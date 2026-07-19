@@ -232,6 +232,14 @@ func (w *Worker) runSession(ctx context.Context) bool {
 		// readiness snapshot stayed "true" between sessions even though no
 		// Hello+HelloAck roundtrip has been acknowledged yet.
 		telemetry.SetHealthRegistered(false)
+		// PR-master-restart: snapshot activeTaskLeases + pendingTasks +
+		// activeTasks BEFORE the transport-Close hoists the session
+		// into a terminal state, so the next New() can replay them.
+		// Best-effort: a snapshot-write failure is logged but does NOT
+		// abort the reconnect path — recovery is opportunistic.
+		if err := w.snapshotRecoveryState(); err != nil {
+			w.logger.Warn("[RECOVERY] snapshot on session-end failed: %v", err)
+		}
 		sessionEnded = true
 	}
 
@@ -266,6 +274,14 @@ func (w *Worker) Stop() {
 		w.logger.Info("Stop requested")
 		close(w.stopChan)
 		w.stopped.Store(true)
+		// PR-master-restart: persist the recovery snapshot BEFORE
+		// draining the in-memory maps so the next session (or a
+		// post-restart process) can replay activeTaskLeases +
+		// pendingTasks. Best-effort: a snapshot-write failure is
+		// logged but does NOT abort the Stop path.
+		if err := w.snapshotRecoveryState(); err != nil {
+			w.logger.Warn("[RECOVERY] snapshot on Stop failed: %v", err)
+		}
 		// Drain pendingTasks on Stop. Entries here correspond to offers
 		// the worker accepted but never received a LeaseGranted for
 		// (worker died mid-flight, master restarted, etc). Master's lease
