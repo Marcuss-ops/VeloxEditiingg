@@ -23,7 +23,7 @@ import (
 //   - authenticated via worker's Bearer token
 //   - HTML responses are rejected after both header and pre-fetch sniff
 func (w *Worker) downloadVeloxAsset(ctx context.Context, assetID string) (string, error) {
-	cacheDir := w.voiceoverCacheDir()
+	cacheDir := w.assetCacheDir()
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return "", err
 	}

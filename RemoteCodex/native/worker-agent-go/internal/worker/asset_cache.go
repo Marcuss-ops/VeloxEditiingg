@@ -11,10 +11,18 @@ import (
 	"strings"
 )
 
-// voiceoverCacheDir returns the directory where downloaded worker-assets
+// assetCacheDir returns the directory where downloaded worker-assets
 // (audio + image) are stored. Same resolver path reused for both media
 // types — cache key prefixes keep them separated when needed.
-func (w *Worker) voiceoverCacheDir() string {
+//
+// Renamed from voiceoverCacheDir when the asset bridge was split
+// (commit d8b0131): the directory is now consumed by both the audio
+// resolver (resolveAudioPayload → resolveVoiceoverAudioPath) and the
+// scene-image resolver (resolveSceneImagePayload), so the "voiceover"
+// name no longer describes the full scope of consumers. Cache key
+// prefixes (asset_id from each velox-asset:// URI) keep the two media
+// streams separated when needed.
+func (w *Worker) assetCacheDir() string {
 	if w != nil && w.config != nil {
 		if trimmed := strings.TrimSpace(w.config.AssetCacheDir); trimmed != "" {
 			return filepath.Join(trimmed, "voiceover")
