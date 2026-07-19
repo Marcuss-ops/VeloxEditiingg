@@ -242,22 +242,144 @@ func detectAndPersistPartitionTransition(
 	return newState, nil
 }
 
-// ReconcileWorkerPartitions scans the workers table for rows whose
-// last_heartbeat_at is older than PartitionThresholdSeconds and
-// whose connection_state is not already PARTITIONED. For each
-// match, it transitions the row to PARTITIONED, emits
-// WORKER_PARTITION_DETECTED, and bumps last_state_change_at — all
-// in one transaction per worker.
+// ReconcileWorkerPartitions reconciles workers whose heartbeat
+// stream has stopped entirely — the recovery-side counterpart to
+// the heartbeat-path PersistWorkerHeartbeat. It scans the workers
+// table for rows whose last_heartbeat_at is older than
+// partitionSeconds and whose connection_state is not already
+// PARTITIONED, then transitions each match to PARTITIONED inside
+// its own *sql.Tx, emits WORKER_PARTITION_DETECTED, and bumps
+// last_state_change_at.
 //
-// This is the recovery surface for the case where the worker
-// heartbeat stream has stopped entirely (no PersistWorkerHeartbeat
-// call ever fires for the partitioned worker). The master is
-// expected to invoke this periodically (e.g., from the master
-// cron loop or a dedicated background goroutine).
+// # Canonical caller
 //
-// Returns the count of workers transitioned into PARTITIONED during
-// the pass. Errors are surfaced per-worker; a partial failure does
-// not abort the rest of the pass (each worker is its own tx).
+// This method is intended to be invoked on a wall-clock cadence
+// from the MASTER scheduler (master cron loop) or a dedicated
+// background goroutine on the master process. It is NOT driven by
+// worker activity and MUST NOT be called from inside the heartbeat
+// path: the candidates it surfaces — workers whose heartbeat
+// stream has stopped entirely — cannot produce a PersistWorkerHeartbeat
+// call by definition, so there is no heartbeat-driven tx to
+// piggyback on. Typical invocation is from master-side cron at a
+// cadence shorter than partitionSeconds so the catch-up lag stays
+// bounded.
+//
+// # Why no shared tx with PersistWorkerHeartbeat
+//
+// PersistWorkerHeartbeat owns the heartbeat-path *sql.Tx — it
+// composes the heartbeat snapshot upsert with the
+// detectAndPersistPartitionTransition call (in this same file)
+// that may also write PARTITIONED_SUSPECTED, plus the canonical
+// worker_events audit row, all in one heartbeat-scoped tx.
+//
+// ReconcileWorkerPartitions CANNOT reuse that transaction for
+// three structural reasons:
+//
+//   - There is no PersistWorkerHeartbeat call for the candidates
+//     ReconcileWorkerPartitions targets. A worker whose heartbeat
+//     stream has stopped entirely never fires the heartbeat path;
+//     the recovery loop exists precisely to make the persistent
+//     mirror catch up when no heartbeat activity is happening.
+//     Coupling master reconciliation to a per-worker heartbeat
+//     transaction would require master to drive heartbeat calls
+//     — out of scope, and would defeat the recovery semantics
+//     by coupling master to a path that the partitioned worker
+//     is structurally absent from.
+//   - Master coordination with per-worker heartbeat transactions
+//     would introduce cross-process coupling that contradicts the
+//     recovery loop's purpose. The recovery loop is intentionally
+//     lightweight and self-contained: it reads the workers table
+//     and writes back the bare PARTITIONED state without any
+//     shared state with the heartbeat path.
+//   - Per-candidate atomicity — the PARTITIONED state transition
+//     plus the WORKER_PARTITION_DETECTED audit row, written
+//     together inside reconcileOnePartition (in
+//     store_worker_recovery_tx.go) — is the recovery-side
+//     contract. Piggybacking on PersistWorkerHeartbeat would
+//     forfeit the bounded per-candidate commit boundary that
+//     lets ONE candidate's failure NOT abort the rest of the
+//     pass.
+//
+// The per-package single-writer invariant permits exactly two
+// s.db.BeginTx sites: PersistWorkerHeartbeat on the heartbeat
+// path (store_worker_heartbeat.go) and reconcileOnePartition on
+// the recovery path (store_worker_recovery_tx.go). This method
+// itself opens no transaction; it fans out per-candidate work
+// to reconcileOnePartition, which is the SOLE BEGIN-TX caller
+// on the recovery side.
+//
+// # Why PARTITIONED is disjoint from PARTITIONED_SUSPECTED
+//
+// The workers.connection_state column has two writer paths in
+// this file and its sibling:
+//
+//   - PARTITIONED_SUSPECTED — written by
+//     detectAndPersistPartitionTransition (heartbeat path,
+//     RECEIVES *sql.Tx from PersistWorkerHeartbeat) when a fresh
+//     heartbeat arrives for a worker whose last_heartbeat_at
+//     crossed the partition threshold. PARTITIONED_SUSPECTED is
+//     the suspect signal: the worker MAY still be alive, just
+//     acknowledged late. It reverts to CONNECTED on the next
+//     fresh heartbeat (WORKER_PARTITION_RESOLVED event).
+//   - PARTITIONED — written ONLY by reconcileOnePartition (via
+//     persistPartitionedStateTx, in store_worker_recovery_tx.go)
+//     when the master reconciler confirms the heartbeat stream
+//     has stopped entirely. PARTITIONED is the unreachable
+//     signal: NO fresh heartbeat is expected. Recovery requires
+//     the worker to surface a new heartbeat — which fires
+//     PersistWorkerHeartbeat and transitions
+//     PARTITIONED → PARTITIONED_SUSPECTED → CONNECTED via the
+//     heartbeat-time detector (never the bare PARTITIONED write,
+//     which is reserved for the reconciler).
+//
+// The two states target DISJOINT value sets, so the per-package
+// single-writer invariant (only one writer of
+// workers.connection_state at a time) holds even though the
+// underlying column is shared. Dashboards can distinguish
+// "worker came back late" (PARTITIONED_SUSPECTED) from "worker
+// stream stopped entirely" (PARTITIONED) by reading
+// connection_state directly — no need to parse details_json on
+// the audit row.
+//
+// # Returns
+//
+//   - transitioned (int): the count of workers transitioned to
+//     PARTITIONED during the pass.
+//   - err (error): nil on a fully-successful pass. If a per-worker
+//     failure occurred during the fan-out (a candidate whose
+//     s.db.BeginTx failed, whose state UPDATE failed, etc.), the
+//     FIRST error encountered is returned so the caller can
+//     surface a partial-failure count alongside `transitioned`.
+//     A partial failure does NOT abort the rest of the pass —
+//     each candidate is its own *sql.Tx, rolled back
+//     independently on failure, so a single broken worker row
+//     cannot delay the recovery of the rest of the fleet.
+//
+// # Argument validation
+//
+//   - staleSeconds <= 0 OR partitionSeconds <= 0 — returns
+//     (0, nil) as a no-op. The caller has not configured
+//     thresholds yet, so the pass should neither side-effect
+//     nor escalate.
+//   - staleSeconds > partitionSeconds — returns
+//     (0, descriptive-error) WITHOUT touching the database so a
+//     misconfiguration surfaces immediately rather than as a
+//     silent "always-partitioned" pass.
+//
+// # Cross-references
+//
+//   - PersistWorkerHeartbeat: store_worker_heartbeat.go (#1 of 2
+//     per-package BEGIN-TX sites).
+//   - detectAndPersistPartitionTransition: this file (heartbeat
+//     detector; RECEIVES *sql.Tx from PersistWorkerHeartbeat).
+//   - reconcileOnePartition: store_worker_recovery_tx.go (#2 of 2
+//     per-package BEGIN-TX sites; the recovery-path wrapper).
+//   - persistPartitionedStateTx: store_worker_recovery_tx.go
+//     (private *sql.Tx helper that writes the bare PARTITIONED
+//     UPDATE).
+//   - appendWorkerPartitionDetectedEvent: store_worker_events.go
+//     (audit-trail row that reconciles the bare PARTITIONED
+//     transition).
 func (s *SQLiteStore) ReconcileWorkerPartitions(ctx context.Context, staleSeconds, partitionSeconds int) (int, error) {
 	if staleSeconds <= 0 || partitionSeconds <= 0 {
 		return 0, nil
