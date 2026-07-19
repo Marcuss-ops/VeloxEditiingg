@@ -1,5 +1,6 @@
 //go:build percheck
 // +build percheck
+
 // size-benchmark: 42-42,2 KB
 
 // Package scan contains the percheck_voiceover_alias_ban verifier.
