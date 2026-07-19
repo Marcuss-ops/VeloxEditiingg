@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -64,8 +65,8 @@ func RegisterRoutes(group gin.IRoutes, cfg *config.Config, sqliteDB *store.SQLit
 	registry := newScriptIngressRegistry(cfg, handlers.dataDir)
 	ingressHandler := jobshandler.NewHandler(registry, enqueuer)
 	group.POST("/generate-with-images", handlers.GenerateWithImagesHandler(cfg))
+	group.POST("/generate", ingressHandler.SubmitFixed("generate"))
 	group.POST("/jobs/:kind", ingressHandler.Submit())
-	group.POST("/generate-from-clips", ingressHandler.SubmitFixed("generate-from-clips"))
 	group.GET("/jobs/:job_id", handlers.ScriptJobHandler(false))
 	group.GET("/jobs/:job_id/full", handlers.ScriptJobHandler(true))
 	group.GET("/:script_id", handlers.ScriptByIDHandler())
@@ -75,12 +76,12 @@ func RegisterRoutes(group gin.IRoutes, cfg *config.Config, sqliteDB *store.SQLit
 func newScriptIngressRegistry(cfg *config.Config, dataDir string) *ingress.Registry {
 	registry := ingress.NewRegistry()
 	registry.MustRegister(ingress.Definition{
-		Kind:            "generate-from-clips",
+		Kind:            "generate",
 		ExecutorID:      "scene.composite.v1",
 		ExecutorVersion: 1,
 		PipelineID:      "hybrid.v1",
-		Builder: func(ctx context.Context, raw map[string]any) (map[string]any, error) {
-			return enqueue.BuildClipPayloadForMaster(raw, dataDir, cfg.Runtime.VideosDir, "")
+		Builder: func(_ context.Context, raw map[string]any) (map[string]any, error) {
+			return buildUnifiedGeneratePayload(raw, dataDir, cfg.Runtime.VideosDir)
 		},
 		Requirements: costmodel.DefaultRequirements(),
 	})
@@ -95,6 +96,61 @@ func newScriptIngressRegistry(cfg *config.Config, dataDir string) *ingress.Regis
 		Requirements: costmodel.DefaultRequirements(),
 	})
 	return registry
+}
+
+// buildUnifiedGeneratePayload is the single public POST /script/generate
+// dispatcher. source.type selects the canonical input normalizer without
+// exposing a separate endpoint for each source family.
+func buildUnifiedGeneratePayload(raw map[string]any, dataDir, videosDir string) (map[string]any, error) {
+	if raw == nil {
+		return nil, fmt.Errorf("request body is required")
+	}
+
+	sourceValue, ok := raw["source"]
+	if !ok {
+		return nil, fmt.Errorf("source is required")
+	}
+	source, ok := sourceValue.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("source must be an object")
+	}
+	sourceType, _ := source["type"].(string)
+	sourceType = strings.ToLower(strings.TrimSpace(sourceType))
+	if sourceType == "" {
+		return nil, fmt.Errorf("source.type is required")
+	}
+
+	switch sourceType {
+	case "clips":
+		// Accept both the canonical nested source payload and the current
+		// render-ready top-level fields during the contract cutover. Top-level
+		// values win so a caller cannot silently override explicit request data.
+		merged := make(map[string]any, len(raw)+len(source))
+		for key, value := range raw {
+			merged[key] = value
+		}
+		for key, value := range source {
+			if key == "type" {
+				continue
+			}
+			if _, exists := merged[key]; !exists {
+				merged[key] = value
+			}
+		}
+
+		normalized, err := enqueue.BuildClipPayloadForMaster(merged, dataDir, videosDir, "")
+		if err != nil {
+			return nil, err
+		}
+		sourceCopy := make(map[string]any, len(source))
+		for key, value := range source {
+			sourceCopy[key] = value
+		}
+		normalized["source"] = sourceCopy
+		return normalized, nil
+	default:
+		return nil, fmt.Errorf("unsupported source.type %q", sourceType)
+	}
 }
 
 // GenerateWithImagesHandler accepts a job payload built from scenes or images,
