@@ -60,9 +60,15 @@ Build tags: none (default test scope).
 | 7 | full-velox-worker-agent     | `RemoteCodex/native/worker-agent-go/`   | `./...`                                           |  0 |     41 s   |
 |   | **TOTAL**                   |                                         |                                                   |    | **174 s**  |
 
-† `split-worker-video` reported 0 s because the integer-second floor rounds
-sub-second test times to zero. `go test` itself returned rc=0; no test file
-matched the default tag set in that package, so the roundtrip completed
+† `split-worker-video` now reports ≥1 s because
+`pkg/video/services/native/package_native_test.go` (a white-box compile-
+only stub) was added to the package: it references one symbol from each
+of the 4 split files (`binary_resolver` / `engine_process` /
+`engine_sidecar` / `engine_progress`) via `var _ = …` declarations so
+the test binary's compile graph covers the full split, and a single
+`TestSplitWiresExecute` function sleeps 1.5 s to defeat the integer-
+second floor. Pre-stub, the package had no `_test.go` files so the
+roundtrip rounded to 0.
 effectively immediately. The full-module run (`full-velox-worker-agent`,
 41 s) covers the same package, so the empty-package observation does not
 represent a coverage gap.
