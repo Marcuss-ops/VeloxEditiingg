@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// store_worker_runtime_recovery.go owns the STALE / PARTITIONED
-// state-machine that mirrors workers.ConnectionStatus at the
+// store_worker_runtime_recovery.go owns the STALE / PARTITIONED_SUSPECTED /
+// PARTITIONED state-machine that mirrors workers.ConnectionStatus at the
 // persistent layer. PersistWorkerHeartbeat is the SINGLE writer of
 // connection_state (single-writer tx contract): every heartbeat
 // recomputes the state from last_heartbeat_at and emits the
@@ -17,31 +17,58 @@ import (
 //
 // State machine:
 //
-//	CONNECTED  --age>=StaleThreshold-->     STALE
-//	STALE      --age>=PartitionThreshold--> PARTITIONED
-//	CONNECTED  --age>=PartitionThreshold--> PARTITIONED (skips STALE
-//	                                          when a worker resurfaces
-//	                                          after a long outage)
-//	STALE      --age<StaleThreshold-->      CONNECTED (recovery)
-//	PARTITIONED --age<StaleThreshold-->     CONNECTED (recovery)
+//	CONNECTED       --age>=StaleThreshold-->     STALE
+//	STALE           --age>=PartitionThreshold--> PARTITIONED_SUSPECTED
+//	CONNECTED       --age>=PartitionThreshold--> PARTITIONED_SUSPECTED
+//	                                              (worker resurfaces
+//	                                               after a long outage)
+//	STALE                  --age<StaleThreshold-->     CONNECTED (recovery)
+//	PARTITIONED_SUSPECTED  --age<StaleThreshold-->     CONNECTED (recovery)
+//
+// Note: connection_state=PARTITIONED is reachable only via the
+// reconciler (ReconcileWorkerPartitions) — the heartbeat-time
+// detector writes PARTITIONED_SUSPECTED instead. The two states
+// are intentionally distinct:
+//
+//   - PARTITIONED_SUSPECTED: heartbeat-driven suspect after a
+//     resurface — the worker MAY still be alive but acknowledged
+//     late. Transitions back to CONNECTED on the next fresh
+//     heartbeat.
+//   - PARTITIONED: reconciler-confirmed unreachable — the heartbeat
+//     stream has stopped entirely. Cannot transition to
+//     PARTITIONED_SUSPECTED without a fresh heartbeat firing
+//     PersistWorkerHeartbeat, at which point the heartbeat-time
+//     path takes over.
 //
 // Events emitted on transitions:
 //
-//	any -> STALE         WORKER_STALE_DETECTED      (WARN)
-//	any -> PARTITIONED   WORKER_PARTITION_DETECTED (ERROR)
-//	PARTITIONED -> CONNECTED WORKER_PARTITION_RESOLVED (INFO)
+//	any                -> STALE                       WORKER_STALE_DETECTED (WARN)
+//	any                -> PARTITIONED_SUSPECTED       WORKER_PARTITION_DETECTED (ERROR)
+//	PARTITIONED_SUSPECTED -> CONNECTED                 WORKER_PARTITION_RESOLVED (INFO)
+//	PARTITIONED       -> CONNECTED                     WORKER_PARTITION_RESOLVED (INFO)
 //
 // Reconciliation: ReconcileWorkerPartitions is the periodic pass
 // that detects workers whose heartbeat stream has stopped entirely
 // (no PersistWorkerHeartbeat call). It is the master's recovery
-// surface for partitions that don't surface a heartbeat.
+// surface for partitions that don't surface a heartbeat, and the
+// only writer of the bare PARTITIONED state from the persistent mirror.
 
 const (
 	// connectionStateConnected is the canonical fresh-heartbeat state.
 	connectionStateConnected = "CONNECTED"
 	// connectionStateStale is the canonical within-grace-but-aging state.
 	connectionStateStale = "STALE"
-	// connectionStatePartitioned is the canonical unreachable state.
+	// connectionStatePartitionedSuspected is the canonical heartbeat-
+	// driven suspect state — emitted by detectAndPersistPartitionTransition
+	// when last_heartbeat_at crosses WorkersConfig.PartitionThresholdSeconds
+	// during a heartbeat-time transition. Distinct from
+	// connectionStatePartitioned (which the reconciler writes when the
+	// heartbeat stream has stopped entirely).
+	connectionStatePartitionedSuspected = "PARTITIONED_SUSPECTED"
+	// connectionStatePartitioned is the canonical reconciler-confirmed
+	// unreachable state. Only ReconcileWorkerPartitions /
+	// reconcileOnePartition writes this value (single-writer
+	// separation).
 	connectionStatePartitioned = "PARTITIONED"
 )
 
@@ -55,18 +82,33 @@ const (
 //   - age >= partitionSeconds         → PARTITIONED
 //   - age >= staleSeconds             → STALE
 //   - age <  staleSeconds             → CONNECTED
+//
+// computeConnectionState derives the canonical state from a
+// heartbeat timestamp + threshold pair. Pure function — no I/O, no
+// DB — so tests and dashboards can call it directly.
+// Heartbeat-driven branches emit PARTITIONED_SUSPECTED, NOT
+// PARTITIONED; the bare PARTITIONED state is reserved for the
+// reconciler code path so dashboards can distinguish "worker came
+// back late" from "worker stream stopped entirely".
+//
+//   - lastHB empty / unparseable      → PARTITIONED_SUSPECTED (the
+//     heartbeat time detector cannot prove the worker is dead, only
+//     that it has stopped responding within the threshold window)
+//   - age >= partitionSeconds         → PARTITIONED_SUSPECTED
+//   - age >= staleSeconds             → STALE
+//   - age <  staleSeconds             → CONNECTED
 func computeConnectionState(lastHB string, now time.Time, staleSeconds, partitionSeconds int) string {
 	if lastHB == "" {
-		return connectionStatePartitioned
+		return connectionStatePartitionedSuspected
 	}
 	t, err := time.Parse(time.RFC3339Nano, lastHB)
 	if err != nil {
-		return connectionStatePartitioned
+		return connectionStatePartitionedSuspected
 	}
 	age := now.Sub(t.UTC())
 	switch {
 	case age >= time.Duration(partitionSeconds)*time.Second:
-		return connectionStatePartitioned
+		return connectionStatePartitionedSuspected
 	case age >= time.Duration(staleSeconds)*time.Second:
 		return connectionStateStale
 	default:
@@ -122,20 +164,22 @@ func detectAndPersistPartitionTransition(
 		return newState, nil
 	}
 
-	// Emit the canonical event for the transition. We only emit on
-	// the four named transitions; STALE -> STALE (no change) or
-	// CONNECTED -> CONNECTED fall through silently.
+	// Emit the canonical event for the transition. The heartbeat-
+	// time detector specifically emits PARTITIONED_SUSPECTED (not
+	// PARTITIONED); the bare PARTITIONED reach is reserved for the
+	// reconciler code path. Recovery from either terminal state
+	// iterates back to CONNECTED + WORKER_PARTITION_RESOLVED.
 	nowRFC3339 := now.UTC().Format(time.RFC3339Nano)
 	switch {
 	case oldState != connectionStateStale && newState == connectionStateStale:
 		if err := appendWorkerStaleDetectedEvent(ctx, tx, workerID, lastHB, staleSeconds, nowRFC3339); err != nil {
 			return "", err
 		}
-	case oldState != connectionStatePartitioned && newState == connectionStatePartitioned:
+	case oldState != connectionStatePartitionedSuspected && newState == connectionStatePartitionedSuspected:
 		if err := appendWorkerPartitionDetectedEvent(ctx, tx, workerID, lastHB, partitionSeconds, nowRFC3339); err != nil {
 			return "", err
 		}
-	case oldState == connectionStatePartitioned && newState == connectionStateConnected:
+	case (oldState == connectionStatePartitionedSuspected || oldState == connectionStatePartitioned) && newState == connectionStateConnected:
 		if err := appendWorkerPartitionResolvedEvent(ctx, tx, workerID, lastHB, nowRFC3339); err != nil {
 			return "", err
 		}
@@ -283,4 +327,21 @@ const (
 	connectionStateChangeReasonStaleDelayed      = "heartbeat_delayed"
 	connectionStateChangeReasonPartitionTimeout  = "heartbeat_timeout"
 	connectionStateChangeReasonPartitionResolved = "heartbeat_resumed"
+)
+
+// Canonical reason_code values surfaced on the TASK_RUNTIME_DISAPPEARED
+// rows emitted by reconcileWorkerRuntime (heartbeat-miss path) and
+// bulkEmitTaskRuntimeDisappearedOnPartition (partition-time path).
+// Distinct from the WORKER-level reason codes above: those carry a
+// per-worker signal; these carry a per-task signal so dashboards can
+// filter by event_type=TASK_RUNTIME_DISAPPEARED + reason_code to drill
+// into the cause without parsing the details_json.
+//
+//   - "heartbeat_missing": the row's missing_heartbeats counter crossed 2.
+//   - "partition_timeout": the worker's connection_state crossed
+//     PARTITIONED_SUSPECTED via the heartbeat-time detector; the
+//     bulk-emit fan-out is the per-task mirror of that signal.
+const (
+	connectionStateChangeReasonHeartbeatMissing     = "heartbeat_missing"
+	connectionStateChangeReasonPartitionTimeoutTask = "partition_timeout"
 )

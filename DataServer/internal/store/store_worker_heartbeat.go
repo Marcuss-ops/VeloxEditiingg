@@ -96,8 +96,29 @@ func (s *SQLiteStore) PersistWorkerHeartbeat(ctx context.Context, raw []byte, se
 	if err != nil {
 		return err
 	}
-	_ = oldConnState // captured for symmetry with the state-change helpers; reserved for future diff-driven events.
-	_ = newConnState // logged via the worker_events rows emitted by detectAndPersistPartitionTransition.
+	// Heartbeat-driven partition suspicion propagates to runtime-task
+	// rows: emit a TASK_RUNTIME_DISAPPEARED per active runtime row
+	// (reason_code="partition_timeout") and flip each row's
+	// runtime_status to PARTITIONED_SUSPECTED. The bulk emitter's
+	// internal runtime_status filter handles idempotency, but we
+	// gate here on the actual transition so a repeat heartbeat that
+	// hits detectAndPersistPartitionTransition's same-state
+	// short-circuit does not pay the bulk-emit cost on every
+	// heartbeat. INVARIANT: every code path inside
+	// detectAndPersistPartitionTransition that returns
+	// (newState=PARTITIONED_SUSPECTED, nil) without mutating workers
+	// must EITHER be the same-state short-circuit OR be the
+	// transition-after-write case (where the UPDATE happened, so
+	// oldConnState != newConnState is still satisfied). The
+	// reconciler (ReconcileWorkerPartitions) is the separate path
+	// that writes the bare PARTITIONED terminal state — it is not
+	// interleaved with this fan-out.
+	if newConnState == connectionStatePartitionedSuspected &&
+		oldConnState != connectionStatePartitionedSuspected {
+		if _, err := bulkEmitTaskRuntimeDisappearedOnPartition(ctx, tx, workerID, nowRFC3339Nano); err != nil {
+			return err
+		}
+	}
 	if oldStatus != "" && (oldStatus != asString(m["status"]) || oldJob != asString(m["current_job"])) {
 		if err := appendWorkerStateChangedEvent(ctx, tx, workerID, sessionID,
 			oldStatus, asString(m["status"]), oldJob, asString(m["current_job"]), nowRFC3339Nano); err != nil {

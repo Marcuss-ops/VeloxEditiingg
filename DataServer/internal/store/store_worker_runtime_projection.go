@@ -137,7 +137,7 @@ func reconcileWorkerRuntime(ctx context.Context, tx *sql.Tx, workerID, sessionID
 		if err := rows.Scan(&taskID, &jobID, &attemptID); err != nil {
 			return err
 		}
-		if err := appendTaskRuntimeDisappearedEvent(ctx, tx, workerID, jobID, taskID, attemptID, now); err != nil {
+		if err := appendTaskRuntimeDisappearedEvent(ctx, tx, workerID, jobID, taskID, attemptID, connectionStateChangeReasonHeartbeatMissing, now); err != nil {
 			return err
 		}
 	}
@@ -146,4 +146,69 @@ func reconcileWorkerRuntime(ctx context.Context, tx *sql.Tx, workerID, sessionID
 	}
 	_, err = tx.ExecContext(ctx, `DELETE FROM worker_task_runtime WHERE worker_id=? AND missing_heartbeats>=2`, workerID)
 	return err
+}
+
+// bulkEmitTaskRuntimeDisappearedOnPartition is the per-task fan-out
+// that mirrors a worker-level PARTITIONED_SUSPECTED transition onto
+// every active worker_task_runtime row owned by the suspected worker.
+// Called from PersistWorkerHeartbeat step 8.5 (after
+// detectAndPersistPartitionTransition has flipped connection_state to
+// PARTITIONED_SUSPECTED). Single-writer tx contract: receives a
+// *sql.Tx from the caller, never opens its own.
+//
+// Idempotency: rows already in PARTITIONED_SUSPECTED or PARTITIONED
+// are skipped on both the SELECT and the subsequent status flip, so
+// this helper can be called multiple times for the same worker
+// without emitting duplicate events. ReconcileWorkerPartitions is the
+// separate path that writes the bare PARTITIONED state and is not
+// affected by this fan-out (it iterates workers, not runtime rows).
+//
+// Returns the number of runtime rows emitted (== the number of
+// runtime_status rows flipped).
+func bulkEmitTaskRuntimeDisappearedOnPartition(ctx context.Context, tx *sql.Tx, workerID, now string) (int, error) {
+	if workerID == "" {
+		return 0, nil
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT task_id, job_id, attempt_id
+		FROM worker_task_runtime
+		WHERE worker_id = ?
+		  AND runtime_status NOT IN ('PARTITIONED_SUSPECTED','PARTITIONED')`,
+		workerID)
+	if err != nil {
+		return 0, fmt.Errorf("query runtimes for partition emission: %w", err)
+	}
+	defer rows.Close()
+
+	type runtimeIdentity struct {
+		tID string
+		jID string
+		aID string
+	}
+	var identities []runtimeIdentity
+	for rows.Next() {
+		var id runtimeIdentity
+		if err := rows.Scan(&id.tID, &id.jID, &id.aID); err != nil {
+			return 0, fmt.Errorf("scan runtime for partition emission: %w", err)
+		}
+		identities = append(identities, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate runtimes for partition emission: %w", err)
+	}
+
+	for _, id := range identities {
+		if err := appendTaskRuntimeDisappearedEvent(ctx, tx, workerID, id.jID, id.tID, id.aID, connectionStateChangeReasonPartitionTimeoutTask, now); err != nil {
+			return 0, fmt.Errorf("append task disappeared (partition): %w", err)
+		}
+	}
+	if len(identities) > 0 {
+		if _, err := tx.ExecContext(ctx, `UPDATE worker_task_runtime
+			SET runtime_status = ?, updated_at = ?
+			WHERE worker_id = ?
+			  AND runtime_status NOT IN ('PARTITIONED_SUSPECTED','PARTITIONED')`,
+			connectionStatePartitionedSuspected, now, workerID); err != nil {
+			return 0, fmt.Errorf("flip runtime status to partitioned_suspected: %w", err)
+		}
+	}
+	return len(identities), nil
 }

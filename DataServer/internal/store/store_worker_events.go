@@ -13,20 +13,28 @@ import (
 // store_worker_events.go owns the worker_events INSERT helpers.
 // The heartbeat path emits three flavours of events today:
 //
-//	WORKER_STATE_CHANGED        — status machine transitions on
-//	                               the workers row.
+//	WORKER_STATE_CHANGED         — status machine transitions on
+//	                                the workers row.
 //	TASK_RUNTIME_DISAPPEARED     — reconciler-detected stale rows
-//	                               in worker_task_runtime.
+//	                                in worker_task_runtime
+//	                                (reason_code=heartbeat_missing),
+//	                                OR the partition-time bulk-emit
+//	                                fan-out
+//	                                (reason_code=partition_timeout).
 //	WORKER_STALE_DETECTED        — first-time heartbeat after the
-//	                               last_heartbeat_at age crossed
-//	                               WorkersConfig.StaleThresholdSeconds.
+//	                                last_heartbeat_at age crossed
+//	                                WorkersConfig.StaleThresholdSeconds.
 //	WORKER_PARTITION_DETECTED    — heartbeat age crossed
-//	                               WorkersConfig.PartitionThresholdSeconds,
-//	                               OR the reconciler detected a
-//	                               worker that stopped sending
-//	                               heartbeats entirely.
+//	                                WorkersConfig.PartitionThresholdSeconds
+//	                                (emitted on transition into
+//	                                PARTITIONED_SUSPECTED), OR the
+//	                                reconciler detected a worker that
+//	                                stopped sending heartbeats entirely
+//	                                (emitted on transition into
+//	                                PARTITIONED).
 //	WORKER_PARTITION_RESOLVED    — heartbeat resumed after a
-//	                               PARTITIONED state.
+//	                                PARTITIONED_SUSPECTED or
+//	                                PARTITIONED state.
 //
 // All helpers receive *sql.Tx from the caller and never open their
 // own. Details are JSON-serialized so the audit ledger is
@@ -49,11 +57,32 @@ func appendWorkerStateChangedEvent(ctx context.Context, tx *sql.Tx, workerID, se
 	return nil
 }
 
-func appendTaskRuntimeDisappearedEvent(ctx context.Context, tx *sql.Tx, workerID, jobID, taskID, attemptID, now string) error {
+// appendTaskRuntimeDisappearedEvent records the canonical event for
+// a single runtime-task row disappearing. reasonCode is supplied by
+// the caller and surfaces on the row's reason_code column so
+// dashboards can filter by event_type=TASK_RUNTIME_DISAPPEARED +
+// reason_code to drill into the cause without parsing details_json.
+//
+// Canonical values:
+//
+//   - "heartbeat_missing" (connectionStateChangeReasonHeartbeatMissing):
+//     driven by reconcileWorkerRuntime when missing_heartbeats>=2.
+//   - "partition_timeout" (connectionStateChangeReasonPartitionTimeoutTask):
+//     driven by the network-partition detector
+//     (bulkEmitTaskRuntimeDisappearedOnPartition) when the worker's
+//     connection_state crosses the partition threshold.
+//
+// An empty reasonCode is replaced with the historical default
+// "heartbeat_missing" so legacy callers that omit it keep their
+// existing audit-trail string.
+func appendTaskRuntimeDisappearedEvent(ctx context.Context, tx *sql.Tx, workerID, jobID, taskID, attemptID, reasonCode, now string) error {
+	if reasonCode == "" {
+		reasonCode = connectionStateChangeReasonHeartbeatMissing
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO worker_events
 		(event_id,worker_id,job_id,task_id,attempt_id,event_type,severity,reason_code,created_at)
 		VALUES (?,?,?,?,?,?,?,?,?)`, uuid.NewString(), workerID, jobID, taskID, attemptID,
-		"TASK_RUNTIME_DISAPPEARED", "WARN", "heartbeat_missing", now); err != nil {
+		"TASK_RUNTIME_DISAPPEARED", "WARN", reasonCode, now); err != nil {
 		return err
 	}
 	return nil
