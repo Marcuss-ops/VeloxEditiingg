@@ -1,0 +1,227 @@
+name: Migrate script clips ingress to generate
+
+on:
+  push:
+    paths:
+      - .github/workflows/migrate-script-generate.yml
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: DataServer/go.mod
+          cache-dependency-path: DataServer/go.sum
+
+      - name: Migrate the public contract
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              return text.replace(old, new, 1)
+
+          handler_path = Path("DataServer/internal/handlers/server/script/handler.go")
+          handler = handler_path.read_text()
+          handler = replace_once(
+              handler,
+              '\t"errors"\n\t"log"',
+              '\t"errors"\n\t"fmt"\n\t"log"',
+              "handler fmt import",
+          )
+          handler = replace_once(
+              handler,
+              '\tgroup.POST("/generate-from-clips", ingressHandler.SubmitFixed("generate-from-clips"))',
+              '\tgroup.POST("/generate", ingressHandler.SubmitFixed("generate"))',
+              "legacy route",
+          )
+          handler = replace_once(
+              handler,
+              '\t\tBuilder: func(ctx context.Context, raw map[string]any) (map[string]any, error) {\n\t\t\treturn enqueue.BuildClipPayloadForMaster(raw, dataDir, cfg.Runtime.VideosDir, "")\n\t\t},',
+              '\t\tBuilder: func(_ context.Context, raw map[string]any) (map[string]any, error) {\n\t\t\treturn buildUnifiedGeneratePayload(raw, dataDir, cfg.Runtime.VideosDir)\n\t\t},',
+              "generate builder",
+          )
+          marker = '\treturn registry\n}\n\n// GenerateWithImagesHandler accepts'
+          helper = '''\treturn registry
+}
+
+// buildUnifiedGeneratePayload is the single public POST /script/generate
+// dispatcher. The source.type discriminator selects the canonical input
+// normalizer without exposing a second endpoint for each source family.
+func buildUnifiedGeneratePayload(raw map[string]any, dataDir, videosDir string) (map[string]any, error) {
+\tif raw == nil {
+\t\treturn nil, fmt.Errorf("request body is required")
+\t}
+
+\tsourceValue, ok := raw["source"]
+\tif !ok {
+\t\treturn nil, fmt.Errorf("source is required")
+\t}
+\tsource, ok := sourceValue.(map[string]any)
+\tif !ok {
+\t\treturn nil, fmt.Errorf("source must be an object")
+\t}
+\tsourceType, _ := source["type"].(string)
+\tsourceType = strings.ToLower(strings.TrimSpace(sourceType))
+\tif sourceType == "" {
+\t\treturn nil, fmt.Errorf("source.type is required")
+\t}
+
+\tswitch sourceType {
+\tcase "clips":
+\t\tmerged := make(map[string]any, len(raw)+len(source))
+\t\tfor key, value := range raw {
+\t\t\tmerged[key] = value
+\t\t}
+\t\tfor key, value := range source {
+\t\t\tif key == "type" {
+\t\t\t\tcontinue
+\t\t\t}
+\t\t\tif _, exists := merged[key]; !exists {
+\t\t\t\tmerged[key] = value
+\t\t\t}
+\t\t}
+
+\t\tnormalized, err := enqueue.BuildClipPayloadForMaster(merged, dataDir, videosDir, "")
+\t\tif err != nil {
+\t\t\treturn nil, err
+\t\t}
+\t\tsourceCopy := make(map[string]any, len(source))
+\t\tfor key, value := range source {
+\t\t\tsourceCopy[key] = value
+\t\t}
+\t\tnormalized["source"] = sourceCopy
+\t\treturn normalized, nil
+\tdefault:
+\t\treturn nil, fmt.Errorf("unsupported source.type %q", sourceType)
+\t}
+}
+
+// GenerateWithImagesHandler accepts'''
+          handler = replace_once(handler, marker, helper, "unified generate helper insertion")
+          handler_path.write_text(handler)
+
+          # Move the operator fixtures to the canonical endpoint name.
+          for old_name in (
+              "jackie_chan_doc_voiceover.generate-from-clips.json",
+              "jackie_chan_doc_voiceover.generate-from-clips.public-downloads.json",
+              "jackie_chan_doc_voiceover.generate-from-clips.usercontent.json",
+          ):
+              old_path = Path("ops/jobs") / old_name
+              if old_path.exists():
+                  new_path = old_path.with_name(old_name.replace("generate-from-clips", "generate"))
+                  old_path.rename(new_path)
+
+          # Remove the legacy identity from active source, tests, docs and ops.
+          for root in (Path("DataServer"), Path("ops")):
+              for path in root.rglob("*"):
+                  if not path.is_file():
+                      continue
+                  try:
+                      text = path.read_text()
+                  except UnicodeDecodeError:
+                      continue
+                  updated = text.replace("generate-from-clips", "generate")
+                  updated = updated.replace("generate_from_clips", "script_generate")
+                  updated = updated.replace("GenerateFromClips", "GenerateSourceClips")
+                  if updated != text:
+                      path.write_text(updated)
+
+          # Every clip-generation request now carries the explicit source discriminator.
+          for path in Path("ops/jobs").glob("jackie_chan_doc_voiceover.generate*.json"):
+              text = path.read_text()
+              if '"source"' not in text:
+                  text = text.replace('{\n', '{\n  "source": {"type": "clips"},\n', 1)
+                  path.write_text(text)
+
+          test_path = Path("DataServer/internal/handlers/server/script/handler_test.go")
+          tests = test_path.read_text()
+          target = '\t\t"video_name": "Jackie Chan Funniest Moments",\n\t\t"delivery_plan": []interface{}{'
+          replacement = '\t\t"video_name": "Jackie Chan Funniest Moments",\n\t\t"source": map[string]interface{}{"type": "clips"},\n\t\t"delivery_plan": []interface{}{'
+          tests = replace_once(tests, target, replacement, "source.type clips test payload")
+          response_marker = '\tjobID, _ := res["job_id"].(string)\n'
+          response_assert = '\tif got := res["kind"]; got != "generate" {\n\t\tt.Fatalf("want kind generate, got %v", got)\n\t}\n' + response_marker
+          tests = replace_once(tests, response_marker, response_assert, "generate response kind assertion")
+          stored_marker = '\tif got := stored["pipeline_id"]; got != "hybrid.v1" {'
+          stored_assert = '\tif got := stored["submitted_via"]; got != "api_script_generate" {\n\t\tt.Fatalf("want submitted_via api_script_generate, got %#v", got)\n\t}\n' + stored_marker
+          tests = replace_once(tests, stored_marker, stored_assert, "canonical submitted_via assertion")
+          missing_source_test = r'''
+func TestGenerate_RequiresSourceType(t *testing.T) {
+\ttempDir := t.TempDir()
+\tdb, err := store.NewSQLiteStore(filepath.Join(tempDir, "velox.db"))
+\tif err != nil {
+\t\tt.Fatalf("new sqlite store: %v", err)
+\t}
+\tatomic := store.NewAtomicJobTaskCreator(db)
+\tcfg := &config.Config{Runtime: config.RuntimeConfig{DataDir: tempDir, VideosDir: filepath.Join(tempDir, "videos")}}
+\tenqueuer := jobenqueue.NewEnqueuer(atomic, nil, nil, noopPlanResolver{})
+\tr := gin.New()
+\tRegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
+
+\tw := httptest.NewRecorder()
+\treq := httptest.NewRequest(http.MethodPost, "/api/script/generate", bytes.NewBufferString(`{"video_name":"missing source"}`))
+\treq.Header.Set("Content-Type", "application/json")
+\tr.ServeHTTP(w, req)
+\tif w.Code != http.StatusBadRequest {
+\t\tt.Fatalf("want 400, got %d body=%s", w.Code, w.Body.String())
+\t}
+}
+
+'''
+          slideshow_marker = 'func TestSubmitJob_SlideshowVideo_EnqueuesImagesPipelineJob'
+          tests = replace_once(tests, slideshow_marker, missing_source_test + slideshow_marker, "missing source contract test")
+          test_path.write_text(tests)
+
+          route_test_path = Path("DataServer/cmd/server/router_script_routes_test.go")
+          route_test = route_test_path.read_text()
+          route_loop = '\tfor _, route := range routes {\n\t\tkey := route.Method + " " + route.Path\n'
+          route_loop_new = '\tfor _, route := range routes {\n\t\tkey := route.Method + " " + route.Path\n\t\tif key == "POST /api/v1/script/generate-from-clips" {\n\t\t\tt.Fatalf("legacy route must not be mounted: %s", key)\n\t\t}\n'
+          route_test = replace_once(route_test, route_loop, route_loop_new, "legacy route absence assertion")
+          route_test_path.write_text(route_test)
+
+          legacy_hits = []
+          for root in (Path("DataServer"), Path("ops")):
+              for path in root.rglob("*"):
+                  if not path.is_file():
+                      continue
+                  try:
+                      text = path.read_text()
+                  except UnicodeDecodeError:
+                      continue
+                  if "generate-from-clips" in text or "generate_from_clips" in text:
+                      legacy_hits.append(str(path))
+          if legacy_hits:
+              raise SystemExit("legacy generate-from-clips references remain:\n" + "\n".join(legacy_hits))
+          PY
+
+          gofmt -w \
+            DataServer/internal/handlers/server/script/handler.go \
+            DataServer/internal/handlers/server/script/handler_test.go \
+            DataServer/cmd/server/router_script_routes_test.go \
+            DataServer/internal/jobs/enqueue/enqueue_clips.go
+
+          cd DataServer
+          go test ./internal/handlers/server/script ./internal/jobs/enqueue ./cmd/server
+
+      - name: Commit migration to main
+        shell: bash
+        run: |
+          rm -f .github/workflows/migrate-script-generate.yml
+          git config user.name "OpenAI"
+          git config user.email "openai@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "refactor(script): migrate clips ingress under generate"
+          git push origin HEAD:main
