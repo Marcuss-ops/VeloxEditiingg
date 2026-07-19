@@ -30,7 +30,18 @@ func loadAuthConfig() AuthConfig {
 func loadPipelineConfig() PipelineConfig {
 	return PipelineConfig{
 		JobMasterURL: os.Getenv("VELOX_JOB_MASTER_URL"),
+		OllamaURL:    firstNonEmpty(os.Getenv("OLLAMA_ADDR"), "http://127.0.0.1:11434"),
+		OllamaModel:  firstNonEmpty(os.Getenv("OLLAMA_MODEL"), "gemma4:e4b"),
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // ── FrontendConfig ─────────────────────────────────────────────────────

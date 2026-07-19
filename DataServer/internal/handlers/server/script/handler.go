@@ -17,9 +17,11 @@ import (
 	"velox-server/internal/creatorflow"
 	remoteansible "velox-server/internal/handlers/remote/ansible"
 	jobshandler "velox-server/internal/handlers/server/jobs"
+	driveintegration "velox-server/internal/integrations/drive"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/jobs/ingress"
 	"velox-server/internal/store"
+	"velox-server/internal/translation"
 )
 
 const scriptSceneMode = "scene_image"
@@ -29,16 +31,21 @@ const scriptSceneMode = "scene_image"
 // operators can tell handler-misconfiguration apart from real DB failures.
 var errScriptHandlerNotConfigured = errors.New("script handler sqliteDB not configured")
 
+type GoogleDocCreator interface {
+	CreateGoogleDoc(context.Context, string, string, string, string) (*driveintegration.UploadResult, error)
+}
+
 // ScriptHandlers exposes the script-with-images workflow.
 //
 // PR15.7a: the *enqueue.Enqueuer replaces both the package-level voiceover
 // global and the legacy free-function EnqueueSceneVideoJob. Constructed
 // once at composition-root (cmd/server/bootstrap) and threaded through.
 type ScriptHandlers struct {
-	enqueuer *enqueue.Enqueuer
-	sqliteDB *store.SQLiteStore
-	dataDir  string
-	creator  *creatorflow.Service
+	enqueuer   *enqueue.Enqueuer
+	sqliteDB   *store.SQLiteStore
+	dataDir    string
+	creator    *creatorflow.Service
+	docCreator GoogleDocCreator
 }
 
 func NewScriptHandlers(cfg *config.Config, sqliteDB *store.SQLiteStore, enqueuer *enqueue.Enqueuer) *ScriptHandlers {
@@ -60,9 +67,12 @@ func NewScriptHandlers(cfg *config.Config, sqliteDB *store.SQLiteStore, enqueuer
 // RegisterRoutes wires the public script routes on the given group.
 //
 // PR15.7a: a *enqueue.Enqueuer is now mandatory alongside sqliteDB.
-func RegisterRoutes(group gin.IRoutes, cfg *config.Config, sqliteDB *store.SQLiteStore, enqueuer *enqueue.Enqueuer) *ScriptHandlers {
+func RegisterRoutes(group gin.IRoutes, cfg *config.Config, sqliteDB *store.SQLiteStore, enqueuer *enqueue.Enqueuer, docCreators ...GoogleDocCreator) *ScriptHandlers {
 	handlers := NewScriptHandlers(cfg, sqliteDB, enqueuer)
-	registry := newScriptIngressRegistry(cfg, handlers.dataDir)
+	if len(docCreators) > 0 {
+		handlers.docCreator = docCreators[0]
+	}
+	registry := newScriptIngressRegistry(cfg, handlers.dataDir, handlers.docCreator)
 	ingressHandler := jobshandler.NewHandler(registry, enqueuer)
 	group.POST("/generate-with-images", handlers.GenerateWithImagesHandler(cfg))
 	group.POST("/generate", ingressHandler.SubmitFixed("generate"))
@@ -73,15 +83,52 @@ func RegisterRoutes(group gin.IRoutes, cfg *config.Config, sqliteDB *store.SQLit
 	return handlers
 }
 
-func newScriptIngressRegistry(cfg *config.Config, dataDir string) *ingress.Registry {
+func newScriptIngressRegistry(cfg *config.Config, dataDir string, docCreator GoogleDocCreator) *ingress.Registry {
 	registry := ingress.NewRegistry()
 	registry.MustRegister(ingress.Definition{
 		Kind:            "generate",
 		ExecutorID:      "scene.composite.v1",
 		ExecutorVersion: 1,
 		PipelineID:      "hybrid.v1",
-		Builder: func(_ context.Context, raw map[string]any) (map[string]any, error) {
-			return buildUnifiedGeneratePayload(raw, dataDir, cfg.Runtime.VideosDir)
+		Builder: func(ctx context.Context, raw map[string]any) (map[string]any, error) {
+			normalized, err := buildUnifiedGeneratePayload(raw, dataDir, cfg.Runtime.VideosDir)
+			if err != nil {
+				return nil, err
+			}
+			translated, err := translation.TranslateScenes(ctx, normalized, translation.Client{
+				BaseURL: cfg.Pipeline.OllamaURL,
+				Model:   cfg.Pipeline.OllamaModel,
+			})
+			if err != nil {
+				return nil, err
+			}
+			if folder := strings.TrimSpace(firstStringValue(translated, "drive_output_folder", "output_directory")); folder != "" {
+				if docCreator == nil {
+					return nil, fmt.Errorf("google doc requested by drive_output_folder but Drive is not configured")
+				}
+				content, err := translation.RenderGoogleDocContent(translated)
+				if err != nil {
+					return nil, err
+				}
+				title := firstStringValue(translated, "video_name", "title", "topic")
+				doc, err := docCreator.CreateGoogleDoc(ctx, title, content, enqueue.ResolveDriveOutputFolderReference(dataDir, folder), firstStringValue(translated, "correlation_id"))
+				if err != nil {
+					return nil, fmt.Errorf("create script google doc: %w", err)
+				}
+				metadata := map[string]interface{}{}
+				if existing, ok := translated["video_metadata"].(map[string]interface{}); ok {
+					for key, value := range existing {
+						metadata[key] = value
+					}
+				}
+				metadata["google_doc"] = map[string]interface{}{
+					"id":    doc.FileID,
+					"link":  doc.WebViewLink,
+					"title": title,
+				}
+				translated["video_metadata"] = metadata
+			}
+			return enqueue.BuildClipPayloadForMaster(translated, dataDir, cfg.Runtime.VideosDir, "")
 		},
 		Requirements: costmodel.DefaultRequirements(),
 	})

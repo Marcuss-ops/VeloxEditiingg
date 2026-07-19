@@ -39,15 +39,22 @@ type Token struct {
 func (t *Token) UnmarshalJSON(data []byte) error {
 	type Alias Token
 	aux := &struct {
-		Expiry interface{} `json:"expiry"`
-		Scope  interface{} `json:"scope"`
-		Scopes interface{} `json:"scopes"`
+		AccessTokenCompat string      `json:"access_token"`
+		Expiry            interface{} `json:"expiry"`
+		Scope             interface{} `json:"scope"`
+		Scopes            interface{} `json:"scopes"`
 		*Alias
 	}{
 		Alias: (*Alias)(t),
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
+	}
+	// PipelineGen's existing token.json uses Google's standard
+	// `access_token` key, while Velox's persisted format historically used
+	// `token`. Accept both so an OAuth session survives the server cutover.
+	if t.AccessToken == "" {
+		t.AccessToken = aux.AccessTokenCompat
 	}
 
 	// Handle Expiry

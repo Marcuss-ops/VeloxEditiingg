@@ -21,6 +21,7 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
+	scripthandlers "velox-server/internal/handlers/server/script"
 	"velox-server/internal/ingest"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/registry"
@@ -97,6 +98,12 @@ func (c *appComponents) routerBundle() RouterBundle {
 			Cfg:         c.cfg,
 			SQLiteStore: c.persistence.SQLite,
 			Enqueuer:    c.modules.Enqueuer,
+			DocCreator: func() scripthandlers.GoogleDocCreator {
+				if c.modules.Drive == nil {
+					return nil
+				}
+				return c.modules.Drive.Service()
+			}(),
 		},
 		Pipeline: PipelineRouteDeps{
 			Cfg:        c.cfg,

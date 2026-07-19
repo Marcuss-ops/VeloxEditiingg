@@ -146,6 +146,15 @@ func BuildClipPayloadForMaster(rawPayload map[string]interface{}, dataDir, video
 	if err != nil {
 		return nil, err
 	}
+	// Preserve the native translation envelope through the canonical V2
+	// projection. The scene text/bindings are already carried by v2.Scenes;
+	// these fields make the requested target and per-scene translation result
+	// visible to the remote Worker and API pollers as well.
+	for _, key := range []string{"translate_to", "translation_status", "translation_language", "translations", "google_doc_id", "google_doc_link", "google_doc_title"} {
+		if value, ok := rawPayload[key]; ok {
+			out[key] = value
+		}
+	}
 	out["clips"] = clipURLs
 	out["items"] = clipItems
 	if len(audioTracks) > 0 {

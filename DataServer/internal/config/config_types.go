@@ -185,6 +185,9 @@ type PipelineConfig struct {
 	// requests. Populated from VELOX_JOB_MASTER_URL. Previously lived at the root
 	// of Config as `JobMasterURL`.
 	JobMasterURL string
+	// OllamaURL and OllamaModel configure the native per-scene translation stage.
+	OllamaURL   string
+	OllamaModel string
 }
 
 // AuthConfig holds authentication settings.

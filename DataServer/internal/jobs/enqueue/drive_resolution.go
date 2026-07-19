@@ -63,10 +63,13 @@ func extractDriveFolderID(ref string) string {
 	if ref == "" {
 		return ""
 	}
-	if strings.Contains(ref, "drive.google.com/drive/folders/") {
-		parts := strings.Split(strings.TrimRight(ref, "/"), "/")
-		if len(parts) > 0 {
-			return strings.TrimSpace(parts[len(parts)-1])
+	if strings.Contains(ref, "drive.google.com") && strings.Contains(ref, "/folders/") {
+		parts := strings.Split(strings.TrimRight(ref, "/"), "/folders/")
+		if len(parts) == 2 {
+			id := strings.TrimSpace(strings.SplitN(parts[1], "?", 2)[0])
+			if id != "" {
+				return id
+			}
 		}
 	}
 	if !strings.Contains(ref, "://") && len(ref) > 15 {
