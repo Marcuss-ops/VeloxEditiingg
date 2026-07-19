@@ -2,72 +2,36 @@
 package native
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
-	"velox-worker-agent/pkg/binaryresolver"
 	"velox-worker-agent/pkg/logger"
 	"velox-worker-agent/pkg/video/pipeline"
 	"velox-worker-agent/pkg/video/plan"
 )
 
+// render_client.go owns the *RenderClient surface — the exported
+// type, constructor, callback setter, and the thin orchestrator that
+// composes the helpers living in the sibling files:
+//
+//   engine_process.go    — subprocess lifecycle + signal handling
+//   engine_progress.go   — stream + JSON progress parsing
+//   engine_sidecar.go    — sidecar types + reader
+//   binary_resolver.go   — binary resolution + plan temp +
+//                          sidecar→metrics mapping + output verify
+//
+// RenderWithMetrics below is the orchestrator: it sequences those
+// helpers with explicit measurement of marshal/write/start/wait
+// wallclock counters. SAFETY-critical code lives in engine_process.go
+// (the Setpgid+Pdeathsig+grace-10s+SIGKILL block) and is not touched
+// here — this file only composes it.
+
 // ProgressFunc is called with progress updates from the C++ engine.
 type ProgressFunc func(percent int, scene, total int, stage string)
-
-// engineSidecar mirrors the C++ <output>.progress.json sidecar written
-// by RenderEngine::emitSidecar. Fields are a subset of the emitted JSON
-// needed for operator-visible telemetry. We parse only what the
-// sidecar contract guarantees — unrecognised keys are silently ignored.
-type engineSidecar struct {
-	Frames       int64              `json:"frames"`
-	Fps          float64            `json:"fps"`
-	SpeedX       float64            `json:"speed_x"`
-	EncodePasses int64              `json:"encode_passes"`
-	TempBytes    int64              `json:"temp_bytes"`
-	DurationSec  float64            `json:"duration_seconds"`
-	ConcatMode   string             `json:"concat_mode"`
-	TotalSize    int64              `json:"total_size"`
-	OutTimeUs    int64              `json:"out_time_us"`
-	OutTimeMs    int64              `json:"out_time_ms"`
-	Bitrate      float64            `json:"bitrate"`
-	DupFrames    int64              `json:"dup_frames"`
-	DropFrames   int64              `json:"drop_frames"`
-	PhaseMS      map[string]float64 `json:"phase_ms,omitempty"`
-	Segments     []segmentTiming    `json:"segments,omitempty"`
-}
-
-// segmentTiming mirrors the C++ SegmentTiming struct emitted inside the
-// sidecar segments[] array.
-type segmentTiming struct {
-	Index            int64   `json:"index"`
-	WorkerIndex      int64   `json:"worker_index"`
-	SourceType       string  `json:"source_type"`
-	TotalMs          float64 `json:"total_ms"`
-	AssetDownloadMs  float64 `json:"asset_download_ms"`
-	FfmpegEncodeMs   float64 `json:"ffmpeg_encode_ms"`
-	SourceBytes      int64   `json:"source_bytes"`
-	OutputBytes      int64   `json:"output_bytes"`
-	FramesEncoded    int64   `json:"frames_encoded"`
-	Codec            string  `json:"codec"`
-	Preset           string  `json:"preset"`
-	FfmpegThreads    int64   `json:"ffmpeg_threads"`
-	Status           string  `json:"status"`
-	ErrorCode        string  `json:"error_code"`
-	ErrorMessage     string  `json:"error_message"`
-	SourceURLHash    string  `json:"source_url_hash"`
-	CacheKey         string  `json:"cache_key"`
-	InputDurationMs  float64 `json:"input_duration_ms"`
-	OutputDurationMs float64 `json:"output_duration_ms"`
-	MetadataJSON     string  `json:"metadata_json"`
-}
 
 // RenderClient executes RenderPlans via the C++ video engine.
 type RenderClient struct {
@@ -109,220 +73,52 @@ func (c *RenderClient) RenderWithMetrics(ctx context.Context, p *plan.RenderPlan
 	metrics := pipeline.RenderMetrics{}
 	start := time.Now()
 
-	tempDir, err := os.MkdirTemp("", "velox_render_*")
+	tempDir, planPath, marshalMs, writeMs, err := preparePlanTemp(p)
 	if err != nil {
-		return metrics, fmt.Errorf("create temp dir: %w", err)
+		return metrics, err
 	}
+	// preparePlanTemp cleans up on its own partial-failure path; only
+	// the success path leaves a live tempDir, which we own here.
 	defer os.RemoveAll(tempDir)
+	metrics.PlanMarshalMs = marshalMs
+	metrics.PlanWriteMs = writeMs
 
-	// ── Plan marshal + write ──────────────────────────────────
-	planPath := filepath.Join(tempDir, "render_plan.json")
-	marshalStart := time.Now()
-	data, err := json.MarshalIndent(p, "", "  ")
-	if err != nil {
-		return metrics, fmt.Errorf("marshal plan: %w", err)
-	}
-	metrics.PlanMarshalMs = time.Since(marshalStart).Milliseconds()
-
-	writeStart := time.Now()
-	if err := os.WriteFile(planPath, data, 0o644); err != nil {
-		return metrics, fmt.Errorf("write plan: %w", err)
-	}
-	metrics.PlanWriteMs = time.Since(writeStart).Milliseconds()
-
-	// ── Subprocess launch ─────────────────────────────────────
 	c.logger.Info("[NATIVE] Launching: %s --render --plan %s", c.binaryPath, planPath)
-	cmd := exec.Command(c.binaryPath, "--render", "--plan", planPath)
-	// Every Attempt owns an isolated process group.  Pdeathsig is the
-	// crash-safety backstop: if the worker agent is SIGKILLed, the native
-	// engine receives SIGKILL from the kernel without relying on Go cleanup.
-	// The engine's descendants (FFmpeg included) inherit this process group.
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid:   true,
-		Pdeathsig: syscall.SIGKILL,
-	}
-
-	stdoutPipe, err := cmd.StdoutPipe()
+	// SAFETY-CRITICAL subprocess lifecycle lives in engine_process.go.
+	processStartMs, processWaitMs, stderrBuf, stdoutBuf, err := runEngineProcess(ctx, c.binaryPath, planPath, c.onProgress)
 	if err != nil {
-		return metrics, fmt.Errorf("stdout pipe: %w", err)
-	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return metrics, fmt.Errorf("stderr pipe: %w", err)
-	}
-
-	processStart := time.Now()
-	if err := cmd.Start(); err != nil {
-		return metrics, fmt.Errorf("start engine: %w", err)
-	}
-	metrics.ProcessStartMs = time.Since(processStart).Milliseconds()
-
-	var stderrBuf strings.Builder
-	stderrReader := bufio.NewReader(stderrPipe)
-	progressDone := make(chan struct{})
-
-	go func() {
-		defer close(progressDone)
-		for {
-			line, err := stderrReader.ReadString('\n')
-			if len(line) > 0 {
-				line = strings.TrimRight(line, "\n\r")
-				stderrBuf.WriteString(line)
-				stderrBuf.WriteString("\n")
-				var prog struct {
-					Percent int    `json:"percent"`
-					Scene   int    `json:"scene"`
-					Total   int    `json:"total_scenes"`
-					Stage   string `json:"stage"`
-				}
-				if json.Unmarshal([]byte(line), &prog) == nil && prog.Percent > 0 {
-					if fn := pipeline.ProgressCallback(ctx); fn != nil {
-						fn(prog.Percent, prog.Scene, prog.Total, prog.Stage)
-					} else if c.onProgress != nil {
-						c.onProgress(prog.Percent, prog.Scene, prog.Total, prog.Stage)
-					}
-				}
-			}
-			if err != nil {
-				break
-			}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			// Cancellation path — ProcessStartMs is set, ProcessWaitMs
+			// is intentionally zero (matches original). TotalMs is
+			// not set on either error path.
+			metrics.ProcessStartMs = processStartMs
+			return metrics, err
 		}
-	}()
-
-	var stdoutBuf strings.Builder
-	stdoutReader := bufio.NewReader(stdoutPipe)
-	go func() {
-		for {
-			line, err := stdoutReader.ReadString('\n')
-			if len(line) > 0 {
-				stdoutBuf.WriteString(line)
-			}
-			if err != nil {
-				break
-			}
-		}
-	}()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- cmd.Wait()
-	}()
-
-	waitStart := time.Now()
-	select {
-	case <-ctx.Done():
-		if cmd.Process != nil {
-			pgid := cmd.Process.Pid
-			_ = syscall.Kill(-pgid, syscall.SIGTERM)
-			select {
-			case <-done:
-			case <-time.After(10 * time.Second):
-				_ = syscall.Kill(-pgid, syscall.SIGKILL)
-				// Reap the process after the hard kill.  Without this wait the
-				// worker can return while the process group is still winding
-				// down, and the native process remains observable as a zombie.
-				<-done
-			}
-		}
-		<-progressDone
-		return metrics, ctx.Err()
-	case execErr := <-done:
-		<-progressDone
-		metrics.ProcessWaitMs = time.Since(waitStart).Milliseconds()
-		if execErr != nil {
-			return metrics, fmt.Errorf("engine failed: %w (stderr=%s stdout=%s)",
-				execErr, strings.TrimSpace(stderrBuf.String()), strings.TrimSpace(stdoutBuf.String()))
-		}
+		// Subprocess failed — populate ProcessWaitMs + wrap with
+		// stderr/stdout context exactly as the original did.
+		metrics.ProcessStartMs = processStartMs
+		metrics.ProcessWaitMs = processWaitMs
+		return metrics, fmt.Errorf("engine failed: %w (stderr=%s stdout=%s)",
+			err, strings.TrimSpace(stderrBuf.String()), strings.TrimSpace(stdoutBuf.String()))
 	}
+	metrics.ProcessStartMs = processStartMs
+	metrics.ProcessWaitMs = processWaitMs
 
 	if stderr := strings.TrimSpace(stderrBuf.String()); stderr != "" {
 		c.logger.Info("[NATIVE] stderr: %s", stderr)
 	}
 
-	if _, err := os.Stat(p.OutputPath); err != nil {
-		return metrics, fmt.Errorf("output file not created %s: %w", p.OutputPath, err)
+	if err := verifyOutputExists(p.OutputPath); err != nil {
+		return metrics, err
 	}
 
-	// ── Read C++ engine sidecar ───────────────────────────────
-	sidecar, err := readEngineSidecar(p.OutputPath)
-	if err != nil {
-		c.logger.Warn("[NATIVE] sidecar read failed: %s", err.Error())
+	sidecar, scErr := readEngineSidecar(p.OutputPath)
+	if scErr != nil {
+		c.logger.Warn("[NATIVE] sidecar read failed: %s", scErr.Error())
 	} else {
-		metrics.Frames = sidecar.Frames
-		metrics.Fps = sidecar.Fps
-		metrics.SpeedX = sidecar.SpeedX
-		metrics.EncodePasses = sidecar.EncodePasses
-		metrics.TempBytes = sidecar.TempBytes
-		metrics.DurationSec = sidecar.DurationSec
-		metrics.ConcatMode = sidecar.ConcatMode
-		metrics.TotalSize = sidecar.TotalSize
-		metrics.OutTimeMs = sidecar.OutTimeMs
-		metrics.Bitrate = sidecar.Bitrate
-		metrics.DupFrames = sidecar.DupFrames
-		metrics.DropFrames = sidecar.DropFrames
-		metrics.PhaseMS = sidecar.PhaseMS
-		metrics.Segments = make([]pipeline.SegmentTiming, 0, len(sidecar.Segments))
-		for _, seg := range sidecar.Segments {
-			metrics.Segments = append(metrics.Segments, pipeline.SegmentTiming{
-				SegmentIndex:     int(seg.Index),
-				SceneWorkerIndex: int(seg.WorkerIndex),
-				SourceType:       seg.SourceType,
-				DurationMS:       seg.TotalMs,
-				AssetDownloadMS:  seg.AssetDownloadMs,
-				FfmpegEncodeMS:   seg.FfmpegEncodeMs,
-				SourceBytes:      seg.SourceBytes,
-				OutputBytes:      seg.OutputBytes,
-				FramesEncoded:    seg.FramesEncoded,
-				Codec:            seg.Codec,
-				Preset:           seg.Preset,
-				FfmpegThreads:    int(seg.FfmpegThreads),
-				Status:           seg.Status,
-				ErrorCode:        seg.ErrorCode,
-				ErrorMessage:     seg.ErrorMessage,
-				SourceURLHash:    seg.SourceURLHash,
-				CacheKey:         seg.CacheKey,
-				InputDurationMS:  seg.InputDurationMs,
-				OutputDurationMS: seg.OutputDurationMs,
-				MetadataJSON:     seg.MetadataJSON,
-			})
-		}
+		mapEngineSidecar(&sidecar, &metrics)
 	}
 
 	metrics.TotalMs = time.Since(start).Milliseconds()
 	return metrics, nil
-}
-
-// readEngineSidecar reads and parses the C++ sidecar at
-// <outputPath>.progress.json. Returns a zero-value EngineSidecar if the
-// file does not exist or cannot be parsed — callers treat missing
-// sidecar as a non-fatal condition.
-func readEngineSidecar(outputPath string) (engineSidecar, error) {
-	var sc engineSidecar
-	sidecarPath := outputPath + ".progress.json"
-	f, err := os.Open(sidecarPath)
-	if err != nil {
-		return sc, fmt.Errorf("open sidecar %s: %w", sidecarPath, err)
-	}
-	defer f.Close()
-	if err := json.NewDecoder(f).Decode(&sc); err != nil {
-		return sc, fmt.Errorf("decode sidecar %s: %w", sidecarPath, err)
-	}
-	return sc, nil
-}
-
-func resolveBinary() (string, error) {
-	r := binaryresolver.Resolver{
-		Name:   "velox_video_engine",
-		EnvVar: "VELOX_VIDEO_ENGINE_CPP_BIN",
-		AbsCandidates: []string{
-			"/usr/local/bin/velox_video_engine",
-		},
-		RelOffsets: []string{
-			filepath.Join("..", "..", "..", "video-engine-cpp", "build", "velox_video_engine"),
-			filepath.Join("..", "..", "..", "video-engine-cpp", "velox_video_engine"),
-			filepath.Join("..", "..", "..", "..", "video-engine-cpp", "build", "velox_video_engine"),
-			filepath.Join("..", "..", "..", "..", "video-engine-cpp", "velox_video_engine"),
-		},
-	}
-	return r.Resolve(0)
 }
