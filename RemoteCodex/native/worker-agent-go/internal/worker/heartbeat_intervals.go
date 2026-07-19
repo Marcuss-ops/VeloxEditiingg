@@ -13,6 +13,13 @@ const (
 	heartbeatIntervalError     = 10 * time.Second // Error: rapid recovery attempts
 	heartbeatMaxBackoff        = 5 * time.Minute  // Maximum backoff interval
 	heartbeatBackoffMultiplier = 2.0              // Backoff multiplier
+
+	// Lease renewal cadence + requested expiry. Mirrored by lease_renewal.go's
+	// leaseRenewLoop (15s ticker, 30m requested expiry) so the cadence is
+	// visible alongside the heartbeat constants for operators tuning the comms
+	// schedule.
+	leaseRenewalInterval = 15 * time.Second // Task-native lease renewal cadence
+	leaseRenewalExpiry   = 30 * time.Minute // Requested lease expiry per renewal
 )
 
 // getHeartbeatInterval returns the appropriate heartbeat interval based on worker status.

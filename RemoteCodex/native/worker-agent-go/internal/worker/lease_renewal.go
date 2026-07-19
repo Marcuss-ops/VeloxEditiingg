@@ -22,7 +22,7 @@ import (
 func (w *Worker) leaseRenewLoop(ctx context.Context) {
 	defer w.wg.Done()
 
-	ticker := time.NewTicker(15 * time.Second)
+	ticker := time.NewTicker(leaseRenewalInterval)
 	defer ticker.Stop()
 
 	for {
@@ -42,7 +42,7 @@ func (w *Worker) leaseRenewLoop(ctx context.Context) {
 					continue
 				}
 
-				taskExpiry := time.Now().UTC().Add(30 * time.Minute)
+				taskExpiry := time.Now().UTC().Add(leaseRenewalExpiry)
 				renewal := &pb.TaskLeaseRenewal{
 					TaskId:          tl.TaskID,
 					JobId:           tl.JobID,

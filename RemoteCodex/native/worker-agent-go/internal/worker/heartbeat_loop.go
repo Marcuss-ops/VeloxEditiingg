@@ -41,7 +41,7 @@ func (w *Worker) heartbeatLoop(ctx context.Context) {
 		logger.LogHeartbeatSuccess(w.config.WorkerID, string(StatusIdle))
 	}
 
-	lastStatus := w.getStatus()
+	lastStatus := w.Status()
 
 	for {
 		select {
@@ -60,7 +60,7 @@ func (w *Worker) heartbeatLoop(ctx context.Context) {
 				consecutiveErrors = 0
 			}
 		case <-ticker.C:
-			currentStatus := w.getStatus()
+			currentStatus := w.Status()
 			if currentStatus != lastStatus {
 				newInterval := w.getHeartbeatInterval()
 				if newInterval != currentInterval {
@@ -100,10 +100,4 @@ func (w *Worker) heartbeatLoop(ctx context.Context) {
 			}
 		}
 	}
-}
-
-// getStatus returns the current worker status, derived from activeJobs and error state.
-// Kept here (heartbeat-internal helper) — single-call site is inside the loop.
-func (w *Worker) getStatus() Status {
-	return w.Status()
 }
