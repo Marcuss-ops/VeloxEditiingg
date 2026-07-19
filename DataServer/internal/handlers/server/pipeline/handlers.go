@@ -7,6 +7,7 @@ import (
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/store"
+	"velox-server/internal/taskgraph"
 	"velox-server/internal/workers"
 )
 
@@ -33,9 +34,10 @@ type Handlers struct {
 // PipelineCancel: list-all for hit-detection, delete for cleanup,
 // command manager for per-worker cancel notifications.
 type JobsDeps struct {
-	Reader jobs.Reader
-	Writer jobs.Writer
-	CmdMgr *workers.CommandManager
+	Reader     jobs.Reader
+	Writer     jobs.Writer
+	CmdMgr     *workers.CommandManager
+	TaskReader taskgraph.Reader
 }
 
 // NewHandlers constructs a Handlers with the three mandatory deps:
@@ -118,7 +120,16 @@ func HandlersFactory(
 // WithJobsDeps returns a copy of h with the optional JobsDeps set.
 // Returns the same handler (mutated) for fluent composition.
 func (h *Handlers) WithJobsDeps(reader jobs.Reader, writer jobs.Writer, cmdMgr *workers.CommandManager) *Handlers {
-	h.jobs = JobsDeps{Reader: reader, Writer: writer, CmdMgr: cmdMgr}
+	h.jobs.Reader = reader
+	h.jobs.Writer = writer
+	h.jobs.CmdMgr = cmdMgr
+	return h
+}
+
+// WithTaskReader wires the canonical task projection used to resolve the
+// worker/attempt/lease fence for remote cancellation.
+func (h *Handlers) WithTaskReader(reader taskgraph.Reader) *Handlers {
+	h.jobs.TaskReader = reader
 	return h
 }
 

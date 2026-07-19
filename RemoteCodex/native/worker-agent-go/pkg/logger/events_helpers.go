@@ -110,6 +110,16 @@ func LogJobCompleted(workerID, jobID string, duration time.Duration) {
 	Info("[%s] %s", e.Name, e.String())
 }
 
+// LogJobCancelled logs an operator/request cancellation separately from a
+// worker or renderer failure.
+func LogJobCancelled(workerID, jobID string, duration time.Duration) {
+	e := obs.NewEvent(EventJobCancelled).
+		WithField("worker_id", workerID).
+		WithField("job_id", jobID).
+		WithDuration(duration)
+	Info("[%s] %s", e.Name, e.String())
+}
+
 // LogJobFailed logs a JOB_FAILED event.
 func LogJobFailed(workerID, jobID string, err error, duration time.Duration) {
 	e := obs.NewEvent(EventJobFailed).

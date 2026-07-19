@@ -360,3 +360,9 @@ EXT
   echo "    \"tls_ca_file\":   \"$INTERMEDIATE_DIR/ca.crt\""
 }
 
+case "$CMD" in
+  root-ca)      cmd_root_ca      ;;
+  intermediate) cmd_intermediate ;;
+  server)       cmd_server       ;;
+  worker)       cmd_worker       ;;
+esac

@@ -333,12 +333,15 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		attemptStatus taskattempts.AttemptStatus
 	)
 	status := cmd.Status
-	if status != "succeeded" && status != "failed" {
+	if status != "succeeded" && status != "failed" && status != "cancelled" {
 		status = "failed"
 	}
 	if status == "succeeded" {
 		taskStatus = taskgraph.StatusSucceeded
 		attemptStatus = taskattempts.AttemptStatusSucceeded
+	} else if status == "cancelled" {
+		taskStatus = taskgraph.StatusCancelled
+		attemptStatus = taskattempts.AttemptStatusCancelled
 	} else {
 		taskStatus = taskgraph.StatusFailed
 		attemptStatus = taskattempts.AttemptStatusFailed
@@ -552,6 +555,8 @@ func (s *TaskReportIngestionService) maybeTransitionJob(ctx context.Context, job
 
 	allTerminal := true
 	anyFailed := false
+	anyHardFailed := false
+	anyCancelled := false
 	allSucceededAndCommitted := true
 	for _, t := range tasks {
 		if !t.Status.IsTerminal() {
@@ -561,6 +566,12 @@ func (s *TaskReportIngestionService) maybeTransitionJob(ctx context.Context, job
 		if t.Status == taskgraph.StatusFailed || t.Status == taskgraph.StatusCancelled {
 			anyFailed = true
 			allSucceededAndCommitted = false
+			if t.Status == taskgraph.StatusCancelled {
+				anyCancelled = true
+			}
+			if t.Status == taskgraph.StatusFailed {
+				anyHardFailed = true
+			}
 		}
 	}
 	if !allTerminal {
@@ -585,6 +596,8 @@ func (s *TaskReportIngestionService) maybeTransitionJob(ctx context.Context, job
 	var newStatus jobs.Status
 	if allSucceededAndCommitted {
 		newStatus = jobs.StatusAwaitingArtifact
+	} else if anyCancelled && !anyHardFailed {
+		newStatus = jobs.StatusCancelled
 	} else if anyFailed {
 		newStatus = jobs.StatusFailed
 	} else {

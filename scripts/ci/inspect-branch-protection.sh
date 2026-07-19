@@ -16,7 +16,7 @@
 #   * Auditors checking whether the four Phase-0 required checks are wired.
 #
 # Exit codes:
-#   0   branch protection present, all four canonical checks are required
+#   0   branch protection present, all seven canonical checks are required
 #   1   branch protection present, but one or more required checks missing
 #   2   usage error
 #   3   gh not authenticated
@@ -69,6 +69,9 @@ CANONICAL_REQUIRED=(
   "E2E gRPC control plane / make e2e-grpc (6-case matrix)"
   "E2E workload (real) / make e2e-workload (Hello→Artifact→SUCCEEDED)"
   "E2E workload-mTLS (PR 7) / make e2e-workload-mtls (mTLS, channel=staging)"
+  "Pre-existing Test Watchlist / Pre-existing Test Watchlist"
+  "no-youtube-regression / YouTube regression guard"
+  "check-canonical-names / Canonical names guard"
 )
 
 ACTUAL="$(printf '%s' "$RAW" | python3 -c '

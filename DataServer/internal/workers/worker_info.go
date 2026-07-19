@@ -19,18 +19,23 @@ import "strings"
 // cached WorkerInfo returned by a previous GetWorker cannot leak derived
 // state across a registry restart.
 type WorkerInfo struct {
-	WorkerID    string `json:"worker_id"`
-	WorkerName  string `json:"worker_name"`
-	DisplayName string `json:"display_name"`
-	Status      string `json:"status"`
-	LastHB      string `json:"last_heartbeat"`
-	FirstSeen   string `json:"first_seen"`
-	CurrentJob  string `json:"current_job"`
-	Drain       bool   `json:"drain"`
-	Schedulable bool   `json:"schedulable"`
-	WorkerGroup string `json:"worker_group"`
-	IPAddress   string `json:"ip_address"`
-	Host        string `json:"host"`
+	WorkerID               string `json:"worker_id"`
+	WorkerName             string `json:"worker_name"`
+	DisplayName            string `json:"display_name"`
+	Status                 string `json:"status"`
+	LastHB                 string `json:"last_heartbeat"`
+	FirstSeen              string `json:"first_seen"`
+	CurrentJob             string `json:"current_job"`
+	Drain                  bool   `json:"drain"`
+	Schedulable            bool   `json:"schedulable"`
+	WorkerGroup            string `json:"worker_group"`
+	IPAddress              string `json:"ip_address"`
+	Host                   string `json:"host"`
+	NodeID                 string `json:"node_id,omitempty"`
+	NodeRole               string `json:"node_role,omitempty"`
+	ClusterID              string `json:"cluster_id,omitempty"`
+	HostFingerprint        string `json:"host_fingerprint,omitempty"`
+	CertificateFingerprint string `json:"certificate_fingerprint,omitempty"`
 
 	// Class (RW-PROD-005 §2.1) is the operator-assigned fleet class
 	// (cpu-xlarge / gpu-a100 / mixed / io ...) used by dispatchers
@@ -146,6 +151,21 @@ func applyMetadataFields(extra map[string]interface{}, info *WorkerInfo) {
 	}
 	if v, ok := extra["engine_version"].(string); ok && v != "" {
 		info.EngineVersion = v
+	}
+	if v, ok := extra["node_id"].(string); ok && v != "" {
+		info.NodeID = v
+	}
+	if v, ok := extra["node_role"].(string); ok && v != "" {
+		info.NodeRole = v
+	}
+	if v, ok := extra["cluster_id"].(string); ok && v != "" {
+		info.ClusterID = v
+	}
+	if v, ok := extra["host_fingerprint"].(string); ok && v != "" {
+		info.HostFingerprint = v
+	}
+	if v, ok := extra["certificate_fingerprint"].(string); ok && v != "" {
+		info.CertificateFingerprint = v
 	}
 	// RW-PROD-005 A9: class + rollout_group arrive in Hello metadata
 	// from the worker's buildHello; the master hydrates WorkerInfo.Class

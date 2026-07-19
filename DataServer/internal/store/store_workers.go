@@ -19,26 +19,59 @@ func (s *SQLiteStore) UpsertWorker(raw []byte) error {
 		return fmt.Errorf("upsert worker: missing worker_id")
 	}
 
-	sched := 0
-	if b, ok := m["schedulable"].(bool); ok && b {
-		sched = 1
-	}
-	drain := 0
-	if b, ok := m["drain"].(bool); ok && b {
-		drain = 1
-	}
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	_, err := s.db.Exec(
+	return s.upsertWorkerExec(s.db, m, raw, now)
+}
+
+type workerSQLExec interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+// EnsureWorkerRecord creates the minimum worker snapshot required before a
+// session can be persisted. Registration may issue the session token before
+// the first heartbeat arrives; keeping this small bootstrap row here preserves
+// the worker_sessions foreign-key/trigger invariant without inventing runtime
+// state.
+func (s *SQLiteStore) EnsureWorkerRecord(workerID string) error {
+	if workerID == "" {
+		return fmt.Errorf("ensure worker: missing worker_id")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.Exec(`INSERT INTO workers
+		(worker_id,worker_name,status,schedulable,drain,raw_json,migrated_at,node_id,node_role)
+		VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(worker_id) DO NOTHING`,
+		workerID, workerID, "REGISTERING", 0, 0, `{}`, now, workerID, "worker")
+	return err
+}
+
+func (s *SQLiteStore) upsertWorkerExec(exec workerSQLExec, m map[string]any, raw []byte, now string) error {
+	workerID := asString(m["worker_id"])
+	sched := boolInt(m["schedulable"])
+	drain := boolInt(m["drain"])
+	metrics, _ := m["metrics"].(map[string]any)
+	metric := func(key string) any { return metrics[key] }
+	_, err := exec.Exec(
 		`INSERT INTO workers (
 			worker_id, worker_name, status, last_heartbeat,
 			schedulable, drain, worker_group,
 			display_name, ip_address, first_seen, current_job,
 			code_version, bundle_version, bundle_hash,
 			protocol_version, engine_version,
+			node_id, node_role, cluster_id, host_fingerprint, certificate_fingerprint,
+			connection_status, connection_reason, session_active, current_task_id,
+			active_task_count, task_slots, cpu_utilization_ratio, memory_used_bytes,
+			disk_free_bytes, jobs_completed, jobs_failed, connected_at, last_heartbeat_at, updated_at,
 			recent_logs, recent_errors, readiness, metrics, capabilities,
 			raw_json, migrated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (
+			?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?)
 		ON CONFLICT(worker_id) DO UPDATE SET
 			worker_name=excluded.worker_name,
 			status=excluded.status,
@@ -55,6 +88,15 @@ func (s *SQLiteStore) UpsertWorker(raw []byte) error {
 			bundle_hash=excluded.bundle_hash,
 			protocol_version=excluded.protocol_version,
 			engine_version=excluded.engine_version,
+			node_id=excluded.node_id, node_role=excluded.node_role, cluster_id=excluded.cluster_id,
+			host_fingerprint=excluded.host_fingerprint, certificate_fingerprint=excluded.certificate_fingerprint,
+			connection_status=excluded.connection_status, connection_reason=excluded.connection_reason,
+			session_active=excluded.session_active, current_task_id=excluded.current_task_id,
+			active_task_count=excluded.active_task_count, task_slots=excluded.task_slots,
+			cpu_utilization_ratio=excluded.cpu_utilization_ratio, memory_used_bytes=excluded.memory_used_bytes,
+			disk_free_bytes=excluded.disk_free_bytes, jobs_completed=excluded.jobs_completed,
+			jobs_failed=excluded.jobs_failed, connected_at=COALESCE(NULLIF(excluded.connected_at, ''), workers.connected_at),
+			last_heartbeat_at=excluded.last_heartbeat_at, updated_at=excluded.updated_at,
 			recent_logs=excluded.recent_logs,
 			recent_errors=excluded.recent_errors,
 			readiness=excluded.readiness,
@@ -70,11 +112,38 @@ func (s *SQLiteStore) UpsertWorker(raw []byte) error {
 		asString(m["code_version"]), asString(m["bundle_version"]),
 		asString(m["bundle_hash"]), asString(m["protocol_version"]),
 		asString(m["engine_version"]),
+		asString(m["node_id"]), defaultString(m["node_role"], "worker"), asString(m["cluster_id"]),
+		asString(m["host_fingerprint"]), asString(m["certificate_fingerprint"]),
+		asString(m["connection_status"]), asString(m["connection_reason"]), boolInt(m["session_active"]),
+		defaultString(m["current_task_id"], asString(m["current_job"])), workerActiveTaskCount(m, metric), int64OrDefault(m["task_slots"], int64OrDefault(metric("task_slots"), 1)),
+		floatOrMetric(m["cpu_utilization_ratio"], metric("cpu_utilization_ratio")), int64OrDefault(m["memory_used_bytes"], int64Value(metric("memory_used_bytes"))), int64OrDefault(m["disk_free_bytes"], int64Value(metric("disk_free_bytes"))),
+		int64Value(m["jobs_completed"]), int64Value(m["jobs_failed"]), asString(m["connected_at"]),
+		defaultString(m["last_heartbeat_at"], asString(m["last_heartbeat"])), now,
 		jsonString(m["recent_logs"]), jsonString(m["recent_errors"]),
 		jsonString(m["readiness"]), jsonString(m["metrics"]), jsonString(m["capabilities"]),
 		string(raw), now,
 	)
 	return err
+}
+
+func workerActiveTaskCount(m map[string]any, metric func(string) any) int64 {
+	if n := int64Value(m["active_task_count"]); n != 0 {
+		return n
+	}
+	if n := int64Value(metric("active_task_count")); n != 0 {
+		return n
+	}
+	if n := int64Value(metric("active_jobs_count")); n != 0 {
+		return n
+	}
+	if n := int64Value(metric("active_tasks")); n != 0 {
+		return n
+	}
+	metrics, _ := m["metrics"].(map[string]any)
+	if items, ok := metrics["active_jobs"].([]any); ok {
+		return int64(len(items))
+	}
+	return 0
 }
 
 // GetWorker returns a single worker as a map by ID.

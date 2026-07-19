@@ -19,6 +19,7 @@ import (
 	"velox-server/internal/jobs/enqueue"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/store"
+	"velox-server/internal/taskgraph"
 	"velox-server/internal/workers"
 )
 
@@ -55,6 +56,7 @@ type PipelineRouteDeps struct {
 	SQLiteStore *store.SQLiteStore
 	JobsRepo    jobs.Repository
 	CmdMgr      *workers.CommandManager
+	TaskReader  taskgraph.Reader
 	// Resolver is the canonical creatorflow.Resolver. The pipeline
 	// handler delegates forward-completed routes to Resolver.Resolve
 	// so the creator_forwardings row + Job row land in the same write
@@ -211,7 +213,7 @@ func registerPipelineRoutes(r *gin.Engine, auth gin.HandlerFunc, deps PipelineRo
 		pipeline.NewRemoteClientFromConfig(deps.Cfg),
 		deps.Resolver,
 		deps.JobsRepo, deps.JobsRepo, deps.CmdMgr,
-	).WithStore(deps.SQLiteStore).RegisterRoutes(r, auth)
+	).WithStore(deps.SQLiteStore).WithTaskReader(deps.TaskReader).RegisterRoutes(r, auth)
 }
 
 // registerDarkeditorRoutes mounts the /api/darkeditor routes.

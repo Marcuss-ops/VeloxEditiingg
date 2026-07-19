@@ -195,6 +195,7 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		logger:           log,
 		status:           StatusIdle,
 		stopChan:         make(chan struct{}),
+		heartbeatWake:    make(chan struct{}, 1),
 		heartbeatBackoff: &backoffConfig{
 			initialInterval: 5 * time.Second,
 			maxInterval:     60 * time.Second,

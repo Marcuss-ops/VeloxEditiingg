@@ -5,7 +5,7 @@
 # Phase 0 (100% certification plan) — branch-protection enforcer.
 #
 # Configures GitHub branch protection on `main` so that:
-#   * Every PR MUST pass all FIVE canonical required checks:
+#   * Every PR MUST pass all SEVEN canonical required checks:
 #       1. CI / make verify
 #       2. E2E gRPC control plane / make e2e-grpc (6-case matrix)
 #       3. E2E workload (real) / make e2e-workload (Hello→Artifact→SUCCEEDED)
@@ -15,6 +15,18 @@
 #            known-previously-flaky tests as a NAMED PR status check
 #            rather than buried in the aggregate workspace-tests.yml
 #            log. Workflow: `.github/workflows/pre-existing-test-watchlist.yml`.
+#       6. no-youtube-regression / YouTube regression guard
+#          ↑ Tier-2 follow-up (added PR-15.16): forbids re-introduction
+#            of any direct Velox-side YouTube integration after the
+#            YouTube → Social API closure. Workflow:
+#            `.github/workflows/no-youtube-regression.yml`.
+#       7. check-canonical-names / Canonical names guard
+#          ↑ Tier-2 follow-up (added PR-15.17): mirror of
+#            no-youtube-regression. Forbids re-introduction of the
+#            deprecated `SocialDestinationID` typed alias (dropped
+#            in Residuo 5) and asserts `external_destination_id`
+#            canonical findability in the 5 typed-source layers.
+#            Workflow: `.github/workflows/check-canonical-names.yml`.
 #   * strict=true        — branches MUST be green-up-to-date with main
 #   * enforce_admins=true — even admins cannot bypass
 #   * required_linear_history=true — no merge commits on main
@@ -28,6 +40,8 @@
 #   - `Routing Invariants / Routing Invariants` (.github/workflows/routing-invariants.yml)
 #   - `Typed Metrics Must-Pass / Typed Metrics Must-Pass` (.github/workflows/typed-metrics-must-pass.yml)
 #   - `Deploy / Deploy (resolve digests + verify signatures + Ansible)` (.github/workflows/deploy.yml)
+#   - `ci-opaque-wire / ci-opaque-wire`         (.github/workflows/ci-opaque-wire.yml)
+#   - `no-youtube-regression / no-youtube-regression` (.github/workflows/no-youtube-regression.yml — single-job variant of the Phase-0 entry above; the canonical status check listed in #6 above uses the `YouTube regression guard` job name)
 #
 # These four additional workflows run in parallel with the canonical
 # 5 but are NOT required for merge today. They are the Tier-2
@@ -124,7 +138,9 @@ read -r -d '' PAYLOAD <<'JSON' || true
       "E2E gRPC control plane / make e2e-grpc (6-case matrix)",
       "E2E workload (real) / make e2e-workload (Hello→Artifact→SUCCEEDED)",
       "E2E workload-mTLS (PR 7) / make e2e-workload-mtls (mTLS, channel=staging)",
-      "Pre-existing Test Watchlist / Pre-existing Test Watchlist"
+      "Pre-existing Test Watchlist / Pre-existing Test Watchlist",
+      "no-youtube-regression / YouTube regression guard",
+      "check-canonical-names / Canonical names guard"
     ]
   },
   "required_pull_request_reviews": {

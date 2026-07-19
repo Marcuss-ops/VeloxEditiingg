@@ -523,6 +523,21 @@ PY
 }
 
 phase8_verify_storage() {
+  # Keep the canonical assertions in one verifier shared with the two-host
+  # driver.  The legacy inline implementation below is retained temporarily
+  # for reviewability while callers migrate; this return makes the shared
+  # verifier authoritative.
+  bash "${REPO_ROOT}/scripts/e2e/verify-golden-job.sh" \
+    --db "${DATA_DIR}/velox.db" \
+    --job-id "${JOB_ID}" \
+    --storage-dir "${STORAGE_DIR}" \
+    --tmpdir "${TMPDIR}/verify" \
+    --profile "${GOLDEN_PROFILE}" \
+    --width "${VIDEO_WIDTH}" --height "${VIDEO_HEIGHT}" --fps "${VIDEO_FPS}" \
+    --duration "${VIDEO_DURATION}" --sample-rate "${AUDIO_SAMPLE_RATE}" \
+    --channels "${AUDIO_CHANNELS}" --scenes "${SCENE_COUNT}"
+  return 0
+
   log "[8/8] Verifying exact Job artifact, lifecycle invariants and media"
   local task_count task_id winner_id artifact_count upload_count
   local open_uploads expected_deliveries delivery_count bad_deliveries

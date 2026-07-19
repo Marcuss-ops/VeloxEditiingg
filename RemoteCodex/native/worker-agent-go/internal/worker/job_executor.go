@@ -7,6 +7,7 @@ package worker
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/logger"
+	"velox-worker-agent/pkg/video/pipeline"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -46,6 +48,7 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	w.activeTasks[taskID] = activeTask
 	w.taskIDsByJob[pte.JobID] = append(w.taskIDsByJob[pte.JobID], taskID)
 	w.activeTasksMu.Unlock()
+	w.wakeHeartbeat()
 	defer func() {
 		w.activeTasksMu.Lock()
 		delete(w.activeTasks, taskID)
@@ -60,11 +63,19 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 			delete(w.taskIDsByJob, pte.JobID)
 		}
 		w.activeTasksMu.Unlock()
+		w.wakeHeartbeat()
 	}()
 
 	jobCtx, jobCancel := context.WithCancel(ctx)
 	activeTask.Cancel = jobCancel
 	defer jobCancel()
+	jobCtx = pipeline.WithProgressCallback(jobCtx, func(percent, scene, total int, stage string) {
+		w.activeTasksMu.Lock()
+		if current := w.activeTasks[taskID]; current != nil {
+			current.Progress = JobProgress{Percent: int32(percent), Scene: int32(scene), TotalScenes: int32(total), Stage: stage}
+		}
+		w.activeTasksMu.Unlock()
+	})
 
 	telemetry.GetPrometheusMetrics().SetWorkerStatus(w.config.WorkerID, 2)
 	telemetry.GetPrometheusMetrics().SetWorkerActiveJobs(w.config.WorkerID, float64(w.concurrencyLimiter.ActiveJobCount()))
@@ -80,10 +91,14 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	duration := time.Since(startTime)
 
 	if execErr != nil {
-		logger.LogJobFailedWithType(w.config.WorkerID, pte.JobID, pte.ExecutorID, execErr, duration)
-		w.setStatus(StatusError)
-		w.tasksFailed.Add(1)
-		telemetry.RecordJobFailure(duration.Milliseconds())
+		if errors.Is(execErr, context.Canceled) {
+			logger.LogJobCancelled(w.config.WorkerID, pte.JobID, duration)
+		} else {
+			logger.LogJobFailedWithType(w.config.WorkerID, pte.JobID, pte.ExecutorID, execErr, duration)
+			w.setStatus(StatusError)
+			w.tasksFailed.Add(1)
+			telemetry.RecordJobFailure(duration.Milliseconds())
+		}
 		telemetry.GetPrometheusMetrics().RecordJobRuntime(pte.ExecutorID, float64(duration.Milliseconds()))
 	} else {
 		if uploadErr := w.uploadTaskOutputs(jobCtx, pte, report); uploadErr != nil {
@@ -127,6 +142,9 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 	var errorCode, errorDetail string
 	if execErr != nil {
 		status = "failed"
+		if errors.Is(execErr, context.Canceled) {
+			status = "cancelled"
+		}
 		errorDetail = execErr.Error()
 		if report != nil {
 			errorCode = report.ErrorCode
@@ -282,6 +300,10 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		if err != nil {
 			return nil, fmt.Errorf("resolve task audio assets: %w", err)
 		}
+		resolvedPayload, err = w.resolveSceneImagePayload(ctx, resolvedPayload)
+		if err != nil {
+			return nil, fmt.Errorf("resolve task scene-image assets: %w", err)
+		}
 		spec.Payload = resolvedPayload
 	}
 
@@ -290,6 +312,12 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		return &report, fmt.Errorf("taskrunner.Run: %w", runErr)
 	}
 	if report.Status != "succeeded" {
+		// Preserve cancellation identity for the wire result. Wrapping every
+		// non-success report as a generic error would turn operator aborts
+		// into FAILED attempts on the master.
+		if report.ErrorCode == taskrunner.CodeCanceled {
+			return &report, context.Canceled
+		}
 		return &report, fmt.Errorf("executor %s failed: code=%q detail=%q",
 			report.ExecutorKey, report.ErrorCode, report.ErrorDetail)
 	}

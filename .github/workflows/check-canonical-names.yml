@@ -1,0 +1,197 @@
+# =============================================================================
+# check-canonical-names.yml — Canonical-name anti-regression CI guard.
+#
+# Purpose:
+#   Forward-protect the opaque-mode canonical identifier name after the
+#   YouTube→Social closure chain (PR-15.11 .. PR-15.14 + Residuo 4 +
+#   Residuo 5). The canonical typed slot is `ExternalDestinationID`
+#   and the canonical wire-key is `external_destination_id`. The
+#   deprecated `SocialDestinationID` typed alias was DROPPED in
+#   Residuo 5 / this lineage. The legacy `social_destination_id`
+#   snake-case wire-key is back-compat-accepted ONLY in
+#   `shapeFromMap`'s firstStringField fallback for pre-rename
+#   operator payloads (audit confirms 0 occurrences in active code
+#   outside the documented carve-out).
+#
+# Mirror of `no-youtube-regression.yml` (PR-15.16). Same single-regex
+# audit pattern, same concurrency/permissions shape, same Hints
+# comment style. The regex is the union of the two patterns the
+# audit forbids re-introduction of:
+#
+#   * `SocialDestinationID`    — PascalCase typed field name
+#                                 (dropped in Residuo 5). MUST NOT
+#                                 reappear in active Go code outside
+#                                 the carve-out set.
+#   * `social_destination_id`  — snake-case wire-key. Allowed ONLY
+#                                 on `shapeFromMap`'s firstStringField
+#                                 legacy fallback + the socialclient
+#                                 wire-shape test fixtures that pin
+#                                 both keys explicitly (see carve-out
+#                                 #11 + #12 below). Any other file
+#                                 matching this is a regression.
+#
+# Exclusions (pathspec-level, category-based + 2 explicit closure-file
+#            carve-outs, transparent):
+#   * .github/workflows/check-canonical-names.yml
+#     SELF-EXCLUSION: this workflow file enumerates the forbidden
+#     disjuncts in the REGEX env var + the Hints comment block.
+#   * **/migrations/**                           — historical SQL
+#     migrations (091/092/093) reference the deprecated name
+#     verbatim in their migration-comment provenance. Forward-only
+#     invariant per
+#     DataServer/internal/store/migrations/README.md.
+#   * **/testdata/**                             — migration
+#     byte-mirror fixtures + snapshot data referenced by the
+#     migration runner.
+#   * **/*_test.go                               — Go test files
+#     legitimately assert canonical-vs-deprecated contracts (e.g.
+#     `delivery_destination_opaque_test.go`'s `LegacyKeys` set; the
+#     `TestShapeFromMap_ExternalDestinationIDAndPlatform`
+#     back-compat `legacy_social_destination_id_key_feeds_canonical`
+#     sub-test). The audit MUST NOT trip on negative-pinning tests.
+#   * **/*.example                               — operator-facing
+#     templates that document the legacy key as RETIRED.
+#   * **/*.md                                    — NESTED
+#     documentation across docs/** + any future subdirectory all
+#     cite the deprecated name as historical context. The audit
+#     MUST NOT trip on documented history.
+#   * CHANGELOG.md                               — ROOT-level
+#     historical change record. `**/*.md` pathspec does NOT match
+#     `file.md` at repo root; add explicitly.
+#   * MILESTONE_PR_YOUTUBE_SOCIAL_SEPARATION.md  — ROOT-level
+#     milestone doc that intentionally cites the audit pattern.
+#   * **/socialcontract/** + **/social_contract/— forward-looking
+#     social_repo boundary tests (zero-cost on current main).
+#
+# Two-file carve-out (with explanatory comment):
+#   * DataServer/internal/jobs/enqueue/delivery_plan_validator.go
+#     The `shapeFromMap` function honors the legacy
+#     `social_destination_id` JSON payload key for backward-compat
+#     reads of pre-rename operator delivery_plan payloads via
+#     `firstStringField(m, "external_destination_id",
+#     "social_destination_id")`. Both keys funnel into the
+#     canonical ExternalDestinationID slot. The legacy key is NOT
+#     surfaced on a typed field anymore (Residuo 5); it lives ONLY
+#     as a wire-key acceptance. This carve-out is INTENTIONAL and
+#     must not be widened without an explicit PR audit.
+#   * DataServer/internal/socialclient/client_test.go
+#     The wire-shape test fixtures (`TestWireShape_Minimal`,
+#     `TestWireShape_Full`, `TestWireShape_LegacyKeysNeverPresent`)
+#     pin BOTH the canonical `external_delivery_id` wire-key AND
+#     the required-keys list with `social_destination_id`. The
+#     negative-pinning fixture (`TestWireShape_LegacyKeysNeverPresent`)
+#     asserts the legacy `platform / account_id / channel_id` keys
+#     never appear at the top level. The required-keys lists are
+#     cargo-cult negative-pinning contracts and MUST stay.
+#     When (and only when) a future contributor rewrites
+#     socialclient wire-shape tests to drop the required-keys
+#     inspection, they MUST also delete this carve-out.
+#
+# Triggers:
+#   * push to main                  — fail-fast
+#   * pull_request to main          — pre-merge gating
+#     (NO paths-ignore — every PR runs the audit so a doc-only edit
+#      introducing a deprecated pattern cannot slip through silently)
+#   * weekly Monday 06:00 UTC drift — drift detector
+#   * workflow_dispatch             — manual re-run
+#
+# Status check name in PR UI: "Canonical names guard".
+# Phase 0 Tier-2 promotion: declared as required_status_check `check-canonical-names / Canonical names guard`
+# in scripts/ci/enable-branch-protection.sh alongside no-youtube-regression
+# (PR-15.16) + the canonical Phase-0 gates.
+# Author: Velox canonical-naming guard initiative (PR-15.17, anti-mirror of PR-15.16).
+# =============================================================================
+
+name: check-canonical-names
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'  # weekly Monday 06:00 UTC drift detector
+  workflow_dispatch:
+
+concurrency:
+  group: check-canonical-names-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Canonical names guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth: 0 makes the full history searchable so future
+          # maintainers can `git blame` any match the audit surfaced.
+          fetch-depth: 0
+
+      - name: Run canonical-names audit
+        env:
+          # Verbatim regex from the user-provided spec. The union of
+          # two patterns: the dropped typed-field PascalCase name
+          # (SocialDestinationID) and the legacy snake-case wire-key
+          # (social_destination_id). The audit fails on non-empty
+          # match in active code outside the carve-out set.
+          REGEX: 'SocialDestinationID|social_destination_id'
+        run: |
+          set -euo pipefail
+          echo "Running canonical-names guard (anti-regression audit)..."
+
+          matches=$(
+            git grep -nE "${REGEX}" -- \
+              ':!.github/workflows/check-canonical-names.yml' \
+              ':!**/migrations/**' \
+              ':!**/testdata/**' \
+              ':!**/*_test.go' \
+              ':!**/*.example' \
+              ':!**/*.md' \
+              ':!CHANGELOG.md' \
+              ':!MILESTONE_PR_YOUTUBE_SOCIAL_SEPARATION.md' \
+              ':!**/socialcontract/**' \
+              ':!**/social_contract/**' \
+              ':!DataServer/internal/jobs/enqueue/delivery_plan_validator.go' \
+              ':!DataServer/internal/socialclient/client_test.go' \
+            || true
+          )
+
+          if [[ -n "${matches}" ]]; then
+            echo
+            echo "Deprecated canonical-name pattern detected:"
+            echo
+            matches_clean=$(printf '%s\n' "${matches}" | grep -v "^README.md:\|^docs/^CHANGELOG.md" || true)
+            echo "${matches_clean}"
+            echo
+            echo "Hints:"
+            echo "  * SocialDestinationID       (typed field, dropped in Residuo 5)"
+            echo "      Use ExternalDestinationID (canonical)."
+            echo "  * social_destination_id     (snake-case wire-key)"
+            echo "      Use external_destination_id (canonical)."
+            echo
+            echo "Both patterns are accepted ONLY by shapeFromMap's"
+            echo "firstStringField back-compat fallback for pre-rename"
+            echo "operator delivery_plan payloads + the socialclient"
+            echo "wire-shape test fixtures that pin both keys explicitly."
+            echo "Any other in-source re-introduction is a regression."
+            echo
+            echo "If a future contributor removes the carve-outs (e.g."
+            echo "delivers a clean-shape delivery_plan validator that"
+            echo "drops the legacy-key fall-back, OR rewrites the"
+            echo "socialclient wire-shape tests to drop the required-keys"
+            echo "inspection), they MUST delete the corresponding"
+            echo "pathspec exclusion line in this workflow in the SAME"
+            echo "atomic commit. Leaving either an unused carve-out or"
+            echo "the underlying surface alone both regress this audit's"
+            echo "surface-area contract."
+            exit 1
+          fi
+
+          echo
+          echo "Deprecation guard clean: ExternalDestinationID canonical on main."

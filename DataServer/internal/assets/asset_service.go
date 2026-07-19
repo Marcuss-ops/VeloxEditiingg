@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -454,10 +455,61 @@ func applySceneImageReferences(payloadMap map[string]interface{}, refs []string)
 
 	payloadMap["scene_image_paths"] = append([]string(nil), refs...)
 
+	// Keep every scene representation worker-visible. In particular, the
+	// engine consumes items[].url and some legacy payloads still carry a JSON
+	// encoded scenes_json string. Leaving either one as file:// would make the
+	// remote worker try to open Computer A's filesystem.
+	if items, ok := payloadMap["items"].([]interface{}); ok {
+		for i, item := range items {
+			if i >= len(refs) {
+				break
+			}
+			if entry, ok := item.(map[string]interface{}); ok {
+				entry["url"] = refs[i]
+			}
+		}
+	} else if items, ok := payloadMap["items"].([]map[string]interface{}); ok {
+		for i, item := range items {
+			if i < len(refs) {
+				item["url"] = refs[i]
+			}
+		}
+	}
+	if images, ok := payloadMap["images"].([]interface{}); ok {
+		for i := range images {
+			if i < len(refs) {
+				images[i] = refs[i]
+			}
+		}
+	} else if images, ok := payloadMap["images"].([]string); ok {
+		for i := range images {
+			if i < len(refs) {
+				images[i] = refs[i]
+			}
+		}
+	}
+	if encoded, ok := payloadMap["scenes_json"].(string); ok && encoded != "" {
+		var scenes []map[string]interface{}
+		if json.Unmarshal([]byte(encoded), &scenes) == nil {
+			for i, scene := range scenes {
+				if i >= len(refs) {
+					break
+				}
+				scene["image"] = refs[i]
+				scene["image_link"] = refs[i]
+				scene["image_links"] = []string{refs[i]}
+			}
+			if rewritten, err := json.Marshal(scenes); err == nil {
+				payloadMap["scenes_json"] = string(rewritten)
+			}
+		}
+	}
+
 	switch scenes := payloadMap["scenes"].(type) {
 	case []map[string]interface{}:
 		for i, scene := range scenes {
 			if i < len(refs) {
+				scene["image"] = refs[i]
 				scene["image_link"] = refs[i]
 				scene["image_links"] = []string{refs[i]}
 			}
@@ -466,6 +518,7 @@ func applySceneImageReferences(payloadMap map[string]interface{}, refs []string)
 		for i, item := range scenes {
 			if i < len(refs) {
 				if scene, ok := item.(map[string]interface{}); ok {
+					scene["image"] = refs[i]
 					scene["image_link"] = refs[i]
 					scene["image_links"] = []string{refs[i]}
 				}

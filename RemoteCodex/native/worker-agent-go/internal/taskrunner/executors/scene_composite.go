@@ -7,6 +7,7 @@ package executors
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -138,6 +139,20 @@ func (s *SceneComposite) Execute(ctx context.Context, _ executor.ExecutionContex
 	pipelineStart := time.Now()
 	runMetrics, err := s.pipelineRunner.RunWithMetrics(ctx, pipelineID, spec.JobID, spec.Payload, outputPath)
 	if err != nil {
+		// A cancelled render is not a renderer failure. The native client
+		// already terminates its process group; remove any partial output
+		// before returning the cancellation sentinel to TaskRunner.
+		_ = os.Remove(outputPath)
+		_ = os.Remove(outputPath + ".progress.json")
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return executor.ExecutionResult{
+				Status:      "failed",
+				ErrorCode:   "cancelled",
+				ErrorDetail: err.Error(),
+				StartedAt:   startedAt,
+				CompletedAt: time.Now().UTC(),
+			}, err
+		}
 		return executor.ExecutionResult{
 			Status:      "failed",
 			ErrorCode:   "execute_failed",

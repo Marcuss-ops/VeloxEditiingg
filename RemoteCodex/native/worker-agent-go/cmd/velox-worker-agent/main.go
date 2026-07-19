@@ -266,6 +266,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+	if err := config.ValidateRemoteMasterEndpoint(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Normalize worker_id to prevent double host_ prefixes and dot-format IDs
 	cfg.WorkerID = config.NormalizeWorkerID(cfg.WorkerID)
@@ -427,7 +431,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	sceneComposite := executors.NewSceneComposite(pipelineRunner, "/tmp/velox/scene-composite")
+	// Render outputs must use the worker's configured, writable output root.
+	// A hardcoded /tmp path can belong to another service account on a
+	// multi-user host and would make remote execution fail at finalization.
+	sceneComposite := executors.NewSceneComposite(pipelineRunner, cfg.OutputDir)
 	registry.MustRegister(sceneComposite)
 	// RW-PROD-004 §3 A4: surface the live executor count on the read
 	// snapshot so /health/ready has a non-zero Executors reason.

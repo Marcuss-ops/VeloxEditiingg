@@ -25,6 +25,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/jobs"
+	"velox-server/internal/taskgraph"
 )
 
 // Cancel handles DELETE /api/remote/pipeline/cancel/:trace_id.
@@ -39,6 +40,9 @@ import (
 func (h *Handlers) Cancel() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		traceID := c.Param("trace_id")
+		if traceID == "" {
+			traceID = c.Param("id")
+		}
 		pipelineLog("CANCEL: requested job_id=%s", traceID)
 
 		localCancelled := []string{}
@@ -61,6 +65,32 @@ func (h *Handlers) Cancel() gin.HandlerFunc {
 		if h.jobs.Reader != nil {
 			toDelete := []string{traceID}
 			workerIDs := map[string]bool{}
+			workerFences := map[string][]map[string]interface{}{}
+
+			// Resolve ownership from the canonical Task table. The old path
+			// attempted to read AssignedTo from the legacy Job queue item,
+			// but ownership now lives on tasks.worker_id.
+			if h.jobs.TaskReader != nil {
+				tasks, err := h.jobs.TaskReader.List(c.Request.Context(), taskgraph.Filter{
+					JobIDs: []string{traceID},
+					Limit:  10000,
+				})
+				if err != nil {
+					pipelineLog("CANCEL: task ownership lookup failed job_id=%s: %v", traceID, err)
+				} else {
+					for _, task := range tasks {
+						if task.WorkerID == "" || task.Status == taskgraph.StatusSucceeded ||
+							task.Status == taskgraph.StatusFailed || task.Status == taskgraph.StatusCancelled {
+							continue
+						}
+						workerIDs[task.WorkerID] = true
+						workerFences[task.WorkerID] = append(workerFences[task.WorkerID], map[string]interface{}{
+							"task_id": task.ID, "attempt_id": task.AttemptID,
+							"lease_id": task.LeaseID, "attempt_number": task.AttemptNumber,
+						})
+					}
+				}
+			}
 
 			allDomainJobs, _ := h.jobs.Reader.List(c.Request.Context(), jobs.Filter{Limit: 10000})
 			for i := range allDomainJobs {
@@ -78,9 +108,11 @@ func (h *Handlers) Cancel() gin.HandlerFunc {
 
 			if h.jobs.CmdMgr != nil {
 				for workerID := range workerIDs {
-					h.jobs.CmdMgr.PushCommand(workerID, "cancel_job", map[string]interface{}{
-						"job_id": traceID,
-					})
+					payload := map[string]interface{}{"job_id": traceID, "reason": "operator_request"}
+					if fences := workerFences[workerID]; len(fences) > 0 {
+						payload["task_fences"] = fences
+					}
+					h.jobs.CmdMgr.PushCommand(workerID, "cancel_job", payload)
 					workerCancelled = append(workerCancelled, workerID)
 					pipelineLog("CANCEL: pushed cancel_job to worker %s for job_id=%s", workerID, traceID)
 				}
@@ -88,7 +120,24 @@ func (h *Handlers) Cancel() gin.HandlerFunc {
 
 			if h.jobs.Writer != nil {
 				for _, id := range toDelete {
-					if err := h.jobs.Writer.Delete(c.Request.Context(), id); err == nil {
+					// Preserve the canonical Job row so the worker's cancelled
+					// TaskResult can be ingested and fenced. Hard-deleting here
+					// turns a real remote abort into a late upload/FAILED result.
+					job, err := h.jobs.Reader.Get(c.Request.Context(), id)
+					if err != nil {
+						pipelineLog("CANCEL: failed to load job %s: %v", id, err)
+						continue
+					}
+					if job == nil {
+						continue
+					}
+					if job.Status == jobs.StatusCancelled {
+						localCancelled = append(localCancelled, id)
+					} else if job.Status != jobs.StatusSucceeded && job.Status != jobs.StatusFailed {
+						if err := h.jobs.Writer.Cancel(c.Request.Context(), id, "operator_request", -1); err != nil {
+							pipelineLog("CANCEL: failed to mark job %s CANCELLED: %v", id, err)
+							continue
+						}
 						localCancelled = append(localCancelled, id)
 					}
 				}

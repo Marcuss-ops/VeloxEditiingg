@@ -233,14 +233,15 @@ func scanCommands(rows *sql.Rows) ([]*PersistedCommand, error) {
 
 // PersistedSession represents a worker session in SQLite.
 type PersistedSession struct {
-	SessionID string    `json:"session_id"`
-	WorkerID  string    `json:"worker_id"`
-	TokenHash string    `json:"token_hash"`
-	IPAddress string    `json:"ip_address"`
-	CreatedAt time.Time `json:"created_at"`
-	ExpiresAt time.Time `json:"expires_at"`
-	LastSeen  time.Time `json:"last_seen"`
-	Revoked   bool      `json:"revoked"`
+	SessionID   string    `json:"session_id"`
+	WorkerID    string    `json:"worker_id"`
+	SessionType string    `json:"session_type"`
+	TokenHash   string    `json:"token_hash"`
+	IPAddress   string    `json:"ip_address"`
+	CreatedAt   time.Time `json:"created_at"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	LastSeen    time.Time `json:"last_seen"`
+	Revoked     bool      `json:"revoked"`
 }
 
 // InsertSession creates a new session record.
@@ -249,11 +250,22 @@ func (s *SQLiteStore) InsertSession(sess *PersistedSession) error {
 		return fmt.Errorf("insert session: missing required fields")
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
+	sessionType := sess.SessionType
+	if sessionType == "" {
+		sessionType = "control"
+	}
+	// A reconnect closes the previous active session of the same type. Asset
+	// authentication and the gRPC control stream intentionally coexist.
+	if _, err := s.db.Exec(`UPDATE worker_sessions
+		SET status='DISCONNECTED', disconnected_at=?, disconnect_reason='replaced', revoked=1
+		WHERE worker_id=? AND session_type=? AND status='ACTIVE' AND revoked=0`, now, sess.WorkerID, sessionType); err != nil {
+		return err
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO worker_sessions (session_id, worker_id, token_hash, ip_address, created_at, expires_at, last_seen, revoked)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+		`INSERT INTO worker_sessions (session_id, worker_id, token_hash, ip_address, created_at, expires_at, last_seen, revoked, status, connected_at, last_seen_at, session_type)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'ACTIVE', ?, ?, ?)`,
 		sess.SessionID, sess.WorkerID, sess.TokenHash, sess.IPAddress,
-		now, sess.ExpiresAt.UTC().Format(time.RFC3339), now,
+		now, sess.ExpiresAt.UTC().Format(time.RFC3339), now, now, now, sessionType,
 	)
 	return err
 }

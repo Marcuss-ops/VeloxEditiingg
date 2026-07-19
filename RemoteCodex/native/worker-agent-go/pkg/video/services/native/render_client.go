@@ -133,7 +133,14 @@ func (c *RenderClient) RenderWithMetrics(ctx context.Context, p *plan.RenderPlan
 	// ── Subprocess launch ─────────────────────────────────────
 	c.logger.Info("[NATIVE] Launching: %s --render --plan %s", c.binaryPath, planPath)
 	cmd := exec.Command(c.binaryPath, "--render", "--plan", planPath)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Every Attempt owns an isolated process group.  Pdeathsig is the
+	// crash-safety backstop: if the worker agent is SIGKILLed, the native
+	// engine receives SIGKILL from the kernel without relying on Go cleanup.
+	// The engine's descendants (FFmpeg included) inherit this process group.
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid:   true,
+		Pdeathsig: syscall.SIGKILL,
+	}
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -169,7 +176,9 @@ func (c *RenderClient) RenderWithMetrics(ctx context.Context, p *plan.RenderPlan
 					Stage   string `json:"stage"`
 				}
 				if json.Unmarshal([]byte(line), &prog) == nil && prog.Percent > 0 {
-					if c.onProgress != nil {
+					if fn := pipeline.ProgressCallback(ctx); fn != nil {
+						fn(prog.Percent, prog.Scene, prog.Total, prog.Stage)
+					} else if c.onProgress != nil {
 						c.onProgress(prog.Percent, prog.Scene, prog.Total, prog.Stage)
 					}
 				}
@@ -203,11 +212,16 @@ func (c *RenderClient) RenderWithMetrics(ctx context.Context, p *plan.RenderPlan
 	select {
 	case <-ctx.Done():
 		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+			pgid := cmd.Process.Pid
+			_ = syscall.Kill(-pgid, syscall.SIGTERM)
 			select {
 			case <-done:
 			case <-time.After(10 * time.Second):
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+				_ = syscall.Kill(-pgid, syscall.SIGKILL)
+				// Reap the process after the hard kill.  Without this wait the
+				// worker can return while the process group is still winding
+				// down, and the native process remains observable as a zombie.
+				<-done
 			}
 		}
 		<-progressDone

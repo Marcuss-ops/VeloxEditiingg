@@ -128,11 +128,12 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	// Issue 7 fix: persist the session to SQLite worker_sessions table.
 	if h.dbStore != nil {
 		_ = h.dbStore.InsertSession(&store.PersistedSession{
-			SessionID: sessionID,
-			WorkerID:  workerID,
-			TokenHash: store.HashCredential(hello.GetCredentialHash()),
-			IPAddress: h.extractPeerIP(stream),
-			ExpiresAt: time.Now().UTC().Add(24 * time.Hour),
+			SessionID:   sessionID,
+			WorkerID:    workerID,
+			SessionType: "control",
+			TokenHash:   store.HashCredential(hello.GetCredentialHash()),
+			IPAddress:   h.extractPeerIP(stream),
+			ExpiresAt:   time.Now().UTC().Add(24 * time.Hour),
 		})
 	}
 
@@ -206,6 +207,24 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 
 	// Dispatch any pending commands that arrived while worker was disconnected
 	h.dispatchCommands(workerID, sess)
+
+	// Commands are durable and may be created while the stream is already
+	// connected (notably operator cancellation). Heartbeats are not a
+	// reliable delivery clock, so poll the outbox independently while this
+	// session is alive. The initial dispatch above handles reconnects; this
+	// loop closes the connected-session delivery gap.
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-sessionCtx.Done():
+				return
+			case <-ticker.C:
+				h.dispatchCommands(workerID, sess)
+			}
+		}
+	}()
 
 	// Start push-mode job notifier.
 	// Issue 6 fix: use sessionCtx for cleanup so notifier goroutines stop

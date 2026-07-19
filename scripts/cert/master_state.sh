@@ -49,25 +49,25 @@ try:
     d = json.load(open(sys.argv[6]))
 except Exception as e:
     print(f"::error::could not parse master-state.json: {e}")
-    sys.exit(0)
+    sys.exit(1)
 
 workers = d.get("workers") or []
 match = next((w for w in workers if w.get("worker_id") == expected_id), None)
 if not match:
     print(f"::error::worker {expected_id} not present in /api/v1/workers (got {len(workers)} workers)")
-    sys.exit(0)
+    sys.exit(1)
 
 # (1) state — must be CONNECTED / READY / REGISTERED / active
 status = match.get("status", match.get("state", ""))
 if status not in ("CONNECTED", "READY", "REGISTERED", "active"):
     print(f"::error::worker {expected_id} state={status!r} (expected CONNECTED)")
-    sys.exit(0)
+    sys.exit(1)
 print(f"OK: worker {expected_id} state={status!r}")
 
 # (2) protocol_version — must match
 if expected_proto and match.get("protocol_version") and match["protocol_version"] != expected_proto:
     print(f"::error::worker {expected_id} protocol_version={match['protocol_version']!r} != {expected_proto!r}")
-    sys.exit(0)
+    sys.exit(1)
 
 # (3) bundle_version — must match EXPECTED_BUNDLE_VERSION (B3' + B5 fix;
 # preflight already refused to enter 2D-3 without a value, and the
@@ -78,13 +78,13 @@ if expected_bversion and not master_bundle_version:
     sys.exit(20)
 if expected_bversion and master_bundle_version and master_bundle_version != expected_bversion:
     print(f"::error::worker {expected_id} bundle_version={master_bundle_version!r} != {expected_bversion!r} (B3' cross-check fail)")
-    sys.exit(0)
+    sys.exit(1)
 
 # (4) bundle_hash — must match EXPECTED_BUNDLE_HASH (B4 fix)
 master_bundle_hash = match.get("bundle_hash") or ""
 if expected_bhash and master_bundle_hash and master_bundle_hash != expected_bhash:
     print(f"::error::worker {expected_id} bundle_hash={master_bundle_hash[:16]}... != {expected_bhash[:16]}... (B4 cross-check fail)")
-    sys.exit(0)
+    sys.exit(1)
 if expected_bhash and not master_bundle_hash:
     print(f"::warn::master did not record bundle_hash for worker {expected_id}; cross-check skipped")
 
@@ -100,7 +100,7 @@ if isinstance(caps, dict):
         executors = list(raw.keys())
 if not executors:
     print(f"::error::worker {expected_id} capabilities.executors is empty (B3 cross-check fail)")
-    sys.exit(0)
+    sys.exit(1)
 print(f"OK: worker {expected_id} executors={executors}")
 
 # (6) max-concurrency — match against EXPECTED_MAX_CONCURRENCY if provided
@@ -108,7 +108,7 @@ if expected_max:
     mx = match.get("max_parallel_jobs") or match.get("max_concurrency") or 0
     if int(mx) != int(expected_max):
         print(f"::error::worker {expected_id} max_parallel_jobs={mx} != {expected_max}")
-        sys.exit(0)
+        sys.exit(1)
 sys.exit(0)
 PYEOF
             local PROBE_RC=$?

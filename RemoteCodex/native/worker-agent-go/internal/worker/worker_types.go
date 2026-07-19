@@ -128,6 +128,9 @@ type Worker struct {
 	// Status management — error state only; busy/idle derived from activeTasks
 	status Status
 	mu     sync.RWMutex
+	// heartbeatWake publishes task start/finish edges immediately instead of
+	// waiting for the previous idle ticker to expire.
+	heartbeatWake chan struct{}
 
 	// Active task executions: keyed by taskID for collision-free multi-task DAGs.
 	// taskIDsByJob provides the reverse-lookup needed for CancelJob.

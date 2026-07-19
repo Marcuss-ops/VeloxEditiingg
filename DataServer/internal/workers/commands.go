@@ -186,11 +186,16 @@ func (tm *TokenManager) GenerateToken(workerID string) string {
 	sessionID := fmt.Sprintf("sess-%s-%d", workerID, time.Now().UnixNano())
 
 	if tm.store != nil {
+		if err := tm.store.EnsureWorkerRecord(workerID); err != nil {
+			registryLog.ErrorWithMsg("token.gen.fail", "Failed to bootstrap worker record",
+				map[string]interface{}{"worker_id": workerID, "err": err.Error()})
+		}
 		sess := &store.PersistedSession{
-			SessionID: sessionID,
-			WorkerID:  workerID,
-			TokenHash: tokenHash,
-			ExpiresAt: time.Now().UTC().Add(time.Hour),
+			SessionID:   sessionID,
+			WorkerID:    workerID,
+			SessionType: "asset",
+			TokenHash:   tokenHash,
+			ExpiresAt:   time.Now().UTC().Add(time.Hour),
 		}
 		if err := tm.store.InsertSession(sess); err != nil {
 			registryLog.ErrorWithMsg("token.gen.fail", "Failed to persist session",

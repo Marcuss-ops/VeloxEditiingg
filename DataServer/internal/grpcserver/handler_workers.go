@@ -41,6 +41,11 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 	extra["jobs_completed"] = hb.GetJobsCompleted()
 	extra["jobs_failed"] = hb.GetJobsFailed()
 	extra["active_jobs_count"] = hb.GetActiveJobsCount()
+	// Keep the typed count aligned with the structured SQLite projection.
+	// PersistWorkerHeartbeat consumes active_task_count for workers and
+	// worker_metric_samples; without this bridge a busy worker was stored as
+	// idle even though the heartbeat carried ActiveJobsCount correctly.
+	extra["active_task_count"] = hb.GetActiveJobsCount()
 
 	if hb.GetExtra() != nil {
 		for k, v := range hb.GetExtra().AsMap() {
@@ -80,7 +85,7 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 	// (preserves the existing pre-F2 contract that handleHeartbeat is
 	// safe with no registry; production code always supplies one).
 	if h.registry != nil {
-		if err := h.registry.Heartbeat(context.Background(), workerID, hb.GetWorkerName(), hb.GetStatus(), hb.GetCurrentJob(), extra); err != nil {
+		if err := h.registry.HeartbeatWithSession(context.Background(), sessionID, workerID, hb.GetWorkerName(), hb.GetStatus(), hb.GetCurrentJob(), extra); err != nil {
 			log.Printf("[GRPC] Heartbeat failed for worker %s: %v", workerID, err)
 		}
 	}

@@ -69,6 +69,7 @@ const (
 	EventJobClaimed   EventCode = "JOB_CLAIMED"
 	EventJobStarted   EventCode = "JOB_STARTED"
 	EventJobCompleted EventCode = "JOB_COMPLETED"
+	EventJobCancelled EventCode = "JOB_CANCELLED"
 	EventJobFailed    EventCode = "JOB_FAILED"
 	EventJobTimeout   EventCode = "JOB_TIMEOUT"
 

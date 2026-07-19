@@ -515,6 +515,15 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 	} else {
 		log.Printf("[GRPC] TaskResult ingest for task=%s done: closed=%v artNew=%d artSkip=%d jobXn=%v jobStatus=%q",
 			taskID, res.AttemptClosed, res.ArtifactsNew, res.ArtifactsSkips, res.JobTransitioned, res.JobNewStatus)
+		// worker_task_runtime is a volatile projection. The canonical
+		// TaskResult ingest has now closed this attempt, so remove the row
+		// immediately instead of waiting for a subsequent heartbeat. This
+		// also prevents a final heartbeat race from leaving a stale runtime.
+		if h.dbStore != nil {
+			if err := h.dbStore.DeleteWorkerTaskRuntime(taskID, attemptID); err != nil {
+				log.Printf("[GRPC] failed to remove worker runtime task=%s attempt=%s: %v", taskID, attemptID, err)
+			}
+		}
 	}
 
 	if sess != nil && sess.sendCh != nil {

@@ -99,11 +99,12 @@ func (c *appComponents) routerBundle() RouterBundle {
 			Enqueuer:    c.modules.Enqueuer,
 		},
 		Pipeline: PipelineRouteDeps{
-			Cfg:      c.cfg,
-			Enqueuer: c.modules.Enqueuer,
-			JobsRepo: c.jobs.Repository,
-			CmdMgr:   c.workers.CommandManager,
-			Resolver: c.resolver,
+			Cfg:        c.cfg,
+			Enqueuer:   c.modules.Enqueuer,
+			JobsRepo:   c.jobs.Repository,
+			CmdMgr:     c.workers.CommandManager,
+			TaskReader: c.tasks.TaskRepository,
+			Resolver:   c.resolver,
 		},
 		Darkeditor: DarkeditorRouteDeps{Cfg: c.cfg, SQLiteStore: c.persistence.SQLite},
 		Upload: UploadRouteDeps{

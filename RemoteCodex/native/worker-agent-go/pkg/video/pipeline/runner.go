@@ -9,6 +9,30 @@ import (
 	"velox-worker-agent/pkg/video/plan"
 )
 
+// ProgressFunc receives operator-visible progress from the native renderer.
+// It is carried on the execution context so a shared Runner remains safe when
+// multiple tasks render concurrently.
+type ProgressFunc func(percent, scene, total int, stage string)
+
+type progressContextKey struct{}
+
+// WithProgressCallback associates a task-local progress sink with ctx.
+func WithProgressCallback(ctx context.Context, fn ProgressFunc) context.Context {
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, progressContextKey{}, fn)
+}
+
+// ProgressCallback returns the task-local progress sink, if any.
+func ProgressCallback(ctx context.Context) ProgressFunc {
+	if ctx == nil {
+		return nil
+	}
+	fn, _ := ctx.Value(progressContextKey{}).(ProgressFunc)
+	return fn
+}
+
 // SegmentTiming mirrors the C++ SegmentTiming struct emitted inside the
 // sidecar segments[] array. One row per timeline segment.
 type SegmentTiming struct {

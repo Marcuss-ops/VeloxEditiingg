@@ -5,6 +5,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"os"
 	"runtime"
@@ -50,6 +51,13 @@ func detectMaxParallelJobs() int {
 
 // getHeartbeatInterval returns the appropriate heartbeat interval based on worker status.
 func (w *Worker) getHeartbeatInterval() time.Duration {
+	w.activeTasksMu.RLock()
+	busy := len(w.activeTasks) > 0
+	w.activeTasksMu.RUnlock()
+	if busy {
+		return heartbeatIntervalBusy
+	}
+
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
@@ -60,6 +68,16 @@ func (w *Worker) getHeartbeatInterval() time.Duration {
 		return heartbeatIntervalError
 	default:
 		return heartbeatIntervalIdle
+	}
+}
+
+func (w *Worker) wakeHeartbeat() {
+	if w.heartbeatWake == nil {
+		return
+	}
+	select {
+	case w.heartbeatWake <- struct{}{}:
+	default:
 	}
 }
 
@@ -90,6 +108,14 @@ func (w *Worker) heartbeatLoop(ctx context.Context) {
 		case <-w.stopChan:
 			w.logger.Debug("Heartbeat loop exiting (stop signal)")
 			return
+		case <-w.heartbeatWake:
+			currentInterval = w.getHeartbeatInterval()
+			ticker.Reset(currentInterval)
+			if err := w.sendHeartbeat(ctx); err != nil {
+				logger.LogHeartbeatFailed(w.config.WorkerID, err, consecutiveErrors+1, maxConsecutiveErrors)
+			} else {
+				consecutiveErrors = 0
+			}
 		case <-ticker.C:
 			currentStatus := w.getStatus()
 			if currentStatus != lastStatus {
@@ -204,16 +230,24 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	activeJobList := make([]map[string]interface{}, 0, len(w.activeTasks))
 	var primaryJobID string
 	for _, at := range w.activeTasks {
+		if at == nil || at.Task == nil {
+			continue
+		}
 		if primaryJobID == "" {
 			primaryJobID = at.JobID
 		}
 		jobInfo := map[string]interface{}{
-			"job_id":     at.JobID,
-			"job_run_id": "",
-			"job_type":   at.Task.ExecutorID,
-			"priority":   0,
-			"lease_id":   at.LeaseID,
-			"attempt":    at.Task.AttemptNumber,
+			"job_id":      at.JobID,
+			"task_id":     at.TaskID,
+			"attempt_id":  at.AttemptID,
+			"job_run_id":  "",
+			"job_type":    at.Task.ExecutorID,
+			"executor_id": at.Task.ExecutorID,
+			"priority":    0,
+			"lease_id":    at.LeaseID,
+			"attempt":     at.Task.AttemptNumber,
+			"status":      "RUNNING",
+			"started_at":  at.StartedAt.UTC().Format(time.RFC3339Nano),
 		}
 		if at.Progress.Percent > 0 {
 			jobInfo["progress_percent"] = at.Progress.Percent
@@ -227,16 +261,30 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	}
 	w.activeTasksMu.RUnlock()
 
-	if len(activeJobList) > 0 {
-		extraMap["active_jobs"] = activeJobList
+	// Send the complete current list, including an explicit empty list when
+	// the worker becomes idle. Omitting the key would make the master retain
+	// the previous active_jobs projection indefinitely.
+	extraMap["active_jobs"] = activeJobList
+	extraMap["active_tasks"] = len(activeJobList)
+	if w.concurrencyLimiter != nil {
+		extraMap["task_slots"] = w.concurrencyLimiter.MaxActiveJobs()
 	}
 	hb.CurrentJob = primaryJobID
 	hb.ActiveJobsCount = int32(len(activeJobList))
 
 	// Serialize extra map to structpb.Struct.
 	if len(extraMap) > 0 {
-		if extra, err := structpb.NewStruct(extraMap); err == nil {
-			hb.Extra = extra
+		// Structpb accepts JSON-shaped values only.  Several heartbeat
+		// fields are naturally built as []string or typed maps; passing
+		// those directly makes NewStruct fail and silently drops the whole
+		// Extra payload (including active_jobs and resources).  Normalize
+		// through JSON so the complete heartbeat survives protobuf encoding.
+		if normalized, err := jsonCompatibleMap(extraMap); err == nil {
+			if extra, err := structpb.NewStruct(normalized); err == nil {
+				hb.Extra = extra
+			}
+		} else {
+			w.logger.Warn("[HEARTBEAT] extra payload omitted: %v", err)
 		}
 	}
 
@@ -251,6 +299,18 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func jsonCompatibleMap(input map[string]interface{}) (map[string]interface{}, error) {
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	var normalized map[string]interface{}
+	if err := json.Unmarshal(encoded, &normalized); err != nil {
+		return nil, err
+	}
+	return normalized, nil
 }
 
 // leaseRenewLoop sends periodic lease renewals for all active jobs AND
