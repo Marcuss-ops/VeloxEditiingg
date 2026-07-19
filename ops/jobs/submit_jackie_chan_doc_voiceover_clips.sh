@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PAYLOAD_FILE="${ROOT_DIR}/ops/jobs/jackie_chan_doc_voiceover.generate-from-clips.json"
+PAYLOAD_FILE="${ROOT_DIR}/ops/jobs/jackie_chan_doc_voiceover.generate.json"
 MASTER_URL="${VELOX_MASTER_URL}"
 ADMIN_TOKEN="${VELOX_ADMIN_TOKEN}"
 
@@ -12,7 +12,7 @@ if [[ -z "${MASTER_URL}" || -z "${ADMIN_TOKEN}" ]]; then
 fi
 
 curl -sS --fail-with-body -X POST \
-  "${MASTER_URL}/api/v1/script/generate-from-clips" \
+  "${MASTER_URL}/api/v1/script/generate" \
   -H "Authorization: Bearer ${ADMIN_TOKEN}" \
   -H "Content-Type: application/json" \
   --data-binary @"${PAYLOAD_FILE}"
