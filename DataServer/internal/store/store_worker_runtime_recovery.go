@@ -8,60 +8,57 @@ import (
 	"time"
 )
 
-// store_worker_runtime_recovery.go is the DOCUMENTED EXCEPTION to the
-// per-package single-writer tx contract enforced by
-// store_worker_runtime.go. All other helpers in this package either
-// receive a *sql.Tx parameter from a caller or use s.db.Exec / s.db.Query
-// directly on the read path; reconcileOnePartition is the single helper
-// in this package that opens its OWN s.db.BeginTx on the recovery path.
+// store_worker_runtime_recovery.go owns the STALE / PARTITIONED_SUSPECTED /
+// PARTITIONED state-machine that mirrors workers.ConnectionStatus at
+// the persistent layer, plus the public recovery loop entry-point
+// (ReconcileWorkerPartitions).
 //
-// Why reconcileOnePartition opens its own *sql.Tx:
+// Per-package single-writer tx contract (see store_worker_runtime.go
+// for the canonical statement): every helper in this file either
+// receives a *sql.Tx parameter (on the heartbeat path) or uses
+// s.db.Query / s.db.Exec directly (read + post-commit side effects).
+// No function in this file opens its own *sql.Tx — the recovery-path
+// BEGIN-TX wrapper has been extracted to store_worker_recovery_tx.go
+// (reconcileOnePartition + persistPartitionedStateTx) for physical
+// isolation from the heartbeat path. See the file header of
+// store_worker_recovery_tx.go for the full rationale on why the
+// per-package single-writer invariant permits exactly two
+// s.db.BeginTx sites (PersistWorkerHeartbeat + reconcileOnePartition).
 //
-//   - It is a background cron-style recovery loop. It is intentionally
-//     invoked from the master scheduler (or a dedicated background
-//     goroutine) on a wall-clock cadence — NOT from a heartbeat.
-//     Because there is no PersistWorkerHeartbeat call available to
-//     piggyback on, even in principle, the reconciler must own a
-//     fresh transaction per candidate.
-//   - It detects workers whose heartbeat stream has STOPPED entirely.
-//     The whole purpose of the loop is to make the persistent mirror
-//     catch up when no write activity is happening on the heartbeat
-//     path. Coupling it to PersistWorkerHeartbeat would defeat the
-//     recovery semantics.
-//   - Each candidate is committed atomically: the PARTITIONED state
-//     transition + WORKER_PARTITION_DETECTED event row are written
-//     together inside the same *sql.Tx so a partial failure on one
-//     candidate cannot corrupt the audit trail of another.
-//   - The per-package single-writer invariant — only one writer of
-//     workers.connection_state at a time — is preserved because
-//     reconcileOnePartition is the ONLY writer of the bare PARTITIONED
-//     state. The heartbeat-time detector (detectAndPersistPartitionTransition,
-//     in this same file) writes PARTITIONED_SUSPECTED, never
-//     PARTITIONED. The two writers target disjoint state values, so
-//     they never collide.
-//   - Per-worker tx boundaries ensure that a per-worker failure does
-//     NOT abort the remainder of the reconciliation pass — each
-//     candidate is independently rolled back on failure and the
-//     loop continues. A single broken worker row cannot delay the
-//     recovery of the rest of the fleet.
+// What lives in this file:
+//
+//   - STALE / PARTITIONED_SUSPECTED / PARTITIONED state-machine
+//     constants (connectionStateConnected / connectionStateStale /
+//     connectionStatePartitionedSuspected / connectionStatePartitioned)
+//     and the pure computeConnectionState helper that derives the
+//     canonical state from a heartbeat timestamp + threshold pair.
+//   - detectAndPersistPartitionTransition: heartbeat-path detector
+//     that RECEIVES *sql.Tx from PersistWorkerHeartbeat. Emits the
+//     STALE / PARTITIONED_SUSPECTED / WORKER_PARTITION_RESOLVED
+//     audit-trail rows; never writes the bare PARTITIONED state.
+//   - ReconcileWorkerPartitions: public recovery entry-point. Scans
+//     the workers table for last_heartbeat_at older than
+//     PartitionThresholdSeconds, fans out across candidates, and
+//     delegates to reconcileOnePartition (in store_worker_recovery_tx.go)
+//     for the per-candidate atomic write.
+//   - eventJSONDetails: small JSON helper for the audit-trail details
+//     column in worker_events (shared with the heartbeat path which
+//     also writes audit rows).
+//   - reason_code constants: package-level audit-trail labels for
+//     both worker-level and task-level events.
 //
 // Contract for future maintainers:
 //
-//   - Do NOT add additional s.db.BeginTx call sites to this package
-//     without first verifying the per-package single-writer invariant
-//     holds for the new site (only PersistWorkerHeartbeat on the
-//     heartbeat path; only reconcileOnePartition on the recovery path).
-//   - Do NOT change reconcileOnePartition to call into the
-//     heartbeat-path helpers via their *sql.Tx parameter — the
-//     recovery loop is structurally independent of the heartbeat
-//     stream.
-//
-// store_worker_runtime_recovery.go owns the STALE / PARTITIONED_SUSPECTED /
-// PARTITIONED state-machine that mirrors workers.ConnectionStatus at the
-// persistent layer. PersistWorkerHeartbeat is the SINGLE writer of
-// connection_state (single-writer tx contract): every heartbeat
-// recomputes the state from last_heartbeat_at and emits the
-// canonical worker_events rows when the state transitions.
+//   - Do NOT add new s.db.BeginTx call sites to this file. The
+//     per-package single-writer contract permits exactly two:
+//     PersistWorkerHeartbeat (heartbeat path, store_worker_heartbeat.go)
+//     and reconcileOnePartition (recovery path, store_worker_recovery_tx.go).
+//   - Do NOT change detectAndPersistPartitionTransition to open its
+//     own *sql.Tx — it is a heartbeat-path helper that operates
+//     inside the tx owned by PersistWorkerHeartbeat.
+//   - Do NOT make ReconcileWorkerPartitions call into the heartbeat
+//     path directly — the recovery loop is structurally independent
+//     of the heartbeat stream.
 //
 // State machine:
 //
@@ -324,34 +321,12 @@ func (s *SQLiteStore) ReconcileWorkerPartitions(ctx context.Context, staleSecond
 }
 
 // reconcileOnePartition is the per-worker tx wrapper used by
-// ReconcileWorkerPartitions. Kept private — callers go through the
-// public ReconcileWorkerPartitions which fans out across the
-// candidates slice.
-func (s *SQLiteStore) reconcileOnePartition(
-	ctx context.Context,
-	workerID, lastHB string,
-	staleSeconds, partitionSeconds int,
-	nowRFC3339 string,
-) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx for %s: %w", workerID, err)
-	}
-	defer tx.Rollback()
-
-	if err := appendWorkerPartitionDetectedEvent(ctx, tx, workerID, lastHB, partitionSeconds, nowRFC3339); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE workers
-		    SET connection_state=?, last_state_change_at=?, status=?
-		  WHERE worker_id=?`,
-		connectionStatePartitioned, nowRFC3339, connectionStatePartitioned, workerID,
-	); err != nil {
-		return fmt.Errorf("update %s: %w", workerID, err)
-	}
-	return tx.Commit()
-}
+// ReconcileWorkerPartitions. Extracted to store_worker_recovery_tx.go
+// for physical isolation from the heartbeat path — see the file
+// header of store_worker_recovery_tx.go for the full rationale on
+// why the per-package single-writer invariant permits exactly two
+// s.db.BeginTx sites (PersistWorkerHeartbeat on the heartbeat path
+// + reconcileOnePartition on the recovery path).
 
 // eventJSONDetails is a tiny helper that marshals a map to its
 // canonical JSON string form for storage in worker_events.
