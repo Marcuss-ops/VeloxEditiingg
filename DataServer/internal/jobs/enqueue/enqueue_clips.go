@@ -53,7 +53,7 @@ func BuildClipPayloadForMaster(rawPayload map[string]interface{}, dataDir, video
 		videoName = paths.SanitizeVideoName(payload.FirstString(rawPayload, "source_text"))
 	}
 	if videoName == "" {
-		videoName = "generate_from_clips_" + time.Now().UTC().Format("20060102_150405")
+		videoName = "script_generate_" + time.Now().UTC().Format("20060102_150405")
 	}
 
 	sceneEntries, clipItems, clipURLs, audioTracks, videoMode, err := normalizeClipPayload(rawPayload)
@@ -104,7 +104,7 @@ func BuildClipPayloadForMaster(rawPayload map[string]interface{}, dataDir, video
 
 	outputPath := payload.FirstString(rawPayload, "output_path")
 	if outputPath == "" {
-		outputPath = paths.DefaultOutputPath(videosDir, dataDir, videoName, "generate_from_clips")
+		outputPath = paths.DefaultOutputPath(videosDir, dataDir, videoName, "script_generate")
 	}
 
 	audioLanguage := payload.FirstString(rawPayload, "audio_language_for_srt", "language")
@@ -137,8 +137,8 @@ func BuildClipPayloadForMaster(rawPayload map[string]interface{}, dataDir, video
 	v2.VideoMode = videoMode
 	v2.OutputPath = outputPath
 	v2.DriveOutput = ResolveDriveOutputFolderReference(dataDir, payload.FirstString(rawPayload, "drive_output_folder", "output_directory"))
-	v2.SubmittedVia = "api_script_generate_from_clips"
-	v2.Source = "script_generate_from_clips"
+	v2.SubmittedVia = "api_script_generate"
+	v2.Source = "script_generate"
 	v2.Version = "v2"
 	v2.Status = "PENDING"
 
