@@ -6,6 +6,7 @@ import (
 
 	"velox-server/internal/costmodel"
 	"velox-server/internal/logging"
+	"velox-server/internal/store"
 	"velox-shared/identity"
 )
 
@@ -37,15 +38,21 @@ const (
 
 	// ConnectionStaleThreshold — heartbeat older than this demotes a
 	// session-active worker from CONNECTED to STALE. Idle workers publish
-	// every 60s, so the read model must allow more than one idle interval
-	// plus normal scheduling/network jitter. 150s is 2.5x the idle period.
-	ConnectionStaleThreshold = 150 * time.Second
+	// every 60s (heartbeat_idle in RemoteCodex heartbeat_intervals.go), so
+	// the read model must allow more than one idle interval plus normal
+	// scheduling/network jitter. Compile-time alias of the canonical
+	// store-side constant so the persist-side mirror and the read-time
+	// derivation share one source of truth (DefaultStaleThreshold in
+	// store/store_worker_heartbeat.go).
+	ConnectionStaleThreshold = store.DefaultStaleThreshold
 
 	// ConnectionDisconnectedThreshold — heartbeat older than this
 	// bumps a worker to DISCONNECTED regardless of session state.
 	// Matches the default `CleanupStaleWorkers` window so the read
 	// model and the eviction loop agree on what "abandoned" means.
-	ConnectionDisconnectedThreshold = 5 * time.Minute
+	// Compile-time alias of the canonical store-side constant
+	// (DefaultPartitionThreshold).
+	ConnectionDisconnectedThreshold = store.DefaultPartitionThreshold
 )
 
 // ConnectionStatus is the canonical state-derivation helper. Pure

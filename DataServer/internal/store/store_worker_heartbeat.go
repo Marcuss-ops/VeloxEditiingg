@@ -188,13 +188,26 @@ type partitionThresholds struct {
 	Partition int
 }
 
-// Default threshold constants. Mirrored from
-// workers/registry_query.go (ConnectionStaleThreshold = 150s,
-// ConnectionDisconnectedThreshold = 5min) so the persistent
-// mirror and the read-time derivation stay aligned by default.
+// Default threshold constants. The canonical single source of truth for
+// heartbeat staleness across the system (handlers, registry, and store).
+//
+// Aligned with the worker-side heartbeat idle interval (60s on the
+// producer side, heartbeat_intervals.go in RemoteCodex) so the
+// read-side derivation and the persist-side mirror stay in lock-step
+// with the heartbeat cadence. STALE = 2.5x idle; PARTITIONED = 5x idle.
+// The idle interval is the producer's heartbeat frequency; bumping
+// the STALE threshold relative to it tolerates normal scheduling
+// jitter + network hiccups without flipping fresh workers to STALE.
+//
+// The workers package's ConnectionStaleThreshold +
+// ConnectionDisconnectedThreshold are compile-time aliases of these
+// constants (const of const) — there is no second copy anywhere.
 const (
-	defaultStaleThresholdSeconds     = 150
-	defaultPartitionThresholdSeconds = 300
+	DefaultStaleThreshold     = 150 * time.Second
+	DefaultPartitionThreshold = 5 * time.Minute
+
+	defaultStaleThresholdSeconds     = int(DefaultStaleThreshold / time.Second)
+	defaultPartitionThresholdSeconds = int(DefaultPartitionThreshold / time.Second)
 )
 
 // sql is imported to satisfy the unused-import detector for the

@@ -16,6 +16,19 @@ import (
 // not open transactions, never BeginTx, never commits. This is the
 // single-writer contract honoured across the runtime/metrics/events
 // helpers.
+//
+// The missing_heartbeats >= 2 counter is a discrete heartbeat-miss
+// bound for runtime-task cleanup: a runtime row is deleted and the
+// TASK_RUNTIME_DISAPPEARED event is emitted after missing 2 heartbeats.
+// This is INDEPENDENT of the canonical heartbeat-staleness threshold
+// (DefaultStaleThreshold in store_worker_heartbeat.go, 150s = 2.5x
+// the producer 60s idle heartbeat). The two thresholds serve
+// different purposes: missing_heartbeats is the low-level "did the
+// worker still advertise this task?" trip-wire for a single runtime
+// row; DefaultStaleThreshold governs the operator-visible
+// worker-level connection_state transitions
+// (CONNECTED -> STALE -> PARTITIONED -> DISCONNECTED). Touching one
+// does not collapse the other.
 
 // DeleteWorkerTaskRuntime removes the volatile runtime projection after the
 // canonical TaskResult transaction has closed the attempt. The task/attempt
