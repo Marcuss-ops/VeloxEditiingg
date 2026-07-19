@@ -395,7 +395,7 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 	}
 }
 
-func TestGenerateFromClips_EnqueuesClipJob(t *testing.T) {
+func TestGenerate_SourceClips_EnqueuesClipJob(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "velox.db")
 	db, err := store.NewSQLiteStore(dbPath)
@@ -423,6 +423,9 @@ func TestGenerateFromClips_EnqueuesClipJob(t *testing.T) {
 
 	payload := map[string]interface{}{
 		"video_name": "Jackie Chan Funniest Moments",
+		"source": map[string]interface{}{
+			"type": "clips",
+		},
 		"delivery_plan": []interface{}{
 			map[string]interface{}{"destination_id": "destination-main", "retry_budget": 3, "priority": 0},
 		},
@@ -466,7 +469,7 @@ func TestGenerateFromClips_EnqueuesClipJob(t *testing.T) {
 	body, _ := json.Marshal(payload)
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/script/generate-from-clips", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/script/generate", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.RemoteAddr = "127.0.0.1:12345"
 	r.ServeHTTP(w, req)
@@ -478,6 +481,9 @@ func TestGenerateFromClips_EnqueuesClipJob(t *testing.T) {
 	var res map[string]interface{}
 	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
 		t.Fatalf("decode response: %v", err)
+	}
+	if got := res["kind"]; got != "generate" {
+		t.Fatalf("want kind generate, got %v", got)
 	}
 	jobID, _ := res["job_id"].(string)
 	if jobID == "" {
@@ -524,8 +530,37 @@ func TestGenerateFromClips_EnqueuesClipJob(t *testing.T) {
 	if got := secondTrack["start_time_offset"]; got != float64(7.5) {
 		t.Fatalf("want second audio offset 7.5, got %#v", got)
 	}
+	if got := stored["submitted_via"]; got != "api_script_generate" {
+		t.Fatalf("want submitted_via api_script_generate, got %#v", got)
+	}
 	if got := stored["pipeline_id"]; got != "hybrid.v1" {
 		t.Fatalf("want pipeline_id hybrid.v1, got %#v", got)
+	}
+}
+
+func TestGenerate_RequiresSourceType(t *testing.T) {
+	tempDir := t.TempDir()
+	db, err := store.NewSQLiteStore(filepath.Join(tempDir, "velox.db"))
+	if err != nil {
+		t.Fatalf("new sqlite store: %v", err)
+	}
+	atomic := store.NewAtomicJobTaskCreator(db)
+	cfg := &config.Config{
+		Runtime: config.RuntimeConfig{
+			DataDir:   tempDir,
+			VideosDir: filepath.Join(tempDir, "videos"),
+		},
+	}
+	enqueuer := jobenqueue.NewEnqueuer(atomic, nil, nil, noopPlanResolver{})
+	r := gin.New()
+	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/script/generate", bytes.NewBufferString(`{"video_name":"missing source"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d body=%s", w.Code, w.Body.String())
 	}
 }
 
