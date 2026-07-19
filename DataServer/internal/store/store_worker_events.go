@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -142,3 +143,101 @@ func appendWorkerPartitionResolvedEvent(ctx context.Context, tx *sql.Tx, workerI
 // the state machine lives). They are referenced directly from this
 // file because both files share the same package — no re-export
 // shim needed.
+
+// WorkerEventRow is the read-side row shape returned by
+// ListWorkerEvents. Mirrors the worker_events schema (migration
+// 094). Fields with no NOT NULL constraint at the schema level
+// (worker_id, session_id, job_id, task_id, attempt_id, reason_code)
+// are typed as sql.NullString so the SQL NULL survives the scan.
+//
+// `DetailsJSON` is the raw details_json column; the handler layer
+// parses it into a structured map (or surfaces it as raw JSON)
+// after sanitization. We deliberately do NOT parse it inside the
+// store layer because the canonical redaction surface (sanitiseHostname,
+// redactIPv4, redactIPv6, redactSecretHex) lives in the handler
+// package and the store package must remain pure data access.
+type WorkerEventRow struct {
+	EventID     string
+	WorkerID    sql.NullString
+	SessionID   sql.NullString
+	JobID       sql.NullString
+	TaskID      sql.NullString
+	AttemptID   sql.NullString
+	EventType   string
+	Severity    string
+	ReasonCode  sql.NullString
+	DetailsJSON string
+	CreatedAt   string
+}
+
+// ListWorkerEvents returns up to `limit` events for `workerID`,
+// newest first (ORDER BY created_at DESC).
+//
+// Parameters:
+//
+//	workerID  — exact match on worker_id. Empty string returns an
+//	            empty slice (defense against an empty :worker_id
+//	            param).
+//	eventType — optional exact match on event_type. Pass "" to
+//	            disable the type filter (returns all event types).
+//	            Known canonical types (used by dashboards for
+//	            filter chips):
+//	              WORKER_STATE_CHANGED
+//	              TASK_RUNTIME_DISAPPEARED
+//	              WORKER_STALE_DETECTED
+//	              WORKER_PARTITION_DETECTED
+//	              WORKER_PARTITION_RESOLVED
+//	            Unknown types are still queryable so a future
+//	            event-type addition does not require a handler
+//	            change — the applier just matches the literal.
+//	since     — optional RFC3339 lower bound on created_at. Pass ""
+//	            to disable.
+//	limit     — caller-supplied upper bound, clamped to [1, 1000].
+//
+// The function NEVER mutates state. Safe for concurrent use.
+func ListWorkerEvents(ctx context.Context, db *sql.DB, workerID, eventType, since string, limit int) ([]WorkerEventRow, error) {
+	if workerID == "" {
+		return []WorkerEventRow{}, nil
+	}
+	if limit < 1 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	args := []interface{}{workerID}
+	q := `SELECT event_id, worker_id, session_id, job_id, task_id, attempt_id,
+		       event_type, severity, reason_code, details_json, created_at
+		  FROM worker_events
+		 WHERE worker_id = ?`
+	if strings.TrimSpace(eventType) != "" {
+		q += ` AND event_type = ?`
+		args = append(args, eventType)
+	}
+	if strings.TrimSpace(since) != "" {
+		q += ` AND created_at >= ?`
+		args = append(args, since)
+	}
+	q += ` ORDER BY created_at DESC, event_id DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list worker events: %w", err)
+	}
+	defer rows.Close()
+	out := make([]WorkerEventRow, 0, limit)
+	for rows.Next() {
+		var r WorkerEventRow
+		if err := rows.Scan(
+			&r.EventID, &r.WorkerID, &r.SessionID, &r.JobID, &r.TaskID, &r.AttemptID,
+			&r.EventType, &r.Severity, &r.ReasonCode, &r.DetailsJSON, &r.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("list worker events: scan: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list worker events: rows: %w", err)
+	}
+	return out, nil
+}

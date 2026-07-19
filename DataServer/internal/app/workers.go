@@ -23,6 +23,9 @@ type WorkersModule struct {
 	workerUpdateHandler *workersapi.WorkerUpdateHandler
 	workerAssetHandler  *assets.Handler
 	workersHandler      *api.WorkersHandler
+	metricsHandler      *api.MetricsHandler
+	sessionsHandler     *api.SessionsHandler
+	eventsHandler       *api.EventsHandler
 }
 
 // NewWorkersModule creates a new workers module.
@@ -40,6 +43,21 @@ func NewWorkersModule(cfg *config.Config, reg *workersreg.Registry, lifecycle *l
 		workersHandler:      api.NewWorkersHandler(reg),
 	}
 }
+
+// SetMetricsHandler wires the per-worker metrics read endpoint
+// (GET /api/v1/workers/:worker_id/metrics). Idempotent; safe to
+// call before RegisterRoutes. Passing nil disables the route.
+func (m *WorkersModule) SetMetricsHandler(h *api.MetricsHandler) { m.metricsHandler = h }
+
+// SetSessionsHandler wires the per-worker sessions read endpoint
+// (GET /api/v1/workers/:worker_id/sessions). Idempotent; safe to
+// call before RegisterRoutes. Passing nil disables the route.
+func (m *WorkersModule) SetSessionsHandler(h *api.SessionsHandler) { m.sessionsHandler = h }
+
+// SetEventsHandler wires the per-worker events read endpoint
+// (GET /api/v1/workers/:worker_id/events). Idempotent; safe to
+// call before RegisterRoutes. Passing nil disables the route.
+func (m *WorkersModule) SetEventsHandler(h *api.EventsHandler) { m.eventsHandler = h }
 
 func (m *WorkersModule) Name() string {
 	return "workers"
@@ -80,6 +98,20 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 		}
 		v1Workers.GET("", m.workersHandler.ListWorkers())
 		v1Workers.GET("/:worker_id", m.workersHandler.GetWorker())
+		// Per-worker metrics / sessions / events read endpoints
+		// (RW-PROD-005). Each is registered only when the
+		// corresponding handler was wired via the Set* setters so
+		// a no-store configuration (tests, partial bootstrap)
+		// does not register routes that would 503 every request.
+		if m.metricsHandler != nil {
+			v1Workers.GET("/:worker_id/metrics", m.metricsHandler.ListWorkerMetrics())
+		}
+		if m.sessionsHandler != nil {
+			v1Workers.GET("/:worker_id/sessions", m.sessionsHandler.ListWorkerSessions())
+		}
+		if m.eventsHandler != nil {
+			v1Workers.GET("/:worker_id/events", m.eventsHandler.ListWorkerEvents())
+		}
 	}
 
 	log.Printf("[WORKERS] Routes registered")

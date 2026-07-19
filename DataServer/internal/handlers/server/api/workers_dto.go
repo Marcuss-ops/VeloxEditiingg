@@ -199,3 +199,162 @@ type Filters struct {
 func (f Filters) IsZero() bool {
 	return f.Class == "" && f.Status == "" && f.RolloutGroup == "" && f.NeedsExecutor == ""
 }
+
+// =====================================================================
+// DTOs for the per-worker metrics / sessions / events endpoints
+// (workers_metrics_handler.go, workers_sessions_handler.go,
+// workers_events_handler.go).
+// =====================================================================
+
+// MetricSampleResponse is the sanitized, operator-facing JSON shape
+// for a single worker_metric_samples row.
+//
+// Field set mirrors the schema (migration 094):
+//   - sampled_at, connection_status, active_tasks, task_slots,
+//     cpu_utilization_ratio, memory_used_bytes, disk_free_bytes
+//     are NOT NULL at the schema level and are surfaced unconditionally.
+//   - session_id is the originating heartbeat session; surfaced for
+//     audit correlation but omitempty so the rare NULL row renders
+//     as a clean omission.
+//   - load_average / process_rss_bytes / network_rx_bytes /
+//     network_tx_bytes are nullable at the schema level. The handler
+//     renders them as 0 / null / omitted via the *float64 / *int64
+//     pointer types so a NULL row carries no false-positive signal.
+//
+// No sensitive fields exist on this DTO (no IPs, no creds, no paths);
+// the time-series counters are pure operator-observability signals.
+type MetricSampleResponse struct {
+	SampledAt           string   `json:"sampled_at"`
+	SessionID           string   `json:"session_id,omitempty"`
+	ConnectionStatus    string   `json:"connection_status"`
+	ActiveTasks         int64    `json:"active_tasks"`
+	TaskSlots           int64    `json:"task_slots"`
+	CPUUtilizationRatio float64  `json:"cpu_utilization_ratio"`
+	MemoryUsedBytes     int64    `json:"memory_used_bytes"`
+	DiskFreeBytes       int64    `json:"disk_free_bytes"`
+	LoadAverage         *float64 `json:"load_average,omitempty"`
+	ProcessRSSBytes     *int64   `json:"process_rss_bytes,omitempty"`
+	NetworkRxBytes      *int64   `json:"network_rx_bytes,omitempty"`
+	NetworkTxBytes      *int64   `json:"network_tx_bytes,omitempty"`
+}
+
+// WorkerMetricsListResponse wraps the metrics array for
+// GET /api/v1/workers/:worker_id/metrics. `WorkerID` is echoed back
+// so dashboards consuming the JSON can correlate the response with
+// the request without parsing the URL.
+type WorkerMetricsListResponse struct {
+	WorkerID string                 `json:"worker_id"`
+	Count    int                    `json:"count"`
+	Metrics  []MetricSampleResponse `json:"metrics"`
+}
+
+// SessionResponse is the sanitized, operator-facing JSON shape for a
+// single worker_sessions row.
+//
+// SECURITY posture (canonical, see OWNERSHIP.md §3):
+//   - token_hash is NEVER carried into the response (it is the SHA-256
+//     of the bearer token used by the worker). The store-layer
+//     ListWorkerSessions helper omits the column from the SELECT so
+//     a future regression that adds it back to the row struct will
+//     fail to compile.
+//   - ip_address IS surfaced but MUST go through sanitiseHostname()
+//     at the handler boundary (IPv4/IPv6/long-hex redaction).
+//   - session_id is the canonical opaque identifier; operators use
+//     it to correlate with the audit ledger.
+//   - disconnect_reason is surfaced verbatim; it can contain an
+//     operator-configured string ("replaced", "migration_normalized",
+//     "expired") and is NOT considered sensitive.
+//
+// session_type is the canonical "control" | "asset" enum from
+// migration 095. status is one of "ACTIVE" | "DISCONNECTED" |
+// "REVOKED" | "EXPIRED".
+type SessionResponse struct {
+	SessionID        string `json:"session_id"`
+	WorkerID         string `json:"worker_id"`
+	SessionType      string `json:"session_type"` // control | asset
+	Status           string `json:"status"`       // ACTIVE | DISCONNECTED | REVOKED | EXPIRED
+	IPAddress        string `json:"ip_address"`   // sanitised via sanitiseHostname()
+	Revoked          bool   `json:"revoked"`
+	ProtocolVersion  string `json:"protocol_version"`
+	BundleVersion    string `json:"bundle_version,omitempty"`
+	CreatedAt        string `json:"created_at"`
+	ExpiresAt        string `json:"expires_at"`
+	ConnectedAt      string `json:"connected_at,omitempty"`
+	LastSeenAt       string `json:"last_seen_at,omitempty"`
+	DisconnectedAt   string `json:"disconnected_at,omitempty"`
+	DisconnectReason string `json:"disconnect_reason,omitempty"`
+}
+
+// WorkerSessionsListResponse wraps the sessions array for
+// GET /api/v1/workers/:worker_id/sessions.
+type WorkerSessionsListResponse struct {
+	WorkerID string            `json:"worker_id"`
+	Count    int               `json:"count"`
+	Sessions []SessionResponse `json:"sessions"`
+}
+
+// EventResponse is the sanitized, operator-facing JSON shape for a
+// single worker_events row.
+//
+// SECURITY posture:
+//   - details_json is the raw audit detail blob; the handler parses
+//     it into a map[string]any and routes every string value through
+//     sanitiseHostname() so an embedded IP / path / long hex cannot
+//     leak. Parsing failures fall back to the raw string (still
+//     sanitised) so the audit ledger is never silently dropped.
+//   - event_type / severity / reason_code are the canonical
+//     operators-controlled taxonomy; surfaced verbatim.
+//
+// No token hashes or credentials live on this table.
+type EventResponse struct {
+	EventID    string         `json:"event_id"`
+	WorkerID   string         `json:"worker_id,omitempty"`
+	SessionID  string         `json:"session_id,omitempty"`
+	JobID      string         `json:"job_id,omitempty"`
+	TaskID     string         `json:"task_id,omitempty"`
+	AttemptID  string         `json:"attempt_id,omitempty"`
+	EventType  string         `json:"event_type"`
+	Severity   string         `json:"severity"`
+	ReasonCode string         `json:"reason_code,omitempty"`
+	Details    map[string]any `json:"details,omitempty"`
+	CreatedAt  string         `json:"created_at"`
+}
+
+// WorkerEventsListResponse wraps the events array for
+// GET /api/v1/workers/:worker_id/events.
+type WorkerEventsListResponse struct {
+	WorkerID string          `json:"worker_id"`
+	Count    int             `json:"count"`
+	Events   []EventResponse `json:"events"`
+}
+
+// Default + max page size for the new per-worker endpoints. Centralised
+// here so the three handlers share the same clamp logic and a future
+// operator can tune the cap by editing one constant.
+const (
+	DefaultListLimit = 100
+	MaxListLimit     = 1000
+)
+
+// clampLimit clamps a user-supplied limit query param into
+// [1, MaxListLimit], defaulting to DefaultListLimit when the value
+// is missing, non-numeric, or non-positive.
+func clampLimit(raw string) int {
+	if raw == "" {
+		return DefaultListLimit
+	}
+	n := 0
+	for _, c := range raw {
+		if c < '0' || c > '9' {
+			return DefaultListLimit
+		}
+		n = n*10 + int(c-'0')
+	}
+	if n < 1 {
+		return DefaultListLimit
+	}
+	if n > MaxListLimit {
+		return MaxListLimit
+	}
+	return n
+}
