@@ -8,6 +8,54 @@ import (
 	"time"
 )
 
+// store_worker_runtime_recovery.go is the DOCUMENTED EXCEPTION to the
+// per-package single-writer tx contract enforced by
+// store_worker_runtime.go. All other helpers in this package either
+// receive a *sql.Tx parameter from a caller or use s.db.Exec / s.db.Query
+// directly on the read path; reconcileOnePartition is the single helper
+// in this package that opens its OWN s.db.BeginTx on the recovery path.
+//
+// Why reconcileOnePartition opens its own *sql.Tx:
+//
+//   - It is a background cron-style recovery loop. It is intentionally
+//     invoked from the master scheduler (or a dedicated background
+//     goroutine) on a wall-clock cadence — NOT from a heartbeat.
+//     Because there is no PersistWorkerHeartbeat call available to
+//     piggyback on, even in principle, the reconciler must own a
+//     fresh transaction per candidate.
+//   - It detects workers whose heartbeat stream has STOPPED entirely.
+//     The whole purpose of the loop is to make the persistent mirror
+//     catch up when no write activity is happening on the heartbeat
+//     path. Coupling it to PersistWorkerHeartbeat would defeat the
+//     recovery semantics.
+//   - Each candidate is committed atomically: the PARTITIONED state
+//     transition + WORKER_PARTITION_DETECTED event row are written
+//     together inside the same *sql.Tx so a partial failure on one
+//     candidate cannot corrupt the audit trail of another.
+//   - The per-package single-writer invariant — only one writer of
+//     workers.connection_state at a time — is preserved because
+//     reconcileOnePartition is the ONLY writer of the bare PARTITIONED
+//     state. The heartbeat-time detector (detectAndPersistPartitionTransition,
+//     in this same file) writes PARTITIONED_SUSPECTED, never
+//     PARTITIONED. The two writers target disjoint state values, so
+//     they never collide.
+//   - Per-worker tx boundaries ensure that a per-worker failure does
+//     NOT abort the remainder of the reconciliation pass — each
+//     candidate is independently rolled back on failure and the
+//     loop continues. A single broken worker row cannot delay the
+//     recovery of the rest of the fleet.
+//
+// Contract for future maintainers:
+//
+//   - Do NOT add additional s.db.BeginTx call sites to this package
+//     without first verifying the per-package single-writer invariant
+//     holds for the new site (only PersistWorkerHeartbeat on the
+//     heartbeat path; only reconcileOnePartition on the recovery path).
+//   - Do NOT change reconcileOnePartition to call into the
+//     heartbeat-path helpers via their *sql.Tx parameter — the
+//     recovery loop is structurally independent of the heartbeat
+//     stream.
+//
 // store_worker_runtime_recovery.go owns the STALE / PARTITIONED_SUSPECTED /
 // PARTITIONED state-machine that mirrors workers.ConnectionStatus at the
 // persistent layer. PersistWorkerHeartbeat is the SINGLE writer of

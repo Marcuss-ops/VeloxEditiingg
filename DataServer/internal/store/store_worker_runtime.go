@@ -21,9 +21,20 @@
 //	                                  snapshot file too)
 //
 // Single-writer contract enforced by this split:
-//   - Only PersistWorkerHeartbeat opens a *sql.Tx (s.db.BeginTx).
-//   - Every helper in the sibling files receives the *sql.Tx as a
-//     parameter. None of them ever call BeginTx themselves.
+//   - PersistWorkerHeartbeat (store_worker_heartbeat.go) is the only
+//     heartbeat-path opener of *sql.Tx (s.db.BeginTx). Every other
+//     helper in the heartbeat path files receives the *sql.Tx as a
+//     parameter; none of them call BeginTx themselves.
+//   - DOCUMENTED EXCEPTION (background recovery loop):
+//     reconcileOnePartition
+//     (in store_worker_runtime_recovery.go, called by the public
+//     ReconcileWorkerPartitions) DOES open its own s.db.BeginTx —
+//     one transaction per candidate worker. It cannot piggyback
+//     on PersistWorkerHeartbeat: it is a cron-style recovery loop
+//     for the case where the heartbeat stream has stopped entirely.
+//     See the file header of store_worker_runtime_recovery.go for
+//     the full rationale and the per-package single-writer
+//     invariant that the exception preserves.
 //   - DeleteWorkerTaskRuntime uses s.db.Exec directly (no transaction:
 //     the canonical TaskResult transaction has already committed by the
 //     time this is invoked).
