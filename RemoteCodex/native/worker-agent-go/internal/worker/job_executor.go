@@ -296,13 +296,9 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 
 	spec := pte.Spec
 	if spec.Payload != nil {
-		resolvedPayload, err := w.resolveAudioPayload(ctx, spec.Payload)
+		resolvedPayload, err := w.resolveTaskAssets(ctx, spec.Payload)
 		if err != nil {
-			return nil, fmt.Errorf("resolve task audio assets: %w", err)
-		}
-		resolvedPayload, err = w.resolveSceneImagePayload(ctx, resolvedPayload)
-		if err != nil {
-			return nil, fmt.Errorf("resolve task scene-image assets: %w", err)
+			return nil, err
 		}
 		spec.Payload = resolvedPayload
 	}
