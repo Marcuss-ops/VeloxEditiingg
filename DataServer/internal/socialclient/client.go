@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 )
 
 // Client is the typed Velox-side boundary against the social_repo.
@@ -43,6 +45,14 @@ func (c *Client) BaseURL() string {
 	return c.cfg.BaseURL
 }
 
+// endpoint joins a path to the configured BaseURL, normalizing any
+// trailing slash so callers do not need to know whether BaseURL ends
+// in "/" or not. It is the single place where Social API URLs are
+// built; all outbound requests methods must use it.
+func (c *Client) endpoint(path string) string {
+	return strings.TrimRight(c.cfg.BaseURL, "/") + path
+}
+
 // DeliverArtifact POSTs the DeliverArtifactRequest to the social_repo
 // and parses the response. Single-attempt: the caller (typically the
 // deliveries.DeliveryRunner) handles retry via the runner's
@@ -71,7 +81,7 @@ func (c *Client) DeliverArtifact(ctx context.Context, req DeliverArtifactRequest
 		return nil, fmt.Errorf("%w: marshal request: %v", ErrPermanent, err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint("/internal/v1/deliveries"), bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("%w: build request: %v", ErrTransient, err)
 	}
@@ -159,8 +169,8 @@ func (c *Client) ValidateDestination(ctx context.Context, socialDestID string) e
 		return fmt.Errorf("%w: empty social_destination_id", ErrPermanent)
 	}
 
-	url := c.cfg.BaseURL + "/internal/v1/destinations/" + socialDestID + "/validate"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	endpoint := c.endpoint("/internal/v1/destinations/" + url.PathEscape(socialDestID) + "/validate")
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("%w: build validate request: %v", ErrTransient, err)
 	}
