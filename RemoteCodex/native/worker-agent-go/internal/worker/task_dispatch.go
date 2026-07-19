@@ -1,19 +1,52 @@
-// Package worker — task dispatch to TaskRunner.
+// Package worker — task dispatch to TaskRunner + active-task lifecycle.
 //
-// task_dispatch.go owns the dispatch path invoked by executeTask:
-//   - runJobTask wraps dispatchTaskRunner with a 30-minute per-job
-//     timeout context (the canonical worker-side budget).
-//   - dispatchTaskRunner resolves the pre-compiled TaskSpec's asset
-//     payload via the worker asset bridge, then invokes
-//     TaskRunner.Run. Surface area:
-//   - wraps taskRunner.Run errors with "taskrunner.Run: %w"
-//   - maps a non-success report to a wrapped error that preserves
-//     the canonical (executor_key, code, detail) tuple on the wire
-//   - preserves context.Canceled identity when report.ErrorCode ==
-//     taskrunner.CodeCanceled (operator aborts must NOT be flattened
-//     to a generic FAILED attempt on the master)
-//   - enforces "every successful output has a non-empty hash" so the
-//     executor cannot declare success with empty content hashes
+// task_dispatch.go owns the dispatch path invoked by executeTask AND
+// the active-task lifecycle helpers that run alongside it:
+//
+//	runJobTask                — wraps dispatchTaskRunner with a 30-minute
+//	                            per-job timeout context (the canonical
+//	                            worker-side budget).
+//	dispatchTaskRunner        — resolves the pre-compiled TaskSpec's
+//	                            asset payload via the worker asset
+//	                            bridge, then invokes TaskRunner.Run.
+//	                            Surface area:
+//	                            - wraps taskRunner.Run errors with
+//	                              "taskrunner.Run: %w"
+//	                            - maps a non-success report to a wrapped
+//	                              error that preserves the canonical
+//	                              (executor_key, code, detail) tuple
+//	                              on the wire
+//	                            - preserves context.Canceled identity
+//	                              when report.ErrorCode ==
+//	                              taskrunner.CodeCanceled (operator
+//	                              aborts must NOT be flattened to a
+//	                              generic FAILED attempt on the master)
+//	                            - enforces "every successful output has
+//	                              a non-empty hash" so the executor
+//	                              cannot declare success with empty
+//	                              content hashes
+//
+//	registerActiveTask        — builds *ActiveTaskExecution, inserts it
+//	                            into the activeTasks + taskIDsByJob maps
+//	                            under activeTasksMu. Returns the pointer
+//	                            so the caller can assign
+//	                            activeTask.Cancel = jobCancel AFTER
+//	                            wakeHeartbeat (preserving the original
+//	                            ordering).
+//	unregisterActiveTask      — deferred cleanup that mirrors the
+//	                            original closure: deletes from the maps,
+//	                            removes empty jobID entries, wakes the
+//	                            heartbeat.
+//	withJobProgressCallback   — wraps the parent context with the
+//	                            progress callback that updates
+//	                            activeTask.Progress under the
+//	                            activeTasksMu lock.
+//
+// The dispatch path and the active-task lifecycle helpers live in the
+// same file because the lifecycle helpers (registration, progress
+// tracking, cleanup) are part of the dispatch flow's resource
+// management surface — they own the in-memory state that the dispatch
+// path mutates while a task is in flight.
 package worker
 
 import (
@@ -22,6 +55,7 @@ import (
 	"time"
 
 	"velox-worker-agent/internal/taskrunner"
+	"velox-worker-agent/pkg/video/pipeline"
 )
 
 // runJobTask executes the actual task via the TaskRunner.
@@ -99,4 +133,63 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		}
 	}
 	return &report, nil
+}
+
+// registerActiveTask builds the ActiveTaskExecution entry, inserts
+// it under activeTasksMu, and returns the pointer. The caller MUST
+// call wakeHeartbeat immediately after, then assign
+// activeTask.Cancel = jobCancel — preserving the original ordering
+// where the heartbeat goroutine sees the new entry BEFORE the cancel
+// function is wired up.
+func (w *Worker) registerActiveTask(taskID, attemptID string, pte *PendingTaskExecution) *ActiveTaskExecution {
+	activeTask := &ActiveTaskExecution{
+		TaskID:    taskID,
+		AttemptID: attemptID,
+		JobID:     pte.JobID,
+		Task:      pte,
+		LeaseID:   pte.LeaseID,
+		StartedAt: time.Now(),
+	}
+	w.activeTasksMu.Lock()
+	w.activeTasks[taskID] = activeTask
+	w.taskIDsByJob[pte.JobID] = append(w.taskIDsByJob[pte.JobID], taskID)
+	w.activeTasksMu.Unlock()
+	return activeTask
+}
+
+// unregisterActiveTask is the deferred cleanup that mirrors the
+// original closure: deletes the active task from both maps, removes
+// the jobID entry when its task list drains to zero, then wakes the
+// heartbeat so the next tick reports the updated state.
+func (w *Worker) unregisterActiveTask(taskID string, pte *PendingTaskExecution) {
+	w.activeTasksMu.Lock()
+	delete(w.activeTasks, taskID)
+	taskIDs := w.taskIDsByJob[pte.JobID]
+	for i, tid := range taskIDs {
+		if tid == taskID {
+			w.taskIDsByJob[pte.JobID] = append(taskIDs[:i], taskIDs[i+1:]...)
+			break
+		}
+	}
+	if len(w.taskIDsByJob[pte.JobID]) == 0 {
+		delete(w.taskIDsByJob, pte.JobID)
+	}
+	w.activeTasksMu.Unlock()
+	w.wakeHeartbeat()
+}
+
+// withJobProgressCallback returns a child context carrying the
+// canonical progress callback that updates activeTask.Progress under
+// the activeTasksMu lock. The callback uses taskID to dynamically
+// look up the current entry — never the captured pointer — so a
+// later replace (which the original code does NOT do) would still
+// route to the fresh entry.
+func (w *Worker) withJobProgressCallback(parent context.Context, taskID string) context.Context {
+	return pipeline.WithProgressCallback(parent, func(percent, scene, total int, stage string) {
+		w.activeTasksMu.Lock()
+		if current := w.activeTasks[taskID]; current != nil {
+			current.Progress = JobProgress{Percent: int32(percent), Scene: int32(scene), TotalScenes: int32(total), Stage: stage}
+		}
+		w.activeTasksMu.Unlock()
+	})
 }

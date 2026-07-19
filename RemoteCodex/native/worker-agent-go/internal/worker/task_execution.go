@@ -7,21 +7,27 @@
 //
 //	task_execution.go       — this file: executeTask orchestrator.
 //	                          Owns the canonical package doc above.
-//	task_dispatch.go        — runJobTask + dispatchTaskRunner (the
-//	                          dispatch path that resolves assets and
-//	                          invokes TaskRunner.Run).
+//	task_dispatch.go        — dispatch path (runJobTask +
+//	                          dispatchTaskRunner) AND active-task
+//	                          lifecycle helpers (registerActiveTask +
+//	                          unregisterActiveTask +
+//	                          withJobProgressCallback).
 //	task_result_builder.go  — submitTaskResult: builds and sends
 //	                          the typed pb.TaskResult via the
 //	                          transport (wire-format canonical).
-//	active_task_lifecycle.go — active-task lifecycle helpers:
-//	                          registerActiveTask, unregisterActiveTask,
-//	                          withJobProgressCallback, recordTaskStart,
-//	                          recordTaskOutcome, recordTaskFinish.
+//	active_task_lifecycle.go — metriche + upload helpers:
+//	                          recordTaskStart, recordTaskOutcome
+//	                          (3-branch outcome telemetry),
+//	                          recordTaskFinish, uploadTaskOutputs
+//	                          (OTel "upload" span + master API
+//	                          upload), selectUploadableOutput.
 //	job_executor.go         — redistributive shell (kept for git
 //	                          history; content moved to the four
 //	                          files above).
-//	output_upload.go        — uploadTaskOutputs + selectUploadableOutput
-//	                          (kept separate; not part of the split).
+//	output_upload.go        — redistributive shell: uploadTaskOutputs
+//	                          + selectUploadableOutput moved into
+//	                          active_task_lifecycle.go alongside
+//	                          the metriche helpers.
 package worker
 
 import (

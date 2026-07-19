@@ -1,29 +1,10 @@
-// Package worker — active-task lifecycle helpers.
+// Package worker — active-task metriche + upload.
 //
 // active_task_lifecycle.go owns the helpers extracted from the
-// monolithic executeTask in the original job_executor.go. The
-// helpers preserve byte-identical behavior — the same lock
-// acquisition order, the same telemetry call ordering, the same
-// 3-branch outcome handling — and are intentionally small so a
-// future regression can be bisected to the helper boundary.
+// monolithic executeTask in the original job_executor.go that are
+// about the task's metriche (telemetry) and upload (output bytes)
+// side-effects. Behaviour-preserving structural split:
 //
-// Helper surface:
-//
-//	registerActiveTask        — builds *ActiveTaskExecution, inserts
-//	                            it into the activeTasks + taskIDsByJob
-//	                            maps under activeTasksMu. Returns the
-//	                            pointer so the caller can assign
-//	                            activeTask.Cancel = jobCancel AFTER
-//	                            wakeHeartbeat (preserving the
-//	                            original ordering).
-//	unregisterActiveTask      — deferred cleanup that mirrors the
-//	                            original closure: deletes from the
-//	                            maps, removes empty jobID entries,
-//	                            wakes the heartbeat.
-//	withJobProgressCallback   — wraps the parent context with the
-//	                            progress callback that updates
-//	                            activeTask.Progress under the
-//	                            activeTasksMu lock.
 //	recordTaskStart           — telemetry seeds (SetWorkerStatus=2,
 //	                            SetWorkerActiveJobs, LogJobStart).
 //	recordTaskOutcome         — the 3-branch outcome telemetry
@@ -33,76 +14,37 @@
 //	                            branch.
 //	recordTaskFinish          — restores idle-side telemetry
 //	                            (SetWorkerStatus=1, SetWorkerActiveJobs).
+//	uploadTaskOutputs         — uploads the first uploadable output
+//	                            artifact to the master API and wraps
+//	                            the canonical "upload" OTel span.
+//	                            Returns nil when there are no outputs;
+//	                            wraps with "upload task outputs: %w"
+//	                            at the caller (executeTask) when the
+//	                            master rejects the upload.
+//	selectUploadableOutput    — picks the canonical render.output
+//	                            artifact first, falling back to any
+//	                            artifact with a non-empty URI.
+//
+// The active-task registration / cleanup / progress-tracking helpers
+// (registerActiveTask, unregisterActiveTask, withJobProgressCallback)
+// live in task_dispatch.go alongside the dispatch path because they
+// are part of the same resource-management surface.
 package worker
 
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"time"
 
+	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/oteltrace"
+	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
+	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/logger"
-	"velox-worker-agent/pkg/video/pipeline"
 )
-
-// registerActiveTask builds the ActiveTaskExecution entry, inserts
-// it under activeTasksMu, and returns the pointer. The caller MUST
-// call wakeHeartbeat immediately after, then assign
-// activeTask.Cancel = jobCancel — preserving the original ordering
-// where the heartbeat goroutine sees the new entry BEFORE the cancel
-// function is wired up.
-func (w *Worker) registerActiveTask(taskID, attemptID string, pte *PendingTaskExecution) *ActiveTaskExecution {
-	activeTask := &ActiveTaskExecution{
-		TaskID:    taskID,
-		AttemptID: attemptID,
-		JobID:     pte.JobID,
-		Task:      pte,
-		LeaseID:   pte.LeaseID,
-		StartedAt: time.Now(),
-	}
-	w.activeTasksMu.Lock()
-	w.activeTasks[taskID] = activeTask
-	w.taskIDsByJob[pte.JobID] = append(w.taskIDsByJob[pte.JobID], taskID)
-	w.activeTasksMu.Unlock()
-	return activeTask
-}
-
-// unregisterActiveTask is the deferred cleanup that mirrors the
-// original closure: deletes the active task from both maps, removes
-// the jobID entry when its task list drains to zero, then wakes the
-// heartbeat so the next tick reports the updated state.
-func (w *Worker) unregisterActiveTask(taskID string, pte *PendingTaskExecution) {
-	w.activeTasksMu.Lock()
-	delete(w.activeTasks, taskID)
-	taskIDs := w.taskIDsByJob[pte.JobID]
-	for i, tid := range taskIDs {
-		if tid == taskID {
-			w.taskIDsByJob[pte.JobID] = append(taskIDs[:i], taskIDs[i+1:]...)
-			break
-		}
-	}
-	if len(w.taskIDsByJob[pte.JobID]) == 0 {
-		delete(w.taskIDsByJob, pte.JobID)
-	}
-	w.activeTasksMu.Unlock()
-	w.wakeHeartbeat()
-}
-
-// withJobProgressCallback returns a child context carrying the
-// canonical progress callback that updates activeTask.Progress under
-// the activeTasksMu lock. The callback uses taskID to dynamically
-// look up the current entry — never the captured pointer — so a
-// later replace (which the original code does NOT do) would still
-// route to the fresh entry.
-func (w *Worker) withJobProgressCallback(parent context.Context, taskID string) context.Context {
-	return pipeline.WithProgressCallback(parent, func(percent, scene, total int, stage string) {
-		w.activeTasksMu.Lock()
-		if current := w.activeTasks[taskID]; current != nil {
-			current.Progress = JobProgress{Percent: int32(percent), Scene: int32(scene), TotalScenes: int32(total), Stage: stage}
-		}
-		w.activeTasksMu.Unlock()
-	})
-}
 
 // recordTaskStart seeds the start-side telemetry counters: worker
 // status is bumped to busy (2) and the active-jobs gauge tracks the
@@ -153,4 +95,87 @@ func (w *Worker) recordTaskOutcome(pte *PendingTaskExecution, execErr error, dur
 func (w *Worker) recordTaskFinish() {
 	telemetry.GetPrometheusMetrics().SetWorkerStatus(w.config.WorkerID, 1)
 	telemetry.GetPrometheusMetrics().SetWorkerActiveJobs(w.config.WorkerID, float64(w.concurrencyLimiter.ActiveJobCount()))
+}
+
+// uploadTaskOutputs uploads the canonical render.output (or the
+// first artifact with a non-empty URI) to the master API. Started
+// here so it integrates with the active-task lifecycle surface
+// (telemetry counters, status transitions, task-result wrapping).
+//
+// Behaviour:
+//   - Returns nil when there are no outputs to upload.
+//   - Returns "worker output upload: api client is not configured"
+//     when apiClient is nil.
+//   - Returns "worker output upload: no uploadable output with a
+//     local file path" when no artifact carries a URI.
+//   - Returns "worker output upload: output file <path> is not
+//     readable: <err>" when the local file is missing.
+//   - Returns the api client's error verbatim on transport failure.
+//   - Returns "worker output upload: master rejected upload for
+//     job <id>: <err>" when the master responds with !OK.
+//
+// Scorecard v2 / Step 15: starts an "upload" span for distributed
+// tracing. The span is closed on function return via defer span.End().
+func (w *Worker) uploadTaskOutputs(ctx context.Context, pte *PendingTaskExecution, report *taskrunner.TaskExecutionReport) error {
+	ctx, span := oteltrace.StartSpan(ctx, "upload",
+		oteltrace.AttrJobID(pte.JobID),
+		oteltrace.AttrTaskID(pte.TaskID),
+	)
+	defer span.End()
+
+	if report == nil || len(report.Outputs) == 0 {
+		return nil
+	}
+	if w.apiClient == nil {
+		return fmt.Errorf("worker output upload: api client is not configured")
+	}
+
+	ref, ok := selectUploadableOutput(report.Outputs)
+	if !ok {
+		return fmt.Errorf("worker output upload: no uploadable output with a local file path")
+	}
+	if _, err := os.Stat(ref.URI); err != nil {
+		return fmt.Errorf("worker output upload: output file %q is not readable: %w", ref.URI, err)
+	}
+
+	resp, err := w.apiClient.UploadCompletedVideo(ctx, api.UploadCompletedVideoRequest{
+		JobID:         pte.JobID,
+		AttemptID:     pte.AttemptID,
+		WorkerID:      w.config.WorkerID,
+		LeaseID:       pte.LeaseID,
+		AttemptNumber: pte.AttemptNumber,
+		Revision:      pte.JobRevision,
+		FilePath:      ref.URI,
+	})
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return fmt.Errorf("worker output upload: master rejected upload for job %s: %s", pte.JobID, resp.Error)
+	}
+
+	w.logger.Info("[TASK] Output uploaded for task %s (job=%s artifact=%s upload=%s)",
+		pte.TaskID, pte.JobID, resp.ArtifactID, resp.UploadID)
+	return nil
+}
+
+// selectUploadableOutput picks the canonical upload candidate from
+// the executor's outputs:
+//
+//  1. The first artifact whose Type == "render.output" AND URI != "".
+//  2. Otherwise, the first artifact with a non-empty URI.
+//  3. If neither matches, returns (zero, false) and the caller
+//     surfaces a "no uploadable output with a local file path" error.
+func selectUploadableOutput(outputs []executor.ArtifactRef) (executor.ArtifactRef, bool) {
+	for _, ref := range outputs {
+		if ref.Type == "render.output" && ref.URI != "" {
+			return ref, true
+		}
+	}
+	for _, ref := range outputs {
+		if ref.URI != "" {
+			return ref, true
+		}
+	}
+	return executor.ArtifactRef{}, false
 }
