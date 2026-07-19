@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# size-benchmark: 42 - 42,2 KB
 """Verify the Golden E2E media contract for one exact artifact."""
 
 import json

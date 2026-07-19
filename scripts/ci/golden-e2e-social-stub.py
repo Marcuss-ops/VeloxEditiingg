@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# size-benchmark: 42 - 42,2 KB
 """Minimal local Social API contract stub for Golden E2E delivery success."""
 
 import json
