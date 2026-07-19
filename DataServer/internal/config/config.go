@@ -33,6 +33,7 @@ func FromEnv() *Config {
 	runtime := loadRuntimeConfig(dataDir)
 	database := loadDatabaseConfig()
 	workers := loadWorkersConfig()
+	retention := loadRetentionConfig()
 	auth := loadAuthConfig()
 	storage := loadStorageConfig()
 	drive := loadDriveConfig(secretsDir, dataDir)
@@ -43,18 +44,19 @@ func FromEnv() *Config {
 
 	pipeline := loadPipelineConfig()
 	c := &Config{
-		Server:   server,
-		Runtime:  runtime,
-		Database: database,
-		Workers:  workers,
-		Auth:     auth,
-		Storage:  storage,
-		Drive:    drive,
-		Ansible:  ansible,
-		Frontend: frontend,
-		Render:   render,
-		NVIDIA:   nvidia,
-		Pipeline: pipeline,
+		Server:    server,
+		Runtime:   runtime,
+		Database:  database,
+		Workers:   workers,
+		Retention: retention,
+		Auth:      auth,
+		Storage:   storage,
+		Drive:     drive,
+		Ansible:   ansible,
+		Frontend:  frontend,
+		Render:    render,
+		NVIDIA:    nvidia,
+		Pipeline:  pipeline,
 	}
 	return c
 }

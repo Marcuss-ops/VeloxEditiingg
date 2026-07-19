@@ -38,5 +38,13 @@ func loadWorkersConfig() WorkersConfig {
 	if ips := os.Getenv("VELOX_ALLOWED_WORKER_IPS"); ips != "" {
 		c.AllowedIPs = parseCommaList(ips)
 	}
+	// STALE / PARTITIONED thresholds for the persistent state machine
+	// owned by store_worker_runtime_recovery.go (single-writer tx).
+	// Defaults match the canonical read-side thresholds in
+	// workers/registry_query.go (ConnectionStaleThreshold = 150s,
+	// ConnectionDisconnectedThreshold = 5min) so the persistent
+	// mirror and the read-time derivation stay aligned.
+	c.StaleThresholdSeconds = intFromEnv("VELOX_WORKER_STALE_THRESHOLD_SECONDS", 150, 1)
+	c.PartitionThresholdSeconds = intFromEnv("VELOX_WORKER_PARTITION_THRESHOLD_SECONDS", 300, 1)
 	return c
 }

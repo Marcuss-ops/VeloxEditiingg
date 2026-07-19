@@ -8,8 +8,9 @@ import (
 )
 
 // store_worker_metrics.go owns the worker_metric_samples table:
-// throttled sample insertion (1 min idle / 15 s busy) and 7-day
-// retention prune. Both helpers receive *sql.Tx from the caller and
+// throttled sample insertion (1 min idle / 15 s busy) and the
+// retention prune for both worker_metric_samples and
+// worker_events. All helpers receive *sql.Tx from the caller and
 // never open their own transaction.
 
 func maybeInsertWorkerMetric(ctx context.Context, tx *sql.Tx, m map[string]any, workerID, sessionID string, changed bool, now string) error {
@@ -34,13 +35,54 @@ func maybeInsertWorkerMetric(ctx context.Context, tx *sql.Tx, m map[string]any, 
 	return err
 }
 
-// pruneWorkerMetricSamples retains the 7-day retention window for
-// worker_metric_samples. Pure SQL-side retention: SQLite's
-// DATETIME('now','-7 days') is the wallclock, no Go-side parameter
-// is needed or honoured.
-func pruneWorkerMetricSamples(ctx context.Context, tx *sql.Tx) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM worker_metric_samples WHERE sampled_at < DATETIME('now','-7 days')`); err != nil {
+// pruneWorkerMetricSamples retains the configured retention window
+// for worker_metric_samples. The window is configurable via
+// WorkersConfig (caller passes the days from the Store's stored
+// retention config).
+//
+// Behavior:
+//   - days <= 0     → opt-out: skip the DELETE pass entirely so a
+//     deployment that explicitly disabled retention
+//     never accidentally deletes its audit table.
+//   - days  > 0     → DELETE rows with sampled_at < DATETIME('now',
+//     '-<days> days').
+//
+// days is interpolated into the SQL via fmt.Sprintf. Safe because
+// days is an int validated by config.intFromEnv(... , default, 1)
+// so the lower bound is enforced at the config layer.
+func pruneWorkerMetricSamples(ctx context.Context, tx *sql.Tx, days int) error {
+	if days <= 0 {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx,
+		fmt.Sprintf(`DELETE FROM worker_metric_samples WHERE sampled_at < DATETIME('now','-%d days')`, days),
+	); err != nil {
 		return fmt.Errorf("prune worker metric samples: %w", err)
+	}
+	return nil
+}
+
+// pruneWorkerEvents retains the configured retention window for
+// the worker_events audit ledger. The window is configurable via
+// WorkersConfig.WorkersRetention config (caller passes the days).
+//
+// Behavior mirrors pruneWorkerMetricSamples:
+//   - days <= 0     → opt-out: skip the DELETE pass.
+//   - days  > 0     → DELETE rows with created_at < DATETIME('now',
+//     '-<days> days').
+//
+// Workers config the audit trail of state transitions, partition
+// detection, and runtime disappearance events. 30 days is the
+// default; production deployments with stricter audit requirements
+// can extend it via VELOX_RETENTION_WORKER_EVENTS_DAYS.
+func pruneWorkerEvents(ctx context.Context, tx *sql.Tx, days int) error {
+	if days <= 0 {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx,
+		fmt.Sprintf(`DELETE FROM worker_events WHERE created_at < DATETIME('now','-%d days')`, days),
+	); err != nil {
+		return fmt.Errorf("prune worker events: %w", err)
 	}
 	return nil
 }

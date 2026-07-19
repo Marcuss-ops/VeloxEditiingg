@@ -44,7 +44,7 @@ type RuntimeConfig struct {
 	// AllowNopBlobStoreDev enables the no-op blob store for local
 	// development ONLY.  The Validate() method bans this flag when
 	// GIN_MODE=release or Environment is production/prod.
-	// Configured via VELOX_ALLOW_NOP_BLOBSTORE_DEV=true.
+	// Configured via VELOX_ALLOW_NOP_BLOB_STORE_DEV=true.
 	AllowNopBlobStoreDev bool
 
 	// GRPCAllowInsecureDev enables insecure gRPC connections (no TLS)
@@ -136,6 +136,46 @@ type WorkersConfig struct {
 	// deprecation shim.
 	MasterServerURL string
 	AllowedIPs      []string
+
+	// StaleThresholdSeconds is the heartbeat age (in seconds) after
+	// which a worker with an active session is considered STALE.
+	// PersistWorkerHeartbeat emits WORKER_STALE_DETECTED on the
+	// transition into this state. Default 150s (matches the canonical
+	// workers.ConnectionStaleThreshold used at the read-side so the
+	// persistent mirror and the read-time derivation stay aligned).
+	StaleThresholdSeconds int
+
+	// PartitionThresholdSeconds is the heartbeat age (in seconds)
+	// after which a worker is considered partitioned (no longer
+	// reachable through any heartbeat path). PersistWorkerHeartbeat
+	// emits WORKER_PARTITION_DETECTED on the transition into this
+	// state and WORKER_PARTITION_RESOLVED on the way back to
+	// CONNECTED. The reconciler (ReconcileWorkerPartitions, callable
+	// from the master cron loop) also flips workers into PARTITIONED
+	// when their heartbeat stream has stopped entirely.
+	// Default 300s.
+	PartitionThresholdSeconds int
+}
+
+// RetentionConfig groups the configurable retention windows for the
+// auxiliary tables the heartbeat path writes to.
+//
+//   - WorkerMetricsDays: how long worker_metric_samples rows are kept
+//     before the prune pass deletes them. Default 7d.
+//   - WorkerEventsDays: how long worker_events rows are kept. Default
+//     30d. The TASKS_RUNTIME_DISAPPEARED / WORKER_STATE_CHANGED /
+//     WORKER_STALE_DETECTED / WORKER_PARTITION_DETECTED /
+//     WORKER_PARTITION_RESOLVED audit trail is bounded by this window.
+//
+// Setting either field to <= 0 disables the corresponding prune pass
+// (interpreted as "retention forever"), which is the canonical opt-out
+// for the rare audit-only deployment that prefers unbounded retention.
+// The default loads via intFromEnv(... , 0, 1), so the operator can
+// opt out with VELOX_RETENTION_WORKER_EVENTS_DAYS=0 (or any non-positive
+// integer) without writing Go code.
+type RetentionConfig struct {
+	WorkerMetricsDays int
+	WorkerEventsDays  int
 }
 
 // PipelineConfig groups configuration that controls the production-pipeline
@@ -202,16 +242,17 @@ type NVIDIAConfig struct {
 // Config is the top-level configuration.
 type Config struct {
 	// Sub-configs (single source of truth for all settings)
-	Server   ServerConfig
-	Runtime  RuntimeConfig
-	Database DatabaseConfig
-	Workers  WorkersConfig
-	Auth     AuthConfig
-	Storage  StorageConfig
-	Drive    DriveConfig
-	Ansible  AnsibleConfig
-	Frontend FrontendConfig
-	Render   RenderConfig
-	NVIDIA   NVIDIAConfig
-	Pipeline PipelineConfig
+	Server    ServerConfig
+	Runtime   RuntimeConfig
+	Database  DatabaseConfig
+	Workers   WorkersConfig
+	Retention RetentionConfig
+	Auth      AuthConfig
+	Storage   StorageConfig
+	Drive     DriveConfig
+	Ansible   AnsibleConfig
+	Frontend  FrontendConfig
+	Render    RenderConfig
+	NVIDIA    NVIDIAConfig
+	Pipeline  PipelineConfig
 }

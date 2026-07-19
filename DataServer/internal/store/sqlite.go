@@ -22,9 +22,15 @@ import (
 )
 
 type SQLiteStore struct {
-	db     *sql.DB
-	path   string
-	outbox OutboxEmitter // optional; nil disables ARTIFACT_READY/JOB_SUCCEEDED emission
+	db            *sql.DB
+	path          string
+	outbox        OutboxEmitter // optional; nil disables ARTIFACT_READY/JOB_SUCCEEDED emission
+	retentionDays retentionDays // configurable retention windows (see SetRetention)
+	// partitionKnobs is the (Stale, Partition) threshold pair used by
+	// detectAndPersistPartitionTransition + ReconcileWorkerPartitions.
+	// Renamed from `partitionThresholds` to avoid a name collision with
+	// the `partitionThresholds()` helper method on the same receiver.
+	partitionKnobs partitionThresholds
 }
 
 // OutboxEmitter is the minimal interface SQLiteStore uses to write
@@ -171,9 +177,9 @@ func NewSQLiteStoreFromHandle(handle *database.Handle, path string, migrateOnSta
 	if !migrateOnStart {
 		// Forward-only tool mode: an external tool owns the schema.
 		// Log current applied version (or "untouched DB") so operators
-		// running with a real migration tool can see what version is
-		// in the DB at boot. The runner is intentionally NOT invoked
-		// and postMigrationAdjustments is intentionally NOT invoked.
+		// running that tool can see what version is in the DB at
+		// boot. The runner is intentionally NOT invoked and
+		// postMigrationAdjustments is intentionally NOT invoked.
 		logSQLiteForwardOnlySummary(db, path)
 		return s, nil
 	}
