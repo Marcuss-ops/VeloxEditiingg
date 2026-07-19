@@ -16,7 +16,7 @@
 #   SKIP_CLEANUP   If set, do not rm -rf $TMPDIR on exit
 #
 # Exit codes:
-#   0   Pipeline OK — assert SUCCEEDED + *.mp4 found in storage
+#   0   Pipeline OK — lifecycle, artifact identity, media contract passed
 #   1   Master / worker / submission failure
 #   2   Assertion failure (SUCCEEDED not reached or MP4 missing)
 #   3   Environment / dependencies missing
@@ -44,11 +44,21 @@ readonly STORAGE_DIR="${DATA_DIR}/storage"
 MASTER_PORT="${MASTER_PORT:-8180}"
 GRPC_PORT="${GRPC_PORT:-51851}"
 WORKER_HEALTH_PORT="${WORKER_HEALTH_PORT:-8181}"
+SOCIAL_API_PORT="${SOCIAL_API_PORT:-$((MASTER_PORT + 2))}"
 readonly ADMIN_TOKEN="e2e-test-admin-token"
 readonly WORKER_ID="e2e-worker-1"
 readonly WORKER_NAME="e2e-worker"
 readonly WORKER_SECRET="golden-e2e-worker-secret"
 BUNDLE_HASH=""
+GOLDEN_PROFILE="${GOLDEN_PROFILE:-small}"
+VIDEO_WIDTH=320
+VIDEO_HEIGHT=240
+VIDEO_FPS=30
+VIDEO_DURATION=2
+AUDIO_SAMPLE_RATE=48000
+AUDIO_CHANNELS=2
+SCENE_COUNT=1
+declare -a SCENE_COLORS=(teal)
 
 # Binaries
 readonly MASTER_BIN="${TMPDIR}/bin/velox-server"
@@ -60,6 +70,7 @@ readonly MASTER_LOG="${LOGDIR}/master.log"
 readonly WORKER_LOG="${LOGDIR}/worker.log"
 readonly MASTER_PIDFILE="${TMPDIR}/master.pid"
 readonly WORKER_PIDFILE="${TMPDIR}/worker.pid"
+readonly SOCIAL_PIDFILE="${TMPDIR}/social-stub.pid"
 readonly WORKER_CONFIG="${TMPDIR}/worker.json"
 readonly JOB_FILE="${TMPDIR}/job.json"
 readonly MASTER_ENV="${TMPDIR}/master.env"
@@ -77,6 +88,7 @@ cleanup() {
     log "cleanup: stopping master + worker"
     [[ -f "$MASTER_PIDFILE" ]] && kill "$(cat "$MASTER_PIDFILE")" 2>/dev/null || true
     [[ -f "$WORKER_PIDFILE" ]] && kill "$(cat "$WORKER_PIDFILE")" 2>/dev/null || true
+    [[ -f "$SOCIAL_PIDFILE" ]] && kill "$(cat "$SOCIAL_PIDFILE")" 2>/dev/null || true
     wait 2>/dev/null || true
   else
     log "cleanup: SKIP_CLEANUP=1 — leaving processes and logs in $TMPDIR"
@@ -107,7 +119,30 @@ phase0_deps() {
   log "version: ${VERSION}"
   BUNDLE_HASH="golden-e2e-bundle-${VERSION}"
 
-  mkdir -p "$LOGDIR" "$CERTS_DIR" "$DATA_DIR" "$STAGING_DIR" "$STORAGE_DIR" "$(dirname "$MASTER_BIN")" "${TMPDIR}/tests/fixtures" "$WORKER_CACHE_DIR" "$WORKER_BLOB_DIR"
+  case "${GOLDEN_PROFILE}" in
+    small)
+      # The renderer's canonical canvas is 1920x1080 even for the short
+      # smoke fixture; keep the small profile small in time and scene count.
+      VIDEO_WIDTH=1920
+      VIDEO_HEIGHT=1080
+      VIDEO_DURATION=2
+      SCENE_COUNT=1
+      SCENE_COLORS=(teal)
+      ;;
+    production-shaped)
+      VIDEO_WIDTH=1920
+      VIDEO_HEIGHT=1080
+      VIDEO_DURATION=30
+      SCENE_COUNT=5
+      SCENE_COLORS=(red green blue yellow magenta)
+      ;;
+    *)
+      die "unsupported GOLDEN_PROFILE=${GOLDEN_PROFILE} (use small or production-shaped)" 3
+      ;;
+  esac
+  log "profile: ${GOLDEN_PROFILE} ${VIDEO_WIDTH}x${VIDEO_HEIGHT}@${VIDEO_FPS} duration=${VIDEO_DURATION}s scenes=${SCENE_COUNT}"
+
+  mkdir -p "$LOGDIR" "$CERTS_DIR" "$DATA_DIR" "$STAGING_DIR" "$STORAGE_DIR" "$(dirname "$MASTER_BIN")" "${TMPDIR}/tests/fixtures" "$WORKER_CACHE_DIR" "$WORKER_BLOB_DIR" "${TMPDIR}/state"
   : > "${DATA_DIR}/velox.db"
   printf '%s\n' "$BUNDLE_HASH" > "${TMPDIR}/BUNDLE_HASH.txt"
   cp -f "${REPO_ROOT}/RemoteCodex/native/worker-agent-go/tests/fixtures/engine_selftest_baseline.sha256" "${TMPDIR}/tests/fixtures/engine_selftest_baseline.sha256"
@@ -172,6 +207,17 @@ phase2_certs() {
 phase3_master() {
   log "[3/8] Bootstrapping master"
 
+  setsid nohup python3 "${REPO_ROOT}/scripts/ci/golden-e2e-social-stub.py" "${SOCIAL_API_PORT}" \
+    </dev/null >"${LOGDIR}/social-stub.log" 2>&1 &
+  echo "$!" > "${SOCIAL_PIDFILE}"
+  for i in $(seq 1 10); do
+    if (echo >/dev/tcp/127.0.0.1/"${SOCIAL_API_PORT}") 2>/dev/null; then
+      ok "local Social API stub ready (${i}s)"
+      break
+    fi
+    sleep 1
+  done
+
   cat > "$MASTER_ENV" <<ENV
 VELOX_MASTER_PORT=${MASTER_PORT}
 VELOX_GRPC_PORT=${GRPC_PORT}
@@ -187,6 +233,7 @@ GIN_MODE=release
 VELOX_ALLOWED_WORKERS=${WORKER_ID}
 VELOX_CODE_VERSION=${VERSION}
 VELOX_DELIVERY_GLOBAL_FALLBACK=true
+SOCIAL_API_URL=http://127.0.0.1:${SOCIAL_API_PORT}
 ENV
 
   # Boot with setsid+nohup so the process survives the script shell.
@@ -219,6 +266,20 @@ ENV
 phase4_worker() {
   log "[4/8] Bootstrapping worker"
 
+  # The render worker downloads file-backed assets over the authenticated
+  # worker-assets HTTP endpoint.  gRPC mTLS authenticates the stream, but the
+  # HTTP asset bridge also requires a short-lived command token.  Obtain the
+  # token through the real registration endpoint and inject it only into this
+  # isolated test worker.
+  local register_out worker_token
+  register_out="$(curl -fsS -m 15 -X POST \
+    -H "Content-Type: application/json" \
+    --data "{\"worker_id\":\"${WORKER_ID}\",\"worker_name\":\"${WORKER_NAME}\",\"version\":\"${VERSION}\",\"bundle_hash\":\"${BUNDLE_HASH}\",\"protocol_version\":\"v3\"}" \
+    "http://127.0.0.1:${MASTER_PORT}/api/v1/workers/register")" \
+    || die "worker HTTP registration failed: ${register_out:-no response}" 1
+  worker_token="$(printf '%s' "${register_out}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("session_id", ""))')"
+  [[ -n "${worker_token}" ]] || die "worker registration returned no session token: ${register_out}" 1
+
   cat > "$WORKER_CONFIG" <<JSON
 {
   "master_url": "http://127.0.0.1:${MASTER_PORT}",
@@ -242,6 +303,8 @@ JSON
   # Boot worker with setsid+nohup
   cd "$TMPDIR"
   setsid nohup env WORK_DIR="${TMPDIR}" \
+    VELOX_STATE_DIR="${TMPDIR}/state" \
+    VELOX_WORKER_TOKEN="${worker_token}" \
     VELOX_VIDEO_ENGINE_CPP_BIN="${ENGINE_BIN}" \
     VELOX_BUNDLE_HASH="${BUNDLE_HASH}" \
     VELOX_WORKER_SECRET="${WORKER_SECRET}" \
@@ -293,35 +356,65 @@ JSON
 phase5_fixtures() {
   log "[5/8] Generating test fixtures"
 
-  # 2-second silent MP3 voiceover
+  # The worker always muxes the input into AAC.  Use a non-silent stereo
+  # source so the final media contract can assert a real audio stream.
   ffmpeg -hide_banner -loglevel error -y \
-    -f lavfi -i anullsrc=r=44100:cl=stereo -t 2 \
-    -c:a libmp3lame "${STAGING_DIR}/voiceover.mp3" 2>/dev/null || true
+    -f lavfi -i "sine=frequency=440:sample_rate=${AUDIO_SAMPLE_RATE}" \
+    -f lavfi -i "sine=frequency=660:sample_rate=${AUDIO_SAMPLE_RATE}" \
+    -filter_complex "[0:a][1:a]amerge=inputs=2[a]" \
+    -map "[a]" -ac "${AUDIO_CHANNELS}" -ar "${AUDIO_SAMPLE_RATE}" \
+    -t "${VIDEO_DURATION}" -c:a pcm_s16le "${STAGING_DIR}/voiceover.wav"
 
-  # Small teal scene image (320x240)
-  ffmpeg -hide_banner -loglevel error -y \
-    -f lavfi -i color=c=teal:s=320x240:d=2 -frames:v 1 \
-    "${STAGING_DIR}/scene1.png" 2>/dev/null || true
+  local i color
+  for ((i = 0; i < SCENE_COUNT; i++)); do
+    color="${SCENE_COLORS[$i]}"
+    ffmpeg -hide_banner -loglevel error -y \
+      -f lavfi -i "color=c=${color}:s=${VIDEO_WIDTH}x${VIDEO_HEIGHT}:d=1" \
+      -frames:v 1 "${STAGING_DIR}/scene$((i + 1)).png"
+  done
 
-  ok "fixtures: voiceover.mp3 + scene1.png"
+  ok "fixtures: voiceover.wav (${AUDIO_SAMPLE_RATE}Hz/${AUDIO_CHANNELS}ch) + ${SCENE_COUNT} scene images"
 }
 
 # ─── Phase 6: Submit job ─────────────────────────────────────────────────────
 phase6_submit() {
   log "[6/8] Submitting images.v1 job"
 
+  local scenes_json='['
+  local i
+  for ((i = 0; i < SCENE_COUNT; i++)); do
+    (( i > 0 )) && scenes_json+=','
+    scenes_json+="{\"text\":\"Scene $((i + 1))\",\"image\":\"file://${STAGING_DIR}/scene$((i + 1)).png\"}"
+  done
+  scenes_json+=']'
+  local scenes_json_json
+  scenes_json_json="$(printf '%s' "$scenes_json" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')"
+  local destination_id
+  sqlite3 "${DATA_DIR}/velox.db" <<'SQL'
+INSERT OR IGNORE INTO delivery_destinations (
+  destination_id, provider, external_destination_id, name, enabled, configuration_json, created_at, updated_at
+) VALUES (
+  'golden-e2e-destination', 'social_gateway', 'golden-e2e-external-destination', 'Golden E2E destination', 1, '{}',
+  STRFTIME('%Y-%m-%dT%H:%M:%fZ','now'), STRFTIME('%Y-%m-%dT%H:%M:%fZ','now')
+);
+SQL
+  destination_id="$(sqlite3 -noheader -batch "${DATA_DIR}/velox.db" \
+    "SELECT destination_id FROM delivery_destinations WHERE enabled=1 ORDER BY destination_id LIMIT 1;" | tr -d '\r')"
+  [[ -n "${destination_id}" ]] || die "no enabled delivery destination available for Golden E2E" 1
+
   # The scenes_json references the staged files via velox-asset:// OR file://
   # The master's AssetService will rewrite file:// paths on submission.
   cat > "$JOB_FILE" <<JSON
 {
   "video_name": "GoldenE2E",
-  "script_text": "E2E test smoke.",
-  "scenes_json": "[{\"text\":\"E2E\",\"image\":\"file://${STAGING_DIR}/scene1.png\"}]",
-  "voiceover_path": "${STAGING_DIR}/voiceover.mp3",
+  "script_text": "Golden E2E ${GOLDEN_PROFILE} scene contract.",
+  "scenes_json": ${scenes_json_json},
+  "voiceover_path": "${STAGING_DIR}/voiceover.wav",
   "render_video": true,
   "save_to_db": true,
   "channel_id": "golden-e2e",
-  "audio_language_for_srt": "en"
+  "audio_language_for_srt": "en",
+  "delivery_plan": [{"destination_id":"${destination_id}","retry_budget":1,"priority":0}]
 }
 JSON
 
@@ -338,27 +431,6 @@ JSON
     warn "submit response: $SUBMIT_OUT"
     die "job submission failed — could not extract job_id" 1
   fi
-
-  local now_utc
-  now_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  sqlite3 "${DATA_DIR}/velox.db" <<SQL
-INSERT INTO job_delivery_plans (
-  job_id, destination_id, enabled, priority, metadata_json, created_at, updated_at
-)
-SELECT
-  '${JOB_ID}',
-  destination_id,
-  1,
-  0,
-  '{}',
-  '${now_utc}',
-  '${now_utc}'
-FROM delivery_destinations
-WHERE enabled = 1
-ON CONFLICT(job_id, destination_id) DO UPDATE SET
-  enabled = excluded.enabled,
-  updated_at = excluded.updated_at;
-SQL
 
   log "job_id=${JOB_ID}"
   ok "job submitted (PENDING)"
@@ -402,28 +474,115 @@ phase7_poll() {
   die "job did not reach SUCCEEDED within $(( max_polls * poll_interval ))s" 126
 }
 
-# ─── Phase 8: Assert final video artifact in VELOX_STORAGE_DIR ───────────────
-phase8_verify_storage() {
-  log "[8/8] Verifying final video artifact in storage"
+# ─── Phase 8: Assert lifecycle, artifact identity and media contract ─────────
+sqlite_scalar() {
+  sqlite3 -noheader -batch "${DATA_DIR}/velox.db" "$1" | tr -d '\r'
+}
 
-  local video_count
-  video_count=$(find "${STORAGE_DIR}" \( -name '*.mp4' -o -name '*.f4v' \) 2>/dev/null | wc -l)
+assert_count() {
+  local label="$1" expected="$2" actual="$3"
+  [[ "${actual}" == "${expected}" ]] || die "${label}: got ${actual}, want ${expected}" 2
+  ok "${label}=${actual}"
+}
 
-  if [[ "$video_count" -eq 0 ]]; then
-    warn "no final video artifact (.mp4/.f4v) found in ${STORAGE_DIR}"
-    find "${STORAGE_DIR}" -type f 2>/dev/null | head -20 || true
-    die "final video artifact not produced (expected ≥1 .mp4 or .f4v in storage)" 2
+resolve_artifact_path() {
+  local local_path="$1" storage_key="$2"
+  if [[ -n "${local_path}" && -f "${local_path}" ]]; then
+    printf '%s\n' "${local_path}"
+  elif [[ -n "${storage_key}" && "${storage_key}" = /* && -f "${storage_key}" ]]; then
+    printf '%s\n' "${storage_key}"
+  elif [[ -n "${storage_key}" && -f "${STORAGE_DIR}/${storage_key}" ]]; then
+    printf '%s\n' "${STORAGE_DIR}/${storage_key}"
+  else
+    return 1
   fi
+}
 
-  local video_size
-  video_size=$(find "${STORAGE_DIR}" \( -name '*.mp4' -o -name '*.f4v' \) -exec stat -c%s {} + 2>/dev/null | paste -sd+ | bc || echo 0)
+verify_scene_contract() {
+  [[ "${GOLDEN_PROFILE}" == "production-shaped" ]] || return 0
+  local i timestamp
+  local -a rgb=("255 0 0" "0 128 0" "0 0 255" "255 255 0" "255 0 255")
+  for ((i = 0; i < SCENE_COUNT; i++)); do
+    timestamp=$((i * VIDEO_DURATION / SCENE_COUNT + 1))
+    local frame_file="${TMPDIR}/scene-frame-${i}.raw"
+    ffmpeg -hide_banner -loglevel error -ss "${timestamp}" -i "${VIDEO_PATH}" \
+      -frames:v 1 -vf scale=1:1 -f rawvideo -pix_fmt rgb24 "${frame_file}"
+    python3 - "${frame_file}" "${rgb[$i]}" "${timestamp}" <<'PY'
+import sys
+with open(sys.argv[1], "rb") as handle:
+    pixel = handle.read(3)
+want = tuple(map(int, sys.argv[2].split()))
+if len(pixel) != 3:
+    raise SystemExit("could not sample video frame")
+got = tuple(pixel)
+if sum(abs(a - b) for a, b in zip(got, want)) > 180:
+    raise SystemExit(f"scene at t={sys.argv[3]}s: RGB={got}, want near {want}")
+PY
+    ok "scene $((i + 1)) at ${timestamp}s matches ${SCENE_COLORS[$i]}"
+  done
+}
 
-  ok "${video_count} final video artifact(s) found (total ${video_size} bytes)"
+phase8_verify_storage() {
+  log "[8/8] Verifying exact Job artifact, lifecycle invariants and media"
+  local task_count task_id winner_id artifact_count upload_count
+  local open_uploads expected_deliveries delivery_count bad_deliveries
+  local artifact_id local_path storage_key artifact_sha artifact_attempt decl_attempt upload_id upload_attempt ta_id upload_worker upload_lease ta_worker ta_lease
 
-  # Final database sanity dump
-  sqlite3 "${DATA_DIR}/velox.db" \
-    "SELECT job_id, status, video_name, job_run_id, updated_at FROM jobs ORDER BY updated_at DESC LIMIT 5;" \
-    2>/dev/null || true
+  assert_count "Job SUCCEEDED" 1 "$(sqlite_scalar "SELECT COUNT(*) FROM jobs WHERE job_id='${JOB_ID}' AND status='SUCCEEDED';")"
+  task_count="$(sqlite_scalar "SELECT COUNT(*) FROM tasks WHERE job_id='${JOB_ID}';")"
+  assert_count "tasks for Job" 1 "${task_count}"
+  task_id="$(sqlite_scalar "SELECT task_id FROM tasks WHERE job_id='${JOB_ID}';")"
+  winner_id="$(sqlite_scalar "SELECT COALESCE(winning_attempt_id,'') FROM tasks WHERE task_id='${task_id}';")"
+  [[ -n "${winner_id}" ]] || die "Task has no winning_attempt_id" 2
+  assert_count "Task SUCCEEDED" 1 "$(sqlite_scalar "SELECT COUNT(*) FROM tasks WHERE task_id='${task_id}' AND status='SUCCEEDED';")"
+  assert_count "winning TaskAttempt" 1 "$(sqlite_scalar "SELECT COUNT(*) FROM task_attempts WHERE task_id='${task_id}' AND id='${winner_id}' AND status='SUCCEEDED';")"
+  assert_count "non-terminal Tasks" 0 "$(sqlite_scalar "SELECT COUNT(*) FROM tasks WHERE job_id='${JOB_ID}' AND status NOT IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT');")"
+
+  artifact_count="$(sqlite_scalar "SELECT COUNT(*) FROM artifacts WHERE job_id='${JOB_ID}' AND status='READY';")"
+  assert_count "Artifact READY" 1 "${artifact_count}"
+  upload_count="$(sqlite_scalar "SELECT COUNT(*) FROM artifact_uploads WHERE job_id='${JOB_ID}' AND status='COMPLETED';")"
+  assert_count "ArtifactUpload COMPLETED" 1 "${upload_count}"
+  assert_count "Artifact STAGING/VERIFYING" 0 "$(sqlite_scalar "SELECT COUNT(*) FROM artifacts WHERE job_id='${JOB_ID}' AND status IN ('STAGING','VERIFYING');")"
+  open_uploads="$(sqlite_scalar "SELECT COUNT(*) FROM artifact_uploads WHERE job_id='${JOB_ID}' AND status IN ('CREATED','UPLOADING','RECEIVED','FINALIZING');")"
+  assert_count "open ArtifactUploads" 0 "${open_uploads}"
+
+  IFS='|' read -r artifact_id local_path storage_key artifact_sha artifact_attempt decl_attempt upload_id upload_attempt ta_id upload_worker upload_lease ta_worker ta_lease < <(
+    sqlite3 -noheader -separator '|' "${DATA_DIR}/velox.db" "
+      SELECT a.id, COALESCE(a.local_path,''), COALESCE(a.storage_key,''),
+             COALESCE(a.sha256,''), COALESCE(CAST(a.attempt_id AS TEXT),''),
+             COALESCE(d.attempt_id,''), au.upload_id, CAST(au.attempt_number AS TEXT),
+             COALESCE(ta.id,''), au.worker_id, au.lease_id,
+             COALESCE(ta.worker_id,''), COALESCE(ta.lease_id,'')
+        FROM artifacts a
+        LEFT JOIN task_output_declarations d ON d.artifact_id=a.id
+        JOIN artifact_uploads au ON au.artifact_id=a.id AND au.status='COMPLETED'
+        LEFT JOIN task_attempts ta ON ta.task_id='${task_id}' AND ta.attempt_number=au.attempt_number
+       WHERE a.job_id='${JOB_ID}' AND a.status='READY';"
+  )
+  [[ -n "${artifact_id}" && -n "${upload_id}" ]] || die "READY artifact identity row missing" 2
+  if [[ -n "${decl_attempt}" ]]; then
+    [[ "${decl_attempt}" == "${upload_attempt}" ]] || die "declaration attempt=${decl_attempt}, upload attempt=${upload_attempt}" 2
+  fi
+  [[ "${ta_id}" == "${winner_id}" ]] || die "upload attempt resolves to ${ta_id}, winner=${winner_id}" 2
+  [[ "${artifact_attempt}" == "${upload_attempt}" ]] || die "artifact.attempt_id=${artifact_attempt}, upload.attempt_number=${upload_attempt}" 2
+  [[ "${upload_worker}" == "${ta_worker}" && "${upload_lease}" == "${ta_lease}" ]] || die "upload fence ${upload_worker}/${upload_lease} differs from attempt ${ta_worker}/${ta_lease}" 2
+  [[ "${artifact_sha}" =~ ^[0-9a-fA-F]{64}$ ]] || die "artifact ${artifact_id} has invalid sha256=${artifact_sha}" 2
+  VIDEO_PATH="$(resolve_artifact_path "${local_path}" "${storage_key}")" || die "artifact ${artifact_id} path not found (local_path=${local_path} storage_key=${storage_key})" 2
+  [[ -s "${VIDEO_PATH}" ]] || die "artifact ${artifact_id} is empty: ${VIDEO_PATH}" 2
+  [[ "$(sha256sum "${VIDEO_PATH}" | awk '{print $1}')" == "${artifact_sha}" ]] || die "artifact SHA mismatch for ${artifact_id}" 2
+  ok "artifact identity: ${artifact_id} upload=${upload_id} attempt=${winner_id} path=${VIDEO_PATH}"
+
+  expected_deliveries="$(sqlite_scalar "SELECT COUNT(*) FROM job_delivery_plans WHERE job_id='${JOB_ID}' AND enabled=1;")"
+  delivery_count="$(sqlite_scalar "SELECT COUNT(*) FROM job_deliveries WHERE artifact_id='${artifact_id}';")"
+  assert_count "JobDelivery rows" "${expected_deliveries}" "${delivery_count}"
+  bad_deliveries="$(sqlite_scalar "SELECT COUNT(*) FROM job_deliveries WHERE artifact_id='${artifact_id}' AND status NOT IN ('PENDING','SUCCEEDED');")"
+  assert_count "invalid JobDelivery states" 0 "${bad_deliveries}"
+
+  python3 "${REPO_ROOT}/scripts/ci/golden-e2e-verify-media.py" "${VIDEO_PATH}" \
+    "${VIDEO_WIDTH}" "${VIDEO_HEIGHT}" "${VIDEO_FPS}" "${VIDEO_DURATION}" \
+    "${AUDIO_SAMPLE_RATE}" "${AUDIO_CHANNELS}"
+  verify_scene_contract
+  sqlite3 "${DATA_DIR}/velox.db" "SELECT job_id, status, video_name, updated_at FROM jobs WHERE job_id='${JOB_ID}';"
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
