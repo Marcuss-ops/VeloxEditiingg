@@ -117,6 +117,8 @@ func (c *appComponents) routerBundle() RouterBundle {
 		Upload: UploadRouteDeps{
 			Cfg:            c.cfg,
 			ArtifactSvc:    c.assets.ArtifactSvc,
+			ArtifactReader: c.assets.ArtifactReader,
+			BlobStore:      c.assets.BlobStore,
 			ChunkedHandler: workerhandlersuploads.NewChunkedUploadHandler(c.assets.ChunkedUploadSvc),
 		},
 		Metrics: MetricsRouteDeps{Registry: c.metricsRegistry},

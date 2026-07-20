@@ -98,6 +98,8 @@ std::optional<RenderPlan> parseRenderPlan(const std::string& jsonStr) {
             track.source_url = ju::extractJsonStringValue(audioStr, "source_url");
             track.volume = ju::extractJsonNumberValue(audioStr, "volume", 1.0);
             track.start_time_offset = ju::extractJsonNumberValue(audioStr, "start_time_offset", 0.0);
+            track.duration_seconds = ju::extractJsonNumberValue(audioStr, "duration_seconds", 0.0);
+            track.role = ju::extractJsonStringValue(audioStr, "role");
             if (!track.source_url.empty()) {
                 plan.audio_tracks.push_back(track);
             }

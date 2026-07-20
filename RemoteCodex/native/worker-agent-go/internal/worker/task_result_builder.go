@@ -121,6 +121,11 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 				InputDurationMs:  seg.InputDurationMS,
 				OutputDurationMs: seg.OutputDurationMS,
 				MetadataJson:     seg.MetadataJSON,
+				StartedOffsetMs:  seg.StartedOffsetMS,
+				FinishedOffsetMs: seg.FinishedOffsetMS,
+				WorkerSlot:       int32(seg.WorkerSlot),
+				CpuThreads:       int32(seg.CPUThreads),
+				ParallelGroup:    seg.ParallelGroup,
 			})
 		}
 

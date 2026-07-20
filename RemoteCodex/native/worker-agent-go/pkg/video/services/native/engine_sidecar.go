@@ -54,6 +54,13 @@ type segmentTiming struct {
 	InputDurationMs  float64 `json:"input_duration_ms"`
 	OutputDurationMs float64 `json:"output_duration_ms"`
 	MetadataJSON     string  `json:"metadata_json"`
+
+	// Parallelism telemetry (migration 098).
+	StartedOffsetMs  float64 `json:"started_offset_ms"`
+	FinishedOffsetMs float64 `json:"finished_offset_ms"`
+	WorkerSlot       int64   `json:"worker_slot"`
+	CpuThreads       int64   `json:"cpu_threads"`
+	ParallelGroup    string  `json:"parallel_group"`
 }
 
 // readEngineSidecar reads and parses the C++ sidecar at

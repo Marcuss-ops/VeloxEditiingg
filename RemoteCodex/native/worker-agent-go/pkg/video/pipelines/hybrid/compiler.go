@@ -55,6 +55,8 @@ type AudioTrackInput struct {
 	SourceURL       string
 	Volume          float64
 	StartTimeOffset float64
+	DurationSeconds float64
+	Role            string
 }
 
 // Validate checks raw input parameters for the hybrid.v1 pipeline.
@@ -112,6 +114,8 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 			SourceURL:       track.SourceURL,
 			Volume:          volume,
 			StartTimeOffset: track.StartTimeOffset,
+			DurationSeconds: track.DurationSeconds,
+			Role:            track.Role,
 		})
 	}
 	if len(audioTracks) == 0 && req.AudioURL != "" {
@@ -241,6 +245,8 @@ func parseRequest(input map[string]interface{}) *Request {
 				SourceURL:       toStringDefault(trackMap["source_url"], toString(trackMap["url"])),
 				Volume:          toFloat64Default(trackMap["volume"], 1.0),
 				StartTimeOffset: toFloat64Default(trackMap["start_time_offset"], 0.0),
+				DurationSeconds: toFloat64Default(trackMap["duration_seconds"], 0.0),
+				Role:            toString(trackMap["role"]),
 			})
 		}
 	}

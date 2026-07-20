@@ -74,6 +74,11 @@ func segmentTimingsFromProto(attemptID, taskID, jobID, workerID string, protoSeg
 			InputDurationMS:  ps.GetInputDurationMs(),
 			OutputDurationMS: ps.GetOutputDurationMs(),
 			MetadataJSON:     ps.GetMetadataJson(),
+			StartedOffsetMS:  ps.GetStartedOffsetMs(),
+			FinishedOffsetMS: ps.GetFinishedOffsetMs(),
+			WorkerSlot:       int(ps.GetWorkerSlot()),
+			CPUThreads:       int(ps.GetCpuThreads()),
+			ParallelGroup:    ps.GetParallelGroup(),
 		})
 	}
 	return segments

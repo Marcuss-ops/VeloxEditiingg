@@ -92,6 +92,10 @@ type MetricsReader interface {
 	GetMetrics(ctx context.Context, attemptID string) (*AttemptMetrics, error)
 	GetCacheStats(ctx context.Context, attemptID string) (*AttemptCacheStats, error)
 	GetCostBasis(ctx context.Context, attemptID string) (*AttemptCostBasis, error)
+	// GetParallelism returns the derived parallelism aggregates for an
+	// attempt, or nil if no parallelism row exists (pre-migration or
+	// zero-segment attempts).
+	GetParallelism(ctx context.Context, attemptID string) (*AttemptParallelism, error)
 }
 
 // Repository combines Reader and Writer into a single attempt persistence contract.

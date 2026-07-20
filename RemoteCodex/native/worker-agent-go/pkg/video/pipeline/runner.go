@@ -56,6 +56,13 @@ type SegmentTiming struct {
 	InputDurationMS  float64
 	OutputDurationMS float64
 	MetadataJSON     string
+
+	// Parallelism telemetry (migration 098).
+	StartedOffsetMS  float64
+	FinishedOffsetMS float64
+	WorkerSlot       int
+	CPUThreads       int
+	ParallelGroup    string
 }
 
 // RenderClient is the interface for executing a RenderPlan.

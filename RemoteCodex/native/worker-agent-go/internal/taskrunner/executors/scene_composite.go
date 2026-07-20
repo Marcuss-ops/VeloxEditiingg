@@ -233,6 +233,11 @@ func (s *SceneComposite) Execute(ctx context.Context, _ executor.ExecutionContex
 			InputDurationMS:  seg.InputDurationMS,
 			OutputDurationMS: seg.OutputDurationMS,
 			MetadataJSON:     seg.MetadataJSON,
+			StartedOffsetMS:  seg.StartedOffsetMS,
+			FinishedOffsetMS: seg.FinishedOffsetMS,
+			WorkerSlot:       seg.WorkerSlot,
+			CPUThreads:       seg.CPUThreads,
+			ParallelGroup:    seg.ParallelGroup,
 		})
 	}
 

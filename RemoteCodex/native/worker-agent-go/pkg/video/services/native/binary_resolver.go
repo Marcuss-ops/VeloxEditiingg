@@ -116,6 +116,11 @@ func mapEngineSidecar(sc *engineSidecar, m *pipeline.RenderMetrics) {
 			InputDurationMS:  seg.InputDurationMs,
 			OutputDurationMS: seg.OutputDurationMs,
 			MetadataJSON:     seg.MetadataJSON,
+			StartedOffsetMS:  seg.StartedOffsetMs,
+			FinishedOffsetMS: seg.FinishedOffsetMs,
+			WorkerSlot:       int(seg.WorkerSlot),
+			CPUThreads:       int(seg.CpuThreads),
+			ParallelGroup:    seg.ParallelGroup,
 		})
 	}
 }

@@ -112,6 +112,18 @@ Examples:
 - Run the remote canary: `scripts/operator/with-production-env.sh bash deploy/runtime/submit-canary-remote.sh`
 - Probe readiness directly: `scripts/operator/with-production-env.sh curl -sS -H "Authorization: Bearer ${VELOX_ADMIN_TOKEN}" "${VELOX_MASTER_URL}/health/ready"`
 
+### Remote pilot tunnel
+
+For a remote creator/master reachable only through SSH, use the persistent
+loopback-only forwards in `scripts/operator/remote-velox-tunnel.sh`. Copy
+`deploy/velox-remote-tunnel.env.example` to `~/.config/velox/remote-tunnel.env`,
+fill the SSH host/user, and authenticate with an SSH key or agent. The forwards
+are: master API `127.0.0.1:18080`, creator API `127.0.0.1:18000`, and worker
+gRPC `127.0.0.1:18505`. Set `VELOX_MASTER_URL` to the master forward when
+submitting jobs. Assets referenced by a payload must be uploaded to the master
+or use master-resolvable `velox-asset://` references; local workstation paths
+are not visible to the remote worker.
+
 Skip the wrapper at your own risk: the master token and admin endpoints are not in the shell environment by default, and pasting them into a command line pollutes shell history and bypasses agent rule §2 ([`docs/architecture/AGENT-CONTRACT.md`](docs/architecture/AGENT-CONTRACT.md)).
 
 ### What the wrapper enforces

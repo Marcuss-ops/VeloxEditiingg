@@ -47,6 +47,11 @@ type AudioTrack struct {
 	SourceURL       string  `json:"source_url"`
 	Volume          float64 `json:"volume,omitempty"`
 	StartTimeOffset float64 `json:"start_time_offset,omitempty"`
+	// DurationSeconds bounds this track to its scene. This is important for
+	// narrated clip timelines: a source clip can contain more audio than the
+	// visible scene and must not bleed into the next scene.
+	DurationSeconds float64 `json:"duration_seconds,omitempty"`
+	Role            string  `json:"role,omitempty"`
 }
 
 // DefaultCanvas returns a standard 1080p canvas.

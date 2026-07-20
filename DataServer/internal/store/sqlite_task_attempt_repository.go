@@ -104,8 +104,9 @@ func (r *SQLiteTaskAttemptRepository) PersistPhaseTimingsDetailed(ctx context.Co
 // ── Segment Timings (migration 070) ──────────────────────────────────────
 
 // PersistSegmentTimings replaces all segment rows for an attempt with
-// the authoritative sidecar records from the C++ engine. Delete-then-insert
-// under a transaction so the table never contains stale segments.
+// the authoritative sidecar records from the C++ engine and computes
+// parallelism aggregates. Uses the shared insertSegmentTimingsAndParallelism
+// to ensure identical behavior with the atomic IngestTaskResultAtomic path.
 func (r *SQLiteTaskAttemptRepository) PersistSegmentTimings(ctx context.Context, attemptID string, segments []taskattempts.SegmentTiming) error {
 	if attemptID == "" {
 		return nil
@@ -116,39 +117,57 @@ func (r *SQLiteTaskAttemptRepository) PersistSegmentTimings(ctx context.Context,
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Delete any prior rows for this attempt so the table mirrors the
-	// authoritative sidecar exactly.
-	if _, err := tx.ExecContext(ctx, `DELETE FROM task_attempt_segment_timings WHERE attempt_id = ?`, attemptID); err != nil {
-		return fmt.Errorf("segment timings delete: %w", err)
+	// Load attempt metrics for parallelism computation. If the metrics row
+	// doesn't exist yet (e.g. called before PersistMetrics), use zero-value
+	// metrics — the segment timing offsets are still authoritative.
+	var metrics taskattempts.AttemptMetrics
+	err = tx.QueryRowContext(ctx,
+		`SELECT COALESCE(active_workers_at_start, 0)
+		 FROM task_attempt_metrics WHERE attempt_id = ?`, attemptID,
+	).Scan(&metrics.ActiveWorkersAtStart)
+	if err != nil && err.Error() != "sql: no rows in result set" {
+		// Non-fatal: proceed with zero metrics.
+		metrics = taskattempts.AttemptMetrics{}
 	}
+	metrics.AttemptID = attemptID
 
-	now := time.Now().UTC().Format(time.RFC3339)
-	for _, seg := range segments {
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO task_attempt_segment_timings (
-				attempt_id, job_id, task_id, worker_id,
-				segment_index, scene_worker_index, source_type,
-				duration_ms, asset_download_ms, ffmpeg_encode_ms,
-				source_bytes, output_bytes, frames_encoded,
-				codec, preset, ffmpeg_threads,
-				status, error_code, error_message,
-				source_url_hash, cache_key,
-				input_duration_ms, output_duration_ms,
-				metadata_json, created_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			attemptID, seg.JobID, seg.TaskID, seg.WorkerID,
-			seg.SegmentIndex, seg.SceneWorkerIndex, seg.SourceType,
-			seg.DurationMS, seg.AssetDownloadMS, seg.FfmpegEncodeMS,
-			seg.SourceBytes, seg.OutputBytes, seg.FramesEncoded,
-			seg.Codec, seg.Preset, seg.FfmpegThreads,
-			seg.Status, seg.ErrorCode, seg.ErrorMessage,
-			seg.SourceURLHash, seg.CacheKey,
-			seg.InputDurationMS, seg.OutputDurationMS,
-			seg.MetadataJSON, now,
-		)
-		if err != nil {
-			return fmt.Errorf("segment timing insert %d: %w", seg.SegmentIndex, err)
-		}
+	if err := insertSegmentTimingsAndParallelism(ctx, tx, attemptID, segments, metrics); err != nil {
+		return err
 	}
 	return tx.Commit()
+}
+
+// GetParallelism returns the derived parallelism aggregates for an attempt,
+// or nil if no parallelism row exists.
+func (r *SQLiteTaskAttemptRepository) GetParallelism(ctx context.Context, attemptID string) (*taskattempts.AttemptParallelism, error) {
+	if attemptID == "" {
+		return nil, nil
+	}
+	var p taskattempts.AttemptParallelism
+	err := r.store.db.QueryRowContext(ctx,
+		`SELECT attempt_id,
+			configured_segment_workers, ffmpeg_threads_per_segment,
+			logical_cpu_count, cpu_budget,
+			serial_work_ms, render_window_ms, union_busy_ms,
+			overlap_ms, idle_gap_ms,
+			peak_concurrency, average_concurrency,
+			speedup_vs_serial, parallel_efficiency_ratio,
+			cpu_oversubscription_ratio,
+			bottleneck_phase, parallel_strategy, calculated_at
+		 FROM task_attempt_parallelism WHERE attempt_id = ?`, attemptID,
+	).Scan(
+		&p.AttemptID,
+		&p.ConfiguredSegmentWorkers, &p.FFmpegThreadsPerSegment,
+		&p.LogicalCPUCount, &p.CPUBudget,
+		&p.SerialWorkMS, &p.RenderWindowMS, &p.UnionBusyMS,
+		&p.OverlapMS, &p.IdleGapMS,
+		&p.PeakConcurrency, &p.AverageConcurrency,
+		&p.SpeedupVsSerial, &p.ParallelEfficiency,
+		&p.CPUOversubscription,
+		&p.BottleneckPhase, &p.ParallelStrategy, &p.CalculatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
 }

@@ -134,6 +134,15 @@ func (s *SocialGatewayProvider) buildRequest(artifact *store.Artifact, destinati
 			req.PublishAt = v
 		}
 	}
+	// Social API requires a non-empty metadata object even when the
+	// destination has no operator-supplied publish fields. Keep the
+	// fallback provider-neutral: the external resolver may enrich it,
+	// while the artifact ID remains a stable, auditable title.
+	if len(req.Metadata) == 0 {
+		req.Metadata = map[string]any{
+			"title": "Velox artifact " + artifact.ID,
+		}
+	}
 
 	req.CallbackURL = s.client.CallbackURL(deliveryID)
 	return req, nil

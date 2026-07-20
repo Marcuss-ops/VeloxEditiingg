@@ -176,6 +176,18 @@ type Collector struct {
 	enginePhaseDurations   *Family // velox_engine_phase_duration_seconds
 	engineSegmentDurations *Family // velox_engine_segment_duration_seconds
 
+	// Parallelism telemetry (migration 098). Gauges stamped per-attempt.
+	parallelSerialWork *Family // velox_taskrunner_serial_work_ms
+	parallelRenderWindow *Family // velox_taskrunner_render_window_ms
+	parallelUnionBusy  *Family // velox_taskrunner_union_busy_ms
+	parallelOverlap    *Family // velox_taskrunner_overlap_ms
+	parallelIdleGap    *Family // velox_taskrunner_idle_gap_ms
+	parallelPeak       *Family // velox_taskrunner_parallel_peak
+	parallelAverage    *Family // velox_taskrunner_parallel_average
+	parallelEfficiency *Family // velox_taskrunner_parallel_efficiency_ratio
+	parallelSpeedup    *Family // velox_taskrunner_speedup_vs_serial
+	parallelOversub    *Family // velox_resource_cpu_oversubscription_ratio
+
 	// ConflictBudget (spec §14 Blocco 5) instrumentation. Three
 	// counters + one histogram capture the consecutive-err
 	// conflict path on the canonical attempt_commits CAS surface
@@ -445,6 +457,30 @@ func NewCollector(reg *Registry) *Collector {
 		enginePhaseBuckets,
 	)
 
+	// Parallelism telemetry (migration 098). Gauges stamped per-attempt
+	// from the task_attempt_parallelism row computed by the master.
+	parLabels := []string{"executor_id", "worker_id"}
+	c.parallelSerialWork = NewGaugeFamily("velox_taskrunner_serial_work_ms",
+		"Sum of all segment durations (serial work baseline)", parLabels)
+	c.parallelRenderWindow = NewGaugeFamily("velox_taskrunner_render_window_ms",
+		"Wall-clock span from first segment start to last segment end", parLabels)
+	c.parallelUnionBusy = NewGaugeFamily("velox_taskrunner_union_busy_ms",
+		"Wall-clock time during which at least one segment was active", parLabels)
+	c.parallelOverlap = NewGaugeFamily("velox_taskrunner_overlap_ms",
+		"Wall-clock time during which >1 segment was active simultaneously", parLabels)
+	c.parallelIdleGap = NewGaugeFamily("velox_taskrunner_idle_gap_ms",
+		"Time within render window where no segment was active", parLabels)
+	c.parallelPeak = NewGaugeFamily("velox_taskrunner_parallel_peak",
+		"Maximum number of segments active simultaneously", parLabels)
+	c.parallelAverage = NewGaugeFamily("velox_taskrunner_parallel_average",
+		"Average concurrency (serial_work / union_busy)", parLabels)
+	c.parallelEfficiency = NewGaugeFamily("velox_taskrunner_parallel_efficiency_ratio",
+		"Parallelism efficiency (average_concurrency / peak_concurrency)", parLabels)
+	c.parallelSpeedup = NewGaugeFamily("velox_taskrunner_speedup_vs_serial",
+		"Speedup over serial execution (serial_work / render_window)", parLabels)
+	c.parallelOversub = NewGaugeFamily("velox_resource_cpu_oversubscription_ratio",
+		"CPU oversubscription (total_ffmpeg_threads / logical_cpu_count)", parLabels)
+
 	c.lastSeen = make(map[string]time.Time)
 
 	for _, f := range c.allFamilies() {
@@ -491,6 +527,16 @@ func (c *Collector) allFamilies() []*Family {
 		c.conflictStreakLength,
 		c.enginePhaseDurations,
 		c.engineSegmentDurations,
+		c.parallelSerialWork,
+		c.parallelRenderWindow,
+		c.parallelUnionBusy,
+		c.parallelOverlap,
+		c.parallelIdleGap,
+		c.parallelPeak,
+		c.parallelAverage,
+		c.parallelEfficiency,
+		c.parallelSpeedup,
+		c.parallelOversub,
 	}
 }
 

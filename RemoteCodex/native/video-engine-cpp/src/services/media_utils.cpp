@@ -248,7 +248,10 @@ std::string buildVideoSegmentArgs(
     }
 
     std::ostringstream cmd;
-    cmd << "-i " << file::shellQuote(clipPath.string())
+    // Narrated scenes can be much longer than the source stock clip. Loop
+    // the source so the visual bed covers the whole requested scene; -t
+    // still bounds the generated segment exactly to that scene duration.
+    cmd << "-stream_loop -1 -i " << file::shellQuote(clipPath.string())
         << " -t " << duration
         << " -vf " << file::shellQuote(scale_filter)
         << ffmpegRateControlArgsForCodec(ffmpegVideoCodec())

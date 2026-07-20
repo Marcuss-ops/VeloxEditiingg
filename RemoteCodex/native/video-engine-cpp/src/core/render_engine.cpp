@@ -142,6 +142,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     segmentPaths.reserve(plan.timeline.size());
 
     double total_duration_seconds = 0.0;
+    auto renderStart = std::chrono::steady_clock::now();
 
     for (size_t i = 0; i < plan.timeline.size(); ++i) {
         const auto& item = plan.timeline[i];
@@ -156,6 +157,8 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         seg.index = i;
         seg.worker_index = 0;
         auto segStart = std::chrono::steady_clock::now();
+        seg.started_offset_ms = std::chrono::duration<double, std::milli>(
+            segStart - renderStart).count();
 
         std::string args_only;
         if (std::holds_alternative<plan::ImageSource>(item.source)) {
@@ -225,6 +228,8 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         seg.output_bytes = segBytes;
         seg.total_ms = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - segStart).count();
+        seg.finished_offset_ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - renderStart).count();
         metrics_.addSegment(seg);
 
         int pct = 10 + static_cast<int>((static_cast<double>(i + 1) / plan.timeline.size()) * 60);
@@ -310,7 +315,13 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 if (t > 0) audioFilter << ";";
                 double vol = downloadedTracks[t].second->volume;
                 double offset = downloadedTracks[t].second->start_time_offset;
-                audioFilter << "[" << t << ":a]volume=" << vol;
+                audioFilter << "[" << t << ":a]";
+                const double trackDuration = downloadedTracks[t].second->duration_seconds;
+                if (trackDuration > 0.0) {
+                    audioFilter << "atrim=duration=" << trackDuration
+                                << ",asetpts=PTS-STARTPTS,";
+                }
+                audioFilter << "volume=" << vol;
                 if (offset > 0.0) {
                     int delayMs = static_cast<int>(offset * 1000);
                     audioFilter << ",adelay=" << delayMs << "|" << delayMs;
@@ -448,7 +459,11 @@ void RenderEngine::emitSidecar(const std::string& output_path) const {
             s << ",\"total_ms\":" << seg.total_ms;
             s << ",\"asset_download_ms\":" << seg.asset_download_ms;
             s << ",\"ffmpeg_encode_ms\":" << seg.ffmpeg_encode_ms;
+            s << ",\"source_bytes\":" << seg.source_bytes;
             s << ",\"output_bytes\":" << seg.output_bytes;
+            s << ",\"frames_encoded\":" << seg.frames_encoded;
+            s << ",\"started_offset_ms\":" << seg.started_offset_ms;
+            s << ",\"finished_offset_ms\":" << seg.finished_offset_ms;
             s << "}";
         }
     }

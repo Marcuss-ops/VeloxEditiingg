@@ -97,7 +97,10 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 		if err != nil {
 			return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: %w", i, err)
 		}
-		finalClipDuration := resolveSceneFinalClipDuration(scene)
+		// A narrated scene must not inherit the generic 4s presentation
+		// placeholder. When no explicit final duration is supplied, probe
+		// the actual clip so the complete source video is shown.
+		finalClipDuration := resolveSceneFinalClipDurationWithProbe(scene, finalClipURL, probe)
 		totalDuration := voiceoverDuration + finalClipDuration
 
 		normalized := make(map[string]interface{}, len(scene)+6)
@@ -126,6 +129,7 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 				"source_url":        voiceoverURL,
 				"volume":            1.0,
 				"start_time_offset": offsetSeconds,
+				"duration_seconds":  voiceoverDuration,
 				"role":              "voiceover",
 			})
 		}
@@ -141,6 +145,7 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 			"source_url":        finalClipURL,
 			"volume":            1.0,
 			"start_time_offset": offsetSeconds + voiceoverDuration,
+			"duration_seconds":  finalClipDuration,
 			"role":              "scene_clip_audio",
 		})
 		clips = append(clips, finalClipURL)
@@ -182,6 +187,24 @@ func resolveSceneFinalClipDuration(scene map[string]interface{}) float64 {
 	}
 	if duration := payload.NormalizedDuration(scene["clip_duration_seconds"]); duration > 0 {
 		return duration
+	}
+	return 4.0
+}
+
+// resolveSceneFinalClipDurationWithProbe preserves explicit timing fields,
+// then uses the real source-video duration. The 4s fallback is retained only
+// for legacy/unprobeable inputs.
+func resolveSceneFinalClipDurationWithProbe(scene map[string]interface{}, clipURL string, probe audioDurationProbe) float64 {
+	if duration := payload.NormalizedDuration(scene["final_clip_duration_seconds"]); duration > 0 {
+		return duration
+	}
+	if duration := payload.NormalizedDuration(scene["clip_duration_seconds"]); duration > 0 {
+		return duration
+	}
+	if clipURL != "" && probe != nil {
+		if duration := probe(clipURL); duration > 0 {
+			return duration
+		}
 	}
 	return 4.0
 }

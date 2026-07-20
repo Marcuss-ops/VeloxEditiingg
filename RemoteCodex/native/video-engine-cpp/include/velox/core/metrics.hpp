@@ -19,7 +19,19 @@ struct SegmentTiming {
     double total_ms{0};
     double asset_download_ms{0};
     double ffmpeg_encode_ms{0};
+    int64_t source_bytes{0};
     int64_t output_bytes{0};
+    int64_t frames_encoded{0};
+    std::string codec;
+    std::string preset;
+    int64_t ffmpeg_threads{0};
+
+    // Parallelism telemetry (migration 098).
+    // Wall-clock offsets relative to render() start. In the single-threaded
+    // --render --plan path these are sequential accumulations. In a future
+    // multi-threaded engine they would reflect actual concurrent scheduling.
+    double started_offset_ms{0};
+    double finished_offset_ms{0};
 };
 
 // EngineMetrics is a thread-safe accumulator for named phase durations

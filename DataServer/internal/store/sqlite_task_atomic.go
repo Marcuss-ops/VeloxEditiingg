@@ -521,6 +521,9 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 	if err := persistSegmentTimings(ctx, tx, cmd); err != nil {
 		return err
 	}
+	if err := persistParallelism(ctx, tx, cmd, now); err != nil {
+		return err
+	}
 	if err := persistPartialPhaseMetrics(ctx, tx, cmd); err != nil {
 		return err
 	}

@@ -66,6 +66,9 @@ type AttemptsDataSource interface {
 	// per-phase/per-segment Prometheus histograms.
 	GetPhaseTimingsDetailed(ctx context.Context, attemptID string) ([]taskattempts.PhaseTimingDetailed, error)
 	GetSegmentTimings(ctx context.Context, attemptID string) ([]taskattempts.SegmentTiming, error)
+	// Parallelism telemetry (migration 098): derived concurrency/speedup
+	// aggregates computed by the master from segment timing offsets.
+	GetParallelism(ctx context.Context, attemptID string) (*taskattempts.AttemptParallelism, error)
 	// Metrics Center / Step 2: daily metric rollups for historical trends.
 	// ComputeDailyRollups aggregates attempt metrics into the
 	// daily_metric_rollups table for the given UTC day (YYYY-MM-DD).
@@ -320,6 +323,15 @@ func (s *Supervisor) tickOnce(ctx context.Context, now time.Time) error {
 			}
 		} else {
 			log.Printf("[METRICS-SUPERVISOR] segment timings %s: %v", id, segErr)
+		}
+
+		// 2a-ter. Parallelism telemetry (migration 098). Read the
+		// computed task_attempt_parallelism row and stamp gauges.
+		if par, parErr := s.attempts.GetParallelism(ctx, id); parErr == nil && par != nil {
+			wid := "unknown"
+			s.collector.RecordParallelism(*par, execID, wid)
+		} else if parErr != nil {
+			log.Printf("[METRICS-SUPERVISOR] parallelism %s: %v", id, parErr)
 		}
 
 		// 2b. Cost aggregation: read AttemptCostBasis and roll

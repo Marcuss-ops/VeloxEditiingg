@@ -398,6 +398,40 @@ type SegmentTiming struct {
 	InputDurationMS  float64 `json:"input_duration_ms"`
 	OutputDurationMS float64 `json:"output_duration_ms"`
 	MetadataJSON     string  `json:"metadata_json,omitempty"`
+
+	// Parallelism telemetry (migration 098).
+	StartedOffsetMS  float64 `json:"started_offset_ms"`
+	FinishedOffsetMS float64 `json:"finished_offset_ms"`
+	WorkerSlot       int     `json:"worker_slot"`
+	CPUThreads       int     `json:"cpu_threads"`
+	ParallelGroup    string  `json:"parallel_group,omitempty"`
+}
+
+// AttemptParallelism stores the master-derived parallelism aggregates
+// for a single task attempt. Computed atomically during
+// IngestTaskResultAtomic from the segment timing rows.
+type AttemptParallelism struct {
+	AttemptID string `json:"attempt_id"`
+
+	ConfiguredSegmentWorkers int     `json:"configured_segment_workers"`
+	FFmpegThreadsPerSegment  int     `json:"ffmpeg_threads_per_segment"`
+	LogicalCPUCount          int     `json:"logical_cpu_count"`
+	CPUBudget                int     `json:"cpu_budget"`
+
+	SerialWorkMS        float64 `json:"serial_work_ms"`
+	RenderWindowMS      float64 `json:"render_window_ms"`
+	UnionBusyMS         float64 `json:"union_busy_ms"`
+	OverlapMS           float64 `json:"overlap_ms"`
+	IdleGapMS           float64 `json:"idle_gap_ms"`
+	PeakConcurrency     int     `json:"peak_concurrency"`
+	AverageConcurrency  float64 `json:"average_concurrency"`
+	SpeedupVsSerial     float64 `json:"speedup_vs_serial"`
+	ParallelEfficiency  float64 `json:"parallel_efficiency_ratio"`
+	CPUOversubscription float64 `json:"cpu_oversubscription_ratio"`
+
+	BottleneckPhase string `json:"bottleneck_phase"`
+	ParallelStrategy string `json:"parallel_strategy"`
+	CalculatedAt    string `json:"calculated_at"`
 }
 
 // TaskAttemptReport is the master-side persisted raw worker report for a

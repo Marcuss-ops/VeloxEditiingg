@@ -113,3 +113,40 @@ func (c *Collector) RecordEngineSegment(seg taskattempts.SegmentTiming, execID, 
 	}
 	c.engineSegmentDurations.Observe([]string{execID, workerID, sourceType, status}, seg.DurationMS/1000)
 }
+
+// RecordParallelism stamps the parallelism gauge families from a computed
+// AttemptParallelism row. Called from the supervisor tick for rows returned
+// by GetParallelism. All values are set-to-current-value (idempotent).
+func (c *Collector) RecordParallelism(p taskattempts.AttemptParallelism, execID, workerID string) {
+	labels := []string{execID, workerID}
+	if p.SerialWorkMS > 0 {
+		c.parallelSerialWork.GaugeSet(labels, int64(p.SerialWorkMS))
+	}
+	if p.RenderWindowMS > 0 {
+		c.parallelRenderWindow.GaugeSet(labels, int64(p.RenderWindowMS))
+	}
+	if p.UnionBusyMS > 0 {
+		c.parallelUnionBusy.GaugeSet(labels, int64(p.UnionBusyMS))
+	}
+	if p.OverlapMS > 0 {
+		c.parallelOverlap.GaugeSet(labels, int64(p.OverlapMS))
+	}
+	if p.IdleGapMS > 0 {
+		c.parallelIdleGap.GaugeSet(labels, int64(p.IdleGapMS))
+	}
+	if p.PeakConcurrency > 0 {
+		c.parallelPeak.GaugeSet(labels, int64(p.PeakConcurrency))
+	}
+	if p.AverageConcurrency > 0 {
+		c.parallelAverage.GaugeSet(labels, int64(p.AverageConcurrency*1000))
+	}
+	if p.ParallelEfficiency > 0 {
+		c.parallelEfficiency.GaugeSet(labels, int64(p.ParallelEfficiency*1000))
+	}
+	if p.SpeedupVsSerial > 0 {
+		c.parallelSpeedup.GaugeSet(labels, int64(p.SpeedupVsSerial*1000))
+	}
+	if p.CPUOversubscription > 0 {
+		c.parallelOversub.GaugeSet(labels, int64(p.CPUOversubscription*1000))
+	}
+}

@@ -23,6 +23,8 @@ import (
 // workflow.Repository any more.
 type assetDeps struct {
 	ArtifactSvc      *artifacts.Service
+	ArtifactReader   artifacts.ArtifactReader
+	BlobStore        store.BlobStore
 	ChunkedUploadSvc *artifacts.ChunkedUploadService
 	Reconciler       *artifacts.Reconciler // mandatory — buildAssets fails fast if init fails
 	OutboxRegistry   *outbox.Registry
@@ -137,6 +139,8 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 
 	return &assetDeps{
 		ArtifactSvc:      artifactSvc,
+		ArtifactReader:   artifactReader,
+		BlobStore:        p.BlobStore,
 		ChunkedUploadSvc: chunkedSvc,
 		Reconciler:       reconciler,
 		OutboxRegistry:   outboxRegistry,

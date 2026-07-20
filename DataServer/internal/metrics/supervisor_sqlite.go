@@ -423,3 +423,41 @@ func (r *SQLiteLabelResolver) GetSegmentTimings(ctx context.Context, attemptID s
 	}
 	return results, rows.Err()
 }
+
+// GetParallelism returns the derived parallelism aggregates for an attempt,
+// or nil if no parallelism row exists (pre-migration or zero-segment attempts).
+func (r *SQLiteLabelResolver) GetParallelism(ctx context.Context, attemptID string) (*taskattempts.AttemptParallelism, error) {
+	if attemptID == "" {
+		return nil, nil
+	}
+	var p taskattempts.AttemptParallelism
+	err := r.DB.QueryRowContext(ctx,
+		`SELECT attempt_id,
+			configured_segment_workers, ffmpeg_threads_per_segment,
+			logical_cpu_count, cpu_budget,
+			serial_work_ms, render_window_ms, union_busy_ms,
+			overlap_ms, idle_gap_ms,
+			peak_concurrency, average_concurrency,
+			speedup_vs_serial, parallel_efficiency_ratio,
+			cpu_oversubscription_ratio,
+			bottleneck_phase, parallel_strategy, calculated_at
+		 FROM task_attempt_parallelism WHERE attempt_id = ?`, attemptID,
+	).Scan(
+		&p.AttemptID,
+		&p.ConfiguredSegmentWorkers, &p.FFmpegThreadsPerSegment,
+		&p.LogicalCPUCount, &p.CPUBudget,
+		&p.SerialWorkMS, &p.RenderWindowMS, &p.UnionBusyMS,
+		&p.OverlapMS, &p.IdleGapMS,
+		&p.PeakConcurrency, &p.AverageConcurrency,
+		&p.SpeedupVsSerial, &p.ParallelEfficiency,
+		&p.CPUOversubscription,
+		&p.BottleneckPhase, &p.ParallelStrategy, &p.CalculatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("supervisor: get parallelism: %w", err)
+	}
+	return &p, nil
+}

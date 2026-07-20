@@ -37,6 +37,8 @@ struct AudioTrack {
     std::string source_url;
     double volume{1.0};
     double start_time_offset{0.0};
+    double duration_seconds{0.0};
+    std::string role;
 };
 
 struct CanvasSpec {

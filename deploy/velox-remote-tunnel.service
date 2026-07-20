@@ -1,0 +1,27 @@
+[Unit]
+Description=Persistent Velox SSH forwards (master, creator, gRPC)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/velox/remote-tunnel.env
+ExecStart=/usr/bin/ssh -N -T \
+  -p ${VELOX_REMOTE_SSH_PORT} \
+  -o BatchMode=yes \
+  -o ControlMaster=no \
+  -o ControlPath=none \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -o TCPKeepAlive=yes \
+  -o StrictHostKeyChecking=yes \
+  -L 127.0.0.1:${VELOX_TUNNEL_MASTER_PORT}:127.0.0.1:${VELOX_REMOTE_MASTER_PORT} \
+  -L 127.0.0.1:${VELOX_TUNNEL_CREATOR_PORT}:127.0.0.1:${VELOX_REMOTE_CREATOR_PORT} \
+  -L 127.0.0.1:${VELOX_TUNNEL_GRPC_PORT}:127.0.0.1:${VELOX_REMOTE_GRPC_PORT} \
+  ${VELOX_REMOTE_SSH_USER}@${VELOX_REMOTE_SSH_HOST}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

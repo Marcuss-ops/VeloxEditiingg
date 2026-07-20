@@ -147,6 +147,10 @@ func (f *fakeAttemptsDataSource) GetSegmentTimings(ctx context.Context, attemptI
 	return nil, nil
 }
 
+func (f *fakeAttemptsDataSource) GetParallelism(ctx context.Context, attemptID string) (*taskattempts.AttemptParallelism, error) {
+	return nil, nil
+}
+
 func (f *fakeAttemptsDataSource) ComputeDailyRollups(ctx context.Context, day string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

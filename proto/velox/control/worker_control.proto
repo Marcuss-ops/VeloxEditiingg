@@ -155,6 +155,13 @@ message SegmentTiming {
   string metadata_json = 18;
   double input_duration_ms = 19;
   double output_duration_ms = 20;
+
+  // Parallelism telemetry (migration 098).
+  double started_offset_ms = 21;   // monotonic offset from attempt start to segment start
+  double finished_offset_ms = 22;  // monotonic offset from attempt start to segment end
+  int32 worker_slot = 23;          // concurrency slot that executed this segment
+  int32 cpu_threads = 24;          // FFmpeg threads allocated to this segment
+  string parallel_group = 25;      // logical grouping (e.g. "scene_0", "concat")
 }
 
 message TaskResult {

@@ -112,6 +112,7 @@ func init() {
 		errorMetricDefinitions(),
 		outcomesMetricDefinitions(),
 		economicsMetricDefinitions(),
+		parallelismMetricDefinitions(),
 	)
 }
 

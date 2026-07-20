@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,6 +81,8 @@ type DarkeditorRouteDeps struct {
 type UploadRouteDeps struct {
 	Cfg            *config.Config
 	ArtifactSvc    *artifacts.Service
+	ArtifactReader artifacts.ArtifactReader
+	BlobStore      store.BlobStore
 	ChunkedHandler *workerhandlersuploads.ChunkedUploadHandler
 }
 
@@ -239,6 +242,10 @@ func registerDarkeditorRoutes(r *gin.Engine, deps DarkeditorRouteDeps) {
 // Each sub-route tolerates a nil sub-component so partial bundles still
 // produce a working router.
 func registerUploadRoutes(r *gin.Engine, deps UploadRouteDeps) {
+	if deps.ArtifactReader != nil && deps.BlobStore != nil {
+		r.GET("/api/internal/artifacts/:artifact_id/download", api.AdminAuthMiddleware(deps.Cfg), artifactDownloadHandler(deps.ArtifactReader, deps.BlobStore))
+		r.HEAD("/api/internal/artifacts/:artifact_id/download", api.AdminAuthMiddleware(deps.Cfg), artifactDownloadHandler(deps.ArtifactReader, deps.BlobStore))
+	}
 	if deps.ArtifactSvc != nil {
 		r.POST("/api/v1/video/upload-completed",
 			workerhandlersuploads.UploadCompletedVideo(deps.Cfg, deps.ArtifactSvc))
@@ -247,6 +254,38 @@ func registerUploadRoutes(r *gin.Engine, deps UploadRouteDeps) {
 		r.POST("/api/v1/video/chunked/init", deps.ChunkedHandler.InitChunkedUpload())
 		r.POST("/api/v1/video/chunked/:job_id/:chunk_index", deps.ChunkedHandler.UploadChunk())
 		r.POST("/api/v1/video/chunked/:job_id/complete", deps.ChunkedHandler.CompleteChunkedUpload())
+	}
+}
+
+func artifactDownloadHandler(reader artifacts.ArtifactReader, blobs store.BlobStore) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		a, err := reader.GetByID(c.Request.Context(), c.Param("artifact_id"))
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "artifact lookup failed"})
+			return
+		}
+		if a == nil || a.Status != "READY" {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+		f, err := blobs.ReadFinal(a.StorageKey)
+		if err != nil {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+		defer f.Close()
+		st, err := f.Stat()
+		if err != nil {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+		mime := "video/mp4"
+		if strings.HasPrefix(a.Type, "video/") {
+			mime = a.Type
+		}
+		c.Header("Content-Type", mime)
+		c.Header("Content-Disposition", "attachment")
+		http.ServeContent(c.Writer, c.Request, a.ID, st.ModTime(), f)
 	}
 }
 
