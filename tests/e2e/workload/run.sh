@@ -269,6 +269,11 @@ phase_submit() {
 phase_worker_start() {
   info "Phase 5: starting worker"
 
+  # Ensure worker runtime directories exist before the agent starts.
+  # The C++ engine and the Go agent write scratch data here and can fail
+  # fast if the directories are missing.
+  mkdir -p "$WORKDIR/runtime-temp" "$WORKDIR/runtime-output" "$WORKDIR/state"
+
   local bundle_hash
   bundle_hash="$(scripts/e2e/write-local-bundle-identity.sh "$WORKDIR" "$WORKER_BIN" "$ENGINE_BIN")"
 
