@@ -20,6 +20,11 @@ func loadAuthConfig() AuthConfig {
 	if c.AdminToken == "" {
 		c.AdminToken = os.Getenv("MASTER_ADMIN_TOKEN")
 	}
+	// InstaEdit→Velox JWT secret. Distinct from SOCIAL_API_TOKEN
+	// (which authenticates the reverse direction). Empty means the
+	// instaeditauth verifier is not configured; the middleware
+	// surfaces 503 so a misconfigured deployment fails loudly.
+	c.InstaeditControlJWTSecret = os.Getenv("INSTAEDIT_CONTROL_JWT_SECRET")
 	return c
 }
 

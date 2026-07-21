@@ -193,6 +193,15 @@ type PipelineConfig struct {
 // AuthConfig holds authentication settings.
 type AuthConfig struct {
 	AdminToken string
+
+	// InstaeditControlJWTSecret is the HS256 shared secret used to
+	// verify the short-lived JWT issued by the InstaEdit BFF when
+	// proxying user-facing requests to the Velox master. Distinct
+	// from SOCIAL_API_TOKEN (which authenticates the reverse
+	// Velox→InstaEdit direction). MUST be at least 32 bytes; the
+	// instaeditauth.New constructor enforces this at boot. Loaded
+	// from INSTAEDIT_CONTROL_JWT_SECRET.
+	InstaeditControlJWTSecret string
 }
 
 // StorageConfig holds S3/MinIO/R2 settings.

@@ -21,6 +21,11 @@
 # ── Master REST API token (consumed by velox-server.env.j2) ─────────────────
 vault_velox_admin_token: ""
 
+# ── InstaEdit Control JWT secret (consumed by velox-server.env.j2) ─────────
+# HS256 shared secret verifying InstaEdit BFF's short-lived JWTs.
+# MUST be at least 32 bytes (256 bits). Distinct from SOCIAL_API_TOKEN.
+vault_velox_instaedit_control_jwt_secret: ""
+
 # ── External Social API secrets (consumed by velox-server.env.j2) ──────────
 # Both render directly into the active env file; operator / install
 # preflight verifies the rendered values are non-empty if a publish
