@@ -230,7 +230,8 @@ func persistAttemptMetrics(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ingest
 			blob_cache_hit_count, blob_cache_miss_count,
 			render_cache_hit_count,
 			output_sha256,
-			completed_segments
+			completed_segments,
+			logical_cpu_count, cpu_quota, effective_cpu_count
 		) VALUES (
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -239,7 +240,8 @@ func persistAttemptMetrics(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ingest
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?,
+			?, ?, ?
 		)`,
 		m.AttemptID, m.InputBytes, m.OutputBytes,
 		m.BytesFromDrive, m.BytesFromBlobstore, m.BytesFromLocalCache,
@@ -277,6 +279,7 @@ func persistAttemptMetrics(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ingest
 		m.RenderCacheHitCount,
 		m.OutputSHA256,
 		m.CompletedSegments,
+		m.LogicalCPUCount, m.CPUQuota, m.EffectiveCPUCount,
 	)
 	if err != nil {
 		return fmt.Errorf("task ingest atomic metrics: %w", err)
@@ -629,9 +632,20 @@ func computeParallelism(segments []taskattempts.SegmentTiming, metrics taskattem
 	if p.ConfiguredSegmentWorkers == 0 {
 		p.ConfiguredSegmentWorkers = 1
 	}
-	// Use ActiveWorkersAtStart as logical CPU count approximation.
-	p.LogicalCPUCount = int(metrics.ActiveWorkersAtStart)
-	p.CPUBudget = p.LogicalCPUCount
+	// Use the per-attempt CPU capacity telemetry sent by the worker.
+	// Fall back to the pre-099 approximation only when the worker did
+	// not yet emit the new fields (older workers).
+	p.LogicalCPUCount = metrics.LogicalCPUCount
+	if p.LogicalCPUCount <= 0 {
+		p.LogicalCPUCount = int(metrics.ActiveWorkersAtStart)
+	}
+	p.CPUBudget = metrics.EffectiveCPUCount
+	if p.CPUBudget <= 0 {
+		p.CPUBudget = p.LogicalCPUCount
+	}
+	if p.CPUBudget <= 0 {
+		p.CPUBudget = 1
+	}
 	if p.CPUBudget > 0 && p.FFmpegThreadsPerSegment > 0 {
 		totalThreads := p.ConfiguredSegmentWorkers * p.FFmpegThreadsPerSegment
 		p.CPUOversubscription = float64(totalThreads) / float64(p.CPUBudget)

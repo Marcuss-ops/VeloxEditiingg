@@ -3357,8 +3357,13 @@ type TaskExecutionMetrics struct {
 	CompletedSegments   int32  `protobuf:"varint,46,opt,name=completed_segments,json=completedSegments,proto3" json:"completed_segments,omitempty"`
 	ErrorComponent      string `protobuf:"bytes,47,opt,name=error_component,json=errorComponent,proto3" json:"error_component,omitempty"`
 	ErrorPhase          string `protobuf:"bytes,48,opt,name=error_phase,json=errorPhase,proto3" json:"error_phase,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// CPU capacity telemetry (migration 099). Sent by the worker so the
+	// master can compute accurate oversubscription ratios per attempt.
+	LogicalCpuCount   int32   `protobuf:"varint,49,opt,name=logical_cpu_count,json=logicalCpuCount,proto3" json:"logical_cpu_count,omitempty"`       // runtime.NumCPU() on the worker host
+	CpuQuota          float64 `protobuf:"fixed64,50,opt,name=cpu_quota,json=cpuQuota,proto3" json:"cpu_quota,omitempty"`                             // cgroup CPU quota in cores (0 = unknown/unlimited)
+	EffectiveCpuCount int32   `protobuf:"varint,51,opt,name=effective_cpu_count,json=effectiveCpuCount,proto3" json:"effective_cpu_count,omitempty"` // min(logical, ceil(cpu_quota))
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *TaskExecutionMetrics) Reset() {
@@ -3725,6 +3730,27 @@ func (x *TaskExecutionMetrics) GetErrorPhase() string {
 		return x.ErrorPhase
 	}
 	return ""
+}
+
+func (x *TaskExecutionMetrics) GetLogicalCpuCount() int32 {
+	if x != nil {
+		return x.LogicalCpuCount
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetCpuQuota() float64 {
+	if x != nil {
+		return x.CpuQuota
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetEffectiveCpuCount() int32 {
+	if x != nil {
+		return x.EffectiveCpuCount
+	}
+	return 0
 }
 
 // WorkerResourceCounters is the typed payload of Heartbeat.resources.
@@ -4269,7 +4295,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x06job_id\x18\x02 \x01(\tR\x05jobId\x12\x1d\n" +
 	"\n" +
 	"attempt_id\x18\x03 \x01(\tR\tattemptId\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\"\xb4\x10\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"\xad\x11\n" +
 	"\x14TaskExecutionMetrics\x12\x1f\n" +
 	"\vinput_bytes\x18\x01 \x01(\x03R\n" +
 	"inputBytes\x12!\n" +
@@ -4322,7 +4348,10 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x12completed_segments\x18. \x01(\x05R\x11completedSegments\x12'\n" +
 	"\x0ferror_component\x18/ \x01(\tR\x0eerrorComponent\x12\x1f\n" +
 	"\verror_phase\x180 \x01(\tR\n" +
-	"errorPhase\"\x92\b\n" +
+	"errorPhase\x12*\n" +
+	"\x11logical_cpu_count\x181 \x01(\x05R\x0flogicalCpuCount\x12\x1b\n" +
+	"\tcpu_quota\x182 \x01(\x01R\bcpuQuota\x12.\n" +
+	"\x13effective_cpu_count\x183 \x01(\x05R\x11effectiveCpuCount\"\x92\b\n" +
 	"\x16WorkerResourceCounters\x122\n" +
 	"\x15cpu_utilization_ratio\x18\x01 \x01(\x01R\x13cpuUtilizationRatio\x12(\n" +
 	"\x10cpu_iowait_ratio\x18\x02 \x01(\x01R\x0ecpuIowaitRatio\x12&\n" +

@@ -136,6 +136,11 @@ type AttemptMetrics struct {
 	PendingTasksAtStart  int64 `json:"pending_tasks_at_start"`
 	ActiveWorkersAtStart int64 `json:"active_workers_at_start"`
 
+	// Scorecard v2 / migration 099: per-attempt CPU capacity telemetry.
+	LogicalCPUCount   int     `json:"logical_cpu_count"`
+	CPUQuota          float64 `json:"cpu_quota"`
+	EffectiveCPUCount int     `json:"effective_cpu_count"`
+
 	// Scorecard v2 / Step 12: input context for normalization.
 	SceneCount            int     `json:"scene_count"`
 	SegmentCount          int     `json:"segment_count"`
@@ -413,10 +418,10 @@ type SegmentTiming struct {
 type AttemptParallelism struct {
 	AttemptID string `json:"attempt_id"`
 
-	ConfiguredSegmentWorkers int     `json:"configured_segment_workers"`
-	FFmpegThreadsPerSegment  int     `json:"ffmpeg_threads_per_segment"`
-	LogicalCPUCount          int     `json:"logical_cpu_count"`
-	CPUBudget                int     `json:"cpu_budget"`
+	ConfiguredSegmentWorkers int `json:"configured_segment_workers"`
+	FFmpegThreadsPerSegment  int `json:"ffmpeg_threads_per_segment"`
+	LogicalCPUCount          int `json:"logical_cpu_count"`
+	CPUBudget                int `json:"cpu_budget"`
 
 	SerialWorkMS        float64 `json:"serial_work_ms"`
 	RenderWindowMS      float64 `json:"render_window_ms"`
@@ -429,9 +434,9 @@ type AttemptParallelism struct {
 	ParallelEfficiency  float64 `json:"parallel_efficiency_ratio"`
 	CPUOversubscription float64 `json:"cpu_oversubscription_ratio"`
 
-	BottleneckPhase string `json:"bottleneck_phase"`
+	BottleneckPhase  string `json:"bottleneck_phase"`
 	ParallelStrategy string `json:"parallel_strategy"`
-	CalculatedAt    string `json:"calculated_at"`
+	CalculatedAt     string `json:"calculated_at"`
 }
 
 // TaskAttemptReport is the master-side persisted raw worker report for a

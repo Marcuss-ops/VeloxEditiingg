@@ -10,9 +10,9 @@
 // outgoing TaskResult envelope.
 //
 // PR-3 invariants (Scorecard v1, F3 worker emit):
-//   - Exactly 17 writable fields, parallel 1:1 with the proto schema.
-//     Adding a 18th field on the proto side requires editing both this
-//     struct and its ToProto() builder at the same time.
+//   - Writable fields are kept 1:1 with the proto schema. Adding a new
+//     field on the proto side requires editing both this struct and its
+//     ToProto() builder at the same time.
 //   - Worker/Job/Executor IDs do NOT belong here; the typed envelope
 //     is *task-scoped*. Identity lives one level up on TaskResult.//   - All fields are zero-value safe. A worker that produces no
 //     ingest/egress traffic simply emits TaskExecutionMetrics{} and
@@ -106,6 +106,11 @@ type TypedExecutionMetrics struct {
 	BlobCacheHitCount   int64 `json:"blob_cache_hit_count"`
 	BlobCacheMissCount  int64 `json:"blob_cache_miss_count"`
 	RenderCacheHitCount int64 `json:"render_cache_hit_count"`
+
+	// ── CPU capacity telemetry (migration 099) ──────────────────────────
+	LogicalCpuCount   int32   `json:"logical_cpu_count"`
+	CpuQuota          float64 `json:"cpu_quota"`
+	EffectiveCpuCount int32   `json:"effective_cpu_count"`
 }
 
 // ToProto serializes a TypedExecutionMetrics onto the typed wire
@@ -168,6 +173,10 @@ func (t TypedExecutionMetrics) ToProto() *pb.TaskExecutionMetrics {
 		BlobCacheHitCount:   t.BlobCacheHitCount,
 		BlobCacheMissCount:  t.BlobCacheMissCount,
 		RenderCacheHitCount: t.RenderCacheHitCount,
+
+		LogicalCpuCount:   t.LogicalCpuCount,
+		CpuQuota:          t.CpuQuota,
+		EffectiveCpuCount: t.EffectiveCpuCount,
 	}
 }
 
@@ -227,5 +236,9 @@ func FromProto(p *pb.TaskExecutionMetrics) TypedExecutionMetrics {
 		BlobCacheHitCount:   p.GetBlobCacheHitCount(),
 		BlobCacheMissCount:  p.GetBlobCacheMissCount(),
 		RenderCacheHitCount: p.GetRenderCacheHitCount(),
+
+		LogicalCpuCount:   p.GetLogicalCpuCount(),
+		CpuQuota:          p.GetCpuQuota(),
+		EffectiveCpuCount: p.GetEffectiveCpuCount(),
 	}
 }

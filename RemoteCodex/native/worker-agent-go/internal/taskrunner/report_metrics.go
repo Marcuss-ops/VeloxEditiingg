@@ -110,6 +110,13 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 		BlobCacheMissCount:  positiveIntegerToInt64(m["blob.cache.miss.count"]),
 		RenderCacheHitCount: positiveIntegerToInt64(m["render.cache.hit.count"]),
 	}
+
+	// CPU capacity is a host-level property, not something the executor
+	// counter map carries. Detect it once and stamp it on every report.
+	cp := telemetry.DetectCPUCapacity()
+	typed.LogicalCpuCount = int32(cp.LogicalCPUCount)
+	typed.CpuQuota = cp.CPUQuota
+	typed.EffectiveCpuCount = int32(cp.EffectiveCPUCount)
 	if v, ok := m["ffmpeg.speed_ratio"].(float64); ok {
 		typed.FfmpegSpeedRatio = v
 	}

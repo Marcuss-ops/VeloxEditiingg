@@ -608,6 +608,12 @@ message TaskExecutionMetrics {
   int32 completed_segments = 46;
   string error_component = 47;
   string error_phase = 48;
+
+  // CPU capacity telemetry (migration 099). Sent by the worker so the
+  // master can compute accurate oversubscription ratios per attempt.
+  int32 logical_cpu_count = 49;      // runtime.NumCPU() on the worker host
+  double cpu_quota = 50;            // cgroup CPU quota in cores (0 = unknown/unlimited)
+  int32 effective_cpu_count = 51;  // min(logical, ceil(cpu_quota))
 }
 
 // WorkerResourceCounters is the typed payload of Heartbeat.resources.

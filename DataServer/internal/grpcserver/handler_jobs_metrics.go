@@ -153,6 +153,11 @@ func executionMetricsToAttemptMetrics(attemptID string, em *pb.TaskExecutionMetr
 	am.ErrorComponent = em.GetErrorComponent()
 	am.ErrorPhase = em.GetErrorPhase()
 
+	// CPU capacity telemetry (migration 099).
+	am.LogicalCPUCount = int(em.GetLogicalCpuCount())
+	am.CPUQuota = em.GetCpuQuota()
+	am.EffectiveCPUCount = int(em.GetEffectiveCpuCount())
+
 	return am
 }
 
