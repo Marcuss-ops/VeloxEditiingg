@@ -291,6 +291,28 @@ func (s *Supervisor) tickOnce(ctx context.Context, now time.Time) error {
 		// the aggregate columns in AttemptMetrics only when no
 		// detailed rows exist (older attempts predating migration
 		// 070).  worker_id comes from the timing rows themselves.
+		//
+		// Fetch segment timings once up-front so we can derive
+		// attemptWorkerID (the first non-empty WorkerID across
+		// segments) and reuse it for the aggregate-fallback and
+		// parallelism stamps below — both previously hardcoded
+		// wid="unknown", collapsing all parallelism gauges onto a
+		// single worker_id="unknown" label and making per-worker
+		// PromQL comparisons impossible.
+		var segs []taskattempts.SegmentTiming
+		if fetched, err := s.attempts.GetSegmentTimings(ctx, id); err == nil {
+			segs = fetched
+		} else {
+			log.Printf("[METRICS-SUPERVISOR] segment timings %s: %v", id, err)
+		}
+		attemptWorkerID := "unknown"
+		for _, seg := range segs {
+			if seg.WorkerID != "" {
+				attemptWorkerID = seg.WorkerID
+				break
+			}
+		}
+
 		hasDetailed := false
 		if pts, ptErr := s.attempts.GetPhaseTimingsDetailed(ctx, id); ptErr == nil && len(pts) > 0 {
 			hasDetailed = true
@@ -304,32 +326,29 @@ func (s *Supervisor) tickOnce(ctx context.Context, now time.Time) error {
 		} else if ptErr != nil {
 			log.Printf("[METRICS-SUPERVISOR] phase timings %s: %v", id, ptErr)
 		}
-		// Fall back to aggregate columns only when no detailed rows exist.
+		// Fall back to aggregate columns only when no detailed rows
+		// exist. The aggregate columns don't carry worker_id, so use
+		// attemptWorkerID derived from segment timings above instead
+		// of the old hardcoded "unknown".
 		if !hasDetailed {
 			if am, amErr := s.attempts.GetMetrics(ctx, id); amErr == nil && am != nil {
-				wid := "unknown"
-				// Try to get worker_id from segment rows (the
-				// aggregate columns don't carry worker_id).
-				s.collector.RecordEngineAggregate(am, execID, wid)
+				s.collector.RecordEngineAggregate(am, execID, attemptWorkerID)
 			}
 		}
-		if segs, segErr := s.attempts.GetSegmentTimings(ctx, id); segErr == nil {
-			for _, seg := range segs {
-				wid := seg.WorkerID
-				if wid == "" {
-					wid = "unknown"
-				}
-				s.collector.RecordEngineSegment(seg, execID, wid)
+		for _, seg := range segs {
+			wid := seg.WorkerID
+			if wid == "" {
+				wid = "unknown"
 			}
-		} else {
-			log.Printf("[METRICS-SUPERVISOR] segment timings %s: %v", id, segErr)
+			s.collector.RecordEngineSegment(seg, execID, wid)
 		}
 
 		// 2a-ter. Parallelism telemetry (migration 098). Read the
 		// computed task_attempt_parallelism row and stamp gauges.
+		// worker_id comes from the segment timing rows (via
+		// attemptWorkerID derived above) — NOT a hardcoded "unknown".
 		if par, parErr := s.attempts.GetParallelism(ctx, id); parErr == nil && par != nil {
-			wid := "unknown"
-			s.collector.RecordParallelism(*par, execID, wid)
+			s.collector.RecordParallelism(*par, execID, attemptWorkerID)
 		} else if parErr != nil {
 			log.Printf("[METRICS-SUPERVISOR] parallelism %s: %v", id, parErr)
 		}
