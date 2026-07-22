@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -234,7 +235,7 @@ func isClientIPAllowed(clientIP string, allowed []string) bool {
 // group registers itself with its OWN deps.
 func newRouter(cfg *config.Config, bundle RouterBundle, registry interface {
 	RegisterRoutes(*gin.Engine)
-}) *gin.Engine {
+}) (*gin.Engine, error) {
 	var r *gin.Engine
 	if cfg.Server.GinMode == "release" {
 		gin.SetMode(gin.ReleaseMode)
@@ -261,23 +262,31 @@ func newRouter(cfg *config.Config, bundle RouterBundle, registry interface {
 	registerDarkeditorRoutes(r, bundle.Darkeditor)
 	registerUploadRoutes(r, bundle.Upload)
 	registerMetricsRoutes(r, bundle.Metrics)
-	registerInstaEditRoutes(r, bundle.InstaEdit)
+	if err := registerInstaEditRoutes(r, bundle.InstaEdit); err != nil {
+		return nil, err
+	}
 
-	return r
+	return r, nil
 }
 
 // registerInstaEditRoutes mounts the InstaEdit BFF route group under
 // /api/v1/instaedit. Every route in this group is protected by the
-// instaeditauth JWT middleware (signature, iss, aud, exp, scopes). The
-// group is omitted entirely when the verifier is nil (dev/test).
-func registerInstaEditRoutes(r *gin.Engine, deps InstaEditRouteDeps) {
+// instaeditauth JWT middleware (signature, iss, aud, exp, scopes).
+//
+// Failure modes:
+//   - Verifier nil: feature is explicitly disabled; routes are not
+//     mounted and the function returns nil.
+//   - Verifier non-nil (feature configured) but any other required
+//     dependency is nil: the function returns an error so the master
+//     refuses to start in a misconfigured state.
+func registerInstaEditRoutes(r *gin.Engine, deps InstaEditRouteDeps) error {
 	if deps.Verifier == nil {
 		log.Printf("[ROUTES] InstaEdit BFF routes skipped: verifier=nil (INSTAEDIT_CONTROL_JWT_SECRET not configured)")
-		return
+		return nil
 	}
 	if deps.Enqueuer == nil || deps.Store == nil || deps.Jobs == nil || deps.Assets == nil {
-		log.Printf("[ROUTES] InstaEdit BFF routes skipped: incomplete dependencies")
-		return
+		return fmt.Errorf("InstaEdit BFF routes enabled but missing required dependencies (enqueuer=%t store=%t jobs=%t assets=%t)",
+			deps.Enqueuer != nil, deps.Store != nil, deps.Jobs != nil, deps.Assets != nil)
 	}
 	instaedithandler.NewHandler(instaedithandler.HandlerDeps{
 		Verifier: deps.Verifier,
@@ -286,6 +295,7 @@ func registerInstaEditRoutes(r *gin.Engine, deps InstaEditRouteDeps) {
 		Jobs:     deps.Jobs,
 		Assets:   deps.Assets,
 	}).RegisterRoutes(r)
+	return nil
 }
 
 // registerScriptRoutes mounts the /api/v1/script routes. Nil-tolerant:

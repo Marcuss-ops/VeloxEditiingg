@@ -60,7 +60,11 @@ func startTransports(cfg *config.Config, c *appComponents) (*transportBundle, er
 	}
 
 	// ── HTTP server ─────────────────────────────────────────────────
-	bundle.router = newRouter(cfg, c.routerBundle(), c.modules.Registry)
+	router, err := newRouter(cfg, c.routerBundle(), c.modules.Registry)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize router: %w", err)
+	}
+	bundle.router = router
 	logRegisteredRoutesAtBoot(bundle.router)
 	bundle.httpServer = &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),

@@ -81,7 +81,10 @@ func TestProductionCompositionRegistersRequiredRoutes(t *testing.T) {
 		Metrics: MetricsRouteDeps{Registry: metrics.NewRegistry()},
 	}
 
-	router := newRouter(cfg, bundle, m.Registry)
+	router, err := newRouter(cfg, bundle, m.Registry)
+	if err != nil {
+		t.Fatalf("newRouter failed: %v", err)
+	}
 	routes := router.Routes()
 
 	want := map[string]bool{
