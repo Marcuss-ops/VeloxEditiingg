@@ -23,6 +23,7 @@ import (
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	scripthandlers "velox-server/internal/handlers/server/script"
 	"velox-server/internal/ingest"
+	"velox-server/internal/instaeditauth"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/registry"
 	"velox-server/internal/supervisor"
@@ -53,6 +54,11 @@ type appComponents struct {
 	// (async poll path) share this instance so they converge on the
 	// same (job_id, forwarding_id) write path.
 	resolver *creatorflow.Resolver
+
+	// instaeditVerifier validates the short-lived JWT the InstaEdit
+	// BFF sends when calling the /api/v1/instaedit/* routes. Nil when
+	// INSTAEDIT_CONTROL_JWT_SECRET is not configured (dev/test).
+	instaeditVerifier *instaeditauth.Verifier
 
 	// CapabilityRegistry wires artifact.commit.v1 dispatch gates.
 	// Registered probes (coordinator, spool, transport) surface in
@@ -121,7 +127,8 @@ func (c *appComponents) routerBundle() RouterBundle {
 			BlobStore:      c.assets.BlobStore,
 			ChunkedHandler: workerhandlersuploads.NewChunkedUploadHandler(c.assets.ChunkedUploadSvc),
 		},
-		Metrics: MetricsRouteDeps{Registry: c.metricsRegistry},
+		Metrics:   MetricsRouteDeps{Registry: c.metricsRegistry},
+		InstaEdit: InstaEditRouteDeps{Verifier: c.instaeditVerifier},
 	}
 }
 
@@ -219,6 +226,20 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	metricsRegistry := velmetrics.NewRegistry()
 	metricsCollector := velmetrics.NewCollector(metricsRegistry)
 
+	// Build the InstaEdit control-plane verifier when the shared
+	// secret is configured. A nil verifier means the /api/v1/instaedit
+	// routes are not mounted, so dev/test deployments keep working.
+	var instaeditVerifier *instaeditauth.Verifier
+	if secret := strings.TrimSpace(cfg.Auth.InstaeditControlJWTSecret); secret != "" {
+		v, err := instaeditauth.New(secret)
+		if err != nil {
+			_ = p.SQLite.Close()
+			return nil, fmt.Errorf("bootstrap: instaedit auth verifier: %w", err)
+		}
+		instaeditVerifier = v
+		log.Printf("[BOOTSTRAP] InstaEdit control JWT verifier configured")
+	}
+
 	supervisor, err := buildSupervisor(a, m, j, p, w, t, metricsCollector)
 	if err != nil {
 		_ = p.SQLite.Close()
@@ -226,17 +247,18 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	}
 
 	return &appComponents{
-		cfg:                cfg,
-		persistence:        p,
-		jobs:               j,
-		tasks:              t,
-		workers:            w,
-		assets:             a,
-		modules:            m,
-		resolver:           resolver,
+		cfg:               cfg,
+		persistence:       p,
+		jobs:              j,
+		tasks:             t,
+		workers:           w,
+		assets:            a,
+		modules:           m,
+		resolver:          resolver,
 		capabilityRegistry: capabilityRegistry,
 		metricsRegistry:    metricsRegistry,
 		metricsCollector:   metricsCollector,
+		instaeditVerifier:  instaeditVerifier,
 		supervisor:         supervisor,
 		health:             m.Health,
 	}, nil

@@ -11,9 +11,11 @@ import (
 	"velox-server/internal/artifacts"
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/instaeditauth"
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/darkeditor"
+	instaedithandler "velox-server/internal/handlers/server/instaedit"
 	"velox-server/internal/handlers/server/pipeline"
 	scripthandlers "velox-server/internal/handlers/server/script"
 	"velox-server/internal/jobs"
@@ -92,6 +94,13 @@ type MetricsRouteDeps struct {
 	Registry *velmetrics.Registry
 }
 
+// InstaEditRouteDeps carries the deps for the /api/v1/instaedit route
+// group. The verifier is created from INSTAEDIT_CONTROL_JWT_SECRET at
+// boot; when it is nil the whole group is skipped (dev/test mode).
+type InstaEditRouteDeps struct {
+	Verifier *instaeditauth.Verifier
+}
+
 // ── RouterBundle ───────────────────────────────────────────────────────────
 
 // RouterBundle is the composition-root input for newRouter. It contains
@@ -108,6 +117,7 @@ type RouterBundle struct {
 	Darkeditor DarkeditorRouteDeps
 	Upload     UploadRouteDeps
 	Metrics    MetricsRouteDeps
+	InstaEdit  InstaEditRouteDeps
 }
 
 // corsMiddleware + adminAuth are unchanged from the pre-refactor router.
@@ -164,8 +174,21 @@ func newRouter(cfg *config.Config, bundle RouterBundle, registry interface {
 	registerDarkeditorRoutes(r, bundle.Darkeditor)
 	registerUploadRoutes(r, bundle.Upload)
 	registerMetricsRoutes(r, bundle.Metrics)
+	registerInstaEditRoutes(r, bundle.InstaEdit)
 
 	return r
+}
+
+// registerInstaEditRoutes mounts the InstaEdit BFF route group under
+// /api/v1/instaedit. Every route in this group is protected by the
+// instaeditauth JWT middleware (signature, iss, aud, exp, scopes). The
+// group is omitted entirely when the verifier is nil (dev/test).
+func registerInstaEditRoutes(r *gin.Engine, deps InstaEditRouteDeps) {
+	if deps.Verifier == nil {
+		log.Printf("[ROUTES] InstaEdit BFF routes skipped: verifier=nil (INSTAEDIT_CONTROL_JWT_SECRET not configured)")
+		return
+	}
+	instaedithandler.NewHandler(deps.Verifier).RegisterRoutes(r)
 }
 
 // registerScriptRoutes mounts the /api/v1/script routes. Nil-tolerant:
