@@ -45,7 +45,6 @@ func NewHandler(verifier *instaeditauth.Verifier) *Handler {
 // appropriate scope.
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	g := r.Group("/api/v1/instaedit")
-	g.Use(instaeditauth.Middleware(h.verifier, nil))
 
 	jobs := g.Group("/jobs")
 	{
