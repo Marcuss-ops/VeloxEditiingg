@@ -65,12 +65,10 @@ func setupIntegrationRouter(t *testing.T) (*gin.Engine, *store.SQLiteStore) {
 	planResolver := &testPlanResolver{db: db.DB()}
 	enq := enqueue.NewEnqueuer(atomic, jobRepo, nil, planResolver)
 
+	svc := NewServiceFromSQLite(db, jobRepo, store.NewSQLiteAssetRepository(db), enq)
 	handler := NewHandler(HandlerDeps{
 		Verifier: verifier,
-		Enqueuer: enq,
-		Store:    db,
-		Jobs:     jobRepo,
-		Assets:   store.NewSQLiteAssetRepository(db),
+		Service:  svc,
 	})
 
 	gin.SetMode(gin.TestMode)

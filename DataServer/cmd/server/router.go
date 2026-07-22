@@ -101,10 +101,7 @@ type MetricsRouteDeps struct {
 // boot; when it is nil the whole group is skipped (dev/test mode).
 type InstaEditRouteDeps struct {
 	Verifier *instaeditauth.Verifier
-	Enqueuer *enqueue.Enqueuer
-	Store    *store.SQLiteStore
-	Jobs     jobs.Repository
-	Assets   store.AssetRepository
+	Service  *instaedithandler.Service
 }
 
 // ── RouterBundle ───────────────────────────────────────────────────────────
@@ -284,16 +281,12 @@ func registerInstaEditRoutes(r *gin.Engine, deps InstaEditRouteDeps) error {
 		log.Printf("[ROUTES] InstaEdit BFF routes skipped: verifier=nil (INSTAEDIT_CONTROL_JWT_SECRET not configured)")
 		return nil
 	}
-	if deps.Enqueuer == nil || deps.Store == nil || deps.Jobs == nil || deps.Assets == nil {
-		return fmt.Errorf("InstaEdit BFF routes enabled but missing required dependencies (enqueuer=%t store=%t jobs=%t assets=%t)",
-			deps.Enqueuer != nil, deps.Store != nil, deps.Jobs != nil, deps.Assets != nil)
+	if deps.Service == nil {
+		return fmt.Errorf("InstaEdit BFF routes enabled but service is nil")
 	}
 	instaedithandler.NewHandler(instaedithandler.HandlerDeps{
 		Verifier: deps.Verifier,
-		Enqueuer: deps.Enqueuer,
-		Store:    deps.Store,
-		Jobs:     deps.Jobs,
-		Assets:   deps.Assets,
+		Service:  deps.Service,
 	}).RegisterRoutes(r)
 	return nil
 }

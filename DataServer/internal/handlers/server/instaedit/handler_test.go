@@ -20,7 +20,10 @@ func setupRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	v, _ := instaeditauth.New(testSecret)
-	h := NewHandler(HandlerDeps{Verifier: v})
+	h := NewHandler(HandlerDeps{
+		Verifier: v,
+		Service:  NewService(nil, nil, nil, nil),
+	})
 	h.RegisterRoutes(r)
 	return r
 }

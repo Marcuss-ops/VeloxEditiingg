@@ -58,7 +58,13 @@ func (f *failingStore) GetDeliveryDestination(ctx context.Context, destID string
 func newFailingRouter(mock storeReader) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	v, _ := instaeditauth.New(testSecret)
-	h := NewHandler(HandlerDeps{Verifier: v, Store: mock})
+	h := NewHandler(HandlerDeps{
+		Verifier: v,
+		Service: NewService(
+			&sqliteJobGateway{storeReader: mock, jobs: nil},
+			nil, nil, nil,
+		),
+	})
 	r := gin.New()
 	h.RegisterRoutes(r)
 	return r

@@ -21,12 +21,13 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
+	instaedithandler "velox-server/internal/handlers/server/instaedit"
 	scripthandlers "velox-server/internal/handlers/server/script"
 	"velox-server/internal/ingest"
 	"velox-server/internal/instaeditauth"
 	velmetrics "velox-server/internal/metrics"
-	"velox-server/internal/store"
 	"velox-server/internal/registry"
+	"velox-server/internal/store"
 	"velox-server/internal/supervisor"
 )
 
@@ -131,10 +132,7 @@ func (c *appComponents) routerBundle() RouterBundle {
 		Metrics:   MetricsRouteDeps{Registry: c.metricsRegistry},
 		InstaEdit: InstaEditRouteDeps{
 			Verifier: c.instaeditVerifier,
-			Enqueuer: c.modules.Enqueuer,
-			Store:    c.persistence.SQLite,
-			Jobs:     c.jobs.Repository,
-			Assets:   store.NewSQLiteAssetRepository(c.persistence.SQLite),
+			Service:  instaedithandler.NewServiceFromSQLite(c.persistence.SQLite, c.jobs.Repository, store.NewSQLiteAssetRepository(c.persistence.SQLite), c.modules.Enqueuer),
 		},
 	}
 }
