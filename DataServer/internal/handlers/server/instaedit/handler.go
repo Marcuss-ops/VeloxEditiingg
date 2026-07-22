@@ -34,6 +34,28 @@ const (
 	ScopeAssetsRead  = "velox:assets:read"
 )
 
+// renderSpecAllowedKeys lists the top-level render keys that may be
+// flattened into the Enqueue payload. It intentionally excludes
+// project_id, delivery_plan, job_id, workspace_id, etc.
+var renderSpecAllowedKeys = []string{
+	"video_name",
+	"video_metadata",
+	"scenes",
+	"scenes_json",
+	"voiceover_paths",
+	"voiceover_path",
+	"audio_language",
+	"language",
+	"clips",
+	"items",
+	"audio_tracks",
+	"fit",
+	"effect",
+	"orientation",
+	"output_path",
+	"drive_output_folder",
+}
+
 // HandlerDeps carries the dependencies required by the InstaEdit BFF
 // handlers. All fields are required for the route group to be mounted;
 // the composition root skips the group when the verifier is nil.
@@ -248,6 +270,15 @@ func (h *Handler) createJob() gin.HandlerFunc {
 		if len(req.RenderSpec) > 0 {
 			var renderSpec map[string]interface{}
 			if err := json.Unmarshal(req.RenderSpec, &renderSpec); err == nil {
+				// Copy only the render fields the Enqueuer understands. We
+				// deliberately do NOT copy arbitrary keys, to prevent the
+				// client from overriding canonical fields such as
+				// project_id, delivery_plan, or job_id.
+				for _, k := range renderSpecAllowedKeys {
+					if v, ok := renderSpec[k]; ok && v != nil {
+						payload[k] = v
+					}
+				}
 				payload["render_spec"] = renderSpec
 			} else {
 				// Keep the raw bytes as a fallback so the render spec is not lost.

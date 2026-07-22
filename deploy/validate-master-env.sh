@@ -117,6 +117,22 @@ elif [[ ${#ADMIN_TOKEN} -lt 32 ]]; then
     WARN_COUNT=$((WARN_COUNT + 1))
 fi
 
+# ─── INSTAEDIT_CONTROL_JWT_SECRET ───────────────────────────────────────────
+# HS256 shared secret used by the InstaEdit BFF when proxying requests to
+# the Velox master. The runtime verifier requires a non-empty secret of at
+# least 32 bytes; without it the /api/v1/instaedit routes are disabled.
+INSTAEDIT_SECRET="$(get_env_value "$ENV_FILE" INSTAEDIT_CONTROL_JWT_SECRET)"
+if [[ -z "$INSTAEDIT_SECRET" ]]; then
+    err "INSTAEDIT_CONTROL_JWT_SECRET is empty or missing (required for InstaEdit BFF authentication)"
+    ERR_COUNT=$((ERR_COUNT + 1))
+elif [[ "$INSTAEDIT_SECRET" =~ CHANGE_ME_ ]]; then
+    err "INSTAEDIT_CONTROL_JWT_SECRET still set to a CHANGE_ME_* placeholder"
+    ERR_COUNT=$((ERR_COUNT + 1))
+elif [[ ${#INSTAEDIT_SECRET} -lt 32 ]]; then
+    warn "INSTAEDIT_CONTROL_JWT_SECRET length=${#INSTAEDIT_SECRET} chars; recommend ≥ 32 chars to match the HS256 verifier minimum."
+    WARN_COUNT=$((WARN_COUNT + 1))
+fi
+
 # ─── VELOX_ALLOWED_WORKERS ──────────────────────────────────────────────────
 # Mirror ValidateProductionWorkers in DataServer/internal/config/workers_validator.go:
 #   * non-empty (production rejects empty allowlists)

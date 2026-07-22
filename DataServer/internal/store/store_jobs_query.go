@@ -199,7 +199,11 @@ func (s *SQLiteStore) ListJobsByWorkspace(ctx context.Context, workspaceID int64
 // workspace. workspaceID == 0 matches legacy rows with NULL workspace.
 func (s *SQLiteStore) GetJobByWorkspace(ctx context.Context, jobID string, workspaceID int64) (map[string]any, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE job_id = ? AND COALESCE(workspace_id, 0) = ?`, jobID, workspaceID)
-	return scanJobRow(row)
+	m, err := scanJobRow(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return m, err
 }
 
 // JobCounts returns a status → count map keyed by the canonical UPPER
