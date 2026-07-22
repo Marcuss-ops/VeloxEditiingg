@@ -237,6 +237,64 @@ else
     fi
 fi
 
+# ─── Social API (InstaEdit reverse direction) ──────────────────────────────
+SOCIAL_API_URL="$(get_env_value "$ENV_FILE" SOCIAL_API_URL)"
+SOCIAL_API_TOKEN="$(get_env_value "$ENV_FILE" SOCIAL_API_TOKEN)"
+SOCIAL_CALLBACK_BASE_URL="$(get_env_value "$ENV_FILE" SOCIAL_CALLBACK_BASE_URL)"
+
+if [[ -z "$SOCIAL_API_URL" ]]; then
+    err "SOCIAL_API_URL is empty (Velox cannot reach InstaEdit to deliver artifacts)"
+    ERR_COUNT=$((ERR_COUNT + 1))
+elif [[ "$SOCIAL_API_URL" =~ CHANGE_ME_ ]]; then
+    err "SOCIAL_API_URL still set to a CHANGE_ME_* placeholder"
+    ERR_COUNT=$((ERR_COUNT + 1))
+else
+    case "$(is_https_url "$SOCIAL_API_URL"; echo $?)" in
+        0) : ;;
+        1) warn "SOCIAL_API_URL uses http:// — only valid behind VPN/front-door TLS. Production must be https://."
+            WARN_COUNT=$((WARN_COUNT + 1)) ;;
+        *) err "SOCIAL_API_URL malformed: '$SOCIAL_API_URL' (expected https://host[:port][/path])"
+            ERR_COUNT=$((ERR_COUNT + 1)) ;;
+    esac
+fi
+
+if [[ -z "$SOCIAL_API_TOKEN" ]]; then
+    err "SOCIAL_API_TOKEN is empty (InstaEdit will reject Velox delivery requests)"
+    ERR_COUNT=$((ERR_COUNT + 1))
+elif [[ "$SOCIAL_API_TOKEN" =~ CHANGE_ME_ ]]; then
+    err "SOCIAL_API_TOKEN still set to a CHANGE_ME_* placeholder"
+    ERR_COUNT=$((ERR_COUNT + 1))
+fi
+
+if [[ -z "$SOCIAL_CALLBACK_BASE_URL" ]]; then
+    err "SOCIAL_CALLBACK_BASE_URL is empty (artifact download_url and callback_url cannot be built)"
+    ERR_COUNT=$((ERR_COUNT + 1))
+elif [[ "$SOCIAL_CALLBACK_BASE_URL" =~ CHANGE_ME_ ]]; then
+    err "SOCIAL_CALLBACK_BASE_URL still set to a CHANGE_ME_* placeholder"
+    ERR_COUNT=$((ERR_COUNT + 1))
+else
+    case "$(is_https_url "$SOCIAL_CALLBACK_BASE_URL"; echo $?)" in
+        0) : ;;
+        1) warn "SOCIAL_CALLBACK_BASE_URL uses http:// — only valid behind VPN/front-door TLS. Production must be https://."
+            WARN_COUNT=$((WARN_COUNT + 1)) ;;
+        *) err "SOCIAL_CALLBACK_BASE_URL malformed: '$SOCIAL_CALLBACK_BASE_URL' (expected https://host[:port][/path])"
+            ERR_COUNT=$((ERR_COUNT + 1)) ;;
+    esac
+fi
+
+# ─── GIN_MODE ───────────────────────────────────────────────────────────────
+# Release mode is required in production so the internal security guard
+# rejects public IPs and browser Origin headers. Debug/test modes leave
+# the master exposed.
+GIN_MODE="$(get_env_value "$ENV_FILE" GIN_MODE)"
+if [[ -z "$GIN_MODE" ]]; then
+    err "GIN_MODE is empty (set to 'release' in production)"
+    ERR_COUNT=$((ERR_COUNT + 1))
+elif [[ "$GIN_MODE" != "release" ]]; then
+    err "GIN_MODE must be 'release' in production (got '$GIN_MODE'); debug/test modes disable the private-network guard"
+    ERR_COUNT=$((ERR_COUNT + 1))
+fi
+
 # ─── VELOX_DB_PATH ─────────────────────────────────────────────────────────
 DB_PATH="$(get_env_value "$ENV_FILE" VELOX_DB_PATH)"
 if [[ -z "$DB_PATH" ]]; then
