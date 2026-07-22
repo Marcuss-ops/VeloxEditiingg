@@ -54,6 +54,20 @@ func validClaims() instaeditauth.Claims {
 	}
 }
 
+func TestInstaEditRoutes_WrongIssuer_401(t *testing.T) {
+	r := setupRouter()
+	claims := validClaims()
+	claims.Issuer = "not-instaedit"
+	token := mintToken(t, claims)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/instaedit/jobs", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for wrong issuer, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestInstaEditRoutes_MissingToken_401(t *testing.T) {
 	r := setupRouter()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/instaedit/jobs", nil)

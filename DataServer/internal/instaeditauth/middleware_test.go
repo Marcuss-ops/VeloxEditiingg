@@ -40,6 +40,26 @@ func TestMiddleware_ValidToken_Passes(t *testing.T) {
 	}
 }
 
+func TestMiddleware_WrongIssuer_401(t *testing.T) {
+	v, _ := New(testSecret)
+	r := setupGin()
+	r.GET("/test", Middleware(v, nil), func(c *gin.Context) {
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	claims := validClaims()
+	claims.Issuer = "evil-issuer"
+	token := mintToken(t, testSecret, claims)
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for wrong issuer, got %d", w.Code)
+	}
+}
+
 func TestMiddleware_MissingToken_401(t *testing.T) {
 	v, _ := New(testSecret)
 	r := setupGin()
