@@ -65,7 +65,6 @@ DataServer/data/backups/
 DataServer/data/dark_editor/
 DataServer/data/drive/
 DataServer/data/jobs/
-DataServer/data/youtube/
 DataServer/data/worker_downloads/
 DataServer/data/ansible/playbooks/inventory.ini
 DataServer/completed_videos/
