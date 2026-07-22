@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -120,24 +121,48 @@ type RouterBundle struct {
 	InstaEdit  InstaEditRouteDeps
 }
 
-// corsMiddleware + adminAuth are unchanged from the pre-refactor router.
-func corsMiddleware() gin.HandlerFunc {
+// internalSecurityGuard blocks direct browser access and enforces an
+// optional IP allowlist. It runs before any route handler so that
+// every HTTP surface (including routes registered by modules) is at
+// least protected at the network edge. Authentication is layered on
+// top by the per-route middlewares (InstaEdit JWT or admin token).
+func internalSecurityGuard(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		origin := c.GetHeader("Origin")
-		if strings.HasPrefix(origin, "http://localhost:3000") ||
-			strings.HasPrefix(origin, "http://127.0.0.1:3000") ||
-			strings.HasPrefix(origin, "http://localhost:3001") ||
-			strings.HasPrefix(origin, "http://127.0.0.1:3001") {
-			c.Header("Access-Control-Allow-Origin", origin)
-			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH")
-			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, Origin")
-			c.Header("Access-Control-Allow-Credentials", "true")
-			c.Header("Access-Control-Max-Age", "86400")
-		}
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204)
+		clientIP := c.ClientIP()
+
+		// Allow loopback unconditionally; side-cars and local tooling
+		// run in the same pod / network namespace.
+		if net.ParseIP(clientIP) != nil && net.ParseIP(clientIP).IsLoopback() {
+			c.Next()
 			return
 		}
+
+		// Reject any request carrying an browser Origin header. Velox
+		// master is not a browser-facing API; the only legitimate HTTP
+		// callers are internal services (InstaEdit BFF, metrics
+		// scrapers, Ansible runners). Browsers never need direct access.
+		if c.GetHeader("Origin") != "" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "direct browser access forbidden"})
+			return
+		}
+
+		// Optional IP allowlist. When set, only explicitly allowed IPs
+		// (plus loopback) may reach the master. This is the code-side
+		// complement to the firewall/VPN rule.
+		if len(cfg.Workers.AllowedIPs) > 0 {
+			allowed := false
+			for _, ip := range cfg.Workers.AllowedIPs {
+				if ip == clientIP {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "client IP not in allowlist"})
+				return
+			}
+		}
+
 		c.Next()
 	}
 }
@@ -160,7 +185,7 @@ func newRouter(cfg *config.Config, bundle RouterBundle, registry interface {
 	auth := api.AdminAuthMiddleware(cfg)
 	configureTrustedProxies(r)
 
-	r.Use(corsMiddleware())
+	r.Use(internalSecurityGuard(cfg))
 	r.Use(requestIDMiddleware())
 	r.Use(accessLogMiddleware())
 	r.Use(addGzipHeaders())
@@ -248,6 +273,7 @@ func registerDarkeditorRoutes(r *gin.Engine, deps DarkeditorRouteDeps) {
 	if deps.Cfg == nil {
 		return
 	}
+	adminAuth := api.AdminAuthMiddleware(deps.Cfg)
 	deCfg := &darkeditor.Config{
 		TempDir:      filepath.Join(deps.Cfg.Runtime.DataDir, "dark_editor", "temp"),
 		ProjectsDir:  filepath.Join(deps.Cfg.Runtime.DataDir, "dark_editor", "projects"),
@@ -258,25 +284,31 @@ func registerDarkeditorRoutes(r *gin.Engine, deps DarkeditorRouteDeps) {
 	if deps.SQLiteStore != nil {
 		deHandler.SetDBStore(deps.SQLiteStore)
 	}
-	darkeditor.RegisterAPIRoutes(r, deHandler)
+	// Wrap darkeditor routes with admin auth. The dark editor SPA is
+	// served by the same internal-only master, so it is protected by
+	// the same service-token gate as the rest of the HTTP API.
+	darkeditor.RegisterAPIRoutes(r.Group("/api/darkeditor", adminAuth), deHandler)
 }
 
 // registerUploadRoutes mounts upload-completed + chunked-upload routes.
 // Each sub-route tolerates a nil sub-component so partial bundles still
-// produce a working router.
+// produce a working router. All upload surfaces are wrapped with the
+// admin auth middleware: the Velox master HTTP API is internal-only
+// (InstaEdit BFF + workers) and must never be reachable from a browser.
 func registerUploadRoutes(r *gin.Engine, deps UploadRouteDeps) {
+	adminAuth := api.AdminAuthMiddleware(deps.Cfg)
 	if deps.ArtifactReader != nil && deps.BlobStore != nil {
-		r.GET("/api/internal/artifacts/:artifact_id/download", api.AdminAuthMiddleware(deps.Cfg), artifactDownloadHandler(deps.ArtifactReader, deps.BlobStore))
-		r.HEAD("/api/internal/artifacts/:artifact_id/download", api.AdminAuthMiddleware(deps.Cfg), artifactDownloadHandler(deps.ArtifactReader, deps.BlobStore))
+		r.GET("/api/internal/artifacts/:artifact_id/download", adminAuth, artifactDownloadHandler(deps.ArtifactReader, deps.BlobStore))
+		r.HEAD("/api/internal/artifacts/:artifact_id/download", adminAuth, artifactDownloadHandler(deps.ArtifactReader, deps.BlobStore))
 	}
 	if deps.ArtifactSvc != nil {
 		r.POST("/api/v1/video/upload-completed",
-			workerhandlersuploads.UploadCompletedVideo(deps.Cfg, deps.ArtifactSvc))
+			adminAuth, workerhandlersuploads.UploadCompletedVideo(deps.Cfg, deps.ArtifactSvc))
 	}
 	if deps.ChunkedHandler != nil {
-		r.POST("/api/v1/video/chunked/init", deps.ChunkedHandler.InitChunkedUpload())
-		r.POST("/api/v1/video/chunked/:job_id/:chunk_index", deps.ChunkedHandler.UploadChunk())
-		r.POST("/api/v1/video/chunked/:job_id/complete", deps.ChunkedHandler.CompleteChunkedUpload())
+		r.POST("/api/v1/video/chunked/init", adminAuth, deps.ChunkedHandler.InitChunkedUpload())
+		r.POST("/api/v1/video/chunked/:job_id/:chunk_index", adminAuth, deps.ChunkedHandler.UploadChunk())
+		r.POST("/api/v1/video/chunked/:job_id/complete", adminAuth, deps.ChunkedHandler.CompleteChunkedUpload())
 	}
 }
 

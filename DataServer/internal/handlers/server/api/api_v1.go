@@ -13,16 +13,22 @@ import (
 
 func AdminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Local loopback requests are allowed for local tooling and
+		// side-car processes that share the pod.
 		if workersreg.IsLocalRequestIP(c.ClientIP()) {
 			c.Next()
 			return
 		}
 
-		// Allow read-only dashboard routes without an admin token.
-		// The workers/ansible UI is meant to stay live on public instances,
-		// but write operations must still remain protected.
-		if c.Request.Method == http.MethodGet && IsPublicReadOnlyRoute(c.Request.URL.Path) {
-			c.Next()
+		// Browser-based requests are never allowed to reach the admin
+		// token path: the Origin header is a reliable indicator of a
+		// cross-origin browser request. Reject it before wasting cycles
+		// on token comparison and to ensure admin credentials never need
+		// to live in the browser.
+		if c.GetHeader("Origin") != "" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error": "direct browser access forbidden",
+			})
 			return
 		}
 
@@ -50,41 +56,3 @@ func AdminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
-func IsPublicReadOnlyRoute(path string) bool {
-	if path == "" {
-		return false
-	}
-
-	publicPrefixes := []string{
-		"/api/v1/jobs",
-		"/api/v1/workers",
-		"/api/v1/dashboard/summary",
-		"/api/v1/dashboard/realtime",
-		"/api/v1/dashboard/health",
-		"/api/v1/analytics",
-		"/api/v1/drive-links",
-		"/api/v1/drive",
-		"/api/v1/master",
-		"/api/v1/ansible",
-		"/api/v1/admin/ansible",
-		"/api/v1/endpoints-status",
-		"/api/v1/services",
-		"/api/v1/queue",
-		"/api/v1/stats",
-		"/api/v1/calendar",
-		"/api/v1/livestream",
-	}
-
-	for _, prefix := range publicPrefixes {
-		if strings.HasPrefix(path, prefix) {
-			return true
-		}
-	}
-
-	// Legacy compat paths used by the workers dashboard SPA.
-	if path == "/jobs" || path == "/workers" || path == "/workers_status" || path == "/api/workers_status" || path == "/api/v1/workers_status" {
-		return true
-	}
-
-	return false
-}

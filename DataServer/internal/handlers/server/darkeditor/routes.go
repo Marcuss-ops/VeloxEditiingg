@@ -6,8 +6,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// RegisterAPIRoutes registers all Dark Editor API routes
-func RegisterAPIRoutes(r *gin.Engine, h *Handler) {
+// RegisterAPIRoutes registers all Dark Editor API routes.
+// The router argument is typically *gin.Engine or *gin.RouterGroup so
+// callers can mount the dark editor surface behind an own middleware
+// group (e.g. an admin-auth gate).
+func RegisterAPIRoutes(r gin.IRouter, h *Handler) {
 	// API group for dark editor
 	api := r.Group("/dark_editor_v2")
 	{
