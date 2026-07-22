@@ -142,6 +142,21 @@ func (s *SQLiteStore) GetWorker(workerID string) (map[string]any, error) {
 	return m, nil
 }
 
+// GetWorkerByWorkspace returns a worker only if it belongs to the given
+// workspace. Rows with NULL workspace_id are not returned.
+func (s *SQLiteStore) GetWorkerByWorkspace(workerID string, workspaceID int64) (map[string]any, error) {
+	var raw string
+	err := s.db.QueryRow(`SELECT raw_json FROM workers WHERE worker_id = ? AND workspace_id = ?`, workerID, workspaceID).Scan(&raw)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // DeleteWorker removes a worker record.
 func (s *SQLiteStore) DeleteWorker(workerID string) error {
 	_, err := s.db.Exec(`DELETE FROM workers WHERE worker_id = ?`, workerID)
@@ -167,6 +182,28 @@ func (s *SQLiteStore) ListWorkers() ([]map[string]any, error) {
 		}
 	}
 	return out, nil
+}
+
+// ListWorkersByWorkspace returns workers scoped to an InstaEdit
+// workspace. Only rows with an explicit workspace_id are returned.
+func (s *SQLiteStore) ListWorkersByWorkspace(workspaceID int64) ([]map[string]any, error) {
+	rows, err := s.db.Query(`SELECT raw_json FROM workers WHERE workspace_id = ? ORDER BY last_heartbeat DESC`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]map[string]any, 0)
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(raw), &m); err == nil {
+			out = append(out, m)
+		}
+	}
+	return out, rows.Err()
 }
 
 // ReplaceWorkers has been removed. Use individual UpsertWorker + SetWorkerRevoked instead.

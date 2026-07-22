@@ -32,6 +32,9 @@ type AssetRepository interface {
 	Insert(ctx context.Context, a AssetRecord) error
 	// GetByID returns a single asset, or (nil, nil) on missing.
 	GetByID(ctx context.Context, assetID string) (*AssetRecord, error)
+	// GetByIDAndWorkspace returns a single asset scoped to a workspace,
+	// or (nil, nil) on missing / wrong workspace.
+	GetByIDAndWorkspace(ctx context.Context, assetID string, workspaceID int64) (*AssetRecord, error)
 	// GetBySHA256 returns the asset with the given SHA-256, or (nil, nil).
 	GetBySHA256(ctx context.Context, sha256 string) (*AssetRecord, error)
 	// UpdateStatus atomically transitions status (CAS on from).
@@ -87,6 +90,31 @@ func (r *SQLiteAssetRepository) Insert(ctx context.Context, a AssetRecord) error
 		return fmt.Errorf("insert asset: %w", err)
 	}
 	return nil
+}
+
+// GetByIDAndWorkspace returns an asset only if it belongs to the given
+// workspace. Rows with NULL workspace_id are not returned.
+func (r *SQLiteAssetRepository) GetByIDAndWorkspace(ctx context.Context, assetID string, workspaceID int64) (*AssetRecord, error) {
+	if r.store == nil || r.store.db == nil {
+		return nil, fmt.Errorf("asset repository: store not initialized")
+	}
+	row := r.store.db.QueryRowContext(ctx,
+		`SELECT asset_id, kind, status, sha256, COALESCE(mime_type,''),
+		        size_bytes, storage_provider, storage_key, COALESCE(metadata_json,''),
+		        created_at, COALESCE(verified_at,''), COALESCE(deleted_at,'')
+		 FROM assets WHERE asset_id = ? AND workspace_id = ?`, assetID, workspaceID,
+	)
+	var a AssetRecord
+	err := row.Scan(&a.AssetID, &a.Kind, &a.Status, &a.SHA256, &a.MimeType,
+		&a.SizeBytes, &a.StorageProvider, &a.StorageKey, &a.MetadataJSON,
+		&a.CreatedAt, &a.VerifiedAt, &a.DeletedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get asset by id and workspace: %w", err)
+	}
+	return &a, nil
 }
 
 func (r *SQLiteAssetRepository) GetByID(ctx context.Context, assetID string) (*AssetRecord, error) {

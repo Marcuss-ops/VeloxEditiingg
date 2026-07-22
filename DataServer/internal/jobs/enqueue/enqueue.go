@@ -90,6 +90,21 @@ func (e *Enqueuer) WithSocialValidator(v DestinationValidator) *Enqueuer {
 // Core enqueue entry point
 // =============================================================================
 
+// EnqueueOption customizes the Job before it is persisted. It is used
+// by callers that need to stamp system-level fields (e.g. workspace_id)
+// without polluting the user's payload map.
+type EnqueueOption func(*jobs.Job)
+
+// WithWorkspaceID scopes the created Job to the given InstaEdit
+// workspace. It is a no-op when id == 0 (legacy callers).
+func WithWorkspaceID(id int64) EnqueueOption {
+	return func(j *jobs.Job) {
+		if id != 0 {
+			j.WorkspaceID = &id
+		}
+	}
+}
+
 // Enqueue is the canonical scene-video enqueue. The Enqueuer owns both
 // the atomic creator + asset service so rewrite invariants are applied
 // exactly once before the atomic Job+Task creation.
@@ -106,12 +121,12 @@ func (e *Enqueuer) WithSocialValidator(v DestinationValidator) *Enqueuer {
 // Callers that need the Job+TaskSpec without a DB write (e.g. for an
 // atomic multi-table transaction with creator_forwardings) should use
 // PrepareJobAndTask instead.
-func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{}, req costmodel.JobRequirements) (map[string]interface{}, error) {
+func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{}, req costmodel.JobRequirements, opts ...EnqueueOption) (map[string]interface{}, error) {
 	if e == nil || e.Creator == nil {
 		return nil, fmt.Errorf("creator unavailable")
 	}
 
-	job, spec, priority, err := e.PrepareJobAndTask(ctx, payloadMap, req)
+	job, spec, priority, err := e.PrepareJobAndTask(ctx, payloadMap, req, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -169,16 +184,16 @@ func (e *Enqueuer) enforceDeliveryPlanPrecondition(ctx context.Context, jobID st
 // Scorecard v2 / Step 15: starts a "schedule_task" span for distributed
 // tracing. The span context propagates through the returned Job ID so
 // downstream claim/execute/report spans link to this root span.
-func (e *Enqueuer) PrepareJobAndTask(ctx context.Context, payloadMap map[string]interface{}, req costmodel.JobRequirements) (*jobs.Job, *taskgraph.TaskSpec, int, error) {
+func (e *Enqueuer) PrepareJobAndTask(ctx context.Context, payloadMap map[string]interface{}, req costmodel.JobRequirements, opts ...EnqueueOption) (*jobs.Job, *taskgraph.TaskSpec, int, error) {
 	ctx, span := telemetry.StartSpan(ctx, "schedule_task")
 	defer span.End()
 
-	return e.prepareJobAndTask(ctx, payloadMap, req)
+	return e.prepareJobAndTask(ctx, payloadMap, req, opts...)
 }
 
 // prepareJobAndTask is the internal implementation extracted so the
 // span wrapper above keeps the defer span.End() clean.
-func (e *Enqueuer) prepareJobAndTask(ctx context.Context, payloadMap map[string]interface{}, req costmodel.JobRequirements) (*jobs.Job, *taskgraph.TaskSpec, int, error) {
+func (e *Enqueuer) prepareJobAndTask(ctx context.Context, payloadMap map[string]interface{}, req costmodel.JobRequirements, opts ...EnqueueOption) (*jobs.Job, *taskgraph.TaskSpec, int, error) {
 	if e == nil || e.Creator == nil {
 		return nil, nil, 0, fmt.Errorf("creator unavailable")
 	}
@@ -230,6 +245,15 @@ func (e *Enqueuer) prepareJobAndTask(ctx context.Context, payloadMap map[string]
 
 	if maxRetry := extractPlanMaxRetry(normalized); maxRetry > 0 {
 		job.MaxRetries = maxRetry
+	}
+
+	// Apply caller-supplied options (e.g. workspace scoping) before
+	// the job is persisted. Options run after the payload-derived
+	// fields are computed so they can override defaults.
+	for _, opt := range opts {
+		if opt != nil {
+			opt(job)
+		}
 	}
 
 	// The plan precondition (ResolvePlan + retry_budget > 0 + MaxRetries

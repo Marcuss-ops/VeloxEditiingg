@@ -214,6 +214,35 @@ func (s *SQLiteStore) ListDeliveryDestinations(provider string, limit int) ([]De
 	return out, rows.Err()
 }
 
+// GetDeliveryDestinationByExternalID returns a destination by its
+// opaque InstaEdit identifier. This is the lookup path used by the
+// InstaEdit BFF when creating a job, because the BFF only knows the
+// external_destination_id, not the internal Velox destination_id.
+func (s *SQLiteStore) GetDeliveryDestinationByExternalID(ctx context.Context, externalID string) (*DeliveryDestination, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT destination_id, provider, COALESCE(external_destination_id, ''),
+		        COALESCE(folder_id, ''),
+		        COALESCE(name, ''),
+		        enabled, COALESCE(configuration_json, ''),
+		        created_at, updated_at
+		 FROM delivery_destinations WHERE external_destination_id = ?`, externalID)
+	var d DeliveryDestination
+	var enabledInt int
+	err := row.Scan(&d.DestinationID, &d.Provider, &d.ExternalDestinationID,
+		&d.FolderID,
+		&d.Name,
+		&enabledInt, &d.ConfigurationJSON,
+		&d.CreatedAt, &d.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, ErrDeliveryNoRow
+	}
+	if err != nil {
+		return nil, err
+	}
+	d.Enabled = enabledInt != 0
+	return &d, nil
+}
+
 // GetDeliveryDestination returns a single destination by id, or
 // ErrDeliveryNoRow when missing (sql.ErrNoRows is normalized).
 //

@@ -264,11 +264,13 @@ func TestResolverEnqueuesWorkerJob(t *testing.T) {
 	if _, present := payload["voiceover_path"]; present {
 		t.Fatalf("voiceover_path alias must NOT be present in canonical creator payload, got %v", payload["voiceover_path"])
 	}
-	if payload["submitted_via"] != "api_v1_scene_video" {
-		t.Fatalf("want submitted_via api_v1_scene_video, got %v", payload["submitted_via"])
+	// Pipeline results carry their own provenance. normalizeSceneVideoPayload
+	// preserves caller-provided values rather than overwriting them.
+	if payload["submitted_via"] != "pipeline_generate_with_images" {
+		t.Fatalf("want submitted_via pipeline_generate_with_images, got %v", payload["submitted_via"])
 	}
-	if payload["source"] != "scene_video_api" {
-		t.Fatalf("want source scene_video_api, got %v", payload["source"])
+	if payload["source"] != "pipeline_generate_with_images" {
+		t.Fatalf("want source pipeline_generate_with_images, got %v", payload["source"])
 	}
 }
 

@@ -100,6 +100,10 @@ type MetricsRouteDeps struct {
 // boot; when it is nil the whole group is skipped (dev/test mode).
 type InstaEditRouteDeps struct {
 	Verifier *instaeditauth.Verifier
+	Enqueuer *enqueue.Enqueuer
+	Store    *store.SQLiteStore
+	Jobs     jobs.Repository
+	Assets   store.AssetRepository
 }
 
 // ── RouterBundle ───────────────────────────────────────────────────────────
@@ -213,7 +217,17 @@ func registerInstaEditRoutes(r *gin.Engine, deps InstaEditRouteDeps) {
 		log.Printf("[ROUTES] InstaEdit BFF routes skipped: verifier=nil (INSTAEDIT_CONTROL_JWT_SECRET not configured)")
 		return
 	}
-	instaedithandler.NewHandler(deps.Verifier).RegisterRoutes(r)
+	if deps.Enqueuer == nil || deps.Store == nil || deps.Jobs == nil || deps.Assets == nil {
+		log.Printf("[ROUTES] InstaEdit BFF routes skipped: incomplete dependencies")
+		return
+	}
+	instaedithandler.NewHandler(instaedithandler.HandlerDeps{
+		Verifier: deps.Verifier,
+		Enqueuer: deps.Enqueuer,
+		Store:    deps.Store,
+		Jobs:     deps.Jobs,
+		Assets:   deps.Assets,
+	}).RegisterRoutes(r)
 }
 
 // registerScriptRoutes mounts the /api/v1/script routes. Nil-tolerant:

@@ -19,7 +19,8 @@ const jobColumns = `job_id, status, video_name, project_id,
 	last_drive_upload_result, remote_status,
 	job_fingerprint, submitted_via, last_activity, run_id, job_run_id,
 	logs_updated_at, slot_data,
-	request_json, result_json`
+	request_json, result_json,
+	workspace_id`
 
 // scanJobRow scans a job row into a map, handling NULL SQL values gracefully.
 func scanJobRow(scanner interface {
@@ -38,6 +39,7 @@ func scanJobRow(scanner interface {
 		jobFingerprint, submittedVia, lastActivity, runID, jobRunID sql.NullString
 		logsUpdatedAt, slotDataRaw                                  sql.NullString
 		requestJSON, resultJSON                                     sql.NullString
+		workspaceID                                                 sql.NullInt64
 	)
 
 	dest := []interface{}{
@@ -53,6 +55,7 @@ func scanJobRow(scanner interface {
 		&jobFingerprint, &submittedVia, &lastActivity, &runID, &jobRunID,
 		&logsUpdatedAt, &slotDataRaw,
 		&requestJSON, &resultJSON,
+		&workspaceID,
 	}
 
 	if err := scanner.Scan(dest...); err != nil {
@@ -116,6 +119,11 @@ func scanJobRow(scanner interface {
 	setJSON("request_json", requestJSON)
 	setJSON("result_json", resultJSON)
 
+	// Workspace scoping (InstaEdit BFF)
+	if workspaceID.Valid {
+		m["workspace_id"] = workspaceID.Int64
+	}
+
 	// Slot data
 	if slotDataRaw.Valid && slotDataRaw.String != "" {
 		var slot map[string]any
@@ -155,6 +163,42 @@ func (s *SQLiteStore) ListJobs(ctx context.Context, limit int) ([]map[string]any
 
 func (s *SQLiteStore) GetJob(ctx context.Context, jobID string) (map[string]any, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE job_id = ?`, jobID)
+	return scanJobRow(row)
+}
+
+// ListJobsByWorkspace returns jobs scoped to an InstaEdit workspace.
+// Pass workspaceID == 0 to list jobs without an explicit workspace
+// (legacy rows).
+func (s *SQLiteStore) ListJobsByWorkspace(ctx context.Context, workspaceID int64, limit int) ([]map[string]any, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE COALESCE(workspace_id, 0) = ? ORDER BY COALESCE(updated_at, created_at) DESC LIMIT ?`, workspaceID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]map[string]any, 0)
+	for rows.Next() {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		m, err := scanJobRow(rows)
+		if err != nil {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// GetJobByWorkspace returns a job only if it belongs to the given
+// workspace. workspaceID == 0 matches legacy rows with NULL workspace.
+func (s *SQLiteStore) GetJobByWorkspace(ctx context.Context, jobID string, workspaceID int64) (map[string]any, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE job_id = ? AND COALESCE(workspace_id, 0) = ?`, jobID, workspaceID)
 	return scanJobRow(row)
 }
 

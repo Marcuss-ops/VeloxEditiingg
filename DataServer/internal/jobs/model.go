@@ -37,6 +37,12 @@ type Job struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 	Payload     string    `json:"-"` // opaque JSON blob (Ondata 3 PR3 final)
 
+	// WorkspaceID scopes the job to an InstaEdit workspace when it is
+	// created through the InstaEdit BFF. It is nil for legacy jobs
+	// created by internal callers (script, pipeline) that do not yet
+	// supply a workspace id.
+	WorkspaceID *int64 `json:"-"`
+
 	// Requirements is the per-job placement needs consumed by the
 	// master-side cost model (PR #6). Default zero value
 	// (ResourceClass="", TemporalMode="") means "no per-job

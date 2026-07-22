@@ -136,10 +136,11 @@ func (c *AtomicJobTaskCreator) CreateJobWithTaskTx(
 			run_id, job_run_id,
 			job_required_resource_class, job_required_temporal_mode,
 			job_required_deterministic, job_required_cacheable,
-			job_required_min_bandwidth_mbps
+			job_required_min_bandwidth_mbps,
+			workspace_id
 		) VALUES (?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, '{}', 0, ?, ?,
 		          ?, ?, ?, ?,
-		          ?)`,
+		          ?, ?)`,
 		job.ID, job.MaxRetries, job.VideoName, job.ProjectID,
 		now, now, now,
 		jobPayload,
@@ -147,6 +148,7 @@ func (c *AtomicJobTaskCreator) CreateJobWithTaskTx(
 		req.ResourceClass, req.TemporalMode,
 		req.Deterministic, req.Cacheable,
 		req.MinBandwidthMbps,
+		job.WorkspaceID,
 	)
 	if err != nil {
 		return fmt.Errorf("atomic creator job insert: %w", err)

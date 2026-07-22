@@ -25,6 +25,7 @@ import (
 	"velox-server/internal/ingest"
 	"velox-server/internal/instaeditauth"
 	velmetrics "velox-server/internal/metrics"
+	"velox-server/internal/store"
 	"velox-server/internal/registry"
 	"velox-server/internal/supervisor"
 )
@@ -128,7 +129,13 @@ func (c *appComponents) routerBundle() RouterBundle {
 			ChunkedHandler: workerhandlersuploads.NewChunkedUploadHandler(c.assets.ChunkedUploadSvc),
 		},
 		Metrics:   MetricsRouteDeps{Registry: c.metricsRegistry},
-		InstaEdit: InstaEditRouteDeps{Verifier: c.instaeditVerifier},
+		InstaEdit: InstaEditRouteDeps{
+			Verifier: c.instaeditVerifier,
+			Enqueuer: c.modules.Enqueuer,
+			Store:    c.persistence.SQLite,
+			Jobs:     c.jobs.Repository,
+			Assets:   store.NewSQLiteAssetRepository(c.persistence.SQLite),
+		},
 	}
 }
 

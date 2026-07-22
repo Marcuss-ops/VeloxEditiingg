@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -21,7 +20,7 @@ func setupRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	v, _ := instaeditauth.New(testSecret)
-	h := NewHandler(v)
+	h := NewHandler(HandlerDeps{Verifier: v})
 	h.RegisterRoutes(r)
 	return r
 }
@@ -65,17 +64,6 @@ func TestInstaEditRoutes_MissingToken_401(t *testing.T) {
 	}
 }
 
-func TestInstaEditRoutes_ValidToken_501(t *testing.T) {
-	r := setupRouter()
-	token := mintToken(t, validClaims())
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/instaedit/jobs", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusNotImplemented {
-		t.Fatalf("expected 501 (stub), got %d: %s", w.Code, w.Body.String())
-	}
-}
 
 func TestInstaEditRoutes_MissingScope_403(t *testing.T) {
 	r := setupRouter()
@@ -143,20 +131,5 @@ func TestInstaEditRoutes_AssetRoute_RequiresAssetScope(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 for missing asset scope, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestNotImplemented_Body(t *testing.T) {
-	// Ensure the stub helper returns a JSON body so callers can
-	// distinguish a protected-but-unimplemented endpoint from a
-	// plain 404.
-	r := setupRouter()
-	token := mintToken(t, validClaims())
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/instaedit/jobs", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if !strings.Contains(w.Body.String(), "not implemented") {
-		t.Fatalf("expected 'not implemented' in body, got: %s", w.Body.String())
 	}
 }

@@ -110,8 +110,12 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 	correlationID := strings.TrimSpace(payload.FirstString(payloadMap, "correlation_id"))
 	base.SetIdentity(jobID, jobRunID, correlationID)
 
-	base.SubmittedVia = "api_v1_scene_video"
-	base.Source = "scene_video_api"
+	if base.SubmittedVia == "" {
+		base.SubmittedVia = "api_v1_scene_video"
+	}
+	if base.Source == "" {
+		base.Source = "scene_video_api"
+	}
 	base.Status = "PENDING"
 	base.Version = "v2"
 
