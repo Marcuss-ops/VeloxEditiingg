@@ -48,7 +48,6 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth gin.HandlerFunc) {
 	remote.POST("/generate", h.Generate())
 	remote.GET("/status/:trace_id", h.Status())
 	remote.DELETE("/cancel/:trace_id", h.Cancel())
-	r.POST("/api/v1/jobs/:id/cancel", h.Cancel())
 
 	// Canonical, versioned pipeline-runs API. The POST creates a
 	// durable pipeline_run before the remote call; the GET returns the
