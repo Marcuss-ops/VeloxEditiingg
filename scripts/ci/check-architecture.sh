@@ -246,5 +246,12 @@ rm -f "$ANSIBLE_LOG"
 bash "${BASH_SOURCE[0]%/*}/check-size-band-policy.sh" >/dev/null \
   || fail "size-band policy violations detected -- see check-size-band-policy.sh output"
 
+# 12. SQL-ownership ratchet. Replaces the previous directory-allowlist
+# gates (check-no-sql-outside-store.sh and check-sql-ownership.sh)
+# with a per-file baseline. The total can only decrease and no new
+# files outside internal/store/** may introduce SQL coupling.
+bash "${BASH_SOURCE[0]%/*}/ratchet-sql.sh" >/dev/null \
+  || fail "SQL ratchet violation detected -- see ratchet-sql.sh output"
+
 
 echo "check-architecture: OK"

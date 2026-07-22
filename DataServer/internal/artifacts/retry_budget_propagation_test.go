@@ -11,6 +11,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"velox-server/internal/artifacts"
+	"velox-server/internal/store"
 )
 
 const phase5Schema = `
@@ -81,7 +82,7 @@ func seedDeliveryPlans(t *testing.T, db *sql.DB, jobID string, plans []phase5Pla
 }
 func runFinalize(t *testing.T, db *sql.DB, resolver artifacts.DeliveryPlanResolver, cmd artifacts.FinalizeVerifiedCommand) (*artifacts.SQLiteFinalizeWriter, *sql.DB) {
 	t.Helper()
-	reader := artifacts.NewSQLiteArtifactReader(db)
+	reader := store.NewSQLiteArtifactReader(db)
 	fin := artifacts.NewSQLiteFinalizeWriter(db, reader, resolver)
 	if _, err := fin.FinalizeVerified(context.Background(), cmd); err != nil {
 		t.Fatalf("FinalizeVerified: %v", err)

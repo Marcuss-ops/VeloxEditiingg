@@ -107,7 +107,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 	// with the artifacts-package writers lets the finalize tx join
 	// with concurrent UpdateUploadStatus on artifact_uploads.
 	repo := store.NewSQLiteUploadRepository(db)
-	artifactReader := NewSQLiteArtifactReader(db)
+	artifactReader := store.NewSQLiteArtifactReader(db)
 	authReader := NewSQLiteAuthReader(db)
 	uploadWriter := NewSQLiteUploadSessionWriter(db)
 	finalizeWriter := NewSQLiteFinalizeWriter(db, artifactReader, nil)

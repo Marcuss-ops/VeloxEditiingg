@@ -62,7 +62,7 @@ func TestUploadCompletedVideo_ArtifactsPipeline(t *testing.T) {
 	// Service composes it with three narrow writers behind
 	// UploadSessionWriter / FinalizationWriter / ArtifactReader.
 	repo := store.NewSQLiteUploadRepository(db)
-	artifactReader := artifacts.NewSQLiteArtifactReader(db)
+	artifactReader := store.NewSQLiteArtifactReader(db)
 	artifactSvc := artifacts.NewService(
 		repo,
 		artifacts.NewSQLiteUploadSessionWriter(db),
@@ -251,7 +251,7 @@ func TestUploadCompletedVideo_BeginUploadRejected_MissingJob(t *testing.T) {
 	}
 
 	repo := store.NewSQLiteUploadRepository(db)
-	artifactReader := artifacts.NewSQLiteArtifactReader(db)
+	artifactReader := store.NewSQLiteArtifactReader(db)
 	artifactSvc := artifacts.NewService(
 		repo,
 		artifacts.NewSQLiteUploadSessionWriter(db),
@@ -316,7 +316,7 @@ func TestUploadCompletedVideo_MissingVideo(t *testing.T) {
 	}
 
 	repo := store.NewSQLiteUploadRepository(db)
-	artifactReader := artifacts.NewSQLiteArtifactReader(db)
+	artifactReader := store.NewSQLiteArtifactReader(db)
 	artifactSvc := artifacts.NewService(
 		repo,
 		artifacts.NewSQLiteUploadSessionWriter(db),

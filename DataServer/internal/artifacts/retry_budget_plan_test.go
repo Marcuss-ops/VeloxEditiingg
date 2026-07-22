@@ -9,6 +9,7 @@ import (
 
 	"velox-server/internal/artifacts"
 	"velox-server/internal/deliveries"
+	"velox-server/internal/store"
 )
 
 func TestFinalizeVerified_StampsRetryBudgetFromPlan(t *testing.T) {
@@ -74,7 +75,7 @@ func TestFinalizeVerified_SingleDestinationDefaultsToFive(t *testing.T) {
 	db := openPropagationDB(t)
 	seedPhase5Fixture(t, db, phase5Fixture{JobID: "J-single", WorkerID: "w", LeaseID: "l", Revision: 1, AttemptNumber: 1, ArtifactID: "art-single", UploadID: "up-single"})
 	seedDeliveryPlans(t, db, "J-single", []phase5Plan{{"primary", 1, 10, true}})
-	reader := artifacts.NewSQLiteArtifactReader(db)
+	reader := store.NewSQLiteArtifactReader(db)
 	fin := artifacts.NewSQLiteFinalizeWriter(db, reader, nil)
 	_, err := fin.FinalizeVerified(context.Background(), artifacts.FinalizeVerifiedCommand{UploadID: "up-single", ArtifactID: "art-single", JobID: "J-single", WorkerID: "w", LeaseID: "l", AttemptNumber: 1, ExpectedRevision: 1, DestinationID: "primary", StorageProvider: "local", StorageKey: "artifacts/J-single/1", SHA256: "deadbeef", SizeBytes: 1024, MIMEType: "video/mp4", VerifiedAt: time.Now().UTC()})
 	if err != nil {

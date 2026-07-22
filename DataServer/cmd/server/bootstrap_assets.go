@@ -52,7 +52,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	// is resolved inside the same tx that INSERTs job_deliveries.
 	planResolver := deliveries.NewSQLiteDeliveryPlanResolver(p.SQLite.DB(), cfg.Runtime.DeliveryGlobalFallback)
 	uploadRepo := store.NewSQLiteUploadRepository(p.SQLite.DB())
-	artifactReader := artifacts.NewSQLiteArtifactReader(p.SQLite.DB())
+	artifactReader := store.NewSQLiteArtifactReader(p.SQLite.DB())
 	authReader := artifacts.NewSQLiteAuthReader(p.SQLite.DB())
 	uploadWriter := artifacts.NewSQLiteUploadSessionWriter(p.SQLite.DB())
 	finalizeWriter := artifacts.NewSQLiteFinalizeWriter(p.SQLite.DB(), artifactReader, planResolver)
