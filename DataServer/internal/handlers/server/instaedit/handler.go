@@ -56,13 +56,26 @@ var renderSpecAllowedKeys = []string{
 	"drive_output_folder",
 }
 
+// storeReader is the minimal store surface consumed by the InstaEdit
+// BFF handlers. It lets tests and future service layers supply a
+// fake or failing implementation without depending on SQLite directly.
+type storeReader interface {
+	ListJobsByWorkspace(ctx context.Context, workspaceID int64, limit int) ([]map[string]any, error)
+	GetJobByWorkspace(ctx context.Context, jobID string, workspaceID int64) (map[string]any, error)
+	ListWorkersByWorkspace(workspaceID int64) ([]map[string]any, error)
+	GetWorkerByWorkspace(workerID string, workspaceID int64) (map[string]any, error)
+	GetDeliveryDestinationByExternalID(ctx context.Context, externalID string) (*store.DeliveryDestination, error)
+	ListJobDeliveriesByJob(jobID string) ([]store.JobDelivery, error)
+	GetDeliveryDestination(ctx context.Context, destID string) (*store.DeliveryDestination, error)
+}
+
 // HandlerDeps carries the dependencies required by the InstaEdit BFF
 // handlers. All fields are required for the route group to be mounted;
 // the composition root skips the group when the verifier is nil.
 type HandlerDeps struct {
 	Verifier *instaeditauth.Verifier
 	Enqueuer *enqueue.Enqueuer
-	Store    *store.SQLiteStore
+	Store    storeReader
 	Jobs     jobs.Repository
 	Assets   store.AssetRepository
 }
@@ -318,9 +331,14 @@ func (h *Handler) getJob() gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
+		deliveries, err := h.loadDeliveries(c.Request.Context(), jobID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load deliveries"})
+			return
+		}
 		detail := jobDetailResponse{
 			Job:        h.mapJob(row, claims.WorkspaceID),
-			Deliveries: h.loadDeliveries(c.Request.Context(), jobID),
+			Deliveries: deliveries,
 		}
 		c.JSON(http.StatusOK, detail)
 	}
@@ -362,7 +380,12 @@ func (h *Handler) listJobDeliveries() gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
-		c.JSON(http.StatusOK, listDeliveriesResponse{Deliveries: h.loadDeliveries(c.Request.Context(), jobID)})
+		deliveries, err := h.loadDeliveries(c.Request.Context(), jobID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load deliveries"})
+			return
+		}
+		c.JSON(http.StatusOK, listDeliveriesResponse{Deliveries: deliveries})
 	}
 }
 
@@ -470,26 +493,30 @@ func (h *Handler) mapAsset(a *store.AssetRecord, workspaceID int64) assetRespons
 	}
 }
 
-func (h *Handler) loadDeliveries(ctx context.Context, jobID string) []deliveryResponse {
+func (h *Handler) loadDeliveries(ctx context.Context, jobID string) ([]deliveryResponse, error) {
 	rows, err := h.deps.Store.ListJobDeliveriesByJob(jobID)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	out := make([]deliveryResponse, 0, len(rows))
 	for _, row := range rows {
+		dest, err := h.deps.Store.GetDeliveryDestination(ctx, row.DestinationID)
+		if err != nil {
+			return nil, err
+		}
 		externalID := ""
-		if dest, err := h.deps.Store.GetDeliveryDestination(ctx, row.DestinationID); err == nil && dest != nil {
+		if dest != nil {
 			externalID = dest.ExternalDestinationID
 		}
 		out = append(out, deliveryResponse{
 			ExternalDestinationID: externalID,
 			SocialDeliveryID:      row.DeliveryID,
 			Status:                row.Status,
-			PlatformMediaID:      row.RemoteID,
+			PlatformMediaID:       row.RemoteID,
 			PlatformURL:           row.RemoteURL,
 		})
 	}
-	return out
+	return out, nil
 }
 
 // --- Helpers ---------------------------------------------------------------

@@ -327,7 +327,7 @@ func (s *SQLiteStore) ListJobDeliveriesByJob(jobID string) ([]JobDelivery, error
 		 FROM job_deliveries jd
 		 JOIN artifacts a ON a.id = jd.artifact_id
 		 WHERE a.job_id = ?
-		 ORDER BY jd.id ASC`, jobID)
+		 ORDER BY jd.delivery_id ASC`, jobID)
 	if err != nil {
 		return nil, err
 	}
