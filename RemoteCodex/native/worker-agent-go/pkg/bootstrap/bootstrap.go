@@ -126,7 +126,7 @@ func Run(ctx context.Context, cfg *config.WorkerConfig, runner RunnerView, opts 
 	// The "creator" profile skips ffmpeg and engine self-render: it
 	// performs script/voiceover/image work and does not require the C++
 	// video pipeline.
-	isCreator := cfg != nil && cfg.WorkerProfile == "creator"
+	isCreator := cfg != nil && cfg.IsCreatorProfile()
 	appender(runBundleHashGate(cfg, resolved.WorkDir))
 	if !isCreator {
 		appender(runFFmpegSelfTest(ctx, resolved))

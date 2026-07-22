@@ -184,6 +184,11 @@ type WorkerConfig struct {
 // ErrInvalidConfig is returned when configuration validation fails.
 var ErrInvalidConfig = errors.New("invalid configuration")
 
+// CreatorProfile is the canonical value for WorkerProfile that disables
+// the C++ video pipeline and enables creative capabilities. It is the
+// single source of truth for the creator profile name.
+const CreatorProfile = "creator"
+
 // minCertValidity is the floor for ResidualValidity on a TLS leaf cert
 // (RW-PROD-001 A1). Anything under this triggers a hard reject so a worker
 // cannot connect with a cert that will expire during a typical task.
@@ -437,6 +442,13 @@ func (c *WorkerConfig) Validate() error {
 			"invalid environment: %q (valid: dev, staging, production)", c.Environment))
 	}
 
+	// Validate worker profile when set. Only "creator" (case-insensitive)
+	// is recognized; an empty value keeps the historical video-worker path.
+	if c.WorkerProfile != "" && !c.IsCreatorProfile() {
+		errs = append(errs, fmt.Sprintf(
+			"invalid worker_profile: %q (valid: %q or empty)", c.WorkerProfile, CreatorProfile))
+	}
+
 	hasCert := tlsCfg.CertFile != ""
 	hasKey := tlsCfg.KeyFile != ""
 	hasCA := tlsCfg.CAFile != ""
@@ -578,6 +590,22 @@ func (c *WorkerConfig) Validate() error {
 // with the Velox master server. Test cases live in shared/identity_test.go.
 func NormalizeWorkerID(id string) string {
 	return identity.NormalizeWorkerID(id)
+}
+
+// IsCreatorProfile reports whether this worker is configured for the
+// creator profile, with case-insensitive matching and whitespace trimming.
+func (c *WorkerConfig) IsCreatorProfile() bool {
+	if c == nil {
+		return false
+	}
+	return IsCreatorProfileValue(c.WorkerProfile)
+}
+
+// IsCreatorProfileValue reports whether the supplied profile string
+// identifies the creator profile, with case-insensitive matching and
+// whitespace trimming.
+func IsCreatorProfileValue(profile string) bool {
+	return strings.ToLower(strings.TrimSpace(profile)) == CreatorProfile
 }
 
 // String returns a formatted string representation of the config (for logging).

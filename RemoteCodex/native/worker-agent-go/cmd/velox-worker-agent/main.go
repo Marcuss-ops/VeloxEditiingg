@@ -392,7 +392,7 @@ func main() {
 	// Worker profile gate: the "creator" profile does not perform video
 	// rendering, so we skip the C++ pipeline runner entirely. This keeps
 	// creator-only deployments from failing on a missing video engine.
-	isCreator := cfg.WorkerProfile == "creator"
+	isCreator := cfg.IsCreatorProfile()
 	var pipelineRunner *pipeline.Runner
 	if !isCreator {
 		var pipeErr error

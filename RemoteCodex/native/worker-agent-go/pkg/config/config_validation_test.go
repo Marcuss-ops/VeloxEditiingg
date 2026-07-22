@@ -160,6 +160,70 @@ func TestStringNil(t *testing.T) {
 //
 // We therefore assert on err==nil vs err!=err, plus a substring check
 // that is loose enough to cover both messages.
+func TestIsCreatorProfile(t *testing.T) {
+	cases := []struct {
+		name    string
+		profile string
+		want    bool
+	}{
+		{"empty", "", false},
+		{"creator lowercase", "creator", true},
+		{"creator uppercase", "CREATOR", true},
+		{"creator mixed case", "Creator", true},
+		{"creator with spaces", " creator ", true},
+		{"unknown profile", "video", false},
+		{"typo", "creater", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := devValidBase()
+			cfg.WorkerProfile = tc.profile
+			if got := cfg.IsCreatorProfile(); got != tc.want {
+				t.Errorf("IsCreatorProfile(%q) = %v, want %v", tc.profile, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidate_WorkerProfile(t *testing.T) {
+	t.Run("valid creator lowercase", func(t *testing.T) {
+		cfg := devValidBase()
+		cfg.WorkerProfile = "creator"
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected validation to pass for creator profile, got: %v", err)
+		}
+	})
+
+	t.Run("valid creator mixed case with spaces", func(t *testing.T) {
+		cfg := devValidBase()
+		cfg.WorkerProfile = " Creator "
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected validation to pass for creator profile, got: %v", err)
+		}
+	})
+
+	t.Run("valid empty", func(t *testing.T) {
+		cfg := devValidBase()
+		cfg.WorkerProfile = ""
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected validation to pass for empty profile, got: %v", err)
+		}
+	})
+
+	t.Run("invalid unknown profile", func(t *testing.T) {
+		cfg := devValidBase()
+		cfg.WorkerProfile = "video-pro"
+		err := cfg.Validate()
+		if err == nil {
+			t.Error("expected validation error for unknown worker profile")
+		}
+		if !strings.Contains(err.Error(), "invalid worker_profile") {
+			t.Errorf("expected error to mention invalid worker_profile, got: %v", err)
+		}
+	})
+}
+
 func TestRWProd001_WorkerIDShape(t *testing.T) {
 	cases := []struct {
 		name      string

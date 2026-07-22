@@ -117,17 +117,7 @@ func Run(ctx context.Context, cfg *config.WorkerConfig, validators []Validator, 
 // --validate-config mode before executor wiring). The full doctor
 // (RW-PROD-016) will always supply a non-nil registry.
 func DefaultValidators() []Validator {
-	return []Validator{
-		&EnvironmentValidator{},
-		&TransportTLSValidator{},
-		&CertExpiryValidator{},
-		&DNSReachabilityValidator{},
-		&DirsValidator{},
-		&DiskFreeValidator{},
-		&PortsValidator{},
-		&EngineBinaryValidator{},
-		&FFmpegValidator{},
-	}
+	return DefaultValidatorsForProfile("")
 }
 
 // DefaultValidatorsWithRegistry returns the full canonical set including
@@ -141,7 +131,7 @@ func DefaultValidatorsWithRegistry(registry ExecutorRegistryView) []Validator {
 // omitting engine/ffmpeg checks when profile is "creator" because a
 // creator worker does not use the C++ video pipeline.
 func DefaultValidatorsForProfile(profile string) []Validator {
-	isCreator := profile == "creator"
+	isCreator := config.IsCreatorProfileValue(profile)
 	vals := []Validator{
 		&EnvironmentValidator{},
 		&TransportTLSValidator{},

@@ -102,7 +102,7 @@ func (w *Worker) capabilitiesMap(hostname string) map[string]interface{} {
 	// Creator profile: advertise the creative job types the master uses
 	// to route script, voiceover and image generation work. Without these
 	// keys the master would never schedule creator jobs on this worker.
-	if w.config.WorkerProfile == "creator" {
+	if w.config.IsCreatorProfile() {
 		m[CapabilityScriptGenerate] = true
 		m[CapabilityVoiceoverGenerateItem] = true
 		m[CapabilityImageGenerateGoogle] = true

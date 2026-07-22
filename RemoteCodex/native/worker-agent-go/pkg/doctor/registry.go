@@ -34,7 +34,7 @@ func (v *RegistryValidator) Run(_ context.Context, _ *config.WorkerConfig) Resul
 			"at minimum, MustRegister(scene.composite.v1@1) before starting the worker")
 	}
 
-	isCreator := v.Profile == "creator"
+	isCreator := config.IsCreatorProfileValue(v.Profile)
 	if isCreator {
 		detail := fmt.Sprintf("%d executor(s) registered (creator profile, scene.composite.v1 not required)", len(descs))
 		return pass("executors.registry", detail)
