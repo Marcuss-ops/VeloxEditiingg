@@ -409,5 +409,68 @@ func TestSupervisorRejectsDuplicateRunnerName(t *testing.T) {
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
+// TestInternalSecurityGuard_PrivateNetworkEnforcement verifies that the
+// master only accepts requests from loopback/private networks in
+// release mode, while non-release modes stay permissive so that dev
+// and test tooling keep working.
+func TestInternalSecurityGuard_PrivateNetworkEnforcement(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name       string
+		ginMode    string
+		remoteAddr string
+		origin     string
+		allowedIPs []string
+		wantStatus int
+	}{
+		{"loopback always allowed", "release", "127.0.0.1:12345", "", nil, http.StatusOK},
+		{"private rfc1918 allowed in release", "release", "10.0.0.1:12345", "", nil, http.StatusOK},
+		{"private 172.16 allowed in release", "release", "172.16.5.5:12345", "", nil, http.StatusOK},
+		{"private 192.168 allowed in release", "release", "192.168.1.100:12345", "", nil, http.StatusOK},
+		{"unique local ipv6 allowed in release", "release", "[fd00::1]:12345", "", nil, http.StatusOK},
+		{"link local allowed in release", "release", "169.254.0.1:12345", "", nil, http.StatusOK},
+		{"public rejected in release", "release", "8.8.8.8:12345", "", nil, http.StatusForbidden},
+		{"public allowed via allowlist", "release", "203.0.113.8:12345", "", []string{"203.0.113.8"}, http.StatusOK},
+		{"public allowed via cidr allowlist", "release", "203.0.113.8:12345", "", []string{"203.0.113.0/24"}, http.StatusOK},
+		{"origin rejected even from loopback", "release", "127.0.0.1:12345", "https://evil.com", nil, http.StatusForbidden},
+		{"public ok in debug mode", "debug", "8.8.8.8:12345", "", nil, http.StatusOK},
+		{"public rejected in production env", "debug", "8.8.8.8:12345", "", nil, http.StatusForbidden},
+		{"empty client ip allowed", "release", "", "", nil, http.StatusOK},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := ""
+			if tt.name == "public rejected in production env" {
+				env = "production"
+			}
+			cfg := &config.Config{
+				Server:  config.ServerConfig{GinMode: tt.ginMode},
+				Runtime: config.RuntimeConfig{Environment: env},
+				Workers: config.WorkersConfig{AllowedIPs: tt.allowedIPs},
+			}
+
+			r := gin.New()
+			r.Use(internalSecurityGuard(cfg))
+			r.GET("/test", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			req.RemoteAddr = tt.remoteAddr
+			if tt.origin != "" {
+				req.Header.Set("Origin", tt.origin)
+			}
+
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+
+			if w.Code != tt.wantStatus {
+				t.Fatalf("got status %d, want %d for remoteAddr=%q ginMode=%q", w.Code, tt.wantStatus, tt.remoteAddr, tt.ginMode)
+			}
+		})
+	}
+}
+
 // newTestConfig is already defined in bootstrap_test.go (same package).
 // It is not duplicated here — both files share package main.

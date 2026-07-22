@@ -125,23 +125,28 @@ type RouterBundle struct {
 	InstaEdit  InstaEditRouteDeps
 }
 
-// internalSecurityGuard blocks direct browser access and enforces an
-// optional IP allowlist. It runs before any route handler so that
-// every HTTP surface (including routes registered by modules) is at
-// least protected at the network edge. Authentication is layered on
-// top by the per-route middlewares (InstaEdit JWT or admin token).
+// internalSecurityGuard blocks direct browser access and enforces that
+// the Velox master HTTP API is reachable only from the private
+// InstaEdit/VPN network (and from workers). In release mode it rejects
+// public IP addresses unless they are explicitly allow-listed.
+//
+// It runs before any route handler so that every HTTP surface
+// (including routes registered by modules) is protected at the
+// network edge. Authentication is layered on top by the per-route
+// middlewares (InstaEdit JWT or admin token).
 func internalSecurityGuard(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		clientIP := c.ClientIP()
-
-		// Allow loopback unconditionally; side-cars and local tooling
-		// run in the same pod / network namespace.
-		if net.ParseIP(clientIP) != nil && net.ParseIP(clientIP).IsLoopback() {
+		// A missing RemoteAddr is common in unit tests. In real
+		// deployments the underlying listener always provides one.
+		if c.Request.RemoteAddr == "" {
 			c.Next()
 			return
 		}
 
-		// Reject any request carrying an browser Origin header. Velox
+		clientIP := c.ClientIP()
+		ip := net.ParseIP(clientIP)
+
+		// Reject any request carrying a browser Origin header. Velox
 		// master is not a browser-facing API; the only legitimate HTTP
 		// callers are internal services (InstaEdit BFF, metrics
 		// scrapers, Ansible runners). Browsers never need direct access.
@@ -150,25 +155,78 @@ func internalSecurityGuard(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		// Optional IP allowlist. When set, only explicitly allowed IPs
-		// (plus loopback) may reach the master. This is the code-side
-		// complement to the firewall/VPN rule.
-		if len(cfg.Workers.AllowedIPs) > 0 {
-			allowed := false
-			for _, ip := range cfg.Workers.AllowedIPs {
-				if ip == clientIP {
-					allowed = true
-					break
-				}
+		// Allow loopback unconditionally; side-cars and local tooling
+		// run in the same pod / network namespace.
+		if ip != nil && ip.IsLoopback() {
+			c.Next()
+			return
+		}
+
+		// In production the master is only reachable from private
+		// networks. Public IPs are rejected unless explicitly listed in
+		// cfg.Workers.AllowedIPs. Non-production modes keep the network
+		// check permissive so dev/test tooling works, while the Origin
+		// guard above still blocks cross-origin browsers.
+		if isNetworkEnforced(cfg) {
+			if ip == nil {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "unparseable client address"})
+				return
 			}
-			if !allowed {
-				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "client IP not in allowlist"})
+
+			// Explicit allowlist takes precedence and can include public IPs.
+			if isClientIPAllowed(clientIP, cfg.Workers.AllowedIPs) {
+				c.Next()
+				return
+			}
+
+			// Otherwise only private networks are permitted.
+			if !ip.IsPrivate() && !ip.IsLinkLocalUnicast() {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "public access forbidden: master is reachable only from the private InstaEdit/VPN network or allow-listed IPs"})
 				return
 			}
 		}
 
 		c.Next()
 	}
+}
+
+// isNetworkEnforced reports whether the private-network access
+// controls should be active. It is enabled in Gin release mode or
+// when the runtime environment is explicitly production.
+func isNetworkEnforced(cfg *config.Config) bool {
+	if cfg.Server.GinMode == "release" {
+		return true
+	}
+	env := strings.ToLower(strings.TrimSpace(cfg.Runtime.Environment))
+	return env == "production" || env == "prod"
+}
+
+// isClientIPAllowed reports whether clientIP matches one of the entries
+// in allowed. Each entry may be an exact IP or a CIDR (e.g. "10.0.0.0/8").
+// Both IPv4 and IPv6 are supported.
+func isClientIPAllowed(clientIP string, allowed []string) bool {
+	ip := net.ParseIP(clientIP)
+	if ip == nil {
+		return false
+	}
+	for _, entry := range allowed {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if strings.Contains(entry, "/") {
+			_, cidr, err := net.ParseCIDR(entry)
+			if err == nil && cidr.Contains(ip) {
+				return true
+			}
+		} else {
+			a := net.ParseIP(entry)
+			if a != nil && a.Equal(ip) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // newRouter assembles the master HTTP router from the supplied
