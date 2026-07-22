@@ -49,6 +49,9 @@ const (
 	// assets_cache and the per-subsystem /opt defaults (cache, blobs).
 	// Default: "/var/lib/velox/worker" (applied by applyDefaults).
 	EnvStateDir = "VELOX_STATE_DIR"
+	// EnvWorkerProfile selects the runtime profile for this worker.
+	// "creator" disables the C++ video pipeline and scene.composite.v1.
+	EnvWorkerProfile = "VELOX_WORKER_PROFILE"
 )
 
 // EnvBindings is the set of env-var names this package inspects.
@@ -66,6 +69,7 @@ var EnvBindings = []string{
 	EnvWorkerClass,
 	EnvRolloutGroup,
 	EnvStateDir,
+	EnvWorkerProfile,
 }
 
 // envTruthy reports whether a string from os.Getenv should be interpreted
@@ -144,5 +148,8 @@ func applyEnvOverrides(cfg *WorkerConfig) {
 	// branching.
 	if v := strings.TrimSpace(os.Getenv(EnvStateDir)); v != "" {
 		cfg.StateDir = v
+	}
+	if v := strings.TrimSpace(os.Getenv(EnvWorkerProfile)); v != "" {
+		cfg.WorkerProfile = v
 	}
 }

@@ -152,6 +152,12 @@ type WorkerConfig struct {
 	// RW-PROD-005 §3 A9.
 	RolloutGroup string `json:"rollout_group,omitempty"`
 
+	// WorkerProfile selects the runtime profile for this worker.
+	// "creator" disables the C++ video pipeline and scene.composite.v1
+	// executor; any other value (or empty) keeps the historical video-worker
+	// behaviour. Binds from VELOX_WORKER_PROFILE env.
+	WorkerProfile string `json:"worker_profile,omitempty"`
+
 	// VideoEngineCppBin is the path to the native C++ video-render binary.
 	// Defaults to "velox-render-cpp" (resolved via exec.LookPath).
 	// Operators override via VELOX_VIDEO_ENGINE_CPP_BIN env in main.go.

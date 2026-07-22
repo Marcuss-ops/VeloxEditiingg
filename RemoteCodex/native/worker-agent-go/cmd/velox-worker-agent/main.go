@@ -254,6 +254,9 @@ func main() {
 	if envWorkerID := os.Getenv("VELOX_WORKER_ID"); envWorkerID != "" {
 		cfg.WorkerID = envWorkerID
 	}
+	if envWorkerProfile := strings.TrimSpace(os.Getenv("VELOX_WORKER_PROFILE")); envWorkerProfile != "" {
+		cfg.WorkerProfile = envWorkerProfile
+	}
 	if bundleVersion := os.Getenv("VELOX_BUNDLE_VERSION"); bundleVersion != "" {
 		cfg.BundleVersion = bundleVersion
 	}
@@ -351,7 +354,7 @@ func main() {
 		fmt.Printf("velox-worker-agent version %s\n", Version)
 		// Run without the executor registry — the doctor runs before
 		// pipeline wiring, so the registry isn't built yet.
-		validators := doctor.DefaultValidators()
+		validators := doctor.DefaultValidatorsForProfile(cfg.WorkerProfile)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		docErr := doctor.Run(ctx, cfg, validators, os.Stdout)
@@ -385,15 +388,27 @@ func main() {
 	// bootLog is the only consumer of pipeline / native-client messages.
 	bootLog := logger.New(logger.InfoLevel, os.Stderr)
 	bootLog.SetPrefix("[BOOT]")
-	pipelineRunner, pipeErr := video.NewPipelineRunner(bootLog)
-	if pipeErr != nil {
-		// Fail closed: a missing C++ engine is a deploy-time problem.
-		// Silently downgrading to an empty registry re-introduces the
-		// dead-letter class of bug — every scene.composite job would
-		// route to ErrExecutorNotFound. Ops must install the C++
-		// engine or set VELOX_VIDEO_ENGINE_CPP_BIN.
-		fmt.Fprintf(os.Stderr, "Error: failed to construct pipeline.runner for scene.composite.v1: %v\n", pipeErr)
-		os.Exit(1)
+
+	// Worker profile gate: the "creator" profile does not perform video
+	// rendering, so we skip the C++ pipeline runner entirely. This keeps
+	// creator-only deployments from failing on a missing video engine.
+	isCreator := cfg.WorkerProfile == "creator"
+	var pipelineRunner *pipeline.Runner
+	if !isCreator {
+		var pipeErr error
+		pipelineRunner, pipeErr = video.NewPipelineRunner(bootLog)
+		if pipeErr != nil {
+			// Fail closed: a missing C++ engine is a deploy-time problem.
+			// Silently downgrading to an empty registry re-introduces the
+			// dead-letter class of bug — every scene.composite job would
+			// route to ErrExecutorNotFound. Ops must install the C++
+			// engine or set VELOX_VIDEO_ENGINE_CPP_BIN.
+			fmt.Fprintf(os.Stderr, "Error: failed to construct pipeline.runner for scene.composite.v1: %v\n", pipeErr)
+			os.Exit(1)
+		}
+		logger.Info("[BOOT] pipeline.runner constructed for scene.composite.v1")
+	} else {
+		logger.Info("[BOOT] Worker profile is 'creator'; skipping C++ pipeline runner")
 	}
 	// RW-PROD-003 §3 A5: synchronous bootstrap-OK gate between the C++
 	// engine construction (above) and the executor wiring (below). The
@@ -434,15 +449,19 @@ func main() {
 	// Render outputs must use the worker's configured, writable output root.
 	// A hardcoded /tmp path can belong to another service account on a
 	// multi-user host and would make remote execution fail at finalization.
-	sceneComposite := executors.NewSceneComposite(pipelineRunner, cfg.OutputDir)
-	registry.MustRegister(sceneComposite)
+	if !isCreator {
+		sceneComposite := executors.NewSceneComposite(pipelineRunner, cfg.OutputDir)
+		registry.MustRegister(sceneComposite)
+		logger.Info("[BOOT] Registered executor: %s@%d", sceneComposite.Descriptor().ID, sceneComposite.Descriptor().Version)
+	} else {
+		logger.Info("[BOOT] Worker profile is 'creator'; scene.composite.v1 disabled")
+	}
 	// RW-PROD-004 §3 A4: surface the live executor count on the read
 	// snapshot so /health/ready has a non-zero Executors reason.
 	// SetExecutorsCount accepts the entire roster size rather than +
 	// 1/−1 arithmetic; the composition root is the single source of
 	// truth for "what is currently advertised to the master".
 	telemetry.SetExecutorsCount(len(registry.Descriptors()))
-	logger.Info("[BOOT] Registered executor: %s@%d", sceneComposite.Descriptor().ID, sceneComposite.Descriptor().Version)
 
 	// PR-3.7: persistent local cache + content-addressed blob store.
 	// Step 6/8 roots are operator-overridable via env vars; the
@@ -602,7 +621,13 @@ func dispatchBootstrap(
 	runner *pipeline.Runner,
 	log *logger.Logger,
 ) (*bootstrap.Report, error) {
-	adapter := &pipelineRunnerAdapter{runner: runner}
+	// The creator profile does not use the C++ pipeline, so runner may be
+	// nil. Pass a nil interface (not a typed nil pointer) so bootstrap.Run
+	// can detect the absence of a runner cleanly.
+	var adapter bootstrap.RunnerView
+	if runner != nil {
+		adapter = &pipelineRunnerAdapter{runner: runner}
+	}
 	report, err := bootstrap.Run(ctx, cfg, adapter, bootstrap.Options{
 		Logger:             log,
 		OutputDir:          cfg.OutputDir,

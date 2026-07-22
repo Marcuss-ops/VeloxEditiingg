@@ -181,3 +181,22 @@ func TestBuildHello_UsesLimiterNotDetectForMaxParallel(t *testing.T) {
 	require.EqualValues(t, 7, hello.Capabilities["max_parallel_jobs"])
 	require.EqualValues(t, 7, hello.Capabilities["host"].(map[string]interface{})["max_parallel_jobs"])
 }
+
+func TestBuildHello_CreatorProfile_AdvertisesCreativeCapabilities(t *testing.T) {
+	// The creator profile must declare the creative job types the
+	// master uses for routing script/voiceover/image work.
+	cfg := newInsecureDevCfg(t)
+	cfg.WorkerProfile = "creator"
+	w, err := New(cfg, "test")
+	require.NoError(t, err)
+
+	hello := w.buildHello()
+	require.True(t, hello.Capabilities[CapabilityScriptGenerate].(bool), "missing script.generate")
+	require.True(t, hello.Capabilities[CapabilityVoiceoverGenerateItem].(bool), "missing voiceover.generate_item")
+	require.True(t, hello.Capabilities[CapabilityImageGenerateGoogle].(bool), "missing image.generate.google")
+
+	// Creator executors registry is empty; the hello must still be
+	// well-formed and not carry video executor entries.
+	execs, _ := hello.Capabilities["executors"].([]interface{})
+	require.Empty(t, execs, "creator profile should not advertise video executors")
+}

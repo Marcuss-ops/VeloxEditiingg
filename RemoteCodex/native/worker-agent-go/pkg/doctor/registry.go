@@ -8,10 +8,14 @@ import (
 )
 
 // RegistryValidator checks that the executor registry is non-empty and
-// that scene.composite.v1@1 is registered.
+// that scene.composite.v1@1 is registered (unless the worker is running
+// in the "creator" profile, which intentionally omits video rendering).
 // RW-PROD-002 §2 item 10.
 type RegistryValidator struct {
 	Registry ExecutorRegistryView
+	// Profile is the worker profile (e.g. "creator"). When set to
+	// "creator", the validator no longer requires scene.composite.v1@1.
+	Profile string
 }
 
 func (v *RegistryValidator) ID() string { return "executors.registry" }
@@ -28,6 +32,12 @@ func (v *RegistryValidator) Run(_ context.Context, _ *config.WorkerConfig) Resul
 		return fail("executors.registry",
 			"executor registry is empty (no executors registered)",
 			"at minimum, MustRegister(scene.composite.v1@1) before starting the worker")
+	}
+
+	isCreator := v.Profile == "creator"
+	if isCreator {
+		detail := fmt.Sprintf("%d executor(s) registered (creator profile, scene.composite.v1 not required)", len(descs))
+		return pass("executors.registry", detail)
 	}
 
 	// Check for scene.composite.v1@1 specifically.

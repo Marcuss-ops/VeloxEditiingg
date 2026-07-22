@@ -48,6 +48,12 @@ type Options struct {
 	// Defaults to DefaultOutputDir when zero. Operators override via
 	// VELOX_OUTPUT_DIR env var in the composition root.
 	OutputDir string
+	// TempDir is the scratch directory for intermediate artifacts (A4).
+	// Defaults to cfg.TempDir when zero.
+	TempDir string
+	// StateDir is the canonical root for mutable worker state (cache,
+	// blobs, spool). Defaults to cfg.StateDir when zero.
+	StateDir string
 	// FFmpegMinMajor is the lowest acceptable major version for ffmpeg
 	// and ffprobe (A3). Defaults to DefaultFFmpegMinMajor when zero.
 	FFmpegMinMajor int
@@ -78,6 +84,13 @@ func applyOptions(opts Options, cfg *config.WorkerConfig) Options {
 	// env var in the composition root.
 	if opts.OutputDir == "" {
 		opts.OutputDir = DefaultOutputDir
+	}
+	// TempDir/StateDir fall back to the validated WorkerConfig values.
+	if opts.TempDir == "" && cfg != nil {
+		opts.TempDir = strings.TrimSpace(cfg.TempDir)
+	}
+	if opts.StateDir == "" && cfg != nil {
+		opts.StateDir = strings.TrimSpace(cfg.StateDir)
 	}
 	if opts.FFmpegMinMajor == 0 {
 		opts.FFmpegMinMajor = DefaultFFmpegMinMajor

@@ -5,7 +5,7 @@ package worker
 // keeps in sync with heartbeat.Extra.capabilities. Single source of
 // truth (capabilitiesMap) is reused by both worker_registration.go
 // (buildHello) and worker_comms.go (sendHeartbeat); any wire-shape
-// change must touch ONE function. Resource sampling lives behind
+// change must touch one function. Resource sampling lives behind
 // w.sampler (telemetry.Sampler) — see worker_types.go for the field
 // definition.
 //
@@ -21,6 +21,14 @@ import (
 	"velox-shared/controltransport"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/pkg/api"
+)
+
+// Canonical capability keys advertised by the creator profile. These
+// must stay aligned with the master's routing keys.
+const (
+	CapabilityScriptGenerate        = "script.generate"
+	CapabilityVoiceoverGenerateItem = "voiceover.generate_item"
+	CapabilityImageGenerateGoogle   = "image.generate.google"
 )
 
 // buildHello constructs a WorkerHello from the worker configuration.
@@ -90,6 +98,15 @@ func (w *Worker) capabilitiesMap(hostname string) map[string]interface{} {
 	m[controltransport.CapabilityArtifactUploadPlanV1] = true
 	m[controltransport.CapabilityArtifactUploadCompletedV1] = true
 	m[controltransport.CapabilityTaskCommitAckV1] = true
+
+	// Creator profile: advertise the creative job types the master uses
+	// to route script, voiceover and image generation work. Without these
+	// keys the master would never schedule creator jobs on this worker.
+	if w.config.WorkerProfile == "creator" {
+		m[CapabilityScriptGenerate] = true
+		m[CapabilityVoiceoverGenerateItem] = true
+		m[CapabilityImageGenerateGoogle] = true
+	}
 	return m
 }
 

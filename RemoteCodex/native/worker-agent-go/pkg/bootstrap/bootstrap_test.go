@@ -89,6 +89,8 @@ func TestRun_AllOK_Smoke(t *testing.T) {
 		Options{
 			WorkDir:            dir,
 			OutputDir:          outputDir,
+			StateDir:           dir,
+			TempDir:            dir,
 			BaselineSHA256Path: baseline,
 			FFmpegMinMajor:     0, // 0 → default applied
 		},
@@ -113,7 +115,7 @@ func TestRun_AllOK_Smoke(t *testing.T) {
 	for _, s := range report.Steps {
 		seenSteps[s.Name] = true
 	}
-	for _, want := range []string{"bundle_hash", "ffmpeg", "output_dir", "engine_self_render"} {
+	for _, want := range []string{"bundle_hash", "ffmpeg", "output_dir", "state_dir", "temp_dir", "engine_self_render"} {
 		if !seenSteps[want] {
 			t.Errorf("missing step %q in report: %+v", want, report.Steps)
 		}
@@ -207,6 +209,60 @@ func TestOk_HardGate_NotRun(t *testing.T) {
 	}
 	if err := HardGate(); err == nil {
 		t.Fatalf("HardGate() should not be nil when bootstrap has not run")
+	}
+}
+
+// TestRun_CreatorProfile_SkipsEngine verifies that the creator profile
+// skips ffmpeg and engine self-render while still checking bundle and
+// runtime directories.
+func TestRun_CreatorProfile_SkipsEngine(t *testing.T) {
+	dir := t.TempDir()
+	const hash = "creator-hash"
+	_ = os.WriteFile(filepath.Join(dir, "BUNDLE_HASH.txt"), []byte(hash+"\n"), 0o644)
+	_ = writeBaseline(t, dir, []byte("creator-baseline"))
+
+	Reset()
+	cfg := makeCfg(hash)
+	cfg.WorkerProfile = "creator"
+	report, err := Run(context.Background(),
+		cfg,
+		nil, // creator does not pass a runner
+		Options{
+			WorkDir:            dir,
+			OutputDir:          dir,
+			StateDir:           dir,
+			TempDir:            dir,
+			BaselineSHA256Path: filepath.Join(dir, "baseline.sha256"),
+		},
+	)
+	if err != nil {
+		t.Fatalf("Run returned error for creator profile: %v", err)
+	}
+	if report == nil {
+		t.Fatalf("Run returned nil report")
+	}
+	if report.Verdict != "OK" {
+		t.Fatalf("verdict = %q want OK; steps=%+v", report.Verdict, report.Steps)
+	}
+
+	seenSteps := map[string]bool{}
+	for _, s := range report.Steps {
+		seenSteps[s.Name] = true
+	}
+	if seenSteps["ffmpeg"] {
+		t.Errorf("creator profile should skip ffmpeg step")
+	}
+	if seenSteps["engine_self_render"] {
+		t.Errorf("creator profile should skip engine_self_render step")
+	}
+	if !seenSteps["bundle_hash"] {
+		t.Errorf("creator profile should still run bundle_hash step")
+	}
+	if !seenSteps["state_dir"] {
+		t.Errorf("creator profile should still run state_dir step")
+	}
+	if !seenSteps["temp_dir"] {
+		t.Errorf("creator profile should still run temp_dir step")
 	}
 }
 

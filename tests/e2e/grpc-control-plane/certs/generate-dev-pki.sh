@@ -5,7 +5,7 @@
 # gRPC control-plane E2E matrix in tests/e2e/grpc-control-plane/.
 #
 # Diff from scripts/gen-worker-certs.sh:
-#   * Default TTL is 7 days for the CA and 1 day for leaves, so a
+#   * Default TTL is 365 days for the CA and 365 days for leaves, so a
 #     cert that "expires" mid-test can be reproduced deterministically
 #     by passing -days 0 (or -days -1 for a Go-style "already-expired"
 #     cert). The 10-year default in scripts/gen-worker-certs.sh is
@@ -36,8 +36,8 @@ set -euo pipefail
 
 OUT_DIR="${1:-}"
 WORKER_CN="${2:-}"
-CA_DAYS="${3:-7}"
-LEAF_DAYS="${4:-1}"
+CA_DAYS="${3:-365}"
+LEAF_DAYS="${4:-365}"
 OPENSSL="${OPENSSL:-openssl}"
 
 if [[ -z "$OUT_DIR" || -z "$WORKER_CN" ]]; then

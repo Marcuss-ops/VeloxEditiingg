@@ -200,6 +200,32 @@ wait_for_master_ready() {
   return 1
 }
 
+# ─── wait-for-ports-free ─────────────────────────────────────────────────────
+# Ensure the previous case's listeners are fully released before the next
+# master starts. Even after kill_all, a socket may briefly linger; poll for
+# up to 20s before giving up and letting the next case surface its own error.
+wait_for_ports_free() {
+  local deadline=$(( $(date +%s) + 20 ))
+  while (( $(date +%s) < deadline )); do
+    local busy=0
+    if command -v ss >/dev/null 2>&1; then
+      if ss -ltn 2>/dev/null | grep -qE ':(8000|50051)\b'; then
+        busy=1
+      fi
+    elif command -v netstat >/dev/null 2>&1; then
+      if netstat -ltn 2>/dev/null | grep -qE ':(8000|50051)\b'; then
+        busy=1
+      fi
+    fi
+    if (( busy == 0 )); then
+      return 0
+    fi
+    sleep 0.5
+  done
+  # Don't fail the matrix here; a lingering port will be reported by the next case.
+  return 0
+}
+
 # ─── Pre-flight: build binaries ──────────────────────────────────────────────
 assert_info "workdir = $WORKDIR"
 mkdir_p "$WORKDIR" "$BIN_DIR" "$WORKDIR/pki" "$WORKDIR/cases"
@@ -210,6 +236,36 @@ fi
 if [[ -z "${VELOX_WORKER_BIN:-}" ]]; then
   VELOX_WORKER_BIN="$(resolve_bin velox-worker-agent "$WORKERAGENT_ROOT" cmd/velox-worker-agent)" || exit 1
 fi
+
+# ─── Shared E2E runtime setup ────────────────────────────────────────────────
+setup_shared() {
+  mkdir -p "$WORKDIR/work/state" "$WORKDIR/work/temp" "$WORKDIR/work/tests/fixtures"
+  printf '%s' "e2e-bundle-hash" > "$WORKDIR/work/BUNDLE_HASH.txt"
+  printf 'velox-e2e-stub-output' | sha256sum | awk '{print $1}' > "$WORKDIR/work/tests/fixtures/engine_selftest_baseline.sha256"
+
+  cat > "$BIN_DIR/velox_video_engine" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+PLAN=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --plan) PLAN="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [[ -z "$PLAN" ]]; then
+  echo "velox_video_engine stub: --plan required" >&2
+  exit 1
+fi
+OUT="$(python3 -c "import json,sys; print(json.load(open('$PLAN'))['output_path'])" 2>/dev/null || jq -r '.output_path' "$PLAN")"
+mkdir -p "$(dirname "$OUT")"
+printf 'velox-e2e-stub-output' > "$OUT"
+EOF
+  chmod +x "$BIN_DIR/velox_video_engine"
+}
+
+setup_shared
+export VELOX_VIDEO_ENGINE_CPP_BIN="$BIN_DIR/velox_video_engine"
 
 # ─── Counters ────────────────────────────────────────────────────────────────
 PASS=0
@@ -237,6 +293,8 @@ case_1_plaintext_accept() {
   local master_env="$case_dir/master.env"
   local worker_cfg="$case_dir/worker-config.json"
   mkdir_p "$case_dir"
+  mkdir -p "$case_dir/data" "$case_dir/run" "$case_dir/videos"
+  touch "$case_dir/data/velox.db"
 
   # Patch env: TLS commented (already commented in template). Enable insecure-dev.
   patch_env "$ROOT/configs/master.env.example" "$master_env" \
@@ -248,7 +306,13 @@ case_1_plaintext_accept() {
     -e 's|^# VELOX_GRPC_ALLOW_INSECURE_DEV=.*|VELOX_GRPC_ALLOW_INSECURE_DEV=true|'
 
   cp "$ROOT/configs/worker-plaintext.json" "$worker_cfg"
-  sed -i "s|WORKER_ID_PLACEHOLDER|$worker_id|" "$worker_cfg"
+  sed -i \
+    -e "s|WORKER_ID_PLACEHOLDER|$worker_id|" \
+    -e "s|WORK_DIR_PLACEHOLDER|$WORKDIR/work|" \
+    -e "s|STATE_DIR_PLACEHOLDER|$WORKDIR/work/state|" \
+    -e "s|TEMP_DIR_PLACEHOLDER|$WORKDIR/work/temp|" \
+    -e "s|BUNDLE_HASH_PLACEHOLDER|e2e-bundle-hash|" \
+    "$worker_cfg"
 
   # ── No PKI ──
   rm -rf "$pki_dir"
@@ -283,8 +347,10 @@ case_2_tls_accept() {
   local master_env="$case_dir/master.env"
   local worker_cfg="$case_dir/worker-config.json"
   mkdir_p "$case_dir" "$pki_dir"
+  mkdir -p "$case_dir/data" "$case_dir/run" "$case_dir/videos"
+  touch "$case_dir/data/velox.db"
 
-  "$ROOT/certs/generate-dev-pki.sh" "$pki_dir" "$worker_id" 7 1 >/dev/null
+  "$ROOT/certs/generate-dev-pki.sh" "$pki_dir" "$worker_id" 7 365 >/dev/null
 
   patch_env "$ROOT/configs/master.env.example" "$master_env" \
     -e "s|^VELOX_RUNTIME_DIR=.*|VELOX_RUNTIME_DIR=$case_dir/run|" \
@@ -300,6 +366,10 @@ case_2_tls_accept() {
   cp "$ROOT/configs/worker-tls.json" "$worker_cfg"
   sed -i \
     -e "s|WORKER_ID_PLACEHOLDER|$worker_id|" \
+    -e "s|WORK_DIR_PLACEHOLDER|$WORKDIR/work|" \
+    -e "s|STATE_DIR_PLACEHOLDER|$WORKDIR/work/state|" \
+    -e "s|TEMP_DIR_PLACEHOLDER|$WORKDIR/work/temp|" \
+    -e "s|BUNDLE_HASH_PLACEHOLDER|e2e-bundle-hash|" \
     -e "s|CERT_DIR_PLACEHOLDER|$pki_dir|g" \
     "$worker_cfg"
 
@@ -334,11 +404,13 @@ case_3_bad_cert_reject() {
   local master_env="$case_dir/master.env"
   local worker_cfg="$case_dir/worker-config.json"
   mkdir_p "$case_dir" "$pki_dir" "$pki_bad_dir"
+  mkdir -p "$case_dir/data" "$case_dir/run" "$case_dir/videos"
+  touch "$case_dir/data/velox.db"
 
   # Master triple: legitimate (CA-valid) — case-2-style.
-  "$ROOT/certs/generate-dev-pki.sh" "$pki_dir" "phantom-ca-3" 7 1 >/dev/null
+  "$ROOT/certs/generate-dev-pki.sh" "$pki_dir" "phantom-ca-3" 7 365 >/dev/null
   # Worker triple: standalone CA + leaf signed by it (won't chain to master CA).
-  "$ROOT/certs/generate-dev-pki.sh" "$pki_bad_dir" "$worker_id" 7 1 >/dev/null
+  "$ROOT/certs/generate-dev-pki.sh" "$pki_bad_dir" "$worker_id" 7 365 >/dev/null
 
   patch_env "$ROOT/configs/master.env.example" "$master_env" \
     -e "s|^VELOX_RUNTIME_DIR=.*|VELOX_RUNTIME_DIR=$case_dir/run|" \
@@ -353,6 +425,10 @@ case_3_bad_cert_reject() {
   cp "$ROOT/configs/worker-tls.json" "$worker_cfg"
   sed -i \
     -e "s|WORKER_ID_PLACEHOLDER|$worker_id|" \
+    -e "s|WORK_DIR_PLACEHOLDER|$WORKDIR/work|" \
+    -e "s|STATE_DIR_PLACEHOLDER|$WORKDIR/work/state|" \
+    -e "s|TEMP_DIR_PLACEHOLDER|$WORKDIR/work/temp|" \
+    -e "s|BUNDLE_HASH_PLACEHOLDER|e2e-bundle-hash|" \
     -e "s|CERT_DIR_PLACEHOLDER|$pki_bad_dir|g" \
     "$worker_cfg"
 
@@ -398,9 +474,11 @@ case_4_wrong_ca_reject() {
   local master_env="$case_dir/master.env"
   local worker_cfg="$case_dir/worker-config.json"
   mkdir_p "$case_dir" "$pki_a_dir" "$pki_b_dir"
+  mkdir -p "$case_dir/data" "$case_dir/run" "$case_dir/videos"
+  touch "$case_dir/data/velox.db"
 
-  "$ROOT/certs/generate-dev-pki.sh" "$pki_a_dir" "phantom-master-ca-4" 7 1 >/dev/null
-  "$ROOT/certs/generate-dev-pki.sh" "$pki_b_dir" "$worker_id"        7 1 >/dev/null
+  "$ROOT/certs/generate-dev-pki.sh" "$pki_a_dir" "phantom-master-ca-4" 7 365 >/dev/null
+  "$ROOT/certs/generate-dev-pki.sh" "$pki_b_dir" "$worker_id"        7 365 >/dev/null
 
   patch_env "$ROOT/configs/master.env.example" "$master_env" \
     -e "s|^VELOX_RUNTIME_DIR=.*|VELOX_RUNTIME_DIR=$case_dir/run|" \
@@ -415,6 +493,10 @@ case_4_wrong_ca_reject() {
   cp "$ROOT/configs/worker-tls.json" "$worker_cfg"
   sed -i \
     -e "s|WORKER_ID_PLACEHOLDER|$worker_id|" \
+    -e "s|WORK_DIR_PLACEHOLDER|$WORKDIR/work|" \
+    -e "s|STATE_DIR_PLACEHOLDER|$WORKDIR/work/state|" \
+    -e "s|TEMP_DIR_PLACEHOLDER|$WORKDIR/work/temp|" \
+    -e "s|BUNDLE_HASH_PLACEHOLDER|e2e-bundle-hash|" \
     -e "s|CERT_DIR_PLACEHOLDER|$pki_b_dir|g" \
     "$worker_cfg"
 
@@ -457,8 +539,10 @@ case_5_plaintext_vs_tls_reject() {
   local master_env="$case_dir/master.env"
   local worker_cfg="$case_dir/worker-config.json"
   mkdir_p "$case_dir" "$pki_dir"
+  mkdir -p "$case_dir/data" "$case_dir/run" "$case_dir/videos"
+  touch "$case_dir/data/velox.db"
 
-  "$ROOT/certs/generate-dev-pki.sh" "$pki_dir" "phantom-master-ca-5" 7 1 >/dev/null
+  "$ROOT/certs/generate-dev-pki.sh" "$pki_dir" "phantom-master-ca-5" 7 365 >/dev/null
 
   patch_env "$ROOT/configs/master.env.example" "$master_env" \
     -e "s|^VELOX_RUNTIME_DIR=.*|VELOX_RUNTIME_DIR=$case_dir/run|" \
@@ -473,7 +557,13 @@ case_5_plaintext_vs_tls_reject() {
   # NB: master TLS ENABLED + insecure-dev disabled — pure TLS-required path.
 
   cp "$ROOT/configs/worker-plaintext.json" "$worker_cfg"
-  sed -i "s|WORKER_ID_PLACEHOLDER|$worker_id|" "$worker_cfg"
+  sed -i \
+    -e "s|WORKER_ID_PLACEHOLDER|$worker_id|" \
+    -e "s|WORK_DIR_PLACEHOLDER|$WORKDIR/work|" \
+    -e "s|STATE_DIR_PLACEHOLDER|$WORKDIR/work/state|" \
+    -e "s|TEMP_DIR_PLACEHOLDER|$WORKDIR/work/temp|" \
+    -e "s|BUNDLE_HASH_PLACEHOLDER|e2e-bundle-hash|" \
+    "$worker_cfg"
 
   CHILD_PIDS=(); CHILD_LABELS=()
   spawn_master "$id" "$master_env"
@@ -517,10 +607,12 @@ case_6_parallel_one_accept_one_reject() {
   local worker_good_cfg="$case_dir/worker-good.json"
   local worker_bad_cfg="$case_dir/worker-bad.json"
   mkdir_p "$case_dir" "$pki_good_dir" "$pki_bad_dir"
+  mkdir -p "$case_dir/data" "$case_dir/run" "$case_dir/videos"
+  touch "$case_dir/data/velox.db"
 
-  "$ROOT/certs/generate-dev-pki.sh" "$pki_good_dir" "$good_id" 7 1 >/dev/null
+  "$ROOT/certs/generate-dev-pki.sh" "$pki_good_dir" "$good_id" 7 365 >/dev/null
   # The "bad" PKI is a separate CA — worker's leaf won't chain to master's pool.
-  "$ROOT/certs/generate-dev-pki.sh" "$pki_bad_dir"  "$bad_id"  7 1 >/dev/null
+  "$ROOT/certs/generate-dev-pki.sh" "$pki_bad_dir"  "$bad_id"  7 365 >/dev/null
 
   patch_env "$ROOT/configs/master.env.example" "$master_env" \
     -e "s|^VELOX_RUNTIME_DIR=.*|VELOX_RUNTIME_DIR=$case_dir/run|" \
@@ -535,11 +627,19 @@ case_6_parallel_one_accept_one_reject() {
   cp "$ROOT/configs/worker-tls.json" "$worker_good_cfg"
   sed -i \
     -e "s|WORKER_ID_PLACEHOLDER|$good_id|" \
+    -e "s|WORK_DIR_PLACEHOLDER|$WORKDIR/work|" \
+    -e "s|STATE_DIR_PLACEHOLDER|$WORKDIR/work/state|" \
+    -e "s|TEMP_DIR_PLACEHOLDER|$WORKDIR/work/temp|" \
+    -e "s|BUNDLE_HASH_PLACEHOLDER|e2e-bundle-hash|" \
     -e "s|CERT_DIR_PLACEHOLDER|$pki_good_dir|g" \
     "$worker_good_cfg"
   cp "$ROOT/configs/worker-tls.json" "$worker_bad_cfg"
   sed -i \
     -e "s|WORKER_ID_PLACEHOLDER|$bad_id|" \
+    -e "s|WORK_DIR_PLACEHOLDER|$WORKDIR/work|" \
+    -e "s|STATE_DIR_PLACEHOLDER|$WORKDIR/work/state|" \
+    -e "s|TEMP_DIR_PLACEHOLDER|$WORKDIR/work/temp|" \
+    -e "s|BUNDLE_HASH_PLACEHOLDER|e2e-bundle-hash|" \
     -e "s|CERT_DIR_PLACEHOLDER|$pki_bad_dir|g" \
     "$worker_bad_cfg"
 
@@ -612,10 +712,15 @@ main() {
   printf "WORKERAGENT_ROOT  = %s\n\n" "$WORKERAGENT_ROOT"
 
   case_1_plaintext_accept
+  wait_for_ports_free
   case_2_tls_accept
+  wait_for_ports_free
   case_3_bad_cert_reject
+  wait_for_ports_free
   case_4_wrong_ca_reject
+  wait_for_ports_free
   case_5_plaintext_vs_tls_reject
+  wait_for_ports_free
   case_6_parallel_one_accept_one_reject
 
   printf "\n==== PR 3 E2E: matrix summary ====\n"

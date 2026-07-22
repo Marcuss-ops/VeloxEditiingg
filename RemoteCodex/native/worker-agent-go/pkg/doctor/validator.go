@@ -134,9 +134,35 @@ func DefaultValidators() []Validator {
 // the executor registry check. Use this when the registry has been wired
 // (e.g., during the full doctor command, or after executor construction).
 func DefaultValidatorsWithRegistry(registry ExecutorRegistryView) []Validator {
-	vals := DefaultValidators()
+	return DefaultValidatorsWithRegistryAndProfile(registry, "")
+}
+
+// DefaultValidatorsForProfile returns the canonical set of validators,
+// omitting engine/ffmpeg checks when profile is "creator" because a
+// creator worker does not use the C++ video pipeline.
+func DefaultValidatorsForProfile(profile string) []Validator {
+	isCreator := profile == "creator"
+	vals := []Validator{
+		&EnvironmentValidator{},
+		&TransportTLSValidator{},
+		&CertExpiryValidator{},
+		&DNSReachabilityValidator{},
+		&DirsValidator{},
+		&DiskFreeValidator{},
+		&PortsValidator{},
+	}
+	if !isCreator {
+		vals = append(vals, &EngineBinaryValidator{}, &FFmpegValidator{})
+	}
+	return vals
+}
+
+// DefaultValidatorsWithRegistryAndProfile returns the full canonical set
+// including the executor registry check, honouring the worker profile.
+func DefaultValidatorsWithRegistryAndProfile(registry ExecutorRegistryView, profile string) []Validator {
+	vals := DefaultValidatorsForProfile(profile)
 	if registry != nil {
-		vals = append(vals, &RegistryValidator{Registry: registry})
+		vals = append(vals, &RegistryValidator{Registry: registry, Profile: profile})
 	}
 	return vals
 }

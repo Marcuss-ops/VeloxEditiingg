@@ -30,21 +30,22 @@ import (
 	"time"
 )
 
-// runOutputDirSmokeTest (RW-PROD-003 A4) creates OutputDir, writes a
-// tiny sentinel file into it, removes the file, and reports the
-// canonical StepResult. ctx is honoured so a hung FS call does not
-// block boot indefinitely.
-func runOutputDirSmokeTest(ctx context.Context, dir string) StepResult {
+// runDirSmokeTest (RW-PROD-003 A4) creates dir, writes a tiny sentinel
+// file into it, removes the file, and reports the canonical StepResult.
+// ctx is honoured so a hung FS call does not block boot indefinitely.
+// The name parameter becomes the StepResult.Name and prefixes the
+// stable error codes (e.g. "temp_dir.readonly").
+func runDirSmokeTest(ctx context.Context, name, dir string) StepResult {
 	start := time.Now().UTC()
 	res := StepResult{
-		Name:      "output_dir",
+		Name:      name,
 		StartedAt: start,
 	}
 
 	if dir == "" {
 		res.Status = "FAIL"
-		res.Code = "output_dir.unwritable"
-		res.Detail = "OutputDir is empty — opts must populate DefaultOutputDir"
+		res.Code = name + ".unwritable"
+		res.Detail = fmt.Sprintf("%s is empty", name)
 		res.CompletedAt = time.Now().UTC()
 		res.DurMs = res.CompletedAt.Sub(start).Milliseconds()
 		return res
@@ -53,7 +54,7 @@ func runOutputDirSmokeTest(ctx context.Context, dir string) StepResult {
 	// MkdirAll covers "dir does not exist yet" AND the parent permissions.
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		res.Status = "FAIL"
-		res.Code = classifyMkdirErr(err)
+		res.Code = classifyMkdirErr(name, err)
 		res.Detail = fmt.Sprintf("MkdirAll(%q): %v", dir, err)
 		res.CompletedAt = time.Now().UTC()
 		res.DurMs = res.CompletedAt.Sub(start).Milliseconds()
@@ -64,7 +65,7 @@ func runOutputDirSmokeTest(ctx context.Context, dir string) StepResult {
 	// dir reaches MkdirAll (root-owned path) but rejects open(WRONLY).
 	if err := ctx.Err(); err != nil {
 		res.Status = "FAIL"
-		res.Code = "output_dir.unwritable"
+		res.Code = name + ".unwritable"
 		res.Detail = fmt.Sprintf("ctx cancelled before write probe: %v", err)
 		res.CompletedAt = time.Now().UTC()
 		res.DurMs = res.CompletedAt.Sub(start).Milliseconds()
@@ -74,7 +75,7 @@ func runOutputDirSmokeTest(ctx context.Context, dir string) StepResult {
 	sentinel := filepath.Join(dir, ".bootstrap_write_test")
 	if err := os.WriteFile(sentinel, []byte("velox-bootstrap-smoke\n"), 0o644); err != nil {
 		res.Status = "FAIL"
-		res.Code = classifyWriteErr(err)
+		res.Code = classifyWriteErr(name, err)
 		res.Detail = fmt.Sprintf("WriteFile(%q): %v", sentinel, err)
 		res.CompletedAt = time.Now().UTC()
 		res.DurMs = res.CompletedAt.Sub(start).Milliseconds()
@@ -91,7 +92,7 @@ func runOutputDirSmokeTest(ctx context.Context, dir string) StepResult {
 		// Surface the file we created before retreat.
 		_ = os.Remove(sentinel)
 		res.Status = "FAIL"
-		res.Code = "output_dir.unwritable"
+		res.Code = name + ".unwritable"
 		res.Detail = fmt.Sprintf("re-OpenFile(%q) failed after initial write: %v", sentinel, err)
 		res.CompletedAt = time.Now().UTC()
 		res.DurMs = res.CompletedAt.Sub(start).Milliseconds()
@@ -101,7 +102,7 @@ func runOutputDirSmokeTest(ctx context.Context, dir string) StepResult {
 
 	if err := os.Remove(sentinel); err != nil {
 		res.Status = "FAIL"
-		res.Code = "output_dir.remove_failed"
+		res.Code = name + ".remove_failed"
 		res.Detail = fmt.Sprintf("Remove(%q): %v — dir may be mounted with chattr +i", sentinel, err)
 		res.CompletedAt = time.Now().UTC()
 		res.DurMs = res.CompletedAt.Sub(start).Milliseconds()
@@ -109,34 +110,52 @@ func runOutputDirSmokeTest(ctx context.Context, dir string) StepResult {
 	}
 
 	res.Status = "OK"
-	res.Code = "output_dir_ok"
+	res.Code = name + "_ok"
 	res.Detail = fmt.Sprintf("mkdir+write+remove=ok at %s", dir)
 	res.CompletedAt = time.Now().UTC()
 	res.DurMs = res.CompletedAt.Sub(start).Milliseconds()
 	return res
 }
 
+// runOutputDirSmokeTest is the legacy wrapper around runDirSmokeTest
+// for the engine output directory.
+func runOutputDirSmokeTest(ctx context.Context, dir string) StepResult {
+	return runDirSmokeTest(ctx, "output_dir", dir)
+}
+
+// runTempDirSmokeTest creates the worker scratch directory used for
+// intermediate artifacts during video pipeline execution.
+func runTempDirSmokeTest(ctx context.Context, dir string) StepResult {
+	return runDirSmokeTest(ctx, "temp_dir", dir)
+}
+
+// runStateDirSmokeTest creates the canonical root for mutable worker
+// state (cache, blobs, spool).
+func runStateDirSmokeTest(ctx context.Context, dir string) StepResult {
+	return runDirSmokeTest(ctx, "state_dir", dir)
+}
+
 // classifyMkdirErr maps MkdirAll failures to stable codes. The intent:
-// ErrPermission → "readonly" (a parent we lack traverse on) and
-// any other failure → "unwritable".
-func classifyMkdirErr(err error) string {
+// ErrPermission → "<name>.readonly" (a parent we lack traverse on) and
+// any other failure → "<name>.unwritable".
+func classifyMkdirErr(name string, err error) string {
 	if err == nil {
 		return ""
 	}
 	if errors.Is(err, os.ErrPermission) {
-		return "output_dir.readonly"
+		return name + ".readonly"
 	}
-	return "output_dir.unwritable"
+	return name + ".unwritable"
 }
 
 // classifyWriteErr mirrors classifyMkdirErr for the WriteFile probe.
 // ENOSPC falls under "unwritable" with the underlying cause in Detail.
-func classifyWriteErr(err error) string {
+func classifyWriteErr(name string, err error) string {
 	if err == nil {
 		return ""
 	}
 	if errors.Is(err, os.ErrPermission) || errors.Is(err, os.ErrExist) {
-		return "output_dir.readonly"
+		return name + ".readonly"
 	}
-	return "output_dir.unwritable"
+	return name + ".unwritable"
 }

@@ -120,29 +120,40 @@ func Run(ctx context.Context, cfg *config.WorkerConfig, runner RunnerView, opts 
 
 	// Order matters: bundle first (cheap; detects operator mistake
 	// before we waste 5s on a C++ render), then ffmpeg (cheap
-	// LookPath + version parse), then output_dir (1 syscall chain),
-	// then engine self-render (expensive; ≤5s bound).
+	// LookPath + version parse), then runtime directories (cheap
+	// mkdir+write+remove), then engine self-render (expensive; ≤5s bound).
+	//
+	// The "creator" profile skips ffmpeg and engine self-render: it
+	// performs script/voiceover/image work and does not require the C++
+	// video pipeline.
+	isCreator := cfg != nil && cfg.WorkerProfile == "creator"
 	appender(runBundleHashGate(cfg, resolved.WorkDir))
-	appender(runFFmpegSelfTest(ctx, resolved))
+	if !isCreator {
+		appender(runFFmpegSelfTest(ctx, resolved))
+	}
+	appender(runStateDirSmokeTest(ctx, resolved.StateDir))
 	appender(runOutputDirSmokeTest(ctx, resolved.OutputDir))
+	appender(runTempDirSmokeTest(ctx, resolved.TempDir))
 
-	if runner == nil {
-		// Without a runner we cannot exercise the engine at all. This
-		// is a different code from "the engine refused the plan" so
-		// operators can distinguish "composition root forgot to pass
-		// pipelineRunner" from "the engine is broken".
-		failAt := time.Now().UTC()
-		appender(StepResult{
-			Name:        "engine_self_render",
-			Status:      "FAIL",
-			Code:        "engine_missing",
-			Detail:      "RunnerView param is nil — composition root did not pass pipelineRunner into bootstrap.Run",
-			StartedAt:   failAt,
-			CompletedAt: failAt,
-			DurMs:       failAt.Sub(failAt).Milliseconds(),
-		})
-	} else {
-		appender(runEngineSelfRender(ctx, resolved, runner.RenderClient()))
+	if !isCreator {
+		if runner == nil {
+			// Without a runner we cannot exercise the engine at all. This
+			// is a different code from "the engine refused the plan" so
+			// operators can distinguish "composition root forgot to pass
+			// pipelineRunner" from "the engine is broken".
+			failAt := time.Now().UTC()
+			appender(StepResult{
+				Name:        "engine_self_render",
+				Status:      "FAIL",
+				Code:        "engine_missing",
+				Detail:      "RunnerView param is nil — composition root did not pass pipelineRunner into bootstrap.Run",
+				StartedAt:   failAt,
+				CompletedAt: failAt,
+				DurMs:       failAt.Sub(failAt).Milliseconds(),
+			})
+		} else {
+			appender(runEngineSelfRender(ctx, resolved, runner.RenderClient()))
+		}
 	}
 
 	report.CompletedAt = time.Now().UTC()
