@@ -185,6 +185,27 @@ func TestMiddleware_ExpiredToken_401(t *testing.T) {
 	}
 }
 
+func TestMiddleware_MissingWorkspaceID_401(t *testing.T) {
+	v, _ := New(testSecret)
+	r := setupGin()
+	r.GET("/test", Middleware(v, nil), func(c *gin.Context) {
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	c := validClaims()
+	c.WorkspaceID = 0
+	token := mintToken(t, testSecret, c)
+
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for missing workspace_id, got %d", w.Code)
+	}
+}
+
 func TestMiddleware_NoBearerPrefix_401(t *testing.T) {
 	v, _ := New(testSecret)
 	r := setupGin()

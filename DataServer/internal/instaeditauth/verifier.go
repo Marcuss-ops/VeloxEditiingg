@@ -71,6 +71,7 @@ var (
 	ErrTokenExpired        = errors.New("instaeditauth: token expired")
 	ErrWrongIssuer         = errors.New("instaeditauth: wrong issuer")
 	ErrWrongAudience       = errors.New("instaeditauth: wrong audience")
+	ErrMissingWorkspaceID  = errors.New("instaeditauth: missing workspace_id")
 	ErrSecretNotConfigured = errors.New("instaeditauth: secret not configured")
 )
 
@@ -174,6 +175,11 @@ func (v *Verifier) Verify(token string) (*Claims, error) {
 	// Audience check.
 	if claims.Audience != ExpectedAudience {
 		return nil, fmt.Errorf("%w: got %q, want %q", ErrWrongAudience, claims.Audience, ExpectedAudience)
+	}
+	// Workspace_id check. The claim is required and must be a positive
+	// integer so downstream handlers can scope every operation.
+	if claims.WorkspaceID <= 0 {
+		return nil, fmt.Errorf("%w: %d", ErrMissingWorkspaceID, claims.WorkspaceID)
 	}
 	// Expiry check. A zero exp is rejected (the issuer MUST set exp).
 	if claims.ExpiresAt <= 0 {

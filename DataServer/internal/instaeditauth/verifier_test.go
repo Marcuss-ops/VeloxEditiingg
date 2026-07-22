@@ -109,6 +109,26 @@ func TestVerify_WrongAudience(t *testing.T) {
 	}
 }
 
+func TestVerify_MissingWorkspaceID_Zero(t *testing.T) {
+	v, _ := New(testSecret)
+	c := validClaims()
+	c.WorkspaceID = 0
+	_, err := v.Verify(mintToken(t, testSecret, c))
+	if !isErr(err, ErrMissingWorkspaceID) {
+		t.Fatalf("expected ErrMissingWorkspaceID for workspace_id=0, got %v", err)
+	}
+}
+
+func TestVerify_MissingWorkspaceID_Negative(t *testing.T) {
+	v, _ := New(testSecret)
+	c := validClaims()
+	c.WorkspaceID = -1
+	_, err := v.Verify(mintToken(t, testSecret, c))
+	if !isErr(err, ErrMissingWorkspaceID) {
+		t.Fatalf("expected ErrMissingWorkspaceID for negative workspace_id, got %v", err)
+	}
+}
+
 func TestVerify_Expired(t *testing.T) {
 	v, _ := New(testSecret)
 	c := validClaims()
