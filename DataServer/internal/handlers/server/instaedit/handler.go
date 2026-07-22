@@ -19,6 +19,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"velox-shared/contract"
+
 	"velox-server/internal/costmodel"
 	"velox-server/internal/instaeditauth"
 	"velox-server/internal/jobs"
@@ -34,27 +36,9 @@ const (
 	ScopeAssetsRead  = "velox:assets:read"
 )
 
-// renderSpecAllowedKeys lists the top-level render keys that may be
-// flattened into the Enqueue payload. It intentionally excludes
-// project_id, delivery_plan, job_id, workspace_id, etc.
-var renderSpecAllowedKeys = []string{
-	"video_name",
-	"video_metadata",
-	"scenes",
-	"scenes_json",
-	"voiceover_paths",
-	"voiceover_path",
-	"audio_language",
-	"language",
-	"clips",
-	"items",
-	"audio_tracks",
-	"fit",
-	"effect",
-	"orientation",
-	"output_path",
-	"drive_output_folder",
-}
+// defaultDeliveryRetryBudget is the retry budget stamped on each
+// delivery-plan entry when the caller does not override it.
+const defaultDeliveryRetryBudget = 5
 
 // storeReader is the minimal store surface consumed by the InstaEdit
 // BFF handlers. It lets tests and future service layers supply a
@@ -235,6 +219,24 @@ func (h *Handler) createJob() gin.HandlerFunc {
 			return
 		}
 
+		// Build the canonical payload using the shared JobPayloadV2 contract.
+		// render_spec must be valid JSON, must conform to the canonical V2
+		// keyset, and must not contain legacy aliases or unknown top-level
+		// keys. We do NOT keep the raw bytes on failure.
+		var renderSpec map[string]interface{}
+		if len(req.RenderSpec) > 0 {
+			if err := json.Unmarshal(req.RenderSpec, &renderSpec); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid render_spec JSON: " + err.Error()})
+				return
+			}
+			if err := contract.StrictValidatePayload(renderSpec); err != nil {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "invalid render_spec: " + err.Error()})
+				return
+			}
+		} else {
+			renderSpec = map[string]interface{}{}
+		}
+
 		// Resolve each external_destination_id to the internal Velox
 		// destination_id. The BFF works with opaque InstaEdit identifiers;
 		// Velox still stores its own destination rows.
@@ -269,35 +271,32 @@ func (h *Handler) createJob() gin.HandlerFunc {
 			deliveryPlan = append(deliveryPlan, map[string]interface{}{
 				"destination_id": dest.DestinationID,
 				"priority":       i,
-				"retry_budget":   5,
+				"retry_budget":   defaultDeliveryRetryBudget,
 				"metadata":       metadata,
 			})
 		}
 
-		// Build the normalized payload the Enqueuer expects.
-		payload := map[string]interface{}{
-			"project_id":    req.ProjectID,
-			"video_name":    req.ProjectID,
-			"delivery_plan": deliveryPlan,
+		// InstaEdit scopes by project; use the project_id as a sensible
+		// default video_name when the caller does not supply one. The
+		// enqueue normalizer will derive script_text from video_name.
+		if _, ok := renderSpec["video_name"]; !ok {
+			renderSpec["video_name"] = req.ProjectID
 		}
-		if len(req.RenderSpec) > 0 {
-			var renderSpec map[string]interface{}
-			if err := json.Unmarshal(req.RenderSpec, &renderSpec); err == nil {
-				// Copy only the render fields the Enqueuer understands. We
-				// deliberately do NOT copy arbitrary keys, to prevent the
-				// client from overriding canonical fields such as
-				// project_id, delivery_plan, or job_id.
-				for _, k := range renderSpecAllowedKeys {
-					if v, ok := renderSpec[k]; ok && v != nil {
-						payload[k] = v
-					}
-				}
-				payload["render_spec"] = renderSpec
-			} else {
-				// Keep the raw bytes as a fallback so the render spec is not lost.
-				payload["render_spec_raw"] = string(req.RenderSpec)
-			}
+
+		// The delivery plan resolved from opaque InstaEdit identifiers
+		// becomes part of the canonical payload.
+		renderSpec["delivery_plan"] = deliveryPlan
+
+		typedPayload := contract.NewJobPayloadV2(renderSpec)
+		payload, err := typedPayload.ToMap()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build canonical payload: " + err.Error()})
+			return
 		}
+		// project_id is InstaEdit-specific and is not part of the
+		// canonical worker payload; preserve it for downstream
+		// InstaEdit-specific bookkeeping.
+		payload["project_id"] = req.ProjectID
 
 		resp, err := h.deps.Enqueuer.Enqueue(c.Request.Context(), payload, costmodel.JobRequirements{}, enqueue.WithWorkspaceID(claims.WorkspaceID))
 		if err != nil {
