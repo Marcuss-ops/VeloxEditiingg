@@ -175,6 +175,20 @@ func TestClassifyNetworkError(t *testing.T) {
 			t.Fatal("context.Canceled should NOT be retryable")
 		}
 	})
+
+	t.Run("context.DeadlineExceeded is PERMANENT", func(t *testing.T) {
+		_, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+		defer cancel()
+		// Wait for the context to expire.
+		time.Sleep(10 * time.Millisecond)
+		re := ClassifyNetworkError(context.DeadlineExceeded)
+		if re.Class != RemoteErrorPermanent {
+			t.Fatalf("class: got %s, want PERMANENT", re.Class)
+		}
+		if re.IsRetryable() {
+			t.Fatal("context.DeadlineExceeded should NOT be retryable")
+		}
+	})
 }
 
 // ── ClassifyDecodeError ──────────────────────────────────────────────────────
@@ -350,25 +364,26 @@ func TestTruncateBody(t *testing.T) {
 // ── RetryPolicy ──────────────────────────────────────────────────────────────
 
 func TestDefaultRetryPolicy(t *testing.T) {
+	// Retries=5 means 1 initial attempt + 5 retries = 6 total attempts.
 	p := DefaultRetryPolicy(5)
-	if p.MaxRetries != 5 {
-		t.Fatalf("MaxRetries: got %d, want 5", p.MaxRetries)
+	if p.MaxAttempts != 6 {
+		t.Fatalf("MaxAttempts: got %d, want 6", p.MaxAttempts)
 	}
-	if p.MaxMalformedRetries != DefaultMalformedRetryLimit {
-		t.Fatalf("MaxMalformedRetries: got %d, want %d", p.MaxMalformedRetries, DefaultMalformedRetryLimit)
+	if p.MaxMalformedAttempts != DefaultMalformedRetryLimit {
+		t.Fatalf("MaxMalformedAttempts: got %d, want %d", p.MaxMalformedAttempts, DefaultMalformedRetryLimit)
 	}
 
-	// When maxRetries < DefaultMalformedRetryLimit, the malformed limit
-	// is clamped to maxRetries so we never exceed the overall cap.
+	// When maxRetries + 1 is less than the malformed limit, the malformed
+	// limit is clamped to MaxAttempts so we never exceed the overall cap.
 	p2 := DefaultRetryPolicy(1)
-	if p2.MaxMalformedRetries != 1 {
-		t.Fatalf("clamped MaxMalformedRetries: got %d, want 1", p2.MaxMalformedRetries)
+	if p2.MaxMalformedAttempts != 2 {
+		t.Fatalf("clamped MaxMalformedAttempts: got %d, want 2", p2.MaxMalformedAttempts)
 	}
 
-	// Zero or negative maxRetries defaults to 3.
+	// Zero or negative maxRetries defaults to 3 retries (4 total attempts).
 	p3 := DefaultRetryPolicy(0)
-	if p3.MaxRetries != 3 {
-		t.Fatalf("zero MaxRetries: got %d, want 3", p3.MaxRetries)
+	if p3.MaxAttempts != 4 {
+		t.Fatalf("zero MaxAttempts: got %d, want 4", p3.MaxAttempts)
 	}
 }
 
@@ -407,7 +422,7 @@ func TestRetryPolicy_ShouldStop_Transient(t *testing.T) {
 }
 
 func TestRetryPolicy_ShouldStop_Malformed_LimitedRetry(t *testing.T) {
-	policy := DefaultRetryPolicy(10) // MaxMalformedRetries = 2
+	policy := DefaultRetryPolicy(10) // MaxMalformedAttempts = 2
 
 	// Simulate a realistic error from ClassifyDecodeError which wraps
 	// ErrMalformedResponse in the Cause chain.
@@ -469,8 +484,8 @@ func TestRetryPolicy_ShouldStop_UntypedError(t *testing.T) {
 	policy := DefaultRetryPolicy(3)
 	err := errors.New("some random error")
 	got, stop := policy.ShouldStop(err, 0)
-	if stop {
-		t.Fatal("untyped error should NOT stop (treated as transient)")
+	if !stop {
+		t.Fatal("untyped error should STOP (treated as permanent)")
 	}
 	if got != err {
 		t.Fatal("ShouldStop should return the same untyped error")
@@ -480,7 +495,7 @@ func TestRetryPolicy_ShouldStop_UntypedError(t *testing.T) {
 // ── Integration: withRetry limited-then-permanent for MALFORMED ───────────────
 
 func TestWithRetry_MalformedPromotedAfterLimit(t *testing.T) {
-	// Create a client with Retries=5 but MaxMalformedRetries=2.
+	// Create a client with Retries=5 but MaxMalformedAttempts=2.
 	// The fn always returns a MALFORMED_RESPONSE error.
 	// After 2 malformed attempts, the error should be promoted to PERMANENT.
 	client := NewClient(Config{URL: "http://localhost:0", Retries: 5})
@@ -498,10 +513,9 @@ func TestWithRetry_MalformedPromotedAfterLimit(t *testing.T) {
 		}
 	})
 
-	// Should have been called exactly MaxMalformedRetries+1 = 3 times
-	// (attempt 0, 1, 2 — on the 3rd call the limit is hit and it stops).
-	// Actually: attempt 0 → malformedAttempts=1, ShouldStop(1) → no
-	//          attempt 1 → malformedAttempts=2, ShouldStop(2) → stop
+	// Should have been called exactly MaxMalformedAttempts times.
+	// attempt 0 → malformedAttempts=1, ShouldStop(1) → no
+	// attempt 1 → malformedAttempts=2, ShouldStop(2) → stop
 	// So 2 calls, then stops.
 	if callCount != 2 {
 		t.Fatalf("callCount: got %d, want 2", callCount)
@@ -656,6 +670,142 @@ func TestClassifyHTTPResponse_429_WithRetryAfter(t *testing.T) {
 	}
 	if !re.IsRetryable() {
 		t.Fatal("RATE_LIMIT should be retryable")
+	}
+}
+
+// ── Retry: exact attempt count and context behaviour ─────────────────────────
+
+func TestWithRetry_TransientExactAttempts(t *testing.T) {
+	// Retries=3 means 1 initial attempt + 3 retries = 4 total attempts.
+	client := NewClient(Config{URL: "http://localhost:0", Retries: 3})
+
+	callCount := 0
+	err := client.withRetry(context.Background(), func(attempt int) error {
+		callCount++
+		return &RemoteError{
+			Class:   RemoteErrorTransient,
+			Code:    "HTTP_503",
+			Message: "server busy",
+		}
+	})
+
+	if callCount != 4 {
+		t.Fatalf("callCount: got %d, want 4", callCount)
+	}
+
+	var re *RemoteError
+	if !errors.As(err, &re) {
+		t.Fatalf("error should be *RemoteError, got %T", err)
+	}
+	if re.Class != RemoteErrorTransient {
+		t.Fatalf("class: got %s, want TRANSIENT", re.Class)
+	}
+}
+
+func TestWithRetry_RetriesEqualsOneMeansTwoAttempts(t *testing.T) {
+	// Retries=1 means 1 initial attempt + 1 retry = 2 total attempts.
+	client := NewClient(Config{URL: "http://localhost:0", Retries: 1})
+
+	callCount := 0
+	err := client.withRetry(context.Background(), func(attempt int) error {
+		callCount++
+		return &RemoteError{
+			Class:   RemoteErrorTransient,
+			Code:    "HTTP_503",
+			Message: "server busy",
+		}
+	})
+
+	if callCount != 2 {
+		t.Fatalf("callCount: got %d, want 2", callCount)
+	}
+	if err == nil {
+		t.Fatal("expected error after exhausting attempts")
+	}
+}
+
+func TestWithRetry_UntypedErrorStopsImmediately(t *testing.T) {
+	client := NewClient(Config{URL: "http://localhost:0", Retries: 5})
+
+	callCount := 0
+	err := client.withRetry(context.Background(), func(attempt int) error {
+		callCount++
+		return errors.New("untyped failure")
+	})
+
+	if callCount != 1 {
+		t.Fatalf("untyped error should only call fn once, got %d", callCount)
+	}
+	if err == nil || err.Error() != "untyped failure" {
+		t.Fatalf("expected untyped error, got %v", err)
+	}
+}
+
+func TestWithRetry_ContextCanceledStopsImmediately(t *testing.T) {
+	client := NewClient(Config{URL: "http://localhost:0", Retries: 5})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	callCount := 0
+	err := client.withRetry(ctx, func(attempt int) error {
+		callCount++
+		return nil
+	})
+
+	if callCount != 0 {
+		t.Fatalf("canceled context should not call fn, got %d", callCount)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestWithRetry_ContextDeadlineExceededStopsImmediately(t *testing.T) {
+	client := NewClient(Config{URL: "http://localhost:0", Retries: 5})
+
+	callCount := 0
+	err := client.withRetry(context.Background(), func(attempt int) error {
+		callCount++
+		return context.DeadlineExceeded
+	})
+
+	if callCount != 1 {
+		t.Fatalf("context.DeadlineExceeded should only call fn once, got %d", callCount)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
+	}
+}
+
+func TestWithRetry_MaxDuration(t *testing.T) {
+	// Backoff schedule starts at 1s; with a 100ms context timeout the
+	// retry loop should return before the first backoff completes.
+	client := NewClient(Config{URL: "http://localhost:0", Retries: 5})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	callCount := 0
+	start := time.Now()
+	err := client.withRetry(ctx, func(attempt int) error {
+		callCount++
+		return &RemoteError{
+			Class:   RemoteErrorTransient,
+			Code:    "HTTP_503",
+			Message: "server busy",
+		}
+	})
+	elapsed := time.Since(start)
+
+	if callCount < 1 {
+		t.Fatal("expected at least one attempt")
+	}
+	if elapsed > 250*time.Millisecond {
+		t.Fatalf("expected to stop near context timeout, took %v", elapsed)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
 	}
 }
 

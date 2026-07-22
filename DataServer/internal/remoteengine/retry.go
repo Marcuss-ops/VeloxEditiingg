@@ -14,29 +14,36 @@ const DefaultMalformedRetryLimit = 2
 
 // ErrMalformedRetryExceeded is the sentinel wrapped into the Cause chain
 // when a MALFORMED_RESPONSE error is promoted to PERMANENT after
-// exceeding MaxMalformedRetries.
+// exceeding MaxMalformedAttempts.
 var ErrMalformedRetryExceeded = errors.New("remote engine: malformed response retry limit exceeded")
 
 // RetryPolicy encapsulates the full retry decision logic for the remote
 // engine client.
+//
+// MaxAttempts is the total number of execution attempts (initial + retries).
+// MaxMalformedAttempts is the total number of malformed-response attempts
+// before the error is promoted to PERMANENT.
 type RetryPolicy struct {
-	MaxRetries          int
-	MaxMalformedRetries int
+	MaxAttempts          int
+	MaxMalformedAttempts int
 }
 
 // DefaultRetryPolicy returns the standard policy derived from the given
-// retry count.
+// retry count. A Retries value of N means 1 initial attempt plus up to N
+// retries, i.e. MaxAttempts = N + 1. If maxRetries is zero or negative,
+// it defaults to 3 retries (4 total attempts).
 func DefaultRetryPolicy(maxRetries int) RetryPolicy {
 	if maxRetries <= 0 {
 		maxRetries = 3
 	}
+	maxAttempts := maxRetries + 1
 	mr := DefaultMalformedRetryLimit
-	if mr > maxRetries {
-		mr = maxRetries
+	if mr > maxAttempts {
+		mr = maxAttempts
 	}
 	return RetryPolicy{
-		MaxRetries:          maxRetries,
-		MaxMalformedRetries: mr,
+		MaxAttempts:          maxAttempts,
+		MaxMalformedAttempts: mr,
 	}
 }
 
@@ -48,8 +55,8 @@ func (p RetryPolicy) ShouldStop(err error, malformedAttempts int) (error, bool) 
 
 	var re *RemoteError
 	if !errors.As(err, &re) {
-		// Untyped error: treat as transient, keep retrying.
-		return err, false
+		// Untyped error: permanent by default; do not retry.
+		return err, true
 	}
 
 	if re.IsPermanent() {
@@ -58,12 +65,12 @@ func (p RetryPolicy) ShouldStop(err error, malformedAttempts int) (error, bool) 
 
 	// MALFORMED_RESPONSE: limited retry, then permanent.
 	if re.Class == RemoteErrorMalformed {
-		if malformedAttempts >= p.MaxMalformedRetries {
+		if malformedAttempts >= p.MaxMalformedAttempts {
 			promoted := &RemoteError{
 				Class:      RemoteErrorPermanent,
 				StatusCode: re.StatusCode,
 				Code:       re.Code + "_RETRY_EXCEEDED",
-				Message:    fmt.Sprintf("malformed response after %d retries: %s", malformedAttempts, re.Message),
+				Message:    fmt.Sprintf("malformed response after %d attempts: %s", malformedAttempts, re.Message),
 				Body:       re.Body,
 				Cause:      fmt.Errorf("%w: %w", ErrMalformedRetryExceeded, re.Cause),
 			}
@@ -75,11 +82,11 @@ func (p RetryPolicy) ShouldStop(err error, malformedAttempts int) (error, bool) 
 	return err, false
 }
 
-// withRetry executes fn up to MaxRetries times.
+// withRetry executes fn up to MaxAttempts times.
 //
 //   - VALIDATION, AUTHENTICATION, PERMANENT → break immediately (no retry).
-//   - RATE_LIMIT, TRANSIENT → retry with backoff up to MaxRetries.
-//   - MALFORMED_RESPONSE → retry up to MaxMalformedRetries, then promote
+//   - RATE_LIMIT, TRANSIENT → retry with backoff up to MaxAttempts.
+//   - MALFORMED_RESPONSE → retry up to MaxMalformedAttempts, then promote
 //     to PERMANENT (limited retry, then permanent).
 //
 // The backoff schedule follows RetrySchedule (1s, 5s, 15s, 30s, 60s, 5m)
@@ -90,7 +97,11 @@ func (c *Client) withRetry(ctx context.Context, fn func(attempt int) error) erro
 	var lastErr error
 	malformedAttempts := 0
 
-	for attempt := 0; attempt < policy.MaxRetries; attempt++ {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	for attempt := 0; attempt < policy.MaxAttempts; attempt++ {
 		lastErr = fn(attempt)
 		if lastErr == nil {
 			return nil
@@ -102,12 +113,19 @@ func (c *Client) withRetry(ctx context.Context, fn func(attempt int) error) erro
 			malformedAttempts++
 		}
 
+		// context.Canceled and context.DeadlineExceeded must stop immediately.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		// Ask the policy whether to stop.
 		var stop bool
 		lastErr, stop = policy.ShouldStop(lastErr, malformedAttempts)
 		if stop {
 			if errors.As(lastErr, &re) {
-				log.Printf("Remote engine stopping (attempt %d/%d): %s", attempt+1, policy.MaxRetries, re)
+				log.Printf("Remote engine stopping (attempt %d/%d): %s", attempt+1, policy.MaxAttempts, re)
+			} else {
+				log.Printf("Remote engine stopping (attempt %d/%d): %v", attempt+1, policy.MaxAttempts, lastErr)
 			}
 			return lastErr
 		}
@@ -115,9 +133,9 @@ func (c *Client) withRetry(ctx context.Context, fn func(attempt int) error) erro
 		// Log the retryable error.
 		if errors.As(lastErr, &re) {
 			log.Printf("Remote engine retryable error (attempt %d/%d, malformed %d/%d): %s",
-				attempt+1, policy.MaxRetries, malformedAttempts, policy.MaxMalformedRetries, re)
+				attempt+1, policy.MaxAttempts, malformedAttempts, policy.MaxMalformedAttempts, re)
 		} else {
-			log.Printf("Remote engine error (attempt %d/%d): %v", attempt+1, policy.MaxRetries, lastErr)
+			log.Printf("Remote engine error (attempt %d/%d): %v", attempt+1, policy.MaxAttempts, lastErr)
 		}
 
 		// Compute backoff.
@@ -127,7 +145,7 @@ func (c *Client) withRetry(ctx context.Context, fn func(attempt int) error) erro
 		}
 		backoff = AddJitter(backoff, int64(attempt)+time.Now().UnixNano())
 
-		if attempt < policy.MaxRetries-1 {
+		if attempt < policy.MaxAttempts-1 {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()

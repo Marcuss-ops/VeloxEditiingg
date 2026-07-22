@@ -692,7 +692,7 @@ func TestClient_MalformedPromotedToPermanent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// GetPipelineStatus retries. With MaxMalformedRetries=2, after 2
+	// GetPipelineStatus retries. With MaxMalformedAttempts=2, after 2
 	// malformed attempts the error is promoted to PERMANENT.
 	client := newTestClient(t, srv.URL, "token", 5)
 

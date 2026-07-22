@@ -46,6 +46,12 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body []byt
 func (c *Client) doRequest(httpReq *http.Request) ([]byte, error) {
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
+		// If the caller's context was canceled or its deadline exceeded,
+		// classify it as a permanent RemoteError so the retry loop stops
+		// immediately while keeping the typed error contract.
+		if ctxErr := httpReq.Context().Err(); ctxErr != nil {
+			return nil, ClassifyNetworkError(ctxErr)
+		}
 		return nil, ClassifyNetworkError(err)
 	}
 	defer resp.Body.Close()

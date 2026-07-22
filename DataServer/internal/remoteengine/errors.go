@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -182,14 +183,25 @@ func ClassifyHTTPError(statusCode int, body string, cause error) *RemoteError {
 
 // ClassifyNetworkError wraps a non-HTTP error (connection refused, DNS
 // failure, timeout, context cancellation) into a *RemoteError classified
-// as TRANSIENT, unless the cause is context.Canceled which is permanent.
+// as TRANSIENT.
+//
+// Caller-initiated context.Canceled / context.DeadlineExceeded are
+// classified as PERMANENT so the retry loop stops immediately. HTTP-client
+// internal timeouts (url.Error with Timeout() true) remain TRANSIENT even
+// though they may wrap context.DeadlineExceeded.
 func ClassifyNetworkError(cause error) *RemoteError {
 	if cause == nil {
 		return nil
 	}
 	class := RemoteErrorTransient
-	if errors.Is(cause, context.Canceled) {
-		class = RemoteErrorPermanent
+	if errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
+		// Only caller-initiated context cancellation/deadline is permanent.
+		// HTTP-client internal timeouts also wrap context.DeadlineExceeded
+		// (as a url.Error with Timeout() == true) and must remain retryable.
+		var urlErr *url.Error
+		if !(errors.As(cause, &urlErr) && urlErr.Timeout()) {
+			class = RemoteErrorPermanent
+		}
 	}
 
 	return &RemoteError{

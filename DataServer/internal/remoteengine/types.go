@@ -10,7 +10,9 @@ type Config struct {
 	URL       string
 	Token     string
 	TimeoutMS int
-	Retries   int
+	// Retries is the number of retry attempts after the initial request.
+	// Total attempts = Retries + 1.
+	Retries int
 }
 
 // Client is the remote engine client
