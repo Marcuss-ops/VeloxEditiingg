@@ -95,9 +95,9 @@ if ! jq -e '.workers | type == "array"' <<<"$WORKERS_JSON" >/dev/null 2>&1; then
     exit 1
 fi
 
-WORKER_MATCH="$(jq -r '.workers[]? | select(.capabilities // [] | index("scene.composite.v1@1")) | .worker_id' <<<"$WORKERS_JSON" | head -1)"
+WORKER_MATCH="$(jq -r '.workers[]? | select(any(.executors[]?; .id == "scene.composite.v1" and .version == 1)) | .worker_id' <<<"$WORKERS_JSON" | head -1)"
 if [[ -z "$WORKER_MATCH" ]]; then
-    emit_fail "no worker advertises capability scene.composite.v1@1"
+    emit_fail "no worker advertises executor scene.composite.v1 version 1"
     exit 1
 fi
 
