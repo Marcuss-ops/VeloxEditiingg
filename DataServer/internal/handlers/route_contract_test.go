@@ -67,8 +67,10 @@ func TestRouteContract_AllModules(t *testing.T) {
 	// per-module deps; their route enumeration lives in module-level tests.
 	want := []string{
 		"GET /api/health",
+		"GET /api/health/ready",
 		"GET /api/ready",
 		"GET /health",
+		"GET /health/ready",
 		"GET /ready",
 	}
 	got := routesByMethod(t, r)

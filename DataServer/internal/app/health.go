@@ -46,6 +46,9 @@ func (m *HealthModule) RegisterRoutes(r *gin.Engine) {
 	r.GET("/api/health", m.health)
 	r.GET("/ready", m.ready)
 	r.GET("/api/ready", m.ready)
+	// Canonical /health/ready alias used by operators and canary checks.
+	r.GET("/health/ready", m.ready)
+	r.GET("/api/health/ready", m.ready)
 }
 
 // AddReadinessCheck registers a named readiness check.
