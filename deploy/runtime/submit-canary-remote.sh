@@ -31,6 +31,8 @@
 #   VELOX_CANARY_TIMEOUT       max seconds to wait for terminal status
 #                              (default: 600)
 #   VELOX_CANARY_INTERVAL      seconds between polls (default: 10)
+#   VELOX_CANARY_SUBMIT_TIMEOUT max seconds for the initial /generate submit
+#                              (default: 30)
 #
 # Exit codes:
 #   0   canary submitted and job reached SUCCEEDED
@@ -60,6 +62,7 @@ ADMIN_HEADER="Authorization: Bearer ${VELOX_ADMIN_TOKEN}"
 PAYLOAD_FILE="${VELOX_CANARY_PAYLOAD_FILE:-ops/jobs/jackie_chan_doc_voiceover.generate.json}"
 POLL_TIMEOUT="${VELOX_CANARY_TIMEOUT:-600}"
 POLL_INTERVAL="${VELOX_CANARY_INTERVAL:-10}"
+SUBMIT_TIMEOUT="${VELOX_CANARY_SUBMIT_TIMEOUT:-30}"
 
 if ! [[ "$POLL_TIMEOUT" =~ ^[0-9]+$ ]] || (( POLL_TIMEOUT <= 0 )); then
     emit_fail "VELOX_CANARY_TIMEOUT must be a positive integer (got: ${POLL_TIMEOUT})"
@@ -67,6 +70,10 @@ if ! [[ "$POLL_TIMEOUT" =~ ^[0-9]+$ ]] || (( POLL_TIMEOUT <= 0 )); then
 fi
 if ! [[ "$POLL_INTERVAL" =~ ^[0-9]+$ ]] || (( POLL_INTERVAL <= 0 )); then
     emit_fail "VELOX_CANARY_INTERVAL must be a positive integer (got: ${POLL_INTERVAL})"
+    exit 1
+fi
+if ! [[ "$SUBMIT_TIMEOUT" =~ ^[0-9]+$ ]] || (( SUBMIT_TIMEOUT <= 0 )); then
+    emit_fail "VELOX_CANARY_SUBMIT_TIMEOUT must be a positive integer (got: ${SUBMIT_TIMEOUT})"
     exit 1
 fi
 
@@ -110,7 +117,7 @@ if [[ "$WORKER_SESSION" != "true" || "$WORKER_STATUS" != "CONNECTED" ]]; then
 fi
 
 # ── 5. Submit the real generate payload ─────────────────────────
-SUBMIT_RESP="$(curl -fsS --max-time 30 \
+SUBMIT_RESP="$(curl -fsS --max-time "${SUBMIT_TIMEOUT}" \
     -X POST "${MASTER_URL}/api/v1/script/generate" \
     -H "$ADMIN_HEADER" \
     -H "Content-Type: application/json" \
