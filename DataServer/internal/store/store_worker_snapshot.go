@@ -119,7 +119,7 @@ func (s *SQLiteStore) upsertWorkerExec(exec workerSQLExec, m map[string]any, raw
 		asString(m["connection_status"]), asString(m["connection_reason"]), boolInt(m["session_active"]),
 		defaultString(m["current_task_id"], asString(m["current_job"])), workerActiveTaskCount(m, metric), int64OrDefault(m["task_slots"], int64OrDefault(metric("task_slots"), 1)),
 		floatOrMetric(m["cpu_utilization_ratio"], metric("cpu_utilization_ratio")), int64OrDefault(m["memory_used_bytes"], int64Value(metric("memory_used_bytes"))), int64OrDefault(m["disk_free_bytes"], int64Value(metric("disk_free_bytes"))),
-		int64Value(m["jobs_completed"]), int64Value(m["jobs_failed"]), asString(m["connected_at"]),
+		int64OrDefault(m["jobs_completed"], int64Value(metric("jobs_completed"))), int64OrDefault(m["jobs_failed"], int64Value(metric("jobs_failed"))), asString(m["connected_at"]),
 		defaultString(m["last_heartbeat_at"], asString(m["last_heartbeat"])), now,
 		jsonString(m["recent_logs"]), jsonString(m["recent_errors"]),
 		jsonString(m["readiness"]), jsonString(m["metrics"]), jsonString(m["capabilities"]),

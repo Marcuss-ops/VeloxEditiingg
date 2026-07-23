@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -568,6 +569,123 @@ func TestRegistryListPopulatesSessionActive_AcrossFleet(t *testing.T) {
 	}
 	if got["w2"].ConnectionStatus != StatusDisconnected {
 		t.Errorf("w2.ConnectionStatus: want DISCONNECTED (no session); got %q", got["w2"].ConnectionStatus)
+	}
+}
+
+// TestInt64FromHeartbeatExtra ensures the heartbeat extra parser accepts the
+// numeric shapes produced by both the gRPC path (int64) and JSON-decoded
+// tests/mock paths (float64, int, int32, string, json.Number).
+func TestInt64FromHeartbeatExtra(t *testing.T) {
+	cases := []struct {
+		name string
+		v    interface{}
+		want int64
+		ok   bool
+	}{
+		{"missing", nil, 0, false},
+		{"int64", int64(42), 42, true},
+		{"int", int(42), 42, true},
+		{"int32", int32(42), 42, true},
+		{"float64", float64(42), 42, true},
+		{"float64-fraction", float64(42.9), 42, true},
+		{"string", "42", 42, true},
+		{"string-invalid", "abc", 0, false},
+		{"json.Number", json.Number("42"), 42, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			extra := map[string]interface{}{}
+			if tc.v != nil {
+				extra["jobs_completed"] = tc.v
+			}
+			got, ok := int64FromHeartbeatExtra(extra, "jobs_completed")
+			if ok != tc.ok || got != tc.want {
+				t.Errorf("int64FromHeartbeatExtra() = (%d, %v), want (%d, %v)", got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+// TestRegistryHeartbeatJobsCompletedInt64PersistsToMetrics verifies that
+// heartbeat extras carrying int64 job counters (the gRPC shape) are copied
+// into info.Metrics and survive a registry reload from SQLite. This is a
+// regression test for the bug where only float64 values were accepted,
+// causing jobs_completed to remain at 0 for real workers.
+func TestRegistryHeartbeatJobsCompletedInt64PersistsToMetrics(t *testing.T) {
+	s, err := store.NewSQLiteStore(t.TempDir() + "/test_jobs_completed.db")
+	if err != nil {
+		t.Fatalf("failed to create test SQLite store: %v", err)
+	}
+	defer s.Close()
+
+	reg := New(s)
+	ctx := context.Background()
+
+	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
+	err = reg.Heartbeat(ctx, "w1", "worker-1", "idle", "", map[string]interface{}{
+		"jobs_completed": int64(7),
+		"jobs_failed":    int64(2),
+	})
+	if err != nil {
+		t.Fatalf("Heartbeat failed: %v", err)
+	}
+
+	info := reg.GetWorker(ctx, "w1")
+	if info == nil {
+		t.Fatal("expected worker to exist")
+	}
+	if got, want := int64FromMap(t, info.Metrics, "jobs_completed"), int64(7); got != want {
+		t.Errorf("info.Metrics jobs_completed = %d, want %d", got, want)
+	}
+	if got, want := int64FromMap(t, info.Metrics, "jobs_failed"), int64(2); got != want {
+		t.Errorf("info.Metrics jobs_failed = %d, want %d", got, want)
+	}
+
+	// Reload from SQLite and assert persistence.
+	reg2 := New(s)
+	info2 := reg2.GetWorker(ctx, "w1")
+	if info2 == nil {
+		t.Fatal("expected worker to exist after reload")
+	}
+	if got, want := int64FromMap(t, info2.Metrics, "jobs_completed"), int64(7); got != want {
+		t.Errorf("reloaded info.Metrics jobs_completed = %d, want %d", got, want)
+	}
+	if got, want := int64FromMap(t, info2.Metrics, "jobs_failed"), int64(2); got != want {
+		t.Errorf("reloaded info.Metrics jobs_failed = %d, want %d", got, want)
+	}
+
+	// Verify the SQLite snapshot columns were updated too (regression for
+	// the store fallback path).
+	var dbCompleted, dbFailed int64
+	dbErr := s.DB().QueryRow(
+		`SELECT jobs_completed, jobs_failed FROM workers WHERE worker_id = ?`,
+		"w1",
+	).Scan(&dbCompleted, &dbFailed)
+	if dbErr != nil {
+		t.Fatalf("failed to read persisted jobs counters: %v", dbErr)
+	}
+	if dbCompleted != 7 || dbFailed != 2 {
+		t.Errorf("persisted jobs_completed=%d jobs_failed=%d, want 7 and 2", dbCompleted, dbFailed)
+	}
+}
+
+func int64FromMap(t *testing.T, m map[string]interface{}, key string) int64 {
+	t.Helper()
+	if m == nil {
+		t.Fatalf("metrics map is nil looking for %s", key)
+	}
+	switch v := m[key].(type) {
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case int32:
+		return int64(v)
+	case float64:
+		return int64(v)
+	default:
+		t.Fatalf("unexpected type for %s: %T", key, m[key])
+		return 0
 	}
 }
 

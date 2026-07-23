@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"velox-server/internal/logging"
@@ -96,17 +97,17 @@ func (r *Registry) HeartbeatWithSession(ctx context.Context, sessionID, workerID
 				info.Metrics[key] = v
 			}
 		}
-		if v, ok := extra["jobs_completed"].(float64); ok {
+		if v, ok := int64FromHeartbeatExtra(extra, "jobs_completed"); ok {
 			if info.Metrics == nil {
 				info.Metrics = make(map[string]interface{})
 			}
-			info.Metrics["jobs_completed"] = int64(v)
+			info.Metrics["jobs_completed"] = v
 		}
-		if v, ok := extra["jobs_failed"].(float64); ok {
+		if v, ok := int64FromHeartbeatExtra(extra, "jobs_failed"); ok {
 			if info.Metrics == nil {
 				info.Metrics = make(map[string]interface{})
 			}
-			info.Metrics["jobs_failed"] = int64(v)
+			info.Metrics["jobs_failed"] = v
 		}
 	}
 
@@ -129,4 +130,34 @@ func (r *Registry) HeartbeatWithSession(ctx context.Context, sessionID, workerID
 		}
 	}
 	return nil
+}
+
+// int64FromHeartbeatExtra extracts an int64 from a heartbeat extra map.
+// The gRPC heartbeat sets these values as int64, but JSON-decoded paths
+// may surface them as float64, int, int32, int64, string or json.Number.
+// Float values are truncated to whole integers (job counters are always whole).
+func int64FromHeartbeatExtra(extra map[string]interface{}, key string) (int64, bool) {
+	v, ok := extra[key]
+	if !ok {
+		return 0, false
+	}
+	switch n := v.(type) {
+	case int64:
+		return n, true
+	case int:
+		return int64(n), true
+	case int32:
+		return int64(n), true
+	case float64:
+		return int64(n), true
+	case float32:
+		return int64(n), true
+	case string:
+		i, err := strconv.ParseInt(n, 10, 64)
+		return i, err == nil
+	case json.Number:
+		i, err := strconv.ParseInt(string(n), 10, 64)
+		return i, err == nil
+	}
+	return 0, false
 }
