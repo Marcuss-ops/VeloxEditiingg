@@ -1,6 +1,5 @@
 4 DataServer/internal/artifacts/chunked.go
 1 DataServer/internal/artifacts/finalization_repository.go
-8 DataServer/internal/artifacts/job_delivery_counter.go
 2 DataServer/internal/artifacts/job_delivery_counter_postgres.go
 11 DataServer/internal/artifacts/reconciler.go
 8 DataServer/internal/artifacts/service_auth.go

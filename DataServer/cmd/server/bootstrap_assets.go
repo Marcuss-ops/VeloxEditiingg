@@ -60,7 +60,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	// the VELOX_FFPROBE_VERIFY_ON_FINALIZE gate (RW-PROD-008 A4).
 	// Production cannot silently run the gate without it; NewService
 	// panics on nil so a bootstrap miss is loud at startup.
-	deliveryCounter := artifacts.NewSQLiteJobDeliveryCounter(p.SQLite.DB())
+	deliveryCounter := store.NewSQLiteJobDeliveryCounter(p.SQLite.DB())
 	artifactSvc := artifacts.NewService(
 		uploadRepo,
 		uploadWriter,

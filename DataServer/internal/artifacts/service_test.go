@@ -111,7 +111,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 	authReader := NewSQLiteAuthReader(db)
 	uploadWriter := NewSQLiteUploadSessionWriter(db)
 	finalizeWriter := NewSQLiteFinalizeWriter(db, artifactReader, nil)
-	jobCounter := NewSQLiteJobDeliveryCounter(db)
+	jobCounter := store.NewSQLiteJobDeliveryCounter(db)
 	svc := NewService(repo, uploadWriter, finalizeWriter, artifactReader, bs, authReader, clk, jobCounter)
 
 	t.Cleanup(func() {
