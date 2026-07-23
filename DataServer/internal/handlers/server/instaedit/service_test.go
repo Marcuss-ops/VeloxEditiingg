@@ -14,12 +14,14 @@ import (
 // --- In-memory port mocks -------------------------------------------------
 
 type memoryJobGateway struct {
-	jobs        []map[string]any
-	getByID     map[string]map[string]any
-	deliveries  []store.JobDelivery
-	destinations map[string]*store.DeliveryDestination
-	cancelled   []string
-	cancelErr   error
+	jobs                     []map[string]any
+	getByID                  map[string]map[string]any
+	deliveries               []store.JobDelivery
+	destinations             map[string]*store.DeliveryDestination
+	cancelled                []string
+	cancelErr                error
+	listJobDeliveriesErr     error
+	getDeliveryDestinationErr error
 }
 
 func (m *memoryJobGateway) ListJobsByWorkspace(ctx context.Context, workspaceID int64, limit int) ([]map[string]any, error) {
@@ -45,17 +47,23 @@ func (m *memoryJobGateway) GetDeliveryDestinationByExternalID(ctx context.Contex
 	return m.destinations[externalID], nil
 }
 
+func (m *memoryJobGateway) ListJobDeliveriesByJob(jobID string) ([]store.JobDelivery, error) {
+	if m.listJobDeliveriesErr != nil {
+		return nil, m.listJobDeliveriesErr
+	}
+	return m.deliveries, nil
+}
+
 func (m *memoryJobGateway) GetDeliveryDestination(ctx context.Context, destID string) (*store.DeliveryDestination, error) {
+	if m.getDeliveryDestinationErr != nil {
+		return nil, m.getDeliveryDestinationErr
+	}
 	for _, d := range m.destinations {
 		if d.DestinationID == destID {
 			return d, nil
 		}
 	}
 	return nil, nil
-}
-
-func (m *memoryJobGateway) ListJobDeliveriesByJob(jobID string) ([]store.JobDelivery, error) {
-	return m.deliveries, nil
 }
 
 type memoryWorkerReader struct {
@@ -291,5 +299,45 @@ func TestService_ListWorkers(t *testing.T) {
 	}
 	if len(resp) != 1 || resp[0].ID != "w-1" {
 		t.Fatalf("unexpected workers: %+v", resp)
+	}
+}
+
+func TestService_GetJob_DeliveryLoadFailure_PropagatesError(t *testing.T) {
+	want := errors.New("db: connection lost")
+	jobs := &memoryJobGateway{
+		getByID:              map[string]map[string]any{"job-1": {"job_id": "job-1", "status": "PENDING", "project_id": "p-1"}},
+		listJobDeliveriesErr: want,
+	}
+	svc := NewService(jobs, nil, nil, nil)
+	_, err := svc.GetJob(context.Background(), 45, "job-1")
+	if !errors.Is(err, want) {
+		t.Fatalf("expected %v, got %v", want, err)
+	}
+}
+
+func TestService_GetJob_DestinationLookupFailure_PropagatesError(t *testing.T) {
+	want := errors.New("db: destination lookup failed")
+	jobs := &memoryJobGateway{
+		getByID: map[string]map[string]any{"job-1": {"job_id": "job-1", "status": "PENDING", "project_id": "p-1"}},
+		deliveries: []store.JobDelivery{{DeliveryID: "d-1", DestinationID: "dest-1"}},
+		getDeliveryDestinationErr: want,
+	}
+	svc := NewService(jobs, nil, nil, nil)
+	_, err := svc.GetJob(context.Background(), 45, "job-1")
+	if !errors.Is(err, want) {
+		t.Fatalf("expected %v, got %v", want, err)
+	}
+}
+
+func TestService_GetJobDeliveries_Failure_PropagatesError(t *testing.T) {
+	want := errors.New("db: connection lost")
+	jobs := &memoryJobGateway{
+		getByID:              map[string]map[string]any{"job-1": {"job_id": "job-1", "status": "PENDING", "project_id": "p-1"}},
+		listJobDeliveriesErr: want,
+	}
+	svc := NewService(jobs, nil, nil, nil)
+	_, err := svc.GetJobDeliveries(context.Background(), 45, "job-1")
+	if !errors.Is(err, want) {
+		t.Fatalf("expected %v, got %v", want, err)
 	}
 }
