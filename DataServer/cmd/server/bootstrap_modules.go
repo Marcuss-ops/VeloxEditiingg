@@ -203,7 +203,17 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	// ── Register modules ────────────────────────────────────────────
 	healthMod := app.NewHealthModule()
 	registry.Register(healthMod)
-	registry.Register(app.NewWorkersModule(cfg, w.Registry, w.Lifecycle, w.UpdateHandler, auth, assetSvc, p.BlobStore))
+	workersModule := app.NewWorkersModule(cfg, w.Registry, w.Lifecycle, w.UpdateHandler, auth, assetSvc, p.BlobStore)
+	if p.SQLite != nil {
+		reader := api.NewSQLDBReader(p.SQLite.DB())
+		if reader != nil {
+			workersModule.SetMetricsHandler(api.NewMetricsHandler(reader.Metrics))
+			workersModule.SetSessionsHandler(api.NewSessionsHandler(reader.Sessions))
+			workersModule.SetEventsHandler(api.NewEventsHandler(reader.Events))
+			log.Printf("[BOOTSTRAP] Worker metrics/sessions/events read endpoints registered")
+		}
+	}
+	registry.Register(workersModule)
 	registry.Register(driveMod)
 
 	ansibleMod := app.NewAnsibleModule(cfg, cfg.Runtime.DataDir, auth, p.SQLite)
