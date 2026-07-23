@@ -16,10 +16,6 @@ import (
 	"velox-server/internal/store"
 )
 
-// defaultDeliveryRetryBudget is the retry budget stamped on each
-// delivery-plan entry when the caller does not override it.
-const defaultDeliveryRetryBudget = 5
-
 // Domain errors. The HTTP adapter maps these to status codes.
 var (
 	ErrNotFound            = errors.New("not found")
@@ -185,7 +181,7 @@ func (s *Service) CreateJob(ctx context.Context, cmd CreateJobCmd) (*jobResponse
 		deliveryPlan = append(deliveryPlan, map[string]any{
 			"destination_id": dest.DestinationID,
 			"priority":       i,
-			"retry_budget":   defaultDeliveryRetryBudget,
+			"retry_budget":   contract.DefaultDeliveryRetryBudget,
 			"metadata":       metadata,
 		})
 	}

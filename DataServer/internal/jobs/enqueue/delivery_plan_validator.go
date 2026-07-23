@@ -7,6 +7,8 @@ import (
 	"log"
 	"strings"
 
+	"velox-shared/contract"
+
 	"velox-server/internal/socialclient"
 )
 
@@ -62,7 +64,7 @@ import (
 //     retry_budget can still recover via FinalizeVerified)
 //   - delivery_plan of wrong root type (string, int, etc.)
 
-const defaultLegacyRetryBudget = 5
+
 
 // DestinationValidator is the minimal contract the enqueue-layer
 // validator needs from the Social API boundary. Production wires
@@ -290,7 +292,7 @@ func extractDeliveryPlanShape(payloadMap map[string]interface{}) ([]deliveryPlan
 		out = append(out, deliveryPlanShape{
 			DestinationID: id,
 			Priority:      i,
-			RetryBudget:   defaultLegacyRetryBudget,
+			RetryBudget:   contract.DefaultDeliveryRetryBudget,
 			Enabled:       true,
 		})
 	}

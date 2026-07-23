@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 
+	"velox-shared/contract"
+
 	"velox-server/internal/store"
 )
 
@@ -201,6 +203,13 @@ func TestService_CreateJob_Success(t *testing.T) {
 	}
 	if enq.last["project_id"] != "proj-1" {
 		t.Fatalf("expected project_id to be preserved, got %v", enq.last["project_id"])
+	}
+	plan, ok := enq.last["delivery_plan"].([]map[string]any)
+	if !ok || len(plan) != 1 {
+		t.Fatalf("expected one delivery plan entry, got %v", enq.last["delivery_plan"])
+	}
+	if plan[0]["retry_budget"] != contract.DefaultDeliveryRetryBudget {
+		t.Fatalf("expected retry_budget %d, got %v", contract.DefaultDeliveryRetryBudget, plan[0]["retry_budget"])
 	}
 }
 

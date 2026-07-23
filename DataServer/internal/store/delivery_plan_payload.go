@@ -29,6 +29,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"velox-shared/contract"
 )
 
 type deliveryPlanEntry struct {
@@ -86,7 +88,7 @@ func parseDeliveryPlanPayload(payload map[string]interface{}) ([]deliveryPlanEnt
 			entries = append(entries, deliveryPlanEntry{
 				DestinationID: id,
 				Priority:      i,
-				RetryBudget:   5,
+				RetryBudget:   contract.DefaultDeliveryRetryBudget,
 				MetadataJSON:  "{}",
 			})
 		}
@@ -120,7 +122,7 @@ func deliveryPlanEntryFromMap(value map[string]interface{}, index int) (delivery
 	if priority < 0 {
 		return deliveryPlanEntry{}, fmt.Errorf("delivery_plan[%d].priority must be >= 0", index)
 	}
-	retryBudget := deliveryPlanIntFromMap(value, "retry_budget", 5)
+	retryBudget := deliveryPlanIntFromMap(value, "retry_budget", contract.DefaultDeliveryRetryBudget)
 	if retryBudget <= 0 {
 		return deliveryPlanEntry{}, fmt.Errorf("delivery_plan[%d].retry_budget must be > 0", index)
 	}
