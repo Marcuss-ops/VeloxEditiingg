@@ -53,7 +53,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	planResolver := deliveries.NewSQLiteDeliveryPlanResolver(p.SQLite.DB(), cfg.Runtime.DeliveryGlobalFallback)
 	uploadRepo := store.NewSQLiteUploadRepository(p.SQLite.DB())
 	artifactReader := store.NewSQLiteArtifactReader(p.SQLite.DB())
-	authReader := artifacts.NewSQLiteAuthReader(p.SQLite.DB())
+	authReader := store.NewSQLiteAuthReader(p.SQLite.DB())
 	uploadWriter := artifacts.NewSQLiteUploadSessionWriter(p.SQLite.DB())
 	finalizeWriter := artifacts.NewSQLiteFinalizeWriter(p.SQLite.DB(), artifactReader, planResolver)
 	// JobDeliveryCounter typed reader — required by NewService post

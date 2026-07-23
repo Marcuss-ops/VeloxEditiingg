@@ -69,7 +69,7 @@ func TestUploadCompletedVideo_ArtifactsPipeline(t *testing.T) {
 		artifacts.NewSQLiteFinalizeWriter(db, artifactReader, nil),
 		artifactReader,
 		bs,
-		artifacts.NewSQLiteAuthReader(db),
+		store.NewSQLiteAuthReader(db),
 		nil,
 		// JobDeliveryCounter typed reader — required by NewService
 		// post the VELOX_FFPROBE_VERIFY_ON_FINALIZE gate
@@ -258,7 +258,7 @@ func TestUploadCompletedVideo_BeginUploadRejected_MissingJob(t *testing.T) {
 		artifacts.NewSQLiteFinalizeWriter(db, artifactReader, nil),
 		artifactReader,
 		bs,
-		artifacts.NewSQLiteAuthReader(db),
+		store.NewSQLiteAuthReader(db),
 		nil,
 		store.NewSQLiteJobDeliveryCounter(db),
 	)
@@ -323,7 +323,7 @@ func TestUploadCompletedVideo_MissingVideo(t *testing.T) {
 		artifacts.NewSQLiteFinalizeWriter(db, artifactReader, nil),
 		artifactReader,
 		bs,
-		artifacts.NewSQLiteAuthReader(db),
+		store.NewSQLiteAuthReader(db),
 		nil,
 		store.NewSQLiteJobDeliveryCounter(db),
 	)

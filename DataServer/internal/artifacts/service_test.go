@@ -108,7 +108,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 	// with concurrent UpdateUploadStatus on artifact_uploads.
 	repo := store.NewSQLiteUploadRepository(db)
 	artifactReader := store.NewSQLiteArtifactReader(db)
-	authReader := NewSQLiteAuthReader(db)
+	authReader := store.NewSQLiteAuthReader(db)
 	uploadWriter := NewSQLiteUploadSessionWriter(db)
 	finalizeWriter := NewSQLiteFinalizeWriter(db, artifactReader, nil)
 	jobCounter := store.NewSQLiteJobDeliveryCounter(db)

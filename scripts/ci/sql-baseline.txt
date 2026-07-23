@@ -1,7 +1,7 @@
 4 DataServer/internal/artifacts/chunked.go
 1 DataServer/internal/artifacts/finalization_repository.go
 11 DataServer/internal/artifacts/reconciler.go
-8 DataServer/internal/artifacts/service_auth.go
+1 DataServer/internal/artifacts/service_auth.go
 5 DataServer/internal/artifacts/service.go
 26 DataServer/internal/artifacts/sqlite_finalize_writer.go
 12 DataServer/internal/artifacts/sqlite_upload_session_writer.go

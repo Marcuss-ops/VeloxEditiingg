@@ -24,7 +24,7 @@ var (
 	ErrJobNotRunning            = errors.New("artifacts: job is not RUNNING")
 	ErrWrongJobOwner            = errors.New("artifacts: wrong job owner (worker mismatch)")
 	ErrLeaseInvalid             = errors.New("artifacts: lease invalid or expired")
-	ErrAttemptMismatch          = errors.New("artifacts: attempt number mismatch")
+	ErrAttemptMismatch          = store.ErrAuthAttemptMismatch
 	ErrRevisionMismatch         = errors.New("artifacts: revision mismatch")
 	ErrAttemptNotRenderFinished = errors.New("artifacts: attempt.status != RENDER_FINISHED")
 	ErrDuplicateReadyArtifact   = errors.New("artifacts: duplicate READY artifact of same kind for job")
