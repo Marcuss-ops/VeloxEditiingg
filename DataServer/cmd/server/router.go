@@ -379,10 +379,10 @@ func registerDarkeditorRoutes(r *gin.Engine, deps DarkeditorRouteDeps) {
 	// served by the same internal-only master, so it is protected by
 	// the same service-token gate as the rest of the HTTP API.
 	//
-	// NOTE: RegisterAPIRoutes mounts its own /dark_editor_v2 prefix,
-	// so the effective path remains /api/darkeditor/dark_editor_v2/*
-	// for backwards compatibility.
-	darkeditor.RegisterAPIRoutes(r.Group("/api/darkeditor", adminAuth), deHandler)
+	// NOTE: RegisterAPIRoutes no longer adds its own /dark_editor_v2
+	// prefix, so we mount the legacy surface at
+	// /api/darkeditor/dark_editor_v2/* for backwards compatibility.
+	darkeditor.RegisterAPIRoutes(r.Group("/api/darkeditor/dark_editor_v2", adminAuth), deHandler)
 }
 
 // registerUploadRoutes mounts upload-completed + chunked-upload routes.
