@@ -138,7 +138,15 @@ func (h *Handlers) forwardPipelineResultToWorker(ctx context.Context, result map
 	// the migration target. The legacy path is expected to trend to
 	// zero as remote-engine workers migrate; sustained traffic after
 	// v2.0.0 will trigger a follow-up that deletes this branch entirely.
-	if err == nil && forwarded != nil {
+	//
+	// TIGHT GUARD: we additionally require forwarded["job_id"] to be a
+	// non-empty string before stamping the counter. This mirrors the
+	// creator_push `workerJobID != ""` guard and prevents the
+	// remote_engine_legacy series from inflating during idempotency
+	// replay storms (the Resolver can return a non-nil response
+	// without a job_id when the forwarding row already exists in the
+	// DB and the CAS is a no-op).
+	if err == nil && forwarded != nil && firstStringResolver(forwarded, "job_id") != "" {
 		h.intakeSinkOrNoop().IncAccepted("remote_engine_legacy")
 		jobID, _ := forwarded["job_id"].(string)
 		pipelineLog(

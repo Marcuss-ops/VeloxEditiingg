@@ -149,3 +149,60 @@ func TestNormalizeRemoteEngineIntakeRejectsMissingSourceJobID(t *testing.T) {
 		t.Fatal("normalizeRemoteEngineIntake() error = nil, want missing source_job_id error")
 	}
 }
+
+// TestNormalizeRemoteEngineIntakeRejectsNonStringSourceJobID pins the
+// drift-proof guarantee that a legacy caller sending job_id as a
+// non-string type (e.g., int 12345) does NOT silently bypass
+// validation. Pre-refactor, the legacy path used a raw
+// firstStringResolver on the raw map and would have produced an empty
+// job_id without error — leaving syncForwardResult to enqueue an
+// identity-less job. Post-refactor, the shared normalizer's typed
+// identity derivation surfaces the missing source_job_id error and
+// syncForwardResult marks the run as FORWARDING for retry. This test
+// is the regression guard against any future refactor that
+// "optimizes" the legacy path to skip ParseRemotePipelineResult.
+func TestNormalizeRemoteEngineIntakeRejectsNonStringSourceJobID(t *testing.T) {
+	_, err := normalizeRemoteEngineIntake(
+		map[string]interface{}{
+			"job_id": 12345, // int, not string — pre-refactor this would have
+			// been silently ignored by the raw firstStringResolver in
+			// forwardPipelineResultToWorker (the old code looked up
+			// job_id via firstStringResolver, which only matches
+			// strings; int values produced "" silently).
+			"status": "completed",
+		},
+		"remote_engine",
+		"",
+		"",
+	)
+	if err == nil {
+		t.Fatal("normalizeRemoteEngineIntake() error = nil, want missing source_job_id error")
+	}
+}
+
+// TestNormalizeRemoteEngineIntateRejectsNestedResultEnvelopeMismatch
+// pins the drift-proof guarantee that a legacy caller sending a raw
+// map with a nested "result" envelope containing the wrong shape (e.g.,
+// a string instead of a map for the nested "result" key) does NOT
+// silently bypass the typed DTO normalization. Pre-refactor, the raw
+// map went straight to the Resolver; post-refactor, flattenResult in
+// dto.go is a no-op for non-map nested "result" values, but the
+// missing source_job_id error still surfaces from the identity
+// derivation chain. The point of this test is: NO input shape reaches
+// resolveCompletedPayload without going through the shared
+// normalizer, so any malformed shape fails fast.
+func TestNormalizeRemoteEngineIntakeRejectsNestedResultEnvelopeMismatch(t *testing.T) {
+	_, err := normalizeRemoteEngineIntake(
+		map[string]interface{}{
+			"result": "not-a-map", // wrong shape — flattenResult will ignore
+			// but no job_id / trace_id / id anywhere
+			"status": "completed",
+		},
+		"remote_engine",
+		"",
+		"",
+	)
+	if err == nil {
+		t.Fatal("normalizeRemoteEngineIntake() error = nil, want missing source_job_id error")
+	}
+}

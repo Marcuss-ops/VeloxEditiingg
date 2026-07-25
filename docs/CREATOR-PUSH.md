@@ -136,6 +136,52 @@ intake paths cannot diverge — drift is mathematically impossible.
 3. Keep `VELOX_ADMIN_TOKEN` as the auth bearer; no secret rotation
    required.
 
+### Sample migration (curl)
+
+The canonical intake endpoint accepts the same `RemotePipelineResult`
+shape the legacy route used internally. A working curl (see also
+`scripts/creator_push_smoke.sh` for the executable variant):
+
+```bash
+curl -X POST https://velox.example.com/api/v1/creator/jobs \
+  -H "Authorization: Bearer $VELOX_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_provider": "creator_pc_1",
+    "source_job_id": "creator-job-20260725-001",
+    "target_executor_id": "scene.composite.v1",
+    "payload": {
+      "status": "completed",
+      "job_id": "creator-job-20260725-001",
+      "video_name": "Example video",
+      "script_text": "The completed script",
+      "voiceover_paths": ["velox-asset://voiceovers/example.mp3"],
+      "scenes": [
+        {
+          "text": "Opening scene",
+          "clip_link": "velox-asset://clips/opening.mp4",
+          "duration_seconds": 7
+        }
+      ],
+      "delivery_plan": [
+        {"destination_id": "drive", "priority": 1, "retry_budget": 3}
+      ]
+    }
+  }'
+```
+
+**Source of truth for the new contract** (regenerate client SDKs from
+here):
+
+- OpenAPI 3.1.0 spec: `DataServer/api/openapi.yaml` — operation
+  `pushCreatorJob`, schemas `CreatorPushRequest` /
+  `CreatorPushPayload` / `CreatorPushAcceptedResponse` /
+  `RemotePipelineResult`, security scheme `bearerAdminToken` on
+  `VELOX_ADMIN_TOKEN`.
+- Validator (CI-enforced): `scripts/api/validate_openapi.py`.
+- Tested behavior (final authority):
+  `DataServer/internal/handlers/server/pipeline/creator_push_e2e_test.go`.
+
 ### Observability
 
 Every legacy call stamps (post-CAS — only after the atomic Resolver

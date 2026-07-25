@@ -150,13 +150,32 @@ in the worker payload. 4 new direct unit tests for
 
 **Files touched** (3-commit chain):
 
-- `DataServer/internal/handlers/server/pipeline/forwarding.go` — shared normalizer call site + `// Deprecated:` annotation + post-CAS telemetry
+- `DataServer/internal/handlers/server/pipeline/forwarding.go` — shared normalizer call site + `// Deprecated:` annotation + post-CAS telemetry (tightened guard in commit `TBD-hardening` to require `forwarded["job_id"] != ""` so idempotency replay no-ops do not inflate the `remote_engine_legacy` counter)
 - `DataServer/internal/handlers/server/pipeline/creator_push.go` — extracts `normalizeRemoteEngineIntake`; thin wrapper preserved for back-compat
-- `DataServer/internal/handlers/server/pipeline/creator_push_test.go` — 4 new direct tests for `normalizeRemoteEngineIntake` (legacy raw-map path)
+- `DataServer/internal/handlers/server/pipeline/creator_push_test.go` — 6 new direct tests for `normalizeRemoteEngineIntake` (legacy raw-map happy path, default target, nil-payload rejection, missing source_job_id rejection, **non-string source_job_id rejection**, **nested result-envelope mismatch rejection**)
 - `DataServer/internal/metrics/creator_intake.go` — label set comment now lists `remote_engine_legacy` (cardinality remains bounded at 3)
 - `DataServer/internal/metrics/catalog_pipeline.go` — `pipeline.creator_intake_accepted_total` description enumerates 3 valid path values + v2.0.0 sunset
-- `docs/CREATOR-PUSH.md` — §Deprecation timeline (migration steps, observability, sunset policy, cross-references)
-- `CHANGELOG.md` — this entry
+- `docs/CREATOR-PUSH.md` — §Deprecation timeline (migration steps, observability, sunset policy, cross-references + sample-migration curl + OpenAPI source-of-truth link)
+- `CHANGELOG.md` — this entry (extended in commit `TBD-hardening` with the behavior-tightening note)
+
+**Behavior tightening (not just preservation).** Beyond the identity
+derivation preservation described above, the legacy `/api/remote/pipeline`
+path now ALSO routes its raw result map through
+`remoteengine.ParseRemotePipelineResult → dto.ToWorkerPayload()`,
+which was previously skipped (the legacy path passed the raw map
+straight to the Resolver). This is a **behavior-tightening**: any
+input shape that the typed DTO rejects (or that yields an empty
+identity chain) now surfaces as a typed error and `syncForwardResult`
+marks the run as `FORWARDING` for retry, instead of silently reaching
+the Resolver with a partially-typed payload. Existing remote-engine
+workers that already passed well-typed maps produce byte-identical
+worker payloads (the typed-DTO overlay preserves all non-DTO fields
+like `delivery_plan` / `output_path` via `flattenResult`); only edge
+cases with non-string `job_id` / nested `result` envelopes of wrong
+shape behave differently. The 2 new failure-path tests in
+`creator_push_test.go` pin the post-refactor contract as a regression
+guard against any future refactor that "optimizes" the legacy path
+to skip `ParseRemotePipelineResult`.
 
 ### Creator-push response: `dispatch_status` overlay
 
