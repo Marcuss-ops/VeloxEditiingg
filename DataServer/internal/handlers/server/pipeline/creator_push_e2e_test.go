@@ -387,16 +387,15 @@ func TestCreatorPushJobsE2E_RealAdminAuthWired(t *testing.T) {
 	h, _, _ := newCreatorPushE2EStack(t)
 	gin.SetMode(gin.TestMode)
 
-	// Pin the env so a leftover VELOX_ADMIN_TOKEN in the developer's shell
-	// or in CI does NOT mask the test token. api.AdminAuthMiddleware honours
+	// Pin the env vars so a leftover value in the developer's shell or in
+	// CI does NOT mask the test token. api.AdminAuthMiddleware honours
 	// cfg.Auth.AdminToken directly, so this is the canonical contract;
-	// setting it to empty guarantees the middleware will still reject
-	// requests with that header value. Also unset the platform fallback
-	// TOKEN_FILE / VELOX_TOKEN_FILE so a path-based token source cannot
-	// leak in and flip the right_bearer_token case from "passes for the
-	// right reason" to "passes for an env-leak reason".
+	// setting both VELOX_ADMIN_TOKEN (env) and TOKEN_FILE (the platform
+	// fallback path env, per pipeline/codegen/voiceover_harness.go::Token
+	// resolution) to empty ensures the middleware will still reject
+	// requests with the corresponding header / will not pick up a stale
+	// file-based token. Order matters: explicit > env > TOKEN_FILE.
 	t.Setenv("VELOX_ADMIN_TOKEN", "")
-	t.Setenv("VELOX_TOKEN_FILE", "")
 	t.Setenv("TOKEN_FILE", "")
 
 	const testToken = "test-secret-token"

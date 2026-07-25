@@ -50,6 +50,28 @@ Refs: `DataServer/internal/handlers/server/pipeline/creator_push.go`,
 `DataServer/internal/handlers/server/pipeline/creator_push_e2e_test.go`,
 `docs/CREATOR-PUSH.md`.
 
+**Verified on `main`** (commit `3165528` + the follow-up trailing
+polish commit applied on top):
+
+- `cd VeloxEditiingg/DataServer && go vet ./internal/handlers/server/pipeline/... ./internal/creatorflow/...`: PASS.
+- `cd VeloxEditiingg/DataServer && go build ./internal/handlers/server/pipeline/... ./internal/creatorflow/...`: PASS.
+- `cd VeloxEditiingg/DataServer && go test -count=1 -v -run 'TestCreatorPushJobsE2E' ./internal/handlers/server/pipeline/...`: PASS for all four subtests:
+  - `TestCreatorPushJobsE2E_VoiceoverStockClipScene` (happy path + idempotency replay, with `created:false` + `dispatch_status` carry-through assertions)
+  - `TestCreatorPushJobsE2E_IncompletePayloadReturns422` (zero-rows on `jobs` + `creator_forwardings` + `tasks`)
+  - `TestCreatorPushJobsE2E_MissingSourceJobIDReturns400` (zero-rows on `creator_forwardings` for the supplied source_provider)
+  - `TestCreatorPushJobsE2E_RealAdminAuthWired` (401 missing, 401 wrong bearer, 202 right bearer) with env-pinned `VELOX_ADMIN_TOKEN` + `TOKEN_FILE` to defend against shell/CI env-leak.
+- `cd VeloxEditiingg/DataServer && go test ./internal/handlers/server/pipeline/... ./internal/creatorflow/... -count=1`: PASS (entire pipeline + creatorflow suites green).
+- `git log --oneline -8` on `main`:
+  ```
+  <polish commit>  fix(pipeline)+test+changelog: address 3 residual polish items
+  e047407         fix(pipeline)+test+pipeline+changelog: guard dispatch_status, pin admin token env, document contract
+  97b64ed         test(pipeline): add real-VELOX_ADMIN_TOKEN E2E suite + dispatch_status replay assert
+  a36fdc9         test(pipeline): fix task_specs JOIN, drop dead SQL/logic, assert created=false on replay
+  efbeabc         test(pipeline): align creator_push E2E assertions with canonical schema
+  bfc82ed         test(pipeline): cover creator-push E2E scenario (voiceover+stock+clip+scene)
+  582a4bc         fix(pipeline): emit dispatch_status=queued_for_workers on creator_push response
+  ```
+
 ## v1.2.21 (2026-07-11)
 
 ### Behavior changes
