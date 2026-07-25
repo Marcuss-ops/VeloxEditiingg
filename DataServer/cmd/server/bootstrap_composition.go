@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
+	"velox-server/internal/handlers/server/darkeditor"
 	instaedithandler "velox-server/internal/handlers/server/instaedit"
 	scripthandlers "velox-server/internal/handlers/server/script"
 	"velox-server/internal/ingest"
@@ -101,6 +103,20 @@ func (c *appComponents) close() error {
 // than free-standing) so the next time a new build* helper adds a
 // per-route dep, the only place to wire it is in this method.
 func (c *appComponents) routerBundle() RouterBundle {
+	// Build a single shared dark editor handler for both the legacy
+	// /api/darkeditor/dark_editor_v2 surface and the InstaEdit-protected
+	// /api/v1/instaedit/editor surface.
+	deCfg := &darkeditor.Config{
+		TempDir:      filepath.Join(c.cfg.Runtime.DataDir, "dark_editor", "temp"),
+		ProjectsDir:  filepath.Join(c.cfg.Runtime.DataDir, "dark_editor", "projects"),
+		LogDir:       filepath.Join(c.cfg.Runtime.DataDir, "dark_editor", "logs"),
+		NVIDIAAPIKey: c.cfg.NVIDIA.APIKey,
+	}
+	deHandler := darkeditor.NewHandler(deCfg)
+	if c.persistence.SQLite != nil {
+		deHandler.SetDBStore(c.persistence.SQLite)
+	}
+
 	return RouterBundle{
 		Script: ScriptRouteDeps{
 			Cfg:         c.cfg,
@@ -121,7 +137,7 @@ func (c *appComponents) routerBundle() RouterBundle {
 			TaskReader: c.tasks.TaskRepository,
 			Resolver:   c.resolver,
 		},
-		Darkeditor: DarkeditorRouteDeps{Cfg: c.cfg, SQLiteStore: c.persistence.SQLite},
+		Darkeditor: DarkeditorRouteDeps{Cfg: c.cfg, SQLiteStore: c.persistence.SQLite, Handler: deHandler},
 		Upload: UploadRouteDeps{
 			Cfg:            c.cfg,
 			ArtifactSvc:    c.assets.ArtifactSvc,
@@ -129,10 +145,11 @@ func (c *appComponents) routerBundle() RouterBundle {
 			BlobStore:      c.assets.BlobStore,
 			ChunkedHandler: workerhandlersuploads.NewChunkedUploadHandler(c.assets.ChunkedUploadSvc),
 		},
-		Metrics:   MetricsRouteDeps{Registry: c.metricsRegistry},
+		Metrics: MetricsRouteDeps{Registry: c.metricsRegistry},
 		InstaEdit: InstaEditRouteDeps{
-			Verifier: c.instaeditVerifier,
-			Service:  instaedithandler.NewServiceFromSQLite(c.persistence.SQLite, c.jobs.Repository, store.NewSQLiteAssetRepository(c.persistence.SQLite), c.modules.Enqueuer),
+			Verifier:    c.instaeditVerifier,
+			Service:     instaedithandler.NewServiceFromSQLite(c.persistence.SQLite, c.jobs.Repository, store.NewSQLiteAssetRepository(c.persistence.SQLite), c.modules.Enqueuer),
+			DarkHandler: deHandler,
 		},
 	}
 }
