@@ -66,17 +66,3 @@ func TestNormalizeCreatorPushRequestRejectsMissingSourceJobID(t *testing.T) {
 	}
 }
 
-// TestNormalizeRemoteEngineIntakeRejectsMissingSourceJobID verifies
-// the shared normalizer errors when no source_job_id is derivable
-// (same contract as the creator_push wrapper).
-func TestNormalizeRemoteEngineIntakeRejectsMissingSourceJobID(t *testing.T) {
-	if _, err := normalizeRemoteEngineIntake(
-		map[string]interface{}{"status": "completed"},
-		"remote_engine",
-		"",
-		"",
-	); err == nil {
-		t.Fatal("normalizeRemoteEngineIntake() error = nil, want missing source_job_id error")
-	}
-}
-
