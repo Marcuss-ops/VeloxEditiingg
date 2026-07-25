@@ -206,7 +206,11 @@ func TestCreatorPushJobsE2E_VoiceoverStockClipScene(t *testing.T) {
 	if taskCount != 1 {
 		t.Fatalf("exactly 1 tasks row expected, got %d", taskCount)
 	}
-	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM task_specs WHERE job_id = ?`, expectedJobID).Scan(&specCount); err != nil {
+	// task_specs is keyed by task_id (no job_id column); JOIN via tasks.
+	if err := db.DB().QueryRow(
+		`SELECT COUNT(*) FROM task_specs WHERE task_id IN (SELECT task_id FROM tasks WHERE job_id = ?)`,
+		expectedJobID,
+	).Scan(&specCount); err != nil {
 		t.Fatalf("count task_specs: %v", err)
 	}
 	if specCount != 1 {
@@ -231,6 +235,11 @@ func TestCreatorPushJobsE2E_VoiceoverStockClipScene(t *testing.T) {
 	// accepted_from is preserved across replays too.
 	if resp2["accepted_from"] != "creator_push" {
 		t.Fatalf("idempotent accepted_from: want creator_push, got %v", resp2["accepted_from"])
+	}
+	// created=false is the canonical signal from buildIdempotentResolveResponse
+	// that the second POST hit the Resolver fast-path, not a fresh insert.
+	if v, ok := resp2["created"]; !ok || v != false {
+		t.Fatalf("idempotent created: want false (fast-path), got %v (present=%v)", v, ok)
 	}
 
 	var fwdCount, jobCount int
@@ -300,6 +309,7 @@ func TestCreatorPushJobsE2E_IncompletePayloadReturns422(t *testing.T) {
 	if fwdCount != 0 {
 		t.Fatalf("422 path must NOT create a forwarding row, got %d", fwdCount)
 	}
+	// task_specs follows task_id; 0 tasks ⇒ 0 task_specs transitively.
 	var taskCount422 int
 	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM tasks WHERE job_id = ?`, expectedJobID).Scan(&taskCount422); err != nil {
 		t.Fatalf("count tasks on 422 path: %v", err)
@@ -336,10 +346,13 @@ func TestCreatorPushJobsE2E_MissingSourceJobIDReturns400(t *testing.T) {
 		t.Fatalf("want 400, got %d body=%s", w.Code, w.Body.String())
 	}
 
-	// 400 path must reject BEFORE the Resolver — no forwarding row.
+	// 400 path must reject BEFORE the Resolver — no forwarding row for the
+	// supplied source_provider (handler rejected in normalizeCreatorPushRequest
+	// before the default "creator" stamp was even applied, so we only need
+	// to probe the supplied provider key).
 	var fwdCount int
 	if err := db.DB().QueryRow(
-		`SELECT COUNT(*) FROM creator_forwardings WHERE source_provider = ? OR source_provider = 'creator'`,
+		`SELECT COUNT(*) FROM creator_forwardings WHERE source_provider = ?`,
 		"creator_pc_nosrc",
 	).Scan(&fwdCount); err != nil {
 		t.Fatalf("count forwardings on 400 path: %v", err)
@@ -347,5 +360,4 @@ func TestCreatorPushJobsE2E_MissingSourceJobIDReturns400(t *testing.T) {
 	if fwdCount != 0 {
 		t.Fatalf("400 path must NOT reach the Resolver (no forwarding row), got %d", fwdCount)
 	}
-	_ = db // referenced to silence unused warning if test scope changes
 }
