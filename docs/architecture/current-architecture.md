@@ -348,6 +348,8 @@ flowchart TD
 
 **Invariante "un solo writer" (riferimento: `runtime-invariants.md §4.2`).** Il push handler `creator_push` non apre transazioni proprie su SQLite e non duplica lo schema di `creator_forwardings`, `jobs` o `tasks`. L'unica transazione che materializza lo stato business è quella aperta da `AtomicForwardAndEnqueue`, lo stesso UoW già utilizzato dal `CreatorForwardingRunner`. I due intake sono quindi due **vie di accesso** alla medesima macchina canonica, non due writer paralleli.
 
+**Callout — il Resolver è l'unico writer.** Il `creatorflow.Resolver` è il solo componente che apre transazioni di mutazione su `creator_forwardings`/`jobs`/`tasks` (via `AtomicForwardAndEnqueue`). Sia il `CreatorForwardingRunner` (intake asincrono) sia il push handler `creator_push` (intake sincrono) convergono su questa unica macchina canonica: nessuno dei due è un writer indipendente, sono due vie di accesso alla stessa transazione.
+
 L'identità canonica `(source_provider, source_job_id, target_executor_id)` (vedi `docs/CREATOR-PUSH.md`) produce un `job_id` deterministico: replay, retry post-crash, poller concorrenti e webhook duplicati convergono sullo stesso forwarding e sullo stesso job Velox indipendentemente dal percorso di intake che li ha generati.
 
 ### Runner

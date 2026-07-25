@@ -95,6 +95,13 @@ preserving the single-writer invariant (`runtime-invariants.md §4.2`).
 Refs: `docs/architecture/current-architecture.md`, `docs/CREATOR-PUSH.md`,
 `docs/architecture/runtime-invariants.md` (§4.2).
 
+**Verified on `main`** (commit `4868256`):
+
+- `git log --oneline -1`: `4868256 docs(architecture+creator-push+changelog): document creator_push intake + single-writer invariant`.
+- `wc -l docs/architecture/current-architecture.md`: 478 lines (was ~185 before this update; +293 lines for the intake enumeration, two new mermaid blocks, invariant paragraphs, and cross-references).
+- `head -5 docs/CREATOR-PUSH.md`: shows the new back-link blockquote to `current-architecture.md §12`.
+- Cross-reference targets exist: `ls docs/CREATOR-PUSH.md docs/architecture/runtime-invariants.md` → both present.
+
 ## v1.2.21 (2026-07-11)
 
 ### Behavior changes
