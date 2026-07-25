@@ -13,13 +13,13 @@ import (
 	"velox-server/internal/artifacts"
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
-	"velox-server/internal/instaeditauth"
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/darkeditor"
 	instaedithandler "velox-server/internal/handlers/server/instaedit"
 	"velox-server/internal/handlers/server/pipeline"
 	scripthandlers "velox-server/internal/handlers/server/script"
+	"velox-server/internal/instaeditauth"
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	velmetrics "velox-server/internal/metrics"
@@ -78,6 +78,9 @@ type PipelineRouteDeps struct {
 type DarkeditorRouteDeps struct {
 	Cfg         *config.Config
 	SQLiteStore *store.SQLiteStore
+	// Handler is the shared dark editor handler instance. When nil,
+	// registerDarkeditorRoutes builds one locally.
+	Handler *darkeditor.Handler
 }
 
 // UploadRouteDeps carries the deps for upload POST routes
@@ -100,8 +103,9 @@ type MetricsRouteDeps struct {
 // group. The verifier is created from INSTAEDIT_CONTROL_JWT_SECRET at
 // boot; when it is nil the whole group is skipped (dev/test mode).
 type InstaEditRouteDeps struct {
-	Verifier *instaeditauth.Verifier
-	Service  *instaedithandler.Service
+	Verifier    *instaeditauth.Verifier
+	Service     *instaedithandler.Service
+	DarkHandler *darkeditor.Handler
 }
 
 // ── RouterBundle ───────────────────────────────────────────────────────────
@@ -284,9 +288,13 @@ func registerInstaEditRoutes(r *gin.Engine, deps InstaEditRouteDeps) error {
 	if deps.Service == nil {
 		return fmt.Errorf("InstaEdit BFF routes enabled but service is nil")
 	}
+	if deps.DarkHandler == nil {
+		return fmt.Errorf("InstaEdit BFF routes enabled but dark editor handler is nil")
+	}
 	instaedithandler.NewHandler(instaedithandler.HandlerDeps{
-		Verifier: deps.Verifier,
-		Service:  deps.Service,
+		Verifier:    deps.Verifier,
+		Service:     deps.Service,
+		DarkHandler: deps.DarkHandler,
 	}).RegisterRoutes(r)
 	return nil
 }
@@ -340,28 +348,40 @@ func registerPipelineRoutes(r *gin.Engine, auth gin.HandlerFunc, deps PipelineRo
 		pipeline.NewRemoteClientFromConfig(deps.Cfg),
 		deps.Resolver,
 		deps.JobsRepo, deps.JobsRepo, deps.CmdMgr,
-	).WithStore(deps.SQLiteStore).WithTaskReader(deps.TaskReader).RegisterRoutes(r, auth)
+	).WithStore(deps.SQLiteStore).WithTaskReader(deps.TaskReader).WithIntakeSink(velmetrics.NewCreatorIntakeSink()).RegisterRoutes(r, auth)
 }
 
-// registerDarkeditorRoutes mounts the /api/darkeditor routes.
+// registerDarkeditorRoutes mounts the legacy /api/darkeditor/dark_editor_v2
+// routes and reuses the shared handler if one was supplied by the
+// composition root. The InstaEdit-protected editor surface is mounted
+// separately under /api/v1/instaedit/editor by registerInstaEditRoutes.
 func registerDarkeditorRoutes(r *gin.Engine, deps DarkeditorRouteDeps) {
 	if deps.Cfg == nil {
 		return
 	}
 	adminAuth := api.AdminAuthMiddleware(deps.Cfg)
-	deCfg := &darkeditor.Config{
-		TempDir:      filepath.Join(deps.Cfg.Runtime.DataDir, "dark_editor", "temp"),
-		ProjectsDir:  filepath.Join(deps.Cfg.Runtime.DataDir, "dark_editor", "projects"),
-		LogDir:       filepath.Join(deps.Cfg.Runtime.DataDir, "dark_editor", "logs"),
-		NVIDIAAPIKey: deps.Cfg.NVIDIA.APIKey,
-	}
-	deHandler := darkeditor.NewHandler(deCfg)
-	if deps.SQLiteStore != nil {
-		deHandler.SetDBStore(deps.SQLiteStore)
+	var deHandler *darkeditor.Handler
+	if deps.Handler != nil {
+		deHandler = deps.Handler
+	} else {
+		deCfg := &darkeditor.Config{
+			TempDir:      filepath.Join(deps.Cfg.Runtime.DataDir, "dark_editor", "temp"),
+			ProjectsDir:  filepath.Join(deps.Cfg.Runtime.DataDir, "dark_editor", "projects"),
+			LogDir:       filepath.Join(deps.Cfg.Runtime.DataDir, "dark_editor", "logs"),
+			NVIDIAAPIKey: deps.Cfg.NVIDIA.APIKey,
+		}
+		deHandler = darkeditor.NewHandler(deCfg)
+		if deps.SQLiteStore != nil {
+			deHandler.SetDBStore(deps.SQLiteStore)
+		}
 	}
 	// Wrap darkeditor routes with admin auth. The dark editor SPA is
 	// served by the same internal-only master, so it is protected by
 	// the same service-token gate as the rest of the HTTP API.
+	//
+	// NOTE: RegisterAPIRoutes mounts its own /dark_editor_v2 prefix,
+	// so the effective path remains /api/darkeditor/dark_editor_v2/*
+	// for backwards compatibility.
 	darkeditor.RegisterAPIRoutes(r.Group("/api/darkeditor", adminAuth), deHandler)
 }
 

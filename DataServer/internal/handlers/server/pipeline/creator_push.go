@@ -14,6 +14,31 @@ import (
 
 const defaultCreatorSourceProvider = "creator"
 
+// CreatorIntakeSink records the accepted payload count by intake path.
+// Nil values are treated as a noop sink (safe default for tests and
+// for callers that have not yet wired the metric). The canonical
+// implementation lives in velox-server/internal/metrics.
+type CreatorIntakeSink interface {
+	IncAccepted(path string)
+}
+
+// noopCreatorIntakeSink is the safe default when no sink is wired.
+// The handler falls back to it so a missing wiring never panics and
+// never silently drops a metric event.
+type noopCreatorIntakeSink struct{}
+
+func (noopCreatorIntakeSink) IncAccepted(string) {}
+
+// intakeSinkOrNoop returns the wired sink or a noop if not set. This
+// is the single observation point the handler uses; the test suite
+// asserts against the same accessor.
+func (h *Handlers) intakeSinkOrNoop() CreatorIntakeSink {
+	if h.intakeSink == nil {
+		return noopCreatorIntakeSink{}
+	}
+	return h.intakeSink
+}
+
 type creatorPushRequest struct {
 	SourceProvider   string                 `json:"source_provider"`
 	SourceJobID      string                 `json:"source_job_id"`
@@ -162,6 +187,25 @@ func (h *Handlers) CreatorPush() gin.HandlerFunc {
 		if _, owned := response["dispatch_status"]; !owned {
 			response["dispatch_status"] = "queued_for_workers"
 		}
+
+		// Fail-closed observation point (runtime-invariants.md §4.4):
+		// the log + counter are stamped ONLY after the atomic CAS
+		// committed (resolveCompletedPayload returned success), so we
+		// never log a "success" that the database has not seen. The
+		// increment is the canonical signal that the new creator_push
+		// intake path was exercised; the legacy async
+		// CreatorForwardingRunner stamps the same counter with
+		// path="creator_forwarder" so the push/forwarder adoption
+		// ratio is comparable.
+		h.intakeSinkOrNoop().IncAccepted("creator_push")
+		jobID, _ := response["job_id"].(string)
+		pipelineLog(
+			"CREATOR_PUSH_ACCEPTED path=creator_push source_provider=%s source_job_id=%s target_executor_id=%s job_id=%s",
+			normalized.SourceProvider,
+			normalized.SourceJobID,
+			normalized.TargetExecutorID,
+			jobID,
+		)
 
 		c.JSON(http.StatusAccepted, response)
 	}

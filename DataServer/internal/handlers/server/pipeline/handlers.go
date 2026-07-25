@@ -27,7 +27,8 @@ type Handlers struct {
 	client   *remoteengine.Client
 	resolver *creatorflow.Resolver
 	jobs     JobsDeps
-	store    *store.SQLiteStore
+	store      *store.SQLiteStore
+	intakeSink CreatorIntakeSink
 }
 
 // JobsDeps bundles the optional jobs-layer dependencies used by
@@ -136,6 +137,16 @@ func (h *Handlers) WithTaskReader(reader taskgraph.Reader) *Handlers {
 // WithStore enables the durable aggregate status projection.
 func (h *Handlers) WithStore(db *store.SQLiteStore) *Handlers {
 	h.store = db
+	return h
+}
+
+// WithIntakeSink wires a CreatorIntakeSink into the Handlers so the
+// creator_push handler can record accepted payloads by intake path.
+// Passing nil is a noop (the handler falls back to
+// noopCreatorIntakeSink). The composition root calls this once at
+// boot with velmetrics.NewCreatorIntakeSink(); tests pass a mock.
+func (h *Handlers) WithIntakeSink(sink CreatorIntakeSink) *Handlers {
+	h.intakeSink = sink
 	return h
 }
 

@@ -44,6 +44,14 @@ func pipelineMetricDefinitions() []MetricDefinition {
 			Name: "pipeline.audio_tracks", Unit: "tracks", Component: CompPipeline, Kind: KindCounter,
 			Description: "Number of audio tracks processed in the pipeline",
 		},
+		// ── Creator intake adoption (Blocco 5 step #4) ────────────────────
+		// Bounded label set: only "path" (values "creator_push" and
+		// "creator_forwarder"). High-cardinality labels (source_provider,
+		// source_job_id) belong in structured logs, not in metrics.
+		{
+			Name: "pipeline.creator_intake_accepted_total", Unit: "count", Component: CompPipeline, Kind: KindCounter,
+			Description: "Total number of creator payloads accepted by the master, split by intake path (push vs forwarder). Label cardinality is bounded — only 'creator_push' and 'creator_forwarder' are valid values.",
+		},
 		// ── Native process (C++ engine subprocess) ───────────────────────
 		{
 			Name: "native.total_ms", Unit: "ms", Component: CompNative, Kind: KindHistogram,
