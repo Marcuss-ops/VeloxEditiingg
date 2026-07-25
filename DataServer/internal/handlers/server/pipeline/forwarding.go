@@ -90,16 +90,40 @@ func (h *Handlers) resolveCompletedPayload(
 }
 
 // forwardPipelineResultToWorker turns a remote-engine result map into a Velox
-// job payload and enqueues it through the canonical provider-agnostic adapter.
+// job payload and enqueues it through the canonical provider-agnostic
+// adapter.
+//
+// Deprecated: POST /api/v1/creator/jobs (the new creator_push path) is the
+// canonical intake surface. /api/remote/pipeline remains functional for
+// backward compatibility with existing remote-engine workers and will be
+// removed in v2.0.0. The two paths converge on the SAME typed DTO
+// normalization (normalizeRemoteEngineIntake) so behavior drift between
+// them is mathematically impossible — see docs/CREATOR-PUSH.md §Deprecation
+// timeline for the migration plan.
 func (h *Handlers) forwardPipelineResultToWorker(ctx context.Context, result map[string]interface{}) (map[string]interface{}, error) {
 	pipelineLog("FORWARD: building worker payload...")
 
+	// DRIFT-PROOF: route the legacy remote-engine raw map through the same
+	// shared normalizer used by /api/v1/creator/jobs so both intake paths
+	// converge on identical typed-DTO normalization + identity derivation.
+	// envelopeSourceProvider is hardcoded to "remote_engine" because the
+	// legacy route never carries an envelope (the SourceProvider identity
+	// is the URL itself). envelopeSourceJobID and envelopeTargetExecutorID
+	// are empty so the normalizer falls back to firstStringResolver on
+	// the typed worker payload (preserves the pre-refactor behavior for
+	// existing callers that already passed job_id / executor_id as
+	// top-level keys in the raw result map).
+	normalized, err := normalizeRemoteEngineIntake(result, "remote_engine", "", "")
+	if err != nil {
+		return nil, err
+	}
+
 	forwarded, err := h.resolveCompletedPayload(
 		ctx,
-		"remote_engine",
-		firstStringResolver(result, "job_id", "trace_id", "id"),
-		firstStringResolver(result, "executor_id", "pipeline_id"),
-		result,
+		normalized.SourceProvider,
+		normalized.SourceJobID,
+		normalized.TargetExecutorID,
+		normalized.WorkerPayload,
 	)
 	if err == creatorflow.ErrResolverNotComplete {
 		return nil, nil

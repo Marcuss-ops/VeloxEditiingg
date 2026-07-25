@@ -53,26 +53,49 @@ type normalizedCreatorPush struct {
 	WorkerPayload    map[string]interface{}
 }
 
-// normalizeCreatorPushRequest converts the external creator envelope through
-// the same typed remote-engine DTO used by the master-initiated flow. The raw
-// creator map is never forwarded directly to the worker.
-func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush, error) {
-	if req.Payload == nil {
+// normalizeRemoteEngineIntake is the SINGLE shared adapter for both
+// intake paths that converge on creatorflow.Resolver.Resolve:
+//
+//   - POST /api/v1/creator/jobs (new creator_push) wraps its payload in
+//     a creatorPushRequest envelope and routes it here.
+//   - POST /api/remote/pipeline (legacy remote-engine sync-forward)
+//     passes its raw result map directly here.
+//
+// Both call sites MUST go through this function so the typed DTO
+// normalization (ParseRemotePipelineResult → ToWorkerPayload) and the
+// identity derivation (source_provider / source_job_id /
+// target_executor_id) stay byte-identical — drift between the two
+// intake paths becomes mathematically impossible.
+//
+// envelopeSourceProvider defaults to defaultCreatorSourceProvider when
+// empty. envelopeSourceJobID and envelopeTargetExecutorID fall back to
+// the typed DTO's RemoteJobID and the worker payload's
+// (job_id|trace_id|id) and (executor_id|pipeline_id) keys respectively.
+// The hardcoded default target_executor_id "scene.composite.v1" only
+// applies when both the envelope and the worker payload are silent —
+// callers SHOULD pass an explicit target to avoid silent fallback.
+func normalizeRemoteEngineIntake(
+	rawResult map[string]interface{},
+	envelopeSourceProvider string,
+	envelopeSourceJobID string,
+	envelopeTargetExecutorID string,
+) (*normalizedCreatorPush, error) {
+	if rawResult == nil {
 		return nil, fmt.Errorf("payload is required")
 	}
 
-	dto, err := remoteengine.ParseRemotePipelineResult(req.Payload)
+	dto, err := remoteengine.ParseRemotePipelineResult(rawResult)
 	if err != nil {
-		return nil, fmt.Errorf("parse creator payload: %w", err)
+		return nil, fmt.Errorf("parse remote-engine payload: %w", err)
 	}
 	workerPayload := dto.ToWorkerPayload()
 
-	sourceProvider := strings.TrimSpace(req.SourceProvider)
+	sourceProvider := strings.TrimSpace(envelopeSourceProvider)
 	if sourceProvider == "" {
 		sourceProvider = defaultCreatorSourceProvider
 	}
 
-	sourceJobID := strings.TrimSpace(req.SourceJobID)
+	sourceJobID := strings.TrimSpace(envelopeSourceJobID)
 	if sourceJobID == "" {
 		sourceJobID = strings.TrimSpace(dto.RemoteJobID)
 	}
@@ -83,7 +106,7 @@ func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush
 		return nil, fmt.Errorf("source_job_id is required (set it in the envelope or payload.job_id)")
 	}
 
-	targetExecutorID := strings.TrimSpace(req.TargetExecutorID)
+	targetExecutorID := strings.TrimSpace(envelopeTargetExecutorID)
 	if targetExecutorID == "" {
 		targetExecutorID = firstStringResolver(workerPayload, "executor_id", "pipeline_id")
 	}
@@ -97,6 +120,20 @@ func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush
 		TargetExecutorID: targetExecutorID,
 		WorkerPayload:    workerPayload,
 	}, nil
+}
+
+// normalizeCreatorPushRequest is the thin wrapper used by POST
+// /api/v1/creator/jobs. It projects the creatorPushRequest envelope
+// onto the shared normalizeRemoteEngineIntake helper so the creator
+// push path and the legacy remote-engine path share a single
+// normalization step.
+func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush, error) {
+	return normalizeRemoteEngineIntake(
+		req.Payload,
+		req.SourceProvider,
+		req.SourceJobID,
+		req.TargetExecutorID,
+	)
 }
 
 // CreatorPush handles POST /api/v1/creator/jobs.
