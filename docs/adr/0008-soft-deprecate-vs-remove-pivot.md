@@ -244,9 +244,16 @@ evidence that the verification gate was not strong enough.
     `(a)/(b)/(c)/(d)` structure
 
 - **CI gates**:
-  - `scripts/ci/run-split-regression.sh` — existing single-writer audit
-    gate (cluster-scoped; pattern example for the future
-    full-module-go-test gate).
+  - `scripts/ci/pre-removal-verify.sh` — full-module verification gate
+    (this ADR\'s §(b) point 2 enforced as an executable wrapper;
+    runs `go vet ./...` + `go build ./...` + `go test ./...` from
+    `DataServer/` before any removal commit is pushed).
+  - `scripts/ci/run-split-regression.sh` — existing single-writer
+    audit gate (cluster-scoped; pattern example for the
+    pre-removal-verify.sh design).
+  - `AGENTS.md` — operational note for AI/code agents, codifying
+    the removal-commit verification gate + the C1/C2 soft-deprecate
+    decision matrix.
   - `DataServer/internal/handlers/server/pipeline/creator_push_test.go` —
     post-removal test set, exercising only the canonical path.
 
