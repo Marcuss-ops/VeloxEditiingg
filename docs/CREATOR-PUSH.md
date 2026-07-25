@@ -104,37 +104,14 @@ The master returns `202 Accepted` after the payload has been converted and queue
 
 A syntactically valid but incomplete creator payload returns `422 Unprocessable Entity` and is not written as a Job.
 
-## Deprecation timeline: `/api/remote/pipeline` → `/api/v1/creator/jobs`
+## Removal: `/api/remote/pipeline` fully retired
 
-`POST /api/remote/pipeline` (the legacy remote-engine sync-forward
-endpoint) is **deprecated** as of `main` HEAD `788a119`. The canonical
+The legacy sync-forward endpoint `/api/remote/pipeline` (and the
+internal `forwardPipelineResultToWorker` / `syncForwardResult`
+machinery it backs) has been **removed** from `main`. The canonical
 creator-push intake is `POST /api/v1/creator/jobs` (this document).
-Both paths continue to work; new integrators MUST use the canonical
-path.
-
-### Behavior parity (drift-proof)
-
-Both paths share a single typed-DTO normalization step:
-`normalizeRemoteEngineIntake` in
-`DataServer/internal/handlers/server/pipeline/forwarding.go`. Any
-change to the typed DTO conversion (`remoteengine.ParseRemotePipelineResult`
-→ `dto.ToWorkerPayload`) or identity derivation
-(`source_provider` / `source_job_id` / `target_executor_id` with the
-documented fallback chain) runs through this one helper. The two
-intake paths cannot diverge — drift is mathematically impossible.
-
-### Migration steps
-
-1. Update your remote-engine worker (or caller) to POST against
-   `/api/v1/creator/jobs` instead of `/api/remote/pipeline`.
-2. Use the canonical `creatorPushRequest` envelope (see **Request**
-   above). The `source_provider` field replaces the implicit
-   `"remote_engine"` identity the legacy route hardcoded — this lets
-   you multiplex multiple creator machines through one master without
-   collisions on the resolver identity key
-   (`source_provider + source_job_id + target_executor_id`).
-3. Keep `VELOX_ADMIN_TOKEN` as the auth bearer; no secret rotation
-   required.
+External clients that were still POSTing to `/api/remote/pipeline`
+now receive `404 Not Found` and MUST migrate.
 
 ### Sample migration (curl)
 
@@ -173,16 +150,16 @@ curl -X POST https://velox.example.com/api/v1/creator/jobs \
 > **Operator warning.** `source_job_id` MUST be unique per invocation
 > (it is the idempotency key: `source_provider + source_job_id +
 > target_executor_id` resolves to a single forwarding row + Job + Task).
-> The example above uses a hard-coded
-> `creator-job-20260725-001` for readability only — running the curl
-> verbatim against a production master will create a real job. The
-> canonical smoke-test payload in `scripts/creator_push_smoke.sh`
-> derives `source_job_id` from the operator's hostname + a UUID
-> suffix to avoid collisions; operators adapting this example should
-> follow the same pattern (or use a UUID-only suffix).
+> The example above uses a hard-coded `creator-job-20260725-001` for
+> readability only — running the curl verbatim against a production
+> master will create a real job. The canonical smoke-test payload in
+> `scripts/creator_push_smoke.sh` derives `source_job_id` from the
+> operator's hostname + a UUID suffix to avoid collisions; operators
+> adapting this example should follow the same pattern (or use a
+> UUID-only suffix).
 
-**Source of truth for the new contract** (regenerate client SDKs from
-here):
+**Source of truth for the canonical contract** (regenerate client
+SDKs from here):
 
 - OpenAPI 3.1.0 spec: `DataServer/api/openapi.yaml` — operation
   `pushCreatorJob`, schemas `CreatorPushRequest` /
@@ -192,44 +169,3 @@ here):
 - Validator (CI-enforced): `scripts/api/validate_openapi.py`.
 - Tested behavior (final authority):
   `DataServer/internal/handlers/server/pipeline/creator_push_e2e_test.go`.
-
-### Observability
-
-Every legacy call stamps (post-CAS — only after the atomic Resolver
-commit, mirroring the creator_push observation point):
-
-- Counter
-  `pipeline.creator_intake_accepted_total{path="remote_engine_legacy"}`
-- Structured log line
-  `DEPRECATED_REMOTE_ENGINE_INTAKE path=remote_engine_legacy
-   source_provider=... source_job_id=... target_executor_id=...
-   job_id=... — use POST /api/v1/creator/jobs`
-
-Operators monitoring the migration should expect the
-`remote_engine_legacy` series to trend to **zero** within one release
-cycle after all remote-engine workers update. Sustained non-zero
-traffic at the v2.0.0 release boundary will block the deletion of
-`forwardPipelineResultToWorker` and trigger a follow-up migration
-push.
-
-### Sunset
-
-`forwardPipelineResultToWorker` (and the `/api/remote/pipeline` HTTP
-route it backs) are scheduled for removal in **v2.0.0**. The removal
-commit will NOT land on `main` until the
-`pipeline.creator_intake_accepted_total{path="remote_engine_legacy"}`
-counter has been observed at **zero** for at least one full release
-cycle (i.e. one calendar quarter of production traffic at the
-previous release). This data-driven sunset guard prevents a silent
-regression in any operator fleet still running the legacy endpoint.
-
-### Cross-references
-
-- Architectural invariant (single Resolver writer):
-  `docs/architecture/current-architecture.md §12 Due percorsi di intake, un solo writer`
-- Telemetry catalog:
-  `DataServer/internal/metrics/catalog_pipeline.go` (entry
-  `pipeline.creator_intake_accepted_total`, label set `{path}` with
-  valid values `creator_push` / `creator_forwarder` / `remote_engine_legacy`)
-- Drift-proof normalizer (the single source of truth for both paths):
-  `DataServer/internal/handlers/server/pipeline/creator_push.go::normalizeRemoteEngineIntake`
