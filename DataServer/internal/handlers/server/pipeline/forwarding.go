@@ -8,14 +8,17 @@
 //     reaches forwardPipelineResultToWorker synchronously when the
 //     remote engine has returned a complete result.
 //
+//   - h.CreatorPush (POST /api/v1/creator/jobs, in creator_push.go)
+//     accepts a completed payload produced independently by a creator
+//     machine and routes it through the same Resolver.
+//
 //   - The async forward-and-poll path runs through
 //     CreatorForwardingRunner in cmd/creatorrunner and ultimately
 //     reaches the same Resolver.Resolve API.
 //
-// Both paths converge on the same Resolver contract; this file owns
+// Every path converges on the same Resolver contract; this file owns
 // the Resolver entry call + a tiny map-key probe (firstStringResolver)
-// used to recover the canonical source_job_id and target_executor_id
-// from the worker payload before resolving.
+// used to recover canonical source and executor identities.
 //
 // pipelineLog (the package-internal logger) lives in logging.go inside
 // the same Go package, so forwarding.go can call it without owning
@@ -33,49 +36,75 @@ import (
 	"velox-server/internal/pipelineruns"
 )
 
-// forwardPipelineResultToWorker is the package-internal method that
-// turns a remote-engine result map into a Velox job payload and
-// enqueues it through the canonical Resolver.Resolve entry point.
-//
-// Blocco 5 of the Verdetto (P1 #11): this method delegates to the same
-// Resolver the CreatorForwardingRunner uses, so the handler's sync
-// forward path and the runner's async poll-and-forward path converge
-// on the same (job_id, forwarding_id) for the same input. The legacy
-// creatorflow.Service forwarder fallback was removed in Blocco 4 step
-// #3 — composition-root callers must wire a non-nil Resolver.
-func (h *Handlers) forwardPipelineResultToWorker(ctx context.Context, result map[string]interface{}) (map[string]interface{}, error) {
-	pipelineLog("FORWARD: building worker payload...")
-
+// resolveCompletedPayload is the single HTTP-side adapter into
+// creatorflow.Resolver.Resolve. It is intentionally provider-agnostic so both
+// master-initiated remote-engine results and creator-initiated push requests
+// converge on the same forwarding row, deterministic Job identity and atomic
+// Job+Task write path.
+func (h *Handlers) resolveCompletedPayload(
+	ctx context.Context,
+	sourceProvider string,
+	sourceJobID string,
+	targetExecutorID string,
+	result map[string]interface{},
+) (map[string]interface{}, error) {
 	if h.resolver == nil {
-		// Fail loud: this means cmd/server wiring is broken (the
-		// composition root unconditionally builds the Resolver
-		// before constructing Handlers). Hiding it behind a legacy
-		// forwarder fallback was removed in Blocco 4 step #3 because
-		// the forwarder shim was indistinguishable from a
-		// misconfigured Resolver at the URL-rewrite step.
 		return nil, fmt.Errorf("pipeline handler requires a wired resolver (composition root MUST pass creatorflow.Resolver)")
 	}
 
+	sourceProvider = strings.TrimSpace(sourceProvider)
+	if sourceProvider == "" {
+		return nil, fmt.Errorf("source_provider is required")
+	}
+	sourceJobID = strings.TrimSpace(sourceJobID)
+	if sourceJobID == "" {
+		return nil, fmt.Errorf("source_job_id is required")
+	}
+	if result == nil {
+		return nil, fmt.Errorf("payload is required")
+	}
+
 	out, err := h.resolver.Resolve(ctx, creatorflow.ResolveRequest{
-		ForwardingID:     "", // sync handler path: INSERT PENDING row
-		SourceProvider:   "remote_engine",
-		SourceJobID:      firstStringResolver(result, "job_id", "trace_id", "id"),
-		TargetExecutorID: firstStringResolver(result, "executor_id", "pipeline_id"),
+		ForwardingID:     "", // HTTP push/sync path: INSERT PENDING row
+		SourceProvider:   sourceProvider,
+		SourceJobID:      sourceJobID,
+		TargetExecutorID: strings.TrimSpace(targetExecutorID),
 		Payload:          result,
 	})
 	if err != nil {
-		if err == creatorflow.ErrResolverNotComplete {
-			return nil, nil
-		}
-		pipelineLog("FORWARD: Resolver.Resolve FAILED: %v", err)
+		pipelineLog("FORWARD: Resolver.Resolve FAILED provider=%s source_job=%s: %v", sourceProvider, sourceJobID, err)
 		return nil, err
 	}
-	if out != nil {
-		pipelineLog("FORWARD: enqueued via Resolver job_id=%s forwarding_id=%s",
-			out.JobID, out.ForwardingID)
-		return out.Response, nil
+	if out == nil {
+		return nil, nil
 	}
-	return nil, nil
+
+	pipelineLog(
+		"FORWARD: enqueued via Resolver provider=%s source_job=%s job_id=%s forwarding_id=%s",
+		sourceProvider,
+		sourceJobID,
+		out.JobID,
+		out.ForwardingID,
+	)
+	return out.Response, nil
+}
+
+// forwardPipelineResultToWorker turns a remote-engine result map into a Velox
+// job payload and enqueues it through the canonical provider-agnostic adapter.
+func (h *Handlers) forwardPipelineResultToWorker(ctx context.Context, result map[string]interface{}) (map[string]interface{}, error) {
+	pipelineLog("FORWARD: building worker payload...")
+
+	forwarded, err := h.resolveCompletedPayload(
+		ctx,
+		"remote_engine",
+		firstStringResolver(result, "job_id", "trace_id", "id"),
+		firstStringResolver(result, "executor_id", "pipeline_id"),
+		result,
+	)
+	if err == creatorflow.ErrResolverNotComplete {
+		return nil, nil
+	}
+	return forwarded, err
 }
 
 // syncForwardResult handles the common sync-forward path for both
