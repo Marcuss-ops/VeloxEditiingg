@@ -1,3 +1,103 @@
+## [v1.3.0-creator-push] - 2026-07-25
+
+### New intake path: `POST /api/v1/creator/jobs`
+
+The Master now accepts **creator-initiated job pushes** directly from the
+Creator app. The new HTTP endpoint:
+
+```http
+POST /api/v1/creator/jobs
+Authorization: Bearer <VELOX_ADMIN_TOKEN>
+Content-Type: application/json
+```
+
+returns `202 Accepted` after transforming the typed payload
+(`RemotePipelineResult`) and routing it through the **canonical Resolver**
+— the same single write path used by the legacy Creator runner. The
+Resolver is the **only writer** for `creator_forwardings + jobs + tasks`;
+the new handler does not write to the database directly. The standing
+architectural invariant "no parallel writers" is preserved.
+
+**Wire contract (202 envelope):**
+
+```json
+{
+  "ok": true,
+  "accepted_from": "creator_push",
+  "source_provider": "creator_pc_1",
+  "source_job_id": "creator-job-001",
+  "target_executor_id": "scene.composite.v1",
+  "job_id": "job_...",
+  "status": "PENDING",
+  "dispatch_status": "queued_for_workers"
+}
+```
+
+The `accepted_from=creator_push` overlay lets operators distinguish the
+new path from the legacy Creator flow in logs/metrics; the
+`dispatch_status` overlay (documented in `[Unreleased]` below) is
+preserved verbatim and surfaces the upstream Resolver emission when one
+exists (e.g. `"dispatching"` / `"dispatched"`).
+
+### Files added or modified
+
+- `DataServer/internal/handlers/server/pipeline/creator_push.go` — endpoint, typed DTO normalization, identity derivation
+- `DataServer/internal/handlers/server/pipeline/creator_intake.go` — typed intake sink + counter `accepted_from={creator_push,legacy}`
+- `DataServer/internal/handlers/server/pipeline/creator_push_e2e_test.go` — real-`VELOX_ADMIN_TOKEN` E2E, idempotency replay, DB row assertions
+- `DataServer/internal/handlers/server/pipeline/forwarding.go` — common adapter shared by creator_push + legacy remote-engine
+- `DataServer/internal/metrics/catalog_pipeline.go` — adds `creator_intake_accepted_total{accepted_from}`
+- `DataServer/cmd/server/router.go` — composition root wires `WithIntakeSink(velmetrics.NewCreatorIntakeSink())` on the pipeline handler
+- `DataServer/api/openapi.yaml` (NEW, 698 lines) — canonical OpenAPI 3.1.0 spec for the Master API surface (`CreatorPushRequest`, `CreatorPushPayload`, `RemotePipelineResult`, `CreatorPushAcceptedResponse`, `ErrorEnvelope`, `ErrorCode`)
+- `scripts/api/validate_openapi.py` (NEW) — PyYAML≥6.0 standalone validator (bidir `ErrorCode` equality, 401/422/500→`ErrorEnvelope` enforcement, exit 0 only on all invariants)
+- `scripts/creator_push_smoke.sh` (NEW) — operator smoke test for the new endpoint
+- `docs/CREATOR-PUSH.md` — full contract + operator runbook
+- `docs/ARCHITECTURE.md` — Resolver-as-unique-writer callout
+- `CHANGELOG.md` — this entry
+
+### Architectural invariant: Resolver-as-unique-writer
+
+The new handler **never** writes to the database directly. It always
+calls `creatorflow.Resolver.Resolve` so the same atomic
+`forwarding + Job + Task` triple is produced whether the job originated
+from the legacy Creator runner, the remote-engine fan-out, or the new
+creator_push path. Future intake surfaces MUST go through the same
+Resolver; any parallel writer path is a regression.
+
+### Tag
+
+`v1.3.0-creator-push` is annotated on commit
+`c2f3b6661564665eee7372dc3f82e0e8c5b2c6d1` (the canonical creator-push
+docs commit), **not** on HEAD. Subsequent commits
+(`c5ebae8`, `f26695b`, `a069579`, `d4970f2`, `6d8e8f1`) build on top of
+`c2f3b66` and are NOT pinned by this tag — the tag marks the **first
+canonical commit** at which the creator-push intake was documented as
+a coherent feature surface. Future operators wanting to inspect the
+feature boundary should `git checkout v1.3.0-creator-push` and read
+`docs/CREATOR-PUSH.md` from that tree; HEAD always carries the latest
+fixes layered on top.
+
+### Verified on `main` (commit `6d8e8f1`)
+
+- `python3 scripts/api/validate_openapi.py DataServer/api/openapi.yaml` → `--- TOTAL PASS: 1 openapi file(s) meet all invariants ---` (exit 0)
+- `cd DataServer && go build ./...` → exit 0 (full module, post-`6d8e8f1` dark-editor wire closure)
+- `cd DataServer && go vet ./...` → exit 0 (no diagnostic-level findings beyond the unrelated `bootstrap_composition.go` unused-imports warning from pre-session refactor WIP)
+- `go test -run IntakeSinkOrNoop ./internal/handlers/server/pipeline/...` → 3/3 PASS
+- `git push origin v1.3.0-creator-push` → exit 0
+
+### Migration notes
+
+Operators currently running `velox-server` on `v1.2.21-yt-removed` can
+adopt `v1.3.0-creator-push` (or any later HEAD) without config changes:
+
+- The new endpoint is **additive** — `POST /api/v1/creator/jobs` is a
+  new path that does not affect any existing route.
+- The `accepted_from` enum is currently `{creator_push}`; the legacy
+  runner continues to emit `accepted_from=legacy`.
+- `VELOX_ADMIN_TOKEN` is the same env var that protects admin routes
+  today — no new secrets required.
+- Strict-mode JSON consumers should add `dispatch_status` to their
+  accepted-key allowlist (see `[Unreleased]` entry below).
+
 ## [Unreleased] - 2026-07-25
 
 ### Creator-push response: `dispatch_status` overlay
