@@ -6,12 +6,12 @@
 // endpoint /api/v1/creator/jobs (POST creator_push).
 //
 // Label discipline (per internal/metrics/catalog.go header):
-//   - Only "path" is exposed as a label. The three valid values are
-//     "creator_push" (the new HTTP push endpoint /api/v1/creator/jobs),
-//     "creator_forwarder" (the async CreatorForwardingRunner), and
-//     "remote_engine_legacy" (the deprecated sync-forward endpoint
-//     /api/remote/pipeline — see docs/CREATOR-PUSH.md §Deprecation
-//     timeline, scheduled for removal in v2.0.0).
+//   - Only "path" is exposed as a label. The two valid values
+//     are "creator_push" (the HTTP endpoint /api/v1/creator/jobs) and
+//     "creator_forwarder" (the async CreatorForwardingRunner).
+//     The "remote_engine_legacy" label was retired when the legacy
+//     /api/remote/pipeline sync-forward endpoint was removed from
+//     main; see docs/CREATOR-PUSH.md §Removal.
 //   - High-cardinality labels (source_provider, source_job_id, job_id)
 //     are FORBIDDEN here — they would explode the time-series count.
 //   - source_provider etc. belong in structured logs (see

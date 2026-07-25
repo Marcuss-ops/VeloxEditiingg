@@ -51,7 +51,7 @@ func pipelineMetricDefinitions() []MetricDefinition {
 		// not in metrics.
 		{
 			Name: "pipeline.creator_intake_accepted_total", Unit: "count", Component: CompPipeline, Kind: KindCounter,
-			Description: "Total number of creator payloads accepted by the master, split by intake path. Label cardinality is bounded — only 'creator_push' (new HTTP endpoint /api/v1/creator/jobs), 'creator_forwarder' (async CreatorForwardingRunner), and 'remote_engine_legacy' (deprecated sync-forward endpoint /api/remote/pipeline, scheduled for removal in v2.0.0 per docs/CREATOR-PUSH.md) are valid values.",
+			Description: "Total number of creator payloads accepted by the master, split by intake path. Label cardinality is bounded — only 'creator_push' (HTTP endpoint /api/v1/creator/jobs) and 'creator_forwarder' (async CreatorForwardingRunner) are valid values. The 'remote_engine_legacy' label was retired when /api/remote/pipeline was fully removed from main (see docs/CREATOR-PUSH.md §Removal).",
 		},
 		// ── Native process (C++ engine subprocess) ───────────────────────
 		{
