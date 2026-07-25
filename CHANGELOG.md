@@ -100,6 +100,10 @@ adopt `v1.3.0-creator-push` (or any later HEAD) without config changes:
 
 ## [Unreleased] - 2026-07-25
 
+### Removal: `/api/remote/pipeline` fully retired
+
+Initially soft-deprecated in commits 51a307d→5d484c4 (6 commits with telemetry + docs); the user pivoted and full removal landed in commits d433e97→f058055. Git log preserves the full audit trail.
+
 ### Creator-push response: `dispatch_status` overlay
 
 The `POST /api/v1/creator/jobs` handler now stamps a top-level
