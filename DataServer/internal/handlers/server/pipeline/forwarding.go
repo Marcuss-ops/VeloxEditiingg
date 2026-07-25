@@ -139,14 +139,18 @@ func (h *Handlers) forwardPipelineResultToWorker(ctx context.Context, result map
 	// zero as remote-engine workers migrate; sustained traffic after
 	// v2.0.0 will trigger a follow-up that deletes this branch entirely.
 	//
-	// TIGHT GUARD: we additionally require forwarded["job_id"] to be a
-	// non-empty string before stamping the counter. This mirrors the
-	// creator_push `workerJobID != ""` guard and prevents the
-	// remote_engine_legacy series from inflating during idempotency
-	// replay storms (the Resolver can return a non-nil response
-	// without a job_id when the forwarding row already exists in the
-	// DB and the CAS is a no-op).
-	if err == nil && forwarded != nil && firstStringResolver(forwarded, "job_id") != "" {
+	// TIGHT GUARD: we additionally require one of the worker-identity
+	// keys (job_id, trace_id, job_run_id, correlation_id — the four
+	// overlays that dto.ToWorkerPayload stamps from RemoteJobID) to be
+	// a non-empty string before stamping the counter. This mirrors the
+	// creator_push `workerJobID != ""` guard (which checks job_id
+	// specifically) but is slightly wider: it survives any future
+	// Resolver refactor that overlays only one of the four keys. The
+	// guard prevents the remote_engine_legacy series from inflating
+	// during idempotency replay storms (the Resolver can return a
+	// non-nil response without any of the identity keys when the
+	// forwarding row already exists in the DB and the CAS is a no-op).
+	if err == nil && forwarded != nil && firstStringResolver(forwarded, "job_id", "trace_id", "job_run_id", "correlation_id") != "" {
 		h.intakeSinkOrNoop().IncAccepted("remote_engine_legacy")
 		jobID, _ := forwarded["job_id"].(string)
 		pipelineLog(

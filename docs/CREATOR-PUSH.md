@@ -170,6 +170,17 @@ curl -X POST https://velox.example.com/api/v1/creator/jobs \
   }'
 ```
 
+> **Operator warning.** `source_job_id` MUST be unique per invocation
+> (it is the idempotency key: `source_provider + source_job_id +
+> target_executor_id` resolves to a single forwarding row + Job + Task).
+> The example above uses a hard-coded
+> `creator-job-20260725-001` for readability only — running the curl
+> verbatim against a production master will create a real job. The
+> canonical smoke-test payload in `scripts/creator_push_smoke.sh`
+> derives `source_job_id` from the operator's hostname + a UUID
+> suffix to avoid collisions; operators adapting this example should
+> follow the same pattern (or use a UUID-only suffix).
+
 **Source of truth for the new contract** (regenerate client SDKs from
 here):
 

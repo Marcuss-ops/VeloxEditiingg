@@ -163,19 +163,27 @@ derivation preservation described above, the legacy `/api/remote/pipeline`
 path now ALSO routes its raw result map through
 `remoteengine.ParseRemotePipelineResult → dto.ToWorkerPayload()`,
 which was previously skipped (the legacy path passed the raw map
-straight to the Resolver). This is a **behavior-tightening**: any
-input shape that the typed DTO rejects (or that yields an empty
-identity chain) now surfaces as a typed error and `syncForwardResult`
-marks the run as `FORWARDING` for retry, instead of silently reaching
-the Resolver with a partially-typed payload. Existing remote-engine
-workers that already passed well-typed maps produce byte-identical
-worker payloads (the typed-DTO overlay preserves all non-DTO fields
-like `delivery_plan` / `output_path` via `flattenResult`); only edge
-cases with non-string `job_id` / nested `result` envelopes of wrong
-shape behave differently. The 2 new failure-path tests in
-`creator_push_test.go` pin the post-refactor contract as a regression
-guard against any future refactor that "optimizes" the legacy path
-to skip `ParseRemotePipelineResult`.
+straight to the Resolver). This is a **behavior-tightening**: identity
+derivation now fails earlier for malformed input (since the typed
+DTO's `RemoteJobID` is empty when the raw map lacks string-typed
+`job_id` / `trace_id` / `id`, or contains non-string variants like
+`job_id: 12345` int), and the missing-source_job_id error surfaces
+in the normalizer's identity chain. `syncForwardResult` then marks
+the run as `FORWARDING` for retry instead of silently reaching the
+Resolver with an identity-less payload. **Important caveat:**
+`ParseRemotePipelineResult` itself does NOT reject any shape — it
+zero-fills missing fields and returns a valid typed DTO in all cases.
+The tightening is downstream: the identity derivation catches what
+the DTO accepts. Existing remote-engine workers that already passed
+well-typed maps produce byte-identical worker payloads (the typed-DTO
+overlay preserves all non-DTO fields like `delivery_plan` /
+`output_path` via `flattenResult`); only edge cases with non-string
+`job_id` / nested `result` envelopes of wrong shape (where the
+identity chain cannot produce a non-empty `source_job_id`) behave
+differently. The 2 new failure-path tests in `creator_push_test.go`
+pin the post-refactor contract as a regression guard against any
+future refactor that "optimizes" the legacy path to skip
+`ParseRemotePipelineResult`.
 
 ### Creator-push response: `dispatch_status` overlay
 
