@@ -10,21 +10,32 @@
 
 Il percorso video usa `shared/contract.JobPayloadV2`.
 
-L'Enqueuer:
+L'Enqueuer riceve il payload da uno dei tre percorsi di intake canonici:
 
-1. riceve il payload da un handler HTTP o dal creator resolver;
-2. risolve voiceover e scene image;
-3. normalizza il payload;
-4. rimuove alias legacy dalle scritture canoniche;
-5. determina identità e metadati;
-6. compila `jobs.Job`;
-7. compila `taskgraph.TaskSpec`;
-8. delega a `AtomicJobTaskCreator`;
-9. inserisce Job e primo Task nella stessa transazione.
+1. un handler HTTP del flusso master (`POST /api/v1/pipeline-runs/*`);
+2. il polling asincrono del `CreatorForwardingRunner` (vedi §12);
+3. l'intake HTTP diretto `POST /api/v1/creator/jobs` (handler `creator_push`, autenticato via bearer `VELOX_ADMIN_TOKEN` nello stesso gruppo di route della pipeline) — vedi §12 per il dettaglio dei due percorsi creator.
+
+In tutti i casi l'Enqueuer:
+
+1. risolve voiceover e scene image;
+2. normalizza il payload;
+3. rimuove alias legacy dalle scritture canoniche;
+4. determina identità e metadati;
+5. compila `jobs.Job`;
+6. compila `taskgraph.TaskSpec`;
+7. delega a `AtomicJobTaskCreator`;
+8. inserisce Job e primo Task nella stessa transazione.
+
+Per i payload provenienti da un creator, la conversione al DTO tipizzato `RemotePipelineResult` avviene nell'handler (prima della delega all'Enqueuer) e non nell'Enqueuer stesso; vedi `docs/CREATOR-PUSH.md` per il dettaglio del contratto.
+
+Tutti i percorsi di intake creator (asincrono via `CreatorForwardingRunner` e sincrono via `POST /api/v1/creator/jobs`) convergono su `creatorflow.Resolver` e quindi su `AtomicForwardAndEnqueue`; nessun handler introduce un secondo writer sul database (vedi §4.2 di `runtime-invariants.md`).
 
 ```mermaid
 flowchart TD
-    A[HTTP handler o Creator Resolver] --> B[Enqueuer]
+    A1[HTTP handler master: POST /pipeline-runs/*] --> B[Enqueuer]
+    A2[HTTP creator_push: POST /api/v1/creator/jobs] --> B
+    A3[Async: CreatorForwardingRunner] --> B
     B --> C[Asset resolution]
     C --> D[JobPayloadV2 normalization]
     D --> E[Compile Job]
@@ -316,6 +327,28 @@ FORWARDED
 BLOCKED
 FAILED
 ```
+
+Questi stati si applicano alla riga `creator_forwardings` indipendentemente dal percorso di intake che l'ha generata (vedi "Due percorsi di intake" più sotto).
+
+### Due percorsi di intake, un solo writer
+
+I payload provenienti da macchine Creator possono entrare nel sistema attraverso due percorsi distinti, entrambi destinati al medesimo `creatorflow.Resolver` e quindi allo stesso `AtomicForwardAndEnqueue`:
+
+1. **Polling asincrono** — `CreatorForwardingRunner` interroga il creator remoto, persiste una riga in `creator_forwardings` e, quando il job remoto risulta `completed`, delega al Resolver. Questo è il flusso master-driven descritto sopra.
+
+2. **Push sincrono** — la macchina Creator invia il payload già pronto via `POST /api/v1/creator/jobs` (autenticato tramite bearer `VELOX_ADMIN_TOKEN` nello stesso gruppo di route della pipeline). Il handler `creator_push` converte il payload nel DTO tipizzato `RemotePipelineResult` e lo passa al medesimo `creatorflow.Resolver`. Questo è il flusso Creator-driven, introdotto accanto al precedente per abilitare un intake diretto senza polling master. Il contratto HTTP è documentato in `docs/CREATOR-PUSH.md`.
+
+```mermaid
+flowchart TD
+    A1[Async: CreatorForwardingRunner] --> R{creatorflow.Resolver}
+    A2[HTTP creator_push handler: POST /api/v1/creator/jobs] --> R
+    R --> E[AtomicForwardAndEnqueue]
+    E --> F[(SQLite: creator_forwardings + jobs + tasks + task_specs)]
+```
+
+**Invariante "un solo writer" (riferimento: `runtime-invariants.md §4.2`).** Il push handler `creator_push` non apre transazioni proprie su SQLite e non duplica lo schema di `creator_forwardings`, `jobs` o `tasks`. L'unica transazione che materializza lo stato business è quella aperta da `AtomicForwardAndEnqueue`, lo stesso UoW già utilizzato dal `CreatorForwardingRunner`. I due intake sono quindi due **vie di accesso** alla medesima macchina canonica, non due writer paralleli.
+
+L'identità canonica `(source_provider, source_job_id, target_executor_id)` (vedi `docs/CREATOR-PUSH.md`) produce un `job_id` deterministico: replay, retry post-crash, poller concorrenti e webhook duplicati convergono sullo stesso forwarding e sullo stesso job Velox indipendentemente dal percorso di intake che li ha generati.
 
 ### Runner
 

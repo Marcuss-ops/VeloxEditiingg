@@ -72,6 +72,29 @@ polish commit applied on top):
   582a4bc         fix(pipeline): emit dispatch_status=queued_for_workers on creator_push response
   ```
 
+### Architecture: creator_push intake + single-writer invariant
+
+`docs/architecture/current-architecture.md` (PARTE I) now documents the
+new `POST /api/v1/creator/jobs` intake path alongside the existing
+`CreatorForwardingRunner` (sections 6 and 12). Both paths converge on
+the same `creatorflow.Resolver` and the same `AtomicForwardAndEnqueue`,
+preserving the single-writer invariant (`runtime-invariants.md §4.2`).
+
+- §6 "Ingresso e compilazione Job" — intake enumeration of three
+  canonical paths (master HTTP handler, async runner, synchronous
+  creator_push) + mermaid diagram showing the convergence on the
+  Enqueuer.
+- §12 "Creatorflow e forwarding" — new subsection "Due percorsi di
+  intake, un solo writer" with a mermaid diagram of the dual-intake
+  architecture and an explicit single-writer invariant
+  reaffirmation.
+- Bidirectional cross-reference with `docs/CREATOR-PUSH.md` (this
+  release also adds a back-link from the contract doc to the
+  architecture doc).
+
+Refs: `docs/architecture/current-architecture.md`, `docs/CREATOR-PUSH.md`,
+`docs/architecture/runtime-invariants.md` (§4.2).
+
 ## v1.2.21 (2026-07-11)
 
 ### Behavior changes

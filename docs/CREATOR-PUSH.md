@@ -1,5 +1,7 @@
 # Creator-initiated job push
 
+> Per l'integrazione architetturale (relazione con `CreatorForwardingRunner`, single-writer invariant), vedi `docs/architecture/current-architecture.md §12 Due percorsi di intake, un solo writer`.
+
 A creator machine can submit a completed render payload directly to the Velox master. The master does not need to create the creator job first and does not poll the creator.
 
 ## Flow
