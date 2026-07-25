@@ -41,7 +41,10 @@ Also lands alongside a tightening of `creator_push_e2e_test.go`:
     `source_provider` (handler rejected in `normalizeCreatorPushRequest`
     prima di raggiungere il Resolver).
 
-NO BEHAVIOR CHANGE for callers that ignore the new field.
+ADITIVE: callers that ignore unknown JSON fields are unaffected. Strict-mode
+consumers (typed unmarshalling into a fixed-shape Go struct, observability
+dashboards pinning the response schema) MUST update because the response
+payload now carries `dispatch_status` in addition to the previous shape.
 
 Refs: `DataServer/internal/handlers/server/pipeline/creator_push.go`,
 `DataServer/internal/handlers/server/pipeline/creator_push_e2e_test.go`,

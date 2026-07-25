@@ -391,8 +391,13 @@ func TestCreatorPushJobsE2E_RealAdminAuthWired(t *testing.T) {
 	// or in CI does NOT mask the test token. api.AdminAuthMiddleware honours
 	// cfg.Auth.AdminToken directly, so this is the canonical contract;
 	// setting it to empty guarantees the middleware will still reject
-	// requests with that header value.
+	// requests with that header value. Also unset the platform fallback
+	// TOKEN_FILE / VELOX_TOKEN_FILE so a path-based token source cannot
+	// leak in and flip the right_bearer_token case from "passes for the
+	// right reason" to "passes for an env-leak reason".
 	t.Setenv("VELOX_ADMIN_TOKEN", "")
+	t.Setenv("VELOX_TOKEN_FILE", "")
+	t.Setenv("TOKEN_FILE", "")
 
 	const testToken = "test-secret-token"
 	cfg := &config.Config{}

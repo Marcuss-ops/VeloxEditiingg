@@ -156,6 +156,9 @@ func (h *Handlers) CreatorPush() gin.HandlerFunc {
 		// response envelope does not already carry dispatch_status, so
 		// a future Resolver that emits "dispatching" / "dispatched"
 		// states is not silently clobbered back to "queued_for_workers".
+		// The empty-present case (Resolver returning dispatch_status=""
+		// empty) is intentionally treated as Resolver-claimed — the
+		// handler does NOT re-stamp. Don't add a value=="" guard.
 		if _, owned := response["dispatch_status"]; !owned {
 			response["dispatch_status"] = "queued_for_workers"
 		}
