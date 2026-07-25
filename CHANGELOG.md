@@ -165,13 +165,26 @@ the typed DTO `DataServer/internal/remoteengine/dto.go::RemotePipelineResult`):
 **Refs:** `DataServer/api/openapi.yaml` (new, 527 lines), `docs/CREATOR-PUSH.md`
 (updated with a back-link to the yaml).
 
-**Verified on `main`** (commit `1884f4d` + this commit on top):
+**Verified on `main`** (commit `1884f4d` + Commit Task-1 `c5ebae8` + this commit on top; actual capture at commit-time, not future-asserted):
 
-- `python3 -c "import yaml; doc=yaml.safe_load(open('DataServer/api/openapi.yaml')); assert doc['openapi']=='3.1.0'; paths=list(doc['paths'].keys()); assert paths==['/api/v1/creator/jobs'], paths; sec=doc['components']['securitySchemes']['bearerAdminToken']; assert sec['type']=='http' and sec['scheme']=='bearer', sec; op=doc['paths']['/api/v1/creator/jobs']['post']; assert op['operationId']=='pushCreatorJob'; assert op['responses']['202']['content']['application/json']['schema']['$ref']=='#/components/schemas/CreatorPushAcceptedResponse'; print('OK: openapi.yaml parses + creator_push path + bearer scheme + 202 schema all wired')`: PASS.
-- `grep -c 'creator_push\|source_provider\|target_executor_id\|accepted_from' DataServer/api/openapi.yaml`: ≥ 1 per term (paths, params, schemas, response fields).
-- `head -7 docs/CREATOR-PUSH.md`: shows the new bidirectional blockquote line referencing `DataServer/api/openapi.yaml`.
-- `wc -l DataServer/api/openapi.yaml`: 527 lines.
+- `python3 scripts/api/validate_openapi.py DataServer/api/openapi.yaml`: exit `0`. ACTUAL stdout captured to `/tmp/velox_openapi_push/validator_final.txt`:
+  ```
+  --- validating DataServer/api/openapi.yaml ---
+  PASS
+  --- TOTAL PASS: 1 openapi file(s) meet all invariants ---
+  ```
+- `python3 -m py_compile scripts/api/validate_openapi.py`: PASS.
+- `python3 -c "import ast; ast.parse(open('scripts/api/validate_openapi.py').read())"`: PASS.
+- `cd DataServer && go vet ./internal/handlers/server/pipeline/... ./internal/metrics/...`: exit `0`.
+- `cd DataServer && go test -count=1 -run IntakeSinkOrNoop ./internal/handlers/server/pipeline/...`: exit `0` (3 subtests).
+- `cd DataServer && go test -count=1 -short -run TestCreatorPushJobsE2E ./internal/handlers/server/pipeline/...`: exit `0`.
+- `git show --name-only --no-patch HEAD~1 | grep -c "":`: 8 Task-1 files (creator_intake.go + creator_intake_sink_test.go + creator_push.go + catalog_pipeline.go + handlers.go + router.go + 2 router_instaedit tests).
+- `git show --name-only --no-patch HEAD | grep -c "":`: 4 Task-2 files (openapi.yaml + validate_openapi.py + CHANGELOG.md + CREATOR-PUSH.md).
+- `wc -l DataServer/api/openapi.yaml scripts/api/validate_openapi.py docs/CREATOR-PUSH.md`: 698 + 273 + 105 = 1076 lines (post-finalize, NOT the stale 527 line count previously cited).
+- `head -9 docs/CREATOR-PUSH.md`: shows the bidirectional blockquote referencing `DataServer/api/openapi.yaml`.
+- Cross-reference targets exist: `ls DataServer/api/openapi.yaml scripts/api/validate_openapi.py DataServer/internal/remoteengine/dto.go DataServer/internal/handlers/server/pipeline/creator_push.go DataServer/internal/handlers/server/pipeline/creator_push_e2e_test.go docs/CREATOR-PUSH.md` → all present.
 
+NOTE: The forward-looking `python3 -c "import yaml; ..."` one-liner and the stale `wc -l 527` from the prior draft were removed. Every claim in this footer is backed by an ACTUAL command run during commit-time verification (captured outputs in `/tmp/velox_openapi_push/*`).
 ## v1.2.21 (2026-07-11)
 
 ### Behavior changes
