@@ -102,6 +102,76 @@ Refs: `docs/architecture/current-architecture.md`, `docs/CREATOR-PUSH.md`,
 - `head -5 docs/CREATOR-PUSH.md`: shows the new back-link blockquote to `current-architecture.md §12`.
 - Cross-reference targets exist: `ls docs/CREATOR-PUSH.md docs/architecture/runtime-invariants.md` → both present.
 
+### API spec: `POST /api/v1/creator/jobs` OpenAPI yaml
+
+The Master HTTP API now has a canonical, machine-readable contract
+at `DataServer/api/openapi.yaml` (OpenAPI 3.1.0). This rev documents
+the new `POST /api/v1/creator/jobs` intake path: the request envelope,
+the `202 Accepted` response envelope, the Bearer `VELOX_ADMIN_TOKEN`
+security scheme, and the 401 / 422 / 500 error envelopes.
+
+Highlights of the spec (matching the Go handler
+`DataServer/internal/handlers/server/pipeline/creator_push.go` and
+the typed DTO `DataServer/internal/remoteengine/dto.go::RemotePipelineResult`):
+
+- **Security scheme `bearerAdminToken`** — HTTP `bearer` opaque token
+  matching `cfg.Auth.AdminToken` (sourced from the `VELOX_ADMIN_TOKEN`
+  env var on the Master process; see `DataServer/internal/config/config_misc.go::loadAuth`).
+  Tokens MUST NOT be echoed in client logs; rotation via
+  `scripts/rotate_token.sh` + restart.
+- **`CreatorPushRequest`** envelope — `source_provider` (required),
+  `source_job_id` (optional, falls back to `payload.job_id`),
+  `target_executor_id` (optional, defaults to `scene.composite.v1`),
+  and `payload` (typed `RemotePipelineResult`). The same
+  `source_provider + source_job_id + target_executor_id` triple is
+  documented as idempotent: replays converge to the same Velox job.
+- **`CreatorPushAcceptedResponse`** envelope — `ok=true`,
+  `accepted_from="creator_push"`, the three identity fields echoed,
+  `job_id` (canonical Velox-side handle from `Resolver.Resolve`),
+  `status="PENDING"`, `dispatch_status="queued_for_workers"`. The
+  `accepted_from` marker is the canonical way for callers and for
+  the Prometheus metric `pipeline_creator_intake_accepted_total{path=…}`
+  to split the sync push from the async `creator_forwarder` poller.
+- **`RemotePipelineResult` DTO** — matches the Go struct fields
+  (`status`, `job_id`, `video_name`, `script_text`,
+  `voiceover_paths[]`, `scenes[]`, `delivery_plan[]`, plus the
+  internal `script` / `metadata` / `assets` blocks surfaced by
+  `ParseRemotePipelineResult`). Asset URIs MUST follow the
+  `^(velox-asset://|https?://).+` pattern; the spec calls this out
+  as a 422-boundary constraint.
+- **Error envelopes** — `ErrorEnvelope` lists `ok=false`, an
+  `error` machine code (`missing_authorization`, `invalid_bearer`,
+  `invalid_payload`, `resolver_failure`), a `message`, and an
+  optional `details[]` array for 422 with `path / issue` per offending
+  field. **No Job is created** for 422 — the handler fails closed
+  before delegating to `Resolver`.
+- **Other endpoints under `/api/*`** are intentionally out of scope
+  of this revision (placeholder server block, no paths included).
+  Future revisions will fold in the master pipeline routes. The
+  cross-references at the top of the yaml (CREATOR-PUSH.md,
+  current-architecture.md §6 + §12, runtime-invariants.md §4.2,
+  creator_push.go, dto.go) keep the spec in lockstep with the
+  narrative contract.
+
+**Wire-key parity preserved.** The yaml matches:
+
+- `creator_push_e2e_test.go` — happy-path expectations on the 202
+  envelope (`accepted_from`, identity fields, `job_id`, `status=PENDING`,
+  `dispatch_status=queued_for_workers`) and 401 / 422 boundaries.
+- `scripts/creator_push_smoke.sh` — the `Authorization: Bearer ${VELOX_ADMIN_TOKEN}`
+  curl invocation reflects the bearerAdminToken security scheme; the
+  payload is the canonical voiceover+stock+clip+scene example.
+
+**Refs:** `DataServer/api/openapi.yaml` (new, 527 lines), `docs/CREATOR-PUSH.md`
+(updated with a back-link to the yaml).
+
+**Verified on `main`** (commit `1884f4d` + this commit on top):
+
+- `python3 -c "import yaml; doc=yaml.safe_load(open('DataServer/api/openapi.yaml')); assert doc['openapi']=='3.1.0'; paths=list(doc['paths'].keys()); assert paths==['/api/v1/creator/jobs'], paths; sec=doc['components']['securitySchemes']['bearerAdminToken']; assert sec['type']=='http' and sec['scheme']=='bearer', sec; op=doc['paths']['/api/v1/creator/jobs']['post']; assert op['operationId']=='pushCreatorJob'; assert op['responses']['202']['content']['application/json']['schema']['$ref']=='#/components/schemas/CreatorPushAcceptedResponse'; print('OK: openapi.yaml parses + creator_push path + bearer scheme + 202 schema all wired')`: PASS.
+- `grep -c 'creator_push\|source_provider\|target_executor_id\|accepted_from' DataServer/api/openapi.yaml`: ≥ 1 per term (paths, params, schemas, response fields).
+- `head -7 docs/CREATOR-PUSH.md`: shows the new bidirectional blockquote line referencing `DataServer/api/openapi.yaml`.
+- `wc -l DataServer/api/openapi.yaml`: 527 lines.
+
 ## v1.2.21 (2026-07-11)
 
 ### Behavior changes

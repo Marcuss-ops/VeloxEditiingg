@@ -1,6 +1,8 @@
 # Creator-initiated job push
 
 > Per l'integrazione architetturale (relazione con `CreatorForwardingRunner`, single-writer invariant), vedi `docs/architecture/current-architecture.md §12 Due percorsi di intake, un solo writer`.
+>
+> Contratto HTTP machine-readable: `DataServer/api/openapi.yaml` (OpenAPI 3.1.0, operazione `pushCreatorJob`, schema `CreatorPushRequest` / `CreatorPushAcceptedResponse` / `RemotePipelineResult`, security scheme `bearerAdminToken` su `VELOX_ADMIN_TOKEN`). Questo file `.md` è la narrativa; lo yaml è il source-of-truth per generatori client / validator OpenAPI / dashboard Swagger. In caso di divergenza, il comportamento testato in `DataServer/internal/handlers/server/pipeline/creator_push_e2e_test.go` è l'autorità finale.
 
 A creator machine can submit a completed render payload directly to the Velox master. The master does not need to create the creator job first and does not poll the creator.
 

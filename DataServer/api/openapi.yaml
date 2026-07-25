@@ -1,0 +1,698 @@
+# OpenAPI 3.1.0 specification for the Velox Master HTTP API.
+#
+# This spec is the canonical machine-readable contract for the endpoints
+# documented in docs/CREATOR-PUSH.md (creator_push intake). Other Master
+# endpoints (full pipeline family) are intentionally omitted from this
+# revision; they will be folded in incrementally as their contracts are
+# ratified. Cross-references:
+#   - docs/CREATOR-PUSH.md                          — narrative contract for /api/v1/creator/jobs
+#   - docs/architecture/current-architecture.md §6+§12 — intake topology
+#   - DataServer/internal/handlers/server/pipeline/creator_push.go — Go handler
+#   - DataServer/internal/remoteengine/dto.go      — typed DTO
+#   - scripts/api/validate_openapi.py              — standalone syntactic + invariant validator
+#
+# Revision tag: creator-push/v3 (post-syntax-fix + post-review polish).
+#
+# Style conventions enforced in this yaml:
+#   - All schema properties use block-form YAML (no inline `{ type: ... }`
+#     flow mappings). Flow mappings were observed to break PyYAML's strict
+#     parser in the v2 polish; block-form is unambiguous and lint-stable.
+#   - Strings that contain colons or regex metacharacters are quoted.
+#   - Error-code enums are centralised under `ErrorCode` so the
+#     validator's `EXPECTED_ERROR_CODES` set can be enforced for
+#     bidirectional equality (no silent drift between spec and validator).
+
+openapi: 3.1.0
+
+info:
+  title: Velox Master HTTP API
+  version: 0.6.0-creatorpush-v3
+  summary: Contract for Velox Master endpoints, with focus on the creator_push intake.
+  description: |
+    The Velox Master exposes a small, authenticated HTTP API for
+    programmatic intake of creator-built payloads and for orchestrator
+    control. All POST endpoints under `/api/v1/` and `/api/` (master
+    pipeline group) are protected by a single bearer-token middleware
+    keyed on the `VELOX_ADMIN_TOKEN` environment variable.
+
+    This revision focuses on the new **creator_push** intake path
+    (`POST /api/v1/creator/jobs`) introduced alongside the existing
+    async `CreatorForwardingRunner` poller. Both intake paths converge
+    on the canonical `creatorflow.Resolver` (the unique writer of
+    `creator_forwardings`/`jobs`/`tasks`); the push handler does NOT
+    open its own transaction or duplicate schema. See
+    `docs/architecture/current-architecture.md` §12 and §4.2 of
+    `docs/architecture/runtime-invariants.md` for the invariant.
+
+    The HTTP contract is also documented narratively in
+    `docs/CREATOR-PUSH.md`. Whenever the two disagree, the tested
+    behavior in `DataServer/internal/handlers/server/pipeline/creator_push_e2e_test.go`
+    is the source of truth.
+
+    NOTE ON SCHEMA REDUNDANCY: this spec declares BOTH `CreatorPushPayload`
+    (the flat wire-facing schema the Creator machine sends) and
+    `RemotePipelineResult` (the nested typed DTO that the handler
+    reconstructs via `remoteengine.ParseRemotePipelineResult`, with the
+    flat→nested mapping rules documented under the `x-flat-to-dto`
+    extension on the latter). The wire format is `CreatorPushPayload`;
+    `RemotePipelineResult` is documented for completeness + parser
+    cross-checking.
+  contact:
+    name: Velox architecture
+    url: https://github.com/example/velox
+  license:
+    name: Proprietary
+
+servers:
+  - url: "{scheme}://{host}"
+    variables:
+      scheme:
+        default: https
+        enum: [http, https]
+      host:
+        default: velox.example.com
+        description: "Master host. Local dev defaults to http://127.0.0.1:8080."
+
+tags:
+  - name: creator
+    description: |
+      Endpoints that accept Creator-built payloads. Today the only
+      entry in this group is `POST /api/v1/creator/jobs` (the sync
+      push). The async `CreatorForwardingRunner` ingests the same
+      shape over an out-of-band channel and falls under
+      `creator_forwarder` only for metrics/observability purposes.
+  - name: pipeline
+    description: |
+      Master pipeline endpoints (Generate / Run / Status). These
+      share the same bearer-auth middleware as `creator` but their
+      full schemas will be ratified in a future spec revision.
+
+# ── Security ────────────────────────────────────────────────────────────────
+# Every endpoint under /api/v1/ or the /api/ master pipeline group
+# requires the same operator-grade bearer. The token is the value of
+# the `VELOX_ADMIN_TOKEN` env var on the Master process (see
+# `DataServer/internal/config/config_misc.go` and the operator runbook
+# `docs/SECURITY_RUNBOOK.md` §"Auth (VELOX_ADMIN_TOKEN)").
+security:
+  - bearerAdminToken: []
+
+components:
+  securitySchemes:
+    bearerAdminToken:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: |
+        Bearer token matching `cfg.Auth.AdminToken`, which is loaded
+        from the `VELOX_ADMIN_TOKEN` env var on the Master process
+        (see `DataServer/internal/config/config_misc.go::loadAuth`).
+        The token is opaque to clients; rotate via `scripts/rotate_token.sh`
+        + restart. Minimum length is enforced server-side. A missing
+        or mismatched bearer returns `401 Unauthorized`; never echo
+        the token value in client logs.
+
+  parameters:
+    AuthorizationHeader:
+      name: Authorization
+      in: header
+      required: true
+      description: |
+        `Bearer ${VELOX_ADMIN_TOKEN}`. Must match the Master's
+        `VELOX_ADMIN_TOKEN`. Example: `Authorization: Bearer eyJhbGciOi...`.
+      schema:
+        type: string
+        pattern: "^Bearer\\s+.+"
+        example: "Bearer ${VELOX_ADMIN_TOKEN}"
+
+    XRequestIDHeader:
+      name: X-Request-ID
+      in: header
+      required: false
+      description: |
+        Optional client-supplied correlation ID, forwarded verbatim
+        into structured observability logs as the request trace key.
+        Convention: short, prefixed by the caller's domain (e.g.
+        `creator-push-smoke`, `e2e-<runner-host>-<ts>`). The Master
+        does NOT validate the format; an absent header is replaced
+        server-side with a generated UUID.
+      schema:
+        type: string
+        maxLength: 128
+        example: creator-push-smoke
+
+  # ── Reusable schemas ────────────────────────────────────────────────────
+  schemas:
+    # ── Envelope: request body for POST /api/v1/creator/jobs ─────────────
+    CreatorPushRequest:
+      type: object
+      required: [source_provider, payload]
+      description: |
+        Top-level envelope sent by a Creator machine to push a
+        completed payload directly to the Master. The Master converts
+        `payload` (the flat `CreatorPushPayload` wire shape) through
+        the typed `RemotePipelineResult` DTO via
+        `remoteengine.ParseRemotePipelineResult` before delegating to
+        the canonical `Resolver`.
+      properties:
+        source_provider:
+          type: string
+          minLength: 1
+          description: |
+            Stable identifier for the Creator machine or fleet (e.g.
+            `creator_pc_1`, `fleet-eu-west`). Becomes part of the
+            deterministic forwarding identity: the same
+            `source_provider + source_job_id + target_executor_id`
+            triple is idempotent — replays converge to the same
+            Velox job.
+          example: creator_pc_1
+        source_job_id:
+          type: string
+          description: |
+            Creator-side identifier of the payload. Optional when
+            `payload.job_id` is present (the handler falls back to
+            the nested value in `normalizeCreatorPushRequest`).
+            Combined with `source_provider + target_executor_id`
+            it forms the deterministic identity used by
+            `Resolver.Resolve`.
+          example: creator-job-001
+        target_executor_id:
+          type: string
+          description: |
+            Optional executor target. If absent, the server applies
+            `scene.composite.v1` via `normalizeCreatorPushRequest`
+            (NOT a YAML-level OpenAPI default — clients MUST still
+            send the field if they want a non-canonical executor).
+            The deterministic identity triple
+            `(source_provider, source_job_id, target_executor_id)`
+            is also affected by this substitution.
+          example: scene.composite.v1
+        payload:
+          $ref: '#/components/schemas/CreatorPushPayload'
+
+    # ── Wire-facing payload (FLAT, what the Creator actually sends) ──────
+    CreatorPushPayload:
+      type: object
+      description: |
+        The **flat** wire-facing schema the Creator machine sends as
+        the value of `CreatorPushRequest.payload`. Distinct from
+        `RemotePipelineResult` (the NESTED typed DTO) — the handler
+        converts this shape into the DTO via
+        `remoteengine.ParseRemotePipelineResult` before delegating.
+        Mirrors the canonical happy-path example in
+        `DataServer/internal/handlers/server/pipeline/creator_push_e2e_test.go`
+        (TestCreatorPushJobsE2E_VoiceoverStockClipScene) and
+        `scripts/creator_push_smoke.sh`.
+      required: [status, job_id]
+      properties:
+        status:
+          type: string
+          enum: [completed, completed_with_warnings]
+          description: |
+            Creator-side completion status. The Master only accepts
+            payloads where `status` indicates a finished creator run.
+          example: completed
+        job_id:
+          type: string
+          description: |
+            Creator-side job identifier. If `source_job_id` is omitted
+            from the top-level envelope the handler falls back to
+            this value.
+          example: creator-job-001
+        video_name:
+          type: string
+          description: |
+            Display name for the resulting video. Optional. NOT a
+            field on the canonical `RemotePipelineResult` typed DTO,
+            but tolerated at the wire boundary: when present the
+            handler forwards it verbatim into the worker payload
+            (see `RemotePipelineResult.ToWorkerPayload`). Clients
+            that depend on this field should treat it as a forward-
+            compatible opaque passthrough, NOT as a contractually
+            structured field on the typed DTO.
+          example: "Aqueducts of Rome"
+        script_text:
+          type: string
+          description: Plain-text script used for TTS / overlay.
+        voiceover_paths:
+          type: array
+          description: |
+            Voiceover audio references. Each entry MUST be a
+            `velox-asset://` URI (the canonical asset scheme) or a
+            fully-qualified reachable URL.
+          items:
+            type: string
+            pattern: "^(velox-asset://|https?://).+"
+          example: ["velox-asset://voiceovers/audio.mp3"]
+        scenes:
+          type: array
+          description: Scene list. Each scene drives one composited segment.
+          items:
+            $ref: '#/components/schemas/CreatorScene'
+        delivery_plan:
+          type: array
+          description: |
+            Ordered delivery targets. The first non-failing delivery
+            wins; the rest are skipped. `priority` is honored
+            ascending (lower = earlier).
+          items:
+            $ref: '#/components/schemas/DeliveryPlanEntry'
+
+    # ── Typed DTO (NESTED, post ParseRemotePipelineResult) ───────────────
+    # This is the IN-MEMORY representation the Master constructs from
+    # the flat `CreatorPushPayload`. It is declared here for cross-
+    # reference only; the wire JSON sent by the Creator is the flat
+    # schema above. Clients do not need to understand this nested
+    # layout — it is documented so a reader cross-checking the Go
+    # handler finds a 1:1 correspondence. The `x-flat-to-dto` extension
+    # below is the single source of truth for the field-name transforms
+    # that `ParseRemotePipelineResult` applies.
+    RemotePipelineResult:
+      type: object
+      x-wire-format: false
+      x-flat-to-dto:
+        job_id:         RemoteJobID
+        video_name:     "__passthrough__"
+        script_text:    Script.Text
+        voiceover_paths: "Voiceover.Paths[]"
+        scenes:         "Scenes[]"
+        delivery_plan:  "__passthrough__"
+      x-flat-to-dto-aliases:
+        clip_link:      ClipLink
+        clip_path:      ClipLink
+      description: |
+        Nested typed DTO. Mirrors the Go struct
+        `DataServer/internal/remoteengine/dto.go::RemotePipelineResult`.
+        The wire-facing equivalent is the flat `CreatorPushPayload`
+        above; `ParseRemotePipelineResult` bridges the two using the
+        mapping rules under `x-flat-to-dto` + `x-flat-to-dto-aliases`.
+        Not used as a `$ref` target for any request/response schema
+        in this revision.
+      properties:
+        RemoteJobID:
+          type: string
+          description: DTO mirror of `payload.job_id`.
+        Script:
+          $ref: '#/components/schemas/CreatorScript'
+        Scenes:
+          type: array
+          items:
+            type: object
+            x-derived-from: '#/components/schemas/CreatorScene'
+            description: |
+              Nested scene shape post-`ParseRemotePipelineResult`. Field
+              names are PascalCase (`Text`, `ClipLink`, `DurationSeconds`)
+              whereas the wire-facing `CreatorScene` is snake_case. This
+              block is a FIELD-NAME TRANSFORM of `CreatorScene`; edit
+              the wire schema as canonical.
+            properties:
+              Text:
+                type: string
+              ImageLink:
+                type: string
+                description: "velox-asset:// or https URI to an image fallback."
+              ClipLink:
+                type: string
+                description: "velox-asset:// clip URI or reachable URL."
+              DurationSeconds:
+                type: number
+                format: float
+                minimum: 0.1
+        Voiceover:
+          type: object
+          properties:
+            Paths:
+              type: array
+              items:
+                type: string
+        Metadata:
+          $ref: '#/components/schemas/CreatorMetadata'
+        Assets:
+          type: array
+          items:
+            $ref: '#/components/schemas/CreatorAsset'
+
+    CreatorScript:
+      type: object
+      description: |
+        Script block of the typed DTO. Used as the value of
+        `RemotePipelineResult.Script` and reconstructed by
+        `ParseRemotePipelineResult` from flat `payload.script_text` +
+        any nested `payload.script{}` sub-fields.
+      properties:
+        text:
+          type: string
+        title:
+          type: string
+        markdown_path:
+          type: string
+          description: "velox-asset:// or https URI to a markdown source."
+        json_path:
+          type: string
+          description: "velox-asset:// or https URI to a structured JSON source."
+
+    CreatorScene:
+      type: object
+      description: |
+        Wire-facing scene (used by `CreatorPushPayload.scenes` and
+        tree-equivalent to the nested `RemotePipelineResult.Scenes`
+        flattened by `ParseRemotePipelineResult`). Either `clip_link`
+        or `clip_path` MAY be sent; the handler treats them as
+        aliases of the same DTO field (see `x-flat-to-dto-aliases`
+        on `RemotePipelineResult`).
+      required: [text, duration_seconds]
+      properties:
+        text:
+          type: string
+        clip_link:
+          type: string
+          description: "velox-asset:// clip URI or reachable URL."
+        clip_path:
+          type: string
+          description: "Legacy alias for clip_link."
+        image_link:
+          type: string
+          description: "Optional image fallback."
+        duration_seconds:
+          type: number
+          format: float
+          minimum: 0.1
+
+    DeliveryPlanEntry:
+      type: object
+      required: [destination_id]
+      properties:
+        destination_id:
+          type: string
+          enum: [drive, gcs, s3, youtube, local]
+          example: drive
+        priority:
+          type: integer
+          default: 1
+          description: "Lower = earlier attempt."
+        retry_budget:
+          type: integer
+          default: 3
+          minimum: 0
+        metadata:
+          type: object
+          additionalProperties: true
+          description: "Destination-specific knobs (folder ID, ACL, etc.)."
+
+    CreatorMetadata:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        privacy_status:
+          type: string
+          enum: [public, unlisted, private]
+
+    CreatorAsset:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [image, clip, audio, subtitle]
+        url:
+          type: string
+          description: "velox-asset:// or https URI."
+        local_path:
+          type: string
+          description: "Filesystem path on the worker."
+
+    # ── Envelope: 202 response for POST /api/v1/creator/jobs ─────────────
+    CreatorPushAcceptedResponse:
+      type: object
+      required: [ok, accepted_from, source_provider, source_job_id, target_executor_id, job_id, status, dispatch_status]
+      description: |
+        Successful creation via the creator_push intake. The handler
+        has already persisted `forwarding + Job + Task` atomically via
+        `creatorflow.Resolver` (the unique writer). `dispatch_status`
+        is `queued_for_workers` because the synchronous HTTP phase
+        ended in enqueue; downstream completion is observable via the
+        polling endpoints under `/api/jobs/{job_id}`.
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+          description: "Synchronous success marker. Always `true` on a 202."
+          example: true
+        accepted_from:
+          type: string
+          enum: [creator_push]
+          description: |
+            Fixed marker that identifies this intake as the sync
+            push (vs the async `creator_forwarder` poller). Stable
+            across idempotent replays: a duplicate push with the same
+            `source_provider + source_job_id + target_executor_id`
+            returns the same envelope. Logged and exported as a
+            Prometheus label on `pipeline_creator_intake_accepted_total`
+            with `path="creator_push"`.
+          example: creator_push
+        source_provider:
+          type: string
+          description: "Echoed from the request envelope."
+          example: creator_pc_1
+        source_job_id:
+          type: string
+          description: "Echoed (or filled from `payload.job_id`)."
+          example: creator-job-001
+        target_executor_id:
+          type: string
+          description: "Echoed (or defaulted to `scene.composite.v1`)."
+          example: scene.composite.v1
+        job_id:
+          type: string
+          description: |
+            Velox-side job identifier created by `Resolver.Resolve`
+            inside the atomic UoW. The caller should treat this as
+            the canonical job handle for downstream polling.
+          example: job_a1b2c3d4
+        status:
+          type: string
+          enum: [PENDING]
+          description: "Initial job lifecycle state. Becomes `RUNNING` once a subworker picks it up."
+          example: PENDING
+        dispatch_status:
+          type: string
+          enum: [queued_for_workers]
+          description: |
+            Sync-phase outcome. Asserts that the payload has been
+            handed off to the worker queue. `dispatch_status` is
+            stable across replays so callers can distinguish
+            creator_push from pushes that reached a real terminal
+            state.
+          example: queued_for_workers
+
+    # ── Error envelopes ────────────────────────────────────────────────────
+    ErrorCode:
+      type: string
+      description: |
+        Machine-readable error codes returned in `ErrorEnvelope.error`.
+        Centralized here so a new error response that adds a code is
+        a one-line schema edit, not a scattered string-literal
+        refactor across 401/422/500 examples. The validator
+        `scripts/api/validate_openapi.py` enforces bidirectional
+        equality against its `EXPECTED_ERROR_CODES` set.
+      enum:
+        - missing_authorization
+        - invalid_bearer
+        - invalid_payload
+        - resolver_failure
+
+    ErrorEnvelope:
+      type: object
+      description: |
+        Single error envelope returned for 4xx/5xx responses.
+        Stable shape across the pipeline group; for 422 the
+        `details` array identifies which top-level or nested fields
+        failed validation.
+      required: [ok, error, message]
+      properties:
+        ok:
+          type: boolean
+          enum: [false]
+          example: false
+        error:
+          $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+          description: "Human-readable explanation."
+          example: "payload.scenes[0] missing 'duration_seconds'"
+        details:
+          type: array
+          description: "Field-level failure list (only present for 422)."
+          items:
+            type: object
+            properties:
+              path:
+                type: string
+                example: "payload.scenes.0.duration_seconds"
+              issue:
+                type: string
+                example: "required"
+
+# ── Paths ───────────────────────────────────────────────────────────────────
+paths:
+  # ── creator_push intake (the new endpoint) ───────────────────────────────
+  /api/v1/creator/jobs:
+    post:
+      tags: [creator]
+      operationId: pushCreatorJob
+      summary: "Push a completed Creator payload directly to the Master."
+      description: |
+        Synchronous intake for Creator machines. The handler
+        `creator_push` accepts a `CreatorPushPayload`-shaped
+        payload, converts it to the typed `RemotePipelineResult`
+        DTO via `remoteengine.ParseRemotePipelineResult`, and
+        delegates to the canonical `creatorflow.Resolver`. Replays
+        with the same
+        `source_provider + source_job_id + target_executor_id` are
+        **idempotent**: they converge to the same Velox job and the
+        same `dispatch_status` overlay.
+
+        The handler does NOT open a parallel database transaction:
+        `creator_forwardings`, `jobs` and `tasks` are written exactly
+        once, inside `AtomicForwardAndEnqueue`. See
+        `docs/architecture/runtime-invariants.md §4.2` for the
+        invariant.
+
+        `accepted_from` in the response is the canonical way for
+        callers (and for our Prometheus metric
+        `pipeline_creator_intake_accepted_total{path=…}`) to split
+        the sync push from the async `creator_forwarder` poller.
+
+        Tested end-to-end by
+        `DataServer/internal/handlers/server/pipeline/creator_push_e2e_test.go`
+        and smoke-tested by `scripts/creator_push_smoke.sh`.
+      parameters:
+        - $ref: '#/components/parameters/AuthorizationHeader'
+        - $ref: '#/components/parameters/XRequestIDHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatorPushRequest'
+            examples:
+              basic_voiceover_stock_clip_scene:
+                summary: "Voiceover + stock + clip + scene (the canonical Creator flow)."
+                value:
+                  source_provider: creator_pc_1
+                  source_job_id: creator-job-001
+                  target_executor_id: scene.composite.v1
+                  payload:
+                    status: completed
+                    job_id: creator-job-001
+                    video_name: "Aqueducts of Rome"
+                    script_text: "In questo video scopriremo gli acquedotti romani."
+                    voiceover_paths:
+                      - "velox-asset://voiceovers/intro.mp3"
+                    scenes:
+                      - text: "Apertura sugli acquedotti"
+                        clip_link: "velox-asset://clips/aqueduct-clip-01.mp4"
+                        duration_seconds: 7
+                      - text: "Dettaglio arco in pietra"
+                        clip_link: "velox-asset://clips/aqueduct-clip-02.mp4"
+                        duration_seconds: 9
+                    delivery_plan:
+                      - destination_id: drive
+                        priority: 1
+                        retry_budget: 3
+      responses:
+        '202':
+          description: |
+            Payload accepted by the Master. `job_id` is the canonical
+            Velox-side identifier and can be polled via the existing
+            pipeline endpoints. `dispatch_status` is
+            `queued_for_workers` for an immediately-accepted push and
+            is preserved across idempotent replays.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatorPushAcceptedResponse'
+              examples:
+                accepted:
+                  value:
+                    ok: true
+                    accepted_from: creator_push
+                    source_provider: creator_pc_1
+                    source_job_id: creator-job-001
+                    target_executor_id: scene.composite.v1
+                    job_id: job_a1b2c3d4
+                    status: PENDING
+                    dispatch_status: queued_for_workers
+        '401':
+          description: |
+            Missing or invalid bearer. Either the `Authorization`
+            header was absent or the bearer did not match
+            `VELOX_ADMIN_TOKEN`. The handler never echoes the actual
+            token value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                missing:
+                  value:
+                    ok: false
+                    error: missing_authorization
+                    message: "Authorization header with bearer token is required"
+                mismatch:
+                  value:
+                    ok: false
+                    error: invalid_bearer
+                    message: "Bearer does not match VELOX_ADMIN_TOKEN"
+        '422':
+          description: |
+            Payload was syntactically valid JSON but semantically
+            rejected (missing required field, unknown `target_executor_id`,
+            non-`velox-asset://` voiceover pointer, etc.). **No Job
+            is created** for 422 responses — the handler fails
+            closed before delegating to `Resolver`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                missing_scene_duration:
+                  value:
+                    ok: false
+                    error: invalid_payload
+                    message: "payload.scenes[0] missing 'duration_seconds'"
+                    details:
+                      - path: "payload.scenes.0.duration_seconds"
+                        issue: "required"
+        '500':
+          description: |
+            Resolver or storage failure inside the atomic UoW. The
+            response is best-effort: a 500 here means NO job was
+            created, but a 4xx/5xx does not rule out the job having
+            been enqueued from a concurrent push with the same
+            identity (the second leg will see the existing row).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                resolver_failure:
+                  value:
+                    ok: false
+                    error: resolver_failure
+                    message: "AtomicForwardAndEnqueue failed: see server logs"
+      x-codeSamples:
+        - lang: curl
+          label: "Smoke push (see scripts/creator_push_smoke.sh)"
+          source: |
+            curl -sS -X POST "${VELOX_MASTER_URL}/api/v1/creator/jobs" \
+              -H "Authorization: Bearer ${VELOX_ADMIN_TOKEN}" \
+              -H "X-Request-ID: creator-push-smoke" \
+              -H "Content-Type: application/json" \
+              --data-binary @examples/creator_push_basic.json
