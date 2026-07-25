@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -53,49 +54,37 @@ type normalizedCreatorPush struct {
 	WorkerPayload    map[string]interface{}
 }
 
-// normalizeRemoteEngineIntake is the SINGLE shared adapter for both
-// intake paths that converge on creatorflow.Resolver.Resolve:
+// normalizeCreatorPushRequest is the canonical typed-DTO adapter
+// for POST /api/v1/creator/jobs. It runs the raw creator map through
+// ParseRemotePipelineResult, derives the worker payload via
+// ToWorkerPayload, and produces the resolver identity tuple
+// (source_provider + source_job_id + target_executor_id) with the
+// documented fallback chain.
 //
-//   - POST /api/v1/creator/jobs (new creator_push) wraps its payload in
-//     a creatorPushRequest envelope and routes it here.
-//   - POST /api/remote/pipeline (legacy remote-engine sync-forward)
-//     passes its raw result map directly here.
-//
-// Both call sites MUST go through this function so the typed DTO
-// normalization (ParseRemotePipelineResult → ToWorkerPayload) and the
-// identity derivation (source_provider / source_job_id /
-// target_executor_id) stay byte-identical — drift between the two
-// intake paths becomes mathematically impossible.
-//
-// envelopeSourceProvider defaults to defaultCreatorSourceProvider when
-// empty. envelopeSourceJobID and envelopeTargetExecutorID fall back to
-// the typed DTO's RemoteJobID and the worker payload's
-// (job_id|trace_id|id) and (executor_id|pipeline_id) keys respectively.
-// The hardcoded default target_executor_id "scene.composite.v1" only
-// applies when both the envelope and the worker payload are silent —
-// callers SHOULD pass an explicit target to avoid silent fallback.
-func normalizeRemoteEngineIntake(
-	rawResult map[string]interface{},
-	envelopeSourceProvider string,
-	envelopeSourceJobID string,
-	envelopeTargetExecutorID string,
-) (*normalizedCreatorPush, error) {
-	if rawResult == nil {
+// source_provider defaults to defaultCreatorSourceProvider when
+// empty. source_job_id falls back to dto.RemoteJobID and then to the
+// worker payload's (job_id|trace_id|id) keys. target_executor_id
+// falls back to the worker payload's (executor_id|pipeline_id) keys,
+// then to the hardcoded "scene.composite.v1" only when both the
+// request and the payload are silent — callers SHOULD pass an
+// explicit target to avoid silent fallback.
+func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush, error) {
+	if req.Payload == nil {
 		return nil, fmt.Errorf("payload is required")
 	}
 
-	dto, err := remoteengine.ParseRemotePipelineResult(rawResult)
+	dto, err := remoteengine.ParseRemotePipelineResult(req.Payload)
 	if err != nil {
-		return nil, fmt.Errorf("parse remote-engine payload: %w", err)
+		return nil, fmt.Errorf("parse creator payload: %w", err)
 	}
 	workerPayload := dto.ToWorkerPayload()
 
-	sourceProvider := strings.TrimSpace(envelopeSourceProvider)
+	sourceProvider := strings.TrimSpace(req.SourceProvider)
 	if sourceProvider == "" {
 		sourceProvider = defaultCreatorSourceProvider
 	}
 
-	sourceJobID := strings.TrimSpace(envelopeSourceJobID)
+	sourceJobID := strings.TrimSpace(req.SourceJobID)
 	if sourceJobID == "" {
 		sourceJobID = strings.TrimSpace(dto.RemoteJobID)
 	}
@@ -106,7 +95,7 @@ func normalizeRemoteEngineIntake(
 		return nil, fmt.Errorf("source_job_id is required (set it in the envelope or payload.job_id)")
 	}
 
-	targetExecutorID := strings.TrimSpace(envelopeTargetExecutorID)
+	targetExecutorID := strings.TrimSpace(req.TargetExecutorID)
 	if targetExecutorID == "" {
 		targetExecutorID = firstStringResolver(workerPayload, "executor_id", "pipeline_id")
 	}
@@ -122,18 +111,74 @@ func normalizeRemoteEngineIntake(
 	}, nil
 }
 
-// normalizeCreatorPushRequest is the thin wrapper used by POST
-// /api/v1/creator/jobs. It projects the creatorPushRequest envelope
-// onto the shared normalizeRemoteEngineIntake helper so the creator
-// push path and the legacy remote-engine path share a single
-// normalization step.
-func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush, error) {
-	return normalizeRemoteEngineIntake(
-		req.Payload,
-		req.SourceProvider,
-		req.SourceJobID,
-		req.TargetExecutorID,
+// resolveCompletedPayload is the canonical HTTP-side adapter into
+// creatorflow.Resolver.Resolve. It is intentionally provider-agnostic
+// so any future creator intake (creator_push today, plus any new
+// producer that wants the same atomic forwarding + Job+Task write
+// path) converges on the same code. Previously this lived in
+// forwarding.go alongside the now-removed legacy sync-forward path;
+// after that path was retired the helper moved here as the single
+// remaining Module's resolver entry call.
+func (h *Handlers) resolveCompletedPayload(
+	ctx context.Context,
+	sourceProvider string,
+	sourceJobID string,
+	targetExecutorID string,
+	result map[string]interface{},
+) (map[string]interface{}, error) {
+	if h.resolver == nil {
+		return nil, fmt.Errorf("pipeline handler requires a wired resolver (composition root MUST pass creatorflow.Resolver)")
+	}
+
+	sourceProvider = strings.TrimSpace(sourceProvider)
+	if sourceProvider == "" {
+		return nil, fmt.Errorf("source_provider is required")
+	}
+	sourceJobID = strings.TrimSpace(sourceJobID)
+	if sourceJobID == "" {
+		return nil, fmt.Errorf("source_job_id is required")
+	}
+	if result == nil {
+		return nil, fmt.Errorf("payload is required")
+	}
+
+	out, err := h.resolver.Resolve(ctx, creatorflow.ResolveRequest{
+		ForwardingID:     "",
+		SourceProvider:   sourceProvider,
+		SourceJobID:      sourceJobID,
+		TargetExecutorID: strings.TrimSpace(targetExecutorID),
+		Payload:          result,
+	})
+	if err != nil {
+		pipelineLog("FORWARD: Resolver.Resolve FAILED provider=%s source_job=%s: %v", sourceProvider, sourceJobID, err)
+		return nil, err
+	}
+	if out == nil {
+		return nil, nil
+	}
+
+	pipelineLog(
+		"FORWARD: enqueued via Resolver provider=%s source_job=%s job_id=%s forwarding_id=%s",
+		sourceProvider,
+		sourceJobID,
+		out.JobID,
+		out.ForwardingID,
 	)
+	return out.Response, nil
+}
+
+// firstStringResolver reads the first non-empty string value from a
+// map across the provided keys. Package-private helper (no tests
+// outside this package should depend on it directly).
+func firstStringResolver(m map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if v, ok := m[key]; ok {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	return ""
 }
 
 // CreatorPush handles POST /api/v1/creator/jobs.
@@ -210,30 +255,10 @@ func (h *Handlers) CreatorPush() gin.HandlerFunc {
 		response["source_provider"] = normalized.SourceProvider
 		response["source_job_id"] = normalized.SourceJobID
 		response["target_executor_id"] = normalized.TargetExecutorID
-		// Surface the dispatch status so callers can split creator_push
-		// traffic from any other producer at the wire level. The Resolver
-		// already emits job status (PENDING); this overlay adds the
-		// dispatch-side marker that docs/CREATOR-PUSH.md and the creator
-		// contract both declare. GUARDED: only stamp when the Resolver
-		// response envelope does not already carry dispatch_status, so
-		// a future Resolver that emits "dispatching" / "dispatched"
-		// states is not silently clobbered back to "queued_for_workers".
-		// The empty-present case (Resolver returning dispatch_status=""
-		// empty) is intentionally treated as Resolver-claimed — the
-		// handler does NOT re-stamp. Don't add a value=="" guard.
 		if _, owned := response["dispatch_status"]; !owned {
 			response["dispatch_status"] = "queued_for_workers"
 		}
 
-		// Fail-closed observation point (runtime-invariants.md §4.4):
-		// the log + counter are stamped ONLY after the atomic CAS
-		// committed (resolveCompletedPayload returned success), so we
-		// never log a "success" that the database has not seen. The
-		// increment is the canonical signal that the new creator_push
-		// intake path was exercised; the legacy async
-		// CreatorForwardingRunner stamps the same counter with
-		// path="creator_forwarder" so the push/forwarder adoption
-		// ratio is comparable.
 		h.intakeSinkOrNoop().IncAccepted("creator_push")
 		jobID, _ := response["job_id"].(string)
 		pipelineLog(

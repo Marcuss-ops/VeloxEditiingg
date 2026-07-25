@@ -78,25 +78,6 @@ func buildCreateResponse(pr *pipelineruns.PipelineRun, isDuplicate bool) gin.H {
 // forwarded to the Velox worker queue. `forwarded` is the worker
 // response map returned by forwardPipelineResultToWorker (which wraps
 // Resolver.Resolve's ResolveOutput.Response).
-func buildCreateResponseFromSyncForward(pr *pipelineruns.PipelineRun, forwarded map[string]interface{}) gin.H {
-	resp := gin.H{
-		"ok":              true,
-		"pipeline_run_id": pr.ID,
-		"request_id":      pr.RequestID,
-		"status":          string(pr.Status),
-		"status_url":      "/api/v1/pipeline-runs/" + pr.ID,
-		"is_duplicate":    false,
-	}
-	if pr.RemoteJobID != "" {
-		resp["remote_job_id"] = pr.RemoteJobID
-	}
-	if forwarded != nil {
-		if wjID, ok := forwarded["job_id"].(string); ok && wjID != "" {
-			resp["velox_job_id"] = wjID
-		}
-	}
-	return resp
-}
 
 // buildPipelineRunProjection builds the full status projection from a
 // pipeline_runs row. When the row has a velox_job_id, it enriches the
@@ -159,3 +140,4 @@ func forwardingStatus(f *store.CreatorForwarding) string {
 		return "REMOTE_QUEUED"
 	}
 }
+

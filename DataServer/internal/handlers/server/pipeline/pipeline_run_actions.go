@@ -287,13 +287,9 @@ func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 			}
 		}
 
-		// ── Sync forward if the result is already complete ────────────
-		if enqueue.ShouldForwardPipelineResult(workerPayload) {
-			forwarded, _ := h.syncForwardResult(ctx, pr, result, workerPayload)
-			c.JSON(http.StatusAccepted, buildCreateResponseFromSyncForward(pr, forwarded))
-			return
-		}
-
+	// Async forward always (the legacy sync-forward on early completion branch was removed
+	// when /api/remote/pipeline was deleted from main; RetryPipelineRun now matches
+	// generate.go’s always-async forwarding behavior).
 		// Persist forwarding for async result.
 		if jobID == "" {
 			// Remote response missing job_id — contract violation.
