@@ -100,6 +100,64 @@ adopt `v1.3.0-creator-push` (or any later HEAD) without config changes:
 
 ## [Unreleased] - 2026-07-25
 
+### Deprecation: `/api/remote/pipeline` → `/api/v1/creator/jobs` (drift-proof)
+
+The legacy sync-forward endpoint `POST /api/remote/pipeline` is now
+formally **deprecated** in favor of the canonical creator_push
+intake `POST /api/v1/creator/jobs`. The migration lands as three
+atomic commits on `main`:
+
+1. `51a307d refactor(pipeline): unify creator_push + remote-engine normalization to eliminate drift`
+   — Extracts `normalizeRemoteEngineIntake` as the SINGLE shared
+   adapter. Both intake paths now route their input through the same
+   typed-DTO normalization (`remoteengine.ParseRemotePipelineResult`
+   → `dto.ToWorkerPayload`) and the same identity derivation
+   (`source_provider` / `source_job_id` / `target_executor_id` with
+   the documented fallback chain). Drift between the two intake
+   paths becomes mathematically impossible.
+
+2. `788a119 feat(pipeline): add deprecation telemetry for /api/remote/pipeline legacy path`
+   — Post-CAS observation point in `forwardPipelineResultToWorker`
+   stamps `pipeline.creator_intake_accepted_total{path="remote_engine_legacy"}`
+   and emits `pipelineLog("DEPRECATED_REMOTE_ENGINE_INTAKE ... — use POST /api/v1/creator/jobs")`.
+   Mirrors the existing creator_push observation point exactly.
+   Time-series cardinality remains bounded at 3 (`creator_push`,
+   `creator_forwarder`, `remote_engine_legacy`).
+
+3. **THIS COMMIT** `docs(creator-push+changelog): document /api/remote/pipeline deprecation timeline`
+   — Adds `docs/CREATOR-PUSH.md §Deprecation timeline` (migration
+   steps, observability, sunset policy, cross-references) and this
+   CHANGELOG entry.
+
+**Sunset policy.** `forwardPipelineResultToWorker` and
+`/api/remote/pipeline` are scheduled for removal in **v2.0.0**.
+Removal will NOT land on `main` until the
+`pipeline.creator_intake_accepted_total{path="remote_engine_legacy"}`
+counter is observed at **zero** for at least one full release cycle
+(one calendar quarter of production traffic at the previous release).
+This data-driven sunset guard prevents a silent regression in any
+operator fleet still running the legacy endpoint.
+
+**Behavior preserved.** Existing remote-engine workers that already
+pass `job_id` / `executor_id` as top-level keys in the raw result map
+produce the same `(source_provider="remote_engine", source_job_id,
+target_executor_id)` tuple they did before the refactor. The new
+typed-DTO overlay runs through `dto.ToWorkerPayload()` which
+preserves all non-DTO fields (`delivery_plan`, `output_path`, etc.)
+in the worker payload. 4 new direct unit tests for
+`normalizeRemoteEngineIntake` lock in the legacy raw-map contract
+(`creator_push_test.go`).
+
+**Files touched** (3-commit chain):
+
+- `DataServer/internal/handlers/server/pipeline/forwarding.go` — shared normalizer call site + `// Deprecated:` annotation + post-CAS telemetry
+- `DataServer/internal/handlers/server/pipeline/creator_push.go` — extracts `normalizeRemoteEngineIntake`; thin wrapper preserved for back-compat
+- `DataServer/internal/handlers/server/pipeline/creator_push_test.go` — 4 new direct tests for `normalizeRemoteEngineIntake` (legacy raw-map path)
+- `DataServer/internal/metrics/creator_intake.go` — label set comment now lists `remote_engine_legacy` (cardinality remains bounded at 3)
+- `DataServer/internal/metrics/catalog_pipeline.go` — `pipeline.creator_intake_accepted_total` description enumerates 3 valid path values + v2.0.0 sunset
+- `docs/CREATOR-PUSH.md` — §Deprecation timeline (migration steps, observability, sunset policy, cross-references)
+- `CHANGELOG.md` — this entry
+
 ### Creator-push response: `dispatch_status` overlay
 
 The `POST /api/v1/creator/jobs` handler now stamps a top-level
