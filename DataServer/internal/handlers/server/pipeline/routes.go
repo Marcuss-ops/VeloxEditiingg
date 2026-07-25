@@ -12,6 +12,8 @@
 //   - POST   /generate                                              → h.Generate()
 //   - GET    /status/:trace_id                                      → h.Status()
 //   - DELETE /cancel/:trace_id                                      → h.Cancel()
+//   - group /api/v1/creator/       (adminAuth-guarded when non-nil)
+//   - POST /jobs                                                    → h.CreatorPush()
 //   - ungrouped /api/v1/pipeline-runs family (canonical versioned API):
 //   - POST /api/v1/pipeline-runs                       → h.CreatePipelineRun()
 //   - GET  /api/v1/pipeline-runs/:id                   → h.PipelineRunStatus()
@@ -21,11 +23,9 @@
 //   - GET  /api/v1/pipeline-runs/:id/artifacts         → h.PipelineRunArtifacts()
 //   - GET  /api/v1/pipeline-runs/:id/deliveries        → h.PipelineRunDeliveries()
 //
-// adminAuth is the gin.HandlerFunc applied to the
-// /api/remote/pipeline/* group when non-nil; pass nil to disable
-// authentication on the operator routes — the trusted-network / test
-// form. The canonical CLI form (cmd/server/router.go) always passes
-// a non-nil adminAuth handler.
+// adminAuth is the gin.HandlerFunc applied to the machine-to-machine route
+// groups when non-nil. The canonical CLI form (cmd/server/router.go) always
+// passes a non-nil adminAuth handler.
 package pipeline
 
 import (
@@ -34,9 +34,8 @@ import (
 
 // RegisterRoutes mounts all pipeline endpoints on the given engine.
 //
-//	adminAuth — when non-nil, applied to the operator routes
-//	             (generate/status/cancel). Pass nil for the trusted
-//	             network or test mounts.
+//	adminAuth — when non-nil, applied to operator and creator push routes.
+//	             Pass nil for trusted-network or test mounts.
 func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth gin.HandlerFunc) {
 	r.POST("/api/script-simple", h.ScriptSimple())
 	r.POST("/api/script-multiple", h.ScriptBatch())
@@ -48,6 +47,12 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth gin.HandlerFunc) {
 	remote.POST("/generate", h.Generate())
 	remote.GET("/status/:trace_id", h.Status())
 	remote.DELETE("/cancel/:trace_id", h.Cancel())
+
+	creator := r.Group("/api/v1/creator")
+	if adminAuth != nil {
+		creator.Use(adminAuth)
+	}
+	creator.POST("/jobs", h.CreatorPush())
 
 	// Canonical, versioned pipeline-runs API. The POST creates a
 	// durable pipeline_run before the remote call; the GET returns the
