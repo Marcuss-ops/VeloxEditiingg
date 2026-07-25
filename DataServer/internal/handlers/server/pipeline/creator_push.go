@@ -148,6 +148,12 @@ func (h *Handlers) CreatorPush() gin.HandlerFunc {
 		response["source_provider"] = normalized.SourceProvider
 		response["source_job_id"] = normalized.SourceJobID
 		response["target_executor_id"] = normalized.TargetExecutorID
+		// Surface the dispatch status so callers can split creator_push
+		// traffic from any other producer at the wire level. The Resolver
+		// already emits job status (PENDING); this overlay adds the
+		// dispatch-side marker that docs/CREATOR-PUSH.md and the creator
+		// contract both declare.
+		response["dispatch_status"] = "queued_for_workers"
 
 		c.JSON(http.StatusAccepted, response)
 	}
