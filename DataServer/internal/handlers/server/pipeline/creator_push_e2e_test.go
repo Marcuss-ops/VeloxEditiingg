@@ -203,14 +203,14 @@ func TestCreatorPushJobsE2E_VoiceoverStockClipScene(t *testing.T) {
 	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM tasks WHERE job_id = ?`, expectedJobID).Scan(&taskCount); err != nil {
 		t.Fatalf("count tasks: %v", err)
 	}
-	if taskCount < 1 {
-		t.Fatalf("at least 1 tasks row expected, got %d", taskCount)
+	if taskCount != 1 {
+		t.Fatalf("exactly 1 tasks row expected, got %d", taskCount)
 	}
 	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM task_specs WHERE job_id = ?`, expectedJobID).Scan(&specCount); err != nil {
 		t.Fatalf("count task_specs: %v", err)
 	}
-	if specCount < 1 {
-		t.Fatalf("at least 1 task_specs row expected, got %d", specCount)
+	if specCount != 1 {
+		t.Fatalf("exactly 1 task_specs row expected, got %d", specCount)
 	}
 
 	// Idempotency: second POST with the same body returns the same job_id
@@ -243,7 +243,7 @@ func TestCreatorPushJobsE2E_VoiceoverStockClipScene(t *testing.T) {
 	if fwdCount != 1 {
 		t.Fatalf("want exactly 1 forwarding row after replay, got %d", fwdCount)
 	}
-	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM jobs WHERE id = ?`, expectedJobID).Scan(&jobCount); err != nil {
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM jobs WHERE job_id = ?`, expectedJobID).Scan(&jobCount); err != nil {
 		t.Fatalf("count jobs: %v", err)
 	}
 	if jobCount != 1 {
@@ -284,7 +284,7 @@ func TestCreatorPushJobsE2E_IncompletePayloadReturns422(t *testing.T) {
 
 	// 422 path must NOT leave any Job or forwarding row behind.
 	var jobCount int
-	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM jobs WHERE id = ?`, expectedJobID).Scan(&jobCount); err != nil {
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM jobs WHERE job_id = ?`, expectedJobID).Scan(&jobCount); err != nil {
 		t.Fatalf("count jobs: %v", err)
 	}
 	if jobCount != 0 {
@@ -300,20 +300,30 @@ func TestCreatorPushJobsE2E_IncompletePayloadReturns422(t *testing.T) {
 	if fwdCount != 0 {
 		t.Fatalf("422 path must NOT create a forwarding row, got %d", fwdCount)
 	}
+	var taskCount422 int
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM tasks WHERE job_id = ?`, expectedJobID).Scan(&taskCount422); err != nil {
+		t.Fatalf("count tasks on 422 path: %v", err)
+	}
+	if taskCount422 != 0 {
+		t.Fatalf("422 path must NOT create a tasks row, got %d", taskCount422)
+	}
 }
 
 // TestCreatorPushJobsE2E_MissingSourceJobIDReturns400 covers the 400 path
 // when neither the envelope nor payload carry source_job_id. The
 // normalization layer rejects this case with a typed error that the
-// handler maps to 400 Bad Request.
+// handler maps to 400 Bad Request. The 400 path runs in
+// normalizeCreatorPushRequest BEFORE any DB write, so we additionally
+// assert that no creator_forwardings row exists for that key — the
+// handler must NOT have reached the Resolver entry point.
 func TestCreatorPushJobsE2E_MissingSourceJobIDReturns400(t *testing.T) {
-	h, _, _ := newCreatorPushE2EStack(t)
+	h, db, _ := newCreatorPushE2EStack(t)
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	h.RegisterRoutes(r, adminAuthFake)
 
 	body := map[string]interface{}{
-		"source_provider": "creator_pc_1",
+		"source_provider": "creator_pc_nosrc",
 		"payload": map[string]interface{}{
 			"status":     "completed",
 			"video_name": "no source_job_id anywhere",
@@ -325,4 +335,17 @@ func TestCreatorPushJobsE2E_MissingSourceJobIDReturns400(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d body=%s", w.Code, w.Body.String())
 	}
+
+	// 400 path must reject BEFORE the Resolver — no forwarding row.
+	var fwdCount int
+	if err := db.DB().QueryRow(
+		`SELECT COUNT(*) FROM creator_forwardings WHERE source_provider = ? OR source_provider = 'creator'`,
+		"creator_pc_nosrc",
+	).Scan(&fwdCount); err != nil {
+		t.Fatalf("count forwardings on 400 path: %v", err)
+	}
+	if fwdCount != 0 {
+		t.Fatalf("400 path must NOT reach the Resolver (no forwarding row), got %d", fwdCount)
+	}
+	_ = db // referenced to silence unused warning if test scope changes
 }
