@@ -133,10 +133,22 @@ atomic commits on `main`:
 `/api/remote/pipeline` are scheduled for removal in **v2.0.0**.
 Removal will NOT land on `main` until the
 `pipeline.creator_intake_accepted_total{path="remote_engine_legacy"}`
-counter is observed at **zero** for at least one full release cycle
-(one calendar quarter of production traffic at the previous release).
-This data-driven sunset guard prevents a silent regression in any
-operator fleet still running the legacy endpoint.
+counter is observed at **zero** for at least one full release cycle of
+production traffic at the immediately preceding v1.x.y release. This
+data-driven sunset guard prevents a silent regression in any operator
+fleet still running the legacy endpoint.
+
+**Counter semantics on reconciler retry loops.** The
+`pipeline.creator_intake_accepted_total{path="remote_engine_legacy"}`
+counter measures **Resolver-bound attempts**, not unique jobs created.
+`forwardPipelineResultToWorker` does not retry internally, but if an
+external reconciler (e.g., the FORWARDING-state reaper) re-calls it
+for the same `pipeline_run`, the counter increments again even though
+the second attempt is a no-op idempotency replay. Operators monitoring
+the sunset should normalize the counter against the
+`(source_provider, source_job_id)` cardinality in the structured
+`DEPRECATED_REMOTE_ENGINE_INTAKE` log lines (each log line carries
+both fields), not against the counter alone.
 
 **Behavior preserved.** Existing remote-engine workers that already
 pass `job_id` / `executor_id` as top-level keys in the raw result map
