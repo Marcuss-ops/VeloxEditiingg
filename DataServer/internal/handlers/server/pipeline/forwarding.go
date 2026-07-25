@@ -128,6 +128,28 @@ func (h *Handlers) forwardPipelineResultToWorker(ctx context.Context, result map
 	if err == creatorflow.ErrResolverNotComplete {
 		return nil, nil
 	}
+
+	// DEPRECATED-PATH TELEMETRY (post-CAS, mirroring creator_push).
+	// The counter + log line are stamped ONLY after the atomic CAS
+	// committed (resolveCompletedPayload returned success), so we never
+	// claim success that the database has not seen. The log carries the
+	// "use POST /api/v1/creator/jobs" hint so operators searching for
+	// legacy traffic in observability dashboards can pivot straight to
+	// the migration target. The legacy path is expected to trend to
+	// zero as remote-engine workers migrate; sustained traffic after
+	// v2.0.0 will trigger a follow-up that deletes this branch entirely.
+	if err == nil && forwarded != nil {
+		h.intakeSinkOrNoop().IncAccepted("remote_engine_legacy")
+		jobID, _ := forwarded["job_id"].(string)
+		pipelineLog(
+			"DEPRECATED_REMOTE_ENGINE_INTAKE path=remote_engine_legacy source_provider=%s source_job_id=%s target_executor_id=%s job_id=%s — use POST /api/v1/creator/jobs",
+			normalized.SourceProvider,
+			normalized.SourceJobID,
+			normalized.TargetExecutorID,
+			jobID,
+		)
+	}
+
 	return forwarded, err
 }
 
