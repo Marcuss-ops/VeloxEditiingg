@@ -387,6 +387,13 @@ func TestCreatorPushJobsE2E_RealAdminAuthWired(t *testing.T) {
 	h, _, _ := newCreatorPushE2EStack(t)
 	gin.SetMode(gin.TestMode)
 
+	// Pin the env so a leftover VELOX_ADMIN_TOKEN in the developer's shell
+	// or in CI does NOT mask the test token. api.AdminAuthMiddleware honours
+	// cfg.Auth.AdminToken directly, so this is the canonical contract;
+	// setting it to empty guarantees the middleware will still reject
+	// requests with that header value.
+	t.Setenv("VELOX_ADMIN_TOKEN", "")
+
 	const testToken = "test-secret-token"
 	cfg := &config.Config{}
 	cfg.Auth.AdminToken = testToken

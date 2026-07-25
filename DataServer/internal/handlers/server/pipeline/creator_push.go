@@ -152,8 +152,13 @@ func (h *Handlers) CreatorPush() gin.HandlerFunc {
 		// traffic from any other producer at the wire level. The Resolver
 		// already emits job status (PENDING); this overlay adds the
 		// dispatch-side marker that docs/CREATOR-PUSH.md and the creator
-		// contract both declare.
-		response["dispatch_status"] = "queued_for_workers"
+		// contract both declare. GUARDED: only stamp when the Resolver
+		// response envelope does not already carry dispatch_status, so
+		// a future Resolver that emits "dispatching" / "dispatched"
+		// states is not silently clobbered back to "queued_for_workers".
+		if _, owned := response["dispatch_status"]; !owned {
+			response["dispatch_status"] = "queued_for_workers"
+		}
 
 		c.JSON(http.StatusAccepted, response)
 	}

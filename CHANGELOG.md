@@ -1,3 +1,52 @@
+## [Unreleased] - 2026-07-25
+
+### Creator-push response: `dispatch_status` overlay
+
+The `POST /api/v1/creator/jobs` handler now stamps a top-level
+`dispatch_status` field (currently the literal `"queued_for_workers"`)
+on every accepted 202 envelope. The overlay is **guarded**: the
+handler only stamps the field when the upstream Resolver response
+does not already carry one, so a future Resolver emission
+(e.g. `"dispatching"` / `"dispatched"`) is preserved instead of
+silently clobbered back to `"queued_for_workers"`.
+
+Wire contract change — callers that consume the 202 envelope MUST be
+prepared to read the new top-level `dispatch_status` key. Operators
+that grep observability logs for `accepted_from=creator_push` are
+unaffected; the new key is orthogonal to that filter.
+
+Also lands alongside a tightening of `creator_push_e2e_test.go`:
+
+- **Real-`VELOX_ADMIN_TOKEN` E2E coverage** — `TestCreatorPushJobsE2E_RealAdminAuthWired`
+  replaces the `adminAuthFake` stub for the auth chain with the
+  production `api.AdminAuthMiddleware(cfg)` and asserts: 401 on no
+  `Authorization`, 401 on wrong bearer, 202 on the right bearer.
+  `req.RemoteAddr` is pinned to RFC 5737 TEST-NET-2
+  (`198.51.100.1:1234`) so the middleware's `IsLocalRequestIP`
+  loopback bypass cannot accidentally satisfy the suite; `gin.SetTrustedProxies(nil)`
+  blocks `X-Forwarded-For` spoofing on the test path; `t.Setenv("VELOX_ADMIN_TOKEN", "")`
+  pins any leftover env.
+- **Idempotency replay envelope** — the second POST now asserts
+  `created: false` (fast-path marker) AND `dispatch_status: queued_for_workers`
+  (carried across replays identically). Guards against future
+  regressions that strip overlay fields on the idempotent path.
+- **Schema-correct DB counts** —
+  - `jobs.id` → `jobs.job_id` (2 sites: idempotency replay + 422 zero-rows).
+  - `tasks.id` non esiste; usa `tasks.job_id`. `task_specs.job_id` non esiste;
+    usa JOIN via `tasks.task_id`: `WHERE task_id IN (SELECT task_id FROM tasks WHERE job_id = ?)`.
+  - Counts su `tasks` e `task_specs` ora esatti (`== 1` invece di `<= 1`).
+  - Path 422 ora asserisce 0 rows anche su `tasks` (atomic CAS non lascia
+    residui parziali).
+  - Path 400 asserisce 0 rows in `creator_forwardings` per la chiave
+    `source_provider` (handler rejected in `normalizeCreatorPushRequest`
+    prima di raggiungere il Resolver).
+
+NO BEHAVIOR CHANGE for callers that ignore the new field.
+
+Refs: `DataServer/internal/handlers/server/pipeline/creator_push.go`,
+`DataServer/internal/handlers/server/pipeline/creator_push_e2e_test.go`,
+`docs/CREATOR-PUSH.md`.
+
 ## v1.2.21 (2026-07-11)
 
 ### Behavior changes
