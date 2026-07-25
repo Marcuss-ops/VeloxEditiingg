@@ -26,6 +26,7 @@ import (
 
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/routing"
@@ -241,6 +242,12 @@ func TestCreatorPushJobsE2E_VoiceoverStockClipScene(t *testing.T) {
 	if v, ok := resp2["created"]; !ok || v != false {
 		t.Fatalf("idempotent created: want false (fast-path), got %v (present=%v)", v, ok)
 	}
+	// dispatch_status is stamped on every response (fresh + replay), so the
+	// replay must carry it identically. This guards against a future
+	// regression that strips overlay fields on the idempotent path.
+	if resp2["dispatch_status"] != "queued_for_workers" {
+		t.Fatalf("idempotent dispatch_status: want queued_for_workers, got %v", resp2["dispatch_status"])
+	}
 
 	var fwdCount, jobCount int
 	if err := db.DB().QueryRow(
@@ -359,5 +366,67 @@ func TestCreatorPushJobsE2E_MissingSourceJobIDReturns400(t *testing.T) {
 	}
 	if fwdCount != 0 {
 		t.Fatalf("400 path must NOT reach the Resolver (no forwarding row), got %d", fwdCount)
+	}
+}
+
+// TestCreatorPushJobsE2E_RealAdminAuthWired verifies that
+// /api/v1/creator/jobs is mounted behind the real
+// api.AdminAuthMiddleware (not the adminAuthFake stub). Three subcases:
+//
+//  1. No Authorization header  → 401 (handler never reached).
+//  2. Wrong bearer token        → 401 (handler never reached).
+//  3. Right bearer token        → 202 (handler reached, CreatorPush enqueued).
+//
+// Defense-in-depth against the IsLocalRequestIP early-return bypass:
+// the middleware short-circuits when c.ClientIP() is loopback. We pin
+// req.RemoteAddr to a non-loopback public IP (RFC 5737 TEST-NET) so
+// the bypass cannot accidentally let the request through inside CI
+// or local-dev environments. SetTrustedProxies(nil) prevents Gin from
+// trusting any X-Forwarded-For header on the test path.
+func TestCreatorPushJobsE2E_RealAdminAuthWired(t *testing.T) {
+	h, _, _ := newCreatorPushE2EStack(t)
+	gin.SetMode(gin.TestMode)
+
+	const testToken = "test-secret-token"
+	cfg := &config.Config{}
+	cfg.Auth.AdminToken = testToken
+	authMW := api.AdminAuthMiddleware(cfg)
+
+	r := gin.New()
+	r.SetTrustedProxies(nil)
+	h.RegisterRoutes(r, authMW)
+
+	body := creatorPushE2EBody("creator_pc_auth", "creator-job-auth-001", "scene.composite.v1")
+	rawBody, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+
+	cases := []struct {
+		name       string
+		authHeader string
+		wantStatus int
+	}{
+		{"no_authorization_header", "", http.StatusUnauthorized},
+		{"wrong_bearer_token", "Bearer invalid-mock-token", http.StatusUnauthorized},
+		{"right_bearer_token", "Bearer " + testToken, http.StatusAccepted},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/creator/jobs", bytes.NewReader(rawBody))
+			req.Header.Set("Content-Type", "application/json")
+			if tc.authHeader != "" {
+				req.Header.Set("Authorization", tc.authHeader)
+			}
+			// RFC 5737 TEST-NET-2 public IP — never loopback, so the
+			// middleware's IsLocalRequestIP early-return cannot save us.
+			req.RemoteAddr = "198.51.100.1:1234"
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if w.Code != tc.wantStatus {
+				t.Fatalf("want %d, got %d body=%s", tc.wantStatus, w.Code, w.Body.String())
+			}
+		})
 	}
 }
