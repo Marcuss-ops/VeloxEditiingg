@@ -349,8 +349,8 @@ func TestCreatorPushJobsE2E_MissingSourceJobIDReturns400(t *testing.T) {
 		},
 	}
 	w := postCreatorPush(t, r, body)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d body=%s", w.Code, w.Body.String())
 	}
 
 	// 400 path must reject BEFORE the Resolver — no forwarding row for the

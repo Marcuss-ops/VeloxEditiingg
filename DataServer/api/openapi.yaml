@@ -504,7 +504,9 @@ components:
       enum:
         - missing_authorization
         - invalid_bearer
+        - invalid_json
         - invalid_payload
+        - payload_incomplete
         - resolver_failure
 
     ErrorEnvelope:
@@ -541,6 +543,48 @@ components:
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 paths:
+  /api/v1/creator/assets:
+    post:
+      tags: [creator]
+      operationId: uploadCreatorAsset
+      summary: "Upload and register one Creator asset."
+      security:
+        - bearerAdminToken: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                kind:
+                  type: string
+                  default: project_file
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: Content-addressed asset registered.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, asset_id, reference, sha256, size_bytes]
+                properties:
+                  ok: {type: boolean, enum: [true]}
+                  asset_id: {type: string}
+                  reference: {type: string, example: velox-asset://abc123}
+                  sha256: {type: string}
+                  size_bytes: {type: integer, format: int64}
+                  mime_type: {type: string}
+        '400':
+          description: Missing or unreadable multipart file.
+        '413':
+          description: Asset exceeds the configured size limit.
+        '422':
+          description: Asset could not be registered.
   # ── creator_push intake (the new endpoint) ───────────────────────────────
   /api/v1/creator/jobs:
     post:

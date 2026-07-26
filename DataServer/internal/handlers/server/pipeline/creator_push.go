@@ -192,19 +192,13 @@ func (h *Handlers) CreatorPush() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req creatorPushRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"ok":    false,
-				"error": "invalid JSON",
-			})
+			creatorPushError(c, http.StatusBadRequest, "invalid_json", "request body must be valid JSON", nil)
 			return
 		}
 
 		normalized, err := normalizeCreatorPushRequest(req)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"ok":    false,
-				"error": err.Error(),
-			})
+			creatorPushError(c, http.StatusUnprocessableEntity, "invalid_payload", err.Error(), nil)
 			return
 		}
 
@@ -217,32 +211,18 @@ func (h *Handlers) CreatorPush() gin.HandlerFunc {
 		)
 		if err != nil {
 			if err == creatorflow.ErrResolverNotComplete {
-				c.JSON(http.StatusUnprocessableEntity, gin.H{
-					"ok":     false,
-					"error":  "creator payload is not complete enough to dispatch",
-					"status": "PAYLOAD_INCOMPLETE",
-				})
+				creatorPushError(c, http.StatusUnprocessableEntity, "payload_incomplete", "creator payload is not complete enough to dispatch", nil)
 				return
 			}
 			if field := enqueue.ValidationErrorField(err); field != "" {
-				c.JSON(http.StatusUnprocessableEntity, gin.H{
-					"ok":    false,
-					"error": err.Error(),
-					"field": field,
-				})
+				creatorPushError(c, http.StatusUnprocessableEntity, "invalid_payload", err.Error(), gin.H{"path": field, "issue": "invalid"})
 				return
 			}
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"ok":    false,
-				"error": "failed to enqueue creator payload",
-			})
+			creatorPushError(c, http.StatusInternalServerError, "resolver_failure", "failed to enqueue creator payload", nil)
 			return
 		}
 		if forwarded == nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"ok":    false,
-				"error": "creator payload resolved without an enqueue response",
-			})
+			creatorPushError(c, http.StatusInternalServerError, "resolver_failure", "creator payload resolved without an enqueue response", nil)
 			return
 		}
 
@@ -271,4 +251,12 @@ func (h *Handlers) CreatorPush() gin.HandlerFunc {
 
 		c.JSON(http.StatusAccepted, response)
 	}
+}
+
+func creatorPushError(c *gin.Context, status int, code, message string, detail any) {
+	body := gin.H{"ok": false, "error": code, "message": message}
+	if detail != nil {
+		body["details"] = []any{detail}
+	}
+	c.JSON(status, body)
 }

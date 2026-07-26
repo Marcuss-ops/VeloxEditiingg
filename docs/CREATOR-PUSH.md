@@ -85,6 +85,23 @@ Do not send local creator paths such as `C:\clips\video.mp4` or `/home/creator/a
 - a `velox-asset://` reference already resolvable by the master; or
 - an HTTP(S) URL reachable by the master and workers.
 
+### Canonical Creator upload
+
+To transfer a local file from the Creator computer, upload it first:
+
+```bash
+curl -sS -X POST "${VELOX_MASTER_URL}/api/v1/creator/assets" \
+  -H "Authorization: Bearer ${VELOX_ADMIN_TOKEN}" \
+  -F "kind=stock_clip" \
+  -F "file=@./clip.mp4"
+```
+
+The `201 Created` response contains `reference`, for example
+`velox-asset://<sha256>`. Put that reference in the subsequent job payload.
+The upload is size-limited, SHA-256 content-addressed, deduplicated and
+stored by the same asset registry used by normal job intake; the binary is
+never embedded in the job JSON.
+
 ## Response
 
 The master returns `202 Accepted` after the payload has been converted and queued for normal worker dispatch.

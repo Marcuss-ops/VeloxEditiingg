@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/jobs"
@@ -22,13 +23,14 @@ import (
 // so the HTTP handler converges with the CreatorForwardingRunner on
 // the same (job_id, forwarding_id).
 type Handlers struct {
-	cfg      *config.Config
-	enqueuer *enqueue.Enqueuer
-	client   *remoteengine.Client
-	resolver *creatorflow.Resolver
-	jobs     JobsDeps
-	store      *store.SQLiteStore
-	intakeSink CreatorIntakeSink
+	cfg          *config.Config
+	enqueuer     *enqueue.Enqueuer
+	client       *remoteengine.Client
+	resolver     *creatorflow.Resolver
+	jobs         JobsDeps
+	store        *store.SQLiteStore
+	intakeSink   CreatorIntakeSink
+	assetService *voiceoverassets.AssetService
 }
 
 // JobsDeps bundles the optional jobs-layer dependencies used by
@@ -147,6 +149,12 @@ func (h *Handlers) WithStore(db *store.SQLiteStore) *Handlers {
 // boot with velmetrics.NewCreatorIntakeSink(); tests pass a mock.
 func (h *Handlers) WithIntakeSink(sink CreatorIntakeSink) *Handlers {
 	h.intakeSink = sink
+	return h
+}
+
+// WithAssetService wires the canonical content-addressed asset registry.
+func (h *Handlers) WithAssetService(svc *voiceoverassets.AssetService) *Handlers {
+	h.assetService = svc
 	return h
 }
 

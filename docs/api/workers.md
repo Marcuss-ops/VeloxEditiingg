@@ -25,12 +25,12 @@ Rules (in evaluation order):
 | 2 | `last_heartbeat` empty OR unparseable               | `DISCONNECTED` |
 | 3 | `session_active == false`                           | `DISCONNECTED` |
 | 4 | `session_active == true` AND `now - last_heartbeat >= 5 min` | `DISCONNECTED` |
-| 5 | `session_active == true` AND `now - last_heartbeat >= 30 s`  | `STALE`        |
+| 5 | `session_active == true` AND `now - last_heartbeat >= 150 s` | `STALE`        |
 | 6 | otherwise                                                       | `CONNECTED`    |
 
 ### Boundary thresholds
 
-- `ConnectionStaleThreshold` = **30 s** — heartbeat older than this demotes a session-active worker from `CONNECTED` to `STALE`. Operators see `STALE` BEFORE the dispatcher's eviction timeout (`VELOX_WORKER_HEARTBEAT_TIMEOUT`, default 120 s) fires, giving time to triage.
+- `ConnectionStaleThreshold` = **150 s** — heartbeat older than this demotes a session-active worker from `CONNECTED` to `STALE`. This is 2.5 idle heartbeat intervals and tolerates normal scheduling/network jitter.
 - `ConnectionDisconnectedThreshold` = **5 min** — heartbeat older than this bumps a worker to `DISCONNECTED` regardless of session state. Matches the `CleanupStaleWorkers` window so the read model and the eviction loop agree on what "abandoned" means.
 - `WorkerSessionFreshnessWindow` = **5 min** — a session is only considered `session_active` if its `last_seen` is within this window, in addition to `revoked=0` AND `expires_at > now()`. Without this gate, an idle worker whose session token expires days from now would falsely read as `CONNECTED` for days.
 

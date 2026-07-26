@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/artifacts"
+	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
@@ -70,7 +71,8 @@ type PipelineRouteDeps struct {
 	// step #3 — the legacy creatorflow.Service forwarder fallback was
 	// removed. Nil here is a wiring bug; registerPipelineRoutes
 	// refuses to start if Resolver is nil.
-	Resolver *creatorflow.Resolver
+	Resolver     *creatorflow.Resolver
+	AssetService *voiceoverassets.AssetService
 }
 
 // DarkeditorRouteDeps carries the deps for the /api/darkeditor routes
@@ -348,7 +350,7 @@ func registerPipelineRoutes(r *gin.Engine, auth gin.HandlerFunc, deps PipelineRo
 		pipeline.NewRemoteClientFromConfig(deps.Cfg),
 		deps.Resolver,
 		deps.JobsRepo, deps.JobsRepo, deps.CmdMgr,
-	).WithStore(deps.SQLiteStore).WithTaskReader(deps.TaskReader).WithIntakeSink(velmetrics.NewCreatorIntakeSink()).RegisterRoutes(r, auth)
+	).WithStore(deps.SQLiteStore).WithTaskReader(deps.TaskReader).WithAssetService(deps.AssetService).WithIntakeSink(velmetrics.NewCreatorIntakeSink()).RegisterRoutes(r, auth)
 }
 
 // registerDarkeditorRoutes mounts the legacy /api/darkeditor/dark_editor_v2

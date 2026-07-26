@@ -41,7 +41,9 @@ except ImportError:  # pragma: no cover - explicit guidance for missing dep
 EXPECTED_ERROR_CODES = {
     "missing_authorization",
     "invalid_bearer",
+    "invalid_json",
     "invalid_payload",
+    "payload_incomplete",
     "resolver_failure",
 }
 
@@ -87,9 +89,10 @@ def validate(path: Path) -> list[str]:
 
     # Single path focused on creator_push (this revision's scope)
     paths = doc.get("paths", {})
-    if list(paths.keys()) != ["/api/v1/creator/jobs"]:
+    expected_paths = ["/api/v1/creator/assets", "/api/v1/creator/jobs"]
+    if list(paths.keys()) != expected_paths:
         failures.append(
-            f"{path}: paths expected ['/api/v1/creator/jobs'], got {list(paths.keys())}"
+            f"{path}: paths expected {expected_paths}, got {list(paths.keys())}"
         )
 
     # Global security: bearerAdminToken must be the active security

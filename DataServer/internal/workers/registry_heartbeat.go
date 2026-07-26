@@ -89,7 +89,7 @@ func (r *Registry) HeartbeatWithSession(ctx context.Context, sessionID, workerID
 			}
 			info.Metrics["active_jobs"] = v
 		}
-		for _, key := range []string{"active_task_count", "active_jobs_count", "active_tasks", "task_slots", "cpu_utilization_ratio", "memory_used_bytes", "disk_free_bytes"} {
+		for _, key := range []string{"active_task_count", "active_jobs_count", "active_tasks", "task_slots", "cpu_utilization_ratio", "memory_used_bytes", "disk_free_bytes", "load_average", "load1", "process_rss_bytes", "network_rx_bytes", "network_receive_bytes_total", "network_tx_bytes", "network_transmit_bytes_total"} {
 			if v, ok := extra[key]; ok {
 				if info.Metrics == nil {
 					info.Metrics = make(map[string]interface{})

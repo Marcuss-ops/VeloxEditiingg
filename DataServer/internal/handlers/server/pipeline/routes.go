@@ -53,6 +53,7 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth gin.HandlerFunc) {
 		creator.Use(adminAuth)
 	}
 	creator.POST("/jobs", h.CreatorPush())
+	creator.POST("/assets", h.CreatorAssetUpload())
 
 	// Canonical, versioned pipeline-runs API. The POST creates a
 	// durable pipeline_run before the remote call; the GET returns the

@@ -146,11 +146,39 @@ func maybeInsertWorkerMetric(ctx context.Context, tx *sql.Tx, m map[string]any, 
 		return nil
 	}
 	_, err := tx.ExecContext(ctx, `INSERT INTO worker_metric_samples
-		(worker_id,session_id,sampled_at,connection_status,active_tasks,task_slots,cpu_utilization_ratio,memory_used_bytes,disk_free_bytes)
-		VALUES (?,?,?,?,?,?,?,?,?)`, workerID, sessionID, now, asString(m["status"]), active,
-		int64OrDefault(m["task_slots"], 1), floatValue(m["cpu_utilization_ratio"]), int64Value(m["memory_used_bytes"]), int64Value(m["disk_free_bytes"]))
+		(worker_id,session_id,sampled_at,connection_status,active_tasks,task_slots,cpu_utilization_ratio,memory_used_bytes,disk_free_bytes,
+		 load_average,process_rss_bytes,network_rx_bytes,network_tx_bytes)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, workerID, sessionID, now, asString(m["status"]), active,
+		int64OrDefault(metricValue(m, "task_slots"), 1), floatValue(metricValue(m, "cpu_utilization_ratio")),
+		int64Value(metricValue(m, "memory_used_bytes")), int64Value(metricValue(m, "disk_free_bytes")),
+		nullableMetric(metricValue(m, "load_average", "load1")),
+		nullableMetric(metricValue(m, "process_rss_bytes")),
+		nullableMetric(metricValue(m, "network_rx_bytes", "network_receive_bytes_total")),
+		nullableMetric(metricValue(m, "network_tx_bytes", "network_transmit_bytes_total")))
 	return err
 }
+
+func metricValue(m map[string]any, keys ...string) any {
+	for _, container := range []map[string]any{m, nestedMetricMap(m, "metrics"), nestedMetricMap(m, "resources")} {
+		for _, key := range keys {
+			if container != nil {
+				if value, ok := container[key]; ok && value != nil {
+					return value
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func nestedMetricMap(m map[string]any, key string) map[string]any {
+	if nested, ok := m[key].(map[string]any); ok {
+		return nested
+	}
+	return nil
+}
+
+func nullableMetric(value any) any { return value }
 
 // pruneWorkerMetricSamples retains the configured retention window
 // for worker_metric_samples. The window is configurable via

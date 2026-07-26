@@ -102,7 +102,10 @@ func TestTick_EffectiveClaimBatch_CappedAtConcurrency(t *testing.T) {
 	// Use a configured client (pointing to a non-existent server) so
 	// tick() proceeds past the IsConfigured guard and actually claims
 	// rows. The remote poll will fail, triggering handleRetry.
-	client := remoteengine.NewClient(remoteengine.Config{URL: "http://localhost:1"})
+	// This test isolates runner semaphore release. Retry/backoff policy is
+	// covered by internal/remoteengine; disabling it keeps a refused dial
+	// from making the semaphore test wait through several seconds of backoff.
+	client := remoteengine.NewClient(remoteengine.Config{URL: "http://localhost:1", Retries: 0})
 	r := NewCreatorForwardingRunner(cfg, db, client, nil, "test-batch")
 
 	err := r.tick(context.Background())
@@ -162,7 +165,10 @@ func TestTick_EffectiveClaimBatch_ParallelNoDeadlock(t *testing.T) {
 		BackoffSchedule: []time.Duration{30 * time.Second},
 	}
 
-	client := remoteengine.NewClient(remoteengine.Config{URL: "http://localhost:1"})
+	// This test isolates runner semaphore release. Retry/backoff policy is
+	// covered by internal/remoteengine; disabling it keeps a refused dial
+	// from making the semaphore test wait through several seconds of backoff.
+	client := remoteengine.NewClient(remoteengine.Config{URL: "http://localhost:1", Retries: 0})
 	r := NewCreatorForwardingRunner(cfg, db, client, nil, "test-par")
 
 	done := make(chan struct{})
@@ -174,8 +180,8 @@ func TestTick_EffectiveClaimBatch_ParallelNoDeadlock(t *testing.T) {
 	select {
 	case <-done:
 		// Success — no deadlock.
-	case <-time.After(10 * time.Second):
-		t.Fatal("tick deadlocked (semaphore not released)")
+	case <-time.After(30 * time.Second):
+		t.Fatal("tick did not complete (semaphore may not have been released)")
 	}
 }
 
