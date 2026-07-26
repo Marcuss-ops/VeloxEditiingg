@@ -34,7 +34,18 @@ func Score(w WorkerProfile, j JobRequirements) (Cost, Explanation) {
 		return Cost{Eligible: false}, exp
 	}
 	if w.MaxParallel > 0 && w.ActiveJobs >= w.MaxParallel {
-		exp.IneligibilityReason = "worker at capacity"
+		exp.IneligibilityReason = "capacity_full"
+		return Cost{Eligible: false}, exp
+	}
+	pressure := w.Pressure
+	if pressure.Memory {
+		exp.Pressure = pressure
+		exp.IneligibilityReason = "memory_pressure"
+		return Cost{Eligible: false}, exp
+	}
+	if pressure.Disk {
+		exp.Pressure = pressure
+		exp.IneligibilityReason = "disk_pressure"
 		return Cost{Eligible: false}, exp
 	}
 

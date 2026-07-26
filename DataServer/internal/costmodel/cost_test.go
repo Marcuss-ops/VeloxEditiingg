@@ -71,8 +71,8 @@ func TestScore_AtCapacityExcluded(t *testing.T) {
 	if c.Eligible {
 		t.Fatalf("at-capacity worker should be ineligible, exp=%+v", exp)
 	}
-	if exp.IneligibilityReason != "worker at capacity" {
-		t.Fatalf("expected `worker at capacity`, got %q", exp.IneligibilityReason)
+	if exp.IneligibilityReason != "capacity_full" {
+		t.Fatalf("expected `capacity_full`, got %q", exp.IneligibilityReason)
 	}
 }
 

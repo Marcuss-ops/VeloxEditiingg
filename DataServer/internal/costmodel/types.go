@@ -74,6 +74,55 @@ type JobRequirements struct {
 	// MinBandwidthMbps applies a score penalty when the worker reports a
 	// positive bandwidth lower than the requested minimum.
 	MinBandwidthMbps float64
+	// Estimated resource reservations are optional hints used by the
+	// admission controller. Zero means "unknown" and never rejects a
+	// legacy job.
+	CPUThreads  int
+	MemoryBytes int64
+	TempBytes   int64
+}
+
+// ResourceSnapshot is the canonical worker resource view consumed by
+// admission and placement. It is deliberately independent from worker
+// protocol structs so the Master remains the only scheduling owner.
+type ResourceSnapshot struct {
+	CPUCores          int
+	CPUThreadsInUse   int
+	MemoryBytes       int64
+	MemoryUsedBytes   int64
+	DiskFreeBytes     int64
+	TempReservedBytes int64
+	ActiveTasks       int
+	TaskSlots         int
+	SwapUsedBytes     int64
+	IOWaitRatio       float64
+}
+
+// PressureState is derived from a snapshot and stable policy thresholds.
+type PressureState struct {
+	Memory bool
+	Disk   bool
+	Swap   bool
+	IOWait bool
+}
+
+// AdmissionPolicy defines safe headroom. The controller never schedules
+// against the last bytes/cores, leaving room for the OS and the worker.
+type AdmissionPolicy struct {
+	ReservedCPUCores   int
+	MinFreeMemoryBytes int64
+	MinFreeDiskBytes   int64
+	MaxIOWaitRatio     float64
+	AllowSwap          bool
+}
+
+func DefaultAdmissionPolicy() AdmissionPolicy {
+	return AdmissionPolicy{
+		ReservedCPUCores:   2,
+		MinFreeMemoryBytes: 512 << 20,
+		MinFreeDiskBytes:   4 << 30,
+		MaxIOWaitRatio:     0.35,
+	}
 }
 
 // DefaultRequirements returns the safe, permissive default used at
@@ -118,7 +167,11 @@ type Explanation struct {
 	// IneligibilityReason: human-readable explanation when
 	// Cost.Eligible == false. Stable across releases so callers can
 	// log without churn.
-	IneligibilityReason string
+	IneligibilityReason  string
+	Pressure             PressureState
+	AvailableCPUThreads  int
+	AvailableMemoryBytes int64
+	AvailableTempBytes   int64
 }
 
 // Cost is the canonical placement decision for one

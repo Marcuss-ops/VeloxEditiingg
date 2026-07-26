@@ -38,6 +38,8 @@ type WorkerProfile struct {
 	IsOffline   bool
 	ActiveJobs  int
 	MaxParallel int
+	Resources   ResourceSnapshot
+	Pressure    PressureState
 }
 
 // BuildWorkerProfile maps a master-side schedulability state + a
@@ -72,6 +74,18 @@ func BuildWorkerProfile(
 		w.TemporalMode = TemporalFrameLocal
 	}
 	return w
+}
+
+// DerivePressure applies the canonical admission policy to a worker snapshot.
+func DerivePressure(r ResourceSnapshot, p AdmissionPolicy) PressureState {
+	freeMemory := r.MemoryBytes - r.MemoryUsedBytes
+	freeDisk := r.DiskFreeBytes - r.TempReservedBytes
+	return PressureState{
+		Memory: r.MemoryBytes > 0 && freeMemory < p.MinFreeMemoryBytes,
+		Disk:   r.DiskFreeBytes > 0 && freeDisk < p.MinFreeDiskBytes,
+		Swap:   r.SwapUsedBytes > 0 && !p.AllowSwap,
+		IOWait: p.MaxIOWaitRatio > 0 && r.IOWaitRatio > p.MaxIOWaitRatio,
+	}
 }
 
 // mergeExecutorsInto applies the per-executor merge policy. Policy
