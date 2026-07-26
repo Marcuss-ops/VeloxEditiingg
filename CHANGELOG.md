@@ -102,7 +102,7 @@ adopt `v1.3.0-creator-push` (or any later HEAD) without config changes:
 
 ### Removal: `/api/remote/pipeline` fully retired
 
-Initially soft-deprecated in commits 51a307d→5d484c4 (6 commits with telemetry + docs); the user pivoted and full removal landed in commits d433e97→c322182. Git log preserves the full audit trail.
+Initially soft-deprecated in commits 51a307d→5d484c4 (6 commits with telemetry + docs); the user pivoted and full removal landed in commits d433e97→c322182, tagged as `v1.4.0-legacy-removed` (the post-removal stable checkpoint). Git log preserves the full audit trail.
 
 ### Creator-push response: `dispatch_status` overlay
 
