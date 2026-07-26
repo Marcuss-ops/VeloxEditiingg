@@ -272,14 +272,17 @@ func (r *Registry) GetEligibleWorkers(ctx context.Context, req costmodel.JobRequ
 		if r.revoked[w.WorkerID] {
 			continue
 		}
+		resources := costmodel.ResourceSnapshotFromMaps(w.Capabilities, w.Metrics)
 		profile := costmodel.BuildWorkerProfile(
 			w.WorkerID,
 			w.Schedulable,
 			w.Drain,
 			w.Status,
-			0, 0,
+			resources.ActiveTasks, resources.TaskSlots,
 			w.Capabilities,
 		)
+		profile.Resources = resources
+		profile.Pressure = costmodel.DerivePressure(resources, costmodel.DefaultAdmissionPolicy())
 		c, _ := costmodel.Score(profile, req)
 		if !c.Eligible {
 			continue

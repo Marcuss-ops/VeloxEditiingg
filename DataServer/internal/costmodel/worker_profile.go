@@ -76,6 +76,82 @@ func BuildWorkerProfile(
 	return w
 }
 
+// ResourceSnapshotFromMaps translates the worker heartbeat maps into the
+// canonical scheduling snapshot. Both metric locations are accepted because
+// older workers publish resources at the root while newer workers nest them.
+func ResourceSnapshotFromMaps(capabilities, metrics map[string]interface{}) ResourceSnapshot {
+	r := ResourceSnapshot{}
+	read := func(name string) interface{} {
+		if metrics != nil {
+			if v, ok := metrics[name]; ok {
+				return v
+			}
+		}
+		if capabilities != nil {
+			if v, ok := capabilities[name]; ok {
+				return v
+			}
+			if resources, ok := capabilities["resources"].(map[string]interface{}); ok {
+				if v, ok := resources[name]; ok {
+					return v
+				}
+			}
+		}
+		return nil
+	}
+	r.CPUCores = intValue(read("cpu_cores"), intValue(read("num_cpu"), 0))
+	r.CPUThreadsInUse = intValue(read("cpu_threads_in_use"), 0)
+	r.MemoryBytes = int64Value(read("memory_total_bytes"), int64Value(read("memory_bytes"), 0))
+	r.MemoryUsedBytes = int64Value(read("memory_used_bytes"), 0)
+	r.DiskFreeBytes = int64Value(read("disk_free_bytes"), 0)
+	r.TempReservedBytes = int64Value(read("temp_reserved_bytes"), 0)
+	r.ActiveTasks = intValue(read("active_tasks"), 0)
+	r.TaskSlots = intValue(read("task_slots"), 0)
+	r.SwapUsedBytes = int64Value(read("swap_used_bytes"), 0)
+	r.IOWaitRatio = floatValue(read("cpu_iowait_ratio"), floatValue(read("iowait_ratio"), 0))
+	return r
+}
+
+func intValue(v interface{}, fallback int) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	case float32:
+		return int(n)
+	}
+	return fallback
+}
+func int64Value(v interface{}, fallback int64) int64 {
+	switch n := v.(type) {
+	case int:
+		return int64(n)
+	case int64:
+		return n
+	case float64:
+		return int64(n)
+	case float32:
+		return int64(n)
+	}
+	return fallback
+}
+func floatValue(v interface{}, fallback float64) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	}
+	return fallback
+}
+
 // DerivePressure applies the canonical admission policy to a worker snapshot.
 func DerivePressure(r ResourceSnapshot, p AdmissionPolicy) PressureState {
 	freeMemory := r.MemoryBytes - r.MemoryUsedBytes
