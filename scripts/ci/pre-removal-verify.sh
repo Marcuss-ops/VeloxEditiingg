@@ -10,7 +10,7 @@
 #   files, are not caught by the scoped check.
 #
 # Empirical evidence (2026-07-25, VeloxEditiingg main):
-#   The `f058055` fixup commit on `main` is the canonical case study.
+#   The `c322182` fixup commit on `main` is the canonical case study.
 #   Scoped `go vet ./internal/handlers/server/pipeline/...` +
 #   `go build ./internal/handlers/server/pipeline/...` had passed at the
 #   boundary of `c9c2ae4` and `716426a`, but full-module
@@ -20,7 +20,7 @@
 #     2. unused `enqueue` import in `pipeline_run_actions.go`
 #        (sync-forward branch removed in `c9c2ae4`).
 #   Without this gate, both residuals would have shipped to `main` and
-#   broken downstream consumers; the `f058055` fixup commit repaired
+#   broken downstream consumers; the `c322182` fixup commit repaired
 #   them after the fact. This script prevents the next removal from
 #   producing a similar fixup.
 #

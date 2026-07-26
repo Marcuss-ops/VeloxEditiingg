@@ -12,7 +12,7 @@
   - `d433e97` — `docs(creator-push+changelog): replace §Deprecation timeline with §Removal`
   - `c9c2ae4` — `refactor(pipeline): fully remove legacy sync-forward path`
   - `716426a` — `chore(cleanup): delete 5 legacy tests + retire remote_engine_legacy metric label`
-  - `f058055` — **fixup(retroactive): residual compile failures caught after push**
+  - `c322182` — **fix(pipeline): delete orphan test + remove unused enqueue import**
   - `a557b8d` — `docs(changelog): add pivot narrative at top of [Unreleased] §Removal`
 
 ## (a) Contesto
@@ -62,7 +62,7 @@ The **removal layer** (commits `d433e97 → a557b8d`, 5 commits):
    `creator_push.go`, delete `forwarding.go` (`c9c2ae4`).
 3. Delete the 5 legacy tests + retire the `remote_engine_legacy` metric
    label (`716426a`).
-4. **Fixup retroactively** (`f058055`): one test referencing the now-removed
+4. **Fixup retroactively** (`c322182`): one test referencing the now-removed
    `normalizeRemoteEngineIntake` helper had been missed in `716426a`, and
    an `enqueue` import became unused after the sync-forward branch was
    removed in `c9c2ae4`. Both were compile residuals that **scoped
@@ -83,8 +83,8 @@ This ADR records two operational lessons from the pivot:
    `go test ./...`** to surface compile residuals that scoped verification
    misses.
 
-The second lesson is the one the `f058055` fixup commit taught us. Before
-`f058055`, scoped `go vet` + scoped `go build` had passed on commits
+The second lesson is the one the `c322182` fixup commit taught us. Before
+`c322182`, scoped `go vet` + scoped `go build` had passed on commits
 `c9c2ae4` and `716426a`; both commits were pushed green. Only a later
 full-module run caught the residual dead code in `pipeline_run_actions.go`
 and the orphan test reference in `creator_push_test.go`. The cost of the
@@ -123,7 +123,7 @@ is allowed to push:
 3. go test -count=1 ./...                (full module, not scoped)
 ```
 
-The `f058055` fixup root-caused to the fact that checks #1 and #2 had been
+The `c322182` fixup root-caused to the fact that checks #1 and #2 had been
 run **scoped** (e.g. `go vet ./internal/handlers/server/pipeline/...`)
 rather than full-module (`go vet ./...`). Scoped verification passed because
 the dead code lived in `pipeline_run_actions.go`, which the scoped command
@@ -155,7 +155,7 @@ Each removal commit MUST be self-contained and revertable in isolation:
   by the full-module gate
 
 A removal layer that produces **zero fixup commits** is the success
-criterion. The current pivot produced one (`f058055`), which is the
+criterion. The current pivot produced one (`c322182`), which is the
 evidence that the verification gate was not strong enough.
 
 ## (c) Conseguenze
@@ -171,7 +171,7 @@ evidence that the verification gate was not strong enough.
   scaffolding overhead.
 - **Fewer fixup commits on `main`**: enforcing full-module `go test ./...`
   on every exported-symbol retirement prevents the post-push regression
-  that `f058055` repaired.
+  that `c322182` repaired.
 - **Decision is reproducible**: the C1/C2 matrix makes the
   soft-deprecate-vs-remove choice a checklist, not a judgment call.
 
@@ -182,7 +182,7 @@ evidence that the verification gate was not strong enough.
   acceptable because it replaces a manual fixup commit on `main` (which
   also blocks the next `main` consumer for the duration of the fix).
 - **A removal layer still requires 3-5 atomic commits** (docs, refactor,
-  cleanup, optionally a `f058055`-style fixup). The reduction vs the
+  cleanup, optionally a `c322182`-style fixup). The reduction vs the
   soft-deprecate layer is from 6+3=9 commits to 3-5 commits, a ~50%
   reduction in audit-trail noise.
 - **C1 verification requires telemetry infrastructure**: the
@@ -193,7 +193,7 @@ evidence that the verification gate was not strong enough.
 
 ### Out-of-scope consequences
 
-- The pre-`f058055` commits on `main` are NOT rewritten. The pivot
+- The pre-`c322182` commits on `main` are NOT rewritten. The pivot
   narrative is the discoverable record of the soft-deprecate→remove
   arc; rewriting the git history would be more disruptive than the
   fixup commit itself.
@@ -233,7 +233,7 @@ evidence that the verification gate was not strong enough.
 - **Commits**:
   - `51a307d → 5d484c4` — soft-deprecate layer (6 commits)
   - `d433e97 → a557b8d` — full removal layer (5 commits)
-  - `f058055` — the fixup commit that motivated the full-module gate
+  - `c322182` — the fixup commit that motivated the full-module gate
 
 - **Authoritative docs**:
   - `docs/CREATOR-PUSH.md` — canonical creator-push intake contract
@@ -267,6 +267,6 @@ evidence that the verification gate was not strong enough.
 
 - **2026-07-25**: ADR accepted. Decision framework (C1/C2 matrix) and
   verification gate (full-module `go test ./...`) codified. The
-  `f058055` fixup commit is the empirical evidence that the gate is
+  `c322182` fixup commit is the empirical evidence that the gate is
   necessary; this ADR is the durable record that future removal commits
   MUST apply it.

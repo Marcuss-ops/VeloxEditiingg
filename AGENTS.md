@@ -39,7 +39,7 @@ are not caught by the scoped check.
 
 ### Why this gate exists
 
-The `f058055` fixup commit on `main` (2026-07-25) is the canonical case
+The `c322182` fixup commit on `main` (2026-07-25) is the canonical case
 study. Scoped `go vet ./internal/handlers/server/pipeline/...` +
 `go build ./internal/handlers/server/pipeline/...` had passed at the
 boundaries of `c9c2ae4` and `716426a`, but a later full-module run caught
