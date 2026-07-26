@@ -59,11 +59,15 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth gin.HandlerFunc) {
 	// aggregated status projection. The :id param accepts either the
 	// pipeline_run id (run_...) or the request_id (req_...) for
 	// backwards compatibility with clients that only stored the request_id.
-	r.POST("/api/v1/pipeline-runs", h.CreatePipelineRun())
-	r.GET("/api/v1/pipeline-runs/:id", h.PipelineRunStatus())
-	r.POST("/api/v1/pipeline-runs/:id/cancel", h.CancelPipelineRun())
-	r.POST("/api/v1/pipeline-runs/:id/retry", h.RetryPipelineRun())
-	r.GET("/api/v1/pipeline-runs/:id/timeline", h.PipelineRunTimeline())
-	r.GET("/api/v1/pipeline-runs/:id/artifacts", h.PipelineRunArtifacts())
-	r.GET("/api/v1/pipeline-runs/:id/deliveries", h.PipelineRunDeliveries())
+	pipelineRuns := r.Group("/api/v1/pipeline-runs")
+	if adminAuth != nil {
+		pipelineRuns.Use(adminAuth)
+	}
+	pipelineRuns.POST("", h.CreatePipelineRun())
+	pipelineRuns.GET("/:id", h.PipelineRunStatus())
+	pipelineRuns.POST("/:id/cancel", h.CancelPipelineRun())
+	pipelineRuns.POST("/:id/retry", h.RetryPipelineRun())
+	pipelineRuns.GET("/:id/timeline", h.PipelineRunTimeline())
+	pipelineRuns.GET("/:id/artifacts", h.PipelineRunArtifacts())
+	pipelineRuns.GET("/:id/deliveries", h.PipelineRunDeliveries())
 }

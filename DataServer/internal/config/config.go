@@ -102,6 +102,11 @@ func (c *Config) Validate() error {
 				c.Runtime.Environment)
 		}
 	}
+	if c.Runtime.AllowLoopbackAdminAuthDev {
+		if c.Server.GinMode == "release" || c.Runtime.Environment == "production" || c.Runtime.Environment == "prod" || c.Runtime.Environment == "staging" {
+			return fmt.Errorf("config: VELOX_ALLOW_LOOPBACK_ADMIN_AUTH_DEV=true is forbidden in release/staging/production")
+		}
+	}
 
 	// Commit HMAC key (P0 #6/#7, Blocco 2). Two-tier guard:
 	//   (1) When the key is non-empty, validate length + hex format

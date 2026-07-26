@@ -51,6 +51,7 @@ func loadRuntimeConfig(dataDir string) RuntimeConfig {
 
 	// NopBlobStore dev opt-in (production ban enforced in Validate()).
 	c.AllowNopBlobStoreDev = strings.TrimSpace(os.Getenv("VELOX_ALLOW_NOP_BLOBSTORE_DEV")) == "true"
+	c.AllowLoopbackAdminAuthDev = strings.TrimSpace(os.Getenv("VELOX_ALLOW_LOOPBACK_ADMIN_AUTH_DEV")) == "true"
 
 	// gRPC insecure dev opt-in.
 	c.GRPCAllowInsecureDev = strings.TrimSpace(os.Getenv("VELOX_GRPC_ALLOW_INSECURE_DEV")) == "true"

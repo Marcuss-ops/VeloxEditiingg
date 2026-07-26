@@ -225,7 +225,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	if t.Observability != nil {
 		workerReader := &workerRegistryAdapter{reg: w.Registry}
 		obsSvc := t.Observability.WithJobs(j.Repository).WithWorkers(workerReader)
-		registry.Register(observability.NewModule(obsSvc))
+		registry.Register(observability.NewModule(obsSvc, api.AdminAuthMiddleware(cfg)))
 		log.Printf("[BOOTSTRAP] Observability REST API registered")
 	}
 

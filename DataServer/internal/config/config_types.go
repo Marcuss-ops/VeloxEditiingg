@@ -47,6 +47,11 @@ type RuntimeConfig struct {
 	// Configured via VELOX_ALLOW_NOP_BLOB_STORE_DEV=true.
 	AllowNopBlobStoreDev bool
 
+	// AllowLoopbackAdminAuthDev permits loopback requests to bypass the
+	// admin bearer token in local development only. It is rejected for
+	// production/staging deployments by Validate().
+	AllowLoopbackAdminAuthDev bool
+
 	// GRPCAllowInsecureDev enables insecure gRPC connections (no TLS)
 	// for local development ONLY. Configured via
 	// VELOX_GRPC_ALLOW_INSECURE_DEV=true.

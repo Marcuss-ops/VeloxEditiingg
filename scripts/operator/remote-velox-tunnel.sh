@@ -8,6 +8,21 @@
 
 set -Eeuo pipefail
 
+# Load the operator-local tunnel configuration automatically. The file is
+# intentionally opt-in and must be mode 0600 because it contains topology
+# and SSH identity settings (never passwords or bearer tokens).
+CONFIG_FILE="${VELOX_TUNNEL_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/velox/remote-tunnel.env}"
+if [[ -f "$CONFIG_FILE" ]]; then
+  if [[ "$(stat -c '%a' "$CONFIG_FILE" 2>/dev/null || true)" != "600" ]]; then
+    echo "remote-tunnel: refusing insecure config permissions on $CONFIG_FILE (expected 600)" >&2
+    exit 1
+  fi
+  set -a
+  # shellcheck disable=SC1090
+  source "$CONFIG_FILE"
+  set +a
+fi
+
 REMOTE_HOST="${VELOX_REMOTE_SSH_HOST:-}"
 REMOTE_USER="${VELOX_REMOTE_SSH_USER:-}"
 REMOTE_PORT="${VELOX_REMOTE_SSH_PORT:-22}"

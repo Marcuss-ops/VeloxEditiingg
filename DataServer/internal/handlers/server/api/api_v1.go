@@ -13,9 +13,10 @@ import (
 
 func AdminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Local loopback requests are allowed for local tooling and
-		// side-car processes that share the pod.
-		if workersreg.IsLocalRequestIP(c.ClientIP()) {
+		// Loopback bypass is an explicit development-only opt-in. SSH
+		// forwards arrive as loopback on the master and must still present
+		// the admin bearer token.
+		if cfg != nil && cfg.Runtime.AllowLoopbackAdminAuthDev && workersreg.IsLocalRequestIP(c.ClientIP()) {
 			c.Next()
 			return
 		}
@@ -40,11 +41,7 @@ func AdminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		token := workersreg.ExtractBearerToken(
-			c.GetHeader("Authorization"),
-			c.GetHeader("X-Admin-Token"),
-			c.Query("token"),
-		)
+		token := workersreg.ExtractBearerToken(c.GetHeader("Authorization"), "", "")
 		if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(expected)) != 1 {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": "invalid admin token",
@@ -55,4 +52,3 @@ func AdminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 		c.Next()
 	}
 }
-
