@@ -18,6 +18,8 @@ type Request struct {
 	AudioURL    string
 	AudioTracks []AudioTrackInput
 	Fit         string
+	Layers      []plan.Layer
+	Subtitles   []plan.SubtitleTrack
 }
 
 // ItemInput is a single timeline item.
@@ -131,6 +133,8 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 		Canvas:      plan.DefaultCanvas(),
 		Timeline:    timeline_items,
 		AudioTracks: audioTracks,
+		Layers:      req.Layers,
+		Subtitles:   req.Subtitles,
 		OutputPath:  outputPath,
 	}, nil
 }
@@ -231,8 +235,10 @@ func parseRequest(input map[string]interface{}) *Request {
 	// (which uses "voiceover_url" for the shared voiceover track).
 	// audio_url wins when both are set.
 	req := &Request{
-		AudioURL: toStringDefault(input["audio_url"], toString(input["voiceover_url"])),
-		Fit:      toStringDefault(input["fit"], "contain"),
+		AudioURL:  toStringDefault(input["audio_url"], toString(input["voiceover_url"])),
+		Fit:       toStringDefault(input["fit"], "contain"),
+		Layers:    parseLayers(input["layers"]),
+		Subtitles: parseSubtitleTracks(input["subtitle_tracks"]),
 	}
 
 	if rawTracks, ok := input["audio_tracks"].([]interface{}); ok {
@@ -380,6 +386,70 @@ func toFloat64Default(v interface{}, fallback float64) float64 {
 		return float64(val)
 	}
 	return fallback
+}
+
+func parseLayers(raw interface{}) []plan.Layer {
+	items, ok := raw.([]interface{})
+	if !ok {
+		return nil
+	}
+	result := make([]plan.Layer, 0, len(items))
+	for index, rawItem := range items {
+		item, ok := rawItem.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		id := toString(item["id"])
+		if id == "" {
+			id = fmt.Sprintf("layer_%d", index)
+		}
+		layer := plan.Layer{
+			ID:              id,
+			Type:            toString(item["type"]),
+			Role:            toString(item["role"]),
+			Text:            toString(item["text"]),
+			Asset:           toString(item["asset"]),
+			Source:          toString(item["source"]),
+			Font:            toString(item["font"]),
+			FontSize:        toFloat64Default(item["font_size"], 0),
+			StartSeconds:    toFloat64Default(item["start_seconds"], 0),
+			DurationSeconds: toFloat64Default(item["duration_seconds"], 0),
+			Preset:          toString(item["preset"]),
+			Animation:       toString(item["animation"]),
+		}
+		if position, ok := item["position"].([]interface{}); ok {
+			for _, value := range position {
+				layer.Position = append(layer.Position, toFloat64Default(value, 0))
+			}
+		}
+		if layer.Type != "" {
+			result = append(result, layer)
+		}
+	}
+	return result
+}
+
+func parseSubtitleTracks(raw interface{}) []plan.SubtitleTrack {
+	items, ok := raw.([]interface{})
+	if !ok {
+		return nil
+	}
+	result := make([]plan.SubtitleTrack, 0, len(items))
+	for _, rawItem := range items {
+		item, ok := rawItem.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		track := plan.SubtitleTrack{
+			Source: toString(item["source"]),
+			Preset: toString(item["preset"]),
+			Font:   toString(item["font"]),
+		}
+		if track.Source != "" {
+			result = append(result, track)
+		}
+	}
+	return result
 }
 
 func toSliceString(v interface{}) []string {
