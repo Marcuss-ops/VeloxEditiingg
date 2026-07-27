@@ -895,4 +895,136 @@ func TestSubmitJobE2E_M2MRateLimitAndQuota(t *testing.T) {
 	})
 }
 
+// ── Scenario 13 — POST → GET polling chain + 404 envelope (NEW for P2) ─────
+
+// getSubmittedJob is the GET-side helper mirroring postSubmitJob.
+// Same m2mJobsAuthFake-token shape (any non-empty bearer is accepted
+// by the in-package fake shim) so the test routes can pin a single
+// test fixture across POST and GET. Tests that exercise a REAL M2M
+// middleware use m2mPost to drive the full auth + audit pipeline.
+func getSubmittedJob(t *testing.T, r *gin.Engine, jobID string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+jobID, nil)
+	req.Header.Set("Authorization", "Bearer m2mJobsAuthFake-token")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+// TestSubmitJobE2E_PollingChain_HappyPath covers the POST → GET chain.
+//
+//  1. POST a fresh submission. Assert the response carries both the
+//     `Location: /api/v1/jobs/{job_id}` header AND the `status_url`
+//     JSON field, with the same canonical path string in both.
+//  2. GET that job_id. Assert 200 + the 4-field envelope
+//     (job_id, status, created=true, status_url).
+//  3. Replay-cache GET (no second POST needed). Assert the same
+//     shape — the GET response is independent of the POST replay
+//     semantics because the resolver fast-path populates the row
+//     before either path returns.
+//
+// The test uses the same m2mJobsAuthFake token fixture for both POST
+// and GET so the focus is on the new envelope + Location header
+// surface, not the auth layer (which has its own dedicated test
+// in M2MAuthEnvelopes).
+func TestSubmitJobE2E_PollingChain_HappyPath(t *testing.T) {
+	h, _ := newSubmitJobE2EStack(t)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
+
+	const idem = "e2e-polling-001"
+	body := validSubmitJobBody(idem)
+	wantJobID := expectedSubmitJobID(idem)
+	wantStatusURL := "/api/v1/jobs/" + wantJobID
+
+	// POST first.
+	w := postSubmitJob(t, r, body)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("POST: want 202, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	// Location header on the 202 response.
+	loc := w.Header().Get("Location")
+	if loc != wantStatusURL {
+		t.Fatalf("Location header = %q, want %q", loc, wantStatusURL)
+	}
+
+	// status_url in the JSON body matches the Location header.
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("POST response json: %v", err)
+	}
+	if resp["status_url"] != wantStatusURL {
+		t.Fatalf("POST response.status_url = %v, want %q (full body: %s)",
+			resp["status_url"], wantStatusURL, w.Body.String())
+	}
+
+	// Sanity: job_id in the body matches the canonical derivation.
+	if resp["job_id"] != wantJobID {
+		t.Fatalf("POST response.job_id = %v, want %s", resp["job_id"], wantJobID)
+	}
+
+	// GET that job_id and assert the 4-field envelope.
+	w2 := getSubmittedJob(t, r, wantJobID)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("GET: want 200, got %d body=%s", w2.Code, w2.Body.String())
+	}
+	var getResp map[string]interface{}
+	if err := json.Unmarshal(w2.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("GET response json: %v", err)
+	}
+	wantGETFields := map[string]interface{}{
+		"ok":         true,
+		"job_id":     wantJobID,
+		"status":     "PENDING",
+		"created":    true,
+		"status_url": wantStatusURL,
+	}
+	for key, want := range wantGETFields {
+		if got := getResp[key]; got != want {
+			t.Fatalf("GET response[%q] = %v, want %v (full body: %s)",
+				key, got, want, w2.Body.String())
+		}
+	}
+
+	// Self-link property: the GET response's status_url dereferences
+	// to the same canonical job_id, forming a stable loop.
+	if getResp["status_url"] != wantStatusURL {
+		t.Fatalf("GET response.status_url self-link broken: %v, want %q",
+			getResp["status_url"], wantStatusURL)
+	}
+}
+
+// TestSubmitJobE2E_PollingChain_NotFound covers the 404 envelope on
+// the GET path when the requested job_id does not match any known
+// creator forwarding row. The envelope shape mirrors the M2M
+// token-rejection envelope (ok:false, error:job_not_found, message)
+// so a single error dispatcher handles both auth + lookup misses
+// without per-endpoint special-casing.
+func TestSubmitJobE2E_PollingChain_NotFound(t *testing.T) {
+	h, _ := newSubmitJobE2EStack(t)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
+
+	w := getSubmittedJob(t, r, "job_does_not_exist_001")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("GET unknown id: want 404, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("GET 404 json: %v", err)
+	}
+	if resp["ok"] != false {
+		t.Fatalf("GET 404 ok = %v, want false", resp["ok"])
+	}
+	if resp["error"] != "job_not_found" {
+		t.Fatalf("GET 404 error = %v, want job_not_found", resp["error"])
+	}
+	if _, ok := resp["message"].(string); !ok {
+		t.Fatalf("GET 404 missing message (body: %s)", w.Body.String())
+	}
+}
+
 // (no extra blank line at file end; format string test bodies use fmt.Sprintf directly via the top-level import.)

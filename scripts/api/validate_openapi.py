@@ -55,6 +55,7 @@ EXPECTED_ERROR_CODES = {
     "payload_incomplete",
     "resolver_failure",
     "idempotency_key_reused",
+    "job_not_found",
 }
 
 # Schema $ref that MUST be the target of every error-style response on
@@ -86,6 +87,10 @@ REQUIRED_SCHEMAS = {
     "SubmitScene",
     "SubmitDeliveryPlanEntry",
     "SubmitJobAcceptedResponse",
+    # Polling endpoint (GET /api/v1/jobs/{job_id}) — 4-field envelope.
+    "SubmitJobStatusResponse",
+    "SubmitLayer",
+    "SubmitSubtitleTrack",
 }
 
 
@@ -133,6 +138,24 @@ ROUTE_INVARIANTS = [
             "401": ERROR_RESPONSE_SCHEMA_REF,
             "409": ERROR_RESPONSE_SCHEMA_REF,
             "422": ERROR_RESPONSE_SCHEMA_REF,
+            "500": ERROR_RESPONSE_SCHEMA_REF,
+        },
+    },
+    {
+        # Polling endpoint (P2): GET /api/v1/jobs/{job_id}. Walks the
+        # same M2M bearer as POST /api/v1/jobs and emits the canonical
+        # 4-field envelope via SubmitJobStatusResponse. The 404 path
+        # carries the new `job_not_found` error code in the spec's
+        # ErrorCode enum.
+        "path": "/api/v1/jobs/{job_id}",
+        "method": "get",
+        "operationId": "getSubmittedJob",
+        "parameters": ["AuthorizationHeader", "XRequestIDHeader"],
+        "responses": {
+            "200": "#/components/schemas/SubmitJobStatusResponse",
+            "400": ERROR_RESPONSE_SCHEMA_REF,
+            "401": ERROR_RESPONSE_SCHEMA_REF,
+            "404": ERROR_RESPONSE_SCHEMA_REF,
             "500": ERROR_RESPONSE_SCHEMA_REF,
         },
     },

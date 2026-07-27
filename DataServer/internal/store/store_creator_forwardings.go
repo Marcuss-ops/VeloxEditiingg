@@ -28,6 +28,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -275,6 +276,44 @@ func (s *SQLiteStore) GetCreatorForwardingByRemoteJob(ctx context.Context, provi
 		 FROM creator_forwardings
 		 WHERE source_provider = ? AND source_job_id = ?
 		 ORDER BY created_at DESC LIMIT 1`, provider, sourceJobID)
+	return scanCreatorForwarding(row)
+}
+
+// GetCreatorForwardingByTargetJobID looks up the canonical forwarding
+// row stamped with target_job_id = :id. This is the read surface for
+// the polling endpoint GET /api/v1/jobs/:id — by the time the resolver
+// commits a request, target_job_id is populated and stable.
+//
+// Lookup invariants:
+//   - target_job_id is populated when status advances past FORWARDING
+//     (the AtomicJobTaskCreator block in creatorflow.Resolver writes
+//     it in the same tx that creates jobs + tasks + task_specs).
+//   - Pre-FORWARDED and FAILED/CANCELLED states leave target_job_id
+//     NULL on some classic races; in that case this helper returns
+//     ErrCreatorForwardingNoRow, mirroring the storage layer's "no row"
+//     contract. Callers can interpret this as "polling target not yet
+//     materialized" (recommended: 404 with retry-after hint).
+//
+// Performance: a B-tree index on target_job_id (migration 102)
+// guarantees an O(log N) lookup under operator-scale table growth.
+// Without the index, every poll is a full-table scan.
+func (s *SQLiteStore) GetCreatorForwardingByTargetJobID(ctx context.Context, targetJobID string) (*CreatorForwarding, error) {
+	if strings.TrimSpace(targetJobID) == "" {
+		return nil, fmt.Errorf("store: GetCreatorForwardingByTargetJobID: empty target_job_id")
+	}
+	row := s.db.QueryRowContext(ctx,
+		`SELECT forwarding_id, source_provider, source_job_id, source_status,
+		        target_executor_id, COALESCE(target_job_id, ''),
+		        COALESCE(payload_json, ''), COALESCE(payload_sha256, ''),
+		        status, attempt_count, COALESCE(next_attempt_at, ''),
+		        poll_attempts, COALESCE(next_poll_at, ''), COALESCE(last_polled_at, ''),
+		        COALESCE(last_remote_status, ''),
+		        COALESCE(locked_by, ''), COALESCE(lease_id, ''), COALESCE(lease_expires_at, ''),
+		        COALESCE(last_error_code, ''), COALESCE(last_error_message, ''), COALESCE(last_error_class, ''),
+		        created_at, updated_at, COALESCE(forwarded_at, '')
+		 FROM creator_forwardings
+		 WHERE target_job_id = ?
+		 ORDER BY created_at DESC LIMIT 1`, targetJobID)
 	return scanCreatorForwarding(row)
 }
 

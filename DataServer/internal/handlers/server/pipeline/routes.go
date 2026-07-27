@@ -85,6 +85,14 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth, m2mJobsAuth gin.Hand
 	}
 	jobs.Use(m2mJobsAuth)
 	jobs.POST("", h.SubmitJob())
+	// Polling endpoint for the just-created job. Reuses the
+	// /api/v1/jobs URL prefix and the same M2M middleware so a
+	// client can chain POST → GET without re-handshaking auth.
+	// The 4-field {job_id,status,created,status_url} envelope
+	// + canonical status_url allow the GET response to be the
+	// next POST-equivalent request body if the caller wants to
+	// re-emit.
+	jobs.GET("/:id", h.GetSubmittedJob())
 
 	// Canonical, versioned pipeline-runs API. The POST creates a
 	// durable pipeline_run before the remote call; the GET returns the

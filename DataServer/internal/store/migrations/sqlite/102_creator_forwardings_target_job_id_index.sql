@@ -1,0 +1,22 @@
+-- Migration 102: B-tree index on creator_forwardings(target_job_id).
+--
+-- The new polling endpoint GET /api/v1/jobs/:id (P2 followup) looks up
+-- creator_forwardings rows by target_job_id = :id for every M2M client
+-- poll. Without an index, every poll is a full-table scan on a table that
+-- grows with every external /api/v1/jobs submission, plus every creator
+-- intake (the table is the FAILED-replay-ability backbone). Under M2M
+-- load, a polling client driving the queue depth of 1000..10000 jobs at
+-- 1 Hz produces per-second scans of an unbounded table — a latency spike
+-- waiting to happen.
+--
+-- B-tree, not UNIQUE: the same target_job_id can legitimately appear on
+-- multiple rows during transient failure cascades (one FORWARDED row, one
+-- RETRY_WAIT row rebuilt from the same upstream identity), so an index
+-- without a uniqueness constraint preserves the historical intake replay
+-- model. Lookups remain O(log N) on the hot path.
+--
+-- Created alongside P2 polling endpoint (POST /api/v1/jobs → GET
+-- /api/v1/jobs/:id) so the production-first rollout never sees a
+-- pre-index scan path.
+CREATE INDEX IF NOT EXISTS idx_creator_forwardings_target_job_id
+    ON creator_forwardings(target_job_id);

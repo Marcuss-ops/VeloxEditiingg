@@ -696,11 +696,15 @@ components:
 
     SubmitJobAcceptedResponse:
       type: object
-      required: [ok, accepted_from, idempotency_key, job_id, dispatch_status]
+      required: [ok, accepted_from, idempotency_key, job_id, dispatch_status, status_url]
       description: |
         Successful creation via the simplified job submission endpoint.
         The handler has persisted forwarding + Job + Task atomically
-        via creatorflow.Resolver.
+        via creatorflow.Resolver. The `status_url` field carries
+        the canonical polling path for this job_id, and the response
+        ALSO emits `Location: /api/v1/jobs/{job_id}` per RFC 7231
+        so RESTful clients can chain immediately via the header
+        without parsing the body.
       properties:
         ok:
           type: boolean
@@ -717,12 +721,73 @@ components:
           example: "ext-job-20260727-001"
         job_id:
           type: string
-          description: "Velox-side job identifier for downstream polling."
+          description: |
+            Velox-side job identifier for downstream polling.
+            Mirrored in the `Location` response header.
           example: job_a1b2c3d4
         dispatch_status:
           type: string
           enum: [queued_for_workers]
           example: queued_for_workers
+        status_url:
+          type: string
+          description: |
+            Canonical polling URL for this job_id. Env-relative
+            (no scheme/host) so it stays stable across dev /
+            staging / production environments and across API
+            gateway rewrites of the Location header. Clients
+            can dereference this with the same auth headers as
+            the POST.
+          example: /api/v1/jobs/job_a1b2c3d4
+
+    SubmitJobStatusResponse:
+      type: object
+      required: [ok, job_id, status, created, status_url]
+      description: |
+        Response shape for `GET /api/v1/jobs/{job_id}`. Mirrors the
+        canonical polling contract: the 4 fields a client needs to
+        (a) decide if the job is done, (b) decide which intake path
+        produced it, and (c) chain the next operation via status_url.
+        Reuses the canonical `creator_forwardings.target_job_id`
+        lookup backed by the migration-102 B-tree index.
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+          description: "Always `true` on a successful 200."
+          example: true
+        job_id:
+          type: string
+          description: "Echoed from the URL path."
+          example: job_a1b2c3d4
+        status:
+          type: string
+          description: |
+            jobs.Status (canonical render state) when the jobs row
+            has materialized; falls back to
+            creator_forwardings.status during the brief pre-FORWARDED
+            race window. The enum below is the public-facing
+            jobs.Status vocabulary.
+          enum: [PENDING, READY, LEASED, RUNNING, SUCCEEDED, FAILED, CANCELLED, AWAITING_ARTIFACT, RETRY_WAIT]
+          example: PENDING
+        created:
+          type: boolean
+          description: |
+            Source discriminator. `true` iff the row was produced by
+            POST /api/v1/jobs (source_provider == 'external_api');
+            `false` iff it came in via POST /api/v1/creator/jobs.
+            Clients can use this boolean to filter their polling
+            surface (e.g. a M2M dashboard cares only about its own
+            external jobs and can drop creator-source rows).
+          example: true
+        status_url:
+          type: string
+          description: |
+            Self-link. Always returns
+            `"/api/v1/jobs/" + <this job_id>` so clients can
+            copy-paste the URL into their next request without
+            re-deriving from the path the response came in on.
+          example: /api/v1/jobs/job_a1b2c3d4
 
     # ── Error envelopes ────────────────────────────────────────────────────
     ErrorCode:
@@ -742,6 +807,7 @@ components:
         - payload_incomplete
         - resolver_failure
         - idempotency_key_reused
+        - job_not_found
 
     ErrorEnvelope:
       type: object
@@ -873,6 +939,15 @@ paths:
           description: |
             Job accepted and queued for worker dispatch. The response
             contains the Velox job_id for downstream polling.
+          headers:
+            Location:
+              description: |
+                Canonical polling URL for the just-created job. Same
+                shape as the body's `status_url` field — env-relative
+                `/api/v1/jobs/{job_id}`. RFC 7231 location-of-resource.
+              schema:
+                type: string
+                example: /api/v1/jobs/job_a1b2c3d4
           content:
             application/json:
               schema:
@@ -885,6 +960,7 @@ paths:
                     idempotency_key: "ext-job-20260727-001"
                     job_id: job_a1b2c3d4
                     dispatch_status: queued_for_workers
+                    status_url: /api/v1/jobs/job_a1b2c3d4
         '400':
           description: Invalid JSON or missing required fields.
           content:
@@ -928,6 +1004,125 @@ paths:
                         issue: hash_mismatch
         '500':
           description: Resolver or internal failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/v1/jobs/{job_id}:
+    get:
+      tags: [jobs]
+      operationId: getSubmittedJob
+      summary: "Poll the status of a previously submitted job."
+      description: |
+        Polling endpoint for jobs that came in via POST /api/v1/jobs.
+        Reuses the canonical lookup surface:
+        `creator_forwardings.target_job_id = :id` (backed by the
+        migration-102 B-tree index, O(log N)) and falls back to
+        `jobs.id = :id` for the canonical `jobs.Status` field when
+        the jobs row has materialized.
+
+        The response is intentionally minimal — 4 fields per the
+        P2 spec — so a client can decide what to do next without
+        parsing a wide envelope:
+
+          - `job_id`     echo of the URL path; canonical handle.
+          - `status`     jobs.Status (render state) — the only
+                         piece of state a polling client needs.
+          - `created`    bool source discriminator (true iff POST
+                         /api/v1/jobs produced this row). Enables a
+                         client dashboard's filter-by-intake path
+                         without a separate lookup.
+          - `status_url` self-link; clients can dereference with
+                         the same auth chain. Always
+                         `/api/v1/jobs/{job_id}` — encourages the
+                         GET response to be a stable document.
+
+        Edge cases:
+          - Unknown `job_id` → 404 job_not_found.
+          - Pre-FORWARDED `target_job_id = NULL` → primary lookup
+            misses → 404 (callers should retry with backoff; the
+            canonical URL is preserved once the resolver commits).
+
+        Auth: this endpoint shares the M2M bearer token surface
+        with POST /api/v1/jobs (scope `jobs.submit`). Cross-client
+        isolation is intentionally soft for v1 — any valid token
+        can poll any job_id; strict cross-client isolation is a
+        documented followup (match creator_forwardings.external_client_id
+        with the m2m_client_id from the request context).
+      parameters:
+        - $ref: '#/components/parameters/AuthorizationHeader'
+        - $ref: '#/components/parameters/XRequestIDHeader'
+        - name: job_id
+          in: path
+          required: true
+          description: |
+            The Velox-side job identifier returned by POST /api/v1/jobs
+            (the `job_id` field of the 202 response, mirrored in the
+            `Location` header). Same shape as POST's output — the
+            hash-derived `job_<…>` format produced by
+            `enqueue.DeriveForwardingJobID`.
+          schema:
+            type: string
+            example: job_a1b2c3d4
+      responses:
+        '200':
+          description: |
+            Job found. The 4-field envelope contains the canonical
+            polling state at the moment of the request. Clients
+            should treat each GET as a single point-in-time query —
+            the underlying MySQL/SQLite row may have advanced since
+            the last poll.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitJobStatusResponse'
+              examples:
+                pending_after_post:
+                  summary: "Freshly-POSTed job, jobs.Status=PENDING."
+                  value:
+                    ok: true
+                    job_id: job_a1b2c3d4
+                    status: PENDING
+                    created: true
+                    status_url: /api/v1/jobs/job_a1b2c3d4
+                creator_source:
+                  summary: "Viewing a creator-source job (created=false)."
+                  value:
+                    ok: true
+                    job_id: job_xyz9876
+                    status: RUNNING
+                    created: false
+                    status_url: /api/v1/jobs/job_xyz9876
+        '400':
+          description: Empty `job_id` in the URL path.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Missing or invalid M2M bearer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: |
+            `job_id` does not match any known creator forwarding
+            row. The 404 envelope mirrors the M2M-token rejection
+            shape so a single error dispatcher handles both auth
+            + lookup misses.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                unknown:
+                  value:
+                    ok: false
+                    error: job_not_found
+                    message: "job_id does not match any known creator forwarding"
+        '500':
+          description: Store-side failure.
           content:
             application/json:
               schema:

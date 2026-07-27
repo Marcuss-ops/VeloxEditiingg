@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/remoteengine"
+	"velox-server/internal/store"
 )
 
 // ExternalAPISourceProvider is the canonical SourceProvider stamped on
@@ -557,6 +559,21 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 			ClientIDFromContext(c),
 		)
 
+		// Status URL + Location header: canonical polling endpoint
+		// address for this job_id. The 202 response carries BOTH the
+		// JSON field (status_url) AND the Location header (per HTTP
+		// RFC 7231 location-of-resource) so automation clients can
+		// pick whichever fits their language — curl --include
+		// surfaces the header; jq .status_url surfaces the field.
+		// Env-relative (no host:port / scheme) so the helper works
+		// across dev / staging / production environments unchanged
+		// and matches the openapi.yaml documented shape.
+		if jobID != "" {
+			statusURL := "/api/v1/jobs/" + jobID
+			c.Header("Location", statusURL)
+			response["status_url"] = statusURL
+		}
+
 		// Stash scene count + total duration so the M2M audit
 		// middleware (or the response writer wrapper) records the
 		// ACTUAL request shape in m2m_audit_log. Best effort; if
@@ -568,6 +585,104 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 		SetUsageStats(c, len(req.Scenes), totalDur)
 
 		c.JSON(http.StatusAccepted, response)
+	}
+}
+
+// GetSubmittedJob handles GET /api/v1/jobs/:id.
+//
+// Polling endpoint for jobs that came in via POST /api/v1/jobs.
+// Reuses the canonical lookup surface: creator_forwardings.target_job_id
+// + jobs.Reader.Get — the same data path the resolver committed to
+// when the job was created. No new SQL is introduced at the lookup
+// layer; the helper at store.GetCreatorForwardingByTargetJobID is the
+// only new addition, and it is exercised by the migration-102 B-tree
+// index for O(log N) polling under M2M load.
+//
+// Response shape (4 fields, per user P2 spec + status_url canonical
+// chain):
+//
+//   job_id      canonical id (the same string POST returned).
+//   status      jobs.Status (canonical render state) — falls back to
+//               forwarding.Status when the jobs row has not materialized
+//               yet (resolver race in pre-FORWARDING state: the row
+//               exists but target_job_id was not yet committed).
+//   created     bool — true if the row was produced by POST /api/v1/jobs
+//               (source_provider == ExternalAPISourceProvider). False
+//               if it came in via POST /api/v1/creator/jobs. The
+//               indicator lets clients distinguish the two intake
+//               paths without a separate lookup.
+//   status_url  env-relative path "/api/v1/jobs/{job_id}" so clients
+//               can chain the canonical into their next request
+//               without re-deriving the URL.
+//
+// 404 envelope mirrors the m2m_token_rejected shape (ok:false,
+// error:job_not_found, message:...) so a single error dispatcher
+// handles auth + lookup misses.
+//
+// Auth scope: jobs.submit. The M2M middleware runs before the
+// handler and rejects requests lacking a valid token. Cross-client
+// authorization (a token for client A polling a job created by
+// client B) is intentionally SOFT for v1 — any valid M2M token
+// can poll any job_id. The strict boundary tightening
+// (creator_forwardings.external_client_id == m2m_client_id from
+// context) is a documented followup.
+//
+// Edge cases:
+//   - Unknown :id → 404 job_not_found.
+//   - Pre-FORWARDED target_job_id not populated → primary lookup
+//     misses → 404 (callers should retry with exponential backoff).
+func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		jobID := strings.TrimSpace(c.Param("id"))
+		if jobID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"ok":      false,
+				"error":   "job_id_required",
+				"message": "URL path /api/v1/jobs/:id requires non-empty :id",
+			})
+			return
+		}
+		ctx := c.Request.Context()
+		forwarding, err := h.store.GetCreatorForwardingByTargetJobID(ctx, jobID)
+		if err != nil {
+			if errors.Is(err, store.ErrCreatorForwardingNoRow) {
+				c.JSON(http.StatusNotFound, gin.H{
+					"ok":      false,
+					"error":   "job_not_found",
+					"message": "job_id does not match any known creator forwarding",
+				})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"ok":      false,
+				"error":   "store_failure",
+				"message": err.Error(),
+			})
+			return
+		}
+		// Prefer jobs.Status (canonical render state). Fall back to
+		// forwarding.Status when the jobs row has not materialized
+		// (resolver race in pre-FORWARDING). Tripping the fallback
+		// produces PENDING / POLLING / etc. — these can be more
+		// granular than the public jobs.Status enum, but the 4-field
+		// contract here passes them through verbatim; clients
+		// implementing strict status matching should consult the
+		// openapi.yaml schema enum, not the raw forwarding status.
+		status := string(forwarding.Status)
+		if h.jobs.Reader != nil {
+			if job, gErr := h.jobs.Reader.Get(ctx, jobID); gErr == nil && job != nil {
+				status = string(job.Status)
+			}
+		}
+		created := forwarding.SourceProvider == ExternalAPISourceProvider
+		statusURL := "/api/v1/jobs/" + jobID
+		c.JSON(http.StatusOK, gin.H{
+			"ok":         true,
+			"job_id":     jobID,
+			"status":     status,
+			"created":    created,
+			"status_url": statusURL,
+		})
 	}
 }
 
