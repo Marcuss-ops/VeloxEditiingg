@@ -640,6 +640,7 @@ components:
         - invalid_payload
         - payload_incomplete
         - resolver_failure
+        - idempotency_key_reused
 
     ErrorEnvelope:
       type: object
@@ -803,6 +804,27 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: |
+            Idempotency key reused with a payload that does not match
+            the previously-stored one. No new job is created. Returned
+            by the payload-hash conflict check inside
+            `creatorflow.Resolver` (which compares the existing
+            `creator_forwardings.payload_sha256` against the SHA of
+            the freshly-rebuilt worker payload).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                hash_mismatch:
+                  value:
+                    ok: false
+                    error: idempotency_key_reused
+                    message: "idempotency_key reused with a different payload"
+                    details:
+                      - path: idempotency_key
+                        issue: hash_mismatch
         '500':
           description: Resolver or internal failure.
           content:

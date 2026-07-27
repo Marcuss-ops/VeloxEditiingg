@@ -54,6 +54,7 @@ EXPECTED_ERROR_CODES = {
     "invalid_payload",
     "payload_incomplete",
     "resolver_failure",
+    "idempotency_key_reused",
 }
 
 # Schema $ref that MUST be the target of every error-style response on
@@ -130,6 +131,7 @@ ROUTE_INVARIANTS = [
             "202": "#/components/schemas/SubmitJobAcceptedResponse",
             "400": ERROR_RESPONSE_SCHEMA_REF,
             "401": ERROR_RESPONSE_SCHEMA_REF,
+            "409": ERROR_RESPONSE_SCHEMA_REF,
             "422": ERROR_RESPONSE_SCHEMA_REF,
             "500": ERROR_RESPONSE_SCHEMA_REF,
         },
