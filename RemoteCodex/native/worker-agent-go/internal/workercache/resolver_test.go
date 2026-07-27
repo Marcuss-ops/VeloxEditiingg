@@ -208,3 +208,77 @@ func TestResolver_FailedDownload_LeavesRowInInFlight(t *testing.T) {
 		t.Errorf("row.download_complete=true after failed Resolve; want false (Downloader contract)")
 	}
 }
+
+// TestResolver_FileMissingRecovery: the cache row says
+// download_complete=true but the on-disk file has been deleted
+// out from under us (admin wipe, disk corruption, worker crash
+// between MarkDownloadComplete and the next read). Resolve MUST
+// flip the row's local_path back to the .part placeholder +
+// download_complete=false, drive the re-download, and end with
+// download_complete=true at the original final path.
+//
+// Without this branch, the file-missing state would silently
+// fall through the cache-hit fast path and the next job relying
+// on the file would either crash on open or npm-oshi-stale.
+func TestResolver_FileMissingRecovery(t *testing.T) {
+	f := newResolverFixture(t)
+	ctx := context.Background()
+
+	// Deliberately DO NOT create the file on disk. The cache row
+	// lies, the filesystem is honest.
+	path := filepath.Join(f.dir, "TYSON001.mp4")
+	if err := f.cache.Store(ctx, Entry{
+		DriveFileID:      "TYSON001",
+		LocalPath:        path,
+		SizeBytes:        15,
+		DownloadComplete: true,
+	}); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if err := f.cache.MarkDownloadComplete(ctx, "TYSON001", path, 15); err != nil {
+		t.Fatalf("MarkDownloadComplete: %v", err)
+	}
+
+	// Sanity: file really is absent before Resolve.
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pre-Resolve: file unexpectedly present at %s", path)
+	}
+
+	payload := []byte("RECOVERED VIDEO ")
+	r := resolverWithBytesSource(t, f, payload)
+
+	got, err := r.Resolve(ctx, "TYSON001")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got != path {
+		t.Errorf("got=%q want %q (file-missing recovery must restore the original final path, not a new one)",
+			got, path)
+	}
+
+	e, ok, fErr := f.cache.Find(ctx, "TYSON001")
+	if fErr != nil || !ok {
+		t.Fatalf("Find post-Resolve: ok=%v err=%v", ok, fErr)
+	}
+	if !e.DownloadComplete {
+		t.Errorf("row.download_complete=false after recovery; want true")
+	}
+	if e.LocalPath != path {
+		t.Errorf("row.local_path=%q want %q", e.LocalPath, path)
+	}
+
+	// The recovered file is now present at the original path with
+	// the freshly downloaded bytes.
+	body, rErr := os.ReadFile(path)
+	if rErr != nil {
+		t.Fatalf("ReadFile recovered: %v", rErr)
+	}
+	if string(body) != string(payload) {
+		t.Errorf("final contents=%q want %q", body, payload)
+	}
+
+	// No .part leftover from the recovery.
+	if _, err := os.Stat(filepath.Join(f.dir, "TYSON001.mp4.part")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf(".part exists post-recovery; want absent. stat err=%v", err)
+	}
+}

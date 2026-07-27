@@ -96,6 +96,10 @@ func TestCleanupLoop_TickOnce_NoSnapshot(t *testing.T) {
 		Policy: f.policy,
 		// Snapshot is intentionally nil.
 		Interval: 5 * time.Minute,
+		// Inject T0 as the wall clock so the 3-minute grace rule
+		// can predictably cover the seeded last_used_at; without
+		// this, time.Now().UTC() drifts past 2026-07-27T12:00:00Z.
+		Now: func() time.Time { return T0 },
 	}
 	stats, err := cl.TickOnce(context.Background())
 	if err != nil {
@@ -120,12 +124,14 @@ func TestCleanupLoop_TickOnce_SnapshotProtected(t *testing.T) {
 	seedRowLoop(t, f.cache, f.dir, "PROTECTED", T0)
 	seedRowLoop(t, f.cache, f.dir, "OLD", oldTime.Add(-10*time.Minute))
 
-	// Snapshot: PROTECTED is in; OLD is not.
+	// Snapshot: PROTECTED is in; OLD is not. GeneratedAt=T0 keeps
+	// staleness < SnapshotMaxAge (2m) deterministically.
 	cl := &CleanupLoop{
 		Cache:    f.cache,
 		Policy:   f.policy,
 		Snapshot: &FixedSnapshotSource{GeneratedAt: T0, ProtectedIDs: []string{"PROTECTED"}},
 		Interval: 5 * time.Minute,
+		Now:      func() time.Time { return T0 },
 	}
 	stats, err := cl.TickOnce(context.Background())
 	if err != nil {
@@ -191,15 +197,20 @@ func TestCleanupLoop_Run_JobDoneTriggersTick(t *testing.T) {
 	seedRowLoop(t, f.cache, f.dir, "JOB-A", T0)
 	seedRowLoop(t, f.cache, f.dir, "JOB-B", T0.Add(-1*time.Hour))
 
-	// Capture each tick via OnTick.
+	// Capture each tick via OnTick. `jobDone` is bidirectional so
+	// we can send; the CleanupLoop field is `<-chan struct{}` so
+	// we MUST assign via a local variable (typed assertion would
+	// not compile — receive-only channels are not assignable from
+	// bidirectional ones at field-position time).
 	var ticks []int
+	jobDone := make(chan struct{}, 1)
 	cl := &CleanupLoop{
 		Cache:    f.cache,
 		Policy:   f.policy,
 		Snapshot: &FixedSnapshotSource{},
 		Interval: 1 * time.Hour,
 		OnTick:   func(_ CleanupStats, _ error) { ticks = append(ticks, 1) },
-		JobDone:  make(chan struct{}, 1),
+		JobDone:  jobDone,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -215,7 +226,7 @@ func TestCleanupLoop_Run_JobDoneTriggersTick(t *testing.T) {
 
 	// Send a JobDone signal — forces a 2nd tick before reaching
 	// the 1h ticker interval.
-	cl.JobDone.(chan struct{}) <- struct{}{}
+	jobDone <- struct{}{}
 	time.Sleep(50 * time.Millisecond)
 
 	cancel()

@@ -86,6 +86,25 @@ type CleanupLoop struct {
 	// with the stats + any error from CleanupWithPolicy. Optional;
 	// production wires Prometheus counters / log lines here.
 	OnTick func(CleanupStats, error)
+
+	// Now is the clock injection point. Optional; when nil, the
+	// loop falls back to time.Now().UTC(). Tests inject a fixed
+	// time so wall-clock drift cannot break the grace-period
+	// predicate (which compares row.LastUsedAt to a 3-minute
+	// reference instant — a test fixture seeded at 2026-07-27T12:00
+	// against a real-now=2026-07-27T18:00 wall clock would always
+	// be "expired").
+	Now func() time.Time
+}
+
+// resolveNow returns cl.Now() if non-nil, otherwise the canonical
+// UTC wall clock. Centralised so production and tests route through
+// the same predicate semantics.
+func (cl *CleanupLoop) resolveNow() time.Time {
+	if cl.Now != nil {
+		return cl.Now()
+	}
+	return time.Now().UTC()
 }
 
 // Run blocks until ctx is cancelled. The first Tick fires
@@ -174,5 +193,5 @@ func (cl *CleanupLoop) TickOnce(ctx context.Context) (CleanupStats, error) {
 		}
 	}
 
-	return CleanupWithPolicy(ctx, cl.Cache, generatedAt, protected, cl.Policy, time.Now().UTC())
+	return CleanupWithPolicy(ctx, cl.Cache, generatedAt, protected, cl.Policy, cl.resolveNow())
 }
