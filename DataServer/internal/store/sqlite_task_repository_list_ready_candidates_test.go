@@ -27,6 +27,15 @@ import (
 // migration 039_tasks.sql (executor_version is INTEGER with default
 // 0, status is TEXT, etc.) — a TEXT/INTEGER drift would mask a typed
 // Scan conversion regression in production.
+//
+// task_specs (payload_json) is also created here because the shared
+// shared/dispatchable.ListNextDispatchableJobs query LEFT JOINs
+// task_specs (added in Pass 3 for the asset-cache snapshot service).
+// COALESCE(NULL) returns '' for a missing row but SQLite errors on a
+// missing table even for LEFT JOIN, so the fixture must mirror the
+// production schema. Production loads task_specs at TaskSpec
+// creation time (PR #4).
+
 const candidatesTestSchema = `
 CREATE TABLE tasks (
     task_id          TEXT PRIMARY KEY,
@@ -45,6 +54,11 @@ CREATE TABLE IF NOT EXISTS task_requirements (
     task_id    TEXT NOT NULL,
     capability TEXT NOT NULL,
     PRIMARY KEY (task_id, capability),
+    FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS task_specs (
+    task_id      TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
 );
 `

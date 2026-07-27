@@ -7,12 +7,12 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
-	"time"
 
 	"velox-server/internal/placement"
+
+	"velox-shared/dispatchable"
 )
 
 // IsAllAttemptCommitsCommittedForTasks is the Phase 2.8 roll-up gate
@@ -78,14 +78,19 @@ func (r *SQLiteTaskRepository) AreDependenciesSatisfied(ctx context.Context, dep
 
 // ListReadyCandidates returns lightweight task metadata rows for the
 // placement matcher. Only the columns needed for placement decisions
-// are fetched — full payloads are loaded later by ClaimTaskForWorkerAtomic.
+// are projected — the shared SELECT in shared/dispatchable fetches
+// a superset (incl. payload_json via LEFT JOIN task_specs), but the
+// scheduler ignores Payload here. Full payloads are still loaded
+// lazily on ClaimTaskForWorkerAtomic.
 //
-// Query: SELECT task_id, job_id, revision, priority, created_at,
-// executor_id, executor_version FROM tasks WHERE status='READY'
-// AND (worker_id=” OR worker_id IS NULL) ORDER BY priority DESC,
-// created_at ASC LIMIT ?.
+// The SQL itself lives in shared/dispatchable to keep the WHERE /
+// ORDER BY contract in ONE place. The asset-cache snapshot service
+// (Pass 5) consumes the same SELECT via the same shared function so
+// that snapshot ordering tracks scheduler ordering exactly.
 //
-// limit <= 0 falls back to a safe default (placementCandidateBatch = 64).
+// limit <= 0 falls back to placementCandidateBatch (the scheduler's
+// own default), deferring the canonical DefaultLimit constant in
+// shared to the snapshot service only.
 func (r *SQLiteTaskRepository) ListReadyCandidates(ctx context.Context, limit int) ([]placement.TaskCandidate, error) {
 	if r.store == nil || r.store.db == nil {
 		return nil, fmt.Errorf("task repository: store not initialized")
@@ -94,67 +99,27 @@ func (r *SQLiteTaskRepository) ListReadyCandidates(ctx context.Context, limit in
 		limit = placementCandidateBatch
 	}
 
-	rows, err := r.store.db.QueryContext(ctx,
-		`SELECT t.task_id, t.job_id, t.revision, t.priority, t.created_at,
-		        t.executor_id, t.executor_version,
-		        GROUP_CONCAT(tr.capability) AS required_capabilities
-		 FROM tasks t
-		 LEFT JOIN task_requirements tr ON tr.task_id = t.task_id
-		 WHERE t.status = 'READY'
-		   AND (t.worker_id = '' OR t.worker_id IS NULL)
-		 GROUP BY t.task_id
-		 ORDER BY t.priority DESC, t.created_at ASC
-		 LIMIT ?`,
-		limit,
-	)
+	jobs, err := dispatchable.ListNextDispatchableJobs(ctx, r.store.db, limit)
 	if err != nil {
 		return nil, fmt.Errorf("task list ready candidates: %w", err)
 	}
-	defer rows.Close()
 
+	// Preserve the zero-row → nil-slice contract that handler_workers
+	// (and the empty-candidates branch path in placement workers.go)
+	// races against. A non-nil empty slice would still pass len==0 at
+	// most call sites but breaks the eager nil check. Use var + append
+	// rather than make([]T, 0, n) so the zero-row case stays nil.
 	var candidates []placement.TaskCandidate
-	for rows.Next() {
-		var (
-			taskID             string
-			jobID              string
-			revision           int
-			priority           int
-			createdAt          string
-			executorID         string
-			executorVersion    int
-			capabilitiesConcat sql.NullString
-		)
-		if scanErr := rows.Scan(&taskID, &jobID, &revision, &priority, &createdAt, &executorID, &executorVersion, &capabilitiesConcat); scanErr != nil {
-			continue
-		}
-
-		var parsedTime time.Time
-		if createdAt != "" {
-			if pt, e := time.Parse(time.RFC3339, createdAt); e == nil {
-				parsedTime = pt
-			}
-		}
-
-		var capabilities []string
-		if capabilitiesConcat.Valid && capabilitiesConcat.String != "" {
-			capabilities = strings.Split(capabilitiesConcat.String, ",")
-		}
-
-		execKey := placement.NormalizeExecutorKey(executorID, executorVersion)
-
+	for _, j := range jobs {
 		candidates = append(candidates, placement.TaskCandidate{
-			TaskID:               taskID,
-			JobID:                jobID,
-			Revision:             revision,
-			Priority:             priority,
-			CreatedAt:            parsedTime,
-			Executor:             execKey,
-			RequiredCapabilities: capabilities,
+			TaskID:               j.TaskID,
+			JobID:                j.JobID,
+			Revision:             j.Revision,
+			Priority:             j.Priority,
+			CreatedAt:            j.CreatedAt,
+			Executor:             placement.NormalizeExecutorKey(j.ExecutorID, j.ExecutorVersion),
+			RequiredCapabilities: j.RequiredCapabilities,
 		})
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("task list ready candidates rows: %w", err)
-	}
-
 	return candidates, nil
 }
