@@ -13,8 +13,8 @@
 // handler is a bug.
 //
 // Companion: openapi.yaml's ErrorEnvelope schema. Changes here MUST
-// stay in lockstep with the validator's REQUIRED_SCHEMAS +
-// EXPECTED_ERROR_CODES sets (and the ErrorCode enum).
+// stay in lockstep with the validator's EXPECTED_ERROR_CODES set
+// (and the ErrorCode enum).
 package creatorflow
 
 import (
@@ -36,51 +36,70 @@ import (
 // callers stay oblivious to the test plumbing.
 var validationFieldExtractor = enqueue.ValidationErrorField
 
+// idempotencyKeyDefault is the canonical JSON-pointer-style path
+// emitted in the 409 detail when ErrIdempotencyKeyReused is raised
+// without an underlying typed validationError. Production paths that
+// carry the keyed identity as a top-level body field (POST /api/v1/jobs)
+// and paths that nest it under an inner envelope (POST /api/v1/creator/
+// jobs, where the canonical hash lives on the inner `payload`) BOTH
+// reach this fallback when the typed error has no field path. Callers
+// that need a context-specific label should wrap the error chain so
+// the typed validationError carries it; the helper reads that via
+// ValidationErrorField.
+const idempotencyKeyDefault = "idempotency_key"
+
 // WriteResolverError writes the canonical HTTP error envelope
 // returned by any handler that delegates to creatorflow.Resolver.Resolve.
+// Both SubmitJob (POST /api/v1/jobs) and CreatorPush (POST /api/v1/
+// creator/jobs) call this helper; removing the call from either is
+// a regression (the inline cascade silently dropped enqueue-layer
+// validation errors to 500 in the [P0] historical memory's audit).
+//
 // The mapping is:
 //
 //	errors.Is(err, ErrResolverNotComplete)
 //	    → 422 + "payload_incomplete"
-//	      message: "payload is not complete enough to dispatch"
 //	      details: nil
 //
 //	errors.Is(err, ErrIdempotencyKeyReused)
 //	    → 409 + "idempotency_key_reused"
-//	      details: [{path: idempotencyField, issue: "hash_mismatch"}]
+//	      details: [{path: <derived>, issue: "hash_mismatch"}]
+//	      where <derived> = validationFieldExtractor(err) if non-empty,
+//	      else idempotencyKeyDefault ("idempotency_key"). This way a
+//	      409 raised over a wrapped validationError with field
+//	      "payload" (creator_push) surfaces "payload"; an unwrapped
+//	      409 (submit_job) surfaces "idempotency_key" without
+//	      for the callsite to thread a third arg through.
 //
 //	validationFieldExtractor(err) != ""
 //	    → 422 + "invalid_payload"
 //	      details: [{path: <extracted-field>, issue: "invalid"}]
-//	      (covers all enqueue-layer *validationError rejections,
-//	      e.g. "delivery_plan[0].external_destination_id",
-//	      "scenes", "script_text", etc.)
+//	      Covers enqueue-layer typed validationError rejections:
+//	      delivery_plan missing / invalid, scenes empty, script_text
+//	      oversized, destination_id missing, social_destination_id
+//	      unrecognized, etc.
 //
 //	strings.Contains(strings.ToLower(err.Error()), "required")
 //	    → 422 + "invalid_payload"
 //	      details: nil (no typed field path available)
-//	      (captures un-typed resolver-internal validation
-//	      messages such as "payload is required" or
-//	      "source_provider and source_job_id are required",
-//	      which without this rule would incorrectly bubble up
-//	      as 500.)
+//	      Captures resolver-internal un-typed validation messages
+//	      (e.g. "payload is required" or "source_provider and
+//	      source_job_id are required") that would otherwise bubble
+//	      as 500. We deliberately do NOT pattern-match non-required
+//	      keywords — typed errors should flow through the
+//	      validationFieldExtractor branch above; if they don't, fix
+//	      the enqueue layer rather than paper over it here.
 //
 //	default
 //	    → 500 + "resolver_failure"
 //	      message: "failed to enqueue job"
 //	      details: nil
 //
-// idempotencyField is the JSON path surfaced in the 409 detail.
-// Pass "idempotency_key" when the caller has a content-level dedup
-// handle (POST /api/v1/jobs) or "payload" when the dedup is
-// embedded in a nested envelope (POST /api/v1/creator/jobs, where
-// the canonical hash-mismatch lives on the inner `payload` object).
-//
 // Nil err or nil gin.Context: noop. The function does NOT write
 // anything in those states. Callers should still gate on `err !=
 // nil` at the top of their handler block for clarity; the noop
 // branch is defensive against accidental panics in test rigs.
-func WriteResolverError(c *gin.Context, err error, idempotencyField string) {
+func WriteResolverError(c *gin.Context, err error) {
 	if c == nil || err == nil {
 		return
 	}
@@ -92,10 +111,19 @@ func WriteResolverError(c *gin.Context, err error, idempotencyField string) {
 			"payload is not complete enough to dispatch",
 			nil)
 	case errors.Is(err, ErrIdempotencyKeyReused):
+		// Derive the 409 detail path from any wrapped
+		// validationError so a hash-conflict raised over a
+		// context-specific subtree (e.g. creator_push's nested
+		// "payload") flows through without callers having to
+		// thread a third arg through the helper signature.
+		path := validationFieldExtractor(err)
+		if path == "" {
+			path = idempotencyKeyDefault
+		}
 		writeErrorEnvelope(c, http.StatusConflict,
 			"idempotency_key_reused",
 			err.Error(),
-			gin.H{"path": idempotencyField, "issue": "hash_mismatch"})
+			gin.H{"path": path, "issue": "hash_mismatch"})
 	case validationFieldExtractor(err) != "":
 		field := validationFieldExtractor(err)
 		writeErrorEnvelope(c, http.StatusUnprocessableEntity,
@@ -103,12 +131,8 @@ func WriteResolverError(c *gin.Context, err error, idempotencyField string) {
 			err.Error(),
 			gin.H{"path": field, "issue": "invalid"})
 	case strings.Contains(strings.ToLower(err.Error()), "required"):
-		// Un-typed resolver validation. We deliberately do NOT
-		// pattern-match non-required keywords (e.g. "delivery_plan"
-		// or "destination_id" in error text) — those should flow
-		// through validationFieldExtractor via the typed
-		// enqueue.validationError path. If they don't, fix the
-		// enqueue layer, don't paper over it here.
+		// Un-typed resolver validation. See comment above on why
+		// we only match "required".
 		writeErrorEnvelope(c, http.StatusUnprocessableEntity,
 			"invalid_payload",
 			err.Error(),

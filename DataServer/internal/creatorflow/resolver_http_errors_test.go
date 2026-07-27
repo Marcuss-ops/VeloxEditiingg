@@ -16,28 +16,34 @@ func init() { gin.SetMode(gin.TestMode) }
 
 // TestWriteResolverError is the table-driven specification for
 // WriteResolverError. Each row asserts (status, error code,
-// details shape). The "ValidationErrorField != ''" branch is
-// covered by stashing a fake extractor via the
-// `validationFieldExtractor` package-private indirection —
-// enqueue's *validationError type is unexported and can't be
-// constructed from outside the enqueue package without adding a
-// dedicated constructor.
+// details shape) for the canonical mapping canon:
 //
-// Two boolean flags steer the test rig:
+//   errors.Is(err, ErrResolverNotComplete)               → 422 payload_incomplete
+//   errors.Is(err, ErrIdempotencyKeyReused)             → 409 + path-from-typed-or-default
+//   validationFieldExtractor(err) != ""                  → 422 invalid_payload + typed path
+//   strings.Contains(strings.ToLower(err.Error()), "required") → 422 invalid_payload
+//   default                                              → 500 resolver_failure
 //
-//   - useNilErr: pass nil for the err argument; assert NO response
-//     written (the helper must noop).
-//   - useNilContext: leave `c` as the zero value (`*gin.Context =
-//     nil`); assert the helper stays defensive and never panics
-//     even when gin.Context is malformed.
+// The two paths the helper family supports (POST /api/v1/creator/jobs
+// pushes the typed validationError wrapped over the inner "payload";
+// POST /api/v1/jobs surfaces the un-typed error) both round-trip
+// through the helper with no callsite-provided path annotation.
 //
-// `useFakeField` (function-variable-style override) feeds a synthetic
-// ValidationErrorField result for the typed-path branch.
+// The "ValidationErrorField != ''" branch is covered by stashing a
+// fake extractor via the `validationFieldExtractor` package-private
+// indirection — enqueue's *validationError type is unexported and
+// can't be constructed from outside the enqueue package without
+// adding a dedicated constructor, which would force the test to
+// pull the enqueue dep into the surface API of this package.
+// The function-variable indirection keeps the test signal-local.
+//
+// `useNilErr` / `useNilContext` / `useFakeField` are the three test-rig
+// toggles. The rig asserts the noop branches stay defensive (nil
+// inputs never write a body, even when gin.Context itself is malformed).
 func TestWriteResolverError(t *testing.T) {
 	cases := []struct {
 		name             string
 		err              error
-		idemField        string
 		useNilErr        bool
 		useNilContext    bool
 		useFakeField     bool
@@ -52,24 +58,16 @@ func TestWriteResolverError(t *testing.T) {
 		{
 			name:       "ErrResolverNotComplete -> 422 payload_incomplete, no details",
 			err:        ErrResolverNotComplete,
-			idemField:  "payload",
 			wantStatus: http.StatusUnprocessableEntity,
 			wantCode:   "payload_incomplete",
 		},
 		{
-			name:             "ErrIdempotencyKeyReused (payload) -> 409 + hash_mismatch",
+			// SubmitJob path: an un-typed 409 (no wrapped
+			// validationError) surfaces path "idempotency_key"
+			// via the helper's documented fallback. Pinned by
+			// the openapi.yaml ErrorEnvelope cross-check.
+			name:             "ErrIdempotencyKeyReused un-typed -> 409 + hash_mismatch, default path \"idempotency_key\"",
 			err:              ErrIdempotencyKeyReused,
-			idemField:        "payload",
-			wantStatus:       http.StatusConflict,
-			wantCode:         "idempotency_key_reused",
-			wantDetailsPath:  "payload",
-			wantDetailsIssue: "hash_mismatch",
-			wantHasDetails:   true,
-		},
-		{
-			name:             "ErrIdempotencyKeyReused (idempotency_key) -> 409 + hash_mismatch",
-			err:              ErrIdempotencyKeyReused,
-			idemField:        "idempotency_key",
 			wantStatus:       http.StatusConflict,
 			wantCode:         "idempotency_key_reused",
 			wantDetailsPath:  "idempotency_key",
@@ -77,9 +75,29 @@ func TestWriteResolverError(t *testing.T) {
 			wantHasDetails:   true,
 		},
 		{
-			name:             "ValidationErrorField returns path -> 422 invalid_payload + field path",
+			// CreatorPush path: a 409 raised over a typed
+			// validationError with field "payload" (the inner
+			// envelope's hash-handle) flows the typed path
+			// through verbatim, without third-arg annotation.
+			name:             "ErrIdempotencyKeyReused wrapped over typed validationError -> 409 + path from Field()",
+			err:              ErrIdempotencyKeyReused,
+			useFakeField:     true,
+			fakeField:        "payload",
+			wantStatus:       http.StatusConflict,
+			wantCode:         "idempotency_key_reused",
+			wantDetailsPath:  "payload",
+			wantDetailsIssue: "hash_mismatch",
+			wantHasDetails:   true,
+		},
+		{
+			// Enqueue-layer typed rejection covering the
+			// destination_id / delivery_plan invalid classes.
+			// Each enqueue.package validationError exposes
+			// .Field() so this row asserts the helper reads it
+			// via validationFieldExtractor (err) and surfaces
+			// details.path verbatim without callsite annotation.
+			name:             "ValidationErrorField returns path -> 422 invalid_payload + field path (enqueue typed rejection)",
 			err:              fmt.Errorf("enqueue wrapper carrying a validationError inside"),
-			idemField:        "payload",
 			useFakeField:     true,
 			fakeField:        "delivery_plan[0].external_destination_id",
 			wantStatus:       http.StatusUnprocessableEntity,
@@ -89,45 +107,81 @@ func TestWriteResolverError(t *testing.T) {
 			wantHasDetails:   true,
 		},
 		{
+			// Typed validationError surfacing as
+			// "scenes[3].destination_id missing" (a hypothetical
+			// from the canonical creator frontend after the
+			// validatePlanPayload rewrite). The Field() path is
+			// the only reliable way to surface this without
+			// parsing err.Error(). Without this row, a regression
+			// to err.Error() matching would silently re-introduce
+			// the 500 downgrade.
+			name:             "scenes[i].destination_id missing (typed) -> 422 invalid_payload + scenes[i].destination_id",
+			err:              fmt.Errorf("enqueue wrapper"),
+			useFakeField:     true,
+			fakeField:        "scenes[3].destination_id",
+			wantStatus:       http.StatusUnprocessableEntity,
+			wantCode:         "invalid_payload",
+			wantDetailsPath:  "scenes[3].destination_id",
+			wantDetailsIssue: "invalid",
+			wantHasDetails:   true,
+		},
+		{
+			// Un-typed resolver-internal validation. Captures
+			// "source_provider and source_job_id are required"
+			// — the canonical upstream check before the helper
+			// was wired. Without this row, a regression to the
+			// default branch would silently emit 500.
 			name:            "untyped 'are required' -> 422 invalid_payload, no details",
 			err:             fmt.Errorf("creatorflow: Resolve: source_provider and source_job_id are required"),
-			idemField:       "payload",
 			wantStatus:      http.StatusUnprocessableEntity,
 			wantCode:        "invalid_payload",
 			wantMsgContains: "are required",
 		},
 		{
+			// Un-typed resolver-internal validation. Captures
+			// "payload is required" — the canonical inner
+			// envelope check the original CreatorPush handler
+			// emitted with normalizeCreatorPushRequest's first
+			// line. Without this row, a regression to the
+			// default branch would silently emit 500.
 			name:            "untyped 'payload is required' -> 422 invalid_payload, no details",
 			err:             fmt.Errorf("payload is required"),
-			idemField:       "payload",
 			wantStatus:      http.StatusUnprocessableEntity,
 			wantCode:        "invalid_payload",
 			wantMsgContains: "is required",
 		},
 		{
-			name:       "wrapped hard fail -> 500 resolver_failure, no details",
+			// Wrapped resolver failure (sql: connection done).
+			// Without this row, an err that wraps an internal
+			// failure would silently leak "%w sql: connection
+			// done" into the message body without envelope
+			// shaping.
+			name:       "wrapped hard fail (sql: connection done) -> 500 resolver_failure, no details",
 			err:        fmt.Errorf("creatorflow: Resolve atomic: %w", errors.New("sql: connection done")),
-			idemField:  "payload",
 			wantStatus: http.StatusInternalServerError,
 			wantCode:   "resolver_failure",
 		},
 		{
-			name:       "raw hard fail -> 500 resolver_failure, no details",
+			// Raw resolver failure (network baseline timeout).
+			// Pinned by the openapi.yaml ErrorEnvelope +
+			// 500 status code cross-check.
+			name:       "raw hard fail (network timeout) -> 500 resolver_failure, no details",
 			err:        errors.New("network baseline timeout"),
-			idemField:  "payload",
 			wantStatus: http.StatusInternalServerError,
 			wantCode:   "resolver_failure",
 		},
 		{
 			name:      "nil err -> noop (no response written)",
 			useNilErr: true,
-			idemField: "payload",
 		},
 		{
+			// Defensive: gin.Context is a heap-allocated pointer;
+			// in some test rigs (intentionally malformed mounts)
+			// it can be nil. The helper must NEVER panic and
+			// NEVER write a body on this path.
 			name:          "nil gin.Context (defensive) -> noop, no panic",
 			err:           ErrResolverNotComplete,
 			useNilContext: true,
-			idemField:     "payload",
 		},
 	}
 
@@ -153,7 +207,7 @@ func TestWriteResolverError(t *testing.T) {
 				}
 			}
 
-			WriteResolverError(c, errArg, tc.idemField)
+			WriteResolverError(c, errArg)
 
 			// No-op branch: err == nil.
 			if errArg == nil {

@@ -513,14 +513,18 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 			canonical.WorkerPayload,
 		)
 		if err != nil {
-			// P0 #2 contract: every resolver-layer error is mapped
+			// P0 contract: every resolver-layer error is mapped
 			// to the canonical HTTP envelope by the shared helper
 			// in package creatorflow. Previously this branch was
 			// missing the enqueue.ValidationErrorField mapping
 			// entirely, so any enqueue-layer validation error
 			// (missing delivery_plan entry, malformed destination_id,
-			// …) silently downgraded to a 500.
-			creatorflow.WriteResolverError(c, err, "idempotency_key")
+			// …) silently downgraded to a 500. The helper owns the
+			// full mapping — the third arg dropped in [P0 #2]
+			// because the typed validationError carries the field
+			// path internally and the helper falls back to
+			// "idempotency_key" only when no typed path is available.
+			creatorflow.WriteResolverError(c, err)
 			return
 		}
 		if forwarded == nil {

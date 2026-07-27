@@ -247,15 +247,17 @@ func (h *Handlers) CreatorPush() gin.HandlerFunc {
 			normalized.WorkerPayload,
 		)
 		if err != nil {
-			// P0 #2 contract: every resolver-layer error is mapped
-			// to the canonical HTTP envelope by the shared helper
-			// in package creatorflow. Inlining the cascade here
-			// invoked drift each time a new error class surfaced;
-			// job_submit.go was already missing the
+			// P0 contract: every resolver-layer error is mapped to
+			// the canonical HTTP envelope by the shared helper in
+			// package creatorflow. Inlining the cascade here
+			// invited drift each time a new error class surfaced;
+			// job_submit.go was historically missing the
 			// enqueue.ValidationErrorField branch and silently
-			// downgrading those errors to 500. The helper owns
-			// the full mapping.
-			creatorflow.WriteResolverError(c, err, "payload")
+			// downgraded those errors to 500. The helper owns
+			// the full mapping (enqueue.ValidationErrorField path
+			// for typed errors + a fallback to idempotency_key
+			// when the 409 carries no typed path).
+			creatorflow.WriteResolverError(c, err)
 			return
 		}
 		if forwarded == nil {
