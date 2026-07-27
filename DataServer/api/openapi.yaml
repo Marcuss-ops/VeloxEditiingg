@@ -81,6 +81,12 @@ tags:
       push). The async `CreatorForwardingRunner` ingests the same
       shape over an out-of-band channel and falls under
       `creator_forwarder` only for metrics/observability purposes.
+  - name: jobs
+    description: |
+      Simplified job submission for external automation. Allows
+      external systems to submit complete video jobs without going
+      through the Creator intermediary. Uses a flat, intuitive
+      payload format that maps to the same resolver machinery.
   - name: pipeline
     description: |
       Master pipeline endpoints (Generate / Run / Status). These
@@ -491,6 +497,132 @@ components:
             state.
           example: queued_for_workers
 
+    # ── Schemas for POST /api/v1/jobs (simplified job submission) ───────
+    SubmitJobRequest:
+      type: object
+      required: [idempotency_key, scenes]
+      description: |
+        Simplified, flat request body for POST /api/v1/jobs.
+        Allows external systems to submit complete video jobs
+        without the Creator intermediary ceremony.
+        
+        The idempotency_key is the single dedup handle. Two
+        requests with the same key converge on the same Velox job.
+      properties:
+        idempotency_key:
+          type: string
+          minLength: 1
+          description: |
+            Required. Unique identifier for idempotent dedup.
+            Two requests with the same key converge on the same
+            Velox job.
+          example: "ext-job-20260727-001"
+        video_name:
+          type: string
+          description: "Display name for the resulting video."
+          example: "My Automated Video"
+        script_text:
+          type: string
+          description: "Plain-text script used for TTS / overlay."
+        voiceover_paths:
+          type: array
+          description: |
+            Voiceover audio references. Each entry MUST be a
+            velox-asset:// URI or a fully-qualified reachable URL.
+          items:
+            type: string
+            pattern: "^(velox-asset://|https?://).+"
+          example: ["velox-asset://voiceovers/intro.mp3"]
+        scenes:
+          type: array
+          description: |
+            Scene list. Each scene drives one composited segment.
+            At least one scene is required.
+          items:
+            $ref: '#/components/schemas/SubmitScene'
+        delivery_plan:
+          type: array
+          description: |
+            Ordered delivery targets. The first non-failing delivery
+            wins; the rest are skipped.
+          items:
+            $ref: '#/components/schemas/SubmitDeliveryPlanEntry'
+
+    SubmitScene:
+      type: object
+      required: [text, duration_seconds]
+      description: |
+        A single scene in the simplified job submission format.
+      properties:
+        text:
+          type: string
+          description: "Narration / overlay text for this scene."
+        clip_link:
+          type: string
+          description: "velox-asset:// clip URI or reachable URL."
+        image_link:
+          type: string
+          description: "Optional image fallback."
+        duration_seconds:
+          type: number
+          format: float
+          minimum: 0.1
+          description: "Intended duration of the scene in seconds."
+
+    SubmitDeliveryPlanEntry:
+      type: object
+      required: [destination_id]
+      description: |
+        A single destination in the delivery plan for simplified
+        job submission.
+      properties:
+        destination_id:
+          type: string
+          description: "Destination identifier (e.g., 'drive', 'gcs', 's3')."
+          example: drive
+        priority:
+          type: integer
+          default: 1
+          description: "Lower = earlier attempt."
+        retry_budget:
+          type: integer
+          default: 3
+          minimum: 0
+        metadata:
+          type: object
+          additionalProperties: true
+          description: "Destination-specific knobs (folder ID, ACL, etc.)."
+
+    SubmitJobAcceptedResponse:
+      type: object
+      required: [ok, accepted_from, idempotency_key, job_id, dispatch_status]
+      description: |
+        Successful creation via the simplified job submission endpoint.
+        The handler has persisted forwarding + Job + Task atomically
+        via creatorflow.Resolver.
+      properties:
+        ok:
+          type: boolean
+          enum: [true]
+          example: true
+        accepted_from:
+          type: string
+          enum: [api_v1_jobs]
+          description: "Fixed marker identifying this intake path."
+          example: api_v1_jobs
+        idempotency_key:
+          type: string
+          description: "Echoed from the request."
+          example: "ext-job-20260727-001"
+        job_id:
+          type: string
+          description: "Velox-side job identifier for downstream polling."
+          example: job_a1b2c3d4
+        dispatch_status:
+          type: string
+          enum: [queued_for_workers]
+          example: queued_for_workers
+
     # ── Error envelopes ────────────────────────────────────────────────────
     ErrorCode:
       type: string
@@ -585,7 +717,98 @@ paths:
           description: Asset exceeds the configured size limit.
         '422':
           description: Asset could not be registered.
-  # ── creator_push intake (the new endpoint) ───────────────────────────────
+  # ── Simplified job submission for external automation ─────────────────────
+  /api/v1/jobs:
+    post:
+      tags: [jobs]
+      operationId: submitJob
+      summary: "Submit a complete video job for external automation."
+      description: |
+        Simplified entry point for external systems to submit complete
+        video jobs without going through the Creator intermediary.
+        
+        The payload is flat and intuitive — no nested "payload" envelope,
+        no source_provider/source_job_id/target_executor_id ceremony.
+        The system derives the Creator-compatible identity tuple
+        automatically from the idempotency_key.
+        
+        Uses the same resolver machinery as the Creator push endpoint,
+        so jobs submitted here follow the same processing pipeline.
+        
+        The idempotency_key is required and ensures that duplicate
+        requests converge on the same Velox job.
+      parameters:
+        - $ref: '#/components/parameters/AuthorizationHeader'
+        - $ref: '#/components/parameters/XRequestIDHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitJobRequest'
+            examples:
+              basic_video:
+                summary: "Basic video with voiceover and scenes."
+                value:
+                  idempotency_key: "ext-job-20260727-001"
+                  video_name: "My Automated Video"
+                  script_text: "This is the script for the video."
+                  voiceover_paths:
+                    - "velox-asset://voiceovers/intro.mp3"
+                  scenes:
+                    - text: "Opening scene"
+                      clip_link: "velox-asset://clips/opening.mp4"
+                      duration_seconds: 7
+                    - text: "Main content"
+                      clip_link: "velox-asset://clips/main.mp4"
+                      duration_seconds: 10
+                  delivery_plan:
+                    - destination_id: drive
+                      priority: 1
+                      retry_budget: 3
+      responses:
+        '202':
+          description: |
+            Job accepted and queued for worker dispatch. The response
+            contains the Velox job_id for downstream polling.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitJobAcceptedResponse'
+              examples:
+                accepted:
+                  value:
+                    ok: true
+                    accepted_from: api_v1_jobs
+                    idempotency_key: "ext-job-20260727-001"
+                    job_id: job_a1b2c3d4
+                    dispatch_status: queued_for_workers
+        '400':
+          description: Invalid JSON or missing required fields.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: |
+            Payload validation failed (e.g., no scenes, invalid
+            duration_seconds).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Resolver or internal failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /api/v1/creator/jobs:
     post:
       tags: [creator]

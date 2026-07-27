@@ -14,6 +14,8 @@
 //   - DELETE /cancel/:trace_id                                      → h.Cancel()
 //   - group /api/v1/creator/       (adminAuth-guarded when non-nil)
 //   - POST /jobs                                                    → h.CreatorPush()
+//   - group /api/v1/jobs/         (adminAuth-guarded when non-nil)
+//   - POST /                                                    → h.SubmitJob()
 //   - ungrouped /api/v1/pipeline-runs family (canonical versioned API):
 //   - POST /api/v1/pipeline-runs                       → h.CreatePipelineRun()
 //   - GET  /api/v1/pipeline-runs/:id                   → h.PipelineRunStatus()
@@ -54,6 +56,13 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth gin.HandlerFunc) {
 	}
 	creator.POST("/jobs", h.CreatorPush())
 	creator.POST("/assets", h.CreatorAssetUpload())
+
+	// Simplified job submission for external automation.
+	jobs := r.Group("/api/v1/jobs")
+	if adminAuth != nil {
+		jobs.Use(adminAuth)
+	}
+	jobs.POST("", h.SubmitJob())
 
 	// Canonical, versioned pipeline-runs API. The POST creates a
 	// durable pipeline_run before the remote call; the GET returns the
