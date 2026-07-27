@@ -135,19 +135,15 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 			workerPayload,
 		)
 		if err != nil {
-			if err == creatorflow.ErrResolverNotComplete {
-				c.JSON(http.StatusUnprocessableEntity, gin.H{
-					"ok":      false,
-					"error":   "payload_incomplete",
-					"message": "job payload is not complete enough to dispatch",
-				})
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"ok":      false,
-				"error":   "resolver_failure",
-				"message": "failed to enqueue job",
-			})
+			// P0 #2 contract: every resolver-layer error is mapped
+			// to the canonical HTTP envelope by the shared helper
+			// in package creatorflow. Previously this branch was
+			// missing the enqueue.ValidationErrorField mapping
+			// entirely, so any enqueue-layer validation error
+			// (missing delivery_plan entry, missing retry_budget,
+			// malformed destination_id, …) silently downgraded
+			// to a 500.
+			creatorflow.WriteResolverError(c, err, "idempotency_key")
 			return
 		}
 		if forwarded == nil {

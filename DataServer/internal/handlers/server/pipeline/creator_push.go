@@ -9,7 +9,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/creatorflow"
-	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/remoteengine"
 )
 
@@ -210,15 +209,15 @@ func (h *Handlers) CreatorPush() gin.HandlerFunc {
 			normalized.WorkerPayload,
 		)
 		if err != nil {
-			if err == creatorflow.ErrResolverNotComplete {
-				creatorPushError(c, http.StatusUnprocessableEntity, "payload_incomplete", "creator payload is not complete enough to dispatch", nil)
-				return
-			}
-			if field := enqueue.ValidationErrorField(err); field != "" {
-				creatorPushError(c, http.StatusUnprocessableEntity, "invalid_payload", err.Error(), gin.H{"path": field, "issue": "invalid"})
-				return
-			}
-			creatorPushError(c, http.StatusInternalServerError, "resolver_failure", "failed to enqueue creator payload", nil)
+			// P0 #2 contract: every resolver-layer error is mapped
+			// to the canonical HTTP envelope by the shared helper
+			// in package creatorflow. Inlining the cascade here
+			// invoked drift each time a new error class surfaced;
+			// job_submit.go was already missing the
+			// enqueue.ValidationErrorField branch and silently
+			// downgrading those errors to 500. The helper owns
+			// the full mapping.
+			creatorflow.WriteResolverError(c, err, "payload")
 			return
 		}
 		if forwarded == nil {
