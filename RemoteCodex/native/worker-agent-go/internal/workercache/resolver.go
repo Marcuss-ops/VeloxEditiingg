@@ -15,9 +15,26 @@
 // "cache hit fast path" and the placeholder recovery for rows
 // that survived a worker crash with download_complete=false.
 //
-// Pass 8 ships the user-spec signature: Resolve(ctx, driveID)
-// (string, error). The companion test matrix exercises all four
-// state transitions: hit, miss, incomplete, download-fail.
+// PASS 11 — concurrent-Resolve dedup. The public Resolve method
+// is wrapped in golang.org/x/sync/singleflight.Group.Do(driveID, fn):
+//
+//   - Two goroutines racing a cold cache for the same driveID
+//     share ONE inner invocation (the slower one's fn).
+//   - All callers receive THE SAME (path, err) result. If the
+//     first caller's fn returns ErrSourceOpen, every caller
+//     sees ErrSourceOpen — singleflight's documented semantic.
+//   - The inner fn runs with the FIRST caller's ctx. If that
+//     caller cancels before subsequent callers enter, fn sees
+//     ctx.Err and returns; the subsequent callers wait but
+//     inherit the same error.
+//   - The dedupe key is the canonical Drive ID; callers are
+//     expected to have already normalised URLs (see
+//     DataServer/internal/assetref.DriveFileID).
+//
+// PASS 11 — 3-min grace + 2-min stale-snapshot guard already
+// shipped in cleanup_policy.go (was Pass 12 in earlier numbering);
+// the user-spec commit message groups all three but this file's
+// delta is the singleflight integration only.
 
 package workercache
 
@@ -28,22 +45,36 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // Resolver composes a Cache, a Downloader, and the destination
 // directory. The downloader's source is whatever the bootstrap
-// wires in; for tests a bytes.NewReader-backed fake is sufficient.
+// wires in; for tests a bytes-source fake is sufficient.
+//
+// The embedded `sf` deduplicates concurrent Resolve(driveID)
+// calls via the standard singleflight.Group API. Two concurrent
+// goroutines calling Resolve on the same driveID race a single
+// resolveInner invocation; subsequent callers wait on the same
+// (path, err) return.
 type Resolver struct {
 	Cache      *Cache
 	Downloader *Downloader
 	Dir        string
+
+	// sf is the singleflight dedup primitive. Zero-value
+	// singleflight.Group is safe; NewResolver leaves it at the
+	// zero value. Field is unexported because callers have no
+	// reason to interact with it directly.
+	sf singleflight.Group
 }
 
 // NewResolver wires the canonical dependencies. The Downloader
 // already owns DriveSource + verifyMedia; the Resolver adds the
-// cache-lookup fast path on top. Panics on nil dependencies so
-// silent fall-backs do not mask operator config bugs (mirrors
-// the NewDownloader convention).
+// cache-lookup fast path + singleflight dedup on top. Panics on
+// nil dependencies so silent fall-backs do not mask operator
+// config bugs (mirrors the NewDownloader convention).
 func NewResolver(cache *Cache, dl *Downloader) *Resolver {
 	if cache == nil {
 		panic("workercache.NewResolver: cache is required (nil cache)")
@@ -54,39 +85,60 @@ func NewResolver(cache *Cache, dl *Downloader) *Resolver {
 	return &Resolver{Cache: cache, Downloader: dl, Dir: dl.dir}
 }
 
-// Resolve returns the local filesystem path for `driveID`.
+// Resolve returns the local filesystem path for `driveID`. The
+// entire body is wrapped in singleflight so two concurrent
+// callers race a single inner invocation.
 //
-// Resolution states:
+// Resolution states (preserved from Pass 8):
 //
 //   - Cache hit (row present AND DownloadComplete=true AND file
 //     exists on disk): zero-download fast path. MarkUsed bumps
-//     last_used_at so the Pass 12 grace rule preserves this row
+//     last_used_at so the Pass 11/12 grace rule preserves this row
 //     during subsequent Cleanup passes.
 //
 //   - Cache miss (no row OR file missing on disk): insert a
 //     placeholder row with the `.part` local_path, then drive
-//     Downloader.DownloadDriveFile. The Downloader's contract
-//     (Pass 10 — atomic .part → verify → rename → MarkDownloadComplete)
-//     handles the rest.
+//     Downloader.DownloadDriveFile.
 //
 //   - Cache incomplete (DownloadComplete=false; e.g. a previous
-//     worker crashed mid-download): treat as a cache miss. The
-//     placeholder row is re-Store'd (a duplicate Store returns
-//     ErrDuplicate which we ignore — concurrent resolvers).
+//     worker crashed mid-download): treat as a cache miss.
 //
 //   - Download failure: the Downloader reverts the row's on-disk
 //     state to download_complete=false. The Resolver returns the
 //     wrapped error verbatim; callers (the worker's dispatch path)
 //     decide whether to abort the job or retry on the next attempt.
-//
-// `now` for any internal clock use is taken from the Downloader's
-// instantiated DriveSource open path; the Resolver itself does NOT
-// stamp rows with time — that's the Cache's job.
 func (r *Resolver) Resolve(ctx context.Context, driveID string) (string, error) {
 	if driveID == "" {
 		return "", ErrEmptyID
 	}
 
+	// Dedupe key is the canonical Drive ID. We use the worker's
+	// pre-normalised form (assetref.DriveFileID) so two callers
+	// with semantically-equal URLs hit the same dedupe key.
+	raw, err, _ := r.sf.Do(driveID, func() (interface{}, error) {
+		return r.resolveInner(ctx, driveID)
+	})
+	if err != nil {
+		return "", err
+	}
+	return raw.(string), nil
+}
+
+// resolveInner is the original Resolve body from Pass 8. It runs
+// AT MOST ONCE per driveID per coalescing window when N concurrent
+// goroutines call Resolve(driveID) — singleflight handles the
+// sharing.
+//
+// Kept private so the singleflight wrapper is the only public
+// entry point. Tests drive this method's branches via the public
+// Resolve; the singleflight tests verify the dedup behaviour at
+// the public surface.
+//
+// Pass 12 's grace / snapshot-stale guards live in
+// CleanupWithPolicy (cleanup_policy.go) and read this Resolver's
+// output via the CleanupLoop → SnapshotSource adapter — they are
+// NOT reimplemented here.
+func (r *Resolver) resolveInner(ctx context.Context, driveID string) (string, error) {
 	entry, ok, err := r.Cache.Find(ctx, driveID)
 	if err != nil {
 		return "", fmt.Errorf("workercache.Resolve(%s): cache.Find: %w", driveID, err)

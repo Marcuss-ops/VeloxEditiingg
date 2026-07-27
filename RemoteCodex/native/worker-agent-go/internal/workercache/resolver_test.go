@@ -11,11 +11,16 @@
 package workercache
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // resolverFixture installs a fresh in-memory cache + dest dir + a
@@ -280,5 +285,195 @@ func TestResolver_FileMissingRecovery(t *testing.T) {
 	// No .part leftover from the recovery.
 	if _, err := os.Stat(filepath.Join(f.dir, "TYSON001.mp4.part")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf(".part exists post-recovery; want absent. stat err=%v", err)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// PASS 11 — singleflight tests.
+//
+// `countingSource` is a small fake DriveSource that counts how
+// many times Open fires. Optional delay lets the test orchestrate
+// concurrent callers that enter Resolve before the first inner
+// fn completes, exercising the singleflight dedup path.
+// ────────────────────────────────────────────────────────────────────────────
+
+// countingSource counts Open calls, optionally delays before
+// returning the payload, and optionally returns a synthetic
+// error. Thread-safe (atomic.Int32).
+//
+// Used by the singleflight tests to assert that two concurrent
+// Resolve(driveID) calls share exactly ONE source.Open invocation
+// (success path) or exactly one source.Open invocation followed
+// by the same wrapped error on both callers (failure path).
+type countingSource struct {
+	openCount atomic.Int32
+	payload   []byte
+	err       error
+	delay     time.Duration
+}
+
+// Open implements DriveSource. Atomic counter bump is the first
+// action — every caller that schedules Open will contribute to
+// the count, so a non-1 final value tells us singleflight failed
+// to dedupe.
+func (c *countingSource) Open(ctx context.Context, _ string) (io.ReadCloser, error) {
+	c.openCount.Add(1)
+	if c.err != nil {
+		return nil, c.err
+	}
+	if c.delay > 0 {
+		select {
+		case <-time.After(c.delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return io.NopCloser(bytes.NewReader(c.payload)), nil
+}
+
+// startBarrier waits on a channel close and returns true. Used
+// by the concurrency tests to gate two goroutines so they enter
+// Resolve as close to simultaneously as possible. Required because
+// singleflight dedup depends on ordering: if goroutine A finishes
+// its full inner fn before B enters, B sees cache-hit-on-row
+// (cheap) and the dedup never exercises.
+func startBarrier() (chan struct{}, func()) {
+	ch := make(chan struct{})
+	return ch, func() { close(ch) }
+}
+
+// TestResolver_Singleflight_TwoConcurrentResolves_OneDownload:
+// two goroutines call Resolve("TYSON001") simultaneously on a
+// cold cache. singleflight MUST coalesce them so source.Open fires
+// exactly ONCE. Both callers return the same path. Cache row ends
+// at the canonical final-path with download_complete=true.
+//
+// This is the user-spec test from Pass 11:
+// "due Resolve simultanei → 1 download".
+func TestResolver_Singleflight_TwoConcurrentResolves_OneDownload(t *testing.T) {
+	f := newResolverFixture(t)
+	ctx := context.Background()
+
+	// 200ms delay guarantees race window for both goroutines to
+	// enter Resolve before the first one finishes its inner fn.
+	// non-zero leading bytes ensure the Downloader's verifyMedia
+	// accepts the content.
+	src := &countingSource{
+		payload: []byte("FAKE MP4 BYTES — first 8 bytes are non-zero"),
+		delay:   200 * time.Millisecond,
+	}
+	dl := NewDownloader(f.cache, f.dir, src)
+	r := &Resolver{Cache: f.cache, Downloader: dl, Dir: f.dir}
+
+	barrier, release := startBarrier()
+	var wg sync.WaitGroup
+	paths := make([]string, 2)
+	errs := make([]error, 2)
+
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-barrier
+			paths[i], errs[i] = r.Resolve(ctx, "TYSON001")
+		}(i)
+	}
+
+	// Release both goroutines simultaneously so they both arrive
+	// at sf.Do() with the same driveID. The first to acquire the
+	// sf mutex runs the inner fn; the second waits on the same fn.
+	release()
+	wg.Wait()
+
+	if errs[0] != nil || errs[1] != nil {
+		t.Errorf("concurrent Resolve errors: [0]=%v [1]=%v (singleflight must share result)", errs[0], errs[1])
+	}
+	if paths[0] != paths[1] {
+		t.Errorf("Resolve paths differ: [0]=%q [1]=%q (singleflight must share result byte-for-byte)", paths[0], paths[1])
+	}
+
+	wantPath := filepath.Join(f.dir, "TYSON001.mp4")
+	if paths[0] != wantPath {
+		t.Errorf("paths[0]=%q want %q", paths[0], wantPath)
+	}
+
+	if got := src.openCount.Load(); got != 1 {
+		t.Errorf("source.Open fired %d times, want 1 (singleflight dedup invariant)", got)
+	}
+
+	// Cache row is consistent: exists, download_complete=true,
+	// local_path = final. Both callers' MarkUsed bumps coalesced
+	// to a single row update.
+	e, ok, fErr := f.cache.Find(ctx, "TYSON001")
+	if fErr != nil || !ok {
+		t.Fatalf("Find post-Resolve: ok=%v err=%v", ok, fErr)
+	}
+	if !e.DownloadComplete {
+		t.Errorf("row.download_complete=false after shared Resolve; want true")
+	}
+	if e.LocalPath != wantPath {
+		t.Errorf("row.local_path=%q want %q", e.LocalPath, wantPath)
+	}
+}
+
+// TestResolver_Singleflight_ErrorSharedAcrossCallers: companion
+// to the success case. When the inner fn returns an error,
+// singleflight shares the error verbatim across all coalesced
+// callers. The Downloader's wrapping with ErrSourceOpen means
+// both Resolve returns must satisfy errors.Is(err, ErrSourceOpen)
+// AND source.Open fires exactly once.
+func TestResolver_Singleflight_ErrorSharedAcrossCallers(t *testing.T) {
+	f := newResolverFixture(t)
+	ctx := context.Background()
+
+	// Synthetic source error; the Downloader wraps it with
+	// ErrSourceOpen via fmt.Errorf("%w: ...") so callers can
+	// errors.Is branch.
+	src := &countingSource{
+		err:   errors.New("drive down"),
+		delay: 100 * time.Millisecond,
+	}
+	dl := NewDownloader(f.cache, f.dir, src)
+	r := &Resolver{Cache: f.cache, Downloader: dl, Dir: f.dir}
+
+	barrier, release := startBarrier()
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	gotPaths := make([]string, 2)
+
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-barrier
+			gotPaths[i], errs[i] = r.Resolve(ctx, "TYSON001")
+		}(i)
+	}
+
+	release()
+	wg.Wait()
+
+	for i, err := range errs {
+		if err == nil {
+			t.Errorf("caller[%d]: Resolve succeeded; want ErrSourceOpen shared error", i)
+			continue
+		}
+		if !errors.Is(err, ErrSourceOpen) {
+			t.Errorf("caller[%d]: err=%v is not wrapped ErrSourceOpen", i, err)
+		}
+	}
+
+	if got := src.openCount.Load(); got != 1 {
+		t.Errorf("source.Open fired %d times on shared failure, want 1 (dedup invariant)", got)
+	}
+
+	// Cache row stays in placeholder/in-flight state (download
+	// failed cleanly per Pass 10 downloader invariant).
+	e, ok, fErr := f.cache.Find(ctx, "TYSON001")
+	if fErr != nil || !ok {
+		t.Fatalf("Find post-failure: ok=%v err=%v", ok, fErr)
+	}
+	if e.DownloadComplete {
+		t.Errorf("row.download_complete=true after shared failure; want false (Downloader contract)")
 	}
 }
