@@ -95,12 +95,19 @@ func newScriptIngressRegistry(cfg *config.Config, dataDir string, docCreator Goo
 			if err != nil {
 				return nil, err
 			}
+			// Preserve explicit authoring overlays through the scene translation
+			// step. They are independent of clip/image normalization and must
+			// reach the canonical worker payload unchanged.
+			requestedLayers := normalized["layers"]
 			translated, err := translation.TranslateScenes(ctx, normalized, translation.Client{
 				BaseURL: cfg.Pipeline.OllamaURL,
 				Model:   cfg.Pipeline.OllamaModel,
 			})
 			if err != nil {
 				return nil, err
+			}
+			if requestedLayers != nil {
+				translated["layers"] = requestedLayers
 			}
 			if folder := strings.TrimSpace(firstStringValue(translated, "drive_output_folder", "output_directory")); folder != "" {
 				if docCreator == nil {
@@ -128,7 +135,14 @@ func newScriptIngressRegistry(cfg *config.Config, dataDir string, docCreator Goo
 				}
 				translated["video_metadata"] = metadata
 			}
-			return enqueue.BuildClipPayloadForMaster(translated, dataDir, cfg.Runtime.VideosDir, "")
+			result, err := enqueue.BuildClipPayloadForMaster(translated, dataDir, cfg.Runtime.VideosDir, "")
+			if err != nil {
+				return nil, err
+			}
+			if requestedLayers != nil {
+				result["layers"] = requestedLayers
+			}
+			return result, nil
 		},
 		Requirements: costmodel.DefaultRequirements(),
 	})
@@ -194,6 +208,9 @@ func buildUnifiedGeneratePayload(raw map[string]any, dataDir, videosDir string) 
 			sourceCopy[key] = value
 		}
 		normalized["source"] = sourceCopy
+		if layers, exists := raw["layers"]; exists {
+			normalized["layers"] = layers
+		}
 		return normalized, nil
 	default:
 		return nil, fmt.Errorf("unsupported source.type %q", sourceType)

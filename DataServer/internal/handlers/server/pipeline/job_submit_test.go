@@ -11,7 +11,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
-
 // TestSubmitJobBuildsWorkerPayloadCorrectly is replaced by
 // TestNormalizeExternalJobSubmission_ProducesCanonicalPayload below —
 // the worker payload is no longer hand-built; it is produced through
@@ -26,22 +25,24 @@ import (
 // the canonical output shape that NormalizeExternalJobSubmission
 // produces. The contract:
 //
-//  (1) source_provider   == ExternalAPISourceProvider (low-cardinality
-//      constant; per the [P0 #4] audit verbatim).
-//  (2) source_job_id      == trimmed idempotency_key.
-//  (3) target_executor_id == JobSubmitTargetExecutorID.
-//  (4) worker_payload["status"]            == "completed".
-//  (5) worker_payload["job_id"]            == trimmed idempotency_key.
-//  (6) worker_payload["video_name"]        (when set on req).
-//  (7) worker_payload["script_text"]       (when set on req).
-//  (8) worker_payload["voiceover_paths"]   (slice with the same entries).
-//  (9) worker_payload["scenes_json"]       — JSON-encoding of the
-//      scene list with text + duration_seconds + clip_link / image_link
-//      fields carried through.
+//	(1) source_provider   == ExternalAPISourceProvider (low-cardinality
+//	    constant; per the [P0 #4] audit verbatim).
+//	(2) source_job_id      == trimmed idempotency_key.
+//	(3) target_executor_id == JobSubmitTargetExecutorID.
+//	(4) worker_payload["status"]            == "completed".
+//	(5) worker_payload["job_id"]            == trimmed idempotency_key.
+//	(6) worker_payload["video_name"]        (when set on req).
+//	(7) worker_payload["script_text"]       (when set on req).
+//	(8) worker_payload["voiceover_paths"]   (slice with the same entries).
+//	(9) worker_payload["scenes_json"]       — JSON-encoding of the
+//	    scene list with text + duration_seconds + clip_link / image_link
+//	    fields carried through.
+//
 // (10) worker_payload["delivery_plan"]     — preserved as the
-//      canonical shape (entry-level {destination_id, priority,
-//      retry_budget, metadata}); ToWorkerPayload base-copies
-//      delivery_plan because the typed DTO does NOT own it.
+//
+//	canonical shape (entry-level {destination_id, priority,
+//	retry_budget, metadata}); ToWorkerPayload base-copies
+//	delivery_plan because the typed DTO does NOT own it.
 func TestNormalizeExternalJobSubmission_ProducesCanonicalPayload(t *testing.T) {
 	t.Parallel()
 
@@ -55,7 +56,7 @@ func TestNormalizeExternalJobSubmission_ProducesCanonicalPayload(t *testing.T) {
 			{Text: "Scene 2", ImageLink: "velox-asset://images/scene2.jpg", DurationSeconds: 3},
 		},
 		DeliveryPlan: []SubmitDeliveryPlanEntry{
-			{DestinationID: "drive", Priority: 1, RetryBudget: 3},
+			{DestinationID: "drive", Priority: 1, RetryBudget: intPtr(3)},
 		},
 	}
 
@@ -146,7 +147,7 @@ func TestNormalizeExternalJobSubmission_MatchesCreatorPushShape(t *testing.T) {
 			{Text: "Parity scene A", ClipLink: "velox-asset://clips/parity-a.mp4", DurationSeconds: 5},
 		},
 		DeliveryPlan: []SubmitDeliveryPlanEntry{
-			{DestinationID: "drive", Priority: 1, RetryBudget: 3},
+			{DestinationID: "drive", Priority: 1, RetryBudget: intPtr(3)},
 		},
 	}
 
@@ -338,6 +339,183 @@ func TestSubmitJobRejectsZeroDurationScene(t *testing.T) {
 	}
 }
 
+// TestSubmitJobRejectsSubMinimumDuration locks the new lower-bound
+// guard added by ValidateSubmitJobRequest (MinSceneDurationSeconds = 0.1).
+// Without this test, a future contributor might widen the floor to
+// 0.0 and silently let requests with `0.05` reach the resolver, where
+// the worker has no useful frame to paint.
+//
+// 0.05 < 0.1 → 422.
+func TestSubmitJobRejectsSubMinimumDuration(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	h := &Handlers{}
+	router.POST("/api/v1/jobs", h.SubmitJob())
+
+	body, _ := json.Marshal(SubmitJobRequest{
+		IdempotencyKey: "test-123",
+		Scenes: []SubmitScene{
+			{Text: "sub-min", DurationSeconds: 0.05},
+		},
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/v1/jobs", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+// TestSubmitJobRejectsExcessiveDuration locks the new upper-bound
+// guard (MaxSceneDurationSeconds = 86400). Anything larger would
+// silently inflate server-side resource budgets (a 1e10-second
+// scene would never finish a paint cycle). This test fires after
+// our previous behaviour where DurationSeconds > 0 was the only
+// guard.
+func TestSubmitJobRejectsExcessiveDuration(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	h := &Handlers{}
+	router.POST("/api/v1/jobs", h.SubmitJob())
+
+	body, _ := json.Marshal(SubmitJobRequest{
+		IdempotencyKey: "test-123",
+		Scenes: []SubmitScene{
+			{Text: "excessive", DurationSeconds: 86400.01},
+		},
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/v1/jobs", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+// TestSubmitJobRejectsUnknownField locks the strict JSON decoder
+// promise. The handler decodes the body with json.Decoder +
+// DisallowUnknownFields(), so a typo (e.g. `ideliverency_key` for
+// `idempotency_key`) fails with 400 invalid_json BEFORE any
+// expensive downstream call. This protects external automation
+// clients from silent "my key was ignored" bugs (which would
+// otherwise produce a different idempotency_key-identity each
+// request → one Job per request → the dedup promise broken).
+func TestSubmitJobRejectsUnknownField(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	h := &Handlers{}
+	router.POST("/api/v1/jobs", h.SubmitJob())
+
+	// Note the typo: `ideliverency_key` (extra `l` / shift).
+	body := []byte(`{
+		"ideliverency_key": "test-123",
+		"scenes": [{"text": "s", "duration_seconds": 5}]
+	}`)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/v1/jobs", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+	// The error code MUST be invalid_json so external clients can
+	// distinguish a typo (unknown field) from a missing field
+	// (which would have been visible in 422 invalid_payload had
+	// the typo not been there).
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response unmarshal: %v", err)
+	}
+	if got := resp["error"]; got != "invalid_json" {
+		t.Errorf("error = %v, want invalid_json", got)
+	}
+}
+
+// TestNormalizeExternalJobSubmission_OmittedRetryBudgetDefaultsToThree
+// locks the *int boundary contract for the omitted case: a client
+// that does not supply retry_budget on a delivery_plan entry MUST
+// end up with the OpenAPI default (3) stamped into the worker
+// payload. This is the "client-friendly" branch — most callers will
+// not bother declaring retry_budget at all — and getting a 0
+// (silent int default) here would silently bypass retry enforcement
+// on every entry the client doesn't annotate.
+//
+// Asserted by reading back the generated worker_payload's
+// delivery_plan entry map and confirming retry_budget == 3.
+func TestNormalizeExternalJobSubmission_OmittedRetryBudgetDefaultsToThree(t *testing.T) {
+	t.Parallel()
+
+	req := SubmitJobRequest{
+		IdempotencyKey: "rb-omitted-001",
+		Scenes: []SubmitScene{
+			{Text: "s", DurationSeconds: 5},
+		},
+		DeliveryPlan: []SubmitDeliveryPlanEntry{
+			{DestinationID: "drive", Priority: 1, RetryBudget: nil},
+		},
+	}
+
+	canonical := NormalizeExternalJobSubmission(req)
+	dp, ok := canonical.WorkerPayload["delivery_plan"].([]interface{})
+	if !ok || len(dp) != 1 {
+		t.Fatalf("delivery_plan shape wrong: %v", canonical.WorkerPayload["delivery_plan"])
+	}
+	entry, ok := dp[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("delivery_plan[0] type %T", dp[0])
+	}
+	if got := entry["retry_budget"]; got != 3 {
+		t.Errorf("entry[retry_budget] = %v, want 3 (OpenAPI default)", got)
+	}
+}
+
+// TestNormalizeExternalJobSubmission_ExplicitRetryBudgetZeroPreserved
+// locks the *int boundary contract for the explicit-zero case:
+// a client that sends {"retry_budget": 0} MUST have that value
+// preserved verbatim into the worker payload, not silently merged
+// with the omitted default (3). This is the actual point of the
+// int→*int refactor — without it, an operator who tries to disable
+// retries on a specific destination would be silently overridden
+// on every request.
+//
+// Asserted by reading back the worker_payload's delivery_plan
+// entry map and confirming retry_budget == 0 (NOT 3).
+func TestNormalizeExternalJobSubmission_ExplicitRetryBudgetZeroPreserved(t *testing.T) {
+	t.Parallel()
+
+	zeroRetry := 0
+	req := SubmitJobRequest{
+		IdempotencyKey: "rb-zero-001",
+		Scenes: []SubmitScene{
+			{Text: "s", DurationSeconds: 5},
+		},
+		DeliveryPlan: []SubmitDeliveryPlanEntry{
+			{DestinationID: "drive", Priority: 1, RetryBudget: &zeroRetry},
+		},
+	}
+
+	canonical := NormalizeExternalJobSubmission(req)
+	dp, ok := canonical.WorkerPayload["delivery_plan"].([]interface{})
+	if !ok || len(dp) != 1 {
+		t.Fatalf("delivery_plan shape wrong: %v", canonical.WorkerPayload["delivery_plan"])
+	}
+	entry, ok := dp[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("delivery_plan[0] type %T", dp[0])
+	}
+	if got := entry["retry_budget"]; got != 0 {
+		t.Errorf("entry[retry_budget] = %v, want 0 (explicit-zero contract)", got)
+	}
+}
+
 // TestLogHashShort locks the truncation invariant promised by the
 // logHashShort helper (in logging.go). Without this, a future PR that
 // flips to [:16] for "more entropy" or breaks on an upstream crypto
@@ -346,17 +524,17 @@ func TestSubmitJobRejectsZeroDurationScene(t *testing.T) {
 //
 // Three assertions:
 //
-//   (1) Length == 12 hex chars: matches the documented "48 bits of
-//       entropy — ample to distinguish concurrent jobs" choice.
+//	(1) Length == 12 hex chars: matches the documented "48 bits of
+//	    entropy — ample to distinguish concurrent jobs" choice.
 //
-//   (2) Same input yields the same hash on every call. This locks the
-//       SHA-256 determinism property that an operator relies on when
-//       searching Loki / journald for a specific job.
+//	(2) Same input yields the same hash on every call. This locks the
+//	    SHA-256 determinism property that an operator relies on when
+//	    searching Loki / journald for a specific job.
 //
-//   (3) Distinct inputs yield distinct hashes. With SHA-256 truncated
-//       to 48 bits, collision is theoretically possible but the test
-//       catches accidental no-op regressions (e.g., helper returning
-//       a constant or zero string) immediately.
+//	(3) Distinct inputs yield distinct hashes. With SHA-256 truncated
+//	    to 48 bits, collision is theoretically possible but the test
+//	    catches accidental no-op regressions (e.g., helper returning
+//	    a constant or zero string) immediately.
 func TestLogHashShort(t *testing.T) {
 	t.Parallel()
 
@@ -393,5 +571,167 @@ func TestLogHashShort(t *testing.T) {
 	}
 	if a, b := logHashShort(""), logHashShort(""); a != b {
 		t.Errorf("empty-input hash not deterministic: %q vs %q", a, b)
+	}
+}
+
+// TestSubmitJobValidateLowerBoundDuration locks the inclusive acceptance
+// boundary for SubmitScene.duration_seconds at MinSceneDurationSeconds
+// (= 0.1). Without this test a regression that flips `<` to `<=`
+// silently rejects valid 0.1-second scenes on the inclusive boundary,
+// breaking sub-second fine-grained montage cuts the Worker supports.
+//
+// 0.1 s MUST pass ValidateSubmitJobRequest without erroring. The handler
+// test path can't reach 202 because a Handlers{} has no resolver wired,
+// so this test asserts at the ValidateSubmitJobRequest layer instead —
+// the layer that owns the rejection detection.
+func TestSubmitJobValidateLowerBoundDuration(t *testing.T) {
+	t.Parallel()
+
+	req := SubmitJobRequest{
+		IdempotencyKey: "lb-001",
+		Scenes: []SubmitScene{
+			{Text: "sub-second", DurationSeconds: MinSceneDurationSeconds},
+		},
+	}
+	if verr, bad := ValidateSubmitJobRequest(req); bad || verr != nil {
+		t.Fatalf("%.4f s scene must be accepted at boundary, got error: %v",
+			MinSceneDurationSeconds, verr)
+	}
+}
+
+// TestSubmitJobValidateUpperBoundDuration mirrors the lower-bound test
+// for MaxSceneDurationSeconds (= 86400).
+func TestSubmitJobValidateUpperBoundDuration(t *testing.T) {
+	t.Parallel()
+
+	req := SubmitJobRequest{
+		IdempotencyKey: "ub-001",
+		Scenes: []SubmitScene{
+			{Text: "24h-timelapse", DurationSeconds: MaxSceneDurationSeconds},
+		},
+	}
+	if verr, bad := ValidateSubmitJobRequest(req); bad || verr != nil {
+		t.Fatalf("%.4f s scene must be accepted at boundary, got error: %v",
+			MaxSceneDurationSeconds, verr)
+	}
+}
+
+// TestSubmitJobValidateRejectsLongVideoName locks both the 422 path
+// AND the details[].issue == "max_length" diagnostic shape.
+func TestSubmitJobValidateRejectsLongVideoName(t *testing.T) {
+	t.Parallel()
+
+	longName := strings.Repeat("a", MaxVideoNameBytes+1)
+	req := SubmitJobRequest{
+		IdempotencyKey: "vn-001",
+		VideoName:      longName,
+		Scenes: []SubmitScene{
+			{Text: "s", DurationSeconds: 5},
+		},
+	}
+	verr, bad := ValidateSubmitJobRequest(req)
+	if !bad || verr == nil || len(verr.Details) == 0 {
+		t.Fatalf("video_name with %d bytes should be rejected", len(longName))
+	}
+	found := false
+	for _, d := range verr.Details {
+		if d["path"] == "video_name" && d["issue"] == "max_length" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected details entry {path:video_name, issue:max_length}, got: %+v", verr.Details)
+	}
+}
+
+// TestSubmitJobValidateRejectsExcessiveScenes locks the 422 path
+// AND the details[].issue == "max_items" diagnostic shape for
+// MaxScenes = 10000.
+func TestSubmitJobValidateRejectsExcessiveScenes(t *testing.T) {
+	t.Parallel()
+
+	scenes := make([]SubmitScene, MaxScenes+1)
+	for i := range scenes {
+		scenes[i] = SubmitScene{Text: "s", DurationSeconds: 5}
+	}
+	req := SubmitJobRequest{
+		IdempotencyKey: "sc-001",
+		Scenes:         scenes,
+	}
+	verr, bad := ValidateSubmitJobRequest(req)
+	if !bad || verr == nil || len(verr.Details) == 0 {
+		t.Fatalf("scenes with %d entries should be rejected", len(scenes))
+	}
+	found := false
+	for _, d := range verr.Details {
+		if d["path"] == "scenes" && d["issue"] == "max_items" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected details entry {path:scenes, issue:max_items}, got: %+v", verr.Details)
+	}
+}
+
+
+// TestSubmitJobValidateRejectsEmptySceneText locks the cross-field rule
+// that SubmitScene.text must be non-empty after trim.
+func TestSubmitJobValidateRejectsEmptySceneText(t *testing.T) {
+	t.Parallel()
+
+	req := SubmitJobRequest{
+		IdempotencyKey: "st-001",
+		Scenes: []SubmitScene{
+			{Text: "", DurationSeconds: 5},
+			{Text: "   ", DurationSeconds: 5}, // whitespace-only also rejected (trim policy).
+		},
+	}
+	verr, bad := ValidateSubmitJobRequest(req)
+	if !bad || verr == nil || len(verr.Details) == 0 {
+		t.Fatalf("empty scene text must be rejected (bad=%v verr=%v)", bad, verr)
+	}
+	found := false
+	for _, d := range verr.Details {
+		p, _ := d["path"].(string)
+		if len(p) > len("scenes.") && p[:len("scenes.")] == "scenes." && d["issue"] == "empty" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected details entry {path:scenes.<i>.text, issue:empty}, got: %+v", verr.Details)
+	}
+}
+
+// TestSubmitJobValidateRejectsEmptyDestinationID locks the cross-field
+// rule that SubmitDeliveryPlanEntry.destination_id must be non-empty.
+func TestSubmitJobValidateRejectsEmptyDestinationID(t *testing.T) {
+	t.Parallel()
+
+	req := SubmitJobRequest{
+		IdempotencyKey: "dd-001",
+		Scenes: []SubmitScene{
+			{Text: "s", DurationSeconds: 5},
+		},
+		DeliveryPlan: []SubmitDeliveryPlanEntry{
+			{DestinationID: "", Priority: 1, RetryBudget: intPtr(3)},
+		},
+	}
+	verr, bad := ValidateSubmitJobRequest(req)
+	if !bad || verr == nil || len(verr.Details) == 0 {
+		t.Fatalf("empty destination_id must be rejected (bad=%v verr=%v)", bad, verr)
+	}
+	found := false
+	for _, d := range verr.Details {
+		p, _ := d["path"].(string)
+		if len(p) > len("delivery_plan.") && p[:len("delivery_plan.")] == "delivery_plan." && d["issue"] == "empty" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected details entry {path:delivery_plan.<i>.destination_id, issue:empty}, got: %+v", verr.Details)
 	}
 }
