@@ -1,0 +1,125 @@
+# api_docs_manifest.yaml — declarative driver for the api-docs codegen
+# (cmd/api-docs-gen). One entry per public HTTP operation. Add a new public
+# route here, NOT in validate_openapi.py's ROUTE_INVARIANTS list (which is
+# being retired as part of [P1] codegen — the validator now checks schema
+# correctness only, not completeness-by-list).
+#
+# Schema rules for ONE entry:
+#
+#   path:        exact path string (matches gin Group + POST/GET).
+#   method:      HTTP verb lowercase ("post", "get", "delete", ...).
+#   operationId: stable identifier for the operation. MUST equal the handler
+#                name when grep'd from openapi.yaml (this is the cross-file
+#                pin — codegen fails loudly if a manifest entry's
+#                operationId does not match any operation in the preimage
+#                openapi.yaml).
+#   tag:         grouping tag (drives the "tags: [...]" array on the
+#                generated operation).
+#   summary:     one-line summary. Emitted as `summary:` only when missing
+#                in the preimage (preserves hand-curated summaries).
+#   parameters:  list of $ref'd parameter names that MUST appear on the
+#                generated operation (e.g. ["AuthorizationHeader",
+#                "XRequestIDHeader"]). Use [] for operations with no
+#                parameters (e.g. anonymous health checks).
+#   requestBody: a mapping with one field "$ref". Set to `null` to omit the
+#                request body entirely (anonymous GET / bare endpoints).
+#   responses:   map of status-code-as-string → mapping-with-$ref OR `null`.
+#                Null emits only the descriptive `description:` (use this
+#                for status codes without a JSON body — 204, 413, etc., or
+#                422 where the spec keeps the envelope inline).
+#
+# Inline-vs-$ref contract:
+#   * $ref'd → the codegen emits `schema: { $ref: ... }` in the operation.
+#   * null    → the codegen emits a description-only response (no JSON
+#                body / inline schema), which keeps the spec free to define
+#                the body inline at the operation layer.
+#
+# This file is the single source of truth for what routes the Master
+# exposes for documentation. Validators + smoke tests + insta-edit
+# consumers all drive their coverage off this file (post P1).
+
+version: 1
+
+routes:
+  # ── /api/v1/creator/assets ────────────────────────────────────────────────
+  # The spec keeps requestBody (multipart/form-data) and 201 (content-
+  # addressed asset envelope) INLINE so the codegen emits null for both.
+  # 400/413/422 likewise have no JSON body; codegen emits description only.
+  - path: /api/v1/creator/assets
+    method: post
+    operationId: uploadCreatorAsset
+    tag: creator
+    summary: "Upload and register one Creator asset."
+    parameters: []
+    requestBody: null
+    responses:
+      "201": null
+      "400": null
+      "413": null
+      "422": null
+
+  - path: /api/v1/creator/jobs
+    method: post
+    operationId: pushCreatorJob
+    tag: creator
+    summary: "Push a completed Creator payload directly to the Master."
+    parameters:
+      - AuthorizationHeader
+      - XRequestIDHeader
+    requestBody:
+      $ref: "#/components/schemas/CreatorPushRequest"
+    responses:
+      "202":
+        $ref: "#/components/schemas/CreatorPushAcceptedResponse"
+      "401":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "422":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "500":
+        $ref: "#/components/schemas/ErrorEnvelope"
+
+  - path: /api/v1/jobs
+    method: post
+    operationId: submitJob
+    tag: jobs
+    summary: "Submit a complete video job for external automation."
+    parameters:
+      - AuthorizationHeader
+      - XRequestIDHeader
+    requestBody:
+      $ref: "#/components/schemas/SubmitJobRequest"
+    responses:
+      "202":
+        $ref: "#/components/schemas/SubmitJobAcceptedResponse"
+      "400":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "401":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "409":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "422":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "500":
+        $ref: "#/components/schemas/ErrorEnvelope"
+
+  - path: /api/v1/jobs/{job_id}
+    method: get
+    operationId: getSubmittedJob
+    tag: jobs
+    summary: "Poll the status of a previously submitted job."
+    parameters:
+      - AuthorizationHeader
+      - XRequestIDHeader
+      - PathJobID
+    requestBody: null
+    responses:
+      "200":
+        $ref: "#/components/schemas/SubmitJobStatusResponse"
+      "400":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "401":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "404":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "500":
+        $ref: "#/components/schemas/ErrorEnvelope"

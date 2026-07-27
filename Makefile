@@ -25,7 +25,7 @@ SHELL := /usr/bin/env bash
 EVIDENCE_ROOT_CAP9      ?= /tmp/velox-cap9-evidence
 EVIDENCE_ROOT_CAP10     ?= /tmp/velox-cap10-evidence
 
-.PHONY: verify verify-fast verify-heavy fmt fmt-check vet pilot e2e-grpc e2e-workload e2e-workload-mtls \
+.PHONY: verify verify-fast verify-heavy fmt fmt-check vet pilot api-docs api-docs-apply e2e-grpc e2e-workload e2e-workload-mtls \
         enable-branch-protection disable-branch-protection inspect-branch-protection \
         local-verify-mirror certify-worker certify-worker-bootstrap-mtls \
         real-bootstrap pin-worker-digest recovery-matrix recovery-matrix-dry \
@@ -43,6 +43,8 @@ help:
 	@echo "  make fmt                          -- gofmt -w on every Go module (auto-format tree)"
 	@echo "  make fmt-check                    -- gofmt -d (dry run); fails if any file is dirty"
 	@echo "  make vet                          -- go vet ./... on every Go module"
+	@echo "  make api-docs                    -- regenerate api/openapi.yaml from manifest + drift-check (CI)"
+	@echo "  make api-docs-apply              -- regenerate + overwrite api/openapi.yaml (local publish)"
 	@echo "  make pilot                        -- full pilot pipeline (build + start + submit + work + poll)"
 	@echo "  make e2e-grpc                     -- PR 3 gRPC control-plane E2E matrix (6 cases, ~90s)"
 	@echo "  make e2e-workload                 -- PR 5 full workload E2E (Hello → artifact, ~3-5 min)"
@@ -112,6 +114,36 @@ vet:           ## go vet ./... on every Go module
 	  echo "-> go vet $$mod"; \
 	  (cd $$mod && go vet ./...) || exit 1; \
 	done
+
+# Codegen target: regenerates DataServer/api/openapi.yaml from
+# DataServer/api/api_docs_manifest.yaml (paths only; schemas stay hand-curated),
+# then runs the correctness-only OpenAPI validator. Drift surfaces as
+# exit code 1.
+#
+# Two flavours:
+#   * make api-docs        — write to a staging file (./api-docs-gen.out)
+#                            and EXIT 1 if the regenerated spec differs
+#                            from the committed openapi.yaml. Use as the
+#                            CI gate; doesn't touch the committed file.
+#   * make api-docs-apply  — overwrite DataServer/api/openapi.yaml in place
+#                            with the codegen output. Use locally when
+#                            you add a route to api_docs_manifest.yaml
+#                            or commit it as the codified form.
+#
+# Both flavours also run the Python validator on the produced spec,
+# so a malformed manifest or unreferenced $ref fails locally before it
+# ever reaches CI.
+api-docs:
+	@echo "--- regenerating api/openapi.yaml from api_docs_manifest.yaml ---"
+	@cd DataServer && go run ./cmd/api-docs-gen -ci -manifest=api/api_docs_manifest.yaml -spec=api/openapi.yaml -out-tmp=api-docs-gen.out
+	@echo "--- running openapi validator (correctness) ---"
+	@python3 scripts/api/validate_openapi.py DataServer/api/openapi.yaml --manifest=DataServer/api/api_docs_manifest.yaml
+
+api-docs-apply:
+	@echo "--- applying regenerated api/openapi.yaml in place ---"
+	@cd DataServer && go run ./cmd/api-docs-gen -apply -manifest=api/api_docs_manifest.yaml -spec=api/openapi.yaml
+	@echo "--- re-running openapi validator against applied spec ---"
+	@python3 scripts/api/validate_openapi.py DataServer/api/openapi.yaml --manifest=DataServer/api/api_docs_manifest.yaml
 
 pilot:         ## Full pilot pipeline (build + start + submit + work + poll)
 	./scripts/pilot.sh
