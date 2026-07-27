@@ -340,9 +340,16 @@ func TestBuildPathsBlock_Inline_NullResponse(t *testing.T) {
 	manifest := &Manifest{
 		Routes: []RouteEntry{
 			{
-				Path:        "/api/v1/creator/assets",
+				// Synthetic fixture — production /api/v1/creator/assets
+				// was intentionally removed from the public spec on
+				// 2026-07-27 (trim to the inter-service keep-list; the
+				// asset-upload path was not part of the public surface).
+				// The intent of this test (null RequestBody + null $ref
+				// → description-only response) is preserved by using a
+				// private route name.
+				Path:        "/__test__/synthetic-asset-upload",
 				Method:      "post",
-				OperationID: "uploadCreatorAsset",
+				OperationID: "__testSyntheticAssetUpload",
 				Tag:         "creator",
 				Parameters:  []string{},
 				RequestBody: nil, // spec keeps the multipart body inline.
@@ -351,7 +358,7 @@ func TestBuildPathsBlock_Inline_NullResponse(t *testing.T) {
 		},
 	}
 	got := buildPathsBlock(manifest)
-	node, _ := got["/api/v1/creator/assets"].(map[string]any)
+	node, _ := got["/__test__/synthetic-asset-upload"].(map[string]any)
 	op, _ := node["post"].(map[string]any)
 	if _, present := op["requestBody"]; present {
 		t.Errorf("nil requestBody should NOT emit a requestBody node, got %v", op["requestBody"])

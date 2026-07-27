@@ -41,23 +41,6 @@
 version: 1
 
 routes:
-  # ── /api/v1/creator/assets ────────────────────────────────────────────────
-  # The spec keeps requestBody (multipart/form-data) and 201 (content-
-  # addressed asset envelope) INLINE so the codegen emits null for both.
-  # 400/413/422 likewise have no JSON body; codegen emits description only.
-  - path: /api/v1/creator/assets
-    method: post
-    operationId: uploadCreatorAsset
-    tag: creator
-    summary: "Upload and register one Creator asset."
-    parameters: []
-    requestBody: null
-    responses:
-      "201": null
-      "400": null
-      "413": null
-      "422": null
-
   - path: /api/v1/creator/jobs
     method: post
     operationId: pushCreatorJob

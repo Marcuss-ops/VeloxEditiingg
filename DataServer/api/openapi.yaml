@@ -87,12 +87,6 @@ tags:
       external systems to submit complete video jobs without going
       through the Creator intermediary. Uses a flat, intuitive
       payload format that maps to the same resolver machinery.
-  - name: pipeline
-    description: |
-      Master pipeline endpoints (Generate / Run / Status). These
-      share the same bearer-auth middleware as `creator` but their
-      full schemas will be ratified in a future spec revision.
-
 # ── Security ────────────────────────────────────────────────────────────────
 # Every endpoint under /api/v1/ or the /api/ master pipeline group
 # requires the same operator-grade bearer. The token is the value of
@@ -843,48 +837,6 @@ components:
 
 # ── Paths ───────────────────────────────────────────────────────────────────
 paths:
-  /api/v1/creator/assets:
-    post:
-      tags: [creator]
-      operationId: uploadCreatorAsset
-      summary: "Upload and register one Creator asset."
-      security:
-        - bearerAdminToken: []
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              required: [file]
-              properties:
-                kind:
-                  type: string
-                  default: project_file
-                file:
-                  type: string
-                  format: binary
-      responses:
-        '201':
-          description: Content-addressed asset registered.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [ok, asset_id, reference, sha256, size_bytes]
-                properties:
-                  ok: {type: boolean, enum: [true]}
-                  asset_id: {type: string}
-                  reference: {type: string, example: velox-asset://abc123}
-                  sha256: {type: string}
-                  size_bytes: {type: integer, format: int64}
-                  mime_type: {type: string}
-        '400':
-          description: Missing or unreadable multipart file.
-        '413':
-          description: Asset exceeds the configured size limit.
-        '422':
-          description: Asset could not be registered.
   # ── Simplified job submission for external automation ─────────────────────
   /api/v1/jobs:
     post:
