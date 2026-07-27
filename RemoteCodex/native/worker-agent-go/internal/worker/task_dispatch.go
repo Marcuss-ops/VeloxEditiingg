@@ -110,6 +110,31 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		spec.Payload = resolvedPayload
 	}
 
+	// Pass 9 — Wrap the render in a per-job clip lease so the
+	// workercache.Cleanup loop never deletes an asset the executor
+	// is actively reading. The lease is acquired AFTER
+	// resolveTaskAssets (which stores MarkDownloadComplete=true for
+	// any clip the resolver just fetched) and BEFORE taskRunner.Run
+	// (so the executor reads leased rows).
+	//
+	// A nil w.clipCache is the documented skip path (legacy
+	// bootstrap profiles, headless tests). A empty driveID slice
+	// is also a skip path (jobs with no clip references — e.g.
+	// audio-only renderings — are legitimate input and must not
+	// panic the dispatch path).
+	var clipLease *ClipLease
+	if w.clipCache != nil {
+		driveIDs := extractDriveIDsFromJSON(spec.Payload)
+		if len(driveIDs) > 0 {
+			leased, leaseErr := AcquireJobClips(ctx, w.clipCache, pte.JobID, driveIDs)
+			if leaseErr != nil {
+				return nil, fmt.Errorf("acquire clip lease: %w", leaseErr)
+			}
+			clipLease = leased
+			defer clipLease.ReleaseAll(ctx)
+		}
+	}
+
 	report, runErr := w.taskRunner.Run(ctx, spec)
 	if runErr != nil {
 		return &report, fmt.Errorf("taskrunner.Run: %w", runErr)

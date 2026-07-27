@@ -16,6 +16,7 @@ import (
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/worker/concurrency"
 	"velox-worker-agent/internal/worker/stageexec"
+	"velox-worker-agent/internal/workercache"
 	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/blob"
 	"velox-worker-agent/pkg/cache"
@@ -28,9 +29,10 @@ import (
 type Option func(*workerOptions)
 
 type workerOptions struct {
-	registry *executor.Registry
-	cache    *cache.PersistedLocalCache
-	blobs    *blob.BlobArtifacts
+	registry  *executor.Registry
+	cache     *cache.PersistedLocalCache
+	blobs     *blob.BlobArtifacts
+	clipCache *workercache.Cache
 }
 
 // WithRegistry replaces the default (empty) executor registry. The
@@ -79,6 +81,25 @@ func WithBlobs(b *blob.BlobArtifacts) Option {
 	}
 	return func(o *workerOptions) {
 		o.blobs = b
+	}
+}
+
+// WithClipCache wires the worker-side workercache.Cache into the
+// Worker. When set, dispatchTaskRunner acquires an active-job lease
+// (active_job_id) on every Drive clip referenced by the job payload
+// BEFORE invoking taskRunner.Run, and a defer at the same scope
+// releases it on success/error/panic so the workercache.Cleanup
+// loop never deletes an asset inside an active render.
+//
+// Passing nil panics loudly; omit WithClipCache to disable the
+// lease surface entirely (legacy bootstrap profiles, headless
+// tests, and workers without a clip cache SQLite).
+func WithClipCache(c *workercache.Cache) Option {
+	if c == nil {
+		panic("worker.WithClipCache: cache must not be nil — pass an explicit *workercache.Cache or omit WithClipCache")
+	}
+	return func(o *workerOptions) {
+		o.clipCache = c
 	}
 }
 
@@ -225,6 +246,7 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		executorRegistry:   wo.registry,
 		cache:              wo.cache,
 		blobs:              wo.blobs,
+		clipCache:          wo.clipCache,
 		taskRunner:         tr,
 		// Resource sampler. Empty procRoot/sysRoot
 		// defaults to /proc + /sys. cfg.WorkDir may be empty on

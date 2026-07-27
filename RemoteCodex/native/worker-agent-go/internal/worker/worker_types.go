@@ -14,6 +14,7 @@ import (
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/worker/concurrency"
 	"velox-worker-agent/internal/worker/stageexec"
+	"velox-worker-agent/internal/workercache"
 	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/blob"
 	"velox-worker-agent/pkg/cache"
@@ -211,6 +212,19 @@ type Worker struct {
 	cache      *cache.PersistedLocalCache
 	blobs      *blob.BlobArtifacts
 	taskRunner *taskrunner.TaskRunner
+
+	// Pass 9: optional worker-side clip cache (workercache.Cache).
+	// When non-nil, dispatchTaskRunner acquires an active-job lease
+	// (active_job_id) on every Drive clip referenced by the job
+	// payload, BEFORE invoking taskRunner.Run. A defer at the same
+	// scope releases the lease on success, error, or panic so the
+	// cleanup loop in workercache.Cleanup never deletes an asset
+	// inside an active render.
+	//
+	// nil is acceptable: a worker with no clip cache (legacy
+	// bootstrap profile, headless tests, etc.) skips the lease step
+	// without any other behaviour change.
+	clipCache *workercache.Cache
 
 	// PR-3.6 / F4: worker-side resource sampler. Powers Heartbeat.resources
 	// (cumulative typed counters → master F2 decodes + delta-converts) AND
