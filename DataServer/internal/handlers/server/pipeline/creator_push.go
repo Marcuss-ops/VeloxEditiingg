@@ -53,6 +53,31 @@ type normalizedCreatorPush struct {
 	WorkerPayload    map[string]interface{}
 }
 
+// CanonicalCompletedPayload is the typed struct every intake path
+// (creator_push, external /api/v1/jobs, and any future producer) MUST
+// converge on before the resolver entry point. It binds the dedup
+// identity tuple (source_provider, source_job_id, target_executor_id)
+// to the canonical worker payload — the map shape that flows through
+// ParseRemotePipelineResult → ToWorkerPayload.
+//
+// Concretely:
+//
+//   - SourceProvider + SourceJobID + TargetExecutorID form the UNIQUE
+//     row key in creator_forwardings. Two POSTs with the same triple
+//     converge on the same Velox job.
+//
+//   - WorkerPayload is the canonical typed-DTO output that the
+//     Resolver consumes. It is NOT the wire format and not the flat
+//     request body; it is what ParseRemotePipelineResult.ToWorkerPayload
+//     produces. Callers MUST NOT hand-build this map; the canonical
+//     path is the typed DTO.
+//
+// Created by normalizeCreatorPushRequest (creator_push) and
+// NormalizeExternalJobSubmission (/api/v1/jobs). Both paths produce
+// the same shape so a future intake (e.g., webhook intake) only needs
+// to return one CanonicalCompletedPayload too.
+type CanonicalCompletedPayload = normalizedCreatorPush
+
 // normalizeCreatorPushRequest is the canonical typed-DTO adapter
 // for POST /api/v1/creator/jobs. It runs the raw creator map through
 // ParseRemotePipelineResult, derives the worker payload via

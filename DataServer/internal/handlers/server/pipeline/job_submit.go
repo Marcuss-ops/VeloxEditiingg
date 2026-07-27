@@ -3,10 +3,12 @@ package pipeline
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/remoteengine"
 )
 
 // ExternalAPISourceProvider is the canonical SourceProvider stamped on
@@ -162,25 +164,21 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 			}
 		}
 
-		// Derive Creator-compatible identity. The provider is a
-		// LOW-CARDINALITY constant instead of a per-key synthesis
-		// ("api_" + key-prefix) so dashboards and security audits
-		// can aggregate jobs by their real source rather than
-		// stumble over a new label per request.
-		sourceProvider := ExternalAPISourceProvider
-		sourceJobID := req.IdempotencyKey
-		targetExecutorID := JobSubmitTargetExecutorID
-
-		// Build the worker payload from the simplified request.
-		workerPayload := buildWorkerPayloadFromSubmit(&req)
+		// Derive Creator-compatible identity via the canonical
+		// pipeline path: SubmitJobRequest → ParseRemotePipelineResult
+		// (typed DTO) → ToWorkerPayload → CanonicalCompletedPayload.
+		// This is the SAME path creator_push's normalizeCreatorPushRequest
+		// takes, so the resolver sees one canonical shape regardless of
+		// the producer (creator workstation vs external /api/v1/jobs).
+		canonical := NormalizeExternalJobSubmission(req)
 
 		// Delegate to the same resolver used by CreatorPush.
 		forwarded, err := h.resolveCompletedPayload(
 			c.Request.Context(),
-			sourceProvider,
-			sourceJobID,
-			targetExecutorID,
-			workerPayload,
+			canonical.SourceProvider,
+			canonical.SourceJobID,
+			canonical.TargetExecutorID,
+			canonical.WorkerPayload,
 		)
 		if err != nil {
 			// P0 #2 contract: every resolver-layer error is mapped
@@ -226,21 +224,103 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 	}
 }
 
-// buildWorkerPayloadFromSubmit converts a SubmitJobRequest into the
-// map[string]interface{} shape that the resolver expects.
-func buildWorkerPayloadFromSubmit(req *SubmitJobRequest) map[string]interface{} {
+// NormalizeExternalJobSubmission is the canonical typed-DTO adapter
+// for POST /api/v1/jobs. It walks the SAME path that creator_push
+// walks (creator_push.go's normalizeCreatorPushRequest):
+//
+//  1. Build a flat raw map mirroring the wire shape that
+//     remoteengine.ParseRemotePipelineResult consumes (status,
+//     job_id, video_name, script_text, voiceover_paths, scenes[],
+//     delivery_plan[]).
+//
+//  2. Pass it through remoteengine.ParseRemotePipelineResult to
+//     produce the typed RemotePipelineResult DTO. This is the single
+//     point where validation (status, scene shape, voiceover shape,
+//     metadata) happens — there is no hand-rolled string-key lookup
+//     anymore.
+//
+//  3. Call (*RemotePipelineResult).ToWorkerPayload() which:
+//     - base-copies fields from the flat raw map (delivery_plan,
+//       output_path, non-DTO passthroughs),
+//     - overlays typed DTO fields (job_id from RemoteJobID,
+//       video_name from Script.Title, scenes_json from Scenes,
+//       voiceover_paths from Voiceover.Paths).
+//
+//  4. Stamp the stable identity tuple:
+//     - source_provider    = ExternalAPISourceProvider (constant,
+//       low-cardinality — see #P0 #4 audit for the rationale).
+//     - source_job_id      = req.IdempotencyKey (the only client-
+//       supplied identity element on this path).
+//     - target_executor_id = JobSubmitTargetExecutorID (constant).
+//
+// Returns *CanonicalCompletedPayload (alias for normalizedCreatorPush,
+// the type CreatorPush's path also returns) so a future third
+// producer (e.g., webhook intake) only has to return the same shape.
+//
+// Validation errors are surfaced as typed errors that the handler maps
+// to 422 invalid_payload. Notably this consolidates a previous
+// duplicate inline-completeness check (scenes > 0, duration > 0) into
+// the typed DTO's NormalizeExternalJobSubmission caller — the
+// SubmitJob() handler still does its OWN belt-and-braces inline check
+// because ParseRemotePipelineResult's incomplete-payload handling
+// runs INSIDE the resolver entry point, not at the normalization
+// boundary.
+//
+// NormalizeExternalJobSubmission does NOT return an error in the
+// current implementation: submitRequestToRawPayload always produces
+// a non-nil raw map (the only failure mode in ParseRemotePipelineResult
+// is "raw == nil", which we control). Semantic validation (scenes > 0,
+// durations > 0, idempotency_key valid) is the SubmitJob() handler's
+// job — it runs BEFORE NormalizeExternalJobSubmission as the early-
+// rejection boundary so a malformed request never reaches the typed
+// DTO path. Normalize is the canonical SHAPE transformation; the
+// handler is the canonical VALIDATION boundary.
+//
+// Trim policy in submitRequestToRawPayload: trim SPACE around
+// identity-bearing fields (IdempotencyKey, VideoName, scene
+// clip_link / image_link, delivery destination_id) because these
+// participate in dedup / URL parsing downstream. Do NOT trim
+// ScriptText or scene `text` — these are CONTENT fields where
+// legitimate whitespace might be present.
+func NormalizeExternalJobSubmission(req SubmitJobRequest) *CanonicalCompletedPayload {
+	rawPayload := submitRequestToRawPayload(&req)
+
+	dto, _ := remoteengine.ParseRemotePipelineResult(rawPayload)
+	workerPayload := dto.ToWorkerPayload()
+
+	return &CanonicalCompletedPayload{
+		SourceProvider:   ExternalAPISourceProvider,
+		SourceJobID:      req.IdempotencyKey,
+		TargetExecutorID: JobSubmitTargetExecutorID,
+		WorkerPayload:    workerPayload,
+	}
+}
+
+// submitRequestToRawPayload builds the canonical flat-map shape that
+// remoteengine.ParseRemotePipelineResult consumes. Mirrors the wire
+// shape documented at DataServer/api/openapi.yaml under
+// `CreatorPushPayload` — same key names (snake_case, alias paths
+// collapsed to canonical) the typed DTO expects.
+//
+// The map is a one-shot invariant: it is the boundary between the
+// Submit-scoped typed structs (SubmitScene, SubmitDeliveryPlanEntry)
+// and the remoteengine-typed DTO (RemotePipelineResult). Everything
+// downstream of this point sees only the canonical envelope.
+func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 	m := map[string]interface{}{
 		"status": "completed",
-		"job_id": req.IdempotencyKey,
+		"job_id": strings.TrimSpace(req.IdempotencyKey),
 	}
 
 	if req.VideoName != "" {
-		m["video_name"] = req.VideoName
+		m["video_name"] = strings.TrimSpace(req.VideoName)
 	}
 	if req.ScriptText != "" {
 		m["script_text"] = req.ScriptText
 	}
 	if len(req.VoiceoverPaths) > 0 {
+		// NormalizeToStrings shape matches what
+		// extractVoiceoverPathsDTO scans for.
 		m["voiceover_paths"] = req.VoiceoverPaths
 	}
 
@@ -248,14 +328,14 @@ func buildWorkerPayloadFromSubmit(req *SubmitJobRequest) map[string]interface{} 
 		scenes := make([]interface{}, 0, len(req.Scenes))
 		for _, s := range req.Scenes {
 			scene := map[string]interface{}{
-				"text":            s.Text,
+				"text":             s.Text,
 				"duration_seconds": s.DurationSeconds,
 			}
 			if s.ClipLink != "" {
-				scene["clip_link"] = s.ClipLink
+				scene["clip_link"] = strings.TrimSpace(s.ClipLink)
 			}
 			if s.ImageLink != "" {
-				scene["image_link"] = s.ImageLink
+				scene["image_link"] = strings.TrimSpace(s.ImageLink)
 			}
 			scenes = append(scenes, scene)
 		}
@@ -266,7 +346,7 @@ func buildWorkerPayloadFromSubmit(req *SubmitJobRequest) map[string]interface{} 
 		plan := make([]interface{}, 0, len(req.DeliveryPlan))
 		for _, d := range req.DeliveryPlan {
 			entry := map[string]interface{}{
-				"destination_id": d.DestinationID,
+				"destination_id": strings.TrimSpace(d.DestinationID),
 			}
 			if d.Priority > 0 {
 				entry["priority"] = d.Priority
