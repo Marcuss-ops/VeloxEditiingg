@@ -1,0 +1,171 @@
+// Package apiwire is the canonical Go source-of-truth for the
+// inter-service HTTP contract between Velox Master and external
+// producers (creator machines on POST /api/v1/creator/jobs and
+// external automation on POST /api/v1/jobs).
+//
+// cmd/api-schema-gen reads the structs in this package via reflect
+// (internal/schemagen) and emits the matching
+// api/openapi.yaml.components/schemas YAML. The spec is DERIVED from
+// this file — never the other way around. Edit a struct's validate:"…"
+// tag here, re-run `go run ./cmd/api-schema-gen -apply`, and the
+// constraints propagate to the YAML automatically. Eliminates the
+// classic duplication where openapi.yaml.creator_push.maxLength=300
+// falls out of sync with Go-side MaxVideoNameBytes = 300.
+//
+// Tag grammar: see the schemagen package doc. Supported rules on
+// these types:
+//
+//   - min=N    → minimum / minLength / minItems depending on Go kind
+//   - max=N    → maximum / maxLength / maxItems
+//   - required → listed in the schema's required array
+//   - oneof=…  → enum
+//   - gte/lte=N→ numeric inclusive bounds
+//   - url      → format: uri
+//
+// To add a new schema type, declare the struct here, tag decisively
+// (especially `required` vs `omitempty`), and add the type name to
+// the registry list in cmd/api-schema-gen.
+package apiwire
+
+// ── POST /api/v1/jobs family ────────────────────────────────────────────────
+
+// SubmitJobRequest is the wire shape for POST /api/v1/jobs.
+// Flat, intuitive, semantically stable: idempotency_key is the
+// dedup handle; scenes[] is the only required repeating block;
+// everything else is optional content + delivery metadata.
+//
+// Idempotency-key byte-level rules (1..128, no ':' or '%', valid
+// UTF-8, no control chars) are enforced separately by
+// job_submit.ValidateIdempotencyKey — the MAX here is the
+// OpenAPI-level alias for the validator's byte cap.
+type SubmitJobRequest struct {
+	IdempotencyKey string                   `json:"idempotency_key" validate:"required,min=1,max=128"`
+	VideoName      string                   `json:"video_name,omitempty" validate:"omitempty,max=300"`
+	ScriptText     string                   `json:"script_text,omitempty"`
+	VoiceoverPaths []string                 `json:"voiceover_paths,omitempty" validate:"omitempty,dive"`
+	Scenes         []SubmitScene            `json:"scenes" validate:"required,min=1,max=10000"`
+	Layers         []SubmitLayer            `json:"layers,omitempty" validate:"omitempty,dive"`
+	SubtitleTracks []SubmitSubtitleTrack    `json:"subtitle_tracks,omitempty" validate:"omitempty,dive"`
+	DeliveryPlan   []SubmitDeliveryPlanEntry `json:"delivery_plan,omitempty" validate:"omitempty,dive"`
+}
+
+// SubmitScene is one composited segment in the simplified job.
+// duration_seconds is bounded by [0.1, 86400] server-side; the
+// `gte=0.1, lte=86400` rule here mirrors that in the spec, and
+// also matches the constants in job_submit.go (MinSceneDurationSeconds
+// + MaxSceneDurationSeconds). Drift between the two was the original
+// "manual duplication" pain point this package replaces.
+type SubmitScene struct {
+	Text            string  `json:"text" validate:"required,min=1"`
+	ClipLink        string  `json:"clip_link,omitempty" validate:"omitempty"`
+	ImageLink       string  `json:"image_link,omitempty" validate:"omitempty"`
+	DurationSeconds float64 `json:"duration_seconds" validate:"required,gte=0.1,lte=86400"`
+}
+
+// SubmitLayer is one independent Chronon rendering layer. Type +
+// Role enums match the Chronon's layer taxonomy.
+type SubmitLayer struct {
+	ID              string    `json:"id" validate:"required,min=1"`
+	Type            string    `json:"type" validate:"required,oneof=text image video color"`
+	Role            string    `json:"role,omitempty" validate:"omitempty,oneof=title name important_phrase overlay"`
+	Text            string    `json:"text,omitempty"`
+	Asset           string    `json:"asset,omitempty"`
+	Source          string    `json:"source,omitempty"`
+	Font            string    `json:"font,omitempty"`
+	FontSize        float64   `json:"font_size,omitempty" validate:"omitempty,gte=0"`
+	Position        []float64 `json:"position,omitempty" validate:"omitempty,len=2"`
+	StartSeconds    float64   `json:"start_seconds,omitempty" validate:"omitempty,gte=0"`
+	DurationSeconds float64   `json:"duration_seconds,omitempty" validate:"omitempty,gte=0"`
+	Preset          string    `json:"preset,omitempty"`
+	Animation       string    `json:"animation,omitempty"`
+}
+
+// SubmitSubtitleTrack is an independent subtitle payload the Chronon
+// compositor renders in parallel to the visual layers.
+type SubmitSubtitleTrack struct {
+	Source string `json:"source" validate:"required,min=1"`
+	Preset string `json:"preset,omitempty"`
+	Font   string `json:"font,omitempty"`
+}
+
+// SubmitDeliveryPlanEntry is one destination in the delivery plan.
+// retry_budget is *int so an explicit client-supplied 0 round-trips
+// distinctly from "field omitted" — the boundary contract that
+// openapi.yaml alone could not enforce without a hand-written
+// patch on the spec.
+type SubmitDeliveryPlanEntry struct {
+	DestinationID string         `json:"destination_id" validate:"required,min=1"`
+	Priority      int            `json:"priority,omitempty" validate:"omitempty,gte=0"`
+	RetryBudget   int            `json:"retry_budget,omitempty" validate:"omitempty,gte=0"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
+}
+
+// ── POST /api/v1/creator/jobs family ───────────────────────────────────────
+
+// CreatorPushRequest is the envelope sent by Creator machines to
+// push a completed payload directly to the Master. The payload goes
+// through the typed RemotePipelineResult DTO via
+// remoteengine.ParseRemotePipelineResult; here we mirror only the
+// WIRE shape (the DTO conversion is internal).
+type CreatorPushRequest struct {
+	SourceProvider   string             `json:"source_provider" validate:"required,min=1"`
+	SourceJobID      string             `json:"source_job_id,omitempty"`
+	TargetExecutorID string             `json:"target_executor_id,omitempty"`
+	Payload          CreatorPushPayload `json:"payload" validate:"required"`
+}
+
+// CreatorPushPayload is the FLAT wire shape nested inside
+// CreatorPushRequest.payload. Distinct from RemotePipelineResult
+// (the typed nested DTO documented separately in the spec as a
+// parser cross-check; the wire shape here is canonical).
+type CreatorPushPayload struct {
+	Status         string              `json:"status" validate:"required,oneof=completed completed_with_warnings"`
+	JobID          string              `json:"job_id" validate:"required,min=1"`
+	VideoName      string              `json:"video_name,omitempty"`
+	ScriptText     string              `json:"script_text,omitempty"`
+	VoiceoverPaths []string            `json:"voiceover_paths,omitempty" validate:"omitempty,dive"`
+	Scenes         []CreatorScene      `json:"scenes,omitempty" validate:"omitempty,dive"`
+	DeliveryPlan   []DeliveryPlanEntry `json:"delivery_plan,omitempty" validate:"omitempty,dive"`
+}
+
+// CreatorScene is one scene inside CreatorPushPayload.scenes.
+// clip_link and clip_path are accepted aliases (the handler maps
+// both onto the same DTO field) so the validate rule does not
+// constrain the URI scheme here — the SSRF/url-filter checklist is
+// enforced server-side outside the wire contract.
+type CreatorScene struct {
+	Text            string  `json:"text" validate:"required,min=1"`
+	ClipLink        string  `json:"clip_link,omitempty"`
+	ClipPath        string  `json:"clip_path,omitempty"`
+	ImageLink       string  `json:"image_link,omitempty" validate:"omitempty"`
+	DurationSeconds float64 `json:"duration_seconds" validate:"required,gte=0.1"`
+}
+
+// DeliveryPlanEntry is the Creator-side delivery destination enum.
+// The destination_id enum is intentionally narrow: a Creator
+// machine only needs to pick from the canonical set of supported
+// storages.
+type DeliveryPlanEntry struct {
+	DestinationID string         `json:"destination_id" validate:"required,oneof=drive gcs s3 youtube local"`
+	Priority      int            `json:"priority,omitempty" validate:"omitempty,gte=0"`
+	RetryBudget   int            `json:"retry_budget,omitempty" validate:"omitempty,gte=0"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
+}
+
+// CreatorMetadata is the social-platform metadata attached to the
+// Creator's final video. privacy_status enum mirrors YouTube's
+// canonical set; tags is bounded at 500 per YouTube's quota.
+type CreatorMetadata struct {
+	Title         string   `json:"title,omitempty"`
+	Description   string   `json:"description,omitempty"`
+	Tags          []string `json:"tags,omitempty" validate:"omitempty,max=500"`
+	PrivacyStatus string   `json:"privacy_status,omitempty" validate:"omitempty,oneof=public unlisted private"`
+}
+
+// CreatorAsset references a remote asset the Creator has uploaded.
+// Type is a closed enum matching the asset-family vocabulary.
+type CreatorAsset struct {
+	Type      string `json:"type" validate:"required,oneof=image clip audio subtitle"`
+	URL       string `json:"url,omitempty" validate:"omitempty"`
+	LocalPath string `json:"local_path,omitempty"`
+}
