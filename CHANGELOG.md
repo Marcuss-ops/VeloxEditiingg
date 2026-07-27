@@ -289,6 +289,50 @@ the typed DTO `DataServer/internal/remoteengine/dto.go::RemotePipelineResult`):
 - Cross-reference targets exist: `ls DataServer/api/openapi.yaml scripts/api/validate_openapi.py DataServer/internal/remoteengine/dto.go DataServer/internal/handlers/server/pipeline/creator_push.go DataServer/internal/handlers/server/pipeline/creator_push_e2e_test.go docs/CREATOR-PUSH.md` → all present.
 
 NOTE: The forward-looking `python3 -c "import yaml; ..."` one-liner and the stale `wc -l 527` from the prior draft were removed. Every claim in this footer is backed by an ACTUAL command run during commit-time verification (captured outputs in `/tmp/velox_openapi_push/*`).
+## [Unreleased] - 2026-07-27
+
+### Validator extensibility — data-driven per-route invariants
+
+`scripts/api/validate_openapi.py` is no longer a brittle strict-equality
+script. `ROUTE_INVARIANTS` is the single source of truth for what the
+spec must contain: each entry declares
+`{path, method, operationId, parameters:[...], responses:{code: $ref}}`
+and the validator:
+
+- emits `FAIL` if any required route is missing;
+- silently tolerates EXTRA routes (the v3 fragility that broke every
+  time a new endpoint landed is closed);
+- emits `FAIL` on `operationId` drift, on a dropped `$ref` for any
+  declared parameter, on a wrong/changed `$ref` for any declared
+  response code.
+
+The new endpoint group — `POST /api/v1/jobs`, operationId `submitJob`,
+schemas `SubmitJobRequest` / `SubmitScene` / `SubmitDeliveryPlanEntry` /
+`SubmitJobAcceptedResponse`, response codes `202` (→`SubmitJobAcceptedResponse`)
+and `400/401/422/500` (→`ErrorEnvelope`) — is now fully covered by the
+validator alongside the existing creator-push and creator-assets
+invariants.
+
+Round-2 cleanups layered on the rewrite:
+
+- Dead code removed: `X_FLAT_TO_DTO_GO_FILE` (was defined but unused),
+  and `ACCEPTED_RESPONSE_SCHEMA_REF` (the 202 $ref is now inline per
+  route invariant).
+- `_missing_required` annotation corrected to `Any` (it was annotated
+  `expected: str` but called with lists, ints, and floats).
+- Per-route `AuthorizationHeader` `$ref` is now enforced for the two
+  authenticated POSTs (was previously only `XRequestIDHeader`-checked).
+
+**Verified on `main`** after the rewrite (round 1) and the round-2
+cleanup (this commit on top):
+
+- `python3 scripts/api/validate_openapi.py DataServer/api/openapi.yaml`:
+  `--- TOTAL PASS: 1 openapi file(s) meet all invariants ---` (exit 0).
+- `python3 -m py_compile scripts/api/validate_openapi.py`: PASS.
+- `python3 -c "import ast; ast.parse(open('scripts/api/validate_openapi.py').read())"`: PASS.
+
+**Refs**: `scripts/api/validate_openapi.py`.
+
 ## v1.2.21 (2026-07-11)
 
 ### Behavior changes
