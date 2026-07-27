@@ -15,16 +15,34 @@ The validator's job is strictly correctness:
   6. Every operation has operationId, tags, responses, security.
   7. Every response $ref points at a schema in components.schemas.
 
-Pre-[P1] this validator carried two completeness lists:
-  * ROUTE_INVARIANTS — a hard-coded list of (path, method, operationId,
-    parameters, requestBody, responses). Adding a fifth route required
-    editing Python. Removed.
-  * REQUIRED_SCHEMAS — a list of schema names that MUST exist. Removed.
+DRIFT DETECTOR — IN_VARIANTS:
 
-The codegen + manifest replaces both. New routes = add an entry to
-api_docs_manifest.yaml, run `make api-docs`, commit. The validator
-never fails because of "missing" routes or "missing" schemas, only
-because something that IS in the spec is malformed.
+This validator is correctness-ONLY for everything else (resolve $refs,
+check operationId/tags/responses/security, bidirectionally match the
+ErrorCode enum, etc.). New routes = add an entry to
+api_docs_manifest.yaml, run `make api-docs-apply`, commit. The
+validator does not fail because of "missing" routes or "missing"
+schemas beyond the explicit MUST-HAVE list below.
+
+For a small, well-documented set of routes the spec MUST publish —
+together they form the system's interop surface and dropping any of
+them silently would break an external client without any
+code-change signal — this validator ALSO enforces the IN_VARIANTS
+list (below). Each IN_VARIANTS entry is
+`{"method": str, "path": str, "rationale": str}`. Adding a route
+here is a deliberate, documented decision; removing one should be a
+one-line review. Extra routes OUTSIDE this list are NOT constrained
+by IN_VARIANTS — the manifest + codegen handles broader drift; this
+list is a *guard rail*, not a *boundary*.
+
+What this validator enforces (and what it does not):
+
+  * Hard FAIL — incomplete spec, malformed $ref, missing operationId,
+    non-bearer security scheme, ErrorCode enum drift, missing
+    IN_VARIANT route.
+  * WARN — manifest route with no matching operation in the spec
+    (the codegen surfaces this at generate-time; re-asserted here
+    so drift is double-checked).
 
 Hard failures vs warnings:
 
@@ -71,6 +89,51 @@ EXPECTED_ERROR_CODES = {
 
 VALID_VERBS = {"get", "post", "put", "delete", "patch", "head", "options"}
 MAX_REF_RECURSION = 8  # bounded walk to keep validation O(small).
+
+# MUST-HAVE routes that are non-negotiable for system interoperability.
+# Missing any of these triggers a HARD FAIL. Each entry MUST be a
+# (method, path, rationale) triple; the rationale is enforced-by-PR
+# documentation (visible in CI logs) and intentionally free-form so the
+# commit message carries the contextual "why" alongside the structural
+# change.
+#
+# Adding to this list is the right move when a contract becomes a
+# permanent interop surface; removing is the right move only on a
+# coordinated deprecation window with all known consumers notified.
+#
+# Extra routes in the spec (outside this list) are NOT constrained here;
+# the manifest + cmd/api-docs-gen alone decide what enters and what
+# leaves. IN_VARIANTS is a guard rail, not a boundary.
+IN_VARIANTS = [
+    {
+        "method": "post",
+        "path": "/api/v1/creator/jobs",
+        "rationale": (
+            "Sync-push intake is a locked contract for older local "
+            "Creator clients still running the legacy submission flow; "
+            "removing it requires a coordinated deprecation window."
+        ),
+    },
+    {
+        "method": "post",
+        "path": "/api/v1/jobs",
+        "rationale": (
+            "Primary payload-flat submission endpoint required by "
+            "external automation (InstaEditLogin, partner pipelines). "
+            "Removing silently breaks every external job submitter."
+        ),
+    },
+    {
+        "method": "get",
+        "path": "/api/v1/jobs/{job_id}",
+        "rationale": (
+            "Canonical polling endpoint required by external clients "
+            "to observe SubmitJobAcceptedResponse subsequent state; "
+            "without this route, no externally-submitted job is "
+            "observable end-to-end."
+        ),
+    },
+]  # fmt: skip (one-liner rationale strings keep diffs readable)
 
 
 # ── Errors / warnings collectors ────────────────────────────────────────
@@ -167,6 +230,37 @@ def _resolve_ref(doc: dict[str, Any], ref: str, report: Report) -> bool:
         )
         return False
     return True
+
+
+def _check_invariants(doc: dict[str, Any], report: Report) -> None:
+    """DRIFT DETECTOR — fail hard if any MUST-HAVE route is gone.
+
+    IN_VARIANTS is the only place this validator enforces route
+    presence at the spec level. Manifest cross-check below is
+    WARN-only (the codegen also surfaces the drift, double-checked
+    here) — IN_VARIANTS is the canary system for routes that
+    external systems depend on by contract.
+
+    Equality on `method` is a case-insensitive comparison: paths
+    containing templated segments (e.g. `{job_id}`) ARE matched
+    verbatim, so the YAML's exact template syntax must equal
+    IN_VARIANTS's literal text.
+    """
+    paths = doc.get("paths") or {}
+    if not isinstance(paths, dict):
+        report.fail(
+            "paths must be a mapping (cannot enforce IN_VARIANTS)"
+        )
+        return
+    for inv in IN_VARIANTS:
+        method = inv["method"].lower()
+        path = inv["path"]
+        path_node = paths.get(path)
+        if not isinstance(path_node, dict) or method not in path_node:
+            report.fail(
+                f"IN_VARIANT MISSING: {method.upper()} {path} — "
+                f"{inv.get('rationale', '(no rationale documented)')}"
+            )
 
 
 def _check_every_ref_resolves(doc: dict[str, Any], report: Report) -> None:
@@ -300,6 +394,7 @@ def validate(
     _check_openapi_version(doc, report)
     _check_security_scheme(doc, report)
     _check_error_code_enum(doc, report)
+    _check_invariants(doc, report)
     _check_every_ref_resolves(doc, report)
     _check_operations(doc, report)
     if manifest is not None:
