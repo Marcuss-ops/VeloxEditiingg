@@ -1,0 +1,66 @@
+{
+  "source": {
+    "type": "clips"
+  },
+  "skip_creator": true,
+  "video_name": "Velox Worker Smoke — Chronon Text Image",
+  "project_id": "velox-worker-smoke",
+  "voiceover_path": "/opt/velox/current/.velox/data/test_voice.mp3",
+  "total_duration_secs": 4,
+  "render_video": true,
+  "save_to_db": true,
+  "fit": "contain",
+  "scenes": [
+    {
+      "id": "smoke-image-text",
+      "index": 0,
+      "kind": "image",
+      "text": "Nome Speciale: Ada Lovelace — FRASE IMPORTANTE — parola IMPORTANTE",
+      "clip_link": "https://dummyimage.com/1280x720/1e90ff/ffffff.png&text=VELOX+IMAGE+ASSET",
+      "image_link": "https://dummyimage.com/1280x720/1e90ff/ffffff.png&text=VELOX+IMAGE+ASSET",
+      "duration_seconds": 4
+    }
+  ],
+  "layers": [
+    {
+      "id": "smoke-name",
+      "type": "text",
+      "role": "name",
+      "text": "Ada Lovelace",
+      "font_size": 84,
+      "position": [960, 180],
+      "start_seconds": 0,
+      "duration_seconds": 4,
+      "animation": "slide_up"
+    },
+    {
+      "id": "smoke-phrase",
+      "type": "text",
+      "role": "important_phrase",
+      "text": "FRASE IMPORTANTE",
+      "font_size": 64,
+      "position": [960, 520],
+      "start_seconds": 0,
+      "duration_seconds": 4,
+      "preset": "glow"
+    },
+    {
+      "id": "smoke-word",
+      "type": "text",
+      "role": "important_word",
+      "text": "PAROLA CHIAVE",
+      "font_size": 72,
+      "position": [960, 760],
+      "start_seconds": 0,
+      "duration_seconds": 4,
+      "preset": "scale_pop"
+    }
+  ],
+  "delivery_plan": [
+    {
+      "destination_id": "comedy_test",
+      "retry_budget": 1,
+      "priority": 100
+    }
+  ]
+}

@@ -120,9 +120,7 @@ COPY RemoteCodex/native/worker-agent-go/go.mod \
 # Backing the module cache with BuildKit cache mount so subsequent builds
 # reuse the same /go/pkg/mod layers (Huge speedup once the dep graph lands).
 WORKDIR /src/RemoteCodex/native/worker-agent-go
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    go mod download
+RUN go mod download
 
 # Now copy the full module. The Makefile's `make agent` target then takes
 # over from BIN_DIR=/out, baking main.Version + main.BuildTime via the
@@ -133,9 +131,7 @@ COPY RemoteCodex/native/worker-agent-go/ /src/RemoteCodex/native/worker-agent-go
 # so the image's main.Version + main.BuildTime match the host `make agent`
 # output byte-for-byte (modulo /go/pkg/mod cache contents). /out is then
 # COPYed in stage 3.
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    make BIN_DIR=/out agent && \
+RUN make BIN_DIR=/out agent && \
     test -x /out/velox-worker-agent
 
 

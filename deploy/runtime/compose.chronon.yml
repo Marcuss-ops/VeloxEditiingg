@@ -1,0 +1,11 @@
+---
+# Optional overlay for workers packaged with Chronon3D.
+# Usage:
+#   docker compose -f deploy/runtime/compose.yml \
+#     -f deploy/runtime/compose.chronon.yml up -d
+services:
+  velox-worker:
+    image: ${VELOX_CHRONON_WORKER_IMAGE:?VELOX_CHRONON_WORKER_IMAGE must be set to a pinned digest}
+    environment:
+      VELOX_RENDER_BACKEND: chronon
+      CHRONON3D_CLI: /opt/chronon3d/bin/chronon3d_cli

@@ -10,6 +10,7 @@ worker-image.yml` (which builds and publishes the worker image).
 | File | Role |
 |---|---|
 | `compose.yml` | Referenceable Compose v2 service definition. Read-only root fs, `cap_drop: ALL`, `no-new-privileges`, isolated per-worker container name. |
+| `compose.chronon.yml` | Optional overlay selecting the Chronon-backed worker image and `chronon.render-plan.v1` execution. |
 | `worker.env.example` | Template for the per-host env file the worker reads. Copy to `/etc/velox-worker/worker.env` on the host and fill in. |
 | `prepare-host.sh` | Idempotent setup: creates dirs, sets ownership to uid 10001 (matching the image's `velox` user), pulls the pinned image, brings the container up. |
 
@@ -34,6 +35,22 @@ sudo install -m 0600 worker_credential    /etc/velox-worker/secrets/
 # 4. Drop binaries into /etc/velox-worker, then run prepare-host.sh.
 sudo deploy/runtime/prepare-host.sh
 ```
+
+## Chronon worker
+
+To run the worker with Chronon3D, publish and pin the image built with
+`RemoteCodex/native/worker-agent-go/Dockerfile.chronon`, then set
+`VELOX_CHRONON_WORKER_IMAGE` to its digest and start with the overlay:
+
+```bash
+export VELOX_CHRONON_WORKER_IMAGE=ghcr.io/<owner>/velox-chronon-worker@sha256:<digest>
+docker compose -p velox-worker-<id> \
+  -f deploy/runtime/compose.yml \
+  -f deploy/runtime/compose.chronon.yml up -d
+```
+
+The overlay sets `VELOX_RENDER_BACKEND=chronon`. Without it, Velox keeps the
+existing native engine backend.
 
 ## Image pinning — digest-only
 

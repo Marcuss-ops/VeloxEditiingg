@@ -1,0 +1,25 @@
+# Velox worker runtime with Chronon supplied as an immutable OCI base image.
+# Build from the Velox repository root after publishing the Chronon image:
+#   docker build -f RemoteCodex/native/worker-agent-go/Dockerfile.chronon \
+#     --build-arg CHRONON_RUNTIME_IMAGE=chronon3d-runtime:0.1.0-alpha.1 .
+
+ARG CHRONON_RUNTIME_IMAGE=ghcr.io/marcuss-ops/chronon-runtime:0.1.0-alpha.1
+FROM ${CHRONON_RUNTIME_IMAGE} AS chronon
+
+FROM golang:1.25.8-bookworm AS worker-builder
+WORKDIR /src
+COPY VERSION.txt .
+COPY shared/ shared/
+COPY RemoteCodex/native/worker-agent-go/ RemoteCodex/native/worker-agent-go/
+WORKDIR /src/RemoteCodex/native/worker-agent-go
+RUN apt-get update -qq && apt-get install -y --no-install-recommends make ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && make BIN_DIR=/out agent
+
+FROM chronon
+USER root
+COPY --from=worker-builder /out/velox-worker-agent /usr/local/bin/velox-worker-agent
+ENV CHRONON3D_CLI=/opt/chronon3d/bin/chronon3d_cli
+ENV VELOX_RENDER_BACKEND=chronon
+USER chronon
+ENTRYPOINT ["/usr/local/bin/velox-worker-agent"]

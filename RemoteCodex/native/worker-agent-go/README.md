@@ -87,6 +87,23 @@ make run-agent    # Esecuzione locale (dev)
 | `MASTER_URL` | — | URL del master server |
 | `WORKER_TOKEN` | — | Token autenticazione worker |
 | `VELOX_VIDEO_ENGINE_CPP_BIN` | — | Path binary video engine C++ |
+| `VELOX_RENDER_BACKEND` | `native` | Set to `chronon` to render through Chronon3D |
+| `CHRONON3D_CLI` | — | Path to `chronon3d_cli` when the Chronon backend is enabled |
+
+### Chronon3D backend
+
+The worker can consume Chronon without copying Chronon sources into Velox.
+Use the worker image built from `Dockerfile.chronon`, which contains the
+Chronon runtime and sets the required environment variables:
+
+```bash
+VELOX_RENDER_BACKEND=chronon
+CHRONON3D_CLI=/opt/chronon3d/bin/chronon3d_cli
+```
+
+In this mode the existing Velox `RenderPlan` is converted to the versioned
+`chronon.render-plan.v1` format and executed with `chronon3d_cli render-plan`.
+The default `native` backend and its command line remain unchanged.
 
 ## Job Types Supportati
 
