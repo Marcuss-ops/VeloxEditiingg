@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -82,6 +83,16 @@ func (c *RenderClient) RenderWithMetrics(ctx context.Context, p *plan.RenderPlan
 	defer os.RemoveAll(tempDir)
 	metrics.PlanMarshalMs = marshalMs
 	metrics.PlanWriteMs = writeMs
+	if chrononBackendEnabled() {
+		data, convertErr := chrononPlanJSON(p)
+		if convertErr != nil {
+			return metrics, convertErr
+		}
+		planPath = filepath.Join(tempDir, "chronon.render-plan.v1.json")
+		if writeErr := os.WriteFile(planPath, data, 0o644); writeErr != nil {
+			return metrics, fmt.Errorf("write Chronon render plan: %w", writeErr)
+		}
+	}
 
 	c.logger.Info("[NATIVE] Launching: %s --render --plan %s", c.binaryPath, planPath)
 	// SAFETY-CRITICAL subprocess lifecycle lives in engine_process.go.

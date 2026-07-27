@@ -32,7 +32,11 @@ import (
 // hard-kill + <-done reaping are preserved verbatim from the original
 // render_client.go. Do not modify these.
 func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgress ProgressFunc) (processStartMs int64, processWaitMs int64, stderrBuf strings.Builder, stdoutBuf strings.Builder, err error) {
-	cmd := exec.Command(binaryPath, "--render", "--plan", planPath)
+	args := []string{"--render", "--plan", planPath}
+	if chrononBackendEnabled() {
+		args = []string{"render-plan", "--input", planPath}
+	}
+	cmd := exec.Command(binaryPath, args...)
 	// Every Attempt owns an isolated process group. Pdeathsig is the
 	// crash-safety backstop: if the worker agent is SIGKILLed, the
 	// native engine receives SIGKILL from the kernel without

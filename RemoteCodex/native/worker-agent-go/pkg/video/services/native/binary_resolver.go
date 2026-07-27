@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"velox-worker-agent/pkg/binaryresolver"
@@ -23,6 +24,11 @@ import (
 // VELOX_VIDEO_ENGINE_CPP_BIN env var, /usr/local/bin, and a couple of
 // relative paths into the sibling video-engine-cpp build tree.
 func resolveBinary() (string, error) {
+	if chrononBackendEnabled() {
+		if path := strings.TrimSpace(os.Getenv("CHRONON3D_CLI")); path != "" {
+			return path, nil
+		}
+	}
 	r := binaryresolver.Resolver{
 		Name:   "velox_video_engine",
 		EnvVar: "VELOX_VIDEO_ENGINE_CPP_BIN",

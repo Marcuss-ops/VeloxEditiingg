@@ -2,6 +2,9 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
 )
 
 // resolveTaskAssets is the only entry point for materialising transport-level
@@ -28,5 +31,67 @@ func (w *Worker) resolveTaskAssets(ctx context.Context, payload map[string]inter
 	if err != nil {
 		return nil, err
 	}
+	// Older task envelopes may carry canonical media fields below a
+	// parameters object. Resolve that nested payload as well so Chronon
+	// never receives a master-only velox-asset:// URI.
+	for _, nestedKey := range []string{"payload", "parameters"} {
+		if encoded, ok := resolved[nestedKey].(string); ok && strings.HasPrefix(strings.TrimSpace(encoded), "{") {
+			var decoded map[string]interface{}
+			if err := json.Unmarshal([]byte(encoded), &decoded); err != nil {
+				return nil, fmt.Errorf("decode nested %s payload: %w", nestedKey, err)
+			}
+			resolved[nestedKey] = decoded
+		}
+		if nested, ok := resolved[nestedKey].(map[string]interface{}); ok && nested != nil {
+			resolvedNested, nestedErr := w.resolveTaskAssets(ctx, nested)
+			if nestedErr != nil {
+				return nil, nestedErr
+			}
+			resolved[nestedKey] = resolvedNested
+		}
+	}
+	materialized, err := w.materializeVeloxAssetRefs(ctx, resolved)
+	if err != nil {
+		return nil, err
+	}
+	if payload, ok := materialized.(map[string]interface{}); ok {
+		return payload, nil
+	}
 	return resolved, nil
+}
+
+// materializeVeloxAssetRefs is the final transport boundary: task envelopes
+// have appeared in several shapes over time, so every nested map/list is
+// walked and every master-only velox-asset:// URI is replaced by a cached
+// filesystem path before a renderer sees it.
+func (w *Worker) materializeVeloxAssetRefs(ctx context.Context, value interface{}) (interface{}, error) {
+	switch v := value.(type) {
+	case string:
+		ref := strings.TrimSpace(v)
+		if !strings.HasPrefix(ref, "velox-asset://") {
+			return value, nil
+		}
+		assetID := strings.TrimPrefix(ref, "velox-asset://")
+		if assetID == "" || strings.ContainsAny(assetID, `/\\`) {
+			return nil, fmt.Errorf("invalid velox asset reference")
+		}
+		return w.downloadVeloxAsset(ctx, assetID)
+	case map[string]interface{}:
+		for key, item := range v {
+			resolved, err := w.materializeVeloxAssetRefs(ctx, item)
+			if err != nil {
+				return nil, fmt.Errorf("resolve asset field %s: %w", key, err)
+			}
+			v[key] = resolved
+		}
+	case []interface{}:
+		for i, item := range v {
+			resolved, err := w.materializeVeloxAssetRefs(ctx, item)
+			if err != nil {
+				return nil, fmt.Errorf("resolve asset item %d: %w", i, err)
+			}
+			v[i] = resolved
+		}
+	}
+	return value, nil
 }

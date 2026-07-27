@@ -90,7 +90,7 @@ func (w *Worker) resolveSceneImagePayload(ctx context.Context, payload map[strin
 		}
 	}
 	resolveScene := func(scene map[string]interface{}, label string) error {
-		for _, key := range []string{"image", "image_link"} {
+		for _, key := range []string{"image", "image_link", "clip_link"} {
 			if ref, ok := scene[key].(string); ok {
 				resolved, err := resolve(ref)
 				if err != nil {
@@ -100,7 +100,14 @@ func (w *Worker) resolveSceneImagePayload(ctx context.Context, payload map[strin
 			}
 		}
 		if value, ok := scene["image_links"]; ok {
-			return resolveStringList(value, label+".image_links")
+			if err := resolveStringList(value, label+".image_links"); err != nil {
+				return err
+			}
+		}
+		if value, ok := scene["clip_links"]; ok {
+			if err := resolveStringList(value, label+".clip_links"); err != nil {
+				return err
+			}
 		}
 		return nil
 	}

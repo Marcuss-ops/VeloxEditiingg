@@ -142,6 +142,10 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		apiClient.SetAuthToken(token)
 		log.Info("[AUTH] Loaded worker token from VELOX_WORKER_TOKEN")
 	}
+	if token := strings.TrimSpace(os.Getenv("VELOX_ADMIN_TOKEN")); token != "" {
+		apiClient.SetAdminAuthToken(token)
+		log.Info("[AUTH] Loaded separate admin token for artifact uploads")
+	}
 
 	// Initialize stage executor for GOD workflow
 	stageExecCfg := &stageexec.StageExecutorConfig{
