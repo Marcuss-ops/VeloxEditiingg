@@ -333,6 +333,54 @@ cleanup (this commit on top):
 
 **Refs**: `scripts/api/validate_openapi.py`.
 
+### Payload-hash idempotency: 409 on `idempotency_key_reused`
+
+`POST /api/v1/jobs` now returns **HTTP 409 `idempotency_key_reused`** when
+the same `idempotency_key` is replayed with a **different payload**.
+Replays with the **same** payload continue to converge on the existing
+job (202 `created:false`) — the contract change closes a silent-clobber
+window that previously existed on the new endpoint.
+
+The verification lives in `creatorflow.Resolver.checkIdempotencyFastPath`,
+NOT only in the SubmitJob handler: it compares the existing
+`creator_forwardings.payload_sha256` to the SHA of the freshly-rebuilt
+(URL-rewritten) worker payload and returns the new sentinel
+`creatorflow.ErrIdempotencyKeyReused` on mismatch. The SubmitJob handler
+maps that sentinel to HTTP 409 with `details: [{path: idempotency_key,
+issue: hash_mismatch}]`.
+
+The same check applies to `POST /api/v1/creator/jobs` so a creator
+machine that POSTs differently-built JSON for the same `remote_job_id`
+is also caught (the resolver is the single writer for both intake
+paths).
+
+**Idempotency-key log privacy**: the `API_V1_JOBS_ACCEPTED` log line
+no longer emits the raw `idempotency_key`. It now emits
+`idempotency_hash=<12 hex chars of SHA-256(key)>`. The raw key can carry
+emails / customer refs / accidental tokens / log-injection payloads;
+the full hash is still persisted inside `creator_forwardings`,
+correlatable via `pipeline_creator_intake_accepted_total{path="api_v1_jobs"}`.
+
+**OpenAPI + validator**:
+
+- `ErrorCode.enum` now lists `idempotency_key_reused`.
+- `POST /api/v1/jobs` declares a new `409` response with an
+  `ErrorEnvelope` example (`{ok:false, error:idempotency_key_reused,
+  details:[{path:idempotency_key, issue:hash_mismatch}]}`).
+- `scripts/api/validate_openapi.py` `EXPECTED_ERROR_CODES` and
+  `ROUTE_INVARIANTS[/api/v1/jobs].responses["409"]` updated.
+
+**Verified on `main`** (committed on top of commit `4fcb46b`):
+
+- `cd DataServer && go vet ./internal/creatorflow/... ./internal/handlers/server/pipeline/...`: PASS.
+- `cd DataServer && go build ./internal/creatorflow/... ./internal/handlers/server/pipeline/...`: PASS.
+- `cd DataServer && go test ./internal/handlers/server/pipeline/... -count=1 -run 'TestSubmitJob|TestCreatorPush'`: PASS.
+- `python3 scripts/api/validate_openapi.py DataServer/api/openapi.yaml`: TOTAL PASS (exit 0).
+
+**Refs**: `DataServer/internal/creatorflow/{resolver.go,resolver_idempotency.go,resolver_types.go}`,
+`DataServer/internal/handlers/server/pipeline/{job_submit.go,creator_push.go}`,
+`DataServer/api/openapi.yaml`, `scripts/api/validate_openapi.py`.
+
 ## v1.2.21 (2026-07-11)
 
 ### Behavior changes

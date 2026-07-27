@@ -42,3 +42,12 @@ type ResolveOutput struct {
 // the caller decides whether nil-output means "early exit" (handler:
 // respond 202 polling, runner: mark retry-wait).
 var ErrResolverNotComplete = fmt.Errorf("creatorflow: Resolve: payload is not complete enough to forward")
+
+// ErrIdempotencyKeyReused is the sentinel for "idempotency key already
+// ingested with a different payload". The resolver detects this when the
+// existing forwarding row's payload_sha256 differs from the SHA of the
+// freshly-rebuilt (URL-rewritten) worker payload. Returned as
+// (nil, ErrIdempotencyKeyReused); the handler maps it to HTTP 409
+// `idempotency_key_reused`. Pre-055 rows whose payload_sha256 is empty
+// cleanly skip this check (legacy idempotency semantics preserved).
+var ErrIdempotencyKeyReused = fmt.Errorf("creatorflow: Resolve: idempotency key reused with a different payload")

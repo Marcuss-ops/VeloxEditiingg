@@ -19,7 +19,6 @@ package creatorflow
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -27,25 +26,6 @@ import (
 
 	"velox-server/internal/jobs/enqueue"
 )
-
-// ErrIdempotencyKeyReused is the canonical sentinel for the 409
-// `idempotency_key_reused` case. The resolver returns (nil, this)
-// when the existing forwarding row's payload_sha256 differs from the
-// SHA of the freshly-rebuilt worker payload.
-//
-// IMPORTANT: the literal message here MUST stay byte-equal with any
-// future re-declaration in resolver_types.go. errors.Is compares by
-// pointer identity, so two distinct fmt.Errorf calls with the same
-// string are NOT equal — the P0 payload-hash followup must use
-// this exported symbol (or a wrapping helper around it) instead of
-// re-introducing its own var. Carrying the message in a single place
-// also makes the OpenAPI 409 example's "idempotency_key reused
-// with a different payload" match the resolver output byte-for-byte.
-//
-// Lives here (rather than in resolver_types.go) until the payload-
-// hash followup lands, so WriteResolverError compiles today without
-// scope expansion.
-var ErrIdempotencyKeyReused = fmt.Errorf("creatorflow: Resolve: idempotency key reused with a different payload")
 
 // validationFieldExtractor is the indirection point used by
 // WriteResolverError. In production it always equals

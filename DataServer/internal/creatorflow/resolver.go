@@ -218,25 +218,31 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOut
 	// Service.ForwardCompleted performed just before Enqueue.
 	req.Payload[routing.KeyForwardingKey] = fwdKey.String()
 
-	// 3. Idempotency fast-path. If the Job already exists, return
-	// immediately so duplicate webhooks + retry storms don't write
-	// twice. We still surface the forwarding_id when available so the
-	// caller can audit-link to the row.
-	//
-	// P0-02 repair: if the forwarding row exists but is NOT yet FORWARDED
-	// (crash interrupted AtomicForwardAndEnqueue after Job INSERT but
-	// before the FORWARDED CAS), call EnsureForwarded to stamp it. This
-	// closes the "Job exists, forwarding row stuck in FORWARDING" window.
-	if out, hit := r.checkIdempotencyFastPath(ctx, req, jobID, targetExecutor); hit {
-		return out, nil
-	}
-
-	// 4. Build + rewrite worker payload. Skip rewriting when the
+	// 3. Build + rewrite worker payload. Skip rewriting when the
 	// resolver was constructed without dataDir+masterURL (in-runner
 	// path; the remote engine already produced a complete result).
 	workerPayload, err := r.buildAndRewritePayload(req.Payload, fwdKey)
 	if err != nil {
 		return nil, err
+	}
+
+	// 4. Idempotency fast-path with payload-hash check. If the Job
+	// already exists AND the existing forwarding row's payload_sha256
+	// matches the SHA of the freshly-rebuilt worker payload, return
+	// the cached output so duplicates don't write twice.
+	//
+	// The fast-path MAY return ErrIdempotencyKeyReused when the
+	// stored hash differs from the incoming one (P0 #3 contract).
+	// That sentinel bubbles up to the handler, which maps it to
+	// HTTP 409 `idempotency_key_reused`.
+	//
+	// P0-02 repair: if the forwarding row exists but is NOT yet
+	// FORWARDED (crash interrupted AtomicForwardAndEnqueue after
+	// Job INSERT but before the FORWARDED CAS), call EnsureForwarded
+	// to stamp it. This closes the "Job exists, forwarding row stuck
+	// in FORWARDING" window.
+	if out, err := r.checkIdempotencyFastPath(ctx, req, jobID, targetExecutor, workerPayload); out != nil || err != nil {
+		return out, err
 	}
 
 	// 5. Promote the forwarding row to READY_TO_FORWARD.

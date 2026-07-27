@@ -284,23 +284,31 @@ func TestBuildFreshResolveResponse(t *testing.T) {
 }
 
 func TestCheckIdempotencyFastPath(t *testing.T) {
+	emptyPayload := map[string]interface{}{}
+
 	t.Run("job miss", func(t *testing.T) {
 		r := &Resolver{jobLookup: &fakeJobLookup{}}
-		out, hit := r.checkIdempotencyFastPath(context.Background(), ResolveRequest{}, "job-1", "scene.composite.v1")
-		if hit || out != nil {
-			t.Fatalf("expected miss (nil, false), got (%+v, %v)", out, hit)
+		out, err := r.checkIdempotencyFastPath(context.Background(), ResolveRequest{}, "job-1", "scene.composite.v1", emptyPayload)
+		if err != nil || out != nil {
+			t.Fatalf("expected miss (nil, nil), got (%+v, %v)", out, err)
 		}
 	})
 
 	t.Run("job hit with explicit forwarding id", func(t *testing.T) {
-		repo := &fakeForwardingRepo{}
+		repo := &fakeForwardingRepo{
+			bySource: map[string]*store.CreatorForwarding{
+				keyForSource("remote_engine", "src-1", "scene.composite.v1"): {ForwardingID: "cf-1"},
+			},
+		}
 		r := &Resolver{
 			jobLookup:   &fakeJobLookup{jobs: map[string]*jobs.Job{"job-1": {ID: "job-1", Status: jobs.StatusPending}}},
 			forwardRepo: repo,
 		}
-		out, hit := r.checkIdempotencyFastPath(context.Background(), ResolveRequest{ForwardingID: "cf-1"}, "job-1", "scene.composite.v1")
-		if !hit || out == nil {
-			t.Fatalf("expected hit, got (%+v, %v)", out, hit)
+		out, err := r.checkIdempotencyFastPath(context.Background(),
+			ResolveRequest{ForwardingID: "cf-1", SourceProvider: "remote_engine", SourceJobID: "src-1"},
+			"job-1", "scene.composite.v1", emptyPayload)
+		if err != nil || out == nil {
+			t.Fatalf("expected hit, got (%+v, %v)", out, err)
 		}
 		if len(repo.ensureForwardedCalls) != 1 {
 			t.Fatalf("expected EnsureForwarded call, got %v", repo.ensureForwardedCalls)
@@ -308,14 +316,21 @@ func TestCheckIdempotencyFastPath(t *testing.T) {
 	})
 
 	t.Run("job hit with ensure forwarded error still returns output", func(t *testing.T) {
-		repo := &fakeForwardingRepo{ensureForwardedErr: errors.New("transition conflict")}
+		repo := &fakeForwardingRepo{
+			ensureForwardedErr: errors.New("transition conflict"),
+			bySource: map[string]*store.CreatorForwarding{
+				keyForSource("remote_engine", "src-1", "scene.composite.v1"): {ForwardingID: "cf-1"},
+			},
+		}
 		r := &Resolver{
 			jobLookup:   &fakeJobLookup{jobs: map[string]*jobs.Job{"job-1": {ID: "job-1", Status: jobs.StatusPending}}},
 			forwardRepo: repo,
 		}
-		out, hit := r.checkIdempotencyFastPath(context.Background(), ResolveRequest{ForwardingID: "cf-1"}, "job-1", "scene.composite.v1")
-		if !hit || out == nil {
-			t.Fatalf("expected hit despite repair error, got (%+v, %v)", out, hit)
+		out, err := r.checkIdempotencyFastPath(context.Background(),
+			ResolveRequest{ForwardingID: "cf-1", SourceProvider: "remote_engine", SourceJobID: "src-1"},
+			"job-1", "scene.composite.v1", emptyPayload)
+		if err != nil || out == nil {
+			t.Fatalf("expected hit despite repair error, got (%+v, %v)", out, err)
 		}
 	})
 
@@ -330,9 +345,9 @@ func TestCheckIdempotencyFastPath(t *testing.T) {
 			forwardRepo: repo,
 		}
 		req := ResolveRequest{SourceProvider: "remote_engine", SourceJobID: "src-1"}
-		out, hit := r.checkIdempotencyFastPath(context.Background(), req, "job-1", "scene.composite.v1")
-		if !hit || out == nil {
-			t.Fatalf("expected hit, got (%+v, %v)", out, hit)
+		out, err := r.checkIdempotencyFastPath(context.Background(), req, "job-1", "scene.composite.v1", emptyPayload)
+		if err != nil || out == nil {
+			t.Fatalf("expected hit, got (%+v, %v)", out, err)
 		}
 		if out.ForwardingID != "cf-2" {
 			t.Fatalf("want forwarding id cf-2, got %s", out.ForwardingID)
@@ -349,9 +364,9 @@ func TestCheckIdempotencyFastPath(t *testing.T) {
 			forwardRepo: repo,
 		}
 		req := ResolveRequest{SourceProvider: "remote_engine", SourceJobID: "src-1"}
-		out, hit := r.checkIdempotencyFastPath(context.Background(), req, "job-1", "scene.composite.v1")
-		if !hit || out == nil {
-			t.Fatalf("expected hit despite lookup error, got (%+v, %v)", out, hit)
+		out, err := r.checkIdempotencyFastPath(context.Background(), req, "job-1", "scene.composite.v1", emptyPayload)
+		if err != nil || out == nil {
+			t.Fatalf("expected hit despite lookup error, got (%+v, %v)", out, err)
 		}
 		if len(repo.ensureForwardedCalls) != 0 {
 			t.Fatalf("expected no EnsureForwarded call when forwarding id unknown, got %v", repo.ensureForwardedCalls)
