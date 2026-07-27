@@ -41,13 +41,20 @@ import (
 // CleanupStats summarises the outcome of one Cleanup pass. All fields
 // are observable counts so callers can log a single line + expose a
 // Prometheus gauge family in a later pass.
+//
+// SkippedGrace (Pass 12) and SkippedSnapshotStale (Pass 12) are
+// additive — older callers reading CleanupStats by name continue to
+// work; new fields are zero-initialised and unused by Pass 9's
+// Cleanup function (which never populates them).
 type CleanupStats struct {
-	Inspected        int
-	SkippedLeased    int
-	SkippedInFlight  int
-	SkippedProtected int
-	Removed          int
-	RemoveErrors     int
+	Inspected            int
+	SkippedLeased        int
+	SkippedInFlight      int
+	SkippedProtected     int
+	SkippedGrace         int
+	SkippedSnapshotStale int
+	Removed              int
+	RemoveErrors         int
 }
 
 // Cleanup removes entries that are NOT leased, NOT in flight, and NOT
