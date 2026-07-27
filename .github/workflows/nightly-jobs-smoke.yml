@@ -1,0 +1,73 @@
+# Nightly smoke for /api/v1/jobs (POST + polling GET).
+#
+# Operator-centric wire proofing: confirms that the live master still accepts
+# M2M auth, mints ephemeral clients, accepts submissions, and exposes polling
+# state on /api/v1/jobs/{job_id}. NOT a substitute for the Go e2e tests
+# (job_submit_e2e_test.go) — those cover the full resolver/forwarding
+# lifecycle; this nightly smoke proves the DEPLOYED wiring end-to-end.
+#
+# Triggered daily at 03:17 UTC. Manual workflow_dispatch supported so on-call
+# can re-run on demand without waiting for the next cron tick.
+#
+# Secrets come from the `production` GitHub Environment:
+#   - VELOX_ADMIN_TOKEN (secret) — admin bearer for /api/v1/admin/m2m/keys
+#   - VELOX_MASTER_URL    (var)   — public URL of the production master
+#
+# Failure handling: a non-zero `make jobs-smoke` exit produces a GitHub
+# Action failure, which surfaces in the workflow runs list. We deliberately
+# do not auto-page on nightly smoke failure (the canonical operator
+# escalation is the existing alerts/ spec + on-call rotation).
+name: nightly-jobs-smoke
+
+on:
+  schedule:
+    # Nightly at 03:17 UTC. The :17 minute is intentional to avoid
+    # collision with the other nightly cron jobs in this repo that
+    # commonly target 00:00 / 02:00 / 06:00 UTC.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      jobs_poll_timeout_s:
+        description: 'Polling timeout in seconds (default 60).'
+        required: false
+        default: '60'
+      jobs_idem_key:
+        description: 'Idempotency key override (default: smoke-<host>-<ts>).'
+        required: false
+        default: ''
+
+jobs:
+  jobs-smoke:
+    name: jobs-smoke /api/v1/jobs
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Smoke /api/v1/jobs (make jobs-smoke)
+        env:
+          VELOX_MASTER_URL:    ${{ vars.VELOX_MASTER_URL || 'https://velox.example.com' }}
+          VELOX_ADMIN_TOKEN:   ${{ secrets.VELOX_ADMIN_TOKEN }}
+          JOBS_POLL_TIMEOUT_S: ${{ github.event.inputs.jobs_poll_timeout_s || '60' }}
+          JOBS_IDEM_KEY:       ${{ github.event.inputs.jobs_idem_key || format('nightly-jobs-smoke-{0}', github.run_id) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "--- preflight ---"
+          command -v make || { echo "FATAL: make not found"; exit 2; }
+          command -v curl || { echo "FATAL: curl not found"; exit 2; }
+          command -v jq   || { echo "FATAL: jq not found"; exit 2; }
+          if [[ -z "${VELOX_ADMIN_TOKEN:-}" ]]; then
+            echo "FATAL: VELOX_ADMIN_TOKEN not present in the production Environment"; exit 2
+          fi
+          if [[ -z "${VELOX_MASTER_URL:-}" ]]; then
+            echo "FATAL: VELOX_MASTER_URL not configured"; exit 2
+          fi
+          echo "  VELOX_MASTER_URL    : $VELOX_MASTER_URL"
+          echo "  JOBS_IDEM_KEY      : $JOBS_IDEM_KEY"
+          echo "  JOBS_POLL_TIMEOUT_S: $JOBS_POLL_TIMEOUT_S"
+          echo "--- running make jobs-smoke ---"
+          make jobs-smoke

@@ -25,7 +25,9 @@ SHELL := /usr/bin/env bash
 EVIDENCE_ROOT_CAP9      ?= /tmp/velox-cap9-evidence
 EVIDENCE_ROOT_CAP10     ?= /tmp/velox-cap10-evidence
 
-.PHONY: verify verify-fast verify-heavy fmt fmt-check vet pilot api-docs api-docs-apply e2e-grpc e2e-workload e2e-workload-mtls \
+.PHONY: verify verify-fast verify-heavy fmt fmt-check vet pilot api-docs api-docs-apply \
+        jobs-smoke \
+        e2e-grpc e2e-workload e2e-workload-mtls \
         enable-branch-protection disable-branch-protection inspect-branch-protection \
         local-verify-mirror certify-worker certify-worker-bootstrap-mtls \
         real-bootstrap pin-worker-digest recovery-matrix recovery-matrix-dry \
@@ -46,6 +48,7 @@ help:
 	@echo "  make api-docs                    -- regenerate api/openapi.yaml from manifest + drift-check (CI)"
 	@echo "  make api-docs-apply              -- regenerate + overwrite api/openapi.yaml (local publish)"
 	@echo "  make pilot                        -- full pilot pipeline (build + start + submit + work + poll)"
+	@echo "  make jobs-smoke                  -- POST + GET polling smoke for /api/v1/jobs (auto-provisions M2M key)"
 	@echo "  make e2e-grpc                     -- PR 3 gRPC control-plane E2E matrix (6 cases, ~90s)"
 	@echo "  make e2e-workload                 -- PR 5 full workload E2E (Hello → artifact, ~3-5 min)"
 	@echo "  make local-verify-mirror          -- reproduce the GitHub Actions pyramid locally"
@@ -147,6 +150,19 @@ api-docs-apply:
 
 pilot:         ## Full pilot pipeline (build + start + submit + work + poll)
 	./scripts/pilot.sh
+
+# Operator smoke for /api/v1/jobs (POST + polling GET). Self-provisions an
+# ephemeral M2M client via the admin surface, submits a job, polls until
+# terminal state, then DELETEs the test client. Optional: never wired into
+# `make verify` (see .github/workflows/nightly-jobs-smoke.yml for nightly CI).
+#
+# Required: $VELOX_ADMIN_TOKEN (operator's adminAuth bearer for /api/v1/admin/m2m/keys).
+# Optional: $VELOX_MASTER_URL (default http://127.0.0.1:8080),
+#           $JOBS_IDEM_KEY (override the per-run idempotency key),
+#           $JOBS_POLL_TIMEOUT_S (default 60),
+#           $JOBS_SMOKE_DEBUG=1 (verbose curl + response dump).
+jobs-smoke:
+	@bash scripts/api/jobs_smoke.sh
 
 verify:        ## Architecture + Go (-race) + cmake + docker (full suite)
 	./scripts/ci/verify.sh
