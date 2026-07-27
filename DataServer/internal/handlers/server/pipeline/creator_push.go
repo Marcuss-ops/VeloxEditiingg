@@ -149,7 +149,20 @@ func (h *Handlers) resolveCompletedPayload(
 		Payload:          result,
 	})
 	if err != nil {
-		pipelineLog("FORWARD: Resolver.Resolve FAILED provider=%s source_job=%s: %v", sourceProvider, sourceJobID, err)
+		// Defense-in-depth log hygiene: errors from the resolver
+		// layer MIGHT embed user-supplied content (e.g., a malformed
+		// URL flowing through enqueue-layer validation, or a wrapped
+		// error whose Message carries the raw input). Surface the
+		// typed error class via %T (server-controlled) and a short
+		// hash for log-grep correlation; the full HTTP envelope goes
+		// out via WriteResolverError a few lines below.
+		pipelineLog(
+			"FORWARD: Resolver.Resolve FAILED provider=%s source_job_hash=%s err_class=%T err_hash=%s",
+			sourceProvider,
+			logHashShort(sourceJobID),
+			err,
+			logHashShort(err.Error()),
+		)
 		return nil, err
 	}
 	if out == nil {
@@ -157,9 +170,9 @@ func (h *Handlers) resolveCompletedPayload(
 	}
 
 	pipelineLog(
-		"FORWARD: enqueued via Resolver provider=%s source_job=%s job_id=%s forwarding_id=%s",
+		"FORWARD: enqueued via Resolver provider=%s source_job_hash=%s job_id=%s forwarding_id=%s",
 		sourceProvider,
-		sourceJobID,
+		logHashShort(sourceJobID),
 		out.JobID,
 		out.ForwardingID,
 	)
@@ -241,9 +254,9 @@ func (h *Handlers) CreatorPush() gin.HandlerFunc {
 		h.intakeSinkOrNoop().IncAccepted("creator_push")
 		jobID, _ := response["job_id"].(string)
 		pipelineLog(
-			"CREATOR_PUSH_ACCEPTED path=creator_push source_provider=%s source_job_id=%s target_executor_id=%s job_id=%s",
+			"CREATOR_PUSH_ACCEPTED path=creator_push source_provider=%s source_job_id_hash=%s target_executor_id=%s job_id=%s",
 			normalized.SourceProvider,
-			normalized.SourceJobID,
+			logHashShort(normalized.SourceJobID),
 			normalized.TargetExecutorID,
 			jobID,
 		)

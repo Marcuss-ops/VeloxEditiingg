@@ -1,8 +1,6 @@
 package pipeline
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"net/http"
 
@@ -220,7 +218,7 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 		jobID, _ := response["job_id"].(string)
 		pipelineLog(
 			"API_V1_JOBS_ACCEPTED idem_hash=%s job_id=%s",
-			logHashIdempotencyKey(req.IdempotencyKey),
+			logHashShort(req.IdempotencyKey),
 			jobID,
 		)
 
@@ -285,34 +283,4 @@ func buildWorkerPayloadFromSubmit(req *SubmitJobRequest) map[string]interface{} 
 	}
 
 	return m
-}
-
-// logHashIdempotencyKey returns the first 12 hex characters of the
-// SHA-256 digest of an idempotency_key. We use this hash in
-// operator-facing log lines (API_V1_JOBS_ACCEPTED, ERROR, audit trail)
-// instead of the raw key because:
-//
-//   - The raw key can carry user-supplied identifiers (email addresses,
-//     customer IDs, accidental bearer tokens) that we DO NOT want in
-//     journald / Loki / CloudWatch output.
-//
-//   - The key can carry unusual Unicode that breaks terminal log
-//     printers. A 12-hex-char ASCII hash is always safe to print.
-//
-//   - The full key remains the source-of-truth dedup identifier in the
-//     forwarding row (cf.source_job_id) and in the database. Operators
-//     who need to look up a specific request can run
-//     `SELECT * FROM creator_forwardings WHERE source_job_id = ?` —
-//     they do not need the key in stdout.
-//
-// The 12-hex-char prefix is the same compact form used by
-// creatorflow.shaShort in the [P0 #3] payload-hash work, so log
-// operators see a consistent format across both log sources.
-//
-// Truncating a SHA-256 to 12 hex chars leaves 48 bits of entropy —
-// ample to distinguish concurrent jobs in practice but NOT a security
-// guarantee against brute-force. It is purely an operator-UX choice.
-func logHashIdempotencyKey(key string) string {
-	sum := sha256.Sum256([]byte(key))
-	return hex.EncodeToString(sum[:])[:12]
 }

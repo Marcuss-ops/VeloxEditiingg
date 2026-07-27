@@ -58,6 +58,8 @@
 package pipeline
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"log"
 )
 
@@ -67,4 +69,44 @@ import (
 // remains uniform across all pipeline-installed routes.
 func pipelineLog(format string, args ...interface{}) {
 	log.Printf("[PIPELINE] "+format, args...)
+}
+
+// logHashShort returns the first 12 hex characters of the SHA-256
+// digest of a client-supplied identifier (typically an idempotency
+// token or the source-side job ID). This is the canonical log-hygiene
+// helper used by both SubmitJob and CreatorPush whenever a pipelineLog
+// site would otherwise emit a raw user-controlled value.
+//
+// Why we hash:
+//
+//  1. The raw value can carry user-supplied identifiers: email
+//     addresses, customer IDs, accidental bearer tokens, anything
+//     the client's caller chooses to put in. We do not want those
+//     in journald / Loki / CloudWatch output.
+//
+//  2. The value can carry unusual Unicode that breaks terminal log
+//     printers or even pipe-grep tooling that assumes printable
+//     ASCII. A 12-hex-char ASCII hash is always safe to print.
+//
+//  3. The full value remains the source-of-truth dedup identifier
+//     in the forwarding row (cf.source_job_id) and in the database.
+//     Operators who need to look up a specific request can run
+//     `SELECT * FROM creator_forwardings WHERE source_job_id = ?`
+//     — they do not need the raw value in stdout.
+//
+// The 12-hex-char prefix is the same compact form used by
+// creatorflow.shaShort in the payload-hash work, so log operators
+// see a consistent format across both log sources.
+//
+// Truncating a SHA-256 to 12 hex chars leaves 48 bits of entropy —
+// ample to distinguish concurrent jobs in practice but NOT a
+// security guarantee against brute force. It is purely an
+// operator-UX choice.
+//
+// Empty input is permitted and produces a stable hash value, NOT a
+// panic. Callers can safely use the helper at the top of a request
+// flow before they have validated the key's presence.
+func logHashShort(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])[:12]
 }
