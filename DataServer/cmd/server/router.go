@@ -89,6 +89,7 @@ type DarkeditorRouteDeps struct {
 // (upload-completed + chunked upload).
 type UploadRouteDeps struct {
 	Cfg            *config.Config
+	WorkerTokens   *workers.TokenManager
 	ArtifactSvc    *artifacts.Service
 	ArtifactReader artifacts.ArtifactReader
 	BlobStore      store.BlobStore
@@ -409,13 +410,14 @@ func registerDarkeditorRoutes(r *gin.Engine, deps DarkeditorRouteDeps) {
 // (InstaEdit BFF + workers) and must never be reachable from a browser.
 func registerUploadRoutes(r *gin.Engine, deps UploadRouteDeps) {
 	adminAuth := api.AdminAuthMiddleware(deps.Cfg)
+	workerDataPlaneAuth := api.WorkerOrAdminAuthMiddleware(deps.Cfg, deps.WorkerTokens)
 	if deps.ArtifactReader != nil && deps.BlobStore != nil {
 		r.GET("/api/internal/artifacts/:artifact_id/download", adminAuth, artifactDownloadHandler(deps.ArtifactReader, deps.BlobStore))
 		r.HEAD("/api/internal/artifacts/:artifact_id/download", adminAuth, artifactDownloadHandler(deps.ArtifactReader, deps.BlobStore))
 	}
 	if deps.ArtifactSvc != nil {
 		r.POST("/api/v1/video/upload-completed",
-			adminAuth, workerhandlersuploads.UploadCompletedVideo(deps.Cfg, deps.ArtifactSvc))
+			workerDataPlaneAuth, workerhandlersuploads.UploadCompletedVideo(deps.Cfg, deps.ArtifactSvc))
 	}
 	if deps.ChunkedHandler != nil {
 		r.POST("/api/v1/video/chunked/init", adminAuth, deps.ChunkedHandler.InitChunkedUpload())
@@ -492,6 +494,7 @@ func newM2MJwAuthFromBundle(cfg *config.Config, deps PipelineRouteDeps) gin.Hand
 // collapses). The split:
 //   - /api/v1/jobs           → m2mAuth    (per-client credentials)
 //   - /api/v1/admin/m2m/keys → adminAuth  (operator manage keys)
+//
 // is the canonical authorization boundary.
 //
 // nil SQLiteStore is treated as "feature disabled" — routes

@@ -132,6 +132,7 @@ func (c *appComponents) routerBundle() RouterBundle {
 		Pipeline: PipelineRouteDeps{
 			Cfg:          c.cfg,
 			Enqueuer:     c.modules.Enqueuer,
+			SQLiteStore:  c.persistence.SQLite,
 			JobsRepo:     c.jobs.Repository,
 			CmdMgr:       c.workers.CommandManager,
 			TaskReader:   c.tasks.TaskRepository,
@@ -141,6 +142,7 @@ func (c *appComponents) routerBundle() RouterBundle {
 		Darkeditor: DarkeditorRouteDeps{Cfg: c.cfg, SQLiteStore: c.persistence.SQLite, Handler: deHandler},
 		Upload: UploadRouteDeps{
 			Cfg:            c.cfg,
+			WorkerTokens:   c.workers.TokenManager,
 			ArtifactSvc:    c.assets.ArtifactSvc,
 			ArtifactReader: c.assets.ArtifactReader,
 			BlobStore:      c.assets.BlobStore,

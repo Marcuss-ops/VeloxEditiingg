@@ -52,3 +52,32 @@ func AdminAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// WorkerOrAdminAuthMiddleware protects worker data-plane endpoints. Workers
+// authenticate with their short-lived command token, while operators use the
+// admin token. This is separate from AdminAuthMiddleware so worker tokens do
+// not grant access to unrelated admin routes.
+func WorkerOrAdminAuthMiddleware(cfg *config.Config, tokenMgr *workersreg.TokenManager) gin.HandlerFunc {
+	admin := ""
+	if cfg != nil {
+		admin = strings.TrimSpace(cfg.Auth.AdminToken)
+	}
+	return func(c *gin.Context) {
+		if c.GetHeader("Origin") != "" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "direct browser access forbidden"})
+			return
+		}
+		token := workersreg.ExtractBearerToken(c.GetHeader("Authorization"), c.GetHeader("X-Worker-Token"), "")
+		if token != "" && admin != "" && subtle.ConstantTimeCompare([]byte(token), []byte(admin)) == 1 {
+			c.Next()
+			return
+		}
+		if token != "" && tokenMgr != nil {
+			if _, ok := tokenMgr.ValidateWorkerCommandToken(token); ok {
+				c.Next()
+				return
+			}
+		}
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid worker or admin token"})
+	}
+}

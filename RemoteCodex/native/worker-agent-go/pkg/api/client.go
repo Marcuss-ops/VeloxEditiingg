@@ -40,6 +40,9 @@ type Client struct {
 
 	// Auth token obtained during registration, sent as Bearer token on subsequent requests.
 	authToken string
+	// adminAuthToken is used only for legacy admin-protected artifact upload
+	// endpoints. Worker asset reads continue using authToken.
+	adminAuthToken string
 }
 
 // ClientOption is a functional option for configuring the Client.
@@ -98,6 +101,12 @@ func (c *Client) SetAuthToken(token string) {
 // AuthToken returns the current auth token, if any.
 func (c *Client) AuthToken() string {
 	return c.authToken
+}
+
+// SetAdminAuthToken configures the operator token used by artifact upload
+// endpoints while preserving the worker session token for asset reads.
+func (c *Client) SetAdminAuthToken(token string) {
+	c.adminAuthToken = strings.TrimSpace(token)
 }
 
 func retryBackoff(attempt int, baseInterval time.Duration) time.Duration {

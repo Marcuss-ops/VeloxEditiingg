@@ -86,8 +86,12 @@ func (c *Client) UploadCompletedVideo(ctx context.Context, req UploadCompletedVi
 		return nil, fmt.Errorf("upload completed video: create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", writer.FormDataContentType())
-	if c.authToken != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.authToken)
+	authToken := c.adminAuthToken
+	if authToken == "" {
+		authToken = c.authToken
+	}
+	if authToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+authToken)
 	}
 	for key, value := range c.headers {
 		httpReq.Header.Set(key, value)
