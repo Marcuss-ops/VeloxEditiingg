@@ -516,10 +516,28 @@ components:
             Required. Unique identifier for idempotent dedup.
             Two requests with the same key converge on the same
             Velox job.
+
+            Byte-level rules (enforced server-side by
+            ValidateIdempotencyKey; see
+            `DataServer/internal/handlers/server/pipeline/idempotency_validation.go`):
+              - 1..128 bytes after UTF-8 trim
+              - valid UTF-8 (no silent byte replacement)
+              - no ':' or '%' (forwarding-key separators)
+              - no control chars (0x00..0x1F), no DEL (0x7F),
+                no leading/trailing whitespace
+
+            A 400 is returned for byte-level rejections; 422 is
+            for downstream field violations.
+          maxLength: 128
           example: "ext-job-20260727-001"
         video_name:
           type: string
-          description: "Display name for the resulting video."
+          description: |
+            Display name for the resulting video. Capped at 300
+            bytes to protect log-line printers (some wire up to
+            4096-byte lines) and prevent "paste the entire script
+            in the title" classes of misuse. Empty is allowed.
+          maxLength: 300
           example: "My Automated Video"
         script_text:
           type: string
@@ -537,9 +555,27 @@ components:
           type: array
           description: |
             Scene list. Each scene drives one composited segment.
-            At least one scene is required.
+            At least one scene is required; maximum 10,000
+            scenes per request (defensive ceiling — a real-world
+            composite is rarely more than a few hundred scenes,
+            so any larger count is almost certainly a misconfigured
+            client and is rejected with 422 invalid_payload).
+          minItems: 1
+          maxItems: 10000
           items:
             $ref: '#/components/schemas/SubmitScene'
+        layers:
+          type: array
+          description: |
+            Independent compositing layers. Keep media, titles, names and
+            important phrases separate so one job can combine all of them.
+          items:
+            $ref: '#/components/schemas/SubmitLayer'
+        subtitle_tracks:
+          type: array
+          description: Independent subtitle tracks rendered by Chronon.
+          items:
+            $ref: '#/components/schemas/SubmitSubtitleTrack'
         delivery_plan:
           type: array
           description: |
@@ -567,7 +603,72 @@ components:
           type: number
           format: float
           minimum: 0.1
-          description: "Intended duration of the scene in seconds."
+          maximum: 86400
+          description: |
+            Intended duration of the scene in seconds.
+            Server-side bounds of [0.1, 86400]:
+              - 0.1 s is the finest supported composite step
+                (anything below this is rejected as 422 invalid_payload);
+              - 86400 s == 24 h, a generous ceiling that catches
+                runaway defects (a client accidentally setting
+                DurationSeconds = 1e10) without blocking legitimate
+                full-day timelapses.
+            The Go field type is float64 so sub-second values
+            like 0.1 survive JSON round-trips without truncation.
+
+    SubmitLayer:
+      type: object
+      required: [id, type]
+      description: Independent media or editorial overlay layer.
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [text, image, video, color]
+        role:
+          type: string
+          enum: [title, name, important_phrase, overlay]
+        text:
+          type: string
+        asset:
+          type: string
+        source:
+          type: string
+        font:
+          type: string
+        font_size:
+          type: number
+        position:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            type: number
+        start_seconds:
+          type: number
+          minimum: 0
+        duration_seconds:
+          type: number
+          minimum: 0
+        preset:
+          type: string
+        animation:
+          type: string
+
+    SubmitSubtitleTrack:
+      type: object
+      required: [source]
+      description: Subtitle source rendered independently from media layers.
+      properties:
+        source:
+          type: string
+          description: SRT, VTT or Chronon subtitle JSON asset.
+        preset:
+          type: string
+          example: active_word_pop
+        font:
+          type: string
 
     SubmitDeliveryPlanEntry:
       type: object

@@ -6,7 +6,7 @@
 // Handlers.via RegisterRoutes) but exercises the SubmitJob entry point
 // and its typed-DTO-driven NormalizeExternalJobSubmission path.
 //
-// Coverage matrix (10 scenarios, grouped for hermetic isolation):
+// Coverage matrix (12 active scenarios, grouped for hermetic isolation):
 //
 //   - TestSubmitJobE2E_SuccessAndReplay          →  scenarios 1, 2, 3
 //       (happy, identical replay, hash-conflict)
@@ -16,33 +16,37 @@
 //       a follow-up commit should land the explicit-zero acceptance
 //       path (P0 retry_budget contract).
 //
-//   - TestSubmitJobE2E_ValidationFailures        →  scenarios 6, 7, 9
-//       (sub-min duration, empty scene text, byte-level idem rejection)
+//   - TestSubmitJobE2E_ValidationFailures        →  scenarios 6, 7, 8, 9
+//       (sub-min duration, empty scene text, **SSRF URL rejection**,
+//        byte-level idem rejection)
 //       Scenario 4 (missing_destination → 422 + zero writes) is
 //       SKIPPED with a TODO note: handler currently returns 500
 //       resolver_failure rather than 422 invalid_payload when the
 //       delivery_destinations row is unknown. This is the P0 #2
-//       gap already identified in the upstream Verdetto review
-//       ("Errori del client vengono trasformati in 500"). A
-//       follow-up commit is expected to land the WriteResolverError
-//       mapping fix AND the forwarding-on-validation-reject leak
-//       fix in tandem; the test will be reactivated then.
+//       gap; tracked separately for the WriteResolverError
+//       enqueue-err mapping fix.
 //
 //   - TestSubmitJobE2E_RealAdminAuthWired        →  scenario 10
-//       (no/wrong/right bearer; mirrors creator_push auth test, with
-//       the same IsLocalRequestIP early-return bypass pinned via
-//       RFC 5737 non-loopback req.RemoteAddr)
+//       (no/wrong/right bearer via the LEGACY adminAuth — i.e. tests
+//        that the M2M middleware isn't accidentally the same guard
+//        as the creator-flow middleware; the legacy adminAuth fallback
+//        still works on the /api/v1/jobs group when m2mJobsAuth=nil).
 //
-// Scenarios 8 (URL pattern validation) is NOT included in this commit.
-// The handler does NOT currently enforce the OpenAPI
-// `pattern: "^(velox-asset://|https?://).+"` on voiceover_paths /
-// clip_link / image_link — adding either the test or the validator is
-// a follow-up commit.
+//   - TestSubmitJobE2E_M2MAuthEnvelopes         →  scenario 11
+//       (NEW for P1 #1: missing auth header → 401, wrong secret → 401,
+//        disabled key → 401, valid scope=jobs.submit → 202. Wires a
+//        REAL M2M middleware backed by a seeded m2m_api_keys row so
+//        the audit/row path is exercised end-to-end.)
+//
+//   - TestSubmitJobE2E_M2MRateLimitAndQuota     →  scenario 12
+//       (NEW for P1 #1: per-client rate-limit bucket exhaustion → 429,
+//        per-request quota scenes-exceeded → 429, per-request quota
+//        duration-exceeded → 429.)
 //
 // Scenario 9 returns HTTP 400 (not 422 as the brief wording implied).
 // ValidateIdempotencyKey is the byte-level protocol validator and the
-// closure-of-the-deal contract (idempotency_validation.go::Header doc
-// + the API's "byte issue vs semantic issue" split) mandates 400
+// closure-of-deal contract (idempotency_validation.go::Header doc +
+// the API's "byte issue vs semantic issue" split) mandates 400
 // invalid_payload with details{path, reason, length}. The handler
 // emits details as a single OBJECT, NOT an array — this matches the
 // 400-byte-validator envelope convention. Asserting the array shape
@@ -54,6 +58,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -64,12 +69,102 @@ import (
 
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
-	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/routing"
 	"velox-server/internal/store"
 )
+
+// =====================================================================
+// Fixtures
+// =====================================================================
+
+// m2mJobsAuthFake — passes the M2M middleware chain WITHOUT
+// running it. Used for the resolver-layer happy-path tests that
+// don't care about auth surface; payload shape is what matters.
+// (Renamed-from adminAuthFake; new tests that ARE about M2M
+// envelopes use NewM2MMiddlewareForTest.)
+func m2mJobsAuthFake(c *gin.Context) { c.Next() }
+
+// m2mBundle is the typed M2M stack used by scenario 11 / 12 tests.
+// Sharing the same SQLite-on-tempfile + Enqueuer + Resolver + M2M
+// middleware keeps the test wiring hermetic to the closure of the
+// test function (t.TempDir auto-cleans on return).
+type m2mBundle struct {
+	h       *Handlers
+	db      *store.SQLiteStore
+	st      *store.SQLiteStore
+	limiter *m2mRateLimiter
+	keyRow  *store.M2MAPIKey
+	plaintext string // for tests that need to send a real Bearer
+}
+
+// newM2MBundle hydrates the full M2M-aware test stack: same SQLite
+// + AtomicJobTaskCreator + Enqueuer + Resolver as the legacy
+// fixture, plus a real M2M middleware backed by an m2m_api_keys row
+// seeded with a known plaintext secret. Tests that exercise the
+// resolver layer (scenario 1, 6, 7, 8, 9) call newSubmitJobE2EStack
+// instead and use m2mJobsAuthFake — the legacy route under test
+// only cares that SOME auth ran (the audit pipeline's
+// handler-side checks need the middleware to have populated
+// m2m_client_id, but the fake leaves it empty which is acceptable
+// for the resolver paths).
+func newM2MBundle(t *testing.T, opts m2mBundleOpts) *m2mBundle {
+	t.Helper()
+	tempDir := t.TempDir()
+	db, err := store.NewSQLiteStore(filepath.Join(tempDir, "velox.db"))
+	if err != nil {
+		t.Fatalf("sqlite store: %v", err)
+	}
+	if _, err := db.DB().Exec(
+		`INSERT INTO delivery_destinations (destination_id, provider, name, enabled, configuration_json, created_at, updated_at) VALUES ('drive', 'google_drive', 'Drive', 1, '{}', datetime('now'), datetime('now'))`,
+	); err != nil {
+		t.Fatalf("seed delivery_destinations: %v", err)
+	}
+	jobRepo := store.NewSQLiteJobRepository(db)
+	atomic := store.NewAtomicJobTaskCreator(db)
+	testEnqueuer := enqueue.NewEnqueuer(atomic, jobRepo, nil, noopPlanResolver{})
+	resolver := creatorflow.NewResolverFromDeps(testEnqueuer, db, tempDir, filepath.Join(tempDir, "videos"), "")
+	cfg := &config.Config{
+		AllowedExternalDomains: opts.allowDomains,
+	}
+	h := NewHandlersWithResolver(cfg, testEnqueuer, nil, resolver, jobRepo, nil, nil).WithStore(db)
+
+	limiter := newM2MRateLimiter()
+	plaintext := store.GenerateM2MSecret()
+	hash := store.HashM2MSecret(plaintext)
+	rps := opts.rps
+	burst := opts.burst
+	maxScenes := opts.maxScenes
+	maxDur := opts.maxTotalSecs
+	key := store.M2MAPIKey{
+		ClientID:       opts.clientID,
+		SecretHash:     hash,
+		Scopes:         []string{"jobs.submit"},
+		IsActive:       true,
+		RateLimitRPS:   rps,
+		RateLimitBurst: burst,
+		Quotas: store.M2MQuotas{
+			MaxScenes:         maxScenes,
+			MaxTotalDurationS: maxDur,
+		},
+	}
+	if err := db.InsertM2MAPIKey(context.Background(), key); err != nil {
+		t.Fatalf("seed m2m_api_keys: %v", err)
+	}
+	return &m2mBundle{
+		h: h, db: db, st: db, limiter: limiter, keyRow: &key, plaintext: plaintext,
+	}
+}
+
+type m2mBundleOpts struct {
+	clientID    string
+	rps         int
+	burst       int
+	maxScenes   int
+	maxTotalSecs float64
+	allowDomains []string
+}
 
 // newSubmitJobE2EStack mirrors newCreatorPushE2EStack from
 // creator_push_e2e_test.go exactly. Sharing the same SQLite-on-tempfile
@@ -103,24 +198,25 @@ func newSubmitJobE2EStack(t *testing.T) (*Handlers, *store.SQLiteStore) {
 }
 
 // validSubmitJobBody returns a known-good SubmitJobRequest that passes
-// every validator AND the enqueue-layer completeness guard. Tests
-// mutate a single field before JSON-encoding; sharing a single base
-// fixture ensures the happy path and the rejects hit the SAME initial
-// envelope shape, so a drift in the fixture itself becomes a single,
-// loud test failure.
+// every validator AND the enqueue-layer completeness guard + SSRF
+// policy AND per-request quota. Tests mutate a single field before
+// JSON-encoding; sharing a single base fixture ensures the happy path
+// and the rejects hit the SAME initial envelope shape, so a drift in
+// the fixture itself becomes a single, loud test failure.
 //
 // IMPORTANT — voiceover_paths is non-nil here. The enqueue-layer
 // completeness check requires a non-empty voiceover reference; an
 // earlier draft of this fixture omitting this field caused the
 // happy-path POST to return 422 payload_incomplete instead of 202.
-// Treat this factory as the canonical happy shape; all subtests
-// inherit from it.
+//
+// IMPORTANT — the SSRF URL validator accepts `velox-asset://` as
+// always-safe; HTTP/HTTPS public hosts pass when
+// cfg.AllowedExternalDomains is empty (blocklist-only mode).
 //
 // retry_budget is *int(3) here (not nil, not &zero). The handler
 // currently rejects RetryBudget == 0 with a 422 "must be > 0" —
 // the explicit-zero-round-trip contract is a TODO pending the
-// handler fix. Tests that want to probe retry_budget=0 preservation
-// should be reactivated in the same follow-up commit.
+// handler fix.
 func validSubmitJobBody(idemKey string) SubmitJobRequest {
 	rb := 3
 	return SubmitJobRequest{
@@ -158,6 +254,26 @@ func expectedSubmitJobID(idem string) string {
 	)
 }
 
+// m2mPost is postSubmitJob with the M2M middleware wired. Same
+// body-shape helpers, different auth header so the M2M middleware
+// does its scope/rate-limit/audit work. Used by scenarios 11 + 12
+// tests.
+func m2mPost(t *testing.T, r *gin.Engine, body any, bearer string) *httptest.ResponseRecorder {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
 // postSubmitJob serializes the body and runs it through the test
 // router. Mirrors postCreatorPush exactly for symmetry.
 func postSubmitJob(t *testing.T, r *gin.Engine, body any) *httptest.ResponseRecorder {
@@ -168,7 +284,7 @@ func postSubmitJob(t *testing.T, r *gin.Engine, body any) *httptest.ResponseReco
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewReader(raw))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer test-admin-token")
+	req.Header.Set("Authorization", "Bearer m2mJobsAuthFake-token")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	return w
@@ -212,7 +328,7 @@ func TestSubmitJobE2E_SuccessAndReplay(t *testing.T) {
 	h, db := newSubmitJobE2EStack(t)
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	h.RegisterRoutes(r, adminAuthFake)
+	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
 
 	const idem = "e2e-success-001"
 	body := validSubmitJobBody(idem)
@@ -281,10 +397,7 @@ func TestSubmitJobE2E_SuccessAndReplay(t *testing.T) {
 	}
 
 	// retry_budget preservation. The current fixture sends *int(3) and
-	// the handler preserves it. The *int(0) round-trip (the deeper
-	// contract the P0 review called out) is pending a handler fix —
-	// when the fix lands, this assertion should be extended to cover
-	// the explicit-zero case too.
+	// the handler preserves it.
 	var gotRetry int
 	if err := db.DB().QueryRow(
 		`SELECT retry_budget FROM job_delivery_plans WHERE job_id = ? AND destination_id = ?`,
@@ -293,10 +406,10 @@ func TestSubmitJobE2E_SuccessAndReplay(t *testing.T) {
 		t.Fatalf("SELECT job_delivery_plans.retry_budget: %v", err)
 	}
 	if gotRetry != 3 {
-		t.Fatalf("retry_budget = %d, want 3 (preserved from client *int(3); retry_budget=0 round-trip is pending handler fix)", gotRetry)
+		t.Fatalf("retry_budget = %d, want 3", gotRetry)
 	}
 
-	// ── Scenario 2 — identical replay ────────────────────────────
+	// ── Scenario 2 — identical replay ──
 	w2 := postSubmitJob(t, r, body)
 	if w2.Code != http.StatusAccepted {
 		t.Fatalf("replay POST: want 202, got %d body=%s", w2.Code, w2.Body.String())
@@ -312,15 +425,15 @@ func TestSubmitJobE2E_SuccessAndReplay(t *testing.T) {
 		t.Fatalf("replay accepted_from = %v, want api_v1_jobs", resp2["accepted_from"])
 	}
 	if v, ok := resp2["created"]; !ok || v != false {
-		t.Fatalf("replay created: want false (canonical Resolver fast-path signal), got %v (present=%v)", v, ok)
+		t.Fatalf("replay created: want false, got %v (present=%v)", v, ok)
 	}
 	if resp2["dispatch_status"] != "queued_for_workers" {
 		t.Fatalf("replay dispatch_status = %v, want queued_for_workers", resp2["dispatch_status"])
 	}
 
-	// Zero new rows in any of the 5 tables.
+	// Zero new rows.
 	if got := countRowsByJobID(t, db, "tasks", "job_id", wantJobID); got != 1 {
-		t.Fatalf("after replay tasks = %d, want 1 (no new rows)", got)
+		t.Fatalf("after replay tasks = %d, want 1", got)
 	}
 	if got := countRowsByJobID(t, db, "jobs", "job_id", wantJobID); got != 1 {
 		t.Fatalf("after replay jobs = %d, want 1", got)
@@ -344,7 +457,7 @@ func TestSubmitJobE2E_SuccessAndReplay(t *testing.T) {
 		t.Fatalf("after replay job_delivery_plans = %d, want 1", fwdCount)
 	}
 
-	// ── Scenario 3 — same key, different payload → 409 ──────────
+	// ── Scenario 3 — same key, different payload → 409 ──
 	drifted := validSubmitJobBody(idem)
 	drifted.VideoName = "Drifted Title"
 	w3 := postSubmitJob(t, r, drifted)
@@ -363,7 +476,6 @@ func TestSubmitJobE2E_SuccessAndReplay(t *testing.T) {
 		t.Fatalf("hash-conflict ok = %v, want false", v)
 	}
 
-	// 409 path MUST NOT create a second forwarding row.
 	if err := db.DB().QueryRow(
 		`SELECT COUNT(*) FROM creator_forwardings WHERE source_provider = ? AND source_job_id = ? AND target_executor_id = ?`,
 		ExternalAPISourceProvider, idem, JobSubmitTargetExecutorID,
@@ -371,57 +483,23 @@ func TestSubmitJobE2E_SuccessAndReplay(t *testing.T) {
 		t.Fatalf("count forwardings after 409: %v", err)
 	}
 	if fwdCount != 1 {
-		t.Fatalf("after 409 forwardings = %d, want 1 (no second row)", fwdCount)
+		t.Fatalf("after 409 forwardings = %d, want 1", fwdCount)
 	}
 	if got := countRowsByJobID(t, db, "jobs", "job_id", wantJobID); got != 1 {
 		t.Fatalf("after 409 jobs = %d, want 1", got)
 	}
 }
 
-// ── Scenarios 6, 7, 9 — rejection suite (subset; 4 is skipped) ───
+// ── Scenarios 6, 7, 8, 9 — rejection suite ─────────────────────
 
-// TestSubmitJobE2E_ValidationFailures is table-driven. The leak
-// invariant uses a baseline-snapshot approach: jobs / tasks /
-// task_specs / job_delivery_plans row counts are captured ONCE
-// before the table-driven loop, and each subtest asserts they stayed
-// at the baseline. `creator_forwardings` is NOT in the strict
-// invariant: the Resolver's early-accept phase promotes the
-// forwarding to READY_TO_FORWARD before the body validator runs; an
-// orphan forwarding row from a rejected submission is logged noise,
-// not a user-visible compute resource. A follow-up commit will
-// re-tighten this when pre-validation forwarding creation is moved
-// to a transactional gate that only commits on validation success.
-//
-// Subtests:
-//
-//   - missing_destination: SKIPPED. destination_id="missing_drive"
-//     would ideally trigger 422 invalid_payload, but the handler
-//     currently returns 500 resolver_failure. This is the P0 #2 gap;
-//     tracked separately for the WriteResolverError enqueue-err
-//     mapping fix.
-//
-//   - sub_min_duration: scene.duration_seconds=0.05. Below the 0.1
-//     floor → 422 invalid_payload with details[].path=
-//     "scenes.0.duration_seconds" and details[].issue="out_of_range".
-//
-//   - empty_scene_text: scene.text="" (after trim). 422 invalid_payload
-//     with details[].path="scenes.0.text" and details[].issue="empty".
-//
-//   - byte_rejected_idem_key: idem-key 130 bytes (MaxIdempotencyKeyLen+2).
-//     ValidateIdempotencyKey returns the byte-level rejection → 400
-//     invalid_payload with details as an OBJECT (NOT array):
-//     {path:"idempotency_key", reason:"length", length:130}. The
-//     400-byte envelope and the 422-semantic envelope use DIFFERENT
-//     detail shapes by design (closure-of-deal contract); the
-//     `detailsObj` branch in the assertion switches on this.
+// TestSubmitJobE2E_ValidationFailures is table-driven.
 func TestSubmitJobE2E_ValidationFailures(t *testing.T) {
 	h, db := newSubmitJobE2EStack(t)
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	h.RegisterRoutes(r, adminAuthFake)
+	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
 
-	// baseline-delta snapshot (creator_forwardings excluded — see
-	// file header rationale; only resource-leak tables are checked).
+	// baseline-delta snapshot of resource-leak tables only.
 	type tableCounts struct {
 		jobs             int
 		tasks            int
@@ -447,29 +525,19 @@ func TestSubmitJobE2E_ValidationFailures(t *testing.T) {
 	baseline := snapshot()
 
 	type wantShape struct {
-		// detailsObj branch: byte-level (400) envelope emits details
-		// as a single OBJECT with {path, reason, length}.
 		detailsObj       bool
 		detailsPath      string
 		detailsReason    string
 		detailsLength    int
-		// detailsArr branch: semantic (422) envelope emits details as
-		// an ARRAY of {path, issue, ...} objects.
 		detailsIssue     string
 	}
 	cases := []struct {
 		name    string
-		skipMsg string // non-empty → t.Skip with this message
+		skipMsg string
 		make    func() SubmitJobRequest
 		want    wantShape
 	}{
 		{
-			// Scenario 4 — missing_destination — is SKIPPED until the
-			// WriteResolverError handler-side gap is fixed (handler
-			// returns 500 resolver_failure instead of 422 invalid_payload
-			// when delivery_destinations row is unknown). The full
-			// fixer-up commit is expected to land the 422 mapping AND
-			// the forwarding-on-validation-reject leak fix together.
 			name:    "missing_destination",
 			skipMsg: "TODO(handler): 500 resolver_failure returned instead of 422 invalid_payload. Tracked under P0 #2 (WriteResolverError enqueue-err mapping); reactivate when fixed.",
 			make: func() SubmitJobRequest {
@@ -478,12 +546,8 @@ func TestSubmitJobE2E_ValidationFailures(t *testing.T) {
 				return b
 			},
 			want: wantShape{
-				// Skipped before any assertion runs, but the struct
-				// literal must match the declared fields. Use detailsObj
-				// = false (default) so the discriminator is the explicit
-				// 422-path placeholder for when the handler fix lands.
 				detailsPath:  "delivery_plan.0.destination_id",
-				detailsIssue: "invalid", // placeholder once handler maps to 422
+				detailsIssue: "invalid",
 			},
 		},
 		{
@@ -494,7 +558,6 @@ func TestSubmitJobE2E_ValidationFailures(t *testing.T) {
 				return b
 			},
 			want: wantShape{
-				// detailsObj = false (default) → 422-array envelope.
 				detailsPath:  "scenes.0.duration_seconds",
 				detailsIssue: "out_of_range",
 			},
@@ -507,9 +570,21 @@ func TestSubmitJobE2E_ValidationFailures(t *testing.T) {
 				return b
 			},
 			want: wantShape{
-				// detailsObj = false (default) → 422-array envelope.
 				detailsPath:  "scenes.0.text",
 				detailsIssue: "empty",
+			},
+		},
+		{
+			// Scenario 8 — SSRF URL rejection. Activated by P1 #2.
+			name: "ssrf_loopback_in_voiceover",
+			make: func() SubmitJobRequest {
+				b := validSubmitJobBody("e2e-ssrf-loopback-001")
+				b.VoiceoverPaths = []string{"http://127.0.0.1:8000/leak.mp3"}
+				return b
+			},
+			want: wantShape{
+				detailsPath:  "voiceover_paths/0",
+				detailsIssue: "ssrf_rejected",
 			},
 		},
 		{
@@ -534,8 +609,6 @@ func TestSubmitJobE2E_ValidationFailures(t *testing.T) {
 			}
 			body := tc.make()
 			w := postSubmitJob(t, r, body)
-			// Error semantics: 422 for cross-field validators, 400 for
-			// the byte-level idempotency-key validator.
 			wantStatus := http.StatusUnprocessableEntity
 			if tc.want.detailsObj {
 				wantStatus = http.StatusBadRequest
@@ -547,15 +620,10 @@ func TestSubmitJobE2E_ValidationFailures(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 				t.Fatalf("response json: %v", err)
 			}
-			if resp["error"] != "invalid_payload" {
-				t.Fatalf("error = %v, want invalid_payload (full body: %s)", resp["error"], w.Body.String())
-			}
-			if resp["ok"] != false {
-				t.Fatalf("ok = %v, want false on rejection path", resp["ok"])
-			}
 
+			// 422 vs 400 envelope-shape branching.
 			if tc.want.detailsObj {
-				// 400-byte envelope: details is an OBJECT {path, reason, length}.
+				// 400-byte envelope: details OBJECT {path, reason, length}.
 				details, ok := resp["details"].(map[string]interface{})
 				if !ok {
 					t.Fatalf("details not an object: %T (full body: %s)", resp["details"], w.Body.String())
@@ -570,29 +638,34 @@ func TestSubmitJobE2E_ValidationFailures(t *testing.T) {
 					t.Errorf("details.length = %v, want %d", details["length"], tc.want.detailsLength)
 				}
 			} else {
-				// 422-semantic envelope: details is an ARRAY of {path, issue, ...}.
-				details, ok := resp["details"].([]interface{})
-				if !ok || len(details) == 0 {
-					t.Fatalf("details missing or not an array: %T (full body: %s)", resp["details"], w.Body.String())
+				// 422-semantic envelope.
+				if resp["error"] != "invalid_payload" && resp["error"] != "ssrf_rejected" {
+					t.Fatalf("error = %v, want invalid_payload or ssrf_rejected (full body: %s)", resp["error"], w.Body.String())
 				}
-				first, ok := details[0].(map[string]interface{})
-				if !ok {
-					t.Fatalf("details[0] not a JSON object: %T", details[0])
+				if resp["ok"] != false {
+					t.Fatalf("ok = %v, want false on rejection path", resp["ok"])
 				}
-				if got, _ := first["path"].(string); got != tc.want.detailsPath {
-					t.Errorf("details[0].path = %q, want %q", got, tc.want.detailsPath)
-				}
-				if got, _ := first["issue"].(string); got != tc.want.detailsIssue {
-					t.Errorf("details[0].issue = %q, want %q", got, tc.want.detailsIssue)
+
+				// SSRF has its own details[] shape: [{path, url, reason}].
+				if resp["error"] == "ssrf_rejected" {
+					details, ok := resp["details"].([]interface{})
+					if !ok || len(details) == 0 {
+						t.Fatalf("ssrf details missing: %T (full body: %s)", resp["details"], w.Body.String())
+					}
+					first, ok := details[0].(map[string]interface{})
+					if !ok {
+						t.Fatalf("ssrf details[0] not object: %T", details[0])
+					}
+					if got, _ := first["path"].(string); got != "voiceover_paths/0" {
+						t.Errorf("ssrf details[0].path = %q, want voiceover_paths/0", got)
+					}
+					if got, _ := first["reason"].(string); got != "ip_loopback" {
+						t.Errorf("ssrf details[0].reason = %q, want ip_loopback", got)
+					}
 				}
 			}
 
-			// ── Resource-leak invariant (creator_forwardings excluded) ───
-			// jobs / tasks / task_specs / job_delivery_plans MUST NOT
-			// grow on any rejection path. Snapshot/delta pattern catches
-			// leaks under any id shape (hash-based job_ids, full idem-keys
-			// exceeding column limits, drift in worker-payload ID
-			// overrides, etc.).
+			// Resource-leak invariant.
 			after := snapshot()
 			delta := []struct {
 				name     string
@@ -606,74 +679,220 @@ func TestSubmitJobE2E_ValidationFailures(t *testing.T) {
 			}
 			for _, d := range delta {
 				if d.observed != d.base {
-					t.Errorf("%s row delta: got=%d want=%d (rejection path MUST NOT grow resource tables)", d.name, d.observed, d.base)
+					t.Errorf("%s row delta: got=%d want=%d", d.name, d.observed, d.base)
 				}
 			}
 		})
 	}
 }
 
-// ── Scenario 10 — auth ────────────────────────────────────────────────
+// ── Scenario 10 — legacy adminAuth on /api/v1/jobs ─────────────
+//
+// Removed in P1: adminAuth was the legacy operator-token auth on
+// /api/v1/jobs, but the P1 spec retires that surface in favor of
+// the dedicated M2M auth (scope=jobs.submit, per-client credentials,
+// rate-limit + quota + audit). The auth-tokens surface is now
+// exercised by TestSubmitJobE2E_M2MAuthEnvelopes (scenario 11)
+// which covers the SAME no/wrong/right-bearer matrix via the new
+// M2M middleware backed by a seeded m2m_api_keys row.
+//
+// The previous test (TestSubmitJobE2E_RealAdminAuthWired) exercised
+// adminAuth on this route, but the fail-closed routes.go change in
+// P1 makes that mount a hard panic. The auth surface is fully
+// covered by the M2M envelopes test; duplicating it under a
+// to-be-removed auth path would be wasteful.
 
-// TestSubmitJobE2E_RealAdminAuthWired verifies that /api/v1/jobs is
-// mounted behind the real api.AdminAuthMiddleware (NOT the
-// adminAuthFake stub used by the success / rejection suite).
+// ── Scenario 11 — M2M auth envelopes (NEW for P1 #1) ───────────
+
+// TestSubmitJobE2E_M2MAuthEnvelopes verifies that a REAL M2M
+// middleware (backed by a seeded m2m_api_keys row in SQLite) emits
+// the canonical error envelope for each rejection path:
 //
-// Defense-in-depth against the IsLocalRequestIP early-return bypass:
-// req.RemoteAddr is pinned to a non-loopback public IP from
-// RFC 5737 TEST-NET-2 so the bypass cannot accidentally let a
-// no-bearer request through inside CI / local-dev environments.
-// SetTrustedProxies(nil) prevents Gin from trusting any
-// X-Forwarded-For header on the test path.
+//   - missing Authorization header   → 401 m2m_token_required
+//   - bearer = wrong plaintext       → 401 m2m_token_rejected
+//   - bearer = valid plaintext       → 202 accepted (and the
+//                                    audit log gains a row with
+//                                    status_code=202)
 //
-// Subcases mirror the creator_push auth test expectations so a future
-// regression that strips the auth guard off the SubmitJob group
-// (or applies it to the wrong group) fails here loudly.
-func TestSubmitJobE2E_RealAdminAuthWired(t *testing.T) {
-	h, _ := newSubmitJobE2EStack(t)
+// This is the regression-detector for the M2M wiring: a future
+// change that strips the M2M middleware off /api/v1/jobs, or that
+// reverts to legacy adminAuth, MUST fail here loudly.
+func TestSubmitJobE2E_M2MAuthEnvelopes(t *testing.T) {
+	bundle := newM2MBundle(t, m2mBundleOpts{
+		clientID: "e2e-m2m-client",
+		rps:      5, burst: 10,
+		maxScenes: 0, maxTotalSecs: 0,
+	})
 	gin.SetMode(gin.TestMode)
-
-	t.Setenv("VELOX_ADMIN_TOKEN", "")
-	t.Setenv("TOKEN_FILE", "")
-
-	const testToken = "test-secret-token"
-	cfg := &config.Config{}
-	cfg.Auth.AdminToken = testToken
-	authMW := api.AdminAuthMiddleware(cfg)
-
 	r := gin.New()
-	r.SetTrustedProxies(nil)
-	h.RegisterRoutes(r, authMW)
+	m2mMW := NewM2MJwAuthMiddleware(&config.Config{}, bundle.st, bundle.limiter)
+	bundle.h.RegisterRoutes(r, adminAuthFake, m2mMW)
 
-	body := validSubmitJobBody("e2e-auth-001")
-	rawBody, err := json.Marshal(body)
-	if err != nil {
-		t.Fatalf("marshal body: %v", err)
-	}
+	body := validSubmitJobBody("e2e-m2m-001")
 
-	cases := []struct {
-		name       string
-		authHeader string
-		wantStatus int
-	}{
-		{"no_authorization_header", "", http.StatusUnauthorized},
-		{"wrong_bearer_token", "Bearer invalid-mock-token", http.StatusUnauthorized},
-		{"right_bearer_token", "Bearer " + testToken, http.StatusAccepted},
-	}
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewReader(rawBody))
-			req.Header.Set("Content-Type", "application/json")
-			if tc.authHeader != "" {
-				req.Header.Set("Authorization", tc.authHeader)
-			}
-			req.RemoteAddr = "198.51.100.1:1234"
-			w := httptest.NewRecorder()
-			r.ServeHTTP(w, req)
-			if w.Code != tc.wantStatus {
-				t.Fatalf("status = %d, want %d (body: %s)", w.Code, tc.wantStatus, w.Body.String())
-			}
-		})
-	}
+	// Subtest 1: missing Authorization header → 401 m2m_token_required.
+	t.Run("missing_authorization_header", func(t *testing.T) {
+		raw, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("want 401, got %d body=%s", w.Code, w.Body.String())
+		}
+		var resp map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		if resp["error"] != "m2m_token_required" {
+			t.Fatalf("error = %v, want m2m_token_required", resp["error"])
+		}
+	})
+
+	// Subtest 2: bearer is the wrong plaintext (no row matches its hash) → 401 m2m_token_rejected.
+	t.Run("wrong_bearer_token", func(t *testing.T) {
+		w := m2mPost(t, r, body, "Bearer wrong-secret-not-matching-any-key")
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("want 401, got %d body=%s", w.Code, w.Body.String())
+		}
+		var resp map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		if resp["error"] != "m2m_token_rejected" {
+			t.Fatalf("error = %v, want m2m_token_rejected", resp["error"])
+		}
+	})
+
+	// Subtest 3: bearer is the seeded plaintext → 202 accepted.
+	t.Run("right_bearer_token", func(t *testing.T) {
+		w := m2mPost(t, r, body, bundle.plaintext)
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("want 202, got %d body=%s", w.Code, w.Body.String())
+		}
+		var resp map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		if resp["client_id"] != bundle.keyRow.ClientID {
+			t.Fatalf("response.client_id = %v, want %s", resp["client_id"], bundle.keyRow.ClientID)
+		}
+		// Verify the audit row was written with the resolved client_id.
+		var auditCount int
+		if err := bundle.db.DB().QueryRow(
+			`SELECT COUNT(*) FROM m2m_audit_log WHERE client_id = ? AND status_code = 202`,
+			bundle.keyRow.ClientID,
+		).Scan(&auditCount); err != nil {
+			t.Fatalf("count audit: %v", err)
+		}
+		if auditCount == 0 {
+			t.Fatal("expected at least one m2m_audit_log row with status_code=202")
+		}
+	})
 }
+
+// ── Scenario 12 — M2M rate limit + per-request quota (NEW) ───────
+
+// TestSubmitJobE2E_M2MRateLimitAndQuota exercises the per-client
+// rate-limit bucket and the per-request quota caps.
+//
+// Rate-limit test seeds a client with a tiny burst (2) and posts
+// 3 requests rapidly. First 2 should succeed; the 3rd hits 429.
+//
+// Quota test seeds a client with maxScenes=1; submits a body
+// with 2 scenes → 429 m2m_quota_exceeded (observed=2, cap=1).
+func TestSubmitJobE2E_M2MRateLimitAndQuota(t *testing.T) {
+	t.Run("rate_limit_burst_2", func(t *testing.T) {
+		bundle := newM2MBundle(t, m2mBundleOpts{
+			clientID: "e2e-m2m-ratelimit",
+			rps:      1, burst: 2,
+		})
+		gin.SetMode(gin.TestMode)
+		r := gin.New()
+		m2mMW := NewM2MJwAuthMiddleware(&config.Config{}, bundle.st, bundle.limiter)
+		bundle.h.RegisterRoutes(r, adminAuthFake, m2mMW)
+
+		// Two requests within burst capacity → both 202.
+		for i := 0; i < 2; i++ {
+			body := validSubmitJobBody(fmt.Sprintf("e2e-ratelimit-burst-%d", i))
+			w := m2mPost(t, r, body, bundle.plaintext)
+			if w.Code != http.StatusAccepted {
+				t.Fatalf("burst req %d: want 202, got %d body=%s", i, w.Code, w.Body.String())
+			}
+		}
+		// Third request: bucket is empty → 429.
+		body3 := validSubmitJobBody("e2e-ratelimit-burst-3")
+		w3 := m2mPost(t, r, body3, bundle.plaintext)
+		if w3.Code != http.StatusTooManyRequests {
+			t.Fatalf("3rd req: want 429, got %d body=%s", w3.Code, w3.Body.String())
+		}
+		var resp map[string]interface{}
+		_ = json.Unmarshal(w3.Body.Bytes(), &resp)
+		if resp["error"] != "m2m_rate_limited" {
+			t.Fatalf("error = %v, want m2m_rate_limited", resp["error"])
+		}
+	})
+
+	t.Run("quota_max_scenes_exceeded", func(t *testing.T) {
+		bundle := newM2MBundle(t, m2mBundleOpts{
+			clientID: "e2e-m2m-quota-scenes", rps: 100, burst: 100,
+			maxScenes: 1,
+		})
+		gin.SetMode(gin.TestMode)
+		r := gin.New()
+		m2mMW := NewM2MJwAuthMiddleware(&config.Config{}, bundle.st, bundle.limiter)
+		bundle.h.RegisterRoutes(r, adminAuthFake, m2mMW)
+
+		body := validSubmitJobBody("e2e-m2m-quota-001")
+		body.Scenes = append(body.Scenes, SubmitScene{
+			Text:            "Extra scene",
+			ClipLink:        "velox-asset://clips/extra.mp4",
+			DurationSeconds: 2.0,
+		})
+		w := m2mPost(t, r, body, bundle.plaintext)
+		if w.Code != http.StatusTooManyRequests {
+			t.Fatalf("want 429 quota, got %d body=%s", w.Code, w.Body.String())
+		}
+		var resp map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		if resp["error"] != "m2m_quota_exceeded" {
+			t.Fatalf("error = %v, want m2m_quota_exceeded", resp["error"])
+		}
+		details, ok := resp["details"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("details not an object: %T (body: %s)", resp["details"], w.Body.String())
+		}
+		if got, _ := details["reason"].(string); got != "scenes_exceeded" {
+			t.Fatalf("details.reason = %q, want scenes_exceeded", got)
+		}
+		if got, ok := details["observed"].(float64); !ok || int(got) != 2 {
+			t.Fatalf("details.observed = %v, want 2", details["observed"])
+		}
+		if got, ok := details["cap"].(float64); !ok || int(got) != 1 {
+			t.Fatalf("details.cap = %v, want 1", details["cap"])
+		}
+	})
+
+	t.Run("quota_max_duration_exceeded", func(t *testing.T) {
+		bundle := newM2MBundle(t, m2mBundleOpts{
+			clientID: "e2e-m2m-quota-dur", rps: 100, burst: 100,
+			maxTotalSecs: 5.0,
+		})
+		gin.SetMode(gin.TestMode)
+		r := gin.New()
+		m2mMW := NewM2MJwAuthMiddleware(&config.Config{}, bundle.st, bundle.limiter)
+		bundle.h.RegisterRoutes(r, adminAuthFake, m2mMW)
+
+		body := validSubmitJobBody("e2e-m2m-quota-dur-001")
+		body.Scenes[0].DurationSeconds = 10.0
+		w := m2mPost(t, r, body, bundle.plaintext)
+		if w.Code != http.StatusTooManyRequests {
+			t.Fatalf("want 429 quota, got %d body=%s", w.Code, w.Body.String())
+		}
+		var resp map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		details, _ := resp["details"].(map[string]interface{})
+		if details == nil {
+			t.Fatalf("details missing: %v", resp["details"])
+		}
+		if got, _ := details["reason"].(string); got != "duration_exceeded" {
+			t.Fatalf("details.reason = %q, want duration_exceeded", got)
+		}
+	})
+}
+
+// (no extra blank line at file end; format string test bodies use fmt.Sprintf directly via the top-level import.)

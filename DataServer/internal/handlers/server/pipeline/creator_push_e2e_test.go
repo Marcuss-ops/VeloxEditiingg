@@ -140,7 +140,7 @@ func TestCreatorPushJobsE2E_VoiceoverStockClipScene(t *testing.T) {
 	h, db, jobRepo := newCreatorPushE2EStack(t)
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	h.RegisterRoutes(r, adminAuthFake)
+	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
 
 	expectedJobID := enqueue.DeriveForwardingJobID(
 		routing.FormatForwardingKey("creator_pc_1", "creator-job-001", "scene.composite.v1").String(),
@@ -276,7 +276,7 @@ func TestCreatorPushJobsE2E_IncompletePayloadReturns422(t *testing.T) {
 	h, db, _ := newCreatorPushE2EStack(t)
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	h.RegisterRoutes(r, adminAuthFake)
+	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
 
 	body := map[string]interface{}{
 		"source_provider": "creator_pc_1",
@@ -337,7 +337,7 @@ func TestCreatorPushJobsE2E_MissingSourceJobIDReturns400(t *testing.T) {
 	h, db, _ := newCreatorPushE2EStack(t)
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	h.RegisterRoutes(r, adminAuthFake)
+	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
 
 	body := map[string]interface{}{
 		"source_provider": "creator_pc_nosrc",
@@ -405,7 +405,7 @@ func TestCreatorPushJobsE2E_RealAdminAuthWired(t *testing.T) {
 
 	r := gin.New()
 	r.SetTrustedProxies(nil)
-	h.RegisterRoutes(r, authMW)
+	h.RegisterRoutes(r, authMW, m2mJobsAuthFake)
 
 	body := creatorPushE2EBody("creator_pc_auth", "creator-job-auth-001", "scene.composite.v1")
 	rawBody, err := json.Marshal(body)

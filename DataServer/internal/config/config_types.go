@@ -209,6 +209,42 @@ type AuthConfig struct {
 	InstaeditControlJWTSecret string
 }
 
+// M2MConfig holds the runtime knobs controlling the
+// machine-to-machine auth surface on POST /api/v1/jobs. The
+// per-client overrides live on `m2m_api_keys.rate_limit_rps` etc. —
+// values here apply when the per-client override is 0. Keeping the
+// two surfaces separated means operators can adjust defaults without
+// touching the DB, and per-client tiering (paid tier / enterprise)
+// can override the defaults for specific clients without changing
+// every other client.
+type M2MConfig struct {
+	// DefaultRPS is the sustained token-bucket refill rate for
+	// per-client M2M requests. The bucket's CAPACITY is
+	// DefaultBurst, which determines how many requests a client
+	// may send in a single burst before throttling kicks in.
+	DefaultRPS int
+
+	// DefaultBurst is the token-bucket capacity. Setting it to
+	// rps*2 gives ~1s of headroom for legitimate scripted bursts;
+	// setting it too high lets a single client drain the DB.
+	DefaultBurst int
+
+	// MaxScenesPerRequest caps the total scene count per accepted
+	// POST. Independent of the existing MaxScenes cap on a single
+	// SubmitJobRequest; the per-request quota is the additional
+	// ceiling enforced at the M2M layer (away from the validator
+	// surface so a single request body of 10k scenes doesn't sneak
+	// past the per-request quota).
+	MaxScenesPerRequest int
+
+	// MaxTotalDurationSecondsPerRequest caps the summed
+	// SubmitScene.DurationSeconds at request time. The rationale
+	// mirrors MaxScenesPerRequest: a legitimate video rarely
+	// exceeds an hour; anything longer is almost certainly
+	// misconfigured / abusive.
+	MaxTotalDurationSecondsPerRequest float64
+}
+
 // StorageConfig holds S3/MinIO/R2 settings.
 type StorageConfig struct {
 	Endpoint    string
@@ -265,6 +301,7 @@ type Config struct {
 	Workers   WorkersConfig
 	Retention RetentionConfig
 	Auth      AuthConfig
+	M2M       M2MConfig
 	Storage   StorageConfig
 	Drive     DriveConfig
 	Ansible   AnsibleConfig
@@ -272,4 +309,15 @@ type Config struct {
 	Render    RenderConfig
 	NVIDIA    NVIDIAConfig
 	Pipeline  PipelineConfig
+
+	// AllowedExternalDomains is the explicit allowlist applied to
+	// outgoing URLs submitted via POST /api/v1/jobs
+	// (voiceover_paths, scenes.clip_link, scenes.image_link). When
+	// empty, only the SSRF blocklist is enforced (private /
+	// loopback / metadata IPs are denied; everything else is
+	// allowed). When non-empty, an entry is the precise hostname
+	// suffix or a `*.foo.com` wildcard. See
+	// internal/handlers/server/pipeline/ssrf_url.go for the full
+	// policy.
+	AllowedExternalDomains []string
 }

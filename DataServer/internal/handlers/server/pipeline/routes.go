@@ -36,9 +36,15 @@ import (
 
 // RegisterRoutes mounts all pipeline endpoints on the given engine.
 //
-//	adminAuth — when non-nil, applied to operator and creator push routes.
-//	             Pass nil for trusted-network or test mounts.
-func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth gin.HandlerFunc) {
+// adminAuth — when non-nil, applied to creator push + remote/pipeline
+//             + canonical pipeline-runs groups (and to AdminAuth-
+//             surfaced admin endpoints via the composition root).
+// m2mJobsAuth — when non-nil, applied EXCLUSIVELY to /api/v1/jobs
+//             (the simplified M2M intake). When nil
+//             m2mJobsAuth falls back to adminAuth so older test mounts
+//             continue to work — production wiring MUST supply a real
+//             M2M middleware (see cmd/server/router.go::registerPipelineRoutes).
+func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth, m2mJobsAuth gin.HandlerFunc) {
 	r.POST("/api/script-simple", h.ScriptSimple())
 	r.POST("/api/script-multiple", h.ScriptBatch())
 
@@ -57,11 +63,27 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth gin.HandlerFunc) {
 	creator.POST("/jobs", h.CreatorPush())
 	creator.POST("/assets", h.CreatorAssetUpload())
 
-	// Simplified job submission for external automation.
+	// Simplified job submission for external M2M automation. The
+	// handler reads m2m_client_id from context (set by the M2M
+	// middleware) and stamps creator_forwardings.external_client_id.
+	// Falls back to adminAuth when m2mJobsAuth is nil so unit-test
+	// mounts retain the legacy "ops-only via VELOX_ADMIN_TOKEN"
+	// shape; production wiring in cmd/server/router.go always passes
+	// a real m2mJobsAuth.
 	jobs := r.Group("/api/v1/jobs")
-	if adminAuth != nil {
-		jobs.Use(adminAuth)
+	if m2mJobsAuth == nil {
+		// Fail-closed: a misconfigured deploy that forgot to wire
+		// the M2M middleware silently regresses to adminAuth, which
+		// is the very surface this commit retires. Loud boot
+		// failure here closes the regression. Log+Fatal matches the
+		// existing wiring pattern in cmd/server/router.go for nil
+		// Resolver. Test mounts that want the legacy adminAuth
+		// behaviour on this path should wrap adminAuth in a
+		// middleware that ALSO satisfies M2MAuth contracts (e.g.
+		// the in-package m2mJobsAuthFake shim).
+		panic("pipeline.RegisterRoutes: /api/v1/jobs requires m2mJobsAuth; adminAuth fallback is forbidden by P1 spec (use m2mJobsAuthFake or pass a wrapped middleware for test mounts)")
 	}
+	jobs.Use(m2mJobsAuth)
 	jobs.POST("", h.SubmitJob())
 
 	// Canonical, versioned pipeline-runs API. The POST creates a

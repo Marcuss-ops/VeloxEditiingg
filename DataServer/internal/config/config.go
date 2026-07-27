@@ -43,20 +43,24 @@ func FromEnv() *Config {
 	nvidia := loadNVIDIAConfig()
 
 	pipeline := loadPipelineConfig()
+	m2m := loadM2MConfig()
+	allowedDomains := loadAllowedExternalDomains()
 	c := &Config{
-		Server:    server,
-		Runtime:   runtime,
-		Database:  database,
-		Workers:   workers,
-		Retention: retention,
-		Auth:      auth,
-		Storage:   storage,
-		Drive:     drive,
-		Ansible:   ansible,
-		Frontend:  frontend,
-		Render:    render,
-		NVIDIA:    nvidia,
-		Pipeline:  pipeline,
+		Server:                 server,
+		Runtime:                runtime,
+		Database:               database,
+		Workers:                workers,
+		Retention:              retention,
+		Auth:                   auth,
+		M2M:                    m2m,
+		Storage:                storage,
+		Drive:                  drive,
+		Ansible:                ansible,
+		Frontend:               frontend,
+		Render:                 render,
+		NVIDIA:                 nvidia,
+		Pipeline:               pipeline,
+		AllowedExternalDomains: allowedDomains,
 	}
 	return c
 }

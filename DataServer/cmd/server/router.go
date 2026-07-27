@@ -261,13 +261,24 @@ func newRouter(cfg *config.Config, bundle RouterBundle, registry interface {
 
 	// ── Remaining (non-module) routes wired per their own deps bundle ───
 	registerScriptRoutes(r, bundle.Script)
-	registerPipelineRoutes(r, auth, bundle.Pipeline)
+	// registerPipelineRoutes takes (adminAuth, m2mAuth); the M2M
+	// middleware is constructed here from the production SQLite
+	// store + M2M defaults. The composition root is the only place
+	// that mints the bucket map + middleware closure; tests build
+	// their own directly via pipeline.NewM2MJwAuthMiddleware.
+	registerPipelineRoutes(r, auth, newM2MJwAuthFromBundle(cfg, bundle.Pipeline), bundle.Pipeline)
 	registerDarkeditorRoutes(r, bundle.Darkeditor)
 	registerUploadRoutes(r, bundle.Upload)
 	registerMetricsRoutes(r, bundle.Metrics)
 	if err := registerInstaEditRoutes(r, bundle.InstaEdit); err != nil {
 		return nil, err
 	}
+
+	// ── Admin CRUD for M2M API keys + audit log (still guarded by
+	//    adminAuth so operators — NOT external M2M clients — can
+	//    rotate/disable keys). Mounted under /api/v1/admin/m2m so it
+	//    follows the existing /api/v1/admin/* convention.
+	registerM2MAdminRoutes(r, auth, bundle.Pipeline.SQLiteStore)
 
 	return r, nil
 }
@@ -330,6 +341,10 @@ func logRegisteredRoutesAtBoot(r *gin.Engine) {
 // but since jobs.Repository (the canonical surface) satisfies BOTH
 // interfaces by structural typing, the same value passes for both.
 //
+// m2mAuth is applied EXCLUSIVELY to /api/v1/jobs (the M2M intake).
+// Every other group keeps the legacy adminAuth. nil m2mAuth falls
+// back to adminAuth so test mounts retain the legacy shape.
+//
 // Blocco 4 step #3: the legacy fallback to NewHandlersFull (which
 // constructed a forwarder Service shim) is gone. Resolver is the
 // SINGLE authoritative forward-completed entry point; the composition
@@ -337,7 +352,7 @@ func logRegisteredRoutesAtBoot(r *gin.Engine) {
 // unconditionally. A nil Resolver at this layer is a wiring bug and
 // refuses to start (log.Fatal) — surfacing it at boot instead of
 // letting clients see 404s later.
-func registerPipelineRoutes(r *gin.Engine, auth gin.HandlerFunc, deps PipelineRouteDeps) {
+func registerPipelineRoutes(r *gin.Engine, auth, m2mAuth gin.HandlerFunc, deps PipelineRouteDeps) {
 	if deps.Enqueuer == nil || deps.JobsRepo == nil {
 		return
 	}
@@ -350,7 +365,7 @@ func registerPipelineRoutes(r *gin.Engine, auth gin.HandlerFunc, deps PipelineRo
 		pipeline.NewRemoteClientFromConfig(deps.Cfg),
 		deps.Resolver,
 		deps.JobsRepo, deps.JobsRepo, deps.CmdMgr,
-	).WithStore(deps.SQLiteStore).WithTaskReader(deps.TaskReader).WithAssetService(deps.AssetService).WithIntakeSink(velmetrics.NewCreatorIntakeSink()).RegisterRoutes(r, auth)
+	).WithStore(deps.SQLiteStore).WithTaskReader(deps.TaskReader).WithAssetService(deps.AssetService).WithIntakeSink(velmetrics.NewCreatorIntakeSink()).RegisterRoutes(r, auth, m2mAuth)
 }
 
 // registerDarkeditorRoutes mounts the legacy /api/darkeditor/dark_editor_v2
@@ -448,4 +463,54 @@ func registerMetricsRoutes(r *gin.Engine, deps MetricsRouteDeps) {
 		return
 	}
 	r.GET("/metrics", gin.WrapH(deps.Registry.Handler()))
+}
+
+// newM2MJwAuthFromBundle constructs the M2M middleware for the
+// /api/v1/jobs group from the RouterBundle. The middleware is
+// pure (no hidden state) so the only mutable piece — the
+// in-memory token-bucket ledger — is LOCAL to this function and
+// dies when the master stops. SQLite is the source of truth for
+// credentials; the rate-limit ledger is intentionally in-memory
+// for the NoSQLiteLock contention reason documented in
+// handlers/server/pipeline/m2m_auth.go.
+//
+// nil cfg / nil SQLiteStore returns nil — caller treats nil
+// m2mAuth as "fall back to adminAuth" so unit-test mounts
+// retain compatibility. Production wiring always supplies both.
+func newM2MJwAuthFromBundle(cfg *config.Config, deps PipelineRouteDeps) gin.HandlerFunc {
+	if cfg == nil || deps.SQLiteStore == nil {
+		return nil
+	}
+	return pipeline.NewM2MJwAuthMiddleware(cfg, deps.SQLiteStore, nil)
+}
+
+// registerM2MAdminRoutes mounts the admin CRUD endpoints for M2M
+// API keys + audit log under /api/v1/admin/m2m/* . The endpoints
+// are guarded by the OPERATOR'S adminAuth (VELOX_ADMIN_TOKEN) —
+// NOT M2M — because a M2M client must NOT be able to mint another
+// client's credentials (else the rate-limit + audit-trail model
+// collapses). The split:
+//   - /api/v1/jobs           → m2mAuth    (per-client credentials)
+//   - /api/v1/admin/m2m/keys → adminAuth  (operator manage keys)
+// is the canonical authorization boundary.
+//
+// nil SQLiteStore is treated as "feature disabled" — routes
+// skipped silently — so dev/test wiring that doesn't include a
+// store still boots (the bootstrap log line tells the operator
+// what happened).
+func registerM2MAdminRoutes(r *gin.Engine, auth gin.HandlerFunc, st *store.SQLiteStore) {
+	if st == nil {
+		log.Printf("[ROUTES] M2M admin routes skipped: store=nil")
+		return
+	}
+	if auth == nil {
+		log.Fatalf("[ROUTES] M2M admin routes require adminAuth (auth=nil); refusing to start")
+	}
+	admin := r.Group("/api/v1/admin/m2m", auth)
+	admin.POST("/keys", api.IssueM2MKey(st))
+	admin.GET("/keys", api.ListM2MKeys(st))
+	admin.GET("/keys/:client_id", api.GetM2MKey(st))
+	admin.DELETE("/keys/:client_id", api.DisableM2MKey(st))
+	admin.GET("/audit", api.ListM2MAudit(st))
+	log.Printf("[ROUTES] M2M admin routes mounted under /api/v1/admin/m2m")
 }

@@ -6,6 +6,22 @@ import (
 	"strings"
 )
 
+// floatFromEnv reads key from the environment and parses it as a float.
+// Returns defaultVal when unset/empty/parse-fail, OR when the parsed
+// value is below min. min=0 accepts any non-negative value; min=1
+// enforces "> 1.0" rejection at boot time.
+func floatFromEnv(key string, defaultVal, min float64) float64 {
+	raw, ok := os.LookupEnv(key)
+	if !ok || raw == "" {
+		return defaultVal
+	}
+	v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil || v < min {
+		return defaultVal
+	}
+	return v
+}
+
 func parseCommaList(s string) []string {
 	if s == "" {
 		return nil
