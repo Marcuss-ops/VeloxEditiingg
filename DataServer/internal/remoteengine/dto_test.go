@@ -291,7 +291,7 @@ func TestParseRemotePipelineResult_ScenesArray(t *testing.T) {
 		t.Fatalf("Scenes[1]: got %+v", dto.Scenes[1])
 	}
 	if dto.Scenes[1].DurationSeconds != 5 {
-		t.Fatalf("Scenes[1].DurationSeconds: got %d, want 5", dto.Scenes[1].DurationSeconds)
+		t.Fatalf("Scenes[1].DurationSeconds: got %v, want 5", dto.Scenes[1].DurationSeconds)
 	}
 }
 

@@ -139,8 +139,14 @@ type SceneResult struct {
 	ImageLink string `json:"image_link,omitempty"`
 	// ClipLink is an alternative to ImageLink for video-clip-based scenes.
 	ClipLink string `json:"clip_link,omitempty"`
-	// DurationSeconds is the intended duration of the scene (0 = auto).
-	DurationSeconds int `json:"duration_seconds,omitempty"`
+	// DurationSeconds is the intended duration of the scene in seconds.
+	// The OpenAPI contract on SubmitScene enforces 0.1 <= duration_seconds
+	// <= 86400; the type is float64 so sub-second values (e.g. 0.1) survive
+	// the JSON round-trip WITHOUT truncation. An int type would silently
+	// turn "0.1" into "0" via the float64->int cast, an explicit
+	// cross-package dependency that was neutralised when the SubmitJob
+	// contract adopted sub-second durations for fine-grained scene cuts.
+	DurationSeconds float64 `json:"duration_seconds,omitempty"`
 }
 
 // VoiceoverResult holds the voiceover audio reference(s).
@@ -359,7 +365,7 @@ func convertRawScenes(raw []interface{}) []SceneResult {
 			ClipLink:  payload.FirstString(m, "clip_link", "clip_url", "video_link"),
 		}
 		if dur, ok := m["duration_seconds"].(float64); ok {
-			scene.DurationSeconds = int(dur)
+			scene.DurationSeconds = dur
 		}
 		scenes = append(scenes, scene)
 	}

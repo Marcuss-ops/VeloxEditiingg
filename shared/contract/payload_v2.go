@@ -52,6 +52,7 @@ type JobPayloadV2 struct {
 	ScriptText      string           `json:"script_text"`
 	ScenesJSON      string           `json:"scenes_json,omitempty"`
 	Scenes          []map[string]any `json:"scenes,omitempty"`
+	Layers          []map[string]any `json:"layers,omitempty"`
 	VoiceoverPaths  []string         `json:"voiceover_paths,omitempty"`
 	AudioLanguage   string           `json:"audio_language_for_srt,omitempty"`
 	VideoMode       string           `json:"video_mode,omitempty"`
@@ -140,6 +141,20 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 			p.Scenes = out
 		}
 	}
+	if layersVal, ok := raw["layers"]; ok {
+		switch s := layersVal.(type) {
+		case []map[string]any:
+			p.Layers = append([]map[string]any{}, s...)
+		case []any:
+			out := make([]map[string]any, 0, len(s))
+			for _, item := range s {
+				if m, ok := item.(map[string]any); ok {
+					out = append(out, m)
+				}
+			}
+			p.Layers = out
+		}
+	}
 	if p.JobID == "" {
 		p.JobID = "scriptimg_" + uuid.NewString()
 	}
@@ -198,6 +213,9 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 	}
 	if len(p.Scenes) > 0 {
 		out["scenes"] = p.Scenes
+	}
+	if len(p.Layers) > 0 {
+		out["layers"] = p.Layers
 	}
 	if len(p.VoiceoverPaths) > 0 {
 		out["voiceover_paths"] = p.VoiceoverPaths
