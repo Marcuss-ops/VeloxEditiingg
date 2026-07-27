@@ -31,10 +31,43 @@ func FromContext(c *gin.Context) *Claims {
 	return claims
 }
 
+// 403 body shape — produced by Middleware / MiddlewareWithOperation
+// on insufficient scope. Designed to satisfy the spec's
+// "messaggio chiaro" requirement: an operator who sees this body can
+// immediately tell:
+//
+//   - what the JWT lacked (required_scopes);
+//   - what the JWT actually carried (presented_scopes, which may be
+//     nil when claims.Scopes is unset — e.g. on tokens issued by an
+//     older InstaEdit build);
+//   - which Velox route rejected them (route, exact URL path);
+//   - which logical operation they attempted (operation, set by
+//     MiddlewareWithOperation callers — falls back to "-" when the
+//     generic Middleware is used);
+//   - how to remediate (hint, a fixed instruction string).
+//
+// All 5 fields are unconditionally present on a 403 from this
+// package so downstream consumers can rely on the schema being
+// stable across handlers.
+type scopeDenialBody struct {
+	Error           string   `json:"error"`
+	RequiredScopes  []string `json:"required_scopes"`
+	PresentedScopes []string `json:"presented_scopes"`
+	Operation       string   `json:"operation"`
+	Route           string   `json:"route"`
+	Hint            string   `json:"hint"`
+}
+
+// scopedHint is the operator-facing remediation string baked into the
+// 403 body. Keep it stable: the BFF may surface it verbatim to the
+// dark-editor SPA's "why was this rejected?" UI.
+const scopedHint = "the InstaEdit BFF must re-mint the control JWT with at least the required_scopes; this is a server-side misconfiguration (or a Velox route demanding a higher grant than the BFF is currently issuing for this operation)."
+
 // Middleware returns a Gin middleware that verifies the InstaEdit JWT
 // from the Authorization: Bearer header. On success it stamps the
 // Claims into the context and calls c.Next(). On failure it aborts
-// with 401/403/503.
+// with 401 (bad/expired token or forged header), 403 (insufficient
+// scope), or 503 (server misconfiguration).
 //
 // CRITICAL: free headers X-User-ID and X-Workspace-ID are NEVER
 // trusted. The middleware actively REJECTS requests that carry these
@@ -44,9 +77,30 @@ func FromContext(c *gin.Context) *Claims {
 // the verified JWT claims.
 //
 // requiredScopes is the scope list the endpoint demands. When the JWT
-// does not include all of them, the middleware aborts with 403. Pass
-// nil to skip scope enforcement (identity-only verification).
+// does not include all of them, the middleware aborts with the
+// enriched 403 body documented on scopeDenialBody (route extracted
+// from c.Request.URL.Path, operation = "-", hint = scopedHint).
+//
+// Use MiddlewareWithOperation when a per-handler operation label
+// (e.g. "publish_thumbnail_session") improves the operator's
+// diagnosis.
 func Middleware(verifier *Verifier, requiredScopes []string) gin.HandlerFunc {
+	return MiddlewareWithOperation(verifier, requiredScopes, "-")
+}
+
+// MiddlewareWithOperation is the operation-tagged variant of
+// Middleware. The operation argument is a short snake_case label that
+// the 403 body exposes under the "operation" field. Operators reading
+// the response can grep the InstaEdit BFF source / Velox route table
+// for the label without having to cross-reference path wildcards.
+//
+// "publish_thumbnail_session", "read_editor_project", "upload_editor_asset",
+// "list_editor_workers" are example operation labels.
+//
+// The label MUST be a stable identifier — the architecture roadmap
+// tracks it as a contract the dark-editor UI's "why rejected" panel
+// may display verbatim.
+func MiddlewareWithOperation(verifier *Verifier, requiredScopes []string, operation string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Defense-in-depth: reject free identity headers up front so
 		// a caller cannot smuggle user_id / workspace_id without a
@@ -97,11 +151,7 @@ func Middleware(verifier *Verifier, requiredScopes []string) gin.HandlerFunc {
 
 		// Scope enforcement (when requiredScopes is non-empty).
 		if len(requiredScopes) > 0 && !claims.HasAllScopes(requiredScopes...) {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-				"error":            "insufficient scope",
-				"required_scopes":  requiredScopes,
-				"presented_scopes": claims.Scopes,
-			})
+			abortInsufficientScope(c, requiredScopes, claims.Scopes, operation)
 			return
 		}
 
@@ -111,6 +161,24 @@ func Middleware(verifier *Verifier, requiredScopes []string) gin.HandlerFunc {
 		c.Set(ctxKeyClaims, claims)
 		c.Next()
 	}
+}
+
+// abortInsufficientScope writes the enriched 403 body. Centralized
+// here so the shape is identical across Middleware and
+// MiddlewareWithOperation call sites — adding a new field to the
+// 403 body means one edit, not 4+ duplicated literals.
+func abortInsufficientScope(c *gin.Context, required, presented []string, operation string) {
+	if operation == "" {
+		operation = "-"
+	}
+	c.AbortWithStatusJSON(http.StatusForbidden, scopeDenialBody{
+		Error:           "insufficient scope",
+		RequiredScopes:  required,
+		PresentedScopes: presented,
+		Operation:       operation,
+		Route:           c.Request.URL.Path,
+		Hint:            scopedHint,
+	})
 }
 
 // hasFreeIdentityHeaders reports whether the request carries
