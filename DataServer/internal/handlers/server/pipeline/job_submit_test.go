@@ -75,26 +75,6 @@ func TestSubmitJobBuildsWorkerPayloadCorrectly(t *testing.T) {
 	}
 }
 
-func TestTruncateKey(t *testing.T) {
-	tests := []struct {
-		s    string
-		n    int
-		want string
-	}{
-		{"short", 10, "short"},
-		{"this-is-a-long-key", 10, "this-is-a-"},
-		{"", 5, ""},
-		{"abc", 3, "abc"},
-	}
-
-	for _, tt := range tests {
-		got := truncateKey(tt.s, tt.n)
-		if got != tt.want {
-			t.Errorf("truncateKey(%q, %d) = %q, want %q", tt.s, tt.n, got, tt.want)
-		}
-	}
-}
-
 func TestSubmitJobRejectsEmptyIdempotencyKey(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -156,5 +136,49 @@ func TestSubmitJobRejectsZeroDurationScene(t *testing.T) {
 
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+// TestLogHashIdempotencyKey locks the truncation invariant promised by the
+// logHashIdempotencyKey helper. Without this, a future PR that flips to
+// [:16] for "more entropy" or breaks on an upstream crypto library update
+// goes unnoticed — the operator log line would silently change format.
+//
+// Three assertions:
+//
+//   (1) Length == 12 hex chars: matches the documented "48 bits of
+//       entropy — ample to distinguish concurrent jobs" choice.
+//
+//   (2) Same input yields the same hash on every call. This locks the
+//       SHA-256 determinism property that an operator relies on when
+//       searching Loki / journald for a specific job.
+//
+//   (3) Distinct inputs yield distinct hashes. With SHA-256 truncated
+//       to 48 bits, collision is theoretically possible but the test
+//       catches accidental no-op regressions (e.g., helper returning
+//       a constant or zero string) immediately.
+func TestLogHashIdempotencyKey(t *testing.T) {
+	t.Parallel()
+
+	// (1) Length == 12 hex chars.
+	got := logHashIdempotencyKey("video-001")
+	if len(got) != 12 {
+		t.Errorf("hash length = %d, want 12", len(got))
+	}
+	for _, c := range got {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			t.Errorf("hash char %q is not lowercase hex", c)
+			break
+		}
+	}
+
+	// (2) Same input → same hash.
+	if a, b := logHashIdempotencyKey("key-X"), logHashIdempotencyKey("key-X"); a != b {
+		t.Errorf("hash not deterministic: %q vs %q", a, b)
+	}
+
+	// (3) Distinct inputs → distinct hashes.
+	if a, b := logHashIdempotencyKey("video-001"), logHashIdempotencyKey("video-002"); a == b {
+		t.Errorf("distinct inputs produced same hash: %q", a)
 	}
 }

@@ -88,23 +88,84 @@ func (m InternalRoutingMetadata) InjectIntoPayload(target map[string]interface{}
 }
 
 // FormatForwardingKey builds a ForwardingKey from its components.
+//
+// The components MUST NOT contain a literal `:` (the separator) or `%`
+// (the escape character), since producing a working round-trip with
+// Parse requires both to be encoded. Callers that pass user-supplied
+// strings through (POST /api/v1/creator/jobs, POST /api/v1/jobs)
+// MUST validate the input first; see the
+// handlers/server/pipeline/idempotency_validation helper which rejects
+// `:` and other control characters at the HTTP boundary.
+//
+// Components containing `:` or `%` ARE encoded here as a defense-in-
+// depth measure so historical callers can still emit safe keys without
+// doing pre-validation, even though the safer contract is for the
+// input layer to reject them outright. Clean ASCII components leave
+// the encoded form byte-identical to the pre-encoding string, so
+// existing DB rows (forwarding_key column) remain readable.
 func FormatForwardingKey(provider, sourceJobID, executorID string) ForwardingKey {
-	return ForwardingKey(fmt.Sprintf("%s:%s:%s", provider, sourceJobID, executorID))
+	return ForwardingKey(fmt.Sprintf("%s:%s:%s",
+		escapeForwardingKeyComponent(provider),
+		escapeForwardingKeyComponent(sourceJobID),
+		escapeForwardingKeyComponent(executorID),
+	))
 }
 
 // ParseForwardingKey splits a ForwardingKey back into its components.
+//
+// The split honours any `%3A` (encoded `:`) and `%25` (encoded `%`)
+// escapes emitted by FormatForwardingKey. A pre-existing ForwardingKey
+// produced without escaping (legacy data) is still split cleanly when
+// it contains none of `:` or `%`; if it contains an unmangled `:`
+// inside what is supposed to be a single component, the result will
+// silently be wrong — callers upgrading must run a one-time migration
+// to rewrite historical rows. New producers MUST go through
+// FormatForwardingKey which encodes consistently.
 func (k ForwardingKey) Parse() (provider, sourceJobID, executorID string) {
 	parts := strings.SplitN(string(k), ":", 3)
 	if len(parts) >= 1 {
-		provider = parts[0]
+		provider = unescapeForwardingKeyComponent(parts[0])
 	}
 	if len(parts) >= 2 {
-		sourceJobID = parts[1]
+		sourceJobID = unescapeForwardingKeyComponent(parts[1])
 	}
 	if len(parts) >= 3 {
-		executorID = parts[2]
+		executorID = unescapeForwardingKeyComponent(parts[2])
 	}
 	return
+}
+
+// escapeForwardingKeyComponent escapes the bytes that would break the
+// writer/reader symmetry of ForwardingKey.Parse: a literal `:` would
+// shift the column of every component, and a literal `%` would mangle
+// any escape sequence that follows. `%` is escaped first so the
+// escaped form of `%` itself does not collide with `%3A`.
+//
+// All other bytes pass through unchanged. The function is the single
+// mirror of unescapeForwardingKeyComponent; changing one without the
+// other is a writer/reader asymmetry bug.
+func escapeForwardingKeyComponent(s string) string {
+	if s == "" {
+		return s
+	}
+	s = strings.ReplaceAll(s, "%", "%25")
+	s = strings.ReplaceAll(s, ":", "%3A")
+	return s
+}
+
+// unescapeForwardingKeyComponent is the inverse of
+// escapeForwardingKeyComponent. We unescape `%25` first so that an
+// escaped `%` does not collide with the prefix of `%3A` in the second
+// pass. A malformed input (a `%` not followed by `25` or `3A`) is
+// preserved as-is rather than silently dropped, so future operators
+// can spot the bug rather than mis-split a forwarding key invisible.
+func unescapeForwardingKeyComponent(s string) string {
+	if s == "" {
+		return s
+	}
+	s = strings.ReplaceAll(s, "%25", "%")
+	s = strings.ReplaceAll(s, "%3A", ":")
+	return s
 }
 
 // InjectIntoPayload writes this ForwardingKey into the target map under

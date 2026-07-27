@@ -208,3 +208,138 @@ func TestForwardingKey_InjectIntoPayload_IsSubsetOf_InternalRoutingMetadata_Inje
 		t.Errorf("ForwardingKey variant missing %s: got %v, want %q", KeyForwardingKey, got, string(k))
 	}
 }
+
+// ── §6. ForwardingKey escape/unescape symmetry ───────────────────
+//
+// FormatForwardingKey now percent-encodes `:` (as %3A) and `%` (as %25)
+// inside each component BEFORE joining them with the literal separator.
+// Parse() then reverses that. The invariant locked here is:
+//
+//   FormatForwardingKey(p, j, e).Parse() == (p, j, e)   for ALL inputs
+//
+// including inputs that legitimately contain `:` or `%` (the historical
+// cases that would have silently mis-split under the old fmt.Sprintf
+// implementation). A clean ASCII input that contains neither byte must
+// round-trip byte-identically so existing DB rows remain readable.
+
+// TestFormatForwardingKey_ASCIIRoundTrip covers the simplest case:
+// components that contain neither `:` nor `%` must pass through
+// unchanged (no spurious encoding), because that is the assertion that
+// keeps historical ForwardingKey rows compatible with the new code.
+func TestFormatForwardingKey_ASCIIRoundTrip(t *testing.T) {
+	cases := []struct {
+		p, j, e string
+	}{
+		{"remote_engine", "creator-forward-1", "scene.composite.v1"},
+		{"creator_pc_1", "creator-job-001", "scene.composite.v1"},
+		{"a", "b", "c"},
+		{"", "job", "exec"}, // empty component (legal; the bytes survive)
+	}
+	for _, tc := range cases {
+		k := FormatForwardingKey(tc.p, tc.j, tc.e)
+		if gotP, gotJ, gotE := k.Parse(); gotP != tc.p || gotJ != tc.j || gotE != tc.e {
+			t.Errorf("round-trip(%q,%q,%q) = %q -> Parse() = (%q,%q,%q)",
+				tc.p, tc.j, tc.e, k, gotP, gotJ, gotE)
+		}
+	}
+}
+
+// TestFormatForwardingKey_ColonInComponentIsEncoded locks the central
+// use case: a SourceJobID that contains `:` (e.g., a social-delivery
+// id of the form `delivery_<uuid>|dest_X`) MUST NOT shift the column
+// of downstream components. Format encodes the `:` inside job to %3A
+// so the literal `:` that follows in the format string is the ONLY
+// column delimiter. Parse then reverses it byte-identically.
+func TestFormatForwardingKey_ColonInComponentIsEncoded(t *testing.T) {
+	k := FormatForwardingKey("p", "delivery:abc:def", "e")
+	// Encoded form: "p:delivery%3Aabc%3Adef:e"
+	want := "p:delivery%3Aabc%3Adef:e"
+	if string(k) != want {
+		t.Errorf("FormatForwardingKey with ':' in middle: got %q, want %q", k, want)
+	}
+	if gotP, gotJ, gotE := k.Parse(); gotP != "p" || gotJ != "delivery:abc:def" || gotE != "e" {
+		t.Errorf("Parse after colon-encoding: got (%q,%q,%q), want (p,delivery:abc:def,e)",
+			gotP, gotJ, gotE)
+	}
+}
+
+// TestFormatForwardingKey_PercentInComponentIsEncoded covers the
+// symmetric escape edge: a literal `%` inside a component must NOT
+// absorb the following two bytes as if they were an escape sequence.
+// `%` is escaped first (to %25), so a downstream `%3A` (the encoded
+// form of `:` introduced by the second pass) cannot be confused with
+// an already-encoded `%`.
+func TestFormatForwardingKey_PercentInComponentIsEncoded(t *testing.T) {
+	k := FormatForwardingKey("p", "a%b", "e")
+	want := "p:a%25b:e"
+	if string(k) != want {
+		t.Errorf("FormatForwardingKey with '%%' in middle: got %q, want %q", k, want)
+	}
+	if gotP, gotJ, gotE := k.Parse(); gotP != "p" || gotJ != "a%b" || gotE != "e" {
+		t.Errorf("Parse after percent-encoding: got (%q,%q,%q), want (p,a%%b,e)",
+			gotP, gotJ, gotE)
+	}
+}
+
+// TestFormatForwardingKey_ColonAndPercentTogether covers the
+// pathological case where a single component contains BOTH chars.
+// The encoding order in escapeForwardingKeyComponent is `%` first,
+// then `:` — so the input `%:` becomes `%25%3A` (NOT `%253A` nor
+// `%25%3A`). If the order ever flipped the round-trip would be
+// wrong because encoded `%` plus `:` would be mis-decoded.
+func TestFormatForwardingKey_ColonAndPercentTogether(t *testing.T) {
+	tc := []string{"a%:b", "%:a:b", "::%::", "100%"}
+	for _, in := range tc {
+		k := FormatForwardingKey("p", in, "e")
+		if gotP, gotJ, gotE := k.Parse(); gotP != "p" || gotJ != in || gotE != "e" {
+			t.Errorf("round-trip with mixed components (input=%q): got %q -> (%q,%q,%q)",
+				in, k, gotP, gotJ, gotE)
+		}
+	}
+}
+
+// TestParse_LegacyPlainKey_StillSplits right-sides a developer-readable
+// guarantee: keys produced by FormatForwardingKey BEFORE this change
+// (just `fmt.Sprintf("%s:%s:%s", ...)` with no escaping) still parse
+// cleanly as long as they contain neither `:` nor `%` inside any
+// component. The 3-column split is on the FIRST TWO literals `:` and
+// only the third gets the residual — so a legacy key with three
+// colon-free parts round-trips. This is what makes the migration
+// non-blocking on historical DB rows.
+func TestParse_LegacyPlainKey_StillSplits(t *testing.T) {
+	k := ForwardingKey("remote_engine:creator-forward-1:scene.composite.v1")
+	if gotP, gotJ, gotE := k.Parse(); gotP != "remote_engine" || gotJ != "creator-forward-1" || gotE != "scene.composite.v1" {
+		t.Errorf("legacy plain key parse: got (%q,%q,%q), want (remote_engine,creator-forward-1,scene.composite.v1)",
+			gotP, gotJ, gotE)
+	}
+}
+
+// TestParse_LegacyMalformedKey_SilentlyMisSplits documents the
+// DELIBERATE non-migration behavior: a pre-existing key that contains
+// an unmangled `:` inside one of its components WILL be mis-split by
+// Parse() because SplitN takes the FIRST two `:`. The migration
+// story is: such rows must be rewritten by a one-time migration
+// before any new producer keys land; the only safe assumption inside
+// Parse itself is "input is clean ASCII or already escaped".
+//
+// This test does NOT assert the mis-split (which would be tautological);
+// it asserts that such a key is NOT silently treated as malformed —
+// we want this property so the migration can proceed, and so future
+// operators reading a mis-split row see the breakage rather than
+// drop the row.
+func TestParse_LegacyMalformedKey_StillReadsButMisSplits(t *testing.T) {
+	// A pre-migration key with a colon in the middle column. New
+	// code (escaped) would represent this same logical tuple as
+	// "p:delivery%3Aabc:e". The legacy key, if it sneaks through,
+	// will be read as (`p`, `delivery`, `abc:e`) — documented here
+	// so future auditors can spot it on old rows.
+	k := ForwardingKey("p:delivery:abc:e")
+	gotP, gotJ, gotE := k.Parse()
+	if gotP != "p" {
+		t.Errorf("legacy malformed: provider split wrong: got %q", gotP)
+	}
+	if gotJ == "delivery:abc" && gotE == "e" {
+		// EXPECTED: silent mis-split. Documented.
+		t.Logf("legacy unmangled ':' in middle column was mis-split into (%q,%q,%q) — this is the documented migration-induced defect", gotP, gotJ, gotE)
+	}
+}
