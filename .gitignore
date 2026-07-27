@@ -186,3 +186,10 @@ Courser/
 # the time for audit, then removed in the same cleanup pass. Anchored at
 # `ops/` since that was and remains their canonical location.
 ops/rw-prod-*.json
+
+# ── api-gen toolchain output (NEVER commit) ────────────────
+# api-schema-gen + api-docs-gen: Go-compiled ELF binaries produced by the
+# api-gen toolchain in DataServer/. Build artefacts, not source ─
+# they live in DataServer/ because the toolchain is itself a cmd/ under there.
+DataServer/api-schema-gen
+DataServer/api-docs-gen
