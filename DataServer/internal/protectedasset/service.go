@@ -87,9 +87,10 @@ type Service struct {
 	mu       sync.RWMutex
 	snapshot Snapshot
 
-	repo  Repo
-	limit int
-	now   func() time.Time
+	repo    Repo
+	limit   int
+	now     func() time.Time
+	onError func(error) // nil-safe hook for Run loop Refresh failures
 }
 
 // DefaultLookahead is the design-doc canonical limit. Both the
@@ -118,6 +119,20 @@ func NewService(repo Repo, limit int) *Service {
 // for constructor-time wiring.
 func (s *Service) SetClock(now func() time.Time) *Service {
 	s.now = now
+	return s
+}
+
+// WithErrorHandler attaches a callback that receives every error
+// surfaced by the Run() loop on a failed Refresh. The hook is
+// called from the Run goroutine and MUST be cheap & non-blocking
+// (forwarding to slog/metrics is the canonical use); pass nil to
+// unregister (the default).
+//
+// Pass 6 (HTTP handler) should wire this BEFORE the handler is
+// exposed, otherwise a chronically broken Refresh loop fails
+// silently and the endpoint keeps serving a stale snapshot.
+func (s *Service) WithErrorHandler(hook func(error)) *Service {
+	s.onError = hook
 	return s
 }
 
@@ -183,10 +198,12 @@ func (s *Service) Run(ctx context.Context, interval time.Duration) error {
 			return ctx.Err()
 		case <-ticker.C:
 			if err := s.Refresh(ctx); err != nil {
-				// Best-effort: a single refresh failure is logged
-				// upstream (Pass 7 metrics) and the loop continues.
-				// Operators only see this if metrics are missing.
-				_ = err
+				if s.onError != nil {
+					s.onError(err)
+				}
+				// Loop continues regardless — a single failed tick
+				// must NOT halt the periodic poll. Observability is
+				// the caller's job; Pass 6 routes to slog/metrics.
 			}
 		}
 	}
