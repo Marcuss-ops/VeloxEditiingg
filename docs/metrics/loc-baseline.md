@@ -394,7 +394,38 @@ media               55  | #
 
 ## 10c. Known LOC carry-over
 
-`tests/operational/artlist_live_e2e_verify.sh` remains above the shell LOC
-threshold as a pre-existing operational verifier. It is tracked for a future
-split; the CI baseline entry is intentionally explicit and removable when
-that refactor lands.
+The following files currently exceed the per-category LOC threshold defined
+in §11. They are tracked as `KNOWN_VIOLATIONS` in
+`scripts/ci/check-loc-thresholds.sh` so the gate passes on `main`. Each
+entry MUST be removed when the corresponding refactor lands, per §13.
+
+### Round-0 baseline (pre-existing)
+- `tests/operational/artlist_live_e2e_verify.sh` (757 LOC, shell) —
+  pre-existing operational E2E verifier, tracked for Round-4 dedup with
+  `tests/e2e/grpc-control-plane/run.sh` into `tests/_lib/sh/` helpers.
+
+### Round-4 carry-over (snapshot 2026-07-28)
+- `DataServer/internal/handlers/server/pipeline/job_submit.go` (1561 LOC,
+  prod-Go) — split per AGENTS plan step 2 into per-domain files
+  (intake/validation, plan derivation, enqueue, response shaping,
+  telemetry).
+- `DataServer/internal/handlers/server/pipeline/job_submit_e2e_test.go`
+  (1240 LOC, test-Go) — split per AGENTS plan step 3 into per-scenario
+  test families aligned with the job_submit.go split.
+- `tests/e2e/grpc-control-plane/run.sh` (737 LOC, shell) — dedup per
+  AGENTS plan step 7 with `artlist_live_e2e_verify.sh` into
+  `tests/_lib/sh/`.
+- `CHANGELOG.md` (1691 LOC, docs) — append-only release-notes file;
+  threshold exceedance is structural, not refactor-driven.
+- `DataServer/api/openapi.yaml` (1235 LOC, yaml) — OpenAPI 3.x
+  single-source-of-truth spec; refactor requires spec redesign
+  (Round-5+).
+
+### Round-4 gate change
+- `scripts/ci/check-loc-thresholds.sh` gained a `BUILD_NOISE_EXCLUDES`
+  array (nested `*/.git`, `*/node_modules`, `*/build`, `*/.pb-cache`)
+  that is now prepended to every per-category scan. This silences
+  false positives in third-party and CMake build trees that were
+  wrongly tripping the gate. Per-category excludes (e.g.
+  `./docs/archive`, `./shared/controltransport/pb/*.pb.go`) are kept
+  on a per-scan basis.

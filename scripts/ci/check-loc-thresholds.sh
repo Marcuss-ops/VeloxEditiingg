@@ -84,7 +84,48 @@ KNOWN_VIOLATIONS_BASELINE=(
 KNOWN_VIOLATIONS_ROUND1=(
 )
 
-KNOWN_VIOLATIONS=("${KNOWN_VIOLATIONS_BASELINE[@]}" "${KNOWN_VIOLATIONS_ROUND1[@]}")
+# KNOWN_VIOLATIONS_ROUND2 — Round-4 baseline carry-over (snapshot
+# 2026-07-28). Five files landed above threshold via 2026-Q2
+# architectural drift and were never refactored down. Each entry maps
+# to a specific step in the AGENTS.md plan; remove the entry when the
+# corresponding refactor lands.
+#   - job_submit.go             → AGENTS plan step 2 (per-domain split)
+#   - job_submit_e2e_test.go    → AGENTS plan step 3 (per-scenario split)
+#   - grpc-control-plane/run.sh → AGENTS plan step 7 (shell dedup)
+#   - CHANGELOG.md              → structural: monotonically-growing
+#   - openapi.yaml              → structural: spec-driven, Round-5+
+KNOWN_VIOLATIONS_ROUND2=(
+  "DataServer/internal/handlers/server/pipeline/job_submit.go|Round-4 prod-Go carry-over (1561 LOC); split per AGENTS plan step 2 into per-domain files"
+  "DataServer/internal/handlers/server/pipeline/job_submit_e2e_test.go|Round-4 test-Go carry-over (1240 LOC); split per AGENTS plan step 3 into per-scenario tests aligned with job_submit.go"
+  "tests/e2e/grpc-control-plane/run.sh|Round-4 shell carry-over (737 LOC); dedup per AGENTS plan step 7 into tests/_lib/sh/ helpers"
+  "CHANGELOG.md|Round-4 docs carry-over (1691 LOC); structural — monotonically-growing release-notes file, threshold breach expected and not refactor-driven"
+  "DataServer/api/openapi.yaml|Round-4 yaml carry-over (1235 LOC); structural — OpenAPI single-source-of-truth spec, refactor requires spec redesign (Round-5+)"
+)
+
+# BUILD_NOISE_EXCLUDES — extra `find -not -path` predicates to silence
+# false positives in non-source tree locations. Without these, the gate
+# trips on vendored / generated / build artifacts (node_modules, CMake
+# build trees, .pb-cache, .git, .github/workflows). These are passed
+# to every scan_dir call below as the leading path filter; per-category
+# excludes (e.g. ./docs/archive, ./shared/controltransport/pb/*.pb.go)
+# are appended on a per-scan basis. Nested variants (`*/X`, `*/X/*`)
+# are required because top-level `*/X`-only would still walk into the
+# tree; both forms together guarantee that no file ever reaches the
+# threshold check.
+BUILD_NOISE_EXCLUDES=(
+  -not -path './.git'
+  -not -path './.git/*'
+  -not -path '*/.git'
+  -not -path '*/.git/*'
+  -not -path '*/node_modules'
+  -not -path '*/node_modules/*'
+  -not -path '*/build'
+  -not -path '*/build/*'
+  -not -path '*/.pb-cache'
+  -not -path '*/.pb-cache/*'
+)
+
+KNOWN_VIOLATIONS=("${KNOWN_VIOLATIONS_BASELINE[@]}" "${KNOWN_VIOLATIONS_ROUND1[@]}" "${KNOWN_VIOLATIONS_ROUND2[@]}")
 
 VIOLATIONS=0
 KNOWN_HITS=0
@@ -126,29 +167,28 @@ scan_dir() {
 }
 
 scan_dir prod-go "$THRESH_PROD_GO" \
+  "${BUILD_NOISE_EXCLUDES[@]}" \
   -type f -name '*.go' \
   -not -name '*_test.go' \
-  -not -path './.git/*' \
-  -not -path './shared/controltransport/pb/*.pb.go' \
-  -not -path '*/.pb-cache/*'
+  -not -path './shared/controltransport/pb/*.pb.go'
 
 scan_dir test-go "$THRESH_TEST_GO" \
-  -type f -name '*_test.go' \
-  -not -path './.git/*'
+  "${BUILD_NOISE_EXCLUDES[@]}" \
+  -type f -name '*_test.go'
 
 scan_dir shell "$THRESH_SH" \
-  -type f -name '*.sh' \
-  -not -path './.git/*'
+  "${BUILD_NOISE_EXCLUDES[@]}" \
+  -type f -name '*.sh'
 
 scan_dir docs "$THRESH_MD" \
+  "${BUILD_NOISE_EXCLUDES[@]}" \
   -type f -name '*.md' \
-  -not -path './.git/*' \
   -not -path './docs/archive/*'
 
 scan_dir yaml "$THRESH_YML" \
+  "${BUILD_NOISE_EXCLUDES[@]}" \
   -type f \( -name '*.yml' -o -name '*.yaml' \) \
-  -not -path './.github/workflows/*' \
-  -not -path './.git/*'
+  -not -path './.github/workflows/*'
 
 if [ "$VIOLATIONS" -gt 0 ]; then
   printf '\n❌ LOC gate: %d NEW violation(s); %d annotated known carryover(s) still tracked (loc-baseline.md §10c).\n' \
