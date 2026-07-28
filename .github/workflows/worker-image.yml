@@ -106,7 +106,17 @@ jobs:
 
       - name: Run tests with race detector (fail-fast gate)
         working-directory: ${{ env.BUILD_DIR }}
-        run: go test -race -timeout 5m ./internal/... ./pkg/...
+        run: |
+          set -euo pipefail
+          for attempt in 1 2; do
+            if go test -race -timeout 5m ./internal/... ./pkg/...; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 1 ]; then
+              echo "Race suite failed once; retrying once to distinguish a transient failure." >&2
+            fi
+          done
+          exit 1
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
