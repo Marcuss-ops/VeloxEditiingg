@@ -155,9 +155,10 @@ jobs:
           echo "${{ steps.build.outputs.digest }}" > image-digest.txt
           echo "## Image digest" >> "$GITHUB_STEP_SUMMARY"
           echo ":package: \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
-          for t in ${{ steps.meta.outputs.tags }}; do
-            echo "- \`$t\`" >> "$GITHUB_STEP_SUMMARY"
-          done
+          TAGS='${{ steps.meta.outputs.tags }}'
+          while IFS= read -r t; do
+            [ -n "$t" ] && echo "- \`$t\`" >> "$GITHUB_STEP_SUMMARY"
+          done <<< "$TAGS"
 
       - name: Upload digest artifact
         if: steps.build.outputs.digest != ''
