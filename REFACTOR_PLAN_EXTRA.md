@@ -58,7 +58,7 @@ I seguenti file `VeloxFrontend/web/dark_editor/` (con LOC > 700) **sono già ana
 | Type | Count | Range LOC |
 |---|---:|---|
 | Go-prod | 5 | 497 → 1561 |
-| Go-test | 10 | 712 → 1240 |
+| Go-test | 11 | 712 → 1240 |
 | spec | 1 | 1235 |
 | shell | 2 | 737 → 757 |
 | docs | 1 | 699 |
