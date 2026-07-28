@@ -285,6 +285,7 @@ jobs:
             -e VELOX_BUNDLE_HASH="$BUNDLE_HASH" \
             -e VELOX_GRPC_MASTER_URL=127.0.0.1:9999 \
             -e VELOX_ALLOW_INSECURE_GRPC_DEV=true \
+            -e VELOX_ENV=dev \
             -v /tmp/velox-real-bootstrap:/var/lib/velox-worker \
             -v /tmp/velox-real-bootstrap/worker_config.json:/opt/velox/worker_config.json:ro \
             "$IMAGE" \
