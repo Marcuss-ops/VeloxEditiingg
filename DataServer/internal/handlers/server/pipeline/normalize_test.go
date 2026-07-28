@@ -33,16 +33,16 @@ import (
 //     (the per-scene nested form) and NO top-level voiceover_paths
 //     MUST produce a CanonicalCompletedPayload where:
 //     1. worker_payload["scenes_json"] is a JSON string whose
-//        parsed [i].voiceover.url equals the per-scene URL — the
-//        worker's authoritative source.
+//     parsed [i].voiceover.url equals the per-scene URL — the
+//     worker's authoritative source.
 //     2. worker_payload["voiceover_paths"] is non-empty (the merged
-//        back-compat array populated by ToWorkerPayload from the
-//        per-scene URLs) — legacy workers that still read the
-//        top-level array see the right URL.
+//     back-compat array populated by ToWorkerPayload from the
+//     per-scene URLs) — legacy workers that still read the
+//     top-level array see the right URL.
 //     3. NO positional re-mapping: a scene at index 0 carrying
-//        voiceover_a must produce voiceover_paths[0] = voiceover_a,
-//        even if the request originally supplied voiceover_paths
-//        with different content.
+//     voiceover_a must produce voiceover_paths[0] = voiceover_a,
+//     even if the request originally supplied voiceover_paths
+//     with different content.
 //
 //   - A SubmitJobRequest with NEITHER per-scene voiceover NOR
 //     top-level voiceover_paths MUST produce a CanonicalCompletedPayload
@@ -59,7 +59,7 @@ func TestNormalizeExternalJobSubmission_PerSceneVoiceoverNotPositionCoupled(t *t
 	const (
 		voiceoverScene0 = "https://drive.example.com/voiceover-scene-0.mp3"
 		voiceoverScene1 = "https://drive.example.com/voiceover-scene-1.mp3"
-		idemKey        = "per-scene-voiceover-001"
+		idemKey         = "per-scene-voiceover-001"
 	)
 
 	t.Run("per_scene_nested_only", func(t *testing.T) {
@@ -242,12 +242,12 @@ func TestNormalizeExternalJobSubmission_PerSceneVoiceoverNotPositionCoupled(t *t
 				{
 					Text:            "scene 0 with per-scene voiceover",
 					DurationSeconds: 5,
-					Voiceover:      &SubmitVoiceover{URL: rightA},
+					Voiceover:       &SubmitVoiceover{URL: rightA},
 				},
 				{
 					Text:            "scene 1 with per-scene voiceover",
 					DurationSeconds: 7,
-					Voiceover:      &SubmitVoiceover{URL: rightB},
+					Voiceover:       &SubmitVoiceover{URL: rightB},
 				},
 			},
 		}
@@ -369,5 +369,51 @@ func TestNormalizeExternalJobSubmission_PerSceneClipAndSubtitlesRoundtrip(t *tes
 	}
 	if subs["format"] != "ass" {
 		t.Errorf("scenes_json[0].subtitles.format = %v, want ass", subs["format"])
+	}
+}
+
+func TestNormalizeExternalJobSubmission_LegacyClipLinkAddsSceneVoiceover(t *testing.T) {
+	t.Parallel()
+
+	const (
+		clipURL      = "https://drive.example.com/clip-scene-0.mp4"
+		voiceoverURL = "velox-asset://voiceovers/scene-0.mp3"
+	)
+
+	req := SubmitJobRequest{
+		IdempotencyKey: "legacy-clip-link-voiceover-001",
+		VoiceoverPaths: []string{
+			voiceoverURL,
+		},
+		Scenes: []SubmitScene{
+			{
+				Text:            "legacy scene with clip link",
+				DurationSeconds: 5,
+				ClipLink:        clipURL,
+			},
+		},
+	}
+
+	canonical := (&Handlers{}).NormalizeExternalJobSubmission(req)
+	if canonical == nil {
+		t.Fatal("NormalizeExternalJobSubmission returned nil")
+	}
+	scenesJSONRaw, ok := canonical.WorkerPayload["scenes_json"].(string)
+	if !ok || scenesJSONRaw == "" {
+		t.Fatalf("worker_payload[scenes_json] missing or empty")
+	}
+	var scenesFromJSON []map[string]interface{}
+	if err := json.Unmarshal([]byte(scenesJSONRaw), &scenesFromJSON); err != nil {
+		t.Fatalf("scenes_json unmarshal: %v", err)
+	}
+	if got := scenesFromJSON[0]["clip_link"]; got != clipURL {
+		t.Fatalf("scenes_json[0].clip_link = %v, want %s", got, clipURL)
+	}
+	voiceover, ok := scenesFromJSON[0]["voiceover"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("scenes_json[0].voiceover missing or wrong type: %+v", scenesFromJSON[0])
+	}
+	if got := voiceover["url"]; got != voiceoverURL {
+		t.Fatalf("scenes_json[0].voiceover.url = %v, want %s", got, voiceoverURL)
 	}
 }

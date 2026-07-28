@@ -29,7 +29,7 @@
         argv:
           - sudo
           - -n
-          - true
+          - "true"
       become: false
       changed_when: false
       failed_when: false

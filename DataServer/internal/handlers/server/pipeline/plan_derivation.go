@@ -20,6 +20,7 @@
 //
 // Caller in this package: job_submit.go (thin composer).
 package pipeline
+
 import (
 	"strings"
 	"velox-server/internal/remoteengine"
@@ -145,7 +146,6 @@ func subtitlesToMap(s *SubmitSubtitles) map[string]interface{} {
 // which silently default to permissive behaviour for missing
 // cross-field constraints.
 
-//
 // Trim policy in submitRequestToRawPayload: trim SPACE around
 // identity-bearing fields (IdempotencyKey, VideoName, scene
 // clip_link / image_link, delivery destination_id) because these
@@ -250,7 +250,7 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 
 	if len(req.Scenes) > 0 {
 		scenes := make([]interface{}, 0, len(req.Scenes))
-		for _, s := range req.Scenes {
+		for i, s := range req.Scenes {
 			scene := map[string]interface{}{
 				"text":             s.Text,
 				"duration_seconds": s.DurationSeconds,
@@ -287,6 +287,10 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 			}
 			if s.Voiceover != nil {
 				scene["voiceover"] = voiceoverToMap(s.Voiceover)
+			} else if i < len(req.VoiceoverPaths) && strings.TrimSpace(req.VoiceoverPaths[i]) != "" {
+				scene["voiceover"] = map[string]interface{}{
+					"url": strings.TrimSpace(req.VoiceoverPaths[i]),
+				}
 			}
 			if s.Subtitles != nil {
 				scene["subtitles"] = subtitlesToMap(s.Subtitles)

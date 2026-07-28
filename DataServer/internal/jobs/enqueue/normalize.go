@@ -163,6 +163,7 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 		return nil, err
 	}
 	copyTimelinePayloadFields(out, payloadMap)
+	attachLegacySceneClipTimeline(out)
 	return out, nil
 }
 
@@ -459,6 +460,72 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 	if meta.ForwardingKey != "" {
 		out[routing.KeyForwardingKey] = meta.ForwardingKey.String()
 	}
+}
+
+func attachLegacySceneClipTimeline(out map[string]interface{}) {
+	if out == nil || hasClipTimelinePayload(out) {
+		return
+	}
+	scenes := normalizeSceneArray(out["scenes"])
+	if len(scenes) == 0 {
+		return
+	}
+
+	voiceovers := normalizeVoiceoverList(out)
+	items := make([]map[string]interface{}, 0, len(scenes))
+	clips := make([]string, 0, len(scenes))
+	audioTracks := make([]map[string]interface{}, 0, len(scenes))
+	offsetSeconds := 0.0
+
+	for i, scene := range scenes {
+		clipURL := firstClipURL(scene)
+		if clipURL == "" {
+			return
+		}
+		duration := payload.NormalizedDuration(scene["duration_seconds"])
+		if duration <= 0 {
+			duration = 4.0
+		}
+
+		normalized := make(map[string]interface{}, len(scene)+3)
+		for k, v := range scene {
+			normalized[k] = v
+		}
+		normalized["clip_link"] = clipURL
+		normalized["clip_links"] = []string{clipURL}
+		normalized["duration_seconds"] = duration
+		scenes[i] = normalized
+
+		items = append(items, map[string]interface{}{
+			"type":     "video",
+			"url":      clipURL,
+			"duration": duration,
+			"fit":      "contain",
+		})
+		clips = append(clips, clipURL)
+
+		if i < len(voiceovers) && strings.TrimSpace(voiceovers[i]) != "" {
+			audioTracks = append(audioTracks, map[string]interface{}{
+				"source_url":        strings.TrimSpace(voiceovers[i]),
+				"volume":            1.0,
+				"start_time_offset": offsetSeconds,
+				"duration_seconds":  duration,
+				"role":              "voiceover",
+			})
+		}
+		offsetSeconds += duration
+	}
+
+	out["scenes"] = scenes
+	if data, err := json.Marshal(scenes); err == nil {
+		out["scenes_json"] = string(data)
+	}
+	out["items"] = items
+	out["clips"] = payload.DedupeStrings(clips)
+	if len(audioTracks) > 0 {
+		out["audio_tracks"] = audioTracks
+	}
+	out["video_mode"] = "clip_stock"
 }
 
 func syncAudioURLFromVoiceover(payloadMap map[string]interface{}) {

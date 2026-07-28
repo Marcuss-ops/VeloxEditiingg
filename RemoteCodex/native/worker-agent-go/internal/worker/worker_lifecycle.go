@@ -84,6 +84,9 @@ func (w *Worker) Start(ctx context.Context) error {
 		w.connFailureCount = 0
 
 		hello := w.buildHello()
+		if token := strings.TrimSpace(hello.CredentialHash); token != "" && w.apiClient != nil {
+			w.apiClient.SetAuthToken(token)
+		}
 		if err := w.transport.Connect(ctx, hello); err != nil {
 			w.connFailureCount++
 

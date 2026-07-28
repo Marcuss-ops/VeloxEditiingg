@@ -193,6 +193,47 @@ func TestBuildPipelinePayload(t *testing.T) {
 	})
 }
 
+func TestNormalizeSceneVideoPayload_AttachesLegacyClipTimeline(t *testing.T) {
+	t.Parallel()
+
+	normalized, err := normalizeSceneVideoPayload(map[string]interface{}{
+		"video_name":  "Legacy clip smoke",
+		"script_text": "Narrated legacy clip body.",
+		"voiceover_paths": []interface{}{
+			"velox-asset://voiceovers/scene-1.mp3",
+		},
+		"scenes": []interface{}{
+			map[string]interface{}{
+				"text":             "Scene 1",
+				"clip_link":        "https://drive.example.com/clip-1.mp4",
+				"duration_seconds": float64(5),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeSceneVideoPayload: %v", err)
+	}
+
+	items, ok := normalized["items"].([]map[string]interface{})
+	if !ok || len(items) != 1 {
+		t.Fatalf("items = %#v, want one timeline item", normalized["items"])
+	}
+	if got := items[0]["url"]; got != "https://drive.example.com/clip-1.mp4" {
+		t.Fatalf("items[0].url = %v", got)
+	}
+	clips, ok := normalized["clips"].([]string)
+	if !ok || len(clips) != 1 || clips[0] != "https://drive.example.com/clip-1.mp4" {
+		t.Fatalf("clips = %#v", normalized["clips"])
+	}
+	tracks, ok := normalized["audio_tracks"].([]map[string]interface{})
+	if !ok || len(tracks) != 1 {
+		t.Fatalf("audio_tracks = %#v, want one voiceover track", normalized["audio_tracks"])
+	}
+	if got := tracks[0]["source_url"]; got != "velox-asset://voiceovers/scene-1.mp3" {
+		t.Fatalf("audio_tracks[0].source_url = %v", got)
+	}
+}
+
 func TestFlattenPipelineResult(t *testing.T) {
 	t.Parallel()
 	nested := map[string]interface{}{"ok": true, "result": map[string]interface{}{"title": "T", "text": "X"}}

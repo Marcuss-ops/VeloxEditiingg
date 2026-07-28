@@ -29,6 +29,15 @@
         | regex_replace(':8000$', ':9000')
       }}
 
+- name: CanonicalRuntime | Read release bundle hash
+  ansible.builtin.slurp:
+    src: "{{ velox_current_root }}/RemoteCodex/BUNDLE_HASH.txt"
+  register: velox_worker_bundle_hash_file
+
+- name: CanonicalRuntime | Resolve release bundle hash
+  ansible.builtin.set_fact:
+    velox_worker_bundle_hash: "{{ bundle_hash | default((velox_worker_bundle_hash_file.content | b64decode | trim), true) }}"
+
 # ── HOSTILE LEGACY UNIT CLEANUP ───────────────────────────────
 # One host -> one systemd unit. Any non-canonical `velox-worker*.service`
 # file (including the bare `velox-worker.service` with no suffix and any
@@ -47,50 +56,51 @@
 # (at task "Reload systemd after cleanup and unit writes") picks it up
 # so any leftover `systemctl start` will fail with "Unit ... is masked."
 - name: CanonicalRuntime | Stop, disable and mask legacy worker units (hostile cleanup)
-  ansible.builtin.shell: |
-    set -euo pipefail
-    canonical="{{ velox_worker_unit_name }}"
-    declare -A seen=()
-    changed=0
-    consider() {
-      local unit="$1"
-      [ -n "$unit" ] || return 0
-      [ -z "${seen[$unit]:-}" ] || return 0
-      seen[$unit]=1
-      case "$unit" in
-        "$canonical"|velox-worker-watchdog.service)
-          return 0
-          ;;
-        # Template units are not used in the canonical runtime; leave them
-        # alone so a future `velox-worker@<instance>.service` (e.g. from
-        # a transient generator) is not silently masked by our glob.
-        velox-worker@*)
-          return 0
-          ;;
-        velox-worker.service|velox-worker-*.service)
-          systemctl stop    "$unit" >/dev/null 2>&1 || true
-          systemctl disable "$unit" >/dev/null 2>&1 || true
-          systemctl mask    "$unit" >/dev/null 2>&1 || true
-          echo "MASKED_UNIT=$unit"
-          changed=1
-          ;;
-      esac
-    }
-    # 1. Iterate velox-worker*.service FILES (enabled/disabled/masked/static
-    #    drop-ins in /etc/systemd/system or /usr/lib). Catches the common
-    #    case where a previous deploy left a unit file on disk.
-    while read -r unit _; do
-      consider "$unit"
-    done < <(systemctl list-unit-files 'velox-worker*.service' --no-legend --no-pager 2>/dev/null || true)
-    # 2. Also iterate velox-worker*.service UNITS in systemd's runtime
-    #    memory. Catches a unit that was started then file-deleted but
-    #    never daemon-reloaded, or a unit created at runtime by a
-    #    transient generator. Both passes are needed because the file
-    #    view and the runtime view can drift between deploys.
-    while read -r unit _; do
-      consider "$unit"
-    done < <(systemctl list-units 'velox-worker*.service' --all --no-legend --no-pager 2>/dev/null || true)
-    exit 0
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      canonical="{{ velox_worker_unit_name }}"
+      declare -A seen=()
+      changed=0
+      consider() {
+        local unit="$1"
+        [ -n "$unit" ] || return 0
+        [ -z "${seen[$unit]:-}" ] || return 0
+        seen[$unit]=1
+        case "$unit" in
+          "$canonical"|velox-worker-watchdog.service)
+            return 0
+            ;;
+          # Template units are not used in the canonical runtime; leave them
+          # alone so a future `velox-worker@<instance>.service` (e.g. from
+          # a transient generator) is not silently masked by our glob.
+          velox-worker@*)
+            return 0
+            ;;
+          velox-worker.service|velox-worker-*.service)
+            systemctl stop    "$unit" >/dev/null 2>&1 || true
+            systemctl disable "$unit" >/dev/null 2>&1 || true
+            systemctl mask    "$unit" >/dev/null 2>&1 || true
+            echo "MASKED_UNIT=$unit"
+            changed=1
+            ;;
+        esac
+      }
+      # 1. Iterate velox-worker*.service FILES (enabled/disabled/masked/static
+      #    drop-ins in /etc/systemd/system or /usr/lib). Catches the common
+      #    case where a previous deploy left a unit file on disk.
+      while read -r unit _; do
+        consider "$unit"
+      done < <(systemctl list-unit-files 'velox-worker*.service' --no-legend --no-pager 2>/dev/null || true)
+      # 2. Also iterate velox-worker*.service UNITS in systemd's runtime
+      #    memory. Catches a unit that was started then file-deleted but
+      #    never daemon-reloaded, or a unit created at runtime by a
+      #    transient generator. Both passes are needed because the file
+      #    view and the runtime view can drift between deploys.
+      while read -r unit _; do
+        consider "$unit"
+      done < <(systemctl list-units 'velox-worker*.service' --all --no-legend --no-pager 2>/dev/null || true)
+      exit 0
   args:
     executable: /bin/bash
   register: legacy_unit_cleanup
@@ -145,6 +155,7 @@
       VELOX_DIR={{ velox_dir }}
       VELOX_BUNDLE_VERSION={{ version_number | default('v1.0.6') }}
       VELOX_VERSION_NUMBER={{ version_number | default('v1.0.6') }}
+      VELOX_BUNDLE_HASH={{ velox_worker_bundle_hash }}
       VELOX_WORKER_PROTOCOL_VERSION={{ worker_protocol_version | default('v3') }}
       VELOX_ENGINE_VERSION={{ engine_version | default(version_number | default('v1.0.6')) }}
       VELOX_HEALTH_PORT={{ velox_worker_health_port }}
@@ -173,7 +184,7 @@
         "work_dir": "{{ velox_worker_runtime_container_dir }}/work",
         "log_level": "info",
         "bundle_version": "{{ version_number | default('v1.0.6') }}",
-        "bundle_hash": "{{ bundle_hash | default('') }}",
+        "bundle_hash": "{{ velox_worker_bundle_hash }}",
         "protocol_version": "{{ worker_protocol_version | default('v3') }}",
         "engine_version": "{{ engine_version | default(version_number | default('v1.0.6')) }}",
         "environment": "staging",
@@ -181,7 +192,9 @@
         "prometheus_port": 0,
         "health_port": {{ velox_worker_health_port }},
         "control_grpc_url": "{{ velox_worker_control_grpc_url }}",
-        "allow_insecure_grpc_dev": true,
+        "tls_cert_file": "/etc/velox/certs/worker.crt",
+        "tls_key_file": "/etc/velox/certs/worker.key",
+        "tls_ca_file": "/etc/velox/certs/ca.crt",
         "video_engine_cpp_bin": "/usr/local/bin/velox_video_engine"
       }
 
@@ -216,7 +229,7 @@
       Environment=VELOX_HEARTBEAT_MASTERS={{ velox_worker_heartbeat_masters }}
       WorkingDirectory={{ velox_dir }}
       ExecStartPre=/bin/sh -c '/usr/bin/docker rm -f {{ velox_worker_container_name }} >/dev/null 2>&1 || true'
-      ExecStart=/usr/bin/docker run --name {{ velox_worker_container_name }} --rm --network host --env-file {{ velox_worker_env_path }} -e VELOX_VIDEO_ENGINE_CPP_BIN=/usr/local/bin/velox_video_engine -v {{ velox_dir }}/current:/app:ro -v {{ velox_worker_runtime_host_dir }}/cache:/home/velox/.cache -v {{ velox_worker_runtime_host_dir }}/blobs:{{ velox_worker_runtime_container_dir }}/blobs -v {{ velox_worker_runtime_host_dir }}/assets_cache:{{ velox_worker_runtime_container_dir }}/assets_cache -v {{ velox_worker_runtime_host_dir }}:{{ velox_worker_runtime_container_dir }} ${VELOX_WORKER_IMAGE} -config {{ velox_worker_runtime_container_dir }}/config/worker_config.json -master ${MASTER_URL} -worker-id ${VELOX_WORKER_ID} -work-dir {{ velox_worker_runtime_container_dir }}/work
+      ExecStart=/usr/bin/docker run --name {{ velox_worker_container_name }} --rm --network host --env-file {{ velox_worker_env_path }} -e VELOX_VIDEO_ENGINE_CPP_BIN=/usr/local/bin/velox_video_engine -v {{ velox_dir }}/current:/app:ro -v {{ velox_worker_runtime_host_dir }}/cache:/home/velox/.cache -v {{ velox_worker_runtime_host_dir }}/blobs:{{ velox_worker_runtime_container_dir }}/blobs -v {{ velox_worker_runtime_host_dir }}/assets_cache:{{ velox_worker_runtime_container_dir }}/assets_cache -v {{ velox_worker_runtime_host_dir }}:{{ velox_worker_runtime_container_dir }} -v /etc/velox/certs:/etc/velox/certs:ro ${VELOX_WORKER_IMAGE} -config {{ velox_worker_runtime_container_dir }}/config/worker_config.json -master ${MASTER_URL} -worker-id ${VELOX_WORKER_ID} -work-dir {{ velox_worker_runtime_container_dir }}/work
       ExecStop=/bin/sh -c '/usr/bin/docker stop -t 20 {{ velox_worker_container_name }} >/dev/null 2>&1 || true'
       ExecStopPost=/bin/sh -c '/usr/bin/docker rm -f {{ velox_worker_container_name }} >/dev/null 2>&1 || true'
       TimeoutStopSec=35
@@ -373,6 +386,32 @@
     src: "{{ velox_current_root }}/RemoteCodex/native/worker-agent-go/tests/fixtures/engine_selftest_baseline.sha256"
     dest: "{{ velox_current_root }}/RemoteCodex/tests/fixtures/engine_selftest_baseline.sha256"
     remote_src: true
+    mode: "0644"
+
+- name: CanonicalRuntime | Copy bundle hash into worker workdir
+  ansible.builtin.copy:
+    src: "{{ velox_current_root }}/RemoteCodex/BUNDLE_HASH.txt"
+    dest: "{{ velox_worker_runtime_host_dir }}/work/BUNDLE_HASH.txt"
+    remote_src: true
+    owner: "10001"
+    group: "10001"
+    mode: "0644"
+
+- name: CanonicalRuntime | Ensure bootstrap fixture directory exists in worker workdir
+  ansible.builtin.file:
+    path: "{{ velox_worker_runtime_host_dir }}/work/tests/fixtures"
+    state: directory
+    owner: "10001"
+    group: "10001"
+    mode: "0775"
+
+- name: CanonicalRuntime | Copy engine selftest baseline fixture into worker workdir
+  ansible.builtin.copy:
+    src: "{{ velox_current_root }}/RemoteCodex/tests/fixtures/engine_selftest_baseline.sha256"
+    dest: "{{ velox_worker_runtime_host_dir }}/work/tests/fixtures/engine_selftest_baseline.sha256"
+    remote_src: true
+    owner: "10001"
+    group: "10001"
     mode: "0644"
 
 - name: CanonicalRuntime | Install canonical auto-update timer (12h)
