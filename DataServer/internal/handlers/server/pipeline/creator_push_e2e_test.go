@@ -369,9 +369,291 @@ func TestCreatorPushJobsE2E_MissingSourceJobIDReturns400(t *testing.T) {
 	}
 }
 
+// TestCreatorPushJobsE2E_RetryBudgetZeroAcceptance mirrors
+// job_submit_e2e_test.go::TestSubmitJobE2E_RetryBudgetZeroAcceptance
+// for the creator_push path. The fix at commit 72a455c relaxed the
+// enqueue-layer validateDeliveryPlanRequires boundary from <=0 to
+// <0, so retry_budget=0 MUST round-trip verbatim into
+// job_delivery_plans.retry_budget on POST /api/v1/creator/jobs too
+// (same Resolver.Resolve → validateDeliveryPlanRequires chain —
+// both paths converge on resolveCompletedPayload at
+// creator_push.go line 183).
+//
+// This is a defensive contract pin: the enqueue-layer fix already
+// covers the creator_push path because normalizeCreatorPushRequest
+// (creator_push.go line 95) has NO retry_budget check of its own
+// and the typed-DTO parser at remoteengine/dto.go does NOT
+// validate retry_budget (delivery_plan is a raw passthrough).
+// Without this test, a future contributor could re-introduce a
+// creator_push-specific guard (e.g., a misplaced >= 0 check in the
+// handler) and silently downgrade retry_budget=0 to 422 —
+// diverging from the submit_job path's contract without any test
+// failure surfacing.
+//
+// Three layers of contract pinned:
+//
+//  1. HTTP envelope: 202 Accepted + ok=true + job_id matches the
+//     DeriveForwardingJobID hash of (source_provider,
+//     source_job_id, target_executor_id).
+//  2. job_delivery_plans.retry_budget = 0 in SQLite (the explicit
+//     client choice MUST round-trip verbatim, NOT bumped to the
+//     OpenAPI default of 3).
+//  3. job.MaxRetries = 0 (the worker terminal-fails on the first
+//     hard error — matching the client's explicit "no retries"
+//     intent; NOT bumped to DefaultRetryBudget=3).
+//
+// Idempotency replay (a second POST with the same body) is
+// pinned too so a future regression on the resolver's
+// idempotency fast-path that drops the retry_budget=0 row is
+// caught.
+func TestCreatorPushJobsE2E_RetryBudgetZeroAcceptance(t *testing.T) {
+	h, db, jobRepo := newCreatorPushE2EStack(t)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
+
+	// Build the canonical body, then override delivery_plan[0].retry_budget=0.
+	// The body helper is fresh per call so the mutation is hermetic.
+	body := creatorPushE2EBody("creator_pc_rz0", "creator-job-rz0-001", "scene.composite.v1")
+	dp := body["payload"].(map[string]interface{})["delivery_plan"].([]interface{})
+	dp[0].(map[string]interface{})["retry_budget"] = 0
+
+	expectedJobID := enqueue.DeriveForwardingJobID(
+		routing.FormatForwardingKey("creator_pc_rz0", "creator-job-rz0-001", "scene.composite.v1").String(),
+	)
+
+	// First POST — retry_budget=0 MUST be accepted (was previously
+	// rejected with 422 by the enqueue-layer validateDeliveryPlanRequires
+	// guard at line 188 of internal/jobs/enqueue/delivery_plan_validator.go;
+	// that guard was relaxed at commit 72a455c).
+	w := postCreatorPush(t, r, body)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("retry_budget=0 first POST: want 202, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response json: %v", err)
+	}
+	if resp["ok"] != true {
+		t.Fatalf("response[ok] = %v, want true (full body=%s)", resp["ok"], w.Body.String())
+	}
+	if resp["job_id"] != expectedJobID {
+		t.Fatalf("response[job_id] = %v, want %s (full body=%s)", resp["job_id"], expectedJobID, w.Body.String())
+	}
+
+	// DB contract: job_delivery_plans.retry_budget MUST be 0 (not 3
+	// bumped to OpenAPI default, not dropped). Mirrors the
+	// TestSubmitJobE2E_RetryBudgetZeroAcceptance assertion.
+	var retryBudget int
+	if err := db.DB().QueryRow(
+		`SELECT retry_budget FROM job_delivery_plans WHERE job_id = ? AND destination_id = ?`,
+		expectedJobID, "drive",
+	).Scan(&retryBudget); err != nil {
+		t.Fatalf("query job_delivery_plans.retry_budget: %v", err)
+	}
+	if retryBudget != 0 {
+		t.Errorf("job_delivery_plans.retry_budget = %d, want 0 (explicit client choice MUST round-trip verbatim — the OpenAPI default bump is forbidden)", retryBudget)
+	}
+
+	// Job-level contract: jobs.MaxRetries MUST be 0 too. The enqueue
+	// layer's extractPlanMaxRetry at normalize.go line 511 (already
+	// verified at commit 72a455c) computes max(retry_budget) across
+	// destinations; with retry_budget=0 as the only entry the max is 0
+	// and job.MaxRetries=0 means the worker terminal-fails on first
+	// hard error. A regression here would silently re-enable retries
+	// for clients that explicitly opted out.
+	job, err := jobRepo.Get(context.Background(), expectedJobID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if job == nil {
+		t.Fatal("jobs row not persisted")
+	}
+	if job.MaxRetries != 0 {
+		t.Errorf("job.MaxRetries = %d, want 0 (retry_budget=0 means worker terminal-fails on first hard error)", job.MaxRetries)
+	}
+
+	// Idempotency replay: a second POST with the same body converges
+	// on the same job_id, the same retry_budget=0 round-trip, and
+	// does NOT create additional rows. The UNIQUE constraint on
+	// (source_provider, source_job_id, target_executor_id) and the
+	// Resolver idempotency fast-path both guarantee convergence.
+	w2 := postCreatorPush(t, r, body)
+	if w2.Code != http.StatusAccepted {
+		t.Fatalf("retry_budget=0 second POST: want 202, got %d body=%s", w2.Code, w2.Body.String())
+	}
+	var resp2 map[string]interface{}
+	if err := json.Unmarshal(w2.Body.Bytes(), &resp2); err != nil {
+		t.Fatalf("response2 json: %v", err)
+	}
+	// Mirror the sibling TestCreatorPushJobsE2E_VoiceoverStockClipScene
+	// replay assertions so a regression that strips overlay fields on
+	// the idempotent path is caught (e.g., a future refactor that
+	// rebuilds the response on the fast-path without re-attaching
+	// accepted_from / dispatch_status / created=false).
+	replayWantFields := map[string]interface{}{
+		"job_id":          expectedJobID,
+		"accepted_from":   "creator_push",
+		"dispatch_status": "queued_for_workers",
+		"created":         false,
+		"ok":              true,
+	}
+	for key, want := range replayWantFields {
+		if resp2[key] != want {
+			t.Errorf("idempotent replay response[%q] = %v, want %v (full body=%s)", key, resp2[key], want, w2.Body.String())
+		}
+	}
+
+	// row-count invariant: exactly 1 jobs row + 1 forwarding row
+	// after the replay. A regression that drops the retry_budget=0
+	// contract on the replay path would still hit the UNIQUE
+	// constraint, but a regression that drops it on the FIRST POST
+	// would not — this row-count check pins the first-POST path.
+	var fwdCount, jobCount int
+	if err := db.DB().QueryRow(
+		`SELECT COUNT(*) FROM creator_forwardings WHERE source_provider = ? AND source_job_id = ? AND target_executor_id = ?`,
+		"creator_pc_rz0", "creator-job-rz0-001", "scene.composite.v1",
+	).Scan(&fwdCount); err != nil {
+		t.Fatalf("count forwardings: %v", err)
+	}
+	if fwdCount != 1 {
+		t.Errorf("want exactly 1 forwarding row, got %d", fwdCount)
+	}
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM jobs WHERE job_id = ?`, expectedJobID).Scan(&jobCount); err != nil {
+		t.Fatalf("count jobs: %v", err)
+	}
+	if jobCount != 1 {
+		t.Errorf("want exactly 1 jobs row, got %d", jobCount)
+	}
+
+	// Final defensive check: confirm the round-trip retry_budget
+	// is STILL 0 after the replay (catches a regression where
+	// the idempotent replay path rebuilds the plan with
+	// DefaultRetryBudget instead of preserving 0).
+	var retryBudgetAfterReplay int
+	if err := db.DB().QueryRow(
+		`SELECT retry_budget FROM job_delivery_plans WHERE job_id = ? AND destination_id = ?`,
+		expectedJobID, "drive",
+	).Scan(&retryBudgetAfterReplay); err != nil {
+		t.Fatalf("query job_delivery_plans.retry_budget post-replay: %v", err)
+	}
+	if retryBudgetAfterReplay != 0 {
+		t.Errorf("post-replay job_delivery_plans.retry_budget = %d, want 0", retryBudgetAfterReplay)
+	}
+}
+
+// TestCreatorPushJobsE2E_NegativeRetryBudgetRejected is the
+// boundary guard for retry_budget < 0 on the creator_push path.
+// Mirrors job_submit_e2e_test.go::TestSubmitJobE2E_NegativeRetryBudgetRejected
+// so the same rejection shape is pinned on both intake paths.
+//
+// Without this row, a future regression that relaxed the enqueue-
+// layer boundary the WRONG WAY (e.g., a contributor who reads
+// "retry_budget=0 is allowed" and concludes "any value is allowed")
+// would surface only on the negative case as a 202 with retry_budget=-1
+// persisted into job_delivery_plans. The handler-side pre-check
+// in the canonical creator_push path does NOT cover negative
+// retry_budget — only the enqueue-layer rejection does — so this
+// e2e test pins the rejection shape end-to-end.
+func TestCreatorPushJobsE2E_NegativeRetryBudgetRejected(t *testing.T) {
+	h, db, _ := newCreatorPushE2EStack(t)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
+
+	// Build the canonical body, then override delivery_plan[0].retry_budget=-1.
+	body := creatorPushE2EBody("creator_pc_rzneg", "creator-job-rzneg-001", "scene.composite.v1")
+	dp := body["payload"].(map[string]interface{})["delivery_plan"].([]interface{})
+	dp[0].(map[string]interface{})["retry_budget"] = -1
+
+	expectedJobID := enqueue.DeriveForwardingJobID(
+		routing.FormatForwardingKey("creator_pc_rzneg", "creator-job-rzneg-001", "scene.composite.v1").String(),
+	)
+
+	// Negative retry_budget MUST be rejected with 422 + invalid_payload.
+	// The enqueue-layer validateDeliveryPlanRequires (line 188 of
+	// internal/jobs/enqueue/delivery_plan_validator.go) returns
+	// &validationError{field: "delivery_plan[0].retry_budget", message: "must be >= 0"}
+	// which creatorflow.WriteResolverError maps to 422 invalid_payload
+	// with details[0].path = "delivery_plan[0].retry_budget" (bracket
+	// notation, matches what validateDeliveryPlanRequires emits via
+	// fmt.Sprintf).
+	w := postCreatorPush(t, r, body)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("retry_budget=-1 POST: want 422, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response json: %v", err)
+	}
+	if resp["ok"] != false {
+		t.Fatalf("response[ok] = %v, want false (full body=%s)", resp["ok"], w.Body.String())
+	}
+	if resp["error"] != "invalid_payload" {
+		t.Fatalf("response[error] = %v, want invalid_payload (full body=%s)", resp["error"], w.Body.String())
+	}
+
+	// Details shape: assert details[0].path = "delivery_plan[0].retry_budget"
+	// (bracket notation, NOT dot — the validator emits via fmt.Sprintf
+	// so the actual emission is bracket). This pins the rejection
+	// shape so a future regression that emits 422 with a different
+	// error code (e.g., payload_incomplete) cannot silently pass.
+	detailsArr, ok := resp["details"].([]interface{})
+	if !ok {
+		t.Fatalf("response[details] missing or wrong type: %T (full body=%s)", resp["details"], w.Body.String())
+	}
+	if len(detailsArr) != 1 {
+		t.Fatalf("response[details] length = %d, want 1 (full body=%s)", len(detailsArr), w.Body.String())
+	}
+	detailsObj, ok := detailsArr[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("details[0] wrong type: %T (full body=%s)", detailsArr[0], w.Body.String())
+	}
+	if gotPath := detailsObj["path"]; gotPath != "delivery_plan[0].retry_budget" {
+		t.Errorf("details[0].path = %v, want delivery_plan[0].retry_budget (bracket notation, what validateDeliveryPlanRequires emits)", gotPath)
+	}
+	if gotIssue := detailsObj["issue"]; gotIssue != "invalid" {
+		t.Errorf("details[0].issue = %v, want \"invalid\" (canonical token from WriteResolverError's validationFieldExtractor branch)", gotIssue)
+	}
+
+	// Row-leak invariant: jobs row MUST NOT exist. The handler never
+	// reaches the atomic Job+Task create when enqueue-layer validation
+	// rejects the payload.
+	var jobCount int
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM jobs WHERE job_id = ?`, expectedJobID).Scan(&jobCount); err != nil {
+		t.Fatalf("count jobs: %v", err)
+	}
+	if jobCount != 0 {
+		t.Errorf("422 path must NOT create a jobs row, got %d", jobCount)
+	}
+
+	// KNOWN FINDING (documented with upper-bound gate): the
+	// creatorforwardings row IS leaked on the 422 path because the
+	// Resolver creates the row (status=READY_TO_FORWARD) BEFORE the
+	// enqueue-layer validateDeliveryPlanRequires rejects. Contrast with
+	// TestCreatorPushJobsE2E_IncompletePayloadReturns422 which DOES
+	// pin the row-leak invariant because the completeness guard runs
+	// before the Resolver entry point. Fixing the row-leak for the
+	// in-Resolver-rejection path is a separate refactor — either move
+	// the enqueue validation BEFORE the forwarding-row creation, or
+	// add a Resolver-level rollback after Enqueue failure. Tracked as
+	// a followup. The upper-bound gate (>= 2 rows) catches an
+	// EXPANSION of the leak (e.g., a future contributor who
+	// inadvertently creates N rows per rejection) while staying
+	// in scope for the retry_budget=0 contract mirror.
+	var fwdCount int
+	if err := db.DB().QueryRow(
+		`SELECT COUNT(*) FROM creator_forwardings WHERE source_provider = ? AND source_job_id = ? AND target_executor_id = ?`,
+		"creator_pc_rzneg", "creator-job-rzneg-001", "scene.composite.v1",
+	).Scan(&fwdCount); err != nil {
+		t.Fatalf("count forwardings: %v", err)
+	}
+	if fwdCount >= 2 {
+		t.Errorf("row-leak UPPER-BOUND gate: creator_forwardings row count = %d, want < 2 (current known leak is 1 row per rejection; this gate catches expansion, not the existing leak)", fwdCount)
+	}
+}
+
 // TestCreatorPushJobsE2E_RealAdminAuthWired verifies that
-// /api/v1/creator/jobs is mounted behind the real
-// api.AdminAuthMiddleware (not the adminAuthFake stub). Three subcases:
 //
 //  1. No Authorization header  → 401 (handler never reached).
 //  2. Wrong bearer token        → 401 (handler never reached).
