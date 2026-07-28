@@ -126,6 +126,7 @@ type moduleDeps struct {
 	Health           *app.HealthModule
 	Drive            *app.DriveModule
 	Ansible          *app.AnsibleModule
+	Workers          *app.WorkersModule
 	AssetService     *voiceoverassets.AssetService
 	Enqueuer         *enqueue.Enqueuer
 	DeliveryRunner   *deliveries.DeliveryRunner
@@ -285,6 +286,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 		Registry:         registry,
 		Health:           healthMod,
 		Drive:            driveMod,
+		Workers:          workersModule,
 		AssetService:     assetSvc,
 		Enqueuer:         enqueuer,
 		DeliveryRunner:   deliveryRunner,

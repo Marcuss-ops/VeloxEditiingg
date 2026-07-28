@@ -118,6 +118,14 @@ func (r *Registry) UpdateWorker(ctx context.Context, workerID string, updates ma
 	if v, ok := updates["drain"].(bool); ok {
 		info.Drain = v
 	}
+	if v, ok := updates["quarantine"].(bool); ok {
+		// Step 6/15 fleet-operator: admin quarantine endpoint writes
+		// via the map-driven path; SetWorkerQuarantine (typed helper)
+		// is the canonical entry. Both paths converge on the same
+		// flag. Persisted (NOT scrubbed in ScrubForPersist) so the
+		// operator's quarantine decision survives a registry restart.
+		info.Quarantined = v
+	}
 	if v, ok := updates["schedulable"].(bool); ok {
 		info.Schedulable = v
 	}
@@ -178,6 +186,23 @@ func (r *Registry) UpdateWorker(ctx context.Context, workerID string, updates ma
 // SetWorkerDrain sets the drain status for a worker
 func (r *Registry) SetWorkerDrain(ctx context.Context, workerID string, drain bool) error {
 	return r.UpdateWorker(ctx, workerID, map[string]interface{}{"drain": drain})
+}
+
+// SetWorkerQuarantine sets the quarantine flag for a worker.
+// Step 6/15 fleet-operator: the admin POST /api/v1/admin/workers/{id}/
+// /quarantine endpoint calls this synchronously so the placement
+// matcher (costmodel.Score via GetEligibleWorkers) excludes the
+// worker on the next match attempt.
+//
+// The flag is operator-persisted (NOT scrubbed in
+// ScrubForPersist) so a registry restart preserves the
+// quarantine decision — see worker_info.go:WorkerInfo.Quarantined
+// doc comment. The companion UpdateWorker map key "quarantine"
+// (added below in UpdateWorker) accepts the same flag from
+// map-driven updates; this helper is the canonical typed-path
+// entry point.
+func (r *Registry) SetWorkerQuarantine(ctx context.Context, workerID string, quarantined bool) error {
+	return r.UpdateWorker(ctx, workerID, map[string]interface{}{"quarantine": quarantined})
 }
 
 // SetWorkerGroup sets the group for a worker

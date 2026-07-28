@@ -19,21 +19,27 @@ import (
 //
 // Step 1/15 of the fleet-operator rollout adds `adminWorkersHandler`
 // (the canonical WorkerCard surface under /api/v1/admin/workers).
-// The new handler reads from the SAME registry as `workersHandler`
-// but mounts at a different URL and is guarded by adminAuth. Keeping
-// it co-resident with the diagnostic handler avoids duplicating the
-// route table or the registry wiring boilerplate.
+// Step 6/15 of the fleet-operator rollout adds
+// `adminWorkersMutationsHandler` (POST /api/v1/admin/workers/{id}/
+// /{drain,resume,quarantine}). Both handlers read from the SAME
+// registry and live under the SAME adminAuth-gated URL group; the
+// mutations handler additionally depends on the FleetController
+// (injected via SetMutationsHandler after buildFleet is wired in
+// cmd/server/bootstrap_composition.go). Keeping them co-resident
+// avoids duplicating the route table or the registry wiring
+// boilerplate.
 type WorkersModule struct {
-	reg                 *workersreg.Registry
-	adminAuth           gin.HandlerFunc
-	workerLifecycle     *lifecycle.Handler
-	workerUpdateHandler *workersapi.WorkerUpdateHandler
-	workerAssetHandler  *assets.Handler
-	workersHandler      *api.WorkersHandler
-	adminWorkersHandler *api.AdminWorkersHandler
-	metricsHandler      *api.MetricsHandler
-	sessionsHandler     *api.SessionsHandler
-	eventsHandler       *api.EventsHandler
+	reg                          *workersreg.Registry
+	adminAuth                    gin.HandlerFunc
+	workerLifecycle              *lifecycle.Handler
+	workerUpdateHandler          *workersapi.WorkerUpdateHandler
+	workerAssetHandler           *assets.Handler
+	workersHandler               *api.WorkersHandler
+	adminWorkersHandler          *api.AdminWorkersHandler
+	adminWorkersMutationsHandler *api.AdminWorkersMutationsHandler
+	metricsHandler               *api.MetricsHandler
+	sessionsHandler              *api.SessionsHandler
+	eventsHandler                *api.EventsHandler
 }
 
 // NewWorkersModule creates a new workers module.
@@ -51,6 +57,27 @@ func NewWorkersModule(cfg *config.Config, reg *workersreg.Registry, lifecycle *l
 		workersHandler:      api.NewWorkersHandler(reg),
 		adminWorkersHandler: api.NewAdminWorkersHandler(reg),
 	}
+}
+
+// Registry exposes the underlying worker registry so the composition
+// root (cmd/server/bootstrap_composition.go) can pass it to
+// dependent handlers built in another file (notably the Step 6/15
+// AdminWorkersMutationsHandler, which needs both the Registry
+// and the FleetController's ControllerPublisher seam). Read-only
+// accessor — callers MUST NOT mutate the registry directly.
+func (m *WorkersModule) Registry() *workersreg.Registry { return m.reg }
+
+// SetMutationsHandler wires the Step 6/15 admin mutations handler
+// (POST drain/resume/quarantine). Idempotent — safe to call before
+// RegisterRoutes; passing nil disables the POST routes so a
+// misconfigured FleetController wire-up keeps the surface silent
+// rather than 503-on-every-request.
+//
+// Composition order: buildFleet (which constructs FleetController) is
+// called AFTER buildModules (which constructs WorkersModule), so the
+// composition root injects the handler here AFTER buildFleet returns.
+func (m *WorkersModule) SetMutationsHandler(h *api.AdminWorkersMutationsHandler) {
+	m.adminWorkersMutationsHandler = h
 }
 
 // SetMetricsHandler wires the per-worker metrics read endpoint
@@ -139,6 +166,19 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 		}
 		adminWorkers.GET("", m.adminWorkersHandler.ListAdminWorkers())
 		adminWorkers.GET("/:worker_id", m.adminWorkersHandler.GetAdminWorker())
+		// Step 6/15 — admin worker mutations (drain / resume /
+		// quarantine). Mounted inside the same adminAuth-gated
+		// group as the read endpoints so the operator dashboard's
+		// canonical auth surface stays single-source-of-truth.
+		// Nil-tolerant via the adminWorkersMutationsHandler nil
+		// guard (the composition root may pass nil when the
+		// FleetController is unavailable — silent skip rather than
+		// a 503-on-every-request dead route).
+		if m.adminWorkersMutationsHandler != nil {
+			adminWorkers.POST("/:worker_id/drain", m.adminWorkersMutationsHandler.DrainWorker())
+			adminWorkers.POST("/:worker_id/resume", m.adminWorkersMutationsHandler.ResumeWorker())
+			adminWorkers.POST("/:worker_id/quarantine", m.adminWorkersMutationsHandler.QuarantineWorker())
+		}
 	}
 
 	log.Printf("[WORKERS] Routes registered")

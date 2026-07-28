@@ -288,7 +288,31 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		return nil, fmt.Errorf("bootstrap: fleet: %w", err)
 	}
 	if fleetDep != nil {
-		log.Printf("[BOOTSTRAP] FleetController wired (audit-only; tick goroutine lands in a follow-up — see FleetDep.tickWiredAtBoot)")
+		if err := registerFleetRunner(supervisor, fleetDep); err != nil {
+			_ = p.SQLite.Close()
+			return nil, fmt.Errorf("bootstrap: fleet supervisor: %w", err)
+		}
+		fleetDep.tickWiredAtBoot = true
+		log.Printf("[BOOTSTRAP] FleetController wired and supervised (operation ledger tick enabled)")
+	}
+
+	// Step 6/15 fleet-operator: wire the admin worker mutations handler
+	// (POST /api/v1/admin/workers/{id}/{drain,resume,quarantine}).
+	// Composition order: buildFleet returns FleetDep AFTER buildModules
+	// returns moduleDeps.Workers, so the FleetController and Registry
+	// are both available here. The mutations handler publishes via
+	// FleetController.PublishOperation and synchronously flips
+	// WorkerInfo.Drain / WorkerInfo.Quarantined via the Registry so the
+	// placement matcher immediately excludes the worker.
+	//
+	// Nil-tolerant: a partial-boot FleetController keeps the POST
+	// routes un-mounted (the adminWorkersMutationsHandler nil-guard
+	// in app/workers.go:RegisterRoutes handles it).
+	if fleetDep != nil && fleetDep.Controller != nil && m != nil && m.Workers != nil {
+		m.Workers.SetMutationsHandler(
+			api.NewAdminWorkersMutationsHandler(m.Workers.Registry(), fleetDep.Controller),
+		)
+		log.Printf("[BOOTSTRAP] Admin workers mutations handler wired (drain/resume/quarantine; tick goroutine drives the audit lifecycle)")
 	}
 
 	return &appComponents{
@@ -315,17 +339,14 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 // of an AdminOperationsHandler for the audit routes, and the
 // ExecutorRegistry reserved for future concrete executor registration.
 //
-// tickWiredAtBoot is FALSE in this commit: the supervisor-wired
-// tick goroutine that drives QUEUED→RUNNING→SUCCEEDED lifecycle
-// lands in a follow-up step. Until then the audit endpoints render
-// the real ledger rows (InsertOperation, AuditList, AuditGet all
-// work) but newly-published Operations stay QUEUED forever
-// because no goroutine promotes them. Tests drive Tick directly
-// to exercise the lifecycle surface.
+// tickWiredAtBoot records whether the controller is registered in the
+// process supervisor. A false value is only valid for partial test
+// composition; production boot must set it to true so published
+// operations cannot remain QUEUED indefinitely.
 type FleetDep struct {
-	Controller       *fleet.FleetController
-	Registry         *fleet.ExecutorRegistry
-	tickWiredAtBoot  bool
+	Controller      *fleet.FleetController
+	Registry        *fleet.ExecutorRegistry
+	tickWiredAtBoot bool
 }
 
 // getHandler returns the api.AdminOperationsHandler wrapping
@@ -345,11 +366,6 @@ func (f *FleetDep) getHandler() *api.AdminOperationsHandler {
 // a persistence-disabled boot (test fixture paths) so the router
 // registers the audit route stubs but serving returns 503 via the
 // handler's nil-controller guard.
-//
-// Intentional gap: the tick goroutine is NOT launched here.
-// Step 4/15 commits the abstraction and the audit surface; live
-// tick wiring belongs to a follow-up so this commit's atomic scope
-// stays tight.
 func buildFleet(p *persistenceDeps) (*FleetDep, error) {
 	if p == nil || p.SQLite == nil {
 		return nil, nil
@@ -366,6 +382,32 @@ func buildFleet(p *persistenceDeps) (*FleetDep, error) {
 		Registry:        registry,
 		tickWiredAtBoot: false,
 	}, nil
+}
+
+// registerFleetRunner attaches the FleetController to the already-built
+// supervisor. buildSupervisor runs before buildFleet because most runners
+// are module dependencies, so registration is intentionally a small
+// post-build step. The supervisor owns the goroutine and graceful shutdown;
+// the controller owns only its operation tick.
+func registerFleetRunner(sup *supervisor.Supervisor, dep *FleetDep) error {
+	if sup == nil || dep == nil || dep.Controller == nil {
+		return nil
+	}
+	const maxRetries = 5
+	return sup.Register(supervisor.Runner{
+		Name:  "fleet-controller",
+		Class: supervisor.ClassRestartable,
+		Policy: supervisor.RestartPolicy{
+			MaxRetries:     maxRetries,
+			InitialBackoff: 500 * time.Millisecond,
+			MaxBackoff:     30 * time.Second,
+			RestartOnPanic: true,
+		},
+		Run: func(ctx context.Context) error {
+			log.Printf("[BOOTSTRAP] FleetController runner started")
+			return dep.Controller.Run(ctx)
+		},
+	})
 }
 
 // wirePostBuild connects dependencies that cross build-layer
