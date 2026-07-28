@@ -19,6 +19,129 @@ force jobs to Worker 51 during smoke. The smoke must prove normal scheduling
 to the available worker pool. A worker is eligible only if it is `CONNECTED`,
 has `session_active=true`, and advertises `scene.composite.v1@1`.
 
+## 0. Quick start: launch the live smoke
+
+Current live Master:
+
+```text
+http://51.91.11.36:8000
+```
+
+The remote client running the smoke must be allow-listed twice:
+
+- network firewall: TCP `8000` inbound to the Master;
+- application allowlist: `VELOX_ALLOWED_WORKER_IPS` on the Master.
+
+As of 2026-07-28, the following PipelineGen/smoke client IPs are allowed for
+HTTP intake:
+
+```text
+45.63.21.236
+77.93.152.122
+```
+
+Only the Master HTTP port is required for PipelineGen:
+
+```text
+PipelineGen/client -> 51.91.11.36:8000
+```
+
+Do not require PipelineGen to reach port `9000`. Port `9000` is for worker
+gRPC sessions only.
+
+From the remote client, verify reachability first:
+
+```bash
+export VELOX_MASTER_URL="http://51.91.11.36:8000"
+curl -fsS "${VELOX_MASTER_URL}/ready"
+```
+
+Expected response:
+
+```json
+{"checks":6,"status":"ready"}
+```
+
+Then export a M2M token with `jobs.submit` scope. This must be the
+`plaintext_secret` returned when creating the M2M client; it is not the admin
+token.
+
+```bash
+export VELOX_M2M_TOKEN="<plaintext_secret_for_jobs.submit>"
+```
+
+Never commit or paste the real token into a tracked file. For an operator-run
+smoke, retrieve it from the Master-side secret handoff or mint a short-lived
+client via:
+
+```http
+POST /api/v1/admin/m2m/keys
+```
+
+using the Master admin token. The smoke itself must use only the returned M2M
+`plaintext_secret`.
+
+Run the operational smoke:
+
+```bash
+scripts/with-velox-auth \
+  tests/operational/comedian_clips_generate_voiceover_subtitles.sh
+```
+
+The first successful submit response must contain:
+
+```json
+{
+  "ok": true,
+  "accepted_from": "api_v1_jobs",
+  "dispatch_status": "queued_for_workers",
+  "job_id": "job_..."
+}
+```
+
+If the smoke fails before submit:
+
+| Symptom | Meaning | Fix |
+| --- | --- | --- |
+| `connection refused` | Master is not reachable at host/port, or wrong URL. | Check `VELOX_MASTER_URL`, service status, and listener on `:8000`. |
+| timeout | Firewall or upstream network block. | Add the client source IP to UFW/provider firewall for TCP `8000`. |
+| `403 public access forbidden` | Application allowlist rejected the client IP. | Add the client source IP to `VELOX_ALLOWED_WORKER_IPS` and restart Master. |
+| `VELOX_M2M_TOKEN=unset` | Client has no submit credential. | Export a valid M2M `plaintext_secret` with `jobs.submit`. |
+| `401` from `/api/v1/jobs` | Token is wrong, inactive, expired, or not known by this Master DB. | Mint/export a new M2M token. |
+| `422 destination_id` | Delivery destination is not registered/enabled. | Use `comedy_test` for the current smoke or register the target destination. |
+
+For the current live smoke, use:
+
+```json
+{
+  "delivery_plan": [
+    {
+      "destination_id": "comedy_test",
+      "priority": 1,
+      "retry_budget": 3
+    }
+  ]
+}
+```
+
+After submit, poll:
+
+```bash
+curl -fsS \
+  -H "Authorization: Bearer ${VELOX_M2M_TOKEN}" \
+  "${VELOX_MASTER_URL}/api/v1/jobs/${JOB_ID}"
+```
+
+The useful progression is:
+
+```text
+PENDING -> RUNNING -> SUCCEEDED
+```
+
+`202 Accepted` alone is not enough. Confirm worker-side processing through
+task/attempt rows, Master logs (`TaskOffer`, `TaskAccepted`,
+`TaskLeaseGranted`), and a non-empty artifact.
+
 ## 1. Final VeloxEditing job
 
 - [ ] Prepare one final valid, versioned JSON payload or manifest.
