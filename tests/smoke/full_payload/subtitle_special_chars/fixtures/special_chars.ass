@@ -12,4 +12,4 @@ Style: Default,Arial,72,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:00.30,0:00:01.20,Default,,0,0,0,,{\c&H0000FF&}{\b1}À è ò — € Euro — 😃 🎉 «virgolette» 'apice' — ñ ü ç ø ß β
+Dialogue: 0,0:00:00.30,0:00:01.20,Default,,0,0,0,,{\c&H0000FF&}{\b1}À è ò — € Euro — 😃 🎉 «virgolette» ‘apice’ — ñ ü ç ø ß α β γ
