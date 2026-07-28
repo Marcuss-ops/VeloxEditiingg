@@ -72,6 +72,7 @@ CANONICAL_REQUIRED=(
   "Pre-existing Test Watchlist / Pre-existing Test Watchlist"
   "no-youtube-regression / YouTube regression guard"
   "check-canonical-names / Canonical names guard"
+  "loc-thresholds / LOC threshold gate"
 )
 
 ACTUAL="$(printf '%s' "$RAW" | python3 -c '

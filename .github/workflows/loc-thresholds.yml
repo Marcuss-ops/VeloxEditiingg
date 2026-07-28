@@ -1,0 +1,77 @@
+# =============================================================================
+# loc-thresholds.yml — Project LOC threshold gate (Long-File Reduction plan).
+#
+# Purpose:
+#   Forward-protect the per-category LOC thresholds defined in
+#   `docs/metrics/loc-baseline.md §11` (prod Go: 900, test Go: 1200, shell:
+#   700, docs: 1200, yaml: 800). The gate fails the build on any NEW violation;
+#   KNOWN_VIOLATIONS in `scripts/ci/check-loc-thresholds.sh` (annotated
+#   baseline carry-over) are accepted via `::warning` and do NOT fail the
+#   build. See §10c of `loc-baseline.md` for the carry-over tracking list and
+#   §R.1 of `metrics-catalog.md` for the WARNING-only STRUCTURAL long-file
+#   visibility pass (CHANGELOG.md, DataServer/api/openapi.yaml).
+#
+# Status check name in PR UI: "loc-thresholds".
+# Author: Velox Long-File Reduction plan (Round-1 onwards).
+# Mirror of `no-youtube-regression.yml`. Same trigger model:
+#   * push to main                                 — immediate fail-fast
+#   * pull_request to main                         — pre-merge gating
+#     (NO paths-ignore — every PR runs the audit so a doc/script/test edit
+#      silently introducing a long file cannot slip through)
+#   * weekly Monday 06:00 UTC drift detector       — catches long-file
+#     carry-over drift that bypassed direct CI somehow (same model as
+#     dependency-scan.yml and no-youtube-regression.yml)
+#   * workflow_dispatch                            — manual re-run.
+# =============================================================================
+
+name: loc-thresholds
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Daily 06:00 UTC drift detector. Catches any new long-file that
+    # somehow bypassed direct CI (e.g. accidentally-committed-then-
+    # reverted, or a branch-merged-without-required-checks). Daily
+    # cadence matches the gate's fail-fast intent: a new file breaching
+    # its per-category cap must surface within hours, not over a weekend.
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: loc-thresholds-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  loc-thresholds:
+    name: LOC threshold gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout (working tree, shallow clone is fine)
+        uses: actions/checkout@v4
+        # Note: fetch-depth is intentionally left at the default (shallow,
+        # i.e. depth=1). `check-loc-thresholds.sh` uses `find` + `wc -l`,
+        # NOT `git grep`, so git history is irrelevant to the gate. The
+        # no-youtube-regression guard uses `git grep -nE` and DOES need
+        # `fetch-depth: 0`; we do NOT. Shallow clone saves CI bandwidth.
+        with:
+          # fetch-depth: 0 makes the full history searchable so future
+          # maintainers can `git blame` any match the audit surfaced.
+          fetch-depth: 0
+
+      - name: Run LOC threshold gate
+        run: |
+          set -euo pipefail
+          echo "🔍 Running LOC threshold gate (per-category caps from docs/metrics/loc-baseline.md §11)..."
+          # The script self-anchors at the repo root via `git rev-parse`,
+          # so it can be invoked from any CWD.
+          bash scripts/ci/check-loc-thresholds.sh
+          # The script exits 1 on any NEW violation (::error) and 0 when
+          # only KNOWN_VIOLATIONS carry-over + STRUCTURAL warnings are
+          # present. No additional logic needed here.

@@ -56,6 +56,16 @@ jobs:
           (cd DataServer && go run ./cmd/seed-velox-db-fixture "$DB")
           ./scripts/ci/check-completion-protocol-invariants.sh "$DB"
       - name: LOC threshold gate
+        # ====== DELIBERATE REDUNDANCY — DO NOT REMOVE ======
+        # This step is intentionally redundant with the dedicated
+        # `loc-thresholds` workflow (`.github/workflows/loc-thresholds.yml`).
+        # The dedicated workflow is the authoritative required status check;
+        # this in-job run provides a second inline signal in the verify logs
+        # for fast local debugging. Both invocations call the same script on
+        # the same checkout, so the two views cannot disagree. If you are
+        # cleaning up and tempted to remove this step, do not — first
+        # update the duplication rationale in the loc-thresholds workflow
+        # README + §10c of `docs/metrics/loc-baseline.md`.
         if: always()
         run: bash scripts/ci/check-loc-thresholds.sh
 

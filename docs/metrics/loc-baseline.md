@@ -450,6 +450,30 @@ The third carry-over (`tests/e2e/grpc-control-plane/run.sh`) is a
 structural set; remove its `KNOWN_VIOLATIONS_ROUND2` entry when the
 dedup lands.
 
+### CI wiring
+
+The gate is wired to a **dedicated status check**
+(`.github/workflows/loc-thresholds.yml`, runs on push to `main` +
+every pull_request + a daily 06:00 UTC drift detector + manual
+`workflow_dispatch`). The check appears in the PR UI as
+`loc-thresholds / LOC threshold gate` and is registered in
+`scripts/ci/inspect-branch-protection.sh` `CANONICAL_REQUIRED`. The
+same script also runs as an inline sub-step of the `verify` job in
+`.github/workflows/ci.yml` (with `if: always()`) so the inline log
+shows the per-file annotation stack in the same job as the rest of
+the verify output. Both invocations call the same script, so the two
+views cannot disagree.
+
+**Operator action**: after this workflow file lands on `main`, an
+operator must re-run `./scripts/ci/enable-branch-protection.sh` to
+register `loc-thresholds / LOC threshold gate` as a required status
+check in the GitHub branch-protection payload. Until that runs, the
+dedicated workflow is defined but not enforced — CI will pass locally
++ on PRs but the branch protection won't actually require the gate on
+merge. Verify with `./scripts/ci/inspect-branch-protection.sh` (its
+audit pass now requires the 8th entry `loc-thresholds / LOC
+threshold gate`).
+
 ### Round-4 gate change
 - `scripts/ci/check-loc-thresholds.sh` gained a `BUILD_NOISE_EXCLUDES`
   array (nested `*/.git`, `*/node_modules`, `*/build`, `*/.pb-cache`)
