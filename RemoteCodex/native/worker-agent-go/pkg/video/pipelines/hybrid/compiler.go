@@ -4,6 +4,7 @@ package hybrid
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -338,6 +339,34 @@ func parseRequest(input map[string]interface{}) *Request {
 			})
 		}
 		return req
+	}
+
+	// The public Master contract carries per-scene media in scenes_json.
+	// Convert clip entries into the canonical timeline while preserving
+	// the clip's own audio; voiceover audio remains a separate concern.
+	if encoded, ok := input["scenes_json"].(string); ok && strings.TrimSpace(encoded) != "" {
+		var scenes []map[string]interface{}
+		if err := json.Unmarshal([]byte(encoded), &scenes); err == nil {
+			for _, scene := range scenes {
+				clipURL := toString(scene["clip_link"])
+				if clip, ok := scene["clip"].(map[string]interface{}); ok {
+					clipURL = toStringDefault(clip["url"], clipURL)
+				}
+				if clipURL == "" {
+					continue
+				}
+				req.Items = append(req.Items, ItemInput{
+					Type:          "video",
+					URL:           clipURL,
+					Duration:      toFloat64Default(scene["duration_seconds"], 4.0),
+					Fit:           req.Fit,
+					IncludeAudio:  true,
+				})
+			}
+		}
+		if len(req.Items) > 0 {
+			return req
+		}
 	}
 
 	// Fallback: build from images + clips arrays
