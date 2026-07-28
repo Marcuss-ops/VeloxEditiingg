@@ -840,23 +840,27 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 				ticker := time.NewTicker(5 * time.Minute)
 				defer ticker.Stop()
 				log.Printf("[FLEET-METRICS] metrics-snapshot-supervisor started (5min tick; computes 13-metric rollup per worker from worker_metric_samples + fleet_operations + smoke_runs + deployment_records)")
+				persist := func() {
+					ds := fleet.WorkerMetricsAggregatorDataSource{
+						Store: p.SQLite,
+						WorkerIDsFn: func(ctx context.Context) ([]string, error) {
+							return fleet.SQLiteWorkerIDs{DB: sqlDB}.WorkerIDs(ctx)
+						},
+					}
+					n, err := fleet.ComputeAndPersistSnapshot(ctx, ds, sqlDB, time.Now().UTC())
+					if err != nil {
+						log.Printf("[FLEET-METRICS] snapshot tick failed: %v", err)
+						return
+					}
+					log.Printf("[FETCH-METRICS] ticked: persisted %d worker snapshots", n)
+				}
+				persist()
 				for {
 					select {
 					case <-ctx.Done():
 						return ctx.Err()
 					case <-ticker.C:
-						ds := fleet.WorkerMetricsAggregatorDataSource{
-							Store: p.SQLite,
-							WorkerIDsFn: func(ctx context.Context) ([]string, error) {
-								return fleet.SQLiteWorkerIDs{DB: sqlDB}.WorkerIDs(ctx)
-							},
-						}
-						n, err := fleet.ComputeAndPersistSnapshot(ctx, ds, sqlDB, time.Now().UTC())
-						if err != nil {
-							log.Printf("[FLEET-METRICS] snapshot tick failed: %v", err)
-							continue
-						}
-						log.Printf("[FETCH-METRICS] ticked: persisted %d worker snapshots", n)
+						persist()
 					}
 				}
 			},
