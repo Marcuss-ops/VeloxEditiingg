@@ -1,0 +1,128 @@
+{
+  "_doc": [
+    "Reusable post-2026-07-28 full-payload smoke scenario.",
+    "Shape: 4 scenes (within the 3-5 range), per-scene voiceover (asset_id+url),",
+    "mixed ASS+SRT subtitle_tracks (2 entries covering 2 source assets),",
+    "special_name 'Jackie Chan' (in scene-2 text + layers[role=name]),",
+    "important_phrase 'Una scoperta incredibile' (in scene-1 text + layers[role=important_phrase]),",
+    "highlighted_word 'Mai' (in scene-0 text + layers[role=overlay]).",
+    "assets referenced: tests/worker-cert/fixtures/assets.json (REUSE only — DO NOT add new asset_id rows here).",
+    "Substituted at submit time by run.sh (--mode=submit): idempotency_key, target_executor_id, delivery_plan[0].destination_id.",
+    "Adapted from docs/operations/04-veloxediting-final-smoke-checklist.md §4 (layers example) and enqueue_normalization_test.go §subtitle_tracks."
+  ],
+  "schema": "velox.submit.full-payload@1",
+  "idempotency_key": "full-payload-4-scenes-PLACEHOLDER",
+  "video_name": "Full-payload smoke (4 scene, special name + important phrase + highlighted word)",
+  "project_id": "full_payload_smoke",
+  "target_executor_id": "scene.composite.v1@1",
+  "voiceover_paths": [
+    "velox-asset://asset-recording-001",
+    "velox-asset://e2e-narrator-001"
+  ],
+  "subtitle_tracks": [
+    {
+      "source": "velox-asset://subtitle-001",
+      "format": "ass",
+      "language": "it",
+      "name": "scene-0-and-1.ass"
+    },
+    {
+      "source": "velox-asset://subtitle-002",
+      "format": "srt",
+      "language": "it",
+      "name": "scene-2-and-3.srt"
+    }
+  ],
+  "scenes": [
+    {
+      "scene_id": "scene-0",
+      "index": 0,
+      "kind": "intro",
+      "text": "Mai prima d'ora avevamo visto Jackie Chan alle prese con un'impresa così incredibile.",
+      "clip_link": "velox-asset://opening-clip-01",
+      "duration_seconds": 7,
+      "voiceover": {
+        "asset_id": "asset-recording-001",
+        "url":      "velox-asset://asset-recording-001"
+      }
+    },
+    {
+      "scene_id": "scene-1",
+      "index": 1,
+      "kind": "development",
+      "text": "Una scoperta incredibile cambia tutto quello che pensavamo di sapere.",
+      "clip_link": "velox-asset://main-clip-01",
+      "duration_seconds": 8,
+      "voiceover": {
+        "asset_id": "asset-recording-001",
+        "url":      "velox-asset://asset-recording-001"
+      }
+    },
+    {
+      "scene_id": "scene-2",
+      "index": 2,
+      "kind": "climax",
+      "text": "Jackie Chan si trova di fronte alla scelta che definirà la sua carriera.",
+      "clip_link": "velox-asset://aqueduct-clip-01",
+      "duration_seconds": 9,
+      "voiceover": {
+        "asset_id": "e2e-narrator-001",
+        "url":      "velox-asset://e2e-narrator-001"
+      }
+    },
+    {
+      "scene_id": "scene-3",
+      "index": 3,
+      "kind": "resolution",
+      "text": "Alla fine, la verità emerge e il pubblico resta senza fiato.",
+      "clip_link": "velox-asset://aqueduct-clip-02",
+      "duration_seconds": 6,
+      "voiceover": {
+        "asset_id": "e2e-narrator-001",
+        "url":      "velox-asset://e2e-narrator-001"
+      }
+    }
+  ],
+  "layers": [
+    {
+      "id": "special-name-001",
+      "type": "text",
+      "role": "name",
+      "text": "Jackie Chan",
+      "scene_id": "scene-2",
+      "start_seconds": 0.0,
+      "duration_seconds": 3.0,
+      "preset": "person_name_v1",
+      "animation": "slide_left"
+    },
+    {
+      "id": "important-phrase-001",
+      "type": "text",
+      "role": "important_phrase",
+      "text": "Una scoperta incredibile",
+      "scene_id": "scene-1",
+      "start_seconds": 0.5,
+      "duration_seconds": 4.0,
+      "preset": "important_phrase_v1",
+      "animation": "fade_up"
+    },
+    {
+      "id": "highlighted-word-001",
+      "type": "text",
+      "role": "overlay",
+      "text": "Mai",
+      "scene_id": "scene-0",
+      "start_seconds": 0.0,
+      "duration_seconds": 2.0,
+      "preset": "highlighted_word_v1",
+      "animation": "pop"
+    }
+  ],
+  "delivery_plan": [
+    {
+      "destination_id": "comedy_test",
+      "priority": 100,
+      "retry_budget": 3
+    }
+  ]
+}
