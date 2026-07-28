@@ -208,6 +208,8 @@ jobs:
       # known bundle identity without an extra DB lookup.
       - name: Record baseline manifest (Phase 1)
         if: steps.digest.outputs.digest != ''
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           set -euo pipefail
           VERSION="$(tr -d '[:space:]' < VERSION.txt 2>/dev/null || echo '')"
@@ -219,7 +221,7 @@ jobs:
           fi
           python3 - <<PYEOF
           import json, os
-          tags = "${{ steps.meta.outputs.tags }}".split()
+          tags = os.environ["IMAGE_TAGS"].split()
           manifest = {
             "digest":         "${{ steps.digest.outputs.digest }}",
             "registry_image": "${{ env.IMAGE_REPO }}",
