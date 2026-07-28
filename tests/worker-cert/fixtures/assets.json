@@ -1,0 +1,22 @@
+{
+  "_doc": "Canonical asset_ids for tests/worker-cert/smoke_one.sh. Hand-curated from job_submit_e2e_happy_path_test.go, enqueue_normalization_test.go, and creator_push_e2e_test.go. Extend locally rather than committing new test asset rows to the live master registry: the canonical Pickle is to reuse these IDs across worker smokes and only register new ones after a CREATE receives a 201 with status=READY.",
+  "voiceover": [
+    {"asset_id": "asset-recording-001", "note": "e2e narrator; worker-agent resolveVoiceoverAudioPath test target"},
+    {"asset_id": "e2e-narrator-001",    "note": "e2e happy-path canon"}
+  ],
+  "clips": [
+    {"asset_id": "opening-clip-01",  "note": "canonical scene.0 clip"},
+    {"asset_id": "main-clip-01",     "note": "canonical scene.1 clip"},
+    {"asset_id": "aqueduct-clip-01", "note": "golden-e2e scene.0 clip"},
+    {"asset_id": "aqueduct-clip-02", "note": "golden-e2e scene.1 clip"}
+  ],
+  "subtitles": [
+    {"asset_id": "subtitle-001", "note": "scene.0 ass/srt"},
+    {"asset_id": "subtitle-002", "note": "scene.1 ass/srt"}
+  ],
+  "images": [
+    {"asset_id": "scene-image-001", "note": "scene image fallback"}
+  ],
+  "_forbidden_pattern": "velox-asset://voiceovers/<file>.mp3 — known failure: see enqueue_normalization_test.go §voiceover-bridge coverage and docs/operations/04-veloxediting-final-smoke-checklist.md §1",
+  "_canonical_pattern": "velox-asset://<asset_id> — must match ^(https?://|velox-asset://).+$ per intake_validation.go §manifestRefURLRegexp"
+}
