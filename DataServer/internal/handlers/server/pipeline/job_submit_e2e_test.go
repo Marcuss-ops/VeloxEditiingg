@@ -1198,6 +1198,31 @@ func TestSubmitJobE2E_NegativeRetryBudgetRejected(t *testing.T) {
 		t.Fatalf("ok = %v, want false on rejection path", resp["ok"])
 	}
 
+	// Tightened envelope shape check (mirrors the ssrf_loopback_in_voiceover
+	// subcase in TestSubmitJobE2E_ValidationFailures): a future regression
+	// that emits 422 with a DIFFERENT error code (payload_incomplete,
+	// resolver_failure, …) or that drops details.path must NOT silently
+	// pass. WriteResolverError emits details:[{path:<field>, issue:"invalid"}]
+	// for any *validationError from the enqueue layer; the path is
+	// validator-generated via enqueue.ValidationErrorField().
+	detailsArr, ok := resp["details"].([]interface{})
+	if !ok {
+		t.Fatalf("details must be []interface{} for invalid_payload 422, got %T (full body: %s)", resp["details"], w.Body.String())
+	}
+	if len(detailsArr) != 1 {
+		t.Fatalf("details length = %d, want 1 — WriteResolverError must emit exactly one issue per rejection (full body: %s)", len(detailsArr), w.Body.String())
+	}
+	first, ok := detailsArr[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("details[0] not map[string]interface{}: %T (got: %#v)", detailsArr[0], detailsArr[0])
+	}
+	if gotPath, _ := first["path"].(string); gotPath != "delivery_plan[0].retry_budget" {
+		t.Errorf("details[0].path = %q, want \"delivery_plan[0].retry_budget\" (validator-emitted field path; bracket notation per enqueue-layer fmt.Sprintf)", gotPath)
+	}
+	if gotIssue, _ := first["issue"].(string); gotIssue != "invalid" {
+		t.Errorf("details[0].issue = %q, want \"invalid\" (canonical issue token from WriteResolverError's validationFieldExtractor branch)", gotIssue)
+	}
+
 	// Resource-leak invariant (negative-rejection path must NOT write rows).
 	after := snapshot()
 	if after.jobs != baseline.jobs {
