@@ -1,0 +1,235 @@
+# Prometheus alerting rules — Step 16/15 fleet-operator
+# structured alerting (mirror of the Go-side catalog in
+# DataServer/internal/fleet/opsalerts/rule_catalog.go).
+#
+# Scope: this file MUST stay in sync with the 12-rule
+# AlertRule struct catalog in the Go engine. The Go-side
+# engine writes to alert_events (SQLite, migration 107) for
+# the operator dashboard; the Prometheus-side rules fire
+# alertingmanager-side alerts so the on-call rotation receives
+# Slack/PagerDuty notifications.
+#
+# Validate with `promtool check rules alerts/spec-16-fleet-alerts.yml`
+# before opening the PR. This file uses the runtime metric
+# families `velox_fleet_alert_state_total{rule_id,severity,state}=1|0`
+# emitted by the alerts-supervisor (one counter increment on
+# every state transition ACTIVE→RESOLVED) and
+# `velox_fleet_alert_active{rule_id,worker_id,severity}=1|0`
+# (gauge 1 means ACTIVE).
+#
+# Suppression policy matches the Go engine's
+# "Sopprimere eventi normali" semantics:
+#   - info: never fires (logged only).
+#   - warning: fires on every 5-minute window flip (the
+#     engine's dedup window) so the dashboard reflects
+#     chronic warning conditions without alertmanager spam.
+#   - critical: fires immediately on every fresh ACTIVE event;
+#     fires again on every last_observed_at bump so paging
+#     channels stay in sync with the live dashboard.
+
+groups:
+  - name: velox.fleet_alerts_critical
+    interval: 30s
+    rules:
+
+      # heartbeat stale >90s
+      - alert: VeloxFleetWorkerHeartbeatStale
+        expr: velox_fleet_alert_active{rule_id="heartbeat_stale",severity="CRITICAL"} == 1
+        for: 0m
+        labels:
+          severity: critical
+          domain: fleet_operator
+          rule_id: heartbeat_stale
+        annotations:
+          summary: "Worker heartbeat stale (>90s)"
+          description: |
+            Worker {{ $labels.worker_id }} heartbeat age > 90s. The worker
+            process is dead, the network is partitioned, or the executor
+            goroutine is stuck. Inspect the alert_events row's current_value
+            (e.g. 'heartbeat_age=120s') and the worker's last_smoke status.
+
+      # container unhealthy
+      - alert: VeloxFleetContainerUnhealthy
+        expr: velox_fleet_alert_active{rule_id="container_unhealthy",severity="CRITICAL"} == 1
+        for: 0m
+        labels:
+          severity: critical
+          domain: fleet_operator
+          rule_id: container_unhealthy
+        annotations:
+          summary: "Worker container unhealthy"
+          description: |
+            Worker {{ $labels.worker_id }}'s compose healthcheck reports
+            status != 'healthy'. Inspect `docker ps + docker inspect` on
+            the worker host.
+
+      # restart loop >= 3/h
+      - alert: VeloxFleetRestartLoop
+        expr: velox_fleet_alert_active{rule_id="restart_loop",severity="CRITICAL"} == 1
+        for: 0m
+        labels:
+          severity: critical
+          domain: fleet_operator
+          rule_id: restart_loop
+        annotations:
+          summary: "Container restart loop (>=3/h)"
+          description: |
+            Worker {{ $labels.worker_id }} has restarted >=3 times in the
+            last 60 minutes. Almost always a misconfig (image_digest
+            mismatch, env var, port collision).
+
+      # disk pressure >95% (CRITICAL tier). The 85% WARNING is
+      # in the next group (velox.fleet_alerts_warning) so the
+      # channel routing can split page-from-notify.
+      - alert: VeloxFleetDiskPressureCritical
+        expr: velox_fleet_alert_active{rule_id="disk_pressure",severity="CRITICAL"} == 1
+        for: 0m
+        labels:
+          severity: critical
+          domain: fleet_operator
+          rule_id: disk_pressure
+        annotations:
+          summary: "Disk usage >95% (CRITICAL)"
+          description: |
+            Worker {{ $labels.worker_id }} disk used crosses 95%. Auto-
+            escalation from 85% WARNING. Drain immediately and either
+            purge or expand the volume.
+
+      # RAM pressure >90%
+      - alert: VeloxFleetRAMPressureCritical
+        expr: velox_fleet_alert_active{rule_id="ram_pressure",severity="CRITICAL"} == 1
+        for: 0m
+        labels:
+          severity: critical
+          domain: fleet_operator
+          rule_id: ram_pressure
+        annotations:
+          summary: "RAM usage >90%"
+          description: |
+            Worker {{ $labels.worker_id }} RAM usage crosses 90%. Render
+            artifacts in flight will OOM-kill mid-pipeline. Drain the
+            worker and consider lowering worker_class concurrency.
+
+      # consecutive_job_failures >=3
+      - alert: VeloxFleetConsecutiveJobFailures
+        expr: velox_fleet_alert_active{rule_id="consecutive_job_failures",severity="CRITICAL"} == 1
+        for: 0m
+        labels:
+          severity: critical
+          domain: fleet_operator
+          rule_id: consecutive_job_failures
+        annotations:
+          summary: "3+ consecutive job failures"
+          description: |
+            Worker {{ $labels.worker_id }} has 3+ consecutive job failures.
+            Inspect velox_compute_failure_reasons_total for the dominant
+            reason.
+
+      # smoke failed
+      - alert: VeloxFleetSmokeFailed
+        expr: velox_fleet_alert_active{rule_id="smoke_failed",severity="CRITICAL"} == 1
+        for: 0m
+        labels:
+          severity: critical
+          domain: fleet_operator
+          rule_id: smoke_failed
+        annotations:
+          summary: "Latest smoke run FAILED"
+          description: |
+            Worker {{ $labels.worker_id }} latest smoke has status=FAILED.
+            Inspect error_message + Drive delivery status from the
+            smoke_runs row.
+
+      # cert expiring <5d (CRITICAL tier)
+      - alert: VeloxFleetCertExpiringCritical
+        expr: velox_fleet_alert_active{rule_id="cert_expiring",severity="CRITICAL"} == 1
+        for: 0m
+        labels:
+          severity: critical
+          domain: fleet_operator
+          rule_id: cert_expiring
+        annotations:
+          summary: "Worker cert expiring (<5d, CRITICAL)"
+          description: |
+            Worker {{ $labels.worker_id }} cert expires within 5 days.
+            After expiry TLS handshake fails and the worker auto-
+            disconnects. Drain immediately and rotate via prepare-host.sh.
+
+      # drive delivery failed
+      - alert: VeloxFleetDriveDeliveryFailed
+        expr: velox_fleet_alert_active{rule_id="drive_delivery_failed",severity="CRITICAL"} == 1
+        for: 0m
+        labels:
+          severity: critical
+          domain: fleet_operator
+          rule_id: drive_delivery_failed
+        annotations:
+          summary: "Drive delivery failed (latest smoke)"
+          description: |
+            Worker {{ $labels.worker_id }} latest smoke's Drive delivery
+            step failed. Inspect /opt/velox-worker/secrets/drive-token.
+
+      # deployment rolled back
+      - alert: VeloxFleetDeploymentRolledBack
+        expr: velox_fleet_alert_active{rule_id="deployment_rollback",severity="CRITICAL"} == 1
+        for: 0m
+        labels:
+          severity: critical
+          domain: fleet_operator
+          rule_id: deployment_rollback
+        annotations:
+          summary: "Deployment rolled back"
+          description: |
+            Worker {{ $labels.worker_id }} latest deployment_records row
+            has status='ROLLED_BACK'. The forward-and-rollback cascade
+            occurred. Inspect the original PENDING row's error_message.
+
+  - name: velox.fleet_alerts_warning
+    interval: 30s
+    rules:
+
+      # disk 85% WARNING
+      - alert: VeloxFleetDiskPressureWarning
+        expr: velox_fleet_alert_active{rule_id="disk_pressure",severity="WARNING"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          domain: fleet_operator
+          rule_id: disk_pressure
+        annotations:
+          summary: "Disk usage >85% (WARNING)"
+          description: |
+            Worker {{ $labels.worker_id }} disk used crosses 85% threshold.
+            Clean up old run/ artifacts or expand the volume. CRITICAL
+            escalation when the metric crosses 95%.
+
+      # version drift WARNING
+      - alert: VeloxFleetVersionDrift
+        expr: velox_fleet_alert_active{rule_id="version_drift",severity="WARNING"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          domain: fleet_operator
+          rule_id: version_drift
+        annotations:
+          summary: "Worker image != desired_version"
+          description: |
+            Worker {{ $labels.worker_id }} image_digest differs from
+            desired_version. Either the update hasn't landed yet, or a
+            previous update was interrupted. Run `fleetctl update <id>
+            --digest <desired>` to align.
+
+      # cert 15d WARNING
+      - alert: VeloxFleetCertExpiringWarning
+        expr: velox_fleet_alert_active{rule_id="cert_expiring",severity="WARNING"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          domain: fleet_operator
+          rule_id: cert_expiring
+        annotations:
+          summary: "Worker cert expiring (<15d, WARNING)"
+          description: |
+            Worker {{ $labels.worker_id }} cert expires within 15 days.
+            Rotate via prepare-host.sh or run `fleetctl update` to
+            trigger automatic cert refresh.

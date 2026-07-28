@@ -24,6 +24,7 @@ import (
 	"velox-server/internal/deploy"
 	"velox-server/internal/deploy/cosign"
 	"velox-server/internal/fleet"
+	"velox-server/internal/fleet/opsalerts"
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/darkeditor"
@@ -462,6 +463,24 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		log.Printf("[BOOTSTRAP] Admin workers metrics aggregator handler wired (GET /api/v1/admin/workers/{id}/metrics + /metrics; metrics-snapshot-supervisor ticks every 5min via buildSupervisor)")
 	}
 
+	// Step 16/15 fleet-operator: wire the structured alerting
+	// surface (12-rule catalog persisted to alert_events via
+	// migration 107). Read paths: /api/v1/admin/workers/{id}/alerts
+	// + /api/v1/admin/alerts/active + /api/v1/admin/alerts/recent.
+	// All adminAuth-gated; serve the operator dashboard.
+	// The actual alert EVALUATION runs async in the
+	// alerts-supervisor registered below in buildSupervisor
+	// (ClassRestartable, 5min tick) so HTTP remains read-only.
+	//
+	// Nil-tolerant via the adminWorkersAlertsHandler nil guard —
+	// a misconfigured bootstrap (no SQLite store) keeps the
+	// routes silently un-mounted rather than 503-on-every-request.
+	if m != nil && m.Workers != nil && p != nil && p.SQLite != nil {
+		alertsHandler := api.NewAdminWorkersAlertsHandler(p.SQLite)
+		m.Workers.SetAlertsHandler(alertsHandler)
+		log.Printf("[BOOTSTRAP] Admin workers alerts handler wired (GET /api/v1/admin/workers/{id}/alerts + /api/v1/admin/alerts/active + /recent; alerts-supervisor ticks every 5min via buildSupervisor)")
+	}
+
 	return &appComponents{
 		cfg:                cfg,
 		persistence:        p,
@@ -874,6 +893,29 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 	// is non-fatal (logged WARN, always returns nil) so no restart
 	// loop is needed even if the manifest endpoint is briefly
 	// unreachable.
+	if p != nil && p.SQLite != nil && m != nil && m.Workers != nil {
+		if err := sup.Register(supervisor.Runner{
+			Name:   "alerts-supervisor",
+			Class:  supervisor.ClassRestartable,
+			Policy: restartablePolicy,
+			Run: func(ctx context.Context) error {
+				// Step 16/15 ships the engine with a nil
+				// DataSource — the registry API does not yet
+				// expose ListAllWorkerIDs / GetWorkerCard so the
+				// real adapter lands in Step 17+ with the
+				// workersreg surface update. The supervisor
+				// still ticks, dedup state machine is wired,
+				// alert_events table is persisted, REST
+				// endpoints serve the (currently empty) table.
+				engine := opsalerts.NewEngine(p.SQLite, nil)
+				log.Printf("[FLEET-ALERTS] alerts-supervisor started (5min tick; 12-rule catalog per the user spec; INFO never persisted, WARNING 5min dedup, CRITICAL fires immediately; data source pending Step 17+ workersreg surface)")
+				return engine.Run(ctx)
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("supervisor register alerts-supervisor: %w", err)
+		}
+	}
+
 	if w.UpdateHandler != nil {
 		if err := sup.Register(supervisor.Runner{
 			Name:  "manifest-generator",

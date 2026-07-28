@@ -43,6 +43,7 @@ type WorkersModule struct {
 	adminWorkersHealthHandler            *api.AdminWorkersHealthHandler
 	adminWorkersSmokeHandler             *api.AdminWorkersSmokeHandler
 	adminWorkersMetricsAggregatorHandler *api.AdminWorkersMetricsAggregatorHandler
+	adminWorkersAlertsHandler           *api.AdminWorkersAlertsHandler
 }
 
 // NewWorkersModule creates a new workers module.
@@ -140,6 +141,20 @@ func (m *WorkersModule) SetSmokeHandler(h *api.AdminWorkersSmokeHandler) {
 // store) does not 503-on-every-request.
 func (m *WorkersModule) SetMetricsAggregatorHandler(h *api.AdminWorkersMetricsAggregatorHandler) {
 	m.adminWorkersMetricsAggregatorHandler = h
+}
+
+// SetAlertsHandler wires the Step 16/15 admin workers structured
+// alerting endpoints (GET /api/v1/admin/workers/{id}/alerts +
+// GET /api/v1/admin/alerts/active + GET /api/v1/admin/alerts/recent).
+// All three read from the alert_events table (migration 107)
+// populated every 5 minutes by the alerts-supervisor in
+// cmd/server/bootstrap_composition.go.
+//
+// Idempotent — safe to call before RegisterRoutes; passing nil
+// disables the routes so a misconfigured bootstrap (no SQLite
+// store) does not 503-on-every-request.
+func (m *WorkersModule) SetAlertsHandler(h *api.AdminWorkersAlertsHandler) {
+	m.adminWorkersAlertsHandler = h
 }
 
 func (m *WorkersModule) Name() string {
@@ -267,6 +282,29 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 			adminWorkers.GET("/metrics", m.adminWorkersMetricsAggregatorHandler.ListFleetMetrics())
 			adminWorkers.GET("/:worker_id/metrics", m.adminWorkersMetricsAggregatorHandler.GetWorkerMetrics())
 		}
+		// Step 16/15 — fleet operator structured alerting
+		// (12-rule catalog persisted to alert_events). Mounted
+		// inside the same adminAuth-gated group so the operator
+		// dashboard's canonical auth surface stays
+		// single-source-of-truth. Nil-tolerant via the
+		// adminWorkersAlertsHandler nil guard.
+		if m.adminWorkersAlertsHandler != nil {
+			adminWorkers.GET("/:worker_id/alerts", m.adminWorkersAlertsHandler.ListWorkerAlerts())
+		}
+	}
+	// Step 16/15 — fleet-wide ALERT surfaces (NOT mounted under
+	// the /api/v1/admin/workers/:worker_id group because they
+	// are fleet-wide, not per-worker). Mounted separately
+	// under /api/v1/admin/alerts, also gated by adminAuth.
+	// The nil-guard prevents 503-on-every-request when the
+	// store is absent (test/partial bootstrap).
+	if m.adminWorkersAlertsHandler != nil {
+		adminAlerts := r.Group("/api/v1/admin/alerts")
+		if m.adminAuth != nil {
+			adminAlerts.Use(m.adminAuth)
+		}
+		adminAlerts.GET("/active", m.adminWorkersAlertsHandler.ListFleetActiveAlerts())
+		adminAlerts.GET("/recent", m.adminWorkersAlertsHandler.ListRecentAlerts())
 	}
 
 	log.Printf("[WORKERS] Routes registered")
