@@ -86,8 +86,10 @@ master admin surface (`201` + `status=READY`) and then add a row to
 
 ## Evidence layout
 
-For each successful `--mode=submit`, `evidence/run-<EPOCH>.json` is written
-atomically (tmp + mv). Schema:
+For each successful `--mode=submit`, `evidence/run-<EPOCH>-<client_id>.json`
+is written atomically (tmp + mv). The `<client_id>` is the ephemeral M2M
+client_id returned by `POST /api/v1/admin/m2m/keys`; including it makes
+back-to-back runs in the same epoch second collision-safe. Schema:
 
 ```jsonc
 {
