@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"time"
 
 	"velox-shared/controltransport"
@@ -79,6 +80,17 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	}
 	extraMap["capabilities"] = w.capabilitiesMap(hostname)
 	extraMap["worker_id"] = w.config.WorkerID
+	if image := strings.TrimSpace(os.Getenv("VELOX_WORKER_IMAGE")); image != "" {
+		if at := strings.LastIndex(image, "@"); at >= 0 {
+			extraMap["image_digest"] = strings.TrimPrefix(image[at+1:], "sha256:")
+		}
+	}
+	if desired := strings.TrimSpace(os.Getenv("VELOX_DESIRED_VERSION")); desired != "" {
+		extraMap["desired_version"] = desired
+	}
+	if state := strings.TrimSpace(os.Getenv("VELOX_DEPLOYMENT_STATE")); state != "" {
+		extraMap["deployment_state"] = state
+	}
 
 	w.activeTasksMu.RLock()
 	activeJobList := make([]map[string]interface{}, 0, len(w.activeTasks))

@@ -53,6 +53,9 @@ type WorkerInfo struct {
 	CodeVersion     string                 `json:"code_version"`
 	BundleVersion   string                 `json:"bundle_version"`
 	BundleHash      string                 `json:"bundle_hash,omitempty"`
+	ImageDigest     string                 `json:"image_digest,omitempty"`
+	DesiredVersion  string                 `json:"desired_version,omitempty"`
+	DeploymentState string                 `json:"deployment_state,omitempty"`
 	ProtocolVersion string                 `json:"protocol_version,omitempty"`
 	EngineVersion   string                 `json:"engine_version,omitempty"`
 	Capabilities    map[string]interface{} `json:"capabilities,omitempty"`
@@ -170,6 +173,15 @@ func applyMetadataFields(extra map[string]interface{}, info *WorkerInfo) {
 	}
 	if v, ok := extra["bundle_hash"].(string); ok && v != "" {
 		info.BundleHash = v
+	}
+	if v, ok := extra["image_digest"].(string); ok && v != "" {
+		info.ImageDigest = v
+	}
+	if v, ok := extra["desired_version"].(string); ok && v != "" {
+		info.DesiredVersion = v
+	}
+	if v, ok := extra["deployment_state"].(string); ok && v != "" {
+		info.DeploymentState = v
 	}
 	if v, ok := extra["protocol_version"].(string); ok && v != "" {
 		info.ProtocolVersion = v

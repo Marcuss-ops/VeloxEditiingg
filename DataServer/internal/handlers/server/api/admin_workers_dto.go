@@ -27,13 +27,10 @@ package api
 //
 // Schema policy. Fields already in the registry read model
 // (`workers.WorkerInfo`) are populated by `buildWorkerCard` (see
-// admin_workers_handler.go). Fields the fleet-controller commits
-// will materialise FIRST (image_digest §5, desired_version §5,
-// health §3, deployment_state §5, last_smoke_status §8/§9,
-// last_smoke_at §8/§9, last_restart_at §6) are intentionally LEFT
-// EMPTY with `omitempty`, so the JSON shape stays stable as those
-// commits land — dashboards do not have to fork their parsers when
-// an empty field starts carrying a value.
+// admin_workers_handler.go). Runtime identity and host telemetry are
+// populated from worker heartbeat metadata. Deployment and smoke-ledger
+// fields remain optional until their corresponding operation has produced
+// a record.
 //
 // SOURCE MAPPING (see `buildWorkerCard` for the canonical impl):
 //
@@ -49,15 +46,9 @@ package api
 //	active_jobs       ParseWorkerMetrics(WorkerInfo.Metrics).ActiveTasks
 //	max_active_jobs   ParseWorkerMetrics(WorkerInfo.Metrics).TaskSlots
 //
-// Empty until fleet-controller commits populate:
-//
-//	image_digest      followup §5  - deployment record ledger
-//	desired_version   followup §5  - desired-state store
-//	health            followup §3  - state machine derivation
-//	deployment_state  followup §5  - deployment record
-//	last_smoke_status followup §8/§9 - smoke ledger
-//	last_smoke_at     followup §8/§9 - smoke ledger
-//	last_restart_at   followup §6  - restart ledger
+// `image_digest`, `desired_version`, and `deployment_state` come from
+// heartbeat metadata. `health` is derived by the registry. Smoke and
+// restart timestamps remain empty unless an operation ledger supplies them.
 //
 // `software_version` is intentionally mapped to CodeVersion (NOT
 // BundleVersion) because the operator's dashboard question is
@@ -73,24 +64,29 @@ package api
 // when the worker self-restarts due to a crash; the field's semantic
 // contract belongs to step §6 of the rollout.
 type WorkerCard struct {
-	WorkerID        string `json:"worker_id"`
-	Hostname        string `json:"hostname"`
-	Host            string `json:"host"`
-	Status          string `json:"status"`
-	SessionActive   bool   `json:"session_active"`
-	Executor        string `json:"executor"`
-	ExecutorVersion int32  `json:"executor_version"`
-	ImageDigest     string `json:"image_digest,omitempty"`
-	SoftwareVersion string `json:"software_version"`
-	DesiredVersion  string `json:"desired_version,omitempty"`
-	LastHeartbeatAt string `json:"last_heartbeat_at,omitempty"`
-	ActiveJobs      int32  `json:"active_jobs"`
-	MaxActiveJobs   int32  `json:"max_active_jobs"`
-	Health          string `json:"health,omitempty"`
-	DeploymentState string `json:"deployment_state,omitempty"`
-	LastSmokeStatus string `json:"last_smoke_status,omitempty"`
-	LastSmokeAt     string `json:"last_smoke_at,omitempty"`
-	LastRestartAt   string `json:"last_restart_at,omitempty"`
+	WorkerID            string  `json:"worker_id"`
+	Hostname            string  `json:"hostname"`
+	Host                string  `json:"host"`
+	Status              string  `json:"status"`
+	SessionActive       bool    `json:"session_active"`
+	Executor            string  `json:"executor"`
+	ExecutorVersion     int32   `json:"executor_version"`
+	ImageDigest         string  `json:"image_digest,omitempty"`
+	SoftwareVersion     string  `json:"software_version"`
+	DesiredVersion      string  `json:"desired_version,omitempty"`
+	LastHeartbeatAt     string  `json:"last_heartbeat_at,omitempty"`
+	ActiveJobs          int32   `json:"active_jobs"`
+	MaxActiveJobs       int32   `json:"max_active_jobs"`
+	CPUUtilizationRatio float64 `json:"cpu_utilization_ratio,omitempty"`
+	MemoryUsedBytes     int64   `json:"memory_used_bytes,omitempty"`
+	DiskFreeBytes       int64   `json:"disk_free_bytes,omitempty"`
+	Load1               float64 `json:"load1,omitempty"`
+	CurrentJob          string  `json:"current_job,omitempty"`
+	Health              string  `json:"health,omitempty"`
+	DeploymentState     string  `json:"deployment_state,omitempty"`
+	LastSmokeStatus     string  `json:"last_smoke_status,omitempty"`
+	LastSmokeAt         string  `json:"last_smoke_at,omitempty"`
+	LastRestartAt       string  `json:"last_restart_at,omitempty"`
 }
 
 // AdminWorkersListResponse is the JSON envelope for

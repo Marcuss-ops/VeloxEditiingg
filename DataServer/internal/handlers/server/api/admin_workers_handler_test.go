@@ -2,12 +2,12 @@
 // surface.
 //
 // Tests cover, in this order:
-//   1. buildWorkerCard mapper (unit): populated, nil, no-executors,
-//      no-metrics, omitempty discipline, sensitive-field posture.
-//   2. ListAdminWorkers (HTTP): success path, sort stability, nil
-//      registry (503), empty registry (200 + empty envelope).
-//   3. GetAdminWorker (HTTP): success path, not-found (404), nil
-//      registry (503), whitespace-trimmed worker_id semantics.
+//  1. buildWorkerCard mapper (unit): populated, nil, no-executors,
+//     no-metrics, omitempty discipline, sensitive-field posture.
+//  2. ListAdminWorkers (HTTP): success path, sort stability, nil
+//     registry (503), empty registry (200 + empty envelope).
+//  3. GetAdminWorker (HTTP): success path, not-found (404), nil
+//     registry (503), whitespace-trimmed worker_id semantics.
 //
 // The test helper `makeCardInfo` produces a fully-populated
 // WorkerInfo so we exercise the mapper WITHOUT going through the
@@ -216,6 +216,34 @@ func TestBuildWorkerCard_BundleVersionNotUsed(t *testing.T) {
 	card := buildWorkerCard(&info)
 	if card.SoftwareVersion != "worker-v1.8.4" {
 		t.Errorf("SoftwareVersion = %q, want CodeVersion worker-v1.8.4 (NOT BundleVersion)", card.SoftwareVersion)
+	}
+}
+
+func TestBuildWorkerCard_RuntimeTelemetry(t *testing.T) {
+	info := makeCardInfo("w-runtime", func(i *workersreg.WorkerInfo) {
+		i.ImageDigest = "sha256:" + strings.Repeat("a", 64)
+		i.DesiredVersion = "worker-v1.9.0"
+		i.DeploymentState = "CURRENT"
+		i.CurrentJob = "job-123"
+		i.Metrics = map[string]interface{}{
+			"active_tasks":          float64(1),
+			"task_slots":            float64(2),
+			"cpu_utilization_ratio": 0.75,
+			"memory_used_bytes":     float64(1024),
+			"disk_free_bytes":       float64(2048),
+			"load1":                 1.5,
+			"active_jobs":           []interface{}{},
+		}
+	})
+	card := buildWorkerCard(&info)
+	if card.ImageDigest != info.ImageDigest || card.DesiredVersion != "worker-v1.9.0" || card.DeploymentState != "CURRENT" {
+		t.Fatalf("runtime identity not mapped: %+v", card)
+	}
+	if card.CPUUtilizationRatio != 0.75 || card.MemoryUsedBytes != 1024 || card.DiskFreeBytes != 2048 || card.Load1 != 1.5 {
+		t.Fatalf("runtime metrics not mapped: %+v", card)
+	}
+	if card.CurrentJob != "job-123" || card.ActiveJobs != 1 || card.MaxActiveJobs != 2 {
+		t.Fatalf("job telemetry not mapped: %+v", card)
 	}
 }
 

@@ -11,6 +11,7 @@ type WorkerMetrics struct {
 	CPUUtilizationRatio float64
 	MemoryUsedBytes     int64
 	DiskFreeBytes       int64
+	Load1               float64
 	JobsCompleted       int64
 	JobsFailed          int64
 	ActiveJobs          []ActiveTaskMetrics
@@ -55,6 +56,11 @@ func ParseWorkerMetrics(raw map[string]interface{}) WorkerMetrics {
 	}
 	if v, ok := toInt64(raw["disk_free_bytes"]); ok {
 		m.DiskFreeBytes = v
+	}
+	if v, ok := toFloat64(raw["load1"]); ok {
+		m.Load1 = v
+	} else if v, ok := toFloat64(raw["load_1"]); ok {
+		m.Load1 = v
 	}
 	if v, ok := toInt64(raw["jobs_completed"]); ok {
 		m.JobsCompleted = v

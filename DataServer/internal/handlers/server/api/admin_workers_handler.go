@@ -150,17 +150,25 @@ func buildWorkerCard(info *workersreg.WorkerInfo) WorkerCard {
 		execVer = exs[0].Version
 	}
 	return WorkerCard{
-		WorkerID:        info.WorkerID,
-		Hostname:        sanitiseHostname(info.WorkerName),
-		Host:            sanitiseHostname(info.IPAddress),
-		Status:          info.ConnectionStatus,
-		SessionActive:   info.SessionActive,
-		Executor:        execID,
-		ExecutorVersion: execVer,
-		SoftwareVersion: info.CodeVersion,
-		LastHeartbeatAt: info.LastHB,
-		ActiveJobs:      metrics.ActiveTasks,
-		MaxActiveJobs:   metrics.TaskSlots,
-		Health:          info.Health, // Step 3/15 — 9-state operator-facing health
+		WorkerID:            info.WorkerID,
+		Hostname:            sanitiseHostname(info.WorkerName),
+		Host:                sanitiseHostname(info.IPAddress),
+		Status:              info.ConnectionStatus,
+		SessionActive:       info.SessionActive,
+		Executor:            execID,
+		ExecutorVersion:     execVer,
+		ImageDigest:         info.ImageDigest,
+		SoftwareVersion:     info.CodeVersion,
+		DesiredVersion:      info.DesiredVersion,
+		DeploymentState:     info.DeploymentState,
+		LastHeartbeatAt:     info.LastHB,
+		ActiveJobs:          metrics.ActiveTasks,
+		MaxActiveJobs:       metrics.TaskSlots,
+		CPUUtilizationRatio: metrics.CPUUtilizationRatio,
+		MemoryUsedBytes:     metrics.MemoryUsedBytes,
+		DiskFreeBytes:       metrics.DiskFreeBytes,
+		Load1:               metrics.Load1,
+		CurrentJob:          info.CurrentJob,
+		Health:              info.Health, // Step 3/15 — 9-state operator-facing health
 	}
 }
