@@ -39,6 +39,7 @@ std::optional<RenderPlan> parseRenderPlan(const std::string& jsonStr) {
         for (const auto& itemStr : ju::splitTopLevelObjects(timelineBlock)) {
             TimelineItem item;
             item.duration_seconds = ju::extractJsonNumberValue(itemStr, "duration_seconds", 0.0);
+            item.include_audio = ju::extractJsonBoolValue(itemStr, "include_audio", false);
             
             // Transform
             item.transform.scale_mode = ju::extractJsonStringValue(itemStr, "scale_mode");

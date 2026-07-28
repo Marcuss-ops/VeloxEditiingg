@@ -33,7 +33,8 @@ std::string buildVideoSegmentArgs(
     const std::filesystem::path& clipPath,
     const std::filesystem::path& segmentPath,
     double duration,
-    const SceneSegmentParams& params);
+    const SceneSegmentParams& params,
+    bool includeAudio = false);
 
 std::string buildColorSegmentArgs(
     const std::filesystem::path& segmentPath,

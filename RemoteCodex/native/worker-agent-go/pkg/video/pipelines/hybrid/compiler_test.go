@@ -134,6 +134,30 @@ func TestCompile_ItemsWithoutAudio_ProducesSilentTimeline(t *testing.T) {
 	}
 }
 
+func TestCompile_VideoItemCanPreserveOriginalAudio(t *testing.T) {
+	input := map[string]interface{}{
+		"items": []interface{}{
+			map[string]interface{}{
+				"type":          "video",
+				"url":           "https://example.com/clip-with-audio.mp4",
+				"duration":      6.0,
+				"include_audio": true,
+			},
+		},
+	}
+
+	plan, err := Compile(context.Background(), "job-original-audio", input, "/tmp/out.mp4", nil)
+	if err != nil {
+		t.Fatalf("Compile(video item with original audio): %v", err)
+	}
+	if got := len(plan.AudioTracks); got != 0 {
+		t.Fatalf("want no external audio tracks, got %d", got)
+	}
+	if !plan.Timeline[0].IncludeAudio {
+		t.Fatalf("want timeline item to preserve source audio")
+	}
+}
+
 func TestCompile_AudioTracks_ProducesOffsetMixPlan(t *testing.T) {
 	input := map[string]interface{}{
 		"items": []interface{}{

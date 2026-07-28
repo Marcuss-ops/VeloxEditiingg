@@ -217,7 +217,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 result.error = "failed to download video source for segment " + std::to_string(i);
                 return result;
             }
-            args_only = media::buildVideoSegmentArgs(localVid, segmentOut, item.duration_seconds, params);
+            args_only = media::buildVideoSegmentArgs(localVid, segmentOut, item.duration_seconds, params, item.include_audio);
         } else if (std::holds_alternative<plan::ColorSource>(item.source)) {
             seg.source_type = "color";
             auto color = std::get<plan::ColorSource>(item.source);

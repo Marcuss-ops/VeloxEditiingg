@@ -233,7 +233,8 @@ std::string buildVideoSegmentArgs(
     const fs::path& clipPath,
     const fs::path& segmentPath,
     double duration,
-    const SceneSegmentParams& params
+    const SceneSegmentParams& params,
+    bool includeAudio
 ) {
     int w, h, fps;
     canvasDims(params, w, h, fps);
@@ -248,14 +249,17 @@ std::string buildVideoSegmentArgs(
     }
 
     std::ostringstream cmd;
-    // Narrated scenes can be much longer than the source stock clip. Loop
-    // the source so the visual bed covers the whole requested scene; -t
-    // still bounds the generated segment exactly to that scene duration.
-    cmd << "-stream_loop -1 -i " << file::shellQuote(clipPath.string())
+    if (!includeAudio) {
+        // Narrated scenes can be much longer than the source stock clip. Loop
+        // the source so the visual bed covers the whole requested scene; -t
+        // still bounds the generated segment exactly to that scene duration.
+        cmd << "-stream_loop -1 ";
+    }
+    cmd << "-i " << file::shellQuote(clipPath.string())
         << " -t " << duration
         << " -vf " << file::shellQuote(scale_filter)
         << ffmpegRateControlArgsForCodec(ffmpegVideoCodec())
-        << " -pix_fmt yuv420p -r " << fps << " -an";
+        << " -pix_fmt yuv420p -r " << fps;
     appendFfmpegVideoEncodingArgs(
         cmd,
         ffmpegVideoCodec(),
@@ -263,6 +267,11 @@ std::string buildVideoSegmentArgs(
         ffmpegVideoTuneForCodec(ffmpegVideoCodec(), false),
         ffmpegThreadCount(),
         "");
+    if (includeAudio) {
+        cmd << " -map 0:v:0 -map 0:a? -c:a aac -ar 48000 -ac 2 -shortest";
+    } else {
+        cmd << " -an";
+    }
     cmd << " " << file::shellQuote(segmentPath.string());
     return cmd.str();
 }

@@ -41,6 +41,7 @@ type TransformSpec struct {
 type TimelineItem struct {
 	Source          MediaSource    `json:"source"`
 	DurationSeconds float64        `json:"duration_seconds"`
+	IncludeAudio    bool           `json:"include_audio,omitempty"`
 	Transform       *TransformSpec `json:"transform,omitempty"`
 }
 

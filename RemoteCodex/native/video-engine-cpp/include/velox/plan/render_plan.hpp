@@ -30,6 +30,7 @@ struct TransformSpec {
 struct TimelineItem {
     MediaSource source;
     double duration_seconds{0.0};
+    bool include_audio{false};
     TransformSpec transform;
 };
 

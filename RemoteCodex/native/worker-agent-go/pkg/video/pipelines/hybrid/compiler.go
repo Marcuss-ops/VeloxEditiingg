@@ -50,6 +50,7 @@ type ItemInput struct {
 	Role                     string // "voiceover_bed", "scene_clip", or "" (legacy)
 	VoiceoverDurationSeconds float64
 	FinalClipDurationSeconds float64
+	IncludeAudio             bool
 }
 
 // AudioTrackInput is a single audio source mixed into the render plan.
@@ -169,6 +170,7 @@ func compileItemsToTimeline(items []ItemInput, defaultFit string) []plan.Timelin
 		timeline[i] = plan.TimelineItem{
 			Source:          sourceForItem(item),
 			DurationSeconds: effectiveDuration(item),
+			IncludeAudio:    item.IncludeAudio,
 			Transform:       &plan.TransformSpec{ScaleMode: effectiveFit(item, defaultFit)},
 		}
 	}
@@ -332,6 +334,7 @@ func parseRequest(input map[string]interface{}) *Request {
 				Role:                     toString(im["role"]),
 				VoiceoverDurationSeconds: toFloat64Default(im["voiceover_duration_seconds"], 0.0),
 				FinalClipDurationSeconds: toFloat64Default(im["final_clip_duration_seconds"], 0.0),
+				IncludeAudio:             toBoolDefault(im["include_audio"], false),
 			})
 		}
 		return req
@@ -384,6 +387,21 @@ func toFloat64Default(v interface{}, fallback float64) float64 {
 		return float64(val)
 	case int64:
 		return float64(val)
+	}
+	return fallback
+}
+
+func toBoolDefault(v interface{}, fallback bool) bool {
+	switch val := v.(type) {
+	case bool:
+		return val
+	case string:
+		switch strings.ToLower(strings.TrimSpace(val)) {
+		case "1", "true", "yes", "y":
+			return true
+		case "0", "false", "no", "n":
+			return false
+		}
 	}
 	return fallback
 }
