@@ -217,6 +217,11 @@ func sceneVoiceoverURL(scene map[string]interface{}) string {
 	if url := payload.FirstString(scene, "voiceover_link", "reference_voiceover", "voiceover_path"); url != "" {
 		return url
 	}
+	if voiceover, ok := scene["voiceover"].(map[string]interface{}); ok {
+		if url := payload.FirstString(voiceover, "link", "url", "drive_link", "local_path"); url != "" {
+			return url
+		}
+	}
 	if bindings, ok := scene["bindings"].(map[string]interface{}); ok {
 		if voiceover, ok := bindings["voiceover"].(map[string]interface{}); ok {
 			if url := payload.FirstString(voiceover, "link", "url", "drive_link", "local_path"); url != "" {

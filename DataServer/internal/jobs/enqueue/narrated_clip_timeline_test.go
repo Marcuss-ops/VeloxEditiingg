@@ -359,6 +359,40 @@ func TestBuildNarratedClipPayload_OffsetClock(t *testing.T) {
 	}
 }
 
+func TestBuildNarratedClipPayload_NestedVoiceoverUsesClipPlusVoiceoverDuration(t *testing.T) {
+	t.Parallel()
+	scenes := []map[string]interface{}{
+		{
+			"duration_seconds": 5.0,
+			"clip": map[string]interface{}{
+				"url":         "velox-asset://clip",
+				"duration_ms": 5000,
+			},
+			"voiceover": map[string]interface{}{
+				"url":         "velox-asset://voiceover",
+				"duration_ms": 5000,
+			},
+		},
+	}
+
+	if !supportsNarratedClipScenes(scenes) {
+		t.Fatal("nested scene.voiceover must select narrated timeline")
+	}
+	entries, items, _, audioTracks, _, err := buildNarratedClipPayload(scenes, narratedClipOptions{})
+	if err != nil {
+		t.Fatalf("buildNarratedClipPayload: %v", err)
+	}
+	if got := asFloat(entries[0]["duration_seconds"]); got != 10.0 {
+		t.Fatalf("scene duration = %v; want 10.0", got)
+	}
+	if len(items) != 2 || asFloat(items[0]["duration"]) != 5.0 || asFloat(items[1]["duration"]) != 5.0 {
+		t.Fatalf("timeline items = %#v; want two 5-second video segments", items)
+	}
+	if len(audioTracks) != 2 || asFloat(audioTracks[1]["start_time_offset"]) != 5.0 || asFloat(audioTracks[1]["duration_seconds"]) != 5.0 {
+		t.Fatalf("audio tracks = %#v; want clip audio at 5s for 5s", audioTracks)
+	}
+}
+
 // TestBuildNarratedClipPayload_RequiresClipOrNarration — if a scene
 // declares NEITHER narration NOR final-clip URL, the builder must fail
 // rather than emit a half-blank entry.
