@@ -38,7 +38,6 @@ import (
 	"errors"
 	"fmt"
 
-	"velox-shared/contract"
 	"velox-shared/contract/deliveryplan"
 )
 
@@ -190,20 +189,4 @@ func marshalEntryMetadata(metadata map[string]interface{}) (string, error) {
 	return string(data), nil
 }
 
-// Silence the contract unused-import warning when this file is the
-// only consumer of velox-shared/contract (kept for the canonical
-// DefaultDeliveryRetryBudget import inside deliveryplan.Parse via
-// the shared package). This static-assert is a no-op; the
-// contract here is purely documentary.
-//
-// (no functional contract below — the import stays because this
-// file is part of the contract package's broader set of Go
-// callers, even though its own body now routes through
-// deliveryplan.Parse.)
 
-// _pullsContractConstant — sentinel assertion. The signature
-// references contract.DefaultDeliveryRetryBudget on a private
-// helper so accidental drift (someone removing the contract
-// import from this file's neighbour) gets caught at compile time
-// rather than at runtime when a legacy fallback case fires.
-var _ = contract.DefaultDeliveryRetryBudget

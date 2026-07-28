@@ -75,10 +75,53 @@ func Parse(payload map[string]interface{}) ([]Entry, error) {
 		entries = planEntries
 	}
 
+	// Creator-machine nested envelope back-compat:
+	//
+	// `{"payload": {"delivery_plan": [...]}}`
+	//
+	// The Creator frontend wraps the entire Job under a nested
+	// "payload" envelope that carries `delivery_plan` (and the
+	// legacy `delivery_destination_ids`/`delivery_destination_id`
+	// aliases inside it). The pre-refactor
+	// store.parseDeliveryPlanPayload / enqueue.validateDeliveryPlanRequires
+	// happy-path accepted this nested form by inspection of the
+	// inner map. After the shared extraction, the canonical
+	// `delivery_plan` key is at the TOP of the wire map for the
+	// typed SubmitJob path; for the Creator-flow path we MUST
+	// ALSO honour the nested envelope or every Creator-push
+	// preflight (validateDeliveryPlanRequires + parseDeliveryPlanPayload)
+	// regresses with the canonical "explicit delivery plan required"
+	// rejection — the regression the cross-module refactor surfaced
+	// via `TestSubmitJobE2E_SuccessAndReplay` (delivery_plan nested under
+	// payload at the creator-machine layer) and the calendar
+	// e2e suite which exercises the same nested form through
+	// creatorflow.ResolveCompletedPayload.
+	if len(entries) == 0 {
+		if nested, ok := payload["payload"].(map[string]interface{}); ok {
+			if raw, ok := nested["delivery_plan"]; ok && raw != nil {
+				planEntries, perr := parsePlanned(raw)
+				if perr != nil {
+					return nil, perr
+				}
+				entries = planEntries
+			}
+		}
+	}
+
 	if len(entries) == 0 {
 		ids, lerr := extractLegacyDestinationIDs(payload)
 		if lerr != nil {
 			return nil, lerr
+		}
+		// Legacy fallback at the nested level too (Creator-flow path
+		// sometimes sends `payload.delivery_destination_ids`).
+		if len(ids) == 0 {
+			if nested, ok := payload["payload"].(map[string]interface{}); ok {
+				ids, lerr = extractLegacyDestinationIDs(nested)
+				if lerr != nil {
+					return nil, lerr
+				}
+			}
 		}
 		for i, id := range ids {
 			entries = append(entries, Entry{

@@ -196,6 +196,58 @@ func TestParse_HappyPaths(t *testing.T) {
 				},
 			},
 		},
+		{
+			// Creator-machine nested envelope back-compat (the
+			// fix for the regression surfaced by
+			// TestSubmitJobE2E_SuccessAndReplay + calendar
+			// e2e suite): the Creator frontend wraps the entire
+			// Job under a nested "payload" envelope that carries
+			// `delivery_plan`. The legacy
+			// store.parseDeliveryPlanPayload accepted this
+			// nested form by inspection of the inner map. The
+			// canonical Parse MUST honour the same nested form
+			// so Creator-flow preflight gates don't regress to
+			// a canonical "explicit delivery plan required"
+			// rejection.
+			name: "creator_nested_envelope_array",
+			in: map[string]interface{}{
+				"payload": map[string]interface{}{
+					"delivery_plan": []interface{}{
+						map[string]interface{}{"destination_id": "drive-main", "priority": 1, "retry_budget": 3},
+					},
+				},
+			},
+		},
+		{
+			// Same nested form, single object delivery_plan.
+			name: "creator_nested_envelope_single_object",
+			in: map[string]interface{}{
+				"payload": map[string]interface{}{
+					"delivery_plan": map[string]interface{}{
+						"destination_id": "drive-main",
+						"retry_budget":   5,
+					},
+				},
+			},
+		},
+		{
+			// Same nested form, legacy ids alias.
+			name: "creator_nested_envelope_legacy_ids",
+			in: map[string]interface{}{
+				"payload": map[string]interface{}{
+					"delivery_destination_ids": []string{"drive-main"},
+				},
+			},
+		},
+		{
+			// Same nested form, legacy single-id alias.
+			name: "creator_nested_envelope_legacy_single_id",
+			in: map[string]interface{}{
+				"payload": map[string]interface{}{
+					"delivery_destination_id": "drive-main",
+				},
+			},
+		},
 	}
 	for _, c := range cases {
 		c := c

@@ -17,14 +17,29 @@
 // (validationError alias, PlanDestination, ResolvedPlan, PlanResolver)
 // remain in scope across both files without re-export.
 //
-// Migration note: after the shared/contract/deliveryplan extraction,
-// the previously private *validationError struct/method surface was
-// collapsed into a type alias `type validationError = deliveryplan.
-// ValidationError`. The literals that used the unexported field names
-// The private validationError type remains local because the normalizers in
-// this package still construct private field/message literals. The delivery
-// plan shape parser lives in shared/contract/deliveryplan and is adapted back
-// to this local error surface at the enqueue boundary.
+// Migration note: the previously-private *validationError struct/method
+// surface in this package was collapsed into the canonical typed
+// surface via the package-wide type alias
+// `type validationError = deliveryplan.ValidationError` (see
+// delivery_plan_validator.go for the declaration). Every literal
+// that previously used the unexported `field/message/wrapped`
+// field names now routes through the canonical constructors:
+//
+//	deliveryplan.NewValidationError(field, msg)
+//	deliveryplan.NewValidationErrorWrapped(field, msg, wrappedErr)
+//
+// The `<FieldPath>: <Msg>` envelope is preserved verbatim so the
+// existing creatorflow.WriteResolverError detection path,
+// integration_test golden assertions, and substring-matched log
+// callers continue to work without any test-side change. The shape
+// rules themselves (allowed payload shapes, legacy fallback, per-
+// entry invariants, field paths) live in shared/contract/
+// deliveryplan/parser.go as the single source of truth; this
+// package constructs only the enqueue-layer-specific precondition
+// messages (e.g. "no plan resolver configured", "resolve failed: ...,
+// create job_delivery_plans rows for this job before enqueueing")
+// and the normalizer's video-metadata validation strings via the
+// canonical constructors.
 package enqueue
 
 import (
