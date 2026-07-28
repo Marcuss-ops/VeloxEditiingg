@@ -372,6 +372,48 @@ func TestNormalizeExternalJobSubmission_PerSceneClipAndSubtitlesRoundtrip(t *tes
 	}
 }
 
+func TestNormalizeExternalJobSubmission_PreservesTopLevelVisualTracks(t *testing.T) {
+	t.Parallel()
+
+	req := SubmitJobRequest{
+		IdempotencyKey: "visual-tracks-001",
+		Scenes: []SubmitScene{
+			{
+				Text:            "scene with global visual tracks",
+				ClipLink:        "velox-asset://clip-1",
+				DurationSeconds: 7,
+			},
+		},
+		VoiceoverPaths: []string{"velox-asset://voice-1"},
+		SubtitleTracks: []SubmitSubtitleTrack{
+			{Source: "velox-asset://subtitle-1", Preset: "active_word_pop", Font: "Inter"},
+		},
+		Layers: []SubmitLayer{
+			{
+				ID:              "important-1",
+				Type:            "text",
+				Role:            "important_phrase",
+				Text:            "Important",
+				StartSeconds:    1,
+				DurationSeconds: 2,
+				Preset:          "important_phrase_v1",
+			},
+		},
+	}
+
+	canonical := (&Handlers{}).NormalizeExternalJobSubmission(req)
+	if canonical == nil {
+		t.Fatal("NormalizeExternalJobSubmission returned nil")
+	}
+	wp := canonical.WorkerPayload
+	if got, ok := wp["subtitle_tracks"].([]interface{}); !ok || len(got) != 1 {
+		t.Fatalf("worker_payload[subtitle_tracks] = %#v, want one track", wp["subtitle_tracks"])
+	}
+	if got, ok := wp["layers"].([]interface{}); !ok || len(got) != 1 {
+		t.Fatalf("worker_payload[layers] = %#v, want one layer", wp["layers"])
+	}
+}
+
 func TestNormalizeExternalJobSubmission_LegacyClipLinkAddsSceneVoiceover(t *testing.T) {
 	t.Parallel()
 

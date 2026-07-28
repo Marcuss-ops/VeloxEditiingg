@@ -192,12 +192,24 @@ func (h *Handlers) NormalizeExternalJobSubmission(req SubmitJobRequest) *Canonic
 
 	dto, _ := remoteengine.ParseRemotePipelineResult(rawPayload)
 	workerPayload := dto.ToWorkerPayload()
+	preserveWorkerPayloadFields(workerPayload, rawPayload, "subtitle_tracks", "layers")
 
 	return &CanonicalCompletedPayload{
 		SourceProvider:   ExternalAPISourceProvider,
 		SourceJobID:      req.IdempotencyKey,
 		TargetExecutorID: JobSubmitTargetExecutorID,
 		WorkerPayload:    workerPayload,
+	}
+}
+
+func preserveWorkerPayloadFields(dst, src map[string]interface{}, keys ...string) {
+	if dst == nil || src == nil {
+		return
+	}
+	for _, key := range keys {
+		if value, ok := src[key]; ok && value != nil {
+			dst[key] = value
+		}
 	}
 }
 
