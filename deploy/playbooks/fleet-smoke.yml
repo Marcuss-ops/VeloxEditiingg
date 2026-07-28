@@ -1,0 +1,141 @@
+---
+# fleet-smoke — Velox fleet-operator (Step 11/15).
+# ────────────────────────────────────────────────────────────────────────────
+# On-demand Level D smoke run for every worker in [velox_workers], one at
+# a time, stop at first fail. Distinct from the prepare-host.sh Level-B
+# selftest — this is the canonical end-to-end smoke rendered through the
+# Step 12/15 LevelDSmokeExecutor:
+#
+#   lease (RegistryDrainLease → WorkerInfo.Drain transient)
+#   → asset resolve
+#   → DownloadAsset
+#   → RunFFmpegRender
+#   → UploadArtifact (Drive)
+#   → smoke_runs SUCCEEDED + duration_ms stamped
+#
+# ROUTING: HTTP delegate to master REST :8000. The Master owns the
+# LevelDSmokeExecutor (Step 12/15) + the smoke_runs ledger + the audit
+# row. The smoke payload is published as OperationKindSmoke.
+#
+# The 10-minute hard `TimeoutSec` default matches the executor's
+# defaultSmokeBudget. Operators wanting a longer cap pass
+# -e smoke_timeout_sec=1800.
+#
+# STOP AL PRIMO FAIL: serial: 1 + any_errors_fatal: true.
+#
+# Usage:
+#   ansible-playbook -i deploy/ansible/inventory.ini \
+#     --ask-vault-pass \
+#     deploy/playbooks/fleet-smoke.yml
+#
+#   # Smoke a different asset bundle:
+#   ansible-playbook -i deploy/ansible/inventory.ini \
+#     --ask-vault-pass \
+#     -e smoke_asset_id=asset-canary-002 \
+#     deploy/playbooks/fleet-smoke.yml
+
+- name: fleet-smoke — Level D end-to-end smoke per worker (Step 12/15)
+  hosts: velox_workers
+  serial: 1
+  any_errors_fatal: true
+  gather_facts: false
+  connection: local
+  become: false
+
+  vars_files:
+    - ../group_vars/all.yml
+    - ../group_vars/vault.yml
+
+  vars:
+    smoke_asset_id: "{{ smoke_asset_id | default('asset-canary-001') }}"
+    smoke_render_plan: >-
+      {{ smoke_render_plan | default('ffmpeg -i {{ pickup_url }} -c:v libx264 -t 5 /tmp/smoke-{{ worker_id }}.mp4') }}
+    smoke_timeout_sec: "{{ smoke_timeout_sec | default(600) }}"
+    smoke_reason: "{{ smoke_reason | default('ansible fleet-smoke serial:1') }}"
+    # Step 12/15 executor opTimeout is 30min; serial:1 fence means we cap
+    # at 12 min per poll (covers slow Drive delivery + retries).
+    velox_poll_attempts: 144   # 144 × 5s = 720s = 12 min
+    velox_poll_delay_sec: 5
+
+  tasks:
+    - name: POST /api/v1/admin/workers/{{ worker_id }}/smoke to master
+      ansible.builtin.uri:
+        url: "https://{{ velox_master_public_url }}:{{ velox_master_port }}/api/v1/admin/workers/{{ worker_id }}/smoke"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ vault_velox_admin_token }}"
+        body_format: json
+        body:
+          asset_id: "{{ smoke_asset_id }}"
+          render_plan: "{{ smoke_render_plan }}"
+          timeout_sec: "{{ smoke_timeout_sec }}"
+          reason: "{{ smoke_reason }}"
+        validate_certs: true
+        timeout: 30
+        status_code: [202, 409]
+      register: smoke_post
+      failed_when: smoke_post.status not in [202, 409]
+
+    - name: Skip polling if smoke returned 409 (operation in-flight)
+      ansible.builtin.debug:
+        msg: >-
+          Worker {{ worker_id }} smoke returned HTTP 409 —
+          a smoke is already in-flight on this worker. Wait for
+          it to terminate (poll
+          /api/v1/admin/operations/{op_id}) before re-running.
+      when: smoke_post.status == 409
+
+    - name: Poll smoke operation until terminal for {{ worker_id }}
+      ansible.builtin.uri:
+        url: "https://{{ velox_master_public_url }}:{{ velox_master_port }}/api/v1/admin/operations/{{ smoke_post.json.operation_id }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ vault_velox_admin_token }}"
+        validate_certs: true
+        timeout: 30
+      register: smoke_poll
+      until: smoke_poll.json.status in ['SUCCEEDED', 'FAILED']
+      retries: "{{ velox_poll_attempts }}"
+      delay: "{{ velox_poll_delay_sec }}"
+      when: smoke_post.status == 202
+
+    - name: Fetch smoke_runs row for the just-finished smoke of {{ worker_id }}
+      ansible.builtin.uri:
+        url: "https://{{ velox_master_public_url }}:{{ velox_master_port }}/api/v1/admin/workers/{{ worker_id }}/smokes/latest"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ vault_velox_admin_token }}"
+        validate_certs: true
+        timeout: 30
+      register: smoke_row
+      failed_when: false
+      when:
+        - smoke_post.status == 202
+        - smoke_poll.json.status == 'SUCCEEDED'
+
+    - name: Fail the play if smoke ended FAILED for {{ worker_id }}
+      ansible.builtin.fail:
+        msg: >-
+          Smoke failed for worker {{ worker_id }} — operation
+          {{ smoke_post.json.operation_id }} ended FAILED with
+          error_message: {{ smoke_poll.json.error_message | default('—') }}.
+          The canonical sentinels (Step 12/15) include
+          smoke_lease_unavailable / asset_download_failed /
+          ffmpeg_render_failed / drive_upload_failed; the surface
+          string in error_message is the dashboard grep key.
+      when:
+        - smoke_post.status == 202
+        - smoke_poll.json.status == 'FAILED'
+
+    - name: Announce smoke duration_ms baseline for {{ worker_id }}
+      ansible.builtin.debug:
+        msg: >-
+          [{{ worker_id }}] SMOKE → SUCCEEDED
+          (operation_id={{ smoke_post.json.operation_id }},
+          duration_ms={{ smoke_row.json.duration_ms | default('—') }},
+          artifact_drive_id={{ smoke_row.json.artifact_drive_id | default('—') }}).
+          The duration_ms stamps onto smoke_runs (Step 12/15) for
+          the fleet-wide analytics baseline.
+      when:
+        - smoke_post.status == 202
+        - smoke_poll.json.status == 'SUCCEEDED'

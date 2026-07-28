@@ -1,0 +1,78 @@
+---
+# fleet-restart — Velox fleet-operator (Step 11/15).
+# ────────────────────────────────────────────────────────────────────────────
+# Restart the docker compose stack for one worker at a time, stop at first
+# fail. This is the canonical "container restart" primitive — used when
+# Level-B health checks miss a transient cleanup, or when the operator
+# wants to recover a stuck worker WITHOUT touching image digest (use
+# fleet-update.yml for image digest changes; that path is ledger-driven
+# + Cosign-verified).
+#
+# ROUTING: SSH direct on the worker host. The docker compose stack is
+# bound to the host, not the master. Master has no `docker` socket.
+#
+# ⚠ Container restart is NOT coordinated with the Master. Operators
+# who restart a draining worker mid-render will see the operations
+# recover when the worker reconnects (Step 1/15 registry heartbeat +
+# task-grace-period). Operations that were RUNNING on the worker at
+# the SIGTERM moment will surface in fleet_operations as READY_FOR_RETRY
+# (the canonical reaper canvas): operators can re-issue them
+# separately.
+#
+# DEPLOY PATTERN (per the Step 9/15 user spec, repeated verbatim):
+#   set -a
+#   source /etc/velox-worker/worker.env
+#   set +a
+#   docker compose \
+#     -p "velox-worker-${VELOX_WORKER_ID}" \
+#     -f /opt/velox-worker/compose.yml \
+#     restart
+#
+# STOP AL PRIMO FAIL: serial: 1 + any_errors_fatal: true.
+#
+# Usage:
+#   ansible-playbook -i deploy/ansible/inventory.ini \
+#     --ask-vault-pass \
+#     deploy/playbooks/fleet-restart.yml
+
+- name: fleet-restart — docker compose restart per worker
+  hosts: velox_workers
+  serial: 1
+  any_errors_fatal: true
+  gather_facts: false
+  connection: ssh
+  become: true
+
+  tasks:
+    - name: Restart docker compose stack for {{ worker_id }}
+      ansible.builtin.command:
+        cmd: >-
+          docker compose
+          -p "velox-worker-{{ worker_id }}"
+          -f /opt/velox-worker/compose.yml
+          restart
+        chdir: /opt/velox-worker
+      environment:
+        VELOX_WORKER_ID: "{{ worker_id }}"
+      register: restart_run
+      changed_when: restart_run.rc == 0
+      failed_when: restart_run.rc != 0
+
+    - name: Wait for /health/ready on the worker loopback
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8081/health/ready"
+        method: GET
+        status_code: 200
+        timeout: 5
+      register: health_ready
+      until: health_ready.status == 200
+      retries: 12          # 12 × 5s = 60s
+      delay: 5
+      failed_when: health_ready.status != 200
+
+    - name: Announce restart healthy for {{ worker_id }}
+      ansible.builtin.debug:
+        msg: >-
+          [{{ worker_id }}] docker compose restart OK;
+          /health/ready returned 200; the master will see the
+          re-registration on the next heartbeat tick (Step 1/15).

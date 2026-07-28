@@ -23,10 +23,18 @@ velox-master.pid
 # These wrap any depth to catch live operator inventories / env files that
 # are generated next to test data or in sub-checkouts. Templates live under
 # `*.example` (e.g. `deploy/inventory/production.ini.example`) and stay versioned.
+# EXCEPTION (Step 11/15 fleet-operator): `deploy/ansible/inventory.ini` IS
+# the canonical versioned inventory for the new `fleet-*` serial:1 playbooks.
+# It is intentionally NOT operator-local; the canonical worker_id + IP
+# mapping ships in-tree so the playbooks run unchanged across operator
+# laptops and CI. The negation below whitelists that single path; do not
+# add similar whitelists for ad-hoc operator copies — keep the policy
+# general and break it only for the canonical ship-time inventory.
 **/production.ini
 **/inventory.ini
 **/inventory.yml
 **/inventory.yaml
+!deploy/ansible/inventory.ini
 **/production.env
 **/.env.production
 **/vault.yml

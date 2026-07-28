@@ -1,0 +1,77 @@
+---
+# fleet-logs — Velox fleet-operator (Step 11/15).
+# ────────────────────────────────────────────────────────────────────────────
+# Tail the docker-compose logs of the Velox worker on each worker host.
+# Useful for triaging a failed fleet-update / fleet-smoke / Level-A
+# hostcheck without ssh'ing into each VPS separately.
+#
+# ROUTING: SSH direct on the worker. Logs live on the worker host, not
+# the master. The Master has no tail-able stream for the worker's
+# stdout (the Level-D smoke delivers to Drive; the rest is on-host).
+#
+# Defaults to the last 200 lines; operators can override with
+# `-e logs_tail=1000` for a longer window. Logs are dumped via
+# `ansible.builtin.debug var=...` so the operator sees them inline
+# with the play recap.
+#
+# STOP AL PRIMO FAIL: serial: 1 + any_errors_fatal: true — a docker
+# compose failure (no such project, daemon dead) on worker 1 halts the
+# run before worker 2 is touched.
+#
+# Usage:
+#   ansible-playbook -i deploy/ansible/inventory.ini \
+#     --ask-vault-pass \
+#     deploy/playbooks/fleet-logs.yml
+#
+#   # Longer tail (1000 lines), follow=false:
+#   ansible-playbook -i deploy/ansible/inventory.ini \
+#     --ask-vault-pass \
+#     -e logs_tail=1000 \
+#     deploy/playbooks/fleet-logs.yml
+
+- name: fleet-logs — tail docker compose logs per worker
+  hosts: velox_workers
+  serial: 1
+  any_errors_fatal: true
+  gather_facts: false
+  connection: ssh
+  become: true
+
+  vars:
+    logs_tail: "{{ logs_tail | default(200) }}"
+
+  tasks:
+    - name: Tail last {{ logs_tail }} lines of velox-worker-{{ worker_id }}
+      ansible.builtin.command:
+        cmd: >-
+          docker compose
+          -p "velox-worker-{{ worker_id }}"
+          -f /opt/velox-worker/compose.yml
+          logs --tail={{ logs_tail }} --no-color --no-log-prefix
+        chdir: /opt/velox-worker
+      register: logs_run
+      changed_when: false
+      failed_when: false   # log-tailing is informational; missing project
+                            # is reported via debug, not a hard fail
+
+    - name: Print {{ worker_id }} docker logs
+      ansible.builtin.debug:
+        msg: |
+          ================== [{{ worker_id }}] docker compose logs (last {{ logs_tail }} lines) ==================
+          {{ logs_run.stdout | default('— (no stdout)') }}
+          {% if logs_run.stderr | default('') | length > 0 %}
+          ---------- stderr ----------
+          {{ logs_run.stderr }}
+          {% endif %}
+          ================== end {{ worker_id }} ===============================================
+
+    - name: Fail the play if docker compose exited non-zero on {{ worker_id }}
+      ansible.builtin.fail:
+        msg: >-
+          docker compose logs failed on worker {{ worker_id }} —
+          rc={{ logs_run.rc }}, stderr=
+          {{ logs_run.stderr | default('') | truncate(400, true, '…') }}.
+          Likely no docker project named velox-worker-{{ worker_id }},
+          OR /opt/velox-worker/compose.yml missing. Operator MUST
+          ssh in by hand before re-running fleet-logs.
+      when: logs_run.rc != 0

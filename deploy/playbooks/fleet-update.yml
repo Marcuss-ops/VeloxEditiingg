@@ -1,0 +1,136 @@
+---
+# fleet-update — Velox fleet-operator (Step 11/15).
+# ────────────────────────────────────────────────────────────────────────────
+# Drive the canonical image-update cascade (Step 9/15 surface) for every
+# worker in [velox_workers] serially (one worker at a time, stop at first
+# fail). The cascade is:
+#
+#   DRAINING
+#   → active_jobs = 0
+#   → snapshot previous_digest (deployment_records row)
+#   → pull image @target_digest with Cosign verify
+#   → docker compose -p velox-worker-${id} restart with new image
+#   → /health/ready check on the new container
+#   → Master reconnect (CONNECTED + session_active)
+#   → optional follow-up smoke (drive separately via fleet-smoke)
+#   → mark SUCCEEDED on deployment_records
+#
+# ROUTING: HTTP delegate to master REST :8000. The Master owns UpdateExecutor
+# (Step 9/15) + the audit ledger. The playbook's job is solely to publish
+# the update operation and poll until terminal. Direct SSH-level docker
+# pull would bypass:
+#   * the deployment_records ledger (Step 5/15)
+#   * the rollback cascade (Step 9/15)
+#   * the Cosign verification gate
+# and is therefore FORBIDDEN.
+#
+# operands (Step 9/15)
+#
+# Usage:
+#   # Pin a new digest onto every worker (one at a time):
+#   ansible-playbook -i deploy/ansible/inventory.ini \
+#     --ask-vault-pass \
+#     -e update_target_digest=sha256:abcdef...123 \
+#     deploy/playbooks/fleet-update.yml
+#
+#   # Use the existing current desired_version pinned in
+#   # group_vars/all.yml (default):
+#   ansible-playbook -i deploy/ansible/inventory.ini \
+#     --ask-vault-pass \
+#     deploy/playbooks/fleet-update.yml
+
+- name: fleet-update — image + digest cascade per worker (Step 9/15)
+  hosts: velox_workers
+  serial: 1
+  any_errors_fatal: true
+  gather_facts: false
+  connection: local
+  become: false
+
+  vars_files:
+    - ../group_vars/all.yml
+    - ../group_vars/vault.yml
+
+  vars:
+    update_target_digest: "{{ update_target_digest | default('') }}"
+    update_reason: "{{ update_reason | default('ansible fleet-update serial:1') }}"
+    velox_poll_attempts: 360   # 360 × 5s = 1800s = 30 min (Step 9/15 opTimeout)
+    velox_poll_delay_sec: 5
+
+  pre_tasks:
+    - name: Assert target digest is git-style sha256:pinned (Step 5/15 invariant)
+      ansible.builtin.assert:
+        that:
+          - update_target_digest is match('^sha256:[0-9a-f]{64}$')
+          - not (update_target_digest is match('.*:latest$'))
+          - not (update_target_digest is match('.*:main$'))
+          - not (update_target_digest is match('.*:stable$'))
+        fail_msg: >-
+          Mobile image refs (:latest/:main/:stable) are rejected
+          per Step 5/15's deploy.ValidateImageRef (cosign verification
+          requires a pinned sha256: digest). Pass
+          -e update_target_digest=sha256:<64-hex> and re-run.
+
+  tasks:
+    - name: POST update operation for {{ worker_id }} (target={{ update_target_digest | default('CURRENT_DESIRED_VERSION') }})
+      ansible.builtin.uri:
+        url: "https://{{ velox_master_public_url }}:{{ velox_master_port }}/api/v1/admin/workers/{{ worker_id }}/update"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ vault_velox_admin_token }}"
+        body_format: json
+        body:
+          target_digest: "{{ update_target_digest }}"
+          reason: "{{ update_reason }}"
+          requested_by: "ansible"
+        validate_certs: true
+        timeout: 30
+        status_code: [202, 409]
+      register: update_post
+      failed_when: update_post.status not in [202, 409]
+
+    - name: Skip polling if update returned 409 (operation in-flight)
+      ansible.builtin.debug:
+        msg: >-
+          Worker {{ worker_id }} update returned HTTP 409 —
+          likely operation in-flight. Triage on
+          /api/v1/admin/operations before re-running.
+      when: update_post.status == 409
+
+    - name: Poll fleet_operations ledger until terminal state for {{ worker_id }}
+      ansible.builtin.uri:
+        url: "https://{{ velox_master_public_url }}:{{ velox_master_port }}/api/v1/admin/operations/{{ update_post.json.operation_id }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ vault_velox_admin_token }}"
+        validate_certs: true
+        timeout: 30
+      register: update_poll
+      until: update_poll.json.status in ['SUCCEEDED', 'FAILED', 'ROLLBACK']
+      retries: "{{ velox_poll_attempts }}"
+      delay: "{{ velox_poll_delay_sec }}"
+      when: update_post.status == 202
+
+    - name: Fail the play if update ended ROLLBACK or FAILED for {{ worker_id }}
+      ansible.builtin.fail:
+        msg: >-
+          Update for worker {{ worker_id }} ended with status
+          {{ update_poll.json.status }} (operation_id={{
+          update_post.json.operation_id }}) —
+          error_message: {{ update_poll.json.error_message | default('—') }}.
+          The Master has auto-reverted to previous_digest per Step 9/15;
+          the operator MUST verify the worker is HEALTHY on the
+          previous image before re-issuing a new update.
+      when:
+        - update_post.status == 202
+        - update_poll.json.status in ['FAILED', 'ROLLBACK']
+
+    - name: Announce update success for {{ worker_id }}
+      ansible.builtin.debug:
+        msg: >-
+          [{{ worker_id }}] UPDATE → SUCCEEDED
+          (operation_id={{ update_post.json.operation_id }},
+          target_digest={{ update_target_digest | default('CURRENT') }}).
+      when:
+        - update_post.status == 202
+        - update_poll.json.status == 'SUCCEEDED'
