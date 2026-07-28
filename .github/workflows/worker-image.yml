@@ -78,6 +78,7 @@ jobs:
             exit 1
           fi
           EXPECTED="${{ steps.read-version.outputs.version }}"
+          EXPECTED="${EXPECTED#v}"
           if [ -n "$EXPECTED" ] && [ "$TAG" != "$EXPECTED" ]; then
             echo "::error::Resolved tag ($TAG) != canonical VERSION.txt ($EXPECTED). Refusing." >&2
             exit 1
