@@ -53,6 +53,7 @@ func main() {
 		{"SubmitLayer", apiwire.SubmitLayer{}},
 		{"SubmitSubtitleTrack", apiwire.SubmitSubtitleTrack{}},
 		{"SubmitDeliveryPlanEntry", apiwire.SubmitDeliveryPlanEntry{}},
+		{"SubmitManifestRef", apiwire.SubmitManifestRef{}},
 		{"CreatorPushRequest", apiwire.CreatorPushRequest{}},
 		{"CreatorPushPayload", apiwire.CreatorPushPayload{}},
 		{"CreatorScene", apiwire.CreatorScene{}},

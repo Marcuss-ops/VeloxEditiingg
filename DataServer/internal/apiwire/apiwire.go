@@ -38,15 +38,73 @@ package apiwire
 // UTF-8, no control chars) are enforced separately by
 // job_submit.ValidateIdempotencyKey — the MAX here is the
 // OpenAPI-level alias for the validator's byte cap.
+//
+// ManifestRef is OPTIONAL: a client that already uploaded clip /
+// voiceover / subtitle assets to a reachable store (Drive, GCS, …)
+// and packaged the immutable scene list into a `velox.render-manifest.v1`
+// JSON can pass a pointer to that JSON instead of inlining the
+// scene list. The Master fetches the JSON, verifies the SHA-256,
+// validates the schema_version, and replaces the inline scene list
+// with the manifest-derived payload. The byte-level shape is
+// enforced by job_submit.ValidateSubmitJobRequest (not at the
+// JSON-tag level) because velox-asset:// is not a standard URL
+// format and the schemagen doesn't know how to express the
+// http(s) + velox-asset:// scheme choice cleanly.
 type SubmitJobRequest struct {
-	IdempotencyKey string                   `json:"idempotency_key" validate:"required,min=1,max=128"`
-	VideoName      string                   `json:"video_name,omitempty" validate:"omitempty,max=300"`
-	ScriptText     string                   `json:"script_text,omitempty"`
-	VoiceoverPaths []string                 `json:"voiceover_paths,omitempty" validate:"omitempty,dive"`
-	Scenes         []SubmitScene            `json:"scenes" validate:"required,min=1,max=10000"`
-	Layers         []SubmitLayer            `json:"layers,omitempty" validate:"omitempty,dive"`
-	SubtitleTracks []SubmitSubtitleTrack    `json:"subtitle_tracks,omitempty" validate:"omitempty,dive"`
+	IdempotencyKey string                    `json:"idempotency_key" validate:"required,min=1,max=128"`
+	VideoName      string                    `json:"video_name,omitempty" validate:"omitempty,max=300"`
+	ScriptText     string                    `json:"script_text,omitempty"`
+	VoiceoverPaths []string                  `json:"voiceover_paths,omitempty" validate:"omitempty,dive"`
+	Scenes         []SubmitScene             `json:"scenes" validate:"required,min=1,max=10000"`
+	Layers         []SubmitLayer             `json:"layers,omitempty" validate:"omitempty,dive"`
+	SubtitleTracks []SubmitSubtitleTrack     `json:"subtitle_tracks,omitempty" validate:"omitempty,dive"`
 	DeliveryPlan   []SubmitDeliveryPlanEntry `json:"delivery_plan,omitempty" validate:"omitempty,dive"`
+	ManifestRef    *SubmitManifestRef        `json:"manifest_ref,omitempty" validate:"omitempty"`
+}
+
+// SubmitManifestRef points to a `velox.render-manifest.v1` JSON the
+// client uploaded to a reachable store (Drive, GCS, S3, …). The
+// Master fetches the JSON, verifies SHA-256 against the SHA-256 the
+// client supplied here, validates the schema_version, and replaces
+// the inline scene list with the manifest-derived payload.
+//
+// Three fields, all required WHEN the parent `manifest_ref` is
+// present (the *SubmitManifestRef pointer distinguishes "no
+// manifest_ref at all" from "manifest_ref declared but empty" —
+// the latter is rejected):
+//
+//   - SchemaVersion is the closed enum of accepted manifest
+//     versions. Today only `velox.render-manifest.v1` is accepted;
+//     future versions (`v2`, …) MUST be added to the `oneof` list
+//     BEFORE the new resolver is shipped, so the contract and the
+//     implementation cannot drift.
+//
+//   - URL is the canonical pointer to the manifest JSON. MUST be a
+//     parseable URL on the http(s) scheme OR on the velox-asset://
+//     scheme (the latter only when the asset is reachable through
+//     the Master asset-bridge; the resolver owns that policy).
+//     The regex below is intentionally permissive — the schemagen
+//     has no native `format: uri` distinction for velox-asset://
+//     so the strict scheme allow-list is enforced by the
+//     shape-level helper in job_submit.ValidateSubmitJobRequest.
+//
+//   - SHA256 is the lowercase hex SHA-256 of the manifest JSON
+//     body. The Master re-downloads the JSON and verifies the
+//     SHA-256 against this value BEFORE substituting it into the
+//     worker payload (fail-closed).
+//
+// Drift guard: the `max=2048` byte cap on URL MUST stay in lockstep
+// with pipeline.MaxManifestRefURLBytes (handler-side constant).
+// Both copies pin the same ceiling — the wire schema advertises
+// maxLength:2048 to clients, and the runtime validator enforces the
+// same cap with details[].issue="max_length". A future bump MUST
+// touch both. The drift-guard test
+// TestSubmitManifestRef_MaxLengthMatchesHandlerConstant in
+// apiwire_test.go hard-fails if the two diverge.
+type SubmitManifestRef struct {
+	SchemaVersion string `json:"schema_version" validate:"required,oneof=velox.render-manifest.v1"`
+	URL           string `json:"url" validate:"required,min=1,max=2048,regex=^(https?://|velox-asset://).+"`
+	SHA256        string `json:"sha256" validate:"required,len=64,regex=^[0-9a-f]{64}$"`
 }
 
 // SubmitScene is one composited segment in the simplified job.

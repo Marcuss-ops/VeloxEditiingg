@@ -289,6 +289,113 @@ the typed DTO `DataServer/internal/remoteengine/dto.go::RemotePipelineResult`):
 - Cross-reference targets exist: `ls DataServer/api/openapi.yaml scripts/api/validate_openapi.py DataServer/internal/remoteengine/dto.go DataServer/internal/handlers/server/pipeline/creator_push.go DataServer/internal/handlers/server/pipeline/creator_push_e2e_test.go docs/CREATOR-PUSH.md` → all present.
 
 NOTE: The forward-looking `python3 -c "import yaml; ..."` one-liner and the stale `wc -l 527` from the prior draft were removed. Every claim in this footer is backed by an ACTUAL command run during commit-time verification (captured outputs in `/tmp/velox_openapi_push/*`).
+## [Unreleased] - 2026-07-28
+
+### `POST /api/v1/jobs`: optional `manifest_ref` field on the wire
+
+The Master `/api/v1/jobs` contract now accepts an OPTIONAL `manifest_ref`
+on the request body. A client that already uploaded clip / voiceover /
+subtitle assets to a reachable store (Drive, GCS, S3, …) and packaged
+the immutable scene list into a `velox.render-manifest.v1` JSON can pass
+a pointer to that JSON instead of inlining the scene list. The Master
+will fetch, SHA-256 verify, and substitute the manifest-derived payload
+into the worker input (resolver-layer work, separate commit).
+
+Wire-level shape (NOT the resolver-side SHA verification, which is
+out-of-scope for this commit):
+
+```json
+{
+  "idempotency_key": "pg_20260728_4f82d731a91c",
+  "manifest_ref": {
+    "schema_version": "velox.render-manifest.v1",
+    "url": "https://drive.google.com/file/d/MANIFEST_FILE_ID/view",
+    "sha256": "0123456789abcdef…"
+  },
+  "delivery_plan": [ … ]
+}
+```
+
+Byte-level invariants enforced by `ValidateSubmitJobRequest` (handler-side,
+NOT relying on a third-party validator — `velox-asset://` is not a
+standard URI format and `regex=…` on the apiwire tag is duplicated
+intentionally so the wire schema and the runtime validator agree):
+
+- `manifest_ref` is `*SubmitManifestRef` — a nil pointer is the canonical
+  "field omitted entirely" path and MUST pass validation silently so
+  every existing client (legacy body shape) sees no wire-shape drift.
+  A non-nil pointer with empty body is rejected with three aggregated
+  422 violations (one per nested field).
+- `schema_version` is a closed enum (`oneof="velox.render-manifest.v1"`
+  on the apiwire tag, mirrored as `manifestRefSchemaVersions` in the
+  handler). A future v2 bump MUST update both surfaces.
+- `url` MUST match `^(https?://|velox-asset://).+` AND be ≤ 2048 bytes
+  after `TrimSpace`. The byte cap (`max=2048` tag + `MaxManifestRefURLBytes`
+  constant) is pinned by a drift-guard test that asserts the apiwire
+  tag still says `max=2048` (the project-wide convention for byte-cap
+  constants in `validate:"..."` tags; see also `MaxVideoNameBytes=300`).
+- `sha256` MUST match `^[0-9a-f]{64}$` (lowercase hex, exactly 64 chars).
+  The strict lowercase check is intentional: the resolver will compare
+  byte-for-byte against the recomputed SHA of the fetched JSON, so a
+  mixed-case drift is a wire-shape mismatch, not a runtime convention.
+
+OpenAPI contract:
+
+- New schema `SubmitManifestRef` added to
+  `DataServer/api/openapi.yaml.components.schemas` via
+  `go run ./cmd/api-schema-gen -apply`.
+- `SubmitJobRequest.manifest_ref` carries `$ref: '#/components/schemas/SubmitManifestRef'`.
+- `python3 scripts/api/validate_openapi.py DataServer/api/openapi.yaml`: PASS (exit 0).
+
+### Files added or modified
+
+- `DataServer/internal/apiwire/apiwire.go` — `SubmitManifestRef` struct
+  + `ManifestRef *SubmitManifestRef` field on `SubmitJobRequest` with
+  the validate tags listed above.
+- `DataServer/internal/handlers/server/pipeline/job_submit.go` —
+  handler-side mirror struct (no validate tags; runtime validator
+  enforces the same rules), regex helpers `manifestRefURLRegexp` +
+  `manifestRefSHA256Regexp`, helper `containsString`, and the
+  validator block in `ValidateSubmitJobRequest` that runs ONLY when
+  `req.ManifestRef != nil` and aggregates all three nested-field
+  violations into a single 422.
+- `DataServer/cmd/api-schema-gen/main.go` — `SubmitManifestRef`
+  added to the codegen registry.
+- `DataServer/api/openapi.yaml` — regenerated via `cmd/api-schema-gen -apply`.
+- `DataServer/internal/apiwire/apiwire_test.go` —
+  `TestSubmitManifestRef_Roundtrip`, `TestSubmitJobRequest_ManifestRef_Roundtrip`
+  (nil-omits-field / non-nil-carries-fields), and
+  `TestSubmitManifestRef_MaxLengthMatchesHandlerConstant` (drift-guard
+  between apiwire tag's `max=2048` and the handler constant).
+- `DataServer/internal/handlers/server/pipeline/job_submit_test.go` —
+  12 boundary tests: nil-accepts, good-shape-accepts,
+  bad-schema_version-rejects, bad-scheme-rejects (file://, javascript:,
+  data:, ftp:, ssh:, not-a-url), all-allowed-schemes-accept (http,
+  https, velox-asset://), bad-sha256-rejects (too short, too long,
+  uppercase, mixed case, non-hex, empty, 0x prefix), empty-url-rejects,
+  empty-object-aggregates-three-violations, empty-schema_version-rejects,
+  url-whitespace-trimmed, url-max_length-boundary (exactly
+  MaxManifestRefURLBytes bytes pass, +1 byte rejected).
+
+### Verified on `main`
+
+- `cd DataServer && go vet ./...`: PASS (exit 0).
+- `cd DataServer && go build ./...`: PASS (exit 0).
+- `cd DataServer && go test -count=1 -run 'TestSubmitManifestRef|TestSubmitJobRequest_ManifestRef|TestSubmitJobValidateManifestRef' ./internal/apiwire/... ./internal/handlers/server/pipeline/...`: PASS (all 15 tests).
+- `python3 scripts/api/validate_openapi.py DataServer/api/openapi.yaml`: `--- TOTAL PASS: 1 file(s) ---` (exit 0).
+
+### Out of scope (separate commits)
+
+- The fetch + SHA-256 verification of the manifest JSON (the
+  `RenderManifestResolver` from the architectural plan). The wire
+  contract this commit ships is the first half of that plan: shape
+  enforcement now, resolver side comes next.
+- Per-scene voiceover/clip/subtitles enrichment on `JobPayloadV2`
+  (so a single scene carries its own clip + voiceover + subtitles,
+  instead of relying on positional coupling). Separate commit.
+- Worker-side `worker_payload_sha256` receipt for cryptographic
+  proof that the remote computer received the manifest payload.
+
 ## [Unreleased] - 2026-07-27
 
 ### Validator extensibility — data-driven per-route invariants

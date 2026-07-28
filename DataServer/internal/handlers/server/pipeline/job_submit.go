@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -89,6 +90,56 @@ const MaxSceneDurationSeconds = 86400.0
 // retry_budget get a different value than the spec advertises).
 const DefaultRetryBudget = 3
 
+// ManifestRefSchemaVersionV1 is the only manifest schema version the
+// Master accepts today. Future versions MUST be added to the `oneof`
+// list in apiwire.SubmitManifestRef.SchemaVersion AND to this
+// constant set BEFORE the new resolver is shipped, so the spec and
+// the implementation cannot drift.
+//
+// Closed enum today (one accepted value) but expressed as a list of
+// constants so a future v2 addition is a one-line bump instead of a
+// scattered refactor across the validator + the resolver.
+var manifestRefSchemaVersions = []string{
+	"velox.render-manifest.v1",
+}
+
+// MaxManifestRefURLBytes caps the wire-level byte length of
+// manifest_ref.url at 2048 — a generous ceiling that fits every
+// realistic https URL and velox-asset URI without truncating. The
+// cap mirrors the apiwire.SubmitManifestRef.validate tag so a
+// drift between the schema and the validator surfaces as a test
+// failure rather than a silent acceptance asymmetry.
+const MaxManifestRefURLBytes = 2048
+
+// manifestRefURLRegexp matches a URL whose scheme is one of http,
+// https, or velox-asset. The schemagen cannot emit a JSON Schema
+// that distinguishes velox-asset:// from arbitrary URIs natively,
+// so the regex is duplicated here (and in the apiwire validate
+// tag) to keep the wire schema and the runtime validator in
+// lockstep. Compile-once at package init so the validator's hot
+// path doesn't pay the regex-compile cost on every request.
+var manifestRefURLRegexp = regexp.MustCompile(`^(https?://|velox-asset://).+`)
+
+// manifestRefSHA256Regexp matches a 64-character lowercase hex
+// string. The hex-only check is intentionally strict (no
+// uppercase, no `0x` prefix, no whitespace) so the byte-level
+// rejection shape matches what the Master will compare against
+// when it recomputes the SHA-256 of the downloaded manifest JSON.
+var manifestRefSHA256Regexp = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// containsString is a tiny slice-membership helper. Used by the
+// manifest_ref.schema_version closed-enum check; inlined here so
+// the validator has no third-party dependency on top of stdlib +
+// gin (the project's existing dependency surface).
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
+
 // SubmitJobRequest is the simplified, versioned API contract for
 // POST /api/v1/jobs. It allows external systems to submit complete
 // video jobs without going through the Creator intermediary.
@@ -143,6 +194,16 @@ type SubmitJobRequest struct {
 	// DeliveryPlan is the ordered list of delivery targets. Empty
 	// allowed (defaults to scene.composite.v1's default resolver).
 	DeliveryPlan []SubmitDeliveryPlanEntry `json:"delivery_plan,omitempty"`
+
+	// ManifestRef is OPTIONAL. When present, the Master downloads
+	// the manifest JSON at `url`, verifies `sha256`, validates
+	// `schema_version`, and uses the manifest-derived payload as
+	// the worker input (replacing / overlaying the inline scene
+	// list). Shape-level rules (URL scheme allow-list, sha256 hex
+	// format, schema_version enum) are enforced by
+	// ValidateSubmitJobRequest. The fetch + verification is the
+	// RenderManifestResolver's responsibility (separate commit).
+	ManifestRef *SubmitManifestRef `json:"manifest_ref,omitempty"`
 }
 
 // SubmitScene is a single scene in the simplified job submission format.
@@ -219,6 +280,48 @@ type SubmitDeliveryPlanEntry struct {
 	// the contract.
 	RetryBudget *int `json:"retry_budget,omitempty"`
 	Metadata    any  `json:"metadata,omitempty"`
+}
+
+// SubmitManifestRef points to a `velox.render-manifest.v1` JSON the
+// client uploaded to a reachable store (Drive, GCS, S3, …). The
+// Master fetches the JSON, verifies SHA-256 against the SHA-256 the
+// client supplied here, validates the schema_version, and replaces
+// the inline scene list with the manifest-derived payload.
+//
+// Three fields, all required WHEN the parent `manifest_ref` is
+// present (the *SubmitManifestRef pointer distinguishes "no
+// manifest_ref at all" from "manifest_ref declared but empty" —
+// the latter is rejected):
+//
+//   - SchemaVersion is the closed enum of accepted manifest
+//     versions. Today only `velox.render-manifest.v1` is accepted;
+//     future versions (`v2`, …) MUST be added to the `oneof` list
+//     AND to manifestRefSchemaVersions BEFORE the new resolver is
+//     shipped, so the contract and the implementation cannot drift.
+//
+//   - URL is the canonical pointer to the manifest JSON. MUST be a
+//     parseable URL on the http(s) scheme OR on the velox-asset://
+//     scheme (the latter only when the asset is reachable through
+//     the Master asset-bridge; the resolver owns that policy).
+//     The regex is intentionally permissive — the schemagen
+//     has no native `format: uri` distinction for velox-asset://
+//     so the strict scheme allow-list is enforced by the
+//     shape-level helper in ValidateSubmitJobRequest.
+//
+//   - SHA256 is the lowercase hex SHA-256 of the manifest JSON
+//     body. The Master re-downloads the JSON and verifies the
+//     SHA-256 against this value BEFORE substituting it into the
+//     worker payload (fail-closed).
+type SubmitManifestRef struct {
+	// SchemaVersion is the closed enum of accepted manifest versions.
+	// Today only `velox.render-manifest.v1` is accepted.
+	SchemaVersion string `json:"schema_version"`
+
+	// URL is the canonical pointer to the manifest JSON.
+	URL string `json:"url"`
+
+	// SHA256 is the lowercase hex SHA-256 of the manifest JSON body.
+	SHA256 string `json:"sha256"`
 }
 
 // SubmitJobValidationError is the structured 4xx envelope returned by
@@ -337,6 +440,80 @@ func ValidateSubmitJobRequest(req SubmitJobRequest) (*SubmitJobValidationError, 
 			details = append(details, gin.H{
 				"path":  pathPrefix + ".destination_id",
 				"issue": "empty",
+			})
+		}
+	}
+
+	// ManifestRef shape validation. Runs ONLY when the pointer is
+	// non-nil — a nil pointer is the "client did not opt in" path
+	// and MUST pass through this validator without complaint. When
+	// the pointer is non-nil the body is treated as the canonical
+	// shape contract: schema_version must be in the closed enum,
+	// url must match the http(s) + velox-asset:// allow-list and
+	// be 1..MaxManifestRefURLBytes after trim, sha256 must be
+	// exactly 64 lowercase hex characters.
+	//
+	// The actual fetch + SHA-256 verification is the
+	// RenderManifestResolver's responsibility (separate commit);
+	// this layer is intentionally byte-level only so the rejection
+	// paths are order-stable and a malformed manifest_ref returns
+	// 422 invalid_payload BEFORE any downstream cost.
+	if req.ManifestRef != nil {
+		mr := req.ManifestRef
+		mrPath := "manifest_ref"
+
+		// schema_version must be in the closed enum. The allowed
+		// list is the source of truth — changing it requires
+		// bumping apiwire.SubmitManifestRef's `oneof` tag too, so
+		// the wire schema and the runtime validator agree.
+		if !containsString(manifestRefSchemaVersions, mr.SchemaVersion) {
+			details = append(details, gin.H{
+				"path":     mrPath + ".schema_version",
+				"issue":    "unsupported_value",
+				"observed": mr.SchemaVersion,
+				"allowed":  manifestRefSchemaVersions,
+			})
+		}
+
+		// url: 1..MaxManifestRefURLBytes after trim AND must match
+		// the http(s) + velox-asset:// allow-list. The regex is
+		// duplicated from the apiwire validate tag because the
+		// schemagen cannot express the velox-asset:// scheme
+		// natively; duplicating it here keeps the wire schema
+		// and the runtime validator in lockstep.
+		trimmedURL := strings.TrimSpace(mr.URL)
+		if trimmedURL == "" {
+			details = append(details, gin.H{
+				"path":  mrPath + ".url",
+				"issue": "empty",
+			})
+		} else if len(trimmedURL) > MaxManifestRefURLBytes {
+			details = append(details, gin.H{
+				"path":     mrPath + ".url",
+				"issue":    "max_length",
+				"max":      MaxManifestRefURLBytes,
+				"observed": len(trimmedURL),
+			})
+		} else if !manifestRefURLRegexp.MatchString(trimmedURL) {
+			details = append(details, gin.H{
+				"path":     mrPath + ".url",
+				"issue":    "unsupported_scheme",
+				"observed": trimmedURL,
+				"allowed":  []string{"https://", "http://", "velox-asset://"},
+			})
+		}
+
+		// sha256: exactly 64 lowercase hex characters. The
+		// hex-only check is intentionally strict (lowercase) so
+		// a future drift to mixed case is caught at the wire
+		// rather than silently producing a mismatch inside the
+		// resolver.
+		if !manifestRefSHA256Regexp.MatchString(mr.SHA256) {
+			details = append(details, gin.H{
+				"path":     mrPath + ".sha256",
+				"issue":    "malformed",
+				"observed": mr.SHA256,
+				"expected": "64 lowercase hex characters ([0-9a-f]{64})",
 			})
 		}
 	}
