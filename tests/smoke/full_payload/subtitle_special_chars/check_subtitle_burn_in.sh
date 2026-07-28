@@ -79,7 +79,7 @@ EXPECTED_KEY_CHARS=(€ « » — ß ñ)
 # --- Tier 4 (ass-only) libass-via bypass substrings ---
 # If libass was bypassed (filter ran in text-stub mode), libass override tags
 # leak through. Any of these substrings in OCR text = bypass detected.
-LIBASS_BYPASS_MARKERS=('{\c' '&H00' '&HFF' '\\c' '{c')
+LIBASS_BYPASS_MARKERS=('{\c' '&H00' '&HFF' '\\c' '{c' '{\b' '{\i')
 
 # --- prereqs ---
 for t in ffmpeg ffprobe tesseract jq python3; do
