@@ -40,6 +40,7 @@ type WorkersModule struct {
 	metricsHandler               *api.MetricsHandler
 	sessionsHandler              *api.SessionsHandler
 	eventsHandler                *api.EventsHandler
+	adminWorkersHealthHandler    *api.AdminWorkersHealthHandler
 }
 
 // NewWorkersModule creates a new workers module.
@@ -94,6 +95,24 @@ func (m *WorkersModule) SetSessionsHandler(h *api.SessionsHandler) { m.sessionsH
 // (GET /api/v1/workers/:worker_id/events). Idempotent; safe to
 // call before RegisterRoutes. Passing nil disables the route.
 func (m *WorkersModule) SetEventsHandler(h *api.EventsHandler) { m.eventsHandler = h }
+
+// SetHealthHandler wires the Step 10/15 admin workers 4-level
+// health probe handler (GET /api/v1/admin/workers/{id}/health
+// with ?level=A|B|C|D, or absent returns aggregated envelope
+// over the 4 levels). Composition order: buildFleet (which
+// wires the FleetController and registry) returns BEFORE
+// buildModules returns moduleDeps.Workers; the composition
+// root injects the handler here AFTER buildFleet finishes,
+// matching the SetMutationsHandler / SetMetricsHandler / Set
+// -SessionsHandler / SetEventsHandler pattern.
+//
+// Idempotent — safe to call before RegisterRoutes; passing
+// nil disables the route so a misconfigured bootstrap does
+// not 503-on-every-request (the adminWorkersHealthHandler
+// nil-guard inside RegisterRoutes handles the skip).
+func (m *WorkersModule) SetHealthHandler(h *api.AdminWorkersHealthHandler) {
+	m.adminWorkersHealthHandler = h
+}
 
 func (m *WorkersModule) Name() string {
 	return "workers"
@@ -178,6 +197,17 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 			adminWorkers.POST("/:worker_id/drain", m.adminWorkersMutationsHandler.DrainWorker())
 			adminWorkers.POST("/:worker_id/resume", m.adminWorkersMutationsHandler.ResumeWorker())
 			adminWorkers.POST("/:worker_id/quarantine", m.adminWorkersMutationsHandler.QuarantineWorker())
+		}
+		// Step 10/15 — 4-level health probe endpoint
+		// (GET /api/v1/admin/workers/:worker_id/health?level=A|B|C|D).
+		// Mounted in the same adminAuth-gated group as the
+		// mutations routes so the operator dashboard's canonical
+		// auth surface stays single-source-of-truth. Nil-tolerant
+		// via the adminWorkersHealthHandler nil guard — silent
+		// skip rather than 503-on-every-request when the
+		// FleetController / registry isn't wired.
+		if m.adminWorkersHealthHandler != nil {
+			adminWorkers.GET("/:worker_id/health", m.adminWorkersHealthHandler.GetWorkerHealth())
 		}
 	}
 

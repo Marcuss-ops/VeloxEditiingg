@@ -351,6 +351,40 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		log.Printf("[BOOTSTRAP] Admin workers mutations handler wired (drain/resume/quarantine; tick goroutine drives the audit lifecycle)")
 	}
 
+	// Step 10/15 fleet-operator: wire the 4-level health probe handler
+	// (GET /api/v1/admin/workers/{id}/health?level=A|B|C|D; absent
+	// returns the aggregated envelope over the 4 levels).
+	//
+	// Production wiring is partial under Step 10+:
+	//   - Registry adapter (Level C) — fully functional
+	//   - Deployments repo (Level B image_digest_match) — wired from
+	//     Step 5/15; the remaining Level B sub-checks need SSH
+	//   - SSH client (Level A + Level B docker inspect) — nil; the
+	//     probes surface CheckResult{passed:false, detail:"ssh client
+	//     not wired (Step 11+ dependency)"} so the operator sees
+	//     the audit gap rather than 503-on-every-probe
+	//   - Smoke runner (Level D) — nil; same pattern, surfaces
+	//     Step 12+ follow-up
+	//
+	// Step 11+ wires the real SSH client (Ansible/playbook surface
+	// per the user spec) and Step 12+ wires the real Level-D smoke
+	// runner. Both planned in the rollout plan; Step 10/15 ships
+	// the surface that the operator dashboard reaches backend
+	// answers through.
+	if fleetDep != nil && m != nil && m.Workers != nil {
+		healthHandler := api.NewAdminWorkersHealthHandler(
+			m.Workers.Registry(),
+			api.HealthProbeDeps{
+				SSH:         nil,      // Step 11+ — real SSH client
+				Deployments: p.SQLite, // Step 5/15 — deployments repo already wired
+				Registry:    &fleet.RealRegistryLevelCGater{Reg: m.Workers.Registry()},
+				Smoke:       nil, // Step 12+ — real smoke runner
+			},
+		)
+		m.Workers.SetHealthHandler(healthHandler)
+		log.Printf("[BOOTSTRAP] Admin workers health handler wired (level=C fully functional; levels A,D audit-only pending Step 11+/12+; level B partial — image_digest_match wired; docker_inspect/curl/healthcheck pending Step 11+)")
+	}
+
 	return &appComponents{
 		cfg:                cfg,
 		persistence:        p,
