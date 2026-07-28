@@ -269,6 +269,7 @@ jobs:
           IMAGE="${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
           BUNDLE_HASH="$(tr -d '[:space:]' < RemoteCodex/BUNDLE_HASH.txt 2>/dev/null || echo '')"
           mkdir -p /tmp/velox-real-bootstrap
+          set +e
           docker run --rm \
             --name worker-real-bootstrap \
             -e VELOX_WORKER_ID=ci-real-bootstrap \
@@ -278,6 +279,7 @@ jobs:
             "$IMAGE" \
             --bootstrap-report > /tmp/velox-real-bootstrap/stdout.log 2> /tmp/velox-real-bootstrap/stderr.log
           rc=$?
+          set -e
           if [[ ! "$rc" =~ ^(0|1)$ ]]; then
             echo "::error::bootstrap-report exited with $rc (expected 0=OK or 1=FAIL)"
             cat /tmp/velox-real-bootstrap/stderr.log >&2 || true
