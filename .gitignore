@@ -193,3 +193,13 @@ ops/rw-prod-*.json
 # they live in DataServer/ because the toolchain is itself a cmd/ under there.
 DataServer/api-schema-gen
 DataServer/api-docs-gen
+
+# ── Full-payload smoke evidence (post-mortem; local-only) ────────────────
+# tests/smoke/full_payload/evidence/run-<EPOCH>-<client_id>.json files are
+# written by run.sh --mode=submit at each successful submit. They carry
+# job_id + epoch + master URL + artifact_url only (no secrets); they're
+# per-run diagnostic evidence that belongs in the operator's working tree,
+# not git. The .gitkeep marker is re-included via the negation rule below
+# so the directory itself stays tracked even when empty.
+tests/smoke/full_payload/evidence/*
+!tests/smoke/full_payload/evidence/.gitkeep

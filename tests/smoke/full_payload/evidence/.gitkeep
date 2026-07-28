@@ -1,0 +1,5 @@
+# Touch marker so this directory stays tracked even when empty.
+# Evidence JSON files (run-<EPOCH>-<client_id>.json) are gitignored at
+# the repo root (see the "Full-payload smoke evidence" block in
+# .gitignore). This file is the single tracked artefact under this
+# directory; do not commit actual run output here.
