@@ -92,12 +92,54 @@ KNOWN_VIOLATIONS_ROUND1=(
 #   - job_submit.go             → AGENTS plan step 2 (per-domain split)
 #   - job_submit_e2e_test.go    → AGENTS plan step 3 (per-scenario split)
 #   - grpc-control-plane/run.sh → AGENTS plan step 7 (shell dedup)
-#   - CHANGELOG.md              → structural: monotonically-growing
-#   - openapi.yaml              → structural: spec-driven, Round-5+
+#   - CHANGELOG.md              → STRUCTURAL: cumulative / spec-driven
+#   - openapi.yaml              → STRUCTURAL: cumulative / spec-driven
+#
+# STRUCTURAL entries (CHANGELOG.md, openapi.yaml) are exempted from the
+# hard gate by design — see `STRUCTURAL_LONG_FILES` below for the
+# detailed per-file justification and the WARNING-only monitoring path
+# that re-emits a `::warning` annotation on every run so the trend stays
+# visible in PRs (no gate, purely informational).
 KNOWN_VIOLATIONS_ROUND2=(
   "tests/e2e/grpc-control-plane/run.sh|Round-4 shell carry-over (737 LOC); dedup per AGENTS plan step 7 into tests/_lib/sh/ helpers"
-  "CHANGELOG.md|Round-4 docs carry-over (1691 LOC); structural — monotonically-growing release-notes file, threshold breach expected and not refactor-driven"
-  "DataServer/api/openapi.yaml|Round-4 yaml carry-over (1235 LOC); structural — OpenAPI single-source-of-truth spec, refactor requires spec redesign (Round-5+)"
+  "CHANGELOG.md|Round-4 docs carry-over (1691 LOC); STRUCTURAL — cumulative release notes, threshold breach expected and not refactor-driven; see STRUCTURAL_LONG_FILES"
+  "DataServer/api/openapi.yaml|Round-4 yaml carry-over (1235 LOC); STRUCTURAL — OpenAPI single-source-of-truth spec, refactor requires spec redesign (Round-5+); see STRUCTURAL_LONG_FILES"
+)
+
+# STRUCTURAL_LONG_FILES — files whose LOC naturally exceeds the
+# threshold by design (cumulative / spec-driven). Exempt from the hard
+# gate above, but re-emitted as `::warning` annotations on every run by
+# `scan_structural()` so the trend stays visible in PR annotations.
+# These annotations do NOT exit non-zero — the gate is purely
+# informational.
+#
+# Per-file justification:
+#   - CHANGELOG.md: cumulative release notes. Monotonically-growing by
+#     design. A refactor would split per release, but that destroys the
+#     single-source history contract (single file, single canonical
+#     timeline, single `git log` / `git blame` view of the project's
+#     evolution). The "split" would be fictitious — the underlying
+#     content is genuinely cumulative. Mitigation: track size in CI,
+#     not refactor it.
+#   - DataServer/api/openapi.yaml: OpenAPI single-source-of-truth
+#     spec. Spec-driven content — every endpoint / schema / parameter
+#     is a real declaration, not boilerplate. A "refactor" would mean
+#     either (a) splitting per tag (which loses the single-source
+#     `$ref` graph), or (b) compressing descriptions (cosmetic, not
+#     -- NOTE: the literal `$ref` here is inside a bash comment (#...) and
+#     therefore NOT parameter-expanded; the matching literal in the
+#     STRUCTURAL_LONG_FILES array below IS inside double quotes and MUST
+#     be escaped as `\$ref` (otherwise `set -u` blows up on the unset
+#     variable). See the array literal for the correct escaping.
+#     refactor). Real reduction requires a spec redesign (e.g.
+#     component-ize per resource), tracked under AGENTS plan Round-5+.
+#     Mitigation: WARNING-only visibility until then.
+#
+# This list is also documented in docs/metrics-catalog.md §R.1 and in
+# docs/metrics/loc-baseline.md §10c (Round-4 carry-over).
+STRUCTURAL_LONG_FILES=(
+  "CHANGELOG.md|cumulative release notes; monotonically-growing by design — splitting per release would lose the single-source history contract. Visible as WARNING-only, no gate."
+  "DataServer/api/openapi.yaml|OpenAPI single-source-of-truth spec; refactor requires component-ize / spec redesign (AGENTS plan Round-5+) — splitting per tag would lose the \$ref graph. Visible as WARNING-only, no gate."
 )
 
 # BUILD_NOISE_EXCLUDES — extra `find -not -path` predicates to silence
@@ -127,6 +169,7 @@ KNOWN_VIOLATIONS=("${KNOWN_VIOLATIONS_BASELINE[@]}" "${KNOWN_VIOLATIONS_ROUND1[@
 
 VIOLATIONS=0
 KNOWN_HITS=0
+STRUCTURAL_HITS=0
 
 # Anchor at the repository root regardless of how/where this script is invoked.
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -188,10 +231,30 @@ scan_dir yaml "$THRESH_YML" \
   -type f \( -name '*.yml' -o -name '*.yaml' \) \
   -not -path './.github/workflows/*'
 
+# scan_structural — WARNING-only visibility for the STRUCTURAL_LONG_FILES
+# set (see comment block above). Emits `::warning` annotations on every
+# run so the trend stays visible in PR UI; does NOT exit non-zero, does
+# NOT contribute to the gate.
+scan_structural() {
+  local entry path justification loc
+  for entry in "${STRUCTURAL_LONG_FILES[@]}"; do
+    path="${entry%%|*}"
+    justification="${entry#*|}"
+    [ -f "$path" ] || continue
+    loc=$(wc -l < "$path" | tr -d ' ')
+    printf '::warning file=%s::STRUCTURAL long-file (no gate): %d LOC — %s\n' \
+      "$path" "$loc" "$justification"
+    STRUCTURAL_HITS=$((STRUCTURAL_HITS + 1))
+  done
+}
+
+scan_structural
+
 if [ "$VIOLATIONS" -gt 0 ]; then
   printf '\n❌ LOC gate: %d NEW violation(s); %d annotated known carryover(s) still tracked (loc-baseline.md §10c).\n' \
     "$VIOLATIONS" "$KNOWN_HITS"
   printf 'Add new long-files to KNOWN_VIOLATIONS in this script AND to docs/metrics/loc-baseline.md §10c.\n'
   exit 1
 fi
-printf '\n✅ LOC gate: %d annotated known carryover(s) tracked; no new violations.\n' "$KNOWN_HITS"
+printf '\n✅ LOC gate: %d annotated known carryover(s) tracked; %d structural long-file(s) warned (no gate).\n' \
+  "$KNOWN_HITS" "$STRUCTURAL_HITS"

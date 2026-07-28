@@ -406,6 +406,50 @@ entry MUST be removed when the corresponding refactor lands, per §13.
 
 ### Round-4 carry-over (snapshot 2026-07-28)
 
+The following three files currently exceed the per-category LOC
+threshold defined in §11. They are tracked as `KNOWN_VIOLATIONS` in
+`scripts/ci/check-loc-thresholds.sh` so the gate passes on `main`.
+
+| File | LOC | Category | Refactor target | Status |
+| --- | ---: | --- | --- | --- |
+| `tests/e2e/grpc-control-plane/run.sh` | 737 | shell | AGENTS plan step 7 — dedup into `tests/_lib/sh/` helpers | real refactor target, tracked |
+| `CHANGELOG.md` | 1 691 | docs | **structural** (see justification below) | exempt, WARNING-only |
+| `DataServer/api/openapi.yaml` | 1 235 | yaml | **structural** (see justification below) | exempt, WARNING-only |
+
+**Structural exemption justification (CHANGELOG.md, openapi.yaml):**
+
+Two of the three Round-4 carry-overs are **structural** — their size
+grows monotonically by design, and a "refactor" would be fictitious:
+
+- **`CHANGELOG.md`** is a *cumulative* release-notes file. Its entire
+  purpose is the single-source chronological history of the project
+  (one canonical timeline, one `git blame` view, one place to read
+  release-to-release). Splitting it per release would destroy this
+  contract. The growth is the deliverable, not a smell. Mitigation:
+  track size in CI (`STRUCTURAL_LONG_FILES` WARNING-only, no gate),
+  not refactor it.
+
+- **`DataServer/api/openapi.yaml`** is the OpenAPI *single-source-of-truth*
+  spec for the entire HTTP/gRPC surface. Every endpoint / schema /
+  parameter is a real declaration, not boilerplate. A "refactor" would
+  mean either (a) splitting per tag — which loses the single-source
+  `$ref` graph and forces consumers to walk multiple files — or (b)
+  compressing descriptions (cosmetic, not refactor). Real reduction
+  requires a spec redesign (e.g. component-ize per resource), tracked
+  under AGENTS plan Round-5+. Until then, the file stays as-is and
+  is monitored via `STRUCTURAL_LONG_FILES` WARNING-only.
+
+Both files are also listed in `scripts/ci/check-loc-thresholds.sh`
+under `STRUCTURAL_LONG_FILES` (with the same per-file justification)
+and re-emitted as `::warning` annotations on every CI run so the
+trend stays visible in PRs. See `docs/metrics-catalog.md §R.1` for
+the formal monitoring entry.
+
+The third carry-over (`tests/e2e/grpc-control-plane/run.sh`) is a
+*real* refactor target per AGENTS plan step 7 and is not in the
+structural set; remove its `KNOWN_VIOLATIONS_ROUND2` entry when the
+dedup lands.
+
 ### Round-4 gate change
 - `scripts/ci/check-loc-thresholds.sh` gained a `BUILD_NOISE_EXCLUDES`
   array (nested `*/.git`, `*/node_modules`, `*/build`, `*/.pb-cache`)

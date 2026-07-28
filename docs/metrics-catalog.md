@@ -329,3 +329,53 @@ Worker (otelgrpc client handler)                    Master (otelgrpc server hand
 | 2026-07-06 | OTLP gRPC exporter support (Step 17b)              | —         |
 | 2026-07-06 | Worker otelgrpc client interceptor (Step 18)       | —         |
 | 2026-07-06 | **Metric catalog updated** (this revision)         | —         |
+
+---
+
+## R. CI Sanity Checks (WARNING-only, non-blocking)
+
+These checks run on every push but emit `::warning` (or `::notice`)
+annotations only — they do **NOT** gate CI. They surface trends for
+files that are structurally exempt from a hard gate (e.g. the LOC
+threshold gate defined in `docs/metrics/loc-baseline.md §11`) so the
+PR author and reviewer can see when a structural file is growing
+without the build failing on it.
+
+### R.1 — Structural long-file warning (LOC)
+
+- **What:** re-emits a `::warning` annotation on every CI run for
+  each file in `STRUCTURAL_LONG_FILES` in
+  `scripts/ci/check-loc-thresholds.sh`. The annotation includes the
+  current LOC count + the per-file structural justification.
+- **Why no gate:** the files listed are structural (cumulative /
+  spec-driven) — splitting them would be either fictitious
+  (CHANGELOG.md loses its single-source history contract) or
+  out-of-scope for a refactor (openapi.yaml requires a spec
+  redesign, tracked under AGENTS plan Round-5+).
+- **Gate symmetry:** the same files are also exempted from the hard
+  LOC gate (`KNOWN_VIOLATIONS` in the script + §10c Round-4
+  carry-over in `loc-baseline.md`). The WARNING check is purely an
+  additional, non-blocking visibility layer.
+
+#### R.1.1 — Files tracked
+
+| File | Approx LOC | Justification |
+| --- | ---: | --- |
+| `CHANGELOG.md` | 1 691 | Cumulative release notes — single-source chronological history. Monotonically-growing by design. Splitting per release would destroy the single-source history contract. |
+| `DataServer/api/openapi.yaml` | 1 235 | OpenAPI single-source-of-truth spec — every endpoint / schema / parameter is a real declaration. Splitting per tag loses the `$ref` graph; reduction requires spec redesign (AGENTS plan Round-5+). |
+
+#### R.1.2 — When the entry should be removed
+
+Remove a file from `STRUCTURAL_LONG_FILES` (and from
+`KNOWN_VIOLATIONS_ROUND2` in the script + §10c in `loc-baseline.md`)
+only when **both** of the following hold:
+
+1. The structural justification no longer applies (e.g. CHANGELOG
+   becomes auto-generated from per-release files, or the OpenAPI
+   spec is component-ized per resource), **and**
+2. The file is genuinely under the §11 threshold (or its exemption
+   has been formally retired via a new `KNOWN_VIOLATIONS` entry +
+   tracking reference, not silently dropped).
+
+Until both conditions hold, the file remains a WARNING-only
+structural exemption.
