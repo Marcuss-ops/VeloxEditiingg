@@ -285,10 +285,11 @@ jobs:
             cat /tmp/velox-real-bootstrap/stderr.log >&2 || true
             exit 1
           fi
-          JSON="$(awk '/^\[BOOTSTRAP_REPORT\]$/{flag=1;next}flag && /^\[/ {exit} flag' /tmp/velox-real-bootstrap/stderr.log)"
+          JSON="$(cat /tmp/velox-real-bootstrap/stderr.log /tmp/velox-real-bootstrap/stdout.log | awk '/^\[BOOTSTRAP_REPORT\]$/{flag=1;next}flag && /^\[/ {exit} flag')"
           if [[ -z "$JSON" ]]; then
             echo "::error::no [BOOTSTRAP_REPORT] JSON block"
             cat /tmp/velox-real-bootstrap/stderr.log >&2 || true
+            cat /tmp/velox-real-bootstrap/stdout.log >&2 || true
             exit 2
           fi
           echo "--- [BOOTSTRAP_REPORT] ---"
