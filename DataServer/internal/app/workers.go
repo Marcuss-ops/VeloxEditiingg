@@ -41,6 +41,7 @@ type WorkersModule struct {
 	sessionsHandler              *api.SessionsHandler
 	eventsHandler                *api.EventsHandler
 	adminWorkersHealthHandler    *api.AdminWorkersHealthHandler
+	adminWorkersSmokeHandler     *api.AdminWorkersSmokeHandler
 }
 
 // NewWorkersModule creates a new workers module.
@@ -112,6 +113,19 @@ func (m *WorkersModule) SetEventsHandler(h *api.EventsHandler) { m.eventsHandler
 // nil-guard inside RegisterRoutes handles the skip).
 func (m *WorkersModule) SetHealthHandler(h *api.AdminWorkersHealthHandler) {
 	m.adminWorkersHealthHandler = h
+}
+
+// SetSmokeHandler wires the Step 12/15 admin workers smoke
+// handler (POST /api/v1/admin/workers/{id}/smoke — publishes
+// an OperationKindSmoke to the FleetController queue for
+// async execution by LevelDSmokeExecutor).
+//
+// Idempotent — safe to call before RegisterRoutes; passing
+// nil disables the route so a misconfigured bootstrap does
+// not 503-on-every-request (the adminWorkersSmokeHandler
+// nil-guard inside RegisterRoutes handles the skip).
+func (m *WorkersModule) SetSmokeHandler(h *api.AdminWorkersSmokeHandler) {
+	m.adminWorkersSmokeHandler = h
 }
 
 func (m *WorkersModule) Name() string {
@@ -208,6 +222,19 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 		// FleetController / registry isn't wired.
 		if m.adminWorkersHealthHandler != nil {
 			adminWorkers.GET("/:worker_id/health", m.adminWorkersHealthHandler.GetWorkerHealth())
+		}
+		// Step 12/15 — on-demand Level D smoke endpoint
+		// (POST /api/v1/admin/workers/:worker_id/smoke).
+		// Mounted in the same adminAuth-gated group as the
+		// mutations routes so the operator dashboard's canonical
+		// auth surface stays single-source-of-truth. Nil-tolerant
+		// via the adminWorkersSmokeHandler nil guard — silent
+		// skip rather than 503-on-every-request when the
+		// FleetController isn't wired. Real smoke execution is
+		// driven async by LevelDSmokeExecutor via the FleetController
+		// tick goroutine (Step 7+).
+		if m.adminWorkersSmokeHandler != nil {
+			adminWorkers.POST("/:worker_id/smoke", m.adminWorkersSmokeHandler.TriggerSmoke())
 		}
 	}
 

@@ -37,6 +37,20 @@ import (
 	"velox-server/internal/supervisor"
 )
 
+// stubAssetResolver is the Step 12/15 minimal asset-resolver
+// stub used when the production asset picker is not yet wired.
+// It returns a single canned pickup URL + expectedBytes=0.
+// Production wiring lands when the canonical asset picker
+// (ResolveAsset's real implementation) is integrated.
+type stubAssetResolver struct {
+	pickupURL     string
+	expectedBytes int64
+}
+
+func (s stubAssetResolver) ResolveAsset(_ context.Context, _ string) (string, int64, error) {
+	return s.pickupURL, s.expectedBytes, nil
+}
+
 // deployUpdateImageValidator wraps internal/deploy.ValidateImageRef
 // for the UpdateExecutor's BackendImageRefValidator surface.
 // Kept inline (not promoted to a separate file) because the
@@ -383,6 +397,45 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		)
 		m.Workers.SetHealthHandler(healthHandler)
 		log.Printf("[BOOTSTRAP] Admin workers health handler wired (level=C fully functional; levels A,D audit-only pending Step 11+/12+; level B partial — image_digest_match wired; docker_inspect/curl/healthcheck pending Step 11+)")
+	}
+
+	// Step 12/15 fleet-operator: register the LevelDSmokeExecutor
+	// for the OperationKindSmoke kind (replaces the noop default
+	// from NewExecutorRegistry), AND wire the on-demand POST
+	// /api/v1/admin/workers/{id}/smoke endpoint that publishes
+	// these operations.
+	//
+	// Production wiring is partial under Step 12+:
+	//   - SmokeRuns repo — wired from p.SQLite
+	//   - Asset resolver — minimal stub (production wiring lands
+	//     when the canonical asset picker is in place)
+	//   - Lease store — wired from a registry adapter (sets
+	//     WorkerInfo.Drain transient during the run)
+	//   - Worker exec (BackendWorkerExec) — nil; the executor's
+	//     ErrSmokeRunnerNotWired sentinel surfaces the missing
+	//     dep without 503-on-every-probe
+	//   - Drive uploader (BackendDriveUploader) — nil; same pattern
+	//
+	// Async execution: the FleetController tick goroutine
+	// (Step 7+ already wired in buildFleet) processes queued
+	// smoke operations. Operator dashboard polls GET
+	// /api/v1/admin/operations/{id} for terminal state; the
+	// smoke_runs table records the duration_ms baseline.
+	if fleetDep != nil && fleetDep.Registry != nil && m != nil && m.Workers != nil && p != nil && p.SQLite != nil {
+		smokeBackend := fleet.LevelDSmokeBackend{
+			Worker:    nil, // Step 12+ — production wiring lands in a follow-up; the Step 11+ SSH client + the Drive uploader must come online first
+			Drive:     nil, // Step 12+ — production wiring lands in a follow-up
+			Asset:     stubAssetResolver{pickupURL: "asset://e2e/smoke/canary.mp4", expectedBytes: 0},
+			Lease:     fleet.NewRegistryDrainLease(m.Workers.Registry()),
+			SmokeRuns: p.SQLite,
+		}
+		if err := fleetDep.Registry.Register(fleet.OperationKindSmoke, fleet.NewLevelDSmokeExecutor(smokeBackend)); err != nil {
+			log.Printf("[BOOTSTRAP] WARN: LevelDSmokeExecutor registration failed: %v (kind=%s continues with noop fallback)", err, fleet.OperationKindSmoke)
+		} else {
+			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor registered for kind=%s (Worker/Drive nil audit-only — pending Step 11+/follow-up; Lease + SmokeRuns wired today)", fleet.OperationKindSmoke)
+		}
+		m.Workers.SetSmokeHandler(api.NewAdminWorkersSmokeHandler(m.Workers.Registry(), fleetDep.Controller))
+		log.Printf("[BOOTSTRAP] Admin workers smoke handler wired (POST /api/v1/admin/workers/{id}/smoke; tick goroutine drives LevelDSmokeExecutor)")
 	}
 
 	return &appComponents{
