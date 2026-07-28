@@ -25,7 +25,7 @@ import (
 // Schema bootstrapping: this file provides
 // CreateSmokeRunsTableIfNotExists for test/dev (in-memory SQLite
 // gets the table without a full migration sweep). Production
-// uses migrations/sqlite/104_smoke_runs.sql — the migration
+// uses migrations/sqlite/106_smoke_runs.sql — the migration
 // runner's checksum tracking stays the source of truth and this
 // method does NOT insert into schema_migrations.
 
@@ -80,7 +80,7 @@ type SmokeRun struct {
 // which both enforce — defence-in-depth against raw-INSERT
 // bugs that bypass the Go-side validation).
 //
-// Production uses migrations/sqlite/104_smoke_runs.sql which
+// Production uses migrations/sqlite/106_smoke_runs.sql which
 // the migration runner applies + records the checksum in
 // schema_migrations; this function is for tests + ad-hoc dev.
 func (s *SQLiteStore) CreateSmokeRunsTableIfNotExists() error {
@@ -242,11 +242,11 @@ ORDER BY started_at DESC`
 // List without drift.
 func scanSmokeRun(rows *sql.Rows) (*SmokeRun, error) {
 	var (
-		r                SmokeRun
-		startedAt        string
-		finishedAt       string
-		artifactDriveID  sql.NullString
-		errorMessage     sql.NullString
+		r               SmokeRun
+		startedAt       string
+		finishedAt      string
+		artifactDriveID sql.NullString
+		errorMessage    sql.NullString
 	)
 	if err := rows.Scan(
 		&r.RunID, &r.WorkerID, &startedAt, &finishedAt, &r.DurationMs,

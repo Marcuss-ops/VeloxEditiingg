@@ -438,6 +438,30 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		log.Printf("[BOOTSTRAP] Admin workers smoke handler wired (POST /api/v1/admin/workers/{id}/smoke; tick goroutine drives LevelDSmokeExecutor)")
 	}
 
+	// Step 13/15 fleet-operator: wire the dual GET telemetry
+	// endpoints
+	//   GET /api/v1/admin/workers/{id}/metrics
+	//     → LATEST snapshot from worker_metrics_snapshots
+	//       (migration 105). 404 when the scheduler hasn't
+	//       ticked yet for the worker.
+	//   GET /api/v1/admin/workers/metrics
+	//     → {data, has_more, count} envelope with one row per
+	//       worker (the LATEST snapshot per worker_id).
+	//
+	// Both endpoints serve the persisted snapshot (not real-time
+	// aggregation) — the metrics-snapshot-supervisor registered
+	// below in buildSupervisor writes one row per worker every
+	// 5 minutes; the dashboard renders a staleness indicator
+	// (snapshotted_at field) rather than per-read compute.
+	//
+	// Nil-tolerant: a partial-boot persists no rows; the handler
+	// reads from p.SQLite directly and 404s gracefully.
+	if fleetDep != nil && m != nil && m.Workers != nil && p != nil && p.SQLite != nil {
+		metricsHandler := api.NewAdminWorkersMetricsAggregatorHandler(p.SQLite, 5*time.Minute)
+		m.Workers.SetMetricsAggregatorHandler(metricsHandler)
+		log.Printf("[BOOTSTRAP] Admin workers metrics aggregator handler wired (GET /api/v1/admin/workers/{id}/metrics + /metrics; metrics-snapshot-supervisor ticks every 5min via buildSupervisor)")
+	}
+
 	return &appComponents{
 		cfg:                cfg,
 		persistence:        p,
@@ -791,6 +815,53 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 			},
 		}); err != nil {
 			return nil, fmt.Errorf("supervisor register metrics-supervisor: %w", err)
+		}
+	}
+
+	// Step 13/15 fleet-operator: 5-minute scheduler that runs
+	// fleet.ComputeAndPersistSnapshot to refresh the
+	// worker_metrics_snapshots table (migration 105). Distinct
+	// from the metrics-supervisor above which handles Prometheus
+	// op-level gauges; this is the fleet-side 13-metric rollup
+	// refresh.
+	//
+	// Why ClassRestartable: a failed snapshot tick should retry
+	// with backoff (per restartablePolicy) so a transient SQLite
+	// lock or schema-migration blip doesn't permanently stall
+	// the dashboard's freshness. NEVER ClassCritical: stale
+	// snapshots degrade UI quality but not fleet functionality.
+	if p != nil && p.SQLite != nil {
+		sqlDB := p.SQLite.DB()
+		if err := sup.Register(supervisor.Runner{
+			Name:   "metrics-snapshot-supervisor",
+			Class:  supervisor.ClassRestartable,
+			Policy: restartablePolicy,
+			Run: func(ctx context.Context) error {
+				ticker := time.NewTicker(5 * time.Minute)
+				defer ticker.Stop()
+				log.Printf("[FLEET-METRICS] metrics-snapshot-supervisor started (5min tick; computes 13-metric rollup per worker from worker_metric_samples + fleet_operations + smoke_runs + deployment_records)")
+				for {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-ticker.C:
+						ds := fleet.WorkerMetricsAggregatorDataSource{
+							Store: p.SQLite,
+							WorkerIDsFn: func(ctx context.Context) ([]string, error) {
+								return fleet.SQLiteWorkerIDs{DB: sqlDB}.WorkerIDs(ctx)
+							},
+						}
+						n, err := fleet.ComputeAndPersistSnapshot(ctx, ds, sqlDB, time.Now().UTC())
+						if err != nil {
+							log.Printf("[FLEET-METRICS] snapshot tick failed: %v", err)
+							continue
+						}
+						log.Printf("[FETCH-METRICS] ticked: persisted %d worker snapshots", n)
+					}
+				}
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("supervisor register metrics-snapshot-supervisor: %w", err)
 		}
 	}
 

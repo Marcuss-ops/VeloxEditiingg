@@ -1,4 +1,4 @@
--- 104_smoke_runs.sql — Step 12/15 fleet-operator: smoke_runs analytics
+-- 106_smoke_runs.sql — Step 12/15 fleet-operator: smoke_runs analytics
 -- table. Records the END-TO-END duration baseline for every Level
 -- D smoke run by LevelDSmokeExecutor.
 --
@@ -11,8 +11,8 @@
 -- are all computed from this column.
 --
 -- Idempotent: CREATE TABLE IF NOT EXISTS so re-running the
--- migration is safe. The schema_migrations row records the
--- checksum at the migration-runner level.
+-- migration is safe. The schema_migrations row records the checksum
+-- at the migration-runner level.
 
 CREATE TABLE IF NOT EXISTS smoke_runs (
   run_id TEXT PRIMARY KEY,

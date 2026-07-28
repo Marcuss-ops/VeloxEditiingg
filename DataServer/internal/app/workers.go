@@ -29,19 +29,20 @@ import (
 // avoids duplicating the route table or the registry wiring
 // boilerplate.
 type WorkersModule struct {
-	reg                          *workersreg.Registry
-	adminAuth                    gin.HandlerFunc
-	workerLifecycle              *lifecycle.Handler
-	workerUpdateHandler          *workersapi.WorkerUpdateHandler
-	workerAssetHandler           *assets.Handler
-	workersHandler               *api.WorkersHandler
-	adminWorkersHandler          *api.AdminWorkersHandler
-	adminWorkersMutationsHandler *api.AdminWorkersMutationsHandler
-	metricsHandler               *api.MetricsHandler
-	sessionsHandler              *api.SessionsHandler
-	eventsHandler                *api.EventsHandler
-	adminWorkersHealthHandler    *api.AdminWorkersHealthHandler
-	adminWorkersSmokeHandler     *api.AdminWorkersSmokeHandler
+	reg                                  *workersreg.Registry
+	adminAuth                            gin.HandlerFunc
+	workerLifecycle                      *lifecycle.Handler
+	workerUpdateHandler                  *workersapi.WorkerUpdateHandler
+	workerAssetHandler                   *assets.Handler
+	workersHandler                       *api.WorkersHandler
+	adminWorkersHandler                  *api.AdminWorkersHandler
+	adminWorkersMutationsHandler         *api.AdminWorkersMutationsHandler
+	metricsHandler                       *api.MetricsHandler
+	sessionsHandler                      *api.SessionsHandler
+	eventsHandler                        *api.EventsHandler
+	adminWorkersHealthHandler            *api.AdminWorkersHealthHandler
+	adminWorkersSmokeHandler             *api.AdminWorkersSmokeHandler
+	adminWorkersMetricsAggregatorHandler *api.AdminWorkersMetricsAggregatorHandler
 }
 
 // NewWorkersModule creates a new workers module.
@@ -126,6 +127,19 @@ func (m *WorkersModule) SetHealthHandler(h *api.AdminWorkersHealthHandler) {
 // nil-guard inside RegisterRoutes handles the skip).
 func (m *WorkersModule) SetSmokeHandler(h *api.AdminWorkersSmokeHandler) {
 	m.adminWorkersSmokeHandler = h
+}
+
+// SetMetricsAggregatorHandler wires the Step 13/15 admin workers
+// telemetry endpoints (GET /api/v1/admin/workers/{id}/metrics +
+// GET /api/v1/admin/workers/metrics — both serve the persisted
+// 13-metric snapshot written every 5 minutes by the
+// metrics-snapshot-supervisor in cmd/server/bootstrap_composition.go).
+//
+// Idempotent — safe to call before RegisterRoutes; passing nil
+// disables the routes so a misconfigured bootstrap (no SQLite
+// store) does not 503-on-every-request.
+func (m *WorkersModule) SetMetricsAggregatorHandler(h *api.AdminWorkersMetricsAggregatorHandler) {
+	m.adminWorkersMetricsAggregatorHandler = h
 }
 
 func (m *WorkersModule) Name() string {
@@ -235,6 +249,23 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 		// tick goroutine (Step 7+).
 		if m.adminWorkersSmokeHandler != nil {
 			adminWorkers.POST("/:worker_id/smoke", m.adminWorkersSmokeHandler.TriggerSmoke())
+		}
+		// Step 13/15 — fleet telemetry (dual endpoints):
+		//   GET /api/v1/admin/workers/:worker_id/metrics
+		//     → latest snapshot for one worker (404 when no
+		//       snapshot yet for the worker; the scheduler
+		//       writes one within 5 min of bootstrap).
+		//   GET /api/v1/admin/workers/metrics
+		//     → {data, has_more, count} envelope with one row
+		//       per worker (the LATEST snapshot per worker_id).
+		// Both endpoints serve the persisted worker_metrics_snapshots
+		// table (migration 105); the dashboard renders a staleness
+		// indicator via the snapshotted_at field rather than
+		// computing on every read. Nil-tolerant via the
+		// adminWorkersMetricsAggregatorHandler nil guard.
+		if m.adminWorkersMetricsAggregatorHandler != nil {
+			adminWorkers.GET("/metrics", m.adminWorkersMetricsAggregatorHandler.ListFleetMetrics())
+			adminWorkers.GET("/:worker_id/metrics", m.adminWorkersMetricsAggregatorHandler.GetWorkerMetrics())
 		}
 	}
 
