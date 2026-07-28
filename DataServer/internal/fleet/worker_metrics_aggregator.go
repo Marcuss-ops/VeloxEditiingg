@@ -163,8 +163,8 @@ func computeJobsAndFailure(ctx context.Context, db *sql.DB, workerID string) (in
 	var ok, fail int64
 	err := db.QueryRowContext(ctx, `
 SELECT
-  SUM(CASE WHEN status='SUCCEEDED' THEN 1 ELSE 0 END),
-  SUM(CASE WHEN status='FAILED'    THEN 1 ELSE 0 END)
+  COALESCE(SUM(CASE WHEN status='SUCCEEDED' THEN 1 ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN status='FAILED'    THEN 1 ELSE 0 END), 0)
 FROM fleet_operations
 WHERE worker_id = ? AND op != 'smoke'`, workerID).Scan(&ok, &fail)
 	if err != nil {
@@ -243,8 +243,8 @@ func computeRestartsAndRollback(ctx context.Context, db *sql.DB, workerID string
 	var restarts, rollbacks int64
 	err := db.QueryRowContext(ctx, `
 SELECT
-  SUM(CASE WHEN status='ROLLED_BACK' THEN 1 ELSE 0 END),
-  SUM(CASE WHEN is_rollback=1      THEN 1 ELSE 0 END)
+  COALESCE(SUM(CASE WHEN status='ROLLED_BACK' THEN 1 ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN is_rollback=1      THEN 1 ELSE 0 END), 0)
 FROM deployment_records
 WHERE worker_id = ?`, workerID).Scan(&restarts, &rollbacks)
 	if err != nil {
@@ -259,9 +259,12 @@ WHERE worker_id = ?`, workerID).Scan(&restarts, &rollbacks)
 func computeCurrentImageDigest(ctx context.Context, db *sql.DB, workerID string) (sql.NullString, error) {
 	var dgst sql.NullString
 	err := db.QueryRowContext(ctx, `
-SELECT target_digest FROM deployment_records
+	SELECT target_digest FROM deployment_records
  WHERE worker_id = ? AND status='SUCCEEDED'
  ORDER BY finished_at DESC LIMIT 1`, workerID).Scan(&dgst)
+	if err == sql.ErrNoRows {
+		return sql.NullString{}, nil
+	}
 	return dgst, err
 }
 
@@ -274,6 +277,9 @@ func computeLastSmokeStatus(ctx context.Context, db *sql.DB, workerID string) (s
 SELECT status FROM smoke_runs
  WHERE worker_id = ?
  ORDER BY finished_at DESC LIMIT 1`, workerID).Scan(&st)
+	if err == sql.ErrNoRows {
+		return sql.NullString{}, nil
+	}
 	return st, err
 }
 
