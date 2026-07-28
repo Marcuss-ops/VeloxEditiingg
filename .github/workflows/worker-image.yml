@@ -33,6 +33,7 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: velox-worker
+  IMAGE_REPO: ghcr.io/marcuss-ops/velox-worker
   BUILD_DIR: RemoteCodex/native/worker-agent-go
   DOCKERFILE: RemoteCodex/native/worker-agent-go/Dockerfile
   BUILD_CONTEXT: .
@@ -125,7 +126,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.IMAGE_REPO }}
           tags: |
             type=raw,value=${{ steps.version.outputs.tag }}
             type=sha,prefix=sha-,format=short
@@ -180,7 +181,7 @@ jobs:
           COSIGN_EXPERIMENTAL: '1'
         run: |
           set -euo pipefail
-          IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.digest }}"
+          IMAGE="${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
           echo "Signing image: $IMAGE"
           cosign sign --yes "$IMAGE"
 
@@ -194,7 +195,7 @@ jobs:
           COSIGN_EXPERIMENTAL: '1'
         run: |
           set -euo pipefail
-          IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.digest }}"
+          IMAGE="${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
           echo "Verifying image: $IMAGE"
           cosign verify \
             --certificate-identity-regexp='^https://github.com/Marcuss-ops/VeloxEditiingg/\.github/workflows/worker-image\.yml@refs/(tags/worker-v.+|heads/.+)' \
@@ -221,7 +222,7 @@ jobs:
           tags = "${{ steps.meta.outputs.tags }}".split()
           manifest = {
             "digest":         "${{ steps.digest.outputs.digest }}",
-            "registry_image": "${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}",
+            "registry_image": "${{ env.IMAGE_REPO }}",
             "tags":           tags,
             "version":        "$VERSION",
             "bundle_hash":    "$BUNDLE_HASH",
@@ -253,7 +254,7 @@ jobs:
         if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
         run: |
           set -euo pipefail
-          IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.digest }}"
+          IMAGE="${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
           BUNDLE_HASH="$(tr -d '[:space:]' < RemoteCodex/BUNDLE_HASH.txt 2>/dev/null || echo '')"
           mkdir -p /tmp/velox-real-bootstrap
           docker run --rm \
@@ -304,7 +305,7 @@ jobs:
         if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
         run: |
           set -euo pipefail
-          IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.digest }}"
+          IMAGE="${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
           echo "Smoke testing entrypoint of: $IMAGE"
           docker run --rm -d \
             --name worker-smoke \
