@@ -93,7 +93,9 @@ cross-package helper, consult ADR 0008 §(b) point 1:
 When this gate is run, it may surface pre-existing test failures that
 were not introduced by the current commit. These are findings, not
 blockers for pushing unrelated work — but they MUST be tracked as
-followups. The 2026-07-25 deployment of this gate surfaced:
+followups.
+
+**2026-07-25 deployment** of this gate surfaced:
 
 - `TestTick_EffectiveClaimBatch_ParallelNoDeadlock` in
   `DataServer/internal/forwarding/runner_failure_injection_test.go:178`
@@ -101,3 +103,15 @@ followups. The 2026-07-25 deployment of this gate surfaced:
   `http://localhost:1` refuses connection; the tick does not release the
   semaphore on dial failure. Pre-existing on `main` before the gate
   deployment; tracked as critical followup.
+
+**2026-07-28 re-deployment** of the gate (commit 6b21b82 series) added:
+
+- 4 `TestCalendarAPI_*` deterministic failures in
+  `DataServer/internal/handlers/server/calendar/*_test.go`:
+  - `TestCalendarAPI_CreateQueuesAndReturnsAgentFields`
+  - `TestCalendarAPI_UpdateCompletesQueuedJobWithoutDuplicate`
+  - `TestCalendarAPI_ExternalIDIsIdempotent`
+  - `TestCalendarAPI_StatusLifecycleAndOutputs`
+  Calendar event lifecycle / queue ops. Pre-existing on `main` (well
+  before the 2026-07-28 commit) and unrelated to the AGENTS-plan
+  test-file refactor; tracked as followups.

@@ -409,9 +409,6 @@ entry MUST be removed when the corresponding refactor lands, per §13.
   prod-Go) — split per AGENTS plan step 2 into per-domain files
   (intake/validation, plan derivation, enqueue, response shaping,
   telemetry).
-- `DataServer/internal/handlers/server/pipeline/job_submit_e2e_test.go`
-  (1240 LOC, test-Go) — split per AGENTS plan step 3 into per-scenario
-  test families aligned with the job_submit.go split.
 - `tests/e2e/grpc-control-plane/run.sh` (737 LOC, shell) — dedup per
   AGENTS plan step 7 with `artlist_live_e2e_verify.sh` into
   `tests/_lib/sh/`.

@@ -96,7 +96,6 @@ KNOWN_VIOLATIONS_ROUND1=(
 #   - openapi.yaml              → structural: spec-driven, Round-5+
 KNOWN_VIOLATIONS_ROUND2=(
   "DataServer/internal/handlers/server/pipeline/job_submit.go|Round-4 prod-Go carry-over (1561 LOC); split per AGENTS plan step 2 into per-domain files"
-  "DataServer/internal/handlers/server/pipeline/job_submit_e2e_test.go|Round-4 test-Go carry-over (1240 LOC); split per AGENTS plan step 3 into per-scenario tests aligned with job_submit.go"
   "tests/e2e/grpc-control-plane/run.sh|Round-4 shell carry-over (737 LOC); dedup per AGENTS plan step 7 into tests/_lib/sh/ helpers"
   "CHANGELOG.md|Round-4 docs carry-over (1691 LOC); structural — monotonically-growing release-notes file, threshold breach expected and not refactor-driven"
   "DataServer/api/openapi.yaml|Round-4 yaml carry-over (1235 LOC); structural — OpenAPI single-source-of-truth spec, refactor requires spec redesign (Round-5+)"
