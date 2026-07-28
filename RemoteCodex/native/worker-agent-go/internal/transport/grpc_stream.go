@@ -20,8 +20,10 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -161,6 +163,18 @@ func (t *GRPCStreamTransport) Connect(ctx context.Context, hello controltranspor
 		t.mu.Lock()
 		t.state = stateDisconnected
 		t.mu.Unlock()
+		// Anti-collision gate (RW-PROD-005 §3 anti-collision invariant):
+		// when the master rejects the incoming Hello with codes.AlreadyExists
+		// because CheckActiveSessionCollision detected an existing ACTIVE
+		// session for this worker_id with a different token_hash, surface
+		// the typed sentinel ErrWorkerIDCollision so the caller (worker
+		// Start loop in worker_lifecycle.go) can detect via errors.Is and
+		// trigger the loud exit-17 path. Wrapping (not replacing) preserves
+		// the original gRPC status error for ops log context (peer IP,
+		// transport-level diagnostic).
+		if status.Code(err) == codes.AlreadyExists {
+			return fmt.Errorf("grpc transport: recv hello_ack: %w: %w", controltransport.ErrWorkerIDCollision, err)
+		}
 		return fmt.Errorf("grpc transport: recv hello_ack: %w", err)
 	}
 

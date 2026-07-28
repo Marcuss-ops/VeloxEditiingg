@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"velox-shared/controltransport"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/bootstrap"
 	"velox-worker-agent/pkg/logger"
@@ -92,6 +93,36 @@ func (w *Worker) Start(ctx context.Context) error {
 
 			w.logger.Warn("[CONNECT] Registration failed (attempt %d): %v", w.connFailureCount, err)
 			w.setConnState(ConnDisconnected)
+
+			// Anti-collision gate (RW-PROD-005 §3): if the master rejected
+			// the Hello with codes.AlreadyExists (wrapped as
+			// controltransport.ErrWorkerIDCollision by grpc_stream.go's
+			// Connect()), this is a hard configuration error — another
+			// machine is already registered with this worker_id on a
+			// different credential. Logging+backoff would mask the
+			// operational fault, so we:
+			//   1. Emit a loud CANNOT-MISS log marker at ERROR level
+			//      (single-line, grep-able for ops dashboards via the
+			//      `[COLLISION]` prefix) including worker_id + master URL
+			//      + the underlying gRPC status message.
+			//   2. Invoke the optional onWorkerIDCollision observer if
+			//      installed (production default in cmd/velox-worker-agent/
+			//      main.go: log + os.Exit(17)). nil-safe.
+			//   3. Break out of the reconnect loop (no further retries)
+			//      so the operator notices — retrying would just thrash.
+			if errors.Is(err, controltransport.ErrWorkerIDCollision) {
+				w.logger.Error("[COLLISION] worker_id COLLISION detected: another machine is already registered with this worker_id on a different credential. Master rejected our Hello with codes.AlreadyExists. worker_id=%q master_url=%s err=%v",
+					w.config.WorkerID, w.config.MasterURL, err)
+				if w.onWorkerIDCollision != nil {
+					w.onWorkerIDCollision(err)
+					// Observer is responsible for terminating the process
+					// (production default: os.Exit(17)). If the observer
+					// returns without exiting, fall through to the
+					// reconnect break below so we still avoid the
+					// backoff-thrash pattern.
+				}
+				break
+			}
 			// RW-PROD-004 A4: mirror ConnReady on every ConnDisconnected
 			// transition so /health/ready drops `not_registered` once the
 			// session is re-established. MarkRegistered queues an

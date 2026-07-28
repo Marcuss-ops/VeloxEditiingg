@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -232,6 +233,18 @@ func scanCommands(rows *sql.Rows) ([]*PersistedCommand, error) {
 
 // ---------- worker_sessions (persistent tokens) ----------
 
+// ErrWorkerIDCollision is returned by InsertSession when a session for the
+// same (worker_id, session_type) is already ACTIVE on a different token
+// hash. This indicates two distinct machines attempted to register the
+// same worker_id; the second one is rejected to prevent dual-execution
+// state corruption (per RW-PROD-005 §3 anti-collision invariant).
+//
+// The legitimate-reconnect path (same machine, network blip, fresh
+// session) is preserved: when the existing ACTIVE session carries the
+// SAME token_hash as the incoming InsertSession, the old session is
+// demoted to DISCONNECTED and the new one is admitted.
+var ErrWorkerIDCollision = errors.New("store: worker_id already active on a different token_hash (collision)")
+
 // PersistedSession represents a worker session in SQLite.
 type PersistedSession struct {
 	SessionID   string    `json:"session_id"`
@@ -245,7 +258,54 @@ type PersistedSession struct {
 	Revoked     bool      `json:"revoked"`
 }
 
+// CheckActiveSessionCollision returns the token_hash of the existing ACTIVE
+// session for (workerID, sessionType), or "" if none. Callers use this to
+// distinguish a legitimate reconnect (same token_hash) from a worker_id
+// collision (different token_hash) before invoking InsertSession.
+//
+// Returns:
+//   - existingTokenHash != "" + same hash → legit reconnect (proceed with demote + INSERT)
+//   - existingTokenHash != "" + different hash → collision (caller MUST reject)
+//   - existingTokenHash == "" + no err → no active session (caller proceeds with INSERT)
+//
+// The SELECT is intentionally NOT wrapped in a transaction with the subsequent
+// INSERT: the SQLite trigger `trg_worker_sessions_one_active` (migration 094 +
+// 095) is the authoritative race-safe gate. Two concurrent inserts with the
+// same worker_id serialize through the trigger; the second one fails with
+// `worker already has an active session of this type` and the caller surfaces
+// that as ErrWorkerIDCollision via the post-failure SELECT (token_hash probe
+// inside the caller-side handleInsertError helper below).
+func (s *SQLiteStore) CheckActiveSessionCollision(workerID, sessionType string) (existingTokenHash string, err error) {
+	if workerID == "" || sessionType == "" {
+		return "", fmt.Errorf("check collision: missing worker_id or session_type")
+	}
+	row := s.db.QueryRow(
+		`SELECT token_hash FROM worker_sessions
+		 WHERE worker_id = ? AND session_type = ? AND status = 'ACTIVE' AND revoked = 0
+		 ORDER BY last_seen_at DESC, created_at DESC LIMIT 1`,
+		workerID, sessionType,
+	)
+	err = row.Scan(&existingTokenHash)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("check collision: %w", err)
+	}
+	return existingTokenHash, nil
+}
+
 // InsertSession creates a new session record.
+//
+// Pre-flight anti-collision gate: if a session for (worker_id, session_type)
+// is already ACTIVE, the caller MUST have already verified via
+// CheckActiveSessionCollision that the existing token_hash matches (legitimate
+// reconnect) or rejected the request (collision). InsertSession performs a
+// second defensive SELECT + token_hash check before mutating state, so a
+// caller that skipped CheckActiveSessionCollision still cannot admit a
+// colliding insert. The post-INSERT trigger (`trg_worker_sessions_one_active`,
+// migration 095) remains the authoritative race-safe backstop for concurrent
+// inserts that slip past the SELECT.
 func (s *SQLiteStore) InsertSession(sess *PersistedSession) error {
 	if sess.SessionID == "" || sess.WorkerID == "" || sess.TokenHash == "" {
 		return fmt.Errorf("insert session: missing required fields")
@@ -255,14 +315,31 @@ func (s *SQLiteStore) InsertSession(sess *PersistedSession) error {
 	if sessionType == "" {
 		sessionType = "control"
 	}
-	// A reconnect closes the previous active session of the same type. Asset
-	// authentication and the gRPC control stream intentionally coexist.
+
+	// Defensive collision check (caller SHOULD have already done this; this is
+	// the second line of defense). Reading the existing token_hash and
+	// comparing BEFORE the pre-emptive demote means a colliding insert is
+	// rejected without mutating the existing ACTIVE row.
+	existingTokenHash, err := s.CheckActiveSessionCollision(sess.WorkerID, sessionType)
+	if err != nil {
+		return fmt.Errorf("insert session collision probe: %w", err)
+	}
+	if existingTokenHash != "" && existingTokenHash != sess.TokenHash {
+		return fmt.Errorf("%w: worker_id=%s session_type=%s existing_ip_pending=%s",
+			ErrWorkerIDCollision, sess.WorkerID, sessionType, sess.SessionID)
+	}
+
+	// A legitimate reconnect closes the previous active session of the same
+	// type. Asset authentication and the gRPC control stream intentionally
+	// coexist (different session_type). After the collision check above, the
+	// demote is safe — it only fires when the existing token_hash matched
+	// (or no existing session).
 	if _, err := s.db.Exec(`UPDATE worker_sessions
 		SET status='DISCONNECTED', disconnected_at=?, disconnect_reason='replaced', revoked=1
 		WHERE worker_id=? AND session_type=? AND status='ACTIVE' AND revoked=0`, now, sess.WorkerID, sessionType); err != nil {
 		return err
 	}
-	_, err := s.db.Exec(
+	_, err = s.db.Exec(
 		`INSERT INTO worker_sessions (session_id, worker_id, token_hash, ip_address, created_at, expires_at, last_seen, revoked, status, connected_at, last_seen_at, session_type)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'ACTIVE', ?, ?, ?)`,
 		sess.SessionID, sess.WorkerID, sess.TokenHash, sess.IPAddress,

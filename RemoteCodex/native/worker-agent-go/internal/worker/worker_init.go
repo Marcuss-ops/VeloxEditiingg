@@ -29,10 +29,11 @@ import (
 type Option func(*workerOptions)
 
 type workerOptions struct {
-	registry  *executor.Registry
-	cache     *cache.PersistedLocalCache
-	blobs     *blob.BlobArtifacts
-	clipCache *workercache.Cache
+	registry            *executor.Registry
+	cache               *cache.PersistedLocalCache
+	blobs               *blob.BlobArtifacts
+	clipCache           *workercache.Cache
+	onWorkerIDCollision func(err error)
 }
 
 // WithRegistry replaces the default (empty) executor registry. The
@@ -100,6 +101,37 @@ func WithClipCache(c *workercache.Cache) Option {
 	}
 	return func(o *workerOptions) {
 		o.clipCache = c
+	}
+}
+
+// WithCollisionObserver installs a callback invoked when the master
+// rejects the worker's Hello handshake with codes.AlreadyExists because
+// another machine is already registered with the same worker_id on a
+// different credential (anti-collision invariant RW-PROD-005 §3).
+//
+// The callback is the SINGLE point of policy for "what should the
+// worker do when this happens". The default production handler in
+// cmd/velox-worker-agent/main.go logs the diagnostic to stderr and
+// calls os.Exit(17) — a hard configuration error (two physical
+// machines sharing a worker_id) is not safe to retry with backoff
+// because doing so would mask the underlying operational fault and
+// keep both machines in a flaky thrash.
+//
+// A non-nil callback REPLACES the default (no-op) behavior. Pass
+// nil to opt out of the observer entirely (legacy / override mode
+// where the operator accepts that two machines may register with
+// the same worker_id and prefers the worker to keep trying with
+// backoff instead of exiting). In production the
+// VELOX_ALLOW_MULTI_HOST_WORKER_IDS env var (default false) gates
+// whether the observer is wired at all.
+//
+// The callback receives the underlying ErrWorkerIDCollision-wrapped
+// error for log context (peer IP, original gRPC status, etc.). It
+// MUST be safe to call from the Start() goroutine context; the
+// worker holds no locks during invocation.
+func WithCollisionObserver(fn func(err error)) Option {
+	return func(o *workerOptions) {
+		o.onWorkerIDCollision = fn
 	}
 }
 
@@ -247,6 +279,12 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		cache:              wo.cache,
 		blobs:              wo.blobs,
 		clipCache:          wo.clipCache,
+		// Anti-collision observer (RW-PROD-005 §3): wired from
+		// workerOptions.onWorkerIDCollision (set by
+		// WithCollisionObserver). nil-safe; Start() guards before
+		// invoking. Production default (cmd/velox-worker-agent/main.go)
+		// logs the diagnostic to stderr + os.Exit(17).
+		onWorkerIDCollision: wo.onWorkerIDCollision,
 		taskRunner:         tr,
 		// Resource sampler. Empty procRoot/sysRoot
 		// defaults to /proc + /sys. cfg.WorkDir may be empty on

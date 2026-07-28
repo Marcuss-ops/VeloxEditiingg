@@ -6,6 +6,7 @@ package grpcserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -126,15 +127,72 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	sess.lastHeartbeatUnix.Store(time.Now().UTC().Unix())
 
 	// Issue 7 fix: persist the session to SQLite worker_sessions table.
+	//
+	// Anti-collision gate (RW-PROD-005 §3 anti-collision invariant): before
+	// admitting the session, look up the existing ACTIVE session for the
+	// same (worker_id, session_type). If one exists with a DIFFERENT
+	// token_hash, two distinct machines are racing to register the same
+	// worker_id — reject the incoming hello with codes.AlreadyExists so the
+	// duplicate never reaches the placement matcher's registry. A matching
+	// token_hash is a legitimate reconnect (same machine, fresh session)
+	// and proceeds to the existing demote-old + insert-new path.
+	//
+	// InsertSession performs a second defensive collision probe as the
+	// last step before the UPDATE-then-INSERT pair, so a caller that
+	// bypassed this handler-level gate still cannot admit a colliding
+	// insert. The trigger `trg_worker_sessions_one_active` (migration 094
+	// + 095) is the authoritative race-safe backstop for concurrent
+	// inserts that slip past both layers.
+	//
+	// Telemetry note: collision-rejection events are logged at INFO level
+	// here (canonical format `[GRPC] Worker %s hello COLLISION` — grep-able
+	// for ops dashboards). A Prometheus counter
+	// `velox_worker_hello_collision_rejected_total` is planned in a
+	// follow-up commit that wires the Handler to a metrics registry via
+	// the standard dependency-injection pattern; the log signal is the
+	// authoritative telemetry surface for this atomic change.
 	if h.dbStore != nil {
-		_ = h.dbStore.InsertSession(&store.PersistedSession{
+		newTokenHash := store.HashCredential(hello.GetCredentialHash())
+		peerIP := h.extractPeerIP(stream)
+		existingTokenHash, probeErr := h.dbStore.CheckActiveSessionCollision(workerID, "control")
+		if probeErr != nil {
+			log.Printf("[GRPC] Worker %s collision probe failed (will defer to InsertSession defensive check): %v", workerID, probeErr)
+		}
+		if probeErr == nil && existingTokenHash != "" && existingTokenHash != newTokenHash {
+			// Anti-collision REJECT path. Distinct token_hash on the
+			// existing ACTIVE session = two machines racing to register
+			// the same worker_id. Emit codes.AlreadyExists so the worker
+			// side can detect (status.FromError().Code()) and exit loudly
+			// via the worker_claimloop.go collision handling + main.go
+			// exit-code 17 diagnostic.
+			log.Printf("[GRPC] Worker %s hello COLLISION: existing ACTIVE session has token_hash=%s (different from incoming token_hash=%s) peer_ip=%s; rejecting incoming hello from same worker_id",
+				workerID, existingTokenHash, newTokenHash, peerIP)
+			return status.Errorf(codes.AlreadyExists,
+				"worker_id %q already connected on a different credential (worker_id collision: two machines with the same identity)", workerID)
+		}
+		insertErr := h.dbStore.InsertSession(&store.PersistedSession{
 			SessionID:   sessionID,
 			WorkerID:    workerID,
 			SessionType: "control",
-			TokenHash:   store.HashCredential(hello.GetCredentialHash()),
-			IPAddress:   h.extractPeerIP(stream),
+			TokenHash:   newTokenHash,
+			IPAddress:   peerIP,
 			ExpiresAt:   time.Now().UTC().Add(24 * time.Hour),
 		})
+		if errors.Is(insertErr, store.ErrWorkerIDCollision) {
+			// Race-window collision: SELECT missed the existing session but
+			// the trigger caught it. Same reject path as the probe above.
+			log.Printf("[GRPC] Worker %s hello COLLISION (race): trigger caught concurrent insert; rejecting incoming hello peer_ip=%s",
+				workerID, peerIP)
+			return status.Errorf(codes.AlreadyExists,
+				"worker_id %q already connected on a different credential (race-window collision)", workerID)
+		}
+		if insertErr != nil {
+			log.Printf("[GRPC] Worker %s InsertSession failed (continuing — session will be tracked in-memory only): %v", workerID, insertErr)
+		} else if existingTokenHash != "" {
+			// Legit reconnect (same token_hash) succeeded: log for ops audit.
+			log.Printf("[GRPC] Worker %s hello RECONNECT: demoted prior ACTIVE session (same token_hash) and admitted new session_id=%s",
+				workerID, sessionID)
+		}
 	}
 
 	// Issue 5 fix: start the dedicated session writer goroutine.

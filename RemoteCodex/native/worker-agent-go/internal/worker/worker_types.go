@@ -213,6 +213,17 @@ type Worker struct {
 	blobs      *blob.BlobArtifacts
 	taskRunner *taskrunner.TaskRunner
 
+	// onWorkerIDCollision (RW-PROD-005 §3 anti-collision invariant) is
+	// the optional observer invoked when the master rejects the worker's
+	// Hello handshake with codes.AlreadyExists because another machine is
+	// already registered with the same worker_id on a different
+	// credential. Set via WithCollisionObserver() (typically by
+	// cmd/velox-worker-agent/main.go to log the diagnostic + os.Exit(17)).
+	// nil-safe: Start() guards w.onWorkerIDCollision != nil before invoking
+	// so the worker package remains usable in unit tests that don't care
+	// about the collision signal.
+	onWorkerIDCollision func(err error)
+
 	// Pass 9: optional worker-side clip cache (workercache.Cache).
 	// When non-nil, dispatchTaskRunner acquires an active-job lease
 	// (active_job_id) on every Drive clip referenced by the job

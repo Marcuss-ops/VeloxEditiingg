@@ -6,9 +6,11 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"velox-shared/controltransport"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/pkg/config"
 )
@@ -116,4 +118,54 @@ func TestNew_WithNilOptionIgnored(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, w)
 	require.Equal(t, 0, w.executorRegistry.Len())
+}
+
+// TestNew_WithCollisionObserverWiresThrough
+// (RW-PROD-005 §3 anti-collision invariant).
+//
+// Behaviour asserted:
+//   * WithCollisionObserver(fn) installs fn on the returned Worker as
+//     w.onWorkerIDCollision. The lifecycle in worker_lifecycle.go
+//     Start() reads the field directly after a Connect-error so the
+//     production main.go's os.Exit(17) only fires if wiring is intact.
+//   * The observer is invoked with the original ErrWorkerIDCollision-
+//     wrapped error; errors.Is(err, controltransport.ErrWorkerIDCollision)
+//     continues to match (the typed sentinel survives the wrap).
+//   * WithCollisionObserver(nil) is the no-op opt-out: w.onWorkerIDCollision
+//     stays nil and Start() safely skips invocation.
+func TestNew_WithCollisionObserverWiresThrough(t *testing.T) {
+	calls := 0
+	var lastErr error
+	observer := func(err error) {
+		calls++
+		lastErr = err
+	}
+
+	w, err := New(newInsecureDevCfg(t), "test", WithCollisionObserver(observer))
+	require.NoError(t, err)
+	require.NotNil(t, w)
+
+	// Without this wiring, the production default (stderr + os.Exit(17))
+	// would never fire on a codes.AlreadyExists reject from the master.
+	require.NotNil(t, w.onWorkerIDCollision, "WithCollisionObserver must wire non-nil")
+
+	// Round-trip the call: a fn-func-typed field can't be require.Same
+	// compared directly, so we invoke and assert side-effect instead.
+	w.onWorkerIDCollision(controltransport.ErrWorkerIDCollision)
+	require.Equal(t, 1, calls, "observer must be invoked exactly once per call")
+	require.True(t, errors.Is(lastErr, controltransport.ErrWorkerIDCollision),
+		"observer must receive the original ErrWorkerIDCollision sentinel")
+	// Identity: invoking twice must call twice (no funky caching).
+	w.onWorkerIDCollision(controltransport.ErrWorkerIDCollision)
+	require.Equal(t, 2, calls)
+
+	// Opt-out path: nil observer keeps the field nil. The worker
+	// constructed this way will silently log + backoff-retry instead
+	// of exiting — useful only for legacy / VELOX_ALLOW_MULTI_HOST_WORKER_IDS
+	// override-mode runs (which short-circuit before Start anyway).
+	w2, err := New(newInsecureDevCfg(t), "test", WithCollisionObserver(nil))
+	require.NoError(t, err)
+	require.NotNil(t, w2)
+	require.Nil(t, w2.onWorkerIDCollision,
+		"WithCollisionObserver(nil) must keep w.onWorkerIDCollision nil")
 }

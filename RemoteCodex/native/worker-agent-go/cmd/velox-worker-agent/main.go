@@ -163,6 +163,23 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// envBool returns the bool value of the named environment variable.
+// Accepts 1/true/yes/on (case-insensitive) as true; anything else (including
+// empty / "0" / "false" / "no" / "off") as false. Missing var returns
+// fallback. Used by the anti-collision gate (RW-PROD-005 §3) for
+// VELOX_ALLOW_MULTI_HOST_WORKER_IDS.
+func envBool(key string, fallback bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	switch strings.ToLower(v) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
 func main() {
 	// Parse command-line flags
 	configPath := flag.String("config", defaultConfigPath, "path to config file")
@@ -499,6 +516,23 @@ func main() {
 		worker.WithRegistry(registry),
 		worker.WithCache(localCache),
 		worker.WithBlobs(blobs),
+		// Anti-collision observer (RW-PROD-005 §3): on master reject with
+		// codes.AlreadyExists (another machine is already registered with
+		// this worker_id on a different credential), exit 17 (anti-
+		// collision sentinel). Gated by VELOX_ALLOW_MULTI_HOST_WORKER_IDS
+		// default=false; legacy blue/green operators can opt out.
+		worker.WithCollisionObserver(func(collisionErr error) {
+			if envBool("VELOX_ALLOW_MULTI_HOST_WORKER_IDS", false) {
+				fmt.Fprintf(os.Stderr, "[WARN] VELOX_ALLOW_MULTI_HOST_WORKER_IDS=true \u2014 collision accepted, continuing with backoff. worker_id=%q master_url=%s err=%v\n", cfg.WorkerID, cfg.MasterURL, collisionErr)
+				return
+			}
+			fmt.Fprintf(os.Stderr, "[ERROR] worker_id COLLISION detected \u2014 exit(17). another machine already registered with worker_id=%q on a different credential. master_url=%s err=%v\n"+
+				"Hint: two physical machines cannot share a worker_id. Check VELOX_WORKER_ID on both hosts. "+
+				"To force-accept collisions (NOT recommended), set VELOX_ALLOW_MULTI_HOST_WORKER_IDS=1.\n",
+				cfg.WorkerID, cfg.MasterURL, collisionErr)
+			fmt.Fprintf(os.Stdout, "[COLLISION] worker_id=%q master_url=%s err=%v\n", cfg.WorkerID, cfg.MasterURL, collisionErr)
+			os.Exit(17)
+		}),
 	)
 	if workerErr != nil {
 		logger.LogRegisterFailed("(initial)", cfg.MasterURL, workerErr)

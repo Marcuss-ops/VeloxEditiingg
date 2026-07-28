@@ -18,6 +18,25 @@ var (
 
 	// ErrNotConnected is returned when trying to send/receive without an active connection.
 	ErrNotConnected = errors.New("not connected")
+
+	// ErrWorkerIDCollision is returned when the master rejects the worker's
+	// Hello/HelloAck handshake with codes.AlreadyExists, signaling that
+	// another machine is already registered with the same worker_id on a
+	// different credential. This is a hard configuration error: two
+	// physical machines cannot share a single worker_id. Callers should
+	// detect this via errors.Is(err, controltransport.ErrWorkerIDCollision)
+	// and exit loudly (exit code 17) rather than retry with backoff —
+	// retrying would mask the operational fault.
+	//
+	// Anti-collision invariant (RW-PROD-005 §3): the master-side handler
+	// emits codes.AlreadyExists whenever CheckActiveSessionCollision finds
+	// an existing ACTIVE session for the same (worker_id, session_type)
+	// with a different token_hash. The race-window trigger
+	// `trg_worker_sessions_one_active` (migration 094 + 095) is the
+	// authoritative backstop for concurrent inserts that slip past the
+	// pre-check; both paths funnel into this same sentinel on the worker
+	// side so the diagnostic is uniform.
+	ErrWorkerIDCollision = errors.New("worker_id already connected on a different credential (worker_id collision: two machines with the same identity)")
 )
 
 // TransportError wraps an error with additional context about the transport operation.
