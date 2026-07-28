@@ -1,0 +1,143 @@
+---
+# Roll out one pinned worker image at a time.
+# The operator must drain the worker and wait for active_jobs=0 before
+# invoking this playbook. A failed prepare/health check restores the exact
+# previous env file and reruns the host converger before failing the play.
+
+- name: Roll out pinned Velox worker image
+  hosts: velox_workers
+  serial: 1
+  become: true
+  gather_facts: false
+  vars:
+    worker_env_path: /etc/velox-worker/worker.env
+    prepare_host_path: /opt/velox/current/deploy/runtime/prepare-host.sh
+    health_port: 8081
+    deployment_id: "deploy-{{ lookup('pipe', 'date -u +%Y%m%d%H%M%S') }}"
+    target_image: ""
+    rollback_image: ""
+
+  pre_tasks:
+    - name: Validate target image digest
+      ansible.builtin.assert:
+        that:
+          - target_image | length > 0
+          - target_image is match('^ghcr\\.io/[a-z0-9._-]+/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$')
+        fail_msg: "target_image must be a pinned lowercase GHCR @sha256:64 image"
+
+    - name: Validate worker env and prepare-host paths
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ worker_env_path }}"
+        - "{{ prepare_host_path }}"
+      register: rollout_paths
+
+    - name: Require worker env and prepare-host
+      ansible.builtin.assert:
+        that:
+          - rollout_paths.results[0].stat.exists
+          - rollout_paths.results[1].stat.exists
+          - rollout_paths.results[1].stat.executable
+        fail_msg: "worker env or executable prepare-host.sh is missing on {{ inventory_hostname }}"
+
+    - name: Read current worker env
+      ansible.builtin.slurp:
+        src: "{{ worker_env_path }}"
+      register: previous_env
+
+    - name: Extract current image reference
+      ansible.builtin.set_fact:
+        previous_image: >-
+          {{ (previous_env.content | b64decode | regex_findall('(?m)^VELOX_WORKER_IMAGE=(.+)$') | first) | default('') }}
+
+    - name: Require current image reference for rollback
+      ansible.builtin.assert:
+        that:
+          - previous_image | length > 0
+        fail_msg: "VELOX_WORKER_IMAGE is missing from {{ worker_env_path }}"
+
+    - name: Create deployment audit directory
+      ansible.builtin.file:
+        path: "/var/lib/velox-worker/deployments/{{ deployment_id }}"
+        state: directory
+        mode: "0750"
+
+    - name: Save deployment manifest
+      ansible.builtin.copy:
+        dest: "/var/lib/velox-worker/deployments/{{ deployment_id }}/deployment.json"
+        mode: "0640"
+        content: |
+          {
+            "deployment_id": {{ deployment_id | to_json }},
+            "worker_id": {{ (worker_id | default(inventory_hostname)) | to_json }},
+            "previous_image": {{ previous_image | to_json }},
+            "target_image": {{ target_image | to_json }},
+            "status": "UPDATING"
+          }
+
+    - name: Save exact previous worker env
+      ansible.builtin.copy:
+        content: "{{ previous_env.content | b64decode }}"
+        dest: "/var/lib/velox-worker/deployments/{{ deployment_id }}/worker.env.previous"
+        mode: "0640"
+
+  tasks:
+    - name: Apply pinned image and converge runtime
+      block:
+        - name: Set target image in worker env
+          ansible.builtin.lineinfile:
+            path: "{{ worker_env_path }}"
+            regexp: '^VELOX_WORKER_IMAGE='
+            line: "VELOX_WORKER_IMAGE={{ target_image }}"
+            create: false
+            backup: true
+
+        - name: Run prepare-host for target image
+          ansible.builtin.command:
+            argv:
+              - "{{ prepare_host_path }}"
+          environment:
+            ENV_FILE: "{{ worker_env_path }}"
+
+        - name: Verify worker readiness after rollout
+          ansible.builtin.uri:
+            url: "http://127.0.0.1:{{ health_port }}/health/ready"
+            status_code: 200
+            timeout: 5
+          register: rollout_health
+          retries: 6
+          delay: 5
+          until: rollout_health.status | default(0) == 200
+
+        - name: Mark deployment current
+          ansible.builtin.replace:
+            path: "/var/lib/velox-worker/deployments/{{ deployment_id }}/deployment.json"
+            regexp: '"status": "UPDATING"'
+            replace: '"status": "CURRENT"'
+
+      rescue:
+        - name: Restore previous worker env
+          ansible.builtin.copy:
+            src: "/var/lib/velox-worker/deployments/{{ deployment_id }}/worker.env.previous"
+            dest: "{{ worker_env_path }}"
+            remote_src: true
+            mode: "0640"
+
+        - name: Re-converge previous worker runtime
+          ansible.builtin.command:
+            argv:
+              - "{{ prepare_host_path }}"
+          environment:
+            ENV_FILE: "{{ worker_env_path }}"
+          failed_when: false
+
+        - name: Mark deployment rolled back
+          ansible.builtin.replace:
+            path: "/var/lib/velox-worker/deployments/{{ deployment_id }}/deployment.json"
+            regexp: '"status": "UPDATING"'
+            replace: '"status": "ROLLED_BACK"'
+
+        - name: Fail rollout after automatic rollback
+          ansible.builtin.fail:
+            msg: "worker image rollout failed; previous env restored on {{ inventory_hostname }}"

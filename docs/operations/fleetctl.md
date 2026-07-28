@@ -26,6 +26,32 @@ a real asset job, waits for `SUCCEEDED`, and verifies the lease worker:
 scripts/fleetctl smoke worker-id
 ```
 
+## Digest rollout
+
+The worker must already be `DRAINING` with `active_jobs=0`. The command
+refuses to run otherwise. It invokes Ansible on exactly one inventory host and
+the playbook performs the host-side digest validation, `prepare-host.sh`,
+readiness check, deployment manifest, and automatic restoration of the
+previous env file on failure:
+
+```bash
+scripts/fleetctl update worker-id \
+  ghcr.io/marcuss-ops/velox-worker@sha256:<64-hex-digest> \
+  "canary release"
+```
+
+Manual rollback uses the previously recorded pinned image reference:
+
+```bash
+scripts/fleetctl rollback worker-id \
+  ghcr.io/marcuss-ops/velox-worker@sha256:<previous-64-hex-digest> \
+  "rollback after smoke failure"
+```
+
+Override the inventory with `FLEET_INVENTORY`. The default playbook is
+`deploy/playbooks/rollout-worker-digest.yml`; override it with
+`FLEET_ROLLOUT_PLAYBOOK` when a host topology uses different paths.
+
 ## Host lifecycle
 
 `restart` sends the existing authenticated worker restart command. It should
@@ -37,9 +63,8 @@ scripts/fleetctl restart worker-id "restart after config change"
 
 Image updates and rollback are deliberately performed by Ansible, where SSH,
 non-interactive sudo, digest pinning, serial rollout, and host-side health
-checks are available. They must not be implemented as `sudo` or SSH calls
-inside a Master HTTP handler. Use the existing worker playbooks with a real
-inventory and `--limit` for one canary at a time:
+checks are available. They are not implemented as `sudo` or SSH calls inside
+a Master HTTP handler.
 
 ```bash
 ansible-playbook -i deploy/inventory/production.ini \
@@ -51,7 +76,6 @@ ansible-playbook -i deploy/inventory/production.ini \
   --limit worker-id
 ```
 
-The current command is an operator facade, not a full deployment controller:
-the repository still needs a production inventory, immutable worker image
-release variables, and a worker-specific rollback playbook before exposing
-`update` and `rollback` as automatic CLI operations.
+The Master remains the source of truth for worker state and job placement;
+Ansible remains the source of truth for host mutation. The smoke command is
+the promotion gate after the playbook completes.

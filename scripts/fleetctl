@@ -18,6 +18,8 @@ Usage:
   scripts/fleetctl resume <worker_id> [reason]
   scripts/fleetctl quarantine <worker_id> [reason]
   scripts/fleetctl restart <worker_id> [reason]
+  scripts/fleetctl update <worker_id> <ghcr-image@sha256:digest> [reason]
+  scripts/fleetctl rollback <worker_id> <ghcr-image@sha256:digest> [reason]
   scripts/fleetctl operations [worker_id] [status]
   scripts/fleetctl smoke <worker_id>
 
@@ -25,6 +27,8 @@ Environment:
   VELOX_MASTER_URL   Master base URL (default: http://127.0.0.1:8000)
   VELOX_ADMIN_TOKEN  Admin bearer token
   TOKEN_FILE         File containing VELOX_ADMIN_TOKEN=<value>
+  FLEET_INVENTORY     Ansible inventory (default: deploy/inventory/production.ini)
+  FLEET_ROLLOUT_PLAYBOOK  Digest rollout playbook override
 EOF
 }
 
@@ -61,6 +65,38 @@ api() {
     curl "${args[@]}" "$MASTER_URL$path"
 }
 
+worker_uri() {
+    printf '/api/v1/admin/workers/%s' "$(printf '%s' "$1" | jq -sRr @uri)"
+}
+
+require_idle_worker() {
+    local id=$1 card
+    card=$(api GET "$(worker_uri "$id")")
+    jq -e '(.active_jobs // 0) == 0 and ((.health // "") == "DRAINING" or (.status // "") == "DRAINING")' \
+        >/dev/null <<<"$card" || die "worker $id must be DRAINING with active_jobs=0 before host rollout"
+}
+
+validate_image() {
+    [[ "$1" =~ ^ghcr\.io/[a-z0-9._-]+/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]] \
+        || die 'image must be a pinned lowercase GHCR @sha256:64 reference'
+}
+
+run_digest_rollout() {
+    local action=$1 worker_id=$2 image=$3 reason=${4:-fleetctl-$action}
+    local inventory=${FLEET_INVENTORY:-$ROOT/deploy/inventory/production.ini}
+    local playbook=${FLEET_ROLLOUT_PLAYBOOK:-$ROOT/deploy/playbooks/rollout-worker-digest.yml}
+    command -v ansible-playbook >/dev/null 2>&1 || die 'ansible-playbook is required for host rollout'
+    [[ -r "$inventory" ]] || die "Ansible inventory not readable: $inventory"
+    [[ -r "$playbook" ]] || die "rollout playbook not readable: $playbook"
+    validate_image "$image"
+    require_idle_worker "$worker_id"
+    printf 'fleetctl: %s worker=%s image=%s reason=%s\n' "$action" "$worker_id" "$image" "$reason" >&2
+    ansible-playbook -i "$inventory" "$playbook" --limit "$worker_id" \
+        -e "master_url=$MASTER_URL" \
+        -e "target_image=$image" \
+        -e "deployment_reason=$reason"
+}
+
 case "$command" in
     status)
         if [[ "${2:-}" == "--json" ]]; then
@@ -93,6 +129,13 @@ case "$command" in
         reason=${3:-fleetctl-restart}
         api POST /worker/restart \
             "$(jq -cn --arg id "$worker_id" --arg reason "$reason" '{worker_id:$id,reason:$reason}')" | jq .
+        ;;
+    update|rollback)
+        worker_id=${2:-}
+        image=${3:-}
+        [[ -n "$worker_id" ]] || die 'worker_id is required'
+        [[ -n "$image" ]] || die 'pinned image reference is required'
+        run_digest_rollout "$command" "$worker_id" "$image" "${4:-fleetctl-$command}"
         ;;
     operations)
         path=/api/v1/admin/operations
