@@ -11,6 +11,7 @@ package remoteengine
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"velox-shared/payload"
@@ -133,10 +134,63 @@ type ScriptResult struct {
 	JSONPath     string // optional path to the .json file on the remote engine's disk
 }
 
+// ClipAsset is the per-scene clip asset reference typed DTO.
+// Mirrors apiwire.SubmitClip (without validate tags — typed-DTO
+// layer does not own wire validation, the SubmitJob handler does).
+//
+// Phase 2 of the render-manifest plan: scene.Clip carries the
+// authoritative clip URL directly. Worker reads it from
+// scenes_json[i].clip.url — no more positional coupling with
+// voiceover_paths[].
+type ClipAsset struct {
+	AssetID     string `json:"asset_id,omitempty"`
+	DriveFileID string `json:"drive_file_id,omitempty"`
+	URL         string `json:"url,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
+	StartMS     int64  `json:"start_ms,omitempty"`
+	EndMS       int64  `json:"end_ms,omitempty"`
+	DurationMS  int64  `json:"duration_ms,omitempty"`
+}
+
+// VoiceoverAsset is the per-scene voiceover asset reference typed DTO.
+// Mirrors apiwire.SubmitVoiceover. The nested form REPLACES the legacy
+// position-coupled voiceover_paths[N] ↔ scenes[N] relationship: a
+// single scene carries its own voiceover URL directly. See
+// ToWorkerPayload for the merge-into-voiceover_paths[] back-compat
+// strategy that keeps legacy worker consumers working.
+type VoiceoverAsset struct {
+	AssetID     string `json:"asset_id,omitempty"`
+	DriveFileID string `json:"drive_file_id,omitempty"`
+	URL         string `json:"url,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
+	DurationMS  int64  `json:"duration_ms,omitempty"`
+	Language    string `json:"language,omitempty"`
+}
+
+// SubtitlesAsset is the per-scene subtitles asset reference typed DTO.
+// Mirrors apiwire.SubmitSubtitles.
+type SubtitlesAsset struct {
+	AssetID  string `json:"asset_id,omitempty"`
+	Format   string `json:"format,omitempty"`
+	URL      string `json:"url,omitempty"`
+	SHA256   string `json:"sha256,omitempty"`
+	Language string `json:"language,omitempty"`
+}
+
 // SceneResult holds a single scene with its text and image reference.
-type SceneResult struct {
-	Text      string `json:"text"`
-	ImageLink string `json:"image_link,omitempty"`
+//
+// Phase 2 of the render-manifest plan: the per-scene Clip / Voiceover
+// / Subtitles nested objects are the canonical SOURCE OF TRUTH for
+// asset URLs. The legacy top-level VoiceoverResult.Paths is preserved
+// for back-compat with the creator-machine wire shape (and to keep
+// the typed DTO surface stable for tests); ToWorkerPayload merges
+// both sources into the worker payload (per-scene voiceover.url
+// FIRST, top-level Paths second, deduped by URL).
+type SceneResult struct {	Text           string           `json:"text"`
+	SceneID        string           `json:"scene_id,omitempty"`
+	Index          int64            `json:"index,omitempty"`
+	Kind           string           `json:"kind,omitempty"`
+	ImageLink      string           `json:"image_link,omitempty"`
 	// ClipLink is an alternative to ImageLink for video-clip-based scenes.
 	ClipLink string `json:"clip_link,omitempty"`
 	// DurationSeconds is the intended duration of the scene in seconds.
@@ -146,10 +200,20 @@ type SceneResult struct {
 	// turn "0.1" into "0" via the float64->int cast, an explicit
 	// cross-package dependency that was neutralised when the SubmitJob
 	// contract adopted sub-second durations for fine-grained scene cuts.
-	DurationSeconds float64 `json:"duration_seconds,omitempty"`
+	DurationSeconds float64          `json:"duration_seconds,omitempty"`
+	Clip            *ClipAsset       `json:"clip,omitempty"`
+	Voiceover       *VoiceoverAsset  `json:"voiceover,omitempty"`
+	Subtitles       *SubtitlesAsset  `json:"subtitles,omitempty"`
 }
 
 // VoiceoverResult holds the voiceover audio reference(s).
+//
+// Phase 2 of the render-manifest plan: the per-scene voiceover.url
+// is the canonical SOURCE OF TRUTH (a single scene carries its own
+// voiceover URL). The top-level Paths field is preserved for
+// back-compat with the creator-machine wire shape — both inputs
+// are merged into the worker payload (per-scene voiceover.url first,
+// top-level Paths second, deduped by URL) by ToWorkerPayload.
 type VoiceoverResult struct {
 	Paths []string // local paths or URLs to voiceover audio files
 }
@@ -282,9 +346,21 @@ func (r *RemotePipelineResult) ToWorkerPayload() map[string]interface{} {
 		}
 	}
 
-	if len(r.Voiceover.Paths) > 0 {
-		// BuildPipelinePayload expects voiceover_paths as []string.
-		m["voiceover_paths"] = r.Voiceover.Paths
+	// Phase-2 voiceover_paths[] merge strategy (Phase 2 of the
+	// render-manifest plan): the per-scene voiceover.url is the
+	// SOURCE OF TRUTH, but the legacy worker consumer still reads
+	// from the top-level voiceover_paths[] array. To keep both
+	// paths consistent we merge both sources into a single deduped
+	// array, with per-scene URLs FIRST (the authoritative source)
+	// and top-level r.Voiceover.Paths SECOND (preserved for the
+	// creator-machine path that doesn't yet use per-scene nested).
+	//
+	// Note: scenes_json is set above regardless of voiceover; the
+	// new worker consumers should read from scenes_json[i].voiceover.url
+	// directly (no positional coupling). The merged voiceover_paths[]
+	// is purely a back-compat shim for legacy worker code.
+	if merged := mergeVoiceoverPaths(r); len(merged) > 0 {
+		m["voiceover_paths"] = merged
 	}
 
 	if r.Metadata.Title != "" || r.Metadata.Description != "" || len(r.Metadata.Tags) > 0 || r.Metadata.PrivacyStatus != "" {
@@ -352,6 +428,12 @@ func extractScenesDTO(flat map[string]interface{}) []SceneResult {
 
 // convertRawScenes converts a []interface{} of map[string]interface{}
 // into typed []SceneResult.
+//
+// Phase 2 of the render-manifest plan: scene_id / index / kind /
+// clip{} / voiceover{} / subtitles{} nested objects are read from
+// the flat-map raw input so the typed DTO carries the canonical
+// per-scene enrichment. The flat clip_link / image_link keys
+// remain supported for back-compat with legacy creator outputs.
 func convertRawScenes(raw []interface{}) []SceneResult {
 	scenes := make([]SceneResult, 0, len(raw))
 	for _, item := range raw {
@@ -361,15 +443,133 @@ func convertRawScenes(raw []interface{}) []SceneResult {
 		}
 		scene := SceneResult{
 			Text:      payload.FirstString(m, "text", "description", "narration"),
+			SceneID:   payload.FirstString(m, "scene_id"),
+			Index:     intFromAnyMap(m["index"]),
+			Kind:      payload.FirstString(m, "kind"),
 			ImageLink: payload.FirstString(m, "image_link", "image_url", "image"),
 			ClipLink:  payload.FirstString(m, "clip_link", "clip_url", "video_link"),
 		}
 		if dur, ok := m["duration_seconds"].(float64); ok {
 			scene.DurationSeconds = dur
 		}
+		if clip, ok := m["clip"].(map[string]interface{}); ok {
+			scene.Clip = convertClipAsset(clip)
+		}
+		if vo, ok := m["voiceover"].(map[string]interface{}); ok {
+			scene.Voiceover = convertVoiceoverAsset(vo)
+		}
+		if sub, ok := m["subtitles"].(map[string]interface{}); ok {
+			scene.Subtitles = convertSubtitlesAsset(sub)
+		}
 		scenes = append(scenes, scene)
 	}
 	return scenes
+}
+
+// intFromAnyMap coerces an arbitrary JSON-decoded value (int /
+// int64 / float64 / string with numeric content / nil) into a Go int64.
+// Returns 0 for unknown shapes so the caller can treat 0 as "absent".
+// Used by convertRawScenes for the new scene.Index field and the
+// ClipAsset.StartMS / EndMS / DurationMS / VoiceoverAsset.DurationMS
+// fields — JSON numbers are decoded as float64 by encoding/json,
+// so the typed fields need explicit coercion. int64 (rather than
+// int) is the canonical Go type for millisecond durations so the
+// renderer can compose 64-bit timestamps without overflow up to
+// ~292M years.
+func intFromAnyMap(v interface{}) int64 {
+	switch n := v.(type) {
+	case int:
+		return int64(n)
+	case int64:
+		return n
+	case float64:
+		return int64(n)
+	case string:
+		if i, err := strconv.ParseInt(strings.TrimSpace(n), 10, 64); err == nil {
+			return i
+		}
+	}
+	return 0
+}
+
+func convertClipAsset(m map[string]interface{}) *ClipAsset {
+	if m == nil {
+		return nil
+	}
+	return &ClipAsset{
+		AssetID:     payload.FirstString(m, "asset_id"),
+		DriveFileID: payload.FirstString(m, "drive_file_id"),
+		URL:         payload.FirstString(m, "url"),
+		SHA256:      payload.FirstString(m, "sha256"),
+		StartMS:     intFromAnyMap(m["start_ms"]),
+		EndMS:       intFromAnyMap(m["end_ms"]),
+		DurationMS:  intFromAnyMap(m["duration_ms"]),
+	}
+}
+
+func convertVoiceoverAsset(m map[string]interface{}) *VoiceoverAsset {
+	if m == nil {
+		return nil
+	}
+	return &VoiceoverAsset{
+		AssetID:     payload.FirstString(m, "asset_id"),
+		DriveFileID: payload.FirstString(m, "drive_file_id"),
+		URL:         payload.FirstString(m, "url"),
+		SHA256:      payload.FirstString(m, "sha256"),
+		DurationMS:  intFromAnyMap(m["duration_ms"]),
+		Language:    payload.FirstString(m, "language"),
+	}
+}
+
+func convertSubtitlesAsset(m map[string]interface{}) *SubtitlesAsset {
+	if m == nil {
+		return nil
+	}
+	return &SubtitlesAsset{
+		AssetID:  payload.FirstString(m, "asset_id"),
+		Format:   payload.FirstString(m, "format"),
+		URL:      payload.FirstString(m, "url"),
+		SHA256:   payload.FirstString(m, "sha256"),
+		Language: payload.FirstString(m, "language"),
+	}
+}
+
+// mergeVoiceoverPaths produces the merged voiceover_paths[] for the
+// worker payload (Phase-2 back-compat strategy). Per-scene URLs
+// (scenes[i].voiceover.url) come FIRST (authoritative source); the
+// top-level r.Voiceover.Paths come SECOND (legacy creator-machine
+// source); duplicates (same trimmed URL) are deduped. Returns nil
+// when no source supplies any URL — the worker payload then has no
+// voiceover_paths key at all (vs. an empty array, which would
+// surface as a falsy check on legacy worker consumers).
+func mergeVoiceoverPaths(r *RemotePipelineResult) []string {
+	seen := map[string]struct{}{}
+	var merged []string
+
+	// Per-scene voiceover URLs first.
+	for _, s := range r.Scenes {
+		if s.Voiceover == nil {
+			continue
+		}
+		if trimmed := strings.TrimSpace(s.Voiceover.URL); trimmed != "" {
+			if _, dup := seen[trimmed]; !dup {
+				seen[trimmed] = struct{}{}
+				merged = append(merged, trimmed)
+			}
+		}
+	}
+
+	// Top-level voiceover.Paths second (legacy creator source).
+	for _, p := range r.Voiceover.Paths {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			if _, dup := seen[trimmed]; !dup {
+				seen[trimmed] = struct{}{}
+				merged = append(merged, trimmed)
+			}
+		}
+	}
+
+	return merged
 }
 
 // extractVoiceoverPathsDTO extracts voiceover paths from the flat map.

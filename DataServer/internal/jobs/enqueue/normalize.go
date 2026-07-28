@@ -8,8 +8,16 @@
 // site that holds a `map[string]interface{}` payload.
 //
 // Cross-file visibility: same `package enqueue`, so private symbols
-// (validationError, PlanDestination, *ResolvedPlan) referenced from
-// sibling files remain in scope without re-export.
+// (validationError alias, PlanDestination, *ResolvedPlan) referenced
+// from sibling files remain in scope without re-export.
+//
+// Migration note: after the shared/contract/deliveryplan extraction,
+// every `&validationError{field: ..., message: ...}` literal in this
+// file now routes through deliveryplan.NewValidationError (or
+// NewValidationErrorWrapped when an unwrapped cause is needed). The
+// canonical `<FieldPath>: <Msg>` envelope is preserved verbatim, so
+// the existing test gold path (substring matches on the rejection
+// messages) stays green without test-side changes.
 package enqueue
 
 import (
@@ -23,6 +31,7 @@ import (
 	"velox-server/internal/jobs"
 	"velox-server/internal/routing"
 	"velox-shared/contract"
+	"velox-shared/contract/deliveryplan"
 	"velox-shared/payload"
 )
 
@@ -39,12 +48,18 @@ import (
 // openapi.yaml:SubmitDeliveryPlanEntry.retry_budget.minimum).
 func validatePlanPayload(plan *ResolvedPlan, job *jobs.Job) error {
 	if plan == nil || len(plan.Destinations) == 0 {
-		return &validationError{field: "delivery_plan", message: "no explicit delivery plan; create job_delivery_plans rows for this job before enqueueing"}
+		return deliveryplan.NewValidationError(
+			"delivery_plan",
+			"no explicit delivery plan; create job_delivery_plans rows for this job before enqueueing",
+		)
 	}
 	maxRetry := 0
 	for i, d := range plan.Destinations {
 		if d.RetryBudget < 0 {
-			return &validationError{field: fmt.Sprintf("delivery_plan[%d].retry_budget", i), message: "must be >= 0"}
+			return deliveryplan.NewValidationError(
+				fmt.Sprintf("delivery_plan.%d.retry_budget", i),
+				"must be >= 0",
+			)
 		}
 		if d.RetryBudget > maxRetry {
 			maxRetry = d.RetryBudget
@@ -64,13 +79,13 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 
 	title := strings.TrimSpace(base.VideoName)
 	if title == "" {
-		return nil, &validationError{field: "video_name", message: "is required"}
+		return nil, deliveryplan.NewValidationError("video_name", "is required")
 	}
 	base.VideoName = title
 	if rawMetadata, present := payloadMap["video_metadata"]; present && rawMetadata != nil {
 		metadata, ok := rawMetadata.(map[string]interface{})
 		if !ok {
-			return nil, &validationError{field: "video_metadata", message: "must be an object"}
+			return nil, deliveryplan.NewValidationError("video_metadata", "must be an object")
 		}
 		if err := validateVideoMetadata(metadata); err != nil {
 			return nil, err
@@ -83,7 +98,7 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 		scriptText = title
 	}
 	if scriptText == "" {
-		return nil, &validationError{field: "script_text", message: "is required"}
+		return nil, deliveryplan.NewValidationError("script_text", "is required")
 	}
 	base.ScriptText = scriptText
 
@@ -92,7 +107,7 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 		return nil, err
 	}
 	if len(scenesValue) == 0 {
-		return nil, &validationError{field: "scenes", message: "at least one scene is required"}
+		return nil, deliveryplan.NewValidationError("scenes", "at least one scene is required")
 	}
 	base.Scenes = scenesValue
 	base.ScenesJSON = scenesJSON
@@ -100,7 +115,7 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 
 	voiceovers := normalizeVoiceoverList(payloadMap)
 	if len(voiceovers) == 0 && !hasClipTimelinePayload(payloadMap) {
-		return nil, &validationError{field: "voiceover_paths", message: "at least one voiceover path is required"}
+		return nil, deliveryplan.NewValidationError("voiceover_paths", "at least one voiceover path is required")
 	}
 	base.VoiceoverPaths = voiceovers
 	base.VoiceoverCount = len(voiceovers)
@@ -181,7 +196,10 @@ func attachVideoMetadataToDeliveryPlan(payloadMap map[string]interface{}) error 
 		for i, item := range plan {
 			entry, ok := item.(map[string]interface{})
 			if !ok {
-				return &validationError{field: fmt.Sprintf("delivery_plan[%d]", i), message: "must be an object"}
+				return deliveryplan.NewValidationError(
+					fmt.Sprintf("delivery_plan.%d", i),
+					"must be an object",
+				)
 			}
 			attach(entry)
 		}
@@ -198,12 +216,12 @@ func attachVideoMetadataToDeliveryPlan(payloadMap map[string]interface{}) error 
 func validateVideoMetadata(metadata map[string]interface{}) error {
 	if title, ok := metadata["title"]; ok {
 		if value, ok := title.(string); !ok || strings.TrimSpace(value) == "" {
-			return &validationError{field: "video_metadata.title", message: "must be a non-empty string"}
+			return deliveryplan.NewValidationError("video_metadata.title", "must be a non-empty string")
 		}
 	}
 	if description, ok := metadata["description"]; ok {
 		if _, ok := description.(string); !ok {
-			return &validationError{field: "video_metadata.description", message: "must be a string"}
+			return deliveryplan.NewValidationError("video_metadata.description", "must be a string")
 		}
 	}
 	if tags, ok := metadata["tags"]; ok && tags != nil {
@@ -211,27 +229,30 @@ func validateVideoMetadata(metadata map[string]interface{}) error {
 		case []interface{}:
 			for i, value := range values {
 				if _, ok := value.(string); !ok {
-					return &validationError{field: fmt.Sprintf("video_metadata.tags[%d]", i), message: "must be a string"}
+					return deliveryplan.NewValidationError(
+						fmt.Sprintf("video_metadata.tags[%d]", i),
+						"must be a string",
+					)
 				}
 			}
 		case []string:
 		default:
-			return &validationError{field: "video_metadata.tags", message: "must be an array of strings"}
+			return deliveryplan.NewValidationError("video_metadata.tags", "must be an array of strings")
 		}
 	}
 	if privacy, ok := metadata["privacy_status"]; ok {
 		value, ok := privacy.(string)
 		if !ok || !isValidPrivacyStatus(value) {
-			return &validationError{field: "video_metadata.privacy_status", message: "must be private, unlisted, or public"}
+			return deliveryplan.NewValidationError("video_metadata.privacy_status", "must be private, unlisted, or public")
 		}
 	}
 	if publishAt, ok := metadata["publish_at"]; ok && publishAt != nil {
 		value, ok := publishAt.(string)
 		if !ok || strings.TrimSpace(value) == "" {
-			return &validationError{field: "video_metadata.publish_at", message: "must be an RFC3339 timestamp"}
+			return deliveryplan.NewValidationError("video_metadata.publish_at", "must be an RFC3339 timestamp")
 		}
 		if _, err := time.Parse(time.RFC3339, value); err != nil {
-			return &validationError{field: "video_metadata.publish_at", message: "must be an RFC3339 timestamp"}
+			return deliveryplan.NewValidationError("video_metadata.publish_at", "must be an RFC3339 timestamp")
 		}
 	}
 	return nil

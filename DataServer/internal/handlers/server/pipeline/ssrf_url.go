@@ -61,15 +61,15 @@ import (
 // can serialize it into SubmitJobValidationError.Details without
 // exposing internal-only information:
 //
-//   Path:    JSON-pointer-style path to the offending URL in the
-//            request body (e.g. "voiceover_paths.0", "scenes.3.clip_link")
-//   URL:     the raw value as sent by the client (echo for debug)
-//   Reason:  short machine token: "scheme", "ip_private",
-//            "ip_loopback", "ip_link_local", "ip_metadata",
-//            "ip_multicast", "ip_unspecified", "ip_unresolved",
-//            "allowlist_miss", "http_disallowed",
-//            "loopback_http_disabled". Use one of these in tests /
-//            clients; the message tail is for humans only.
+//	Path:    JSON-pointer-style path to the offending URL in the
+//	         request body (e.g. "voiceover_paths.0", "scenes.3.clip_link")
+//	URL:     the raw value as sent by the client (echo for debug)
+//	Reason:  short machine token: "scheme", "ip_private",
+//	         "ip_loopback", "ip_link_local", "ip_metadata",
+//	         "ip_multicast", "ip_unspecified", "ip_unresolved",
+//	         "allowlist_miss", "http_disallowed",
+//	         "loopback_http_disabled". Use one of these in tests /
+//	         clients; the message tail is for humans only.
 type SSRFValidationError struct {
 	Path   string
 	URL    string
@@ -287,6 +287,7 @@ func classifyIP(ip net.IP, allowLoopbackHTTP bool, scheme string) string {
 //   - exact match on the host label, or
 //   - bare suffix "example.com" matches "a.example.com", or
 //   - wildcard "*.foo.com" matches one extra label ("a.foo.com").
+//
 // This is the simpler-than-glob policy and matches the most common
 // SaaS providers' expectation.
 //
@@ -389,6 +390,36 @@ func ValidateAllExternalURLs(req SubmitJobRequest, cfg *config.Config) []SSRFVal
 					se.Path = base + ".image_link"
 				}
 				errs = append(errs, *se)
+			}
+		}
+		if s.Clip != nil {
+			if err := ValidateExternalURL(s.Clip.URL, domains, allowLoopbackHTTP); err != nil {
+				if se, ok := err.(*SSRFValidationError); ok {
+					if se.Path == "" {
+						se.Path = base + ".clip.url"
+					}
+					errs = append(errs, *se)
+				}
+			}
+		}
+		if s.Voiceover != nil {
+			if err := ValidateExternalURL(s.Voiceover.URL, domains, allowLoopbackHTTP); err != nil {
+				if se, ok := err.(*SSRFValidationError); ok {
+					if se.Path == "" {
+						se.Path = base + ".voiceover.url"
+					}
+					errs = append(errs, *se)
+				}
+			}
+		}
+		if s.Subtitles != nil {
+			if err := ValidateExternalURL(s.Subtitles.URL, domains, allowLoopbackHTTP); err != nil {
+				if se, ok := err.(*SSRFValidationError); ok {
+					if se.Path == "" {
+						se.Path = base + ".subtitles.url"
+					}
+					errs = append(errs, *se)
+				}
 			}
 		}
 	}

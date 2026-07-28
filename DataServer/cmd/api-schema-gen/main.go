@@ -50,6 +50,9 @@ func main() {
 	}{
 		{"SubmitJobRequest", apiwire.SubmitJobRequest{}},
 		{"SubmitScene", apiwire.SubmitScene{}},
+		{"SubmitClip", apiwire.SubmitClip{}},
+		{"SubmitVoiceover", apiwire.SubmitVoiceover{}},
+		{"SubmitSubtitles", apiwire.SubmitSubtitles{}},
 		{"SubmitLayer", apiwire.SubmitLayer{}},
 		{"SubmitSubtitleTrack", apiwire.SubmitSubtitleTrack{}},
 		{"SubmitDeliveryPlanEntry", apiwire.SubmitDeliveryPlanEntry{}},

@@ -113,7 +113,7 @@ func TestPrepareJobAndTask_RejectsMissingDeliveryPlan(t *testing.T) {
 			name:      "no_plan_no_legacy",
 			mutate:    func(p map[string]interface{}) {},
 			wantField: "delivery_plan",
-			wantSub:   "is required",
+			wantSub:   "explicit delivery plan required",
 		},
 		{
 			name: "empty_array",
@@ -121,7 +121,7 @@ func TestPrepareJobAndTask_RejectsMissingDeliveryPlan(t *testing.T) {
 				p["delivery_plan"] = []interface{}{}
 			},
 			wantField: "delivery_plan",
-			wantSub:   "is required",
+			wantSub:   "explicit delivery plan required",
 		},
 		// rejection-table note: retry_budget=0 was historically
 		// rejected. Now ALLOWED per openapi.yaml (minimum=0). The
@@ -135,7 +135,7 @@ func TestPrepareJobAndTask_RejectsMissingDeliveryPlan(t *testing.T) {
 					map[string]interface{}{"destination_id": "drive-main", "retry_budget": -1},
 				}
 			},
-			wantField: "delivery_plan[0].retry_budget",
+			wantField: "delivery_plan.0.retry_budget",
 			wantSub:   "must be >= 0",
 		},
 		{
@@ -145,7 +145,7 @@ func TestPrepareJobAndTask_RejectsMissingDeliveryPlan(t *testing.T) {
 					map[string]interface{}{"retry_budget": 3},
 				}
 			},
-			wantField: "delivery_plan[0].destination_id",
+			wantField: "delivery_plan.0.destination_id",
 			wantSub:   "is required",
 		},
 		{
@@ -155,7 +155,7 @@ func TestPrepareJobAndTask_RejectsMissingDeliveryPlan(t *testing.T) {
 					map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "enabled": false},
 				}
 			},
-			wantField: "delivery_plan[0]",
+			wantField: "delivery_plan.0",
 			wantSub:   "disabled",
 		},
 		{
@@ -163,7 +163,7 @@ func TestPrepareJobAndTask_RejectsMissingDeliveryPlan(t *testing.T) {
 			mutate: func(p map[string]interface{}) {
 				p["delivery_destination_ids"] = []string{"drive-main", "drive-main"}
 			},
-			wantField: "delivery_plan[1].destination_id",
+			wantField: "delivery_plan.1.destination_id",
 			wantSub:   "duplicate",
 		},
 		{
@@ -171,7 +171,7 @@ func TestPrepareJobAndTask_RejectsMissingDeliveryPlan(t *testing.T) {
 			mutate: func(p map[string]interface{}) {
 				p["delivery_plan"] = []interface{}{"drive-main"}
 			},
-			wantField: "delivery_plan[0]",
+			wantField: "delivery_plan.0",
 			wantSub:   "must be an object",
 		},
 		{
@@ -189,7 +189,7 @@ func TestPrepareJobAndTask_RejectsMissingDeliveryPlan(t *testing.T) {
 					map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": -1},
 				}
 			},
-			wantField: "delivery_plan[0].priority",
+			wantField: "delivery_plan.0.priority",
 			wantSub:   "must be >= 0",
 		},
 	}

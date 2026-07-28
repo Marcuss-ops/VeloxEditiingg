@@ -298,11 +298,12 @@ on the request body. A client that already uploaded clip / voiceover /
 subtitle assets to a reachable store (Drive, GCS, S3, …) and packaged
 the immutable scene list into a `velox.render-manifest.v1` JSON can pass
 a pointer to that JSON instead of inlining the scene list. The Master
-will fetch, SHA-256 verify, and substitute the manifest-derived payload
-into the worker input (resolver-layer work, separate commit).
+fetches the JSON, verifies `manifest_ref.sha256` against the raw
+downloaded bytes, validates the manifest's internal
+`integrity.manifest_sha256`, and substitutes the manifest-derived payload
+into the worker input before enqueue.
 
-Wire-level shape (NOT the resolver-side SHA verification, which is
-out-of-scope for this commit):
+Wire-level shape:
 
 ```json
 {
@@ -386,13 +387,6 @@ OpenAPI contract:
 
 ### Out of scope (separate commits)
 
-- The fetch + SHA-256 verification of the manifest JSON (the
-  `RenderManifestResolver` from the architectural plan). The wire
-  contract this commit ships is the first half of that plan: shape
-  enforcement now, resolver side comes next.
-- Per-scene voiceover/clip/subtitles enrichment on `JobPayloadV2`
-  (so a single scene carries its own clip + voiceover + subtitles,
-  instead of relying on positional coupling). Separate commit.
 - Worker-side `worker_payload_sha256` receipt for cryptographic
   proof that the remote computer received the manifest payload.
 
@@ -1695,4 +1689,3 @@ sudo ./deploy/scripts/audit-no-youtube-residuals.sh /var/lib/velox/data/velox.db
 ### Files intentionally **not** split
 
 `094_worker_runtime_persistence.sql`, `095_worker_session_types.sql`, `remote_endpoint.go`, `verify-golden-job.sh`, `master-driver.sh`, `worker-run.sh`, `cancel.go`. Migrations are immutable historical documents; scripts in the 40–150 LOC range are still manageable; small handlers don't justify fragmentation.
-

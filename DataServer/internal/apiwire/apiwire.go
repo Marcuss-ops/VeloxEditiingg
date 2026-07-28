@@ -31,8 +31,9 @@ package apiwire
 
 // SubmitJobRequest is the wire shape for POST /api/v1/jobs.
 // Flat, intuitive, semantically stable: idempotency_key is the
-// dedup handle; scenes[] is the only required repeating block;
-// everything else is optional content + delivery metadata.
+// dedup handle; inline bodies provide scenes[], while manifest_ref
+// bodies may omit scenes because the Master substitutes them from the
+// fetched manifest; everything else is optional content + delivery metadata.
 //
 // Idempotency-key byte-level rules (1..128, no ':' or '%', valid
 // UTF-8, no control chars) are enforced separately by
@@ -55,7 +56,7 @@ type SubmitJobRequest struct {
 	VideoName      string                    `json:"video_name,omitempty" validate:"omitempty,max=300"`
 	ScriptText     string                    `json:"script_text,omitempty"`
 	VoiceoverPaths []string                  `json:"voiceover_paths,omitempty" validate:"omitempty,dive"`
-	Scenes         []SubmitScene             `json:"scenes" validate:"required,min=1,max=10000"`
+	Scenes         []SubmitScene             `json:"scenes,omitempty" validate:"omitempty,max=10000"`
 	Layers         []SubmitLayer             `json:"layers,omitempty" validate:"omitempty,dive"`
 	SubtitleTracks []SubmitSubtitleTrack     `json:"subtitle_tracks,omitempty" validate:"omitempty,dive"`
 	DeliveryPlan   []SubmitDeliveryPlanEntry `json:"delivery_plan,omitempty" validate:"omitempty,dive"`
@@ -113,11 +114,83 @@ type SubmitManifestRef struct {
 // also matches the constants in job_submit.go (MinSceneDurationSeconds
 // + MaxSceneDurationSeconds). Drift between the two was the original
 // "manual duplication" pain point this package replaces.
+//
+// Per-scene enrichment (Phase 2 of the render-manifest plan): the
+// Clip / Voiceover / Subtitles nested objects REPLACE the legacy
+// position-coupled relationship where `voiceover_paths[N]` matched
+// `scenes[N]` by index (a fragile contract that broke when a scene
+// was reordered or removed). A single scene now carries its own
+// clip / voiceover / subtitles assets directly; the worker reads
+// them from `scenes_json[i].voiceover.url` (and .clip, .subtitles)
+// instead of relying on a top-level positional array.
+//
+// All three nested objects are POINTERS so that a client that supplies
+// `{}` (the parent object with no nested keys) is distinguishable from
+// the "scene carries no clip/vo/sub" case (pointer nil). The
+// handler-side validator rejects the empty-object case with three
+// aggregated 422 violations (URL / format / language checks fire).
 type SubmitScene struct {
-	Text            string  `json:"text" validate:"required,min=1"`
-	ClipLink        string  `json:"clip_link,omitempty" validate:"omitempty"`
-	ImageLink       string  `json:"image_link,omitempty" validate:"omitempty"`
-	DurationSeconds float64 `json:"duration_seconds" validate:"required,gte=0.1,lte=86400"`
+	Text    string `json:"text" validate:"required,min=1"`
+	SceneID string `json:"scene_id,omitempty" validate:"omitempty,max=64"`
+	// Index aligned on int64 with StartMS/EndMS/DurationMS precedent
+	// and with remoteengine.SceneResult.Index (populated via
+	// intFromAnyMap → int64). Closing the drift here keeps the
+	// wire-DTO bridge uniform across submit + creator paths.
+	Index           int64            `json:"index,omitempty" validate:"omitempty,gte=0"`
+	Kind            string           `json:"kind,omitempty" validate:"omitempty,max=32"`
+	ClipLink        string           `json:"clip_link,omitempty" validate:"omitempty,max=2048"`
+	ImageLink       string           `json:"image_link,omitempty" validate:"omitempty,max=2048"`
+	DurationSeconds float64          `json:"duration_seconds" validate:"required,gte=0.1,lte=86400"`
+	Clip            *SubmitClip      `json:"clip,omitempty" validate:"omitempty"`
+	Voiceover       *SubmitVoiceover `json:"voiceover,omitempty" validate:"omitempty"`
+	Subtitles       *SubmitSubtitles `json:"subtitles,omitempty" validate:"omitempty"`
+}
+
+// SubmitClip is the per-scene clip asset reference nested inside
+// SubmitScene. Every field is optional individually; the parent's
+// pointer (SubmitScene.Clip *SubmitClip) is what makes the whole
+// nested object optional on the wire (`json:"clip,omitempty"`).
+//
+// All fields match the canonical render-manifest.v1 scene.clip
+// shape (asset_id / drive_file_id / url / sha256 / start_ms /
+// end_ms / duration_ms). The same struct is reused by CreatorScene
+// (apiwire) so the creator-machine wire shape and the
+// simplified-submit wire shape agree on the per-scene clip envelope.
+type SubmitClip struct {
+	AssetID     string `json:"asset_id,omitempty" validate:"omitempty,max=128"`
+	DriveFileID string `json:"drive_file_id,omitempty" validate:"omitempty,max=128"`
+	URL         string `json:"url,omitempty" validate:"omitempty,url,max=2048"`
+	SHA256      string `json:"sha256,omitempty" validate:"omitempty,len=64,regex=^[0-9a-f]{64}$"`
+	StartMS     int64  `json:"start_ms,omitempty" validate:"omitempty,gte=0"`
+	EndMS       int64  `json:"end_ms,omitempty" validate:"omitempty,gte=0"`
+	DurationMS  int64  `json:"duration_ms,omitempty" validate:"omitempty,gte=0"`
+}
+
+// SubmitVoiceover is the per-scene voiceover asset reference nested
+// inside SubmitScene. Same pointer-indirection contract as
+// SubmitClip: pointer nil = "no voiceover for this scene" (default);
+// pointer non-nil with empty body = rejected with aggregated 422
+// (handler validator checks URL + language).
+type SubmitVoiceover struct {
+	AssetID     string `json:"asset_id,omitempty" validate:"omitempty,max=128"`
+	DriveFileID string `json:"drive_file_id,omitempty" validate:"omitempty,max=128"`
+	URL         string `json:"url,omitempty" validate:"omitempty,url,max=2048"`
+	SHA256      string `json:"sha256,omitempty" validate:"omitempty,len=64,regex=^[0-9a-f]{64}$"`
+	DurationMS  int64  `json:"duration_ms,omitempty" validate:"omitempty,gte=0"`
+	Language    string `json:"language,omitempty" validate:"omitempty,len=2"`
+}
+
+// SubmitSubtitles is the per-scene subtitles asset reference nested
+// inside SubmitScene. The `format` enum is intentionally narrow
+// (ass / srt / vtt) — the three subtitle flavours the Chronon
+// compositor accepts today. A future addition (e.g. `ttml`) requires
+// bumping the `oneof` list in lockstep with the renderer support.
+type SubmitSubtitles struct {
+	AssetID  string `json:"asset_id,omitempty" validate:"omitempty,max=128"`
+	Format   string `json:"format,omitempty" validate:"omitempty,oneof=ass srt vtt"`
+	URL      string `json:"url,omitempty" validate:"omitempty,url,max=2048"`
+	SHA256   string `json:"sha256,omitempty" validate:"omitempty,len=64,regex=^[0-9a-f]{64}$"`
+	Language string `json:"language,omitempty" validate:"omitempty,len=2"`
 }
 
 // SubmitLayer is one independent Chronon rendering layer. Type +
@@ -191,12 +264,31 @@ type CreatorPushPayload struct {
 // both onto the same DTO field) so the validate rule does not
 // constrain the URI scheme here — the SSRF/url-filter checklist is
 // enforced server-side outside the wire contract.
+//
+// Per-scene enrichment parity with SubmitScene: scene_id, index,
+// kind, clip{}, voiceover{}, subtitles{} nested objects are
+// available on the Creator-machine wire shape too (the same
+// SubmitClip / SubmitVoiceover / SubmitSubtitles types are reused).
+// The Creator path already carried positional voiceover couplings
+// (the typed VoiceoverResult.Paths is top-level), so the per-scene
+// enrichment here is purely additive — Creator-machine clients can
+// adopt it incrementally without breaking the legacy flat shape.
 type CreatorScene struct {
-	Text            string  `json:"text" validate:"required,min=1"`
-	ClipLink        string  `json:"clip_link,omitempty"`
-	ClipPath        string  `json:"clip_path,omitempty"`
-	ImageLink       string  `json:"image_link,omitempty" validate:"omitempty"`
-	DurationSeconds float64 `json:"duration_seconds" validate:"required,gte=0.1"`
+	Text    string `json:"text" validate:"required,min=1"`
+	SceneID string `json:"scene_id,omitempty" validate:"omitempty,max=64"`
+	// Index parity with SubmitScene: int64 (see SubmitScene.Index
+	// comment for rationale: matches StartMS/EndMS/DurationMS
+	// precedent and keeps the wire-DTO bridge uniform across the
+	// Creator Push and POST /api/v1/jobs submission paths).
+	Index           int64            `json:"index,omitempty" validate:"omitempty,gte=0"`
+	Kind            string           `json:"kind,omitempty" validate:"omitempty,max=32"`
+	ClipLink        string           `json:"clip_link,omitempty"`
+	ClipPath        string           `json:"clip_path,omitempty"`
+	ImageLink       string           `json:"image_link,omitempty" validate:"omitempty"`
+	DurationSeconds float64          `json:"duration_seconds" validate:"required,gte=0.1"`
+	Clip            *SubmitClip      `json:"clip,omitempty" validate:"omitempty"`
+	Voiceover       *SubmitVoiceover `json:"voiceover,omitempty" validate:"omitempty"`
+	Subtitles       *SubmitSubtitles `json:"subtitles,omitempty" validate:"omitempty"`
 }
 
 // DeliveryPlanEntry is the Creator-side delivery destination enum.

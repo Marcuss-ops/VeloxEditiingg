@@ -412,7 +412,7 @@ func TestCreatorPushJobsE2E_RetryBudgetZeroAcceptance(t *testing.T) {
 	r := gin.New()
 	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
 
-	// Build the canonical body, then override delivery_plan[0].retry_budget=0.
+	// Build the canonical body, then override delivery_plan.0.retry_budget=0.
 	// The body helper is fresh per call so the mutation is hermetic.
 	body := creatorPushE2EBody("creator_pc_rz0", "creator-job-rz0-001", "scene.composite.v1")
 	dp := body["payload"].(map[string]interface{})["delivery_plan"].([]interface{})
@@ -561,7 +561,7 @@ func TestCreatorPushJobsE2E_NegativeRetryBudgetRejected(t *testing.T) {
 	r := gin.New()
 	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
 
-	// Build the canonical body, then override delivery_plan[0].retry_budget=-1.
+	// Build the canonical body, then override delivery_plan.0.retry_budget=-1.
 	body := creatorPushE2EBody("creator_pc_rzneg", "creator-job-rzneg-001", "scene.composite.v1")
 	dp := body["payload"].(map[string]interface{})["delivery_plan"].([]interface{})
 	dp[0].(map[string]interface{})["retry_budget"] = -1
@@ -573,9 +573,9 @@ func TestCreatorPushJobsE2E_NegativeRetryBudgetRejected(t *testing.T) {
 	// Negative retry_budget MUST be rejected with 422 + invalid_payload.
 	// The enqueue-layer validateDeliveryPlanRequires (line 188 of
 	// internal/jobs/enqueue/delivery_plan_validator.go) returns
-	// &validationError{field: "delivery_plan[0].retry_budget", message: "must be >= 0"}
+	// &validationError{field: "delivery_plan.0.retry_budget", message: "must be >= 0"}
 	// which creatorflow.WriteResolverError maps to 422 invalid_payload
-	// with details[0].path = "delivery_plan[0].retry_budget" (bracket
+	// with details[0].path = "delivery_plan.0.retry_budget" (canonical
 	// notation, matches what validateDeliveryPlanRequires emits via
 	// fmt.Sprintf).
 	w := postCreatorPush(t, r, body)
@@ -593,7 +593,7 @@ func TestCreatorPushJobsE2E_NegativeRetryBudgetRejected(t *testing.T) {
 		t.Fatalf("response[error] = %v, want invalid_payload (full body=%s)", resp["error"], w.Body.String())
 	}
 
-	// Details shape: assert details[0].path = "delivery_plan[0].retry_budget"
+	// Details shape: assert details[0].path = "delivery_plan.0.retry_budget"
 	// (bracket notation, NOT dot — the validator emits via fmt.Sprintf
 	// so the actual emission is bracket). This pins the rejection
 	// shape so a future regression that emits 422 with a different
@@ -609,8 +609,8 @@ func TestCreatorPushJobsE2E_NegativeRetryBudgetRejected(t *testing.T) {
 	if !ok {
 		t.Fatalf("details[0] wrong type: %T (full body=%s)", detailsArr[0], w.Body.String())
 	}
-	if gotPath := detailsObj["path"]; gotPath != "delivery_plan[0].retry_budget" {
-		t.Errorf("details[0].path = %v, want delivery_plan[0].retry_budget (bracket notation, what validateDeliveryPlanRequires emits)", gotPath)
+	if gotPath := detailsObj["path"]; gotPath != "delivery_plan.0.retry_budget" {
+		t.Errorf("details[0].path = %v, want delivery_plan.0.retry_budget (dot-notation, canonical path-format per openapi.yaml + HTTP-layer ValidateSubmitJobRequest)", gotPath)
 	}
 	if gotIssue := detailsObj["issue"]; gotIssue != "invalid" {
 		t.Errorf("details[0].issue = %v, want \"invalid\" (canonical token from WriteResolverError's validationFieldExtractor branch)", gotIssue)

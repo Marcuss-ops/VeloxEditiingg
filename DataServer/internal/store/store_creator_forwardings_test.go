@@ -550,9 +550,30 @@ func TestAtomicForwardAndEnqueue_CreatesJobAndMarksForwarded(t *testing.T) {
 	db := setupForwardingTestDB(t)
 	ctx := context.Background()
 
+	if err := db.InsertDeliveryDestination(&DeliveryDestination{
+		DestinationID: "drive",
+		Provider:      "drive",
+		Name:          "drive",
+		Enabled:       true,
+	}); err != nil {
+		t.Fatalf("seed delivery destination: %v", err)
+	}
+
+	payloadJSON := `{"video":"test","delivery_plan":[{"destination_id":"drive","priority":1,"retry_budget":3}]}`
+	payload := map[string]any{
+		"video": "test",
+		"delivery_plan": []any{
+			map[string]any{
+				"destination_id": "drive",
+				"priority":       1,
+				"retry_budget":   3,
+			},
+		},
+	}
+
 	// Arrange: insert a READY_TO_FORWARD forwarding with stored payload.
 	insertTestForwardingWithPayload(t, db, "cf-atomic", "openai", "creator-atomic",
-		"scene.composite.v1", "READY_TO_FORWARD", `{"video":"test"}`, "abc")
+		"scene.composite.v1", "READY_TO_FORWARD", payloadJSON, "abc")
 
 	// Build a minimal Job and TaskSpec.
 	job := &jobs.Job{
@@ -561,7 +582,7 @@ func TestAtomicForwardAndEnqueue_CreatesJobAndMarksForwarded(t *testing.T) {
 		Status:    jobs.StatusPending,
 		VideoName: "AtomicTest",
 		RunID:     "run-atomic",
-		Payload:   `{"video":"test"}`,
+		Payload:   payloadJSON,
 		Requirements: costmodel.JobRequirements{
 			ResourceClass: "GPU",
 			Deterministic: true,
@@ -571,7 +592,7 @@ func TestAtomicForwardAndEnqueue_CreatesJobAndMarksForwarded(t *testing.T) {
 		Version:    taskgraph.SpecVersion,
 		JobID:      "job-atomic-001",
 		ExecutorID: "scene.composite.v1@1",
-		Payload:    map[string]any{"video": "test"},
+		Payload:    payload,
 	}
 
 	// Act: atomic enqueue + forward.

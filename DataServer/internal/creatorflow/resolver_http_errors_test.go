@@ -103,16 +103,16 @@ func TestWriteResolverError(t *testing.T) {
 			name:             "ValidationErrorField returns path -> 422 invalid_payload + field path (enqueue typed rejection)",
 			err:              fmt.Errorf("enqueue wrapper carrying a validationError inside"),
 			useFakeField:     true,
-			fakeField:        "delivery_plan[0].external_destination_id",
+			fakeField:        "delivery_plan.0.external_destination_id",
 			wantStatus:       http.StatusUnprocessableEntity,
 			wantCode:         "invalid_payload",
-			wantDetailsPath:  "delivery_plan[0].external_destination_id",
+			wantDetailsPath:  "delivery_plan.0.external_destination_id",
 			wantDetailsIssue: "invalid",
 			wantHasDetails:   true,
 		},
 		{
 			// Typed validationError surfacing as
-			// "scenes[3].destination_id missing" (a hypothetical
+			// "scenes.3.destination_id missing" (a hypothetical
 			// from the canonical creator frontend after the
 			// validatePlanPayload rewrite). The Field() path is
 			// the only reliable way to surface this without
@@ -122,10 +122,10 @@ func TestWriteResolverError(t *testing.T) {
 			name:             "scenes[i].destination_id missing (typed) -> 422 invalid_payload + scenes[i].destination_id",
 			err:              fmt.Errorf("enqueue wrapper"),
 			useFakeField:     true,
-			fakeField:        "scenes[3].destination_id",
+			fakeField:        "scenes.3.destination_id",
 			wantStatus:       http.StatusUnprocessableEntity,
 			wantCode:         "invalid_payload",
-			wantDetailsPath:  "scenes[3].destination_id",
+			wantDetailsPath:  "scenes.3.destination_id",
 			wantDetailsIssue: "invalid",
 			wantHasDetails:   true,
 		},
@@ -144,13 +144,13 @@ func TestWriteResolverError(t *testing.T) {
 			// pre-check has already accepted — the same
 			// plaintext-classification regression P0 #2
 			// (commit 72a455c) closed for destination-existence.
-			name:             "store-typed DeliveryPlanValidationError -> 422 invalid_payload + delivery_plan[N].retry_budget",
+			name:             "store-typed DeliveryPlanValidationError -> 422 invalid_payload + delivery_plan.N.retry_budget",
 			err:              fmt.Errorf("store parser: typed rejection wrapped for chain"),
 			useFakeDPField:   true,
-			fakeDPField:      "delivery_plan[0].retry_budget",
+			fakeDPField:      "delivery_plan.0.retry_budget",
 			wantStatus:       http.StatusUnprocessableEntity,
 			wantCode:         "invalid_payload",
-			wantDetailsPath:  "delivery_plan[0].retry_budget",
+			wantDetailsPath:  "delivery_plan.0.retry_budget",
 			wantDetailsIssue: "invalid",
 			wantHasDetails:   true,
 		},
@@ -167,12 +167,12 @@ func TestWriteResolverError(t *testing.T) {
 			// above and surface as a 500 in production.
 			name: "store-typed end-to-end (no fake indirection) -> 422 invalid_payload + delivery_plan[2].retry_budget",
 			err: fmt.Errorf("enqueue prepare: %w", store.NewDeliveryPlanValidationError(
-				"delivery_plan[2].retry_budget",
+				"delivery_plan.2.retry_budget",
 				"must be >= 0 (got -3)",
 			)),
 			wantStatus:       http.StatusUnprocessableEntity,
 			wantCode:         "invalid_payload",
-			wantDetailsPath:  "delivery_plan[2].retry_budget",
+			wantDetailsPath:  "delivery_plan.2.retry_budget",
 			wantDetailsIssue: "invalid",
 			wantHasDetails:   true,
 		},
@@ -194,12 +194,12 @@ func TestWriteResolverError(t *testing.T) {
 			name:             "enqueue-typed wins over store-typed when both are present",
 			err:              fmt.Errorf("dual-layer typed rejection chain"),
 			useFakeField:     true,
-			fakeField:        "delivery_plan[0].external_destination_id",
+			fakeField:        "delivery_plan.0.external_destination_id",
 			useFakeDPField:   true,
-			fakeDPField:      "delivery_plan[0].retry_budget",
+			fakeDPField:      "delivery_plan.0.retry_budget",
 			wantStatus:       http.StatusUnprocessableEntity,
 			wantCode:         "invalid_payload",
-			wantDetailsPath:  "delivery_plan[0].external_destination_id",
+			wantDetailsPath:  "delivery_plan.0.external_destination_id",
 			wantDetailsIssue: "invalid",
 			wantHasDetails:   true,
 		},

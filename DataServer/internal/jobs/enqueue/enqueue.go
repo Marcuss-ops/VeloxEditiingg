@@ -14,15 +14,23 @@
 // resolveInternalExecutorID, resolveRequiredCapabilities, etc.) live in
 // sibling normalize.go so the orchestration code below can be reasoned
 // about linearly. Same `package enqueue`, so private symbols
-// (validationError, PlanDestination, ResolvedPlan, PlanResolver) remain
-// in scope across both files without re-export.
+// (validationError alias, PlanDestination, ResolvedPlan, PlanResolver)
+// remain in scope across both files without re-export.
+//
+// Migration note: after the shared/contract/deliveryplan extraction,
+// the previously private *validationError struct/method surface was
+// collapsed into a type alias `type validationError = deliveryplan.
+// ValidationError`. The literals that used the unexported field names
+// The private validationError type remains local because the normalizers in
+// this package still construct private field/message literals. The delivery
+// plan shape parser lives in shared/contract/deliveryplan and is adapted back
+// to this local error surface at the enqueue boundary.
 package enqueue
 
 import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -33,6 +41,7 @@ import (
 	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
 	"velox-server/internal/telemetry"
+	"velox-shared/contract/deliveryplan"
 	"velox-shared/payload"
 
 	"github.com/google/uuid"
@@ -165,15 +174,18 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 // to the MAX retry_budget across destinations.
 func (e *Enqueuer) enforceDeliveryPlanPrecondition(ctx context.Context, jobID string, job *jobs.Job) error {
 	if e == nil || e.PlanResolver == nil {
-		return &validationError{field: "delivery_plan", message: "no plan resolver configured"}
+		return deliveryplan.NewValidationError(
+			"delivery_plan",
+			"no plan resolver configured",
+		)
 	}
 	plan, err := e.PlanResolver.ResolvePlan(ctx, jobID, "")
 	if err != nil {
-		return &validationError{
-			field:   "delivery_plan",
-			message: fmt.Sprintf("resolve failed: %v; create job_delivery_plans rows for this job before enqueueing", err),
-			wrapped: err,
-		}
+		return deliveryplan.NewValidationErrorWrapped(
+			"delivery_plan",
+			fmt.Sprintf("resolve failed: %v; create job_delivery_plans rows for this job before enqueueing", err),
+			err,
+		)
 	}
 	return validatePlanPayload(plan, job)
 }
@@ -388,73 +400,9 @@ func DeriveForwardingJobID(forwardingKey string) string {
 	return "job_" + hex.EncodeToString(sum[:8])
 }
 
-type validationError struct {
-	field   string
-	message string
-	wrapped error // optional underlying cause (e.g. deliveries.ErrNoExplicitPlan)
-}
-
-func (e *validationError) Error() string {
-	return e.field + ": " + e.message
-}
-
-// Field returns the structured field path that produced the rejection
-// (e.g. "delivery_plan[0].social_destination_id"). Exposed via a
-// getter (rather than exporting the field) so the unexported
-// `field` stays a private invariant — but cross-package callers can
-// still reach the path via `errors.As(err, &verr); verr.Field()`.
-func (e *validationError) Field() string {
-	if e == nil {
-		return ""
-	}
-	return e.field
-}
-
-// Message returns the human-readable rejection message WITHOUT the
-// field-path prefix (use Error() if you want the field+message
-// concatenation). Exposed via a getter for the same reason as Field.
-func (e *validationError) Message() string {
-	if e == nil {
-		return ""
-	}
-	return e.message
-}
-
-// Unwrap returns the underlying cause so errors.Is / errors.As can
-// inspect the original resolver error (e.g. deliveries.ErrNoExplicitPlan).
-// Without this, callers can only inspect the formatted message, which is
-// fragile across message refactors.
-func (e *validationError) Unwrap() error {
-	return e.wrapped
-}
-
-// ValidationErrorField returns the structured field path (e.g.
-// "delivery_plan[0].social_destination_id") of the *validationError
-// wrapped inside err, or "" if err is not a validationError. Exposed
-// as a package-level helper so cross-package callers (the
-// integration_test package + future HTTP handlers + CLI tooling) can
-// extract the field path without needing access to the unexported
-// `validationError` type itself.
-//
-// Typical usage:
-//
-//	if got := enqueue.ValidationErrorField(err); got != "delivery_plan[0].social_destination_id" {
-//	    // fail the assertion
-//	}
-//
-// This helper intentionally returns "" (not an error) on a
-// non-validationError input so callers can use it in expression
-// position without short-circuiting their flow.
-func ValidationErrorField(err error) string {
-	if err == nil {
-		return ""
-	}
-	var verr *validationError
-	if errors.As(err, &verr) && verr != nil {
-		return verr.Field()
-	}
-	return ""
-}
+// =============================================================================
+// Plan types
+// =============================================================================
 
 // PlanDestination is a minimal subset of the per-destination plan that the
 // Enqueuer needs to enforce the precondition. Defined locally to decouple

@@ -50,6 +50,9 @@ type JobPayloadV2 struct {
 	// Business fields
 	VideoName       string           `json:"video_name"`
 	ScriptText      string           `json:"script_text"`
+	RenderManifest  map[string]any   `json:"render_manifest,omitempty"`
+	ManifestRef     map[string]any   `json:"manifest_ref,omitempty"`
+	ManifestSHA256  string           `json:"manifest_sha256,omitempty"`
 	ScenesJSON      string           `json:"scenes_json,omitempty"`
 	Scenes          []map[string]any `json:"scenes,omitempty"`
 	Layers          []map[string]any `json:"layers,omitempty"`
@@ -127,6 +130,13 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 	if metadata, ok := raw["video_metadata"].(map[string]any); ok {
 		p.VideoMetadata = cloneObject(metadata)
 	}
+	if manifest, ok := raw["render_manifest"].(map[string]any); ok {
+		p.RenderManifest = cloneObject(manifest)
+	}
+	if manifestRef, ok := raw["manifest_ref"].(map[string]any); ok {
+		p.ManifestRef = cloneObject(manifestRef)
+	}
+	p.ManifestSHA256 = payload.FirstString(raw, "manifest_sha256")
 	if scenesVal, ok := raw["scenes"]; ok {
 		switch s := scenesVal.(type) {
 		case []map[string]any:
@@ -210,6 +220,15 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 	}
 	if p.ScenesJSON != "" {
 		out["scenes_json"] = p.ScenesJSON
+	}
+	if len(p.RenderManifest) > 0 {
+		out["render_manifest"] = cloneObject(p.RenderManifest)
+	}
+	if len(p.ManifestRef) > 0 {
+		out["manifest_ref"] = cloneObject(p.ManifestRef)
+	}
+	if p.ManifestSHA256 != "" {
+		out["manifest_sha256"] = p.ManifestSHA256
 	}
 	if len(p.Scenes) > 0 {
 		out["scenes"] = p.Scenes

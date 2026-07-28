@@ -1216,8 +1216,8 @@ func TestSubmitJobE2E_NegativeRetryBudgetRejected(t *testing.T) {
 	if !ok {
 		t.Fatalf("details[0] not map[string]interface{}: %T (got: %#v)", detailsArr[0], detailsArr[0])
 	}
-	if gotPath, _ := first["path"].(string); gotPath != "delivery_plan[0].retry_budget" {
-		t.Errorf("details[0].path = %q, want \"delivery_plan[0].retry_budget\" (validator-emitted field path; bracket notation per enqueue-layer fmt.Sprintf)", gotPath)
+	if gotPath, _ := first["path"].(string); gotPath != "delivery_plan.0.retry_budget" {
+		t.Errorf("details[0].path = %q, want \"delivery_plan.0.retry_budget\" (validator-emitted field path; dot-notation per the path-format alignment commit)", gotPath)
 	}
 	if gotIssue, _ := first["issue"].(string); gotIssue != "invalid" {
 		t.Errorf("details[0].issue = %q, want \"invalid\" (canonical issue token from WriteResolverError's validationFieldExtractor branch)", gotIssue)

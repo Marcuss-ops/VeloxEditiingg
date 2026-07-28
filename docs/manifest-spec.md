@@ -5,8 +5,8 @@
 > the optional `manifest_ref` field. Any drift between this doc, the
 > Go types in `DataServer/internal/apiwire/apiwire.go` (the
 > `SubmitManifestRef` + `SubmitScene` + nested
-> `SubmitClip/SubmitVoiceover/SubmitSubtitles` structs), and the
-> `RenderManifestResolver` (yet-to-land) is a contract bug.
+> `SubmitClip/SubmitVoiceover/SubmitSubtitles` structs), and
+> `ResolveRenderManifestRef` is a contract bug.
 >
 > The CI guard `scripts/ci/check-manifest-schema-canicality.sh`
 > asserts THIS DOCUMENT against a fixture JSON on every push,

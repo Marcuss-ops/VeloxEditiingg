@@ -14,6 +14,8 @@ package pipeline
 import (
 	"strings"
 	"testing"
+
+	"velox-server/internal/config"
 )
 
 // TestValidateExternalURL_HappyPaths asserts the allow-list of
@@ -245,7 +247,7 @@ func TestHostnameAllowed_Policy(t *testing.T) {
 		// Wildcard.
 		{"a.foo.com", []string{"*.foo.com"}, true},
 		{"b.a.foo.com", []string{"*.foo.com"}, false}, // too deep
-		{"foo.com", []string{"*.foo.com"}, false},      // bare domain
+		{"foo.com", []string{"*.foo.com"}, false},     // bare domain
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -255,5 +257,36 @@ func TestHostnameAllowed_Policy(t *testing.T) {
 				t.Fatalf("hostnameAllowed(%q, %v) = %v, want %v", tc.host, tc.allow, got, tc.wantOK)
 			}
 		})
+	}
+}
+
+func TestValidateAllExternalURLs_ChecksNestedSceneAssets(t *testing.T) {
+	req := SubmitJobRequest{
+		IdempotencyKey: "nested-ssrf",
+		Scenes: []SubmitScene{
+			{
+				Text:            "nested assets",
+				DurationSeconds: 1,
+				Clip:            &SubmitClip{URL: "https://127.0.0.1/clip.mp4"},
+				Voiceover:       &SubmitVoiceover{URL: "https://169.254.169.254/voice.mp3"},
+				Subtitles:       &SubmitSubtitles{URL: "file:///tmp/subtitles.ass"},
+			},
+		},
+	}
+	errs := ValidateAllExternalURLs(req, &config.Config{})
+	want := map[string]string{
+		"scenes.0.clip.url":      "ip_loopback",
+		"scenes.0.voiceover.url": "ip_metadata",
+		"scenes.0.subtitles.url": "scheme",
+	}
+	if len(errs) != len(want) {
+		t.Fatalf("errs len = %d, want %d: %#v", len(errs), len(want), errs)
+	}
+	for _, got := range errs {
+		if wantReason, ok := want[got.Path]; !ok {
+			t.Fatalf("unexpected path %q in %#v", got.Path, errs)
+		} else if got.Reason != wantReason {
+			t.Fatalf("%s reason = %q, want %q", got.Path, got.Reason, wantReason)
+		}
 	}
 }

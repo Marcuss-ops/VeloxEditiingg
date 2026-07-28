@@ -288,9 +288,20 @@ type SubmitJobRequest struct {
 	// the worker input (replacing / overlaying the inline scene
 	// list). Shape-level rules (URL scheme allow-list, sha256 hex
 	// format, schema_version enum) are enforced by
-	// ValidateSubmitJobRequest. The fetch + verification is the
-	// RenderManifestResolver's responsibility (separate commit).
+	// ValidateSubmitJobRequest. Fetch + verification are handled by
+	// ResolveRenderManifestRef before enqueue.
 	ManifestRef *SubmitManifestRef `json:"manifest_ref,omitempty"`
+
+	// ResolvedManifest fields are internal-only. They are populated by
+	// ResolveRenderManifestRef after the Master fetches and verifies
+	// manifest_ref. They are intentionally ignored by JSON decoding
+	// because DisallowUnknownFields would reject these names on the public
+	// wire contract; submitRequestToRawPayload copies them into the
+	// worker payload after resolution so TaskSpec carries the immutable
+	// manifest snapshot.
+	ResolvedManifest       map[string]interface{} `json:"-"`
+	ResolvedManifestRef    map[string]interface{} `json:"-"`
+	ResolvedManifestSHA256 string                 `json:"-"`
 }
 
 // SubmitScene is a single scene in the simplified job submission format.
@@ -568,13 +579,19 @@ func ValidateSubmitJobRequest(req SubmitJobRequest) (*SubmitJobValidationError, 
 		})
 	}
 
-	// Scenes count: at least 1, at most MaxScenes. Empty or oversized
-	// is a hard fail.
+	// Scenes count: at least 1, at most MaxScenes for inline bodies.
+	// A manifest_ref-only submission is allowed to omit scenes because
+	// RenderManifestResolver substitutes the manifest-derived scene list
+	// before enqueue. If an inline scene list is supplied alongside
+	// manifest_ref it is still validated here; the resolver later replaces
+	// it with the manifest as the source of truth.
 	if len(req.Scenes) == 0 {
-		details = append(details, gin.H{
-			"path":  "scenes",
-			"issue": "empty",
-		})
+		if req.ManifestRef == nil {
+			details = append(details, gin.H{
+				"path":  "scenes",
+				"issue": "empty",
+			})
+		}
 	} else if len(req.Scenes) > MaxScenes {
 		details = append(details, gin.H{
 			"path":     "scenes",
@@ -733,11 +750,10 @@ func ValidateSubmitJobRequest(req SubmitJobRequest) (*SubmitJobValidationError, 
 	// be 1..MaxManifestRefURLBytes after trim, sha256 must be
 	// exactly 64 lowercase hex characters.
 	//
-	// The actual fetch + SHA-256 verification is the
-	// RenderManifestResolver's responsibility (separate commit);
-	// this layer is intentionally byte-level only so the rejection
-	// paths are order-stable and a malformed manifest_ref returns
-	// 422 invalid_payload BEFORE any downstream cost.
+	// The actual fetch + SHA-256 verification happens later in
+	// ResolveRenderManifestRef; this layer is intentionally byte-level
+	// only so the rejection paths are order-stable and a malformed
+	// manifest_ref returns 422 invalid_payload BEFORE any downstream cost.
 	if req.ManifestRef != nil {
 		mr := req.ManifestRef
 		mrPath := "manifest_ref"
@@ -897,6 +913,29 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 				"details": vErr.Details,
 			})
 			return
+		}
+
+		if req.ManifestRef != nil {
+			resolvedReq, resolveErr := h.ResolveRenderManifestRef(c.Request.Context(), req)
+			if resolveErr != nil {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{
+					"ok":      false,
+					"error":   resolveErr.Code,
+					"message": resolveErr.Message,
+					"details": resolveErr.Details,
+				})
+				return
+			}
+			req = resolvedReq
+			if vErr, bad := ValidateSubmitJobRequest(req); bad {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{
+					"ok":      false,
+					"error":   vErr.Code,
+					"message": vErr.Message,
+					"details": vErr.Details,
+				})
+				return
+			}
 		}
 
 		// Delivery-destination existence pre-flight (P0 #2 closure):
@@ -1127,19 +1166,19 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 // Response shape (4 fields, per user P2 spec + status_url canonical
 // chain):
 //
-//   job_id      canonical id (the same string POST returned).
-//   status      jobs.Status (canonical render state) — falls back to
-//               forwarding.Status when the jobs row has not materialized
-//               yet (resolver race in pre-FORWARDING state: the row
-//               exists but target_job_id was not yet committed).
-//   created     bool — true if the row was produced by POST /api/v1/jobs
-//               (source_provider == ExternalAPISourceProvider). False
-//               if it came in via POST /api/v1/creator/jobs. The
-//               indicator lets clients distinguish the two intake
-//               paths without a separate lookup.
-//   status_url  env-relative path "/api/v1/jobs/{job_id}" so clients
-//               can chain the canonical into their next request
-//               without re-deriving the URL.
+//	job_id      canonical id (the same string POST returned).
+//	status      jobs.Status (canonical render state) — falls back to
+//	            forwarding.Status when the jobs row has not materialized
+//	            yet (resolver race in pre-FORWARDING state: the row
+//	            exists but target_job_id was not yet committed).
+//	created     bool — true if the row was produced by POST /api/v1/jobs
+//	            (source_provider == ExternalAPISourceProvider). False
+//	            if it came in via POST /api/v1/creator/jobs. The
+//	            indicator lets clients distinguish the two intake
+//	            paths without a separate lookup.
+//	status_url  env-relative path "/api/v1/jobs/{job_id}" so clients
+//	            can chain the canonical into their next request
+//	            without re-deriving the URL.
 //
 // 404 envelope mirrors the m2m_token_rejected shape (ok:false,
 // error:job_not_found, message:...) so a single error dispatcher
@@ -1399,6 +1438,15 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 	}
 	if req.ScriptText != "" {
 		m["script_text"] = req.ScriptText
+	}
+	if req.ResolvedManifest != nil {
+		m["render_manifest"] = req.ResolvedManifest
+	}
+	if req.ResolvedManifestRef != nil {
+		m["manifest_ref"] = req.ResolvedManifestRef
+	}
+	if req.ResolvedManifestSHA256 != "" {
+		m["manifest_sha256"] = req.ResolvedManifestSHA256
 	}
 	if len(req.VoiceoverPaths) > 0 {
 		// NormalizeToStrings shape matches what

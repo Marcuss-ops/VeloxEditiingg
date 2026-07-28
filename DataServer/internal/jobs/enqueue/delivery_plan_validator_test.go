@@ -1,18 +1,27 @@
 // Package enqueue — delivery_plan_validator_test.go.
 //
-// Pure isolated unit tests for delivery_plan_validator.go. No DB,
-// no migrations, no fixtures. The closest integration cousin is
-// TestPrepareJobAndTask_RejectsMissingDeliveryPlan
-// (enqueue_delivery_plan_test.go) which exercises the SAME validator
-// indirectly through PrepareJobAndTask. This file drives the
-// validator DIRECTLY so each rejection mode is observable in
-// isolation — no scene normalization, no atomic creator wiring,
-// no idempotency noise.
+// Pure isolated unit tests for the post-refactor enqueue-layer
+// validator. The shape + validation boundaries themselves are
+// owned by the canonical:
 //
-// The validator is the canonical-purity preflight (Step 4/8) so
-// each rejection code below is a real production boundary; tests
-// pin both the field path and the substring so downstream callers
-// can rely on errors.Is / strings.Contains checks.
+//	shared/contract/deliveryplan/parser_test.go
+//
+// This file covers the enqueue-LAYER concerns that the canonical
+// parser does not cover:
+//
+//   1. validateDeliveryPlanRequires / validateDeliveryPlanShapeOnly
+//      surfaces the SAME field paths +212 envelope errors as the
+//      canonical parser (regression guard against bridging drift).
+//   2. socialclient pre-flight loop classification on the
+//      DestinationValidator interface:
+//       * ErrPermanent / ErrAuth → HARD (typed error with wrapped
+//         sentinel, errors.Is chain preserved).
+//       * ErrTransient / ErrRateLimit / ErrNotConfigured → SOFT (log
+//         + continue, no rejection).
+//   3. Empty external_destination_id → loop skips pre-flight.
+//   4. nil validator → substitutes noopDestinationValidator.
+//   5. Per-entry call count + argument pinning.
+
 package enqueue
 
 import (
@@ -80,11 +89,7 @@ func TestValidateDeliveryPlanRequires_HappyPaths(t *testing.T) {
 		},
 		{
 			// retry_budget=0 is now ALLOWED per openapi.yaml:
-			// SubmitDeliveryPlanEntry.retry_budget.minimum=0. The
-			// explicit-zero contract round-trips downstream as
-			// job_delivery_plans.retry_budget=0 so the worker
-			// terminal-fails on the first hard error. Acceptance path
-			// here pins the validator boundary.
+			// SubmitDeliveryPlanEntry.retry_budget.minimum=0.
 			name: "retry_budget_zero_explicit_accepted",
 			in: map[string]interface{}{
 				"delivery_plan": []interface{}{
@@ -93,13 +98,10 @@ func TestValidateDeliveryPlanRequires_HappyPaths(t *testing.T) {
 			},
 		},
 		{
-			// intFromAny coerces unrecognized JSON types (string, bool,
-			// nil, …) to 0 via its default branch. Under the relaxed
-			// contract (<0), the coerced 0 MUST be accepted just like
-			// an explicit numeric 0. This pins the intFromAny fallback
-			// boundary so a future refactor that flips the default to
-			// -1 (silently rejecting malformed payloads) cannot
-			// regress unnoticed.
+			// intFromAny coerces unrecognized JSON types (string,
+			// bool, nil, …) to 0. Under the relaxed contract (<0),
+			// the coerced 0 MUST be accepted just like an explicit
+			// numeric 0.
 			name: "retry_budget_string_invalid_coerces_to_zero_accepted",
 			in: map[string]interface{}{
 				"delivery_plan": []interface{}{
@@ -137,6 +139,13 @@ func TestValidateDeliveryPlanRequires_HappyPaths(t *testing.T) {
 // =====================================================================
 // validateDeliveryPlanRequires — every documented rejection mode.
 // =====================================================================
+//
+// After the delegation refactor, validateDeliveryPlanShapeOnly
+// routes through deliveryplan.Parse. The error contract is the
+// same, so substring pins below are unchanged. REGRESSION-GUARD:
+// if a future contributor injects a new wrapping layer that
+// re-formats the canonical "<field>: <message>" envelope, every
+// row here would fail.
 
 func TestValidateDeliveryPlanRequires_RejectPaths(t *testing.T) {
 	t.Parallel()
@@ -150,13 +159,13 @@ func TestValidateDeliveryPlanRequires_RejectPaths(t *testing.T) {
 			name:      "nil_payload",
 			in:        nil,
 			wantField: "delivery_plan",
-			wantSub:   "is required for canonical-purity enqueue",
+			wantSub:   "explicit delivery plan required",
 		},
 		{
 			name:      "empty_payload",
 			in:        map[string]interface{}{},
 			wantField: "delivery_plan",
-			wantSub:   "is required for canonical-purity enqueue",
+			wantSub:   "explicit delivery plan required",
 		},
 		{
 			name: "empty_array",
@@ -164,14 +173,14 @@ func TestValidateDeliveryPlanRequires_RejectPaths(t *testing.T) {
 				"delivery_plan": []interface{}{},
 			},
 			wantField: "delivery_plan",
-			wantSub:   "is required for canonical-purity enqueue",
+			wantSub:   "explicit delivery plan required",
 		},
 		{
 			name: "non_object_array_entry",
 			in: map[string]interface{}{
 				"delivery_plan": []interface{}{"drive-main"},
 			},
-			wantField: "delivery_plan[0]",
+			wantField: "delivery_plan.0",
 			wantSub:   "must be an object",
 		},
 		{
@@ -197,7 +206,7 @@ func TestValidateDeliveryPlanRequires_RejectPaths(t *testing.T) {
 					map[string]interface{}{"retry_budget": 3},
 				},
 			},
-			wantField: "delivery_plan[0].destination_id",
+			wantField: "delivery_plan.0.destination_id",
 			wantSub:   "is required",
 		},
 		{
@@ -207,7 +216,7 @@ func TestValidateDeliveryPlanRequires_RejectPaths(t *testing.T) {
 					map[string]interface{}{"destination_id": "   ", "retry_budget": 3},
 				},
 			},
-			wantField: "delivery_plan[0].destination_id",
+			wantField: "delivery_plan.0.destination_id",
 			wantSub:   "is required",
 		},
 		{
@@ -218,13 +227,9 @@ func TestValidateDeliveryPlanRequires_RejectPaths(t *testing.T) {
 					map[string]interface{}{"destination_id": "drive-main", "retry_budget": 5},
 				},
 			},
-			wantField: "delivery_plan[1].destination_id",
+			wantField: "delivery_plan.1.destination_id",
 			wantSub:   "duplicate",
 		},
-		// Note: retry_budget=0 IS NOW ACCEPTED per openapi.yaml
-		// (SubmitDeliveryPlanEntry.retry_budget.minimum=0). The
-		// rejection-table below only pins negative values; the
-		// happy-path table above locks retry_budget=0 explicitly.
 		{
 			name: "retry_budget_negative",
 			in: map[string]interface{}{
@@ -232,18 +237,9 @@ func TestValidateDeliveryPlanRequires_RejectPaths(t *testing.T) {
 					map[string]interface{}{"destination_id": "drive-main", "retry_budget": -3},
 				},
 			},
-			wantField: "delivery_plan[0].retry_budget",
+			wantField: "delivery_plan.0.retry_budget",
 			wantSub:   "must be >= 0",
 		},
-		// Note: retry_budget="abc" coerces to 0 via intFromAny's
-		// default branch (intFromAny returns 0 for unrecognized
-		// types). Under the relaxed contract (<0), the coerced 0 is
-		// now accepted; the rejection table above only pins negative
-		// numerics (retry_budget=-3).
-		// The happy-path table above covers retry_budget=0 acceptance;
-		// the ABove string-coerce-to-zero acceptance is exercised by
-		// TestPrepareJobAndTask_AcceptsZeroRetryBudget in the sibling
-		// enqueue_delivery_plan_test.go file.
 		{
 			name: "disabled_entry",
 			in: map[string]interface{}{
@@ -251,7 +247,7 @@ func TestValidateDeliveryPlanRequires_RejectPaths(t *testing.T) {
 					map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "enabled": false},
 				},
 			},
-			wantField: "delivery_plan[0]",
+			wantField: "delivery_plan.0",
 			wantSub:   "is disabled",
 		},
 		{
@@ -261,7 +257,7 @@ func TestValidateDeliveryPlanRequires_RejectPaths(t *testing.T) {
 					map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": -1},
 				},
 			},
-			wantField: "delivery_plan[0].priority",
+			wantField: "delivery_plan.0.priority",
 			wantSub:   "must be >= 0",
 		},
 		{
@@ -308,235 +304,10 @@ func TestValidateDeliveryPlanRequires_RejectPaths(t *testing.T) {
 }
 
 // =====================================================================
-// extractLegacyDestinationIDs: documented resolver order.
-//
-// The provider walks delivery_destination_ids → destination_ids → then
-// single-key delivery_destination_id → destination_id. Mirrors the
-// comment block at the top of delivery_plan_validator.go.
-// =====================================================================
-
-func TestExtractLegacyDestinationIDs_ResolverOrder(t *testing.T) {
-	t.Parallel()
-
-	t.Run("delivery_destination_ids_beats_destination_ids", func(t *testing.T) {
-		t.Parallel()
-		in := map[string]interface{}{
-			"delivery_destination_ids": []string{"canonical"},
-			"destination_ids":          []string{"alias"},
-		}
-		got, err := extractLegacyDestinationIDs(in)
-		if err != nil {
-			t.Fatalf("err: %v", err)
-		}
-		if !equalStrings(got, []string{"canonical"}) {
-			t.Errorf("got %v; want [canonical] (delivery_destination_ids wins)", got)
-		}
-	})
-
-	t.Run("delivery_destination_id_beats_destination_id", func(t *testing.T) {
-		t.Parallel()
-		in := map[string]interface{}{
-			"delivery_destination_id": "primary-single",
-			"destination_id":          "alias-single",
-		}
-		got, err := extractLegacyDestinationIDs(in)
-		if err != nil {
-			t.Fatalf("err: %v", err)
-		}
-		if !equalStrings(got, []string{"primary-single"}) {
-			t.Errorf("got %v; want [primary-single]", got)
-		}
-	})
-
-	t.Run("array_wins_over_single_when_both_present", func(t *testing.T) {
-		t.Parallel()
-		in := map[string]interface{}{
-			"delivery_destination_ids": []string{"a", "b"},
-			"delivery_destination_id":  "single",
-		}
-		got, err := extractLegacyDestinationIDs(in)
-		if err != nil {
-			t.Fatalf("err: %v", err)
-		}
-		if !equalStrings(got, []string{"a", "b"}) {
-			t.Errorf("got %v; want [a b] (array present → array wins; single is fallback)", got)
-		}
-	})
-
-	t.Run("empty_map_returns_nil_no_error", func(t *testing.T) {
-		t.Parallel()
-		got, err := extractLegacyDestinationIDs(map[string]interface{}{})
-		if err != nil {
-			t.Fatalf("err: %v", err)
-		}
-		if got != nil {
-			t.Errorf("empty map: got %v; want nil", got)
-		}
-	})
-
-	t.Run("nil_map_returns_nil_no_error", func(t *testing.T) {
-		t.Parallel()
-		got, err := extractLegacyDestinationIDs(nil)
-		if err != nil {
-			t.Fatalf("err: %v", err)
-		}
-		if got != nil {
-			t.Errorf("nil map: got %v; want nil", got)
-		}
-	})
-
-	t.Run("interface_slice_normalizes_strings", func(t *testing.T) {
-		t.Parallel()
-		in := map[string]interface{}{
-			"delivery_destination_ids": []interface{}{"a", "b", "  c  "},
-		}
-		got, err := extractLegacyDestinationIDs(in)
-		if err != nil {
-			t.Fatalf("err: %v", err)
-		}
-		if !equalStrings(got, []string{"a", "b", "c"}) {
-			t.Errorf("got %v; want [a b c] (interface slice normalized with trim)", got)
-		}
-	})
-}
-
-// =====================================================================
-// intFromAny: every numeric type covered by extractDeliveryPlanShape
-// must parse correctly. Non-numeric inputs collapse to 0 (which then
-// fails the retry_budget > 0 gate downstream — pinned here as a
-// pure contract test).
-// =====================================================================
-
-func TestIntFromAny(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name string
-		in   interface{}
-		want int
-	}{
-		{"nil", nil, 0},
-		{"int_positive", int(7), 7},
-		{"int_zero", int(0), 0},
-		{"int_negative", int(-3), -3},
-		{"int8", int8(8), 8},
-		{"int16", int16(9), 9},
-		{"int32", int32(10), 10},
-		{"int64", int64(11), 11},
-		{"uint", uint(12), 12},
-		{"uint8", uint8(13), 13},
-		{"uint16", uint16(14), 14},
-		{"uint32", uint32(15), 15},
-		{"uint64", uint64(16), 16},
-		{"float32_whole_value", float32(17), 17},
-		{"float32_truncates", float32(18.7), 18}, // int() truncation
-		{"float64_whole_value", float64(19), 19},
-		{"float64_truncates_negative", float64(-2.9), -2},
-		{"bool_true_collapses_to_zero", true, 0}, // bool is not numeric
-		{"string_collapses_to_zero", "35", 0},
-		{"map_collapses_to_zero", map[string]interface{}{}, 0},
-		{"slice_collapses_to_zero", []string{}, 0},
-	}
-	for _, c := range cases {
-		c := c
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			if got := intFromAny(c.in); got != c.want {
-				t.Errorf("intFromAny(%v) = %d; want %d", c.in, got, c.want)
-			}
-		})
-	}
-}
-
-// =====================================================================
-// boolFromAny: with explicit overrides and default fallback.
-// =====================================================================
-
-func TestBoolFromAny(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name     string
-		in       interface{}
-		fallback bool
-		want     bool
-	}{
-		{"true_overrides_default_false", true, false, true},
-		{"false_overrides_default_true", false, true, false},
-		{"nil_uses_fallback", nil, true, true},
-		{"nil_uses_fallback_false", nil, false, false},
-		{"int_uses_fallback", int(1), true, true},
-		{"string_uses_fallback", "true", true, true},
-	}
-	for _, c := range cases {
-		c := c
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			if got := boolFromAny(c.in, c.fallback); got != c.want {
-				t.Errorf("boolFromAny(%v, %v) = %v; want %v", c.in, c.fallback, got, c.want)
-			}
-		})
-	}
-}
-
-// =====================================================================
-// shapeFromMap: integration of intFromAny + boolFromAny + firstStringField
-// applied to a deliveryPlanShape. Pins the parser-level invariants of
-// extractDeliveryPlanShape on the per-entry map.
-// =====================================================================
-
-func TestShapeFromMap_DefaultsAndOverrides(t *testing.T) {
-	t.Parallel()
-	t.Run("missing_destination_id_defaults_empty", func(t *testing.T) {
-		t.Parallel()
-		s := shapeFromMap(map[string]interface{}{})
-		if s.DestinationID != "" {
-			t.Errorf("destination_id = %q; want ''", s.DestinationID)
-		}
-		if s.RetryBudget != 0 {
-			t.Errorf("retry_budget = %d; want 0", s.RetryBudget)
-		}
-		if s.Priority != 0 {
-			t.Errorf("priority = %d; want 0", s.Priority)
-		}
-		if !s.Enabled {
-			t.Errorf("enabled = false; want true (default for missing key)")
-		}
-	})
-
-	t.Run("alias_id_key_resolved", func(t *testing.T) {
-		t.Parallel()
-		s := shapeFromMap(map[string]interface{}{"id": "alias-id"})
-		if s.DestinationID != "alias-id" {
-			t.Errorf("destination_id via id alias = %q; want alias-id", s.DestinationID)
-		}
-	})
-
-	t.Run("all_explicit_fields_honored", func(t *testing.T) {
-		t.Parallel()
-		s := shapeFromMap(map[string]interface{}{
-			"destination_id": "primary",
-			"priority":       5,
-			"retry_budget":   7,
-			"enabled":        true,
-		})
-		if s.DestinationID != "primary" {
-			t.Errorf("destination_id = %q; want primary", s.DestinationID)
-		}
-		if s.Priority != 5 {
-			t.Errorf("priority = %d; want 5", s.Priority)
-		}
-		if s.RetryBudget != 7 {
-			t.Errorf("retry_budget = %d; want 7", s.RetryBudget)
-		}
-		if !s.Enabled {
-			t.Errorf("enabled = false; want true")
-		}
-	})
-}
-
-// =====================================================================
-// blackbox: an enabled=false with retry_budget<=0 must trip retry_budget
-// first (the validator visits retry_budget after enabled), pinning the
-// rejection order so callers can reason about which error surfaced.
+// blackbox: an enabled=false with retry_budget<=0 must trip
+// retry_budget first (the validator visits enabled → retry_budget
+// → priority), pinning the rejection order across the canonical
+// parser delegation.
 // =====================================================================
 
 func TestValidateDeliveryPlanRequires_DisabledFalsyRetryBudgetTripOrder(t *testing.T) {
@@ -554,97 +325,18 @@ func TestValidateDeliveryPlanRequires_DisabledFalsyRetryBudgetTripOrder(t *testi
 	if err == nil {
 		t.Fatal("want error; got nil")
 	}
-	// Per the validator's loop order (id → dup → enabled → retry → priority),
-	// enabled=false fails before retry_budget<=0.
+	// Per the canonical parser's entryFromMap visit order
+	// (enabled → retry_budget → priority), enabled=false fails
+	// before retry_budget<=0.
 	if !strings.Contains(err.Error(), "is disabled") {
 		t.Errorf("want 'is disabled' to surface first; got %q", err.Error())
 	}
 }
 
 // =====================================================================
-// shapeFromMap: external_destination_id + platform surface for the
-// Social API pre-flight loop. Both fields are optional and ignored
-// when empty (legacy Drive-only entries).
-//
-// Residuo 5 (this commit): the deprecated typed alias for the opaque
-// identifier has been dropped. The legacy `social_destination_id` JSON
-// payload key is still accepted for backward-compat reads of operator
-// payloads — both keys funnel into the canonical ExternalDestinationID
-// slot via shapeFromMap's firstStringField fallback. The pin below
-// keeps the back-compat behaviour OBSERVABLE on the canonical typed
-// field (not on a removed alias field).
-// =====================================================================
-
-func TestShapeFromMap_ExternalDestinationIDAndPlatform(t *testing.T) {
-	t.Parallel()
-	t.Run("defaults_to_empty", func(t *testing.T) {
-		t.Parallel()
-		s := shapeFromMap(map[string]interface{}{"destination_id": "drive-main"})
-		if s.ExternalDestinationID != "" {
-			t.Errorf("external_destination_id = %q; want ''", s.ExternalDestinationID)
-		}
-		if s.Platform != "" {
-			t.Errorf("platform = %q; want ''", s.Platform)
-		}
-	})
-	// Back-compat: the legacy `social_destination_id` JSON key is
-	// still honored for pre-rename operator payloads and feeds the
-	// canonical field. The typed alias is gone, so there's no second
-	// field to compare — what matters is the canonical slot is
-	// populated.
-	t.Run("legacy_social_destination_id_key_feeds_canonical", func(t *testing.T) {
-		t.Parallel()
-		s := shapeFromMap(map[string]interface{}{
-			"destination_id":        "social-amish",
-			"social_destination_id": "social_dest_amish",
-			"platform":              "youtube",
-		})
-		if s.ExternalDestinationID != "social_dest_amish" {
-			t.Errorf("ExternalDestinationID = %q; want social_dest_amish (legacy JSON key back-compat read)", s.ExternalDestinationID)
-		}
-		if s.Platform != "youtube" {
-			t.Errorf("platform = %q; want youtube", s.Platform)
-		}
-	})
-	// Residuo 4 (post-rename): the canonical
-	// `external_destination_id` JSON key is the primary contract.
-	t.Run("canonical_external_destination_id_honored", func(t *testing.T) {
-		t.Parallel()
-		s := shapeFromMap(map[string]interface{}{
-			"destination_id":          "social-amish",
-			"external_destination_id": "social_dest_amish",
-			"platform":                "youtube",
-		})
-		if s.ExternalDestinationID != "social_dest_amish" {
-			t.Errorf("ExternalDestinationID = %q; want social_dest_amish", s.ExternalDestinationID)
-		}
-		if s.Platform != "youtube" {
-			t.Errorf("Platform = %q; want youtube", s.Platform)
-		}
-	})
-	// Residuo 4 precedence: when BOTH canonical and legacy keys are
-	// present with DIFFERENT values, canonical wins. The legacy key
-	// is NOT surfaced on a typed alias anymore (Residuo 5) — the
-	// canonical slot is the SINGLE source of truth, no silent
-	// coercion of a removed field.
-	t.Run("canonical_wins_over_legacy_key_when_both_present", func(t *testing.T) {
-		t.Parallel()
-		s := shapeFromMap(map[string]interface{}{
-			"destination_id":          "social-amish",
-			"external_destination_id": "canonical_id",
-			"social_destination_id":   "legacy_id",
-			"platform":                "youtube",
-		})
-		if s.ExternalDestinationID != "canonical_id" {
-			t.Errorf("ExternalDestinationID = %q; want canonical_id (canonical wins over legacy JSON key when both present)", s.ExternalDestinationID)
-		}
-	})
-}
-
-// =====================================================================
-// stubValidator: a hand-rolled DestinationValidator used to drive the
-// per-entry pre-flight loop from unit tests without involving the
-// real *socialclient.Client.
+// stubValidator: a hand-rolled DestinationValidator used to drive
+// the per-entry pre-flight loop from unit tests without involving
+// the real *socialclient.Client.
 // =====================================================================
 
 type stubValidator struct {
@@ -670,16 +362,9 @@ func (s *stubValidator) callCount() int {
 // validateDeliveryPlanRequires — pre-flight loop. Pins the
 // hard/soft classification of socialclient sentinels:
 //
-//	ErrPermanent | ErrAuth               → HARD fail (validationError)
-//	ErrTransient | ErrRateLimit | ErrNotConfigured → SOFT pass (nil return)
+//	ErrPermanent | ErrAuth               → HARD fail (typed error)
+//	ErrTransient | ErrRateLimit | ErrNotConfigured → SOFT pass
 //	missing external_destination_id      → loop skips pre-flight
-//
-// Residuo 5 (this commit): the validator reads `ExternalDestinationID`
-// from the typed shape (canonical, post-Residuo-4 rename). The legacy
-// `social_destination_id` JSON key is still funneled into the same
-// canonical slot by shapeFromMap (back-compat for pre-rename operator
-// payloads), so the operator-visible wire contract has not regressed;
-// only the typed alias has been removed.
 // =====================================================================
 
 func TestValidateDeliveryPlanRequires_Preflight(t *testing.T) {
@@ -707,9 +392,10 @@ func TestValidateDeliveryPlanRequires_Preflight(t *testing.T) {
 	t.Run("hard_fail_on_ErrPermanent", func(t *testing.T) {
 		t.Parallel()
 		// Wrap the sentinel with %w so errors.Is(err, socialclient.ErrPermanent)
-		// returns true through the validator's *validationError chain. A bare
-		// errors.New(...) with the same text would NOT satisfy errors.Is and
-		// the validator would silently classify the failure as soft.
+		// returns true through the validator's *validationError chain. A
+		// bare errors.New(...) with the same text would NOT satisfy
+		// errors.Is and the validator would silently classify the
+		// failure as soft.
 		stub := &stubValidator{err: fmt.Errorf("wrapped: %w", socialclient.ErrPermanent)}
 		err := validateDeliveryPlanRequires(context.Background(), planWithSocial, stub)
 		if err == nil {
@@ -718,26 +404,23 @@ func TestValidateDeliveryPlanRequires_Preflight(t *testing.T) {
 		if stub.callCount() != 1 {
 			t.Errorf("validator call count = %d; want 1", stub.callCount())
 		}
-		if !strings.Contains(err.Error(), "delivery_plan[0].external_destination_id") {
-			t.Errorf("error %q does not contain delivery_plan[0].external_destination_id", err.Error())
+		if !strings.Contains(err.Error(), "delivery_plan.0.external_destination_id") {
+			t.Errorf("error %q does not contain delivery_plan.0.external_destination_id", err.Error())
 		}
 		if !strings.Contains(err.Error(), "social_dest_amish") {
 			t.Errorf("error %q does not contain social_dest_amish", err.Error())
 		}
-		// Pin the errors.Is contract: the validator wraps the socialclient
-		// sentinel in *validationError so callers using errors.Is can
-		// classify the failure without parsing the formatted message.
+		// Pin the errors.Is contract through the typed chain.
 		if !errors.Is(err, socialclient.ErrPermanent) {
 			t.Errorf("errors.Is must propagate ErrPermanent; got %v", err)
 		}
-		// Pin the errors.As contract so callers can read the structured
-		// field path (atomic creator, completion coordinator, delivery
-		// runner will reach for verr.Field to log the rejection reason).
+		// Pin the errors.As contract so callers can read the
+		// structured field path through the canonical surface.
 		var verr *validationError
 		if !errors.As(err, &verr) {
 			t.Errorf("errors.As must surface *validationError; got %T", err)
-		} else if verr.Field() != "delivery_plan[0].external_destination_id" {
-			t.Errorf("validationError.Field() = %q; want %q", verr.Field(), "delivery_plan[0].external_destination_id")
+		} else if verr.Field() != "delivery_plan.0.external_destination_id" {
+			t.Errorf("validationError.Field() = %q; want %q", verr.Field(), "delivery_plan.0.external_destination_id")
 		}
 	})
 
@@ -754,16 +437,14 @@ func TestValidateDeliveryPlanRequires_Preflight(t *testing.T) {
 		if !strings.Contains(err.Error(), "rejected by social_repo") {
 			t.Errorf("error %q does not contain 'rejected by social_repo'", err.Error())
 		}
-		// Pin the errors.Is contract for the auth path.
 		if !errors.Is(err, socialclient.ErrAuth) {
 			t.Errorf("errors.Is must propagate ErrAuth; got %v", err)
 		}
-		// Pin the errors.As contract for the auth path.
 		var verr *validationError
 		if !errors.As(err, &verr) {
 			t.Errorf("errors.As must surface *validationError; got %T", err)
-		} else if verr.Field() != "delivery_plan[0].external_destination_id" {
-			t.Errorf("validationError.Field() = %q; want %q", verr.Field(), "delivery_plan[0].external_destination_id")
+		} else if verr.Field() != "delivery_plan.0.external_destination_id" {
+			t.Errorf("validationError.Field() = %q; want %q", verr.Field(), "delivery_plan.0.external_destination_id")
 		}
 	})
 
@@ -806,10 +487,11 @@ func TestValidateDeliveryPlanRequires_Preflight(t *testing.T) {
 	t.Run("cancelled_ctx_does_not_block_enqueue", func(t *testing.T) {
 		t.Parallel()
 		// A cancelled ctx arriving at the validator must NOT block
-		// enqueue: the socialclient returns ErrTransient (or equivalent)
-		// from a cancelled HTTP request, and the validator classifies
-		// ErrTransient as SOFT. The test stubs a transient response to
-		// simulate the canceled-ctx behaviour deterministically.
+		// enqueue: the socialclient returns ErrTransient (or
+		// equivalent) from a cancelled HTTP request, and the
+		// validator classifies ErrTransient as SOFT. The test
+		// stubs a transient response to simulate the canceled-ctx
+		// behaviour deterministically.
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		stub := &stubValidator{err: fmt.Errorf("wrapped: %w", socialclient.ErrTransient)}

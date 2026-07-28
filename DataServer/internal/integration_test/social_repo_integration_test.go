@@ -264,8 +264,8 @@ func TestIntegration_Preflight_AuthError(t *testing.T) {
 	// (canonical, post-Residuo-4 rename). Cross-package access goes
 	// through the enqueue.ValidationErrorField helper so the test does
 	// not need to import the unexported *validationError type.
-	if got := enqueue.ValidationErrorField(err); got != "delivery_plan[0].external_destination_id" {
-		t.Errorf("ValidationErrorField = %q; want delivery_plan[0].external_destination_id", got)
+	if got := enqueue.ValidationErrorField(err); got != "delivery_plan.0.external_destination_id" {
+		t.Errorf("ValidationErrorField = %q; want delivery_plan.0.external_destination_id", got)
 	}
 }
 

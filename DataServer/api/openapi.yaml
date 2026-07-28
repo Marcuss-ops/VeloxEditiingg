@@ -189,6 +189,8 @@ components:
             type: object
         CreatorScene:
             properties:
+                clip:
+                    $ref: '#/components/schemas/SubmitClip'
                 clip_link:
                     type: string
                 clip_path:
@@ -199,9 +201,22 @@ components:
                     type: number
                 image_link:
                     type: string
+                index:
+                    minimum: 0
+                    type: integer
+                kind:
+                    maxLength: 32
+                    type: string
+                scene_id:
+                    maxLength: 64
+                    type: string
+                subtitles:
+                    $ref: '#/components/schemas/SubmitSubtitles'
                 text:
                     minLength: 1
                     type: string
+                voiceover:
+                    $ref: '#/components/schemas/SubmitVoiceover'
             required:
                 - duration_seconds
                 - text
@@ -364,6 +379,33 @@ components:
                 clip_link: ClipLink
                 clip_path: ClipLink
             x-wire-format: false
+        SubmitClip:
+            properties:
+                asset_id:
+                    maxLength: 128
+                    type: string
+                drive_file_id:
+                    maxLength: 128
+                    type: string
+                duration_ms:
+                    minimum: 0
+                    type: integer
+                end_ms:
+                    minimum: 0
+                    type: integer
+                sha256:
+                    maxLength: 64
+                    minLength: 64
+                    pattern: ^[0-9a-f]{64}$
+                    type: string
+                start_ms:
+                    minimum: 0
+                    type: integer
+                url:
+                    format: uri
+                    maxLength: 2048
+                    type: string
+            type: object
         SubmitDeliveryPlanEntry:
             properties:
                 destination_id:
@@ -459,7 +501,6 @@ components:
                         $ref: '#/components/schemas/SubmitScene'
                     maxItems: 10000
                     minItems: 0
-                    minimum: 1
                     type: array
                 script_text:
                     type: string
@@ -478,7 +519,6 @@ components:
                     type: array
             required:
                 - idempotency_key
-                - scenes
             type: object
         SubmitJobStatusResponse:
             description: |
@@ -620,7 +660,10 @@ components:
             type: object
         SubmitScene:
             properties:
+                clip:
+                    $ref: '#/components/schemas/SubmitClip'
                 clip_link:
+                    maxLength: 2048
                     type: string
                 duration_seconds:
                     format: float
@@ -628,10 +671,24 @@ components:
                     minimum: 0.1
                     type: number
                 image_link:
+                    maxLength: 2048
                     type: string
+                index:
+                    minimum: 0
+                    type: integer
+                kind:
+                    maxLength: 32
+                    type: string
+                scene_id:
+                    maxLength: 64
+                    type: string
+                subtitles:
+                    $ref: '#/components/schemas/SubmitSubtitles'
                 text:
                     minLength: 1
                     type: string
+                voiceover:
+                    $ref: '#/components/schemas/SubmitVoiceover'
             required:
                 - duration_seconds
                 - text
@@ -647,6 +704,56 @@ components:
                     type: string
             required:
                 - source
+            type: object
+        SubmitSubtitles:
+            properties:
+                asset_id:
+                    maxLength: 128
+                    type: string
+                format:
+                    enum:
+                        - ass
+                        - srt
+                        - vtt
+                    type: string
+                language:
+                    maxLength: 2
+                    minLength: 2
+                    type: string
+                sha256:
+                    maxLength: 64
+                    minLength: 64
+                    pattern: ^[0-9a-f]{64}$
+                    type: string
+                url:
+                    format: uri
+                    maxLength: 2048
+                    type: string
+            type: object
+        SubmitVoiceover:
+            properties:
+                asset_id:
+                    maxLength: 128
+                    type: string
+                drive_file_id:
+                    maxLength: 128
+                    type: string
+                duration_ms:
+                    minimum: 0
+                    type: integer
+                language:
+                    maxLength: 2
+                    minLength: 2
+                    type: string
+                sha256:
+                    maxLength: 64
+                    minLength: 64
+                    pattern: ^[0-9a-f]{64}$
+                    type: string
+                url:
+                    format: uri
+                    maxLength: 2048
+                    type: string
             type: object
     securitySchemes:
         bearerAdminToken:

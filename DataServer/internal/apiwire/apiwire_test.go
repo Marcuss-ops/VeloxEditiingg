@@ -209,3 +209,137 @@ func TestSubmitJobRequest_ManifestRef_Roundtrip(t *testing.T) {
 		}
 	}
 }
+
+// TestSubmitScene_PerSceneNestedAssets_Roundtrip pins the JSON
+// roundtrip shape of the per-scene enrichment introduced in Phase 2
+// of the render-manifest plan: scene_id / index / kind at the scene
+// level + Clip / Voiceover / Subtitles nested objects carrying the
+// asset references directly. The point of the nested form is to
+// REPLACE the legacy position-coupled `voiceover_paths[N] ↔
+// scenes[N]` relationship — a single scene now carries its own
+// voiceover URL, the worker reads it from scenes_json[i].voiceover.url
+// without any positional arithmetic.
+//
+// Roundtrip coverage:
+//   - Snake-case key names (asset_id, drive_file_id, url, sha256,
+//     start_ms, end_ms, duration_ms, format, language).
+//   - Pointer-nil semantics: a SubmitScene with no nested pointers
+//     MUST emit a scene JSON object without any clip/voiceover/
+//     subtitles keys.
+//   - All three nested types carry their fields correctly through
+//     the JSON roundtrip (including int64 fields which encoding/json
+//     emits as JSON numbers without truncation).
+func TestSubmitScene_PerSceneNestedAssets_Roundtrip(t *testing.T) {
+	original := SubmitScene{
+		Text:            "scene with nested assets",
+		SceneID:         "scene-intro-001",
+		Index:           0,
+		Kind:            "intro",
+		ClipLink:        "https://legacy.example.com/clip.mp4",
+		DurationSeconds: 7.2,
+		Clip: &SubmitClip{
+			AssetID:     "clip_123",
+			DriveFileID: "1cQVbWKK4Tlmf2b9XIoMpLq3DnIblb53t",
+			URL:         "https://drive.google.com/file/d/1cQVbWKK4Tlmf2b9XIoMpLq3DnIblb53t/view",
+			SHA256:      strings.Repeat("a", 64),
+			StartMS:     0,
+			EndMS:       7200,
+			DurationMS:  7200,
+		},
+		Voiceover: &SubmitVoiceover{
+			AssetID:     "voiceover_scene_0",
+			DriveFileID: "19m3s1-_guIYqEZE2Ywy77s_mJZMR7686",
+			URL:         "https://drive.google.com/file/d/19m3s1-_guIYqEZE2Ywy77s_mJZMR7686/view",
+			SHA256:      strings.Repeat("b", 64),
+			DurationMS:  7190,
+			Language:    "en",
+		},
+		Subtitles: &SubmitSubtitles{
+			AssetID:  "subtitle_scene_0",
+			Format:   "ass",
+			URL:      "https://drive.google.com/file/d/SUBTITLE_FILE_ID/view",
+			SHA256:   strings.Repeat("c", 64),
+			Language: "en",
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var back SubmitScene
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if back.Text != original.Text {
+		t.Errorf("text: got %q want %q", back.Text, original.Text)
+	}
+	if back.SceneID != original.SceneID {
+		t.Errorf("scene_id: got %q want %q", back.SceneID, original.SceneID)
+	}
+	if back.Index != original.Index {
+		t.Errorf("index: got %d want %d", back.Index, original.Index)
+	}
+	if back.Kind != original.Kind {
+		t.Errorf("kind: got %q want %q", back.Kind, original.Kind)
+	}
+	if back.ClipLink != original.ClipLink {
+		t.Errorf("clip_link (legacy): got %q want %q", back.ClipLink, original.ClipLink)
+	}
+	if back.DurationSeconds != original.DurationSeconds {
+		t.Errorf("duration_seconds: got %v want %v", back.DurationSeconds, original.DurationSeconds)
+	}
+	if back.Clip == nil || back.Clip.URL != original.Clip.URL {
+		t.Errorf("clip.url roundtrip: got %+v want %+v", back.Clip, original.Clip)
+	}
+	if back.Voiceover == nil || back.Voiceover.URL != original.Voiceover.URL {
+		t.Errorf("voiceover.url roundtrip: got %+v want %+v", back.Voiceover, original.Voiceover)
+	}
+	if back.Subtitles == nil || back.Subtitles.Format != original.Subtitles.Format {
+		t.Errorf("subtitles.format roundtrip: got %+v want %+v", back.Subtitles, original.Subtitles)
+	}
+	// int64 roundtrip — JSON numbers survive the roundtrip.
+	if back.Clip != nil && (back.Clip.StartMS != 0 || back.Clip.EndMS != 7200 || back.Clip.DurationMS != 7200) {
+		t.Errorf("clip int64 roundtrip: start_ms=%d end_ms=%d duration_ms=%d",
+			back.Clip.StartMS, back.Clip.EndMS, back.Clip.DurationMS)
+	}
+	if back.Voiceover != nil && back.Voiceover.DurationMS != 7190 {
+		t.Errorf("voiceover.duration_ms roundtrip: got %d want 7190", back.Voiceover.DurationMS)
+	}
+}
+
+// TestSubmitScene_NoNestedAssets_OmitsNestedKeys pins the
+// pointer-nil semantics: a SubmitScene without Clip / Voiceover /
+// Subtitles MUST emit a JSON scene object with NONE of the nested
+// keys present. This is the legacy-flat-shape path — existing
+// clients that haven't migrated to the per-scene enrichment must
+// see no wire-shape drift (no `clip: null` keys, no `voiceover:
+// null` keys, etc).
+func TestSubmitScene_NoNestedAssets_OmitsNestedKeys(t *testing.T) {
+	scene := SubmitScene{
+		Text:            "flat-shape scene",
+		DurationSeconds: 5,
+	}
+	data, err := json.Marshal(scene)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	raw := string(data)
+	for _, banned := range []string{`"clip":`, `"voiceover":`, `"subtitles":`, `"scene_id":`, `"index":`, `"kind":`} {
+		if strings.Contains(raw, banned) {
+			t.Errorf("flat-shape scene MUST NOT emit %q; got: %s", banned, raw)
+		}
+	}
+}
+
+// TestSubmitScene_AllNestedAssets_NilPointerAccepts would pin the
+// handler-side validator's "pointer-nil = no nested assets" path
+// here, but `ValidateSubmitJobRequest` lives in the `pipeline`
+// package (which imports `apiwire`, so the reverse direction is
+// a cycle) — it cannot be called from `apiwire_test.go`. The
+// canonical "legacy flat-shape client unaffected" assertion lives
+// in `internal/handlers/server/pipeline/job_submit_test.go`
+// (TestSubmitJobValidateFlatShapeStillPasses) where the validator
+// function is in scope. Pinning it in BOTH packages would test
+// the same code path twice; pinning it in the pipeline package
+// alone covers the full validator surface that ships to operators.

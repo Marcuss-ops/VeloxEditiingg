@@ -52,6 +52,7 @@ var CanonicalTopLevelKeys = []string{
 
 	// Business fields
 	"video_name", "script_text",
+	"render_manifest", "manifest_ref", "manifest_sha256",
 	"scenes_json", "scenes",
 	"voiceover_paths",
 	"items", // Step 2/8: items[].role scene/clip contract (worker payload layer)
@@ -208,6 +209,14 @@ func ValidatePayload(payload map[string]interface{}) error {
 		if _, ok := v.(map[string]interface{}); !ok {
 			return fmt.Errorf("%w: %q must be an object (got %T)",
 				ErrShapeAnomaly, "video_metadata", v)
+		}
+	}
+	for _, field := range []string{"render_manifest", "manifest_ref"} {
+		if v, ok := payload[field]; ok && v != nil {
+			if _, ok := v.(map[string]interface{}); !ok {
+				return fmt.Errorf("%w: %q must be an object (got %T)",
+					ErrShapeAnomaly, field, v)
+			}
 		}
 	}
 
