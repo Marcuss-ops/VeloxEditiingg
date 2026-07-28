@@ -13,13 +13,20 @@ import (
 	"velox-server/internal/store"
 )
 
-// persistenceDeps holds the database, blob-store and outbox store —
-// the three infra-level dependencies that everything else builds on.
+// persistenceDeps holds the database, blob-store, outbox store, and
+// outbox registry — the four infra-level dependencies that
+// everything else builds on. OutboxRegistry is the canonical
+// *outbox.Registry shared between buildWorkers (registers subsystem
+// handlers like BundleRebuildHandler) and buildAssets (creates the
+// dispatcher that consumes events from the same registry). The
+// single-source-of-truth wiring is the precondition for
+// outbox.completeness_test's invariants to hold at runtime.
 type persistenceDeps struct {
-	Handle    *database.Handle
-	SQLite    *store.SQLiteStore
-	BlobStore store.BlobStore
-	Outbox    *outbox.Store
+	Handle        *database.Handle
+	SQLite        *store.SQLiteStore
+	BlobStore     store.BlobStore
+	Outbox        *outbox.Store
+	OutboxRegistry *outbox.Registry
 }
 
 // buildPersistence opens the database, builds the SQLiteStore,
@@ -104,10 +111,21 @@ func buildPersistence(cfg *config.Config) (*persistenceDeps, error) {
 	}
 	log.Printf("[BOOTSTRAP] BlobStore ready: staging=%s storage=%s", blobStore.StagingDir(), blobStore.FinalDir())
 
+	// outbox.ProductionRegistry() is the canonical wiring point for
+	// every outbox handler. Built ONCE here so every consumer
+	// (buildWorkers for subsystem handler registration, buildAssets
+	// for the dispatcher) reads the same *Registry instance. If a
+	// subsystem handler registers against a different *Registry
+	// than the dispatcher's, the dispatcher will mark that handler's
+	// events as FAILED with "no handler" — exactly the symptom a
+	// naive split-by-package architecture would produce.
+	outboxRegistry := outbox.ProductionRegistry()
+
 	return &persistenceDeps{
-		Handle:    handle,
-		SQLite:    sqliteStore,
-		BlobStore: blobStore,
-		Outbox:    outboxStore,
+		Handle:        handle,
+		SQLite:        sqliteStore,
+		BlobStore:     blobStore,
+		Outbox:        outboxStore,
+		OutboxRegistry: outboxRegistry,
 	}, nil
 }

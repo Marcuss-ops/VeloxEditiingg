@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"velox-server/internal/config"
+	"velox-server/internal/outbox"
 	workersreg "velox-server/internal/workers"
 
 	"github.com/gin-gonic/gin"
@@ -20,11 +21,17 @@ import (
 // (Phase 4.4: updateMgr removed — the persistent `update_code` command
 // in worker_commands is the single source of truth. The in-memory
 // UpdateManager was a duplicate write path).
+//
+// outbox is the wired `*outbox.Store` for the
+// ForceRegenerateZipHandler async path. Nil indicates a bootstrap
+// miss; the handler fails loud (500) in that case instead of
+// silently dropping the rebuild request behind a 202 ACK.
 type WorkerUpdateHandler struct {
 	cfg         *config.Config
 	reg         *workersreg.Registry
 	cmdMgr      *workersreg.CommandManager
 	tokenMgr    *workersreg.TokenManager
+	outbox      *outbox.Store
 	dataDir     string
 	bundleDir   string
 	codeVersion string
@@ -134,9 +141,18 @@ func findRepoRootFrom(start string) string {
 
 // NewWorkerUpdateHandler creates a new worker update handler.
 // Phase 4.4: the UpdateManager argument was dropped — the persistent
-// update_code command is the single source of truth. The signature is
-// reduced to the actually-used dependencies.
-func NewWorkerUpdateHandler(cfg *config.Config, reg *workersreg.Registry, cmdMgr *workersreg.CommandManager, tokenMgr *workersreg.TokenManager, dataDir string) *WorkerUpdateHandler {
+// update_code command is the single source of truth. Phase 5: a new
+// trailing `outboxStore` parameter was appended at the END of the
+// argument list (rather than mid-list) to keep existing call sites
+// compiling with a mechanical one-line edit.
+//
+// outboxStore powers the ForceRegenerateZipHandler async path
+// (bundled rebuild via WORKER_BUNDLE_REBUILD_REQUESTED outbox
+// events). Passing nil is unsupported in production; the handler
+// fails loud rather than accepting a request it cannot durably
+// enqueue. The composition root wires `p.Outbox` (cmd/server/
+// bootstrap_persistence.go) here.
+func NewWorkerUpdateHandler(cfg *config.Config, reg *workersreg.Registry, cmdMgr *workersreg.CommandManager, tokenMgr *workersreg.TokenManager, dataDir string, outboxStore *outbox.Store) *WorkerUpdateHandler {
 	bundleDir := cfg.Workers.BundleDir
 	if bundleDir != "" {
 		if _, err := os.Stat(filepath.Join(bundleDir, "worker_code.zip")); err != nil {
@@ -162,6 +178,7 @@ func NewWorkerUpdateHandler(cfg *config.Config, reg *workersreg.Registry, cmdMgr
 		reg:         reg,
 		cmdMgr:      cmdMgr,
 		tokenMgr:    tokenMgr,
+		outbox:      outboxStore,
 		dataDir:     dataDir,
 		bundleDir:   bundleDir,
 		codeVersion: cfg.Workers.CodeVersion,

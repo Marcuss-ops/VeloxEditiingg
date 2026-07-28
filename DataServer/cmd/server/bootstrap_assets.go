@@ -95,15 +95,21 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	}
 	log.Printf("[BOOTSTRAP] artifacts.Reconciler ready (mandatory — 4 rules)")
 
-	// ── Outbox registry + dispatcher ────────────────────────────────
-	// outbox.ProductionRegistry() is the canonical wiring location for
-	// all outbox handlers. Today the registry is empty (the dispatcher
-	// marks every emitted event as FAILED via the "no handler → MarkFailed"
-	// path); once real handlers are wired, this single call point picks
-	// them up with no bootstrap change. The completeness invariant is
-	// asserted by internal/outbox/completeness_test.go.
-	outboxRegistry := outbox.ProductionRegistry()
-	outboxDispatcher := outbox.NewDispatcher(p.Outbox, outboxRegistry, outbox.Config{
+	// ── Outbox dispatcher ──────────────────────────────────────────
+	// outbox.ProductionRegistry() is called EXACTLY ONCE at bootstrap
+	// persistence (buildPersistence) so the single *Registry instance
+	// is shared with subsystem registrations (buildWorkers registers
+	// BundleRebuildHandler on p.OutboxRegistry). Using a fresh
+	// ProductionRegistry() here would create a second
+	// (otherwise-equivalent) Registry with zero handlers — the
+	// dispatcher's "no handler" MarkFailed branch would fire for
+	// every WORKER_BUNDLE_REBUILD_REQUESTED the workers subsystem
+	// durably enqueues. The completeness invariant for
+	// package-globally-registered handlers is asserted by
+	// internal/outbox/completeness_test.go; subsystem registrations
+	// are validated by their owning package's tests (e.g.
+	// workers/bundle_rebuild_outbox_test.go).
+	outboxDispatcher := outbox.NewDispatcher(p.Outbox, p.OutboxRegistry, outbox.Config{
 		PollInterval: 750 * time.Millisecond,
 		BatchSize:    32,
 		LockDuration: 30 * time.Second,
@@ -143,7 +149,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 		BlobStore:        p.BlobStore,
 		ChunkedUploadSvc: chunkedSvc,
 		Reconciler:       reconciler,
-		OutboxRegistry:   outboxRegistry,
+		OutboxRegistry:   p.OutboxRegistry,
 		OutboxDispatcher: outboxDispatcher,
 	}, nil
 }
