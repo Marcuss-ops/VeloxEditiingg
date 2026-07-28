@@ -396,6 +396,82 @@ OpenAPI contract:
 - Worker-side `worker_payload_sha256` receipt for cryptographic
   proof that the remote computer received the manifest payload.
 
+### Worker allowlist: HTTP 403 deny rule + minimum remote-worker configuration
+
+`POST /api/v1/workers/register` now rejects workers whose
+`worker_id` is not in the master-side `VELOX_ALLOWED_WORKERS`
+allowlist with **HTTP 403 `worker_not_allowed`** — the canonical
+operator-visible rejection path, surfaced BEFORE the gRPC stream
+handshake and BEFORE any credential storage so an unlisted worker
+cannot accidentally leave a row in `worker_credentials`.
+
+The implementation mirrors the existing gRPC stream-side allowlist
+rule in `DataServer/internal/grpcserver/authorizer.go::IsAllowed`
+(and in `DataServer/internal/grpcserver/handler_stream.go::Stream`)
+byte-for-byte — including the `*` wildcard semantics — so both
+paths cannot drift at the byte level (defence in depth). They
+differ only in the status-code surface:
+
+- gRPC stream path: `codes.PermissionDenied` ("worker %q is not in VELOX_ALLOWED_WORKERS").
+- HTTP register path: **HTTP 403** with `{ok:false, error:"worker_not_allowed", message:"worker_id is not in VELOX_ALLOWED_WORKERS on this master"}`.
+
+A future refactor could move both behind a shared
+`internal/auth/workerauthz` package; until then the duplication is
+intentional and tested.
+
+Byte-level invariants on the helper
+(`handler.go::IsWorkerAllowed`):
+
+- `worker_id` empty            → deny (always).
+- allowlist CSV empty OR `*` + production → deny (bootstrap should have fail-fast blocked this).
+- allowlist CSV empty OR `*` + dev (`Runtime.GRPCAllowInsecureDev=true`) → allow with a one-time warn.
+- allowlist CSV non-empty AND non-`*` → `worker_id` MUST exact-match after `TrimSpace`.
+
+Order-of-operations invariant: the HTTP gate runs AFTER JSON parse +
+`worker_id` non-empty (so 400 still wins on malformed bodies) and
+BEFORE credential validation + registry insert (so we do NOT store
+credentials for, or register, an unlisted worker). Pinned by
+`TestRegisterV2_AllowlistGate_BeforeCredentialStorage`.
+
+#### `docs/worker_deployment.md` — "Minimum Remote Worker Configuration"
+
+New section documenting the five env vars a remote worker MUST
+have to register + execute jobs (the canonical operator contract):
+
+1. `VELOX_WORKER_ID` — worker id; MUST appear in master's `VELOX_ALLOWED_WORKERS`.
+2. `VELOX_GRPC_MASTER_URL` — master gRPC control-plane endpoint (host:port).
+3. `VELOX_WORKER_SECRET` — credential secret; combined with `worker_id` to derive `credential_hash` (validated against `worker_credentials` table on the master).
+4. `VELOX_GRPC_TLS_CERT_FILE` + `VELOX_GRPC_TLS_KEY_FILE` + `VELOX_GRPC_TLS_CA_FILE` — three PEM files (mandatory except in dev). RW-PROD-001 A1/A2 invariants: 14-day min residual validity; key perms 0600 in production; partial TLS rejected.
+5. `VELOX_RENDER_BACKEND` + `VELOX_VIDEO_ENGINE_CPP_BIN` + `VELOX_MAX_ACTIVE_JOBS` — render backend selection + C++ engine path + max concurrent jobs per worker.
+
+Plus a failure-mode table mapping each misconfiguration to its
+operator-visible master response (HTTP 403 / 401 / 4xx / gRPC
+`FailedPrecondition` etc.), so a new operator reading the doc
+top-to-bottom sees the canonical signature for every known
+breakage class without needing to dig through Go source.
+
+#### Files added or modified
+
+- `DataServer/internal/handlers/remote/workers/lifecycle/handler.go` — `IsWorkerAllowed` method on `*Handler` (imports `log` + `strings`).
+- `DataServer/internal/handlers/remote/workers/lifecycle/registration.go` — 403 gate inserted in `RegisterV2Handler`.
+- `DataServer/internal/handlers/remote/workers/lifecycle/worker_registration_test.go` (NEW, 9 tests) — happy 200, deny 403, whitespace-trimmed match, prod-empty deny, dev-empty allow, no-credential still gated, no-credential-row leak invariant, `*`-wildcard prod deny, `*`-wildcard dev allow.
+- `docs/worker_deployment.md` — "Minimum Remote Worker Configuration" section + failure-mode table.
+
+#### Verified on `main` (pre-push)
+
+- `cd DataServer && go vet ./...`: PASS (exit 0).
+- `cd DataServer && go build ./...`: PASS (exit 0).
+- `cd DataServer && go test -count=1 -run 'TestRegisterV2|TestAllowlistAuthorizer|TestValidateWorkerAllowlist' ./internal/handlers/remote/workers/lifecycle/... ./internal/grpcserver/... ./internal/config/...`: PASS (all suites green; the existing `grpcserver` allowlist + config validator tests still pass after the HTTP-side change).
+
+#### Out of scope (separate commits / future refactor)
+
+- A `internal/auth/workerauthz` package consolidating the HTTP
+  + gRPC allowlist lookups behind one interface (the byte-for-byte
+  duplication today is intentional until the consolidation lands).
+- `scripts/ci/check-worker-allowlist-coverage.sh` — a CI guard
+  that fails any PR / push that removes `worker_id` references from
+  the allowlist CSV (catches operator-level drift).
+
 ## [Unreleased] - 2026-07-27
 
 ### Validator extensibility — data-driven per-route invariants

@@ -73,6 +73,100 @@ When a worker requests a job via `ClaimNextJob`, the master validates:
 
 If any check fails, the job is rejected with a descriptive reason.
 
+## Minimum Remote Worker Configuration
+
+A remote worker MUST have all five configuration items below to register
+and execute jobs. Each item is a single-valued contract — drift between
+the local worker config and the master's allowlist breaks the handshake
+with `HTTP 403 worker_not_allowed` on `POST /api/v1/workers/register`,
+which is the canonical operator-visible rejection path (see
+`DataServer/internal/handlers/remote/workers/lifecycle/{handler,registration}.go`
++ `DataServer/internal/grpcserver/{authorizer,handler_stream}.go` for the
+parallel HTTP 403 and gRPC `PermissionDenied` paths; both must agree on
+the allowlist decision; they differ only in status-code surface).
+
+### 1. `VELOX_WORKER_ID`
+
+The unique worker identifier (canonical regex
+`^[a-z][a-z0-9-]{2,62}$`; auto-derived host aliases are lowercased,
+dots replaced with `_`, leading `host_` stripped). The value MUST appear
+in the master's `VELOX_ALLOWED_WORKERS` CSV — otherwise the master
+returns HTTP 403 on `/api/v1/workers/register` and the worker is
+silently excluded from placement.
+
+```bash
+VELOX_WORKER_ID=velox-render-1
+# Auto-derived from IP: 57.129.132.133 → host_57_129_132_133
+```
+
+### 2. `VELOX_GRPC_MASTER_URL`
+
+The master gRPC control-plane endpoint (host:port, no scheme). Required
+by the gRPC-push architecture; the worker opens a bidirectional stream
+to this endpoint and authenticates via mTLS.
+
+```bash
+VELOX_GRPC_MASTER_URL=master.example.com:9000
+# Local dev:
+VELOX_GRPC_MASTER_URL=127.0.0.1:51851
+```
+
+### 3. Worker credential
+
+Set via `VELOX_WORKER_SECRET`. The secret is combined with `worker_id`
+to derive the credential_hash that the master validates against the
+`worker_credentials` table (SHA-256 of `worker_id:secret`). A worker
+that sends no credential on `/api/v1/workers/register` skips credential
+validation (backward compatibility); supplying a WRONG credential to a
+KNOWN worker returns HTTP 401 (impersonation signal).
+
+```bash
+VELOX_WORKER_SECRET=$(openssl rand -hex 32)
+```
+
+### 4. TLS for the gRPC control plane
+
+Mandatory except in dev. The three PEM files form the worker's mTLS
+identity. All three are required together; partial configuration is
+rejected by `worker-config-validate` (see `pkg/config`).
+
+| Env var | File | Purpose |
+|---------|------|---------|
+| `VELOX_GRPC_TLS_CERT_FILE` | worker cert (PEM) | Leaf cert, validated against CA; 14-day minimum residual validity (RW-PROD-001 A1) |
+| `VELOX_GRPC_TLS_KEY_FILE` | worker key (PEM) | Private key; must be `0600` in production (RW-PROD-001 A2) |
+| `VELOX_GRPC_TLS_CA_FILE` | CA cert (PEM) | CA that signed the master's cert; verifies server identity |
+
+```bash
+bash scripts/gen-worker-certs.sh /etc/velox/certs velox-render-1
+export VELOX_GRPC_TLS_CERT_FILE=/etc/velox/certs/worker.crt
+export VELOX_GRPC_TLS_KEY_FILE=/etc/velox/certs/worker.key
+export VELOX_GRPC_TLS_CA_FILE=/etc/velox/certs/ca.crt
+```
+
+### 5. Render backend + max active jobs
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `VELOX_RENDER_BACKEND` | `native` | Selects the rendering backend (`native`, `chronon3d`, …) |
+| `VELOX_VIDEO_ENGINE_CPP_BIN` | `velox-render-cpp` | Path to the C++ video render binary (resolved via `exec.LookPath`) |
+| `VELOX_MAX_ACTIVE_JOBS` | `1` | Concurrent active jobs per worker (currently bound via `worker_config.json` as `max_active_jobs`; `VELOX_MAX_ACTIVE_JOBS` env-var binding is on the roadmap) |
+
+### Failure modes (operator-visible)
+
+| Misconfiguration | Master's response |
+|------------------|-------------------|
+| `worker_id` not in `VELOX_ALLOWED_WORKERS` | **HTTP 403 `worker_not_allowed`** on `POST /api/v1/workers/register` (this is the canonical "not on the fleet" rejection path) |
+| Cert expired or about to expire (<14d) | Master rejects at gRPC handshake (`FailedPrecondition`) |
+| Key permissions > `0600` (production) | Production boot fails closed; non-prod records a non-fatal `weak_permissions_warn` |
+| `VELOX_GRPC_TLS_*` partial (missing one of three) | `worker-config-validate` rejects with explicit missing-field list |
+| `VELOX_GRPC_MASTER_URL` missing | Transport factory refuses to start |
+| Bundle hash mismatch | Master returns gRPC `FailedPrecondition` at handshake |
+
+The HTTP 403 `worker_not_allowed` path is the FIRST signal an operator
+sees when a new worker is misconfigured — long before any gRPC stream
+is opened. See `DataServer/internal/handlers/remote/workers/lifecycle/worker_registration_test.go`
+for the regression tests.
+
 ## Manifest Bundle
 
 The master auto-generates `manifest_v2.json` at startup containing:

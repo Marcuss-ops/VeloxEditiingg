@@ -1,6 +1,9 @@
 package lifecycle
 
 import (
+	"log"
+	"strings"
+
 	"velox-server/internal/config"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
@@ -54,4 +57,57 @@ func (h *Handler) GetTokenManager() *workersreg.TokenManager {
 // Config returns the runtime config.
 func (h *Handler) Config() *config.Config {
 	return h.cfg
+}
+
+// IsWorkerAllowed reports whether the supplied workerID is on the master-side
+// VELOX_ALLOWED_WORKERS allowlist. Used by RegisterV2Handler to reject
+// unknown workers with HTTP 403 BEFORE the gRPC stream handshake.
+//
+// Operator-visible rejection at the HTTP layer: a worker not in the
+// allowlist gets an immediate 403 (and no session token), not a transient
+// 200 + token followed by a gRPC PermissionDenied later. The gRPC path
+// remains authoritative — both paths MUST agree on the allowlist decision;
+// they differ only in the status-code surface (HTTP 403 vs gRPC
+// PermissionDenied).
+//
+// The lookup logic mirrors grpcserver/allowlistAuthorizer::IsAllowed byte-
+// for-byte (including the `*` wildcard semantics) so drift between the
+// HTTP and gRPC paths is impossible at the byte level. A future refactor
+// could move both behind a shared internal/auth/workerauthz package;
+// until then the duplication is intentional and tested.
+//
+// Edge cases:
+//   - empty workerID                       → denied (always)
+//   - allowlist CSV empty OR "*" + production    → denied (bootstrap should have fail-fast blocked this)
+//   - allowlist CSV empty OR "*" + dev (AllowInsecureDev=true) → allowed with a one-time warn
+//   - allowlist CSV non-empty AND non-`*`        → worker MUST exact-match (whitespace trimmed)
+func (h *Handler) IsWorkerAllowed(workerID string) bool {
+	if h == nil || h.cfg == nil {
+		return false
+	}
+	workerID = strings.TrimSpace(workerID)
+	if workerID == "" {
+		return false
+	}
+	csv := strings.TrimSpace(h.cfg.Workers.AllowedWorkers)
+	// Mirror grpcserver/allowlistAuthorizer::IsAllowed: an empty CSV
+	// OR a CSV of literal "*" are both treated as "no allowlist"
+	// (the dev-bypass surface). Bootstrap rejects "*" via
+	// ValidateProductionWorkers so the only configuration that
+	// reaches this branch with "*" is dev (or an operator who
+	// hand-crafted a config).
+	if csv == "" || csv == "*" {
+		if h.cfg.Runtime.GRPCAllowInsecureDev {
+			log.Printf("[WORKERS][REGISTER] VELOX_ALLOWED_WORKERS is empty/\"*\" in dev mode — allowing %q (matches gRPC handler behaviour)", workerID)
+			return true
+		}
+		log.Printf("[WORKERS][REGISTER] VELOX_ALLOWED_WORKERS is empty/\"*\" in production mode — denying worker %q", workerID)
+		return false
+	}
+	for _, id := range strings.Split(csv, ",") {
+		if strings.TrimSpace(id) == workerID {
+			return true
+		}
+	}
+	return false
 }
