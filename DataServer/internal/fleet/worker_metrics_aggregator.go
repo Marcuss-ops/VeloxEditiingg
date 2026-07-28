@@ -296,7 +296,7 @@ func (s SQLiteWorkerIDs) WorkerIDs(ctx context.Context) ([]string, error) {
 	// so the aggregator self-bootstraps when telemetry is the
 	// only signal of a worker's existence (e.g., a worker that
 	// has been heart-beating but never registered via V2).
-	rows, err := s.DB.QueryContext(ctx, `SELECT id FROM workers`)
+	rows, err := s.DB.QueryContext(ctx, `SELECT worker_id FROM workers`)
 	if err != nil {
 		return nil, fmt.Errorf("list worker ids from workers table: %w", err)
 	}
