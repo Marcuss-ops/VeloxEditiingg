@@ -10,13 +10,14 @@
     "feeds into the final MP4.",
     "Assets reused from tests/worker-cert/fixtures/assets.json (DO NOT add new",
     "asset_id rows here): voiceover asset-recording-001, clip opening-clip-01.",
-    "Substituted at submit time by run.sh --mode=submit: idempotency_key,",
-    "target_executor_id, delivery_plan[0].destination_id.",
-    "Redundant legacy per-binding upload-target fields are intentionally",
-    "omitted; the master derives the uplink from the velox-asset:// scheme",
-    "keyed by bindings.clip.url."
+    "Substituted at submit time by run.sh --mode=submit: idempotency_key ONLY.",
+    "target_executor_id and delivery_plan[0].destination_id are literal and",
+    "must match the live fleet (scene.composite.v1@1, comedy_test).",
+    "Redundant per-binding upload-target fields are intentionally omitted; the",
+    "master derives the uplink from the velox-asset:// scheme keyed by",
+    "bindings.clip.url."
   ],
-  "schema": "velox.scene-composite.preserve-clip-audio@1",
+  "schema": "velox.submit.preserve-clip-audio@1",
   "idempotency_key": "preserve-audio-1-scene-PLACEHOLDER",
   "video_name": "Audio preservation smoke (1 scene, clip + voiceover both audible)",
   "project_id": "full_payload_smoke",
@@ -27,7 +28,6 @@
       "index": 0,
       "kind": "intro",
       "text": "Una scena con audio della clip preservato insieme al voiceover sovrapposto.",
-      "clip_link": "velox-asset://opening-clip-01",
       "voiceover_duration_seconds": 5,
       "final_clip_duration_seconds": 5,
       "bindings": {

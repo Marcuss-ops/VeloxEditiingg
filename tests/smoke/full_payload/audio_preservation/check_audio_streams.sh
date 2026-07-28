@@ -51,8 +51,8 @@ ensure_command_available ffprobe || { log_error "ffprobe missing on PATH"; exit 
 PROBE_JSON="$(ffprobe -v quiet -print_format json -show_format -show_streams "$MP4_PATH")"
 [[ -n "$PROBE_JSON" ]] || { log_error "ffprobe returned empty for $MP4_PATH"; exit 2; }
 
-AUDIO_COUNT=$(printf '%s' "$PROBE_JSON" | jq '[.streams[] | select(.codec_type == "audio")] | length')
-VIDEO_COUNT=$(printf '%s' "$PROBE_JSON" | jq '[.streams[] | select(.codec_type == "video")] | length')
+AUDIO_COUNT=$(printf '%s' "$PROBE_JSON" | jq '[.streams[] | select(.codec_type == "audio")] | length' 2>/dev/null)
+VIDEO_COUNT=$(printf '%s' "$PROBE_JSON" | jq '[.streams[] | select(.codec_type == "video")] | length' 2>/dev/null)
 
 log_info "mp4=$MP4_PATH audio_streams=$AUDIO_COUNT video_streams=$VIDEO_COUNT"
 
@@ -66,22 +66,22 @@ fi
 # seconds). ffprobe populates .start_time lazily; fall back to "0" when
 # the field is absent (raw PCM dual = both starting at t=0 canonical).
 A1_CODEC=$(printf '%s' "$PROBE_JSON" \
-  | jq -r '[.streams[] | select(.codec_type=="audio")][0] | .codec_name // "(unset)"')
+  | jq -r '[.streams[] | select(.codec_type=="audio")][0] | .codec_name // "(unset)"' 2>/dev/null)
 A2_CODEC=$(printf '%s' "$PROBE_JSON" \
-  | jq -r '[.streams[] | select(.codec_type=="audio")][1] | .codec_name // "(unset)"')
+  | jq -r '[.streams[] | select(.codec_type=="audio")][1] | .codec_name // "(unset)"' 2>/dev/null)
 
 A1_START=$(printf '%s' "$PROBE_JSON" \
-  | jq '[.streams[] | select(.codec_type=="audio")][0] | .start_time // "0" | tonumber')
+  | jq '[.streams[] | select(.codec_type=="audio")][0] | .start_time // "0" | tonumber' 2>/dev/null)
 A2_START=$(printf '%s' "$PROBE_JSON" \
-  | jq '[.streams[] | select(.codec_type=="audio")][1] | .start_time // "0" | tonumber')
+  | jq '[.streams[] | select(.codec_type=="audio")][1] | .start_time // "0" | tonumber' 2>/dev/null)
 
-TOTAL_DUR=$(printf '%s' "$PROBE_JSON" | jq '.format.duration // "0" | tonumber')
+TOTAL_DUR=$(printf '%s' "$PROBE_JSON" | jq '.format.duration // "0" | tonumber' 2>/dev/null)
 # Each stream also reports its own duration (defensive in case format
 # level dur is missing due to a multi-mux concat edge case).
 A1_DUR=$(printf '%s' "$PROBE_JSON" \
-  | jq '[.streams[] | select(.codec_type=="audio")][0] | .duration // "0" | tonumber')
+  | jq '[.streams[] | select(.codec_type=="audio")][0] | .duration // "0" | tonumber' 2>/dev/null)
 A2_DUR=$(printf '%s' "$PROBE_JSON" \
-  | jq '[.streams[] | select(.codec_type=="audio")][1] | .duration // "0" | tonumber')
+  | jq '[.streams[] | select(.codec_type=="audio")][1] | .duration // "0" | tonumber' 2>/dev/null)
 
 # Assertion 2: sync drift between the two audio streams ≤ 0.10s (100ms).
 # For a clean dual-track the C++ engine aligns both feeds at the same PTS
@@ -89,12 +89,22 @@ A2_DUR=$(printf '%s' "$PROBE_JSON" \
 SYNC_DRIFT=$(awk -v a="$A1_START" -v b="$A2_START" \
   'BEGIN{ d=a-b; if (d<0) d=-d; printf "%.3f", d }')
 
+# Assertion 2b: per-stream duration drift ≤ 0.05s (50ms). Catches a malformed
+# mux where the C++ engine wrote e.g. a 30s voiceover next to a 5s clip
+# audio (count check passes but tip-off is missing).
+DUR_DRIFT=$(awk -v d1="$A1_DUR" -v d2="$A2_DUR" \
+  'BEGIN{ d=d1-d2; if (d<0) d=-d; printf "%.3f", d }')
+
 log_info "audio_stream_1: codec=$A1_CODEC start_time=${A1_START}s duration=${A1_DUR}s"
 log_info "audio_stream_2: codec=$A2_CODEC start_time=${A2_START}s duration=${A2_DUR}s"
-log_info "sync_drift=${SYNC_DRIFT}s  total_duration=${TOTAL_DUR}s"
+log_info "sync_drift=${SYNC_DRIFT}s  dur_drift=${DUR_DRIFT}s  total_duration=${TOTAL_DUR}s"
 
 if ! awk -v d="$SYNC_DRIFT" 'BEGIN{ exit !(d <= 0.10) }'; then
   log_error "FAIL: sync drift ${SYNC_DRIFT}s exceeds the 0.10s tolerance band"
+  exit 1
+fi
+if ! awk -v d="$DUR_DRIFT" 'BEGIN{ exit !(d <= 0.05) }'; then
+  log_error "FAIL: per-stream duration drift ${DUR_DRIFT}s exceeds the 0.05s tolerance band"
   exit 1
 fi
 
