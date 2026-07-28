@@ -21,7 +21,9 @@ import (
 	"velox-server/internal/app"
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/fleet"
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
+	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/handlers/server/darkeditor"
 	instaedithandler "velox-server/internal/handlers/server/instaedit"
 	scripthandlers "velox-server/internal/handlers/server/script"
@@ -52,6 +54,7 @@ type appComponents struct {
 	workers     *workerDeps
 	assets      *assetDeps
 	modules     *moduleDeps
+	fleet       *FleetDep
 
 	// Resolver is the canonical creatorflow.Resolver. The pipeline
 	// handler (sync forward path) and the CreatorForwardingRunner
@@ -118,6 +121,14 @@ func (c *appComponents) routerBundle() RouterBundle {
 	}
 
 	return RouterBundle{
+		Fleet: FleetRouteDeps{
+			// The Handler wraps FleetDep.Controller via the
+			// ControllerAudit interface seam defined in
+			// internal/handlers/server/api/admin_operations_handler.go;
+			// nil-tolerant below (registerFleetOperationsRoutes
+			// logs+skips when handler=nil).
+			Handler: c.fleet.getHandler(),
+		},
 		Script: ScriptRouteDeps{
 			Cfg:         c.cfg,
 			SQLiteStore: c.persistence.SQLite,
@@ -271,6 +282,15 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		return nil, err
 	}
 
+	fleetDep, err := buildFleet(p)
+	if err != nil {
+		_ = p.SQLite.Close()
+		return nil, fmt.Errorf("bootstrap: fleet: %w", err)
+	}
+	if fleetDep != nil {
+		log.Printf("[BOOTSTRAP] FleetController wired (audit-only; tick goroutine lands in a follow-up — see FleetDep.tickWiredAtBoot)")
+	}
+
 	return &appComponents{
 		cfg:                cfg,
 		persistence:        p,
@@ -279,6 +299,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		workers:            w,
 		assets:             a,
 		modules:            m,
+		fleet:              fleetDep,
 		resolver:           resolver,
 		capabilityRegistry: capabilityRegistry,
 		metricsRegistry:    metricsRegistry,
@@ -286,6 +307,64 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		instaeditVerifier:  instaeditVerifier,
 		supervisor:         supervisor,
 		health:             m.Health,
+	}, nil
+}
+
+// FleetDep is the Step 4/15 fleet-operator dependency bundle: the
+// FleetController (publish + tick + audit bridge), the constructor
+// of an AdminOperationsHandler for the audit routes, and the
+// ExecutorRegistry reserved for future concrete executor registration.
+//
+// tickWiredAtBoot is FALSE in this commit: the supervisor-wired
+// tick goroutine that drives QUEUED→RUNNING→SUCCEEDED lifecycle
+// lands in a follow-up step. Until then the audit endpoints render
+// the real ledger rows (InsertOperation, AuditList, AuditGet all
+// work) but newly-published Operations stay QUEUED forever
+// because no goroutine promotes them. Tests drive Tick directly
+// to exercise the lifecycle surface.
+type FleetDep struct {
+	Controller       *fleet.FleetController
+	Registry         *fleet.ExecutorRegistry
+	tickWiredAtBoot  bool
+}
+
+// getHandler returns the api.AdminOperationsHandler wrapping
+// Controller, or nil if Controller is absent (e.g. feature
+// disabled via the bootstrap). Returns nil-safe on a zero-value
+// FleetDep so destructive reads of c.fleet.getHandler() during
+// route registration do not panic.
+func (f *FleetDep) getHandler() *api.AdminOperationsHandler {
+	if f == nil || f.Controller == nil {
+		return nil
+	}
+	return api.NewAdminOperationsHandler(f.Controller)
+}
+
+// buildFleet constructs the FleetController + ExecutorRegistry
+// when the persistence layer is available. Returns (nil, nil) on
+// a persistence-disabled boot (test fixture paths) so the router
+// registers the audit route stubs but serving returns 503 via the
+// handler's nil-controller guard.
+//
+// Intentional gap: the tick goroutine is NOT launched here.
+// Step 4/15 commits the abstraction and the audit surface; live
+// tick wiring belongs to a follow-up so this commit's atomic scope
+// stays tight.
+func buildFleet(p *persistenceDeps) (*FleetDep, error) {
+	if p == nil || p.SQLite == nil {
+		return nil, nil
+	}
+	registry := fleet.NewExecutorRegistry()
+	controller := fleet.NewFleetController(
+		p.SQLite,
+		registry,
+		fleet.DefaultTickInterval,
+		fleet.DefaultOpTimeout,
+	)
+	return &FleetDep{
+		Controller:      controller,
+		Registry:        registry,
+		tickWiredAtBoot: false,
 	}, nil
 }
 

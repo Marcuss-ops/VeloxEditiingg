@@ -111,6 +111,23 @@ type InstaEditRouteDeps struct {
 	DarkHandler *darkeditor.Handler
 }
 
+// FleetRouteDeps carries the deps for the /api/v1/admin/operations
+// audit routes (Step 4/15 fleet-operator rollout, GET-only surface).
+// The Handler wraps a ControllerAudit bridge to the live
+// FleetController constructed by the composition root; audit reads
+// return real fleet_operations ledger rows.
+//
+// Auth is produced inside newRouter (api.AdminAuthMiddleware) so
+// the bundle never carries it — matches the existing convention
+// documented above RouterBundle. The FleetController tick goroutine
+// is NOT started by this commit's wiring path: the tick lands in a
+// follow-up (Step 5+) so the audit endpoints render real QUEUED
+// rows NOW, but the transition lifecycle (QUEUED→RUNNING→SUCCEEDED)
+// is owned by the supervisor runner registration in a later step.
+type FleetRouteDeps struct {
+	Handler *api.AdminOperationsHandler
+}
+
 // ── RouterBundle ───────────────────────────────────────────────────────────
 
 // RouterBundle is the composition-root input for newRouter. It contains
@@ -128,6 +145,7 @@ type RouterBundle struct {
 	Upload     UploadRouteDeps
 	Metrics    MetricsRouteDeps
 	InstaEdit  InstaEditRouteDeps
+	Fleet      FleetRouteDeps
 }
 
 // internalSecurityGuard blocks direct browser access and enforces that
@@ -280,6 +298,14 @@ func newRouter(cfg *config.Config, bundle RouterBundle, registry interface {
 	//    rotate/disable keys). Mounted under /api/v1/admin/m2m so it
 	//    follows the existing /api/v1/admin/* convention.
 	registerM2MAdminRoutes(r, auth, bundle.Pipeline.SQLiteStore)
+
+	// ── Step 4/15 fleet-operator audit (GET-only). The Handler is
+	//    constructed by the composition root from the live
+	//    FleetController. nil-tolerant: a misconfigured boot keeps
+	//    the routes un-mounted rather than serving a 503 on every
+	//    request. AdminAuth path mirrors /api/v1/admin/workers
+	//    above.
+	registerFleetOperationsRoutes(r, auth, bundle.Fleet)
 
 	return r, nil
 }
@@ -516,4 +542,28 @@ func registerM2MAdminRoutes(r *gin.Engine, auth gin.HandlerFunc, st *store.SQLit
 	admin.DELETE("/keys/:client_id", api.DisableM2MKey(st))
 	admin.GET("/audit", api.ListM2MAudit(st))
 	log.Printf("[ROUTES] M2M admin routes mounted under /api/v1/admin/m2m")
+}
+
+// registerFleetOperationsRoutes mounts the fleet-operator audit
+// surface at /api/v1/admin/operations/* . The Handler was
+// constructed by the composition root from the live FleetController;
+// nil-tolerant: a misconfigured boot (handler=nil) keeps the
+// route un-mounted rather than serving a 503-on-every-request
+// dead route, matching the nil-guard pattern used for admin/workers
+// in internal/app/workers.go.
+//
+// Auth surface mirrors /api/v1/admin/workers (adminAuth via the
+// operator's VELOX_ADMIN_TOKEN).
+func registerFleetOperationsRoutes(r *gin.Engine, auth gin.HandlerFunc, deps FleetRouteDeps) {
+	if deps.Handler == nil {
+		log.Printf("[ROUTES] fleet operations audit routes skipped: handler=nil (FleetController not wired at this boot)")
+		return
+	}
+	if auth == nil {
+		log.Fatalf("[ROUTES] fleet operations audit routes require adminAuth (auth=nil); refusing to start")
+	}
+	adminOps := r.Group("/api/v1/admin/operations", auth)
+	adminOps.GET("", deps.Handler.ListAdminOperations())
+	adminOps.GET("/:operation_id", deps.Handler.GetAdminOperation())
+	log.Printf("[ROUTES] Fleet operations audit routes mounted under /api/v1/admin/operations")
 }
