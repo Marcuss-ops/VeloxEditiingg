@@ -25,16 +25,58 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/jobs/enqueue"
+	"velox-server/internal/store"
 )
 
 // validationFieldExtractor is the indirection point used by
-// WriteResolverError. In production it always equals
-// enqueue.ValidationErrorField; tests override it to inject a
-// deterministic field path without having to lean on the
-// unexported enqueue.validationError type. Keeping the override as
-// a package-private var (rather than a parameter or interface) lets
-// callers stay oblivious to the test plumbing.
+// WriteResolverError for the enqueue-layer typed validationError.
+// In production it always equals enqueue.ValidationErrorField;
+// tests override it to inject a deterministic field path without
+// having to lean on the unexported enqueue.validationError type.
+// Keeping the override as a package-private var (rather than a
+// parameter or interface) lets callers stay oblivious to the test
+// plumbing.
 var validationFieldExtractor = enqueue.ValidationErrorField
+
+// deliveryPlanFieldExtractor is the indirection point used by
+// WriteResolverError for the store-layer typed
+// DeliveryPlanValidationError. In production it always equals
+// store.DeliveryPlanValidationField; tests override it to inject a
+// deterministic field path. Same indirection rationale as
+// validationFieldExtractor above.
+//
+// The store-layer typed error exists because store cannot import
+// enqueue (the dep edge goes enqueue -> store) so the parser in
+// internal/store/delivery_plan_payload.go must own its own typed
+// error type. Without this extractor, the in-tx parser would emit
+// plaintext errors that fall through to the default 500 branch —
+// the same classification regression that P0 commit 72a455c closed
+// for destination-existence, now closed for retry_budget and any
+// future per-entry rejection in this parser.
+var deliveryPlanFieldExtractor = store.DeliveryPlanValidationField
+
+// extractUnifiedFieldPath returns the structured field path of
+// either an enqueue.validationError OR a
+// store.DeliveryPlanValidationError wrapped inside err, or "" if
+// neither typed error is present. Used by WriteResolverError as the
+// unified classification point so a future contributor can add
+// another typed error source without touching the switch below —
+// just wire it into one of the two extractors above (or add a
+// third indirection var + a fallback line here).
+//
+// Order matters: enqueue is checked first because the enqueue-layer
+// validationError is the canonical wrapper for any rejection that
+// crosses the package boundary, and store's typed error is the
+// last-resort typed classification for the in-tx parser path.
+func extractUnifiedFieldPath(err error) string {
+	if f := validationFieldExtractor(err); f != "" {
+		return f
+	}
+	if f := deliveryPlanFieldExtractor(err); f != "" {
+		return f
+	}
+	return ""
+}
 
 // idempotencyKeyDefault is the canonical JSON-pointer-style path
 // emitted in the 409 detail when ErrIdempotencyKeyReused is raised
@@ -71,13 +113,19 @@ const idempotencyKeyDefault = "idempotency_key"
 //	      409 (submit_job) surfaces "idempotency_key" without
 //	      for the callsite to thread a third arg through.
 //
-//	validationFieldExtractor(err) != ""
+//	extractUnifiedFieldPath(err) != ""
 //	    → 422 + "invalid_payload"
 //	      details: [{path: <extracted-field>, issue: "invalid"}]
-//	      Covers enqueue-layer typed validationError rejections:
-//	      delivery_plan missing / invalid, scenes empty, script_text
-//	      oversized, destination_id missing, social_destination_id
-//	      unrecognized, etc.
+//	      Covers typed validation rejections from BOTH packages:
+//	        - enqueue.validationError (delivery_plan missing /
+//	          invalid, scenes empty, script_text oversized,
+//	          destination_id missing, social_destination_id
+//	          unrecognized, etc.)
+//	        - store.DeliveryPlanValidationError (in-tx
+//	          parseDeliveryPlanPayload rejections such as
+//	          retry_budget < 0, priority < 0, duplicate
+//	          destination_id, disabled entry, metadata
+//	          serialization failure)
 //
 //	strings.Contains(strings.ToLower(err.Error()), "required")
 //	    → 422 + "invalid_payload"
@@ -124,8 +172,8 @@ func WriteResolverError(c *gin.Context, err error) {
 			"idempotency_key_reused",
 			err.Error(),
 			gin.H{"path": path, "issue": "hash_mismatch"})
-	case validationFieldExtractor(err) != "":
-		field := validationFieldExtractor(err)
+	case extractUnifiedFieldPath(err) != "":
+		field := extractUnifiedFieldPath(err)
 		writeErrorEnvelope(c, http.StatusUnprocessableEntity,
 			"invalid_payload",
 			err.Error(),

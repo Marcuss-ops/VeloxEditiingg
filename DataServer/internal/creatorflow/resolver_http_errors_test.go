@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	"velox-server/internal/store"
 )
 
 func init() { gin.SetMode(gin.TestMode) }
@@ -47,7 +49,9 @@ func TestWriteResolverError(t *testing.T) {
 		useNilErr        bool
 		useNilContext    bool
 		useFakeField     bool
-		fakeField        string // override validationFieldExtractor
+		fakeField        string // override validationFieldExtractor (enqueue-layer)
+		useFakeDPField   bool
+		fakeDPField      string // override deliveryPlanFieldExtractor (store-layer)
 		wantStatus       int
 		wantCode         string
 		wantDetailsPath  string
@@ -122,6 +126,80 @@ func TestWriteResolverError(t *testing.T) {
 			wantStatus:       http.StatusUnprocessableEntity,
 			wantCode:         "invalid_payload",
 			wantDetailsPath:  "scenes[3].destination_id",
+			wantDetailsIssue: "invalid",
+			wantHasDetails:   true,
+		},
+		{
+			// Store-typed rejection covering the in-tx
+			// parseDeliveryPlanPayload path on
+			// retry_budget < 0. The store package cannot import
+			// enqueue (dep edge goes enqueue -> store), so it
+			// owns its own typed error
+			// (*store.DeliveryPlanValidationError). Without
+			// deliveryPlanFieldExtractor in the unified
+			// classification, a regression to the default
+			// branch would silently emit 500
+			// resolver_failure on the rare path where the
+			// in-tx parser rejects AFTER the handler-side
+			// pre-check has already accepted — the same
+			// plaintext-classification regression P0 #2
+			// (commit 72a455c) closed for destination-existence.
+			name:             "store-typed DeliveryPlanValidationError -> 422 invalid_payload + delivery_plan[N].retry_budget",
+			err:              fmt.Errorf("store parser: typed rejection wrapped for chain"),
+			useFakeDPField:   true,
+			fakeDPField:      "delivery_plan[0].retry_budget",
+			wantStatus:       http.StatusUnprocessableEntity,
+			wantCode:         "invalid_payload",
+			wantDetailsPath:  "delivery_plan[0].retry_budget",
+			wantDetailsIssue: "invalid",
+			wantHasDetails:   true,
+		},
+		{
+			// End-to-end classification (no fake indirection):
+			// construct a REAL *store.DeliveryPlanValidationError
+			// via store.NewDeliveryPlanValidationError, wrap it
+			// with %w, and assert that the production
+			// deliveryPlanFieldExtractor (= store.DeliveryPlanValidationField)
+			// actually extracts the field path. Without this
+			// row, a regression that breaks store.DeliveryPlanValidationField
+			// (typo, deleted helper, dropped errors.As chain)
+			// would silently pass the fake-indirection test
+			// above and surface as a 500 in production.
+			name: "store-typed end-to-end (no fake indirection) -> 422 invalid_payload + delivery_plan[2].retry_budget",
+			err: fmt.Errorf("enqueue prepare: %w", store.NewDeliveryPlanValidationError(
+				"delivery_plan[2].retry_budget",
+				"must be >= 0 (got -3)",
+			)),
+			wantStatus:       http.StatusUnprocessableEntity,
+			wantCode:         "invalid_payload",
+			wantDetailsPath:  "delivery_plan[2].retry_budget",
+			wantDetailsIssue: "invalid",
+			wantHasDetails:   true,
+		},
+		{
+			// Enqueue-typed wins when BOTH typed layers are
+			// present in the chain (defensive ordering — the
+			// unified extractor checks enqueue first because
+			// the enqueue-layer validationError is the
+			// canonical wrapper for cross-package rejections;
+			// store's typed error is the in-tx parser path).
+			// The dual-typed row exercises the
+			// deliveryPlanFieldExtractor indirection (kept
+			// from the original row above) to confirm the
+			// ordering without depending on a real
+			// *store.DeliveryPlanValidationError. The
+			// end-to-end row above covers the real-instance
+			// path; together they pin both the ordering AND
+			// the production-helper wiring.
+			name:             "enqueue-typed wins over store-typed when both are present",
+			err:              fmt.Errorf("dual-layer typed rejection chain"),
+			useFakeField:     true,
+			fakeField:        "delivery_plan[0].external_destination_id",
+			useFakeDPField:   true,
+			fakeDPField:      "delivery_plan[0].retry_budget",
+			wantStatus:       http.StatusUnprocessableEntity,
+			wantCode:         "invalid_payload",
+			wantDetailsPath:  "delivery_plan[0].external_destination_id",
 			wantDetailsIssue: "invalid",
 			wantHasDetails:   true,
 		},
@@ -204,6 +282,14 @@ func TestWriteResolverError(t *testing.T) {
 				t.Cleanup(func() { validationFieldExtractor = saved })
 				validationFieldExtractor = func(err error) string {
 					return tc.fakeField
+				}
+			}
+
+			if tc.useFakeDPField {
+				saved := deliveryPlanFieldExtractor
+				t.Cleanup(func() { deliveryPlanFieldExtractor = saved })
+				deliveryPlanFieldExtractor = func(err error) string {
+					return tc.fakeDPField
 				}
 			}
 
