@@ -316,3 +316,205 @@ func TestMatcherSkipsIncompatibleAndSelectsNextCompatible(t *testing.T) {
 		t.Fatalf("expected t-unsupported to be rejected as unsupported_executor, rejections: %+v", result.Rejections)
 	}
 }
+
+// TestMatcherRejectsWorkerExcludedByPlacementPin — when VELOX_PLACEMENT_PIN_
+// WORKER_ID is set to a target worker, every other worker_id receives a
+// single RejectPlacementPinExcluded and is short-circuited BEFORE any
+// executor/capability gate. Powers tests/worker-cert/smoke_one.sh.
+func TestMatcherRejectsWorkerExcludedByPlacementPin(t *testing.T) {
+	m := NewMatcher()
+	m.SetPin("w-target")
+
+	worker := newWorkerSnapshot(
+		executorKeys(ExecutorKey{ID: "scene.composite.v1", Version: 1}),
+		capMap("artifact.commit.v1"),
+		true, false, 2, 2,
+	)
+	worker.WorkerID = "w-other"
+
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	candidates := []TaskCandidate{
+		{
+			TaskID:               "t-scene",
+			Priority:             10,
+			CreatedAt:            now,
+			Executor:             ExecutorKey{ID: "scene.composite.v1", Version: 1},
+			RequiredCapabilities: []string{"artifact.commit.v1"},
+		},
+	}
+
+	result := m.Select(worker, candidates)
+
+	if result.Candidate != nil {
+		t.Fatalf("expected nil candidate, got %s", result.Candidate.TaskID)
+	}
+	if len(result.Rejections) != 1 {
+		t.Fatalf("expected 1 rejection from pin gate, got %d: %+v", len(result.Rejections), result.Rejections)
+	}
+	r := result.Rejections[0]
+	if r.Code != RejectPlacementPinExcluded {
+		t.Fatalf("expected RejectPlacementPinExcluded, got %s", r.Code)
+	}
+	if r.TaskID != "" {
+		t.Fatalf("expected empty TaskID on pin terminal gate, got %s", r.TaskID)
+	}
+}
+
+// TestMatcherAllowsPinnedWorker — the pin gate is transparent for the
+// pinned worker_id itself; subsequent capability/capacity gates still
+// apply normally.
+func TestMatcherAllowsPinnedWorker(t *testing.T) {
+	m := NewMatcher()
+	m.SetPin("w-target")
+
+	worker := newWorkerSnapshot(
+		executorKeys(ExecutorKey{ID: "scene.composite.v1", Version: 1}),
+		capMap("artifact.commit.v1"),
+		true, false, 2, 2,
+	)
+	worker.WorkerID = "w-target"
+
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	candidates := []TaskCandidate{
+		{
+			TaskID:               "t-scene",
+			Priority:             10,
+			CreatedAt:            now,
+			Executor:             ExecutorKey{ID: "scene.composite.v1", Version: 1},
+			RequiredCapabilities: []string{"artifact.commit.v1"},
+		},
+	}
+
+	result := m.Select(worker, candidates)
+
+	if result.Candidate == nil {
+		t.Fatal("pinned worker should still match a compatible candidate")
+	}
+	if result.Candidate.TaskID != "t-scene" {
+		t.Fatalf("expected t-scene selected, got %s", result.Candidate.TaskID)
+	}
+	if len(result.Rejections) != 0 {
+		t.Fatalf("pinned-compatible worker should have no rejections, got %+v", result.Rejections)
+	}
+}
+
+// TestMatcherPinDisabledByDefault — a freshly-constructed Matcher with
+// no SetPin call behaves exactly as the pre-pin stateless engine: a
+// non-target worker with matching capabilities still gets a candidate.
+func TestMatcherPinDisabledByDefault(t *testing.T) {
+	m := NewMatcher() // no SetPin → pin empty
+
+	worker := newWorkerSnapshot(
+		executorKeys(ExecutorKey{ID: "scene.composite.v1", Version: 1}),
+		capMap("artifact.commit.v1"),
+		true, false, 2, 2,
+	)
+	worker.WorkerID = "w-other"
+
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	candidates := []TaskCandidate{
+		{
+			TaskID:               "t-scene",
+			Priority:             10,
+			CreatedAt:            now,
+			Executor:             ExecutorKey{ID: "scene.composite.v1", Version: 1},
+			RequiredCapabilities: []string{"artifact.commit.v1"},
+		},
+	}
+
+	result := m.Select(worker, candidates)
+
+	if result.Candidate == nil {
+		t.Fatal("without a pin installed, a compatible worker should still be selectable")
+	}
+	if result.Candidate.TaskID != "t-scene" {
+		t.Fatalf("expected t-scene selected, got %s", result.Candidate.TaskID)
+	}
+	for _, r := range result.Rejections {
+		if r.Code == RejectPlacementPinExcluded {
+			t.Fatalf("pin-disable regression: pin exclusion fired with no SetPin call; rejections: %+v", result.Rejections)
+		}
+	}
+}
+
+// TestMatcherPinWhitespaceOnlyIsTreatedAsNoPin — SetPin applies TrimSpace
+// before storing the value via atomic.Value, so a whitespace-only arg
+// collapses to the empty (no-pin) state. This prevents an operator
+// typo like `VELOX_PLACEMENT_PIN_WORKER_ID="   "` from accidentally
+// pinning the master to a worker_id that no real worker can match.
+func TestMatcherPinWhitespaceOnlyIsTreatedAsNoPin(t *testing.T) {
+	m := NewMatcher()
+	m.SetPin("   \t  \n")
+
+	worker := newWorkerSnapshot(
+		executorKeys(ExecutorKey{ID: "scene.composite.v1", Version: 1}),
+		capMap("artifact.commit.v1"),
+		true, false, 2, 2,
+	)
+	worker.WorkerID = "w-other"
+
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	candidates := []TaskCandidate{
+		{
+			TaskID:               "t-scene",
+			Priority:             10,
+			CreatedAt:            now,
+			Executor:             ExecutorKey{ID: "scene.composite.v1", Version: 1},
+			RequiredCapabilities: []string{"artifact.commit.v1"},
+		},
+	}
+
+	result := m.Select(worker, candidates)
+
+	if result.Candidate == nil {
+		t.Fatal("whitespace-only pin should be treated as no pin; expected a candidate")
+	}
+	if result.Candidate.TaskID != "t-scene" {
+		t.Fatalf("expected t-scene, got %s", result.Candidate.TaskID)
+	}
+	for _, r := range result.Rejections {
+		if r.Code == RejectPlacementPinExcluded {
+			t.Fatalf("whitespace-only pin must NOT trigger pin exclusion; rejections: %+v", result.Rejections)
+		}
+	}
+}
+
+// TestMatcherRejectsEmptyWorkerIdWhenPinIsSet — worker_id="" can never
+// match a non-empty pin, so the pin-exclusion fires on this defensive
+// abnormal state. Documents the boundary explicitly: the operator
+// reads this as "an empty worker_id is never the intended pin
+// recipient" rather than an exception.
+func TestMatcherRejectsEmptyWorkerIdWhenPinIsSet(t *testing.T) {
+	m := NewMatcher()
+	m.SetPin("w-target")
+
+	worker := newWorkerSnapshot(
+		executorKeys(ExecutorKey{ID: "scene.composite.v1", Version: 1}),
+		capMap("artifact.commit.v1"),
+		true, false, 2, 2,
+	)
+	worker.WorkerID = "" // defensive abnormal state
+
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	candidates := []TaskCandidate{
+		{
+			TaskID:               "t-scene",
+			Priority:             10,
+			CreatedAt:            now,
+			Executor:             ExecutorKey{ID: "scene.composite.v1", Version: 1},
+			RequiredCapabilities: []string{"artifact.commit.v1"},
+		},
+	}
+
+	result := m.Select(worker, candidates)
+
+	if result.Candidate != nil {
+		t.Fatalf("worker_id=\"\" + pin=\"w-target\" should be excluded; got candidate %s", result.Candidate.TaskID)
+	}
+	if len(result.Rejections) != 1 {
+		t.Fatalf("expected 1 pin-exclusion rejection, got %d: %+v", len(result.Rejections), result.Rejections)
+	}
+	if result.Rejections[0].Code != RejectPlacementPinExcluded {
+		t.Fatalf("expected RejectPlacementPinExcluded, got %s", result.Rejections[0].Code)
+	}
+}

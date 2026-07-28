@@ -12,6 +12,8 @@ package placement
 import (
 	"fmt"
 	"sort"
+	"strings"
+	"sync/atomic"
 )
 
 // MatchResult bundles the selected candidate (if any) with rejection
@@ -21,13 +23,43 @@ type MatchResult struct {
 	Rejections []Rejection
 }
 
-// Matcher is the placement engine. It is stateless and safe for
-// concurrent use.
-type Matcher struct{}
+// Matcher is the placement engine. It is stateless with respect to
+// placement decisions and safe for concurrent use. The optional
+// placement-pin (SetPin) is a master-wide operator override used by
+// deterministic-pick smoke harnesses (e.g.
+// tests/worker-cert/smoke_one.sh) that need a single worker to be the
+// only eligible target regardless of pool composition.
+//
+// Placement pin semantics:
+//   - Pin is a worker_id string. Empty string disables the pin (the
+//     matcher then behaves as the pre-pin stateless engine, matching
+//     every existing call site that does not opt in).
+//   - Pin mutates only via SetPin (called once at handler construction).
+//   - Concurrent Select reads are lock-free via atomic.Value: zero
+//     allocations on the hot dispatch path, no contention with
+//     notifyTasksAvailable goroutines.
+//
+// The pin emits a single RejectPlacementPinExcluded rejection with
+// TaskID="" (terminal worker-level gate, before candidate iteration),
+// which flows naturally through the existing recordPlacementRejections
+// log/sink loop so velox_placement_rejections_total{reason="placement_pin_excluded"}
+// is populated without collector changes.
+type Matcher struct {
+	pinWorkerID atomic.Value // string; "" means "no pin"
+}
 
-// NewMatcher returns a ready-to-use Matcher.
+// NewMatcher returns a ready-to-use Matcher with no pin installed.
 func NewMatcher() *Matcher {
-	return &Matcher{}
+	m := &Matcher{}
+	m.pinWorkerID.Store("")
+	return m
+}
+
+// SetPin installs the worker_id that Select will allow; empty string
+// disables the pin (stateless behaviour restored). Idempotent and safe
+// to call concurrently with Select.
+func (m *Matcher) SetPin(workerID string) {
+	m.pinWorkerID.Store(strings.TrimSpace(workerID))
 }
 
 // Select evaluates candidates against the worker snapshot and returns
@@ -48,6 +80,21 @@ func (m *Matcher) Select(
 ) MatchResult {
 	result := MatchResult{
 		Rejections: make([]Rejection, 0),
+	}
+
+	// Operator-driven placement pin (VELOX_PLACEMENT_PIN_WORKER_ID):
+	// the FIRST terminal gate. When the pin is set to a worker_id and
+	// this worker's id is something else, the matcher emits a single
+	// RejectPlacementPinExcluded and short-circuits BEFORE any
+	// capability/capacity check — the pin operator intent is "only
+	// this one worker, full stop". An empty pin is a no-op so the
+	// pre-existing stateless call path is unchanged.
+	if pin, _ := m.pinWorkerID.Load().(string); pin != "" && worker.WorkerID != pin {
+		result.Rejections = append(result.Rejections, Rejection{
+			Code:   RejectPlacementPinExcluded,
+			Detail: fmt.Sprintf("master pinned to worker %q; worker %q excluded", pin, worker.WorkerID),
+		})
+		return result
 	}
 
 	// Terminal worker-level gates.

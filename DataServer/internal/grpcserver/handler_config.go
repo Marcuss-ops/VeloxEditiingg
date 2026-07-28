@@ -6,6 +6,8 @@
 package grpcserver
 
 import (
+	"strings"
+
 	"velox-server/internal/ingest"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/registry"
@@ -60,4 +62,17 @@ func (h *Handler) SetPlacementRejectionSink(sink velmetrics.PlacementRejectionSi
 // paths, partial-wiring bootstrap variants) skips the gate entirely.
 func (h *Handler) SetCapabilityRegistry(r *registry.CapabilityRegistry) {
 	h.capabilityRegistry = r
+}
+
+// SetPlacementPin installs the worker_id pin (VELOX_PLACEMENT_PIN_WORKER_ID)
+// used by the placement matcher to deterministically restrict dispatch
+// to a single worker. Empty string (or whitespace-only) clears the pin
+// and restores the stateless matcher. Bootstrap wires
+// cfg.Workers.PlacementPinWorkerID here so the matcher emits
+// RejectPlacementPinExcluded for every non-pinned worker when the
+// operator sets the env var; tests/worker-cert/smoke_one.sh relies on
+// this for per-worker deterministic certification without having to
+// drain the rest of the eligible pool at the operator level.
+func (h *Handler) SetPlacementPin(workerID string) {
+	h.placementMatcher.SetPin(strings.TrimSpace(workerID))
 }

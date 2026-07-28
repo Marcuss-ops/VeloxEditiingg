@@ -38,6 +38,12 @@ func loadWorkersConfig() WorkersConfig {
 	if ips := os.Getenv("VELOX_ALLOWED_WORKER_IPS"); ips != "" {
 		c.AllowedIPs = parseCommaList(ips)
 	}
+	// Operator-driven deterministic-pick for placement matching: when
+	// set, the placement matcher emits RejectPlacementPinExcluded for
+	// every worker_id != the pin (Bootstrap wires this to the Handler
+	// via Handler.SetPlacementPin). Empty value keeps the matcher in
+	// its stateless default.
+	c.PlacementPinWorkerID = strings.TrimSpace(os.Getenv("VELOX_PLACEMENT_PIN_WORKER_ID"))
 	// STALE / PARTITIONED thresholds for the persistent state machine
 	// owned by store_worker_runtime_recovery.go (single-writer tx).
 	// Defaults match the canonical read-side thresholds in

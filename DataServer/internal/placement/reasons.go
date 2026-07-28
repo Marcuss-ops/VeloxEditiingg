@@ -34,6 +34,16 @@ const (
 	// RejectInvalidTaskRequirement — the task's executor key is invalid
 	// (empty ID or zero version).
 	RejectInvalidTaskRequirement RejectionCode = "invalid_task_requirement"
+
+	// RejectPlacementPinExcluded — the master is currently pinned to a
+	// different worker_id via VELOX_PLACEMENT_PIN_WORKER_ID, so this
+	// worker is excluded from matchmaking even though all other gates
+	// might have passed. Operator-driven deterministic-pick used by
+	// tests/worker-cert/smoke_one.sh; emits a distinct reason so
+	// dashboards can distinguish "intentionally pinned out" from a
+	// genuine capability/capacity miss. Empty pin disables (the
+	// matcher then behaves as the pre-pin stateless engine).
+	RejectPlacementPinExcluded RejectionCode = "placement_pin_excluded"
 )
 
 // Rejection describes why a single candidate was skipped.

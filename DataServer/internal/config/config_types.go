@@ -142,6 +142,16 @@ type WorkersConfig struct {
 	MasterServerURL string
 	AllowedIPs      []string
 
+	// PlacementPinWorkerID mirrors VELOX_PLACEMENT_PIN_WORKER_ID. When
+	// non-empty, the placement matcher emits RejectPlacementPinExcluded
+	// for every worker_id != pin so only the pinned worker is eligible.
+	// Operator-driven deterministic-pick used by the per-worker cert
+	// smoke harness (tests/worker-cert/smoke_one.sh); empty string
+	// disables the pin (the matcher then behaves as the pre-pin
+	// stateless engine). Bootstrap forwards the value to the Handler
+	// via grpcserver.Handler.SetPlacementPin.
+	PlacementPinWorkerID string
+
 	// StaleThresholdSeconds is the heartbeat age (in seconds) after
 	// which a worker with an active session is considered STALE.
 	// PersistWorkerHeartbeat emits WORKER_STALE_DETECTED on the
