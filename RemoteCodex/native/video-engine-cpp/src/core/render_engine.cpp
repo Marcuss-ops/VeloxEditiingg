@@ -73,6 +73,28 @@ namespace {
     std::string composeSegmentCmd(const std::string& args_only) {
         return "ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -nostats " + args_only;
     }
+
+    bool burnSubtitleTrack(
+        const fs::path& inputVideo,
+        const fs::path& subtitleFile,
+        const fs::path& outputVideo
+    ) {
+        std::ostringstream filter;
+        filter << "subtitles=" << file::shellQuote(subtitleFile.string());
+
+        std::ostringstream cmd;
+        cmd << "ffmpeg -y -hide_banner -loglevel error"
+            << " -i " << file::shellQuote(inputVideo.string())
+            << " -vf " << file::shellQuote(filter.str())
+            << " -c:v libx264 -preset veryfast -crf 20"
+            << " -pix_fmt yuv420p -an "
+            << file::shellQuote(outputVideo.string());
+        file::CommandResult r = file::runCommandTimed(cmd.str());
+        std::cerr << "{\"metric\":\"ffmpeg.subtitle_burn_ms\",\"value\":" << r.wall_ms
+                  << ",\"ok\":" << (r.ok ? "true" : "false")
+                  << ",\"exit_code\":" << r.exit_code << "}" << std::endl;
+        return r.ok;
+    }
 }
 
 void RenderEngine::setProgressCallback(services::ProgressCallback cb) {
@@ -253,6 +275,27 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     temp_bytes_written_.fetch_add(fileSize(videoOnly));
     concat_mode_ = "stream_copy";
 
+    fs::path videoForMux = videoOnly;
+    if (!plan.subtitle_tracks.empty()) {
+        reportProgress(80, "burning_subtitles");
+        const auto& subtitle = plan.subtitle_tracks.front();
+        fs::path localSubtitle = workDir / "subtitle_track_0.srt";
+        {
+            ScopedTimer t(metrics_, "asset_download_ms");
+            if (!file::downloadAsset(subtitle.source, localSubtitle)) {
+                result.error = "failed to download subtitle track";
+                return result;
+            }
+        }
+        fs::path subtitledVideo = workDir / "video_subtitled.mp4";
+        if (!burnSubtitleTrack(videoOnly, localSubtitle, subtitledVideo)) {
+            result.error = "failed to burn subtitle track";
+            return result;
+        }
+        temp_bytes_written_.fetch_add(fileSize(subtitledVideo));
+        videoForMux = subtitledVideo;
+    }
+
     // 3. Mix audio tracks (supports multi-track with volume/offset)
     reportProgress(85, "muxing_audio");
     if (!plan.audio_tracks.empty()) {
@@ -275,7 +318,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             std::error_code ec;
             {
                 ScopedTimer t(metrics_, "copy_final_ms");
-                fs::copy_file(videoOnly, outPath, fs::copy_options::overwrite_existing, ec);
+                fs::copy_file(videoForMux, outPath, fs::copy_options::overwrite_existing, ec);
             }
             if (ec) {
                 result.error = "failed to copy final output (no audio)";
@@ -289,7 +332,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             bool muxOk;
             {
                 ScopedTimer t(metrics_, "mux_audio_ms");
-                muxOk = media::muxAudio(videoOnly, downloadedTracks[0].first, finalMuxed, vol, offset);
+                muxOk = media::muxAudio(videoForMux, downloadedTracks[0].first, finalMuxed, vol, offset);
             }
             if (muxOk) {
                 std::error_code ec;
@@ -348,7 +391,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 bool muxOk;
                 {
                     ScopedTimer t(metrics_, "mux_audio_ms");
-                    muxOk = media::muxAudio(videoOnly, mixedAudio, finalMuxed);
+                    muxOk = media::muxAudio(videoForMux, mixedAudio, finalMuxed);
                 }
                 if (muxOk) {
                     std::error_code ec;
@@ -371,7 +414,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 std::error_code ec;
                 {
                     ScopedTimer t(metrics_, "copy_final_ms");
-                    fs::copy_file(videoOnly, outPath, fs::copy_options::overwrite_existing, ec);
+                    fs::copy_file(videoForMux, outPath, fs::copy_options::overwrite_existing, ec);
                 }
                 if (ec) {
                     result.error = "failed to copy final output (mix failed)";
@@ -384,7 +427,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         std::error_code ec;
         {
             ScopedTimer t(metrics_, "copy_final_ms");
-            fs::copy_file(videoOnly, outPath, fs::copy_options::overwrite_existing, ec);
+            fs::copy_file(videoForMux, outPath, fs::copy_options::overwrite_existing, ec);
         }
         if (ec) {
             result.error = "failed to copy final output (no audio tracks)";

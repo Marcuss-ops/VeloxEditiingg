@@ -106,6 +106,20 @@ std::optional<RenderPlan> parseRenderPlan(const std::string& jsonStr) {
         }
     }
 
+    // Subtitle tracks
+    std::string subtitleBlock = ju::extractArrayBlock(jsonStr, "subtitle_tracks");
+    if (!subtitleBlock.empty()) {
+        for (const auto& subtitleStr : ju::splitTopLevelObjects(subtitleBlock)) {
+            SubtitleTrack track;
+            track.source = ju::extractJsonStringValue(subtitleStr, "source");
+            track.preset = ju::extractJsonStringValue(subtitleStr, "preset");
+            track.font = ju::extractJsonStringValue(subtitleStr, "font");
+            if (!track.source.empty()) {
+                plan.subtitle_tracks.push_back(track);
+            }
+        }
+    }
+
     return plan;
 }
 

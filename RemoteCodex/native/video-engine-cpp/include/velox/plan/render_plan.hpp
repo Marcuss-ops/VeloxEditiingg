@@ -41,6 +41,12 @@ struct AudioTrack {
     std::string role;
 };
 
+struct SubtitleTrack {
+    std::string source;
+    std::string preset;
+    std::string font;
+};
+
 struct CanvasSpec {
     int width{1920};
     int height{1080};
@@ -53,6 +59,7 @@ struct RenderPlan {
     CanvasSpec canvas;
     std::vector<TimelineItem> timeline;
     std::vector<AudioTrack> audio_tracks;
+    std::vector<SubtitleTrack> subtitle_tracks;
     std::string output_path;
 };
 
