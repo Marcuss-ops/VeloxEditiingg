@@ -123,8 +123,14 @@ func deliveryPlanEntryFromMap(value map[string]interface{}, index int) (delivery
 		return deliveryPlanEntry{}, fmt.Errorf("delivery_plan[%d].priority must be >= 0", index)
 	}
 	retryBudget := deliveryPlanIntFromMap(value, "retry_budget", contract.DefaultDeliveryRetryBudget)
-	if retryBudget <= 0 {
-		return deliveryPlanEntry{}, fmt.Errorf("delivery_plan[%d].retry_budget must be > 0", index)
+	// retry_budget=0 is explicitly allowed per the canonical contract
+	// (openapi.yaml:SubmitDeliveryPlanEntry.retry_budget.minimum is 0)
+	// and round-trips verbatim into job_delivery_plans.retry_budget so
+	// the worker terminal-fails on the first hard error — matching the
+	// client's explicit "no retries" intent. Only negative values are
+	// rejected at the parse layer.
+	if retryBudget < 0 {
+		return deliveryPlanEntry{}, fmt.Errorf("delivery_plan[%d].retry_budget must be >= 0 (got %d)", index, retryBudget)
 	}
 
 	metadataJSON := "{}"

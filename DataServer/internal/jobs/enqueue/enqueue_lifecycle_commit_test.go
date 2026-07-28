@@ -208,14 +208,18 @@ func TestEnqueue_Precondition_RejectsEmptyDestinations(t *testing.T) {
 	}
 }
 
-// TestEnqueue_Precondition_RejectsZeroRetryBudget verifies that an
-// enqueue is rejected when any destination has retry_budget <= 0. The
+// TestEnqueue_Precondition_RejectsNegativeRetryBudget verifies that an
+// enqueue is rejected when any destination has retry_budget < 0. The
 // per-delivery delivery_plan_payload.go validator already rejects at
 // parse time; this is the runtime counterpart at enqueue time.
 // The atomic create runs FIRST with the payload's delivery_plan,
 // so the payload's destination_id "d1" must be seeded to reach
 // the precondition check.
-func TestEnqueue_Precondition_RejectsZeroRetryBudget(t *testing.T) {
+//
+// Note: retry_budget=0 is now ALLOWED per openapi.yaml
+// (SubmitDeliveryPlanEntry.retry_budget.minimum is 0). The previous
+// boundary (<=0) was too strict; only negative values are now rejected.
+func TestEnqueue_Precondition_RejectsNegativeRetryBudget(t *testing.T) {
 	t.Parallel()
 	tempDir := t.TempDir()
 	db, err := store.NewSQLiteStore(filepath.Join(tempDir, "test.db"))
@@ -231,13 +235,13 @@ func TestEnqueue_Precondition_RejectsZeroRetryBudget(t *testing.T) {
 			JobID: "test",
 			Destinations: []PlanDestination{
 				{DestinationID: "d1", Priority: 0, RetryBudget: 5},
-				{DestinationID: "d2", Priority: 1, RetryBudget: 0}, // INVALID
+				{DestinationID: "d2", Priority: 1, RetryBudget: -1}, // INVALID
 			},
 		}},
 	)
 
 	payload := map[string]interface{}{
-		"video_name":      "zero-budget",
+		"video_name":      "negative-budget",
 		"script_text":     "test",
 		"scenes":          []interface{}{map[string]interface{}{"scene": "intro", "voiceover": "v1"}},
 		"voiceover_paths": []string{"/tmp/v.mp3"},
@@ -247,13 +251,13 @@ func TestEnqueue_Precondition_RejectsZeroRetryBudget(t *testing.T) {
 	}
 	_, err = enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
 	if err == nil {
-		t.Fatal("want error when retry_budget=0, got nil")
+		t.Fatal("want error when retry_budget=-1, got nil")
 	}
 	if !strings.Contains(err.Error(), "retry_budget") {
 		t.Errorf("want error to mention retry_budget, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "must be > 0") {
-		t.Errorf("want error to mention 'must be > 0', got %v", err)
+	if !strings.Contains(err.Error(), "must be >= 0") {
+		t.Errorf("want error to mention 'must be >= 0', got %v", err)
 	}
 }
 

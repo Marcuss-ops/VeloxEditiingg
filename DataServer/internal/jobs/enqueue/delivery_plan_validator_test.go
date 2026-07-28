@@ -79,6 +79,35 @@ func TestValidateDeliveryPlanRequires_HappyPaths(t *testing.T) {
 			},
 		},
 		{
+			// retry_budget=0 is now ALLOWED per openapi.yaml:
+			// SubmitDeliveryPlanEntry.retry_budget.minimum=0. The
+			// explicit-zero contract round-trips downstream as
+			// job_delivery_plans.retry_budget=0 so the worker
+			// terminal-fails on the first hard error. Acceptance path
+			// here pins the validator boundary.
+			name: "retry_budget_zero_explicit_accepted",
+			in: map[string]interface{}{
+				"delivery_plan": []interface{}{
+					map[string]interface{}{"destination_id": "drive-main", "retry_budget": 0},
+				},
+			},
+		},
+		{
+			// intFromAny coerces unrecognized JSON types (string, bool,
+			// nil, …) to 0 via its default branch. Under the relaxed
+			// contract (<0), the coerced 0 MUST be accepted just like
+			// an explicit numeric 0. This pins the intFromAny fallback
+			// boundary so a future refactor that flips the default to
+			// -1 (silently rejecting malformed payloads) cannot
+			// regress unnoticed.
+			name: "retry_budget_string_invalid_coerces_to_zero_accepted",
+			in: map[string]interface{}{
+				"delivery_plan": []interface{}{
+					map[string]interface{}{"destination_id": "drive-main", "retry_budget": "abc"},
+				},
+			},
+		},
+		{
 			name: "legacy_single_id_alias_key",
 			in: map[string]interface{}{
 				"destination_id": "drive-main",
@@ -192,16 +221,10 @@ func TestValidateDeliveryPlanRequires_RejectPaths(t *testing.T) {
 			wantField: "delivery_plan[1].destination_id",
 			wantSub:   "duplicate",
 		},
-		{
-			name: "retry_budget_zero",
-			in: map[string]interface{}{
-				"delivery_plan": []interface{}{
-					map[string]interface{}{"destination_id": "drive-main", "retry_budget": 0},
-				},
-			},
-			wantField: "delivery_plan[0].retry_budget",
-			wantSub:   "must be > 0",
-		},
+		// Note: retry_budget=0 IS NOW ACCEPTED per openapi.yaml
+		// (SubmitDeliveryPlanEntry.retry_budget.minimum=0). The
+		// rejection-table below only pins negative values; the
+		// happy-path table above locks retry_budget=0 explicitly.
 		{
 			name: "retry_budget_negative",
 			in: map[string]interface{}{
@@ -210,18 +233,17 @@ func TestValidateDeliveryPlanRequires_RejectPaths(t *testing.T) {
 				},
 			},
 			wantField: "delivery_plan[0].retry_budget",
-			wantSub:   "must be > 0",
+			wantSub:   "must be >= 0",
 		},
-		{
-			name: "retry_budget_string_invalid",
-			in: map[string]interface{}{
-				"delivery_plan": []interface{}{
-					map[string]interface{}{"destination_id": "drive-main", "retry_budget": "abc"},
-				},
-			},
-			wantField: "delivery_plan[0].retry_budget",
-			wantSub:   "must be > 0",
-		},
+		// Note: retry_budget="abc" coerces to 0 via intFromAny's
+		// default branch (intFromAny returns 0 for unrecognized
+		// types). Under the relaxed contract (<0), the coerced 0 is
+		// now accepted; the rejection table above only pins negative
+		// numerics (retry_budget=-3).
+		// The happy-path table above covers retry_budget=0 acceptance;
+		// the ABove string-coerce-to-zero acceptance is exercised by
+		// TestPrepareJobAndTask_AcceptsZeroRetryBudget in the sibling
+		// enqueue_delivery_plan_test.go file.
 		{
 			name: "disabled_entry",
 			in: map[string]interface{}{

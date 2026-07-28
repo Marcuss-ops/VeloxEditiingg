@@ -10,11 +10,13 @@
 //
 //   - TestSubmitJobE2E_SuccessAndReplay          →  scenarios 1, 2, 3
 //       (happy, identical replay, hash-conflict)
-//       Scenario 5 (retry_budget=0 preservation) is asserted at
-//       retry_budget=3 (the default). Sending *int(0) currently
-//       triggers handler rejection with 422 "retry_budget must be > 0";
-//       a follow-up commit should land the explicit-zero acceptance
-//       path (P0 retry_budget contract).
+//       Scenario 5 (retry_budget=0 preservation) — landed in this
+//       commit: the explicit-zero path is asserted at scenario level
+//       (see TestSubmitJobE2E_RetryBudgetZeroAcceptance below). The
+//       en-queue path round-trips retry_budget=0 into
+//       job_delivery_plans.retry_budget=0 (verified at scenario level)
+//       so the worker terminal-fails on the first hard error, matching
+//       the openapi.yaml minimum=0 contract.
 //
 //   - TestSubmitJobE2E_ValidationFailures        →  scenarios 6, 7, 8, 9
 //       (sub-min duration, empty scene text, **SSRF URL rejection**,
@@ -213,10 +215,11 @@ func newSubmitJobE2EStack(t *testing.T) (*Handlers, *store.SQLiteStore) {
 // always-safe; HTTP/HTTPS public hosts pass when
 // cfg.AllowedExternalDomains is empty (blocklist-only mode).
 //
-// retry_budget is *int(3) here (not nil, not &zero). The handler
-// currently rejects RetryBudget == 0 with a 422 "must be > 0" —
-// the explicit-zero-round-trip contract is a TODO pending the
-// handler fix.
+// retry_budget is *int(3) here (not nil, not &zero). The handler now
+// accepts RetryBudget == 0 (preserved verbatim) per the relaxed
+// P0 retry_budget contract. Scenario 5 (TestSubmitJobE2E_
+// RetryBudgetZeroAcceptance) below covers the explicit-zero
+// round-trip end-to-end.
 func validSubmitJobBody(idemKey string) SubmitJobRequest {
 	rb := 3
 	return SubmitJobRequest{
@@ -538,8 +541,14 @@ func TestSubmitJobE2E_ValidationFailures(t *testing.T) {
 		want    wantShape
 	}{
 		{
-			name:    "missing_destination",
-			skipMsg: "TODO(handler): 500 resolver_failure returned instead of 422 invalid_payload. Tracked under P0 #2 (WriteResolverError enqueue-err mapping); reactivate when fixed.",
+			// Scenario 4 — missing destination → 422 invalid_payload +
+			// zero writes (handler-side destination-existence pre-flight).
+			// Previously skipped because AtomicForwardAndEnqueue would
+			// surface a 500 resolver_failure from the plaintext
+			// "destination_id %q does not exist" error inside the
+			// atomic UoW. Closed by P0 #2 (handler-side destination-
+			// existence pre-check at job_submit.go::SubmitJob).
+			name: "missing_destination",
 			make: func() SubmitJobRequest {
 				b := validSubmitJobBody("e2e-missing-dest-001")
 				b.DeliveryPlan[0].DestinationID = "missing_drive"
@@ -1028,3 +1037,179 @@ func TestSubmitJobE2E_PollingChain_NotFound(t *testing.T) {
 }
 
 // (no extra blank line at file end; format string test bodies use fmt.Sprintf directly via the top-level import.)
+
+// ── Scenario 5 — retry_budget=0 round-trip (NEW) ──────────────
+
+// TestSubmitJobE2E_RetryBudgetZeroAcceptance locks the explicit-zero
+// contract end-to-end on POST /api/v1/jobs (P0 retry_budget closure).
+// A request that supplies retry_budget: 0 MUST be accepted (202),
+// MUST round-trip into job_delivery_plans.retry_budget=0 verbatim
+// (NOT silently coerced to DefaultRetryBudget=3 or any other
+// fallback), and the persisted row MUST have retry_budget=0 so the
+// worker terminal-fails on the first hard error — matching
+// openapi.yaml:SubmitDeliveryPlanEntry.retry_budget.minimum=0.
+//
+// Pre-P0-relaxation, the validator at enqueue/delivery_plan_validator.go
+// rejected retry_budget<=0 with the plaintext "must be > 0" error,
+// which WriteResolverError mapped to 422 invalid_payload. After the
+// relaxation (boundary now <0), this scenario becomes 202-ok and the
+// contract is the round-trip preservation through:
+//
+//  1. HTTP → SubmitJobRequest → ValidateSubmitJobRequest passes.
+//  2. destination-existence pre-flight passes (drive is seeded).
+//  3. NormalizeExternalJobSubmission → submitRequestToRawPayload:
+//     nil → DefaultRetryBudget=3; *int-&-0 → entry["retry_budget"]=0
+//     (the *int-pointer boundary the contract hinges on).
+//  4. Resolver.Resolve → Enqueuer.PrepareJobAndTask →
+//     validateDeliveryPlanRequires accepts retry_budget=0.
+//  5. AtomicForwardAndEnqueue (creatorflow.Resolver) writes
+//     job_delivery_plans.retry_budget=0 verbatim.
+//
+// Resource-leak invariant: exactly one job row is created; replay
+// with retry_budget=0 + same idempotency_key converges on the
+// existing row (created=false in the response).
+func TestSubmitJobE2E_RetryBudgetZeroAcceptance(t *testing.T) {
+	h, db := newSubmitJobE2EStack(t)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
+
+	const idem = "e2e-retry-budget-zero-001"
+	rb := 0
+	body := validSubmitJobBody(idem)
+	body.DeliveryPlan[0].RetryBudget = &rb
+
+	wantJobID := expectedSubmitJobID(idem)
+
+	// ── Scenario 5 — explicit-zero POST → 202 + canonical envelope ──
+	w := postSubmitJob(t, r, body)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response json: %v", err)
+	}
+	if resp["job_id"] != wantJobID {
+		t.Fatalf("response.job_id = %v, want %s (explicit-zero acceptance)", resp["job_id"], wantJobID)
+	}
+	if resp["accepted_from"] != "api_v1_jobs" {
+		t.Fatalf("response.accepted_from = %v, want api_v1_jobs", resp["accepted_from"])
+	}
+	if resp["ok"] != true {
+		t.Fatalf("response.ok = %v, want true", resp["ok"])
+	}
+
+	// Round-trip invariant: job_delivery_plans.retry_budget MUST
+	// equal 0 verbatim. The pre-P0-relaxation bug was that the
+	// validator rejected 0 at the enqueue layer, blocking this row
+	// entirely. After the relaxation the column round-trips as 0
+	// (not the DefaultRetryBudget=3 fallback the test fixture uses
+	// in validSubmitJobBody otherwise).
+	var gotRetry int
+	if err := db.DB().QueryRow(
+		`SELECT retry_budget FROM job_delivery_plans WHERE job_id = ? AND destination_id = ?`,
+		wantJobID, "drive",
+	).Scan(&gotRetry); err != nil {
+		t.Fatalf("SELECT job_delivery_plans.retry_budget: %v", err)
+	}
+	if gotRetry != 0 {
+		t.Fatalf("job_delivery_plans.retry_budget = %d, want 0 (explicit-zero contract; NOT DefaultRetryBudget=3 fallback)", gotRetry)
+	}
+
+	if got := countRowsByJobID(t, db, "jobs", "job_id", wantJobID); got != 1 {
+		t.Fatalf("jobs rows = %d, want 1 (resource-leak invariant)", got)
+	}
+
+	// ── Scenario 5b — replay (idempotent convergence) ─────────────────
+	// A second POST with the SAME retry_budget=0 + idempotency_key
+	// must hit the Resolver fast-path, return 202, and create NO
+	// new job_delivery_plans row. created=false in the response is
+	// the canonical signal the fast-path was taken.
+	w2 := postSubmitJob(t, r, body)
+	if w2.Code != http.StatusAccepted {
+		t.Fatalf("replay: want 202, got %d body=%s", w2.Code, w2.Body.String())
+	}
+	var resp2 map[string]interface{}
+	_ = json.Unmarshal(w2.Body.Bytes(), &resp2)
+	if resp2["job_id"] != wantJobID {
+		t.Errorf("replay job_id = %v, want %s", resp2["job_id"], wantJobID)
+	}
+	if v, ok := resp2["created"]; !ok || v != false {
+		t.Errorf("replay created = %v, want false (canonical fast-path signal)", v)
+	}
+
+	var ddpCount int
+	if err := db.DB().QueryRow(
+		`SELECT COUNT(*) FROM job_delivery_plans WHERE job_id = ?`,
+		wantJobID,
+	).Scan(&ddpCount); err != nil {
+		t.Fatalf("count job_delivery_plans after replay: %v", err)
+	}
+	if ddpCount != 1 {
+		t.Errorf("job_delivery_plans rows after replay = %d, want 1 (idempotent convergence)", ddpCount)
+	}
+}
+
+// TestSubmitJobE2E_NegativeRetryBudgetRejected pins the relaxed
+// rejection boundary (<0) at the HTTP layer: a request that supplies
+// retry_budget: -1 MUST be rejected with 422 invalid_payload and
+// details[].path pointing at delivery_plan.0.retry_budget. Mirrors the
+// down-stack regression guard `TestEnqueue_Precondition_RejectsNegativeRetryBudget`
+// at the enqueue layer so a future "intFromAny coercion" (which would
+// silently turn -1 into 0) is caught at the very edge instead of
+// surfacing as a flaky 202-ok on a negative input.
+func TestSubmitJobE2E_NegativeRetryBudgetRejected(t *testing.T) {
+	h, db := newSubmitJobE2EStack(t)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
+
+	// Resource-leak baseline snapshot. The seeded DB has only the
+	// "drive" dest row, so any new jobs/tasks/task_specs/job_delivery_plans
+	// row is a leak (the rejection path must not write rows).
+	type tableCounts struct {
+		jobs, tasks, taskSpecs, jobDeliveryPlans int
+	}
+	snapshot := func() tableCounts {
+		var c tableCounts
+		_ = db.DB().QueryRow(`SELECT COUNT(*) FROM jobs`).Scan(&c.jobs)
+		_ = db.DB().QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&c.tasks)
+		_ = db.DB().QueryRow(`SELECT COUNT(*) FROM task_specs`).Scan(&c.taskSpecs)
+		_ = db.DB().QueryRow(`SELECT COUNT(*) FROM job_delivery_plans`).Scan(&c.jobDeliveryPlans)
+		return c
+	}
+	baseline := snapshot()
+
+	rb := -1
+	body := validSubmitJobBody("e2e-retry-budget-negative-001")
+	body.DeliveryPlan[0].RetryBudget = &rb
+
+	w := postSubmitJob(t, r, body)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["error"] != "invalid_payload" {
+		t.Fatalf("error = %v, want invalid_payload (negative retry_budget is the only rejected class)", resp["error"])
+	}
+	if resp["ok"] != false {
+		t.Fatalf("ok = %v, want false on rejection path", resp["ok"])
+	}
+
+	// Resource-leak invariant (negative-rejection path must NOT write rows).
+	after := snapshot()
+	if after.jobs != baseline.jobs {
+		t.Errorf("jobs row delta: got=%d want=%d", after.jobs, baseline.jobs)
+	}
+	if after.tasks != baseline.tasks {
+		t.Errorf("tasks row delta: got=%d want=%d", after.tasks, baseline.tasks)
+	}
+	if after.taskSpecs != baseline.taskSpecs {
+		t.Errorf("task_specs row delta: got=%d want=%d", after.taskSpecs, baseline.taskSpecs)
+	}
+	if after.jobDeliveryPlans != baseline.jobDeliveryPlans {
+		t.Errorf("job_delivery_plans row delta: got=%d want=%d", after.jobDeliveryPlans, baseline.jobDeliveryPlans)
+	}
+}

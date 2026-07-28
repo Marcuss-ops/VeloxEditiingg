@@ -52,7 +52,10 @@ import (
 // Rejected (with *validationError):
 //   - delivery_plan absent + no legacy fallback
 //   - delivery_plan present but empty after snapshot
-//   - per-entry retry_budget <= 0
+//   - per-entry retry_budget < 0 (negative values; zero is allowed and
+//     explicitly preserved as the client-supplied "no retries" intent,
+//     matching openapi.yaml:SubmitDeliveryPlanEntry.retry_budget.minimum
+//     which is 0)
 //   - per-entry enabled == false  (same semantics as store parser)
 //   - per-entry destination_id missing, empty, or duplicated
 //   - per-entry priority < 0
@@ -185,10 +188,18 @@ func validateDeliveryPlanRequires(ctx context.Context, payloadMap map[string]int
 				message: "is disabled; omit it instead of creating a non-routable plan",
 			}
 		}
-		if e.RetryBudget <= 0 {
+		if e.RetryBudget < 0 {
+			// retry_budget=0 is explicitly allowed by openapi.yaml
+			// (SubmitDeliveryPlanEntry.retry_budget.minimum is 0). The
+			// -1 boundary below catches the only truly invalid class.
+			// A 0 retry_budget round-trips into the worker payload as
+			// 0 (preserved verbatim by NormalizeExternalJobSubmission
+			// / submitRequestToRawPayload), and downstream callers
+			// (FinalizeVerified, deliveries/Runner) honour that as
+			// "no retries for this destination".
 			return &validationError{
 				field:   fmt.Sprintf("delivery_plan[%d].retry_budget", i),
-				message: "must be > 0",
+				message: "must be >= 0",
 			}
 		}
 		if e.Priority < 0 {

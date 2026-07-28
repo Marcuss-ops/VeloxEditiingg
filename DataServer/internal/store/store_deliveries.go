@@ -243,6 +243,111 @@ func (s *SQLiteStore) GetDeliveryDestinationByExternalID(ctx context.Context, ex
 	return &d, nil
 }
 
+// BatchDeliveryDestinationsExistAndEnabled checks each provided id against
+// the delivery_destinations table in batched SELECTs and returns a map
+// `{id -> true if a row exists AND enabled = 1 else false}`. Inputs are
+// deduplicated and trimmed before issuing the query. IDs that the caller
+// supplied but the table did not return are explicitly mapped to `false`
+// (rather than absent) so call sites can distinguish "row missing"
+// from "row found" with a single map read.
+//
+// Used by HTTP handlers (SubmitJob, future CreatorPush counterpart) that
+// need to verify delivery_plan destinations BEFORE delegating to the
+// resolver. The reason this lookup lives OUTSIDE the enqueue package
+// is the file's "intentionally self-contained (no store import)"
+// contract in DataServer/internal/jobs/enqueue/delivery_plan_validator.go,
+// which keeps shape-only validation in the enqueue package and pushes
+// existence + enabled checks up to the consumer that already owns a
+// store handle.
+//
+// Multi-id SQL: SQLite's SQLITE_MAX_VARIABLE_NUMBER defaults to 999
+// (compile-time constant), so the helper chunks requests into batches
+// of 500 placeholders — well under the floor across SQLite builds
+// (3.32+ defaults to 32766, but we keep the chunk conservative).
+//
+// Errors:
+//   - sql driver failure during QueryContext → wrapped error returned,
+//     caller should fail-closed (handler surfaces 500 store_failure).
+//   - rows.Scan / rows.Err failures → wrapped error returned.
+//
+// Empty input: returns an empty map and nil error; no SQL is issued.
+//
+// Mirrors the policy of the in-tx `validateDeliveryDestinationTx`
+// (DataServer/internal/store/atomic_job_task.go) so the handler-side
+// pre-check and the atomic write agree on the existence + enabled
+// invariant.
+func (s *SQLiteStore) BatchDeliveryDestinationsExistAndEnabled(ctx context.Context, ids []string) (map[string]bool, error) {
+	out := make(map[string]bool, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	// Deduplicate + trim. SQLite's IN clause tolerates duplicates
+	// (slower) but the de-dup here keeps the placeholder set minimal
+	// for the common case where a plan has repeated destinations.
+	seen := make(map[string]struct{}, len(ids))
+	unique := make([]string, 0, len(ids))
+	for _, id := range ids {
+		tid := strings.TrimSpace(id)
+		if tid == "" {
+			continue
+		}
+		if _, dup := seen[tid]; dup {
+			continue
+		}
+		seen[tid] = struct{}{}
+		unique = append(unique, tid)
+	}
+	if len(unique) == 0 {
+		return out, nil
+	}
+
+	const chunkSize = 500
+	for start := 0; start < len(unique); start += chunkSize {
+		end := start + chunkSize
+		if end > len(unique) {
+			end = len(unique)
+		}
+		chunk := unique[start:end]
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(chunk)), ",")
+		query := `SELECT destination_id FROM delivery_destinations` +
+			` WHERE destination_id IN (` + placeholders + `) AND enabled = 1`
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		rows, err := s.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("store: BatchDeliveryDestinationsExistAndEnabled: query: %w", err)
+		}
+		var found []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("store: BatchDeliveryDestinationsExistAndEnabled: scan: %w", err)
+			}
+			found = append(found, id)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("store: BatchDeliveryDestinationsExistAndEnabled: rows: %w", err)
+		}
+		for _, id := range found {
+			out[id] = true
+		}
+	}
+
+	// Populate false for every unique id NOT in the result set so the
+	// caller can distinguish "row found" from "row missing/disabled"
+	// with a single map lookup.
+	for _, id := range unique {
+		if _, ok := out[id]; !ok {
+			out[id] = false
+		}
+	}
+	return out, nil
+}
+
 // GetDeliveryDestination returns a single destination by id, or
 // ErrDeliveryNoRow when missing (sql.ErrNoRows is normalized).
 //

@@ -123,15 +123,20 @@ func TestPrepareJobAndTask_RejectsMissingDeliveryPlan(t *testing.T) {
 			wantField: "delivery_plan",
 			wantSub:   "is required",
 		},
+		// rejection-table note: retry_budget=0 was historically
+		// rejected. Now ALLOWED per openapi.yaml (minimum=0). The
+		// explicit-zero acceptance is locked by a dedicated happy-path
+		// test (TestPrepareJobAndTask_AcceptsZeroRetryBudget) below.
+		// The rejection-table here only pins negative retry_budget.
 		{
-			name: "retry_budget_zero",
+			name: "retry_budget_negative",
 			mutate: func(p map[string]interface{}) {
 				p["delivery_plan"] = []interface{}{
-					map[string]interface{}{"destination_id": "drive-main", "retry_budget": 0},
+					map[string]interface{}{"destination_id": "drive-main", "retry_budget": -1},
 				}
 			},
 			wantField: "delivery_plan[0].retry_budget",
-			wantSub:   "must be > 0",
+			wantSub:   "must be >= 0",
 		},
 		{
 			name: "missing_destination_id",
@@ -228,27 +233,72 @@ func TestEnqueue_RejectsMissingDeliveryPlan(t *testing.T) {
 	}
 }
 
+// TestPrepareJobAndTask_AcceptsZeroRetryBudget locks the explicit-zero
+// contract from openapi.yaml:SubmitDeliveryPlanEntry.retry_budget.minimum
+// (which is 0). retry_budget=0 MUST round-trip encoding into the
+// worker payload as 0 (NOT the DefaultRetryBudget=3 fallback) and
+// MUST NOT be rejected by validateDeliveryPlanRequires.
+//
+// Background: pre-P0-retry_budget contract, this validator rejected
+// retry_budget <= 0 with the plaintext message "must be > 0". The
+// relaxed boundary is now < 0. This test pins the acceptance side.
+func TestPrepareJobAndTask_AcceptsZeroRetryBudget(t *testing.T) {
+	t.Parallel()
+	enq := newTestEnqueuer(t)
+
+	payload := map[string]interface{}{
+		"video_name":     "Explicit Zero Budget",
+		"script_text":    "explicit zero retry_budget is the client's choice",
+		"voiceover_path": "/tmp/v.mp3",
+		"scenes":         []interface{}{map[string]interface{}{"text": "S1", "image_link": "https://example.com/i.png"}},
+		"delivery_plan": []interface{}{
+			map[string]interface{}{
+				"destination_id": "drive-main",
+				"retry_budget":   0,
+			},
+		},
+	}
+	job, spec, _, err := enq.PrepareJobAndTask(context.Background(), payload, costmodel.DefaultRequirements())
+	if err != nil {
+		t.Fatalf("PrepareJobAndTask: want NO error (retry_budget=0 is allowed), got %v", err)
+	}
+	if job == nil || spec == nil {
+		t.Fatal("want non-nil job and spec")
+	}
+	// The explicit-zero contract: job.MaxRetries = maxRetry across
+	// destinations = 0 here (the only entry has retry_budget=0). The
+	// worker should terminal-fail on the first hard error for this
+	// job. The pre-P0-relaxation compileSceneVideoJob default of
+	// MaxRetries=0 happens to coincide, so the assertion also pins
+	// that the value is NOT silently bumped to DefaultRetryBudget=3.
+	if job.MaxRetries != 0 {
+		t.Errorf("job.MaxRetries = %d, want 0 (explicit-zero contract; NOT default-retries-3 fallback)", job.MaxRetries)
+	}
+}
+
 func TestEnqueue_PropagatesDeliveryPlanPreflightError(t *testing.T) {
 	t.Parallel()
 	enq := newTestEnqueuer(t)
 
-	// retry_budget <= 0 path: Enqueue must surface the same field/path
+	// retry_budget < 0 path: Enqueue must surface the same field/path
 	// the validator produced, so callers can programmatically distinguish
-	// "missing plan" from "budget not configured" from "disabled entry".
+	// "missing plan" from "budget negative" from "disabled entry".
+	// Note: retry_budget=0 is now ALLOWED per openapi.yaml (minimum=0),
+	// so this test uses -1 to keep its purpose intact.
 	payload := map[string]interface{}{
 		"video_name":     "Bad Budget",
 		"script_text":    "bad budget",
 		"voiceover_path": "/tmp/v.mp3",
 		"scenes":         []interface{}{map[string]interface{}{"text": "S1", "image_link": "https://example.com/i.png"}},
 		"delivery_plan": []interface{}{
-			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 0},
+			map[string]interface{}{"destination_id": "drive-main", "retry_budget": -1},
 		},
 	}
 	_, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
 	if err == nil {
-		t.Fatal("want error from Enqueue when retry_budget is 0")
+		t.Fatal("want error from Enqueue when retry_budget is negative")
 	}
-	if !strings.Contains(err.Error(), "retry_budget") || !strings.Contains(err.Error(), "must be > 0") {
+	if !strings.Contains(err.Error(), "retry_budget") || !strings.Contains(err.Error(), "must be >= 0") {
 		t.Fatalf("want retry_budget error, got %v", err)
 	}
 }

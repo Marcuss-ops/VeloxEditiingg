@@ -30,14 +30,17 @@ func TestParseDeliveryPlanPayloadRejectsInvalidPlans(t *testing.T) {
 			want: "disabled",
 		},
 		{
+			// retry_budget=0 is now ALLOWED (openapi.yaml minimum is 0).
+			// The parse-layer rejection boundary moved from <=0 to <0.
+			// Use -1 so the test keeps pinning the rejection path.
 			name: "retry budget",
 			payload: map[string]interface{}{
 				"delivery_plan": map[string]interface{}{
 					"destination_id": "drive-main",
-					"retry_budget":   0,
+					"retry_budget":   -1,
 				},
 			},
-			want: "retry_budget must be > 0",
+			want: "retry_budget must be >= 0",
 		},
 	}
 

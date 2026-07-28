@@ -32,16 +32,19 @@ import (
 // store.validateDeliveryDestinationTx inside CreateJobWithTaskTx.
 //
 // Invariants: plan must be non-nil and carry >=1 destination; every
-// destination's retry_budget > 0. On success, writes the MAX
-// retry_budget into job.MaxRetries.
+// destination's retry_budget >= 0. On success, writes the MAX
+// retry_budget into job.MaxRetries (maxRetry=0 when every entry opts out
+// of retries — preserved as 0 so the worker terminal-fails on the first
+// hard error, matching the explicit-zero contract from
+// openapi.yaml:SubmitDeliveryPlanEntry.retry_budget.minimum).
 func validatePlanPayload(plan *ResolvedPlan, job *jobs.Job) error {
 	if plan == nil || len(plan.Destinations) == 0 {
 		return &validationError{field: "delivery_plan", message: "no explicit delivery plan; create job_delivery_plans rows for this job before enqueueing"}
 	}
 	maxRetry := 0
 	for i, d := range plan.Destinations {
-		if d.RetryBudget <= 0 {
-			return &validationError{field: fmt.Sprintf("delivery_plan[%d].retry_budget", i), message: "must be > 0"}
+		if d.RetryBudget < 0 {
+			return &validationError{field: fmt.Sprintf("delivery_plan[%d].retry_budget", i), message: "must be >= 0"}
 		}
 		if d.RetryBudget > maxRetry {
 			maxRetry = d.RetryBudget
