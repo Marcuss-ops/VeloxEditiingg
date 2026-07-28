@@ -53,6 +53,10 @@ PROBE_JSON="$(ffprobe -v quiet -print_format json -show_format -show_streams "$M
 
 AUDIO_COUNT=$(printf '%s' "$PROBE_JSON" | jq '[.streams[] | select(.codec_type == "audio")] | length' 2>/dev/null)
 VIDEO_COUNT=$(printf '%s' "$PROBE_JSON" | jq '[.streams[] | select(.codec_type == "video")] | length' 2>/dev/null)
+# Default to 0 if ffprobe returned nothing parseable, so the operator log line
+# reads `audio_streams=0 video_streams=0` (clear) instead of `audio_streams=`.
+: "${AUDIO_COUNT:=0}"
+: "${VIDEO_COUNT:=0}"
 
 log_info "mp4=$MP4_PATH audio_streams=$AUDIO_COUNT video_streams=$VIDEO_COUNT"
 
