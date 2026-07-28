@@ -63,7 +63,8 @@
 #                                     submit body OR asset HEAD returned 404).
 #   7  SHA-256 round-trip mismatch (master side output_sha256 != local
 #                                     sha256sum of downloaded artifact).
-#   8  timeout / permission markers detected in worker or master log.
+#   8  timeout marker detected in worker or master log (filtered by $JOB_ID).
+ 10  permission marker detected in worker or master log (filtered by $JOB_ID).
 #   9  master-or-pipeline_gen path marker detected in worker log.
 # =============================================================================
 
@@ -318,7 +319,11 @@ PERM_SAMPLE=""
 BAD_PATH_SAMPLE=""
 TERMINAL_STATE=""
 
-# Log source wrapper for grep — works on either path or journalctl.
+# Log source wrapper for grep — works on either path or journalctl. ALL
+# four branches (master path + worker path + master journalctl + worker
+# journalctl) filter by $JOB_ID so stale lines from prior probes do not
+# false-positive the forbidden-marker probes (timeout / permission /
+# bad-path).
 grep_dual() {
   local pattern="$1"
   local line=""
@@ -327,7 +332,7 @@ grep_dual() {
   fi
   if [[ "$WORKER_LOG_SRC" == path:* ]]; then
     local l2
-    l2=$(grep -E "$pattern" "$WORKER_LOG_PATH" 2>/dev/null | tail -3 || true)
+    l2=$(grep -F "$JOB_ID" "$WORKER_LOG_PATH" 2>/dev/null | grep -E "$pattern" | tail -3 || true)
     line="${line}${l2:+$'\n'}${l2}"
   fi
   if [[ "$MASTER_LOG_SRC" == journalctl:* ]]; then
@@ -339,7 +344,7 @@ grep_dual() {
   if [[ "$WORKER_LOG_SRC" == journalctl:* ]]; then
     local l4
     l4=$(journalctl -u velox-worker-agent -n 5000 --no-pager 2>/dev/null \
-      | grep -E "$pattern" | tail -3 || true)
+      | grep -F "$JOB_ID" | grep -E "$pattern" | tail -3 || true)
     line="${line}${l4:+$'\n'}${l4}"
   fi
   printf '%s' "$line"
@@ -478,10 +483,12 @@ else
   record_probe 8 "no timeout" PASS "no i/o timeout / deadline-exceeded markers"
 fi
 if $SEEN_PERMISSION; then
-  # split record: probe 8 was already used for timeout; reuse 8+1 logic via SECOND record below
-  record_probe "8a" "no permission" FAIL "marker: ${PERM_SAMPLE:0:200}"
+  # Probe 8 was already used for timeout; record 10 for permission as a
+  # separate probe. Use numeric idx=10 because the helper's --argjson
+  # rejects strings like "8a" (must be a valid JSON literal).
+  record_probe 10 "no permission" FAIL "marker: ${PERM_SAMPLE:0:200}"
 else
-  record_probe "8a" "no permission" PASS "no permission-denied / EACCES markers"
+  record_probe 10 "no permission" PASS "no permission-denied / EACCES markers"
 fi
 if $SEEN_BAD_PATH; then
   record_probe 9 "no master/PipelineGen paths" FAIL "marker: ${BAD_PATH_SAMPLE:0:200}"
