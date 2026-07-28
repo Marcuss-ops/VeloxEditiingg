@@ -489,10 +489,10 @@ func attachLegacySceneClipTimeline(out map[string]interface{}) {
 		clipDuration := sceneClipDurationSeconds(scene)
 		duration := payload.NormalizedDuration(scene["duration_seconds"])
 		if voiceoverDuration > 0 {
-			duration = voiceoverDuration
-			if clipDuration > duration {
-				duration = clipDuration
-			}
+			// A narrated scene has two consecutive phases: the voiceover
+			// bed, then the clip with its original audio. Never truncate the
+			// scene to the longer input; its duration is their sum.
+			duration = voiceoverDuration + clipDuration
 		}
 		if duration <= 0 {
 			if clipDuration > 0 {
@@ -509,6 +509,10 @@ func attachLegacySceneClipTimeline(out map[string]interface{}) {
 		normalized["clip_link"] = clipURL
 		normalized["clip_links"] = []string{clipURL}
 		normalized["duration_seconds"] = duration
+		if voiceoverDuration > 0 {
+			normalized["voiceover_duration_seconds"] = voiceoverDuration
+			normalized["final_clip_duration_seconds"] = clipDuration
+		}
 		scenes[i] = normalized
 
 		items = append(items, map[string]interface{}{
@@ -516,22 +520,38 @@ func attachLegacySceneClipTimeline(out map[string]interface{}) {
 			"url":           clipURL,
 			"duration":      duration,
 			"fit":           "contain",
-			"include_audio": true,
+			"include_audio": voiceoverDuration <= 0,
 		})
 		clips = append(clips, clipURL)
 
-		if i < len(voiceovers) && strings.TrimSpace(voiceovers[i]) != "" {
+		voiceoverURL := ""
+		if i < len(voiceovers) {
+			voiceoverURL = strings.TrimSpace(voiceovers[i])
+		}
+		if voiceoverURL == "" {
+			voiceoverURL = sceneVoiceoverURL(scene)
+		}
+		if voiceoverURL != "" {
 			trackDuration := duration
 			if voiceoverDuration > 0 {
 				trackDuration = voiceoverDuration
 			}
 			audioTracks = append(audioTracks, map[string]interface{}{
-				"source_url":        strings.TrimSpace(voiceovers[i]),
+				"source_url":        voiceoverURL,
 				"volume":            1.0,
 				"start_time_offset": offsetSeconds,
 				"duration_seconds":  trackDuration,
 				"role":              "voiceover",
 			})
+			if voiceoverDuration > 0 && clipDuration > 0 {
+				audioTracks = append(audioTracks, map[string]interface{}{
+					"source_url":        clipURL,
+					"volume":            1.0,
+					"start_time_offset": offsetSeconds + voiceoverDuration,
+					"duration_seconds":  clipDuration,
+					"role":              "scene_clip_audio",
+				})
+			}
 		}
 		if len(subtitleTracks) == 0 {
 			if track := sceneSubtitleTrack(scene); len(track) > 0 {
