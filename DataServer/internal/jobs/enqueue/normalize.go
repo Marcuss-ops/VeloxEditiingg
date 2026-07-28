@@ -477,6 +477,7 @@ func attachLegacySceneClipTimeline(out map[string]interface{}) {
 	items := make([]map[string]interface{}, 0, len(scenes))
 	clips := make([]string, 0, len(scenes))
 	audioTracks := make([]map[string]interface{}, 0, len(scenes))
+	subtitleTracks := normalizeSubtitleTracks(out["subtitle_tracks"])
 	offsetSeconds := 0.0
 
 	for i, scene := range scenes {
@@ -531,6 +532,11 @@ func attachLegacySceneClipTimeline(out map[string]interface{}) {
 				"role":              "voiceover",
 			})
 		}
+		if len(subtitleTracks) == 0 {
+			if track := sceneSubtitleTrack(scene); len(track) > 0 {
+				subtitleTracks = append(subtitleTracks, track)
+			}
+		}
 		offsetSeconds += duration
 	}
 
@@ -543,7 +549,57 @@ func attachLegacySceneClipTimeline(out map[string]interface{}) {
 	if len(audioTracks) > 0 {
 		out["audio_tracks"] = audioTracks
 	}
+	if len(subtitleTracks) > 0 {
+		out["subtitle_tracks"] = subtitleTracks
+	}
 	out["video_mode"] = "clip_stock"
+}
+
+func normalizeSubtitleTracks(raw interface{}) []map[string]interface{} {
+	var tracks []map[string]interface{}
+	switch values := raw.(type) {
+	case []map[string]interface{}:
+		for _, value := range values {
+			if len(value) > 0 {
+				tracks = append(tracks, value)
+			}
+		}
+	case []interface{}:
+		for _, value := range values {
+			if track, ok := value.(map[string]interface{}); ok && len(track) > 0 {
+				tracks = append(tracks, track)
+			}
+		}
+	}
+	return tracks
+}
+
+func sceneSubtitleTrack(scene map[string]interface{}) map[string]interface{} {
+	if scene == nil {
+		return nil
+	}
+	nested, ok := scene["subtitles"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	source := strings.TrimSpace(payload.FirstString(nested, "source", "url"))
+	if source == "" {
+		return nil
+	}
+	track := map[string]interface{}{"source": source}
+	if preset := strings.TrimSpace(payload.FirstString(nested, "preset")); preset != "" {
+		track["preset"] = preset
+	}
+	if font := strings.TrimSpace(payload.FirstString(nested, "font")); font != "" {
+		track["font"] = font
+	}
+	if format := strings.TrimSpace(payload.FirstString(nested, "format")); format != "" {
+		track["format"] = format
+	}
+	if language := strings.TrimSpace(payload.FirstString(nested, "language")); language != "" {
+		track["language"] = language
+	}
+	return track
 }
 
 func sceneVoiceoverDurationSeconds(scene map[string]interface{}) float64 {

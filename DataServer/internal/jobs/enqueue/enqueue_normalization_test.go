@@ -325,11 +325,50 @@ func TestNormalizeSceneVideoPayload_PreservesVisualTimelineFields(t *testing.T) 
 		t.Fatalf("normalizeSceneVideoPayload: %v", err)
 	}
 
-	if got, ok := normalized["subtitle_tracks"].([]interface{}); !ok || len(got) != 1 {
+	if got, ok := normalized["subtitle_tracks"].([]map[string]interface{}); !ok || len(got) != 1 {
 		t.Fatalf("subtitle_tracks = %#v, want one preserved track", normalized["subtitle_tracks"])
 	}
 	if got, ok := normalized["layers"].([]interface{}); !ok || len(got) != 1 {
 		t.Fatalf("layers = %#v, want one preserved layer", normalized["layers"])
+	}
+}
+
+func TestNormalizeSceneVideoPayload_DerivesSubtitleTrackFromSceneSubtitles(t *testing.T) {
+	t.Parallel()
+
+	normalized, err := normalizeSceneVideoPayload(map[string]interface{}{
+		"video_name":  "Nested subtitle smoke",
+		"script_text": "Nested subtitle body.",
+		"voiceover_paths": []interface{}{
+			"velox-asset://voice-1",
+		},
+		"scenes": []interface{}{
+			map[string]interface{}{
+				"text":             "Scene 1",
+				"clip_link":        "velox-asset://clip-1",
+				"duration_seconds": float64(5),
+				"subtitles": map[string]interface{}{
+					"url":    "velox-asset://subtitle-1",
+					"format": "srt",
+					"preset": "active_word_pop",
+					"font":   "Inter",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeSceneVideoPayload: %v", err)
+	}
+
+	tracks, ok := normalized["subtitle_tracks"].([]map[string]interface{})
+	if !ok || len(tracks) != 1 {
+		t.Fatalf("subtitle_tracks = %#v, want one derived track", normalized["subtitle_tracks"])
+	}
+	if got := tracks[0]["source"]; got != "velox-asset://subtitle-1" {
+		t.Fatalf("subtitle_tracks[0].source = %v, want velox-asset://subtitle-1", got)
+	}
+	if got := tracks[0]["format"]; got != "srt" {
+		t.Fatalf("subtitle_tracks[0].format = %v, want srt", got)
 	}
 }
 
