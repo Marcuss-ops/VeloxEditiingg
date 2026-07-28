@@ -404,7 +404,7 @@ func TestShouldForwardPipelineResult(t *testing.T) {
 	if ShouldForwardPipelineResult(map[string]interface{}{"status": "completed", "result": map[string]interface{}{"voiceover_path": voicePath}}) {
 		t.Error("want false for no scenes")
 	}
-	if ShouldForwardPipelineResult(map[string]interface{}{"status": "completed", "result": map[string]interface{}{"scenes_json": sceneJSON}}) {
-		t.Error("want false for no voiceover")
+	if !ShouldForwardPipelineResult(map[string]interface{}{"status": "completed", "result": map[string]interface{}{"scenes_json": sceneJSON}}) {
+		t.Error("want true for renderable scenes without voiceover")
 	}
 }

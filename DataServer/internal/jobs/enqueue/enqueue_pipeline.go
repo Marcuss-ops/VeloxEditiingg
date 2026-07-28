@@ -56,9 +56,6 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 	}
 
 	voiceovers := extractVoiceoverPaths(flat)
-	if len(voiceovers) == 0 {
-		return nil, fmt.Errorf("voiceover path missing from pipeline result")
-	}
 	if title == "" {
 		return nil, fmt.Errorf("video title missing from pipeline result")
 	}
@@ -123,10 +120,35 @@ func ShouldForwardPipelineResult(result map[string]interface{}) bool {
 	if payload.FirstString(flat, "scenes_json", "json_path") == "" && payload.FirstString(flat, "scenes") == "" {
 		return false
 	}
-	if len(extractVoiceoverPaths(flat)) == 0 {
+	if len(extractVoiceoverPaths(flat)) == 0 && !hasRenderableMedia(flat) {
 		return false
 	}
 	return true
+}
+
+func hasRenderableMedia(flat map[string]interface{}) bool {
+	for _, key := range []string{"items", "clips", "images", "intro_clip_paths", "stock_clip_paths", "scene_image_paths"} {
+		if values, ok := flat[key].([]interface{}); ok && len(values) > 0 {
+			return true
+		}
+		if values, ok := flat[key].([]string); ok && len(values) > 0 {
+			return true
+		}
+	}
+	if encoded := payload.FirstString(flat, "scenes_json"); encoded != "" {
+		var scenes []map[string]interface{}
+		if json.Unmarshal([]byte(encoded), &scenes) == nil {
+			for _, scene := range scenes {
+				if payload.FirstString(scene, "clip_link", "image_link") != "" {
+					return true
+				}
+				if clip, ok := scene["clip"].(map[string]interface{}); ok && payload.FirstString(clip, "url", "asset_id") != "" {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func extractVoiceoverPaths(p map[string]interface{}) []string {
