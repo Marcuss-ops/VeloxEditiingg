@@ -1,0 +1,72 @@
+{
+  "schema_version": "velox.render-manifest.v1",
+  "manifest_id": "pg_e2e_canonicality_20260728_0001",
+  "created_at": "2026-07-28T14:30:00Z",
+  "source": {
+    "provider": "pipelinegen",
+    "pipelinegen_job_id": "pg_test_job_canonicality_001",
+    "generation_schema": 1
+  },
+  "video": {
+    "name": "CanonicalityFixture",
+    "language": "en",
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "output_format": "mp4"
+  },
+  "script": {
+    "text": "Canonical-shape test fixture for velox.render-manifest.v1 CI canonicality guard.",
+    "google_doc_url": "https://docs.google.com/document/d/canonicality-test-fixture/edit",
+    "language": "en"
+  },
+  "scenes": [
+    {
+      "scene_id": "scene-0",
+      "index": 0,
+      "kind": "intro",
+      "text": "Scene zero canonical narration line.",
+      "duration_ms": 7200,
+      "clip": {
+        "asset_id": "clip_0_canonicality",
+        "drive_file_id": "drivefile_clip_0_canonicality",
+        "url": "https://drive.google.com/file/d/clip_0_canonicality/view",
+        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "start_ms": 0,
+        "end_ms": 7200,
+        "duration_ms": 7200
+      },
+      "voiceover": {
+        "asset_id": "vo_0_canonicality",
+        "drive_file_id": "drivefile_vo_0_canonicality",
+        "url": "https://drive.google.com/file/d/vo_0_canonicality/view",
+        "sha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+        "duration_ms": 7190,
+        "language": "en"
+      },
+      "subtitles": {
+        "asset_id": "sub_0_canonicality",
+        "format": "ass",
+        "url": "https://drive.google.com/file/d/sub_0_canonicality/view",
+        "sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        "language": "en"
+      }
+    }
+  ],
+  "delivery_plan": [
+    {
+      "destination_id": "drive",
+      "priority": 1,
+      "retry_budget": 3,
+      "metadata": {
+        "folder_id": "drive_folder_e2e_canonicality"
+      }
+    }
+  ],
+  "integrity": {
+    "algorithm": "sha256",
+    "manifest_sha256": "e5090c2eec68a0edab87d649d4ca55b8782ab473bbb0aaaa7c5b071400e50c03",
+    "scene_count": 1,
+    "total_duration_ms": 7200
+  }
+}

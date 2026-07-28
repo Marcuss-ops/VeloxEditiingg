@@ -472,6 +472,109 @@ breakage class without needing to dig through Go source.
   that fails any PR / push that removes `worker_id` references from
   the allowlist CSV (catches operator-level drift).
 
+### `velox.render-manifest.v1` canonical spec + CI canonicality guard
+
+The `velox.render-manifest.v1` wire contract is now a first-class
+specification with its own canonical reference doc and a CI guard
+that pins the contract to a fixture file (so a future contributor
+cannot drift the wire shape silently).
+
+**`docs/manifest-spec.md` (NEW, 12 sections)** — the canonical
+human-readable reference for the contract. Sections:
+
+1. Top-level envelope (`schema_version`, `manifest_id`, `created_at`).
+2. `source` object (`provider`, `pipelinegen_job_id`, `generation_schema`).
+3. `video` object (`name`, `language`, `width`, `height`, `fps`, `output_format`).
+4. `script` object (`text`, `google_doc_url`, `language`).
+5. `scenes[]` array — per-scene mandatory fields (`scene_id`, `index`,
+   `kind`, `text`, `duration_ms`, `clip`, `voiceover`, `subtitles`) and
+   optional fields (`scene_id`/`index` are required; `clip`/`voiceover`/
+   `subtitles` nested objects are required when the upstream pipeline
+   has those assets for the scene).
+6. `clip` object (`asset_id`, `drive_file_id`, `url`, `sha256`,
+   `start_ms`, `end_ms`, `duration_ms`).
+7. `voiceover` object (`asset_id`, `drive_file_id`, `url`, `sha256`,
+   `duration_ms`, `language`).
+8. `subtitles` object (`asset_id`, `format`, `url`, `sha256`, `language`).
+9. `delivery_plan[]` entries (typed envelope, mirrors the existing
+   `SubmitDeliveryPlanEntry` schema).
+10. `integrity` object (`algorithm`, `manifest_sha256`, `scene_count`,
+    `total_duration_ms`). `manifest_sha256` is the SHA-256 of the
+    canonical-form JSON (sorted keys, `, ` and `: ` separators) of
+    the manifest body **minus the `integrity` field itself**, so
+    the verification is reproducible from the on-disk JSON alone.
+11. Reject envelope — 422 / 400 / 409 response shapes that the
+    handler returns when the manifest fails shape rules, the
+    SHA-256 doesn't match, or the `schema_version` is not in the
+    closed enum.
+12. Acceptance test matrix — enumerates the canonical
+    good-fixture / bad-fixture cases a CI guard MUST pin.
+
+The spec doc is the single human-readable source of truth for the
+contract. The Go wire validator in
+`DataServer/internal/handlers/server/pipeline/job_submit.go::ValidateSubmitJobRequest`
+and the OpenAPI schema in `DataServer/api/openapi.yaml::SubmitManifestRef`
+are the corresponding machine-readable enforcement surfaces.
+
+**`scripts/ci/check-manifest-schema-canicality.sh` (NEW)** — the CI
+guard. Three sections in sequence:
+
+- **Spec coverage** — asserts the spec doc lists every mandatory
+  top-level block (`schema_version`, `manifest_id`, `created_at`,
+  `source`, `video`, `script`, `scenes`, `delivery_plan`, `integrity`)
+  and the per-object sections (`source`, `video`, `script`, `scene`,
+  `integrity`). Case-insensitive match against section headings so
+  a future markdown linting pass cannot accidentally drop a
+  heading and silently break the contract reference.
+- **Good-fixture integrity** — parses `manifest.v1.fixture.json`,
+  asserts `schema_version == "velox.render-manifest.v1"`, every
+  required top-level field is present, every per-scene required
+  field is present (n_scenes > 0), and the `integrity.manifest_sha256`
+  matches the recomputed canonical-form SHA-256 (so a future fixture
+  edit that forgets to recompute the hash is caught at CI time).
+- **Bad-fixture mismatch** — parses `manifest.v1.bad-fixture.json`,
+  asserts its `integrity.manifest_sha256` does NOT match the
+  recomputed SHA-256. This pins that the bad-fixture is genuinely
+  bad (i.e., someone hasn't accidentally edited it back into a
+  good-fixture without updating the SHA-256 to match).
+
+**Fixtures (NEW)**:
+
+- `scripts/ci/fixtures/manifest.v1.fixture.json` — minimal-valid
+  manifest: 1 scene, full clip + voiceover + subtitles objects,
+  `delivery_plan` with `drive`, `integrity.manifest_sha256` set
+  to the canonical-form SHA-256 of the body minus `integrity`.
+- `scripts/ci/fixtures/manifest.v1.bad-fixture.json` — same shape
+  as the good fixture but with a deliberately wrong SHA-256 (all
+  zeros) so the mismatch-pin assertion has something to assert
+  against. The fixture is the canonical example of
+  "manifest_ref was supplied but the hash doesn't match" — the
+  same shape an operator would see from a corrupted upload.
+
+#### Files added or modified
+
+- `docs/manifest-spec.md` (NEW, 12 sections, 19 561 bytes).
+- `scripts/ci/check-manifest-schema-canicality.sh` (NEW, executable
+  Python-free shell + `jq`, no third-party deps).
+- `scripts/ci/fixtures/manifest.v1.fixture.json` (NEW).
+- `scripts/ci/fixtures/manifest.v1.bad-fixture.json` (NEW).
+- `CHANGELOG.md` — this entry.
+
+#### Verified on `main` (pre-push)
+
+- `bash scripts/ci/check-manifest-schema-canicality.sh`: exit `0`,
+  full PASS (spec coverage + good-fixture integrity + bad-fixture
+  mismatch all green).
+- `python3 -c "import json, hashlib; ..."`: stated SHA-256
+  `e5090c2eec68a0edab87d649d4ca55b8782ab473bbb0aaaa7c5b071400e50c03`
+  matches the canonical-form SHA-256 byte-for-byte (paranoia check
+  that the fixture is not silently tampered with).
+- `ls -la scripts/ci/check-manifest-schema-canicality.sh
+  scripts/ci/fixtures/manifest.v1.fixture.json
+  scripts/ci/fixtures/manifest.v1.bad-fixture.json
+  docs/manifest-spec.md`: all four files present, validator
+  executable.
+
 ## [Unreleased] - 2026-07-27
 
 ### Validator extensibility — data-driven per-route invariants

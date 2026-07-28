@@ -1,0 +1,57 @@
+{
+  "schema_version": "velox.render-manifest.v1",
+  "manifest_id": "pg_e2e_canonicality_BAD_20260728_0001",
+  "created_at": "2026-07-28T14:30:00Z",
+  "source": {
+    "provider": "pipelinegen",
+    "pipelinegen_job_id": "pg_test_job_BAD_canonicality_001",
+    "generation_schema": 1
+  },
+  "video": {
+    "name": "CanonicalityFixture_BAD",
+    "language": "en",
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "output_format": "mp4"
+  },
+  "script": {
+    "text": "Negative-path fixture — integrity.manifest_sha256 is INTENTIONALLY wrong; the validator MUST fail this fixture.",
+    "google_doc_url": "https://docs.google.com/document/d/canonicality-test-fixture-bad/edit",
+    "language": "en"
+  },
+  "scenes": [
+    {
+      "scene_id": "scene-0",
+      "index": 0,
+      "kind": "intro",
+      "text": "Scene zero BAD canonical narration line.",
+      "duration_ms": 7200,
+      "clip": {
+        "asset_id": "clip_0_BAD",
+        "drive_file_id": "drivefile_clip_0_BAD",
+        "url": "https://drive.google.com/file/d/clip_0_BAD/view",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "start_ms": 0,
+        "end_ms": 7200,
+        "duration_ms": 7200
+      }
+    }
+  ],
+  "delivery_plan": [
+    {
+      "destination_id": "drive",
+      "priority": 1,
+      "retry_budget": 3,
+      "metadata": {
+        "folder_id": "drive_folder_BAD_canonicality"
+      }
+    }
+  ],
+  "integrity": {
+    "algorithm": "sha256",
+    "manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "scene_count": 1,
+    "total_duration_ms": 7200
+  }
+}
