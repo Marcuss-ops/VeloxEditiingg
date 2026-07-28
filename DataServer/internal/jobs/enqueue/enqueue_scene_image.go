@@ -63,10 +63,6 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 			voiceoverPaths = []string{src}
 		}
 	}
-	if len(voiceoverPaths) == 0 {
-		return nil, fmt.Errorf("voiceover_path or source_media is required")
-	}
-
 	sceneCount := len(sceneEntries)
 
 	jobID := payload.FirstString(rawPayload, "job_id", "script_id")
