@@ -1,0 +1,33 @@
+name: shellcheck
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  shellcheck:
+    name: shellcheck --severity=warning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+      - name: shellcheck on smoke harnesses
+        run: |
+          set -euo pipefail
+          shellcheck --severity=warning \
+            tests/smoke/full_payload/run.sh \
+            tests/worker-cert/smoke_one.sh \
+            tests/worker-cert/worker_offline_recovery.sh \
+            tests/worker-cert/restart_reconnect.sh \
+            tests/worker-cert/fleet_distribute.sh \
+            tests/worker-cert/perf_matrix.sh \
+            tests/worker-cert/assets_probe.sh \
+            tests/worker-cert/asset_dependency_check.sh \
+            tests/worker-cert/pass_criteria.sh \
+            scripts/api/jobs_smoke.sh \
+            scripts/creator_push_smoke.sh
