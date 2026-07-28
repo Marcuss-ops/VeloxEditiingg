@@ -512,10 +512,11 @@ func attachLegacySceneClipTimeline(out map[string]interface{}) {
 		scenes[i] = normalized
 
 		items = append(items, map[string]interface{}{
-			"type":     "video",
-			"url":      clipURL,
-			"duration": duration,
-			"fit":      "contain",
+			"type":          "video",
+			"url":           clipURL,
+			"duration":      duration,
+			"fit":           "contain",
+			"include_audio": true,
 		})
 		clips = append(clips, clipURL)
 
