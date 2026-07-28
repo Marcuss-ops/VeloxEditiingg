@@ -22,12 +22,22 @@ import (
 // newTestJobStack sets up the real persistence layer used by Phase 2 tests
 // (jobs.Writer + store.AtomicJobTaskCreator backed by the same *SQLiteStore).
 // Tests own their own DB via t.TempDir() so they're parallel-safe.
+//
+// Seeds delivery_destinations with `destination-main` so the canonical
+// delivery-plan preflight (parseDeliveryPlanPayload → validateDeliveryDestinationTx)
+// accepts the happy-path fixture plan that the four CreateJobWithPlan tests
+// share. The seed name matches validPlan().Payload["delivery_plan"][0] so
+// any test reading or asserting on the persisted delivery-plan row sees a
+// consistent id.
 func newTestJobStack(t *testing.T) (*store.SQLiteStore, *store.SQLiteJobRepository, *store.AtomicJobTaskCreator) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "velox.db")
 	db, err := store.NewSQLiteStore(dbPath)
 	if err != nil {
 		t.Fatalf("sqlite store: %v", err)
+	}
+	if _, err := db.DB().Exec(`INSERT INTO delivery_destinations (destination_id, provider, name, enabled, configuration_json, created_at, updated_at) VALUES ('destination-main', 'google_drive', 'Drive Main', 1, '{}', datetime('now'), datetime('now'))`); err != nil {
+		t.Fatalf("seed delivery_destinations: %v", err)
 	}
 	jobRepo := store.NewSQLiteJobRepository(db)
 	atomic := store.NewAtomicJobTaskCreator(db)
@@ -36,6 +46,13 @@ func newTestJobStack(t *testing.T) (*store.SQLiteStore, *store.SQLiteJobReposito
 
 // validPlan returns a baseline RenderPlan that satisfies validation. Tests
 // clone it and tweak the field under test (idempotency_key, payload, etc.).
+//
+// Payload carries an explicit `delivery_plan[]` so the canonical preflight
+// (parseDeliveryPlanPayload) accepts it without falling back to legacy fields.
+// The destination_id `destination-main` matches the seed in newTestJobStack so
+// the per-destination validator (validateDeliveryDestinationTx) doesn't reject
+// the plan; the row is shared across Idempotency / Concurrency / Rollback tests
+// so the schema state stays consistent with the fixture.
 func validPlan() RenderPlan {
 	return RenderPlan{
 		VideoName:      "Phase 2 Test Video",
@@ -48,6 +65,9 @@ func validPlan() RenderPlan {
 		Payload: map[string]interface{}{
 			"render_plan_id":  "rp-default",
 			"voiceover_paths": []string{"https://example.com/voice.mp3"},
+			"delivery_plan": []map[string]interface{}{
+				{"destination_id": "destination-main", "priority": 0, "retry_budget": 3, "enabled": true},
+			},
 		},
 	}
 }
