@@ -341,11 +341,19 @@ jobs:
         run: |
           set -euo pipefail
           IMAGE="${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
+          BUNDLE_HASH="$(tr -d '[:space:]' < RemoteCodex/BUNDLE_HASH.txt 2>/dev/null || echo '')"
           echo "Smoke testing entrypoint of: $IMAGE"
+          mkdir -p /tmp/velox-real-bootstrap/work
+          printf '%s\n' "$BUNDLE_HASH" > /tmp/velox-real-bootstrap/work/BUNDLE_HASH.txt
           docker run --rm -d \
             --name worker-smoke \
             -e VELOX_WORKER_ID=ci-smoke \
             -e VELOX_GRPC_MASTER_URL=127.0.0.1:9999 \
+            -e VELOX_ALLOW_INSECURE_GRPC_DEV=true \
+            -e VELOX_ENV=dev \
+            -e VELOX_BUNDLE_HASH="$BUNDLE_HASH" \
+            -v /tmp/velox-real-bootstrap:/var/lib/velox-worker \
+            -v /tmp/velox-real-bootstrap/worker_config.json:/opt/velox/worker_config.json:ro \
             -p 8081:8081 \
             "$IMAGE"
           sleep 5
