@@ -234,6 +234,105 @@ func TestNormalizeSceneVideoPayload_AttachesLegacyClipTimeline(t *testing.T) {
 	}
 }
 
+func TestNormalizeSceneVideoPayload_UsesNestedVoiceoverDurationForClipTimeline(t *testing.T) {
+	t.Parallel()
+
+	normalized, err := normalizeSceneVideoPayload(map[string]interface{}{
+		"video_name":  "Narrated clip smoke",
+		"script_text": "Narrated clip body.",
+		"voiceover_paths": []interface{}{
+			"velox-asset://voice-1",
+		},
+		"scenes": []interface{}{
+			map[string]interface{}{
+				"text":             "Scene 1",
+				"clip_link":        "velox-asset://clip-1",
+				"duration_seconds": float64(5),
+				"clip": map[string]interface{}{
+					"url":         "velox-asset://clip-1",
+					"duration_ms": float64(5000),
+				},
+				"voiceover": map[string]interface{}{
+					"url":         "velox-asset://voice-1",
+					"duration_ms": float64(24216),
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeSceneVideoPayload: %v", err)
+	}
+
+	items, ok := normalized["items"].([]map[string]interface{})
+	if !ok || len(items) != 1 {
+		t.Fatalf("items = %#v, want one timeline item", normalized["items"])
+	}
+	if got := asFloat(items[0]["duration"]); got != 24.216 {
+		t.Fatalf("items[0].duration = %v, want 24.216", got)
+	}
+	tracks, ok := normalized["audio_tracks"].([]map[string]interface{})
+	if !ok || len(tracks) != 1 {
+		t.Fatalf("audio_tracks = %#v, want one voiceover track", normalized["audio_tracks"])
+	}
+	if got := asFloat(tracks[0]["duration_seconds"]); got != 24.216 {
+		t.Fatalf("audio_tracks[0].duration_seconds = %v, want 24.216", got)
+	}
+	scenes, ok := normalized["scenes"].([]map[string]interface{})
+	if !ok || len(scenes) != 1 {
+		t.Fatalf("scenes = %#v, want one scene", normalized["scenes"])
+	}
+	if got := asFloat(scenes[0]["duration_seconds"]); got != 24.216 {
+		t.Fatalf("scenes[0].duration_seconds = %v, want 24.216", got)
+	}
+}
+
+func TestNormalizeSceneVideoPayload_PreservesVisualTimelineFields(t *testing.T) {
+	t.Parallel()
+
+	normalized, err := normalizeSceneVideoPayload(map[string]interface{}{
+		"video_name":  "Subtitle layer smoke",
+		"script_text": "Subtitle layer body.",
+		"voiceover_paths": []interface{}{
+			"velox-asset://voice-1",
+		},
+		"scenes": []interface{}{
+			map[string]interface{}{
+				"text":             "Scene 1",
+				"clip_link":        "velox-asset://clip-1",
+				"duration_seconds": float64(5),
+			},
+		},
+		"subtitle_tracks": []interface{}{
+			map[string]interface{}{
+				"source": "velox-asset://subtitles-1",
+				"preset": "active_word_pop",
+				"font":   "Inter",
+			},
+		},
+		"layers": []interface{}{
+			map[string]interface{}{
+				"id":               "important-1",
+				"type":             "text",
+				"role":             "important_phrase",
+				"text":             "Important",
+				"start_seconds":    float64(1),
+				"duration_seconds": float64(2),
+				"preset":           "important_phrase_v1",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeSceneVideoPayload: %v", err)
+	}
+
+	if got, ok := normalized["subtitle_tracks"].([]interface{}); !ok || len(got) != 1 {
+		t.Fatalf("subtitle_tracks = %#v, want one preserved track", normalized["subtitle_tracks"])
+	}
+	if got, ok := normalized["layers"].([]interface{}); !ok || len(got) != 1 {
+		t.Fatalf("layers = %#v, want one preserved layer", normalized["layers"])
+	}
+}
+
 func TestFlattenPipelineResult(t *testing.T) {
 	t.Parallel()
 	nested := map[string]interface{}{"ok": true, "result": map[string]interface{}{"title": "T", "text": "X"}}

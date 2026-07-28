@@ -429,6 +429,8 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 		"clips",
 		"items",
 		"audio_tracks",
+		"subtitle_tracks",
+		"layers",
 		"clip_segments",
 		"intro_clip_paths",
 		"stock_clip_paths",
@@ -482,9 +484,21 @@ func attachLegacySceneClipTimeline(out map[string]interface{}) {
 		if clipURL == "" {
 			return
 		}
+		voiceoverDuration := sceneVoiceoverDurationSeconds(scene)
+		clipDuration := sceneClipDurationSeconds(scene)
 		duration := payload.NormalizedDuration(scene["duration_seconds"])
+		if voiceoverDuration > 0 {
+			duration = voiceoverDuration
+			if clipDuration > duration {
+				duration = clipDuration
+			}
+		}
 		if duration <= 0 {
-			duration = 4.0
+			if clipDuration > 0 {
+				duration = clipDuration
+			} else {
+				duration = 4.0
+			}
 		}
 
 		normalized := make(map[string]interface{}, len(scene)+3)
@@ -505,11 +519,15 @@ func attachLegacySceneClipTimeline(out map[string]interface{}) {
 		clips = append(clips, clipURL)
 
 		if i < len(voiceovers) && strings.TrimSpace(voiceovers[i]) != "" {
+			trackDuration := duration
+			if voiceoverDuration > 0 {
+				trackDuration = voiceoverDuration
+			}
 			audioTracks = append(audioTracks, map[string]interface{}{
 				"source_url":        strings.TrimSpace(voiceovers[i]),
 				"volume":            1.0,
 				"start_time_offset": offsetSeconds,
-				"duration_seconds":  duration,
+				"duration_seconds":  trackDuration,
 				"role":              "voiceover",
 			})
 		}
@@ -526,6 +544,45 @@ func attachLegacySceneClipTimeline(out map[string]interface{}) {
 		out["audio_tracks"] = audioTracks
 	}
 	out["video_mode"] = "clip_stock"
+}
+
+func sceneVoiceoverDurationSeconds(scene map[string]interface{}) float64 {
+	if scene == nil {
+		return 0
+	}
+	if duration := payload.NormalizedDuration(scene["voiceover_duration_seconds"]); duration > 0 {
+		return duration
+	}
+	if nested, ok := scene["voiceover"].(map[string]interface{}); ok {
+		if duration := payload.NormalizedDuration(nested["duration_seconds"]); duration > 0 {
+			return duration
+		}
+		if ms := payload.NormalizedDuration(nested["duration_ms"]); ms > 0 {
+			return ms / 1000.0
+		}
+	}
+	return 0
+}
+
+func sceneClipDurationSeconds(scene map[string]interface{}) float64 {
+	if scene == nil {
+		return 0
+	}
+	if duration := payload.NormalizedDuration(scene["final_clip_duration_seconds"]); duration > 0 {
+		return duration
+	}
+	if duration := payload.NormalizedDuration(scene["clip_duration_seconds"]); duration > 0 {
+		return duration
+	}
+	if nested, ok := scene["clip"].(map[string]interface{}); ok {
+		if duration := payload.NormalizedDuration(nested["duration_seconds"]); duration > 0 {
+			return duration
+		}
+		if ms := payload.NormalizedDuration(nested["duration_ms"]); ms > 0 {
+			return ms / 1000.0
+		}
+	}
+	return 0
 }
 
 func syncAudioURLFromVoiceover(payloadMap map[string]interface{}) {
