@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# Central operator entry point for the Velox worker fleet.
+# Master API operations are authenticated with VELOX_ADMIN_TOKEN; the smoke
+# command delegates to the repository's real per-worker certification script.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MASTER_URL="${VELOX_MASTER_URL:-http://127.0.0.1:8000}"
+MASTER_URL="${MASTER_URL%/}"
+
+usage() {
+    cat <<'EOF'
+Usage:
+  scripts/fleetctl status [--json]
+  scripts/fleetctl inspect <worker_id>
+  scripts/fleetctl drain <worker_id> [reason]
+  scripts/fleetctl resume <worker_id> [reason]
+  scripts/fleetctl quarantine <worker_id> [reason]
+  scripts/fleetctl restart <worker_id> [reason]
+  scripts/fleetctl operations [worker_id] [status]
+  scripts/fleetctl smoke <worker_id>
+
+Environment:
+  VELOX_MASTER_URL   Master base URL (default: http://127.0.0.1:8000)
+  VELOX_ADMIN_TOKEN  Admin bearer token
+  TOKEN_FILE         File containing VELOX_ADMIN_TOKEN=<value>
+EOF
+}
+
+die() { printf 'fleetctl: %s\n' "$*" >&2; exit 2; }
+
+command=${1:-help}
+if [[ "$command" == "help" || "$command" == "--help" || "$command" == "-h" ]]; then
+    usage
+    exit 0
+fi
+
+resolve_token() {
+    if [[ -n "${VELOX_ADMIN_TOKEN:-}" ]]; then
+        printf '%s' "$VELOX_ADMIN_TOKEN"
+        return
+    fi
+    if [[ -n "${TOKEN_FILE:-}" && -r "$TOKEN_FILE" ]]; then
+        sed -n 's/^VELOX_ADMIN_TOKEN=//p' "$TOKEN_FILE" | head -n 1 \
+            | tr -d '\r' | sed "s/^['\"]//; s/['\"]$//"
+        return
+    fi
+    die 'VELOX_ADMIN_TOKEN or TOKEN_FILE is required'
+}
+
+TOKEN="$(resolve_token)"
+[[ -n "$TOKEN" ]] || die 'admin token is empty'
+
+api() {
+    local method=$1 path=$2 body=${3:-}
+    local args=(-fsS -X "$method" -H "Authorization: Bearer $TOKEN")
+    if [[ -n "$body" ]]; then
+        args+=(-H 'Content-Type: application/json' --data-raw "$body")
+    fi
+    curl "${args[@]}" "$MASTER_URL$path"
+}
+
+case "$command" in
+    status)
+        if [[ "${2:-}" == "--json" ]]; then
+            api GET /api/v1/admin/workers
+        else
+            rows=$(api GET /api/v1/admin/workers \
+                | jq -r '.workers[] | [.worker_id, (.health // .status // "UNKNOWN"), (.software_version // "-"), ((.active_jobs // 0 | tostring)+"/"+(.max_active_jobs // 0 | tostring)), (.last_smoke_status // "-")] | @tsv')
+            if command -v column >/dev/null 2>&1; then
+                printf '%s\n' "$rows" | column -t -s $'\t'
+            else
+                printf '%s\n' "$rows"
+            fi
+        fi
+        ;;
+    inspect)
+        worker_id=${2:-}
+        [[ -n "$worker_id" ]] || die 'worker_id is required'
+        api GET "/api/v1/admin/workers/$(printf '%s' "$worker_id" | jq -sRr @uri)" | jq .
+        ;;
+    drain|resume|quarantine)
+        worker_id=${2:-}
+        [[ -n "$worker_id" ]] || die 'worker_id is required'
+        reason=${3:-fleetctl-$command}
+        api POST "/api/v1/admin/workers/$(printf '%s' "$worker_id" | jq -sRr @uri)/$command" \
+            "$(jq -cn --arg reason "$reason" '{reason:$reason}')" | jq .
+        ;;
+    restart)
+        worker_id=${2:-}
+        [[ -n "$worker_id" ]] || die 'worker_id is required'
+        reason=${3:-fleetctl-restart}
+        api POST /worker/restart \
+            "$(jq -cn --arg id "$worker_id" --arg reason "$reason" '{worker_id:$id,reason:$reason}')" | jq .
+        ;;
+    operations)
+        path=/api/v1/admin/operations
+        [[ -n "${2:-}" ]] && path+="?worker_id=$(printf '%s' "$2" | jq -sRr @uri)"
+        if [[ -n "${3:-}" ]]; then
+            separator='?'
+            [[ "$path" == *\?* ]] && separator='&'
+            path+="${separator}status=$(printf '%s' "$3" | jq -sRr @uri)"
+        fi
+        api GET "$path" | jq .
+        ;;
+    smoke)
+        worker_id=${2:-}
+        [[ -n "$worker_id" ]] || die 'worker_id is required'
+        VELOX_MASTER_URL="$MASTER_URL" VELOX_ADMIN_TOKEN="$TOKEN" \
+            "$ROOT/tests/worker-cert/smoke_one.sh" "$worker_id"
+        ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac
