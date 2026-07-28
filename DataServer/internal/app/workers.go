@@ -16,6 +16,13 @@ import (
 )
 
 // WorkersModule provides worker management endpoints.
+//
+// Step 1/15 of the fleet-operator rollout adds `adminWorkersHandler`
+// (the canonical WorkerCard surface under /api/v1/admin/workers).
+// The new handler reads from the SAME registry as `workersHandler`
+// but mounts at a different URL and is guarded by adminAuth. Keeping
+// it co-resident with the diagnostic handler avoids duplicating the
+// route table or the registry wiring boilerplate.
 type WorkersModule struct {
 	reg                 *workersreg.Registry
 	adminAuth           gin.HandlerFunc
@@ -23,6 +30,7 @@ type WorkersModule struct {
 	workerUpdateHandler *workersapi.WorkerUpdateHandler
 	workerAssetHandler  *assets.Handler
 	workersHandler      *api.WorkersHandler
+	adminWorkersHandler *api.AdminWorkersHandler
 	metricsHandler      *api.MetricsHandler
 	sessionsHandler     *api.SessionsHandler
 	eventsHandler       *api.EventsHandler
@@ -41,6 +49,7 @@ func NewWorkersModule(cfg *config.Config, reg *workersreg.Registry, lifecycle *l
 		adminAuth:           adminAuth,
 		workerAssetHandler:  assets.NewHandler(cfg, tokenMgr, assetSvc, blobStore),
 		workersHandler:      api.NewWorkersHandler(reg),
+		adminWorkersHandler: api.NewAdminWorkersHandler(reg),
 	}
 }
 
@@ -112,6 +121,24 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 		if m.eventsHandler != nil {
 			v1Workers.GET("/:worker_id/events", m.eventsHandler.ListWorkerEvents())
 		}
+	}
+
+	// Step 1/15 — Fleet operator canonical WorkerCard endpoints.
+	// Distinct URL from /api/v1/workers (allowlist/diagnostic surface);
+	// these are gated explicitly by adminAuth (VELOX_ADMIN_TOKEN)
+	// so the operator dashboard never bypasses auth. The nil-guard
+	// mirrors the diagnostic surface's pattern: a misconfigured
+	// bootstrap that passes a nil handler keeps the route
+	// un-mounted rather than mounting a 503-on-every-request dead
+	// route. Same registry as the diagnostic surface — the only
+	// difference is shape (WorkerCard vs WorkerResponse) and auth.
+	if m.adminWorkersHandler != nil {
+		adminWorkers := r.Group("/api/v1/admin/workers")
+		if m.adminAuth != nil {
+			adminWorkers.Use(m.adminAuth)
+		}
+		adminWorkers.GET("", m.adminWorkersHandler.ListAdminWorkers())
+		adminWorkers.GET("/:worker_id", m.adminWorkersHandler.GetAdminWorker())
 	}
 
 	log.Printf("[WORKERS] Routes registered")

@@ -1,0 +1,165 @@
+// Package api — Step 1/15 fleet operator HTTP entry points.
+//
+// Two endpoints, distinct URL/auth from the diagnostic surface:
+//
+//	GET /api/v1/admin/workers           — operator fleet overview
+//	GET /api/v1/admin/workers/:worker_id — operator per-worker card
+//
+// URL and auth contrast:
+//
+//	/api/v1/workers             — diagnostic allowlist (operator UI)
+//	/api/v1/admin/workers       — adminAuth (VELOX_ADMIN_TOKEN)
+//
+// Both endpoints read from the SAME canonical source
+// (`workers.Registry`); only the field shape and the auth surface
+// differ. Keeping the two handlers in parallel preserves the security
+// posture of the diagnostic surface (no sensitive PII leak through the
+// allowlist bypass) while letting the operator dashboard safely drive
+// sequencing decisions through adminAuth.
+//
+// The handler is a thin shell — the `buildWorkerCard` mapper is pure
+// (no I/O, no auth) so the mapper is unit-test driven and any future
+// state-machine / digest derivation can land there without churn on
+// the HTTP layer.
+package api
+
+import (
+	"net/http"
+	"sort"
+	"strings"
+
+	"github.com/gin-gonic/gin"
+
+	workersreg "velox-server/internal/workers"
+)
+
+// AdminWorkersHandler holds the registry dependency for the operator-
+// facing GET /api/v1/admin/workers endpoints.
+//
+// Constructor takes a non-nil Registry; tests pass `nil` to exercise
+// the 503 path explicitly. Route registration in app/workers.go
+// skips the GET when the handler itself is nil so a misconfigured
+// bootstrap never accidentally mounts an admin endpoint.
+type AdminWorkersHandler struct {
+	reg *workersreg.Registry
+}
+
+// NewAdminWorkersHandler wires an AdminWorkersHandler to the worker
+// registry read model.
+func NewAdminWorkersHandler(reg *workersreg.Registry) *AdminWorkersHandler {
+	return &AdminWorkersHandler{reg: reg}
+}
+
+// ListAdminWorkers returns GET /api/v1/admin/workers — the canonical
+// fleet operator's view of every registered worker.
+//
+// Output is sorted by WorkerID (stable alpha) so dashboard consumers
+// do not flicker on each poll; the sort lives in the handler-boundary
+// so the underlying mapper can be re-ordered (e.g. by Health desc)
+// without re-churning the sort key.
+//
+// Failure modes:
+//
+//	reg == nil  → 503 Service Unavailable
+//	(empty reg) → 200 with `count=0, workers=[]` (legitimate empty
+//	              fleet state; the schema is stable for an empty array
+//	              so dashboards never see an envelope-only drift)
+func (h *AdminWorkersHandler) ListAdminWorkers() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if h.reg == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "worker registry not available"})
+			return
+		}
+		list := h.reg.List(c.Request.Context())
+		cards := make([]WorkerCard, 0, len(list))
+		for i := range list {
+			cards = append(cards, buildWorkerCard(&list[i]))
+		}
+		sort.Slice(cards, func(i, j int) bool {
+			return cards[i].WorkerID < cards[j].WorkerID
+		})
+		c.JSON(http.StatusOK, AdminWorkersListResponse{
+			Count:   len(cards),
+			Workers: cards,
+		})
+	}
+}
+
+// GetAdminWorker returns GET /api/v1/admin/workers/:worker_id — the
+// canonical fleet operator's view of a single worker, or 404 when
+// the worker is not registered.
+//
+// worker_id is trimmed because gin's path-param decoder passes
+// surrounding whitespace through verbatim; an empty trim is treated
+// as 400 (the path is syntactically valid but semantically empty)
+// rather than 404 to give the operator a faster diagnostic signal.
+//
+// Failure modes:
+//
+//	reg == nil                → 503 Service Unavailable
+//	empty worker_id (after trim) → 400 Bad Request
+//	unknown worker_id          → 404 Not Found
+func (h *AdminWorkersHandler) GetAdminWorker() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if h.reg == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "worker registry not available"})
+			return
+		}
+		workerID := strings.TrimSpace(c.Param("worker_id"))
+		if workerID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "worker_id path parameter is required"})
+			return
+		}
+		info := h.reg.GetWorker(c.Request.Context(), workerID)
+		if info == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "worker not found"})
+			return
+		}
+		c.JSON(http.StatusOK, buildWorkerCard(info))
+	}
+}
+
+// buildWorkerCard translates the registry read model into the
+// canonical WorkerCard. Pure function — no I/O, no auth — so the
+// mapper is unit-test driven and any future state-machine / digest
+// derivation can land here without churn on the HTTP layer.
+//
+// Source map documented in admin_workers_dto.go (WorkerCard doc).
+//
+// `software_version ← info.CodeVersion` (NOT BundleVersion) because
+// the operator's question is "what software is the worker running
+// right now", which is the worker-reported code version. The
+// staging-bundle label remains available through the diagnostic
+// WorkerResponse.BundleVersion field.
+//
+// executor flattening: deterministic by the FIRST advertised
+// executor. This matches `placement.ExecutorKey` selection
+// (dispatch master ranks candidates by the same first-entry rule,
+// see placement/model.go:NormalizeExecutorKey), so the operator view
+// and the dispatch view never disagree on which executor the
+// worker is currently running.
+func buildWorkerCard(info *workersreg.WorkerInfo) WorkerCard {
+	if info == nil {
+		return WorkerCard{}
+	}
+	metrics := ParseWorkerMetrics(info.Metrics)
+	var execID string
+	var execVer int32
+	if exs := extractExecutors(info.Capabilities); len(exs) > 0 {
+		execID = exs[0].ID
+		execVer = exs[0].Version
+	}
+	return WorkerCard{
+		WorkerID:        info.WorkerID,
+		Hostname:        sanitiseHostname(info.WorkerName),
+		Host:            sanitiseHostname(info.IPAddress),
+		Status:          info.ConnectionStatus,
+		SessionActive:   info.SessionActive,
+		Executor:        execID,
+		ExecutorVersion: execVer,
+		SoftwareVersion: info.CodeVersion,
+		LastHeartbeatAt: info.LastHB,
+		ActiveJobs:      metrics.ActiveTasks,
+		MaxActiveJobs:   metrics.TaskSlots,
+	}
+}

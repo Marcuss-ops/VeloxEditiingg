@@ -1,0 +1,103 @@
+// Package api — Step 1/15 of the fleet-operator rollout: the canonical
+// worker card DTO.
+//
+// The shape is intentionally distinct from the diagnostic WorkerResponse
+// (PR 4) — the admin card trades diagnostic depth for the fields a fleet
+// dashboard needs to decide when to drain, when to update, and when to
+// roll back. The two surfaces stay co-resident so a reformat of the
+// diagnostic response cannot accidentally leak into the admin endpoint.
+//
+// SECURITY posture (mirrors WorkerResponse, see OWNERSHIP.md §3):
+//
+//   - No secret, credential_hash, TLS file paths, worker secret, raw
+//     IPv4/IPv6 of internal interfaces.
+//   - `hostname` and `host` go through `sanitiseHostname()` (see
+//     workers_sanitise.go) which redacts IP addresses, long hex strings
+//     (≥40-char SHA halves), and credential paths before the value
+//     lands in the response.
+//   - `executor` and `executor_version` are flattened from the
+//     canonical `WorkerInfo.Capabilities["executors"][]` entry list —
+//     the same source the dispatcher uses to rank a worker, so the
+//     operator dashboard never sees a different "primary executor"
+//     than the dispatch master.
+package api
+
+// WorkerCard is the canonical fleet-operator-facing JSON shape for a
+// single registered worker.
+//
+// Schema policy. Fields already in the registry read model
+// (`workers.WorkerInfo`) are populated by `buildWorkerCard` (see
+// admin_workers_handler.go). Fields the fleet-controller commits
+// will materialise FIRST (image_digest §5, desired_version §5,
+// health §3, deployment_state §5, last_smoke_status §8/§9,
+// last_smoke_at §8/§9, last_restart_at §6) are intentionally LEFT
+// EMPTY with `omitempty`, so the JSON shape stays stable as those
+// commits land — dashboards do not have to fork their parsers when
+// an empty field starts carrying a value.
+//
+// SOURCE MAPPING (see `buildWorkerCard` for the canonical impl):
+//
+//	worker_id         WorkerInfo.WorkerID       (post-NormalizeWorkerID)
+//	hostname          sanitiseHostname(WorkerInfo.WorkerName)
+//	host              sanitiseHostname(WorkerInfo.IPAddress)
+//	status            WorkerInfo.ConnectionStatus  (canonical enum)
+//	session_active    WorkerInfo.SessionActive  (post-hydration)
+//	executor          WorkerInfo.Capabilities["executors"][0].id
+//	executor_version  WorkerInfo.Capabilities["executors"][0].version
+//	software_version  WorkerInfo.CodeVersion     (worker-reported code)
+//	last_heartbeat_at WorkerInfo.LastHB
+//	active_jobs       ParseWorkerMetrics(WorkerInfo.Metrics).ActiveTasks
+//	max_active_jobs   ParseWorkerMetrics(WorkerInfo.Metrics).TaskSlots
+//
+// Empty until fleet-controller commits populate:
+//
+//	image_digest      followup §5  - deployment record ledger
+//	desired_version   followup §5  - desired-state store
+//	health            followup §3  - state machine derivation
+//	deployment_state  followup §5  - deployment record
+//	last_smoke_status followup §8/§9 - smoke ledger
+//	last_smoke_at     followup §8/§9 - smoke ledger
+//	last_restart_at   followup §6  - restart ledger
+//
+// `software_version` is intentionally mapped to CodeVersion (NOT
+// BundleVersion) because the operator's dashboard question is
+// "what software is the worker running right now" — the worker-
+// reported code version — not "what bundle was the master staging".
+// BundleVersion remains available through the diagnostic
+// /api/v1/workers endpoint if the operator needs the staging context.
+//
+// `last_restart_at` is intentionally LEFT EMPTY (no BootTS fallback)
+// because `WorkerInfo.BootTS` is "when the worker process started",
+// which is semantically distinct from "when the Fleet Controller
+// restarted the worker". Using BootTS here would mislead the operator
+// when the worker self-restarts due to a crash; the field's semantic
+// contract belongs to step §6 of the rollout.
+type WorkerCard struct {
+	WorkerID        string `json:"worker_id"`
+	Hostname        string `json:"hostname"`
+	Host            string `json:"host"`
+	Status          string `json:"status"`
+	SessionActive   bool   `json:"session_active"`
+	Executor        string `json:"executor"`
+	ExecutorVersion int32  `json:"executor_version"`
+	ImageDigest     string `json:"image_digest,omitempty"`
+	SoftwareVersion string `json:"software_version"`
+	DesiredVersion  string `json:"desired_version,omitempty"`
+	LastHeartbeatAt string `json:"last_heartbeat_at,omitempty"`
+	ActiveJobs      int32  `json:"active_jobs"`
+	MaxActiveJobs   int32  `json:"max_active_jobs"`
+	Health          string `json:"health,omitempty"`
+	DeploymentState string `json:"deployment_state,omitempty"`
+	LastSmokeStatus string `json:"last_smoke_status,omitempty"`
+	LastSmokeAt     string `json:"last_smoke_at,omitempty"`
+	LastRestartAt   string `json:"last_restart_at,omitempty"`
+}
+
+// AdminWorkersListResponse is the JSON envelope for
+// GET /api/v1/admin/workers. The `count` field is a convenience for
+// dashboards; `len(workers)` is the canonical count and the two MUST
+// agree on every response (handler-side invariant, asserted by test).
+type AdminWorkersListResponse struct {
+	Count   int          `json:"count"`
+	Workers []WorkerCard `json:"workers"`
+}
