@@ -278,6 +278,8 @@ jobs:
             | .allow_insecure_grpc_dev = true
           ' deploy/runtime/worker_config.example.json \
             > /tmp/velox-real-bootstrap/worker_config.json
+          mkdir -p /tmp/velox-real-bootstrap/work
+          printf '%s\n' "$BUNDLE_HASH" > /tmp/velox-real-bootstrap/work/BUNDLE_HASH.txt
           set +e
           docker run --rm \
             --name worker-real-bootstrap \
@@ -308,9 +310,10 @@ jobs:
           printf '%s\n' "$JSON"
           echo "--- /[BOOTSTRAP_REPORT] ---"
           printf '%s' "$JSON" > /tmp/velox-real-bootstrap/bootstrap-report.json
-          printf '%s' "$JSON" | python3 - <<'PYEOF'
+          BOOTSTRAP_JSON="$JSON" python3 - <<'PYEOF'
           import json, sys
-          d = json.load(sys.stdin)
+          import os
+          d = json.loads(os.environ["BOOTSTRAP_JSON"])
           verdict = d.get("verdict", "UNKNOWN")
           steps = {s.get("name"): s.get("status") for s in d.get("steps", [])}
           required = ("bundle_hash", "ffmpeg", "output_dir", "engine_self_render")
