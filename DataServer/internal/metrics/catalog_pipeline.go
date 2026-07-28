@@ -53,6 +53,23 @@ func pipelineMetricDefinitions() []MetricDefinition {
 			Name: "pipeline.creator_intake_accepted_total", Unit: "count", Component: CompPipeline, Kind: KindCounter,
 			Description: "Total number of creator payloads accepted by the master, split by intake path. Label cardinality is bounded — only 'creator_push' (HTTP endpoint /api/v1/creator/jobs) and 'creator_forwarder' (async CreatorForwardingRunner) are valid values. The 'remote_engine_legacy' label was retired when /api/remote/pipeline was fully removed from main (see docs/CREATOR-PUSH.md §Removal).",
 		},
+		// ── Legacy body-shape warning (POST /api/v1/jobs pre-manifest_ref) ─
+		// Fires when a client submits a legacy compatibility body
+		// (top-level voiceover_paths[] / scenes[N].clip_link / subtitle_tracks)
+		// WITHOUT supplying a manifest_ref. The body is still accepted (the
+		// emit is non-blocking; the resolver handles it via the canonical
+		// compat-shape path) so existing PipelineGen clients keep working
+		// until they migrate to the manifest_ref contract; the counter is the
+		// operator-visible signal that migration is overdue.
+		//
+		// Bounded label set: only "client_kind" (today only
+		// "pipelinegen_pre_manifest_ref"; future values may include
+		// e.g. "internal_legacy_test_harness"). High-cardinality labels
+		// (idempotency_key, job_id) belong in structured logs, not here.
+		{
+			Name: "pipeline.legacy_body_shape_total", Unit: "count", Component: CompPipeline, Kind: KindCounter,
+			Description: "Total number of POST /api/v1/jobs submissions that arrived with the legacy compatibility body shape (top-level voiceover_paths[] OR scenes[N].clip_link OR subtitle_tracks[]) WITHOUT manifest_ref. The submission is still accepted (non-blocking warning) so existing clients that have not migrated to the manifest_ref contract continue to work; the counter is the operator-visible signal that migration is overdue. Label cardinality is bounded — only 'client_kind' with documented values.",
+		},
 		// ── Native process (C++ engine subprocess) ───────────────────────
 		{
 			Name: "native.total_ms", Unit: "ms", Component: CompNative, Kind: KindHistogram,

@@ -575,6 +575,100 @@ guard. Three sections in sequence:
   docs/manifest-spec.md`: all four files present, validator
   executable.
 
+### Legacy-body-shape warning on POST /api/v1/jobs
+
+`POST /api/v1/jobs` now emits a non-blocking warning when a client
+submits the pre-`manifest_ref` compatibility body shape WITHOUT
+a `manifest_ref`. The submission still passes through the canonical
+resolver path; the warning is the operator-visible signal that
+PipelineGen migration to `manifest_ref` is overdue.
+
+**Detection criteria** (any of):
+- `voiceover_paths` (top-level array, non-empty).
+- any `scenes[i].clip_link` non-empty after trim.
+- `subtitle_tracks` (top-level array, non-empty).
+
+A scene carrying the new nested `clip{}` / `voiceover{}` /
+`subtitles{}` objects is NOT a legacy-shape signal (the per-scene
+enrichment is the migration target). A body that ALSO supplies
+`manifest_ref` is also NOT a legacy-shape signal — the client has
+migrated and the resolver will use the manifest side instead.
+
+**Structured warning surfaces**:
+
+- **Metric** — `pipeline.legacy_body_shape_total{client_kind="pipelinegen_pre_manifest_ref"}`.
+  New catalog entry (`DataServer/internal/metrics/catalog_pipeline.go`),
+  bounded `client_kind` label enum (today only
+  `pipelinegen_pre_manifest_ref`; future values are additive). The
+  counter is the dashboard signal — operators compute the
+  migration rate over time by `rate(pipeline_legacy_body_shape_total[1d])`,
+  with the goal of trending to zero as PipelineGen migrates.
+- **Log** — `pipelineLog("LEGACY_BODY_WARNING client_kind=… idempotency_hash=… voiceover_paths=N scenes_with_clip_link=N subtitle_tracks=N manifest_ref=absent")`
+  via `DataServer/internal/handlers/server/pipeline/job_submit.go::NormalizeExternalJobSubmission`.
+  Carries the per-scene distribution count so operators can see
+  the compat-shape breakdown in the structured log without
+  grepping every scene.
+- **No gate** — the warning emission is INTENTIONALLY NON-BLOCKING.
+  Existing PipelineGen clients (and any other compat-shape
+  producer) keep working until they migrate; only the operator-
+  visible signal fires.
+
+**API surface change** — `NormalizeExternalJobSubmission` is now
+a method on `*Handlers` (`DataServer/internal/handlers/server/pipeline/job_submit.go`)
+so it can call `h.legacyBodySinkOrNoop()` from the emit site. The
+call site in the `SubmitJob` handler updates accordingly
+(`h.NormalizeExternalJobSubmission(req)`). All existing test sites
+in `job_submit_test.go` + `normalize_test.go` (9 call sites
+total) update to `(&Handlers{}).NormalizeExternalJobSubmission(req)`
+— mechanical, one-character change per call site. No wire-contract
+drift: the public `SubmitJob` HTTP surface is unchanged.
+
+**Composition root** — `DataServer/cmd/server/router.go` wires
+`velmetrics.NewLegacyBodySink()` into the pipeline handler chain
+via `.WithLegacyBodySink(...)`. Mirrors the existing
+`WithIntakeSink(...)` wiring pattern (`creator_intake.go`).
+
+#### Files added or modified
+
+- `DataServer/internal/metrics/catalog_pipeline.go` — new
+  `pipeline.legacy_body_shape_total` MetricDefinition.
+- `DataServer/internal/metrics/legacy_body_shape.go` (NEW) —
+  CounterFamily + `LegacyBodySink` interface + `LegacyBodySinkImpl`
+  production type + `NewLegacyBodySink()` constructor. Mirrors
+  `creator_intake.go` byte-for-byte.
+- `DataServer/internal/handlers/server/pipeline/legacy_body_shape_sink.go` (NEW) —
+  `LegacyBodySinkClientKindPreManifestRef` constant + handler-side
+  `LegacyBodySink` interface + `noopLegacyBodySink{}`.
+- `DataServer/internal/handlers/server/pipeline/handlers.go` —
+  `legacyBodySink` field on `Handlers` struct + `WithLegacyBodySink()`
+  mutator.
+- `DataServer/internal/handlers/server/pipeline/job_submit.go` —
+  `NormalizeExternalJobSubmission` converted to a method on
+  `*Handlers`; legacy-shape detection + emission at the top of
+  the method; pure helpers `isLegacyCompatShape(req)` +
+  `countScenesWithClipLink(scenes)` + accessor
+  `legacyBodySinkOrNoop()`. `SubmitJob` handler call site
+  updated.
+- `DataServer/internal/handlers/server/pipeline/job_submit_test.go` —
+  4 call-site updates (mechanical).
+- `DataServer/internal/handlers/server/pipeline/normalize_test.go` —
+  5 call-site updates (mechanical).
+- `DataServer/internal/handlers/server/pipeline/legacy_body_warning_test.go` (NEW) —
+  11 sub-tests covering the full matrix: sink wired/nil/explicit-nil,
+  isLegacyCompatShape positive + negative branches + whitespace trim +
+  nested-Clip negative + combination, countScenesWithClipLink
+  boundaries, integration (legacy-emits-warning, manifest_ref-
+  suppresses, no-legacy-no-warning, no-sink-still-works,
+  clip_link-alone, subtitle_tracks-alone), constant value lock.
+- `DataServer/cmd/server/router.go` — wires `velmetrics.NewLegacyBodySink()`.
+- `CHANGELOG.md` — this entry.
+
+#### Verified on `main` (pre-push)
+
+- `cd DataServer && go vet ./...`: PASS (exit 0).
+- `cd DataServer && go build ./...`: PASS (exit 0).
+- `cd DataServer && go test -count=1 -run 'TestWithLegacyBodySink|TestIsLegacyCompatShape|TestCountScenesWithClipLink|TestNormalizeExternalJobSubmission_LegacyBodyEmitsWarning|TestNormalizeExternalJobSubmission_ManifestRefSuppressedWarning|TestNormalizeExternalJobSubmission_NoLegacyFieldsNoWarning|TestNormalizeExternalJobSubmission_NoSinkStillWorks|TestNormalizeExternalJobSubmission_ClipLinkAloneTriggers|TestLegacyBodySinkClientKindPreManifestRef_Value|TestNormalizeExternalJobSubmission_SubtitleTracksAloneTriggers|TestNormalizeExternalJobSubmission_ProducesCanonicalPayload|TestNormalizeExternalJobSubmission_MatchesCreatorPushShape|TestNormalizeExternalJobSubmission_OmittedRetryBudgetDefaultsToThree|TestNormalizeExternalJobSubmission_ExplicitRetryBudgetZeroPreserved|TestNormalizeExternalJobSubmission_PerSceneVoiceoverNotPositionCoupled|TestNormalizeExternalJobSubmission_PerSceneClipAndSubtitlesRoundtrip|TestIntakeSinkOrNoop|TestCatalog_NoDuplicateNames|TestValidateMetricName' ./internal/handlers/server/pipeline/... ./internal/metrics/...`: PASS (all suites green; the existing `intakeSink` + `TestCatalog_*` invariants hold after the catalog addition).
+
 ## [Unreleased] - 2026-07-27
 
 ### Validator extensibility — data-driven per-route invariants

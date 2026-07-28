@@ -60,7 +60,7 @@ func TestNormalizeExternalJobSubmission_ProducesCanonicalPayload(t *testing.T) {
 		},
 	}
 
-	canonical := NormalizeExternalJobSubmission(req)
+	canonical := (&Handlers{}).NormalizeExternalJobSubmission(req)
 	if canonical == nil {
 		t.Fatal("NormalizeExternalJobSubmission returned nil canonical")
 	}
@@ -182,7 +182,7 @@ func TestNormalizeExternalJobSubmission_MatchesCreatorPushShape(t *testing.T) {
 		},
 	}
 
-	submitCanonical := NormalizeExternalJobSubmission(submitReq)
+	submitCanonical := (&Handlers{}).NormalizeExternalJobSubmission(submitReq)
 	creatorCanonical, err := normalizeCreatorPushRequest(creatorReq)
 	if err != nil {
 		t.Fatalf("normalizeCreatorPushRequest: %v", err)
@@ -463,7 +463,7 @@ func TestNormalizeExternalJobSubmission_OmittedRetryBudgetDefaultsToThree(t *tes
 		},
 	}
 
-	canonical := NormalizeExternalJobSubmission(req)
+	canonical := (&Handlers{}).NormalizeExternalJobSubmission(req)
 	dp, ok := canonical.WorkerPayload["delivery_plan"].([]interface{})
 	if !ok || len(dp) != 1 {
 		t.Fatalf("delivery_plan shape wrong: %v", canonical.WorkerPayload["delivery_plan"])
@@ -502,7 +502,7 @@ func TestNormalizeExternalJobSubmission_ExplicitRetryBudgetZeroPreserved(t *test
 		},
 	}
 
-	canonical := NormalizeExternalJobSubmission(req)
+	canonical := (&Handlers{}).NormalizeExternalJobSubmission(req)
 	dp, ok := canonical.WorkerPayload["delivery_plan"].([]interface{})
 	if !ok || len(dp) != 1 {
 		t.Fatalf("delivery_plan shape wrong: %v", canonical.WorkerPayload["delivery_plan"])

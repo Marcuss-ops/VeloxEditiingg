@@ -23,14 +23,15 @@ import (
 // so the HTTP handler converges with the CreatorForwardingRunner on
 // the same (job_id, forwarding_id).
 type Handlers struct {
-	cfg          *config.Config
-	enqueuer     *enqueue.Enqueuer
-	client       *remoteengine.Client
-	resolver     *creatorflow.Resolver
-	jobs         JobsDeps
-	store        *store.SQLiteStore
-	intakeSink   CreatorIntakeSink
-	assetService *voiceoverassets.AssetService
+	cfg             *config.Config
+	enqueuer        *enqueue.Enqueuer
+	client          *remoteengine.Client
+	resolver        *creatorflow.Resolver
+	jobs            JobsDeps
+	store           *store.SQLiteStore
+	intakeSink      CreatorIntakeSink
+	legacyBodySink  LegacyBodySink
+	assetService    *voiceoverassets.AssetService
 }
 
 // JobsDeps bundles the optional jobs-layer dependencies used by
@@ -149,6 +150,18 @@ func (h *Handlers) WithStore(db *store.SQLiteStore) *Handlers {
 // boot with velmetrics.NewCreatorIntakeSink(); tests pass a mock.
 func (h *Handlers) WithIntakeSink(sink CreatorIntakeSink) *Handlers {
 	h.intakeSink = sink
+	return h
+}
+
+// WithLegacyBodySink wires a LegacyBodySink into the Handlers so the
+// POST /api/v1/jobs path can record legacy-body-shape warnings (the
+// pre-manifest_ref compat-shape submissions that PipelineGen emits
+// until the manifest_ref migration lands). Passing nil is a noop
+// (the handler falls back to noopLegacyBodySink). The composition
+// root calls this once at boot with
+// velmetrics.NewLegacyBodySink(); tests pass a mock.
+func (h *Handlers) WithLegacyBodySink(sink LegacyBodySink) *Handlers {
+	h.legacyBodySink = sink
 	return h
 }
 

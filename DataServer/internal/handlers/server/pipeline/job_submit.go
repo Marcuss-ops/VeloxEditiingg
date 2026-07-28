@@ -140,6 +140,93 @@ func containsString(haystack []string, needle string) bool {
 	return false
 }
 
+// per-scene nested-asset map builders used by submitRequestToRawPayload.
+// Each builder returns nil if the source struct is nil so the caller
+// can simply append the result to the scene map under the canonical
+// nested key (clip / voiceover / subtitles) without an extra nil-check.
+//
+// Trim policy: URL-bearing fields are TrimSpace'd to match the
+// identity-field trim policy (job_submit.go::submitRequestToRawPayload
+// "Trim policy" block). Asset-id and language are passed verbatim
+// (they're not URL-shaped so the parser doesn't care about whitespace).
+func clipToMap(c *SubmitClip) map[string]interface{} {
+	if c == nil {
+		return nil
+	}
+	out := map[string]interface{}{}
+	if c.AssetID != "" {
+		out["asset_id"] = c.AssetID
+	}
+	if c.DriveFileID != "" {
+		out["drive_file_id"] = c.DriveFileID
+	}
+	if c.URL != "" {
+		out["url"] = strings.TrimSpace(c.URL)
+	}
+	if c.SHA256 != "" {
+		out["sha256"] = c.SHA256
+	}
+	if c.StartMS > 0 {
+		out["start_ms"] = c.StartMS
+	}
+	if c.EndMS > 0 {
+		out["end_ms"] = c.EndMS
+	}
+	if c.DurationMS > 0 {
+		out["duration_ms"] = c.DurationMS
+	}
+	return out
+}
+
+func voiceoverToMap(v *SubmitVoiceover) map[string]interface{} {
+	if v == nil {
+		return nil
+	}
+	out := map[string]interface{}{}
+	if v.AssetID != "" {
+		out["asset_id"] = v.AssetID
+	}
+	if v.DriveFileID != "" {
+		out["drive_file_id"] = v.DriveFileID
+	}
+	if v.URL != "" {
+		out["url"] = strings.TrimSpace(v.URL)
+	}
+	if v.SHA256 != "" {
+		out["sha256"] = v.SHA256
+	}
+	if v.DurationMS > 0 {
+		out["duration_ms"] = v.DurationMS
+	}
+	if v.Language != "" {
+		out["language"] = v.Language
+	}
+	return out
+}
+
+func subtitlesToMap(s *SubmitSubtitles) map[string]interface{} {
+	if s == nil {
+		return nil
+	}
+	out := map[string]interface{}{}
+	if s.AssetID != "" {
+		out["asset_id"] = s.AssetID
+	}
+	if s.Format != "" {
+		out["format"] = s.Format
+	}
+	if s.URL != "" {
+		out["url"] = strings.TrimSpace(s.URL)
+	}
+	if s.SHA256 != "" {
+		out["sha256"] = s.SHA256
+	}
+	if s.Language != "" {
+		out["language"] = s.Language
+	}
+	return out
+}
+
 // SubmitJobRequest is the simplified, versioned API contract for
 // POST /api/v1/jobs. It allows external systems to submit complete
 // video jobs without going through the Creator intermediary.
@@ -213,6 +300,21 @@ type SubmitJobRequest struct {
 //   - DurationSeconds in [MinSceneDurationSeconds,
 //     MaxSceneDurationSeconds] (i.e. [0.1, 86400] seconds).
 //
+// Per-scene enrichment (Phase 2 of the render-manifest plan): the
+// Clip / Voiceover / Subtitles nested objects REPLACE the legacy
+// position-coupled relationship where `voiceover_paths[N]` matched
+// `scenes[N]` by index (a fragile contract that broke when a scene
+// was reordered or removed). A single scene now carries its own
+// clip / voiceover / subtitles assets directly; the worker reads
+// them from `scenes_json[i].voiceover.url` (and .clip, .subtitles)
+// instead of relying on a top-level positional array.
+//
+// All three nested objects are POINTERS so that a client that supplies
+// `{}` (the parent object with no nested keys) is distinguishable from
+// the "scene carries no clip/vo/sub" case (pointer nil). The
+// handler-side validator rejects the empty-object case with three
+// aggregated 422 violations.
+//
 // ValidateSubmitJobRequest (in this file) runs the per-scene check
 // and aggregates failures into a single 422 with details pointing at
 // the offending index.
@@ -221,7 +323,30 @@ type SubmitScene struct {
 	// non-empty after trim.
 	Text string `json:"text"`
 
+	// SceneID is the canonical client-supplied scene identifier
+	// (e.g. "scene-0"). Optional; used by callers that track scene
+	// identity across requests.
+	SceneID string `json:"scene_id,omitempty"`
+
+	// Index is the scene's position in the video timeline. Optional;
+	// the validator does not require continuity (a caller that
+	// supplies only every other index is fine). Worker consumers
+	// use scenes_json's array order as the canonical timeline
+	// regardless of this field's value. Parity: int64 (matches
+	// apiwire.SubmitScene.Index; the bridge into
+	// remoteengine.SceneResult.Index is uniform, so a future
+	// cross-package cast won't trip on the int->int64 widening).
+	Index int64 `json:"index,omitempty"`
+
+	// Kind is the scene's role tag (e.g. "intro", "clip", "outro").
+	// Free-form string for forward-compatibility; the validator
+	// caps it at 32 bytes.
+	Kind string `json:"kind,omitempty"`
+
 	// ClipLink is a velox-asset:// clip URI or reachable URL.
+	// PRESERVED for back-compat with legacy clients; when both
+	// ClipLink and Clip.URL are supplied, the nested form wins
+	// (submitRequestToRawPayload's documented tie-break).
 	ClipLink string `json:"clip_link,omitempty"`
 
 	// ImageLink is an optional image fallback.
@@ -230,6 +355,55 @@ type SubmitScene struct {
 	// DurationSeconds is the intended duration of the scene. Must be
 	// in [MinSceneDurationSeconds, MaxSceneDurationSeconds].
 	DurationSeconds float64 `json:"duration_seconds"`
+
+	// Clip is the per-scene clip asset reference (Phase 2 of the
+	// render-manifest plan). Pointer nil = "no clip for this scene".
+	// Pointer non-nil with empty body = rejected with aggregated 422.
+	Clip *SubmitClip `json:"clip,omitempty"`
+
+	// Voiceover is the per-scene voiceover asset reference. Same
+	// pointer semantics as Clip. The nested form REPLACES the legacy
+	// top-level voiceover_paths[N] positional coupling.
+	Voiceover *SubmitVoiceover `json:"voiceover,omitempty"`
+
+	// Subtitles is the per-scene subtitles asset reference. Same
+	// pointer semantics as Clip.
+	Subtitles *SubmitSubtitles `json:"subtitles,omitempty"`
+}
+
+// SubmitClip is the per-scene clip asset reference nested inside
+// SubmitScene. Mirrors apiwire.SubmitClip (no validate tags here —
+// the handler-side ValidateSubmitJobRequest runs the shape checks
+// when Clip != nil).
+type SubmitClip struct {
+	AssetID     string `json:"asset_id,omitempty"`
+	DriveFileID string `json:"drive_file_id,omitempty"`
+	URL         string `json:"url,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
+	StartMS     int64  `json:"start_ms,omitempty"`
+	EndMS       int64  `json:"end_ms,omitempty"`
+	DurationMS  int64  `json:"duration_ms,omitempty"`
+}
+
+// SubmitVoiceover is the per-scene voiceover asset reference nested
+// inside SubmitScene. Same pointer indirection contract as SubmitClip.
+type SubmitVoiceover struct {
+	AssetID     string `json:"asset_id,omitempty"`
+	DriveFileID string `json:"drive_file_id,omitempty"`
+	URL         string `json:"url,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
+	DurationMS  int64  `json:"duration_ms,omitempty"`
+	Language    string `json:"language,omitempty"`
+}
+
+// SubmitSubtitles is the per-scene subtitles asset reference nested
+// inside SubmitScene.
+type SubmitSubtitles struct {
+	AssetID  string `json:"asset_id,omitempty"`
+	Format   string `json:"format,omitempty"`
+	URL      string `json:"url,omitempty"`
+	SHA256   string `json:"sha256,omitempty"`
+	Language string `json:"language,omitempty"`
 }
 
 // SubmitLayer is the API representation of one independent Chronon layer.
@@ -427,6 +601,112 @@ func ValidateSubmitJobRequest(req SubmitJobRequest) (*SubmitJobValidationError, 
 				"max":      MaxSceneDurationSeconds,
 				"observed": s.DurationSeconds,
 			})
+		}
+	}
+
+	// Per-scene nested-asset validation. Runs ONLY when the scene
+	// at index i has a non-nil Clip / Voiceover / Subtitles
+	// pointer. A nil pointer is the canonical "scene carries no
+	// clip/vo/sub" path and MUST pass silently — legacy clients
+	// never sent nested objects, so every existing client is
+	// unaffected by the new fields' presence.
+	//
+	// Shape rules (matching apiwire validate tags):
+	//   - URL: must be non-empty after trim and must match the
+	//     http(s) + velox-asset:// scheme allow-list (same regex
+	//     used for manifest_ref.url; the SSRF blocklist layer
+	//     downstream enforces the egress policy separately).
+	//   - SHA256: must be exactly 64 lowercase hex chars.
+	//   - Subtitles.format: closed enum (ass / srt / vtt).
+	//   - Language: 2-byte ISO 639-1 (best-effort — not strictly
+	//     validated against the full ISO list; an empty string is
+	//     permitted because the worker can fall back to the
+	//     project default).
+	//
+	// An empty-object nested (pointer non-nil with all fields
+	// empty) is rejected with at least one violation per nested
+	// object that has an empty URL — the canonical "client sent
+	// {}" shape must not silently pass.
+	for i, s := range req.Scenes {
+		if s.Clip != nil {
+			pathPrefix := fmt.Sprintf("scenes.%d.clip", i)
+			if trimmed := strings.TrimSpace(s.Clip.URL); trimmed == "" {
+				details = append(details, gin.H{
+					"path":  pathPrefix + ".url",
+					"issue": "empty",
+				})
+			} else if !manifestRefURLRegexp.MatchString(trimmed) {
+				details = append(details, gin.H{
+					"path":     pathPrefix + ".url",
+					"issue":    "unsupported_scheme",
+					"observed": trimmed,
+					"allowed":  []string{"https://", "http://", "velox-asset://"},
+				})
+			}
+			if s.Clip.SHA256 != "" && !manifestRefSHA256Regexp.MatchString(s.Clip.SHA256) {
+				details = append(details, gin.H{
+					"path":     pathPrefix + ".sha256",
+					"issue":    "malformed",
+					"observed": s.Clip.SHA256,
+					"expected": "64 lowercase hex characters ([0-9a-f]{64})",
+				})
+			}
+		}
+		if s.Voiceover != nil {
+			pathPrefix := fmt.Sprintf("scenes.%d.voiceover", i)
+			if trimmed := strings.TrimSpace(s.Voiceover.URL); trimmed == "" {
+				details = append(details, gin.H{
+					"path":  pathPrefix + ".url",
+					"issue": "empty",
+				})
+			} else if !manifestRefURLRegexp.MatchString(trimmed) {
+				details = append(details, gin.H{
+					"path":     pathPrefix + ".url",
+					"issue":    "unsupported_scheme",
+					"observed": trimmed,
+					"allowed":  []string{"https://", "http://", "velox-asset://"},
+				})
+			}
+			if s.Voiceover.SHA256 != "" && !manifestRefSHA256Regexp.MatchString(s.Voiceover.SHA256) {
+				details = append(details, gin.H{
+					"path":     pathPrefix + ".sha256",
+					"issue":    "malformed",
+					"observed": s.Voiceover.SHA256,
+					"expected": "64 lowercase hex characters ([0-9a-f]{64})",
+				})
+			}
+		}
+		if s.Subtitles != nil {
+			pathPrefix := fmt.Sprintf("scenes.%d.subtitles", i)
+			if trimmed := strings.TrimSpace(s.Subtitles.URL); trimmed == "" {
+				details = append(details, gin.H{
+					"path":  pathPrefix + ".url",
+					"issue": "empty",
+				})
+			} else if !manifestRefURLRegexp.MatchString(trimmed) {
+				details = append(details, gin.H{
+					"path":     pathPrefix + ".url",
+					"issue":    "unsupported_scheme",
+					"observed": trimmed,
+					"allowed":  []string{"https://", "http://", "velox-asset://"},
+				})
+			}
+			if s.Subtitles.SHA256 != "" && !manifestRefSHA256Regexp.MatchString(s.Subtitles.SHA256) {
+				details = append(details, gin.H{
+					"path":     pathPrefix + ".sha256",
+					"issue":    "malformed",
+					"observed": s.Subtitles.SHA256,
+					"expected": "64 lowercase hex characters ([0-9a-f]{64})",
+				})
+			}
+			if s.Subtitles.Format != "" && !containsString([]string{"ass", "srt", "vtt"}, s.Subtitles.Format) {
+				details = append(details, gin.H{
+					"path":     pathPrefix + ".format",
+					"issue":    "unsupported_value",
+					"observed": s.Subtitles.Format,
+					"allowed":  []string{"ass", "srt", "vtt"},
+				})
+			}
 		}
 	}
 
@@ -744,7 +1024,7 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 		// This is the SAME path creator_push's normalizeCreatorPushRequest
 		// takes, so the resolver sees one canonical shape regardless of
 		// the producer (creator workstation vs external /api/v1/jobs).
-		canonical := NormalizeExternalJobSubmission(req)
+		canonical := h.NormalizeExternalJobSubmission(req)
 
 		// Delegate to the same resolver used by CreatorPush.
 		forwarded, err := h.resolveCompletedPayload(
@@ -974,7 +1254,42 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 // participate in dedup / URL parsing downstream. Do NOT trim
 // ScriptText or scene `text` — these are CONTENT fields where
 // legitimate whitespace might be present.
-func NormalizeExternalJobSubmission(req SubmitJobRequest) *CanonicalCompletedPayload {
+func (h *Handlers) NormalizeExternalJobSubmission(req SubmitJobRequest) *CanonicalCompletedPayload {
+	// Legacy-body-shape warning (P1): when the request body carries
+	// the pre-manifest_ref compat shape (top-level voiceover_paths[]
+	// / scenes[N].clip_link / subtitle_tracks[]) AND no manifest_ref
+	// was supplied, emit a structured metric + a structured log line
+	// so operators can monitor PipelineGen migration progress. The
+	// emit is INTENTIONALLY NON-BLOCKING — the submission still
+	// passes through the canonical resolver path; only the operator-
+	// visible signal fires. The compat path stays open until the
+	// PipelineGen manifest_ref migration is complete; the metric is
+	// the durability signal, not a gate.
+	//
+	// Detection criteria (any of):
+	//   - len(req.VoiceoverPaths) > 0      — pre-manifest_ref top-level voiceover list
+	//   - any req.Scenes[i].ClipLink != "" — pre-manifest_ref flat per-scene clip
+	//   - len(req.SubtitleTracks) > 0     — pre-manifest_ref top-level subtitle tracks
+	//
+	// A scene with the new nested Clip{}/Voiceover{}/Subtitles{}
+	// objects is NOT a legacy-shape signal (the per-scene enrichment
+	// is the migration target). A body that ALSO supplies
+	// manifest_ref is also NOT a legacy-shape signal — the client has
+	// migrated and the resolver will use the manifest side instead.
+	if req.ManifestRef == nil && isLegacyCompatShape(req) {
+		if sink := h.legacyBodySinkOrNoop(); sink != nil {
+			sink.IncLegacyBody(LegacyBodySinkClientKindPreManifestRef)
+		}
+		pipelineLog(
+			"LEGACY_BODY_WARNING client_kind=%s idempotency_hash=%s voiceover_paths=%d scenes_with_clip_link=%d subtitle_tracks=%d manifest_ref=absent",
+			LegacyBodySinkClientKindPreManifestRef,
+			logHashShort(req.IdempotencyKey),
+			len(req.VoiceoverPaths),
+			countScenesWithClipLink(req.Scenes),
+			len(req.SubtitleTracks),
+		)
+	}
+
 	rawPayload := submitRequestToRawPayload(&req)
 
 	dto, _ := remoteengine.ParseRemotePipelineResult(rawPayload)
@@ -988,6 +1303,52 @@ func NormalizeExternalJobSubmission(req SubmitJobRequest) *CanonicalCompletedPay
 	}
 }
 
+// isLegacyCompatShape reports whether the SubmitJobRequest carries
+// the pre-manifest_ref compatibility body shape. Pure function: no
+// handler/sink access. Used by NormalizeExternalJobSubmission to gate
+// the legacy-body-shape warning emit; the test suite calls it
+// directly to pin the detection criteria.
+func isLegacyCompatShape(req SubmitJobRequest) bool {
+	if len(req.VoiceoverPaths) > 0 {
+		return true
+	}
+	if len(req.SubtitleTracks) > 0 {
+		return true
+	}
+	for _, s := range req.Scenes {
+		if strings.TrimSpace(s.ClipLink) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// countScenesWithClipLink returns the number of scenes whose
+// pre-manifest_ref flat `clip_link` field is non-empty. Used by the
+// legacy-body-shape warning log line so operators can see the per-
+// scene distribution in the compat body without grepping every
+// scene in the structured log.
+func countScenesWithClipLink(scenes []SubmitScene) int {
+	n := 0
+	for _, s := range scenes {
+		if strings.TrimSpace(s.ClipLink) != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// legacyBodySinkOrNoop returns the wired legacy-body-shape sink or a
+// noop if not set. Mirrors intakeSinkOrNoop's contract: the handler
+// never panics on a missing wiring and never silently drops a metric
+// event.
+func (h *Handlers) legacyBodySinkOrNoop() LegacyBodySink {
+	if h.legacyBodySink == nil {
+		return noopLegacyBodySink{}
+	}
+	return h.legacyBodySink
+}
+
 // submitRequestToRawPayload builds the canonical flat-map shape that
 // remoteengine.ParseRemotePipelineResult consumes. Mirrors the wire
 // shape documented at DataServer/api/openapi.yaml under
@@ -998,6 +1359,16 @@ func NormalizeExternalJobSubmission(req SubmitJobRequest) *CanonicalCompletedPay
 // Submit-scoped typed structs (SubmitScene, SubmitDeliveryPlanEntry)
 // and the remoteengine-typed DTO (RemotePipelineResult). Everything
 // downstream of this point sees only the canonical envelope.
+//
+// Per-scene enrichment (Phase 2 of the render-manifest plan):
+// scene[N].Clip / Voiceover / Subtitles nested objects are emitted
+// directly as nested maps in the scene entry, replacing the legacy
+// position-coupled `voiceover_paths[N] ↔ scenes[N]` contract. The
+// flat `clip_link` / `image_link` keys are still emitted when
+// present on the wire (back-compat for clients that haven't migrated
+// to the nested shape). When BOTH the flat and the nested are
+// supplied for the same scene, the nested wins (the canonical
+// "new shape" override on the legacy alias key).
 //
 // RetryBudget boundary contract:
 //   - d.RetryBudget == nil              → entry["retry_budget"] = DefaultRetryBudget
@@ -1013,9 +1384,10 @@ func NormalizeExternalJobSubmission(req SubmitJobRequest) *CanonicalCompletedPay
 //
 // Trim policy (matching NormalizeExternalJobSubmission's contract):
 // identity-bearing fields are trimmed (IdempotencyKey, VideoName,
-// URL-shaped scene clip_link / image_link, delivery destination_id).
-// CONTENT fields (ScriptText, scene text) are passed through verbatim
-// because legitimate whitespace might appear.
+// URL-shaped scene clip_link / image_link, delivery destination_id,
+// scene nested object URLs). CONTENT fields (ScriptText, scene text)
+// are passed through verbatim because legitimate whitespace might
+// appear.
 func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 	m := map[string]interface{}{
 		"status": "completed",
@@ -1031,6 +1403,14 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 	if len(req.VoiceoverPaths) > 0 {
 		// NormalizeToStrings shape matches what
 		// extractVoiceoverPathsDTO scans for.
+		//
+		// Phase-2 note: the per-scene voiceover.url (when present)
+		// is the SOURCE OF TRUTH; this top-level array is preserved
+		// for back-compat with legacy worker consumers that read
+		// voiceover_paths[] directly. ToWorkerPayload (remoteengine
+		// side) merges both sources into a single deduped array
+		// so the legacy field stays consistent for old workers
+		// even when new clients send only the per-scene form.
 		m["voiceover_paths"] = req.VoiceoverPaths
 	}
 
@@ -1041,11 +1421,41 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 				"text":             s.Text,
 				"duration_seconds": s.DurationSeconds,
 			}
+			if s.SceneID != "" {
+				scene["scene_id"] = strings.TrimSpace(s.SceneID)
+			}
+			if s.Index > 0 {
+				scene["index"] = s.Index
+			}
+			if s.Kind != "" {
+				scene["kind"] = strings.TrimSpace(s.Kind)
+			}
+			// Legacy flat-shape alias keys: preserved verbatim when
+			// supplied, so old clients that haven't migrated still
+			// see a working round-trip. When the nested Clip{}
+			// also carries a URL, BOTH end up in the map — the
+			// worker's scenes_json consumer picks the nested form
+			// (authoritative) but the legacy key remains visible
+			// to any code that still reads `clip_link` directly.
 			if s.ClipLink != "" {
 				scene["clip_link"] = strings.TrimSpace(s.ClipLink)
 			}
 			if s.ImageLink != "" {
 				scene["image_link"] = strings.TrimSpace(s.ImageLink)
+			}
+			// Per-scene nested objects (Phase 2): clip / voiceover /
+			// subtitles carry their own asset references so the
+			// worker reads the canonical URL directly from
+			// scenes_json[i].voiceover.url (no more positional
+			// coupling with top-level voiceover_paths[]).
+			if s.Clip != nil {
+				scene["clip"] = clipToMap(s.Clip)
+			}
+			if s.Voiceover != nil {
+				scene["voiceover"] = voiceoverToMap(s.Voiceover)
+			}
+			if s.Subtitles != nil {
+				scene["subtitles"] = subtitlesToMap(s.Subtitles)
 			}
 			scenes = append(scenes, scene)
 		}
