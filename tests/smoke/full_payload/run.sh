@@ -16,7 +16,7 @@
 # Modes:
 #   --mode=submit   (default) full HTTP flow: mint M2M → POST → poll until
 #                   SUCCEEDED → write tests/smoke/full_payload/evidence/
-#                   run-<EPOCH>.json
+#                   run-<EPOCH>-<client_id>.json (collision-safe)
 #   --mode=dry      build substituted payload + jq summary to stdout; no HTTP.
 #                   Used in CI matrix rows that pre-flight the wire shape
 #                   without reaching the master.
@@ -245,13 +245,23 @@ log_info "M2M client_id=${PROVISIONED_CLIENT_ID}"
 TMP_HDRS="$(mktemp)"; TMP_BODY="$(mktemp)"
 trap 'rm -f "$TMP_HDRS" "$TMP_BODY"; on_signals' EXIT INT TERM
 
+# Capture curl_rc explicitly. Without this, a network failure during
+# POST would fall through to the HTTP-status check and exit 4
+# (HTTP non-202), misclassifying a transport failure as an intake
+# rejection. exit 3 is the documented network-error code; exit 4 is
+# the documented HTTP non-202 code. See run.sh header for the exit map.
+curl_rc=0
 curl -sS -m 30 -X POST \
   -H "Authorization: Bearer ${M2M_BEARER}" \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: full-payload-${EPOCH}-${PROVISIONED_CLIENT_ID}" \
   --data-raw "$PAYLOAD" \
   "${VELOX_MASTER_URL}/api/v1/jobs" \
-  -D "$TMP_HDRS" -o "$TMP_BODY" 2>/dev/null
+  -D "$TMP_HDRS" -o "$TMP_BODY" 2>/dev/null || curl_rc=$?
+if (( curl_rc != 0 )); then
+  log_error "POST /api/v1/jobs network failure (curl_rc=${curl_rc}); could not reach ${VELOX_MASTER_URL}"
+  exit 3
+fi
 POST_STATUS=$(awk 'NR==1 && $1 ~ /^[Hh][Tt][Tt][Pp]\// {print $2; exit}' "$TMP_HDRS")
 POST_BODY=$(cat "$TMP_BODY")
 if [[ "$POST_STATUS" != "202" ]]; then
@@ -317,7 +327,10 @@ artifact_size_bytes=$(smoke_artifact_size "$ARTIFACT_URL" "$M2M_BEARER")
 NOW_ISO="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
 ensure_dir "$EVIDENCE_DIR"
-EV_FILE="${EVIDENCE_DIR}/run-${EPOCH}.json"
+# Include the M2M client_id in the evidence filename so back-to-back
+# runs in the same epoch second don't clobber each other. PROVISIONED_CLIENT_ID
+# is set by smoke_mint_m2m and exported; it is unique per M2M provisioning.
+EV_FILE="${EVIDENCE_DIR}/run-${EPOCH}-${PROVISIONED_CLIENT_ID}.json"
 TMP_EV="$(mktemp "${EVIDENCE_DIR}/run-XXXXXX.json")"
 
 SCENE_COUNT=$(printf '%s' "$PAYLOAD" | jq '.scenes | length')
