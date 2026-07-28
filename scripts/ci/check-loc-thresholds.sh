@@ -45,8 +45,14 @@ THRESH_YML=800
 # files are well under the policy thresholds, so this array is empty.
 # The partition into KNOWN_VIOLATIONS_BASELINE / KNOWN_VIOLATIONS_ROUND1
 # is preserved as an audit trail for future additions.
+# Status (post-[REFACTOR 6/N]): both Round-4 baseline shell entries have
+# landed. artlist_live_e2e_verify.sh (757→135 LOC) and
+# grpc-control-plane/run.sh (737→470 LOC) were deduplicated into
+# tests/_lib/sh/ helpers (logging / pid-trap / ensure / check / retry /
+# exitcode-aggregation / asset-bootstrap), and the 358-line file-size
+# padding fixture in artlist was retired. Both consumer scripts are now
+# comfortably under the §11 shell threshold (700), so this array is empty.
 KNOWN_VIOLATIONS_BASELINE=(
-  "tests/operational/artlist_live_e2e_verify.sh|pre-existing operational E2E verifier; tracked for Round-4 split"
 )
 
 # KNOWN_VIOLATIONS_ROUND1 — six baseline violators surfaced by the first
@@ -85,15 +91,28 @@ KNOWN_VIOLATIONS_ROUND1=(
 )
 
 # KNOWN_VIOLATIONS_ROUND2 — Round-4 baseline carry-over (snapshot
-# 2026-07-28). Five files landed above threshold via 2026-Q2
-# architectural drift and were never refactored down. Each entry maps
-# to a specific step in the AGENTS.md plan; remove the entry when the
-# corresponding refactor lands.
+# 2026-07-28). Each entry below was a long-file elevated above the
+# §11 thresholds during 2026-Q2 architectural drift; remove the entry
+# when the corresponding refactor lands (cross-references in AGENTS.md
+# + docs/metrics/loc-baseline.md §10c). STRUCTURAL entries are
+# exempted from the hard gate by design — see STRUCTURAL_LONG_FILES
+# below for the per-file justification and WARNING-only annotation path.
 #   - job_submit.go             → AGENTS plan step 2 (per-domain split)
 #   - job_submit_e2e_test.go    → AGENTS plan step 3 (per-scenario split)
-#   - grpc-control-plane/run.sh → AGENTS plan step 7 (shell dedup)
 #   - CHANGELOG.md              → STRUCTURAL: cumulative / spec-driven
 #   - openapi.yaml              → STRUCTURAL: cumulative / spec-driven
+#
+# NOTE: the bullets above are aspirational documentation of ALL Round-2
+# long-file candidates elevated during 2026-Q2 drift. Only entries
+# whose refactor has NOT yet landed appear in KNOWN_VIOLATIONS_ROUND2=
+# immediately below — move them into the array (with the appropriate
+# AGENTS-plan-step tracking-ref) as the refactor lands, then remove
+# the corresponding bullet. STRUCTURAL entries (CHANGELOG.md,
+# openapi.yaml) appear in BOTH KNOWN_VIOLATIONS_ROUND2=() below AND
+# STRUCTURAL_LONG_FILES=() further down — the duplication is
+# intentional (the array drives the `::warning` annotation count, the
+# STRUCTURAL_LONG_FILES entry carries the per-file justification
+# text).
 #
 # STRUCTURAL entries (CHANGELOG.md, openapi.yaml) are exempted from the
 # hard gate by design — see `STRUCTURAL_LONG_FILES` below for the
@@ -101,7 +120,6 @@ KNOWN_VIOLATIONS_ROUND1=(
 # that re-emits a `::warning` annotation on every run so the trend stays
 # visible in PRs (no gate, purely informational).
 KNOWN_VIOLATIONS_ROUND2=(
-  "tests/e2e/grpc-control-plane/run.sh|Round-4 shell carry-over (737 LOC); dedup per AGENTS plan step 7 into tests/_lib/sh/ helpers"
   "CHANGELOG.md|Round-4 docs carry-over (1691 LOC); STRUCTURAL — cumulative release notes, threshold breach expected and not refactor-driven; see STRUCTURAL_LONG_FILES"
   "DataServer/api/openapi.yaml|Round-4 yaml carry-over (1235 LOC); STRUCTURAL — OpenAPI single-source-of-truth spec, refactor requires spec redesign (Round-5+); see STRUCTURAL_LONG_FILES"
 )
