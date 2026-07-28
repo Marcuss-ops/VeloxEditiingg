@@ -269,13 +269,24 @@ jobs:
           IMAGE="${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
           BUNDLE_HASH="$(tr -d '[:space:]' < RemoteCodex/BUNDLE_HASH.txt 2>/dev/null || echo '')"
           mkdir -p /tmp/velox-real-bootstrap
+          jq '
+            with_entries(select(.key | startswith("_") | not))
+            | .master_url = "http://127.0.0.1:9999"
+            | .control_grpc_url = "http://127.0.0.1:9999"
+            | .worker_id = "ci-real-bootstrap"
+            | .worker_name = "ci-real-bootstrap"
+            | .allow_insecure_grpc_dev = true
+          ' deploy/runtime/worker_config.example.json \
+            > /tmp/velox-real-bootstrap/worker_config.json
           set +e
           docker run --rm \
             --name worker-real-bootstrap \
             -e VELOX_WORKER_ID=ci-real-bootstrap \
             -e VELOX_BUNDLE_HASH="$BUNDLE_HASH" \
             -e VELOX_GRPC_MASTER_URL=127.0.0.1:9999 \
+            -e VELOX_ALLOW_INSECURE_GRPC_DEV=true \
             -v /tmp/velox-real-bootstrap:/var/lib/velox-worker \
+            -v /tmp/velox-real-bootstrap/worker_config.json:/opt/velox/worker_config.json:ro \
             "$IMAGE" \
             --bootstrap-report > /tmp/velox-real-bootstrap/stdout.log 2> /tmp/velox-real-bootstrap/stderr.log
           rc=$?
