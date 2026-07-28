@@ -21,6 +21,8 @@ import (
 	"velox-server/internal/app"
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/deploy"
+	"velox-server/internal/deploy/cosign"
 	"velox-server/internal/fleet"
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/handlers/server/api"
@@ -34,6 +36,40 @@ import (
 	"velox-server/internal/store"
 	"velox-server/internal/supervisor"
 )
+
+// deployUpdateImageValidator wraps internal/deploy.ValidateImageRef
+// for the UpdateExecutor's BackendImageRefValidator surface.
+// Kept inline (not promoted to a separate file) because the
+// Step 9/15 wiring path needs the type-name at the composition
+// root and the shape is single-purpose.
+type deployUpdateImageValidator struct{}
+
+// Validate delegates to deploy.ValidateImageRef. The error
+// sentinels (ErrEmptyImageRef, ErrMobileImageRef, etc.) flow
+// through unmodified so the executor's audit-dashboard grep
+// remains stable.
+func (deployUpdateImageValidator) Validate(ref string) error {
+	return deploy.ValidateImageRef(ref)
+}
+
+// newUpdateCosignVerifier returns the production-default Cosign
+// verifier for the UpdateExecutor's BackendCosignVerifierIfc
+// surface. The ExternalCosignVerifier shells out to the cosign
+// CLI; VELOX_SKIP_COSIGN_VERIFY=1 short-circuits via the env
+// guard inside the verifier.
+func newUpdateCosignVerifier() BackendCosignVerifierIfc {
+	return cosign.NewExternalCosignVerifier()
+}
+
+// BackendCosignVerifierIfc is the alias type the fleet package
+// declares in update_executor.go. We re-declare it here so the
+// composition root doesn't have to import the fleet package's
+// unexported type. (The two declarations are structurally
+// identical — the fleet package's is the canonical interface;
+// this satisfies it via structural typing.)
+type BackendCosignVerifierIfc interface {
+	Verify(ctx context.Context, ref string) error
+}
 
 // appComponents holds every dependency the master process needs at
 // runtime. The split into per-file helpers means runServer itself
@@ -366,6 +402,23 @@ func (f *FleetDep) getHandler() *api.AdminOperationsHandler {
 // a persistence-disabled boot (test fixture paths) so the router
 // registers the audit route stubs but serving returns 503 via the
 // handler's nil-controller guard.
+//
+// Step 9/15: registers the UpdateExecutor for the `update`
+// operation kind, replacing the Step 4/15 noop default. Live
+// dependencies (Deployments repo, Cosign verifier, Image
+// validator) are wired from the persistence layer; future
+// steps (7+/8+/9+) plug in the real SSH client, Docker cli
+// wrapper, Smoke runner, and Drive verifier (each nil-tolerant
+// today: missing dep fails the Execute call loudly rather than
+// silently noops).
+//
+// opTimeout is bumped to 30min (overriding DefaultOpTimeout's
+// 10min) so the forward+rollback cascade for an `update`
+// operation has headroom for: cosign verify (30s) +
+// docker pull (10min) + compose restart (2min) + container
+// running check + /health/ready poll (60s) + master connect
+// (30s) + Level D smoke (5min) + Drive verify (60s) +
+// RB-only cascade on failure (15min slack).
 func buildFleet(p *persistenceDeps) (*FleetDep, error) {
 	if p == nil || p.SQLite == nil {
 		return nil, nil
@@ -375,8 +428,21 @@ func buildFleet(p *persistenceDeps) (*FleetDep, error) {
 		p.SQLite,
 		registry,
 		fleet.DefaultTickInterval,
-		fleet.DefaultOpTimeout,
+		30*time.Minute, // opTimeout for forward + rollback cascade
 	)
+
+	// Step 9/15 UpdateExecutor — wires the live deps that
+	// bootstrap knows about (deployments repo, cosign validator,
+	// image-ref validator). SSH/Docker/Smoke/Drive are Step 7+
+	// follow-ups; nil-tolerant today.
+	updateBackend := fleet.UpdateBackend{
+		Deployments: p.SQLite,
+		Cosign:      newUpdateCosignVerifier(),
+		Image:       deployUpdateImageValidator{},
+	}
+	registry.Register(fleet.OperationKindUpdate, fleet.NewUpdateExecutor(updateBackend))
+	log.Printf("[BOOTSTRAP] UpdateExecutor registered for kind=%s (SSH/Docker/Smoke/Drive pending Step 7+/8+)", fleet.OperationKindUpdate)
+
 	return &FleetDep{
 		Controller:      controller,
 		Registry:        registry,

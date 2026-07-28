@@ -190,6 +190,38 @@ UPDATE deployment_records SET is_rollback = ? WHERE deployment_id = ?`,
 	return err
 }
 
+// MarkDeploymentRolledBack atomically transitions a row to the
+// terminal ROLLED_BACK status AND sets is_rollback=true in a
+// single UPDATE — Step 9/15 UpdateExecutor writes a SEPARATE
+// row (status=PENDING, is_rollback=true from creation) for the
+// rollback cascade, then transitions it on completion.
+//
+//   rollbackOK=true  → status=ROLLED_BACK (rollback finished
+//                      cleanly; the worker is back on
+//                      previous_digest).
+//   rollbackOK=false → status=FAILED (rollback also failed;
+//                      operator intervention required; Health
+//                      derives ROLLBACK from is_rollback=true
+//                      in both cases so the operator always
+//                      sees the rollback attempt at-glance).
+//
+// The atomic UPDATE prevents a torn state where status was
+// updated but is_rollback wasn't (or vice versa) which would
+// silently make the row invisible to dashboard rollback views.
+func (s *SQLiteStore) MarkDeploymentRolledBack(ctx context.Context, deploymentID string, finishedAt time.Time, rollbackOK bool) error {
+	status := DeployStatusRolledBack
+	if !rollbackOK {
+		status = DeployStatusFailed
+	}
+	_, err := s.db.ExecContext(ctx, `
+UPDATE deployment_records
+SET status = ?, finished_at = ?, is_rollback = 1
+WHERE deployment_id = ?`,
+		status, finishedAt.UTC().Format(time.RFC3339), deploymentID,
+	)
+	return err
+}
+
 // GetLatestDeploymentForWorker returns the row with the highest
 // started_at for the worker, regardless of status. Returns
 // ErrDeploymentNotFound when no rows exist. Crucial for the
