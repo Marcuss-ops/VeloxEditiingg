@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -28,6 +29,13 @@ import (
 // others' lease authority.
 //
 // Returns typed DeliveryLease values for the runner to dispatch.
+//
+// NOT refactored to TxManager.RunInTx yet: the multi-statement shape
+// (UPDATE+RETURNING + per-row sub-SELECT + per-row sub-CAS UPDATE +
+// per-row INSERT) would inflate the closure body to ~30 lines and
+// obscure the per-row carve-out. Future refactor: extract a
+// `claimOneDelivery(tx, claimedRow)` helper and call it from inside
+// RunInTx.
 func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, lease time.Duration, batch int) ([]DeliveryLease, error) {
 	if batch <= 0 {
 		batch = 1
@@ -185,6 +193,11 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 // RenewDeliveryLease extends the lease on a RUNNING delivery. The CAS guard
 // verifies (delivery_id, status=RUNNING, locked_by, lease_id) to prevent
 // stale renewals. Returns ErrTransitionConflict if the guard fails.
+//
+// NOT refactored to TxManager.RunInTx: a single CAS UPDATE with no
+// sub-operations has no need for explicit tx wrapping. RunInTx is
+// overkill for the single-statement atomic primitive; the value
+// (BeginTx/Commit/Rollback dedup) is exactly zero here.
 func (s *SQLiteStore) RenewDeliveryLease(ctx context.Context, deliveryID, runnerID, leaseID string, newExpiry time.Time) error {
 	if deliveryID == "" || runnerID == "" || leaseID == "" {
 		return fmt.Errorf("store: RenewDeliveryLease: missing required fields")
@@ -213,167 +226,154 @@ func (s *SQLiteStore) RenewDeliveryLease(ctx context.Context, deliveryID, runner
 // MarkDeliverySucceeded moves a RUNNING delivery to SUCCEEDED with CAS guard.
 // Stamps completed_at and optionally remote_id/remote_url.
 //
-// The job_deliveries UPDATE, delivery_attempts UPDATE, and outbox INSERT all
-// happen inside a single transaction so a crash between updates cannot leave
-// delivery and attempt in mismatched states.
+// The job_deliveries UPDATE and the delivery_attempts UPDATE both happen
+// inside RunInTx so a crash between updates cannot leave delivery and
+// attempt in mismatched states. CAS-miss surfaces ErrTransitionConflict
+// verbatim so the caller can errors.Is on it.
 func (s *SQLiteStore) MarkDeliverySucceeded(ctx context.Context, deliveryID, runnerID, leaseID, remoteID, remoteURL string) error {
 	if deliveryID == "" || runnerID == "" || leaseID == "" {
 		return fmt.Errorf("store: MarkDeliverySucceeded: missing required fields")
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("MarkDeliverySucceeded begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+	return NewTxManager(s).RunInTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		now := time.Now().UTC().Format(time.RFC3339)
+		result, err := tx.ExecContext(ctx,
+			`UPDATE job_deliveries
+			 SET status = 'SUCCEEDED',
+			     remote_id = COALESCE(NULLIF(?, ''), remote_id),
+			     remote_url = COALESCE(NULLIF(?, ''), remote_url),
+			     completed_at = ?,
+			     updated_at = ?
+			 WHERE delivery_id = ?
+			   AND status = 'RUNNING'
+			   AND locked_by = ?
+			   AND lease_id = ?`,
+			remoteID, remoteURL, now, now, deliveryID, runnerID, leaseID,
+		)
+		if err != nil {
+			return err
+		}
+		affected, _ := result.RowsAffected()
+		if affected == 0 {
+			return ErrTransitionConflict
+		}
 
-	now := time.Now().UTC().Format(time.RFC3339)
-	result, err := tx.ExecContext(ctx,
-		`UPDATE job_deliveries
-		 SET status = 'SUCCEEDED',
-		     remote_id = COALESCE(NULLIF(?, ''), remote_id),
-		     remote_url = COALESCE(NULLIF(?, ''), remote_url),
-		     completed_at = ?,
-		     updated_at = ?
-		 WHERE delivery_id = ?
-		   AND status = 'RUNNING'
-		   AND locked_by = ?
-		   AND lease_id = ?`,
-		remoteID, remoteURL, now, now, deliveryID, runnerID, leaseID,
-	)
-	if err != nil {
-		return err
-	}
-	affected, _ := result.RowsAffected()
-	if affected == 0 {
-		return ErrTransitionConflict
-	}
-
-	// Close the latest delivery_attempt — now inside the same tx.
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE delivery_attempts
-		 SET status = 'SUCCESS', completed_at = ?
-		 WHERE delivery_id = ?
-		   AND id = (SELECT MAX(id) FROM delivery_attempts WHERE delivery_id = ?)`,
-		now, deliveryID, deliveryID,
-	); err != nil {
-		return fmt.Errorf("MarkDeliverySucceeded attempt UPDATE: %w", err)
-	}
-
-	return tx.Commit()
+		// Close the latest delivery_attempt — same RunInTx tx.
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE delivery_attempts
+			 SET status = 'SUCCESS', completed_at = ?
+			 WHERE delivery_id = ?
+			   AND id = (SELECT MAX(id) FROM delivery_attempts WHERE delivery_id = ?)`,
+			now, deliveryID, deliveryID,
+		); err != nil {
+			return fmt.Errorf("MarkDeliverySucceeded attempt UPDATE: %w", err)
+		}
+		return nil
+	})
 }
 
 // MarkDeliveryRetry moves a RUNNING delivery to RETRY_WAIT with the next
 // attempt scheduled after a backoff delay. Sets last_error_code and
 // last_error_message for diagnostics.
 //
-// Runs inside a single tx so the job_deliveries flip and delivery_attempts
-// close are atomic — a crash cannot leave them mismatched.
+// Runs through TxManager.RunInTx so the job_deliveries flip and the
+// delivery_attempts close are atomic — a crash cannot leave them
+// mismatched.
 func (s *SQLiteStore) MarkDeliveryRetry(ctx context.Context, deliveryID, runnerID, leaseID, errorCode, errorMsg string, nextAttemptAt time.Time) error {
 	if deliveryID == "" || runnerID == "" || leaseID == "" {
 		return fmt.Errorf("store: MarkDeliveryRetry: missing required fields")
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("MarkDeliveryRetry begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+	return NewTxManager(s).RunInTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		now := time.Now().UTC().Format(time.RFC3339)
+		nextISO := nextAttemptAt.UTC().Format(time.RFC3339)
+		result, err := tx.ExecContext(ctx,
+			`UPDATE job_deliveries
+			 SET status = 'RETRY_WAIT',
+			     locked_by = NULL,
+			     lease_id = NULL,
+			     lease_expires_at = NULL,
+			     next_attempt_at = ?,
+			     last_error_code = ?,
+			     last_error_message = ?,
+			     updated_at = ?
+			 WHERE delivery_id = ?
+			   AND status = 'RUNNING'
+			   AND locked_by = ?
+			   AND lease_id = ?`,
+			nextISO, nullIfEmpty(errorCode), nullIfEmpty(errorMsg), now,
+			deliveryID, runnerID, leaseID,
+		)
+		if err != nil {
+			return err
+		}
+		affected, _ := result.RowsAffected()
+		if affected == 0 {
+			return ErrTransitionConflict
+		}
 
-	now := time.Now().UTC().Format(time.RFC3339)
-	nextISO := nextAttemptAt.UTC().Format(time.RFC3339)
-	result, err := tx.ExecContext(ctx,
-		`UPDATE job_deliveries
-		 SET status = 'RETRY_WAIT',
-		     locked_by = NULL,
-		     lease_id = NULL,
-		     lease_expires_at = NULL,
-		     next_attempt_at = ?,
-		     last_error_code = ?,
-		     last_error_message = ?,
-		     updated_at = ?
-		 WHERE delivery_id = ?
-		   AND status = 'RUNNING'
-		   AND locked_by = ?
-		   AND lease_id = ?`,
-		nextISO, nullIfEmpty(errorCode), nullIfEmpty(errorMsg), now,
-		deliveryID, runnerID, leaseID,
-	)
-	if err != nil {
-		return err
-	}
-	affected, _ := result.RowsAffected()
-	if affected == 0 {
-		return ErrTransitionConflict
-	}
-
-	// Close the latest delivery_attempt — now inside the same tx.
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE delivery_attempts
-		 SET status = 'RETRY_WAIT', completed_at = ?, error_message = ?
-		 WHERE delivery_id = ?
-		   AND id = (SELECT MAX(id) FROM delivery_attempts WHERE delivery_id = ?)`,
-		now, nullIfEmpty(errorMsg), deliveryID, deliveryID,
-	); err != nil {
-		return fmt.Errorf("MarkDeliveryRetry attempt UPDATE: %w", err)
-	}
-
-	return tx.Commit()
+		// Close the latest delivery_attempt — same RunInTx tx.
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE delivery_attempts
+			 SET status = 'RETRY_WAIT', completed_at = ?, error_message = ?
+			 WHERE delivery_id = ?
+			   AND id = (SELECT MAX(id) FROM delivery_attempts WHERE delivery_id = ?)`,
+			now, nullIfEmpty(errorMsg), deliveryID, deliveryID,
+		); err != nil {
+			return fmt.Errorf("MarkDeliveryRetry attempt UPDATE: %w", err)
+		}
+		return nil
+	})
 }
 
 // MarkDeliveryFailed moves a RUNNING delivery to FAILED (permanent failure).
 // No further retry attempts will be scheduled.
 //
-// Runs inside a single tx — delivery + attempt + outbox are all-or-nothing.
+// Runs through TxManager.RunInTx — delivery + attempt are all-or-nothing.
 func (s *SQLiteStore) MarkDeliveryFailed(ctx context.Context, deliveryID, runnerID, leaseID, errorCode, errorMsg string) error {
 	if deliveryID == "" || runnerID == "" || leaseID == "" {
 		return fmt.Errorf("store: MarkDeliveryFailed: missing required fields")
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("MarkDeliveryFailed begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+	return NewTxManager(s).RunInTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		now := time.Now().UTC().Format(time.RFC3339)
+		result, err := tx.ExecContext(ctx,
+			`UPDATE job_deliveries
+			 SET status = 'FAILED',
+			     locked_by = NULL,
+			     lease_id = NULL,
+			     lease_expires_at = NULL,
+			     last_error_code = ?,
+			     last_error_message = ?,
+			     completed_at = ?,
+			     updated_at = ?
+			 WHERE delivery_id = ?
+			   AND status = 'RUNNING'
+			   AND locked_by = ?
+			   AND lease_id = ?`,
+			nullIfEmpty(errorCode), nullIfEmpty(errorMsg), now, now,
+			deliveryID, runnerID, leaseID,
+		)
+		if err != nil {
+			return err
+		}
+		affected, _ := result.RowsAffected()
+		if affected == 0 {
+			return ErrTransitionConflict
+		}
 
-	now := time.Now().UTC().Format(time.RFC3339)
-	result, err := tx.ExecContext(ctx,
-		`UPDATE job_deliveries
-		 SET status = 'FAILED',
-		     locked_by = NULL,
-		     lease_id = NULL,
-		     lease_expires_at = NULL,
-		     last_error_code = ?,
-		     last_error_message = ?,
-		     completed_at = ?,
-		     updated_at = ?
-		 WHERE delivery_id = ?
-		   AND status = 'RUNNING'
-		   AND locked_by = ?
-		   AND lease_id = ?`,
-		nullIfEmpty(errorCode), nullIfEmpty(errorMsg), now, now,
-		deliveryID, runnerID, leaseID,
-	)
-	if err != nil {
-		return err
-	}
-	affected, _ := result.RowsAffected()
-	if affected == 0 {
-		return ErrTransitionConflict
-	}
-
-	// Close the latest delivery_attempt — now inside the same tx.
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE delivery_attempts
-		 SET status = 'FAILED', completed_at = ?, error_message = ?
-		 WHERE delivery_id = ?
-		   AND id = (SELECT MAX(id) FROM delivery_attempts WHERE delivery_id = ?)`,
-		now, nullIfEmpty(errorMsg), deliveryID, deliveryID,
-	); err != nil {
-		return fmt.Errorf("MarkDeliveryFailed attempt UPDATE: %w", err)
-	}
-
-	return tx.Commit()
+		// Close the latest delivery_attempt — same RunInTx tx.
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE delivery_attempts
+			 SET status = 'FAILED', completed_at = ?, error_message = ?
+			 WHERE delivery_id = ?
+			   AND id = (SELECT MAX(id) FROM delivery_attempts WHERE delivery_id = ?)`,
+			now, nullIfEmpty(errorMsg), deliveryID, deliveryID,
+		); err != nil {
+			return fmt.Errorf("MarkDeliveryFailed attempt UPDATE: %w", err)
+		}
+		return nil
+	})
 }
 
 // MarkDeliveryBlockedAuth moves a RUNNING delivery to BLOCKED_AUTH when the
@@ -381,54 +381,49 @@ func (s *SQLiteStore) MarkDeliveryFailed(ctx context.Context, deliveryID, runner
 // resolved by retrying. The delivery stays blocked until operator intervention
 // re-enables the destination credentials.
 //
-// Runs inside a single tx — delivery + attempt are all-or-nothing.
+// Runs through TxManager.RunInTx — delivery + attempt are all-or-nothing.
 func (s *SQLiteStore) MarkDeliveryBlockedAuth(ctx context.Context, deliveryID, runnerID, leaseID, errorCode, errorMsg string) error {
 	if deliveryID == "" || runnerID == "" || leaseID == "" {
 		return fmt.Errorf("store: MarkDeliveryBlockedAuth: missing required fields")
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("MarkDeliveryBlockedAuth begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+	return NewTxManager(s).RunInTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		now := time.Now().UTC().Format(time.RFC3339)
+		result, err := tx.ExecContext(ctx,
+			`UPDATE job_deliveries
+			 SET status = 'BLOCKED_AUTH',
+			     locked_by = NULL,
+			     lease_id = NULL,
+			     lease_expires_at = NULL,
+			     last_error_code = ?,
+			     last_error_message = ?,
+			     completed_at = ?,
+			     updated_at = ?
+			 WHERE delivery_id = ?
+			   AND status = 'RUNNING'
+			   AND locked_by = ?
+			   AND lease_id = ?`,
+			nullIfEmpty(errorCode), nullIfEmpty(errorMsg), now, now,
+			deliveryID, runnerID, leaseID,
+		)
+		if err != nil {
+			return err
+		}
+		affected, _ := result.RowsAffected()
+		if affected == 0 {
+			return ErrTransitionConflict
+		}
 
-	now := time.Now().UTC().Format(time.RFC3339)
-	result, err := tx.ExecContext(ctx,
-		`UPDATE job_deliveries
-		 SET status = 'BLOCKED_AUTH',
-		     locked_by = NULL,
-		     lease_id = NULL,
-		     lease_expires_at = NULL,
-		     last_error_code = ?,
-		     last_error_message = ?,
-		     completed_at = ?,
-		     updated_at = ?
-		 WHERE delivery_id = ?
-		   AND status = 'RUNNING'
-		   AND locked_by = ?
-		   AND lease_id = ?`,
-		nullIfEmpty(errorCode), nullIfEmpty(errorMsg), now, now,
-		deliveryID, runnerID, leaseID,
-	)
-	if err != nil {
-		return err
-	}
-	affected, _ := result.RowsAffected()
-	if affected == 0 {
-		return ErrTransitionConflict
-	}
-
-	// Close the latest delivery_attempt — now inside the same tx.
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE delivery_attempts
-		 SET status = 'BLOCKED_AUTH', completed_at = ?, error_message = ?
-		 WHERE delivery_id = ?
-		   AND id = (SELECT MAX(id) FROM delivery_attempts WHERE delivery_id = ?)`,
-		now, nullIfEmpty(errorMsg), deliveryID, deliveryID,
-	); err != nil {
-		return fmt.Errorf("MarkDeliveryBlockedAuth attempt UPDATE: %w", err)
-	}
-
-	return tx.Commit()
+		// Close the latest delivery_attempt — same RunInTx tx.
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE delivery_attempts
+			 SET status = 'BLOCKED_AUTH', completed_at = ?, error_message = ?
+			 WHERE delivery_id = ?
+			   AND id = (SELECT MAX(id) FROM delivery_attempts WHERE delivery_id = ?)`,
+			now, nullIfEmpty(errorMsg), deliveryID, deliveryID,
+		); err != nil {
+			return fmt.Errorf("MarkDeliveryBlockedAuth attempt UPDATE: %w", err)
+		}
+		return nil
+	})
 }
