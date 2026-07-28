@@ -87,7 +87,7 @@ namespace {
             << " -i " << file::shellQuote(inputVideo.string())
             << " -vf " << file::shellQuote(filter.str())
             << " -c:v libx264 -preset veryfast -crf 20"
-            << " -pix_fmt yuv420p -an "
+            << " -pix_fmt yuv420p -map 0:v:0 -map 0:a? -c:a aac -ar 48000 -ac 2 "
             << file::shellQuote(outputVideo.string());
         file::CommandResult r = file::runCommandTimed(cmd.str());
         std::cerr << "{\"metric\":\"ffmpeg.subtitle_burn_ms\",\"value\":" << r.wall_ms
