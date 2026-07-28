@@ -215,7 +215,7 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 
 func stageVoiceoverAssets(_ /* dataDir */, _ /* masterURL */, _ /* jobID */ string, voiceoverPaths []string) ([]string, error) {
 	if len(voiceoverPaths) == 0 {
-		return nil, fmt.Errorf("voiceover_path or source_media is required")
+		return nil, nil
 	}
 	// Voiceover-asset rewriting (path → velox-asset:// reference) is owned by
 	// the Enqueuer now. This helper returns paths verbatim; the Enqueuer's
