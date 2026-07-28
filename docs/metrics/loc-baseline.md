@@ -405,18 +405,6 @@ entry MUST be removed when the corresponding refactor lands, per §13.
   `tests/e2e/grpc-control-plane/run.sh` into `tests/_lib/sh/` helpers.
 
 ### Round-4 carry-over (snapshot 2026-07-28)
-- `DataServer/internal/handlers/server/pipeline/job_submit.go` (1561 LOC,
-  prod-Go) — split per AGENTS plan step 2 into per-domain files
-  (intake/validation, plan derivation, enqueue, response shaping,
-  telemetry).
-- `tests/e2e/grpc-control-plane/run.sh` (737 LOC, shell) — dedup per
-  AGENTS plan step 7 with `artlist_live_e2e_verify.sh` into
-  `tests/_lib/sh/`.
-- `CHANGELOG.md` (1691 LOC, docs) — append-only release-notes file;
-  threshold exceedance is structural, not refactor-driven.
-- `DataServer/api/openapi.yaml` (1235 LOC, yaml) — OpenAPI 3.x
-  single-source-of-truth spec; refactor requires spec redesign
-  (Round-5+).
 
 ### Round-4 gate change
 - `scripts/ci/check-loc-thresholds.sh` gained a `BUILD_NOISE_EXCLUDES`
