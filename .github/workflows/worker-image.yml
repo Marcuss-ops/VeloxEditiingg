@@ -282,6 +282,9 @@ jobs:
             > /tmp/velox-real-bootstrap/worker_config.json
           mkdir -p /tmp/velox-real-bootstrap/work
           printf '%s\n' "$BUNDLE_HASH" > /tmp/velox-real-bootstrap/work/BUNDLE_HASH.txt
+          mkdir -p /tmp/velox-real-bootstrap/work/tests/fixtures
+          cp RemoteCodex/native/worker-agent-go/tests/fixtures/engine_selftest_baseline.sha256 \
+            /tmp/velox-real-bootstrap/work/tests/fixtures/engine_selftest_baseline.sha256
           set +e
           docker run --rm \
             --name worker-real-bootstrap \
