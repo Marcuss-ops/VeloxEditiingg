@@ -89,6 +89,28 @@ type WorkerInfo struct {
 	// Always serialized (no omitempty) so clients can distinguish "" from absent.
 	Reason string `json:"reason"`
 
+	// Health — canonical 9-state operator-facing health (Step 3/15
+	// fleet-operator rollout). Pure-function derivation via
+	// HealthForInfo(info, lastSmokeFail, deploymentState, now).
+	// Read-time hydrated by the registry, NEVER persisted to
+	// workers.raw_json (zeroed in ScrubForPersist). Surface
+	// vocabulary: HEALTHY, BUSY, DRAINING, UPDATING, RESTARTING,
+	// DEGRADED, OFFLINE, QUARANTINED, ROLLBACK. The diagnostic
+	// WorkerResponse.Status continues to surface the legacy
+	// 4-state ConnectionStatus for back-compat; admin WorkerCard
+	// surfaces this new 9-state Health.
+	Health string `json:"health"`
+
+	// Quarantined — operator-set flag for "excluded from
+	// placement, do not schedule new jobs". Quarantine beats
+	// every other state in Health() precedence (rank 1); the
+	// future admin endpoint POST /api/v1/admin/workers/{
+	// id}/quarantine (Step 4/15) wires a writer via the
+	// Fleet Controller. Persisted (NOT scrubbed in
+	// ScrubForPersist) so a restart preserves the quarantine
+	// decision. Zero on register until the operator sets it.
+	Quarantined bool `json:"quarantined"`
+
 	Readiness    map[string]interface{} `json:"readiness,omitempty"`
 	RecentLogs   []string               `json:"recent_logs,omitempty"`
 	RecentErrors []string               `json:"recent_errors,omitempty"`
@@ -119,9 +141,10 @@ type WorkerInfo struct {
 // raw_json paths, or you reintroduce the leak. The shape contract on
 // worker_flags.raw_json is enforced by store_workers_test.go.
 //
-// Treating SessionActive + ConnectionStatus as "never persisted" is the
-// only way to keep the workers.raw_json JSON contract and the
-// read-model enum consistent across restarts.
+// Treating SessionActive + ConnectionStatus + Reason + Health as
+// "never persisted" preserves the JSON contract across restarts.
+// Quarantined is intentionally NOT scrubbed — it is operator-persisted
+// (a restart preserves the operator's quarantine decision).
 func ScrubForPersist(info *WorkerInfo) {
 	if info == nil {
 		return
@@ -129,6 +152,8 @@ func ScrubForPersist(info *WorkerInfo) {
 	info.SessionActive = false
 	info.ConnectionStatus = ""
 	info.Reason = ""
+	info.Health = ""
+	// Quarantined is intentionally NOT scrubbed: operator-persisted.
 }
 
 const DefaultWorkerProtocolVersion = "v3"

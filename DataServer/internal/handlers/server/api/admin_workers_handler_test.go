@@ -320,6 +320,58 @@ func TestWorkerCard_SensitiveFieldsDoNotLeak(t *testing.T) {
 	}
 }
 
+// TestBuildWorkerCard_HealthFieldPropagates pins the Step 3/15
+// wire: admin WorkerCard.Health MUST reflect the
+// registry-populated WorkerInfo.Health. Uses all 9-state fixtures
+// (one sub-test each) so a future regression that drops a state
+// from the Health vocabulary surfaces here.
+func TestBuildWorkerCard_HealthFieldPropagates(t *testing.T) {
+	cases := []struct {
+		health string
+	}{
+		{workersreg.WorkerHealthHealthy},
+		{workersreg.WorkerHealthBusy},
+		{workersreg.WorkerHealthDraining},
+		{workersreg.WorkerHealthUpdating},
+		{workersreg.WorkerHealthRestarting},
+		{workersreg.WorkerHealthDegraded},
+		{workersreg.WorkerHealthOffline},
+		{workersreg.WorkerHealthQuarantined},
+		{workersreg.WorkerHealthRollback},
+	}
+	for _, tc := range cases {
+		t.Run(tc.health, func(t *testing.T) {
+			info := makeCardInfo("w-health", func(i *workersreg.WorkerInfo) {
+				i.Health = tc.health
+			})
+			card := buildWorkerCard(&info)
+			if card.Health != tc.health {
+				t.Errorf("card.Health = %q, want %q (info.Health propagates unchanged)", card.Health, tc.health)
+			}
+		})
+	}
+}
+
+// TestBuildWorkerCard_HealthOmitempty asserts the Step 1/15
+// contract: when WorkerInfo.Health is empty, the JSON should
+// drop the "health" field (no broken/null leaks to the
+// dashboard). Pair with TestWorkerCard_JSON_OmitsEmptyFields.
+func TestBuildWorkerCard_HealthOmitempty(t *testing.T) {
+	info := makeCardInfo("w-empty-health")
+	info.Health = "" // explicit zero
+	card := buildWorkerCard(&info)
+	if card.Health != "" {
+		t.Errorf("expected empty Health for unset WorkerInfo.Health, got %q", card.Health)
+	}
+	b, err := json.Marshal(card)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(b), `"health":`) {
+		t.Errorf("WorkerCard JSON leaked empty 'health' field: %s", string(b))
+	}
+}
+
 // ── HTTP-level tests (gin router) ─────────────────────────────────
 
 // TestListAdminWorkers_Success asserts the list endpoint returns

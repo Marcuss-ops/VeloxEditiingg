@@ -161,5 +161,6 @@ func buildWorkerCard(info *workersreg.WorkerInfo) WorkerCard {
 		LastHeartbeatAt: info.LastHB,
 		ActiveJobs:      metrics.ActiveTasks,
 		MaxActiveJobs:   metrics.TaskSlots,
+		Health:          info.Health, // Step 3/15 — 9-state operator-facing health
 	}
 }
