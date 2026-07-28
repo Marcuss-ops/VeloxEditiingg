@@ -12,6 +12,7 @@ Velox workers are deployed via Ansible playbooks from the master server. The dep
 
 Workers are identified by a sanitized inventory alias:
 - IP `57.129.132.133` → alias `host_57_129_132_133`
+- IP `51.222.204.158` → worker `velox-worker-523925eb` (hostname `vps-523925eb`)
 - The alias becomes both the Ansible `inventory_hostname` and the `worker_id`
 
 ## Playbooks
