@@ -144,6 +144,7 @@ jobs:
               ':!**/*.md' \
               ':!CHANGELOG.md' \
               ':!docs/**' \
+              ":!DataServer/internal/socialclient/targets.go" \
             || true
           )
 
