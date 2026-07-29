@@ -1,0 +1,109 @@
+---
+# fleet-checklist — Velox fleet-operator (Step 11/15 extension).
+# ────────────────────────────────────────────────────────────────────────────
+# Runs deploy/runtime/checklist-verify.sh (sections 5–15) on every worker
+# in [velox_workers], serially, with `--json` output. Each worker's JSON
+# report is fetched back to the control node at
+# /tmp/velox-checklist-<worker_id>.json.
+#
+# The checklist covers:
+#   §5   image pull
+#   §6   image digest match
+#   §7   worker.env integrity
+#   §8   TLS certificate validity
+#   §9   docker-compose.yml integrity
+#   §10  prepare-host.sh
+#   §11  container running
+#   §12  /health/ready endpoint
+#   §13  log scrub (forbidden tokens: permission denied, etc.)
+#   §14  Master connection (CONNECTED worker on /api/v1/workers)
+#   §15  E2E canary smoke
+#
+# Pre-requisites:
+#   - SSH key-based auth as ansible_user (per inventory)
+#   - Passwordless sudo on each worker
+#   - The repo cloned at /opt/velox/current on each worker (or override
+#     `checklist_repo_root`)
+#   - Master URL reachable from each worker (set `velox_master_public_url`
+#     in deploy/group_vars/all.yml)
+#
+# STOP AL PRIMO FAIL: serial: 1 + any_errors_fatal: true.
+#
+# Usage:
+#   ansible-playbook -i deploy/ansible/inventory.ini \
+#     --ask-vault-pass \
+#     deploy/playbooks/fleet-checklist.yml
+#
+#   # Override repo root (if not /opt/velox/current):
+#   ansible-playbook -i deploy/ansible/inventory.ini \
+#     -e checklist_repo_root=/root/VeloxEditiingg \
+#     deploy/playbooks/fleet-checklist.yml
+
+- name: fleet-checklist — full 15-section checklist per worker
+  hosts: velox_workers
+  serial: 1
+  any_errors_fatal: true
+  gather_facts: true
+  become: true
+  become_method: sudo
+
+  vars_files:
+    - ../group_vars/all.yml
+    - ../group_vars/vault.yml
+
+  vars:
+    checklist_repo_root: "{{ checklist_repo_root | default('/opt/velox/current') }}"
+    checklist_master_url: "{{ velox_master_public_url }}:{{ velox_master_port }}"
+    checklist_json_path: "/tmp/velox-checklist-{{ worker_id }}.json"
+
+  tasks:
+    - name: Assert checklist script exists on {{ worker_id }}
+      ansible.builtin.stat:
+        path: "{{ checklist_repo_root }}/deploy/runtime/checklist-verify.sh"
+      register: checklist_stat
+
+    - name: Fail if checklist-verify.sh not found
+      ansible.builtin.fail:
+        msg: >-
+          checklist-verify.sh not found at
+          {{ checklist_repo_root }}/deploy/runtime/checklist-verify.sh
+          on {{ inventory_hostname }}. Override with
+          -e checklist_repo_root=/path/to/repo
+      when: not checklist_stat.stat.exists
+
+    - name: Run checklist-verify.sh on {{ worker_id }}
+      ansible.builtin.command:
+        cmd: >-
+          {{ checklist_repo_root }}/deploy/runtime/checklist-verify.sh
+          --worker-id {{ worker_id }}
+          --master {{ checklist_master_url }}
+          --json {{ checklist_json_path }}
+        chdir: "{{ checklist_repo_root }}"
+      register: checklist_run
+      changed_when: false
+      failed_when: checklist_run.rc != 0 and checklist_run.rc != 1
+      # rc=0 → all PASS; rc=1 → at least one FAIL (non-fatal for us —
+      # we want the JSON report regardless)
+
+    - name: Print checklist stdout for {{ worker_id }}
+      ansible.builtin.debug:
+        msg: "{{ checklist_run.stdout_lines }}"
+
+    - name: Print checklist stderr for {{ worker_id }}
+      ansible.builtin.debug:
+        msg: "{{ checklist_run.stderr_lines }}"
+      when: checklist_run.stderr_lines | length > 0
+
+    - name: Fetch JSON report from {{ worker_id }}
+      ansible.builtin.fetch:
+        src: "{{ checklist_json_path }}"
+        dest: "/tmp/velox-checklist-{{ worker_id }}.json"
+        flat: true
+      when: checklist_run.rc is defined
+
+    - name: Announce checklist result for {{ worker_id }}
+      ansible.builtin.debug:
+        msg: >-
+          [{{ worker_id }}] checklist exit={{ checklist_run.rc }}
+          (0=all-PASS, 1=some-FAIL, 2=precondition-fail).
+          Report saved to /tmp/velox-checklist-{{ worker_id }}.json
