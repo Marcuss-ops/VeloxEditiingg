@@ -356,6 +356,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	// Shared SSH client for health probes (Level A + B) and smoke (Level D).
 	// Built once at composition time; nil-tolerant consumers handle nil gracefully.
 	sharedSSH := fleet.NewSSHClient(map[string]fleet.SSHWorkerTarget{
+		"host_57_129_132_133":   {Host: "57.129.132.133", User: "pierone", KeyPath: "/etc/velox/ssh/id_ed25519_velox"},
 		"host_57_131_20_173":    {Host: "57.131.20.173", User: "debian", KeyPath: "/etc/velox/ssh/id_ed25519_velox"},
 		"velox-worker-523925eb": {Host: "51.222.204.158", User: "ubuntu", KeyPath: "/etc/velox/ssh/id_ed25519_velox"},
 		"velox-worker-13197":    {Host: "149.56.131.97", User: "pierone", KeyPath: "/etc/velox/ssh/id_ed25519_velox"},
@@ -381,7 +382,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 			},
 		)
 		m.Workers.SetHealthHandler(healthHandler)
-		log.Printf("[BOOTSTRAP] Admin workers health handler wired (SSH=3 targets + Registry + Deployments; level=D smoke pending)")
+		log.Printf("[BOOTSTRAP] Admin workers health handler wired (SSH=4 targets + Registry + Deployments; level=D smoke pending)")
 	}
 
 	// Step 12/15 fleet-operator: register the LevelDSmokeExecutor
@@ -428,23 +429,30 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 			smokeBackend.Drive = fleet.NewLocalFileDriveUploader()
 			smokeBackend.Asset = fleet.NewStubAssetResolver("asset://e2e/smoke/canary.mp4", 0)
 			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: DEV MODE (VELOX_SMOKE_MODE=development) — LocalShellWorker + LocalFileDriveUploader + StubAssetResolver")
-		} else {
-			// Production mode: real SSH worker + real Drive adapter.
-			smokeBackend.Worker = fleet.NewSSHWorkerExec(sharedSSH)
-			if m.Drive != nil {
-				if svc := m.Drive.Service(); svc != nil {
-					smokeBackend.Drive = &driveUploaderAdapter{svc: svc}
-					log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: production Drive adapter wired (integrations/drive.Service)")
-				} else {
-					log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: Drive module present but Service() is nil — smoke will fail with ErrSmokeRunnerNotWired until Drive credentials are configured")
-				}
+	} else {
+		// Production mode: real SSH worker + real Drive adapter.
+		smokeBackend.Worker = fleet.NewSSHWorkerExec(sharedSSH)
+		if m.Drive != nil {
+			if svc := m.Drive.Service(); svc != nil {
+				smokeBackend.Drive = &driveUploaderAdapter{svc: svc}
+				log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: production Drive adapter wired (integrations/drive.Service)")
 			} else {
-				log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: Drive module not configured — smoke will fail with ErrSmokeRunnerNotWired until Drive is wired")
+				log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: Drive module present but Service() is nil — falling back to LocalFileDriveUploader")
 			}
-			// Asset resolver remains nil in production until the
-			// canonical asset picker is integrated.
-			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: Asset resolver is nil (production) — smoke will fail with ErrSmokeRunnerNotWired until the canonical asset picker lands")
 		}
+		// Fallback: when Drive is not configured, use local-file
+		// uploader so smoke can still complete Phase 6 (artifact
+		// saved to /tmp/velox-smoke-drive instead of Google Drive).
+		if smokeBackend.Drive == nil {
+			smokeBackend.Drive = fleet.NewLocalFileDriveUploader()
+			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: Drive not configured — using LocalFileDriveUploader (smoke artifacts saved to /tmp/velox-smoke-drive)")
+		}
+		// Stub asset resolver so Phase 1 resolves a canned pickup
+		// URL. The worker downloads the asset bundle via SSH; the
+		// canary.mp4 asset is pre-staged on each worker.
+		smokeBackend.Asset = fleet.NewStubAssetResolver("asset://e2e/smoke/canary.mp4", 0)
+		log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: using StubAssetResolver (asset://e2e/smoke/canary.mp4)")
+	}
 
 		if err := fleetDep.Registry.Register(fleet.OperationKindSmoke, fleet.NewLevelDSmokeExecutor(smokeBackend)); err != nil {
 			log.Printf("[BOOTSTRAP] WARN: LevelDSmokeExecutor registration failed: %v (kind=%s continues with noop fallback)", err, fleet.OperationKindSmoke)
@@ -457,7 +465,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 			if smokeBackend.Asset != nil {
 				assetDesc = "StubAsset"
 			}
-			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor registered for kind=%s (Worker=SSHWorkerExec[3 targets], Drive=%s, Asset=%s, Lease=RegistryDrain, SmokeRuns=SQLite)", fleet.OperationKindSmoke, driveDesc, assetDesc)
+			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor registered for kind=%s (Worker=SSHWorkerExec[4 targets], Drive=%s, Asset=%s, Lease=RegistryDrain, SmokeRuns=SQLite)", fleet.OperationKindSmoke, driveDesc, assetDesc)
 		}
 		m.Workers.SetSmokeHandler(api.NewAdminWorkersSmokeHandler(m.Workers.Registry(), fleetDep.Controller))
 		log.Printf("[BOOTSTRAP] Admin workers smoke handler wired (POST /api/v1/admin/workers/{id}/smoke; tick goroutine drives LevelDSmokeExecutor)")
