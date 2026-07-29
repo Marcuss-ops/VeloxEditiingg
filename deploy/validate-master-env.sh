@@ -91,6 +91,15 @@ is_pinned_image_ref() {
     [[ "$ref" =~ ^ghcr\.io/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+@sha256:[a-f0-9]{64}$ ]]
 }
 
+# is_positive_integer — returns 0 iff $1 parses as a non-negative integer
+# (0, 1, 2, …). Used by the SOCIAL_API_TIMEOUT_MS / SOCIAL_API_RETRIES
+# validators below to reject non-numeric / negative operator typos so
+# they cannot silently override the socialclient defaults.
+is_positive_integer() {
+    local v="${1:-}"
+    [[ "$v" =~ ^[0-9]+$ ]]
+}
+
 # ─── CHANGE_ME sweep on ACTIVE lines only ───────────────────────────────────
 # Match uncommented lines (anything that doesn't start with `#` after
 # whitespace). A comment mentioning CHANGE_ME is acceptable; an active line
@@ -280,6 +289,45 @@ else
         *) err "SOCIAL_CALLBACK_BASE_URL malformed: '$SOCIAL_CALLBACK_BASE_URL' (expected https://host[:port][/path])"
             ERR_COUNT=$((ERR_COUNT + 1)) ;;
     esac
+fi
+
+# ─── SOCIAL_API_TIMEOUT_MS / SOCIAL_API_RETRIES parseable integer ──────────
+# Both fields have canonical defaults (TIMEOUT_MS=30000, RETRIES=3) declared
+# in deploy/velox-server.env.example. Empty values are accepted at
+# pre-flight (the canonical defaults still apply); a non-empty value MUST
+# parse as a non-negative integer so socialclient.parseDurationMillis /
+# parseInt cannot silently fall back to defaults on operator typos.
+SOCIAL_API_TIMEOUT_MS_VAL="$(get_env_value "$ENV_FILE" SOCIAL_API_TIMEOUT_MS)"
+if [[ -n "$SOCIAL_API_TIMEOUT_MS_VAL" ]] && ! is_positive_integer "$SOCIAL_API_TIMEOUT_MS_VAL"; then
+    err "SOCIAL_API_TIMEOUT_MS='$SOCIAL_API_TIMEOUT_MS_VAL' is not a non-negative integer (single-attempt HTTP timeout in milliseconds; default 30000)"
+    ERR_COUNT=$((ERR_COUNT + 1))
+fi
+
+SOCIAL_API_RETRIES_VAL="$(get_env_value "$ENV_FILE" SOCIAL_API_RETRIES)"
+if [[ -n "$SOCIAL_API_RETRIES_VAL" ]] && ! is_positive_integer "$SOCIAL_API_RETRIES_VAL"; then
+    err "SOCIAL_API_RETRIES='$SOCIAL_API_RETRIES_VAL' is not a non-negative integer (default 3; Velox-runnner-driven retry is canonical, see socialclient.ConfigFromEnv)"
+    ERR_COUNT=$((ERR_COUNT + 1))
+fi
+
+# ─── Legacy SOCIAL_GATEWAY_* alias detection (do not honor, but warn) ─────
+# PR-15.10 retirement chain (ca000bf / bb407b8 / 6aadcd9) closed the
+# SOCIAL_GATEWAY_* deprecation cycle on `main` — the canonical contract
+# honors ONLY SOCIAL_API_* env vars (see socialclient.ConfigFromEnv). If
+# an operator is still carrying SOCIAL_GATEWAY_* keys in /etc/velox-server.env,
+# the runtime silently ignores them at the Go boundary; this WARN gives
+# the operator a clear rename hint on every deploy pre-flight so the rename
+# surfaces BEFORE a silent ErrNotConfigured failure at DeliverArtifact time.
+LEGACY_GATEWAY_HITS="$(grep -nE '^[[:space:]]*[^#].*(^|[[:space:]])(SOCIAL_GATEWAY_URL|SOCIAL_GATEWAY_API_KEY|SOCIAL_GATEWAY_CALLBACK_BASE_URL)=' "$ENV_FILE" 2>/dev/null || true)"
+if [[ -n "$LEGACY_GATEWAY_HITS" ]]; then
+    warn "legacy SOCIAL_GATEWAY_* alias detected in $ENV_FILE — RETIRED (PR-15.10) and NOT honored. Operator playbook rename map:"
+    warn "    SOCIAL_GATEWAY_URL                              → SOCIAL_API_URL"
+    warn "    SOCIAL_GATEWAY_API_KEY                          → SOCIAL_API_TOKEN"
+    warn "    SOCIAL_GATEWAY_CALLBACK_BASE_URL                → SOCIAL_CALLBACK_BASE_URL"
+    warn "    (ansible vault) vault_velox_social_gateway_api_key  → vault_velox_social_api_token"
+    while IFS= read -r line; do
+        warn "    $line"
+    done <<<"$LEGACY_GATEWAY_HITS"
+    WARN_COUNT=$((WARN_COUNT + 1))
 fi
 
 # ─── GIN_MODE ───────────────────────────────────────────────────────────────
