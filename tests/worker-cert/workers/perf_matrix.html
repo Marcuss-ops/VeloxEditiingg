@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Velox Worker Performance Matrix</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0d1117; color: #c9d1d9; padding: 2rem;
+  }
+  h1 { font-size: 1.5rem; margin-bottom: 0.5rem; color: #58a6ff; }
+  h2 { font-size: 1.1rem; margin: 1.5rem 0 0.75rem; color: #8b949e; }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 1rem 2rem;
+    font-size: 0.85rem; color: #8b949e; margin-bottom: 1.5rem;
+  }
+  .meta span { white-space: nowrap; }
+  .meta strong { color: #c9d1d9; }
+  table {
+    width: 100%; border-collapse: collapse; font-size: 0.85rem;
+    margin-bottom: 1.5rem;
+  }
+  th, td {
+    padding: 0.45rem 0.6rem; text-align: left;
+    border-bottom: 1px solid #21262d;
+  }
+  th {
+    background: #161b22; color: #8b949e; font-weight: 600;
+    position: sticky; top: 0; z-index: 1;
+  }
+  td.wid { font-weight: 600; color: #e6edf3; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.succ { color: #3fb950; }
+  td.fail { color: #f85149; }
+  td.status { color: #f85149; font-weight: 600; }
+  td.bool { text-align: center; }
+  td.jid code { font-size: 0.75rem; color: #8b949e; }
+  td.digest code { font-size: 0.75rem; }
+  .best { background: rgba(63,185,80,0.12); }
+  .worst { background: rgba(248,81,73,0.10); }
+  tr:hover { background: rgba(88,166,255,0.06); }
+  details { margin-top: 1rem; }
+  summary {
+    cursor: pointer; color: #58a6ff; font-weight: 600;
+    font-size: 0.9rem; padding: 0.5rem 0;
+  }
+  .footer {
+    margin-top: 2rem; font-size: 0.75rem; color: #484f58;
+    border-top: 1px solid #21262d; padding-top: 1rem;
+  }
+  .ok-badge { color: #3fb950; }
+  .fail-badge { color: #f85149; }
+</style>
+</head>
+<body>
+
+<h1>🚀 Velox Worker Performance Matrix</h1>
+
+<div class="meta">
+  <span>Master: <strong>http://127.0.0.1:8000</strong></span>
+  <span>Destination: <strong>comedy_test</strong></span>
+  <span>Date: <strong>2026-07-29T12:11:27Z</strong></span>
+  <span>Schema: <strong>tests/worker-cert/sequential_bench@1</strong></span>
+  <span>Epoch: <strong>1785326922</strong></span>
+  <span>Jobs/worker: <strong>3</strong></span>
+  <span>All succeeded: <strong class="ok-badge">true</strong></span>
+</div>
+
+<h2>📊 Per-Worker Summary</h2>
+<table>
+<thead><tr>
+  <th>Worker ID</th>
+  <th>Digest</th>
+  <th class="num">✅ OK</th>
+  <th class="num">❌ Fail</th>
+  <th class="num">Rate</th>
+  <th class="num">Median</th>
+  <th class="num">Min</th>
+  <th class="num">Max</th>
+  <th class="num">Avg</th>
+  <th class="num">RT Factor</th>
+  <th class="num">Out Dur</th>
+  <th class="num">Sub Lat</th>
+</tr></thead>
+<tbody>
+<tr><td class="wid">host_57_129_132_133</td><td class="digest"><code>a1774003cca8</code></td><td class="num succ">3</td><td class="num fail">0</td><td class="num rate">100%</td><td class="num med">3000 ms</td><td class="num min">3000 ms</td><td class="num max">3000 ms</td><td class="num avg">3000 ms</td><td class="num rtf">0.50x</td><td class="num dur">6000 ms</td><td class="num lat">535598082980844540 ms</td></tr>
+<tr><td class="wid">host_57_131_20_173</td><td class="digest"><code>a1774003cca8</code></td><td class="num succ">3</td><td class="num fail">0</td><td class="num rate">100%</td><td class="num med">2000 ms</td><td class="num min">2000 ms</td><td class="num max">2000 ms</td><td class="num avg">2000 ms</td><td class="num rtf">0.33x</td><td class="num dur">6000 ms</td><td class="num lat">69416015 ms</td></tr>
+<tr><td class="wid">velox-worker-13197</td><td class="digest"><code>a1774003cca8</code></td><td class="num succ">3</td><td class="num fail">0</td><td class="num rate">100%</td><td class="num med">2000 ms</td><td class="num min">2000 ms</td><td class="num max">2000 ms</td><td class="num avg">2000 ms</td><td class="num rtf">0.33x</td><td class="num dur">6000 ms</td><td class="num lat">72795585 ms</td></tr>
+<tr><td class="wid">velox-worker-523925eb</td><td class="digest"><code>a1774003cca8</code></td><td class="num succ">3</td><td class="num fail">0</td><td class="num rate">100%</td><td class="num med">1000 ms</td><td class="num min">1000 ms</td><td class="num max">2000 ms</td><td class="num avg">1333 ms</td><td class="num rtf">0.17x</td><td class="num dur">6000 ms</td><td class="num lat">-535598114616723200 ms</td></tr>
+</tbody>
+</table>
+
+<h2>🔍 Per-Run Details</h2>
+<details>
+<summary>12 runs across 4 workers</summary>
+<table>
+<thead><tr>
+  <th>Target Worker</th>
+  <th class="num">Run #</th>
+  <th>Job ID</th>
+  <th>Status</th>
+  <th class="num">Submit Lat</th>
+  <th class="num">Render</th>
+  <th>Actual Worker</th>
+  <th>Pin OK</th>
+</tr></thead>
+<tbody>
+<tr><td class="wid">host_57_129_132_133</td><td class="num">1</td><td class="jid"><code>job_1bad69683a1b6653</code></td><td class="status">SUCCEEDED</td><td class="num">76635385 ms</td><td class="num">3000 ms</td><td class="wid">host_57_129_132_133</td><td class="bool">true</td></tr>
+<tr><td class="wid">host_57_129_132_133</td><td class="num">2</td><td class="jid"><code>job_97073b59e85493de</code></td><td class="status">SUCCEEDED</td><td class="num">77701593 ms</td><td class="num">3000 ms</td><td class="wid">host_57_129_132_133</td><td class="bool">true</td></tr>
+<tr><td class="wid">host_57_129_132_133</td><td class="num">3</td><td class="jid"><code>job_abaab15cea16f942</code></td><td class="status">SUCCEEDED</td><td class="num">1606794248788196641 ms</td><td class="num">3000 ms</td><td class="wid">host_57_129_132_133</td><td class="bool">true</td></tr>
+<tr><td class="wid">host_57_131_20_173</td><td class="num">1</td><td class="jid"><code>job_83607014b2ff41e4</code></td><td class="status">SUCCEEDED</td><td class="num">68433533 ms</td><td class="num">2000 ms</td><td class="wid">host_57_131_20_173</td><td class="bool">true</td></tr>
+<tr><td class="wid">host_57_131_20_173</td><td class="num">2</td><td class="jid"><code>job_2cb87baec5acaf3e</code></td><td class="status">SUCCEEDED</td><td class="num">68897485 ms</td><td class="num">2000 ms</td><td class="wid">host_57_131_20_173</td><td class="bool">true</td></tr>
+<tr><td class="wid">host_57_131_20_173</td><td class="num">3</td><td class="jid"><code>job_978280a543ed51af</code></td><td class="status">SUCCEEDED</td><td class="num">70917029 ms</td><td class="num">2000 ms</td><td class="wid">host_57_131_20_173</td><td class="bool">true</td></tr>
+<tr><td class="wid">velox-worker-13197</td><td class="num">1</td><td class="jid"><code>job_a9297f5514ce650f</code></td><td class="status">SUCCEEDED</td><td class="num">68684923 ms</td><td class="num">2000 ms</td><td class="wid">velox-worker-13197</td><td class="bool">true</td></tr>
+<tr><td class="wid">velox-worker-13197</td><td class="num">2</td><td class="jid"><code>job_88b3cc4e4d885903</code></td><td class="status">SUCCEEDED</td><td class="num">73472456 ms</td><td class="num">2000 ms</td><td class="wid">velox-worker-13197</td><td class="bool">true</td></tr>
+<tr><td class="wid">velox-worker-13197</td><td class="num">3</td><td class="jid"><code>job_0915bd54d07623e4</code></td><td class="status">SUCCEEDED</td><td class="num">76229376 ms</td><td class="num">2000 ms</td><td class="wid">velox-worker-13197</td><td class="bool">true</td></tr>
+<tr><td class="wid">velox-worker-523925eb</td><td class="num">1</td><td class="jid"><code>job_840bd6a0e316a4ba</code></td><td class="status">SUCCEEDED</td><td class="num">-1606794344021782064 ms</td><td class="num">2000 ms</td><td class="wid">velox-worker-523925eb</td><td class="bool">true</td></tr>
+<tr><td class="wid">velox-worker-523925eb</td><td class="num">2</td><td class="jid"><code>job_5a304a951315f83c</code></td><td class="status">SUCCEEDED</td><td class="num">93465337 ms</td><td class="num">1000 ms</td><td class="wid">velox-worker-523925eb</td><td class="bool">true</td></tr>
+<tr><td class="wid">velox-worker-523925eb</td><td class="num">3</td><td class="jid"><code>job_1c67a9aa369bdbe5</code></td><td class="status">SUCCEEDED</td><td class="num">78147030 ms</td><td class="num">1000 ms</td><td class="wid">velox-worker-523925eb</td><td class="bool">true</td></tr>
+</tbody>
+</table>
+</details>
+
+<div class="footer">
+  Generated by <code>tests/worker-cert/perf_matrix.sh</code> —
+  source: <code>/home/pierone/Projects/company/VeloxEditiingg/tests/worker-cert/workers/benchmark.json</code>
+</div>
+
+</body>
+</html>

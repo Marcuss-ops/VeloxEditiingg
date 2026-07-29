@@ -1,0 +1,5 @@
+worker_id,image_digest_short,jobs_succeeded,jobs_failed,success_rate_pct,render_median_ms,render_min_ms,render_max_ms,render_avg_ms,realtime_factor,output_duration_ms,submit_latency_avg_ms
+"host_57_129_132_133","a1774003cca8",3,0,100,3000,3000,3000,3000,"0.50",6000,535598082980844540
+"host_57_131_20_173","a1774003cca8",3,0,100,2000,2000,2000,2000,"0.33",6000,69416015
+"velox-worker-13197","a1774003cca8",3,0,100,2000,2000,2000,2000,"0.33",6000,72795585
+"velox-worker-523925eb","a1774003cca8",3,0,100,1000,1000,2000,1333,"0.17",6000,-535598114616723200
