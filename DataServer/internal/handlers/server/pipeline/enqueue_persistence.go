@@ -64,20 +64,81 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		// implementing strict status matching should consult the
 		// openapi.yaml schema enum, not the raw forwarding status.
 		status := string(forwarding.Status)
+		var startedAt, completedAt string
 		if h.jobs.Reader != nil {
 			if job, gErr := h.jobs.Reader.Get(ctx, jobID); gErr == nil && job != nil {
 				status = string(job.Status)
+				if !job.StartedAt.IsZero() {
+					startedAt = job.StartedAt.UTC().Format("2006-01-02T15:04:05Z")
+				}
+				if !job.CompletedAt.IsZero() {
+					completedAt = job.CompletedAt.UTC().Format("2006-01-02T15:04:05Z")
+				}
 			}
 		}
+
+		// Enrich with artifact info (best-effort; nil store tolerated).
+		var artifactURL string
+		var artifactSizeBytes int64
+		if h.store != nil {
+			artifacts, aErr := h.store.GetArtifactsByJob(jobID, 1)
+			if aErr == nil && len(artifacts) > 0 {
+				a := artifacts[0]
+				if a.StorageURL != "" {
+					artifactURL = a.StorageURL
+				} else {
+					artifactURL = a.LocalPath
+				}
+				artifactSizeBytes = a.SizeBytes
+			}
+		}
+
+		// Enrich with task-attempt identity (worker_id, task_id,
+		// attempt_id, lease_id). Best-effort — the attempt row may
+		// not exist yet when the job is PENDING.
+		var workerID, taskID, attemptID, leaseID string
+		if h.store != nil {
+			if snap, sErr := h.store.GetLatestTaskAttemptForJob(ctx, jobID); sErr == nil && snap != nil {
+				workerID = snap.WorkerID
+				taskID = snap.TaskID
+				attemptID = snap.AttemptID
+				leaseID = snap.LeaseID
+			}
+		}
+
 		created := forwarding.SourceProvider == ExternalAPISourceProvider
 		statusURL := "/api/v1/jobs/" + jobID
-		c.JSON(http.StatusOK, gin.H{
+
+		resp := gin.H{
 			"ok":         true,
 			"job_id":     jobID,
 			"status":     status,
 			"created":    created,
 			"status_url": statusURL,
-		})
+		}
+		if startedAt != "" {
+			resp["started_at"] = startedAt
+		}
+		if completedAt != "" {
+			resp["completed_at"] = completedAt
+		}
+		if artifactURL != "" {
+			resp["artifact_url"] = artifactURL
+			resp["artifact_size_bytes"] = artifactSizeBytes
+		}
+		if workerID != "" {
+			resp["worker_id"] = workerID
+		}
+		if taskID != "" {
+			resp["task_id"] = taskID
+		}
+		if attemptID != "" {
+			resp["attempt_id"] = attemptID
+		}
+		if leaseID != "" {
+			resp["lease_id"] = leaseID
+		}
+		c.JSON(http.StatusOK, resp)
 	}
 }
 

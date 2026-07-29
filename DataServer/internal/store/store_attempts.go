@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -158,6 +159,37 @@ func (s *SQLiteStore) GetArtifact(id string) (*Artifact, error) {
 		return nil, err
 	}
 	return &a, nil
+}
+
+// TaskAttemptSnapshot carries the identity fields from task_attempts
+// needed by polling consumers (smoke_one.sh, perf_matrix.sh).
+// Lightweight — no attemptmetrics / taskattempts import needed.
+type TaskAttemptSnapshot struct {
+	TaskID        string `json:"task_id"`
+	AttemptID     string `json:"attempt_id"`
+	JobID         string `json:"job_id"`
+	WorkerID      string `json:"worker_id"`
+	LeaseID       string `json:"lease_id"`
+	AttemptNumber int    `json:"attempt_number"`
+}
+
+// GetLatestTaskAttemptForJob returns the most recent task_attempts row
+// for jobID, or (nil, nil) if no attempt exists yet.
+func (s *SQLiteStore) GetLatestTaskAttemptForJob(ctx context.Context, jobID string) (*TaskAttemptSnapshot, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT task_id, id, job_id, worker_id, lease_id, attempt_number
+		 FROM task_attempts WHERE job_id = ?
+		 ORDER BY created_at DESC LIMIT 1`, jobID)
+	var snap TaskAttemptSnapshot
+	err := row.Scan(&snap.TaskID, &snap.AttemptID, &snap.JobID,
+		&snap.WorkerID, &snap.LeaseID, &snap.AttemptNumber)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get latest task attempt for job %s: %w", jobID, err)
+	}
+	return &snap, nil
 }
 
 func (s *SQLiteStore) GetArtifactsByJob(jobID string, limit int) ([]Artifact, error) {
