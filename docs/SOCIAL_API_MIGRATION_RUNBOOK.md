@@ -659,7 +659,7 @@ rebase assigns a PR-N.NN anchor):
   Operator-visible safety net: `deploy/validate-master-env.sh` warns when any
   `SOCIAL_GATEWAY_*` alias is still set in the master env file, AND
   `DataServer/cmd/server/bootstrap_modules.go` emits a one-line
-  `[SOCIALCLIENT] WARN` at every master boot pointing at the canonical rename.
+  `[BOOTSTRAP][SOCIALCLIENT] WARN` at every master boot pointing at the canonical rename.
 
 ---
 
