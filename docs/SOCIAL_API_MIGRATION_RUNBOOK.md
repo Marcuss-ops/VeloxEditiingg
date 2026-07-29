@@ -201,26 +201,34 @@ the cross-repo contract:
 
 | # | Condition | Enforced by | Failure surface in `/publishing/targets` |
 |---|---|---|---|
-| 1 | **Workspace binding enabled** for the channel's owning workspace | `internal/target_resolver.go::resolveBindings` (`InstaeditLogin`) → propagates to `can_post=false` | `status="binding_disabled"` or absence from the catalog |
-| 2 | **Platform account active** (not paused, not deleted) | `internal/target_resolver.go::resolveAccountStatus` | `status="account_inactive"`, `target_error_code="ACCOUNT_INACTIVE"` |
-| 3 | **OAuth valid** (access token not expired, not revoked, refresh-token chain not broken) | `internal/target_resolver.go::resolveOAuthHealth` | `status="reauth_required"`, `block_reason="channel authentication requires attention"`, `target_error_code="BLOCKED_AUTH"` |
-| 4 | **External destination enabled** (the linked row in `delivery_destinations` has `enabled=true` AND a non-empty `external_destination_id`) | Velox: `delivery_destinations.enabled` + `validateDeliveryDestinationTx` (`atomic_job_task.go`) | `enabled=false`, `can_post=false`, `target_error_code="DEST_DISABLED"` |
+| 1 | **Workspace binding enabled** for the channel's owning workspace | `InstaeditLogin/internal/deliveries/target_resolver.go::checkAccountEligibility` (binding gate — step 4 of the eligibility gate) | absence from the catalog (no `can_post=true` row surfaces) |
+| 2 | **Platform account active** (status enum = `active`, not `paused` / `revoked` / `disconnected`) | same `checkAccountEligibility` (status gate — step 3 of the eligibility gate) | row dropped from catalog, or `can_post=false` |
+| 3 | **OAuth valid** (access token not expired, not revoked, refresh-token chain not broken) | same `checkAccountEligibility` (reauth_required gate — step 1 of the eligibility gate; dual-signal: status enum OR `reauth_required_at` timestamp). Token-freshness itself is verified at the WORKER boundary via `internal/services/youtube_validate.go`. | `status="reauth_required"`, `target_error_code="BLOCKED_AUTH"` |
+| 4 | **External destination enabled** (the linked row in `delivery_destinations` has `enabled=true` AND a non-empty `external_destination_id`) | Velox: `DataServer/internal/deliveries/store_deliveries.go::BatchDeliveryDestinationsExistAndEnabled` (handler pre-flight) AND `DataServer/internal/store/delivery_plan_validator.go::validateDeliveryDestinationTx` (in-tx atomic creator gate, called from `DataServer/internal/store/atomic_job_task.go::insertDeliveryPlanTx`) | `enabled=false` row omitted from `targets[]`, or enqueue rejected with `destination_id %q is globally disabled` |
 
-**Condition 1, 2, 3 are evaluated server-side by the InstaEdit
-catalog resolver.** Velox surfaces the verdict as the
-`can_post` boolean in the `/publishing/targets` response. A
-channel that fails ANY of 1/2/3 arrives at Velox with
-`can_post=false` and `capabilities.upload_video=false`. Senders
-MUST skip these rows even if `destination_id` is non-empty.
+`checkAccountEligibility` (defined at
+`InstaeditLogin/internal/deliveries/target_resolver.go:615`) is the
+SINGLE canonical gate shared by the SavedDestination,
+DirectTarget, and `ListWorkspaceTargets` paths in the catalog
+resolver (line 286 + 433, and `target_catalog.go:103`). Operators
+MUST NOT re-derive condition 1/2/3 in the sender; trust the
+`can_post` boolean surfaced by `/publishing/targets`.
 
 **Condition 4 is enforced by Velox itself** at enqueue time
-(through `validateDeliveryDestinationTx` inside the atomic
-creator's INSERT transaction; see
-`internal/store/atomic_job_task.go::insertDeliveryPlanTx`). A
-`delivery_destinations` row whose `enabled` flips to `false`
-between catalog discovery and job submission causes Velox to
-reject the enqueue with `destination_id %q is globally disabled`,
-NOT to silently dispatch.
+through the canonical `validateDeliveryDestinationTx` inside the
+atomic creator's INSERT transaction. A `delivery_destinations`
+row whose `enabled` flips to `false` between catalog discovery and
+job submission causes Velox to reject the enqueue with
+`destination_id %q is globally disabled`, NOT to silently dispatch.
+
+Conditions 1-3 are also surfaced through the per-row
+`target_error_code` taxonomy (see
+`InstaeditLogin/internal/deliveries/target_resolver.go:184-188`):
+`TARGET_NOT_AVAILABLE` and `BLOCKED_AUTH` are the only two
+catalog-sourced error codes a sender should match on. The other
+codes the resolver emits (`ACCOUNT_INACTIVE`, `DEST_DISABLED`,
+etc.) were speculation in earlier drafts of this section and have
+been REMOVED in favor of the canonical taxonomy.
 
 ### 0.2.1 Diagnostic SQL — verify all 4 conditions on the master
 
