@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// evaluator.go — Step 16/15 pure-rule evaluator for the 12-rule
+// evaluator.go — Step 16/15 pure-rule evaluator for the 15-rule
 // fleet-operator alert catalog.
 //
 // Design contract:
@@ -129,6 +129,28 @@ type WorkerSnapshot struct {
 	// most-recent deployment_records row for this worker
 	// ("PENDING" | "SUCCEEDED" | "FAILED" | "ROLLED_BACK").
 	LatestDeploymentStatus *string
+
+	// ConnectionStatus is the worker's connection_status
+	// ("CONNECTED" | "STALE" | "DISCONNECTED" | "DRAINING").
+	// nil until the worker's first heartbeat populates it.
+	ConnectionStatus *string
+
+	// LongestRunningJobMinutes is the duration in minutes of
+	// the longest-running job currently in RUNNING state on
+	// this worker. nil when no jobs are RUNNING or data not
+	// yet collected.
+	LongestRunningJobMinutes *float64
+
+	// OldestLeaseAgeSeconds is the age in seconds of the
+	// oldest active task lease on this worker. nil when no
+	// leases are active or data not yet collected.
+	OldestLeaseAgeSeconds *float64
+
+	// WorkdirPermissionOK is true when the worker's
+	// /var/lib/velox-worker directory has the expected
+	// ownership (uid 10001). nil when the host-level check
+	// hasn't been performed yet.
+	WorkdirPermissionOK *bool
 }
 
 // Evaluate runs every rule in the catalog against the given
@@ -252,6 +274,34 @@ func evaluateOne(ctx CallCtx, snap *WorkerSnapshot, r AlertRule) (AlertEventHit,
 		}
 		if !r.Above && *snap.LatestDeploymentStatus == "ROLLED_BACK" {
 			return makeHit(snap.WorkerID, r, "deployment=ROLLED_BACK"), true
+		}
+	case RuleWorkerDisconnected:
+		if snap.ConnectionStatus == nil {
+			break
+		}
+		if !r.Above && *snap.ConnectionStatus == "DISCONNECTED" {
+			return makeHit(snap.WorkerID, r, fmt.Sprintf("connection_status=%s", *snap.ConnectionStatus)), true
+		}
+	case RuleJobStuckRunning:
+		if snap.LongestRunningJobMinutes == nil {
+			break
+		}
+		if r.Above && *snap.LongestRunningJobMinutes >= r.Threshold {
+			return makeHit(snap.WorkerID, r, fmt.Sprintf("longest_running_job=%.0fmin", *snap.LongestRunningJobMinutes)), true
+		}
+	case RuleStaleLease:
+		if snap.OldestLeaseAgeSeconds == nil {
+			break
+		}
+		if r.Above && *snap.OldestLeaseAgeSeconds >= r.Threshold {
+			return makeHit(snap.WorkerID, r, fmt.Sprintf("oldest_lease_age=%.0fs", *snap.OldestLeaseAgeSeconds)), true
+		}
+	case RuleWorkdirPermissionChange:
+		if snap.WorkdirPermissionOK == nil {
+			break
+		}
+		if !r.Above && !*snap.WorkdirPermissionOK {
+			return makeHit(snap.WorkerID, r, "workdir_permission=changed"), true
 		}
 	}
 	return AlertEventHit{}, false

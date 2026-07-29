@@ -2,7 +2,7 @@
 # structured alerting (mirror of the Go-side catalog in
 # DataServer/internal/fleet/opsalerts/rule_catalog.go).
 #
-# Scope: this file MUST stay in sync with the 12-rule
+# Scope: this file MUST stay in sync with the 15-rule
 # AlertRule struct catalog in the Go engine. The Go-side
 # engine writes to alert_events (SQLite, migration 107) for
 # the operator dashboard; the Prometheus-side rules fire
@@ -184,6 +184,35 @@ groups:
             has status='ROLLED_BACK'. The forward-and-rollback cascade
             occurred. Inspect the original PENDING row's error_message.
 
+      # job stuck running
+      - alert: VeloxFleetJobStuckRunning
+        expr: velox_fleet_alert_active{rule_id="job_stuck_running",severity="CRITICAL"} == 1
+        for: 0m
+        labels:
+          severity: critical
+          domain: fleet_operator
+          rule_id: job_stuck_running
+        annotations:
+          summary: "Job stuck in RUNNING state (>10min)"
+          description: |
+            Worker {{ $labels.worker_id }} has a job stuck in RUNNING
+            for more than 10 minutes. Inspect task_attempts for the
+            last progress update. Possible FFmpeg stall or I/O saturation.
+
+      # workdir permission changed
+      - alert: VeloxFleetWorkdirPermissionChange
+        expr: velox_fleet_alert_active{rule_id="workdir_permission_changed",severity="CRITICAL"} == 1
+        for: 0m
+        labels:
+          severity: critical
+          domain: fleet_operator
+          rule_id: workdir_permission_changed
+        annotations:
+          summary: "Workdir permissions changed (container cannot write)"
+          description: |
+            Worker {{ $labels.worker_id }} /var/lib/velox-worker
+            permissions have changed. Run prepare-host.sh to restore.
+
   - name: velox.fleet_alerts_warning
     interval: 30s
     rules:
@@ -233,3 +262,33 @@ groups:
             Worker {{ $labels.worker_id }} cert expires within 15 days.
             Rotate via prepare-host.sh or run `fleetctl update` to
             trigger automatic cert refresh.
+
+      # worker disconnected
+      - alert: VeloxFleetWorkerDisconnected
+        expr: velox_fleet_alert_active{rule_id="worker_disconnected",severity="WARNING"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          domain: fleet_operator
+          rule_id: worker_disconnected
+        annotations:
+          summary: "Worker disconnected"
+          description: |
+            Worker {{ $labels.worker_id }} connection_status is DISCONNECTED.
+            The session is dead or the heartbeat expired beyond 5min.
+            Check SSH + docker compose on the worker host.
+
+      # stale lease
+      - alert: VeloxFleetStaleLease
+        expr: velox_fleet_alert_active{rule_id="stale_lease",severity="WARNING"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          domain: fleet_operator
+          rule_id: stale_lease
+        annotations:
+          summary: "Oldest task lease >5min (stale)"
+          description: |
+            Worker {{ $labels.worker_id }} has a task lease older than
+            5 minutes. The task-lease-reaper should auto-reclaim it.
+            Persistent stale leases suggest executor stall.

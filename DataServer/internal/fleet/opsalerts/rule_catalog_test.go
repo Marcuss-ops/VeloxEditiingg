@@ -18,13 +18,16 @@ import (
 //   9. cert <15gg = WARNING / <5gg = CRITICAL (two entries, same RuleID)
 //  10. Drive delivery fail = CRITICAL
 //  11. deployment ROLLBACK = CRITICAL
+//  12. worker disconnected = WARNING
+//  13. job stuck in RUNNING >10min = CRITICAL
+//  14. stale lease >5min = WARNING
+//  15. workdir permission changed = CRITICAL
 
 func TestAllRulesCatalogCount(t *testing.T) {
 	rules := AllRules()
-	// 11 rule_ids + 1 for the second-severity tier of disk =
-	// 13 entries. Cert has 2 tiers too. The user spec lists 11
-	// families; 3 of those have dual severity => 11 + 2 = 13 total.
-	if got, want := len(rules), 13; got != want {
+	// 15 rule families + 2 dual-severity entries (disk 85/95,
+	// cert 15d/5d) = 17 total.
+	if got, want := len(rules), 17; got != want {
 		t.Fatalf("AllRules() count: got %d, want %d", got, want)
 	}
 }
@@ -118,14 +121,18 @@ func TestRuleIDsMatchUserSpec(t *testing.T) {
 		RuleVersionDrift:           true,
 		RuleCertExpiring:           true,
 		RuleDriveDeliveryFailed:    true,
-		RuleDeploymentRollback:     true,
+		RuleDeploymentRollback:      true,
+		RuleWorkerDisconnected:      true,
+		RuleJobStuckRunning:         true,
+		RuleStaleLease:              true,
+		RuleWorkdirPermissionChange: true,
 	}
 	for _, r := range AllRules() {
 		if !want[r.ID] {
 			t.Fatalf("unexpected rule_id %q in catalog", r.ID)
 		}
 	}
-	if len(want) != 11 {
-		t.Fatalf("user spec expects 11 rule families, got %d", len(want))
+	if len(want) != 15 {
+		t.Fatalf("user spec expects 15 rule families, got %d", len(want))
 	}
 }

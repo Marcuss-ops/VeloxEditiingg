@@ -1,6 +1,6 @@
 -- alert_events table for Step 16/15 fleet-operator structured alerting.
 --
--- 12 rules per the user spec, each producing 0..N AlertEvent rows over time:
+-- 15 rules per the user spec, each producing 0..N AlertEvent rows over time:
 --   - heartbeat_stale (>90s CRITICAL)
 --   - container_unhealthy (CRITICAL)
 --   - restart_loop (>=3/h CRITICAL)
@@ -12,6 +12,10 @@
 --   - cert_expiring (<15d WARNING, <5d CRITICAL)
 --   - drive_delivery_failed (CRITICAL)
 --   - deployment_rollback (CRITICAL)
+--   - worker_disconnected (WARNING)
+--   - job_stuck_running (>10min CRITICAL)
+--   - stale_lease (>5min WARNING)
+--   - workdir_permission_changed (CRITICAL)
 --
 -- Each rule emits at most one ACTIVE row per (worker_id, rule_id) at a time;
 -- on resolution the row's resolved_at is stamped. The dedup logic lives in

@@ -22,7 +22,7 @@
 // dedup key.
 package opsalerts
 
-// RuleID is the canonical 12-rule catalog ID per the user spec.
+// RuleID is the canonical 15-rule catalog ID per the user spec.
 // IDs are stable strings (used as DB row.rule_id AND as
 // Prometheus Alert.alert name equivalence). Operator-facing
 // dashboards key by these IDs.
@@ -40,6 +40,10 @@ const (
 	RuleCertExpiring            RuleID = "cert_expiring"
 	RuleDriveDeliveryFailed     RuleID = "drive_delivery_failed"
 	RuleDeploymentRollback      RuleID = "deployment_rollback"
+	RuleWorkerDisconnected      RuleID = "worker_disconnected"
+	RuleJobStuckRunning         RuleID = "job_stuck_running"
+	RuleStaleLease              RuleID = "stale_lease"
+	RuleWorkdirPermissionChange RuleID = "workdir_permission_changed"
 )
 
 // Severities is the canonical 3-bucket enum per the user spec.
@@ -100,8 +104,8 @@ type AlertRule struct {
 	// Documented inline per evaluator.
 }
 
-// AllRules is the canonical 12-rule catalog. Order matches the
-// user spec's listing order (heartbeat first, deployment_rollback
+// AllRules is the canonical 15-rule catalog. Order matches the
+// user spec's listing order (heartbeat first, workdir_permission_changed
 // last) so the dashboard's grouped-by-rule view has a stable
 // ordering without a sort key.
 func AllRules() []AlertRule {
@@ -200,13 +204,41 @@ func AllRules() []AlertRule {
 			HumanReadable: "Deployment rolled back",
 			LongDescription: "Latest deployment_records row for this worker has status='ROLLED_BACK' (is_rollback=true). The forward cascade failed and the worker auto-rolled-back to previous_digest. Inspect the original PENDING row's error_message; the forward-then-rollback sequence is logged.",
 		},
+		// 12. worker disconnected = WARNING
+		{
+			ID: RuleWorkerDisconnected, Severity: Warning,
+			Threshold: 0, Above: false,
+			HumanReadable: "Worker disconnected (session dead or heartbeat expired)",
+			LongDescription: "Worker connection_status is DISCONNECTED. The session is dead or the heartbeat has expired beyond the 5min threshold. The worker will not receive new leases until it reconnects. Check the worker host SSH + docker compose status.",
+		},
+		// 13. job stuck in RUNNING >10min = CRITICAL
+		{
+			ID: RuleJobStuckRunning, Severity: Critical,
+			Threshold: 10, Above: true,
+			HumanReadable: "Job stuck in RUNNING state (>10min)",
+			LongDescription: "At least one job on this worker has been in RUNNING state for more than 10 minutes. The render pipeline may be hung (FFmpeg stall, disk I/O saturation, or network partition during asset download). Inspect the job's task_attempts for the last progress update.",
+		},
+		// 14. stale lease >5min = WARNING
+		{
+			ID: RuleStaleLease, Severity: Warning,
+			Threshold: 300, Above: true,
+			HumanReadable: "Oldest task lease >5min (stale lease)",
+			LongDescription: "The oldest active task lease on this worker is older than 5 minutes. The worker may have accepted a lease but never started (or completed) the associated task. The master-side task-lease-reaper should auto-reclaim it; persistent stale leases suggest a worker-side executor stall.",
+		},
+		// 15. workdir permission changed = CRITICAL
+		{
+			ID: RuleWorkdirPermissionChange, Severity: Critical,
+			Threshold: 1, Above: false,
+			HumanReadable: "Workdir permissions altered (container cannot write)",
+			LongDescription: "The worker's /var/lib/velox-worker directory permissions have changed from the expected uid 10001 (the image's velox user). The container will fail to write artifacts, temp files, or smoke outputs. Run `sudo deploy/runtime/prepare-host.sh` to restore correct ownership.",
+		},
 	}
 }
 
 // AllRulesByID is a lookup table keyed by (rule_id, severity) —
 // the dedup key used by dedup.go and the alert_events table.
 func AllRulesByID() map[RuleID][]AlertRule {
-	out := make(map[RuleID][]AlertRule, 11)
+	out := make(map[RuleID][]AlertRule, 15)
 	for _, r := range AllRules() {
 		out[r.ID] = append(out[r.ID], r)
 	}
