@@ -1,6 +1,6 @@
 {
   "schema": "tests/worker-cert/sequential_bench@1",
-  "epoch": 1785322875,
+  "epoch": 1785325138,
   "workers_tested": 4,
   "total_runs": 12,
   "jobs_per_worker": 3,
@@ -9,7 +9,7 @@
   "no_drain": false,
   "all_jobs_succeeded": false,
   "master_url": "http://127.0.0.1:8000",
-  "written_at": "2026-07-29T11:01:58Z",
+  "written_at": "2026-07-29T11:41:42Z",
   "workers": [{"worker_id":"host_57_129_132_133","image_digest":"a1774003cca82ab71ae943c477ee3d6b53c94aaa9d57332df1549bedb60e6326","jobs_succeeded":0,"jobs_failed":3,"render_time_ms":{"median":0,"min":0,"max":0,"avg":0},"output_duration_ms":6000,"realtime_factor":"0"},{"worker_id":"host_57_131_20_173","image_digest":"a1774003cca82ab71ae943c477ee3d6b53c94aaa9d57332df1549bedb60e6326","jobs_succeeded":0,"jobs_failed":3,"render_time_ms":{"median":0,"min":0,"max":0,"avg":0},"output_duration_ms":6000,"realtime_factor":"0"},{"worker_id":"velox-worker-13197","image_digest":"a1774003cca82ab71ae943c477ee3d6b53c94aaa9d57332df1549bedb60e6326","jobs_succeeded":0,"jobs_failed":3,"render_time_ms":{"median":0,"min":0,"max":0,"avg":0},"output_duration_ms":6000,"realtime_factor":"0"},{"worker_id":"velox-worker-523925eb","image_digest":"a1774003cca82ab71ae943c477ee3d6b53c94aaa9d57332df1549bedb60e6326","jobs_succeeded":0,"jobs_failed":3,"render_time_ms":{"median":0,"min":0,"max":0,"avg":0},"output_duration_ms":6000,"realtime_factor":"0"}],
-  "runs": [{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"}]
+  "runs": [{"job_id":"job_d4241f5a463f776f","status":"FAILED","error":"terminal FAILED"},{"job_id":"job_1da4ad2e87822368","status":"FAILED","error":"terminal FAILED"},{"job_id":"job_9a8d020e8d914862","status":"FAILED","error":"terminal FAILED"},{"job_id":"job_c8aed0b671b551b1","status":"FAILED","error":"terminal FAILED"},{"job_id":"job_8ef272aa4fb234b7","status":"FAILED","error":"terminal FAILED"},{"job_id":"job_cf23b64d3a201d19","status":"FAILED","error":"terminal FAILED"},{"job_id":"job_890f0f55dbb5b50a","status":"FAILED","error":"terminal FAILED"},{"job_id":"job_9a6b6d0681b65c0e","status":"FAILED","error":"terminal FAILED"},{"job_id":"job_304f1b845880a949","status":"FAILED","error":"terminal FAILED"},{"job_id":"job_4121ec8fd4663116","status":"FAILED","error":"terminal FAILED"},{"job_id":"job_ed7dbe8e4cd6e931","status":"FAILED","error":"terminal FAILED"},{"job_id":"job_39eee3008cb40873","status":"FAILED","error":"terminal FAILED"}]
 }

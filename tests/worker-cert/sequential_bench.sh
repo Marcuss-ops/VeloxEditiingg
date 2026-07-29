@@ -219,6 +219,7 @@ submit_and_poll_job() {
 {
   "idempotency_key": "${idem_key}",
   "video_name": "sequential_bench ${target_worker} run ${run_idx}",
+  "script_text": "Benchmark test script for sequential worker evaluation.",
   "placement_pin_worker_id": "${target_worker}",
   "voiceover_paths": ["velox-asset://${ASSET_VO}"],
   "scenes": [

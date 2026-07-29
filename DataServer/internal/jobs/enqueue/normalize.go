@@ -444,6 +444,10 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 		"delivery_destination_id",
 		"destination_ids",
 		"destination_id",
+		// Preserve per-job placement pin through normalization so
+		// the placement matcher sees _placement_pin_worker_id in
+		// the task spec payload and routes to the pinned worker.
+		"_placement_pin_worker_id",
 	} {
 		if value, ok := src[key]; ok && value != nil {
 			out[key] = value

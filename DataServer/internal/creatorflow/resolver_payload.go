@@ -36,6 +36,14 @@ func (r *Resolver) buildAndRewritePayload(reqPayload map[string]interface{}, fwd
 	// same step the legacy Service.ForwardCompleted performed.
 	fwdKey.InjectIntoPayload(workerPayload)
 
+	// Re-inject _placement_pin_worker_id from the original payload —
+	// BuildPipelinePayload creates a fresh map that drops per-job
+	// operator fields. Without this, placement_pin_worker_id in
+	// SubmitJobRequest silently fails to route to the pinned worker.
+	if pin, ok := reqPayload["_placement_pin_worker_id"].(string); ok && pin != "" {
+		workerPayload["_placement_pin_worker_id"] = pin
+	}
+
 	return workerPayload, nil
 }
 
