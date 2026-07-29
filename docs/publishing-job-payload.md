@@ -1,40 +1,54 @@
 # Velox job publishing payload
 
-This document defines the canonical publishing intent carried by callers of
-`POST /api/v1/jobs`.
+This document defines the canonical flow used by trusted systems that submit
+render jobs and optionally request social delivery.
 
-The render job is still submitted only to the Velox Master. Social OAuth tokens
-remain inside InstaEdit and must never be placed in this payload.
+```text
+job sender → Velox Master → render worker → InstaEdit → private upload
+```
 
-## 1. Discover available channels
+The sender never calls a render worker directly and never receives OAuth,
+Google, YouTube or provider secrets.
 
-Before submitting a job, the service calls InstaEdit using the Velox M2M token:
+## 1. Discover channels through Velox
+
+The trusted sender calls Velox with the same M2M authentication used for job
+submission:
 
 ```http
-POST /internal/v1/destinations/resolve-target
-Authorization: Bearer <VELOX_API_TOKEN>
+POST /api/v1/publishing/targets
+Authorization: Bearer <VELOX_M2M_TOKEN>
 Content-Type: application/json
 ```
 
 ```json
 {
   "workspace_id": 12,
-  "platform": "youtube",
-  "target": {
-    "type": "catalog"
-  }
+  "platform": "youtube"
 }
 ```
 
-The response contains every YouTube channel bound to the workspace. Stable
-identifiers are authoritative; `channel_name` is display-only.
+To narrow discovery to one InstaEdit account/channel:
 
 ```json
 {
-  "valid": true,
-  "destination_id": "instaedit_youtube",
-  "resolved_targets": [
+  "workspace_id": 12,
+  "platform": "youtube",
+  "platform_account_id": 381
+}
+```
+
+Velox calls InstaEdit's internal catalog, synchronizes its own
+`delivery_destinations` registry and returns Velox-ready destination IDs:
+
+```json
+{
+  "workspace_id": 12,
+  "platform": "youtube",
+  "targets": [
     {
+      "destination_id": "instaedit_extdst_01JREADY",
+      "external_destination_id": "extdst_01JREADY",
       "platform_account_id": 381,
       "platform": "youtube",
       "channel_id": "UCxxxxxxxx",
@@ -70,14 +84,22 @@ identifiers are authoritative; `channel_name` is display-only.
 }
 ```
 
-A sender must only allow selection of rows where `can_post=true`.
+A sender must only permit selection when all of these conditions are true:
 
-## 2. Submit one channel target
+```text
+can_post = true
++ destination_id is non-empty
++ capabilities.upload_video = true
+```
 
-The publishing intent is stored inside the existing
-`delivery_plan[].metadata` boundary. Velox already preserves this object into
-the canonical worker payload, so no parallel top-level publishing contract is
-introduced.
+`channel_name` is display-only. The sender copies `destination_id` exactly as
+returned by Velox.
+
+## 2. Submit a render job with social delivery
+
+Publishing metadata uses the existing `delivery_plan[].metadata` field. The
+selected channel is represented only by `destination_id`; it is not repeated as
+an account name or channel name inside metadata.
 
 ```json
 {
@@ -104,84 +126,58 @@ introduced.
   ],
   "delivery_plan": [
     {
-      "destination_id": "instaedit_youtube",
+      "destination_id": "instaedit_extdst_01JREADY",
       "priority": 1,
       "retry_budget": 3,
       "metadata": {
         "contract_version": "velox.instaedit.publish.v1",
-        "publishing": {
-          "platform": "youtube",
-          "workspace_id": 12,
-          "target": {
-            "type": "channel",
-            "platform_account_id": 381,
-            "channel_id": "UCxxxxxxxx"
-          },
-          "initial_privacy": "private",
-          "final_privacy": "public",
-          "require_thumbnail": true
-        }
+        "title": "Video title",
+        "description": "Video description",
+        "tags": ["wwe", "wrestling"],
+        "privacy_status": "private",
+        "final_privacy": "public",
+        "require_thumbnail": true
       }
     }
   ]
 }
 ```
 
-Both `platform_account_id` and `channel_id` may be supplied. InstaEdit treats
-the numeric account ID as authoritative and uses the provider-native channel ID
-as a cross-check against an OAuth grant that may have changed channel.
-
-## 3. Submit a group target
+Optional scheduling metadata:
 
 ```json
 {
-  "destination_id": "instaedit_youtube",
-  "metadata": {
-    "contract_version": "velox.instaedit.publish.v1",
-    "publishing": {
-      "platform": "youtube",
-      "workspace_id": 12,
-      "target": {
-        "type": "group",
-        "group_id": 27
-      },
-      "initial_privacy": "private",
-      "final_privacy": "public",
-      "require_thumbnail": true
+  "publish_at": "2026-07-30T18:00:00Z"
+}
+```
+
+The initial upload must always remain private. InstaEdit applies the thumbnail
+before executing the final public, unlisted or scheduled transition.
+
+## 3. No social delivery
+
+When the caller does not specify a channel, omit the InstaEdit delivery entry.
+The render job can still use a Drive or other registered destination:
+
+```json
+{
+  "delivery_plan": [
+    {
+      "destination_id": "comedy_test",
+      "retry_budget": 3
     }
-  }
+  ]
 }
 ```
 
-InstaEdit expands a group into independent per-channel deliveries. A partial
-failure must remain visible per target and must never be collapsed into a false
-success.
+Do not invent a default social channel and do not select the first catalog row
+automatically.
 
-## 4. Mandatory pre-flight
+## 4. Failure rules
 
-Before enqueueing a job with publishing metadata, the sender must validate the
-selected target:
-
-```json
-{
-  "workspace_id": 12,
-  "platform": "youtube",
-  "target": {
-    "type": "channel",
-    "platform_account_id": 381,
-    "channel_id": "UCxxxxxxxx"
-  }
-}
-```
-
-The same endpoint returns `valid=false` with `TARGET_NOT_AVAILABLE`,
-`GROUP_EMPTY`, or `BLOCKED_AUTH` when the target cannot be used.
-
-## 5. Safety invariants
-
-- The sender submits only to the Velox Master, never directly to a worker.
-- The sender never sends OAuth, refresh, Google, YouTube, or provider API keys.
-- Stable IDs are used; display channel names are never identifiers.
-- The initial YouTube privacy is always `private`.
-- Final publication is blocked until the thumbnail has been applied.
-- A replay uses the same idempotency key and must not create a second upload.
+- Missing or disabled `destination_id`: Velox rejects the job before enqueue.
+- Channel requires reauthorization: catalog returns `can_post=false`.
+- InstaEdit unavailable: target discovery returns a service/upstream error.
+- Same job retry: reuse the original `idempotency_key`.
+- Thumbnail or publish failure: the uploaded video remains private.
+- Display-name changes never affect routing because delivery uses opaque IDs.
