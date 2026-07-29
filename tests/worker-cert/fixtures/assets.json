@@ -17,5 +17,20 @@
     {"asset_id": "scene-image-001", "note": "placeholder — 16 scene_image READY assets available; pick one when needed"}
   ],
   "_stats": "voiceover=53 READY, stock_clip=44 READY, source_clip=6 READY, subtitle=8 READY, scene_image=16 READY (as of 2026-07-29)",
-  "_canonical_pattern": "velox-asset://<asset_id> — must match ^(https?://|velox-asset://).+$ per intake_validation.go §manifestRefURLRegexp"
+  "_canonical_pattern": "velox-asset://<asset_id> — must match ^(https?://|velox-asset://).+$ per intake_validation.go §manifestRefURLRegexp",
+  "_refresh_query": {
+    "_doc": "Run these on the master VPS (sqlite3 /opt/velox/current/.velox/data/velox.db) to regenerate this file when the DB is repopulated. Then manually copy source files to storage_key paths if the cached blobs are missing (see _restore_blobs).",
+    "voiceover": "SELECT a.asset_id, a.mime_type, s.source_reference FROM assets a JOIN asset_sources s ON a.asset_id = s.asset_id WHERE a.kind = 'voiceover' AND a.status = 'READY' AND s.source_type = 'file' ORDER BY a.created_at DESC LIMIT 2",
+    "clips": "SELECT a.asset_id, a.mime_type FROM assets a WHERE a.kind = 'stock_clip' AND a.status = 'READY' ORDER BY a.created_at DESC LIMIT 3",
+    "counts": "SELECT kind, COUNT(*) FROM assets WHERE status = 'READY' GROUP BY kind ORDER BY count DESC",
+    "storage_keys": "SELECT asset_id, storage_key FROM assets WHERE asset_id IN (<ids>)",
+    "_restore_blobs": {
+      "_doc": "If jobs fail with 'voiceover asset not found', the cached blobs at storage_key paths are missing. Copy source files back:",
+      "command": "for id in ccc7f50e... b5bc023f...; do KEY=$(sqlite3 velox.db \"SELECT storage_key FROM assets WHERE asset_id='$id'\"); [ ! -f \"$KEY\" ] && cp /opt/velox/current/.velox/data/e2e-smoke/voiceover.mp3 \"$KEY\"; done",
+      "known_sources": {
+        "voiceover": "/opt/velox/current/.velox/data/e2e-smoke/voiceover.mp3",
+        "clip": "/opt/velox/current/.velox/data/smoke_assets/video.mp4"
+      }
+    }
+  }
 }
