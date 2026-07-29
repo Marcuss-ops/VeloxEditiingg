@@ -34,12 +34,11 @@ import (
 	"strings"
 )
 
-// workerListResponse / workerCardResponse / mutationResponse
-// match the Step 1/15 / Step 6/15 / Step 7/15 envelopes.
+// workerListResponse matches GET /api/v1/admin/workers envelope
+// (top-level keys: count, workers).
 type workerListResponse struct {
-	Data []map[string]any `json:"data"`
-	HasMore bool           `json:"has_more"`
-	Count int             `json:"count"`
+	Workers []map[string]any `json:"workers"`
+	Count   int              `json:"count"`
 }
 
 type workerCardResponse map[string]any
@@ -71,7 +70,7 @@ func runStatus(client *fleetClient) int {
 	// Pretty-print.
 	fmt.Printf("%-32s  %-9s  %-9s  %-9s  %-26s  %-13s\n", "WORKER_ID", "STATUS", "HEALTH", "JOBS", "EXECUTOR@VERSION", "LAST_SMOKE")
 	fmt.Printf("%-32s  %-9s  %-9s  %-9s  %-26s  %-13s\n", "---------", "------", "------", "----", "--------------", "----------")
-	for _, w := range resp.Data {
+	for _, w := range resp.Workers {
 		wid, _ := w["worker_id"].(string)
 		statusS, _ := w["status"].(string)
 		health, _ := w["health"].(string)

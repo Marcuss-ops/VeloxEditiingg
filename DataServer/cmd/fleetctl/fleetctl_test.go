@@ -168,7 +168,7 @@ func TestRunStatus_StatusOK_PrettyPrintsCard(t *testing.T) {
 		}
 		// Return a 2-worker list with WorkerCard-shaped rows.
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": []map[string]any{
+			"workers": []map[string]any{
 				{
 					"worker_id":        "velox-worker-13197",
 					"status":           "CONNECTED",
@@ -190,8 +190,7 @@ func TestRunStatus_StatusOK_PrettyPrintsCard(t *testing.T) {
 					"last_smoke_status": "FAILED",
 				},
 			},
-			"has_more": false,
-			"count":   2,
+			"count": 2,
 		})
 	})
 	defer srv.Close()
