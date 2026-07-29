@@ -118,6 +118,13 @@ func (b *baseJobRepository) SetStatus(ctx context.Context, id string, from, to j
 	if err != nil {
 		return fmt.Errorf("setstatus: get job %s: %w", id, err)
 	}
+	if sj == nil {
+		// getJob returns (nil, nil) for a missing job. Without this
+		// guard, the CAS at sj.Revision below dereferences nil and
+		// crashes the request handler. Escalate as a typed error so
+		// the API layer can map to 404 instead of a 500 panic.
+		return fmt.Errorf("setstatus: job %s not found", id)
+	}
 	p := b.dialect
 	now := nowStrISO()
 	res, err := b.db.ExecContext(ctx,
