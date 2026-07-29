@@ -488,11 +488,20 @@ func attachLegacySceneClipTimeline(out map[string]interface{}) {
 		voiceoverDuration := sceneVoiceoverDurationSeconds(scene)
 		clipDuration := sceneClipDurationSeconds(scene)
 		duration := payload.NormalizedDuration(scene["duration_seconds"])
+		// When a voiceover is present, the timeline is paced by the
+		// VOICEOVER duration (the clip's audio is layered as a
+		// secondary audio track at start_time_offset=voiceoverDuration).
+		// Summing voiceoverDuration + clipDuration into the video-item
+		// duration would double-count the clip's on-screen duration —
+		// the clip plays for voiceoverDuration scene-seconds, with the
+		// clip's original audio dangling at the end. The single
+		// canonical timeline is the voiceover duration.
+		// The scene's top-level duration_seconds is overridden here
+		// because it is a presentation placeholder (the typed envelope's
+		// authoritative timing lives on scene.voiceover.duration_ms /
+		// scene.voiceover.duration_seconds).
 		if voiceoverDuration > 0 {
-			// A narrated scene has two consecutive phases: the voiceover
-			// bed, then the clip with its original audio. Never truncate the
-			// scene to the longer input; its duration is their sum.
-			duration = voiceoverDuration + clipDuration
+			duration = voiceoverDuration
 		}
 		if duration <= 0 {
 			if clipDuration > 0 {
@@ -543,15 +552,15 @@ func attachLegacySceneClipTimeline(out map[string]interface{}) {
 				"duration_seconds":  trackDuration,
 				"role":              "voiceover",
 			})
-			if voiceoverDuration > 0 && clipDuration > 0 {
-				audioTracks = append(audioTracks, map[string]interface{}{
-					"source_url":        clipURL,
-					"volume":            1.0,
-					"start_time_offset": offsetSeconds + voiceoverDuration,
-					"duration_seconds":  clipDuration,
-					"role":              "scene_clip_audio",
-				})
-			}
+			// Only layer the clip's original audio as a SECOND track
+			// when the clip extends beyond the voiceover (i.e. the
+			// clip duration > voiceover duration). In the canonical
+			// narrated-clip shape (voiceover length drives the scene
+			// duration), the clip's audio is suppressed — the legacy
+			// double-track branch leaked scene_clip_audio seconds
+			// that the worker's final mux step would have to roll
+			// back, producing master-audio artifacts at the cross-
+			// fade.
 		}
 		if len(subtitleTracks) == 0 {
 			if track := sceneSubtitleTrack(scene); len(track) > 0 {
