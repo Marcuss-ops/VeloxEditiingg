@@ -509,6 +509,11 @@ func NewSSHClient(targets map[string]SSHWorkerTarget) BackendSSHClient {
 
 // Run executes command on the worker via ssh. Returns the combined
 // stdout+stderr on success, or an error wrapping the ssh exit code.
+//
+// Security: StrictHostKeyChecking=yes with UserKnownHostsFile ensures
+// the worker's host key is verified against a known_hosts file managed
+// by the operator. The known_hosts file is populated at deploy time
+// via ansible (ssh-keyscan) and must exist at the configured path.
 func (c *sshClient) Run(ctx context.Context, workerID string, command string) (string, error) {
 	t, ok := c.targets[workerID]
 	if !ok {
@@ -523,9 +528,11 @@ func (c *sshClient) Run(ctx context.Context, workerID string, command string) (s
 	}
 	cmd := exec.CommandContext(ctx, "ssh",
 		"-i", keyPath,
-		"-o", "StrictHostKeyChecking=no",
+		"-o", "StrictHostKeyChecking=yes",
+		"-o", "UserKnownHostsFile=/etc/velox/ssh/known_hosts",
 		"-o", "ConnectTimeout=10",
 		"-o", "BatchMode=yes",
+		"-o", "LogLevel=ERROR",
 		t.User+"@"+t.Host,
 		command,
 	)
