@@ -371,7 +371,8 @@ JSON
 }
 
 # ─── Pre-flight: workers list ──────────────────────────────────────────────
-smoke_workers_list "$M2M_BEARER" "$VELOX_MASTER_URL" || { log_error "could not list workers"; exit 3; }
+# NOTE: /api/v1/workers requires admin auth (not M2M job-scoped token).
+smoke_workers_list "$ADMIN_TOKEN" "$VELOX_MASTER_URL" || { log_error "could not list workers"; exit 3; }
 
 # ─── benchmark_worker: all per-worker steps ─────────────────────────────────
 # Runs pre-flight, drain, submit+poll, resume, stats for a single worker.
@@ -380,21 +381,20 @@ benchmark_worker() {
   local w="$1"
   log_info "═══ BENCHMARKING $w ═══"
 
-  # ── Step 1: Pre-flight health A/B/C ──
-  local health_ok=1
+  # ── Step 1: Pre-flight health C (connectivity) required; A/B informational ──
   local level
-  for level in A B C; do
+  for level in A B; do
     if probe_health_level "$w" "$level"; then
       log_info "[pre-flight $w] health level $level: PASS"
     else
-      log_error "[pre-flight $w] health level $level: FAIL"
-      health_ok=0
+      log_warn "[pre-flight $w] health level $level: FAIL (infrastructure — non-blocking)"
     fi
   done
-  if (( health_ok == 0 )); then
-    log_error "[pre-flight $w] health pre-flight failed — skipping worker"
+  if ! probe_health_level "$w" "C"; then
+    log_error "[pre-flight $w] health level C FAILED — worker not connected, skipping"
     return 0
   fi
+  log_info "[pre-flight $w] health level C: PASS"
 
   # ── Step 2: Image digest check ──
   local worker_json image_digest

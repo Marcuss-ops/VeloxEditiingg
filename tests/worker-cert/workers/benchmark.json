@@ -1,0 +1,15 @@
+{
+  "schema": "tests/worker-cert/sequential_bench@1",
+  "epoch": 1785322875,
+  "workers_tested": 4,
+  "total_runs": 12,
+  "jobs_per_worker": 3,
+  "poll_timeout_s": 300,
+  "destination_id": "comedy_test",
+  "no_drain": false,
+  "all_jobs_succeeded": false,
+  "master_url": "http://127.0.0.1:8000",
+  "written_at": "2026-07-29T11:01:58Z",
+  "workers": [{"worker_id":"host_57_129_132_133","image_digest":"a1774003cca82ab71ae943c477ee3d6b53c94aaa9d57332df1549bedb60e6326","jobs_succeeded":0,"jobs_failed":3,"render_time_ms":{"median":0,"min":0,"max":0,"avg":0},"output_duration_ms":6000,"realtime_factor":"0"},{"worker_id":"host_57_131_20_173","image_digest":"a1774003cca82ab71ae943c477ee3d6b53c94aaa9d57332df1549bedb60e6326","jobs_succeeded":0,"jobs_failed":3,"render_time_ms":{"median":0,"min":0,"max":0,"avg":0},"output_duration_ms":6000,"realtime_factor":"0"},{"worker_id":"velox-worker-13197","image_digest":"a1774003cca82ab71ae943c477ee3d6b53c94aaa9d57332df1549bedb60e6326","jobs_succeeded":0,"jobs_failed":3,"render_time_ms":{"median":0,"min":0,"max":0,"avg":0},"output_duration_ms":6000,"realtime_factor":"0"},{"worker_id":"velox-worker-523925eb","image_digest":"a1774003cca82ab71ae943c477ee3d6b53c94aaa9d57332df1549bedb60e6326","jobs_succeeded":0,"jobs_failed":3,"render_time_ms":{"median":0,"min":0,"max":0,"avg":0},"output_duration_ms":6000,"realtime_factor":"0"}],
+  "runs": [{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"},{"job_id":"","status":"SUBMIT_FAILED","error":"HTTP 400"}]
+}
