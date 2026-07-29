@@ -91,11 +91,12 @@ is_pinned_image_ref() {
     [[ "$ref" =~ ^ghcr\.io/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+@sha256:[a-f0-9]{64}$ ]]
 }
 
-# is_positive_integer — returns 0 iff $1 parses as a non-negative integer
-# (0, 1, 2, …). Used by the SOCIAL_API_TIMEOUT_MS / SOCIAL_API_RETRIES
-# validators below to reject non-numeric / negative operator typos so
-# they cannot silently override the socialclient defaults.
-is_positive_integer() {
+# is_non_negative_integer — returns 0 iff $1 parses as a non-negative
+# integer (0, 1, 2, …). Used by the SOCIAL_API_TIMEOUT_MS /
+# SOCIAL_API_RETRIES validators below to reject non-numeric / negative
+# operator typos so they cannot silently override the socialclient
+# defaults (30000ms / 3 retries when the env var is empty / unparseable).
+is_non_negative_integer() {
     local v="${1:-}"
     [[ "$v" =~ ^[0-9]+$ ]]
 }
@@ -298,13 +299,13 @@ fi
 # parse as a non-negative integer so socialclient.parseDurationMillis /
 # parseInt cannot silently fall back to defaults on operator typos.
 SOCIAL_API_TIMEOUT_MS_VAL="$(get_env_value "$ENV_FILE" SOCIAL_API_TIMEOUT_MS)"
-if [[ -n "$SOCIAL_API_TIMEOUT_MS_VAL" ]] && ! is_positive_integer "$SOCIAL_API_TIMEOUT_MS_VAL"; then
+if [[ -n "$SOCIAL_API_TIMEOUT_MS_VAL" ]] && ! is_non_negative_integer "$SOCIAL_API_TIMEOUT_MS_VAL"; then
     err "SOCIAL_API_TIMEOUT_MS='$SOCIAL_API_TIMEOUT_MS_VAL' is not a non-negative integer (single-attempt HTTP timeout in milliseconds; default 30000)"
     ERR_COUNT=$((ERR_COUNT + 1))
 fi
 
 SOCIAL_API_RETRIES_VAL="$(get_env_value "$ENV_FILE" SOCIAL_API_RETRIES)"
-if [[ -n "$SOCIAL_API_RETRIES_VAL" ]] && ! is_positive_integer "$SOCIAL_API_RETRIES_VAL"; then
+if [[ -n "$SOCIAL_API_RETRIES_VAL" ]] && ! is_non_negative_integer "$SOCIAL_API_RETRIES_VAL"; then
     err "SOCIAL_API_RETRIES='$SOCIAL_API_RETRIES_VAL' is not a non-negative integer (default 3; Velox-runnner-driven retry is canonical, see socialclient.ConfigFromEnv)"
     ERR_COUNT=$((ERR_COUNT + 1))
 fi
@@ -317,7 +318,12 @@ fi
 # the runtime silently ignores them at the Go boundary; this WARN gives
 # the operator a clear rename hint on every deploy pre-flight so the rename
 # surfaces BEFORE a silent ErrNotConfigured failure at DeliverArtifact time.
-LEGACY_GATEWAY_HITS="$(grep -nE '^[[:space:]]*[^#].*(^|[[:space:]])(SOCIAL_GATEWAY_URL|SOCIAL_GATEWAY_API_KEY|SOCIAL_GATEWAY_CALLBACK_BASE_URL)=' "$ENV_FILE" 2>/dev/null || true)"
+# Anchor the alias as the literal variable name itself (with optional
+# `export` / `declare -airx …` prefix); the previous greedy `.*` pattern
+# could false-positive on string-literal mentions like
+# `echo "note: SOCIAL_GATEWAY_URL=…"`. The new pattern guarantees the
+# match is an actual bash assignment of a retired alias key.
+LEGACY_GATEWAY_HITS="$(grep -nE '^[[:space:]]*(export[[:space:]]+|declare[[:space:]]+-[aAirx]+[[:space:]]+)?SOCIAL_GATEWAY_(URL|API_KEY|CALLBACK_BASE_URL)=' "$ENV_FILE" 2>/dev/null || true)"
 if [[ -n "$LEGACY_GATEWAY_HITS" ]]; then
     warn "legacy SOCIAL_GATEWAY_* alias detected in $ENV_FILE — RETIRED (PR-15.10) and NOT honored. Operator playbook rename map:"
     warn "    SOCIAL_GATEWAY_URL                              → SOCIAL_API_URL"
