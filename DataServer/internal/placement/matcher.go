@@ -165,6 +165,25 @@ func (m *Matcher) Select(
 			continue
 		}
 
+		// Per-job placement pin: when a task carries a
+		// _placement_pin_worker_id, only the named worker may claim
+		// it. All other workers receive a pin-mismatch rejection.
+		// This gate runs AFTER executor/capability compatibility
+		// checks so the rejection reason is "wrong worker" not
+		// "unsupported executor" — the pin is an operator intent
+		// overlay, not a capability constraint.
+		if candidate.PlacementPinWorkerID != "" && candidate.PlacementPinWorkerID != worker.WorkerID {
+			result.Rejections = append(result.Rejections, Rejection{
+				TaskID: candidate.TaskID,
+				Code:   RejectPlacementPinMismatch,
+				Detail: fmt.Sprintf(
+					"task pinned to worker %q; worker %q excluded",
+					candidate.PlacementPinWorkerID, worker.WorkerID,
+				),
+			})
+			continue
+		}
+
 		missing := ""
 		for _, capability := range candidate.RequiredCapabilities {
 			if !worker.Capabilities[capability] {

@@ -186,6 +186,16 @@ type SubmitJobRequest struct {
 	// ResolveRenderManifestRef before enqueue.
 	ManifestRef *SubmitManifestRef `json:"manifest_ref,omitempty"`
 
+	// PlacementPinWorkerID is an optional operator/admin field that
+	// forces the job to be placed on a specific worker, skipping
+	// the normal placement matcher. Used by benchmark harnesses
+	// (tests/worker-cert/smoke_one.sh, sequential_bench.sh) to
+	// target a single worker without drain/resume. When non-empty,
+	// the value is stored in the task spec payload as
+	// _placement_pin_worker_id and enforced by the placement
+	// matcher at dispatch time.
+	PlacementPinWorkerID string `json:"placement_pin_worker_id,omitempty"`
+
 	// ResolvedManifest fields are internal-only. They are populated by
 	// ResolveRenderManifestRef after the Master fetches and verifies
 	// manifest_ref. They are intentionally ignored by JSON decoding

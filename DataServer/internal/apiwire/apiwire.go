@@ -61,6 +61,18 @@ type SubmitJobRequest struct {
 	SubtitleTracks []SubmitSubtitleTrack     `json:"subtitle_tracks,omitempty" validate:"omitempty,dive"`
 	DeliveryPlan   []SubmitDeliveryPlanEntry `json:"delivery_plan,omitempty" validate:"omitempty,dive"`
 	ManifestRef    *SubmitManifestRef        `json:"manifest_ref,omitempty" validate:"omitempty"`
+
+	// PlacementPinWorkerID is an optional operator/admin field that
+	// forces the job to be placed on a specific worker, skipping the
+	// normal placement matcher. Used by benchmark harnesses
+	// (tests/worker-cert/smoke_one.sh, sequential_bench.sh) to
+	// target a single worker without drain/resume. When non-empty,
+	// the value is stored in the task spec payload as
+	// _placement_pin_worker_id and enforced by the placement matcher
+	// at dispatch time. Clients polling GET /api/v1/jobs/{id} will
+	// see the actual worker_id that executed the job, providing
+	// authoritative placement verification.
+	PlacementPinWorkerID string `json:"placement_pin_worker_id,omitempty" validate:"omitempty,max=128"`
 }
 
 // SubmitManifestRef points to a `velox.render-manifest.v1` JSON the

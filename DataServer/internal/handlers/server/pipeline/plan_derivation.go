@@ -192,7 +192,7 @@ func (h *Handlers) NormalizeExternalJobSubmission(req SubmitJobRequest) *Canonic
 
 	dto, _ := remoteengine.ParseRemotePipelineResult(rawPayload)
 	workerPayload := dto.ToWorkerPayload()
-	preserveWorkerPayloadFields(workerPayload, rawPayload, "subtitle_tracks", "layers")
+	preserveWorkerPayloadFields(workerPayload, rawPayload, "subtitle_tracks", "layers", "_placement_pin_worker_id")
 
 	return &CanonicalCompletedPayload{
 		SourceProvider:   ExternalAPISourceProvider,
@@ -335,6 +335,10 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 			subtitles = append(subtitles, map[string]interface{}{"source": strings.TrimSpace(track.Source), "preset": track.Preset, "font": track.Font})
 		}
 		m["subtitle_tracks"] = subtitles
+	}
+
+	if req.PlacementPinWorkerID != "" {
+		m["_placement_pin_worker_id"] = strings.TrimSpace(req.PlacementPinWorkerID)
 	}
 
 	if len(req.DeliveryPlan) > 0 {

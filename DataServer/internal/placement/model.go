@@ -65,6 +65,12 @@ type TaskCandidate struct {
 	Executor ExecutorKey
 
 	RequiredCapabilities []string
+
+	// PlacementPinWorkerID is the per-job worker pin extracted from
+	// the task spec payload (_placement_pin_worker_id). When
+	// non-empty, the matcher will only match this task to the named
+	// worker; all other workers receive RejectPlacementPinMismatch.
+	PlacementPinWorkerID string
 }
 
 // WorkerSnapshot captures the placement-relevant state of a connected

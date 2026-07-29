@@ -44,6 +44,15 @@ const (
 	// genuine capability/capacity miss. Empty pin disables (the
 	// matcher then behaves as the pre-pin stateless engine).
 	RejectPlacementPinExcluded RejectionCode = "placement_pin_excluded"
+
+	// RejectPlacementPinMismatch — the task carries a per-job
+	// placement_pin_worker_id and the current worker does not match
+	// it. Unlike the global master pin (RejectPlacementPinExcluded),
+	// this is a per-task gate: the task can still be dispatched to
+	// the pinned worker on a subsequent tick when that worker
+	// connects. Benchmark harnesses (sequential_bench.sh) use this
+	// to target specific workers without drain/resume.
+	RejectPlacementPinMismatch RejectionCode = "placement_pin_mismatch"
 )
 
 // Rejection describes why a single candidate was skipped.

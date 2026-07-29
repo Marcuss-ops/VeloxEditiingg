@@ -64,6 +64,11 @@ type Job struct {
 	ExecutorVersion      int
 	RequiredCapabilities []string
 	Payload              json.RawMessage
+
+	// PlacementPinWorkerID is extracted from the task spec payload
+	// (_placement_pin_worker_id). When non-empty, the placement
+	// matcher will only dispatch this task to the named worker.
+	PlacementPinWorkerID string
 }
 
 // listQuery is the canonical SELECT. Mirror of the SQL previously
@@ -144,6 +149,13 @@ func ListNextDispatchableJobs(ctx context.Context, db Querier, limit int) ([]Job
 		}
 		if payloadStr.Valid && payloadStr.String != "" {
 			j.Payload = json.RawMessage(payloadStr.String)
+			// Extract per-job placement pin from the task spec payload.
+			var payloadMap map[string]interface{}
+			if json.Unmarshal(j.Payload, &payloadMap) == nil {
+				if pin, ok := payloadMap["_placement_pin_worker_id"].(string); ok && pin != "" {
+					j.PlacementPinWorkerID = pin
+				}
+			}
 		}
 		out = append(out, j)
 	}

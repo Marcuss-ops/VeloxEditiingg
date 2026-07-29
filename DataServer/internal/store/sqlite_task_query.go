@@ -119,6 +119,7 @@ func (r *SQLiteTaskRepository) ListReadyCandidates(ctx context.Context, limit in
 			CreatedAt:            j.CreatedAt,
 			Executor:             placement.NormalizeExecutorKey(j.ExecutorID, j.ExecutorVersion),
 			RequiredCapabilities: j.RequiredCapabilities,
+			PlacementPinWorkerID: j.PlacementPinWorkerID,
 		})
 	}
 	return candidates, nil
