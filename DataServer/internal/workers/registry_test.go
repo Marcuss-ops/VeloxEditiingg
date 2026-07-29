@@ -502,8 +502,14 @@ func TestRegistryConnectionStatus_SessionDropAndOldHeartbeat(t *testing.T) {
 			info.ConnectionStatus)
 	}
 
-	// ── 5. DRAINING — drain=true overrides a fresh session/heartbeat
-	insertSession("w1", "sess-drain")
+	// ── 5. DRAINING — drain=true overrides a fresh session/heartbeat ───
+	// sess-stale from step 3 is still ACTIVE (not revoked), which is the
+	// canonical precondition for a CONNECTED baseline before SetWorkerDrain
+	// flips the connection status to DRAINING. Inserting a NEW session
+	// here would collide with the still-active sess-stale (different
+	// token_hash → ErrWorkerIDCollision), so we deliberately reuse the
+	// existing active session + fresh heartbeat instead of calling
+	// insertSession again.
 	setHB("w1", 0) // fresh
 
 	info = reg.GetWorker(ctx, "w1")
