@@ -430,6 +430,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		sshClient := fleet.NewSSHClient(map[string]fleet.SSHWorkerTarget{
 			"host_57_131_20_173":    {Host: "57.131.20.173", User: "debian", KeyPath: "/etc/velox/ssh/id_ed25519_velox"},
 			"velox-worker-523925eb": {Host: "51.222.204.158", User: "ubuntu", KeyPath: "/etc/velox/ssh/id_ed25519_velox"},
+			"velox-worker-13197":    {Host: "149.56.131.97", User: "pierone", KeyPath: "/etc/velox/ssh/id_ed25519_velox"},
 		})
 		smokeBackend := fleet.LevelDSmokeBackend{
 			Worker:    fleet.NewSSHWorkerExec(sshClient),
@@ -441,7 +442,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		if err := fleetDep.Registry.Register(fleet.OperationKindSmoke, fleet.NewLevelDSmokeExecutor(smokeBackend)); err != nil {
 			log.Printf("[BOOTSTRAP] WARN: LevelDSmokeExecutor registration failed: %v (kind=%s continues with noop fallback)", err, fleet.OperationKindSmoke)
 		} else {
-			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor registered for kind=%s (Worker=SSHWorkerExec[2 targets], Drive=LocalFile, Lease=RegistryDrain, SmokeRuns=SQLite)", fleet.OperationKindSmoke)
+			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor registered for kind=%s (Worker=SSHWorkerExec[3 targets], Drive=LocalFile, Lease=RegistryDrain, SmokeRuns=SQLite)", fleet.OperationKindSmoke)
 		}
 		m.Workers.SetSmokeHandler(api.NewAdminWorkersSmokeHandler(m.Workers.Registry(), fleetDep.Controller))
 		log.Printf("[BOOTSTRAP] Admin workers smoke handler wired (POST /api/v1/admin/workers/{id}/smoke; tick goroutine drives LevelDSmokeExecutor)")
