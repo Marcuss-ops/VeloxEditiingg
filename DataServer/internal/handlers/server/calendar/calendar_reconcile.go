@@ -161,6 +161,21 @@ func applyQueueStateToEvent(ctx context.Context, event *store.CalendarEvent, job
 
 // submitCalendarJob creates a new job via AtomicJobTaskCreator (Job+Task atomically).
 // PR #3: replaces jobs.Writer.Create (Job-only) with the single atomic creation path.
+//
+// Canonical delivery-plan invariant (fix(scheduler): explicit-noop default):
+// the shared store/parseDeliveryPlanPayload + deliveryplan.Parse chain
+// rejects payloads that lack any of {delivery_plan, delivery_destination_ids,
+// delivery_destination_id} with `delivery_plan: explicit delivery plan required`.
+// Calendar events that are render-only (no InstaEdit/social publish target for
+// the render) still have to satisfy the schema invariant — without an explicit
+// delivery entry the atomic creator rejects the enqueue and the calendar
+// event stays in `scheduled` with a queue_error. We inject a single inert
+// entry pointing at the seeded `calendar_noop` destination; downstream
+// publish steps in the social gateway treat noop destinations as "render
+// without publish". A caller that already provides one of the explicit
+// fields leaves it untouched.
+const calendarNoopDestinationID = "calendar_noop"
+
 func submitCalendarJob(ctx context.Context, atomic *store.AtomicJobTaskCreator, jobID string, payload map[string]interface{}) error {
 	if atomic == nil {
 		return fmt.Errorf("submit calendar job: creator is nil")
@@ -177,6 +192,26 @@ func submitCalendarJob(ctx context.Context, atomic *store.AtomicJobTaskCreator, 
 	} else if s, ok := payload["run_id"].(string); ok && s != "" {
 		runID = s
 	}
+
+	// fix(scheduler): explicit default delivery_plan for calendar events.
+	// Insert only when none of the three canonical fields are already set, so
+	// admin callers that DO specify a real InstaEdit destination keep their
+	// contract. The shape matches the canonical delivery_plan entry the
+	// store-layer validator (deliveryplan.Parse) recognizes.
+	if _, hasPlan := payload["delivery_plan"]; !hasPlan {
+		if _, hasIDs := payload["delivery_destination_ids"]; !hasIDs {
+			if _, hasID := payload["delivery_destination_id"]; !hasID {
+				payload["delivery_plan"] = []map[string]interface{}{
+					{
+						"destination_id": calendarNoopDestinationID,
+						"priority":       0,
+						"retry_budget":   0,
+					},
+				}
+			}
+		}
+	}
+
 	raw, _ := json.Marshal(payload)
 	job := &jobs.Job{
 		ID:         jobID,
