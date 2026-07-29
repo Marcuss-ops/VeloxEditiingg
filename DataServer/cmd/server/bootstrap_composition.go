@@ -424,8 +424,8 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	// smoke_runs table records the duration_ms baseline.
 	if fleetDep != nil && fleetDep.Registry != nil && m != nil && m.Workers != nil && p != nil && p.SQLite != nil {
 		smokeBackend := fleet.LevelDSmokeBackend{
-			Worker:    nil, // Step 12+ — production wiring lands in a follow-up; the Step 11+ SSH client + the Drive uploader must come online first
-			Drive:     nil, // Step 12+ — production wiring lands in a follow-up
+			Worker:    fleet.NewLocalShellWorker(),
+			Drive:     fleet.NewLocalFileDriveUploader(),
 			Asset:     stubAssetResolver{pickupURL: "asset://e2e/smoke/canary.mp4", expectedBytes: 0},
 			Lease:     fleet.NewRegistryDrainLease(m.Workers.Registry()),
 			SmokeRuns: p.SQLite,
@@ -433,7 +433,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		if err := fleetDep.Registry.Register(fleet.OperationKindSmoke, fleet.NewLevelDSmokeExecutor(smokeBackend)); err != nil {
 			log.Printf("[BOOTSTRAP] WARN: LevelDSmokeExecutor registration failed: %v (kind=%s continues with noop fallback)", err, fleet.OperationKindSmoke)
 		} else {
-			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor registered for kind=%s (Worker/Drive nil audit-only — pending Step 11+/follow-up; Lease + SmokeRuns wired today)", fleet.OperationKindSmoke)
+			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor registered for kind=%s (Worker=LocalShell, Drive=LocalFile, Lease=RegistryDrain, SmokeRuns=SQLite)", fleet.OperationKindSmoke)
 		}
 		m.Workers.SetSmokeHandler(api.NewAdminWorkersSmokeHandler(m.Workers.Registry(), fleetDep.Controller))
 		log.Printf("[BOOTSTRAP] Admin workers smoke handler wired (POST /api/v1/admin/workers/{id}/smoke; tick goroutine drives LevelDSmokeExecutor)")
