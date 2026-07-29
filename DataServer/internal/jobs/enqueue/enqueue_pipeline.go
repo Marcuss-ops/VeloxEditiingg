@@ -56,6 +56,15 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 	}
 
 	voiceovers := extractVoiceoverPaths(flat)
+	if len(voiceovers) == 0 && !hasRenderableMedia(flat) {
+		// A render job with no voiceover AND no renderable scene media
+		// has nothing the worker can mux. surfaced here so the
+		// resolve path fails fast with an actionable message rather
+		// than letting the worker burn its render budget on a
+		// zero-track timeline. Mirrors the same gate already in
+		// normalizeSceneVideoPayload (the canonical envelope path).
+		return nil, fmt.Errorf("voiceover (and no renderable scene media) missing from pipeline result")
+	}
 	if title == "" {
 		return nil, fmt.Errorf("video title missing from pipeline result")
 	}
