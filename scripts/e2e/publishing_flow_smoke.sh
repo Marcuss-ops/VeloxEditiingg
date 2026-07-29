@@ -229,11 +229,16 @@ ISSUE_REQ=$(cat <<JSON
 JSON
 )
 
+# post_admin_issue() — POST the ephemeral M2M client to /api/v1/admin/m2m/keys.
+# MUST include "${ADMIN_KEYS_URL}" as the URL argument; if omitted, curl
+# exits 2 ("Failed to initialize") with no body and the smoke misreports
+# "curl could not reach" — that was the bug in commit 15aa687, fixed here.
 post_admin_issue() {
   local rc=0
   curl -sS -m 15 -X POST -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
     --data-raw "$ISSUE_REQ" \
+    "${ADMIN_KEYS_URL}" \
     -D "$TMP_HDRS" -o "$TMP_BODY" 2>"$TMP_TRACE" || rc=$?
   return $rc
 }
@@ -264,10 +269,15 @@ issue_status=$(awk 'NR==1 && $1 ~ /^[Hh][Tt][Tt][Pp]// {print $2; exit}' "$TMP_H
 issue_body=$(cat "$TMP_BODY")
 
 # 409 retry-on-collision (concurrent re-runs in the same second):
-# canonical idempotency path on the admin surface.
+# canonical idempotency path on the admin surface. The previous sed-based
+# rewrite (`s/${EPOCH})/...`) was structurally wrong because the literal
+# pattern `EPOCH)` doesn't appear in the canonical JSON (only the outer
+# `.client_id` string carries the unique suffix). Use a full-string
+# replacement on `${CLIENT_ID}` instead.
 if [[ "$issue_status" == "409" || "$issue_status" == "400" ]]; then
+  OLD_CLIENT_ID="${CLIENT_ID}"
   CLIENT_ID="pub-smoke-$((${EPOCH}+1))-$$"
-  ISSUE_REQ=$(echo "$ISSUE_REQ" | sed "s/${EPOCH})/$((${EPOCH}+1))/")
+  ISSUE_REQ="${ISSUE_REQ//${OLD_CLIENT_ID}/${CLIENT_ID}}"
   if ! post_admin_issue; then
     echo "FATAL: retry of M2M provisioning also failed at network level" >&2
     exit 3
