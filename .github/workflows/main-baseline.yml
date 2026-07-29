@@ -1,0 +1,115 @@
+# main-baseline.yml
+#
+# Minimal "every commit on main is healthy" gate for VeloxEditiingg.
+#
+# Scope: build + vet + test + golangci-lint on the canonical Go
+# workspace. Runs on every push to main so the HEAD commit carries
+# the required status check the user requested.
+#
+# This workflow INTENTIONALLY complements (not replaces) the heavier
+# ones already in .github/workflows/:
+#   - ci.yml: make verify (architecture + Go -race + cmake + docker);
+#     domain gates (compute-outcome labels, conflict-budget call pattern,
+#     sql ownership, dsn busy-timeout); completion-protocol invariants;
+#     LOC thresholds.
+#   - workspace-tests.yml: per-module sequential Go test runner.
+#   - regression-race.yml: weekly scheduled -race regression.
+#   - ci-opaque-wire.yml: prevent legacy opaque-wire fields.
+#   - typed-metrics-must-pass.yml: lock 3 typed-metrics sub-tests.
+#   - no-youtube-regression.yml / loc-thresholds.yml: scheduled gates.
+#   - shellcheck.yml: linter on smoke harnesses + scripts.
+#   - dependency-scan.yml: Go module security scan.
+#   - golden-e2e.yml / master-image.yml / worker-image.yml: heavy
+#     integration suites gated on schedule or path filters.
+#   - deploy.yml: tag-driven deployment handoff.
+#
+# Keeping the gate narrow (build / vet / test / lint) makes it a
+# fast, deterministic blocker on the commit → push → CI feedback
+# loop. Domain gates (sql ownership, opaque wire, completion
+# protocol) surface from their dedicated workflows; running them in
+# addition here would only re-state their verdict and slow the cycle.
+#
+# Conventions:
+#   - actions/setup-go@v5 + go-version-file: go.work so the toolchain
+#     version follows whichever module the workspace declares (matches
+#     regression-race.yml convention).
+#   - gofmt -l . via make fmt-check so the rule stays in lock-step with
+#     local-driven lint.
+#   - go test ./... at the workspace root walks every module in the
+#     workspace (Go 1.18+ semantic).
+#   - golangci-lint run --timeout=5m reads the canonical .golangci.yml.
+name: main-baseline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# One concurrent run per ref; cancel in-flight runs on a new push so
+# the latest commit always wins — same scheme used by ci.yml.
+concurrency:
+  group: main-baseline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-vet-test-lint:
+    name: build / vet / test / lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go (workspace toolchain)
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache: true
+
+      - name: Install cmake
+        # Mirrors ci.yml; needed because `go build ./...` against
+          # execstack helpers transitively links C deps. Cheap
+          # apt-get, cached on the runner image.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake
+
+      - name: gofmt check (no auto-write)
+        # make fmt-check runs gofmt -l on every Go file in the
+        # workspace and exits non-zero on drift. Same rule local devs
+        # run; no mutation here.
+        run: make fmt-check
+
+      - name: go vet ./... (workspace)
+        # Workspace-aware vet: walks every module declared in go.work
+        # (DataServer, RemoteCodex/native/worker-agent-go, shared,
+        # internal/application/images, cmd/archcheck/scan). Same
+        # surface local devs run via `make vet`.
+        run: make vet
+
+      - name: go build ./... (workspace)
+        run: go build ./...
+
+      - name: go test ./... (workspace)
+        # Workspace-aware test: counts every test in every module.
+        # Race-detector coverage lives in regression-race.yml so this
+        # lane stays fast for the daily green.
+        run: go test -count=1 -timeout 25m ./...
+
+      - name: golangci-lint run
+        # Reads the canonical .golangci.yml at repo root. The config
+        # whitelists funlen=600 and disables errcheck on the canonical
+        # `Error return value of .* is not checked` substring.
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.61.0
+          args: --timeout=5m
+          # Cache by go.work so the binary is reused across runs of
+          # the same toolchain.
+          cache: true
