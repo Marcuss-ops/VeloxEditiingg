@@ -145,18 +145,13 @@ log_info "assets: vo=$ASSET_VO clip_a=$ASSET_CLIP_A clip_b=$ASSET_CLIP_B sub=$AS
 
 EPOCH=$(date +%s)
 IDEM_KEY="smoke-one-${TARGET_WORKER_ID}-${EPOCH}"
-# target_executor_id explicit: don't rely on the matcher default-executor
-# derivation (see DataServer/internal/jobs/enqueue/normalize.go and
-# enqueue_normalization_test.go for the canonical chain). If that default
-# ever shifts off scene.composite.v1@1 the smoke would still pass a placement
-# pin against another worker; pinning the executor here makes the smoke
-# resistant to that drift.
+# Payload uses only fields accepted by SubmitJobRequest (apiwire.go).
+# project_id and target_executor_id are NOT in the schema — removed.
+# The executor is derived server-side (scene.composite.v1@1 default).
 PAYLOAD=$(cat <<JSON
 {
   "idempotency_key": "${IDEM_KEY}",
   "video_name": "smoke_one for ${TARGET_WORKER_ID}@${EPOCH}",
-  "project_id": "worker-cert-smoke",
-  "target_executor_id": "scene.composite.v1@1",
   "voiceover_paths": [
     "velox-asset://${ASSET_VO}"
   ],
@@ -250,16 +245,33 @@ LEASE_ID=$(printf '%s' "$LEASE_JSON" | jq -er '.lease_id  // empty')
 log_info "lease worker=$LEASED_WORKER task=$TASK_ID attempt=$ATTEMPT_ID lease_id=$LEASE_ID"
 
 # ─── Compute render_time_ms + artifact size ────────────────────────────────
-STARTED_AT=$(printf '%s' "$last_body"  | jq -er '.started_at   // empty')
-COMPLETED_AT=$(printf '%s' "$last_body" | jq -er '.completed_at // empty')
-ARTIFACT_URL=$(printf '%s' "$last_body" | jq -er '.artifact_url // .artifact_path // .output_path // empty')
-s_epoch=$(smoke_parse_iso8601 "$STARTED_AT")
-c_epoch=$(smoke_parse_iso8601 "$COMPLETED_AT")
-render_time_ms="0"
-if [[ -n "$s_epoch" && -n "$c_epoch" ]]; then
-  render_time_ms=$(awk -v a="$s_epoch" -v b="$c_epoch" 'BEGIN{printf "%.0f", (b-a)*1000}')
+# NOTE: GET /api/v1/jobs/{id} currently returns only {ok, job_id, status,
+# created, status_url}. started_at / completed_at / artifact_url are NOT
+# in the polling response (see enqueue_persistence.go GetSubmittedJob).
+# We try to read them anyway (future-proof); if absent, render_time_ms=0
+# and artifact_size_bytes=0 with an explicit log warning.
+STARTED_AT=$(printf '%s' "$last_body"  | jq -er '.started_at   // empty' 2>/dev/null || true)
+COMPLETED_AT=$(printf '%s' "$last_body" | jq -er '.completed_at // empty' 2>/dev/null || true)
+ARTIFACT_URL=$(printf '%s' "$last_body" | jq -er '.artifact_url // .artifact_path // .output_path // empty' 2>/dev/null || true)
+
+if [[ -z "$STARTED_AT" || -z "$COMPLETED_AT" ]]; then
+  log_warn "started_at or completed_at missing from GET /api/v1/jobs/{id} response — render_time_ms will be 0. Extend the endpoint to include these fields for meaningful timing."
+  render_time_ms="0"
+else
+  s_epoch=$(smoke_parse_iso8601 "$STARTED_AT")
+  c_epoch=$(smoke_parse_iso8601 "$COMPLETED_AT")
+  render_time_ms="0"
+  if [[ -n "$s_epoch" && -n "$c_epoch" ]]; then
+    render_time_ms=$(awk -v a="$s_epoch" -v b="$c_epoch" 'BEGIN{printf "%.0f", (b-a)*1000}')
+  fi
 fi
-artifact_size_bytes=$(smoke_artifact_size "$ARTIFACT_URL" "$M2M_BEARER")
+
+if [[ -z "$ARTIFACT_URL" ]]; then
+  log_warn "artifact_url missing from GET /api/v1/jobs/{id} response — artifact_size_bytes will be 0. Extend the endpoint to include artifact_url."
+  artifact_size_bytes="0"
+else
+  artifact_size_bytes=$(smoke_artifact_size "$ARTIFACT_URL" "$M2M_BEARER")
+fi
 log_info "render_time_ms=$render_time_ms artifact_bytes=$artifact_size_bytes"
 
 # ─── Worker-on-leased assertion (placement-pin enforcement) ────────────────
