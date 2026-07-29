@@ -7,26 +7,21 @@ import (
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/remoteengine"
+	"velox-server/internal/socialclient"
 	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
 	"velox-server/internal/workers"
 )
 
 // Handlers carries every dependency the pipeline HTTP layer needs.
-//
-// The struct carries the mandatory remote params (cfg, enqueuer, client,
-// resolver) plus optional cancel-side dependencies bundled in JobsDeps.
-//
-// Blocco 5 of the Verdetto (P1 #11) — Resolver is the SINGLE
-// authoritative forward-completed entry point. Built ONCE at
-// construction time so URL resolution does NOT run per request, and
-// so the HTTP handler converges with the CreatorForwardingRunner on
-// the same (job_id, forwarding_id).
+// Resolver and socialClient are built once at construction so target discovery
+// and job intake do not create transport clients per request.
 type Handlers struct {
 	cfg             *config.Config
 	enqueuer        *enqueue.Enqueuer
 	client          *remoteengine.Client
 	resolver        *creatorflow.Resolver
+	socialClient    *socialclient.Client
 	jobs            JobsDeps
 	store           *store.SQLiteStore
 	intakeSink      CreatorIntakeSink
@@ -44,29 +39,10 @@ type JobsDeps struct {
 	TaskReader taskgraph.Reader
 }
 
-// NewHandlers constructs a Handlers with the three mandatory deps:
-//
-//	cfg       — render settings (remote URL, poll interval, ...)
-//	enqueuer  — the canonical *enqueue.Enqueuer shared with the rest
-//	             of the server (script handler, creatorflow), used to
-//	             forward completed pipeline results to Velox workers.
-//	client    — the *remoteengine.Client talking to the script service
-//	             (may be nil when VELOX_REMOTE_ENGINE_URL is unset).
-//
-// The resolver creatorflow.Resolver must be wired by the composition root
-// (see NewHandlersWithResolver). MasterURL is resolved from cfg at boot
-// time — there is no per-request hostname discovery.
-//
-// Compose with WithJobsDeps to add the optional cancel deps.
 func NewHandlers(cfg *config.Config, enqueuer *enqueue.Enqueuer, client *remoteengine.Client) *Handlers {
 	return HandlersFactory(cfg, enqueuer, client, nil, nil, nil, nil)
 }
 
-// NewHandlersFull is the composition-root constructor that wires
-// every optional dependency (jobs reader/writer for cancellation
-// cleanup, worker command manager for per-worker cancel notifications).
-// Pre-builds the resolver at construction time for the same
-// performance reason as NewHandlers.
 func NewHandlersFull(
 	cfg *config.Config,
 	enqueuer *enqueue.Enqueuer,
@@ -78,12 +54,6 @@ func NewHandlersFull(
 	return HandlersFactory(cfg, enqueuer, client, nil, jobsReader, jobsWriter, cmdMgr)
 }
 
-// NewHandlersWithResolver is the Blocco 5 preferred composition-root
-// constructor: the caller supplies a pre-built Resolver so the
-// single forward-completed path is explicitly shared with the
-// CreatorForwardingRunner (the runner also accepts the same Resolver
-// via SetResolver). This is what runServer should call once it has
-// constructed the canonical Resolver in buildModules.
 func NewHandlersWithResolver(
 	cfg *config.Config,
 	enqueuer *enqueue.Enqueuer,
@@ -96,13 +66,10 @@ func NewHandlersWithResolver(
 	return HandlersFactory(cfg, enqueuer, client, resolver, jobsReader, jobsWriter, cmdMgr)
 }
 
-// HandlersFactory is the shared construction helper for the three
-// public constructors above. resolver may be nil; the Handlers panics
-// at request time if forward-completed is reached without a wired
-// resolver — composition-root callers must pass a non-nil resolver
-// (see cmd/server/bootstrap_composition.go::appComponents where
-// `creatorflow.NewResolver(cfg, m.Enqueuer, p.SQLite)` is unconditionally
-// built before the pipeline handler is constructed).
+// HandlersFactory is the shared construction helper. The Social API client is
+// created from the canonical SOCIAL_API_* environment adapter once. Empty
+// configuration remains fail-closed: ListPublishingTargets returns
+// socialclient.ErrNotConfigured and the HTTP handler maps it to 503.
 func HandlersFactory(
 	cfg *config.Config,
 	enqueuer *enqueue.Enqueuer,
@@ -113,16 +80,15 @@ func HandlersFactory(
 	cmdMgr *workers.CommandManager,
 ) *Handlers {
 	return &Handlers{
-		cfg:      cfg,
-		enqueuer: enqueuer,
-		client:   client,
-		resolver: resolver,
-		jobs:     JobsDeps{Reader: jobsReader, Writer: jobsWriter, CmdMgr: cmdMgr},
+		cfg:          cfg,
+		enqueuer:     enqueuer,
+		client:       client,
+		resolver:     resolver,
+		socialClient: socialclient.New(socialclient.ConfigFromEnv()),
+		jobs:         JobsDeps{Reader: jobsReader, Writer: jobsWriter, CmdMgr: cmdMgr},
 	}
 }
 
-// WithJobsDeps returns a copy of h with the optional JobsDeps set.
-// Returns the same handler (mutated) for fluent composition.
 func (h *Handlers) WithJobsDeps(reader jobs.Reader, writer jobs.Writer, cmdMgr *workers.CommandManager) *Handlers {
 	h.jobs.Reader = reader
 	h.jobs.Writer = writer
@@ -130,58 +96,39 @@ func (h *Handlers) WithJobsDeps(reader jobs.Reader, writer jobs.Writer, cmdMgr *
 	return h
 }
 
-// WithTaskReader wires the canonical task projection used to resolve the
-// worker/attempt/lease fence for remote cancellation.
 func (h *Handlers) WithTaskReader(reader taskgraph.Reader) *Handlers {
 	h.jobs.TaskReader = reader
 	return h
 }
 
-// WithStore enables the durable aggregate status projection.
 func (h *Handlers) WithStore(db *store.SQLiteStore) *Handlers {
 	h.store = db
 	return h
 }
 
-// WithIntakeSink wires a CreatorIntakeSink into the Handlers so the
-// creator_push handler can record accepted payloads by intake path.
-// Passing nil is a noop (the handler falls back to
-// noopCreatorIntakeSink). The composition root calls this once at
-// boot with velmetrics.NewCreatorIntakeSink(); tests pass a mock.
+// WithSocialClient overrides the canonical Social API client. Production uses
+// the factory default; tests inject an httptest-backed client.
+func (h *Handlers) WithSocialClient(client *socialclient.Client) *Handlers {
+	h.socialClient = client
+	return h
+}
+
 func (h *Handlers) WithIntakeSink(sink CreatorIntakeSink) *Handlers {
 	h.intakeSink = sink
 	return h
 }
 
-// WithLegacyBodySink wires a LegacyBodySink into the Handlers so the
-// POST /api/v1/jobs path can record legacy-body-shape warnings (the
-// pre-manifest_ref compat-shape submissions that PipelineGen emits
-// until the manifest_ref migration lands). Passing nil is a noop
-// (the handler falls back to noopLegacyBodySink). The composition
-// root calls this once at boot with
-// velmetrics.NewLegacyBodySink(); tests pass a mock.
 func (h *Handlers) WithLegacyBodySink(sink LegacyBodySink) *Handlers {
 	h.legacyBodySink = sink
 	return h
 }
 
-// WithAssetService wires the canonical content-addressed asset registry.
 func (h *Handlers) WithAssetService(svc *voiceoverassets.AssetService) *Handlers {
 	h.assetService = svc
 	return h
 }
 
-// NewRemoteClientFromConfig constructs the canonical
-// *remoteengine.Client from a *config.Config at composition root.
-//
-// PR-DI-pipeline: replaces the previous `pipeline.InitRemoteEngine`
-// package-level mutator that built the client and parked it on the
-// `remoteEngineClient` global. Returns nil when the remote engine
-// is unconfigured (VELOX_REMOTE_ENGINE_URL empty) so the handler's
-// IsConfigured checks flow naturally into a 503 response.
-//
-// Callers: cmd/server/router.go (production), tests (with a custom
-// URL/TimeoutMS pointing at a stub httptest server).
+// NewRemoteClientFromConfig constructs the canonical remote-engine client.
 func NewRemoteClientFromConfig(cfg *config.Config) *remoteengine.Client {
 	if cfg == nil || cfg.Render.RemoteEngineURL == "" {
 		return nil
