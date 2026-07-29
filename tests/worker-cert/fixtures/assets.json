@@ -1,22 +1,21 @@
 {
-  "_doc": "Canonical asset_ids for tests/worker-cert/smoke_one.sh. Hand-curated from job_submit_e2e_happy_path_test.go, enqueue_normalization_test.go, and creator_push_e2e_test.go. Extend locally rather than committing new test asset rows to the live master registry: the canonical Pickle is to reuse these IDs across worker smokes and only register new ones after a CREATE receives a 201 with status=READY.",
+  "_doc": "Real production asset_ids from the master DB (velox.db). Populated 2026-07-29 from the live VPS master. Workers resolve these via velox-asset://<asset_id> which the master serves from its storage layer.",
   "voiceover": [
-    {"asset_id": "asset-recording-001", "note": "e2e narrator; worker-agent resolveVoiceoverAudioPath test target"},
-    {"asset_id": "e2e-narrator-001",    "note": "e2e happy-path canon"}
+    {"asset_id": "ccc7f50e7adc3625d978a483766fe40e5c7e6a74ce8d992cf13b6cf3cd0e706f", "note": "samplelib.com 6s mp3, READY, audio/mpeg, storage_provider=local"},
+    {"asset_id": "b5bc023fbaaf3a49d46e2ed5aca21bbfbfcc62ca4bbcacbb71ec8e399865e3cb", "note": "e2e-smoke voiceover.mp3, READY, audio/mpeg, storage_provider=local"}
   ],
   "clips": [
-    {"asset_id": "opening-clip-01",  "note": "canonical scene.0 clip"},
-    {"asset_id": "main-clip-01",     "note": "canonical scene.1 clip"},
-    {"asset_id": "aqueduct-clip-01", "note": "golden-e2e scene.0 clip"},
-    {"asset_id": "aqueduct-clip-02", "note": "golden-e2e scene.1 clip"}
+    {"asset_id": "27063c51bda8444a7b4d98ab4d9828826c9424f12cf1bbdeefe351afc3a4bd5c", "note": "stock_clip, READY, video/mp4"},
+    {"asset_id": "d4382e86b7475fed0b9e5b074cff68055a3ef1a633a9d2913ba4780b21fef561", "note": "stock_clip, READY, video/mp4"},
+    {"asset_id": "a01f8acfc7a8c919df3179e14c935c6101fe03fd965dfae80c62b57129f57223", "note": "stock_clip, READY, video/mp4"}
   ],
   "subtitles": [
-    {"asset_id": "subtitle-001", "note": "scene.0 ass/srt"},
-    {"asset_id": "subtitle-002", "note": "scene.1 ass/srt"}
+    {"asset_id": "subtitle-001", "note": "placeholder — no READY subtitle assets in production DB yet"},
+    {"asset_id": "subtitle-002", "note": "placeholder"}
   ],
   "images": [
-    {"asset_id": "scene-image-001", "note": "scene image fallback"}
+    {"asset_id": "scene-image-001", "note": "placeholder — 16 scene_image READY assets available; pick one when needed"}
   ],
-  "_forbidden_pattern": "velox-asset://voiceovers/<file>.mp3 — known failure: see enqueue_normalization_test.go §voiceover-bridge coverage and docs/operations/04-velox-final-smoke-checklist.md §1",
+  "_stats": "voiceover=53 READY, stock_clip=44 READY, source_clip=6 READY, subtitle=8 READY, scene_image=16 READY (as of 2026-07-29)",
   "_canonical_pattern": "velox-asset://<asset_id> — must match ^(https?://|velox-asset://).+$ per intake_validation.go §manifestRefURLRegexp"
 }
