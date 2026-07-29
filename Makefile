@@ -30,7 +30,7 @@ EVIDENCE_ROOT_CAP10     ?= /tmp/velox-cap10-evidence
         e2e-grpc e2e-workload e2e-workload-mtls \
         enable-branch-protection disable-branch-protection inspect-branch-protection \
         local-verify-mirror certify-worker certify-worker-bootstrap-mtls \
-        real-bootstrap pin-worker-digest recovery-matrix recovery-matrix-dry \
+        real-bootstrap pin-worker-digest align-worker-digest recovery-matrix recovery-matrix-dry \
         cap-7-reboot-recovery cap-7-reboot-recovery-dry \
         cap-8-upgrade-rollback cap-8-upgrade-rollback-dry \
         cap-8-upgrade-rollback-upgrade cap-8-upgrade-rollback-rollback \
@@ -61,6 +61,7 @@ help:
 	@echo "  Phase 1 (image certification, cap. 2):"
 	@echo "  make real-bootstrap               -- REAL bootstrap pass on a published digest (4-step PASS required)"
 	@echo "  make pin-worker-digest            -- record a cosign-verified baseline for a digest under evidence/baselines/"
+	@echo "  make align-worker-digest          -- align a worker's image digest to the fleet baseline (pin + fleetctl update + verify)"
 	@echo ""
 	@echo "  Phase 2 (worker certification, cap. 3):"
 	@echo "  make certify-worker               -- certify a single worker host+deploy (sub-phases 2A+2B)"
@@ -248,6 +249,14 @@ pin-worker-digest:  ## Phase 1 / cap. 2 — record a cosign-verified baseline fo
 	  exit 1 ; \
 	fi
 	@bash scripts/cert/pin-worker-digest.sh "$$@"
+
+# Operator convenience: align a worker's image digest to the fleet baseline.
+# Runs pin-worker-digest → fleetctl update → fleetctl status verify.
+# Required: --worker-id + --digest (or VELOX_ADMIN_TOKEN + DIGEST env).
+# Optional: --skip-pin, --dry-run, --owner, --registry.
+# See scripts/ops/align-worker-digest.sh for full usage.
+align-worker-digest:  ## Align a worker's digest to the fleet baseline (pin + update + verify)
+	@bash scripts/ops/align-worker-digest.sh "$$@"
 
 # Phase 2C+2D / cap. 3 — orchestrator that runs (a) 2C: real-bootstrap
 # certifier on the published worker image, asserting verdict=OK + the 4
