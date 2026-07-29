@@ -1,32 +1,22 @@
 ---
 # fleet-restart — Velox fleet-operator (Step 11/15).
 # ────────────────────────────────────────────────────────────────────────────
-# Restart the docker compose stack for one worker at a time, stop at first
-# fail. This is the canonical "container restart" primitive — used when
-# Level-B health checks miss a transient cleanup, or when the operator
-# wants to recover a stuck worker WITHOUT touching image digest (use
-# fleet-update.yml for image digest changes; that path is ledger-driven
-# + Cosign-verified).
+# Restart the worker container for one worker at a time, stop at first
+# fail. Supports two deploy patterns, auto-detected per worker:
 #
-# ROUTING: SSH direct on the worker host. The docker compose stack is
-# bound to the host, not the master. Master has no `docker` socket.
+#   COMPOSE MODE  (compose.yml exists at /opt/velox-worker/compose.yml):
+#     docker compose -p velox-worker-<id> -f /opt/velox-worker/compose.yml restart
+#
+#   RAW MODE      (no compose.yml — container launched via docker run):
+#     docker restart velox-worker-<id>
+#
+# ROUTING: SSH direct on the worker host. The container is bound to the
+# host, not the master. Master has no `docker` socket.
 #
 # ⚠ Container restart is NOT coordinated with the Master. Operators
 # who restart a draining worker mid-render will see the operations
 # recover when the worker reconnects (Step 1/15 registry heartbeat +
-# task-grace-period). Operations that were RUNNING on the worker at
-# the SIGTERM moment will surface in fleet_operations as READY_FOR_RETRY
-# (the canonical reaper canvas): operators can re-issue them
-# separately.
-#
-# DEPLOY PATTERN (per the Step 9/15 user spec, repeated verbatim):
-#   set -a
-#   source /etc/velox-worker/worker.env
-#   set +a
-#   docker compose \
-#     -p "velox-worker-${VELOX_WORKER_ID}" \
-#     -f /opt/velox-worker/compose.yml \
-#     restart
+# task-grace-period).
 #
 # STOP AL PRIMO FAIL: serial: 1 + any_errors_fatal: true.
 #
@@ -35,7 +25,7 @@
 #     --ask-vault-pass \
 #     deploy/playbooks/fleet-restart.yml
 
-- name: fleet-restart — docker compose restart per worker
+- name: fleet-restart — container restart per worker (compose or raw)
   hosts: velox_workers
   serial: 1
   any_errors_fatal: true
@@ -43,13 +33,22 @@
   connection: ssh
   become: true
 
+  vars:
+    compose_file: /opt/velox-worker/compose.yml
+    container_name_raw: "velox-worker-{{ worker_id }}"
+
   tasks:
-    - name: Restart docker compose stack for {{ worker_id }}
+    - name: Detect deploy pattern — check for compose.yml on {{ worker_id }}
+      ansible.builtin.stat:
+        path: "{{ compose_file }}"
+      register: compose_stat
+
+    - name: Restart via docker compose ({{ worker_id }})
       ansible.builtin.command:
         cmd: >-
           docker compose
           -p "velox-worker-{{ worker_id }}"
-          -f /opt/velox-worker/compose.yml
+          -f {{ compose_file }}
           restart
         chdir: /opt/velox-worker
       environment:
@@ -57,6 +56,15 @@
       register: restart_run
       changed_when: restart_run.rc == 0
       failed_when: restart_run.rc != 0
+      when: compose_stat.stat.exists
+
+    - name: Restart via raw docker restart ({{ worker_id }})
+      ansible.builtin.command:
+        cmd: docker restart {{ container_name_raw }}
+      register: restart_run
+      changed_when: restart_run.rc == 0
+      failed_when: restart_run.rc != 0
+      when: not compose_stat.stat.exists
 
     - name: Wait for /health/ready on the worker loopback
       ansible.builtin.uri:
@@ -73,6 +81,6 @@
     - name: Announce restart healthy for {{ worker_id }}
       ansible.builtin.debug:
         msg: >-
-          [{{ worker_id }}] docker compose restart OK;
+          [{{ worker_id }}] {{ 'compose' if compose_stat.stat.exists else 'raw docker' }} restart OK;
           /health/ready returned 200; the master will see the
           re-registration on the next heartbeat tick (Step 1/15).
