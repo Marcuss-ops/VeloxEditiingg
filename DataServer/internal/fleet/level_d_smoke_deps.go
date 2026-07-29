@@ -393,7 +393,8 @@ func (w *LocalShellWorker) runDir(runID string) string {
 
 // DownloadAsset downloads the asset from pickupURL to destPath.
 // In production, uses curl/wget from the resolved pickup URL.
-// In dev mode (empty pickupURL), falls back to a synthetic ffmpeg-generated clip.
+// A pickupURL starting with "asset://" or empty URL triggers the
+// dev-mode fallback: a synthetic ffmpeg-generated clip.
 func (w *LocalShellWorker) DownloadAsset(_ context.Context, runID, _, pickupURL, destPath string) error {
 	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
 		return fmt.Errorf("smoke: mkdir for download: %w", err)
@@ -401,7 +402,8 @@ func (w *LocalShellWorker) DownloadAsset(_ context.Context, runID, _, pickupURL,
 	_ = os.MkdirAll(w.runDir(runID), 0755)
 
 	// Production path: download the real asset from the pickup URL.
-	if pickupURL != "" {
+	// asset:// URLs are synthetic (StubAssetResolver) — skip curl.
+	if pickupURL != "" && !strings.HasPrefix(pickupURL, "asset://") {
 		cmd := exec.Command("curl", "-sSL", "-o", destPath, pickupURL)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -555,10 +557,12 @@ func NewSSHWorkerExec(ssh BackendSSHClient) BackendWorkerExec {
 
 // DownloadAsset downloads the asset on the remote worker.
 // In production, uses curl from the resolved pickupURL.
-// In dev mode (empty pickupURL), falls back to a synthetic ffmpeg-generated clip.
+// A pickupURL starting with "asset://" or empty URL triggers the
+// dev-mode fallback: a synthetic ffmpeg-generated clip.
 func (e *SSHWorkerExec) DownloadAsset(ctx context.Context, runID, workerID, pickupURL, destPath string) error {
 	// Production path: download the real asset from the pickup URL.
-	if pickupURL != "" {
+	// asset:// URLs are synthetic (StubAssetResolver) — skip curl.
+	if pickupURL != "" && !strings.HasPrefix(pickupURL, "asset://") {
 		cmd := fmt.Sprintf(
 			"mkdir -p %s && curl -sSL -o %s '%s'",
 			filepath.Dir(destPath), destPath, pickupURL,
