@@ -35,7 +35,9 @@
 
   vars:
     compose_file: /opt/velox-worker/compose.yml
-    container_name_raw: "velox-worker-{{ worker_id }}"
+    # container_name is a per-host inventory var (defaults to velox-worker-<worker_id>).
+    # Override it in inventory.ini when a host uses a non-standard --name convention.
+    _container_name: "{{ container_name | default('velox-worker-' + worker_id) }}"
 
   tasks:
     - name: Detect deploy pattern — check for compose.yml on {{ worker_id }}
@@ -60,7 +62,7 @@
 
     - name: Restart via raw docker restart ({{ worker_id }})
       ansible.builtin.command:
-        cmd: docker restart {{ container_name_raw }}
+        cmd: docker restart {{ _container_name }}
       register: restart_run
       changed_when: restart_run.rc == 0
       failed_when: restart_run.rc != 0
