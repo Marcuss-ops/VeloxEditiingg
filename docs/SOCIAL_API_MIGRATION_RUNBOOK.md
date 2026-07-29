@@ -376,14 +376,29 @@ entry satisfies the §0.3.1 predicate, the sender MUST:
 
 1. Log the full `targets[]` response at `WARN` (after redacting
    `channel_id` if it carries PII under the workspace's data policy).
-2. Surface the catalog verdict (`binding_disabled` / `account_inactive` /
-   `reauth_required` / `enabled=false`) to the operator console so
-   the operator can take the §0.2.2 action.
+2. Surface the **canonical catalog verdict** to the operator console
+   so the operator can take the §0.2.2 action. The verdict MUST be
+   drawn from the resolver taxonomy at
+   `InstaeditLogin/internal/deliveries/target_resolver.go:184-188`:
+   `target_error_code="BLOCKED_AUTH"` (OAuth reauth) or
+   `target_error_code="TARGET_NOT_AVAILABLE"` (conditions 1+2 collapsed);
+   complemented by the underlying `platform_accounts.status` enum
+   value (`active`, `reauth_required`, `paused`, `revoked`,
+   `disconnected`, `error`, `expired`, `pending_authorization`).
+   The non-canonical strings `binding_disabled` / `account_inactive`
+   were drift in earlier drafts of §0.3.4 and have been REMOVED
+   (see §0.2.2 for the round-2 alignment rationale).
 3. **Refuse to invent a default channel.** The system MUST NOT
    pick the first row, a similar-named row, or any account from a
    different workspace. Routing via opaque IDs makes silent
    selection catastrophic — a typo in `delivery_plan[0].destination_id`
    dispatches to the wrong account.
+4. For condition 4 (Velox-side `delivery_destinations.enabled=false`),
+   the canonical operator signal is the runner error envelope
+   `destination_id %q is globally disabled` (see §0.2 and
+   `DataServer/internal/store/delivery_plan_validator.go::validateDeliveryDestinationTx`).
+   Senders MUST translate this into the same `BLOCKED_NO_PUBLISHABLE_CHANNEL`
+   envelope below; they MUST NOT invent a custom code.
 
 The error envelope a sender surfaces on the §0.3.1 zero-match
 case is `BLOCKED_NO_PUBLISHABLE_CHANNEL` with the
