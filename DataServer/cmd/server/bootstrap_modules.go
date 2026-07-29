@@ -195,7 +195,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 		{"SOCIAL_GATEWAY_CALLBACK_BASE_URL", "SOCIAL_CALLBACK_BASE_URL"},
 	} {
 		if os.Getenv(alias.env) != "" {
-			log.Printf("[SOCIALCLIENT] WARN legacy alias env detected: %s is RETIRED (PR-15.10) and NOT honored — rename to %s.", alias.env, alias.canonical)
+			log.Printf("[BOOTSTRAP][SOCIALCLIENT] WARN legacy alias env detected: %s is RETIRED (PR-15.10) and NOT honored — rename to %s.", alias.env, alias.canonical)
 		}
 	}
 
