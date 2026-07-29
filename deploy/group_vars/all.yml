@@ -14,7 +14,7 @@ velox_grpc_port: 9000
 # Public URL the master advertises to clients and worker agents.
 # In the current public deployment this should be the master's public IP
 # or a real DNS name that resolves from the worker hosts.
-velox_master_public_url: "https://CHANGE_ME_MASTER_HOST" # operator MUST replace with a real hostname before production use
+velox_master_public_url: "https://CHANGE_ME_MASTER_HOST" # operator MUST replace with a real hostname before production use; override with -e for local testing
 
 # ── Master filesystem layout ────────────────────────────────────────────────
 velox_runtime_dir: /var/lib/velox
