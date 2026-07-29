@@ -1,5 +1,39 @@
 ## [Unreleased] - 2026-07-29
 
+
+### PR-15.17 — Runbook §0.1/§0.2/§0.3 emission
+
+Promotes the Velox → Social API migration runbook to a complete
+cross-repo operator map. The 5-commit chain covers: round-1 initial
+§0.1/§0.2/§0.3 emission (env-var bootstrap, 4 channel-readiness
+prerequisites, sender-side `destination_id` selection); round-2
+canonical-path / canonical-function-name alignment in §0.2;
+round-2 §0.2.2 triage table aligned with the canonical
+target_resolver.go taxonomy (BLOCKED_AUTH / TARGET_NOT_AVAILABLE +
+the underlying `platform_accounts.status` enum); round-3 §0.3.4
+catalog-verdict list aligned with the canonical taxonomy;
+round-4 pinning of the `platform_accounts.status` enum to
+`InstaeditLogin/internal/models/user.go:49-72` with the canonical
+8-value declaration (`active`, `reauth_required`, `revoked`,
+`disconnected`, `expired`, `error`, `pending_authorization`,
+`suspended`).
+
+Operator-visible outcome: a sender or on-call reading the runbook
+now sees one canonical mapping per condition (the §0.2 chart) and
+one canonical triage row per verdict (the §0.2.2 cheat-sheet); the
+non-canonical codes `binding_disabled` / `account_inactive` that
+drifted through earlier drafts have been REMOVED from the runbook
+in favor of the canonical taxonomy.
+
+CHANGELOG anchor: PR-15.17. Commits in this anchor (already on
+`main`):
+
+  - `422e5c1`  `docs(runbook): add §0.1/§0.2/§0.3 (env bootstrap, channel prerequisites, sender-side destination_id selection)`
+  - `cdec3c7`  `docs(runbook): replace speculative function names + paths with verified canonicals in §0.2`
+  - `fb1f663`  `docs(runbook): align §0.2.2 triage with canonical taxonomy (round-2)`
+  - `736e1ee`  `docs(runbook): align 0.3.4 catalog-verdict list with canonical taxonomy (round-3)`
+  - `74973df`  `docs(runbook): pin platform_accounts.status enum to user.go:49-72 + correct 8 canonical values (round-4)`
+
 ### Fleet Operator: 4/4 workers — 16/16 health checks passing
 
 Complete fleet audit, onboarding, and hardening session. All 4 remote

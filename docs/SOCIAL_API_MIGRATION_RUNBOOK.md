@@ -1011,6 +1011,30 @@ Anchors currently shipping in CHANGELOG.md on `main` (verified by
   `SocialDestinationID → ExternalDestinationID` via migration 092)
 * **PR-15.16** — Residuo 6 closure (`external_destination_id`
   migration / `channel_id` retirement)
+* **PR-15.17** — Runbook §0.1/§0.2/§0.3 emission (5-commit
+  runbook-promotion chain promoting the Velox→Social API migration
+  runbook to a complete cross-repo operator map covering
+  `SOCIAL_API_*` env-var bootstrap (§0.1), the 4 channel-readiness
+  prerequisites (§0.2), and sender-side `destination_id` selection
+  (§0.3)). Round-1 through round-4 commits align §0.2.2 triage +
+  §0.3.4 catalog-verdict list with the canonical `target_resolver.go`
+  taxonomy and pin the `platform_accounts.status` enum to
+  `user.go:49-72` (the canonical 8-value enum declaration).
+  Cross-checks: canonical status strings (`BLOCKED_AUTH`,
+  `TARGET_NOT_AVAILABLE`, `active`, `reauth_required`); canonical
+  path/file anchors (`runner.go:499-500`,
+  `store_deliveries.go::BatchDeliveryDestinationsStatus`,
+  `delivery_plan_validator.go::validateDeliveryDestinationTx`,
+  `InstaeditLogin/internal/deliveries/target_resolver.go:184-188`).
+  Operator follow-ups closed: speculative function-name drift
+  (`CheckWorkspace` / `VerifyActive`) and non-canonical triage codes
+  (`binding_disabled`, `account_inactive`) REMOVED in favor of the
+  canonical taxonomy.
+  - `422e5c1`  `docs(runbook): add §0.1/§0.2/§0.3 (env bootstrap, channel prerequisites, sender-side destination_id selection)`
+  - `cdec3c7`  `docs(runbook): replace speculative function names + paths with verified canonicals in §0.2`
+  - `fb1f663`  `docs(runbook): align §0.2.2 triage with canonical taxonomy (round-2)`
+  - `736e1ee`  `docs(runbook): align 0.3.4 catalog-verdict list with canonical taxonomy (round-3)`
+  - `74973df`  `docs(runbook): pin platform_accounts.status enum to user.go:49-72 + correct 8 canonical values (round-4)`
 
 Operator follow-up (work landed on `main` but NOT yet anchored in
 CHANGELOG.md — track via commit hash until the next CHANGELOG
