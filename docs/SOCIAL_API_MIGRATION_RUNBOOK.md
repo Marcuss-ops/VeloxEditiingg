@@ -644,9 +644,22 @@ rebase assigns a PR-N.NN anchor):
 * **Opaque-wire CI guard (round-1, round-3 fix-ups):**
   - `1927b8b`  `ci(workflow): add opaque-wire Residuo 3 guard`
   - `bf3b845`  `ci(workflow): harden opaque-wire Residuo 3 guard`
-* **Residuo 5 (alias removal `SOCIAL_GATEWAY_*`):** pending
-  operator-side coordination. When landed, will surface as the
-  next PR-N.NN anchor.
+* **Residuo 5 (alias removal `SOCIAL_GATEWAY_*`):** DONE — closed in PR-15.10 retirement
+  chain on `main` (commits `ca000bf` / `bb407b8` / `6aadcd9`). Canonical-only env contract
+  is in force: `socialclient.ConfigFromEnv()` honors ONLY `SOCIAL_API_URL`,
+  `SOCIAL_API_TOKEN`, `SOCIAL_API_TIMEOUT_MS`, `SOCIAL_API_RETRIES`,
+  `SOCIAL_CALLBACK_BASE_URL`. The deprecation-cycle aliases
+  `SOCIAL_GATEWAY_URL` / `SOCIAL_GATEWAY_API_KEY` /
+  `SOCIAL_GATEWAY_CALLBACK_BASE_URL` are NOT honored — operators still carrying
+  these in `/etc/velox-server.env` (or the `vault_velox_social_gateway_api_key`
+  ansible-vault key) MUST rename to the canonical form. The negative-pinning test
+  `TestConfigFromEnv_DropsLegacySocialGatewayAliases` and its companion
+  `TestConfigFromEnv_HonorsCanonicalSocialAPIEnvs` (both in
+  `DataServer/internal/socialclient/config_test.go`) lock the boundary closed.
+  Operator-visible safety net: `deploy/validate-master-env.sh` warns when any
+  `SOCIAL_GATEWAY_*` alias is still set in the master env file, AND
+  `DataServer/cmd/server/bootstrap_modules.go` emits a one-line
+  `[SOCIALCLIENT] WARN` at every master boot pointing at the canonical rename.
 
 ---
 
