@@ -73,12 +73,20 @@ jobs:
         with:
           go-version-file: go.work
           cache: true
+          # VeloxEditiingg is a multi-module workspace (DataServer,
+          # RemoteCodex/native/worker-agent-go, shared, ...) — the
+          # default cache key only hashes the root go.sum. Pin the
+          # key to every go.sum under the repo so a dependency bump
+          # in any module busts the cache.
+          cache-dependency-path: '**/go.sum'
 
       - name: Install cmake
         # Mirrors ci.yml; needed because `go build ./...` against
           # execstack helpers transitively links C deps. Cheap
           # apt-get, cached on the runner image.
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake
+        # ubuntu-latest runners already run as root, so `sudo` is a
+        # no-op shell escape that adds noise. Drop it.
+        run: apt-get update && apt-get install -y --no-install-recommends cmake
 
       - name: gofmt check (no auto-write)
         # make fmt-check runs gofmt -l on every Go file in the
