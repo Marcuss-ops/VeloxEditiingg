@@ -423,8 +423,16 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	// /api/v1/admin/operations/{id} for terminal state; the
 	// smoke_runs table records the duration_ms baseline.
 	if fleetDep != nil && fleetDep.Registry != nil && m != nil && m.Workers != nil && p != nil && p.SQLite != nil {
+		// Wire SSH-based worker exec for the 2 accessible workers.
+		// Workers not in the map (velox-worker-13197, host_57_129_132_133)
+		// will fail at DownloadAsset with an SSH error — the correct
+		// behavior until SSH connectivity is restored.
+		sshClient := fleet.NewSSHClient(map[string]fleet.SSHWorkerTarget{
+			"host_57_131_20_173":    {Host: "57.131.20.173", User: "debian", KeyPath: "/etc/velox/ssh/id_ed25519_velox"},
+			"velox-worker-523925eb": {Host: "51.222.204.158", User: "ubuntu", KeyPath: "/etc/velox/ssh/id_ed25519_velox"},
+		})
 		smokeBackend := fleet.LevelDSmokeBackend{
-			Worker:    fleet.NewLocalShellWorker(),
+			Worker:    fleet.NewSSHWorkerExec(sshClient),
 			Drive:     fleet.NewLocalFileDriveUploader(),
 			Asset:     stubAssetResolver{pickupURL: "asset://e2e/smoke/canary.mp4", expectedBytes: 0},
 			Lease:     fleet.NewRegistryDrainLease(m.Workers.Registry()),
@@ -433,7 +441,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		if err := fleetDep.Registry.Register(fleet.OperationKindSmoke, fleet.NewLevelDSmokeExecutor(smokeBackend)); err != nil {
 			log.Printf("[BOOTSTRAP] WARN: LevelDSmokeExecutor registration failed: %v (kind=%s continues with noop fallback)", err, fleet.OperationKindSmoke)
 		} else {
-			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor registered for kind=%s (Worker=LocalShell, Drive=LocalFile, Lease=RegistryDrain, SmokeRuns=SQLite)", fleet.OperationKindSmoke)
+			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor registered for kind=%s (Worker=SSHWorkerExec[2 targets], Drive=LocalFile, Lease=RegistryDrain, SmokeRuns=SQLite)", fleet.OperationKindSmoke)
 		}
 		m.Workers.SetSmokeHandler(api.NewAdminWorkersSmokeHandler(m.Workers.Registry(), fleetDep.Controller))
 		log.Printf("[BOOTSTRAP] Admin workers smoke handler wired (POST /api/v1/admin/workers/{id}/smoke; tick goroutine drives LevelDSmokeExecutor)")

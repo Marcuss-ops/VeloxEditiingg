@@ -194,8 +194,15 @@ func (e *LevelDSmokeExecutor) Execute(ctx context.Context, op *store.Operation) 
 			fmt.Sprintf("%s: ffmpeg exited 0 but artifact is empty (after %s)", ErrArtifactMissing.Error(), "render"))
 	}
 	// ── Phase 6: upload artifact to Drive ────────────────────────
+	// Use the path returned by RunFFmpegRender (may differ from
+	// outputPath when the adapter fetches the artifact locally, e.g.
+	// SSHWorkerExec downloads via base64 to a local temp path).
+	artifactPath := outputPathReturned
+	if artifactPath == "" {
+		artifactPath = outputPath
+	}
 	upCtx, cancel := context.WithTimeout(ctx, timeoutDriveUpload)
-	driveFileID, err := e.backend.Drive.UploadArtifact(upCtx, runID, outputPath, artifactBytes)
+	driveFileID, err := e.backend.Drive.UploadArtifact(upCtx, runID, artifactPath, artifactBytes)
 	cancel()
 	if err != nil {
 		return e.runCleanupAndFail(ctx, runID, op.WorkerID, runStart,
