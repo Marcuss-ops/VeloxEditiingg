@@ -378,7 +378,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 				SSH:         sharedSSH,
 				Deployments: p.SQLite,
 				Registry:    &fleet.RealRegistryLevelCGater{Reg: m.Workers.Registry()},
-				Smoke:       nil,
+				Smoke:       fleet.NewSmokeRunHealthChecker(p.SQLite),
 			},
 		)
 		m.Workers.SetHealthHandler(healthHandler)
