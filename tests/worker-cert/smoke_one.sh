@@ -245,17 +245,15 @@ LEASE_ID=$(printf '%s' "$LEASE_JSON" | jq -er '.lease_id  // empty')
 log_info "lease worker=$LEASED_WORKER task=$TASK_ID attempt=$ATTEMPT_ID lease_id=$LEASE_ID"
 
 # ─── Compute render_time_ms + artifact size ────────────────────────────────
-# NOTE: GET /api/v1/jobs/{id} currently returns only {ok, job_id, status,
-# created, status_url}. started_at / completed_at / artifact_url are NOT
-# in the polling response (see enqueue_persistence.go GetSubmittedJob).
-# We try to read them anyway (future-proof); if absent, render_time_ms=0
-# and artifact_size_bytes=0 with an explicit log warning.
+# GET /api/v1/jobs/{id} now returns started_at, completed_at, artifact_url,
+# artifact_size_bytes, worker_id, task_id, attempt_id, lease_id (commit 5b976f3).
 STARTED_AT=$(printf '%s' "$last_body"  | jq -er '.started_at   // empty' 2>/dev/null || true)
 COMPLETED_AT=$(printf '%s' "$last_body" | jq -er '.completed_at // empty' 2>/dev/null || true)
-ARTIFACT_URL=$(printf '%s' "$last_body" | jq -er '.artifact_url // .artifact_path // .output_path // empty' 2>/dev/null || true)
+ARTIFACT_URL=$(printf '%s' "$last_body" | jq -er '.artifact_url // empty' 2>/dev/null || true)
+ARTIFACT_SIZE_FROM_API=$(printf '%s' "$last_body" | jq -er '.artifact_size_bytes // 0' 2>/dev/null || echo "0")
 
 if [[ -z "$STARTED_AT" || -z "$COMPLETED_AT" ]]; then
-  log_warn "started_at or completed_at missing from GET /api/v1/jobs/{id} response — render_time_ms will be 0. Extend the endpoint to include these fields for meaningful timing."
+  log_error "started_at or completed_at missing from GET /api/v1/jobs/{id} response — endpoint regression?"
   render_time_ms="0"
 else
   s_epoch=$(smoke_parse_iso8601 "$STARTED_AT")
@@ -266,11 +264,14 @@ else
   fi
 fi
 
-if [[ -z "$ARTIFACT_URL" ]]; then
-  log_warn "artifact_url missing from GET /api/v1/jobs/{id} response — artifact_size_bytes will be 0. Extend the endpoint to include artifact_url."
-  artifact_size_bytes="0"
-else
+# Prefer artifact_size_bytes from the API response (no extra HEAD roundtrip).
+# Fall back to smoke_artifact_size HEAD probe only if the API field is absent.
+if [[ -n "$ARTIFACT_SIZE_FROM_API" && "$ARTIFACT_SIZE_FROM_API" != "0" ]]; then
+  artifact_size_bytes="$ARTIFACT_SIZE_FROM_API"
+elif [[ -n "$ARTIFACT_URL" ]]; then
   artifact_size_bytes=$(smoke_artifact_size "$ARTIFACT_URL" "$M2M_BEARER")
+else
+  artifact_size_bytes="0"
 fi
 log_info "render_time_ms=$render_time_ms artifact_bytes=$artifact_size_bytes"
 
