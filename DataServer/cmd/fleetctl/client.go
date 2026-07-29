@@ -123,9 +123,10 @@ func newFleetClient(cfg *clientConfig) (*fleetClient, error) {
 //
 //   (status, err)
 //
-//     status=HTTP code, err=nil on success
-//     status=HTTP code, err=non-nil on transport / decode failure
-//     status=0, err=non-nil on request build failure
+//     status=HTTP code, err=nil on success AND on non-2xx
+//       (caller maps status via MapHTTPStatusToOpExit)
+//     status=HTTP code, err=non-nil on decode failure (2xx with bad JSON)
+//     status=0, err=non-nil on request build / transport failure
 //
 // Callers map non-2xx to canonical exit codes per exit_codes.go.
 func (c *fleetClient) doJSON(ctx context.Context, method, path string, body any, out any) (int, error) {
@@ -159,9 +160,12 @@ func (c *fleetClient) doJSON(ctx context.Context, method, path string, body any,
 		fmt.Fprintf(os.Stderr, "[fleetctl] <- %d %s\n", resp.StatusCode, string(raw))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Surface a typed error so handlers can pattern-match
-		// (e.g., 404 → ExitWorkerNotFound, 409 → ExitLeaseUnavailable).
-		return resp.StatusCode, fmt.Errorf("HTTP %d: %s", resp.StatusCode, snippet(raw, 256))
+		// Return only the status code — no error. Callers check
+		// status != 200 and map to canonical exit codes via
+		// MapHTTPStatusToOpExit. Returning an error here causes
+		// runInspect/runStatus/runMutation to short-circuit to
+		// ExitUnexpected before ever evaluating the status code.
+		return resp.StatusCode, nil
 	}
 	if out != nil {
 		if err := json.Unmarshal(raw, out); err != nil {
