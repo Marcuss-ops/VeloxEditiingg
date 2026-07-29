@@ -26,7 +26,7 @@ EVIDENCE_ROOT_CAP9      ?= /tmp/velox-cap9-evidence
 EVIDENCE_ROOT_CAP10     ?= /tmp/velox-cap10-evidence
 
 .PHONY: verify verify-fast verify-heavy fmt fmt-check vet pilot api-docs api-docs-apply \
-        jobs-smoke \
+        jobs-smoke publishing-flow-smoke \
         e2e-grpc e2e-workload e2e-workload-mtls \
         enable-branch-protection disable-branch-protection inspect-branch-protection \
         local-verify-mirror certify-worker certify-worker-bootstrap-mtls \
@@ -49,6 +49,7 @@ help:
 	@echo "  make api-docs-apply              -- regenerate + overwrite api/openapi.yaml (local publish)"
 	@echo "  make pilot                        -- full pilot pipeline (build + start + submit + work + poll)"
 	@echo "  make jobs-smoke                  -- POST + GET polling smoke for /api/v1/jobs (auto-provisions M2M key)"
+	@echo "  make publishing-flow-smoke       -- Cross-repo publishing flow smoke (Velox → InstaeditLogin catalog → /publishing/targets → /jobs → SUCCEEDED → PRIVATE_UPLOADED)"
 	@echo "  make e2e-grpc                     -- PR 3 gRPC control-plane E2E matrix (6 cases, ~90s)"
 	@echo "  make e2e-workload                 -- PR 5 full workload E2E (Hello → artifact, ~3-5 min)"
 	@echo "  make local-verify-mirror          -- reproduce the GitHub Actions pyramid locally"
@@ -164,6 +165,39 @@ pilot:         ## Full pilot pipeline (build + start + submit + work + poll)
 #           $JOBS_SMOKE_DEBUG=1 (verbose curl + response dump).
 jobs-smoke:
 	@bash scripts/api/jobs_smoke.sh
+
+# Operator smoke for the cross-repo Velox → InstaeditLogin publishing flow.
+# Steps (mirrors docs/SOCIAL_API_MIGRATION_RUNBOOK.md §0.3 + §3):
+#   1. Self-provision an ephemeral M2M client via /api/v1/admin/m2m/keys
+#      (same pattern as jobs-smoke).
+#   2. POST /api/v1/publishing/targets — Velox forwards to the InstaeditLogin
+#      catalog and upserts delivery_destinations on the way back.
+#   3. Pick the FIRST target with can_post=true AND capabilities.upload_video=true.
+#   4. POST /api/v1/jobs with delivery_plan[0].destination_id set to the
+#      Velox-side opaque id (no channel / platform_account_id in metadata).
+#   5. Poll GET /api/v1/jobs/{id} until SUCCEEDED (exponential backoff).
+#   6. If $INSTAEDIT_BASE_URL is set, discover external_delivery_id from the
+#      polled job body and poll the InstaeditLogin delivery endpoint until
+#      status=PRIVATE_UPLOADED (the canonical YouTube private-upload gate).
+#   7. Cleanup: DELETE the ephemeral M2M client on every exit path.
+#
+# Required: $VELOX_ADMIN_TOKEN (operator's adminAuth bearer).
+# Optional: $VELOX_MASTER_URL (default http://127.0.0.1:8080),
+#           $PUBLISHING_WORKSPACE_ID (mandatory — int64),
+#           $PUBLISHING_PLATFORM (default youtube),
+#           $PUBLISHING_PLATFORM_ACCOUNT_ID (optional scalar filter),
+#           $INSTAEDIT_BASE_URL (optional — without it step 6 is skipped),
+#           $PUBLISHING_POLL_TIMEOUT_S (default 300),
+#           $PUBLISHING_PRIVATE_TIMEOUT_S (default 300),
+#           $PUBLISHING_IDEM_KEY (override the auto-generated key),
+#           $PUBLISHING_FLOW_DEBUG=1 (verbose curl + body dump),
+#           $PUBLISHING_FLOW_DRY=1 (print would-be request bodies, exit 0).
+#
+# Exit codes (documented in the script header):
+#   0 success, 2 usage/env, 3 network, 4 non-2xx HTTP, 5 no publishable target,
+#   6 missing job_id on 202, 7 FAILED/CANCELLED, 8 poll timeout, 9 PRIVATE_UPLOADED timeout.
+publishing-flow-smoke:
+	@bash scripts/e2e/publishing_flow_smoke.sh
 
 verify:        ## Architecture + Go (-race) + cmake + docker (full suite)
 	./scripts/ci/verify.sh
