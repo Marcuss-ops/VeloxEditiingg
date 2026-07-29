@@ -8,19 +8,13 @@ import (
 func TestSubmitRequestToRawPayloadPreservesPublishingMetadata(t *testing.T) {
 	retryBudget := 3
 	publishingMetadata := map[string]interface{}{
-		"contract_version": "velox.instaedit.publish.v1",
-		"publishing": map[string]interface{}{
-			"platform":     "youtube",
-			"workspace_id": int64(12),
-			"target": map[string]interface{}{
-				"type":                "channel",
-				"platform_account_id": int64(381),
-				"channel_id":           "UCxxxxxxxx",
-			},
-			"initial_privacy":  "private",
-			"final_privacy":    "public",
-			"require_thumbnail": true,
-		},
+		"contract_version":  "velox.instaedit.publish.v1",
+		"title":             "Video title",
+		"description":       "Video description",
+		"tags":              []string{"wwe", "wrestling"},
+		"privacy_status":    "private",
+		"final_privacy":     "public",
+		"require_thumbnail": true,
 	}
 
 	req := &SubmitJobRequest{
@@ -31,7 +25,7 @@ func TestSubmitRequestToRawPayloadPreservesPublishingMetadata(t *testing.T) {
 			DurationSeconds: 7.2,
 		}},
 		DeliveryPlan: []SubmitDeliveryPlanEntry{{
-			DestinationID: "instaedit_youtube",
+			DestinationID: "instaedit_extdst_01JREADY",
 			Priority:      1,
 			RetryBudget:   &retryBudget,
 			Metadata:      publishingMetadata,
@@ -47,7 +41,7 @@ func TestSubmitRequestToRawPayloadPreservesPublishingMetadata(t *testing.T) {
 	if !ok {
 		t.Fatalf("delivery plan entry shape = %#v", plan[0])
 	}
-	if got := entry["destination_id"]; got != "instaedit_youtube" {
+	if got := entry["destination_id"]; got != "instaedit_extdst_01JREADY" {
 		t.Fatalf("destination_id = %#v", got)
 	}
 	if !reflect.DeepEqual(entry["metadata"], publishingMetadata) {
