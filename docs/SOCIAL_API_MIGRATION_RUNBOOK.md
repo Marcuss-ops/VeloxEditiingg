@@ -64,6 +64,300 @@ credentials). Velox carries NO knowledge of those downstream fields.
 
 ---
 
+## 0.1 Bootstrap order for `SOCIAL_API_*` env vars (procedure 0)
+
+Operators bringing up a fresh Velox Master, or rebuilding after a
+disaster, MUST configure the `SOCIAL_API_*` env vars on the master
+in this exact order. Out-of-order bootstrap leaves the
+`socialclient` package partially initialized and triggers the
+negative-pinning tests in `DataServer/internal/socialclient/config_test.go`
+on the very first request.
+
+### 0.1.1 Variable inventory (canonical, post-Residuo-5)
+
+The canonical contract — enforced by `socialclient.ConfigFromEnv()`
+(`DataServer/internal/socialclient/config.go:104-108`) and locked by
+`TestConfigFromEnv_HonorsCanonicalSocialAPIEnvs` — reads **only**
+the following variables:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SOCIAL_API_URL` | (none — required) | Base URL of the external Social API (e.g. `https://instaedit.example.com`). Read at `config.go:104`. |
+| `SOCIAL_API_TOKEN` | (none — required) | Bearer sent as `Authorization: Bearer <token>` on every Velox→Social call. Read at `config.go:105`. |
+| `SOCIAL_API_TIMEOUT_MS` | `30000` | Per-request timeout (ms) for Velox→Social HTTP calls. Default 30s. |
+| `SOCIAL_API_RETRIES` | `3` | Retries on transient failures (network errors, 5xx). Default 3. |
+| `SOCIAL_CALLBACK_BASE_URL` | (none — required) | Public base URL the Social API calls back to (e.g. `https://velox.example.com`). Used for webhook delivery. |
+
+**No other `SOCIAL_*` variable is honored.** In particular, the
+deprecated one-release-cycle aliases from PR-15.10
+(`SOCIAL_GATEWAY_URL`, `SOCIAL_GATEWAY_API_KEY`,
+`SOCIAL_GATEWAY_CALLBACK_BASE_URL`) are **dropped** at parse time;
+see the negative-pinning test
+`TestConfigFromEnv_DropsLegacySocialGatewayAliases` and the
+operator-visible warning emitted by `DataServer/cmd/server/bootstrap_modules.go`
+at every master boot.
+
+### 0.1.2 Bootstrap order (mandatory)
+
+```text
+Step 1 — SOCIAL_API_URL
+Step 2 — SOCIAL_API_TOKEN
+Step 3 — SOCIAL_API_TIMEOUT_MS
+Step 4 — SOCIAL_API_RETRIES
+Step 5 — SOCIAL_CALLBACK_BASE_URL
+Step 6 — verify (see §0.1.3)
+Step 7 — restart the master
+```
+
+1. **`SOCIAL_API_URL`** first. Without it, the `socialclient`
+   `Config{BaseURL:""}` returns immediately on every call and the
+   master boot logs `[BOOTSTRAP][SOCIALCLIENT] WARN: SOCIAL_API_URL
+   is unset — Velox will skip Social delivery` (see
+   `bootstrap_modules.go:211-217`). Setting the URL alone is
+   necessary but not sufficient.
+
+2. **`SOCIAL_API_TOKEN`** second. The token authenticates Velox to
+   the Social API; the URL alone would be rejected with `401` on
+   the very first probe. **Rotate via the `vault_velox_social_api_token`
+   ansible-vault key** (see `SECURITY_RUNBOOK.md` §2.4 / §3.4);
+   never hand-edit `/etc/velox-server.env` outside the vault-driven
+   deploy path.
+
+3. **`SOCIAL_API_TIMEOUT_MS`** third. Default 30s is the
+   cross-repo-tested ceiling for chunked artifact delivery. Operators
+   who lower this must verify the downstream timeout on the Social
+   API side is strictly greater to avoid spurious `504` from
+   intermediate proxies.
+
+4. **`SOCIAL_API_RETRIES`** fourth. Default 3 retries covers
+   transient network failures (network errors, HTTP 5xx). Operators
+   who raise this should monitor the
+   `velox_socialclient_retries_total` metric for exponential retry
+   amplification.
+
+5. **`SOCIAL_CALLBACK_BASE_URL`** fifth. This is the public base URL
+   the Social API calls back to. It MUST match the URL the Social
+   API has configured in its `velox_callback_base_url` setting,
+   otherwise webhook deliveries will be rejected with HTTP 403
+   from the master.
+
+6. **Verify** before restart (see §0.1.3).
+
+7. **Restart the master** (`systemctl restart velox-server` or
+   `velox-server systemd unit`). The env vars are read at process
+   start; an in-place reload requires a full restart.
+
+### 0.1.3 Pre-restart verification
+
+Run `deploy/validate-master-env.sh` (see `deploy/validate-master-env.sh:251-271`)
+to confirm every canonical variable is set, no `CHANGE_ME_*` placeholders
+remain, and `SOCIAL_API_URL` parses as a valid `https://` URL:
+
+```bash
+sudo -u velox bash -c 'source /etc/velox-server.env && \
+    /opt/velox/current/deploy/validate-master-env.sh'
+```
+
+**Expected output envelope:**
+
+* `OK — SOCIAL_API_URL=https://instaedit.example.com` (or similar)
+* `OK — SOCIAL_API_TOKEN is set (redacted)`
+* `WARN` only when the URL is `http://` and the master is behind a
+  VPN/front-door TLS terminator (acceptable in dev, never in prod).
+* `FAIL` on a `CHANGE_ME_*` placeholder, missing value, malformed
+  URL, or any of the deprecated `SOCIAL_GATEWAY_*` aliases still
+  set.
+
+If `FAIL`, the master will not boot cleanly. Re-edit
+`/etc/velox-server.env` (preferably via the ansible-vault deploy
+path) and re-run §0.1.3.
+
+### 0.1.4 Post-restart invariant
+
+After the master boots with all 5 canonical variables set, the
+following must hold:
+
+* `/var/log/velox/server.log` contains exactly one
+  `[BOOTSTRAP][SOCIALCLIENT] OK: 5/5 canonical SOCIAL_API_* envs honored`
+  line.
+* `TestConfigFromEnv_HonorsCanonicalSocialAPIEnvs` and
+  `TestConfigFromEnv_DropsLegacySocialGatewayAliases` continue to
+  pass on `main` (CI gate `main-baseline.yml`).
+* The deprecated `SOCIAL_GATEWAY_*` aliases are NOT present in
+  `/etc/velox-server.env` (the warning from §0.1.1 must not appear).
+
+If any of these invariants breaks, re-run §0.1.3 and re-roll the
+master env vars.
+
+---
+
+## 0.2 Channel prerequisites for a publishable destination (procedure 0b)
+
+A channel surfaced by `POST /api/v1/publishing/targets` is
+**publishable** — i.e. usable as `delivery_plan[0].destination_id`
+on a render job — **iff all four conditions** below hold
+simultaneously. Each condition is enforced by a different layer of
+the cross-repo contract:
+
+| # | Condition | Enforced by | Failure surface in `/publishing/targets` |
+|---|---|---|---|
+| 1 | **Workspace binding enabled** for the channel's owning workspace | `internal/target_resolver.go::resolveBindings` (`InstaeditLogin`) → propagates to `can_post=false` | `status="binding_disabled"` or absence from the catalog |
+| 2 | **Platform account active** (not paused, not deleted) | `internal/target_resolver.go::resolveAccountStatus` | `status="account_inactive"`, `target_error_code="ACCOUNT_INACTIVE"` |
+| 3 | **OAuth valid** (access token not expired, not revoked, refresh-token chain not broken) | `internal/target_resolver.go::resolveOAuthHealth` | `status="reauth_required"`, `block_reason="channel authentication requires attention"`, `target_error_code="BLOCKED_AUTH"` |
+| 4 | **External destination enabled** (the linked row in `delivery_destinations` has `enabled=true` AND a non-empty `external_destination_id`) | Velox: `delivery_destinations.enabled` + `validateDeliveryDestinationTx` (`atomic_job_task.go`) | `enabled=false`, `can_post=false`, `target_error_code="DEST_DISABLED"` |
+
+**Condition 1, 2, 3 are evaluated server-side by the InstaEdit
+catalog resolver.** Velox surfaces the verdict as the
+`can_post` boolean in the `/publishing/targets` response. A
+channel that fails ANY of 1/2/3 arrives at Velox with
+`can_post=false` and `capabilities.upload_video=false`. Senders
+MUST skip these rows even if `destination_id` is non-empty.
+
+**Condition 4 is enforced by Velox itself** at enqueue time
+(through `validateDeliveryDestinationTx` inside the atomic
+creator's INSERT transaction; see
+`internal/store/atomic_job_task.go::insertDeliveryPlanTx`). A
+`delivery_destinations` row whose `enabled` flips to `false`
+between catalog discovery and job submission causes Velox to
+reject the enqueue with `destination_id %q is globally disabled`,
+NOT to silently dispatch.
+
+### 0.2.1 Diagnostic SQL — verify all 4 conditions on the master
+
+```sql
+-- Condition 4 check: every destination linked to an InstaEdit provider
+-- must have enabled=1 AND a non-empty external_destination_id.
+SELECT destination_id,
+       provider,
+       external_destination_id,
+       enabled,
+       json_extract(configuration_json, '$.residuo4_closed_at') AS r4_marker
+FROM delivery_destinations
+WHERE provider IN ('instaedit_social_gateway', 'social_gateway')
+  AND (
+    enabled != 1
+    OR external_destination_id IS NULL
+    OR TRIM(external_destination_id) = ''
+  );
+```
+
+**Expected post-healthy-install envelope:** empty result set. A
+non-zero count indicates a row whose condition-4 prerequisite
+failed — these channels will surface as `can_post=false` in
+`/publishing/targets` until an operator flips `enabled=1` (or
+re-syncs the catalog via `POST /api/v1/admin/destinations/sync`).
+
+Conditions 1/2/3 are checked from the InstaEdit side via:
+
+```bash
+curl -fsS \
+  -H "Authorization: Bearer ${INSTAEDIT_ADMIN_TOKEN}" \
+  "${INSTAEDIT_BASE_URL}/api/v1/internal/workspaces/<workspace_id>/channels/publishable"
+```
+
+The InstaEdit response must report `count == expected_count` and
+no entry with `block_reason` set.
+
+### 0.2.2 Failure triage cheat-sheet
+
+| Catalog status | Condition that failed | Operator action |
+|---|---|---|
+| `binding_disabled` | 1 | Enable the workspace binding in the InstaEdit admin console; re-sync catalog |
+| `account_inactive` | 2 | Re-activate the platform account or delete the channel entry |
+| `reauth_required` | 3 | Re-consent the OAuth flow; the catalog entry re-flips to `active` once the new refresh-token is healthy |
+| `enabled=false` (Velox-side) | 4 | `UPDATE delivery_destinations SET enabled = 1 WHERE destination_id = '...'` OR re-sync the catalog via `POST /api/v1/admin/destinations/sync` |
+| Missing from catalog | 1+2+3 | The channel was deleted upstream; remove it from the sender's allow-list |
+
+---
+
+## 0.3 Sender-side `destination_id` selection criteria (procedure 0c)
+
+A trusted sender (e.g. `PipelineGen` or any `creatorflow` caller)
+calls `POST /api/v1/publishing/targets` and selects **exactly one**
+target from the response. The selection criteria are operator-enforced
+in the sender's code; Velox cannot reject an enqueue that picks a
+non-publishable target because the enqueue path is downstream of
+selection. Operators MUST encode the §0.2 conditions in the
+sender-side predicate.
+
+### 0.3.1 Canonical selection predicate
+
+```text
+pick the FIRST target in the response array that satisfies:
+
+  can_post == true                                       (boolean AND)
+  AND destination_id is non-empty AND not null            (string presence)
+  AND capabilities.upload_video == true                   (capability bit)
+
+Rejects: targets with can_post=false (any of conditions 1-4 failed in §0.2);
+         targets with empty/null destination_id (catalog shape drift);
+         targets with capabilities.upload_video=false (platform lacks upload scope).
+```
+
+Field roles:
+
+* `destination_id` (string) — the Velox-side opaque ID. This is the
+  ONLY field the sender copies into `delivery_plan[0].destination_id`
+  on the subsequent `POST /api/v1/jobs`. Display-only fields MUST
+  NOT be propagated.
+* `external_destination_id` (string) — the InstaEdit-side opaque ID.
+  Display-only / audit-trail; never propagated to the job payload.
+* `channel_id` / `channel_name` (strings) — display-only.
+  **Routing uses the opaque IDs only**, so a display-name change
+  upstream never breaks dispatch.
+* `platform` / `platform_account_id` — the human-friendly hint. The
+  sender MAY log these for audit, but MUST NOT include them in
+  `delivery_plan[].metadata` (the §0.3.2 metadata hygiene rule).
+
+### 0.3.2 Metadata hygiene — what NOT to copy into `delivery_plan[].metadata`
+
+Senders MUST NOT mirror the following fields into
+`delivery_plan[].metadata`:
+
+| Forbidden in metadata | Why |
+|---|---|
+| `platform` | Opaque-mode contract (see `socialclient/requests.go` § wire-shape); repeated platforms create a side-channel that bypasses the canonical opaque wire. |
+| `account_id` / `channel_id` / `language` | Same — Velox's resolver never reads them; the external Social API owns these resolutions. |
+| `destination_id` (echo) | The destination is selected via `delivery_plan[0].destination_id`, NOT via metadata. Echoing it produces a confusing audit trail. |
+
+`delivery_plan[].metadata` is for **per-delivery editorial intent**
+(title, description, tags, privacy_status, final_privacy,
+require_thumbnail, publish_at). See
+`docs/publishing-job-payload.md` §2 for the canonical metadata
+contract.
+
+### 0.3.3 Smoke verification
+
+The cross-repo smoke `scripts/e2e/publishing_flow_smoke.sh`
+embeds the §0.3.1 predicate as a `jq` filter on the
+`/publishing/targets` response. Operators adapting a new sender
+SHOULD lift the predicate from the smoke unchanged rather than
+re-deriving it. The smoke exits with code `5` if no target
+satisfies the predicate — the same signal a sender should raise
+when no publishable channel exists for the workspace.
+
+### 0.3.4 Failure mode: zero targets satisfy §0.3.1
+
+If `POST /api/v1/publishing/targets` returns `targets[]` where no
+entry satisfies the §0.3.1 predicate, the sender MUST:
+
+1. Log the full `targets[]` response at `WARN` (after redacting
+   `channel_id` if it carries PII under the workspace's data policy).
+2. Surface the catalog verdict (`binding_disabled` / `account_inactive` /
+   `reauth_required` / `enabled=false`) to the operator console so
+   the operator can take the §0.2.2 action.
+3. **Refuse to invent a default channel.** The system MUST NOT
+   pick the first row, a similar-named row, or any account from a
+   different workspace. Routing via opaque IDs makes silent
+   selection catastrophic — a typo in `delivery_plan[0].destination_id`
+   dispatches to the wrong account.
+
+The error envelope a sender surfaces on the §0.3.1 zero-match
+case is `BLOCKED_NO_PUBLISHABLE_CHANNEL` with the
+`block_reason="no target with can_post=true AND capabilities.upload_video=true"`.
+
+---
+
 ## 1. Back-filling `external_destination_id` for legacy rows (procedure a)
 
 ### 1.1 Prerequisites
@@ -555,6 +849,9 @@ detector schedule baked into
 
 | Need | Action |
 |---|---|
+| Order of `SOCIAL_API_*` env vars on a fresh master | §0.1 |
+| Verify all 4 channel-prerequisite conditions are healthy | §0.2 |
+| Pick a `destination_id` in the sender (selection criteria) | §0.3 |
 | Find unmapped `delivery_destinations` | §1.2 |
 | Resolve a mapping against the external Social API | §1.3 |
 | Back-fill one row | §1.4 |
