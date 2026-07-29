@@ -204,7 +204,7 @@ the cross-repo contract:
 | 1 | **Workspace binding enabled** for the channel's owning workspace | `InstaeditLogin/internal/deliveries/target_resolver.go::checkAccountEligibility` (binding gate — step 4 of the eligibility gate) | absence from the catalog (no `can_post=true` row surfaces) |
 | 2 | **Platform account active** (status enum = `active`, not `paused` / `revoked` / `disconnected`) | same `checkAccountEligibility` (status gate — step 3 of the eligibility gate) | row dropped from catalog, or `can_post=false` |
 | 3 | **OAuth valid** (access token not expired, not revoked, refresh-token chain not broken) | same `checkAccountEligibility` (reauth_required gate — step 1 of the eligibility gate; dual-signal: status enum OR `reauth_required_at` timestamp). Token-freshness itself is verified at the WORKER boundary via `internal/services/youtube_validate.go`. | `status="reauth_required"`, `target_error_code="BLOCKED_AUTH"` |
-| 4 | **External destination enabled** (the linked row in `delivery_destinations` has `enabled=true` AND a non-empty `external_destination_id`) | Velox: `DataServer/internal/deliveries/store_deliveries.go::BatchDeliveryDestinationsExistAndEnabled` (handler pre-flight) AND `DataServer/internal/store/delivery_plan_validator.go::validateDeliveryDestinationTx` (in-tx atomic creator gate, called from `DataServer/internal/store/atomic_job_task.go::insertDeliveryPlanTx`) | `enabled=false` row omitted from `targets[]`, or enqueue rejected with `destination_id %q is globally disabled` |
+| 4 | **External destination enabled** (the linked row in `delivery_destinations` has `enabled=true` AND a non-empty `external_destination_id`) | Velox: `DataServer/internal/store/store_deliveries.go::BatchDeliveryDestinationsStatus` (NEW 3-state handler pre-flight, replaces the collapsed 2-state `BatchDeliveryDestinationsExistAndEnabled`) AND `DataServer/internal/store/delivery_plan_validator.go::validateDeliveryDestinationTx` (in-tx atomic creator gate, called from `DataServer/internal/store/atomic_job_task.go::insertDeliveryPlanTx`; wraps `ErrDestinationDisabled` typed sentinel for `errors.Is`) | §0.3.4 item 4 split — **two distinct surfaces** so operator dashboards can disambiguate: (i) Velox-side enqueue-time `details[].target_error_code=BLOCKED_VELOX_DISABLED` (row exists but `enabled=0` on Velox); (ii) catalog-side top-level `error.code=BLOCKED_NO_PUBLISHABLE_CHANNEL` (InstaeditLogin catalog yielded ≥1 entry but zero satisfy `can_post=true AND capabilities.upload_video=true`). Canonical code constants live at `DataServer/internal/handlers/server/pipeline/publishing_error_codes.go`. |
 
 `checkAccountEligibility` (defined at
 `InstaeditLogin/internal/deliveries/target_resolver.go:615`) is the
@@ -289,7 +289,8 @@ The triage cheat-sheet for a sender or operator is therefore:
 | `target_error_code="TARGET_NOT_AVAILABLE"` AND the underlying `platform_accounts.status` is one of `paused` / `revoked` / `disconnected` / `error` / `expired` / `pending_authorization` | 2 (account inactive) | Re-activate the platform account or delete the channel entry |
 | `target_error_code="TARGET_NOT_AVAILABLE"` AND the underlying workspace binding row is soft-disabled | 1 (binding) | Enable the workspace binding in the InstaEdit admin console; re-sync catalog |
 | Row missing from `targets[]` entirely | 1+2+3 all failed simultaneously OR the channel was deleted upstream | Remove from sender allow-list |
-| Velox enqueue rejected with `destination_id %q is globally disabled` | 4 (Velox-side `delivery_destinations.enabled=false`) | `UPDATE delivery_destinations SET enabled = 1 WHERE destination_id = '...'` OR re-sync the catalog via `POST /api/v1/admin/destinations/sync` |
+| Velox enqueue-rejected with `details[].target_error_code=BLOCKED_VELOX_DISABLED` (Velox-side `delivery_destinations.enabled=false` for the producer-selected `destination_id`) | 4 (Velox-side, enqueue-time) — see §0.3.4 NIT-2 split | `UPDATE delivery_destinations SET enabled = 1 WHERE destination_id = '...'` OR re-sync the catalog via `POST /api/v1/admin/destinations/sync`. **Distinct** from the catalog-side row above: this case means the producer picked a `destination_id` Velox still had enabled, but it flipped to `enabled=0` between catalog discovery and job submission. Canonical code constant: `DataServer/internal/handlers/server/pipeline/publishing_error_codes.go::BlockedCodeVeloxDisabled`. |
+| Velox `POST /api/v1/publishing/targets` returns top-level `error.code=BLOCKED_NO_PUBLISHABLE_CHANNEL` (catalog yielded ≥1 row but zero satisfy `can_post=true AND capabilities.upload_video=true`) | 4 (catalog-side, discovery-time) — see §0.3.4 NIT-2 split | Inspect the per-row `target_error_code` on each element of `targets[]` (still populated — the producer gets the per-row diagnostic AND the top-level summary) and act per the §0.2 chart above. `block_reason` on the top-level error lists workspace/platform so dashboards can group alerts. Canonical code constant: `DataServer/internal/handlers/server/pipeline/publishing_error_codes.go::BlockedCodeNoPublishableChannel`. |
 
 **Note (drift pinned by the §0.2 commit):** the previous draft of
 this triage table listed `binding_disabled` and `account_inactive`
@@ -371,14 +372,34 @@ when no publishable channel exists for the workspace.
 
 ### 0.3.4 Failure mode: zero targets satisfy §0.3.1
 
+**NIT-2 split (this commit):** the zero-match catalog case and the
+Velox-side enqueue-rejected case are emitted as TWO DISTINCT
+canonical error envelopes so operator dashboards can disambiguate
+the remediation:
+
+| Surface | Code | Trigger | Owner |
+|---|---|---|---|
+| Top-level `error` on `POST /api/v1/publishing/targets` response | `BLOCKED_NO_PUBLISHABLE_CHANNEL` | InstaeditLogin catalog yielded ≥1 row but zero satisfy `can_post=true AND capabilities.upload_video=true` | Velox (publisher has no usable candidate to surface) |
+| `details[].target_error_code` on `POST /api/v1/jobs` 422 response | `BLOCKED_VELOX_DISABLED` | Producer picked a `destination_id` that exists in `delivery_destinations` but `enabled=0` (catalog was stale at enqueue-time) | Velox (state-of-the-world flipped between catalog and enqueue) |
+| `details[].target_error_code` on `POST /api/v1/jobs` 422 response | `DESTINATION_NOT_FOUND` | Producer picked (or fabricated) a `destination_id` never in `delivery_destinations` | sender (stale-id bug — must re-pick from `/publishing/targets`) |
+
+Canonical code constants are defined at
+`DataServer/internal/handlers/server/pipeline/publishing_error_codes.go`.
+The CI gate `ci-opaque-wire.yml` already enforces the wire-shape;
+the §0.3.4 split adds operator-triage granularity on top.
+
 If `POST /api/v1/publishing/targets` returns `targets[]` where no
 entry satisfies the §0.3.1 predicate, the sender MUST:
 
 1. Log the full `targets[]` response at `WARN` (after redacting
    `channel_id` if it carries PII under the workspace's data policy).
-2. Surface the **canonical catalog verdict** to the operator console
-   so the operator can take the §0.2.2 action. The verdict MUST be
-   drawn from the resolver taxonomy at
+2. If the response carries a top-level `error.code` (the
+   NIT-2 `BLOCKED_NO_PUBLISHABLE_CHANNEL` verdict), surface it
+   verbatim to the operator console — do not collapse it into a
+   generic "no channels" message because the distinct code is the
+   triage key the dashboard group-by relies on.
+3. Surface the **canonical catalog verdict** in addition (per-row
+   `target_error_code`), drawn from the resolver taxonomy at
    `InstaeditLogin/internal/deliveries/target_resolver.go:184-188`:
    `target_error_code="BLOCKED_AUTH"` (OAuth reauth) or
    `target_error_code="TARGET_NOT_AVAILABLE"` (conditions 1+2 collapsed);
@@ -393,21 +414,28 @@ entry satisfies the §0.3.1 predicate, the sender MUST:
    The non-canonical strings `binding_disabled` / `account_inactive`
    were drift in earlier drafts of §0.3.4 and have been REMOVED
    (see §0.2.2 for the round-2 alignment rationale).
-3. **Refuse to invent a default channel.** The system MUST NOT
+4. **Refuse to invent a default channel.** The system MUST NOT
    pick the first row, a similar-named row, or any account from a
    different workspace. Routing via opaque IDs makes silent
    selection catastrophic — a typo in `delivery_plan[0].destination_id`
    dispatches to the wrong account.
-4. For condition 4 (Velox-side `delivery_destinations.enabled=false`),
-   the canonical operator signal is the runner error envelope
+5. For condition 4 Velox-side enqueue-rejection
+   (`target_error_code=BLOCKED_VELOX_DISABLED`), the canonical
+   operator signal is the runner error envelope
    `destination_id %q is globally disabled` (see §0.2 and
-   `DataServer/internal/store/delivery_plan_validator.go::validateDeliveryDestinationTx`).
-   Senders MUST translate this into the same `BLOCKED_NO_PUBLISHABLE_CHANNEL`
-   envelope below; they MUST NOT invent a custom code.
+   `DataServer/internal/store/delivery_plan_validator.go::validateDeliveryDestinationTx`,
+   which wraps the typed sentinel `ErrDestinationDisabled` via `%w`
+   to enable `errors.Is` mapping). The DISTINCT
+   `DESTINATION_NOT_FOUND` code covers the unknown-id case.
 
 The error envelope a sender surfaces on the §0.3.1 zero-match
 case is `BLOCKED_NO_PUBLISHABLE_CHANNEL` with the
-`block_reason="no target with can_post=true AND capabilities.upload_video=true"`.
+`block_reason="no target with can_post=true AND capabilities.upload_video=true"`
+(top-level on the catalog response). The DISTINCT
+`BLOCKED_VELOX_DISABLED` envelope is surfaced on the enqueue
+422 response when the producer picks a destination whose Velox
+side row flipped to `enabled=0`. Senders MUST NOT collapse these
+two codes into a single field; they are decoupled by design.
 
 ---
 

@@ -33,8 +33,41 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
+
+// ErrDestinationDisabled is the typed sentinel returned by
+// validateDeliveryDestinationTx when the row exists in
+// delivery_destinations but its `enabled` column is 0. It is
+// wrapped (via %w) on top of the STABLE contract string
+// "destination_id %q is globally disabled" so:
+//
+//  1. legacy atomic_job_task_test.go assertions that match on
+//     the substring (a plain `strings.Contains` / t.Fatalf
+//     pattern) keep passing;
+//  2. future resolver-layer callers can map this to the
+//     structured envelope target_error_code=BLOCKED_VELOX_DISABLED
+//     (defined at
+//     velox-server/internal/handlers/server/pipeline/publishing_error_codes.go)
+//     using errors.Is.
+//
+// The race-condition between the handler-layer pre-flight in
+// job_submit.go (block reason already surfaces as
+// BLOCKED_VELOX_DISABLED) and the tx-layer gate here (disabled
+// flipped between pre-flight and INSERT) now maps to the SAME
+// structured envelope, preserving diagnostic granularity in
+// operator dashboards per the §0.3.4 item 4 split.
+var ErrDestinationDisabled = errors.New("delivery destination disabled")
+
+// ErrDestinationNotFound is the typed sentinel returned by
+// validateDeliveryDestinationTx when no row matches the
+// destination_id. Mirrors ErrDestinationDisabled's contract:
+// the wrapped string ("destination_id %q does not exist")
+// remains the STABLE contract; errors.Is enables structured
+// mapping for future resolver-layer callers
+// (target_error_code=DESTINATION_NOT_FOUND).
+var ErrDestinationNotFound = errors.New("delivery destination not found")
 
 // validateDeliveryDestinationTx checks that destID is an existing AND
 // globally-enabled row in delivery_destinations. Runs inside the
@@ -55,13 +88,21 @@ func validateDeliveryDestinationTx(ctx context.Context, tx *sql.Tx, destID strin
 		destID,
 	).Scan(&globallyEnabled)
 	if err == sql.ErrNoRows {
-		return fmt.Errorf("destination_id %q does not exist", destID)
+		// Stable contract string preserved; wrap ErrDestinationNotFound
+		// via %w so resolver-layer callers can errors.Is(...) without
+		// breaking the existing t.Fatalf string-match assertions in
+		// atomic_job_task_test.go.
+		return fmt.Errorf("%w: destination_id %q does not exist", ErrDestinationNotFound, destID)
 	}
 	if err != nil {
 		return fmt.Errorf("validate destination_id %q: %w", destID, err)
 	}
 	if globallyEnabled != 1 {
-		return fmt.Errorf("destination_id %q is globally disabled", destID)
+		// Stable contract string preserved; wrap ErrDestinationDisabled
+		// via %w so resolver-layer callers can errors.Is(...) without
+		// breaking the existing t.Fatalf string-match assertions in
+		// atomic_job_task_test.go.
+		return fmt.Errorf("%w: destination_id %q is globally disabled", ErrDestinationDisabled, destID)
 	}
 	return nil
 }

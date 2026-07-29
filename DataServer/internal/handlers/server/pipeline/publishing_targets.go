@@ -29,18 +29,42 @@ type PublishingTargetResponse struct {
 	DestinationID string `json:"destination_id,omitempty"`
 }
 
+// PublishingCatalogError is the optional TOP-LEVEL error block
+// added when the InstaeditLogin catalog yielded AT LEAST ONE
+// entry but ZERO entries satisfied the publishable predicate
+// (can_post=true AND capabilities.upload_video=true). Distinct
+// from the per-row target_error_code (which explains WHY one
+// specific entry is rejected), this top-level block answers
+// WHAT THE PRODUCER SHOULD DO when no row is usable.
+//
+// §0.3.4 item 4 split (NIT-2): this error code is the
+// catalog-side sibling of BLOCKED_VELOX_DISABLED, which is
+// emitted on the enqueue-side (POST /api/v1/jobs pre-flight) when
+// the producer-picked destination_id is globally disabled on
+// Velox. Together they preserve diagnostic granularity in
+// operator dashboards. The field is OPTIONAL in the response
+// envelope (omitempty) so existing senders that read .targets
+// continue to work unchanged.
+type PublishingCatalogError struct {
+	Code        string `json:"code"`
+	BlockReason string `json:"block_reason,omitempty"`
+	WorkspaceID int64  `json:"workspace_id,omitempty"`
+	Platform    string `json:"platform,omitempty"`
+}
+
 type PublishingTargetsResponse struct {
 	WorkspaceID int64                      `json:"workspace_id"`
 	Platform    string                     `json:"platform"`
 	Targets     []PublishingTargetResponse `json:"targets"`
+	Error       *PublishingCatalogError    `json:"error,omitempty"`
 }
 
 // ListPublishingTargets implements POST /api/v1/publishing/targets.
 //
 // Flow:
-//   1. discover canonical targets from InstaEdit;
-//   2. upsert a local social_gateway destination for each opaque destination;
-//   3. return the Velox destination_id to the trusted job sender.
+//  1. discover canonical targets from InstaEdit;
+//  2. upsert a local social_gateway destination for each opaque destination;
+//  3. return the Velox destination_id to the trusted job sender.
 //
 // No OAuth or provider credential is returned or persisted in job payloads.
 func (h *Handlers) ListPublishingTargets() gin.HandlerFunc {
@@ -50,14 +74,14 @@ func (h *Handlers) ListPublishingTargets() gin.HandlerFunc {
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&req); err != nil {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
-				"error": "invalid_json",
+				"error":   "invalid_json",
 				"message": err.Error(),
 			})
 			return
 		}
 		if req.WorkspaceID <= 0 {
 			c.AbortWithStatusJSON(http.StatusUnprocessableEntity, gin.H{
-				"error": "invalid_payload",
+				"error":   "invalid_payload",
 				"details": []gin.H{{"path": "workspace_id", "issue": "must_be_positive"}},
 			})
 			return
@@ -68,7 +92,7 @@ func (h *Handlers) ListPublishingTargets() gin.HandlerFunc {
 		}
 		if req.Platform != "youtube" {
 			c.AbortWithStatusJSON(http.StatusUnprocessableEntity, gin.H{
-				"error": "invalid_payload",
+				"error":   "invalid_payload",
 				"details": []gin.H{{"path": "platform", "issue": "unsupported_value", "allowed": []string{"youtube"}}},
 			})
 			return
@@ -117,11 +141,11 @@ func (h *Handlers) ListPublishingTargets() gin.HandlerFunc {
 			if target.ExternalDestinationID != "" {
 				out.DestinationID = veloxDestinationID(target.ExternalDestinationID)
 				configuration, marshalErr := json.Marshal(map[string]any{
-					"source":                "instaedit_catalog",
-					"workspace_id":          req.WorkspaceID,
-					"platform":              target.Platform,
-					"platform_account_id":   target.PlatformAccountID,
-					"channel_id":            target.ChannelID,
+					"source":                  "instaedit_catalog",
+					"workspace_id":            req.WorkspaceID,
+					"platform":                target.Platform,
+					"platform_account_id":     target.PlatformAccountID,
+					"channel_id":              target.ChannelID,
 					"external_destination_id": target.ExternalDestinationID,
 				})
 				if marshalErr != nil {
@@ -144,6 +168,41 @@ func (h *Handlers) ListPublishingTargets() gin.HandlerFunc {
 				}
 			}
 			response.Targets = append(response.Targets, out)
+		} // close for-loop
+
+		// §0.3.4 item 4 split (NIT-2): if the catalog yielded AT
+		// LEAST ONE entry but NONE of the kept (post-platform-filter)
+		// entries satisfy the publishable predicate
+		// (can_post=true AND capabilities.upload_video=true), surface a
+		// top-level error.code=BLOCKED_NO_PUBLISHABLE_CHANNEL.
+		//
+		// This is the catalog-side sibling of BLOCKED_VELOX_DISABLED
+		// (which publishing_targets.go does NOT emit; it is owned by
+		// job_submit.go's pre-flight only). Keeping the two split out
+		// preserves operator-dashboard diagnostic granularity.
+		//
+		// Empty ResolvedTargets (catalog returned no rows at all) is a
+		// silently-fine 200 with targets:[] — that case is the
+		// InstaEdit-side "this workspace/platform has nothing bound"
+		// verdict, which the producer should treat as "no channel
+		// exists to even attempt"; surfacing BLOCKED_NO_PUBLISHABLE_CHANNEL
+		// there would conflate it with "channels exist but none are
+		// usable". Leaving targets:[] is correct.
+		if len(response.Targets) > 0 {
+			publishableCount := 0
+			for _, t := range response.Targets {
+				if t.CanPost && t.Capabilities.UploadVideo {
+					publishableCount++
+				}
+			}
+			if publishableCount == 0 {
+				response.Error = &PublishingCatalogError{
+					Code:        BlockedCodeNoPublishableChannel,
+					BlockReason: "no target with can_post=true AND capabilities.upload_video=true for the requested workspace/platform",
+					WorkspaceID: req.WorkspaceID,
+					Platform:    req.Platform,
+				}
+			}
 		}
 
 		c.JSON(http.StatusOK, response)

@@ -23,14 +23,16 @@
 // typo'd json blob fails with 400 invalid_json before
 // downstream code runs.
 package pipeline
+
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/gin-gonic/gin"
 	"io"
 	"net/http"
 	"strings"
-	"github.com/gin-gonic/gin"
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/store"
 )
 
 // invalid_json BEFORE we touch downstream code. Gin's binding tag
@@ -138,6 +140,31 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 		// store.validateDeliveryDestinationTx so the handler-side
 		// and tx-side checks agree on existence + enabled=1.
 		//
+		// §0.3.4 item 4 split (NIT-2): the previous 2-state helper
+		// collapsed NOT_FOUND and DISABLED into a single
+		// `issue: invalid` detail. This pre-flight now uses the
+		// 3-state BatchDeliveryDestinationsStatus and emits a
+		// distinct target_error_code per bucket so operator
+		// dashboards can disambiguate:
+		//
+		//   - NOT_FOUND       → target_error_code=DESTINATION_NOT_FOUND
+		//                       (id was unknown; producer must re-pick
+		//                       from /publishing/targets, never
+		//                       invent destinations).
+		//   - DISABLED        → target_error_code=BLOCKED_VELOX_DISABLED
+		//                       (Velox-side delivery_destinations
+		//                       .enabled flipped to 0; remediation is
+		//                       `UPDATE delivery_destinations SET
+		//                       enabled = 1 WHERE destination_id=...`
+		//                       OR re-sync the catalog via
+		//                       POST /api/v1/admin/destinations/sync).
+		//   - ENABLED         → no detail, enqueue proceeds.
+		//
+		// The catalog-side BLOCKED_NO_PUBLISHABLE_CHANNEL is owned
+		// by /publishing/targets (publishing_targets.go) and is the
+		// §0.2.2 cheat-sheet sibling to BLOCKED_VELOX_DISABLED
+		// (see docs/SOCIAL_API_MIGRATION_RUNBOOK.md).
+		//
 		// aggregates ALL destination-existence violations into a
 		// single 422 with details[].path = "delivery_plan.N.destination_id"
 		// (same path shape used by enqueue's *validationError).
@@ -150,7 +177,7 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 				}
 			}
 			if len(ids) > 0 {
-				exist, qerr := h.store.BatchDeliveryDestinationsExistAndEnabled(
+				statuses, qerr := h.store.BatchDeliveryDestinationsStatus(
 					c.Request.Context(), ids,
 				)
 				if qerr != nil {
@@ -170,10 +197,20 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 						// don't emit a misleading duplicate entry.
 						continue
 					}
-					if ok, present := exist[tid]; !present || !ok {
+					switch statuses[tid] {
+					case store.DeliveryDestinationNotFound:
 						destDetails = append(destDetails, gin.H{
-							"path":  fmt.Sprintf("delivery_plan.%d.destination_id", i),
-							"issue": "invalid",
+							"path":              fmt.Sprintf("delivery_plan.%d.destination_id", i),
+							"issue":             "destination_not_found",
+							"target_error_code": "DESTINATION_NOT_FOUND",
+							"status":            store.DeliveryDestinationNotFound.String(),
+						})
+					case store.DeliveryDestinationDisabled:
+						destDetails = append(destDetails, gin.H{
+							"path":              fmt.Sprintf("delivery_plan.%d.destination_id", i),
+							"issue":             "destination_disabled",
+							"target_error_code": BlockedCodeVeloxDisabled,
+							"status":            store.DeliveryDestinationDisabled.String(),
 						})
 					}
 				}

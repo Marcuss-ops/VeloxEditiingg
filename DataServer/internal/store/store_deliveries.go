@@ -243,41 +243,95 @@ func (s *SQLiteStore) GetDeliveryDestinationByExternalID(ctx context.Context, ex
 	return &d, nil
 }
 
-// BatchDeliveryDestinationsExistAndEnabled checks each provided id against
-// the delivery_destinations table in batched SELECTs and returns a map
-// `{id -> true if a row exists AND enabled = 1 else false}`. Inputs are
-// deduplicated and trimmed before issuing the query. IDs that the caller
-// supplied but the table did not return are explicitly mapped to `false`
-// (rather than absent) so call sites can distinguish "row missing"
-// from "row found" with a single map read.
+// DeliveryDestinationStatus is the 3-state verdict returned by
+// BatchDeliveryDestinationsStatus. It exists so the handler-layer
+// pre-flight can distinguish the two failure modes that §0.3.4
+// item 4 of the runbook splits (Velox-side enabled=false vs.
+// InstaEdit-side catalog-zero-match) — the previous 2-state
+// batched helper collapsed both into a single `false` and made
+// operator dashboards unable to disambiguate the remediation.
+type DeliveryDestinationStatus int
+
+const (
+	// DeliveryDestinationNotFound indicates the destination_id is
+	// not present in delivery_destinations. The producer picked
+	// (or fabricated) an unknown id; handler emits 422
+	// target_error_code=DESTINATION_NOT_FOUND.
+	DeliveryDestinationNotFound DeliveryDestinationStatus = iota
+	// DeliveryDestinationDisabled indicates the row exists but
+	// enabled = 0. Handler emits 422
+	// target_error_code=BLOCKED_VELOX_DISABLED — distinct from
+	// the catalog-sourced BLOCKED_NO_PUBLISHABLE_CHANNEL.
+	DeliveryDestinationDisabled
+	// DeliveryDestinationEnabled indicates the row exists and
+	// enabled = 1. Handler allows the enqueue.
+	DeliveryDestinationEnabled
+)
+
+// String returns the canonical wire-format name for use in JSON
+// envelopes. Stable contract: the lowercase strings are the
+// accepted values for `details[].status` in the §0.3.4 split
+// response.
+func (s DeliveryDestinationStatus) String() string {
+	switch s {
+	case DeliveryDestinationNotFound:
+		return "not_found"
+	case DeliveryDestinationDisabled:
+		return "disabled"
+	case DeliveryDestinationEnabled:
+		return "enabled"
+	default:
+		return "unknown"
+	}
+}
+
+// BatchDeliveryDestinationsStatus replaces the previous 2-state
+// BatchDeliveryDestinationsExistAndEnabled helper. Each
+// destination_id is looked up exactly once and bucketed into
+// NOT_FOUND / DISABLED / ENABLED. The 2-state helper collapsed
+// "row missing" and "row present-but-disabled" into the same
+// `false`, which made it impossible for the POST /api/v1/jobs
+// pre-flight to surface a distinct target_error_code for the
+// §0.3.4 item 4 split (BLOCKED_VELOX_DISABLED for Velox-side
+// enabled=false vs. catalog-sourced BLOCKED_NO_PUBLISHABLE_CHANNEL).
 //
-// Used by HTTP handlers (SubmitJob, future CreatorPush counterpart) that
-// need to verify delivery_plan destinations BEFORE delegating to the
-// resolver. The reason this lookup lives OUTSIDE the enqueue package
-// is the file's "intentionally self-contained (no store import)"
-// contract in DataServer/internal/jobs/enqueue/delivery_plan_validator.go,
-// which keeps shape-only validation in the enqueue package and pushes
-// existence + enabled checks up to the consumer that already owns a
-// store handle.
+// Inputs are deduplicated + trimmed before SQL. IDs the caller
+// supplied but the table did not return are explicitly bucketed
+// as NOT_FOUND (rather than identically mapped via map presence)
+// so call sites can distinguish the buckets with a single map
+// lookup per id.
 //
-// Multi-id SQL: SQLite's SQLITE_MAX_VARIABLE_NUMBER defaults to 999
-// (compile-time constant), so the helper chunks requests into batches
-// of 500 placeholders — well under the floor across SQLite builds
-// (3.32+ defaults to 32766, but we keep the chunk conservative).
+// Used by HTTP handlers (SubmitJob, future CreatorPush
+// counterpart) that need to verify delivery_plan destinations
+// BEFORE delegating to the resolver. The reason this lookup
+// lives OUTSIDE the enqueue package is the file's
+// "intentionally self-contained (no store import)" contract in
+// DataServer/internal/jobs/enqueue/delivery_plan_validator.go,
+// which keeps shape-only validation in the enqueue package and
+// pushes existence + enabled checks up to the consumer that
+// already owns a store handle.
+//
+// Multi-id SQL: SQLite's SQLITE_MAX_VARIABLE_NUMBER defaults to
+// 999 (compile-time constant), so the helper chunks requests
+// into batches of 500 placeholders — well under the floor
+// across SQLite builds (3.32+ defaults to 32766, but we keep
+// the chunk conservative).
 //
 // Errors:
-//   - sql driver failure during QueryContext → wrapped error returned,
-//     caller should fail-closed (handler surfaces 500 store_failure).
+//   - sql driver failure during QueryContext → wrapped error
+//     returned, caller should fail-closed (handler surfaces 500
+//     store_failure).
 //   - rows.Scan / rows.Err failures → wrapped error returned.
 //
-// Empty input: returns an empty map and nil error; no SQL is issued.
+// Empty input: returns an empty map and nil error; no SQL is
+// issued.
 //
 // Mirrors the policy of the in-tx `validateDeliveryDestinationTx`
-// (DataServer/internal/store/atomic_job_task.go) so the handler-side
-// pre-check and the atomic write agree on the existence + enabled
-// invariant.
-func (s *SQLiteStore) BatchDeliveryDestinationsExistAndEnabled(ctx context.Context, ids []string) (map[string]bool, error) {
-	out := make(map[string]bool, len(ids))
+// (DataServer/internal/store/atomic_job_task.go) so the
+// handler-side pre-check and the atomic write agree on the
+// existence + enabled invariant.
+func (s *SQLiteStore) BatchDeliveryDestinationsStatus(ctx context.Context, ids []string) (map[string]DeliveryDestinationStatus, error) {
+	out := make(map[string]DeliveryDestinationStatus, len(ids))
 	if len(ids) == 0 {
 		return out, nil
 	}
@@ -301,6 +355,11 @@ func (s *SQLiteStore) BatchDeliveryDestinationsExistAndEnabled(ctx context.Conte
 		return out, nil
 	}
 
+	// First pass: collect (destination_id, enabled) for every id
+	// the caller supplied, regardless of enabled. This is what
+	// makes the 3-state verdict possible: enabling filtering on
+	// `enabled = 1` here (as the 2-state helper did) would drop
+	// the rows we need to bucket as DISABLED.
 	const chunkSize = 500
 	for start := 0; start < len(unique); start += chunkSize {
 		end := start + chunkSize
@@ -309,40 +368,43 @@ func (s *SQLiteStore) BatchDeliveryDestinationsExistAndEnabled(ctx context.Conte
 		}
 		chunk := unique[start:end]
 		placeholders := strings.TrimRight(strings.Repeat("?,", len(chunk)), ",")
-		query := `SELECT destination_id FROM delivery_destinations` +
-			` WHERE destination_id IN (` + placeholders + `) AND enabled = 1`
+		// NOTE: no `AND enabled = 1` filter. We bucket into
+		// DISABLED based on the enabled column in the result set.
+		query := `SELECT destination_id, enabled FROM delivery_destinations` +
+			` WHERE destination_id IN (` + placeholders + `)`
 		args := make([]any, len(chunk))
 		for i, id := range chunk {
 			args[i] = id
 		}
 		rows, err := s.db.QueryContext(ctx, query, args...)
 		if err != nil {
-			return nil, fmt.Errorf("store: BatchDeliveryDestinationsExistAndEnabled: query: %w", err)
+			return nil, fmt.Errorf("store: BatchDeliveryDestinationsStatus: query: %w", err)
 		}
-		var found []string
 		for rows.Next() {
 			var id string
-			if err := rows.Scan(&id); err != nil {
+			var enabledInt int
+			if err := rows.Scan(&id, &enabledInt); err != nil {
 				rows.Close()
-				return nil, fmt.Errorf("store: BatchDeliveryDestinationsExistAndEnabled: scan: %w", err)
+				return nil, fmt.Errorf("store: BatchDeliveryDestinationsStatus: scan: %w", err)
 			}
-			found = append(found, id)
+			if enabledInt == 1 {
+				out[id] = DeliveryDestinationEnabled
+			} else {
+				out[id] = DeliveryDestinationDisabled
+			}
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
-			return nil, fmt.Errorf("store: BatchDeliveryDestinationsExistAndEnabled: rows: %w", err)
-		}
-		for _, id := range found {
-			out[id] = true
+			return nil, fmt.Errorf("store: BatchDeliveryDestinationsStatus: rows: %w", err)
 		}
 	}
 
-	// Populate false for every unique id NOT in the result set so the
-	// caller can distinguish "row found" from "row missing/disabled"
-	// with a single map lookup.
+	// Populate NotFound for every unique id NOT in the result set
+	// so the caller can distinguish the three buckets with a
+	// single map lookup per id.
 	for _, id := range unique {
 		if _, ok := out[id]; !ok {
-			out[id] = false
+			out[id] = DeliveryDestinationNotFound
 		}
 	}
 	return out, nil

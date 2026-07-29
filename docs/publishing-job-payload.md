@@ -176,8 +176,27 @@ automatically.
 ## 4. Failure rules
 
 - Missing or disabled `destination_id`: Velox rejects the job before enqueue.
+  The 422 envelope distinguishes the two failure modes (NIT-2, §0.3.4 item 4):
+  - `details[].target_error_code="DESTINATION_NOT_FOUND"` — the `destination_id`
+    is not present in `delivery_destinations`. Operator fix: re-pick from
+    `/publishing/targets`; never invent a destination.
+  - `details[].target_error_code="BLOCKED_VELOX_DISABLED"` — the row exists but
+    `delivery_destinations.enabled=0` on Velox. Operator fix: `UPDATE
+    delivery_destinations SET enabled = 1 WHERE destination_id = '...'` OR
+    re-sync the catalog via `POST /api/v1/admin/destinations/sync`.
 - Channel requires reauthorization: catalog returns `can_post=false`.
+- Catalog returned one or more rows but none satisfy the publishable predicate
+  (`can_post=true AND capabilities.upload_video=true`): the catalog response
+  carries a top-level `error.code="BLOCKED_NO_PUBLISHABLE_CHANNEL"`. Inspect
+  each entry's `target_error_code` (`BLOCKED_AUTH` / `TARGET_NOT_AVAILABLE`)
+  and act per the §0.2.2 cheat-sheet in `SOCIAL_API_MIGRATION_RUNBOOK.md`.
 - InstaEdit unavailable: target discovery returns a service/upstream error.
 - Same job retry: reuse the original `idempotency_key`.
 - Thumbnail or publish failure: the uploaded video remains private.
 - Display-name changes never affect routing because delivery uses opaque IDs.
+
+The wire-format codes are canonical and locked at
+`DataServer/internal/handlers/server/pipeline/publishing_error_codes.go`.
+Adding a new code requires a cross-repo changelog; renaming or removing an
+existing code requires bumping `velox.instaedit.publish.v1` (the contract
+version stamped in `delivery_plan[].metadata`).
