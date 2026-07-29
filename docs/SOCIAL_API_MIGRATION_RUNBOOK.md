@@ -268,13 +268,38 @@ no entry with `block_reason` set.
 
 ### 0.2.2 Failure triage cheat-sheet
 
-| Catalog status | Condition that failed | Operator action |
+The canonical catalog-sourced error codes (declared at
+`InstaeditLogin/internal/deliveries/target_resolver.go:184-188`)
+are exactly **two**:
+
+* `TARGET_NOT_AVAILABLE` — the eligibility gate rejected the row
+  (covers conditions 1, 2, and 3 collapsed; the resolver does NOT
+  emit a distinct status enum per condition).
+* `BLOCKED_AUTH` — emitted specifically when condition 3
+  (OAuth reauth_required dual-signal) is the failing one; the row
+  also carries the `status="reauth_required"` enum value on the
+  underlying `platform_accounts` row (see
+  `InstaeditLogin/internal/models/user.go:51`).
+
+The triage cheat-sheet for a sender or operator is therefore:
+
+| Catalog verdict | Failing condition(s) | Operator action |
 |---|---|---|
-| `binding_disabled` | 1 | Enable the workspace binding in the InstaEdit admin console; re-sync catalog |
-| `account_inactive` | 2 | Re-activate the platform account or delete the channel entry |
-| `reauth_required` | 3 | Re-consent the OAuth flow; the catalog entry re-flips to `active` once the new refresh-token is healthy |
-| `enabled=false` (Velox-side) | 4 | `UPDATE delivery_destinations SET enabled = 1 WHERE destination_id = '...'` OR re-sync the catalog via `POST /api/v1/admin/destinations/sync` |
-| Missing from catalog | 1+2+3 | The channel was deleted upstream; remove it from the sender's allow-list |
+| `target_error_code="BLOCKED_AUTH"` (row also has `status="reauth_required"`) | 3 (OAuth) | Re-consent the OAuth flow; the catalog entry re-flips to `active` once the new refresh-token is healthy |
+| `target_error_code="TARGET_NOT_AVAILABLE"` AND the underlying `platform_accounts.status` is one of `paused` / `revoked` / `disconnected` / `error` / `expired` / `pending_authorization` | 2 (account inactive) | Re-activate the platform account or delete the channel entry |
+| `target_error_code="TARGET_NOT_AVAILABLE"` AND the underlying workspace binding row is soft-disabled | 1 (binding) | Enable the workspace binding in the InstaEdit admin console; re-sync catalog |
+| Row missing from `targets[]` entirely | 1+2+3 all failed simultaneously OR the channel was deleted upstream | Remove from sender allow-list |
+| Velox enqueue rejected with `destination_id %q is globally disabled` | 4 (Velox-side `delivery_destinations.enabled=false`) | `UPDATE delivery_destinations SET enabled = 1 WHERE destination_id = '...'` OR re-sync the catalog via `POST /api/v1/admin/destinations/sync` |
+
+**Note (drift pinned by the §0.2 commit):** the previous draft of
+this triage table listed `binding_disabled` and `account_inactive`
+as catalog status strings. Those strings do not exist in the
+canonical `target_resolver.go` taxonomy; they were speculation
+from the §0.2 commit (`422e5c1`) and have been REMOVED. The
+resolver surfaces ONE binary `target_error_code` enum
+(`TARGET_NOT_AVAILABLE` OR `BLOCKED_AUTH`) and the underlying
+`platform_accounts.status` enum (`active` vs `reauth_required`
+being the two values the resolver actively maps onto).
 
 ---
 
