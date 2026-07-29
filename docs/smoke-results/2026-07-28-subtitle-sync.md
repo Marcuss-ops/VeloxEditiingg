@@ -194,7 +194,7 @@ SYNC-PASS: subtitle rendered within tolerance (drift=33.3ms <= 80ms)
   `RemoteCodex/native/video-engine-cpp/src/core/render_engine.cpp:77–83` (libass filter wiring)
   `RemoteCodex/native/video-engine-cpp/src/core/render_engine.cpp:279–292` (engine entry point)
 - Smoke checklist gating this:
-  `docs/operations/04-veloxediting-final-smoke-checklist.md:341` ("Sottotitoli e voiceover restano sincronizzati (frame accurate)")
+  `docs/operations/04-velox-final-smoke-checklist.md:341` ("Sottotitoli e voiceover restano sincronizzati (frame accurate)")
 
 ## 7. Reproduce
 

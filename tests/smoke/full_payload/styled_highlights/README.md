@@ -3,7 +3,7 @@
 Smoke matrix that proves the **libass burn-in path preserves per-Dialogue
 style attributes** (font size + colour + position + bold/italic) across
 3 distinct ASS events rendered in non-overlapping PTS windows. Closes
-`docs/operations/04-veloxediting-final-smoke-checklist.md` line items for:
+`docs/operations/04-velox-final-smoke-checklist.md` line items for:
 
 * `frase importante` (important phrase) — large red bold at top
 * `nome speciale` (special proper name) — medium cyan regular at middle

@@ -7,7 +7,7 @@
 # subtitle_tracks, special name + important phrase + highlighted word layers,
 # destination comedy_test, executor scene.composite.v1@1) to the Velox
 # Master's POST /api/v1/jobs endpoint. Source-of-truth for shape:
-#   - docs/operations/04-veloxediting-final-smoke-checklist.md §4 (layers example)
+#   - docs/operations/04-velox-final-smoke-checklist.md §4 (layers example)
 #   - DataServer/internal/apiwire/apiwire.go SubmitJobRequest
 #   - DataServer/internal/jobs/enqueue/enqueue_normalization_test.go
 #     (subtitle_tracks + scene.voiceover nested)

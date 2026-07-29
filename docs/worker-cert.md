@@ -104,7 +104,7 @@ matrix reports a precise root cause.
 - `tests/worker-cert/fixtures/assets.json` — curated asset_ids for the smoke harness
 - `tests/worker-cert/lib/pluck.sh` — M2M provisioning + worker-list + lease-scraping helpers
 - `docs/worker_deployment.md` — operator-side deployment runbook
-- `docs/operations/04-veloxediting-final-smoke-checklist.md` — e2e checklist (precedes worker-cert)
+- `docs/operations/04-velox-final-smoke-checklist.md` — e2e checklist (precedes worker-cert)
 
 ## Update history (chronological)
 

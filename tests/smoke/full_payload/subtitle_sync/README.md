@@ -2,7 +2,7 @@
 
 Smoke matrix that proves the **FFmpeg / libass burn-in path renders subtitles
 with millisecond-level timing precision relative to the voiceover audio track**.
-Closes the `docs/operations/04-veloxediting-final-smoke-checklist.md:341`
+Closes the `docs/operations/04-velox-final-smoke-checklist.md:341`
 item: *"Sottotitoli e voiceover restano sincronizzati (frame accurate)".*
 
 The test renders a 3.0-second clip with a 440 Hz sine voiceover stub and an

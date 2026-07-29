@@ -17,6 +17,6 @@
   "images": [
     {"asset_id": "scene-image-001", "note": "scene image fallback"}
   ],
-  "_forbidden_pattern": "velox-asset://voiceovers/<file>.mp3 — known failure: see enqueue_normalization_test.go §voiceover-bridge coverage and docs/operations/04-veloxediting-final-smoke-checklist.md §1",
+  "_forbidden_pattern": "velox-asset://voiceovers/<file>.mp3 — known failure: see enqueue_normalization_test.go §voiceover-bridge coverage and docs/operations/04-velox-final-smoke-checklist.md §1",
   "_canonical_pattern": "velox-asset://<asset_id> — must match ^(https?://|velox-asset://).+$ per intake_validation.go §manifestRefURLRegexp"
 }

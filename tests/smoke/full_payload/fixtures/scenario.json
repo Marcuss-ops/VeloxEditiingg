@@ -8,7 +8,7 @@
     "highlighted_word 'Mai' (in scene-0 text + layers[role=overlay]).",
     "assets referenced: tests/worker-cert/fixtures/assets.json (REUSE only — DO NOT add new asset_id rows here).",
     "Substituted at submit time by run.sh (--mode=submit): idempotency_key, target_executor_id, delivery_plan[0].destination_id.",
-    "Adapted from docs/operations/04-veloxediting-final-smoke-checklist.md §4 (layers example) and enqueue_normalization_test.go §subtitle_tracks."
+    "Adapted from docs/operations/04-velox-final-smoke-checklist.md §4 (layers example) and enqueue_normalization_test.go §subtitle_tracks."
   ],
   "schema": "velox.submit.full-payload@1",
   "idempotency_key": "full-payload-4-scenes-PLACEHOLDER",

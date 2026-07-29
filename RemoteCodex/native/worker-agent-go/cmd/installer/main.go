@@ -32,7 +32,7 @@ func main() {
 
 	flag.StringVar(&masterURL, "master-url", "", "master URL used for this install")
 	flag.StringVar(&workerName, "worker-name", "", "worker name for metadata")
-	flag.StringVar(&targetDir, "target-dir", "/opt/VeloxEditing", "installation target directory")
+	flag.StringVar(&targetDir, "target-dir", "/opt/velox", "installation target directory")
 	flag.StringVar(&packageSource, "package-source", "", "zip package to unpack")
 	flag.Parse()
 

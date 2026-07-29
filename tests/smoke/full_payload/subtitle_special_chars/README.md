@@ -6,7 +6,7 @@ the Velox narrative-targeting fleet needs: Italian accented letters (`À è ò`)
 the Euro sign (`€`), emoji (`😃 🎉`), Italian `«virgolette»`, smart `'`/`"`
 quotes, non-ASCII Latin-1 (`ñ ü ç ø ß`), and Greek (`β`).
 
-Closes the `docs/operations/04-veloxediting-final-smoke-checklist.md:342`
+Closes the `docs/operations/04-velox-final-smoke-checklist.md:342`
 gap: *"Accents and special characters render correctly."*
 
 ## Source-of-truth chain
@@ -182,7 +182,7 @@ without the upstream dependency chain.
   `DataServer/internal/handlers/server/pipeline/normalize_test.go:308`,
   which assert `subtitle_tracks[]` round-trips through the wire-shape to the
   worker payload unchanged.
-- The 4th `04-veloxediting-final-smoke-checklist.md` checklist item
+- The 4th `04-velox-final-smoke-checklist.md` checklist item
   *("Accents and special characters render correctly")* is the operational
   gap this harness closes once the worker fleet is exercised against
   `assets.json` rows that include `kind=subtitle`.

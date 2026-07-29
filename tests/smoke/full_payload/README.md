@@ -118,7 +118,7 @@ back-to-back runs in the same epoch second collision-safe. Schema:
 ## Cross-references
 
 - Drives the unfinished checks listed at the bottom of
-  [`docs/operations/04-veloxediting-final-smoke-checklist.md`](../../docs/operations/04-veloxediting-final-smoke-checklist.md)
+  [`docs/operations/04-velox-final-smoke-checklist.md`](../../docs/operations/04-velox-final-smoke-checklist.md)
   §1–4 (subtitle sync accuracy, ASS/SRT special characters, overlay text
   rendering with special names + important phrases + highlighted words,
   audio-preservation alongside voiceover).
