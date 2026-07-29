@@ -32,25 +32,12 @@ import (
 	scripthandlers "velox-server/internal/handlers/server/script"
 	"velox-server/internal/ingest"
 	"velox-server/internal/instaeditauth"
+	integrationsDrive "velox-server/internal/integrations/drive"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/registry"
 	"velox-server/internal/store"
 	"velox-server/internal/supervisor"
 )
-
-// stubAssetResolver is the Step 12/15 minimal asset-resolver
-// stub used when the production asset picker is not yet wired.
-// It returns a single canned pickup URL + expectedBytes=0.
-// Production wiring lands when the canonical asset picker
-// (ResolveAsset's real implementation) is integrated.
-type stubAssetResolver struct {
-	pickupURL     string
-	expectedBytes int64
-}
-
-func (s stubAssetResolver) ResolveAsset(_ context.Context, _ string) (string, int64, error) {
-	return s.pickupURL, s.expectedBytes, nil
-}
 
 // deployUpdateImageValidator wraps internal/deploy.ValidateImageRef
 // for the UpdateExecutor's BackendImageRefValidator surface.
@@ -403,16 +390,16 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	// /api/v1/admin/workers/{id}/smoke endpoint that publishes
 	// these operations.
 	//
-	// Production wiring is partial under Step 12+:
-	//   - SmokeRuns repo — wired from p.SQLite
-	//   - Asset resolver — minimal stub (production wiring lands
-	//     when the canonical asset picker is in place)
-	//   - Lease store — wired from a registry adapter (sets
-	//     WorkerInfo.Drain transient during the run)
-	//   - Worker exec (BackendWorkerExec) — nil; the executor's
-	//     ErrSmokeRunnerNotWired sentinel surfaces the missing
-	//     dep without 503-on-every-probe
-	//   - Drive uploader (BackendDriveUploader) — nil; same pattern
+	// Smoke mode is controlled by VELOX_SMOKE_MODE:
+	//   - "development": wires LocalFileDriveUploader + StubAssetResolver
+	//     (fakes). Smoke succeeds with synthetic assets — useful for
+	//     local iteration but MUST NOT ship to production.
+	//   - default (production / unset): wires the real Drive adapter
+	//     (when the Drive module is configured) and leaves Asset nil
+	//     until the canonical asset picker lands. The executor's
+	//     pre-flight nil check surfaces ErrSmokeRunnerNotWired so the
+	//     smoke operation FAILS rather than silently succeeding with
+	//     fake dependencies.
 	//
 	// Async execution: the FleetController tick goroutine
 	// (Step 7+ already wired in buildFleet) processes queued
@@ -420,17 +407,57 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	// /api/v1/admin/operations/{id} for terminal state; the
 	// smoke_runs table records the duration_ms baseline.
 	if fleetDep != nil && fleetDep.Registry != nil && m != nil && m.Workers != nil && p != nil && p.SQLite != nil {
+		isDev := strings.ToLower(strings.TrimSpace(os.Getenv("VELOX_SMOKE_MODE"))) == "development"
+
 		smokeBackend := fleet.LevelDSmokeBackend{
-			Worker:    fleet.NewSSHWorkerExec(sharedSSH),
-			Drive:     fleet.NewLocalFileDriveUploader(),
-			Asset:     stubAssetResolver{pickupURL: "asset://e2e/smoke/canary.mp4", expectedBytes: 0},
 			Lease:     fleet.NewRegistryDrainLease(m.Workers.Registry()),
 			SmokeRuns: p.SQLite,
+			// Worker, Drive and Asset default to nil — the executor's
+			// pre-flight check returns ErrSmokeRunnerNotWired, which is
+			// the correct production behavior until real adapters are
+			// wired. They are populated below based on VELOX_SMOKE_MODE.
 		}
+
+		if isDev {
+			// Development mode: wire fakes for local iteration.
+			// LocalShellWorker runs smoke phases on the master host
+			// (no SSH needed), LocalFileDriveUploader copies to
+			// /tmp/velox-smoke-drive, StubAssetResolver returns
+			// a canned pickup URL.
+			smokeBackend.Worker = fleet.NewLocalShellWorker()
+			smokeBackend.Drive = fleet.NewLocalFileDriveUploader()
+			smokeBackend.Asset = fleet.NewStubAssetResolver("asset://e2e/smoke/canary.mp4", 0)
+			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: DEV MODE (VELOX_SMOKE_MODE=development) — LocalShellWorker + LocalFileDriveUploader + StubAssetResolver")
+		} else {
+			// Production mode: real SSH worker + real Drive adapter.
+			smokeBackend.Worker = fleet.NewSSHWorkerExec(sharedSSH)
+			if m.Drive != nil {
+				if svc := m.Drive.Service(); svc != nil {
+					smokeBackend.Drive = &driveUploaderAdapter{svc: svc}
+					log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: production Drive adapter wired (integrations/drive.Service)")
+				} else {
+					log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: Drive module present but Service() is nil — smoke will fail with ErrSmokeRunnerNotWired until Drive credentials are configured")
+				}
+			} else {
+				log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: Drive module not configured — smoke will fail with ErrSmokeRunnerNotWired until Drive is wired")
+			}
+			// Asset resolver remains nil in production until the
+			// canonical asset picker is integrated.
+			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: Asset resolver is nil (production) — smoke will fail with ErrSmokeRunnerNotWired until the canonical asset picker lands")
+		}
+
 		if err := fleetDep.Registry.Register(fleet.OperationKindSmoke, fleet.NewLevelDSmokeExecutor(smokeBackend)); err != nil {
 			log.Printf("[BOOTSTRAP] WARN: LevelDSmokeExecutor registration failed: %v (kind=%s continues with noop fallback)", err, fleet.OperationKindSmoke)
 		} else {
-			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor registered for kind=%s (Worker=SSHWorkerExec[3 targets], Drive=LocalFile, Lease=RegistryDrain, SmokeRuns=SQLite)", fleet.OperationKindSmoke)
+			driveDesc := "nil"
+			assetDesc := "nil"
+			if smokeBackend.Drive != nil {
+				driveDesc = "RealDrive"
+			}
+			if smokeBackend.Asset != nil {
+				assetDesc = "StubAsset"
+			}
+			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor registered for kind=%s (Worker=SSHWorkerExec[3 targets], Drive=%s, Asset=%s, Lease=RegistryDrain, SmokeRuns=SQLite)", fleet.OperationKindSmoke, driveDesc, assetDesc)
 		}
 		m.Workers.SetSmokeHandler(api.NewAdminWorkersSmokeHandler(m.Workers.Registry(), fleetDep.Controller))
 		log.Printf("[BOOTSTRAP] Admin workers smoke handler wired (POST /api/v1/admin/workers/{id}/smoke; tick goroutine drives LevelDSmokeExecutor)")
@@ -495,6 +522,42 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		supervisor:         supervisor,
 		health:             m.Health,
 	}, nil
+}
+
+// driveUploaderAdapter adapts integrationsDrive.Service to the
+// fleet.BackendDriveUploader interface. Lives in the composition root
+// (not the fleet package) to keep fleet decoupled from integrations/drive.
+type driveUploaderAdapter struct {
+	svc *integrationsDrive.Service
+}
+
+// UploadArtifact delegates to the real Drive service's UploadFile.
+// The runID is used as the deliveryID for traceability in Drive properties.
+// A smoke-specific folder can be configured via VELOX_SMOKE_DRIVE_FOLDER_ID;
+// when unset the file is uploaded to the Drive root.
+func (a *driveUploaderAdapter) UploadArtifact(ctx context.Context, runID, srcPath string, expectedBytes int64) (string, error) {
+	if a == nil || a.svc == nil {
+		return "", fmt.Errorf("drive uploader: service not configured")
+	}
+	folderID := strings.TrimSpace(os.Getenv("VELOX_SMOKE_DRIVE_FOLDER_ID"))
+	result, err := a.svc.UploadFile(ctx, srcPath, folderID, runID)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", fleet.ErrDriveUploadFail, err)
+	}
+	if !result.Success {
+		return "", fmt.Errorf("%w: %s", fleet.ErrDriveUploadFail, result.Error)
+	}
+	if result.FileID == "" {
+		return "", fmt.Errorf("%w: drive returned empty file_id", fleet.ErrDriveUploadFail)
+	}
+	// Cross-check: verify the uploaded file size matches expectedBytes
+	// when the caller provides a non-zero expected size.
+	_ = expectedBytes // Drive API does not expose size in the upload response;
+	// a follow-up step can add a files.get metadata call to verify.
+	if expectedBytes > 0 {
+		log.Printf("[SMOKE-DRIVE] uploaded %s → Drive file_id=%s (expected_bytes=%d; size verification pending files.get integration)", runID, result.FileID, expectedBytes)
+	}
+	return result.FileID, nil
 }
 
 // FleetDep is the Step 4/15 fleet-operator dependency bundle: the

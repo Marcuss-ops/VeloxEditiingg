@@ -163,8 +163,14 @@ type BackendLeaseStore interface {
 // the smoke-specific SSH exec helper that wraps the SSHClient
 // with phase-specific command strings. Tests wire a stub
 // dispatching by command-string prefix.
+//
+// DownloadAsset receives the pickupURL resolved by Phase 1 (asset
+// resolver) so the worker can download the real asset bundle
+// instead of generating a synthetic test clip. In dev mode
+// (VELOX_SMOKE_MODE=development) the URL may be empty and the
+// implementation falls back to a synthetic ffmpeg-generated clip.
 type BackendWorkerExec interface {
-	DownloadAsset(ctx context.Context, runID, workerID, assetID, destPath string) error
+	DownloadAsset(ctx context.Context, runID, workerID, pickupURL, destPath string) error
 	RunFFmpegRender(ctx context.Context, runID, workerID, renderPlan, outputPath string) (artifactPath string, artifactBytes int64, err error)
 	CleanupWorkerTemp(ctx context.Context, runID, workerID string) error
 }
@@ -327,30 +333,33 @@ func (r *RegistryDrainLease) ReleaseSmokeLease(_ context.Context, runID string) 
 	return nil
 }
 
-// stubAssetResolver is the minimal BackendAssetResolver used
-// for atomic Step 12+ until the canonical asset picker (the
-// stage_preflight / engine_planner asset lookup) lands. Both
-// pickup URL and expected bytes are caller-provided so production
-// wiring can swap it with a real resolver via the same seam.
+// StubAssetResolver is the minimal BackendAssetResolver used
+// for development smoke runs (VELOX_SMOKE_MODE=development) until
+// the canonical asset picker (the stage_preflight / engine_planner
+// asset lookup) lands. Both pickup URL and expected bytes are
+// caller-provided so production wiring can swap it with a real
+// resolver via the same seam.
 //
-// Package-private name (stubAssetResolver) because Step 12+
-// ships it as a temporary production-default stub; a future
-// step promotes it to a public type with a real backend wiring
-// (matching the comparable stub-SSH / stub-Drive pattern in
-// future Steps 11+/follow-up).
-type stubAssetResolver struct {
-	pickupURL     string
-	expectedBytes int64
+// In production mode this resolver MUST NOT be used — the asset
+// resolver should be nil, causing the executor's pre-flight nil
+// check to surface ErrSmokeRunnerNotWired until the real asset
+// resolver is wired.
+type StubAssetResolver struct {
+	PickupURL     string
+	ExpectedBytes int64
+}
+
+// NewStubAssetResolver returns a StubAssetResolver for dev-mode smoke runs.
+func NewStubAssetResolver(pickupURL string, expectedBytes int64) *StubAssetResolver {
+	return &StubAssetResolver{PickupURL: pickupURL, ExpectedBytes: expectedBytes}
 }
 
 // ResolveAsset returns the canned pickup URL + expected bytes.
-// Atomic Step 12+ ships this stub; production wiring in a
-// follow-up step swaps in a stage-preflight-derivative resolver.
-func (s stubAssetResolver) ResolveAsset(_ context.Context, _ string) (string, int64, error) {
-	if s.pickupURL == "" {
+func (s *StubAssetResolver) ResolveAsset(_ context.Context, _ string) (string, int64, error) {
+	if s.PickupURL == "" {
 		return "", 0, errors.New("smoke: stub asset resolver has empty pickup_url (production wiring lands in a follow-up step)")
 	}
-	return s.pickupURL, s.expectedBytes, nil
+	return s.PickupURL, s.ExpectedBytes, nil
 }
 
 // ── LocalShellWorker (BackendWorkerExec via os/exec) ────────────────
@@ -382,17 +391,26 @@ func (w *LocalShellWorker) runDir(runID string) string {
 	return filepath.Join(SmokeTempRoot, runID)
 }
 
-// DownloadAsset creates a small test asset file locally (simulates
-// downloading from the asset resolver's pickup URL). In production,
-// this would SSH to the worker and curl/wget the real asset.
-func (w *LocalShellWorker) DownloadAsset(_ context.Context, runID, _, _, destPath string) error {
+// DownloadAsset downloads the asset from pickupURL to destPath.
+// In production, uses curl/wget from the resolved pickup URL.
+// In dev mode (empty pickupURL), falls back to a synthetic ffmpeg-generated clip.
+func (w *LocalShellWorker) DownloadAsset(_ context.Context, runID, _, pickupURL, destPath string) error {
 	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
 		return fmt.Errorf("smoke: mkdir for download: %w", err)
 	}
-	// Also create the smoke temp dir for log files / local cache.
 	_ = os.MkdirAll(w.runDir(runID), 0755)
-	// Generate a small test video via ffmpeg lavfi (1s, single color).
-	// In production this would be a curl from the asset resolver URL.
+
+	// Production path: download the real asset from the pickup URL.
+	if pickupURL != "" {
+		cmd := exec.Command("curl", "-sSL", "-o", destPath, pickupURL)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("smoke: curl download asset from %s: %w (output: %s)", pickupURL, err, string(out))
+		}
+		return nil
+	}
+
+	// Dev-mode fallback: generate a small test video via ffmpeg lavfi.
 	ffmpeg := w.FFmpegBin
 	if ffmpeg == "" {
 		ffmpeg = "ffmpeg"
@@ -535,10 +553,24 @@ func NewSSHWorkerExec(ssh BackendSSHClient) BackendWorkerExec {
 	return &SSHWorkerExec{ssh: ssh}
 }
 
-// DownloadAsset creates the test asset file on the remote worker via
-// ffmpeg lavfi. The destPath is the executor's convention path
-// (/var/lib/velox-worker/smoke/<runID>.in).
-func (e *SSHWorkerExec) DownloadAsset(ctx context.Context, runID, workerID, _, destPath string) error {
+// DownloadAsset downloads the asset on the remote worker.
+// In production, uses curl from the resolved pickupURL.
+// In dev mode (empty pickupURL), falls back to a synthetic ffmpeg-generated clip.
+func (e *SSHWorkerExec) DownloadAsset(ctx context.Context, runID, workerID, pickupURL, destPath string) error {
+	// Production path: download the real asset from the pickup URL.
+	if pickupURL != "" {
+		cmd := fmt.Sprintf(
+			"mkdir -p %s && curl -sSL -o %s '%s'",
+			filepath.Dir(destPath), destPath, pickupURL,
+		)
+		_, err := e.ssh.Run(ctx, workerID, cmd)
+		if err != nil {
+			return fmt.Errorf("%w: ssh download asset from %s: %v", ErrAssetDownloadFail, pickupURL, err)
+		}
+		return nil
+	}
+
+	// Dev-mode fallback: generate a synthetic test clip via ffmpeg lavfi.
 	cmd := fmt.Sprintf(
 		"mkdir -p %s && ffmpeg -f lavfi -i color=c=blue:size=320x240:d=1 -c:v libx264 -f mp4 -t 1 -y %s",
 		filepath.Dir(destPath), destPath,

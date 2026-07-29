@@ -163,9 +163,11 @@ func (e *LevelDSmokeExecutor) Execute(ctx context.Context, op *store.Operation) 
 		}
 	}()
 	// ── Phase 4: download asset via worker exec ──────────────────
+	// Pass the pickupURL resolved in Phase 1 so the worker downloads
+	// the real asset bundle (not a synthetic ffmpeg-generated clip).
 	destPath := fmt.Sprintf("/var/lib/velox-worker/smoke/%s.in", runID)
 	dlCtx, cancel := context.WithTimeout(ctx, timeoutAssetDownload)
-	err = e.backend.Worker.DownloadAsset(dlCtx, runID, op.WorkerID, payload.AssetID, destPath)
+	err = e.backend.Worker.DownloadAsset(dlCtx, runID, op.WorkerID, pickupURL, destPath)
 	cancel()
 	if err != nil {
 		return e.runCleanupAndFail(ctx, runID, op.WorkerID, runStart,
