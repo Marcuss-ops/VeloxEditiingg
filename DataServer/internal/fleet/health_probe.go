@@ -479,15 +479,14 @@ func ProbeLevelC(ctx context.Context, registry HealthLevelCGater, workerID strin
 }
 
 // hasExecutorAdvertisement returns true if WorkerInfo advertises
-// at least one supported executor via supported_executors or
-// supported_job_types. Accepts []string and []interface{} boxed
-// forms because applyMetadataFields stores either depending on
-// the source map shape.
+// at least one supported executor via the canonical "executors"
+// key (proto-structured list of {id, version} objects), or the
+// legacy flat-map keys "supported_executors" / "supported_job_types".
 func hasExecutorAdvertisement(info *workersreg.WorkerInfo) bool {
 	if info == nil || len(info.Capabilities) == 0 {
 		return false
 	}
-	for _, key := range []string{"supported_executors", "supported_job_types"} {
+	for _, key := range []string{"executors", "supported_executors", "supported_job_types"} {
 		v, ok := info.Capabilities[key]
 		if !ok || v == nil {
 			continue
