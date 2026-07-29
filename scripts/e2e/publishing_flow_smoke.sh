@@ -69,8 +69,30 @@
 #                                     has hundreds of channels.
 #   INSTAEDIT_BASE_URL               (optional) Base URL of the InstaeditLogin
 #                                     instance. When unset the script
-#                                     skips step 6 (PRIVATE_UPLOADED
+#                                     SKIPS step 1b (catalog GET via
+#                                     /api/v1/integrations/velox/destinations)
+#                                     AND step 6 (PRIVATE_UPLOADED
 #                                     verification) and logs a notice.
+#                                     Set INSTAEDIT_VELOX_USER_TOKEN as
+#                                     well to enable step 1b (cross-validation
+#                                     invariant S_velox ⊆ S_inst against
+#                                     the InstaeditLogin catalog).
+#   INSTAEDIT_VELOX_USER_TOKEN       (required when INSTAEDIT_BASE_URL is
+#                                     set) Bearer for the InstaeditLogin
+#                                     /api/v1/integrations/velox/destinations
+#                                     endpoint. The destinations endpoint
+#                                     requires a workspace-owner USER JWT;
+#                                     the Velox admin token cannot be reused
+#                                     here because the handler rejects
+#                                     non-user identities via
+#                                     adminIdentityUserID(req)==0 -> 401.
+#                                     Mirror of the resolve_token() pattern
+#                                     above; can also be sourced from a
+#                                     TOKEN_FILE dotenv line
+#                                     INSTAEDIT_VELOX_USER_TOKEN=...
+#                                     When INSTAEDIT_BASE_URL is set but
+#                                     INSTAEDIT_VELOX_USER_TOKEN is unset:
+#                                     FATAL exit 2 (explicit misconfig).
 #   PUBLISHING_POLL_TIMEOUT_S        (optional) Default: 300 (5 minutes —
 #                                     the cross-repo flow includes a real
 #                                     render + chunked upload).
@@ -90,9 +112,12 @@
 #   0  success — full chain reached SUCCEEDED (and PRIVATE_UPLOADED if
 #      INSTAEDIT_BASE_URL was set AND remote_id was discoverable)
 #   2  usage / env error (missing admin token, missing workspace id,
-#      no curl/jq)
+#      no curl/jq, INSTAEDIT_BASE_URL set without INSTAEDIT_VELOX_USER_TOKEN,
+#      CR/LF in either token)
 #   3  network error (curl could not reach Velox or InstaeditLogin)
 #   4  HTTP non-200/202 on a Velox endpoint (M2M issuance, targets, jobs)
+#      OR HTTP non-200 on the InstaeditLogin
+#      /integrations/velox/destinations catalog GET (step 1b)
 #   5  no publishable target found in /publishing/targets response
 #      (can_post=true && capabilities.upload_video=true)
 #   6  job reached SUCCEEDED but the API response was missing
@@ -103,6 +128,13 @@
 #   9  PRIVATE_UPLOADED was not reached on InstaeditLogin side within
 #      $PUBLISHING_PRIVATE_TIMEOUT_S (only checked when
 #      $INSTAEDIT_BASE_URL is set)
+#  10  catalog cross-validation failed — either the chosen Velox
+#      destination_id does not start with "instaedit_" (per
+#      publishing_targets.go::veloxDestinationID mapping contract),
+#      OR (when step 1b ran) the Velox destination_id's suffix is
+#      not present in the InstaeditLogin catalog for the requested
+#      workspace. Indicates catalog drift between Velox and
+#      InstaEdit.
 #
 # Usage:
 #   PUBLISHING_WORKSPACE_ID=42 INSTAEDIT_BASE_URL=https://instaedit.example.com \
@@ -185,6 +217,34 @@ fi
 INSTAEDIT_BASE_URL="${INSTAEDIT_BASE_URL:-}"
 INSTAEDIT_BASE_URL="${INSTAEDIT_BASE_URL%/}"
 DRY_MODE="${PUBLISHING_FLOW_DRY:-0}"
+
+# ---- INST_VELOX_USER_TOKEN resolution (USER-JWT for InstaeditLogin) -------
+# Required ONLY when INSTAEDIT_BASE_URL is set — the
+# /integrations/velox/destinations handler requires a workspace-owner
+# USER JWT (adminIdentityUserID(req)==0 → 401), so the Velox admin
+# token cannot be reused. We mirror the resolve_token() dotenv
+# precedence so an operator can reuse one TOKEN_FILE across the
+# three smokes (publishing_flow, jobs_smoke, creator_push_smoke).
+INST_USER_TOKEN=""
+if [[ -n "$INSTAEDIT_BASE_URL" ]]; then
+  if [[ -n "${INSTAEDIT_VELOX_USER_TOKEN:-}" ]]; then
+    INST_USER_TOKEN="${INSTAEDIT_VELOX_USER_TOKEN}"
+  elif [[ -n "${TOKEN_FILE:-}" && -r "${TOKEN_FILE}" ]]; then
+    INST_USER_TOKEN=$(grep -E '^INSTAEDIT_VELOX_USER_TOKEN=' "${TOKEN_FILE}" | head -1 \
+      | sed 's/^[^=]*=//' \
+      | tr -d '"' | tr -d "'" | xargs || true)
+  fi
+  if [[ -z "$INST_USER_TOKEN" ]]; then
+    echo "FATAL: INSTAEDIT_BASE_URL='${INSTAEDIT_BASE_URL}' but INSTAEDIT_VELOX_USER_TOKEN is unset" >&2
+    echo "  Remediation: export INSTAEDIT_VELOX_USER_TOKEN=<workspace-owner USER JWT>" >&2
+    echo "  Get a JWT via /api/v1/auth/login on the InstaEdit instance." >&2
+    exit 2
+  fi
+  if [[ "$INST_USER_TOKEN" == *$'\r'* || "$INST_USER_TOKEN" == *$'\n'* ]]; then
+    echo "FATAL: INSTAEDIT_VELOX_USER_TOKEN contains CR or LF; refusing to use it" >&2
+    exit 2
+  fi
+fi
 DEBUG_MODE="${PUBLISHING_FLOW_DEBUG:-0}"
 POLL_TIMEOUT="${PUBLISHING_POLL_TIMEOUT_S:-300}"
 PRIVATE_TIMEOUT="${PUBLISHING_PRIVATE_TIMEOUT_S:-300}"
@@ -249,13 +309,55 @@ post_admin_issue() {
 if [[ "$DRY_MODE" == "1" ]]; then
   echo "[DRY] /api/v1/admin/m2m/keys POST would carry:" >&2
   echo "$ISSUE_REQ" >&2
+  if [[ -n "$INSTAEDIT_BASE_URL" && -n "$INST_USER_TOKEN" ]]; then
+    cat <<'DRYINNER' >&2
+[DRY] /api/v1/integrations/velox/destinations GET would target:
+[DRY]   ${INSTAEDIT_BASE_URL}/api/v1/integrations/velox/destinations?workspace_id=${PUBLISHING_WORKSPACE_ID}
+[DRY]   Bearer: <USER-JWT, redacted>  (workspace-owner)
+[DRY]   expected shape: { destinations: [ { external_destination_id, platform_account_id, status, ... } , ... ] }
+[DRY]   step 1b captures: S_inst := [external_destination_id for each enabled active row]
+DRYINNER
+  else
+    echo "[DRY] (skipped) /api/v1/integrations/velox/destinations GET - INSTAEDIT_BASE_URL or INSTAEDIT_VELOX_USER_TOKEN unset" >&2
+    echo "[DRY]   cross-validation degrades to one-sided shape check (destination_id STARTSWITH instaedit_)" >&2
+  fi
   echo "[DRY] /api/v1/publishing/targets POST would carry:" >&2
-  printf '{\"workspace_id\":%s,\"platform\":\"%s\"' \
+  printf '{"workspace_id":%s,"platform":"%s"' \
     "${PUBLISHING_WORKSPACE_ID}" "${PLATFORM}" >&2
   if [[ -n "$PLATFORM_ACCOUNT_ID" ]]; then
-    printf ',\"platform_account_id\":%s' "${PLATFORM_ACCOUNT_ID}" >&2
+    printf ',"platform_account_id":%s' "${PLATFORM_ACCOUNT_ID}" >&2
   fi
   printf '}\n' >&2
+  echo "[DRY] step 2 captures: S_velox := [external_destination_id for each target row in response]" >&2
+  echo "[DRY] step 2 will assert (invariant S_velox is-subset S_inst):" >&2
+  echo "[DRY]   - chosen target destination_id STARTSWITH instaedit_" >&2
+  echo "[DRY]   - exit 10 on STARTSWITH failure OR chosen-target suffix not in S_inst" >&2
+  echo "[DRY]   - WARN line surfaces S_velox-S_inst diff across ALL targets (not just chosen)" >&2
+  echo "[DRY] jobs POST would carry (delivery_plan[0].metadata per spec, jq-built for safety):" >&2
+  jq -nc --arg idem "${IDEM_KEY}" --arg epoch "${EPOCH}" --arg dest "<velox-side-instaedit_...>" --arg contract "velox.instaedit.publish.v1" \
+    '{
+      idempotency_key: $idem,
+      video_name: ("publishing_flow_smoke epoch=" + $epoch),
+      script_text: "Smoke script for publishing flow E2E.",
+      voiceover_paths: ["velox-asset://voiceovers/pub-smoke.mp3"],
+      scenes: [ { text: "Smoke scene", clip_link: "velox-asset://clips/pub-smoke.mp4", duration_seconds: 3 } ],
+      delivery_plan: [
+        {
+          destination_id: $dest,
+          priority: 1,
+          retry_budget: 1,
+          metadata: {
+            contract_version: $contract,
+            title: ("Velox Publishing Smoke (epoch=" + $epoch + ")"),
+            description: "Automated smoke script for cross-repo publishing flow.",
+            tags: ["velox-smoke", "e2e", "publishing"],
+            privacy_status: "private",
+            final_privacy: "public",
+            require_thumbnail: true
+          }
+        }
+      ]
+    }' >&2
   echo "[DRY] no live HTTP calls done; exit 0" >&2
   exit 0
 fi
@@ -305,6 +407,80 @@ fi
 PROVISIONED_CLIENT_ID="$CLIENT_ID"
 echo "  client_id        : ${PROVISIONED_CLIENT_ID}"
 echo "  plaintext_secret : ********** (redacted)"
+
+# ---- Step 1b: GET /api/v1/integrations/velox/destinations on InstaeditLogin
+# Optional, mirrors the PRIVATE_UPLOADED-check pattern below: when
+# INSTAEDIT_BASE_URL / INST_USER_TOKEN is unset, skip with a notice
+# AND downgrade the step-2 cross-validation to a one-sided shape check
+# (destination_id STARTSWITH "instaedit_") — a fully stricter invariant
+# BOTH-URL+TURN-OFF would have us fail; partial-degrade is the better
+# caller experience and is documented in the exit-code table above.
+S_INST=""
+S_INST_COUNT=""
+INST_CATALOG_STATUS=""
+if [[ -n "$INSTAEDIT_BASE_URL" && -n "$INST_USER_TOKEN" ]]; then
+  INST_CATALOG_URL="${INSTAEDIT_BASE_URL}/api/v1/integrations/velox/destinations?workspace_id=${PUBLISHING_WORKSPACE_ID}"
+  echo "--- GET ${INST_CATALOG_URL} ---"
+  CURL_RC=0
+  curl -sS -m 15 \
+    -H "Authorization: Bearer ${INST_USER_TOKEN}" \
+    -H "X-Request-ID: pub-smoke-${EPOCH}-catalog" \
+    "${INST_CATALOG_URL}" \
+    -D "$TMP_HDRS" -o "$TMP_BODY" 2>"$TMP_TRACE" || CURL_RC=$?
+  if [[ $CURL_RC -ne 0 ]]; then
+    echo "FATAL: curl could not reach ${INST_CATALOG_URL} (exit=${CURL_RC})" >&2
+    exit 3
+  fi
+  INST_CATALOG_STATUS=$(awk 'NR==1 && $1 ~ /^[Hh][Tt][Tt][Pp]// {print $2; exit}' "$TMP_HDRS")
+  INST_CATALOG_BODY=$(cat "$TMP_BODY")
+  if [[ "${DEBUG_MODE}" == "1" ]]; then
+    echo "DEBUG: /integrations/velox/destinations response:" >&2
+    echo "$INST_CATALOG_BODY" | jq . >&2
+  fi
+  if [[ "$INST_CATALOG_STATUS" != "200" ]]; then
+    echo "FATAL: GET ${INST_CATALOG_URL} returned HTTP ${INST_CATALOG_STATUS}" >&2
+    echo "  Hint: 401 → USER-JWT missing/invalid (adminIdentityUserID(req)==0);" >&2
+    echo "        403 → workspace owned by another user (ownership check);" >&2
+    echo "        400 → workspace_id query param missing or non-positive." >&2
+    echo "  Response body:" >&2
+    echo "$INST_CATALOG_BODY" | sed 's/^/    /' >&2
+    exit 4
+  fi
+  # Capture active+enabled rows into a newline-separated set S_inst.
+  # We DO NOT include include_disabled=true — the cross-validation target
+  # is "what can the sender actually pick right now?", and disabled rows
+  # are not selectable from the perspective of an active can_post target.
+  if ! S_INST=$(printf '%s' "$INST_CATALOG_BODY" | jq -er '
+    (.destinations // [])
+    | map(select(
+        (.status // "active") == "active"
+        and ((.external_destination_id // "") | length) > 0
+      ))
+    | map(.external_destination_id)
+    | join("\n")
+  ' 2>/dev/null); then
+    echo "WARN: jq parse of /integrations/velox/destinations body failed; treating S_inst as empty" >&2
+    S_INST=""
+  fi
+  # `wc -l` on empty string yields 0; strip CR defensively.
+  S_INST=$(printf '%s' "$S_INST" | tr -d '\r')
+  if [[ -z "$S_INST" ]]; then
+    S_INST_COUNT="0"
+  else
+    S_INST_COUNT=$(printf '%s\n' "$S_INST" | grep -c '^' || true)
+  fi
+  echo "OK: InstaeditLogin catalog returned (active enabled rows): ${S_INST_COUNT}"
+  if [[ "${DEBUG_MODE}" == "1" && -n "$S_INST" ]]; then
+    echo "DEBUG: S_inst external_destination_ids:" >&2
+    printf '%s\n' "$S_INST" | sed 's/^/    /' >&2
+  fi
+else
+  echo "NOTICE: INSTAEDIT_BASE_URL or INSTAEDIT_VELOX_USER_TOKEN unset —" \
+       "skipping step 1b (InstaeditLogin catalog GET). Cross-validation" \
+       "in step 2 degrades to one-sided shape check (destination_id STARTSWITH" \
+       "'instaedit_' per publishing_targets.go::veloxDestinationID); suffix" \
+       "membership in S_inst is left as a WARN." >&2
+fi
 
 # ---- POST /api/v1/publishing/targets -------------------------------------
 TARGETS_PAYLOAD=$(jq -nc \
@@ -370,14 +546,85 @@ echo "  channel_name           : ${CHANNEL_NAME}"
 echo "  destination_id (Velox) : ${DESTINATION_ID}"
 echo "  external_destination_id (InstaEdit): ${EXTERNAL_DESTINATION_ID:-"(unset)"}"
 
+# ---- Cross-validation: chosen target shape + full S_velox-is-subset-S_inst ---
+# Per the user spec + the production mapping contract
+# (publishing_targets.go::veloxDestinationID), a Velox-side destination_id
+# MUST be of the canonical form 'instaedit_<external_destination_id>'.
+# We assert two layers:
+#   (1) chosen target destination_id STARTSWITH "instaedit_" AND when
+#       S_inst is known its suffix is in S_inst (the InstaeditLogin catalog);
+#   (2) full-iteration WARN: all S_velox destination_id suffixes vs all
+#       S_inst rows, surfacing any drift across the entire response.
+#       WARN not FATAL so a transient async-disabled target does not fail.
+EXPECTED_DIR_PREFIX="instaedit_"
+if [[ "${DESTINATION_ID:0:${#EXPECTED_DIR_PREFIX}}" != "$EXPECTED_DIR_PREFIX" ]]; then
+  echo "FATAL: chosen target destination_id='${DESTINATION_ID}' does not start with '${EXPECTED_DIR_PREFIX}' -- Velox mapping contract drift" >&2
+  echo "  Expected: instaedit_<external_destination_id> per publishing_targets.go::veloxDestinationID" >&2
+  exit 10
+fi
+S_VELOX_SUFFIX="${DESTINATION_ID#${EXPECTED_DIR_PREFIX}}"
+if [[ -n "$S_INST" ]]; then
+  if ! printf '%s\n' "$S_INST" | grep -Fxq "$S_VELOX_SUFFIX"; then
+    echo "FATAL: chosen destination_id='${DESTINATION_ID}' has suffix '${S_VELOX_SUFFIX}' which is NOT in the InstaeditLogin catalog for workspace_id=${PUBLISHING_WORKSPACE_ID}" >&2
+    echo "  S_inst (active enabled rows from /integrations/velox/destinations):" >&2
+    printf '%s\n' "$S_INST" | sed 's/^/    /' >&2
+    echo "  Hint: Velox is reporting a destination_id not known by InstaEdit -- possible catalog drift or stale snapshot." >&2
+    exit 10
+  fi
+  echo "OK: chosen-target cross-validation passed -- Velox destination_id suffix is in the InstaeditLogin catalog"
+elif [[ -n "$INST_CATALOG_STATUS" ]]; then
+  echo "WARN: step 1b returned 200 but S_inst was empty -- cross-validation downgrades to one-sided shape check (destination_id STARTSWITH instaedit_)" >&2
+else
+  echo "WARN: step 1b was skipped -- only enforced destination_id STARTSWITH instaedit_ (single-sided shape check)" >&2
+fi
+# Full-iteration WARN: surface any external_destination_ids present in Velox
+# /publishing/targets but absent from the InstaeditLogin catalog across ALL
+# targets. Catches drift even when the can_post filter hides the drifted row.
+if [[ -n "$S_INST" ]]; then
+  S_VELOX_FULL=$(printf '%s' "$targets_body" | jq -er '
+    (.targets // [])
+    | map(
+        if (.external_destination_id // "") != "" then .external_destination_id
+        elif (.destination_id // "") | startswith("instaedit_") then
+          .destination_id | sub("^instaedit_"; "")
+        else "" end
+      )
+    | map(select(. != ""))
+    | unique
+    | join("\n")
+  ' 2>/dev/null || echo "")
+  S_INST_SORTED=$(printf '%s\n' "$S_INST" | sort -u || true)
+  S_VELOX_SORTED=$(printf '%s\n' "$S_VELOX_FULL" | sort -u || true)
+  if [[ -n "$S_VELOX_SORTED" ]]; then
+    S_DIFF=$(comm -23 <(printf '%s\n' "$S_VELOX_SORTED") <(printf '%s\n' "$S_INST_SORTED") || true)
+    if [[ -n "$S_DIFF" ]]; then
+      echo "WARN: drift detected -- these external_destination_ids appear in Velox /publishing/targets but NOT in InstaeditLogin catalog:" >&2
+      printf '%s\n' "$S_DIFF" | sed 's/^/    /' >&2
+      echo "  (WARN not FATAL -- operator should investigate catalog drift)" >&2
+    else
+      echo "OK: full S_velox-is-subset-S_inst invariant holds (all Velox destination_id suffixes are in S_inst)"
+    fi
+  fi
+fi
+
 # ---- POST /api/v1/jobs ----------------------------------------------------
-# Metadata is intentionally minimal — the contract says destination_id on
-# the delivery_plan entry is the authoritative pick; we do NOT echo channel /
-# platform_account_id back into metadata.
+# The metadata block is the JOB-side pass-through blob that the Velox
+# worker forwards to InstaeditLogin at POST /internal/v1/deliveries.
+# Per the user's spec the metadata MUST pin contract_version="velox.instaedit.publish.v1"
+# (this is the JOB-side discriminator literal — the InstaeditLogin
+# /internal/v1/deliveries CONTRACT discriminator is a separate value,
+# `ContractVersionV1 = "velox-instaedit.v1"` (dashes), used at the
+# worker hand-off boundary; both literals coexist because they tag
+# different wire boundaries on the cross-repo flow). All other fields
+# are hardcoded per the user spec: privacy_status=private,
+# final_privacy=public, require_thumbnail=true.
 JOBS_PAYLOAD=$(jq -nc \
   --arg idem "${IDEM_KEY}" \
   --arg ts "publishing_flow_smoke epoch=${EPOCH}" \
   --arg dest "${DESTINATION_ID}" \
+  --arg contract "velox.instaedit.publish.v1" \
+  --arg title "Velox Publishing Smoke (epoch=${EPOCH})" \
+  --arg desc "Automated smoke script for cross-repo publishing flow." \
   '{
     idempotency_key: $idem,
     video_name: $ts,
@@ -391,7 +638,20 @@ JOBS_PAYLOAD=$(jq -nc \
       }
     ],
     delivery_plan: [
-      { destination_id: $dest, priority: 1, retry_budget: 1 }
+      {
+        destination_id: $dest,
+        priority: 1,
+        retry_budget: 1,
+        metadata: {
+          contract_version: $contract,
+          title: $title,
+          description: $desc,
+          tags: ["velox-smoke", "e2e", "publishing"],
+          privacy_status: "private",
+          final_privacy: "public",
+          require_thumbnail: true
+        }
+      }
     ]
   }')
 
