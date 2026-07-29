@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"velox-server/internal/app"
@@ -179,6 +180,24 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	planResolver := deliveries.NewSQLiteDeliveryPlanResolver(p.SQLite.DB(), cfg.Runtime.DeliveryGlobalFallback)
 	planAdapter := &deliveryPlanResolverAdapter{inner: planResolver}
 	enqueuer := enqueue.NewEnqueuer(t.AtomicCreator, j.Repository, assetSvc, planAdapter)
+
+	// Warn at boot if any deprecated SOCIAL_GATEWAY_* alias is still set in
+	// the operator's environment. PR-15.10 retirement chain closed the
+	// deprecation cycle on `main`; the canonical contract honors ONLY
+	// SOCIAL_API_* env vars (see socialclient.ConfigFromEnv). Operators
+	// carrying the legacy aliases in /etc/velox-server.env will see
+	// ErrNotConfigured at DeliverArtifact time; this one-line WARN gives
+	// them a clear rename hint at every master boot so the rename
+	// surfaces BEFORE a silent delivery failure.
+	for _, alias := range []struct{ env, canonical string }{
+		{"SOCIAL_GATEWAY_URL", "SOCIAL_API_URL"},
+		{"SOCIAL_GATEWAY_API_KEY", "SOCIAL_API_TOKEN"},
+		{"SOCIAL_GATEWAY_CALLBACK_BASE_URL", "SOCIAL_CALLBACK_BASE_URL"},
+	} {
+		if os.Getenv(alias.env) != "" {
+			log.Printf("[SOCIALCLIENT] WARN legacy alias env detected: %s is RETIRED (PR-15.10) and NOT honored — rename to %s.", alias.env, alias.canonical)
+		}
+	}
 
 	// Compute the socialclient.Config ONCE here so the Enqueuer validator
 	// wiring AND the socialGatewayProvider below share the same
