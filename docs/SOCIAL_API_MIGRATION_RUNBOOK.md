@@ -383,8 +383,13 @@ entry satisfies the §0.3.1 predicate, the sender MUST:
    `target_error_code="BLOCKED_AUTH"` (OAuth reauth) or
    `target_error_code="TARGET_NOT_AVAILABLE"` (conditions 1+2 collapsed);
    complemented by the underlying `platform_accounts.status` enum
-   value (`active`, `reauth_required`, `paused`, `revoked`,
-   `disconnected`, `error`, `expired`, `pending_authorization`).
+   value (see `InstaeditLogin/internal/models/user.go:49-72` for
+   the canonical declaration): `active`, `reauth_required`,
+   `revoked`, `disconnected`, `expired`, `error`,
+   `pending_authorization`, `suspended`. The resolver itself only
+   branches on `active` vs `reauth_required` (the dual-signal gate
+   at `target_resolver.go:618-628`); the other 6 enum values are
+   forwarded to the operator console for diagnostic granularity.
    The non-canonical strings `binding_disabled` / `account_inactive`
    were drift in earlier drafts of §0.3.4 and have been REMOVED
    (see §0.2.2 for the round-2 alignment rationale).
