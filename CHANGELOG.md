@@ -1,3 +1,77 @@
+## [Unreleased] - 2026-07-29
+
+### Fleet Operator: 4/4 workers onboarded + Level-D smoke working
+
+Full fleet health audit completed: all 4 remote workers are now
+reachable via SSH key auth, connected to the Master, and passing
+the 4-level health probe (A=host, B=container, C=registry, D=smoke).
+
+**Onboard `host_57_129_132_133`** (57.129.132.133, pierone):
+- Port 22 was open all along — previous connection refused was transient.
+- SSH key auth configured, sudo works, docker group already present.
+- Cleaned 11.25 GB (55 old images + 7 stopped containers).
+- Created `/var/lib/velox-worker/smoke` with pierone ownership.
+- Disk: 60% → 42% after cleanup.
+
+**Smoke Level-D now working on all 4 workers**:
+- `asset://` pickup URLs (StubAssetResolver) now treated as dev-mode
+  fallback in both `SSHWorkerExec.DownloadAsset` and
+  `LocalShellWorker.DownloadAsset` — generate ffmpeg lavfi clip instead
+  of passing `asset://` to curl (which can't resolve the synthetic scheme).
+- Asset resolver wired in production mode (was nil, causing
+  `smoke_runner_not_wired`). Drive falls back to `LocalFileDriveUploader`
+  when Google Drive module is not configured.
+- SSH client now covers all 4 workers (was 3; added worker-129).
+
+**Container name aligned on `velox-worker-13197`**:
+- `chronon.conf` had `--name velox-worker-13197` → renamed to
+  `velox-worker-velox-worker-13197` for consistency with the other
+  3 workers.
+
+**Ansible inventory + vault**:
+- `inventory.ini`: SSH users corrected (pierone/ubuntu/debian, no more
+  `velox-deploy`), `container_name` per-worker var added.
+- `group_vars/vault.yml`: encrypted with `ansible-vault`, contains
+  `vault_velox_admin_token` + `vault_velox_sudo_password`.
+- `fleet-restart.yml`: dual-mode auto-detection (compose vs raw docker)
+  with per-worker `container_name` support.
+
+**Health probe fixes**:
+- `hasExecutorAdvertisement`: added `"executors"` key check (workers
+  send proto-structured list under this key, not legacy
+  `supported_executors`).
+- SSH client wired into health handler (was nil → Level A+B were
+  audit-only).
+- `image_digest_match` pending `deployment_records` population.
+- `health_ready` fails on workers without `-p 8081:8081` port binding.
+
+**Cleanup — 21.57 GB reclaimed across 3 workers**:
+- 57 old Docker images removed (chronon alpha, v1.x, golang, qdrant,
+  ubuntu, busybox, hello-world).
+- Old `/tmp` directories cleaned (`velox/`, `velox-worker/`,
+  `velox_video_engine_plan/`, `velox-pull.log`, etc.).
+- `worker-13197`: 82% → 77% disk (was critical).
+
+**Commit chain on `main`** (all atomic, oldest → newest):
+- `09f5c9c` feat(ansible): add sudo password to vault, fix SSH users
+- `ae29413` fix(health): add "executors" key to hasExecutorAdvertisement
+- `b826934` feat(health): wire shared SSH client into health handler
+- `4306390` feat(fleet-restart): auto-detect compose vs raw docker
+- `a47d098` feat(fleet-restart): container_name per-worker in inventory
+- `14d9cd2` fix(inventory): worker-129 now reachable via SSH
+- `98bcb5e` feat(smoke): add worker-129 SSH target + Asset/Drive fallbacks
+- `c4c8fcf` fix(smoke): treat asset:// pickup URLs as dev-mode fallback
+
+### Fleet Health Matrix (2026-07-29)
+
+Level A (Host): 4/4 ✅ — SSH, CPU, RAM, disk, Docker, NTP all green.
+Level B (Container): 0/4 ⚠️ — container_running ✅, health_ready ❌ on
+  2 workers (no port binding), image_digest_match ❌ on all (needs
+  deployment_records).
+Level C (Master): 4/4 ✅ — CONNECTED, session active, executor advertised,
+  heartbeat fresh, deployment_state OK.
+Level D (Smoke): 4/4 ✅ — lease→ffmpeg→artifact→delivery SUCCEEDED.
+
 ## [v1.3.0-creator-push] - 2026-07-25
 
 ### New intake path: `POST /api/v1/creator/jobs`
