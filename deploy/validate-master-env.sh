@@ -319,11 +319,13 @@ fi
 # the operator a clear rename hint on every deploy pre-flight so the rename
 # surfaces BEFORE a silent ErrNotConfigured failure at DeliverArtifact time.
 # Anchor the alias as the literal variable name itself (with optional
-# `export` / `declare -airx …` prefix); the previous greedy `.*` pattern
-# could false-positive on string-literal mentions like
+# `export` / `readonly` / `declare -airx …` prefix); the previous greedy
+# `.*` pattern could false-positive on string-literal mentions like
 # `echo "note: SOCIAL_GATEWAY_URL=…"`. The new pattern guarantees the
-# match is an actual bash assignment of a retired alias key.
-LEGACY_GATEWAY_HITS="$(grep -nE '^[[:space:]]*(export[[:space:]]+|declare[[:space:]]+-[aAirx]+[[:space:]]+)?SOCIAL_GATEWAY_(URL|API_KEY|CALLBACK_BASE_URL)=' "$ENV_FILE" 2>/dev/null || true)"
+# match is an actual bash assignment of a retired alias key, and
+# `readonly` is included because operators sometimes lock the
+# canonical values as immutable after sourcing the vault.
+LEGACY_GATEWAY_HITS="$(grep -nE '^[[:space:]]*(export[[:space:]]+|readonly[[:space:]]+|declare[[:space:]]+-[aAirx]+[[:space:]]+)?SOCIAL_GATEWAY_(URL|API_KEY|CALLBACK_BASE_URL)=' "$ENV_FILE" 2>/dev/null || true)"
 if [[ -n "$LEGACY_GATEWAY_HITS" ]]; then
     warn "legacy SOCIAL_GATEWAY_* alias detected in $ENV_FILE — RETIRED (PR-15.10) and NOT honored. Operator playbook rename map:"
     warn "    SOCIAL_GATEWAY_URL                              → SOCIAL_API_URL"
