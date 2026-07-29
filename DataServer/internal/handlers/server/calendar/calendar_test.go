@@ -36,6 +36,23 @@ func setupCalendarTestEnv(t *testing.T) (*store.SQLiteStore, jobs.Repository, *g
 	jobRepo := store.NewSQLiteJobRepository(db)
 	atomic := store.NewAtomicJobTaskCreator(db)
 
+	// fix(scheduler): seed calendar_noop destination so the canonical
+	// delivery-plan validator (parseDeliveryPlanPayload) accepts the
+	// default inert entry submitCalendarJob injects when the caller
+	// didn't supply an explicit delivery_plan / destination_id. Without
+	// this seed validateDeliveryDestinationTx rejects with
+	// "destination_id %q does not exist" and the calendar event stays
+	// in `scheduled` instead of transitioning to `queued`.
+	if err := db.InsertDeliveryDestination(&store.DeliveryDestination{
+		DestinationID:     "calendar_noop",
+		Provider:          "calendar",
+		Name:              "Calendar No-Op (render-only)",
+		Enabled:           true,
+		ConfigurationJSON: "{}",
+	}); err != nil {
+		t.Fatalf("seed calendar_noop destination: %v", err)
+	}
+
 	r := gin.New()
 	v1 := r.Group("/api/v1")
 	sched := NewCalendarScheduler(db, jobRepo, atomic)
