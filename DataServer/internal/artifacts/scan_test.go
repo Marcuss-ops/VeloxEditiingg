@@ -82,6 +82,14 @@ var allowedWriters = map[string]bool{
 	filepath.Join("internal", "workflow", "sqlite_repository.go"):         true,
 	filepath.Join("internal", "workflow", "sqlite_repository_queries.go"): true,
 	filepath.Join("internal", "workflow", "sqlite_repository_steps.go"):   true,
+	// SEPARATE lifecycle: UPDATE smoke_runs SET status='SUCCEEDED' is the
+	// LevelDSmokeExecutor's terminal-transition writer (NOT jobs). The
+	// smoke_runs dashboard reads this column for the analytics baseline.
+	// This is the analytics/observability surface for the per-worker
+	// duration p-baseline (p95 / p99 / moving-avg); it is NOT a
+	// verified-finalization writer and does not need to go through
+	// FinalizeVerified.
+	filepath.Join("internal", "store", "store_smoke_runs.go"): true,
 }
 
 // allowedTestFiles are files that legitimately contain the SQL

@@ -175,7 +175,7 @@ func TestSmoke_PopulatedOp_HasAllFields(t *testing.T) {
 func TestSmoke_NewHandler_NilDepsOK(t *testing.T) {
 	// Constructor tolerant of nil reg + nil publisher; deferred
 	// check via the 503 handler-side path.
-	h := NewAdminWorkersSmokeHandler(nil, &stubSmokePublisher{})
+	h := NewAdminWorkersSmokeHandler(nil, nil)
 	if h == nil {
 		t.Fatalf("NewAdminWorkersSmokeHandler(nil deps) returned nil")
 	}
