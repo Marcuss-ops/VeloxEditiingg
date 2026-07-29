@@ -157,8 +157,11 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 
 // resolveSceneVoiceoverDuration returns the authoritative voiceover
 // duration for a narrated scene. It checks:
-//  1. Explicit voiceover_duration_seconds field.
-//  2. Probe of the actual audio file.
+//  1. Explicit voiceover_duration_seconds field (top-level).
+//  2. Nested voiceover.duration_seconds / voiceover.duration_ms fields
+//     (the canonical typed-envelope shape used by the
+//     normalize.go scene-builder path).
+//  3. Probe of the actual audio file.
 //
 // If the voiceover exists but is unmeasurable, it returns an error —
 // generic duration_seconds is deliberately ignored here.
@@ -166,7 +169,7 @@ func resolveSceneVoiceoverDuration(scene map[string]interface{}, voiceoverURL st
 	if voiceoverURL == "" {
 		return 0, nil
 	}
-	if duration := payload.NormalizedDuration(scene["voiceover_duration_seconds"]); duration > 0 {
+	if duration := sceneVoiceoverDurationSeconds(scene); duration > 0 {
 		return duration, nil
 	}
 	if probe != nil {
@@ -195,10 +198,11 @@ func resolveSceneFinalClipDuration(scene map[string]interface{}) float64 {
 // then uses the real source-video duration. The 4s fallback is retained only
 // for legacy/unprobeable inputs.
 func resolveSceneFinalClipDurationWithProbe(scene map[string]interface{}, clipURL string, probe audioDurationProbe) float64 {
-	if duration := payload.NormalizedDuration(scene["final_clip_duration_seconds"]); duration > 0 {
-		return duration
-	}
-	if duration := payload.NormalizedDuration(scene["clip_duration_seconds"]); duration > 0 {
+	// sceneClipDurationSeconds already handles the canonical typed-envelope
+	// shape (clip.duration_ms / clip.duration_seconds / final_clip_duration_seconds
+	// / clip_duration_seconds). Reuse it so the nested-clip and top-level scene
+	// alias keys are honoured uniformly across both timeline builders.
+	if duration := sceneClipDurationSeconds(scene); duration > 0 {
 		return duration
 	}
 	if clipURL != "" && probe != nil {
