@@ -22,8 +22,13 @@ func (r *Resolver) buildAndRewritePayload(reqPayload map[string]interface{}, fwd
 
 	// Skip rewriting when the resolver was constructed without
 	// dataDir+masterURL (in-runner path; the remote engine already
-	// produced a complete result).
-	if r.dataDir != "" && r.masterURL != "" {
+	// produced a complete result). Also skip when the payload has no
+	// images / scene_image_paths — the scene_image rewrite forces
+	// video_mode=scene_image which requires per-scene images. Payloads
+	// from POST /api/v1/jobs with audio_tracks but no images would
+	// fail the worker render without this guard.
+	needsImageRewrite := hasImagesForRewrite(reqPayload)
+	if r.dataDir != "" && r.masterURL != "" && needsImageRewrite {
 		workerPayload, err = enqueue.BuildSceneImagePayloadForMaster(workerPayload, r.dataDir, r.videosDir, r.masterURL)
 		if err != nil {
 			return nil, fmt.Errorf("creatorflow: Resolve rewrite master URL: %w", err)
@@ -71,4 +76,35 @@ func resolverMarshalPayload(result map[string]interface{}) (payloadJSON, payload
 func sha256HexResolver(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+// hasImagesForRewrite returns true when the payload carries image
+// references that need master-URL rewriting. Payloads without images
+// (e.g. voiceover-only or audio_tracks-only from POST /api/v1/jobs)
+// skip the scene_image rewrite, avoiding video_mode=scene_image which
+// would require per-scene images the worker can't satisfy.
+func hasImagesForRewrite(payload map[string]interface{}) bool {
+	for _, key := range []string{"images", "image_links", "scene_image_paths", "image_paths"} {
+		switch v := payload[key].(type) {
+		case []interface{}:
+			if len(v) > 0 {
+				return true
+			}
+		case []string:
+			if len(v) > 0 {
+				return true
+			}
+		}
+	}
+	// Check scenes for image_link references.
+	if scenes, ok := payload["scenes"].([]interface{}); ok {
+		for _, s := range scenes {
+			if scene, ok := s.(map[string]interface{}); ok {
+				if img, ok := scene["image_link"].(string); ok && img != "" {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
