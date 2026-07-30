@@ -407,4 +407,32 @@ func TestShouldForwardPipelineResult(t *testing.T) {
 	if !ShouldForwardPipelineResult(map[string]interface{}{"status": "completed", "result": map[string]interface{}{"scenes_json": sceneJSON}}) {
 		t.Error("want true for renderable scenes without voiceover")
 	}
+	// audio_tracks-only payload: background music + scenes, no voiceover,
+	// should be forwardable (the worker muxes audio_tracks into the final AAC).
+	// Uses scenes_json — the canonical shape after ToWorkerPayload marshals
+	// the typed DTO scenes back to JSON.
+	bgmSceneJSON := `[{"text":"BGM-only scene","duration_seconds":12}]`
+	if !ShouldForwardPipelineResult(map[string]interface{}{
+		"status":      "completed",
+		"scenes_json": bgmSceneJSON,
+		"audio_tracks": []interface{}{
+			map[string]interface{}{
+				"source_url": "velox-asset://music-1",
+				"role":       "background_music",
+				"volume":     float64(0.12),
+			},
+		},
+	}) {
+		t.Error("want true for audio_tracks-only payload (BGM + scenes, no voiceover)")
+	}
+	// audio_tracks with no source_url should NOT count as forwardable.
+	if ShouldForwardPipelineResult(map[string]interface{}{
+		"status":      "completed",
+		"scenes_json": `[{"text":"Empty tracks","duration_seconds":5}]`,
+		"audio_tracks": []interface{}{
+			map[string]interface{}{"role": "background_music", "volume": float64(0.1)},
+		},
+	}) {
+		t.Error("want false for audio_tracks with no source_url")
+	}
 }

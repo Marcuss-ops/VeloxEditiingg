@@ -129,10 +129,38 @@ func ShouldForwardPipelineResult(result map[string]interface{}) bool {
 	if payload.FirstString(flat, "scenes_json", "json_path") == "" && payload.FirstString(flat, "scenes") == "" {
 		return false
 	}
-	if len(extractVoiceoverPaths(flat)) == 0 && !hasRenderableMedia(flat) {
+	// Forwardable when ANY audio source is present: voiceover, renderable
+	// media (items/clips/images with URLs), or top-level audio_tracks
+	// (background music, scene clip audio, global narration). Without at
+	// least one, the worker has nothing to mux into the output AAC stream.
+	if len(extractVoiceoverPaths(flat)) == 0 && !hasRenderableMedia(flat) && !hasAudioTracks(flat) {
 		return false
 	}
 	return true
+}
+
+// hasAudioTracks returns true when the payload carries at least one
+// top-level audio_tracks entry with a source_url. This covers background
+// music, scene_clip_audio, and global narration beds submitted via
+// POST /api/v1/jobs with audio_tracks[].
+func hasAudioTracks(flat map[string]interface{}) bool {
+	switch tracks := flat["audio_tracks"].(type) {
+	case []interface{}:
+		for _, item := range tracks {
+			if track, ok := item.(map[string]interface{}); ok {
+				if payload.FirstString(track, "source_url", "source", "url") != "" {
+					return true
+				}
+			}
+		}
+	case []map[string]interface{}:
+		for _, track := range tracks {
+			if payload.FirstString(track, "source_url", "source", "url") != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func hasRenderableMedia(flat map[string]interface{}) bool {

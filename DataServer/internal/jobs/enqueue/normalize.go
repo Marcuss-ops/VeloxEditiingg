@@ -114,8 +114,8 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 	base.SceneCount = len(scenesValue)
 
 	voiceovers := normalizeVoiceoverList(payloadMap)
-	if len(voiceovers) == 0 && !hasClipTimelinePayload(payloadMap) && !hasRenderableMedia(payloadMap) {
-		return nil, deliveryplan.NewValidationError("voiceover_paths", "at least one voiceover path is required")
+	if len(voiceovers) == 0 && !hasClipTimelinePayload(payloadMap) && !hasRenderableMedia(payloadMap) && !hasAudioTracks(payloadMap) {
+		return nil, deliveryplan.NewValidationError("voiceover_paths", "at least one voiceover path is required (or audio_tracks, or renderable media)")
 	}
 	base.VoiceoverPaths = voiceovers
 	base.VoiceoverCount = len(voiceovers)
