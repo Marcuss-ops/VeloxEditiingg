@@ -205,3 +205,88 @@ func TestCompile_AudioTracks_ProducesOffsetMixPlan(t *testing.T) {
 		t.Fatalf("want second audio start offset 7.5, got %v", got)
 	}
 }
+
+func TestCompile_BackgroundMusic_RoleEnablesLoopFadeDucking(t *testing.T) {
+	input := map[string]interface{}{
+		"items": []interface{}{
+			map[string]interface{}{
+				"type":     "video",
+				"url":      "https://example.com/clip.mp4",
+				"duration": 12.0,
+			},
+		},
+		"audio_tracks": []interface{}{
+			map[string]interface{}{
+				"source_url": "https://example.com/bgm.mp3",
+				"volume":     0.15,
+				"role":       "background_music",
+			},
+		},
+	}
+
+	plan, err := Compile(context.Background(), "job-bgm", input, "/tmp/out.mp4", nil)
+	if err != nil {
+		t.Fatalf("Compile(background_music): %v", err)
+	}
+	if got := len(plan.AudioTracks); got != 1 {
+		t.Fatalf("want 1 audio track, got %d", got)
+	}
+
+	track := plan.AudioTracks[0]
+	if track.Role != "background_music" {
+		t.Errorf("role = %q, want background_music", track.Role)
+	}
+	if !track.Loop {
+		t.Error("background_music track: Loop should be true")
+	}
+	if track.FadeInSeconds != 0.5 {
+		t.Errorf("FadeInSeconds = %v, want 0.5", track.FadeInSeconds)
+	}
+	if track.FadeOutSeconds != 0.5 {
+		t.Errorf("FadeOutSeconds = %v, want 0.5", track.FadeOutSeconds)
+	}
+	if !track.DuckingEnabled {
+		t.Error("background_music track: DuckingEnabled should be true")
+	}
+	if track.Volume != 0.15 {
+		t.Errorf("Volume = %v, want 0.15", track.Volume)
+	}
+}
+
+func TestCompile_VoiceoverRole_NoAutoLoopFadeDucking(t *testing.T) {
+	input := map[string]interface{}{
+		"items": []interface{}{
+			map[string]interface{}{
+				"type":     "video",
+				"url":      "https://example.com/clip.mp4",
+				"duration": 12.0,
+			},
+		},
+		"audio_tracks": []interface{}{
+			map[string]interface{}{
+				"source_url": "https://example.com/voiceover.mp3",
+				"volume":     1.0,
+				"role":       "voiceover",
+			},
+		},
+	}
+
+	plan, err := Compile(context.Background(), "job-vo", input, "/tmp/out.mp4", nil)
+	if err != nil {
+		t.Fatalf("Compile(voiceover): %v", err)
+	}
+	if got := len(plan.AudioTracks); got != 1 {
+		t.Fatalf("want 1 audio track, got %d", got)
+	}
+
+	track := plan.AudioTracks[0]
+	if track.Loop {
+		t.Error("voiceover track: Loop should be false (no auto-enable for non-bgm roles)")
+	}
+	if track.FadeInSeconds != 0 {
+		t.Errorf("voiceover track: FadeInSeconds should be 0, got %v", track.FadeInSeconds)
+	}
+	if track.DuckingEnabled {
+		t.Error("voiceover track: DuckingEnabled should be false")
+	}
+}

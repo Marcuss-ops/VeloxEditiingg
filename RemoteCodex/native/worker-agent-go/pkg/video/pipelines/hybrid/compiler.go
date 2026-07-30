@@ -104,7 +104,10 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 	// as the default for items that do not declare their own.
 	timeline_items := compileItemsToTimeline(req.Items, req.Fit)
 
-	// Audio tracks
+	// Audio tracks — role-aware processing for background_music.
+	// Loop, fade, and ducking are enabled automatically when the role
+	// is "background_music" (the renderer applies the corresponding
+	// FFmpeg filters: -stream_loop, afade, and sidechain compression).
 	audioTracks := make([]plan.AudioTrack, 0, len(req.AudioTracks))
 	for _, track := range req.AudioTracks {
 		if track.SourceURL == "" {
@@ -114,13 +117,26 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 		if volume <= 0 {
 			volume = 1.0
 		}
-		audioTracks = append(audioTracks, plan.AudioTrack{
+		at := plan.AudioTrack{
 			SourceURL:       track.SourceURL,
 			Volume:          volume,
 			StartTimeOffset: track.StartTimeOffset,
 			DurationSeconds: track.DurationSeconds,
 			Role:            track.Role,
-		})
+		}
+
+		// Role-aware defaults for background_music.
+		// The renderer uses these flags to generate the FFmpeg filter
+		// chain: -stream_loop -1, afade=t=in/out, and sidechain
+		// compression ducking under voiceover.
+		if track.Role == "background_music" {
+			at.Loop = true
+			at.FadeInSeconds = 0.5
+			at.FadeOutSeconds = 0.5
+			at.DuckingEnabled = true
+		}
+
+		audioTracks = append(audioTracks, at)
 	}
 	if len(audioTracks) == 0 && req.AudioURL != "" {
 		audioTracks = append(audioTracks, plan.AudioTrack{

@@ -44,11 +44,25 @@ func chrononPlanJSON(p *plan.RenderPlan) ([]byte, error) {
 		if strings.TrimSpace(track.SourceURL) == "" {
 			continue
 		}
-		result.AudioTracks = append(result.AudioTracks, map[string]any{
+		entry := map[string]any{
 			"source": track.SourceURL, "volume": track.Volume,
 			"start_time_offset": track.StartTimeOffset, "duration_seconds": track.DurationSeconds,
 			"role": track.Role,
-		})
+		}
+		// Role-aware rendering hints for the C++ engine.
+		if track.Loop {
+			entry["loop"] = true
+		}
+		if track.FadeInSeconds > 0 {
+			entry["fade_in_seconds"] = track.FadeInSeconds
+		}
+		if track.FadeOutSeconds > 0 {
+			entry["fade_out_seconds"] = track.FadeOutSeconds
+		}
+		if track.DuckingEnabled {
+			entry["ducking_enabled"] = true
+		}
+		result.AudioTracks = append(result.AudioTracks, entry)
 	}
 	frame := 0
 	for index, item := range p.Timeline {

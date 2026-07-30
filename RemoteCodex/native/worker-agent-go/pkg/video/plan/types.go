@@ -55,6 +55,25 @@ type AudioTrack struct {
 	// visible scene and must not bleed into the next scene.
 	DurationSeconds float64 `json:"duration_seconds,omitempty"`
 	Role            string  `json:"role,omitempty"`
+
+	// Loop enables seamless looping when the audio source is shorter
+	// than the total video duration. The renderer uses -stream_loop -1
+	// (or equivalent) and trims to the output length.
+	Loop bool `json:"loop,omitempty"`
+
+	// FadeInSeconds applies a linear fade-in from silence over the
+	// given duration at the start of the track. 0 means no fade.
+	FadeInSeconds float64 `json:"fade_in_seconds,omitempty"`
+
+	// FadeOutSeconds applies a linear fade-out to silence over the
+	// given duration at the end of the track. 0 means no fade.
+	FadeOutSeconds float64 `json:"fade_out_seconds,omitempty"`
+
+	// DuckingEnabled instructs the renderer to apply sidechain
+	// compression (or equivalent volume automation) that lowers this
+	// track's volume when voiceover is active. Typical for
+	// background_music role.
+	DuckingEnabled bool `json:"ducking_enabled,omitempty"`
 }
 
 // Layer is an independent compositing layer. Media remains in Timeline;
