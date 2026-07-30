@@ -181,6 +181,14 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 		// Canonical v2 bundle routes.
 		r.GET("/api/worker/v2/manifest", m.workerUpdateHandler.GetManifestV2Handler())
 		r.GET("/api/worker/v2/chunk/:chunkName", m.workerUpdateHandler.GetChunkV2Handler())
+		// Bundle update + rebuild routes (admin-gated — fleet-wide mutations).
+		adminBundle := r.Group("")
+		if m.adminAuth != nil {
+			adminBundle.Use(m.adminAuth)
+		}
+		adminBundle.POST("/install_worker/force_regenerate_zip", m.workerUpdateHandler.ForceRegenerateZipHandler())
+		adminBundle.POST("/workers/full_update_linux", m.workerUpdateHandler.FullUpdateLinuxHandler())
+		adminBundle.POST("/workers/update_all_latest_bundle", m.workerUpdateHandler.UpdateAllLatestBundleHandler())
 	}
 
 	if m.workerAssetHandler != nil {
