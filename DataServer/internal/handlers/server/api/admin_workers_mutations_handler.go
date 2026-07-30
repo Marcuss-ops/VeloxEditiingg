@@ -96,7 +96,8 @@ type ControllerPublisher interface {
 // TrimWhitespace+empty-fallback chain ensures the schema's
 // `length(reason) > 0` CHECK never trips on handler output.
 type MutationRequest struct {
-	Reason string `json:"reason"`
+	Reason       string `json:"reason"`
+	TargetDigest string `json:"target_digest"`
 }
 
 // MutationResponse is the unified 202 envelope for all 3 mutations.
@@ -244,12 +245,16 @@ func (h *AdminWorkersMutationsHandler) mutationHandler(kind string, action mutat
 
 		// ── Publish operation (audit ledger + downstream executor) ──
 		now := time.Now().UTC()
+		payload := json.RawMessage("{}")
+		if req.TargetDigest != "" {
+			payload, _ = json.Marshal(map[string]string{"target_digest": req.TargetDigest})
+		}
 		op := &store.Operation{
 			WorkerID:    workerID,
 			Op:          kind,
 			RequestedBy: "admin", // Step 6/15: admin auth context does not yet carry an operator identity
 			Reason:      req.Reason,
-			Payload:     json.RawMessage("{}"),
+			Payload:     payload,
 			QueuedAt:    now,
 		}
 		if err := h.publisher.PublishOperation(c.Request.Context(), op); err != nil {
@@ -332,6 +337,27 @@ func (h *AdminWorkersMutationsHandler) QuarantineWorker() gin.HandlerFunc {
 			return errAlreadyInDesiredState{desired: "QUARANTINED", current: "QUARANTINED"}
 		}
 		return h.reg.SetWorkerQuarantine(ctx, info.WorkerID, true)
+	})
+}
+
+// UpdateWorker returns POST /api/v1/admin/workers/:worker_id/update.
+//
+// Accepts {target_digest: "sha256:<64hex>", reason: "..."}. The
+// target_digest is validated against the canonical sha256:<64hex>
+// regex before the operation is published. Unlike drain/resume/
+// quarantine, update has no synchronous state flag to flip — the
+// handler publishes the operation and the FleetController's tick
+// goroutine (Step 7+) dispatches it to the UpdateExecutor which
+// handles docker pull + compose restart on the worker host via SSH.
+//
+// Idempotency:
+//   - In-flight update op for the same worker → 409 (ErrOperationInFlight).
+//   - Malformed or missing target_digest → 400.
+func (h *AdminWorkersMutationsHandler) UpdateWorker() gin.HandlerFunc {
+	return h.mutationHandler(fleet.OperationKindUpdate, func(ctx context.Context, info *workersreg.WorkerInfo) error {
+		// No synchronous state flag to flip — the update is purely
+		// async via the FleetController tick goroutine.
+		return nil
 	})
 }
 

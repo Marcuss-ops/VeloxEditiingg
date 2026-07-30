@@ -248,6 +248,7 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 			adminWorkers.POST("/:worker_id/drain", m.adminWorkersMutationsHandler.DrainWorker())
 			adminWorkers.POST("/:worker_id/resume", m.adminWorkersMutationsHandler.ResumeWorker())
 			adminWorkers.POST("/:worker_id/quarantine", m.adminWorkersMutationsHandler.QuarantineWorker())
+			adminWorkers.POST("/:worker_id/update", m.adminWorkersMutationsHandler.UpdateWorker())
 		}
 		// Step 10/15 — 4-level health probe endpoint
 		// (GET /api/v1/admin/workers/:worker_id/health?level=A|B|C|D).
