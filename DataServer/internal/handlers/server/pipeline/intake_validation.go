@@ -172,6 +172,13 @@ type SubmitJobRequest struct {
 	// SubtitleTracks are independent from visual layers and media.
 	SubtitleTracks []SubmitSubtitleTrack `json:"subtitle_tracks,omitempty"`
 
+	// AudioTracks are top-level audio layers mixed into the final
+	// render (background music, ambient sound, global narration).
+	// Independent from per-scene voiceover — these span the entire
+	// video duration. The renderer mixes audio_tracks together with
+	// per-scene clip audio + voiceover into a single AAC output.
+	AudioTracks []SubmitAudioTrack `json:"audio_tracks,omitempty"`
+
 	// DeliveryPlan is the ordered list of delivery targets. Empty
 	// allowed (defaults to scene.composite.v1's default resolver).
 	DeliveryPlan []SubmitDeliveryPlanEntry `json:"delivery_plan,omitempty"`
@@ -347,6 +354,34 @@ type SubmitSubtitleTrack struct {
 	Preset string `json:"preset,omitempty"`
 	Font   string `json:"font,omitempty"`
 }
+
+// SubmitAudioTrack is a top-level audio track mixed into the final render.
+// Independent from per-scene voiceover — this is for global audio layers
+// such as background music, ambient sound, or narration beds that span the
+// entire video. The renderer mixes all audio_tracks together with per-scene
+// clip audio and voiceover into a single AAC output stream.
+//
+// Canonical roles (closed enum):
+//   - "voiceover"          narration / speech (volume ~1.0)
+//   - "scene_clip_audio"   original audio from timeline clips
+//   - "background_music"   background music bed (volume 0.10-0.18 recommended)
+//
+// Initial release rules (no loop/fade/ducking yet):
+//   - volume in [0.0, 2.0]
+//   - source_url must match the http(s) + velox-asset:// allow-list
+//   - role must be one of the three canonical values
+//   - asset_id is optional; when present, the Master resolves it to a URL
+type SubmitAudioTrack struct {
+	AssetID          string  `json:"asset_id,omitempty"`
+	SourceURL        string  `json:"source_url"`
+	Role             string  `json:"role,omitempty"`
+	Volume           float64 `json:"volume,omitempty"`
+	StartTimeOffset  float64 `json:"start_time_offset,omitempty"`
+	DurationSeconds  float64 `json:"duration_seconds,omitempty"`
+}
+
+// audioRoleValues is the closed set of accepted SubmitAudioTrack.Role values.
+var audioRoleValues = []string{"voiceover", "scene_clip_audio", "background_music"}
 
 // SubmitDeliveryPlanEntry is a single destination in the delivery plan.
 //
@@ -628,6 +663,48 @@ func ValidateSubmitJobRequest(req SubmitJobRequest) (*SubmitJobValidationError, 
 					"allowed":  []string{"ass", "srt", "vtt"},
 				})
 			}
+		}
+	}
+
+	// Per-audio-track validation: at least one of source_url or asset_id
+	// must be non-empty (the Master resolves asset_id → source_url before
+	// the worker sees the payload). When source_url IS provided, it must
+	// match the http(s) + velox-asset:// allow-list. Role must be in the
+	// closed enum (when supplied). Volume in [0.0, 2.0].
+	for i, track := range req.AudioTracks {
+		pathPrefix := fmt.Sprintf("audio_tracks.%d", i)
+		trimmedURL := strings.TrimSpace(track.SourceURL)
+		trimmedAsset := strings.TrimSpace(track.AssetID)
+		if trimmedURL == "" && trimmedAsset == "" {
+			details = append(details, gin.H{
+				"path":  pathPrefix,
+				"issue": "empty",
+				"hint":  "provide source_url or asset_id",
+			})
+		} else if trimmedURL != "" && !manifestRefURLRegexp.MatchString(trimmedURL) {
+			details = append(details, gin.H{
+				"path":     pathPrefix + ".source_url",
+				"issue":    "unsupported_scheme",
+				"observed": trimmedURL,
+				"allowed":  []string{"https://", "http://", "velox-asset://"},
+			})
+		}
+		if track.Role != "" && !containsString(audioRoleValues, track.Role) {
+			details = append(details, gin.H{
+				"path":     pathPrefix + ".role",
+				"issue":    "unsupported_value",
+				"observed": track.Role,
+				"allowed":  audioRoleValues,
+			})
+		}
+		if track.Volume < 0.0 || track.Volume > 2.0 {
+			details = append(details, gin.H{
+				"path":     pathPrefix + ".volume",
+				"issue":    "out_of_range",
+				"min":      0.0,
+				"max":      2.0,
+				"observed": track.Volume,
+			})
 		}
 	}
 

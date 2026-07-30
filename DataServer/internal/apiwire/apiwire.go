@@ -59,6 +59,7 @@ type SubmitJobRequest struct {
 	Scenes         []SubmitScene             `json:"scenes,omitempty" validate:"omitempty,max=10000"`
 	Layers         []SubmitLayer             `json:"layers,omitempty" validate:"omitempty,dive"`
 	SubtitleTracks []SubmitSubtitleTrack     `json:"subtitle_tracks,omitempty" validate:"omitempty,dive"`
+	AudioTracks    []SubmitAudioTrack        `json:"audio_tracks,omitempty" validate:"omitempty,dive"`
 	DeliveryPlan   []SubmitDeliveryPlanEntry `json:"delivery_plan,omitempty" validate:"omitempty,dive"`
 	ManifestRef    *SubmitManifestRef        `json:"manifest_ref,omitempty" validate:"omitempty"`
 
@@ -229,6 +230,18 @@ type SubmitSubtitleTrack struct {
 	Source string `json:"source" validate:"required,min=1"`
 	Preset string `json:"preset,omitempty"`
 	Font   string `json:"font,omitempty"`
+}
+
+// SubmitAudioTrack is a top-level audio track mixed into the final render.
+// Independent from per-scene voiceover — this is for global audio layers
+// such as background music, ambient sound, or narration beds.
+type SubmitAudioTrack struct {
+	AssetID         string  `json:"asset_id,omitempty" validate:"omitempty,max=128"`
+	SourceURL       string  `json:"source_url,omitempty" validate:"omitempty,url,max=2048"`
+	Role            string  `json:"role,omitempty" validate:"omitempty,oneof=voiceover scene_clip_audio background_music"`
+	Volume          float64 `json:"volume,omitempty" validate:"omitempty,gte=0,lte=2"`
+	StartTimeOffset float64 `json:"start_time_offset,omitempty" validate:"omitempty,gte=0"`
+	DurationSeconds float64 `json:"duration_seconds,omitempty" validate:"omitempty,gte=0"`
 }
 
 // SubmitDeliveryPlanEntry is one destination in the delivery plan.
