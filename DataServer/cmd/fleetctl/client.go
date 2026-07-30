@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,35 +44,48 @@ type clientConfig struct {
 // On any resolution failure, returns an error + the caller
 // surfaces exit code ExitMisuse (2).
 func loadClientConfig(args []string) (*clientConfig, error) {
-	fs := flag.NewFlagSet("fleetctl-cfg", flag.ContinueOnError)
-	masterURL := fs.String("master", "", "Master URL (e.g. https://velox.example.com:8000)")
-	tokenFile := fs.String("token-file", "", "Path to chmod-600 file holding bearer token")
-	verbose := fs.Bool("verbose", false, "Dump request + response body to stderr (debug)")
-	if err := fs.Parse(args); err != nil {
-		return nil, fmt.Errorf("flag parse: %w", err)
+	// Manual scan: extract only --master, --token-file, and --verbose.
+	// We intentionally do NOT use flag.FlagSet.Parse because it is
+	// destructive — sub-command handlers (e.g. runUpdate) need to
+	// parse their own flags (--digest, --reason) from the same args
+	// slice. Scanning manually leaves unknown flags untouched.
+	var masterURL, tokenFile string
+	var verbose bool
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--master" && i+1 < len(args):
+			masterURL = args[i+1]
+			i++
+		case strings.HasPrefix(args[i], "--master="):
+			masterURL = strings.TrimPrefix(args[i], "--master=")
+		case args[i] == "--token-file" && i+1 < len(args):
+			tokenFile = args[i+1]
+			i++
+		case strings.HasPrefix(args[i], "--token-file="):
+			tokenFile = strings.TrimPrefix(args[i], "--token-file=")
+		case args[i] == "--verbose":
+			verbose = true
+		}
 	}
-	// Master URL resolution: --master flag, then $VELOX_MASTER_URL
-	// env, then deploy/group_vars/all.yml's default-style
-	// placeholder (returns mis-use if all are empty).
-	if *masterURL == "" {
-		*masterURL = os.Getenv("VELOX_MASTER_URL")
+	if masterURL == "" {
+		masterURL = os.Getenv("VELOX_MASTER_URL")
 	}
-	if *masterURL == "" {
+	if masterURL == "" {
 		return nil, errors.New("master URL required: pass --master=https://HOST:8000 or set VELOX_MASTER_URL")
 	}
-	if strings.HasSuffix(*masterURL, "/") {
-		*masterURL = strings.TrimRight(*masterURL, "/")
+	if strings.HasSuffix(masterURL, "/") {
+		masterURL = strings.TrimRight(masterURL, "/")
 	}
 	// Token resolution: --token-file, then $VELOX_ADMIN_TOKEN env,
 	// then canonical Master-side file at /opt/velox/secrets/admin-token.
-	tok, err := resolveToken(*tokenFile)
+	tok, err := resolveToken(tokenFile)
 	if err != nil {
 		return nil, err
 	}
 	return &clientConfig{
-		MasterURL: *masterURL,
+		MasterURL: masterURL,
 		Token:     tok,
-		Verbose:   *verbose,
+		Verbose:   verbose,
 	}, nil
 }
 
