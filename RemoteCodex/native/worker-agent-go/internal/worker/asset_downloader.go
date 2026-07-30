@@ -16,19 +16,40 @@ import (
 // reused by both the audio resolver and the scene-image resolver —
 // the asset bridge never builds per-domain downloaders.
 //
+// Backward-compat: delegates to downloadVeloxAssetWithSHA with empty SHA-256.
+// Callers that have the asset digest should use downloadVeloxAssetWithSHA
+// for cache-integrity verification on both cache-hit and cache-miss paths.
+func (w *Worker) downloadVeloxAsset(ctx context.Context, assetID string) (string, error) {
+	return w.downloadVeloxAssetWithSHA(ctx, assetID, "")
+}
+
+// downloadVeloxAssetWithSHA downloads a single velox-asset by ID with
+// optional SHA-256 integrity verification. When expectedSHA256 is non-empty:
+//   - Cache hit: the cached file's SHA-256 is verified; mismatch triggers
+//     a re-download (fail-closed, godlike/07).
+//   - Cache miss: the downloaded file's SHA-256 is verified before
+//     promoting to cache; mismatch discards the download and returns error.
+//   - Cache key includes the first 12 chars of expectedSHA256 so different
+//     versions of the same asset never collide.
+//
+// When expectedSHA256 is empty (legacy path):
+//   - Cache hit: returns the first cached file without verification.
+//   - Cache miss: downloads and caches, computing SHA-256 for future callers.
+//
 // Behaviour preserved verbatim from the original asset_bridge.go:
 //   - up to 4 attempts with exponential backoff (500ms, 1s, 2s)
 //   - redirects constrained to the master's base host (max 5 hops)
 //   - 404 fails fast, 5xx is retried, 4xx other than 404 fails fast
 //   - authenticated via worker's Bearer token
 //   - HTML responses are rejected after both header and pre-fetch sniff
-func (w *Worker) downloadVeloxAsset(ctx context.Context, assetID string) (string, error) {
+func (w *Worker) downloadVeloxAssetWithSHA(ctx context.Context, assetID string, expectedSHA256 string) (string, error) {
 	cacheDir := w.assetCacheDir()
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return "", err
 	}
 
-	if existing, err := cachedVoiceoverPath(cacheDir, assetID); err == nil && existing != "" {
+	// Cache hit fast path: verify SHA-256 when provided.
+	if existing, err := cachedAssetPath(cacheDir, assetID, expectedSHA256); err == nil && existing != "" {
 		return existing, nil
 	}
 
@@ -82,12 +103,12 @@ func (w *Worker) downloadVeloxAsset(ctx context.Context, assetID string) (string
 
 		if resp.StatusCode == http.StatusNotFound {
 			resp.Body.Close()
-			return "", fmt.Errorf("voiceover asset not found")
+			return "", fmt.Errorf("asset not found")
 		}
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 			resp.Body.Close()
-			return "", fmt.Errorf("voiceover asset download failed: %s", strings.TrimSpace(string(body)))
+			return "", fmt.Errorf("asset download failed: %s", strings.TrimSpace(string(body)))
 		}
 		if resp.StatusCode >= 500 {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
@@ -96,7 +117,7 @@ func (w *Worker) downloadVeloxAsset(ctx context.Context, assetID string) (string
 			continue
 		}
 
-		localPath, err := writeVeloxAssetToCache(cacheDir, assetID, resp)
+		localPath, err := writeVeloxAssetToCache(cacheDir, assetID, expectedSHA256, resp)
 		resp.Body.Close()
 		if err != nil {
 			lastErr = err
