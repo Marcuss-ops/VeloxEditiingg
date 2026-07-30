@@ -242,6 +242,10 @@ type SubmitAudioTrack struct {
 	Volume          float64 `json:"volume,omitempty" validate:"omitempty,gte=0,lte=2"`
 	StartTimeOffset float64 `json:"start_time_offset,omitempty" validate:"omitempty,gte=0"`
 	DurationSeconds float64 `json:"duration_seconds,omitempty" validate:"omitempty,gte=0"`
+	Loop            bool    `json:"loop,omitempty"`
+	FadeInSeconds   float64 `json:"fade_in_seconds,omitempty" validate:"omitempty,gte=0"`
+	FadeOutSeconds  float64 `json:"fade_out_seconds,omitempty" validate:"omitempty,gte=0"`
+	DuckingEnabled  bool    `json:"ducking_enabled,omitempty"`
 }
 
 // SubmitDeliveryPlanEntry is one destination in the delivery plan.

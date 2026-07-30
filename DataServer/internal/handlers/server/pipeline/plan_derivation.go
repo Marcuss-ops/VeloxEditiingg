@@ -129,8 +129,9 @@ func subtitlesToMap(s *SubmitSubtitles) map[string]interface{} {
 // audioTrackToMap converts a SubmitAudioTrack to the canonical
 // worker-payload shape consumed by the hybrid.v1 compiler. The
 // shape matches plan.AudioTrack (source_url, volume, role,
-// start_time_offset, duration_seconds) plus the optional asset_id
-// for Master-side resolution.
+// start_time_offset, duration_seconds, loop, fade_in/out_seconds,
+// ducking_enabled) plus the optional asset_id for Master-side
+// resolution.
 func audioTrackToMap(t SubmitAudioTrack) map[string]interface{} {
 	out := map[string]interface{}{}
 	if trimmed := strings.TrimSpace(t.SourceURL); trimmed != "" {
@@ -150,6 +151,18 @@ func audioTrackToMap(t SubmitAudioTrack) map[string]interface{} {
 	}
 	if t.DurationSeconds > 0 {
 		out["duration_seconds"] = t.DurationSeconds
+	}
+	if t.Loop {
+		out["loop"] = true
+	}
+	if t.FadeInSeconds > 0 {
+		out["fade_in_seconds"] = t.FadeInSeconds
+	}
+	if t.FadeOutSeconds > 0 {
+		out["fade_out_seconds"] = t.FadeOutSeconds
+	}
+	if t.DuckingEnabled {
+		out["ducking_enabled"] = true
 	}
 	return out
 }

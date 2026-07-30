@@ -378,6 +378,10 @@ type SubmitAudioTrack struct {
 	Volume           float64 `json:"volume,omitempty"`
 	StartTimeOffset  float64 `json:"start_time_offset,omitempty"`
 	DurationSeconds  float64 `json:"duration_seconds,omitempty"`
+	Loop             bool    `json:"loop,omitempty"`
+	FadeInSeconds    float64 `json:"fade_in_seconds,omitempty"`
+	FadeOutSeconds   float64 `json:"fade_out_seconds,omitempty"`
+	DuckingEnabled   bool    `json:"ducking_enabled,omitempty"`
 }
 
 // audioRoleValues is the closed set of accepted SubmitAudioTrack.Role values.
