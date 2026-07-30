@@ -56,14 +56,14 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 	}
 
 	voiceovers := extractVoiceoverPaths(flat)
-	if len(voiceovers) == 0 && !hasRenderableMedia(flat) {
+	if len(voiceovers) == 0 && !hasRenderableMedia(flat) && !hasAudioTracks(flat) {
 		// A render job with no voiceover AND no renderable scene media
-		// has nothing the worker can mux. surfaced here so the
-		// resolve path fails fast with an actionable message rather
-		// than letting the worker burn its render budget on a
-		// zero-track timeline. Mirrors the same gate already in
-		// normalizeSceneVideoPayload (the canonical envelope path).
-		return nil, fmt.Errorf("voiceover (and no renderable scene media) missing from pipeline result")
+		// AND no audio_tracks has nothing the worker can mux. surfaced
+		// here so the resolve path fails fast with an actionable
+		// message rather than letting the worker burn its render
+		// budget on a zero-track timeline. Mirrors the same gate
+		// already in normalizeSceneVideoPayload.
+		return nil, fmt.Errorf("voiceover (and no renderable scene media or audio_tracks) missing from pipeline result")
 	}
 	if title == "" {
 		return nil, fmt.Errorf("video title missing from pipeline result")
@@ -97,7 +97,16 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 		payload.FirstString(flat, "correlation_id", "trace_id"),
 	)
 
-	return p.ToMap()
+	out, err := p.ToMap()
+	if err != nil {
+		return nil, err
+	}
+	// Preserve timeline fields that the typed V2 envelope doesn't carry
+	// natively — audio_tracks, subtitle_tracks, layers, and renderable
+	// media keys. copyTimelinePayloadFields mirrors the same preservation
+	// done in normalizeSceneVideoPayload.
+	copyTimelinePayloadFields(out, flat)
+	return out, nil
 }
 
 // FlattenPipelineResult flattens a nested pipeline result by merging top-level
