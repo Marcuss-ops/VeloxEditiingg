@@ -231,6 +231,14 @@ func renderManifestToSubmitRequest(base SubmitJobRequest, manifest map[string]in
 				"expected": len(scenes),
 			})
 		}
+		if got := int64Field(integrity, "audio_track_count"); got != int64(len(audioTracks)) {
+			details = append(details, gin.H{
+				"path":     "integrity.audio_track_count",
+				"issue":    "mismatch",
+				"observed": got,
+				"expected": len(audioTracks),
+			})
+		}
 		var total int64
 		for _, s := range scenes {
 			total += int64(s.DurationSeconds * 1000)

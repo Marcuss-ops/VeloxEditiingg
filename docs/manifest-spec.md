@@ -324,8 +324,9 @@ include its own value — that would be a cycle).
 "integrity": {
   "algorithm":          "sha256",            // required, closed enum ("sha256" today)
   "manifest_sha256":    "<64 lowercase hex>", // required, sha256(body minus this field)
-  "scene_count":        1,                   // required, integer ≥ 1 (matches `len(scenes)`)
-  "total_duration_ms":  7200                // required, integer ≥ 0 (matches `sum(scenes[*].duration_ms)`)
+  "scene_count":        1,                   // required, integer >= 1 (matches `len(scenes)`)
+  "audio_track_count":  0,                   // required, integer >= 0 (matches `len(audio_tracks)`)
+  "total_duration_ms":  7200                // required, integer >= 0 (matches `sum(scenes[*].duration_ms)`)
 }
 ```
 
@@ -334,6 +335,7 @@ include its own value — that would be a cycle).
 | `algorithm`          |   yes   | Closed enum today (`sha256`). Future hash algos (e.g. `sha512`) require an additive `v2` schema bump |
 | `manifest_sha256`     |   yes   | Lowercase hex, exactly 64 chars. Computed as `sha256(canonical_json_serialization(body minus integrity.manifest_sha256))`. The canonical form is: UTF-8, no whitespace, sorted keys, `","` and `":"` separators (matches Python's `json.dumps(body, sort_keys=True, separators=(',',':'))`) |
 | `scene_count`        |   yes   | Integer ≥ 1. MUST equal `len(scenes)`. Mismatch ⇒ 422 invalid_payload |
+| `audio_track_count`  |   yes   | Integer ≥ 0. MUST equal `len(audio_tracks)`. Mismatch ⇒ 422 invalid_payload |
 | `total_duration_ms`   |   yes   | Integer ≥ 0. MUST equal `sum(scenes[*].duration_ms)`. Mismatch ⇒ 422 invalid_payload |
 
 ### Canonical form (the only form the master accepts)
@@ -365,7 +367,7 @@ def manifest_sha256(body: dict) -> str:
 
 When ANY of the above checks fails (missing required field, wrong
 type, sha256 mismatch, schema_version mismatch, scene_count /
-total_duration_ms drift, …) the master returns:
+audio_track_count / total_duration_ms drift, …) the master returns:
 
 ```http
 HTTP/1.1 422 Unprocessable Entity
@@ -402,15 +404,17 @@ The canonical conformance test is
    `scripts/ci/fixtures/manifest.v1.fixture.json` parses as valid JSON.
 3. **Required-field presence** — `schema_version`, `manifest_id`,
    `created_at`, `source.provider`, `video.name`, `script.text`,
-   `scenes`, `delivery_plan`, `integrity.manifest_sha256` all
+   `scenes`, `delivery_plan`, `integrity.manifest_sha256`,
+   `integrity.scene_count`, `integrity.audio_track_count` all
    present on the fixture.
 4. **`schema_version` closed enum** — equals `"velox.render-manifest.v1"`.
 5. **`integrity.manifest_sha256` self-consistency** — the
    sha256 of the canonical JSON serialization of the fixture
    (minus the `integrity.manifest_sha256` self) equals the
    stated value. A drifted spec OR a hand-edited fixture ⇒ exit 1.
-6. **`integrity.scene_count` and `integrity.total_duration_ms`**
-   match the asserted values from `len(scenes)` and
+6. **`integrity.scene_count`, `integrity.audio_track_count`, and
+   `integrity.total_duration_ms`** match the asserted values from
+   `len(scenes)`, `len(audio_tracks)`, and
    `sum(scenes[*].duration_ms)`.
 7. **Negative-path fixture** — a second fixture at
    `scripts/ci/fixtures/manifest.v1.bad-fixture.json` (with
