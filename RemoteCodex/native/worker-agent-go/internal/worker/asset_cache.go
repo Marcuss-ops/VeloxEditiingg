@@ -2,6 +2,7 @@ package worker
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"mime"
@@ -11,21 +12,12 @@ import (
 	"strings"
 )
 
-// assetCacheDir returns the directory where downloaded worker-assets
-// (audio + image) are stored. Same resolver path reused for both media
-// types — cache key prefixes keep them separated when needed.
-//
-// Renamed from voiceoverCacheDir when the asset bridge was split
-// (commit d8b0131): the directory is now consumed by both the audio
-// resolver (resolveAudioPayload → resolveVoiceoverAudioPath) and the
-// scene-image resolver (resolveSceneImagePayload), so the "voiceover"
-// name no longer describes the full scope of consumers. Cache key
-// prefixes (asset_id from each velox-asset:// URI) keep the two media
-// streams separated when needed.
+// assetCacheDir returns the directory where downloaded audio assets are
+// cached. Returns the canonical assets/audio subdirectory.
 func (w *Worker) assetCacheDir() string {
 	if w != nil && w.config != nil {
 		if trimmed := strings.TrimSpace(w.config.AssetCacheDir); trimmed != "" {
-			return filepath.Join(trimmed, "voiceover")
+			return filepath.Join(trimmed, "assets", "audio")
 		}
 		if trimmed := strings.TrimSpace(w.config.WorkDir); trimmed != "" {
 			return filepath.Join(trimmed, "worker_downloads", "assets", "audio")
@@ -34,20 +26,98 @@ func (w *Worker) assetCacheDir() string {
 	return filepath.Join(os.TempDir(), "velox-worker", "assets", "audio")
 }
 
-// cachedVoiceoverPath returns a previously cached asset path when present.
-func cachedVoiceoverPath(cacheDir, assetID string) (string, error) {
-	matches, err := filepath.Glob(filepath.Join(cacheDir, assetID+".*"))
+// assetImageCacheDir returns the directory where downloaded image assets are
+// cached. Returns the canonical assets/image subdirectory.
+func (w *Worker) assetImageCacheDir() string {
+	if w != nil && w.config != nil {
+		if trimmed := strings.TrimSpace(w.config.AssetCacheDir); trimmed != "" {
+			return filepath.Join(trimmed, "assets", "image")
+		}
+		if trimmed := strings.TrimSpace(w.config.WorkDir); trimmed != "" {
+			return filepath.Join(trimmed, "worker_downloads", "assets", "image")
+		}
+	}
+	return filepath.Join(os.TempDir(), "velox-worker", "assets", "image")
+}
+
+// cacheKeyPrefix builds the filesystem-safe cache key from assetID and an
+// optional SHA-256 prefix. When sha256Prefix is non-empty, the first 12
+// characters are embedded in the filename so different versions of the same
+// asset do not collide. Format: <assetID>_<sha12> (when sha256 is set) or
+// just <assetID> (legacy, no integrity check possible).
+func cacheKeyPrefix(assetID string, sha256Prefix string) string {
+	safe := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			return r
+		}
+		return '_'
+	}, assetID)
+	if sha256Prefix != "" {
+		short := sha256Prefix
+		if len(short) > 12 {
+			short = short[:12]
+		}
+		return safe + "_" + short
+	}
+	return safe
+}
+
+// cachedAssetPath returns a previously cached asset path when present.
+// When expectedSHA256 is non-empty, the file's SHA-256 is verified on cache
+// hit; a mismatch returns ("", nil) so the caller re-downloads.
+func cachedAssetPath(cacheDir, assetID string, expectedSHA256 string) (string, error) {
+	prefix := cacheKeyPrefix(assetID, expectedSHA256)
+	matches, err := filepath.Glob(filepath.Join(cacheDir, prefix+".*"))
 	if err != nil || len(matches) == 0 {
+		// Fall back to legacy cache key (assetID without SHA-256 suffix)
+		// when the new key yields no results.
+		if expectedSHA256 != "" {
+			legacyPrefix := cacheKeyPrefix(assetID, "")
+			legacyMatches, legacyErr := filepath.Glob(filepath.Join(cacheDir, legacyPrefix+".*"))
+			if legacyErr == nil && len(legacyMatches) > 0 {
+				// Legacy cache entry exists but has no SHA-256 guarantee.
+				// Treat as cache miss so we re-download with integrity.
+				return "", nil
+			}
+		}
 		return "", err
 	}
-	return matches[0], nil
+	cachedPath := matches[0]
+
+	// Verify SHA-256 when expected.
+	if expectedSHA256 != "" {
+		actual, err := sha256File(cachedPath)
+		if err != nil {
+			return "", nil // corrupted file → re-download
+		}
+		if actual != expectedSHA256 {
+			return "", nil // hash mismatch → re-download
+		}
+	}
+	return cachedPath, nil
+}
+
+// sha256File computes the lowercase hex SHA-256 of a file.
+func sha256File(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
 // writeVeloxAssetToCache streams a successful response body to a temp file
 // inside the cache directory, then atomically renames to the final path.
 // Sniffs for HTML on both the Content-Type header and the first 512 bytes
 // of the payload to refuse HTML responses from misconfigured upstreams.
-func writeVeloxAssetToCache(cacheDir, assetID string, resp *http.Response) (string, error) {
+// When expectedSHA256 is non-empty, the cached filename embeds the SHA-256
+// prefix so different asset versions don't collide.
+func writeVeloxAssetToCache(cacheDir, assetID string, expectedSHA256 string, resp *http.Response) (string, error) {
 	mediaType := strings.TrimSpace(resp.Header.Get("Content-Type"))
 	if idx := strings.Index(mediaType, ";"); idx >= 0 {
 		mediaType = strings.TrimSpace(mediaType[:idx])
@@ -70,21 +140,27 @@ func writeVeloxAssetToCache(cacheDir, assetID string, resp *http.Response) (stri
 		ext = ".audio"
 	}
 
-	tmp, err := os.CreateTemp(cacheDir, assetID+"-*")
+	prefix := cacheKeyPrefix(assetID, expectedSHA256)
+	tmp, err := os.CreateTemp(cacheDir, prefix+"-*")
 	if err != nil {
 		return "", err
 	}
 	tmpPath := tmp.Name()
 	defer tmp.Close()
 
-	written, err := io.Copy(tmp, reader)
+	// Tee the download into a SHA-256 hasher so we can verify integrity
+	// before promoting to cache. Even when no expectedSHA256 is supplied,
+	// we compute the hash for future caller-side verification.
+	hasher := sha256.New()
+	teeReader := io.TeeReader(reader, hasher)
+	written, err := io.Copy(tmp, teeReader)
 	if err != nil {
 		_ = os.Remove(tmpPath)
 		return "", err
 	}
 	if written <= 0 {
 		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("downloaded voiceover is empty")
+		return "", fmt.Errorf("downloaded asset is empty")
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = os.Remove(tmpPath)
@@ -95,7 +171,14 @@ func writeVeloxAssetToCache(cacheDir, assetID string, resp *http.Response) (stri
 		return "", err
 	}
 
-	finalPath := filepath.Join(cacheDir, assetID+ext)
+	// Verify against expected SHA-256 when supplied.
+	actualSHA256 := fmt.Sprintf("%x", hasher.Sum(nil))
+	if expectedSHA256 != "" && actualSHA256 != expectedSHA256 {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("downloaded asset SHA-256 mismatch (got %s, want %s)", actualSHA256[:16], expectedSHA256[:16])
+	}
+
+	finalPath := filepath.Join(cacheDir, prefix+ext)
 	if info, err := os.Stat(finalPath); err == nil && !info.IsDir() {
 		_ = os.Remove(tmpPath)
 		return finalPath, nil

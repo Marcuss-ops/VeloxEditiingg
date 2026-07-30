@@ -25,10 +25,17 @@
 #
 # Cleanup
 # ───────
-# Trap EXIT / INT / TERM walks $CHILD_PIDS, sends SIGTERM, escalates to SIGKILL
-# after 1s. After kill, run.sh intentionally does NOT remove $WORKDIR — the logs
-# and per-case db paths are the operator's post-mortem evidence. Set
+# Trap EXIT / INT / TERM calls lib_kill_all (TERM with 1s KILL escalation) on
+# $LIB_CHILD_PIDS. After kill, run.sh intentionally does NOT remove $WORKDIR —
+# the logs and per-case db paths are the operator's post-mortem evidence. Set
 # E2E_CLEAN=1 to wipe on EXIT.
+#
+# Helpers
+# ───────
+# Cross-test helpers live in tests/_lib/sh/ (logging, pid-trap, ensure, check,
+# asset-bootstrap, exitcode-aggregation). The 6 case_N_*() functions below own
+# the per-case scenario flow; they reference helpers by the same names they
+# had pre-Refactor 6/N, just sourced from _lib.sh.
 #
 # Environment
 # ───────────
@@ -38,6 +45,7 @@
 #   DATASERVER_ROOT      path to DataServer/ source           (default $ROOT/../../DataServer)
 #   WORKERAGENT_ROOT     path to RemoteCodex/.../ source      (default $ROOT/../../RemoteCodex/native/worker-agent-go)
 #   E2E_CLEAN=1          wipe $WORKDIR on exit (default keep)
+#   BUNDLE_HASH          bundle hash written to $WORKDIR/work/BUNDLE_HASH.txt
 # =============================================================================
 
 set -uo pipefail  # NOT -e: continue across case failures so the matrix reports all verdicts
@@ -48,63 +56,75 @@ WORKDIR="${E2E_WORKDIR:-/tmp/velox-e2e-grpc}"
 DATASERVER_ROOT="${DATASERVER_ROOT:-$ROOT/../../../DataServer}"
 WORKERAGENT_ROOT="${WORKERAGENT_ROOT:-$ROOT/../../../RemoteCodex/native/worker-agent-go}"
 BIN_DIR="$WORKDIR/bin"
-
-# go binaries
 GO_BIN="${GO_BIN:-$(command -v go || true)}"
 
-# ─── Source assertion helpers ───────────────────────────────────────────────
-# shellcheck disable=SC1091
+# ─── Source helpers ─────────────────────────────────────────────────────────
+# shellcheck source=tests/_lib/sh/_lib.sh
+source "$(cd "$(dirname "$0")" && cd ../_lib/sh && pwd)/_lib.sh"
+
+# assert.sh lives next to run.sh (test-script-local) and is NOT a cross-test
+# helper — it only asserts in the gRPC matrix context. Keep local.
+# shellcheck source=assert.sh
 source "$ROOT/assert.sh"
 
-# ─── Child PID tracking + trap cleanup ──────────────────────────────────────
-declare -a CHILD_PIDS=()
-declare -a CHILD_LABELS=()   # parallel array: CHILD_LABELS[i] = label for CHILD_PIDS[i]
-
-push_pid() {
-  CHILD_PIDS+=("$1")
-  CHILD_LABELS+=("$2")
-}
-
-kill_all() {
-  local sig="${1:-TERM}"
-  local n=${#CHILD_PIDS[@]}
-  if (( n == 0 )); then return 0; fi
-  printf "[run.sh] sending %s to %d child(ren): %s\n" "$sig" "$n" "${CHILD_LABELS[*]}"
-  for i in "${!CHILD_PIDS[@]}"; do
-    local pid="${CHILD_PIDS[$i]}"
-    if kill -0 "$pid" 2>/dev/null; then
-      kill -"$sig" "$pid" 2>/dev/null || true
-    fi
-  done
-  if [[ "$sig" == "TERM" ]]; then
-    sleep 1
-    # Escalate to KILL any survivors.
-    for i in "${!CHILD_PIDS[@]}"; do
-      local pid="${CHILD_PIDS[$i]}"
-      if kill -0 "$pid" 2>/dev/null; then
-        printf "[run.sh] escalating to KILL: pid=%s label=%s\n" "$pid" "${CHILD_LABELS[$i]}"
-        kill -KILL "$pid" 2>/dev/null || true
-      fi
-    done
-    # wait briefly so the kernel actually reaps
-    for pid in "${CHILD_PIDS[@]}"; do
-      wait "$pid" 2>/dev/null || true
-    done
-  fi
-}
-
-on_int()  { kill_all TERM; exit 130; }
-on_term() { kill_all TERM; exit 143; }
+# ─── Per-scenario cleanup trap (calls lib_kill_all on exit) ─────────────────
+on_int()  { lib_kill_all TERM; exit 130; }
+on_term() { lib_kill_all TERM; exit 143; }
 on_exit() {
-  kill_all TERM
+  lib_kill_all TERM
   [[ "${E2E_CLEAN:-0}" == "1" ]] && rm -rf "$WORKDIR"
 }
 trap on_exit EXIT
 trap 'on_int'  INT
 trap 'on_term' TERM
 
-# ─── Helpers ────────────────────────────────────────────────────────────────
-mkdir_p() { mkdir -p "$1" ; }
+# ─── Verdict counter init (sourced from _lib.sh) ────────────────────────────
+aggregate_init
+
+# ─── Pre-flight: build binaries ──────────────────────────────────────────────
+assert_info "workdir = $WORKDIR"
+mkdir_p "$WORKDIR" "$BIN_DIR" "$WORKDIR/pki" "$WORKDIR/cases"
+
+if [[ -z "${VELOX_SERVER_BIN:-}" ]]; then
+  VELOX_SERVER_BIN="$(resolve_bin velox-server "$DATASERVER_ROOT" cmd/server)" || exit 1
+fi
+if [[ -z "${VELOX_WORKER_BIN:-}" ]]; then
+  VELOX_WORKER_BIN="$(resolve_bin velox-worker-agent "$WORKERAGENT_ROOT" cmd/velox-worker-agent)" || exit 1
+fi
+
+# ─── Shared E2E runtime setup (helpers from _lib.sh) ───────────────────────
+setup_shared() {
+  : "${BUNDLE_HASH:=e2e-bundle-hash}"
+  bootstrap_workdir "$WORKDIR/work" "${BUNDLE_HASH}"
+
+  # Stub the velox_video_engine binary — minimal Python|JSON→output_path
+  # echo satisfying the runtime contract without a real engine build.
+  local stub_body
+  stub_body="$(cat <<'STUB_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+PLAN=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --plan) PLAN="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [[ -z "$PLAN" ]]; then
+  echo "velox_video_engine stub: --plan required" >&2
+  exit 1
+fi
+OUT="$(python3 -c "import json,sys; print(json.load(open('$PLAN'))['output_path'])" 2>/dev/null || jq -r '.output_path' "$PLAN")"
+mkdir -p "$(dirname "$OUT")"
+printf 'velox-e2e-stub-output' > "$OUT"
+STUB_EOF
+)"
+  write_stub_binary "$BIN_DIR/velox_video_engine" "$stub_body"
+}
+setup_shared
+export VELOX_VIDEO_ENGINE_CPP_BIN="$BIN_DIR/velox_video_engine"
+
+# ─── Scenario-specific helpers (only used by case_N_* below) ────────────────
 
 # resolve_bin <basename> <module-root> <cmd-path-rel>
 # Returns the absolute path to a built binary; builds it if missing.
@@ -117,7 +137,7 @@ resolve_bin() {
     return 0
   fi
   if [[ -z "$GO_BIN" ]]; then
-    printf "%s\n" "[run.sh] FATAL: go not on PATH and $bin not built" >&2
+    printf "[run.sh] FATAL: go not on PATH and $bin not built\n" >&2
     return 1
   fi
   assert_info "building $1 (one-time) into $bin"
@@ -125,37 +145,32 @@ resolve_bin() {
   printf "%s\n" "$bin"
 }
 
+# patch_env <template> <output> <sed-program-argv...>
 patch_env() {
-  # patch_env <template> <output> <sed-program-argv...>
   local tmpl="$1" out="$2"; shift 2
   sed "$@" "$tmpl" > "$out"
 }
 
 spawn_master() {
-  # spawn_master <case-id> <patched-master-env-file>
   local case_id="$1" envfile="$2"
   local log="$WORKDIR/$case_id/master.log"
   mkdir_p "$(dirname "$log")"
   assert_info "starting master for $case_id (env=$envfile, log=$log)"
-  # Disable bash interactive job-control messages; we want clean stderr in log.
   set +m
   set -a
   # shellcheck disable=SC1090
   source "$envfile"
   set +a
-  set -m  # re-enable job control briefly for the launch only
+  set -m
   set +m
   "$VELOX_SERVER_BIN" >"$log" 2>&1 &
   local pid=$!
-  push_pid "$pid" "master-$case_id"
+  lib_push_pid "$pid" "master-$case_id"
   set -m
-  # Give the master a moment to bind ports before the worker tries to dial.
   sleep 1
 }
 
 spawn_worker_sync() {
-  # spawn_worker_sync <case-id> <worker-id> <config-json>
-  # Waits up to 12s for handshake to succeed; returns 0 if worker is accepted.
   local case_id="$1" worker_id="$2" config="$3"
   local log="$WORKDIR/$case_id/worker-${worker_id}.log"
   mkdir_p "$(dirname "$log")"
@@ -163,13 +178,8 @@ spawn_worker_sync() {
   set +m
   "$VELOX_WORKER_BIN" --config "$config" >"$log" 2>&1 &
   local pid=$!
-  push_pid "$pid" "worker-$worker_id"
+  lib_push_pid "$pid" "worker-$worker_id"
   set -m
-  # Worker is short-lived on accept (PR 2: drainStream emits exit 0 quickly
-  # after HelloAck for case 1's plaintext path; OR after GoodbyeTimeout for
-  # case 2's TLS path with --heartbeat-window).
-  # We poll for the log marker instead of trusting shell & exit code, so the
-  # test is stable regardless of how fast the worker tears down.
   local master_log="$WORKDIR/$case_id/master.log"
   if wait_for_worker_connection "$master_log" "$worker_id" 12; then
     return 0
@@ -182,8 +192,6 @@ wait_for_master_ready() {
   if [[ -z "$VELOX_SERVER_BIN" ]]; then
     return 1
   fi
-  # We don't have a /healthz endpoint guaranteed pre-PR 4; fall back to
-  # waiting for the master's "listening" log marker.
   local case_id="$4"
   local log="$WORKDIR/$case_id/master.log"
   local deadline=$(( $(date +%s) + budget ))
@@ -200,10 +208,25 @@ wait_for_master_ready() {
   return 1
 }
 
-# ─── wait-for-ports-free ─────────────────────────────────────────────────────
+# Wait for master log to see an Accept (HelloAck) marker for $worker_id,
+# up to $budget seconds. Returns 0 if marker seen, 1 on timeout.
+wait_for_worker_connection() {
+  local master_log="$1" worker_id="$2" budget="${3:-12}"
+  local deadline=$(( $(date +%s) + budget ))
+  while (( $(date +%s) < deadline )); do
+    if grep -qE "(${worker_id}.*HelloAck|${worker_id}.*accepted|${worker_id}.*registered)" \
+          "$master_log" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
 # Ensure the previous case's listeners are fully released before the next
-# master starts. Even after kill_all, a socket may briefly linger; poll for
-# up to 20s before giving up and letting the next case surface its own error.
+# master starts. Even after lib_kill_all, a socket may briefly linger; poll
+# for up to 20s before giving up and letting the next case surface its own
+# error.
 wait_for_ports_free() {
   local deadline=$(( $(date +%s) + 20 ))
   while (( $(date +%s) < deadline )); do
@@ -222,64 +245,7 @@ wait_for_ports_free() {
     fi
     sleep 0.5
   done
-  # Don't fail the matrix here; a lingering port will be reported by the next case.
   return 0
-}
-
-# ─── Pre-flight: build binaries ──────────────────────────────────────────────
-assert_info "workdir = $WORKDIR"
-mkdir_p "$WORKDIR" "$BIN_DIR" "$WORKDIR/pki" "$WORKDIR/cases"
-
-if [[ -z "${VELOX_SERVER_BIN:-}" ]]; then
-  VELOX_SERVER_BIN="$(resolve_bin velox-server "$DATASERVER_ROOT" cmd/server)" || exit 1
-fi
-if [[ -z "${VELOX_WORKER_BIN:-}" ]]; then
-  VELOX_WORKER_BIN="$(resolve_bin velox-worker-agent "$WORKERAGENT_ROOT" cmd/velox-worker-agent)" || exit 1
-fi
-
-# ─── Shared E2E runtime setup ────────────────────────────────────────────────
-setup_shared() {
-  mkdir -p "$WORKDIR/work/state" "$WORKDIR/work/temp" "$WORKDIR/work/tests/fixtures"
-  printf '%s' "e2e-bundle-hash" > "$WORKDIR/work/BUNDLE_HASH.txt"
-  printf 'velox-e2e-stub-output' | sha256sum | awk '{print $1}' > "$WORKDIR/work/tests/fixtures/engine_selftest_baseline.sha256"
-
-  cat > "$BIN_DIR/velox_video_engine" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-PLAN=""
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --plan) PLAN="$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-if [[ -z "$PLAN" ]]; then
-  echo "velox_video_engine stub: --plan required" >&2
-  exit 1
-fi
-OUT="$(python3 -c "import json,sys; print(json.load(open('$PLAN'))['output_path'])" 2>/dev/null || jq -r '.output_path' "$PLAN")"
-mkdir -p "$(dirname "$OUT")"
-printf 'velox-e2e-stub-output' > "$OUT"
-EOF
-  chmod +x "$BIN_DIR/velox_video_engine"
-}
-
-setup_shared
-export VELOX_VIDEO_ENGINE_CPP_BIN="$BIN_DIR/velox_video_engine"
-
-# ─── Counters ────────────────────────────────────────────────────────────────
-PASS=0
-FAIL_COUNT=0
-declare -a CASE_VERDICTS=()
-
-record() {
-  local case_name="$1" verdict="$2"
-  CASE_VERDICTS+=("$case_name: $verdict")
-  if [[ "$verdict" == "PASS" ]]; then
-    (( PASS++ ))
-  else
-    (( FAIL_COUNT++ ))
-  fi
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -296,7 +262,6 @@ case_1_plaintext_accept() {
   mkdir -p "$case_dir/data" "$case_dir/run" "$case_dir/videos"
   touch "$case_dir/data/velox.db"
 
-  # Patch env: TLS commented (already commented in template). Enable insecure-dev.
   patch_env "$ROOT/configs/master.env.example" "$master_env" \
     -e "s|^VELOX_RUNTIME_DIR=.*|VELOX_RUNTIME_DIR=$case_dir/run|" \
     -e "s|^VELOX_DATA_DIR=.*|VELOX_DATA_DIR=$case_dir/data|" \
@@ -314,25 +279,24 @@ case_1_plaintext_accept() {
     -e "s|BUNDLE_HASH_PLACEHOLDER|e2e-bundle-hash|" \
     "$worker_cfg"
 
-  # ── No PKI ──
   rm -rf "$pki_dir"
 
-  CHILD_PIDS=(); CHILD_LABELS=()
+  lib_reset_children
   spawn_master "$id" "$master_env"
   if ! wait_for_master_ready "http://localhost:8000" "e2e-admin-token" 15 "$id"; then
-    kill_all TERM
+    lib_kill_all TERM
     assert_fail "case-1: master never became ready"
-    record "$id" "FAIL"
+    aggregate_record "$id" "FAIL"
     return
   fi
   spawn_worker_sync "$id" "$worker_id" "$worker_cfg"
   local rv=$?
   sleep 1
-  kill_all TERM
+  lib_kill_all TERM
   if (( rv == 0 )); then
-    record "$id" "PASS"
+    aggregate_record "$id" "PASS"
   else
-    record "$id" "FAIL"
+    aggregate_record "$id" "FAIL"
   fi
 }
 
@@ -373,22 +337,22 @@ case_2_tls_accept() {
     -e "s|CERT_DIR_PLACEHOLDER|$pki_dir|g" \
     "$worker_cfg"
 
-  CHILD_PIDS=(); CHILD_LABELS=()
+  lib_reset_children
   spawn_master "$id" "$master_env"
   if ! wait_for_master_ready "http://localhost:8000" "e2e-admin-token" 15 "$id"; then
-    kill_all TERM
+    lib_kill_all TERM
     assert_fail "case-2: master never became ready"
-    record "$id" "FAIL"
+    aggregate_record "$id" "FAIL"
     return
   fi
   spawn_worker_sync "$id" "$worker_id" "$worker_cfg"
   local rv=$?
   sleep 1
-  kill_all TERM
+  lib_kill_all TERM
   if (( rv == 0 )); then
-    record "$id" "PASS"
+    aggregate_record "$id" "PASS"
   else
-    record "$id" "FAIL"
+    aggregate_record "$id" "FAIL"
   fi
 }
 
@@ -407,9 +371,7 @@ case_3_bad_cert_reject() {
   mkdir -p "$case_dir/data" "$case_dir/run" "$case_dir/videos"
   touch "$case_dir/data/velox.db"
 
-  # Master triple: legitimate (CA-valid) — case-2-style.
   "$ROOT/certs/generate-dev-pki.sh" "$pki_dir" "phantom-ca-3" 7 365 >/dev/null
-  # Worker triple: standalone CA + leaf signed by it (won't chain to master CA).
   "$ROOT/certs/generate-dev-pki.sh" "$pki_bad_dir" "$worker_id" 7 365 >/dev/null
 
   patch_env "$ROOT/configs/master.env.example" "$master_env" \
@@ -432,33 +394,31 @@ case_3_bad_cert_reject() {
     -e "s|CERT_DIR_PLACEHOLDER|$pki_bad_dir|g" \
     "$worker_cfg"
 
-  CHILD_PIDS=(); CHILD_LABELS=()
+  lib_reset_children
   spawn_master "$id" "$master_env"
   if ! wait_for_master_ready "http://localhost:8000" "e2e-admin-token" 15 "$id"; then
-    kill_all TERM
+    lib_kill_all TERM
     assert_fail "case-3: master never became ready"
-    record "$id" "FAIL"
+    aggregate_record "$id" "FAIL"
     return
   fi
 
-  # Spawn worker; expect rejection (worker exits 1).
   local worker_log="$WORKDIR/$id/worker-${worker_id}.log"
   set +m
   "$VELOX_WORKER_BIN" --config "$worker_cfg" >"$worker_log" 2>&1 &
-  push_pid $! "worker-$worker_id"
+  lib_push_pid $! "worker-$worker_id"
   set -m
   sleep 6
-  local exit_code=0
-  for pid in "${CHILD_PIDS[@]}"; do
-    wait "$pid" 2>/dev/null || exit_code=$?
+  for pid in "${_LIB_CHILD_PIDS[@]}"; do
+    wait "$pid" 2>/dev/null || true
   done
-  kill_all TERM
+  lib_kill_all TERM
 
   if grep -qiE "(handshake|verify|certificate|unknown authority|invalid|TLS.*fail|PermissionDenied|Unauthenticated)" "$worker_log"; then
-    record "$id" "PASS"
+    aggregate_record "$id" "PASS"
   else
     assert_fail "case-3: worker log lacks handover-failure marker (see $worker_log)"
-    record "$id" "FAIL"
+    aggregate_record "$id" "FAIL"
   fi
 }
 
@@ -469,8 +429,8 @@ case_4_wrong_ca_reject() {
   local id="case-4-wrong-ca-reject"
   local worker_id="e2e-worker-wrong-ca-4"
   local case_dir="$WORKDIR/cases/$id"
-  local pki_a_dir="$WORKDIR/pki/${id}-ca-a"   # master's PKI
-  local pki_b_dir="$WORKDIR/pki/${id}-ca-b"   # worker's PKI (different CA)
+  local pki_a_dir="$WORKDIR/pki/${id}-ca-a"
+  local pki_b_dir="$WORKDIR/pki/${id}-ca-b"
   local master_env="$case_dir/master.env"
   local worker_cfg="$case_dir/worker-config.json"
   mkdir_p "$case_dir" "$pki_a_dir" "$pki_b_dir"
@@ -500,31 +460,31 @@ case_4_wrong_ca_reject() {
     -e "s|CERT_DIR_PLACEHOLDER|$pki_b_dir|g" \
     "$worker_cfg"
 
-  CHILD_PIDS=(); CHILD_LABELS=()
+  lib_reset_children
   spawn_master "$id" "$master_env"
   if ! wait_for_master_ready "http://localhost:8000" "e2e-admin-token" 15 "$id"; then
-    kill_all TERM
+    lib_kill_all TERM
     assert_fail "case-4: master never became ready"
-    record "$id" "FAIL"
+    aggregate_record "$id" "FAIL"
     return
   fi
 
   local worker_log="$WORKDIR/$id/worker-${worker_id}.log"
   set +m
   "$VELOX_WORKER_BIN" --config "$worker_cfg" >"$worker_log" 2>&1 &
-  push_pid $! "worker-$worker_id"
+  lib_push_pid $! "worker-$worker_id"
   set -m
   sleep 6
-  for pid in "${CHILD_PIDS[@]}"; do
+  for pid in "${_LIB_CHILD_PIDS[@]}"; do
     wait "$pid" 2>/dev/null || true
   done
-  kill_all TERM
+  lib_kill_all TERM
 
   if grep -qiE "(handshake|verify|certificate|unknown authority|invalid|PermissionDenied|Unauthenticated)" "$worker_log"; then
-    record "$id" "PASS"
+    aggregate_record "$id" "PASS"
   else
     assert_fail "case-4: worker log lacks handover-failure marker (see $worker_log)"
-    record "$id" "FAIL"
+    aggregate_record "$id" "FAIL"
   fi
 }
 
@@ -554,7 +514,6 @@ case_5_plaintext_vs_tls_reject() {
     -e "s|^# VELOX_GRPC_TLS_KEY_FILE=.*|VELOX_GRPC_TLS_KEY_FILE=$pki_dir/server.key|" \
     -e "s|^# VELOX_GRPC_TLS_CA_FILE=.*|VELOX_GRPC_TLS_CA_FILE=$pki_dir/ca.crt|" \
     -e 's|^VELOX_GRPC_ALLOW_INSECURE_DEV=.*|VELOX_GRPC_ALLOW_INSECURE_DEV=false|'
-  # NB: master TLS ENABLED + insecure-dev disabled — pure TLS-required path.
 
   cp "$ROOT/configs/worker-plaintext.json" "$worker_cfg"
   sed -i \
@@ -565,31 +524,31 @@ case_5_plaintext_vs_tls_reject() {
     -e "s|BUNDLE_HASH_PLACEHOLDER|e2e-bundle-hash|" \
     "$worker_cfg"
 
-  CHILD_PIDS=(); CHILD_LABELS=()
+  lib_reset_children
   spawn_master "$id" "$master_env"
   if ! wait_for_master_ready "http://localhost:8000" "e2e-admin-token" 15 "$id"; then
-    kill_all TERM
+    lib_kill_all TERM
     assert_fail "case-5: master never became ready"
-    record "$id" "FAIL"
+    aggregate_record "$id" "FAIL"
     return
   fi
 
   local worker_log="$WORKDIR/$id/worker-${worker_id}.log"
   set +m
   "$VELOX_WORKER_BIN" --config "$worker_cfg" >"$worker_log" 2>&1 &
-  push_pid $! "worker-$worker_id"
+  lib_push_pid $! "worker-$worker_id"
   set -m
   sleep 6
-  for pid in "${CHILD_PIDS[@]}"; do
+  for pid in "${_LIB_CHILD_PIDS[@]}"; do
     wait "$pid" 2>/dev/null || true
   done
-  kill_all TERM
+  lib_kill_all TERM
 
   if grep -qiE "(handshake|verify|TLS|no certificate|connection refused|PermissionDenied|Unauthenticated|unknown)" "$worker_log"; then
-    record "$id" "PASS"
+    aggregate_record "$id" "PASS"
   else
     assert_fail "case-5: worker log lacks handover-failure marker (see $worker_log)"
-    record "$id" "FAIL"
+    aggregate_record "$id" "FAIL"
   fi
 }
 
@@ -611,7 +570,6 @@ case_6_parallel_one_accept_one_reject() {
   touch "$case_dir/data/velox.db"
 
   "$ROOT/certs/generate-dev-pki.sh" "$pki_good_dir" "$good_id" 7 365 >/dev/null
-  # The "bad" PKI is a separate CA — worker's leaf won't chain to master's pool.
   "$ROOT/certs/generate-dev-pki.sh" "$pki_bad_dir"  "$bad_id"  7 365 >/dev/null
 
   patch_env "$ROOT/configs/master.env.example" "$master_env" \
@@ -643,63 +601,59 @@ case_6_parallel_one_accept_one_reject() {
     -e "s|CERT_DIR_PLACEHOLDER|$pki_bad_dir|g" \
     "$worker_bad_cfg"
 
-  CHILD_PIDS=(); CHILD_LABELS=()
+  lib_reset_children
   spawn_master "$id" "$master_env"
   if ! wait_for_master_ready "http://localhost:8000" "e2e-admin-token" 15 "$id"; then
-    kill_all TERM
+    lib_kill_all TERM
     assert_fail "case-6: master never became ready"
-    record "$id" "FAIL"
+    aggregate_record "$id" "FAIL"
     return
   fi
 
-  # Sequential fleet: one worker finishing before the next starts.
-  # Both share port 50051 on the master; the master's TLS handshake is
-  # one-shot per connection. The good worker registers, the bad worker's
-  # handshake fails.
   local good_log="$WORKDIR/$id/worker-${good_id}.log"
   local bad_log="$WORKDIR/$id/worker-${bad_id}.log"
 
   set +m
   "$VELOX_WORKER_BIN" --config "$worker_good_cfg" >"$good_log" 2>&1 &
-  push_pid $! "worker-$good_id"
+  lib_push_pid $! "worker-$good_id"
   set -m
   if wait_for_worker_connection "$WORKDIR/$id/master.log" "$good_id" 12; then
-    sleep 1   # let handshake complete cleanly
+    sleep 1
   fi
-  for pid in "${CHILD_PIDS[@]}"; do
+  for pid in "${_LIB_CHILD_PIDS[@]}"; do
     wait "$pid" 2>/dev/null || true
   done
-  # Remove only the worker PID — master MUST stay in CHILD_PIDS so
-  # the trap handler (on_exit → kill_all TERM) can reap it.
+  # Remove only the worker PID — master MUST stay in _LIB_CHILD_PIDS so
+  # the trap handler (on_exit → lib_kill_all TERM) can reap it.
   local new_pids=() new_labels=()
-  for i in "${!CHILD_PIDS[@]}"; do
-    if [[ "${CHILD_LABELS[$i]}" != "worker-$good_id" ]]; then
-      new_pids+=("${CHILD_PIDS[$i]}")
-      new_labels+=("${CHILD_LABELS[$i]}")
+  for i in "${!_LIB_CHILD_PIDS[@]}"; do
+    if [[ "${_LIB_CHILD_LABELS[$i]}" != "worker-$good_id" ]]; then
+      new_pids+=("${_LIB_CHILD_PIDS[$i]}")
+      new_labels+=("${_LIB_CHILD_LABELS[$i]}")
     fi
   done
-  CHILD_PIDS=("${new_pids[@]}")
-  CHILD_LABELS=("${new_labels[@]}")
+  _LIB_CHILD_PIDS=("${new_pids[@]}")
+  _LIB_CHILD_LABELS=("${new_labels[@]}")
 
   set +m
   "$VELOX_WORKER_BIN" --config "$worker_bad_cfg" >"$bad_log" 2>&1 &
-  push_pid $! "worker-$bad_id"
+  lib_push_pid $! "worker-$bad_id"
   set -m
   sleep 6
-  for pid in "${CHILD_PIDS[@]}"; do
+  for pid in "${_LIB_CHILD_PIDS[@]}"; do
     wait "$pid" 2>/dev/null || true
   done
-  kill_all TERM
+  lib_kill_all TERM
 
   local good_ok=0 bad_ok=0
   grep -qE "(HelloAck|✓ HelloAck)" "$good_log" && good_ok=1
   grep -qiE "(handshake|verify|certificate|unknown authority|PermissionDenied|Unauthenticated)" "$bad_log" && bad_ok=1
 
   if (( good_ok == 1 && bad_ok == 1 )); then
-    record "$id" "PASS"
+    aggregate_record "$id" "PASS"
   else
     assert_fail "case-6: good_ok=$good_ok bad_ok=$bad_ok (good_log=$good_log, bad_log=$bad_log)"
-    record "$id" "FAIL"
+    aggregate_record "$id" "FAIL"
   fi
 }
 
@@ -723,15 +677,7 @@ main() {
   wait_for_ports_free
   case_6_parallel_one_accept_one_reject
 
-  printf "\n==== PR 3 E2E: matrix summary ====\n"
-  for v in "${CASE_VERDICTS[@]:-}"; do
-    printf "  %s\n" "$v"
-  done
-  printf "\nResult: %d PASS, %d FAIL\n" "$PASS" "$FAIL_COUNT"
-  if (( FAIL_COUNT > 0 )); then
-    return 1
-  fi
-  return 0
+  aggregate_summary_and_exit
 }
 
 main "$@"

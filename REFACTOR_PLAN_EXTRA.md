@@ -123,12 +123,13 @@ Split in `internal/workercache/{cache,store,eviction}.go` (~150 LOC ciascuno).
 
 ---
 
-## RemoteCodex appendix (file > 400 LOC non in top-20 broad scan)
+## Additional RemoteCodex files (>600 LOC, beyond top-30)
 
 | LOC | Path | Note |
 |---:|---|---|
-| 483 | `RemoteCodex/native/video-engine-cpp/src/services/ffmpeg_progress_parser.cpp` | C++ |
-| 479 | `RemoteCodex/native/video-engine-cpp/src/core/render_engine.cpp` | C++ |
+| 660 | `RemoteCodex/native/worker-agent-go/cmd/velox-worker-agent/main.go` | Go-prod |
+| 618 | `RemoteCodex/native/worker-agent-go/pkg/config/config.go` | Go-prod |
+| 497 | `RemoteCodex/native/worker-agent-go/internal/workercache/cache.go` | Go-prod |
 | 469 | `RemoteCodex/native/worker-agent-go/pkg/video/pipelines/hybrid/compiler.go` | Go-prod |
 | 462 | `RemoteCodex/native/worker-agent-go/internal/transport/grpc_stream.go` | Go-prod |
 | 460 | `RemoteCodex/native/worker-agent-go/internal/publisher/manifest.go` | Go-prod |
@@ -136,9 +137,6 @@ Split in `internal/workercache/{cache,store,eviction}.go` (~150 LOC ciascuno).
 | 433 | `RemoteCodex/native/worker-agent-go/internal/worker/worker_init.go` | Go-prod |
 | 429 | `RemoteCodex/native/worker-agent-go/internal/worker/worker_claimloop.go` | Go-prod |
 | 429 | `RemoteCodex/native/worker-agent-go/internal/taskrunner/runner.go` | Go-prod |
-| 414 | `RemoteCodex/native/video-engine-cpp/src/cmd_full_video.cpp` | C++ |
-
-> Test file RemoteCodex (`transport_registry_test.go` 661, `job_executor_dispatch_test.go` 627, ecc.) — tollerati a > 600 LOC in Go convention.
 
 ---
 
