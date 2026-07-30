@@ -11,6 +11,7 @@ import (
 
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/api"
 )
 
@@ -36,6 +37,12 @@ func (w *Worker) processCommand(ctx context.Context, cmd api.WorkerCommand) {
 	case "restart_worker":
 		w.logger.Info("[COMMANDS] Restart requested — enabling drain mode, will restart after current jobs complete")
 		w.drainMode.Store(true)
+		// Auto-drain-timeout: if the process doesn't actually exit within
+		// restartDrainTimeout (e.g. Docker container restart fails), clear
+		// drain mode so the worker can resume accepting tasks. Without this
+		// guard a failed restart leaves the worker stuck in drain=true forever
+		// because no gRPC message can undo it (see MsgDrain in worker_claimloop.go).
+		go w.autoUndrainAfter(restartDrainTimeout)
 
 	case "update_code":
 		version := ""
@@ -46,9 +53,15 @@ func (w *Worker) processCommand(ctx context.Context, cmd api.WorkerCommand) {
 		}
 		w.logger.Info("[COMMANDS] Update requested — version=%s (download will be handled by supervisor)", version)
 
+	case "undrain":
+		w.logger.Info("[COMMANDS] Undrain requested — clearing drain mode")
+		w.drainMode.Store(false)
+		telemetry.MarkDrainMode(false)
+
 	case "reboot_host":
 		w.logger.Info("[COMMANDS] Host reboot requested — draining jobs first")
 		w.drainMode.Store(true)
+		go w.autoUndrainAfter(restartDrainTimeout)
 
 	case "cancel_job":
 		jobID := ""
@@ -101,4 +114,29 @@ func (w *Worker) processCommand(ctx context.Context, cmd api.WorkerCommand) {
 	if resultErr != nil {
 		w.logger.Error("[COMMANDS] Command %s processing error: %v", cmd.Command, resultErr)
 	}
+}
+
+// autoUndrainAfter waits for the specified duration. If the worker process
+// is still running (IsStopped() returns false), it clears drain mode so the
+// worker can resume accepting tasks. This is the self-healing guard against
+// failed restarts (e.g. Docker container restart that never terminates the
+// Go process, leaving drainMode=true permanently).
+//
+// Called from restart_worker and reboot_host command handlers. The timeout
+// is restartDrainTimeout (120s) — enough time for the process to gracefully
+// finish in-flight tasks and exit.
+func (w *Worker) autoUndrainAfter(after time.Duration) {
+	select {
+	case <-time.After(after):
+	case <-w.stopChan:
+		return
+	}
+
+	if w.IsStopped() {
+		return
+	}
+
+	w.logger.Warn("[COMMANDS] Auto-undrain after %v — restart/reboot did not complete; clearing drain mode to resume accepting tasks", after)
+	w.drainMode.Store(false)
+	telemetry.MarkDrainMode(false)
 }

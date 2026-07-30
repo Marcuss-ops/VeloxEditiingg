@@ -55,6 +55,15 @@ const (
 	// backoff is reserved for application-level errors (credential mismatch,
 	// protocol version, TLS).
 	connectionRetryBackoff = 2 * time.Second
+
+	// restartDrainTimeout is the maximum time the worker waits after
+	// receiving a restart_worker / reboot_host command before auto-clearing
+	// drain mode. If the process hasn't exited within this window (e.g.
+	// Docker container restart failed), the worker self-heals by calling
+	// autoUndrainAfter so it can resume accepting tasks. This prevents the
+	// permanent-drain freeze documented in the gRPC drain-state disconnect
+	// root-cause analysis.
+	restartDrainTimeout = 120 * time.Second
 )
 
 // ActiveTaskExecution represents a single task execution in progress.
