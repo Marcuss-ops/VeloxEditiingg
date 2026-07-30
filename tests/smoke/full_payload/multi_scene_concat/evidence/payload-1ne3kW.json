@@ -1,0 +1,76 @@
+{
+  "idempotency_key": "smoke-one-multi-scene-concat-dry-1785262881",
+  "video_name": "Real-asset smoke for multi-scene-concat-dry@1785262881 (scenes=10)",
+  "project_id": "worker-cert-smoke",
+  "target_executor_id": "scene.composite.v1@1",
+  "voiceover_paths": [
+    "velox-asset://asset-recording-001",
+    "velox-asset://e2e-narrator-001"
+  ],
+  "scenes": [
+    {
+      "text": "Scene 0 — multi-scene concat multi-scene-concat-dry (idx=0 clip=0 vo=0)",
+      "clip_link": "velox-asset://opening-clip-01",
+      "duration_seconds": 2
+    },
+    {
+      "text": "Scene 1 — multi-scene concat multi-scene-concat-dry (idx=1 clip=1 vo=1)",
+      "clip_link": "velox-asset://main-clip-01",
+      "duration_seconds": 2
+    },
+    {
+      "text": "Scene 2 — multi-scene concat multi-scene-concat-dry (idx=2 clip=2 vo=0)",
+      "clip_link": "velox-asset://aqueduct-clip-01",
+      "duration_seconds": 2
+    },
+    {
+      "text": "Scene 3 — multi-scene concat multi-scene-concat-dry (idx=3 clip=3 vo=1)",
+      "clip_link": "velox-asset://aqueduct-clip-02",
+      "duration_seconds": 2
+    },
+    {
+      "text": "Scene 4 — multi-scene concat multi-scene-concat-dry (idx=4 clip=0 vo=0)",
+      "clip_link": "velox-asset://opening-clip-01",
+      "duration_seconds": 2
+    },
+    {
+      "text": "Scene 5 — multi-scene concat multi-scene-concat-dry (idx=5 clip=1 vo=1)",
+      "clip_link": "velox-asset://main-clip-01",
+      "duration_seconds": 2
+    },
+    {
+      "text": "Scene 6 — multi-scene concat multi-scene-concat-dry (idx=6 clip=2 vo=0)",
+      "clip_link": "velox-asset://aqueduct-clip-01",
+      "duration_seconds": 2
+    },
+    {
+      "text": "Scene 7 — multi-scene concat multi-scene-concat-dry (idx=7 clip=3 vo=1)",
+      "clip_link": "velox-asset://aqueduct-clip-02",
+      "duration_seconds": 2
+    },
+    {
+      "text": "Scene 8 — multi-scene concat multi-scene-concat-dry (idx=8 clip=0 vo=0)",
+      "clip_link": "velox-asset://opening-clip-01",
+      "duration_seconds": 2
+    },
+    {
+      "text": "Scene 9 — multi-scene concat multi-scene-concat-dry (idx=9 clip=1 vo=1)",
+      "clip_link": "velox-asset://main-clip-01",
+      "duration_seconds": 2
+    }
+  ],
+  "delivery_plan": [
+    {
+      "destination_id": "comedy_test",
+      "priority": 100,
+      "retry_budget": 1
+    }
+  ],
+  "_audit": {
+    "generator": "tests/worker-cert/build_real_payload.py",
+    "generator_rev": 1,
+    "generation_time_epoch": 1785262881,
+    "idempotency_key_suffix": 0,
+    "fixture_path": "/home/pierone/Projects/company/VeloxEditiingg/tests/worker-cert/fixtures/assets.json"
+  }
+}

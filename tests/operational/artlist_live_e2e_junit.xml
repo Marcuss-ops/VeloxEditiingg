@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="artlist_render_v1" tests="5" failures="0" time="61579843000">
+    <testcase classname="artlist" name="preflight"/>
+    <testcase classname="artlist" name="acquire_artlist"/>
+    <testcase classname="artlist" name="validate_artlist"/>
+    <testcase classname="artlist" name="execute_pipeline"/>
+    <testcase classname="artlist" name="verify_artifacts"/>
+  </testsuite>
+</testsuites>
