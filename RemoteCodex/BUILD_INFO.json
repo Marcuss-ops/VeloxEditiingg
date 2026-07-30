@@ -1,13 +1,13 @@
 {
-  "version": "v1.2.20-bgmfix",
-  "git_commit": "9a9c386",
+  "version": "v1.2.20-bgmfix2",
+  "git_commit": "31f2413",
   "source_hash": "f106b007d8f827ae667dfbe1c1a1a31eff4647a71cf2de53b125d7347dbf51ca",
   "protocol_version": "2026-06-worker-v1",
   "engine_version": "v1.2.20",
   "platform": "linux",
   "arch": "x86_64",
   "built_at": "2026-07-14T11:28:44Z",
-  "bundle_hash": "50578ba4d5333da9baffe780e0a8fac6a57655a9b0624649535a0e24d8b3120f",
+  "bundle_hash": "0cb27972c7e82a1b7df1e5858614a3795d19519faf3b33c2fe987a1028fad5ca",
   "build_time": "2026-07-30T11:20:50Z",
-  "go_binary_sha256": "50578ba4d5333da9baffe780e0a8fac6a57655a9b0624649535a0e24d8b3120f"
+  "go_binary_sha256": "0cb27972c7e82a1b7df1e5858614a3795d19519faf3b33c2fe987a1028fad5ca"
 }
