@@ -61,6 +61,17 @@ type AudioTrackInput struct {
 	StartTimeOffset float64
 	DurationSeconds float64
 	Role            string
+	Loop            bool
+	FadeInSeconds   float64
+	FadeOutSeconds  float64
+	DuckingEnabled  bool
+
+	// hasExplicitBGMConfig is true when the user explicitly provided
+	// at least one of the loop/fade/ducking fields in the payload.
+	// When false for a background_music track, the compiler applies
+	// sensible defaults (loop=true, fade=0.5s, ducking=true). When
+	// true, the compiler trusts the user's explicit values.
+	hasExplicitBGMConfig bool
 }
 
 // Validate checks raw input parameters for the hybrid.v1 pipeline.
@@ -105,9 +116,11 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 	timeline_items := compileItemsToTimeline(req.Items, req.Fit)
 
 	// Audio tracks — role-aware processing for background_music.
-	// Loop, fade, and ducking are enabled automatically when the role
-	// is "background_music" (the renderer applies the corresponding
-	// FFmpeg filters: -stream_loop, afade, and sidechain compression).
+	// Loop, fade, and ducking defaults are applied automatically when
+	// the role is "background_music" AND the user did not explicitly
+	// configure them. When the user provides ANY of loop/fade/ducking
+	// fields, the compiler trusts those values verbatim (so a user can
+	// opt out with loop:false, ducking_enabled:false, etc.).
 	audioTracks := make([]plan.AudioTrack, 0, len(req.AudioTracks))
 	for _, track := range req.AudioTracks {
 		if track.SourceURL == "" {
@@ -125,15 +138,22 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 			Role:            track.Role,
 		}
 
-		// Role-aware defaults for background_music.
-		// The renderer uses these flags to generate the FFmpeg filter
-		// chain: -stream_loop -1, afade=t=in/out, and sidechain
-		// compression ducking under voiceover.
 		if track.Role == "background_music" {
-			at.Loop = true
-			at.FadeInSeconds = 0.5
-			at.FadeOutSeconds = 0.5
-			at.DuckingEnabled = true
+			if track.hasExplicitBGMConfig {
+				// User explicitly configured BGM — trust
+				// their values verbatim, even when zero.
+				at.Loop = track.Loop
+				at.FadeInSeconds = track.FadeInSeconds
+				at.FadeOutSeconds = track.FadeOutSeconds
+				at.DuckingEnabled = track.DuckingEnabled
+			} else {
+				// No explicit config — apply sensible
+				// defaults for background music.
+				at.Loop = true
+				at.FadeInSeconds = 0.5
+				at.FadeOutSeconds = 0.5
+				at.DuckingEnabled = true
+			}
 		}
 
 		audioTracks = append(audioTracks, at)
@@ -266,13 +286,27 @@ func parseRequest(input map[string]interface{}) *Request {
 			if !ok {
 				continue
 			}
-			req.AudioTracks = append(req.AudioTracks, AudioTrackInput{
+			track := AudioTrackInput{
 				SourceURL:       toStringDefault(trackMap["source_url"], toString(trackMap["url"])),
 				Volume:          toFloat64Default(trackMap["volume"], 1.0),
 				StartTimeOffset: toFloat64Default(trackMap["start_time_offset"], 0.0),
 				DurationSeconds: toFloat64Default(trackMap["duration_seconds"], 0.0),
 				Role:            toString(trackMap["role"]),
-			})
+				Loop:            toBoolDefault(trackMap["loop"], false),
+				FadeInSeconds:   toFloat64Default(trackMap["fade_in_seconds"], 0.0),
+				FadeOutSeconds:  toFloat64Default(trackMap["fade_out_seconds"], 0.0),
+				DuckingEnabled:  toBoolDefault(trackMap["ducking_enabled"], false),
+			}
+			// Detect explicit user config: if ANY of the
+			// loop/fade/ducking keys exist in the raw map,
+			// the user explicitly configured BGM behaviour.
+			for _, key := range []string{"loop", "fade_in_seconds", "fade_out_seconds", "ducking_enabled"} {
+				if _, exists := trackMap[key]; exists {
+					track.hasExplicitBGMConfig = true
+					break
+				}
+			}
+			req.AudioTracks = append(req.AudioTracks, track)
 		}
 	}
 
