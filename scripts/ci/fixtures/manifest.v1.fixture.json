@@ -67,6 +67,7 @@
     "algorithm": "sha256",
     "manifest_sha256": "e5090c2eec68a0edab87d649d4ca55b8782ab473bbb0aaaa7c5b071400e50c03",
     "scene_count": 1,
+    "audio_track_count": 0,
     "total_duration_ms": 7200
   }
 }
