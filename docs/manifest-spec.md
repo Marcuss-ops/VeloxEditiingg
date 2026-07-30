@@ -15,9 +15,8 @@
 
 ## 1. Top-level structure
 
-Every manifest is a single JSON object with **exactly nine** top-level
-keys (no extras; the CI guard fails on missing/extra keys at the
-top level):
+Every manifest is a single JSON object with **nine required** top-level
+keys plus one **optional** `audio_tracks` key:
 
 ```jsonc
 {
@@ -29,7 +28,8 @@ top level):
   "script":          { ... },                      // [6] required, script text + reference
   "scenes":          [ ... ],                      // [7] required, non-empty array
   "delivery_plan":   [ ... ],                      // [8] required, non-empty array
-  "integrity":       { ... }                       // [9] required, sha256 + counts
+  "integrity":       { ... },                      // [9] required, sha256 + counts
+  "audio_tracks":    [ ... ]                       // [10] optional, global audio layers
 }
 ```
 
@@ -43,7 +43,8 @@ top level):
 | 6 | `script`         | object |   yes   | See [§7 Script](#7-script-object) |
 | 7 | `scenes`         | array  |   yes   | Non-empty; per-element shape per [§8 Scene](#8-scene-object) |
 | 8 | `delivery_plan`  | array  |   yes   | Non-empty; per-element shape per [§9 DeliveryPlan entry](#9-delivery_plan-entry) |
-| 9 | `integrity`      | object |   yes   | Self-consistency hash — see [§10 Integrity](#10-integrity-object) |
+| 9 | `integrity`      | object |   yes   | Self-consistency hash — see [§11 Integrity](#11-integrity-object) |
+| 10 | `audio_tracks`   | array  |   no    | Optional global audio layers mixed into the final render — see [§10 Audio tracks](#10-audio_tracks-array) |
 
 > **Reject envelope (HTTP layer).** A manifest that fails ANY
 > required-field check, schema_version mismatch, sha256 mismatch, or
@@ -252,7 +253,66 @@ The array MUST contain **at least one** entry. Mirrors
 
 ---
 
-## 10. Integrity object
+## 10. `audio_tracks` array
+
+Optional top-level array of global audio layers mixed into the final
+render output. Each entry carries a source URL (or asset reference),
+a canonical role, independent volume control, and optional time
+bounds. This is the manifest-level equivalent of
+`SubmitJobRequest.audio_tracks` — the master's
+`renderManifestToSubmitRequest` maps each entry into a
+`SubmitAudioTrack` before the worker payload is assembled.
+
+An absent or `null` `audio_tracks` key is equivalent to an empty
+array — no global audio layers are added.
+
+```jsonc
+"audio_tracks": [
+  {
+    "asset_id":           "bgm-test-001",                     // optional, string (≤ 128 bytes)
+    "source_url":         "velox-asset://music/bgm-test-001.mp3", // conditional, string (required when asset_id absent)
+    "role":               "background_music",                 // optional, closed enum
+    "volume":             0.15,                               // optional, float [0.0, 2.0]
+    "start_time_offset":  0,                                  // optional, float ≥ 0 (seconds)
+    "duration_seconds":   12.0                                // optional, float ≥ 0 (seconds)
+  }
+]
+```
+
+| Field               | Required | Constraint |
+|---------------------|:--------:|------------|
+| `asset_id`          |   no    | Producer-supplied asset identifier; ≤ 128 bytes. When `source_url` is absent, the master resolves the asset via the asset bridge |
+| `source_url`        |   conditional    | **At least one of `asset_id` or `source_url` is required per track.** URL on the `https://` or `velox-asset://` scheme; ≤ 2048 bytes after `TrimSpace` |
+| `role`              |   no    | Closed enum: `voiceover`, `scene_clip_audio`, `background_music`. Describes the audio track's function in the mix. Default (empty/absent) is treated as a generic audio layer |
+| `volume`            |   no    | Float in `[0.0, 2.0]`. `1.0` = unity gain, `0.0` = silence, `0.10–0.18` is the recommended range for background music under voiceover. Defaults to `1.0` downstream when `0` or absent |
+| `start_time_offset` |   no    | Float ≥ 0. Seconds from the beginning of the timeline at which this track starts playing. Default `0` |
+| `duration_seconds`  |   no    | Float ≥ 0. How many seconds of audio to play from `source_url`. `0` means "play the entire source" (the worker/compiler determines the actual duration from the asset metadata) |
+
+### Canonical roles
+
+| Role                  | Meaning |
+|-----------------------|---------|
+| `voiceover`           | Narration / voice track — mixed at full volume, centered |
+| `scene_clip_audio`    | Original audio from a scene clip — preserved alongside voiceover |
+| `background_music`     | Subtle musical bed — mixed at reduced volume (typically 0.10–0.18) behind voiceover |
+
+> **Future capabilities.** Loop, fade-in/out, and automatic ducking
+> (lowering background music volume when voiceover is active) are NOT
+> yet supported at the manifest layer. The compiler may apply these
+> effects at render time based on the `role` tag — producers MUST NOT
+> depend on specific ducking/fading behaviour until a future
+> `render-manifest.v2` schema formalizes the controls.
+
+> **Per-scene vs. top-level.** `audio_tracks` at the top level are
+> GLOBAL — they span the entire timeline. Per-scene audio (e.g.
+> `scenes[N].voiceover.url`) remains the canonical per-segment
+> contract. The two layers are additive: the worker composites
+> per-scene voiceover + scene_clip_audio + top-level background_music
+> into a single AAC mix.
+
+---
+
+## 11. Integrity object
 
 Self-describing hash that the master verifies BEFORE substituting
 the manifest into the worker payload. The hash is computed over the
@@ -301,7 +361,7 @@ def manifest_sha256(body: dict) -> str:
 
 ---
 
-## 11. Reject envelope (canonical)
+## 12. Reject envelope (canonical)
 
 When ANY of the above checks fails (missing required field, wrong
 type, sha256 mismatch, schema_version mismatch, scene_count /
@@ -330,7 +390,7 @@ react to each violation without parsing the human-readable message.
 
 ---
 
-## 12. Acceptance tests
+## 13. Acceptance tests
 
 The canonical conformance test is
 `scripts/ci/check-manifest-schema-canicality.sh` which asserts:
