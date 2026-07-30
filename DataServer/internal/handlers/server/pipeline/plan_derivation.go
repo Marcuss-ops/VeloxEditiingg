@@ -126,6 +126,34 @@ func subtitlesToMap(s *SubmitSubtitles) map[string]interface{} {
 	return out
 }
 
+// audioTrackToMap converts a SubmitAudioTrack to the canonical
+// worker-payload shape consumed by the hybrid.v1 compiler. The
+// shape matches plan.AudioTrack (source_url, volume, role,
+// start_time_offset, duration_seconds) plus the optional asset_id
+// for Master-side resolution.
+func audioTrackToMap(t SubmitAudioTrack) map[string]interface{} {
+	out := map[string]interface{}{}
+	if trimmed := strings.TrimSpace(t.SourceURL); trimmed != "" {
+		out["source_url"] = trimmed
+	}
+	if t.AssetID != "" {
+		out["asset_id"] = t.AssetID
+	}
+	if t.Role != "" {
+		out["role"] = t.Role
+	}
+	if t.Volume > 0 {
+		out["volume"] = t.Volume
+	}
+	if t.StartTimeOffset > 0 {
+		out["start_time_offset"] = t.StartTimeOffset
+	}
+	if t.DurationSeconds > 0 {
+		out["duration_seconds"] = t.DurationSeconds
+	}
+	return out
+}
+
 // SubmitJobRequest is the simplified, versioned API contract for
 // POST /api/v1/jobs. It allows external systems to submit complete
 // video jobs without going through the Creator intermediary.
@@ -192,7 +220,7 @@ func (h *Handlers) NormalizeExternalJobSubmission(req SubmitJobRequest) *Canonic
 
 	dto, _ := remoteengine.ParseRemotePipelineResult(rawPayload)
 	workerPayload := dto.ToWorkerPayload()
-	preserveWorkerPayloadFields(workerPayload, rawPayload, "subtitle_tracks", "layers", "_placement_pin_worker_id")
+	preserveWorkerPayloadFields(workerPayload, rawPayload, "subtitle_tracks", "audio_tracks", "layers", "_placement_pin_worker_id")
 
 	return &CanonicalCompletedPayload{
 		SourceProvider:   ExternalAPISourceProvider,
@@ -335,6 +363,13 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 			subtitles = append(subtitles, map[string]interface{}{"source": strings.TrimSpace(track.Source), "preset": track.Preset, "font": track.Font})
 		}
 		m["subtitle_tracks"] = subtitles
+	}
+	if len(req.AudioTracks) > 0 {
+		audioTracks := make([]interface{}, 0, len(req.AudioTracks))
+		for _, track := range req.AudioTracks {
+			audioTracks = append(audioTracks, audioTrackToMap(track))
+		}
+		m["audio_tracks"] = audioTracks
 	}
 
 	if req.PlacementPinWorkerID != "" {
