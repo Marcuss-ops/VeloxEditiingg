@@ -420,6 +420,19 @@ func hasClipTimelinePayload(payloadMap map[string]interface{}) bool {
 	return false
 }
 
+// CopyTimelinePayloadFields preserves visual-timeline and audio-track
+// fields across normalization boundaries. When a typed V2 envelope is
+// built (via contract.NewJobPayloadV2.ToMap), it drops keys not in the
+// typed struct — audio_tracks, subtitle_tracks, layers, items, clips,
+// images, and other timeline payload fields.
+//
+// Call this after any Build*Payload or BuildSceneImagePayload that
+// produces a fresh map, passing the original (pre-build) map as src
+// and the fresh output as dst.
+func CopyTimelinePayloadFields(out, src map[string]interface{}) {
+	copyTimelinePayloadFields(out, src)
+}
+
 func copyTimelinePayloadFields(out, src map[string]interface{}) {
 	if out == nil || src == nil {
 		return

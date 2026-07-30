@@ -28,6 +28,10 @@ func (r *Resolver) buildAndRewritePayload(reqPayload map[string]interface{}, fwd
 		if err != nil {
 			return nil, fmt.Errorf("creatorflow: Resolve rewrite master URL: %w", err)
 		}
+		// BuildSceneImagePayloadForMaster creates a fresh typed V2
+		// envelope that drops timeline fields. Preserve audio_tracks,
+		// subtitle_tracks, layers, etc. from the pre-rewrite payload.
+		enqueue.CopyTimelinePayloadFields(workerPayload, reqPayload)
 	}
 
 	// Re-inject the forwarding key into the rewritten payload — both
