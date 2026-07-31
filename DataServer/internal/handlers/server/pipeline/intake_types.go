@@ -44,6 +44,11 @@ type SubmitJobRequest struct {
 	// allowed (defaults to scene.composite.v1's default resolver).
 	DeliveryPlan []SubmitDeliveryPlanEntry `json:"delivery_plan,omitempty"`
 
+	// Publications are the canonical publication intents for the
+	// rendered outputs. They are kept separate from the renderer
+	// payload and are consumed by the publication/delivery pipeline.
+	Publications []SubmitPublication `json:"publications,omitempty"`
+
 	// ManifestRef is OPTIONAL. When present, the Master downloads
 	// the manifest JSON at `url`, verifies `sha256`, validates
 	// `schema_version`, and uses the manifest-derived payload as
@@ -266,6 +271,56 @@ type SubmitDeliveryPlanEntry struct {
 	// the contract.
 	RetryBudget *int `json:"retry_budget,omitempty"`
 	Metadata    any  `json:"metadata,omitempty"`
+}
+
+// SubmitPublication describes one concrete publication of a rendered output.
+// Its metadata and destinations belong to the delivery pipeline, not to the
+// renderer worker payload.
+type SubmitPublication struct {
+	PublicationID   string                             `json:"publication_id"`
+	OutputRef       SubmitPublicationOutputRef         `json:"output_ref"`
+	Language        string                             `json:"language,omitempty"`
+	DefaultLanguage string                             `json:"default_language,omitempty"`
+	Metadata        SubmitPublicationMetadata          `json:"metadata,omitempty"`
+	Localizations   map[string]SubmitLocalizedMetadata `json:"localizations,omitempty"`
+	Destinations    []SubmitPublicationDestination     `json:"destinations"`
+	ProviderOptions map[string]any                     `json:"provider_options,omitempty"`
+}
+
+// SubmitPublicationOutputRef selects either a language variant or an artifact
+// role produced by rendering. Validation will require exactly one selector.
+type SubmitPublicationOutputRef struct {
+	VariantID    string `json:"variant_id,omitempty"`
+	ArtifactRole string `json:"artifact_role,omitempty"`
+}
+
+// SubmitPublicationMetadata contains provider-independent publication fields.
+// Destination adapters enforce platform-specific length and capability limits.
+type SubmitPublicationMetadata struct {
+	Title                  string   `json:"title,omitempty"`
+	Description            string   `json:"description,omitempty"`
+	Tags                   []string `json:"tags,omitempty"`
+	CategoryID             string   `json:"category_id,omitempty"`
+	Privacy                string   `json:"privacy,omitempty"`
+	PublishAt              string   `json:"publish_at,omitempty"`
+	MadeForKids            *bool    `json:"made_for_kids,omitempty"`
+	ContainsSyntheticMedia *bool    `json:"contains_synthetic_media,omitempty"`
+}
+
+// SubmitLocalizedMetadata contains title and description for one locale.
+type SubmitLocalizedMetadata struct {
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// SubmitPublicationDestination is one independently routable destination for
+// a publication. RetryBudget is a pointer so explicit zero survives decoding.
+type SubmitPublicationDestination struct {
+	DestinationID    string                     `json:"destination_id"`
+	Priority         int                        `json:"priority,omitempty"`
+	RetryBudget      *int                       `json:"retry_budget,omitempty"`
+	MetadataOverride *SubmitPublicationMetadata `json:"metadata_override,omitempty"`
+	ProviderOptions  map[string]any             `json:"provider_options,omitempty"`
 }
 
 // SubmitManifestRef points to a `velox.render-manifest.v1` JSON the

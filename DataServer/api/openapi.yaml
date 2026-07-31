@@ -480,6 +480,50 @@ components:
             type: object
         SubmitJobRequest:
             properties:
+                audio_tracks:
+                    items:
+                        properties:
+                            asset_id:
+                                maxLength: 128
+                                type: string
+                            ducking_enabled:
+                                type: boolean
+                            duration_seconds:
+                                format: float
+                                minimum: 0
+                                type: number
+                            fade_in_seconds:
+                                format: float
+                                minimum: 0
+                                type: number
+                            fade_out_seconds:
+                                format: float
+                                minimum: 0
+                                type: number
+                            loop:
+                                type: boolean
+                            role:
+                                enum:
+                                    - voiceover
+                                    - scene_clip_audio
+                                    - background_music
+                                type: string
+                            source_url:
+                                format: uri
+                                maxLength: 2048
+                                type: string
+                            start_time_offset:
+                                format: float
+                                minimum: 0
+                                type: number
+                            volume:
+                                format: float
+                                maximum: 2
+                                minimum: 0
+                                type: number
+                        type: object
+                    minItems: 0
+                    type: array
                 delivery_plan:
                     items:
                         $ref: '#/components/schemas/SubmitDeliveryPlanEntry'
@@ -496,6 +540,112 @@ components:
                     type: array
                 manifest_ref:
                     $ref: '#/components/schemas/SubmitManifestRef'
+                placement_pin_worker_id:
+                    maxLength: 128
+                    type: string
+                publications:
+                    items:
+                        properties:
+                            default_language:
+                                type: string
+                            destinations:
+                                items:
+                                    properties:
+                                        destination_id:
+                                            minLength: 1
+                                            type: string
+                                        metadata_override:
+                                            properties:
+                                                category_id:
+                                                    type: string
+                                                contains_synthetic_media:
+                                                    type: boolean
+                                                description:
+                                                    type: string
+                                                made_for_kids:
+                                                    type: boolean
+                                                privacy:
+                                                    type: string
+                                                publish_at:
+                                                    type: string
+                                                tags:
+                                                    items:
+                                                        type: string
+                                                    minItems: 0
+                                                    type: array
+                                                title:
+                                                    type: string
+                                            type: object
+                                        priority:
+                                            minimum: 0
+                                            type: integer
+                                        provider_options:
+                                            additionalProperties:
+                                                type: object
+                                            type: object
+                                        retry_budget:
+                                            minimum: 0
+                                            type: integer
+                                    required:
+                                        - destination_id
+                                    type: object
+                                minItems: 0
+                                minimum: 1
+                                type: array
+                            language:
+                                type: string
+                            localizations:
+                                additionalProperties:
+                                    properties:
+                                        description:
+                                            type: string
+                                        title:
+                                            type: string
+                                    type: object
+                                type: object
+                            metadata:
+                                properties:
+                                    category_id:
+                                        type: string
+                                    contains_synthetic_media:
+                                        type: boolean
+                                    description:
+                                        type: string
+                                    made_for_kids:
+                                        type: boolean
+                                    privacy:
+                                        type: string
+                                    publish_at:
+                                        type: string
+                                    tags:
+                                        items:
+                                            type: string
+                                        minItems: 0
+                                        type: array
+                                    title:
+                                        type: string
+                                type: object
+                            output_ref:
+                                properties:
+                                    artifact_role:
+                                        type: string
+                                    variant_id:
+                                        type: string
+                                type: object
+                            provider_options:
+                                additionalProperties:
+                                    type: object
+                                type: object
+                            publication_id:
+                                minLength: 1
+                                type: string
+                        required:
+                            - destinations
+                            - output_ref
+                            - publication_id
+                        type: object
+                    minItems: 0
+                    type: array
                 scenes:
                     items:
                         $ref: '#/components/schemas/SubmitScene'

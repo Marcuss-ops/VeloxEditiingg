@@ -61,6 +61,7 @@ type SubmitJobRequest struct {
 	SubtitleTracks []SubmitSubtitleTrack     `json:"subtitle_tracks,omitempty" validate:"omitempty,dive"`
 	AudioTracks    []SubmitAudioTrack        `json:"audio_tracks,omitempty" validate:"omitempty,dive"`
 	DeliveryPlan   []SubmitDeliveryPlanEntry `json:"delivery_plan,omitempty" validate:"omitempty,dive"`
+	Publications   []SubmitPublication       `json:"publications,omitempty" validate:"omitempty,dive"`
 	ManifestRef    *SubmitManifestRef        `json:"manifest_ref,omitempty" validate:"omitempty"`
 
 	// PlacementPinWorkerID is an optional operator/admin field that
@@ -74,6 +75,52 @@ type SubmitJobRequest struct {
 	// see the actual worker_id that executed the job, providing
 	// authoritative placement verification.
 	PlacementPinWorkerID string `json:"placement_pin_worker_id,omitempty" validate:"omitempty,max=128"`
+}
+
+// SubmitPublication describes one concrete publication of a rendered output.
+// Publication metadata is intentionally separate from the render worker payload.
+type SubmitPublication struct {
+	PublicationID   string                             `json:"publication_id" validate:"required,min=1"`
+	OutputRef       SubmitPublicationOutputRef         `json:"output_ref" validate:"required"`
+	Language        string                             `json:"language,omitempty"`
+	DefaultLanguage string                             `json:"default_language,omitempty"`
+	Metadata        SubmitPublicationMetadata          `json:"metadata,omitempty"`
+	Localizations   map[string]SubmitLocalizedMetadata `json:"localizations,omitempty"`
+	Destinations    []SubmitPublicationDestination     `json:"destinations" validate:"required,min=1,dive"`
+	ProviderOptions map[string]any                     `json:"provider_options,omitempty"`
+}
+
+// SubmitPublicationOutputRef selects either a language variant or an artifact role.
+type SubmitPublicationOutputRef struct {
+	VariantID    string `json:"variant_id,omitempty"`
+	ArtifactRole string `json:"artifact_role,omitempty"`
+}
+
+// SubmitPublicationMetadata contains provider-independent publication metadata.
+type SubmitPublicationMetadata struct {
+	Title                  string   `json:"title,omitempty"`
+	Description            string   `json:"description,omitempty"`
+	Tags                   []string `json:"tags,omitempty"`
+	CategoryID             string   `json:"category_id,omitempty"`
+	Privacy                string   `json:"privacy,omitempty"`
+	PublishAt              string   `json:"publish_at,omitempty"`
+	MadeForKids            *bool    `json:"made_for_kids,omitempty"`
+	ContainsSyntheticMedia *bool    `json:"contains_synthetic_media,omitempty"`
+}
+
+// SubmitLocalizedMetadata contains title and description for one locale.
+type SubmitLocalizedMetadata struct {
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// SubmitPublicationDestination is one independently routable publication target.
+type SubmitPublicationDestination struct {
+	DestinationID    string                     `json:"destination_id" validate:"required,min=1"`
+	Priority         int                        `json:"priority,omitempty" validate:"omitempty,gte=0"`
+	RetryBudget      *int                       `json:"retry_budget,omitempty" validate:"omitempty,gte=0"`
+	MetadataOverride *SubmitPublicationMetadata `json:"metadata_override,omitempty" validate:"omitempty"`
+	ProviderOptions  map[string]any             `json:"provider_options,omitempty"`
 }
 
 // SubmitManifestRef points to a `velox.render-manifest.v1` JSON the
