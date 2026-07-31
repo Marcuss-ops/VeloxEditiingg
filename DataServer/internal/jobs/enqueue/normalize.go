@@ -493,7 +493,13 @@ func attachLegacySceneClipTimeline(out map[string]interface{}) {
 	voiceovers := normalizeVoiceoverList(out)
 	items := make([]map[string]interface{}, 0, len(scenes))
 	clips := make([]string, 0, len(scenes))
-	audioTracks := make([]map[string]interface{}, 0, len(scenes))
+	audioTracks := normalizeAudioTracks(out["audio_tracks"])
+	seenAudioTracks := make(map[string]struct{}, len(audioTracks))
+	for _, track := range audioTracks {
+		if key := audioTrackKey(track); key != "" {
+			seenAudioTracks[key] = struct{}{}
+		}
+	}
 	subtitleTracks := normalizeSubtitleTracks(out["subtitle_tracks"])
 	offsetSeconds := 0.0
 
@@ -562,13 +568,19 @@ func attachLegacySceneClipTimeline(out map[string]interface{}) {
 			if voiceoverDuration > 0 {
 				trackDuration = voiceoverDuration
 			}
-			audioTracks = append(audioTracks, map[string]interface{}{
+			voiceoverTrack := map[string]interface{}{
 				"source_url":        voiceoverURL,
 				"volume":            1.0,
 				"start_time_offset": offsetSeconds,
 				"duration_seconds":  trackDuration,
 				"role":              "voiceover",
-			})
+			}
+			if key := audioTrackKey(voiceoverTrack); key == "" {
+				audioTracks = append(audioTracks, voiceoverTrack)
+			} else if _, exists := seenAudioTracks[key]; !exists {
+				audioTracks = append(audioTracks, voiceoverTrack)
+				seenAudioTracks[key] = struct{}{}
+			}
 			// Only layer the clip's original audio as a SECOND track
 			// when the clip extends beyond the voiceover (i.e. the
 			// clip duration > voiceover duration). In the canonical
@@ -600,6 +612,38 @@ func attachLegacySceneClipTimeline(out map[string]interface{}) {
 		out["subtitle_tracks"] = subtitleTracks
 	}
 	out["video_mode"] = "clip_stock"
+}
+
+func normalizeAudioTracks(raw interface{}) []map[string]interface{} {
+	var tracks []map[string]interface{}
+	switch values := raw.(type) {
+	case []map[string]interface{}:
+		for _, value := range values {
+			if len(value) > 0 {
+				tracks = append(tracks, value)
+			}
+		}
+	case []interface{}:
+		for _, value := range values {
+			if track, ok := value.(map[string]interface{}); ok && len(track) > 0 {
+				tracks = append(tracks, track)
+			}
+		}
+	}
+	return tracks
+}
+
+func audioTrackKey(track map[string]interface{}) string {
+	if track == nil {
+		return ""
+	}
+	source := strings.TrimSpace(payload.FirstString(track, "source_url", "source", "url"))
+	if source == "" {
+		return ""
+	}
+	role := strings.TrimSpace(payload.FirstString(track, "role"))
+	offset := payload.NormalizedDuration(track["start_time_offset"])
+	return fmt.Sprintf("%s\x00%s\x00%.6f", role, source, offset)
 }
 
 func normalizeSubtitleTracks(raw interface{}) []map[string]interface{} {

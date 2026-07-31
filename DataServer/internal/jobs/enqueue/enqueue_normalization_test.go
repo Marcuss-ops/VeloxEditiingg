@@ -234,6 +234,81 @@ func TestNormalizeSceneVideoPayload_AttachesLegacyClipTimeline(t *testing.T) {
 	}
 }
 
+func TestNormalizeSceneVideoPayload_PreservesBackgroundMusicAndMergesTwoVoiceovers(t *testing.T) {
+	t.Parallel()
+
+	normalized, err := normalizeSceneVideoPayload(map[string]interface{}{
+		"video_name":  "Mixed audio timeline smoke",
+		"script_text": "Background music plus two scene voiceovers.",
+		"voiceover_paths": []interface{}{
+			"velox-asset://voiceover-scene-0",
+			"velox-asset://voiceover-scene-1",
+		},
+		"scenes": []interface{}{
+			map[string]interface{}{
+				"scene_id":         "scene-0",
+				"clip_link":        "velox-asset://clip-scene-0",
+				"duration_seconds": float64(6),
+			},
+			map[string]interface{}{
+				"scene_id":         "scene-1",
+				"clip_link":        "velox-asset://clip-scene-1",
+				"duration_seconds": float64(6),
+			},
+		},
+		"audio_tracks": []interface{}{
+			map[string]interface{}{
+				"source_url":        "velox-asset://background-music",
+				"role":              "background_music",
+				"volume":            float64(0.12),
+				"start_time_offset": float64(0),
+				"duration_seconds":  float64(12),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeSceneVideoPayload: %v", err)
+	}
+
+	tracks, ok := normalized["audio_tracks"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("audio_tracks = %#v, want []map[string]interface{}", normalized["audio_tracks"])
+	}
+	if len(tracks) != 3 {
+		t.Fatalf("audio_tracks len = %d, want 3 (background music + two voiceovers)", len(tracks))
+	}
+
+	bySource := make(map[string]map[string]interface{}, len(tracks))
+	for _, track := range tracks {
+		source, _ := track["source_url"].(string)
+		bySource[source] = track
+	}
+
+	assertTrack := func(source, role string, volume, offset, duration float64) {
+		t.Helper()
+		track, exists := bySource[source]
+		if !exists {
+			t.Fatalf("missing %s track %q in %#v", role, source, tracks)
+		}
+		if got := track["role"]; got != role {
+			t.Errorf("%s role = %v, want %q", source, got, role)
+		}
+		if got := asFloat(track["volume"]); got != volume {
+			t.Errorf("%s volume = %v, want %v", source, got, volume)
+		}
+		if got := asFloat(track["start_time_offset"]); got != offset {
+			t.Errorf("%s start_time_offset = %v, want %v", source, got, offset)
+		}
+		if got := asFloat(track["duration_seconds"]); got != duration {
+			t.Errorf("%s duration_seconds = %v, want %v", source, got, duration)
+		}
+	}
+
+	assertTrack("velox-asset://background-music", "background_music", 0.12, 0, 12)
+	assertTrack("velox-asset://voiceover-scene-0", "voiceover", 1, 0, 6)
+	assertTrack("velox-asset://voiceover-scene-1", "voiceover", 1, 6, 6)
+}
+
 func TestNormalizeSceneVideoPayload_UsesNestedVoiceoverDurationForClipTimeline(t *testing.T) {
 	t.Parallel()
 
