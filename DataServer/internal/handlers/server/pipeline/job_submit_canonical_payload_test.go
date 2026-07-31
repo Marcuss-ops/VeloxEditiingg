@@ -1,9 +1,12 @@
 package pipeline
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
+
+	"velox-shared/contract"
 )
 
 // TestSubmitJobBuildsWorkerPayloadCorrectly is replaced by
@@ -107,6 +110,79 @@ func TestNormalizeExternalJobSubmission_ProducesCanonicalPayload(t *testing.T) {
 	dp, ok := wp["delivery_plan"].([]interface{})
 	if !ok || len(dp) != 1 {
 		t.Errorf("worker_payload[delivery_plan] = %v, want 1 entry", wp["delivery_plan"])
+	}
+}
+
+// TestCanonicalPayloadParity_PipelinePreservesCanonicalKeys verifies the
+// fourth contract surface: keys emitted by the external pipeline intake must
+// survive the DTO → worker-payload projection. The raw request projection
+// intentionally encodes scenes as scenes_json; every other populated
+// canonical key is expected to remain at the same top-level key.
+func TestCanonicalPayloadParity_PipelinePreservesCanonicalKeys(t *testing.T) {
+	t.Parallel()
+
+	req := SubmitJobRequest{
+		IdempotencyKey: "contract-parity-pipeline-001",
+		VideoName:      "Parity pipeline video",
+		ScriptText:     "Parity pipeline script",
+		VoiceoverPaths: []string{"velox-asset://voiceover/parity.mp3"},
+		Scenes: []SubmitScene{{
+			Text:            "Parity scene",
+			ClipLink:        "velox-asset://clip/parity.mp4",
+			DurationSeconds: 5,
+		}},
+		Layers: []SubmitLayer{{
+			ID: "layer-parity", Type: "text", Role: "title", Text: "Parity",
+		}},
+		SubtitleTracks: []SubmitSubtitleTrack{{
+			Source: "velox-asset://subtitle/parity.srt", Preset: "default", Font: "Inter",
+		}},
+		AudioTracks: []SubmitAudioTrack{{
+			SourceURL: "velox-asset://audio/parity.mp3", Role: "music", Volume: 1,
+		}},
+		DeliveryPlan: []SubmitDeliveryPlanEntry{{
+			DestinationID: "drive", Priority: 1, RetryBudget: intPtr(3),
+		}},
+	}
+
+	raw := submitRequestToRawPayload(&req)
+	canonical := (&Handlers{}).NormalizeExternalJobSubmission(req)
+	if canonical == nil || canonical.WorkerPayload == nil {
+		t.Fatal("NormalizeExternalJobSubmission returned no worker payload")
+	}
+
+	outputKey := map[string]string{"scenes": "scenes_json"}
+	for key, value := range raw {
+		if value == nil || strings.HasPrefix(key, "_") {
+			continue
+		}
+		if !contract.IsCanonicalKey(key) {
+			t.Errorf("pipeline raw payload emitted non-canonical key %q", key)
+			continue
+		}
+		wantKey := key
+		if mapped, ok := outputKey[key]; ok {
+			wantKey = mapped
+		}
+		workerValue, ok := canonical.WorkerPayload[wantKey]
+		if !ok {
+			t.Errorf("canonical pipeline key %q was lost during worker projection (raw key %q)", wantKey, key)
+			continue
+		}
+		if key == "scenes" {
+			continue // scenes is intentionally serialized as scenes_json.
+		}
+		rawJSON, err := json.Marshal(value)
+		if err != nil {
+			t.Fatalf("marshal raw pipeline key %q: %v", key, err)
+		}
+		workerJSON, err := json.Marshal(workerValue)
+		if err != nil {
+			t.Fatalf("marshal worker pipeline key %q: %v", wantKey, err)
+		}
+		if string(rawJSON) != string(workerJSON) {
+			t.Errorf("pipeline key %q changed during worker projection: raw=%s worker=%s", key, rawJSON, workerJSON)
+		}
 	}
 }
 

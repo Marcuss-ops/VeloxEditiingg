@@ -23,17 +23,13 @@ import (
 // caller — never to the orchestrator — to keep the refactor purely
 // structural (zero comportamento/schema/API/protoc).
 func (w *Worker) resolveTaskAssets(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error) {
-	resolved, err := w.resolveAudioPayload(ctx, payload)
-	if err != nil {
-		return nil, err
+	if payload == nil {
+		return nil, nil
 	}
-	resolved, err = w.resolveSceneImagePayload(ctx, resolved)
-	if err != nil {
-		return nil, err
-	}
-	// Older task envelopes may carry canonical media fields below a
-	// parameters object. Resolve that nested payload as well so Chronon
-	// never receives a master-only velox-asset:// URI.
+	// Older task envelopes may carry JSON-encoded canonical payloads below
+	// payload/parameters. Decode them before building the metadata index so
+	// integrity declarations in the outer envelope apply to nested media.
+	resolved := payload
 	for _, nestedKey := range []string{"payload", "parameters"} {
 		if encoded, ok := resolved[nestedKey].(string); ok && strings.HasPrefix(strings.TrimSpace(encoded), "{") {
 			var decoded map[string]interface{}
@@ -42,22 +38,8 @@ func (w *Worker) resolveTaskAssets(ctx context.Context, payload map[string]inter
 			}
 			resolved[nestedKey] = decoded
 		}
-		if nested, ok := resolved[nestedKey].(map[string]interface{}); ok && nested != nil {
-			resolvedNested, nestedErr := w.resolveTaskAssets(ctx, nested)
-			if nestedErr != nil {
-				return nil, nestedErr
-			}
-			resolved[nestedKey] = resolvedNested
-		}
 	}
-	materialized, err := w.materializeVeloxAssetRefs(ctx, resolved)
-	if err != nil {
-		return nil, err
-	}
-	if payload, ok := materialized.(map[string]interface{}); ok {
-		return payload, nil
-	}
-	return resolved, nil
+	return w.resolveCommonAssetPayload(ctx, resolved)
 }
 
 // materializeVeloxAssetRefs is the final transport boundary: task envelopes
