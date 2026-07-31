@@ -193,7 +193,23 @@ message TaskResult {
   // complete. Stored in task_phase_timings with status='PARTIAL' or
   // 'FAILED' so the master can diagnose which phase/component caused the
   // failure without losing the timings of the work already done.
+  //
+  // Observability chain / block 1: this field is LEGACY. New workers
+  // populate `phase_timings` (20) with the FULL phase list on every
+  // report (success AND failure) and mirror the failure subset here so
+  // older masters that predate field 20 keep receiving partial-phase
+  // data for failed attempts.
   repeated PhaseTimingDetailed partial_phase_metrics = 19;
+
+  // Observability chain / block 1: the FULL ordered phase list for the
+  // attempt. The worker compiles this on every report (success and
+  // failure) via the telemetry phase recorder. The master persists the
+  // rows into task_phase_timings AND projects the event-carrying
+  // entries into the append-only task_execution_events table. The
+  // identity tuple (job/task/worker/session/snapshot/lease/executor)
+  // on each entry is stamped by the MASTER from the canonical identity
+  // tuple at ingest; worker-supplied identity fields are informational.
+  repeated PhaseTimingDetailed phase_timings = 20;
 }
 
 message TaskLeaseRenewal {
@@ -226,6 +242,14 @@ message PhaseMarker {
 // context (component, action, byte/frame counters, error code) to
 // diagnose failures while reusing the same task_phase_timings storage
 // as successful attempts.
+//
+// Observability chain / block 1: PhaseTimingDetailed is ALSO the unit
+// of the append-only task_execution_events timeline. Fields 14-24 add
+// the event taxonomy (origin, scope, event_type, event_name,
+// event_index) plus an echo of the identity tuple. The master stamps
+// the canonical identity values at ingest; whatever the worker puts in
+// fields 20-24 is informational and overridden from the canonical
+// attempt tuple.
 message PhaseTimingDetailed {
   int32 phase_order = 1;
   string component = 2;
@@ -240,6 +264,34 @@ message PhaseTimingDetailed {
   int64 bytes_out = 11;
   int64 frames = 12;
   string metadata_json = 13;
+
+  // ── Observability chain / block 1: event taxonomy ────────────────
+  // Closed enums (constants, not enum types, so older workers can send
+  // unknown origins/scopes without a wire break):
+  //   origin: master | worker | engine | ffmpeg | upload | validation
+  //   scope:  job | task | attempt | segment | audio_track |
+  //           subtitle_track | artifact
+  string origin = 14;
+  string scope = 15;
+  // event_type: "started" | "completed" | "failed" | "progress" | ...
+  // event_name: free-form short label (e.g. "encode_segment_4").
+  string event_type = 16;
+  string event_name = 17;
+  // Monotonic per-(attempt, origin) sequence number. Combined with the
+  // master's UNIQUE(attempt_id, origin, event_index) index it makes
+  // report replays idempotent.
+  int64 event_index = 18;
+  // Canonical phase name (queue, asset_wait, cache_lookup, download,
+  // decode, compile, simulate, render, composite, encode, upload,
+  // finalize) when this event belongs to one.
+  string phase = 19;
+
+  // ── Identity echo (informational; master overrides at ingest) ────
+  string executor_id = 20;
+  int32 executor_version = 21;
+  string lease_id = 22;
+  string worker_snapshot_id = 23;
+  string worker_session_id = 24;
 }
 
 message ArtifactUploaded {
