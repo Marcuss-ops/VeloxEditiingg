@@ -352,3 +352,84 @@ func TestRunner_IllegalDescriptorRejectedByRegistry(t *testing.T) {
 	}()
 	_ = newTestRunner(bad) // MustRegister on bad descriptor panics
 }
+
+// TestRunner_Success_DetailedPhases: the block-1 recorder must drain a
+// complete, ordered phase stream onto the report on the success path,
+// with worker/attempt origin/scope, per-origin event indexes starting at
+// 0, executor identity, and the terminal report phase last.
+func TestRunner_Success_DetailedPhases(t *testing.T) {
+	exec := &fakeExec{
+		desc:       makeDesc("detail.v1", 1),
+		validateFn: func(_ executor.TaskSpec) error { return nil },
+	}
+	r := newTestRunner(exec)
+	rep, err := r.Run(context.Background(), goodSpec("detail.v1"))
+	if err != nil {
+		t.Fatalf("Run returned err: %v", err)
+	}
+	if !rep.Succeeded() {
+		t.Fatalf("expected succeeded, got %q", rep.Status)
+	}
+	if len(rep.DetailedPhases) < 5 {
+		t.Fatalf("expected >= 5 detailed phases, got %d", len(rep.DetailedPhases))
+	}
+	for i, p := range rep.DetailedPhases {
+		if p.PhaseOrder != i+1 {
+			t.Errorf("phase %d: phase_order = %d, want %d", i, p.PhaseOrder, i+1)
+		}
+		if p.Origin != "worker" || p.Scope != "attempt" {
+			t.Errorf("phase %d: origin/scope = %q/%q, want worker/attempt", i, p.Origin, p.Scope)
+		}
+		if p.Component != "runner" {
+			t.Errorf("phase %d: component = %q, want runner", i, p.Component)
+		}
+		if p.EventType == "" || p.Status == "" {
+			t.Errorf("phase %d: empty event_type/status", i)
+		}
+		if p.ExecutorID != "detail.v1" || p.ExecutorVersion != 1 {
+			t.Errorf("phase %d: identity = %q@%d, want detail.v1@1", i, p.ExecutorID, p.ExecutorVersion)
+		}
+	}
+	// The terminal event must be the report phase.
+	last := rep.DetailedPhases[len(rep.DetailedPhases)-1]
+	if last.Action != PhaseReport {
+		t.Errorf("last detailed action = %q, want %q", last.Action, PhaseReport)
+	}
+	// Per-origin indexes must be strictly increasing.
+	for i := 1; i < len(rep.DetailedPhases); i++ {
+		if rep.DetailedPhases[i].EventIndex != rep.DetailedPhases[i-1].EventIndex+1 {
+			t.Fatalf("event indexes not contiguous at %d: %d then %d",
+				i, rep.DetailedPhases[i-1].EventIndex, rep.DetailedPhases[i].EventIndex)
+		}
+	}
+}
+
+// TestRunner_Failure_DetailedPhases: a failure path must still carry the
+// detailed stream, with the terminal failed runner event last.
+func TestRunner_Failure_DetailedPhases(t *testing.T) {
+	exec := &fakeExec{
+		desc:       makeDesc("failing.v1", 1),
+		validateFn: func(_ executor.TaskSpec) error { return nil },
+		executeFn: func(_ context.Context, _ executor.ExecutionContext, _ executor.TaskSpec) (executor.ExecutionResult, error) {
+			return executor.ExecutionResult{Status: "failed", ErrorDetail: "boom"}, errors.New("boom")
+		},
+	}
+	r := newTestRunner(exec)
+	rep, err := r.Run(context.Background(), goodSpec("failing.v1"))
+	if err != nil {
+		t.Fatalf("Run returned err: %v", err)
+	}
+	if rep.Succeeded() {
+		t.Fatal("expected failed")
+	}
+	if len(rep.DetailedPhases) == 0 {
+		t.Fatal("expected a detailed phase stream on the failure path")
+	}
+	last := rep.DetailedPhases[len(rep.DetailedPhases)-1]
+	if last.Status != "failed" || last.Action != "run" {
+		t.Errorf("expected terminal failed run event, got action=%q status=%q", last.Action, last.Status)
+	}
+	if last.ErrorCode == "" {
+		t.Error("expected failure error_code on the terminal event")
+	}
+}

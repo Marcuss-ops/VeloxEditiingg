@@ -46,6 +46,78 @@ type TaskExecutionReport struct {
 	StartedAt    time.Time                        `json:"started_at"`
 	CompletedAt  time.Time                        `json:"completed_at"`
 	PhaseMarkers []PhaseMarker                    `json:"phase_markers,omitempty"`
+	// DetailedPhases is the full, ordered, event-taxonomy phase list for
+	// the attempt, drained from the phase recorder at Run completion.
+	// Serialized to TaskResult.phase_timings (proto field 20); the
+	// master ingests the rows into task_execution_events and derives
+	// task_phase_timings PARTIAL/FAILED summaries from them. Legacy
+	// masters (pre-block-1) ignore the field entirely.
+	DetailedPhases []DetailedPhaseTiming `json:"detailed_phases,omitempty"`
+}
+
+// DetailedPhaseTiming is the worker-side mirror of
+// pb.PhaseTimingDetailed (proto fields 1–24): a single execution event
+// with closed origin/scope enums, a per-origin monotonic event_index,
+// and identity fields. The transport boundary (submitTaskResult)
+// converts each entry via ToProto.
+//
+// Clock contract: DurationMS comes from a monotonic clock; StartedAt /
+// CompletedAt are UTC wall stamps for cross-host correlation only.
+type DetailedPhaseTiming struct {
+	PhaseOrder   int
+	Component    string
+	Action       string
+	StartedAt    time.Time
+	CompletedAt  time.Time
+	DurationMS   int64
+	Status       string
+	ErrorCode    string
+	ErrorMessage string
+	BytesIn      int64
+	BytesOut     int64
+	Frames       int64
+	MetadataJSON string
+	// ── Observability chain / block 1: event taxonomy ────────────────
+	Origin     string
+	Scope      string
+	EventType  string
+	EventName  string
+	EventIndex int64
+	Phase      string
+	// ── Identity (master overrides at ingest) ────────────────────────
+	ExecutorID      string
+	ExecutorVersion int32
+	LeaseID         string
+}
+
+// fromRecordedPhase converts a drained telemetry event onto the report
+// type, stamping the identity fields the recorder does not carry. phaseOrder
+// is the 1-based position within the attempt's phase sequence.
+func fromRecordedPhase(p telemetry.RecordedPhase, phaseOrder int, executorID string, executorVersion int32, leaseID string) DetailedPhaseTiming {
+	return DetailedPhaseTiming{
+		PhaseOrder:      phaseOrder,
+		Component:       p.Component,
+		Action:          p.Action,
+		StartedAt:       p.StartedAt,
+		CompletedAt:     p.CompletedAt,
+		DurationMS:      p.DurationMS,
+		Status:          p.Status,
+		ErrorCode:       p.ErrorCode,
+		ErrorMessage:    p.ErrorMessage,
+		BytesIn:         p.BytesIn,
+		BytesOut:        p.BytesOut,
+		Frames:          p.Frames,
+		MetadataJSON:    p.MetadataJSON,
+		Origin:          p.Origin,
+		Scope:           p.Scope,
+		EventType:       p.EventType,
+		EventName:       p.EventName,
+		EventIndex:      p.EventIndex,
+		Phase:           p.Phase,
+		ExecutorID:      executorID,
+		ExecutorVersion: executorVersion,
+		LeaseID:         leaseID,
+	}
 }
 
 // PhaseMarker records one canonical phase's timing and outcome. Status

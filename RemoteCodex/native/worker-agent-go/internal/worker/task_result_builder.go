@@ -43,13 +43,21 @@ import (
 func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution, taskID, attemptID string, report *taskrunner.TaskExecutionReport, execErr error) {
 	status := "succeeded"
 	var errorCode, errorDetail string
+	if report != nil && report.Status == "failed" {
+		// Preserve a failed report even when the execution wrapper has no
+		// separate error. This is important for partial renders whose
+		// terminal failure was already classified by TaskRunner.
+		status = "failed"
+		errorCode = report.ErrorCode
+		errorDetail = report.ErrorDetail
+	}
 	if execErr != nil {
 		status = "failed"
 		if errors.Is(execErr, context.Canceled) {
 			status = "cancelled"
 		}
 		errorDetail = execErr.Error()
-		if report != nil {
+		if report != nil && report.ErrorCode != "" {
 			errorCode = report.ErrorCode
 		}
 	}
@@ -96,6 +104,20 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 				Status:      pm.Status,
 				Notes:       pm.Notes,
 			})
+		}
+
+		// Build the full detailed phase stream (proto field 20). This is
+		// the block-1 replacement for the legacy partial_phase_metrics
+		// (field 19); legacy masters ignore it, block-1 masters ingest it
+		// into task_execution_events. Lease identity is stamped here (the
+		// runner does not know it); the master overrides all identity
+		// fields at ingest.
+		for _, phase := range report.DetailedPhases {
+			p := phase.ToProto()
+			if p.LeaseId == "" && pte.LeaseID != "" {
+				p.LeaseId = pte.LeaseID
+			}
+			tr.PhaseTimings = append(tr.PhaseTimings, p)
 		}
 
 		// Build per-segment C++ sidecar timings.

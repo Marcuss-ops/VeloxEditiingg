@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -318,5 +319,211 @@ func TestSubmitTaskResultCarriesAttachedAssetOperations(t *testing.T) {
 	}
 	if !strings.Contains(result.PhaseMarkers[0].Notes, "asset-wire-1") {
 		t.Fatalf("wire phase notes = %q, missing asset report", result.PhaseMarkers[0].Notes)
+	}
+}
+
+// TestSubmitTaskResult_PhaseTimings: block-1 — the full detailed phase
+// stream (proto field 20) is populated on the wire, with lease identity
+// stamped from the PendingTaskExecution and all event fields mapping
+// through ToProto untouched.
+func TestSubmitTaskResult_PhaseTimings(t *testing.T) {
+	transport := &recordingTransport{}
+	w := &Worker{
+		config:    &config.WorkerConfig{WorkerID: "worker-phases-test", ProtocolVersion: "v3"},
+		logger:    logger.New(logger.InfoLevel, io.Discard),
+		transport: transport,
+	}
+	start := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	report := &taskrunner.TaskExecutionReport{
+		ExecutorKey: "scene.composite.v1@1",
+		DetailedPhases: []taskrunner.DetailedPhaseTiming{
+			{
+				PhaseOrder:      1,
+				Component:       "runner",
+				Action:          "cache_lookup",
+				StartedAt:       start,
+				CompletedAt:     start.Add(10 * time.Millisecond),
+				DurationMS:      10,
+				Status:          "ok",
+				Origin:          "worker",
+				Scope:           "attempt",
+				EventType:       "completed",
+				EventName:       "cache_lookup",
+				EventIndex:      0,
+				Phase:           "cache_lookup",
+				ExecutorID:      "scene.composite.v1",
+				ExecutorVersion: 1,
+			},
+			{
+				PhaseOrder:      2,
+				Component:       "runner",
+				Action:          "report",
+				StartedAt:       start.Add(10 * time.Millisecond),
+				CompletedAt:     start.Add(12 * time.Millisecond),
+				DurationMS:      2,
+				Status:          "failed",
+				ErrorCode:       "EXECUTE_FAILED",
+				ErrorMessage:    "boom",
+				Origin:          "worker",
+				Scope:           "attempt",
+				EventType:       "failed",
+				EventName:       "report",
+				EventIndex:      1,
+				Phase:           "report",
+				ExecutorID:      "scene.composite.v1",
+				ExecutorVersion: 1,
+			},
+		},
+	}
+	pte := &PendingTaskExecution{JobID: "job-phases-test", ExecutorID: "scene.composite.v1", LeaseID: "lease-phases-test"}
+
+	w.submitTaskResult(context.Background(), pte, "task-phases-test", "attempt-phases-test", report, nil)
+
+	message, ok := transport.last()
+	if !ok || message.Type != controltransport.MsgTaskResult {
+		t.Fatalf("last message = %#v, want TaskResult", message)
+	}
+	result, ok := message.TypedPayload.(*pb.TaskResult)
+	if !ok || result == nil {
+		t.Fatalf("typed task result = %#v", message.TypedPayload)
+	}
+	if len(result.PhaseTimings) != 2 {
+		t.Fatalf("PhaseTimings len = %d, want 2", len(result.PhaseTimings))
+	}
+	first := result.PhaseTimings[0]
+	if first.PhaseOrder != 1 || first.Component != "runner" || first.Action != "cache_lookup" {
+		t.Errorf("first phase = %d %s.%s", first.PhaseOrder, first.Component, first.Action)
+	}
+	if first.EventIndex != 0 || first.EventType != "completed" || first.Status != "ok" {
+		t.Errorf("first phase event = idx=%d type=%q status=%q", first.EventIndex, first.EventType, first.Status)
+	}
+	if first.Origin != "worker" || first.Scope != "attempt" || first.Phase != "cache_lookup" {
+		t.Errorf("first phase taxonomy = %q/%q phase=%q", first.Origin, first.Scope, first.Phase)
+	}
+	if first.ExecutorId != "scene.composite.v1" || first.ExecutorVersion != 1 {
+		t.Errorf("first phase identity = %s@%d", first.ExecutorId, first.ExecutorVersion)
+	}
+	if first.DurationMs != 10 {
+		t.Errorf("first phase duration_ms = %d, want 10", first.DurationMs)
+	}
+	second := result.PhaseTimings[1]
+	if second.LeaseId != "lease-phases-test" {
+		t.Errorf("lease stamped = %q, want lease-phases-test", second.LeaseId)
+	}
+	if second.EventType != "failed" || second.ErrorCode != "EXECUTE_FAILED" || second.ErrorMessage != "boom" {
+		t.Errorf("second phase failure = type=%q code=%q msg=%q", second.EventType, second.ErrorCode, second.ErrorMessage)
+	}
+}
+
+// TestSubmitTaskResult_FailedRenderPreservesDetailedPhases verifies that
+// submitTaskResult does not discard the worker report when execution fails.
+// Failed renders must still deliver every phase completed before the error,
+// including the failed phase itself, so the master can persist partial work.
+func TestSubmitTaskResult_FailedRenderPreservesDetailedPhases(t *testing.T) {
+	transport := &recordingTransport{}
+	w := &Worker{
+		config:    &config.WorkerConfig{WorkerID: "worker-failed-phases", ProtocolVersion: "v3"},
+		logger:    logger.New(logger.InfoLevel, io.Discard),
+		transport: transport,
+	}
+	started := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	report := &taskrunner.TaskExecutionReport{
+		ExecutorKey: "scene.composite.v1@1",
+		Status:      "failed",
+		ErrorCode:   "EXECUTE_FAILED",
+		ErrorDetail: "encoder crashed",
+		DetailedPhases: []taskrunner.DetailedPhaseTiming{
+			{
+				PhaseOrder: 1, Component: "runner", Action: "cache_lookup",
+				StartedAt: started, CompletedAt: started.Add(5 * time.Millisecond),
+				DurationMS: 5, Status: "ok", Origin: "worker", Scope: "attempt",
+				EventType: "completed", EventName: "cache_lookup", EventIndex: 0,
+				Phase: "cache_lookup", ExecutorID: "scene.composite.v1", ExecutorVersion: 1,
+			},
+			{
+				PhaseOrder: 2, Component: "runner", Action: "execute",
+				StartedAt: started.Add(5 * time.Millisecond), CompletedAt: started.Add(25 * time.Millisecond),
+				DurationMS: 20, Status: "failed", ErrorCode: "EXECUTE_FAILED",
+				ErrorMessage: "encoder crashed", Origin: "worker", Scope: "attempt",
+				EventType: "failed", EventName: "execute", EventIndex: 1,
+				Phase: "render", ExecutorID: "scene.composite.v1", ExecutorVersion: 1,
+			},
+		},
+	}
+	pte := &PendingTaskExecution{
+		JobID: "job-failed-phases", ExecutorID: "scene.composite.v1", LeaseID: "lease-failed-phases",
+	}
+
+	w.submitTaskResult(context.Background(), pte, "task-failed-phases", "attempt-failed-phases", report, errors.New("encoder crashed"))
+
+	message, ok := transport.last()
+	if !ok || message.Type != controltransport.MsgTaskResult {
+		t.Fatalf("last message = %#v, want TaskResult", message)
+	}
+	result, ok := message.TypedPayload.(*pb.TaskResult)
+	if !ok || result == nil {
+		t.Fatalf("typed task result = %#v", message.TypedPayload)
+	}
+	if result.Status != "failed" {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+	if result.ErrorCode != "EXECUTE_FAILED" {
+		t.Fatalf("error code = %q, want EXECUTE_FAILED from the failed report", result.ErrorCode)
+	}
+	if result.ErrorDetail != "encoder crashed" {
+		t.Fatalf("error detail = %q, want encoder crashed", result.ErrorDetail)
+	}
+	if len(result.PhaseTimings) != len(report.DetailedPhases) {
+		t.Fatalf("phase timings = %d, want %d", len(result.PhaseTimings), len(report.DetailedPhases))
+	}
+	for i, phase := range result.PhaseTimings {
+		if phase.PhaseOrder != int32(i+1) || phase.EventIndex != int64(i) {
+			t.Errorf("phase[%d] order/index = %d/%d, want %d/%d", i, phase.PhaseOrder, phase.EventIndex, i+1, i)
+		}
+	}
+	if result.PhaseTimings[1].Status != "failed" || result.PhaseTimings[1].ErrorCode != "EXECUTE_FAILED" {
+		t.Fatalf("failed phase = status:%q code:%q", result.PhaseTimings[1].Status, result.PhaseTimings[1].ErrorCode)
+	}
+	for i, phase := range result.PhaseTimings {
+		if phase.LeaseId != pte.LeaseID {
+			t.Errorf("phase[%d] lease_id = %q, want %q", i, phase.LeaseId, pte.LeaseID)
+		}
+	}
+}
+
+func TestSubmitTaskResult_FailedReportWithoutExecutionErrorPreservesFailure(t *testing.T) {
+	transport := &recordingTransport{}
+	w := &Worker{
+		config:    &config.WorkerConfig{WorkerID: "worker-failed-report", ProtocolVersion: "v3"},
+		logger:    logger.New(logger.InfoLevel, io.Discard),
+		transport: transport,
+	}
+	report := &taskrunner.TaskExecutionReport{
+		Status:      "failed",
+		ErrorCode:   "UPLOAD_FAILED",
+		ErrorDetail: "artifact commit rejected",
+		DetailedPhases: []taskrunner.DetailedPhaseTiming{{
+			PhaseOrder: 1, Component: "runner", Action: "upload", Status: "failed",
+			ErrorCode: "UPLOAD_FAILED", ErrorMessage: "artifact commit rejected",
+			Origin: "worker", Scope: "attempt", EventType: "failed", EventIndex: 0,
+		}},
+	}
+	pte := &PendingTaskExecution{JobID: "job-failed-report", ExecutorID: "scene.composite.v1", LeaseID: "lease-failed-report"}
+
+	w.submitTaskResult(context.Background(), pte, "task-failed-report", "attempt-failed-report", report, nil)
+
+	message, ok := transport.last()
+	if !ok {
+		t.Fatal("expected a TaskResult message")
+	}
+	result, ok := message.TypedPayload.(*pb.TaskResult)
+	if !ok || result == nil {
+		t.Fatalf("typed task result = %#v", message.TypedPayload)
+	}
+	if result.Status != "failed" || result.ErrorCode != "UPLOAD_FAILED" || result.ErrorDetail != "artifact commit rejected" {
+		t.Fatalf("failure = status:%q code:%q detail:%q", result.Status, result.ErrorCode, result.ErrorDetail)
+	}
+	if len(result.PhaseTimings) != 1 || result.PhaseTimings[0].Status != "failed" {
+		t.Fatalf("phase timings = %+v, want one failed phase", result.PhaseTimings)
 	}
 }

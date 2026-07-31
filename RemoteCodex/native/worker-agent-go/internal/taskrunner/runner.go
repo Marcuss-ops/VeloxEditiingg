@@ -44,10 +44,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/oteltrace"
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/logger"
 )
 
@@ -164,6 +167,12 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		StartedAt:    overallStart,
 		PhaseMarkers: make([]PhaseMarker, 0, 5),
 	}
+	// The per-attempt phase recorder accumulates the detailed event
+	// stream that TaskResult.phase_timings (proto field 20) carries to
+	// the master. attachDetailedPhases drains it onto the report before
+	// every return path, so success AND failure reports both carry the
+	// full phase history.
+	rec := telemetry.NewEventRecorder()
 	// appendPhase writes directly to report.PhaseMarkers so the
 	// returned TaskExecutionReport always carries the recorded phases.
 	// Run is single-goroutine; no mutex needed.
@@ -174,7 +183,7 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	// Defensive: nil registry would brick Run. Externally we already
 	// panic in NewTaskRunner; this catches post-construction mutation.
 	if r.registry == nil {
-		return r.completeError(report, appendPhase, CodeInternalRunnerFault, "nil registry at Run time"), nil
+		return r.completeError(rec, report, appendPhase, CodeInternalRunnerFault, "nil registry at Run time"), nil
 	}
 
 	// Phase: spec.Validate runs FIRST. The PR-3 doc invariant: validate
@@ -187,17 +196,17 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	)
 	if err := spec.Validate(); err != nil {
 		validateSpan.End()
-		return r.completeError(report, appendPhase, CodeValidationFailed,
+		return r.completeError(rec, report, appendPhase, CodeValidationFailed,
 			fmt.Sprintf("spec validation: %v", err)), nil
 	}
 	validateSpan.End()
-	appendPhase(r.runPhase(PhaseCacheLookup, func() error { return nil }, overallStart))
+	appendPhase(r.runPhase(rec, PhaseCacheLookup, func() error { return nil }, overallStart))
 
 	// Phase: resolve executor from the registry.
 	version := r.specVersion(spec)
 	exec, lookupErr := r.registry.Resolve(spec.ExecutorID, version)
 	if lookupErr != nil {
-		return r.completeError(report, appendPhase, CodeUnsupportedExecutor,
+		return r.completeError(rec, report, appendPhase, CodeUnsupportedExecutor,
 			fmt.Sprintf("resolve %s@%d: %v", spec.ExecutorID, version, lookupErr)), nil
 	}
 	desc := exec.Descriptor()
@@ -224,16 +233,16 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		BlobStats:  r.blobStats,
 	})
 	if err != nil {
-		return r.completeError(report, appendPhase, CodeInternalRunnerFault,
+		return r.completeError(rec, report, appendPhase, CodeInternalRunnerFault,
 			fmt.Sprintf("build ExecutionContext: %v", err)), nil
 	}
 
 	// Phase: Executor.Validate BEFORE Execute. PR-3 invariant.
 	if err := exec.Validate(spec); err != nil {
-		return r.completeError(report, appendPhase, CodeValidationFailed,
+		return r.completeError(rec, report, appendPhase, CodeValidationFailed,
 			fmt.Sprintf("executor.Validate: %v", err)), nil
 	}
-	appendPhase(r.runPhase(PhasePrefetch, func() error { return nil }, overallStart))
+	appendPhase(r.runPhase(rec, PhasePrefetch, func() error { return nil }, overallStart))
 
 	// Phase: Execute with panic containment + cancellation mapping.
 	// Scorecard v2 / Step 15: starts a "render" span for distributed tracing.
@@ -241,7 +250,7 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		oteltrace.AttrJobID(spec.JobID),
 		oteltrace.AttrExecutorID(spec.ExecutorID),
 	)
-	result, execErr := r.runExecute(rc, exec, spec, appendPhase)
+	result, execErr := r.runExecute(rc, exec, spec, appendPhase, rec)
 	renderSpan.End()
 
 	// Map internal err into a stable Code for the report.
@@ -250,34 +259,34 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		// success path
 	case execErr == nil && isPanicContained(result):
 		code := CodeExecutorPanicContained
-		return r.completeError(report, appendPhase, code, result.ErrorDetail), nil
+		return r.completeError(rec, report, appendPhase, code, result.ErrorDetail), nil
 	case errors.Is(execErr, context.DeadlineExceeded):
-		return r.completeError(report, appendPhase, CodeContextDeadlineExceeded, execErr.Error()), nil
+		return r.completeError(rec, report, appendPhase, CodeContextDeadlineExceeded, execErr.Error()), nil
 	case errors.Is(execErr, context.Canceled):
 		// PR-3.5 will split lease-loss vs operator-cancel. Today both
 		// map to CodeCanceled.
-		return r.completeError(report, appendPhase, CodeCanceled, execErr.Error()), nil
+		return r.completeError(rec, report, appendPhase, CodeCanceled, execErr.Error()), nil
 	case execErr != nil:
 		// The Executor returned an error or panicked; classify.
 		if isPanicErr(execErr) {
-			return r.completeError(report, appendPhase, CodeExecutorPanicContained, execErr.Error()), nil
+			return r.completeError(rec, report, appendPhase, CodeExecutorPanicContained, execErr.Error()), nil
 		}
-		return r.completeError(report, appendPhase, CodeExecuteFailed, execErr.Error()), nil
+		return r.completeError(rec, report, appendPhase, CodeExecuteFailed, execErr.Error()), nil
 	default:
 		// Executor returned a non-"succeeded" status string.
-		return r.completeError(report, appendPhase, CodeExecuteFailed,
+		return r.completeError(rec, report, appendPhase, CodeExecuteFailed,
 			fmt.Sprintf("executor returned non-success status %q (code=%q detail=%q)",
 				result.Status, result.ErrorCode, result.ErrorDetail)), nil
 	}
 
 	// Phase: upload (skipped if no outputs).
-	uploadErr := r.runUpload(rc, result, appendPhase)
+	uploadErr := r.runUpload(rc, result, appendPhase, rec)
 	if uploadErr != nil {
-		return r.completeError(report, appendPhase, CodeUploadFailed, uploadErr.Error()), nil
+		return r.completeError(rec, report, appendPhase, CodeUploadFailed, uploadErr.Error()), nil
 	}
 
 	// Phase: report - already built; mark final.
-	appendPhase(r.runPhase(PhaseReport, func() error { return nil }, overallStart))
+	appendPhase(r.runPhase(rec, PhaseReport, func() error { return nil }, overallStart))
 	report.Status = "succeeded"
 	report.Outputs = result.Outputs
 	report.Metrics = result.Metrics
@@ -292,11 +301,16 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		}
 		r.mergeStatsInto(report, report.Metrics)
 	}
+	r.attachDetailedPhases(rec, report)
 	return *report, nil
 }
 
-// runPhase records one canonical phase timing.
-func (r *TaskRunner) runPhase(name string, fn func() error, fallbackStart time.Time) PhaseMarker {
+// runPhase records one canonical phase timing into the report marker
+// list and, when a recorder is attached, as a detailed worker-origin
+// event. The recorded event reuses the marker's wall stamps and
+// duration so the task_phase_timings summary and the
+// task_execution_events detail correlate exactly.
+func (r *TaskRunner) runPhase(rec *telemetry.EventRecorder, name string, fn func() error, fallbackStart time.Time) PhaseMarker {
 	start := r.now()
 	err := fn()
 	end := r.now()
@@ -304,6 +318,15 @@ func (r *TaskRunner) runPhase(name string, fn func() error, fallbackStart time.T
 	if err != nil {
 		m.Status = "failed"
 		m.Notes = err.Error()
+	}
+	if rec != nil {
+		rec.Record(telemetry.EventSpec{
+			Origin:    telemetry.OriginWorker,
+			Scope:     telemetry.ScopeAttempt,
+			Component: "runner",
+			Action:    name,
+			Phase:     name,
+		}, start, end, end.Sub(start).Milliseconds(), m.Status, "", m.Notes)
 	}
 	return m
 }
@@ -313,11 +336,23 @@ func (r *TaskRunner) runPhase(name string, fn func() error, fallbackStart time.T
 // PR-3.7: failure paths also surface cache + blob counters so operators
 // see real hit/miss/eviction activity on failed-task reports rather
 // than a misleading zero-map.
-func (r *TaskRunner) completeError(report *TaskExecutionReport, appendPhase func(PhaseMarker), code, detail string) TaskExecutionReport {
+func (r *TaskRunner) completeError(rec *telemetry.EventRecorder, report *TaskExecutionReport, appendPhase func(PhaseMarker), code, detail string) TaskExecutionReport {
 	report.Status = "failed"
 	report.ErrorCode = code
 	report.ErrorDetail = detail
 	report.CompletedAt = r.now()
+	// Record the failure as the terminal worker-origin event so the
+	// detailed phase stream shows how the attempt ended, even when the
+	// failure happened before any canonical phase ran.
+	if rec != nil {
+		now := r.now()
+		rec.Record(telemetry.EventSpec{
+			Origin:    telemetry.OriginWorker,
+			Scope:     telemetry.ScopeAttempt,
+			Component: "runner",
+			Action:    "run",
+		}, now, now, 0, telemetry.StatusFailed, code, detail)
+	}
 	// Always have at least one marker (the report phase) so consumers
 	// that check `len(phaseMarkers) == 0` can rely on truth: failure
 	// means a phase WAS run.
@@ -330,7 +365,36 @@ func (r *TaskRunner) completeError(report *TaskExecutionReport, appendPhase func
 		}
 		r.mergeStatsInto(report, report.Metrics)
 	}
+	r.attachDetailedPhases(rec, report)
 	return *report
+}
+
+// attachDetailedPhases drains the recorder onto the report as the
+// ordered DetailedPhases list, numbering events 1..N across the whole
+// attempt. Identity fields come from the report's canonical executor
+// tuple; lease/snapshot identity is stamped at the submit boundary and
+// overridden by the master at ingest.
+func (r *TaskRunner) attachDetailedPhases(rec *telemetry.EventRecorder, report *TaskExecutionReport) {
+	if rec == nil {
+		return
+	}
+	execID := report.ExecutorID
+	execVersion := int32(0)
+	if key := report.ExecutorKey; key != "" {
+		if i := strings.LastIndexByte(key, '@'); i >= 0 {
+			if v, err := strconv.Atoi(key[i+1:]); err == nil {
+				execVersion = int32(v)
+			}
+		}
+	}
+	phases := rec.Flush()
+	if len(phases) == 0 {
+		return
+	}
+	report.DetailedPhases = make([]DetailedPhaseTiming, 0, len(phases))
+	for i, p := range phases {
+		report.DetailedPhases = append(report.DetailedPhases, fromRecordedPhase(p, i+1, execID, execVersion, ""))
+	}
 }
 
 func (r *TaskRunner) now() time.Time {
