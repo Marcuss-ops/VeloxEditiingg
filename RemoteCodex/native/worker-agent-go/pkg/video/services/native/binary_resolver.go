@@ -129,6 +129,42 @@ func mapEngineSidecar(sc *engineSidecar, m *pipeline.RenderMetrics) {
 			ParallelGroup:    seg.ParallelGroup,
 		})
 	}
+	m.DetailedPhases = make([]pipeline.DetailedPhaseTiming, 0, len(sc.Phases))
+	for _, phase := range sc.Phases {
+		metadata := phase.MetadataJSON
+		if metadata == "" && len(phase.Metadata) > 0 {
+			metadata = string(phase.Metadata)
+		}
+		m.DetailedPhases = append(m.DetailedPhases, pipeline.DetailedPhaseTiming{
+			Origin:           phase.Origin,
+			Scope:            phase.Scope,
+			Component:        phase.Component,
+			Action:           phase.Action,
+			Phase:            phase.Phase,
+			EventType:        phase.EventType,
+			EventName:        phase.EventName,
+			EventIndex:       phase.EventIndex,
+			StartedAt:        phase.StartedAt,
+			CompletedAt:      phase.CompletedAt,
+			DurationMS:       phase.DurationMS,
+			Status:           phase.Status,
+			ErrorCode:        phase.ErrorCode,
+			ErrorMessage:     phase.ErrorMessage,
+			BytesIn:          phase.BytesIn,
+			BytesOut:         phase.BytesOut,
+			Frames:           phase.Frames,
+			MetadataJSON:     metadata,
+			SegmentIndex:     phase.SegmentIndex,
+			TrackKind:        phase.TrackKind,
+			TrackIndex:       phase.TrackIndex,
+			StartedOffsetMS:  phase.StartedOffsetMS,
+			FinishedOffsetMS: phase.FinishedOffsetMS,
+			CPUMS:            phase.CPUMS,
+			QueueWaitMS:      phase.QueueWaitMS,
+			FramesIn:         phase.FramesIn,
+			FramesOut:        phase.FramesOut,
+		})
+	}
 }
 
 // verifyOutputExists confirms the engine actually wrote its declared

@@ -218,6 +218,39 @@ type SegmentTiming struct {
 	ParallelGroup    string
 }
 
+// DetailedPhaseTiming is one event parsed from the native C++ sidecar
+// phases[] array. It intentionally mirrors the worker report shape while
+// keeping the executor package independent from taskrunner.
+type DetailedPhaseTiming struct {
+	Origin           string
+	Scope            string
+	Component        string
+	Action           string
+	Phase            string
+	EventType        string
+	EventName        string
+	EventIndex       int64
+	StartedAt        time.Time
+	CompletedAt      time.Time
+	DurationMS       int64
+	Status           string
+	ErrorCode        string
+	ErrorMessage     string
+	BytesIn          int64
+	BytesOut         int64
+	Frames           int64
+	MetadataJSON     string
+	SegmentIndex     int32
+	TrackKind        string
+	TrackIndex       int32
+	StartedOffsetMS  float64
+	FinishedOffsetMS float64
+	CPUMS            float64
+	QueueWaitMS      float64
+	FramesIn         int64
+	FramesOut        int64
+}
+
 // ExecutionResult is the structured outcome of one Execute call.
 // The taskrunner converts this into the canonical TaskExecutionReport
 // reported back to the master (PR-1 metrics catalogue).
@@ -231,6 +264,8 @@ type ExecutionResult struct {
 	Metrics map[string]interface{} `json:"metrics,omitempty"`
 	// Segments holds per-segment C++ sidecar timings.
 	Segments []SegmentTiming `json:"segments,omitempty"`
+	// DetailedPhases holds the optional native C++ sidecar phases[] stream.
+	DetailedPhases []DetailedPhaseTiming `json:"detailed_phases,omitempty"`
 	// ErrorCode is a stable error code when Status == "failed"
 	// (e.g. "validation_failed", "executor_panic_contained", "lease_lost").
 	ErrorCode string `json:"error_code,omitempty"`

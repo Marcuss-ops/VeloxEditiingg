@@ -10,6 +10,7 @@
 //
 // Run via the binary velox_phase_recorder_tests.
 
+#include "velox/core/render_engine.hpp"
 #include "velox/telemetry/phase_recorder.hpp"
 
 #include <chrono>
@@ -187,6 +188,102 @@ void testAppendJson() {
     EXPECT(std::strstr(json.c_str(), "\"started_at\":") != nullptr, "started_at in json");
 }
 
+void testAppendJsonMetadataValidationAndDetailedFields() {
+    SUBCASE("AppendJson omits invalid metadata and keeps detailed fields");
+    vt::PhaseRecorder r;
+    int64_t token = r.Begin(vt::kOriginEngine, vt::kScopeSegment,
+                            "engine", "encode", "encode");
+    r.SetMetadataJSON(token, "{\"codec\":]");
+    r.SetDetailedMetrics(token, 3, "video", 1, 1.25, 8.5, 42.0, 2.0, 31, 30);
+    r.Complete(token, 100, 200, 30, vt::kStatusOk);
+    auto events = r.Snapshot();
+    EXPECT_EQ_INT(static_cast<int>(events.size()), 1);
+    std::ostringstream out;
+    events[0].AppendJson(out);
+    const std::string invalidJson = out.str();
+    EXPECT(std::strstr(invalidJson.c_str(), "\"metadata\"") == nullptr,
+           "invalid metadata omitted");
+    EXPECT(std::strstr(invalidJson.c_str(), "\"segment_index\":3") != nullptr,
+           "segment index emitted");
+    EXPECT(std::strstr(invalidJson.c_str(), "\"track_kind\":\"video\"") != nullptr,
+           "track kind emitted");
+    EXPECT(std::strstr(invalidJson.c_str(), "\"frames_in\":31") != nullptr,
+           "frames in emitted");
+
+    vt::PhaseRecorder validRecorder;
+    int64_t validToken = validRecorder.Begin(vt::kOriginEngine, vt::kScopeSegment,
+                                             "engine", "encode", "encode");
+    validRecorder.SetMetadataJSON(validToken, "{\"codec\":\"h264\",\"stream\":{\"index\":0},\"tags\":[\"main\"]}");
+    validRecorder.Complete(validToken, 0, 0, 0, vt::kStatusOk);
+    std::ostringstream validOut;
+    validRecorder.Snapshot()[0].AppendJson(validOut);
+    EXPECT(std::strstr(validOut.str().c_str(), "\"metadata\":{\"codec\":\"h264\",\"stream\":{\"index\":0},\"tags\":[\"main\"]}") != nullptr,
+           "valid nested metadata emitted");
+}
+
+void testAppendJsonEscapesStrings() {
+    SUBCASE("AppendJson escapes detailed event strings so phases[] remains valid JSON");
+    vt::PhaseRecorder r;
+    int64_t token = r.Begin(vt::kOriginEngine, vt::kScopeSegment,
+                            "engine", "encode", "encode", "", "segment\"0");
+    r.Abort(token, "E\\\"IO", "line 1\nline 2");
+    auto events = r.Snapshot();
+    EXPECT_EQ_INT(static_cast<int>(events.size()), 1);
+    std::ostringstream out;
+    events[0].AppendJson(out);
+    const std::string json = out.str();
+    EXPECT(std::strstr(json.c_str(), "segment\\\"0") != nullptr, "event_name quote escaped");
+    EXPECT(std::strstr(json.c_str(), "E\\\\\\\"IO") != nullptr, "error_code quote escaped");
+    EXPECT(std::strstr(json.c_str(), "line 1\\nline 2") != nullptr, "error newline escaped");
+}
+
+void testCompleteSidecarSchema() {
+    SUBCASE("sidecarJson keeps phase_ms, segments[] and phases[] in one payload");
+    velox::core::RenderEngine engine;
+    engine.metrics().addMs("encode", 12.5);
+    velox::core::SegmentTiming segment;
+    segment.index = 2;
+    segment.source_type = "video";
+    segment.total_ms = 20.0;
+    segment.codec = "h264";
+    segment.preset = "fast";
+    segment.status = vt::kStatusOk;
+    segment.started_offset_ms = 1.5;
+    segment.finished_offset_ms = 21.5;
+    segment.worker_slot = 3;
+    segment.cpu_threads = 4;
+    segment.parallel_group = "scene-2";
+    engine.metrics().addSegment(segment);
+
+    int64_t token = engine.recorder().Begin(
+        vt::kOriginEngine, vt::kScopeSegment, "engine.encode", "frame_submit", "encode");
+    engine.recorder().SetDetailedMetrics(token, 2, "video", 0, 1.5, 21.0, 18.0, 0.5, 120, 118);
+    engine.recorder().Complete(token, 1000, 2000, 118, vt::kStatusOk);
+
+    const std::string json = engine.sidecarJson("/tmp/render-output.mp4");
+    EXPECT(json.size() > 0, "sidecar JSON is not empty");
+    EXPECT(json.front() == '{' && json.back() == '}', "sidecar JSON is object-shaped");
+    EXPECT(vt::IsValidJsonObject(json), "complete sidecar JSON parses as an object");
+    EXPECT(std::strstr(json.c_str(), "\"phase_ms\":{\"encode\":12.5}") != nullptr,
+           "phase_ms summary emitted");
+    EXPECT(std::strstr(json.c_str(), "\"segments\":[") != nullptr,
+           "segments array emitted");
+    EXPECT(std::strstr(json.c_str(), "\"codec\":\"h264\"") != nullptr,
+           "segment codec emitted");
+    EXPECT(std::strstr(json.c_str(), "\"parallel_group\":\"scene-2\"") != nullptr,
+           "segment parallelism emitted");
+    EXPECT(std::strstr(json.c_str(), "\"phases\":[") != nullptr,
+           "phases array emitted");
+    EXPECT(std::strstr(json.c_str(), "\"component\":\"engine.encode\"") != nullptr,
+           "detailed phase emitted");
+    EXPECT(std::strstr(json.c_str(), "\"segment_index\":2") != nullptr,
+           "detailed segment index emitted");
+    EXPECT(std::strstr(json.c_str(), "\"cpu_ms\":18") != nullptr,
+           "detailed cpu timing emitted");
+    EXPECT(std::strstr(json.c_str(), "\"frames_in\":120") != nullptr,
+           "detailed frame counters emitted");
+}
+
 void testReset() {
     SUBCASE("Reset clears events and re-starts indexes at 0");
     vt::PhaseRecorder r;
@@ -223,6 +320,9 @@ int main() {
     testScopedPhaseRaii();
     testScopedPhaseMove();
     testAppendJson();
+    testAppendJsonMetadataValidationAndDetailedFields();
+    testAppendJsonEscapesStrings();
+    testCompleteSidecarSchema();
     testReset();
     testCanonicalEnums();
 

@@ -1,10 +1,158 @@
 // phase_recorder.cpp — C++ engine-side event recorder implementation.
 #include "velox/telemetry/phase_recorder.hpp"
 
+#include <cctype>
 #include <chrono>
 #include <iomanip>
 #include <ostream>
 #include <sstream>
+
+namespace {
+class JsonValidator {
+public:
+    explicit JsonValidator(const std::string& input) : input_(input) {}
+
+    bool validObject() {
+        skipWhitespace();
+        if (!parseObject()) return false;
+        skipWhitespace();
+        return pos_ == input_.size();
+    }
+
+private:
+    void skipWhitespace() {
+        while (pos_ < input_.size() && std::isspace(static_cast<unsigned char>(input_[pos_]))) ++pos_;
+    }
+
+    bool parseObject() {
+        if (!consume('{')) return false;
+        skipWhitespace();
+        if (consume('}')) return true;
+        while (true) {
+            skipWhitespace();
+            if (!parseString()) return false;
+            skipWhitespace();
+            if (!consume(':')) return false;
+            skipWhitespace();
+            if (!parseValue()) return false;
+            skipWhitespace();
+            if (consume('}')) return true;
+            if (!consume(',')) return false;
+        }
+    }
+
+    bool parseArray() {
+        if (!consume('[')) return false;
+        skipWhitespace();
+        if (consume(']')) return true;
+        while (true) {
+            skipWhitespace();
+            if (!parseValue()) return false;
+            skipWhitespace();
+            if (consume(']')) return true;
+            if (!consume(',')) return false;
+        }
+    }
+
+    bool parseString() {
+        if (!consume('"')) return false;
+        while (pos_ < input_.size()) {
+            const unsigned char c = static_cast<unsigned char>(input_[pos_++]);
+            if (c == '"') return true;
+            if (c < 0x20) return false;
+            if (c == '\\') {
+                if (pos_ >= input_.size()) return false;
+                const char escaped = input_[pos_++];
+                if (escaped == 'u') {
+                    for (int i = 0; i < 4; ++i) {
+                        if (pos_ >= input_.size() ||
+                            !std::isxdigit(static_cast<unsigned char>(input_[pos_++]))) return false;
+                    }
+                } else if (std::string("\\\"/bfnrt").find(escaped) == std::string::npos) {
+                    return false;
+                }
+            }
+        }
+        return false;
+    }
+
+    bool parseNumber() {
+        const size_t start = pos_;
+        if (pos_ < input_.size() && input_[pos_] == '-') ++pos_;
+        if (pos_ >= input_.size()) return false;
+        if (input_[pos_] == '0') {
+            ++pos_;
+        } else {
+            if (!std::isdigit(static_cast<unsigned char>(input_[pos_]))) return false;
+            while (pos_ < input_.size() && std::isdigit(static_cast<unsigned char>(input_[pos_]))) ++pos_;
+        }
+        if (pos_ < input_.size() && input_[pos_] == '.') {
+            ++pos_;
+            const size_t fraction = pos_;
+            while (pos_ < input_.size() && std::isdigit(static_cast<unsigned char>(input_[pos_]))) ++pos_;
+            if (fraction == pos_) return false;
+        }
+        if (pos_ < input_.size() && (input_[pos_] == 'e' || input_[pos_] == 'E')) {
+            ++pos_;
+            if (pos_ < input_.size() && (input_[pos_] == '+' || input_[pos_] == '-')) ++pos_;
+            const size_t exponent = pos_;
+            while (pos_ < input_.size() && std::isdigit(static_cast<unsigned char>(input_[pos_]))) ++pos_;
+            if (exponent == pos_) return false;
+        }
+        return start != pos_;
+    }
+
+    bool parseLiteral(const char* literal) {
+        const size_t length = std::char_traits<char>::length(literal);
+        if (input_.compare(pos_, length, literal) != 0) return false;
+        pos_ += length;
+        return true;
+    }
+
+    bool parseValue() {
+        skipWhitespace();
+        if (pos_ >= input_.size()) return false;
+        switch (input_[pos_]) {
+            case '{': return parseObject();
+            case '[': return parseArray();
+            case '"': return parseString();
+            case 't': return parseLiteral("true");
+            case 'f': return parseLiteral("false");
+            case 'n': return parseLiteral("null");
+            default: return parseNumber();
+        }
+    }
+
+    bool consume(char expected) {
+        if (pos_ >= input_.size() || input_[pos_] != expected) return false;
+        ++pos_;
+        return true;
+    }
+
+    const std::string& input_;
+    size_t pos_{0};
+};
+
+bool isValidJsonObjectShape(const std::string& value) {
+    return !value.empty() && JsonValidator(value).validObject();
+}
+
+std::string escapeJsonString(const std::string& value) {
+    std::string out;
+    out.reserve(value.size() + 4);
+    for (char c : value) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default: out += c; break;
+        }
+    }
+    return out;
+}
+} // namespace
 
 namespace velox::telemetry {
 
@@ -38,29 +186,70 @@ bool IsCanonicalScope(const std::string& s) {
            s == kScopeSubtitleTrack || s == kScopeArtifact;
 }
 
+bool IsValidJsonObject(const std::string& s) {
+    return isValidJsonObjectShape(s);
+}
+
 void PhaseEvent::AppendJson(std::ostringstream& out) const {
     out << "{";
-    out << "\"origin\":\"" << origin << "\"";
-    out << ",\"scope\":\"" << scope << "\"";
-    out << ",\"component\":\"" << component << "\"";
-    out << ",\"action\":\"" << action << "\"";
-    out << ",\"phase\":\"" << phase << "\"";
-    out << ",\"event_type\":\"" << event_type << "\"";
-    out << ",\"event_name\":\"" << event_name << "\"";
+    out << "\"origin\":\"" << escapeJsonString(origin) << "\"";
+    out << ",\"scope\":\"" << escapeJsonString(scope) << "\"";
+    out << ",\"component\":\"" << escapeJsonString(component) << "\"";
+    out << ",\"action\":\"" << escapeJsonString(action) << "\"";
+    out << ",\"phase\":\"" << escapeJsonString(phase) << "\"";
+    out << ",\"event_type\":\"" << escapeJsonString(event_type) << "\"";
+    out << ",\"event_name\":\"" << escapeJsonString(event_name) << "\"";
     out << ",\"event_index\":" << event_index;
-    out << ",\"started_at\":\"" << started_at << "\"";
-    out << ",\"completed_at\":\"" << completed_at << "\"";
+    out << ",\"started_at\":\"" << escapeJsonString(started_at) << "\"";
+    out << ",\"completed_at\":\"" << escapeJsonString(completed_at) << "\"";
     out << ",\"duration_ms\":" << duration_ms;
-    out << ",\"status\":\"" << status << "\"";
-    out << ",\"error_code\":\"" << error_code << "\"";
-    out << ",\"error_message\":\"" << error_message << "\"";
+    out << ",\"status\":\"" << escapeJsonString(status) << "\"";
+    out << ",\"error_code\":\"" << escapeJsonString(error_code) << "\"";
+    out << ",\"error_message\":\"" << escapeJsonString(error_message) << "\"";
     out << ",\"bytes_in\":" << bytes_in;
     out << ",\"bytes_out\":" << bytes_out;
     out << ",\"frames\":" << frames;
-    if (!metadata_json.empty()) {
+    out << ",\"segment_index\":" << segment_index;
+    out << ",\"track_kind\":\"" << escapeJsonString(track_kind) << "\"";
+    out << ",\"track_index\":" << track_index;
+    out << ",\"started_offset_ms\":" << started_offset_ms;
+    out << ",\"finished_offset_ms\":" << finished_offset_ms;
+    out << ",\"cpu_ms\":" << cpu_ms;
+    out << ",\"queue_wait_ms\":" << queue_wait_ms;
+    out << ",\"frames_in\":" << frames_in;
+    out << ",\"frames_out\":" << frames_out;
+    if (isValidJsonObjectShape(metadata_json)) {
         out << ",\"metadata\":" << metadata_json;
     }
     out << "}";
+}
+
+void PhaseRecorder::SetMetadataJSON(int64_t token, std::string metadata_json) {
+    std::lock_guard<std::mutex> lock(mu_);
+    auto it = inflight_.find(token);
+    if (it == inflight_.end() || !it->second.active) return;
+    if (!isValidJsonObjectShape(metadata_json)) return;
+    it->second.partial.metadata_json = std::move(metadata_json);
+}
+
+void PhaseRecorder::SetDetailedMetrics(int64_t token, int32_t segment_index,
+                                       std::string track_kind, int32_t track_index,
+                                       double started_offset_ms, double finished_offset_ms,
+                                       double cpu_ms, double queue_wait_ms,
+                                       int64_t frames_in, int64_t frames_out) {
+    std::lock_guard<std::mutex> lock(mu_);
+    auto it = inflight_.find(token);
+    if (it == inflight_.end() || !it->second.active) return;
+    auto& event = it->second.partial;
+    event.segment_index = segment_index;
+    event.track_kind = std::move(track_kind);
+    event.track_index = track_index;
+    event.started_offset_ms = started_offset_ms;
+    event.finished_offset_ms = finished_offset_ms;
+    event.cpu_ms = cpu_ms;
+    event.queue_wait_ms = queue_wait_ms;
+    event.frames_in = frames_in;
+    event.frames_out = frames_out;
 }
 
 void PhaseRecorder::Reset() {
@@ -187,6 +376,24 @@ ScopedPhase::ScopedPhase(PhaseRecorder& recorder, std::string origin,
                             std::move(event_name))) {}
 
 ScopedPhase::~ScopedPhase() { finish(); }
+
+void ScopedPhase::SetMetadataJSON(std::string metadata_json) {
+    if (!done_ && recorder_ != nullptr) {
+        recorder_->SetMetadataJSON(token_, std::move(metadata_json));
+    }
+}
+
+void ScopedPhase::SetDetailedMetrics(int32_t segment_index, std::string track_kind,
+                                     int32_t track_index, double started_offset_ms,
+                                     double finished_offset_ms, double cpu_ms,
+                                     double queue_wait_ms, int64_t frames_in,
+                                     int64_t frames_out) {
+    if (!done_ && recorder_ != nullptr) {
+        recorder_->SetDetailedMetrics(token_, segment_index, std::move(track_kind),
+                                      track_index, started_offset_ms, finished_offset_ms,
+                                      cpu_ms, queue_wait_ms, frames_in, frames_out);
+    }
+}
 
 void ScopedPhase::Complete(int64_t bytes_in, int64_t bytes_out, int64_t frames,
                            const std::string& status, const std::string& error_code,

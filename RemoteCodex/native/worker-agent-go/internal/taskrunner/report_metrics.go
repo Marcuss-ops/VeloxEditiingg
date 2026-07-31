@@ -37,6 +37,20 @@ import (
 //
 // Safe under zero-valued providers (noop fallbacks keep the merge
 // safe and idempotent for tests).
+// TypedMetricsFromMap converts legacy dotted metrics into the typed wire
+// mirror. It is also used at the transport boundary for reports assembled
+// outside TaskRunner (for example failed/cancelled reports in tests or
+// pre-run asset failures).
+func TypedMetricsFromMap(m map[string]interface{}) *telemetry.TypedExecutionMetrics {
+	copyMap := make(map[string]interface{}, len(m))
+	for key, value := range m {
+		copyMap[key] = value
+	}
+	report := &TaskExecutionReport{}
+	(&TaskRunner{}).mergeStatsInto(report, copyMap)
+	return report.TypedMetrics
+}
+
 func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]interface{}) {
 	if r.cacheStats != nil {
 		cs := r.cacheStats.Stats()
@@ -57,6 +71,32 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 		m["blob.fetch_corruption"] = bs.FetchCorruption
 		m["blob.entries"] = bs.Entries
 		m["blob.bytes"] = bs.Bytes
+	}
+
+	// Native SceneComposite metrics use engine/native namespaces while the
+	// typed envelope uses the canonical report keys. Preserve an explicitly
+	// supplied canonical value and only fill aliases when it is absent.
+	for source, target := range map[string]string{
+		"engine.frames":           "frames.encoded",
+		"engine.speed_x":          "ffmpeg.speed_ratio",
+		"engine.encode_passes":    "encode.passes",
+		"engine.temp_bytes":       "temp.bytes.written",
+		"engine.duration_seconds": "media.duration.seconds",
+		"engine.concat_mode":      "concat.mode",
+	} {
+		if value, ok := m[source]; ok {
+			if _, exists := m[target]; !exists {
+				m[target] = value
+			}
+		}
+	}
+	// native.total_ms is wall-clock duration. Convert milliseconds to
+	// seconds before projecting it into the typed wall-clock field; never
+	// confuse it with CPU time.
+	if value, ok := m["native.total_ms"]; ok {
+		if _, exists := m["wall.clock.seconds"]; !exists {
+			m["wall.clock.seconds"] = floatFromMap(value) / 1000
+		}
 	}
 
 	// ── Scorecard v1 typed mirror ────────────────────────────────────

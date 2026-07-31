@@ -25,6 +25,12 @@ struct SegmentTiming {
     std::string codec;
     std::string preset;
     int64_t ffmpeg_threads{0};
+    std::string status;
+    std::string error_code;
+    std::string error_message;
+    int64_t worker_slot{0};
+    int64_t cpu_threads{0};
+    std::string parallel_group;
 
     // Parallelism telemetry (migration 098).
     // Wall-clock offsets relative to render() start. In the single-threaded

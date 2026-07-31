@@ -411,7 +411,18 @@ func TestRunner_Failure_DetailedPhases(t *testing.T) {
 		desc:       makeDesc("failing.v1", 1),
 		validateFn: func(_ executor.TaskSpec) error { return nil },
 		executeFn: func(_ context.Context, _ executor.ExecutionContext, _ executor.TaskSpec) (executor.ExecutionResult, error) {
-			return executor.ExecutionResult{Status: "failed", ErrorDetail: "boom"}, errors.New("boom")
+			return executor.ExecutionResult{
+				Status:      "failed",
+				ErrorDetail: "boom",
+				Metrics:     map[string]interface{}{"engine.encode": float64(42)},
+				Segments: []executor.SegmentTiming{{
+					SegmentIndex: 3, StartedOffsetMS: 1.5, FinishedOffsetMS: 7.25,
+				}},
+				DetailedPhases: []executor.DetailedPhaseTiming{{
+					Origin: "engine", Scope: "segment", Component: "engine.encode",
+					Action: "flush", EventIndex: 11, Status: "failed", ErrorCode: "encoder_crashed",
+				}},
+			}, errors.New("boom")
 		},
 	}
 	r := newTestRunner(exec)
@@ -421,6 +432,15 @@ func TestRunner_Failure_DetailedPhases(t *testing.T) {
 	}
 	if rep.Succeeded() {
 		t.Fatal("expected failed")
+	}
+	if rep.Metrics["engine.encode"] != float64(42) {
+		t.Errorf("partial metrics = %#v, want engine.encode=42", rep.Metrics)
+	}
+	if len(rep.Segments) != 1 || rep.Segments[0].SegmentIndex != 3 || rep.Segments[0].FinishedOffsetMS != 7.25 {
+		t.Fatalf("partial segment timings = %#v", rep.Segments)
+	}
+	if len(rep.DetailedPhases) < 1 || rep.DetailedPhases[0].EventIndex != 11 || rep.DetailedPhases[0].ErrorCode != "encoder_crashed" {
+		t.Fatalf("executor detailed phases were not preserved: %#v", rep.DetailedPhases)
 	}
 	if len(rep.DetailedPhases) == 0 {
 		t.Fatal("expected a detailed phase stream on the failure path")

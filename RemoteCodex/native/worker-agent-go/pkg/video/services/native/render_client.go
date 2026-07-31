@@ -99,16 +99,24 @@ func (c *RenderClient) RenderWithMetrics(ctx context.Context, p *plan.RenderPlan
 	processStartMs, processWaitMs, stderrBuf, stdoutBuf, err := runEngineProcess(ctx, c.binaryPath, planPath, c.onProgress)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			// Cancellation path — ProcessStartMs is set, ProcessWaitMs
-			// is intentionally zero (matches original). TotalMs is
-			// not set on either error path.
+			// Cancellation path — preserve any sidecar phases already
+			// flushed before the process stopped, while retaining the
+			// original cancellation error semantics.
 			metrics.ProcessStartMs = processStartMs
+			if sidecar, sidecarErr := readEngineSidecar(p.OutputPath); sidecarErr == nil {
+				mapEngineSidecar(&sidecar, &metrics)
+			}
 			return metrics, err
 		}
-		// Subprocess failed — populate ProcessWaitMs + wrap with
-		// stderr/stdout context exactly as the original did.
+		// Subprocess failed — preserve any partial sidecar telemetry before
+		// returning the process error. Failed renders can still contain
+		// completed phases and segment timing that are valuable for retry
+		// and waste analysis; reading them is strictly best-effort.
 		metrics.ProcessStartMs = processStartMs
 		metrics.ProcessWaitMs = processWaitMs
+		if sidecar, sidecarErr := readEngineSidecar(p.OutputPath); sidecarErr == nil {
+			mapEngineSidecar(&sidecar, &metrics)
+		}
 		return metrics, fmt.Errorf("engine failed: %w (stderr=%s stdout=%s)",
 			err, strings.TrimSpace(stderrBuf.String()), strings.TrimSpace(stdoutBuf.String()))
 	}

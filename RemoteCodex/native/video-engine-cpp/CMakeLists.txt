@@ -65,6 +65,10 @@ add_test(NAME ffmpeg_progress_parser_tests
 add_executable(velox_phase_recorder_tests
     tests/test_phase_recorder.cpp
     src/telemetry/phase_recorder.cpp
+    src/core/render_engine.cpp
+    src/services/file_utils.cpp
+    src/services/media_utils.cpp
+    src/services/ffmpeg_progress_parser.cpp
 )
 
 target_include_directories(velox_phase_recorder_tests

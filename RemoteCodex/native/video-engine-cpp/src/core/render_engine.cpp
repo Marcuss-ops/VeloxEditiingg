@@ -101,6 +101,12 @@ void RenderEngine::setProgressCallback(services::ProgressCallback cb) {
     progress_cb_ = std::move(cb);
 }
 
+RenderEngine::SidecarGuard::~SidecarGuard() {
+    if (engine_ != nullptr && !output_path_.empty()) {
+        engine_->emitSidecar(output_path_);
+    }
+}
+
 RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     // Reset accumulators on every fresh render() call.
     frames_encoded_.store(0);
@@ -130,6 +136,11 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
 
     RenderResult result;
     result.output_path = plan.output_path;
+
+    // Declare the guard before renderPhase so destruction order finalizes
+    // the enclosing event first, then writes the complete sidecar on every
+    // success and failure return path.
+    SidecarGuard sidecarGuard(this, result.output_path);
 
     // Block-1: the whole render call is one engine-origin "render"
     // event. RAII completion fires on every return path (success or
@@ -248,13 +259,23 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             bool built = runFfmpegSegmentWithProgress(
                 composeSegmentCmd(args_only), wrapped_cb, expected_us);
             if (!built) {
-                encodePhase.Abort("encode_failed",
-                                  "failed to build timeline segment " + std::to_string(i));
-                result.error = "failed to build timeline segment " + std::to_string(i);
+                seg.status = telemetry::kStatusFailed;
+                seg.error_code = "encode_failed";
+                seg.error_message = "failed to build timeline segment " + std::to_string(i);
+                encodePhase.Abort(seg.error_code, seg.error_message);
+                result.error = seg.error_message;
                 return result;
             }
             seg.ffmpeg_encode_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - encStart).count();
+            seg.status = telemetry::kStatusOk;
+            seg.ffmpeg_threads = 0;
+            encodePhase.SetDetailedMetrics(
+                static_cast<int32_t>(i), "video", -1,
+                seg.started_offset_ms,
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - renderStart).count(),
+                0.0, 0.0, 0, frames_encoded_.load());
             encodePhase.Complete(0, fileSize(segmentOut), frames_encoded_.load(),
                                  telemetry::kStatusOk);
         }
@@ -455,19 +476,13 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
 
     reportProgress(100, "completed");
 
-    if (result.success) {
-        emitSidecar(outPath.string());
-    }
-
     return result;
 }
 
-void RenderEngine::emitSidecar(const std::string& output_path) const {
+std::string RenderEngine::sidecarJson(const std::string& output_path) const {
     using services::escapeProgressJsonString;
 
     fs::path outPath(output_path);
-    fs::path sidecar = outPath;
-    sidecar += ".progress.json";
 
     const services::EngineProgress& last = last_progress_;
 
@@ -515,15 +530,24 @@ void RenderEngine::emitSidecar(const std::string& output_path) const {
             s << "{";
             s << "\"index\":" << seg.index;
             s << ",\"worker_index\":" << seg.worker_index;
-            s << ",\"source_type\":\"" << seg.source_type << "\"";
+            s << ",\"source_type\":\"" << escapeProgressJsonString(seg.source_type) << "\"";
             s << ",\"total_ms\":" << seg.total_ms;
             s << ",\"asset_download_ms\":" << seg.asset_download_ms;
             s << ",\"ffmpeg_encode_ms\":" << seg.ffmpeg_encode_ms;
             s << ",\"source_bytes\":" << seg.source_bytes;
             s << ",\"output_bytes\":" << seg.output_bytes;
             s << ",\"frames_encoded\":" << seg.frames_encoded;
+            s << ",\"codec\":\"" << escapeProgressJsonString(seg.codec) << "\"";
+            s << ",\"preset\":\"" << escapeProgressJsonString(seg.preset) << "\"";
+            s << ",\"ffmpeg_threads\":" << seg.ffmpeg_threads;
+            s << ",\"status\":\"" << escapeProgressJsonString(seg.status) << "\"";
+            s << ",\"error_code\":\"" << escapeProgressJsonString(seg.error_code) << "\"";
+            s << ",\"error_message\":\"" << escapeProgressJsonString(seg.error_message) << "\"";
             s << ",\"started_offset_ms\":" << seg.started_offset_ms;
             s << ",\"finished_offset_ms\":" << seg.finished_offset_ms;
+            s << ",\"worker_slot\":" << seg.worker_slot;
+            s << ",\"cpu_threads\":" << seg.cpu_threads;
+            s << ",\"parallel_group\":\"" << escapeProgressJsonString(seg.parallel_group) << "\"";
             s << "}";
         }
     }
@@ -541,8 +565,13 @@ void RenderEngine::emitSidecar(const std::string& output_path) const {
     s << "]";
 
     s << "}";
+    return s.str();
+}
 
-    if (!services::SidecarWriter::writeAtomic(sidecar, s.str())) {
+void RenderEngine::emitSidecar(const std::string& output_path) const {
+    fs::path sidecar(output_path);
+    sidecar += ".progress.json";
+    if (!services::SidecarWriter::writeAtomic(sidecar, sidecarJson(output_path))) {
         std::cerr << "warning: failed to write progress sidecar at " << sidecar << "\n";
     }
 }

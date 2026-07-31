@@ -53,9 +53,10 @@ func (f *fakeCompiler) Compile(_ context.Context, jobID string, input map[string
 
 // fakeRenderClient implements pipeline.RenderClient with hard-coded behavior.
 type fakeRenderClient struct {
-	renderErr error
-	called    bool
-	lastPlan  *plan.RenderPlan
+	renderErr      error
+	partialMetrics pipeline.RenderMetrics
+	called         bool
+	lastPlan       *plan.RenderPlan
 }
 
 func (f *fakeRenderClient) Render(_ context.Context, p *plan.RenderPlan) error {
@@ -67,7 +68,7 @@ func (f *fakeRenderClient) RenderWithMetrics(_ context.Context, p *plan.RenderPl
 	f.called = true
 	f.lastPlan = p
 	if f.renderErr != nil {
-		return pipeline.RenderMetrics{}, f.renderErr
+		return f.partialMetrics, f.renderErr
 	}
 	if err := os.MkdirAll(filepath.Dir(p.OutputPath), 0o750); err != nil {
 		return pipeline.RenderMetrics{}, err
@@ -75,10 +76,21 @@ func (f *fakeRenderClient) RenderWithMetrics(_ context.Context, p *plan.RenderPl
 	if err := os.WriteFile(p.OutputPath, []byte("fake-mp4-bytes"), 0o640); err != nil {
 		return pipeline.RenderMetrics{}, err
 	}
-	if err := os.WriteFile(p.OutputPath+".progress.json", []byte(`{"phase_ms":{"render":1},"frames":1}`), 0o640); err != nil {
+	if err := os.WriteFile(p.OutputPath+".progress.json", []byte(`{"phase_ms":{"render":1},"segments":[{"index":0,"started_offset_ms":1.25,"finished_offset_ms":4.5,"worker_slot":2,"cpu_threads":4,"parallel_group":"scene-0"}],"phases":[{"origin":"engine","scope":"segment","component":"engine.video","action":"decode","event_index":4,"duration_ms":3,"segment_index":0,"started_offset_ms":1.25,"finished_offset_ms":4.25}],"frames":1}`), 0o640); err != nil {
 		return pipeline.RenderMetrics{}, err
 	}
-	return pipeline.RenderMetrics{}, nil
+	return pipeline.RenderMetrics{
+		PhaseMS: map[string]float64{"render": 1},
+		Segments: []pipeline.SegmentTiming{{
+			SegmentIndex: 0, StartedOffsetMS: 1.25, FinishedOffsetMS: 4.5,
+			WorkerSlot: 2, CPUThreads: 4, ParallelGroup: "scene-0",
+		}},
+		DetailedPhases: []pipeline.DetailedPhaseTiming{{
+			Origin: "engine", Scope: "segment", Component: "engine.video",
+			Action: "decode", EventIndex: 4, DurationMS: 3, SegmentIndex: 0,
+			StartedOffsetMS: 1.25, FinishedOffsetMS: 4.25,
+		}},
+	}, nil
 }
 
 // newTestSceneComposite builds minimal pipeline + executor wiring.
@@ -194,10 +206,28 @@ func TestSceneComposite_Execute_Success(t *testing.T) {
 	if res.Outputs[1].Type != "engine.progress.sidecar" || res.Outputs[1].Hash == "" || res.Outputs[1].SizeBytes <= 0 {
 		t.Errorf("sidecar output = %#v, want engine.progress.sidecar with real hash and size", res.Outputs[1])
 	}
+	if len(res.Segments) != 1 || res.Segments[0].FinishedOffsetMS != 4.5 || res.Segments[0].WorkerSlot != 2 {
+		t.Fatalf("segment timing/parallelism not propagated: %#v", res.Segments)
+	}
+	if len(res.DetailedPhases) != 1 || res.DetailedPhases[0].Component != "engine.video" || res.DetailedPhases[0].EventIndex != 4 {
+		t.Fatalf("detailed phases not propagated: %#v", res.DetailedPhases)
+	}
 }
 
 func TestSceneComposite_Execute_RenderErrorMapsToFailure(t *testing.T) {
 	exec, rclient := newTestSceneComposite(errors.New("ffmpeg crashed"))
+	rclient.partialMetrics = pipeline.RenderMetrics{
+		PhaseMS: map[string]float64{"decode": 12},
+		Segments: []pipeline.SegmentTiming{{
+			SegmentIndex: 2, StartedOffsetMS: 3.5, FinishedOffsetMS: 8.25,
+			WorkerSlot: 1, CPUThreads: 4, ParallelGroup: "g1",
+		}},
+		DetailedPhases: []pipeline.DetailedPhaseTiming{{
+			Origin: "engine", Scope: "segment", Component: "engine.encode",
+			Action: "frame_submit", EventIndex: 9, Status: "failed",
+			ErrorCode: "encoder_crashed", SegmentIndex: 2,
+		}},
+	}
 	spec := executor.TaskSpec{
 		Version: 1, JobID: "j-err", ExecutorID: SceneCompositeID,
 		Payload: goodPayload("j-err"),
@@ -215,9 +245,46 @@ func TestSceneComposite_Execute_RenderErrorMapsToFailure(t *testing.T) {
 	if !strings.Contains(res.ErrorDetail, "ffmpeg crashed") {
 		t.Errorf("res.ErrorDetail should carry ffmpeg error, got %q", res.ErrorDetail)
 	}
+	if res.Metrics["engine.decode"] != float64(12) {
+		t.Errorf("partial phase metrics = %#v, want engine.decode=12", res.Metrics)
+	}
+	if len(res.Segments) != 1 || res.Segments[0].SegmentIndex != 2 || res.Segments[0].FinishedOffsetMS != 8.25 {
+		t.Fatalf("partial segment timings = %#v", res.Segments)
+	}
+	if len(res.DetailedPhases) != 1 || res.DetailedPhases[0].EventIndex != 9 || res.DetailedPhases[0].ErrorCode != "encoder_crashed" {
+		t.Fatalf("partial detailed phases = %#v", res.DetailedPhases)
+	}
 	// Adapter should not swallow caller error: ensure the render was attempted.
 	if !rclient.called {
 		t.Errorf("RenderClient.Render should still have been invoked")
+	}
+}
+
+func TestSceneComposite_Execute_CancellationPreservesPartialTelemetry(t *testing.T) {
+	exec, rclient := newTestSceneComposite(context.Canceled)
+	rclient.partialMetrics = pipeline.RenderMetrics{
+		PhaseMS:  map[string]float64{"decode": 7},
+		Segments: []pipeline.SegmentTiming{{SegmentIndex: 4, StartedOffsetMS: 2, FinishedOffsetMS: 5}},
+		DetailedPhases: []pipeline.DetailedPhaseTiming{{
+			Origin: "engine", Scope: "segment", Component: "engine.decode",
+			Action: "frame_reorder", EventIndex: 12, Status: "ok", SegmentIndex: 4,
+		}},
+	}
+	res, err := exec.Execute(context.Background(), nil, executor.TaskSpec{
+		Version: 1, JobID: "j-cancel", ExecutorID: SceneCompositeID,
+		Payload: goodPayload("j-cancel"),
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if res.ErrorCode != "cancelled" {
+		t.Fatalf("error code = %q, want cancelled", res.ErrorCode)
+	}
+	if res.Metrics["engine.decode"] != float64(7) || len(res.Segments) != 1 || len(res.DetailedPhases) != 1 {
+		t.Fatalf("partial cancellation telemetry = metrics:%#v segments:%#v phases:%#v", res.Metrics, res.Segments, res.DetailedPhases)
+	}
+	if !rclient.called {
+		t.Fatal("render client was not invoked")
 	}
 }
 

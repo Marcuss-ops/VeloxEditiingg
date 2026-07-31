@@ -257,6 +257,13 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	result, execErr := r.runExecute(rc, exec, spec, appendPhase, rec)
 	renderSpan.End()
 
+	// Preserve executor telemetry before classifying the outcome. Executors
+	// may return completed native phases, segments, and metrics together
+	// with a failure or cancellation; completeError must not discard them.
+	report.Metrics = result.Metrics
+	report.Segments = result.Segments
+	report.DetailedPhases = append(report.DetailedPhases, detailedPhasesFromExecutor(result.DetailedPhases)...)
+
 	// Map internal err into a stable Code for the report.
 	switch {
 	case execErr == nil && (result.Status == "" || result.Status == "succeeded"):
@@ -293,18 +300,13 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	appendPhase(r.runPhase(rec, PhaseReport, func() error { return nil }, overallStart))
 	report.Status = "succeeded"
 	report.Outputs = result.Outputs
-	report.Metrics = result.Metrics
-	report.Segments = result.Segments
-	// PR-3.7: surface cache + blob counters as dotted-key entries.
-	// Merge runs AFTER assign so a nil result.Metrics is preserved as
-	// a fresh map, and an executor-provided map is widened rather than
-	// overwritten.
-	if r.cacheStats != nil || r.blobStats != nil {
-		if report.Metrics == nil {
-			report.Metrics = make(map[string]interface{})
-		}
-		r.mergeStatsInto(report, report.Metrics)
+	// Project both legacy dotted metrics and the typed wire mirror on every
+	// outcome. This must not depend on cache/blob providers because native
+	// engine metrics are executor-provided.
+	if report.Metrics == nil {
+		report.Metrics = make(map[string]interface{})
 	}
+	r.mergeStatsInto(report, report.Metrics)
 	r.attachDetailedPhases(rec, report)
 	return *report, nil
 }
@@ -361,14 +363,12 @@ func (r *TaskRunner) completeError(rec *telemetry.EventRecorder, report *TaskExe
 	// that check `len(phaseMarkers) == 0` can rely on truth: failure
 	// means a phase WAS run.
 	appendPhase(PhaseMarker{Name: PhaseReport, StartedAt: r.now(), CompletedAt: r.now(), Status: "ok", Notes: "failure recorded"})
-	// Mirror the success-path merge; init Metrics if nil so the merge
-	// does not lose cache+blob data when the executor short-circuited.
-	if r.cacheStats != nil || r.blobStats != nil {
-		if report.Metrics == nil {
-			report.Metrics = make(map[string]interface{})
-		}
-		r.mergeStatsInto(report, report.Metrics)
+	// Preserve the typed mirror on failure as well; native phases often
+	// explain why the executor failed and must remain wire-visible.
+	if report.Metrics == nil {
+		report.Metrics = make(map[string]interface{})
 	}
+	r.mergeStatsInto(report, report.Metrics)
 	r.attachDetailedPhases(rec, report)
 	return *report
 }
@@ -396,9 +396,12 @@ func (r *TaskRunner) attachDetailedPhases(rec *telemetry.EventRecorder, report *
 	if len(phases) == 0 {
 		return
 	}
-	report.DetailedPhases = make([]DetailedPhaseTiming, 0, len(phases))
+	// Preserve detailed native phases already attached from the executor;
+	// worker lifecycle events are appended in recorder order. Both sources
+	// retain their canonical per-origin event_index values.
+	start := len(report.DetailedPhases) + 1
 	for i, p := range phases {
-		report.DetailedPhases = append(report.DetailedPhases, fromRecordedPhase(p, i+1, execID, execVersion, ""))
+		report.DetailedPhases = append(report.DetailedPhases, fromRecordedPhase(p, start+i, execID, execVersion, ""))
 	}
 }
 

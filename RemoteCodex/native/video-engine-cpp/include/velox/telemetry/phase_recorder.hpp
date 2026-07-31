@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <map>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -56,6 +57,9 @@ inline constexpr const char* kStatusFailed = "failed";
 // enums above. Empty strings are NOT canonical.
 bool IsCanonicalOrigin(const std::string& s);
 bool IsCanonicalScope(const std::string& s);
+// Validates a complete JSON object using the recorder's dependency-free
+// parser. Used by sidecar compatibility tests and metadata guards.
+bool IsValidJsonObject(const std::string& s);
 
 // PhaseEvent is one immutable execution event. JSON-serialized into the
 // sidecar `phases[]` array by the recorder's ToJson helper (or by the
@@ -78,6 +82,15 @@ struct PhaseEvent {
     int64_t bytes_in{0};
     int64_t bytes_out{0};
     int64_t frames{0};
+    int32_t segment_index{-1};
+    std::string track_kind;
+    int32_t track_index{-1};
+    double started_offset_ms{0};
+    double finished_offset_ms{0};
+    double cpu_ms{0};
+    double queue_wait_ms{0};
+    int64_t frames_in{0};
+    int64_t frames_out{0};
     std::string metadata_json; // pre-serialized JSON object, embedded verbatim
 
     // AppendJson appends this event as one sidecar `phases[]` element
@@ -111,6 +124,18 @@ public:
     // Abort finalizes a token as failed. Safe on unknown tokens.
     void Abort(int64_t token, const std::string& error_code = "",
                const std::string& error_message = "");
+
+    // SetMetadataJSON attaches a pre-serialized JSON object to an inflight
+    // event. Invalid/empty metadata is ignored so the sidecar remains valid.
+    void SetMetadataJSON(int64_t token, std::string metadata_json);
+
+    // SetDetailedMetrics attaches segment/track identity, offsets and
+    // resource counters to an inflight event before it is finalized.
+    void SetDetailedMetrics(int64_t token, int32_t segment_index,
+                            std::string track_kind, int32_t track_index,
+                            double started_offset_ms, double finished_offset_ms,
+                            double cpu_ms, double queue_wait_ms,
+                            int64_t frames_in, int64_t frames_out);
 
     // Emit records a point-in-time event (no duration). Non-canonical
     // origin/scope are coerced to engine/attempt.
@@ -160,6 +185,12 @@ public:
                   const std::string& error_code = "",
                   const std::string& error_message = "");
     void Abort(const std::string& error_code = "", const std::string& error_message = "");
+    void SetMetadataJSON(std::string metadata_json);
+    void SetDetailedMetrics(int32_t segment_index, std::string track_kind,
+                            int32_t track_index, double started_offset_ms,
+                            double finished_offset_ms, double cpu_ms,
+                            double queue_wait_ms, int64_t frames_in,
+                            int64_t frames_out);
 
     ScopedPhase(ScopedPhase&& other) noexcept;
     ScopedPhase& operator=(ScopedPhase&& other) noexcept;

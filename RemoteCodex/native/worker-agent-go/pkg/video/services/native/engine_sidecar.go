@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 )
 
 // engine_sidecar.go owns the C++ engine sidecar format: the JSON
@@ -14,25 +15,60 @@ import (
 // engineSidecar mirrors the C++ <output>.progress.json sidecar written
 // by RenderEngine::emitSidecar.
 type engineSidecar struct {
-	Frames       int64              `json:"frames"`
-	Fps          float64            `json:"fps"`
-	SpeedX       float64            `json:"speed_x"`
-	EncodePasses int64              `json:"encode_passes"`
-	TempBytes    int64              `json:"temp_bytes"`
-	DurationSec  float64            `json:"duration_seconds"`
-	ConcatMode   string             `json:"concat_mode"`
-	TotalSize    int64              `json:"total_size"`
-	OutTimeUs    int64              `json:"out_time_us"`
-	OutTimeMs    int64              `json:"out_time_ms"`
-	Bitrate      float64            `json:"bitrate"`
-	DupFrames    int64              `json:"dup_frames"`
-	DropFrames   int64              `json:"drop_frames"`
-	PhaseMS      map[string]float64 `json:"phase_ms,omitempty"`
-	Segments     []segmentTiming    `json:"segments,omitempty"`
+	Frames       int64                 `json:"frames"`
+	Fps          float64               `json:"fps"`
+	SpeedX       float64               `json:"speed_x"`
+	EncodePasses int64                 `json:"encode_passes"`
+	TempBytes    int64                 `json:"temp_bytes"`
+	DurationSec  float64               `json:"duration_seconds"`
+	ConcatMode   string                `json:"concat_mode"`
+	TotalSize    int64                 `json:"total_size"`
+	OutTimeUs    int64                 `json:"out_time_us"`
+	OutTimeMs    int64                 `json:"out_time_ms"`
+	Bitrate      float64               `json:"bitrate"`
+	DupFrames    int64                 `json:"dup_frames"`
+	DropFrames   int64                 `json:"drop_frames"`
+	PhaseMS      map[string]float64    `json:"phase_ms,omitempty"`
+	Segments     []segmentTiming       `json:"segments,omitempty"`
+	Phases       []detailedPhaseTiming `json:"phases,omitempty"`
 }
 
 // segmentTiming mirrors the C++ SegmentTiming struct emitted inside
 // the sidecar segments[] array.
+// detailedPhaseTiming mirrors one event from the C++ phases[] sidecar
+// array. All fields are optional at the wire boundary so older sidecars
+// remain valid and newer fields can be adopted independently.
+type detailedPhaseTiming struct {
+	Origin           string          `json:"origin"`
+	Scope            string          `json:"scope"`
+	Component        string          `json:"component"`
+	Action           string          `json:"action"`
+	Phase            string          `json:"phase"`
+	EventType        string          `json:"event_type"`
+	EventName        string          `json:"event_name"`
+	EventIndex       int64           `json:"event_index"`
+	StartedAt        time.Time       `json:"started_at"`
+	CompletedAt      time.Time       `json:"completed_at"`
+	DurationMS       int64           `json:"duration_ms"`
+	Status           string          `json:"status"`
+	ErrorCode        string          `json:"error_code"`
+	ErrorMessage     string          `json:"error_message"`
+	BytesIn          int64           `json:"bytes_in"`
+	BytesOut         int64           `json:"bytes_out"`
+	Frames           int64           `json:"frames"`
+	Metadata         json.RawMessage `json:"metadata"`
+	MetadataJSON     string          `json:"metadata_json"`
+	SegmentIndex     int32           `json:"segment_index"`
+	TrackKind        string          `json:"track_kind"`
+	TrackIndex       int32           `json:"track_index"`
+	StartedOffsetMS  float64         `json:"started_offset_ms"`
+	FinishedOffsetMS float64         `json:"finished_offset_ms"`
+	CPUMS            float64         `json:"cpu_ms"`
+	QueueWaitMS      float64         `json:"queue_wait_ms"`
+	FramesIn         int64           `json:"frames_in"`
+	FramesOut        int64           `json:"frames_out"`
+}
+
 type segmentTiming struct {
 	Index            int64   `json:"index"`
 	WorkerIndex      int64   `json:"worker_index"`

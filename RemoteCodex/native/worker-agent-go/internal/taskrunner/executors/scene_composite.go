@@ -154,39 +154,18 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	pipelineID := resolvePipelineID(spec.Payload)
 	pipelineStart := time.Now()
 	runMetrics, err := s.pipelineRunner.RunWithMetrics(ctx, pipelineID, spec.JobID, spec.Payload, outputPath)
-	if err != nil {
-		// A cancelled render is not a renderer failure. The native client
-		// already terminates its process group; remove any partial output
-		// before returning the cancellation sentinel to TaskRunner.
-		_ = os.Remove(outputPath)
-		_ = os.Remove(outputPath + ".progress.json")
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return executor.ExecutionResult{
-				Status:      "failed",
-				ErrorCode:   "cancelled",
-				ErrorDetail: err.Error(),
-				StartedAt:   startedAt,
-				CompletedAt: time.Now().UTC(),
-			}, err
-		}
-		return executor.ExecutionResult{
-			Status:      "failed",
-			ErrorCode:   "execute_failed",
-			ErrorDetail: fmt.Sprintf("pipeline.Runner.RunWithMetrics(%s): %v", pipelineID, err),
-			StartedAt:   startedAt,
-			CompletedAt: time.Now().UTC(),
-		}, nil
-	}
+
+	// Materialize native telemetry before handling the render error. The
+	// engine may have emitted useful completed phases and segment timings
+	// even when the process fails or is cancelled.
 	metrics["pipeline.total_ms"] = time.Since(pipelineStart).Milliseconds()
 	metrics["pipeline.id"] = pipelineID
-	// Per-phase pipeline timings
 	metrics["pipeline.resolve_ms"] = runMetrics.ResolveMs
 	metrics["pipeline.validate_ms"] = runMetrics.ValidateMs
 	metrics["pipeline.compile_ms"] = runMetrics.CompileMs
 	metrics["pipeline.render_ms"] = runMetrics.RenderMs
 	metrics["pipeline.timeline_items"] = int64(runMetrics.TimelineItems)
 	metrics["pipeline.audio_tracks"] = int64(runMetrics.AudioTracks)
-	// Native engine sidecar counters
 	metrics["native.total_ms"] = runMetrics.RenderMetrics.TotalMs
 	metrics["native.plan_write_ms"] = runMetrics.RenderMetrics.PlanWriteMs
 	metrics["native.process_wait_ms"] = runMetrics.RenderMetrics.ProcessWaitMs
@@ -200,9 +179,102 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	metrics["engine.bitrate"] = runMetrics.RenderMetrics.Bitrate
 	metrics["engine.dup_frames"] = runMetrics.RenderMetrics.DupFrames
 	metrics["engine.drop_frames"] = runMetrics.RenderMetrics.DropFrames
-	// C++ engine phase-level timings from sidecar phase_ms
 	for k, v := range runMetrics.RenderMetrics.PhaseMS {
 		metrics["engine."+k] = v
+	}
+
+	segments := make([]executor.SegmentTiming, 0, len(runMetrics.RenderMetrics.Segments))
+	for _, seg := range runMetrics.RenderMetrics.Segments {
+		segments = append(segments, executor.SegmentTiming{
+			SegmentIndex:     seg.SegmentIndex,
+			SceneWorkerIndex: seg.SceneWorkerIndex,
+			SourceType:       seg.SourceType,
+			DurationMS:       seg.DurationMS,
+			AssetDownloadMS:  seg.AssetDownloadMS,
+			FfmpegEncodeMS:   seg.FfmpegEncodeMS,
+			SourceBytes:      seg.SourceBytes,
+			OutputBytes:      seg.OutputBytes,
+			FramesEncoded:    seg.FramesEncoded,
+			Codec:            seg.Codec,
+			Preset:           seg.Preset,
+			FfmpegThreads:    seg.FfmpegThreads,
+			Status:           seg.Status,
+			ErrorCode:        seg.ErrorCode,
+			ErrorMessage:     seg.ErrorMessage,
+			SourceURLHash:    seg.SourceURLHash,
+			CacheKey:         seg.CacheKey,
+			InputDurationMS:  seg.InputDurationMS,
+			OutputDurationMS: seg.OutputDurationMS,
+			MetadataJSON:     seg.MetadataJSON,
+			StartedOffsetMS:  seg.StartedOffsetMS,
+			FinishedOffsetMS: seg.FinishedOffsetMS,
+			WorkerSlot:       seg.WorkerSlot,
+			CPUThreads:       seg.CPUThreads,
+			ParallelGroup:    seg.ParallelGroup,
+		})
+	}
+
+	detailedPhases := make([]executor.DetailedPhaseTiming, 0, len(runMetrics.RenderMetrics.DetailedPhases))
+	for _, phase := range runMetrics.RenderMetrics.DetailedPhases {
+		detailedPhases = append(detailedPhases, executor.DetailedPhaseTiming{
+			Origin:           phase.Origin,
+			Scope:            phase.Scope,
+			Component:        phase.Component,
+			Action:           phase.Action,
+			Phase:            phase.Phase,
+			EventType:        phase.EventType,
+			EventName:        phase.EventName,
+			EventIndex:       phase.EventIndex,
+			StartedAt:        phase.StartedAt,
+			CompletedAt:      phase.CompletedAt,
+			DurationMS:       phase.DurationMS,
+			Status:           phase.Status,
+			ErrorCode:        phase.ErrorCode,
+			ErrorMessage:     phase.ErrorMessage,
+			BytesIn:          phase.BytesIn,
+			BytesOut:         phase.BytesOut,
+			Frames:           phase.Frames,
+			MetadataJSON:     phase.MetadataJSON,
+			SegmentIndex:     phase.SegmentIndex,
+			TrackKind:        phase.TrackKind,
+			TrackIndex:       phase.TrackIndex,
+			StartedOffsetMS:  phase.StartedOffsetMS,
+			FinishedOffsetMS: phase.FinishedOffsetMS,
+			CPUMS:            phase.CPUMS,
+			QueueWaitMS:      phase.QueueWaitMS,
+			FramesIn:         phase.FramesIn,
+			FramesOut:        phase.FramesOut,
+		})
+	}
+
+	if err != nil {
+		// A cancelled render is not a renderer failure. The native client
+		// already terminates its process group; remove any partial output
+		// before returning the cancellation sentinel to TaskRunner.
+		_ = os.Remove(outputPath)
+		_ = os.Remove(outputPath + ".progress.json")
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return executor.ExecutionResult{
+				Status:         "failed",
+				ErrorCode:      "cancelled",
+				ErrorDetail:    err.Error(),
+				Metrics:        metrics,
+				Segments:       segments,
+				DetailedPhases: detailedPhases,
+				StartedAt:      startedAt,
+				CompletedAt:    time.Now().UTC(),
+			}, err
+		}
+		return executor.ExecutionResult{
+			Status:         "failed",
+			ErrorCode:      "execute_failed",
+			ErrorDetail:    fmt.Sprintf("pipeline.Runner.RunWithMetrics(%s): %v", pipelineID, err),
+			Metrics:        metrics,
+			Segments:       segments,
+			DetailedPhases: detailedPhases,
+			StartedAt:      startedAt,
+			CompletedAt:    time.Now().UTC(),
+		}, nil
 	}
 	// Compute output file hash and size for artifact metadata.
 	// A successful renderer invocation is not sufficient: both the
@@ -247,37 +319,6 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	metrics["output.bytes"] = outputSize
 	metrics["executor.total_ms"] = time.Since(startedAt).Milliseconds()
 
-	segments := make([]executor.SegmentTiming, 0, len(runMetrics.RenderMetrics.Segments))
-	for _, seg := range runMetrics.RenderMetrics.Segments {
-		segments = append(segments, executor.SegmentTiming{
-			SegmentIndex:     seg.SegmentIndex,
-			SceneWorkerIndex: seg.SceneWorkerIndex,
-			SourceType:       seg.SourceType,
-			DurationMS:       seg.DurationMS,
-			AssetDownloadMS:  seg.AssetDownloadMS,
-			FfmpegEncodeMS:   seg.FfmpegEncodeMS,
-			SourceBytes:      seg.SourceBytes,
-			OutputBytes:      seg.OutputBytes,
-			FramesEncoded:    seg.FramesEncoded,
-			Codec:            seg.Codec,
-			Preset:           seg.Preset,
-			FfmpegThreads:    seg.FfmpegThreads,
-			Status:           seg.Status,
-			ErrorCode:        seg.ErrorCode,
-			ErrorMessage:     seg.ErrorMessage,
-			SourceURLHash:    seg.SourceURLHash,
-			CacheKey:         seg.CacheKey,
-			InputDurationMS:  seg.InputDurationMS,
-			OutputDurationMS: seg.OutputDurationMS,
-			MetadataJSON:     seg.MetadataJSON,
-			StartedOffsetMS:  seg.StartedOffsetMS,
-			FinishedOffsetMS: seg.FinishedOffsetMS,
-			WorkerSlot:       seg.WorkerSlot,
-			CPUThreads:       seg.CPUThreads,
-			ParallelGroup:    seg.ParallelGroup,
-		})
-	}
-
 	outputs := []executor.ArtifactRef{{Type: "render.output", Hash: outputHash, URI: outputPath, SizeBytes: outputSize}}
 	sidecarPath := outputPath + ".progress.json"
 	if sidecarManifest, sidecarErr := publisher.ComputeLocalManifest(ctx, sidecarPath); sidecarErr == nil && sidecarManifest.SizeBytes > 0 {
@@ -317,12 +358,13 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginValidation, Scope: telemetry.ScopeArtifact, Component: "quality", Action: "ffprobe"}, telemetry.StatusOK, "", "")
 	}
 	return executor.ExecutionResult{
-		Status:      "succeeded",
-		Outputs:     outputs,
-		Metrics:     metrics,
-		Segments:    segments,
-		StartedAt:   startedAt,
-		CompletedAt: time.Now().UTC(),
+		Status:         "succeeded",
+		Outputs:        outputs,
+		Metrics:        metrics,
+		Segments:       segments,
+		DetailedPhases: detailedPhases,
+		StartedAt:      startedAt,
+		CompletedAt:    time.Now().UTC(),
 	}, nil
 }
 

@@ -65,6 +65,41 @@ type SegmentTiming struct {
 	ParallelGroup    string
 }
 
+// DetailedPhaseTiming is the parser-neutral representation of one C++
+// sidecar phases[] event. It deliberately lives in pipeline (rather than
+// taskrunner) so the native client can expose parsed telemetry without an
+// import cycle. The executor converts it to taskrunner.DetailedPhaseTiming
+// at the worker contract boundary.
+type DetailedPhaseTiming struct {
+	Origin           string
+	Scope            string
+	Component        string
+	Action           string
+	Phase            string
+	EventType        string
+	EventName        string
+	EventIndex       int64
+	StartedAt        time.Time
+	CompletedAt      time.Time
+	DurationMS       int64
+	Status           string
+	ErrorCode        string
+	ErrorMessage     string
+	BytesIn          int64
+	BytesOut         int64
+	Frames           int64
+	MetadataJSON     string
+	SegmentIndex     int32
+	TrackKind        string
+	TrackIndex       int32
+	StartedOffsetMS  float64
+	FinishedOffsetMS float64
+	CPUMS            float64
+	QueueWaitMS      float64
+	FramesIn         int64
+	FramesOut        int64
+}
+
 // RenderClient is the interface for executing a RenderPlan.
 // Implemented by the native C++ render client.
 type RenderClient interface {
@@ -97,8 +132,12 @@ type RenderMetrics struct {
 	// (engine.asset_download, engine.segment_build, engine.concat, …).
 	// Nil when no sidecar was read.
 	PhaseMS map[string]float64
-	// Segments carries the per-segment C++ sidecar timings.
+	// Segments carries the per-segment C++ sidecar timings, including
+	// started/finished offsets and all parallelism fields.
 	Segments []SegmentTiming
+	// DetailedPhases carries the optional C++ sidecar phases[] stream.
+	// It is nil for legacy sidecars that predate detailed events.
+	DetailedPhases []DetailedPhaseTiming
 }
 
 // RenderClient exposes the underlying render client so callers outside
@@ -156,9 +195,13 @@ type RunMetrics struct {
 // RunWithMetrics executes the full pipeline and returns phase-level
 // timings plus the native engine sidecar counters. Run() delegates to
 // this method so existing callers are source-compatible.
-func (r *Runner) RunWithMetrics(ctx context.Context, pipelineID string, jobID string, input map[string]interface{}, outputPath string) (RunMetrics, error) {
-	m := RunMetrics{}
+func (r *Runner) RunWithMetrics(ctx context.Context, pipelineID string, jobID string, input map[string]interface{}, outputPath string) (m RunMetrics, err error) {
 	start := time.Now()
+	defer func() {
+		// Preserve the total wall-clock duration on every early return,
+		// including resolve/validate/compile/render failures.
+		m.TotalMs = time.Since(start).Milliseconds()
+	}()
 
 	// Phase: resolve compiler
 	resolveStart := time.Now()
@@ -196,11 +239,13 @@ func (r *Runner) RunWithMetrics(ctx context.Context, pipelineID string, jobID st
 	renderStart := time.Now()
 	nativeMetrics, renderErr := r.renderClient.RenderWithMetrics(ctx, p)
 	m.RenderMs = time.Since(renderStart).Milliseconds()
+	// Preserve native sidecar metrics before inspecting renderErr. Failed
+	// and cancelled renders can still have completed phases/segments that
+	// must remain available to waste and retry diagnostics.
+	m.RenderMetrics = nativeMetrics
 	if renderErr != nil {
 		return m, fmt.Errorf("pipeline: render %s: %w", pipelineID, renderErr)
 	}
-	// Copy native engine sidecar counters into the pipeline metrics
-	m.RenderMetrics = nativeMetrics
 
 	r.logger.Info("[PIPELINE] Completed %s for job %s", pipelineID, jobID)
 	m.TotalMs = time.Since(start).Milliseconds()

@@ -432,6 +432,16 @@ func TestSubmitTaskResult_FailedRenderPreservesDetailedPhases(t *testing.T) {
 		Status:      "failed",
 		ErrorCode:   "EXECUTE_FAILED",
 		ErrorDetail: "encoder crashed",
+		Metrics: map[string]interface{}{
+			"engine.frames":        int64(144),
+			"engine.speed_x":       float64(1.75),
+			"engine.encode_passes": int64(2),
+			"native.total_ms":      int64(2500),
+		},
+		Segments: []taskrunner.SegmentTiming{{
+			SegmentIndex: 3, StartedOffsetMS: 1.5, FinishedOffsetMS: 7.25,
+			WorkerSlot: 2, CPUThreads: 4, ParallelGroup: "encode-group",
+		}},
 		DetailedPhases: []taskrunner.DetailedPhaseTiming{
 			{
 				PhaseOrder: 1, Component: "runner", Action: "cache_lookup",
@@ -473,6 +483,9 @@ func TestSubmitTaskResult_FailedRenderPreservesDetailedPhases(t *testing.T) {
 	if result.ErrorDetail != "encoder crashed" {
 		t.Fatalf("error detail = %q, want encoder crashed", result.ErrorDetail)
 	}
+	if result.ExecutionMetrics == nil || result.ExecutionMetrics.FramesEncoded != 144 || result.ExecutionMetrics.FfmpegSpeedRatio != 1.75 || result.ExecutionMetrics.EncodePasses != 2 || result.ExecutionMetrics.WallClockSeconds != 2.5 {
+		t.Fatalf("typed execution metrics = %+v, want frames=144 speed=1.75 passes=2 wall=2.5s", result.ExecutionMetrics)
+	}
 	if len(result.PhaseTimings) != len(report.DetailedPhases) {
 		t.Fatalf("phase timings = %d, want %d", len(result.PhaseTimings), len(report.DetailedPhases))
 	}
@@ -488,6 +501,13 @@ func TestSubmitTaskResult_FailedRenderPreservesDetailedPhases(t *testing.T) {
 		if phase.LeaseId != pte.LeaseID {
 			t.Errorf("phase[%d] lease_id = %q, want %q", i, phase.LeaseId, pte.LeaseID)
 		}
+	}
+	if len(result.SegmentTimings) != 1 {
+		t.Fatalf("segment timings = %d, want 1", len(result.SegmentTimings))
+	}
+	segment := result.SegmentTimings[0]
+	if segment.SegmentIndex != 3 || segment.FinishedOffsetMs != 7.25 || segment.WorkerSlot != 2 || segment.CpuThreads != 4 || segment.ParallelGroup != "encode-group" {
+		t.Fatalf("failed segment timing = %+v", segment)
 	}
 }
 

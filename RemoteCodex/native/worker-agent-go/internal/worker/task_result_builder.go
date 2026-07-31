@@ -84,7 +84,12 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 	if report != nil {
 		tr.ExecutorKey = report.ExecutorKey
 
-		// Build typed execution_metrics.
+		// Build typed execution_metrics. Reports assembled outside TaskRunner
+		// may only have the legacy dotted map (notably failed/cancelled
+		// paths), so derive the typed mirror at this boundary as a fallback.
+		if report.TypedMetrics == nil && len(report.Metrics) > 0 {
+			report.TypedMetrics = taskrunner.TypedMetricsFromMap(report.Metrics)
+		}
 		if report.TypedMetrics != nil {
 			m := *report.TypedMetrics
 			// Fall back to the first output artifact's hash when the

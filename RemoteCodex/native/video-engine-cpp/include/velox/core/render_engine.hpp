@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <string>
+#include <utility>
 
 namespace velox::core {
 
@@ -63,8 +64,27 @@ public:
     // Esegue il rendering completo del RenderPlan dato
     RenderResult render(const plan::RenderPlan& plan);
 
+    // Builds the complete progress sidecar JSON without writing it. This
+    // keeps the wire-format serializer directly testable and lets callers
+    // inspect phase_ms, segments[] and phases[] as one payload.
+    std::string sidecarJson(const std::string& output_path) const;
+
 private:
     void emitSidecar(const std::string& output_path) const;
+
+    class SidecarGuard {
+    public:
+        SidecarGuard(const RenderEngine* engine, std::string output_path)
+            : engine_(engine), output_path_(std::move(output_path)) {}
+        ~SidecarGuard();
+
+        SidecarGuard(const SidecarGuard&) = delete;
+        SidecarGuard& operator=(const SidecarGuard&) = delete;
+
+    private:
+        const RenderEngine* engine_;
+        std::string output_path_;
+    };
 
     services::ProgressCallback progress_cb_;
     std::atomic<int64_t> frames_encoded_{0};
