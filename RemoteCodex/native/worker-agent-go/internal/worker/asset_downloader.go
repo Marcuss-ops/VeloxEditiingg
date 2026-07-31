@@ -48,8 +48,24 @@ func (w *Worker) downloadVeloxAssetWithSHA(ctx context.Context, assetID string, 
 		return "", err
 	}
 
+	operationStarted := time.Now().UTC()
+
 	// Cache hit fast path: verify SHA-256 when provided.
 	if existing, err := cachedAssetPath(cacheDir, assetID, expectedSHA256); err == nil && existing != "" {
+		completed := time.Now().UTC()
+		recordAssetOperation(ctx, AssetOperationRecord{
+			AssetID:             assetID,
+			CacheStatus:         "hit",
+			DownloadStartedAt:   operationStarted,
+			DownloadCompletedAt: completed,
+			DownloadMS:          0,
+			DownloadedBytes:     0,
+			SHA256Verified:      expectedSHA256 != "",
+			IntegrityCheck:      "sha256",
+			IntegrityValid:      expectedSHA256 != "",
+			LocalPath:           existing,
+			Source:              "master_asset_bridge",
+		})
 		return existing, nil
 	}
 
@@ -117,12 +133,26 @@ func (w *Worker) downloadVeloxAssetWithSHA(ctx context.Context, assetID string, 
 			continue
 		}
 
-		localPath, err := writeVeloxAssetToCache(cacheDir, assetID, expectedSHA256, resp)
+		localPath, downloadedBytes, err := writeVeloxAssetToCache(cacheDir, assetID, expectedSHA256, resp)
 		resp.Body.Close()
 		if err != nil {
 			lastErr = err
 			continue
 		}
+		completed := time.Now().UTC()
+		recordAssetOperation(ctx, AssetOperationRecord{
+			AssetID:             assetID,
+			CacheStatus:         "miss",
+			DownloadStartedAt:   operationStarted,
+			DownloadCompletedAt: completed,
+			DownloadMS:          completed.Sub(operationStarted).Milliseconds(),
+			DownloadedBytes:     downloadedBytes,
+			SHA256Verified:      expectedSHA256 != "",
+			IntegrityCheck:      "sha256",
+			IntegrityValid:      expectedSHA256 != "",
+			LocalPath:           localPath,
+			Source:              "master_asset_bridge",
+		})
 		return localPath, nil
 	}
 

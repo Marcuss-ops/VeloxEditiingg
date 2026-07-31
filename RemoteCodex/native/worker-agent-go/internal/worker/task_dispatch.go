@@ -102,6 +102,8 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	}
 
 	spec := pte.Spec
+	assetTracker := &assetOperationTracker{}
+	ctx = withAssetOperationTracker(ctx, assetTracker)
 	if spec.Payload != nil {
 		resolvedPayload, err := w.resolveTaskAssets(ctx, spec.Payload)
 		if err != nil {
@@ -136,6 +138,8 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	}
 
 	report, runErr := w.taskRunner.Run(ctx, spec)
+	attachAssetOperations(&report, assetTracker)
+	attachAssetOperationsToPhaseMarkers(&report)
 	if runErr != nil {
 		return &report, fmt.Errorf("taskrunner.Run: %w", runErr)
 	}

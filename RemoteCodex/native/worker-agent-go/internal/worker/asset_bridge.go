@@ -77,7 +77,24 @@ func (w *Worker) materializeVeloxAssetRefs(ctx context.Context, value interface{
 		}
 		return w.downloadVeloxAsset(ctx, assetID)
 	case map[string]interface{}:
+		// Asset envelopes commonly carry the expected digest beside the
+		// transport URI. Resolve that pair together so generic recursive
+		// materialization verifies SHA-256 on both misses and hits.
+		expectedSHA := expectedAssetSHA256(v)
 		for key, item := range v {
+			ref, ok := item.(string)
+			if ok && strings.HasPrefix(strings.TrimSpace(ref), "velox-asset://") {
+				assetID := strings.TrimPrefix(strings.TrimSpace(ref), "velox-asset://")
+				if assetID == "" || strings.ContainsAny(assetID, `/\\`) {
+					return nil, fmt.Errorf("invalid velox asset reference")
+				}
+				resolved, err := w.downloadVeloxAssetWithSHA(ctx, assetID, expectedSHA)
+				if err != nil {
+					return nil, fmt.Errorf("resolve asset field %s: %w", key, err)
+				}
+				v[key] = resolved
+				continue
+			}
 			resolved, err := w.materializeVeloxAssetRefs(ctx, item)
 			if err != nil {
 				return nil, fmt.Errorf("resolve asset field %s: %w", key, err)

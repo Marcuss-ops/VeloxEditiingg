@@ -58,7 +58,7 @@ func (w *Worker) resolveVoiceoverAudioPath(ctx context.Context, ref string, para
 		if assetID == "" || strings.ContainsAny(assetID, `/\`) {
 			return "", fmt.Errorf("invalid velox asset reference")
 		}
-		return w.downloadVeloxAsset(ctx, assetID)
+		return w.downloadVeloxAssetWithSHA(ctx, assetID, expectedAssetSHA256(params))
 	case strings.HasPrefix(strings.ToLower(reference), "http://"), strings.HasPrefix(strings.ToLower(reference), "https://"), strings.Contains(strings.ToLower(reference), "drive.google.com"):
 		return "", fmt.Errorf("unsupported voiceover reference: raw URL must be bridged as velox-asset://")
 	default:
@@ -117,7 +117,7 @@ func (w *Worker) resolveAudioPayload(ctx context.Context, payload map[string]int
 			}
 			for _, key := range []string{"source_url", "audio_url", "url"} {
 				if ref, ok := trackClone[key].(string); ok && strings.HasPrefix(strings.TrimSpace(ref), "velox-asset://") {
-					resolved, err := w.resolveVoiceoverAudioPath(ctx, ref, clone)
+					resolved, err := w.resolveVoiceoverAudioPath(ctx, ref, trackClone)
 					if err != nil {
 						return nil, fmt.Errorf("resolve audio_tracks[%d].%s: %w", i, key, err)
 					}

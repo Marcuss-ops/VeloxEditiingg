@@ -88,9 +88,16 @@ func cachedAssetPath(cacheDir, assetID string, expectedSHA256 string) (string, e
 	if expectedSHA256 != "" {
 		actual, err := sha256File(cachedPath)
 		if err != nil {
+			// Remove only this invalid entry; the rest of the cache remains
+			// untouched and the caller re-downloads the asset.
+			_ = os.Remove(cachedPath)
 			return "", nil // corrupted file → re-download
 		}
 		if actual != expectedSHA256 {
+			// A cache hit is valid only after the digest matches. Remove
+			// this corrupt entry atomically from the cache namespace before
+			// reacquiring it; never clear the entire cache.
+			_ = os.Remove(cachedPath)
 			return "", nil // hash mismatch → re-download
 		}
 	}
@@ -117,19 +124,19 @@ func sha256File(path string) (string, error) {
 // of the payload to refuse HTML responses from misconfigured upstreams.
 // When expectedSHA256 is non-empty, the cached filename embeds the SHA-256
 // prefix so different asset versions don't collide.
-func writeVeloxAssetToCache(cacheDir, assetID string, expectedSHA256 string, resp *http.Response) (string, error) {
+func writeVeloxAssetToCache(cacheDir, assetID string, expectedSHA256 string, resp *http.Response) (string, int64, error) {
 	mediaType := strings.TrimSpace(resp.Header.Get("Content-Type"))
 	if idx := strings.Index(mediaType, ";"); idx >= 0 {
 		mediaType = strings.TrimSpace(mediaType[:idx])
 	}
 	if isHTMLMediaType(mediaType) {
-		return "", fmt.Errorf("unexpected HTML response while downloading asset")
+		return "", 0, fmt.Errorf("unexpected HTML response while downloading asset")
 	}
 
 	reader := bufio.NewReader(resp.Body)
 	peek, _ := reader.Peek(512)
 	if isHTMLPayload(peek) {
-		return "", fmt.Errorf("unexpected HTML response while downloading asset")
+		return "", 0, fmt.Errorf("unexpected HTML response while downloading asset")
 	}
 	if mediaType == "" {
 		mediaType = http.DetectContentType(peek)
@@ -143,7 +150,7 @@ func writeVeloxAssetToCache(cacheDir, assetID string, expectedSHA256 string, res
 	prefix := cacheKeyPrefix(assetID, expectedSHA256)
 	tmp, err := os.CreateTemp(cacheDir, prefix+"-*")
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	tmpPath := tmp.Name()
 	defer tmp.Close()
@@ -156,38 +163,37 @@ func writeVeloxAssetToCache(cacheDir, assetID string, expectedSHA256 string, res
 	written, err := io.Copy(tmp, teeReader)
 	if err != nil {
 		_ = os.Remove(tmpPath)
-		return "", err
+		return "", 0, err
 	}
 	if written <= 0 {
 		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("downloaded asset is empty")
+		return "", 0, fmt.Errorf("downloaded asset is empty")
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = os.Remove(tmpPath)
-		return "", err
+		return "", 0, err
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		return "", err
+		return "", 0, err
 	}
 
 	// Verify against expected SHA-256 when supplied.
 	actualSHA256 := fmt.Sprintf("%x", hasher.Sum(nil))
 	if expectedSHA256 != "" && actualSHA256 != expectedSHA256 {
 		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("downloaded asset SHA-256 mismatch (got %s, want %s)", actualSHA256[:16], expectedSHA256[:16])
+		return "", 0, fmt.Errorf("downloaded asset SHA-256 mismatch (got %s, want %s)", actualSHA256[:16], expectedSHA256[:16])
 	}
 
 	finalPath := filepath.Join(cacheDir, prefix+ext)
-	if info, err := os.Stat(finalPath); err == nil && !info.IsDir() {
-		_ = os.Remove(tmpPath)
-		return finalPath, nil
-	}
+	// Rename replaces an existing destination atomically. This is important
+	// after a verified cache miss: a corrupt entry must be repaired, not
+	// silently retained because the filename already exists.
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		_ = os.Remove(tmpPath)
-		return "", err
+		return "", 0, err
 	}
-	return finalPath, nil
+	return finalPath, written, nil
 }
 
 // isHTMLMediaType reports whether a Content-Type looks like HTML.
