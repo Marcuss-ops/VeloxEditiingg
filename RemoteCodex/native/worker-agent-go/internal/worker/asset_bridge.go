@@ -81,6 +81,7 @@ func (w *Worker) materializeVeloxAssetRefs(ctx context.Context, value interface{
 		// transport URI. Resolve that pair together so generic recursive
 		// materialization verifies SHA-256 on both misses and hits.
 		expectedSHA := expectedAssetSHA256(v)
+		expectedSizeBytes := expectedAssetSize(v)
 		for key, item := range v {
 			ref, ok := item.(string)
 			if ok && strings.HasPrefix(strings.TrimSpace(ref), "velox-asset://") {
@@ -88,7 +89,7 @@ func (w *Worker) materializeVeloxAssetRefs(ctx context.Context, value interface{
 				if assetID == "" || strings.ContainsAny(assetID, `/\\`) {
 					return nil, fmt.Errorf("invalid velox asset reference")
 				}
-				resolved, err := w.downloadVeloxAssetWithSHA(ctx, assetID, expectedSHA)
+				resolved, err := w.downloadVeloxAssetWithMetadata(ctx, assetID, expectedSHA, expectedSizeBytes)
 				if err != nil {
 					return nil, fmt.Errorf("resolve asset field %s: %w", key, err)
 				}

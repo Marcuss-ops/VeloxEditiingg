@@ -3,6 +3,7 @@ package worker
 import (
 	"bufio"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"mime"
@@ -63,9 +64,17 @@ func cacheKeyPrefix(assetID string, sha256Prefix string) string {
 }
 
 // cachedAssetPath returns a previously cached asset path when present.
-// When expectedSHA256 is non-empty, the file's SHA-256 is verified on cache
-// hit; a mismatch returns ("", nil) so the caller re-downloads.
-func cachedAssetPath(cacheDir, assetID string, expectedSHA256 string) (string, error) {
+// A hit is valid only after every supplied integrity constraint passes:
+// expectedSizeBytes (when positive) and expectedSHA256 (when non-empty).
+// Any invalid entry is removed individually and reported as a miss so the
+// caller re-downloads it from the Master.
+func cachedAssetPath(cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64) (string, error) {
+	// A cache hit is never valid without both pieces of integrity metadata.
+	// Keep this invariant here as well as in the downloader so future callers
+	// cannot accidentally bypass complete validation.
+	if expectedSHA256 == "" || expectedSizeBytes <= 0 {
+		return "", nil
+	}
 	prefix := cacheKeyPrefix(assetID, expectedSHA256)
 	matches, err := filepath.Glob(filepath.Join(cacheDir, prefix+".*"))
 	if err != nil || len(matches) == 0 {
@@ -84,16 +93,20 @@ func cachedAssetPath(cacheDir, assetID string, expectedSHA256 string) (string, e
 	}
 	cachedPath := matches[0]
 
-	// Verify SHA-256 when expected.
+	info, err := os.Stat(cachedPath)
+	if err != nil || !info.Mode().IsRegular() {
+		// Remove only this invalid entry; the rest of the cache remains
+		// untouched and the caller re-downloads the asset.
+		_ = os.Remove(cachedPath)
+		return "", nil
+	}
+	if expectedSizeBytes > 0 && info.Size() != expectedSizeBytes {
+		_ = os.Remove(cachedPath)
+		return "", nil // size mismatch → re-download
+	}
 	if expectedSHA256 != "" {
 		actual, err := sha256File(cachedPath)
-		if err != nil {
-			// Remove only this invalid entry; the rest of the cache remains
-			// untouched and the caller re-downloads the asset.
-			_ = os.Remove(cachedPath)
-			return "", nil // corrupted file → re-download
-		}
-		if actual != expectedSHA256 {
+		if err != nil || actual != expectedSHA256 {
 			// A cache hit is valid only after the digest matches. Remove
 			// this corrupt entry atomically from the cache namespace before
 			// reacquiring it; never clear the entire cache.
@@ -102,6 +115,14 @@ func cachedAssetPath(cacheDir, assetID string, expectedSHA256 string) (string, e
 		}
 	}
 	return cachedPath, nil
+}
+
+func validSHA256(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 // sha256File computes the lowercase hex SHA-256 of a file.
@@ -124,7 +145,7 @@ func sha256File(path string) (string, error) {
 // of the payload to refuse HTML responses from misconfigured upstreams.
 // When expectedSHA256 is non-empty, the cached filename embeds the SHA-256
 // prefix so different asset versions don't collide.
-func writeVeloxAssetToCache(cacheDir, assetID string, expectedSHA256 string, resp *http.Response) (string, int64, error) {
+func writeVeloxAssetToCache(cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64, resp *http.Response) (string, int64, error) {
 	mediaType := strings.TrimSpace(resp.Header.Get("Content-Type"))
 	if idx := strings.Index(mediaType, ";"); idx >= 0 {
 		mediaType = strings.TrimSpace(mediaType[:idx])
@@ -178,7 +199,11 @@ func writeVeloxAssetToCache(cacheDir, assetID string, expectedSHA256 string, res
 		return "", 0, err
 	}
 
-	// Verify against expected SHA-256 when supplied.
+	// Verify all supplied integrity metadata before promoting the file.
+	if expectedSizeBytes > 0 && written != expectedSizeBytes {
+		_ = os.Remove(tmpPath)
+		return "", 0, fmt.Errorf("downloaded asset size mismatch (got %d, want %d)", written, expectedSizeBytes)
+	}
 	actualSHA256 := fmt.Sprintf("%x", hasher.Sum(nil))
 	if expectedSHA256 != "" && actualSHA256 != expectedSHA256 {
 		_ = os.Remove(tmpPath)

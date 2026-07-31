@@ -16,11 +16,11 @@ import (
 // reused by both the audio resolver and the scene-image resolver —
 // the asset bridge never builds per-domain downloaders.
 //
-// Backward-compat: delegates to downloadVeloxAssetWithSHA with empty SHA-256.
-// Callers that have the asset digest should use downloadVeloxAssetWithSHA
-// for cache-integrity verification on both cache-hit and cache-miss paths.
+// Backward-compat: delegates to the metadata-aware downloader without
+// expected metadata. Such legacy calls may download the asset, but an
+// existing cache entry is never reused as a verified hit.
 func (w *Worker) downloadVeloxAsset(ctx context.Context, assetID string) (string, error) {
-	return w.downloadVeloxAssetWithSHA(ctx, assetID, "")
+	return w.downloadVeloxAssetWithMetadata(ctx, assetID, "", 0)
 }
 
 // downloadVeloxAssetWithSHA downloads a single velox-asset by ID with
@@ -33,7 +33,8 @@ func (w *Worker) downloadVeloxAsset(ctx context.Context, assetID string) (string
 //     versions of the same asset never collide.
 //
 // When expectedSHA256 is empty (legacy path):
-//   - Cache hit: returns the first cached file without verification.
+//   - Cache hit: is reused only when another expected size is supplied;
+//     otherwise the path is treated as a miss and refreshed from Master.
 //   - Cache miss: downloads and caches, computing SHA-256 for future callers.
 //
 // Behaviour preserved verbatim from the original asset_bridge.go:
@@ -43,6 +44,14 @@ func (w *Worker) downloadVeloxAsset(ctx context.Context, assetID string) (string
 //   - authenticated via worker's Bearer token
 //   - HTML responses are rejected after both header and pre-fetch sniff
 func (w *Worker) downloadVeloxAssetWithSHA(ctx context.Context, assetID string, expectedSHA256 string) (string, error) {
+	return w.downloadVeloxAssetWithMetadata(ctx, assetID, expectedSHA256, 0)
+}
+
+// downloadVeloxAssetWithMetadata is the integrity-aware asset path. A cache
+// hit is reused only after the supplied size and SHA-256 checks pass. Invalid
+// entries are removed individually by cachedAssetPath, then the asset is
+// downloaded and verified before atomic promotion.
+func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, expectedSHA256 string, expectedSizeBytes int64) (string, error) {
 	cacheDir := w.assetCacheDir()
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return "", err
@@ -50,23 +59,28 @@ func (w *Worker) downloadVeloxAssetWithSHA(ctx context.Context, assetID string, 
 
 	operationStarted := time.Now().UTC()
 
-	// Cache hit fast path: verify SHA-256 when provided.
-	if existing, err := cachedAssetPath(cacheDir, assetID, expectedSHA256); err == nil && existing != "" {
-		completed := time.Now().UTC()
-		recordAssetOperation(ctx, AssetOperationRecord{
-			AssetID:             assetID,
-			CacheStatus:         "hit",
-			DownloadStartedAt:   operationStarted,
-			DownloadCompletedAt: completed,
-			DownloadMS:          0,
-			DownloadedBytes:     0,
-			SHA256Verified:      expectedSHA256 != "",
-			IntegrityCheck:      "sha256",
-			IntegrityValid:      expectedSHA256 != "",
-			LocalPath:           existing,
-			Source:              "master_asset_bridge",
-		})
-		return existing, nil
+	// Cache hit fast path: reuse an entry only when both integrity metadata
+	// values are available. Bare or partially-described legacy URIs are
+	// intentionally treated as misses, because an incompletely verified file
+	// must never be reused as a valid hit.
+	if expectedSHA256 != "" && expectedSizeBytes > 0 {
+		if existing, err := cachedAssetPath(cacheDir, assetID, expectedSHA256, expectedSizeBytes); err == nil && existing != "" {
+			completed := time.Now().UTC()
+			recordAssetOperation(ctx, AssetOperationRecord{
+				AssetID:             assetID,
+				CacheStatus:         "hit",
+				DownloadStartedAt:   operationStarted,
+				DownloadCompletedAt: completed,
+				DownloadMS:          0,
+				DownloadedBytes:     0,
+				SHA256Verified:      true,
+				IntegrityCheck:      "size_bytes+sha256",
+				IntegrityValid:      true,
+				LocalPath:           existing,
+				Source:              "master_asset_bridge",
+			})
+			return existing, nil
+		}
 	}
 
 	downloadURL := strings.TrimRight(strings.TrimSpace(w.config.MasterURL), "/") + "/api/v1/worker-assets/" + neturl.PathEscape(assetID)
@@ -133,7 +147,7 @@ func (w *Worker) downloadVeloxAssetWithSHA(ctx context.Context, assetID string, 
 			continue
 		}
 
-		localPath, downloadedBytes, err := writeVeloxAssetToCache(cacheDir, assetID, expectedSHA256, resp)
+		localPath, downloadedBytes, err := writeVeloxAssetToCache(cacheDir, assetID, expectedSHA256, expectedSizeBytes, resp)
 		resp.Body.Close()
 		if err != nil {
 			lastErr = err
@@ -146,12 +160,11 @@ func (w *Worker) downloadVeloxAssetWithSHA(ctx context.Context, assetID string, 
 			DownloadStartedAt:   operationStarted,
 			DownloadCompletedAt: completed,
 			DownloadMS:          completed.Sub(operationStarted).Milliseconds(),
-			DownloadedBytes:     downloadedBytes,
-			SHA256Verified:      expectedSHA256 != "",
-			IntegrityCheck:      "sha256",
-			IntegrityValid:      expectedSHA256 != "",
-			LocalPath:           localPath,
-			Source:              "master_asset_bridge",
+			DownloadedBytes:     downloadedBytes, SHA256Verified: expectedSHA256 != "",
+			IntegrityCheck: integrityCheck(expectedSHA256, expectedSizeBytes),
+			IntegrityValid: expectedSHA256 != "" && expectedSizeBytes > 0,
+			LocalPath:      localPath,
+			Source:         "master_asset_bridge",
 		})
 		return localPath, nil
 	}

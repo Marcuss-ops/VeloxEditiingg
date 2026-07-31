@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -46,8 +47,9 @@ func TestDownloadVeloxAssetWithSHA_ReportsMissHitAndCorruptRedownload(t *testing
 	}
 	tracker := &assetOperationTracker{}
 	ctx := withAssetOperationTracker(context.Background(), tracker)
+	expectedSizeBytes := int64(len(assetBytes))
 
-	path, err := w.downloadVeloxAssetWithSHA(ctx, assetID, expectedSHA)
+	path, err := w.downloadVeloxAssetWithMetadata(ctx, assetID, expectedSHA, expectedSizeBytes)
 	if err != nil {
 		t.Fatalf("cold resolve: %v", err)
 	}
@@ -55,7 +57,13 @@ func TestDownloadVeloxAssetWithSHA_ReportsMissHitAndCorruptRedownload(t *testing
 		t.Fatalf("cached path %q: %v", path, err)
 	}
 
-	pathAgain, err := w.downloadVeloxAssetWithSHA(ctx, assetID, expectedSHA)
+	// A separate cache entry must survive repair of the corrupted asset.
+	sentinelPath := filepath.Join(w.assetCacheDir(), "unrelated-asset.mp3")
+	if err := os.WriteFile(sentinelPath, []byte("keep me"), 0o644); err != nil {
+		t.Fatalf("write unrelated cache entry: %v", err)
+	}
+
+	pathAgain, err := w.downloadVeloxAssetWithMetadata(ctx, assetID, expectedSHA, expectedSizeBytes)
 	if err != nil {
 		t.Fatalf("warm resolve: %v", err)
 	}
@@ -63,10 +71,14 @@ func TestDownloadVeloxAssetWithSHA_ReportsMissHitAndCorruptRedownload(t *testing
 		t.Fatalf("warm path = %q, want %q", pathAgain, path)
 	}
 
-	if err := os.WriteFile(path, []byte("corrupt"), 0o644); err != nil {
+	corruptBytes := bytes.Repeat([]byte{'x'}, len(assetBytes))
+	if bytes.Equal(corruptBytes, assetBytes) {
+		t.Fatal("test corruption must differ from the valid payload")
+	}
+	if err := os.WriteFile(path, corruptBytes, 0o644); err != nil {
 		t.Fatalf("corrupt cache entry: %v", err)
 	}
-	pathAfterCorruption, err := w.downloadVeloxAssetWithSHA(ctx, assetID, expectedSHA)
+	pathAfterCorruption, err := w.downloadVeloxAssetWithMetadata(ctx, assetID, expectedSHA, expectedSizeBytes)
 	if err != nil {
 		t.Fatalf("corrupt-cache resolve: %v", err)
 	}
@@ -75,6 +87,9 @@ func TestDownloadVeloxAssetWithSHA_ReportsMissHitAndCorruptRedownload(t *testing
 	}
 	if requestCount != 2 {
 		t.Fatalf("master request count = %d, want 2 (miss + corrupt redownload)", requestCount)
+	}
+	if got, err := os.ReadFile(sentinelPath); err != nil || string(got) != "keep me" {
+		t.Fatalf("unrelated cache entry = %q, err=%v; it must remain untouched", got, err)
 	}
 
 	records := tracker.snapshot()
@@ -99,7 +114,7 @@ func TestDownloadVeloxAssetWithSHA_ReportsMissHitAndCorruptRedownload(t *testing
 		if record.DownloadCompletedAt.Before(record.DownloadStartedAt) {
 			t.Errorf("record[%d] completed before started: %+v", i, record)
 		}
-		if !record.SHA256Verified || record.IntegrityCheck != "sha256" || !record.IntegrityValid {
+		if !record.SHA256Verified || record.IntegrityCheck != "size_bytes+sha256" || !record.IntegrityValid {
 			t.Errorf("record[%d] integrity fields = verified:%v check:%q valid:%v", i, record.SHA256Verified, record.IntegrityCheck, record.IntegrityValid)
 		}
 	}
@@ -108,6 +123,48 @@ func TestDownloadVeloxAssetWithSHA_ReportsMissHitAndCorruptRedownload(t *testing
 	}
 	if records[1].DownloadedBytes != 0 || records[1].DownloadMS != 0 {
 		t.Errorf("hit metrics = bytes:%d ms:%d, want 0/0", records[1].DownloadedBytes, records[1].DownloadMS)
+	}
+}
+
+func TestDownloadVeloxAssetWithMetadataRequiresSizeAndSHAForCacheHit(t *testing.T) {
+	assetID := "asset-requires-complete-integrity"
+	assetBytes := []byte("complete integrity metadata")
+	digest := sha256.Sum256(assetBytes)
+	expectedSHA := hex.EncodeToString(digest[:])
+	requestCount := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write(assetBytes)
+	}))
+	defer srv.Close()
+
+	w := &Worker{
+		config:    &config.WorkerConfig{MasterURL: srv.URL, WorkDir: t.TempDir()},
+		apiClient: api.NewClient(srv.URL),
+	}
+	ctx := context.Background()
+
+	completeSize := int64(len(assetBytes))
+	if _, err := w.downloadVeloxAssetWithMetadata(ctx, assetID, expectedSHA, completeSize); err != nil {
+		t.Fatalf("complete-metadata download: %v", err)
+	}
+	cacheDir := w.assetCacheDir()
+	if got, err := cachedAssetPath(cacheDir, assetID, expectedSHA, 0); err != nil || got != "" {
+		t.Fatalf("SHA-only cache lookup = %q, err=%v; partial metadata must not hit", got, err)
+	}
+	if got, err := cachedAssetPath(cacheDir, assetID, "", completeSize); err != nil || got != "" {
+		t.Fatalf("size-only cache lookup = %q, err=%v; partial metadata must not hit", got, err)
+	}
+	if _, err := w.downloadVeloxAssetWithMetadata(ctx, assetID, expectedSHA, 0); err != nil {
+		t.Fatalf("SHA-only download: %v", err)
+	}
+	if _, err := w.downloadVeloxAssetWithMetadata(ctx, assetID, "", completeSize); err != nil {
+		t.Fatalf("size-only download: %v", err)
+	}
+	if requestCount != 3 {
+		t.Fatalf("master request count = %d, want 3 (complete + two partial-metadata misses)", requestCount)
 	}
 }
 
@@ -131,8 +188,9 @@ func TestResolveSceneImagePayload_PropagatesExpectedSHA(t *testing.T) {
 	ctx := withAssetOperationTracker(context.Background(), tracker)
 	payload := map[string]interface{}{
 		"scenes": []interface{}{map[string]interface{}{
-			"clip_link": "velox-asset://" + assetID,
-			"sha256":    expectedSHA,
+			"clip_link":  "velox-asset://" + assetID,
+			"sha256":     expectedSHA,
+			"size_bytes": int64(len(assetBytes)),
 		}},
 	}
 
@@ -150,8 +208,8 @@ func TestResolveSceneImagePayload_PropagatesExpectedSHA(t *testing.T) {
 	if len(records) != 1 || records[0].AssetID != assetID {
 		t.Fatalf("scene asset records = %+v, want one record for %s", records, assetID)
 	}
-	if !records[0].SHA256Verified || records[0].IntegrityCheck != "sha256" || !records[0].IntegrityValid {
-		t.Fatalf("scene asset integrity = %+v, want verified SHA-256", records[0])
+	if !records[0].SHA256Verified || records[0].IntegrityCheck != "size_bytes+sha256" || !records[0].IntegrityValid {
+		t.Fatalf("scene asset integrity = %+v, want verified size and SHA-256", records[0])
 	}
 }
 

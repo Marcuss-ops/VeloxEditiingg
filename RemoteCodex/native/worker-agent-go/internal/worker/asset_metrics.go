@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -78,6 +79,75 @@ func expectedAssetSHA256(fields map[string]interface{}) string {
 		}
 	}
 	return ""
+}
+
+// expectedAssetSize returns the expected byte count from the asset envelope.
+// JSON decoding commonly represents numbers as float64, while typed callers
+// may provide int64 or a decimal string, so accept all transport forms.
+func integrityCheck(expectedSHA256 string, expectedSizeBytes int64) string {
+	if expectedSHA256 != "" && expectedSizeBytes > 0 {
+		return "size_bytes+sha256"
+	}
+	if expectedSHA256 != "" {
+		return "sha256"
+	}
+	if expectedSizeBytes > 0 {
+		return "size_bytes"
+	}
+	return "none"
+}
+
+func expectedAssetSize(fields map[string]interface{}) int64 {
+	if fields == nil {
+		return 0
+	}
+	for _, key := range []string{"size_bytes", "sizeBytes", "expected_size_bytes", "size"} {
+		value, ok := fields[key]
+		if !ok {
+			continue
+		}
+		var size int64
+		switch typed := value.(type) {
+		case int:
+			size = int64(typed)
+		case int32:
+			size = int64(typed)
+		case int64:
+			size = typed
+		case uint:
+			size = int64(typed)
+		case uint32:
+			size = int64(typed)
+		case uint64:
+			if typed > uint64(^uint64(0)>>1) {
+				continue
+			}
+			size = int64(typed)
+		case float64:
+			if typed != float64(int64(typed)) {
+				continue
+			}
+			size = int64(typed)
+		case json.Number:
+			parsed, err := typed.Int64()
+			if err != nil {
+				continue
+			}
+			size = parsed
+		case string:
+			parsed, err := strconv.ParseInt(typed, 10, 64)
+			if err != nil {
+				continue
+			}
+			size = parsed
+		default:
+			continue
+		}
+		if size > 0 {
+			return size
+		}
+	}
+	return 0
 }
 
 func attachAssetOperations(report *taskrunner.TaskExecutionReport, tracker *assetOperationTracker) {

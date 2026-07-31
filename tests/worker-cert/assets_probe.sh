@@ -64,7 +64,7 @@
 #   7  SHA-256 round-trip mismatch (master side output_sha256 != local
 #                                     sha256sum of downloaded artifact).
 #   8  timeout marker detected in worker or master log (filtered by $JOB_ID).
- 10  permission marker detected in worker or master log (filtered by $JOB_ID).
+#  10  permission marker detected in worker or master log (filtered by $JOB_ID).
 #   9  master-or-pipeline_gen path marker detected in worker log.
 # =============================================================================
 

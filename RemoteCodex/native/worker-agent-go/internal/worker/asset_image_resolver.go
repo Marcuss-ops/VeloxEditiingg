@@ -19,7 +19,7 @@ func (w *Worker) resolveSceneImagePayload(ctx context.Context, payload map[strin
 		clone[key] = value
 	}
 
-	resolve := func(ref, expectedSHA string) (string, error) {
+	resolve := func(ref, expectedSHA string, expectedSizeBytes int64) (string, error) {
 		ref = strings.TrimSpace(ref)
 		if !strings.HasPrefix(ref, "velox-asset://") {
 			return ref, nil
@@ -28,14 +28,14 @@ func (w *Worker) resolveSceneImagePayload(ctx context.Context, payload map[strin
 		if assetID == "" || strings.ContainsAny(assetID, `/\`) {
 			return "", fmt.Errorf("invalid scene image asset reference")
 		}
-		return w.downloadVeloxAssetWithSHA(ctx, assetID, expectedSHA)
+		return w.downloadVeloxAssetWithMetadata(ctx, assetID, expectedSHA, expectedSizeBytes)
 	}
 
 	resolveStringList := func(value interface{}, label string) error {
 		switch items := value.(type) {
 		case []string:
 			for i, item := range items {
-				resolved, err := resolve(item, "")
+				resolved, err := resolve(item, "", 0)
 				if err != nil {
 					return fmt.Errorf("resolve %s[%d]: %w", label, i, err)
 				}
@@ -47,7 +47,7 @@ func (w *Worker) resolveSceneImagePayload(ctx context.Context, payload map[strin
 				if !ok {
 					continue
 				}
-				resolved, err := resolve(ref, "")
+				resolved, err := resolve(ref, "", 0)
 				if err != nil {
 					return fmt.Errorf("resolve %s[%d]: %w", label, i, err)
 				}
@@ -71,7 +71,7 @@ func (w *Worker) resolveSceneImagePayload(ctx context.Context, payload map[strin
 				continue
 			}
 			if ref, ok := item["url"].(string); ok {
-				resolved, err := resolve(ref, expectedAssetSHA256(item))
+				resolved, err := resolve(ref, expectedAssetSHA256(item), expectedAssetSize(item))
 				if err != nil {
 					return nil, fmt.Errorf("resolve items[%d].url: %w", i, err)
 				}
@@ -82,7 +82,7 @@ func (w *Worker) resolveSceneImagePayload(ctx context.Context, payload map[strin
 	if items, ok := clone["items"].([]map[string]interface{}); ok {
 		for i, item := range items {
 			if ref, ok := item["url"].(string); ok {
-				resolved, err := resolve(ref, expectedAssetSHA256(item))
+				resolved, err := resolve(ref, expectedAssetSHA256(item), expectedAssetSize(item))
 				if err != nil {
 					return nil, fmt.Errorf("resolve items[%d].url: %w", i, err)
 				}
@@ -95,7 +95,7 @@ func (w *Worker) resolveSceneImagePayload(ctx context.Context, payload map[strin
 		expectedSHA := expectedAssetSHA256(scene)
 		for _, key := range []string{"image", "image_link", "clip_link"} {
 			if ref, ok := scene[key].(string); ok {
-				resolved, err := resolve(ref, expectedSHA)
+				resolved, err := resolve(ref, expectedSHA, expectedAssetSize(scene))
 				if err != nil {
 					return fmt.Errorf("resolve %s.%s: %w", label, key, err)
 				}
