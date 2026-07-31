@@ -400,6 +400,12 @@ func ValidateSubmitJobRequest(req SubmitJobRequest) (*SubmitJobValidationError, 
 		}
 	}
 
+	// Publications are validated against the shared canonical contract.
+	// This remains separate from the renderer payload and adds the
+	// request-level uniqueness/provider-options checks that the shared
+	// package cannot know about.
+	details = append(details, validateSubmitPublications(req.Publications)...)
+
 	// ManifestRef shape validation. Runs ONLY when the pointer is
 	// non-nil — a nil pointer is the "client did not opt in" path
 	// and MUST pass through this validator without complaint. When
