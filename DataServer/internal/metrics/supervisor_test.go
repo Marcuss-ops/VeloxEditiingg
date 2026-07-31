@@ -37,6 +37,10 @@ type fakeAttemptsDataSource struct {
 	ComputeDailyRollupsCalls int
 	ComputeDailyRollupsDays  []string
 	ComputeDailyRollupsErr   error
+
+	RenderPerformanceRollupCalls int
+	RenderPerformanceRollupDays  []string
+	RenderPerformanceRollupErr   error
 }
 
 type fakeAttemptRecord struct {
@@ -156,6 +160,17 @@ func (f *fakeAttemptsDataSource) ComputeDailyRollups(ctx context.Context, day st
 	defer f.mu.Unlock()
 	f.ComputeDailyRollupsDays = append(f.ComputeDailyRollupsDays, day)
 	f.ComputeDailyRollupsCalls++
+	return f.ComputeDailyRollupsErr
+}
+
+func (f *fakeAttemptsDataSource) ComputeRenderPerformanceDailyRollup(ctx context.Context, day string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.RenderPerformanceRollupDays = append(f.RenderPerformanceRollupDays, day)
+	f.RenderPerformanceRollupCalls++
+	if f.RenderPerformanceRollupErr != nil {
+		return f.RenderPerformanceRollupErr
+	}
 	return f.ComputeDailyRollupsErr
 }
 
@@ -306,6 +321,44 @@ func TestSupervisor_TickOnce_DeltaDetection(t *testing.T) {
 	out := dumpFamily(t, reg, "velox_cost_total_per_output_minute")
 	if !contains(out, `worker_class="cpu"`) {
 		t.Errorf("second tick must not lose per-class cost gauges; got:\n%s", out)
+	}
+}
+
+// TestSupervisor_TickOnce_NoAttempts_NoCrash: cold-start tick
+// with empty DB and stale since — recent returns []ids, master
+// health still refreshed, no panic.
+func TestSupervisor_TickOnce_NoAttempts_RunsRenderPerformanceRollup(t *testing.T) {
+	reg := NewRegistry()
+	c := NewCollector(reg)
+	attempts := &fakeAttemptsDataSource{attempts: map[string]*fakeAttemptRecord{}}
+	s := NewSupervisor(c, attempts, &fakeOutboxGauge{}, DefaultCostFactors())
+
+	now := time.Date(2026, time.July, 31, 12, 0, 0, 0, time.UTC)
+	s.lastRollupDay = "2026-07-29"
+	if err := s.tickOnce(context.Background(), now); err != nil {
+		t.Fatalf("quiet tick: %v", err)
+	}
+	if attempts.RenderPerformanceRollupCalls != 1 {
+		t.Fatalf("quiet tick render rollup calls=%d, want 1", attempts.RenderPerformanceRollupCalls)
+	}
+	if got := attempts.RenderPerformanceRollupDays[0]; got != "2026-07-30" {
+		t.Fatalf("quiet tick rendered day=%q, want 2026-07-30", got)
+	}
+}
+
+func TestSupervisor_TickOnce_NoAttempts_RollupErrorPropagates(t *testing.T) {
+	reg := NewRegistry()
+	c := NewCollector(reg)
+	attempts := &fakeAttemptsDataSource{attempts: map[string]*fakeAttemptRecord{}, RenderPerformanceRollupErr: fmt.Errorf("rollup unavailable")}
+	s := NewSupervisor(c, attempts, &fakeOutboxGauge{}, DefaultCostFactors())
+	s.lastRollupDay = "2026-07-29"
+
+	err := s.tickOnce(context.Background(), time.Date(2026, time.July, 31, 12, 0, 0, 0, time.UTC))
+	if err == nil || !contains(err.Error(), "rollup unavailable") {
+		t.Fatalf("quiet tick error=%v, want propagated rollup error", err)
+	}
+	if s.lastRollupDay != "2026-07-29" {
+		t.Fatalf("failed rollup advanced watermark to %q", s.lastRollupDay)
 	}
 }
 

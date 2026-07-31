@@ -28,6 +28,7 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -74,6 +75,9 @@ type AttemptsDataSource interface {
 	// daily_metric_rollups table for the given UTC day (YYYY-MM-DD).
 	// Idempotent — INSERT OR REPLACE per (day, metric_name, executor, worker).
 	ComputeDailyRollups(ctx context.Context, day string) error
+	// ComputeRenderPerformanceDailyRollup persists cohort/version/phase
+	// aggregates, p25 baselines, and recoverable phase time.
+	ComputeRenderPerformanceDailyRollup(ctx context.Context, day string) error
 }
 
 // OutboxGauge is the minimal contract the supervisor needs from the
@@ -237,11 +241,18 @@ func (s *Supervisor) tickOnce(ctx context.Context, now time.Time) error {
 			since.Format(time.RFC3339), err)
 	}
 	if len(ids) == 0 {
+		// Daily rollups are calendar-driven, not attempt-driven. They
+		// must still run on quiet ticks so an idle master can cross
+		// midnight and persist the previous day's aggregates.
+		rollupErr := s.tryDailyRollup(ctx, now)
 		if mhErr := s.refreshMasterHealth(ctx, now); mhErr != nil {
 			log.Printf("[METRICS-SUPERVISOR] master-health refresh: %v", mhErr)
+			if rollupErr != nil {
+				return errors.Join(rollupErr, mhErr)
+			}
 			return mhErr
 		}
-		return nil
+		return rollupErr
 	}
 
 	log.Printf("[METRICS-SUPERVISOR] tick=%s since=%s — %d newly-terminal attempts",
@@ -393,9 +404,7 @@ func (s *Supervisor) tickOnce(ctx context.Context, now time.Time) error {
 
 	// 6. Daily rollups: if we've crossed midnight since the last rollup,
 	//    compute and persist yesterday's rollup.
-	s.tryDailyRollup(ctx, now)
-
-	return nil
+	return s.tryDailyRollup(ctx, now)
 }
 
 // refreshMasterHealth refreshes the heartbeat-age + master-health
@@ -427,10 +436,10 @@ func (s *Supervisor) refreshMasterHealth(ctx context.Context, now time.Time) err
 // rollup, and if so, computes the daily rollup for the day that just
 // ended. Runs at most once per tick — the lastRollupDay watermark
 // ensures idempotency across restarts.
-func (s *Supervisor) tryDailyRollup(ctx context.Context, now time.Time) {
+func (s *Supervisor) tryDailyRollup(ctx context.Context, now time.Time) error {
 	today := now.UTC().Format("2006-01-02")
 	if today == s.lastRollupDay {
-		return
+		return nil
 	}
 
 	// Determine the range of days to roll up: from (lastRollupDay+1) up to
@@ -445,21 +454,18 @@ func (s *Supervisor) tryDailyRollup(ctx context.Context, now time.Time) {
 		// Normal path: roll up all days from lastRollupDay+1 to today-1.
 		start, err := dateAddDay(s.lastRollupDay, 1)
 		if err != nil {
-			log.Printf("[METRICS-SUPERVISOR] daily rollup: bad lastRollupDay %q: %v", s.lastRollupDay, err)
-			return
+			return fmt.Errorf("daily rollup: bad lastRollupDay %q: %w", s.lastRollupDay, err)
 		}
 		end, err := dateAddDay(today, -1)
 		if err != nil {
-			log.Printf("[METRICS-SUPERVISOR] daily rollup: bad today %q: %v", today, err)
-			return
+			return fmt.Errorf("daily rollup: bad today %q: %w", today, err)
 		}
 		// Walk from start up to end inclusive.
 		for d := start; d <= end; {
 			days = append(days, d)
 			next, err := dateAddDay(d, 1)
 			if err != nil {
-				log.Printf("[METRICS-SUPERVISOR] daily rollup: date arithmetic failed at %q: %v", d, err)
-				break
+				return fmt.Errorf("daily rollup: date arithmetic failed at %q: %w", d, err)
 			}
 			d = next
 		}
@@ -474,15 +480,22 @@ func (s *Supervisor) tryDailyRollup(ctx context.Context, now time.Time) {
 		log.Printf("[METRICS-SUPERVISOR] daily rollup for %s started", day)
 		if err := s.attempts.ComputeDailyRollups(ctx, day); err != nil {
 			log.Printf("[METRICS-SUPERVISOR] daily rollup for %s FAILED: %v", day, err)
-			errs = append(errs, fmt.Errorf("day %s: %w", day, err))
+			errs = append(errs, fmt.Errorf("day %s daily metrics: %w", day, err))
 			continue
 		}
-		log.Printf("[METRICS-SUPERVISOR] daily rollup for %s completed", day)
+		if err := s.attempts.ComputeRenderPerformanceDailyRollup(ctx, day); err != nil {
+			log.Printf("[METRICS-SUPERVISOR] render performance rollup for %s FAILED: %v", day, err)
+			errs = append(errs, fmt.Errorf("day %s render performance: %w", day, err))
+			continue
+		}
+		log.Printf("[METRICS-SUPERVISOR] daily rollups for %s completed", day)
 	}
-	s.lastRollupDay = today
-	if len(errs) > 0 {
-		log.Printf("[METRICS-SUPERVISOR] daily rollup: %d/%d days failed", len(errs), len(days))
+	if len(errs) == 0 {
+		s.lastRollupDay = today
+		return nil
 	}
+	log.Printf("[METRICS-SUPERVISOR] daily rollup: %d/%d days failed; watermark remains %q for retry", len(errs), len(days), s.lastRollupDay)
+	return errors.Join(errs...)
 }
 
 // gcSeenIDs clears the seenIDs map when it exceeds seenCap. The
