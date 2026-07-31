@@ -12,7 +12,14 @@ After PR 1 (`codex/grpc-config-single-source`) the worker-agent refuses to start
 tests/e2e/grpc-control-plane/
 ├── README.md                       (this file)
 ├── compose.yml                     docker compose v2 reference (manual alt)
-├── run.sh                          host-native orchestrator (the matrix entrypoint)
+├── run.sh                          host-native orchestrator (setup, cleanup, aggregation)
+├── cases/                          six sourced case implementations
+│   ├── case_1_plaintext_accept.sh
+│   ├── case_2_tls_accept.sh
+│   ├── case_3_bad_cert_reject.sh
+│   ├── case_4_wrong_ca_reject.sh
+│   ├── case_5_plaintext_vs_tls_reject.sh
+│   └── case_6_parallel_one_accept_one_reject.sh
 ├── assert.sh                       assertion helpers (sourced by run.sh)
 ├── certs/
 │   └── generate-dev-pki.sh         openssl-driven CA + leaf generator (7d / 1d default TTL)
@@ -21,6 +28,8 @@ tests/e2e/grpc-control-plane/
     ├── worker-tls.json             mTLS worker config (env=production, fixed ports)
     └── worker-plaintext.json       dev-insecure worker config (env=dev per PR 1 recipe)
 ```
+
+`run.sh` keeps shared setup, process traps, cleanup, dispatch and verdict aggregation in the orchestrator. The six case functions are sourced from `cases/` in the same Bash process so PID tracking and shared globals remain intact.
 
 `make e2e-grpc` at the repo root builds the binaries once (if missing), then runs `run.sh` over the 6-case matrix.
 

@@ -60,7 +60,7 @@ GO_BIN="${GO_BIN:-$(command -v go || true)}"
 
 # ─── Source helpers ─────────────────────────────────────────────────────────
 # shellcheck source=tests/_lib/sh/_lib.sh
-source "$(cd "$(dirname "$0")" && cd ../_lib/sh && pwd)/_lib.sh"
+source "$ROOT/../../_lib/sh/_lib.sh"
 
 # assert.sh lives next to run.sh (test-script-local) and is NOT a cross-test
 # helper — it only asserts in the gRPC matrix context. Keep local.
@@ -80,49 +80,6 @@ trap 'on_term' TERM
 
 # ─── Verdict counter init (sourced from _lib.sh) ────────────────────────────
 aggregate_init
-
-# ─── Pre-flight: build binaries ──────────────────────────────────────────────
-assert_info "workdir = $WORKDIR"
-mkdir_p "$WORKDIR" "$BIN_DIR" "$WORKDIR/pki" "$WORKDIR/cases"
-
-if [[ -z "${VELOX_SERVER_BIN:-}" ]]; then
-  VELOX_SERVER_BIN="$(resolve_bin velox-server "$DATASERVER_ROOT" cmd/server)" || exit 1
-fi
-if [[ -z "${VELOX_WORKER_BIN:-}" ]]; then
-  VELOX_WORKER_BIN="$(resolve_bin velox-worker-agent "$WORKERAGENT_ROOT" cmd/velox-worker-agent)" || exit 1
-fi
-
-# ─── Shared E2E runtime setup (helpers from _lib.sh) ───────────────────────
-setup_shared() {
-  : "${BUNDLE_HASH:=e2e-bundle-hash}"
-  bootstrap_workdir "$WORKDIR/work" "${BUNDLE_HASH}"
-
-  # Stub the velox_video_engine binary — minimal Python|JSON→output_path
-  # echo satisfying the runtime contract without a real engine build.
-  local stub_body
-  stub_body="$(cat <<'STUB_EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-PLAN=""
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --plan) PLAN="$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-if [[ -z "$PLAN" ]]; then
-  echo "velox_video_engine stub: --plan required" >&2
-  exit 1
-fi
-OUT="$(python3 -c "import json,sys; print(json.load(open('$PLAN'))['output_path'])" 2>/dev/null || jq -r '.output_path' "$PLAN")"
-mkdir -p "$(dirname "$OUT")"
-printf 'velox-e2e-stub-output' > "$OUT"
-STUB_EOF
-)"
-  write_stub_binary "$BIN_DIR/velox_video_engine" "$stub_body"
-}
-setup_shared
-export VELOX_VIDEO_ENGINE_CPP_BIN="$BIN_DIR/velox_video_engine"
 
 # ─── Scenario-specific helpers (only used by case_N_* below) ────────────────
 
@@ -251,411 +208,78 @@ wait_for_ports_free() {
 # ─────────────────────────────────────────────────────────────────────────────
 # Case 1 — plaintext accept (master + worker both plaintext)
 # ─────────────────────────────────────────────────────────────────────────────
-case_1_plaintext_accept() {
-  local id="case-1-plaintext-accept"
-  local worker_id="e2e-worker-plaintext-1"
-  local case_dir="$WORKDIR/cases/$id"
-  local pki_dir="$WORKDIR/pki/$id"
-  local master_env="$case_dir/master.env"
-  local worker_cfg="$case_dir/worker-config.json"
-  mkdir_p "$case_dir"
-  mkdir -p "$case_dir/data" "$case_dir/run" "$case_dir/videos"
-  touch "$case_dir/data/velox.db"
-
-  patch_env "$ROOT/configs/master.env.example" "$master_env" \
-    -e "s|^VELOX_RUNTIME_DIR=.*|VELOX_RUNTIME_DIR=$case_dir/run|" \
-    -e "s|^VELOX_DATA_DIR=.*|VELOX_DATA_DIR=$case_dir/data|" \
-    -e "s|^VELOX_DB_PATH=.*|VELOX_DB_PATH=$case_dir/data/velox.db|" \
-    -e "s|^VELOX_VIDEOS_DIR=.*|VELOX_VIDEOS_DIR=$case_dir/videos|" \
-    -e "s|^VELOX_ALLOWED_WORKERS=.*|VELOX_ALLOWED_WORKERS=$worker_id|" \
-    -e 's|^# VELOX_GRPC_ALLOW_INSECURE_DEV=.*|VELOX_GRPC_ALLOW_INSECURE_DEV=true|'
-
-  cp "$ROOT/configs/worker-plaintext.json" "$worker_cfg"
-  sed -i \
-    -e "s|WORKER_ID_PLACEHOLDER|$worker_id|" \
-    -e "s|WORK_DIR_PLACEHOLDER|$WORKDIR/work|" \
-    -e "s|STATE_DIR_PLACEHOLDER|$WORKDIR/work/state|" \
-    -e "s|TEMP_DIR_PLACEHOLDER|$WORKDIR/work/temp|" \
-    -e "s|BUNDLE_HASH_PLACEHOLDER|e2e-bundle-hash|" \
-    "$worker_cfg"
-
-  rm -rf "$pki_dir"
-
-  lib_reset_children
-  spawn_master "$id" "$master_env"
-  if ! wait_for_master_ready "http://localhost:8000" "e2e-admin-token" 15 "$id"; then
-    lib_kill_all TERM
-    assert_fail "case-1: master never became ready"
-    aggregate_record "$id" "FAIL"
-    return
-  fi
-  spawn_worker_sync "$id" "$worker_id" "$worker_cfg"
-  local rv=$?
-  sleep 1
-  lib_kill_all TERM
-  if (( rv == 0 )); then
-    aggregate_record "$id" "PASS"
-  else
-    aggregate_record "$id" "FAIL"
-  fi
-}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Case 2 — TLS accept (master + worker both full matching mTLS)
 # ─────────────────────────────────────────────────────────────────────────────
-case_2_tls_accept() {
-  local id="case-2-tls-accept"
-  local worker_id="e2e-worker-tls-case-2"
-  local case_dir="$WORKDIR/cases/$id"
-  local pki_dir="$WORKDIR/pki/$id"
-  local master_env="$case_dir/master.env"
-  local worker_cfg="$case_dir/worker-config.json"
-  mkdir_p "$case_dir" "$pki_dir"
-  mkdir -p "$case_dir/data" "$case_dir/run" "$case_dir/videos"
-  touch "$case_dir/data/velox.db"
-
-  "$ROOT/certs/generate-dev-pki.sh" "$pki_dir" "$worker_id" 7 365 >/dev/null
-
-  patch_env "$ROOT/configs/master.env.example" "$master_env" \
-    -e "s|^VELOX_RUNTIME_DIR=.*|VELOX_RUNTIME_DIR=$case_dir/run|" \
-    -e "s|^VELOX_DATA_DIR=.*|VELOX_DATA_DIR=$case_dir/data|" \
-    -e "s|^VELOX_DB_PATH=.*|VELOX_DB_PATH=$case_dir/data/velox.db|" \
-    -e "s|^VELOX_VIDEOS_DIR=.*|VELOX_VIDEOS_DIR=$case_dir/videos|" \
-    -e "s|^VELOX_ALLOWED_WORKERS=.*|VELOX_ALLOWED_WORKERS=$worker_id|" \
-    -e "s|^# VELOX_GRPC_TLS_CERT_FILE=.*|VELOX_GRPC_TLS_CERT_FILE=$pki_dir/server.crt|" \
-    -e "s|^# VELOX_GRPC_TLS_KEY_FILE=.*|VELOX_GRPC_TLS_KEY_FILE=$pki_dir/server.key|" \
-    -e "s|^# VELOX_GRPC_TLS_CA_FILE=.*|VELOX_GRPC_TLS_CA_FILE=$pki_dir/ca.crt|" \
-    -e 's|^VELOX_GRPC_ALLOW_INSECURE_DEV=.*|VELOX_GRPC_ALLOW_INSECURE_DEV=false|'
-
-  cp "$ROOT/configs/worker-tls.json" "$worker_cfg"
-  sed -i \
-    -e "s|WORKER_ID_PLACEHOLDER|$worker_id|" \
-    -e "s|WORK_DIR_PLACEHOLDER|$WORKDIR/work|" \
-    -e "s|STATE_DIR_PLACEHOLDER|$WORKDIR/work/state|" \
-    -e "s|TEMP_DIR_PLACEHOLDER|$WORKDIR/work/temp|" \
-    -e "s|BUNDLE_HASH_PLACEHOLDER|e2e-bundle-hash|" \
-    -e "s|CERT_DIR_PLACEHOLDER|$pki_dir|g" \
-    "$worker_cfg"
-
-  lib_reset_children
-  spawn_master "$id" "$master_env"
-  if ! wait_for_master_ready "http://localhost:8000" "e2e-admin-token" 15 "$id"; then
-    lib_kill_all TERM
-    assert_fail "case-2: master never became ready"
-    aggregate_record "$id" "FAIL"
-    return
-  fi
-  spawn_worker_sync "$id" "$worker_id" "$worker_cfg"
-  local rv=$?
-  sleep 1
-  lib_kill_all TERM
-  if (( rv == 0 )); then
-    aggregate_record "$id" "PASS"
-  else
-    aggregate_record "$id" "FAIL"
-  fi
-}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Case 3 — bad-cert reject (worker leaf is self-signed / wrong-key)
 # ─────────────────────────────────────────────────────────────────────────────
-case_3_bad_cert_reject() {
-  local id="case-3-bad-cert-reject"
-  local worker_id="e2e-worker-tls-bad-3"
-  local case_dir="$WORKDIR/cases/$id"
-  local pki_dir="$WORKDIR/pki/$id"
-  local pki_bad_dir="$WORKDIR/pki/${id}-worker-bad"
-  local master_env="$case_dir/master.env"
-  local worker_cfg="$case_dir/worker-config.json"
-  mkdir_p "$case_dir" "$pki_dir" "$pki_bad_dir"
-  mkdir -p "$case_dir/data" "$case_dir/run" "$case_dir/videos"
-  touch "$case_dir/data/velox.db"
-
-  "$ROOT/certs/generate-dev-pki.sh" "$pki_dir" "phantom-ca-3" 7 365 >/dev/null
-  "$ROOT/certs/generate-dev-pki.sh" "$pki_bad_dir" "$worker_id" 7 365 >/dev/null
-
-  patch_env "$ROOT/configs/master.env.example" "$master_env" \
-    -e "s|^VELOX_RUNTIME_DIR=.*|VELOX_RUNTIME_DIR=$case_dir/run|" \
-    -e "s|^VELOX_DATA_DIR=.*|VELOX_DATA_DIR=$case_dir/data|" \
-    -e "s|^VELOX_DB_PATH=.*|VELOX_DB_PATH=$case_dir/data/velox.db|" \
-    -e "s|^VELOX_VIDEOS_DIR=.*|VELOX_VIDEOS_DIR=$case_dir/videos|" \
-    -e "s|^VELOX_ALLOWED_WORKERS=.*|VELOX_ALLOWED_WORKERS=$worker_id|" \
-    -e "s|^# VELOX_GRPC_TLS_CERT_FILE=.*|VELOX_GRPC_TLS_CERT_FILE=$pki_dir/server.crt|" \
-    -e "s|^# VELOX_GRPC_TLS_KEY_FILE=.*|VELOX_GRPC_TLS_KEY_FILE=$pki_dir/server.key|" \
-    -e "s|^# VELOX_GRPC_TLS_CA_FILE=.*|VELOX_GRPC_TLS_CA_FILE=$pki_dir/ca.crt|"
-
-  cp "$ROOT/configs/worker-tls.json" "$worker_cfg"
-  sed -i \
-    -e "s|WORKER_ID_PLACEHOLDER|$worker_id|" \
-    -e "s|WORK_DIR_PLACEHOLDER|$WORKDIR/work|" \
-    -e "s|STATE_DIR_PLACEHOLDER|$WORKDIR/work/state|" \
-    -e "s|TEMP_DIR_PLACEHOLDER|$WORKDIR/work/temp|" \
-    -e "s|BUNDLE_HASH_PLACEHOLDER|e2e-bundle-hash|" \
-    -e "s|CERT_DIR_PLACEHOLDER|$pki_bad_dir|g" \
-    "$worker_cfg"
-
-  lib_reset_children
-  spawn_master "$id" "$master_env"
-  if ! wait_for_master_ready "http://localhost:8000" "e2e-admin-token" 15 "$id"; then
-    lib_kill_all TERM
-    assert_fail "case-3: master never became ready"
-    aggregate_record "$id" "FAIL"
-    return
-  fi
-
-  local worker_log="$WORKDIR/$id/worker-${worker_id}.log"
-  set +m
-  "$VELOX_WORKER_BIN" --config "$worker_cfg" >"$worker_log" 2>&1 &
-  lib_push_pid $! "worker-$worker_id"
-  set -m
-  sleep 6
-  for pid in "${_LIB_CHILD_PIDS[@]}"; do
-    wait "$pid" 2>/dev/null || true
-  done
-  lib_kill_all TERM
-
-  if grep -qiE "(handshake|verify|certificate|unknown authority|invalid|TLS.*fail|PermissionDenied|Unauthenticated)" "$worker_log"; then
-    aggregate_record "$id" "PASS"
-  else
-    assert_fail "case-3: worker log lacks handover-failure marker (see $worker_log)"
-    aggregate_record "$id" "FAIL"
-  fi
-}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Case 4 — wrong-CA reject (master CA pool = CA-A; worker leaf signed by CA-B)
 # ─────────────────────────────────────────────────────────────────────────────
-case_4_wrong_ca_reject() {
-  local id="case-4-wrong-ca-reject"
-  local worker_id="e2e-worker-wrong-ca-4"
-  local case_dir="$WORKDIR/cases/$id"
-  local pki_a_dir="$WORKDIR/pki/${id}-ca-a"
-  local pki_b_dir="$WORKDIR/pki/${id}-ca-b"
-  local master_env="$case_dir/master.env"
-  local worker_cfg="$case_dir/worker-config.json"
-  mkdir_p "$case_dir" "$pki_a_dir" "$pki_b_dir"
-  mkdir -p "$case_dir/data" "$case_dir/run" "$case_dir/videos"
-  touch "$case_dir/data/velox.db"
-
-  "$ROOT/certs/generate-dev-pki.sh" "$pki_a_dir" "phantom-master-ca-4" 7 365 >/dev/null
-  "$ROOT/certs/generate-dev-pki.sh" "$pki_b_dir" "$worker_id"        7 365 >/dev/null
-
-  patch_env "$ROOT/configs/master.env.example" "$master_env" \
-    -e "s|^VELOX_RUNTIME_DIR=.*|VELOX_RUNTIME_DIR=$case_dir/run|" \
-    -e "s|^VELOX_DATA_DIR=.*|VELOX_DATA_DIR=$case_dir/data|" \
-    -e "s|^VELOX_DB_PATH=.*|VELOX_DB_PATH=$case_dir/data/velox.db|" \
-    -e "s|^VELOX_VIDEOS_DIR=.*|VELOX_VIDEOS_DIR=$case_dir/videos|" \
-    -e "s|^VELOX_ALLOWED_WORKERS=.*|VELOX_ALLOWED_WORKERS=$worker_id|" \
-    -e "s|^# VELOX_GRPC_TLS_CERT_FILE=.*|VELOX_GRPC_TLS_CERT_FILE=$pki_a_dir/server.crt|" \
-    -e "s|^# VELOX_GRPC_TLS_KEY_FILE=.*|VELOX_GRPC_TLS_KEY_FILE=$pki_a_dir/server.key|" \
-    -e "s|^# VELOX_GRPC_TLS_CA_FILE=.*|VELOX_GRPC_TLS_CA_FILE=$pki_a_dir/ca.crt|"
-
-  cp "$ROOT/configs/worker-tls.json" "$worker_cfg"
-  sed -i \
-    -e "s|WORKER_ID_PLACEHOLDER|$worker_id|" \
-    -e "s|WORK_DIR_PLACEHOLDER|$WORKDIR/work|" \
-    -e "s|STATE_DIR_PLACEHOLDER|$WORKDIR/work/state|" \
-    -e "s|TEMP_DIR_PLACEHOLDER|$WORKDIR/work/temp|" \
-    -e "s|BUNDLE_HASH_PLACEHOLDER|e2e-bundle-hash|" \
-    -e "s|CERT_DIR_PLACEHOLDER|$pki_b_dir|g" \
-    "$worker_cfg"
-
-  lib_reset_children
-  spawn_master "$id" "$master_env"
-  if ! wait_for_master_ready "http://localhost:8000" "e2e-admin-token" 15 "$id"; then
-    lib_kill_all TERM
-    assert_fail "case-4: master never became ready"
-    aggregate_record "$id" "FAIL"
-    return
-  fi
-
-  local worker_log="$WORKDIR/$id/worker-${worker_id}.log"
-  set +m
-  "$VELOX_WORKER_BIN" --config "$worker_cfg" >"$worker_log" 2>&1 &
-  lib_push_pid $! "worker-$worker_id"
-  set -m
-  sleep 6
-  for pid in "${_LIB_CHILD_PIDS[@]}"; do
-    wait "$pid" 2>/dev/null || true
-  done
-  lib_kill_all TERM
-
-  if grep -qiE "(handshake|verify|certificate|unknown authority|invalid|PermissionDenied|Unauthenticated)" "$worker_log"; then
-    aggregate_record "$id" "PASS"
-  else
-    assert_fail "case-4: worker log lacks handover-failure marker (see $worker_log)"
-    aggregate_record "$id" "FAIL"
-  fi
-}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Case 5 — plaintext-vs-TLS reject (master TLS-required; worker sends plaintext)
 # ─────────────────────────────────────────────────────────────────────────────
-case_5_plaintext_vs_tls_reject() {
-  local id="case-5-plaintext-vs-tls-reject"
-  local worker_id="e2e-worker-plaintext-5"
-  local case_dir="$WORKDIR/cases/$id"
-  local pki_dir="$WORKDIR/pki/$id"
-  local master_env="$case_dir/master.env"
-  local worker_cfg="$case_dir/worker-config.json"
-  mkdir_p "$case_dir" "$pki_dir"
-  mkdir -p "$case_dir/data" "$case_dir/run" "$case_dir/videos"
-  touch "$case_dir/data/velox.db"
-
-  "$ROOT/certs/generate-dev-pki.sh" "$pki_dir" "phantom-master-ca-5" 7 365 >/dev/null
-
-  patch_env "$ROOT/configs/master.env.example" "$master_env" \
-    -e "s|^VELOX_RUNTIME_DIR=.*|VELOX_RUNTIME_DIR=$case_dir/run|" \
-    -e "s|^VELOX_DATA_DIR=.*|VELOX_DATA_DIR=$case_dir/data|" \
-    -e "s|^VELOX_DB_PATH=.*|VELOX_DB_PATH=$case_dir/data/velox.db|" \
-    -e "s|^VELOX_VIDEOS_DIR=.*|VELOX_VIDEOS_DIR=$case_dir/videos|" \
-    -e "s|^VELOX_ALLOWED_WORKERS=.*|VELOX_ALLOWED_WORKERS=$worker_id|" \
-    -e "s|^# VELOX_GRPC_TLS_CERT_FILE=.*|VELOX_GRPC_TLS_CERT_FILE=$pki_dir/server.crt|" \
-    -e "s|^# VELOX_GRPC_TLS_KEY_FILE=.*|VELOX_GRPC_TLS_KEY_FILE=$pki_dir/server.key|" \
-    -e "s|^# VELOX_GRPC_TLS_CA_FILE=.*|VELOX_GRPC_TLS_CA_FILE=$pki_dir/ca.crt|" \
-    -e 's|^VELOX_GRPC_ALLOW_INSECURE_DEV=.*|VELOX_GRPC_ALLOW_INSECURE_DEV=false|'
-
-  cp "$ROOT/configs/worker-plaintext.json" "$worker_cfg"
-  sed -i \
-    -e "s|WORKER_ID_PLACEHOLDER|$worker_id|" \
-    -e "s|WORK_DIR_PLACEHOLDER|$WORKDIR/work|" \
-    -e "s|STATE_DIR_PLACEHOLDER|$WORKDIR/work/state|" \
-    -e "s|TEMP_DIR_PLACEHOLDER|$WORKDIR/work/temp|" \
-    -e "s|BUNDLE_HASH_PLACEHOLDER|e2e-bundle-hash|" \
-    "$worker_cfg"
-
-  lib_reset_children
-  spawn_master "$id" "$master_env"
-  if ! wait_for_master_ready "http://localhost:8000" "e2e-admin-token" 15 "$id"; then
-    lib_kill_all TERM
-    assert_fail "case-5: master never became ready"
-    aggregate_record "$id" "FAIL"
-    return
-  fi
-
-  local worker_log="$WORKDIR/$id/worker-${worker_id}.log"
-  set +m
-  "$VELOX_WORKER_BIN" --config "$worker_cfg" >"$worker_log" 2>&1 &
-  lib_push_pid $! "worker-$worker_id"
-  set -m
-  sleep 6
-  for pid in "${_LIB_CHILD_PIDS[@]}"; do
-    wait "$pid" 2>/dev/null || true
-  done
-  lib_kill_all TERM
-
-  if grep -qiE "(handshake|verify|TLS|no certificate|connection refused|PermissionDenied|Unauthenticated|unknown)" "$worker_log"; then
-    aggregate_record "$id" "PASS"
-  else
-    assert_fail "case-5: worker log lacks handover-failure marker (see $worker_log)"
-    aggregate_record "$id" "FAIL"
-  fi
-}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Case 6 — parallel one-accept-one-reject (two workers; one good, one bad)
 # ─────────────────────────────────────────────────────────────────────────────
-case_6_parallel_one_accept_one_reject() {
-  local id="case-6-parallel-one-accept-one-reject"
-  local good_id="e2e-worker-tls-good-6"
-  local bad_id="e2e-worker-tls-bad-6"
-  local case_dir="$WORKDIR/cases/$id"
-  local pki_good_dir="$WORKDIR/pki/${id}-good"
-  local pki_bad_dir="$WORKDIR/pki/${id}-bad"
-  local master_env="$case_dir/master.env"
-  local worker_good_cfg="$case_dir/worker-good.json"
-  local worker_bad_cfg="$case_dir/worker-bad.json"
-  mkdir_p "$case_dir" "$pki_good_dir" "$pki_bad_dir"
-  mkdir -p "$case_dir/data" "$case_dir/run" "$case_dir/videos"
-  touch "$case_dir/data/velox.db"
 
-  "$ROOT/certs/generate-dev-pki.sh" "$pki_good_dir" "$good_id" 7 365 >/dev/null
-  "$ROOT/certs/generate-dev-pki.sh" "$pki_bad_dir"  "$bad_id"  7 365 >/dev/null
+# ─── Pre-flight: build binaries ──────────────────────────────────────────────
+assert_info "workdir = $WORKDIR"
+mkdir_p "$WORKDIR" "$BIN_DIR" "$WORKDIR/pki" "$WORKDIR/cases"
 
-  patch_env "$ROOT/configs/master.env.example" "$master_env" \
-    -e "s|^VELOX_RUNTIME_DIR=.*|VELOX_RUNTIME_DIR=$case_dir/run|" \
-    -e "s|^VELOX_DATA_DIR=.*|VELOX_DATA_DIR=$case_dir/data|" \
-    -e "s|^VELOX_DB_PATH=.*|VELOX_DB_PATH=$case_dir/data/velox.db|" \
-    -e "s|^VELOX_VIDEOS_DIR=.*|VELOX_VIDEOS_DIR=$case_dir/videos|" \
-    -e "s|^VELOX_ALLOWED_WORKERS=.*|VELOX_ALLOWED_WORKERS=$good_id,$bad_id|" \
-    -e "s|^# VELOX_GRPC_TLS_CERT_FILE=.*|VELOX_GRPC_TLS_CERT_FILE=$pki_good_dir/server.crt|" \
-    -e "s|^# VELOX_GRPC_TLS_KEY_FILE=.*|VELOX_GRPC_TLS_KEY_FILE=$pki_good_dir/server.key|" \
-    -e "s|^# VELOX_GRPC_TLS_CA_FILE=.*|VELOX_GRPC_TLS_CA_FILE=$pki_good_dir/ca.crt|"
+if [[ -z "${VELOX_SERVER_BIN:-}" ]]; then
+  VELOX_SERVER_BIN="$(resolve_bin velox-server "$DATASERVER_ROOT" cmd/server)" || exit 1
+fi
+if [[ -z "${VELOX_WORKER_BIN:-}" ]]; then
+  VELOX_WORKER_BIN="$(resolve_bin velox-worker-agent "$WORKERAGENT_ROOT" cmd/velox-worker-agent)" || exit 1
+fi
 
-  cp "$ROOT/configs/worker-tls.json" "$worker_good_cfg"
-  sed -i \
-    -e "s|WORKER_ID_PLACEHOLDER|$good_id|" \
-    -e "s|WORK_DIR_PLACEHOLDER|$WORKDIR/work|" \
-    -e "s|STATE_DIR_PLACEHOLDER|$WORKDIR/work/state|" \
-    -e "s|TEMP_DIR_PLACEHOLDER|$WORKDIR/work/temp|" \
-    -e "s|BUNDLE_HASH_PLACEHOLDER|e2e-bundle-hash|" \
-    -e "s|CERT_DIR_PLACEHOLDER|$pki_good_dir|g" \
-    "$worker_good_cfg"
-  cp "$ROOT/configs/worker-tls.json" "$worker_bad_cfg"
-  sed -i \
-    -e "s|WORKER_ID_PLACEHOLDER|$bad_id|" \
-    -e "s|WORK_DIR_PLACEHOLDER|$WORKDIR/work|" \
-    -e "s|STATE_DIR_PLACEHOLDER|$WORKDIR/work/state|" \
-    -e "s|TEMP_DIR_PLACEHOLDER|$WORKDIR/work/temp|" \
-    -e "s|BUNDLE_HASH_PLACEHOLDER|e2e-bundle-hash|" \
-    -e "s|CERT_DIR_PLACEHOLDER|$pki_bad_dir|g" \
-    "$worker_bad_cfg"
+# ─── Shared E2E runtime setup (helpers from _lib.sh) ───────────────────────
+setup_shared() {
+  : "${BUNDLE_HASH:=e2e-bundle-hash}"
+  bootstrap_workdir "$WORKDIR/work" "${BUNDLE_HASH}"
 
-  lib_reset_children
-  spawn_master "$id" "$master_env"
-  if ! wait_for_master_ready "http://localhost:8000" "e2e-admin-token" 15 "$id"; then
-    lib_kill_all TERM
-    assert_fail "case-6: master never became ready"
-    aggregate_record "$id" "FAIL"
-    return
-  fi
-
-  local good_log="$WORKDIR/$id/worker-${good_id}.log"
-  local bad_log="$WORKDIR/$id/worker-${bad_id}.log"
-
-  set +m
-  "$VELOX_WORKER_BIN" --config "$worker_good_cfg" >"$good_log" 2>&1 &
-  lib_push_pid $! "worker-$good_id"
-  set -m
-  if wait_for_worker_connection "$WORKDIR/$id/master.log" "$good_id" 12; then
-    sleep 1
-  fi
-  for pid in "${_LIB_CHILD_PIDS[@]}"; do
-    wait "$pid" 2>/dev/null || true
-  done
-  # Remove only the worker PID — master MUST stay in _LIB_CHILD_PIDS so
-  # the trap handler (on_exit → lib_kill_all TERM) can reap it.
-  local new_pids=() new_labels=()
-  for i in "${!_LIB_CHILD_PIDS[@]}"; do
-    if [[ "${_LIB_CHILD_LABELS[$i]}" != "worker-$good_id" ]]; then
-      new_pids+=("${_LIB_CHILD_PIDS[$i]}")
-      new_labels+=("${_LIB_CHILD_LABELS[$i]}")
-    fi
-  done
-  _LIB_CHILD_PIDS=("${new_pids[@]}")
-  _LIB_CHILD_LABELS=("${new_labels[@]}")
-
-  set +m
-  "$VELOX_WORKER_BIN" --config "$worker_bad_cfg" >"$bad_log" 2>&1 &
-  lib_push_pid $! "worker-$bad_id"
-  set -m
-  sleep 6
-  for pid in "${_LIB_CHILD_PIDS[@]}"; do
-    wait "$pid" 2>/dev/null || true
-  done
-  lib_kill_all TERM
-
-  local good_ok=0 bad_ok=0
-  grep -qE "(HelloAck|✓ HelloAck)" "$good_log" && good_ok=1
-  grep -qiE "(handshake|verify|certificate|unknown authority|PermissionDenied|Unauthenticated)" "$bad_log" && bad_ok=1
-
-  if (( good_ok == 1 && bad_ok == 1 )); then
-    aggregate_record "$id" "PASS"
-  else
-    assert_fail "case-6: good_ok=$good_ok bad_ok=$bad_ok (good_log=$good_log, bad_log=$bad_log)"
-    aggregate_record "$id" "FAIL"
-  fi
+  # Stub the velox_video_engine binary — minimal Python|JSON→output_path
+  # echo satisfying the runtime contract without a real engine build.
+  local stub_body
+  stub_body="$(cat <<'STUB_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+PLAN=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --plan) PLAN="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [[ -z "$PLAN" ]]; then
+  echo "velox_video_engine stub: --plan required" >&2
+  exit 1
+fi
+OUT="$(python3 -c "import json,sys; print(json.load(open('$PLAN'))['output_path'])" 2>/dev/null || jq -r '.output_path' "$PLAN")"
+mkdir -p "$(dirname "$OUT")"
+printf 'velox-e2e-stub-output' > "$OUT"
+STUB_EOF
+)"
+  write_stub_binary "$BIN_DIR/velox_video_engine" "$stub_body"
 }
+setup_shared
+export VELOX_VIDEO_ENGINE_CPP_BIN="$BIN_DIR/velox_video_engine"
+
+
+# ─── Case implementations (sourced in-process; shared globals/PIDs preserved) ──
+source "$ROOT/cases/case_1_plaintext_accept.sh"
+source "$ROOT/cases/case_2_tls_accept.sh"
+source "$ROOT/cases/case_3_bad_cert_reject.sh"
+source "$ROOT/cases/case_4_wrong_ca_reject.sh"
+source "$ROOT/cases/case_5_plaintext_vs_tls_reject.sh"
+source "$ROOT/cases/case_6_parallel_one_accept_one_reject.sh"
 
 # ─── Main dispatch ──────────────────────────────────────────────────────────
 main() {
