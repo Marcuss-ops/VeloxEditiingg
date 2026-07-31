@@ -70,7 +70,10 @@ func (c *appComponents) routerBundle() RouterBundle {
 			BlobStore:      c.assets.BlobStore,
 			ChunkedHandler: workerhandlersuploads.NewChunkedUploadHandler(c.assets.ChunkedUploadSvc),
 		},
-		Metrics: MetricsRouteDeps{Registry: c.metricsRegistry},
+		Metrics: MetricsRouteDeps{
+			Registry:      c.metricsRegistry,
+			BenchmarkRuns: store.NewSQLitePerformanceRepository(c.persistence.SQLite),
+		},
 		InstaEdit: InstaEditRouteDeps{
 			Verifier:    c.instaeditVerifier,
 			Service:     instaedithandler.NewServiceFromSQLite(c.persistence.SQLite, c.jobs.Repository, store.NewSQLiteAssetRepository(c.persistence.SQLite), c.modules.Enqueuer),

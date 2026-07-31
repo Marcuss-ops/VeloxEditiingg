@@ -9,7 +9,11 @@
 #   ./tests/worker-cert/perf_matrix.sh \
 #       --input workers/benchmark.json \
 #       --csv-out workers/perf_matrix.csv \
-#       --html-out workers/perf_matrix.html
+#       --html-out workers/perf_matrix.html \
+#       --cache-mode cold_cache \
+#       REGISTER_BENCHMARK_RUNS=true VELOX_ADMIN_TOKEN=... \
+#       ./tests/worker-cert/perf_matrix.sh --cache-mode warm_cache
+#       ./tests/worker-cert/perf_matrix.sh --cache-mode both
 #
 # What the script does:
 #   1. Reads benchmark.json (produced by sequential_bench.sh).
@@ -20,7 +24,11 @@
 #        success_rate_pct, render_median_ms, render_min_ms, render_max_ms,
 #        render_avg_ms, realtime_factor, output_duration_ms,
 #        submit_latency_avg_ms
-#   5. Produces a self-contained HTML file with:
+#   5. When REGISTER_BENCHMARK_RUNS=true, registers every .runs[] row at
+#      POST /api/v1/performance/benchmarks/runs with benchmark_case_id
+#      gervais-final-v1 and the selected cold_cache/warm_cache mode.
+#      --cache-mode both registers the complete input once per mode.
+#   6. Produces a self-contained HTML file with:
 #        - Metadata header (master URL, date, destination, epoch).
 #        - A styled comparative table with best/worst highlighting.
 #        - Per-run detail section (collapsible).
@@ -45,6 +53,10 @@ source "${REPO_ROOT}/tests/_lib/sh/_lib.sh"
 INPUT="${INPUT:-${SCRIPT_DIR}/workers/benchmark.json}"
 CSV_OUT="${CSV_OUT:-}"
 HTML_OUT="${HTML_OUT:-}"
+CACHE_MODE="${CACHE_MODE:-cold_cache}"
+REGISTER_BENCHMARK_RUNS="${REGISTER_BENCHMARK_RUNS:-false}"
+BENCHMARK_CASE_ID="gervais-final-v1"
+BENCHMARK_RUNS_PATH="/api/v1/performance/benchmarks/runs"
 
 usage() {
   sed -n '2,/^# ====/p' "$0" | sed 's/^# \{0,1\}//'
@@ -57,10 +69,16 @@ while (( $# > 0 )); do
     --input)     INPUT="$2";     shift 2 ;;
     --csv-out)   CSV_OUT="$2";   shift 2 ;;
     --html-out)  HTML_OUT="$2";  shift 2 ;;
+    --cache-mode) CACHE_MODE="$2"; shift 2 ;;
     -h|--help)   usage ;;
     *)           log_error "unknown flag: $1"; exit 2 ;;
   esac
 done
+
+case "$CACHE_MODE" in
+  cold_cache|warm_cache|both) ;;
+  *) log_error "cache mode must be cold_cache, warm_cache, or both: $CACHE_MODE"; exit 2 ;;
+esac
 
 # ─── Validate input ────────────────────────────────────────────────────────
 [[ -r "$INPUT" ]] || { log_error "benchmark.json not readable: $INPUT"; exit 3; }
@@ -74,7 +92,7 @@ done
 log_info "perf_matrix input=$INPUT csv_out=${CSV_OUT:-<stdout>} html_out=${HTML_OUT:-<none>}"
 
 # ─── Extract metadata ──────────────────────────────────────────────────────
-MASTER_URL=$(jq -r '.master_url // "unknown"' "$INPUT")
+MASTER_URL="${VELOX_MASTER_URL:-$(jq -r '.master_url // "unknown"' "$INPUT")}"
 WRITTEN_AT=$(jq -r '.written_at // "unknown"' "$INPUT")
 SCHEMA=$(jq -r '.schema // "?"' "$INPUT")
 DEST_ID=$(jq -r '.destination_id // "?"' "$INPUT")
@@ -84,7 +102,89 @@ TOTAL_RUNS=$(jq -r '.total_runs // 0' "$INPUT")
 ALL_OK=$(jq -r '.all_jobs_succeeded // false' "$INPUT")
 EPOCH=$(jq -r '.epoch // 0' "$INPUT")
 
-log_info "matrix: ${WORKERS_TESTED} workers × ${JOBS_PER_WORKER} jobs, total=${TOTAL_RUNS} runs, all_ok=${ALL_OK}"
+log_info "matrix: ${WORKERS_TESTED} workers × ${JOBS_PER_WORKER} jobs, total=${TOTAL_RUNS} runs, all_ok=${ALL_OK}, cache_mode=${CACHE_MODE}"
+
+resolve_admin_token() {
+  local token=""
+  if [[ -n "${VELOX_ADMIN_TOKEN:-}" ]]; then
+    token="$VELOX_ADMIN_TOKEN"
+  elif [[ -n "${TOKEN_FILE:-}" && -r "$TOKEN_FILE" ]]; then
+    token=$(grep -E '^VELOX_ADMIN_TOKEN=' "$TOKEN_FILE" | head -1 \
+      | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs || true)
+  fi
+  printf '%s' "$token"
+}
+
+register_benchmark_runs_for_mode() {
+  local mode="$1"
+  [[ "$REGISTER_BENCHMARK_RUNS" == "true" ]] || return 0
+  local admin_token
+  admin_token=$(resolve_admin_token)
+  [[ -n "$admin_token" ]] || { log_error "REGISTER_BENCHMARK_RUNS=true requires VELOX_ADMIN_TOKEN or TOKEN_FILE"; return 2; }
+  [[ "$MASTER_URL" != "unknown" && -n "$MASTER_URL" ]] || { log_error "benchmark master_url is required to register runs"; return 2; }
+  command -v curl >/dev/null 2>&1 || { log_error "curl is required to register benchmark runs"; return 2; }
+
+  local payload_file status_file payload status
+  payload_file=$(mktemp)
+  status_file=$(mktemp)
+  trap 'rm -f "${payload_file:-}" "${status_file:-}"' RETURN
+
+  jq -c --arg case_id "$BENCHMARK_CASE_ID" --arg cache_mode "$mode" \
+    --arg git_sha "${BENCHMARK_GIT_SHA:-}" \
+    --arg engine_version "${BENCHMARK_ENGINE_VERSION:-}" \
+    --arg ffmpeg_version "${BENCHMARK_FFMPEG_VERSION:-}" \
+    --arg config_hash "${BENCHMARK_CONFIG_HASH:-}" \
+    --arg docker_image_digest "${BENCHMARK_DOCKER_IMAGE_DIGEST:-}" \
+    '.runs[] as $run |
+     ([.workers[] | select(.worker_id == $run.target_worker)][0]) as $worker |
+     ($run.attempt_id // ($run.job_id + ":" + (($run.run_idx // 0) | tostring))) as $attempt |
+     {
+       run_id: ($case_id + ":" + $cache_mode + ":" + $attempt),
+       benchmark_case_id: $case_id,
+       job_id: ($run.job_id // ""),
+       task_id: ($run.task_id // ""),
+       attempt_id: $attempt,
+       worker_id: ($run.resp_worker_id // $run.target_worker // ""),
+       cache_mode: $cache_mode,
+       git_sha: $git_sha,
+       engine_version: $engine_version,
+       ffmpeg_version: $ffmpeg_version,
+       config_hash: $config_hash,
+       docker_image_digest: ($worker.image_digest // $docker_image_digest),
+       status: ($run.status // "UNKNOWN"),
+       render_factor: (if (($run.render_time_ms // 0) > 0 and ($worker.output_duration_ms // 0) > 0) then (($run.render_time_ms / $worker.output_duration_ms) | tonumber) else 0 end),
+       wall_ms: ($run.render_time_ms // 0),
+       output_duration_ms: ($worker.output_duration_ms // 0),
+       output_sha256: ($run.output_sha256 // "")
+     }' "$INPUT" > "$payload_file"
+
+  while IFS= read -r payload; do
+    [[ -n "$payload" ]] || continue
+    status=$(curl -sS -m 30 -o "$status_file" -w '%{http_code}' \
+      -H "Authorization: Bearer $admin_token" \
+      -H 'Content-Type: application/json' \
+      -X POST "${MASTER_URL%/}${BENCHMARK_RUNS_PATH}" \
+      --data "$payload" || printf '000')
+    if [[ "$status" != "200" ]]; then
+      log_error "benchmark run registration failed: HTTP $status"
+      cat "$status_file" >&2 || true
+      return 1
+    fi
+  done < "$payload_file"
+  log_info "registered ${TOTAL_RUNS} benchmark runs: case=${BENCHMARK_CASE_ID} cache_mode=${mode}"
+}
+
+register_benchmark_runs() {
+  case "$CACHE_MODE" in
+    both)
+      register_benchmark_runs_for_mode cold_cache || return
+      register_benchmark_runs_for_mode warm_cache || return
+      ;;
+    *)
+      register_benchmark_runs_for_mode "$CACHE_MODE"
+      ;;
+  esac
+}
 
 # ─── CSV output ────────────────────────────────────────────────────────────
 # Single-pass CSV with submit_latency computed from runs.
@@ -318,6 +418,13 @@ fi
 if [[ -n "$HTML_OUT" ]]; then
   ensure_dir "$(dirname "$HTML_OUT")"
   generate_html "$HTML_OUT"
+fi
+
+register_benchmark_runs
+rc=$?
+if (( rc != 0 )); then
+  log_error "benchmark run registration failed"
+  exit "$rc"
 fi
 
 log_info "perf_matrix done"

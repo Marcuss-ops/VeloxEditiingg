@@ -150,6 +150,85 @@ func (r *SQLitePerformanceRepository) ListByGitSHA(ctx context.Context, gitSHA s
 	return results, nil
 }
 
+// RecordBenchmarkRun persists immutable benchmark evidence. An identical replay
+// is accepted; a divergent payload using the same run_id returns a conflict.
+func (r *SQLitePerformanceRepository) RecordBenchmarkRun(ctx context.Context, run *performance.BenchmarkRun) error {
+	if r.store == nil || r.store.db == nil {
+		return fmt.Errorf("performance repository: store not initialized")
+	}
+	if err := run.Validate(); err != nil {
+		return err
+	}
+	hash, err := performance.ComputeBenchmarkRunPayloadHash(run)
+	if err != nil {
+		return err
+	}
+	run.PayloadHash = hash
+	if run.CreatedAt.IsZero() {
+		run.CreatedAt = time.Now().UTC()
+	}
+
+	_, err = r.store.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO performance_benchmark_runs (
+			run_id, payload_hash, benchmark_case_id, job_id, task_id, attempt_id,
+			worker_id, worker_snapshot_id, cache_mode, git_sha, engine_version,
+			ffmpeg_version, config_hash, docker_image_digest, status, render_factor,
+			wall_ms, output_duration_ms, output_sha256, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		run.RunID, run.PayloadHash, run.BenchmarkCaseID, run.JobID, run.TaskID, run.AttemptID,
+		run.WorkerID, run.WorkerSnapshotID, run.CacheMode, run.GitSHA, run.EngineVersion,
+		run.FFmpegVersion, run.ConfigHash, run.DockerImageDigest, run.Status, run.RenderFactor,
+		run.WallMS, run.OutputDurationMS, run.OutputSHA256, run.CreatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("performance benchmark run insert: %w", err)
+	}
+
+	existing, err := r.GetBenchmarkRun(ctx, run.RunID)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return fmt.Errorf("performance benchmark run %q was not persisted", run.RunID)
+	}
+	if existing.PayloadHash != run.PayloadHash {
+		return &performance.BenchmarkRunConflictError{RunID: run.RunID}
+	}
+	return nil
+}
+
+// GetBenchmarkRun returns one persisted benchmark run, or nil when absent.
+func (r *SQLitePerformanceRepository) GetBenchmarkRun(ctx context.Context, runID string) (*performance.BenchmarkRun, error) {
+	if r.store == nil || r.store.db == nil {
+		return nil, fmt.Errorf("performance repository: store not initialized")
+	}
+	row := r.store.db.QueryRowContext(ctx, `
+		SELECT run_id, payload_hash, benchmark_case_id, job_id, task_id, attempt_id,
+		       worker_id, worker_snapshot_id, cache_mode, git_sha, engine_version,
+		       ffmpeg_version, config_hash, docker_image_digest, status, render_factor,
+		       wall_ms, output_duration_ms, output_sha256, created_at
+		FROM performance_benchmark_runs WHERE run_id = ?`, runID)
+	var run performance.BenchmarkRun
+	var createdAt string
+	if err := row.Scan(
+		&run.RunID, &run.PayloadHash, &run.BenchmarkCaseID, &run.JobID, &run.TaskID, &run.AttemptID,
+		&run.WorkerID, &run.WorkerSnapshotID, &run.CacheMode, &run.GitSHA, &run.EngineVersion,
+		&run.FFmpegVersion, &run.ConfigHash, &run.DockerImageDigest, &run.Status, &run.RenderFactor,
+		&run.WallMS, &run.OutputDurationMS, &run.OutputSHA256, &createdAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("scan performance benchmark run: %w", err)
+	}
+	if createdAt != "" {
+		if parsed, parseErr := time.Parse(time.RFC3339Nano, createdAt); parseErr == nil {
+			run.CreatedAt = parsed
+		}
+	}
+	return &run, nil
+}
+
 func scanBaseline(row interface{ Scan(...interface{}) error }) (*performance.Baseline, error) {
 	var b performance.Baseline
 	var createdAt string

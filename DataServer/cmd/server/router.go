@@ -24,6 +24,7 @@ import (
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	velmetrics "velox-server/internal/metrics"
+	"velox-server/internal/performance"
 	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
 	"velox-server/internal/workers"
@@ -99,7 +100,8 @@ type UploadRouteDeps struct {
 // MetricsRouteDeps carries the deps for the /metrics route (Prometheus
 // exporter mounted when EnableMetricsEnpoint is true).
 type MetricsRouteDeps struct {
-	Registry *velmetrics.Registry
+	Registry      *velmetrics.Registry
+	BenchmarkRuns performance.BenchmarkRunRepository
 }
 
 // InstaEditRouteDeps carries the deps for the /api/v1/instaedit route
@@ -289,6 +291,7 @@ func newRouter(cfg *config.Config, bundle RouterBundle, registry interface {
 	registerDarkeditorRoutes(r, bundle.Darkeditor)
 	registerUploadRoutes(r, bundle.Upload)
 	registerMetricsRoutes(r, bundle.Metrics)
+	registerBenchmarkRoutes(r, bundle.Metrics, cfg)
 	if err := registerInstaEditRoutes(r, bundle.InstaEdit); err != nil {
 		return nil, err
 	}
