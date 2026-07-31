@@ -110,6 +110,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     concat_mode_ = "reencode";
     last_progress_ = services::EngineProgress{};
     metrics_.reset();
+    recorder_.Reset();
 
     const auto onProgress = progress_cb_;
     auto recordProgress = [this](const services::EngineProgress& p) {
@@ -129,6 +130,13 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
 
     RenderResult result;
     result.output_path = plan.output_path;
+
+    // Block-1: the whole render call is one engine-origin "render"
+    // event. RAII completion fires on every return path (success or
+    // error) without touching the early returns below.
+    telemetry::ScopedPhase renderPhase(
+        recorder_, telemetry::kOriginEngine, telemetry::kScopeAttempt,
+        "engine", "render", "render");
 
     reportProgress(0, "starting");
 
@@ -230,16 +238,25 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         }
 
         {
+            // Block-1: per-segment encode event (engine origin, segment
+            // scope). Completed with output bytes + cumulative frames.
+            telemetry::ScopedPhase encodePhase(
+                recorder_, telemetry::kOriginEngine, telemetry::kScopeSegment,
+                "ffmpeg", "encode_segment_" + std::to_string(i), "encode");
             auto encStart = std::chrono::steady_clock::now();
             ScopedTimer t(metrics_, "segment_build_ms");
             bool built = runFfmpegSegmentWithProgress(
                 composeSegmentCmd(args_only), wrapped_cb, expected_us);
             if (!built) {
+                encodePhase.Abort("encode_failed",
+                                  "failed to build timeline segment " + std::to_string(i));
                 result.error = "failed to build timeline segment " + std::to_string(i);
                 return result;
             }
             seg.ffmpeg_encode_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - encStart).count();
+            encodePhase.Complete(0, fileSize(segmentOut), frames_encoded_.load(),
+                                 telemetry::kStatusOk);
         }
 
         encode_passes_.fetch_add(1);
@@ -508,6 +525,17 @@ void RenderEngine::emitSidecar(const std::string& output_path) const {
             s << ",\"started_offset_ms\":" << seg.started_offset_ms;
             s << ",\"finished_offset_ms\":" << seg.finished_offset_ms;
             s << "}";
+        }
+    }
+    s << "]";
+
+    // ── Block-1: detailed phase/event stream ─────────────────────
+    s << ",\"phases\":[";
+    {
+        auto phases = recorder_.Snapshot();
+        for (size_t i = 0; i < phases.size(); ++i) {
+            if (i > 0) s << ",";
+            phases[i].AppendJson(s);
         }
     }
     s << "]";

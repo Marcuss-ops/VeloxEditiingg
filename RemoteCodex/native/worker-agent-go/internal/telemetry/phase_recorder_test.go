@@ -124,22 +124,22 @@ func TestEventRecorder_RecordExplicitStamps(t *testing.T) {
 	}
 }
 
-// TestEventRecorder_FlushClears verifies that Flush drains the buffer,
-// so a second Flush returns only events recorded after the first.
+// TestEventRecorder_FlushClears verifies that Flush drains only the buffered
+// events while event indexes remain monotonic for the complete attempt.
 func TestEventRecorder_FlushClears(t *testing.T) {
 	r := NewEventRecorder()
 	r.Emit(EventSpec{Origin: OriginWorker, Scope: ScopeAttempt, Component: "runner", Action: "cache_lookup"}, "ok", "", "")
 	first := r.Flush()
-	if len(first) != 1 {
-		t.Fatalf("expected 1 event on first flush, got %d", len(first))
+	if len(first) != 1 || first[0].EventIndex != 0 {
+		t.Fatalf("first flush = %+v, want one event at index 0", first)
 	}
 	r.Emit(EventSpec{Origin: OriginWorker, Scope: ScopeAttempt, Component: "runner", Action: "cache_lookup"}, "ok", "", "")
 	second := r.Flush()
 	if len(second) != 1 {
-		t.Fatalf("expected 1 event on second flush (index reset), got %d", len(second))
+		t.Fatalf("expected 1 event on second flush, got %d", len(second))
 	}
-	if second[0].EventIndex != 0 {
-		t.Errorf("expected index reset to 0 after flush, got %d", second[0].EventIndex)
+	if second[0].EventIndex != 1 {
+		t.Errorf("expected monotonic index 1 after flush, got %d", second[0].EventIndex)
 	}
 }
 

@@ -121,15 +121,50 @@ func (w *Worker) recordTaskFinish() {
 //
 // Scorecard v2 / Step 15: starts an "upload" span for distributed
 // tracing. The span is closed on function return via defer span.End().
-func (w *Worker) uploadTaskOutputs(ctx context.Context, pte *PendingTaskExecution, report *taskrunner.TaskExecutionReport) error {
+func (w *Worker) uploadTaskOutputs(ctx context.Context, pte *PendingTaskExecution, report *taskrunner.TaskExecutionReport) (err error) {
 	ctx, span := oteltrace.StartSpan(ctx, "upload",
 		oteltrace.AttrJobID(pte.JobID),
 		oteltrace.AttrTaskID(pte.TaskID),
 	)
 	defer span.End()
+	rec := telemetry.RecorderFromContext(ctx)
+	transfer := rec.Begin(telemetry.EventSpec{
+		Origin: telemetry.OriginUpload, Scope: telemetry.ScopeArtifact,
+		Component: "worker.upload", Action: "transfer",
+	})
+	defer func() {
+		if transfer == nil {
+			return
+		}
+		if err != nil {
+			transfer.Abort("upload_failed", err.Error())
+			return
+		}
+		transfer.Complete()
+	}()
 
 	if report == nil || len(report.Outputs) == 0 {
 		return nil
+	}
+
+	// Record per-artifact manifest and declaration boundaries before the
+	// transport-specific upload path. These events make multi-artifact
+	// attempts distinguishable without placing artifact IDs in metric labels.
+	for i, ref := range report.Outputs {
+		hashEvent := rec.Begin(telemetry.EventSpec{
+			Origin: telemetry.OriginUpload, Scope: telemetry.ScopeArtifact,
+			Component: "worker.output", Action: "hash",
+		})
+		if hashEvent != nil {
+			hashEvent.SetMetadata("artifact_index", i)
+			hashEvent.SetMetadata("artifact_type", ref.Type)
+			hashEvent.SetMetadata("sha256", ref.Hash)
+			hashEvent.CompleteWith(ref.SizeBytes, 0, 0, telemetry.StatusOK, "", "")
+		}
+		rec.Emit(telemetry.EventSpec{
+			Origin: telemetry.OriginUpload, Scope: telemetry.ScopeArtifact,
+			Component: "worker.output", Action: "declare",
+		}, telemetry.StatusOK, "", "")
 	}
 
 	// A newly constructed worker has the typed publisher registry. Publish

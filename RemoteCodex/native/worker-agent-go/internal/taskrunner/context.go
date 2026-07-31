@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/blob"
 	"velox-worker-agent/pkg/cache"
 )
@@ -138,6 +139,13 @@ func (c *runnerContext) Logger() executor.Logger            { return c.logger }
 // was wired.
 func (c *runnerContext) CacheStats() CacheStatsProvider { return c.cacheStats }
 func (c *runnerContext) BlobStats() BlobStatsProvider   { return c.blobStats }
+
+// Recorder is an optional internal extension for executors that emit
+// canonical detailed events. It is deliberately not part of the public
+// executor.ExecutionContext interface, preserving third-party executors.
+func (c *runnerContext) Recorder() *telemetry.EventRecorder {
+	return telemetry.RecorderFromContext(c.ctx)
+}
 
 // Done is closed when the parent ctx is canceled AND when the runner
 // explicitly fires Cancel(). PR-3 invariant #8: executors MUST check

@@ -172,7 +172,11 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	// the master. attachDetailedPhases drains it onto the report before
 	// every return path, so success AND failure reports both carry the
 	// full phase history.
-	rec := telemetry.NewEventRecorder()
+	rec := telemetry.RecorderFromContext(parent)
+	if rec == nil {
+		rec = telemetry.NewEventRecorder()
+	}
+	report.AttemptRecorder = rec
 	// appendPhase writes directly to report.PhaseMarkers so the
 	// returned TaskExecutionReport always carries the recorded phases.
 	// Run is single-goroutine; no mutex needed.
@@ -387,13 +391,42 @@ func (r *TaskRunner) attachDetailedPhases(rec *telemetry.EventRecorder, report *
 			}
 		}
 	}
-	phases := rec.Flush()
+	phases := rec.Snapshot()
+	report.AttemptRecorderOffset = len(phases)
 	if len(phases) == 0 {
 		return
 	}
 	report.DetailedPhases = make([]DetailedPhaseTiming, 0, len(phases))
 	for i, p := range phases {
 		report.DetailedPhases = append(report.DetailedPhases, fromRecordedPhase(p, i+1, execID, execVersion, ""))
+	}
+}
+
+// AppendDetailedPhases drains events recorded after TaskRunner.Run returned
+// (for example the worker's output upload and commit lifecycle) onto the
+// existing report. Run uses Snapshot so the attempt recorder remains alive
+// until the outer worker boundary has completed the entire attempt.
+func AppendDetailedPhases(report *TaskExecutionReport, rec *telemetry.EventRecorder) {
+	if report == nil || rec == nil {
+		return
+	}
+	phases := rec.DrainFrom(report.AttemptRecorderOffset)
+	if len(phases) == 0 {
+		return
+	}
+	report.AttemptRecorderOffset += len(phases)
+	execID := report.ExecutorID
+	execVersion := int32(0)
+	if key := report.ExecutorKey; key != "" {
+		if i := strings.LastIndexByte(key, '@'); i >= 0 {
+			if v, err := strconv.Atoi(key[i+1:]); err == nil {
+				execVersion = int32(v)
+			}
+		}
+	}
+	start := len(report.DetailedPhases) + 1
+	for i, p := range phases {
+		report.DetailedPhases = append(report.DetailedPhases, fromRecordedPhase(p, start+i, execID, execVersion, ""))
 	}
 }
 

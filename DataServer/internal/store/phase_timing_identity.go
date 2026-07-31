@@ -14,6 +14,8 @@ type phaseTimingIdentity struct {
 	JobID            string
 	TaskID           string
 	WorkerID         string
+	WorkerSessionID  string
+	LeaseID          string
 	WorkerSnapshotID string
 	ExecutorID       string
 	ExecutorVersion  int
@@ -32,8 +34,8 @@ func resolvePhaseTimingIdentity(
 	}
 
 	query := `
-		SELECT a.job_id, a.task_id, a.worker_id, a.worker_snapshot_id,
-		       t.executor_id, t.executor_version
+		SELECT a.job_id, a.task_id, a.worker_id, a.worker_session_id, a.lease_id,
+		       a.worker_snapshot_id, t.executor_id, t.executor_version
 		FROM task_attempts a
 		JOIN tasks t ON t.task_id = a.task_id
 		WHERE a.id = ?`
@@ -56,6 +58,8 @@ func resolvePhaseTimingIdentity(
 		&identity.JobID,
 		&identity.TaskID,
 		&identity.WorkerID,
+		&identity.WorkerSessionID,
+		&identity.LeaseID,
 		&identity.WorkerSnapshotID,
 		&identity.ExecutorID,
 		&identity.ExecutorVersion,

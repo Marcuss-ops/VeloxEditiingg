@@ -2,6 +2,7 @@
 #include "velox/core/metrics.hpp"
 #include "velox/plan/render_plan.hpp"
 #include "velox/services/ffmpeg_progress_parser.hpp"
+#include "velox/telemetry/phase_recorder.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -52,6 +53,13 @@ public:
     EngineMetrics& metrics() { return metrics_; }
     const EngineMetrics& metrics() const { return metrics_; }
 
+    // Block-1 event recorder. Reset on every render() call; the drained
+    // snapshot populates the sidecar `phases[]` array. Exposed so the
+    // caller can pre-register events or attach identity metadata before
+    // render() runs.
+    telemetry::PhaseRecorder& recorder() { return recorder_; }
+    const telemetry::PhaseRecorder& recorder() const { return recorder_; }
+
     // Esegue il rendering completo del RenderPlan dato
     RenderResult render(const plan::RenderPlan& plan);
 
@@ -66,6 +74,7 @@ private:
     std::string concat_mode_{"reencode"};
     services::EngineProgress last_progress_{};
     EngineMetrics metrics_;
+    telemetry::PhaseRecorder recorder_;
 };
 
 } // namespace velox::core

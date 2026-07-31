@@ -35,8 +35,16 @@ import (
 	"fmt"
 	"time"
 
+	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
 )
+
+func reportRecorder(report *taskrunner.TaskExecutionReport) *telemetry.EventRecorder {
+	if report == nil {
+		return nil
+	}
+	return report.AttemptRecorder
+}
 
 // executeTask executes a task and reports the result via typed TaskResult.
 //
@@ -102,6 +110,11 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 			execErr = fmt.Errorf("upload task outputs: %w", uploadErr)
 		}
 	}
+
+	// Upload/commit runs outside TaskRunner.Run. Drain those late events
+	// only after the complete attempt lifecycle, preserving the runner
+	// events already snapshotted in report.DetailedPhases.
+	taskrunner.AppendDetailedPhases(report, reportRecorder(report))
 
 	w.recordTaskOutcome(pte, execErr, duration)
 	w.recordTaskFinish()

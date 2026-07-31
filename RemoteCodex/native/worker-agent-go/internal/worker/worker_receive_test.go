@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/types/known/structpb"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/executor"
@@ -13,6 +14,97 @@ import (
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
 )
+
+func TestReceiveLoop_TaskOfferRejectsInvalidRenderPlanBeforeAccept(t *testing.T) {
+	log := logger.New(logger.InfoLevel, io.Discard)
+	reg := executor.NewRegistry()
+	if err := reg.Register(fakeSceneComposite{}); err != nil {
+		t.Fatalf("register fake executor: %v", err)
+	}
+	rt := &recordingTransport{}
+
+	w := &Worker{
+		config: &config.WorkerConfig{
+			WorkerID:        "test-worker-invalid-plan",
+			WorkerName:      "test-worker-invalid-plan",
+			LogLevel:        "info",
+			MaxActiveJobs:   1,
+			ProtocolVersion: controltransport.ProtocolVersionCurrent,
+		},
+		logger:             log,
+		transport:          rt,
+		status:             StatusIdle,
+		stopChan:           make(chan struct{}),
+		heartbeatBackoff:   &backoffConfig{initialInterval: time.Second, maxInterval: time.Minute, multiplier: 2.0},
+		seenCommands:       make(map[string]time.Time),
+		recentLogs:         newRecentLogBuffer(50),
+		activeTasks:        make(map[string]*ActiveTaskExecution),
+		taskIDsByJob:       make(map[string][]string),
+		pendingTasks:       make(map[string]*PendingTaskExecution),
+		activeTaskLeases:   make(map[string]*ActiveTaskLease),
+		executorRegistry:   reg,
+		concurrencyLimiter: concurrency.NewConcurrencyLimiter(1),
+		version:            "test",
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	recvCh := make(chan controltransport.ControlMessage, 1)
+	w.wg.Add(1)
+	go w.receiveLoop(ctx, recvCh)
+
+	recvCh <- controltransport.NewTypedMessage(
+		controltransport.MsgTaskOffer,
+		"master",
+		controltransport.ProtocolVersionCurrent,
+		&pb.TaskOffer{
+			TaskId:          "task-invalid-plan-001",
+			JobId:           "job-invalid-plan-001",
+			AttemptId:       "attempt-invalid-plan-001",
+			LeaseId:         "lease-invalid-plan-001",
+			AttemptNumber:   1,
+			Revision:        7,
+			ExecutorId:      "scene.composite.v1",
+			ExecutorVersion: 1,
+			TaskSpec: mustStruct(t, map[string]interface{}{
+				"scenes": []interface{}{"legacy scene"},
+			}),
+		},
+	)
+
+	var got controltransport.ControlMessage
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if msg, ok := rt.last(); ok {
+			got = msg
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got.Type != controltransport.MsgTaskRejected {
+		t.Fatalf("worker reply type = %q, want %q", got.Type, controltransport.MsgTaskRejected)
+	}
+	reject, ok := got.TypedPayload.(*pb.TaskRejected)
+	if !ok || reject == nil {
+		t.Fatalf("reply payload = %T, want *pb.TaskRejected", got.TypedPayload)
+	}
+	if reject.GetReason() != "invalid_render_plan" {
+		t.Fatalf("reject reason = %q, want invalid_render_plan", reject.GetReason())
+	}
+
+	cancel()
+	close(recvCh)
+	w.wg.Wait()
+}
+
+func mustStruct(t *testing.T, values map[string]interface{}) *structpb.Struct {
+	t.Helper()
+	value, err := structpb.NewStruct(values)
+	if err != nil {
+		t.Fatalf("structpb.NewStruct: %v", err)
+	}
+	return value
+}
 
 func TestReceiveLoop_TaskOfferRejectsUnsupportedExecutorBeforeAccept(t *testing.T) {
 	log := logger.New(logger.InfoLevel, io.Discard)

@@ -95,6 +95,16 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 		// PerformanceReport metadata.
 		ReportSchemaVersion: 1,
 		ReportVersion:       1,
+		PhaseTimings: []taskattempts.PhaseTimingDetailed{
+			{
+				AttemptID: "e2e-attempt-001", EventID: "e2e-encode-setup-0", EventIndex: 0,
+				Origin: "engine", Scope: "segment", Component: "engine.encode", Action: "setup",
+				Phase: "encode", PhaseOrder: 1, SegmentIndex: 0, Status: "ok",
+				DurationMS: 125, BytesIn: 2048, BytesOut: 1024, Frames: 60,
+				StartedOffsetMS: 0, FinishedOffsetMS: 125, CPUMS: 240, QueueWaitMS: 4,
+				FramesIn: 60, FramesOut: 60,
+			},
+		},
 		Metrics: taskattempts.AttemptMetrics{
 			AttemptID: attemptID,
 			// Legacy 7 carry-over.
@@ -152,6 +162,16 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 	}
 	if err := taskRepo.IngestTaskResultAtomic(ctx, cmd); err != nil {
 		t.Fatalf("IngestTaskResultAtomic: %v", err)
+	}
+
+	var executionEventCount int
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM task_execution_events WHERE attempt_id = ?`, attemptID,
+	).Scan(&executionEventCount); err != nil {
+		t.Fatalf("count persisted execution events: %v", err)
+	}
+	if executionEventCount != 1 {
+		t.Fatalf("execution events=%d; want 1 modern engine event", executionEventCount)
 	}
 
 	// Promote job to SUCCEEDED so Overview picks it up.

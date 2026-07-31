@@ -55,6 +55,7 @@ import (
 	"time"
 
 	"velox-worker-agent/internal/taskrunner"
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/video/pipeline"
 )
 
@@ -103,11 +104,32 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 
 	spec := pte.Spec
 	assetTracker := &assetOperationTracker{}
+	// One recorder belongs to this attempt and is shared with asset
+	// resolution and TaskRunner. Binding it before resolving assets keeps
+	// cache/download events in the same ordered report as runner/engine
+	// events; it is never global across attempts.
+	rec := telemetry.NewEventRecorder()
+	ctx = telemetry.WithRecorder(ctx, rec)
 	ctx = withAssetOperationTracker(ctx, assetTracker)
+	partialReport := &taskrunner.TaskExecutionReport{
+		JobID:           pte.JobID,
+		ExecutorID:      pte.ExecutorID,
+		Status:          "failed",
+		StartedAt:       time.Now().UTC(),
+		AttemptRecorder: rec,
+	}
+	failBeforeRun := func(code string, err error) (*taskrunner.TaskExecutionReport, error) {
+		partialReport.ErrorCode = code
+		partialReport.ErrorDetail = err.Error()
+		partialReport.CompletedAt = time.Now().UTC()
+		attachAssetOperations(partialReport, assetTracker)
+		taskrunner.AppendDetailedPhases(partialReport, rec)
+		return partialReport, err
+	}
 	if spec.Payload != nil {
 		resolvedPayload, err := w.resolveTaskAssets(ctx, spec.Payload)
 		if err != nil {
-			return nil, err
+			return failBeforeRun("asset_resolution_failed", err)
 		}
 		spec.Payload = resolvedPayload
 	}
@@ -130,7 +152,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		if len(driveIDs) > 0 {
 			leased, leaseErr := AcquireJobClips(ctx, w.clipCache, pte.JobID, driveIDs)
 			if leaseErr != nil {
-				return nil, fmt.Errorf("acquire clip lease: %w", leaseErr)
+				return failBeforeRun("clip_lease_failed", fmt.Errorf("acquire clip lease: %w", leaseErr))
 			}
 			clipLease = leased
 			defer clipLease.ReleaseAll(ctx)

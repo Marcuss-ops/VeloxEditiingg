@@ -406,6 +406,7 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 	typedCache := deriveCacheStats(attemptID, typedMetrics)
 	typedCost := executionMetricsToCostBasis(attemptID, tr.GetExecutionMetrics())
 	segmentTimings := segmentTimingsFromProto(attemptID, taskID, jobID, workerID, tr.GetSegmentTimings())
+	phaseTimings := phaseTimingsFromProto(attemptID, taskID, jobID, workerID, tr.GetPhaseTimings())
 	partialPhaseTimings := partialPhaseTimingsFromProto(attemptID, taskID, jobID, workerID, tr.GetPartialPhaseMetrics())
 
 	// Scorecard v2 / Step 15: start an "ingest_result" span.
@@ -486,6 +487,7 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 		CostBasis:           typedCost,
 		SegmentTimings:      segmentTimings,
 		PartialPhaseMetrics: partialPhaseTimings,
+		PhaseTimings:        phaseTimings,
 		GitSHA:              gitSHA,
 		WorkerVersion:       workerVer,
 		EngineVersion:       engineVer,

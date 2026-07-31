@@ -123,4 +123,8 @@ type IngestResultCommand struct {
 	// attempt fails before all phases complete. Stored in
 	// task_phase_timings with status='PARTIAL' or 'FAILED'.
 	PartialPhaseMetrics []taskattempts.PhaseTimingDetailed
+	// PhaseTimings is the complete append-only event timeline emitted by
+	// the worker. It is authoritative when present; PartialPhaseMetrics
+	// remains the compatibility fallback for older workers.
+	PhaseTimings []taskattempts.PhaseTimingDetailed
 }

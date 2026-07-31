@@ -12,13 +12,14 @@ import (
 	"runtime/debug"
 
 	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/telemetry"
 )
 
 // runExecute is the heart of PR-3.3: it invokes Executor.Execute under a
 // recover() guard so a panic never escapes the runner. It also checks
 // the parent ctx after Execute returns so we can hand back lease /
 // cancel / deadline errors cleanly.
-func (r *TaskRunner) runExecute(rc *runnerContext, exec executor.Executor, spec executor.TaskSpec, appendPhase func(PhaseMarker)) (executor.ExecutionResult, error) {
+func (r *TaskRunner) runExecute(rc *runnerContext, exec executor.Executor, spec executor.TaskSpec, appendPhase func(PhaseMarker), rec *telemetry.EventRecorder) (executor.ExecutionResult, error) {
 	execStart := r.now()
 	var result executor.ExecutionResult
 	var execErr error
@@ -46,6 +47,15 @@ func (r *TaskRunner) runExecute(rc *runnerContext, exec executor.Executor, spec 
 			result.Status, result.ErrorCode, result.ErrorDetail)
 	}
 	appendPhase(final)
+	if rec != nil {
+		rec.Record(telemetry.EventSpec{
+			Origin:    telemetry.OriginWorker,
+			Scope:     telemetry.ScopeAttempt,
+			Component: "runner",
+			Action:    PhaseExecute,
+			Phase:     PhaseExecute,
+		}, execStart, execEnd, execEnd.Sub(execStart).Milliseconds(), final.Status, "", final.Notes)
+	}
 
 	if recovered != nil || execErr != nil {
 		// Reset result so the caller sees the failure post-mapping.

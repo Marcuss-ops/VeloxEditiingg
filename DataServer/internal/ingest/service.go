@@ -97,6 +97,10 @@ type IngestCommand struct {
 	// Scorecard v2 / Step 18: partial phase metrics captured when an
 	// attempt fails before all phases complete.
 	PartialPhaseMetrics []taskattempts.PhaseTimingDetailed
+	// PhaseTimings is the complete append-only event timeline. It is
+	// persisted atomically with the terminal result; the legacy partial
+	// field remains a fallback for older workers.
+	PhaseTimings []taskattempts.PhaseTimingDetailed
 }
 
 // DeclaredArtifact is one worker-claimed artifact. Mirrors the proto
@@ -419,8 +423,9 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		ReportHash:          cmd.ReportHash,
 		// Scorecard v2 / Step 17: per-segment C++ sidecar timings.
 		SegmentTimings: cmd.SegmentTimings,
-		// Scorecard v2 / Step 18: partial phase metrics for FAILED attempts.
+		// Scorecard v2 / Step 18: phase timeline for successful and failed attempts.
 		PartialPhaseMetrics: cmd.PartialPhaseMetrics,
+		PhaseTimings:        cmd.PhaseTimings,
 	})
 
 	// fix/atomic-ingestion: IngestTaskResultAtomic succeeded — the Task +

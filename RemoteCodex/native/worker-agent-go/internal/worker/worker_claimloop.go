@@ -25,6 +25,7 @@ import (
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/api"
+	"velox-worker-agent/pkg/api/renderplan"
 )
 
 // receiveLoop processes incoming messages from the transport receive channel.
@@ -110,6 +111,31 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					}
 					continue
 				}
+
+				// RenderPlan admission is intentionally before TaskAccepted:
+				// the worker must execute a versioned compiled plan, not
+				// infer a timeline from arbitrary legacy keys. The executor
+				// identity is sourced from the typed offer and output_contract
+				// is merged from its dedicated protobuf field.
+				admissionPayload := map[string]interface{}{}
+				if tsp := taskOffer.GetTaskSpec(); tsp != nil {
+					for key, value := range tsp.AsMap() {
+						admissionPayload[key] = value
+					}
+				}
+				admissionPayload["executor_id"] = executorID
+				admissionPayload["executor_version"] = executorVersion
+				if outputContract := taskOffer.GetOutputContract(); outputContract != nil {
+					admissionPayload["output_contract"] = outputContract.AsMap()
+				}
+				if err := renderplan.ValidateTaskPayload(admissionPayload); err != nil {
+					w.logger.Warn("[RECEIVE] TaskOffer refused — invalid versioned RenderPlan (task=%s): %v", taskID, err)
+					if rejectErr := w.sendTaskReject(ctx, taskID, jobID, attemptID, leaseID, "invalid_render_plan", attemptNumber, revision); rejectErr != nil {
+						w.logger.Warn("[RECEIVE] Failed to send TaskRejected (invalid render plan): %v", rejectErr)
+					}
+					continue
+				}
+
 				w.logger.Info("[RECEIVE] TaskOffer received: task=%s attempt=%s job=%s executor=%s@%d — deferring executeTask to TaskLeaseGranted",
 					taskID, attemptID, jobID, executorID, taskOffer.GetExecutorVersion())
 

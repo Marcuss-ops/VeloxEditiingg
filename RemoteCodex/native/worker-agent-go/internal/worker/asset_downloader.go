@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"velox-worker-agent/internal/telemetry"
 )
 
 // downloadVeloxAssetWithMetadata is the integrity-aware asset path. A cache
@@ -29,6 +31,11 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 	// must never be reused as a valid hit.
 	if expectedSHA256 != "" && expectedSizeBytes > 0 {
 		if existing, err := cachedAssetPath(cacheDir, assetID, expectedSHA256, expectedSizeBytes); err == nil && existing != "" {
+			if rec := telemetry.RecorderFromContext(ctx); rec != nil {
+				h := rec.Begin(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeArtifact, Component: "worker.cache", Action: "hit_read"})
+				h.SetMetadata("asset_id", assetID)
+				h.Complete()
+			}
 			completed := time.Now().UTC()
 			recordAssetOperation(ctx, AssetOperationRecord{
 				AssetID:             assetID,
@@ -47,6 +54,9 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 		}
 	}
 
+	if rec := telemetry.RecorderFromContext(ctx); rec != nil {
+		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeArtifact, Component: "worker.cache", Action: "miss"}, telemetry.StatusOK, "", "")
+	}
 	downloadURL := strings.TrimRight(strings.TrimSpace(w.config.MasterURL), "/") + "/api/v1/worker-assets/" + neturl.PathEscape(assetID)
 	authToken := ""
 	if w.apiClient != nil {
@@ -111,12 +121,20 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 			continue
 		}
 
+		transfer := telemetry.RecorderFromContext(ctx)
+		transferHandle := (*telemetry.EventHandle)(nil)
+		if transfer != nil {
+			transferHandle = transfer.Begin(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask, Component: "worker.asset", Action: "transfer"})
+			transferHandle.SetMetadata("asset_id", assetID)
+		}
 		localPath, downloadedBytes, err := writeVeloxAssetToCache(cacheDir, assetID, expectedSHA256, expectedSizeBytes, resp)
 		resp.Body.Close()
 		if err != nil {
+			transferHandle.Abort("asset_transfer", err.Error())
 			lastErr = err
 			continue
 		}
+		transferHandle.CompleteWith(downloadedBytes, downloadedBytes, 0, telemetry.StatusOK, "", "")
 		completed := time.Now().UTC()
 		recordAssetOperation(ctx, AssetOperationRecord{
 			AssetID:             assetID,

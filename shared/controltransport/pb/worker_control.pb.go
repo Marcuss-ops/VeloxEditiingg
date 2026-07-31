@@ -1387,8 +1387,11 @@ type PhaseTimingDetailed struct {
 	QueueWaitMs      float64 `protobuf:"fixed64,31,opt,name=queue_wait_ms,json=queueWaitMs,proto3" json:"queue_wait_ms,omitempty"`
 	FramesIn         int64   `protobuf:"varint,32,opt,name=frames_in,json=framesIn,proto3" json:"frames_in,omitempty"`
 	FramesOut        int64   `protobuf:"varint,33,opt,name=frames_out,json=framesOut,proto3" json:"frames_out,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Optional artifact identity for artifact-scoped events. The master
+	// still overrides identity fields from canonical database rows.
+	ArtifactId    string `protobuf:"bytes,34,opt,name=artifact_id,json=artifactId,proto3" json:"artifact_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PhaseTimingDetailed) Reset() {
@@ -1650,6 +1653,13 @@ func (x *PhaseTimingDetailed) GetFramesOut() int64 {
 		return x.FramesOut
 	}
 	return 0
+}
+
+func (x *PhaseTimingDetailed) GetArtifactId() string {
+	if x != nil {
+		return x.ArtifactId
+	}
+	return ""
 }
 
 type ArtifactUploaded struct {
@@ -4343,7 +4353,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"started_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12=\n" +
 	"\fcompleted_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vcompletedAt\x12\x16\n" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x12\x14\n" +
-	"\x05notes\x18\x05 \x01(\tR\x05notes\"\xf2\b\n" +
+	"\x05notes\x18\x05 \x01(\tR\x05notes\"\x93\t\n" +
 	"\x13PhaseTimingDetailed\x12\x1f\n" +
 	"\vphase_order\x18\x01 \x01(\x05R\n" +
 	"phaseOrder\x12\x1c\n" +
@@ -4389,7 +4399,9 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\rqueue_wait_ms\x18\x1f \x01(\x01R\vqueueWaitMs\x12\x1b\n" +
 	"\tframes_in\x18  \x01(\x03R\bframesIn\x12\x1d\n" +
 	"\n" +
-	"frames_out\x18! \x01(\x03R\tframesOut\"\xf3\x02\n" +
+	"frames_out\x18! \x01(\x03R\tframesOut\x12\x1f\n" +
+	"\vartifact_id\x18\" \x01(\tR\n" +
+	"artifactId\"\xf3\x02\n" +
 	"\x10ArtifactUploaded\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x1f\n" +
 	"\vartifact_id\x18\x02 \x01(\tR\n" +

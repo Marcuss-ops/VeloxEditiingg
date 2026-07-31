@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/logger"
 )
 
@@ -158,15 +159,37 @@ func (se *StageExecutor) executeChunkWithRetry(ctx context.Context, jobID string
 		}
 		chunkCtx, chunkCancel := context.WithTimeout(ctx, se.config.ChunkTimeout)
 		startTime := time.Now()
+		rec := telemetry.RecorderFromContext(ctx)
+		var retryEvent *telemetry.EventHandle
+		// The first execution is an attempt, not a retry. Emit the closed
+		// retry event only for subsequent attempts so retry counts remain
+		// semantically correct.
+		if rec != nil && attempt > 1 {
+			retryEvent = rec.Begin(telemetry.EventSpec{
+				Origin: telemetry.OriginWorker, Scope: telemetry.ScopeAttempt,
+				Component: "attempt", Action: "retry", SegmentIndex: int32(attempt - 1),
+			})
+		}
+		if retryEvent != nil {
+			retryEvent.SetMetadata("stage", string(stage))
+			retryEvent.SetMetadata("chunk_id", chunkID)
+			retryEvent.SetMetadata("attempt", attempt)
+		}
 		output, err := executor(chunkCtx, stage, chunkID, params)
 		duration := time.Since(startTime)
 		chunkCancel()
 
 		if err == nil {
+			if retryEvent != nil {
+				retryEvent.CompleteWith(0, 0, 0, telemetry.StatusOK, "", "")
+			}
 			return ChunkResult{Stage: stage, ChunkID: chunkID, Success: true, Output: output, Duration: duration, Attempt: attempt}
 		}
 
 		lastErr = err
+		if retryEvent != nil {
+			retryEvent.Abort("chunk_failed", err.Error())
+		}
 		logger.Warn("[STAGE_EXECUTOR] Job %s: chunk %s attempt %d/%d failed: %v",
 			jobID, chunkID, attempt, se.config.MaxChunkRetries+1, err)
 

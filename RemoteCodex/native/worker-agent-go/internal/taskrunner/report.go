@@ -53,6 +53,10 @@ type TaskExecutionReport struct {
 	// task_phase_timings PARTIAL/FAILED summaries from them. Legacy
 	// masters (pre-block-1) ignore the field entirely.
 	DetailedPhases []DetailedPhaseTiming `json:"detailed_phases,omitempty"`
+	// AttemptRecorder remains attached until the outer worker lifecycle has
+	// finished upload/commit. It is transport-local state and never serialized.
+	AttemptRecorder       *telemetry.EventRecorder `json:"-"`
+	AttemptRecorderOffset int                      `json:"-"`
 }
 
 // DetailedPhaseTiming is the worker-side mirror of

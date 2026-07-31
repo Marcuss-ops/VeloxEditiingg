@@ -15,6 +15,7 @@ import (
 
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/publisher"
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/video/pipeline"
 )
 
@@ -115,9 +116,25 @@ func (s *SceneComposite) Validate(spec executor.TaskSpec) error {
 // cancellation propagates only AFTER the engine finishes. The
 // descriptor's TemporalMode=global + Deterministic=true advertise this
 // property to the master scheduler.
-func (s *SceneComposite) Execute(ctx context.Context, _ executor.ExecutionContext, spec executor.TaskSpec) (executor.ExecutionResult, error) {
+func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.ExecutionContext, spec executor.TaskSpec) (executor.ExecutionResult, error) {
 	startedAt := time.Now().UTC()
 	metrics := map[string]interface{}{}
+	rec := recorderFromExecutionContext(execCtx)
+	planHandle := rec.Begin(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask, Component: "worker.plan", Action: "compile"})
+	if planHandle != nil {
+		planHandle.SetMetadata("pipeline_id", resolvePipelineID(spec.Payload))
+	}
+	planCompleted := false
+	defer func() {
+		if planHandle == nil || planCompleted {
+			return
+		}
+		if execCtx.Err() != nil {
+			planHandle.Abort("context_cancelled", execCtx.Err().Error())
+			return
+		}
+		planHandle.Abort("execution_failed", "scene composite exited before plan completion")
+	}()
 
 	outputPath, err := s.resolveOutputPath(spec)
 	if err != nil {
@@ -196,9 +213,13 @@ func (s *SceneComposite) Execute(ctx context.Context, _ executor.ExecutionContex
 	var outputHash string
 	var outputSize int64
 	hashStart := time.Now()
+	if rec != nil {
+		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginValidation, Scope: telemetry.ScopeArtifact, Component: "quality", Action: "sha256"}, telemetry.StatusOK, "", "")
+	}
 	outputManifest, manifestErr := publisher.ComputeLocalManifest(ctx, outputPath)
 	metrics["output.hash_ms"] = time.Since(hashStart).Milliseconds()
 	if manifestErr != nil {
+		planHandle.Abort("quality_manifest", manifestErr.Error())
 		metrics["output.manifest_error"] = manifestErr.Error()
 		return executor.ExecutionResult{
 			Status:      "failed",
@@ -212,6 +233,7 @@ func (s *SceneComposite) Execute(ctx context.Context, _ executor.ExecutionContex
 	outputHash = outputManifest.SHA256Hex
 	outputSize = outputManifest.SizeBytes
 	if outputSize <= 0 {
+		planHandle.Abort("quality_empty", "render output manifest has zero bytes")
 		metrics["output.manifest_error"] = "render output is empty"
 		return executor.ExecutionResult{
 			Status:      "failed",
@@ -289,6 +311,11 @@ func (s *SceneComposite) Execute(ctx context.Context, _ executor.ExecutionContex
 		}, nil
 	}
 
+	planHandle.CompleteWith(0, outputSize, runMetrics.RenderMetrics.Frames, telemetry.StatusOK, "", "")
+	planCompleted = true
+	if rec != nil {
+		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginValidation, Scope: telemetry.ScopeArtifact, Component: "quality", Action: "ffprobe"}, telemetry.StatusOK, "", "")
+	}
 	return executor.ExecutionResult{
 		Status:      "succeeded",
 		Outputs:     outputs,

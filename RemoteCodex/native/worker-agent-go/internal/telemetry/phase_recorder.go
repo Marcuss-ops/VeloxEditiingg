@@ -1,48 +1,19 @@
-// phase_recorder.go — observability chain / block 1: per-attempt event
-// recorder.
-//
-// The recorder accumulates execution events for ONE attempt. The
-// TaskRunner creates it at Run time, records every canonical phase
-// through EventHandle.Begin/Complete, and drains it via Flush when the
-// attempt finishes. The taskrunner boundary maps the drained
-// telemetry.RecordedPhase values onto DetailedPhaseTiming (its report
-// type), which the transport layer serializes into
-// TaskResult.phase_timings for the master's task_execution_events table.
-//
-// Clock contract (mirrors canonical_phases.go):
-//   - DurationMS is measured on a MONOTONIC clock (time.Since against
-//     the recorder's start stamp) so wall-clock jumps never distort
-//     phase durations.
-//   - StartedAt / CompletedAt are UTC wall stamps, for cross-host
-//     correlation only (the master does not compute durations from
-//     them).
-//
-// Event index: each recorded event carries a per-origin event_index,
-// incrementing from 0. The master's task_execution_events table guards
-// UNIQUE(attempt_id, origin, event_index) so a replayed report is
-// idempotent per origin.
-//
-// Thread-safety: EventRecorder is safe for concurrent use. The runner
-// itself is single-goroutine per Run, but the C++ engine bridge may
-// record from other goroutines in a later block.
+// phase_recorder.go — per-attempt canonical execution event recorder.
 package telemetry
 
 import (
+	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// Status values recorded on events. These mirror the status vocabulary
-// used by task_phase_timings so that summary + detail rows stay
-// consistent for the same phase.
 const (
 	StatusOK     = "ok"
 	StatusFailed = "failed"
 )
 
-// RecordedPhase is one immutable execution event drained from an
-// EventRecorder. It is the telemetry-owned shape; the taskrunner maps
-// it onto its DetailedPhaseTiming report type at the Run boundary.
+// RecordedPhase is one immutable execution event drained from an EventRecorder.
 type RecordedPhase struct {
 	Origin           string
 	Scope            string
@@ -52,6 +23,7 @@ type RecordedPhase struct {
 	EventType        string
 	EventName        string
 	EventIndex       int64
+	ArtifactID       string
 	StartedAt        time.Time
 	CompletedAt      time.Time
 	DurationMS       int64
@@ -73,9 +45,8 @@ type RecordedPhase struct {
 	FramesOut        int64
 }
 
-// EventSpec describes the event the caller is about to record. Origin,
-// Scope, and Component/Action MUST be registered in phase_registry.go;
-// non-canonical values are rejected before they enter the event stream.
+// EventSpec describes an event. Origin, scope, and component/action must be
+// registered in phase_registry.go; invalid specs are rejected before recording.
 type EventSpec struct {
 	Origin           string
 	Scope            string
@@ -84,6 +55,7 @@ type EventSpec struct {
 	Phase            string
 	EventType        string
 	EventName        string
+	ArtifactID       string
 	MetadataJSON     string
 	SegmentIndex     int32
 	TrackKind        string
@@ -96,16 +68,15 @@ type EventSpec struct {
 	FramesOut        int64
 }
 
-// EventRecorder accumulates RecordedPhase entries for one attempt.
+// EventRecorder accumulates events for one attempt. Event indexes are
+// monotonic for the complete attempt and are not reset by Flush.
 type EventRecorder struct {
 	mu        sync.Mutex
-	startedAt time.Time // monotonic base for DurationMS
+	startedAt time.Time
 	events    []RecordedPhase
-	indexes   map[string]int64 // origin → next event_index
+	indexes   map[string]int64
 }
 
-// NewEventRecorder returns a recorder whose DurationMS values are
-// measured against a fresh monotonic start stamp.
 func NewEventRecorder() *EventRecorder {
 	return &EventRecorder{
 		startedAt: time.Now(),
@@ -113,113 +84,77 @@ func NewEventRecorder() *EventRecorder {
 	}
 }
 
-// Begin opens a new event for the given spec and returns a handle the
-// caller completes (or aborts). A nil recorder returns a nil handle so
-// callers can guard with `if h != nil`; Begin itself is safe to call on
-// a nil receiver.
 func (r *EventRecorder) Begin(spec EventSpec) *EventHandle {
-	if r == nil {
+	if r == nil || !normalizeEventSpec(&spec) {
 		return nil
 	}
-	if !normalizeEventSpec(&spec) {
-		return nil
-	}
-	return &EventHandle{
-		rec:       r,
-		spec:      spec,
-		startWall: time.Now().UTC(),
-		startMono: time.Now(),
-	}
+	now := time.Now()
+	return &EventHandle{rec: r, spec: spec, startWall: now.UTC(), startMono: now}
 }
 
-// Emit records a point-in-time event with no duration (started and
-// completed stamps identical). Safe on a nil receiver.
 func (r *EventRecorder) Emit(spec EventSpec, status, errCode, errMsg string) {
-	if r == nil {
+	if r == nil || !normalizeEventSpec(&spec) {
 		return
 	}
-	if !normalizeEventSpec(&spec) {
-		return
-	}
-	now := time.Now().UTC()
+	now := time.Now()
+	eventType := eventTypeFor(spec.EventType, status)
 	r.record(RecordedPhase{
-		Origin:           spec.Origin,
-		Scope:            spec.Scope,
-		Component:        spec.Component,
-		Action:           spec.Action,
-		Phase:            spec.Phase,
-		EventType:        spec.EventType,
-		EventName:        spec.EventName,
-		StartedAt:        now,
-		CompletedAt:      now,
-		DurationMS:       0,
-		Status:           status,
-		ErrorCode:        errCode,
-		ErrorMessage:     errMsg,
-		MetadataJSON:     spec.MetadataJSON,
-		SegmentIndex:     spec.SegmentIndex,
-		TrackKind:        spec.TrackKind,
-		TrackIndex:       spec.TrackIndex,
-		StartedOffsetMS:  spec.StartedOffsetMS,
-		FinishedOffsetMS: spec.FinishedOffsetMS,
-		CPUMS:            spec.CPUMS,
-		QueueWaitMS:      spec.QueueWaitMS,
-		FramesIn:         spec.FramesIn,
-		FramesOut:        spec.FramesOut,
+		Origin: spec.Origin, Scope: spec.Scope, Component: spec.Component,
+		Action: spec.Action, Phase: spec.Phase, EventType: eventType,
+		EventName: spec.EventName, ArtifactID: spec.ArtifactID, StartedAt: now.UTC(), CompletedAt: now.UTC(),
+		Status: status, ErrorCode: errCode, ErrorMessage: errMsg,
+		MetadataJSON: spec.MetadataJSON, SegmentIndex: spec.SegmentIndex,
+		TrackKind: spec.TrackKind, TrackIndex: spec.TrackIndex,
+		StartedOffsetMS: r.offsetMS(now), FinishedOffsetMS: r.offsetMS(now),
+		CPUMS: spec.CPUMS, QueueWaitMS: spec.QueueWaitMS,
+		FramesIn: spec.FramesIn, FramesOut: spec.FramesOut,
 	})
 }
 
-// Record appends a fully-formed event with explicit stamps. Use it when
-// the caller already owns the timing (e.g. the runner reusing
-// PhaseMarker times so summary + detail rows correlate exactly);
-// Begin/Complete remains the API for long-running work. Safe on a nil
-// receiver.
 func (r *EventRecorder) Record(spec EventSpec, startedAt, completedAt time.Time, durationMS int64, status, errCode, errMsg string) {
-	if r == nil {
+	if r == nil || !normalizeEventSpec(&spec) {
 		return
-	}
-	if !normalizeEventSpec(&spec) {
-		return
-	}
-	eventType := spec.EventType
-	if eventType == "" {
-		if status == StatusFailed {
-			eventType = "failed"
-		} else {
-			eventType = "completed"
-		}
 	}
 	r.record(RecordedPhase{
-		Origin:           spec.Origin,
-		Scope:            spec.Scope,
-		Component:        spec.Component,
-		Action:           spec.Action,
-		Phase:            spec.Phase,
-		EventType:        eventType,
-		EventName:        spec.EventName,
-		StartedAt:        startedAt.UTC(),
-		CompletedAt:      completedAt.UTC(),
-		DurationMS:       durationMS,
-		Status:           status,
-		ErrorCode:        errCode,
-		ErrorMessage:     errMsg,
-		MetadataJSON:     spec.MetadataJSON,
-		SegmentIndex:     spec.SegmentIndex,
-		TrackKind:        spec.TrackKind,
-		TrackIndex:       spec.TrackIndex,
-		StartedOffsetMS:  spec.StartedOffsetMS,
-		FinishedOffsetMS: spec.FinishedOffsetMS,
-		CPUMS:            spec.CPUMS,
-		QueueWaitMS:      spec.QueueWaitMS,
-		FramesIn:         spec.FramesIn,
-		FramesOut:        spec.FramesOut,
+		Origin: spec.Origin, Scope: spec.Scope, Component: spec.Component,
+		Action: spec.Action, Phase: spec.Phase,
+		EventType: eventTypeFor(spec.EventType, status), EventName: spec.EventName, ArtifactID: spec.ArtifactID,
+		StartedAt: startedAt.UTC(), CompletedAt: completedAt.UTC(), DurationMS: durationMS,
+		Status: status, ErrorCode: errCode, ErrorMessage: errMsg,
+		MetadataJSON: spec.MetadataJSON, SegmentIndex: spec.SegmentIndex,
+		TrackKind: spec.TrackKind, TrackIndex: spec.TrackIndex,
+		StartedOffsetMS: spec.StartedOffsetMS, FinishedOffsetMS: spec.FinishedOffsetMS,
+		CPUMS: spec.CPUMS, QueueWaitMS: spec.QueueWaitMS,
+		FramesIn: spec.FramesIn, FramesOut: spec.FramesOut,
 	})
 }
 
-// Flush drains a defensive copy of all recorded events in insertion
-// order, and clears the accumulator so a subsequent drain returns only
-// events recorded after the flush. Safe on a nil receiver.
 func (r *EventRecorder) Flush() []RecordedPhase {
+	return r.DrainFrom(0)
+}
+
+// DrainFrom returns events recorded after offset and clears the recorder
+// buffer. It lets the outer attempt boundary append upload/commit events
+// without duplicating the events already snapshotted by TaskRunner.Run.
+func (r *EventRecorder) DrainFrom(offset int) []RecordedPhase {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(r.events) {
+		offset = len(r.events)
+	}
+	out := make([]RecordedPhase, len(r.events)-offset)
+	copy(out, r.events[offset:])
+	r.events = r.events[:0]
+	return out
+}
+
+func (r *EventRecorder) Snapshot() []RecordedPhase {
 	if r == nil {
 		return nil
 	}
@@ -227,99 +162,189 @@ func (r *EventRecorder) Flush() []RecordedPhase {
 	defer r.mu.Unlock()
 	out := make([]RecordedPhase, len(r.events))
 	copy(out, r.events)
-	r.events = r.events[:0]
-	for k := range r.indexes {
-		delete(r.indexes, k)
-	}
 	return out
 }
 
-func (r *EventRecorder) record(p RecordedPhase) {
+func (r *EventRecorder) record(event RecordedPhase) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	p.EventIndex = r.indexes[p.Origin]
-	r.indexes[p.Origin]++
-	r.events = append(r.events, p)
+	event.EventIndex = r.indexes[event.Origin]
+	r.indexes[event.Origin]++
+	r.events = append(r.events, event)
 }
 
-// normalizeEventSpec applies the closed canonical taxonomy. Invalid
-// origin/scope/component/action combinations are rejected, so the
-// recorder never emits rows the master's CHECK constraints can reject.
-func normalizeEventSpec(spec *EventSpec) bool {
-	if spec == nil {
-		return false
+func (r *EventRecorder) offsetMS(stamp time.Time) float64 {
+	if r == nil {
+		return 0
 	}
-	return CanonicalizeEventSpec(spec)
+	return float64(stamp.Sub(r.startedAt).Microseconds()) / 1000
 }
 
-// EventHandle is an in-flight event returned by EventRecorder.Begin.
-// It must be completed exactly once; a nil handle makes every method a
-// no-op so caller-side guards are optional.
+func eventTypeFor(explicit, status string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if status == StatusFailed {
+		return StatusFailed
+	}
+	return "completed"
+}
+
+func normalizeEventSpec(spec *EventSpec) bool {
+	return spec != nil && CanonicalizeEventSpec(spec)
+}
+
+// EventHandle is safe to complete from multiple goroutines; exactly one
+// completion is recorded. Counter and metadata updates are safe before the
+// completion wins the lifecycle race.
 type EventHandle struct {
 	rec       *EventRecorder
 	spec      EventSpec
 	startWall time.Time
 	startMono time.Time
-	done      bool
+	done      atomic.Bool
+
+	mu        sync.Mutex
+	bytesIn   int64
+	bytesOut  int64
+	frames    int64
+	framesIn  int64
+	framesOut int64
+	metadata  string
 }
 
-// Complete finalizes the event as success (status "ok"). Safe on a nil
-// handle; a second Complete/Abort on the same handle is a no-op.
 func (h *EventHandle) Complete() {
 	h.complete(0, 0, 0, StatusOK, "", "")
 }
 
-// CompleteWith finalizes the event with counters and an explicit
-// status. Safe on a nil handle.
 func (h *EventHandle) CompleteWith(bytesIn, bytesOut, frames int64, status, errCode, errMsg string) {
 	h.complete(bytesIn, bytesOut, frames, status, errCode, errMsg)
 }
 
-// Abort finalizes the event as failed. Safe on a nil handle.
 func (h *EventHandle) Abort(errCode, errMsg string) {
 	h.complete(0, 0, 0, StatusFailed, errCode, errMsg)
 }
 
-func (h *EventHandle) complete(bytesIn, bytesOut, frames int64, status, errCode, errMsg string) {
-	if h == nil || h.rec == nil || h.done {
+func (h *EventHandle) AddInputBytes(n int64) {
+	if h == nil {
 		return
 	}
-	h.done = true
+	h.mu.Lock()
+	h.bytesIn += n
+	h.mu.Unlock()
+}
+
+func (h *EventHandle) AddOutputBytes(n int64) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	h.bytesOut += n
+	h.mu.Unlock()
+}
+
+func (h *EventHandle) AddFrames(n int64) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	h.frames += n
+	h.mu.Unlock()
+}
+
+func (h *EventHandle) AddFramesIn(n int64) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	h.framesIn += n
+	h.mu.Unlock()
+}
+
+func (h *EventHandle) AddFramesOut(n int64) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	h.framesOut += n
+	h.mu.Unlock()
+}
+
+func (h *EventHandle) SetMetadataJSON(value string) {
+	if h == nil {
+		return
+	}
+	var object map[string]any
+	if err := json.Unmarshal([]byte(value), &object); err != nil {
+		return
+	}
+	encoded, err := json.Marshal(object)
+	if err != nil {
+		return
+	}
+	h.mu.Lock()
+	h.metadata = string(encoded)
+	h.mu.Unlock()
+}
+
+func (h *EventHandle) SetMetadata(key string, value any) {
+	if h == nil || key == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	object := map[string]any{}
+	if h.metadata != "" {
+		_ = json.Unmarshal([]byte(h.metadata), &object)
+	}
+	object[key] = value
+	if encoded, err := json.Marshal(object); err == nil {
+		h.metadata = string(encoded)
+	}
+}
+
+func (h *EventHandle) complete(bytesIn, bytesOut, frames int64, status, errCode, errMsg string) {
+	if h == nil || h.rec == nil || !h.done.CompareAndSwap(false, true) {
+		return
+	}
+	h.mu.Lock()
+	bytesIn += h.bytesIn
+	bytesOut += h.bytesOut
+	frames += h.frames
+	framesIn := h.framesIn
+	framesOut := h.framesOut
+	metadata := h.metadata
+	h.mu.Unlock()
+
 	endMono := time.Now()
-	eventType := h.spec.EventType
-	if eventType == "" {
-		if status == StatusFailed {
-			eventType = "failed"
-		} else {
-			eventType = "completed"
-		}
+	startedOffset := h.spec.StartedOffsetMS
+	if startedOffset == 0 {
+		startedOffset = h.rec.offsetMS(h.startMono)
+	}
+	finishedOffset := h.spec.FinishedOffsetMS
+	if finishedOffset == 0 {
+		finishedOffset = h.rec.offsetMS(endMono)
 	}
 	h.rec.record(RecordedPhase{
-		Origin:           h.spec.Origin,
-		Scope:            h.spec.Scope,
-		Component:        h.spec.Component,
-		Action:           h.spec.Action,
-		Phase:            h.spec.Phase,
-		EventType:        eventType,
-		EventName:        h.spec.EventName,
-		StartedAt:        h.startWall,
-		CompletedAt:      endMono.UTC(),
-		DurationMS:       endMono.Sub(h.startMono).Milliseconds(),
-		Status:           status,
-		ErrorCode:        errCode,
-		ErrorMessage:     errMsg,
-		BytesIn:          bytesIn,
-		BytesOut:         bytesOut,
-		Frames:           frames,
-		MetadataJSON:     h.spec.MetadataJSON,
-		SegmentIndex:     h.spec.SegmentIndex,
-		TrackKind:        h.spec.TrackKind,
-		TrackIndex:       h.spec.TrackIndex,
-		StartedOffsetMS:  h.spec.StartedOffsetMS,
-		FinishedOffsetMS: h.spec.FinishedOffsetMS,
-		CPUMS:            h.spec.CPUMS,
-		QueueWaitMS:      h.spec.QueueWaitMS,
-		FramesIn:         h.spec.FramesIn,
-		FramesOut:        h.spec.FramesOut,
+		Origin: h.spec.Origin, Scope: h.spec.Scope, Component: h.spec.Component,
+		Action: h.spec.Action, Phase: h.spec.Phase,
+		EventType: eventTypeFor(h.spec.EventType, status), EventName: h.spec.EventName, ArtifactID: h.spec.ArtifactID,
+		StartedAt: h.startWall, CompletedAt: endMono.UTC(),
+		DurationMS: endMono.Sub(h.startMono).Milliseconds(), Status: status,
+		ErrorCode: errCode, ErrorMessage: errMsg,
+		BytesIn: bytesIn, BytesOut: bytesOut, Frames: frames,
+		MetadataJSON: firstNonEmpty(metadata, h.spec.MetadataJSON),
+		SegmentIndex: h.spec.SegmentIndex, TrackKind: h.spec.TrackKind,
+		TrackIndex: h.spec.TrackIndex, StartedOffsetMS: startedOffset,
+		FinishedOffsetMS: finishedOffset, CPUMS: h.spec.CPUMS,
+		QueueWaitMS: h.spec.QueueWaitMS, FramesIn: framesIn + h.spec.FramesIn,
+		FramesOut: framesOut + h.spec.FramesOut,
 	})
+}
+
+func firstNonEmpty(value, fallback string) string {
+	if value != "" {
+		return value
+	}
+	return fallback
 }

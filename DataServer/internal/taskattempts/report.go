@@ -357,6 +357,14 @@ func (b *AttemptCostBasis) Compute() {
 // detailed records are persisted via PersistPhaseTimingsDetailed.
 type PhaseTimingDetailed struct {
 	AttemptID        string    `json:"attempt_id"`
+	EventID          string    `json:"event_id,omitempty"`
+	Origin           string    `json:"origin,omitempty"`
+	Scope            string    `json:"scope,omitempty"`
+	EventType        string    `json:"event_type,omitempty"`
+	EventName        string    `json:"event_name,omitempty"`
+	EventIndex       int64     `json:"event_index"`
+	Phase            string    `json:"phase,omitempty"`
+	ArtifactID       string    `json:"artifact_id,omitempty"`
 	JobID            string    `json:"job_id"`
 	TaskID           string    `json:"task_id"`
 	WorkerID         string    `json:"worker_id"`

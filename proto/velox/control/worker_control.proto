@@ -306,6 +306,9 @@ message PhaseTimingDetailed {
   double queue_wait_ms = 31;
   int64 frames_in = 32;
   int64 frames_out = 33;
+  // Optional artifact identity for artifact-scoped events. The master
+  // still overrides identity fields from canonical database rows.
+  string artifact_id = 34;
 }
 
 message ArtifactUploaded {

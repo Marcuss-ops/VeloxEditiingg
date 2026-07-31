@@ -473,6 +473,14 @@ func main() {
 	} else {
 		logger.Info("[BOOT] Worker profile is 'creator'; scene.composite.v1 disabled")
 	}
+	// RenderPlan v1 is the sole timeline source for the deterministic
+	// subtitle/audio/video stages. Register these adapters in the same
+	// capability registry used by dispatch and worker hello.
+	if err := executors.RegisterRenderPlanExecutors(registry, cfg.OutputDir); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to register RenderPlan executors: %v\n", err)
+		os.Exit(1)
+	}
+	logger.Info("[BOOT] Registered RenderPlan executors: %s@1, %s@1, %s@1, %s@1", executors.SubtitleAlignID, executors.AudioMixID, executors.ComposeID, executors.EncodeID)
 	// RW-PROD-004 §3 A4: surface the live executor count on the read
 	// snapshot so /health/ready has a non-zero Executors reason.
 	// SetExecutorsCount accepts the entire roster size rather than +

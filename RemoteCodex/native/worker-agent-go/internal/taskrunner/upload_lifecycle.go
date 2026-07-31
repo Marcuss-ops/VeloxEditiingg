@@ -12,19 +12,33 @@ package taskrunner
 
 import (
 	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/telemetry"
 )
 
 // runUpload publishes executor outputs. PR-3.3 minimum: identity
 // publication of outputs into the report; real upload arrives when
 // PersistentLocalArtifactCache (PR-3.7) lands.
-func (r *TaskRunner) runUpload(rc *runnerContext, result executor.ExecutionResult, appendPhase func(PhaseMarker)) error {
+func (r *TaskRunner) runUpload(rc *runnerContext, result executor.ExecutionResult, appendPhase func(PhaseMarker), rec *telemetry.EventRecorder) error {
 	start := r.now()
+	recordUpload := func(status, notes string) {
+		end := r.now()
+		appendPhase(PhaseMarker{Name: PhaseUpload, StartedAt: start, CompletedAt: end, Status: status, Notes: notes})
+		if rec != nil {
+			rec.Record(telemetry.EventSpec{
+				Origin:    telemetry.OriginWorker,
+				Scope:     telemetry.ScopeAttempt,
+				Component: "runner",
+				Action:    PhaseUpload,
+				Phase:     PhaseUpload,
+			}, start, end, end.Sub(start).Milliseconds(), status, "", notes)
+		}
+	}
 	if len(result.Outputs) == 0 {
-		appendPhase(PhaseMarker{Name: PhaseUpload, StartedAt: start, CompletedAt: r.now(), Status: "ok", Notes: "skipped: no outputs"})
+		recordUpload("ok", "skipped: no outputs")
 		return nil
 	}
 	// PR-3.7 will publish each output through the ArtifactAccess backend.
 	// Today we only record the phase marker.
-	appendPhase(PhaseMarker{Name: PhaseUpload, StartedAt: start, CompletedAt: r.now(), Status: "ok", Notes: "stub: PR-3.7 wires real upload"})
+	recordUpload("ok", "stub: PR-3.7 wires real upload")
 	return nil
 }
