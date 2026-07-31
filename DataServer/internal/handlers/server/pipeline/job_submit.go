@@ -1,16 +1,16 @@
 // Package pipeline — job_submit.go is the thin composer
 // for POST /api/v1/jobs. Orchestrates decode → validate
 // (IdempotencyKey byte-level + ValidateSubmitJobRequest) →
-// NormalizeExternalJobSubmission (plan_derivation.go) →
+// NormalizeExternalJobSubmission (canonical_request_projection.go) →
 // enqueue (jobs/enqueue) → 202 Accepted response
 // (response_shaping.go status + Location helpers).
 //
 // Domain logic lives in:
 //   - intake_validation.go (DTO types, limit consts, regexes,
 //     SubmitJobValidationError, ValidateSubmitJobRequest)
-//   - plan_derivation.go (clip/voiceover/subtitles map
-//     builders, NormalizeExternalJobSubmission,
-//     submitRequestToRawPayload)
+//   - canonical_request_projection.go (NormalizeExternalJobSubmission)
+//   - asset_projection.go (nested asset map builders)
+//   - worker_payload_projection.go (submitRequestToRawPayload and worker projection)
 //   - enqueue_persistence.go (GetSubmittedJob polling)
 //   - response_shaping.go (submitJobAcceptedStatus,
 //     buildSubmittedJobLocation)

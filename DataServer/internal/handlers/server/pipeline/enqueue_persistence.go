@@ -12,11 +12,12 @@
 // (see scripts/ci/check-single-writer.sh). GetSubmittedJob is
 // read-only.
 package pipeline
+
 import (
 	"errors"
+	"github.com/gin-gonic/gin"
 	"net/http"
 	"strings"
-	"github.com/gin-gonic/gin"
 	"velox-server/internal/store"
 )
 
@@ -141,46 +142,3 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		c.JSON(http.StatusOK, resp)
 	}
 }
-
-// NormalizeExternalJobSubmission is the canonical typed-DTO adapter
-// for POST /api/v1/jobs. It walks the SAME path that creator_push
-// walks (creator_push.go::normalizeCreatorPushRequest):
-//
-//  1. Build a flat raw map mirroring the wire shape that
-//     remoteengine.ParseRemotePipelineResult consumes (status,
-//     job_id, video_name, script_text, voiceover_paths, scenes[],
-//     delivery_plan[]).
-//
-//  2. Pass it through remoteengine.ParseRemotePipelineResult to
-//     produce the typed RemotePipelineResult DTO. This is the single
-//     point where typed validation happens — there is no hand-rolled
-//     string-key lookup anymore.
-//
-//  3. Call (*RemotePipelineResult).ToWorkerPayload() which:
-//     - base-copies fields from the flat raw map (delivery_plan,
-//     output_path, non-DTO passthroughs),
-//     - overlays typed DTO fields (job_id from RemoteJobID,
-//     video_name from Script.Title, scenes_json from Scenes,
-//     voiceover_paths from Voiceover.Paths).
-//
-//  4. Stamp the stable identity tuple:
-//     - source_provider    = ExternalAPISourceProvider (constant,
-//     low-cardinality — see [P0 #4] audit for the rationale).
-//     - source_job_id      = the (already-validated) IdempotencyKey.
-//     - target_executor_id = JobSubmitTargetExecutorID (constant).
-//
-// Returns *CanonicalCompletedPayload (alias for normalizedCreatorPush,
-// the type CreatorPush's path also returns), so a future third
-// producer (e.g., webhook intake) only has to return the same shape.
-//
-// submitRequestToRawPayload's retry_budget handling is the canonical
-// boundary for the *int round-trip contract: nil → DefaultRetryBudget
-// (mirrors OpenAPI default), pointer-to-0 → 0 (preserves explicit
-// client choice). Anything else is just a value dereference.
-//
-// Trim policy in submitRequestToRawPayload: trim SPACE around
-// identity-bearing fields (IdempotencyKey, VideoName, scene
-// clip_link / image_link, delivery destination_id) because these
-// participate in dedup / URL parsing downstream. Do NOT trim
-// ScriptText or scene `text` — these are CONTENT fields where
-// legitimate whitespace might be present.

@@ -1,22 +1,15 @@
 // Package pipeline — telemetry.go owns:
-//   - isLegacyCompatShape: pre-manifest_ref legacy-shape
-//     detector that returns true when the request carries the
-//     legacy positional `voiceover_paths` without a per-scene
-//     nested asset (so the legacy body sink should swallow
-//     the warning).
-//   - countScenesWithClipLink: telemetry counter helper that
-//     returns the number of scenes whose flat clip_link is
-//     set (used for legacy-shape migration dashboards).
-//   - legacyBodySinkOrNoop: legacy-compat body sink selector
-//     invoked when isLegacyCompatShape returns true. Returns
-//     the noop sink when h.legacyBodySink is nil (the
-//     deprecated-path default) so the call site stays
-//     nil-safe.
+//   - isLegacyCompatShape: pre-manifest_ref legacy-shape detector.
+//   - countScenesWithClipLink: migration-dashboard counter helper.
+//   - legacyBodySinkOrNoop: nil-safe legacy sink selector.
+//
+// The warning emission itself lives in legacy_request_adapter.go;
+// this file owns only detection and telemetry plumbing.
 package pipeline
+
 import (
 	"strings"
 )
-
 
 // isLegacyCompatShape reports whether the SubmitJobRequest carries
 // the pre-manifest_ref compatibility body shape. Pure function: no
@@ -63,43 +56,3 @@ func (h *Handlers) legacyBodySinkOrNoop() LegacyBodySink {
 	}
 	return h.legacyBodySink
 }
-
-// submitRequestToRawPayload builds the canonical flat-map shape that
-// remoteengine.ParseRemotePipelineResult consumes. Mirrors the wire
-// shape documented at DataServer/api/openapi.yaml under
-// `CreatorPushPayload` — same key names (snake_case, alias paths
-// collapsed to canonical) the typed DTO expects.
-//
-// The map is a one-shot invariant: it is the boundary between the
-// Submit-scoped typed structs (SubmitScene, SubmitDeliveryPlanEntry)
-// and the remoteengine-typed DTO (RemotePipelineResult). Everything
-// downstream of this point sees only the canonical envelope.
-//
-// Per-scene enrichment (Phase 2 of the render-manifest plan):
-// scene[N].Clip / Voiceover / Subtitles nested objects are emitted
-// directly as nested maps in the scene entry, replacing the legacy
-// position-coupled `voiceover_paths[N] ↔ scenes[N]` contract. The
-// flat `clip_link` / `image_link` keys are still emitted when
-// present on the wire (back-compat for clients that haven't migrated
-// to the nested shape). When BOTH the flat and the nested are
-// supplied for the same scene, the nested wins (the canonical
-// "new shape" override on the legacy alias key).
-//
-// RetryBudget boundary contract:
-//   - d.RetryBudget == nil              → entry["retry_budget"] = DefaultRetryBudget
-//     (the OpenAPI default of 3; mirrors what an omitted int field
-//     would have meant historically).
-//   - d.RetryBudget != nil, *d == 0    → entry["retry_budget"] = 0
-//     (client explicitly chose zero retries; preserved verbatim so
-//     downstream enqueue-layer validation can distinguish "0
-//     explicitly" from "omitted").
-//   - d.RetryBudget != nil, *d > 0     → entry["retry_budget"] = *d
-//     (clamp unchanged; a future enrichment could enforce an upper
-//     bound here without touching the boundary contract).
-//
-// Trim policy (matching NormalizeExternalJobSubmission's contract):
-// identity-bearing fields are trimmed (IdempotencyKey, VideoName,
-// URL-shaped scene clip_link / image_link, delivery destination_id,
-// scene nested object URLs). CONTENT fields (ScriptText, scene text)
-// are passed through verbatim because legitimate whitespace might
-// appear.
