@@ -415,6 +415,85 @@ func TestSubmitTaskResult_PhaseTimings(t *testing.T) {
 	}
 }
 
+func TestSubmitTaskResult_PreservesTenDistinctEngineEncodeEventsOnSuccessAndFailure(t *testing.T) {
+	start := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	phases := make([]taskrunner.DetailedPhaseTiming, 0, 10)
+	for i := 0; i < 10; i++ {
+		phases = append(phases, taskrunner.DetailedPhaseTiming{
+			PhaseOrder:   i + 1,
+			Component:    "engine",
+			Action:       "encode",
+			Origin:       "engine",
+			Scope:        "segment",
+			EventType:    "completed",
+			EventName:    "engine.encode",
+			EventIndex:   int64(100 + i),
+			Phase:        "encode",
+			SegmentIndex: int32(i),
+			StartedAt:    start.Add(time.Duration(i) * time.Millisecond),
+			CompletedAt:  start.Add(time.Duration(i+1) * time.Millisecond),
+			DurationMS:   1,
+			Status:       "ok",
+			FramesIn:     int64(90 + i),
+			FramesOut:    int64(90 + i),
+		})
+	}
+
+	for _, tc := range []struct {
+		name   string
+		status string
+		err    error
+	}{
+		{name: "succeeded", status: "succeeded"},
+		{name: "failed", status: "failed", err: errors.New("encoder crashed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			transport := &recordingTransport{}
+			w := &Worker{
+				config:    &config.WorkerConfig{WorkerID: "worker-encode-events", ProtocolVersion: "v3"},
+				logger:    logger.New(logger.InfoLevel, io.Discard),
+				transport: transport,
+			}
+			report := &taskrunner.TaskExecutionReport{
+				Status:         tc.status,
+				ExecutorKey:    "scene.composite.v1@1",
+				DetailedPhases: phases,
+			}
+			pte := &PendingTaskExecution{
+				JobID: "job-encode-events", ExecutorID: "scene.composite.v1", LeaseID: "lease-encode-events",
+			}
+
+			w.submitTaskResult(context.Background(), pte, "task-encode-events", "attempt-encode-events", report, tc.err)
+
+			message, ok := transport.last()
+			if !ok {
+				t.Fatal("expected a TaskResult message")
+			}
+			result, ok := message.TypedPayload.(*pb.TaskResult)
+			if !ok || result == nil {
+				t.Fatalf("typed task result = %#v", message.TypedPayload)
+			}
+			if result.Status != tc.status {
+				t.Fatalf("status = %q, want %q", result.Status, tc.status)
+			}
+			if len(result.PhaseTimings) != 10 {
+				t.Fatalf("phase timings = %d, want 10 distinct engine.encode events", len(result.PhaseTimings))
+			}
+			for i, phase := range result.PhaseTimings {
+				if phase.Component != "engine" || phase.Action != "encode" || phase.Scope != "segment" {
+					t.Errorf("phase[%d] identity = %q.%q scope=%q", i, phase.Component, phase.Action, phase.Scope)
+				}
+				if phase.EventIndex != int64(100+i) || phase.SegmentIndex != int32(i) {
+					t.Errorf("phase[%d] event/segment = %d/%d, want %d/%d", i, phase.EventIndex, phase.SegmentIndex, 100+i, i)
+				}
+				if phase.LeaseId != pte.LeaseID {
+					t.Errorf("phase[%d] lease_id = %q, want %q", i, phase.LeaseId, pte.LeaseID)
+				}
+			}
+		})
+	}
+}
+
 // TestSubmitTaskResult_FailedRenderPreservesDetailedPhases verifies that
 // submitTaskResult does not discard the worker report when execution fails.
 // Failed renders must still deliver every phase completed before the error,

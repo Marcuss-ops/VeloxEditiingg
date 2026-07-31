@@ -116,14 +116,10 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 		// (field 19); legacy masters ignore it, block-1 masters ingest it
 		// into task_execution_events. Lease identity is stamped here (the
 		// runner does not know it); the master overrides all identity
-		// fields at ingest.
-		for _, phase := range report.DetailedPhases {
-			p := phase.ToProto()
-			if p.LeaseId == "" && pte.LeaseID != "" {
-				p.LeaseId = pte.LeaseID
-			}
-			tr.PhaseTimings = append(tr.PhaseTimings, p)
-		}
+		// fields at ingest. Keep this conversion independent of report
+		// status: failed attempts carry the same complete prefix/event
+		// stream as successful attempts.
+		tr.PhaseTimings = appendDetailedPhaseTimings(tr.PhaseTimings, report.DetailedPhases, pte.LeaseID)
 
 		// Build per-segment C++ sidecar timings.
 		for _, seg := range report.Segments {
@@ -204,4 +200,20 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 		}
 		w.logger.Info("[TASK] TaskResult submitted for %s (status: %s, artifacts: %d)", taskID, status, artifactCount)
 	}
+}
+
+// appendDetailedPhaseTimings converts every worker-reported detailed phase
+// without filtering or coalescing. Repeated events such as ten distinct
+// engine.encode segment operations must remain ten distinct wire entries.
+// The helper is deliberately status-agnostic so successful and failed
+// TaskResults use exactly the same cardinality and ordering contract.
+func appendDetailedPhaseTimings(dst []*pb.PhaseTimingDetailed, phases []taskrunner.DetailedPhaseTiming, leaseID string) []*pb.PhaseTimingDetailed {
+	for _, phase := range phases {
+		p := phase.ToProto()
+		if p.LeaseId == "" && leaseID != "" {
+			p.LeaseId = leaseID
+		}
+		dst = append(dst, p)
+	}
+	return dst
 }
