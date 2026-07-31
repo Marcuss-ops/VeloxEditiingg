@@ -35,20 +35,22 @@ func (s AttemptStatus) IsTerminal() bool {
 // Uniqueness: (task_id, attempt_number) is unique.
 // At most one active (non-terminal) attempt exists per task at any time.
 type TaskAttempt struct {
-	ID            string        `json:"id"`
-	TaskID        string        `json:"task_id"`
-	JobID         string        `json:"job_id"`
-	AttemptNumber int           `json:"attempt_number"`
-	WorkerID      string        `json:"worker_id"`
-	LeaseID       string        `json:"lease_id"`
-	Status        AttemptStatus `json:"status"`
-	StartedAt     *time.Time    `json:"started_at,omitempty"`
-	CompletedAt   *time.Time    `json:"completed_at,omitempty"`
-	ErrorCode     string        `json:"error_code,omitempty"`
-	ErrorMessage  string        `json:"error_message,omitempty"`
-	ReportVersion int           `json:"report_version"`
-	CreatedAt     time.Time     `json:"created_at"`
-	UpdatedAt     time.Time     `json:"updated_at"`
+	ID               string        `json:"id"`
+	TaskID           string        `json:"task_id"`
+	JobID            string        `json:"job_id"`
+	AttemptNumber    int           `json:"attempt_number"`
+	WorkerID         string        `json:"worker_id"`
+	WorkerSessionID  string        `json:"worker_session_id,omitempty"`
+	WorkerSnapshotID string        `json:"worker_snapshot_id,omitempty"`
+	LeaseID          string        `json:"lease_id"`
+	Status           AttemptStatus `json:"status"`
+	StartedAt        *time.Time    `json:"started_at,omitempty"`
+	CompletedAt      *time.Time    `json:"completed_at,omitempty"`
+	ErrorCode        string        `json:"error_code,omitempty"`
+	ErrorMessage     string        `json:"error_message,omitempty"`
+	ReportVersion    int           `json:"report_version"`
+	CreatedAt        time.Time     `json:"created_at"`
+	UpdatedAt        time.Time     `json:"updated_at"`
 	// Scorecard v2 / Step 8: software versioning for regression tracing.
 	GitSHA            string `json:"git_sha,omitempty"`
 	WorkerVersion     string `json:"worker_version,omitempty"`

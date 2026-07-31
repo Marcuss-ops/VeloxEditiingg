@@ -6,6 +6,7 @@ package grpcserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -71,8 +72,66 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		return fmt.Errorf("stream: credential validation failed: %w", err)
 	}
 
+	// Reject unsupported protocol versions before creating any durable
+	// runtime identity row. A refused Hello must leave no snapshot behind.
+	if !controltransport.IsSupportedProtocol(env.ProtocolVersion) {
+		log.Printf("[GRPC] worker %s protocol version %q rejected — supported: %v",
+			declaredWorkerID, env.ProtocolVersion, controltransport.SupportedProtocolVersions)
+		return status.Errorf(codes.FailedPrecondition,
+			"worker %s protocol_version %q is not supported (supported: %v)",
+			declaredWorkerID, env.ProtocolVersion, controltransport.SupportedProtocolVersions)
+	}
+
 	workerID := declaredWorkerID
 	sessionID := fmt.Sprintf("grpc-%s-%d", workerID, time.Now().UnixNano())
+
+	// The Hello is the authoritative admission point for runtime identity.
+	// Mint/reuse the immutable snapshot before registering the in-memory
+	// session, so every claim created by this session has a canonical
+	// snapshot ID available for its atomic TaskAttempt insert.
+	workerSnapshotID := ""
+	if h.dbStore != nil {
+		caps := map[string]interface{}{}
+		if hello.GetCapabilities() != nil {
+			caps = hello.GetCapabilities().AsMap()
+		}
+		capabilitiesJSON, marshalErr := json.Marshal(caps)
+		if marshalErr != nil {
+			return fmt.Errorf("stream: encode worker runtime capabilities: %w", marshalErr)
+		}
+		snapshot, snapshotErr := h.dbStore.GetOrCreateWorkerRuntimeSnapshot(store.WorkerRuntimeSnapshot{
+			WorkerID:          workerID,
+			SessionID:         sessionID,
+			Hostname:          hello.GetHostname(),
+			WorkerName:        hello.GetWorkerName(),
+			WorkerClass:       hello.GetWorkerClass(),
+			RolloutGroup:      hello.GetRolloutGroup(),
+			WorkerVersion:     hello.GetVersion(),
+			BundleVersion:     hello.GetBundleVersion(),
+			BundleHash:        hello.GetBundleHash(),
+			EngineVersion:     hello.GetEngineVersion(),
+			ProtocolVersion:   env.ProtocolVersion,
+			CapabilitiesJSON:  string(capabilitiesJSON),
+			LogicalCPUCount:   snapshotInt(caps, "logical_cpu_count", snapshotHostInt(caps, "cpu_count")),
+			EffectiveCPUCount: snapshotInt(caps, "effective_cpu_count", snapshotHostInt(caps, "cpu_count")),
+			TotalMemoryBytes:  snapshotInt64(caps, "total_memory_bytes", snapshotHostInt64(caps, "ram_bytes")),
+			CPUQuota:          snapshotFloat(caps, "cpu_quota", 0),
+			GPUModel:          snapshotString(caps, "gpu_model", ""),
+			CPUModel:          snapshotString(caps, "cpu_model", ""),
+			StorageClass:      snapshotString(caps, "storage_class", ""),
+			ConfigHash:        snapshotString(caps, "config_hash", ""),
+			DockerImageDigest: snapshotString(caps, "docker_image_digest", ""),
+			FFmpegVersion:     snapshotString(caps, "ffmpeg_version", ""),
+			GitSHA:            snapshotString(caps, "git_sha", ""),
+		})
+		if snapshotErr != nil {
+			return fmt.Errorf("stream: create worker runtime snapshot: %w", snapshotErr)
+		}
+		if snapshot == nil || snapshot.SnapshotID == "" {
+			return fmt.Errorf("stream: create worker runtime snapshot: empty snapshot")
+		}
+		workerSnapshotID = snapshot.SnapshotID
+	}
 
 	// Issue 6 fix: create a cancellable context for the session.
 	// Scorecard v2 / Step 15c: derive from stream.Context() so the
@@ -87,14 +146,15 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	h.closeOldSessionLocked(workerID)
 
 	sess := &workerSession{
-		workerID:  workerID,
-		sessionID: sessionID,
-		stream:    stream,
-		done:      make(chan struct{}),
-		cancel:    sessionCancel,
-		ctx:       sessionCtx,
-		sendCh:    sendCh,
-		writerErr: make(chan error, 1),
+		workerID:         workerID,
+		sessionID:        sessionID,
+		workerSnapshotID: workerSnapshotID,
+		stream:           stream,
+		done:             make(chan struct{}),
+		cancel:           sessionCancel,
+		ctx:              sessionCtx,
+		sendCh:           sendCh,
+		writerErr:        make(chan error, 1),
 	}
 	h.sessions[sessionID] = sess
 	h.workerSessions[workerID] = sessionID
@@ -237,17 +297,6 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		})
 		log.Printf("[GRPC] Worker %s disconnected (session: %s)", workerID, sessionID)
 	}()
-
-	// Protocol-version handshake validation — STRICT mode.
-	// Only ProtocolVersionCurrent ("v3") is accepted. Empty strings and
-	// legacy versions return FailedPrecondition.
-	if !controltransport.IsSupportedProtocol(env.ProtocolVersion) {
-		log.Printf("[GRPC] worker %s protocol version %q rejected — supported: %v",
-			workerID, env.ProtocolVersion, controltransport.SupportedProtocolVersions)
-		return status.Errorf(codes.FailedPrecondition,
-			"worker %s protocol_version %q is not supported (supported: %v)",
-			workerID, env.ProtocolVersion, controltransport.SupportedProtocolVersions)
-	}
 
 	// Send typed HelloAck via sendCh (sessionWriter handles the actual Send).
 	ack := &pb.MasterToWorkerEnvelope{

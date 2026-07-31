@@ -147,13 +147,22 @@ func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, w
 		return nil, nil, nil
 	}
 
-	// 5. INSERT PENDING TaskAttempt in the same tx.
+	// 5. Resolve the canonical runtime identity for legacy callers that
+	// only provide worker_id. The placement path uses ClaimTaskForWorkerAtomic
+	// and supplies both IDs directly; this fallback keeps the older atomic
+	// method attributable whenever the production session/snapshot tables
+	// are available, while preserving minimal historical test fixtures.
+	workerSessionID, workerSnapshotID := resolveWorkerRuntimeIdentityTx(ctx, tx, workerID)
+
+	// INSERT PENDING TaskAttempt in the same tx.
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO task_attempts (
-			id, task_id, job_id, attempt_number, worker_id, lease_id,
+			id, task_id, job_id, attempt_number, worker_id,
+			worker_session_id, worker_snapshot_id, lease_id,
 			status, report_version, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)`,
-		attemptID, t.ID, t.JobID, attemptNumber, workerID, leaseID, nowStr, nowStr,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)`,
+		attemptID, t.ID, t.JobID, attemptNumber, workerID,
+		workerSessionID, workerSnapshotID, leaseID, nowStr, nowStr,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("task claim-with-attempt insert: %w", err)
@@ -190,15 +199,17 @@ func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, w
 	}
 
 	att := &taskattempts.TaskAttempt{
-		ID:            attemptID,
-		TaskID:        t.ID,
-		JobID:         t.JobID,
-		AttemptNumber: attemptNumber,
-		WorkerID:      workerID,
-		LeaseID:       leaseID,
-		Status:        taskattempts.AttemptStatusPending,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ID:               attemptID,
+		TaskID:           t.ID,
+		JobID:            t.JobID,
+		AttemptNumber:    attemptNumber,
+		WorkerID:         workerID,
+		WorkerSessionID:  workerSessionID,
+		WorkerSnapshotID: workerSnapshotID,
+		LeaseID:          leaseID,
+		Status:           taskattempts.AttemptStatusPending,
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 	return tws, att, nil
 }

@@ -505,10 +505,9 @@ func (r *SQLiteTaskRepository) ReleaseLease(ctx context.Context, taskID, workerI
 //  6. Read task_spec payload.
 //  7. Commit.
 //
-// SessionID and CapabilityRevision are carried through for fencing
-// (the caller checks them before and after the claim); they are NOT
-// persisted yet but must travel in the command so the eventual
-// transactional fencing doesn't require a signature change.
+// SessionID and WorkerSnapshotID are persisted with the canonical attempt
+// in the same transaction. CapabilityRevision remains an in-memory fencing
+// value checked by the caller before and after the claim.
 func (r *SQLiteTaskRepository) ClaimTaskForWorkerAtomic(
 	ctx context.Context,
 	cmd taskgraph.ClaimTaskForWorkerCommand,
@@ -598,10 +597,12 @@ func (r *SQLiteTaskRepository) ClaimTaskForWorkerAtomic(
 	// 5. INSERT PENDING TaskAttempt in the same tx.
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO task_attempts (
-			id, task_id, job_id, attempt_number, worker_id, lease_id,
+			id, task_id, job_id, attempt_number, worker_id,
+			worker_session_id, worker_snapshot_id, lease_id,
 			status, report_version, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)`,
-		attemptID, t.ID, t.JobID, attemptNumber, cmd.WorkerID, cmd.LeaseID, nowStr, nowStr,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)`,
+		attemptID, t.ID, t.JobID, attemptNumber, cmd.WorkerID,
+		cmd.SessionID, cmd.WorkerSnapshotID, cmd.LeaseID, nowStr, nowStr,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("task claim-for-worker insert: %w", err)
@@ -638,15 +639,17 @@ func (r *SQLiteTaskRepository) ClaimTaskForWorkerAtomic(
 	}
 
 	att := &taskattempts.TaskAttempt{
-		ID:            attemptID,
-		TaskID:        t.ID,
-		JobID:         t.JobID,
-		AttemptNumber: attemptNumber,
-		WorkerID:      cmd.WorkerID,
-		LeaseID:       cmd.LeaseID,
-		Status:        taskattempts.AttemptStatusPending,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ID:               attemptID,
+		TaskID:           t.ID,
+		JobID:            t.JobID,
+		AttemptNumber:    attemptNumber,
+		WorkerID:         cmd.WorkerID,
+		WorkerSessionID:  cmd.SessionID,
+		WorkerSnapshotID: cmd.WorkerSnapshotID,
+		LeaseID:          cmd.LeaseID,
+		Status:           taskattempts.AttemptStatusPending,
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 	return tws, att, nil
 }

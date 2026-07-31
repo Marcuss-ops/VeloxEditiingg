@@ -248,6 +248,7 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 		ExpectedTaskRevision: candidate.Revision,
 		WorkerID:             workerID,
 		SessionID:            snapshot.SessionID,
+		WorkerSnapshotID:     sess.workerSnapshotID,
 		LeaseID:              leaseID,
 		ExecutorID:           candidate.Executor.ID,
 		ExecutorVersion:      candidate.Executor.Version,

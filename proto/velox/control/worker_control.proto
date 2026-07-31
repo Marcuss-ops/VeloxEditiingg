@@ -91,6 +91,8 @@ message Hello {
   // — see the design note in that file for the proto-vs-impl
   // divergence rationale.
   google.protobuf.Struct capabilities = 8;
+  string worker_class = 9;
+  string rollout_group = 10;
 }
 
 // Heartbeat carries typed resource counters plus the typed FFmpeg

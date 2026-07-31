@@ -291,6 +291,8 @@ func TestClaimTaskForWorkerAtomic_HappyPath(t *testing.T) {
 		executorVersion = 4
 		taskRevision    = 0
 		workerID        = "w-claim-1"
+		sessionID       = "sess-1"
+		snapshotID      = "snapshot-1"
 		leaseID         = "L-claim-1"
 	)
 	seedReadyTaskWithExecutor(t, s.db, taskID, executorID, executorVersion, taskRevision)
@@ -299,7 +301,8 @@ func TestClaimTaskForWorkerAtomic_HappyPath(t *testing.T) {
 		TaskID:               taskID,
 		ExpectedTaskRevision: taskRevision,
 		WorkerID:             workerID,
-		SessionID:            "sess-1",
+		SessionID:            sessionID,
+		WorkerSnapshotID:     snapshotID,
 		LeaseID:              leaseID,
 		ExecutorID:           executorID,
 		ExecutorVersion:      executorVersion,
@@ -335,7 +338,7 @@ func TestClaimTaskForWorkerAtomic_HappyPath(t *testing.T) {
 		t.Errorf("tasks.revision = %d; want %d", revision, taskRevision+1)
 	}
 
-	// Verify PENDING attempt exists.
+	// Verify PENDING attempt exists and carries the canonical Hello identity.
 	attFromDB := attemptForTask(t, s.db, taskID, workerID, leaseID)
 	if attFromDB == nil {
 		t.Fatal("PENDING attempt missing after claim")
@@ -345,6 +348,20 @@ func TestClaimTaskForWorkerAtomic_HappyPath(t *testing.T) {
 	}
 	if attFromDB.AttemptNumber != 1 {
 		t.Errorf("attempt.attempt_number = %d; want 1", attFromDB.AttemptNumber)
+	}
+	var storedSessionID, storedSnapshotID string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT worker_session_id, worker_snapshot_id FROM task_attempts WHERE id = ?`, attFromDB.ID,
+	).Scan(&storedSessionID, &storedSnapshotID); err != nil {
+		t.Fatalf("read attempt runtime identity: %v", err)
+	}
+	if storedSessionID != sessionID || storedSnapshotID != snapshotID {
+		t.Errorf("attempt runtime identity = (%q, %q); want (%q, %q)",
+			storedSessionID, storedSnapshotID, sessionID, snapshotID)
+	}
+	if att.WorkerSessionID != sessionID || att.WorkerSnapshotID != snapshotID {
+		t.Errorf("returned attempt runtime identity = (%q, %q); want (%q, %q)",
+			att.WorkerSessionID, att.WorkerSnapshotID, sessionID, snapshotID)
 	}
 
 	// Verify returned TaskWithSpec carries the spec payload.

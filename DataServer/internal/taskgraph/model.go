@@ -67,8 +67,9 @@ type ClaimTaskForWorkerCommand struct {
 	TaskID               string
 	ExpectedTaskRevision int
 
-	WorkerID  string
-	SessionID string
+	WorkerID         string
+	SessionID        string
+	WorkerSnapshotID string
 
 	LeaseID string
 

@@ -79,6 +79,8 @@ CREATE TABLE task_attempts (
 	job_id             TEXT,
 	attempt_number     INTEGER NOT NULL,
 	worker_id          TEXT,
+	worker_session_id  TEXT,
+	worker_snapshot_id TEXT,
 	lease_id           TEXT,
 	status             TEXT,
 	started_at         TEXT,

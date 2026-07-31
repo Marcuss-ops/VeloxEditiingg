@@ -358,6 +358,8 @@ func (t *GRPCStreamTransport) helloToEnvelope(hello controltransport.WorkerHello
 				EngineVersion:  hello.EngineVersion,
 				CredentialHash: hello.CredentialHash,
 				Capabilities:   caps,
+				WorkerClass:    hello.WorkerClass,
+				RolloutGroup:   hello.RolloutGroup,
 			},
 		},
 	}

@@ -30,12 +30,13 @@ type outboundMessage struct {
 
 // workerSession tracks a single worker's gRPC stream connection.
 type workerSession struct {
-	workerID  string
-	sessionID string
-	stream    grpc.BidiStreamingServer[pb.WorkerToMasterEnvelope, pb.MasterToWorkerEnvelope]
-	done      chan struct{}
-	doneOnce  sync.Once          // P0 #6: prevents double-close on session teardown/reconnect
-	cancel    context.CancelFunc // cancels the session context to terminate old goroutines
+	workerID         string
+	sessionID        string
+	workerSnapshotID string
+	stream           grpc.BidiStreamingServer[pb.WorkerToMasterEnvelope, pb.MasterToWorkerEnvelope]
+	done             chan struct{}
+	doneOnce         sync.Once          // P0 #6: prevents double-close on session teardown/reconnect
+	cancel           context.CancelFunc // cancels the session context to terminate old goroutines
 
 	// gRPC request context (carries trace context via otelgrpc).
 	// Scorecard v2 / Step 15c: handlers use this instead of context.Background()

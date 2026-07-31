@@ -357,6 +357,8 @@ type Hello struct {
 	// — see the design note in that file for the proto-vs-impl
 	// divergence rationale.
 	Capabilities  *structpb.Struct `protobuf:"bytes,8,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
+	WorkerClass   string           `protobuf:"bytes,9,opt,name=worker_class,json=workerClass,proto3" json:"worker_class,omitempty"`
+	RolloutGroup  string           `protobuf:"bytes,10,opt,name=rollout_group,json=rolloutGroup,proto3" json:"rollout_group,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -445,6 +447,20 @@ func (x *Hello) GetCapabilities() *structpb.Struct {
 		return x.Capabilities
 	}
 	return nil
+}
+
+func (x *Hello) GetWorkerClass() string {
+	if x != nil {
+		return x.WorkerClass
+	}
+	return ""
+}
+
+func (x *Hello) GetRolloutGroup() string {
+	if x != nil {
+		return x.RolloutGroup
+	}
+	return ""
 }
 
 // Heartbeat carries typed resource counters plus the typed FFmpeg
@@ -4138,7 +4154,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\agoodbye\x18\x13 \x01(\v2\x16.velox.control.GoodbyeH\x00R\agoodbye\x12U\n" +
 	"\x14task_output_declared\x18  \x01(\v2!.velox.control.TaskOutputDeclaredH\x00R\x12taskOutputDeclared\x12d\n" +
 	"\x19artifact_upload_completed\x18! \x01(\v2&.velox.control.ArtifactUploadCompletedH\x00R\x17artifactUploadCompletedB\x05\n" +
-	"\x03msgJ\x04\b\f\x10\rJ\x04\b\r\x10\x0eJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10J\x04\b\x11\x10\x12J\x04\b\"\x10#\"\xb3\x02\n" +
+	"\x03msgJ\x04\b\f\x10\rJ\x04\b\r\x10\x0eJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10J\x04\b\x11\x10\x12J\x04\b\"\x10#\"\xfb\x02\n" +
 	"\x05Hello\x12\x1f\n" +
 	"\vworker_name\x18\x01 \x01(\tR\n" +
 	"workerName\x12\x1a\n" +
@@ -4149,7 +4165,10 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"bundleHash\x12%\n" +
 	"\x0eengine_version\x18\x06 \x01(\tR\rengineVersion\x12'\n" +
 	"\x0fcredential_hash\x18\a \x01(\tR\x0ecredentialHash\x12;\n" +
-	"\fcapabilities\x18\b \x01(\v2\x17.google.protobuf.StructR\fcapabilities\"\xaf\x04\n" +
+	"\fcapabilities\x18\b \x01(\v2\x17.google.protobuf.StructR\fcapabilities\x12!\n" +
+	"\fworker_class\x18\t \x01(\tR\vworkerClass\x12#\n" +
+	"\rrollout_group\x18\n" +
+	" \x01(\tR\frolloutGroup\"\xaf\x04\n" +
 	"\tHeartbeat\x12\x1f\n" +
 	"\vworker_name\x18\x01 \x01(\tR\n" +
 	"workerName\x12#\n" +
