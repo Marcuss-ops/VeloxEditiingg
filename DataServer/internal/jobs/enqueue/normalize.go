@@ -493,12 +493,20 @@ func attachLegacySceneClipTimeline(out map[string]interface{}) {
 	voiceovers := normalizeVoiceoverList(out)
 	items := make([]map[string]interface{}, 0, len(scenes))
 	clips := make([]string, 0, len(scenes))
-	audioTracks := normalizeAudioTracks(out["audio_tracks"])
-	seenAudioTracks := make(map[string]struct{}, len(audioTracks))
-	for _, track := range audioTracks {
-		if key := audioTrackKey(track); key != "" {
-			seenAudioTracks[key] = struct{}{}
+	rawAudioTracks := normalizeAudioTracks(out["audio_tracks"])
+	audioTracks := make([]map[string]interface{}, 0, len(rawAudioTracks)+len(scenes))
+	seenAudioTracks := make(map[string]struct{}, len(rawAudioTracks)+len(scenes))
+	for _, track := range rawAudioTracks {
+		key := audioTrackKey(track)
+		if key == "" {
+			audioTracks = append(audioTracks, track)
+			continue
 		}
+		if _, exists := seenAudioTracks[key]; exists {
+			continue
+		}
+		audioTracks = append(audioTracks, track)
+		seenAudioTracks[key] = struct{}{}
 	}
 	subtitleTracks := normalizeSubtitleTracks(out["subtitle_tracks"])
 	offsetSeconds := 0.0

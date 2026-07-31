@@ -309,6 +309,80 @@ func TestNormalizeSceneVideoPayload_PreservesBackgroundMusicAndMergesTwoVoiceove
 	assertTrack("velox-asset://voiceover-scene-1", "voiceover", 1, 6, 6)
 }
 
+func TestNormalizeSceneVideoPayload_DeduplicatesCombinedAudioTracks(t *testing.T) {
+	t.Parallel()
+
+	normalized, err := normalizeSceneVideoPayload(map[string]interface{}{
+		"video_name":  "Deduplicated audio timeline smoke",
+		"script_text": "Duplicate and offset audio tracks.",
+		"voiceover_paths": []interface{}{
+			"velox-asset://voiceover-scene-0",
+		},
+		"scenes": []interface{}{
+
+			map[string]interface{}{
+				"clip_link":        "velox-asset://clip-scene-0",
+				"duration_seconds": float64(12),
+			},
+		},
+		"audio_tracks": []interface{}{
+			map[string]interface{}{
+				"source_url":        "velox-asset://background-music",
+				"role":              "background_music",
+				"volume":            float64(0.12),
+				"start_time_offset": float64(0),
+				"duration_seconds":  float64(12),
+			},
+			map[string]interface{}{
+				"source_url":        "velox-asset://background-music",
+				"role":              "background_music",
+				"volume":            float64(0.5),
+				"start_time_offset": float64(0),
+				"duration_seconds":  float64(12),
+			},
+			map[string]interface{}{
+				"source_url":        "velox-asset://background-music",
+				"role":              "background_music",
+				"volume":            float64(0.12),
+				"start_time_offset": float64(6),
+				"duration_seconds":  float64(6),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeSceneVideoPayload: %v", err)
+	}
+
+	tracks, ok := normalized["audio_tracks"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("audio_tracks = %#v, want []map[string]interface{}", normalized["audio_tracks"])
+	}
+	if len(tracks) != 3 {
+		t.Fatalf("audio_tracks len = %d, want 3 (duplicate removed, distinct offset and voiceover kept)", len(tracks))
+	}
+	if got := tracks[0]["role"]; got != "background_music" {
+		t.Errorf("first track role = %v, want background_music", got)
+	}
+	if got := asFloat(tracks[0]["volume"]); got != 0.12 {
+		t.Errorf("first duplicate volume = %v, want first occurrence volume 0.12", got)
+	}
+	if got := asFloat(tracks[0]["start_time_offset"]); got != 0 {
+		t.Errorf("first track offset = %v, want 0", got)
+	}
+	if got := asFloat(tracks[0]["duration_seconds"]); got != 12 {
+		t.Errorf("first track duration = %v, want 12", got)
+	}
+	if got := asFloat(tracks[1]["start_time_offset"]); got != 6 {
+		t.Errorf("second track offset = %v, want 6", got)
+	}
+	if got := tracks[2]["role"]; got != "voiceover" {
+		t.Errorf("third track role = %v, want voiceover", got)
+	}
+	if got := tracks[2]["source_url"]; got != "velox-asset://voiceover-scene-0" {
+		t.Errorf("third track source = %v, want voiceover asset", got)
+	}
+}
+
 func TestNormalizeSceneVideoPayload_UsesNestedVoiceoverDurationForClipTimeline(t *testing.T) {
 	t.Parallel()
 
