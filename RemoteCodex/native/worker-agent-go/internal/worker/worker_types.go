@@ -10,6 +10,8 @@ import (
 
 	"velox-shared/controltransport"
 	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/publisher"
+	"velox-worker-agent/internal/spool"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/worker/concurrency"
@@ -221,6 +223,13 @@ type Worker struct {
 	cache      *cache.PersistedLocalCache
 	blobs      *blob.BlobArtifacts
 	taskRunner *taskrunner.TaskRunner
+
+	// publisherRegistry resolves the transport named by the master's
+	// ArtifactUploadPlan. It is shared across attempts and is nil only
+	// in legacy/headless test workers that do not use the typed sidecar
+	// publication path.
+	publisherRegistry *publisher.Registry
+	outputSpool       *spool.Store
 
 	// onWorkerIDCollision (RW-PROD-005 §3 anti-collision invariant) is
 	// the optional observer invoked when the master rejects the worker's

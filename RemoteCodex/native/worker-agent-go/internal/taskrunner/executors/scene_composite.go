@@ -6,16 +6,15 @@ package executors
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/pkg/video/pipeline"
 )
 
@@ -80,7 +79,7 @@ func (s *SceneComposite) Descriptor() executor.Descriptor {
 		ID:            SceneCompositeID,
 		Version:       SceneCompositeVersion,
 		InputTypes:    []string{"render.input", "audio.input"},
-		OutputTypes:   []string{"render.output"},
+		OutputTypes:   []string{"render.output", "engine.progress.sidecar"},
 		ResourceClass: executor.ResourceCPU,
 		Deterministic: true,
 		Cacheable:     true,
@@ -188,25 +187,41 @@ func (s *SceneComposite) Execute(ctx context.Context, _ executor.ExecutionContex
 	for k, v := range runMetrics.RenderMetrics.PhaseMS {
 		metrics["engine."+k] = v
 	}
-
 	// Compute output file hash and size for artifact metadata.
-	// Hash is mandatory per fix/artifact-metadata — dispatchTaskRunner
-	// rejects succeeded tasks with empty-hash outputs.
-	// Uses streaming hash (io.Copy) to avoid loading large video files
-	// into memory. Time is recorded so operators can distinguish
-	// slow-disk from slow-encode.
+	// A successful renderer invocation is not sufficient: both the
+	// primary output and its progress receipt must exist and have a
+	// real manifest before this executor can report success. This is
+	// the fail-closed boundary that prevents a mock/partial renderer
+	// from producing a misleading succeeded task.
 	var outputHash string
 	var outputSize int64
 	hashStart := time.Now()
-	if f, err := os.Open(outputPath); err == nil {
-		defer f.Close()
-		h := sha256.New()
-		if n, copyErr := io.Copy(h, f); copyErr == nil {
-			outputHash = fmt.Sprintf("%x", h.Sum(nil))
-			outputSize = n
-		}
-	}
+	outputManifest, manifestErr := publisher.ComputeLocalManifest(ctx, outputPath)
 	metrics["output.hash_ms"] = time.Since(hashStart).Milliseconds()
+	if manifestErr != nil {
+		metrics["output.manifest_error"] = manifestErr.Error()
+		return executor.ExecutionResult{
+			Status:      "failed",
+			ErrorCode:   "output_manifest_missing",
+			ErrorDetail: fmt.Sprintf("render output manifest: %v", manifestErr),
+			Metrics:     metrics,
+			StartedAt:   startedAt,
+			CompletedAt: time.Now().UTC(),
+		}, nil
+	}
+	outputHash = outputManifest.SHA256Hex
+	outputSize = outputManifest.SizeBytes
+	if outputSize <= 0 {
+		metrics["output.manifest_error"] = "render output is empty"
+		return executor.ExecutionResult{
+			Status:      "failed",
+			ErrorCode:   "output_manifest_empty",
+			ErrorDetail: "render output manifest has zero bytes",
+			Metrics:     metrics,
+			StartedAt:   startedAt,
+			CompletedAt: time.Now().UTC(),
+		}, nil
+	}
 	metrics["output.bytes"] = outputSize
 	metrics["executor.total_ms"] = time.Since(startedAt).Milliseconds()
 
@@ -241,9 +256,42 @@ func (s *SceneComposite) Execute(ctx context.Context, _ executor.ExecutionContex
 		})
 	}
 
+	outputs := []executor.ArtifactRef{{Type: "render.output", Hash: outputHash, URI: outputPath, SizeBytes: outputSize}}
+	sidecarPath := outputPath + ".progress.json"
+	if sidecarManifest, sidecarErr := publisher.ComputeLocalManifest(ctx, sidecarPath); sidecarErr == nil && sidecarManifest.SizeBytes > 0 {
+		// The renderer owns this file as a durable receipt. Do not remove it
+		// here: the worker must keep it available through declaration,
+		// upload, and the master's commit acknowledgement.
+		outputs = append(outputs, executor.ArtifactRef{
+			Type:      "engine.progress.sidecar",
+			Hash:      sidecarManifest.SHA256Hex,
+			URI:       sidecarPath,
+			SizeBytes: sidecarManifest.SizeBytes,
+		})
+		metrics["sidecar.present"] = true
+		metrics["sidecar.bytes"] = sidecarManifest.SizeBytes
+	} else {
+		// The sidecar is the renderer's progress receipt and is part of
+		// the artifact contract. Do not silently report success without
+		// it: the worker cannot register a complete operation receipt.
+		metrics["sidecar.present"] = false
+		if sidecarErr == nil {
+			sidecarErr = errors.New("render progress sidecar is empty")
+		}
+		metrics["sidecar.error"] = sidecarErr.Error()
+		return executor.ExecutionResult{
+			Status:      "failed",
+			ErrorCode:   "progress_sidecar_missing",
+			ErrorDetail: fmt.Sprintf("render progress sidecar manifest: %v", sidecarErr),
+			Metrics:     metrics,
+			StartedAt:   startedAt,
+			CompletedAt: time.Now().UTC(),
+		}, nil
+	}
+
 	return executor.ExecutionResult{
 		Status:      "succeeded",
-		Outputs:     []executor.ArtifactRef{{Type: "render.output", Hash: outputHash, URI: outputPath, SizeBytes: outputSize}},
+		Outputs:     outputs,
 		Metrics:     metrics,
 		Segments:    segments,
 		StartedAt:   startedAt,

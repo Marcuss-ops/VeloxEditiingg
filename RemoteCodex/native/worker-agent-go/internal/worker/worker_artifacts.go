@@ -59,7 +59,13 @@ func (w *Worker) registerPendingArtifactAck(taskID string) chan controltransport
 func (w *Worker) waitForArtifactAck(ctx context.Context, taskID string, deadline time.Time) (controltransport.ControlMessage, error) {
 	ch := w.registerPendingArtifactAck(taskID)
 	defer w.unregisterPendingArtifactAck(taskID)
+	return w.waitForRegisteredArtifactAck(ctx, ch, deadline)
+}
 
+// waitForRegisteredArtifactAck waits on a dispatcher channel that the caller
+// registered before sending the request. That ordering is required because a
+// fast master may reply immediately after TaskOutputDeclared is sent.
+func (w *Worker) waitForRegisteredArtifactAck(ctx context.Context, ch <-chan controltransport.ControlMessage, deadline time.Time) (controltransport.ControlMessage, error) {
 	timeout := time.NewTimer(time.Until(deadline))
 	defer timeout.Stop()
 

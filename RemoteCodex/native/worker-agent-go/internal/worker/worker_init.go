@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
 	"velox-shared/controltransport"
 	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/publisher"
+	"velox-worker-agent/internal/spool"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/worker/concurrency"
@@ -233,6 +236,29 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		return nil, fmt.Errorf("transport factory: %w", err)
 	}
 
+	// Open the durable output spool before constructing the worker. Every
+	// typed artifact publication registers its local file here before the
+	// Master sees TaskOutputDeclared, so a worker restart can resume or
+	// audit an output instead of losing the progress receipt.
+	stateDir := cfg.StateDir
+	if stateDir == "" {
+		// Config loaded through LoadConfig receives the production
+		// /var/lib default. Keep direct unit-test construction safe by
+		// using a worker-scoped temp root when that defaulting step was
+		// intentionally skipped.
+		stateDir = filepath.Join(os.TempDir(), "velox-worker", cfg.WorkerID)
+	}
+	spoolDir := filepath.Join(stateDir, "executor_spool")
+	if err := os.MkdirAll(spoolDir, 0o750); err != nil {
+		_ = initialTransport.Close()
+		return nil, fmt.Errorf("create output spool directory: %w", err)
+	}
+	outputSpool, err := spool.Open(filepath.Join(spoolDir, "worker_output_spool.sqlite3"))
+	if err != nil {
+		_ = initialTransport.Close()
+		return nil, fmt.Errorf("open output spool: %w", err)
+	}
+
 	// Build the TaskRunner from registry + cache + blobs. The
 	// runner is shared by future executeTask routes and is also
 	// where cache + blob counters get surfaced as report.Metrics entries.
@@ -285,7 +311,9 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		// invoking. Production default (cmd/velox-worker-agent/main.go)
 		// logs the diagnostic to stderr + os.Exit(17).
 		onWorkerIDCollision: wo.onWorkerIDCollision,
-		taskRunner:         tr,
+		taskRunner:          tr,
+		publisherRegistry:   publisher.NewRegistry(),
+		outputSpool:         outputSpool,
 		// Resource sampler. Empty procRoot/sysRoot
 		// defaults to /proc + /sys. cfg.WorkDir may be empty on
 		// minimal test setups; the sampler tolerates that path

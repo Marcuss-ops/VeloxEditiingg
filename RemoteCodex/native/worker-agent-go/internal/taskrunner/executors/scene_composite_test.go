@@ -3,6 +3,7 @@ package executors
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -65,7 +66,19 @@ func (f *fakeRenderClient) Render(_ context.Context, p *plan.RenderPlan) error {
 func (f *fakeRenderClient) RenderWithMetrics(_ context.Context, p *plan.RenderPlan) (pipeline.RenderMetrics, error) {
 	f.called = true
 	f.lastPlan = p
-	return pipeline.RenderMetrics{}, f.renderErr
+	if f.renderErr != nil {
+		return pipeline.RenderMetrics{}, f.renderErr
+	}
+	if err := os.MkdirAll(filepath.Dir(p.OutputPath), 0o750); err != nil {
+		return pipeline.RenderMetrics{}, err
+	}
+	if err := os.WriteFile(p.OutputPath, []byte("fake-mp4-bytes"), 0o640); err != nil {
+		return pipeline.RenderMetrics{}, err
+	}
+	if err := os.WriteFile(p.OutputPath+".progress.json", []byte(`{"phase_ms":{"render":1},"frames":1}`), 0o640); err != nil {
+		return pipeline.RenderMetrics{}, err
+	}
+	return pipeline.RenderMetrics{}, nil
 }
 
 // newTestSceneComposite builds minimal pipeline + executor wiring.
@@ -165,15 +178,21 @@ func TestSceneComposite_Execute_Success(t *testing.T) {
 	if !rclient.called {
 		t.Errorf("RenderClient.Render was not invoked")
 	}
-	if len(res.Outputs) != 1 {
-		t.Fatalf("len(Outputs) = %d, want 1", len(res.Outputs))
+	if len(res.Outputs) != 2 {
+		t.Fatalf("len(Outputs) = %d, want 2 (video + progress sidecar)", len(res.Outputs))
 	}
 	wantURI := filepath.Join("/tmp/velox/scene-composite-test", "j-42.mp4")
 	if got, want := res.Outputs[0].URI, wantURI; got != want {
 		t.Errorf("Output URI = %q, want %q (local path, not payload output_path)", got, want)
 	}
-	if res.Outputs[0].Type != "render.output" {
-		t.Errorf("Output Type = %q, want render.output", res.Outputs[0].Type)
+	if res.Outputs[0].Type != "render.output" || res.Outputs[0].Hash == "" || res.Outputs[0].SizeBytes <= 0 {
+		t.Errorf("primary output = %#v, want render.output with real hash and size", res.Outputs[0])
+	}
+	if got, want := res.Outputs[1].URI, wantURI+".progress.json"; got != want {
+		t.Errorf("sidecar URI = %q, want %q", got, want)
+	}
+	if res.Outputs[1].Type != "engine.progress.sidecar" || res.Outputs[1].Hash == "" || res.Outputs[1].SizeBytes <= 0 {
+		t.Errorf("sidecar output = %#v, want engine.progress.sidecar with real hash and size", res.Outputs[1])
 	}
 }
 
