@@ -1,0 +1,34 @@
+package enqueue
+
+import (
+	"testing"
+
+	"velox-shared/contract"
+)
+
+func TestNormalizeSceneVideoPayload_EmitsCanonicalTimelineOnly(t *testing.T) {
+	normalized, err := normalizeSceneVideoPayload(map[string]interface{}{
+		"video_name":  "Canonical timeline",
+		"script_text": "Canonical timeline body.",
+		"voiceover_paths": []interface{}{
+			"velox-asset://voice-1",
+		},
+		"scenes": []interface{}{
+			map[string]interface{}{
+				"clip_link":        "velox-asset://clip-1",
+				"duration_seconds": 5.0,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeSceneVideoPayload: %v", err)
+	}
+	if got := normalized["payload_contract_version"]; got != contract.PayloadContractVersionCanonical {
+		t.Fatalf("payload_contract_version = %v, want %d", got, contract.PayloadContractVersionCanonical)
+	}
+	for _, legacyKey := range []string{"items", "clips", "video_mode"} {
+		if _, ok := normalized[legacyKey]; ok {
+			t.Fatalf("canonical normalization unexpectedly emitted legacy key %q: %#v", legacyKey, normalized[legacyKey])
+		}
+	}
+}

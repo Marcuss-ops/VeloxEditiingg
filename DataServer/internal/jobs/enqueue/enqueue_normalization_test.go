@@ -213,6 +213,10 @@ func TestNormalizeSceneVideoPayload_AttachesLegacyClipTimeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeSceneVideoPayload: %v", err)
 	}
+	normalized, err = ProjectLegacyWorkerPayload(normalized)
+	if err != nil {
+		t.Fatalf("ProjectLegacyWorkerPayload: %v", err)
+	}
 
 	items, ok := normalized["items"].([]map[string]interface{})
 	if !ok || len(items) != 1 {
@@ -268,6 +272,10 @@ func TestNormalizeSceneVideoPayload_PreservesBackgroundMusicAndMergesTwoVoiceove
 	})
 	if err != nil {
 		t.Fatalf("normalizeSceneVideoPayload: %v", err)
+	}
+	normalized, err = ProjectLegacyWorkerPayload(normalized)
+	if err != nil {
+		t.Fatalf("ProjectLegacyWorkerPayload: %v", err)
 	}
 
 	tracks, ok := normalized["audio_tracks"].([]map[string]interface{})
@@ -352,6 +360,10 @@ func TestNormalizeSceneVideoPayload_DeduplicatesCombinedAudioTracks(t *testing.T
 	if err != nil {
 		t.Fatalf("normalizeSceneVideoPayload: %v", err)
 	}
+	normalized, err = ProjectLegacyWorkerPayload(normalized)
+	if err != nil {
+		t.Fatalf("ProjectLegacyWorkerPayload: %v", err)
+	}
 
 	tracks, ok := normalized["audio_tracks"].([]map[string]interface{})
 	if !ok {
@@ -410,6 +422,10 @@ func TestNormalizeSceneVideoPayload_UsesNestedVoiceoverDurationForClipTimeline(t
 	})
 	if err != nil {
 		t.Fatalf("normalizeSceneVideoPayload: %v", err)
+	}
+	normalized, err = ProjectLegacyWorkerPayload(normalized)
+	if err != nil {
+		t.Fatalf("ProjectLegacyWorkerPayload: %v", err)
 	}
 
 	items, ok := normalized["items"].([]map[string]interface{})
@@ -473,6 +489,10 @@ func TestNormalizeSceneVideoPayload_PreservesVisualTimelineFields(t *testing.T) 
 	if err != nil {
 		t.Fatalf("normalizeSceneVideoPayload: %v", err)
 	}
+	normalized, err = ProjectLegacyWorkerPayload(normalized)
+	if err != nil {
+		t.Fatalf("ProjectLegacyWorkerPayload: %v", err)
+	}
 
 	if got, ok := normalized["subtitle_tracks"].([]map[string]interface{}); !ok || len(got) != 1 {
 		t.Fatalf("subtitle_tracks = %#v, want one preserved track", normalized["subtitle_tracks"])
@@ -507,6 +527,10 @@ func TestNormalizeSceneVideoPayload_DerivesSubtitleTrackFromSceneSubtitles(t *te
 	})
 	if err != nil {
 		t.Fatalf("normalizeSceneVideoPayload: %v", err)
+	}
+	normalized, err = ProjectLegacyWorkerPayload(normalized)
+	if err != nil {
+		t.Fatalf("ProjectLegacyWorkerPayload: %v", err)
 	}
 
 	tracks, ok := normalized["subtitle_tracks"].([]map[string]interface{})

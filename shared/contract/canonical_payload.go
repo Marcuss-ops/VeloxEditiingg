@@ -48,7 +48,7 @@ import (
 // emitted at the top level by canonical writers.
 var CanonicalTopLevelKeys = []string{
 	// Lifecycle / canonical identity
-	"contract_version",
+	"contract_version", "payload_contract_version",
 	"job_id", "job_run_id", "correlation_id",
 	"job_type", "version", "created_at", "updated_at",
 

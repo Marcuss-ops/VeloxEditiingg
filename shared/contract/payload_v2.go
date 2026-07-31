@@ -31,6 +31,15 @@ import (
 // no-version legacy rows) and may reject other versions.
 const ContractVersionV2 = 2
 
+// Payload contract versions identify the shape delivered to workers.
+// Version 1 is the compatibility projection; version 2 is the canonical
+// flat payload. The master persists only the canonical version and projects
+// version 1 just before offering a task to an old worker.
+const (
+	PayloadContractVersionLegacy    = 1
+	PayloadContractVersionCanonical = 2
+)
+
 // JobPayloadV2 is the single, canonical, top-level typed shape for any
 // process_video job payload going through the enqueue boundary.
 //
@@ -39,14 +48,15 @@ const ContractVersionV2 = 2
 // — so MarshalJSON produces diffable blobs across writers.
 type JobPayloadV2 struct {
 	// Lifecycle / canonical identity
-	ContractVersion int    `json:"contract_version"`
-	JobID           string `json:"job_id"`
-	JobRunID        string `json:"job_run_id"`
-	CorrelationID   string `json:"correlation_id"`
-	JobType         string `json:"job_type"`
-	Version         string `json:"version"`
-	CreatedAt       string `json:"created_at"`
-	UpdatedAt       string `json:"updated_at"`
+	ContractVersion        int    `json:"contract_version"`
+	PayloadContractVersion int    `json:"payload_contract_version"`
+	JobID                  string `json:"job_id"`
+	JobRunID               string `json:"job_run_id"`
+	CorrelationID          string `json:"correlation_id"`
+	JobType                string `json:"job_type"`
+	Version                string `json:"version"`
+	CreatedAt              string `json:"created_at"`
+	UpdatedAt              string `json:"updated_at"`
 
 	// Business fields
 	VideoName        string           `json:"video_name"`
@@ -109,30 +119,31 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	p := &JobPayloadV2{
-		ContractVersion: ContractVersionV2,
-		JobID:           payload.FirstString(raw, "job_id", "script_id"),
-		JobRunID:        payload.FirstString(raw, "job_run_id", "run_id"),
-		CorrelationID:   payload.FirstString(raw, "correlation_id"),
-		JobType:         "process_video",
-		Version:         "v2",
-		CreatedAt:       payload.EnsureRFC3339(payload.FirstString(raw, "created_at"), now),
-		UpdatedAt:       payload.EnsureRFC3339(payload.FirstString(raw, "updated_at"), now),
-		VideoName:       payload.FirstString(raw, "video_name", "title", "project_name"),
-		ScriptText:      payload.FirstString(raw, "script_text", "script", "source_text"),
-		ScenesJSON:      payload.FirstString(raw, "scenes_json"),
-		VoiceoverPaths:  append([]string{}, compatibility.ReadStringList(raw, compatibility.VoiceoverPathsKey)...),
-		AudioLanguage:   payload.FirstString(raw, "audio_language_for_srt", "audio_lang", "language"),
-		VideoMode:       payload.FirstString(raw, "video_mode"),
-		OutputPath:      payload.FirstString(raw, "output_path"),
-		DriveOutput:     payload.FirstString(raw, "drive_output_folder", "output_directory"),
-		ChannelID:       payload.FirstString(raw, "channel_id"),
-		SceneImagePaths: append([]string{}, payload.NormalizeStringList(raw, "scene_image_paths")...),
-		Priority:        payload.EnsureInt(raw["priority"], 1),
-		TimeoutSecs:     payload.EnsureInt(raw["timeout_secs"], 3600),
-		SubmittedVia:    payload.FirstString(raw, "submitted_via"),
-		Source:          payload.FirstString(raw, "source"),
-		Status:          "PENDING",
-		DeliveryPlan:    raw["delivery_plan"],
+		ContractVersion:        ContractVersionV2,
+		PayloadContractVersion: PayloadContractVersionCanonical,
+		JobID:                  payload.FirstString(raw, "job_id", "script_id"),
+		JobRunID:               payload.FirstString(raw, "job_run_id", "run_id"),
+		CorrelationID:          payload.FirstString(raw, "correlation_id"),
+		JobType:                "process_video",
+		Version:                "v2",
+		CreatedAt:              payload.EnsureRFC3339(payload.FirstString(raw, "created_at"), now),
+		UpdatedAt:              payload.EnsureRFC3339(payload.FirstString(raw, "updated_at"), now),
+		VideoName:              payload.FirstString(raw, "video_name", "title", "project_name"),
+		ScriptText:             payload.FirstString(raw, "script_text", "script", "source_text"),
+		ScenesJSON:             payload.FirstString(raw, "scenes_json"),
+		VoiceoverPaths:         append([]string{}, compatibility.ReadStringList(raw, compatibility.VoiceoverPathsKey)...),
+		AudioLanguage:          payload.FirstString(raw, "audio_language_for_srt", "audio_lang", "language"),
+		VideoMode:              payload.FirstString(raw, "video_mode"),
+		OutputPath:             payload.FirstString(raw, "output_path"),
+		DriveOutput:            payload.FirstString(raw, "drive_output_folder", "output_directory"),
+		ChannelID:              payload.FirstString(raw, "channel_id"),
+		SceneImagePaths:        append([]string{}, payload.NormalizeStringList(raw, "scene_image_paths")...),
+		Priority:               payload.EnsureInt(raw["priority"], 1),
+		TimeoutSecs:            payload.EnsureInt(raw["timeout_secs"], 3600),
+		SubmittedVia:           payload.FirstString(raw, "submitted_via"),
+		Source:                 payload.FirstString(raw, "source"),
+		Status:                 "PENDING",
+		DeliveryPlan:           raw["delivery_plan"],
 	}
 	if metadata, ok := raw["video_metadata"].(map[string]any); ok {
 		p.VideoMetadata = cloneObject(metadata)
@@ -215,18 +226,19 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 		return map[string]any{}, nil
 	}
 	out := map[string]any{
-		"contract_version": p.ContractVersion,
-		"job_id":           p.JobID,
-		"job_run_id":       p.JobRunID,
-		"correlation_id":   p.CorrelationID,
-		"job_type":         p.JobType,
-		"version":          p.Version,
-		"created_at":       p.CreatedAt,
-		"updated_at":       p.UpdatedAt,
-		"video_name":       p.VideoName,
-		"script_text":      p.ScriptText,
-		"priority":         p.Priority,
-		"timeout_secs":     p.TimeoutSecs,
+		"contract_version":         p.ContractVersion,
+		"payload_contract_version": p.PayloadContractVersion,
+		"job_id":                   p.JobID,
+		"job_run_id":               p.JobRunID,
+		"correlation_id":           p.CorrelationID,
+		"job_type":                 p.JobType,
+		"version":                  p.Version,
+		"created_at":               p.CreatedAt,
+		"updated_at":               p.UpdatedAt,
+		"video_name":               p.VideoName,
+		"script_text":              p.ScriptText,
+		"priority":                 p.Priority,
+		"timeout_secs":             p.TimeoutSecs,
 	}
 	if p.ScenesJSON != "" {
 		out["scenes_json"] = p.ScenesJSON

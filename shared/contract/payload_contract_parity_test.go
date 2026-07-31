@@ -42,8 +42,9 @@ func jobPayloadV2JSONTagKeys(t *testing.T) map[string]bool {
 func mustPayloadV2Map(t *testing.T) map[string]any {
 	t.Helper()
 	payload := &JobPayloadV2{
-		ContractVersion: 2,
-		JobID:           "job-1", JobRunID: "run-1", CorrelationID: "corr-1",
+		ContractVersion:        2,
+		PayloadContractVersion: 2,
+		JobID:                  "job-1", JobRunID: "run-1", CorrelationID: "corr-1",
 		JobType: "process_video", Version: "v2",
 		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
 		VideoName: "video", ScriptText: "script", RenderManifest: map[string]any{"schema": "manifest"},
@@ -133,7 +134,7 @@ func TestNewJobPayloadV2PreservesRenderTimelineArrays(t *testing.T) {
 
 func TestJobPayloadV2JSONAndToMapHaveTheSameKeys(t *testing.T) {
 	payload := &JobPayloadV2{
-		ContractVersion: 2, JobID: "job-1", JobRunID: "run-1", CorrelationID: "corr-1",
+		ContractVersion: 2, PayloadContractVersion: 2, JobID: "job-1", JobRunID: "run-1", CorrelationID: "corr-1",
 		JobType: "process_video", Version: "v2", CreatedAt: "now", UpdatedAt: "now",
 		VideoName: "video", ScriptText: "script", Priority: 1, TimeoutSecs: 1,
 		Items:          []map[string]any{{"role": "scene"}},

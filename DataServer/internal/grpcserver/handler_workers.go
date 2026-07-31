@@ -2,14 +2,17 @@ package grpcserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"time"
 
+	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/placement"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
+	"velox-shared/contract"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 
@@ -284,6 +287,43 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 	h.sendClaimedTaskOffer(ctx, sess, tws, attempt, leaseID)
 }
 
+// workerSupportsCanonicalPayload is the single compatibility predicate for
+// the executor capability negotiated during the worker Hello handshake. For
+// the scene.composite executor, ExecutorVersion is the advertised payload
+// contract capability (not an unrelated build version): versions below the
+// canonical payload version, including unknown zero, are legacy; version 2+
+// explicitly accepts the canonical payload contract.
+func workerSupportsCanonicalPayload(executorVersion int) bool {
+	return executorVersion >= contract.PayloadContractVersionCanonical
+}
+
+// projectPayloadForWorker selects the wire contract from the executor
+// capability negotiated during the worker Hello handshake. Legacy workers
+// receive a compatibility projection; canonical payloads are never mutated.
+func projectPayloadForWorker(canonical map[string]interface{}, executorVersion int) (map[string]interface{}, error) {
+	workerPayload := canonical
+	if !workerSupportsCanonicalPayload(executorVersion) {
+		var err error
+		workerPayload, err = enqueue.ProjectLegacyWorkerPayload(canonical)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// The protobuf Struct boundary accepts JSON-native arrays/maps. The
+	// enqueue adapter intentionally preserves Go collection types for its
+	// package-level compatibility tests, so normalize only this wire copy.
+	encoded, err := json.Marshal(workerPayload)
+	if err != nil {
+		return nil, fmt.Errorf("encode worker payload: %w", err)
+	}
+	var wirePayload map[string]interface{}
+	if err := json.Unmarshal(encoded, &wirePayload); err != nil {
+		return nil, fmt.Errorf("decode worker payload: %w", err)
+	}
+	return wirePayload, nil
+}
+
 // sendClaimedTaskOffer builds the protobuf TaskOffer envelope from a
 // successfully claimed task+attempt and sends it via the session's
 // sendCh. Extracted from sendPushTaskOffer to keep the placement
@@ -295,9 +335,26 @@ func (h *Handler) sendClaimedTaskOffer(
 	attempt *taskattempts.TaskAttempt,
 	leaseID string,
 ) {
+	workerPayload, projectionErr := projectPayloadForWorker(tws.SpecPayload, tws.ExecutorVersion)
+	if projectionErr != nil {
+		log.Printf("[PLACEMENT] Failed to project payload for worker %s task %s: %v", sess.workerID, tws.ID, projectionErr)
+		if releaseErr := h.taskRepo.ReleaseLease(ctx, tws.ID, sess.workerID, leaseID); releaseErr != nil {
+			log.Printf("[PLACEMENT] Failed to release claim for task %s after payload projection failure: %v", tws.ID, releaseErr)
+		}
+		return
+	}
+
 	var taskSpecPB *structpb.Struct
-	if tws.SpecPayload != nil {
-		taskSpecPB, _ = structpb.NewStruct(tws.SpecPayload)
+	if workerPayload != nil {
+		var err error
+		taskSpecPB, err = structpb.NewStruct(workerPayload)
+		if err != nil {
+			log.Printf("[PLACEMENT] Failed to encode TaskOffer payload for worker %s task %s: %v", sess.workerID, tws.ID, err)
+			if releaseErr := h.taskRepo.ReleaseLease(ctx, tws.ID, sess.workerID, leaseID); releaseErr != nil {
+				log.Printf("[PLACEMENT] Failed to release claim for task %s after TaskOffer payload encoding failure: %v", tws.ID, releaseErr)
+			}
+			return
+		}
 	}
 
 	leaseDeadline := time.Now().UTC().Add(30 * time.Minute)

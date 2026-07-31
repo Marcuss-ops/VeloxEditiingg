@@ -136,7 +136,6 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 	// behavior.
 	if !strictManifest {
 		copyTimelinePayloadFields(out, payloadMap)
-		attachLegacySceneClipTimeline(out)
 	}
 
 	// Strict V2 manifests are compiled master-side before the task is
@@ -160,18 +159,12 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 		return
 	}
 	for _, key := range []string{
-		"images",
-		"clips",
-		"items",
+		// Canonical timeline fields only. Legacy images/clips/items
+		// and clip-pool aliases are projected at the worker offer
+		// boundary, never persisted in the master payload.
 		"audio_tracks",
 		"subtitle_tracks",
 		"layers",
-		"clip_segments",
-		"intro_clip_paths",
-		"stock_clip_paths",
-		"fit",
-		"effect",
-		"orientation",
 		// Preserve legacy delivery keys through normalization so
 		// taskSpec.Payload still satisfies AtomicJobTaskCreator's parse-time
 		// delivery-plan requirement.
