@@ -191,6 +191,13 @@ type WorkersConfig struct {
 type RetentionConfig struct {
 	WorkerMetricsDays int
 	WorkerEventsDays  int
+
+	// WorkerResourceRawDays controls raw worker_resource_samples retention.
+	// Default 90 days; <= 0 disables pruning.
+	WorkerResourceRawDays int
+	// WorkerResourceRollupDays controls hourly rollup retention.
+	// Default 365 days; <= 0 disables pruning.
+	WorkerResourceRollupDays int
 }
 
 // PipelineConfig groups configuration that controls the production-pipeline

@@ -9,13 +9,69 @@ package grpcserver
 import (
 	"sync"
 	"testing"
+	"time"
 
 	velmetrics "velox-server/internal/metrics"
+	"velox-server/internal/store"
+	workersreg "velox-server/internal/workers"
 
 	pb "velox-shared/controltransport/pb"
 
+	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+func TestHandleHeartbeat_ResourcesPersistThroughRegistryToSQLite(t *testing.T) {
+	s, err := store.NewSQLiteStore(t.TempDir() + "/typed-resource-heartbeat.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.SetResourceRetention(0, 0)
+
+	registry := workersreg.New(s)
+	h := NewHandler(registry, nil, nil, nil, nil, nil, nil, &HandlerConfig{PushMode: true})
+	sampledAt := time.Date(2026, 7, 31, 15, 16, 17, 123456000, time.UTC)
+	h.handleHeartbeat("worker-e2e", "session-e2e", &pb.Heartbeat{
+		WorkerName:      "worker-e2e",
+		ActiveJobsCount: 2,
+		Resources: &pb.WorkerResourceCounters{CpuUtilizationRatio: 0.42,
+			ActiveTasks: 2,
+			SampledAt:   timestamppb.New(sampledAt),
+		},
+		Extra: func() *structpb.Struct {
+			extra, err := structpb.NewStruct(map[string]any{"ffmpeg_processes": 3})
+			if err != nil {
+				t.Fatalf("build heartbeat extra: %v", err)
+			}
+			return extra
+		}(),
+	})
+
+	var gotSampledAt string
+	var gotFFmpeg, gotActive int64
+	err = s.DB().QueryRow(`
+		SELECT sampled_at, ffmpeg_processes, active_tasks
+		FROM worker_resource_samples
+		WHERE worker_id=? AND session_id=?`, "worker-e2e", "session-e2e").Scan(
+		&gotSampledAt, &gotFFmpeg, &gotActive)
+	if err != nil {
+		t.Fatalf("query persisted resource sample: %v", err)
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, gotSampledAt)
+	if err != nil {
+		t.Fatalf("parse persisted sampled_at %q: %v", gotSampledAt, err)
+	}
+	if !parsed.Equal(sampledAt) {
+		t.Fatalf("persisted sampled_at=%v, want %v", parsed, sampledAt)
+	}
+	if gotFFmpeg != 3 {
+		t.Fatalf("persisted ffmpeg_processes=%d, want 3", gotFFmpeg)
+	}
+	if gotActive != 2 {
+		t.Fatalf("persisted active_tasks=%d, want 2", gotActive)
+	}
+}
 
 // recordableSink counts RecordWorker invocations AND captures the
 // typed ResourceSnapshot for spot-check assertions. Single-threaded by

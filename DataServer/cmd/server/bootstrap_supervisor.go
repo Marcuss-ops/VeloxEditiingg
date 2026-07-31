@@ -230,6 +230,37 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 	// the dashboard's freshness. NEVER ClassCritical: stale
 	// snapshots degrade UI quality but not fleet functionality.
 	if p != nil && p.SQLite != nil {
+		if err := sup.Register(supervisor.Runner{
+			Name:   "worker-resource-maintenance",
+			Class:  supervisor.ClassRestartable,
+			Policy: restartablePolicy,
+			Run: func(ctx context.Context) error {
+				ticker := time.NewTicker(5 * time.Minute)
+				defer ticker.Stop()
+				maintain := func() error {
+					if err := p.SQLite.MaintainWorkerResourceSamples(ctx, time.Now().UTC()); err != nil {
+						return fmt.Errorf("worker resource maintenance failed: %w", err)
+					}
+					return nil
+				}
+				if err := maintain(); err != nil {
+					return err
+				}
+				for {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-ticker.C:
+						if err := maintain(); err != nil {
+							return err
+						}
+					}
+				}
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("supervisor register worker-resource-maintenance: %w", err)
+		}
+
 		sqlDB := p.SQLite.DB()
 		if err := sup.Register(supervisor.Runner{
 			Name:   "metrics-snapshot-supervisor",

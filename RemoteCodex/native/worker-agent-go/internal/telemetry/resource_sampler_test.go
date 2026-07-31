@@ -384,6 +384,21 @@ func TestToWireMap_OmitsZeroFields(t *testing.T) {
 
 // TestToWireMap_PopulatedSnapshot: non-zero values map to the
 // expected snake_case keys.
+func TestToProto_PopulatedSnapshot(t *testing.T) {
+	s := &SampledResources{
+		CPUUtilRatio: 0.5, CPUIOWaitRatio: 0.1, CPUStealRatio: 0.02,
+		MemoryUsedBytes: 100, ProcessRSSBytes: 200, ActiveTasks: 2,
+		TaskSlots: 4, SampledAt: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	p := s.ToProto()
+	if p == nil || p.GetCpuUtilizationRatio() != 0.5 || p.GetActiveTasks() != 2 {
+		t.Fatalf("typed resource conversion lost values: %+v", p)
+	}
+	if p.GetSampledAt() == nil || !p.GetSampledAt().AsTime().Equal(s.SampledAt) {
+		t.Fatalf("typed sampled_at=%v, want %v", p.GetSampledAt(), s.SampledAt)
+	}
+}
+
 func TestToWireMap_PopulatedSnapshot(t *testing.T) {
 	s := &SampledResources{
 		SampledAt:                 time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),

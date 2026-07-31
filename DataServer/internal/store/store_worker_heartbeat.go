@@ -85,6 +85,9 @@ func (s *SQLiteStore) PersistWorkerHeartbeat(ctx context.Context, raw []byte, se
 	if err := maybeInsertWorkerMetric(ctx, tx, m, workerID, sessionID, oldStatus != asString(m["status"]), nowRFC3339Nano); err != nil {
 		return err
 	}
+	if err := maybeInsertWorkerResourceSample(ctx, tx, m, workerID, sessionID, nowRFC3339Nano); err != nil {
+		return err
+	}
 	if err := pruneWorkerMetricSamples(ctx, tx, s.retentionDays.Metrics); err != nil {
 		return err
 	}
@@ -172,6 +175,16 @@ func (s *SQLiteStore) SetRetention(metricsDays, eventsDays int) {
 	s.retentionDays.Events = eventsDays
 }
 
+// SetResourceRetention configures the raw sample and hourly rollup windows.
+// Non-positive values disable the corresponding prune pass.
+func (s *SQLiteStore) SetResourceRetention(rawDays, rollupDays int) {
+	if s == nil {
+		return
+	}
+	s.resourceRetention.RawDays = rawDays
+	s.resourceRetention.RollupDays = rollupDays
+}
+
 // SetPartitionThresholds is the canonical entry point for the
 // master boot path to wire config.WorkersConfig.{Stale,
 // Partition}ThresholdSeconds into the store. Idempotent.
@@ -199,6 +212,11 @@ func (s *SQLiteStore) SetPartitionThresholds(staleSeconds, partitionSeconds int)
 type retentionDays struct {
 	Metrics int
 	Events  int
+}
+
+type resourceRetention struct {
+	RawDays    int
+	RollupDays int
 }
 
 // partitionThresholds is the threshold pair used by

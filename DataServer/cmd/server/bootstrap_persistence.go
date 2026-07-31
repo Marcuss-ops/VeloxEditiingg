@@ -22,10 +22,10 @@ import (
 // single-source-of-truth wiring is the precondition for
 // outbox.completeness_test's invariants to hold at runtime.
 type persistenceDeps struct {
-	Handle        *database.Handle
-	SQLite        *store.SQLiteStore
-	BlobStore     store.BlobStore
-	Outbox        *outbox.Store
+	Handle         *database.Handle
+	SQLite         *store.SQLiteStore
+	BlobStore      store.BlobStore
+	Outbox         *outbox.Store
 	OutboxRegistry *outbox.Registry
 }
 
@@ -92,6 +92,8 @@ func buildPersistence(cfg *config.Config) (*persistenceDeps, error) {
 	// A nil outbox at runtime is a bootstrap bug — emitOutbox fails
 	// hard and the caller MUST rollback.
 	sqliteStore.SetOutbox(outboxStore)
+	sqliteStore.SetRetention(cfg.Retention.WorkerMetricsDays, cfg.Retention.WorkerEventsDays)
+	sqliteStore.SetResourceRetention(cfg.Retention.WorkerResourceRawDays, cfg.Retention.WorkerResourceRollupDays)
 
 	var blobStore store.BlobStore
 	blobStore, bsErr := store.NewFilesystemBlobStore(cfg.Runtime.StagingDir, cfg.Runtime.StorageDir)
@@ -122,10 +124,10 @@ func buildPersistence(cfg *config.Config) (*persistenceDeps, error) {
 	outboxRegistry := outbox.ProductionRegistry()
 
 	return &persistenceDeps{
-		Handle:        handle,
-		SQLite:        sqliteStore,
-		BlobStore:     blobStore,
-		Outbox:        outboxStore,
+		Handle:         handle,
+		SQLite:         sqliteStore,
+		BlobStore:      blobStore,
+		Outbox:         outboxStore,
 		OutboxRegistry: outboxRegistry,
 	}, nil
 }

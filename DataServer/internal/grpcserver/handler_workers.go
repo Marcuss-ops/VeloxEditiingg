@@ -61,6 +61,7 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 	// fields via the legacy HTTP /admin/workers path (channelised
 	// worker debugging tools depend on this JSON view).
 	if resExtra := ResourcesToExtra(hb.GetResources()); resExtra != nil {
+		extra["resource_sample_present"] = true
 		for k, v := range resExtra {
 			extra[k] = v
 		}

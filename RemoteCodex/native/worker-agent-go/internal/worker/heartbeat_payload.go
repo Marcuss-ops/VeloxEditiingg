@@ -65,12 +65,18 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 		extraMap["recent_errors_count"] = len(recentErrors)
 	}
 
-	// Attach typed WorkerResourceCounters.
+	// Attach typed WorkerResourceCounters. Keep the legacy Extra mirror
+	// below as well so older registry/debug consumers remain compatible.
 	if w.sampler != nil {
 		if snap := w.sampler.Latest(); snap != nil {
+			hb.Resources = snap.ToProto()
 			if m := snap.ToWireMap(); m != nil {
 				extraMap["resources"] = m
 			}
+			// ffmpeg_processes is intentionally carried in the dynamic
+			// Extra map for compatibility with the existing protobuf
+			// schema; the master registry/store already preserves it.
+			extraMap["ffmpeg_processes"] = snap.FFmpegProcesses
 		}
 	}
 

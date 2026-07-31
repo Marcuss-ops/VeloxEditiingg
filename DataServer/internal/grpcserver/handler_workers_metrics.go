@@ -208,5 +208,5 @@ func timeOrZero(ts interface{ AsTime() time.Time }) string {
 	if ts == nil {
 		return ""
 	}
-	return ts.AsTime().UTC().Format(time.RFC3339)
+	return ts.AsTime().UTC().Format(time.RFC3339Nano)
 }

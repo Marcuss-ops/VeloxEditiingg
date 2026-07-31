@@ -109,6 +109,9 @@ type SampledResources struct {
 	ActiveTasks int32
 	TaskSlots   int32
 
+	// FFmpeg process count visible in this worker's PID namespace.
+	FFmpegProcesses int32
+
 	// Load average + run queue.
 	Load1    float64
 	RunQueue int32
@@ -278,6 +281,9 @@ func (s *Sampler) Sample(ctx context.Context) (*SampledResources, error) {
 			out.ProcessRSSPeakBytes = peakKib * 1024
 		}
 	}
+
+	// FFmpeg processes in this worker's PID namespace.
+	out.FFmpegProcesses = int32(s.countFFmpegProcesses())
 
 	// /proc/loadavg — instant load1 + run queue.
 	load1, runQ, err := s.readProcLoadavg()

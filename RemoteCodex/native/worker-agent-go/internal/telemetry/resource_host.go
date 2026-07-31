@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
+	pb "velox-shared/controltransport/pb"
 )
 
 // ToWireMap flattens a SampledResources snapshot into a
@@ -65,12 +66,45 @@ func (s *SampledResources) ToWireMap() map[string]interface{} {
 	addI64("network_retransmits_total", s.NetworkRetransmitsTotal)
 	addI32("active_tasks", s.ActiveTasks)
 	addI32("task_slots", s.TaskSlots)
+	addI32("ffmpeg_processes", s.FFmpegProcesses)
 	addFloat("load1", s.Load1)
 	addI32("run_queue", s.RunQueue)
 	if !s.SampledAt.IsZero() {
 		out["sampled_at"] = s.SampledAt.UTC().Format(time.RFC3339Nano)
 	}
 	return out
+}
+
+// ToProto converts a sampled snapshot to the typed heartbeat payload.
+// Zero values are preserved here because zero is a valid observed resource
+// value; ToWireMap remains the compact legacy Extra representation.
+func (s *SampledResources) ToProto() *pb.WorkerResourceCounters {
+	if s == nil {
+		return nil
+	}
+	return &pb.WorkerResourceCounters{
+		CpuUtilizationRatio:       s.CPUUtilRatio,
+		CpuIowaitRatio:            s.CPUIOWaitRatio,
+		CpuStealRatio:             s.CPUStealRatio,
+		MemoryUsedBytes:           s.MemoryUsedBytes,
+		MemoryAvailableBytes:      s.MemoryAvailableBytes,
+		ProcessRssBytes:           s.ProcessRSSBytes,
+		ProcessRssPeakBytes:       s.ProcessRSSPeakBytes,
+		SwapUsedBytes:             s.SwapUsedBytes,
+		MajorPageFaultsTotal:      s.MajorPageFaultsTotal,
+		DiskReadBytesTotal:        s.DiskReadBytesTotal,
+		DiskWriteBytesTotal:       s.DiskWriteBytesTotal,
+		DiskFreeBytes:             s.DiskFreeBytes,
+		TempBytesWritten:          s.TempBytesWritten,
+		TempFilesOpen:             s.TempFilesOpen,
+		NetworkReceiveBytesTotal:  s.NetworkReceiveBytesTotal,
+		NetworkTransmitBytesTotal: s.NetworkTransmitBytesTotal,
+		NetworkRetransmitsTotal:   s.NetworkRetransmitsTotal,
+		ActiveTasks:               s.ActiveTasks, TaskSlots: s.TaskSlots,
+		Load1:     s.Load1,
+		RunQueue:  s.RunQueue,
+		SampledAt: s.TimestampProto(),
+	}
 }
 
 // TimestampProto is a helper for callers that want to inject the
