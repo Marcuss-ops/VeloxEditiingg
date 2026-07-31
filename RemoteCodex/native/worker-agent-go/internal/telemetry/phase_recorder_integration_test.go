@@ -63,3 +63,44 @@ func TestEventRecorderOffsetsUseMonotonicClock(t *testing.T) {
 		t.Fatalf("explicit Record should preserve explicit-zero offsets, got %v/%v", e.StartedOffsetMS, e.FinishedOffsetMS)
 	}
 }
+
+func TestEventRecorderStartAndSnapshotAreAppendOnly(t *testing.T) {
+	r := NewEventRecorder()
+	h := r.Start(EventSpec{
+		Origin: OriginWorker, Scope: ScopeAttempt,
+		Component: "runner", Action: "cache_lookup",
+	})
+	if h == nil {
+		t.Fatal("Start returned nil for a registered event")
+	}
+	h.Complete()
+
+	first := r.Snapshot()
+	if len(first) != 1 {
+		t.Fatalf("first snapshot length = %d, want 1", len(first))
+	}
+	first[0].Action = "mutated"
+
+	second := r.Snapshot()
+	if len(second) != 1 {
+		t.Fatalf("snapshot should be non-destructive, length = %d, want 1", len(second))
+	}
+	if second[0].Action != "cache_lookup" {
+		t.Fatalf("snapshot mutation leaked into recorder: action=%q", second[0].Action)
+	}
+
+	r.Emit(EventSpec{
+		Origin: OriginWorker, Scope: ScopeAttempt,
+		Component: "runner", Action: "execute",
+	}, StatusOK, "", "")
+	if len(first) != 1 {
+		t.Fatalf("previous snapshot changed after append: length = %d, want 1", len(first))
+	}
+	third := r.Snapshot()
+	if len(third) != 2 {
+		t.Fatalf("new snapshot length = %d, want 2", len(third))
+	}
+	if third[0].EventIndex != 0 || third[1].EventIndex != 1 {
+		t.Fatalf("append-only indexes = %d,%d; want 0,1", third[0].EventIndex, third[1].EventIndex)
+	}
+}

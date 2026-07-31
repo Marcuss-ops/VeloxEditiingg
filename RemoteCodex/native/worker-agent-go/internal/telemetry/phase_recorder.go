@@ -84,12 +84,20 @@ func NewEventRecorder() *EventRecorder {
 	}
 }
 
-func (r *EventRecorder) Begin(spec EventSpec) *EventHandle {
+// Start begins one event using the canonical recorder API. The returned
+// handle owns a monotonic start timestamp and records exactly once when
+// completed. Begin remains as a compatibility alias for existing callers.
+func (r *EventRecorder) Start(spec EventSpec) *EventHandle {
 	if r == nil || !normalizeEventSpec(&spec) {
 		return nil
 	}
 	now := time.Now()
 	return &EventHandle{rec: r, spec: spec, startWall: now.UTC(), startMono: now}
+}
+
+// Begin is retained for compatibility with existing worker call sites.
+func (r *EventRecorder) Begin(spec EventSpec) *EventHandle {
+	return r.Start(spec)
 }
 
 func (r *EventRecorder) Emit(spec EventSpec, status, errCode, errMsg string) {
@@ -154,6 +162,10 @@ func (r *EventRecorder) DrainFrom(offset int) []RecordedPhase {
 	return out
 }
 
+// Snapshot returns an independent, non-destructive copy of all events
+// recorded so far. Recording remains append-only until an explicit
+// DrainFrom/Flush operation; mutating the returned slice or its elements
+// cannot mutate recorder state.
 func (r *EventRecorder) Snapshot() []RecordedPhase {
 	if r == nil {
 		return nil
