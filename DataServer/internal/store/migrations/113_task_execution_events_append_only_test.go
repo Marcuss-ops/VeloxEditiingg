@@ -152,6 +152,32 @@ func TestMigration113_RepeatedScopedEventsAndEventIdempotency(t *testing.T) {
 	}
 }
 
+func TestMigration113_ClosedOriginAndScopeChecks(t *testing.T) {
+	db := openTestDB(t)
+	applyTaskExecutionEventsMigrations(t, db)
+
+	for _, test := range []struct {
+		name   string
+		origin string
+		scope  string
+	}{
+		{name: "origin", origin: "custom", scope: "task"},
+		{name: "scope", origin: "worker", scope: "custom"},
+	} {
+		_, err := db.Exec(`
+			INSERT INTO task_execution_events (
+				event_id, attempt_id, origin, scope, event_index
+			) VALUES (?, 'attempt-closed-enums', ?, ?, 0)`,
+			test.name, test.origin, test.scope)
+		if err == nil {
+			t.Fatalf("invalid %s should be rejected by SQL CHECK constraint", test.name)
+		}
+		if !strings.Contains(strings.ToLower(err.Error()), "check constraint") {
+			t.Fatalf("invalid %s error=%v, want CHECK constraint failure", test.name, err)
+		}
+	}
+}
+
 func TestMigration113_AppendOnlyAndScopedValidation(t *testing.T) {
 	db := openTestDB(t)
 	applyTaskExecutionEventsMigrations(t, db)

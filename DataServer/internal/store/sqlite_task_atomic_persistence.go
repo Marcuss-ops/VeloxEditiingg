@@ -59,8 +59,9 @@ func ingestTaskCAS(ctx context.Context, tx *sql.Tx, cmd taskgraph.IngestResultCo
 }
 
 // probeTaskAlreadyTerminalForAttempt returns true when the task is already
-// SUCCEEDED for the same attempt_id. In that case the downstream
-// metric/cache/cost/artifact writes must still commit, so the CAS is skipped.
+// terminal for the same attempt_id. In that case the downstream
+// metric/cache/cost/artifact/event writes must still be replay-safe, so the
+// lifecycle CAS is skipped.
 func probeTaskAlreadyTerminalForAttempt(ctx context.Context, tx *sql.Tx, taskID, workerID, leaseID, attemptID string) (bool, error) {
 	var cs, ca string
 	probeErr := tx.QueryRowContext(ctx,
@@ -73,7 +74,12 @@ func probeTaskAlreadyTerminalForAttempt(ctx context.Context, tx *sql.Tx, taskID,
 	if probeErr != nil {
 		return false, fmt.Errorf("task ingest atomic probe: %w", probeErr)
 	}
-	return cs == "SUCCEEDED" && ca == attemptID, nil
+	switch cs {
+	case "SUCCEEDED", "FAILED", "CANCELLED":
+		return ca == attemptID, nil
+	default:
+		return false, nil
+	}
 }
 
 // ingestAttemptCAS performs the Attempt-side CAS for IngestTaskResultAtomic.

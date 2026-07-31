@@ -71,6 +71,26 @@ func TestE2E_FailedAttempt_PartialPhaseMetrics(t *testing.T) {
 		nowStr, nowStr, nowStr, nowStr,
 	)
 
+	// Seed orchestration history plus stale worker telemetry. The failed
+	// terminal report must replace only the worker event set.
+	execQuery(t, store, ctx, `
+		INSERT INTO task_execution_events (
+			event_id, attempt_id, job_id, task_id, worker_id, event_index,
+			origin, scope, component, action, phase, status, created_at
+		) VALUES ('failed-master-event', ?, ?, ?, ?, 0, 'master', 'task',
+			'master.queue', 'ready_wait', 'queue', 'ok', ?)`,
+		attemptID, jobID, taskID, workerID, nowStr,
+	)
+	execQuery(t, store, ctx, `
+		INSERT INTO task_execution_events (
+			event_id, attempt_id, job_id, task_id, worker_id, event_index,
+			origin, scope, component, action, phase, status, created_at,
+			segment_index
+		) VALUES ('failed-stale-worker-event', ?, ?, ?, ?, 0, 'engine', 'segment',
+			'engine.encode', 'setup', 'encode', 'ok', ?, 88)`,
+		attemptID, jobID, taskID, workerID, nowStr,
+	)
+
 	// ── 1. Ingest a FAILED result with partial phase metrics ────────────
 	taskRepo := NewSQLiteTaskRepository(store)
 	cmd := taskgraph.IngestResultCommand{
@@ -113,6 +133,20 @@ func TestE2E_FailedAttempt_PartialPhaseMetrics(t *testing.T) {
 				BytesOut:         1048576,
 				Frames:           0,
 				MetadataJSON:     `{"source":"drive"}`,
+			},
+			{
+				AttemptID: attemptID,
+				Origin:    "worker",
+				Scope:     "attempt",
+				EventID:   "failed-worker-report-event", EventIndex: 0,
+				PhaseOrder:   3,
+				Component:    "runner",
+				Action:       "run",
+				Phase:        "render",
+				Status:       "failed",
+				ErrorCode:    "RENDER_ENGINE_CRASH",
+				ErrorMessage: "native process exited with code 139",
+				DurationMS:   1,
 			},
 			{
 				AttemptID:        attemptID,
@@ -219,8 +253,29 @@ func TestE2E_FailedAttempt_PartialPhaseMetrics(t *testing.T) {
 		}
 		got = append(got, r)
 	}
-	if len(got) != 2 {
-		t.Fatalf("phase timings rows = %d; want 2", len(got))
+	if len(got) != 3 {
+		t.Fatalf("phase timings rows = %d; want 3", len(got))
+	}
+
+	var failedEventCount, failedMasterCount, failedStaleCount int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_execution_events WHERE attempt_id = ? AND origin <> 'master'`, attemptID).Scan(&failedEventCount); err != nil {
+		t.Fatalf("count failed worker events: %v", err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_execution_events WHERE event_id = 'failed-master-event'`).Scan(&failedMasterCount); err != nil {
+		t.Fatalf("count failed master event: %v", err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_execution_events WHERE event_id = 'failed-stale-worker-event'`).Scan(&failedStaleCount); err != nil {
+		t.Fatalf("count failed stale worker event: %v", err)
+	}
+	if failedEventCount != 1 || failedMasterCount != 1 || failedStaleCount != 0 {
+		t.Fatalf("failed replacement worker=%d master=%d stale=%d; want 1/1/0", failedEventCount, failedMasterCount, failedStaleCount)
+	}
+	var failedAuthorizationCount int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_execution_event_replacement_authorizations WHERE attempt_id = ?`, attemptID).Scan(&failedAuthorizationCount); err != nil {
+		t.Fatalf("count replacement authorization after failed ingest: %v", err)
+	}
+	if failedAuthorizationCount != 0 {
+		t.Fatalf("replacement authorization rows=%d; want 0 after commit", failedAuthorizationCount)
 	}
 
 	var canonicalJobID, canonicalTaskID, canonicalWorkerID, canonicalSnapshotID, canonicalExecutorID string
@@ -245,6 +300,7 @@ func TestE2E_FailedAttempt_PartialPhaseMetrics(t *testing.T) {
 	want := []phaseRow{
 		{phase: "download.asset_fetch", component: "download", action: "asset_fetch", status: "ok", errorCode: "", durationMS: 2500, bytesIn: 1048576, frames: 0},
 		{phase: "render.segment_build", component: "render", action: "segment_build", status: "failed", errorCode: "SEGMENT_BUILD_TIMEOUT", durationMS: 3200, bytesIn: 1048576, frames: 180},
+		{phase: "render", component: "runner", action: "run", status: "failed", errorCode: "RENDER_ENGINE_CRASH", durationMS: 1, bytesIn: 0, frames: 0},
 	}
 	for i := range want {
 		if got[i] != want[i] {

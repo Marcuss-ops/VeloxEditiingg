@@ -24,6 +24,9 @@ func (s Spec) Normalize() (Spec, error) {
 	out.PublicationID = strings.TrimSpace(out.PublicationID)
 	out.Language = NormalizeLanguage(out.Language)
 	out.DefaultLanguage = NormalizeLanguage(out.DefaultLanguage)
+	if whitespaceViolations := validateWhitespaceSelectors(out); len(whitespaceViolations) > 0 {
+		return Spec{}, whitespaceViolations
+	}
 	out.OutputRef.VariantID = strings.TrimSpace(out.OutputRef.VariantID)
 	out.OutputRef.ArtifactRole = strings.TrimSpace(out.OutputRef.ArtifactRole)
 
@@ -58,16 +61,30 @@ func (s Spec) Validate() error {
 	if s.Version != Version {
 		violations = append(violations, NewValidationError("version", "unsupported_version", fmt.Sprintf("must be %d", Version)))
 	}
-	if s.PublicationID == "" {
+	if strings.TrimSpace(s.PublicationID) == "" {
 		violations = append(violations, NewValidationError("publication_id", "required", "non-empty identifier"))
-	} else if publicationIDSeparatorPattern.MatchString(s.PublicationID) {
+	} else if publicationIDSeparatorPattern.MatchString(strings.TrimSpace(s.PublicationID)) {
 		violations = append(violations, NewValidationError("publication_id", "reserved_separator", "must not contain '.', '/', or '\\'"))
 	}
-	if s.OutputRef.VariantID == "" && s.OutputRef.ArtifactRole == "" {
+	variantID := strings.TrimSpace(s.OutputRef.VariantID)
+	artifactRole := strings.TrimSpace(s.OutputRef.ArtifactRole)
+	if s.OutputRef.VariantID != "" && variantID == "" {
+		violations = append(violations, NewValidationError("output_ref.variant_id", "required", "non-empty identifier"))
+	}
+	if s.OutputRef.ArtifactRole != "" && artifactRole == "" {
+		violations = append(violations, NewValidationError("output_ref.artifact_role", "required", "non-empty identifier"))
+	}
+	if variantID == "" && artifactRole == "" {
 		violations = append(violations, NewValidationError("output_ref", "selector_required", "exactly one of variant_id or artifact_role"))
 	}
-	if s.OutputRef.VariantID != "" && s.OutputRef.ArtifactRole != "" {
+	if variantID != "" && artifactRole != "" {
 		violations = append(violations, NewValidationError("output_ref", "selectors_mutually_exclusive", "only one of variant_id or artifact_role"))
+	}
+	if publicationIDSeparatorPattern.MatchString(variantID) {
+		violations = append(violations, NewValidationError("output_ref.variant_id", "reserved_separator", "must not contain '.', '/', or '\\'"))
+	}
+	if publicationIDSeparatorPattern.MatchString(artifactRole) {
+		violations = append(violations, NewValidationError("output_ref.artifact_role", "reserved_separator", "must not contain '.', '/', or '\\'"))
 	}
 	if len(s.Destinations) == 0 {
 		violations = append(violations, NewValidationError("destinations", "required", "at least one destination"))
@@ -75,18 +92,22 @@ func (s Spec) Validate() error {
 	seenDestinations := make(map[string]struct{}, len(s.Destinations))
 	for i, destination := range s.Destinations {
 		path := fmt.Sprintf("destinations.%d", i)
-		if destination.DestinationID == "" {
+		destinationID := strings.TrimSpace(destination.DestinationID)
+		if destinationID == "" {
 			violations = append(violations, NewValidationError(path+".destination_id", "required", "non-empty identifier"))
-		} else if _, exists := seenDestinations[destination.DestinationID]; exists {
+		} else if _, exists := seenDestinations[destinationID]; exists {
 			violations = append(violations, NewValidationError(path+".destination_id", "duplicate", "unique destination_id per publication"))
 		} else {
-			seenDestinations[destination.DestinationID] = struct{}{}
+			seenDestinations[destinationID] = struct{}{}
 		}
 		if destination.Priority < 0 {
 			violations = append(violations, NewValidationError(path+".priority", "out_of_range", "non-negative integer"))
 		}
 		if destination.RetryBudget != nil && *destination.RetryBudget < 0 {
 			violations = append(violations, NewValidationError(path+".retry_budget", "out_of_range", "non-negative integer"))
+		}
+		if publicationIDSeparatorPattern.MatchString(destinationID) {
+			violations = append(violations, NewValidationError(path+".destination_id", "reserved_separator", "must not contain '.', '/', or '\\'"))
 		}
 		if destination.MetadataOverride != nil {
 			violations = append(violations, validateMetadata(*destination.MetadataOverride, path+".metadata_override")...)
@@ -120,6 +141,17 @@ func (s Spec) Validate() error {
 		return violations
 	}
 	return nil
+}
+
+func validateWhitespaceSelectors(spec Spec) ValidationErrors {
+	var violations ValidationErrors
+	if spec.OutputRef.VariantID != "" && strings.TrimSpace(spec.OutputRef.VariantID) == "" {
+		violations = append(violations, NewValidationError("output_ref.variant_id", "required", "non-empty identifier"))
+	}
+	if spec.OutputRef.ArtifactRole != "" && strings.TrimSpace(spec.OutputRef.ArtifactRole) == "" {
+		violations = append(violations, NewValidationError("output_ref.artifact_role", "required", "non-empty identifier"))
+	}
+	return violations
 }
 
 func validateMetadata(metadata Metadata, path string) ValidationErrors {

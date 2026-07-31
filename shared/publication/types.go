@@ -87,6 +87,21 @@ type ResolvedMetadata struct {
 	Language               string   `json:"language,omitempty"`
 }
 
+// ResolvedPublication is the immutable delivery snapshot produced by the
+// canonical resolver. It contains the metadata for one publication and one
+// destination, while retaining all localizations and effective provider
+// options needed by an adapter. MetadataHash is the idempotency key component
+// for this exact delivery snapshot.
+type ResolvedPublication struct {
+	PublicationID   string                  `json:"publication_id"`
+	DestinationID   string                  `json:"destination_id"`
+	OutputRef       OutputRef               `json:"output_ref"`
+	Metadata        ResolvedMetadata        `json:"metadata"`
+	Localizations   map[string]Localization `json:"localizations,omitempty"`
+	ProviderOptions map[string]any          `json:"provider_options,omitempty"`
+	MetadataHash    string                  `json:"metadata_hash"`
+}
+
 // ValidationError is a typed contract violation. Path uses dot notation (for
 // example destinations.0.destination_id) so HTTP and storage layers can expose
 // the same field location without parsing human-readable messages.
@@ -231,6 +246,24 @@ func cloneMap(in map[string]any) map[string]any {
 		out[key] = cloneValue(value)
 	}
 	return out
+}
+
+func cloneBoolPointer(input *bool) *bool {
+	if input == nil {
+		return nil
+	}
+	value := *input
+	return &value
+}
+
+// Clone returns a defensive copy of the resolved delivery snapshot.
+func (p ResolvedPublication) Clone() ResolvedPublication {
+	p.Metadata.Tags = append([]string(nil), p.Metadata.Tags...)
+	p.Metadata.MadeForKids = cloneBoolPointer(p.Metadata.MadeForKids)
+	p.Metadata.ContainsSyntheticMedia = cloneBoolPointer(p.Metadata.ContainsSyntheticMedia)
+	p.Localizations = cloneLocalizations(p.Localizations)
+	p.ProviderOptions = cloneMap(p.ProviderOptions)
+	return p
 }
 
 func cloneValue(value any) any {

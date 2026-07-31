@@ -17,14 +17,48 @@ import (
 // PartialPhaseMetrics field is used only when the new field is absent.
 func persistPhaseTimingsAndExecutionEvents(ctx context.Context, tx *sql.Tx, cmd taskgraph.IngestResultCommand) error {
 	timings := append([]taskattempts.PhaseTimingDetailed(nil), cmd.PhaseTimings...)
-	if len(cmd.PartialPhaseMetrics) > 0 {
+	if len(timings) == 0 {
 		timings = append(timings, cmd.PartialPhaseMetrics...)
 	}
 	timings = deduplicatePhaseTimings(timings)
-	if len(timings) == 0 {
+
+	// A report hash is the idempotency boundary for the whole worker event
+	// set. An identical terminal replay must not rewrite anything; a
+	// different report is rejected before the authoritative replacement can
+	// touch the existing rows. The caller's transaction then rolls back all
+	// task, attempt, metric, and event writes together.
+	replaceWorkerEvents, err := shouldReplaceWorkerExecutionEvents(ctx, tx, cmd)
+	if err != nil {
+		return err
+	}
+	if !replaceWorkerEvents {
 		return nil
 	}
 
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO task_execution_event_replacement_authorizations
+			(attempt_id, authorization, created_at)
+		 VALUES (?, 'atomic_ingest', ?)`,
+		cmd.AttemptID, time.Now().UTC().Format(time.RFC3339Nano),
+	); err != nil {
+		return fmt.Errorf("task ingest atomic worker execution event authorization: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM task_execution_events
+		 WHERE attempt_id = ? AND origin <> 'master'`,
+		cmd.AttemptID,
+	); err != nil {
+		return fmt.Errorf("task ingest atomic worker execution event replacement: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM task_execution_event_replacement_authorizations WHERE attempt_id = ?`,
+		cmd.AttemptID,
+	); err != nil {
+		return fmt.Errorf("task ingest atomic worker execution event authorization cleanup: %w", err)
+	}
+	if len(timings) == 0 {
+		return nil
+	}
 	identity, err := resolvePhaseTimingIdentity(ctx, tx, cmd.AttemptID, cmd.TaskID, cmd.WorkerID, cmd.LeaseID)
 	if err != nil {
 		return fmt.Errorf("task ingest atomic phase identity: %w", err)
@@ -36,6 +70,37 @@ func persistPhaseTimingsAndExecutionEvents(ctx context.Context, tx *sql.Tx, cmd 
 		return err
 	}
 	return nil
+}
+
+// shouldReplaceWorkerExecutionEvents enforces report-hash idempotency before
+// the non-master event set is replaced. An empty raw report is a legacy
+// caller without a hash boundary and retains the historical write behavior.
+func shouldReplaceWorkerExecutionEvents(ctx context.Context, tx *sql.Tx, cmd taskgraph.IngestResultCommand) (bool, error) {
+	if cmd.RawReportJSON == "" {
+		return true, nil
+	}
+
+	rawHash := cmd.ReportHash
+	if rawHash == "" {
+		rawHash = fmt.Sprintf("%x", sha256.Sum256([]byte(cmd.RawReportJSON)))
+	}
+
+	var existingHash string
+	err := tx.QueryRowContext(ctx,
+		`SELECT report_hash FROM task_attempt_reports WHERE attempt_id = ?`,
+		cmd.AttemptID,
+	).Scan(&existingHash)
+	if err == sql.ErrNoRows {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("task ingest atomic execution event hash check: %w", err)
+	}
+	if existingHash != "" && existingHash != rawHash {
+		return false, fmt.Errorf("task ingest atomic raw report conflict: attempt_id=%s existing_hash=%s new_hash=%s: %w",
+			cmd.AttemptID, existingHash, rawHash, taskattempts.ErrReportConflict)
+	}
+	return existingHash == "", nil
 }
 
 // phaseTimingIsLegacy reports whether a phase has no event taxonomy. Older
@@ -220,6 +285,27 @@ func persistExecutionEvents(ctx context.Context, tx *sql.Tx, attemptID string, i
 		if eventID == "" {
 			eventID = deterministicEventID(attemptID, timing)
 		}
+		var segmentIndex, trackIndex *int
+		if timing.Scope == "segment" {
+			value := timing.SegmentIndex
+			segmentIndex = &value
+		}
+		if timing.Scope == "audio_track" || timing.Scope == "subtitle_track" {
+			value := timing.TrackIndex
+			trackIndex = &value
+		}
+		if err := (taskattempts.ExecutionEvent{
+			EventID:      eventID,
+			AttemptID:    attemptID,
+			EventIndex:   timing.EventIndex,
+			Origin:       taskattempts.ExecutionEventOrigin(timing.Origin),
+			Scope:        taskattempts.ExecutionEventScope(timing.Scope),
+			SegmentIndex: segmentIndex,
+			TrackIndex:   trackIndex,
+			ArtifactID:   timing.ArtifactID,
+		}).Validate(); err != nil {
+			return fmt.Errorf("task ingest atomic execution event %s: %w", eventID, err)
+		}
 		startedAt := formatTimingTime(timing.StartedAt)
 		completedAt := formatTimingTime(timing.CompletedAt)
 		metadata := timing.MetadataJSON
@@ -314,19 +400,9 @@ func nullableEventString(value string) any {
 }
 
 func isExecutionEventOrigin(value string) bool {
-	switch value {
-	case "master", "worker", "engine", "ffmpeg", "upload", "validation":
-		return true
-	default:
-		return false
-	}
+	return taskattempts.ExecutionEventOrigin(value).IsValid()
 }
 
 func isExecutionEventScope(value string) bool {
-	switch value {
-	case "job", "task", "attempt", "segment", "audio_track", "subtitle_track", "artifact":
-		return true
-	default:
-		return false
-	}
+	return taskattempts.ExecutionEventScope(value).IsValid()
 }

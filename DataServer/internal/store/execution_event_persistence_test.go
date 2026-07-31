@@ -55,6 +55,11 @@ CREATE TABLE task_phase_timings (
     executor_version INTEGER NOT NULL DEFAULT 0,
     UNIQUE (attempt_id, component, action)
 );
+CREATE TABLE task_execution_event_replacement_authorizations (
+    attempt_id TEXT PRIMARY KEY,
+    authorization TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE task_execution_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id TEXT NOT NULL UNIQUE,

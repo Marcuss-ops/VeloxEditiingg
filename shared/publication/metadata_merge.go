@@ -45,29 +45,38 @@ func (m *ResolvedMetadata) Apply(source Metadata) {
 // precedence is destination override, requested localization, publication
 // metadata, then job video_name. Apply is intentionally called from lowest to
 // highest precedence so absent fields inherit rather than being erased.
+//
+// This function is retained as the small, backwards-compatible API used by
+// existing callers. ResolvePublication in resolver.go adds the canonical
+// delivery hash and provider options around the same resolution operation.
 func ResolveMetadata(jobVideoName string, spec Spec, destination Destination, requestedLocale string) (ResolvedMetadata, error) {
 	canonical, err := spec.Normalize()
 	if err != nil {
 		return ResolvedMetadata{}, err
 	}
-	locale := NormalizeLanguage(requestedLocale)
-	if locale == "" {
-		locale = canonical.Language
+	destination.DestinationID = strings.TrimSpace(destination.DestinationID)
+	if _, ok := declaredDestinationByID(canonical, destination.DestinationID); !ok {
+		return ResolvedMetadata{}, NewValidationError(
+			"destinations",
+			"destination_not_found",
+			fmt.Sprintf("destination_id %q is not part of publication", destination.DestinationID),
+		)
 	}
-	if locale == "" && len(canonical.Localizations) > 0 {
-		locale = canonical.DefaultLanguage
-	}
+	return resolveCanonicalMetadata(jobVideoName, canonical, destination, requestedLocale)
+}
 
+func resolveCanonicalMetadata(jobVideoName string, spec Spec, destination Destination, requestedLocale string) (ResolvedMetadata, error) {
+	locale := effectiveLocale(spec, requestedLocale)
 	resolved := ResolvedMetadata{Title: strings.TrimSpace(jobVideoName), Language: locale}
-	resolved.Apply(canonical.Metadata)
-	if localized, ok := canonical.Localizations[locale]; ok {
+	resolved.Apply(spec.Metadata)
+	if localized, ok := spec.Localizations[locale]; ok {
 		resolved.Apply(Metadata{Title: localized.Title, Description: localized.Description})
 	}
 	if destination.MetadataOverride != nil {
 		resolved.Apply(*destination.MetadataOverride)
 	}
 	if strings.TrimSpace(resolved.Title) == "" {
-		return ResolvedMetadata{}, fmt.Errorf("%w: publication_id %q", ErrMissingTitle, canonical.PublicationID)
+		return ResolvedMetadata{}, fmt.Errorf("%w: publication_id %q", ErrMissingTitle, spec.PublicationID)
 	}
 	return resolved, nil
 }

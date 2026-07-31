@@ -73,6 +73,28 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 		nowStr, nowStr, nowStr, nowStr,
 	)
 
+	// Seed orchestration history and a stale worker event. The terminal
+	// report must replace only the worker event set and preserve master
+	// history in the same transaction.
+	execQuery(t, store, ctx, `
+		INSERT INTO task_execution_events (
+			event_id, attempt_id, job_id, task_id, worker_id, event_index,
+			origin, scope, component, action, phase, status, created_at,
+			segment_index
+		) VALUES ('e2e-master-event', ?, ?, ?, ?, 0, 'master', 'task',
+			'master.queue', 'ready_wait', 'queue', 'ok', ?, NULL)`,
+		attemptID, jobID, taskID, workerID, nowStr,
+	)
+	execQuery(t, store, ctx, `
+		INSERT INTO task_execution_events (
+			event_id, attempt_id, job_id, task_id, worker_id, event_index,
+			origin, scope, component, action, phase, status, created_at,
+			segment_index
+		) VALUES ('e2e-stale-worker-event', ?, ?, ?, ?, 0, 'engine', 'segment',
+			'engine.encode', 'setup', 'encode', 'ok', ?, 99)`,
+		attemptID, jobID, taskID, workerID, nowStr,
+	)
+
 	// ── 1. Ingest via the production code path ────────────────────────
 	taskRepo := NewSQLiteTaskRepository(store)
 	cmd := taskgraph.IngestResultCommand{
@@ -170,8 +192,18 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 	).Scan(&executionEventCount); err != nil {
 		t.Fatalf("count persisted execution events: %v", err)
 	}
-	if executionEventCount != 1 {
-		t.Fatalf("execution events=%d; want 1 modern engine event", executionEventCount)
+	if executionEventCount != 2 {
+		t.Fatalf("execution events=%d; want 1 master + 1 authoritative worker event", executionEventCount)
+	}
+	var staleWorkerCount, masterEventCount int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_execution_events WHERE event_id = 'e2e-stale-worker-event'`).Scan(&staleWorkerCount); err != nil {
+		t.Fatalf("count stale worker event: %v", err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_execution_events WHERE event_id = 'e2e-master-event'`).Scan(&masterEventCount); err != nil {
+		t.Fatalf("count master event: %v", err)
+	}
+	if staleWorkerCount != 0 || masterEventCount != 1 {
+		t.Fatalf("replacement left stale worker=%d master=%d; want 0/1", staleWorkerCount, masterEventCount)
 	}
 
 	// Promote job to SUCCEEDED so Overview picks it up.
@@ -381,6 +413,13 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 	if err := taskRepo.IngestTaskResultAtomic(ctx, cmd); err != nil {
 		t.Fatalf("re-ingest same raw report: %v", err)
 	}
+	var replayEventCount int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_execution_events WHERE attempt_id = ?`, attemptID).Scan(&replayEventCount); err != nil {
+		t.Fatalf("count events after idempotent replay: %v", err)
+	}
+	if replayEventCount != executionEventCount {
+		t.Fatalf("idempotent replay changed event count=%d; want %d", replayEventCount, executionEventCount)
+	}
 	var idempotentHash string
 	if err := store.db.QueryRowContext(ctx,
 		`SELECT report_hash FROM task_attempt_reports WHERE attempt_id = ?`,
@@ -398,8 +437,32 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 	if err := taskRepo.IngestTaskResultAtomic(ctx, cmd2); err == nil {
 		t.Fatal("expected conflict error when re-ingesting different raw report for same attempt")
 	}
+	var conflictEventCount, conflictMasterCount int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_execution_events WHERE attempt_id = ?`, attemptID).Scan(&conflictEventCount); err != nil {
+		t.Fatalf("count events after hash conflict: %v", err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_execution_events WHERE event_id = 'e2e-master-event'`).Scan(&conflictMasterCount); err != nil {
+		t.Fatalf("count master event after hash conflict: %v", err)
+	}
+	if conflictEventCount != executionEventCount || conflictMasterCount != 1 {
+		t.Fatalf("hash conflict changed events=%d/master=%d; want %d/1", conflictEventCount, conflictMasterCount, executionEventCount)
+	}
+	var taskStatusAfterConflict, attemptStatusAfterConflict string
+	if err := store.db.QueryRowContext(ctx, `SELECT status FROM tasks WHERE task_id = ?`, taskID).Scan(&taskStatusAfterConflict); err != nil {
+		t.Fatalf("read task status after hash conflict: %v", err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT status FROM task_attempts WHERE id = ?`, attemptID).Scan(&attemptStatusAfterConflict); err != nil {
+		t.Fatalf("read attempt status after hash conflict: %v", err)
+	}
+	// The success CAS intentionally leaves the task in RUNNING with
+	// winning_attempt_terminal_pending=1 until the job roll-up finalizer;
+	// the attempt is already terminal. A hash conflict must preserve that
+	// exact pre-conflict lifecycle state.
+	if taskStatusAfterConflict != "RUNNING" || attemptStatusAfterConflict != "SUCCEEDED" {
+		t.Fatalf("hash conflict changed terminal lifecycle: task=%q attempt=%q; want RUNNING/SUCCEEDED", taskStatusAfterConflict, attemptStatusAfterConflict)
+	}
 
-	t.Log("E2E metrics flow: PASS — 16 metric fields verified (incl. 4 engine phase), overview OK, rollups OK, raw report OK")
+	t.Log("E2E metrics flow: PASS — atomic worker replacement, master preservation, replay, conflict rollback, metrics and raw report verified")
 }
 
 // execQuery is a helper that runs an ExecContext and fatals on error.
