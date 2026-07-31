@@ -221,6 +221,69 @@ func TestPersistExecutionEvents_RepeatedSegmentsAndCanonicalIdentity(t *testing.
 		snapshotID != "snapshot-1" || executorID != "executor.canonical" || executorVersion != 7 {
 		t.Fatalf("event identity=%q/%q/%q/%q/%q/%q/%d; want canonical master identity", jobID, taskID, workerID, sessionID, snapshotID, executorID, executorVersion)
 	}
+
+	var segmentIndex, trackIndex sql.NullInt64
+	var trackKind, status, errorCode string
+	var startedOffset, finishedOffset, cpuMS, queueWait float64
+	var bytesIn, bytesOut, frames, framesIn, framesOut int64
+	if err := db.QueryRow(`
+		SELECT segment_index, track_kind, track_index, started_offset_ms,
+		       finished_offset_ms, cpu_ms, queue_wait_ms, bytes_in, bytes_out,
+		       frames, frames_in, frames_out, status, error_code
+		FROM task_execution_events WHERE event_id = 'encode-segment-1'`).Scan(
+		&segmentIndex, &trackKind, &trackIndex, &startedOffset, &finishedOffset,
+		&cpuMS, &queueWait, &bytesIn, &bytesOut, &frames, &framesIn, &framesOut,
+		&status, &errorCode); err != nil {
+		t.Fatalf("read mapped event telemetry: %v", err)
+	}
+	if !segmentIndex.Valid || segmentIndex.Int64 != 1 || trackKind != "" || trackIndex.Valid ||
+		startedOffset != 20 || finishedOffset != 35 || cpuMS != 18 || queueWait != 2 ||
+		bytesIn != 1200 || bytesOut != 600 || frames != 120 || framesIn != 120 || framesOut != 120 ||
+		status != "ok" || errorCode != "" {
+		t.Fatalf("mapped event telemetry=segment:%v track:%q/%v offsets:%v/%v cpu:%v queue:%v bytes:%d/%d frames:%d/%d/%d status:%q code:%q",
+			segmentIndex, trackKind, trackIndex, startedOffset, finishedOffset, cpuMS, queueWait,
+			bytesIn, bytesOut, frames, framesIn, framesOut, status, errorCode)
+	}
+}
+
+func TestPersistExecutionEvents_MapsAudioTrackIdentityAndTelemetry(t *testing.T) {
+	db := openExecutionEventPersistenceTestDB(t)
+	seedExecutionEventIdentity(t, db)
+
+	base := time.Date(2026, 7, 31, 0, 1, 0, 0, time.UTC)
+	track := taskattempts.PhaseTimingDetailed{
+		AttemptID: "attempt-1", Origin: "engine", Scope: "audio_track",
+		EventID: "voiceover-track-0", EventIndex: 9,
+		Component: "engine.audio", Action: "voiceover_decode", Phase: "audio",
+		TrackKind: "voiceover", TrackIndex: 0, PhaseOrder: 4, Status: "ok",
+		StartedAt: base, CompletedAt: base.Add(25 * time.Millisecond), DurationMS: 25,
+		StartedOffsetMS: 61, FinishedOffsetMS: 86, CPUMS: 31.5, QueueWaitMS: 2.25,
+		BytesIn: 4096, BytesOut: 2048, Frames: 100, FramesIn: 100, FramesOut: 100,
+	}
+	if err := persistExecutionEventTestBatch(t, db, []taskattempts.PhaseTimingDetailed{track}); err != nil {
+		t.Fatalf("persist audio track event: %v", err)
+	}
+
+	var trackKind, status string
+	var trackIndex int
+	var startedOffset, finishedOffset, cpuMS, queueWait float64
+	var bytesIn, bytesOut, frames, framesIn, framesOut int64
+	if err := db.QueryRow(`
+		SELECT track_kind, track_index, started_offset_ms, finished_offset_ms,
+		       cpu_ms, queue_wait_ms, bytes_in, bytes_out, frames, frames_in,
+		       frames_out, status
+		FROM task_execution_events WHERE event_id = 'voiceover-track-0'`).Scan(
+		&trackKind, &trackIndex, &startedOffset, &finishedOffset, &cpuMS, &queueWait,
+		&bytesIn, &bytesOut, &frames, &framesIn, &framesOut, &status); err != nil {
+		t.Fatalf("read audio track event: %v", err)
+	}
+	if trackKind != "voiceover" || trackIndex != 0 || startedOffset != 61 || finishedOffset != 86 ||
+		cpuMS != 31.5 || queueWait != 2.25 || bytesIn != 4096 || bytesOut != 2048 ||
+		frames != 100 || framesIn != 100 || framesOut != 100 || status != "ok" {
+		t.Fatalf("audio track mapping=%q/%d offsets=%v/%v cpu=%v queue=%v bytes=%d/%d frames=%d/%d/%d status=%q",
+			trackKind, trackIndex, startedOffset, finishedOffset, cpuMS, queueWait,
+			bytesIn, bytesOut, frames, framesIn, framesOut, status)
+	}
 }
 
 func TestPersistExecutionEvents_ReplayIsIdempotentAndLegacySummarySurvives(t *testing.T) {

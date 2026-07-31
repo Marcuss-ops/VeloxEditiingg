@@ -459,9 +459,8 @@ func TestSubmitTaskResult_PreservesTenDistinctEngineEncodeEventsOnSuccessAndFail
 				ExecutorKey:    "scene.composite.v1@1",
 				DetailedPhases: phases,
 			}
-			pte := &PendingTaskExecution{
-				JobID: "job-encode-events", ExecutorID: "scene.composite.v1", LeaseID: "lease-encode-events",
-			}
+			pte := &PendingTaskExecution{					JobID: "job-encode-events", ExecutorID: "scene.composite.v1", ExecutorVersion: 1, LeaseID: "lease-encode-events",
+				}
 
 			w.submitTaskResult(context.Background(), pte, "task-encode-events", "attempt-encode-events", report, tc.err)
 
@@ -489,7 +488,11 @@ func TestSubmitTaskResult_PreservesTenDistinctEngineEncodeEventsOnSuccessAndFail
 				if phase.LeaseId != pte.LeaseID {
 					t.Errorf("phase[%d] lease_id = %q, want %q", i, phase.LeaseId, pte.LeaseID)
 				}
+				if phase.ExecutorId != pte.ExecutorID || phase.ExecutorVersion != 1 {
+					t.Errorf("phase[%d] executor identity = %q@%d, want %q@1", i, phase.ExecutorId, phase.ExecutorVersion, pte.ExecutorID)
+				}
 			}
+
 		})
 	}
 }

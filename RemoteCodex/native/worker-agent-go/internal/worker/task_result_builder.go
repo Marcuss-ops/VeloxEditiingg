@@ -119,7 +119,13 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 		// fields at ingest. Keep this conversion independent of report
 		// status: failed attempts carry the same complete prefix/event
 		// stream as successful attempts.
-		tr.PhaseTimings = appendDetailedPhaseTimings(tr.PhaseTimings, report.DetailedPhases, pte.LeaseID)
+		tr.PhaseTimings = appendDetailedPhaseTimings(
+			tr.PhaseTimings,
+			report.DetailedPhases,
+			pte.LeaseID,
+			pte.ExecutorID,
+			int32(pte.ExecutorVersion),
+		)
 
 		// Build per-segment C++ sidecar timings.
 		for _, seg := range report.Segments {
@@ -207,9 +213,26 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 // engine.encode segment operations must remain ten distinct wire entries.
 // The helper is deliberately status-agnostic so successful and failed
 // TaskResults use exactly the same cardinality and ordering contract.
-func appendDetailedPhaseTimings(dst []*pb.PhaseTimingDetailed, phases []taskrunner.DetailedPhaseTiming, leaseID string) []*pb.PhaseTimingDetailed {
+func appendDetailedPhaseTimings(
+	dst []*pb.PhaseTimingDetailed,
+	phases []taskrunner.DetailedPhaseTiming,
+	leaseID string,
+	executorID string,
+	executorVersion int32,
+) []*pb.PhaseTimingDetailed {
 	for _, phase := range phases {
 		p := phase.ToProto()
+		// Native sidecar events do not know the task offer identity. Stamp
+		// the worker's canonical execution tuple here when the event did not
+		// already carry it. The master still overwrites all identity fields
+		// from task_attempts at ingest; this makes the wire report complete
+		// without allowing worker echoes to become authoritative.
+		if p.ExecutorId == "" && executorID != "" {
+			p.ExecutorId = executorID
+		}
+		if p.ExecutorVersion == 0 && executorVersion > 0 {
+			p.ExecutorVersion = executorVersion
+		}
 		if p.LeaseId == "" && leaseID != "" {
 			p.LeaseId = leaseID
 		}
