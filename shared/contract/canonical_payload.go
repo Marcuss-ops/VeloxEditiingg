@@ -32,6 +32,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"velox-shared/contract/rendermanifest"
 )
 
 // CanonicalTopLevelKeys is the documented set of top-level keys for any
@@ -243,6 +245,15 @@ func ValidatePayload(payload map[string]interface{}) error {
 func StrictValidatePayload(payload map[string]interface{}) error {
 	if err := ValidatePayload(payload); err != nil {
 		return err
+	}
+	if raw, ok := payload["render_manifest"]; ok && raw != nil {
+		manifest, ok := raw.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("%w: %q must be an object (got %T)", ErrShapeAnomaly, "render_manifest", raw)
+		}
+		if err := rendermanifest.ValidateMap(manifest); err != nil {
+			return fmt.Errorf("%w: render_manifest: %v", ErrShapeAnomaly, err)
+		}
 	}
 	for k := range payload {
 		if canonicalKeySet[k] || legacyAliasSet[k] {

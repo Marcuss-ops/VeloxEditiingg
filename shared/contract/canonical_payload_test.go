@@ -374,6 +374,67 @@ func TestStrictValidatePayload_AcceptsCanonical(t *testing.T) {
 	}
 }
 
+func TestStrictValidatePayload_ValidatesRenderManifest(t *testing.T) {
+	payload := map[string]interface{}{
+		"job_id":          "job-1",
+		"render_manifest": validRenderManifestMap(),
+	}
+	if err := StrictValidatePayload(payload); err != nil {
+		t.Fatalf("valid render_manifest rejected by strict payload validation: %v", err)
+	}
+}
+
+func TestStrictValidatePayload_RejectsInvalidRenderManifest(t *testing.T) {
+	manifest := validRenderManifestMap()
+	manifest["output"].(map[string]interface{})["video_codec"] = "vp9"
+	payload := map[string]interface{}{
+		"job_id":          "job-1",
+		"render_manifest": manifest,
+	}
+	if err := StrictValidatePayload(payload); err == nil {
+		t.Fatal("expected strict payload validation to reject an invalid render_manifest")
+	} else if !errors.Is(err, ErrShapeAnomaly) {
+		t.Fatalf("expected ErrShapeAnomaly, got %v", err)
+	}
+}
+
+func validRenderManifestMap() map[string]interface{} {
+	return map[string]interface{}{
+		"schema": "velox.render-manifest.v1",
+		"canvas": map[string]interface{}{
+			"width": 1920, "height": 1080, "fps_num": 30, "fps_den": 1, "pixel_format": "yuv420p",
+		},
+		"assets": []interface{}{
+			map[string]interface{}{
+				"id": "clip-001", "uri": "velox-asset://clip-001", "kind": "video",
+				"sha256":     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+				"size_bytes": 1000, "duration_ms": 1000,
+			},
+			map[string]interface{}{
+				"id": "voiceover", "uri": "velox-asset://voiceover", "kind": "audio",
+				"sha256":     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+				"size_bytes": 1000, "duration_ms": 1000,
+			},
+		},
+		"tracks": []interface{}{
+			map[string]interface{}{
+				"id": "video", "kind": "video", "events": []interface{}{
+					map[string]interface{}{"asset_id": "clip-001", "timeline_start_ms": 0, "duration_ms": 1000},
+				},
+			},
+			map[string]interface{}{
+				"id": "voiceover", "kind": "voiceover", "events": []interface{}{
+					map[string]interface{}{"asset_id": "voiceover", "timeline_start_ms": 0, "duration_ms": 1000},
+				},
+			},
+		},
+		"output": map[string]interface{}{
+			"container": "mp4", "video_codec": "h264", "audio_codec": "aac",
+			"audio_sample_rate": 48000, "audio_channels": 2,
+		},
+	}
+}
+
 func TestStrictValidatePayload_AcceptsUnderscoreNoise(t *testing.T) {
 	// Header/envelope noise (e.g. _etag, x-traceid) is filtered.
 	payload := map[string]interface{}{
