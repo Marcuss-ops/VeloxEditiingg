@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"velox-shared/compatibility"
 	"velox-shared/payload"
 )
 
@@ -119,7 +120,7 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 		VideoName:       payload.FirstString(raw, "video_name", "title", "project_name"),
 		ScriptText:      payload.FirstString(raw, "script_text", "script", "source_text"),
 		ScenesJSON:      payload.FirstString(raw, "scenes_json"),
-		VoiceoverPaths:  append([]string{}, payload.NormalizeStringList(raw, "voiceover_paths", "voiceover_path", "audio_path", "source_media", "source_media_url", "audio_source")...),
+		VoiceoverPaths:  append([]string{}, compatibility.ReadStringList(raw, compatibility.VoiceoverPathsKey)...),
 		AudioLanguage:   payload.FirstString(raw, "audio_language_for_srt", "audio_lang", "language"),
 		VideoMode:       payload.FirstString(raw, "video_mode"),
 		OutputPath:      payload.FirstString(raw, "output_path"),

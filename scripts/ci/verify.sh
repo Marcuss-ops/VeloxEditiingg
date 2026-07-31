@@ -72,6 +72,8 @@ log "check-db-access"
 ./scripts/ci/check-db-access.sh
 log "check-registry"
 ./scripts/ci/check-registry.sh
+log "check-compatibility-alias-registry"
+./scripts/ci/check-compatibility-alias-registry.sh
 log "check-share-cert (RW-PROD-001 A7)"
 ./scripts/ci/check-share-cert.sh
 log "check-no-binaries"

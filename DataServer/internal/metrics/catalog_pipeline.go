@@ -70,6 +70,10 @@ func pipelineMetricDefinitions() []MetricDefinition {
 			Name: "pipeline.legacy_body_shape_total", Unit: "count", Component: CompPipeline, Kind: KindCounter,
 			Description: "Total number of POST /api/v1/jobs submissions that arrived with the legacy compatibility body shape (top-level voiceover_paths[] OR scenes[N].clip_link OR subtitle_tracks[]) WITHOUT manifest_ref. The submission is still accepted (non-blocking warning) so existing clients that have not migrated to the manifest_ref contract continue to work; the counter is the operator-visible signal that migration is overdue. Label cardinality is bounded — only 'client_kind' with documented values.",
 		},
+		{
+			Name: "pipeline.compat_alias_reads_total", Unit: "count", Component: CompPipeline, Kind: KindCounter,
+			Description: "Reads of registered legacy payload aliases, labeled by alias and canonical key. Values are bounded by the shared compatibility registry.",
+		},
 		// ── Native process (C++ engine subprocess) ───────────────────────
 		{
 			Name: "native.total_ms", Unit: "ms", Component: CompNative, Kind: KindHistogram,

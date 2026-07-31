@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"velox-shared/compatibility"
 	"velox-worker-agent/pkg/validation"
 )
 
@@ -196,24 +197,7 @@ func validateAnyClipVoiceover(plan *RenderPlan) *PlanError {
 		}
 	}
 
-	hasVoiceover := false
-	voiceoverFields := []string{"voiceover_paths", "audio_path", "voiceover_path"}
-	for _, field := range voiceoverFields {
-		if vo, ok := params[field]; ok {
-			if voList, ok := vo.([]interface{}); ok && len(voList) > 0 {
-				hasVoiceover = true
-				break
-			}
-			if voList, ok := vo.([]string); ok && len(voList) > 0 {
-				hasVoiceover = true
-				break
-			}
-			if voStr, ok := vo.(string); ok && voStr != "" {
-				hasVoiceover = true
-				break
-			}
-		}
-	}
+	hasVoiceover := len(compatibility.ReadStringList(params, compatibility.VoiceoverPathsKey)) > 0
 
 	if !hasClip && !hasScenePlan {
 		return &PlanError{

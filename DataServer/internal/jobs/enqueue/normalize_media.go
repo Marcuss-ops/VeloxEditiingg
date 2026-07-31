@@ -6,35 +6,12 @@ import (
 	"strings"
 
 	"velox-server/internal/routing"
+	"velox-shared/compatibility"
 	"velox-shared/payload"
 )
 
 func normalizeVoiceoverList(payloadMap map[string]interface{}) []string {
-	candidates := []string{
-		payload.FirstString(payloadMap, "voiceover_path", "voiceover", "unified_voiceover_link"),
-	}
-	if v, ok := payloadMap["voiceover_paths"]; ok {
-		candidates = append(candidates, payload.NormalizeToStrings(v)...)
-	}
-	if v, ok := payloadMap["voiceovers"]; ok {
-		candidates = append(candidates, payload.NormalizeToStrings(v)...)
-	}
-	if v, ok := payloadMap["voiceovers_urls"]; ok {
-		candidates = append(candidates, payload.NormalizeToStrings(v)...)
-	}
-
-	result := make([]string, 0, len(candidates))
-	seen := map[string]struct{}{}
-	for _, item := range candidates {
-		if trimmed := strings.TrimSpace(item); trimmed != "" {
-			if _, exists := seen[trimmed]; exists {
-				continue
-			}
-			seen[trimmed] = struct{}{}
-			result = append(result, trimmed)
-		}
-	}
-	return result
+	return compatibility.ReadStringList(payloadMap, compatibility.VoiceoverPathsKey)
 }
 func voiceoverCountFromPayload(payloadMap map[string]interface{}) int {
 	if arr, ok := payloadMap["voiceover_paths"].([]string); ok {

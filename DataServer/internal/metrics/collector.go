@@ -165,7 +165,8 @@ type Collector struct {
 	// placement matcher rejects a candidate (velox_placement_rejections_total)
 	// with a single label `reason` carrying the stable RejectionCode
 	// (e.g. capacity_full, unsupported_executor, missing_capability).
-	placementRejections *Family // velox_placement_rejections_total{reason}
+	placementRejections     *Family // velox_placement_rejections_total{reason}
+	compatibilityAliasReads *Family // velox_compat_alias_reads_total{alias,canonical}
 
 	// Engine phase timing histograms (Scorecard v2 / Step 7).
 	// Two histogram families capture per-phase and per-segment
@@ -177,16 +178,16 @@ type Collector struct {
 	engineSegmentDurations *Family // velox_engine_segment_duration_seconds
 
 	// Parallelism telemetry (migration 098). Gauges stamped per-attempt.
-	parallelSerialWork *Family // velox_taskrunner_serial_work_ms
+	parallelSerialWork   *Family // velox_taskrunner_serial_work_ms
 	parallelRenderWindow *Family // velox_taskrunner_render_window_ms
-	parallelUnionBusy  *Family // velox_taskrunner_union_busy_ms
-	parallelOverlap    *Family // velox_taskrunner_overlap_ms
-	parallelIdleGap    *Family // velox_taskrunner_idle_gap_ms
-	parallelPeak       *Family // velox_taskrunner_parallel_peak
-	parallelAverage    *Family // velox_taskrunner_parallel_average
-	parallelEfficiency *Family // velox_taskrunner_parallel_efficiency_ratio
-	parallelSpeedup    *Family // velox_taskrunner_speedup_vs_serial
-	parallelOversub    *Family // velox_resource_cpu_oversubscription_ratio
+	parallelUnionBusy    *Family // velox_taskrunner_union_busy_ms
+	parallelOverlap      *Family // velox_taskrunner_overlap_ms
+	parallelIdleGap      *Family // velox_taskrunner_idle_gap_ms
+	parallelPeak         *Family // velox_taskrunner_parallel_peak
+	parallelAverage      *Family // velox_taskrunner_parallel_average
+	parallelEfficiency   *Family // velox_taskrunner_parallel_efficiency_ratio
+	parallelSpeedup      *Family // velox_taskrunner_speedup_vs_serial
+	parallelOversub      *Family // velox_resource_cpu_oversubscription_ratio
 
 	// ConflictBudget (spec §14 Blocco 5) instrumentation. Three
 	// counters + one histogram capture the consecutive-err
@@ -396,6 +397,11 @@ func NewCollector(reg *Registry) *Collector {
 		"Placement rejections by reason code (capacity_full, unsupported_executor, missing_capability, ...)",
 		[]string{"reason"},
 	)
+	c.compatibilityAliasReads = NewCounterFamily(
+		"velox_compat_alias_reads_total",
+		"Reads of legacy compatibility aliases by alias and canonical key",
+		[]string{"alias", "canonical"},
+	)
 
 	// ConflictBudget instrumentation (spec §14 Blocco 5). Three
 	// counters + one histogram. Cardinality discipline: NO labels —
@@ -519,6 +525,7 @@ func (c *Collector) allFamilies() []*Family {
 		c.reconcileTotal,
 		c.commitDeadlineExceeded,
 		c.placementRejections,
+		c.compatibilityAliasReads,
 		c.errorClassification,
 		c.wasteTotal,
 		c.conflictStreakReset,

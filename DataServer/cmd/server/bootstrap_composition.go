@@ -25,6 +25,7 @@ import (
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/registry"
 	"velox-server/internal/supervisor"
+	"velox-shared/compatibility"
 )
 
 // appComponents holds every dependency the master process needs at
@@ -186,6 +187,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 
 	metricsRegistry := velmetrics.NewRegistry()
 	metricsCollector := velmetrics.NewCollector(metricsRegistry)
+	compatibility.SetAliasReadObserver(metricsCollector.NewCompatibilityAliasObserver())
 
 	// Build the InstaEdit control-plane verifier when the shared
 	// secret is configured. A nil verifier means the /api/v1/instaedit

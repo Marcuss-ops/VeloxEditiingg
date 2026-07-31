@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"velox-server/internal/remoteengine"
+	"velox-shared/compatibility"
 )
 
 // projectWorkerPayload follows the canonical remoteengine DTO path.
@@ -63,7 +64,7 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 		// side) merges both sources into a single deduped array
 		// so the legacy field stays consistent for old workers
 		// even when new clients send only the per-scene form.
-		m["voiceover_paths"] = req.VoiceoverPaths
+		m[compatibility.VoiceoverPathsKey] = req.VoiceoverPaths
 	}
 
 	if len(req.Scenes) > 0 {

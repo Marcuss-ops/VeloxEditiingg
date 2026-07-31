@@ -3,6 +3,7 @@ package remoteengine
 import (
 	"strings"
 
+	"velox-shared/compatibility"
 	"velox-shared/payload"
 )
 
@@ -90,15 +91,7 @@ func mergeVoiceoverPaths(r *RemotePipelineResult) []string {
 // Supports multiple key shapes: voiceover_paths ([]string or []interface{}),
 // voiceover_path (string), voiceover.local_path, voiceover_info.local_path.
 func extractVoiceoverPathsDTO(flat map[string]interface{}) []string {
-	var candidates []string
-
-	if s := payload.FirstString(flat, "voiceover_path", "audio_path", "voiceover"); s != "" {
-		candidates = append(candidates, s)
-	}
-
-	if v, ok := flat["voiceover_paths"]; ok {
-		candidates = append(candidates, payload.NormalizeToStrings(v)...)
-	}
+	candidates := compatibility.ReadStringList(flat, compatibility.VoiceoverPathsKey)
 
 	if voiceover, ok := flat["voiceover"].(map[string]interface{}); ok {
 		if s := payload.FirstString(voiceover, "local_path", "path", "drive_link", "url"); s != "" {
@@ -112,7 +105,8 @@ func extractVoiceoverPathsDTO(flat map[string]interface{}) []string {
 		}
 	}
 
-	// Dedup + trim.
+	// Dedup + trim. The shared registry already normalizes the flat
+	// aliases; nested object paths are merged here for DTO compatibility.
 	result := make([]string, 0, len(candidates))
 	seen := make(map[string]struct{}, len(candidates))
 	for _, item := range candidates {
