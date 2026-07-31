@@ -8,8 +8,17 @@ import (
 
 func TestPhaseTimingDetailedExtendedFieldsRoundTrip(t *testing.T) {
 	input := &PhaseTimingDetailed{
-		EventIndex:       7,
+		Origin:           "engine",
 		Scope:            "segment",
+		EventType:        "completed",
+		EventName:        "engine.encode",
+		EventIndex:       7,
+		Phase:            "encode",
+		ExecutorId:       "scene.composite.v1",
+		ExecutorVersion:  3,
+		LeaseId:          "lease-7",
+		WorkerSnapshotId: "snapshot-7",
+		WorkerSessionId:  "session-7",
 		SegmentIndex:     3,
 		TrackKind:        "voiceover",
 		TrackIndex:       1,
@@ -19,6 +28,7 @@ func TestPhaseTimingDetailedExtendedFieldsRoundTrip(t *testing.T) {
 		QueueWaitMs:      12.5,
 		FramesIn:         900,
 		FramesOut:        897,
+		ArtifactId:       "artifact-7",
 	}
 
 	data, err := proto.Marshal(input)
@@ -30,8 +40,11 @@ func TestPhaseTimingDetailedExtendedFieldsRoundTrip(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	if output.GetEventIndex() != input.GetEventIndex() || output.GetScope() != input.GetScope() {
-		t.Fatalf("existing taxonomy fields lost: got event=%d scope=%q", output.GetEventIndex(), output.GetScope())
+	if output.GetOrigin() != input.GetOrigin() || output.GetScope() != input.GetScope() || output.GetEventType() != input.GetEventType() || output.GetEventName() != input.GetEventName() || output.GetEventIndex() != input.GetEventIndex() || output.GetPhase() != input.GetPhase() {
+		t.Fatalf("taxonomy fields lost: got origin=%q scope=%q type=%q name=%q index=%d phase=%q", output.GetOrigin(), output.GetScope(), output.GetEventType(), output.GetEventName(), output.GetEventIndex(), output.GetPhase())
+	}
+	if output.GetExecutorId() != input.GetExecutorId() || output.GetExecutorVersion() != input.GetExecutorVersion() || output.GetLeaseId() != input.GetLeaseId() || output.GetWorkerSnapshotId() != input.GetWorkerSnapshotId() || output.GetWorkerSessionId() != input.GetWorkerSessionId() {
+		t.Fatalf("identity fields lost: got executor=%q@%d lease=%q snapshot=%q session=%q", output.GetExecutorId(), output.GetExecutorVersion(), output.GetLeaseId(), output.GetWorkerSnapshotId(), output.GetWorkerSessionId())
 	}
 	if output.GetSegmentIndex() != input.GetSegmentIndex() || output.GetTrackKind() != input.GetTrackKind() || output.GetTrackIndex() != input.GetTrackIndex() {
 		t.Fatalf("segment/track fields lost: got segment=%d track=%q/%d", output.GetSegmentIndex(), output.GetTrackKind(), output.GetTrackIndex())
@@ -42,8 +55,8 @@ func TestPhaseTimingDetailedExtendedFieldsRoundTrip(t *testing.T) {
 	if output.GetCpuMs() != input.GetCpuMs() || output.GetQueueWaitMs() != input.GetQueueWaitMs() {
 		t.Fatalf("resource wait fields lost: got cpu=%v queue=%v", output.GetCpuMs(), output.GetQueueWaitMs())
 	}
-	if output.GetFramesIn() != input.GetFramesIn() || output.GetFramesOut() != input.GetFramesOut() {
-		t.Fatalf("frame fields lost: got in=%d out=%d", output.GetFramesIn(), output.GetFramesOut())
+	if output.GetFramesIn() != input.GetFramesIn() || output.GetFramesOut() != input.GetFramesOut() || output.GetArtifactId() != input.GetArtifactId() {
+		t.Fatalf("frame/artifact fields lost: got in=%d out=%d artifact=%q", output.GetFramesIn(), output.GetFramesOut(), output.GetArtifactId())
 	}
 }
 

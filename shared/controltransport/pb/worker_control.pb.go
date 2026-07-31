@@ -1330,10 +1330,11 @@ func (x *PhaseMarker) GetNotes() string {
 // Observability chain / block 1: PhaseTimingDetailed is ALSO the unit
 // of the append-only task_execution_events timeline. Fields 14-24 add
 // the event taxonomy (origin, scope, event_type, event_name,
-// event_index) plus an echo of the identity tuple. The master stamps
-// the canonical identity values at ingest; whatever the worker puts in
-// fields 20-24 is informational and overridden from the canonical
-// attempt tuple.
+// event_index) plus an echo of the executor/lease/worker identity.
+// Fields 25-34 carry repeated-event context, resource timing and an
+// optional artifact identity. The master stamps canonical identity
+// values at ingest; worker-supplied identity echoes are informational
+// and overridden from the canonical attempt tuple.
 type PhaseTimingDetailed struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	PhaseOrder   int32                  `protobuf:"varint,1,opt,name=phase_order,json=phaseOrder,proto3" json:"phase_order,omitempty"`
