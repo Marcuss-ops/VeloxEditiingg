@@ -263,6 +263,10 @@ func persistPartialPhaseMetrics(ctx context.Context, tx *sql.Tx, cmd taskgraph.I
 		return fmt.Errorf("task ingest atomic partial phase timings delete: %w", err)
 	}
 	nowPhase := time.Now().UTC().Format(time.RFC3339)
+	identity, err := resolvePhaseTimingIdentity(ctx, tx, cmd.AttemptID, cmd.TaskID, cmd.WorkerID, cmd.LeaseID)
+	if err != nil {
+		return fmt.Errorf("task ingest atomic partial phase timing identity: %w", err)
+	}
 	for _, pt := range cmd.PartialPhaseMetrics {
 		startedAt := nowPhase
 		completedAt := nowPhase
@@ -281,12 +285,16 @@ func persistPartialPhaseMetrics(ctx context.Context, tx *sql.Tx, cmd taskgraph.I
 				attempt_id, phase, duration_ms, wall_start, wall_end,
 				phase_order, component, action,
 				status, error_code, error_message,
-				bytes_in, bytes_out, frames, metadata_json
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				bytes_in, bytes_out, frames, metadata_json,
+				job_id, task_id, worker_id, worker_snapshot_id,
+				executor_id, executor_version
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			cmd.AttemptID, phase, pt.DurationMS, startedAt, completedAt,
 			pt.PhaseOrder, pt.Component, pt.Action,
 			pt.Status, pt.ErrorCode, pt.ErrorMessage,
 			pt.BytesIn, pt.BytesOut, pt.Frames, pt.MetadataJSON,
+			identity.JobID, identity.TaskID, identity.WorkerID,
+			identity.WorkerSnapshotID, identity.ExecutorID, identity.ExecutorVersion,
 		)
 		if err != nil {
 			return fmt.Errorf("task ingest atomic partial phase timing insert %s: %w", phase, err)

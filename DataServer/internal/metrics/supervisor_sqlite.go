@@ -352,7 +352,9 @@ func (r *SQLiteLabelResolver) GetPhaseTimingsDetailed(ctx context.Context, attem
 		SELECT attempt_id, phase, duration_ms, wall_start, wall_end,
 		       phase_order, component, action,
 		       status, error_code, error_message,
-		       bytes_in, bytes_out, frames, metadata_json
+		       bytes_in, bytes_out, frames, metadata_json,
+		       job_id, task_id, worker_id, worker_snapshot_id,
+		       executor_id, executor_version
 		FROM task_phase_timings WHERE attempt_id = ? ORDER BY phase_order ASC, wall_start ASC`,
 		attemptID,
 	)
@@ -370,7 +372,9 @@ func (r *SQLiteLabelResolver) GetPhaseTimingsDetailed(ctx context.Context, attem
 		if err := rows.Scan(&pt.AttemptID, &phase, &pt.DurationMS, &wallStart, &wallEnd,
 			&pt.PhaseOrder, &pt.Component, &pt.Action,
 			&pt.Status, &pt.ErrorCode, &pt.ErrorMessage,
-			&pt.BytesIn, &pt.BytesOut, &pt.Frames, &pt.MetadataJSON); err != nil {
+			&pt.BytesIn, &pt.BytesOut, &pt.Frames, &pt.MetadataJSON,
+			&pt.JobID, &pt.TaskID, &pt.WorkerID, &pt.WorkerSnapshotID,
+			&pt.ExecutorID, &pt.ExecutorVersion); err != nil {
 			continue
 		}
 		pt.StartedAt, _ = time.Parse(time.RFC3339, wallStart)

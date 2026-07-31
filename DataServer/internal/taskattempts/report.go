@@ -356,24 +356,26 @@ func (b *AttemptCostBasis) Compute() {
 // PhaseTiming struct continues to work for lightweight phase records;
 // detailed records are persisted via PersistPhaseTimingsDetailed.
 type PhaseTimingDetailed struct {
-	AttemptID    string    `json:"attempt_id"`
-	JobID        string    `json:"job_id"`
-	TaskID       string    `json:"task_id"`
-	WorkerID     string    `json:"worker_id"`
-	ExecutorID   string    `json:"executor_id"`
-	PhaseOrder   int       `json:"phase_order"`
-	Component    string    `json:"component"`
-	Action       string    `json:"action"`
-	StartedAt    time.Time `json:"started_at"`
-	CompletedAt  time.Time `json:"completed_at"`
-	DurationMS   int64     `json:"duration_ms"`
-	Status       string    `json:"status"`
-	ErrorCode    string    `json:"error_code,omitempty"`
-	ErrorMessage string    `json:"error_message,omitempty"`
-	BytesIn      int64     `json:"bytes_in"`
-	BytesOut     int64     `json:"bytes_out"`
-	Frames       int64     `json:"frames"`
-	MetadataJSON string    `json:"metadata_json,omitempty"`
+	AttemptID        string    `json:"attempt_id"`
+	JobID            string    `json:"job_id"`
+	TaskID           string    `json:"task_id"`
+	WorkerID         string    `json:"worker_id"`
+	WorkerSnapshotID string    `json:"worker_snapshot_id"`
+	ExecutorID       string    `json:"executor_id"`
+	ExecutorVersion  int       `json:"executor_version"`
+	PhaseOrder       int       `json:"phase_order"`
+	Component        string    `json:"component"`
+	Action           string    `json:"action"`
+	StartedAt        time.Time `json:"started_at"`
+	CompletedAt      time.Time `json:"completed_at"`
+	DurationMS       int64     `json:"duration_ms"`
+	Status           string    `json:"status"`
+	ErrorCode        string    `json:"error_code,omitempty"`
+	ErrorMessage     string    `json:"error_message,omitempty"`
+	BytesIn          int64     `json:"bytes_in"`
+	BytesOut         int64     `json:"bytes_out"`
+	Frames           int64     `json:"frames"`
+	MetadataJSON     string    `json:"metadata_json,omitempty"`
 }
 
 // SegmentTiming mirrors the C++ SegmentTiming struct emitted inside the

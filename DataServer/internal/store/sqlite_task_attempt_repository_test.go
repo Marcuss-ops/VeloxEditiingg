@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"testing"
 	"time"
+
+	"velox-server/internal/taskattempts"
 )
 
 func openTaskAttemptTestDB(t *testing.T) *SQLiteTaskAttemptRepository {
@@ -21,6 +23,37 @@ func openTaskAttemptTestDB(t *testing.T) *SQLiteTaskAttemptRepository {
 	t.Cleanup(func() { _ = db.Close() })
 
 	const schema = `
+CREATE TABLE tasks (
+	task_id          TEXT PRIMARY KEY,
+	job_id           TEXT NOT NULL,
+	executor_id      TEXT NOT NULL DEFAULT '',
+	executor_version INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE task_phase_timings (
+	id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+	attempt_id         TEXT NOT NULL,
+	phase              TEXT NOT NULL,
+	duration_ms        INTEGER NOT NULL DEFAULT 0,
+	wall_start         TEXT NOT NULL DEFAULT '',
+	wall_end           TEXT NOT NULL DEFAULT '',
+	phase_order        INTEGER NOT NULL DEFAULT 0,
+	component          TEXT NOT NULL DEFAULT '',
+	action             TEXT NOT NULL DEFAULT '',
+	status             TEXT NOT NULL DEFAULT 'ok',
+	error_code         TEXT NOT NULL DEFAULT '',
+	error_message      TEXT NOT NULL DEFAULT '',
+	bytes_in           INTEGER NOT NULL DEFAULT 0,
+	bytes_out          INTEGER NOT NULL DEFAULT 0,
+	frames             INTEGER NOT NULL DEFAULT 0,
+	metadata_json      TEXT NOT NULL DEFAULT '{}',
+	job_id             TEXT NOT NULL DEFAULT '',
+	task_id            TEXT NOT NULL DEFAULT '',
+	worker_id          TEXT NOT NULL DEFAULT '',
+	worker_snapshot_id TEXT NOT NULL DEFAULT '',
+	executor_id        TEXT NOT NULL DEFAULT '',
+	executor_version   INTEGER NOT NULL DEFAULT 0,
+	UNIQUE (attempt_id, component, action)
+);
 CREATE TABLE task_attempts (
 	id              TEXT PRIMARY KEY,
 	task_id         TEXT NOT NULL,
@@ -53,6 +86,59 @@ CREATE TABLE task_attempts (
 	}
 
 	return NewSQLiteTaskAttemptRepository(&SQLiteStore{db: db})
+}
+
+func TestPersistPhaseTimingsDetailed_UsesCanonicalIdentity(t *testing.T) {
+	repo := openTaskAttemptTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	if _, err := repo.store.db.ExecContext(ctx, `
+		INSERT INTO tasks (task_id, job_id, executor_id, executor_version)
+		VALUES ('task-canonical', 'job-canonical', 'executor.canonical', 7)`); err != nil {
+		t.Fatalf("insert canonical task: %v", err)
+	}
+	if _, err := repo.store.db.ExecContext(ctx, `
+		INSERT INTO task_attempts (
+			id, task_id, job_id, attempt_number, worker_id,
+			worker_session_id, worker_snapshot_id, lease_id, status,
+			created_at, updated_at
+		) VALUES ('attempt-canonical', 'task-canonical', 'job-canonical', 1,
+			'worker-canonical', 'session-canonical', 'snapshot-canonical',
+			'lease-canonical', 'FAILED', ?, ?)`, now, now); err != nil {
+		t.Fatalf("insert canonical attempt: %v", err)
+	}
+
+	err := repo.PersistPhaseTimingsDetailed(ctx, "attempt-canonical", []taskattempts.PhaseTimingDetailed{{
+		AttemptID:        "attempt-canonical",
+		JobID:            "spoofed-job",
+		TaskID:           "spoofed-task",
+		WorkerID:         "spoofed-worker",
+		WorkerSnapshotID: "spoofed-snapshot",
+		ExecutorID:       "spoofed.executor",
+		ExecutorVersion:  999,
+		Component:        "engine",
+		Action:           "encode",
+		Status:           "ok",
+		DurationMS:       42,
+	}})
+	if err != nil {
+		t.Fatalf("PersistPhaseTimingsDetailed: %v", err)
+	}
+
+	var jobID, taskID, workerID, snapshotID, executorID string
+	var executorVersion int
+	if err := repo.store.db.QueryRowContext(ctx, `
+		SELECT job_id, task_id, worker_id, worker_snapshot_id, executor_id, executor_version
+		FROM task_phase_timings WHERE attempt_id = 'attempt-canonical'`).Scan(
+		&jobID, &taskID, &workerID, &snapshotID, &executorID, &executorVersion); err != nil {
+		t.Fatalf("read persisted phase identity: %v", err)
+	}
+	if jobID != "job-canonical" || taskID != "task-canonical" || workerID != "worker-canonical" ||
+		snapshotID != "snapshot-canonical" || executorID != "executor.canonical" || executorVersion != 7 {
+		t.Fatalf("persisted phase identity = %q/%q/%q/%q/%q/%d; want canonical values",
+			jobID, taskID, workerID, snapshotID, executorID, executorVersion)
+	}
 }
 
 func TestGetByTaskIDAndWorkerAndLease_ScansTextTimestamps(t *testing.T) {

@@ -80,19 +80,27 @@ func (r *SQLiteTaskAttemptRepository) PersistPhaseTimingsDetailed(ctx context.Co
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	identity, err := resolvePhaseTimingIdentity(ctx, tx, attemptID, "", "", "")
+	if err != nil {
+		return fmt.Errorf("phase timings detailed identity: %w", err)
+	}
 	for _, pt := range timings {
 		_, err := tx.ExecContext(ctx,
 			`INSERT OR REPLACE INTO task_phase_timings (
 				attempt_id, phase, duration_ms, wall_start, wall_end,
 				phase_order, component, action,
 				status, error_code, error_message,
-				bytes_in, bytes_out, frames, metadata_json
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				bytes_in, bytes_out, frames, metadata_json,
+				job_id, task_id, worker_id, worker_snapshot_id,
+				executor_id, executor_version
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			attemptID, pt.Component+"."+pt.Action, pt.DurationMS,
 			pt.StartedAt.Format(time.RFC3339), pt.CompletedAt.Format(time.RFC3339),
 			pt.PhaseOrder, pt.Component, pt.Action,
 			pt.Status, pt.ErrorCode, pt.ErrorMessage,
 			pt.BytesIn, pt.BytesOut, pt.Frames, pt.MetadataJSON,
+			identity.JobID, identity.TaskID, identity.WorkerID,
+			identity.WorkerSnapshotID, identity.ExecutorID, identity.ExecutorVersion,
 		)
 		if err != nil {
 			return fmt.Errorf("phase timing detailed insert: %w", err)

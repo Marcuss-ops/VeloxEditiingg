@@ -21,12 +21,15 @@ func TestE2E_FailedAttempt_PartialPhaseMetrics(t *testing.T) {
 	nowStr := now.Format(time.RFC3339)
 
 	const (
-		jobID      = "e2e-failed-job-001"
-		taskID     = "e2e-failed-task-001"
-		workerID   = "worker-failed-01"
-		leaseID    = "lease-failed-001"
-		attemptID  = "e2e-failed-attempt-001"
-		executorID = "scene.composite.v1"
+		jobID            = "e2e-failed-job-001"
+		taskID           = "e2e-failed-task-001"
+		workerID         = "worker-failed-01"
+		workerSessionID  = "session-failed-01"
+		workerSnapshotID = "snapshot-failed-01"
+		leaseID          = "lease-failed-001"
+		attemptID        = "e2e-failed-attempt-001"
+		executorID       = "scene.composite.v1"
+		executorVersion  = 3
 	)
 
 	// ── 0. Seed job, task, and attempt ─────────────────────────────────
@@ -57,13 +60,14 @@ func TestE2E_FailedAttempt_PartialPhaseMetrics(t *testing.T) {
 
 	execQuery(t, store, ctx,
 		`INSERT INTO task_attempts
-		 (id, task_id, job_id, attempt_number, worker_id, lease_id, status,
+		 (id, task_id, job_id, attempt_number, worker_id,
+		  worker_session_id, worker_snapshot_id, lease_id, status,
 		  started_at, completed_at, error_code, error_message, report_version,
 		  created_at, updated_at)
-		 VALUES (?, ?, ?, 1, ?, ?, 'RUNNING',
+		 VALUES (?, ?, ?, 1, ?, ?, ?, ?, 'RUNNING',
 		         ?, ?, '', '', 0,
 		         ?, ?)`,
-		attemptID, taskID, jobID, workerID, leaseID,
+		attemptID, taskID, jobID, workerID, workerSessionID, workerSnapshotID, leaseID,
 		nowStr, nowStr, nowStr, nowStr,
 	)
 
@@ -93,36 +97,42 @@ func TestE2E_FailedAttempt_PartialPhaseMetrics(t *testing.T) {
 		},
 		PartialPhaseMetrics: []taskattempts.PhaseTimingDetailed{
 			{
-				AttemptID:    attemptID,
-				JobID:        jobID,
-				TaskID:       taskID,
-				WorkerID:     workerID,
-				PhaseOrder:   1,
-				Component:    "download",
-				Action:       "asset_fetch",
-				DurationMS:   2500,
-				Status:       "ok",
-				BytesIn:      1048576,
-				BytesOut:     1048576,
-				Frames:       0,
-				MetadataJSON: `{"source":"drive"}`,
+				AttemptID:        attemptID,
+				JobID:            "spoofed-job",
+				TaskID:           "spoofed-task",
+				WorkerID:         "spoofed-worker",
+				WorkerSnapshotID: "spoofed-snapshot",
+				ExecutorID:       "spoofed.executor",
+				ExecutorVersion:  999,
+				PhaseOrder:       1,
+				Component:        "download",
+				Action:           "asset_fetch",
+				DurationMS:       2500,
+				Status:           "ok",
+				BytesIn:          1048576,
+				BytesOut:         1048576,
+				Frames:           0,
+				MetadataJSON:     `{"source":"drive"}`,
 			},
 			{
-				AttemptID:    attemptID,
-				JobID:        jobID,
-				TaskID:       taskID,
-				WorkerID:     workerID,
-				PhaseOrder:   2,
-				Component:    "render",
-				Action:       "segment_build",
-				DurationMS:   3200,
-				Status:       "failed",
-				ErrorCode:    "SEGMENT_BUILD_TIMEOUT",
-				ErrorMessage: "segment 7 exceeded 30s budget",
-				BytesIn:      1048576,
-				BytesOut:     0,
-				Frames:       180,
-				MetadataJSON: `{"segment_index":7}`,
+				AttemptID:        attemptID,
+				JobID:            "spoofed-job-2",
+				TaskID:           "spoofed-task-2",
+				WorkerID:         "spoofed-worker-2",
+				WorkerSnapshotID: "spoofed-snapshot-2",
+				ExecutorID:       "spoofed.executor.v2",
+				ExecutorVersion:  1000,
+				PhaseOrder:       2,
+				Component:        "render",
+				Action:           "segment_build",
+				DurationMS:       3200,
+				Status:           "failed",
+				ErrorCode:        "SEGMENT_BUILD_TIMEOUT",
+				ErrorMessage:     "segment 7 exceeded 30s budget",
+				BytesIn:          1048576,
+				BytesOut:         0,
+				Frames:           180,
+				MetadataJSON:     `{"segment_index":7}`,
 			},
 		},
 	}
@@ -211,6 +221,25 @@ func TestE2E_FailedAttempt_PartialPhaseMetrics(t *testing.T) {
 	}
 	if len(got) != 2 {
 		t.Fatalf("phase timings rows = %d; want 2", len(got))
+	}
+
+	var canonicalJobID, canonicalTaskID, canonicalWorkerID, canonicalSnapshotID, canonicalExecutorID string
+	var canonicalExecutorVersion int
+	if err := store.db.QueryRowContext(ctx, `
+		SELECT job_id, task_id, worker_id, worker_snapshot_id, executor_id, executor_version
+		FROM task_phase_timings WHERE attempt_id = ? ORDER BY phase_order ASC LIMIT 1`, attemptID).Scan(
+		&canonicalJobID, &canonicalTaskID, &canonicalWorkerID, &canonicalSnapshotID,
+		&canonicalExecutorID, &canonicalExecutorVersion,
+	); err != nil {
+		t.Fatalf("SELECT canonical phase identity: %v", err)
+	}
+	if canonicalJobID != jobID || canonicalTaskID != taskID || canonicalWorkerID != workerID ||
+		canonicalSnapshotID != workerSnapshotID || canonicalExecutorID != executorID ||
+		canonicalExecutorVersion != executorVersion {
+		t.Fatalf("phase identity = %q/%q/%q/%q/%q/%d; want canonical %q/%q/%q/%q/%q/%d",
+			canonicalJobID, canonicalTaskID, canonicalWorkerID, canonicalSnapshotID,
+			canonicalExecutorID, canonicalExecutorVersion,
+			jobID, taskID, workerID, workerSnapshotID, executorID, executorVersion)
 	}
 
 	want := []phaseRow{
