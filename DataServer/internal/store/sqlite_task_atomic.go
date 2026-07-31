@@ -153,6 +153,9 @@ func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, w
 	// method attributable whenever the production session/snapshot tables
 	// are available, while preserving minimal historical test fixtures.
 	workerSessionID, workerSnapshotID := resolveWorkerRuntimeIdentityTx(ctx, tx, workerID)
+	if err := validateWorkerRuntimeIdentityTx(ctx, tx, workerID, workerSessionID, workerSnapshotID); err != nil {
+		return nil, nil, fmt.Errorf("task claim-with-attempt runtime identity: %w", err)
+	}
 
 	// INSERT PENDING TaskAttempt in the same tx.
 	_, err = tx.ExecContext(ctx,

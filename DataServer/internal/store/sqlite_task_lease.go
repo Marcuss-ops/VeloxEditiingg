@@ -534,6 +534,12 @@ func (r *SQLiteTaskRepository) ClaimTaskForWorkerAtomic(
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Runtime identity is canonical master-owned data. Validate the supplied
+	// session/snapshot tuple before touching the task CAS or minting an attempt.
+	if err := validateWorkerRuntimeIdentityTx(ctx, tx, cmd.WorkerID, cmd.SessionID, cmd.WorkerSnapshotID); err != nil {
+		return nil, nil, fmt.Errorf("task claim-for-worker runtime identity: %w", err)
+	}
+
 	// 1. SELECT the specific task candidate with revision + executor gate.
 	row := tx.QueryRowContext(ctx,
 		`SELECT `+strings.Join(taskColumns, ", ")+`

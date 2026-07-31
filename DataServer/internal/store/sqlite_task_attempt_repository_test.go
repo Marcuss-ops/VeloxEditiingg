@@ -141,6 +141,64 @@ func TestPersistPhaseTimingsDetailed_UsesCanonicalIdentity(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsNonCanonicalWorkerSnapshot(t *testing.T) {
+	repo := openTaskAttemptTestDB(t)
+	ctx := context.Background()
+
+	if _, err := repo.store.db.ExecContext(ctx, `
+		CREATE TABLE worker_sessions (
+			session_id TEXT PRIMARY KEY,
+			worker_id TEXT NOT NULL,
+			session_type TEXT NOT NULL,
+			status TEXT NOT NULL,
+			revoked INTEGER NOT NULL DEFAULT 0
+		);
+		CREATE TABLE worker_runtime_snapshots (
+			snapshot_id TEXT PRIMARY KEY,
+			worker_id TEXT NOT NULL,
+			session_id TEXT NOT NULL
+		);`); err != nil {
+		t.Fatalf("create runtime identity schema: %v", err)
+	}
+
+	if _, err := repo.store.db.ExecContext(ctx, `
+		INSERT INTO worker_sessions(session_id, worker_id, session_type, status, revoked)
+		VALUES ('session-create-a', 'worker-create', 'control', 'ACTIVE', 0),
+		       ('session-create-b', 'worker-create', 'control', 'ACTIVE', 0)`); err != nil {
+		t.Fatalf("insert runtime sessions: %v", err)
+	}
+	if _, err := repo.store.db.ExecContext(ctx, `
+		INSERT INTO worker_runtime_snapshots(snapshot_id, worker_id, session_id)
+		VALUES ('snapshot-create-a', 'worker-create', 'session-create-a'),
+		       ('snapshot-create-b', 'worker-create', 'session-create-b')`); err != nil {
+		t.Fatalf("insert runtime snapshots: %v", err)
+	}
+
+	attempt := &taskattempts.TaskAttempt{
+		ID:               "attempt-create-spoof",
+		TaskID:           "task-create-spoof",
+		JobID:            "job-create-spoof",
+		AttemptNumber:    1,
+		WorkerID:         "worker-create",
+		WorkerSessionID:  "session-create-a",
+		WorkerSnapshotID: "snapshot-create-b", // belongs to session B
+		LeaseID:          "lease-create-spoof",
+		Status:           taskattempts.AttemptStatusPending,
+	}
+	if err := repo.Create(ctx, attempt); err == nil {
+		t.Fatal("Create should reject a snapshot belonging to a different session")
+	}
+
+	var rows int
+	if err := repo.store.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM task_attempts WHERE id = ?`, attempt.ID).Scan(&rows); err != nil {
+		t.Fatalf("count rejected attempt rows: %v", err)
+	}
+	if rows != 0 {
+		t.Fatalf("rejected attempt rows = %d, want 0", rows)
+	}
+}
+
 func TestGetByTaskIDAndWorkerAndLease_ScansTextTimestamps(t *testing.T) {
 	repo := openTaskAttemptTestDB(t)
 	ctx := context.Background()

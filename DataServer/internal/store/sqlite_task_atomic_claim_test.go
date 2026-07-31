@@ -378,6 +378,248 @@ func TestClaimTaskForWorkerAtomic_HappyPath(t *testing.T) {
 	}
 }
 
+func TestClaimTaskForWorkerAtomic_RuntimeIdentityIsolation(t *testing.T) {
+	s, r := openTaskAtomicTestDB(t)
+	ctx := context.Background()
+
+	// Add the production runtime identity tables to the minimal claim fixture.
+	// The repository must validate these rows before creating attempts.
+	if _, err := s.db.ExecContext(ctx, `
+		CREATE TABLE worker_sessions (
+			session_id TEXT PRIMARY KEY,
+			worker_id TEXT NOT NULL,
+			token_hash TEXT NOT NULL,
+			ip_address TEXT,
+			created_at TEXT NOT NULL,
+			expires_at TEXT NOT NULL,
+			last_seen TEXT,
+			revoked INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL,
+			connected_at TEXT,
+			last_seen_at TEXT,
+			disconnected_at TEXT,
+			disconnect_reason TEXT,
+			session_type TEXT NOT NULL
+		);
+		CREATE TABLE worker_runtime_snapshots (
+			snapshot_id TEXT PRIMARY KEY,
+			worker_id TEXT NOT NULL,
+			session_id TEXT NOT NULL,
+			disconnected_at TEXT
+		);`); err != nil {
+		t.Fatalf("create runtime identity fixture: %v", err)
+	}
+
+	const workerID = "w-runtime-isolated"
+	if err := s.InsertSession(&PersistedSession{
+		SessionID:   "session-runtime-a",
+		WorkerID:    workerID,
+		SessionType: "control",
+		TokenHash:   "runtime-token",
+		CreatedAt:   time.Now().UTC(),
+		ExpiresAt:   time.Now().UTC().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("insert runtime session A: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO worker_runtime_snapshots (snapshot_id, worker_id, session_id)
+		VALUES ('snapshot-runtime-a', ?, 'session-runtime-a')`, workerID); err != nil {
+		t.Fatalf("insert runtime snapshot A: %v", err)
+	}
+
+	seedReadyTaskWithExecutor(t, s.db, "T-runtime-a", "blender", 4, 0)
+	_, attempt, err := r.ClaimTaskForWorkerAtomic(ctx, taskgraph.ClaimTaskForWorkerCommand{
+		TaskID:               "T-runtime-a",
+		ExpectedTaskRevision: 0,
+		WorkerID:             workerID,
+		SessionID:            "session-runtime-a",
+		WorkerSnapshotID:     "snapshot-runtime-a",
+		LeaseID:              "lease-runtime-a",
+		ExecutorID:           "blender",
+		ExecutorVersion:      4,
+		CapabilityRevision:   1,
+	})
+	if err != nil {
+		t.Fatalf("claim session A: %v", err)
+	}
+	if attempt == nil || attempt.WorkerSessionID != "session-runtime-a" || attempt.WorkerSnapshotID != "snapshot-runtime-a" {
+		t.Fatalf("attempt A identity = session=%q snapshot=%q; want session=%q snapshot=%q",
+			attempt.WorkerSessionID, attempt.WorkerSnapshotID, "session-runtime-a", "snapshot-runtime-a")
+	}
+
+	if err := s.RevokeSession("session-runtime-a"); err != nil {
+		t.Fatalf("revoke runtime session A: %v", err)
+	}
+	var snapshotDisconnected sql.NullString
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT disconnected_at FROM worker_runtime_snapshots WHERE snapshot_id = 'snapshot-runtime-a'`).Scan(&snapshotDisconnected); err != nil {
+		t.Fatalf("read closed runtime snapshot A: %v", err)
+	}
+	if !snapshotDisconnected.Valid {
+		t.Fatal("runtime snapshot A disconnected_at should be populated")
+	}
+	if err := s.InsertSession(&PersistedSession{
+		SessionID:   "session-runtime-b",
+		WorkerID:    workerID,
+		SessionType: "control",
+		TokenHash:   "runtime-token",
+		CreatedAt:   time.Now().UTC(),
+		ExpiresAt:   time.Now().UTC().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("insert runtime session B: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO worker_runtime_snapshots (snapshot_id, worker_id, session_id)
+		VALUES ('snapshot-runtime-b', ?, 'session-runtime-b')`, workerID); err != nil {
+		t.Fatalf("insert runtime snapshot B: %v", err)
+	}
+
+	seedReadyTaskWithExecutor(t, s.db, "T-runtime-b", "blender", 4, 0)
+	_, attempt, err = r.ClaimTaskForWorkerAtomic(ctx, taskgraph.ClaimTaskForWorkerCommand{
+		TaskID:               "T-runtime-b",
+		ExpectedTaskRevision: 0,
+		WorkerID:             workerID,
+		SessionID:            "session-runtime-b",
+		WorkerSnapshotID:     "snapshot-runtime-b",
+		LeaseID:              "lease-runtime-b",
+		ExecutorID:           "blender",
+		ExecutorVersion:      4,
+		CapabilityRevision:   1,
+	})
+	if err != nil {
+		t.Fatalf("claim session B after reconnect: %v", err)
+	}
+	if attempt == nil || attempt.WorkerSessionID != "session-runtime-b" || attempt.WorkerSnapshotID != "snapshot-runtime-b" {
+		t.Fatalf("attempt B identity = session=%q snapshot=%q; want session=%q snapshot=%q",
+			attempt.WorkerSessionID, attempt.WorkerSnapshotID, "session-runtime-b", "snapshot-runtime-b")
+	}
+
+	var rows int
+	var status string
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM task_attempts
+		 WHERE worker_id = ? AND worker_session_id = 'session-runtime-a'
+		   AND worker_snapshot_id = 'snapshot-runtime-a'`, workerID).Scan(&rows); err != nil {
+		t.Fatalf("count session A attempts: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("session A attempt rows = %d, want 1", rows)
+	}
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM task_attempts
+		 WHERE worker_id = ? AND worker_session_id = 'session-runtime-b'
+		   AND worker_snapshot_id = 'snapshot-runtime-b'`, workerID).Scan(&rows); err != nil {
+		t.Fatalf("count session B attempts: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("session B attempt rows = %d, want 1", rows)
+	}
+
+	seedReadyTaskWithExecutor(t, s.db, "T-runtime-spoof", "blender", 4, 0)
+	_, spoofedAttempt, err := r.ClaimTaskForWorkerAtomic(ctx, taskgraph.ClaimTaskForWorkerCommand{
+		TaskID:               "T-runtime-spoof",
+		ExpectedTaskRevision: 0,
+		WorkerID:             workerID,
+		SessionID:            "session-runtime-a",
+		WorkerSnapshotID:     "snapshot-runtime-b", // belongs to session B
+		LeaseID:              "lease-runtime-spoof",
+		ExecutorID:           "blender",
+		ExecutorVersion:      4,
+		CapabilityRevision:   1,
+	})
+	if err == nil {
+		t.Fatal("mismatched session/snapshot claim should fail")
+	}
+	if spoofedAttempt != nil {
+		t.Fatalf("mismatched identity returned attempt: %+v", spoofedAttempt)
+	}
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT status FROM tasks WHERE task_id = 'T-runtime-spoof'`).Scan(&status); err != nil {
+		t.Fatalf("read spoofed task status: %v", err)
+	}
+	if status != "READY" {
+		t.Fatalf("spoofed task status = %q, want READY", status)
+	}
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM task_attempts WHERE task_id = 'T-runtime-spoof'`).Scan(&rows); err != nil {
+		t.Fatalf("count spoofed attempts: %v", err)
+	}
+	if rows != 0 {
+		t.Fatalf("spoofed task attempt rows = %d, want 0", rows)
+	}
+}
+
+func TestClaimNextWithAttemptAtomic_ResolvesAndRejectsCanonicalRuntimeIdentity(t *testing.T) {
+	s, r := openTaskAtomicTestDB(t)
+	ctx := context.Background()
+	if _, err := s.db.ExecContext(ctx, `
+		CREATE TABLE worker_sessions (
+			session_id TEXT PRIMARY KEY,
+			worker_id TEXT NOT NULL,
+			session_type TEXT NOT NULL,
+			status TEXT NOT NULL,
+			revoked INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			last_seen_at TEXT
+		);
+		CREATE TABLE worker_runtime_snapshots (
+			snapshot_id TEXT PRIMARY KEY,
+			worker_id TEXT NOT NULL,
+			session_id TEXT NOT NULL
+		);`); err != nil {
+		t.Fatalf("create runtime identity fixture: %v", err)
+	}
+
+	const (
+		workerID   = "w-runtime-legacy"
+		sessionID  = "session-runtime-legacy"
+		snapshotID = "snapshot-runtime-legacy"
+	)
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO worker_sessions
+			(session_id, worker_id, session_type, status, revoked, created_at, last_seen_at)
+		VALUES (?, ?, 'control', 'ACTIVE', 0, ?, ?)`, sessionID, workerID, now, now); err != nil {
+		t.Fatalf("insert active runtime session: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO worker_runtime_snapshots (snapshot_id, worker_id, session_id)
+		VALUES (?, ?, ?)`, snapshotID, workerID, sessionID); err != nil {
+		t.Fatalf("insert runtime snapshot: %v", err)
+	}
+
+	seedReadyTask(t, s.db, "T-runtime-legacy-a", 0)
+	_, attempt, err := r.ClaimNextWithAttemptAtomic(ctx, workerID, "lease-runtime-legacy-a")
+	if err != nil {
+		t.Fatalf("active legacy claim: %v", err)
+	}
+	if attempt == nil || attempt.WorkerSessionID != sessionID || attempt.WorkerSnapshotID != snapshotID {
+		t.Fatalf("legacy attempt identity = session=%q snapshot=%q; want session=%q snapshot=%q",
+			attempt.WorkerSessionID, attempt.WorkerSnapshotID, sessionID, snapshotID)
+	}
+
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE worker_sessions SET status='DISCONNECTED', revoked=1 WHERE session_id = ?`, sessionID); err != nil {
+		t.Fatalf("revoke runtime session: %v", err)
+	}
+	seedReadyTask(t, s.db, "T-runtime-legacy-b", 0)
+	_, rejectedAttempt, err := r.ClaimNextWithAttemptAtomic(ctx, workerID, "lease-runtime-legacy-b")
+	if err == nil {
+		t.Fatal("claim with revoked runtime session should fail")
+	}
+	if rejectedAttempt != nil {
+		t.Fatalf("revoked-session claim returned attempt: %+v", rejectedAttempt)
+	}
+	var rows int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM task_attempts WHERE task_id = 'T-runtime-legacy-b'`).Scan(&rows); err != nil {
+		t.Fatalf("count revoked-session attempts: %v", err)
+	}
+	if rows != 0 {
+		t.Fatalf("revoked-session attempt rows = %d, want 0", rows)
+	}
+}
+
 // TestClaimTaskForWorkerAtomic_RevisionMismatch: task exists READY but
 // the expected revision doesn't match → ErrTransitionConflict.
 func TestClaimTaskForWorkerAtomic_RevisionMismatch(t *testing.T) {

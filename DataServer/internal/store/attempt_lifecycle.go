@@ -95,21 +95,33 @@ func (r *SQLiteTaskAttemptRepository) Create(ctx context.Context, attempt *taska
 		attempt.Status = taskattempts.AttemptStatusPending
 	}
 
-	// Check for active attempt
-	var count int
-	err := r.store.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM task_attempts WHERE task_id = ? AND status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED')`,
-		attempt.TaskID,
-	).Scan(&count)
+	now := time.Now().UTC().Format(time.RFC3339)
+	tx, err := r.store.db.BeginTx(ctx, nil)
 	if err != nil {
+		return fmt.Errorf("task attempt create begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var count int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM task_attempts WHERE task_id = ? AND status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT')`,
+		attempt.TaskID,
+	).Scan(&count); err != nil {
 		return fmt.Errorf("task attempt create check: %w", err)
 	}
 	if count > 0 {
 		return fmt.Errorf("task attempt create: %w", taskattempts.ErrActiveAttemptExists)
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err = r.store.db.ExecContext(ctx,
+	if err := validateWorkerRuntimeIdentityTx(ctx, tx, attempt.WorkerID, attempt.WorkerSessionID, attempt.WorkerSnapshotID); err != nil {
+		return fmt.Errorf("task attempt create runtime identity: %w", err)
+	}
+	_, err = tx.ExecContext(ctx,
 		`INSERT INTO task_attempts (
 			id, task_id, job_id, attempt_number, worker_id,
 			worker_session_id, worker_snapshot_id, lease_id,
@@ -122,6 +134,10 @@ func (r *SQLiteTaskAttemptRepository) Create(ctx context.Context, attempt *taska
 	if err != nil {
 		return fmt.Errorf("task attempt create: %w", err)
 	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("task attempt create commit: %w", err)
+	}
+	committed = true
 	return nil
 }
 
@@ -176,7 +192,7 @@ func (r *SQLiteTaskAttemptRepository) GetActiveAttempt(ctx context.Context, task
 	}
 	row := r.store.db.QueryRowContext(ctx,
 		`SELECT `+strings.Join(attemptColumns, ",")+` FROM task_attempts
-		 WHERE task_id = ? AND status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+		 WHERE task_id = ? AND status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT')
 		 ORDER BY attempt_number DESC LIMIT 1`,
 		taskID,
 	)
@@ -207,7 +223,7 @@ func (r *SQLiteTaskAttemptRepository) GetByTaskIDAndWorkerAndLease(
 	row := r.store.db.QueryRowContext(ctx,
 		`SELECT `+strings.Join(attemptColumns, ",")+` FROM task_attempts
 		 WHERE task_id = ? AND worker_id = ? AND lease_id = ?
-		   AND status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+		   AND status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT')
 		 ORDER BY attempt_number DESC LIMIT 1`,
 		taskID, workerID, leaseID)
 	a, err := scanAttempt(row)

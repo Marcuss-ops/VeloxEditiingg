@@ -458,16 +458,61 @@ func (s *SQLiteStore) RevokeSession(sessionID string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.Exec(`UPDATE worker_sessions
-		SET revoked = 1, status = CASE WHEN status = 'ACTIVE' THEN 'DISCONNECTED' ELSE status END,
-		    disconnected_at = COALESCE(disconnected_at, ?)
-		WHERE session_id = ?`, now, sessionID); err != nil {
+	var statusColumnCount, disconnectedColumnCount int
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM pragma_table_info('worker_sessions') WHERE name = 'status'`).Scan(&statusColumnCount); err != nil {
+		return fmt.Errorf("revoke session status schema probe: %w", err)
+	}
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM pragma_table_info('worker_sessions') WHERE name = 'disconnected_at'`).Scan(&disconnectedColumnCount); err != nil {
+		return fmt.Errorf("revoke session disconnected schema probe: %w", err)
+	}
+
+	var revokeQuery string
+	switch {
+	case statusColumnCount == 1 && disconnectedColumnCount == 1:
+		revokeQuery = `UPDATE worker_sessions
+			SET revoked = 1, status = CASE WHEN status = 'ACTIVE' THEN 'DISCONNECTED' ELSE status END,
+			    disconnected_at = COALESCE(disconnected_at, ?)
+			WHERE session_id = ?`
+	case statusColumnCount == 1:
+		revokeQuery = `UPDATE worker_sessions
+			SET revoked = 1, status = CASE WHEN status = 'ACTIVE' THEN 'DISCONNECTED' ELSE status END
+			WHERE session_id = ?`
+	case disconnectedColumnCount == 1:
+		revokeQuery = `UPDATE worker_sessions
+			SET revoked = 1, disconnected_at = COALESCE(disconnected_at, ?)
+			WHERE session_id = ?`
+	default:
+		revokeQuery = `UPDATE worker_sessions SET revoked = 1 WHERE session_id = ?`
+	}
+	var revokeArgs []interface{}
+	if statusColumnCount == 1 && disconnectedColumnCount == 1 {
+		revokeArgs = []interface{}{now, sessionID}
+	} else if statusColumnCount == 1 || disconnectedColumnCount == 1 {
+		if disconnectedColumnCount == 1 {
+			revokeArgs = []interface{}{now, sessionID}
+		} else {
+			revokeArgs = []interface{}{sessionID}
+		}
+	} else {
+		revokeArgs = []interface{}{sessionID}
+	}
+	if _, err := tx.Exec(revokeQuery, revokeArgs...); err != nil {
 		return fmt.Errorf("revoke session row: %w", err)
 	}
-	if _, err := tx.Exec(`UPDATE worker_runtime_snapshots
-		SET disconnected_at = COALESCE(disconnected_at, ?)
-		WHERE session_id = ?`, now, sessionID); err != nil {
-		return fmt.Errorf("revoke runtime snapshot: %w", err)
+	var snapshotTableCount int
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM sqlite_master
+		 WHERE type = 'table' AND name = 'worker_runtime_snapshots'`).Scan(&snapshotTableCount); err != nil {
+		return fmt.Errorf("revoke runtime snapshot schema probe: %w", err)
+	}
+	if snapshotTableCount == 1 {
+		if _, err := tx.Exec(`UPDATE worker_runtime_snapshots
+			SET disconnected_at = COALESCE(disconnected_at, ?)
+			WHERE session_id = ?`, now, sessionID); err != nil {
+			return fmt.Errorf("revoke runtime snapshot: %w", err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("revoke session commit: %w", err)
