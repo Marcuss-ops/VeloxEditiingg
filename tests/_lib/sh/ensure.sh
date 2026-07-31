@@ -4,9 +4,13 @@
 
 # ensure_dir <path> — create directory if missing; log_error + return 1 on failure.
 ensure_dir() {
-  local d="$1"
-  [[ -d "$d" ]] && return 0
-  mkdir -p "$d" || { log_error "ensure_dir failed: $d"; return 1; }
+  [[ $# -gt 0 ]] || { log_error "ensure_dir requires at least one path"; return 1; }
+  local d
+  for d in "$@"; do
+    [[ -d "$d" ]] && continue
+    mkdir -p "$d" || { log_error "ensure_dir failed: $d"; return 1; }
+  done
+  return 0
 }
 
 # mkdir_p <path> — thin alias for ensure_dir (preserves prior call sites in
