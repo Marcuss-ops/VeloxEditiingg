@@ -11,42 +11,6 @@ import (
 	"time"
 )
 
-// downloadVeloxAsset downloads a single velox-asset by ID through the
-// configured master's worker-assets endpoint. The shared instance is
-// reused by both the audio resolver and the scene-image resolver —
-// the asset bridge never builds per-domain downloaders.
-//
-// Backward-compat: delegates to the metadata-aware downloader without
-// expected metadata. Such legacy calls may download the asset, but an
-// existing cache entry is never reused as a verified hit.
-func (w *Worker) downloadVeloxAsset(ctx context.Context, assetID string) (string, error) {
-	return w.downloadVeloxAssetWithMetadata(ctx, assetID, "", 0)
-}
-
-// downloadVeloxAssetWithSHA downloads a single velox-asset by ID with
-// optional SHA-256 integrity verification. When expectedSHA256 is non-empty:
-//   - Cache hit: the cached file's SHA-256 is verified; mismatch triggers
-//     a re-download (fail-closed, godlike/07).
-//   - Cache miss: the downloaded file's SHA-256 is verified before
-//     promoting to cache; mismatch discards the download and returns error.
-//   - Cache key includes the first 12 chars of expectedSHA256 so different
-//     versions of the same asset never collide.
-//
-// When expectedSHA256 is empty (legacy path):
-//   - Cache hit: is reused only when another expected size is supplied;
-//     otherwise the path is treated as a miss and refreshed from Master.
-//   - Cache miss: downloads and caches, computing SHA-256 for future callers.
-//
-// Behaviour preserved verbatim from the original asset_bridge.go:
-//   - up to 4 attempts with exponential backoff (500ms, 1s, 2s)
-//   - redirects constrained to the master's base host (max 5 hops)
-//   - 404 fails fast, 5xx is retried, 4xx other than 404 fails fast
-//   - authenticated via worker's Bearer token
-//   - HTML responses are rejected after both header and pre-fetch sniff
-func (w *Worker) downloadVeloxAssetWithSHA(ctx context.Context, assetID string, expectedSHA256 string) (string, error) {
-	return w.downloadVeloxAssetWithMetadata(ctx, assetID, expectedSHA256, 0)
-}
-
 // downloadVeloxAssetWithMetadata is the integrity-aware asset path. A cache
 // hit is reused only after the supplied size and SHA-256 checks pass. Invalid
 // entries are removed individually by cachedAssetPath, then the asset is

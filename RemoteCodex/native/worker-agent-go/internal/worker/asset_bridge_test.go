@@ -13,6 +13,8 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -56,7 +58,9 @@ func TestResolveVoiceoverAudioPathDownloadsFromConfiguredMasterURL(t *testing.T)
 	}
 	w.apiClient.SetAuthToken("worker-token-123")
 
-	localPath, err := w.resolveVoiceoverAudioPath(context.Background(), "velox-asset://asset-123", nil)
+	digest := sha256.Sum256(assetBytes)
+	metadata := map[string]interface{}{"sha256": hex.EncodeToString(digest[:]), "size_bytes": int64(len(assetBytes))}
+	localPath, err := w.resolveVoiceoverAudioPath(context.Background(), "velox-asset://asset-123", metadata)
 	if err != nil {
 		t.Fatalf("resolve voiceover: %v", err)
 	}
@@ -114,7 +118,10 @@ func TestResolveVoiceoverAudioPathRetriesTransient5xxAndFailsOn404(t *testing.T)
 	}
 	w.apiClient.SetAuthToken("worker-token-123")
 
-	path, err := w.resolveVoiceoverAudioPath(context.Background(), "velox-asset://transient", nil)
+	transientBytes := []byte("ID3transient")
+	transientDigest := sha256.Sum256(transientBytes)
+	metadata := map[string]interface{}{"sha256": hex.EncodeToString(transientDigest[:]), "size_bytes": int64(len(transientBytes))}
+	path, err := w.resolveVoiceoverAudioPath(context.Background(), "velox-asset://transient", metadata)
 	if err != nil {
 		t.Fatalf("resolve transient asset: %v", err)
 	}
@@ -130,7 +137,12 @@ func TestResolveVoiceoverAudioPathRetriesTransient5xxAndFailsOn404(t *testing.T)
 	attempts = 0
 	mu.Unlock()
 
-	_, err = w.resolveVoiceoverAudioPath(context.Background(), "velox-asset://missing", nil)
+	missingBytes := []byte("ID3missing")
+	missingDigest := sha256.Sum256(missingBytes)
+	_, err = w.resolveVoiceoverAudioPath(context.Background(), "velox-asset://missing", map[string]interface{}{
+		"sha256":     hex.EncodeToString(missingDigest[:]),
+		"size_bytes": int64(len(missingBytes)),
+	})
 	if err == nil {
 		t.Fatal("want 404 error")
 	}

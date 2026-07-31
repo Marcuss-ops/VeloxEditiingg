@@ -27,9 +27,16 @@ func (w *Worker) resolveTaskAssets(ctx context.Context, payload map[string]inter
 		return nil, nil
 	}
 	// Older task envelopes may carry JSON-encoded canonical payloads below
-	// payload/parameters. Decode them before building the metadata index so
-	// integrity declarations in the outer envelope apply to nested media.
-	resolved := payload
+	// payload/parameters. Deep-copy before decoding so the caller's task
+	// payload remains immutable while integrity declarations are indexed.
+	copied, err := deepCopyAssetValue(payload)
+	if err != nil {
+		return nil, fmt.Errorf("copy task asset payload: %w", err)
+	}
+	resolved, ok := copied.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("copy task asset payload: object expected")
+	}
 	for _, nestedKey := range []string{"payload", "parameters"} {
 		if encoded, ok := resolved[nestedKey].(string); ok && strings.HasPrefix(strings.TrimSpace(encoded), "{") {
 			var decoded map[string]interface{}
@@ -40,58 +47,4 @@ func (w *Worker) resolveTaskAssets(ctx context.Context, payload map[string]inter
 		}
 	}
 	return w.resolveCommonAssetPayload(ctx, resolved)
-}
-
-// materializeVeloxAssetRefs is the final transport boundary: task envelopes
-// have appeared in several shapes over time, so every nested map/list is
-// walked and every master-only velox-asset:// URI is replaced by a cached
-// filesystem path before a renderer sees it.
-func (w *Worker) materializeVeloxAssetRefs(ctx context.Context, value interface{}) (interface{}, error) {
-	switch v := value.(type) {
-	case string:
-		ref := strings.TrimSpace(v)
-		if !strings.HasPrefix(ref, "velox-asset://") {
-			return value, nil
-		}
-		assetID := strings.TrimPrefix(ref, "velox-asset://")
-		if assetID == "" || strings.ContainsAny(assetID, `/\\`) {
-			return nil, fmt.Errorf("invalid velox asset reference")
-		}
-		return w.downloadVeloxAsset(ctx, assetID)
-	case map[string]interface{}:
-		// Asset envelopes commonly carry the expected digest beside the
-		// transport URI. Resolve that pair together so generic recursive
-		// materialization verifies SHA-256 on both misses and hits.
-		expectedSHA := expectedAssetSHA256(v)
-		expectedSizeBytes := expectedAssetSize(v)
-		for key, item := range v {
-			ref, ok := item.(string)
-			if ok && strings.HasPrefix(strings.TrimSpace(ref), "velox-asset://") {
-				assetID := strings.TrimPrefix(strings.TrimSpace(ref), "velox-asset://")
-				if assetID == "" || strings.ContainsAny(assetID, `/\\`) {
-					return nil, fmt.Errorf("invalid velox asset reference")
-				}
-				resolved, err := w.downloadVeloxAssetWithMetadata(ctx, assetID, expectedSHA, expectedSizeBytes)
-				if err != nil {
-					return nil, fmt.Errorf("resolve asset field %s: %w", key, err)
-				}
-				v[key] = resolved
-				continue
-			}
-			resolved, err := w.materializeVeloxAssetRefs(ctx, item)
-			if err != nil {
-				return nil, fmt.Errorf("resolve asset field %s: %w", key, err)
-			}
-			v[key] = resolved
-		}
-	case []interface{}:
-		for i, item := range v {
-			resolved, err := w.materializeVeloxAssetRefs(ctx, item)
-			if err != nil {
-				return nil, fmt.Errorf("resolve asset item %d: %w", i, err)
-			}
-			v[i] = resolved
-		}
-	}
-	return value, nil
 }

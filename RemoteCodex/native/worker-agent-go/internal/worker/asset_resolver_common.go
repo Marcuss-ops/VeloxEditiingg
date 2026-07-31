@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -10,10 +11,10 @@ import (
 // can be materialized. A URI without both fields is never downloaded or
 // accepted from cache.
 type assetMetadata struct {
-	ID         string
-	URI        string
-	SHA256     string
-	SizeBytes  int64
+	ID        string
+	URI       string
+	SHA256    string
+	SizeBytes int64
 }
 
 type assetMetadataIndex map[string]assetMetadata
@@ -31,7 +32,11 @@ func (w *Worker) resolveCommonAssetPayload(ctx context.Context, payload map[stri
 	if err := collectAssetMetadata(payload, index); err != nil {
 		return nil, err
 	}
-	resolved, err := w.resolveCommonAssetValue(ctx, payload, index, "", false)
+	copyPayload, err := deepCopyAssetValue(payload)
+	if err != nil {
+		return nil, fmt.Errorf("common asset resolver: deep copy payload: %w", err)
+	}
+	resolved, err := w.resolveCommonAssetValue(ctx, copyPayload, index, "", false)
 	if err != nil {
 		return nil, err
 	}
@@ -51,12 +56,28 @@ func (w *Worker) resolveCommonAssetValue(ctx context.Context, value interface{},
 		}
 		return w.resolveVerifiedAssetReference(ctx, ref, index, field)
 	case map[string]interface{}:
-		assetContext := mediaContext || isAssetEnvelope(typed) || isMediaContainerField(field)
+		assetContext := mediaContext || isAssetEnvelope(typed)
 		for key, item := range typed {
-			childMedia := assetContext && isMediaValueField(key)
-			if isMediaContainerField(key) {
-				childMedia = true
+			if strings.EqualFold(key, "scenes_json") {
+				encoded, ok := item.(string)
+				if ok && strings.TrimSpace(encoded) != "" {
+					var decoded interface{}
+					if err := json.Unmarshal([]byte(encoded), &decoded); err != nil {
+						return nil, fmt.Errorf("common asset resolver: %s: invalid JSON: %w", fieldPath(field, key), err)
+					}
+					resolved, err := w.resolveCommonAssetValue(ctx, decoded, index, fieldPath(field, key), false)
+					if err != nil {
+						return nil, err
+					}
+					encodedResolved, err := json.Marshal(resolved)
+					if err != nil {
+						return nil, fmt.Errorf("common asset resolver: %s: encode JSON: %w", fieldPath(field, key), err)
+					}
+					typed[key] = string(encodedResolved)
+					continue
+				}
 			}
+			childMedia := (assetContext && isMediaValueField(key)) || isMediaContainerField(key) || isMediaReferenceField(key)
 			resolved, err := w.resolveCommonAssetValue(ctx, item, index, fieldPath(field, key), childMedia)
 			if err != nil {
 				return nil, err
@@ -65,8 +86,13 @@ func (w *Worker) resolveCommonAssetValue(ctx context.Context, value interface{},
 		}
 		return typed, nil
 	case []interface{}:
+		// A semantic scene list may contain plain text strings; only lists
+		// whose field itself denotes media references are URI lists. Maps
+		// inside scenes/tracks are still traversed and their media fields
+		// are classified individually.
+		listMedia := isMediaReferenceField(field)
 		for i, item := range typed {
-			resolved, err := w.resolveCommonAssetValue(ctx, item, index, fmt.Sprintf("%s[%d]", field, i), mediaContext || isMediaContainerField(field))
+			resolved, err := w.resolveCommonAssetValue(ctx, item, index, fmt.Sprintf("%s[%d]", field, i), listMedia)
 			if err != nil {
 				return nil, err
 			}
@@ -74,8 +100,9 @@ func (w *Worker) resolveCommonAssetValue(ctx context.Context, value interface{},
 		}
 		return typed, nil
 	case []string:
+		listMedia := isMediaReferenceField(field)
 		for i, item := range typed {
-			resolved, err := w.resolveCommonAssetValue(ctx, item, index, fmt.Sprintf("%s[%d]", field, i), mediaContext || isMediaContainerField(field))
+			resolved, err := w.resolveCommonAssetValue(ctx, item, index, fmt.Sprintf("%s[%d]", field, i), listMedia)
 			if err != nil {
 				return nil, err
 			}
@@ -84,7 +111,7 @@ func (w *Worker) resolveCommonAssetValue(ctx context.Context, value interface{},
 		return typed, nil
 	case []map[string]interface{}:
 		for i, item := range typed {
-			resolved, err := w.resolveCommonAssetValue(ctx, item, index, fmt.Sprintf("%s[%d]", field, i), mediaContext || isMediaContainerField(field))
+			resolved, err := w.resolveCommonAssetValue(ctx, item, index, fmt.Sprintf("%s[%d]", field, i), mediaContext)
 			if err != nil {
 				return nil, err
 			}
@@ -101,10 +128,10 @@ func (w *Worker) resolveCommonAssetValue(ctx context.Context, value interface{},
 }
 
 func (w *Worker) resolveVerifiedAssetReference(ctx context.Context, reference string, index assetMetadataIndex, field string) (string, error) {
-	if !strings.HasPrefix(strings.ToLower(reference), "velox-asset://") {
+	assetID, bridged := parseVeloxAssetReference(reference)
+	if !bridged {
 		return "", fmt.Errorf("common asset resolver: %s: raw URL or local path rejected; use velox-asset://", field)
 	}
-	assetID := strings.TrimSpace(strings.TrimPrefix(reference, "velox-asset://"))
 	if !validAssetReferenceID(assetID) {
 		return "", fmt.Errorf("common asset resolver: %s: invalid velox-asset:// reference", field)
 	}
@@ -128,6 +155,18 @@ func collectAssetMetadata(value interface{}, index assetMetadataIndex) error {
 		sha := expectedAssetSHA256(typed)
 		size := expectedAssetSize(typed)
 		for key, raw := range typed {
+			if strings.EqualFold(key, "scenes_json") {
+				if encoded, ok := raw.(string); ok && strings.TrimSpace(encoded) != "" {
+					var decoded interface{}
+					if err := json.Unmarshal([]byte(encoded), &decoded); err != nil {
+						return fmt.Errorf("common asset resolver: scenes_json metadata: %w", err)
+					}
+					if err := collectAssetMetadata(decoded, index); err != nil {
+						return err
+					}
+				}
+				continue
+			}
 			ref, ok := raw.(string)
 			if !ok || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(ref)), "velox-asset://") || !isAssetReferenceField(key) {
 				continue
@@ -168,12 +207,16 @@ func collectAssetMetadata(value interface{}, index assetMetadataIndex) error {
 
 func registerAssetMetadata(index assetMetadataIndex, reference string, fields map[string]interface{}, sha string, size int64) {
 	ref := strings.TrimSpace(reference)
+	assetID, bridged := parseVeloxAssetReference(ref)
+	if !bridged {
+		return
+	}
 	if ref == "" {
 		return
 	}
-	assetID := strings.TrimPrefix(ref, "velox-asset://")
-	index[ref] = assetMetadata{ID: assetID, URI: ref, SHA256: strings.TrimSpace(sha), SizeBytes: size}
-	index["velox-asset://"+assetID] = index[ref]
+	canonicalRef := "velox-asset://" + assetID
+	index[ref] = assetMetadata{ID: assetID, URI: canonicalRef, SHA256: strings.TrimSpace(sha), SizeBytes: size}
+	index[canonicalRef] = index[ref]
 	if id := firstString(fields, "asset_id", "id"); id != "" {
 		index["velox-asset://"+id] = index[ref]
 	}
@@ -206,7 +249,7 @@ func isAssetEnvelope(fields map[string]interface{}) bool {
 
 func isMediaContainerField(field string) bool {
 	switch strings.ToLower(strings.TrimSpace(field)) {
-	case "scenes", "scene", "items", "audio_tracks", "video", "video_url", "video_path", "voiceover", "voiceover_url", "music", "music_url", "effects", "effect", "sfx", "sfx_url", "subtitles", "subtitle_tracks", "subtitle_url", "captions", "caption_url", "tracks", "assets", "render_manifest":
+	case "scenes", "scene", "scenes_json", "items", "audio_tracks", "voiceover_paths", "voiceover_path", "audio_path", "video", "video_url", "video_path", "clip_segments", "clips", "images", "scene_image_paths", "voiceover", "voiceover_url", "music", "music_url", "music_path", "effects", "effect", "effect_url", "effect_path", "sfx", "sfx_url", "sfx_path", "subtitles", "subtitle_tracks", "subtitle_url", "subtitle_path", "captions", "caption_url", "caption_path", "tracks", "assets", "render_manifest":
 		return true
 	default:
 		return false
@@ -214,12 +257,16 @@ func isMediaContainerField(field string) bool {
 }
 
 func isMediaValueField(field string) bool {
-	return isAssetReferenceField(field) || isMediaContainerField(field)
+	return isMediaReferenceField(field) || isMediaContainerField(field)
+}
+
+func isMediaReferenceField(field string) bool {
+	return isAssetReferenceField(field) || strings.HasSuffix(strings.ToLower(strings.TrimSpace(field)), "_paths") || strings.HasSuffix(strings.ToLower(strings.TrimSpace(field)), "_links")
 }
 
 func isAssetReferenceField(field string) bool {
 	switch strings.ToLower(strings.TrimSpace(field)) {
-	case "uri", "url", "source_url", "source", "audio_path", "video_url", "video_path", "voiceover_path", "voiceover", "voiceover_url", "voiceover_paths", "audio_url", "music_path", "music_url", "effect", "effect_path", "effect_url", "sfx", "sfx_path", "sfx_url", "subtitle", "subtitles", "subtitle_path", "subtitle_url", "caption", "caption_path", "caption_url", "clip", "clip_link", "clip_links", "image", "image_link", "image_links", "scene_image_paths":
+	case "uri", "url", "source_url", "source", "audio_path", "video_url", "video_path", "voiceover_path", "voiceover", "voiceover_url", "voiceover_paths", "audio_url", "music", "music_path", "music_url", "effect", "effects", "effect_path", "effect_url", "sfx", "sfx_path", "sfx_url", "subtitle", "subtitles", "subtitle_path", "subtitle_url", "caption", "captions", "caption_path", "caption_url", "clip", "clips", "clip_link", "clip_links", "image", "images", "image_link", "image_links", "scene_image_paths":
 		return true
 	default:
 		return false
@@ -231,6 +278,27 @@ func fieldPath(parent, child string) string {
 		return child
 	}
 	return parent + "." + child
+}
+
+func parseVeloxAssetReference(reference string) (string, bool) {
+	const scheme = "velox-asset://"
+	trimmed := strings.TrimSpace(reference)
+	if len(trimmed) < len(scheme) || !strings.EqualFold(trimmed[:len(scheme)], scheme) {
+		return "", false
+	}
+	return strings.TrimSpace(trimmed[len(scheme):]), true
+}
+
+func deepCopyAssetValue(value interface{}) (interface{}, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	var copyValue interface{}
+	if err := json.Unmarshal(data, &copyValue); err != nil {
+		return nil, err
+	}
+	return copyValue, nil
 }
 
 func firstString(fields map[string]interface{}, keys ...string) string {

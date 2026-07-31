@@ -6,6 +6,8 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -216,6 +218,8 @@ func (e uploadRecordingExecutor) Execute(
 
 func TestPR_3_9_DispatchResolvesVoiceoverAssetBeforeExecutor(t *testing.T) {
 	wantAudioBytes := []byte("ID3recorded-audio-bytes")
+	digest := sha256.Sum256(wantAudioBytes)
+	expectedSHA := hex.EncodeToString(digest[:])
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "audio/mpeg")
 		_, _ = w.Write(wantAudioBytes)
@@ -265,6 +269,8 @@ func TestPR_3_9_DispatchResolvesVoiceoverAssetBeforeExecutor(t *testing.T) {
 			ExecutorID: "scene.composite.v1",
 			Payload: map[string]interface{}{
 				"audio_path":  "velox-asset://asset-recording-001",
+				"sha256":      expectedSHA,
+				"size_bytes":  int64(len(wantAudioBytes)),
 				"script_text": "voiceover asset resolve test",
 				"output_path": "/tmp/voiceover-resolve.mp4",
 			},
