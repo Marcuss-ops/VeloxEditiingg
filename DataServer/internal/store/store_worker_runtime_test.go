@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -102,19 +103,19 @@ func TestWorkerRuntimeMigrationConstraints(t *testing.T) {
 // (RW-PROD-005 §3 anti-collision invariant).
 //
 // Behaviour asserted:
-//   * The FIRST InsertSession on a fresh worker_id succeeds (no prior ACTIVE).
-//   * The SECOND InsertSession on the SAME worker_id with a DIFFERENT
+//   - The FIRST InsertSession on a fresh worker_id succeeds (no prior ACTIVE).
+//   - The SECOND InsertSession on the SAME worker_id with a DIFFERENT
 //     token_hash is rejected with ErrWorkerIDCollision — the master is
 //     protecting the registry against two physical machines sharing an
 //     identity. This is the handler-level pre-emptive probe path that
 //     short-circuits before any INSERT is attempted.
-//   * The SECOND InsertSession on the SAME worker_id with the SAME
+//   - The SECOND InsertSession on the SAME worker_id with the SAME
 //     token_hash succeeds (legitimate reconnect: same machine, fresh
 //     session). The pre-emptive UPDATE demotes the prior ACTIVE and the
 //     INSERT goes through.
-//   * The collision-reject path returns errors.Is(err, ErrWorkerIDCollision)
+//   - The collision-reject path returns errors.Is(err, ErrWorkerIDCollision)
 //     so callers can detect via the typed sentinel without string-matching.
-//   * The DB-level trigger (worker_sessions_one_active / migrations 094 +
+//   - The DB-level trigger (worker_sessions_one_active / migrations 094 +
 //     095) continues to backstop the race window as a defensive layer.
 func TestInsertSession_CollisionRejectsDifferentTokenHash(t *testing.T) {
 	s, err := NewSQLiteStore(t.TempDir() + "/worker-runtime-collision.db")
@@ -219,12 +220,124 @@ func TestInsertSession_CollisionRejectsDifferentTokenHash(t *testing.T) {
 // (RW-PROD-005 §3 anti-collision invariant).
 //
 // Behaviour asserted:
-//   * CheckActiveSessionCollision returns "" + nil for a worker_id with
+//   - CheckActiveSessionCollision returns "" + nil for a worker_id with
 //     no ACTIVE session (no false-positive collisions on fresh boot).
-//   * CheckActiveSessionCollision returns the matching token_hash when an
+//   - CheckActiveSessionCollision returns the matching token_hash when an
 //     ACTIVE session exists for the worker_id.
-//   * The function is session-type-scoped (control vs asset) — an ACTIVE
+//   - The function is session-type-scoped (control vs asset) — an ACTIVE
 //     asset session does NOT shadow a candidate control session.
+func TestInsertSession_ReconnectInsertFailureRollsBackDemotion(t *testing.T) {
+	s, err := NewSQLiteStore(t.TempDir() + "/worker-runtime-reconnect-rollback.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	const workerID = "rollback-worker-1"
+	if _, err := s.DB().Exec(
+		`INSERT INTO workers(worker_id,worker_name,node_role,raw_json,migrated_at) VALUES(?,?,?,?,?)`,
+		workerID, "rollback-test", "worker", "{}", "datetime('now')",
+	); err != nil {
+		t.Fatalf("seed workers row failed: %v", err)
+	}
+
+	if err := s.InsertSession(&PersistedSession{
+		SessionID:   "rollback-session-a",
+		WorkerID:    workerID,
+		SessionType: "control",
+		TokenHash:   "rollback-token",
+		ExpiresAt:   time.Now().UTC().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("seed InsertSession failed: %v", err)
+	}
+
+	// Reusing the existing primary key forces the INSERT after the reconnect
+	// demotion to fail. The transaction must roll back that demotion, leaving
+	// the original session ACTIVE.
+	err = s.InsertSession(&PersistedSession{
+		SessionID:   "rollback-session-a",
+		WorkerID:    workerID,
+		SessionType: "control",
+		TokenHash:   "rollback-token",
+		ExpiresAt:   time.Now().UTC().Add(time.Hour),
+	})
+	if err == nil {
+		t.Fatal("duplicate reconnect session ID should fail")
+	}
+
+	var status string
+	var revoked int
+	var disconnectedAt sql.NullString
+	if err := s.DB().QueryRow(
+		`SELECT status, revoked, disconnected_at FROM worker_sessions WHERE session_id = ?`, "rollback-session-a",
+	).Scan(&status, &revoked, &disconnectedAt); err != nil {
+		t.Fatalf("read original session state: %v", err)
+	}
+	if status != "ACTIVE" || revoked != 0 || disconnectedAt.Valid {
+		t.Fatalf("original session state = status=%q revoked=%d disconnected_at=%v, want ACTIVE/0/NULL after rollback", status, revoked, disconnectedAt)
+	}
+}
+
+func TestRevokeSessionClosesRuntimeSnapshotAtomically(t *testing.T) {
+	s, err := NewSQLiteStore(t.TempDir() + "/worker-runtime-revoke.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	const (
+		workerID   = "revoke-worker-1"
+		sessionID  = "revoke-session-1"
+		snapshotID = "revoke-snapshot-1"
+	)
+	if _, err := s.DB().Exec(
+		`INSERT INTO workers(worker_id,worker_name,node_role,raw_json,migrated_at) VALUES(?,?,?,?,?)`,
+		workerID, "revoke-test", "worker", "{}", "datetime('now')",
+	); err != nil {
+		t.Fatalf("seed workers row failed: %v", err)
+	}
+	if err := s.InsertSession(&PersistedSession{
+		SessionID:   sessionID,
+		WorkerID:    workerID,
+		SessionType: "control",
+		TokenHash:   "revoke-token",
+		ExpiresAt:   time.Now().UTC().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("seed session failed: %v", err)
+	}
+	if _, err := s.DB().Exec(`
+		INSERT INTO worker_runtime_snapshots
+			(snapshot_id, worker_id, session_id, connected_at)
+		VALUES (?, ?, ?, ?)`, snapshotID, workerID, sessionID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("seed runtime snapshot failed: %v", err)
+	}
+
+	if err := s.RevokeSession(sessionID); err != nil {
+		t.Fatalf("RevokeSession: %v", err)
+	}
+
+	var sessionStatus string
+	var revoked int
+	var sessionDisconnected, snapshotDisconnected sql.NullString
+	if err := s.DB().QueryRow(`
+		SELECT status, revoked, disconnected_at
+		  FROM worker_sessions WHERE session_id = ?`, sessionID).Scan(
+		&sessionStatus, &revoked, &sessionDisconnected,
+	); err != nil {
+		t.Fatalf("read revoked session: %v", err)
+	}
+	if sessionStatus != "DISCONNECTED" || revoked != 1 || !sessionDisconnected.Valid {
+		t.Fatalf("session lifecycle = status=%q revoked=%d disconnected_at=%v, want DISCONNECTED/1/non-NULL", sessionStatus, revoked, sessionDisconnected)
+	}
+	if err := s.DB().QueryRow(`
+		SELECT disconnected_at FROM worker_runtime_snapshots WHERE snapshot_id = ?`, snapshotID).Scan(&snapshotDisconnected); err != nil {
+		t.Fatalf("read closed runtime snapshot: %v", err)
+	}
+	if !snapshotDisconnected.Valid {
+		t.Fatal("runtime snapshot disconnected_at should be populated")
+	}
+}
+
 func TestCheckActiveSessionCollision_ReturnsMatchingHash(t *testing.T) {
 	s, err := NewSQLiteStore(t.TempDir() + "/worker-runtime-collision-probe.db")
 	if err != nil {

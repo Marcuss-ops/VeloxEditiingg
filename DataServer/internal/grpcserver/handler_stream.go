@@ -85,16 +85,23 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	workerID := declaredWorkerID
 	sessionID := fmt.Sprintf("grpc-%s-%d", workerID, time.Now().UnixNano())
 
-	// The Hello is the authoritative admission point for runtime identity.
-	// Mint/reuse the immutable snapshot before registering the in-memory
-	// session, so every claim created by this session has a canonical
-	// snapshot ID available for its atomic TaskAttempt insert.
+	// Validate the Hello capability payload before any durable admission.
+	// A malformed worker must not create a session or runtime snapshot.
+	caps := map[string]interface{}{}
+	if hello.GetCapabilities() != nil {
+		caps = hello.GetCapabilities().AsMap()
+	}
+	executors, err := parseExecutorCapabilities(caps)
+	if err != nil {
+		return fmt.Errorf("stream: invalid executor capabilities: %w", err)
+	}
+
+	// Mint the immutable snapshot before admitting the durable control
+	// session. InsertSession is transactional; if collision or any other
+	// admission error occurs, this exact snapshot is deleted and the prior
+	// session remains untouched.
 	workerSnapshotID := ""
 	if h.dbStore != nil {
-		caps := map[string]interface{}{}
-		if hello.GetCapabilities() != nil {
-			caps = hello.GetCapabilities().AsMap()
-		}
 		capabilitiesJSON, marshalErr := json.Marshal(caps)
 		if marshalErr != nil {
 			return fmt.Errorf("stream: encode worker runtime capabilities: %w", marshalErr)
@@ -131,6 +138,34 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 			return fmt.Errorf("stream: create worker runtime snapshot: empty snapshot")
 		}
 		workerSnapshotID = snapshot.SnapshotID
+
+		newTokenHash := store.HashCredential(hello.GetCredentialHash())
+		peerIP := h.extractPeerIP(stream)
+		insertErr := h.dbStore.InsertSession(&store.PersistedSession{
+			SessionID:   sessionID,
+			WorkerID:    workerID,
+			SessionType: "control",
+			TokenHash:   newTokenHash,
+			IPAddress:   peerIP,
+			ExpiresAt:   time.Now().UTC().Add(24 * time.Hour),
+		})
+		if errors.Is(insertErr, store.ErrWorkerIDCollision) {
+			if cleanupErr := h.dbStore.DeleteWorkerRuntimeSnapshotBySession(workerID, sessionID); cleanupErr != nil {
+				log.Printf("[GRPC] Worker %s snapshot cleanup after collision failed: %v", workerID, cleanupErr)
+			}
+			log.Printf("[GRPC] Worker %s hello COLLISION: rejecting incoming hello peer_ip=%s", workerID, peerIP)
+			return status.Errorf(codes.AlreadyExists,
+				"worker_id %q already connected on a different credential", workerID)
+		}
+		if insertErr != nil {
+			if cleanupErr := h.dbStore.DeleteWorkerRuntimeSnapshotBySession(workerID, sessionID); cleanupErr != nil {
+				log.Printf("[GRPC] Worker %s snapshot cleanup after session admission failure failed: %v", workerID, cleanupErr)
+			}
+			return fmt.Errorf("stream: persist worker session: %w", insertErr)
+		}
+		if existingTokenHash, probeErr := h.dbStore.CheckActiveSessionCollision(workerID, "control"); probeErr == nil && existingTokenHash == newTokenHash {
+			log.Printf("[GRPC] Worker %s hello admitted/reconnected (session: %s)", workerID, sessionID)
+		}
 	}
 
 	// Issue 6 fix: create a cancellable context for the session.
@@ -167,93 +202,18 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	// capability report and store them on the session. A worker whose
 	// executors block is missing or malformed is NOT eligible for
 	// placement and must be rejected at registration.
-	if hello.GetCapabilities() != nil {
-		capsMap := hello.GetCapabilities().AsMap()
-		if types := extractSupportedJobTypes(capsMap); len(types) > 0 {
+	if len(caps) > 0 {
+		if types := extractSupportedJobTypes(caps); len(types) > 0 {
 			sess.supportedJobTypes.Store(types)
 		}
-		if mpj := maxParallelJobsFromCapabilities(capsMap); mpj > 0 {
+		if mpj := maxParallelJobsFromCapabilities(caps); mpj > 0 {
 			sess.maxParallelJobs.Store(int32(mpj))
 		}
-		executors, err := parseExecutorCapabilities(capsMap)
-		if err != nil {
-			log.Printf("[GRPC] Worker %s: failed to parse executor capabilities: %v", workerID, err)
-			return fmt.Errorf("stream: invalid executor capabilities: %w", err)
-		}
-		sess.replaceCapabilities(executors, capabilitiesBoolMap(capsMap))
+		sess.replaceCapabilities(executors, capabilitiesBoolMap(caps))
 	}
 	sess.ready.Store(true)
 	sess.draining.Store(false)
 	sess.lastHeartbeatUnix.Store(time.Now().UTC().Unix())
-
-	// Issue 7 fix: persist the session to SQLite worker_sessions table.
-	//
-	// Anti-collision gate (RW-PROD-005 §3 anti-collision invariant): before
-	// admitting the session, look up the existing ACTIVE session for the
-	// same (worker_id, session_type). If one exists with a DIFFERENT
-	// token_hash, two distinct machines are racing to register the same
-	// worker_id — reject the incoming hello with codes.AlreadyExists so the
-	// duplicate never reaches the placement matcher's registry. A matching
-	// token_hash is a legitimate reconnect (same machine, fresh session)
-	// and proceeds to the existing demote-old + insert-new path.
-	//
-	// InsertSession performs a second defensive collision probe as the
-	// last step before the UPDATE-then-INSERT pair, so a caller that
-	// bypassed this handler-level gate still cannot admit a colliding
-	// insert. The trigger `trg_worker_sessions_one_active` (migration 094
-	// + 095) is the authoritative race-safe backstop for concurrent
-	// inserts that slip past both layers.
-	//
-	// Telemetry note: collision-rejection events are logged at INFO level
-	// here (canonical format `[GRPC] Worker %s hello COLLISION` — grep-able
-	// for ops dashboards). A Prometheus counter
-	// `velox_worker_hello_collision_rejected_total` is planned in a
-	// follow-up commit that wires the Handler to a metrics registry via
-	// the standard dependency-injection pattern; the log signal is the
-	// authoritative telemetry surface for this atomic change.
-	if h.dbStore != nil {
-		newTokenHash := store.HashCredential(hello.GetCredentialHash())
-		peerIP := h.extractPeerIP(stream)
-		existingTokenHash, probeErr := h.dbStore.CheckActiveSessionCollision(workerID, "control")
-		if probeErr != nil {
-			log.Printf("[GRPC] Worker %s collision probe failed (will defer to InsertSession defensive check): %v", workerID, probeErr)
-		}
-		if probeErr == nil && existingTokenHash != "" && existingTokenHash != newTokenHash {
-			// Anti-collision REJECT path. Distinct token_hash on the
-			// existing ACTIVE session = two machines racing to register
-			// the same worker_id. Emit codes.AlreadyExists so the worker
-			// side can detect (status.FromError().Code()) and exit loudly
-			// via the worker_claimloop.go collision handling + main.go
-			// exit-code 17 diagnostic.
-			log.Printf("[GRPC] Worker %s hello COLLISION: existing ACTIVE session has token_hash=%s (different from incoming token_hash=%s) peer_ip=%s; rejecting incoming hello from same worker_id",
-				workerID, existingTokenHash, newTokenHash, peerIP)
-			return status.Errorf(codes.AlreadyExists,
-				"worker_id %q already connected on a different credential (worker_id collision: two machines with the same identity)", workerID)
-		}
-		insertErr := h.dbStore.InsertSession(&store.PersistedSession{
-			SessionID:   sessionID,
-			WorkerID:    workerID,
-			SessionType: "control",
-			TokenHash:   newTokenHash,
-			IPAddress:   peerIP,
-			ExpiresAt:   time.Now().UTC().Add(24 * time.Hour),
-		})
-		if errors.Is(insertErr, store.ErrWorkerIDCollision) {
-			// Race-window collision: SELECT missed the existing session but
-			// the trigger caught it. Same reject path as the probe above.
-			log.Printf("[GRPC] Worker %s hello COLLISION (race): trigger caught concurrent insert; rejecting incoming hello peer_ip=%s",
-				workerID, peerIP)
-			return status.Errorf(codes.AlreadyExists,
-				"worker_id %q already connected on a different credential (race-window collision)", workerID)
-		}
-		if insertErr != nil {
-			log.Printf("[GRPC] Worker %s InsertSession failed (continuing — session will be tracked in-memory only): %v", workerID, insertErr)
-		} else if existingTokenHash != "" {
-			// Legit reconnect (same token_hash) succeeded: log for ops audit.
-			log.Printf("[GRPC] Worker %s hello RECONNECT: demoted prior ACTIVE session (same token_hash) and admitted new session_id=%s",
-				workerID, sessionID)
-		}
-	}
 
 	// Issue 5 fix: start the dedicated session writer goroutine.
 	// All stream.Send() calls go through sendCh → sessionWriter from this point on.

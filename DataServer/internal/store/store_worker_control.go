@@ -316,12 +316,24 @@ func (s *SQLiteStore) InsertSession(sess *PersistedSession) error {
 		sessionType = "control"
 	}
 
-	// Defensive collision check (caller SHOULD have already done this; this is
-	// the second line of defense). Reading the existing token_hash and
-	// comparing BEFORE the pre-emptive demote means a colliding insert is
-	// rejected without mutating the existing ACTIVE row.
-	existingTokenHash, err := s.CheckActiveSessionCollision(sess.WorkerID, sessionType)
+	tx, err := s.db.Begin()
 	if err != nil {
+		return fmt.Errorf("insert session begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Keep the collision probe, reconnect demotion, and new-session insert in
+	// one transaction. A failed reconnect must not revoke the previously
+	// active session halfway through the operation.
+	var existingTokenHash string
+	err = tx.QueryRow(`
+		SELECT token_hash FROM worker_sessions
+		 WHERE worker_id = ? AND session_type = ? AND status = 'ACTIVE' AND revoked = 0
+		 ORDER BY last_seen_at DESC, created_at DESC LIMIT 1`,
+		sess.WorkerID, sessionType).Scan(&existingTokenHash)
+	if err == sql.ErrNoRows {
+		existingTokenHash = ""
+	} else if err != nil {
 		return fmt.Errorf("insert session collision probe: %w", err)
 	}
 	if existingTokenHash != "" && existingTokenHash != sess.TokenHash {
@@ -329,23 +341,41 @@ func (s *SQLiteStore) InsertSession(sess *PersistedSession) error {
 			ErrWorkerIDCollision, sess.WorkerID, sessionType, sess.SessionID)
 	}
 
-	// A legitimate reconnect closes the previous active session of the same
-	// type. Asset authentication and the gRPC control stream intentionally
-	// coexist (different session_type). After the collision check above, the
-	// demote is safe — it only fires when the existing token_hash matched
-	// (or no existing session).
-	if _, err := s.db.Exec(`UPDATE worker_sessions
+	if _, err := tx.Exec(`UPDATE worker_sessions
 		SET status='DISCONNECTED', disconnected_at=?, disconnect_reason='replaced', revoked=1
-		WHERE worker_id=? AND session_type=? AND status='ACTIVE' AND revoked=0`, now, sess.WorkerID, sessionType); err != nil {
-		return err
+		WHERE worker_id=? AND session_type=? AND status='ACTIVE' AND revoked=0`,
+		now, sess.WorkerID, sessionType); err != nil {
+		return fmt.Errorf("insert session demote: %w", err)
 	}
-	_, err = s.db.Exec(
+	if _, err := tx.Exec(
 		`INSERT INTO worker_sessions (session_id, worker_id, token_hash, ip_address, created_at, expires_at, last_seen, revoked, status, connected_at, last_seen_at, session_type)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'ACTIVE', ?, ?, ?)`,
 		sess.SessionID, sess.WorkerID, sess.TokenHash, sess.IPAddress,
 		now, sess.ExpiresAt.UTC().Format(time.RFC3339), now, now, now, sessionType,
-	)
-	return err
+	); err != nil {
+		if strings.Contains(err.Error(), "worker already has an active session") {
+			return fmt.Errorf("%w: concurrent insert collision", ErrWorkerIDCollision)
+		}
+		return fmt.Errorf("insert session row: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("insert session commit: %w", err)
+	}
+	return nil
+}
+
+// DeleteWorkerRuntimeSnapshotBySession removes a snapshot that was created
+// during a failed Hello admission before any TaskAttempt could reference it.
+// It is intentionally scoped to the exact worker/session pair.
+func (s *SQLiteStore) DeleteWorkerRuntimeSnapshotBySession(workerID, sessionID string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("worker runtime snapshot: store not initialized")
+	}
+	_, err := s.db.Exec(`DELETE FROM worker_runtime_snapshots WHERE worker_id = ? AND session_id = ?`, workerID, sessionID)
+	if err != nil {
+		return fmt.Errorf("worker runtime snapshot delete: %w", err)
+	}
+	return nil
 }
 
 // ValidateSession checks if a token hash maps to a valid, non-expired, non-revoked session.
@@ -416,10 +446,33 @@ func (s *SQLiteStore) RevokeWorkerSessions(workerID string) error {
 	return err
 }
 
-// RevokeSession revokes a single session.
+// RevokeSession revokes a single session and closes its immutable runtime
+// snapshot, when one exists. Keeping both lifecycle records aligned lets
+// historical attempt queries distinguish a connected runtime from one that
+// had already disconnected.
 func (s *SQLiteStore) RevokeSession(sessionID string) error {
-	_, err := s.db.Exec(`UPDATE worker_sessions SET revoked = 1 WHERE session_id = ?`, sessionID)
-	return err
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("revoke session begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`UPDATE worker_sessions
+		SET revoked = 1, status = CASE WHEN status = 'ACTIVE' THEN 'DISCONNECTED' ELSE status END,
+		    disconnected_at = COALESCE(disconnected_at, ?)
+		WHERE session_id = ?`, now, sessionID); err != nil {
+		return fmt.Errorf("revoke session row: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE worker_runtime_snapshots
+		SET disconnected_at = COALESCE(disconnected_at, ?)
+		WHERE session_id = ?`, now, sessionID); err != nil {
+		return fmt.Errorf("revoke runtime snapshot: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("revoke session commit: %w", err)
+	}
+	return nil
 }
 
 // CleanupExpiredSessions deletes sessions that are expired or revoked for more than 24h.
