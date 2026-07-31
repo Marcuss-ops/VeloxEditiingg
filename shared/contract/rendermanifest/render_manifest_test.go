@@ -2,6 +2,7 @@ package rendermanifest
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 )
@@ -90,6 +91,24 @@ func TestValidate_TrackAndEventRules(t *testing.T) {
 	for _, path := range []string{"tracks[0].events[0].asset_id", "tracks[0].events[0].timeline_start_ms", "tracks[0].events[0].source_start_ms", "tracks[0].events[0].fade_in_ms", "tracks[1].events[0].asset_id", "tracks[2].kind", "tracks[3].asset_id"} {
 		if !hasPath(violations, path) {
 			t.Errorf("missing track/event violation for %s: %+v", path, violations)
+		}
+	}
+}
+
+func TestValidate_LayerRules(t *testing.T) {
+	manifest := validManifest()
+	manifest.Layers = []Layer{
+		{ID: "duplicate", Type: "text", StartSeconds: -1, DurationSeconds: math.NaN(), Position: []float64{math.Inf(1)}},
+		{ID: "duplicate", Type: "", FontSize: -1},
+	}
+	err := manifest.Validate()
+	var violations ValidationErrors
+	if !errors.As(err, &violations) {
+		t.Fatalf("expected ValidationErrors, got %T (%v)", err, err)
+	}
+	for _, path := range []string{"layers[0].start_seconds", "layers[0].duration_seconds", "layers[0].position[0]", "layers[1].type", "layers[1].font_size", "layers[1].id"} {
+		if !hasPath(violations, path) {
+			t.Errorf("missing layer violation for %s: %+v", path, violations)
 		}
 	}
 }

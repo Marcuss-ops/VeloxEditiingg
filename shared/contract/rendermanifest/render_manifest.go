@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
@@ -26,6 +27,7 @@ type Manifest struct {
 	Canvas Canvas  `json:"canvas"`
 	Assets []Asset `json:"assets"`
 	Tracks []Track `json:"tracks"`
+	Layers []Layer `json:"layers,omitempty"`
 	Output Output  `json:"output"`
 }
 
@@ -58,6 +60,24 @@ type Track struct {
 	AssetID string  `json:"asset_id,omitempty"`
 	Events  []Event `json:"events,omitempty"`
 	BurnIn  bool    `json:"burn_in,omitempty"`
+}
+
+// Layer is an ordered visual overlay. Layers are sorted by start time and ID
+// by the master compiler before the manifest is serialized.
+type Layer struct {
+	ID              string    `json:"id"`
+	Type            string    `json:"type"`
+	Role            string    `json:"role,omitempty"`
+	Text            string    `json:"text,omitempty"`
+	Asset           string    `json:"asset,omitempty"`
+	Source          string    `json:"source,omitempty"`
+	Font            string    `json:"font,omitempty"`
+	FontSize        float64   `json:"font_size,omitempty"`
+	Position        []float64 `json:"position,omitempty"`
+	StartSeconds    float64   `json:"start_seconds,omitempty"`
+	DurationSeconds float64   `json:"duration_seconds,omitempty"`
+	Preset          string    `json:"preset,omitempty"`
+	Animation       string    `json:"animation,omitempty"`
 }
 
 // Event places one asset on a track. SourceStartMS defaults to zero when it
@@ -220,6 +240,20 @@ func (m Manifest) Validate() error {
 	if len(m.Tracks) > 0 && !hasVoiceover {
 		errs.add("tracks", "missing_kind", "at least one voiceover track", "")
 	}
+	layerIDs := make(map[string]bool, len(m.Layers))
+	for i, layer := range m.Layers {
+		path := fmt.Sprintf("layers[%d]", i)
+		for _, violation := range layer.validate(path) {
+			errs = append(errs, violation)
+		}
+		if layer.ID != "" {
+			if layerIDs[layer.ID] {
+				errs.add(path+".id", "duplicate", "unique layer id", layer.ID)
+			} else {
+				layerIDs[layer.ID] = true
+			}
+		}
+	}
 	errs = append(errs, m.Output.validate()...)
 	if len(errs) > 0 {
 		return errs
@@ -244,14 +278,38 @@ func (a Asset) validate(path string) (errs ValidationErrors) {
 	if !sha256Pattern.MatchString(a.SHA256) {
 		errs.add(path+".sha256", "invalid_sha256", "64 lowercase hexadecimal characters", a.SHA256)
 	}
-	if a.SizeBytes < 0 {
-		errs.add(path+".size_bytes", "out_of_range", "non-negative integer", fmt.Sprint(a.SizeBytes))
+	if a.SizeBytes <= 0 {
+		errs.add(path+".size_bytes", "out_of_range", "positive integer", fmt.Sprint(a.SizeBytes))
 	}
 	if (a.Kind == "video" || a.Kind == "audio") && a.DurationMS <= 0 {
 		errs.add(path+".duration_ms", "required", "positive milliseconds", fmt.Sprint(a.DurationMS))
 	}
 	if a.Kind == "subtitle" && a.Format != "ass" && a.Format != "srt" && a.Format != "vtt" {
 		errs.add(path+".format", "unsupported_value", "ass, srt, or vtt", a.Format)
+	}
+	return errs
+}
+
+func (l Layer) validate(path string) (errs ValidationErrors) {
+	if strings.TrimSpace(l.ID) == "" {
+		errs.add(path+".id", "required", "non-empty string", l.ID)
+	}
+	if strings.TrimSpace(l.Type) == "" {
+		errs.add(path+".type", "required", "non-empty string", l.Type)
+	}
+	if l.FontSize < 0 || math.IsNaN(l.FontSize) || math.IsInf(l.FontSize, 0) {
+		errs.add(path+".font_size", "out_of_range", "finite non-negative number", fmt.Sprint(l.FontSize))
+	}
+	if l.StartSeconds < 0 || math.IsNaN(l.StartSeconds) || math.IsInf(l.StartSeconds, 0) {
+		errs.add(path+".start_seconds", "out_of_range", "finite non-negative seconds", fmt.Sprint(l.StartSeconds))
+	}
+	if l.DurationSeconds < 0 || math.IsNaN(l.DurationSeconds) || math.IsInf(l.DurationSeconds, 0) {
+		errs.add(path+".duration_seconds", "out_of_range", "finite non-negative seconds", fmt.Sprint(l.DurationSeconds))
+	}
+	for i, value := range l.Position {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			errs.add(fmt.Sprintf("%s.position[%d]", path, i), "out_of_range", "finite number", fmt.Sprint(value))
+		}
 	}
 	return errs
 }

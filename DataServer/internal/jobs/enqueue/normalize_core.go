@@ -2,6 +2,7 @@
 package enqueue
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,13 +12,31 @@ import (
 	"velox-server/internal/routing"
 	"velox-shared/contract"
 	"velox-shared/contract/deliveryplan"
+	"velox-shared/contract/rendercompiler"
 	"velox-shared/payload"
 )
 
 func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]interface{}, error) {
+	return normalizeSceneVideoPayloadContext(context.Background(), payloadMap)
+}
+
+// normalizeSceneVideoPayloadContext is the request-aware normalizer used by
+// the enqueue path. The compatibility wrapper above keeps existing package
+// callers and tests on the historical signature.
+func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[string]interface{}) (map[string]interface{}, error) {
 	// Build the canonical typed envelope, then project to the downstream
 	// map. No `parameters` sub-map, no legacy alias keys. Single source
 	// of truth is the contract.JobPayloadV2 struct.
+	rawManifest, manifestPresent := payloadMap["render_manifest"]
+	strictManifest := manifestPresent
+	if strictManifest {
+		if rawManifest == nil {
+			return nil, deliveryplan.NewValidationError("render_manifest", "must be an object")
+		}
+		if _, ok := rawManifest.(map[string]interface{}); !ok {
+			return nil, deliveryplan.NewValidationError("render_manifest", "must be an object")
+		}
+	}
 	base := contract.NewJobPayloadV2(payloadMap)
 
 	title := strings.TrimSpace(base.VideoName)
@@ -45,23 +64,25 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 	}
 	base.ScriptText = scriptText
 
-	scenesValue, scenesJSON, err := normalizeScenes(payloadMap)
-	if err != nil {
-		return nil, err
-	}
-	if len(scenesValue) == 0 {
-		return nil, deliveryplan.NewValidationError("scenes", "at least one scene is required")
-	}
-	base.Scenes = scenesValue
-	base.ScenesJSON = scenesJSON
-	base.SceneCount = len(scenesValue)
+	if !strictManifest {
+		scenesValue, scenesJSON, err := normalizeScenes(payloadMap)
+		if err != nil {
+			return nil, err
+		}
+		if len(scenesValue) == 0 {
+			return nil, deliveryplan.NewValidationError("scenes", "at least one scene is required")
+		}
+		base.Scenes = scenesValue
+		base.ScenesJSON = scenesJSON
+		base.SceneCount = len(scenesValue)
 
-	voiceovers := normalizeVoiceoverList(payloadMap)
-	if len(voiceovers) == 0 && !hasClipTimelinePayload(payloadMap) && !hasRenderableMedia(payloadMap) && !hasAudioTracks(payloadMap) {
-		return nil, deliveryplan.NewValidationError("voiceover_paths", "at least one voiceover path is required (or audio_tracks, or renderable media)")
+		voiceovers := normalizeVoiceoverList(payloadMap)
+		if len(voiceovers) == 0 && !hasClipTimelinePayload(payloadMap) && !hasRenderableMedia(payloadMap) && !hasAudioTracks(payloadMap) {
+			return nil, deliveryplan.NewValidationError("voiceover_paths", "at least one voiceover path is required (or audio_tracks, or renderable media)")
+		}
+		base.VoiceoverPaths = voiceovers
+		base.VoiceoverCount = len(voiceovers)
 	}
-	base.VoiceoverPaths = voiceovers
-	base.VoiceoverCount = len(voiceovers)
 
 	// Identity enrichment — prefer explicit caller-provided IDs/new
 	// UUIDs over the constructor's defaults so the typed struct always
@@ -105,8 +126,26 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 	if err := attachVideoMetadataToDeliveryPlan(out); err != nil {
 		return nil, err
 	}
-	copyTimelinePayloadFields(out, payloadMap)
-	attachLegacySceneClipTimeline(out)
+	// A strict render_manifest is the sole timeline source. Legacy timeline
+	// projection is intentionally skipped so raw scenes/layers cannot shadow
+	// the compiled immutable plan. Legacy payloads retain the old pass-through
+	// behavior.
+	if !strictManifest {
+		copyTimelinePayloadFields(out, payloadMap)
+		attachLegacySceneClipTimeline(out)
+	}
+
+	// Strict V2 manifests are compiled master-side before the task is
+	// created. Legacy payloads remain on their existing path because they
+	// do not necessarily carry verified asset size/hash metadata.
+	if strictManifest {
+		plan, compileErr := rendercompiler.DefaultRegistry().Compile(ctx, base)
+		if compileErr != nil {
+			return nil, deliveryplan.NewValidationErrorWrapped("render_manifest", "compile failed", compileErr)
+		}
+		out["render_plan_json"] = string(plan.JSON())
+		out["render_plan_sha256"] = plan.SHA256()
+	}
 	return out, nil
 }
 func CopyTimelinePayloadFields(out, src map[string]interface{}) {

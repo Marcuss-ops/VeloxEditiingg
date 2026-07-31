@@ -45,6 +45,7 @@
 #   DATASERVER_ROOT      path to DataServer/ source           (default $ROOT/../../DataServer)
 #   WORKERAGENT_ROOT     path to RemoteCodex/.../ source      (default $ROOT/../../RemoteCodex/native/worker-agent-go)
 #   E2E_CLEAN=1          wipe $WORKDIR on exit (default keep)
+#   E2E_MASTER_PORT      REST port override (default: dynamically allocated)
 #   BUNDLE_HASH          bundle hash written to $WORKDIR/work/BUNDLE_HASH.txt
 # =============================================================================
 
@@ -57,6 +58,8 @@ DATASERVER_ROOT="${DATASERVER_ROOT:-$ROOT/../../../DataServer}"
 WORKERAGENT_ROOT="${WORKERAGENT_ROOT:-$ROOT/../../../RemoteCodex/native/worker-agent-go}"
 BIN_DIR="$WORKDIR/bin"
 GO_BIN="${GO_BIN:-$(command -v go || true)}"
+MASTER_PORT="${E2E_MASTER_PORT:-}"
+MASTER_URL=""
 
 # ─── Source helpers ─────────────────────────────────────────────────────────
 # shellcheck source=tests/_lib/sh/_lib.sh
@@ -106,6 +109,9 @@ resolve_bin() {
 patch_env() {
   local tmpl="$1" out="$2"; shift 2
   sed "$@" "$tmpl" > "$out"
+  if [[ -n "$MASTER_PORT" ]]; then
+    sed -i "s|^VELOX_MASTER_PORT=.*|VELOX_MASTER_PORT=$MASTER_PORT|" "$out"
+  fi
 }
 
 spawn_master() {
@@ -180,29 +186,63 @@ wait_for_worker_connection() {
   return 1
 }
 
+# Returns: 0 when listening, 1 when verified free, 2 when availability
+# cannot be checked. Callers must treat 2 as a failure (fail closed).
+port_is_listening() {
+  local port="$1"
+  local backend_available=0
+  if command -v ss >/dev/null 2>&1; then
+    backend_available=1
+    ss -ltn 2>/dev/null | grep -qE ":${port}[[:space:]]" && return 0
+  fi
+  if command -v netstat >/dev/null 2>&1; then
+    backend_available=1
+    netstat -ltn 2>/dev/null | grep -qE ":${port}[[:space:]]" && return 0
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    backend_available=1
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 && return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$port" <<'PY'
+import socket
+import sys
+try:
+    with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=0.2):
+        pass
+except ConnectionRefusedError:
+    sys.exit(1)
+except (TimeoutError, OSError):
+    sys.exit(2)
+sys.exit(0)
+PY
+    case "$?" in
+      0) return 0 ;;
+      1) backend_available=1 ;;
+      *) return 2 ;;
+    esac
+  fi
+  (( backend_available == 1 )) && return 1
+  return 2
+}
+
 # Ensure the previous case's listeners are fully released before the next
 # master starts. Even after lib_kill_all, a socket may briefly linger; poll
-# for up to 20s before giving up and letting the next case surface its own
-# error.
+# for up to 20s and fail closed if either active matrix port remains busy.
 wait_for_ports_free() {
   local deadline=$(( $(date +%s) + 20 ))
   while (( $(date +%s) < deadline )); do
-    local busy=0
-    if command -v ss >/dev/null 2>&1; then
-      if ss -ltn 2>/dev/null | grep -qE ':(8000|50051)\b'; then
-        busy=1
-      fi
-    elif command -v netstat >/dev/null 2>&1; then
-      if netstat -ltn 2>/dev/null | grep -qE ':(8000|50051)\b'; then
-        busy=1
-      fi
-    fi
-    if (( busy == 0 )); then
+    local rest_rc grpc_rc
+    port_is_listening "$MASTER_PORT"
+    rest_rc=$?
+    port_is_listening 50051
+    grpc_rc=$?
+    if (( rest_rc == 1 && grpc_rc == 1 )); then
       return 0
     fi
     sleep 0.5
   done
-  return 0
+  return 1
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -229,8 +269,44 @@ wait_for_ports_free() {
 # Case 6 — parallel one-accept-one-reject (two workers; one good, one bad)
 # ─────────────────────────────────────────────────────────────────────────────
 
+pick_free_port() {
+  python3 - <<'PY'
+import socket
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.bind(("127.0.0.1", 0))
+print(sock.getsockname()[1])
+sock.close()
+PY
+}
+
+assert_port_free() {
+  local port="$1"
+  if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+    return 1
+  fi
+  local listening_rc
+  port_is_listening "$port"
+  listening_rc=$?
+  case "$listening_rc" in
+    1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # ─── Pre-flight: build binaries ──────────────────────────────────────────────
-assert_info "workdir = $WORKDIR"
+if [[ -z "$MASTER_PORT" ]]; then
+  MASTER_PORT="$(pick_free_port)" || exit 1
+fi
+if ! assert_port_free "$MASTER_PORT"; then
+  printf '[run.sh] FATAL: E2E master REST port %s is invalid or unavailable\n' "$MASTER_PORT" >&2
+  exit 1
+fi
+if ! assert_port_free 50051; then
+  printf '[run.sh] FATAL: E2E gRPC port 50051 is invalid or unavailable\n' >&2
+  exit 1
+fi
+MASTER_URL="http://localhost:${MASTER_PORT}"
+assert_info "workdir = $WORKDIR (master REST port=$MASTER_PORT)"
 mkdir_p "$WORKDIR" "$BIN_DIR" "$WORKDIR/pki" "$WORKDIR/cases"
 
 if [[ -z "${VELOX_SERVER_BIN:-}" ]]; then
@@ -290,15 +366,15 @@ main() {
   printf "WORKERAGENT_ROOT  = %s\n\n" "$WORKERAGENT_ROOT"
 
   case_1_plaintext_accept
-  wait_for_ports_free
+  wait_for_ports_free || { printf '[run.sh] FATAL: matrix ports did not become free after case 1\n' >&2; exit 1; }
   case_2_tls_accept
-  wait_for_ports_free
+  wait_for_ports_free || { printf '[run.sh] FATAL: matrix ports did not become free after case 2\n' >&2; exit 1; }
   case_3_bad_cert_reject
-  wait_for_ports_free
+  wait_for_ports_free || { printf '[run.sh] FATAL: matrix ports did not become free after case 3\n' >&2; exit 1; }
   case_4_wrong_ca_reject
-  wait_for_ports_free
+  wait_for_ports_free || { printf '[run.sh] FATAL: matrix ports did not become free after case 4\n' >&2; exit 1; }
   case_5_plaintext_vs_tls_reject
-  wait_for_ports_free
+  wait_for_ports_free || { printf '[run.sh] FATAL: matrix ports did not become free after case 5\n' >&2; exit 1; }
   case_6_parallel_one_accept_one_reject
 
   aggregate_summary_and_exit

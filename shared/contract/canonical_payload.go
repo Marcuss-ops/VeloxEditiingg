@@ -42,10 +42,10 @@ import (
 // then routing/audit — matching the JSON marshaling order of
 // JobPayloadV2 (see payload_v2.go).
 //
-// The Phase 4 additions ("items" from Step 2/8, "delivery_plan" from
-// Step 4/8) are canonical here even though they are not yet folded into
-// the JobPayloadV2 typed struct — they live in the worker payload layer
-// and are emitted at the top level by every new writer.
+//	// The render timeline fields (items, audio_tracks, subtitle_tracks) and
+//
+// delivery_plan are part of the JobPayloadV2 typed projection and are
+// emitted at the top level by canonical writers.
 var CanonicalTopLevelKeys = []string{
 	// Lifecycle / canonical identity
 	"contract_version",
@@ -55,9 +55,12 @@ var CanonicalTopLevelKeys = []string{
 	// Business fields
 	"video_name", "script_text",
 	"render_manifest", "manifest_ref", "manifest_sha256",
+	"render_plan_json", "render_plan_sha256",
 	"scenes_json", "scenes",
 	"voiceover_paths",
+	"layers",
 	"items", // Step 2/8: items[].role scene/clip contract (worker payload layer)
+	"audio_tracks", "subtitle_tracks",
 	"video_metadata",
 	"audio_language_for_srt",
 	"video_mode", "output_path",
@@ -195,7 +198,7 @@ func ValidatePayload(payload map[string]interface{}) error {
 	}
 
 	// Rule 4 — array-shaped canonical fields.
-	arrayFields := []string{"scenes", "voiceover_paths", "scene_image_paths", "items"}
+	arrayFields := []string{"scenes", "voiceover_paths", "scene_image_paths", "layers", "items", "audio_tracks", "subtitle_tracks"}
 	for _, field := range arrayFields {
 		v, ok := payload[field]
 		if !ok || v == nil {

@@ -48,7 +48,7 @@ case_6_parallel_one_accept_one_reject() {
 
   lib_reset_children
   spawn_master "$id" "$master_env"
-  if ! wait_for_master_ready "http://localhost:8000" "e2e-admin-token" 15 "$id"; then
+  if ! wait_for_master_ready "$MASTER_URL" "e2e-admin-token" 15 "$id"; then
     lib_kill_all TERM
     assert_fail "case-6: master never became ready"
     aggregate_record "$id" "FAIL"

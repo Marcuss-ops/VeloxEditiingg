@@ -48,24 +48,29 @@ type JobPayloadV2 struct {
 	UpdatedAt       string `json:"updated_at"`
 
 	// Business fields
-	VideoName       string           `json:"video_name"`
-	ScriptText      string           `json:"script_text"`
-	RenderManifest  map[string]any   `json:"render_manifest,omitempty"`
-	ManifestRef     map[string]any   `json:"manifest_ref,omitempty"`
-	ManifestSHA256  string           `json:"manifest_sha256,omitempty"`
-	ScenesJSON      string           `json:"scenes_json,omitempty"`
-	Scenes          []map[string]any `json:"scenes,omitempty"`
-	Layers          []map[string]any `json:"layers,omitempty"`
-	VoiceoverPaths  []string         `json:"voiceover_paths,omitempty"`
-	AudioLanguage   string           `json:"audio_language_for_srt,omitempty"`
-	VideoMode       string           `json:"video_mode,omitempty"`
-	OutputPath      string           `json:"output_path,omitempty"`
-	DriveOutput     string           `json:"drive_output_folder,omitempty"`
-	ChannelID       string           `json:"channel_id,omitempty"`
-	OutputVideoID   string           `json:"output_video_id,omitempty"`
-	SceneImagePaths []string         `json:"scene_image_paths,omitempty"`
-	ImageSourceMap  string           `json:"image_source_map,omitempty"`
-	VideoMetadata   map[string]any   `json:"video_metadata,omitempty"`
+	VideoName        string           `json:"video_name"`
+	ScriptText       string           `json:"script_text"`
+	RenderManifest   map[string]any   `json:"render_manifest,omitempty"`
+	ManifestRef      map[string]any   `json:"manifest_ref,omitempty"`
+	ManifestSHA256   string           `json:"manifest_sha256,omitempty"`
+	RenderPlanJSON   string           `json:"render_plan_json,omitempty"`
+	RenderPlanSHA256 string           `json:"render_plan_sha256,omitempty"`
+	ScenesJSON       string           `json:"scenes_json,omitempty"`
+	Scenes           []map[string]any `json:"scenes,omitempty"`
+	Layers           []map[string]any `json:"layers,omitempty"`
+	Items            []map[string]any `json:"items,omitempty"`
+	AudioTracks      []map[string]any `json:"audio_tracks,omitempty"`
+	SubtitleTracks   []map[string]any `json:"subtitle_tracks,omitempty"`
+	VoiceoverPaths   []string         `json:"voiceover_paths,omitempty"`
+	AudioLanguage    string           `json:"audio_language_for_srt,omitempty"`
+	VideoMode        string           `json:"video_mode,omitempty"`
+	OutputPath       string           `json:"output_path,omitempty"`
+	DriveOutput      string           `json:"drive_output_folder,omitempty"`
+	ChannelID        string           `json:"channel_id,omitempty"`
+	OutputVideoID    string           `json:"output_video_id,omitempty"`
+	SceneImagePaths  []string         `json:"scene_image_paths,omitempty"`
+	ImageSourceMap   string           `json:"image_source_map,omitempty"`
+	VideoMetadata    map[string]any   `json:"video_metadata,omitempty"`
 
 	// Numeric metadata (sent as JSON numbers)
 	Priority          int     `json:"priority"`
@@ -137,6 +142,8 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 		p.ManifestRef = cloneObject(manifestRef)
 	}
 	p.ManifestSHA256 = payload.FirstString(raw, "manifest_sha256")
+	p.RenderPlanJSON = payload.FirstString(raw, "render_plan_json")
+	p.RenderPlanSHA256 = payload.FirstString(raw, "render_plan_sha256")
 	if scenesVal, ok := raw["scenes"]; ok {
 		switch s := scenesVal.(type) {
 		case []map[string]any:
@@ -152,18 +159,16 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 		}
 	}
 	if layersVal, ok := raw["layers"]; ok {
-		switch s := layersVal.(type) {
-		case []map[string]any:
-			p.Layers = append([]map[string]any{}, s...)
-		case []any:
-			out := make([]map[string]any, 0, len(s))
-			for _, item := range s {
-				if m, ok := item.(map[string]any); ok {
-					out = append(out, m)
-				}
-			}
-			p.Layers = out
-		}
+		p.Layers = normalizeObjectList(layersVal)
+	}
+	if itemsVal, ok := raw["items"]; ok {
+		p.Items = normalizeObjectList(itemsVal)
+	}
+	if audioTracksVal, ok := raw["audio_tracks"]; ok {
+		p.AudioTracks = normalizeObjectList(audioTracksVal)
+	}
+	if subtitleTracksVal, ok := raw["subtitle_tracks"]; ok {
+		p.SubtitleTracks = normalizeObjectList(subtitleTracksVal)
 	}
 	if p.JobID == "" {
 		p.JobID = "scriptimg_" + uuid.NewString()
@@ -230,11 +235,26 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 	if p.ManifestSHA256 != "" {
 		out["manifest_sha256"] = p.ManifestSHA256
 	}
+	if p.RenderPlanJSON != "" {
+		out["render_plan_json"] = p.RenderPlanJSON
+	}
+	if p.RenderPlanSHA256 != "" {
+		out["render_plan_sha256"] = p.RenderPlanSHA256
+	}
 	if len(p.Scenes) > 0 {
 		out["scenes"] = p.Scenes
 	}
 	if len(p.Layers) > 0 {
 		out["layers"] = p.Layers
+	}
+	if len(p.Items) > 0 {
+		out["items"] = p.Items
+	}
+	if len(p.AudioTracks) > 0 {
+		out["audio_tracks"] = p.AudioTracks
+	}
+	if len(p.SubtitleTracks) > 0 {
+		out["subtitle_tracks"] = p.SubtitleTracks
 	}
 	if len(p.VoiceoverPaths) > 0 {
 		out["voiceover_paths"] = p.VoiceoverPaths
@@ -305,6 +325,27 @@ func cloneObject(in map[string]any) map[string]any {
 		out[key] = value
 	}
 	return out
+}
+
+func normalizeObjectList(value any) []map[string]any {
+	switch items := value.(type) {
+	case []map[string]any:
+		out := make([]map[string]any, 0, len(items))
+		for _, item := range items {
+			out = append(out, cloneObject(item))
+		}
+		return out
+	case []any:
+		out := make([]map[string]any, 0, len(items))
+		for _, item := range items {
+			if object, ok := item.(map[string]any); ok {
+				out = append(out, cloneObject(object))
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // JobPayloadV2FromJSON parses a JSON byte slice back into a typed struct.

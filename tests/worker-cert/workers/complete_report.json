@@ -1,0 +1,2092 @@
+{
+  "schema": "tests/worker-cert/complete_report@1",
+  "generated_at": "2026-07-31T09:14:26Z",
+  "overall_status": "FAIL",
+  "evidence_quality": "INCOMPLETE_OR_FAILED",
+  "criteria_policy": {
+    "missing_evidence": "FAIL",
+    "job_succeeded_is_not_media_pass": true,
+    "review_required_is_not_pass": true,
+    "expected_duration_ms": 12000,
+    "required_sections": [
+      "identifiers",
+      "timestamps",
+      "durations_ms",
+      "assets",
+      "cache",
+      "render",
+      "audio",
+      "subtitles",
+      "sidecar"
+    ]
+  },
+  "source": {
+    "benchmark_path": "tests/worker-cert/workers/benchmark.json",
+    "evidence_root": null,
+    "sidecar_root": null,
+    "benchmark_schema": "tests/worker-cert/sequential_bench@1",
+    "benchmark_written_at": "2026-07-29T12:11:27Z"
+  },
+  "summary": {
+    "workers": 4,
+    "runs": 12,
+    "runs_passed": 0,
+    "runs_failed": 12
+  },
+  "workers": [
+    {
+      "worker_id": "host_57_129_132_133",
+      "runs_total": 3,
+      "runs_passed": 0,
+      "runs_failed": 3,
+      "criteria_failures": {
+        "asset_integrity": 3,
+        "audio": 3,
+        "cache": 3,
+        "durations": 3,
+        "render": 3,
+        "sidecar": 3,
+        "subtitles": 3,
+        "timestamps": 3
+      },
+      "conclusion": "FAIL",
+      "conclusion_detail": "at least one mandatory criterion failed or evidence was not captured"
+    },
+    {
+      "worker_id": "host_57_131_20_173",
+      "runs_total": 3,
+      "runs_passed": 0,
+      "runs_failed": 3,
+      "criteria_failures": {
+        "asset_integrity": 3,
+        "audio": 3,
+        "cache": 3,
+        "durations": 3,
+        "render": 3,
+        "sidecar": 3,
+        "subtitles": 3,
+        "timestamps": 3
+      },
+      "conclusion": "FAIL",
+      "conclusion_detail": "at least one mandatory criterion failed or evidence was not captured"
+    },
+    {
+      "worker_id": "velox-worker-13197",
+      "runs_total": 3,
+      "runs_passed": 0,
+      "runs_failed": 3,
+      "criteria_failures": {
+        "asset_integrity": 3,
+        "audio": 3,
+        "cache": 3,
+        "durations": 3,
+        "render": 3,
+        "sidecar": 3,
+        "subtitles": 3,
+        "timestamps": 3
+      },
+      "conclusion": "FAIL",
+      "conclusion_detail": "at least one mandatory criterion failed or evidence was not captured"
+    },
+    {
+      "worker_id": "velox-worker-523925eb",
+      "runs_total": 3,
+      "runs_passed": 0,
+      "runs_failed": 3,
+      "criteria_failures": {
+        "asset_integrity": 3,
+        "audio": 3,
+        "cache": 3,
+        "durations": 3,
+        "render": 3,
+        "sidecar": 3,
+        "subtitles": 3,
+        "timestamps": 3
+      },
+      "conclusion": "FAIL",
+      "conclusion_detail": "at least one mandatory criterion failed or evidence was not captured"
+    }
+  ],
+  "runs": [
+    {
+      "run_index": 1,
+      "worker_id": "host_57_129_132_133",
+      "placement_pin_worker_id": "host_57_129_132_133",
+      "identifiers": {
+        "job_id": "job_1bad69683a1b6653",
+        "task_id": "4befb922-849d-4ee5-a424-653200f33f30",
+        "attempt_id": "c4912bbc-b9da-4017-80e0-bd606a1b0138",
+        "lease_id": "l-host_57_129_132_133-bb1db0d6",
+        "worker_id": "host_57_129_132_133",
+        "placement_pin_worker_id": "host_57_129_132_133"
+      },
+      "status": "FAIL",
+      "timestamps": {
+        "submit_started_at": null,
+        "accepted_at": null,
+        "lease_granted_at": null,
+        "task_started_at": null,
+        "assets_ready_at": null,
+        "render_started_at": null,
+        "render_completed_at": null,
+        "artifact_declared_at": null,
+        "artifact_committed_at": null,
+        "job_completed_at": null,
+        "source_started_at": "2026-07-29T12:08:48Z",
+        "source_completed_at": "2026-07-29T12:08:51Z",
+        "source_written_at": null
+      },
+      "durations_ms": {
+        "submit": 76635385,
+        "queue_wait": null,
+        "lease_to_start": null,
+        "asset_materialization": null,
+        "render": 3000,
+        "artifact_commit": null,
+        "total": 3000
+      },
+      "assets": [],
+      "render": {
+        "artifact_url": null,
+        "artifact_path": null,
+        "artifact_size_bytes": 0,
+        "output_duration_ms": null,
+        "expected_duration_ms": 12000
+      },
+      "audio": null,
+      "subtitles": null,
+      "cache": {
+        "records": [],
+        "status": "FAIL"
+      },
+      "sidecar": {
+        "status": "FAIL",
+        "captured": false,
+        "associated": false,
+        "master_registered": false,
+        "path": null,
+        "data": null
+      },
+      "criteria": [
+        {
+          "name": "job_succeeded",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job status='SUCCEEDED'"
+        },
+        {
+          "name": "worker_pin",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "target='host_57_129_132_133', response='host_57_129_132_133', pin_ok='true'"
+        },
+        {
+          "name": "identity",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job/task/attempt/lease/worker/pin identifiers are present"
+        },
+        {
+          "name": "timestamps",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "missing canonical lifecycle timestamps: submit_started_at, accepted_at, lease_granted_at, task_started_at, assets_ready_at, render_started_at, render_completed_at, artifact_declared_at, artifact_committed_at, job_completed_at"
+        },
+        {
+          "name": "durations",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "missing or negative durations: queue_wait, lease_to_start, asset_materialization, artifact_commit"
+        },
+        {
+          "name": "duration_consistency",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "total duration agrees with lifecycle timestamps"
+        },
+        {
+          "name": "asset_integrity",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no per-asset integrity records were supplied"
+        },
+        {
+          "name": "cache",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no cache hit/miss records were supplied"
+        },
+        {
+          "name": "render",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "artifact_url=missing, size=0, duration_ms=missing, expected=12000"
+        },
+        {
+          "name": "audio",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no audio evidence was supplied"
+        },
+        {
+          "name": "subtitles",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no subtitle evidence was supplied"
+        },
+        {
+          "name": "sidecar",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "renderer .progress.json sidecar was not captured"
+        }
+      ],
+      "missing_or_failed_criteria": [
+        "timestamps",
+        "durations",
+        "asset_integrity",
+        "cache",
+        "render",
+        "audio",
+        "subtitles",
+        "sidecar"
+      ],
+      "source": {
+        "benchmark_run": {
+          "job_id": "job_1bad69683a1b6653",
+          "status": "SUCCEEDED",
+          "run_idx": 1,
+          "submit_latency_ms": 76635385,
+          "render_time_ms": 3000,
+          "artifact_size_bytes": 0,
+          "started_at": "2026-07-29T12:08:48Z",
+          "completed_at": "2026-07-29T12:08:51Z",
+          "artifact_url": "",
+          "target_worker": "host_57_129_132_133",
+          "resp_worker_id": "host_57_129_132_133",
+          "leased_worker": "",
+          "task_id": "4befb922-849d-4ee5-a424-653200f33f30",
+          "attempt_id": "c4912bbc-b9da-4017-80e0-bd606a1b0138",
+          "lease_id": "l-host_57_129_132_133-bb1db0d6",
+          "pin_ok": "true"
+        },
+        "evidence_path": null
+      }
+    },
+    {
+      "run_index": 2,
+      "worker_id": "host_57_129_132_133",
+      "placement_pin_worker_id": "host_57_129_132_133",
+      "identifiers": {
+        "job_id": "job_97073b59e85493de",
+        "task_id": "66e23659-302b-4e5e-b2ab-04adef4d0995",
+        "attempt_id": "f0665095-7bfd-4f46-9d93-88d83be83d39",
+        "lease_id": "l-host_57_129_132_133-843c483e",
+        "worker_id": "host_57_129_132_133",
+        "placement_pin_worker_id": "host_57_129_132_133"
+      },
+      "status": "FAIL",
+      "timestamps": {
+        "submit_started_at": null,
+        "accepted_at": null,
+        "lease_granted_at": null,
+        "task_started_at": null,
+        "assets_ready_at": null,
+        "render_started_at": null,
+        "render_completed_at": null,
+        "artifact_declared_at": null,
+        "artifact_committed_at": null,
+        "job_completed_at": null,
+        "source_started_at": "2026-07-29T12:08:56Z",
+        "source_completed_at": "2026-07-29T12:08:59Z",
+        "source_written_at": null
+      },
+      "durations_ms": {
+        "submit": 77701593,
+        "queue_wait": null,
+        "lease_to_start": null,
+        "asset_materialization": null,
+        "render": 3000,
+        "artifact_commit": null,
+        "total": 3000
+      },
+      "assets": [],
+      "render": {
+        "artifact_url": null,
+        "artifact_path": null,
+        "artifact_size_bytes": 0,
+        "output_duration_ms": null,
+        "expected_duration_ms": 12000
+      },
+      "audio": null,
+      "subtitles": null,
+      "cache": {
+        "records": [],
+        "status": "FAIL"
+      },
+      "sidecar": {
+        "status": "FAIL",
+        "captured": false,
+        "associated": false,
+        "master_registered": false,
+        "path": null,
+        "data": null
+      },
+      "criteria": [
+        {
+          "name": "job_succeeded",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job status='SUCCEEDED'"
+        },
+        {
+          "name": "worker_pin",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "target='host_57_129_132_133', response='host_57_129_132_133', pin_ok='true'"
+        },
+        {
+          "name": "identity",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job/task/attempt/lease/worker/pin identifiers are present"
+        },
+        {
+          "name": "timestamps",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "missing canonical lifecycle timestamps: submit_started_at, accepted_at, lease_granted_at, task_started_at, assets_ready_at, render_started_at, render_completed_at, artifact_declared_at, artifact_committed_at, job_completed_at"
+        },
+        {
+          "name": "durations",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "missing or negative durations: queue_wait, lease_to_start, asset_materialization, artifact_commit"
+        },
+        {
+          "name": "duration_consistency",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "total duration agrees with lifecycle timestamps"
+        },
+        {
+          "name": "asset_integrity",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no per-asset integrity records were supplied"
+        },
+        {
+          "name": "cache",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no cache hit/miss records were supplied"
+        },
+        {
+          "name": "render",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "artifact_url=missing, size=0, duration_ms=missing, expected=12000"
+        },
+        {
+          "name": "audio",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no audio evidence was supplied"
+        },
+        {
+          "name": "subtitles",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no subtitle evidence was supplied"
+        },
+        {
+          "name": "sidecar",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "renderer .progress.json sidecar was not captured"
+        }
+      ],
+      "missing_or_failed_criteria": [
+        "timestamps",
+        "durations",
+        "asset_integrity",
+        "cache",
+        "render",
+        "audio",
+        "subtitles",
+        "sidecar"
+      ],
+      "source": {
+        "benchmark_run": {
+          "job_id": "job_97073b59e85493de",
+          "status": "SUCCEEDED",
+          "run_idx": 2,
+          "submit_latency_ms": 77701593,
+          "render_time_ms": 3000,
+          "artifact_size_bytes": 0,
+          "started_at": "2026-07-29T12:08:56Z",
+          "completed_at": "2026-07-29T12:08:59Z",
+          "artifact_url": "",
+          "target_worker": "host_57_129_132_133",
+          "resp_worker_id": "host_57_129_132_133",
+          "leased_worker": "",
+          "task_id": "66e23659-302b-4e5e-b2ab-04adef4d0995",
+          "attempt_id": "f0665095-7bfd-4f46-9d93-88d83be83d39",
+          "lease_id": "l-host_57_129_132_133-843c483e",
+          "pin_ok": "true"
+        },
+        "evidence_path": null
+      }
+    },
+    {
+      "run_index": 3,
+      "worker_id": "host_57_129_132_133",
+      "placement_pin_worker_id": "host_57_129_132_133",
+      "identifiers": {
+        "job_id": "job_abaab15cea16f942",
+        "task_id": "6045c2fa-588e-4663-abfb-cb3a14873c6f",
+        "attempt_id": "d5498e8f-c2ed-4e59-960b-2216ea5e76f6",
+        "lease_id": "l-host_57_129_132_133-ab3c8676",
+        "worker_id": "host_57_129_132_133",
+        "placement_pin_worker_id": "host_57_129_132_133"
+      },
+      "status": "FAIL",
+      "timestamps": {
+        "submit_started_at": null,
+        "accepted_at": null,
+        "lease_granted_at": null,
+        "task_started_at": null,
+        "assets_ready_at": null,
+        "render_started_at": null,
+        "render_completed_at": null,
+        "artifact_declared_at": null,
+        "artifact_committed_at": null,
+        "job_completed_at": null,
+        "source_started_at": "2026-07-29T12:09:06Z",
+        "source_completed_at": "2026-07-29T12:09:09Z",
+        "source_written_at": null
+      },
+      "durations_ms": {
+        "submit": 1606794248788196641,
+        "queue_wait": null,
+        "lease_to_start": null,
+        "asset_materialization": null,
+        "render": 3000,
+        "artifact_commit": null,
+        "total": 3000
+      },
+      "assets": [],
+      "render": {
+        "artifact_url": null,
+        "artifact_path": null,
+        "artifact_size_bytes": 0,
+        "output_duration_ms": null,
+        "expected_duration_ms": 12000
+      },
+      "audio": null,
+      "subtitles": null,
+      "cache": {
+        "records": [],
+        "status": "FAIL"
+      },
+      "sidecar": {
+        "status": "FAIL",
+        "captured": false,
+        "associated": false,
+        "master_registered": false,
+        "path": null,
+        "data": null
+      },
+      "criteria": [
+        {
+          "name": "job_succeeded",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job status='SUCCEEDED'"
+        },
+        {
+          "name": "worker_pin",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "target='host_57_129_132_133', response='host_57_129_132_133', pin_ok='true'"
+        },
+        {
+          "name": "identity",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job/task/attempt/lease/worker/pin identifiers are present"
+        },
+        {
+          "name": "timestamps",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "missing canonical lifecycle timestamps: submit_started_at, accepted_at, lease_granted_at, task_started_at, assets_ready_at, render_started_at, render_completed_at, artifact_declared_at, artifact_committed_at, job_completed_at"
+        },
+        {
+          "name": "durations",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "missing or negative durations: queue_wait, lease_to_start, asset_materialization, artifact_commit"
+        },
+        {
+          "name": "duration_consistency",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "total duration agrees with lifecycle timestamps"
+        },
+        {
+          "name": "asset_integrity",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no per-asset integrity records were supplied"
+        },
+        {
+          "name": "cache",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no cache hit/miss records were supplied"
+        },
+        {
+          "name": "render",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "artifact_url=missing, size=0, duration_ms=missing, expected=12000"
+        },
+        {
+          "name": "audio",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no audio evidence was supplied"
+        },
+        {
+          "name": "subtitles",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no subtitle evidence was supplied"
+        },
+        {
+          "name": "sidecar",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "renderer .progress.json sidecar was not captured"
+        }
+      ],
+      "missing_or_failed_criteria": [
+        "timestamps",
+        "durations",
+        "asset_integrity",
+        "cache",
+        "render",
+        "audio",
+        "subtitles",
+        "sidecar"
+      ],
+      "source": {
+        "benchmark_run": {
+          "job_id": "job_abaab15cea16f942",
+          "status": "SUCCEEDED",
+          "run_idx": 3,
+          "submit_latency_ms": 1606794248788196641,
+          "render_time_ms": 3000,
+          "artifact_size_bytes": 0,
+          "started_at": "2026-07-29T12:09:06Z",
+          "completed_at": "2026-07-29T12:09:09Z",
+          "artifact_url": "",
+          "target_worker": "host_57_129_132_133",
+          "resp_worker_id": "host_57_129_132_133",
+          "leased_worker": "",
+          "task_id": "6045c2fa-588e-4663-abfb-cb3a14873c6f",
+          "attempt_id": "d5498e8f-c2ed-4e59-960b-2216ea5e76f6",
+          "lease_id": "l-host_57_129_132_133-ab3c8676",
+          "pin_ok": "true"
+        },
+        "evidence_path": null
+      }
+    },
+    {
+      "run_index": 1,
+      "worker_id": "host_57_131_20_173",
+      "placement_pin_worker_id": "host_57_131_20_173",
+      "identifiers": {
+        "job_id": "job_83607014b2ff41e4",
+        "task_id": "a283adfd-3788-4613-b4e3-7eceec42ae1d",
+        "attempt_id": "1da49e5e-6988-433e-ab2a-aeaf4f96e7c9",
+        "lease_id": "l-host_57_131_20_173-7521da33",
+        "worker_id": "host_57_131_20_173",
+        "placement_pin_worker_id": "host_57_131_20_173"
+      },
+      "status": "FAIL",
+      "timestamps": {
+        "submit_started_at": null,
+        "accepted_at": null,
+        "lease_granted_at": null,
+        "task_started_at": null,
+        "assets_ready_at": null,
+        "render_started_at": null,
+        "render_completed_at": null,
+        "artifact_declared_at": null,
+        "artifact_committed_at": null,
+        "job_completed_at": null,
+        "source_started_at": "2026-07-29T12:09:18Z",
+        "source_completed_at": "2026-07-29T12:09:20Z",
+        "source_written_at": null
+      },
+      "durations_ms": {
+        "submit": 68433533,
+        "queue_wait": null,
+        "lease_to_start": null,
+        "asset_materialization": null,
+        "render": 2000,
+        "artifact_commit": null,
+        "total": 2000
+      },
+      "assets": [],
+      "render": {
+        "artifact_url": null,
+        "artifact_path": null,
+        "artifact_size_bytes": 0,
+        "output_duration_ms": null,
+        "expected_duration_ms": 12000
+      },
+      "audio": null,
+      "subtitles": null,
+      "cache": {
+        "records": [],
+        "status": "FAIL"
+      },
+      "sidecar": {
+        "status": "FAIL",
+        "captured": false,
+        "associated": false,
+        "master_registered": false,
+        "path": null,
+        "data": null
+      },
+      "criteria": [
+        {
+          "name": "job_succeeded",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job status='SUCCEEDED'"
+        },
+        {
+          "name": "worker_pin",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "target='host_57_131_20_173', response='host_57_131_20_173', pin_ok='true'"
+        },
+        {
+          "name": "identity",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job/task/attempt/lease/worker/pin identifiers are present"
+        },
+        {
+          "name": "timestamps",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "missing canonical lifecycle timestamps: submit_started_at, accepted_at, lease_granted_at, task_started_at, assets_ready_at, render_started_at, render_completed_at, artifact_declared_at, artifact_committed_at, job_completed_at"
+        },
+        {
+          "name": "durations",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "missing or negative durations: queue_wait, lease_to_start, asset_materialization, artifact_commit"
+        },
+        {
+          "name": "duration_consistency",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "total duration agrees with lifecycle timestamps"
+        },
+        {
+          "name": "asset_integrity",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no per-asset integrity records were supplied"
+        },
+        {
+          "name": "cache",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no cache hit/miss records were supplied"
+        },
+        {
+          "name": "render",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "artifact_url=missing, size=0, duration_ms=missing, expected=12000"
+        },
+        {
+          "name": "audio",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no audio evidence was supplied"
+        },
+        {
+          "name": "subtitles",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no subtitle evidence was supplied"
+        },
+        {
+          "name": "sidecar",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "renderer .progress.json sidecar was not captured"
+        }
+      ],
+      "missing_or_failed_criteria": [
+        "timestamps",
+        "durations",
+        "asset_integrity",
+        "cache",
+        "render",
+        "audio",
+        "subtitles",
+        "sidecar"
+      ],
+      "source": {
+        "benchmark_run": {
+          "job_id": "job_83607014b2ff41e4",
+          "status": "SUCCEEDED",
+          "run_idx": 1,
+          "submit_latency_ms": 68433533,
+          "render_time_ms": 2000,
+          "artifact_size_bytes": 0,
+          "started_at": "2026-07-29T12:09:18Z",
+          "completed_at": "2026-07-29T12:09:20Z",
+          "artifact_url": "",
+          "target_worker": "host_57_131_20_173",
+          "resp_worker_id": "host_57_131_20_173",
+          "leased_worker": "",
+          "task_id": "a283adfd-3788-4613-b4e3-7eceec42ae1d",
+          "attempt_id": "1da49e5e-6988-433e-ab2a-aeaf4f96e7c9",
+          "lease_id": "l-host_57_131_20_173-7521da33",
+          "pin_ok": "true"
+        },
+        "evidence_path": null
+      }
+    },
+    {
+      "run_index": 2,
+      "worker_id": "host_57_131_20_173",
+      "placement_pin_worker_id": "host_57_131_20_173",
+      "identifiers": {
+        "job_id": "job_2cb87baec5acaf3e",
+        "task_id": "1ff86d05-b6cb-491b-b1fb-66c48f71c54d",
+        "attempt_id": "ca1ea30a-141e-47ee-8398-0cb3ed300b4f",
+        "lease_id": "l-host_57_131_20_173-10906e2d",
+        "worker_id": "host_57_131_20_173",
+        "placement_pin_worker_id": "host_57_131_20_173"
+      },
+      "status": "FAIL",
+      "timestamps": {
+        "submit_started_at": null,
+        "accepted_at": null,
+        "lease_granted_at": null,
+        "task_started_at": null,
+        "assets_ready_at": null,
+        "render_started_at": null,
+        "render_completed_at": null,
+        "artifact_declared_at": null,
+        "artifact_committed_at": null,
+        "job_completed_at": null,
+        "source_started_at": "2026-07-29T12:09:36Z",
+        "source_completed_at": "2026-07-29T12:09:38Z",
+        "source_written_at": null
+      },
+      "durations_ms": {
+        "submit": 68897485,
+        "queue_wait": null,
+        "lease_to_start": null,
+        "asset_materialization": null,
+        "render": 2000,
+        "artifact_commit": null,
+        "total": 2000
+      },
+      "assets": [],
+      "render": {
+        "artifact_url": null,
+        "artifact_path": null,
+        "artifact_size_bytes": 0,
+        "output_duration_ms": null,
+        "expected_duration_ms": 12000
+      },
+      "audio": null,
+      "subtitles": null,
+      "cache": {
+        "records": [],
+        "status": "FAIL"
+      },
+      "sidecar": {
+        "status": "FAIL",
+        "captured": false,
+        "associated": false,
+        "master_registered": false,
+        "path": null,
+        "data": null
+      },
+      "criteria": [
+        {
+          "name": "job_succeeded",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job status='SUCCEEDED'"
+        },
+        {
+          "name": "worker_pin",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "target='host_57_131_20_173', response='host_57_131_20_173', pin_ok='true'"
+        },
+        {
+          "name": "identity",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job/task/attempt/lease/worker/pin identifiers are present"
+        },
+        {
+          "name": "timestamps",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "missing canonical lifecycle timestamps: submit_started_at, accepted_at, lease_granted_at, task_started_at, assets_ready_at, render_started_at, render_completed_at, artifact_declared_at, artifact_committed_at, job_completed_at"
+        },
+        {
+          "name": "durations",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "missing or negative durations: queue_wait, lease_to_start, asset_materialization, artifact_commit"
+        },
+        {
+          "name": "duration_consistency",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "total duration agrees with lifecycle timestamps"
+        },
+        {
+          "name": "asset_integrity",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no per-asset integrity records were supplied"
+        },
+        {
+          "name": "cache",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no cache hit/miss records were supplied"
+        },
+        {
+          "name": "render",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "artifact_url=missing, size=0, duration_ms=missing, expected=12000"
+        },
+        {
+          "name": "audio",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no audio evidence was supplied"
+        },
+        {
+          "name": "subtitles",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no subtitle evidence was supplied"
+        },
+        {
+          "name": "sidecar",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "renderer .progress.json sidecar was not captured"
+        }
+      ],
+      "missing_or_failed_criteria": [
+        "timestamps",
+        "durations",
+        "asset_integrity",
+        "cache",
+        "render",
+        "audio",
+        "subtitles",
+        "sidecar"
+      ],
+      "source": {
+        "benchmark_run": {
+          "job_id": "job_2cb87baec5acaf3e",
+          "status": "SUCCEEDED",
+          "run_idx": 2,
+          "submit_latency_ms": 68897485,
+          "render_time_ms": 2000,
+          "artifact_size_bytes": 0,
+          "started_at": "2026-07-29T12:09:36Z",
+          "completed_at": "2026-07-29T12:09:38Z",
+          "artifact_url": "",
+          "target_worker": "host_57_131_20_173",
+          "resp_worker_id": "host_57_131_20_173",
+          "leased_worker": "",
+          "task_id": "1ff86d05-b6cb-491b-b1fb-66c48f71c54d",
+          "attempt_id": "ca1ea30a-141e-47ee-8398-0cb3ed300b4f",
+          "lease_id": "l-host_57_131_20_173-10906e2d",
+          "pin_ok": "true"
+        },
+        "evidence_path": null
+      }
+    },
+    {
+      "run_index": 3,
+      "worker_id": "host_57_131_20_173",
+      "placement_pin_worker_id": "host_57_131_20_173",
+      "identifiers": {
+        "job_id": "job_978280a543ed51af",
+        "task_id": "91fff0e9-c360-4fa1-900f-49686c89397c",
+        "attempt_id": "4945b3f5-1644-4eca-b813-5067d571076d",
+        "lease_id": "l-host_57_131_20_173-4c873adb",
+        "worker_id": "host_57_131_20_173",
+        "placement_pin_worker_id": "host_57_131_20_173"
+      },
+      "status": "FAIL",
+      "timestamps": {
+        "submit_started_at": null,
+        "accepted_at": null,
+        "lease_granted_at": null,
+        "task_started_at": null,
+        "assets_ready_at": null,
+        "render_started_at": null,
+        "render_completed_at": null,
+        "artifact_declared_at": null,
+        "artifact_committed_at": null,
+        "job_completed_at": null,
+        "source_started_at": "2026-07-29T12:09:46Z",
+        "source_completed_at": "2026-07-29T12:09:48Z",
+        "source_written_at": null
+      },
+      "durations_ms": {
+        "submit": 70917029,
+        "queue_wait": null,
+        "lease_to_start": null,
+        "asset_materialization": null,
+        "render": 2000,
+        "artifact_commit": null,
+        "total": 2000
+      },
+      "assets": [],
+      "render": {
+        "artifact_url": null,
+        "artifact_path": null,
+        "artifact_size_bytes": 0,
+        "output_duration_ms": null,
+        "expected_duration_ms": 12000
+      },
+      "audio": null,
+      "subtitles": null,
+      "cache": {
+        "records": [],
+        "status": "FAIL"
+      },
+      "sidecar": {
+        "status": "FAIL",
+        "captured": false,
+        "associated": false,
+        "master_registered": false,
+        "path": null,
+        "data": null
+      },
+      "criteria": [
+        {
+          "name": "job_succeeded",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job status='SUCCEEDED'"
+        },
+        {
+          "name": "worker_pin",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "target='host_57_131_20_173', response='host_57_131_20_173', pin_ok='true'"
+        },
+        {
+          "name": "identity",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job/task/attempt/lease/worker/pin identifiers are present"
+        },
+        {
+          "name": "timestamps",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "missing canonical lifecycle timestamps: submit_started_at, accepted_at, lease_granted_at, task_started_at, assets_ready_at, render_started_at, render_completed_at, artifact_declared_at, artifact_committed_at, job_completed_at"
+        },
+        {
+          "name": "durations",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "missing or negative durations: queue_wait, lease_to_start, asset_materialization, artifact_commit"
+        },
+        {
+          "name": "duration_consistency",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "total duration agrees with lifecycle timestamps"
+        },
+        {
+          "name": "asset_integrity",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no per-asset integrity records were supplied"
+        },
+        {
+          "name": "cache",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no cache hit/miss records were supplied"
+        },
+        {
+          "name": "render",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "artifact_url=missing, size=0, duration_ms=missing, expected=12000"
+        },
+        {
+          "name": "audio",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no audio evidence was supplied"
+        },
+        {
+          "name": "subtitles",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no subtitle evidence was supplied"
+        },
+        {
+          "name": "sidecar",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "renderer .progress.json sidecar was not captured"
+        }
+      ],
+      "missing_or_failed_criteria": [
+        "timestamps",
+        "durations",
+        "asset_integrity",
+        "cache",
+        "render",
+        "audio",
+        "subtitles",
+        "sidecar"
+      ],
+      "source": {
+        "benchmark_run": {
+          "job_id": "job_978280a543ed51af",
+          "status": "SUCCEEDED",
+          "run_idx": 3,
+          "submit_latency_ms": 70917029,
+          "render_time_ms": 2000,
+          "artifact_size_bytes": 0,
+          "started_at": "2026-07-29T12:09:46Z",
+          "completed_at": "2026-07-29T12:09:48Z",
+          "artifact_url": "",
+          "target_worker": "host_57_131_20_173",
+          "resp_worker_id": "host_57_131_20_173",
+          "leased_worker": "",
+          "task_id": "91fff0e9-c360-4fa1-900f-49686c89397c",
+          "attempt_id": "4945b3f5-1644-4eca-b813-5067d571076d",
+          "lease_id": "l-host_57_131_20_173-4c873adb",
+          "pin_ok": "true"
+        },
+        "evidence_path": null
+      }
+    },
+    {
+      "run_index": 1,
+      "worker_id": "velox-worker-13197",
+      "placement_pin_worker_id": "velox-worker-13197",
+      "identifiers": {
+        "job_id": "job_a9297f5514ce650f",
+        "task_id": "97400709-af25-4c5c-b9ec-06884cb61fee",
+        "attempt_id": "bd56b1db-608c-448a-8852-4cef5aa403da",
+        "lease_id": "l-velox-worker-13197-c0400299",
+        "worker_id": "velox-worker-13197",
+        "placement_pin_worker_id": "velox-worker-13197"
+      },
+      "status": "FAIL",
+      "timestamps": {
+        "submit_started_at": null,
+        "accepted_at": null,
+        "lease_granted_at": null,
+        "task_started_at": null,
+        "assets_ready_at": null,
+        "render_started_at": null,
+        "render_completed_at": null,
+        "artifact_declared_at": null,
+        "artifact_committed_at": null,
+        "job_completed_at": null,
+        "source_started_at": "2026-07-29T12:10:06Z",
+        "source_completed_at": "2026-07-29T12:10:08Z",
+        "source_written_at": null
+      },
+      "durations_ms": {
+        "submit": 68684923,
+        "queue_wait": null,
+        "lease_to_start": null,
+        "asset_materialization": null,
+        "render": 2000,
+        "artifact_commit": null,
+        "total": 2000
+      },
+      "assets": [],
+      "render": {
+        "artifact_url": null,
+        "artifact_path": null,
+        "artifact_size_bytes": 0,
+        "output_duration_ms": null,
+        "expected_duration_ms": 12000
+      },
+      "audio": null,
+      "subtitles": null,
+      "cache": {
+        "records": [],
+        "status": "FAIL"
+      },
+      "sidecar": {
+        "status": "FAIL",
+        "captured": false,
+        "associated": false,
+        "master_registered": false,
+        "path": null,
+        "data": null
+      },
+      "criteria": [
+        {
+          "name": "job_succeeded",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job status='SUCCEEDED'"
+        },
+        {
+          "name": "worker_pin",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "target='velox-worker-13197', response='velox-worker-13197', pin_ok='true'"
+        },
+        {
+          "name": "identity",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job/task/attempt/lease/worker/pin identifiers are present"
+        },
+        {
+          "name": "timestamps",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "missing canonical lifecycle timestamps: submit_started_at, accepted_at, lease_granted_at, task_started_at, assets_ready_at, render_started_at, render_completed_at, artifact_declared_at, artifact_committed_at, job_completed_at"
+        },
+        {
+          "name": "durations",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "missing or negative durations: queue_wait, lease_to_start, asset_materialization, artifact_commit"
+        },
+        {
+          "name": "duration_consistency",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "total duration agrees with lifecycle timestamps"
+        },
+        {
+          "name": "asset_integrity",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no per-asset integrity records were supplied"
+        },
+        {
+          "name": "cache",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no cache hit/miss records were supplied"
+        },
+        {
+          "name": "render",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "artifact_url=missing, size=0, duration_ms=missing, expected=12000"
+        },
+        {
+          "name": "audio",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no audio evidence was supplied"
+        },
+        {
+          "name": "subtitles",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no subtitle evidence was supplied"
+        },
+        {
+          "name": "sidecar",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "renderer .progress.json sidecar was not captured"
+        }
+      ],
+      "missing_or_failed_criteria": [
+        "timestamps",
+        "durations",
+        "asset_integrity",
+        "cache",
+        "render",
+        "audio",
+        "subtitles",
+        "sidecar"
+      ],
+      "source": {
+        "benchmark_run": {
+          "job_id": "job_a9297f5514ce650f",
+          "status": "SUCCEEDED",
+          "run_idx": 1,
+          "submit_latency_ms": 68684923,
+          "render_time_ms": 2000,
+          "artifact_size_bytes": 0,
+          "started_at": "2026-07-29T12:10:06Z",
+          "completed_at": "2026-07-29T12:10:08Z",
+          "artifact_url": "",
+          "target_worker": "velox-worker-13197",
+          "resp_worker_id": "velox-worker-13197",
+          "leased_worker": "",
+          "task_id": "97400709-af25-4c5c-b9ec-06884cb61fee",
+          "attempt_id": "bd56b1db-608c-448a-8852-4cef5aa403da",
+          "lease_id": "l-velox-worker-13197-c0400299",
+          "pin_ok": "true"
+        },
+        "evidence_path": null
+      }
+    },
+    {
+      "run_index": 2,
+      "worker_id": "velox-worker-13197",
+      "placement_pin_worker_id": "velox-worker-13197",
+      "identifiers": {
+        "job_id": "job_88b3cc4e4d885903",
+        "task_id": "dc655acb-c44c-4a53-997f-3d422ed1342a",
+        "attempt_id": "0d19e5c2-071a-473f-8d86-0851a8750e3b",
+        "lease_id": "l-velox-worker-13197-35d23da8",
+        "worker_id": "velox-worker-13197",
+        "placement_pin_worker_id": "velox-worker-13197"
+      },
+      "status": "FAIL",
+      "timestamps": {
+        "submit_started_at": null,
+        "accepted_at": null,
+        "lease_granted_at": null,
+        "task_started_at": null,
+        "assets_ready_at": null,
+        "render_started_at": null,
+        "render_completed_at": null,
+        "artifact_declared_at": null,
+        "artifact_committed_at": null,
+        "job_completed_at": null,
+        "source_started_at": "2026-07-29T12:10:26Z",
+        "source_completed_at": "2026-07-29T12:10:28Z",
+        "source_written_at": null
+      },
+      "durations_ms": {
+        "submit": 73472456,
+        "queue_wait": null,
+        "lease_to_start": null,
+        "asset_materialization": null,
+        "render": 2000,
+        "artifact_commit": null,
+        "total": 2000
+      },
+      "assets": [],
+      "render": {
+        "artifact_url": null,
+        "artifact_path": null,
+        "artifact_size_bytes": 0,
+        "output_duration_ms": null,
+        "expected_duration_ms": 12000
+      },
+      "audio": null,
+      "subtitles": null,
+      "cache": {
+        "records": [],
+        "status": "FAIL"
+      },
+      "sidecar": {
+        "status": "FAIL",
+        "captured": false,
+        "associated": false,
+        "master_registered": false,
+        "path": null,
+        "data": null
+      },
+      "criteria": [
+        {
+          "name": "job_succeeded",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job status='SUCCEEDED'"
+        },
+        {
+          "name": "worker_pin",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "target='velox-worker-13197', response='velox-worker-13197', pin_ok='true'"
+        },
+        {
+          "name": "identity",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job/task/attempt/lease/worker/pin identifiers are present"
+        },
+        {
+          "name": "timestamps",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "missing canonical lifecycle timestamps: submit_started_at, accepted_at, lease_granted_at, task_started_at, assets_ready_at, render_started_at, render_completed_at, artifact_declared_at, artifact_committed_at, job_completed_at"
+        },
+        {
+          "name": "durations",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "missing or negative durations: queue_wait, lease_to_start, asset_materialization, artifact_commit"
+        },
+        {
+          "name": "duration_consistency",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "total duration agrees with lifecycle timestamps"
+        },
+        {
+          "name": "asset_integrity",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no per-asset integrity records were supplied"
+        },
+        {
+          "name": "cache",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no cache hit/miss records were supplied"
+        },
+        {
+          "name": "render",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "artifact_url=missing, size=0, duration_ms=missing, expected=12000"
+        },
+        {
+          "name": "audio",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no audio evidence was supplied"
+        },
+        {
+          "name": "subtitles",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no subtitle evidence was supplied"
+        },
+        {
+          "name": "sidecar",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "renderer .progress.json sidecar was not captured"
+        }
+      ],
+      "missing_or_failed_criteria": [
+        "timestamps",
+        "durations",
+        "asset_integrity",
+        "cache",
+        "render",
+        "audio",
+        "subtitles",
+        "sidecar"
+      ],
+      "source": {
+        "benchmark_run": {
+          "job_id": "job_88b3cc4e4d885903",
+          "status": "SUCCEEDED",
+          "run_idx": 2,
+          "submit_latency_ms": 73472456,
+          "render_time_ms": 2000,
+          "artifact_size_bytes": 0,
+          "started_at": "2026-07-29T12:10:26Z",
+          "completed_at": "2026-07-29T12:10:28Z",
+          "artifact_url": "",
+          "target_worker": "velox-worker-13197",
+          "resp_worker_id": "velox-worker-13197",
+          "leased_worker": "",
+          "task_id": "dc655acb-c44c-4a53-997f-3d422ed1342a",
+          "attempt_id": "0d19e5c2-071a-473f-8d86-0851a8750e3b",
+          "lease_id": "l-velox-worker-13197-35d23da8",
+          "pin_ok": "true"
+        },
+        "evidence_path": null
+      }
+    },
+    {
+      "run_index": 3,
+      "worker_id": "velox-worker-13197",
+      "placement_pin_worker_id": "velox-worker-13197",
+      "identifiers": {
+        "job_id": "job_0915bd54d07623e4",
+        "task_id": "78e44600-e956-4a0a-8c43-ffa98ac5923d",
+        "attempt_id": "66b2faaf-5f96-420b-9fb2-59b34ded28db",
+        "lease_id": "l-velox-worker-13197-49ea7ea0",
+        "worker_id": "velox-worker-13197",
+        "placement_pin_worker_id": "velox-worker-13197"
+      },
+      "status": "FAIL",
+      "timestamps": {
+        "submit_started_at": null,
+        "accepted_at": null,
+        "lease_granted_at": null,
+        "task_started_at": null,
+        "assets_ready_at": null,
+        "render_started_at": null,
+        "render_completed_at": null,
+        "artifact_declared_at": null,
+        "artifact_committed_at": null,
+        "job_completed_at": null,
+        "source_started_at": "2026-07-29T12:10:36Z",
+        "source_completed_at": "2026-07-29T12:10:38Z",
+        "source_written_at": null
+      },
+      "durations_ms": {
+        "submit": 76229376,
+        "queue_wait": null,
+        "lease_to_start": null,
+        "asset_materialization": null,
+        "render": 2000,
+        "artifact_commit": null,
+        "total": 2000
+      },
+      "assets": [],
+      "render": {
+        "artifact_url": null,
+        "artifact_path": null,
+        "artifact_size_bytes": 0,
+        "output_duration_ms": null,
+        "expected_duration_ms": 12000
+      },
+      "audio": null,
+      "subtitles": null,
+      "cache": {
+        "records": [],
+        "status": "FAIL"
+      },
+      "sidecar": {
+        "status": "FAIL",
+        "captured": false,
+        "associated": false,
+        "master_registered": false,
+        "path": null,
+        "data": null
+      },
+      "criteria": [
+        {
+          "name": "job_succeeded",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job status='SUCCEEDED'"
+        },
+        {
+          "name": "worker_pin",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "target='velox-worker-13197', response='velox-worker-13197', pin_ok='true'"
+        },
+        {
+          "name": "identity",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job/task/attempt/lease/worker/pin identifiers are present"
+        },
+        {
+          "name": "timestamps",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "missing canonical lifecycle timestamps: submit_started_at, accepted_at, lease_granted_at, task_started_at, assets_ready_at, render_started_at, render_completed_at, artifact_declared_at, artifact_committed_at, job_completed_at"
+        },
+        {
+          "name": "durations",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "missing or negative durations: queue_wait, lease_to_start, asset_materialization, artifact_commit"
+        },
+        {
+          "name": "duration_consistency",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "total duration agrees with lifecycle timestamps"
+        },
+        {
+          "name": "asset_integrity",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no per-asset integrity records were supplied"
+        },
+        {
+          "name": "cache",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no cache hit/miss records were supplied"
+        },
+        {
+          "name": "render",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "artifact_url=missing, size=0, duration_ms=missing, expected=12000"
+        },
+        {
+          "name": "audio",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no audio evidence was supplied"
+        },
+        {
+          "name": "subtitles",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no subtitle evidence was supplied"
+        },
+        {
+          "name": "sidecar",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "renderer .progress.json sidecar was not captured"
+        }
+      ],
+      "missing_or_failed_criteria": [
+        "timestamps",
+        "durations",
+        "asset_integrity",
+        "cache",
+        "render",
+        "audio",
+        "subtitles",
+        "sidecar"
+      ],
+      "source": {
+        "benchmark_run": {
+          "job_id": "job_0915bd54d07623e4",
+          "status": "SUCCEEDED",
+          "run_idx": 3,
+          "submit_latency_ms": 76229376,
+          "render_time_ms": 2000,
+          "artifact_size_bytes": 0,
+          "started_at": "2026-07-29T12:10:36Z",
+          "completed_at": "2026-07-29T12:10:38Z",
+          "artifact_url": "",
+          "target_worker": "velox-worker-13197",
+          "resp_worker_id": "velox-worker-13197",
+          "leased_worker": "",
+          "task_id": "78e44600-e956-4a0a-8c43-ffa98ac5923d",
+          "attempt_id": "66b2faaf-5f96-420b-9fb2-59b34ded28db",
+          "lease_id": "l-velox-worker-13197-49ea7ea0",
+          "pin_ok": "true"
+        },
+        "evidence_path": null
+      }
+    },
+    {
+      "run_index": 1,
+      "worker_id": "velox-worker-523925eb",
+      "placement_pin_worker_id": "velox-worker-523925eb",
+      "identifiers": {
+        "job_id": "job_840bd6a0e316a4ba",
+        "task_id": "3d9fe42b-40b1-48f3-8dfe-a7179c3eb346",
+        "attempt_id": "29cc6809-e4f2-40a3-9e40-15ae1a8c3a29",
+        "lease_id": "l-velox-worker-523925eb-5cb82a10",
+        "worker_id": "velox-worker-523925eb",
+        "placement_pin_worker_id": "velox-worker-523925eb"
+      },
+      "status": "FAIL",
+      "timestamps": {
+        "submit_started_at": null,
+        "accepted_at": null,
+        "lease_granted_at": null,
+        "task_started_at": null,
+        "assets_ready_at": null,
+        "render_started_at": null,
+        "render_completed_at": null,
+        "artifact_declared_at": null,
+        "artifact_committed_at": null,
+        "job_completed_at": null,
+        "source_started_at": "2026-07-29T12:10:56Z",
+        "source_completed_at": "2026-07-29T12:10:58Z",
+        "source_written_at": null
+      },
+      "durations_ms": {
+        "submit": -1606794344021782064,
+        "queue_wait": null,
+        "lease_to_start": null,
+        "asset_materialization": null,
+        "render": 2000,
+        "artifact_commit": null,
+        "total": 2000
+      },
+      "assets": [],
+      "render": {
+        "artifact_url": null,
+        "artifact_path": null,
+        "artifact_size_bytes": 0,
+        "output_duration_ms": null,
+        "expected_duration_ms": 12000
+      },
+      "audio": null,
+      "subtitles": null,
+      "cache": {
+        "records": [],
+        "status": "FAIL"
+      },
+      "sidecar": {
+        "status": "FAIL",
+        "captured": false,
+        "associated": false,
+        "master_registered": false,
+        "path": null,
+        "data": null
+      },
+      "criteria": [
+        {
+          "name": "job_succeeded",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job status='SUCCEEDED'"
+        },
+        {
+          "name": "worker_pin",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "target='velox-worker-523925eb', response='velox-worker-523925eb', pin_ok='true'"
+        },
+        {
+          "name": "identity",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job/task/attempt/lease/worker/pin identifiers are present"
+        },
+        {
+          "name": "timestamps",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "missing canonical lifecycle timestamps: submit_started_at, accepted_at, lease_granted_at, task_started_at, assets_ready_at, render_started_at, render_completed_at, artifact_declared_at, artifact_committed_at, job_completed_at"
+        },
+        {
+          "name": "durations",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "missing or negative durations: submit, queue_wait, lease_to_start, asset_materialization, artifact_commit"
+        },
+        {
+          "name": "duration_consistency",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "total duration agrees with lifecycle timestamps"
+        },
+        {
+          "name": "asset_integrity",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no per-asset integrity records were supplied"
+        },
+        {
+          "name": "cache",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no cache hit/miss records were supplied"
+        },
+        {
+          "name": "render",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "artifact_url=missing, size=0, duration_ms=missing, expected=12000"
+        },
+        {
+          "name": "audio",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no audio evidence was supplied"
+        },
+        {
+          "name": "subtitles",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no subtitle evidence was supplied"
+        },
+        {
+          "name": "sidecar",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "renderer .progress.json sidecar was not captured"
+        }
+      ],
+      "missing_or_failed_criteria": [
+        "timestamps",
+        "durations",
+        "asset_integrity",
+        "cache",
+        "render",
+        "audio",
+        "subtitles",
+        "sidecar"
+      ],
+      "source": {
+        "benchmark_run": {
+          "job_id": "job_840bd6a0e316a4ba",
+          "status": "SUCCEEDED",
+          "run_idx": 1,
+          "submit_latency_ms": -1606794344021782064,
+          "render_time_ms": 2000,
+          "artifact_size_bytes": 0,
+          "started_at": "2026-07-29T12:10:56Z",
+          "completed_at": "2026-07-29T12:10:58Z",
+          "artifact_url": "",
+          "target_worker": "velox-worker-523925eb",
+          "resp_worker_id": "velox-worker-523925eb",
+          "leased_worker": "",
+          "task_id": "3d9fe42b-40b1-48f3-8dfe-a7179c3eb346",
+          "attempt_id": "29cc6809-e4f2-40a3-9e40-15ae1a8c3a29",
+          "lease_id": "l-velox-worker-523925eb-5cb82a10",
+          "pin_ok": "true"
+        },
+        "evidence_path": null
+      }
+    },
+    {
+      "run_index": 2,
+      "worker_id": "velox-worker-523925eb",
+      "placement_pin_worker_id": "velox-worker-523925eb",
+      "identifiers": {
+        "job_id": "job_5a304a951315f83c",
+        "task_id": "861ce80e-801a-4dd1-9fb3-8dd87749f00a",
+        "attempt_id": "76e4df8b-1b25-4edc-b443-2c762831236d",
+        "lease_id": "l-velox-worker-523925eb-284e3533",
+        "worker_id": "velox-worker-523925eb",
+        "placement_pin_worker_id": "velox-worker-523925eb"
+      },
+      "status": "FAIL",
+      "timestamps": {
+        "submit_started_at": null,
+        "accepted_at": null,
+        "lease_granted_at": null,
+        "task_started_at": null,
+        "assets_ready_at": null,
+        "render_started_at": null,
+        "render_completed_at": null,
+        "artifact_declared_at": null,
+        "artifact_committed_at": null,
+        "job_completed_at": null,
+        "source_started_at": "2026-07-29T12:11:06Z",
+        "source_completed_at": "2026-07-29T12:11:07Z",
+        "source_written_at": null
+      },
+      "durations_ms": {
+        "submit": 93465337,
+        "queue_wait": null,
+        "lease_to_start": null,
+        "asset_materialization": null,
+        "render": 1000,
+        "artifact_commit": null,
+        "total": 1000
+      },
+      "assets": [],
+      "render": {
+        "artifact_url": null,
+        "artifact_path": null,
+        "artifact_size_bytes": 0,
+        "output_duration_ms": null,
+        "expected_duration_ms": 12000
+      },
+      "audio": null,
+      "subtitles": null,
+      "cache": {
+        "records": [],
+        "status": "FAIL"
+      },
+      "sidecar": {
+        "status": "FAIL",
+        "captured": false,
+        "associated": false,
+        "master_registered": false,
+        "path": null,
+        "data": null
+      },
+      "criteria": [
+        {
+          "name": "job_succeeded",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job status='SUCCEEDED'"
+        },
+        {
+          "name": "worker_pin",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "target='velox-worker-523925eb', response='velox-worker-523925eb', pin_ok='true'"
+        },
+        {
+          "name": "identity",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job/task/attempt/lease/worker/pin identifiers are present"
+        },
+        {
+          "name": "timestamps",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "missing canonical lifecycle timestamps: submit_started_at, accepted_at, lease_granted_at, task_started_at, assets_ready_at, render_started_at, render_completed_at, artifact_declared_at, artifact_committed_at, job_completed_at"
+        },
+        {
+          "name": "durations",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "missing or negative durations: queue_wait, lease_to_start, asset_materialization, artifact_commit"
+        },
+        {
+          "name": "duration_consistency",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "total duration agrees with lifecycle timestamps"
+        },
+        {
+          "name": "asset_integrity",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no per-asset integrity records were supplied"
+        },
+        {
+          "name": "cache",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no cache hit/miss records were supplied"
+        },
+        {
+          "name": "render",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "artifact_url=missing, size=0, duration_ms=missing, expected=12000"
+        },
+        {
+          "name": "audio",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no audio evidence was supplied"
+        },
+        {
+          "name": "subtitles",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no subtitle evidence was supplied"
+        },
+        {
+          "name": "sidecar",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "renderer .progress.json sidecar was not captured"
+        }
+      ],
+      "missing_or_failed_criteria": [
+        "timestamps",
+        "durations",
+        "asset_integrity",
+        "cache",
+        "render",
+        "audio",
+        "subtitles",
+        "sidecar"
+      ],
+      "source": {
+        "benchmark_run": {
+          "job_id": "job_5a304a951315f83c",
+          "status": "SUCCEEDED",
+          "run_idx": 2,
+          "submit_latency_ms": 93465337,
+          "render_time_ms": 1000,
+          "artifact_size_bytes": 0,
+          "started_at": "2026-07-29T12:11:06Z",
+          "completed_at": "2026-07-29T12:11:07Z",
+          "artifact_url": "",
+          "target_worker": "velox-worker-523925eb",
+          "resp_worker_id": "velox-worker-523925eb",
+          "leased_worker": "",
+          "task_id": "861ce80e-801a-4dd1-9fb3-8dd87749f00a",
+          "attempt_id": "76e4df8b-1b25-4edc-b443-2c762831236d",
+          "lease_id": "l-velox-worker-523925eb-284e3533",
+          "pin_ok": "true"
+        },
+        "evidence_path": null
+      }
+    },
+    {
+      "run_index": 3,
+      "worker_id": "velox-worker-523925eb",
+      "placement_pin_worker_id": "velox-worker-523925eb",
+      "identifiers": {
+        "job_id": "job_1c67a9aa369bdbe5",
+        "task_id": "f09c6e9c-5318-478c-a549-b4fcd6839441",
+        "attempt_id": "5a4b3d41-da65-4926-ae07-4b3f067f752c",
+        "lease_id": "l-velox-worker-523925eb-7ea50814",
+        "worker_id": "velox-worker-523925eb",
+        "placement_pin_worker_id": "velox-worker-523925eb"
+      },
+      "status": "FAIL",
+      "timestamps": {
+        "submit_started_at": null,
+        "accepted_at": null,
+        "lease_granted_at": null,
+        "task_started_at": null,
+        "assets_ready_at": null,
+        "render_started_at": null,
+        "render_completed_at": null,
+        "artifact_declared_at": null,
+        "artifact_committed_at": null,
+        "job_completed_at": null,
+        "source_started_at": "2026-07-29T12:11:16Z",
+        "source_completed_at": "2026-07-29T12:11:17Z",
+        "source_written_at": null
+      },
+      "durations_ms": {
+        "submit": 78147030,
+        "queue_wait": null,
+        "lease_to_start": null,
+        "asset_materialization": null,
+        "render": 1000,
+        "artifact_commit": null,
+        "total": 1000
+      },
+      "assets": [],
+      "render": {
+        "artifact_url": null,
+        "artifact_path": null,
+        "artifact_size_bytes": 0,
+        "output_duration_ms": null,
+        "expected_duration_ms": 12000
+      },
+      "audio": null,
+      "subtitles": null,
+      "cache": {
+        "records": [],
+        "status": "FAIL"
+      },
+      "sidecar": {
+        "status": "FAIL",
+        "captured": false,
+        "associated": false,
+        "master_registered": false,
+        "path": null,
+        "data": null
+      },
+      "criteria": [
+        {
+          "name": "job_succeeded",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job status='SUCCEEDED'"
+        },
+        {
+          "name": "worker_pin",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "target='velox-worker-523925eb', response='velox-worker-523925eb', pin_ok='true'"
+        },
+        {
+          "name": "identity",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "job/task/attempt/lease/worker/pin identifiers are present"
+        },
+        {
+          "name": "timestamps",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "missing canonical lifecycle timestamps: submit_started_at, accepted_at, lease_granted_at, task_started_at, assets_ready_at, render_started_at, render_completed_at, artifact_declared_at, artifact_committed_at, job_completed_at"
+        },
+        {
+          "name": "durations",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "missing or negative durations: queue_wait, lease_to_start, asset_materialization, artifact_commit"
+        },
+        {
+          "name": "duration_consistency",
+          "status": "PASS",
+          "evidence_status": "OBSERVED",
+          "detail": "total duration agrees with lifecycle timestamps"
+        },
+        {
+          "name": "asset_integrity",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no per-asset integrity records were supplied"
+        },
+        {
+          "name": "cache",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no cache hit/miss records were supplied"
+        },
+        {
+          "name": "render",
+          "status": "FAIL",
+          "evidence_status": "OBSERVED",
+          "detail": "artifact_url=missing, size=0, duration_ms=missing, expected=12000"
+        },
+        {
+          "name": "audio",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no audio evidence was supplied"
+        },
+        {
+          "name": "subtitles",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "no subtitle evidence was supplied"
+        },
+        {
+          "name": "sidecar",
+          "status": "FAIL",
+          "evidence_status": "NOT_RUN",
+          "detail": "renderer .progress.json sidecar was not captured"
+        }
+      ],
+      "missing_or_failed_criteria": [
+        "timestamps",
+        "durations",
+        "asset_integrity",
+        "cache",
+        "render",
+        "audio",
+        "subtitles",
+        "sidecar"
+      ],
+      "source": {
+        "benchmark_run": {
+          "job_id": "job_1c67a9aa369bdbe5",
+          "status": "SUCCEEDED",
+          "run_idx": 3,
+          "submit_latency_ms": 78147030,
+          "render_time_ms": 1000,
+          "artifact_size_bytes": 0,
+          "started_at": "2026-07-29T12:11:16Z",
+          "completed_at": "2026-07-29T12:11:17Z",
+          "artifact_url": "",
+          "target_worker": "velox-worker-523925eb",
+          "resp_worker_id": "velox-worker-523925eb",
+          "leased_worker": "",
+          "task_id": "f09c6e9c-5318-478c-a549-b4fcd6839441",
+          "attempt_id": "5a4b3d41-da65-4926-ae07-4b3f067f752c",
+          "lease_id": "l-velox-worker-523925eb-7ea50814",
+          "pin_ok": "true"
+        },
+        "evidence_path": null
+      }
+    }
+  ]
+}

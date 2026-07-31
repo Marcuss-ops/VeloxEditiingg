@@ -232,7 +232,7 @@ func (e *Enqueuer) prepareJobAndTask(ctx context.Context, payloadMap map[string]
 		return nil, nil, 0, err
 	}
 
-	normalized, err := normalizeSceneVideoPayload(payloadMap)
+	normalized, err := normalizeSceneVideoPayloadContext(ctx, payloadMap)
 	if err != nil {
 		return nil, nil, 0, err
 	}
