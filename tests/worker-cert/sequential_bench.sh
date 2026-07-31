@@ -18,12 +18,19 @@
 #   2. Image digest check: GET /api/v1/admin/workers/{id} → image_digest.
 #   3. (Optional) Drain non-target workers so the target has zero load.
 #   4. Wait for active_jobs=0 on target worker.
-#   5. Submit 3 identical jobs with placement_pin_worker_id targeting
-#      this worker. Poll GET /api/v1/jobs/{id} until SUCCEEDED.
+#   5. Submit jobs with placement_pin_worker_id targeting this worker. Each
+#      payload contains two stock clips, scene voiceover, background music and
+#      one ASS subtitle track. Every media reference is velox-asset://<sha256>.
+#      Poll GET /api/v1/jobs/{id} until SUCCEEDED.
 #   6. Scrape TaskLeaseGranted from master log to verify placement.
 #   7. Collect: submit_latency_ms, started_at, completed_at,
 #      render_time_ms, artifact_size_bytes, worker_id from job response.
 #   8. Resume drained workers.
+#
+# Runtime media inputs (required; use only Master-registered READY assets):
+#   BENCH_BACKGROUND_MUSIC_ASSET_ID       64-hex SHA-256 asset ID
+#   BENCH_BACKGROUND_MUSIC_DURATION_SECONDS >= 6 (video is 2 x 3 seconds)
+#   BENCH_SUBTITLE_ASSET_ID               64-hex SHA-256 ASS asset ID
 #
 # After all workers: compute median, min, max, and realtime_factor
 # (render_ms / output_duration_ms) per worker. Write benchmark.json.
@@ -71,6 +78,9 @@ NO_DRAIN=0
 POLL_TIMEOUT_S="${BENCH_POLL_TIMEOUT_S:-300}"
 JOBS_PER_WORKER="${BENCH_JOBS_PER_WORKER:-3}"
 DESTINATION_ID="${BENCH_DESTINATION_ID:-comedy_test}"
+BENCH_BACKGROUND_MUSIC_ASSET_ID="${BENCH_BACKGROUND_MUSIC_ASSET_ID:-}"
+BENCH_BACKGROUND_MUSIC_DURATION_SECONDS="${BENCH_BACKGROUND_MUSIC_DURATION_SECONDS:-}"
+BENCH_SUBTITLE_ASSET_ID="${BENCH_SUBTITLE_ASSET_ID:-}"
 BENCH_OUT_ROOT="${BENCH_OUT_ROOT:-${REPO_ROOT}/tests/worker-cert/workers}"
 VELOX_MASTER_LOG_PATH="${VELOX_MASTER_LOG_PATH:-}"
 
@@ -107,7 +117,23 @@ done
 VELOX_MASTER_URL="${VELOX_MASTER_URL%/}"
 DESTINATION_ID="${DESTINATION_ID%/}"
 
+for required_media in BENCH_BACKGROUND_MUSIC_ASSET_ID BENCH_BACKGROUND_MUSIC_DURATION_SECONDS BENCH_SUBTITLE_ASSET_ID; do
+  if [[ -z "${!required_media}" ]]; then
+    log_error "${required_media} is required; refusing to invent benchmark media"
+    exit 2
+  fi
+done
+if ! [[ "$BENCH_BACKGROUND_MUSIC_ASSET_ID" =~ ^[0-9a-f]{64}$ && "$BENCH_SUBTITLE_ASSET_ID" =~ ^[0-9a-f]{64}$ ]]; then
+  log_error "benchmark music and ASS asset IDs must be lowercase 64-hex SHA-256 values"
+  exit 2
+fi
+if ! [[ "$BENCH_BACKGROUND_MUSIC_DURATION_SECONDS" =~ ^[0-9]+([.][0-9]+)?$ ]] || ! awk -v d="$BENCH_BACKGROUND_MUSIC_DURATION_SECONDS" 'BEGIN { exit !(d >= 6) }'; then
+  log_error "BENCH_BACKGROUND_MUSIC_DURATION_SECONDS must be numeric and >= 6 seconds"
+  exit 2
+fi
+
 log_info "sequential_bench workers=${WORKER_IDS[*]} master=$VELOX_MASTER_URL dest=$DESTINATION_ID"
+log_info "media: music=$BENCH_BACKGROUND_MUSIC_ASSET_ID duration=${BENCH_BACKGROUND_MUSIC_DURATION_SECONDS}s ass=$BENCH_SUBTITLE_ASSET_ID"
 log_info "tunables: poll_timeout=${POLL_TIMEOUT_S}s jobs_per_worker=$JOBS_PER_WORKER no_drain=$NO_DRAIN"
 
 # ─── Resolve admin token ───────────────────────────────────────────────────
@@ -151,6 +177,12 @@ ASSETS_FILE="${SCRIPT_DIR}/fixtures/assets.json"
 ASSET_VO=$(jq -er '.voiceover[0].asset_id' "$ASSETS_FILE")
 ASSET_CLIP_A=$(jq -er '.clips[0].asset_id' "$ASSETS_FILE")
 ASSET_CLIP_B=$(jq -er '.clips[1].asset_id' "$ASSETS_FILE")
+for fixture_asset in ASSET_VO ASSET_CLIP_A ASSET_CLIP_B; do
+  if ! [[ "${!fixture_asset}" =~ ^[0-9a-f]{64}$ ]]; then
+    log_error "fixture ${fixture_asset} is not a content-addressed SHA-256 asset ID"
+    exit 2
+  fi
+done
 log_info "assets: vo=$ASSET_VO clip_a=$ASSET_CLIP_A clip_b=$ASSET_CLIP_B"
 
 # ─── Helper: fetch worker JSON (admin endpoint) ────────────────────────────
@@ -209,10 +241,27 @@ wait_active_jobs_zero() {
   return 1
 }
 
+# ─── Helper: static payload URI validation ─────────────────────────────────
+validate_benchmark_payload() {
+  local payload_json="$1"
+  jq -e '
+    ([.voiceover_paths[]?]
+      + [.scenes[]?.clip_link]
+      + [.scenes[]?.clip.url]
+      + [.audio_tracks[]?.source_url]
+      + [.subtitle_tracks[]?.source]
+      + [.scenes[]?.subtitles.url])
+    | map(select(. != null)) as $media
+    | (($media | length > 0)
+       and (all($media[]; type == "string" and startswith("velox-asset://")))
+       and ([.. | strings | select(startswith("file://") or startswith("http://") or startswith("https://"))] | length == 0))
+  ' <<<"$payload_json" >/dev/null 2>&1
+}
+
 # ─── Helper: submit + poll a single job ────────────────────────────────────
 submit_and_poll_job() {
   local target_worker="$1" run_idx="$2" epoch="$3"
-  local idem_key="seqbench-${target_worker}-${epoch}-${run_idx}"
+  local idem_key="seqbench-${target_worker}-${epoch}-$(date +%s%N)-${run_idx}"
 
   local payload
   payload=$(cat <<JSON
@@ -221,17 +270,54 @@ submit_and_poll_job() {
   "video_name": "sequential_bench ${target_worker} run ${run_idx}",
   "script_text": "Benchmark test script for sequential worker evaluation.",
   "placement_pin_worker_id": "${target_worker}",
-  "voiceover_paths": ["velox-asset://${ASSET_VO}"],
+  "voiceover_paths": [
+    "velox-asset://${ASSET_VO}",
+    "velox-asset://${ASSET_VO}"
+  ],
+  "audio_tracks": [
+    {
+      "asset_id": "${BENCH_BACKGROUND_MUSIC_ASSET_ID}",
+      "source_url": "velox-asset://${BENCH_BACKGROUND_MUSIC_ASSET_ID}",
+      "role": "background_music",
+      "volume": 0.12,
+      "start_time_offset": 0,
+      "duration_seconds": ${BENCH_BACKGROUND_MUSIC_DURATION_SECONDS}
+    }
+  ],
   "scenes": [
-    {"text":"Bench scene 1 — ${target_worker}","clip_link":"velox-asset://${ASSET_CLIP_A}","duration_seconds":3},
+    {
+      "text":"Bench scene 1 — ${target_worker}",
+      "clip_link":"velox-asset://${ASSET_CLIP_A}",
+      "duration_seconds":3,
+      "subtitles": {
+        "asset_id":"${BENCH_SUBTITLE_ASSET_ID}",
+        "format":"ass",
+        "url":"velox-asset://${BENCH_SUBTITLE_ASSET_ID}",
+        "sha256":"${BENCH_SUBTITLE_ASSET_ID}",
+        "language":"it"
+      }
+    },
     {"text":"Bench scene 2 — ${target_worker}","clip_link":"velox-asset://${ASSET_CLIP_B}","duration_seconds":3}
   ],
   "delivery_plan": [
-    {"destination_id":"${DESTINATION_ID}","priority":100,"retry_budget":1}
+    {
+      "destination_id":"${DESTINATION_ID}",
+      "priority":100,
+      "retry_budget":1,
+      "metadata":{"test_type":"sequential_stock_voiceover_music_ass"}
+    }
   ]
 }
 JSON
 )
+
+  # Static contract guard: this benchmark must never submit local paths or
+  # ordinary HTTP URLs, and every media reference must use velox-asset://.
+  if ! validate_benchmark_payload "$payload"; then
+    log_error "[submit ${target_worker} #${run_idx}] payload URI validation failed"
+    printf '{"job_id":"","status":"PAYLOAD_INVALID","error":"media refs must use velox-asset://"}\n'
+    return 1
+  fi
 
   # ── POST /api/v1/jobs ──
   local submit_start post_status job_id
@@ -548,6 +634,11 @@ cat > "$TMP_OUT" <<JSON
   "jobs_per_worker": ${JOBS_PER_WORKER},
   "poll_timeout_s": ${POLL_TIMEOUT_S},
   "destination_id": "${DESTINATION_ID}",
+  "media_profile": "stock_clip_voiceover_background_music_ass",
+  "asset_uri_scheme": "velox-asset",
+  "video_duration_ms": 6000,
+  "background_music_duration_seconds": ${BENCH_BACKGROUND_MUSIC_DURATION_SECONDS},
+  "subtitle_format": "ass",
   "no_drain": $([[ $NO_DRAIN -eq 1 ]] && echo true || echo false),
   "all_jobs_succeeded": $([[ $ALL_JOBS_SUCCEEDED -eq 1 ]] && echo true || echo false),
   "master_url": "${VELOX_MASTER_URL}",
