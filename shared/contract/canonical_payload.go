@@ -54,7 +54,7 @@ var CanonicalTopLevelKeys = []string{
 
 	// Business fields
 	"video_name", "script_text",
-	"render_manifest", "manifest_ref", "manifest_sha256",
+	"render_manifest", "assets", "manifest_ref", "manifest_sha256",
 	"render_plan_json", "render_plan_sha256",
 	"scenes_json", "scenes",
 	"voiceover_paths",
@@ -198,7 +198,7 @@ func ValidatePayload(payload map[string]interface{}) error {
 	}
 
 	// Rule 4 — array-shaped canonical fields.
-	arrayFields := []string{"scenes", "voiceover_paths", "scene_image_paths", "layers", "items", "audio_tracks", "subtitle_tracks"}
+	arrayFields := []string{"scenes", "assets", "voiceover_paths", "scene_image_paths", "layers", "items", "audio_tracks", "subtitle_tracks"}
 	for _, field := range arrayFields {
 		v, ok := payload[field]
 		if !ok || v == nil {

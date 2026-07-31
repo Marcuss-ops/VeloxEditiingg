@@ -51,6 +51,7 @@ type JobPayloadV2 struct {
 	VideoName        string           `json:"video_name"`
 	ScriptText       string           `json:"script_text"`
 	RenderManifest   map[string]any   `json:"render_manifest,omitempty"`
+	Assets           []map[string]any `json:"assets,omitempty"`
 	ManifestRef      map[string]any   `json:"manifest_ref,omitempty"`
 	ManifestSHA256   string           `json:"manifest_sha256,omitempty"`
 	RenderPlanJSON   string           `json:"render_plan_json,omitempty"`
@@ -137,6 +138,9 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 	}
 	if manifest, ok := raw["render_manifest"].(map[string]any); ok {
 		p.RenderManifest = cloneObject(manifest)
+	}
+	if assetsVal, ok := raw["assets"]; ok {
+		p.Assets = normalizeObjectList(assetsVal)
 	}
 	if manifestRef, ok := raw["manifest_ref"].(map[string]any); ok {
 		p.ManifestRef = cloneObject(manifestRef)
@@ -228,6 +232,9 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 	}
 	if len(p.RenderManifest) > 0 {
 		out["render_manifest"] = cloneObject(p.RenderManifest)
+	}
+	if len(p.Assets) > 0 {
+		out["assets"] = p.Assets
 	}
 	if len(p.ManifestRef) > 0 {
 		out["manifest_ref"] = cloneObject(p.ManifestRef)

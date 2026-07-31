@@ -62,6 +62,18 @@ func (r Registry) CompilePayload(ctx context.Context, raw map[string]any) (*Rend
 	if raw == nil {
 		return nil, fmt.Errorf("rendercompiler: raw payload is nil")
 	}
+	if rawManifest, present := raw["render_manifest"]; present {
+		if rawManifest == nil {
+			return nil, fmt.Errorf("rendercompiler: render_manifest must be an object")
+		}
+		manifest, ok := rawManifest.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("rendercompiler: render_manifest must be an object, got %T", rawManifest)
+		}
+		if len(manifest) == 0 {
+			return nil, fmt.Errorf("rendercompiler: render_manifest must not be empty")
+		}
+	}
 	payload := contract.NewJobPayloadV2(raw)
 	// NewJobPayloadV2 intentionally defaults missing routing fields for
 	// legacy readers. The registry must nevertheless dispatch explicit raw

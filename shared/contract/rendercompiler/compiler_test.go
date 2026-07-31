@@ -50,6 +50,23 @@ func TestCompilePayloadDispatchesExplicitJobTypeAndVersion(t *testing.T) {
 	}
 }
 
+func TestCompilePayloadRejectsInvalidRenderManifestShapes(t *testing.T) {
+	for name, manifest := range map[string]any{
+		"null":   nil,
+		"string": "not-an-object",
+		"empty":  map[string]any{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := DefaultRegistry().CompilePayload(context.Background(), map[string]any{
+				"render_manifest": manifest,
+			})
+			if err == nil || !strings.Contains(err.Error(), "render_manifest") {
+				t.Fatalf("invalid render_manifest shape was accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestDefaultRegistryCompilesProcessVideoDeterministically(t *testing.T) {
 	payload := testPayload()
 	registry := DefaultRegistry()

@@ -46,8 +46,8 @@ func mustPayloadV2Map(t *testing.T) map[string]any {
 		JobID:           "job-1", JobRunID: "run-1", CorrelationID: "corr-1",
 		JobType: "process_video", Version: "v2",
 		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
-		VideoName: "video", ScriptText: "script",
-		RenderManifest: map[string]any{"schema": "manifest"},
+		VideoName: "video", ScriptText: "script", RenderManifest: map[string]any{"schema": "manifest"},
+		Assets:         []map[string]any{{"id": "asset-1"}},
 		ManifestRef:    map[string]any{"uri": "velox-asset://manifest"},
 		ManifestSHA256: "manifest-sha",
 		RenderPlanJSON: "{}", RenderPlanSHA256: "plan-sha",
@@ -113,7 +113,7 @@ func assertKeySetEqual(t *testing.T, leftName string, left map[string]bool, righ
 }
 
 func TestNewJobPayloadV2PreservesRenderTimelineArrays(t *testing.T) {
-	raw := map[string]any{
+	raw := map[string]any{"assets": []any{map[string]any{"id": "asset-1"}},
 		"items":           []any{map[string]any{"role": "scene"}},
 		"audio_tracks":    []any{map[string]any{"source_url": "audio.mp3"}},
 		"subtitle_tracks": []any{map[string]any{"source": "subtitles.srt"}},
@@ -123,7 +123,7 @@ func TestNewJobPayloadV2PreservesRenderTimelineArrays(t *testing.T) {
 	if err != nil {
 		t.Fatalf("JobPayloadV2.ToMap(): %v", err)
 	}
-	for _, key := range []string{"items", "audio_tracks", "subtitle_tracks"} {
+	for _, key := range []string{"assets", "items", "audio_tracks", "subtitle_tracks"} {
 		values, ok := mapped[key].([]map[string]any)
 		if !ok || len(values) != 1 {
 			t.Fatalf("%s = %#v, want one object", key, mapped[key])

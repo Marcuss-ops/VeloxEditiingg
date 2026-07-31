@@ -33,8 +33,12 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 		if rawManifest == nil {
 			return nil, deliveryplan.NewValidationError("render_manifest", "must be an object")
 		}
-		if _, ok := rawManifest.(map[string]interface{}); !ok {
+		manifest, ok := rawManifest.(map[string]interface{})
+		if !ok {
 			return nil, deliveryplan.NewValidationError("render_manifest", "must be an object")
+		}
+		if len(manifest) == 0 {
+			return nil, deliveryplan.NewValidationError("render_manifest", "must not be empty")
 		}
 	}
 	base := contract.NewJobPayloadV2(payloadMap)
