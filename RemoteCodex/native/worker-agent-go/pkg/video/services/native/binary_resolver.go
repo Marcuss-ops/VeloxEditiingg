@@ -99,6 +99,12 @@ func mapEngineSidecar(sc *engineSidecar, m *pipeline.RenderMetrics) {
 	m.DupFrames = sc.DupFrames
 	m.DropFrames = sc.DropFrames
 	m.PhaseMS = sc.PhaseMS
+	if sc.Observability != nil {
+		m.Observability = make(map[string]interface{}, len(sc.Observability))
+		for key, value := range sc.Observability {
+			m.Observability[key] = value
+		}
+	}
 	m.Segments = make([]pipeline.SegmentTiming, 0, len(sc.Segments))
 	for _, seg := range sc.Segments {
 		m.Segments = append(m.Segments, pipeline.SegmentTiming{

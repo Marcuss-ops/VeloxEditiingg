@@ -260,6 +260,21 @@ void testCompleteSidecarSchema() {
     engine.recorder().SetDetailedMetrics(token, 2, "video", 0, 1.5, 21.0, 18.0, 0.5, 120, 118);
     engine.recorder().Complete(token, 1000, 2000, 118, vt::kStatusOk);
 
+    int64_t audioToken = engine.recorder().Begin(
+        vt::kOriginEngine, vt::kScopeAudioTrack, "engine.audio", "mix", "audio");
+    engine.recorder().Complete(audioToken, 300, 400, 0, vt::kStatusOk);
+    int64_t subtitleToken = engine.recorder().Begin(
+        vt::kOriginValidation, vt::kScopeSubtitleTrack, "subtitle", "burn_in", "subtitle");
+    engine.recorder().Complete(subtitleToken, 0, 0, 0, vt::kStatusOk);
+    int64_t qualityToken = engine.recorder().Begin(
+        vt::kOriginValidation, vt::kScopeArtifact, "quality", "ffprobe", "quality");
+    engine.recorder().Complete(qualityToken, 0, 0, 0, vt::kStatusOk);
+    int64_t failedAssetToken = engine.recorder().Begin(
+        vt::kOriginWorker, vt::kScopeArtifact, "worker.asset", "download", "download");
+    engine.recorder().Complete(failedAssetToken, 512, 0, 0, vt::kStatusFailed, "EIO", "disk full");
+    engine.recorder().Emit(
+        vt::kOriginWorker, vt::kScopeAttempt, "attempt", "retry", "retry", vt::kStatusOk);
+
     const std::string json = engine.sidecarJson("/tmp/render-output.mp4");
     EXPECT(json.size() > 0, "sidecar JSON is not empty");
     EXPECT(json.front() == '{' && json.back() == '}', "sidecar JSON is object-shaped");
@@ -282,6 +297,18 @@ void testCompleteSidecarSchema() {
            "detailed cpu timing emitted");
     EXPECT(std::strstr(json.c_str(), "\"frames_in\":120") != nullptr,
            "detailed frame counters emitted");
+    EXPECT(std::strstr(json.c_str(), "\"observability\":{") != nullptr,
+           "observability rollup emitted");
+    EXPECT(std::strstr(json.c_str(), "\"audio\":{\"events\":1") != nullptr,
+           "audio rollup emitted");
+    EXPECT(std::strstr(json.c_str(), "\"subtitle\":{\"events\":1") != nullptr,
+           "subtitle rollup emitted");
+    EXPECT(std::strstr(json.c_str(), "\"quality\":{\"events\":1") != nullptr,
+           "quality rollup emitted");
+    EXPECT(std::strstr(json.c_str(), "\"retry\":{\"count\":1}") != nullptr,
+           "retry rollup emitted");
+    EXPECT(std::strstr(json.c_str(), "\"wasted_download_bytes\":512") != nullptr,
+           "wasted download rollup emitted");
 }
 
 void testReset() {

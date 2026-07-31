@@ -77,12 +77,25 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 	// typed envelope uses the canonical report keys. Preserve an explicitly
 	// supplied canonical value and only fill aliases when it is absent.
 	for source, target := range map[string]string{
-		"engine.frames":           "frames.encoded",
-		"engine.speed_x":          "ffmpeg.speed_ratio",
-		"engine.encode_passes":    "encode.passes",
-		"engine.temp_bytes":       "temp.bytes.written",
-		"engine.duration_seconds": "media.duration.seconds",
-		"engine.concat_mode":      "concat.mode",
+		"engine.frames":                "frames.encoded",
+		"engine.speed_x":               "ffmpeg.speed_ratio",
+		"engine.encode_passes":         "encode.passes",
+		"engine.temp_bytes":            "temp.bytes.written",
+		"engine.duration_seconds":      "media.duration.seconds",
+		"engine.concat_mode":           "concat.mode",
+		"quality.ffprobe.valid":        "ffprobe.valid",
+		"quality.black.frame.ratio":    "black.frame.ratio",
+		"quality.duration.diff.sec":    "duration.diff.sec",
+		"quality.audio.sync.offset.ms": "audio.sync.offset.ms",
+		"io.disk.read.bytes":           "disk.read.bytes",
+		"io.disk.write.bytes":          "disk.write.bytes",
+		"io.network.rx.bytes":          "network.rx.bytes",
+		"io.network.tx.bytes":          "network.tx.bytes",
+		"waste.wasted_cpu_ms":          "wasted.cpu.ms",
+		"waste.wasted_download_bytes":  "wasted.download.bytes",
+		"waste.completed_segments":     "completed.segments",
+		"waste.error_component":        "error.component",
+		"waste.error_phase":            "error.phase",
 	} {
 		if value, ok := m[source]; ok {
 			if _, exists := m[target]; !exists {
@@ -149,6 +162,12 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 		BlobCacheHitCount:   positiveIntegerToInt64(m["blob.cache.hit.count"]),
 		BlobCacheMissCount:  positiveIntegerToInt64(m["blob.cache.miss.count"]),
 		RenderCacheHitCount: positiveIntegerToInt64(m["render.cache.hit.count"]),
+
+		WastedCpuMs:         positiveIntegerToInt64(m["wasted.cpu.ms"]),
+		WastedDownloadBytes: positiveIntegerToInt64(m["wasted.download.bytes"]),
+		CompletedSegments:   int32(positiveIntegerToInt64(m["completed.segments"])),
+		ErrorComponent:      stringFromMap(m["error.component"]),
+		ErrorPhase:          stringFromMap(m["error.phase"]),
 	}
 
 	// CPU capacity is a host-level property, not something the executor

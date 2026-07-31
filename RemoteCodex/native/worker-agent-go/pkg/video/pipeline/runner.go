@@ -138,6 +138,10 @@ type RenderMetrics struct {
 	// DetailedPhases carries the optional C++ sidecar phases[] stream.
 	// It is nil for legacy sidecars that predate detailed events.
 	DetailedPhases []DetailedPhaseTiming
+	// Observability carries optional category summaries (audio, subtitles,
+	// I/O, quality, retry, and wasted work) from newer sidecars. Legacy
+	// sidecars leave it nil and remain fully compatible.
+	Observability map[string]interface{}
 }
 
 // RenderClient exposes the underlying render client so callers outside

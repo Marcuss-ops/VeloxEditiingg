@@ -61,6 +61,14 @@ func TestReadEngineSidecar_FullSchemaMapsAllTelemetry(t *testing.T) {
 	output := writeSidecarFixture(t, `{
 		"frames": 300,
 		"phase_ms": {"decode": 14.25, "encode": 38.5},
+		"observability": {
+			"audio": {"events": 2, "wall_ms": 12.5, "bytes_in": 100},
+			"subtitle": {"events": 1, "wall_ms": 3.5},
+			"io": {"events": 4, "bytes_in": 4096, "bytes_out": 2048},
+			"quality": {"events": 3, "wall_ms": 7},
+			"retry": {"count": 2},
+			"waste": {"wasted_cpu_ms": 88, "wasted_download_bytes": 512, "completed_segments": 2, "error_component": "engine", "error_phase": "encode"}
+		},
 		"segments": [{
 			"index": 0,
 			"worker_index": 0,
@@ -106,6 +114,13 @@ func TestReadEngineSidecar_FullSchemaMapsAllTelemetry(t *testing.T) {
 	if len(sc.PhaseMS) != 2 || sc.PhaseMS["decode"] != 14.25 || sc.PhaseMS["encode"] != 38.5 {
 		t.Fatalf("phase_ms not preserved: %#v", sc.PhaseMS)
 	}
+	if sc.Observability["audio"].(map[string]interface{})["events"] != float64(2) {
+		t.Fatalf("audio observability not parsed: %#v", sc.Observability)
+	}
+	waste := sc.Observability["waste"].(map[string]interface{})
+	if waste["wasted_cpu_ms"] != float64(88) || waste["completed_segments"] != float64(2) {
+		t.Fatalf("waste observability not parsed: %#v", waste)
+	}
 	if len(sc.Segments) != 1 || sc.Segments[0].FinishedOffsetMs != 53.0 {
 		t.Fatalf("segment timing/parallelism not preserved: %#v", sc.Segments)
 	}
@@ -129,7 +144,12 @@ func TestReadEngineSidecar_FullSchemaMapsAllTelemetry(t *testing.T) {
 
 func TestMapEngineSidecar_PreservesSegmentsAndMapsPhases(t *testing.T) {
 	sc := engineSidecar{
-		PhaseMS:  map[string]float64{"encode": 5},
+		PhaseMS: map[string]float64{"encode": 5},
+		Observability: map[string]interface{}{
+			"audio":   map[string]interface{}{"events": float64(2)},
+			"quality": map[string]interface{}{"events": float64(3)},
+			"waste":   map[string]interface{}{"wasted_cpu_ms": float64(88), "wasted_download_bytes": float64(512), "completed_segments": float64(2), "error_component": "engine", "error_phase": "encode"},
+		},
 		Segments: []segmentTiming{{Index: 1, StartedOffsetMs: 2.5, FinishedOffsetMs: 8.5, WorkerSlot: 2, CpuThreads: 6, ParallelGroup: "g"}},
 		Phases:   []detailedPhaseTiming{{Origin: "engine", Scope: "segment", Component: "engine.video", Action: "decode", EventIndex: 3, DurationMS: 6, SegmentIndex: 1, StartedOffsetMS: 2.5, FinishedOffsetMS: 8.5}},
 	}
@@ -143,5 +163,8 @@ func TestMapEngineSidecar_PreservesSegmentsAndMapsPhases(t *testing.T) {
 	}
 	if len(mapped.DetailedPhases) != 1 || mapped.DetailedPhases[0].EventIndex != 3 || mapped.DetailedPhases[0].Component != "engine.video" {
 		t.Fatalf("mapped detailed phases = %#v", mapped.DetailedPhases)
+	}
+	if mapped.Observability["quality"].(map[string]interface{})["events"] != float64(3) {
+		t.Fatalf("mapped category observability = %#v", mapped.Observability)
 	}
 }

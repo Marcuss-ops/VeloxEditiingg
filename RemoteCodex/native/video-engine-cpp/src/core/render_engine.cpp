@@ -315,18 +315,23 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
 
     fs::path videoForMux = videoOnly;
     if (!plan.subtitle_tracks.empty()) {
+        telemetry::ScopedPhase subtitlePhase(
+            recorder_, telemetry::kOriginEngine, telemetry::kScopeSubtitleTrack,
+            "subtitle", "burn_in", "subtitle");
         reportProgress(80, "burning_subtitles");
         const auto& subtitle = plan.subtitle_tracks.front();
         fs::path localSubtitle = workDir / "subtitle_track_0.srt";
         {
             ScopedTimer t(metrics_, "asset_download_ms");
             if (!file::downloadAsset(subtitle.source, localSubtitle)) {
+                subtitlePhase.Abort("subtitle_download_failed", "failed to download subtitle track");
                 result.error = "failed to download subtitle track";
                 return result;
             }
         }
         fs::path subtitledVideo = workDir / "video_subtitled.mp4";
         if (!burnSubtitleTrack(videoOnly, localSubtitle, subtitledVideo)) {
+            subtitlePhase.Abort("subtitle_burn_failed", "failed to burn subtitle track");
             result.error = "failed to burn subtitle track";
             return result;
         }
@@ -337,6 +342,9 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     // 3. Mix audio tracks (supports multi-track with volume/offset)
     reportProgress(85, "muxing_audio");
     if (!plan.audio_tracks.empty()) {
+        telemetry::ScopedPhase audioPhase(
+            recorder_, telemetry::kOriginEngine, telemetry::kScopeAudioTrack,
+            "engine.audio", "mix", "audio");
         std::vector<std::pair<fs::path, const plan::AudioTrack*>> downloadedTracks;
         {
             ScopedTimer t(metrics_, "audio_download_ms");
@@ -359,6 +367,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 fs::copy_file(videoForMux, outPath, fs::copy_options::overwrite_existing, ec);
             }
             if (ec) {
+                audioPhase.Abort("audio_copy_failed", "failed to copy final output (no audio)");
                 result.error = "failed to copy final output (no audio)";
                 return result;
             }
@@ -379,12 +388,14 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                     fs::copy_file(finalMuxed, outPath, fs::copy_options::overwrite_existing, ec);
                 }
                 if (ec) {
+                    audioPhase.Abort("audio_copy_failed", "failed to copy final output");
                     result.error = "failed to copy final output";
                     return result;
                 }
                 temp_bytes_written_.fetch_add(fileSize(finalMuxed));
                 result.success = true;
             } else {
+                audioPhase.Abort("audio_mux_failed", "failed to mux audio track");
                 result.error = "failed to mux audio track";
                 return result;
             }
@@ -438,12 +449,14 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                         fs::copy_file(finalMuxed, outPath, fs::copy_options::overwrite_existing, ec);
                     }
                     if (ec) {
+                        audioPhase.Abort("audio_copy_failed", "failed to copy final output");
                         result.error = "failed to copy final output";
                         return result;
                     }
                     temp_bytes_written_.fetch_add(fileSize(finalMuxed));
                     result.success = true;
                 } else {
+                    audioPhase.Abort("audio_mux_failed", "failed to mux mixed audio");
                     result.error = "failed to mux mixed audio";
                     return result;
                 }
@@ -453,11 +466,12 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 {
                     ScopedTimer t(metrics_, "copy_final_ms");
                     fs::copy_file(videoForMux, outPath, fs::copy_options::overwrite_existing, ec);
-                }
-                if (ec) {
-                    result.error = "failed to copy final output (mix failed)";
-                    return result;
-                }
+                }                    if (ec) {
+                        audioPhase.Abort("audio_copy_failed", "failed to copy final output (mix failed)");
+                        result.error = "failed to copy final output (mix failed)";
+                        return result;
+                    }
+
                 result.success = true;
             }
         }
@@ -478,6 +492,111 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
 
     return result;
 }
+
+namespace {
+
+struct ObservabilityAggregate {
+    int64_t events{0};
+    double wall_ms{0};
+    double cpu_ms{0};
+    double queue_wait_ms{0};
+    int64_t bytes_in{0};
+    int64_t bytes_out{0};
+    int64_t frames_in{0};
+    int64_t frames_out{0};
+    int64_t retry_count{0};
+    int64_t wasted_cpu_ms{0};
+    int64_t wasted_download_bytes{0};
+    int64_t completed_segments{0};
+    std::string error_component;
+    std::string error_phase;
+};
+
+struct ObservabilityRollup {
+    ObservabilityAggregate audio;
+    ObservabilityAggregate subtitle;
+    ObservabilityAggregate io;
+    ObservabilityAggregate quality;
+    ObservabilityAggregate retry;
+    ObservabilityAggregate waste;
+};
+
+bool containsToken(const std::string& value, const char* token) {
+    return value.find(token) != std::string::npos;
+}
+
+void addEventToAggregate(ObservabilityAggregate& aggregate,
+                         const telemetry::PhaseEvent& event) {
+    aggregate.events++;
+    aggregate.wall_ms += static_cast<double>(event.duration_ms);
+    aggregate.cpu_ms += event.cpu_ms;
+    aggregate.queue_wait_ms += event.queue_wait_ms;
+    aggregate.bytes_in += event.bytes_in;
+    aggregate.bytes_out += event.bytes_out;
+    aggregate.frames_in += event.frames_in;
+    aggregate.frames_out += event.frames_out;
+}
+
+ObservabilityRollup aggregateObservability(
+    const std::vector<telemetry::PhaseEvent>& phases) {
+    ObservabilityRollup rollup;
+    for (const auto& event : phases) {
+        if (event.scope == telemetry::kScopeAudioTrack ||
+            containsToken(event.component, "audio") ||
+            containsToken(event.action, "audio")) {
+            addEventToAggregate(rollup.audio, event);
+        } else if (event.scope == telemetry::kScopeSubtitleTrack ||
+                   containsToken(event.component, "subtitle") ||
+                   containsToken(event.action, "subtitle")) {
+            addEventToAggregate(rollup.subtitle, event);
+        } else if (containsToken(event.component, "quality") ||
+                   containsToken(event.action, "quality")) {
+            addEventToAggregate(rollup.quality, event);
+        } else if (containsToken(event.component, "asset") ||
+                   containsToken(event.component, "cache") ||
+                   containsToken(event.component, "upload") ||
+                   containsToken(event.action, "disk") ||
+                   containsToken(event.action, "transfer") ||
+                   containsToken(event.action, "hash")) {
+            addEventToAggregate(rollup.io, event);
+        }
+
+        if (event.action == "retry" || containsToken(event.event_name, "retry")) {
+            addEventToAggregate(rollup.retry, event);
+            rollup.retry.retry_count++;
+        }
+        if (event.status == telemetry::kStatusFailed) {
+            rollup.waste.wasted_cpu_ms += static_cast<int64_t>(event.cpu_ms);
+            if (containsToken(event.component, "asset") ||
+                containsToken(event.action, "download")) {
+                rollup.waste.wasted_download_bytes += event.bytes_in;
+            }
+            rollup.waste.error_component = event.component;
+            rollup.waste.error_phase = event.phase;
+        }
+        if (event.scope == telemetry::kScopeSegment &&
+            event.status == telemetry::kStatusOk) {
+            rollup.waste.completed_segments++;
+        }
+    }
+    return rollup;
+}
+
+void appendAggregateJson(std::ostringstream& out,
+                         const ObservabilityAggregate& aggregate) {
+    out << "{"
+        << "\"events\":" << aggregate.events
+        << ",\"wall_ms\":" << aggregate.wall_ms
+        << ",\"cpu_ms\":" << aggregate.cpu_ms
+        << ",\"queue_wait_ms\":" << aggregate.queue_wait_ms
+        << ",\"bytes_in\":" << aggregate.bytes_in
+        << ",\"bytes_out\":" << aggregate.bytes_out
+        << ",\"frames_in\":" << aggregate.frames_in
+        << ",\"frames_out\":" << aggregate.frames_out
+        << "}";
+}
+
+} // namespace
 
 std::string RenderEngine::sidecarJson(const std::string& output_path) const {
     using services::escapeProgressJsonString;
@@ -563,6 +682,30 @@ std::string RenderEngine::sidecarJson(const std::string& output_path) const {
         }
     }
     s << "]";
+
+    // Category rollups are derived from the same append-only event stream.
+    // They are optional for old readers and never replace phases[].
+    const auto rollup = aggregateObservability(recorder_.Snapshot());
+    s << ",\"observability\":{";
+    s << "\"audio\":";
+    appendAggregateJson(s, rollup.audio);
+    s << ",\"subtitle\":";
+    appendAggregateJson(s, rollup.subtitle);
+    s << ",\"io\":";
+    appendAggregateJson(s, rollup.io);
+    s << ",\"quality\":";
+    appendAggregateJson(s, rollup.quality);
+    s << ",\"retry\":{\"count\":" << rollup.retry.retry_count << "}";
+    s << ",\"waste\":{";
+    s << "\"wasted_cpu_ms\":" << rollup.waste.wasted_cpu_ms;
+    s << ",\"wasted_download_bytes\":" << rollup.waste.wasted_download_bytes;
+    s << ",\"completed_segments\":" << rollup.waste.completed_segments;
+    s << ",\"error_component\":\""
+      << escapeProgressJsonString(rollup.waste.error_component) << "\"";
+    s << ",\"error_phase\":\""
+      << escapeProgressJsonString(rollup.waste.error_phase) << "\"";
+    s << "}";
+    s << "}";
 
     s << "}";
     return s.str();

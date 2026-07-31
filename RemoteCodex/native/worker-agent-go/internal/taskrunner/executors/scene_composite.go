@@ -6,6 +6,7 @@ package executors
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -182,6 +183,9 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	for k, v := range runMetrics.RenderMetrics.PhaseMS {
 		metrics["engine."+k] = v
 	}
+	for key, value := range runMetrics.RenderMetrics.Observability {
+		flattenObservabilityMetric(metrics, key, value)
+	}
 
 	segments := make([]executor.SegmentTiming, 0, len(runMetrics.RenderMetrics.Segments))
 	for _, seg := range runMetrics.RenderMetrics.Segments {
@@ -246,6 +250,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 			FramesOut:        phase.FramesOut,
 		})
 	}
+	appendObservabilitySummaryPhases(&detailedPhases, runMetrics.RenderMetrics.Observability)
 
 	if err != nil {
 		// A cancelled render is not a renderer failure. The native client
@@ -366,6 +371,66 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		StartedAt:      startedAt,
 		CompletedAt:    time.Now().UTC(),
 	}, nil
+}
+
+// appendObservabilitySummaryPhases projects category rollups into the same
+// detailed phase stream used by TaskResult. This preserves audio, subtitle,
+// I/O, quality, retry, and waste summaries even though the protobuf has no
+// generic map field. The raw category values remain in Metrics as well.
+func appendObservabilitySummaryPhases(phases *[]executor.DetailedPhaseTiming, values map[string]interface{}) {
+	if len(values) == 0 {
+		return
+	}
+	nextEventIndex := int64(0)
+	for _, phase := range *phases {
+		if phase.Origin == telemetry.OriginValidation && phase.EventIndex >= nextEventIndex {
+			nextEventIndex = phase.EventIndex + 1
+		}
+	}
+	for _, category := range []string{"audio", "subtitle", "io", "quality", "retry", "waste"} {
+		value, ok := values[category]
+		if !ok {
+			continue
+		}
+		metadata, err := json.Marshal(value)
+		if err != nil {
+			continue
+		}
+		*phases = append(*phases, executor.DetailedPhaseTiming{
+			Origin:       telemetry.OriginValidation,
+			Scope:        telemetry.ScopeAttempt,
+			Component:    category,
+			Action:       "summary",
+			Phase:        category,
+			EventType:    "summary",
+			EventName:    category,
+			EventIndex:   nextEventIndex,
+			Status:       telemetry.StatusOK,
+			MetadataJSON: string(metadata),
+		})
+		nextEventIndex++
+	}
+}
+
+// flattenObservabilityMetric keeps category summaries in the legacy dotted
+// metric map so TaskRunner can project them into typed execution_metrics.
+// Nested JSON objects are flattened without losing audio/subtitle/I/O/quality
+// category names; scalar values retain their JSON-decoded types.
+func flattenObservabilityMetric(dst map[string]interface{}, prefix string, value interface{}) {
+	if prefix == "" {
+		return
+	}
+	if nested, ok := value.(map[string]interface{}); ok {
+		for key, child := range nested {
+			name := key
+			if prefix != "" {
+				name = prefix + "." + key
+			}
+			flattenObservabilityMetric(dst, name, child)
+		}
+		return
+	}
+	dst[prefix] = value
 }
 
 func resolvePipelineID(payload map[string]interface{}) string {

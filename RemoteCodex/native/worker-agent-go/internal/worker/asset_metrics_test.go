@@ -433,10 +433,18 @@ func TestSubmitTaskResult_FailedRenderPreservesDetailedPhases(t *testing.T) {
 		ErrorCode:   "EXECUTE_FAILED",
 		ErrorDetail: "encoder crashed",
 		Metrics: map[string]interface{}{
-			"engine.frames":        int64(144),
-			"engine.speed_x":       float64(1.75),
-			"engine.encode_passes": int64(2),
-			"native.total_ms":      int64(2500),
+			"engine.frames":             int64(144),
+			"engine.speed_x":            float64(1.75),
+			"engine.encode_passes":      int64(2),
+			"native.total_ms":           int64(2500),
+			"quality.ffprobe.valid":     int64(1),
+			"quality.black.frame.ratio": float64(0.02),
+			"io.disk.read.bytes":        int64(4096),
+			"wasted.cpu.ms":             int64(88),
+			"wasted.download.bytes":     int64(512),
+			"completed.segments":        int64(2),
+			"error.component":           "engine",
+			"error.phase":               "encode",
 		},
 		Segments: []taskrunner.SegmentTiming{{
 			SegmentIndex: 3, StartedOffsetMS: 1.5, FinishedOffsetMS: 7.25,
@@ -483,8 +491,8 @@ func TestSubmitTaskResult_FailedRenderPreservesDetailedPhases(t *testing.T) {
 	if result.ErrorDetail != "encoder crashed" {
 		t.Fatalf("error detail = %q, want encoder crashed", result.ErrorDetail)
 	}
-	if result.ExecutionMetrics == nil || result.ExecutionMetrics.FramesEncoded != 144 || result.ExecutionMetrics.FfmpegSpeedRatio != 1.75 || result.ExecutionMetrics.EncodePasses != 2 || result.ExecutionMetrics.WallClockSeconds != 2.5 {
-		t.Fatalf("typed execution metrics = %+v, want frames=144 speed=1.75 passes=2 wall=2.5s", result.ExecutionMetrics)
+	if result.ExecutionMetrics == nil || result.ExecutionMetrics.FramesEncoded != 144 || result.ExecutionMetrics.FfmpegSpeedRatio != 1.75 || result.ExecutionMetrics.EncodePasses != 2 || result.ExecutionMetrics.WallClockSeconds != 2.5 || result.ExecutionMetrics.FfprobeValid != 1 || result.ExecutionMetrics.BlackFrameRatio != 0.02 || result.ExecutionMetrics.DiskReadBytes != 4096 || result.ExecutionMetrics.WastedCpuMs != 88 || result.ExecutionMetrics.WastedDownloadBytes != 512 || result.ExecutionMetrics.CompletedSegments != 2 || result.ExecutionMetrics.ErrorComponent != "engine" || result.ExecutionMetrics.ErrorPhase != "encode" {
+		t.Fatalf("typed execution metrics = %+v, want native/quality/io/waste fields", result.ExecutionMetrics)
 	}
 	if len(result.PhaseTimings) != len(report.DetailedPhases) {
 		t.Fatalf("phase timings = %d, want %d", len(result.PhaseTimings), len(report.DetailedPhases))
@@ -508,6 +516,58 @@ func TestSubmitTaskResult_FailedRenderPreservesDetailedPhases(t *testing.T) {
 	segment := result.SegmentTimings[0]
 	if segment.SegmentIndex != 3 || segment.FinishedOffsetMs != 7.25 || segment.WorkerSlot != 2 || segment.CpuThreads != 4 || segment.ParallelGroup != "encode-group" {
 		t.Fatalf("failed segment timing = %+v", segment)
+	}
+}
+
+func TestSubmitTaskResult_ObservabilitySummaryPhasesReachWire(t *testing.T) {
+	transport := &recordingTransport{}
+	w := &Worker{
+		config:    &config.WorkerConfig{WorkerID: "worker-summary-wire", ProtocolVersion: "v3"},
+		logger:    logger.New(logger.InfoLevel, io.Discard),
+		transport: transport,
+	}
+	categories := []string{"audio", "subtitle", "io", "quality", "retry", "waste"}
+	report := &taskrunner.TaskExecutionReport{
+		ExecutorKey:    "scene.composite.v1@1",
+		DetailedPhases: make([]taskrunner.DetailedPhaseTiming, 0, len(categories)),
+	}
+	for i, category := range categories {
+		report.DetailedPhases = append(report.DetailedPhases, taskrunner.DetailedPhaseTiming{
+			Origin: "validation", Scope: "attempt", Component: category,
+			Action: "summary", Phase: category, EventType: "summary",
+			EventName: category, EventIndex: int64(i), Status: "ok",
+			MetadataJSON: `{"events":1}`,
+		})
+	}
+	pte := &PendingTaskExecution{JobID: "job-summary-wire", ExecutorID: "scene.composite.v1", LeaseID: "lease-summary-wire"}
+
+	w.submitTaskResult(context.Background(), pte, "task-summary-wire", "attempt-summary-wire", report, nil)
+
+	message, ok := transport.last()
+	if !ok {
+		t.Fatal("expected a TaskResult message")
+	}
+	result, ok := message.TypedPayload.(*pb.TaskResult)
+	if !ok || result == nil {
+		t.Fatalf("typed task result = %#v", message.TypedPayload)
+	}
+	if len(result.PhaseTimings) != len(categories) {
+		t.Fatalf("summary phase timings = %d, want %d", len(result.PhaseTimings), len(categories))
+	}
+	seen := make(map[string]bool, len(categories))
+	for i, phase := range result.PhaseTimings {
+		if phase.EventType != "summary" || phase.Action != "summary" || phase.MetadataJson != `{"events":1}` {
+			t.Errorf("summary[%d] = type:%q action:%q metadata:%q", i, phase.EventType, phase.Action, phase.MetadataJson)
+		}
+		if phase.EventIndex != int64(i) {
+			t.Errorf("summary[%d] event_index = %d, want %d", i, phase.EventIndex, i)
+		}
+		seen[phase.Component] = true
+	}
+	for _, category := range categories {
+		if !seen[category] {
+			t.Errorf("wire summaries missing category %q", category)
+		}
 	}
 }
 

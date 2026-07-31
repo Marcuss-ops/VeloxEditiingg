@@ -81,6 +81,14 @@ func (f *fakeRenderClient) RenderWithMetrics(_ context.Context, p *plan.RenderPl
 	}
 	return pipeline.RenderMetrics{
 		PhaseMS: map[string]float64{"render": 1},
+		Observability: map[string]interface{}{
+			"audio":    map[string]interface{}{"events": float64(2), "wall_ms": float64(12.5)},
+			"subtitle": map[string]interface{}{"events": float64(1)},
+			"io":       map[string]interface{}{"bytes_in": float64(4096)},
+			"quality":  map[string]interface{}{"events": float64(3)},
+			"retry":    map[string]interface{}{"count": float64(2)},
+			"waste":    map[string]interface{}{"wasted_cpu_ms": float64(88), "wasted_download_bytes": float64(512), "completed_segments": float64(2), "error_component": "engine", "error_phase": "encode"},
+		},
 		Segments: []pipeline.SegmentTiming{{
 			SegmentIndex: 0, StartedOffsetMS: 1.25, FinishedOffsetMS: 4.5,
 			WorkerSlot: 2, CPUThreads: 4, ParallelGroup: "scene-0",
@@ -209,8 +217,22 @@ func TestSceneComposite_Execute_Success(t *testing.T) {
 	if len(res.Segments) != 1 || res.Segments[0].FinishedOffsetMS != 4.5 || res.Segments[0].WorkerSlot != 2 {
 		t.Fatalf("segment timing/parallelism not propagated: %#v", res.Segments)
 	}
-	if len(res.DetailedPhases) != 1 || res.DetailedPhases[0].Component != "engine.video" || res.DetailedPhases[0].EventIndex != 4 {
+	if len(res.DetailedPhases) < 7 || res.DetailedPhases[0].Component != "engine.video" || res.DetailedPhases[0].EventIndex != 4 {
 		t.Fatalf("detailed phases not propagated: %#v", res.DetailedPhases)
+	}
+	seenSummary := map[string]bool{}
+	for _, phase := range res.DetailedPhases[1:] {
+		if phase.EventType == "summary" {
+			seenSummary[phase.Component] = true
+		}
+	}
+	for _, category := range []string{"audio", "subtitle", "io", "quality", "retry", "waste"} {
+		if !seenSummary[category] {
+			t.Errorf("missing %s summary phase: %#v", category, res.DetailedPhases)
+		}
+	}
+	if res.Metrics["audio.events"] != float64(2) || res.Metrics["subtitle.events"] != float64(1) || res.Metrics["io.bytes_in"] != float64(4096) || res.Metrics["quality.events"] != float64(3) || res.Metrics["retry.count"] != float64(2) || res.Metrics["waste.wasted_cpu_ms"] != float64(88) {
+		t.Fatalf("category observability not propagated: %#v", res.Metrics)
 	}
 }
 

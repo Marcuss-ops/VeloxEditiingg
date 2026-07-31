@@ -107,6 +107,13 @@ type TypedExecutionMetrics struct {
 	BlobCacheMissCount  int64 `json:"blob_cache_miss_count"`
 	RenderCacheHitCount int64 `json:"render_cache_hit_count"`
 
+	// ── Failure attribution and wasted work (migration 073/step 18) ────
+	WastedCpuMs         int64  `json:"wasted_cpu_ms"`
+	WastedDownloadBytes int64  `json:"wasted_download_bytes"`
+	CompletedSegments   int32  `json:"completed_segments"`
+	ErrorComponent      string `json:"error_component,omitempty"`
+	ErrorPhase          string `json:"error_phase,omitempty"`
+
 	// ── CPU capacity telemetry (migration 099) ──────────────────────────
 	LogicalCpuCount   int32   `json:"logical_cpu_count"`
 	CpuQuota          float64 `json:"cpu_quota"`
@@ -174,6 +181,12 @@ func (t TypedExecutionMetrics) ToProto() *pb.TaskExecutionMetrics {
 		BlobCacheMissCount:  t.BlobCacheMissCount,
 		RenderCacheHitCount: t.RenderCacheHitCount,
 
+		WastedCpuMs:         t.WastedCpuMs,
+		WastedDownloadBytes: t.WastedDownloadBytes,
+		CompletedSegments:   t.CompletedSegments,
+		ErrorComponent:      t.ErrorComponent,
+		ErrorPhase:          t.ErrorPhase,
+
 		LogicalCpuCount:   t.LogicalCpuCount,
 		CpuQuota:          t.CpuQuota,
 		EffectiveCpuCount: t.EffectiveCpuCount,
@@ -236,6 +249,12 @@ func FromProto(p *pb.TaskExecutionMetrics) TypedExecutionMetrics {
 		BlobCacheHitCount:   p.GetBlobCacheHitCount(),
 		BlobCacheMissCount:  p.GetBlobCacheMissCount(),
 		RenderCacheHitCount: p.GetRenderCacheHitCount(),
+
+		WastedCpuMs:         p.GetWastedCpuMs(),
+		WastedDownloadBytes: p.GetWastedDownloadBytes(),
+		CompletedSegments:   p.GetCompletedSegments(),
+		ErrorComponent:      p.GetErrorComponent(),
+		ErrorPhase:          p.GetErrorPhase(),
 
 		LogicalCpuCount:   p.GetLogicalCpuCount(),
 		CpuQuota:          p.GetCpuQuota(),
