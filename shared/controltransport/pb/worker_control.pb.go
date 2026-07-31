@@ -1376,6 +1376,17 @@ type PhaseTimingDetailed struct {
 	LeaseId          string `protobuf:"bytes,22,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
 	WorkerSnapshotId string `protobuf:"bytes,23,opt,name=worker_snapshot_id,json=workerSnapshotId,proto3" json:"worker_snapshot_id,omitempty"`
 	WorkerSessionId  string `protobuf:"bytes,24,opt,name=worker_session_id,json=workerSessionId,proto3" json:"worker_session_id,omitempty"`
+	// Repeated-event context and resource timing. These fields are appended
+	// so fields 1-24 remain wire-compatible with existing workers/masters.
+	SegmentIndex     int32   `protobuf:"varint,25,opt,name=segment_index,json=segmentIndex,proto3" json:"segment_index,omitempty"`
+	TrackKind        string  `protobuf:"bytes,26,opt,name=track_kind,json=trackKind,proto3" json:"track_kind,omitempty"`
+	TrackIndex       int32   `protobuf:"varint,27,opt,name=track_index,json=trackIndex,proto3" json:"track_index,omitempty"`
+	StartedOffsetMs  float64 `protobuf:"fixed64,28,opt,name=started_offset_ms,json=startedOffsetMs,proto3" json:"started_offset_ms,omitempty"`
+	FinishedOffsetMs float64 `protobuf:"fixed64,29,opt,name=finished_offset_ms,json=finishedOffsetMs,proto3" json:"finished_offset_ms,omitempty"`
+	CpuMs            float64 `protobuf:"fixed64,30,opt,name=cpu_ms,json=cpuMs,proto3" json:"cpu_ms,omitempty"`
+	QueueWaitMs      float64 `protobuf:"fixed64,31,opt,name=queue_wait_ms,json=queueWaitMs,proto3" json:"queue_wait_ms,omitempty"`
+	FramesIn         int64   `protobuf:"varint,32,opt,name=frames_in,json=framesIn,proto3" json:"frames_in,omitempty"`
+	FramesOut        int64   `protobuf:"varint,33,opt,name=frames_out,json=framesOut,proto3" json:"frames_out,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -1576,6 +1587,69 @@ func (x *PhaseTimingDetailed) GetWorkerSessionId() string {
 		return x.WorkerSessionId
 	}
 	return ""
+}
+
+func (x *PhaseTimingDetailed) GetSegmentIndex() int32 {
+	if x != nil {
+		return x.SegmentIndex
+	}
+	return 0
+}
+
+func (x *PhaseTimingDetailed) GetTrackKind() string {
+	if x != nil {
+		return x.TrackKind
+	}
+	return ""
+}
+
+func (x *PhaseTimingDetailed) GetTrackIndex() int32 {
+	if x != nil {
+		return x.TrackIndex
+	}
+	return 0
+}
+
+func (x *PhaseTimingDetailed) GetStartedOffsetMs() float64 {
+	if x != nil {
+		return x.StartedOffsetMs
+	}
+	return 0
+}
+
+func (x *PhaseTimingDetailed) GetFinishedOffsetMs() float64 {
+	if x != nil {
+		return x.FinishedOffsetMs
+	}
+	return 0
+}
+
+func (x *PhaseTimingDetailed) GetCpuMs() float64 {
+	if x != nil {
+		return x.CpuMs
+	}
+	return 0
+}
+
+func (x *PhaseTimingDetailed) GetQueueWaitMs() float64 {
+	if x != nil {
+		return x.QueueWaitMs
+	}
+	return 0
+}
+
+func (x *PhaseTimingDetailed) GetFramesIn() int64 {
+	if x != nil {
+		return x.FramesIn
+	}
+	return 0
+}
+
+func (x *PhaseTimingDetailed) GetFramesOut() int64 {
+	if x != nil {
+		return x.FramesOut
+	}
+	return 0
 }
 
 type ArtifactUploaded struct {
@@ -4269,7 +4343,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"started_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12=\n" +
 	"\fcompleted_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vcompletedAt\x12\x16\n" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x12\x14\n" +
-	"\x05notes\x18\x05 \x01(\tR\x05notes\"\xbc\x06\n" +
+	"\x05notes\x18\x05 \x01(\tR\x05notes\"\xf2\b\n" +
 	"\x13PhaseTimingDetailed\x12\x1f\n" +
 	"\vphase_order\x18\x01 \x01(\x05R\n" +
 	"phaseOrder\x12\x1c\n" +
@@ -4303,7 +4377,19 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x10executor_version\x18\x15 \x01(\x05R\x0fexecutorVersion\x12\x19\n" +
 	"\blease_id\x18\x16 \x01(\tR\aleaseId\x12,\n" +
 	"\x12worker_snapshot_id\x18\x17 \x01(\tR\x10workerSnapshotId\x12*\n" +
-	"\x11worker_session_id\x18\x18 \x01(\tR\x0fworkerSessionId\"\xf3\x02\n" +
+	"\x11worker_session_id\x18\x18 \x01(\tR\x0fworkerSessionId\x12#\n" +
+	"\rsegment_index\x18\x19 \x01(\x05R\fsegmentIndex\x12\x1d\n" +
+	"\n" +
+	"track_kind\x18\x1a \x01(\tR\ttrackKind\x12\x1f\n" +
+	"\vtrack_index\x18\x1b \x01(\x05R\n" +
+	"trackIndex\x12*\n" +
+	"\x11started_offset_ms\x18\x1c \x01(\x01R\x0fstartedOffsetMs\x12,\n" +
+	"\x12finished_offset_ms\x18\x1d \x01(\x01R\x10finishedOffsetMs\x12\x15\n" +
+	"\x06cpu_ms\x18\x1e \x01(\x01R\x05cpuMs\x12\"\n" +
+	"\rqueue_wait_ms\x18\x1f \x01(\x01R\vqueueWaitMs\x12\x1b\n" +
+	"\tframes_in\x18  \x01(\x03R\bframesIn\x12\x1d\n" +
+	"\n" +
+	"frames_out\x18! \x01(\x03R\tframesOut\"\xf3\x02\n" +
 	"\x10ArtifactUploaded\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x1f\n" +
 	"\vartifact_id\x18\x02 \x01(\tR\n" +

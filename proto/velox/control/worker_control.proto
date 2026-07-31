@@ -294,6 +294,18 @@ message PhaseTimingDetailed {
   string lease_id = 22;
   string worker_snapshot_id = 23;
   string worker_session_id = 24;
+
+  // Repeated-event context and resource timing. These fields are appended
+  // so fields 1-24 remain wire-compatible with existing workers/masters.
+  int32 segment_index = 25;
+  string track_kind = 26;
+  int32 track_index = 27;
+  double started_offset_ms = 28;
+  double finished_offset_ms = 29;
+  double cpu_ms = 30;
+  double queue_wait_ms = 31;
+  int64 frames_in = 32;
+  int64 frames_out = 33;
 }
 
 message ArtifactUploaded {

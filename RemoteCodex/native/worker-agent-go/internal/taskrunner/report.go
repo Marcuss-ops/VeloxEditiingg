@@ -85,9 +85,18 @@ type DetailedPhaseTiming struct {
 	EventIndex int64
 	Phase      string
 	// ── Identity (master overrides at ingest) ────────────────────────
-	ExecutorID      string
-	ExecutorVersion int32
-	LeaseID         string
+	ExecutorID       string
+	ExecutorVersion  int32
+	LeaseID          string
+	SegmentIndex     int32
+	TrackKind        string
+	TrackIndex       int32
+	StartedOffsetMS  float64
+	FinishedOffsetMS float64
+	CPUMS            float64
+	QueueWaitMS      float64
+	FramesIn         int64
+	FramesOut        int64
 }
 
 // fromRecordedPhase converts a drained telemetry event onto the report
@@ -95,28 +104,37 @@ type DetailedPhaseTiming struct {
 // is the 1-based position within the attempt's phase sequence.
 func fromRecordedPhase(p telemetry.RecordedPhase, phaseOrder int, executorID string, executorVersion int32, leaseID string) DetailedPhaseTiming {
 	return DetailedPhaseTiming{
-		PhaseOrder:      phaseOrder,
-		Component:       p.Component,
-		Action:          p.Action,
-		StartedAt:       p.StartedAt,
-		CompletedAt:     p.CompletedAt,
-		DurationMS:      p.DurationMS,
-		Status:          p.Status,
-		ErrorCode:       p.ErrorCode,
-		ErrorMessage:    p.ErrorMessage,
-		BytesIn:         p.BytesIn,
-		BytesOut:        p.BytesOut,
-		Frames:          p.Frames,
-		MetadataJSON:    p.MetadataJSON,
-		Origin:          p.Origin,
-		Scope:           p.Scope,
-		EventType:       p.EventType,
-		EventName:       p.EventName,
-		EventIndex:      p.EventIndex,
-		Phase:           p.Phase,
-		ExecutorID:      executorID,
-		ExecutorVersion: executorVersion,
-		LeaseID:         leaseID,
+		PhaseOrder:       phaseOrder,
+		Component:        p.Component,
+		Action:           p.Action,
+		StartedAt:        p.StartedAt,
+		CompletedAt:      p.CompletedAt,
+		DurationMS:       p.DurationMS,
+		Status:           p.Status,
+		ErrorCode:        p.ErrorCode,
+		ErrorMessage:     p.ErrorMessage,
+		BytesIn:          p.BytesIn,
+		BytesOut:         p.BytesOut,
+		Frames:           p.Frames,
+		MetadataJSON:     p.MetadataJSON,
+		Origin:           p.Origin,
+		Scope:            p.Scope,
+		EventType:        p.EventType,
+		EventName:        p.EventName,
+		EventIndex:       p.EventIndex,
+		Phase:            p.Phase,
+		ExecutorID:       executorID,
+		ExecutorVersion:  executorVersion,
+		LeaseID:          leaseID,
+		SegmentIndex:     p.SegmentIndex,
+		TrackKind:        p.TrackKind,
+		TrackIndex:       p.TrackIndex,
+		StartedOffsetMS:  p.StartedOffsetMS,
+		FinishedOffsetMS: p.FinishedOffsetMS,
+		CPUMS:            p.CPUMS,
+		QueueWaitMS:      p.QueueWaitMS,
+		FramesIn:         p.FramesIn,
+		FramesOut:        p.FramesOut,
 	}
 }
 

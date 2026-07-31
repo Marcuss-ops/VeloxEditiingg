@@ -364,6 +364,15 @@ type PhaseTimingDetailed struct {
 	ExecutorID       string    `json:"executor_id"`
 	ExecutorVersion  int       `json:"executor_version"`
 	PhaseOrder       int       `json:"phase_order"`
+	SegmentIndex     int       `json:"segment_index"`
+	TrackKind        string    `json:"track_kind,omitempty"`
+	TrackIndex       int       `json:"track_index"`
+	StartedOffsetMS  float64   `json:"started_offset_ms"`
+	FinishedOffsetMS float64   `json:"finished_offset_ms"`
+	CPUMS            float64   `json:"cpu_ms"`
+	QueueWaitMS      float64   `json:"queue_wait_ms"`
+	FramesIn         int64     `json:"frames_in"`
+	FramesOut        int64     `json:"frames_out"`
 	Component        string    `json:"component"`
 	Action           string    `json:"action"`
 	StartedAt        time.Time `json:"started_at"`

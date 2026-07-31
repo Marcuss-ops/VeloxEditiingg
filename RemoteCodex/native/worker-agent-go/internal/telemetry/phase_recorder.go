@@ -44,38 +44,56 @@ const (
 // EventRecorder. It is the telemetry-owned shape; the taskrunner maps
 // it onto its DetailedPhaseTiming report type at the Run boundary.
 type RecordedPhase struct {
-	Origin       string
-	Scope        string
-	Component    string
-	Action       string
-	Phase        string
-	EventType    string
-	EventName    string
-	EventIndex   int64
-	StartedAt    time.Time
-	CompletedAt  time.Time
-	DurationMS   int64
-	Status       string
-	ErrorCode    string
-	ErrorMessage string
-	BytesIn      int64
-	BytesOut     int64
-	Frames       int64
-	MetadataJSON string
+	Origin           string
+	Scope            string
+	Component        string
+	Action           string
+	Phase            string
+	EventType        string
+	EventName        string
+	EventIndex       int64
+	StartedAt        time.Time
+	CompletedAt      time.Time
+	DurationMS       int64
+	Status           string
+	ErrorCode        string
+	ErrorMessage     string
+	BytesIn          int64
+	BytesOut         int64
+	Frames           int64
+	MetadataJSON     string
+	SegmentIndex     int32
+	TrackKind        string
+	TrackIndex       int32
+	StartedOffsetMS  float64
+	FinishedOffsetMS float64
+	CPUMS            float64
+	QueueWaitMS      float64
+	FramesIn         int64
+	FramesOut        int64
 }
 
 // EventSpec describes the event the caller is about to record. Origin,
 // Scope, and Component/Action MUST be registered in phase_registry.go;
 // non-canonical values are rejected before they enter the event stream.
 type EventSpec struct {
-	Origin       string
-	Scope        string
-	Component    string
-	Action       string
-	Phase        string
-	EventType    string
-	EventName    string
-	MetadataJSON string
+	Origin           string
+	Scope            string
+	Component        string
+	Action           string
+	Phase            string
+	EventType        string
+	EventName        string
+	MetadataJSON     string
+	SegmentIndex     int32
+	TrackKind        string
+	TrackIndex       int32
+	StartedOffsetMS  float64
+	FinishedOffsetMS float64
+	CPUMS            float64
+	QueueWaitMS      float64
+	FramesIn         int64
+	FramesOut        int64
 }
 
 // EventRecorder accumulates RecordedPhase entries for one attempt.
@@ -125,20 +143,29 @@ func (r *EventRecorder) Emit(spec EventSpec, status, errCode, errMsg string) {
 	}
 	now := time.Now().UTC()
 	r.record(RecordedPhase{
-		Origin:       spec.Origin,
-		Scope:        spec.Scope,
-		Component:    spec.Component,
-		Action:       spec.Action,
-		Phase:        spec.Phase,
-		EventType:    spec.EventType,
-		EventName:    spec.EventName,
-		StartedAt:    now,
-		CompletedAt:  now,
-		DurationMS:   0,
-		Status:       status,
-		ErrorCode:    errCode,
-		ErrorMessage: errMsg,
-		MetadataJSON: spec.MetadataJSON,
+		Origin:           spec.Origin,
+		Scope:            spec.Scope,
+		Component:        spec.Component,
+		Action:           spec.Action,
+		Phase:            spec.Phase,
+		EventType:        spec.EventType,
+		EventName:        spec.EventName,
+		StartedAt:        now,
+		CompletedAt:      now,
+		DurationMS:       0,
+		Status:           status,
+		ErrorCode:        errCode,
+		ErrorMessage:     errMsg,
+		MetadataJSON:     spec.MetadataJSON,
+		SegmentIndex:     spec.SegmentIndex,
+		TrackKind:        spec.TrackKind,
+		TrackIndex:       spec.TrackIndex,
+		StartedOffsetMS:  spec.StartedOffsetMS,
+		FinishedOffsetMS: spec.FinishedOffsetMS,
+		CPUMS:            spec.CPUMS,
+		QueueWaitMS:      spec.QueueWaitMS,
+		FramesIn:         spec.FramesIn,
+		FramesOut:        spec.FramesOut,
 	})
 }
 
@@ -163,20 +190,29 @@ func (r *EventRecorder) Record(spec EventSpec, startedAt, completedAt time.Time,
 		}
 	}
 	r.record(RecordedPhase{
-		Origin:       spec.Origin,
-		Scope:        spec.Scope,
-		Component:    spec.Component,
-		Action:       spec.Action,
-		Phase:        spec.Phase,
-		EventType:    eventType,
-		EventName:    spec.EventName,
-		StartedAt:    startedAt.UTC(),
-		CompletedAt:  completedAt.UTC(),
-		DurationMS:   durationMS,
-		Status:       status,
-		ErrorCode:    errCode,
-		ErrorMessage: errMsg,
-		MetadataJSON: spec.MetadataJSON,
+		Origin:           spec.Origin,
+		Scope:            spec.Scope,
+		Component:        spec.Component,
+		Action:           spec.Action,
+		Phase:            spec.Phase,
+		EventType:        eventType,
+		EventName:        spec.EventName,
+		StartedAt:        startedAt.UTC(),
+		CompletedAt:      completedAt.UTC(),
+		DurationMS:       durationMS,
+		Status:           status,
+		ErrorCode:        errCode,
+		ErrorMessage:     errMsg,
+		MetadataJSON:     spec.MetadataJSON,
+		SegmentIndex:     spec.SegmentIndex,
+		TrackKind:        spec.TrackKind,
+		TrackIndex:       spec.TrackIndex,
+		StartedOffsetMS:  spec.StartedOffsetMS,
+		FinishedOffsetMS: spec.FinishedOffsetMS,
+		CPUMS:            spec.CPUMS,
+		QueueWaitMS:      spec.QueueWaitMS,
+		FramesIn:         spec.FramesIn,
+		FramesOut:        spec.FramesOut,
 	})
 }
 
@@ -259,22 +295,31 @@ func (h *EventHandle) complete(bytesIn, bytesOut, frames int64, status, errCode,
 		}
 	}
 	h.rec.record(RecordedPhase{
-		Origin:       h.spec.Origin,
-		Scope:        h.spec.Scope,
-		Component:    h.spec.Component,
-		Action:       h.spec.Action,
-		Phase:        h.spec.Phase,
-		EventType:    eventType,
-		EventName:    h.spec.EventName,
-		StartedAt:    h.startWall,
-		CompletedAt:  endMono.UTC(),
-		DurationMS:   endMono.Sub(h.startMono).Milliseconds(),
-		Status:       status,
-		ErrorCode:    errCode,
-		ErrorMessage: errMsg,
-		BytesIn:      bytesIn,
-		BytesOut:     bytesOut,
-		Frames:       frames,
-		MetadataJSON: h.spec.MetadataJSON,
+		Origin:           h.spec.Origin,
+		Scope:            h.spec.Scope,
+		Component:        h.spec.Component,
+		Action:           h.spec.Action,
+		Phase:            h.spec.Phase,
+		EventType:        eventType,
+		EventName:        h.spec.EventName,
+		StartedAt:        h.startWall,
+		CompletedAt:      endMono.UTC(),
+		DurationMS:       endMono.Sub(h.startMono).Milliseconds(),
+		Status:           status,
+		ErrorCode:        errCode,
+		ErrorMessage:     errMsg,
+		BytesIn:          bytesIn,
+		BytesOut:         bytesOut,
+		Frames:           frames,
+		MetadataJSON:     h.spec.MetadataJSON,
+		SegmentIndex:     h.spec.SegmentIndex,
+		TrackKind:        h.spec.TrackKind,
+		TrackIndex:       h.spec.TrackIndex,
+		StartedOffsetMS:  h.spec.StartedOffsetMS,
+		FinishedOffsetMS: h.spec.FinishedOffsetMS,
+		CPUMS:            h.spec.CPUMS,
+		QueueWaitMS:      h.spec.QueueWaitMS,
+		FramesIn:         h.spec.FramesIn,
+		FramesOut:        h.spec.FramesOut,
 	})
 }
