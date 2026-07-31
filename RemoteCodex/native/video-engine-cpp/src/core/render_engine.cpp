@@ -148,18 +148,27 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     telemetry::ScopedPhase renderPhase(
         recorder_, telemetry::kOriginEngine, telemetry::kScopeAttempt,
         "engine", "render", "render");
+    auto failRender = [&renderPhase, &result](const std::string& error_code) -> RenderResult {
+        renderPhase.Abort(error_code, result.error);
+        return result;
+    };
 
     reportProgress(0, "starting");
 
     fs::path workBase = fs::temp_directory_path() / "velox_video_engine_plan";
     fs::path workDir;
     {
+        telemetry::ScopedPhase tempPhase(
+            recorder_, telemetry::kOriginEngine, telemetry::kScopeAttempt,
+            "worker.temp", "create", "prepare");
         ScopedTimer t(metrics_, "workdir_create_ms");
         workDir = file::makeTempDir(workBase, "plan_job_");
         if (workDir.empty()) {
+            tempPhase.Abort("tempdir_create_failed", "failed to create temp work dir");
             result.error = "failed to create temp work dir";
-            return result;
+            return failRender("tempdir_create_failed");
         }
+        tempPhase.Complete();
     }
 
     struct CleanupGuard {
@@ -207,10 +216,18 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             auto src = std::get<plan::ImageSource>(item.source);
             fs::path localImg = workDir / ("image_" + std::to_string(i) + ".jpg");
             bool gotImage;
+            telemetry::ScopedPhase assetPhase(
+                recorder_, telemetry::kOriginEngine, telemetry::kScopeSegment,
+                "worker.asset", "transfer", "download");
             auto dlStart = std::chrono::steady_clock::now();
             {
                 ScopedTimer t(metrics_, "asset_download_ms");
                 gotImage = file::downloadAsset(src.url, localImg, src.cache_key);
+            }
+            if (gotImage) {
+                assetPhase.Complete();
+            } else {
+                assetPhase.Abort("asset_download_failed", "image download failed; using fallback");
             }
             seg.asset_download_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - dlStart).count();
@@ -225,6 +242,9 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             auto src = std::get<plan::VideoSource>(item.source);
             fs::path localVid = workDir / ("video_" + std::to_string(i) + ".mp4");
             bool gotVid;
+            telemetry::ScopedPhase assetPhase(
+                recorder_, telemetry::kOriginEngine, telemetry::kScopeSegment,
+                "worker.asset", "transfer", "download");
             auto dlStart = std::chrono::steady_clock::now();
             {
                 ScopedTimer t(metrics_, "asset_download_ms");
@@ -233,9 +253,11 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             seg.asset_download_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - dlStart).count();
             if (!gotVid) {
+                assetPhase.Abort("asset_download_failed", "failed to download video source");
                 result.error = "failed to download video source for segment " + std::to_string(i);
-                return result;
+                return failRender("asset_download_failed");
             }
+            assetPhase.Complete();
             args_only = media::buildVideoSegmentArgs(localVid, segmentOut, item.duration_seconds, params, item.include_audio);
         } else if (std::holds_alternative<plan::ColorSource>(item.source)) {
             seg.source_type = "color";
@@ -245,7 +267,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
 
         if (args_only.empty()) {
             result.error = "unknown segment source type for " + std::to_string(i);
-            return result;
+            return failRender("unknown_segment_source");
         }
 
         {
@@ -264,7 +286,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 seg.error_message = "failed to build timeline segment " + std::to_string(i);
                 encodePhase.Abort(seg.error_code, seg.error_message);
                 result.error = seg.error_message;
-                return result;
+                return failRender(seg.error_code);
             }
             seg.ffmpeg_encode_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - encStart).count();
@@ -304,11 +326,16 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     reportProgress(75, "concatenating");
     fs::path videoOnly = workDir / "video_only.mp4";
     {
+        telemetry::ScopedPhase concatPhase(
+            recorder_, telemetry::kOriginEngine, telemetry::kScopeAttempt,
+            "engine", "concat", "composite");
         ScopedTimer t(metrics_, "concat_ms");
         if (!media::concatSegments(segmentPaths, videoOnly, workDir)) {
+            concatPhase.Abort("concat_failed", "failed to concatenate video segments");
             result.error = "failed to concatenate video segments";
-            return result;
+            return failRender("concat_failed");
         }
+        concatPhase.Complete();
     }
     temp_bytes_written_.fetch_add(fileSize(videoOnly));
     concat_mode_ = "stream_copy";
@@ -326,14 +353,14 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             if (!file::downloadAsset(subtitle.source, localSubtitle)) {
                 subtitlePhase.Abort("subtitle_download_failed", "failed to download subtitle track");
                 result.error = "failed to download subtitle track";
-                return result;
+                return failRender("subtitle_download_failed");
             }
         }
         fs::path subtitledVideo = workDir / "video_subtitled.mp4";
         if (!burnSubtitleTrack(videoOnly, localSubtitle, subtitledVideo)) {
             subtitlePhase.Abort("subtitle_burn_failed", "failed to burn subtitle track");
             result.error = "failed to burn subtitle track";
-            return result;
+            return failRender("subtitle_burn_failed");
         }
         temp_bytes_written_.fetch_add(fileSize(subtitledVideo));
         videoForMux = subtitledVideo;
@@ -369,7 +396,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             if (ec) {
                 audioPhase.Abort("audio_copy_failed", "failed to copy final output (no audio)");
                 result.error = "failed to copy final output (no audio)";
-                return result;
+                return failRender("audio_copy_failed");
             }
             result.success = true;
         } else if (downloadedTracks.size() == 1) {
@@ -377,6 +404,9 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             double vol = downloadedTracks[0].second->volume;
             double offset = downloadedTracks[0].second->start_time_offset;
             bool muxOk;
+            telemetry::ScopedPhase muxPhase(
+                recorder_, telemetry::kOriginEngine, telemetry::kScopeAudioTrack,
+                "engine.mux", "audio", "encode");
             {
                 ScopedTimer t(metrics_, "mux_audio_ms");
                 muxOk = media::muxAudio(videoForMux, downloadedTracks[0].first, finalMuxed, vol, offset);
@@ -388,17 +418,20 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                     fs::copy_file(finalMuxed, outPath, fs::copy_options::overwrite_existing, ec);
                 }
                 if (ec) {
+                    muxPhase.Abort("audio_copy_failed", "failed to copy final output");
                     audioPhase.Abort("audio_copy_failed", "failed to copy final output");
                     result.error = "failed to copy final output";
-                    return result;
+                    return failRender("audio_copy_failed");
                 }
                 temp_bytes_written_.fetch_add(fileSize(finalMuxed));
                 result.success = true;
             } else {
+                muxPhase.Abort("audio_mux_failed", "failed to mux audio track");
                 audioPhase.Abort("audio_mux_failed", "failed to mux audio track");
                 result.error = "failed to mux audio track";
-                return result;
+                return failRender("audio_mux_failed");
             }
+            muxPhase.Complete();
         } else {
             std::ostringstream audioFilter;
             std::ostringstream audioInputs;
@@ -438,6 +471,9 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             if (file::runCommand(mixCmd.str())) {
                 fs::path finalMuxed = workDir / "final_muxed.mp4";
                 bool muxOk;
+                telemetry::ScopedPhase muxPhase(
+                    recorder_, telemetry::kOriginEngine, telemetry::kScopeAudioTrack,
+                    "engine.mux", "audio", "encode");
                 {
                     ScopedTimer t(metrics_, "mux_audio_ms");
                     muxOk = media::muxAudio(videoForMux, mixedAudio, finalMuxed);
@@ -449,17 +485,20 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                         fs::copy_file(finalMuxed, outPath, fs::copy_options::overwrite_existing, ec);
                     }
                     if (ec) {
+                        muxPhase.Abort("audio_copy_failed", "failed to copy final output");
                         audioPhase.Abort("audio_copy_failed", "failed to copy final output");
                         result.error = "failed to copy final output";
-                        return result;
+                        return failRender("audio_copy_failed");
                     }
                     temp_bytes_written_.fetch_add(fileSize(finalMuxed));
                     result.success = true;
                 } else {
+                    muxPhase.Abort("audio_mux_failed", "failed to mux mixed audio");
                     audioPhase.Abort("audio_mux_failed", "failed to mux mixed audio");
                     result.error = "failed to mux mixed audio";
-                    return result;
+                    return failRender("audio_mux_failed");
                 }
+                muxPhase.Complete();
             } else {
                 std::cerr << "warning: audio mix failed, exporting video without audio\n";
                 std::error_code ec;
@@ -469,7 +508,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 }                    if (ec) {
                         audioPhase.Abort("audio_copy_failed", "failed to copy final output (mix failed)");
                         result.error = "failed to copy final output (mix failed)";
-                        return result;
+                        return failRender("audio_copy_failed");
                     }
 
                 result.success = true;
@@ -483,7 +522,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         }
         if (ec) {
             result.error = "failed to copy final output (no audio tracks)";
-            return result;
+            return failRender("audio_copy_failed");
         }
         result.success = true;
     }

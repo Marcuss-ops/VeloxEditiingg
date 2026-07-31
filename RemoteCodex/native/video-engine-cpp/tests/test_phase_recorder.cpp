@@ -11,12 +11,14 @@
 // Run via the binary velox_phase_recorder_tests.
 
 #include "velox/core/render_engine.hpp"
+#include "velox/services/file_utils.hpp"
 #include "velox/telemetry/phase_recorder.hpp"
 
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -260,9 +262,21 @@ void testCompleteSidecarSchema() {
     engine.recorder().SetDetailedMetrics(token, 2, "video", 0, 1.5, 21.0, 18.0, 0.5, 120, 118);
     engine.recorder().Complete(token, 1000, 2000, 118, vt::kStatusOk);
 
+    int64_t tempToken = engine.recorder().Begin(
+        vt::kOriginEngine, vt::kScopeAttempt, "worker.temp", "create", "prepare");
+    engine.recorder().Complete(tempToken, 0, 0, 0, vt::kStatusOk);
+    int64_t assetToken = engine.recorder().Begin(
+        vt::kOriginEngine, vt::kScopeSegment, "worker.asset", "transfer", "download");
+    engine.recorder().Complete(assetToken, 1000, 1000, 0, vt::kStatusOk);
+    int64_t concatToken = engine.recorder().Begin(
+        vt::kOriginEngine, vt::kScopeAttempt, "engine", "concat", "composite");
+    engine.recorder().Complete(concatToken, 1000, 2000, 120, vt::kStatusOk);
     int64_t audioToken = engine.recorder().Begin(
         vt::kOriginEngine, vt::kScopeAudioTrack, "engine.audio", "mix", "audio");
     engine.recorder().Complete(audioToken, 300, 400, 0, vt::kStatusOk);
+    int64_t muxToken = engine.recorder().Begin(
+        vt::kOriginEngine, vt::kScopeAudioTrack, "engine.mux", "audio", "encode");
+    engine.recorder().Complete(muxToken, 300, 400, 0, vt::kStatusOk);
     int64_t subtitleToken = engine.recorder().Begin(
         vt::kOriginValidation, vt::kScopeSubtitleTrack, "subtitle", "burn_in", "subtitle");
     engine.recorder().Complete(subtitleToken, 0, 0, 0, vt::kStatusOk);
@@ -291,6 +305,14 @@ void testCompleteSidecarSchema() {
            "phases array emitted");
     EXPECT(std::strstr(json.c_str(), "\"component\":\"engine.encode\"") != nullptr,
            "detailed phase emitted");
+    EXPECT(std::strstr(json.c_str(), "\"component\":\"worker.temp\"") != nullptr,
+           "temp phase emitted");
+    EXPECT(std::strstr(json.c_str(), "\"component\":\"worker.asset\"") != nullptr,
+           "asset phase emitted");
+    EXPECT(std::strstr(json.c_str(), "\"action\":\"concat\"") != nullptr,
+           "concat phase emitted");
+    EXPECT(std::strstr(json.c_str(), "\"component\":\"engine.mux\"") != nullptr,
+           "mux phase emitted");
     EXPECT(std::strstr(json.c_str(), "\"segment_index\":2") != nullptr,
            "detailed segment index emitted");
     EXPECT(std::strstr(json.c_str(), "\"cpu_ms\":18") != nullptr,
@@ -299,8 +321,8 @@ void testCompleteSidecarSchema() {
            "detailed frame counters emitted");
     EXPECT(std::strstr(json.c_str(), "\"observability\":{") != nullptr,
            "observability rollup emitted");
-    EXPECT(std::strstr(json.c_str(), "\"audio\":{\"events\":1") != nullptr,
-           "audio rollup emitted");
+    EXPECT(std::strstr(json.c_str(), "\"audio\":{\"events\":2") != nullptr,
+           "audio rollup includes mix and mux events");
     EXPECT(std::strstr(json.c_str(), "\"subtitle\":{\"events\":1") != nullptr,
            "subtitle rollup emitted");
     EXPECT(std::strstr(json.c_str(), "\"quality\":{\"events\":1") != nullptr,
@@ -309,6 +331,54 @@ void testCompleteSidecarSchema() {
            "retry rollup emitted");
     EXPECT(std::strstr(json.c_str(), "\"wasted_download_bytes\":512") != nullptr,
            "wasted download rollup emitted");
+}
+
+void testRenderEngineIntegration() {
+    SUBCASE("RenderEngine records real phases and writes a compatible sidecar");
+    namespace fs = std::filesystem;
+    const auto stem = std::string("velox_phase_integration_") +
+                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const fs::path output = fs::temp_directory_path() / (stem + ".mp4");
+    const fs::path sidecar = fs::path(output.string() + ".progress.json");
+    struct Cleanup {
+        fs::path output;
+        fs::path sidecar;
+        ~Cleanup() {
+            std::error_code ec;
+            fs::remove(sidecar, ec);
+            fs::remove(output, ec);
+        }
+    } cleanup{output, sidecar};
+
+    velox::plan::RenderPlan plan;
+    plan.job_id = "phase-recorder-integration";
+    plan.canvas = {64, 64, 5};
+    plan.timeline.push_back({velox::plan::ColorSource{"#112233"}, 0.2, false, {"stretch", false}});
+    plan.output_path = output.string();
+
+    velox::core::RenderEngine engine;
+    const auto result = engine.render(plan);
+    EXPECT(result.success, "RenderEngine color render must succeed");
+    EXPECT(fs::exists(output), "render output must exist");
+    EXPECT(fs::exists(sidecar), "SidecarGuard must write the progress sidecar");
+
+    const std::string json = velox::file::readFile(sidecar.string());
+    EXPECT(!json.empty(), "integration sidecar must not be empty");
+    EXPECT(vt::IsValidJsonObject(json), "integration sidecar must be valid JSON");
+    EXPECT(std::strstr(json.c_str(), "\"phase_ms\":{") != nullptr,
+           "integration sidecar keeps phase_ms");
+    EXPECT(std::strstr(json.c_str(), "\"segments\":[") != nullptr,
+           "integration sidecar keeps segments");
+    EXPECT(std::strstr(json.c_str(), "\"phases\":[") != nullptr,
+           "integration sidecar emits phases");
+    EXPECT(std::strstr(json.c_str(), "\"action\":\"render\"") != nullptr,
+           "real render phase emitted");
+    EXPECT(std::strstr(json.c_str(), "\"component\":\"worker.temp\"") != nullptr,
+           "real temp phase emitted");
+    EXPECT(std::strstr(json.c_str(), "\"component\":\"ffmpeg\"") != nullptr,
+           "real encode phase emitted");
+    EXPECT(std::strstr(json.c_str(), "\"action\":\"concat\"") != nullptr,
+           "real concat phase emitted");
 }
 
 void testReset() {
@@ -350,6 +420,7 @@ int main() {
     testAppendJsonMetadataValidationAndDetailedFields();
     testAppendJsonEscapesStrings();
     testCompleteSidecarSchema();
+    testRenderEngineIntegration();
     testReset();
     testCanonicalEnums();
 
