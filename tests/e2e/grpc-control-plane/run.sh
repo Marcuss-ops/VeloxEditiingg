@@ -97,7 +97,7 @@ resolve_bin() {
     printf "[run.sh] FATAL: go not on PATH and $bin not built\n" >&2
     return 1
   fi
-  assert_info "building $1 (one-time) into $bin"
+  assert_info "building $1 (one-time) into $bin" >&2
   (cd "$module_root" && "$GO_BIN" build -o "$bin" "./$cmd_rel")
   printf "%s\n" "$bin"
 }
