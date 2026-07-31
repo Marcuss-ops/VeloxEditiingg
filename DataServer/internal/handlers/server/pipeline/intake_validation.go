@@ -1,28 +1,23 @@
-// Package pipeline — intake_validation.go owns the request-DTO
-// types (SubmitJobRequest and its nested shapes), the per-field
-// limit consts (video-name bytes, scene count, scene-duration
-// bounds, retry-budget default, manifest-ref URL bytes, schema-
-// version closed enum), the manifest-ref URL/SHA256 regexes,
-// SubmitJobValidationError + its .Error() method, the
-// containsString slice-membership helper, and
-// ValidateSubmitJobRequest (the cross-field validator that
-// returns either nil+false or a populated error with
-// details[].path / []issue entries).
+// Package pipeline — intake_validation.go owns the intake limits,
+// manifest-reference regexes, structured validation error, and
+// ValidateSubmitJobRequest cross-field validator. Request DTOs live in
+// intake_types.go so the wire contract stays separate from its rules.
 //
-// All bool-returned validation paths return FALSE on the happy
-// path so handlers can write `if verr, bad := …; bad { ... }`.
-// Cross-field failures are aggregated into a single 4xx envelope
-// so a client can correct them in one round trip.
+// All bool-returned validation paths return FALSE on the happy path so
+// handlers can write `if verr, bad := …; bad { ... }`. Cross-field failures
+// are aggregated into a single 4xx envelope so a client can correct them
+// in one round trip.
 //
 // Caller in this package: job_submit.go (thin composer).
 package pipeline
+
 import (
 	"fmt"
 	"regexp"
 	"strings"
+
 	"github.com/gin-gonic/gin"
 )
-
 
 // MaxVideoNameBytes is the byte-length cap on SubmitJobRequest.video_name.
 // The cap protects log-line printers (some wire up to 4096-byte lines)
@@ -115,6 +110,9 @@ var manifestRefURLRegexp = regexp.MustCompile(`^(https?://|velox-asset://).+`)
 // when it recomputes the SHA-256 of the downloaded manifest JSON.
 var manifestRefSHA256Regexp = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
+// audioRoleValues is the closed set of accepted SubmitAudioTrack.Role values.
+var audioRoleValues = []string{"voiceover", "scene_clip_audio", "background_music"}
+
 // containsString is a tiny slice-membership helper. Used by the
 // manifest_ref.schema_version closed-enum check; inlined here so
 // the validator has no third-party dependency on top of stdlib +
@@ -126,330 +124,6 @@ func containsString(haystack []string, needle string) bool {
 		}
 	}
 	return false
-}
-
-// per-scene nested-asset map builders used by submitRequestToRawPayload.
-// Each builder returns nil if the source struct is nil so the caller
-// can simply append the result to the scene map under the canonical
-// nested key (clip / voiceover / subtitles) without an extra nil-check.
-//
-// Trim policy: URL-bearing fields are TrimSpace'd to match the
-// identity-field trim policy (job_submit.go::submitRequestToRawPayload
-// "Trim policy" block). Asset-id and language are passed verbatim
-// (they're not URL-shaped so the parser doesn't care about whitespace).
-
-// which silently default to permissive behaviour for missing
-// cross-field constraints.
-type SubmitJobRequest struct {
-	// IdempotencyKey is required. 1..128 bytes after UTF-8 trim, valid
-	// UTF-8, no control bytes, no ':' or '%' separators. See
-	// ValidateIdempotencyKey in idempotency_validation.go for the
-	// byte-level rules and rejection envelopes.
-	IdempotencyKey string `json:"idempotency_key"`
-
-	// VideoName is the display name for the resulting video. Capped
-	// at MaxVideoNameBytes (300); empty allowed.
-	VideoName string `json:"video_name,omitempty"`
-
-	// ScriptText is the plain-text script used for TTS / overlay.
-	// Content field — NOT trimmed. Empty allowed. No byte-length cap
-	// here; matches the creator path's tolerance.
-	ScriptText string `json:"script_text,omitempty"`
-
-	// VoiceoverPaths are voiceover audio references. Each entry MUST
-	// be a velox-asset:// URI or a fully-qualified reachable URL.
-	VoiceoverPaths []string `json:"voiceover_paths,omitempty"`
-
-	// Scenes is the scene list. Each scene drives one composited
-	// segment. At least one scene is required; max MaxScenes (10k).
-	Scenes []SubmitScene `json:"scenes"`
-
-	// Layers are independent overlays: title, name, important phrase or
-	// additional media. They are not folded into Scenes, so callers can
-	// submit a video, images and any combination of overlays together.
-	Layers []SubmitLayer `json:"layers,omitempty"`
-
-	// SubtitleTracks are independent from visual layers and media.
-	SubtitleTracks []SubmitSubtitleTrack `json:"subtitle_tracks,omitempty"`
-
-	// AudioTracks are top-level audio layers mixed into the final
-	// render (background music, ambient sound, global narration).
-	// Independent from per-scene voiceover — these span the entire
-	// video duration. The renderer mixes audio_tracks together with
-	// per-scene clip audio + voiceover into a single AAC output.
-	AudioTracks []SubmitAudioTrack `json:"audio_tracks,omitempty"`
-
-	// DeliveryPlan is the ordered list of delivery targets. Empty
-	// allowed (defaults to scene.composite.v1's default resolver).
-	DeliveryPlan []SubmitDeliveryPlanEntry `json:"delivery_plan,omitempty"`
-
-	// ManifestRef is OPTIONAL. When present, the Master downloads
-	// the manifest JSON at `url`, verifies `sha256`, validates
-	// `schema_version`, and uses the manifest-derived payload as
-	// the worker input (replacing / overlaying the inline scene
-	// list). Shape-level rules (URL scheme allow-list, sha256 hex
-	// format, schema_version enum) are enforced by
-	// ValidateSubmitJobRequest. Fetch + verification are handled by
-	// ResolveRenderManifestRef before enqueue.
-	ManifestRef *SubmitManifestRef `json:"manifest_ref,omitempty"`
-
-	// PlacementPinWorkerID is an optional operator/admin field that
-	// forces the job to be placed on a specific worker, skipping
-	// the normal placement matcher. Used by benchmark harnesses
-	// (tests/worker-cert/smoke_one.sh, sequential_bench.sh) to
-	// target a single worker without drain/resume. When non-empty,
-	// the value is stored in the task spec payload as
-	// _placement_pin_worker_id and enforced by the placement
-	// matcher at dispatch time.
-	PlacementPinWorkerID string `json:"placement_pin_worker_id,omitempty"`
-
-	// ResolvedManifest fields are internal-only. They are populated by
-	// ResolveRenderManifestRef after the Master fetches and verifies
-	// manifest_ref. They are intentionally ignored by JSON decoding
-	// because DisallowUnknownFields would reject these names on the public
-	// wire contract; submitRequestToRawPayload copies them into the
-	// worker payload after resolution so TaskSpec carries the immutable
-	// manifest snapshot.
-	ResolvedManifest       map[string]interface{} `json:"-"`
-	ResolvedManifestRef    map[string]interface{} `json:"-"`
-	ResolvedManifestSHA256 string                 `json:"-"`
-}
-
-// SubmitScene is a single scene in the simplified job submission format.
-//
-// Field validation rules — submitted scenes MUST satisfy:
-//   - Text non-empty (string length > 0 after trim).
-//   - DurationSeconds in [MinSceneDurationSeconds,
-//     MaxSceneDurationSeconds] (i.e. [0.1, 86400] seconds).
-//
-// Per-scene enrichment (Phase 2 of the render-manifest plan): the
-// Clip / Voiceover / Subtitles nested objects REPLACE the legacy
-// position-coupled relationship where `voiceover_paths[N]` matched
-// `scenes[N]` by index (a fragile contract that broke when a scene
-// was reordered or removed). A single scene now carries its own
-// clip / voiceover / subtitles assets directly; the worker reads
-// them from `scenes_json[i].voiceover.url` (and .clip, .subtitles)
-// instead of relying on a top-level positional array.
-//
-// All three nested objects are POINTERS so that a client that supplies
-// `{}` (the parent object with no nested keys) is distinguishable from
-// the "scene carries no clip/vo/sub" case (pointer nil). The
-// handler-side validator rejects the empty-object case with three
-// aggregated 422 violations.
-//
-// ValidateSubmitJobRequest (in this file) runs the per-scene check
-// and aggregates failures into a single 422 with details pointing at
-// the offending index.
-type SubmitScene struct {
-	// Text is the narration / overlay text for this scene. Must be
-	// non-empty after trim.
-	Text string `json:"text"`
-
-	// SceneID is the canonical client-supplied scene identifier
-	// (e.g. "scene-0"). Optional; used by callers that track scene
-	// identity across requests.
-	SceneID string `json:"scene_id,omitempty"`
-
-	// Index is the scene's position in the video timeline. Optional;
-	// the validator does not require continuity (a caller that
-	// supplies only every other index is fine). Worker consumers
-	// use scenes_json's array order as the canonical timeline
-	// regardless of this field's value. Parity: int64 (matches
-	// apiwire.SubmitScene.Index; the bridge into
-	// remoteengine.SceneResult.Index is uniform, so a future
-	// cross-package cast won't trip on the int->int64 widening).
-	Index int64 `json:"index,omitempty"`
-
-	// Kind is the scene's role tag (e.g. "intro", "clip", "outro").
-	// Free-form string for forward-compatibility; the validator
-	// caps it at 32 bytes.
-	Kind string `json:"kind,omitempty"`
-
-	// ClipLink is a velox-asset:// clip URI or reachable URL.
-	// PRESERVED for back-compat with legacy clients; when both
-	// ClipLink and Clip.URL are supplied, the nested form wins
-	// (submitRequestToRawPayload's documented tie-break).
-	ClipLink string `json:"clip_link,omitempty"`
-
-	// ImageLink is an optional image fallback.
-	ImageLink string `json:"image_link,omitempty"`
-
-	// DurationSeconds is the intended duration of the scene. Must be
-	// in [MinSceneDurationSeconds, MaxSceneDurationSeconds].
-	DurationSeconds float64 `json:"duration_seconds"`
-
-	// Clip is the per-scene clip asset reference (Phase 2 of the
-	// render-manifest plan). Pointer nil = "no clip for this scene".
-	// Pointer non-nil with empty body = rejected with aggregated 422.
-	Clip *SubmitClip `json:"clip,omitempty"`
-
-	// Voiceover is the per-scene voiceover asset reference. Same
-	// pointer semantics as Clip. The nested form REPLACES the legacy
-	// top-level voiceover_paths[N] positional coupling.
-	Voiceover *SubmitVoiceover `json:"voiceover,omitempty"`
-
-	// Subtitles is the per-scene subtitles asset reference. Same
-	// pointer semantics as Clip.
-	Subtitles *SubmitSubtitles `json:"subtitles,omitempty"`
-}
-
-// SubmitClip is the per-scene clip asset reference nested inside
-// SubmitScene. Mirrors apiwire.SubmitClip (no validate tags here —
-// the handler-side ValidateSubmitJobRequest runs the shape checks
-// when Clip != nil).
-type SubmitClip struct {
-	AssetID     string `json:"asset_id,omitempty"`
-	DriveFileID string `json:"drive_file_id,omitempty"`
-	URL         string `json:"url,omitempty"`
-	SHA256      string `json:"sha256,omitempty"`
-	StartMS     int64  `json:"start_ms,omitempty"`
-	EndMS       int64  `json:"end_ms,omitempty"`
-	DurationMS  int64  `json:"duration_ms,omitempty"`
-}
-
-// SubmitVoiceover is the per-scene voiceover asset reference nested
-// inside SubmitScene. Same pointer indirection contract as SubmitClip.
-type SubmitVoiceover struct {
-	AssetID     string `json:"asset_id,omitempty"`
-	DriveFileID string `json:"drive_file_id,omitempty"`
-	URL         string `json:"url,omitempty"`
-	SHA256      string `json:"sha256,omitempty"`
-	DurationMS  int64  `json:"duration_ms,omitempty"`
-	Language    string `json:"language,omitempty"`
-}
-
-// SubmitSubtitles is the per-scene subtitles asset reference nested
-// inside SubmitScene.
-type SubmitSubtitles struct {
-	AssetID  string `json:"asset_id,omitempty"`
-	Format   string `json:"format,omitempty"`
-	URL      string `json:"url,omitempty"`
-	SHA256   string `json:"sha256,omitempty"`
-	Language string `json:"language,omitempty"`
-}
-
-// SubmitLayer is the API representation of one independent Chronon layer.
-// Type is one of text, image, video or color; Role can distinguish title,
-// name and important_phrase without creating separate renderer paths.
-type SubmitLayer struct {
-	ID              string    `json:"id"`
-	Type            string    `json:"type"`
-	Role            string    `json:"role,omitempty"`
-	Text            string    `json:"text,omitempty"`
-	Asset           string    `json:"asset,omitempty"`
-	Source          string    `json:"source,omitempty"`
-	Font            string    `json:"font,omitempty"`
-	FontSize        float64   `json:"font_size,omitempty"`
-	Position        []float64 `json:"position,omitempty"`
-	StartSeconds    float64   `json:"start_seconds,omitempty"`
-	DurationSeconds float64   `json:"duration_seconds,omitempty"`
-	Preset          string    `json:"preset,omitempty"`
-	Animation       string    `json:"animation,omitempty"`
-}
-
-// SubmitSubtitleTrack is a separate subtitle API payload. SRT, VTT and
-// Chronon-compatible JSON sources are supported by the renderer.
-type SubmitSubtitleTrack struct {
-	Source string `json:"source"`
-	Preset string `json:"preset,omitempty"`
-	Font   string `json:"font,omitempty"`
-}
-
-// SubmitAudioTrack is a top-level audio track mixed into the final render.
-// Independent from per-scene voiceover — this is for global audio layers
-// such as background music, ambient sound, or narration beds that span the
-// entire video. The renderer mixes all audio_tracks together with per-scene
-// clip audio and voiceover into a single AAC output stream.
-//
-// Canonical roles (closed enum):
-//   - "voiceover"          narration / speech (volume ~1.0)
-//   - "scene_clip_audio"   original audio from timeline clips
-//   - "background_music"   background music bed (volume 0.10-0.18 recommended)
-//
-// Initial release rules (no loop/fade/ducking yet):
-//   - volume in [0.0, 2.0]
-//   - source_url must match the http(s) + velox-asset:// allow-list
-//   - role must be one of the three canonical values
-//   - asset_id is optional; when present, the Master resolves it to a URL
-type SubmitAudioTrack struct {
-	AssetID          string  `json:"asset_id,omitempty"`
-	SourceURL        string  `json:"source_url"`
-	Role             string  `json:"role,omitempty"`
-	Volume           float64 `json:"volume,omitempty"`
-	StartTimeOffset  float64 `json:"start_time_offset,omitempty"`
-	DurationSeconds  float64 `json:"duration_seconds,omitempty"`
-	Loop             bool    `json:"loop,omitempty"`
-	FadeInSeconds    float64 `json:"fade_in_seconds,omitempty"`
-	FadeOutSeconds   float64 `json:"fade_out_seconds,omitempty"`
-	DuckingEnabled   bool    `json:"ducking_enabled,omitempty"`
-}
-
-// audioRoleValues is the closed set of accepted SubmitAudioTrack.Role values.
-var audioRoleValues = []string{"voiceover", "scene_clip_audio", "background_music"}
-
-// SubmitDeliveryPlanEntry is a single destination in the delivery plan.
-//
-// Field validation rules — submitted entries MUST satisfy:
-//   - DestinationID non-empty (string length > 0 after trim).
-//   - RetryBudget is a POINTER so that an explicit client-supplied value
-//     of 0 round-trips distinctly from "field omitted". A nil pointer
-//     means "client did not specify" — submitRequestToRawPayload
-//     substitutes the OpenAPI default (DefaultRetryBudget = 3) at
-//     normalization time. A pointer-to-0 means "client explicitly
-//     wants 0 retries" — preserved verbatim into the worker payload.
-//     Without the *int pointer, the Go default for int (0) would
-//     silently merge with the omitted-field default and clients could
-//     not distinguish "0 explicitly" from "omitted".
-type SubmitDeliveryPlanEntry struct {
-	DestinationID string `json:"destination_id"`
-	Priority      int    `json:"priority,omitempty"`
-	// RetryBudget is *int so that an explicit JSON value 0 round-trips
-	// distinctly from the omitted case (nil). See the type doc for
-	// the contract.
-	RetryBudget *int `json:"retry_budget,omitempty"`
-	Metadata    any  `json:"metadata,omitempty"`
-}
-
-// SubmitManifestRef points to a `velox.render-manifest.v1` JSON the
-// client uploaded to a reachable store (Drive, GCS, S3, …). The
-// Master fetches the JSON, verifies SHA-256 against the SHA-256 the
-// client supplied here, validates the schema_version, and replaces
-// the inline scene list with the manifest-derived payload.
-//
-// Three fields, all required WHEN the parent `manifest_ref` is
-// present (the *SubmitManifestRef pointer distinguishes "no
-// manifest_ref at all" from "manifest_ref declared but empty" —
-// the latter is rejected):
-//
-//   - SchemaVersion is the closed enum of accepted manifest
-//     versions. Today only `velox.render-manifest.v1` is accepted;
-//     future versions (`v2`, …) MUST be added to the `oneof` list
-//     AND to manifestRefSchemaVersions BEFORE the new resolver is
-//     shipped, so the contract and the implementation cannot drift.
-//
-//   - URL is the canonical pointer to the manifest JSON. MUST be a
-//     parseable URL on the http(s) scheme OR on the velox-asset://
-//     scheme (the latter only when the asset is reachable through
-//     the Master asset-bridge; the resolver owns that policy).
-//     The regex is intentionally permissive — the schemagen
-//     has no native `format: uri` distinction for velox-asset://
-//     so the strict scheme allow-list is enforced by the
-//     shape-level helper in ValidateSubmitJobRequest.
-//
-//   - SHA256 is the lowercase hex SHA-256 of the manifest JSON
-//     body. The Master re-downloads the JSON and verifies the
-//     SHA-256 against this value BEFORE substituting it into the
-//     worker payload (fail-closed).
-type SubmitManifestRef struct {
-	// SchemaVersion is the closed enum of accepted manifest versions.
-	// Today only `velox.render-manifest.v1` is accepted.
-	SchemaVersion string `json:"schema_version"`
-
-	// URL is the canonical pointer to the manifest JSON.
-	URL string `json:"url"`
-
-	// SHA256 is the lowercase hex SHA-256 of the manifest JSON body.
-	SHA256 string `json:"sha256"`
 }
 
 // SubmitJobValidationError is the structured 4xx envelope returned by
