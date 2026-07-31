@@ -42,6 +42,12 @@ type IngestCommand struct {
 	WorkerID  string
 	JobID     string // optional but required for the Job roll-up step (4)
 
+	// Executor identity is master-owned. The handler may populate these
+	// values from the canonical task row, but canonicalizePhaseTimingIdentity
+	// resolves and overwrites them again before persistence.
+	ExecutorID      string
+	ExecutorVersion int
+
 	// AttemptNumber is the canonical attempt number stamped at Claim time
 	// (PR-2 / fix/canonical-attempt-identity). Authoritatively-derived
 	// ValidateIdentityTuple strict-compares the wire attempt_number against
@@ -99,7 +105,9 @@ type IngestCommand struct {
 	PartialPhaseMetrics []taskattempts.PhaseTimingDetailed
 	// PhaseTimings is the complete append-only event timeline. It is
 	// persisted atomically with the terminal result; the legacy partial
-	// field remains a fallback for older workers.
+	// field remains a fallback for older workers. Identity fields inside
+	// these entries are always overwritten from master-owned task/attempt
+	// rows before persistence.
 	PhaseTimings []taskattempts.PhaseTimingDetailed
 }
 
@@ -301,6 +309,47 @@ func (s *TaskReportIngestionService) ValidateIdentityTuple(ctx context.Context, 
 	return nil
 }
 
+// canonicalizePhaseTimingIdentity stamps every detailed event with the
+// canonical tuple resolved by the master. The worker's job/task/attempt/
+// worker/executor echoes are deliberately discarded.
+func (s *TaskReportIngestionService) canonicalizePhaseTimingIdentity(ctx context.Context, cmd *IngestCommand) error {
+	att, err := s.attemptRepo.Get(ctx, cmd.AttemptID)
+	if err != nil {
+		return fmt.Errorf("ingest.canonicalizePhaseTimingIdentity: attempt lookup: %w", err)
+	}
+	if att == nil || att.ID != cmd.AttemptID || att.TaskID != cmd.TaskID || att.WorkerID != cmd.WorkerID || att.LeaseID != cmd.LeaseID || att.JobID != cmd.JobID {
+		return fmt.Errorf("ingest.canonicalizePhaseTimingIdentity: canonical attempt mismatch for %s: %w", cmd.AttemptID, taskattempts.ErrIdentityMismatch)
+	}
+	task, err := s.taskRepo.Get(ctx, cmd.TaskID)
+	if err != nil {
+		return fmt.Errorf("ingest.canonicalizePhaseTimingIdentity: task lookup: %w", err)
+	}
+	if task == nil || task.ID != cmd.TaskID || task.JobID != att.JobID {
+		return fmt.Errorf("ingest.canonicalizePhaseTimingIdentity: canonical task mismatch for %s: %w", cmd.TaskID, taskattempts.ErrIdentityMismatch)
+	}
+	cmd.ExecutorID = task.ExecutorID
+	cmd.ExecutorVersion = task.ExecutorVersion
+	for i := range cmd.PhaseTimings {
+		cmd.PhaseTimings[i].AttemptID = att.ID
+		cmd.PhaseTimings[i].TaskID = task.ID
+		cmd.PhaseTimings[i].JobID = task.JobID
+		cmd.PhaseTimings[i].WorkerID = att.WorkerID
+		cmd.PhaseTimings[i].WorkerSnapshotID = att.WorkerSnapshotID
+		cmd.PhaseTimings[i].ExecutorID = task.ExecutorID
+		cmd.PhaseTimings[i].ExecutorVersion = task.ExecutorVersion
+	}
+	for i := range cmd.PartialPhaseMetrics {
+		cmd.PartialPhaseMetrics[i].AttemptID = att.ID
+		cmd.PartialPhaseMetrics[i].TaskID = task.ID
+		cmd.PartialPhaseMetrics[i].JobID = task.JobID
+		cmd.PartialPhaseMetrics[i].WorkerID = att.WorkerID
+		cmd.PartialPhaseMetrics[i].WorkerSnapshotID = att.WorkerSnapshotID
+		cmd.PartialPhaseMetrics[i].ExecutorID = task.ExecutorID
+		cmd.PartialPhaseMetrics[i].ExecutorVersion = task.ExecutorVersion
+	}
+	return nil
+}
+
 // IngestTaskResult executes the audit-mandated sequence for a single TaskResult:
 //
 //  1. Validate wire identity tuple (TaskID + AttemptID + LeaseID + WorkerID
@@ -325,6 +374,15 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 	// letting impersonation attempts bypass the gate.
 	if err := s.ValidateIdentityTuple(ctx, cmd); err != nil {
 		return res, err
+	}
+
+	// Normalize detailed-event identity from master-owned rows before any
+	// event reaches the atomic persistence boundary. Worker echoes are
+	// telemetry only and are never authoritative.
+	if len(cmd.PhaseTimings) > 0 || len(cmd.PartialPhaseMetrics) > 0 {
+		if err := s.canonicalizePhaseTimingIdentity(ctx, &cmd); err != nil {
+			return res, err
+		}
 	}
 
 	// Step 2: atomic ingestion — Task CAS + Attempt CAS + metrics +

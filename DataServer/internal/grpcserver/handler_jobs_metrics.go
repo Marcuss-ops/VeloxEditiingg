@@ -162,9 +162,10 @@ func executionMetricsToAttemptMetrics(attemptID string, em *pb.TaskExecutionMetr
 }
 
 // phaseTimingsFromProto maps the complete worker event timeline onto the
-// master-side canonical shape. Worker identity echoes are retained only as
-// diagnostics; the atomic writer resolves the authoritative identity tuple.
-func phaseTimingsFromProto(attemptID, taskID, jobID, workerID string, protoTimings []*pb.PhaseTimingDetailed) []taskattempts.PhaseTimingDetailed {
+// master-side canonical shape. Every identity argument is resolved and
+// verified by the master before this function is called; all identity echoes
+// in the worker protobuf are intentionally ignored.
+func phaseTimingsFromProto(attemptID, taskID, jobID, workerID, executorID string, executorVersion int, protoTimings []*pb.PhaseTimingDetailed) []taskattempts.PhaseTimingDetailed {
 	if len(protoTimings) == 0 {
 		return nil
 	}
@@ -192,8 +193,8 @@ func phaseTimingsFromProto(attemptID, taskID, jobID, workerID string, protoTimin
 			JobID:            jobID,
 			TaskID:           taskID,
 			WorkerID:         workerID,
-			ExecutorID:       pt.GetExecutorId(),
-			ExecutorVersion:  int(pt.GetExecutorVersion()),
+			ExecutorID:       executorID,
+			ExecutorVersion:  executorVersion,
 			PhaseOrder:       int(pt.GetPhaseOrder()),
 			SegmentIndex:     int(pt.GetSegmentIndex()),
 			TrackKind:        pt.GetTrackKind(),
@@ -223,8 +224,8 @@ func phaseTimingsFromProto(attemptID, taskID, jobID, workerID string, protoTimin
 
 // partialPhaseTimingsFromProto keeps the legacy field mapping available for
 // older workers and older callers. New reports use phase_timings above.
-func partialPhaseTimingsFromProto(attemptID, taskID, jobID, workerID string, protoTimings []*pb.PhaseTimingDetailed) []taskattempts.PhaseTimingDetailed {
-	return phaseTimingsFromProto(attemptID, taskID, jobID, workerID, protoTimings)
+func partialPhaseTimingsFromProto(attemptID, taskID, jobID, workerID, executorID string, executorVersion int, protoTimings []*pb.PhaseTimingDetailed) []taskattempts.PhaseTimingDetailed {
+	return phaseTimingsFromProto(attemptID, taskID, jobID, workerID, executorID, executorVersion, protoTimings)
 }
 
 // deriveCacheStats builds the per-attempt cache snapshot the persistence

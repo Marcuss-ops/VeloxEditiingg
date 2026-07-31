@@ -48,6 +48,8 @@ type spoofStubTaskRepo struct {
 	lastCacheStats      taskattempts.AttemptCacheStats
 	lastCostBasis       taskattempts.AttemptCostBasis
 	lastArtifacts       []taskoutput_artifacts.OutputArtifact
+	lastPhaseTimings    []taskattempts.PhaseTimingDetailed
+	lastPartialPhases   []taskattempts.PhaseTimingDetailed
 }
 
 func (s *spoofStubTaskRepo) Get(_ context.Context, id string) (*taskgraph.Task, error) {
@@ -151,6 +153,8 @@ func (s *spoofStubTaskRepo) IngestTaskResultAtomic(_ context.Context, cmd taskgr
 	if cmd.Artifacts != nil {
 		s.lastArtifacts = append([]taskoutput_artifacts.OutputArtifact(nil), cmd.Artifacts...)
 	}
+	s.lastPhaseTimings = append([]taskattempts.PhaseTimingDetailed(nil), cmd.PhaseTimings...)
+	s.lastPartialPhases = append([]taskattempts.PhaseTimingDetailed(nil), cmd.PartialPhaseMetrics...)
 	return nil
 }
 func (s *spoofStubTaskRepo) IsAllAttemptCommitsCommittedForTasks(_ context.Context, _ []string) (bool, error) {
@@ -215,7 +219,7 @@ func (s *spoofStubAttemptRepo) seedCanonical(taskID, workerID, leaseID string) {
 	if s.attempts == nil {
 		s.attempts = map[string]*taskattempts.TaskAttempt{}
 	}
-	s.attempts[taskID+"|"+workerID+"|"+leaseID] = &taskattempts.TaskAttempt{ID: "A-canonical", TaskID: taskID, WorkerID: workerID, LeaseID: leaseID, AttemptNumber: 1, JobID: "J-canonical", Status: taskattempts.AttemptStatusRunning}
+	s.attempts[taskID+"|"+workerID+"|"+leaseID] = &taskattempts.TaskAttempt{ID: "A-canonical", TaskID: taskID, WorkerID: workerID, WorkerSnapshotID: "snapshot.master", LeaseID: leaseID, AttemptNumber: 1, JobID: "J-canonical", Status: taskattempts.AttemptStatusRunning}
 }
 func (s *spoofStubAttemptRepo) GetByTaskIDAndWorkerAndLease(_ context.Context, taskID, workerID, leaseID string) (*taskattempts.TaskAttempt, error) {
 	s.mu.Lock()
@@ -332,7 +336,10 @@ func buildSpoofHandler(t *testing.T) (*Handler, *spoofStubTaskRepo, *spoofStubJo
 	fx := newSpoofFixture()
 	attempts := &spoofStubAttemptRepo{}
 	attempts.seedCanonical(fx.taskID, fx.workerID, fx.canonicalLease)
-	taskRepo := &spoofStubTaskRepo{listTasks: []taskgraph.Task{{ID: fx.taskID, JobID: fx.wireJobID, Status: taskgraph.StatusSucceeded}}}
+	taskRepo := &spoofStubTaskRepo{
+		listTasks: []taskgraph.Task{{ID: fx.taskID, JobID: fx.wireJobID, Status: taskgraph.StatusSucceeded}},
+		nowTask:   taskgraph.Task{ID: fx.taskID, JobID: fx.wireJobID, ExecutorID: "executor.master", ExecutorVersion: 7},
+	}
 	jobsRepo := &spoofStubJobsRepo{getJob: &jobs.Job{ID: fx.wireJobID, Status: jobs.StatusRunning, MaxRetries: 3, Revision: 0}}
 	outputArts := newSpoofStubOutputArts()
 	svc, err := ingest.NewTaskReportIngestionService(taskRepo, jobsRepo, attempts, outputArts)

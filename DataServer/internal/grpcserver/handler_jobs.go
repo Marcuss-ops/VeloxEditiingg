@@ -368,6 +368,20 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 		return
 	}
 
+	// Resolve executor fields from the master-owned task row when it is
+	// available. The ingestion service remains the authoritative identity
+	// gate and repeats the task/attempt lookup before persistence; keeping
+	// this lookup best-effort preserves compatibility with lightweight
+	// handler callers while ensuring worker echoes are never trusted.
+	var canonicalExecutorID string
+	var canonicalExecutorVersion int
+	if h.taskRepo != nil {
+		if canonicalTask, taskErr := h.taskRepo.Get(context.Background(), taskID); taskErr == nil && canonicalTask != nil && canonicalTask.ID == taskID {
+			canonicalExecutorID = canonicalTask.ExecutorID
+			canonicalExecutorVersion = canonicalTask.ExecutorVersion
+		}
+	}
+
 	// Translate protobuf output_artifacts (Struct items) into the typed
 	// DeclaredArtifact slice. Metadata is best-effort JSON.
 	declared := make([]ingest.DeclaredArtifact, 0, len(tr.GetOutputArtifacts()))
@@ -406,8 +420,8 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 	typedCache := deriveCacheStats(attemptID, typedMetrics)
 	typedCost := executionMetricsToCostBasis(attemptID, tr.GetExecutionMetrics())
 	segmentTimings := segmentTimingsFromProto(attemptID, taskID, jobID, workerID, tr.GetSegmentTimings())
-	phaseTimings := phaseTimingsFromProto(attemptID, taskID, jobID, workerID, tr.GetPhaseTimings())
-	partialPhaseTimings := partialPhaseTimingsFromProto(attemptID, taskID, jobID, workerID, tr.GetPartialPhaseMetrics())
+	phaseTimings := phaseTimingsFromProto(attemptID, taskID, jobID, workerID, canonicalExecutorID, canonicalExecutorVersion, tr.GetPhaseTimings())
+	partialPhaseTimings := partialPhaseTimingsFromProto(attemptID, taskID, jobID, workerID, canonicalExecutorID, canonicalExecutorVersion, tr.GetPartialPhaseMetrics())
 
 	// Scorecard v2 / Step 15: start an "ingest_result" span.
 	// Scorecard v2 / Step 15c: use session.ctx (derived from stream.Context())
@@ -478,6 +492,8 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 		LeaseID:             leaseID,
 		WorkerID:            workerID,
 		JobID:               jobID,
+		ExecutorID:          canonicalExecutorID,
+		ExecutorVersion:     canonicalExecutorVersion,
 		Status:              tr.GetStatus(),
 		ErrorCode:           tr.GetErrorCode(),
 		ErrorDetail:         tr.GetErrorDetail(),

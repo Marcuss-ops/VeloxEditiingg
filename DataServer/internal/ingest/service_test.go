@@ -25,6 +25,7 @@ type stubIngestTaskRepo struct {
 	nowTask             taskgraph.Task
 	nowErr              error
 	allCommitsCommitted bool
+	lastIngestCommand   taskgraph.IngestResultCommand
 }
 
 func (s *stubIngestTaskRepo) Get(_ context.Context, id string) (*taskgraph.Task, error) {
@@ -118,6 +119,7 @@ func (s *stubIngestTaskRepo) IngestTaskResultAtomic(_ context.Context, cmd taskg
 	s.transitionCalls++
 	s.transitionedTask = cmd.TaskID
 	s.transitionedState = cmd.TaskStatus
+	s.lastIngestCommand = cmd
 	if s.transitionErr != nil {
 		return s.transitionErr
 	}
