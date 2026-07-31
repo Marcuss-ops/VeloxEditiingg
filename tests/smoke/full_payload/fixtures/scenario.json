@@ -1,120 +1,77 @@
 {
   "_doc": [
-    "Reusable post-2026-07-28 full-payload smoke scenario.",
-    "Shape: 4 scenes (within the 3-5 range), per-scene voiceover.asset_id only (URL implicit via velox-asset:// scheme),",
-    "mixed ASS+SRT subtitle_tracks (2 entries covering 2 source assets),",
-    "special_name 'Jackie Chan' (in scene-2 text + layers[role=name]),",
-    "important_phrase 'Una scoperta incredibile' (in scene-1 text + layers[role=important_phrase]),",
-    "highlighted_word 'Mai' (in scene-0 text + layers[role=overlay]).",
-    "assets referenced: tests/worker-cert/fixtures/assets.json (REUSE only — DO NOT add new asset_id rows here).",
-    "Substituted at submit time by run.sh (--mode=submit): idempotency_key, target_executor_id, delivery_plan[0].destination_id.",
-    "Adapted from docs/operations/04-velox-final-smoke-checklist.md §4 (layers example) and enqueue_normalization_test.go §subtitle_tracks."
+    "Complete two-scene stock-media smoke template.",
+    "run.sh fills clip and voiceover references from tests/worker-cert/fixtures/assets.json.",
+    "run.sh requires real registered background-music and ASS subtitle asset IDs plus a worker pin.",
+    "The final payload contains two 6-second scenes (12 seconds total), one background_music track of at least 12 seconds, two scene voiceover bindings, ASS subtitles, delivery_plan and placement_pin_worker_id.",
+    "Never replace required runtime asset IDs with local paths, invented URLs, placeholder IDs or fallback media."
   ],
-  "schema": "velox.submit.full-payload@1",
-  "idempotency_key": "full-payload-4-scenes-PLACEHOLDER",
-  "video_name": "Full-payload smoke (4 scene, special name + important phrase + highlighted word)",
-  "project_id": "full_payload_smoke",
+  "schema": "velox.submit.stock-audio-subtitle-smoke@1",
+  "idempotency_key": "stock-audio-subtitle-smoke-PLACEHOLDER",
+  "video_name": "Stock audio subtitle smoke",
+  "script_text": "Smoke test completo con due clip stock, voiceover, musica di sottofondo e sottotitoli ASS.",
+  "project_id": "worker_cert_stock_audio_subtitle_smoke",
   "target_executor_id": "scene.composite.v1@1",
-  "subtitle_tracks": [
-    {
-      "source": "velox-asset://subtitle-001",
-      "format": "ass",
-      "language": "it",
-      "name": "scene-0-and-1.ass"
-    },
-    {
-      "source": "velox-asset://subtitle-002",
-      "format": "srt",
-      "language": "it",
-      "name": "scene-2-and-3.srt"
-    }
-  ],
+  "placement_pin_worker_id": "RUNTIME_REQUIRED_WORKER_ID",
+  "voiceover_paths": [],
+  "audio_tracks": [],
   "scenes": [
     {
       "scene_id": "scene-0",
       "index": 0,
       "kind": "intro",
-      "text": "Mai prima d'ora avevamo visto Jackie Chan alle prese con un'impresa così incredibile.",
-      "clip_link": "velox-asset://opening-clip-01",
-      "duration_seconds": 7,
+      "text": "Prima scena dello smoke test stock, voiceover, musica e sottotitoli.",
+      "clip": {
+        "asset_id": "RUNTIME_CLIP_A",
+        "url": "velox-asset://RUNTIME_CLIP_A",
+        "sha256": "RUNTIME_CLIP_A",
+        "duration_ms": 6000
+      },
+      "duration_seconds": 6,
       "voiceover": {
-        "asset_id": "asset-recording-001"
+        "asset_id": "RUNTIME_VOICEOVER",
+        "url": "velox-asset://RUNTIME_VOICEOVER",
+        "sha256": "RUNTIME_VOICEOVER",
+        "duration_ms": 6000,
+        "language": "it"
+      },
+      "subtitles": {
+        "asset_id": "RUNTIME_SUBTITLE_ASS",
+        "format": "ass",
+        "url": "velox-asset://RUNTIME_SUBTITLE_ASS",
+        "sha256": "RUNTIME_SUBTITLE_ASS",
+        "language": "it"
       }
     },
     {
       "scene_id": "scene-1",
       "index": 1,
-      "kind": "development",
-      "text": "Una scoperta incredibile cambia tutto quello che pensavamo di sapere.",
-      "clip_link": "velox-asset://main-clip-01",
-      "duration_seconds": 8,
-      "voiceover": {
-        "asset_id": "asset-recording-001"
-      }
-    },
-    {
-      "scene_id": "scene-2",
-      "index": 2,
-      "kind": "climax",
-      "text": "Jackie Chan si trova di fronte alla scelta che definirà la sua carriera.",
-      "clip_link": "velox-asset://aqueduct-clip-01",
-      "duration_seconds": 9,
-      "voiceover": {
-        "asset_id": "e2e-narrator-001"
-      }
-    },
-    {
-      "scene_id": "scene-3",
-      "index": 3,
       "kind": "resolution",
-      "text": "Alla fine, la verità emerge e il pubblico resta senza fiato.",
-      "clip_link": "velox-asset://aqueduct-clip-02",
+      "text": "Seconda scena dello smoke test con musica sotto il voiceover.",
+      "clip": {
+        "asset_id": "RUNTIME_CLIP_B",
+        "url": "velox-asset://RUNTIME_CLIP_B",
+        "sha256": "RUNTIME_CLIP_B",
+        "duration_ms": 6000
+      },
       "duration_seconds": 6,
       "voiceover": {
-        "asset_id": "e2e-narrator-001"
+        "asset_id": "RUNTIME_VOICEOVER",
+        "url": "velox-asset://RUNTIME_VOICEOVER",
+        "sha256": "RUNTIME_VOICEOVER",
+        "duration_ms": 6000,
+        "language": "it"
       }
-    }
-  ],
-  "layers": [
-    {
-      "id": "special-name-001",
-      "type": "text",
-      "role": "name",
-      "text": "Jackie Chan",
-      "scene_id": "scene-2",
-      "start_seconds": 0.0,
-      "duration_seconds": 3.0,
-      "preset": "person_name_v1",
-      "animation": "slide_left"
-    },
-    {
-      "id": "important-phrase-001",
-      "type": "text",
-      "role": "important_phrase",
-      "text": "Una scoperta incredibile",
-      "scene_id": "scene-1",
-      "start_seconds": 0.5,
-      "duration_seconds": 4.0,
-      "preset": "important_phrase_v1",
-      "animation": "fade_up"
-    },
-    {
-      "id": "highlighted-word-001",
-      "type": "text",
-      "role": "overlay",
-      "text": "Mai",
-      "scene_id": "scene-0",
-      "start_seconds": 0.0,
-      "duration_seconds": 2.0,
-      "preset": "highlighted_word_v1",
-      "animation": "pop"
     }
   ],
   "delivery_plan": [
     {
       "destination_id": "comedy_test",
       "priority": 100,
-      "retry_budget": 3
+      "retry_budget": 1,
+      "metadata": {
+        "test_type": "stock_voiceover_music_subtitles_ass"
+      }
     }
   ]
 }

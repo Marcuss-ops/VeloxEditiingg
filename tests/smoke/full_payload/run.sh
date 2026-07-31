@@ -3,9 +3,15 @@
 # tests/smoke/full_payload/run.sh — Reusable submitter for the post-2026-07-28
 # full-payload smoke matrix.
 # =============================================================================
-# Submits tests/smoke/full_payload/fixtures/scenario.json (4 scene, ASS+SRT
-# subtitle_tracks, special name + important phrase + highlighted word layers,
-# destination comedy_test, executor scene.composite.v1@1) to the Velox
+# Submits tests/smoke/full_payload/fixtures/scenario.json (2 stock scenes,
+# voiceover, background music, ASS subtitle track, delivery plan and worker
+# placement pin) to the Velox Master's POST /api/v1/jobs endpoint.
+# Clip and voiceover IDs come from the canonical worker-cert fixture; music,
+# ASS subtitle and worker IDs are mandatory runtime inputs because they must be
+# real registered resources, never placeholders.
+#
+# The final video is 12 seconds (2 x 6 seconds). The runner refuses a music
+# duration shorter than 12 seconds.
 # Master's POST /api/v1/jobs endpoint. Source-of-truth for shape:
 #   - docs/operations/04-velox-final-smoke-checklist.md §4 (layers example)
 #   - DataServer/internal/apiwire/apiwire.go SubmitJobRequest
@@ -44,8 +50,6 @@
 #   VELOX_ADMIN_TOKEN                admin bearer for /api/v1/admin/m2m/keys
 #                                    (set this OR TOKEN_FILE)
 #   TOKEN_FILE                       dotenv alternative for VELOX_ADMIN_TOKEN
-#   FULLPAYLOAD_IDEM_KEY             idempotency_key override
-#                                    (default: full-payload-4-scenes-<EPOCH>)
 #   FULLPAYLOAD_DESTINATION_ID       destination_id override (default: comedy_test)
 #   FULLPAYLOAD_TARGET_EXECUTOR_ID   target_executor_id override
 #                                    (default: scene.composite.v1@1)
@@ -54,6 +58,12 @@
 #   FULLPAYLOAD_EVIDENCE_DIR         evidence output dir
 #                                    (default: <self-dir>/evidence)
 #   FULLPAYLOAD_POLL_TIMEOUT_S       polling cap seconds (default: 240)
+#   FULLPAYLOAD_WORKER_ID             required placement pin worker ID
+#   FULLPAYLOAD_BACKGROUND_MUSIC_ASSET_ID
+#                                     required registered music asset ID
+#   FULLPAYLOAD_BACKGROUND_MUSIC_DURATION_SECONDS
+#                                     required real music duration; must be >= 12
+#   FULLPAYLOAD_SUBTITLE_ASSET_ID     required registered ASS subtitle asset ID
 #
 # Usage:
 #   tests/smoke/full_payload/run.sh
@@ -104,13 +114,18 @@ for bin in curl jq; do
   ensure_command_available "$bin" || { log_error "${bin} missing on PATH"; exit 2; }
 done
 
-# Defaults (overridable via env).
+# Defaults (overridable via env). Runtime asset/worker values are intentionally
+# required below; inventing them would produce a smoke that cannot run.
 : "${VELOX_MASTER_URL:=http://127.0.0.1:8080}"
 : "${FULLPAYLOAD_DESTINATION_ID:=comedy_test}"
 : "${FULLPAYLOAD_TARGET_EXECUTOR_ID:=scene.composite.v1@1}"
 : "${FULLPAYLOAD_SCENARIO:=${SCRIPT_DIR}/fixtures/scenario.json}"
 : "${FULLPAYLOAD_EVIDENCE_DIR:=${SCRIPT_DIR}/evidence}"
 : "${FULLPAYLOAD_POLL_TIMEOUT_S:=240}"
+: "${FULLPAYLOAD_WORKER_ID:=}"
+: "${FULLPAYLOAD_BACKGROUND_MUSIC_ASSET_ID:=}"
+: "${FULLPAYLOAD_BACKGROUND_MUSIC_DURATION_SECONDS:=}"
+: "${FULLPAYLOAD_SUBTITLE_ASSET_ID:=}"
 
 VELOX_MASTER_URL="${VELOX_MASTER_URL%/}"
 FULLPAYLOAD_DESTINATION_ID="${FULLPAYLOAD_DESTINATION_ID%/}"
@@ -123,8 +138,33 @@ POLL_TIMEOUT_FULL="${FULLPAYLOAD_POLL_TIMEOUT_S}"
 [[ -r "$SCENARIO_FILE" ]] || { log_error "scenario file not readable: ${SCENARIO_FILE}"; exit 2; }
 jq -e . "$SCENARIO_FILE" >/dev/null 2>&1 || { log_error "scenario file is not valid JSON: ${SCENARIO_FILE}"; exit 2; }
 
-EPOCH=$(date +%s)
-IDEM_KEY="${FULLPAYLOAD_IDEM_KEY:-full-payload-4-scenes-${EPOCH}}"
+for required_runtime in FULLPAYLOAD_WORKER_ID FULLPAYLOAD_BACKGROUND_MUSIC_ASSET_ID FULLPAYLOAD_BACKGROUND_MUSIC_DURATION_SECONDS FULLPAYLOAD_SUBTITLE_ASSET_ID; do
+  if [[ -z "${!required_runtime}" ]]; then
+    log_error "${required_runtime} is required; refusing to invent an asset ID, duration or worker pin"
+    exit 2
+  fi
+done
+if ! [[ "$FULLPAYLOAD_BACKGROUND_MUSIC_ASSET_ID" =~ ^[0-9a-f]{64}$ && "$FULLPAYLOAD_SUBTITLE_ASSET_ID" =~ ^[0-9a-f]{64}$ && "$FULLPAYLOAD_WORKER_ID" =~ ^[^[:space:]]+$ ]]; then
+  log_error "runtime asset IDs must be lowercase SHA-256 values and worker ID must be a non-empty token"
+  exit 2
+fi
+if ! [[ "$FULLPAYLOAD_BACKGROUND_MUSIC_DURATION_SECONDS" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  log_error "FULLPAYLOAD_BACKGROUND_MUSIC_DURATION_SECONDS must be a positive number"
+  exit 2
+fi
+if ! jq -en --arg d "$FULLPAYLOAD_BACKGROUND_MUSIC_DURATION_SECONDS" '$d | tonumber >= 12' >/dev/null; then
+  log_error "background music duration must be >= 12 seconds (video duration is 12 seconds)"
+  exit 2
+fi
+
+ASSETS_FILE="${REPO_ROOT}/tests/worker-cert/fixtures/assets.json"
+[[ -r "$ASSETS_FILE" ]] || { log_error "worker-cert assets fixture not readable: ${ASSETS_FILE}"; exit 2; }
+ASSET_VO=$(jq -er '.voiceover[0].asset_id' "$ASSETS_FILE") || { log_error "fixture has no usable voiceover asset"; exit 2; }
+ASSET_CLIP_A=$(jq -er '.clips[0].asset_id' "$ASSETS_FILE") || { log_error "fixture has no usable first clip asset"; exit 2; }
+ASSET_CLIP_B=$(jq -er '.clips[1].asset_id' "$ASSETS_FILE") || { log_error "fixture has no usable second clip asset"; exit 2; }
+
+EPOCH=$(date +%s%N)
+IDEM_KEY="full-payload-2-scenes-${EPOCH}"
 
 log_info "mode=${MODE} master=${VELOX_MASTER_URL} scenario=${SCENARIO_FILE} destination=${FULLPAYLOAD_DESTINATION_ID} executor=${FULLPAYLOAD_TARGET_EXECUTOR_ID} idem=${IDEM_KEY}"
 
@@ -139,9 +179,53 @@ build_payload() {
     --arg idem "$IDEM_KEY" \
     --arg dest "$FULLPAYLOAD_DESTINATION_ID" \
     --arg exec_id "$FULLPAYLOAD_TARGET_EXECUTOR_ID" \
+    --arg worker_id "$FULLPAYLOAD_WORKER_ID" \
+    --arg vo_id "$ASSET_VO" \
+    --arg clip_a "$ASSET_CLIP_A" \
+    --arg clip_b "$ASSET_CLIP_B" \
+    --arg music_id "$FULLPAYLOAD_BACKGROUND_MUSIC_ASSET_ID" \
+    --arg music_duration "$FULLPAYLOAD_BACKGROUND_MUSIC_DURATION_SECONDS" \
+    --arg subtitle_id "$FULLPAYLOAD_SUBTITLE_ASSET_ID" \
     '.idempotency_key = $idem
      | .target_executor_id = $exec_id
-     | (.delivery_plan[0].destination_id = $dest)' \
+     | .placement_pin_worker_id = $worker_id
+     | (.delivery_plan[0].destination_id = $dest)
+     | .scenes[0].clip = {
+         asset_id: $clip_a,
+         url: ("velox-asset://" + $clip_a),
+         sha256: $clip_a,
+         duration_ms: 6000
+       }
+     | .scenes[1].clip = {
+         asset_id: $clip_b,
+         url: ("velox-asset://" + $clip_b),
+         sha256: $clip_b,
+         duration_ms: 6000
+       }
+     | .scenes[0].voiceover.asset_id = $vo_id
+     | .scenes[0].voiceover.url = ("velox-asset://" + $vo_id)
+     | .scenes[0].voiceover.sha256 = $vo_id
+     | .scenes[1].voiceover.asset_id = $vo_id
+     | .scenes[1].voiceover.url = ("velox-asset://" + $vo_id)
+     | .scenes[1].voiceover.sha256 = $vo_id
+     | .audio_tracks = [{
+         asset_id: $music_id,
+         source_url: ("velox-asset://" + $music_id),
+         role: "background_music",
+         volume: 0.12,
+         start_time_offset: 0,
+         duration_seconds: ($music_duration | tonumber)
+       }]
+     | .scenes[0].subtitles = {
+         asset_id: $subtitle_id,
+         format: "ass",
+         url: ("velox-asset://" + $subtitle_id),
+         sha256: $subtitle_id,
+         language: "it"
+       }
+     | (.delivery_plan[0].metadata = {
+         test_type: "stock_voiceover_music_subtitles_ass"
+       })' \
     <<<"$SCENARIO_BODY"
 }
 
@@ -150,15 +234,21 @@ build_payload() {
 # against the authoritative FORBIDDEN_RX. Mirrors build_real_payload.py
 # §FORBIDDEN_PATTERNS (without the local-path branch — that runs on the
 # server in intake_validation.go §manifestRefURLRegexp). Exits 9 on hit.
-FORBIDDEN_RX='velox-asset://(voiceovers|clips|subtitles|images)/[A-Za-z0-9._-]+\\.[A-Za-z0-9]+|file://'
+FORBIDDEN_RX='velox-asset://(voiceovers|clips|subtitles|images)/[^[:space:]]+|file://'
 
 assert_no_forbidden() {
   local payload_json="$1" hits_json count
   hits_json="$(jq \
     --arg rx "$FORBIDDEN_RX" \
     '[.. | select(type == "string")] | map(select(test($rx))) | {count: length, hits: .}' \
-    <<<"$payload_json")"
-  count=$(printf '%s' "$hits_json" | jq -er '.count')
+    <<<"$payload_json")" || {
+    log_error "self-check: forbidden-pattern scan failed"
+    return 9
+  }
+  count=$(printf '%s' "$hits_json" | jq -er '.count') || {
+    log_error "self-check: forbidden-pattern count failed"
+    return 9
+  }
   if (( count > 0 )); then
     log_error "self-check: ${count} forbidden pattern(s) detected in payload:"
     printf '%s' "$hits_json" | jq -er '.hits[]' | sed 's/^/  - /' >&2
@@ -167,21 +257,32 @@ assert_no_forbidden() {
   return 0
 }
 
-PAYLOAD="$(build_payload)"
+PAYLOAD="$(build_payload)" || {
+  log_error "failed to build substituted smoke payload"
+  exit 2
+}
+[[ -n "$PAYLOAD" ]] || {
+  log_error "substituted smoke payload is empty"
+  exit 2
+}
 assert_no_forbidden "$PAYLOAD" || exit 9
 
 # ─── selftest mode short-circuit ───────────────────────────────────────────
 if [[ "$MODE" == "selftest" ]]; then
   echo "──── FULL-PAYLOAD SELFTEST (mode=selftest, no HTTP) ────"
-  printf '%s' "$PAYLOAD" | jq '{schema, idempotency_key, video_name, project_id, target_executor_id,
+  printf '%s' "$PAYLOAD" | jq '{schema, idempotency_key, video_name, script_text, project_id, target_executor_id, placement_pin_worker_id,
                                 scene_count: (.scenes | length),
-                                scenes_kinds: [.scenes[] | .kind],
+                                scene_durations: [.scenes[] | .duration_seconds],
                                 voiceover_paths: .voiceover_paths,
-                                subtitle_tracks_count: (.subtitle_tracks | length),
-                                subtitle_tracks_formats: [.subtitle_tracks[] | .format],
-                                layer_count: (.layers | length),
-                                layer_roles: [.layers[] | .role],
-                                delivery_plan: .delivery_plan}'
+                                audio_tracks: .audio_tracks,
+                                derived_subtitle_tracks: [{
+                                  source: .scenes[0].subtitles.url,
+                                  format: .scenes[0].subtitles.format
+                                }],
+                                delivery_plan: .delivery_plan}' || {
+    log_error "selftest payload summary failed"
+    exit 2
+  }
   log_info "selftest OK"
   exit 0
 fi
@@ -189,11 +290,12 @@ fi
 # ─── dry mode short-circuit ───────────────────────────────────────────────
 if [[ "$MODE" == "dry" ]]; then
   echo "──── FULL-PAYLOAD DRY RUN (mode=dry, no HTTP) ────"
-  printf '%s' "$PAYLOAD" | jq '{idempotency_key, video_name, project_id, target_executor_id,
+  printf '%s' "$PAYLOAD" | jq '{idempotency_key, video_name, project_id, target_executor_id, placement_pin_worker_id,
                                num_scenes: (.scenes | length),
-                               num_layers: (.layers | length),
-                               num_subtitle_tracks: (.subtitle_tracks | length),
-                               num_voiceover_paths: (.voiceover_paths | length),
+                               scene_duration_seconds: ([.scenes[].duration_seconds] | add),
+                               audio_tracks: .audio_tracks,
+                               num_scene_subtitle_sources: ([.scenes[] | select(.subtitles != null) | .subtitles] | length),
+                               num_voiceover_paths: ([.scenes[].voiceover] | length),
                                delivery_plan: .delivery_plan}'
   exit 0
 fi
@@ -335,8 +437,8 @@ TMP_EV="$(mktemp "${EVIDENCE_DIR}/run-XXXXXX.json")"
 
 SCENE_COUNT=$(printf '%s' "$PAYLOAD" | jq '.scenes | length')
 LAYER_COUNT=$(printf '%s' "$PAYLOAD" | jq '.layers | length')
-SUB_COUNT=$(printf '%s' "$PAYLOAD" | jq '.subtitle_tracks | length')
-VO_COUNT=$(printf '%s' "$PAYLOAD" | jq '.voiceover_paths | length')
+SUB_COUNT=$(printf '%s' "$PAYLOAD" | jq '[.scenes[] | select(.subtitles != null) | .subtitles] | length')
+VO_COUNT=$(printf '%s' "$PAYLOAD" | jq '[.scenes[].voiceover] | length')
 
 cat > "$TMP_EV" <<JSON
 {
@@ -351,7 +453,7 @@ cat > "$TMP_EV" <<JSON
   "completed_at": "${COMPLETED_AT}",
   "artifact_url": "${ARTIFACT_URL}",
   "scene_count": ${SCENE_COUNT},
-  "voiceover_paths_count": ${VO_COUNT},
+  "scene_voiceover_count": ${VO_COUNT},
   "subtitle_tracks_count": ${SUB_COUNT},
   "layer_count": ${LAYER_COUNT},
   "smoke_runner_rev": ${SMOKE_PLUCKER_VARS_REV:-3},
@@ -368,7 +470,7 @@ echo "  target_executor_id  : ${FULLPAYLOAD_TARGET_EXECUTOR_ID}"
 echo "  scene_count         : ${SCENE_COUNT}"
 echo "  layer_count         : ${LAYER_COUNT}"
 echo "  subtitle_tracks_ct  : ${SUB_COUNT}"
-echo "  voiceover_paths_ct  : ${VO_COUNT}"
+echo "  scene_voiceover_ct   : ${VO_COUNT}"
 echo "  render_time_ms      : ${render_time_ms:-0}"
 echo "  artifact_bytes      : ${artifact_size_bytes:-0}"
 echo "  evidence            : ${EV_FILE}"

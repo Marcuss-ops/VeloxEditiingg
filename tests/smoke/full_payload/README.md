@@ -5,13 +5,14 @@ VeloxEditingg fleet smoke owner; touches no production code.
 
 ## Files
 
-- `fixtures/scenario.json` — the canned SubmitJobRequest payload. **4 scene**
-  (within the 3–5 range), mixed **ASS+SRT** `subtitle_tracks`, `layers[]` covering
-  all three overlay roles (`role=name` Jackie Chan, `role=important_phrase` "Una
-  scoperta incredibile", `role=overlay` "Mai"), `destination_id=comedy_test`,
-  `target_executor_id=scene.composite.v1@1`. Reused verbatim across runs.
-  `idempotency_key` / `target_executor_id` / `delivery_plan[0].destination_id`
-  are NOT substituted at file-load time; they are overridden per run by
+- `fixtures/scenario.json` — the canned SubmitJobRequest payload for **2 stock
+  scenes of 6 seconds each**, with nested voiceover bindings, a background-music
+  track, one ASS subtitle source (derived into one global track), `delivery_plan`
+  and worker placement pin.
+  `run.sh` resolves the two clips and voiceover from the canonical worker-cert
+  fixture, and requires real registered music, ASS subtitle and worker IDs at
+  runtime. A fresh `idempotency_key` and all asset references plus worker pin,
+  `target_executor_id` and `delivery_plan[0].destination_id` are overridden by
   `run.sh` via `jq` field assignment (no `sed` on JSON).
 - `run.sh` — submitter. Mints an ephemeral M2M key via
   `POST /api/v1/admin/m2m/keys`, POSTs the substituted payload to
@@ -24,6 +25,15 @@ VeloxEditingg fleet smoke owner; touches no production code.
 ## Quick-start
 
 ```sh
+# Supply only IDs returned by the Master asset registry with status READY. The
+# runner validates SHA-256 syntax and duration, but does not replace the required
+# Master-side READY/accessibility preflight. The music and ASS IDs must be
+# 64-character SHA-256 asset IDs; the music must last at least 12 seconds.
+export FULLPAYLOAD_WORKER_ID=host_57_129_132_133
+export FULLPAYLOAD_BACKGROUND_MUSIC_ASSET_ID="replace-with-real-64-hex-music-sha256"
+export FULLPAYLOAD_BACKGROUND_MUSIC_DURATION_SECONDS=12
+export FULLPAYLOAD_SUBTITLE_ASSET_ID="replace-with-real-64-hex-ass-sha256"
+
 # CI shape: render the substituted payload + a short summary, no HTTP.
 tests/smoke/full_payload/run.sh --mode=dry
 
@@ -47,11 +57,14 @@ tests/smoke/full_payload/run.sh
 | `VELOX_MASTER_URL`               | `http://127.0.0.1:8080` | master HTTP base. Trim trailing `/`. |
 | `VELOX_ADMIN_TOKEN`              | _required_ for `--mode=submit` | bearer for `/api/v1/admin/m2m/keys` |
 | `TOKEN_FILE`                     | _unset_                 | dotenv alternative; first `VELOX_ADMIN_TOKEN=` line wins |
-| `FULLPAYLOAD_IDEM_KEY`           | `full-payload-4-scenes-<EPOCH>` | idempotency_key |
 | `FULLPAYLOAD_DESTINATION_ID`     | `comedy_test`           | `delivery_plan[0].destination_id` |
 | `FULLPAYLOAD_TARGET_EXECUTOR_ID` | `scene.composite.v1@1`  | `target_executor_id` |
+| `FULLPAYLOAD_WORKER_ID`          | _required_              | `placement_pin_worker_id` |
+| `FULLPAYLOAD_BACKGROUND_MUSIC_ASSET_ID` | _required_         | registered SHA-256 asset ID |
+| `FULLPAYLOAD_BACKGROUND_MUSIC_DURATION_SECONDS` | _required_ | must be at least 12 seconds |
+| `FULLPAYLOAD_SUBTITLE_ASSET_ID`  | _required_              | registered SHA-256 ASS asset ID |
 | `FULLPAYLOAD_SCENARIO`           | `<self-dir>/fixtures/scenario.json` | absolute path override |
-| `FULLPAYLOAD_EVIDENCE_DIR`       | `<self-dir>/evidence`   | evidence output directory |
+| `FULLPAYLOAD_EVIDENCE_DIR`       | `<self-dir>/evidence`   | evidence output dir |
 | `FULLPAYLOAD_POLL_TIMEOUT_S`     | `240`                   | poll cap (seconds) |
 
 ## Exit codes
@@ -73,11 +86,12 @@ See header in `run.sh`. Quick map:
 `scenario.json` references ONLY asset IDs from
 [`tests/worker-cert/fixtures/assets.json`](../worker-cert/fixtures/assets.json):
 
-| Kind       | Asset IDs                                                          |
-|------------|--------------------------------------------------------------------|
-| voiceover  | `asset-recording-001`, `e2e-narrator-001`                          |
-| clips      | `opening-clip-01`, `main-clip-01`, `aqueduct-clip-01`, `aqueduct-clip-02` |
-| subtitles  | `subtitle-001` (ASS), `subtitle-002` (SRT)                         |
+| Kind       | Source in this smoke |
+|------------|----------------------|
+| voiceover  | `.voiceover[0].asset_id` from `assets.json` |
+| clips      | `.clips[0]` and `.clips[1]` from `assets.json` |
+| background music | `FULLPAYLOAD_BACKGROUND_MUSIC_ASSET_ID` (required runtime SHA-256 for a Master `READY` asset) |
+| subtitles | `FULLPAYLOAD_SUBTITLE_ASSET_ID` (required runtime SHA-256 for a Master `READY` ASS asset; attached to scene 0 and derived into one track) |
 
 Do **NOT** introduce new `asset_id` rows in this directory. If a future scene
 needs an asset that is not yet in the master registry, register it via the
@@ -103,10 +117,10 @@ back-to-back runs in the same epoch second collision-safe. Schema:
   "started_at": "2026-07-28T...",
   "completed_at": "2026-07-28T...",
   "artifact_url": "...",
-  "scene_count": 4,
-  "voiceover_paths_count": 2,
-  "subtitle_tracks_count": 2,
-  "layer_count": 3,
+  "scene_count": 2,
+  "scene_voiceover_count": 2,
+  "subtitle_tracks_count": 1,
+  "layer_count": 0,
   "smoke_runner_rev": 3,
   "written_at": "2026-07-28T..."
 }
@@ -123,8 +137,9 @@ back-to-back runs in the same epoch second collision-safe. Schema:
   rendering with special names + important phrases + highlighted words,
   audio-preservation alongside voiceover).
 - Complements — does NOT replace — [`tests/worker-cert/smoke_one.sh`](../worker-cert/smoke_one.sh),
-  which is the per-worker cert smoke (placement pin). This directory owns the
-  **fleet-wide** matrix payload; `smoke_one.sh` keeps the per-worker shape.
+  which is the per-worker cert smoke. This directory owns the complete
+  **two-scene stock/audio/ASS matrix payload**; `smoke_one.sh` keeps the
+  per-worker shape.
 - Source-of-truth schema:
   [`shared/contract/canonical_payload.go`](../../shared/contract/canonical_payload.go),
   [`DataServer/internal/apiwire/apiwire.go`](../../DataServer/internal/apiwire/apiwire.go)
