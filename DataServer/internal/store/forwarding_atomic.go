@@ -1,0 +1,165 @@
+// Package store provides the SQLite persistence layer for forwarding state.
+package store
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"velox-server/internal/jobs"
+	"velox-server/internal/taskgraph"
+)
+
+// Atomic forwarding operations spanning creator_forwardings and job/task creation.
+
+// ── Atomic Enqueue + Forward ───────────────────────────────────────────
+
+// AtomicForwardAndEnqueue combines the Job+Task+TaskSpec creation AND the
+// forwarding status update into a single SQLite transaction. This guarantees
+// that a crash between the enqueue and the FORWARDED marking cannot leave a
+// forwarded Job with the forwarding row still in FORWARDING, or vice versa.
+//
+// The transaction:
+//  1. CAS: READY_TO_FORWARD → FORWARDING (claim the row)
+//  2. INSERT Job, Task, TaskSpec (same semantics as CreateJobWithTask)
+//  3. CAS: FORWARDING → FORWARDED (set target_job_id = job.ID)
+//
+// If the initial CAS fails (another runner claimed the row), the
+// transaction rolls back and ErrTransitionConflict is returned without
+// any side effects.
+func (s *SQLiteStore) AtomicForwardAndEnqueue(
+	ctx context.Context,
+	forwardingID string,
+	job *jobs.Job,
+	taskSpec *taskgraph.TaskSpec,
+	priority int,
+) error {
+	if forwardingID == "" || job == nil || job.ID == "" {
+		return fmt.Errorf("store: AtomicForwardAndEnqueue: missing required fields")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("AtomicForwardAndEnqueue begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	// 1. CAS: READY_TO_FORWARD → FORWARDING
+	claimResult, err := tx.ExecContext(ctx,
+		`UPDATE creator_forwardings
+		 SET status = 'FORWARDING', updated_at = ?
+		 WHERE forwarding_id = ?
+		   AND status = 'READY_TO_FORWARD'`,
+		now, forwardingID,
+	)
+	if err != nil {
+		return fmt.Errorf("AtomicForwardAndEnqueue claim: %w", err)
+	}
+	affected, _ := claimResult.RowsAffected()
+	if affected == 0 {
+		return ErrTransitionConflict
+	}
+
+	// 2. Delegate Job+Task+TaskSpec creation to the canonical single-writer
+	//    path (CreateJobWithTaskTx) so the SQL lives in exactly one place.
+	creator := NewAtomicJobTaskCreator(s)
+	if err := creator.CreateJobWithTaskTx(ctx, tx, job, taskSpec, priority); err != nil {
+		return fmt.Errorf("AtomicForwardAndEnqueue create job+task: %w", err)
+	}
+
+	// 3. CAS: FORWARDING → FORWARDED
+	forwardResult, err := tx.ExecContext(ctx,
+		`UPDATE creator_forwardings
+		 SET status = 'FORWARDED', target_job_id = ?,
+		     forwarded_at = ?, updated_at = ?
+		 WHERE forwarding_id = ?
+		   AND status = 'FORWARDING'`,
+		job.ID, now, now, forwardingID,
+	)
+	if err != nil {
+		return fmt.Errorf("AtomicForwardAndEnqueue forward: %w", err)
+	}
+	affected, _ = forwardResult.RowsAffected()
+	if affected == 0 {
+		return fmt.Errorf("store: AtomicForwardAndEnqueue: FORWARDING→FORWARDED CAS failed")
+	}
+
+	return tx.Commit()
+}
+
+// MarkCreatorForwardingReadySync transitions a PENDING/POLLING forwarding to
+// READY_TO_FORWARD WITHOUT a (locked_by, lease_id) CAS. This is the
+// synchronous handler path: the HTTP request INSERTed a fresh PENDING row
+// (no lease) and immediately needs to promote it for the atomic enqueue step.
+//
+// Diff vs MarkCreatorForwardingReadyToForward: the latter is the legitimate
+// runner lease-holder promotion (CAS on qualifier+lease_id pair). The sync
+// path has no lease — using a CAS that requires one would never match. So
+// the sync method uses a relaxed guard: forwarding_id + status in
+// (PENDING, POLLING) only. Safe because the sync caller just INSERTed the
+// row in the same logical operation (no other runner can have claimed it
+// yet: PENDING = claimable, POLLING = lock/unlikely-immediately-after-insert).
+//
+// Returns ErrTransitionConflict if the row is not in a promotable state
+// (already READY_TO_FORWARD, FORWARDED, FAILED, BLOCKED, etc.).
+func (s *SQLiteStore) MarkCreatorForwardingReadySync(ctx context.Context, forwardingID, payloadJSON, payloadSHA256 string) error {
+	if forwardingID == "" {
+		return fmt.Errorf("store: MarkCreatorForwardingReadySync: empty forwarding_id")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE creator_forwardings
+		 SET status = 'READY_TO_FORWARD',
+		     source_status = 'completed',
+		     payload_json = ?, payload_sha256 = ?,
+		     locked_by = '', lease_id = '', lease_expires_at = '',
+		     updated_at = ?
+		 WHERE forwarding_id = ?
+		   AND status IN ('PENDING', 'POLLING')`,
+		payloadJSON, payloadSHA256, now, forwardingID,
+	)
+	if err != nil {
+		return fmt.Errorf("store: MarkCreatorForwardingReadySync: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return ErrTransitionConflict
+	}
+	return nil
+}
+
+// MarkCreatorForwardingEnqueueRetry moves a forwarding that failed to enqueue
+// (FORWARDING or READY_TO_FORWARD) to RETRY_WAIT with a backoff delay.
+// This is the enqueue-phase analog of MarkCreatorForwardingRetry (which
+// handles the POLLING phase). CAS on (forwarding_id, status IN enqueue
+// states). Clears lock/lease fields.
+func (s *SQLiteStore) MarkCreatorForwardingEnqueueRetry(ctx context.Context, forwardingID, errorCode, errorMsg string, nextAttemptAt time.Time) error {
+	if forwardingID == "" {
+		return fmt.Errorf("store: MarkCreatorForwardingEnqueueRetry: empty forwarding_id")
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	nextISO := nextAttemptAt.UTC().Format(time.RFC3339)
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE creator_forwardings
+		 SET status = 'RETRY_WAIT',
+		     locked_by = '', lease_id = '', lease_expires_at = '',
+		     next_attempt_at = ?,
+		     last_error_code = ?, last_error_message = ?,
+		     updated_at = ?
+		 WHERE forwarding_id = ?
+		   AND status IN ('FORWARDING', 'READY_TO_FORWARD')`,
+		nextISO, nullIfEmpty(errorCode), nullIfEmpty(errorMsg), now,
+		forwardingID,
+	)
+	if err != nil {
+		return fmt.Errorf("store: MarkCreatorForwardingEnqueueRetry: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return ErrTransitionConflict
+	}
+	return nil
+}
