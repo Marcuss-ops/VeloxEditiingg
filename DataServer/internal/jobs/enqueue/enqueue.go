@@ -46,6 +46,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -60,6 +61,7 @@ import (
 	"velox-shared/payload"
 
 	"github.com/google/uuid"
+	"github.com/mattn/go-sqlite3"
 )
 
 // Enqueuer bundles the atomic creator + jobs reader + the asset service
@@ -170,6 +172,16 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 	}
 
 	if err := e.Creator.CreateJobWithTask(ctx, job, spec, priority); err != nil {
+		// The pre-check above is only an optimization. Concurrent retries
+		// can both miss it and race on the authoritative jobs.job_id
+		// constraint. A losing deterministic retry must converge on the
+		// committed row after its transaction rolls back; unrelated DB
+		// errors remain hard failures.
+		if isJobIDUniqueConflict(err) && e.Jobs != nil {
+			if existing, getErr := e.Jobs.Get(ctx, jobID); getErr == nil && existing != nil && existing.ID == jobID {
+				return buildIdempotentResponse(normalized, existing), nil
+			}
+		}
 		return nil, fmt.Errorf("enqueue: atomic create: %w", err)
 	}
 
@@ -181,6 +193,30 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 	// Finalization remains responsible for resolving the durable plan when
 	// delivery records are created.
 	return buildSceneVideoResponse(normalized), nil
+}
+
+// isJobIDUniqueConflict identifies only a SQLite uniqueness conflict for
+// the canonical jobs.job_id identity. The transaction owner has already
+// rolled back before this helper is reached, so a successful lookup is a
+// safe idempotent retry confirmation. Other constraint failures must not be
+// converted into success.
+func isJobIDUniqueConflict(err error) bool {
+	if err == nil || !strings.Contains(err.Error(), "jobs.job_id") {
+		return false
+	}
+	var sqliteErr sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		return isJobIdentityConstraint(sqliteErr.ExtendedCode)
+	}
+	var sqliteErrPtr *sqlite3.Error
+	if errors.As(err, &sqliteErrPtr) && sqliteErrPtr != nil {
+		return isJobIdentityConstraint(sqliteErrPtr.ExtendedCode)
+	}
+	return false
+}
+
+func isJobIdentityConstraint(code sqlite3.ErrNoExtended) bool {
+	return code == sqlite3.ErrConstraintUnique || code == sqlite3.ErrConstraintPrimaryKey
 }
 
 // enforceDeliveryPlanPrecondition resolves the per-job plan and applies
