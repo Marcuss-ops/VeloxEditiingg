@@ -1,13 +1,16 @@
+// Package store / sqlite_task_lease_claim.go — lease claim and release.
+// Extracted from sqlite_task_lease.go: the CAS-gated claim
+// (ClaimNextReadyTask, ClaimTaskForWorkerAtomic) and the CAS-gated
+// release (ReleaseLease) plus the shared defaultTaskLeaseTTL.
+//
+// Lease management on the tasks table spans claim (CAS-gated to
+// LEASED), renew (sqlite_task_lease_renew.go), and expire/reap
+// (sqlite_task_lease_expire.go). All multi-row writes are committed in
+// a single tx so the audit §9.5 invariant ("Task RUNNING ⇒ Attempt
+// RUNNING") cannot be violated by a process crash between statements.
+// Single-row book-keeping CAS (Lease in CRUD; SetStatus/Start/Fail/
+// IncrementAttempt/Delete in CRUD) stay in their respective files.
 package store
-
-// sqlite_task_lease.go: lease management on the tasks table — claim
-// (CAS-gated to LEASED), renew, release, reaper scan, and reap-close.
-// All multi-row writes are committed in a single tx so the audit §9.5
-// invariant ("Task RUNNING ⇒ Attempt RUNNING") cannot be violated by
-// a process crash between statements. Single-row book-keeping CAS
-// (Lease in CRUD; SetStatus/Start/Fail/IncrementAttempt/Delete in
-// CRUD) stay in their respective files.
-// Extracted from sqlite_task_repository.go (commit d7eff6f → next).
 
 import (
 	"context"
