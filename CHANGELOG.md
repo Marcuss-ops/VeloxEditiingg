@@ -27,6 +27,16 @@ tracked as a followup for the owning session to resolve when the
 `assets` WIP is completed. The post-split verification rule remains
 active for future splits; the working tree was left untouched.
 
+**RESOLVED** — the owning session committed `70c7dc9f feat(security):
+harden all remote input acquisition`, and the committed
+`assets/service.go` does **not** import `metrics` (verified at HEAD).
+Full-module verification now passes: `go test -count=1 ./...` in
+`DataServer` is green, `internal/metrics` passes (0.685s), and the
+workspace (`DataServer` + `worker-agent-go` + `shared`) builds clean.
+The remaining untracked `assets` files (`video_segments.go`,
+`video_trimmer.go` + tests) are additive work-in-progress and no
+longer introduce the cycle.
+
 Separate event (not part of this finding): the first full-module run
 also surfaced a transient `TestGenerateWithImages_UsesCreatorStageWhenConfigured`
 failure in `internal/handlers/server/script`, which passed 3/3 in
