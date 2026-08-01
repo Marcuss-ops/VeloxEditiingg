@@ -67,6 +67,7 @@ func buildTasks(p *persistenceDeps) (*taskDeps, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: observability service: %w", err)
 	}
+	obsSvc.WithAudit(p.SQLite)
 
 	return &taskDeps{
 		TaskRepository:    taskRepo,

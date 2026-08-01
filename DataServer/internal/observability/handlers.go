@@ -69,6 +69,23 @@ func (h *Handlers) JobDetailHandler() gin.HandlerFunc {
 	}
 }
 
+// JobAuditHandler returns the append-only audit history for a job or task.
+func (h *Handlers) JobAuditHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("job_id")
+		if id == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "missing_job_id"})
+			return
+		}
+		events, err := h.svc.ListAudit(c.Request.Context(), id, 1000)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "audit_failed", "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"job_id": id, "events": events})
+	}
+}
+
 // WorkersHandler returns the per-worker performance list.
 //
 //	GET /api/observability/workers

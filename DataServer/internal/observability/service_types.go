@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"velox-server/internal/audittrail"
 	"velox-server/internal/jobs"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
@@ -50,6 +51,10 @@ type VersionMetricsReader interface {
 	// with the given git_sha. Returns an empty slice when no attempts
 	// match (not an error).
 	ListMetricsByGitSHA(ctx context.Context, gitSHA string) ([]VersionMetricSnapshot, error)
+}
+
+type AuditReader interface {
+	ListAuditEvents(context.Context, string, int) ([]audittrail.Event, error)
 }
 
 // VersionMetricSnapshot is a single attempt's metric values indexed
@@ -100,6 +105,7 @@ type Service struct {
 	jobs           JobReader
 	workers        WorkerReader
 	versionMetrics VersionMetricsReader
+	audit          AuditReader
 }
 
 // NewService constructs the observability aggregation service.
@@ -123,6 +129,15 @@ func (s *Service) WithWorkers(r WorkerReader) *Service { s.workers = r; return s
 
 // WithVersionMetrics sets the version metrics reader for regression comparison.
 func (s *Service) WithVersionMetrics(r VersionMetricsReader) *Service { s.versionMetrics = r; return s }
+
+func (s *Service) WithAudit(r AuditReader) *Service { s.audit = r; return s }
+
+func (s *Service) ListAudit(ctx context.Context, resourceID string, limit int) ([]audittrail.Event, error) {
+	if s.audit == nil {
+		return []audittrail.Event{}, nil
+	}
+	return s.audit.ListAuditEvents(ctx, resourceID, limit)
+}
 
 // SummarizeTask returns the aggregated execution diagnostics for a task.
 func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionSummary, error) {
