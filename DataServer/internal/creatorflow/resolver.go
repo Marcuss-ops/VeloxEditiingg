@@ -50,6 +50,7 @@ package creatorflow
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -58,6 +59,7 @@ import (
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/routing"
 	"velox-server/internal/store"
+	"velox-shared/publication"
 )
 
 // Resolver bundles the canonical dependencies for Resolve. Holding them on
@@ -194,6 +196,75 @@ func (r *Resolver) HasDBAccess() bool {
 // old free function was an ad-hoc compatibility shim that bypassed
 // master-URL rewriting. The Resolver applies that step exactly once
 // for every caller.
+// preparePayloadWithControlPlaneDelivery builds the short-lived enqueue
+// envelope. Delivery routing is present only long enough for enqueue's
+// validation/parser; compileSceneVideoJob removes it before TaskSpec.Payload
+// is persisted for the renderer. Publication specs never enter this map.
+func preparePayloadWithControlPlaneDelivery(rendererPayload, deliveryPlan map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(rendererPayload)+len(deliveryPlan))
+	for key, value := range rendererPayload {
+		out[key] = value
+	}
+	for key, value := range deliveryPlan {
+		out[key] = value
+	}
+	return out
+}
+
+func deliveryPlanFromPayload(payload map[string]interface{}) map[string]interface{} {
+	if payload == nil {
+		return nil
+	}
+	out := make(map[string]interface{})
+	for _, key := range []string{
+		"delivery_plan",
+		"delivery_destination_ids",
+		"delivery_destination_id",
+		"delivery_metadata",
+		"destinations",
+		"delivery_destinations",
+		"destination_ids",
+		"destination_id",
+	} {
+		if value, ok := payload[key]; ok && value != nil {
+			out[key] = value
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func clonePublicationSpecs(specs []publication.Spec) []map[string]interface{} {
+	if len(specs) == 0 {
+		return nil
+	}
+	out := make([]map[string]interface{}, 0, len(specs))
+	for _, spec := range specs {
+		encoded, err := json.Marshal(spec)
+		if err != nil {
+			continue
+		}
+		var value map[string]interface{}
+		if err := json.Unmarshal(encoded, &value); err == nil {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func cloneControlPlaneMap(input map[string]interface{}) map[string]interface{} {
+	if input == nil {
+		return nil
+	}
+	out := make(map[string]interface{}, len(input))
+	for key, value := range input {
+		out[key] = value
+	}
+	return out
+}
+
 func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOutput, error) {
 	if r == nil || r.enqueuer == nil || r.forwardRepo == nil {
 		return nil, fmt.Errorf("creatorflow: Resolve: resolver dependencies missing")
@@ -206,6 +277,9 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOut
 	}
 	if !enqueue.ShouldForwardPipelineResult(req.Payload) {
 		return nil, ErrResolverNotComplete
+	}
+	if len(req.DeliveryPlan) == 0 {
+		req.DeliveryPlan = deliveryPlanFromPayload(req.Payload)
 	}
 
 	targetExecutor := req.TargetExecutorID
@@ -256,11 +330,20 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOut
 		return nil, err
 	}
 
-	// 6. Compile Job + TaskSpec.
-	job, spec, priority, err := r.enqueuer.PrepareJobAndTask(ctx, workerPayload, costmodel.DefaultRequirements())
+	// 6. Compile Job + TaskSpec. The delivery envelope is supplied to
+	// enqueue only as a separate control-plane input. PrepareJobAndTask
+	// validates it and compiles TaskSpec.DeliveryPlan, while its renderer
+	// projection removes the same fields from TaskSpec.Payload.
+	preparePayload := preparePayloadWithControlPlaneDelivery(workerPayload, req.DeliveryPlan)
+	job, spec, priority, err := r.enqueuer.PrepareJobAndTask(ctx, preparePayload, costmodel.DefaultRequirements())
 	if err != nil {
 		return nil, fmt.Errorf("creatorflow: Resolve prepare job/task: %w", err)
 	}
+	// Delivery routing belongs to the control plane. Keep it out of the
+	// renderer payload while attaching the separately-carried envelope to
+	// TaskSpec, where AtomicJobTaskCreator persists job_delivery_plans.
+	spec.DeliveryPlan = cloneControlPlaneMap(req.DeliveryPlan)
+	spec.PublicationSpecs = clonePublicationSpecs(req.PublicationSpecs)
 
 	// 7. Atomic FORWARDED transition.
 	if err := r.forwardRepo.AtomicForwardAndEnqueue(ctx, forwardingID, job, spec, priority); err != nil {

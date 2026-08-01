@@ -88,6 +88,7 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 		SourceJobID:      lease.SourceJobID,
 		TargetExecutorID: lease.TargetExecutorID,
 		Payload:          result,
+		DeliveryPlan:     deliveryPlanEnvelope(result),
 	})
 	if err != nil {
 		if errors.Is(err, creatorflow.ErrResolverNotComplete) {
@@ -112,4 +113,32 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 		lease.ForwardingID, out.JobID, lease.SourceProvider)
 	r.metrics.Forwarded.Add(1)
 	return nil
+}
+
+// deliveryPlanEnvelope extracts only control-plane routing fields before the
+// runner hands the result to the canonical resolver. The renderer payload is
+// still projected and stripped by the resolver/enqueue boundary.
+func deliveryPlanEnvelope(payload map[string]interface{}) map[string]interface{} {
+	if payload == nil {
+		return nil
+	}
+	out := make(map[string]interface{})
+	for _, key := range []string{
+		"delivery_plan",
+		"delivery_destination_ids",
+		"delivery_destination_id",
+		"delivery_metadata",
+		"destinations",
+		"delivery_destinations",
+		"destination_ids",
+		"destination_id",
+	} {
+		if value, ok := payload[key]; ok && value != nil {
+			out[key] = value
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

@@ -17,9 +17,10 @@ import (
 // normalization, pipeline-result building, and remote-engine DTO projection.
 //
 // Lifecycle identity and producer labels are excluded from the projection;
-// render inputs and legacy routing are not. This makes a field silently
-// dropped by one ingress a failing contract test rather than a production
-// regression discovered only after a worker claim.
+// render inputs are. Delivery routing is asserted separately on the
+// control-plane envelope, so it cannot silently cross the renderer boundary.
+// This makes a field silently dropped by one ingress a failing contract test
+// rather than a production regression discovered only after a worker claim.
 func TestCanonicalIngressParity(t *testing.T) {
 	retryBudget := 3
 	req := SubmitJobRequest{
@@ -65,13 +66,17 @@ func TestCanonicalIngressParity(t *testing.T) {
 	}
 
 	rawAPI := submitRequestToRawPayload(&req)
-	apiPayload := (&Handlers{}).NormalizeExternalJobSubmission(req).WorkerPayload
+	canonicalAPI := (&Handlers{}).NormalizeExternalJobSubmission(req)
+	apiPayload := canonicalAPI.WorkerPayload
 	if apiPayload == nil {
 		t.Fatal("API projection returned nil worker payload")
 	}
+	if canonicalAPI.DeliveryPlan["delivery_plan"] == nil {
+		t.Fatalf("API control-plane delivery plan was lost: %#v", canonicalAPI.DeliveryPlan)
+	}
 	for _, key := range []string{
 		"video_name", "script_text", "scenes_json", "voiceover_paths",
-		"audio_tracks", "subtitle_tracks", "layers", "delivery_plan",
+		"audio_tracks", "subtitle_tracks", "layers",
 	} {
 		if _, ok := apiPayload[key]; !ok {
 			t.Fatalf("API baseline is missing required common worker field %q", key)
@@ -141,14 +146,13 @@ func canonicalWorkerProjection(payload map[string]interface{}) map[string]interf
 		items           = "items"
 		clips           = "clips"
 		images          = "images"
-		deliveryPlan    = "delivery_plan"
 	)
 	projection := make(map[string]interface{})
 	for _, key := range []string{
 		videoName, scriptText, scenesJSON, voiceoverPaths, audioTracks,
 		subtitleTracks, layers, videoMetadata, outputPath, driveOutput,
 		audioLanguage, videoMode, sceneImagePaths, imageSourceMap, items,
-		clips, images, deliveryPlan,
+		clips, images,
 	} {
 		value, ok := payload[key]
 		if !ok {

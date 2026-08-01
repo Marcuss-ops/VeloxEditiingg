@@ -7,13 +7,6 @@
     }
   ],
   "correlation_id": "golden-worker-job-001",
-  "delivery_plan": [
-    {
-      "destination_id": "youtube-en",
-      "priority": 1,
-      "retry_budget": 3
-    }
-  ],
   "job_id": "golden-worker-job-001",
   "job_run_id": "golden-worker-job-001",
   "layers": [

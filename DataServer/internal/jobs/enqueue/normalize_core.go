@@ -56,7 +56,10 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 		if err := validateVideoMetadata(metadata); err != nil {
 			return nil, err
 		}
-		base.VideoMetadata = cloneMetadataMap(metadata)
+		// Keep only renderer-owned technical settings. Publication fields
+		// are validated at intake but never enter the typed render payload,
+		// render-plan compiler, persisted TaskSpec, or worker wire payload.
+		base.VideoMetadata = rendererVideoMetadata(metadata)
 	}
 
 	scriptText := strings.TrimSpace(base.ScriptText)

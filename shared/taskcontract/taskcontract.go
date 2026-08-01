@@ -26,11 +26,19 @@ var ErrInvalidSpec = fmt.Errorf("taskcontract: invalid spec")
 // must be validated before persistence. A deterministic spec_hash is
 // stored alongside for integrity verification.
 type TaskSpec struct {
-	Version              int                    `json:"version"`
-	JobID                string                 `json:"job_id"`
-	ExecutorID           string                 `json:"executor_id"`
-	Payload              map[string]interface{} `json:"payload,omitempty"`
-	RequiredCapabilities []string               `json:"required_capabilities,omitempty"`
+	Version    int                    `json:"version"`
+	JobID      string                 `json:"job_id"`
+	ExecutorID string                 `json:"executor_id"`
+	Payload    map[string]interface{} `json:"payload,omitempty"`
+	// DeliveryPlan is control-plane routing data. It is persisted into
+	// job_delivery_plans and must never be sent to the renderer in Payload.
+	// The map retains the canonical delivery_plan/legacy alias envelope so
+	// the shared parser remains the single shape owner.
+	DeliveryPlan map[string]interface{} `json:"delivery_plan,omitempty"`
+	// PublicationSpecs are control-plane publication intents. They are
+	// retained with the canonical spec but are never included in Payload.
+	PublicationSpecs     []map[string]interface{} `json:"publication_specs,omitempty"`
+	RequiredCapabilities []string                 `json:"required_capabilities,omitempty"`
 }
 
 // Validate checks the task spec for structural correctness.

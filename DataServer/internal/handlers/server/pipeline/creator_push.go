@@ -10,6 +10,7 @@ import (
 
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/remoteengine"
+	"velox-shared/publication"
 )
 
 const defaultCreatorSourceProvider = "creator"
@@ -51,6 +52,14 @@ type normalizedCreatorPush struct {
 	SourceJobID      string
 	TargetExecutorID string
 	WorkerPayload    map[string]interface{}
+	// DeliveryPlan is control-plane routing data. It is never part of
+	// WorkerPayload and is passed separately to creatorflow.Resolver.
+	DeliveryPlan map[string]interface{}
+
+	// PublicationSpecs are control-plane delivery intents. They are
+	// intentionally separate from WorkerPayload and must never be serialized
+	// into the renderer task payload sent to the C++ engine.
+	PublicationSpecs []publication.Spec
 }
 
 // CanonicalCompletedPayload is the typed struct every intake path
@@ -97,6 +106,7 @@ func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush
 		return nil, fmt.Errorf("payload is required")
 	}
 
+	deliveryPlan := extractDeliveryPlanEnvelope(req.Payload)
 	dto, err := remoteengine.ParseRemotePipelineResult(req.Payload)
 	if err != nil {
 		return nil, fmt.Errorf("parse creator payload: %w", err)
@@ -132,6 +142,8 @@ func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush
 		SourceJobID:      sourceJobID,
 		TargetExecutorID: targetExecutorID,
 		WorkerPayload:    workerPayload,
+		DeliveryPlan:     deliveryPlan,
+		PublicationSpecs: nil,
 	}, nil
 }
 
@@ -149,6 +161,8 @@ func (h *Handlers) resolveCompletedPayload(
 	sourceJobID string,
 	targetExecutorID string,
 	result map[string]interface{},
+	deliveryPlan map[string]interface{},
+	publicationSpecs []publication.Spec,
 ) (map[string]interface{}, error) {
 	if h.resolver == nil {
 		return nil, fmt.Errorf("pipeline handler requires a wired resolver (composition root MUST pass creatorflow.Resolver)")
@@ -172,6 +186,8 @@ func (h *Handlers) resolveCompletedPayload(
 		SourceJobID:      sourceJobID,
 		TargetExecutorID: strings.TrimSpace(targetExecutorID),
 		Payload:          result,
+		DeliveryPlan:     deliveryPlan,
+		PublicationSpecs: publicationSpecs,
 	})
 	if err != nil {
 		// Defense-in-depth log hygiene: errors from the resolver
@@ -207,6 +223,31 @@ func (h *Handlers) resolveCompletedPayload(
 // firstStringResolver reads the first non-empty string value from a
 // map across the provided keys. Package-private helper (no tests
 // outside this package should depend on it directly).
+func extractDeliveryPlanEnvelope(payload map[string]interface{}) map[string]interface{} {
+	if payload == nil {
+		return nil
+	}
+	out := make(map[string]interface{})
+	for _, key := range []string{
+		"delivery_plan",
+		"delivery_destination_ids",
+		"delivery_destination_id",
+		"delivery_metadata",
+		"destinations",
+		"delivery_destinations",
+		"destination_ids",
+		"destination_id",
+	} {
+		if value, ok := payload[key]; ok && value != nil {
+			out[key] = value
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func firstStringResolver(m map[string]interface{}, keys ...string) string {
 	for _, key := range keys {
 		if v, ok := m[key]; ok {
@@ -242,9 +283,10 @@ func (h *Handlers) CreatorPush() gin.HandlerFunc {
 		forwarded, err := h.resolveCompletedPayload(
 			c.Request.Context(),
 			normalized.SourceProvider,
-			normalized.SourceJobID,
-			normalized.TargetExecutorID,
+			normalized.SourceJobID, normalized.TargetExecutorID,
 			normalized.WorkerPayload,
+			normalized.DeliveryPlan,
+			normalized.PublicationSpecs,
 		)
 		if err != nil {
 			// P0 contract: every resolver-layer error is mapped to

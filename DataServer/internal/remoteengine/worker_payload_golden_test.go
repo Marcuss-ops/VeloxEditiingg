@@ -159,7 +159,7 @@ func TestToWorkerPayload_Golden(t *testing.T) {
 		t.Fatalf("worker payload differs from golden %s:\n--- got ---\n%s--- want ---\n%s", goldenPath, encoded, want)
 	}
 
-	for _, key := range []string{"publications", "metadata", "title", "description", "privacy", "privacy_status", "publish_at"} {
+	for _, key := range []string{"publications", "metadata", "title", "description", "privacy", "privacy_status", "publish_at", "delivery_plan", "destination_id", "destination_ids"} {
 		if _, present := payload[key]; present {
 			t.Fatalf("publication field %q leaked into worker payload", key)
 		}

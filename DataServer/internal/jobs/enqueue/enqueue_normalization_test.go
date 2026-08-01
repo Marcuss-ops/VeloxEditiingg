@@ -164,7 +164,7 @@ func TestBuildPipelinePayload(t *testing.T) {
 		t.Parallel()
 		result := map[string]interface{}{
 			"status": "completed", "result": map[string]interface{}{
-				"title": "Pipeline Video", "script_text": "Test script.", "json_path": jsonPath,
+				"video_name": "Pipeline Video", "script_text": "Test script.", "json_path": jsonPath,
 				"voiceover": map[string]interface{}{"local_path": voicePath},
 			},
 		}
@@ -189,7 +189,7 @@ func TestBuildPipelinePayload(t *testing.T) {
 		os.WriteFile(mdPath, []byte("# Title\n\nContent."), 0o644)
 		result := map[string]interface{}{
 			"status": "completed", "result": map[string]interface{}{
-				"title": "MD Video", "markdown_path": mdPath, "json_path": jsonPath,
+				"video_name": "MD Video", "markdown_path": mdPath, "json_path": jsonPath,
 				"voiceover": map[string]interface{}{"local_path": voicePath},
 			},
 		}
@@ -207,7 +207,7 @@ func TestBuildPipelinePayload(t *testing.T) {
 		os.WriteFile(v2, []byte("d"), 0o644)
 		result := map[string]interface{}{
 			"status": "completed", "result": map[string]interface{}{
-				"title": "Multi", "script_text": "Text.", "json_path": jsonPath,
+				"video_name": "Multi", "script_text": "Text.", "json_path": jsonPath,
 				"voiceover_paths": []string{v1, v2},
 			},
 		}
@@ -221,7 +221,7 @@ func TestBuildPipelinePayload(t *testing.T) {
 	t.Run("flat", func(t *testing.T) {
 		t.Parallel()
 		result := map[string]interface{}{
-			"title": "Flat", "script_text": "Flat script.", "json_path": jsonPath, "voiceover_path": voicePath,
+			"video_name": "Flat", "script_text": "Flat script.", "json_path": jsonPath, "voiceover_path": voicePath,
 		}
 		payload, err := BuildPipelinePayload(result)
 		if err != nil {
@@ -239,9 +239,9 @@ func TestBuildPipelinePayload(t *testing.T) {
 			result map[string]interface{}
 		}{
 			{"nil", nil},
-			{"no_voiceover", map[string]interface{}{"status": "completed", "result": map[string]interface{}{"title": "X", "json_path": jsonPath}}},
+			{"no_voiceover", map[string]interface{}{"status": "completed", "result": map[string]interface{}{"video_name": "X", "json_path": jsonPath}}},
 			{"no_title", map[string]interface{}{"status": "completed", "result": map[string]interface{}{"json_path": jsonPath, "voiceover": map[string]interface{}{"local_path": voicePath}}}},
-			{"no_scenes", map[string]interface{}{"status": "completed", "result": map[string]interface{}{"title": "X", "json_path": jsonPath, "voiceover": map[string]interface{}{"local_path": voicePath}}}},
+			{"no_scenes", map[string]interface{}{"status": "completed", "result": map[string]interface{}{"video_name": "X", "json_path": jsonPath, "voiceover": map[string]interface{}{"local_path": voicePath}}}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				t.Parallel()

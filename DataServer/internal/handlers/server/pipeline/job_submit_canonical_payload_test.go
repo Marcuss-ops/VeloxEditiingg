@@ -36,11 +36,12 @@ import (
 //	    scene list with text + duration_seconds + clip_link / image_link
 //	    fields carried through.
 //
-// (10) worker_payload["delivery_plan"]     — preserved as the
+// (10) canonical.DeliveryPlan              — preserved as the
 //
-//	canonical shape (entry-level {destination_id, priority,
-//	retry_budget, metadata}); ToWorkerPayload base-copies
-//	delivery_plan because the typed DTO does NOT own it.
+//	control-plane shape (entry-level {destination_id, priority,
+//	retry_budget, metadata}); the renderer WorkerPayload must not
+//
+// carry delivery routing.
 func TestNormalizeExternalJobSubmission_ProducesCanonicalPayload(t *testing.T) {
 	t.Parallel()
 
@@ -106,10 +107,13 @@ func TestNormalizeExternalJobSubmission_ProducesCanonicalPayload(t *testing.T) {
 	if !ok || scenesJSON == "" {
 		t.Errorf("worker_payload[scenes_json] missing or empty: %v", wp["scenes_json"])
 	}
-	// (10) delivery_plan: preserved as the entry-shape map[]interface{}.
-	dp, ok := wp["delivery_plan"].([]interface{})
-	if !ok || len(dp) != 1 {
-		t.Errorf("worker_payload[delivery_plan] = %v, want 1 entry", wp["delivery_plan"])
+	// (10) renderer payload must not carry publication metadata. Legacy
+	// delivery routing, when present, is allowed only without metadata.
+	if _, present := wp["video_metadata"]; present {
+		t.Errorf("worker_payload contains video_metadata: %v", wp["video_metadata"])
+	}
+	if _, present := wp["publications"]; present {
+		t.Errorf("worker_payload contains publications: %v", wp["publications"])
 	}
 }
 
@@ -156,6 +160,11 @@ func TestCanonicalPayloadParity_PipelinePreservesCanonicalKeys(t *testing.T) {
 		if value == nil || strings.HasPrefix(key, "_") {
 			continue
 		}
+		// Delivery routing is carried by CanonicalCompletedPayload.DeliveryPlan,
+		// not by the renderer WorkerPayload. Its boundary is asserted below.
+		if key == "delivery_plan" {
+			continue
+		}
 		if !contract.IsCanonicalKey(key) {
 			t.Errorf("pipeline raw payload emitted non-canonical key %q", key)
 			continue
@@ -184,6 +193,15 @@ func TestCanonicalPayloadParity_PipelinePreservesCanonicalKeys(t *testing.T) {
 			t.Errorf("pipeline key %q changed during worker projection: raw=%s worker=%s", key, rawJSON, workerJSON)
 		}
 	}
+
+	dp, ok := canonical.DeliveryPlan["delivery_plan"].([]interface{})
+	if !ok || len(dp) != 1 {
+		t.Fatalf("control-plane delivery_plan shape wrong: %v", canonical.DeliveryPlan["delivery_plan"])
+	}
+	if _, leaked := canonical.WorkerPayload["delivery_plan"]; leaked {
+		t.Fatalf("delivery_plan leaked into renderer WorkerPayload: %#v", canonical.WorkerPayload["delivery_plan"])
+	}
+
 }
 
 // TestNormalizeExternalJobSubmission_MatchesCreatorPushShape is the
@@ -326,22 +344,24 @@ func TestNormalizeExternalJobSubmission_MatchesCreatorPushShape(t *testing.T) {
 		}
 	}
 
-	// delivery_plan: both must be a 1-entry []interface{} with
-	// destination_id == "drive". exact priority / retry_budget values
-	// are passed through verbatim from buildWorkerPayloadFromSubmit /
-	// ToWorkerPayload, so we lock just the destination.
-	for label, payload := range map[string]map[string]interface{}{
-		"submit":  submitCanonical.WorkerPayload,
-		"creator": creatorCanonical.WorkerPayload,
+	// Delivery routing is control-plane data. Both canonical intake paths
+	// must preserve a 1-entry envelope with destination_id == "drive",
+	// while neither renderer WorkerPayload may contain delivery_plan.
+	for label, canonical := range map[string]*CanonicalCompletedPayload{
+		"submit":  submitCanonical,
+		"creator": creatorCanonical,
 	} {
-		dp, ok := payload["delivery_plan"].([]interface{})
+		dp, ok := canonical.DeliveryPlan["delivery_plan"].([]interface{})
 		if !ok || len(dp) != 1 {
-			t.Errorf("%s delivery_plan shape wrong: %v", label, payload["delivery_plan"])
+			t.Errorf("%s control-plane delivery_plan shape wrong: %v", label, canonical.DeliveryPlan["delivery_plan"])
 			continue
 		}
 		entry, ok := dp[0].(map[string]interface{})
 		if !ok || entry["destination_id"] != "drive" {
-			t.Errorf("%s delivery_plan[0] destination_id wrong: %v", label, entry["destination_id"])
+			t.Errorf("%s control-plane delivery_plan[0] destination_id wrong: %v", label, entry["destination_id"])
+		}
+		if _, leaked := canonical.WorkerPayload["delivery_plan"]; leaked {
+			t.Errorf("%s delivery_plan leaked into renderer WorkerPayload: %#v", label, canonical.WorkerPayload["delivery_plan"])
 		}
 	}
 }
@@ -349,13 +369,13 @@ func TestNormalizeExternalJobSubmission_MatchesCreatorPushShape(t *testing.T) {
 // TestNormalizeExternalJobSubmission_OmittedRetryBudgetDefaultsToThree
 // locks the *int boundary contract for the omitted case: a client
 // that does not supply retry_budget on a delivery_plan entry MUST
-// end up with the OpenAPI default (3) stamped into the worker
-// payload. This is the "client-friendly" branch — most callers will
+// end up with the OpenAPI default (3) stamped into the control-plane
+// envelope. This is the "client-friendly" branch — most callers will
 // not bother declaring retry_budget at all — and getting a 0
 // (silent int default) here would silently bypass retry enforcement
 // on every entry the client doesn't annotate.
 //
-// Asserted by reading back the generated worker_payload's
+// Asserted by reading back the generated control-plane delivery envelope's
 // delivery_plan entry map and confirming retry_budget == 3.
 func TestNormalizeExternalJobSubmission_OmittedRetryBudgetDefaultsToThree(t *testing.T) {
 	t.Parallel()
@@ -371,9 +391,9 @@ func TestNormalizeExternalJobSubmission_OmittedRetryBudgetDefaultsToThree(t *tes
 	}
 
 	canonical := (&Handlers{}).NormalizeExternalJobSubmission(req)
-	dp, ok := canonical.WorkerPayload["delivery_plan"].([]interface{})
+	dp, ok := canonical.DeliveryPlan["delivery_plan"].([]interface{})
 	if !ok || len(dp) != 1 {
-		t.Fatalf("delivery_plan shape wrong: %v", canonical.WorkerPayload["delivery_plan"])
+		t.Fatalf("control-plane delivery_plan shape wrong: %v", canonical.DeliveryPlan["delivery_plan"])
 	}
 	entry, ok := dp[0].(map[string]interface{})
 	if !ok {
@@ -387,14 +407,14 @@ func TestNormalizeExternalJobSubmission_OmittedRetryBudgetDefaultsToThree(t *tes
 // TestNormalizeExternalJobSubmission_ExplicitRetryBudgetZeroPreserved
 // locks the *int boundary contract for the explicit-zero case:
 // a client that sends {"retry_budget": 0} MUST have that value
-// preserved verbatim into the worker payload, not silently merged
-// with the omitted default (3). This is the actual point of the
+// preserved verbatim into the control-plane envelope, not silently
+// merged with the omitted default (3). This is the actual point of the
 // int→*int refactor — without it, an operator who tries to disable
 // retries on a specific destination would be silently overridden
 // on every request.
 //
-// Asserted by reading back the worker_payload's delivery_plan
-// entry map and confirming retry_budget == 0 (NOT 3).
+// Asserted by reading back the control-plane delivery envelope's
+// delivery_plan entry map and confirming retry_budget == 0 (NOT 3).
 func TestNormalizeExternalJobSubmission_ExplicitRetryBudgetZeroPreserved(t *testing.T) {
 	t.Parallel()
 
@@ -410,9 +430,9 @@ func TestNormalizeExternalJobSubmission_ExplicitRetryBudgetZeroPreserved(t *test
 	}
 
 	canonical := (&Handlers{}).NormalizeExternalJobSubmission(req)
-	dp, ok := canonical.WorkerPayload["delivery_plan"].([]interface{})
+	dp, ok := canonical.DeliveryPlan["delivery_plan"].([]interface{})
 	if !ok || len(dp) != 1 {
-		t.Fatalf("delivery_plan shape wrong: %v", canonical.WorkerPayload["delivery_plan"])
+		t.Fatalf("control-plane delivery_plan shape wrong: %v", canonical.DeliveryPlan["delivery_plan"])
 	}
 	entry, ok := dp[0].(map[string]interface{})
 	if !ok {

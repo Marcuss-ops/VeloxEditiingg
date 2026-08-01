@@ -113,10 +113,11 @@ func ParseRemotePipelineResult(raw map[string]interface{}) (*RemotePipelineResul
 // receives a payload DERIVED from the typed DTO, not the raw remote map
 // passed through unchecked.
 //
-// The merge strategy preserves all fields from the flattened raw map
-// (so delivery_plan, output_path, and other non-DTO fields are not lost)
-// while overlaying the typed DTO fields on top — the typed values take
-// precedence, having been validated and normalized by ParseRemotePipelineResult.
+// The merge strategy preserves render-only fields from the flattened raw map
+// (for example output_path) while overlaying the typed DTO fields on top —
+// the typed values take precedence, having been validated and normalized by
+// ParseRemotePipelineResult. Control-plane publication and delivery fields
+// are removed at the renderer boundary below.
 //
 // Overlaid fields include:
 //   - job_id / trace_id / job_run_id / correlation_id (from RemoteJobID)
@@ -131,8 +132,9 @@ func (r *RemotePipelineResult) ToWorkerPayload() map[string]interface{} {
 		return map[string]interface{}{}
 	}
 
-	// Start with the flattened raw map as a base so non-DTO fields
-	// (delivery_plan, output_path, etc.) are preserved.
+	// Start with the flattened raw map as a base so render-only fields
+	// (such as output paths) are preserved. Control-plane data is removed
+	// before the map can reach enqueue/C++.
 	m := map[string]interface{}{}
 	if r.Raw != nil {
 		flat := flattenResult(r.Raw)
@@ -185,24 +187,74 @@ func (r *RemotePipelineResult) ToWorkerPayload() map[string]interface{} {
 		m["voiceover_paths"] = merged
 	}
 
-	if r.Metadata.Title != "" || r.Metadata.Description != "" || len(r.Metadata.Tags) > 0 || r.Metadata.PrivacyStatus != "" {
-		meta := map[string]interface{}{}
-		if r.Metadata.Title != "" {
-			meta["title"] = r.Metadata.Title
-		}
-		if r.Metadata.Description != "" {
-			meta["description"] = r.Metadata.Description
-		}
-		if len(r.Metadata.Tags) > 0 {
-			meta["tags"] = r.Metadata.Tags
-		}
-		if r.Metadata.PrivacyStatus != "" {
-			meta["privacy_status"] = r.Metadata.PrivacyStatus
-		}
-		m["video_metadata"] = meta
+	// Enforce the renderer boundary after all typed overlays. This removes
+	// publication metadata even when it arrived under a legacy raw key or
+	// nested inside delivery_plan entries.
+	stripRendererPublicationFields(m)
+	return m
+}
+
+func stripRendererPublicationFields(payload map[string]interface{}) {
+	if payload == nil {
+		return
+	}
+	// These top-level fields are control-plane publication contracts, not
+	// renderer inputs. Remove them even when they arrived from a legacy raw
+	// remote response rather than the typed SubmitJobRequest path. `video_name`
+	// is intentionally retained: it is the technical render/job name, not the
+	// publication title and is required by the renderer contract.
+	rawVideoMetadata := payload["video_metadata"]
+	for _, key := range []string{
+		"publications",
+		"publication_specs",
+		"destinations",
+		"delivery_destinations",
+		"delivery_metadata",
+		"destination_id",
+		"destination_ids",
+		"metadata",
+		"metadata_override",
+		"localizations",
+		"description",
+		"tags",
+		"privacy",
+		"privacy_status",
+		"publish_at",
+		"schedule",
+		"scheduling",
+		"title",
+	} {
+		delete(payload, key)
+	}
+	if technical := rendererTechnicalMetadata(rawVideoMetadata); len(technical) > 0 {
+		payload["video_metadata"] = technical
+	} else {
+		delete(payload, "video_metadata")
 	}
 
-	return m
+	// Delivery routing, destinations, and their metadata are control-plane
+	// data. They must never cross the renderer boundary, even in the legacy
+	// compatibility shape.
+	delete(payload, "delivery_plan")
+}
+
+func rendererTechnicalMetadata(value interface{}) map[string]interface{} {
+	metadata, ok := value.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	allowed := map[string]struct{}{
+		"width": {}, "height": {}, "fps_num": {}, "fps_den": {},
+		"pixel_format": {}, "sample_rate": {}, "audio_sample_rate": {},
+		"audio_channels": {}, "video_codec": {}, "audio_codec": {},
+	}
+	filtered := make(map[string]interface{})
+	for key, item := range metadata {
+		if _, ok := allowed[key]; ok {
+			filtered[key] = item
+		}
+	}
+	return filtered
 }
 
 // flattenResult merges top-level keys with the nested "result" map.

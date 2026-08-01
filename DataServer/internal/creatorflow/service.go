@@ -140,12 +140,14 @@ func (s *Service) StartOrPersistForwarding(ctx context.Context, rawPayload map[s
 		if rs == nil {
 			return nil, false, fmt.Errorf("creatorflow: StartOrPersistForwarding: resolver construction failed")
 		}
+		deliveryPlan := deliveryPlanFromPayload(creatorResult)
 		out, err := rs.Resolve(ctx, ResolveRequest{
 			ForwardingID:     "",
 			SourceProvider:   "remote_engine",
 			SourceJobID:      sourceJobID,
 			TargetExecutorID: targetExecID,
 			Payload:          workerPayload,
+			DeliveryPlan:     deliveryPlan,
 		})
 		if err != nil && err != ErrResolverNotComplete {
 			return nil, false, err

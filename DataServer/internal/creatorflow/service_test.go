@@ -200,7 +200,7 @@ func TestResolverEnqueuesWorkerJob(t *testing.T) {
 		"status":   "completed",
 		"trace_id": "creator-complete-1",
 		"result": map[string]interface{}{
-			"title": "Creator Video", "script_text": "Creator script",
+			"video_name": "Creator Video", "script_text": "Creator script",
 			"scenes_json":    `[{"text":"Scene 1","image_link":"https://example.com/scene1.png"}]`,
 			"voiceover_path": "https://example.com/voice.mp3",
 			"delivery_plan": []interface{}{
@@ -228,6 +228,11 @@ func TestResolverEnqueuesWorkerJob(t *testing.T) {
 		SourceJobID:      "creator-complete-1",
 		TargetExecutorID: "scene.composite.v1",
 		Payload:          result,
+		DeliveryPlan: map[string]interface{}{
+			"delivery_plan": []interface{}{
+				map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -291,6 +296,29 @@ func TestResolverEnqueuesWorkerJob(t *testing.T) {
 	}
 	if payload["source"] != "pipeline_generate_with_images" {
 		t.Fatalf("want source pipeline_generate_with_images, got %v", payload["source"])
+	}
+
+	// Delivery routing is persisted separately from the renderer payload.
+	var persistedPlanCount int
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM job_delivery_plans WHERE job_id = ? AND destination_id = ?`, expectedJobID, "drive-main").Scan(&persistedPlanCount); err != nil {
+		t.Fatalf("count persisted delivery plan: %v", err)
+	}
+	if persistedPlanCount != 1 {
+		t.Fatalf("want one control-plane delivery plan row, got %d", persistedPlanCount)
+	}
+
+	var taskPayloadJSON string
+	if err := db.DB().QueryRow(`SELECT payload_json FROM task_specs WHERE task_id IN (SELECT task_id FROM tasks WHERE job_id = ?)`, expectedJobID).Scan(&taskPayloadJSON); err != nil {
+		t.Fatalf("read persisted task payload: %v", err)
+	}
+	var rendererPayload map[string]interface{}
+	if err := json.Unmarshal([]byte(taskPayloadJSON), &rendererPayload); err != nil {
+		t.Fatalf("decode persisted task payload: %v", err)
+	}
+	for _, key := range []string{"delivery_plan", "delivery_metadata", "destinations", "delivery_destinations", "destination_id", "destination_ids"} {
+		if _, leaked := rendererPayload[key]; leaked {
+			t.Fatalf("control-plane field %q leaked into persisted renderer payload: %#v", key, rendererPayload[key])
+		}
 	}
 }
 

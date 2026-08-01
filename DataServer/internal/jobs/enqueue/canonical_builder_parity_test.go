@@ -12,7 +12,9 @@ import (
 // canonical builders on fields that are owned by the renderer. Lifecycle
 // labels are intentionally excluded because each ingress has a distinct
 // producer identity; render inputs, technical metadata, canonical timeline
-// tracks, output routing, and delivery routing must not drift. Legacy
+// tracks and output routing must not drift. Delivery plans are control-plane
+// data and are intentionally asserted separately rather than compared as
+// renderer fields. Legacy
 // worker-wire fields (items/clips/images/video_mode) are intentionally out
 // of this persisted canonical contract and are covered by the dedicated
 // legacy projection tests.
@@ -118,8 +120,14 @@ func TestCanonicalBuilderParity_RichPayload(t *testing.T) {
 	} else if width, ok := richNumber(metadata["width"]); !ok || width != 1920 {
 		t.Fatalf("normalizer changed technical metadata width: %#v", metadata["width"])
 	}
+	// The normalizer returns the canonical envelope consumed by enqueue;
+	// delivery_plan remains there for the control plane and is removed only
+	// by the renderer projection. Assert that separation explicitly.
+	if plan, ok := normalized["delivery_plan"].([]interface{}); !ok || len(plan) != 1 {
+		t.Fatalf("canonical normalizer lost control-plane delivery_plan: %#v", normalized["delivery_plan"])
+	}
+
 	for name, payload := range map[string]map[string]interface{}{
-		"normalizer":    normalized,
 		"pipeline":      pipelinePayload,
 		"remote_engine": remotePayload,
 	} {
@@ -130,7 +138,7 @@ func TestCanonicalBuilderParity_RichPayload(t *testing.T) {
 		if _, leaked := metadata["title"]; leaked {
 			t.Errorf("%s leaked publication title into renderer metadata: %#v", name, metadata)
 		}
-		for _, key := range []string{"title", "metadata", "description", "tags", "privacy_status", "publish_at"} {
+		for _, key := range []string{"title", "metadata", "description", "tags", "privacy_status", "publish_at", "delivery_plan"} {
 			if _, leaked := payload[key]; leaked {
 				t.Errorf("%s leaked editorial field %q into renderer payload: %#v", name, key, payload[key])
 			}
@@ -152,7 +160,6 @@ func richWorkerProjection(payload map[string]interface{}) map[string]interface{}
 		"layers",
 		"subtitle_tracks",
 		"audio_tracks",
-		"delivery_plan",
 	} {
 		value, ok := payload[key]
 		if !ok {

@@ -25,10 +25,10 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 
 	flat := FlattenPipelineResult(result)
 
-	title := payload.FirstString(flat, "video_name", "title", "script_title", "name")
-	if title == "" {
-		title = firstMetadataTitle(flat)
-	}
+	// `video_name` is the technical render/job name. Never fall back to
+	// video_metadata.title: publication titles belong exclusively to the
+	// control-plane PublicationSpecs and must not reach the renderer.
+	title := payload.FirstString(flat, "video_name")
 
 	scriptText := payload.FirstString(flat, "script_text", "script", "generated_script", "text")
 	if scriptText == "" {
@@ -81,6 +81,14 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 	p := contract.NewJobPayloadV2(flat)
 	p.VideoName = title
 	p.ScriptText = scriptText
+	// BuildPipelinePayload is also called directly by legacy/runner paths,
+	// so enforce the same renderer boundary here as normalizeSceneVideoPayload
+	// and remoteengine.ToWorkerPayload. Only technical render options may
+	// survive; publication title/description/tags/privacy/scheduling and
+	// localizations never enter the canonical worker map.
+	if rawMetadata, ok := flat["video_metadata"]; ok {
+		p.VideoMetadata = rendererVideoMetadata(rawMetadataMap(rawMetadata))
+	}
 	p.ScenesJSON = scenesJSON
 	p.VoiceoverPaths = voiceovers
 	p.OutputPath = payload.FirstString(flat, "output_path", "output_dir")
@@ -106,7 +114,11 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 	// media keys. copyTimelinePayloadFields mirrors the same preservation
 	// done in normalizeSceneVideoPayload.
 	copyTimelinePayloadFields(out, flat)
-	return out, nil
+	// BuildPipelinePayload is the worker-facing projection. Keep the
+	// canonical delivery envelope available to callers that extracted it
+	// before this step, but never send routing/control-plane fields to the
+	// renderer.
+	return cloneRendererPayload(out), nil
 }
 
 // FlattenPipelineResult flattens a nested pipeline result by merging top-level
@@ -207,26 +219,7 @@ func extractScenesJSONFromFile(path string) (string, error) {
 	}
 }
 
-func firstMetadataTitle(p map[string]interface{}) string {
-	metadata, ok := p["metadata"]
-	if !ok {
-		return ""
-	}
-	switch v := metadata.(type) {
-	case []interface{}:
-		for _, item := range v {
-			if m, ok := item.(map[string]interface{}); ok {
-				if title := payload.FirstString(m, "title", "name"); title != "" {
-					return title
-				}
-			}
-		}
-	case []map[string]interface{}:
-		for _, item := range v {
-			if title := payload.FirstString(item, "title", "name"); title != "" {
-				return title
-			}
-		}
-	}
-	return ""
+func rawMetadataMap(value interface{}) map[string]interface{} {
+	metadata, _ := value.(map[string]interface{})
+	return metadata
 }

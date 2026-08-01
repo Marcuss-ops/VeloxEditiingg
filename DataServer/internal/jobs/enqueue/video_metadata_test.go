@@ -11,9 +11,9 @@ import (
 	"velox-shared/contract/rendermanifest"
 )
 
-func TestNormalizeSceneVideoPayloadPreservesAndValidatesVideoMetadata(t *testing.T) {
+func TestNormalizeSceneVideoPayloadStripsPublicationMetadataAndPreservesTechnicalRenderMetadata(t *testing.T) {
 	payload := map[string]interface{}{
-		"video_name": "Test video",
+		"video_name": "Renderer job name",
 		"scenes": []interface{}{
 			map[string]interface{}{"text": "Scene 1", "image_link": "https://example.com/1.png"},
 		},
@@ -22,12 +22,18 @@ func TestNormalizeSceneVideoPayloadPreservesAndValidatesVideoMetadata(t *testing
 			map[string]interface{}{"destination_id": "social-main", "retry_budget": 3},
 		},
 		"video_metadata": map[string]interface{}{
-			"title":          "Published title",
-			"description":    "Published description",
-			"tags":           []interface{}{"velox", "test"},
-			"privacy_status": "private",
-			"publish_at":     "2026-07-20T18:00:00+02:00",
-			"channel_id":     "channel-1",
+			"title":             "Published title",
+			"description":       "Published description",
+			"tags":              []interface{}{"velox", "test"},
+			"privacy_status":    "private",
+			"publish_at":        "2026-07-20T18:00:00+02:00",
+			"localizations":     map[string]interface{}{"it": map[string]interface{}{"title": "Titolo"}},
+			"metadata_override": map[string]interface{}{"title": "Override"},
+			"width":             1920,
+			"height":            1080,
+			"fps_num":           30,
+			"fps_den":           1,
+			"pixel_format":      "yuv420p",
 		},
 	}
 
@@ -37,11 +43,17 @@ func TestNormalizeSceneVideoPayloadPreservesAndValidatesVideoMetadata(t *testing
 	}
 	metadata, ok := out["video_metadata"].(map[string]interface{})
 	if !ok {
-		t.Fatalf("video_metadata type = %T, want map[string]interface{}", out["video_metadata"])
+		t.Fatalf("video_metadata type = %T, want technical map[string]interface{}", out["video_metadata"])
 	}
-	if metadata["channel_id"] != "channel-1" || metadata["publish_at"] != "2026-07-20T18:00:00+02:00" {
-		t.Fatalf("metadata was not preserved: %#v", metadata)
+	if metadata["width"] != 1920 || metadata["height"] != 1080 || metadata["pixel_format"] != "yuv420p" {
+		t.Fatalf("technical render metadata was not preserved: %#v", metadata)
 	}
+	for _, key := range []string{"title", "description", "tags", "privacy_status", "publish_at", "localizations", "metadata_override"} {
+		if _, present := metadata[key]; present {
+			t.Fatalf("publication metadata %q leaked into normalized renderer metadata: %#v", key, metadata[key])
+		}
+	}
+
 	plan, ok := out["delivery_plan"].([]interface{})
 	if !ok || len(plan) != 1 {
 		t.Fatalf("delivery_plan = %#v", out["delivery_plan"])
@@ -50,12 +62,11 @@ func TestNormalizeSceneVideoPayloadPreservesAndValidatesVideoMetadata(t *testing
 	if !ok {
 		t.Fatalf("delivery plan item = %#v", plan[0])
 	}
-	planMetadata, ok := planItem["metadata"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("delivery metadata = %#v", planItem["metadata"])
+	if planItem["destination_id"] != "social-main" || planItem["retry_budget"] != 3 {
+		t.Fatalf("legacy routing fields changed: %#v", planItem)
 	}
-	if _, ok := planMetadata["video_metadata"]; !ok {
-		t.Fatalf("delivery metadata does not carry video_metadata: %#v", planMetadata)
+	if _, present := planItem["metadata"]; present {
+		t.Fatalf("publication metadata was attached to delivery plan: %#v", planItem["metadata"])
 	}
 }
 

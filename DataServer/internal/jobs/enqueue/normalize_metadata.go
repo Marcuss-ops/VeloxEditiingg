@@ -1,4 +1,4 @@
-// Package enqueue - video metadata validation and delivery metadata projection.
+// Package enqueue - video metadata validation and renderer-safe projection.
 package enqueue
 
 import (
@@ -9,46 +9,52 @@ import (
 	"velox-shared/contract/deliveryplan"
 )
 
+// attachVideoMetadataToDeliveryPlan is retained as a compatibility helper for
+// callers that invoke the normalizer directly. Publication metadata is never
+// copied into delivery_plan or the renderer payload. Only technical render
+// options understood by the renderer are retained in video_metadata.
 func attachVideoMetadataToDeliveryPlan(payloadMap map[string]interface{}) error {
+	if payloadMap == nil {
+		return nil
+	}
 	metadata, ok := payloadMap["video_metadata"].(map[string]interface{})
 	if !ok || len(metadata) == 0 {
 		return nil
 	}
-	rawPlan, ok := payloadMap["delivery_plan"]
-	if !ok || rawPlan == nil {
-		return nil
-	}
-	attach := func(entry map[string]interface{}) {
-		entryMetadata, ok := entry["metadata"].(map[string]interface{})
-		if !ok {
-			entryMetadata = map[string]interface{}{}
-			entry["metadata"] = entryMetadata
-		}
-		if _, exists := entryMetadata["video_metadata"]; !exists {
-			entryMetadata["video_metadata"] = cloneMetadataMap(metadata)
-		}
-	}
-	switch plan := rawPlan.(type) {
-	case []interface{}:
-		for i, item := range plan {
-			entry, ok := item.(map[string]interface{})
-			if !ok {
-				return deliveryplan.NewValidationError(
-					fmt.Sprintf("delivery_plan.%d", i),
-					"must be an object",
-				)
-			}
-			attach(entry)
-		}
-	case []map[string]interface{}:
-		for _, entry := range plan {
-			attach(entry)
-		}
-	case map[string]interface{}:
-		attach(plan)
+	filtered := rendererVideoMetadata(metadata)
+	if len(filtered) == 0 {
+		delete(payloadMap, "video_metadata")
+	} else {
+		payloadMap["video_metadata"] = filtered
 	}
 	return nil
 }
+
+// rendererVideoMetadata allowlists only technical render settings. Editorial
+// publication fields (title, description, tags, privacy, scheduling,
+// localizations, and provider overrides) are deliberately excluded.
+func rendererVideoMetadata(metadata map[string]interface{}) map[string]interface{} {
+	allowed := map[string]struct{}{
+		"width":             {},
+		"height":            {},
+		"fps_num":           {},
+		"fps_den":           {},
+		"pixel_format":      {},
+		"sample_rate":       {},
+		"audio_sample_rate": {},
+		"audio_channels":    {},
+		"video_codec":       {},
+		"audio_codec":       {},
+	}
+	filtered := make(map[string]interface{})
+	for key, value := range metadata {
+		if _, ok := allowed[key]; ok {
+			filtered[key] = value
+		}
+	}
+	return filtered
+}
+
 func validateVideoMetadata(metadata map[string]interface{}) error {
 	if title, ok := metadata["title"]; ok {
 		if value, ok := title.(string); !ok || strings.TrimSpace(value) == "" {
@@ -93,6 +99,7 @@ func validateVideoMetadata(metadata map[string]interface{}) error {
 	}
 	return nil
 }
+
 func isValidPrivacyStatus(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "private", "unlisted", "public":
@@ -101,6 +108,7 @@ func isValidPrivacyStatus(value string) bool {
 		return false
 	}
 }
+
 func cloneMetadataMap(metadata map[string]interface{}) map[string]interface{} {
 	out := make(map[string]interface{}, len(metadata))
 	for key, value := range metadata {
