@@ -27,6 +27,12 @@ tracked as a followup for the owning session to resolve when the
 `assets` WIP is completed. The post-split verification rule remains
 active for future splits; the working tree was left untouched.
 
+Separate event (not part of this finding): the first full-module run
+also surfaced a transient `TestGenerateWithImages_UsesCreatorStageWhenConfigured`
+failure in `internal/handlers/server/script`, which passed 3/3 in
+isolation and in the full-package run — a load-parallelism flake, not a
+regression, and not reproducible in isolation.
+
 ### File-splitting refactor — large files broken down by domain
 
 A 28-commit pass broke the repo's largest files (>600 lines) into
