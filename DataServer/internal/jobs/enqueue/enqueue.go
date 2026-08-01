@@ -224,6 +224,11 @@ func (e *Enqueuer) prepareJobAndTask(ctx context.Context, payloadMap map[string]
 		return nil, nil, 0, fmt.Errorf("creator unavailable")
 	}
 
+	forwardingKey, hasForwardingKey, err := validateForwardingIdentity(payloadMap)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+
 	if err := e.resolveVoiceoverPayload(ctx, payloadMap); err != nil {
 		return nil, nil, 0, err
 	}
@@ -234,6 +239,13 @@ func (e *Enqueuer) prepareJobAndTask(ctx context.Context, payloadMap map[string]
 	normalized, err := normalizeSceneVideoPayloadContext(ctx, payloadMap)
 	if err != nil {
 		return nil, nil, 0, err
+	}
+
+	// A validated forwarding key is part of the idempotent identity
+	// contract. Re-inject it after normalization so a future projection
+	// change cannot silently turn a forwarded retry into a UUID job.
+	if hasForwardingKey {
+		normalized[routing.KeyForwardingKey] = forwardingKey
 	}
 
 	// A Job without an explicit delivery plan (and per-entry retry_budget > 0)
@@ -287,6 +299,39 @@ func (e *Enqueuer) prepareJobAndTask(ctx context.Context, payloadMap map[string]
 	// called after this method has committed the job.
 
 	return job, spec, priority, nil
+}
+
+// validateForwardingIdentity enforces the fail-closed identity boundary.
+// Ordinary jobs may omit the internal key and keep their UUID identity. Once
+// the key is present, however, it must be a canonical, complete
+// source-provider/source-job/target-executor tuple; otherwise the caller is on
+// an idempotent path whose identity cannot be trusted.
+func validateForwardingIdentity(payloadMap map[string]interface{}) (string, bool, error) {
+	if payloadMap == nil {
+		return "", false, nil
+	}
+	raw, present := payloadMap[routing.KeyForwardingKey]
+	if !present {
+		return "", false, nil
+	}
+	key, ok := raw.(string)
+	if !ok {
+		return "", true, fmt.Errorf("%s must be a string for idempotent forwarding", routing.KeyForwardingKey)
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "", true, fmt.Errorf("%s is required for idempotent forwarding", routing.KeyForwardingKey)
+	}
+
+	provider, sourceJobID, executorID := routing.ForwardingKey(key).Parse()
+	if provider == "" || sourceJobID == "" || executorID == "" {
+		return "", true, fmt.Errorf("%s must contain source_provider, source_job_id, and target_executor_id", routing.KeyForwardingKey)
+	}
+	canonical := routing.FormatForwardingKey(provider, sourceJobID, executorID).String()
+	if canonical != key {
+		return "", true, fmt.Errorf("%s is not canonical", routing.KeyForwardingKey)
+	}
+	return key, true, nil
 }
 
 func buildSceneVideoResponse(normalized map[string]interface{}) map[string]interface{} {

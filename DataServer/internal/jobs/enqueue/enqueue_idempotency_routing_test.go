@@ -50,6 +50,50 @@ func TestDeriveForwardingJobID_DifferentKeys(t *testing.T) {
 
 // TestEnqueueWithForwardingKey verifies that when a payload carries
 // _internal_forwarding_key, the job_id is deterministic.
+func TestValidateForwardingIdentity(t *testing.T) {
+	t.Parallel()
+
+	validKey := routing.FormatForwardingKey("remote_engine", "creator-forward-1", "scene.composite.v1").String()
+	cases := []struct {
+		name    string
+		value   interface{}
+		wantErr string
+	}{
+		{name: "valid", value: validKey},
+		{name: "empty", value: "", wantErr: "required"},
+		{name: "wrong_type", value: 42, wantErr: "must be a string"},
+		{name: "incomplete", value: "remote_engine:creator-forward-1", wantErr: "must contain"},
+		{name: "non_canonical_escape", value: "remote%engine:creator-forward-1:scene.composite.v1", wantErr: "not canonical"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := map[string]interface{}{routing.KeyForwardingKey: tc.value}
+			got, present, err := validateForwardingIdentity(payload)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validateForwardingIdentity: %v", err)
+				}
+				if !present || got != validKey {
+					t.Fatalf("identity = (%q, %t), want (%q, true)", got, present, validKey)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %v, want substring %q", err, tc.wantErr)
+			}
+			if !present {
+				t.Fatal("present = false, want true for an explicitly supplied key")
+			}
+		})
+	}
+
+	got, present, err := validateForwardingIdentity(map[string]interface{}{})
+	if err != nil || present || got != "" {
+		t.Fatalf("missing key = (%q, %t, %v), want (\"\", false, nil)", got, present, err)
+	}
+}
+
 func TestEnqueueWithForwardingKey(t *testing.T) {
 	t.Parallel()
 	enq := newTestEnqueuer(t)
