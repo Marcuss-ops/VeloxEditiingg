@@ -1,3 +1,5 @@
+// Package drive / service.go — core Drive service: types, constructor and
+// accessors. Sub-domains live in folders.go, groups.go, tokens.go, master.go.
 package drive
 
 import (
