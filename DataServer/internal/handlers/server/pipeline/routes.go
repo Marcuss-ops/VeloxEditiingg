@@ -38,11 +38,13 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth, m2mJobsAuth gin.Hand
 	publishing := r.Group("/api/v1/publishing")
 	publishing.Use(m2mJobsAuth)
 	publishing.POST("/targets", h.ListPublishingTargets())
+	publishing.POST("/catalog", h.ListPublishingCatalog())
 
 	// Simplified job submission for external M2M automation.
 	jobs := r.Group("/api/v1/jobs")
 	jobs.Use(m2mJobsAuth)
 	jobs.POST("", h.SubmitJob())
+	jobs.POST("/batch", h.SubmitJobBatch())
 	jobs.GET("/:id", h.GetSubmittedJob())
 
 	pipelineRuns := r.Group("/api/v1/pipeline-runs")

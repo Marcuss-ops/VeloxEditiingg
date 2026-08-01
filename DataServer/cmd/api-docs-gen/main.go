@@ -5,13 +5,13 @@
 //
 // Why a custom codegen instead of swag/oapi-codegen/ogen:
 //
-//   * Zero new third-party dependencies. yaml.v3 is already vendored.
-//   * The hand-curated narrative (operation descriptions, response
+//   - Zero new third-party dependencies. yaml.v3 is already vendored.
+//   - The hand-curated narrative (operation descriptions, response
 //     examples, schema explanations) stays untouched. swag requires
 //     `// @Description` annotation on every handler; the cost of
 //     porting 30+ handlers is far higher than the maintenance cost
 //     of a small, declarative manifest.
-//   * The schema block (components/schemas) remains hand-curated
+//   - The schema block (components/schemas) remains hand-curated
 //     because the validator's invariants (minLength, minimum,
 //     pattern, enum) mirror Go-side constants (MaxVideoNameBytes,
 //     MinSceneDurationSeconds, ...) — a fully-generated schema
@@ -26,15 +26,15 @@
 //
 // Exit codes:
 //
-//   0 — codegen succeeded AND drift is clean
-//   1 — codegen succeeded BUT drift detected (re-run with -apply)
-//   2 — codegen failed (manifest invalid, $ref unresolved, ...)
+//	0 — codegen succeeded AND drift is clean
+//	1 — codegen succeeded BUT drift detected (re-run with -apply)
+//	2 — codegen failed (manifest invalid, $ref unresolved, ...)
 //
 // Usage:
 //
-//   api-docs-gen                          # write to .api-docs-gen.out, print drift
-//   api-docs-gen -apply                   # write back into openapi.yaml
-//   api-docs-gen -apply -ci               # silence drift warnings (treat as drifted)
+//	api-docs-gen                          # write to .api-docs-gen.out, print drift
+//	api-docs-gen -apply                   # write back into openapi.yaml
+//	api-docs-gen -apply -ci               # silence drift warnings (treat as drifted)
 package main
 
 import (
@@ -88,13 +88,14 @@ type Manifest struct {
 }
 
 type RouteEntry struct {
-	Path        string             `yaml:"path"`
-	Method      string             `yaml:"method"`
-	OperationID string             `yaml:"operationId"`
-	Tag         string             `yaml:"tag"`
-	Summary     string             `yaml:"summary,omitempty"`
-	Parameters  []string           `yaml:"parameters"`
-	RequestBody *RefEntry          `yaml:"requestBody,omitempty"`
+	Path        string               `yaml:"path"`
+	Method      string               `yaml:"method"`
+	OperationID string               `yaml:"operationId"`
+	Tag         string               `yaml:"tag"`
+	Summary     string               `yaml:"summary,omitempty"`
+	Parameters  []string             `yaml:"parameters"`
+	Security    string               `yaml:"security,omitempty"`
+	RequestBody *RefEntry            `yaml:"requestBody,omitempty"`
 	Responses   map[string]*RefEntry `yaml:"responses"`
 }
 
@@ -155,22 +156,22 @@ func isHTTPStatusCode(code string) bool {
 // "removed", and "mismatched" entries — the Kind discriminator drives
 // display + machine parsing.
 type driftEntry struct {
-	Kind       string `json:"kind"`     // "added" | "removed" | "mismatched"
-	Path       string `json:"path"`
-	Method     string `json:"method"`
-	Field      string `json:"field,omitempty"` // which subfield drifted
-	Preimage   string `json:"preimage,omitempty"`
-	Generated  string `json:"generated,omitempty"`
-	Operation  string `json:"operationId,omitempty"`
+	Kind      string `json:"kind"` // "added" | "removed" | "mismatched"
+	Path      string `json:"path"`
+	Method    string `json:"method"`
+	Field     string `json:"field,omitempty"` // which subfield drifted
+	Preimage  string `json:"preimage,omitempty"`
+	Generated string `json:"generated,omitempty"`
+	Operation string `json:"operationId,omitempty"`
 }
 
 func main() {
 	var (
-		applyFlag   = flag.Bool("apply", false, "write the regenerated openapi.yaml back to disk")
-		ciMode      = flag.Bool("ci", false, "CI mode: exit 1 on drift, exit 0 on clean (default behavior in non-CI mode prints drift but exits 0)")
-		manifestIn  = flag.String("manifest", "api/api_docs_manifest.yaml", "path to the manifest file")
-		specIn      = flag.String("spec", "api/openapi.yaml", "path to the curated openapi.yaml (preimage)")
-		outTmp      = flag.String("out-tmp", "", "if set, write the generated spec to this file instead of STDOUT for diffing")
+		applyFlag  = flag.Bool("apply", false, "write the regenerated openapi.yaml back to disk")
+		ciMode     = flag.Bool("ci", false, "CI mode: exit 1 on drift, exit 0 on clean (default behavior in non-CI mode prints drift but exits 0)")
+		manifestIn = flag.String("manifest", "api/api_docs_manifest.yaml", "path to the manifest file")
+		specIn     = flag.String("spec", "api/openapi.yaml", "path to the curated openapi.yaml (preimage)")
+		outTmp     = flag.String("out-tmp", "", "if set, write the generated spec to this file instead of STDOUT for diffing")
 	)
 	flag.Parse()
 
@@ -510,7 +511,11 @@ func buildPathsBlock(m *Manifest) map[string]any {
 			}
 		}
 		op["responses"] = responses
-		op["security"] = []any{map[string]any{"bearerAdminToken": []string{}}}
+		securityScheme := "bearerAdminToken"
+		if r.Security != "" {
+			securityScheme = r.Security
+		}
+		op["security"] = []any{map[string]any{securityScheme: []string{}}}
 		pathNode, ok := out[r.Path].(map[string]any)
 		if !ok {
 			pathNode = map[string]any{}

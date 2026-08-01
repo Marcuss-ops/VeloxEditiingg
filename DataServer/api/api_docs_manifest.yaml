@@ -85,6 +85,51 @@ routes:
       "500":
         $ref: "#/components/schemas/ErrorEnvelope"
 
+  - path: /api/v1/jobs/batch
+    method: post
+    operationId: submitJobBatch
+    tag: jobs
+    summary: "Submit multiple independent video jobs in one request."
+    parameters:
+      - AuthorizationHeader
+      - XRequestIDHeader
+    requestBody:
+      $ref: "#/components/schemas/SubmitJobBatchRequest"
+    responses:
+      "200":
+        $ref: "#/components/schemas/SubmitJobBatchResponse"
+      "400":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "401":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "422":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "500":
+        $ref: "#/components/schemas/ErrorEnvelope"
+
+  - path: /api/v1/publishing/catalog
+    method: post
+    operationId: listPublishingCatalog
+    tag: publishing
+    summary: "List channel and group publishing targets for a workspace."
+    security: bearerM2MToken
+    parameters:
+      - AuthorizationHeader
+      - XRequestIDHeader
+    requestBody:
+      $ref: "#/components/schemas/PublishingCatalogRequest"
+    responses:
+      "200":
+        $ref: "#/components/schemas/PublishingCatalogResponse"
+      "400":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "401":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "422":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "500":
+        $ref: "#/components/schemas/ErrorEnvelope"
+
   - path: /api/v1/jobs/{job_id}
     method: get
     operationId: getSubmittedJob

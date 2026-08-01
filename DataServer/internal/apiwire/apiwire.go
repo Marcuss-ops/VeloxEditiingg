@@ -77,6 +77,84 @@ type SubmitJobRequest struct {
 	PlacementPinWorkerID string `json:"placement_pin_worker_id,omitempty" validate:"omitempty,max=128"`
 }
 
+// SubmitJobBatchRequest is the wire shape for POST /api/v1/jobs/batch.
+// Each item is a complete SubmitJobRequest and retains the legacy
+// delivery_plan field alongside the canonical publications field.
+type SubmitJobBatchRequest struct {
+	BatchID string             `json:"batch_id" validate:"required,min=1,max=128"`
+	Items   []SubmitJobRequest `json:"items" validate:"required,min=1,max=50,dive"`
+}
+
+// SubmitJobBatchItemResult reports the independent outcome of one batch item.
+type SubmitJobBatchItemResult struct {
+	Index          int      `json:"index" validate:"gte=0"`
+	IdempotencyKey string   `json:"idempotency_key,omitempty"`
+	JobID          string   `json:"job_id,omitempty"`
+	Status         string   `json:"status" validate:"required"`
+	Errors         []string `json:"errors,omitempty"`
+}
+
+// SubmitJobBatchResponse contains one result for every submitted item.
+type SubmitJobBatchResponse struct {
+	BatchID string                     `json:"batch_id"`
+	Items   []SubmitJobBatchItemResult `json:"items"`
+}
+
+// PublishingCatalogRequest is the M2M request for the unified channel/group
+// publishing catalog. The handler enforces the supported platform allow-list.
+type PublishingCatalogRequest struct {
+	WorkspaceID int64  `json:"workspace_id" validate:"required,gte=1"`
+	Platform    string `json:"platform" validate:"required,min=1"`
+}
+
+// PublishingCatalogCapabilities describes the operations a channel supports.
+type PublishingCatalogCapabilities struct {
+	UploadVideo  bool `json:"upload_video"`
+	SetThumbnail bool `json:"set_thumbnail"`
+	Publish      bool `json:"publish"`
+	Schedule     bool `json:"schedule"`
+}
+
+// PublishingCatalogChannel is one concrete channel selectable by an M2M
+// sender. DestinationID is ready for delivery_plan[].destination_id.
+type PublishingCatalogChannel struct {
+	Type              string                        `json:"type" validate:"required,oneof=channel"`
+	DestinationID     string                        `json:"destination_id" validate:"required,min=1"`
+	PlatformAccountID int64                         `json:"platform_account_id" validate:"required,gte=1"`
+	ChannelID         string                        `json:"channel_id" validate:"required,min=1"`
+	Name              string                        `json:"name" validate:"required,min=1"`
+	Status            string                        `json:"status" validate:"required,min=1"`
+	Enabled           bool                          `json:"enabled"`
+	CanPost           bool                          `json:"can_post"`
+	Capabilities      PublishingCatalogCapabilities `json:"capabilities" validate:"required"`
+	BlockReason       string                        `json:"block_reason,omitempty"`
+	TargetErrorCode   string                        `json:"target_error_code,omitempty"`
+}
+
+// PublishingCatalogGroup is a selectable group summary. Group expansion is
+// performed server-side during job submission, not by the external sender.
+type PublishingCatalogGroup struct {
+	Type                   string `json:"type" validate:"required,oneof=group"`
+	GroupID                int64  `json:"group_id" validate:"required,gte=1"`
+	Name                   string `json:"name" validate:"required,min=1"`
+	ParentGroupID          *int64 `json:"parent_group_id,omitempty"`
+	MemberCount            int    `json:"member_count" validate:"gte=0"`
+	PublishableMemberCount int    `json:"publishable_member_count" validate:"gte=0"`
+	Status                 string `json:"status,omitempty"`
+	CanPost                bool   `json:"can_post"`
+	BlockReason            string `json:"block_reason,omitempty"`
+	TargetErrorCode        string `json:"target_error_code,omitempty"`
+}
+
+// PublishingCatalogResponse is the unified M2M catalog of concrete channels
+// and server-resolvable groups for one workspace and platform.
+type PublishingCatalogResponse struct {
+	WorkspaceID int64                      `json:"workspace_id" validate:"required,gte=1"`
+	Platform    string                     `json:"platform" validate:"required,min=1"`
+	Channels    []PublishingCatalogChannel `json:"channels"`
+	Groups      []PublishingCatalogGroup   `json:"groups"`
+}
+
 // SubmitPublication describes one concrete publication of a rendered output.
 // Publication metadata is intentionally separate from the render worker payload.
 type SubmitPublication struct {

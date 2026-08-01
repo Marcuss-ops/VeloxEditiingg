@@ -9,15 +9,37 @@ import (
 	"net/http"
 )
 
-// PublishingTargetCatalogRequest asks the Social API for every channel bound
-// to one workspace and platform. The discriminator is fixed to catalog by the
-// client so callers cannot accidentally send a channel/group validation shape.
-type PublishingTargetCatalogRequest struct {
+// PublishingCatalogRequest asks the Social API for every channel and group
+// bound to one workspace and platform. The discriminator is fixed to catalog
+// by the client so callers cannot accidentally send a channel/group validation
+// shape.
+type PublishingCatalogRequest struct {
 	WorkspaceID int64  `json:"workspace_id"`
 	Platform    string `json:"platform"`
 	Target      struct {
 		Type string `json:"type"`
 	} `json:"target"`
+}
+
+// PublishingTargetCatalogRequest is the historical name kept for callers of
+// the channel-only catalog method. It is an alias so both endpoints share the
+// exact same upstream wire shape.
+type PublishingTargetCatalogRequest = PublishingCatalogRequest
+
+// PublishingGroup is a group selection returned by InstaEdit's catalog. Group
+// expansion is deliberately not performed by this client; Velox receives the
+// authoritative membership summary and the group_id for a later server-side
+// resolution step.
+type PublishingGroup struct {
+	GroupID                int64  `json:"group_id"`
+	Name                   string `json:"name"`
+	ParentGroupID          *int64 `json:"parent_group_id"`
+	MemberCount            int    `json:"member_count"`
+	PublishableMemberCount int    `json:"publishable_member_count"`
+	Status                 string `json:"status,omitempty"`
+	CanPost                bool   `json:"can_post"`
+	BlockReason            string `json:"block_reason,omitempty"`
+	TargetErrorCode        string `json:"target_error_code,omitempty"`
 }
 
 // PublishingCapabilities mirrors the provider-neutral capability block owned
@@ -52,14 +74,18 @@ type PublishingTargetCatalogResponse struct {
 	Valid           bool               `json:"valid"`
 	DestinationID   string             `json:"destination_id,omitempty"`
 	ResolvedTargets []PublishingTarget `json:"resolved_targets"`
-	ErrorCode       string             `json:"error_code,omitempty"`
-	Message         string             `json:"message,omitempty"`
+	ResolvedGroups  []PublishingGroup  `json:"resolved_groups,omitempty"`
+	// Groups is accepted as an upstream compatibility alias. New callers
+	// should emit resolved_groups; the handler merges both fields by group_id.
+	Groups    []PublishingGroup `json:"groups,omitempty"`
+	ErrorCode string            `json:"error_code,omitempty"`
+	Message   string            `json:"message,omitempty"`
 }
 
-// ListPublishingTargets discovers posting targets through the same internal
-// Social API boundary used for validation and delivery. It performs one HTTP
-// attempt; the caller owns retry and response policy.
-func (c *Client) ListPublishingTargets(ctx context.Context, workspaceID int64, platform string) (*PublishingTargetCatalogResponse, error) {
+// ListPublishingCatalog discovers channels and groups through the same
+// internal Social API boundary used for validation and delivery. It performs
+// one HTTP attempt; the caller owns retry and response policy.
+func (c *Client) ListPublishingCatalog(ctx context.Context, workspaceID int64, platform string) (*PublishingTargetCatalogResponse, error) {
 	if c == nil || c.cfg.BaseURL == "" {
 		return nil, ErrNotConfigured
 	}
@@ -104,4 +130,11 @@ func (c *Client) ListPublishingTargets(ctx context.Context, workspaceID int64, p
 		out.ResolvedTargets = []PublishingTarget{}
 	}
 	return &out, nil
+}
+
+// ListPublishingTargets is the backward-compatible channel catalog method.
+// The upstream response may now carry groups, but this method preserves the
+// historical API for callers that only consume ResolvedTargets.
+func (c *Client) ListPublishingTargets(ctx context.Context, workspaceID int64, platform string) (*PublishingTargetCatalogResponse, error) {
+	return c.ListPublishingCatalog(ctx, workspaceID, platform)
 }

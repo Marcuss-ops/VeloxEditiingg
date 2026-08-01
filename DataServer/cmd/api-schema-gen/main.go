@@ -7,16 +7,16 @@
 //
 // Modes:
 //
-//   api-schema-gen            # write generated schemas to stdout
-//   api-schema-gen -out=PATH  # write generated schemas to PATH (file)
-//   api-schema-gen -apply     # in-place replace api/openapi.yaml.components.schemas
-//                             # with the generated block (yaml.v3 roundtrip)
+//	api-schema-gen            # write generated schemas to stdout
+//	api-schema-gen -out=PATH  # write generated schemas to PATH (file)
+//	api-schema-gen -apply     # in-place replace api/openapi.yaml.components.schemas
+//	                          # with the generated block (yaml.v3 roundtrip)
 //
 // Exit codes:
 //
-//   0 — codegen succeeded
-//   1 — apply / I/O error
-//   2 — codegen failed (e.g. internal/schemagen returned an error)
+//	0 — codegen succeeded
+//	1 — apply / I/O error
+//	2 — codegen failed (e.g. internal/schemagen returned an error)
 package main
 
 import (
@@ -57,6 +57,14 @@ func main() {
 		{"SubmitSubtitleTrack", apiwire.SubmitSubtitleTrack{}},
 		{"SubmitDeliveryPlanEntry", apiwire.SubmitDeliveryPlanEntry{}},
 		{"SubmitManifestRef", apiwire.SubmitManifestRef{}},
+		{"SubmitJobBatchRequest", apiwire.SubmitJobBatchRequest{}},
+		{"SubmitJobBatchItemResult", apiwire.SubmitJobBatchItemResult{}},
+		{"SubmitJobBatchResponse", apiwire.SubmitJobBatchResponse{}},
+		{"PublishingCatalogRequest", apiwire.PublishingCatalogRequest{}},
+		{"PublishingCatalogCapabilities", apiwire.PublishingCatalogCapabilities{}},
+		{"PublishingCatalogChannel", apiwire.PublishingCatalogChannel{}},
+		{"PublishingCatalogGroup", apiwire.PublishingCatalogGroup{}},
+		{"PublishingCatalogResponse", apiwire.PublishingCatalogResponse{}},
 		{"CreatorPushRequest", apiwire.CreatorPushRequest{}},
 		{"CreatorPushPayload", apiwire.CreatorPushPayload{}},
 		{"CreatorScene", apiwire.CreatorScene{}},
