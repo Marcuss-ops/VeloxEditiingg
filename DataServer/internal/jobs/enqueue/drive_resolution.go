@@ -3,12 +3,9 @@
 package enqueue
 
 import (
+	"context"
 	"database/sql"
-	"os"
-	"path/filepath"
 	"strings"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 // ResolveDriveOutputFolderReference normalizes a user-provided Drive target.
@@ -17,7 +14,24 @@ import (
 // - raw folder IDs
 // - local aliases like "rap" stored in drive_master_folders metadata_json
 // - exact folder names stored in drive_master_folders
-func ResolveDriveOutputFolderReference(dataDir, ref string) string {
+//
+// ResolveDriveOutputFolderReference resolves a Drive folder reference using a
+// borrowed, process-owned SQLite handle when one is supplied. The dataDir
+// argument remains for source compatibility with older callers, but is no
+// longer used to discover or open a database. Without a DB, database-backed
+// aliases fail closed by returning the original reference unchanged.
+func ResolveDriveOutputFolderReference(dataDir, ref string, dbs ...*sql.DB) string {
+	_ = dataDir
+	var db *sql.DB
+	if len(dbs) > 0 {
+		db = dbs[0]
+	}
+	return resolveDriveOutputFolderReference(context.Background(), db, ref)
+}
+
+// resolveDriveOutputFolderReference performs the lookup with explicit
+// ownership and context. db is borrowed and must never be closed here.
+func resolveDriveOutputFolderReference(ctx context.Context, db *sql.DB, ref string) string {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		return ""
@@ -26,20 +40,12 @@ func ResolveDriveOutputFolderReference(dataDir, ref string) string {
 	if folderID := extractDriveFolderID(ref); folderID != "" {
 		return folderID
 	}
-
-	dbPath := filepath.Join(strings.TrimSpace(dataDir), "velox.db")
-	if _, err := os.Stat(dbPath); err != nil {
+	if db == nil {
 		return ref
 	}
-
-	db, err := sql.Open("sqlite3", dbPath)
-	if err != nil {
-		return ref
-	}
-	defer db.Close()
 
 	normRef := normalizeDriveAlias(ref)
-	rows, err := db.Query(`SELECT id, name, url, language, metadata_json FROM drive_master_folders`)
+	rows, err := db.QueryContext(ctx, `SELECT id, name, url, language, metadata_json FROM drive_master_folders`)
 	if err != nil {
 		return ref
 	}
@@ -53,6 +59,9 @@ func ResolveDriveOutputFolderReference(dataDir, ref string) string {
 		if driveFolderMatches(ref, normRef, id, name, url, language, meta) {
 			return id
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return ref
 	}
 
 	return ref

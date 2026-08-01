@@ -17,6 +17,7 @@
 package enqueue
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -47,7 +48,11 @@ import (
 //  7. Fill a contract.NewJobPayloadV2 envelope and project to the output map.
 //  8. Attach clips, items, optional audio_tracks, fit, and (when no
 //     audio tracks yet) audio_url from the first voiceover path.
-func BuildClipPayloadForMaster(rawPayload map[string]interface{}, dataDir, videosDir, _ string) (map[string]interface{}, error) {
+func BuildClipPayloadForMaster(rawPayload map[string]interface{}, dataDir, videosDir, _ string, dbs ...*sql.DB) (map[string]interface{}, error) {
+	var db *sql.DB
+	if len(dbs) > 0 {
+		db = dbs[0]
+	}
 	videoName := payload.FirstString(rawPayload, "video_name", "title", "topic")
 	if videoName == "" {
 		videoName = paths.SanitizeVideoName(payload.FirstString(rawPayload, "source_text"))
@@ -136,7 +141,7 @@ func BuildClipPayloadForMaster(rawPayload map[string]interface{}, dataDir, video
 	v2.AudioLanguage = audioLanguage
 	v2.VideoMode = videoMode
 	v2.OutputPath = outputPath
-	v2.DriveOutput = ResolveDriveOutputFolderReference(dataDir, payload.FirstString(rawPayload, "drive_output_folder", "output_directory"))
+	v2.DriveOutput = ResolveDriveOutputFolderReference(dataDir, payload.FirstString(rawPayload, "drive_output_folder", "output_directory"), db)
 	v2.SubmittedVia = "api_script_generate"
 	v2.Source = "script_generate"
 	v2.Version = "v2"

@@ -72,7 +72,7 @@ func RegisterRoutes(group gin.IRoutes, cfg *config.Config, sqliteDB *store.SQLit
 	if len(docCreators) > 0 {
 		handlers.docCreator = docCreators[0]
 	}
-	registry := newScriptIngressRegistry(cfg, handlers.dataDir, handlers.docCreator)
+	registry := newScriptIngressRegistry(cfg, handlers.dataDir, handlers.sqliteDB, handlers.docCreator)
 	ingressHandler := jobshandler.NewHandler(registry, enqueuer)
 	group.POST("/generate-with-images", handlers.GenerateWithImagesHandler(cfg))
 	group.POST("/generate", ingressHandler.SubmitFixed("generate"))
@@ -83,7 +83,11 @@ func RegisterRoutes(group gin.IRoutes, cfg *config.Config, sqliteDB *store.SQLit
 	return handlers
 }
 
-func newScriptIngressRegistry(cfg *config.Config, dataDir string, docCreator GoogleDocCreator) *ingress.Registry {
+func newScriptIngressRegistry(cfg *config.Config, dataDir string, sqliteDB *store.SQLiteStore, docCreator GoogleDocCreator) *ingress.Registry {
+	var db *sql.DB
+	if sqliteDB != nil {
+		db = sqliteDB.DB()
+	}
 	registry := ingress.NewRegistry()
 	registry.MustRegister(ingress.Definition{
 		Kind:            "generate",
@@ -91,7 +95,7 @@ func newScriptIngressRegistry(cfg *config.Config, dataDir string, docCreator Goo
 		ExecutorVersion: 1,
 		PipelineID:      "hybrid.v1",
 		Builder: func(ctx context.Context, raw map[string]any) (map[string]any, error) {
-			normalized, err := buildUnifiedGeneratePayload(raw, dataDir, cfg.Runtime.VideosDir)
+			normalized, err := buildUnifiedGeneratePayload(raw, dataDir, cfg.Runtime.VideosDir, db)
 			if err != nil {
 				return nil, err
 			}
@@ -118,7 +122,7 @@ func newScriptIngressRegistry(cfg *config.Config, dataDir string, docCreator Goo
 					return nil, err
 				}
 				title := firstStringValue(translated, "video_name", "title", "topic")
-				doc, err := docCreator.CreateGoogleDoc(ctx, title, content, enqueue.ResolveDriveOutputFolderReference(dataDir, folder), firstStringValue(translated, "correlation_id"))
+				doc, err := docCreator.CreateGoogleDoc(ctx, title, content, enqueue.ResolveDriveOutputFolderReference(dataDir, folder, db), firstStringValue(translated, "correlation_id"))
 				if err != nil {
 					return nil, fmt.Errorf("create script google doc: %w", err)
 				}
@@ -135,7 +139,7 @@ func newScriptIngressRegistry(cfg *config.Config, dataDir string, docCreator Goo
 				}
 				translated["video_metadata"] = metadata
 			}
-			result, err := enqueue.BuildClipPayloadForMaster(translated, dataDir, cfg.Runtime.VideosDir, "")
+			result, err := enqueue.BuildClipPayloadForMaster(translated, dataDir, cfg.Runtime.VideosDir, "", db)
 			if err != nil {
 				return nil, err
 			}
@@ -152,7 +156,7 @@ func newScriptIngressRegistry(cfg *config.Config, dataDir string, docCreator Goo
 		ExecutorVersion: 1,
 		PipelineID:      "images.v1",
 		Builder: func(ctx context.Context, raw map[string]any) (map[string]any, error) {
-			return enqueue.BuildSlideshowPayloadForMaster(raw, dataDir, cfg.Runtime.VideosDir, "")
+			return enqueue.BuildSlideshowPayloadForMaster(raw, dataDir, cfg.Runtime.VideosDir, "", db)
 		},
 		Requirements: costmodel.DefaultRequirements(),
 	})
@@ -162,7 +166,7 @@ func newScriptIngressRegistry(cfg *config.Config, dataDir string, docCreator Goo
 // buildUnifiedGeneratePayload is the single public POST /script/generate
 // dispatcher. source.type selects the canonical input normalizer without
 // exposing a separate endpoint for each source family.
-func buildUnifiedGeneratePayload(raw map[string]any, dataDir, videosDir string) (map[string]any, error) {
+func buildUnifiedGeneratePayload(raw map[string]any, dataDir, videosDir string, db *sql.DB) (map[string]any, error) {
 	if raw == nil {
 		return nil, fmt.Errorf("request body is required")
 	}
@@ -199,7 +203,7 @@ func buildUnifiedGeneratePayload(raw map[string]any, dataDir, videosDir string) 
 			}
 		}
 
-		normalized, err := enqueue.BuildClipPayloadForMaster(merged, dataDir, videosDir, "")
+		normalized, err := enqueue.BuildClipPayloadForMaster(merged, dataDir, videosDir, "", db)
 		if err != nil {
 			return nil, err
 		}
@@ -265,7 +269,11 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 			}
 		}
 
-		normalized, err := enqueue.BuildSceneImagePayloadForMaster(payload, h.dataDir, cfg.Runtime.VideosDir, resolvedMasterURL)
+		var db *sql.DB
+		if h.sqliteDB != nil {
+			db = h.sqliteDB.DB()
+		}
+		normalized, err := enqueue.BuildSceneImagePayloadForMaster(payload, h.dataDir, cfg.Runtime.VideosDir, resolvedMasterURL, db)
 		if err != nil {
 			if assetErr, ok := voiceoverassets.AsAcquisitionError(err); ok {
 				c.JSON(http.StatusUnprocessableEntity, gin.H{
@@ -407,7 +415,7 @@ func (h *ScriptHandlers) ScriptJobHandler(full bool) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to load job"})
 			return
 		}
-		c.JSON(http.StatusOK, enqueue.RenderHTTPBoundaryJobResponse(job, full))
+		c.JSON(http.StatusOK, enqueue.RenderHTTPBoundaryJobResponse(job, full, h.sqliteDB.DB()))
 	}
 }
 
@@ -428,7 +436,7 @@ func (h *ScriptHandlers) ScriptByIDHandler() gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to load script"})
 			return
 		}
-		c.JSON(http.StatusOK, enqueue.RenderHTTPBoundaryJobResponse(job, true))
+		c.JSON(http.StatusOK, enqueue.RenderHTTPBoundaryJobResponse(job, true, h.sqliteDB.DB()))
 	}
 }
 

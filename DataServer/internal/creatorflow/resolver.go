@@ -49,6 +49,7 @@ package creatorflow
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 
@@ -75,6 +76,7 @@ type Resolver struct {
 	dataDir     string
 	videosDir   string
 	masterURL   string
+	db          *sql.DB
 }
 
 // NewResolver is the canonical constructor for the handler-side Resolver.
@@ -96,6 +98,7 @@ func NewResolver(cfg *config.Config, enqueuer *enqueue.Enqueuer, dbStore *store.
 		dataDir:     strings.TrimSpace(cfg.Runtime.DataDir),
 		videosDir:   strings.TrimSpace(cfg.Runtime.VideosDir),
 		masterURL:   resolvePublicMasterURL(cfg),
+		db:          dbStore.DB(),
 	}
 }
 
@@ -114,6 +117,7 @@ func NewResolverMinimal(enqueuer *enqueue.Enqueuer, dbStore *store.SQLiteStore) 
 		enqueuer:    enqueuer,
 		jobLookup:   enqueuer.Jobs,
 		forwardRepo: dbStore,
+		db:          dbStore.DB(),
 	}
 }
 
@@ -134,6 +138,7 @@ func NewResolverFromDeps(enqueuer *enqueue.Enqueuer, dbStore *store.SQLiteStore,
 		dataDir:     strings.TrimSpace(dataDir),
 		videosDir:   strings.TrimSpace(videosDir),
 		masterURL:   strings.TrimSpace(masterURL),
+		db:          dbStore.DB(),
 	}
 }
 

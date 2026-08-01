@@ -2,6 +2,7 @@
 package enqueue
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -24,18 +25,22 @@ import (
 // request body. This is the canonical builder used by the script/generate-with-images
 // endpoint. It auto-detects audio duration, normalizes scenes with image fallbacks,
 // and computes per-scene durations.
-func BuildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDir string) (map[string]interface{}, error) {
-	return BuildSceneImagePayloadForMaster(rawPayload, dataDir, videosDir, "")
+func BuildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDir string, dbs ...*sql.DB) (map[string]interface{}, error) {
+	return BuildSceneImagePayloadForMaster(rawPayload, dataDir, videosDir, "", dbs...)
 }
 
 // BuildSceneImagePayloadForMaster builds the canonical script-with-images payload
 // and stages remote voiceover assets behind the master so workers can fetch them
 // from a local master URL instead of Google Drive.
-func BuildSceneImagePayloadForMaster(rawPayload map[string]interface{}, dataDir, videosDir, masterURL string) (map[string]interface{}, error) {
-	return buildSceneImagePayload(rawPayload, dataDir, videosDir, masterURL)
+func BuildSceneImagePayloadForMaster(rawPayload map[string]interface{}, dataDir, videosDir, masterURL string, dbs ...*sql.DB) (map[string]interface{}, error) {
+	var db *sql.DB
+	if len(dbs) > 0 {
+		db = dbs[0]
+	}
+	return buildSceneImagePayload(rawPayload, dataDir, videosDir, masterURL, db)
 }
 
-func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDir, masterURL string) (map[string]interface{}, error) {
+func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDir, masterURL string, db *sql.DB) (map[string]interface{}, error) {
 	videoName := payload.FirstString(rawPayload, "video_name", "title", "topic")
 	if videoName == "" {
 		videoName = paths.SanitizeVideoName(payload.FirstString(rawPayload, "topic", "source_text"))
@@ -158,7 +163,7 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	v2.AudioLanguage = audioLanguage
 	v2.VideoMode = "scene_image"
 	v2.OutputPath = outputPath
-	v2.DriveOutput = ResolveDriveOutputFolderReference(dataDir, payload.FirstString(rawPayload, "drive_output_folder", "output_directory"))
+	v2.DriveOutput = ResolveDriveOutputFolderReference(dataDir, payload.FirstString(rawPayload, "drive_output_folder", "output_directory"), db)
 	v2.SceneImagePaths = stagedSceneImagePaths
 	v2.SubmittedVia = "api_script_generate_with_images"
 	v2.Source = "script_generate_with_images"

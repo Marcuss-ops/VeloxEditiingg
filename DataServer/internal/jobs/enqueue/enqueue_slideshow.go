@@ -2,6 +2,7 @@
 package enqueue
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 
@@ -13,8 +14,8 @@ import (
 // that reuse scene.composite.v1 but want the worker to route through
 // `images.v1`. It reuses the canonical scene-image builder, then mirrors the
 // normalized image/audio fields expected by the images pipeline compiler.
-func BuildSlideshowPayloadForMaster(rawPayload map[string]interface{}, dataDir, videosDir, masterURL string) (map[string]interface{}, error) {
-	normalized, err := BuildSceneImagePayloadForMaster(rawPayload, dataDir, videosDir, masterURL)
+func BuildSlideshowPayloadForMaster(rawPayload map[string]interface{}, dataDir, videosDir, masterURL string, dbs ...*sql.DB) (map[string]interface{}, error) {
+	normalized, err := BuildSceneImagePayloadForMaster(rawPayload, dataDir, videosDir, masterURL, dbs...)
 	if err != nil {
 		return nil, err
 	}
