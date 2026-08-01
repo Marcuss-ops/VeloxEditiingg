@@ -28,7 +28,7 @@ func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease 
 	}
 	if lease.AttemptCount >= maxAttempts {
 		if err := r.dbStore.MarkCreatorForwardingFailed(ctx,
-			lease.ForwardingID, r.identity, lease.LeaseID,
+			lease.ForwardingID, lease.RunnerID, lease.LeaseID,
 			"MAX_ENQUEUE_ATTEMPTS",
 			fmt.Sprintf("exhausted %d attempts: %s", maxAttempts, msg),
 			errorClass,
@@ -55,7 +55,7 @@ func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease 
 		// also fail (which is correct — the new lease holder owns it).
 		log.Printf("[FORWARDING] enqueue retry CAS failed forwarding=%s: %v; best-effort FAILED (may no-op if preempted)", lease.ForwardingID, err)
 		if ferr := r.dbStore.MarkCreatorForwardingFailed(ctx,
-			lease.ForwardingID, r.identity, lease.LeaseID,
+			lease.ForwardingID, lease.RunnerID, lease.LeaseID,
 			"ENQUEUE_RETRY_CAS_FAILED",
 			fmt.Sprintf("CAS failure on enqueue retry: %v", err),
 			"",
@@ -85,7 +85,7 @@ func (r *CreatorForwardingRunner) handleRetry(ctx context.Context, lease store.C
 	}
 	if lease.AttemptCount >= maxAttempts {
 		if err := r.dbStore.MarkCreatorForwardingFailed(ctx,
-			lease.ForwardingID, r.identity, lease.LeaseID,
+			lease.ForwardingID, lease.RunnerID, lease.LeaseID,
 			"MAX_ATTEMPTS",
 			fmt.Sprintf("exhausted %d attempts: %s", maxAttempts, msg),
 			errorClass,
@@ -102,7 +102,7 @@ func (r *CreatorForwardingRunner) handleRetry(ctx context.Context, lease store.C
 	backoff := r.cfg.backoffForAttempt(lease.AttemptCount)
 	nextAttempt := time.Now().UTC().Add(backoff)
 	if err := r.dbStore.MarkCreatorForwardingRetry(ctx,
-		lease.ForwardingID, r.identity, lease.LeaseID,
+		lease.ForwardingID, lease.RunnerID, lease.LeaseID,
 		code, msg, errorClass, nextAttempt,
 	); err != nil {
 		return errors.Join(supervisor.ErrElementScoped,

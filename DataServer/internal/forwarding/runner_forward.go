@@ -47,7 +47,7 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 	payloadJSON, payloadSHA256 := marshalPayload(result)
 	if payloadJSON == "" && payloadSHA256 == "" {
 		if err := r.dbStore.MarkCreatorForwardingBlocked(ctx,
-			lease.ForwardingID, r.identity, lease.LeaseID,
+			lease.ForwardingID, lease.RunnerID, lease.LeaseID,
 			"PAYLOAD_MARSHAL_ERROR",
 			"enqueue payload is not JSON-serializable",
 		); err != nil {
@@ -62,7 +62,7 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 	// 2. POLLING → READY_TO_FORWARD. The runner has a legitimate
 	//    lease so the leasable CAS guard applies.
 	if err := r.dbStore.MarkCreatorForwardingReadyToForward(ctx,
-		lease.ForwardingID, r.identity, lease.LeaseID,
+		lease.ForwardingID, lease.RunnerID, lease.LeaseID,
 		payloadJSON, payloadSHA256,
 	); err != nil {
 		log.Printf("[FORWARDING] mark ready-to-forward failed forwarding=%s: %v", lease.ForwardingID, err)

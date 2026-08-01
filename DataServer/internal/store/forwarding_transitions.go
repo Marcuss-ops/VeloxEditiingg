@@ -13,14 +13,16 @@ import (
 // ── State Transitions ──────────────────────────────────────────────────
 
 // RecordCreatorForwardingPoll updates the poll-tracking fields on a
-// creator_forwardings row without changing its status. It is called by
-// the runner after every successful remote poll so the row reflects the
-// latest poll attempt, the remote status, and when the next poll is due.
-func (s *SQLiteStore) RecordCreatorForwardingPoll(ctx context.Context, forwardingID, remoteStatus string, nextPollAt time.Time) error {
-	if forwardingID == "" {
-		return fmt.Errorf("store: RecordCreatorForwardingPoll: empty forwarding_id")
+// creator_forwardings row without changing its status. It is lease-fenced:
+// only the current runner/lease pair may record a poll while the lease is
+// still valid. A failed CAS returns ErrLeaseLost and leaves next_poll_at
+// untouched so a stale runner cannot reschedule the current owner's work.
+func (s *SQLiteStore) RecordCreatorForwardingPoll(ctx context.Context, forwardingID, runnerID, leaseID, remoteStatus string, nextPollAt time.Time) error {
+	if forwardingID == "" || runnerID == "" || leaseID == "" {
+		return fmt.Errorf("store: RecordCreatorForwardingPoll: missing required fields")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := time.Now().UTC()
+	nowISO := now.Format(time.RFC3339)
 	nextISO := ""
 	if !nextPollAt.IsZero() {
 		nextISO = nextPollAt.UTC().Format(time.RFC3339)
@@ -32,15 +34,20 @@ func (s *SQLiteStore) RecordCreatorForwardingPoll(ctx context.Context, forwardin
 		     last_remote_status = ?,
 		     next_poll_at = ?,
 		     updated_at = ?
-		 WHERE forwarding_id = ?`,
-		now, remoteStatus, nextISO, now, forwardingID,
+		 WHERE forwarding_id = ?
+		   AND status = 'POLLING'
+		   AND locked_by = ?
+		   AND lease_id = ?
+		   AND lease_expires_at > ?`,
+		nowISO, remoteStatus, nextISO, nowISO,
+		forwardingID, runnerID, leaseID, nowISO,
 	)
 	if err != nil {
 		return fmt.Errorf("store: RecordCreatorForwardingPoll: %w", err)
 	}
 	affected, _ := result.RowsAffected()
-	if affected == 0 {
-		return ErrTransitionConflict
+	if affected != 1 {
+		return fmt.Errorf("store: RecordCreatorForwardingPoll: %w", ErrLeaseLost)
 	}
 	return nil
 }
@@ -73,9 +80,10 @@ func (s *SQLiteStore) MarkCreatorForwardingReadyToForward(ctx context.Context, f
 		 WHERE forwarding_id = ?
 		   AND status = 'POLLING'
 		   AND locked_by = ?
-		   AND lease_id = ?`,
+		   AND lease_id = ?
+		   AND lease_expires_at > ?`,
 		payloadJSON, payloadSHA256, now,
-		forwardingID, runnerID, leaseID,
+		forwardingID, runnerID, leaseID, now,
 	)
 	if err != nil {
 		return fmt.Errorf("MarkCreatorForwardingReadyToForward: %w", err)
@@ -166,9 +174,10 @@ func (s *SQLiteStore) MarkCreatorForwardingRetry(ctx context.Context, forwarding
 		 WHERE forwarding_id = ?
 		   AND status = 'POLLING'
 		   AND locked_by = ?
-		   AND lease_id = ?`,
+		   AND lease_id = ?
+		   AND lease_expires_at > ?`,
 		nextISO, nullIfEmpty(errorCode), nullIfEmpty(errorMsg), nullIfEmpty(errorClass), now,
-		forwardingID, runnerID, leaseID,
+		forwardingID, runnerID, leaseID, now,
 	)
 	if err != nil {
 		return fmt.Errorf("MarkCreatorForwardingRetry: %w", err)
@@ -194,6 +203,9 @@ func (s *SQLiteStore) MarkCreatorForwardingFailed(ctx context.Context, forwardin
 	if forwardingID == "" {
 		return fmt.Errorf("store: MarkCreatorForwardingFailed: empty forwarding_id")
 	}
+	if (runnerID == "") != (leaseID == "") {
+		return fmt.Errorf("store: MarkCreatorForwardingFailed: runner_id and lease_id must be both empty or both present")
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -210,11 +222,9 @@ func (s *SQLiteStore) MarkCreatorForwardingFailed(ctx context.Context, forwardin
 		     updated_at = ?
 		 WHERE forwarding_id = ?
 		   AND status IN ('PENDING', 'POLLING', 'RETRY_WAIT', 'READY_TO_FORWARD', 'FORWARDING')
-		   AND (? = '' OR locked_by = ?)
-		   AND (? = '' OR lease_id = ?)`,
+		   AND (? = '' OR (locked_by = ? AND lease_id = ? AND lease_expires_at > ?))`,
 		nullIfEmpty(errorCode), nullIfEmpty(errorMsg), nullIfEmpty(errorClass), now, forwardingID,
-		runnerID, runnerID,
-		leaseID, leaseID,
+		runnerID, runnerID, leaseID, now,
 	)
 	if err != nil {
 		return fmt.Errorf("MarkCreatorForwardingFailed: %w", err)
@@ -235,6 +245,9 @@ func (s *SQLiteStore) MarkCreatorForwardingFailed(ctx context.Context, forwardin
 func (s *SQLiteStore) MarkCreatorForwardingCancelled(ctx context.Context, forwardingID, runnerID, leaseID, errorCode, errorMsg string) error {
 	if forwardingID == "" {
 		return fmt.Errorf("store: MarkCreatorForwardingCancelled: empty forwarding_id")
+	}
+	if (runnerID == "") != (leaseID == "") {
+		return fmt.Errorf("store: MarkCreatorForwardingCancelled: runner_id and lease_id must be both empty or both present")
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -270,11 +283,15 @@ func (s *SQLiteStore) MarkCreatorForwardingCancelled(ctx context.Context, forwar
 }
 
 // MarkCreatorForwardingBlocked moves a leasable forwarding to BLOCKED
-// (operator intervention required). Same full-CAS semantics as
-// MarkCreatorForwardingFailed: (forwarding_id, status, locked_by, lease_id).
+// (operator intervention required). When runnerID/leaseID are supplied,
+// the CAS also requires an unexpired lease; empty identifiers preserve the
+// operator/non-lease repair path.
 func (s *SQLiteStore) MarkCreatorForwardingBlocked(ctx context.Context, forwardingID, runnerID, leaseID, errorCode, errorMsg string) error {
 	if forwardingID == "" {
 		return fmt.Errorf("store: MarkCreatorForwardingBlocked: empty forwarding_id")
+	}
+	if (runnerID == "") != (leaseID == "") {
+		return fmt.Errorf("store: MarkCreatorForwardingBlocked: runner_id and lease_id must be both empty or both present")
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -292,11 +309,9 @@ func (s *SQLiteStore) MarkCreatorForwardingBlocked(ctx context.Context, forwardi
 		     updated_at = ?
 		 WHERE forwarding_id = ?
 		   AND status IN ('PENDING', 'POLLING', 'RETRY_WAIT', 'READY_TO_FORWARD', 'FORWARDING')
-		   AND (? = '' OR locked_by = ?)
-		   AND (? = '' OR lease_id = ?)`,
+		   AND (? = '' OR (locked_by = ? AND lease_id = ? AND lease_expires_at > ?))`,
 		nullIfEmpty(errorCode), nullIfEmpty(errorMsg), now, forwardingID,
-		runnerID, runnerID,
-		leaseID, leaseID,
+		runnerID, runnerID, leaseID, now,
 	)
 	if err != nil {
 		return fmt.Errorf("MarkCreatorForwardingBlocked: %w", err)
