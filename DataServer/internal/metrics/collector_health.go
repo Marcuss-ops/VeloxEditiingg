@@ -70,3 +70,27 @@ func readProcessRSS() int64 {
 func (c *Collector) AverageHeartbeatAge(now time.Time) {
 	c.averageHeartbeatAge(now)
 }
+
+// initMasterFamilies creates the master-side health gauges + the
+// per-worker heartbeat-age gauge recorded by RecordMasterHealth /
+// averageHeartbeatAge. Called once from NewCollector at boot.
+func (c *Collector) initMasterFamilies() {
+	masterLabels := []string{}
+	c.masterRssBytes = NewGaugeFamily("velox_master_memory_rss_bytes",
+		"Master process RSS", masterLabels)
+	c.masterGoroutines = NewGaugeFamily("velox_master_goroutines",
+		"Active goroutines on master", masterLabels)
+	c.masterOutboxPending = NewGaugeFamily("velox_master_outbox_pending",
+		"Pending outbox events", masterLabels)
+	c.heartbeatAge = NewGaugeFamily("velox_master_worker_heartbeat_age_seconds",
+		"Seconds since last worker heartbeat", []string{"worker_id"})
+}
+
+// masterFamilies returns the master-health subset registered by
+// NewCollector via allFamilies.
+func (c *Collector) masterFamilies() []*Family {
+	return []*Family{
+		c.masterRssBytes, c.masterGoroutines, c.masterOutboxPending,
+		c.heartbeatAge,
+	}
+}

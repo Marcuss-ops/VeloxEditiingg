@@ -168,3 +168,75 @@ func (c *Collector) RecordErrorClassification(errorCode, component, phase string
 	}
 	c.errorClassification.Inc([]string{errorCode, component, phase}, 1)
 }
+
+// initSinkFamilies creates the sink-recorded families: reconcile
+// supervisor counters, placement rejections, compatibility-alias
+// reads, error classification, and the ConflictBudget triplet +
+// histogram. Called once from NewCollector at boot.
+func (c *Collector) initSinkFamilies() {
+	c.reconcileTotal = NewCounterFamily(
+		"velox_completion_reconcile_total",
+		"Reconcile supervisor dispatch counts by case × action",
+		[]string{"case", "action"},
+	)
+	c.commitDeadlineExceeded = NewCounterFamily(
+		"velox_commit_deadline_exceeded_total",
+		"Attempts whose commit_deadline_at crossed without a terminal transition",
+		[]string{},
+	)
+
+	c.placementRejections = NewCounterFamily(
+		"velox_placement_rejections_total",
+		"Placement rejections by reason code (capacity_full, unsupported_executor, missing_capability, ...)",
+		[]string{"reason"},
+	)
+	c.compatibilityAliasReads = NewCounterFamily(
+		"velox_compat_alias_reads_total",
+		"Reads of legacy compatibility aliases by alias and canonical key",
+		[]string{"alias", "canonical"},
+	)
+
+	c.conflictStreakReset = NewCounterFamily(
+		"velox_conflict_streak_reset_total",
+		"ConflictBudget streak resets on a successful Coordinator-method exit (Record(nil) with non-zero prior streak)",
+		[]string{},
+	)
+	c.conflictEscalations = NewCounterFamily(
+		"velox_conflict_escalations_total",
+		"ConflictBudget escalations to ErrConflictBudgetExhausted when the consecutive-conflict threshold is crossed",
+		[]string{},
+	)
+	c.conflictStayedUnder = NewCounterFamily(
+		"velox_conflict_stayed_under_threshold_total",
+		"ConflictBudget observations of ErrTransitionConflict that incremented the streak but stayed under threshold",
+		[]string{},
+	)
+	c.errorClassification = NewCounterFamily(
+		"velox_error_classification_total",
+		"Error count classified by canonical error_code, component, and phase",
+		[]string{"error_code", "component", "phase"},
+	)
+
+	c.conflictStreakLength = NewHistogramFamily(
+		"velox_conflict_streak_length",
+		"Distribution of consecutive-conflict streak lengths observed on the attempt_commits CAS path",
+		[]string{},
+		[]float64{1, 2, 3, 5, 10},
+	)
+}
+
+// sinkFamilies returns the sink-recorded subset registered by
+// NewCollector via allFamilies.
+func (c *Collector) sinkFamilies() []*Family {
+	return []*Family{
+		c.reconcileTotal,
+		c.commitDeadlineExceeded,
+		c.placementRejections,
+		c.compatibilityAliasReads,
+		c.errorClassification,
+		c.conflictStreakReset,
+		c.conflictEscalations,
+		c.conflictStayedUnder,
+		c.conflictStreakLength,
+	}
+}

@@ -68,3 +68,36 @@ func encodeMicroEUR(eur float64) int64 {
 func (c *Collector) RecordWaste(wasteType string, value uint64) {
 	c.wasteTotal.Inc([]string{wasteType}, value)
 }
+
+// initCostFamilies creates the cost-per-output-minute gauges + the
+// waste counter recorded by RecordAggregateCost / RecordWaste. Called
+// once from NewCollector at boot.
+func (c *Collector) initCostFamilies() {
+	costLabels := []string{"worker_class"}
+	c.costCpuPerMin = NewGaugeFamily("velox_cost_cpu_core_seconds_per_output_minute",
+		"CPU cost per output minute (€ × 1e6) by worker class",
+		costLabels)
+	c.costNetworkPerMin = NewGaugeFamily("velox_cost_network_gb_per_output_minute",
+		"Network egress cost per output minute (€ × 1e6) by worker class",
+		costLabels)
+	c.costStoragePerMin = NewGaugeFamily("velox_cost_storage_gb_written_per_output_minute",
+		"Storage cost per output minute (€ × 1e6) by worker class",
+		costLabels)
+	c.costTotalPerMin = NewGaugeFamily("velox_cost_total_per_output_minute",
+		"Total cost per output minute (€ × 1e6) by worker class",
+		costLabels)
+	c.wasteTotal = NewCounterFamily(
+		"velox_waste_total",
+		"Waste/cost totals by type (retry_count, wasted_cpu_ms, wasted_download_bytes, wasted_cost_estimate)",
+		[]string{"waste_type"},
+	)
+}
+
+// costFamilies returns the cost/waste subset registered by
+// NewCollector via allFamilies.
+func (c *Collector) costFamilies() []*Family {
+	return []*Family{
+		c.costCpuPerMin, c.costNetworkPerMin, c.costStoragePerMin, c.costTotalPerMin,
+		c.wasteTotal,
+	}
+}

@@ -150,3 +150,64 @@ func (c *Collector) RecordParallelism(p taskattempts.AttemptParallelism, execID,
 		c.parallelOversub.GaugeSet(labels, int64(p.CPUOversubscription*1000))
 	}
 }
+
+// initEngineFamilies creates the engine phase/segment histograms +
+// the parallelism gauge set recorded by RecordEnginePhase /
+// RecordEngineSegment / RecordParallelism. Called once from
+// NewCollector at boot.
+func (c *Collector) initEngineFamilies() {
+	enginePhaseBuckets := []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}
+	c.enginePhaseDurations = NewHistogramFamily(
+		"velox_engine_phase_duration_seconds",
+		"Per-phase duration in seconds for C++ engine and Go pipeline phases",
+		[]string{"executor_id", "worker_id", "phase", "status"},
+		enginePhaseBuckets,
+	)
+	c.engineSegmentDurations = NewHistogramFamily(
+		"velox_engine_segment_duration_seconds",
+		"Per-segment duration in seconds from the C++ engine sidecar segments[]",
+		[]string{"executor_id", "worker_id", "source_type", "status"},
+		enginePhaseBuckets,
+	)
+
+	parLabels := []string{"executor_id", "worker_id"}
+	c.parallelSerialWork = NewGaugeFamily("velox_taskrunner_serial_work_ms",
+		"Sum of all segment durations (serial work baseline)", parLabels)
+	c.parallelRenderWindow = NewGaugeFamily("velox_taskrunner_render_window_ms",
+		"Wall-clock span from first segment start to last segment end", parLabels)
+	c.parallelUnionBusy = NewGaugeFamily("velox_taskrunner_union_busy_ms",
+		"Wall-clock time during which at least one segment was active", parLabels)
+	c.parallelOverlap = NewGaugeFamily("velox_taskrunner_overlap_ms",
+		"Wall-clock time during which >1 segment was active simultaneously", parLabels)
+	c.parallelIdleGap = NewGaugeFamily("velox_taskrunner_idle_gap_ms",
+		"Time within render window where no segment was active", parLabels)
+	c.parallelPeak = NewGaugeFamily("velox_taskrunner_parallel_peak",
+		"Maximum number of segments active simultaneously", parLabels)
+	c.parallelAverage = NewGaugeFamily("velox_taskrunner_parallel_average",
+		"Average concurrency (serial_work / union_busy)", parLabels)
+	c.parallelEfficiency = NewGaugeFamily("velox_taskrunner_parallel_efficiency_ratio",
+		"Parallelism efficiency (average_concurrency / peak_concurrency)", parLabels)
+	c.parallelSpeedup = NewGaugeFamily("velox_taskrunner_speedup_vs_serial",
+		"Speedup over serial execution (serial_work / render_window)", parLabels)
+	c.parallelOversub = NewGaugeFamily("velox_resource_cpu_oversubscription_ratio",
+		"CPU oversubscription (total_ffmpeg_threads / logical_cpu_count)", parLabels)
+}
+
+// engineFamilies returns the engine/parallelism subset registered by
+// NewCollector via allFamilies.
+func (c *Collector) engineFamilies() []*Family {
+	return []*Family{
+		c.enginePhaseDurations,
+		c.engineSegmentDurations,
+		c.parallelSerialWork,
+		c.parallelRenderWindow,
+		c.parallelUnionBusy,
+		c.parallelOverlap,
+		c.parallelIdleGap,
+		c.parallelPeak,
+		c.parallelAverage,
+		c.parallelEfficiency,
+		c.parallelSpeedup,
+		c.parallelOversub,
+	}
+}

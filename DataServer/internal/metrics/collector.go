@@ -53,6 +53,11 @@ import (
 
 // Collector is the registered metric surface for the master. It owns
 // the *metrics.Registry and a curated list of typed families.
+//
+// The family fields are grouped by domain. Each domain's families are
+// created by the matching init<Domain>Families method and returned by
+// the matching <domain>Families list method, both living in the
+// collector_<domain>.go file next to that domain's recorders.
 type Collector struct {
 	reg *Registry
 
@@ -211,281 +216,23 @@ type Collector struct {
 }
 
 // NewCollector returns a Collector with all 12 scorecard family +
-// supporting families registered on reg.
+// supporting families registered on reg. Each domain's families are
+// created by the init<Domain>Families methods defined in the matching
+// collector_<domain>.go files.
 func NewCollector(reg *Registry) *Collector {
 	c := &Collector{reg: reg}
 
-	c.renderSpeed = NewGaugeFamily(
-		"velox_project_render_speed_ratio",
-		"Ratio of media duration to wall clock time (>1 means faster than realtime)",
-		[]string{"executor_id", "worker_class"},
-	)
-
-	c.phaseDurations = NewHistogramFamily(
-		"velox_task_phase_duration_seconds",
-		"Per-phase duration in seconds for a canonical rendering phase",
-		[]string{"executor_id", "executor_version", "worker_class", "phase", "status"},
-		[]float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 1800},
-	)
-
-	// FFmpeg.
-	c.ffmpegFramesTotal = NewCounterFamily("velox_ffmpeg_frames_processed_total",
-		"Total frames processed by FFmpeg as observed from -progress", []string{"executor_id"})
-	c.ffmpegFps = NewGaugeFamily("velox_ffmpeg_fps",
-		"Last-observed FFmpeg fps", []string{"executor_id"})
-	c.ffmpegSpeed = NewGaugeFamily("velox_ffmpeg_speed_ratio",
-		"Last-observed FFmpeg speed vs realtime (>1 faster)", []string{"executor_id"})
-	c.ffmpegEncodeMs = NewHistogramFamily("velox_ffmpeg_encode_duration_seconds",
-		"Encode duration as observed", []string{"executor_id"},
-		[]float64{0.5, 1, 2.5, 5, 10, 30, 60, 300})
-	c.ffmpegDecodeMs = NewHistogramFamily("velox_ffmpeg_decode_duration_seconds",
-		"Decode duration as observed", []string{"executor_id"},
-		[]float64{0.25, 0.5, 1, 2.5, 5, 10, 30, 60})
-	c.ffmpegDropped = NewCounterFamily("velox_ffmpeg_dropped_frames_total",
-		"Dropped frames as observed", []string{"executor_id"})
-	c.ffmpegDuplicated = NewCounterFamily("velox_ffmpeg_duplicated_frames_total",
-		"Duplicated frames as observed", []string{"executor_id"})
-	c.ffmpegExits = NewCounterFamily("velox_ffmpeg_exit_total",
-		"FFmpeg process exits by exit code", []string{"executor_id", "exit_code"})
-	c.ffmpegRestarts = NewCounterFamily("velox_ffmpeg_restarts_total",
-		"FFmpeg process restarts", []string{"executor_id"})
-	c.ffmpegProcessesAct = NewGaugeFamily("velox_ffmpeg_processes_active",
-		"Currently running FFmpeg processes", []string{"executor_id"})
-
-	// Video encode amplification.
-	c.videoEncodePasses = NewCounterFamily("velox_video_encode_passes_total",
-		"Encode passes performed", []string{"executor_id"})
-	c.videoFramesEnc = NewCounterFamily("velox_video_frames_encoded_total",
-		"Frames encoded (sum across passes)", []string{"executor_id"})
-	c.videoOutputFrames = NewCounterFamily("velox_video_output_frames_total",
-		"Output frames published (lower-bound dedup)", []string{"executor_id"})
-	c.videoStreamCopy = NewCounterFamily("velox_video_stream_copy_operations_total",
-		"Stream-copy concat operations (cheap path)", []string{})
-	c.videoReencode = NewCounterFamily("velox_video_reencode_operations_total",
-		"Reencode concat operations (expensive path)", []string{"reason"})
-
-	// Cache.
-	c.cacheHits = NewCounterFamily("velox_cache_requests_total",
-		"Cache requests by result", []string{"result"})
-	c.cacheBytes = NewCounterFamily("velox_cache_bytes_total",
-		"Cache bytes by result", []string{"result"})
-	c.cacheEntries = NewGaugeFamily("velox_cache_entries",
-		"Current cache entries", []string{"worker_id"})
-	c.cacheSizeBytes = NewGaugeFamily("velox_cache_size_bytes",
-		"Current cache size in bytes", []string{"worker_id"})
-	c.cacheEvictions = NewCounterFamily("velox_cache_evictions_total",
-		"Cache evictions", []string{"worker_id"})
-	c.cacheEvictedBytes = NewCounterFamily("velox_cache_evicted_bytes_total",
-		"Bytes evicted from cache", []string{"worker_id"})
-	c.cacheCorruptions = NewCounterFamily("velox_cache_corruption_total",
-		"Cache corruption events", []string{"worker_id"})
-
-	// Worker.
-	c.workerCPUUtil = NewGaugeFamily("velox_worker_cpu_utilization_ratio",
-		"Worker CPU utilization (0-1)", []string{"worker_id"})
-	c.workerIOWait = NewGaugeFamily("velox_worker_cpu_iowait_ratio",
-		"Worker iowait ratio", []string{"worker_id"})
-	c.workerSteal = NewGaugeFamily("velox_worker_cpu_steal_ratio",
-		"Worker steal time ratio", []string{"worker_id"})
-	c.workerRSSBytes = NewGaugeFamily("velox_worker_process_rss_bytes",
-		"Worker process RSS", []string{"worker_id"})
-	c.workerRSSPeak = NewGaugeFamily("velox_worker_process_rss_peak_bytes",
-		"Worker peak RSS", []string{"worker_id"})
-	c.workerMemoryUsed = NewGaugeFamily("velox_worker_memory_used_bytes",
-		"Worker system memory used", []string{"worker_id"})
-	c.workerDiskFree = NewGaugeFamily("velox_worker_disk_free_bytes",
-		"Worker disk free bytes", []string{"worker_id"})
-	c.workerTempBytes = NewGaugeFamily("velox_worker_temp_bytes",
-		"Worker temp bytes (gauge at heartbeat time)", []string{"worker_id"})
-	c.workerActiveTasks = NewGaugeFamily("velox_worker_active_tasks",
-		"Active tasks on worker", []string{"worker_id"})
-	c.workerTaskSlots = NewGaugeFamily("velox_worker_task_slots",
-		"Worker task slots", []string{"worker_id"})
-	c.workerLoad1 = NewGaugeFamily("velox_worker_load1",
-		"Worker 1-min loadavg", []string{"worker_id"})
-	c.workerRunQueue = NewGaugeFamily("velox_worker_run_queue",
-		"Worker run queue depth", []string{"worker_id"})
-	c.workerNetRxBytes = NewCounterFamily("velox_worker_network_receive_bytes_total",
-		"Worker net rx total", []string{"worker_id"})
-	c.workerNetTxBytes = NewCounterFamily("velox_worker_network_transmit_bytes_total",
-		"Worker net tx total", []string{"worker_id"})
-
-	// Master health.
-	masterLabels := []string{}
-	c.masterRssBytes = NewGaugeFamily("velox_master_memory_rss_bytes",
-		"Master process RSS", masterLabels)
-	c.masterGoroutines = NewGaugeFamily("velox_master_goroutines",
-		"Active goroutines on master", masterLabels)
-	c.masterOutboxPending = NewGaugeFamily("velox_master_outbox_pending",
-		"Pending outbox events", masterLabels)
-	c.heartbeatAge = NewGaugeFamily("velox_master_worker_heartbeat_age_seconds",
-		"Seconds since last worker heartbeat", []string{"worker_id"})
-
-	// Compute outcomes (spec §14).
-	c.computeSeconds = NewCounterFamily(
-		"velox_compute_seconds_total",
-		"Compute seconds classified by outcome (useful|failed|cancelled|stale|speculative_lost)",
-		[]string{"outcome"},
-	)
-	c.computeFailureReasons = NewCounterFamily(
-		"velox_compute_failure_reasons_total",
-		"Number of failed compute attempts by reason code",
-		[]string{"reason"},
-	)
-
-	// Cost per output minute (spec §14 follow-up). Each gauge is
-	// single-label `worker_class`. Stamped per-tick by the
-	// supervisor with the per-class aggregate (sum/count) for the
-	// just-completed attempts — see RecordAggregateCost + the
-	// math caveat in cost_factors.go. Micro-EUR encoding
-	// (×1_000_000) so the int64 gauge can carry a fraction.
-	costLabels := []string{"worker_class"}
-	c.costCpuPerMin = NewGaugeFamily("velox_cost_cpu_core_seconds_per_output_minute",
-		"CPU cost per output minute (€ × 1e6) by worker class",
-		costLabels)
-	c.costNetworkPerMin = NewGaugeFamily("velox_cost_network_gb_per_output_minute",
-		"Network egress cost per output minute (€ × 1e6) by worker class",
-		costLabels)
-	c.costStoragePerMin = NewGaugeFamily("velox_cost_storage_gb_written_per_output_minute",
-		"Storage cost per output minute (€ × 1e6) by worker class",
-		costLabels)
-	c.costTotalPerMin = NewGaugeFamily("velox_cost_total_per_output_minute",
-		"Total cost per output minute (€ × 1e6) by worker class",
-		costLabels)
-
-	// Derived scorecard gauges (Scorecard v2 / Step 18). Single-label
-	// worker_class; values are pre-computed on the master so the
-	// exporter emits raw ratios/ms/bytes-per-second without forcing
-	// PromQL derivations.
-	c.renderFactor = NewGaugeFamily("velox_render_factor",
-		"Wall clock seconds per output second (lower is faster)",
-		costLabels)
-	c.encodeMsPerOutputMinute = NewGaugeFamily("velox_encode_ms_per_output_minute",
-		"Engine segment build milliseconds per output minute",
-		costLabels)
-	c.cpuMsPerOutputMinute = NewGaugeFamily("velox_cpu_ms_per_output_minute",
-		"CPU milliseconds per output minute",
-		costLabels)
-	c.tempWriteAmplification = NewGaugeFamily("velox_temp_write_amplification",
-		"Temp bytes written per output byte",
-		costLabels)
-	c.cacheHitRatio = NewGaugeFamily("velox_cache_hit_ratio",
-		"Cache hit ratio (0-1)",
-		costLabels)
-	c.downloadThroughput = NewGaugeFamily("velox_download_throughput_bytes_per_second",
-		"Download throughput in bytes per second",
-		costLabels)
-
-	// Phase 4.3 — reconcile supervisor counters. Cardinality
-	// discipline: 11 cases × 3 actions = 33 series (closed enum, no
-	// host-IDs or job-IDs). commit_deadline_exceeded_total has no
-	// labels at all — the supervisor's tick owns the rate; a label
-	// would force operators to aggregate on their side.
-	c.reconcileTotal = NewCounterFamily(
-		"velox_completion_reconcile_total",
-		"Reconcile supervisor dispatch counts by case × action",
-		[]string{"case", "action"},
-	)
-	c.commitDeadlineExceeded = NewCounterFamily(
-		"velox_commit_deadline_exceeded_total",
-		"Attempts whose commit_deadline_at crossed without a terminal transition",
-		[]string{},
-	)
-
-	c.placementRejections = NewCounterFamily(
-		"velox_placement_rejections_total",
-		"Placement rejections by reason code (capacity_full, unsupported_executor, missing_capability, ...)",
-		[]string{"reason"},
-	)
-	c.compatibilityAliasReads = NewCounterFamily(
-		"velox_compat_alias_reads_total",
-		"Reads of legacy compatibility aliases by alias and canonical key",
-		[]string{"alias", "canonical"},
-	)
-
-	// ConflictBudget instrumentation (spec §14 Blocco 5). Three
-	// counters + one histogram. Cardinality discipline: NO labels —
-	// the conflict path's relevant dimension is the streak length,
-	// which the histogram captures as an observed value rather than
-	// as a label series. Bucket choice [1,2,3,5,10] covers the
-	// default threshold=3 plus 2x and 3x headroom for future
-	// policy bumps; anything above 10 saturates the +Inf bucket
-	// (a deadlock signal that operators should already have alerted
-	// on through the escalation counter).
-	c.conflictStreakReset = NewCounterFamily(
-		"velox_conflict_streak_reset_total",
-		"ConflictBudget streak resets on a successful Coordinator-method exit (Record(nil) with non-zero prior streak)",
-		[]string{},
-	)
-	c.conflictEscalations = NewCounterFamily(
-		"velox_conflict_escalations_total",
-		"ConflictBudget escalations to ErrConflictBudgetExhausted when the consecutive-conflict threshold is crossed",
-		[]string{},
-	)
-	c.conflictStayedUnder = NewCounterFamily(
-		"velox_conflict_stayed_under_threshold_total",
-		"ConflictBudget observations of ErrTransitionConflict that incremented the streak but stayed under threshold",
-		[]string{},
-	)
-	c.errorClassification = NewCounterFamily(
-		"velox_error_classification_total",
-		"Error count classified by canonical error_code, component, and phase",
-		[]string{"error_code", "component", "phase"},
-	)
-
-	c.wasteTotal = NewCounterFamily(
-		"velox_waste_total",
-		"Waste/cost totals by type (retry_count, wasted_cpu_ms, wasted_download_bytes, wasted_cost_estimate)",
-		[]string{"waste_type"},
-	)
-
-	c.conflictStreakLength = NewHistogramFamily(
-		"velox_conflict_streak_length",
-		"Distribution of consecutive-conflict streak lengths observed on the attempt_commits CAS path",
-		[]string{},
-		[]float64{1, 2, 3, 5, 10},
-	)
-
-	// Engine phase timing histograms (Scorecard v2 / Step 7).
-	// Granular sub-second buckets because engine phases are fast
-	// (asset download, ffmpeg encode, concat, etc.).
-	enginePhaseBuckets := []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}
-	c.enginePhaseDurations = NewHistogramFamily(
-		"velox_engine_phase_duration_seconds",
-		"Per-phase duration in seconds for C++ engine and Go pipeline phases",
-		[]string{"executor_id", "worker_id", "phase", "status"},
-		enginePhaseBuckets,
-	)
-	c.engineSegmentDurations = NewHistogramFamily(
-		"velox_engine_segment_duration_seconds",
-		"Per-segment duration in seconds from the C++ engine sidecar segments[]",
-		[]string{"executor_id", "worker_id", "source_type", "status"},
-		enginePhaseBuckets,
-	)
-
-	// Parallelism telemetry (migration 098). Gauges stamped per-attempt
-	// from the task_attempt_parallelism row computed by the master.
-	parLabels := []string{"executor_id", "worker_id"}
-	c.parallelSerialWork = NewGaugeFamily("velox_taskrunner_serial_work_ms",
-		"Sum of all segment durations (serial work baseline)", parLabels)
-	c.parallelRenderWindow = NewGaugeFamily("velox_taskrunner_render_window_ms",
-		"Wall-clock span from first segment start to last segment end", parLabels)
-	c.parallelUnionBusy = NewGaugeFamily("velox_taskrunner_union_busy_ms",
-		"Wall-clock time during which at least one segment was active", parLabels)
-	c.parallelOverlap = NewGaugeFamily("velox_taskrunner_overlap_ms",
-		"Wall-clock time during which >1 segment was active simultaneously", parLabels)
-	c.parallelIdleGap = NewGaugeFamily("velox_taskrunner_idle_gap_ms",
-		"Time within render window where no segment was active", parLabels)
-	c.parallelPeak = NewGaugeFamily("velox_taskrunner_parallel_peak",
-		"Maximum number of segments active simultaneously", parLabels)
-	c.parallelAverage = NewGaugeFamily("velox_taskrunner_parallel_average",
-		"Average concurrency (serial_work / union_busy)", parLabels)
-	c.parallelEfficiency = NewGaugeFamily("velox_taskrunner_parallel_efficiency_ratio",
-		"Parallelism efficiency (average_concurrency / peak_concurrency)", parLabels)
-	c.parallelSpeedup = NewGaugeFamily("velox_taskrunner_speedup_vs_serial",
-		"Speedup over serial execution (serial_work / render_window)", parLabels)
-	c.parallelOversub = NewGaugeFamily("velox_resource_cpu_oversubscription_ratio",
-		"CPU oversubscription (total_ffmpeg_threads / logical_cpu_count)", parLabels)
+	c.initRenderFamilies()
+	c.initFFmpegFamilies()
+	c.initVideoFamilies()
+	c.initCacheFamilies()
+	c.initWorkerFamilies()
+	c.initMasterFamilies()
+	c.initComputeFamilies()
+	c.initDerivedFamilies()
+	c.initCostFamilies()
+	c.initSinkFamilies()
+	c.initEngineFamilies()
 
 	c.lastSeen = make(map[string]time.Time)
 
@@ -497,122 +244,20 @@ func NewCollector(reg *Registry) *Collector {
 
 // allFamilies returns the curated list to register. Adding a new family
 // to the collector requires adding it here AND a typed Recorder hook.
+// The per-domain subsets are composed from the <domain>Families list
+// methods defined in the collector_<domain>.go files.
 func (c *Collector) allFamilies() []*Family {
-	return []*Family{
-		c.renderSpeed,
-		c.phaseDurations,
-		c.ffmpegFramesTotal, c.ffmpegFps, c.ffmpegSpeed,
-		c.ffmpegEncodeMs, c.ffmpegDecodeMs,
-		c.ffmpegDropped, c.ffmpegDuplicated, c.ffmpegExits,
-		c.ffmpegRestarts, c.ffmpegProcessesAct,
-		c.videoEncodePasses, c.videoFramesEnc, c.videoOutputFrames,
-		c.videoStreamCopy, c.videoReencode,
-		c.cacheHits, c.cacheBytes, c.cacheEntries,
-		c.cacheSizeBytes, c.cacheEvictions, c.cacheEvictedBytes,
-		c.cacheCorruptions,
-		c.workerCPUUtil, c.workerIOWait, c.workerSteal,
-		c.workerRSSBytes, c.workerRSSPeak, c.workerMemoryUsed,
-		c.workerDiskFree, c.workerTempBytes,
-		c.workerActiveTasks, c.workerTaskSlots,
-		c.workerLoad1, c.workerRunQueue,
-		c.workerNetRxBytes, c.workerNetTxBytes,
-		c.masterRssBytes, c.masterGoroutines, c.masterOutboxPending,
-		c.heartbeatAge,
-		c.computeSeconds,
-		c.computeFailureReasons, c.costCpuPerMin, c.costNetworkPerMin, c.costStoragePerMin, c.costTotalPerMin,
-		c.renderFactor, c.encodeMsPerOutputMinute, c.cpuMsPerOutputMinute,
-		c.tempWriteAmplification, c.cacheHitRatio, c.downloadThroughput,
-		c.reconcileTotal,
-		c.commitDeadlineExceeded,
-		c.placementRejections,
-		c.compatibilityAliasReads,
-		c.errorClassification,
-		c.wasteTotal,
-		c.conflictStreakReset,
-		c.conflictEscalations,
-		c.conflictStayedUnder,
-		c.conflictStreakLength,
-		c.enginePhaseDurations,
-		c.engineSegmentDurations,
-		c.parallelSerialWork,
-		c.parallelRenderWindow,
-		c.parallelUnionBusy,
-		c.parallelOverlap,
-		c.parallelIdleGap,
-		c.parallelPeak,
-		c.parallelAverage,
-		c.parallelEfficiency,
-		c.parallelSpeedup,
-		c.parallelOversub,
-	}
+	var families []*Family
+	families = append(families, c.renderFamilies()...)
+	families = append(families, c.ffmpegFamilies()...)
+	families = append(families, c.videoFamilies()...)
+	families = append(families, c.cacheFamilies()...)
+	families = append(families, c.workerFamilies()...)
+	families = append(families, c.masterFamilies()...)
+	families = append(families, c.computeFamilies()...)
+	families = append(families, c.derivedFamilies()...)
+	families = append(families, c.costFamilies()...)
+	families = append(families, c.sinkFamilies()...)
+	families = append(families, c.engineFamilies()...)
+	return families
 }
-
-// RecordAttempt ingests one AttemptMetrics + CacheStats + CostBasis row
-// into the registry. Gauges are set-to-current-value (idempotent on
-// repeat calls with the same input). Counters are NOT idempotent —
-// each call increments iff the input has fresh totals; the supervisor
-// poll path must either deliver deltas or dedup on attempt-id to
-// avoid double-counting in steady state. (TODO pre-existing; see the
-// package-header "Idempotent violated" caveat.)
-//
-// For the master to be fully incremental we rely on the aggregator
-// reading deltas from a previous snapshot via the AttemptReader
-// interface; this method is the SIMPLE set-to-current-value path used
-// when Scan is wired to load the latest attempt rows.
-// RecordAttemptOutcome classifies one FINAL attempt state onto the
-// compute-outcome families (spec §14).
-//
-// Outcomes emitted:
-//
-//	AttemptStatusSucceeded  → outcome="useful"
-//	AttemptStatusFailed     → outcome="failed" + computeFailureReasons{reason=errCode}++
-//	AttemptStatusCancelled → outcome="cancelled"
-//	AttemptStatusTimedOut   → outcome="stale"
-//
-// Pending/Running (non-terminal) attempts are no-ops: we deliberately
-// only emit at completion so supervisor polls don't double-count.
-//
-// speculative_lost is part of the family surface per spec §14 but
-// is NOT emitted from this path; the scheduler writes that outcome
-// directly when a speculative attempt is abandoned by a committed
-// winner. Reserved for that integration.
-//
-// errCode is only meaningful when status==FAILED; otherwise pass ""
-// (the helper ignores it).
-//
-// The legacy 4-family computeUseful / computeFailed / computeCancel /
-// computeStale surface is gone — collapsed to one family per spec §14.
-// Counter cumulative values restart from zero on rollout (no
-// migration); old dashboards reading velox_compute_seconds_total_*
-// must migrate to velox_compute_seconds_total{outcome=...}.
-// RecordWorker stamps a worker's resource counters onto the per-worker
-// gauge set. The heartbeat period drives how often this is called from
-// watchdogs (default 15s).
-
-// ResourceSnapshot is the typed payload RecordWorker expects; this
-// matches pb.WorkerResourceCounters but stays decoupled from proto
-// symbols (so internal/metrics has no cross-module dep). counter. Called from internal/completion's
-// ReconcileSupervisor after every Coordinator.ReconcileAttempt
-// dispatch (and once for every deadline-expired row that the
-// coordinator couldn't reach in this tick). The case/action
-// dimensions are exposed as strings on the metric labels.
-//
-// Compile-time guard: the *Collector satisfies
-// completion.ReconcileMetrics — wiring mistakes break loudly at
-// build time.
-// IncCommitDeadlineExceeded stamps one observation on the deadline
-// counter. Called once per attempt whose commit_deadline_at has
-// crossed without a terminal transition. Distinct from the
-// {case,action} counter because a single tick can produce multiple
-// deadline-expired rows and a single row can be observed across
-// ticks (the seenIDs dedup map is bounded by seenCap).
-// AttemptReader isolates the collector from a hard dependency on
-// store/sqlite_task_attempt_repository; the Master wires the real
-// repository on the goroutine via NewMethods. The supervisor calls
-// ScanAttemptWithLabels after resolving executor and worker labels.
-//
-// GetStatus was added in spec §14 refactor: the compute-outcome
-// family classifies compute seconds by terminal attempt state, so
-// the reader must surface the attempt Status. Implementations that
-// can't surface a status may return any value; the labeled scan falls
-// back to PENDING on error, making RecordAttemptOutcome a safe no-op.

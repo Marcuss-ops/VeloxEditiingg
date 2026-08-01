@@ -235,3 +235,62 @@ func (c *Collector) ScanAttemptWithLabels(
 	// counting on the velox_engine_phase_duration_seconds histogram.
 	return nil
 }
+
+// initComputeFamilies creates the spec §14 compute-outcome counter
+// families recorded by RecordAttemptOutcome. Called once from
+// NewCollector at boot.
+func (c *Collector) initComputeFamilies() {
+	c.computeSeconds = NewCounterFamily(
+		"velox_compute_seconds_total",
+		"Compute seconds classified by outcome (useful|failed|cancelled|stale|speculative_lost)",
+		[]string{"outcome"},
+	)
+	c.computeFailureReasons = NewCounterFamily(
+		"velox_compute_failure_reasons_total",
+		"Number of failed compute attempts by reason code",
+		[]string{"reason"},
+	)
+}
+
+// computeFamilies returns the compute-outcome subset registered by
+// NewCollector via allFamilies.
+func (c *Collector) computeFamilies() []*Family {
+	return []*Family{
+		c.computeSeconds,
+		c.computeFailureReasons,
+	}
+}
+
+// initDerivedFamilies creates the Scorecard v2 / Step 18 derived
+// gauges recorded by RecordAttempt. Called once from NewCollector at
+// boot.
+func (c *Collector) initDerivedFamilies() {
+	costLabels := []string{"worker_class"}
+	c.renderFactor = NewGaugeFamily("velox_render_factor",
+		"Wall clock seconds per output second (lower is faster)",
+		costLabels)
+	c.encodeMsPerOutputMinute = NewGaugeFamily("velox_encode_ms_per_output_minute",
+		"Engine segment build milliseconds per output minute",
+		costLabels)
+	c.cpuMsPerOutputMinute = NewGaugeFamily("velox_cpu_ms_per_output_minute",
+		"CPU milliseconds per output minute",
+		costLabels)
+	c.tempWriteAmplification = NewGaugeFamily("velox_temp_write_amplification",
+		"Temp bytes written per output byte",
+		costLabels)
+	c.cacheHitRatio = NewGaugeFamily("velox_cache_hit_ratio",
+		"Cache hit ratio (0-1)",
+		costLabels)
+	c.downloadThroughput = NewGaugeFamily("velox_download_throughput_bytes_per_second",
+		"Download throughput in bytes per second",
+		costLabels)
+}
+
+// derivedFamilies returns the derived-scorecard subset registered by
+// NewCollector via allFamilies.
+func (c *Collector) derivedFamilies() []*Family {
+	return []*Family{
+		c.renderFactor, c.encodeMsPerOutputMinute, c.cpuMsPerOutputMinute,
+		c.tempWriteAmplification, c.cacheHitRatio, c.downloadThroughput,
+	}
+}

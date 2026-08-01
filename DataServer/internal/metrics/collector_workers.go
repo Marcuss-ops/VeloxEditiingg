@@ -98,3 +98,49 @@ func (c *Collector) RecordWorker(workerID string, rs *ResourceSnapshot) {
 	c.lastSeen[workerID] = rs.SampledAt
 	c.stateMu.Unlock()
 }
+
+// initWorkerFamilies creates the per-worker resource counter/gauge set
+// recorded by RecordWorker. Called once from NewCollector at boot.
+func (c *Collector) initWorkerFamilies() {
+	c.workerCPUUtil = NewGaugeFamily("velox_worker_cpu_utilization_ratio",
+		"Worker CPU utilization (0-1)", []string{"worker_id"})
+	c.workerIOWait = NewGaugeFamily("velox_worker_cpu_iowait_ratio",
+		"Worker iowait ratio", []string{"worker_id"})
+	c.workerSteal = NewGaugeFamily("velox_worker_cpu_steal_ratio",
+		"Worker steal time ratio", []string{"worker_id"})
+	c.workerRSSBytes = NewGaugeFamily("velox_worker_process_rss_bytes",
+		"Worker process RSS", []string{"worker_id"})
+	c.workerRSSPeak = NewGaugeFamily("velox_worker_process_rss_peak_bytes",
+		"Worker peak RSS", []string{"worker_id"})
+	c.workerMemoryUsed = NewGaugeFamily("velox_worker_memory_used_bytes",
+		"Worker system memory used", []string{"worker_id"})
+	c.workerDiskFree = NewGaugeFamily("velox_worker_disk_free_bytes",
+		"Worker disk free bytes", []string{"worker_id"})
+	c.workerTempBytes = NewGaugeFamily("velox_worker_temp_bytes",
+		"Worker temp bytes (gauge at heartbeat time)", []string{"worker_id"})
+	c.workerActiveTasks = NewGaugeFamily("velox_worker_active_tasks",
+		"Active tasks on worker", []string{"worker_id"})
+	c.workerTaskSlots = NewGaugeFamily("velox_worker_task_slots",
+		"Worker task slots", []string{"worker_id"})
+	c.workerLoad1 = NewGaugeFamily("velox_worker_load1",
+		"Worker 1-min loadavg", []string{"worker_id"})
+	c.workerRunQueue = NewGaugeFamily("velox_worker_run_queue",
+		"Worker run queue depth", []string{"worker_id"})
+	c.workerNetRxBytes = NewCounterFamily("velox_worker_network_receive_bytes_total",
+		"Worker net rx total", []string{"worker_id"})
+	c.workerNetTxBytes = NewCounterFamily("velox_worker_network_transmit_bytes_total",
+		"Worker net tx total", []string{"worker_id"})
+}
+
+// workerFamilies returns the worker subset registered by NewCollector
+// via allFamilies.
+func (c *Collector) workerFamilies() []*Family {
+	return []*Family{
+		c.workerCPUUtil, c.workerIOWait, c.workerSteal,
+		c.workerRSSBytes, c.workerRSSPeak, c.workerMemoryUsed,
+		c.workerDiskFree, c.workerTempBytes,
+		c.workerActiveTasks, c.workerTaskSlots,
+		c.workerLoad1, c.workerRunQueue,
+		c.workerNetRxBytes, c.workerNetTxBytes,
+	}
+}
