@@ -82,6 +82,48 @@ func sampleDestination() *deliveries.Destination {
 // Scenario 1 — Social API accepts delivery (HTTP 2xx with social_delivery_id)
 // ─────────────────────────────────────────────────────────────────────
 
+func TestSocialGatewayProvider_OpaqueDestinationWireContract(t *testing.T) {
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		bodyCh <- raw
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"social_delivery_id":"opaque-delivery-1","status":"accepted"}`))
+	}))
+	defer server.Close()
+
+	provider := newLiveProviderForServer(t, server.URL, server.URL, "")
+	localDestinationID := "instaedit_ext-group-a"
+	externalDestinationID := "ext-group-a"
+	if _, err := provider.Deliver(context.Background(), sampleArtifact(), &deliveries.Destination{
+		DestinationID:         localDestinationID,
+		ExternalDestinationID: externalDestinationID,
+		DeliveryMetadataJSON:  `{"title":"group member"}`,
+	}, "delivery-group-a", "delivery-group-a"); err != nil {
+		t.Fatalf("opaque delivery: %v", err)
+	}
+
+	var raw []byte
+	select {
+	case raw = <-bodyCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Social API request")
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("decode Social API request: %v; body=%s", err, raw)
+	}
+	if got, _ := wire["external_destination_id"].(string); got != externalDestinationID {
+		t.Fatalf("external_destination_id=%q, want opaque %q; body=%s", got, externalDestinationID, raw)
+	}
+	for _, forbidden := range []string{"destination_id", "group_id", "platform_account_id", "channel_id"} {
+		if _, present := wire[forbidden]; present {
+			t.Fatalf("delivery wire must not contain %q: %s", forbidden, raw)
+		}
+	}
+}
+
 func TestSocialGatewayProvider_SocialAcceptsDelivery(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
