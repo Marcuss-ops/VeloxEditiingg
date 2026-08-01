@@ -20,6 +20,7 @@ package enqueue
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
@@ -30,7 +31,7 @@ import (
 
 // compileSceneVideoJob builds a canonical *jobs.Job and *taskgraph.TaskSpec
 // from a normalized scene-video payload. The caller owns the atomic creation.
-func compileSceneVideoJob(normalized map[string]interface{}, req costmodel.JobRequirements) (*jobs.Job, *taskgraph.TaskSpec, int) {
+func compileSceneVideoJob(normalized map[string]interface{}, req costmodel.JobRequirements) (*jobs.Job, *taskgraph.TaskSpec, int, error) {
 	jobID, _ := normalized["job_id"].(string)
 	videoName, _ := normalized["video_name"].(string)
 	projectID, _ := normalized["project_id"].(string)
@@ -45,7 +46,10 @@ func compileSceneVideoJob(normalized map[string]interface{}, req costmodel.JobRe
 	priority := payload.EnsureInt(normalized["priority"], 5)
 
 	rendererPayload := cloneRendererPayload(normalized)
-	raw, _ := json.Marshal(rendererPayload)
+	raw, err := json.Marshal(rendererPayload)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("marshal renderer payload: %w", err)
+	}
 
 	job := &jobs.Job{
 		ID:        jobID,
@@ -77,7 +81,7 @@ func compileSceneVideoJob(normalized map[string]interface{}, req costmodel.JobRe
 		RequiredCapabilities: resolveRequiredCapabilities(executorID),
 	}
 
-	return job, spec, priority
+	return job, spec, priority, nil
 }
 
 // cloneRendererPayload creates the final worker-facing map from the

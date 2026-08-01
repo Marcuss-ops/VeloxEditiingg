@@ -46,6 +46,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -171,7 +172,7 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 		}
 	}
 
-	if err := e.Creator.CreateJobWithTask(ctx, job, spec, priority); err != nil {
+	if err := e.persistEnqueueJobTask(ctx, job, spec, priority); err != nil {
 		// The pre-check above is only an optimization. Concurrent retries
 		// can both miss it and race on the authoritative jobs.job_id
 		// constraint. A losing deterministic retry must converge on the
@@ -182,7 +183,7 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 				return buildIdempotentResponse(normalized, existing), nil
 			}
 		}
-		return nil, fmt.Errorf("enqueue: atomic create: %w", err)
+		return nil, wrapEnqueuePhase(EnqueuePhasePersistJobAndTask, fmt.Errorf("enqueue: atomic create: %w", err))
 	}
 
 	// The atomic creator has already validated and persisted the delivery
@@ -256,84 +257,57 @@ func (e *Enqueuer) PrepareJobAndTask(ctx context.Context, payloadMap map[string]
 // prepareJobAndTask is the internal implementation extracted so the
 // span wrapper above keeps the defer span.End() clean.
 func (e *Enqueuer) prepareJobAndTask(ctx context.Context, payloadMap map[string]interface{}, req costmodel.JobRequirements, opts ...EnqueueOption) (*jobs.Job, *taskgraph.TaskSpec, int, error) {
-	if e == nil || e.Creator == nil {
-		return nil, nil, 0, fmt.Errorf("creator unavailable")
-	}
-
-	forwardingKey, hasForwardingKey, err := validateForwardingIdentity(payloadMap)
+	forwardingKey, hasForwardingKey, err := e.validateEnqueueInput(payloadMap)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, wrapEnqueuePhase(EnqueuePhaseValidateInput, err)
 	}
 
-	if err := e.resolveVoiceoverPayload(ctx, payloadMap); err != nil {
-		return nil, nil, 0, err
-	}
-	if err := e.resolveSceneImagePayload(ctx, payloadMap); err != nil {
-		return nil, nil, 0, err
+	// Delivery validation intentionally remains after asset resolution and
+	// canonical normalization: deliveryplan.Parse receives the single
+	// canonical map used by the rest of enqueue. Legacy delivery aliases are
+	// retained by the compatibility projection during normalization.
+	if err := e.resolveEnqueueAssets(ctx, payloadMap); err != nil {
+		return nil, nil, 0, wrapEnqueuePhase(EnqueuePhaseResolveAssets, err)
 	}
 
-	normalized, err := normalizeSceneVideoPayloadContext(ctx, payloadMap)
+	normalized, err := normalizeEnqueuePayload(ctx, payloadMap, forwardingKey, hasForwardingKey)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, wrapEnqueuePhase(EnqueuePhaseNormalizePayload, err)
+	}
+	if err := e.validateEnqueueDeliveryPlan(ctx, normalized); err != nil {
+		return nil, nil, 0, wrapEnqueuePhase(EnqueuePhaseValidateInput, err)
 	}
 
-	// A validated forwarding key is part of the idempotent identity
-	// contract. Re-inject it after normalization so a future projection
-	// change cannot silently turn a forwarded retry into a UUID job.
-	if hasForwardingKey {
-		normalized[routing.KeyForwardingKey] = forwardingKey
-	}
-
-	// A Job without an explicit delivery plan (and per-entry retry_budget > 0)
-	// must never reach the workers. Without this preflight,
-	// FinalizeVerified would discover the missing plan AFTER the render
-	// has burned its budget — the diagnostic's
-	// "Validate delivery plan at enqueue or pre-render" regression.
-	if err := validateDeliveryPlanRequires(ctx, payloadMap, e.SocialValidator); err != nil {
-		return nil, nil, 0, err
-	}
-
+	// Forwarding identity is deterministic and must be finalized before
+	// worker projection. Ordinary payloads receive a UUID only when no
+	// forwarding key supplied an identity.
 	jobID, _ := normalized["job_id"].(string)
-
-	// When a forwarding key is present, derive the job_id
-	// deterministically regardless of any auto-generated ID from
-	// NewJobPayloadV2 or SetIdentity. Concurrent pollers, duplicate
-	// webhooks, and post-crash retries must converge on the same Job ID.
 	fwdMeta := routing.FromPayload(normalized)
 	if fwdMeta.ForwardingKey != "" {
 		jobID = DeriveForwardingJobID(fwdMeta.ForwardingKey.String())
 		normalized["job_id"] = jobID
 	}
-
 	if jobID == "" {
 		jobID = uuid.NewString()
 		normalized["job_id"] = jobID
 	}
 
-	// compileSceneVideoJob sets MaxRetries=0; extractPlanMaxRetry below
-	// is the single writer of that field on the insert path. The atomic
-	// creator persists this value together with the job and task.
-	job, spec, priority := compileSceneVideoJob(normalized, req)
-
+	job, spec, priority, err := projectEnqueueJob(normalized, req)
+	if err != nil {
+		return nil, nil, 0, wrapEnqueuePhase(EnqueuePhaseProjectWorker, err)
+	}
+	if job == nil || spec == nil {
+		return nil, nil, 0, wrapEnqueuePhase(EnqueuePhaseProjectWorker, fmt.Errorf("projected job/task is nil"))
+	}
 	if maxRetry := extractPlanMaxRetry(normalized); maxRetry > 0 {
 		job.MaxRetries = maxRetry
 	}
 
-	// Apply caller-supplied options (e.g. workspace scoping) before
-	// the job is persisted. Options run after the payload-derived
-	// fields are computed so they can override defaults.
 	for _, opt := range opts {
 		if opt != nil {
 			opt(job)
 		}
 	}
-
-	// The enqueue path validates payload shape before compilation and
-	// validates destination existence/enabled state inside
-	// CreateJobWithTaskTx. Those checks are the commit gate. The durable
-	// resolver remains the source of truth for finalization, but is not
-	// called after this method has committed the job.
-
 	return job, spec, priority, nil
 }
 
@@ -466,6 +440,47 @@ func (e *Enqueuer) resolveSceneImagePayload(ctx context.Context, payloadMap map[
 		return nil
 	}
 	return rewriteSceneImagePayloadFor(ctx, e.Voiceover, payloadMap)
+}
+
+func hasTimedVideoClipSegments(value interface{}) bool {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		if _, hasStart := typed["start_seconds"]; hasStart {
+			if _, hasEnd := typed["end_seconds"]; hasEnd {
+				return true
+			}
+		}
+		if _, hasStart := typed["start_ms"]; hasStart {
+			if _, hasEnd := typed["end_ms"]; hasEnd {
+				return true
+			}
+		}
+		for _, child := range typed {
+			if hasTimedVideoClipSegments(child) {
+				return true
+			}
+		}
+	case []interface{}:
+		for _, child := range typed {
+			if hasTimedVideoClipSegments(child) {
+				return true
+			}
+		}
+	case []map[string]interface{}:
+		for _, child := range typed {
+			if hasTimedVideoClipSegments(child) {
+				return true
+			}
+		}
+	case string:
+		var decoded interface{}
+		if strings.HasPrefix(strings.TrimSpace(typed), "[") || strings.HasPrefix(strings.TrimSpace(typed), "{") {
+			if json.Unmarshal([]byte(typed), &decoded) == nil {
+				return hasTimedVideoClipSegments(decoded)
+			}
+		}
+	}
+	return false
 }
 
 // DeriveForwardingJobID produces a deterministic, UUID-shaped job ID from a

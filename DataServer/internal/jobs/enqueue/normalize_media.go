@@ -77,6 +77,7 @@ func hasAudioTracks(payloadMap map[string]interface{}) bool {
 	}
 	return false
 }
+
 func voiceoverCountFromPayload(payloadMap map[string]interface{}) int {
 	if arr, ok := payloadMap["voiceover_paths"].([]string); ok {
 		return len(arr)
