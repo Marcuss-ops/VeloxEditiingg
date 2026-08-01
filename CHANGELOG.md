@@ -202,7 +202,7 @@ D=smoke).
 
 **Docker cleanup — 33 GB reclaimed across 4 workers**:
 - 112 old Docker images removed (chronon alpha 1-5, v1.0-v1.2.x,
-  golang, qdrant, ubuntu, busybox, hello-world, velox-worker-console).
+  golang, qdrant, ubuntu, busybox, hello-world, the worker console image).
 - 7 stopped containers pruned.
 - Old `/tmp` directories cleaned on all workers.
 - `worker-13197`: 82% → 77% (was the critical one).
