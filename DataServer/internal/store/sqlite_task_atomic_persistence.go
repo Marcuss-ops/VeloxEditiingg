@@ -2,8 +2,9 @@ package store
 
 // sqlite_task_atomic_persistence.go: CAS and invariant-probe helpers used by
 // IngestTaskResultAtomic. The persistence writers live in
-// sqlite_task_atomic_persistence_helpers.go; both files receive the
-// coordinator-owned transaction and never open or close one themselves.
+// sqlite_task_atomic_persistence_{attempt,task,lease}.go; all of these files
+// receive the coordinator-owned transaction and never open or close one
+// themselves.
 
 import (
 	"context"
