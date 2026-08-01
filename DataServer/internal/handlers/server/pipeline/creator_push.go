@@ -10,6 +10,7 @@ import (
 
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/remoteengine"
+	"velox-shared/contract/deliveryplan"
 	"velox-shared/publication"
 )
 
@@ -106,7 +107,7 @@ func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush
 		return nil, fmt.Errorf("payload is required")
 	}
 
-	deliveryPlan := extractDeliveryPlanEnvelope(req.Payload)
+	deliveryPlan := deliveryplan.ExtractEnvelope(req.Payload)
 	dto, err := remoteengine.ParseRemotePipelineResult(req.Payload)
 	if err != nil {
 		return nil, fmt.Errorf("parse creator payload: %w", err)
@@ -223,31 +224,6 @@ func (h *Handlers) resolveCompletedPayload(
 // firstStringResolver reads the first non-empty string value from a
 // map across the provided keys. Package-private helper (no tests
 // outside this package should depend on it directly).
-func extractDeliveryPlanEnvelope(payload map[string]interface{}) map[string]interface{} {
-	if payload == nil {
-		return nil
-	}
-	out := make(map[string]interface{})
-	for _, key := range []string{
-		"delivery_plan",
-		"delivery_destination_ids",
-		"delivery_destination_id",
-		"delivery_metadata",
-		"destinations",
-		"delivery_destinations",
-		"destination_ids",
-		"destination_id",
-	} {
-		if value, ok := payload[key]; ok && value != nil {
-			out[key] = value
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
 func firstStringResolver(m map[string]interface{}, keys ...string) string {
 	for _, key := range keys {
 		if v, ok := m[key]; ok {

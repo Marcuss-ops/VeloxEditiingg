@@ -1,6 +1,8 @@
 // Package pipeline — request DTOs for the external job intake contract.
 package pipeline
 
+const MaxSubmitJobBatchItems = 50
+
 type SubmitJobRequest struct {
 	// IdempotencyKey is required. 1..128 bytes after UTF-8 trim, valid
 	// UTF-8, no control bytes, no ':' or '%' separators. See
@@ -370,6 +372,30 @@ type SubmitPublicationDestination struct {
 //     body. The Master re-downloads the JSON and verifies the
 //     SHA-256 against this value BEFORE substituting it into the
 //     worker payload (fail-closed).
+// SubmitJobBatchRequest is the wire shape for POST /api/v1/jobs/batch.
+// Items are intentionally full SubmitJobRequest values so delivery_plan and
+// publications remain backward-compatible with the single-job endpoint.
+type SubmitJobBatchRequest struct {
+	BatchID string             `json:"batch_id"`
+	Items   []SubmitJobRequest `json:"items"`
+}
+
+// SubmitJobBatchItemResult reports one independent batch item outcome.
+type SubmitJobBatchItemResult struct {
+	Index          int      `json:"index"`
+	IdempotencyKey string   `json:"idempotency_key"`
+	JobID          string   `json:"job_id,omitempty"`
+	Status         string   `json:"status"`
+	Errors         []string `json:"errors,omitempty"`
+}
+
+// SubmitJobBatchResponse contains an outcome for every submitted item.
+// A failed item never changes the status or idempotency semantics of another.
+type SubmitJobBatchResponse struct {
+	BatchID string                     `json:"batch_id"`
+	Items   []SubmitJobBatchItemResult `json:"items"`
+}
+
 type SubmitManifestRef struct {
 	// SchemaVersion is the closed enum of accepted manifest versions.
 	// Today only `velox.render-manifest.v1` is accepted.

@@ -1,6 +1,10 @@
 package creatorflow
 
-import "fmt"
+import (
+	"fmt"
+
+	"velox-shared/publication"
+)
 
 // ResolveRequest is the typed input for Resolver.Resolve.
 //
@@ -24,6 +28,14 @@ type ResolveRequest struct {
 	SourceJobID      string
 	TargetExecutorID string
 	Payload          map[string]interface{}
+
+	// DeliveryPlan is control-plane routing data. It is passed separately
+	// from Payload so the renderer never receives destination aliases.
+	DeliveryPlan map[string]interface{}
+
+	// PublicationSpecs are control-plane delivery intents. They are kept
+	// outside Payload so renderer workers never receive publication metadata.
+	PublicationSpecs []publication.Spec
 }
 
 // ResolveOutput is what every caller receives. JobID and ForwardingID

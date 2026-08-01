@@ -19,6 +19,7 @@ import (
 	"velox-server/internal/routing"
 	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
+	"velox-shared/contract/deliveryplan"
 )
 
 // Service encapsulates the optional "creator" stage so multiple endpoints can
@@ -140,7 +141,7 @@ func (s *Service) StartOrPersistForwarding(ctx context.Context, rawPayload map[s
 		if rs == nil {
 			return nil, false, fmt.Errorf("creatorflow: StartOrPersistForwarding: resolver construction failed")
 		}
-		deliveryPlan := deliveryPlanFromPayload(creatorResult)
+		deliveryPlan := deliveryplan.ExtractEnvelope(creatorResult)
 		out, err := rs.Resolve(ctx, ResolveRequest{
 			ForwardingID:     "",
 			SourceProvider:   "remote_engine",

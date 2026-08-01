@@ -24,6 +24,7 @@ import (
 	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
 	"velox-server/internal/taskgraph"
+	"velox-shared/contract/deliveryplan"
 	"velox-shared/payload"
 )
 
@@ -72,7 +73,7 @@ func compileSceneVideoJob(normalized map[string]interface{}, req costmodel.JobRe
 		Payload:    rendererPayload,
 		// DeliveryPlan is control-plane data. Capture it before the
 		// renderer projection removes the routing keys from Payload.
-		DeliveryPlan:         extractDeliveryPlanEnvelope(normalized),
+		DeliveryPlan:         deliveryplan.ExtractEnvelope(normalized),
 		RequiredCapabilities: resolveRequiredCapabilities(executorID),
 	}
 
@@ -83,48 +84,5 @@ func compileSceneVideoJob(normalized map[string]interface{}, req costmodel.JobRe
 // normalized canonical map. Delivery routing is consumed by the control
 // plane and persisted separately, so it is deliberately absent here.
 func cloneRendererPayload(normalized map[string]interface{}) map[string]interface{} {
-	out := make(map[string]interface{}, len(normalized))
-	for key, value := range normalized {
-		out[key] = value
-	}
-	for _, key := range []string{
-		"delivery_plan",
-		"delivery_destination_ids",
-		"delivery_destination_id",
-		"delivery_metadata",
-		"destinations",
-		"delivery_destinations",
-		"destination_ids",
-		"destination_id",
-	} {
-		delete(out, key)
-	}
-	return out
-}
-
-// extractDeliveryPlanEnvelope keeps the canonical delivery shape intact for
-// the control-plane writer while avoiding any renderer payload coupling.
-func extractDeliveryPlanEnvelope(normalized map[string]interface{}) map[string]interface{} {
-	if normalized == nil {
-		return nil
-	}
-	out := make(map[string]interface{})
-	for _, key := range []string{
-		"delivery_plan",
-		"delivery_destination_ids",
-		"delivery_destination_id",
-		"delivery_metadata",
-		"destinations",
-		"delivery_destinations",
-		"destination_ids",
-		"destination_id",
-	} {
-		if value, ok := normalized[key]; ok && value != nil {
-			out[key] = value
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+	return deliveryplan.StripEnvelope(normalized)
 }

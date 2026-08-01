@@ -1,7 +1,10 @@
 // Package pipeline — canonical_request_projection.go owns the typed external intake facade.
 package pipeline
 
-import "velox-shared/publication"
+import (
+	"velox-shared/contract/deliveryplan"
+	"velox-shared/publication"
+)
 
 // ExternalAPISourceProvider is the stable source-provider identity for POST /api/v1/jobs.
 const ExternalAPISourceProvider = "external_api"
@@ -20,7 +23,7 @@ func (h *Handlers) NormalizeExternalJobSubmission(req SubmitJobRequest) *Canonic
 		SourceJobID:      req.IdempotencyKey,
 		TargetExecutorID: JobSubmitTargetExecutorID,
 		WorkerPayload:    workerPayload,
-		DeliveryPlan:     extractDeliveryPlanEnvelope(rawPayload),
+		DeliveryPlan:     deliveryplan.ExtractEnvelope(rawPayload),
 		PublicationSpecs: projectPublicationSpecs(req.Publications),
 	}
 }

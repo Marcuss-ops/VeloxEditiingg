@@ -59,6 +59,7 @@ import (
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/routing"
 	"velox-server/internal/store"
+	"velox-shared/contract/deliveryplan"
 	"velox-shared/publication"
 )
 
@@ -211,31 +212,6 @@ func preparePayloadWithControlPlaneDelivery(rendererPayload, deliveryPlan map[st
 	return out
 }
 
-func deliveryPlanFromPayload(payload map[string]interface{}) map[string]interface{} {
-	if payload == nil {
-		return nil
-	}
-	out := make(map[string]interface{})
-	for _, key := range []string{
-		"delivery_plan",
-		"delivery_destination_ids",
-		"delivery_destination_id",
-		"delivery_metadata",
-		"destinations",
-		"delivery_destinations",
-		"destination_ids",
-		"destination_id",
-	} {
-		if value, ok := payload[key]; ok && value != nil {
-			out[key] = value
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
 func clonePublicationSpecs(specs []publication.Spec) []map[string]interface{} {
 	if len(specs) == 0 {
 		return nil
@@ -279,7 +255,7 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOut
 		return nil, ErrResolverNotComplete
 	}
 	if len(req.DeliveryPlan) == 0 {
-		req.DeliveryPlan = deliveryPlanFromPayload(req.Payload)
+		req.DeliveryPlan = deliveryplan.ExtractEnvelope(req.Payload)
 	}
 
 	targetExecutor := req.TargetExecutorID
