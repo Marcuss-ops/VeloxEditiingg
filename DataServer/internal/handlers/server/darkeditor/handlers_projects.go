@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -74,8 +72,7 @@ func (h *Handler) listProjectsFromFile(c *gin.Context, projectType string) {
 			continue
 		}
 
-		metaPath := filepath.Join(h.cfg.ProjectsDir, entry.Name(), "meta.json")
-		metaData, err := os.ReadFile(metaPath)
+		metaData, err := confinedProjectReadFile(h.cfg.ProjectsDir, entry.Name(), "meta.json")
 		if err != nil {
 			continue
 		}
@@ -106,6 +103,16 @@ func (h *Handler) SaveProject(c *gin.Context) {
 	if req.ID == "" {
 		req.ID = fmt.Sprintf("%s", uuid.New().String())
 	}
+	if _, err := validatePathComponent(req.ID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid project ID"})
+		return
+	}
+	if req.PreviewFilename != "" {
+		if _, err := validatePathComponent(req.PreviewFilename); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid preview filename"})
+			return
+		}
+	}
 
 	if req.Type == "" {
 		req.Type = "project"
@@ -121,6 +128,10 @@ func (h *Handler) SaveProject(c *gin.Context) {
 }
 
 func (h *Handler) saveProjectToDB(c *gin.Context, req SaveProjectRequest) {
+	if err := ensureProjectDir(h.cfg.ProjectsDir, req.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prepare project directory"})
+		return
+	}
 	ctx := context.Background()
 
 	now := time.Now()
@@ -158,15 +169,14 @@ func (h *Handler) saveProjectToDB(c *gin.Context, req SaveProjectRequest) {
 
 	// Handle preview file if provided
 	if req.PreviewFilename != "" {
-		srcPath := h.getTempPath(req.PreviewFilename)
-		projectDir := filepath.Join(h.cfg.ProjectsDir, req.ID)
-		if err := h.ensureDir(projectDir); err == nil {
-			dstPath := filepath.Join(projectDir, "preview.png")
-			if data, err := os.ReadFile(srcPath); err == nil {
-				_ = os.WriteFile(dstPath, data, 0644)
-			} else {
-				log.Printf("[WARN] SaveProject preview copy failed: %v", err)
-			}
+		data, err := confinedReadFile(h.cfg.TempDir, req.PreviewFilename)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Preview file not found"})
+			return
+		}
+		if err := confinedProjectWriteFile(h.cfg.ProjectsDir, req.ID, "preview.png", data, 0644); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save preview"})
+			return
 		}
 	}
 
@@ -177,9 +187,8 @@ func (h *Handler) saveProjectToDB(c *gin.Context, req SaveProjectRequest) {
 }
 
 func (h *Handler) saveProjectToFile(c *gin.Context, req SaveProjectRequest) {
-	projectDir := filepath.Join(h.cfg.ProjectsDir, req.ID)
-	if err := h.ensureDir(projectDir); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create project directory"})
+	if err := ensureProjectDir(h.cfg.ProjectsDir, req.ID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid project ID"})
 		return
 	}
 
@@ -192,8 +201,7 @@ func (h *Handler) saveProjectToFile(c *gin.Context, req SaveProjectRequest) {
 		UpdatedAt:  time.Now(),
 	}
 
-	existingMetaPath := filepath.Join(projectDir, "meta.json")
-	if existingData, err := os.ReadFile(existingMetaPath); err == nil {
+	if existingData, err := confinedProjectReadFile(h.cfg.ProjectsDir, req.ID, "meta.json"); err == nil {
 		var existing Project
 		if json.Unmarshal(existingData, &existing) == nil {
 			project.CreatedAt = existing.CreatedAt
@@ -203,13 +211,12 @@ func (h *Handler) saveProjectToFile(c *gin.Context, req SaveProjectRequest) {
 		project.CreatedAt = time.Now()
 	}
 
-	canvasPath := filepath.Join(projectDir, "canvas.json")
 	canvasData, err := json.MarshalIndent(req.CanvasJSON, "", "  ")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to serialize canvas"})
 		return
 	}
-	if err := os.WriteFile(canvasPath, canvasData, 0644); err != nil {
+	if err := confinedProjectWriteFile(h.cfg.ProjectsDir, req.ID, "canvas.json", canvasData, 0644); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save canvas"})
 		return
 	}
@@ -219,18 +226,20 @@ func (h *Handler) saveProjectToFile(c *gin.Context, req SaveProjectRequest) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to serialize metadata"})
 		return
 	}
-	if err := os.WriteFile(existingMetaPath, metaData, 0644); err != nil {
+	if err := confinedProjectWriteFile(h.cfg.ProjectsDir, req.ID, "meta.json", metaData, 0644); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save metadata"})
 		return
 	}
 
 	if req.PreviewFilename != "" {
-		srcPath := h.getTempPath(req.PreviewFilename)
-		dstPath := filepath.Join(projectDir, "preview.png")
-		if data, err := os.ReadFile(srcPath); err == nil {
-			_ = os.WriteFile(dstPath, data, 0644)
-		} else {
-			log.Printf("[WARN] SaveProject preview copy failed: %v", err)
+		data, err := confinedReadFile(h.cfg.TempDir, req.PreviewFilename)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Preview file not found"})
+			return
+		}
+		if err := confinedProjectWriteFile(h.cfg.ProjectsDir, req.ID, "preview.png", data, 0644); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save preview"})
+			return
 		}
 	}
 
@@ -243,6 +252,10 @@ func (h *Handler) saveProjectToFile(c *gin.Context, req SaveProjectRequest) {
 // LoadProject loads a project by ID
 func (h *Handler) LoadProject(c *gin.Context) {
 	projectID := c.Param("id")
+	if _, err := validatePathComponent(projectID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid project ID"})
+		return
+	}
 
 	if h.dbStore != nil {
 		ctx := context.Background()
@@ -264,10 +277,7 @@ func (h *Handler) LoadProject(c *gin.Context) {
 	}
 
 	// Fallback to file-based loading
-	projectDir := filepath.Join(h.cfg.ProjectsDir, projectID)
-	canvasPath := filepath.Join(projectDir, "canvas.json")
-
-	canvasData, err := os.ReadFile(canvasPath)
+	canvasData, err := confinedProjectReadFile(h.cfg.ProjectsDir, projectID, "canvas.json")
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
 		return
@@ -288,6 +298,10 @@ func (h *Handler) LoadProject(c *gin.Context) {
 // DeleteProject deletes a project
 func (h *Handler) DeleteProject(c *gin.Context) {
 	projectID := c.Param("id")
+	if _, err := validatePathComponent(projectID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid project ID"})
+		return
+	}
 
 	if h.dbStore != nil {
 		ctx := context.Background()
@@ -300,8 +314,15 @@ func (h *Handler) DeleteProject(c *gin.Context) {
 	}
 
 	// Fallback to file-based deletion
-	projectDir := filepath.Join(h.cfg.ProjectsDir, projectID)
-	if err := os.RemoveAll(projectDir); err != nil {
+	if err := projectDirExists(h.cfg.ProjectsDir, projectID); err != nil {
+		if os.IsNotExist(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid project directory"})
+		}
+		return
+	}
+	if err := confinedProjectRemoveAll(h.cfg.ProjectsDir, projectID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete project"})
 		return
 	}

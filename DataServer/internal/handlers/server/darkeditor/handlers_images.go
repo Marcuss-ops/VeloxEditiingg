@@ -44,15 +44,12 @@ func (h *Handler) UploadImage(c *gin.Context) {
 		return
 	}
 
-	dstPath := h.getTempPath(filename)
-	dst, err := os.Create(dstPath)
+	data, err := io.ReadAll(file)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create file"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read file"})
 		return
 	}
-	defer dst.Close()
-
-	if _, err := io.Copy(dst, file); err != nil {
+	if err := confinedWriteFile(h.cfg.TempDir, filename, data, 0644); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save file"})
 		return
 	}
@@ -71,13 +68,17 @@ func (h *Handler) ApplyFilter(c *gin.Context) {
 		return
 	}
 
-	inputPath := h.getTempPath(req.Filename)
-	if _, err := os.Stat(inputPath); os.IsNotExist(err) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Image not found"})
+	inputData, pathErr := confinedReadFile(h.cfg.TempDir, req.Filename)
+	if pathErr != nil {
+		if os.IsNotExist(pathErr) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Image not found"})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid filename"})
+		}
 		return
 	}
 
-	img, err := processors.LoadImage(inputPath)
+	img, err := processors.LoadImageFromBytes(inputData)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to load image: %v", err)})
 		return
@@ -99,9 +100,12 @@ func (h *Handler) ApplyFilter(c *gin.Context) {
 		ext = "png"
 	}
 	newFilename := h.getUniqueFilename(ext)
-	outputPath := h.getTempPath(newFilename)
-
-	if err := processors.SaveImage(processedImg, outputPath); err != nil {
+	outputData, err := processors.ExportImage(processedImg, processors.ExportOptions{Format: processors.ParseFormat(ext), Quality: 90})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to encode processed image: %v", err)})
+		return
+	}
+	if err := confinedWriteFile(h.cfg.TempDir, newFilename, outputData, 0644); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to save processed image: %v", err)})
 		return
 	}
@@ -120,13 +124,17 @@ func (h *Handler) TransformImage(c *gin.Context) {
 		return
 	}
 
-	inputPath := h.getTempPath(req.Filename)
-	if _, err := os.Stat(inputPath); os.IsNotExist(err) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Image not found"})
+	inputData, pathErr := confinedReadFile(h.cfg.TempDir, req.Filename)
+	if pathErr != nil {
+		if os.IsNotExist(pathErr) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Image not found"})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid filename"})
+		}
 		return
 	}
 
-	img, err := processors.LoadImage(inputPath)
+	img, err := processors.LoadImageFromBytes(inputData)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to load image: %v", err)})
 		return
@@ -145,9 +153,12 @@ func (h *Handler) TransformImage(c *gin.Context) {
 		ext = "png"
 	}
 	newFilename := h.getUniqueFilename(ext)
-	outputPath := h.getTempPath(newFilename)
-
-	if err := processors.SaveImage(processedImg, outputPath); err != nil {
+	outputData, err := processors.ExportImage(processedImg, processors.ExportOptions{Format: processors.ParseFormat(ext), Quality: 90})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to encode processed image: %v", err)})
+		return
+	}
+	if err := confinedWriteFile(h.cfg.TempDir, newFilename, outputData, 0644); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to save processed image: %v", err)})
 		return
 	}
@@ -166,13 +177,17 @@ func (h *Handler) ExportImage(c *gin.Context) {
 		return
 	}
 
-	inputPath := h.getTempPath(req.Filename)
-	if _, err := os.Stat(inputPath); os.IsNotExist(err) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Image not found"})
+	inputData, pathErr := confinedReadFile(h.cfg.TempDir, req.Filename)
+	if pathErr != nil {
+		if os.IsNotExist(pathErr) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Image not found"})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid filename"})
+		}
 		return
 	}
 
-	img, err := processors.LoadImage(inputPath)
+	img, err := processors.LoadImageFromBytes(inputData)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to load image: %v", err)})
 		return
@@ -192,9 +207,12 @@ func (h *Handler) ExportImage(c *gin.Context) {
 	}
 
 	newFilename := h.getUniqueFilename(ext)
-	outputPath := h.getTempPath(newFilename)
-
-	if err := processors.ExportToFile(img, outputPath, exportOpts); err != nil {
+	outputData, err := processors.ExportImage(img, exportOpts)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to export image: %v", err)})
+		return
+	}
+	if err := confinedWriteFile(h.cfg.TempDir, newFilename, outputData, 0644); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to export image: %v", err)})
 		return
 	}
@@ -289,9 +307,7 @@ func (h *Handler) GenerateImage(c *gin.Context) {
 	}
 
 	filename := h.getUniqueFilename("png")
-	outputPath := h.getTempPath(filename)
-
-	if err := os.WriteFile(outputPath, imgData, 0644); err != nil {
+	if err := confinedWriteFile(h.cfg.TempDir, filename, imgData, 0644); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save image"})
 		return
 	}
@@ -311,25 +327,21 @@ func (h *Handler) UpscaleImage(c *gin.Context) {
 		return
 	}
 
-	inputPath := h.getTempPath(req.Filename)
-	if _, err := os.Stat(inputPath); os.IsNotExist(err) {
-		if filepath.IsAbs(req.Filename) {
-			inputPath = req.Filename
-			if _, err := os.Stat(inputPath); os.IsNotExist(err) {
-				c.JSON(http.StatusNotFound, gin.H{"error": "Input file not found"})
-				return
-			}
-		} else {
+	inputData, pathErr := confinedReadFile(h.cfg.TempDir, req.Filename)
+	if pathErr != nil {
+		if os.IsNotExist(pathErr) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Input file not found"})
-			return
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid filename"})
 		}
+		return
 	}
 
 	if req.Scale == 0 {
 		req.Scale = 2
 	}
 
-	img, err := processors.LoadImage(inputPath)
+	img, err := processors.LoadImageFromBytes(inputData)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to load image: %v", err)})
 		return
@@ -340,7 +352,17 @@ func (h *Handler) UpscaleImage(c *gin.Context) {
 		ext = "png"
 	}
 	newFilename := h.getUniqueFilename(ext)
-	outputPath := h.getTempPath(newFilename)
+	privateDir, err := os.MkdirTemp("", "darkeditor-upscale-")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create processing workspace"})
+		return
+	}
+	defer os.RemoveAll(privateDir)
+	outputPath := filepath.Join(privateDir, newFilename)
+	if err := os.WriteFile(filepath.Join(privateDir, "input"), inputData, 0600); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prepare processing workspace"})
+		return
+	}
 
 	upscaleOpts := processors.UpscaleOptions{
 		Scale:       req.Scale,
@@ -353,6 +375,16 @@ func (h *Handler) UpscaleImage(c *gin.Context) {
 		return
 	}
 
+	resultData, err := os.ReadFile(result.OutputPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read upscaled image"})
+		return
+	}
+	if err := confinedWriteFile(h.cfg.TempDir, newFilename, resultData, 0644); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save upscaled image"})
+		return
+	}
+
 	if !processors.IsRealESRGANAvailable() {
 		h.logger.Log(LogLevelWarn, "Real-ESRGAN not available, used Lanczos upscaling fallback", nil, "server")
 	}
@@ -360,6 +392,7 @@ func (h *Handler) UpscaleImage(c *gin.Context) {
 	c.JSON(http.StatusOK, UpscaleResponse{
 		Filename: newFilename,
 		URL:      fmt.Sprintf("temp/%s", newFilename),
-		SavedAt:  result.OutputPath,
+		// Do not expose the private processing workspace path.
+		SavedAt: newFilename,
 	})
 }

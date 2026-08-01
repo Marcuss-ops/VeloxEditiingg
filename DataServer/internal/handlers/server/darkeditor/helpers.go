@@ -29,11 +29,6 @@ func (h *Handler) ensureDir(dir string) error {
 	return os.MkdirAll(dir, 0755)
 }
 
-// getTempPath returns the full path for a temp file
-func (h *Handler) getTempPath(filename string) string {
-	return filepath.Join(h.cfg.TempDir, filename)
-}
-
 // ============================================================================
 // MULTIPART BUILDER
 // ============================================================================

@@ -80,9 +80,13 @@ func (h *BackgroundRemovalHandler) RemoveBackground(c *gin.Context) {
 		return
 	}
 
-	inputPath := filepath.Join(h.tempDir, req.Filename)
-	if _, err := os.Stat(inputPath); os.IsNotExist(err) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Image not found"})
+	inputData, pathErr := confinedReadFile(h.tempDir, req.Filename)
+	if pathErr != nil {
+		if os.IsNotExist(pathErr) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Image not found"})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid filename"})
+		}
 		return
 	}
 
@@ -93,10 +97,12 @@ func (h *BackgroundRemovalHandler) RemoveBackground(c *gin.Context) {
 		req.OutputFormat = "png"
 	}
 
-	outputFilename := fmt.Sprintf("nobg_%s.%s",
-		strings.TrimSuffix(req.Filename, filepath.Ext(req.Filename)),
-		req.OutputFormat)
-	outputPath := filepath.Join(h.tempDir, outputFilename)
+	outputFilename := fmt.Sprintf("nobg_%d_%s.%s",
+		time.Now().UnixNano(), uuid.New().String(), req.OutputFormat)
+	if _, err := validatePathComponent(outputFilename); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid output filename"})
+		return
+	}
 
 	if req.Async {
 		taskID := uuid.New().String()
@@ -106,7 +112,7 @@ func (h *BackgroundRemovalHandler) RemoveBackground(c *gin.Context) {
 			StartedAt: time.Now(),
 		})
 
-		go h.processBackgroundRemoval(taskID, inputPath, outputPath, req.Model)
+		go h.processBackgroundRemoval(taskID, inputData, outputFilename, req.Model)
 
 		c.JSON(http.StatusAccepted, RemoveBackgroundResponse{
 			Processing: true,
@@ -115,15 +121,19 @@ func (h *BackgroundRemovalHandler) RemoveBackground(c *gin.Context) {
 		return
 	}
 
-	result, err := h.removeBackgroundSync(inputPath, outputPath, req.Model)
+	outputData, err := h.removeBackgroundSync(inputData, req.Model)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	if err := confinedWriteFile(h.tempDir, outputFilename, outputData, 0644); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save output"})
+		return
+	}
 
 	c.JSON(http.StatusOK, RemoveBackgroundResponse{
-		Filename: result,
-		URL:      fmt.Sprintf("temp/%s", result),
+		Filename: outputFilename,
+		URL:      fmt.Sprintf("temp/%s", outputFilename),
 	})
 }
 
@@ -140,12 +150,12 @@ func (h *BackgroundRemovalHandler) GetBackgroundRemovalStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, status)
 }
 
-func (h *BackgroundRemovalHandler) processBackgroundRemoval(taskID, inputPath, outputPath, model string) {
+func (h *BackgroundRemovalHandler) processBackgroundRemoval(taskID string, inputData []byte, outputFilename, model string) {
 	h.taskRepo.Update(taskID, func(status *BackgroundRemovalStatus) {
 		status.Status = "processing"
 	})
 
-	result, err := h.removeBackgroundSync(inputPath, outputPath, model)
+	outputData, err := h.removeBackgroundSync(inputData, model)
 	if err != nil {
 		h.taskRepo.Update(taskID, func(status *BackgroundRemovalStatus) {
 			status.Status = "failed"
@@ -156,26 +166,45 @@ func (h *BackgroundRemovalHandler) processBackgroundRemoval(taskID, inputPath, o
 		return
 	}
 
+	if err := confinedWriteFile(h.tempDir, outputFilename, outputData, 0644); err != nil {
+		h.taskRepo.Update(taskID, func(status *BackgroundRemovalStatus) {
+			status.Status = "failed"
+			status.Error = err.Error()
+			status.EndedAt = time.Now()
+		})
+		return
+	}
 	h.taskRepo.Update(taskID, func(status *BackgroundRemovalStatus) {
 		status.Status = "completed"
-		status.Filename = result
-		status.URL = fmt.Sprintf("temp/%s", result)
+		status.Filename = outputFilename
+		status.URL = fmt.Sprintf("temp/%s", outputFilename)
 		status.EndedAt = time.Now()
 	})
 	log.Printf("[OK] Background removal completed for task %s", taskID)
 }
 
-func (h *BackgroundRemovalHandler) removeBackgroundSync(inputPath, outputPath, model string) (string, error) {
+func (h *BackgroundRemovalHandler) removeBackgroundSync(inputData []byte, model string) ([]byte, error) {
 	if h.cfg.UseAPI && h.cfg.APIEndpoint != "" {
-		return h.removeBackgroundViaAPI(inputPath, outputPath, model)
+		return h.removeBackgroundViaAPI(inputData, model)
 	}
-	return h.removeBackgroundLocal(inputPath, outputPath, model)
+	return h.removeBackgroundLocal(inputData, model)
 }
 
-func (h *BackgroundRemovalHandler) removeBackgroundLocal(inputPath, outputPath, model string) (string, error) {
+func (h *BackgroundRemovalHandler) removeBackgroundLocal(inputData []byte, model string) ([]byte, error) {
 	checkCmd := exec.Command(h.cfg.PythonPath, "-c", "import rembg")
 	if err := checkCmd.Run(); err != nil {
-		return "", fmt.Errorf("rembg not installed. Install with: pip install rembg")
+		return nil, fmt.Errorf("rembg not installed. Install with: pip install rembg")
+	}
+
+	privateDir, err := os.MkdirTemp("", "darkeditor-rembg-")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create processing workspace: %w", err)
+	}
+	defer os.RemoveAll(privateDir)
+	inputPath := filepath.Join(privateDir, "input.bin")
+	outputPath := filepath.Join(privateDir, "output.bin")
+	if err := os.WriteFile(inputPath, inputData, 0600); err != nil {
+		return nil, fmt.Errorf("failed to prepare processing input: %w", err)
 	}
 
 	script := fmt.Sprintf(`
@@ -203,31 +232,26 @@ print("Background removed successfully")
 	cmd := exec.CommandContext(ctx, h.cfg.PythonPath, "-c", script)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("rembg execution failed: %v\n%s", err, string(output))
+		return nil, fmt.Errorf("rembg execution failed: %v\n%s", err, string(output))
 	}
 
-	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
-		return "", fmt.Errorf("output file not created")
+	outputData, err := os.ReadFile(outputPath)
+	if err != nil {
+		return nil, fmt.Errorf("output file not created: %w", err)
 	}
-
-	return filepath.Base(outputPath), nil
+	return outputData, nil
 }
 
-func (h *BackgroundRemovalHandler) removeBackgroundViaAPI(inputPath, outputPath, model string) (string, error) {
-	inputData, err := os.ReadFile(inputPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read input file: %w", err)
-	}
-
+func (h *BackgroundRemovalHandler) removeBackgroundViaAPI(inputData []byte, model string) ([]byte, error) {
 	body := &bytes.Buffer{}
-	writer, err := createMultipartWriter(body, inputData, filepath.Base(inputPath))
+	writer, err := createMultipartWriter(body, inputData, "input.png")
 	if err != nil {
-		return "", fmt.Errorf("failed to create multipart form: %w", err)
+		return nil, fmt.Errorf("failed to create multipart form: %w", err)
 	}
 
 	req, err := http.NewRequest("POST", h.cfg.APIEndpoint, body)
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -238,25 +262,21 @@ func (h *BackgroundRemovalHandler) removeBackgroundViaAPI(inputPath, outputPath,
 	client := &http.Client{Timeout: h.cfg.Timeout}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("API request failed: %w", err)
+		return nil, fmt.Errorf("API request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(bodyBytes))
+		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	outputData, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to read API response: %w", err)
+		return nil, fmt.Errorf("failed to read API response: %w", err)
 	}
 
-	if err := os.WriteFile(outputPath, outputData, 0644); err != nil {
-		return "", fmt.Errorf("failed to save output: %w", err)
-	}
-
-	return filepath.Base(outputPath), nil
+	return outputData, nil
 }
 
 func createMultipartWriter(body *bytes.Buffer, data []byte, filename string) (*multipart.Writer, error) {
@@ -282,7 +302,7 @@ func createMultipartWriter(body *bytes.Buffer, data []byte, filename string) (*m
 
 // RemoveBackgroundSimple accepts file upload directly for background removal
 func (h *BackgroundRemovalHandler) RemoveBackgroundSimple(c *gin.Context) {
-	file, header, err := c.Request.FormFile("file")
+	file, _, err := c.Request.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No file provided"})
 		return
@@ -291,8 +311,13 @@ func (h *BackgroundRemovalHandler) RemoveBackgroundSimple(c *gin.Context) {
 
 	model := c.DefaultQuery("model", "u2net")
 
-	inputFilename := fmt.Sprintf("input_%d_%s", time.Now().Unix(), header.Filename)
-	inputPath := filepath.Join(h.tempDir, inputFilename)
+	// Never embed the multipart filename in a filesystem path. Multipart
+	// filenames are attacker-controlled and may contain traversal syntax.
+	outputFilename := fmt.Sprintf("nobg_%d_%s.png", time.Now().UnixNano(), uuid.New().String())
+	if _, err := validatePathComponent(outputFilename); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid output filename"})
+		return
+	}
 
 	inputData, err := io.ReadAll(file)
 	if err != nil {
@@ -300,26 +325,20 @@ func (h *BackgroundRemovalHandler) RemoveBackgroundSimple(c *gin.Context) {
 		return
 	}
 
-	if err := os.WriteFile(inputPath, inputData, 0644); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save file"})
-		return
-	}
-
-	ext := filepath.Ext(header.Filename)
-	outputFilename := fmt.Sprintf("nobg_%s.png", strings.TrimSuffix(header.Filename, ext))
-	outputPath := filepath.Join(h.tempDir, outputFilename)
-
-	result, err := h.removeBackgroundSync(inputPath, outputPath, model)
+	outputData, err := h.removeBackgroundSync(inputData, model)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	os.Remove(inputPath)
+	if err := confinedWriteFile(h.tempDir, outputFilename, outputData, 0644); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save output"})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"filename": result,
-		"url":      fmt.Sprintf("temp/%s", result),
+		"filename": outputFilename,
+		"url":      fmt.Sprintf("temp/%s", outputFilename),
 	})
 }
 
