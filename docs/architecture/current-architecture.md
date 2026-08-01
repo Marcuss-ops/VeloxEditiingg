@@ -10,6 +10,101 @@
 
 Il percorso video usa `shared/contract.JobPayloadV2`.
 
+### 6.1 Confine canonico del payload
+
+Il flusso canonico è una sequenza di sei confini logici. I confini
+ descrivono l'ownership dei dati e non introducono un framework interno o un
+nuovo modello di dominio. L'ordine temporale può avere due ingressi: il
+risultato del remote engine passa dall'adapter prima di convergere nel
+contratto; una richiesta HTTP già canonica passa direttamente dall'intake.
+
+```text
+HTTP request ──→ intake HTTP ───────────────┐
+                                            ├─→ canonical contract
+remote-engine response ──→ remote adapter ──┘   (JobPayloadV2 / DTO canonico)
+                                                       ↓
+                                                control plane
+                                        (DeliveryPlan + PublicationSpecs)
+                                                       ↓
+                                            worker payload projection
+                                                       ↓
+                                             enqueue preparation
+                                                       ↓
+                                           Job + TaskSpec persistiti
+                                                       ↓
+                                                worker / renderer
+```
+
+Il **remote engine adapter** è quindi un confine di ingresso/proiezione, non
+un passaggio successivo alla persistenza: `ParseRemotePipelineResult` e
+`ToWorkerPayload` vengono usati dagli handler prima di `creatorflow.Resolver`
+e dell'enqueue. La matrice seguente mantiene comunque tutti e sei i confini
+espliciti per evitare che questa responsabilità venga duplicata.
+
+La tabella seguente è la matrice di responsabilità operativa. Le colonne
+**entra** e **esce** descrivono il confine, mentre **non possiede** rende
+esplicite le responsabilità che non devono essere duplicate in quel livello.
+
+| Confine | Implementazione/tipi esistenti | Entra | Esce | Possiede | Non possiede |
+| --- | --- | --- | --- | --- | --- |
+| **1. Intake HTTP** | `pipeline.SubmitJob`, `decodeStrictJSON`, `ValidateSubmitJobRequest`, `normalizeCreatorPushRequest` per il push creator | Body HTTP, header e autenticazione del producer | DTO di richiesta validato oppure `CanonicalCompletedPayload` | Decodifica stretta, validazione di forma, limiti HTTP, idempotency key e traduzione degli errori HTTP | Scritture SQL, risoluzione asset, stato Job/Task, payload finale del renderer |
+| **2. Canonical contract** | `contract.JobPayloadV2`, `NewJobPayloadV2`, `(*JobPayloadV2).ToMap`, `pipeline.CanonicalCompletedPayload` | DTO/map già accettati dall'intake o risultato remoto | Forma tipizzata/canonica con identità, scene, asset e campi tecnici | Nomi canonici, versione del contratto, identità, shape di scene e payload; rifiuto/stripping degli alias nelle scritture canoniche | Binding HTTP, schema SQL, scelta del worker, metadata di pubblicazione |
+| **3. Control plane** | `creatorflow.ResolveRequest`, `DeliveryPlan`, `publication.Spec`, `creatorflow.Resolver`, `PlanResolver` | Payload worker canonico più `DeliveryPlan` e `PublicationSpecs` separati | `TaskSpec.DeliveryPlan`, `TaskSpec.PublicationSpecs` e routing persistibile | Destinazioni, retry budget, priorità, metadata di delivery, publication intent, forwarding identity e transizioni atomiche | Scene rendering, composizione video, interpretazione di metadata social nel renderer |
+| **4. Worker payload projection** | `projectWorkerPayload`, `submitRequestToRawPayload`, `remoteengine.RemotePipelineResult.ToWorkerPayload`, `stripRendererPublicationFields` | Input canonico o DTO remoto tipizzato | Map worker con `scenes_json`, asset tecnici, audio, output e campi di rendering | Proiezione controllata e compatibile per il renderer; rimozione di publication/delivery metadata; compatibilità legacy solo nella proiezione documentata | Destinazioni, `PublicationSpecs`, scheduling, retry delivery, scritture Job/Task |
+| **5. Enqueue preparation** | `Enqueuer.PrepareJobAndTask`, `validateEnqueueInput`, `resolveEnqueueAssets`, `normalizeEnqueuePayload`, `projectEnqueueJobContext`, `persistEnqueueJobTask` | Payload worker/canonico e requisiti di scheduling | `jobs.Job` e `taskgraph.TaskSpec` pronti per `AtomicJobTaskCreator` | Ordine delle fasi validate → resolve assets → normalize → project → persist, identità forwarding deterministica, risoluzione asset e errori classificabili (`EnqueuePhase`) | Parsing HTTP, decisioni editoriali, reinterpretazione del contratto remoto, upload/delivery al provider |
+| **6. Remote engine adapter** | `remoteengine.ValidateInitialResponse`, `ParseRemotePipelineResult`, `RemotePipelineResult`, `ToWorkerPayload` | Mappe di risposta del remote engine | DTO remoto validato e successiva proiezione worker | Validazione di status/job ID, conversione da map a DTO, estrazione scene/asset/audio e rimozione dei campi non renderer | Business policy del master, assegnazione destinazioni, persistenza, scelta di un executor alternativo |
+
+#### Regole di attraversamento
+
+1. **Un solo contratto canonico per l'esecuzione.** I producer possono avere
+   envelope diversi, ma dopo l'intake devono convergere su
+   `CanonicalCompletedPayload` e/o `JobPayloadV2`; non devono creare una
+   seconda normalizzazione equivalente.
+2. **Il control plane viaggia a fianco del payload renderer.**
+   `DeliveryPlan` e `PublicationSpecs` sono argomenti/campi distinti di
+   `ResolveRequest` e `TaskSpec`. Non vanno inseriti in `WorkerPayload`,
+   `scenes_json` o `video_metadata`.
+3. **Il renderer riceve una proiezione, non il progetto grezzo.**
+   `ToWorkerPayload` è il punto in cui il risultato remoto viene convertito
+   in input worker. `stripRendererPublicationFields` deve restare applicato
+   dopo gli overlay tipizzati, così i campi di controllo non possono
+   rientrare tramite una risposta legacy.
+4. **L'enqueue non reinterpreta il dominio remoto.** Prepara asset, identità,
+   requisiti e `TaskSpec`; non deve diventare un secondo HTTP handler o un
+   secondo adapter remote-engine.
+5. **Gli alias legacy sono fallback di lettura, non output canonico.**
+   `NewJobPayloadV2` può leggere alias dalle righe/forme legacy compatibili,
+   mentre `JobPayloadV2.ToMap()` produce la forma V2 e li rimuove dall'output.
+   Eventuali compatibilità devono restare confinate a letture/proiezioni
+   documentate e non reintrodurre `parameters`, `id`, `run_id`, `title`,
+   `voiceover_path` o `audio_path` nelle nuove scritture.
+6. **Persistenza e ownership restano atomiche.** Il Resolver prepara il
+   payload e passa `Job`, `TaskSpec`, delivery plan e publication specs a
+   `AtomicForwardAndEnqueue`; gli handler non aprono writer paralleli.
+
+#### Confini di esclusione per i dati
+
+| Dato | Intake/contract | Control plane | Worker payload | Enqueue/TaskSpec |
+| --- | --- | --- | --- | --- |
+| Scene text, timeline e asset tecnici | valida e canonizza | non possiede | **sì**, nella forma necessaria al renderer | risolve riferimenti e compila |
+| `video_metadata` tecnico (codec, dimensioni, audio) | valida shape | non possiede | **sì**, solo campi renderer-owned | persiste solo se richiesto dal TaskSpec |
+| Publication title/description/tags/privacy | può ricevere e normalizzare | **sì** (`publication.Spec`) | **mai** | persiste come publication intent, non come scena |
+| Destinazioni e `delivery_plan` | valida forma | **sì** | **mai** | persiste in `TaskSpec.DeliveryPlan`/piano delivery |
+| Retry budget e priorità delivery | valida forma | **sì** | **mai** | applica precondizioni e compila il task |
+| Forwarding identity | decodifica/propaga | **sì** per dedup e transizioni | solo il riferimento tecnico necessario | deriva il `job_id` deterministico |
+
+Questa matrice è descrittiva dello stato corrente su `main`. Se un futuro
+cambiamento richiede un nuovo tipo o un nuovo passaggio, deve prima
+identificare quale riga della matrice possiede la responsabilità e dimostrare
+una duplicazione reale; non si aggiungono astrazioni generiche soltanto per
+rappresentare il diagramma.
+
+---
+
+### 6.2 Percorsi di intake esistenti
+
+Il percorso video usa `shared/contract.JobPayloadV2`.
+
 L'Enqueuer riceve il payload da uno dei tre percorsi di intake canonici:
 
 1. un handler HTTP del flusso master (`POST /api/v1/pipeline-runs/*`);
