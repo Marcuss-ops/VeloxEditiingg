@@ -391,13 +391,13 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 					}
 				}
 			case *pb.WorkerToMasterEnvelope_TaskLeaseRenewal:
-				h.handleTaskRenewal(workerID, m.TaskLeaseRenewal)
+				h.handleTaskRenewal(workerID, m.TaskLeaseRenewal, sess)
 
 			case *pb.WorkerToMasterEnvelope_TaskAccepted:
 				h.handleTaskAccepted(workerID, m.TaskAccepted, sess)
 
 			case *pb.WorkerToMasterEnvelope_TaskRejected:
-				h.handleTaskRejected(workerID, m.TaskRejected)
+				h.handleTaskRejected(workerID, m.TaskRejected, sess)
 
 			case *pb.WorkerToMasterEnvelope_TaskResult:
 				h.handleTaskResult(workerID, m.TaskResult, sess)
@@ -475,6 +475,23 @@ func (h *Handler) isCurrentSession(workerID, sessionID string) bool {
 	defer h.mu.RUnlock()
 	sid, ok := h.workerSessions[workerID]
 	return ok && sid == sessionID
+}
+
+// isCurrentSessionLocked is the lock-held variant used when a lifecycle CAS
+// must be fenced against reconnect between ownership validation and mutation.
+// It compares both the registry entry and pointer identity; the latter also
+// keeps lightweight handler tests safe when a session has no generated ID.
+// Callers must hold h.mu.RLock or h.mu.Lock.
+func (h *Handler) isCurrentSessionLocked(workerID string, sess *workerSession) bool {
+	if sess == nil || sess.workerID != workerID {
+		return false
+	}
+	sid, ok := h.workerSessions[workerID]
+	if !ok {
+		return false
+	}
+	current, ok := h.sessions[sid]
+	return ok && current == sess && (sess.sessionID == "" || sid == sess.sessionID)
 }
 
 // sessionWriter is the sole goroutine allowed to call stream.Send().

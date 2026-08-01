@@ -504,13 +504,9 @@ func TestGenerate_SourceClips_EnqueuesClipJob(t *testing.T) {
 	if got := stored["video_mode"]; got != "clip_stock" {
 		t.Fatalf("want stored video_mode %q, got %v", "clip_stock", got)
 	}
-	clips, ok := stored["clips"].([]interface{})
-	if !ok || len(clips) != 2 {
-		t.Fatalf("want 2 stored clips, got %#v", stored["clips"])
-	}
-	items, ok := stored["items"].([]interface{})
-	if !ok || len(items) != 4 {
-		t.Fatalf("want 4 stored items, got %#v", stored["items"])
+	scenes, ok := stored["scenes"].([]interface{})
+	if !ok || len(scenes) != 2 {
+		t.Fatalf("want 2 canonical stored scenes, got %#v", stored["scenes"])
 	}
 	audioTracks, ok := stored["audio_tracks"].([]interface{})
 	if !ok || len(audioTracks) != 4 {
@@ -635,9 +631,9 @@ func TestSubmitJob_SlideshowVideo_EnqueuesImagesPipelineJob(t *testing.T) {
 	if got := stored["pipeline_id"]; got != "images.v1" {
 		t.Fatalf("want pipeline_id images.v1, got %#v", got)
 	}
-	images, ok := stored["images"].([]interface{})
+	images, ok := stored["scene_image_paths"].([]interface{})
 	if !ok || len(images) != 2 {
-		t.Fatalf("want 2 stored images, got %#v", stored["images"])
+		t.Fatalf("want 2 stored scene_image_paths, got %#v", stored["scene_image_paths"])
 	}
 	if got := stored["audio_url"]; got != "https://example.com/voice.mp3" {
 		t.Fatalf("want audio_url voiceover mirrored, got %#v", got)

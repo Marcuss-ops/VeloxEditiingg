@@ -141,7 +141,10 @@ func (s *Service) StartOrPersistForwarding(ctx context.Context, rawPayload map[s
 		if rs == nil {
 			return nil, false, fmt.Errorf("creatorflow: StartOrPersistForwarding: resolver construction failed")
 		}
-		deliveryPlan := deliveryplan.ExtractEnvelope(creatorResult)
+		// Remote creator responses may wrap the completed payload under
+		// `result`; flatten before extracting the control-plane envelope so
+		// delivery_plan is not lost on the sync forwarding path.
+		deliveryPlan := deliveryplan.ExtractEnvelope(enqueue.FlattenPipelineResult(creatorResult))
 		out, err := rs.Resolve(ctx, ResolveRequest{
 			ForwardingID:     "",
 			SourceProvider:   "remote_engine",

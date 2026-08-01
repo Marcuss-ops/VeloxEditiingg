@@ -190,18 +190,19 @@ func testRenderManifest() map[string]interface{} {
 		},
 		"audio_tracks": []interface{}{
 			map[string]interface{}{
-				"asset_id":           "bgm-test-001",
-				"source_url":         "velox-asset://music/bgm-test-001.mp3",
-				"role":               "background_music",
-				"volume":             0.15,
-				"start_time_offset":  0,
-				"duration_seconds":   12.0,
+				"asset_id":          "bgm-test-001",
+				"source_url":        "velox-asset://music/bgm-test-001.mp3",
+				"role":              "background_music",
+				"volume":            0.15,
+				"start_time_offset": 0,
+				"duration_seconds":  12.0,
 			},
 		},
 		"integrity": map[string]interface{}{
 			"algorithm":         "sha256",
 			"manifest_sha256":   "",
 			"scene_count":       1,
+			"audio_track_count": 1,
 			"total_duration_ms": 7200,
 		},
 	}

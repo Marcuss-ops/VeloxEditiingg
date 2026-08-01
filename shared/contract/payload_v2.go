@@ -76,6 +76,8 @@ type JobPayloadV2 struct {
 	VoiceoverPaths   []string         `json:"voiceover_paths,omitempty"`
 	AudioLanguage    string           `json:"audio_language_for_srt,omitempty"`
 	VideoMode        string           `json:"video_mode,omitempty"`
+	Effect           string           `json:"effect,omitempty"`
+	Orientation      string           `json:"orientation,omitempty"`
 	OutputPath       string           `json:"output_path,omitempty"`
 	DriveOutput      string           `json:"drive_output_folder,omitempty"`
 	ChannelID        string           `json:"channel_id,omitempty"`
@@ -134,6 +136,8 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 		VoiceoverPaths:         append([]string{}, compatibility.ReadStringList(raw, compatibility.VoiceoverPathsKey)...),
 		AudioLanguage:          payload.FirstString(raw, "audio_language_for_srt", "audio_lang", "language"),
 		VideoMode:              payload.FirstString(raw, "video_mode"),
+		Effect:                 payload.FirstString(raw, "effect"),
+		Orientation:            payload.FirstString(raw, "orientation"),
 		OutputPath:             payload.FirstString(raw, "output_path"),
 		DriveOutput:            payload.FirstString(raw, "drive_output_folder", "output_directory"),
 		ChannelID:              payload.FirstString(raw, "channel_id"),
@@ -284,6 +288,12 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 	}
 	if p.VideoMode != "" {
 		out["video_mode"] = p.VideoMode
+	}
+	if p.Effect != "" {
+		out["effect"] = p.Effect
+	}
+	if p.Orientation != "" {
+		out["orientation"] = p.Orientation
 	}
 	if p.OutputPath != "" {
 		out["output_path"] = p.OutputPath

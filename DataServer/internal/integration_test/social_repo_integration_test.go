@@ -375,7 +375,11 @@ func TestIntegration_Preflight_RetryIdempotency(t *testing.T) {
 // (which itself points at the mock).
 func newRegistryWithSocialProvider(t *testing.T, client *socialclient.Client) (*deliveries.Registry, *providers.SocialGatewayProvider) {
 	t.Helper()
-	cfg := socialclient.Config{BaseURL: client.BaseURL(), APIKey: client.BaseURL()} // APIKey unused by mock; inert
+	cfg := socialclient.Config{
+		BaseURL:         client.BaseURL(),
+		APIKey:          client.BaseURL(), // APIKey unused by mock; inert
+		CallbackBaseURL: client.BaseURL(), // mock stands in for Velox callback URLs
+	}
 	reg := deliveries.NewRegistry()
 	p := providers.NewSocialGatewayProvider(cfg)
 	reg.Register(p)

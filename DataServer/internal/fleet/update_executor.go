@@ -14,55 +14,55 @@
 //     is_rollback=false. Health() flips to UPDATING via
 //     DeriveDeploymentHealthState precedence rank 4.
 //  6. forward pipeline:
-//       a. cosign verify target_digest (with VELOX_SKIP_*
-//          override sentinel).
-//       b. ssh: docker pull <target_digest> on the worker.
-//       c. ssh: docker compose -p velox-worker-<id> restart.
-//       d. ContainerRunning poll.
-//       e. /health/ready poll via ssh curl on the worker.
-//       f. master-connection check via Registry.SessionActive
-//          + heartbeat recency.
-//       g. RunLevelD smoke (returns smoke artifact_id).
-//       h. Drive verifier confirms the smoke artifact landed.
-//       i. MarkSucceeded on the PENDING row → Health HEALTHY.
+//     a. cosign verify target_digest (with VELOX_SKIP_*
+//     override sentinel).
+//     b. ssh: docker pull <target_digest> on the worker.
+//     c. ssh: docker compose -p velox-worker-<id> restart.
+//     d. ContainerRunning poll.
+//     e. /health/ready poll via ssh curl on the worker.
+//     f. master-connection check via Registry.SessionActive
+//     + heartbeat recency.
+//     g. RunLevelD smoke (returns smoke artifact_id).
+//     h. Drive verifier confirms the smoke artifact landed.
+//     i. MarkSucceeded on the PENDING row → Health HEALTHY.
 //  7. on any forward failure (cosign fail / pull fail /
 //     container unhealthy / health non-200 / master offline
 //     / smoke fail / Drive fail), UPDATES the PENDING row to
 //     status=FAILED and runs the rollback cascade:
-//       a. INSERT a SECOND deployment_records row, status=
-//          PENDING, is_rollback=true. Health flips to
-//          ROLLBACK via rank-3 precedence (beats UPDATING).
-//       b. ssh: docker pull <previous_digest>.
-//       c. ssh: docker compose restart.
-//       d. ContainerRunning poll.
-//       e. /health/ready poll.
-//       f. health CONTAINER-restart path does NOT re-run
-//          smoke — the previous_digest has already passed
-//          smoke historically; a re-smoke is unnecessary
-//          and would double the rollback latency.
-//       g. MarkDeploymentRolledBack on the rollback row:
-//          rollbackOK=true → status=ROLLED_BACK (terminal),
-//          rollbackOK=false → status=FAILED — the worker is
-//          now in an inconsistent state and operator
-//          intervention is required.
+//     a. INSERT a SECOND deployment_records row, status=
+//     PENDING, is_rollback=true. Health flips to
+//     ROLLBACK via rank-3 precedence (beats UPDATING).
+//     b. ssh: docker pull <previous_digest>.
+//     c. ssh: docker compose restart.
+//     d. ContainerRunning poll.
+//     e. /health/ready poll.
+//     f. health CONTAINER-restart path does NOT re-run
+//     smoke — the previous_digest has already passed
+//     smoke historically; a re-smoke is unnecessary
+//     and would double the rollback latency.
+//     g. MarkDeploymentRolledBack on the rollback row:
+//     rollbackOK=true → status=ROLLED_BACK (terminal),
+//     rollbackOK=false → status=FAILED — the worker is
+//     now in an inconsistent state and operator
+//     intervention is required.
 //
 // Return semantics (Execute → FleetController):
 //   - forward OK       → nil            → FCO marks SUCCEEDED
 //   - forward fail,
 //     rollback OK      → ErrForward + ErrRollbackSucceeded wrap
-//                      → FCO marks FAILED, error_message
-//                        surfaces "rollback_ok to <digest>"
+//     → FCO marks FAILED, error_message
+//     surfaces "rollback_ok to <digest>"
 //   - forward fail,
 //     rollback fail    → ErrForward + ErrRollbackFailed wrap,
-//                        rollback err wrapped.
-//                      → FCO marks FAILED, error_message
-//                        surfaces "rollback_failed: <err>"
+//     rollback err wrapped.
+//     → FCO marks FAILED, error_message
+//     surfaces "rollback_failed: <err>"
 //   - empty registry   → ErrEmptyRegistry
-//                      → FCO marks FAILED, error_message
-//                        surfaces "empty_registry: ..."
+//     → FCO marks FAILED, error_message
+//     surfaces "empty_registry: ..."
 //   - unregistered     → ErrUnregisteredWorker
-//                      → FCO marks FAILED — NO rollback
-//                        (forward never started)
+//     → FCO marks FAILED — NO rollback
+//     (forward never started)
 //
 // Per-step timeouts (forward budget 30min; configured via
 // fleet.NewFleetController opTimeout). Each step's helper
@@ -139,17 +139,17 @@ var (
 // ("DRAINING → /health/ready → health → Master connection
 // → Level D smoke → Drive delivery verification").
 const (
-	timeoutSnapshot        = 10 * time.Second
-	timeoutDrainVerify     = 5 * time.Second
-	timeoutActiveJobsIdle  = 5 * time.Minute
-	timeoutCosign          = 30 * time.Second
-	timeoutDockerPull      = 10 * time.Minute
-	timeoutComposeRestart  = 2 * time.Minute
-	timeoutContainerCheck  = 30 * time.Second
-	timeoutHealthReady     = 60 * time.Second
-	timeoutMasterCheck     = 30 * time.Second
-	timeoutSmokeRun        = 5 * time.Minute
-	timeoutDriveVerify     = 60 * time.Second
+	timeoutSnapshot       = 10 * time.Second
+	timeoutDrainVerify    = 5 * time.Second
+	timeoutActiveJobsIdle = 5 * time.Minute
+	timeoutCosign         = 30 * time.Second
+	timeoutDockerPull     = 10 * time.Minute
+	timeoutComposeRestart = 2 * time.Minute
+	timeoutContainerCheck = 30 * time.Second
+	timeoutHealthReady    = 60 * time.Second
+	timeoutMasterCheck    = 30 * time.Second
+	timeoutSmokeRun       = 5 * time.Minute
+	timeoutDriveVerify    = 60 * time.Second
 )
 
 // UpdateExecutor is the Step 9/15 OperationExecutor binding
@@ -161,7 +161,8 @@ const (
 // at buildFleet can supply a single dependency object. Tests
 // construct UpdateBackend manually with stub implementations.
 type UpdateExecutor struct {
-	backend UpdateBackend
+	backend      UpdateBackend
+	drainTimeout time.Duration
 }
 
 // UpdateBackend is the bundled dependency surface for
@@ -191,7 +192,7 @@ func NewUpdateExecutor(b UpdateBackend) *UpdateExecutor {
 	if b.Now == nil {
 		b.Now = func() time.Time { return time.Now().UTC() }
 	}
-	return &UpdateExecutor{backend: b}
+	return &UpdateExecutor{backend: b, drainTimeout: timeoutActiveJobsIdle}
 }
 
 // BackendCosignVerifierIfc is the local alias for
@@ -337,7 +338,11 @@ func (e *UpdateExecutor) waitForIdle(ctx context.Context, workerID string) error
 		// a missing dependency surfaces the failure explicitly.
 		return errors.New("update: registry gater not wired (cannot confirm drain)")
 	}
-	deadline := time.Now().Add(timeoutActiveJobsIdle)
+	drainTimeout := e.drainTimeout
+	if drainTimeout <= 0 {
+		drainTimeout = timeoutActiveJobsIdle
+	}
+	deadline := time.Now().Add(drainTimeout)
 	for {
 		if e.backend.Registry.IsActiveJobsZero(ctx, workerID) {
 			return nil

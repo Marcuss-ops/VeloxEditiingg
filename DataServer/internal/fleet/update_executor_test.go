@@ -3,46 +3,46 @@
 // Coverage map (each test exercises a single decision branch
 // of the forward+rollback pipeline):
 //
-//   Happy-path:
-//     TestUpdate_HappyPath                       — all 8 forward steps pass
+//	Happy-path:
+//	  TestUpdate_HappyPath                       — all 8 forward steps pass
 //
-//   Phase 1 (input validation) errors:
-//     TestUpdate_EmptyPayload                    — empty json.RawMessage
-//     TestUpdate_PayloadMissingTargetDigest      — JSON parses, target_digest=""
-//     TestUpdate_PayloadParseFails               — malformed JSON
-//     TestUpdate_InvalidImageRef_MobileTag       — :latest rejected
-//     TestUpdate_InvalidImageRef_WrongRegistry   — non-ghcr.io rejected
-//     TestUpdate_NilBackend                      — backend not wired
+//	Phase 1 (input validation) errors:
+//	  TestUpdate_EmptyPayload                    — empty json.RawMessage
+//	  TestUpdate_PayloadMissingTargetDigest      — JSON parses, target_digest=""
+//	  TestUpdate_PayloadParseFails               — malformed JSON
+//	  TestUpdate_InvalidImageRef_MobileTag       — :latest rejected
+//	  TestUpdate_InvalidImageRef_WrongRegistry   — non-ghcr.io rejected
+//	  TestUpdate_NilBackend                      — backend not wired
 //
-//   Phase 2/3 (registry + snapshot) errors:
-//     TestUpdate_UnregisteredWorker              — registry returns nil WorkerInfo
-//     TestUpdate_EmptyRegistry                   — no prior deployment_records row
+//	Phase 2/3 (registry + snapshot) errors:
+//	  TestUpdate_UnregisteredWorker              — registry returns nil WorkerInfo
+//	  TestUpdate_EmptyRegistry                   — no prior deployment_records row
 //
-//   Phase 4 (drain) errors:
-//     TestUpdate_ActiveJobsTimeout               — active_tasks never reaches 0
+//	Phase 4 (drain) errors:
+//	  TestUpdate_ActiveJobsTimeout               — active_tasks never reaches 0
 //
-//   Phase 6 forward-pipeline failures (each triggers rollback):
-//     TestUpdate_CosignFail_RollsBack            — Verify returns error
-//     TestUpdate_PullImageFail_RollsBack         — PullImage returns error
-//     TestUpdate_ComposeRestartFail_RollsBack    — ComposeRestart returns error
-//     TestUpdate_ContainerUnhealthy_RollsBack    — ContainerRunning → false
-//     TestUpdate_HealthReadyFail_RollsBack       — /health/ready curl fails
-//     TestUpdate_MasterDisconnected_RollsBack    — info.SessionActive=false
-//     TestUpdate_SmokeFail_RollsBack             — RunLevelD returns error
-//     TestUpdate_DriveDeliveryMissing_RollsBack  — VerifyDelivery returns missing
+//	Phase 6 forward-pipeline failures (each triggers rollback):
+//	  TestUpdate_CosignFail_RollsBack            — Verify returns error
+//	  TestUpdate_PullImageFail_RollsBack         — PullImage returns error
+//	  TestUpdate_ComposeRestartFail_RollsBack    — ComposeRestart returns error
+//	  TestUpdate_ContainerUnhealthy_RollsBack    — ContainerRunning → false
+//	  TestUpdate_HealthReadyFail_RollsBack       — /health/ready curl fails
+//	  TestUpdate_MasterDisconnected_RollsBack    — info.SessionActive=false
+//	  TestUpdate_SmokeFail_RollsBack             — RunLevelD returns error
+//	  TestUpdate_DriveDeliveryMissing_RollsBack  — VerifyDelivery returns missing
 //
-//   Rollback-side outcomes:
-//     TestUpdate_RollbackSucceedsAfterForwardFail — composite ErrRollbackSucceeded
-//     TestUpdate_RollbackFailsAfterForwardFail    — composite ErrRollbackFailed
-//     TestUpdate_PayloadSuppliesPreviousDigest    — caller overrides snapshot
+//	Rollback-side outcomes:
+//	  TestUpdate_RollbackSucceedsAfterForwardFail — composite ErrRollbackSucceeded
+//	  TestUpdate_RollbackFailsAfterForwardFail    — composite ErrRollbackFailed
+//	  TestUpdate_PayloadSuppliesPreviousDigest    — caller overrides snapshot
 //
-//   Row transition audit:
-//     TestUpdate_ForwardRowTransitions_SUCCEEDED  — happy path persistence trail
-//     TestUpdate_ForwardRowTransitions_FAILED     — forward-fail persistence trail
+//	Row transition audit:
+//	  TestUpdate_ForwardRowTransitions_SUCCEEDED  — happy path persistence trail
+//	  TestUpdate_ForwardRowTransitions_FAILED     — forward-fail persistence trail
 //
-//   Helper unit tests:
-//     TestUpdate_stepContainerRunning_NilDocker  — guard returns ErrContainerUnhealthy
-//     TestUpdate_parsePayload_EmptyJSONObject    — "{}" accepted as empty
+//	Helper unit tests:
+//	  TestUpdate_stepContainerRunning_NilDocker  — guard returns ErrContainerUnhealthy
+//	  TestUpdate_parsePayload_EmptyJSONObject    — "{}" accepted as empty
 //
 // Pinned to Go 1.21+ (the repo's go.mod).
 package fleet
@@ -207,7 +207,9 @@ func (s *stubBackendsState) GetWorker(_ context.Context, id string) (*workers.Wo
 	return info, nil
 }
 
-func (s *stubBackendsState) IsActiveJobsZero(_ context.Context, _ string) bool { return s.activeTasksZero }
+func (s *stubBackendsState) IsActiveJobsZero(_ context.Context, _ string) bool {
+	return s.activeTasksZero
+}
 
 // ── BackendDeploymentRepo ───────────────────────────────────────────
 
@@ -375,6 +377,7 @@ func TestUpdate_ActiveJobsTimeout(t *testing.T) {
 	backend, st := stubBackends(t)
 	st.activeTasksZero = false // stays busy
 	e := NewUpdateExecutor(backend)
+	e.drainTimeout = 10 * time.Millisecond
 	op := mkOp("wkr-1", validImageRef(), "")
 	err := e.Execute(context.Background(), op)
 	if err == nil || !strings.Contains(err.Error(), "active_jobs did not drain") {
