@@ -3,10 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"errors"
-	"fmt"
-	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -272,11 +268,12 @@ func TestClaimNextWithAttemptAtomic_UsesHistoricalMaxAttemptNumber(t *testing.T)
 // so a concurrent dispatcher cannot claim the same task between
 // ListReadyCandidates and Claim. The tests below assert:
 //   - Happy path: matching revision + executor → LEASED + PENDING attempt
-//   - Stale revision: wrong revision → ErrTransitionConflict
-//   - Executor mismatch: wrong executor_id or executor_version → conflict
-//   - Status mismatch: task not READY → conflict
-//   - Concurrent claim: task already claimed by another dispatcher → conflict
+//   - Runtime identity: session/snapshot carried on the PENDING attempt
 //   - Atomicity: mid-tx failure (dropped task_specs) → full rollback
+//
+// Conflict/failure cases (stale revision, executor id/version mismatch,
+// not READY) live in sqlite_task_atomic_claim_failures_test.go; the
+// concurrent-claim race lives in sqlite_task_atomic_claim_concurrency_test.go.
 // =====================================================================
 
 // TestClaimTaskForWorkerAtomic_HappyPath: READY task with matching
@@ -617,85 +614,6 @@ func TestClaimNextWithAttemptAtomic_ResolvesAndRejectsCanonicalRuntimeIdentity(t
 	}
 	if rows != 0 {
 		t.Fatalf("revoked-session attempt rows = %d, want 0", rows)
-	}
-}
-
-// TestClaimTaskForWorkerAtomic_AlreadyClaimed: two concurrent claims
-// race on the same task → one wins, the other gets ErrTransitionConflict.
-func TestClaimTaskForWorkerAtomic_AlreadyClaimed(t *testing.T) {
-	s, r := openTaskAtomicTestDB(t)
-	ctx := context.Background()
-
-	seedReadyTaskWithExecutor(t, s.db, "T-claim-race", "blender", 4, 0)
-
-	claim := func(workerID, leaseID string) error {
-		cmd := taskgraph.ClaimTaskForWorkerCommand{
-			TaskID:               "T-claim-race",
-			ExpectedTaskRevision: 0,
-			WorkerID:             workerID,
-			SessionID:            "sess-" + workerID,
-			LeaseID:              leaseID,
-			ExecutorID:           "blender",
-			ExecutorVersion:      4,
-			CapabilityRevision:   1,
-		}
-		_, _, err := r.ClaimTaskForWorkerAtomic(ctx, cmd)
-		return err
-	}
-
-	var wg sync.WaitGroup
-	errs := make(chan error, 2)
-	for i := 0; i < 2; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			errs <- claim(
-				fmt.Sprintf("w-race-%d", idx),
-				fmt.Sprintf("L-race-%d", idx),
-			)
-		}(i)
-	}
-	wg.Wait()
-	close(errs)
-
-	successes := 0
-	conflicts := 0
-	for err := range errs {
-		if err == nil {
-			successes++
-		} else if errors.Is(err, taskgraph.ErrTransitionConflict) ||
-			strings.Contains(err.Error(), "database table is locked") {
-			conflicts++
-		} else {
-			t.Errorf("unexpected error: %v", err)
-		}
-	}
-	if successes != 1 {
-		t.Errorf("concurrent claims: successes=%d; want exactly 1", successes)
-	}
-	if conflicts != 1 {
-		t.Errorf("concurrent claims: conflicts=%d; want exactly 1", conflicts)
-	}
-
-	// Verify exactly one LEASED row exists.
-	var count int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM tasks WHERE task_id = 'T-claim-race' AND status = 'LEASED'`,
-	).Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	if count != 1 {
-		t.Errorf("LEASED tasks = %d; want 1", count)
-	}
-
-	// Verify exactly one PENDING attempt.
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM task_attempts WHERE task_id = 'T-claim-race'`,
-	).Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	if count != 1 {
-		t.Errorf("task_attempts rows = %d; want 1", count)
 	}
 }
 
