@@ -270,6 +270,8 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		tr = tr.WithArtifacts(wo.blobs).WithBlobStats(wo.blobs)
 	}
 
+	sampler := telemetry.NewResourceSampler("", "", cfg.WorkDir, 0, 0)
+	sampler.SetTempDir(cfg.TempDir)
 	w := &Worker{
 		config:           cfg,
 		apiClient:        apiClient,
@@ -320,7 +322,7 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		// (statvfs + resolveWorkDirDevice degrade to best-effort).
 		// 5s tick + 3-tick emit cadence is the default from
 		// NewResourceSampler.
-		sampler:  telemetry.NewResourceSampler("", "", cfg.WorkDir, 0, 0),
+		sampler:  sampler,
 		exitFunc: os.Exit,
 	}
 

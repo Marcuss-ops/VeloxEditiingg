@@ -49,6 +49,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -69,14 +70,9 @@ type SampledResources struct {
 	MemoryUsedBytes      int64
 	SwapUsedBytes        int64
 
-	// Worker-local temp disk accounting. Keeps these on the
-	// typed envelope (proto_worker_temp_bytes_written /
-	// proto_worker_temp_files_open) so master-side cost basis
-	// (F1 handler_jobs_metrics.go::executionMetricsToCostBasis) can
-	// stop zero-pading storage_gb_written. Today both fields stay
-	// zero — neither /proc nor /sys exposes per-process temp bytes
-	// reliably. A future sampler may populate them by hooking into
-	// the taskrunner output staging loop.
+	// Worker-local temp disk accounting. TempBytesWritten is cumulative
+	// observed growth in the configured worker scratch tree; TempFilesOpen
+	// is the current number of this worker's open descriptors into that tree.
 	TempBytesWritten int64
 	TempFilesOpen    int32
 
@@ -129,9 +125,13 @@ type Sampler struct {
 	workDir  string
 	tick     time.Duration
 
-	mu        sync.Mutex
-	lastCPU   cpuJiffies
-	lastCPUAt time.Time
+	mu               sync.Mutex
+	lastCPU          cpuJiffies
+	lastCPUAt        time.Time
+	tempDir          string
+	lastTempBytes    int64
+	tempBytesWritten int64
+	tempInitialized  bool
 
 	slot atomic.Pointer[SampledResources]
 	host atomic.Pointer[SampledHost]
@@ -173,6 +173,22 @@ func NewResourceSampler(procRoot, sysRoot, workDir string, tick time.Duration, e
 	}
 }
 
+// SetTempDir selects the worker scratch directory whose activity is reported
+// by temp_bytes_written and temp_files_open. It is separate from workDir:
+// workDir is the installation/mount used for disk accounting, while TempDir
+// contains render intermediates.
+func (s *Sampler) SetTempDir(tempDir string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.tempDir = tempDir
+	s.lastTempBytes = 0
+	s.tempBytesWritten = 0
+	s.tempInitialized = false
+	s.mu.Unlock()
+}
+
 // Latest returns the most recent published snapshot OR nil if no
 // emit boundary has fired yet. Reception from heartbeat emit
 // tolerates nil (master falls back to nothing — Prometheus simply
@@ -202,6 +218,10 @@ func (s *Sampler) Sample(ctx context.Context) (*SampledResources, error) {
 	}
 
 	out := &SampledResources{SampledAt: time.Now().UTC()}
+	if tempBytes, tempFiles := s.sampleTempActivity(); tempBytes >= 0 {
+		out.TempBytesWritten = tempBytes
+		out.TempFilesOpen = int32(tempFiles)
+	}
 
 	// CPU ratio computation (delta-based).
 	cpu, err := s.readProcStat()
@@ -294,6 +314,66 @@ func (s *Sampler) Sample(ctx context.Context) (*SampledResources, error) {
 	}
 
 	return out, firstErr
+}
+
+// sampleTempActivity returns cumulative observed growth and the number of
+// worker-process descriptors currently pointing into TempDir. Deletions never
+// reduce the cumulative counter. This is deliberately scoped to the worker's
+// own temp tree; counting the entire OS temp directory would mix unrelated
+// processes into the render telemetry.
+func (s *Sampler) sampleTempActivity() (int64, int) {
+	if s == nil {
+		return -1, 0
+	}
+	s.mu.Lock()
+	tempDir := s.tempDir
+	if tempDir == "" {
+		s.mu.Unlock()
+		return 0, 0
+	}
+	var current int64
+	_ = filepath.WalkDir(tempDir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry == nil {
+			return nil
+		}
+		if entry.Type().IsRegular() {
+			if info, statErr := entry.Info(); statErr == nil && info.Size() > 0 {
+				current += info.Size()
+			}
+		}
+		return nil
+	})
+	if !s.tempInitialized {
+		s.lastTempBytes = current
+		s.tempInitialized = true
+	} else if current > s.lastTempBytes {
+		s.tempBytesWritten += current - s.lastTempBytes
+		s.lastTempBytes = current
+	} else {
+		s.lastTempBytes = current
+	}
+	cumulative := s.tempBytesWritten
+	s.mu.Unlock()
+
+	open := 0
+	entries, err := os.ReadDir(filepath.Join(s.procRoot, "self", "fd"))
+	if err != nil {
+		return cumulative, 0
+	}
+	root, err := filepath.Abs(tempDir)
+	if err != nil {
+		return cumulative, 0
+	}
+	for _, entry := range entries {
+		target, linkErr := os.Readlink(filepath.Join(s.procRoot, "self", "fd", entry.Name()))
+		if linkErr != nil {
+			continue
+		}
+		if abs, absErr := filepath.Abs(target); absErr == nil && (abs == root || filepath.HasPrefix(abs, root+string(os.PathSeparator))) {
+			open++
+		}
+	}
+	return cumulative, open
 }
 
 // Run drives the 5s tick + 15s publish cadence. Cancel ctx to stop.

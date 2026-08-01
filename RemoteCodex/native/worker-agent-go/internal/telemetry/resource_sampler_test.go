@@ -305,6 +305,46 @@ func TestRun_PublishesEveryThirdTick(t *testing.T) {
 	// the fact the loop survived 7+ ticks implies cadence ticked.
 }
 
+func TestSample_TempActivityTracksGrowthAndOpenDescriptors(t *testing.T) {
+	proc, sys := stubProc(t, defaultStubOpts())
+	tempDir := t.TempDir()
+	tempFile := filepath.Join(tempDir, "render.part")
+	if err := os.WriteFile(tempFile, []byte("1234567890"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fdDir := filepath.Join(proc, "self", "fd")
+	if err := os.MkdirAll(fdDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(tempFile, filepath.Join(fdDir, "7")); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewResourceSampler(proc, sys, "/", 0, 0)
+	s.SetTempDir(tempDir)
+	first, _ := s.Sample(context.Background())
+	if first.TempBytesWritten != 0 {
+		t.Fatalf("first sample counted pre-existing bytes: %d", first.TempBytesWritten)
+	}
+	if first.TempFilesOpen != 1 {
+		t.Fatalf("open temp files = %d, want 1", first.TempFilesOpen)
+	}
+	if err := os.WriteFile(tempFile, []byte("12345678901234567890"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := s.Sample(context.Background())
+	if second.TempBytesWritten != 10 {
+		t.Fatalf("temp bytes written = %d, want 10", second.TempBytesWritten)
+	}
+	if err := os.Remove(tempFile); err != nil {
+		t.Fatal(err)
+	}
+	third, _ := s.Sample(context.Background())
+	if third.TempBytesWritten != 10 {
+		t.Fatalf("deletion reduced cumulative temp bytes to %d", third.TempBytesWritten)
+	}
+}
+
 // TestSampleHost_BasicSanity: SampleHost populates RAMBytes, populates
 // HasGPU=false in test env (no /dev/nvidia0), populates DiskFreeBytes
 // to ≥0 (workDir tmpfs may report any positive number).

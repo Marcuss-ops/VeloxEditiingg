@@ -30,7 +30,7 @@ func TestHandleTaskResult_PersistTypedMetrics_F1(t *testing.T) {
 	// A non-zero typed execution metrics envelope, every writable
 	// int32/int64/float64/bool populated. The derived CostBasis only
 	// depends on CpuTimeMs + the 3 price fields today (TempBytesWritten
-	// is NOT yet on the typed proto — derives to 0 in the cost row).
+	// is carried through the typed proto into the cost row).
 	em := &pb.TaskExecutionMetrics{
 		InputBytes:            1048576,
 		OutputBytes:           524288,
@@ -49,6 +49,7 @@ func TestHandleTaskResult_PersistTypedMetrics_F1(t *testing.T) {
 		CpuPricePerSecond:     0.000005,
 		StoragePricePerGb:     0.00012,
 		NetworkPricePerGb:     0.01,
+		TempBytesWritten:      123456789,
 	}
 
 	artItem, _ := structpb.NewStruct(map[string]interface{}{
@@ -95,8 +96,8 @@ func TestHandleTaskResult_PersistTypedMetrics_F1(t *testing.T) {
 	if got.FinalConcatStreamCopy != em.GetFinalConcatStreamCopy() || got.ConcatMode != em.GetConcatMode() {
 		t.Errorf("AttemptMetrics concat fields wrong: sc=%v mode=%q want sc=%v mode=%q", got.FinalConcatStreamCopy, got.ConcatMode, em.GetFinalConcatStreamCopy(), em.GetConcatMode())
 	}
-	if got.TempBytesWritten != 0 {
-		t.Errorf("AttemptMetrics TempBytesWritten = %d; want 0 (not yet on typed proto, derives to 0)", got.TempBytesWritten)
+	if got.TempBytesWritten != em.GetTempBytesWritten() {
+		t.Errorf("AttemptMetrics TempBytesWritten = %d; want %d", got.TempBytesWritten, em.GetTempBytesWritten())
 	}
 
 	gotCache := taskRepo.lastCacheStats
@@ -114,8 +115,9 @@ func TestHandleTaskResult_PersistTypedMetrics_F1(t *testing.T) {
 	if gotCost.CPUTimeSecondsTotal != float64(em.GetCpuTimeMs())/1000.0 {
 		t.Errorf("CostBasis.CPUTimeSecondsTotal = %v; want %v", gotCost.CPUTimeSecondsTotal, float64(em.GetCpuTimeMs())/1000.0)
 	}
-	if gotCost.StorageGBWritten != 0 {
-		t.Errorf("CostBasis.StorageGBWritten = %v; want 0 (TempBytesWritten not on typed proto yet)", gotCost.StorageGBWritten)
+	wantStorageGB := float64(em.GetTempBytesWritten()) / 1e9
+	if gotCost.StorageGBWritten != wantStorageGB {
+		t.Errorf("CostBasis.StorageGBWritten = %v; want %v", gotCost.StorageGBWritten, wantStorageGB)
 	}
 	if gotCost.NetworkGBEgressed != 0 {
 		t.Errorf("CostBasis.NetworkGBEgressed = %v; want 0 (TODO PR-3)", gotCost.NetworkGBEgressed)

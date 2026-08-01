@@ -310,11 +310,8 @@ func executionMetricsToCostBasis(attemptID string, em *pb.TaskExecutionMetrics) 
 	cb.StoragePricePerGB = em.GetStoragePricePerGb()
 	cb.NetworkPricePerGB = em.GetNetworkPricePerGb()
 	cb.CPUTimeSecondsTotal = float64(em.GetCpuTimeMs()) / 1000.0
-	// StorageGBWritten: derives from TempBytesWritten on the SQL column,
-	// not yet on the typed proto. Until the worker emits TempBytesWritten
-	// on the wire this stays 0 (Compute() short-circuits the
-	// per-output-minute divide by zero anyway).
-	cb.StorageGBWritten = 0
+	// StorageGBWritten is populated by the worker's typed temp-byte counter.
+	cb.StorageGBWritten = float64(em.GetTempBytesWritten()) / 1e9
 	// NetworkGBEgressed: TODO PR-3 — surface the artifact-upload
 	// transport size on ArtifactUploaded/Heartbeat, then derive here.
 	cb.NetworkGBEgressed = 0
