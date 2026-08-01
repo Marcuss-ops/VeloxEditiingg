@@ -36,7 +36,7 @@ import (
 // need the full store layer use this shortcut.
 func openTestStoreWithMetricsSnapshots(t *testing.T) *SQLiteStore {
 	t.Helper()
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := sql.Open("sqlite3", "file::memory:?cache=shared&_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open in-memory sqlite: %v", err)
 	}

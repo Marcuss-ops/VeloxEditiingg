@@ -106,7 +106,7 @@ CREATE TABLE task_execution_events (
 
 func openExecutionEventPersistenceTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := sql.Open("sqlite3", "file::memory:?cache=shared&_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
