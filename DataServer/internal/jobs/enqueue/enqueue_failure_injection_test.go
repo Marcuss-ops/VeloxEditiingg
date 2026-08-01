@@ -9,6 +9,7 @@ import (
 
 	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
+	"velox-server/internal/socialclient"
 	"velox-server/internal/store"
 )
 
@@ -85,6 +86,145 @@ func failureInjectionPayload(videoName string) map[string]interface{} {
 	}
 }
 
+func TestEnqueueFailureInjection_SocialValidatorHardErrorBlocksCreate(t *testing.T) {
+	db, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "social-hard.sqlite"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	seedDestinations(t, db, map[string]bool{"drive-main": true})
+
+	enq := NewEnqueuer(
+		store.NewAtomicJobTaskCreator(db),
+		store.NewSQLiteJobRepository(db),
+		nil,
+		&mockPlanResolver{plan: &ResolvedPlan{JobID: "social-hard"}},
+	).WithSocialValidator(&stubValidator{err: errors.Join(errors.New("destination rejected"), socialclient.ErrPermanent)})
+
+	payload := failureInjectionPayload("social-hard")
+	plan := payload["delivery_plan"].([]interface{})[0].(map[string]interface{})
+	plan["external_destination_id"] = "social-hard-destination"
+	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
+	if err == nil {
+		t.Fatalf("hard SocialValidator error must fail closed; got response=%v", response)
+	}
+	if response != nil {
+		t.Fatalf("hard SocialValidator error returned ambiguous response: %#v", response)
+	}
+	if !errors.Is(err, socialclient.ErrPermanent) {
+		t.Fatalf("hard SocialValidator sentinel was not preserved: %v", err)
+	}
+	if got := ValidationErrorField(err); got != "delivery_plan.0.external_destination_id" {
+		t.Fatalf("ValidationErrorField = %q, want delivery_plan.0.external_destination_id", got)
+	}
+	assertNoPersistedEnqueueGraph(t, db, "")
+}
+
+func TestEnqueueFailureInjection_SocialValidatorUnknownErrorFailsClosed(t *testing.T) {
+	db, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "social-unknown.sqlite"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	seedDestinations(t, db, map[string]bool{"drive-main": true})
+	validatorErr := errors.New("injected validator contract failure")
+	enq := NewEnqueuer(
+		store.NewAtomicJobTaskCreator(db),
+		store.NewSQLiteJobRepository(db),
+		nil,
+		&mockPlanResolver{plan: &ResolvedPlan{JobID: "social-unknown"}},
+	).WithSocialValidator(&stubValidator{err: validatorErr})
+
+	payload := failureInjectionPayload("social-unknown")
+	plan := payload["delivery_plan"].([]interface{})[0].(map[string]interface{})
+	plan["external_destination_id"] = "social-unknown-destination"
+	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
+	if err == nil {
+		t.Fatalf("unknown SocialValidator error must fail closed; got response=%v", response)
+	}
+	if response != nil {
+		t.Fatalf("unknown SocialValidator error returned ambiguous response: %#v", response)
+	}
+	if !errors.Is(err, validatorErr) {
+		t.Fatalf("unknown SocialValidator error was not preserved: %v", err)
+	}
+	if !strings.Contains(err.Error(), "non-retryable or unclassified error") {
+		t.Fatalf("unknown SocialValidator error is ambiguous: %v", err)
+	}
+	assertNoPersistedEnqueueGraph(t, db, "")
+}
+
+func TestEnqueueFailureInjection_SocialValidatorTransientIsExplicitSoftSuccess(t *testing.T) {
+	db, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "social-transient.sqlite"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	seedDestinations(t, db, map[string]bool{"drive-main": true})
+	enq := NewEnqueuer(
+		store.NewAtomicJobTaskCreator(db),
+		store.NewSQLiteJobRepository(db),
+		nil,
+		&mockPlanResolver{plan: &ResolvedPlan{JobID: "social-transient"}},
+	).WithSocialValidator(&stubValidator{err: errors.Join(errors.New("social service unavailable"), socialclient.ErrTransient)})
+
+	payload := failureInjectionPayload("social-transient")
+	plan := payload["delivery_plan"].([]interface{})[0].(map[string]interface{})
+	plan["external_destination_id"] = "social-transient-destination"
+	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
+	if err != nil {
+		t.Fatalf("transient SocialValidator error must soft-pass; got %v", err)
+	}
+	if response == nil || response["ok"] != true {
+		t.Fatalf("soft-pass must return explicit ok=true response, got %#v", response)
+	}
+	jobID, _ := response["job_id"].(string)
+	if jobID == "" {
+		t.Fatal("soft-pass response has no job_id")
+	}
+	job, err := enq.Jobs.Get(context.Background(), jobID)
+	if err != nil || job == nil {
+		t.Fatalf("soft-pass committed job missing: job=%v err=%v", job, err)
+	}
+}
+
+func TestEnqueueFailureInjection_CreateJobWithTaskRollsBackOnDestinationFailure(t *testing.T) {
+	db, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "creator-failure.sqlite"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	seedDestinations(t, db, map[string]bool{"drive-main": true})
+	enq := NewEnqueuer(
+		store.NewAtomicJobTaskCreator(db),
+		store.NewSQLiteJobRepository(db),
+		nil,
+		&mockPlanResolver{plan: &ResolvedPlan{JobID: "creator-failure"}},
+	)
+
+	payload := failureInjectionPayload("creator-failure")
+	plan := payload["delivery_plan"].([]interface{})[0].(map[string]interface{})
+	plan["destination_id"] = "missing-destination"
+	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
+	if err == nil {
+		t.Fatalf("CreateJobWithTask destination failure must return an error; got response=%v", response)
+	}
+	if response != nil {
+		t.Fatalf("CreateJobWithTask failure returned ambiguous response: %#v", response)
+	}
+	if !errors.Is(err, store.ErrDestinationNotFound) {
+		t.Fatalf("destination failure sentinel was not preserved: %v", err)
+	}
+	if !strings.Contains(err.Error(), "missing-destination") {
+		t.Fatalf("creator error does not identify the rejected destination: %v", err)
+	}
+	assertNoPersistedEnqueueGraph(t, db, "")
+
+	var count int
+	if err := db.DB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM jobs WHERE video_name = ?`, "creator-failure").Scan(&count); err != nil {
+		t.Fatalf("count creator-failure jobs: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("CreateJobWithTask rollback leaked %d job rows", count)
+	}
+}
+
 func assertNoPersistedEnqueueGraph(t *testing.T, db *store.SQLiteStore, jobID string) {
 	t.Helper()
 	ctx := context.Background()
@@ -92,17 +232,17 @@ func assertNoPersistedEnqueueGraph(t *testing.T, db *store.SQLiteStore, jobID st
 		name  string
 		query string
 	}{
-		{name: "jobs", query: `SELECT COUNT(*) FROM jobs WHERE job_id = ?`},
-		{name: "tasks", query: `SELECT COUNT(*) FROM tasks WHERE job_id = ?`},
-		{name: "delivery plans", query: `SELECT COUNT(*) FROM job_delivery_plans WHERE job_id = ?`},
+		{name: "jobs", query: `SELECT COUNT(*) FROM jobs`},
+		{name: "tasks", query: `SELECT COUNT(*) FROM tasks`},
+		{name: "delivery plans", query: `SELECT COUNT(*) FROM job_delivery_plans`},
 	}
 	for _, tc := range queries {
 		var count int
-		if err := db.DB().QueryRowContext(ctx, tc.query, jobID).Scan(&count); err != nil {
+		if err := db.DB().QueryRowContext(ctx, tc.query).Scan(&count); err != nil {
 			t.Fatalf("count %s for %q: %v", tc.name, jobID, err)
 		}
 		if count != 0 {
-			t.Fatalf("failure path persisted %d %s rows for job %q", count, tc.name, jobID)
+			t.Fatalf("failure path persisted %d %s rows (job=%q)", count, tc.name, jobID)
 		}
 	}
 }
