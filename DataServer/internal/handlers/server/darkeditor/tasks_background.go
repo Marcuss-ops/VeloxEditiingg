@@ -26,30 +26,51 @@ type BackgroundRemovalConfig struct {
 	APIEndpoint string
 	APIKey      string
 	Timeout     time.Duration
+
+	// TaskTTL bounds how long asynchronous task statuses remain available.
+	// MaxTasks bounds in-memory status retention. CleanupInterval controls
+	// periodic expired-task cleanup; zero uses the production default.
+	TaskTTL         time.Duration
+	MaxTasks        int
+	CleanupInterval time.Duration
 }
 
 // BackgroundRemovalHandler handles background removal operations
 type BackgroundRemovalHandler struct {
-	cfg     *BackgroundRemovalConfig
-	tempDir string
+	cfg      *BackgroundRemovalConfig
+	tempDir  string
+	taskRepo *BackgroundTaskRepository
 }
 
 // NewBackgroundRemovalHandler creates a new background removal handler
 func NewBackgroundRemovalHandler(cfg *BackgroundRemovalConfig, tempDir string) *BackgroundRemovalHandler {
+	if cfg == nil {
+		cfg = &BackgroundRemovalConfig{}
+	}
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 60 * time.Second
 	}
 	if cfg.PythonPath == "" {
 		cfg.PythonPath = "python3"
 	}
+	cleanupInterval := cfg.CleanupInterval
+	if cleanupInterval <= 0 {
+		cleanupInterval = defaultBackgroundTaskCleanupInterval
+	}
 	return &BackgroundRemovalHandler{
-		cfg:     cfg,
-		tempDir: tempDir,
+		cfg:      cfg,
+		tempDir:  tempDir,
+		taskRepo: newBackgroundTaskRepository(cfg.TaskTTL, cfg.MaxTasks, cleanupInterval, time.Now),
 	}
 }
 
-// Async task storage (in-memory, not persisted)
-var backgroundTasks = make(map[string]*BackgroundRemovalStatus)
+// Close stops the background-task cleanup loop. Handlers that are replaced
+// during tests or shutdown should call Close to release the goroutine.
+func (h *BackgroundRemovalHandler) Close() {
+	if h != nil && h.taskRepo != nil {
+		h.taskRepo.Close()
+	}
+}
 
 // RemoveBackground handles background removal requests
 func (h *BackgroundRemovalHandler) RemoveBackground(c *gin.Context) {
@@ -79,11 +100,11 @@ func (h *BackgroundRemovalHandler) RemoveBackground(c *gin.Context) {
 
 	if req.Async {
 		taskID := uuid.New().String()
-		backgroundTasks[taskID] = &BackgroundRemovalStatus{
+		h.taskRepo.Set(BackgroundRemovalStatus{
 			TaskID:    taskID,
 			Status:    "pending",
 			StartedAt: time.Now(),
-		}
+		})
 
 		go h.processBackgroundRemoval(taskID, inputPath, outputPath, req.Model)
 
@@ -110,7 +131,7 @@ func (h *BackgroundRemovalHandler) RemoveBackground(c *gin.Context) {
 func (h *BackgroundRemovalHandler) GetBackgroundRemovalStatus(c *gin.Context) {
 	taskID := c.Param("task_id")
 
-	status, exists := backgroundTasks[taskID]
+	status, exists := h.taskRepo.Get(taskID)
 	if !exists {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
 		return
@@ -120,22 +141,27 @@ func (h *BackgroundRemovalHandler) GetBackgroundRemovalStatus(c *gin.Context) {
 }
 
 func (h *BackgroundRemovalHandler) processBackgroundRemoval(taskID, inputPath, outputPath, model string) {
-	status := backgroundTasks[taskID]
-	status.Status = "processing"
+	h.taskRepo.Update(taskID, func(status *BackgroundRemovalStatus) {
+		status.Status = "processing"
+	})
 
 	result, err := h.removeBackgroundSync(inputPath, outputPath, model)
 	if err != nil {
-		status.Status = "failed"
-		status.Error = err.Error()
-		status.EndedAt = time.Now()
+		h.taskRepo.Update(taskID, func(status *BackgroundRemovalStatus) {
+			status.Status = "failed"
+			status.Error = err.Error()
+			status.EndedAt = time.Now()
+		})
 		log.Printf("[ERROR] Background removal failed for task %s: %v", taskID, err)
 		return
 	}
 
-	status.Status = "completed"
-	status.Filename = result
-	status.URL = fmt.Sprintf("temp/%s", result)
-	status.EndedAt = time.Now()
+	h.taskRepo.Update(taskID, func(status *BackgroundRemovalStatus) {
+		status.Status = "completed"
+		status.Filename = result
+		status.URL = fmt.Sprintf("temp/%s", result)
+		status.EndedAt = time.Now()
+	})
 	log.Printf("[OK] Background removal completed for task %s", taskID)
 }
 
