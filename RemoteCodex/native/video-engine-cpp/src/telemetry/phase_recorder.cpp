@@ -140,14 +140,25 @@ bool isValidJsonObjectShape(const std::string& value) {
 std::string escapeJsonString(const std::string& value) {
     std::string out;
     out.reserve(value.size() + 4);
-    for (char c : value) {
+    const char hex[] = "0123456789abcdef";
+    for (unsigned char c : value) {
         switch (c) {
             case '"':  out += "\\\""; break;
             case '\\': out += "\\\\"; break;
+            case '\b':  out += "\\b"; break;
+            case '\f':  out += "\\f"; break;
             case '\n': out += "\\n"; break;
             case '\r': out += "\\r"; break;
             case '\t': out += "\\t"; break;
-            default: out += c; break;
+            default:
+                if (c < 0x20) {
+                    out += "\\u00";
+                    out += hex[(c >> 4) & 0x0f];
+                    out += hex[c & 0x0f];
+                } else {
+                    out += static_cast<char>(c);
+                }
+                break;
         }
     }
     return out;

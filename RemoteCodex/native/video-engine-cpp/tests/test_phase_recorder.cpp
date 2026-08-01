@@ -237,6 +237,18 @@ void testAppendJsonEscapesStrings() {
     EXPECT(std::strstr(json.c_str(), "segment\\\"0") != nullptr, "event_name quote escaped");
     EXPECT(std::strstr(json.c_str(), "E\\\\\\\"IO") != nullptr, "error_code quote escaped");
     EXPECT(std::strstr(json.c_str(), "line 1\\nline 2") != nullptr, "error newline escaped");
+
+    vt::PhaseRecorder controls;
+    int64_t controlToken = controls.Begin(vt::kOriginEngine, vt::kScopeAttempt,
+                                           "engine", "render", "render", "", "controls");
+    controls.Abort(controlToken, "E\\b\\f", "control\b\f\x01");
+    std::ostringstream controlOut;
+    controls.Snapshot()[0].AppendJson(controlOut);
+    const std::string controlJson = controlOut.str();
+    EXPECT(std::strstr(controlJson.c_str(), "E\\\\b\\\\f") != nullptr,
+           "backspace and form-feed escapes emitted");
+    EXPECT(std::strstr(controlJson.c_str(), "control\\b\\f\\u0001") != nullptr,
+           "ASCII control characters emitted as JSON escapes");
 }
 
 void testCompleteSidecarSchema() {
