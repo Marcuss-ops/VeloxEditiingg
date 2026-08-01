@@ -217,7 +217,7 @@ func (s *AssetService) registerPreparedVideoFile(ctx context.Context, preparedPa
 	if err != nil {
 		return nil, fmt.Errorf("segment staging path: %w", err)
 	}
-	staging, err := os.Create(stagingPath)
+	staging, err := os.OpenFile(stagingPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("create segment staging file: %w", err)
 	}
