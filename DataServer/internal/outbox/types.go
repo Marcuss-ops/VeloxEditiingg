@@ -38,6 +38,7 @@ const (
 //	locked_until   TEXT
 //	processed_at   TEXT
 //	last_error     TEXT
+//	fence_token    TEXT NOT NULL  (unique claim fencing token)
 //	created_at     TEXT NOT NULL
 type Event struct {
 	EventID       string
@@ -46,6 +47,7 @@ type Event struct {
 	AggregateID   string
 	Payload       []byte
 	AttemptCount  int
+	FenceToken    string
 	AvailableAt   time.Time
 	CreatedAt     time.Time
 }

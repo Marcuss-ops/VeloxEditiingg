@@ -53,6 +53,7 @@ func newOutboxDB(t *testing.T) *sql.DB {
 		attempt_count   INTEGER NOT NULL DEFAULT 0,
 		locked_by       TEXT,
 		locked_until    TEXT,
+		fence_token     TEXT NOT NULL DEFAULT '',
 		processed_at    TEXT,
 		last_error      TEXT,
 		created_at      TEXT NOT NULL
@@ -189,6 +190,7 @@ func adminAuthForTest(c *gin.Context) {
 // dying immediately after the ACK by:
 //   - NEVER starting a dispatcher goroutine.
 //   - Asserting NO side-effect happened on disk (no zip written).
+//
 // We then SIMULATE the master pod restarting on the same DB and run
 // a single dispatcher tick to drain the row.
 //

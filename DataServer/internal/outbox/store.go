@@ -48,6 +48,17 @@ func (s *Store) newID() string {
 	return "ev-" + hex.EncodeToString(b[:])
 }
 
+// newFenceToken returns a fresh claim token. It is intentionally independent
+// from the dispatcher identity: every Claim gets a new token so a reclaimed
+// event invalidates all writes from the previous owner.
+func (s *Store) newFenceToken() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("fence-%d", time.Now().UnixNano())
+	}
+	return "fence-" + hex.EncodeToString(b[:])
+}
+
 // Insert writes a new event with status=PENDING.
 //
 // Producers may be guarded by a transaction with their state-change
@@ -119,7 +130,9 @@ func exec(ctx context.Context, ex Executor, q string, args ...any) (sql.Result, 
 }
 
 // Claim atomically transitions a batch of PENDING (or expired-PROCESSING)
-// rows to PROCESSING, stamping locked_by/locked_until/attempt_count.
+// rows to PROCESSING, stamping locked_by/locked_until/attempt_count and a
+// fresh fencing token. Every returned Event carries the token required for
+// all subsequent compare-and-swap writes.
 //
 // Per the PR 8 spec:
 //
@@ -144,6 +157,7 @@ UPDATE outbox_events
 SET status = 'PROCESSING',
     locked_by = ?,
     locked_until = ?,
+    fence_token = ?,
     attempt_count = attempt_count + 1
 WHERE event_id IN (
     SELECT event_id FROM outbox_events
@@ -158,11 +172,12 @@ WHERE event_id IN (
     LIMIT ?
 )
 RETURNING event_id, event_type, aggregate_type, aggregate_id,
-          payload_json, attempt_count, created_at`
+          payload_json, attempt_count, fence_token, created_at`
 
 	nowStr := s.now().UTC().Format(time.RFC3339Nano)
+	fenceToken := s.newFenceToken()
 	rows, err := s.DB.QueryContext(ctx, query,
-		lockedBy, lockUntil.UTC().Format(time.RFC3339Nano),
+		lockedBy, lockUntil.UTC().Format(time.RFC3339Nano), fenceToken,
 		nowStr, nowStr,
 		batchSize,
 	)
@@ -174,11 +189,11 @@ RETURNING event_id, event_type, aggregate_type, aggregate_id,
 	var out []Event
 	for rows.Next() {
 		var (
-			eventID, evtType, aggType, aggID, payload string
-			attempt                                   int
-			createdAt                                 string
+			eventID, evtType, aggType, aggID, payload, claimedFenceToken string
+			attempt                                                      int
+			createdAt                                                    string
 		)
-		if err := rows.Scan(&eventID, &evtType, &aggType, &aggID, &payload, &attempt, &createdAt); err != nil {
+		if err := rows.Scan(&eventID, &evtType, &aggType, &aggID, &payload, &attempt, &claimedFenceToken, &createdAt); err != nil {
 			return nil, fmt.Errorf("outbox claim scan: %w", err)
 		}
 		e := Event{
@@ -188,6 +203,7 @@ RETURNING event_id, event_type, aggregate_type, aggregate_id,
 			AggregateID:   aggID,
 			Payload:       []byte(payload),
 			AttemptCount:  attempt,
+			FenceToken:    claimedFenceToken,
 		}
 		if t, err := time.Parse(time.RFC3339, createdAt); err == nil {
 			e.CreatedAt = t
@@ -200,68 +216,81 @@ RETURNING event_id, event_type, aggregate_type, aggregate_id,
 	return out, nil
 }
 
-// MarkProcessed sets status=PROCESSED and processed_at=now.
-//
-// Called only after a Handler returned nil. Idempotent: marking an already
-// PROCESSED row is a no-op.
-func (s *Store) MarkProcessed(ctx context.Context, eventID string) error {
-	if eventID == "" {
+// MarkProcessed sets status=PROCESSED and processed_at=now only while the
+// supplied fencing token still owns the PROCESSING row.
+func (s *Store) MarkProcessed(ctx context.Context, eventID, fenceToken string) error {
+	if eventID == "" || fenceToken == "" {
 		return ErrInvalidEvent
 	}
 	now := s.now().UTC().Format(time.RFC3339Nano)
-	_, err := s.DB.ExecContext(ctx,
+	result, err := s.DB.ExecContext(ctx,
 		`UPDATE outbox_events
 		 SET status = 'PROCESSED', processed_at = ?, locked_by = NULL,
 		     locked_until = NULL, last_error = NULL
-		 WHERE event_id = ? AND status = 'PROCESSING'`,
-		now, eventID,
+		 WHERE event_id = ? AND status = 'PROCESSING' AND fence_token = ?
+		   AND locked_until > ?`,
+		now, eventID, fenceToken, now,
 	)
 	if err != nil {
 		return fmt.Errorf("outbox mark processed: %w", err)
 	}
+	if n, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("outbox mark processed rows: %w", err)
+	} else if n != 1 {
+		return fmt.Errorf("outbox mark processed %q: %w", eventID, ErrLeaseLost)
+	}
 	return nil
 }
 
-// MarkFailed sets status=FAILED with the recorded error.
-//
-// Called on permanent Handler errors or after attempt_count crosses
-// MaxAttempts.
-func (s *Store) MarkFailed(ctx context.Context, eventID string, lastErr string) error {
-	if eventID == "" {
+// MarkFailed sets status=FAILED with the recorded error only while the
+// supplied fencing token still owns the PROCESSING row.
+func (s *Store) MarkFailed(ctx context.Context, eventID, fenceToken, lastErr string) error {
+	if eventID == "" || fenceToken == "" {
 		return ErrInvalidEvent
 	}
 	now := s.now().UTC().Format(time.RFC3339Nano)
-	_, err := s.DB.ExecContext(ctx,
+	result, err := s.DB.ExecContext(ctx,
 		`UPDATE outbox_events
 		 SET status = 'FAILED', processed_at = ?, last_error = ?,
 		     locked_by = NULL, locked_until = NULL
-		 WHERE event_id = ?`,
-		now, lastErr, eventID,
+		 WHERE event_id = ? AND status = 'PROCESSING' AND fence_token = ?
+		   AND locked_until > ?`,
+		now, lastErr, eventID, fenceToken, now,
 	)
 	if err != nil {
 		return fmt.Errorf("outbox mark failed: %w", err)
 	}
+	if n, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("outbox mark failed rows: %w", err)
+	} else if n != 1 {
+		return fmt.Errorf("outbox mark failed %q: %w", eventID, ErrLeaseLost)
+	}
 	return nil
 }
 
-// ExtendLock re-stamps locked_until and keeps status=PROCESSING.
-//
-// Called when a handler returned a transient error so the event remains
-// visible to Claim once the lock window opens again. Calling this is
-// optional — if the dispatcher just releases the row, the event re-enters
-// the ready queue at the next claim tick.
-func (s *Store) ExtendLock(ctx context.Context, eventID string, lockUntil time.Time, lastErr string) error {
-	if eventID == "" {
+// ExtendLock re-stamps locked_until and keeps status=PROCESSING only while
+// the supplied fencing token still owns the row. The dispatcher deliberately
+// clears locked_by to release the row for the next claim after lock expiry;
+// fence_token remains the CAS identity until the next Claim replaces it.
+func (s *Store) ExtendLock(ctx context.Context, eventID, fenceToken string, lockUntil time.Time, lastErr string) error {
+	if eventID == "" || fenceToken == "" {
 		return ErrInvalidEvent
 	}
-	_, err := s.DB.ExecContext(ctx,
+	now := s.now().UTC().Format(time.RFC3339Nano)
+	result, err := s.DB.ExecContext(ctx,
 		`UPDATE outbox_events
 		 SET locked_until = ?, last_error = ?, locked_by = NULL
-		 WHERE event_id = ? AND status = 'PROCESSING'`,
-		lockUntil.UTC().Format(time.RFC3339Nano), lastErr, eventID,
+		 WHERE event_id = ? AND status = 'PROCESSING' AND fence_token = ?
+		   AND locked_until > ?`,
+		lockUntil.UTC().Format(time.RFC3339Nano), lastErr, eventID, fenceToken, now,
 	)
 	if err != nil {
 		return fmt.Errorf("outbox extend lock: %w", err)
+	}
+	if n, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("outbox extend lock rows: %w", err)
+	} else if n != 1 {
+		return fmt.Errorf("outbox extend lock %q: %w", eventID, ErrLeaseLost)
 	}
 	return nil
 }
@@ -303,14 +332,14 @@ func (s *Store) PendingCount(ctx context.Context) (int64, error) {
 func (s *Store) GetByID(ctx context.Context, eventID string) (*Event, string, error) {
 	row := s.DB.QueryRowContext(ctx,
 		`SELECT event_id, event_type, aggregate_type, aggregate_id,
-		        payload_json, status, attempt_count, last_error, created_at
+		        payload_json, status, attempt_count, last_error, fence_token, created_at
 		 FROM outbox_events WHERE event_id = ?`, eventID)
 	var (
-		eid, et, at, ai, pl, status, createdAt string
-		attempt                                int
-		lastErr                                sql.NullString
+		eid, et, at, ai, pl, status, fenceToken, createdAt string
+		attempt                                            int
+		lastErr                                            sql.NullString
 	)
-	if err := row.Scan(&eid, &et, &at, &ai, &pl, &status, &attempt, &lastErr, &createdAt); err != nil {
+	if err := row.Scan(&eid, &et, &at, &ai, &pl, &status, &attempt, &lastErr, &fenceToken, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, "", nil
 		}
@@ -324,6 +353,7 @@ func (s *Store) GetByID(ctx context.Context, eventID string) (*Event, string, er
 			AggregateID:   ai,
 			Payload:       []byte(pl),
 			AttemptCount:  attempt,
+			FenceToken:    fenceToken,
 			CreatedAt:     t,
 		}, status, nil
 	}
@@ -334,6 +364,7 @@ func (s *Store) GetByID(ctx context.Context, eventID string) (*Event, string, er
 		AggregateID:   ai,
 		Payload:       []byte(pl),
 		AttemptCount:  attempt,
+		FenceToken:    fenceToken,
 	}, status, nil
 }
 

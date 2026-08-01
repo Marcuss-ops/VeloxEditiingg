@@ -43,6 +43,10 @@ type Config struct {
 	// MaxAttempts is the per-event cap before transitioning to FAILED.
 	// Zero defaults to 5.
 	MaxAttempts int
+	// OnLeaseLost is an optional observability hook invoked when a stale
+	// handler loses its fenced write. It is intentionally a callback so the
+	// outbox package does not import the metrics package.
+	OnLeaseLost func(Event, error)
 }
 
 func (c *Config) applyDefaults() {
@@ -219,9 +223,13 @@ func (d *Dispatcher) dispatchEvent(ctx context.Context, e Event, lockUntil time.
 			panicVal = r
 			d.logger.Printf("[OUTBOX] PANIC in handler (event_id=%s type=%s): %v",
 				e.EventID, e.EventType, r)
-			if mkErr := d.store.MarkFailed(ctx, e.EventID,
+			if mkErr := d.store.MarkFailed(ctx, e.EventID, e.FenceToken,
 				fmt.Sprintf("panic: %v", r)); mkErr != nil {
-				d.logger.Printf("[OUTBOX] mark failed (panic) error: %v", mkErr)
+				if errors.Is(mkErr, ErrLeaseLost) {
+					d.observeLeaseLost(e, mkErr)
+				} else {
+					d.logger.Printf("[OUTBOX] mark failed (panic) error: %v", mkErr)
+				}
 			}
 		}
 	}()
@@ -231,8 +239,12 @@ func (d *Dispatcher) dispatchEvent(ctx context.Context, e Event, lockUntil time.
 		if !panicked {
 			d.logger.Printf("[OUTBOX] no handler for %q (event_id=%s) — marking FAILED",
 				e.EventType, e.EventID)
-			if mkErr := d.store.MarkFailed(ctx, e.EventID, err.Error()); mkErr != nil {
-				d.logger.Printf("[OUTBOX] mark failed error: %v", mkErr)
+			if mkErr := d.store.MarkFailed(ctx, e.EventID, e.FenceToken, err.Error()); mkErr != nil {
+				if errors.Is(mkErr, ErrLeaseLost) {
+					d.observeLeaseLost(e, mkErr)
+				} else {
+					d.logger.Printf("[OUTBOX] mark failed error: %v", mkErr)
+				}
 			}
 		}
 		return
@@ -240,8 +252,12 @@ func (d *Dispatcher) dispatchEvent(ctx context.Context, e Event, lockUntil time.
 
 	err = h.Handle(ctx, e)
 	if err == nil && !panicked {
-		if mkErr := d.store.MarkProcessed(ctx, e.EventID); mkErr != nil {
-			d.logger.Printf("[OUTBOX] mark processed error: %v", mkErr)
+		if mkErr := d.store.MarkProcessed(ctx, e.EventID, e.FenceToken); mkErr != nil {
+			if errors.Is(mkErr, ErrLeaseLost) {
+				d.observeLeaseLost(e, mkErr)
+			} else {
+				d.logger.Printf("[OUTBOX] mark processed error: %v", mkErr)
+			}
 		}
 		return
 	}
@@ -257,7 +273,7 @@ func (d *Dispatcher) dispatchEvent(ctx context.Context, e Event, lockUntil time.
 	if !isTransient {
 		d.logger.Printf("[OUTBOX] permanent handler failure event_id=%s type=%s: %v",
 			e.EventID, e.EventType, err)
-		if mkErr := d.store.MarkFailed(ctx, e.EventID, err.Error()); mkErr != nil {
+		if mkErr := d.store.MarkFailed(ctx, e.EventID, e.FenceToken, err.Error()); mkErr != nil {
 			d.logger.Printf("[OUTBOX] mark failed error: %v", mkErr)
 		}
 		return
@@ -269,16 +285,35 @@ func (d *Dispatcher) dispatchEvent(ctx context.Context, e Event, lockUntil time.
 	if e.AttemptCount >= d.cfg.MaxAttempts {
 		d.logger.Printf("[OUTBOX] max attempts (%d) reached event_id=%s — FAILED",
 			d.cfg.MaxAttempts, e.EventID)
-		if mkErr := d.store.MarkFailed(ctx, e.EventID,
+		if mkErr := d.store.MarkFailed(ctx, e.EventID, e.FenceToken,
 			fmt.Sprintf("max attempts reached: %v", err)); mkErr != nil {
-			d.logger.Printf("[OUTBOX] mark failed error: %v", mkErr)
+			if errors.Is(mkErr, ErrLeaseLost) {
+				d.observeLeaseLost(e, mkErr)
+			} else {
+				d.logger.Printf("[OUTBOX] mark failed error: %v", mkErr)
+			}
 		}
 		return
 	}
 
 	// Release the lock so the next Claim sees the row again immediately.
-	if extErr := d.store.ExtendLock(ctx, e.EventID, lockUntil, err.Error()); extErr != nil {
-		d.logger.Printf("[OUTBOX] extend lock error: %v", extErr)
+	// The original claim deadline is not used here: retaining it would
+	// delay a transient retry until the unused remainder of the claim.
+	releasedAt := time.Now().UTC().Add(-time.Millisecond)
+	if extErr := d.store.ExtendLock(ctx, e.EventID, e.FenceToken, releasedAt, err.Error()); extErr != nil {
+		if errors.Is(extErr, ErrLeaseLost) {
+			d.observeLeaseLost(e, extErr)
+		} else {
+			d.logger.Printf("[OUTBOX] extend lock error: %v", extErr)
+		}
 	}
 	_ = panicVal // silence unused variable warnings
+}
+
+func (d *Dispatcher) observeLeaseLost(e Event, err error) {
+	d.logger.Printf("[OUTBOX] lease lost event_id=%s event_type=%s fence_token=%s err=%v",
+		e.EventID, e.EventType, e.FenceToken, err)
+	if d.cfg.OnLeaseLost != nil {
+		d.cfg.OnLeaseLost(e, err)
+	}
 }

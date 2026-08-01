@@ -2,6 +2,7 @@ package outbox_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -147,8 +148,12 @@ func TestOutbox_IdempotentHandler_MarkProcessedIsIdempotent(t *testing.T) {
 		t.Fatalf("Claim got event_id %q, want %q", events[0].EventID, id)
 	}
 
-	// MarkProcessed first time.
-	if err := store.MarkProcessed(context.Background(), id); err != nil {
+	// MarkProcessed first time with the current claim token.
+	fenceToken := events[0].FenceToken
+	if fenceToken == "" {
+		t.Fatal("Claim returned an empty fencing token")
+	}
+	if err := store.MarkProcessed(context.Background(), id, fenceToken); err != nil {
 		t.Fatalf("MarkProcessed 1: %v", err)
 	}
 	_, status1, _ := store.GetByID(context.Background(), id)
@@ -156,10 +161,11 @@ func TestOutbox_IdempotentHandler_MarkProcessedIsIdempotent(t *testing.T) {
 		t.Fatalf("after first MarkProcessed status = %q, want PROCESSED", status1)
 	}
 
-	// MarkProcessed second time: WHERE clause includes `status='PROCESSING'`
-	// so it should affect zero rows (only PROCESSING → PROCESSED).
-	if err := store.MarkProcessed(context.Background(), id); err != nil {
-		t.Fatalf("MarkProcessed 2: %v", err)
+	// A second terminal write with the old token is no longer an owned
+	// operation; fencing reports the lost claim instead of silently
+	// pretending the write succeeded.
+	if err := store.MarkProcessed(context.Background(), id, fenceToken); !errors.Is(err, outbox.ErrLeaseLost) {
+		t.Fatalf("MarkProcessed 2 error = %v, want ErrLeaseLost", err)
 	}
 	_, status2, _ := store.GetByID(context.Background(), id)
 	if status2 != string(outbox.StatusProcessed) {

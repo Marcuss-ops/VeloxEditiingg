@@ -65,6 +65,7 @@ func newTestDB(t *testing.T) *sql.DB {
 		attempt_count   INTEGER NOT NULL DEFAULT 0,
 		locked_by       TEXT,
 		locked_until    TEXT,
+		fence_token     TEXT NOT NULL DEFAULT '',
 		processed_at    TEXT,
 		last_error      TEXT,
 		created_at      TEXT NOT NULL

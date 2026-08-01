@@ -15,3 +15,9 @@ var ErrInvalidEvent = errors.New("outbox: invalid event: aggregate_type/event_ty
 // ErrUnknownStatus is returned by internal cast helpers; surfaces to table
 // columns that were written by a future-proofing hand-edited migration.
 var ErrUnknownStatus = errors.New("outbox: unknown status")
+
+// ErrLeaseLost means the caller no longer owns the event claim. It is
+// returned when a fenced compare-and-swap updates zero rows because another
+// dispatcher reclaimed the event or the event already reached a different
+// terminal state.
+var ErrLeaseLost = errors.New("outbox: lease lost")
