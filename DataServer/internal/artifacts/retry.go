@@ -1,6 +1,9 @@
 // Package artifacts / retry.go — idempotent retry-able quarantine.
 // Extracted from reconciler.go: the two-phase QUARANTINED flip with
 // deferred outbox emission (retried out of band by downstream consumers).
+// Raw SQL here (UPDATE artifacts + INSERT INTO outbox_events) is covered
+// by the reconciler sql-allowlist marker atop reconciler.go
+// (baseline-ratched in scripts/ci/sql-baseline.txt).
 package artifacts
 
 import (
