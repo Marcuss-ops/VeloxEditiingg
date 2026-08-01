@@ -606,25 +606,13 @@ func (c *Collector) allFamilies() []*Family {
 // {case,action} counter because a single tick can produce multiple
 // deadline-expired rows and a single row can be observed across
 // ticks (the seenIDs dedup map is bounded by seenCap).
-// ScanAttemptWithLabels ingests a single attempt from an
-// AttemptReader into the registry using caller-supplied labels
-// (execID, execVer, workerClass). Used by the supervisor poll loop
-// when it has already resolved the labels via AttemptsLabelResolver;
-// this avoids the hardcoded "unknown/0/default" that ScanAttempt
-// falls back to and lets per-worker-class gauges reflect real
-// worker_class values instead of all rows collapsing onto "default".
-//
-// The legacy ScanAttempt below is retained for back-compat with
-// any direct caller; it delegates to ScanAttemptWithLabels with
-// the historical defaults.
-// ScanAttempt ingests a single attempt from an AttemptReader into
-// the registry. Used by the supervisor poll loop.
 // AttemptReader isolates the collector from a hard dependency on
 // store/sqlite_task_attempt_repository; the Master wires the real
-// repository on the goroutine via NewMethods.
+// repository on the goroutine via NewMethods. The supervisor calls
+// ScanAttemptWithLabels after resolving executor and worker labels.
 //
 // GetStatus was added in spec §14 refactor: the compute-outcome
 // family classifies compute seconds by terminal attempt state, so
 // the reader must surface the attempt Status. Implementations that
-// can't (legacy stub) may return any value; ScanAttempt falls back
-// to PENDING on error which makes RecordAttemptOutcome a safe no-op.
+// can't surface a status may return any value; the labeled scan falls
+// back to PENDING on error, making RecordAttemptOutcome a safe no-op.

@@ -3,9 +3,9 @@
 // Per-attempt metric aggregation loop sliced out of collector.go so
 // the Collector struct definition stays focused on registration.
 //
-// The ScanAttempt/ScanAttemptWithLabels methods are the supervisor's
-// hot path: every newly-terminal attempt per tick is fed through
-// these to stamp both the attempt-metrics families AND the
+// ScanAttemptWithLabels is the supervisor's hot path: every newly-terminal
+// attempt per tick is fed through it to stamp both the attempt-metrics families
+// and the
 // compute-outcome family (spec §14).
 //
 // AttemptReader is the interface the supervisor depends on,
@@ -26,7 +26,7 @@ import (
 // GetStatus was added in spec §14 refactor: the compute-outcome
 // family classifies compute seconds by terminal attempt state, so
 // the reader must surface the attempt Status. Implementations that
-// can't (legacy stub) may return any value; ScanAttempt falls back
+// can't (legacy stub) may return any value; the labeled scan falls back
 // to PENDING on error which makes RecordAttemptOutcome a safe no-op.
 type AttemptReader interface {
 	GetMetrics(ctx context.Context, attemptID string) (*taskattempts.AttemptMetrics, error)
@@ -164,13 +164,8 @@ func (c *Collector) RecordAttemptOutcome(status taskattempts.AttemptStatus, errC
 // AttemptReader into the registry using caller-supplied labels
 // (execID, execVer, workerClass). Used by the supervisor poll loop
 // when it has already resolved the labels via AttemptsLabelResolver;
-// this avoids the hardcoded "unknown/0/default" that ScanAttempt
-// falls back to and lets per-worker-class gauges reflect real
-// worker_class values instead of all rows collapsing onto "default".
-//
-// The legacy ScanAttempt below is retained for back-compat with
-// any direct caller; it delegates to ScanAttemptWithLabels with
-// the historical defaults.
+// this avoids collapsing all rows onto hardcoded "unknown/0/default"
+// labels and lets per-worker-class gauges reflect real worker_class values.
 func (c *Collector) ScanAttemptWithLabels(
 	ctx context.Context,
 	mem AttemptReader,
@@ -205,7 +200,7 @@ func (c *Collector) ScanAttemptWithLabels(
 		cache = *cs
 	}
 	// Status drives the compute-outcome family spec §14. If the
-	// reader can't surface a status (legacy stub), we fall back to
+	// reader can't surface a status, we fall back to
 	// PENDING so RecordAttemptOutcome is a no-op — safe-by-default.
 	status := taskattempts.AttemptStatusPending
 	if s, sErr := mem.GetStatus(ctx, attemptID); sErr == nil && s != "" {
@@ -238,49 +233,5 @@ func (c *Collector) ScanAttemptWithLabels(
 	// rows and falls back to the aggregate columns only when no
 	// detailed rows exist for the attempt.  This avoids double-
 	// counting on the velox_engine_phase_duration_seconds histogram.
-	return nil
-}
-
-// ScanAttempt ingests a single attempt from an AttemptReader into
-// the registry. Used by the supervisor poll loop.
-func (c *Collector) ScanAttempt(ctx context.Context, mem AttemptReader, attemptID string) error {
-	if mem == nil || attemptID == "" {
-		return nil
-	}
-	am, err := mem.GetMetrics(ctx, attemptID)
-	if err != nil || am == nil {
-		return err
-	}
-	cs, err := mem.GetCacheStats(ctx, attemptID)
-	if err != nil {
-		cs = nil
-	}
-	cb, err := mem.GetCostBasis(ctx, attemptID)
-	if err != nil {
-		cb = nil
-	}
-	cache := taskattempts.AttemptCacheStats{}
-	if cs != nil {
-		cache = *cs
-	}
-	cost := &taskattempts.AttemptCostBasis{}
-	if cb != nil {
-		cost = cb
-	}
-
-	// Status drives the compute-outcome family spec §14. If the reader
-	// can't surface a status (e.g. older implementations didn't
-	// implement GetStatus yet), we fall back to PENDING so the outcome
-	// helper is a no-op — that way an absent status is safe-by-default
-	// (no spurious "useful" classification).
-	status := taskattempts.AttemptStatusPending
-	if s, sErr := mem.GetStatus(ctx, attemptID); sErr == nil && s != "" {
-		status = s
-	}
-
-	// Executor / version / worker come from the attempt record.
-	execID, execVer, workerClass := "unknown", "0", "default"
-	c.RecordAttempt(*am, cache, cost, execID, execVer, workerClass)
-	c.RecordAttemptOutcome(status, "", am.CPUTimeMS)
 	return nil
 }

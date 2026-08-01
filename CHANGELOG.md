@@ -1,5 +1,20 @@
 ## [Unreleased] - 2026-07-29
 
+### Technical-debt cleanup audit — proven unused metric adapter removed
+
+The final cleanup audit removed only `metrics.Collector.ScanAttempt`, an
+exported compatibility adapter with no production or test references. The
+supervisor already uses `ScanAttemptWithLabels`, so the removal does not
+change the active metric-ingestion path.
+
+The audit explicitly retained compatibility aliases, migration metrics,
+validation endpoints, and the validation-store wiring because each still has
+runtime registration, callers, tests, or an operator-facing contract. No
+endpoint was removed based on roadmap status alone, and no mutable global
+state was changed in this tranche.
+
+Validation for this removal is gated by `scripts/ci/pre-removal-verify.sh`
+(the full `DataServer` vet/build/test gate) before any push to `main`.
 
 ### PR-15.17 — Runbook §0.1/§0.2/§0.3 emission
 
