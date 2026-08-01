@@ -1,6 +1,12 @@
 package drive
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestTokenUnmarshalAcceptsPipelineGenAccessToken(t *testing.T) {
 	var token Token
@@ -12,5 +18,35 @@ func TestTokenUnmarshalAcceptsPipelineGenAccessToken(t *testing.T) {
 	}
 	if token.RefreshToken != "refresh" {
 		t.Fatalf("refresh token was not preserved")
+	}
+}
+
+func TestTokenManagerEncryptsAndRejectsPlaintext(t *testing.T) {
+	t.Setenv("VELOX_CREDENTIAL_KEY", "01234567890123456789012345678901")
+	tm, err := NewTokenManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := &Token{AccessToken: "access-secret", RefreshToken: "refresh-secret", Expiry: time.Now().Add(time.Hour)}
+	if err := tm.SaveToken("default", token); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(tm.tokensDir, "default.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "access-secret") || strings.Contains(string(raw), "refresh-secret") {
+		t.Fatalf("token file contains plaintext secret: %s", raw)
+	}
+	loaded, err := tm.LoadToken("default")
+	if err != nil || loaded.AccessToken != "access-secret" || loaded.RefreshToken != "refresh-secret" {
+		t.Fatalf("loaded token = %#v, err=%v", loaded, err)
+	}
+	if err := os.WriteFile(path, []byte(`{"access_token":"plaintext"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tm.LoadToken("default"); err == nil {
+		t.Fatal("plaintext token file was accepted")
 	}
 }

@@ -31,6 +31,7 @@ import (
 	"log"
 	"time"
 
+	"velox-server/internal/credentials"
 	"velox-server/internal/jobs"
 	"velox-server/internal/renderfingerprint"
 	"velox-server/internal/taskattempts"
@@ -326,6 +327,10 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		cb.AttemptID = cmd.AttemptID
 	}
 
+	rawReportJSON := cmd.RawReportJSON
+	if rawReportJSON != "" {
+		rawReportJSON = credentials.JSON(rawReportJSON)
+	}
 	ingestErr := s.taskRepo.IngestTaskResultAtomic(ctx, taskgraph.IngestResultCommand{
 		TaskID:        cmd.TaskID,
 		JobID:         cmd.JobID,
@@ -353,7 +358,7 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		TraceID: cmd.TraceID,
 		SpanID:  cmd.SpanID,
 		// Step 16: raw worker report payload for audit/replay.
-		RawReportJSON:       cmd.RawReportJSON,
+		RawReportJSON:       rawReportJSON,
 		RawReportReceivedAt: cmd.RawReportReceivedAt,
 		// PerformanceReport metadata supplied by the worker.
 		ReportSchemaVersion: cmd.ReportSchemaVersion,

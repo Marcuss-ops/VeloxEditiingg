@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"velox-server/internal/credentials"
 )
 
 // OAuth2Config holds the OAuth2 configuration for Google Drive
@@ -107,6 +109,7 @@ func (t *Token) UnmarshalJSON(data []byte) error {
 // TokenManager handles token storage and retrieval
 type TokenManager struct {
 	tokensDir string
+	keyring   *credentials.Keyring
 	mu        sync.RWMutex
 }
 
@@ -115,7 +118,19 @@ func NewTokenManager(tokensDir string) (*TokenManager, error) {
 	if err := os.MkdirAll(tokensDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create tokens directory: %w", err)
 	}
-	return &TokenManager{tokensDir: tokensDir}, nil
+	// Construction remains possible for health endpoints, but persistence is
+	// fail-closed when the central encryption key is not configured.
+	var keyring *credentials.Keyring
+	if loaded, loadErr := credentials.LoadKeyring(); loadErr == nil {
+		keyring = loaded
+	}
+	return &TokenManager{tokensDir: tokensDir, keyring: keyring}, nil
+}
+
+type encryptedTokenFile struct {
+	Format     string `json:"format"`
+	KeyVersion int    `json:"key_version"`
+	Ciphertext []byte `json:"ciphertext"`
 }
 
 // SaveToken saves a token to a file
@@ -125,9 +140,20 @@ func (tm *TokenManager) SaveToken(name string, token *Token) error {
 
 	token.CreatedAt = time.Now()
 	tokenPath := filepath.Join(tm.tokensDir, name+".json")
-	data, err := json.MarshalIndent(token, "", "  ")
+	if tm.keyring == nil {
+		return credentials.ErrKeyUnavailable
+	}
+	plain, err := json.Marshal(token)
 	if err != nil {
 		return fmt.Errorf("failed to marshal token: %w", err)
+	}
+	ciphertext, keyVersion, err := tm.keyring.Seal(plain)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt token: %w", err)
+	}
+	data, err := json.Marshal(encryptedTokenFile{Format: "velox-credential-v1", KeyVersion: keyVersion, Ciphertext: ciphertext})
+	if err != nil {
+		return fmt.Errorf("failed to marshal encrypted token: %w", err)
 	}
 
 	if err := os.WriteFile(tokenPath, data, 0600); err != nil {
@@ -149,9 +175,20 @@ func (tm *TokenManager) LoadToken(name string) (*Token, error) {
 		return nil, fmt.Errorf("failed to read token file: %w", err)
 	}
 
+	if tm.keyring == nil {
+		return nil, credentials.ErrKeyUnavailable
+	}
+	var envelope encryptedTokenFile
+	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Format != "velox-credential-v1" || envelope.KeyVersion <= 0 || len(envelope.Ciphertext) == 0 {
+		return nil, fmt.Errorf("refusing unencrypted or invalid token file")
+	}
+	plain, err := tm.keyring.Open(envelope.KeyVersion, envelope.Ciphertext)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt token: %w", err)
+	}
 	var token Token
-	if err := json.Unmarshal(data, &token); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal token: %w", err)
+	if err := json.Unmarshal(plain, &token); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal decrypted token: %w", err)
 	}
 
 	return &token, nil

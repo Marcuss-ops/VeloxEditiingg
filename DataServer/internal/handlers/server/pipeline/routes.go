@@ -45,7 +45,13 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth, m2mJobsAuth gin.Hand
 	jobs.Use(m2mJobsAuth)
 	jobs.POST("", h.SubmitJob())
 	jobs.POST("/batch", h.SubmitJobBatch())
+	jobs.POST("/validate", h.ValidateJob())
+	jobs.POST("/estimate", h.EstimateJob())
 	jobs.GET("/:id", h.GetSubmittedJob())
+
+	publications := r.Group("/api/v1/publications")
+	publications.Use(m2mJobsAuth)
+	publications.POST("/preview", h.PreviewPublication())
 
 	pipelineRuns := r.Group("/api/v1/pipeline-runs")
 	if adminAuth != nil {
