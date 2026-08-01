@@ -353,16 +353,16 @@ func auditM2MReject(c *gin.Context, st *store.SQLiteStore, clientID, reason stri
 	}
 	status := statusFromReason(reason)
 	_ = st.AppendM2MAuditLog(c.Request.Context(), store.M2MAuditEntry{
-		ClientID:            clientID,
-		IdemKeyHash:         idemHashForLog(c.GetHeader("Idempotency-Key")),
-		Method:              c.Request.Method,
-		Path:                c.Request.URL.Path,
-		StatusCode:          status,
-		Scope:               "jobs.submit",
-		SceneCount:          0,
+		ClientID:             clientID,
+		IdemKeyHash:          idemHashForLog(c.GetHeader("Idempotency-Key")),
+		Method:               c.Request.Method,
+		Path:                 c.Request.URL.Path,
+		StatusCode:           status,
+		Scope:                "jobs.submit",
+		SceneCount:           0,
 		TotalDurationSeconds: 0,
-		IPAddress:           c.ClientIP(),
-		RejectReason:        sqlNullString(reason),
+		IPAddress:            c.ClientIP(),
+		RejectReason:         sqlNullString(reason),
 	})
 }
 
@@ -377,15 +377,15 @@ func auditM2MSuccess(c *gin.Context, st *store.SQLiteStore, clientID string, sta
 	}
 	scenes, totalDur := usageFromContext(c)
 	entry := store.M2MAuditEntry{
-		ClientID:            clientID,
-		IdemKeyHash:         idemHashForLog(c.GetHeader("Idempotency-Key")),
-		Method:              c.Request.Method,
-		Path:                c.Request.URL.Path,
-		StatusCode:          statusCode,
-		Scope:               "jobs.submit",
-		SceneCount:          scenes,
+		ClientID:             clientID,
+		IdemKeyHash:          idemHashForLog(c.GetHeader("Idempotency-Key")),
+		Method:               c.Request.Method,
+		Path:                 c.Request.URL.Path,
+		StatusCode:           statusCode,
+		Scope:                "jobs.submit",
+		SceneCount:           scenes,
 		TotalDurationSeconds: totalDur,
-		IPAddress:           c.ClientIP(),
+		IPAddress:            c.ClientIP(),
 	}
 	if statusCode >= 400 {
 		entry.RejectReason = sqlNullString("handler_rejected")
@@ -437,9 +437,9 @@ func SetUsageStats(c *gin.Context, scenes int, totalDurationS float64) {
 // touch creator_forwardings. Returns *QuotaError (HTTP 429 in the
 // handler) so the response carries a machine-readable shape.
 type QuotaError struct {
-	Reason string
+	Reason   string
 	Observed float64
-	Cap     float64
+	Cap      float64
 }
 
 func (e *QuotaError) Error() string {
@@ -526,4 +526,3 @@ func statusFromReason(reason string) int {
 		return http.StatusInternalServerError
 	}
 }
-

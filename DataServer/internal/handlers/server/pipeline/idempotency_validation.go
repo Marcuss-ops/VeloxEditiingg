@@ -51,8 +51,8 @@ type IdempotencyKeyError struct {
 	// 400 body so the operator can see the exact violation (length_observed,
 	// offset_of_bad_byte). They are pointers so the empty case does not write
 	// a misleading "0" or "nil" to the JSON.
-	FieldLength   *int `json:"length,omitempty"`
-	FieldByteOff  *int `json:"byte_offset,omitempty"`
+	FieldLength  *int `json:"length,omitempty"`
+	FieldByteOff *int `json:"byte_offset,omitempty"`
 }
 
 // Error implements the error interface so the helper can be used idiomatically
@@ -95,11 +95,11 @@ func ValidateIdempotencyKey(raw string) (*IdempotencyKeyError, bool) {
 
 	if key == "" {
 		return &IdempotencyKeyError{
-			Code:          "invalid_payload",
-			Reason:        "empty",
-			Message:       "idempotency_key is required",
-			FieldLength:   intPtr(len(key)),
-			FieldByteOff:  nil,
+			Code:         "invalid_payload",
+			Reason:       "empty",
+			Message:      "idempotency_key is required",
+			FieldLength:  intPtr(len(key)),
+			FieldByteOff: nil,
 		}, true
 	}
 
@@ -114,11 +114,11 @@ func ValidateIdempotencyKey(raw string) (*IdempotencyKeyError, bool) {
 		// being silently zeroed.
 		offset := firstInvalidUTF8Offset(key)
 		return &IdempotencyKeyError{
-			Code:          "invalid_payload",
-			Reason:        "encoding",
-			Message:       "idempotency_key must be valid UTF-8",
-			FieldLength:   intPtr(len(key)),
-			FieldByteOff:  intPtr(offset),
+			Code:         "invalid_payload",
+			Reason:       "encoding",
+			Message:      "idempotency_key must be valid UTF-8",
+			FieldLength:  intPtr(len(key)),
+			FieldByteOff: intPtr(offset),
 		}, true
 	}
 
@@ -133,10 +133,10 @@ func ValidateIdempotencyKey(raw string) (*IdempotencyKeyError, bool) {
 
 	if off, bad := hasControlOrSeparatorByte(key); bad {
 		return &IdempotencyKeyError{
-			Code:        "invalid_payload",
-			Reason:      "control_char",
-			Message:     "idempotency_key contains a forbidden byte (' ' \\t \\r \\n NUL ':' '%' or DEL)",
-			FieldLength: intPtr(len(key)),
+			Code:         "invalid_payload",
+			Reason:       "control_char",
+			Message:      "idempotency_key contains a forbidden byte (' ' \\t \\r \\n NUL ':' '%' or DEL)",
+			FieldLength:  intPtr(len(key)),
 			FieldByteOff: intPtr(off),
 		}, true
 	}

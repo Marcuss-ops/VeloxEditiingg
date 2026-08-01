@@ -18,6 +18,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
 func TestSubmitJobE2E_RetryBudgetZeroAcceptance(t *testing.T) {
 	h, db := newSubmitJobE2EStack(t)
 	gin.SetMode(gin.TestMode)

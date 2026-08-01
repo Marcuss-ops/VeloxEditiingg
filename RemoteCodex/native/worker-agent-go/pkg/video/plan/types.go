@@ -98,9 +98,19 @@ type Layer struct {
 // SubtitleTrack is kept separate from visual layers so subtitle APIs can
 // evolve independently from media and editorial overlays.
 type SubtitleTrack struct {
-	Source string `json:"source"`
-	Preset string `json:"preset,omitempty"`
-	Font   string `json:"font,omitempty"`
+	Source string          `json:"source"`
+	Preset string          `json:"preset,omitempty"`
+	Font   string          `json:"font,omitempty"`
+	Events []SubtitleEvent `json:"events,omitempty"`
+}
+
+// SubtitleEvent is a deterministic, already-aligned caption interval.
+// Subtitle alignment consumes the final voiceover timing and never infers
+// timing from text length on the worker.
+type SubtitleEvent struct {
+	Text         string  `json:"text"`
+	StartSeconds float64 `json:"start_seconds"`
+	EndSeconds   float64 `json:"end_seconds"`
 }
 
 // DefaultCanvas returns a standard 1080p canvas.

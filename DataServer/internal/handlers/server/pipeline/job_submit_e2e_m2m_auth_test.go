@@ -37,11 +37,11 @@ import (
 // middleware keeps the test wiring hermetic to the closure of the
 // test function (t.TempDir auto-cleans on return).
 type m2mBundle struct {
-	h       *Handlers
-	db      *store.SQLiteStore
-	st      *store.SQLiteStore
-	limiter *m2mRateLimiter
-	keyRow  *store.M2MAPIKey
+	h         *Handlers
+	db        *store.SQLiteStore
+	st        *store.SQLiteStore
+	limiter   *m2mRateLimiter
+	keyRow    *store.M2MAPIKey
 	plaintext string // for tests that need to send a real Bearer
 }
 
@@ -104,10 +104,10 @@ func newM2MBundle(t *testing.T, opts m2mBundleOpts) *m2mBundle {
 }
 
 type m2mBundleOpts struct {
-	clientID    string
-	rps         int
-	burst       int
-	maxScenes   int
+	clientID     string
+	rps          int
+	burst        int
+	maxScenes    int
 	maxTotalSecs float64
 	allowDomains []string
 }

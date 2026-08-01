@@ -140,4 +140,3 @@ func forwardingStatus(f *store.CreatorForwarding) string {
 		return "REMOTE_QUEUED"
 	}
 }
-

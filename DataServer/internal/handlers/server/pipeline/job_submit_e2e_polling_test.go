@@ -20,6 +20,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
 func getSubmittedJob(t *testing.T, r *gin.Engine, jobID string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+jobID, nil)

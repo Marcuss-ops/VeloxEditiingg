@@ -18,6 +18,7 @@ package providers
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -48,7 +49,10 @@ func newLiveProviderForServer(t *testing.T, baseURL, callbackBase, apiKey string
 	if callbackBase != "" {
 		t.Setenv("SOCIAL_CALLBACK_BASE_URL", callbackBase)
 	} else {
-		t.Setenv("SOCIAL_CALLBACK_BASE_URL", "")
+		// A live delivery must expose both artifact download and callback
+		// endpoints. Tests that exercise the HTTP adapter use the httptest
+		// server as a stand-in for Velox's callback base.
+		t.Setenv("SOCIAL_CALLBACK_BASE_URL", baseURL)
 	}
 	if apiKey != "" {
 		t.Setenv("SOCIAL_API_TOKEN", apiKey)
@@ -235,8 +239,9 @@ func TestSocialGatewayProvider_SocialUnreachable(t *testing.T) {
 	// Use a short client timeout so the test runs quickly even if the
 	// dial itself doesn't immediately refuse on this OS.
 	cfg := socialclient.Config{
-		BaseURL: deadURL,
-		Timeout: 200 * time.Millisecond,
+		BaseURL:         deadURL,
+		CallbackBaseURL: deadURL,
+		Timeout:         200 * time.Millisecond,
 	}
 	p := NewSocialGatewayProvider(cfg)
 

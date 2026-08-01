@@ -44,27 +44,27 @@ func TestValidateIdempotencyKey(t *testing.T) {
 	badUTF8 := string([]byte{'a', 0x80, 'b'})
 
 	cases := []struct {
-		name         string
-		input        string
-		wantReject   bool
-		wantReason   string
-		wantLength   *int
-		wantByteOff  *int
+		name        string
+		input       string
+		wantReject  bool
+		wantReason  string
+		wantLength  *int
+		wantByteOff *int
 	}{
 		// ── §1 — empty / whitespace ─────────────────────────────────
-		{name: "empty_string",      input: "",             wantReject: true, wantReason: "empty"},
-		{name: "all_spaces",        input: "   ",          wantReject: true, wantReason: "empty"},
-		{name: "tab_newline_only",  input: "\t\n",         wantReject: true, wantReason: "empty"},
+		{name: "empty_string", input: "", wantReject: true, wantReason: "empty"},
+		{name: "all_spaces", input: "   ", wantReject: true, wantReason: "empty"},
+		{name: "tab_newline_only", input: "\t\n", wantReject: true, wantReason: "empty"},
 		// ── §2 — length ─────────────────────────────────────────────
 		{
-			name:        "one_below_max",
-			input:       strings.Repeat("a", MaxIdempotencyKeyLen-1),
-			wantReject:  false,
+			name:       "one_below_max",
+			input:      strings.Repeat("a", MaxIdempotencyKeyLen-1),
+			wantReject: false,
 		},
 		{
-			name:        "exactly_max",
-			input:       strings.Repeat("a", MaxIdempotencyKeyLen),
-			wantReject:  false,
+			name:       "exactly_max",
+			input:      strings.Repeat("a", MaxIdempotencyKeyLen),
+			wantReject: false,
 		},
 		{
 			name:       "one_above_max",
@@ -133,18 +133,18 @@ func TestValidateIdempotencyKey(t *testing.T) {
 			wantByteOff: intPtr(3),
 		},
 		// ── §5 — happy path ─────────────────────────────────────────
-		{name: "lowercase_alpha",   input: "abc-123",      wantReject: false},
-		{name: "alphanumeric_mixed", input: "Video_001",   wantReject: false},
-		{name: "utf8_happy",        input: "vidéo-01",     wantReject: false}, // multi-byte OK
-		{name: "punctuation_ok",    input: "vid.01+a@b-c", wantReject: false},
+		{name: "lowercase_alpha", input: "abc-123", wantReject: false},
+		{name: "alphanumeric_mixed", input: "Video_001", wantReject: false},
+		{name: "utf8_happy", input: "vidéo-01", wantReject: false}, // multi-byte OK
+		{name: "punctuation_ok", input: "vid.01+a@b-c", wantReject: false},
 		// ── §6 — post-trim canonicalization ─────────────────────────
-		{name: "trims_leading",     input: "   abc",       wantReject: false},
-		{name: "trims_trailing",    input: "abc\t\n",      wantReject: false}, // TrimSpace removes \t \n
-		{name: "trims_both",        input: "\n  abc  \r\n", wantReject: false},
+		{name: "trims_leading", input: "   abc", wantReject: false},
+		{name: "trims_trailing", input: "abc\t\n", wantReject: false}, // TrimSpace removes \t \n
+		{name: "trims_both", input: "\n  abc  \r\n", wantReject: false},
 		// 4-byte UTF-8 emoji straddling max boundary would split
 		// under byte-truncation; here we just verify that's accepted
 		// when the total rune count fits (and the byte-length fits).
-		{name: "emoji_3_bytes",     input: "🚀abc",        wantReject: false},
+		{name: "emoji_3_bytes", input: "🚀abc", wantReject: false},
 		// The "passes_max_with_emoji" check is implicit: a 128-byte
 		// string of 1-byte runes is acceptable, and a 128-byte
 		// string with 4-byte runes ALSO is acceptable (because the
@@ -214,11 +214,11 @@ func TestValidateIdempotencyKey_AllRejectionsReturnTypedCode(t *testing.T) {
 	rejectInputs := []string{
 		"",
 		strings.Repeat("a", MaxIdempotencyKeyLen+1),
-		"a\x80b",  // invalid utf8
-		"a:b",     // colon
-		"a%b",     // percent
-		"a\x00b",  // NUL
-		"a b",     // space
+		"a\x80b", // invalid utf8
+		"a:b",    // colon
+		"a%b",    // percent
+		"a\x00b", // NUL
+		"a b",    // space
 	}
 
 	for _, in := range rejectInputs {
@@ -251,11 +251,11 @@ func TestFirstInvalidUTF8Offset(t *testing.T) {
 		want int
 	}{
 		{"ascii_clean", "abc", -1},
-		{"utf8_clean",  "héllo", -1},                       // é = 2 bytes
+		{"utf8_clean", "héllo", -1},                       // é = 2 bytes
 		{"utf8_clean_4b", "🚀abc", -1},                     // 🚀 = 4 bytes
-		{"invalid_at_0", string([]byte{0x80}) + "abc", 0},  // lone continuation
+		{"invalid_at_0", string([]byte{0x80}) + "abc", 0}, // lone continuation
 		{"invalid_at_1", "a" + string([]byte{0x80}), 1},
-		{"invalid_at_3", "abc" + string([]byte{0xC0, 0x80}), 3},  // overlong NUL
+		{"invalid_at_3", "abc" + string([]byte{0xC0, 0x80}), 3}, // overlong NUL
 	}
 	for _, tc := range cases {
 		tc := tc

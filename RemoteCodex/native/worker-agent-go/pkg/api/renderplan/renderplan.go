@@ -1,4 +1,5 @@
-// Package renderplan provides the RenderPlan v1 contract for job validation.
+// Package renderplan provides versioned worker render-plan contracts and the
+// temporary adapter for the historical v1 payload shape.
 package renderplan
 
 import (

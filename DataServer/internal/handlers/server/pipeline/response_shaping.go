@@ -4,7 +4,6 @@
 //     the SubmitJob handler emits on successful enqueue.
 //   - buildSubmittedJobLocation: canonical Location-header
 //     value for a freshly-accepted SubmitJob.
-//
 package pipeline
 
 import "net/http"

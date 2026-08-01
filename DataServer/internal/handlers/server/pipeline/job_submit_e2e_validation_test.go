@@ -23,6 +23,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
 func TestSubmitJobE2E_ValidationFailures(t *testing.T) {
 	h, db := newSubmitJobE2EStack(t)
 	gin.SetMode(gin.TestMode)
@@ -55,11 +56,11 @@ func TestSubmitJobE2E_ValidationFailures(t *testing.T) {
 	baseline := snapshot()
 
 	type wantShape struct {
-		detailsObj       bool
-		detailsPath      string
-		detailsReason    string
-		detailsLength    int
-		detailsIssue     string
+		detailsObj    bool
+		detailsPath   string
+		detailsReason string
+		detailsLength int
+		detailsIssue  string
 	}
 	cases := []struct {
 		name    string
@@ -247,8 +248,8 @@ func TestSubmitJobE2E_ValidationFailures(t *testing.T) {
 //   - missing Authorization header   → 401 m2m_token_required
 //   - bearer = wrong plaintext       → 401 m2m_token_rejected
 //   - bearer = valid plaintext       → 202 accepted (and the
-//                                    audit log gains a row with
-//                                    status_code=202)
+//     audit log gains a row with
+//     status_code=202)
 //
 // This is the regression-detector for the M2M wiring: a future
 // change that strips the M2M middleware off /api/v1/jobs, or that

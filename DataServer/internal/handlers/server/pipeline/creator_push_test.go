@@ -65,4 +65,3 @@ func TestNormalizeCreatorPushRequestRejectsMissingSourceJobID(t *testing.T) {
 		t.Fatal("normalizeCreatorPushRequest() error = nil, want missing source_job_id error")
 	}
 }
-

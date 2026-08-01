@@ -62,7 +62,7 @@ func TestIntakeSinkOrNoop_NilSinkFallsBackToNoop(t *testing.T) {
 func TestIntakeSinkOrNoop_NilSinkExplicit(t *testing.T) {
 	sink := &recordingIntakeSink{}
 	h := &Handlers{}
-	h.WithIntakeSink(nil) // explicit nil
+	h.WithIntakeSink(nil)  // explicit nil
 	h.WithIntakeSink(sink) // then real sink
 
 	h.intakeSinkOrNoop().IncAccepted("creator_push")

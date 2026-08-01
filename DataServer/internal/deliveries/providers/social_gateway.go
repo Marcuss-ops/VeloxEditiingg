@@ -145,6 +145,12 @@ func (s *SocialGatewayProvider) buildRequest(artifact *store.Artifact, destinati
 	}
 
 	req.CallbackURL = s.client.CallbackURL(deliveryID)
+	if req.CallbackURL == "" || req.Artifact.DownloadURL == "" {
+		return socialclient.DeliverArtifactRequest{}, fmt.Errorf(
+			"%w: SOCIAL_CALLBACK_BASE_URL is required for video delivery",
+			deliveries.ErrProviderNotConfigured,
+		)
+	}
 	return req, nil
 }
 

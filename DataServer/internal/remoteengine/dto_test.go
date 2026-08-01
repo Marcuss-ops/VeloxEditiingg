@@ -381,16 +381,41 @@ func TestToWorkerPayload_RoundTrip(t *testing.T) {
 		t.Fatalf("voiceover_paths: got %v", vp)
 	}
 
-	// video_metadata should be a map.
-	meta, ok := m["video_metadata"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("video_metadata should be map, got %T", m["video_metadata"])
+	// Publication metadata belongs to the control plane and must not be
+	// included in the renderer payload, even when the typed DTO contains it.
+	if _, present := m["video_metadata"]; present {
+		t.Fatalf("video_metadata leaked into renderer payload: %v", m["video_metadata"])
 	}
-	if meta["title"] != "Meta Title" {
-		t.Fatalf("metadata title: got %v", meta["title"])
+}
+
+func TestToWorkerPayload_StripsPublicationFieldsFromRawPayload(t *testing.T) {
+	raw := map[string]interface{}{
+		"job_id": "job_publication_fields",
+		"status": "completed",
+		"video_metadata": map[string]interface{}{
+			"title":          "Published title",
+			"description":    "Published description",
+			"tags":           []interface{}{"tag"},
+			"privacy_status": "private",
+			"publish_at":     "2026-07-20T18:00:00Z",
+		},
+		"publications": []interface{}{map[string]interface{}{"metadata": map[string]interface{}{"title": "Nested"}}},
+		"delivery_plan": []interface{}{map[string]interface{}{
+			"destination_id": "youtube-en",
+			"retry_budget":   3,
+			"metadata":       map[string]interface{}{"title": "Legacy nested"},
+		}},
 	}
-	if meta["privacy_status"] != "private" {
-		t.Fatalf("metadata privacy: got %v", meta["privacy_status"])
+
+	dto := &RemotePipelineResult{RemoteJobID: "job_publication_fields", Script: ScriptResult{Title: "Renderer name", Text: "Render script"}, Raw: raw}
+	m := dto.ToWorkerPayload()
+	for _, key := range []string{"video_metadata", "publications", "publication_specs"} {
+		if _, present := m[key]; present {
+			t.Fatalf("%s leaked into renderer payload: %#v", key, m[key])
+		}
+	}
+	if _, present := m["delivery_plan"]; present {
+		t.Fatalf("delivery_plan leaked into renderer payload: %#v", m["delivery_plan"])
 	}
 }
 
@@ -410,9 +435,10 @@ func TestToWorkerPayload_PreservesRawFields(t *testing.T) {
 
 	m := dto.ToWorkerPayload()
 
-	// delivery_plan should be preserved from the raw map.
-	if dp, ok := m["delivery_plan"]; !ok || dp == nil {
-		t.Fatal("delivery_plan should be preserved from raw map")
+	// Delivery routing is control-plane data and must not cross the
+	// renderer boundary. Render-only fields such as output_path remain.
+	if _, ok := m["delivery_plan"]; ok {
+		t.Fatalf("delivery_plan leaked into renderer payload: %#v", m["delivery_plan"])
 	}
 	// output_path should be preserved.
 	if m["output_path"] != "/tmp/output" {

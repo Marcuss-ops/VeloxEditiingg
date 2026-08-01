@@ -105,7 +105,14 @@ func (c *AtomicJobTaskCreator) CreateJobWithTaskTx(
 		job.ID = uuid.NewString()
 	}
 
-	deliveryPlan, err := parseDeliveryPlanPayload(taskSpec.Payload)
+	controlPlanePayload := taskSpec.DeliveryPlan
+	if len(controlPlanePayload) == 0 {
+		// Compatibility fallback for legacy callers that still place the
+		// delivery envelope in TaskSpec.Payload. New canonical writers use
+		// TaskSpec.DeliveryPlan and keep the renderer payload clean.
+		controlPlanePayload = taskSpec.Payload
+	}
+	deliveryPlan, err := parseDeliveryPlanPayload(controlPlanePayload)
 	if err != nil {
 		return fmt.Errorf("atomic creator: invalid delivery plan: %w", err)
 	}

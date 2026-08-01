@@ -157,14 +157,14 @@ func TestCreatorPushJobsE2E_VoiceoverStockClipScene(t *testing.T) {
 		t.Fatalf("response json: %v", err)
 	}
 	wantFields := map[string]interface{}{
-		"ok":                true,
-		"accepted_from":     "creator_push",
-		"source_provider":   "creator_pc_1",
-		"source_job_id":     "creator-job-001",
+		"ok":                 true,
+		"accepted_from":      "creator_push",
+		"source_provider":    "creator_pc_1",
+		"source_job_id":      "creator-job-001",
 		"target_executor_id": "scene.composite.v1",
-		"job_id":            expectedJobID,
-		"status":            "PENDING",
-		"dispatch_status":   "queued_for_workers",
+		"job_id":             expectedJobID,
+		"status":             "PENDING",
+		"dispatch_status":    "queued_for_workers",
 	}
 	for key, want := range wantFields {
 		if resp[key] != want {

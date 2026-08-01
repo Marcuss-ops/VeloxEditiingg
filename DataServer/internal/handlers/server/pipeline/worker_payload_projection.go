@@ -2,6 +2,7 @@
 package pipeline
 
 import (
+	"fmt"
 	"strings"
 
 	"velox-server/internal/remoteengine"
@@ -11,7 +12,13 @@ import (
 // projectWorkerPayload follows the canonical remoteengine DTO path.
 func projectWorkerPayload(req *SubmitJobRequest) map[string]interface{} {
 	rawPayload := submitRequestToRawPayload(req)
-	dto, _ := remoteengine.ParseRemotePipelineResult(rawPayload)
+	dto, err := remoteengine.ParseRemotePipelineResult(rawPayload)
+	if err != nil {
+		// This helper predates the error-returning canonical facade. Keep its
+		// map return shape for compatibility, but fail closed instead of
+		// silently projecting an empty DTO.
+		return map[string]interface{}{"_canonical_projection_error": fmt.Sprintf("parse remote pipeline result: %v", err)}
+	}
 	workerPayload := dto.ToWorkerPayload()
 	preserveWorkerPayloadFields(workerPayload, rawPayload, "subtitle_tracks", "audio_tracks", "layers", "_placement_pin_worker_id")
 	return workerPayload
@@ -169,9 +176,10 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 			} else {
 				entry["retry_budget"] = *d.RetryBudget
 			}
-			if d.Metadata != nil {
-				entry["metadata"] = d.Metadata
-			}
+			// Delivery routing remains available for legacy enqueue logic,
+			// but publication metadata never crosses into the renderer map.
+			// Titles, descriptions, tags, privacy, and scheduling belong to
+			// PublicationSpecs on the control plane.
 			plan = append(plan, entry)
 		}
 		m["delivery_plan"] = plan

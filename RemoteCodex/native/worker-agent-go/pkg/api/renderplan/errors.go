@@ -23,9 +23,10 @@ const RenderPlanVersion = "v1"
 type ErrorCode string
 
 const (
-	ERR_PLAN_SCHEMA         ErrorCode = "ERR_PLAN_SCHEMA"
-	ERR_PLAN_REQUIRED_FIELD ErrorCode = "ERR_PLAN_REQUIRED_FIELD"
-	ERR_PLAN_INCONSISTENT   ErrorCode = "ERR_PLAN_INCONSISTENT"
+	ERR_PLAN_SCHEMA              ErrorCode = "ERR_PLAN_SCHEMA"
+	ERR_PLAN_REQUIRED_FIELD      ErrorCode = "ERR_PLAN_REQUIRED_FIELD"
+	ERR_PLAN_INCONSISTENT        ErrorCode = "ERR_PLAN_INCONSISTENT"
+	ERR_PLAN_UNSUPPORTED_VERSION ErrorCode = "ERR_PLAN_UNSUPPORTED_VERSION"
 )
 
 // PlanError represents a typed error with code, field, and message.

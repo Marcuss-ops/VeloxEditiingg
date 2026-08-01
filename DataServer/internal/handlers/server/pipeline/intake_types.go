@@ -1,6 +1,10 @@
 // Package pipeline — request DTOs for the external job intake contract.
 package pipeline
 
+// MaxSubmitJobBatchItems bounds the number of independent jobs accepted by
+// POST /api/v1/jobs/batch. The limit protects request latency and keeps a
+// batch's per-item response bounded; each item still has its own idempotency
+// key and enqueue transaction.
 const MaxSubmitJobBatchItems = 50
 
 type SubmitJobRequest struct {
@@ -44,6 +48,10 @@ type SubmitJobRequest struct {
 
 	// DeliveryPlan is the ordered list of delivery targets. Empty
 	// allowed (defaults to scene.composite.v1's default resolver).
+	// It remains backward-compatible with legacy senders. When
+	// PublishingTarget is present, the handler resolves that selector into
+	// this concrete plan before enqueue and rejects a request that supplies
+	// both fields.
 	DeliveryPlan []SubmitDeliveryPlanEntry `json:"delivery_plan,omitempty"`
 
 	// PublishingTarget is an optional server-side channel/group selector.
@@ -373,6 +381,7 @@ type SubmitPublicationDestination struct {
 //     body. The Master re-downloads the JSON and verifies the
 //     SHA-256 against this value BEFORE substituting it into the
 //     worker payload (fail-closed).
+//
 // SubmitJobBatchRequest is the wire shape for POST /api/v1/jobs/batch.
 // Items are intentionally full SubmitJobRequest values so delivery_plan and
 // publications remain backward-compatible with the single-job endpoint.

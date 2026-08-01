@@ -25,12 +25,11 @@
 package pipeline
 
 import (
-	"encoding/json"
 	"fmt"
-	"github.com/gin-gonic/gin"
-	"io"
 	"net/http"
 	"strings"
+
+	"github.com/gin-gonic/gin"
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/store"
 )
@@ -42,16 +41,7 @@ import (
 func (h *Handlers) SubmitJob() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req SubmitJobRequest
-		dec := json.NewDecoder(c.Request.Body)
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(&req); err != nil {
-			// Drain the request body so the unread tail does not
-			// corrupt subsequent requests on the same HTTP/1.1
-			// keepalive connection. A small body in practice, but
-			// a long-lived automation client can fold many
-			// requests onto one TCP stream where leftover bytes
-			// from a 400 would otherwise mix with the next request.
-			_, _ = io.Copy(io.Discard, c.Request.Body)
+		if err := decodeStrictJSON(c.Request.Body, &req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"ok":      false,
 				"error":   "invalid_json",
@@ -87,6 +77,10 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 			})
 			return
 		}
+		// ValidateIdempotencyKey intentionally trims only for validation;
+		// carry the same canonical value into the resolver, response, and
+		// logs so retries with surrounding whitespace cannot diverge.
+		req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
 
 		// SubmitJob-level validation: video_name byte-length, scenes
 		// count + each scene (text, duration bounds), each delivery
@@ -195,6 +189,14 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 		// (same path shape used by enqueue's *validationError).
 		// Fail-closed on store failure (500 store_failure).
 		if len(req.DeliveryPlan) > 0 {
+			if h.store == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"ok":      false,
+					"error":   "store_failure",
+					"message": "delivery_plan validation requires a configured store",
+				})
+				return
+			}
 			ids := make([]string, 0, len(req.DeliveryPlan))
 			for _, d := range req.DeliveryPlan {
 				if tid := strings.TrimSpace(d.DestinationID); tid != "" {
