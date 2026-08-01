@@ -318,6 +318,104 @@ func TestPersistExecutionEvents_ReplayIsIdempotentAndLegacySummarySurvives(t *te
 	}
 }
 
+func TestPersistExecutionEvents_ReplacementRemovesStaleRowsAndRollsBack(t *testing.T) {
+	db := openExecutionEventPersistenceTestDB(t)
+	seedExecutionEventIdentity(t, db)
+
+	if err := persistExecutionEventTestBatch(t, db, modernExecutionTimings()); err != nil {
+		t.Fatalf("persist initial event batch: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO task_phase_timings (attempt_id, phase, component, action, duration_ms)
+		VALUES ('attempt-1', 'engine.decode.probe', 'engine.decode', 'probe', 999)`); err != nil {
+		t.Fatalf("insert stale phase summary: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO task_execution_events
+			(event_id, attempt_id, origin, scope, component, action, phase, created_at)
+		VALUES ('master-preserved', 'attempt-1', 'master', 'task', 'master.queue', 'ready_wait', 'queue', '2026-07-31T00:00:00Z')`); err != nil {
+		t.Fatalf("insert master event: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO task_execution_events
+			(event_id, attempt_id, origin, scope, component, action, phase, created_at)
+		VALUES ('stale-worker', 'attempt-1', 'engine', 'segment', 'engine.decode', 'probe', 'decode', '2026-07-31T00:00:00Z')`); err != nil {
+		t.Fatalf("insert stale worker event: %v", err)
+	}
+
+	// A replacement report contains only segment zero. It must remove the
+	// omitted worker event and phase summary, while retaining master history.
+	if err := persistExecutionEventTestBatch(t, db, modernExecutionTimings()[:1]); err != nil {
+		t.Fatalf("persist replacement event batch: %v", err)
+	}
+
+	var phaseCount, eventCount, masterCount, staleWorkerCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_phase_timings WHERE attempt_id = 'attempt-1'`).Scan(&phaseCount); err != nil {
+		t.Fatalf("count replacement phase summaries: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_execution_events WHERE attempt_id = 'attempt-1'`).Scan(&eventCount); err != nil {
+		t.Fatalf("count replacement events: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_execution_events WHERE event_id = 'master-preserved'`).Scan(&masterCount); err != nil {
+		t.Fatalf("count preserved master event: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_execution_events WHERE event_id = 'stale-worker'`).Scan(&staleWorkerCount); err != nil {
+		t.Fatalf("count removed stale worker event: %v", err)
+	}
+	if phaseCount != 1 || eventCount != 2 || masterCount != 1 || staleWorkerCount != 0 {
+		t.Fatalf("replacement state phases=%d events=%d master=%d stale_worker=%d; want 1/2/1/0", phaseCount, eventCount, masterCount, staleWorkerCount)
+	}
+
+	// A later invalid replacement must roll back both deletion and inserts,
+	// leaving the previously committed worker event and phase summary intact.
+	if _, err := db.Exec(`
+		INSERT INTO task_phase_timings (attempt_id, phase, component, action, duration_ms)
+		VALUES ('attempt-1', 'engine.decode.probe', 'engine.decode', 'probe', 777)`); err != nil {
+		t.Fatalf("insert rollback sentinel phase summary: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO task_execution_events
+			(event_id, attempt_id, origin, scope, component, action, phase, created_at)
+		VALUES ('rollback-sentinel', 'attempt-1', 'engine', 'segment', 'engine.decode', 'probe', 'decode', '2026-07-31T00:00:00Z')`); err != nil {
+		t.Fatalf("insert rollback sentinel event: %v", err)
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin rollback transaction: %v", err)
+	}
+	invalid := append([]taskattempts.PhaseTimingDetailed(nil), modernExecutionTimings()[:1]...)
+	invalid = append(invalid, taskattempts.PhaseTimingDetailed{
+		AttemptID: "attempt-1", Origin: "engine", Scope: "segment", EventID: "invalid-replacement",
+		EventIndex: 99, Component: "engine.unknown", Action: "invented", Status: "ok",
+	})
+	err = persistPhaseTimingsAndExecutionEvents(context.Background(), tx, taskgraph.IngestResultCommand{
+		AttemptID: "attempt-1", TaskID: "task-1", WorkerID: "worker-1", LeaseID: "lease-1",
+		PhaseTimings: invalid,
+	})
+	if err == nil {
+		_ = tx.Rollback()
+		t.Fatal("invalid replacement should fail")
+	}
+	if rollbackErr := tx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
+		t.Fatalf("rollback invalid replacement: %v", rollbackErr)
+	}
+
+	var sentinelPhaseCount, sentinelEventCount, currentEventCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_phase_timings WHERE component = 'engine.decode' AND action = 'probe'`).Scan(&sentinelPhaseCount); err != nil {
+		t.Fatalf("count rollback phase sentinel: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_execution_events WHERE event_id = 'rollback-sentinel'`).Scan(&sentinelEventCount); err != nil {
+		t.Fatalf("count rollback event sentinel: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_execution_events WHERE event_id = 'encode-segment-0'`).Scan(&currentEventCount); err != nil {
+		t.Fatalf("count committed event after rollback: %v", err)
+	}
+	if sentinelPhaseCount != 1 || sentinelEventCount != 1 || currentEventCount != 1 {
+		t.Fatalf("rollback state phase_sentinel=%d event_sentinel=%d current=%d; want 1/1/1", sentinelPhaseCount, sentinelEventCount, currentEventCount)
+	}
+}
+
 func TestPersistExecutionEvents_RejectsUnregisteredModernEvent(t *testing.T) {
 	db := openExecutionEventPersistenceTestDB(t)
 	seedExecutionEventIdentity(t, db)

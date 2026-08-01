@@ -94,6 +94,15 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 			'engine.encode', 'setup', 'encode', 'ok', ?, 99)`,
 		attemptID, jobID, taskID, workerID, nowStr,
 	)
+	// Also seed an omitted compact phase summary. The incoming worker
+	// report is authoritative, so this stale row must disappear with the
+	// old worker event in the same ingest transaction.
+	execQuery(t, store, ctx, `
+		INSERT INTO task_phase_timings
+			(attempt_id, phase, duration_ms, component, action)
+		VALUES (?, 'engine.decode.probe', 999, 'engine.decode', 'probe')`,
+		attemptID,
+	)
 
 	// ── 1. Ingest via the production code path ────────────────────────
 	taskRepo := NewSQLiteTaskRepository(store)
@@ -204,6 +213,19 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 	}
 	if staleWorkerCount != 0 || masterEventCount != 1 {
 		t.Fatalf("replacement left stale worker=%d master=%d; want 0/1", staleWorkerCount, masterEventCount)
+	}
+	var phaseCount, stalePhaseCount int
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM task_phase_timings WHERE attempt_id = ?`, attemptID).Scan(&phaseCount); err != nil {
+		t.Fatalf("count phase summaries after replacement: %v", err)
+	}
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM task_phase_timings
+		 WHERE attempt_id = ? AND component = 'engine.decode' AND action = 'probe'`, attemptID).Scan(&stalePhaseCount); err != nil {
+		t.Fatalf("count stale phase summaries: %v", err)
+	}
+	if phaseCount != 1 || stalePhaseCount != 0 {
+		t.Fatalf("replacement left phase summaries=%d stale=%d; want 1/0", phaseCount, stalePhaseCount)
 	}
 
 	// Promote job to SUCCEEDED so Overview picks it up.
@@ -437,15 +459,25 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 	if err := taskRepo.IngestTaskResultAtomic(ctx, cmd2); err == nil {
 		t.Fatal("expected conflict error when re-ingesting different raw report for same attempt")
 	}
-	var conflictEventCount, conflictMasterCount int
+	var conflictEventCount, conflictMasterCount, conflictPhaseCount, conflictStalePhaseCount int
 	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_execution_events WHERE attempt_id = ?`, attemptID).Scan(&conflictEventCount); err != nil {
 		t.Fatalf("count events after hash conflict: %v", err)
 	}
 	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_execution_events WHERE event_id = 'e2e-master-event'`).Scan(&conflictMasterCount); err != nil {
 		t.Fatalf("count master event after hash conflict: %v", err)
 	}
-	if conflictEventCount != executionEventCount || conflictMasterCount != 1 {
-		t.Fatalf("hash conflict changed events=%d/master=%d; want %d/1", conflictEventCount, conflictMasterCount, executionEventCount)
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_phase_timings WHERE attempt_id = ?`, attemptID).Scan(&conflictPhaseCount); err != nil {
+		t.Fatalf("count phase summaries after hash conflict: %v", err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_phase_timings
+		WHERE attempt_id = ? AND component = 'engine.decode' AND action = 'probe'`, attemptID).Scan(&conflictStalePhaseCount); err != nil {
+		t.Fatalf("count stale phase summaries after hash conflict: %v", err)
+	}
+	if conflictEventCount != executionEventCount || conflictMasterCount != 1 ||
+		conflictPhaseCount != phaseCount || conflictStalePhaseCount != 0 {
+		t.Fatalf("hash conflict changed events=%d/master=%d phases=%d/stale=%d; want %d/1/%d/0",
+			conflictEventCount, conflictMasterCount, conflictPhaseCount, conflictStalePhaseCount,
+			executionEventCount, phaseCount)
 	}
 	var taskStatusAfterConflict, attemptStatusAfterConflict string
 	if err := store.db.QueryRowContext(ctx, `SELECT status FROM tasks WHERE task_id = ?`, taskID).Scan(&taskStatusAfterConflict); err != nil {

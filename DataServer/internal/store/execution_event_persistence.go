@@ -50,6 +50,17 @@ func persistPhaseTimingsAndExecutionEvents(ctx context.Context, tx *sql.Tx, cmd 
 	); err != nil {
 		return fmt.Errorf("task ingest atomic worker execution event replacement: %w", err)
 	}
+	// Phase summaries are the compact projection of the same authoritative
+	// worker report. Clear them before rebuilding so a replacement that omits
+	// a previously reported phase cannot leave stale rows behind. This runs on
+	// the coordinator-owned transaction, so a later validation or hash error
+	// rolls the deletion back together with the event replacement.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM task_phase_timings WHERE attempt_id = ?`,
+		cmd.AttemptID,
+	); err != nil {
+		return fmt.Errorf("task ingest atomic phase summary replacement: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM task_execution_event_replacement_authorizations WHERE attempt_id = ?`,
 		cmd.AttemptID,
