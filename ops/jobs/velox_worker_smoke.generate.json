@@ -5,7 +5,7 @@
   "skip_creator": true,
   "video_name": "Velox Worker Smoke — Chronon Text Image",
   "project_id": "velox-worker-smoke",
-  "voiceover_path": "/opt/velox/current/.velox/data/test_voice.mp3",
+  "voiceover_paths": ["/opt/velox/current/.velox/data/test_voice.mp3"],
   "total_duration_secs": 4,
   "render_video": true,
   "save_to_db": true,
