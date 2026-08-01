@@ -17,7 +17,7 @@ const LegacyBodySinkClientKindPreManifestRef = "pipelinegen_pre_manifest_ref"
 
 // LegacyBodySink records legacy-body-shape warnings on POST
 // /api/v1/jobs. The canonical production implementation lives in
-// velox-server/internal/metrics (NewLegacyBodySink). Nil values are
+// velox-server/internal/metrics (NewCreatorBodyWarningSink). Nil values are
 // treated as a noop sink (safe default for tests and for callers
 // that have not yet wired the metric). The interface is intentionally
 // separate from CreatorIntakeSink because the two counters have

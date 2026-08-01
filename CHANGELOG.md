@@ -838,7 +838,7 @@ total) update to `(&Handlers{}).NormalizeExternalJobSubmission(req)`
 drift: the public `SubmitJob` HTTP surface is unchanged.
 
 **Composition root** — `DataServer/cmd/server/router.go` wires
-`velmetrics.NewLegacyBodySink()` into the pipeline handler chain
+`velmetrics.NewCreatorBodyWarningSink()` into the pipeline handler chain
 via `.WithLegacyBodySink(...)`. Mirrors the existing
 `WithIntakeSink(...)` wiring pattern (`creator_intake.go`).
 
@@ -848,7 +848,7 @@ via `.WithLegacyBodySink(...)`. Mirrors the existing
   `pipeline.legacy_body_shape_total` MetricDefinition.
 - `DataServer/internal/metrics/legacy_body_shape.go` (NEW) —
   CounterFamily + `LegacyBodySink` interface + `LegacyBodySinkImpl`
-  production type + `NewLegacyBodySink()` constructor. Mirrors
+production type + `NewCreatorBodyWarningSink()` constructor. Mirrors
   `creator_intake.go` byte-for-byte.
 - `DataServer/internal/handlers/server/pipeline/legacy_body_shape_sink.go` (NEW) —
   `LegacyBodySinkClientKindPreManifestRef` constant + handler-side
@@ -874,7 +874,7 @@ via `.WithLegacyBodySink(...)`. Mirrors the existing
   boundaries, integration (legacy-emits-warning, manifest_ref-
   suppresses, no-legacy-no-warning, no-sink-still-works,
   clip_link-alone, subtitle_tracks-alone), constant value lock.
-- `DataServer/cmd/server/router.go` — wires `velmetrics.NewLegacyBodySink()`.
+- `DataServer/cmd/server/router.go` — wires `velmetrics.NewCreatorBodyWarningSink()`.
 - `CHANGELOG.md` — this entry.
 
 #### Verified on `main` (pre-push)

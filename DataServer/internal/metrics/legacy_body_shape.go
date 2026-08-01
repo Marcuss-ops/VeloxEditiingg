@@ -40,7 +40,7 @@ var pipelineLegacyBodyShape = NewCounterFamily(
 
 // LegacyBodySink is the production interface for emitting
 // legacy-body-shape warnings. The canonical implementation lives in
-// NewLegacyBodySink; tests typically pass a recording mock so they
+// NewCreatorBodyWarningSink; tests typically pass a recording mock so they
 // can assert the exact (client_kind) tuples that fired without
 // relying on a Prometheus collector.
 //
@@ -67,10 +67,10 @@ type LegacyBodySink interface {
 // across goroutines (the family's Inc is internally synchronized).
 type LegacyBodySinkImpl struct{}
 
-// NewLegacyBodySink returns a sink that records legacy-body-shape
+// NewCreatorBodyWarningSink returns a sink that records legacy-body-shape
 // warnings. The returned value is a thin handle; the underlying
 // counter is package-level.
-func NewLegacyBodySink() *LegacyBodySinkImpl { return &LegacyBodySinkImpl{} }
+func NewCreatorBodyWarningSink() *LegacyBodySinkImpl { return &LegacyBodySinkImpl{} }
 
 // IncLegacyBody increments the counter for the given client_kind.
 // See LegacyBodySink interface for the label-cardinality contract.
