@@ -10,12 +10,19 @@ import (
 	"velox-server/internal/routing"
 )
 
+// BuildWorkerPayload builds the creatorflow worker payload through the same
+// canonical pipeline builder used by Resolver.Resolve. It has no database or
+// network side effects and is useful for cross-ingress contract checks.
+func BuildWorkerPayload(reqPayload map[string]interface{}) (map[string]interface{}, error) {
+	return enqueue.BuildPipelinePayload(reqPayload)
+}
+
 // buildAndRewritePayload builds the worker payload from the raw remote
 // result, optionally rewrites scene-image URLs for the public master,
 // and injects the forwarding key. It returns an error if the payload
 // cannot be built or rewritten.
 func (r *Resolver) buildAndRewritePayload(reqPayload map[string]interface{}, fwdKey routing.ForwardingKey) (map[string]interface{}, error) {
-	workerPayload, err := enqueue.BuildPipelinePayload(reqPayload)
+	workerPayload, err := BuildWorkerPayload(reqPayload)
 	if err != nil {
 		return nil, fmt.Errorf("creatorflow: Resolve build worker payload: %w", err)
 	}
