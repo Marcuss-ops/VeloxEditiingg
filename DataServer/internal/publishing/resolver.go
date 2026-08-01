@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"velox-server/internal/socialclient"
@@ -41,8 +42,9 @@ type DestinationReader interface {
 }
 
 // TargetResolver validates authoritative publishing targets and selected
-// destinations. It deliberately does not expand groups: membership belongs to
-// the upstream source of truth and must be snapshotted there before enqueue.
+// destinations. Group membership belongs to the upstream source of truth and
+// is expanded only from its immutable snapshot at selection time, before
+// enqueue, so the delivery plan contains concrete channel destinations.
 type TargetResolver struct {
 	catalog      CatalogClient
 	destinations DestinationReader
@@ -208,6 +210,12 @@ type SelectionRequest struct {
 type Selection struct {
 	Channels []Channel
 	Groups   []Group
+
+	// DestinationIDs is the concrete, deduplicated snapshot that the
+	// enqueue boundary can place into delivery_plan. Group selections are
+	// expanded here from the authoritative member snapshot; callers do not
+	// need to duplicate membership or destination mapping logic.
+	DestinationIDs []string
 }
 
 // ResolveSelection validates selected channels against both the upstream
@@ -244,7 +252,11 @@ func (r *TargetResolver) ResolveSelection(ctx context.Context, req SelectionRequ
 		groupsByID[group.GroupID] = group
 	}
 
-	selection := &Selection{Channels: make([]Channel, 0, len(req.DestinationIDs)), Groups: make([]Group, 0, len(req.GroupIDs))}
+	selection := &Selection{
+		Channels:       make([]Channel, 0, len(req.DestinationIDs)),
+		Groups:         make([]Group, 0, len(req.GroupIDs)),
+		DestinationIDs: make([]string, 0, len(req.DestinationIDs)),
+	}
 	seenDestinations := make(map[string]struct{}, len(req.DestinationIDs))
 	for _, rawID := range req.DestinationIDs {
 		id := strings.TrimSpace(rawID)
@@ -266,6 +278,7 @@ func (r *TargetResolver) ResolveSelection(ctx context.Context, req SelectionRequ
 			return nil, err
 		}
 		selection.Channels = append(selection.Channels, channel)
+		appendUniqueDestinationID(&selection.DestinationIDs, channel.DestinationID)
 	}
 
 	seenGroups := make(map[int64]struct{}, len(req.GroupIDs))
@@ -284,12 +297,40 @@ func (r *TargetResolver) ResolveSelection(ctx context.Context, req SelectionRequ
 		if !group.Eligible {
 			return nil, fmt.Errorf("%w: group_id=%d", ErrGroupNotPublishable, id)
 		}
+		group.Members = orderedGroupMembers(group.Members)
 		if err := r.validateGroupMembers(ctx, req.WorkspaceID, req.Platform, group); err != nil {
 			return nil, err
 		}
 		selection.Groups = append(selection.Groups, group)
+		for _, member := range group.Members {
+			appendUniqueDestinationID(&selection.DestinationIDs, DestinationIDForExternal(member.ExternalDestinationID))
+		}
 	}
 	return selection, nil
+}
+
+func orderedGroupMembers(members []GroupMember) []GroupMember {
+	ordered := append([]GroupMember(nil), members...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].PlatformAccountID != ordered[j].PlatformAccountID {
+			return ordered[i].PlatformAccountID < ordered[j].PlatformAccountID
+		}
+		return strings.TrimSpace(ordered[i].ExternalDestinationID) < strings.TrimSpace(ordered[j].ExternalDestinationID)
+	})
+	return ordered
+}
+
+func appendUniqueDestinationID(ids *[]string, candidate string) {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return
+	}
+	for _, existing := range *ids {
+		if existing == candidate {
+			return
+		}
+	}
+	*ids = append(*ids, candidate)
 }
 
 func (r *TargetResolver) validateGroupMembers(ctx context.Context, workspaceID int64, platform string, group Group) error {
@@ -465,11 +506,21 @@ func normalizeGroupMembers(workspaceID int64, members []socialclient.PublishingG
 	if len(members) == 0 {
 		return nil, false
 	}
-	out := make([]GroupMember, 0, len(members))
-	seenExternal := make(map[string]struct{}, len(members))
-	seenAccounts := make(map[int64]struct{}, len(members))
+	// The upstream snapshot is authoritative, but its transport order is
+	// not part of the contract. Sort before validation/projection so the
+	// concrete delivery_plan and idempotency hash are stable across refreshes.
+	sortedMembers := append([]socialclient.PublishingGroupMember(nil), members...)
+	sort.SliceStable(sortedMembers, func(i, j int) bool {
+		if sortedMembers[i].PlatformAccountID != sortedMembers[j].PlatformAccountID {
+			return sortedMembers[i].PlatformAccountID < sortedMembers[j].PlatformAccountID
+		}
+		return strings.TrimSpace(sortedMembers[i].ExternalDestinationID) < strings.TrimSpace(sortedMembers[j].ExternalDestinationID)
+	})
+	out := make([]GroupMember, 0, len(sortedMembers))
+	seenExternal := make(map[string]struct{}, len(sortedMembers))
+	seenAccounts := make(map[int64]struct{}, len(sortedMembers))
 	valid := true
-	for _, member := range members {
+	for _, member := range sortedMembers {
 		externalID := strings.TrimSpace(member.ExternalDestinationID)
 		if member.WorkspaceID != 0 && member.WorkspaceID != workspaceID || member.PlatformAccountID <= 0 || externalID == "" {
 			valid = false

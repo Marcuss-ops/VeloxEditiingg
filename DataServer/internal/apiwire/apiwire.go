@@ -52,17 +52,18 @@ package apiwire
 // format and the schemagen doesn't know how to express the
 // http(s) + velox-asset:// scheme choice cleanly.
 type SubmitJobRequest struct {
-	IdempotencyKey string                    `json:"idempotency_key" validate:"required,min=1,max=128"`
-	VideoName      string                    `json:"video_name,omitempty" validate:"omitempty,max=300"`
-	ScriptText     string                    `json:"script_text,omitempty"`
-	VoiceoverPaths []string                  `json:"voiceover_paths,omitempty" validate:"omitempty,dive"`
-	Scenes         []SubmitScene             `json:"scenes,omitempty" validate:"omitempty,max=10000"`
-	Layers         []SubmitLayer             `json:"layers,omitempty" validate:"omitempty,dive"`
-	SubtitleTracks []SubmitSubtitleTrack     `json:"subtitle_tracks,omitempty" validate:"omitempty,dive"`
-	AudioTracks    []SubmitAudioTrack        `json:"audio_tracks,omitempty" validate:"omitempty,dive"`
-	DeliveryPlan   []SubmitDeliveryPlanEntry `json:"delivery_plan,omitempty" validate:"omitempty,dive"`
-	Publications   []SubmitPublication       `json:"publications,omitempty" validate:"omitempty,dive"`
-	ManifestRef    *SubmitManifestRef        `json:"manifest_ref,omitempty" validate:"omitempty"`
+	IdempotencyKey   string                    `json:"idempotency_key" validate:"required,min=1,max=128"`
+	VideoName        string                    `json:"video_name,omitempty" validate:"omitempty,max=300"`
+	ScriptText       string                    `json:"script_text,omitempty"`
+	VoiceoverPaths   []string                  `json:"voiceover_paths,omitempty" validate:"omitempty,dive"`
+	Scenes           []SubmitScene             `json:"scenes,omitempty" validate:"omitempty,max=10000"`
+	Layers           []SubmitLayer             `json:"layers,omitempty" validate:"omitempty,dive"`
+	SubtitleTracks   []SubmitSubtitleTrack     `json:"subtitle_tracks,omitempty" validate:"omitempty,dive"`
+	AudioTracks      []SubmitAudioTrack        `json:"audio_tracks,omitempty" validate:"omitempty,dive"`
+	DeliveryPlan     []SubmitDeliveryPlanEntry `json:"delivery_plan,omitempty" validate:"omitempty,dive"`
+	PublishingTarget *SubmitPublishingTarget   `json:"publishing_target,omitempty" validate:"omitempty"`
+	Publications     []SubmitPublication       `json:"publications,omitempty" validate:"omitempty,dive"`
+	ManifestRef      *SubmitManifestRef        `json:"manifest_ref,omitempty" validate:"omitempty"`
 
 	// PlacementPinWorkerID is an optional operator/admin field that
 	// forces the job to be placed on a specific worker, skipping the
@@ -75,6 +76,18 @@ type SubmitJobRequest struct {
 	// see the actual worker_id that executed the job, providing
 	// authoritative placement verification.
 	PlacementPinWorkerID string `json:"placement_pin_worker_id,omitempty" validate:"omitempty,max=128"`
+}
+
+// SubmitPublishingTarget selects one server-resolved channel or group.
+// Channel targets use the catalog's opaque destination_id; group targets use
+// group_id. The workspace scope is explicit so selection cannot cross a
+// workspace boundary. The handler enforces that this selector is mutually
+// exclusive with a non-empty delivery_plan.
+type SubmitPublishingTarget struct {
+	WorkspaceID   int64  `json:"workspace_id" validate:"required,gte=1"`
+	Type          string `json:"type" validate:"required,oneof=channel group"`
+	DestinationID string `json:"destination_id,omitempty" validate:"omitempty,min=1"`
+	GroupID       int64  `json:"group_id,omitempty" validate:"omitempty,gte=1"`
 }
 
 // SubmitJobBatchRequest is the wire shape for POST /api/v1/jobs/batch.

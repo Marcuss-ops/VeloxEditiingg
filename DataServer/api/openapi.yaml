@@ -818,6 +818,8 @@ components:
                         type: object
                     minItems: 0
                     type: array
+                publishing_target:
+                    $ref: '#/components/schemas/SubmitPublishingTarget'
                 scenes:
                     items:
                         $ref: '#/components/schemas/SubmitScene'
@@ -979,6 +981,26 @@ components:
                 - schema_version
                 - sha256
                 - url
+            type: object
+        SubmitPublishingTarget:
+            properties:
+                destination_id:
+                    minLength: 1
+                    type: string
+                group_id:
+                    minimum: 1
+                    type: integer
+                type:
+                    enum:
+                        - channel
+                        - group
+                    type: string
+                workspace_id:
+                    minimum: 1
+                    type: integer
+            required:
+                - type
+                - workspace_id
             type: object
         SubmitScene:
             properties:
@@ -1231,7 +1253,7 @@ paths:
                                 $ref: '#/components/schemas/ErrorEnvelope'
                     description: Internal Server Error.
             security:
-                - bearerAdminToken: []
+                - bearerM2MToken: []
             summary: Submit a complete video job for external automation.
             tags:
                 - jobs
@@ -1274,7 +1296,7 @@ paths:
                                 $ref: '#/components/schemas/ErrorEnvelope'
                     description: Internal Server Error.
             security:
-                - bearerAdminToken: []
+                - bearerM2MToken: []
             summary: Poll the status of a previously submitted job.
             tags:
                 - jobs
@@ -1322,7 +1344,7 @@ paths:
                                 $ref: '#/components/schemas/ErrorEnvelope'
                     description: Internal Server Error.
             security:
-                - bearerAdminToken: []
+                - bearerM2MToken: []
             summary: Submit multiple independent video jobs in one request.
             tags:
                 - jobs

@@ -1,0 +1,275 @@
+package pipeline
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/gin-gonic/gin"
+
+	targetpublishing "velox-server/internal/publishing"
+	"velox-server/internal/socialclient"
+	"velox-server/internal/store"
+)
+
+type publishingTargetDestinationReader struct {
+	statuses map[string]store.DeliveryDestinationStatus
+	rows     map[string]*store.DeliveryDestination
+}
+
+func (f publishingTargetDestinationReader) BatchDeliveryDestinationsStatus(context.Context, []string) (map[string]store.DeliveryDestinationStatus, error) {
+	return f.statuses, nil
+}
+
+func (f publishingTargetDestinationReader) GetDeliveryDestination(_ context.Context, id string) (*store.DeliveryDestination, error) {
+	row := f.rows[id]
+	if row == nil {
+		return nil, store.ErrDeliveryNoRow
+	}
+	return row, nil
+}
+
+func TestValidateSubmitJobRequestPublishingTargetRules(t *testing.T) {
+	base := SubmitJobRequest{
+		IdempotencyKey: "target-validation-001",
+		Scenes:         []SubmitScene{{Text: "scene", DurationSeconds: 1}},
+	}
+	cases := []struct {
+		name   string
+		target *SubmitPublishingTarget
+		plan   []SubmitDeliveryPlanEntry
+		issue  string
+	}{
+		{"channel requires destination", &SubmitPublishingTarget{WorkspaceID: 1, Type: "channel"}, nil, "required_for_channel"},
+		{"group requires id", &SubmitPublishingTarget{WorkspaceID: 1, Type: "group"}, nil, "required_for_group"},
+		{"channel forbids group id", &SubmitPublishingTarget{WorkspaceID: 1, Type: "channel", DestinationID: "dest", GroupID: 2}, nil, "forbidden_for_channel"},
+		{"group forbids destination", &SubmitPublishingTarget{WorkspaceID: 1, Type: "group", GroupID: 2, DestinationID: "dest"}, nil, "forbidden_for_group"},
+		{"selector conflicts with legacy plan", &SubmitPublishingTarget{WorkspaceID: 1, Type: "channel", DestinationID: "dest"}, []SubmitDeliveryPlanEntry{{DestinationID: "legacy"}}, "conflicts_with_delivery_plan"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := base
+			req.PublishingTarget = tc.target
+			req.DeliveryPlan = tc.plan
+			verr, bad := ValidateSubmitJobRequest(req)
+			if !bad || verr == nil {
+				t.Fatalf("request should be rejected: err=%v", verr)
+			}
+			for _, detail := range verr.Details {
+				if detail["issue"] == tc.issue {
+					return
+				}
+			}
+			t.Fatalf("missing issue %q in details: %#v", tc.issue, verr.Details)
+		})
+	}
+}
+
+func TestSubmitPublishingTargetStrictJSONRoundTrip(t *testing.T) {
+	var req SubmitJobRequest
+	if err := decodeStrictJSON(strings.NewReader(`{"idempotency_key":"target-json-001","scenes":[{"text":"scene","duration_seconds":1}],"publishing_target":{"workspace_id":42,"type":"channel","destination_id":"instaedit_ext"}}`), &req); err != nil {
+		t.Fatalf("valid publishing_target rejected: %v", err)
+	}
+	if req.PublishingTarget == nil || req.PublishingTarget.Type != "channel" || req.PublishingTarget.DestinationID != "instaedit_ext" {
+		t.Fatalf("decoded target = %#v", req.PublishingTarget)
+	}
+	if err := decodeStrictJSON(strings.NewReader(`{"idempotency_key":"target-json-002","scenes":[{"text":"scene","duration_seconds":1}],"publishing_target":{"workspace_id":42,"type":"channel","unknown":true}}`), &req); err == nil {
+		t.Fatal("unknown publishing_target field must be rejected by strict JSON")
+	}
+}
+
+func TestResolveSelectionExpandsGroupToConcreteDeliveryPlanDeterministically(t *testing.T) {
+	catalog := &targetpublishing.Catalog{
+		WorkspaceID: 42,
+		Platform:    targetpublishing.PlatformYouTube,
+		Groups: []targetpublishing.Group{{
+			GroupID:                7,
+			WorkspaceID:            42,
+			MemberCount:            2,
+			PublishableMemberCount: 2,
+			Eligible:               true,
+			Members: []targetpublishing.GroupMember{
+				{WorkspaceID: 42, PlatformAccountID: 102, ExternalDestinationID: "ext-b", Enabled: true, CanPost: true, Capabilities: targetpublishing.Capabilities{UploadVideo: true}},
+				{WorkspaceID: 42, PlatformAccountID: 101, ExternalDestinationID: "ext-a", Enabled: true, CanPost: true, Capabilities: targetpublishing.Capabilities{UploadVideo: true}},
+			},
+		}},
+	}
+	reader := publishingTargetDestinationReader{
+		statuses: map[string]store.DeliveryDestinationStatus{},
+		rows:     map[string]*store.DeliveryDestination{},
+	}
+	for _, member := range catalog.Groups[0].Members {
+		id := targetpublishing.DestinationIDForExternal(member.ExternalDestinationID)
+		reader.statuses[id] = store.DeliveryDestinationEnabled
+		reader.rows[id] = &store.DeliveryDestination{
+			DestinationID:         id,
+			Provider:              targetpublishing.ProviderSocialGateway,
+			ExternalDestinationID: member.ExternalDestinationID,
+			ConfigurationJSON:     fmt.Sprintf(`{"workspace_id":42,"platform":"youtube","platform_account_id":%d}`, member.PlatformAccountID),
+		}
+	}
+	resolver := targetpublishing.NewTargetResolver(nil, reader)
+	selection, err := resolver.ResolveSelection(context.Background(), targetpublishing.SelectionRequest{
+		CatalogRequest: targetpublishing.CatalogRequest{WorkspaceID: 42, Platform: targetpublishing.PlatformYouTube},
+		Catalog:        catalog,
+		GroupIDs:       []int64{7},
+	})
+	if err != nil {
+		t.Fatalf("ResolveSelection: %v", err)
+	}
+	want := []string{"instaedit_ext-a", "instaedit_ext-b"}
+	if len(selection.DestinationIDs) != len(want) {
+		t.Fatalf("concrete destinations = %#v, want %#v", selection.DestinationIDs, want)
+	}
+	for i := range want {
+		if selection.DestinationIDs[i] != want[i] {
+			t.Fatalf("destination order = %#v, want %#v", selection.DestinationIDs, want)
+		}
+	}
+}
+
+type publishingTargetCatalogClient struct {
+	response *socialclient.PublishingTargetCatalogResponse
+}
+
+func (f publishingTargetCatalogClient) ListPublishingCatalog(context.Context, int64, string) (*socialclient.PublishingTargetCatalogResponse, error) {
+	return f.response, nil
+}
+
+func TestResolvePublishingTargetAdapterProjectsConcretePlan(t *testing.T) {
+	channel := socialclient.PublishingTarget{
+		WorkspaceID:           42,
+		PlatformAccountID:     101,
+		Platform:              "youtube",
+		ChannelID:             "UC-101",
+		ChannelName:           "Channel 101",
+		ExternalDestinationID: "ext-101",
+		Status:                "active",
+		Enabled:               true,
+		CanPost:               true,
+		Capabilities:          socialclient.PublishingCapabilities{UploadVideo: true},
+	}
+	destinationID := targetpublishing.DestinationIDForExternal(channel.ExternalDestinationID)
+	reader := publishingTargetDestinationReader{
+		statuses: map[string]store.DeliveryDestinationStatus{destinationID: store.DeliveryDestinationEnabled},
+		rows: map[string]*store.DeliveryDestination{destinationID: {
+			DestinationID:         destinationID,
+			Provider:              targetpublishing.ProviderSocialGateway,
+			ExternalDestinationID: channel.ExternalDestinationID,
+			ConfigurationJSON:     `{"workspace_id":42,"platform":"youtube","platform_account_id":101,"channel_id":"UC-101"}`,
+		}},
+	}
+	h := &Handlers{
+		targetResolver: targetpublishing.NewTargetResolver(
+			publishingTargetCatalogClient{response: &socialclient.PublishingTargetCatalogResponse{
+				Valid: true, ResolvedTargets: []socialclient.PublishingTarget{channel},
+			}}, reader),
+		socialClient: socialclient.New(socialclient.Config{BaseURL: "http://catalog.test"}),
+		store:        &store.SQLiteStore{},
+	}
+	resolved, err := h.resolvePublishingTarget(context.Background(), SubmitJobRequest{
+		IdempotencyKey: "adapter-channel-001",
+		PublishingTarget: &SubmitPublishingTarget{
+			WorkspaceID: 42, Type: "channel", DestinationID: destinationID,
+		},
+	})
+	if err != nil {
+		t.Fatalf("resolvePublishingTarget: %v", err)
+	}
+	if resolved.PublishingTarget != nil {
+		t.Fatal("publishing_target must be removed after resolution")
+	}
+	if len(resolved.DeliveryPlan) != 1 || resolved.DeliveryPlan[0].DestinationID != destinationID {
+		t.Fatalf("resolved delivery_plan = %#v", resolved.DeliveryPlan)
+	}
+	if resolved.DeliveryPlan[0].RetryBudget == nil || *resolved.DeliveryPlan[0].RetryBudget != DefaultRetryBudget {
+		t.Fatalf("resolved retry budget = %#v, want %d", resolved.DeliveryPlan[0].RetryBudget, DefaultRetryBudget)
+	}
+}
+
+func TestSubmitJobHTTPResolvesPublishingTargetIntoConcreteDeliveryPlan(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, db := newSubmitJobE2EStack(t)
+	defer db.Close()
+
+	const destinationID = "instaedit_ext-http-101"
+	catalogServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(socialclient.PublishingTargetCatalogResponse{
+			Valid: true,
+			ResolvedTargets: []socialclient.PublishingTarget{{
+				WorkspaceID: 42, PlatformAccountID: 101, Platform: "youtube",
+				ChannelID: "UC-http-101", ChannelName: "HTTP Channel",
+				ExternalDestinationID: "ext-http-101", Status: "active",
+				Enabled: true, CanPost: true,
+				Capabilities: socialclient.PublishingCapabilities{UploadVideo: true},
+			}},
+		})
+	}))
+	defer catalogServer.Close()
+	h.WithSocialClient(socialclient.New(socialclient.Config{BaseURL: catalogServer.URL}))
+	if _, err := db.DB().Exec(`INSERT INTO delivery_destinations (destination_id, provider, external_destination_id, name, enabled, configuration_json, created_at, updated_at) VALUES (?, 'social_gateway', ?, 'HTTP Channel', 1, ?, datetime('now'), datetime('now'))`, destinationID, "ext-http-101", `{"workspace_id":42,"platform":"youtube","platform_account_id":101,"channel_id":"UC-http-101"}`); err != nil {
+		t.Fatalf("seed destination: %v", err)
+	}
+
+	r := gin.New()
+	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
+	body := validSubmitJobBody("http-target-001")
+	body.DeliveryPlan = nil
+	body.PublishingTarget = &SubmitPublishingTarget{WorkspaceID: 42, Type: "channel", DestinationID: destinationID}
+	w := postSubmitJob(t, r, body)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("POST with publishing_target: status=%d body=%s", w.Code, w.Body.String())
+	}
+	var response struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	var gotDestination string
+	if err := db.DB().QueryRow(`SELECT destination_id FROM job_delivery_plans WHERE job_id = ?`, response.JobID).Scan(&gotDestination); err != nil {
+		t.Fatalf("read concrete delivery plan: %v", err)
+	}
+	if gotDestination != destinationID {
+		t.Fatalf("persisted destination_id=%q, want %q", gotDestination, destinationID)
+	}
+}
+
+func TestSubmitPublishingTargetDoesNotLeakIntoWorkerPayload(t *testing.T) {
+	req := SubmitJobRequest{
+		IdempotencyKey: "target-projection-001",
+		Scenes:         []SubmitScene{{Text: "scene", DurationSeconds: 1}},
+		PublishingTarget: &SubmitPublishingTarget{
+			WorkspaceID: 42, Type: "channel", DestinationID: "instaedit_ext",
+		},
+	}
+	canonical := (&Handlers{}).NormalizeExternalJobSubmission(req)
+	if canonical.WorkerPayload == nil {
+		t.Fatal("worker payload is nil")
+	}
+	for _, key := range []string{"publishing_target", "workspace_id", "target_type", "group_id"} {
+		if _, ok := canonical.WorkerPayload[key]; ok {
+			t.Fatalf("worker payload leaked selector key %q: %#v", key, canonical.WorkerPayload[key])
+		}
+	}
+}
+
+func TestSubmitJobRequestWireDTOIncludesPublishingTarget(t *testing.T) {
+	data, err := json.Marshal(SubmitJobRequest{
+		IdempotencyKey: "wire-001",
+		PublishingTarget: &SubmitPublishingTarget{
+			WorkspaceID: 42, Type: "group", GroupID: 7,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "publishing_target") {
+		t.Fatalf("wire payload omitted publishing_target: %s", data)
+	}
+}

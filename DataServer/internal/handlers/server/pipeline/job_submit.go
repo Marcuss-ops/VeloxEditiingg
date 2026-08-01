@@ -280,6 +280,19 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 			return
 		}
 
+		// Resolve the optional channel/group selector into the same concrete
+		// delivery_plan shape consumed by legacy enqueue code. This is the
+		// only public-submit boundary where publishing_target is interpreted;
+		// the renderer never receives the selector or upstream group metadata.
+		if req.PublishingTarget != nil {
+			resolvedReq, targetErr := h.resolvePublishingTarget(c.Request.Context(), req)
+			if targetErr != nil {
+				writePublishingTargetError(c, targetErr)
+				return
+			}
+			req = resolvedReq
+		}
+
 		// Derive Creator-compatible identity via the canonical
 		// pipeline path: SubmitJobRequest → ParseRemotePipelineResult
 		// (typed DTO) → ToWorkerPayload → CanonicalCompletedPayload.

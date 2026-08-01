@@ -44,6 +44,11 @@ type SubmitJobRequest struct {
 	// allowed (defaults to scene.composite.v1's default resolver).
 	DeliveryPlan []SubmitDeliveryPlanEntry `json:"delivery_plan,omitempty"`
 
+	// PublishingTarget is an optional server-side channel/group selector.
+	// It is never serialized into the renderer payload: the resolver expands
+	// it into concrete DeliveryPlan entries before the canonical projection.
+	PublishingTarget *SubmitPublishingTarget `json:"publishing_target,omitempty"`
+
 	// Publications are the canonical publication intents for the
 	// rendered outputs. They are kept separate from the renderer
 	// payload and are consumed by the publication/delivery pipeline.
@@ -248,6 +253,18 @@ type SubmitAudioTrack struct {
 	FadeInSeconds   float64 `json:"fade_in_seconds,omitempty"`
 	FadeOutSeconds  float64 `json:"fade_out_seconds,omitempty"`
 	DuckingEnabled  bool    `json:"ducking_enabled,omitempty"`
+}
+
+// SubmitPublishingTarget selects one concrete channel or one upstream group.
+// Channel selection uses the opaque Velox destination_id returned by the
+// publishing catalog; group selection uses the upstream group_id. The
+// workspace_id is explicit so the server can fail closed against a catalog
+// from another workspace.
+type SubmitPublishingTarget struct {
+	WorkspaceID   int64  `json:"workspace_id"`
+	Type          string `json:"type"`
+	DestinationID string `json:"destination_id,omitempty"`
+	GroupID       int64  `json:"group_id,omitempty"`
 }
 
 // SubmitDeliveryPlanEntry is a single destination in the delivery plan.

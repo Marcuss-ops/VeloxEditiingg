@@ -56,6 +56,7 @@ func main() {
 		{"SubmitLayer", apiwire.SubmitLayer{}},
 		{"SubmitSubtitleTrack", apiwire.SubmitSubtitleTrack{}},
 		{"SubmitDeliveryPlanEntry", apiwire.SubmitDeliveryPlanEntry{}},
+		{"SubmitPublishingTarget", apiwire.SubmitPublishingTarget{}},
 		{"SubmitManifestRef", apiwire.SubmitManifestRef{}},
 		{"SubmitJobBatchRequest", apiwire.SubmitJobBatchRequest{}},
 		{"SubmitJobBatchItemResult", apiwire.SubmitJobBatchItemResult{}},

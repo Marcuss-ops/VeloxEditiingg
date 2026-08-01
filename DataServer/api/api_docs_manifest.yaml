@@ -64,6 +64,7 @@ routes:
   - path: /api/v1/jobs
     method: post
     operationId: submitJob
+    security: bearerM2MToken
     tag: jobs
     summary: "Submit a complete video job for external automation."
     parameters:
@@ -88,6 +89,7 @@ routes:
   - path: /api/v1/jobs/batch
     method: post
     operationId: submitJobBatch
+    security: bearerM2MToken
     tag: jobs
     summary: "Submit multiple independent video jobs in one request."
     parameters:
@@ -133,6 +135,7 @@ routes:
   - path: /api/v1/jobs/{job_id}
     method: get
     operationId: getSubmittedJob
+    security: bearerM2MToken
     tag: jobs
     summary: "Poll the status of a previously submitted job."
     parameters:
