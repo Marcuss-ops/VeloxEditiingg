@@ -170,6 +170,24 @@ func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, w
 	if err != nil {
 		return nil, nil, fmt.Errorf("task claim-with-attempt insert: %w", err)
 	}
+	if err := persistMasterExecutionEventTx(ctx, tx, masterExecutionEvent{
+		AttemptID: attemptID, JobID: t.JobID, TaskID: t.ID, WorkerID: workerID,
+		WorkerSessionID: workerSessionID, SnapshotID: workerSnapshotID, LeaseID: leaseID,
+		ExecutorID: t.ExecutorID, ExecutorVersion: t.ExecutorVersion,
+		Scope: "task", Component: "master.placement", Action: "match", Phase: "queue",
+		StartedAt: now, CompletedAt: time.Now().UTC(),
+	}); err != nil {
+		return nil, nil, fmt.Errorf("task claim master telemetry: %w", err)
+	}
+	if err := persistMasterExecutionEventTx(ctx, tx, masterExecutionEvent{
+		AttemptID: attemptID, JobID: t.JobID, TaskID: t.ID, WorkerID: workerID,
+		WorkerSessionID: workerSessionID, SnapshotID: workerSnapshotID, LeaseID: leaseID,
+		ExecutorID: t.ExecutorID, ExecutorVersion: t.ExecutorVersion,
+		Scope: "task", Component: "master.lease", Action: "issue", Phase: "queue",
+		StartedAt: now, CompletedAt: time.Now().UTC(),
+	}); err != nil {
+		return nil, nil, fmt.Errorf("task claim lease telemetry: %w", err)
+	}
 
 	// 6. Read task_spec payload (continues ClaimNextReadyTask ergonomics).
 	var specPayloadJSON sql.NullString
@@ -307,6 +325,15 @@ func (r *SQLiteTaskRepository) AcceptTaskAtomic(ctx context.Context, attempt *ta
 		// genuinely-missing rows).
 		return fmt.Errorf("task accept atomic attempt %s not PENDING or missing (canonical drift): %w",
 			attempt.ID, taskgraph.ErrTransitionConflict)
+	}
+	if err := persistMasterExecutionEventTx(ctx, tx, masterExecutionEvent{
+		AttemptID: attempt.ID, JobID: attempt.JobID, TaskID: attempt.TaskID,
+		WorkerID: attempt.WorkerID, WorkerSessionID: attempt.WorkerSessionID,
+		SnapshotID: attempt.WorkerSnapshotID, LeaseID: attempt.LeaseID,
+		Scope: "task", Component: "master.offer", Action: "accept_to_start", Phase: "queue",
+		StartedAt: time.Now().UTC(), CompletedAt: time.Now().UTC(),
+	}); err != nil {
+		return fmt.Errorf("task accept master telemetry: %w", err)
 	}
 
 	// 3. Job roll-up: once the worker acceptance is persisted, the parent
@@ -505,6 +532,7 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 			_ = tx.Rollback()
 		}
 	}()
+	ingestStartedAt := time.Now().UTC()
 
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -537,6 +565,14 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 	}
 	if err := persistParallelism(ctx, tx, cmd, now); err != nil {
 		return err
+	}
+	if err := persistMasterExecutionEventTx(ctx, tx, masterExecutionEvent{
+		EventID:   fmt.Sprintf("master-%s-result-ingest-tx", cmd.AttemptID),
+		AttemptID: cmd.AttemptID, TaskID: cmd.TaskID,
+		Scope: "attempt", Component: "db", Action: "result_ingest_tx", Phase: "finalize",
+		StartedAt: ingestStartedAt, CompletedAt: time.Now().UTC(),
+	}); err != nil {
+		return fmt.Errorf("task ingest master telemetry: %w", err)
 	}
 	if err := persistPhaseTimingsAndExecutionEvents(ctx, tx, cmd); err != nil {
 		return err

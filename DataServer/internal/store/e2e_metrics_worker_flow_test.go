@@ -201,8 +201,8 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 	).Scan(&executionEventCount); err != nil {
 		t.Fatalf("count persisted execution events: %v", err)
 	}
-	if executionEventCount != 2 {
-		t.Fatalf("execution events=%d; want 1 master + 1 authoritative worker event", executionEventCount)
+	if executionEventCount != 3 {
+		t.Fatalf("execution events=%d; want 2 master + 1 authoritative worker event", executionEventCount)
 	}
 	var staleWorkerCount, masterEventCount int
 	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_execution_events WHERE event_id = 'e2e-stale-worker-event'`).Scan(&staleWorkerCount); err != nil {
