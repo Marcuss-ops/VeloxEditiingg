@@ -1,3 +1,6 @@
+// Package pipeline / pipeline_run_submit.go — pipeline run submit phase.
+// Extracted from pipeline_run_actions.go: the FAILED-run retry flow that
+// re-issues the remote engine call with the original payload.
 package pipeline
 
 import (

@@ -46,9 +46,13 @@
 //	pipeline_create.go     — CreatePipelineRun handler + buildRemotePayload
 //	                         (request-shape mapper).
 //	pipeline_run_status.go — PipelineRunStatus handler.
-//	pipeline_run_actions.go — lookupPipelineRun + CancelPipelineRun +
-//	                         RetryPipelineRun + PipelineRunTimeline +
-//	                         PipelineRunArtifacts + PipelineRunDeliveries.
+//	pipeline_run_actions.go    — lookupPipelineRun + CancelPipelineRun +
+//	                             errPipelineRunNotFound (shared run plumbing).
+//	pipeline_run_submit.go     — RetryPipelineRun (submit phase).
+//	pipeline_run_progress.go   — PipelineRunTimeline + eventTimestamp
+//	                             (advancement phase).
+//	pipeline_run_completion.go — PipelineRunArtifacts + PipelineRunDeliveries
+//	                             (completion phase).
 //	pipeline_run_validator.go — ValidateCreateRequest + ValidationError.
 //	pipeline_scripts.go    — ScriptSimple / ScriptBatch.
 //
