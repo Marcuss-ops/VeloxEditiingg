@@ -86,3 +86,40 @@ func TestHasAudioTracksCharacterization(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeAudioAndSubtitleTracksHaveSameShapeBehavior(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  interface{}
+	}{
+		{
+			name: "interface slice",
+			raw: []interface{}{
+				map[string]interface{}{"source_url": "music.wav"},
+				map[string]interface{}{},
+				"not a track",
+			},
+		},
+		{
+			name: "typed map slice",
+			raw: []map[string]interface{}{
+				{"source_url": "voice.wav"},
+				{},
+			},
+		},
+		{
+			name: "unsupported shape",
+			raw:  "not a list",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			audio := normalizeAudioTracks(tt.raw)
+			subtitles := normalizeSubtitleTracks(tt.raw)
+			if !reflect.DeepEqual(audio, subtitles) {
+				t.Fatalf("audio tracks = %#v, subtitle tracks = %#v", audio, subtitles)
+			}
+		})
+	}
+}

@@ -91,22 +91,26 @@ func hasClipTimelinePayload(payloadMap map[string]interface{}) bool {
 	return false
 }
 func normalizeAudioTracks(raw interface{}) []map[string]interface{} {
-	var tracks []map[string]interface{}
+	return normalizeMapList(raw)
+}
+
+func normalizeMapList(raw interface{}) []map[string]interface{} {
+	var result []map[string]interface{}
 	switch values := raw.(type) {
 	case []map[string]interface{}:
 		for _, value := range values {
 			if len(value) > 0 {
-				tracks = append(tracks, value)
+				result = append(result, value)
 			}
 		}
 	case []interface{}:
 		for _, value := range values {
-			if track, ok := value.(map[string]interface{}); ok && len(track) > 0 {
-				tracks = append(tracks, track)
+			if item, ok := value.(map[string]interface{}); ok && len(item) > 0 {
+				result = append(result, item)
 			}
 		}
 	}
-	return tracks
+	return result
 }
 func audioTrackKey(track map[string]interface{}) string {
 	if track == nil {
@@ -121,22 +125,7 @@ func audioTrackKey(track map[string]interface{}) string {
 	return fmt.Sprintf("%s\x00%s\x00%.6f", role, source, offset)
 }
 func normalizeSubtitleTracks(raw interface{}) []map[string]interface{} {
-	var tracks []map[string]interface{}
-	switch values := raw.(type) {
-	case []map[string]interface{}:
-		for _, value := range values {
-			if len(value) > 0 {
-				tracks = append(tracks, value)
-			}
-		}
-	case []interface{}:
-		for _, value := range values {
-			if track, ok := value.(map[string]interface{}); ok && len(track) > 0 {
-				tracks = append(tracks, track)
-			}
-		}
-	}
-	return tracks
+	return normalizeMapList(raw)
 }
 func syncAudioURLFromVoiceover(payloadMap map[string]interface{}) {
 	if payloadMap == nil {
