@@ -148,30 +148,6 @@ func ShouldForwardPipelineResult(result map[string]interface{}) bool {
 	return true
 }
 
-// hasAudioTracks returns true when the payload carries at least one
-// top-level audio_tracks entry with a source_url. This covers background
-// music, scene_clip_audio, and global narration beds submitted via
-// POST /api/v1/jobs with audio_tracks[].
-func hasAudioTracks(flat map[string]interface{}) bool {
-	switch tracks := flat["audio_tracks"].(type) {
-	case []interface{}:
-		for _, item := range tracks {
-			if track, ok := item.(map[string]interface{}); ok {
-				if payload.FirstString(track, "source_url", "source", "url") != "" {
-					return true
-				}
-			}
-		}
-	case []map[string]interface{}:
-		for _, track := range tracks {
-			if payload.FirstString(track, "source_url", "source", "url") != "" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func hasRenderableMedia(flat map[string]interface{}) bool {
 	for _, key := range []string{"items", "clips", "images", "intro_clip_paths", "stock_clip_paths", "scene_image_paths"} {
 		if values, ok := flat[key].([]interface{}); ok && len(values) > 0 {
@@ -195,40 +171,6 @@ func hasRenderableMedia(flat map[string]interface{}) bool {
 		}
 	}
 	return false
-}
-
-func extractVoiceoverPaths(p map[string]interface{}) []string {
-	var candidates []string
-	if s := payload.FirstString(p, "voiceover_path", "audio_path", "voiceover"); s != "" {
-		candidates = append(candidates, s)
-	}
-	if v, ok := p["voiceover_paths"]; ok {
-		candidates = append(candidates, payload.NormalizeToStrings(v)...)
-	}
-	if voiceover, ok := p["voiceover"].(map[string]interface{}); ok {
-		candidates = append(candidates,
-			payload.FirstString(voiceover, "local_path", "path", "drive_link", "url"),
-		)
-	}
-	if nested, ok := p["voiceover_info"].(map[string]interface{}); ok {
-		candidates = append(candidates,
-			payload.FirstString(nested, "local_path", "path", "drive_link", "url"),
-		)
-	}
-	result := make([]string, 0, len(candidates))
-	seen := make(map[string]struct{}, len(candidates))
-	for _, item := range candidates {
-		trimmed := strings.TrimSpace(item)
-		if trimmed == "" {
-			continue
-		}
-		if _, exists := seen[trimmed]; exists {
-			continue
-		}
-		seen[trimmed] = struct{}{}
-		result = append(result, trimmed)
-	}
-	return result
 }
 
 func extractScenesJSONFromFile(path string) (string, error) {
