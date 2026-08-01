@@ -144,6 +144,28 @@ func TestFetchTransferTimeoutIsCanonical(t *testing.T) {
 	}
 }
 
+func TestFetchUsesSystemTempWhenPolicyOmitsTempDir(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.AllowPrivateNetworks = true
+	policy.Transport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/plain"}},
+			Body:       io.NopCloser(strings.NewReader("safe input")),
+			Request:    req,
+		}, nil
+	})
+
+	fetched, err := NewFetcher(policy).Fetch(context.Background(), "https://example.test/input", KindUnknown)
+	if err != nil {
+		t.Fatalf("Fetch with default temp policy: %v", err)
+	}
+	defer os.Remove(fetched.Path)
+	if !strings.HasPrefix(filepath.Clean(fetched.Path), filepath.Clean(os.TempDir())+string(filepath.Separator)) {
+		t.Fatalf("download path = %q, want system temp directory", fetched.Path)
+	}
+}
+
 func TestFetchRejectsDNSRebindingAfterRedirect(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "http://rebind.test/final", http.StatusFound)

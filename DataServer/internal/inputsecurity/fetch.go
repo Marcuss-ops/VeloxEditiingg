@@ -136,7 +136,11 @@ func (f *Fetcher) Fetch(ctx context.Context, rawURL string, kind Kind) (*Fetched
 		_ = f.quarantineOrRemove(tmpPath, kind, ErrDownloadTooLarge, "stream exceeded the input byte limit")
 		return nil, f.reject(kind, newError(kind, ErrDownloadTooLarge, "stream exceeded the input byte limit", nil), uint64(maxInt64(written)))
 	}
-	validation, validationErr := f.ValidateFile(ctx, tmpPath, kind, resp.Header.Get("Content-Type"))
+	// Fetch may fill in a system temp directory when the caller supplied a
+	// partial policy. Validate against that effective policy, otherwise a
+	// valid download created in os.TempDir would fail its own path allowlist.
+	validator := &Fetcher{policy: policy}
+	validation, validationErr := validator.ValidateFile(ctx, tmpPath, kind, resp.Header.Get("Content-Type"))
 	if validationErr != nil {
 		_ = f.quarantineOrRemove(tmpPath, kind, CodeOf(validationErr), validationErr.Error())
 		return nil, f.reject(kind, validationErr, uint64(maxInt64(written)))
