@@ -21,16 +21,22 @@ type publishingTargetDestinationReader struct {
 	rows     map[string]*store.DeliveryDestination
 }
 
-func (f publishingTargetDestinationReader) BatchDeliveryDestinationsStatus(context.Context, []string) (map[string]store.DeliveryDestinationStatus, error) {
-	return f.statuses, nil
-}
-
-func (f publishingTargetDestinationReader) GetDeliveryDestination(_ context.Context, id string) (*store.DeliveryDestination, error) {
-	row := f.rows[id]
-	if row == nil {
-		return nil, store.ErrDeliveryNoRow
+func (f publishingTargetDestinationReader) BatchDeliveryDestinations(_ context.Context, ids []string) (map[string]*store.DeliveryDestination, error) {
+	out := make(map[string]*store.DeliveryDestination, len(ids))
+	for _, id := range ids {
+		if row := f.rows[id]; row != nil {
+			copy := *row
+			if status, ok := f.statuses[id]; ok {
+				copy.Enabled = status == store.DeliveryDestinationEnabled
+			}
+			out[id] = &copy
+			continue
+		}
+		if status, ok := f.statuses[id]; ok && status == store.DeliveryDestinationDisabled {
+			out[id] = &store.DeliveryDestination{DestinationID: id, Enabled: false}
+		}
 	}
-	return row, nil
+	return out, nil
 }
 
 func TestValidateSubmitJobRequestPublishingTargetRules(t *testing.T) {
@@ -108,6 +114,7 @@ func TestResolveSelectionExpandsGroupToConcreteDeliveryPlanDeterministically(t *
 		reader.rows[id] = &store.DeliveryDestination{
 			DestinationID:         id,
 			Provider:              targetpublishing.ProviderSocialGateway,
+			Enabled:               true,
 			ExternalDestinationID: member.ExternalDestinationID,
 			ConfigurationJSON:     fmt.Sprintf(`{"workspace_id":42,"platform":"youtube","platform_account_id":%d}`, member.PlatformAccountID),
 		}
@@ -159,6 +166,7 @@ func TestResolvePublishingTargetAdapterProjectsConcretePlan(t *testing.T) {
 		rows: map[string]*store.DeliveryDestination{destinationID: {
 			DestinationID:         destinationID,
 			Provider:              targetpublishing.ProviderSocialGateway,
+			Enabled:               true,
 			ExternalDestinationID: channel.ExternalDestinationID,
 			ConfigurationJSON:     `{"workspace_id":42,"platform":"youtube","platform_account_id":101,"channel_id":"UC-101"}`,
 		}},
@@ -237,6 +245,154 @@ func TestSubmitJobHTTPResolvesPublishingTargetIntoConcreteDeliveryPlan(t *testin
 	}
 	if gotDestination != destinationID {
 		t.Fatalf("persisted destination_id=%q, want %q", gotDestination, destinationID)
+	}
+}
+
+func TestSubmitJobHTTPResolvesGroupIntoDeterministicConcretePlans(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, db := newSubmitJobE2EStack(t)
+	defer db.Close()
+
+	members := []struct {
+		accountID int64
+		external  string
+	}{
+		{accountID: 202, external: "ext-group-b"},
+		{accountID: 101, external: "ext-group-a"},
+	}
+	for _, member := range members {
+		destinationID := targetpublishing.DestinationIDForExternal(member.external)
+		if _, err := db.DB().Exec(`INSERT INTO delivery_destinations (destination_id, provider, external_destination_id, name, enabled, configuration_json, created_at, updated_at) VALUES (?, 'social_gateway', ?, ?, 1, ?, datetime('now'), datetime('now'))`, destinationID, member.external, member.external, fmt.Sprintf(`{"workspace_id":42,"platform":"youtube","platform_account_id":%d}`, member.accountID)); err != nil {
+			t.Fatalf("seed group destination %s: %v", destinationID, err)
+		}
+	}
+
+	catalogServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(socialclient.PublishingTargetCatalogResponse{
+			Valid: true,
+			ResolvedGroups: []socialclient.PublishingGroup{{
+				WorkspaceID: 42, GroupID: 77, Name: "Group 77", MemberCount: 2,
+				PublishableMemberCount: 2, Status: "active", CanPost: true,
+				Members: []socialclient.PublishingGroupMember{
+					{WorkspaceID: 42, PlatformAccountID: 202, ExternalDestinationID: "ext-group-b", Enabled: true, CanPost: true, Capabilities: socialclient.PublishingCapabilities{UploadVideo: true}},
+					{WorkspaceID: 42, PlatformAccountID: 101, ExternalDestinationID: "ext-group-a", Enabled: true, CanPost: true, Capabilities: socialclient.PublishingCapabilities{UploadVideo: true}},
+				},
+			}},
+		})
+	}))
+	defer catalogServer.Close()
+	h.WithSocialClient(socialclient.New(socialclient.Config{BaseURL: catalogServer.URL}))
+
+	r := gin.New()
+	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
+	body := validSubmitJobBody("http-group-001")
+	body.DeliveryPlan = nil
+	body.PublishingTarget = &SubmitPublishingTarget{WorkspaceID: 42, Type: "group", GroupID: 77}
+	w := postSubmitJob(t, r, body)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("group submit: status=%d body=%s", w.Code, w.Body.String())
+	}
+	var response struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := db.DB().Query(`SELECT destination_id FROM job_delivery_plans WHERE job_id = ? ORDER BY priority ASC, destination_id ASC`, response.JobID)
+	if err != nil {
+		t.Fatalf("read group delivery plans: %v", err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var destinationID string
+		if err := rows.Scan(&destinationID); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, destinationID)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"instaedit_ext-group-a", "instaedit_ext-group-b"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("persisted group delivery plan = %#v, want %#v", got, want)
+	}
+}
+
+func TestSubmitJobHTTPRejectsGroupAtomicallyWhenMemberDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, db := newSubmitJobE2EStack(t)
+	defer db.Close()
+
+	for _, member := range []struct {
+		accountID int64
+		external  string
+		enabled   int
+	}{
+		{accountID: 101, external: "ext-disabled-a", enabled: 1},
+		{accountID: 202, external: "ext-disabled-b", enabled: 0},
+	} {
+		destinationID := targetpublishing.DestinationIDForExternal(member.external)
+		if _, err := db.DB().Exec(`INSERT INTO delivery_destinations (destination_id, provider, external_destination_id, name, enabled, configuration_json, created_at, updated_at) VALUES (?, 'social_gateway', ?, ?, ?, ?, datetime('now'), datetime('now'))`, destinationID, member.external, member.external, member.enabled, fmt.Sprintf(`{"workspace_id":42,"platform":"youtube","platform_account_id":%d}`, member.accountID)); err != nil {
+			t.Fatalf("seed disabled-group destination %s: %v", destinationID, err)
+		}
+	}
+
+	catalogServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(socialclient.PublishingTargetCatalogResponse{
+			Valid: true,
+			ResolvedGroups: []socialclient.PublishingGroup{{
+				WorkspaceID: 42, GroupID: 88, Name: "Group 88", MemberCount: 2,
+				PublishableMemberCount: 2, Status: "active", CanPost: true,
+				Members: []socialclient.PublishingGroupMember{
+					{WorkspaceID: 42, PlatformAccountID: 101, ExternalDestinationID: "ext-disabled-a", Enabled: true, CanPost: true, Capabilities: socialclient.PublishingCapabilities{UploadVideo: true}},
+					{WorkspaceID: 42, PlatformAccountID: 202, ExternalDestinationID: "ext-disabled-b", Enabled: true, CanPost: true, Capabilities: socialclient.PublishingCapabilities{UploadVideo: true}},
+				},
+			}},
+		})
+	}))
+	defer catalogServer.Close()
+	h.WithSocialClient(socialclient.New(socialclient.Config{BaseURL: catalogServer.URL}))
+
+	count := func(table string) int {
+		var n int
+		if err := db.DB().QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		return n
+	}
+	baseline := map[string]int{
+		"jobs": count("jobs"), "tasks": count("tasks"),
+		"task_specs": count("task_specs"), "job_delivery_plans": count("job_delivery_plans"),
+	}
+
+	r := gin.New()
+	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
+	body := validSubmitJobBody("http-group-disabled-001")
+	body.DeliveryPlan = nil
+	body.PublishingTarget = &SubmitPublishingTarget{WorkspaceID: 42, Type: "group", GroupID: 88}
+	w := postSubmitJob(t, r, body)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("disabled group submit: status=%d body=%s", w.Code, w.Body.String())
+	}
+	var response map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["error"] != "invalid_payload" || response["ok"] != false {
+		t.Fatalf("disabled group response = %#v", response)
+	}
+	message, _ := response["message"].(string)
+	if !strings.Contains(message, "group_id=88") || !strings.Contains(message, "instaedit_ext-disabled-b") {
+		t.Fatalf("disabled group response lacks group/member context: %#v", response)
+	}
+	for table, want := range baseline {
+		if got := count(table); got != want {
+			t.Errorf("%s rows after rejected group = %d, want %d", table, got, want)
+		}
 	}
 }
 

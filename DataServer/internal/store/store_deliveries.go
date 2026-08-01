@@ -410,6 +410,85 @@ func (s *SQLiteStore) BatchDeliveryDestinationsStatus(ctx context.Context, ids [
 	return out, nil
 }
 
+// BatchDeliveryDestinations returns a point-in-time local registry snapshot
+// for the requested destination IDs. It deliberately returns rows regardless
+// of enabled state so callers can distinguish a disabled member from a
+// missing member without issuing per-member queries. IDs absent from the
+// registry are omitted from the result map.
+func (s *SQLiteStore) BatchDeliveryDestinations(ctx context.Context, ids []string) (map[string]*DeliveryDestination, error) {
+	out := make(map[string]*DeliveryDestination, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	unique := make([]string, 0, len(ids))
+	for _, rawID := range ids {
+		id := strings.TrimSpace(rawID)
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	if len(unique) == 0 {
+		return out, nil
+	}
+
+	// Keep every chunk inside one read transaction. SQLite establishes the
+	// read snapshot on the first SELECT and holds it until commit, so a large
+	// group cannot observe mixed enabled/configuration state if a destination
+	// changes while the snapshot is being collected.
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("store: BatchDeliveryDestinations: begin snapshot: %w", err)
+	}
+	defer tx.Rollback()
+
+	const chunkSize = 500
+	for start := 0; start < len(unique); start += chunkSize {
+		end := start + chunkSize
+		if end > len(unique) {
+			end = len(unique)
+		}
+		chunk := unique[start:end]
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(chunk)), ",")
+		query := `SELECT destination_id, provider, COALESCE(external_destination_id, ''),
+		                 COALESCE(folder_id, ''), COALESCE(name, ''), enabled,
+		                 COALESCE(configuration_json, ''), created_at, updated_at
+		          FROM delivery_destinations WHERE destination_id IN (` + placeholders + `)`
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		rows, err := tx.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("store: BatchDeliveryDestinations: query: %w", err)
+		}
+		for rows.Next() {
+			var d DeliveryDestination
+			var enabledInt int
+			if err := rows.Scan(&d.DestinationID, &d.Provider, &d.ExternalDestinationID,
+				&d.FolderID, &d.Name, &enabledInt, &d.ConfigurationJSON,
+				&d.CreatedAt, &d.UpdatedAt); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("store: BatchDeliveryDestinations: scan: %w", err)
+			}
+			d.Enabled = enabledInt != 0
+			copy := d
+			out[d.DestinationID] = &copy
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("store: BatchDeliveryDestinations: rows: %w", err)
+		}
+		rows.Close()
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("store: BatchDeliveryDestinations: commit snapshot: %w", err)
+	}
+	return out, nil
+}
+
 // GetDeliveryDestination returns a single destination by id, or
 // ErrDeliveryNoRow when missing (sql.ErrNoRows is normalized).
 //

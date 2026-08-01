@@ -37,8 +37,9 @@ type CatalogClient interface {
 
 // DestinationReader is the local Velox destination registry boundary.
 type DestinationReader interface {
-	BatchDeliveryDestinationsStatus(context.Context, []string) (map[string]store.DeliveryDestinationStatus, error)
-	GetDeliveryDestination(context.Context, string) (*store.DeliveryDestination, error)
+	// BatchDeliveryDestinations returns one local registry snapshot for all
+	// requested opaque destinations. Missing IDs are absent from the map.
+	BatchDeliveryDestinations(context.Context, []string) (map[string]*store.DeliveryDestination, error)
 }
 
 // TargetResolver validates authoritative publishing targets and selected
@@ -257,32 +258,60 @@ func (r *TargetResolver) ResolveSelection(ctx context.Context, req SelectionRequ
 		Groups:         make([]Group, 0, len(req.GroupIDs)),
 		DestinationIDs: make([]string, 0, len(req.DestinationIDs)),
 	}
+	candidateByID := make(map[string]Channel)
+	candidateGroupByID := make(map[string]int64)
+	orderedIDs := make([]string, 0, len(req.DestinationIDs))
 	seenDestinations := make(map[string]struct{}, len(req.DestinationIDs))
+	seenChannels := make(map[string]struct{}, len(req.DestinationIDs))
+	addCandidate := func(channel Channel, groupID int64) {
+		id := strings.TrimSpace(channel.DestinationID)
+		if id == "" {
+			return
+		}
+		if _, exists := seenDestinations[id]; !exists {
+			seenDestinations[id] = struct{}{}
+			orderedIDs = append(orderedIDs, id)
+			candidateByID[id] = channel
+		}
+		if groupID > 0 {
+			// Keep the first group deterministically when two selected groups
+			// share a concrete destination. The destination is still emitted
+			// once; only the diagnostic owner needs to be stable.
+			if _, exists := candidateGroupByID[id]; !exists {
+				candidateGroupByID[id] = groupID
+			}
+		}
+	}
+
 	for _, rawID := range req.DestinationIDs {
 		id := strings.TrimSpace(rawID)
 		if id == "" {
 			return nil, fmt.Errorf("%w: empty destination_id", ErrTargetDestinationInvalid)
 		}
-		if _, duplicate := seenDestinations[id]; duplicate {
-			continue
-		}
-		seenDestinations[id] = struct{}{}
 		channel, exists := channelsByID[id]
 		if !exists {
 			return nil, fmt.Errorf("%w: destination_id=%q", ErrTargetNotFound, id)
 		}
+		if channel.WorkspaceID != 0 && channel.WorkspaceID != req.WorkspaceID {
+			return nil, fmt.Errorf("%w: destination_id=%q workspace mismatch", ErrTargetDestinationInvalid, id)
+		}
+		if channel.Platform != "" && normalizePlatform(channel.Platform) != normalizePlatform(req.Platform) {
+			return nil, fmt.Errorf("%w: destination_id=%q platform mismatch", ErrTargetDestinationInvalid, id)
+		}
 		if !channel.Eligible {
 			return nil, fmt.Errorf("%w: destination_id=%q", ErrTargetNotPublishable, id)
 		}
-		if err := r.validateLocalDestination(ctx, req.WorkspaceID, req.Platform, channel); err != nil {
-			return nil, err
+		if _, duplicate := seenChannels[id]; !duplicate {
+			seenChannels[id] = struct{}{}
+			selection.Channels = append(selection.Channels, channel)
 		}
-		selection.Channels = append(selection.Channels, channel)
-		appendUniqueDestinationID(&selection.DestinationIDs, channel.DestinationID)
+		addCandidate(channel, 0)
 	}
 
-	seenGroups := make(map[int64]struct{}, len(req.GroupIDs))
-	for _, id := range req.GroupIDs {
+	groupIDs := append([]int64(nil), req.GroupIDs...)
+	sort.Slice(groupIDs, func(i, j int) bool { return groupIDs[i] < groupIDs[j] })
+	seenGroups := make(map[int64]struct{}, len(groupIDs))
+	for _, id := range groupIDs {
 		if id <= 0 {
 			return nil, fmt.Errorf("%w: group_id=%d", ErrGroupNotFound, id)
 		}
@@ -294,17 +323,58 @@ func (r *TargetResolver) ResolveSelection(ctx context.Context, req SelectionRequ
 		if !exists {
 			return nil, fmt.Errorf("%w: group_id=%d", ErrGroupNotFound, id)
 		}
+		if group.WorkspaceID != 0 && group.WorkspaceID != req.WorkspaceID {
+			return nil, fmt.Errorf("%w: group_id=%d workspace mismatch", ErrGroupNotPublishable, id)
+		}
 		if !group.Eligible {
 			return nil, fmt.Errorf("%w: group_id=%d", ErrGroupNotPublishable, id)
 		}
 		group.Members = orderedGroupMembers(group.Members)
-		if err := r.validateGroupMembers(ctx, req.WorkspaceID, req.Platform, group); err != nil {
-			return nil, err
+		if len(group.Members) == 0 {
+			return nil, fmt.Errorf("%w: group_id=%d has no member snapshot", ErrGroupNotPublishable, id)
+		}
+		for _, member := range group.Members {
+			if member.WorkspaceID != 0 && member.WorkspaceID != req.WorkspaceID {
+				return nil, fmt.Errorf("%w: group_id=%d member account=%d workspace mismatch", ErrGroupNotPublishable, id, member.PlatformAccountID)
+			}
+			if !member.Enabled || !member.CanPost || !optionalBoolTrue(member.AccountActive) || !optionalBoolTrue(member.WorkspaceBindingEnabled) || !member.Capabilities.UploadVideo {
+				return nil, fmt.Errorf("%w: group_id=%d member account=%d is not publishable", ErrGroupNotPublishable, id, member.PlatformAccountID)
+			}
+			addCandidate(Channel{
+				DestinationID:           DestinationIDForExternal(member.ExternalDestinationID),
+				WorkspaceID:             req.WorkspaceID,
+				PlatformAccountID:       member.PlatformAccountID,
+				Platform:                normalizePlatform(req.Platform),
+				ExternalDestinationID:   member.ExternalDestinationID,
+				UpstreamEnabled:         member.Enabled,
+				CanPost:                 member.CanPost,
+				AccountActive:           member.AccountActive,
+				WorkspaceBindingEnabled: member.WorkspaceBindingEnabled,
+				Capabilities:            member.Capabilities,
+				Eligible:                true,
+			}, id)
 		}
 		selection.Groups = append(selection.Groups, group)
-		for _, member := range group.Members {
-			appendUniqueDestinationID(&selection.DestinationIDs, DestinationIDForExternal(member.ExternalDestinationID))
+	}
+
+	// Validate every concrete destination against one local registry snapshot.
+	// No Selection is returned until all candidates pass, which gives group
+	// expansion its all-or-nothing contract even when one member is missing or
+	// disabled locally.
+	rows, err := r.destinations.BatchDeliveryDestinations(ctx, orderedIDs)
+	if err != nil {
+		return nil, fmt.Errorf("%w: batch destination lookup: %v", ErrTargetDestinationInvalid, err)
+	}
+	for _, id := range orderedIDs {
+		channel := candidateByID[id]
+		row := rows[id]
+		if err := validateLocalDestinationSnapshot(req.WorkspaceID, req.Platform, channel, row); err != nil {
+			if groupID := candidateGroupByID[id]; groupID > 0 {
+				return nil, fmt.Errorf("%w: group_id=%d member destination_id=%q: %v", ErrGroupNotPublishable, groupID, id, err)
+			}
+			return nil, err
 		}
+		selection.DestinationIDs = append(selection.DestinationIDs, id)
 	}
 	return selection, nil
 }
@@ -320,67 +390,12 @@ func orderedGroupMembers(members []GroupMember) []GroupMember {
 	return ordered
 }
 
-func appendUniqueDestinationID(ids *[]string, candidate string) {
-	candidate = strings.TrimSpace(candidate)
-	if candidate == "" {
-		return
-	}
-	for _, existing := range *ids {
-		if existing == candidate {
-			return
-		}
-	}
-	*ids = append(*ids, candidate)
-}
-
-func (r *TargetResolver) validateGroupMembers(ctx context.Context, workspaceID int64, platform string, group Group) error {
-	if len(group.Members) == 0 {
-		return fmt.Errorf("%w: group_id=%d has no member snapshot", ErrGroupNotPublishable, group.GroupID)
-	}
-	for _, member := range group.Members {
-		if !member.Enabled || !member.CanPost || !optionalBoolTrue(member.AccountActive) || !optionalBoolTrue(member.WorkspaceBindingEnabled) || !member.Capabilities.UploadVideo {
-			return fmt.Errorf("%w: group_id=%d member account=%d is not publishable", ErrGroupNotPublishable, group.GroupID, member.PlatformAccountID)
-		}
-		channel := Channel{
-			DestinationID:           DestinationIDForExternal(member.ExternalDestinationID),
-			WorkspaceID:             workspaceID,
-			PlatformAccountID:       member.PlatformAccountID,
-			Platform:                platform,
-			ExternalDestinationID:   member.ExternalDestinationID,
-			UpstreamEnabled:         member.Enabled,
-			CanPost:                 member.CanPost,
-			AccountActive:           member.AccountActive,
-			WorkspaceBindingEnabled: member.WorkspaceBindingEnabled,
-			Capabilities:            member.Capabilities,
-			Eligible:                true,
-		}
-		if err := r.validateLocalDestination(ctx, workspaceID, platform, channel); err != nil {
-			return fmt.Errorf("%w: group_id=%d member account=%d: %v", ErrGroupNotPublishable, group.GroupID, member.PlatformAccountID, err)
-		}
-	}
-	return nil
-}
-
-func (r *TargetResolver) validateLocalDestination(ctx context.Context, workspaceID int64, platform string, channel Channel) error {
-	statuses, err := r.destinations.BatchDeliveryDestinationsStatus(ctx, []string{channel.DestinationID})
-	if err != nil {
-		return fmt.Errorf("%w: status lookup: %v", ErrTargetDestinationInvalid, err)
-	}
-	switch statuses[channel.DestinationID] {
-	case store.DeliveryDestinationNotFound:
+func validateLocalDestinationSnapshot(workspaceID int64, platform string, channel Channel, row *store.DeliveryDestination) error {
+	if row == nil {
 		return fmt.Errorf("%w: destination_id=%q", ErrDestinationNotFound, channel.DestinationID)
-	case store.DeliveryDestinationDisabled:
+	}
+	if !row.Enabled {
 		return fmt.Errorf("%w: destination_id=%q", ErrDestinationDisabled, channel.DestinationID)
-	case store.DeliveryDestinationEnabled:
-	default:
-		return fmt.Errorf("%w: unknown destination status for %q", ErrTargetDestinationInvalid, channel.DestinationID)
-	}
-	row, err := r.destinations.GetDeliveryDestination(ctx, channel.DestinationID)
-	if err != nil || row == nil {
-		if err != nil {
-			return fmt.Errorf("%w: destination_id=%q: %v", ErrTargetDestinationInvalid, channel.DestinationID, err)
-		}
-		return fmt.Errorf("%w: destination_id=%q", ErrDestinationNotFound, channel.DestinationID)
 	}
 	if row.Provider != ProviderSocialGateway || row.ExternalDestinationID != channel.ExternalDestinationID {
 		return fmt.Errorf("%w: destination_id=%q provider or external id mismatch", ErrTargetDestinationInvalid, channel.DestinationID)
@@ -405,10 +420,8 @@ func (r *TargetResolver) validateLocalDestination(ctx context.Context, workspace
 	if metadata.PlatformAccountID != 0 && metadata.PlatformAccountID != channel.PlatformAccountID {
 		return fmt.Errorf("%w: destination_id=%q account mismatch", ErrTargetDestinationInvalid, channel.DestinationID)
 	}
-	// Group membership snapshots currently carry the opaque destination and
-	// platform account, but may not carry a provider channel ID. Only compare
-	// channel IDs when both sides expose one; workspace, platform, account,
-	// provider, and opaque destination checks remain mandatory.
+	// Group snapshots may not carry a provider channel ID. Compare it only
+	// when both the upstream member and local configuration expose one.
 	if metadata.ChannelID != "" && channel.ChannelID != "" && metadata.ChannelID != channel.ChannelID {
 		return fmt.Errorf("%w: destination_id=%q channel mismatch", ErrTargetDestinationInvalid, channel.DestinationID)
 	}

@@ -126,6 +126,31 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 			}
 		}
 
+		// Resolve the optional channel/group selector before any destination
+		// pre-flight or quota check. Group expansion is server-side and
+		// all-or-nothing: once this returns, DeliveryPlan contains the
+		// deterministic concrete snapshot that every downstream validator and
+		// enqueue step must observe.
+		if req.PublishingTarget != nil {
+			resolvedReq, targetErr := h.resolvePublishingTarget(c.Request.Context(), req)
+			if targetErr != nil {
+				writePublishingTargetError(c, targetErr)
+				return
+			}
+			req = resolvedReq
+			// Re-run the canonical validator over the concrete plan so any
+			// delivery-plan constraints also apply to expanded group members.
+			if vErr, bad := ValidateSubmitJobRequest(req); bad {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{
+					"ok":      false,
+					"error":   vErr.Code,
+					"message": vErr.Message,
+					"details": vErr.Details,
+				})
+				return
+			}
+		}
+
 		// Delivery-destination existence pre-flight (P0 #2 closure):
 		// every unique non-empty delivery_plan[N].destination_id
 		// MUST resolve to an enabled row in delivery_destinations.
@@ -278,19 +303,6 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 				"message": qerr.Error(),
 			})
 			return
-		}
-
-		// Resolve the optional channel/group selector into the same concrete
-		// delivery_plan shape consumed by legacy enqueue code. This is the
-		// only public-submit boundary where publishing_target is interpreted;
-		// the renderer never receives the selector or upstream group metadata.
-		if req.PublishingTarget != nil {
-			resolvedReq, targetErr := h.resolvePublishingTarget(c.Request.Context(), req)
-			if targetErr != nil {
-				writePublishingTargetError(c, targetErr)
-				return
-			}
-			req = resolvedReq
 		}
 
 		// Derive Creator-compatible identity via the canonical

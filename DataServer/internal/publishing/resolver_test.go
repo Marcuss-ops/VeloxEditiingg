@@ -25,16 +25,25 @@ type fakeDestinationReader struct {
 	err      error
 }
 
-func (f fakeDestinationReader) BatchDeliveryDestinationsStatus(context.Context, []string) (map[string]store.DeliveryDestinationStatus, error) {
-	return f.statuses, f.err
-}
-
-func (f fakeDestinationReader) GetDeliveryDestination(_ context.Context, id string) (*store.DeliveryDestination, error) {
-	row := f.rows[id]
-	if row == nil {
-		return nil, store.ErrDeliveryNoRow
+func (f fakeDestinationReader) BatchDeliveryDestinations(_ context.Context, ids []string) (map[string]*store.DeliveryDestination, error) {
+	if f.err != nil {
+		return nil, f.err
 	}
-	return row, nil
+	out := make(map[string]*store.DeliveryDestination, len(ids))
+	for _, id := range ids {
+		if row := f.rows[id]; row != nil {
+			copy := *row
+			if status, ok := f.statuses[id]; ok {
+				copy.Enabled = status == store.DeliveryDestinationEnabled
+			}
+			out[id] = &copy
+			continue
+		}
+		if status, ok := f.statuses[id]; ok && status == store.DeliveryDestinationDisabled {
+			out[id] = &store.DeliveryDestination{DestinationID: id, Enabled: false}
+		}
+	}
+	return out, nil
 }
 
 func healthyTarget(externalID string, accountID int64) socialclient.PublishingTarget {
