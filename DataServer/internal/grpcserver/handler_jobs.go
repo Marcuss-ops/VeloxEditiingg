@@ -9,7 +9,6 @@ import (
 
 	"velox-server/internal/ingest"
 	"velox-server/internal/placement"
-	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 	"velox-server/internal/telemetry"
@@ -21,182 +20,16 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// handleTaskAccepted processes typed TaskAccepted — PR #4 task-native push mode.
-// The lease was already created by ClaimNextReadyTask; we promote LEASED→RUNNING,
-// create a TaskAttempt record, and grant the lease.
-//
-// fix/identity-tuple-mandatory: the full 6-field identity tuple
-// (task_id, job_id, attempt_id, lease_id, attempt_number, revision) is
-// now MANDATORY. The handler rejects any TaskAccepted with missing or
-// zero-valued identity fields BEFORE touching the session or taskRepo.
-func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted, sess *workerSession) {
-	if !h.config.PushMode {
-		return
-	}
-	taskID := ta.GetTaskId()
-	jobID := ta.GetJobId()
-	attemptID := ta.GetAttemptId()
-	leaseID := ta.GetLeaseId()
-	attemptNumber := ta.GetAttemptNumber()
-	revision := ta.GetRevision()
-
-	if taskID == "" || jobID == "" || attemptID == "" || leaseID == "" || attemptNumber <= 0 {
-		log.Printf("[GRPC] TaskAccepted from worker %s refused — incomplete identity (task=%q job=%q attempt=%q lease=%q attempt_num=%d rev=%d)",
-			workerID, taskID, jobID, attemptID, leaseID, attemptNumber, revision)
-		return
-	}
-
-	if sess == nil {
-		return
-	}
-
-	// Lock claimMu to safely read and clear pendingTaskOffer.
-	sess.claimMu.Lock()
-	offer := sess.pendingTaskOffer
-	var offerTaskID, offerLeaseID string
-	if offer != nil {
-		offerTaskID = offer.ID
-		offerLeaseID = offer.LeaseID
-	}
-	sess.claimMu.Unlock()
-
-	if offer == nil || offerTaskID != taskID {
-		log.Printf("[GRPC] Worker %s accepted task %s but no matching pending offer", workerID, taskID)
-		return
-	}
-	log.Printf("[GRPC] TaskAccepted received from worker %s: task=%s job=%s attempt=%s lease=%s offer_attempt=%s offer_lease=%s rev=%d",
-		workerID, taskID, jobID, attemptID, leaseID, offer.AttemptID, offerLeaseID, revision)
-
-	// Verify the lease_id and attempt_id the worker is accepting match
-	// what we offered. The offer carries the canonical (attempt_id, lease_id)
-	// pair minted by ClaimNextWithAttemptAtomic; the worker must echo both
-	// back exactly.
-	if leaseID != offerLeaseID {
-		log.Printf("[GRPC] Worker %s accepted task %s with mismatched lease_id: got %s, want %s",
-			workerID, taskID, leaseID, offerLeaseID)
-		return
-	}
-	if attemptID != offer.AttemptID {
-		log.Printf("[GRPC] Worker %s accepted task %s with mismatched attempt_id: got %s, want %s",
-			workerID, taskID, attemptID, offer.AttemptID)
-		return
-	}
-
-	// PR-2 (canonical-attempt-identity): the canonical attempt_id was
-	// minted at Claim time (in ClaimNextWithAttemptAtomic inside the
-	// same tx as the LEASED CAS + PENDING TaskAttempt INSERT). handleTaskAccepted
-	// now CONSUMES the canonical attempt_id from the pending offer rather
-	// than minting a new UUID, AND closes the canonical TaskAttempt
-	// PENDING → RUNNING inside AcceptTaskAtomic's atomic tx.
-	//
-	// §9.5 invariant preserved: Task LEASED → RUNNING AND Attempt
-	// PENDING → RUNNING commit in ONE transaction (AcceptTaskAtomic). The
-	// pre-PR-2 INSERT pattern (Start + Create) had a crash window; PR-2's
-	// earlier-minted PENDING row + this UPDATE path closes it.
-	//
-	// Scorecard v2 / Step 15: start a "claim_task" span for distributed
-	// tracing. The trace context flows from the gRPC metadata through
-	// the otelgrpc stats handler + W3C propagator.
-	// Scorecard v2 / Step 15c: use session.ctx (derived from stream.Context())
-	// so the span inherits the parent trace context from the worker.
-	gRPCctx := context.Background()
-	if sess != nil && sess.ctx != nil {
-		gRPCctx = sess.ctx
-	}
-	ctx, span := telemetry.StartSpan(gRPCctx, "claim_task",
-		attribute.String("velox.task_id", taskID),
-		attribute.String("velox.worker_id", workerID),
-		attribute.String("velox.attempt_id", attemptID),
-	)
-	defer span.End()
-
-	attempt := &taskattempts.TaskAttempt{
-		ID:            attemptID,
-		TaskID:        taskID,
-		JobID:         jobID,
-		WorkerID:      workerID,
-		AttemptNumber: int(attemptNumber),
-		LeaseID:       leaseID,
-		Status:        taskattempts.AttemptStatusRunning,
-	}
-	if err := h.taskRepo.AcceptTaskAtomic(ctx, attempt, int(revision)); err != nil {
-		if errors.Is(err, store.ErrTransitionConflict) {
-			log.Printf("[GRPC] Worker %s accepted task %s but lease is stale or canonical attempt drift (offer.attempt_id=%s offer.attempt_number=%d attempt_id=%s attempt_number=%d) rev=%d — dropping TaskAccepted",
-				workerID, taskID, offer.AttemptID, offer.AttemptNumber, attempt.ID, attemptNumber, offer.Revision)
-			// Stale lease: clear the pending offer so the next
-			// ClaimNextReadyTask can re-offer this task.
-			sess.claimMu.Lock()
-			if sess.pendingTaskOffer != nil && sess.pendingTaskOffer.ID == taskID {
-				sess.pendingTaskOffer = nil
-			}
-			sess.claimMu.Unlock()
-		} else {
-			log.Printf("[GRPC] AcceptTaskAtomic (LEASED→RUNNING + Attempt PENDING→RUNNING) failed for %s (worker %s): %v — keeping pending offer for retry",
-				taskID, workerID, err)
-			// Non-stale error: keep pendingTaskOffer so the next
-			// TaskAccepted from the worker can retry the same offer
-			// without a fresh ClaimNextReadyTask roundtrip.
-		}
-		return
-	}
-	jobRevision := int32(0)
-	if h.jobsRepo != nil {
-		job, jobErr := h.jobsRepo.Get(ctx, jobID)
-		if jobErr != nil {
-			log.Printf("[GRPC] Failed to load job revision for TaskLeaseGranted task=%s job=%s: %v", taskID, jobID, jobErr)
-		} else if job != nil {
-			jobRevision = int32(job.Revision)
-		}
-	}
-
-	// Send typed TaskLeaseGranted via sendCh with the full identity tuple.
-	env := &pb.MasterToWorkerEnvelope{
-		MessageId:       fmt.Sprintf("taskgrant-%s-%s", workerID, taskID),
-		WorkerId:        workerID,
-		SentAt:          timestamppb.Now(),
-		ProtocolVersion: controltransport.ProtocolVersionCurrent,
-		Msg: &pb.MasterToWorkerEnvelope_TaskLeaseGranted{
-			TaskLeaseGranted: &pb.TaskLeaseGranted{
-				TaskId:        taskID,
-				JobId:         jobID,
-				LeaseId:       offer.LeaseID,
-				AttemptId:     attemptID,
-				AttemptNumber: attemptNumber,
-				Revision:      revision,
-				JobRevision:   jobRevision,
-			},
-		},
-	}
-
-	if !safeSend(sess.sendCh, &outboundMessage{Envelope: env}) {
-		log.Printf("[GRPC] sendCh full/closed for TaskLeaseGranted to worker %s — releasing claim for task %s",
-			workerID, taskID)
-		if releaseErr := h.taskRepo.ReleaseLease(ctx, taskID, workerID, offer.LeaseID); releaseErr != nil {
-			log.Printf("[GRPC] Failed to release claim for task %s after grant send failure: %v", taskID, releaseErr)
-		}
-		sess.claimMu.Lock()
-		if sess.pendingTaskOffer != nil && sess.pendingTaskOffer.ID == taskID {
-			sess.pendingTaskOffer = nil
-		}
-		sess.claimMu.Unlock()
-		return
-	}
-
-	// Clear pending offer under claimMu — task is now running on this worker.
-	sess.claimMu.Lock()
-	if sess.pendingTaskOffer != nil && sess.pendingTaskOffer.ID == taskID {
-		sess.pendingTaskOffer = nil
-	}
-	sess.claimMu.Unlock()
-}
-
 // handleTaskRejected processes typed TaskRejected — PR #4 task-native push mode.
 // Releases the claimed task back to READY for another worker.
 //
 // fix/identity-tuple-mandatory: the full 6-field identity tuple is now
 // MANDATORY. Every field must be present and non-empty / non-zero.
 // Permissive "if x != """ guards replaced by strict field-presence checks.
-func (h *Handler) handleTaskRejected(workerID string, tr *pb.TaskRejected) {
+func (h *Handler) handleTaskRejected(workerID string, tr *pb.TaskRejected, sess *workerSession) {
+	if tr == nil || h.taskRepo == nil {
+		return
+	}
 	taskID := tr.GetTaskId()
 	jobID := tr.GetJobId()
 	attemptID := tr.GetAttemptId()
@@ -205,51 +38,52 @@ func (h *Handler) handleTaskRejected(workerID string, tr *pb.TaskRejected) {
 	revision := tr.GetRevision()
 	reason := tr.GetReason()
 
-	if taskID == "" || jobID == "" || attemptID == "" || leaseID == "" || attemptNumber <= 0 {
-		log.Printf("[GRPC] TaskRejected from worker %s refused — incomplete identity (task=%q job=%q attempt=%q lease=%q attempt_num=%d rev=%d reason=%q)",
-			workerID, taskID, jobID, attemptID, leaseID, attemptNumber, revision, reason)
-		h.clearPendingOfferForTask(workerID, taskID)
-		return
-	}
-
-	// h.taskRepo is wired at construction by bootstrap.go; nil here is a
-	// programmer error (bootstrap must reject nil taskRepo before
-	// creating the Handler).
 	ctx := context.Background()
 	t, err := h.taskRepo.Get(ctx, taskID)
 	if err != nil || t == nil {
-		log.Printf("[GRPC] TaskRejected from worker %s for task %s — task not found (reason=%q)",
-			workerID, taskID, reason)
-		h.clearPendingOfferForTask(workerID, taskID)
+		log.Printf("[GRPC] TaskRejected from worker %s for task %s — task not found (reason=%q)", workerID, taskID, reason)
 		return
 	}
-
-	// Guard 1: ownership — the rejecting worker must still own the task.
-	if t.WorkerID != workerID {
-		log.Printf("[GRPC] TaskRejected from worker %s for task %s refused — task now owned by %s (reason=%q)",
-			workerID, taskID, t.WorkerID, reason)
-		h.clearPendingOfferForTask(workerID, taskID)
+	masterIdentity := taskIdentityFromTask(t)
+	if t.Status != taskgraph.StatusLeased {
+		log.Printf("[GRPC] TaskRejected from worker %s refused — task %s is not LEASED (status=%s)", workerID, taskID, t.Status)
 		return
 	}
-
-	// Guard 2: lease identity — strict compare (both fields are mandatory).
-	if t.LeaseID != leaseID {
-		log.Printf("[GRPC] TaskRejected from worker %s for task %s refused — lease mismatch (reported=%s stored=%s, reason=%q)",
-			workerID, taskID, leaseID, t.LeaseID, reason)
-		h.clearPendingOfferForTask(workerID, taskID)
+	if sess == nil || sess.workerID != workerID {
+		log.Printf("[GRPC] TaskRejected from worker %s refused — stale or missing session for task %s", workerID, taskID)
 		return
 	}
-
-	// Guard 3: attempt identity — strict compare (both fields are mandatory).
-	if t.AttemptID != attemptID {
-		log.Printf("[GRPC] TaskRejected from worker %s for task %s refused — attempt mismatch (reported=%s stored=%s, reason=%q)",
-			workerID, taskID, attemptID, t.AttemptID, reason)
-		h.clearPendingOfferForTask(workerID, taskID)
+	sess.claimMu.Lock()
+	offer := sess.pendingTaskOffer
+	sess.claimMu.Unlock()
+	if offer == nil || offer.ID != taskID {
+		log.Printf("[GRPC] TaskRejected from worker %s refused — no matching pending offer for task %s", workerID, taskID)
+		return
+	}
+	wireIdentity := taskIdentityFromWire(taskID, jobID, attemptID, leaseID, int(attemptNumber), int(revision), workerID)
+	if err := validateTaskIdentity(wireIdentity, masterIdentity); err != nil {
+		// Do not clear the pending offer on an invalid message: clearing is a
+		// mutation and would let a replay/takeover message alter live state.
+		log.Printf("[GRPC] TaskRejected from worker %s refused — identity validation failed for task %s: %v (reason=%q)", workerID, taskID, err, reason)
+		return
+	}
+	if err := validateTaskIdentity(taskIdentityFromTask(&offer.Task), masterIdentity); err != nil {
+		log.Printf("[GRPC] TaskRejected from worker %s refused — pending offer for task %s is stale: %v", workerID, taskID, err)
 		return
 	}
 
 	log.Printf("[GRPC] Worker %s rejected task %s (attempt=%s lease=%s): %s",
 		workerID, taskID, attemptID, leaseID, reason)
+
+	// Hold the session registry read lock across the durable CAS and all
+	// in-memory cleanup. A reconnect cannot replace this session between
+	// ownership validation and release/offer mutation.
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if !h.isCurrentSessionLocked(workerID, sess) {
+		log.Printf("[GRPC] TaskRejected from worker %s refused — session was replaced before release for task %s", workerID, taskID)
+		return
+	}
 
 	// Special-case: unsupported_executor — the worker rejected a task
 	// it cannot execute because the executor is not in its registry.
@@ -257,17 +91,21 @@ func (h *Handler) handleTaskRejected(workerID string, tr *pb.TaskRejected) {
 	// and the worker's actual runtime state. The session's executor
 	// map is invalidated so the matcher won't pick this pair again.
 	if reason == "unsupported_executor" {
-		h.handleUnsupportedExecutorRejection(ctx, workerID, t)
-		h.clearPendingOfferForTask(workerID, taskID)
+		if h.handleUnsupportedExecutorRejection(ctx, workerID, t, sess) {
+			h.clearPendingOfferForTask(sess, taskID)
+		}
 		return
 	}
 
 	if err := h.taskRepo.ReleaseLease(ctx, taskID, workerID, leaseID); err != nil {
+		// A failed CAS means ownership was not proven. Do not mutate the
+		// session offer; the current owner/session must reconcile it.
 		log.Printf("[GRPC] Failed to release rejected task %s: %v", taskID, err)
+		return
 	}
 
-	// Clear pending offer under claimMu.
-	h.clearPendingOfferForTask(workerID, taskID)
+	// Clear pending offer only after the lease release committed.
+	h.clearPendingOfferForTask(sess, taskID)
 }
 
 // handleUnsupportedExecutorRejection handles a task rejected with
@@ -285,40 +123,43 @@ func (h *Handler) handleUnsupportedExecutorRejection(
 	ctx context.Context,
 	workerID string,
 	t *taskgraph.Task,
-) {
+	sess *workerSession,
+) bool {
 	executorKey := placement.NormalizeExecutorKey(t.ExecutorID, t.ExecutorVersion)
 
 	log.Printf("[PLACEMENT] Worker %s rejected task %s as unsupported_executor (executor=%s@%d) — capability inconsistency, invalidating for session",
 		workerID, t.ID, t.ExecutorID, t.ExecutorVersion)
 
-	// Invalidate this executor/version pair so the matcher won't
-	// select another task with the same requirement for this session.
-	sess := h.getSession(workerID)
-	if sess != nil {
-		sess.invalidateExecutor(executorKey)
-	}
-
-	// Release the lease. ReleaseLease sets the task back to READY
+	// Release the lease first. ReleaseLease sets the task back to READY
 	// and removes the PENDING attempt. The attempt_count is NOT
 	// consumed: PENDING attempts that never started don't count
-	// toward the retry budget.
+	// toward the retry budget. A failed CAS proves ownership was lost,
+	// so no session capability state may be changed.
 	if err := h.taskRepo.ReleaseLease(ctx, t.ID, workerID, t.LeaseID); err != nil {
 		log.Printf("[PLACEMENT] ReleaseLease for unsupported_executor task %s failed: %v", t.ID, err)
+		return false
 	}
+
+	// Invalidate this executor/version pair only after the durable release
+	// succeeds, so a stale rejection cannot poison the live session.
+	if sess == nil || sess.workerID != workerID {
+		return false
+	}
+	sess.invalidateExecutor(executorKey)
 
 	// Increment velox_placement_rejections_total{reason="unsupported_executor"}
 	// via the PlacementRejectionSink (when wired).
 	if h.placementRejectionSink != nil {
 		h.placementRejectionSink.RecordPlacementRejection("unsupported_executor")
 	}
+	return true
 }
 
 // clearPendingOfferForTask removes the pending offer for a task if the
 // worker still holds it. Safe to call when sess is nil (no-op). Extracted
 // from handleTaskRejected so every early-return path clears the offer
 // without duplicating the claimMu lock dance.
-func (h *Handler) clearPendingOfferForTask(workerID, taskID string) {
-	sess := h.getSession(workerID)
+func (h *Handler) clearPendingOfferForTask(sess *workerSession, taskID string) {
 	if sess == nil {
 		return
 	}
@@ -569,7 +410,10 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 // fix/identity-tuple-mandatory: the worker sends the full 6-field
 // identity tuple on every renewal. We validate all fields are present
 // then issue the CAS-backed RenewLease against the live DB revision.
-func (h *Handler) handleTaskRenewal(workerID string, tr *pb.TaskLeaseRenewal) {
+func (h *Handler) handleTaskRenewal(workerID string, tr *pb.TaskLeaseRenewal, sess *workerSession) {
+	if tr == nil || h.taskRepo == nil || sess == nil || sess.workerID != workerID {
+		return
+	}
 	ctx := context.Background()
 	taskID := tr.GetTaskId()
 	jobID := tr.GetJobId()
@@ -578,15 +422,28 @@ func (h *Handler) handleTaskRenewal(workerID string, tr *pb.TaskLeaseRenewal) {
 	attemptNumber := tr.GetAttemptNumber()
 	renewalRevision := tr.GetRevision()
 
-	if taskID == "" || jobID == "" || attemptID == "" || leaseID == "" || attemptNumber <= 0 {
-		log.Printf("[GRPC] TaskLeaseRenewal from worker %s refused — incomplete identity (task=%q job=%q attempt=%q lease=%q attempt_num=%d rev=%d)",
-			workerID, taskID, jobID, attemptID, leaseID, attemptNumber, renewalRevision)
-		return
-	}
-
 	t, err := h.taskRepo.Get(ctx, taskID)
 	if err != nil || t == nil {
 		log.Printf("[GRPC] TaskLeaseRenewal task %s not found: %v", taskID, err)
+		return
+	}
+	if t.Status != taskgraph.StatusLeased && t.Status != taskgraph.StatusRunning {
+		log.Printf("[GRPC] TaskLeaseRenewal from worker %s refused — task %s is not leasable (status=%s)", workerID, taskID, t.Status)
+		return
+	}
+	wireIdentity := taskIdentityFromWire(taskID, jobID, attemptID, leaseID, int(attemptNumber), int(renewalRevision), workerID)
+	if err := validateTaskIdentity(wireIdentity, taskIdentityFromTask(t)); err != nil {
+		log.Printf("[GRPC] TaskLeaseRenewal from worker %s refused — identity validation failed for task %s: %v", workerID, taskID, err)
+		return
+	}
+
+	// Fence renewal to the authenticated stream session and hold the
+	// registry read lock through the repository CAS. This prevents an old
+	// stream from renewing a task after a same-worker reconnect.
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if !h.isCurrentSessionLocked(workerID, sess) {
+		log.Printf("[GRPC] TaskLeaseRenewal from worker %s refused — session was replaced before CAS for task %s", workerID, taskID)
 		return
 	}
 
@@ -595,7 +452,7 @@ func (h *Handler) handleTaskRenewal(workerID string, tr *pb.TaskLeaseRenewal) {
 		expiry = tr.GetRequestedExpiry().AsTime()
 	}
 
-	if err := h.taskRepo.RenewLease(ctx, taskID, workerID, leaseID, expiry, t.Revision); err != nil {
+	if err := h.taskRepo.RenewLease(ctx, taskID, workerID, leaseID, expiry, int(renewalRevision)); err != nil {
 		log.Printf("[GRPC] TaskLeaseRenewal failed for %s (worker %s lease %s): %v",
 			taskID, workerID, leaseID, err)
 		return
