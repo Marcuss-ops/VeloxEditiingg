@@ -336,6 +336,7 @@ type SubmitLocalizedMetadata struct {
 // a publication. RetryBudget is a pointer so explicit zero survives decoding.
 type SubmitPublicationDestination struct {
 	DestinationID    string                     `json:"destination_id"`
+	CredentialRef    string                     `json:"credential_ref,omitempty"`
 	Priority         int                        `json:"priority,omitempty"`
 	RetryBudget      *int                       `json:"retry_budget,omitempty"`
 	MetadataOverride *SubmitPublicationMetadata `json:"metadata_override,omitempty"`

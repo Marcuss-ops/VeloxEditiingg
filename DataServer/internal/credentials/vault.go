@@ -318,6 +318,23 @@ func (v *Vault) Revoke(ctx context.Context, ref string) error {
 	return v.repo.RevokeCredential(ctx, ref, v.now().UTC())
 }
 
+// ValidateReference verifies existence, decryptability and current validity
+// without returning secret material.
+func (v *Vault) ValidateReference(ctx context.Context, ref string) error {
+	record, _, err := v.load(ctx, ref)
+	if err != nil {
+		return err
+	}
+	now := v.now().UTC()
+	if record.RevokedAt != nil {
+		return ErrRevoked
+	}
+	if !record.ExpiresAt.IsZero() && !record.ExpiresAt.After(now) {
+		return ErrExpired
+	}
+	return nil
+}
+
 func (v *Vault) Rotate(ctx context.Context, ref string, material Material, expiresAt, rotationDueAt time.Time) error {
 	record, _, err := v.load(ctx, ref)
 	if err != nil {
@@ -376,6 +393,9 @@ func opaqueRef() (string, error) {
 var refRE = regexp.MustCompile(`^cred_[a-f0-9]{36}$`)
 
 func validRef(ref string) bool { return refRE.MatchString(strings.TrimSpace(ref)) }
+
+// ValidReference is the public opaque-reference shape check.
+func ValidReference(ref string) bool { return validRef(ref) }
 
 func normalizeScopes(scopes []string) []string {
 	set := make(map[string]struct{}, len(scopes))

@@ -66,6 +66,7 @@ type Localization struct {
 // Destination is one independent delivery target for a publication.
 type Destination struct {
 	DestinationID    string         `json:"destination_id"`
+	CredentialRef    string         `json:"credential_ref,omitempty"`
 	Priority         int            `json:"priority,omitempty"`
 	RetryBudget      *int           `json:"retry_budget,omitempty"`
 	MetadataOverride *Metadata      `json:"metadata_override,omitempty"`

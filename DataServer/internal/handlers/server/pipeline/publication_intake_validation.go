@@ -92,6 +92,7 @@ func submitPublicationToSharedSpec(input SubmitPublication) publication.Spec {
 		}
 		destinations[index] = publication.Destination{
 			DestinationID:    strings.TrimSpace(destination.DestinationID),
+			CredentialRef:    strings.TrimSpace(destination.CredentialRef),
 			Priority:         destination.Priority,
 			RetryBudget:      cloneIntPointer(destination.RetryBudget),
 			MetadataOverride: metadataOverride,

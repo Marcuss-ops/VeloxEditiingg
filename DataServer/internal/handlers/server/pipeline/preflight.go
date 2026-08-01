@@ -1,10 +1,14 @@
 package pipeline
 
 import (
+	"context"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"velox-server/internal/credentials"
 	"velox-server/internal/publicationcap"
 )
 
@@ -25,7 +29,7 @@ func (h *Handlers) ValidateJob() gin.HandlerFunc {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error_code": vErr.Code, "message": vErr.Message, "details": vErr.Details})
 			return
 		}
-		if err := validatePublicationCapabilities(req); err != nil {
+		if err := h.validatePreflightPublication(req); err != nil {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error_code": "PUBLICATION_NOT_REALIZABLE", "error": err.Error()})
 			return
 		}
@@ -94,6 +98,30 @@ func validatePublicationCapabilities(req SubmitJobRequest) error {
 			hasLocalizations := len(pub.Localizations) > 0
 			if err := registry.Validate(provider, publicationcap.Metadata{Title: pub.Metadata.Title, Description: pub.Metadata.Description, Tags: pub.Metadata.Tags, HasSchedule: pub.Metadata.PublishAt != "", HasLocalizations: hasLocalizations, HasThumbnail: false, HasCaptions: false}); err != nil {
 				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (h *Handlers) validatePreflightPublication(req SubmitJobRequest) error {
+	if err := validatePublicationCapabilities(req); err != nil {
+		return err
+	}
+	for _, pub := range req.Publications {
+		for _, destination := range pub.Destinations {
+			ref := strings.TrimSpace(destination.CredentialRef)
+			if ref == "" {
+				return fmt.Errorf("credential_ref_required: publication %s destination %s", pub.PublicationID, destination.DestinationID)
+			}
+			if !credentials.ValidReference(ref) {
+				return fmt.Errorf("credential_ref_invalid: %s", ref)
+			}
+			if h.credentialVault == nil {
+				return fmt.Errorf("credential_vault_unavailable")
+			}
+			if err := h.credentialVault.ValidateReference(context.Background(), ref); err != nil {
+				return fmt.Errorf("credential_invalid: %w", err)
 			}
 		}
 	}

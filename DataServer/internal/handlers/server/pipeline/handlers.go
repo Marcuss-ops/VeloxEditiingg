@@ -4,6 +4,7 @@ import (
 	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/credentials"
 	"velox-server/internal/inputsecurity"
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
@@ -19,18 +20,19 @@ import (
 // Resolver and socialClient are built once at construction so target discovery
 // and job intake do not create transport clients per request.
 type Handlers struct {
-	cfg            *config.Config
-	enqueuer       *enqueue.Enqueuer
-	client         *remoteengine.Client
-	resolver       *creatorflow.Resolver
-	socialClient   *socialclient.Client
-	targetResolver *targetpublishing.TargetResolver
-	jobs           JobsDeps
-	store          *store.SQLiteStore
-	intakeSink     CreatorIntakeSink
-	legacyBodySink LegacyBodySink
-	assetService   *voiceoverassets.AssetService
-	inputPolicy    *inputsecurity.Policy
+	cfg             *config.Config
+	enqueuer        *enqueue.Enqueuer
+	client          *remoteengine.Client
+	resolver        *creatorflow.Resolver
+	socialClient    *socialclient.Client
+	targetResolver  *targetpublishing.TargetResolver
+	jobs            JobsDeps
+	store           *store.SQLiteStore
+	intakeSink      CreatorIntakeSink
+	legacyBodySink  LegacyBodySink
+	assetService    *voiceoverassets.AssetService
+	inputPolicy     *inputsecurity.Policy
+	credentialVault *credentials.Vault
 }
 
 // JobsDeps bundles the optional jobs-layer dependencies used by
@@ -109,6 +111,9 @@ func (h *Handlers) WithTaskReader(reader taskgraph.Reader) *Handlers {
 
 func (h *Handlers) WithStore(db *store.SQLiteStore) *Handlers {
 	h.store = db
+	if keys, err := credentials.LoadKeyring(); err == nil {
+		h.credentialVault, _ = credentials.NewVault(db, keys)
+	}
 	h.targetResolver = targetpublishing.NewTargetResolver(h.socialClient, h.store)
 	return h
 }
