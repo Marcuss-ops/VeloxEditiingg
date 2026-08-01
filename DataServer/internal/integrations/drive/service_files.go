@@ -16,6 +16,8 @@ import (
 	"strings"
 )
 
+const defaultDownloadMaxBytes int64 = 256 * 1024 * 1024
+
 // UploadFile uploads a file to Drive
 func (s *Service) UploadFile(ctx context.Context, filePath string, folderID string, deliveryID string) (*UploadResult, error) {
 	token, err := s.getToken(ctx)
@@ -119,6 +121,16 @@ func (s *Service) UploadFile(ctx context.Context, filePath string, folderID stri
 
 // DownloadFile downloads a file from Drive
 func (s *Service) DownloadFile(ctx context.Context, fileID string, destPath string) error {
+	return s.DownloadFileWithLimit(ctx, fileID, destPath, defaultDownloadMaxBytes)
+}
+
+// DownloadFileWithLimit enforces the byte cap while reading the response.
+// Checking Content-Length alone is insufficient because an upstream may omit
+// it or lie about it.
+func (s *Service) DownloadFileWithLimit(ctx context.Context, fileID string, destPath string, maxBytes int64) error {
+	if maxBytes <= 0 {
+		return fmt.Errorf("download byte limit must be positive")
+	}
 	token, err := s.getToken(ctx)
 	if err != nil {
 		return err
@@ -154,9 +166,17 @@ func (s *Service) DownloadFile(ctx context.Context, fileID string, destPath stri
 	}
 	defer out.Close()
 
-	// Copy the content
-	if _, err := io.Copy(out, resp.Body); err != nil {
+	if resp.ContentLength > maxBytes {
+		return fmt.Errorf("download exceeds byte limit")
+	}
+	// Copy one byte beyond the limit so a lying or missing Content-Length is
+	// detected before the destination can be accepted by the asset resolver.
+	written, err := io.Copy(out, io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
 		return fmt.Errorf("failed to write file content: %w", err)
+	}
+	if written > maxBytes {
+		return fmt.Errorf("download exceeds byte limit")
 	}
 
 	log.Printf("[DRIVE] Downloaded file %s to %s", fileID, destPath)

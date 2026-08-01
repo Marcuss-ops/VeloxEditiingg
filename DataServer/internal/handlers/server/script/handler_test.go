@@ -3,6 +3,7 @@ package script
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -44,6 +45,16 @@ func seedDestinationMain(t *testing.T, db *store.SQLiteStore) {
 	if err != nil {
 		t.Fatalf("seed delivery_destinations: %v", err)
 	}
+}
+
+func validTestWAV() []byte {
+	data, _ := base64.StdEncoding.DecodeString("UklGRmYDAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgATElTVBoAAABJTkZPSVNGVA0AAABMYXZmNjIuMy4xMDAAAGRhdGEgAwAAgoqQi4B0cHSAi5CLgHRwdH+LkIuAdHB0gIuPi4B0cHSAi5CLgHRwdH+Lj4uAdHB0f4uQi4B0cHSAi4+LgHRwdH+Lj4uAdHB0gIuQi4B0cHSAi4+LgHRwdH+Lj4uAdHB0f4uPi4B0cHSAi4+LgHRwdICLkIuAdHB0f4uPi4B0cHR/i5CLgHRwdICLj4uAdHB0f4uPi4B0cHSAi5CLgHRwdICLj4uAdHB0f4uPi4B0cHR/i4+LgHRwdICLj4uAdHB0gIuQi4B0cHR/i4+LgHRwdH+LkIuAdHB0gIuPi4B0cHR/i4+LgHRwdICLkIuAdHB0gIuPi4B0cHR/i4+LgHRwdH+Lj4uAdHB0gIuPi4B0cHSAi5CLgHRwdH+Lj4uAdHB0f4uQi4B0cHSAi4+LgHRwdH+Lj4uAdHB0gIuQi4B0cHSAi4+LgHRwdH+Lj4uAdHB0f4uPi4B0cHSAi4+LgHRwdICLkIuAdHB0f4uPi4B0cHR/i5CLgHRwdICLj4uAdHB0f4uPi4B0cHSAi5CLgHRwdICLj4uAdHB0f4uPi4B0cHR/i4+LgHRwdICLj4uAdHB0gIuQi4B0cHR/i4+LgHRwdH+LkIuAdHB0gIuPi4B0cHR/i4+LgHRwdICLkIuAdHB0gIuPi4B0cHR/i4+LgHRwdH+Lj4uAdHB0gIuPi4B0cHSAi5CLgHRwdH+Lj4uAdHB0f4uQi4B0cHSAi4+LgHRwdH+Lj4uAdHB0gIuQi4B0cHSAi4+LgHRwdH+Lj4uAdHB0f4uPi4B0cHSAi4+LgHRwdICLkIuAdHB0f4uPi4B0cHSAi5CLgHRwdICLj4uAdHB0f4uPi4B0cHSAi5CLgHRwdICLj4uAdHB0f4uPi4B0cHR/i4+LgHRwdICLj4uAdHB0gIuQi4B0cHR/i4+LgHRwdH+LkIuAdHB0gIuPi4B0cHR/i4+LgHRwdICLkIuAdHB0gIuPi4B0cHR/i4+LgHRwdH+Lj4t/dG90f4uPi390b3U=")
+	return data
+}
+
+func validTestPNG() []byte {
+	data, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+	return data
 }
 
 func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
@@ -183,16 +194,19 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 	assetRepo := store.NewSQLiteAssetRepository(assetDB)
 	assetBlobStore := store.NewNopBlobStore(tempDir)
 	assetStore := voiceoverassets.NewStore(tempDir, 0, []string{tempDir})
+	assetPolicy := assetStore.SecurityPolicy()
+	assetPolicy.AllowPrivateNetworks = true
+	assetStore.SetSecurityPolicy(assetPolicy)
 	assetRegistry := voiceoverassets.NewResolverRegistry(voiceoverassets.NewTypedResolversFromStore(assetStore, nil, nil)...)
 	voiceoverSvc := voiceoverassets.NewAssetService(assetRepo, assetBlobStore, assetRegistry, clock.System{})
 
 	dbPath := filepath.Join(tempDir, "velox.db")
 	voicePath := filepath.Join(tempDir, "voice.mp3")
 	imagePath := filepath.Join(tempDir, "scene1.png")
-	if err := os.WriteFile(voicePath, []byte("voice"), 0o644); err != nil {
+	if err := os.WriteFile(voicePath, validTestWAV(), 0o644); err != nil {
 		t.Fatalf("write voice: %v", err)
 	}
-	if err := os.WriteFile(imagePath, []byte("image"), 0o644); err != nil {
+	if err := os.WriteFile(imagePath, validTestPNG(), 0o644); err != nil {
 		t.Fatalf("write image: %v", err)
 	}
 	db, err := store.NewSQLiteStore(dbPath)
@@ -208,11 +222,11 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 		case "/voice.mp3":
 			w.Header().Set("Content-Type", "audio/mpeg")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("voice"))
+			_, _ = w.Write(validTestWAV())
 		case "/scene1.png":
 			w.Header().Set("Content-Type", "image/png")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("image"))
+			_, _ = w.Write(validTestPNG())
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -327,7 +341,7 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "velox.db")
 	voicePath := filepath.Join(tempDir, "roman_voiceover.mp3")
-	if err := os.WriteFile(voicePath, []byte("voice"), 0o644); err != nil {
+	if err := os.WriteFile(voicePath, validTestWAV(), 0o644); err != nil {
 		t.Fatalf("write voice: %v", err)
 	}
 	db, err := store.NewSQLiteStore(dbPath)

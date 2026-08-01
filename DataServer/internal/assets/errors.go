@@ -3,6 +3,8 @@ package assets
 import (
 	"net/http"
 	"strings"
+
+	"velox-server/internal/inputsecurity"
 )
 
 const (
@@ -13,6 +15,7 @@ const (
 // AcquisitionError is a structured failure returned by the asset bridge.
 type AcquisitionError struct {
 	Code       string
+	ErrorCode  string `json:"error_code,omitempty"`
 	Field      string
 	Message    string
 	SourceType string
@@ -52,8 +55,14 @@ func newAcquisitionError(field, sourceType, message string, cause error) *Acquis
 	if strings.TrimSpace(message) == "" && cause != nil {
 		message = cause.Error()
 	}
+	code := VoiceoverAssetUnavailableCode
+	errorCode := string(inputsecurity.CodeOf(cause))
+	if errorCode == "" {
+		errorCode = code
+	}
 	return &AcquisitionError{
 		Code:       VoiceoverAssetUnavailableCode,
+		ErrorCode:  errorCode,
 		Field:      field,
 		Message:    message,
 		SourceType: sourceType,

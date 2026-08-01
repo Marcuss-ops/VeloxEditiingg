@@ -256,6 +256,7 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 					c.JSON(http.StatusUnprocessableEntity, gin.H{
 						"ok":          false,
 						"code":        assetErr.Code,
+						"error_code":  assetErr.ErrorCode,
 						"field":       assetErr.Field,
 						"message":     assetErr.Message,
 						"source_type": assetErr.SourceType,
@@ -279,6 +280,7 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 				c.JSON(http.StatusUnprocessableEntity, gin.H{
 					"ok":          false,
 					"code":        assetErr.Code,
+					"error_code":  assetErr.ErrorCode,
 					"field":       assetErr.Field,
 					"message":     assetErr.Message,
 					"source_type": assetErr.SourceType,
@@ -295,6 +297,7 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 				c.JSON(http.StatusUnprocessableEntity, gin.H{
 					"ok":          false,
 					"code":        assetErr.Code,
+					"error_code":  assetErr.ErrorCode,
 					"field":       assetErr.Field,
 					"message":     assetErr.Message,
 					"source_type": assetErr.SourceType,

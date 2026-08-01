@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"velox-server/internal/inputsecurity"
 )
 
 const VeloxAssetScheme = "velox-asset"
@@ -41,6 +43,7 @@ type Store struct {
 	tmpDir       string
 	maxBytes     int64
 	allowedRoots []string
+	security     inputsecurity.Policy
 }
 
 // NewStore creates a content-addressed store under <dataDir>/worker_downloads/assets/audio.
@@ -50,13 +53,45 @@ func NewStore(dataDir string, maxBytes int64, allowedRoots []string) *Store {
 		maxBytes = 256 * 1024 * 1024
 	}
 	roots := normalizeAllowedRoots(append(allowedRoots, trimmed)...)
+	tmpDir := filepath.Join(trimmed, "worker_downloads", "assets", "audio", ".tmp")
+	policy := inputsecurity.DefaultPolicy()
+	policy.MaxBytes = maxBytes
+	policy.TempDir = tmpDir
+	policy.QuarantineDir = filepath.Join(trimmed, "worker_downloads", "quarantine")
+	policy.AllowedRoots = append([]string(nil), roots...)
 	return &Store{
 		dataDir:      trimmed,
 		assetDir:     filepath.Join(trimmed, "worker_downloads", "assets", "audio"),
-		tmpDir:       filepath.Join(trimmed, "worker_downloads", "assets", "audio", ".tmp"),
+		tmpDir:       tmpDir,
 		maxBytes:     maxBytes,
 		allowedRoots: roots,
+		security:     policy,
 	}
+}
+
+// SecurityPolicy returns a copy of the input policy used by this store.
+func (s *Store) SecurityPolicy() inputsecurity.Policy {
+	if s == nil {
+		return inputsecurity.DefaultPolicy()
+	}
+	return s.security
+}
+
+// SetSecurityPolicy is intended for composition and hermetic tests. Production
+// callers should use the policy created by NewStore and only adjust explicit
+// operational limits before wiring the resolver registry.
+func (s *Store) SetSecurityPolicy(policy inputsecurity.Policy) {
+	if s == nil {
+		return
+	}
+	s.security = policy
+}
+
+func (s *Store) SecurityMetrics() *inputsecurity.Metrics {
+	if s == nil {
+		return nil
+	}
+	return s.security.Metrics
 }
 
 func (s *Store) AssetDir() string {

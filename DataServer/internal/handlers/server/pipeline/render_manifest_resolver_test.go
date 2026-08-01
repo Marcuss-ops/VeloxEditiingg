@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"velox-server/internal/config"
+	"velox-server/internal/inputsecurity"
 )
 
 func TestResolveRenderManifestRef_SubstitutesCanonicalRequest(t *testing.T) {
@@ -27,7 +28,10 @@ func TestResolveRenderManifestRef_SubstitutesCanonicalRequest(t *testing.T) {
 	defer srv.Close()
 
 	host := strings.Split(strings.TrimPrefix(srv.URL, "http://"), ":")[0]
-	h := &Handlers{cfg: &config.Config{AllowedExternalDomains: []string{host}}}
+	policy := inputsecurity.DefaultPolicy()
+	policy.AllowPrivateNetworks = true
+	policy.TempDir = t.TempDir()
+	h := (&Handlers{cfg: &config.Config{AllowedExternalDomains: []string{host}, Runtime: config.RuntimeConfig{AllowLoopbackAdminAuthDev: true}}}).WithInputSecurityPolicy(policy)
 	req := SubmitJobRequest{
 		IdempotencyKey: "pg_20260728_manifest_001",
 		ManifestRef: &SubmitManifestRef{
@@ -98,7 +102,10 @@ func TestResolveRenderManifestRef_RejectsRawSHA256Mismatch(t *testing.T) {
 	defer srv.Close()
 
 	host := strings.Split(strings.TrimPrefix(srv.URL, "http://"), ":")[0]
-	h := &Handlers{cfg: &config.Config{AllowedExternalDomains: []string{host}}}
+	policy := inputsecurity.DefaultPolicy()
+	policy.AllowPrivateNetworks = true
+	policy.TempDir = t.TempDir()
+	h := (&Handlers{cfg: &config.Config{AllowedExternalDomains: []string{host}, Runtime: config.RuntimeConfig{AllowLoopbackAdminAuthDev: true}}}).WithInputSecurityPolicy(policy)
 	req := SubmitJobRequest{
 		IdempotencyKey: "pg_20260728_manifest_bad_sha",
 		ManifestRef: &SubmitManifestRef{

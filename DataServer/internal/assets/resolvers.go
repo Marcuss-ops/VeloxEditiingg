@@ -1,7 +1,6 @@
 package assets
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -12,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"velox-server/internal/inputsecurity"
 	driveapi "velox-server/internal/integrations/drive"
 
 	"velox-shared/paths"
@@ -44,6 +44,11 @@ func (r *veloxAssetResolver) Open(ctx context.Context, reference string) (*Sourc
 	resolved, err := r.store.Lookup(assetID)
 	if err != nil {
 		return nil, err
+	}
+	if _, validationErr := inputsecurity.NewFetcher(r.store.SecurityPolicy()).ValidateFile(ctx, resolved.LocalPath, inputsecurity.KindUnknown, resolved.MediaType); validationErr != nil {
+		fetcher := inputsecurity.NewFetcher(r.store.SecurityPolicy())
+		_ = fetcher.Quarantine(resolved.LocalPath, inputsecurity.KindUnknown, inputsecurity.CodeOf(validationErr), validationErr.Error())
+		return nil, newAcquisitionError("reference", "velox_asset", validationErr.Error(), validationErr)
 	}
 	f, err := os.Open(resolved.LocalPath)
 	if err != nil {
@@ -88,6 +93,11 @@ func (r *localFileResolver) Open(ctx context.Context, reference string) (*Source
 	} else if info.IsDir() {
 		return nil, fmt.Errorf("source is a directory")
 	}
+	if _, validationErr := inputsecurity.NewFetcher(r.store.SecurityPolicy()).ValidateFile(ctx, source, inputsecurity.KindUnknown, detectMediaType(source, filepath.Ext(source))); validationErr != nil {
+		fetcher := inputsecurity.NewFetcher(r.store.SecurityPolicy())
+		_ = fetcher.Quarantine(source, inputsecurity.KindUnknown, inputsecurity.CodeOf(validationErr), validationErr.Error())
+		return nil, newAcquisitionError("reference", "file", validationErr.Error(), validationErr)
+	}
 	f, err := os.Open(source)
 	if err != nil {
 		return nil, err
@@ -105,6 +115,13 @@ type httpResolver struct {
 	http  *http.Client
 }
 
+func (r *httpResolver) SecurityPolicy() inputsecurity.Policy {
+	if r != nil && r.store != nil {
+		return r.store.SecurityPolicy()
+	}
+	return inputsecurity.DefaultPolicy()
+}
+
 func (r *httpResolver) Scheme() string   { return "https" }
 func (r *httpResolver) ServerOnly() bool { return false }
 
@@ -114,50 +131,26 @@ func (r *httpResolver) Open(ctx context.Context, reference string) (*Source, err
 	}
 	client := r.http
 	if client == nil {
-		client = &http.Client{
-			Timeout: 90 * time.Second,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 5 {
-					return http.ErrUseLastResponse
-				}
-				return nil
-			},
-		}
+		client = &http.Client{Timeout: 90 * time.Second}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reference, nil)
+	policy := r.SecurityPolicy()
+	if client.Transport != nil {
+		policy.Transport = client.Transport
+	}
+	fetched, err := inputsecurity.NewFetcher(policy).Fetch(ctx, reference, inputsecurity.KindUnknown)
 	if err != nil {
-		return nil, err
+		return nil, newAcquisitionError("reference", "http", err.Error(), err)
 	}
-	resp, err := client.Do(req)
+	f, err := os.Open(fetched.Path)
 	if err != nil {
-		return nil, newAcquisitionError("reference", "http", "download failed", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		_ = resp.Body.Close()
-		return nil, newAcquisitionError("reference", "http", fmt.Sprintf("download failed with status %d", resp.StatusCode), nil)
-	}
-	mediaType := strings.TrimSpace(resp.Header.Get("Content-Type"))
-	if idx := strings.Index(mediaType, ";"); idx >= 0 {
-		mediaType = strings.TrimSpace(mediaType[:idx])
-	}
-	if mediaType != "" && isHTMLMediaType(mediaType) {
-		_ = resp.Body.Close()
-		return nil, newAcquisitionError("reference", "http", "unexpected HTML response", nil)
-	}
-	reader := bufio.NewReader(resp.Body)
-	peek, _ := reader.Peek(512)
-	if isHTMLPayload(peek) {
-		_ = resp.Body.Close()
-		return nil, newAcquisitionError("reference", "http", "unexpected HTML response", nil)
-	}
-	if mediaType == "" {
-		mediaType = http.DetectContentType(peek)
+		_ = os.Remove(fetched.Path)
+		return nil, newAcquisitionError("reference", "http", "secure download cannot be opened", err)
 	}
 	return &Source{
-		Reader:        &readCloser{reader},
-		SuggestedName: suggestedFilenameFromURL(reference),
-		MIMEType:      mediaType,
-		ExpectedSize:  resp.ContentLength,
+		Reader:        &cleanupCloser{f, fetched.Path},
+		SuggestedName: fetched.SuggestedName,
+		MIMEType:      fetched.MIMEType,
+		ExpectedSize:  fetched.ExpectedSize,
 		SourceType:    "https",
 	}, nil
 }
@@ -224,9 +217,23 @@ func (r *driveResolver) Open(ctx context.Context, reference string) (*Source, er
 	}
 	tmpPath := tmp.Name()
 	_ = tmp.Close()
-	if err := r.drive.DownloadFile(ctx, fileID, tmpPath); err != nil {
+	var downloadErr error
+	if bounded, ok := r.drive.(interface {
+		DownloadFileWithLimit(context.Context, string, string, int64) error
+	}); ok {
+		downloadErr = bounded.DownloadFileWithLimit(ctx, fileID, tmpPath, r.store.maxBytes)
+	} else {
+		downloadErr = r.drive.DownloadFile(ctx, fileID, tmpPath)
+	}
+	if downloadErr != nil {
 		_ = os.Remove(tmpPath)
-		return nil, newAcquisitionError("reference", "drive", "Drive download failed", err)
+		return nil, newAcquisitionError("reference", "drive", "Drive download failed", downloadErr)
+	}
+	policy := r.store.SecurityPolicy()
+	fetcher := inputsecurity.NewFetcher(policy)
+	if _, validationErr := fetcher.ValidateFile(ctx, tmpPath, inputsecurity.KindUnknown, meta.MimeType); validationErr != nil {
+		_ = fetcher.Quarantine(tmpPath, inputsecurity.KindUnknown, inputsecurity.CodeOf(validationErr), validationErr.Error())
+		return nil, newAcquisitionError("reference", "drive", validationErr.Error(), validationErr)
 	}
 	f, err := os.Open(tmpPath)
 	if err != nil {

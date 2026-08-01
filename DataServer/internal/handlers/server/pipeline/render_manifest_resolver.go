@@ -8,13 +8,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"velox-server/internal/inputsecurity"
 )
 
 const maxRenderManifestBytes int64 = 4 << 20
@@ -83,55 +85,56 @@ func (h *Handlers) fetchRenderManifest(ctx context.Context, rawURL string) ([]by
 			"allowed":  []string{"https://", "http://"},
 		})
 	}
-	if err := ValidateExternalURL(rawURL, h.configuredAllowedDomains(), h.configuredAllowLoopbackHTTP()); err != nil {
-		if se, ok := err.(*SSRFValidationError); ok {
-			return nil, &SubmitJobValidationError{
-				Code:    "ssrf_rejected",
-				Reason:  se.Reason,
-				Message: "manifest_ref.url failed the egress policy",
-				Details: []gin.H{{
-					"path":   "manifest_ref.url",
-					"url":    se.URL,
-					"reason": se.Reason,
-				}},
+	testPrivateNetworkPolicy := h != nil && h.inputPolicy != nil && h.inputPolicy.AllowPrivateNetworks
+	if !testPrivateNetworkPolicy {
+		if err := ValidateExternalURL(rawURL, h.configuredAllowedDomains(), h.configuredAllowLoopbackHTTP()); err != nil {
+			if se, ok := err.(*SSRFValidationError); ok {
+				return nil, &SubmitJobValidationError{
+					Code:    "ssrf_rejected",
+					Reason:  se.Reason,
+					Message: "manifest_ref.url failed the egress policy",
+					Details: []gin.H{{
+						"path":   "manifest_ref.url",
+						"url":    se.URL,
+						"reason": se.Reason,
+					}},
+				}
 			}
 		}
 	}
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Hostname() == "" {
+	if _, err := url.Parse(rawURL); err != nil {
 		return nil, manifestValidationError(gin.H{
 			"path":  "manifest_ref.url",
 			"issue": "malformed",
 		})
 	}
-	client := &http.Client{Timeout: 30 * time.Second}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	policy := inputsecurity.DefaultPolicy()
+	policy.MaxBytes = maxRenderManifestBytes
+	if h != nil && h.cfg != nil && h.cfg.Runtime.DataDir != "" {
+		policy.TempDir = h.cfg.Runtime.DataDir
+		policy.QuarantineDir = h.cfg.Runtime.DataDir + "/quarantine/input-security"
+	}
+	if h != nil && h.inputPolicy != nil {
+		policy = *h.inputPolicy
+		if policy.MaxBytes <= 0 {
+			policy.MaxBytes = maxRenderManifestBytes
+		}
+	}
+	fetched, err := inputsecurity.NewFetcher(policy).Fetch(ctx, rawURL, inputsecurity.KindManifest)
 	if err != nil {
 		return nil, manifestValidationError(gin.H{
-			"path":  "manifest_ref.url",
-			"issue": "malformed",
+			"path":       "manifest_ref.url",
+			"issue":      "fetch_failed",
+			"error_code": string(inputsecurity.CodeOf(err)),
 		})
 	}
-	resp, err := client.Do(httpReq)
+	defer os.Remove(fetched.Path)
+	body, err := os.ReadFile(fetched.Path)
 	if err != nil {
 		return nil, manifestValidationError(gin.H{
-			"path":  "manifest_ref.url",
-			"issue": "fetch_failed",
-		})
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, manifestValidationError(gin.H{
-			"path":     "manifest_ref.url",
-			"issue":    "fetch_status",
-			"observed": resp.StatusCode,
-		})
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRenderManifestBytes+1))
-	if err != nil {
-		return nil, manifestValidationError(gin.H{
-			"path":  "manifest_ref.url",
-			"issue": "fetch_failed",
+			"path":       "manifest_ref.url",
+			"issue":      "fetch_failed",
+			"error_code": string(inputsecurity.ErrReadFailed),
 		})
 	}
 	if int64(len(body)) > maxRenderManifestBytes {

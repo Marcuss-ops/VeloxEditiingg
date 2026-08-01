@@ -4,6 +4,7 @@ import (
 	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/inputsecurity"
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	targetpublishing "velox-server/internal/publishing"
@@ -29,6 +30,7 @@ type Handlers struct {
 	intakeSink     CreatorIntakeSink
 	legacyBodySink LegacyBodySink
 	assetService   *voiceoverassets.AssetService
+	inputPolicy    *inputsecurity.Policy
 }
 
 // JobsDeps bundles the optional jobs-layer dependencies used by
@@ -131,6 +133,13 @@ func (h *Handlers) WithLegacyBodySink(sink LegacyBodySink) *Handlers {
 
 func (h *Handlers) WithAssetService(svc *voiceoverassets.AssetService) *Handlers {
 	h.assetService = svc
+	return h
+}
+
+// WithInputSecurityPolicy is intended for hermetic tests and controlled
+// composition roots. Production handlers use the fail-closed default policy.
+func (h *Handlers) WithInputSecurityPolicy(policy inputsecurity.Policy) *Handlers {
+	h.inputPolicy = &policy
 	return h
 }
 

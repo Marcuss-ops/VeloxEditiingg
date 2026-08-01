@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"velox-server/internal/identity"
+	"velox-server/internal/inputsecurity"
 )
 
 // registration.go owns the asset-registration pipeline: the unique
@@ -59,7 +60,14 @@ func (s *AssetService) ResolveAndRegister(ctx context.Context, cmd ResolveAssetC
 
 	hasher := sha256.New()
 	tee := io.TeeReader(source.Reader, hasher)
-	sizeBytes, err := io.Copy(stagingFile, tee)
+	maxBytes := int64(0)
+	if s.security != nil {
+		maxBytes = s.security.Policy().MaxBytes
+	}
+	if maxBytes <= 0 {
+		maxBytes = 256 * 1024 * 1024
+	}
+	sizeBytes, err := io.Copy(stagingFile, io.LimitReader(tee, maxBytes+1))
 	if err != nil {
 		_ = stagingFile.Close()
 		_ = s.blobStore.RemoveStaging(stagingPath)
@@ -75,6 +83,26 @@ func (s *AssetService) ResolveAndRegister(ctx context.Context, cmd ResolveAssetC
 	if sizeBytes == 0 {
 		_ = s.blobStore.RemoveStaging(stagingPath)
 		return nil, fmt.Errorf("empty asset from %s", reference)
+	}
+	if sizeBytes > maxBytes {
+		securityErr := inputsecurity.NewError(inputsecurity.NormalizeKind(cmd.Kind), inputsecurity.ErrDownloadTooLarge, "asset exceeds the input byte limit", nil)
+		if s.security != nil {
+			_ = s.security.Quarantine(stagingPath, inputsecurity.NormalizeKind(cmd.Kind), inputsecurity.ErrDownloadTooLarge, securityErr.Error())
+		} else {
+			_ = s.blobStore.RemoveStaging(stagingPath)
+		}
+		return nil, securityErr
+	}
+	if s.security == nil {
+		_ = s.blobStore.RemoveStaging(stagingPath)
+		return nil, fmt.Errorf("input security validator unavailable")
+	}
+	validation, validationErr := s.security.ValidateFile(ctx, stagingPath, inputsecurity.NormalizeKind(cmd.Kind), source.MIMEType)
+	if validationErr != nil {
+		if quarantineErr := s.security.Quarantine(stagingPath, inputsecurity.NormalizeKind(cmd.Kind), inputsecurity.CodeOf(validationErr), validationErr.Error()); quarantineErr != nil {
+			return nil, fmt.Errorf("validate asset: %w; quarantine: %v", validationErr, quarantineErr)
+		}
+		return nil, validationErr
 	}
 	sha256hex := hex.EncodeToString(hasher.Sum(nil))
 
@@ -99,7 +127,7 @@ func (s *AssetService) ResolveAndRegister(ctx context.Context, cmd ResolveAssetC
 		Kind:            kind,
 		Status:          AssetStatusReady,
 		SHA256:          sha256hex,
-		MimeType:        source.MIMEType,
+		MimeType:        validation.MIMEType,
 		SizeBytes:       sizeBytes,
 		StorageProvider: "local",
 		StorageKey:      storageKey,
@@ -132,7 +160,7 @@ func (s *AssetService) ResolveAndRegister(ctx context.Context, cmd ResolveAssetC
 		Kind:            kind,
 		Status:          AssetStatusReady,
 		SHA256:          sha256hex,
-		MimeType:        source.MIMEType,
+		MimeType:        validation.MIMEType,
 		SizeBytes:       sizeBytes,
 		StorageProvider: "local",
 		StorageKey:      storageKey,

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"velox-server/internal/inputsecurity"
 )
 
 // Source is what a resolver returns: a reader plus metadata.
@@ -33,6 +35,8 @@ type Resolver interface {
 type ResolverRegistry struct {
 	resolvers map[string]Resolver
 	ordered   []Resolver
+	security  inputsecurity.Policy
+	hasPolicy bool
 }
 
 // NewResolverRegistry creates a registry from the provided resolvers.
@@ -50,6 +54,10 @@ func NewResolverRegistry(resolvers ...Resolver) *ResolverRegistry {
 		}
 		r.resolvers[scheme] = res
 		r.ordered = append(r.ordered, res)
+		if provider, ok := res.(interface{ SecurityPolicy() inputsecurity.Policy }); ok && !r.hasPolicy {
+			r.security = provider.SecurityPolicy()
+			r.hasPolicy = true
+		}
 	}
 	return r
 }
@@ -65,6 +73,17 @@ func (r *ResolverRegistry) Register(resolver Resolver) {
 	}
 	r.resolvers[scheme] = resolver
 	r.ordered = append(r.ordered, resolver)
+	if provider, ok := resolver.(interface{ SecurityPolicy() inputsecurity.Policy }); ok && !r.hasPolicy {
+		r.security = provider.SecurityPolicy()
+		r.hasPolicy = true
+	}
+}
+
+func (r *ResolverRegistry) SecurityPolicy() (inputsecurity.Policy, bool) {
+	if r == nil || !r.hasPolicy {
+		return inputsecurity.Policy{}, false
+	}
+	return r.security, true
 }
 
 // ResolveByScheme dispatches to the resolver matching the scheme of reference.

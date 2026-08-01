@@ -187,6 +187,13 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 
 	metricsRegistry := velmetrics.NewRegistry()
 	metricsCollector := velmetrics.NewCollector(metricsRegistry)
+	if m != nil && m.AssetService != nil {
+		for _, family := range velmetrics.NewInputSecurityFamilies(m.AssetService.SecurityMetrics()) {
+			if family != nil {
+				metricsRegistry.Register(family)
+			}
+		}
+	}
 	compatibility.SetAliasReadObserver(metricsCollector.NewCompatibilityAliasObserver())
 
 	// Build the InstaEdit control-plane verifier when the shared

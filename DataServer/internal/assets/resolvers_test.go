@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	neturl "net/url"
+	"os"
 	"strings"
 	"testing"
 
@@ -44,7 +45,16 @@ func (m *mockDriveDownloader) DownloadFile(ctx context.Context, fileID string, d
 	if m.downloadFile != nil {
 		return m.downloadFile(ctx, fileID, destPath)
 	}
-	return nil
+	return os.WriteFile(destPath, []byte("mock-drive-bytes"), 0o600)
+}
+
+func testResolverStore(t *testing.T) *Store {
+	t.Helper()
+	store := NewStore(t.TempDir(), 1024*1024, nil)
+	policy := store.SecurityPolicy()
+	policy.AllowPrivateNetworks = true
+	store.SetSecurityPolicy(policy)
+	return store
 }
 
 func TestPublicDriveDownloadURL_FileLink(t *testing.T) {
@@ -74,7 +84,7 @@ func TestDriveResolver_Open_PublicDrive200OK(t *testing.T) {
 	client := &http.Client{
 		Transport: &rewriteGoogleDriveTransport{target: targetURL, base: http.DefaultTransport},
 	}
-	store := NewStore(t.TempDir(), 1024*1024, nil)
+	store := testResolverStore(t)
 	resolver := &driveResolver{store: store, http: client}
 
 	src, err := resolver.Open(context.Background(), "https://drive.google.com/file/d/public-file-id/view?usp=drive_link")
@@ -112,7 +122,7 @@ func TestDriveResolver_Open_PublicDrive403WithoutAuth(t *testing.T) {
 	client := &http.Client{
 		Transport: &rewriteGoogleDriveTransport{target: targetURL, base: http.DefaultTransport},
 	}
-	store := NewStore(t.TempDir(), 1024*1024, nil)
+	store := testResolverStore(t)
 	resolver := &driveResolver{store: store, http: client}
 
 	_, err := resolver.Open(context.Background(), "https://drive.google.com/file/d/public-file-id/view?usp=drive_link")
@@ -145,7 +155,7 @@ func TestDriveResolver_Open_PublicDriveHTMLWithoutAuth(t *testing.T) {
 	client := &http.Client{
 		Transport: &rewriteGoogleDriveTransport{target: targetURL, base: http.DefaultTransport},
 	}
-	store := NewStore(t.TempDir(), 1024*1024, nil)
+	store := testResolverStore(t)
 	resolver := &driveResolver{store: store, http: client}
 
 	_, err := resolver.Open(context.Background(), "https://drive.google.com/file/d/public-file-id/view?usp=drive_link")
@@ -163,8 +173,8 @@ func TestDriveResolver_Open_PublicDriveHTMLWithoutAuth(t *testing.T) {
 	if ae.Cause == nil {
 		t.Fatal("expected Cause to be non-nil")
 	}
-	if !strings.Contains(ae.Cause.Error(), "unexpected HTML response") {
-		t.Fatalf("cause = %q, want 'unexpected HTML response'", ae.Cause.Error())
+	if !strings.Contains(ae.Cause.Error(), "INPUT_HTML_PAYLOAD") {
+		t.Fatalf("cause = %q, want canonical HTML rejection", ae.Cause.Error())
 	}
 }
 
@@ -182,14 +192,14 @@ func TestDriveResolver_Open_PublicDriveFailsWithAuthAvailable(t *testing.T) {
 	client := &http.Client{
 		Transport: &rewriteGoogleDriveTransport{target: targetURL, base: http.DefaultTransport},
 	}
-	store := NewStore(t.TempDir(), 1024*1024, nil)
+	store := testResolverStore(t)
 
 	drive := &mockDriveDownloader{
 		getFileMetadata: func(ctx context.Context, fileID string) (*driveapi.File, error) {
 			return &driveapi.File{Name: "auth-file", MimeType: "audio/mpeg", Size: 200}, nil
 		},
 		downloadFile: func(ctx context.Context, fileID string, destPath string) error {
-			return nil
+			return os.WriteFile(destPath, []byte("mock-drive-bytes"), 0o600)
 		},
 	}
 
@@ -213,7 +223,7 @@ func TestDriveResolver_Open_DriveFolderWithoutAuth(t *testing.T) {
 
 	// A Drive folder link — publicDriveDownloadURL returns false so it should
 	// NOT be treated as a public file and should go straight to the auth check.
-	store := NewStore(t.TempDir(), 1024*1024, nil)
+	store := testResolverStore(t)
 	resolver := &driveResolver{store: store, http: http.DefaultClient}
 
 	_, err := resolver.Open(context.Background(), "https://drive.google.com/drive/folders/abcd1234")

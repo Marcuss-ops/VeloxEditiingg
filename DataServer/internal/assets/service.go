@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 
+	"velox-server/internal/inputsecurity"
 	"velox-server/internal/platform/clock"
 )
 
@@ -41,10 +42,12 @@ type BlobStore interface {
 
 // AssetService is the generic asset registry service.
 type AssetService struct {
-	repo      AssetRepository
-	blobStore BlobStore
-	registry  *ResolverRegistry
-	clock     clock.Clock
+	repo         AssetRepository
+	blobStore    BlobStore
+	registry     *ResolverRegistry
+	clock        clock.Clock
+	videoTrimmer *VideoTrimmer
+	security     *inputsecurity.Fetcher
 }
 
 // NewAssetService creates a new generic asset service.
@@ -52,12 +55,29 @@ func NewAssetService(repo AssetRepository, blobStore BlobStore, registry *Resolv
 	if c == nil {
 		c = clock.System{}
 	}
-	return &AssetService{
-		repo:      repo,
-		blobStore: blobStore,
-		registry:  registry,
-		clock:     c,
+	policy := inputsecurity.DefaultPolicy()
+	if registry != nil {
+		if configured, ok := registry.SecurityPolicy(); ok {
+			policy = configured
+		}
 	}
+	return &AssetService{
+		repo:         repo,
+		blobStore:    blobStore,
+		registry:     registry,
+		clock:        c,
+		videoTrimmer: NewVideoTrimmer(DefaultVideoNormalization),
+		security:     inputsecurity.NewFetcher(policy),
+	}
+}
+
+// SecurityMetrics exposes bounded input rejection counters for the metrics
+// composition root without exposing URLs or filesystem paths.
+func (s *AssetService) SecurityMetrics() *inputsecurity.Metrics {
+	if s == nil || s.security == nil {
+		return nil
+	}
+	return s.security.Metrics()
 }
 
 // Get retrieves an asset by ID.
