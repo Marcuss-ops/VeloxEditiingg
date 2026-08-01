@@ -1,0 +1,22 @@
+{
+  "annotations": { "list": [] },
+  "description": "Cache efficiency dashboard. Prometheus uses the closed result label; benchmark cache_mode and exact run attribution remain SQL-only.",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "panels": [
+    { "type": "timeseries", "title": "Cache requests by result", "description": "Closed result values are hit, miss and corrupt.", "gridPos": { "h": 10, "w": 12, "x": 0, "y": 0 }, "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "sum by (result) (rate(velox_cache_requests_total[5m]))", "legendFormat": "{{result}}", "refId": "A" } ] },
+    { "type": "timeseries", "title": "Cache bytes by result", "description": "Transferred bytes split by hit and miss.", "gridPos": { "h": 10, "w": 12, "x": 12, "y": 0 }, "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "sum by (result) (rate(velox_cache_bytes_total[5m]))", "legendFormat": "{{result}}", "refId": "A" } ] },
+    { "type": "timeseries", "title": "Cache hit ratio by class", "description": "Pre-computed ratio gauge, encoded in micro-units by the collector.", "gridPos": { "h": 10, "w": 12, "x": 0, "y": 10 }, "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "avg by (worker_class) (velox_cache_hit_ratio) / 1000000", "legendFormat": "{{worker_class}}", "refId": "A" } ] },
+    { "type": "text", "title": "Cold / warm benchmark detail", "options": { "mode": "markdown", "content": "Run **Cold vs Warm Cache** in `prometheus/engine-analysis.sql` for `performance_benchmark_runs.cache_mode`, render factor, wall time and output hash. Do not compare different benchmark cases." }, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 } }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["velox", "observability", "cache"],
+  "templating": { "list": [ { "name": "DS_PROMETHEUS", "type": "datasource", "query": "prometheus", "label": "Datasource", "current": { "text": "Prometheus", "value": "Prometheus" } } ] },
+  "time": { "from": "now-24h", "to": "now" },
+  "timezone": "",
+  "title": "Velox — Cold vs Warm Cache",
+  "uid": "velox-cold-warm-cache",
+  "version": 1
+}

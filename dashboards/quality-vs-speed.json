@@ -1,0 +1,22 @@
+{
+  "annotations": { "list": [] },
+  "description": "Quality versus speed overview. Prometheus exposes speed and compute signals; output quality fields are compared per attempt in SQL.",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "panels": [
+    { "type": "timeseries", "title": "Render speed ratio", "description": "Media duration divided by wall clock, grouped by executor and worker class.", "gridPos": { "h": 10, "w": 12, "x": 0, "y": 0 }, "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "avg by (executor_id, worker_class) (velox_project_render_speed_ratio)", "legendFormat": "{{executor_id}} / {{worker_class}}", "refId": "A" } ] },
+    { "type": "timeseries", "title": "FFmpeg speed ratio", "description": "Engine-side realtime speed signal.", "gridPos": { "h": 10, "w": 12, "x": 12, "y": 0 }, "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "avg by (executor_id) (velox_ffmpeg_speed_ratio)", "legendFormat": "{{executor_id}}", "refId": "A" } ] },
+    { "type": "timeseries", "title": "Useful versus failed compute", "description": "Quality investigation should correlate these outcomes with SQL quality checks.", "gridPos": { "h": 10, "w": 12, "x": 0, "y": 10 }, "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "sum by (outcome) (rate(velox_compute_seconds_total{outcome=~\"useful|failed\"}[1h]))", "legendFormat": "{{outcome}}", "refId": "A" } ] },
+    { "type": "text", "title": "SQL quality dimensions", "options": { "mode": "markdown", "content": "Run **Quality vs Speed** in `prometheus/engine-analysis.sql` to compare render factor with `ffprobe_valid`, duration delta, stream presence, black-frame ratio and audio sync offset. High-cardinality attempt identifiers remain SQL-only." }, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 } }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 38,
+  "tags": ["velox", "observability", "quality"],
+  "templating": { "list": [ { "name": "DS_PROMETHEUS", "type": "datasource", "query": "prometheus", "label": "Datasource", "current": { "text": "Prometheus", "value": "Prometheus" } } ] },
+  "time": { "from": "now-24h", "to": "now" },
+  "timezone": "",
+  "title": "Velox — Quality vs Speed",
+  "uid": "velox-quality-vs-speed",
+  "version": 1
+}

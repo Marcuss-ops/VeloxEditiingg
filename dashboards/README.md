@@ -22,6 +22,14 @@ those substrings appearing in this directory.
 
 ## Files
 
+- `attempt-explorer.json` — Fleet-level attempt timeline and phase signals; use SQL for the exact attempt Gantt.
+- `worker-ranking.json` — Worker and worker-class performance ranking.
+- `version-regression.json` — Executor/version phase regression signals.
+- `recoverable-time.json` — Observed latency and links to p25 baseline/recoverable-time SQL.
+- `cold-warm-cache.json` — Cache hit/miss signals and deterministic benchmark guidance.
+- `parallelism-efficiency.json` — Parallel efficiency, speedup, overlap, idle gap and oversubscription.
+- `quality-vs-speed.json` — Render speed/quality overview with SQL quality drill-down.
+- `waste-analysis.json` — Retry, wasted resource and compute-outcome signals.
 - `compute-outcomes.json` — Grafana panel set for compute outcomes.
 - `failure-reasons.json` — Grafana panel for the failure-reason
   sibling family (top-N reasons).
@@ -42,6 +50,26 @@ those substrings appearing in this directory.
   Cardinality discipline: NO labels on any of the four families
   (no host, no per-reason dim) — the streak length is captured as
   a histogram observation rather than as a label series.
+
+## Cardinality split
+
+The dashboards use Prometheus only for bounded operational labels already
+registered by the master: `executor_id`, `executor_version`, `worker_class`,
+`worker_id`, `phase`, `status`, `source_type`, `result`, `outcome` and
+`waste_type`. They never select `job_id`, `task_id`, `attempt_id`, hashes,
+asset IDs or free-form messages as labels.
+
+The detailed Attempt Explorer, worker attribution, version identity, cohort
+baseline, cold/warm benchmark, parallel segment timeline, quality outliers and
+waste attribution queries live in `prometheus/observability-dashboards.sql`.
+Those SQL queries intentionally expose high-cardinality identifiers because
+SQLite is the investigation plane, not the Prometheus time-series plane.
+
+Run the static contract check with:
+
+```sh
+bash scripts/ci/check-observability-dashboards.sh
+```
 
 ## How to import
 

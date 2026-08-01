@@ -1,0 +1,22 @@
+{
+  "annotations": { "list": [] },
+  "description": "Waste dashboard for retries, wasted CPU, duplicated downloads and wasted cost. Exact attempt attribution is in SQL.",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "panels": [
+    { "type": "timeseries", "title": "Waste by type", "description": "Closed waste_type values are retry_count, wasted_cpu_ms, wasted_download_bytes and wasted_cost_estimate.", "gridPos": { "h": 10, "w": 12, "x": 0, "y": 0 }, "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "sum by (waste_type) (rate(velox_waste_total[1h]))", "legendFormat": "{{waste_type}}", "refId": "A" } ] },
+    { "type": "timeseries", "title": "Compute outcome mix", "description": "Failed and cancelled compute indicate potentially recoverable work.", "gridPos": { "h": 10, "w": 12, "x": 12, "y": 0 }, "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "sum by (outcome) (rate(velox_compute_seconds_total[1h]))", "legendFormat": "{{outcome}}", "refId": "A" } ] },
+    { "type": "timeseries", "title": "Cost per output minute", "description": "Worker-class cost gauges for waste prioritization.", "gridPos": { "h": 10, "w": 12, "x": 0, "y": 10 }, "fieldConfig": { "defaults": { "unit": "currencyEUR" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "avg by (worker_class) (velox_cost_total_per_output_minute) / 1000000", "legendFormat": "{{worker_class}}", "refId": "A" } ] },
+    { "type": "text", "title": "SQL attribution", "options": { "mode": "markdown", "content": "Run **Waste** in `prometheus/engine-analysis.sql` for retry count, wasted CPU/download bytes, failed segments, cost and the exact attempt/worker/version context." }, "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 } }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 38,
+  "tags": ["velox", "observability", "waste"],
+  "templating": { "list": [ { "name": "DS_PROMETHEUS", "type": "datasource", "query": "prometheus", "label": "Datasource", "current": { "text": "Prometheus", "value": "Prometheus" } } ] },
+  "time": { "from": "now-24h", "to": "now" },
+  "timezone": "",
+  "title": "Velox — Waste",
+  "uid": "velox-waste-analysis",
+  "version": 1
+}

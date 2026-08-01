@@ -1,0 +1,22 @@
+{
+  "annotations": { "list": [] },
+  "description": "Segment parallelism efficiency by bounded executor_id and worker_id. Gauge ratios are encoded at x1000 by the collector and normalized in PromQL.",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "panels": [
+    { "type": "timeseries", "title": "Parallel efficiency", "description": "Average concurrency divided by peak concurrency.", "gridPos": { "h": 10, "w": 12, "x": 0, "y": 0 }, "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "avg by (worker_id) (velox_taskrunner_parallel_efficiency_ratio) / 1000", "legendFormat": "{{worker_id}}", "refId": "A" } ] },
+    { "type": "timeseries", "title": "Speedup vs serial", "description": "Serial work divided by render window.", "gridPos": { "h": 10, "w": 12, "x": 12, "y": 0 }, "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "avg by (worker_id) (velox_taskrunner_speedup_vs_serial) / 1000", "legendFormat": "{{worker_id}}", "refId": "A" } ] },
+    { "type": "timeseries", "title": "Overlap and idle gap", "description": "Time lost to overlap or gaps within the render window.", "gridPos": { "h": 10, "w": 12, "x": 0, "y": 10 }, "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "avg by (worker_id) (velox_taskrunner_overlap_ms)", "legendFormat": "overlap / {{worker_id}}", "refId": "A" }, { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "avg by (worker_id) (velox_taskrunner_idle_gap_ms)", "legendFormat": "idle / {{worker_id}}", "refId": "B" } ] },
+    { "type": "timeseries", "title": "CPU oversubscription", "description": "Total segment threads divided by logical CPU count.", "gridPos": { "h": 10, "w": 12, "x": 12, "y": 10 }, "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "avg by (worker_id) (velox_resource_cpu_oversubscription_ratio) / 1000", "legendFormat": "{{worker_id}}", "refId": "A" } ] }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["velox", "observability", "parallelism"],
+  "templating": { "list": [ { "name": "DS_PROMETHEUS", "type": "datasource", "query": "prometheus", "label": "Datasource", "current": { "text": "Prometheus", "value": "Prometheus" } } ] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "",
+  "title": "Velox — Parallelism Efficiency",
+  "uid": "velox-parallelism-efficiency",
+  "version": 1
+}

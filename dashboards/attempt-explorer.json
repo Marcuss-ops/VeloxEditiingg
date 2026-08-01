@@ -1,0 +1,54 @@
+{
+  "annotations": { "list": [] },
+  "description": "Fleet-level attempt timeline signals. Use the Attempt Explorer SQL queries in prometheus/engine-analysis.sql for job/task/attempt-level Gantt detail; those identifiers stay out of Prometheus labels.",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Phase p95 by phase",
+      "description": "Canonical phase latency grouped only by the closed phase label.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "showLegend": true } },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "histogram_quantile(0.95, sum by (le, phase) (rate(velox_task_phase_duration_seconds_bucket[5m])))", "legendFormat": "{{phase}}", "refId": "A" } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Phase failures",
+      "description": "Non-ok phase observations grouped by closed phase and status labels.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "showLegend": true } },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "sum by (phase, status) (rate(velox_task_phase_duration_seconds_count{status!=\"ok\"}[5m]))", "legendFormat": "{{phase}} / {{status}}", "refId": "A" } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Render speed by worker class",
+      "description": "Lower render factor and higher render speed ratio indicate faster attempts; exact attribution is in SQL.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "showLegend": true } },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "avg by (executor_id, worker_class) (velox_project_render_speed_ratio)", "legendFormat": "{{executor_id}} / {{worker_class}}", "refId": "A" } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Active tasks by worker",
+      "description": "Current worker load for correlating queue and execution windows.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "showLegend": true } },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "max by (worker_id) (velox_worker_active_tasks)", "legendFormat": "{{worker_id}}", "refId": "A" } ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["velox", "observability", "attempt"],
+  "templating": { "list": [ { "name": "DS_PROMETHEUS", "type": "datasource", "query": "prometheus", "label": "Datasource", "current": { "text": "Prometheus", "value": "Prometheus" } } ] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "",
+  "title": "Velox — Attempt Explorer",
+  "uid": "velox-attempt-explorer",
+  "version": 1
+}

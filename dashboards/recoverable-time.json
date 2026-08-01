@@ -1,0 +1,22 @@
+{
+  "annotations": { "list": [] },
+  "description": "Recoverable time is calculated from render_performance_daily using a healthy cohort p25 baseline. Prometheus panels provide live phase latency; SQL provides observed, baseline and recoverable milliseconds.",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "panels": [
+    { "type": "timeseries", "title": "Observed phase p95", "description": "Live observed phase latency; join to render_performance_daily for recoverable_ms_total.", "gridPos": { "h": 10, "w": 12, "x": 0, "y": 0 }, "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "histogram_quantile(0.95, sum by (le, phase) (rate(velox_task_phase_duration_seconds_bucket[1h])))", "legendFormat": "{{phase}}", "refId": "A" } ] },
+    { "type": "timeseries", "title": "Observed render factor", "description": "Lower wall-clock seconds per output second is better; cohort baseline is SQL-only.", "gridPos": { "h": 10, "w": 12, "x": 12, "y": 0 }, "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "avg by (worker_class) (velox_render_factor) / 1000000", "legendFormat": "{{worker_class}}", "refId": "A" } ] },
+    { "type": "timeseries", "title": "Download throughput", "description": "A live proxy for recoverable asset wait time.", "gridPos": { "h": 10, "w": 12, "x": 0, "y": 10 }, "fieldConfig": { "defaults": { "unit": "Bps" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "avg by (worker_class) (velox_download_throughput_bytes_per_second)", "legendFormat": "{{worker_class}}", "refId": "A" } ] },
+    { "type": "text", "title": "SQL detail", "options": { "mode": "markdown", "content": "Run **Recoverable Time** in `prometheus/engine-analysis.sql`. It returns observed phase p25, healthy baseline p25 and `recoverable_ms` from `render_performance_daily`; filter by `cohort_base_key` before comparing workloads." }, "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 } }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 38,
+  "tags": ["velox", "observability", "recoverable-time"],
+  "templating": { "list": [ { "name": "DS_PROMETHEUS", "type": "datasource", "query": "prometheus", "label": "Datasource", "current": { "text": "Prometheus", "value": "Prometheus" } } ] },
+  "time": { "from": "now-7d", "to": "now" },
+  "timezone": "",
+  "title": "Velox — Recoverable Time",
+  "uid": "velox-recoverable-time",
+  "version": 1
+}

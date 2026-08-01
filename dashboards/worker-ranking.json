@@ -1,0 +1,22 @@
+{
+  "annotations": { "list": [] },
+  "description": "Worker performance ranking with bounded worker_id labels. Use SQL for exact attempt and snapshot attribution.",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "panels": [
+    { "type": "timeseries", "title": "Engine phase p95 by worker", "description": "Top-level worker comparison; worker_id is fleet-bounded.", "gridPos": { "h": 10, "w": 12, "x": 0, "y": 0 }, "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "topk(20, histogram_quantile(0.95, sum by (le, worker_id) (rate(velox_engine_phase_duration_seconds_bucket[15m]))))", "legendFormat": "{{worker_id}}", "refId": "A" } ] },
+    { "type": "timeseries", "title": "CPU utilization by worker", "description": "Current CPU pressure for the same worker fleet.", "gridPos": { "h": 10, "w": 12, "x": 12, "y": 0 }, "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "max by (worker_id) (velox_worker_cpu_utilization_ratio)", "legendFormat": "{{worker_id}}", "refId": "A" } ] },
+    { "type": "timeseries", "title": "Render speed by worker class", "description": "Class-level comparison is stable across worker churn.", "gridPos": { "h": 10, "w": 12, "x": 0, "y": 10 }, "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "avg by (worker_class) (velox_project_render_speed_ratio)", "legendFormat": "{{worker_class}}", "refId": "A" } ] },
+    { "type": "timeseries", "title": "Cache hit ratio by class", "description": "Class-level cache efficiency; exact asset attribution remains SQL-only.", "gridPos": { "h": 10, "w": 12, "x": 12, "y": 10 }, "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "avg by (worker_class) (velox_cache_hit_ratio) / 1000000", "legendFormat": "{{worker_class}}", "refId": "A" } ] }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["velox", "observability", "worker"],
+  "templating": { "list": [ { "name": "DS_PROMETHEUS", "type": "datasource", "query": "prometheus", "label": "Datasource", "current": { "text": "Prometheus", "value": "Prometheus" } } ] },
+  "time": { "from": "now-24h", "to": "now" },
+  "timezone": "",
+  "title": "Velox — Worker Ranking",
+  "uid": "velox-worker-ranking",
+  "version": 1
+}

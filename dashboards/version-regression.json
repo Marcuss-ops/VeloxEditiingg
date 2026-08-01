@@ -1,0 +1,22 @@
+{
+  "annotations": { "list": [] },
+  "description": "Regression signals by executor and executor_version. Git SHA, engine, FFmpeg, image and config comparisons are available in SQL.",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "panels": [
+    { "type": "timeseries", "title": "Phase p95 by executor version", "description": "Compare equivalent phase latency across closed executor_version values.", "gridPos": { "h": 10, "w": 12, "x": 0, "y": 0 }, "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "histogram_quantile(0.95, sum by (le, executor_version) (rate(velox_task_phase_duration_seconds_bucket[1h])))", "legendFormat": "v{{executor_version}}", "refId": "A" } ] },
+    { "type": "timeseries", "title": "Phase p95 by executor", "description": "Detect executor-specific regressions without unbounded dimensions.", "gridPos": { "h": 10, "w": 12, "x": 12, "y": 0 }, "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "histogram_quantile(0.95, sum by (le, executor_id) (rate(velox_task_phase_duration_seconds_bucket[1h])))", "legendFormat": "{{executor_id}}", "refId": "A" } ] },
+    { "type": "timeseries", "title": "Render speed by version and class", "description": "Higher is faster; use SQL cohort queries for release-level baselines.", "gridPos": { "h": 10, "w": 12, "x": 0, "y": 10 }, "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "avg by (executor_id, worker_class) (velox_project_render_speed_ratio)", "legendFormat": "{{executor_id}} / {{worker_class}}", "refId": "A" } ] },
+    { "type": "timeseries", "title": "Failure rate by phase status", "description": "Regression companion for phase failures.", "gridPos": { "h": 10, "w": 12, "x": 12, "y": 10 }, "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "sum by (executor_version, status) (rate(velox_task_phase_duration_seconds_count{status!=\"ok\"}[1h]))", "legendFormat": "v{{executor_version}} / {{status}}", "refId": "A" } ] }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 38,
+  "tags": ["velox", "observability", "regression", "version"],
+  "templating": { "list": [ { "name": "DS_PROMETHEUS", "type": "datasource", "query": "prometheus", "label": "Datasource", "current": { "text": "Prometheus", "value": "Prometheus" } } ] },
+  "time": { "from": "now-7d", "to": "now" },
+  "timezone": "",
+  "title": "Velox — Version Regression",
+  "uid": "velox-version-regression",
+  "version": 1
+}

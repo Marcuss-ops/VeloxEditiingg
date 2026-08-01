@@ -16,6 +16,37 @@
 
 ---
 
+## Dashboard observability contract
+
+The operator surface is intentionally split into two planes:
+
+| Dashboard | Prometheus panels (closed labels) | SQL detail source |
+| --- | --- | --- |
+| Attempt Explorer | phase p95/failure, render speed, active worker load | `observability-dashboards.sql` §1: event Gantt and immutable worker snapshot |
+| Worker Ranking | engine phase p95, CPU, render speed and cache ratio | §2: worker success/render/cache ranking |
+| Version Regression | phase p95 and failures by `executor_id`/`executor_version` | §3: `render_performance_daily` by cohort, Git SHA, engine, FFmpeg, image and config |
+| Recoverable Time | observed phase p95, render factor and download throughput | §4: healthy cohort p25 baseline and `recoverable_ms_total` |
+| Cold vs Warm Cache | cache requests/bytes and cache ratio | §5: `performance_benchmark_runs` for `gervais-final-v1` and `cold_cache`/`warm_cache` |
+| Parallelism Efficiency | efficiency, speedup, overlap, idle gap and oversubscription | §6: `task_attempt_parallelism` and segment offsets |
+| Quality vs Speed | render speed, FFmpeg speed and useful/failed compute | §7: ffprobe, duration, black-frame and audio-sync SQL dimensions |
+| Waste | `waste_type`, outcome and class-level cost | §8: retry, wasted CPU/download/cost and exact attempt attribution |
+
+Prometheus labels used by these dashboards are limited to the closed set
+`executor_id`, `executor_version`, `worker_class`, `worker_id`, `phase`,
+`status`, `source_type`, `result`, `outcome` and `waste_type` (plus the
+standard histogram `le` label). `job_id`, `task_id`, `attempt_id`, hashes,
+asset IDs, templates and free-form messages remain SQL-only. The canonical
+Grafana JSON lives in `dashboards/`; the corresponding SQL is
+`prometheus/observability-dashboards.sql`.
+
+### Derived gauge units
+
+The collector stores ratio gauges as integer micro-units to preserve
+precision: `velox_render_factor` and `velox_cache_hit_ratio` are divided by
+`1e6` in panels. Parallelism ratios (`velox_taskrunner_*_ratio` and
+`velox_resource_cpu_oversubscription_ratio`) are stored at `1e3` and divided
+by `1e3`. Cost gauges are micro-EUR and are divided by `1e6`.
+
 ## A. Job-Level Metrics
 
 | #  | Metric Name                                | Type | Description                                           | Unit      | Labels                          | DB Source                                 | Ret. | HC |
@@ -329,6 +360,7 @@ Worker (otelgrpc client handler)                    Master (otelgrpc server hand
 | 2026-07-06 | OTLP gRPC exporter support (Step 17b)              | —         |
 | 2026-07-06 | Worker otelgrpc client interceptor (Step 18)       | —         |
 | 2026-07-06 | **Metric catalog updated** (this revision)         | —         |
+| 2026-07-31 | Eight observability dashboards, SQL detail queries and cardinality contract | — |
 
 ---
 

@@ -318,15 +318,15 @@ type countingSource struct {
 // to dedupe.
 func (c *countingSource) Open(ctx context.Context, _ string) (io.ReadCloser, error) {
 	c.openCount.Add(1)
-	if c.err != nil {
-		return nil, c.err
-	}
 	if c.delay > 0 {
 		select {
 		case <-time.After(c.delay):
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
+	}
+	if c.err != nil {
+		return nil, c.err
 	}
 	return io.NopCloser(bytes.NewReader(c.payload)), nil
 }
