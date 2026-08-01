@@ -11,6 +11,20 @@ import (
 )
 
 func normalizeVoiceoverList(payloadMap map[string]interface{}) []string {
+	if payloadMap == nil {
+		return nil
+	}
+	// Once the canonical field is present it is authoritative. Do not
+	// re-scan broad legacy aliases such as `source` or `url`: canonical
+	// JobPayloadV2 metadata uses those keys for non-audio fields, and a
+	// second normalization must not reinterpret them as voiceover paths.
+	if raw, present := payloadMap[compatibility.VoiceoverPathsKey]; present {
+		if canonical := payload.NormalizeToStrings(raw); len(canonical) > 0 {
+			return canonical
+		}
+		// Preserve the migration fallback for an explicitly empty
+		// canonical field paired with a legacy value.
+	}
 	return compatibility.ReadStringList(payloadMap, compatibility.VoiceoverPathsKey)
 }
 

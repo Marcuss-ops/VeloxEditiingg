@@ -331,12 +331,13 @@ func NormalizeSceneEntry(scene map[string]interface{}) map[string]interface{} {
 	if text := payload.FirstString(scene, "text"); text != "" {
 		normalized["text"] = text
 	}
-	if image := payload.FirstString(scene, "image_link", "image_url", "image"); image != "" {
+	image := payload.FirstString(scene, "image_link", "image_url", "image")
+	if image != "" {
 		normalized["image_link"] = image
 	}
 	if links := payload.NormalizeStringList(scene, "image_links"); len(links) > 0 {
 		normalized["image_links"] = links
-	} else if image := payload.FirstString(scene, "image_link"); image != "" {
+	} else if image != "" {
 		normalized["image_links"] = []string{image}
 	}
 	if duration := payload.NormalizedDuration(normalized["duration_seconds"]); duration <= 0 {

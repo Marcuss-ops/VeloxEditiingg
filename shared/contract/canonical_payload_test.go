@@ -191,6 +191,24 @@ func TestValidatePayload_Accept_Canonical(t *testing.T) {
 // ValidatePayload — legacy alias rejection
 // ────────────────────────────────────────────────────────────────────────
 
+func TestValidatePayload_RejectsEveryLegacyAlias(t *testing.T) {
+	for _, alias := range LegacyAliasKeys {
+		t.Run(alias, func(t *testing.T) {
+			payload := map[string]interface{}{"job_id": "canonical-job", alias: "legacy-value"}
+			err := ValidatePayload(payload)
+			if err == nil {
+				t.Fatalf("expected legacy alias %q to be rejected", alias)
+			}
+			if !errors.Is(err, ErrLegacyAlias) {
+				t.Fatalf("expected ErrLegacyAlias for %q, got %v", alias, err)
+			}
+			if !strings.Contains(err.Error(), alias) {
+				t.Fatalf("expected error for %q to name the alias, got %v", alias, err)
+			}
+		})
+	}
+}
+
 func TestValidatePayload_Reject_LegacyAlias(t *testing.T) {
 	tests := []struct {
 		name      string

@@ -1,9 +1,12 @@
 package enqueue
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"velox-shared/contract"
 )
 
 // =====================================================================
@@ -21,6 +24,64 @@ import (
 //     pipeline result objects (it must NOT mutate the input map).
 //   - ShouldForwardPipelineResult gates whether a pipeline result is
 //     eligible to be re-enqueued (status==completed + scenes+voiceover).
+
+func TestNormalizeSceneVideoPayload_IsIdempotent(t *testing.T) {
+	input := map[string]interface{}{
+		"job_id":          "idempotent-job",
+		"job_run_id":      "idempotent-run",
+		"correlation_id":  "idempotent-correlation",
+		"video_name":      "Idempotent render",
+		"script_text":     "The canonical payload must remain stable.",
+		"voiceover_paths": []interface{}{"velox-asset://voiceover.mp3"},
+		"delivery_plan":   []interface{}{map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3}},
+		"video_metadata":  map[string]interface{}{"width": 1920, "height": 1080, "fps_num": 30, "fps_den": 1, "video_codec": "h264"},
+		"scenes": []interface{}{
+			map[string]interface{}{
+				"scene_id":         "scene-0",
+				"text":             "Scene 0",
+				"image_url":        "velox-asset://scene-0.png",
+				"duration_seconds": 5.0,
+			},
+		},
+	}
+
+	first, err := normalizeSceneVideoPayload(input)
+	if err != nil {
+		t.Fatalf("first normalization: %v", err)
+	}
+	firstBeforeSecond, err := json.Marshal(first)
+	if err != nil {
+		t.Fatalf("marshal first normalized payload before second pass: %v", err)
+	}
+	second, err := normalizeSceneVideoPayload(first)
+	if err != nil {
+		t.Fatalf("second normalization: %v", err)
+	}
+
+	firstJSON, err := json.Marshal(first)
+	if err != nil {
+		t.Fatalf("marshal first normalized payload: %v", err)
+	}
+	if string(firstBeforeSecond) != string(firstJSON) {
+		t.Fatalf("second normalization mutated the first normalized payload:\nbefore: %s\nafter:  %s", firstBeforeSecond, firstJSON)
+	}
+	secondJSON, err := json.Marshal(second)
+	if err != nil {
+		t.Fatalf("marshal second normalized payload: %v", err)
+	}
+	if string(firstJSON) != string(secondJSON) {
+		t.Fatalf("normalization is not idempotent:\nfirst:  %s\nsecond: %s", firstJSON, secondJSON)
+	}
+	if err := contract.ValidatePayload(second); err != nil {
+		t.Fatalf("second normalized payload failed canonical validation: %v", err)
+	}
+
+	for _, alias := range contract.LegacyAliasKeys {
+		if _, present := second[alias]; present {
+			t.Fatalf("normalized payload contains legacy alias %q", alias)
+		}
+	}
+}
 
 func TestNormalizeScenesPayload(t *testing.T) {
 	t.Parallel()
