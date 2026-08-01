@@ -1,3 +1,7 @@
+// Package grpcserver / handler_result.go
+//
+// TaskResult handler, sliced out of handler_jobs.go so each
+// task-lifecycle message type owns a file.
 package grpcserver
 
 import (
