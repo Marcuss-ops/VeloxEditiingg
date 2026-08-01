@@ -50,6 +50,12 @@ type spoofStubTaskRepo struct {
 	lastArtifacts       []taskoutput_artifacts.OutputArtifact
 	lastPhaseTimings    []taskattempts.PhaseTimingDetailed
 	lastPartialPhases   []taskattempts.PhaseTimingDetailed
+	acceptCalls         int
+	releaseCalls        int
+	releaseErr          error
+	renewCalls          int
+	lastRenewRevision   int
+	transitionTaskState bool
 }
 
 func (s *spoofStubTaskRepo) Get(_ context.Context, id string) (*taskgraph.Task, error) {
@@ -94,8 +100,23 @@ func (s *spoofStubTaskRepo) GetByJobID(_ context.Context, jobID string) (*taskgr
 func (s *spoofStubTaskRepo) ClaimNextReadyTask(_ context.Context, _, _ string) (*taskgraph.TaskWithSpec, error) {
 	panic("spoofStubTaskRepo.ClaimNextReadyTask")
 }
-func (s *spoofStubTaskRepo) ReleaseLease(_ context.Context, _, _, _ string) error {
-	panic("spoofStubTaskRepo.ReleaseLease")
+func (s *spoofStubTaskRepo) ReleaseLease(_ context.Context, taskID, workerID, leaseID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.releaseCalls++
+	if s.releaseErr != nil {
+		return s.releaseErr
+	}
+	if s.nowTask.ID != taskID || s.nowTask.WorkerID != workerID || s.nowTask.LeaseID != leaseID || s.nowTask.Status != taskgraph.StatusLeased {
+		return taskgraph.ErrTransitionConflict
+	}
+	s.nowTask.Status = taskgraph.StatusReady
+	s.nowTask.WorkerID = ""
+	s.nowTask.LeaseID = ""
+	s.nowTask.AttemptID = ""
+	s.nowTask.AttemptNumber = 0
+	s.nowTask.Revision++
+	return nil
 }
 func (s *spoofStubTaskRepo) Start(_ context.Context, _, _, _ string, _, _ int) error {
 	panic("spoofStubTaskRepo.Start")
@@ -109,11 +130,32 @@ func (s *spoofStubTaskRepo) IncrementAttempt(_ context.Context, _ string) error 
 func (s *spoofStubTaskRepo) AreDependenciesSatisfied(_ context.Context, _ []string) (bool, error) {
 	panic("spoofStubTaskRepo.AreDependenciesSatisfied")
 }
-func (s *spoofStubTaskRepo) AcceptTaskAtomic(_ context.Context, _ *taskattempts.TaskAttempt, _ int) error {
-	panic("spoofStubTaskRepo.AcceptTaskAtomic")
+func (s *spoofStubTaskRepo) AcceptTaskAtomic(_ context.Context, attempt *taskattempts.TaskAttempt, revision int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.acceptCalls++
+	if s.transitionErr != nil {
+		return s.transitionErr
+	}
+	if s.nowTask.Status != taskgraph.StatusLeased || s.nowTask.Revision != revision ||
+		s.nowTask.WorkerID != attempt.WorkerID || s.nowTask.LeaseID != attempt.LeaseID ||
+		s.nowTask.AttemptID != attempt.ID || s.nowTask.AttemptNumber != attempt.AttemptNumber {
+		return taskgraph.ErrTransitionConflict
+	}
+	s.nowTask.Status = taskgraph.StatusRunning
+	s.nowTask.Revision++
+	return nil
 }
-func (s *spoofStubTaskRepo) RenewLease(_ context.Context, _, _, _ string, _ time.Time, _ int) error {
-	panic("spoofStubTaskRepo.RenewLease")
+func (s *spoofStubTaskRepo) RenewLease(_ context.Context, taskID, workerID, leaseID string, _ time.Time, revision int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.renewCalls++
+	s.lastRenewRevision = revision
+	if s.nowTask.ID != taskID || s.nowTask.WorkerID != workerID || s.nowTask.LeaseID != leaseID || s.nowTask.Revision != revision ||
+		(s.nowTask.Status != taskgraph.StatusLeased && s.nowTask.Status != taskgraph.StatusRunning) {
+		return taskgraph.ErrTransitionConflict
+	}
+	return nil
 }
 func (s *spoofStubTaskRepo) ExpireTaskLeaseAtomic(_ context.Context, _, _, _ string, _ int) (taskgraph.ExpireResult, error) {
 	panic("spoofStubTaskRepo.ExpireTaskLeaseAtomic")
