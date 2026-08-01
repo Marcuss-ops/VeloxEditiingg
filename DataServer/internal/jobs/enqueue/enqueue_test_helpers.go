@@ -76,11 +76,13 @@ func seedDestinations(t *testing.T, db *store.SQLiteStore, pairs map[string]bool
 // configured plan or error verbatim, with a defensive copy of the
 // destinations slice so tests cannot accidentally mutate shared state.
 type mockPlanResolver struct {
-	plan *ResolvedPlan
-	err  error
+	plan  *ResolvedPlan
+	err   error
+	calls int
 }
 
 func (m *mockPlanResolver) ResolvePlan(_ context.Context, _, _ string) (*ResolvedPlan, error) {
+	m.calls++
 	if m.err != nil {
 		return nil, m.err
 	}

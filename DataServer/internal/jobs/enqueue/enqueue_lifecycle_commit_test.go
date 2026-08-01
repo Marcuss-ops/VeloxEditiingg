@@ -28,10 +28,9 @@ import (
 //     catches misconfiguration at boot, not at first production enqueue.
 //   - TestRenderHTTPBoundaryJobResponse: HTTP-edge adapter (5 subtests)
 //     covering basic/legacy-alias-fallback/full/nil/error.
-//   - TestEnqueue_Precondition_*: 5 tests pinning the precondition
-//     rejection paths (missing plan, empty destinations, zero retry
-//     budget, max-retry propagation) + the integration tests against
-//     the real SQLiteDeliveryPlanResolver.
+//   - TestEnqueue_Precondition_*: tests pinning payload/transaction
+//     rejection paths and max-retry propagation, plus integration tests
+//     against the real SQLiteDeliveryPlanResolver.
 
 func TestEnqueueCreatesJobAndTaskAtomically(t *testing.T) {
 	t.Parallel()
@@ -136,10 +135,10 @@ func TestNewEnqueuer_PanicsOnNilPlanResolver(t *testing.T) {
 	_ = NewEnqueuer(nil, nil, nil, nil)
 }
 
-// TestEnqueue_Precondition_RejectsMissingPlan verifies that an enqueue is
-// rejected when the PlanResolver returns an error (e.g. ErrNoExplicitPlan
-// from the real SQLiteDeliveryPlanResolver). The atomic create must NOT
-// happen and the error must surface a clear "delivery_plan" hint.
+// TestEnqueue_Precondition_RejectsMissingPlan verifies that an enqueue
+// without a delivery plan is rejected during payload preflight, before
+// the atomic creator or PlanResolver can run. The error must surface a
+// clear "delivery_plan" hint.
 func TestEnqueue_Precondition_RejectsMissingPlan(t *testing.T) {
 	t.Parallel()
 	tempDir := t.TempDir()
@@ -169,13 +168,13 @@ func TestEnqueue_Precondition_RejectsMissingPlan(t *testing.T) {
 	}
 }
 
-// TestEnqueue_Precondition_RejectsEmptyDestinations verifies that an
-// enqueue is rejected when the plan has zero destinations (treated as
-// "no explicit plan"). The atomic create runs FIRST with the payload's
-// delivery_plan, so the payload's destination_id "d1" must be seeded;
-// otherwise validateDeliveryDestinationTx rejects the insert before
-// the precondition check.
-func TestEnqueue_Precondition_RejectsEmptyDestinations(t *testing.T) {
+// TestEnqueue_ResolverFailureAfterAtomicCreateDoesNotReportFalseFailure
+// characterizes the commit boundary. The payload is valid and the atomic
+// creator can commit Job+Task+delivery-plan rows, but the legacy resolver
+// deliberately returns an error. Resolver failures belong to finalization;
+// they must not turn a committed enqueue into an error that causes callers
+// to retry and potentially misdiagnose the already-persisted job.
+func TestEnqueue_ResolverFailureAfterAtomicCreateDoesNotReportFalseFailure(t *testing.T) {
 	t.Parallel()
 	tempDir := t.TempDir()
 	db, err := store.NewSQLiteStore(filepath.Join(tempDir, "test.db"))
@@ -187,7 +186,53 @@ func TestEnqueue_Precondition_RejectsEmptyDestinations(t *testing.T) {
 		store.NewAtomicJobTaskCreator(db),
 		store.NewSQLiteJobRepository(db),
 		nil,
-		&mockPlanResolver{plan: &ResolvedPlan{JobID: "test"}},
+		&mockPlanResolver{err: errors.New("resolver unavailable after commit")},
+	)
+
+	payload := map[string]interface{}{
+		"video_name":      "resolver-failure-does-not-orphan",
+		"script_text":     "test",
+		"scenes":          []interface{}{map[string]interface{}{"scene": "intro", "voiceover": "v1"}},
+		"voiceover_paths": []string{"/tmp/v.mp3"},
+		"delivery_plan": []interface{}{
+			map[string]interface{}{"destination_id": "d1", "priority": 0, "retry_budget": 3},
+		},
+	}
+
+	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
+	if err != nil {
+		t.Fatalf("valid atomic enqueue must succeed despite resolver error: %v", err)
+	}
+	if response["ok"] != true {
+		t.Fatalf("response.ok = %v, want true", response["ok"])
+	}
+	jobID, _ := response["job_id"].(string)
+	if jobID == "" {
+		t.Fatal("response.job_id is empty")
+	}
+	job, err := enq.Jobs.Get(context.Background(), jobID)
+	if err != nil || job == nil {
+		t.Fatalf("committed job missing: err=%v job=%v", err, job)
+	}
+	if job.Status != jobs.StatusPending {
+		t.Fatalf("committed job status = %q, want PENDING", job.Status)
+	}
+}
+
+func TestEnqueue_ResolverEmptyPlanDoesNotRejectValidPayload(t *testing.T) {
+	t.Parallel()
+	tempDir := t.TempDir()
+	db, err := store.NewSQLiteStore(filepath.Join(tempDir, "test.db"))
+	if err != nil {
+		t.Fatalf("sqlite store: %v", err)
+	}
+	seedDestinations(t, db, map[string]bool{"d1": true})
+	resolver := &mockPlanResolver{plan: &ResolvedPlan{JobID: "test"}}
+	enq := NewEnqueuer(
+		store.NewAtomicJobTaskCreator(db),
+		store.NewSQLiteJobRepository(db),
+		nil,
+		resolver,
 	)
 
 	payload := map[string]interface{}{
@@ -199,27 +244,23 @@ func TestEnqueue_Precondition_RejectsEmptyDestinations(t *testing.T) {
 			map[string]interface{}{"destination_id": "d1", "priority": 0, "retry_budget": 3},
 		},
 	}
-	_, err = enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
-	if err == nil {
-		t.Fatal("want error when destinations empty, got nil")
+	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
+	if err != nil {
+		t.Fatalf("valid payload must enqueue despite empty resolver result: %v", err)
 	}
-	if !strings.Contains(err.Error(), "no explicit delivery plan") {
-		t.Errorf("want error to mention missing plan, got %v", err)
+	if response["ok"] != true {
+		t.Fatalf("response.ok = %v, want true", response["ok"])
+	}
+	if resolver.calls != 0 {
+		t.Fatalf("resolver calls = %d, want 0 on committed enqueue path", resolver.calls)
 	}
 }
 
-// TestEnqueue_Precondition_RejectsNegativeRetryBudget verifies that an
-// enqueue is rejected when any destination has retry_budget < 0. The
-// per-delivery delivery_plan_payload.go validator already rejects at
-// parse time; this is the runtime counterpart at enqueue time.
-// The atomic create runs FIRST with the payload's delivery_plan,
-// so the payload's destination_id "d1" must be seeded to reach
-// the precondition check.
-//
-// Note: retry_budget=0 is now ALLOWED per openapi.yaml
-// (SubmitDeliveryPlanEntry.retry_budget.minimum is 0). The previous
-// boundary (<=0) was too strict; only negative values are now rejected.
-func TestEnqueue_Precondition_RejectsNegativeRetryBudget(t *testing.T) {
+// TestEnqueue_ResolverNegativeRetryBudgetDoesNotRejectValidPayload
+// verifies that a stale/invalid resolver result cannot turn a committed
+// valid payload into a false enqueue failure. Negative payload budgets
+// are still rejected before creation by validateDeliveryPlanRequires.
+func TestEnqueue_ResolverNegativeRetryBudgetDoesNotRejectValidPayload(t *testing.T) {
 	t.Parallel()
 	tempDir := t.TempDir()
 	db, err := store.NewSQLiteStore(filepath.Join(tempDir, "test.db"))
@@ -227,17 +268,18 @@ func TestEnqueue_Precondition_RejectsNegativeRetryBudget(t *testing.T) {
 		t.Fatalf("sqlite store: %v", err)
 	}
 	seedDestinations(t, db, map[string]bool{"d1": true})
+	resolver := &mockPlanResolver{plan: &ResolvedPlan{
+		JobID: "test",
+		Destinations: []PlanDestination{
+			{DestinationID: "d1", Priority: 0, RetryBudget: 5},
+			{DestinationID: "d2", Priority: 1, RetryBudget: -1}, // INVALID
+		},
+	}}
 	enq := NewEnqueuer(
 		store.NewAtomicJobTaskCreator(db),
 		store.NewSQLiteJobRepository(db),
 		nil,
-		&mockPlanResolver{plan: &ResolvedPlan{
-			JobID: "test",
-			Destinations: []PlanDestination{
-				{DestinationID: "d1", Priority: 0, RetryBudget: 5},
-				{DestinationID: "d2", Priority: 1, RetryBudget: -1}, // INVALID
-			},
-		}},
+		resolver,
 	)
 
 	payload := map[string]interface{}{
@@ -249,15 +291,15 @@ func TestEnqueue_Precondition_RejectsNegativeRetryBudget(t *testing.T) {
 			map[string]interface{}{"destination_id": "d1", "priority": 0, "retry_budget": 3},
 		},
 	}
-	_, err = enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
-	if err == nil {
-		t.Fatal("want error when retry_budget=-1, got nil")
+	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
+	if err != nil {
+		t.Fatalf("valid payload must enqueue despite invalid resolver result: %v", err)
 	}
-	if !strings.Contains(err.Error(), "retry_budget") {
-		t.Errorf("want error to mention retry_budget, got %v", err)
+	if response["ok"] != true {
+		t.Fatalf("response.ok = %v, want true", response["ok"])
 	}
-	if !strings.Contains(err.Error(), "must be >= 0") {
-		t.Errorf("want error to mention 'must be >= 0', got %v", err)
+	if resolver.calls != 0 {
+		t.Fatalf("resolver calls = %d, want 0 on committed enqueue path", resolver.calls)
 	}
 }
 

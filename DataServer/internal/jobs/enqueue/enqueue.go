@@ -173,14 +173,13 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 		return nil, fmt.Errorf("enqueue: atomic create: %w", err)
 	}
 
-	// ResolvePlan runs AFTER the atomic create so it sees the plan
-	// rows this call just committed. A small matcher race window
-	// exists before the precondition returns, but worker-side
-	// re-resolution lands on WAITING_FOR_PLAN so observability holds.
-	if err := e.enforceDeliveryPlanPrecondition(ctx, jobID, job); err != nil {
-		return nil, fmt.Errorf("enqueue: post-create plan precondition: %w", err)
-	}
-
+	// The atomic creator has already validated and persisted the delivery
+	// plan in the same transaction as Job+Task. Do not run the DB-backed
+	// resolver as a second gate here: its read uses a separate connection,
+	// and any error at this point would report enqueue failure after the
+	// transaction committed, leaving a job that callers may retry.
+	// Finalization remains responsible for resolving the durable plan when
+	// delivery records are created.
 	return buildSceneVideoResponse(normalized), nil
 }
 
@@ -264,10 +263,8 @@ func (e *Enqueuer) prepareJobAndTask(ctx context.Context, payloadMap map[string]
 	}
 
 	// compileSceneVideoJob sets MaxRetries=0; extractPlanMaxRetry below
-	// is the single writer of that field on the insert path. The
-	// post-create precondition in Enqueue re-reads the plan from the
-	// DB for consistency gating but no longer mutates the committed
-	// value.
+	// is the single writer of that field on the insert path. The atomic
+	// creator persists this value together with the job and task.
 	job, spec, priority := compileSceneVideoJob(normalized, req)
 
 	if maxRetry := extractPlanMaxRetry(normalized); maxRetry > 0 {
@@ -283,22 +280,11 @@ func (e *Enqueuer) prepareJobAndTask(ctx context.Context, payloadMap map[string]
 		}
 	}
 
-	// The plan precondition (ResolvePlan + retry_budget > 0 + MaxRetries
-	// propagation) is enforced POST-create in Enqueue(). PrepareJobAndTask
-	// stays pure: it only validates the payload shape via
-	// validateDeliveryPlanRequires (above) and pre-computes
-	// job.MaxRetries from the payload's delivery_plan (above) so the
-	// insert-time column matches the resolver's view at INSERT time.
-	//
-	// *Tx-variant callers (AtomicForwardAndEnqueue etc.) get the same
-	// guard via validateDeliveryDestinationTx inside CreateJobWithTaskTx,
-	// which rejects malformed delivery contracts in the same SQLite tx.
-	// The public Enqueue path additionally runs a post-create resolver
-	// round-trip purely so observability on the new-submit hot path
-	// surfaces an actionable "missing plan" hint before the worker
-	// invests in a lease — the canonical fix for the "manual preinsert
-	// required" production bug surfaced on the Jackie Chan doc-voiceover
-	// real run.
+	// The enqueue path validates payload shape before compilation and
+	// validates destination existence/enabled state inside
+	// CreateJobWithTaskTx. Those checks are the commit gate. The durable
+	// resolver remains the source of truth for finalization, but is not
+	// called after this method has committed the job.
 
 	return job, spec, priority, nil
 }
