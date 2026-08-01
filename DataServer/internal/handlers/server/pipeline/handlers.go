@@ -6,6 +6,7 @@ import (
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
+	targetpublishing "velox-server/internal/publishing"
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/socialclient"
 	"velox-server/internal/store"
@@ -17,16 +18,17 @@ import (
 // Resolver and socialClient are built once at construction so target discovery
 // and job intake do not create transport clients per request.
 type Handlers struct {
-	cfg             *config.Config
-	enqueuer        *enqueue.Enqueuer
-	client          *remoteengine.Client
-	resolver        *creatorflow.Resolver
-	socialClient    *socialclient.Client
-	jobs            JobsDeps
-	store           *store.SQLiteStore
-	intakeSink      CreatorIntakeSink
-	legacyBodySink  LegacyBodySink
-	assetService    *voiceoverassets.AssetService
+	cfg            *config.Config
+	enqueuer       *enqueue.Enqueuer
+	client         *remoteengine.Client
+	resolver       *creatorflow.Resolver
+	socialClient   *socialclient.Client
+	targetResolver *targetpublishing.TargetResolver
+	jobs           JobsDeps
+	store          *store.SQLiteStore
+	intakeSink     CreatorIntakeSink
+	legacyBodySink LegacyBodySink
+	assetService   *voiceoverassets.AssetService
 }
 
 // JobsDeps bundles the optional jobs-layer dependencies used by
@@ -79,7 +81,7 @@ func HandlersFactory(
 	jobsWriter jobs.Writer,
 	cmdMgr *workers.CommandManager,
 ) *Handlers {
-	return &Handlers{
+	h := &Handlers{
 		cfg:          cfg,
 		enqueuer:     enqueuer,
 		client:       client,
@@ -87,6 +89,8 @@ func HandlersFactory(
 		socialClient: socialclient.New(socialclient.ConfigFromEnv()),
 		jobs:         JobsDeps{Reader: jobsReader, Writer: jobsWriter, CmdMgr: cmdMgr},
 	}
+	h.targetResolver = targetpublishing.NewTargetResolver(h.socialClient, h.store)
+	return h
 }
 
 func (h *Handlers) WithJobsDeps(reader jobs.Reader, writer jobs.Writer, cmdMgr *workers.CommandManager) *Handlers {
@@ -103,6 +107,7 @@ func (h *Handlers) WithTaskReader(reader taskgraph.Reader) *Handlers {
 
 func (h *Handlers) WithStore(db *store.SQLiteStore) *Handlers {
 	h.store = db
+	h.targetResolver = targetpublishing.NewTargetResolver(h.socialClient, h.store)
 	return h
 }
 
@@ -110,6 +115,7 @@ func (h *Handlers) WithStore(db *store.SQLiteStore) *Handlers {
 // the factory default; tests inject an httptest-backed client.
 func (h *Handlers) WithSocialClient(client *socialclient.Client) *Handlers {
 	h.socialClient = client
+	h.targetResolver = targetpublishing.NewTargetResolver(h.socialClient, h.store)
 	return h
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	targetpublishing "velox-server/internal/publishing"
 	"velox-server/internal/socialclient"
 	"velox-server/internal/store"
 )
@@ -101,45 +102,54 @@ func (h *Handlers) ListPublishingTargets() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "social_api_not_configured"})
 			return
 		}
-		if h.store == nil {
+		if h.store == nil || h.targetResolver == nil {
 			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "destination_store_not_configured"})
 			return
 		}
 
-		catalog, err := h.socialClient.ListPublishingTargets(c.Request.Context(), req.WorkspaceID, req.Platform)
+		resolved, err := h.targetResolver.ResolveCatalog(c.Request.Context(), targetpublishing.CatalogRequest{
+			WorkspaceID: req.WorkspaceID,
+			Platform:    req.Platform,
+		})
 		if err != nil {
-			status := http.StatusBadGateway
-			code := "social_api_failure"
-			switch {
-			case errors.Is(err, socialclient.ErrNotConfigured):
-				status = http.StatusServiceUnavailable
-				code = "social_api_not_configured"
-			case errors.Is(err, socialclient.ErrAuth):
+			status, code := publishingCatalogUpstreamError(err)
+			if !errors.Is(err, socialclient.ErrNotConfigured) && !errors.Is(err, socialclient.ErrAuth) && !errors.Is(err, socialclient.ErrRateLimit) && !errors.Is(err, socialclient.ErrPermanent) {
 				status = http.StatusBadGateway
-				code = "social_api_auth_failed"
-			case errors.Is(err, socialclient.ErrRateLimit):
-				status = http.StatusTooManyRequests
-				code = "social_api_rate_limited"
-			case errors.Is(err, socialclient.ErrPermanent):
-				status = http.StatusUnprocessableEntity
-				code = "social_target_catalog_rejected"
+				code = "social_catalog_invalid"
 			}
 			c.AbortWithStatusJSON(status, gin.H{"error": code, "message": err.Error()})
 			return
 		}
-
 		response := PublishingTargetsResponse{
 			WorkspaceID: req.WorkspaceID,
 			Platform:    req.Platform,
 			Targets:     []PublishingTargetResponse{},
 		}
-		for _, target := range catalog.ResolvedTargets {
-			if req.PlatformAccountID > 0 && target.PlatformAccountID != req.PlatformAccountID {
-				continue
+		syncedDestinationIDs := make([]string, 0, len(resolved.Channels))
+		for _, channel := range resolved.Channels {
+			target := socialclient.PublishingTarget{
+				WorkspaceID:           channel.WorkspaceID,
+				PlatformAccountID:     channel.PlatformAccountID,
+				Platform:              channel.Platform,
+				ChannelID:             channel.ChannelID,
+				ChannelName:           channel.Name,
+				ExternalDestinationID: channel.ExternalDestinationID,
+				Status:                channel.Status,
+				Enabled:               channel.Eligible,
+				CanPost:               channel.CanPost,
+				BlockReason:           channel.BlockReason,
+				TargetErrorCode:       channel.TargetErrorCode,
+				Capabilities: socialclient.PublishingCapabilities{
+					UploadVideo:  channel.Capabilities.UploadVideo,
+					SetThumbnail: channel.Capabilities.SetThumbnail,
+					Publish:      channel.Capabilities.Publish,
+					Schedule:     channel.Capabilities.Schedule,
+				},
 			}
 			out := PublishingTargetResponse{PublishingTarget: target}
 			if target.ExternalDestinationID != "" {
 				out.DestinationID = veloxDestinationID(target.ExternalDestinationID)
+				syncedDestinationIDs = append(syncedDestinationIDs, out.DestinationID)
 				configuration, marshalErr := json.Marshal(map[string]any{
 					"source":                  "instaedit_catalog",
 					"workspace_id":            req.WorkspaceID,
@@ -154,10 +164,10 @@ func (h *Handlers) ListPublishingTargets() gin.HandlerFunc {
 				}
 				if upsertErr := h.store.UpsertSyncedDeliveryDestination(c.Request.Context(), store.DeliveryDestination{
 					DestinationID:         out.DestinationID,
-					Provider:              "social_gateway",
+					Provider:              targetpublishing.ProviderSocialGateway,
 					ExternalDestinationID: target.ExternalDestinationID,
 					Name:                  target.ChannelName,
-					Enabled:               target.CanPost,
+					Enabled:               channel.Eligible,
 					ConfigurationJSON:     string(configuration),
 				}); upsertErr != nil {
 					c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
@@ -169,6 +179,19 @@ func (h *Handlers) ListPublishingTargets() gin.HandlerFunc {
 			}
 			response.Targets = append(response.Targets, out)
 		} // close for-loop
+
+		// A full catalog refresh is authoritative. Disable stale local rows
+		// without deleting them, so historical deliveries remain auditable.
+		// A filtered request must not disable channels outside its filter.
+		if req.PlatformAccountID == 0 {
+			if err := h.store.DisableMissingSyncedDeliveryDestinations(c.Request.Context(), syncedDestinationIDs); err != nil {
+				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+					"error":   "destination_sync_failed",
+					"message": err.Error(),
+				})
+				return
+			}
+		}
 
 		// §0.3.4 item 4 split (NIT-2): if the catalog yielded AT
 		// LEAST ONE entry but NONE of the kept (post-platform-filter)
@@ -213,5 +236,5 @@ func (h *Handlers) ListPublishingTargets() gin.HandlerFunc {
 // registry key. The prefix keeps provider namespaces explicit and the mapping
 // is reversible for diagnostics.
 func veloxDestinationID(externalDestinationID string) string {
-	return "instaedit_" + strings.TrimSpace(externalDestinationID)
+	return targetpublishing.DestinationIDForExternal(externalDestinationID)
 }

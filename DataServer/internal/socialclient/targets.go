@@ -26,20 +26,35 @@ type PublishingCatalogRequest struct {
 // exact same upstream wire shape.
 type PublishingTargetCatalogRequest = PublishingCatalogRequest
 
+// PublishingGroupMember is the immutable membership snapshot used to validate
+// all-or-nothing group selection. The upstream service remains authoritative;
+// Velox never infers membership from counts alone.
+type PublishingGroupMember struct {
+	WorkspaceID             int64                  `json:"workspace_id,omitempty"`
+	PlatformAccountID       int64                  `json:"platform_account_id"`
+	ExternalDestinationID   string                 `json:"external_destination_id"`
+	Enabled                 bool                   `json:"enabled"`
+	CanPost                 bool                   `json:"can_post"`
+	AccountActive           *bool                  `json:"account_active,omitempty"`
+	WorkspaceBindingEnabled *bool                  `json:"workspace_binding_enabled,omitempty"`
+	Capabilities            PublishingCapabilities `json:"capabilities"`
+}
+
 // PublishingGroup is a group selection returned by InstaEdit's catalog. Group
 // expansion is deliberately not performed by this client; Velox receives the
-// authoritative membership summary and the group_id for a later server-side
-// resolution step.
+// authoritative membership snapshot and validates it before selection.
 type PublishingGroup struct {
-	GroupID                int64  `json:"group_id"`
-	Name                   string `json:"name"`
-	ParentGroupID          *int64 `json:"parent_group_id"`
-	MemberCount            int    `json:"member_count"`
-	PublishableMemberCount int    `json:"publishable_member_count"`
-	Status                 string `json:"status,omitempty"`
-	CanPost                bool   `json:"can_post"`
-	BlockReason            string `json:"block_reason,omitempty"`
-	TargetErrorCode        string `json:"target_error_code,omitempty"`
+	WorkspaceID            int64                   `json:"workspace_id,omitempty"`
+	GroupID                int64                   `json:"group_id"`
+	Name                   string                  `json:"name"`
+	ParentGroupID          *int64                  `json:"parent_group_id"`
+	MemberCount            int                     `json:"member_count"`
+	PublishableMemberCount int                     `json:"publishable_member_count"`
+	Status                 string                  `json:"status,omitempty"`
+	CanPost                bool                    `json:"can_post"`
+	BlockReason            string                  `json:"block_reason,omitempty"`
+	TargetErrorCode        string                  `json:"target_error_code,omitempty"`
+	Members                []PublishingGroupMember `json:"members,omitempty"`
 }
 
 // PublishingCapabilities mirrors the provider-neutral capability block owned
@@ -55,17 +70,20 @@ type PublishingCapabilities struct {
 // ExternalDestinationID is the only delivery identifier Velox persists;
 // channel/account fields exist for display and audit.
 type PublishingTarget struct {
-	PlatformAccountID     int64                  `json:"platform_account_id"`
-	Platform              string                 `json:"platform"`
-	ChannelID             string                 `json:"channel_id"`
-	ChannelName           string                 `json:"channel_name,omitempty"`
-	ExternalDestinationID string                 `json:"external_destination_id,omitempty"`
-	Status                string                 `json:"status"`
-	Enabled               bool                   `json:"enabled"`
-	CanPost               bool                   `json:"can_post"`
-	BlockReason           string                 `json:"block_reason,omitempty"`
-	Capabilities          PublishingCapabilities `json:"capabilities"`
-	TargetErrorCode       string                 `json:"target_error_code,omitempty"`
+	WorkspaceID             int64                  `json:"workspace_id,omitempty"`
+	PlatformAccountID       int64                  `json:"platform_account_id"`
+	Platform                string                 `json:"platform"`
+	ChannelID               string                 `json:"channel_id"`
+	ChannelName             string                 `json:"channel_name,omitempty"`
+	ExternalDestinationID   string                 `json:"external_destination_id,omitempty"`
+	Status                  string                 `json:"status"`
+	Enabled                 bool                   `json:"enabled"`
+	CanPost                 bool                   `json:"can_post"`
+	AccountActive           *bool                  `json:"account_active,omitempty"`
+	WorkspaceBindingEnabled *bool                  `json:"workspace_binding_enabled,omitempty"`
+	BlockReason             string                 `json:"block_reason,omitempty"`
+	Capabilities            PublishingCapabilities `json:"capabilities"`
+	TargetErrorCode         string                 `json:"target_error_code,omitempty"`
 }
 
 // PublishingTargetCatalogResponse is returned by InstaEdit's canonical

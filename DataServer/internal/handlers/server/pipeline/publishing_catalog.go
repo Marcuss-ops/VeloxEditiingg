@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/apiwire"
+	targetpublishing "velox-server/internal/publishing"
 	"velox-server/internal/socialclient"
 	"velox-server/internal/store"
 )
@@ -63,34 +64,26 @@ func (h *Handlers) ListPublishingCatalog() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "social_api_not_configured"})
 			return
 		}
-		if h.store == nil {
+		if h.store == nil || h.targetResolver == nil {
 			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "destination_store_not_configured"})
 			return
 		}
 
-		catalog, err := h.socialClient.ListPublishingCatalog(c.Request.Context(), req.WorkspaceID, req.Platform)
+		resolved, err := h.targetResolver.ResolveCatalog(c.Request.Context(), targetpublishing.CatalogRequest{
+			WorkspaceID: req.WorkspaceID,
+			Platform:    req.Platform,
+		})
 		if err != nil {
 			status, code := publishingCatalogUpstreamError(err)
-			c.AbortWithStatusJSON(status, gin.H{"error": code, "message": err.Error()})
-			return
-		}
-
-		channels, externalIDs, err := projectCatalogChannels(catalog.ResolvedTargets, req.Platform)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{
-				"error":   "social_catalog_invalid",
+			c.AbortWithStatusJSON(status, gin.H{
+				"error":   code,
 				"message": err.Error(),
 			})
 			return
 		}
-		groups, err := projectCatalogGroups(catalog)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{
-				"error":   "social_catalog_invalid",
-				"message": err.Error(),
-			})
-			return
-		}
+		projected, externalIDs := projectResolvedCatalog(resolved)
+		channels := projected.Channels
+		groups := projected.Groups
 
 		// Synchronize the complete valid snapshot atomically. This prevents
 		// a partial catalog refresh when one destination row fails.
@@ -153,85 +146,38 @@ func publishingCatalogUpstreamError(err error) (int, string) {
 	return status, code
 }
 
-func projectCatalogChannels(targets []socialclient.PublishingTarget, platform string) ([]PublishingCatalogChannel, []string, error) {
-	channels := make([]PublishingCatalogChannel, 0, len(targets))
-	externalIDs := make([]string, 0, len(targets))
-	seenExternalIDs := make(map[string]struct{}, len(targets))
-	for _, target := range targets {
-		if target.Platform != "" && target.Platform != platform {
-			return nil, nil, errors.New("catalog target platform does not match request")
-		}
-		if target.PlatformAccountID <= 0 || strings.TrimSpace(target.ChannelID) == "" || strings.TrimSpace(target.ChannelName) == "" || strings.TrimSpace(target.Status) == "" {
-			return nil, nil, errors.New("catalog channel fields are incomplete")
-		}
-		externalID := strings.TrimSpace(target.ExternalDestinationID)
-		if externalID == "" {
-			return nil, nil, errors.New("catalog channel is missing external_destination_id")
-		}
-		if _, duplicate := seenExternalIDs[externalID]; duplicate {
-			return nil, nil, errors.New("catalog contains duplicate external_destination_id")
-		}
-		seenExternalIDs[externalID] = struct{}{}
-
-		destinationID := veloxDestinationID(externalID)
-		channels = append(channels, PublishingCatalogChannel{
-			Type:              "channel",
-			DestinationID:     destinationID,
-			PlatformAccountID: target.PlatformAccountID,
-			ChannelID:         target.ChannelID,
-			Name:              target.ChannelName,
-			Status:            target.Status,
-			Enabled:           target.Enabled && target.CanPost,
-			CanPost:           target.CanPost,
+func projectResolvedCatalog(catalog *targetpublishing.Catalog) (PublishingCatalogResponse, []string) {
+	response := PublishingCatalogResponse{
+		WorkspaceID: catalog.WorkspaceID,
+		Platform:    catalog.Platform,
+		Channels:    make([]PublishingCatalogChannel, 0, len(catalog.Channels)),
+		Groups:      make([]PublishingCatalogGroup, 0, len(catalog.Groups)),
+	}
+	externalIDs := make([]string, 0, len(catalog.Channels))
+	for _, channel := range catalog.Channels {
+		response.Channels = append(response.Channels, PublishingCatalogChannel{
+			Type:              channel.Type,
+			DestinationID:     channel.DestinationID,
+			PlatformAccountID: channel.PlatformAccountID,
+			ChannelID:         channel.ChannelID,
+			Name:              channel.Name,
+			Status:            channel.Status,
+			Enabled:           channel.Eligible,
+			CanPost:           channel.CanPost,
 			Capabilities: apiwire.PublishingCatalogCapabilities{
-				UploadVideo:  target.Capabilities.UploadVideo,
-				SetThumbnail: target.Capabilities.SetThumbnail,
-				Publish:      target.Capabilities.Publish,
-				Schedule:     target.Capabilities.Schedule,
+				UploadVideo:  channel.Capabilities.UploadVideo,
+				SetThumbnail: channel.Capabilities.SetThumbnail,
+				Publish:      channel.Capabilities.Publish,
+				Schedule:     channel.Capabilities.Schedule,
 			},
-			BlockReason:     target.BlockReason,
-			TargetErrorCode: target.TargetErrorCode,
+			BlockReason:     channel.BlockReason,
+			TargetErrorCode: channel.TargetErrorCode,
 		})
-		externalIDs = append(externalIDs, externalID)
+		externalIDs = append(externalIDs, channel.ExternalDestinationID)
 	}
-	return channels, externalIDs, nil
-}
-
-func projectCatalogGroups(catalog *socialclient.PublishingTargetCatalogResponse) ([]PublishingCatalogGroup, error) {
-	if catalog == nil {
-		return []PublishingCatalogGroup{}, nil
-	}
-	all := make([]socialclient.PublishingGroup, 0, len(catalog.ResolvedGroups)+len(catalog.Groups))
-	all = append(all, catalog.ResolvedGroups...)
-	all = append(all, catalog.Groups...)
-	groups := make([]PublishingCatalogGroup, 0, len(all))
-	seen := make(map[int64]socialclient.PublishingGroup, len(all))
-	for _, group := range all {
-		if group.GroupID <= 0 {
-			return nil, errors.New("catalog group_id must be positive")
-		}
-		if previous, duplicate := seen[group.GroupID]; duplicate {
-			if previous.Name == group.Name &&
-				sameOptionalInt64(previous.ParentGroupID, group.ParentGroupID) &&
-				previous.MemberCount == group.MemberCount &&
-				previous.PublishableMemberCount == group.PublishableMemberCount &&
-				previous.Status == group.Status &&
-				previous.CanPost == group.CanPost &&
-				previous.BlockReason == group.BlockReason &&
-				previous.TargetErrorCode == group.TargetErrorCode {
-				continue
-			}
-			return nil, errors.New("catalog contains conflicting duplicate group_id")
-		}
-		if strings.TrimSpace(group.Name) == "" {
-			return nil, errors.New("catalog group name is required")
-		}
-		if group.MemberCount < 0 || group.PublishableMemberCount < 0 || group.PublishableMemberCount > group.MemberCount {
-			return nil, errors.New("catalog group member counts are invalid")
-		}
-		seen[group.GroupID] = group
-		groups = append(groups, PublishingCatalogGroup{
-			Type:                   "group",
+	for _, group := range catalog.Groups {
+		response.Groups = append(response.Groups, PublishingCatalogGroup{
+			Type:                   group.Type,
 			GroupID:                group.GroupID,
 			Name:                   group.Name,
 			ParentGroupID:          group.ParentGroupID,
@@ -243,12 +189,28 @@ func projectCatalogGroups(catalog *socialclient.PublishingTargetCatalogResponse)
 			TargetErrorCode:        group.TargetErrorCode,
 		})
 	}
-	return groups, nil
+	return response, externalIDs
 }
 
-func sameOptionalInt64(left, right *int64) bool {
-	if left == nil || right == nil {
-		return left == right
+// These adapters keep the package-local projection tests focused while all
+// validation remains owned by internal/publishing.
+func projectCatalogChannels(targets []socialclient.PublishingTarget, platform string) ([]PublishingCatalogChannel, []string, error) {
+	catalog, err := targetpublishing.NormalizeCatalog(targetpublishing.CatalogRequest{WorkspaceID: 1, Platform: platform}, &socialclient.PublishingTargetCatalogResponse{Valid: true, ResolvedTargets: targets})
+	if err != nil {
+		return nil, nil, err
 	}
-	return *left == *right
+	response, externalIDs := projectResolvedCatalog(catalog)
+	return response.Channels, externalIDs, nil
+}
+
+func projectCatalogGroups(catalog *socialclient.PublishingTargetCatalogResponse) ([]PublishingCatalogGroup, error) {
+	if catalog == nil {
+		return []PublishingCatalogGroup{}, nil
+	}
+	resolved, err := targetpublishing.NormalizeCatalog(targetpublishing.CatalogRequest{WorkspaceID: 1, Platform: targetpublishing.PlatformYouTube}, catalog)
+	if err != nil {
+		return nil, err
+	}
+	projected, _ := projectResolvedCatalog(resolved)
+	return projected.Groups, nil
 }
