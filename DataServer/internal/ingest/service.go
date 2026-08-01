@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"velox-server/internal/jobs"
+	"velox-server/internal/renderfingerprint"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 	"velox-server/internal/taskoutput_artifacts"
@@ -59,8 +60,12 @@ type IngestCommand struct {
 	Status string
 
 	// Error fields. Populated when Status == "failed"; ignored otherwise.
-	ErrorCode   string
-	ErrorDetail string
+	ErrorCode    string
+	ErrorDetail  string
+	FailureClass string
+	// RenderFingerprint is supplied by a trusted compiler/worker adapter and
+	// persisted atomically with the terminal attempt report.
+	RenderFingerprint *renderfingerprint.Fingerprint
 
 	// OutputArtifacts is the worker's map of declared artifacts. Each
 	// entry is converted to OutputArtifact via metadata JSON; declared_path
@@ -451,6 +456,7 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 
 	ingestErr := s.taskRepo.IngestTaskResultAtomic(ctx, taskgraph.IngestResultCommand{
 		TaskID:        cmd.TaskID,
+		JobID:         cmd.JobID,
 		WorkerID:      cmd.WorkerID,
 		LeaseID:       cmd.LeaseID,
 		AttemptID:     cmd.AttemptID,
@@ -458,6 +464,7 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		AttemptStatus: attemptStatus,
 		ErrorCode:     cmd.ErrorCode,
 		ErrorMsg:      cmd.ErrorDetail,
+		FailureClass:  cmd.FailureClass,
 		Metrics:       metrics,
 		CacheStats:    cs,
 		CostBasis:     cb,
@@ -469,6 +476,7 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		FFmpegVersion:     cmd.FFmpegVersion,
 		ConfigHash:        cmd.ConfigHash,
 		DockerImageDigest: cmd.DockerImageDigest,
+		RenderFingerprint: cmd.RenderFingerprint,
 		// Scorecard v2 / Step 15: tracing.
 		TraceID: cmd.TraceID,
 		SpanID:  cmd.SpanID,

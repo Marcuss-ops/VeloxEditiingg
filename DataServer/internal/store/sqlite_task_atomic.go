@@ -532,6 +532,11 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 			_ = tx.Rollback()
 		}
 	}()
+	if cmd.JobID == "" {
+		if err := tx.QueryRowContext(ctx, `SELECT job_id FROM tasks WHERE task_id = ?`, cmd.TaskID).Scan(&cmd.JobID); err != nil {
+			return fmt.Errorf("task ingest atomic resolve job_id: %w", err)
+		}
+	}
 	ingestStartedAt := time.Now().UTC()
 
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -546,6 +551,9 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 		return err
 	}
 	if err := persistAttemptTracing(ctx, tx, cmd, now); err != nil {
+		return err
+	}
+	if err := SaveRenderFingerprint(ctx, tx, cmd.AttemptID, cmd.TaskID, cmd.JobID, cmd.RenderFingerprint, ingestStartedAt); err != nil {
 		return err
 	}
 	if err := persistAttemptMetrics(ctx, tx, cmd); err != nil {
@@ -578,6 +586,9 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 		return err
 	}
 	if err := persistRawReport(ctx, tx, cmd, now); err != nil {
+		return err
+	}
+	if err := persistDeadLetter(ctx, tx, cmd, ingestStartedAt); err != nil {
 		return err
 	}
 

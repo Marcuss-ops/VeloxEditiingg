@@ -8,6 +8,7 @@ package taskgraph
 import (
 	"time"
 
+	"velox-server/internal/renderfingerprint"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskoutput_artifacts"
 )
@@ -88,6 +89,7 @@ type ClaimTaskForWorkerCommand struct {
 // tasks.attempt_id column and reject replays whose attempt_id drifts.
 type IngestResultCommand struct {
 	TaskID        string
+	JobID         string
 	WorkerID      string
 	LeaseID       string
 	AttemptID     string
@@ -95,6 +97,7 @@ type IngestResultCommand struct {
 	AttemptStatus taskattempts.AttemptStatus
 	ErrorCode     string
 	ErrorMsg      string
+	FailureClass  string
 	Metrics       taskattempts.AttemptMetrics
 	CacheStats    taskattempts.AttemptCacheStats
 	CostBasis     taskattempts.AttemptCostBasis
@@ -106,6 +109,9 @@ type IngestResultCommand struct {
 	FFmpegVersion     string
 	ConfigHash        string
 	DockerImageDigest string
+	// RenderFingerprint is the complete deterministic identity of the render.
+	// It is persisted with the immutable attempt report when present.
+	RenderFingerprint *renderfingerprint.Fingerprint
 	// Scorecard v2 / Step 15: OpenTelemetry tracing correlation.
 	TraceID string
 	SpanID  string

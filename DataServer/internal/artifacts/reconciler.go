@@ -73,6 +73,7 @@ type Reconciler struct {
 	repo      store.UploadRepository
 	clock     clock.Clock
 	config    ReconcilerConfig
+	gcStore   *store.ArtifactGCStore
 }
 
 // ReconcilerConfig holds tunables that the spec fixes to 24h by
@@ -116,6 +117,8 @@ type ReconcileStats struct {
 	QuarantinedWithEvent  int // QUARANTINED committed AND outbox event committed
 	QuarantinedStatusOnly int // QUARANTINED committed but outbox event deferred (schema drift)
 	StuckArtifacts        int // rule 4
+	GCDeleted             int // durable candidate bytes removed
+	GCFailed              int // candidate deletion deferred
 }
 
 // NewReconciler composes a Reconciler. db and blobStore must outlive
@@ -153,6 +156,7 @@ func NewReconciler(db *sql.DB, blobStore store.BlobStore, repo store.UploadRepos
 		repo:      repo,
 		clock:     c,
 		config:    config,
+		gcStore:   store.NewArtifactGCStore(db),
 	}, nil
 }
 
@@ -190,10 +194,10 @@ func (r *Reconciler) runOnce(ctx context.Context, source string) {
 		log.Printf("[RECONCILER] %s pass failed: %v", source, err)
 		return
 	}
-	if stats.ExpiredUploads+stats.OrphanFinalBlobs+stats.QuarantinedWithEvent+stats.QuarantinedStatusOnly+stats.StuckArtifacts > 0 {
-		log.Printf("[RECONCILER] %s pass expired=%d orphan_blobs=%d quarantined_event=%d quarantined_status_only=%d stuck_artifacts=%d",
+	if stats.ExpiredUploads+stats.OrphanFinalBlobs+stats.QuarantinedWithEvent+stats.QuarantinedStatusOnly+stats.StuckArtifacts+stats.GCDeleted+stats.GCFailed > 0 {
+		log.Printf("[RECONCILER] %s pass expired=%d orphan_blobs=%d quarantined_event=%d quarantined_status_only=%d stuck_artifacts=%d gc_deleted=%d gc_failed=%d",
 			source, stats.ExpiredUploads, stats.OrphanFinalBlobs,
-			stats.QuarantinedWithEvent, stats.QuarantinedStatusOnly, stats.StuckArtifacts)
+			stats.QuarantinedWithEvent, stats.QuarantinedStatusOnly, stats.StuckArtifacts, stats.GCDeleted, stats.GCFailed)
 	}
 }
 
@@ -224,6 +228,11 @@ func (r *Reconciler) Reconcile(ctx context.Context) (ReconcileStats, error) {
 		log.Printf("[RECONCILER] rule4 error: %v", err)
 	} else {
 		stats.StuckArtifacts = n
+	}
+	if deleted, failed, err := RunArtifactGC(ctx, r.gcStore, r.blobStore, "reconciler", r.clock.Now(), 15*time.Minute, r.config.BatchLimit); err != nil {
+		log.Printf("[RECONCILER] artifact GC error: %v", err)
+	} else {
+		stats.GCDeleted, stats.GCFailed = deleted, failed
 	}
 
 	return stats, nil
@@ -621,6 +630,12 @@ func (r *Reconciler) reconcileStuckArtifacts(ctx context.Context) (int, error) {
 			continue
 		}
 		if affected == 1 {
+			if _, err := r.db.ExecContext(ctx, `
+				INSERT INTO artifact_gc_candidates (artifact_id, reason, eligible_at, status)
+				VALUES (?, 'stuck_staging', ?, 'ELIGIBLE')
+				ON CONFLICT(artifact_id) DO NOTHING`, id, r.clock.Now().UTC().Format(time.RFC3339)); err != nil {
+				log.Printf("[RECONCILER] rule4: enqueue GC candidate %s failed: %v", id, err)
+			}
 			n++
 		}
 	}
