@@ -1,5 +1,32 @@
 ## [Unreleased] - 2026-07-29
 
+### Tracked finding — pre-existing import cycle in `internal/metrics` (uncommitted WIP)
+
+Full-module verification (`go vet ./...` + `go build ./...` +
+`go test -count=1 ./...` in `DataServer`, as mandated by the
+post-split verification rule) surfaced an **import cycle** that makes
+`go test ./internal/metrics/` fail with `[setup failed]`:
+
+```
+internal/metrics (test render_performance_test.go)
+  → internal/store (store_assets.go)
+    → internal/assets (service.go, UNCOMMITTED)
+      → internal/metrics (velmetrics import, UNCOMMITTED)
+```
+
+**This is NOT a regression from the file-splitting refactor.** The
+cycle exists only because of **uncommitted work-in-progress from
+another session** in `DataServer/internal/assets/` (the `velmetrics
+"velox-server/internal/metrics"` import + `SecurityMetricFamilies` in
+`service.go`). At `HEAD` (committed tree) `assets/service.go` does not
+import `metrics`, so no cycle exists. None of the split commits touch
+`internal/assets` (last commit there: `9d26671d`, pre-existing).
+
+Per AGENTS.md §4 this is a **finding, not a blocker**: it must be
+tracked as a followup for the owning session to resolve when the
+`assets` WIP is completed. The post-split verification rule remains
+active for future splits; the working tree was left untouched.
+
 ### File-splitting refactor — large files broken down by domain
 
 A 28-commit pass broke the repo's largest files (>600 lines) into
