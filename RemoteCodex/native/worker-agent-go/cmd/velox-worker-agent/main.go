@@ -3,6 +3,14 @@
 // AGENT 2 - Standardized Logging:
 // - Uses structured events for all startup/register/heartbeat/shutdown operations
 // - All log output follows [EVENT_CODE] format for automatic parsing
+//
+// Composition-root layout:
+//   - internal/bootstrap owns the initial-configuration resolution
+//     (ResolveConfig), the default-config generator (GenerateDefaultConfig),
+//     the env helpers (EnvOr/EnvBool), and the RW-PROD-003 bootstrap-gate
+//     dispatch (Dispatch).
+//   - This file keeps the process-level wiring: flag parsing, executor
+//     registry construction, cache/blob wiring, and worker start/shutdown.
 package main
 
 import (
@@ -12,10 +20,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
+	boot "velox-worker-agent/internal/bootstrap"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/taskrunner/executors"
 	"velox-worker-agent/internal/telemetry"
@@ -87,102 +95,9 @@ func startDiskWatcher(ctx context.Context, cfg *config.WorkerConfig, watchDir st
 // Version is set at build time via -ldflags.
 var Version = "dev"
 
-// Default paths
-const (
-	defaultConfigPath = "/opt/velox/worker_config.json"
-	defaultWorkDir    = "/opt/velox"
-)
-
-// readVersionFile attempts to read version from VERSION.txt in the work directory
-// as a fallback when the ldflags version is "dev".
-func readVersionFile(workDir string) string {
-	// Try several known locations for VERSION.txt
-	candidates := []string{
-		filepath.Join(workDir, "VERSION.txt"),
-		filepath.Join(workDir, "..", "VERSION.txt"),
-		filepath.Join(workDir, "..", "..", "VERSION.txt"),
-		"/opt/velox/VERSION.txt",
-		filepath.Join(workDir, "versions", "current", "VERSION.txt"),
-	}
-	seen := make(map[string]bool)
-	for _, path := range candidates {
-		abs, err := filepath.Abs(path)
-		if err != nil {
-			continue
-		}
-		if seen[abs] {
-			continue
-		}
-		seen[abs] = true
-		data, err := os.ReadFile(abs)
-		if err == nil {
-			v := strings.TrimSpace(string(data))
-			if v != "" {
-				return v
-			}
-		}
-	}
-	return ""
-}
-
-func readTextFileFirst(workDir, filename string) string {
-	candidates := []string{
-		filepath.Join(workDir, filename),
-		filepath.Join(workDir, "versions", "current", filename),
-		"/opt/velox/" + filename,
-	}
-	seen := make(map[string]bool)
-	for _, path := range candidates {
-		abs, err := filepath.Abs(path)
-		if err != nil {
-			continue
-		}
-		if seen[abs] {
-			continue
-		}
-		seen[abs] = true
-		data, err := os.ReadFile(abs)
-		if err == nil {
-			v := strings.TrimSpace(string(data))
-			if v != "" {
-				return v
-			}
-		}
-	}
-	return ""
-}
-
-// envOr returns the value of the named environment variable, trimmed
-// of surrounding whitespace; if unset or empty, it returns fallback.
-// Centralised so main.go does not sprinkle os.Getenv calls across the
-// composition root.
-func envOr(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return fallback
-}
-
-// envBool returns the bool value of the named environment variable.
-// Accepts 1/true/yes/on (case-insensitive) as true; anything else (including
-// empty / "0" / "false" / "no" / "off") as false. Missing var returns
-// fallback. Used by the anti-collision gate (RW-PROD-005 §3) for
-// VELOX_ALLOW_MULTI_HOST_WORKER_IDS.
-func envBool(key string, fallback bool) bool {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return fallback
-	}
-	switch strings.ToLower(v) {
-	case "1", "true", "yes", "on":
-		return true
-	}
-	return false
-}
-
 func main() {
 	// Parse command-line flags
-	configPath := flag.String("config", defaultConfigPath, "path to config file")
+	configPath := flag.String("config", boot.DefaultConfigPath, "path to config file")
 	workDir := flag.String("work-dir", "", "working directory (overrides config)")
 	masterURL := flag.String("master", "", "master server URL (overrides config)")
 	workerID := flag.String("worker-id", "", "worker ID (overrides config, auto-generated if empty)")
@@ -214,19 +129,11 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Load or create config
-	var cfg *config.WorkerConfig
-	var err error
-
+	// Generate a default config and exit
 	if *generateConfig {
-		// Generate default config
-		dir := *workDir
-		if dir == "" {
-			dir = defaultWorkDir
-		}
-		cfg = config.DefaultConfig(dir)
-		if err := config.SaveConfig(*configPath, cfg); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: failed to save config: %v\n", err)
+		cfg, genErr := boot.GenerateDefaultConfig(*configPath, *workDir)
+		if genErr != nil {
+			fmt.Fprintf(os.Stderr, "Error: failed to save config: %v\n", genErr)
 			os.Exit(1)
 		}
 		fmt.Printf("Generated config file: %s\n", *configPath)
@@ -234,135 +141,22 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Try to load existing config
-	cfg, err = config.LoadConfig(*configPath)
-	if err != nil {
-		// Config file doesn't exist, create default
-		if os.IsNotExist(err) {
-			// Use structured event for config creation
-			dir := *workDir
-			if dir == "" {
-				dir = defaultWorkDir
-			}
-			cfg = config.DefaultConfig(dir)
-			logger.LogConfigCreated(*configPath, cfg.WorkerID)
-		} else {
-			logger.LogConfigError(err)
-			os.Exit(1)
-		}
-	} else {
-		// Log config loaded
-		logger.LogConfigLoaded(*configPath, cfg.WorkerID)
-	}
-
-	// Apply command-line overrides
-	if *workDir != "" {
-		cfg.WorkDir = *workDir
-	}
-	if *masterURL != "" {
-		cfg.MasterURL = *masterURL
-	}
-	if *workerID != "" {
-		cfg.WorkerID = *workerID
-	}
-	if *logLevel != "" {
-		cfg.LogLevel = *logLevel
-	}
-	if envWorkerID := os.Getenv("VELOX_WORKER_ID"); envWorkerID != "" {
-		cfg.WorkerID = envWorkerID
-	}
-	if envWorkerProfile := strings.TrimSpace(os.Getenv("VELOX_WORKER_PROFILE")); envWorkerProfile != "" {
-		cfg.WorkerProfile = envWorkerProfile
-	}
-	if bundleVersion := os.Getenv("VELOX_BUNDLE_VERSION"); bundleVersion != "" {
-		cfg.BundleVersion = bundleVersion
-	}
-	if cfg.BundleVersion == "" {
-		cfg.BundleVersion = Version
-	}
-
-	// Validate config
-	if err := cfg.Validate(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	// Resolve the initial configuration: load/create worker_config.json,
+	// apply CLI + env overrides, validate production-readiness, and
+	// resolve version/bundle identity fields. Failures are fail-closed.
+	cfg, resolvedVersion, cfgErr := boot.ResolveConfig(boot.ConfigOptions{
+		ConfigPath:     *configPath,
+		WorkDir:        *workDir,
+		MasterURL:      *masterURL,
+		WorkerID:       *workerID,
+		LogLevel:       *logLevel,
+		ReadyzEndpoint: *readyzEndpointFlag,
+		Version:        Version,
+	})
+	if cfgErr != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", cfgErr)
 		os.Exit(1)
 	}
-	if err := config.ValidateRemoteMasterEndpoint(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Normalize worker_id to prevent double host_ prefixes and dot-format IDs
-	cfg.WorkerID = config.NormalizeWorkerID(cfg.WorkerID)
-	logger.Info("[WORKER_ID] Normalized worker ID: %s", cfg.WorkerID)
-
-	// Save config if it's new (ensures worker_id is persisted)
-	if _, err := os.Stat(*configPath); os.IsNotExist(err) {
-		if err := config.SaveConfig(*configPath, cfg); err != nil {
-			logger.Warn("Failed to save config: %v", err)
-		}
-	}
-
-	// Try to read VERSION.txt as a fallback for version reporting
-	// The Version from ldflags takes precedence, but if it's "dev" we try VERSION.txt
-	resolvedVersion := Version
-	if resolvedVersion == "dev" {
-		if v := readVersionFile(cfg.WorkDir); v != "" {
-			resolvedVersion = v
-			logger.Info("[VERSION] Loaded version from VERSION.txt: %s", resolvedVersion)
-		}
-	}
-	// Also ensure BundleVersion is set from resolved version if not already set
-	if cfg.BundleVersion == "" || cfg.BundleVersion == "dev" {
-		cfg.BundleVersion = resolvedVersion
-	}
-	if bundleHash := os.Getenv("VELOX_BUNDLE_HASH"); bundleHash != "" {
-		cfg.BundleHash = bundleHash
-	}
-	if assetCacheDir := os.Getenv("VELOX_ASSET_CACHE_DIR"); strings.TrimSpace(assetCacheDir) != "" {
-		cfg.AssetCacheDir = strings.TrimSpace(assetCacheDir)
-	}
-	// RW-PROD-004 §3 A9: --ready-endpoint CLI flag beats the env var
-	// and the JSON config (per the standard precedence: CLI > env > JSON).
-	// Empty string from the flag is a no-op so the canonical
-	// /health/ready stays in force when the operator does not opt in.
-	if *readyzEndpointFlag != "" {
-		cfg.ReadyzEndpoint = *readyzEndpointFlag
-	}
-	if cfg.ReadyzEndpoint == "" {
-		cfg.ReadyzEndpoint = "/health/ready"
-	}
-	if cfg.BundleHash == "" {
-		cfg.BundleHash = readTextFileFirst(cfg.WorkDir, "BUNDLE_HASH.txt")
-	}
-	if protocolVersion := os.Getenv("VELOX_WORKER_PROTOCOL_VERSION"); protocolVersion != "" {
-		cfg.ProtocolVersion = protocolVersion
-	}
-	if cfg.ProtocolVersion == "" {
-		cfg.ProtocolVersion = "v3"
-	}
-	if workerSecret := os.Getenv("VELOX_WORKER_SECRET"); workerSecret != "" {
-		cfg.WorkerSecret = workerSecret
-	}
-	if engineVersion := os.Getenv("VELOX_ENGINE_VERSION"); engineVersion != "" {
-		cfg.EngineVersion = engineVersion
-	}
-	if cfg.EngineVersion == "" {
-		cfg.EngineVersion = resolvedVersion
-	}
-	if strings.TrimSpace(cfg.VideoEngineCppBin) != "" && strings.TrimSpace(os.Getenv("VELOX_VIDEO_ENGINE_CPP_BIN")) == "" {
-		// Make the composition-root config authoritative for the native renderer.
-		// The render client resolves the engine path from VELOX_VIDEO_ENGINE_CPP_BIN,
-		// so mirror the validated config into the environment before pipeline wiring.
-		if err := os.Setenv("VELOX_VIDEO_ENGINE_CPP_BIN", strings.TrimSpace(cfg.VideoEngineCppBin)); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: failed to export VELOX_VIDEO_ENGINE_CPP_BIN from config: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
-	// Create worker
-	// Option A (2026-06 fix): New() returns (*Worker, error) — a bad TLS or
-	// insecure-flag misconfiguration is surfaced here instead of panicking
-	// during Start().
 
 	// --validate-config: run the doctor validators and exit.
 	// Replaces the transport-only config.Validate() with the full
@@ -441,7 +235,7 @@ func main() {
 	// any registration attempt. Master side selector therefore never sees
 	// `registered=true` for a malformed worker.
 	bootCtx, bootCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	report, err := dispatchBootstrap(bootCtx, cfg, pipelineRunner, bootLog)
+	report, err := boot.Dispatch(bootCtx, cfg, pipelineRunner, bootLog)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: bootstrap gate failed (RW-PROD-003): %v\n", err)
 		os.Exit(1)
@@ -452,10 +246,10 @@ func main() {
 	// plan; cap. 2): the real-bootstrap operator wrapper invokes
 	// `velox-worker-agent --bootstrap-report` to verify a freshly-built
 	// image under production deps WITHOUT registering with a master.
-	// dispatchBootstrap has already written [BOOTSTRAP_REPORT] to
-	// stderr; the certifier reads it + asserts verdict=OK + 4 step
-	// PASS. Here we map the verdict to the exit code (0=OK, 1=FAIL)
-	// so the wrapper's `docker run ... ; echo $?` round-trip works.
+	// Dispatch has already written [BOOTSTRAP_REPORT] to stderr; the
+	// certifier reads it + asserts verdict=OK + 4 step PASS. Here we map
+	// the verdict to the exit code (0=OK, 1=FAIL) so the wrapper's
+	// `docker run ... ; echo $?` round-trip works.
 	if *bootstrapReportFlag {
 		if report != nil && report.Verdict == "OK" {
 			os.Exit(0)
@@ -494,8 +288,8 @@ func main() {
 	// cfg.StateDir = /var/lib/velox/worker). Both invalidate the
 	// noop defaults in taskrunner/context.go (no silent-fallback
 	// policy).
-	cacheDir := envOr("VELOX_WORKER_CACHE_DIR", filepath.Join(cfg.StateDir, "cache"))
-	blobDir := envOr("VELOX_WORKER_BLOB_DIR", filepath.Join(cfg.StateDir, "blobs"))
+	cacheDir := boot.EnvOr("VELOX_WORKER_CACHE_DIR", filepath.Join(cfg.StateDir, "cache"))
+	blobDir := boot.EnvOr("VELOX_WORKER_BLOB_DIR", filepath.Join(cfg.StateDir, "blobs"))
 	localCache, cacheErr := cache.NewPersistedLocalCache(cache.CacheOptions{Root: cacheDir})
 	if cacheErr != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to construct local cache at %s: %v\n", cacheDir, cacheErr)
@@ -530,7 +324,7 @@ func main() {
 		// collision sentinel). Gated by VELOX_ALLOW_MULTI_HOST_WORKER_IDS
 		// default=false; legacy blue/green operators can opt out.
 		worker.WithCollisionObserver(func(collisionErr error) {
-			if envBool("VELOX_ALLOW_MULTI_HOST_WORKER_IDS", false) {
+			if boot.EnvBool("VELOX_ALLOW_MULTI_HOST_WORKER_IDS", false) {
 				fmt.Fprintf(os.Stderr, "[WARN] VELOX_ALLOW_MULTI_HOST_WORKER_IDS=true \u2014 collision accepted, continuing with backoff. worker_id=%q master_url=%s err=%v\n", cfg.WorkerID, cfg.MasterURL, collisionErr)
 				return
 			}
@@ -547,7 +341,7 @@ func main() {
 		os.Exit(1)
 	}
 	// RW-PROD-004 §3 A4: MarkBootstrapped(true) is set here because
-	// dispatchBootstrap has already returned (with err==nil) and the
+	// Dispatch has already returned (with err==nil) and the
 	// package-level bootstrap.Ok() gate is therefore true. We do NOT
 	// force a hard-fail if bootstrap.Ok() returns false here — the
 	// composition root already blocks Start() via bootstrap.HardGate
@@ -641,62 +435,4 @@ func main() {
 		logger.LogRegisterFailed(cfg.WorkerID, cfg.MasterURL, err)
 		os.Exit(1)
 	}
-}
-
-// dispatchBootstrap (RW-PROD-003 A5) bridges the canonical
-// *pipeline.Runner (built by video.NewPipelineRunner above) into the
-// narrow bootstrap.RunnerView interface used by pkg/bootstrap. We use a
-// tiny adapter because pkg/bootstrap keeps pkg/video at arm's length
-// to keep its test surface free of CGO coupling.
-//
-// On success and failure alike we ALWAYS dump the JSON boot report to
-// stderr so ops triage stays in one place — the per-step record travels
-// with the short-form error caught by main(). The --bootstrap-report
-// certifier reads the same [BOOTSTRAP_REPORT] block off stderr to
-// assert verdict+steps without re-instrumenting the worker.
-//
-// Returns the *Report so --bootstrap-report can exit with the verdict
-// code (0=OK, !0=FAIL) without re-deriving verdict from message text.
-func dispatchBootstrap(
-	ctx context.Context,
-	cfg *config.WorkerConfig,
-	runner *pipeline.Runner,
-	log *logger.Logger,
-) (*bootstrap.Report, error) {
-	// The creator profile does not use the C++ pipeline, so runner may be
-	// nil. Pass a nil interface (not a typed nil pointer) so bootstrap.Run
-	// can detect the absence of a runner cleanly.
-	var adapter bootstrap.RunnerView
-	if runner != nil {
-		adapter = &pipelineRunnerAdapter{runner: runner}
-	}
-	report, err := bootstrap.Run(ctx, cfg, adapter, bootstrap.Options{
-		Logger:             log,
-		OutputDir:          cfg.OutputDir,
-		BaselineSHA256Path: filepath.Join(cfg.WorkDir, bootstrap.DefaultBaselineFixtureRel),
-	})
-	if report != nil {
-		_ = bootstrap.DumpReport(report)
-	}
-	return report, err
-}
-
-// pipelineRunnerAdapter is the one-method shim required by
-// bootstrap.RunnerView. We do NOT export it (lowercase type) because
-// the only caller is dispatchBootstrap in this file.
-//
-// Crucially: bootstrap.RenderClientIface and pipeline.RenderClient
-// have IDENTICAL signatures (Render(ctx, *plan.RenderPlan) error) so the
-// runner's render client can flow through to bootstrap without any
-// struct wrapping — the adapter merely exposes the runner's accessor
-// through a different interface name.
-type pipelineRunnerAdapter struct {
-	runner *pipeline.Runner
-}
-
-func (a *pipelineRunnerAdapter) RenderClient() bootstrap.RenderClientIface {
-	if a == nil || a.runner == nil {
-		return nil
-	}
-	return a.runner.RenderClient()
 }
