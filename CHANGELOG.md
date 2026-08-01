@@ -1,5 +1,44 @@
 ## [Unreleased] - 2026-07-29
 
+### File-splitting refactor — large files broken down by domain
+
+A 28-commit pass broke the repo's largest files (>600 lines) into
+per-domain files. Each split is a **verbatim extraction**: no symbol,
+error string, SQL statement, or test assertion changed — only file
+placement. Facades, interfaces, public signatures, and call sites are
+untouched; every package still compiles and passes its full test suite
+identically.
+
+**Why:** single files above ~600 lines are hard to navigate, review,
+and reason about; splitting by domain (entity / responsibility /
+message type / phase) makes each file self-describing and keeps
+diffs reviewable. The rule applied to every split: work directly on
+`main` (no branches), verify with `gofmt` + `go build ./...` +
+`go vet ./...` + `go test`, and commit + push immediately after each
+extraction.
+
+| Base file (before) | Lines | Split by | Resulting files | Commits |
+|---|---|---|---|---|
+| `internal/metrics/collector.go` | — | metric family | `collector_attempts.go`, `collector_cache.go`, `collector_costs.go`, `collector_engine.go`, `collector_ffmpeg.go`, `collector_health.go`, `collector_render.go`, `collector_sinks.go`, `collector_video.go`, `collector_workers.go` | `b10f7a30` |
+| `internal/grpcserver/handler_jobs.go` | 686 | message type | `handler_accept.go`, `handler_reject.go`, `handler_renewal.go`, `handler_result.go` | `5e59cc19`, `f6b161a7`, `f3d9d74b`, `5679b646` |
+| `internal/store/sqlite_task_atomic_persistence_helpers.go` | 652 | entity | `sqlite_task_atomic_persistence_attempt.go`, `sqlite_task_atomic_persistence_task.go`, `sqlite_task_atomic_persistence_lease.go` | `60ae3fee`, `a531bd99` |
+| `internal/services/drive/service.go` | 614 | sub-domain | `folders.go`, `groups.go`, `tokens.go`, `master.go` | `52082c0e`, `6c2b71b3`, `556a9e1c`, `b056be63` |
+| `internal/store/sqlite_task_atomic_claim_test.go` | 971 | test scenario | `sqlite_task_atomic_claim_failures_test.go`, `sqlite_task_atomic_claim_concurrency_test.go` | `93880800`, `57ce329f` |
+| `internal/artifacts/reconciler.go` | 628 | responsibility | `retry.go`, `cleanup.go` | `c63299ff`, `8c20e174` |
+| `internal/handlers/server/pipeline/pipeline_run_actions.go` | 634 | run phase | `pipeline_run_submit.go`, `pipeline_run_progress.go`, `pipeline_run_completion.go` | `3352dd71`, `7a50b30e`, `fd2eba57` |
+| `internal/store/sqlite_task_lease.go` | 661 | lease operation | `sqlite_task_lease_claim.go`, `sqlite_task_lease_renew.go`, `sqlite_task_lease_expire.go` | `b7391111`, `3f2a0c40`, `38d0a4ae` |
+| `worker-agent-go/cmd/velox-worker-agent/main.go` | 702 | new package | `internal/bootstrap/config.go` + `internal/bootstrap/dispatch.go` (main.go trimmed to a thin composition root) | `e88a9f6d` |
+| `internal/ingest/service.go` | 714 | concern | `identity.go`, `timing.go`, `job_transitions.go` | `be15fa27` |
+| `internal/store/store_worker_control.go` | 765 | DB table | `store_worker_commands.go`, `store_worker_sessions.go`, `store_worker_credentials.go` | `91cdc63a` |
+| `internal/publishing/resolver.go` | 628 | responsibility | `resolver_normalize.go`, `resolver_selection.go` | `a6ec3741` |
+| `internal/remoteengine/client_test.go` | 946 | client behavior | `client_auth_test.go`, `client_retry_test.go`, `client_contract_test.go`, `client_http_errors_test.go`, `client_endpoints_test.go` | `13601bef` |
+
+**Validation on every split** (before push):
+
+- `gofmt` clean on all extracted files; `go build ./...` + `go vet ./...` pass on the affected module.
+- `go test -count=1` passes on the affected package(s) with identical results (e.g. `internal/remoteengine` 38s green post-split, `internal/store` 105s green post-split).
+- A code review pass confirmed verbatim extraction, complete per-file imports, and no orphaned/duplicated symbols.
+
 ### Technical-debt cleanup audit — proven unused metric adapter removed
 
 The final cleanup audit removed only `metrics.Collector.ScanAttempt`, an
