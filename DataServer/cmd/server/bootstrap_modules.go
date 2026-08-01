@@ -210,9 +210,10 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	// Wire the Social API boundary as the per-entry destination validator.
 	// When SOCIAL_API_URL is unset, socialclient.Config{BaseURL=""} returns
 	// ErrNotConfigured from every ValidateDestination call; the enqueue
-	// pre-flight loop classifies ErrNotConfigured as SOFT (logged warning,
-	// enqueue continues), so dev / pre-rollout operators do not have to
-	// configure the social_repo to keep Velox accepting submissions.
+	// pre-flight loop treats this as a HARD operational failure because
+	// DeliveryRunner classifies provider-not-configured as terminal (there
+	// is no retry path to consume retry_budget). Operators must configure
+	// the social_repo before submitting plans with social destinations.
 	// When SOCIAL_API_URL IS set, the validator hard-rejects entries with
 	// 4xx responses from the social_repo and lets 5xx / rate-limit fall
 	// through to the runner's retry_budget.

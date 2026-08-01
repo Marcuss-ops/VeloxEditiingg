@@ -16,8 +16,11 @@
 //      DestinationValidator interface:
 //       * ErrPermanent / ErrAuth → HARD (typed error with wrapped
 //         sentinel, errors.Is chain preserved).
-//       * ErrTransient / ErrRateLimit / ErrNotConfigured → SOFT (log
-//         + continue, no rejection).
+//       * ErrTransient / ErrRateLimit → SOFT (log + continue; the
+//         delivery runner consumes retry_budget later).
+//       * ErrNotConfigured → HARD operational failure (the runner treats
+//         provider-not-configured as terminal).
+//       * Unknown errors → FAIL CLOSED (propagated, no silent retry).
 //   3. Empty external_destination_id → loop skips pre-flight.
 //   4. nil validator → substitutes noopDestinationValidator.
 //   5. Per-entry call count + argument pinning.
@@ -363,7 +366,9 @@ func (s *stubValidator) callCount() int {
 // hard/soft classification of socialclient sentinels:
 //
 //	ErrPermanent | ErrAuth               → HARD fail (typed error)
-//	ErrTransient | ErrRateLimit | ErrNotConfigured → SOFT pass
+//	ErrTransient | ErrRateLimit           → SOFT pass
+//	ErrNotConfigured                      → HARD operational failure
+//	unknown error                         → FAIL CLOSED
 //	missing external_destination_id      → loop skips pre-flight
 // =====================================================================
 
@@ -472,12 +477,18 @@ func TestValidateDeliveryPlanRequires_Preflight(t *testing.T) {
 		}
 	})
 
-	t.Run("soft_pass_on_ErrNotConfigured", func(t *testing.T) {
+	t.Run("hard_fail_on_ErrNotConfigured", func(t *testing.T) {
 		t.Parallel()
 		stub := &stubValidator{err: fmt.Errorf("wrapped: %w", socialclient.ErrNotConfigured)}
 		err := validateDeliveryPlanRequires(context.Background(), planWithSocial, stub)
-		if err != nil {
-			t.Errorf("soft pass on ErrNotConfigured must NOT block enqueue; got %v", err)
+		if err == nil {
+			t.Fatal("ErrNotConfigured must fail preflight; got nil")
+		}
+		if !strings.Contains(err.Error(), "non-retryable or unclassified error") {
+			t.Errorf("error %q does not identify the operational failure", err.Error())
+		}
+		if !errors.Is(err, socialclient.ErrNotConfigured) {
+			t.Errorf("errors.Is must preserve ErrNotConfigured; got %v", err)
 		}
 		if stub.callCount() != 1 {
 			t.Errorf("validator call count = %d; want 1", stub.callCount())
@@ -556,6 +567,24 @@ func TestValidateDeliveryPlanRequires_Preflight(t *testing.T) {
 			if stub.calls[i] != w {
 				t.Errorf("call[%d] = %q; want %q", i, stub.calls[i], w)
 			}
+		}
+	})
+
+	t.Run("unknown_error_fails_closed", func(t *testing.T) {
+		t.Parallel()
+		stub := &stubValidator{err: errors.New("validator contract is unavailable")}
+		err := validateDeliveryPlanRequires(context.Background(), planWithSocial, stub)
+		if err == nil {
+			t.Fatal("unclassified validator error must fail closed; got nil")
+		}
+		if !strings.Contains(err.Error(), "non-retryable or unclassified error") {
+			t.Errorf("error %q does not identify an unclassified preflight error", err.Error())
+		}
+		if !errors.Is(err, stub.err) {
+			t.Errorf("errors.Is must preserve the original validator error; got %v", err)
+		}
+		if stub.callCount() != 1 {
+			t.Errorf("validator call count = %d; want 1", stub.callCount())
 		}
 	})
 }

@@ -29,7 +29,7 @@ import (
 //     pre-flight via the DestinationValidator interface (no-op by
 //     default for legacy/dev mode). The HARD/SOFT classification
 //     of socialclient sentinels (ErrPermanent/ErrAuth HARD,
-//     ErrTransient/ErrRateLimit/ErrNotConfigured SOFT) stays
+//     ErrTransient/ErrRateLimit SOFT, ErrNotConfigured HARD) stays
 //     here because the socialclient boundary is enqueue-only.
 //
 // Canonical rename note (YouTube → Delivery, PR-15.8):
@@ -134,11 +134,18 @@ func (noopDestinationValidator) ValidateDestination(ctx context.Context, socialD
 //	ErrPermanent / ErrAuth    → HARD fail: bad / unauthorized
 //	                            destination, enqueue is rejected
 //	                            with a wrapped *validationError.
-//	ErrTransient / ErrRateLimit / ErrNotConfigured
-//	                          → SOFT warn: log and continue; the
+//	ErrTransient / ErrRateLimit → SOFT warn: log and continue; the
 //	                            runner's per-destination
 //	                            retry_budget will re-resolve at
 //	                            FinalizeVerified.
+//	ErrNotConfigured            → HARD operational failure: propagate
+//	                            an untyped error; the runner treats
+//	                            provider-not-configured as terminal.
+//	Unknown errors             → FAIL CLOSED: propagate an untyped
+//	                            error. An unclassified failure is not
+//	                            safe to accept as retryable because the
+//	                            delivery runner cannot apply a known
+//	                            retry policy to it.
 func validateDeliveryPlanRequires(ctx context.Context, payloadMap map[string]interface{}, validator DestinationValidator) error {
 	// Parse owns the shape rules + duplicate detection + per-entry
 	// validation (retry_budget<0, priority<0, dup, disabled,
@@ -186,13 +193,22 @@ func validateDeliveryPlanRequires(ctx context.Context, payloadMap map[string]int
 						socialDestID, perr),
 					perr,
 				)
-			default:
-				// Soft: ErrTransient / ErrRateLimit /
-				// ErrNotConfigured. Log a warning and
-				// continue. The DeliveryRunner's retry_budget
-				// at finalize is the recovery path.
+			case errors.Is(perr, socialclient.ErrTransient),
+				errors.Is(perr, socialclient.ErrRateLimit):
+				// SOFT: the destination may become routable before
+				// finalization. Accept the job, but retain the
+				// destination in the durable plan so the delivery
+				// runner can re-resolve it and apply retry_budget.
 				log.Printf("[PREFLIGHT][enqueue] external_destination_id=%q for destination_id=%q skipped: %v (soft: enqueue continues; runner will re-attempt at finalize)",
 					socialDestID, e.DestinationID, perr)
+			default:
+				// FAIL CLOSED: ErrNotConfigured and every unknown
+				// error must stop enqueue. ErrNotConfigured is
+				// terminal in DeliveryRunner, so accepting it here
+				// would claim recoverability that the runner cannot
+				// provide; unknown errors have no reliable retry
+				// classification at all.
+				return fmt.Errorf("social destination %q preflight returned non-retryable or unclassified error: %w", socialDestID, perr)
 			}
 		}
 	}
