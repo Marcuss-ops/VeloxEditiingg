@@ -149,8 +149,12 @@ func WithWorkspaceID(id int64) EnqueueOption {
 // atomic multi-table transaction with creator_forwardings) should use
 // PrepareJobAndTask instead.
 func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{}, req costmodel.JobRequirements, opts ...EnqueueOption) (map[string]interface{}, error) {
+	ctx, enqueueMetrics := telemetry.EnsureEnqueueMetrics(ctx)
+	ctx, span := telemetry.StartSpan(ctx, "enqueue")
+	defer span.End()
+	defer enqueueMetrics.RecordOnSpan(span)
 	if e == nil || e.Creator == nil {
-		return nil, fmt.Errorf("creator unavailable")
+		return nil, wrapEnqueuePhase(EnqueuePhaseValidateInput, fmt.Errorf("creator unavailable"))
 	}
 
 	job, spec, priority, err := e.PrepareJobAndTask(ctx, payloadMap, req, opts...)
@@ -248,8 +252,10 @@ func (e *Enqueuer) enforceDeliveryPlanPrecondition(ctx context.Context, jobID st
 // tracing. The span context propagates through the returned Job ID so
 // downstream claim/execute/report spans link to this root span.
 func (e *Enqueuer) PrepareJobAndTask(ctx context.Context, payloadMap map[string]interface{}, req costmodel.JobRequirements, opts ...EnqueueOption) (*jobs.Job, *taskgraph.TaskSpec, int, error) {
+	ctx, enqueueMetrics := telemetry.EnsureEnqueueMetrics(ctx)
 	ctx, span := telemetry.StartSpan(ctx, "schedule_task")
 	defer span.End()
+	defer enqueueMetrics.RecordOnSpan(span)
 
 	return e.prepareJobAndTask(ctx, payloadMap, req, opts...)
 }
@@ -257,7 +263,9 @@ func (e *Enqueuer) PrepareJobAndTask(ctx context.Context, payloadMap map[string]
 // prepareJobAndTask is the internal implementation extracted so the
 // span wrapper above keeps the defer span.End() clean.
 func (e *Enqueuer) prepareJobAndTask(ctx context.Context, payloadMap map[string]interface{}, req costmodel.JobRequirements, opts ...EnqueueOption) (*jobs.Job, *taskgraph.TaskSpec, int, error) {
+	finishPhase := telemetry.BeginEnqueuePhase(ctx, string(EnqueuePhaseValidateInput))
 	forwardingKey, hasForwardingKey, err := e.validateEnqueueInput(payloadMap)
+	finishPhase()
 	if err != nil {
 		return nil, nil, 0, wrapEnqueuePhase(EnqueuePhaseValidateInput, err)
 	}
@@ -266,17 +274,25 @@ func (e *Enqueuer) prepareJobAndTask(ctx context.Context, payloadMap map[string]
 	// canonical normalization: deliveryplan.Parse receives the single
 	// canonical map used by the rest of enqueue. Legacy delivery aliases are
 	// retained by the compatibility projection during normalization.
+	finishPhase = telemetry.BeginEnqueuePhase(ctx, string(EnqueuePhaseResolveAssets))
 	if err := e.resolveEnqueueAssets(ctx, payloadMap); err != nil {
+		finishPhase()
 		return nil, nil, 0, wrapEnqueuePhase(EnqueuePhaseResolveAssets, err)
 	}
+	finishPhase()
 
+	finishPhase = telemetry.BeginEnqueuePhase(ctx, string(EnqueuePhaseNormalizePayload))
 	normalized, err := normalizeEnqueuePayload(ctx, payloadMap, forwardingKey, hasForwardingKey)
+	finishPhase()
 	if err != nil {
 		return nil, nil, 0, wrapEnqueuePhase(EnqueuePhaseNormalizePayload, err)
 	}
+	finishPhase = telemetry.BeginEnqueuePhase(ctx, string(EnqueuePhaseValidateInput))
 	if err := e.validateEnqueueDeliveryPlan(ctx, normalized); err != nil {
+		finishPhase()
 		return nil, nil, 0, wrapEnqueuePhase(EnqueuePhaseValidateInput, err)
 	}
+	finishPhase()
 
 	// Forwarding identity is deterministic and must be finalized before
 	// worker projection. Ordinary payloads receive a UUID only when no
@@ -292,7 +308,9 @@ func (e *Enqueuer) prepareJobAndTask(ctx context.Context, payloadMap map[string]
 		normalized["job_id"] = jobID
 	}
 
-	job, spec, priority, err := projectEnqueueJob(normalized, req)
+	finishPhase = telemetry.BeginEnqueuePhase(ctx, string(EnqueuePhaseProjectWorker))
+	job, spec, priority, err := projectEnqueueJobContext(ctx, normalized, req)
+	finishPhase()
 	if err != nil {
 		return nil, nil, 0, wrapEnqueuePhase(EnqueuePhaseProjectWorker, err)
 	}
@@ -443,6 +461,10 @@ func (e *Enqueuer) resolveSceneImagePayload(ctx context.Context, payloadMap map[
 }
 
 func hasTimedVideoClipSegments(value interface{}) bool {
+	return hasTimedVideoClipSegmentsContext(context.Background(), value)
+}
+
+func hasTimedVideoClipSegmentsContext(ctx context.Context, value interface{}) bool {
 	switch typed := value.(type) {
 	case map[string]interface{}:
 		if _, hasStart := typed["start_seconds"]; hasStart {
@@ -456,27 +478,28 @@ func hasTimedVideoClipSegments(value interface{}) bool {
 			}
 		}
 		for _, child := range typed {
-			if hasTimedVideoClipSegments(child) {
+			if hasTimedVideoClipSegmentsContext(ctx, child) {
 				return true
 			}
 		}
 	case []interface{}:
 		for _, child := range typed {
-			if hasTimedVideoClipSegments(child) {
+			if hasTimedVideoClipSegmentsContext(ctx, child) {
 				return true
 			}
 		}
 	case []map[string]interface{}:
 		for _, child := range typed {
-			if hasTimedVideoClipSegments(child) {
+			if hasTimedVideoClipSegmentsContext(ctx, child) {
 				return true
 			}
 		}
 	case string:
 		var decoded interface{}
 		if strings.HasPrefix(strings.TrimSpace(typed), "[") || strings.HasPrefix(strings.TrimSpace(typed), "{") {
+			telemetry.RecordEnqueueJSONUnmarshal(ctx)
 			if json.Unmarshal([]byte(typed), &decoded) == nil {
-				return hasTimedVideoClipSegments(decoded)
+				return hasTimedVideoClipSegmentsContext(ctx, decoded)
 			}
 		}
 	}

@@ -19,12 +19,14 @@
 package enqueue
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
 	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
 	"velox-server/internal/taskgraph"
+	"velox-server/internal/telemetry"
 	"velox-shared/contract/deliveryplan"
 	"velox-shared/payload"
 )
@@ -32,6 +34,10 @@ import (
 // compileSceneVideoJob builds a canonical *jobs.Job and *taskgraph.TaskSpec
 // from a normalized scene-video payload. The caller owns the atomic creation.
 func compileSceneVideoJob(normalized map[string]interface{}, req costmodel.JobRequirements) (*jobs.Job, *taskgraph.TaskSpec, int, error) {
+	return compileSceneVideoJobContext(context.Background(), normalized, req)
+}
+
+func compileSceneVideoJobContext(ctx context.Context, normalized map[string]interface{}, req costmodel.JobRequirements) (*jobs.Job, *taskgraph.TaskSpec, int, error) {
 	jobID, _ := normalized["job_id"].(string)
 	videoName, _ := normalized["video_name"].(string)
 	projectID, _ := normalized["project_id"].(string)
@@ -46,6 +52,7 @@ func compileSceneVideoJob(normalized map[string]interface{}, req costmodel.JobRe
 	priority := payload.EnsureInt(normalized["priority"], 5)
 
 	rendererPayload := cloneRendererPayload(normalized)
+	telemetry.RecordEnqueueJSONMarshal(ctx)
 	raw, err := json.Marshal(rendererPayload)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("marshal renderer payload: %w", err)

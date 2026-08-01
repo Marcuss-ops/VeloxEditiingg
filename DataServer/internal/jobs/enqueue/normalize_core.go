@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"velox-server/internal/routing"
+	"velox-server/internal/telemetry"
 	"velox-shared/contract"
 	"velox-shared/contract/deliveryplan"
 	"velox-shared/contract/rendercompiler"
@@ -72,7 +73,7 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 	base.ScriptText = scriptText
 
 	if !strictManifest {
-		scenesValue, scenesJSON, err := normalizeScenes(payloadMap)
+		scenesValue, scenesJSON, err := normalizeScenesContext(ctx, payloadMap)
 		if err != nil {
 			return nil, err
 		}
@@ -110,7 +111,7 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 
 	// Apply the fingerprint AFTER all identity + business fields are
 	// finalized, so the hash reflects the canonical V2 shape.
-	base.JobFingerprint = sceneVideoFingerprint(
+	base.JobFingerprint = sceneVideoFingerprintContext(ctx,
 		base.JobID,
 		base.VideoName,
 		base.ScriptText,
@@ -218,6 +219,10 @@ func resolveRequiredCapabilities(executorID string) []string {
 	return nil
 }
 func sceneVideoFingerprint(parts ...interface{}) string {
+	return sceneVideoFingerprintContext(context.Background(), parts...)
+}
+
+func sceneVideoFingerprintContext(ctx context.Context, parts ...interface{}) string {
 	h := sha256.New()
 	for _, part := range parts {
 		switch v := part.(type) {
@@ -235,6 +240,7 @@ func sceneVideoFingerprint(parts ...interface{}) string {
 			if part == nil {
 				continue
 			}
+			telemetry.RecordEnqueueJSONMarshal(ctx)
 			if data, err := json.Marshal(part); err == nil {
 				h.Write(data)
 			}

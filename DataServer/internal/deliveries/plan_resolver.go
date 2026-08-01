@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"velox-server/internal/artifacts"
+	"velox-server/internal/telemetry"
 )
 
 // ErrNoExplicitPlan is returned when no per-job delivery plan exists and
@@ -144,6 +145,7 @@ func (r *SQLiteDeliveryPlanResolver) ResolvePlan(ctx context.Context, jobID, art
 	_ = artifactID // available for future per-artifact routing
 
 	// Step 1: check for per-job plans.
+	telemetry.RecordEnqueueResolverQuery(ctx, "plans")
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT destination_id, priority, retry_budget FROM job_delivery_plans
 		 WHERE job_id = ? AND enabled = 1
@@ -184,6 +186,7 @@ func (r *SQLiteDeliveryPlanResolver) ResolvePlan(ctx context.Context, jobID, art
 	}
 
 	// Step 3: fallback — all enabled global destinations (dev mode only).
+	telemetry.RecordEnqueueResolverQuery(ctx, "fallback")
 	fallback, err := r.db.QueryContext(ctx,
 		`SELECT destination_id FROM delivery_destinations WHERE enabled = 1
 		 ORDER BY destination_id ASC`)

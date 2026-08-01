@@ -8,6 +8,7 @@ import (
 
 	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
+	"velox-server/internal/telemetry"
 )
 
 func TestEnqueuePhaseOfPreservesUnderlyingValidationError(t *testing.T) {
@@ -139,6 +140,41 @@ func TestProjectEnqueueJobClassifiesRendererMarshalError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "marshal renderer payload") {
 		t.Fatalf("error does not identify renderer projection: %v", err)
+	}
+}
+
+func TestEnqueueRecordsPersistPhaseInRequestMetrics(t *testing.T) {
+	enqueuer := newTestEnqueuer(t)
+	ctx, metrics := telemetry.WithEnqueueMetrics(context.Background(), false)
+	payload := map[string]interface{}{
+		"video_name":     "instrumented enqueue",
+		"script_text":    "phase timing",
+		"voiceover_path": "/tmp/v.mp3",
+		"scenes": []interface{}{
+			map[string]interface{}{"text": "S1", "image_link": "https://example.com/i.png"},
+		},
+		"delivery_plan": []interface{}{
+			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 1},
+		},
+	}
+	if _, err := enqueuer.Enqueue(ctx, payload, costmodel.DefaultRequirements()); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	snapshot := metrics.Snapshot()
+	for _, phase := range []EnqueuePhase{
+		EnqueuePhaseValidateInput,
+		EnqueuePhaseResolveAssets,
+		EnqueuePhaseNormalizePayload,
+		EnqueuePhaseProjectWorker,
+		EnqueuePhasePersistJobAndTask,
+	} {
+		if snapshot.PhaseDuration[string(phase)] <= 0 {
+			t.Errorf("phase %q was not measured: %v", phase, snapshot.PhaseDuration)
+		}
+	}
+	if snapshot.JSONMarshalCount == 0 {
+		t.Error("enqueue did not record any json.Marshal operations")
 	}
 }
 

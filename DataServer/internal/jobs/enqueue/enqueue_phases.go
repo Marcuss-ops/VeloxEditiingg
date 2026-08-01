@@ -9,6 +9,7 @@ import (
 	"velox-server/internal/jobs"
 	"velox-server/internal/routing"
 	"velox-server/internal/taskgraph"
+	"velox-server/internal/telemetry"
 )
 
 // EnqueuePhase identifies the logical stage that rejected an enqueue request.
@@ -77,7 +78,7 @@ func (e *Enqueuer) resolveEnqueueAssets(ctx context.Context, payloadMap map[stri
 	if err := e.resolveSceneImagePayload(ctx, payloadMap); err != nil {
 		return err
 	}
-	if hasTimedVideoClipSegments(payloadMap) && e.Voiceover == nil {
+	if hasTimedVideoClipSegmentsContext(ctx, payloadMap) && e.Voiceover == nil {
 		return fmt.Errorf("video clip segments require master asset service for trimming")
 	}
 	if e.Voiceover != nil {
@@ -102,10 +103,16 @@ func normalizeEnqueuePayload(ctx context.Context, payloadMap map[string]interfac
 }
 
 func projectEnqueueJob(normalized map[string]interface{}, req costmodel.JobRequirements) (*jobs.Job, *taskgraph.TaskSpec, int, error) {
-	return compileSceneVideoJob(normalized, req)
+	return projectEnqueueJobContext(context.Background(), normalized, req)
+}
+
+func projectEnqueueJobContext(ctx context.Context, normalized map[string]interface{}, req costmodel.JobRequirements) (*jobs.Job, *taskgraph.TaskSpec, int, error) {
+	return compileSceneVideoJobContext(ctx, normalized, req)
 }
 
 func (e *Enqueuer) persistEnqueueJobTask(ctx context.Context, job *jobs.Job, spec *taskgraph.TaskSpec, priority int) error {
+	finishPhase := telemetry.BeginEnqueuePhase(ctx, string(EnqueuePhasePersistJobAndTask))
+	defer finishPhase()
 	if e == nil || e.Creator == nil {
 		return fmt.Errorf("creator unavailable")
 	}
