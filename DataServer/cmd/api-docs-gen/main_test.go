@@ -7,56 +7,6 @@ import (
 	"testing"
 )
 
-// minimalOpenAPISpec returns the components block the codegen's $ref
-// resolver expects, with one schema + one parameter fixture. Used by
-// tests that need a valid preimage without depending on the prod
-// openapi.yaml.
-func minimalOpenAPISpec(t *testing.T) map[string]any {
-	t.Helper()
-	return map[string]any{
-		"openapi": "3.1.0",
-		"info": map[string]any{
-			"title":   "Test",
-			"version": "0.0.0-test",
-		},
-		"paths": map[string]any{
-			"/api/v1/jobs": map[string]any{
-				"post": map[string]any{
-					"operationId": "submitJob",
-					"tags":        []any{"jobs"},
-				},
-			},
-		},
-		"components": map[string]any{
-			"schemas": map[string]any{
-				"SubmitJobRequest":          map[string]any{"type": "object"},
-				"SubmitJobAcceptedResponse": map[string]any{"type": "object"},
-				"ErrorEnvelope":             map[string]any{"type": "object"},
-			},
-			"parameters": map[string]any{
-				"AuthorizationHeader": map[string]any{
-					"name": "Authorization",
-					"in":   "header",
-				},
-				"XRequestIDHeader": map[string]any{
-					"name": "X-Request-ID",
-					"in":   "header",
-				},
-				"PathJobID": map[string]any{
-					"name": "job_id",
-					"in":   "path",
-				},
-			},
-			"securitySchemes": map[string]any{
-				"bearerAdminToken": map[string]any{
-					"type":   "http",
-					"scheme": "bearer",
-				},
-			},
-		},
-	}
-}
-
 func TestRouteEntry_Validate(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -436,5 +386,4 @@ func TestPrintDrift_EncodesJSON(t *testing.T) {
 	_ = buf
 }
 
-func strPtr(s string) *string        { return &s }
 func refEntryPtr(s string) *RefEntry { return &RefEntry{Ref: s} }

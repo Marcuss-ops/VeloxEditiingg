@@ -55,7 +55,6 @@ type spoofStubTaskRepo struct {
 	releaseErr          error
 	renewCalls          int
 	lastRenewRevision   int
-	transitionTaskState bool
 }
 
 func (s *spoofStubTaskRepo) Get(_ context.Context, id string) (*taskgraph.Task, error) {

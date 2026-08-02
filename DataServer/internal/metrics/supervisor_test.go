@@ -55,15 +55,6 @@ type fakeLabels struct {
 	execID, execVer, wClass string
 }
 
-func (f *fakeAttemptsDataSource) add(a *fakeAttemptRecord, id string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.attempts == nil {
-		f.attempts = make(map[string]*fakeAttemptRecord)
-	}
-	f.attempts[id] = a
-}
-
 func (f *fakeAttemptsDataSource) RecentAttemptIDs(ctx context.Context, since time.Time, limit int) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

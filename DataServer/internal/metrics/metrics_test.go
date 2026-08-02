@@ -318,15 +318,6 @@ func loadOutcomeSecondsOrZero(t *testing.T, reg *Registry, outcome string) uint6
 	return v
 }
 
-// loadFailureReasonCountOrZero is the same shape for the sibling
-// reasons family.
-func loadFailureReasonCountOrZero(t *testing.T, reg *Registry, reason string) uint64 {
-	t.Helper()
-	v, _ := lookupChildValue(t, reg, "velox_compute_failure_reasons_total",
-		`velox_compute_failure_reasons_total{reason="`+reason+`"} `)
-	return v
-}
-
 // ─── F: cost gauges (spec §14 follow-up) ────────────────────────────────
 
 // TestCostGauges_RegisterOnCollector: the 4 cost-per-output-minute

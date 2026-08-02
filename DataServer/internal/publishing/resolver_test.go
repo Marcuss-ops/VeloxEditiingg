@@ -10,15 +10,6 @@ import (
 	"velox-server/internal/store"
 )
 
-type fakeCatalogClient struct {
-	response *socialclient.PublishingTargetCatalogResponse
-	err      error
-}
-
-func (f fakeCatalogClient) ListPublishingCatalog(context.Context, int64, string) (*socialclient.PublishingTargetCatalogResponse, error) {
-	return f.response, f.err
-}
-
 type fakeDestinationReader struct {
 	statuses map[string]store.DeliveryDestinationStatus
 	rows     map[string]*store.DeliveryDestination

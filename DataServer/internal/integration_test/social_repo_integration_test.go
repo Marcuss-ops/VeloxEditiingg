@@ -90,14 +90,6 @@ func newMockSocialRepo(t *testing.T, mode string) *mockSocialRepo {
 
 func (m *mockSocialRepo) URL() string { return m.server.URL }
 
-// setMode flips the response mode mid-test (useful for the dedup test
-// that exercises success → success → transient → success).
-func (m *mockSocialRepo) setMode(mode string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.mode = mode
-}
-
 func (m *mockSocialRepo) handle(w http.ResponseWriter, r *http.Request) {
 	atomic.AddInt32(&m.postCount, 1)
 	raw, _ := io.ReadAll(r.Body)

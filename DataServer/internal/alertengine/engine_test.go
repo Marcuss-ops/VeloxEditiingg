@@ -186,16 +186,6 @@ func (s *spyNotifier) count() int {
 	return len(s.alerts)
 }
 
-func (s *spyNotifier) last() *Alert {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.alerts) == 0 {
-		return nil
-	}
-	cp := s.alerts[len(s.alerts)-1]
-	return &cp
-}
-
 // ── Tests: ErrorRate Rule ────────────────────────────────────────────────
 
 func TestRuleErrorRate_Triggers(t *testing.T) {

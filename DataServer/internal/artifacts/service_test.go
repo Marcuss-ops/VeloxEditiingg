@@ -195,13 +195,6 @@ func (e *testEnv) markPreExistingReady(jobID, kind, artifactID string) {
 	require.NoError(e.t, err)
 }
 
-func nullableTime(t time.Time) interface{} {
-	if t.IsZero() {
-		return nil
-	}
-	return t.UTC().Format(time.RFC3339)
-}
-
 func beginUploadDefaultCmd(jobID string) BeginUploadCommand {
 	return BeginUploadCommand{
 		JobID:            jobID,

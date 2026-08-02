@@ -3,52 +3,52 @@
 // Coverage map (each per-phase test exercises a single decision
 // branch of the executor's 7-phase pipeline):
 //
-//   Happy path:
-//     TestLevelDSmoke_HappyPath               — all 7 phases pass, smoke_runs
-//                                              row marked SUCCEEDED with
-//                                              duration_ms + drive_file_id
+//	Happy path:
+//	  TestLevelDSmoke_HappyPath               — all 7 phases pass, smoke_runs
+//	                                           row marked SUCCEEDED with
+//	                                           duration_ms + drive_file_id
 //
-//   Pre-flight (parsePayload / nil deps):
-//     TestLevelDSmoke_NilOp                   — nil op → error
-//     TestLevelDSmoke_EmptyWorkerID          — empty worker_id → error
-//     TestLevelDSmoke_NilBackend_Returns     — nil backend bundle
-//                                               surfaces ErrSmokeRunnerNotWired
+//	Pre-flight (parsePayload / nil deps):
+//	  TestLevelDSmoke_NilOp                   — nil op → error
+//	  TestLevelDSmoke_EmptyWorkerID          — empty worker_id → error
+//	  TestLevelDSmoke_NilBackend_Returns     — nil backend bundle
+//	                                            surfaces ErrSmokeRunnerNotWired
 //
-//   Phase 0 (parsePayload):
-//     TestLevelDSmoke_EmptyPayload            — empty "{}" → payload-empty error
-//     TestLevelDSmoke_PayloadParseFails       — malformed JSON → parse error
-//     TestLevelDSmoke_MissingAssetID         — JSON parses but no asset_id
+//	Phase 0 (parsePayload):
+//	  TestLevelDSmoke_EmptyPayload            — empty "{}" → payload-empty error
+//	  TestLevelDSmoke_PayloadParseFails       — malformed JSON → parse error
+//	  TestLevelDSmoke_MissingAssetID         — JSON parses but no asset_id
 //
-//   Phase 1 (asset resolve):
-//     TestLevelDSmoke_AssetResolveFail        — resolver returns error
-//     TestLevelDSmoke_AssetEmptyURL           — resolver returns empty URL
+//	Phase 1 (asset resolve):
+//	  TestLevelDSmoke_AssetResolveFail        — resolver returns error
+//	  TestLevelDSmoke_AssetEmptyURL           — resolver returns empty URL
 //
-//   Phase 3 (lease acquire):
-//     TestLevelDSmoke_LeaseUnavailable        — lease acquire fails →
-//                                              smoke_runs FAILED with
-//                                              ErrSmokeLeaseUnavailable
+//	Phase 3 (lease acquire):
+//	  TestLevelDSmoke_LeaseUnavailable        — lease acquire fails →
+//	                                           smoke_runs FAILED with
+//	                                           ErrSmokeLeaseUnavailable
 //
-//   Phase 4-6 (asset / ffmpeg / Drive):
-//     TestLevelDSmoke_AssetDownloadFail       — Phase 4 fail → FAILED + pipeline wrap
-//     TestLevelDSmoke_FFmpegRenderFail        — Phase 5 fail → FAILED
-//     TestLevelDSmoke_ArtifactMissing         — Phase 5 ok but zero bytes → ERR
-//     TestLevelDSmoke_DriveUploadFail         — Phase 6 fail → FAILED
-//     TestLevelDSmoke_DriveEmptyFileID       — Phase 6 returns "" → ERR
+//	Phase 4-6 (asset / ffmpeg / Drive):
+//	  TestLevelDSmoke_AssetDownloadFail       — Phase 4 fail → FAILED + pipeline wrap
+//	  TestLevelDSmoke_FFmpegRenderFail        — Phase 5 fail → FAILED
+//	  TestLevelDSmoke_ArtifactMissing         — Phase 5 ok but zero bytes → ERR
+//	  TestLevelDSmoke_DriveUploadFail         — Phase 6 fail → FAILED
+//	  TestLevelDSmoke_DriveEmptyFileID       — Phase 6 returns "" → ERR
 //
-//   Cleanup cascade (mandatory lease release + best-effort temp):
-//     TestLevelDSmoke_Cleanup_ReleasesLease   — happy-path suite asserts lease
-//                                               release was called (via stub)
-//     TestLevelDSmoke_Cleanup_BestEffortTemp  — Phase 6 fail: worker temp cleanup
-//                                               is best-effort (warning-only)
-//     TestLevelDSmoke_Cleanup_FailSurfaces    — Phase 5 ffmpeg fail: cleanup
-//                                               cascade on worker temp must
-//                                               still be attempted
+//	Cleanup cascade (mandatory lease release + best-effort temp):
+//	  TestLevelDSmoke_Cleanup_ReleasesLease   — happy-path suite asserts lease
+//	                                            release was called (via stub)
+//	  TestLevelDSmoke_Cleanup_BestEffortTemp  — Phase 6 fail: worker temp cleanup
+//	                                            is best-effort (warning-only)
+//	  TestLevelDSmoke_Cleanup_FailSurfaces    — Phase 5 ffmpeg fail: cleanup
+//	                                            cascade on worker temp must
+//	                                            still be attempted
 //
-//   Helpers:
-//     TestLevelDSmoke_ParsePayload_Whitespace — leading/trailing whitespace
-//                                              trimmed from asset_id
-//     TestLevelDSmoke_NilNow_Defaults         — NowFunc nil default falls back
-//                                               to time.Now
+//	Helpers:
+//	  TestLevelDSmoke_ParsePayload_Whitespace — leading/trailing whitespace
+//	                                           trimmed from asset_id
+//	  TestLevelDSmoke_NilNow_Defaults         — NowFunc nil default falls back
+//	                                            to time.Now
 package fleet
 
 import (
@@ -67,11 +67,11 @@ import (
 
 // stubLeaseStore records Acquire/Release calls for cleanup assertions.
 type stubLeaseStore struct {
-	mu          sync.Mutex
-	acquired    map[string]string // runID → workerID
-	released    []string         // runIDs
-	acquireErr  error
-	releaseErr  error
+	mu         sync.Mutex
+	acquired   map[string]string // runID → workerID
+	released   []string          // runIDs
+	acquireErr error
+	releaseErr error
 }
 
 func newStubLease() *stubLeaseStore {
@@ -130,8 +130,6 @@ type stubWorker struct {
 	renderErr     error
 	cleanupErr    error
 	artifactBytes int64
-	downloadOK    bool
-	renderOK      bool
 	cleanupCalls  int
 }
 
@@ -263,13 +261,6 @@ func (s *stubSmokeRuns) GetLatestSmokeForWorker(_ context.Context, workerID stri
 
 func (s *stubSmokeRuns) ListRecentSmokesForWorker(_ context.Context, _ string, _ int) ([]store.SmokeRun, error) {
 	return nil, nil
-}
-
-func (s *stubSmokeRuns) get(runID string) (store.SmokeRun, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	r, ok := s.rows[runID]
-	return r, ok
 }
 
 // ── Common test fixtures ────────────────────────────────────────────

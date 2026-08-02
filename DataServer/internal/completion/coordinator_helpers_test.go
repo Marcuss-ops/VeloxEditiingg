@@ -216,10 +216,3 @@ func readArtifactStatus(t *testing.T, db *sql.DB, artifactID string) string {
 	}
 	return status
 }
-
-// errorsIs is a tiny inline errors.Is shim to avoid pulling the
-// stdlib import into every test. The Go 1.18+ errors package is used
-// identically to errors.Is.
-func errorsIs(err, target error) bool {
-	return err != nil && (err == target || (err.Error() == target.Error()))
-}
