@@ -109,6 +109,10 @@ func TestCoordinator_CompleteUpload_BranchC_ServerSHAMatch_PromotesToReady(t *te
 	}); err != nil {
 		t.Fatalf("DeclareOutputs: %v", err)
 	}
+	if _, err := db.Exec(`UPDATE task_output_declarations SET upload_id = ?, artifact_id = ? WHERE task_id = ? AND attempt_id = ?`,
+		"up-branch-c", "art-branch-c", fence.TaskID, fence.AttemptID); err != nil {
+		t.Fatalf("bind Branch C declaration: %v", err)
+	}
 
 	if err := c.CompleteUpload(context.Background(), CompleteUploadCommand{
 		Fence:        fence,
@@ -120,6 +124,13 @@ func TestCoordinator_CompleteUpload_BranchC_ServerSHAMatch_PromotesToReady(t *te
 	}
 	if got := readArtifactStatus(t, db, "art-branch-c"); got != "READY" {
 		t.Errorf("Branch C artifact.status: got %q, want READY (server SHA matches declarative)", got)
+	}
+	var outputKind string
+	if err := db.QueryRow(`SELECT output_kind FROM artifacts WHERE id = ?`, "art-branch-c").Scan(&outputKind); err != nil {
+		t.Fatalf("Branch C read output_kind: %v", err)
+	}
+	if outputKind != "final_video" {
+		t.Errorf("Branch C artifact.output_kind: got %q, want final_video", outputKind)
 	}
 	// received_sha256 must be the server-derived SHA, NOT the
 	// worker self-report. This is the canonical ledger entry; if

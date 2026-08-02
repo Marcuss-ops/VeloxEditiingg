@@ -224,7 +224,12 @@ func (r *sqliteAttemptCommitRepo) CompleteArtifactUpload(
 		}
 		if _, err := r.u.tx.ExecContext(ctx,
 			`UPDATE artifacts
-			    SET status = 'READY', verified_at = ?
+			    SET status = 'READY', verified_at = ?,
+			        output_kind = COALESCE(
+			            (SELECT output_kind FROM task_output_declarations
+			              WHERE artifact_id = artifacts.id
+			              LIMIT 1),
+			            output_kind)
 			  WHERE id = (SELECT artifact_id FROM artifact_uploads WHERE upload_id = ?)
 			    AND status IN ('STAGING','VERIFYING')`,
 			nowStr, uploadID,

@@ -102,9 +102,10 @@ type sqliteDeliveryRepo struct {
 	u *sqliteUnitOfWork
 }
 
-// InsertDeliveriesForJob computes the (artifact × destination) cross
-// product and idempotently INSERTs job_deliveries rows. The
-// idempotency_key UNIQUE absorbs re-emission duplicates.
+// InsertDeliveriesForJob computes the (final-video artifact × destination)
+// product and idempotently INSERTs job_deliveries rows. Auxiliary outputs
+// such as engine progress sidecars are committed artifacts, but they are
+// not publishable media and must never enter the delivery queue.
 func (r *sqliteDeliveryRepo) InsertDeliveriesForJob(ctx context.Context, jobID, nowStr string) error {
 	rows, err := r.u.tx.QueryContext(ctx,
 		`SELECT a.id, dd.destination_id
@@ -112,6 +113,8 @@ func (r *sqliteDeliveryRepo) InsertDeliveriesForJob(ctx context.Context, jobID, 
 		   CROSS JOIN delivery_destinations dd
 		  WHERE a.job_id = ?
 		    AND a.status = 'READY'
+		    AND (a.output_kind = 'final_video'
+		         OR (a.output_kind = '' AND a.type IN ('video', 'final_video')))
 		    AND dd.enabled = 1`,
 		jobID,
 	)

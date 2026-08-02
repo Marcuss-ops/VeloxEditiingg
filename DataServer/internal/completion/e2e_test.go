@@ -643,8 +643,9 @@ func TestPhase6_Scenarios16_17_RaceAndDeliveryRestore(t *testing.T) {
 	})
 
 	t.Run("s17_delivery_runner_restore", func(t *testing.T) {
-		// After CommitAttempt, job_deliveries rows must persist per
-		// (artifact × destination) cross-join. lease_expiry past-NOW
+		// After CommitAttempt, one job_deliveries row must persist for the
+		// publishable final-video artifact. Auxiliary committed outputs are
+		// not delivery targets. lease_expiry past-NOW
 		// on those rows is the durable input the DeliveryRunner's
 		// re-claim query picks up on restart.
 		db := openCoordinatorTestDB(t)
@@ -653,6 +654,12 @@ func TestPhase6_Scenarios16_17_RaceAndDeliveryRestore(t *testing.T) {
 		jobID := "job-s17"
 		seedCompleteUploadFixture(t, db, "up-s17", "art-s17", jobID, strings.Repeat("a", 64))
 		seedDeliveryDestination(t, db, "dest-s17", "drive")
+		if _, err := db.Exec(`
+		INSERT INTO artifacts (id, job_id, type, output_kind, storage_provider, status, created_at)
+		VALUES (?, ?, 'engine_progress_sidecar', 'engine_progress_sidecar', 'local', 'READY', ?)`,
+			"art-s17-sidecar", jobID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			t.Fatalf("S17 seed sidecar: %v", err)
+		}
 
 		if _, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
 			Fence:           fence,
@@ -675,8 +682,15 @@ func TestPhase6_Scenarios16_17_RaceAndDeliveryRestore(t *testing.T) {
 		if err := db.QueryRow(`SELECT COUNT(*) FROM job_deliveries WHERE artifact_id = ?`, "art-s17").Scan(&n); err != nil {
 			t.Fatalf("S17 job_deliveries count: %v", err)
 		}
-		if n < 1 {
-			t.Errorf("S17 job_deliveries count after CommitAttempt: got=%d want>=1", n)
+		if n != 1 {
+			t.Errorf("S17 job_deliveries count after CommitAttempt: got=%d want=1 (final video only)", n)
+		}
+		var sidecarDeliveries int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM job_deliveries WHERE artifact_id = ?`, "art-s17-sidecar").Scan(&sidecarDeliveries); err != nil {
+			t.Fatalf("S17 sidecar delivery count: %v", err)
+		}
+		if sidecarDeliveries != 0 {
+			t.Errorf("S17 sidecar job_deliveries count: got=%d want=0", sidecarDeliveries)
 		}
 		// Force lease expiry; runner's re-claim query on restart
 		// picks up the row.
