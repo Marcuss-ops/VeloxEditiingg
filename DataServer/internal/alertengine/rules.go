@@ -175,14 +175,6 @@ func ruleFFmpegSpeedRatio(deps RuleDeps) RuleFunc {
 	}
 }
 
-// dockerDataDir returns the data directory path for disk-free checks.
-func envDataDir() string {
-	if d := os.Getenv("VELOX_DATA_DIR"); d != "" {
-		return d
-	}
-	return "/velox-data"
-}
-
 // EnvFloat reads a float64 from an env var, returning the default when
 // unset or unparseable.
 func EnvFloat(key string, def float64) float64 {

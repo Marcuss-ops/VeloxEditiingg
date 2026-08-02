@@ -23,7 +23,6 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -336,15 +335,4 @@ func TestService_Run_TicksUntilContextDone(t *testing.T) {
 	if v := svc.Snapshot().Version; v < 1 {
 		t.Errorf("Version after Run = %d, want at least 1 (refresh fired during tick)", v)
 	}
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// helper used by tests that want a known-sorted canonical slice
-// (paranoia: assert prevents accidental sort-keys drift).
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-func sortedCopy(in []string) []string {
-	out := make([]string, len(in))
-	copy(out, in)
-	sort.Strings(out)
-	return out
 }

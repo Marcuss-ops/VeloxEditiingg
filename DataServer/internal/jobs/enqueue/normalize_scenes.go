@@ -10,10 +10,6 @@ import (
 	"velox-shared/contract"
 )
 
-func normalizeScenes(payloadMap map[string]interface{}) ([]map[string]interface{}, string, error) {
-	return normalizeScenesContext(context.Background(), payloadMap)
-}
-
 func normalizeScenesContext(ctx context.Context, payloadMap map[string]interface{}) ([]map[string]interface{}, string, error) {
 	if v, ok := payloadMap["scenes"]; ok {
 		switch scenes := v.(type) {

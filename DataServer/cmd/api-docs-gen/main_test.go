@@ -3,12 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"gopkg.in/yaml.v3"
 )
 
 // minimalOpenAPISpec returns the components block the codegen's $ref
@@ -33,9 +29,9 @@ func minimalOpenAPISpec(t *testing.T) map[string]any {
 		},
 		"components": map[string]any{
 			"schemas": map[string]any{
-				"SubmitJobRequest":         map[string]any{"type": "object"},
+				"SubmitJobRequest":          map[string]any{"type": "object"},
 				"SubmitJobAcceptedResponse": map[string]any{"type": "object"},
-				"ErrorEnvelope":            map[string]any{"type": "object"},
+				"ErrorEnvelope":             map[string]any{"type": "object"},
 			},
 			"parameters": map[string]any{
 				"AuthorizationHeader": map[string]any{
@@ -59,20 +55,6 @@ func minimalOpenAPISpec(t *testing.T) map[string]any {
 			},
 		},
 	}
-}
-
-func writeManifest(t *testing.T, manifest Manifest) string {
-	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "manifest.yaml")
-	raw, err := yaml.Marshal(manifest)
-	if err != nil {
-		t.Fatalf("yaml.Marshal(manifest): %v", err)
-	}
-	if err := os.WriteFile(path, raw, 0o644); err != nil {
-		t.Fatalf("writeFile(manifest): %v", err)
-	}
-	return path
 }
 
 func TestRouteEntry_Validate(t *testing.T) {
@@ -454,5 +436,5 @@ func TestPrintDrift_EncodesJSON(t *testing.T) {
 	_ = buf
 }
 
-func strPtr(s string) *string          { return &s }
-func refEntryPtr(s string) *RefEntry   { return &RefEntry{Ref: s} }
+func strPtr(s string) *string        { return &s }
+func refEntryPtr(s string) *RefEntry { return &RefEntry{Ref: s} }

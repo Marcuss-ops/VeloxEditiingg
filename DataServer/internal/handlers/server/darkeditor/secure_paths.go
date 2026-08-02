@@ -120,19 +120,6 @@ func confinedWriteFile(baseDir, reference string, data []byte, perm os.FileMode)
 	return root.WriteFile(name, data, perm)
 }
 
-func confinedRemoveFile(baseDir, reference string) error {
-	name, err := validatePathComponent(reference)
-	if err != nil {
-		return err
-	}
-	root, err := openConfinedRoot(baseDir)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	return root.Remove(name)
-}
-
 // confinedProjectReadFile/read/write/remove use a validated flat project ID
 // and a fixed server-owned filename. The complete nested operation remains
 // inside one os.Root, so project-directory symlink replacement cannot escape.

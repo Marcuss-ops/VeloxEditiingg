@@ -60,10 +60,6 @@ func (e *Enqueuer) resolveSceneImagePayload(ctx context.Context, payloadMap map[
 	return rewriteSceneImagePayloadFor(ctx, e.Voiceover, payloadMap)
 }
 
-func hasTimedVideoClipSegments(value interface{}) bool {
-	return hasTimedVideoClipSegmentsContext(context.Background(), value)
-}
-
 func hasTimedVideoClipSegmentsContext(ctx context.Context, value interface{}) bool {
 	switch typed := value.(type) {
 	case map[string]interface{}:

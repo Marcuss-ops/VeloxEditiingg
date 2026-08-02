@@ -288,20 +288,6 @@ type readCloser struct {
 
 func (r *readCloser) Close() error { return nil }
 
-// ── Shared helpers ──
-
-func suggestedFilenameFromURL(reference string) string {
-	u, err := neturl.Parse(strings.TrimSpace(reference))
-	if err != nil {
-		return ""
-	}
-	base := filepath.Base(u.Path)
-	if base == "." || base == string(filepath.Separator) {
-		return ""
-	}
-	return base
-}
-
 func looksLikeDriveURL(reference string) bool {
 	trimmed := strings.TrimSpace(reference)
 	if trimmed == "" {
@@ -331,16 +317,6 @@ func publicDriveDownloadURL(reference string) (string, string, bool) {
 		return "", "", false
 	}
 	return "https://drive.usercontent.google.com/download?id=" + neturl.QueryEscape(fileID) + "&export=download&confirm=t", fileID, true
-}
-
-func isHTMLMediaType(mediaType string) bool {
-	lower := strings.ToLower(strings.TrimSpace(mediaType))
-	return strings.HasPrefix(lower, "text/html") || strings.HasPrefix(lower, "application/xhtml+xml")
-}
-
-func isHTMLPayload(buf []byte) bool {
-	detected := strings.ToLower(http.DetectContentType(buf))
-	return strings.HasPrefix(detected, "text/html") || strings.HasPrefix(detected, "application/xhtml+xml")
 }
 
 // NewTypedResolversFromStore creates the 4 standard typed resolvers from a Store.

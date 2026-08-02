@@ -270,10 +270,6 @@ func (s *SQLiteStore) GetAnalyticsTotals(period string) (map[string]any, error) 
 	}, nil
 }
 
-func parseIntDef(s string, def int) int {
-	return payload.ParseIntDef(s, def)
-}
-
 func asFloat(v any) float64 {
 	return payload.AsFloat(v)
 }

@@ -108,11 +108,3 @@ func isValidPrivacyStatus(value string) bool {
 		return false
 	}
 }
-
-func cloneMetadataMap(metadata map[string]interface{}) map[string]interface{} {
-	out := make(map[string]interface{}, len(metadata))
-	for key, value := range metadata {
-		out[key] = value
-	}
-	return out
-}
