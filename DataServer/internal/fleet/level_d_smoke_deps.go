@@ -8,11 +8,11 @@
 // implementations:
 //   - lease store    → WorkerInfo.Drain transient (Step 6/15 owner)
 //   - worker exec    → BackendSSHClient (Step 9/15 owner, real SSH
-//                     wiring lands in Step 11+)
+//     wiring lands in Step 11+)
 //   - drive uploader → integrations/drive.Service.UploadFile
-//                     (production wiring lands in a follow-up step)
+//     (production wiring lands in a follow-up step)
 //   - asset resolver → minimal stub today; bundle lookup wiring
-//                     lands when the canonical asset picker lands
+//     lands when the canonical asset picker lands
 //   - smoke runs     → SQLiteStore persisted rows
 //
 // Tests wire in-process stubs that drive every phase + failure
@@ -22,22 +22,20 @@
 // the audit row's error_message prefixes each failure with the
 // sentinel string so the dashboard surfaces a clean category
 // per failure rather than a stringified Go error.
+//
+// File split by responsibility:
+//   - level_d_smoke_deps.go    → errors, status, payload, interfaces, backend bundle
+//   - level_d_smoke_lease.go   → RegistryDrainLease (BackendLeaseStore adapter)
+//   - level_d_smoke_local.go   → LocalShellWorker + LocalFileDriveUploader (dev adapters)
+//   - level_d_smoke_ssh.go     → SSHWorkerTarget + sshClient + SSHWorkerExec (prod adapters)
 package fleet
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
-	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strconv"
-	"strings"
 	"time"
 
 	"velox-server/internal/store"
-	workersreg "velox-server/internal/workers"
 )
 
 // ── Sentinel errors ──────────────────────────────────────────────────
@@ -153,10 +151,10 @@ type BackendLeaseStore interface {
 // BackendWorkerExec owns the worker's per-phase action surface.
 // Each method corresponds to one phase of the forward pipeline:
 //
-//   DownloadAsset     — curl/SSH the asset bundle from a pickup URL
-//   RunFFmpegRender  — invoke the engine's ffmpeg-wrapped render
-//                       plan; returns the output path + size in bytes
-//   CleanupWorkerTemp — best-effort rm of /var/lib/velox-worker/smoke/<run_id>
+//	DownloadAsset     — curl/SSH the asset bundle from a pickup URL
+//	RunFFmpegRender  — invoke the engine's ffmpeg-wrapped render
+//	                    plan; returns the output path + size in bytes
+//	CleanupWorkerTemp — best-effort rm of /var/lib/velox-worker/smoke/<run_id>
 //
 // Production reuses Step 9/15's BackendSSHClient for the
 // underlying shell-out; per-method semantics are implemented by
@@ -251,88 +249,6 @@ type LevelDSmokeBackend struct {
 	Now       NowFunc
 }
 
-// ── Production adapters (composition-root side) ─────────────────────
-//
-// These concrete adapter types live next to the consumer
-// interfaces so the bootstrap_composition.go wiring has a single
-// canonical import. They are NOT interfaces — concrete
-// implementations of the surfaces above.
-
-// RegistryDrainLease adapts the in-process workersreg.Registry
-// to the BackendLeaseStore surface: AcquireSmokeLease flips
-// WorkerInfo.Drain=true (excluding the worker from real-job
-// placement for the smoke duration); ReleaseSmokeLease restores
-// Drain=false. Symmetric with Step 6/15's mutations handler
-// which calls SetWorkerDrain directly.
-//
-// Audit-only invariant: when WorkerInfo.Drain is set transiently
-// by smoke, the Worker's Health derivation (Step 3/15) reflects
-// DRAINING on the next poll. The deferred ReleaseSmokeLease
-// in LevelDSmokeExecutor's Phase 3 cleanup ensures the worker
-// recovers to HEALTHY even if a panic / cleanup-skipped state
-// interrupts the pipeline.
-//
-// The runID convention is "smoke-<workerID>-<nanos>" — see
-// LevelDSmokeExecutor's `runID := fmt.Sprintf(...)` call —
-// so ReleaseSmokeLease splits the runID to recover workerID.
-// Future steps may swap this for a parallel
-// smoke_lease_owner column in workers.raw_json, but for atomic
-// Step 12+ we accept the URL-encoding constraint.
-type RegistryDrainLease struct {
-	Reg *workersreg.Registry
-}
-
-// NewRegistryDrainLease returns the lease store wrapping the
-// given registry. Production calls this in bootstrap with
-// m.Workers.Registry() as the registry. Returns nil if reg is
-// nil so the bootstrap's nil-tolerance flow-through survives.
-func NewRegistryDrainLease(reg *workersreg.Registry) BackendLeaseStore {
-	if reg == nil {
-		return nil
-	}
-	return &RegistryDrainLease{Reg: reg}
-}
-
-// AcquireSmokeLease calls reg.SetWorkerDrain(workerID, true) so
-// costmodel.Score excludes the worker. Returns
-// ErrSmokeLeaseUnavailable on any underlying error so the
-// audit-row grep is stable.
-func (r *RegistryDrainLease) AcquireSmokeLease(_ context.Context, runID, workerID string) error {
-	if r == nil || r.Reg == nil {
-		return ErrSmokeLeaseUnavailable
-	}
-	if err := r.Reg.SetWorkerDrain(context.Background(), workerID, true); err != nil {
-		return fmt.Errorf("%w: worker drain or registry error: %v", ErrSmokeLeaseUnavailable, err)
-	}
-	return nil
-}
-
-// ReleaseSmokeLease calls reg.SetWorkerDrain(workerID, false)
-// idempotently. Parses the workerID from the runID: the executor
-// formats runID as "smoke-<workerID>-<nanos>". Since workerID
-// may itself contain dashes (e.g. "velox-worker-523925eb"), we
-// strip the "smoke-" prefix then split on the LAST dash to
-// separate workerID from nanos.
-func (r *RegistryDrainLease) ReleaseSmokeLease(_ context.Context, runID string) error {
-	if r == nil || r.Reg == nil {
-		return nil
-	}
-	const prefix = "smoke-"
-	if !strings.HasPrefix(runID, prefix) {
-		return nil
-	}
-	withoutPrefix := runID[len(prefix):]
-	lastDash := strings.LastIndex(withoutPrefix, "-")
-	if lastDash <= 0 {
-		return nil
-	}
-	workerID := withoutPrefix[:lastDash]
-	if err := r.Reg.SetWorkerDrain(context.Background(), workerID, false); err != nil {
-		return fmt.Errorf("smoke: release drain: %w", err)
-	}
-	return nil
-}
-
 // StubAssetResolver is the minimal BackendAssetResolver used
 // for development smoke runs (VELOX_SMOKE_MODE=development) until
 // the canonical asset picker (the stage_preflight / engine_planner
@@ -360,345 +276,4 @@ func (s *StubAssetResolver) ResolveAsset(_ context.Context, _ string) (string, i
 		return "", 0, errors.New("smoke: stub asset resolver has empty pickup_url (production wiring lands in a follow-up step)")
 	}
 	return s.PickupURL, s.ExpectedBytes, nil
-}
-
-// ── LocalShellWorker (BackendWorkerExec via os/exec) ────────────────
-//
-// Runs smoke phases (download, ffmpeg, cleanup) as local shell
-// commands on the Master host. This is a development/staging
-// adapter — production swaps in a real SSH-backed
-// BackendWorkerExec once SSH keys and worker connectivity are
-// configured. The adapter creates a per-run temp directory under
-// SmokeTempRoot and cleans it up on CleanupWorkerTemp.
-
-// SmokeTempRoot is the parent directory for smoke run temp files.
-const SmokeTempRoot = "/tmp/velox-smoke"
-
-// LocalShellWorker implements BackendWorkerExec by shelling out
-// to local commands. Each method writes a small log file under
-// SmokeTempRoot/<runID>/ for post-mortem inspection.
-type LocalShellWorker struct {
-	// FFmpegBin is the path to the ffmpeg binary (default: "ffmpeg").
-	FFmpegBin string
-}
-
-// NewLocalShellWorker returns a LocalShellWorker with sensible defaults.
-func NewLocalShellWorker() *LocalShellWorker {
-	return &LocalShellWorker{FFmpegBin: "ffmpeg"}
-}
-
-func (w *LocalShellWorker) runDir(runID string) string {
-	return filepath.Join(SmokeTempRoot, runID)
-}
-
-// DownloadAsset downloads the asset from pickupURL to destPath.
-// In production, uses curl/wget from the resolved pickup URL.
-// A pickupURL starting with "asset://" or empty URL triggers the
-// dev-mode fallback: a synthetic ffmpeg-generated clip.
-func (w *LocalShellWorker) DownloadAsset(_ context.Context, runID, _, pickupURL, destPath string) error {
-	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
-		return fmt.Errorf("smoke: mkdir for download: %w", err)
-	}
-	_ = os.MkdirAll(w.runDir(runID), 0755)
-
-	// Production path: download the real asset from the pickup URL.
-	// asset:// URLs are synthetic (StubAssetResolver) — skip curl.
-	if pickupURL != "" && !strings.HasPrefix(pickupURL, "asset://") {
-		cmd := exec.Command("curl", "-sSL", "-o", destPath, pickupURL)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("smoke: curl download asset from %s: %w (output: %s)", pickupURL, err, string(out))
-		}
-		return nil
-	}
-
-	// Dev-mode fallback: generate a small test video via ffmpeg lavfi.
-	ffmpeg := w.FFmpegBin
-	if ffmpeg == "" {
-		ffmpeg = "ffmpeg"
-	}
-	cmd := exec.Command(ffmpeg,
-		"-f", "lavfi", "-i", "color=c=blue:size=320x240:d=1",
-		"-c:v", "libx264", "-f", "mp4", "-t", "1", "-y", destPath,
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("smoke: ffmpeg generate test asset: %w (output: %s)", err, string(out))
-	}
-	return nil
-}
-
-// RunFFmpegRender executes the render plan as a local ffmpeg command.
-// Returns the output path and artifact size in bytes.
-func (w *LocalShellWorker) RunFFmpegRender(_ context.Context, runID, _, renderPlan, outputPath string) (string, int64, error) {
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
-		return "", 0, fmt.Errorf("smoke: mkdir for render: %w", err)
-	}
-	ffmpeg := w.FFmpegBin
-	if ffmpeg == "" {
-		ffmpeg = "ffmpeg"
-	}
-	args := []string{"-y"}
-	if renderPlan != "" {
-		// Derive input path from outputPath: the executor places
-		// destPath and outputPath in the same directory (e.g.
-		// /var/lib/velox-worker/smoke/<runID>.in / .mp4).
-		inputPath := filepath.Join(filepath.Dir(outputPath), runID+".in")
-		args = append(args, "-i", inputPath,
-			"-c:v", "libx264", "-t", "2", outputPath)
-	} else {
-		args = append(args, "-f", "lavfi", "-i", "color=c=red:size=320x240:d=2",
-			"-c:v", "libx264", "-t", "2", outputPath)
-	}
-	cmd := exec.Command(ffmpeg, args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", 0, fmt.Errorf("%w: %v (output: %s)", ErrFFmpegRenderFail, err, string(out))
-	}
-	fi, err := os.Stat(outputPath)
-	if err != nil {
-		return "", 0, fmt.Errorf("%w: stat artifact: %v", ErrArtifactMissing, err)
-	}
-	return outputPath, fi.Size(), nil
-}
-
-// CleanupWorkerTemp removes the smoke temp directory and the
-// executor's convention-path files for this run.
-func (w *LocalShellWorker) CleanupWorkerTemp(_ context.Context, runID, _ string) error {
-	// 1. Remove the local smoke temp dir (log / cache files).
-	localDir := w.runDir(runID)
-	if err := os.RemoveAll(localDir); err != nil {
-		return fmt.Errorf("smoke: cleanup local dir %s: %w", localDir, err)
-	}
-	// 2. Remove executor convention-path files
-	//    (/var/lib/velox-worker/smoke/<runID>.in, .mp4).
-	smokeDir := "/var/lib/velox-worker/smoke"
-	matches, _ := filepath.Glob(filepath.Join(smokeDir, runID+".*"))
-	for _, f := range matches {
-		_ = os.Remove(f)
-	}
-	return nil
-}
-
-// ── SSHWorkerTarget + sshClient (BackendSSHClient) ──────────────────
-//
-// Production adapters for executing commands on remote workers via SSH.
-// The sshClient maps workerID → SSH connection details; SSHWorkerExec
-// wraps it to implement the BackendWorkerExec surface for smoke phases.
-
-// SSHWorkerTarget holds the connection details for a single worker.
-type SSHWorkerTarget struct {
-	Host    string // IP or hostname
-	User    string // SSH user (e.g. debian, ubuntu, velox-deploy)
-	KeyPath string // path to SSH private key
-}
-
-// sshClient implements BackendSSHClient by shelling out to the
-// system ssh binary. Tests wire the stubs from update_executor_test.go
-// which implement the same interface via canned responses.
-type sshClient struct {
-	targets map[string]SSHWorkerTarget
-}
-
-// NewSSHClient returns a BackendSSHClient backed by the system ssh
-// binary. targets maps workerID → SSH connection details; workers
-// not in the map will receive an error on Run.
-func NewSSHClient(targets map[string]SSHWorkerTarget) BackendSSHClient {
-	return &sshClient{targets: targets}
-}
-
-// Run executes command on the worker via ssh. Returns the combined
-// stdout+stderr on success, or an error wrapping the ssh exit code.
-//
-// Security: StrictHostKeyChecking=yes with UserKnownHostsFile ensures
-// the worker's host key is verified against a known_hosts file managed
-// by the operator. The known_hosts file is populated at deploy time
-// via ansible (ssh-keyscan) and must exist at the configured path.
-func (c *sshClient) Run(ctx context.Context, workerID string, command string) (string, error) {
-	t, ok := c.targets[workerID]
-	if !ok {
-		return "", fmt.Errorf("ssh: no target configured for worker %s", workerID)
-	}
-	if t.Host == "" || t.User == "" {
-		return "", fmt.Errorf("ssh: incomplete target for worker %s (host=%q user=%q)", workerID, t.Host, t.User)
-	}
-	keyPath := t.KeyPath
-	if keyPath == "" {
-		keyPath = os.ExpandEnv("$HOME/.ssh/id_ed25519_velox")
-	}
-	cmd := exec.CommandContext(ctx, "ssh",
-		"-i", keyPath,
-		"-o", "StrictHostKeyChecking=yes",
-		"-o", "UserKnownHostsFile=/etc/velox/ssh/known_hosts",
-		"-o", "ConnectTimeout=10",
-		"-o", "BatchMode=yes",
-		"-o", "LogLevel=ERROR",
-		t.User+"@"+t.Host,
-		command,
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return string(out), fmt.Errorf("ssh %s@%s: %w (output: %s)", t.User, t.Host, err, string(out))
-	}
-	return string(out), nil
-}
-
-// ── SSHWorkerExec (BackendWorkerExec via SSH) ───────────────────────
-//
-// Executes smoke phases on the remote worker via SSH. Each method
-// constructs a shell command and delegates to BackendSSHClient.Run.
-// Production wires this when SSH keys and worker connectivity are
-// configured; before that, LocalShellWorker serves as the dev adapter.
-
-// SSHWorkerExec implements BackendWorkerExec by running commands on
-// the remote worker via SSH.
-type SSHWorkerExec struct {
-	ssh BackendSSHClient
-}
-
-// NewSSHWorkerExec returns a BackendWorkerExec that runs smoke phases
-// on remote workers via the provided SSH client.
-func NewSSHWorkerExec(ssh BackendSSHClient) BackendWorkerExec {
-	return &SSHWorkerExec{ssh: ssh}
-}
-
-// DownloadAsset downloads the asset on the remote worker.
-// In production, uses curl from the resolved pickupURL.
-// A pickupURL starting with "asset://" or empty URL triggers the
-// dev-mode fallback: a synthetic ffmpeg-generated clip.
-func (e *SSHWorkerExec) DownloadAsset(ctx context.Context, runID, workerID, pickupURL, destPath string) error {
-	// Production path: download the real asset from the pickup URL.
-	// asset:// URLs are synthetic (StubAssetResolver) — skip curl.
-	if pickupURL != "" && !strings.HasPrefix(pickupURL, "asset://") {
-		cmd := fmt.Sprintf(
-			"mkdir -p %s && curl -sSL -o %s '%s'",
-			filepath.Dir(destPath), destPath, pickupURL,
-		)
-		_, err := e.ssh.Run(ctx, workerID, cmd)
-		if err != nil {
-			return fmt.Errorf("%w: ssh download asset from %s: %v", ErrAssetDownloadFail, pickupURL, err)
-		}
-		return nil
-	}
-
-	// Dev-mode fallback: generate a synthetic test clip via ffmpeg lavfi.
-	cmd := fmt.Sprintf(
-		"mkdir -p %s && ffmpeg -f lavfi -i color=c=blue:size=320x240:d=1 -c:v libx264 -f mp4 -t 1 -y %s",
-		filepath.Dir(destPath), destPath,
-	)
-	_, err := e.ssh.Run(ctx, workerID, cmd)
-	if err != nil {
-		return fmt.Errorf("%w: ssh download asset: %v", ErrAssetDownloadFail, err)
-	}
-	return nil
-}
-
-// RunFFmpegRender executes the render on the remote worker, then SCPs the
-// artifact back to a local temp path so LocalFileDriveUploader can read it.
-// Returns the LOCAL artifact path + size in bytes.
-func (e *SSHWorkerExec) RunFFmpegRender(ctx context.Context, runID, workerID, renderPlan, outputPath string) (string, int64, error) {
-	// 1. Render on remote worker + stat for byte count.
-	var cmd string
-	if renderPlan != "" {
-		inputPath := filepath.Join(filepath.Dir(outputPath), runID+".in")
-		cmd = fmt.Sprintf(
-			"mkdir -p %s && ffmpeg -y -i %s -c:v libx264 -t 2 %s 2>/dev/null && stat -c%%s %s",
-			filepath.Dir(outputPath), inputPath, outputPath, outputPath,
-		)
-	} else {
-		cmd = fmt.Sprintf(
-			"mkdir -p %s && ffmpeg -y -f lavfi -i color=c=red:size=320x240:d=2 -c:v libx264 -t 2 %s 2>/dev/null && stat -c%%s %s",
-			filepath.Dir(outputPath), outputPath, outputPath,
-		)
-	}
-	out, err := e.ssh.Run(ctx, workerID, cmd)
-	if err != nil {
-		return "", 0, fmt.Errorf("%w: ssh ffmpeg render: %v", ErrFFmpegRenderFail, err)
-	}
-	// Last line is the stat byte count.
-	out = strings.TrimSpace(out)
-	lines := strings.Split(out, "\n")
-	lastLine := strings.TrimSpace(lines[len(lines)-1])
-	artifactBytes, parseErr := strconv.ParseInt(lastLine, 10, 64)
-	if parseErr != nil {
-		return "", 0, fmt.Errorf("%w: parse stat output %q: %v", ErrArtifactMissing, lastLine, parseErr)
-	}
-	if artifactBytes == 0 {
-		return "", 0, fmt.Errorf("%w: artifact is empty (stat returned 0)", ErrArtifactMissing)
-	}
-
-	// 2. Fetch the artifact via base64 (sshClient.Run returns string, so
-	//    we can't pass raw binary — base64 is ASCII-safe and smoke videos
-	//    are tiny).
-	fetchCmd := fmt.Sprintf("base64 -w0 %s 2>/dev/null", outputPath)
-	b64, err := e.ssh.Run(ctx, workerID, fetchCmd)
-	if err != nil {
-		return "", 0, fmt.Errorf("%w: ssh fetch artifact: %v", ErrArtifactMissing, err)
-	}
-	raw, decErr := base64.StdEncoding.DecodeString(strings.TrimSpace(b64))
-	if decErr != nil {
-		return "", 0, fmt.Errorf("%w: base64 decode artifact: %v", ErrArtifactMissing, decErr)
-	}
-
-	// 3. Write to local temp path so LocalFileDriveUploader can read it.
-	localPath := filepath.Join(SmokeTempRoot, runID, runID+".mp4")
-	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
-		return "", 0, fmt.Errorf("%w: mkdir for local artifact: %v", ErrArtifactMissing, err)
-	}
-	if err := os.WriteFile(localPath, raw, 0644); err != nil {
-		return "", 0, fmt.Errorf("%w: write local artifact: %v", ErrArtifactMissing, err)
-	}
-	return localPath, artifactBytes, nil
-}
-
-// CleanupWorkerTemp removes smoke temp files from the remote worker AND
-// the local temp directory created by RunFFmpegRender.
-// Best-effort: always returns nil (errors are logged by the executor).
-func (e *SSHWorkerExec) CleanupWorkerTemp(ctx context.Context, runID, workerID string) error {
-	cmd := fmt.Sprintf(
-		"rm -f /var/lib/velox-worker/smoke/%s.* /tmp/velox-smoke/%s/* 2>/dev/null; true",
-		runID, runID,
-	)
-	// Best-effort: ignore errors (worker may be unreachable or files already gone).
-	_, _ = e.ssh.Run(ctx, workerID, cmd)
-	// Also clean local temp files written by RunFFmpegRender.
-	_ = os.RemoveAll(filepath.Join(SmokeTempRoot, runID))
-	return nil
-}
-
-// ── LocalFileDriveUploader (BackendDriveUploader via local fs) ──────
-//
-// Writes the artifact to a local directory instead of uploading
-// to Google Drive. Returns a fake driveFileID so the smoke
-// pipeline can complete end-to-end. Production swaps in a real
-// Drive-backed adapter once credentials are configured.
-
-// LocalDriveRoot is the parent directory for smoke artifact "uploads".
-const LocalDriveRoot = "/tmp/velox-smoke-drive"
-
-// LocalFileDriveUploader implements BackendDriveUploader by copying
-// the artifact to a local directory.
-type LocalFileDriveUploader struct{}
-
-// NewLocalFileDriveUploader returns a LocalFileDriveUploader.
-func NewLocalFileDriveUploader() *LocalFileDriveUploader {
-	return &LocalFileDriveUploader{}
-}
-
-// UploadArtifact copies srcPath to LocalDriveRoot/<runID>.mp4 and
-// returns a fake Drive file ID.
-func (d *LocalFileDriveUploader) UploadArtifact(_ context.Context, runID, srcPath string, _ int64) (string, error) {
-	if err := os.MkdirAll(LocalDriveRoot, 0755); err != nil {
-		return "", fmt.Errorf("smoke: mkdir drive root: %w", err)
-	}
-	dst := filepath.Join(LocalDriveRoot, runID+".mp4")
-	src, err := os.ReadFile(srcPath)
-	if err != nil {
-		return "", fmt.Errorf("%w: read artifact: %v", ErrDriveUploadFail, err)
-	}
-	if err := os.WriteFile(dst, src, 0644); err != nil {
-		return "", fmt.Errorf("%w: write local drive: %v", ErrDriveUploadFail, err)
-	}
-	fakeID := "local-drive-" + runID
-	return fakeID, nil
 }
