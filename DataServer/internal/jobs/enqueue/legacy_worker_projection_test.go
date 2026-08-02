@@ -42,6 +42,13 @@ func TestProjectLegacyWorkerPayload_ProjectsOnlyWorkerCopy(t *testing.T) {
 	if _, ok := legacy["video_mode"]; !ok {
 		t.Fatalf("legacy payload missing video_mode: %#v", legacy)
 	}
+	parameters, ok := legacy["parameters"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("legacy payload missing render parameters: %#v", legacy)
+	}
+	if _, ok := parameters["scenes_json"]; !ok {
+		t.Fatalf("legacy render parameters missing scenes_json: %#v", parameters)
+	}
 	if got := canonical["payload_contract_version"]; got != contract.PayloadContractVersionCanonical {
 		t.Fatalf("canonical payload version mutated to %v", got)
 	}
