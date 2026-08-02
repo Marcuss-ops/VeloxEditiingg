@@ -75,7 +75,11 @@ var allowedWriters = map[string]bool{
 	// sqlite_finalize_writer.go.
 	// SEPARATE lifecycle: UPDATE job_deliveries SET status='SUCCEEDED'
 	// is delivery-completion (NOT jobs).
-	filepath.Join("internal", "store", "store_deliveries.go"):       true,
+	filepath.Join("internal", "store", "store_deliveries.go"): true,
+	// Completion UoW repository split: these task/job status writes remain
+	// inside the same audited transaction gateway as coordinator.go. The SQL
+	// moved from sqlite_uow.go into this responsibility-specific file.
+	filepath.Join("internal", "completion", "sqlite_uow_repos.go"):  true,
 	filepath.Join("internal", "store", "store_deliveries_lease.go"): true,
 	// SEPARATE lifecycles: UPDATE workflow_steps / workflow_runs SET
 	// status='SUCCEEDED' is workflow-completion (NOT jobs).
