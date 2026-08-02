@@ -54,8 +54,6 @@ var voiceoverAliasRegistry = CompatibilityAlias{
 		"audio_url",
 		"audio_path",
 		"source_url",
-		"source",
-		"url",
 		"source_media",
 		"source_media_url",
 		"audio_source",

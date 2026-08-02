@@ -16,7 +16,7 @@ func TestRegistryVoiceoverAliases(t *testing.T) {
 	}
 	for _, want := range []string{
 		"voiceover_path", "voiceover", "unified_voiceover_link", "voiceovers",
-		"voiceovers_urls", "audio_url", "audio_path", "source_url", "source", "url",
+		"voiceovers_urls", "audio_url", "audio_path", "source_url",
 		"source_media", "source_media_url", "audio_source",
 	} {
 		if !contains(entry.Aliases, want) {
