@@ -60,7 +60,12 @@ func (h *Handler) handleTaskOutputDeclared(workerID string, msg *pb.TaskOutputDe
 	for i, m := range manifests {
 		key := m.OutputKind + "\x00" + m.LogicalName
 		b, exists := byKey[key]
-		if !exists {
+		// DeclareOutputs creates the durable declaration before the worker
+		// upload session exists.  A declaration with empty IDs is therefore
+		// not an established binding and must be completed below.  Treating
+		// declaration presence alone as a binding leaves the worker with an
+		// empty upload target and stalls the task after rendering.
+		if !exists || b.UploadID == "" || b.ArtifactID == "" {
 			if i >= len(plan.Targets) || plan.Targets[i].DeclarationID == "" {
 				log.Printf("[GRPC] TaskOutputDeclared task=%s missing declaration for output=%s", msg.GetTaskId(), m.LogicalName)
 				return
