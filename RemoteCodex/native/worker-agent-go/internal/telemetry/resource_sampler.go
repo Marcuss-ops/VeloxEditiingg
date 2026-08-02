@@ -13,6 +13,8 @@
 //   - network_sampler.go  : /proc/net/dev
 //   - process_sampler.go  : /proc/self/statm + /proc/self/status
 //   - host_sampler.go     : /dev/nvidia* + /sys/class/drm (GPU detect)
+//   - resource_sampler_tempdir.go : temp-dir activity accounting
+//     (sampleTempActivity)
 //
 // Cumulative vs delta (the only design choice that matters for F2):
 //   - /proc/stat: read agg row "cpu" (user, nice, system, idle, iowait,
@@ -49,7 +51,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -314,66 +315,6 @@ func (s *Sampler) Sample(ctx context.Context) (*SampledResources, error) {
 	}
 
 	return out, firstErr
-}
-
-// sampleTempActivity returns cumulative observed growth and the number of
-// worker-process descriptors currently pointing into TempDir. Deletions never
-// reduce the cumulative counter. This is deliberately scoped to the worker's
-// own temp tree; counting the entire OS temp directory would mix unrelated
-// processes into the render telemetry.
-func (s *Sampler) sampleTempActivity() (int64, int) {
-	if s == nil {
-		return -1, 0
-	}
-	s.mu.Lock()
-	tempDir := s.tempDir
-	if tempDir == "" {
-		s.mu.Unlock()
-		return 0, 0
-	}
-	var current int64
-	_ = filepath.WalkDir(tempDir, func(path string, entry os.DirEntry, err error) error {
-		if err != nil || entry == nil {
-			return nil
-		}
-		if entry.Type().IsRegular() {
-			if info, statErr := entry.Info(); statErr == nil && info.Size() > 0 {
-				current += info.Size()
-			}
-		}
-		return nil
-	})
-	if !s.tempInitialized {
-		s.lastTempBytes = current
-		s.tempInitialized = true
-	} else if current > s.lastTempBytes {
-		s.tempBytesWritten += current - s.lastTempBytes
-		s.lastTempBytes = current
-	} else {
-		s.lastTempBytes = current
-	}
-	cumulative := s.tempBytesWritten
-	s.mu.Unlock()
-
-	open := 0
-	entries, err := os.ReadDir(filepath.Join(s.procRoot, "self", "fd"))
-	if err != nil {
-		return cumulative, 0
-	}
-	root, err := filepath.Abs(tempDir)
-	if err != nil {
-		return cumulative, 0
-	}
-	for _, entry := range entries {
-		target, linkErr := os.Readlink(filepath.Join(s.procRoot, "self", "fd", entry.Name()))
-		if linkErr != nil {
-			continue
-		}
-		if abs, absErr := filepath.Abs(target); absErr == nil && (abs == root || filepath.HasPrefix(abs, root+string(os.PathSeparator))) {
-			open++
-		}
-	}
-	return cumulative, open
 }
 
 // Run drives the 5s tick + 15s publish cadence. Cancel ctx to stop.
