@@ -237,6 +237,35 @@ func TestMarkDeliverySucceeded(t *testing.T) {
 	}
 }
 
+func TestApplyReconciledDeliveryDoesNotRegressSucceeded(t *testing.T) {
+	db := setupDeliveryTestDB(t)
+	ctx := context.Background()
+
+	insertTestDeliveryDestination(t, db, "dest-reconcile", "social_gateway")
+	insertTestArtifact(t, db, "art-reconcile", "job-reconcile", "/tmp/reconcile.mp4")
+	insertTestJobDelivery(t, db, "del-reconcile", "art-reconcile", "dest-reconcile")
+
+	leases, err := db.ClaimDeliveries(ctx, "runner-reconcile", 5*time.Minute, 1)
+	if err != nil || len(leases) != 1 {
+		t.Fatalf("claim: %v len=%d", err, len(leases))
+	}
+	lease := leases[0]
+	if err := db.MarkDeliverySucceeded(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "remote-reconcile", ""); err != nil {
+		t.Fatalf("MarkDeliverySucceeded: %v", err)
+	}
+
+	if err := db.ApplyReconciledDelivery(ctx, lease.DeliveryID, "RUNNING", "remote-reconcile", "", "", ""); err != nil {
+		t.Fatalf("ApplyReconciledDelivery: %v", err)
+	}
+	row, err := db.GetJobDelivery(ctx, lease.DeliveryID)
+	if err != nil {
+		t.Fatalf("GetJobDelivery: %v", err)
+	}
+	if row.Status != "SUCCEEDED" {
+		t.Fatalf("reconciliation regressed terminal delivery to %q", row.Status)
+	}
+}
+
 func TestMarkDeliveryRetry(t *testing.T) {
 	db := setupDeliveryTestDB(t)
 	ctx := context.Background()

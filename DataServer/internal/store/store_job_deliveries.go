@@ -120,7 +120,7 @@ func (s *SQLiteStore) ListDeliveryReconciliationCandidates(ctx context.Context, 
 		       created_at, updated_at
 		FROM job_deliveries
 		WHERE COALESCE(remote_id,'') <> ''
-		  AND status IN ('RUNNING','RETRY_WAIT','SUCCEEDED')
+		  AND status IN ('RUNNING','RETRY_WAIT')
 		  AND updated_at >= datetime('now','-15 minutes')
 		ORDER BY updated_at ASC LIMIT ?`, limit)
 	if err != nil {
@@ -142,7 +142,11 @@ func (s *SQLiteStore) ApplyReconciledDelivery(ctx context.Context, deliveryID, s
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE job_deliveries
-		SET status = ?, remote_id = CASE WHEN ? <> '' THEN ? ELSE remote_id END,
+		SET status = CASE
+		              WHEN status IN ('SUCCEEDED', 'FAILED', 'BLOCKED_AUTH', 'CANCELLED') THEN status
+		              ELSE ?
+		            END,
+		    remote_id = CASE WHEN ? <> '' THEN ? ELSE remote_id END,
 		    remote_url = CASE WHEN ? <> '' THEN ? ELSE remote_url END,
 		    last_error_code = CASE WHEN ? <> '' THEN ? ELSE last_error_code END,
 		    last_error_message = CASE WHEN ? <> '' THEN ? ELSE last_error_message END,
