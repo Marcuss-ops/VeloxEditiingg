@@ -92,12 +92,13 @@ type DarkeditorRouteDeps struct {
 // UploadRouteDeps carries the deps for upload POST routes
 // (upload-completed + chunked upload).
 type UploadRouteDeps struct {
-	Cfg            *config.Config
-	WorkerTokens   *workers.TokenManager
-	ArtifactSvc    *artifacts.Service
-	ArtifactReader artifacts.ArtifactReader
-	BlobStore      store.BlobStore
-	ChunkedHandler *workerhandlersuploads.ChunkedUploadHandler
+	Cfg                     *config.Config
+	WorkerTokens            *workers.TokenManager
+	ArtifactSvc             *artifacts.Service
+	ArtifactReader          artifacts.ArtifactReader
+	BlobStore               store.BlobStore
+	ChunkedHandler          *workerhandlersuploads.ChunkedUploadHandler
+	CompletionTokenVerifier workerhandlersuploads.CommitTokenVerifier
 }
 
 // MetricsRouteDeps carries the deps for the /metrics route (Prometheus

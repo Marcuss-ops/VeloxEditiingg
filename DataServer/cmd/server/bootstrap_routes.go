@@ -31,6 +31,7 @@ func (c *appComponents) routerBundle() RouterBundle {
 		deHandler.SetDBStore(c.persistence.SQLite)
 	}
 
+	chunkedHandler := workerhandlersuploads.NewChunkedUploadHandler(c.assets.ChunkedUploadSvc)
 	return RouterBundle{
 		Fleet: FleetRouteDeps{
 			// The Handler wraps FleetDep.Controller via the
@@ -63,12 +64,13 @@ func (c *appComponents) routerBundle() RouterBundle {
 		},
 		Darkeditor: DarkeditorRouteDeps{Cfg: c.cfg, SQLiteStore: c.persistence.SQLite, Handler: deHandler},
 		Upload: UploadRouteDeps{
-			Cfg:            c.cfg,
-			WorkerTokens:   c.workers.TokenManager,
-			ArtifactSvc:    c.assets.ArtifactSvc,
-			ArtifactReader: c.assets.ArtifactReader,
-			BlobStore:      c.assets.BlobStore,
-			ChunkedHandler: workerhandlersuploads.NewChunkedUploadHandler(c.assets.ChunkedUploadSvc),
+			Cfg:                     c.cfg,
+			WorkerTokens:            c.workers.TokenManager,
+			ArtifactSvc:             c.assets.ArtifactSvc,
+			ArtifactReader:          c.assets.ArtifactReader,
+			BlobStore:               c.assets.BlobStore,
+			ChunkedHandler:          chunkedHandler,
+			CompletionTokenVerifier: c.assets.CompletionStore,
 		},
 		Metrics: MetricsRouteDeps{
 			Registry:      c.metricsRegistry,

@@ -48,6 +48,10 @@ type UploadRequest struct {
 	Target UploadTarget
 	// WorkerSHA256 is the hex SHA-256 computed by the worker.
 	WorkerSHA256 string
+	// CommitToken is the short-lived master-issued token authorizing the
+	// master-stream upload target. It is sent only as an HTTP header and is
+	// never logged by transports.
+	CommitToken string
 	// Progress is invoked at least once per chunk when non-nil.
 	Progress func(uploadedBytes int64)
 }

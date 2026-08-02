@@ -218,6 +218,84 @@ func (s *ChunkedUploadService) GetChunkState(ctx context.Context, uploadID strin
 	}, nil
 }
 
+// GetUpload returns a durable upload session for the typed master-stream
+// protocol. Callers use it only for fenced, post-receive verification; the
+// worker never supplies the session identity as authority.
+func (s *ChunkedUploadService) GetUpload(ctx context.Context, uploadID string) (*store.UploadSession, error) {
+	if uploadID == "" {
+		return nil, fmt.Errorf("artifacts: GetUpload: uploadID required")
+	}
+	session, err := s.repo.GetUploadSession(ctx, uploadID)
+	if err != nil {
+		return nil, translateStoreErr(err)
+	}
+	if session == nil {
+		return nil, fmt.Errorf("%w: upload_id=%s", ErrUploadNotFound, uploadID)
+	}
+	return session, nil
+}
+
+// ReceiveChunked assembles the durable chunks and runs the master-side
+// Receive phase without invoking the legacy Finalize path. The typed commit
+// coordinator performs the later artifact promotion and job commit after all
+// declared outputs have passed verification.
+func (s *ChunkedUploadService) ReceiveChunked(ctx context.Context, uploadID string) (*ReceiveResult, error) {
+	session, err := s.GetUpload(ctx, uploadID)
+	if err != nil {
+		return nil, err
+	}
+	chunks, err := s.repo.ListChunks(ctx, uploadID)
+	if err != nil {
+		return nil, translateStoreErr(err)
+	}
+	if len(chunks) == 0 {
+		return nil, fmt.Errorf("artifacts: ReceiveChunked: no chunks for upload=%s", uploadID)
+	}
+	for i, c := range chunks {
+		if c.ChunkIndex != i {
+			return nil, fmt.Errorf("artifacts: ReceiveChunked: missing chunk %d for upload=%s", i, uploadID)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(session.TemporaryStorageKey), 0o755); err != nil {
+		return nil, fmt.Errorf("%w: mkdir assembly: %v", ErrBlobWriteFailed, err)
+	}
+	out, err := os.OpenFile(filepath.Clean(session.TemporaryStorageKey), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("%w: create assembly: %v", ErrBlobWriteFailed, err)
+	}
+	for _, c := range chunks {
+		in, openErr := os.Open(filepath.Clean(c.StorageKey))
+		if openErr != nil {
+			_ = out.Close()
+			return nil, fmt.Errorf("artifacts: ReceiveChunked: open chunk %d: %w", c.ChunkIndex, openErr)
+		}
+		_, copyErr := io.Copy(out, in)
+		_ = in.Close()
+		if copyErr != nil {
+			_ = out.Close()
+			return nil, fmt.Errorf("artifacts: ReceiveChunked: copy chunk %d: %w", c.ChunkIndex, copyErr)
+		}
+	}
+	if err := out.Sync(); err != nil {
+		_ = out.Close()
+		return nil, fmt.Errorf("%w: sync assembly: %v", ErrBlobWriteFailed, err)
+	}
+	if err := out.Close(); err != nil {
+		return nil, fmt.Errorf("%w: close assembly: %v", ErrBlobWriteFailed, err)
+	}
+	assembled, err := os.Open(filepath.Clean(session.TemporaryStorageKey))
+	if err != nil {
+		return nil, fmt.Errorf("artifacts: ReceiveChunked: open assembled: %w", err)
+	}
+	defer assembled.Close()
+	result, err := s.artifactSvc.Receive(ctx, uploadID, assembled)
+	if err != nil {
+		return nil, fmt.Errorf("artifacts: ReceiveChunked Receive: %w", err)
+	}
+	_ = s.cleanupChunks(ctx, uploadID)
+	return result, nil
+}
+
 // CompleteChunked assembles all chunks into the staging blob, then runs the
 // canonical Receive → Finalize pipeline (master hash + atomic SUCCEEDED).
 func (s *ChunkedUploadService) CompleteChunked(ctx context.Context, cmd ChunkedCompleteCommand) (*store.Artifact, error) {

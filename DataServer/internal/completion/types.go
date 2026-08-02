@@ -108,6 +108,34 @@ type UploadPlan struct {
 	Targets     []UploadTarget
 }
 
+// UploadBinding is the durable join between a declared output and its
+// master-owned upload session. It is the lookup surface used by the gRPC
+// protocol after a worker reconnects; no in-memory publication state is
+// required to resume an upload.
+type UploadBinding struct {
+	DeclarationID string
+	CommitID      string
+	UploadID      string
+	ArtifactID    string
+	TaskID        string
+	AttemptID     string
+	WorkerID      string
+	LeaseID       string
+	Revision      int
+	OutputKind    string
+	LogicalName   string
+}
+
+// UploadProtocolStore is the durable binding/token surface used by the
+// master-stream adapter. It is deliberately separate from Coordinator so
+// existing lightweight Coordinator test doubles remain source-compatible.
+type UploadProtocolStore interface {
+	ListUploadBindings(ctx context.Context, commitID string) ([]UploadBinding, error)
+	GetUploadBinding(ctx context.Context, uploadID string) (*UploadBinding, error)
+	BindUpload(ctx context.Context, declarationID, uploadID, artifactID string) error
+	VerifyUploadToken(ctx context.Context, uploadID, token string) error
+}
+
 // UploadTarget is the per-manifest upload instructions. Empty until
 // Fase 3.7 wires the transport registry. The proto Definition lands
 // in Fase 3.4.

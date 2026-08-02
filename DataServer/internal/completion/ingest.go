@@ -197,6 +197,21 @@ func (c *coordinator) DeclareOutputs(ctx context.Context, cmd DeclareOutputsComm
 		}
 	}
 
+	// Return declaration IDs in manifest order. Transport/session fields are
+	// bound by the master-stream adapter immediately after this transaction;
+	// returning the durable IDs here makes replay matching deterministic.
+	targets := make([]UploadTarget, 0, len(cmd.OutputManifests))
+	for _, m := range cmd.OutputManifests {
+		var declarationID string
+		if err := tx.QueryRowContext(ctx, `
+			SELECT declaration_id FROM task_output_declarations
+			 WHERE commit_id = ? AND output_kind = ? AND logical_name = ?`,
+			commitID, m.OutputKind, m.LogicalName).Scan(&declarationID); err != nil {
+			return nil, fmt.Errorf("completion.DeclareOutputs: resolve declaration %s: %w", m.LogicalName, err)
+		}
+		targets = append(targets, UploadTarget{DeclarationID: declarationID})
+	}
+
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("completion.DeclareOutputs: commit: %w", err)
 	}
@@ -205,7 +220,7 @@ func (c *coordinator) DeclareOutputs(ctx context.Context, cmd DeclareOutputsComm
 	return &UploadPlan{
 		CommitID:    commitID,
 		CommitToken: token,
-		Targets:     nil,
+		Targets:     targets,
 	}, nil
 }
 

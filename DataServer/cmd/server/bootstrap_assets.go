@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"time"
 
 	"velox-server/internal/artifacts"
+	"velox-server/internal/completion"
 	"velox-server/internal/config"
 	"velox-server/internal/deliveries"
 	"velox-server/internal/outbox"
@@ -26,6 +28,8 @@ type assetDeps struct {
 	ArtifactReader   artifacts.ArtifactReader
 	BlobStore        store.BlobStore
 	ChunkedUploadSvc *artifacts.ChunkedUploadService
+	Completion       completion.Coordinator
+	CompletionStore  completion.UploadProtocolStore
 	Reconciler       *artifacts.Reconciler // mandatory — buildAssets fails fast if init fails
 	OutboxRegistry   *outbox.Registry
 	OutboxDispatcher *outbox.Dispatcher
@@ -81,6 +85,28 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 		p.SQLite.DB(),
 	)
 	log.Printf("[BOOTSTRAP] ChunkedUploadService ready (persistent chunked upload via artifact pipeline)")
+
+	var completionCoord completion.Coordinator
+	var completionStore completion.UploadProtocolStore
+	if keyHex := cfg.Runtime.CommitHMACKey; keyHex != "" {
+		key, decodeErr := hex.DecodeString(keyHex)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("bootstrap: decode VELOX_COMMIT_HMAC_KEY: %w", decodeErr)
+		}
+		coord, coordErr := completion.NewCoordinator(completion.CoordinatorConfig{DB: p.SQLite.DB(), HMACKey: key, BlobStore: p.BlobStore})
+		if coordErr != nil {
+			return nil, fmt.Errorf("bootstrap: completion coordinator: %w", coordErr)
+		}
+		completionCoord = coord
+		if bound, ok := coord.(completion.UploadProtocolStore); ok {
+			completionStore = bound
+		} else {
+			return nil, fmt.Errorf("bootstrap: completion coordinator lacks upload protocol store")
+		}
+		log.Printf("[BOOTSTRAP] completion coordinator ready (typed artifact commit protocol)")
+	} else {
+		log.Printf("[BOOTSTRAP] completion coordinator disabled: VELOX_COMMIT_HMAC_KEY is empty")
+	}
 
 	// ── Reconciler (mandatory — fail-fast if init fails) ──────────
 	reconciler, recErr := artifacts.NewReconciler(
@@ -148,6 +174,8 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 		ArtifactReader:   artifactReader,
 		BlobStore:        p.BlobStore,
 		ChunkedUploadSvc: chunkedSvc,
+		Completion:       completionCoord,
+		CompletionStore:  completionStore,
 		Reconciler:       reconciler,
 		OutboxRegistry:   p.OutboxRegistry,
 		OutboxDispatcher: outboxDispatcher,

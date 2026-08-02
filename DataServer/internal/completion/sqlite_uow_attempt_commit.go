@@ -157,16 +157,25 @@ func (r *sqliteAttemptCommitRepo) GetArtifactUploadState(ctx context.Context, up
 		return nil, fmt.Errorf("completion.AttemptCommitRepository.GetArtifactUploadState: uploadID empty")
 	}
 	var (
-		expected  sql.NullString
-		received  sql.NullString
-		rowStatus string
+		expected            sql.NullString
+		received            sql.NullString
+		rowStatus           string
+		artifactID          string
+		temporaryStorageKey string
+		mimeType            sql.NullString
+		sizeBytes           sql.NullInt64
 	)
 	err := r.u.tx.QueryRowContext(ctx,
-		`SELECT expected_sha256, received_sha256, status
-		   FROM artifact_uploads
-		  WHERE upload_id = ?`,
+		`SELECT au.expected_sha256, au.received_sha256, au.status,
+		        au.artifact_id, au.temporary_storage_key,
+		        COALESCE(d.mime_type, a.type, ''),
+		        COALESCE(au.received_size_bytes, au.expected_size_bytes, a.size_bytes, 0)
+		   FROM artifact_uploads au
+		   JOIN artifacts a ON a.id = au.artifact_id
+		   LEFT JOIN task_output_declarations d ON d.upload_id = au.upload_id
+		  WHERE au.upload_id = ?`,
 		uploadID,
-	).Scan(&expected, &received, &rowStatus)
+	).Scan(&expected, &received, &rowStatus, &artifactID, &temporaryStorageKey, &mimeType, &sizeBytes)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("%w: upload_id=%s", ErrAttemptCommitNotFound, uploadID)
@@ -174,10 +183,14 @@ func (r *sqliteAttemptCommitRepo) GetArtifactUploadState(ctx context.Context, up
 		return nil, fmt.Errorf("completion.AttemptCommitRepository.GetArtifactUploadState: %w", err)
 	}
 	return &ArtifactUploadState{
-		UploadID:       uploadID,
-		ExpectedSHA256: expected.String,
-		ReceivedSHA256: received.String,
-		Status:         rowStatus,
+		UploadID:            uploadID,
+		ExpectedSHA256:      expected.String,
+		ReceivedSHA256:      received.String,
+		Status:              rowStatus,
+		ArtifactID:          artifactID,
+		TemporaryStorageKey: temporaryStorageKey,
+		MimeType:            mimeType.String,
+		SizeBytes:           sizeBytes.Int64,
 	}, nil
 }
 

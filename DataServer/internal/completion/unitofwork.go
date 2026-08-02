@@ -105,10 +105,14 @@ type AttemptCommitRow struct {
 // Mirrors only the columns CompleteUpload inspects (expected_sha256,
 // received_sha256, status).
 type ArtifactUploadState struct {
-	UploadID       string
-	ExpectedSHA256 string
-	ReceivedSHA256 string
-	Status         string
+	UploadID            string
+	ExpectedSHA256      string
+	ReceivedSHA256      string
+	Status              string
+	ArtifactID          string
+	TemporaryStorageKey string
+	MimeType            string
+	SizeBytes           int64
 }
 
 // ArtifactCompletionVerdict selects the artifact_uploads + artifacts

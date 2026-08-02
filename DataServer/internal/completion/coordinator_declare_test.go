@@ -46,10 +46,10 @@ func TestCoordinator_DeclareOutputs_HappyPath(t *testing.T) {
 	if len(plan.CommitToken) != commitTokenByteLen*2 {
 		t.Errorf("plan.CommitToken hex length: got %d, want %d", len(plan.CommitToken), commitTokenByteLen*2)
 	}
-	// Targets empty in this phase (no transport registry); explicitly
-	// nil is forward-compatible.
-	if plan.Targets != nil {
-		t.Errorf("plan.Targets should be nil in this phase: got %d entry", len(plan.Targets))
+	// The master-stream adapter receives durable declaration IDs here and
+	// fills transport/session fields after the coordinator transaction.
+	if len(plan.Targets) != 1 || plan.Targets[0].DeclarationID == "" {
+		t.Fatalf("plan.Targets should contain the durable declaration ID: %#v", plan.Targets)
 	}
 
 	row := readAttemptCommitRow(t, db, fence)

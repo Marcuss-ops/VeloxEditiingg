@@ -45,6 +45,12 @@ func (h *Handler) dispatchMessage(workerID, sessionID string, env *pb.WorkerToMa
 	case *pb.WorkerToMasterEnvelope_TaskResult:
 		h.handleTaskResult(workerID, m.TaskResult, sess)
 
+	case *pb.WorkerToMasterEnvelope_TaskOutputDeclared:
+		h.handleTaskOutputDeclared(workerID, m.TaskOutputDeclared, sess)
+
+	case *pb.WorkerToMasterEnvelope_ArtifactUploadCompleted:
+		h.handleArtifactUploadCompleted(workerID, m.ArtifactUploadCompleted, sess)
+
 	case *pb.WorkerToMasterEnvelope_CommandAck:
 		h.handleCommandAck(workerID, m.CommandAck)
 

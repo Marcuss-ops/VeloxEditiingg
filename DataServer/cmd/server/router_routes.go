@@ -159,9 +159,14 @@ func registerUploadRoutes(r *gin.Engine, deps UploadRouteDeps) {
 			workerDataPlaneAuth, workerhandlersuploads.UploadCompletedVideo(deps.Cfg, deps.ArtifactSvc))
 	}
 	if deps.ChunkedHandler != nil {
+		deps.ChunkedHandler.SetCommitTokenVerifier(deps.CompletionTokenVerifier)
 		r.POST("/api/v1/video/chunked/init", adminAuth, deps.ChunkedHandler.InitChunkedUpload())
 		r.POST("/api/v1/video/chunked/:job_id/:chunk_index", adminAuth, deps.ChunkedHandler.UploadChunk())
 		r.POST("/api/v1/video/chunked/:job_id/complete", adminAuth, deps.ChunkedHandler.CompleteChunkedUpload())
+		// Typed worker artifact publication authenticates with its short-lived
+		// HMAC commit token, not the master admin bearer.
+		r.POST("/api/v1/video/master-stream/:upload_id/:chunk_index", deps.ChunkedHandler.MasterStreamChunk())
+		r.POST("/api/v1/video/master-stream/:upload_id/complete", deps.ChunkedHandler.MasterStreamComplete())
 	}
 }
 

@@ -45,6 +45,8 @@ package completion
 import (
 	"database/sql"
 	"fmt"
+
+	"velox-server/internal/store"
 )
 
 // commitTokenByteLen is the cryptographic entropy for an opaque
@@ -67,6 +69,10 @@ const commitTokenByteLen = 32
 type CoordinatorConfig struct {
 	DB      *sql.DB
 	HMACKey []byte
+	// BlobStore is required by the production master-stream path to promote
+	// a verified staging file before the commit becomes visible. It remains
+	// optional for the DB-only unit-test coordinator.
+	BlobStore store.BlobStore
 }
 
 // NewCoordinator constructs a Coordinator backed by cfg. cfg.DB is
@@ -95,6 +101,7 @@ func NewCoordinator(cfg CoordinatorConfig) (Coordinator, error) {
 	return &coordinator{
 		db:         cfg.DB,
 		hmacKey:    cfg.HMACKey,
+		blobStore:  cfg.BlobStore,
 		uowFactory: NewSQLiteUnitOfWorkFactory(cfg.DB),
 		budget:     NewConflictBudget(DefaultConflictBudgetPolicy()),
 	}, nil
@@ -127,6 +134,7 @@ func (c *coordinator) SetConflictBudgetSink(sink ConflictBudgetSink) {
 type coordinator struct {
 	db         *sql.DB
 	hmacKey    []byte
+	blobStore  store.BlobStore
 	uowFactory UnitOfWorkFactory
 	// budget counts consecutive ErrTransitionConflict on the
 	// three canonical attempt_commits CAS paths

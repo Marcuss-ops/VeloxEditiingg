@@ -8,6 +8,8 @@ package grpcserver
 import (
 	"strings"
 
+	"velox-server/internal/artifacts"
+	"velox-server/internal/completion"
 	"velox-server/internal/ingest"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/registry"
@@ -62,6 +64,16 @@ func (h *Handler) SetPlacementRejectionSink(sink velmetrics.PlacementRejectionSi
 // paths, partial-wiring bootstrap variants) skips the gate entirely.
 func (h *Handler) SetCapabilityRegistry(r *registry.CapabilityRegistry) {
 	h.capabilityRegistry = r
+}
+
+// SetCompletionProtocol wires the durable typed artifact publication bridge.
+// The bridge is optional for legacy/lightweight handler tests, but bootstrap
+// must supply all four dependencies when typed worker capabilities are on.
+func (h *Handler) SetCompletionProtocol(coord completion.Coordinator, store completion.UploadProtocolStore, chunked *artifacts.ChunkedUploadService, masterURL string) {
+	h.completionCoord = coord
+	h.completionStore = store
+	h.chunkedUploadSvc = chunked
+	h.masterURL = strings.TrimRight(strings.TrimSpace(masterURL), "/")
 }
 
 // SetPlacementPin installs the worker_id pin (VELOX_PLACEMENT_PIN_WORKER_ID)

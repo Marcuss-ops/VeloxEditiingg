@@ -65,6 +65,7 @@ func (t *MasterStreamTransport) Upload(ctx context.Context, req UploadRequest) (
 			httpReq.Header.Set("Content-Type", "application/octet-stream")
 			httpReq.Header.Set("X-Upload-Id", req.Target.UploadID)
 			httpReq.Header.Set("X-Worker-SHA256", req.WorkerSHA256)
+			httpReq.Header.Set("X-Artifact-Commit-Token", req.CommitToken)
 			resp, err := client.Do(httpReq)
 			if err != nil {
 				return nil, fmt.Errorf("%w: master-stream chunk %d: %v",
@@ -97,6 +98,7 @@ func (t *MasterStreamTransport) Upload(ctx context.Context, req UploadRequest) (
 	}
 	compReq.Header.Set("X-Upload-Id", req.Target.UploadID)
 	compReq.Header.Set("X-Worker-SHA256", req.WorkerSHA256)
+	compReq.Header.Set("X-Artifact-Commit-Token", req.CommitToken)
 	resp, err := client.Do(compReq)
 	if err != nil {
 		return nil, fmt.Errorf("%w: master-stream complete: %v", ErrUploadFailed, err)

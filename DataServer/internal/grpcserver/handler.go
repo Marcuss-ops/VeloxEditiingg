@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"velox-server/internal/artifacts"
+	"velox-server/internal/completion"
 	"velox-server/internal/ingest"
 	"velox-server/internal/jobs"
 	velmetrics "velox-server/internal/metrics"
@@ -77,6 +78,10 @@ type Handler struct {
 	// checkArtifactCommitGate() before handleArtifactUploaded; a
 	// not-ready registry returns codes.PermissionDenied.
 	capabilityRegistry *registry.CapabilityRegistry
+	completionCoord    completion.Coordinator
+	completionStore    completion.UploadProtocolStore
+	chunkedUploadSvc   *artifacts.ChunkedUploadService
+	masterURL          string
 
 	mu             sync.RWMutex
 	sessions       map[string]*workerSession // sessionID → active stream session

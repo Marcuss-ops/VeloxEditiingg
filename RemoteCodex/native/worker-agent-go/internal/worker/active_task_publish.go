@@ -138,6 +138,7 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 			LocalPath:    ref.URI,
 			Target:       target,
 			WorkerSHA256: ref.Hash,
+			CommitToken:  plan.GetCommitToken(),
 		})
 		if err != nil {
 			return fmt.Errorf("worker artifact upload: transfer %q: %w", ref.Type, err)

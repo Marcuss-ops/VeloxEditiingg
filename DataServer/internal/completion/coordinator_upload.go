@@ -13,7 +13,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"mime"
 	"time"
+
+	"velox-server/internal/artifacts"
 )
 
 // ────────────────────────────────────────────────────────────────────────
@@ -118,6 +121,28 @@ func (c *coordinator) CompleteUpload(ctx context.Context, cmd CompleteUploadComm
 
 	if err := repos.AttemptCommits().CompleteArtifactUpload(ctx, verdict, cmd.UploadID, cmd.ServerSHA256, nowStr); err != nil {
 		return fmt.Errorf("completion.CompleteUpload: artifact CAS: %w", err)
+	}
+
+	// The typed protocol receives bytes into the artifact staging key rather
+	// than through artifacts.Service.Finalize (which is the legacy single-
+	// output job-success path). Promote the verified file here, before the
+	// commit transaction becomes visible, and stamp the canonical pointer so
+	// DeliveryRunner can read the exact bytes after CommitAttempt.
+	if verdict == ArtifactReady && c.blobStore != nil && uploadState.TemporaryStorageKey != "" {
+		ext := ".bin"
+		if exts, merr := mime.ExtensionsByType(uploadState.MimeType); merr == nil && len(exts) > 0 && exts[0] != "" {
+			ext = exts[0]
+		}
+		storageKey, perr := artifacts.PromoteToCanonical(c.blobStore, uploadState.TemporaryStorageKey, cmd.ServerSHA256, ext)
+		if perr != nil {
+			return fmt.Errorf("completion.CompleteUpload: promote artifact: %w", perr)
+		}
+		if _, uerr := tx.ExecContext(ctx, `
+			UPDATE artifacts
+			   SET storage_provider = 'local', storage_key = ?, sha256 = ?, size_bytes = ?
+			 WHERE id = ?`, storageKey, cmd.ServerSHA256, uploadState.SizeBytes, uploadState.ArtifactID); uerr != nil {
+			return fmt.Errorf("completion.CompleteUpload: stamp canonical artifact: %w", uerr)
+		}
 	}
 
 	if err := repos.AttemptCommits().UpdateReadyCountExhaustive(ctx, cmd.Fence, nowStr); err != nil {
