@@ -81,7 +81,6 @@ func TestInstaEditRoutes_MissingToken_401(t *testing.T) {
 	}
 }
 
-
 func TestInstaEditRoutes_MissingScope_403(t *testing.T) {
 	r := setupRouter()
 	claims := validClaims()

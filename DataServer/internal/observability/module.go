@@ -38,7 +38,6 @@ func (m *ObservabilityModule) Name() string {
 //	GET /api/observability/overview        — system health snapshot
 //	GET /api/observability/jobs/:job_id    — job detail with phase waterfall
 //	GET /api/observability/workers         — per-worker performance list
-//	GET /api/observability/phases/trends   — phase timing trends
 func (m *ObservabilityModule) RegisterRoutes(r *gin.Engine) {
 	v1 := r.Group("/api/observability")
 	if m.auth != nil {
@@ -48,6 +47,4 @@ func (m *ObservabilityModule) RegisterRoutes(r *gin.Engine) {
 	v1.GET("/jobs/:job_id", m.handlers.JobDetailHandler())
 	v1.GET("/jobs/:job_id/audit", m.handlers.JobAuditHandler())
 	v1.GET("/workers", m.handlers.WorkersHandler())
-	v1.GET("/phases/trends", m.handlers.PhaseTrendsHandler())
-	v1.GET("/regressions", m.handlers.RegressionsHandler())
 }

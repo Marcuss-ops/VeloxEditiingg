@@ -48,6 +48,10 @@ func (m *mockDriveDownloader) DownloadFile(ctx context.Context, fileID string, d
 	return os.WriteFile(destPath, []byte("mock-drive-bytes"), 0o600)
 }
 
+func (m *mockDriveDownloader) DownloadFileWithLimit(ctx context.Context, fileID string, destPath string, maxBytes int64) error {
+	return m.DownloadFile(ctx, fileID, destPath)
+}
+
 func testResolverStore(t *testing.T) *Store {
 	t.Helper()
 	store := NewStore(t.TempDir(), 1024*1024, nil)

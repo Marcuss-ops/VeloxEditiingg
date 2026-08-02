@@ -10,12 +10,15 @@
 package instaedit
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
+	"velox-server/internal/creatorflow"
 	"velox-server/internal/handlers/server/darkeditor"
 	"velox-server/internal/instaeditauth"
 )
@@ -32,9 +35,10 @@ const (
 // handlers. All fields are required for the route group to be mounted;
 // the composition root skips the group when the verifier is nil.
 type HandlerDeps struct {
-	Verifier    *instaeditauth.Verifier
-	Service     *Service
-	DarkHandler *darkeditor.Handler
+	Verifier      *instaeditauth.Verifier
+	Service       *Service
+	DarkHandler   *darkeditor.Handler
+	WebhookSecret string
 }
 
 // Handler holds the dependencies for the InstaEdit BFF endpoints.
@@ -112,8 +116,18 @@ func (h *Handler) createJob() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		claims := h.claimsFromContext(c)
 		var req createJobRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
+		decoder := json.NewDecoder(c.Request.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON: " + err.Error()})
+			return
+		}
+		if req.ContractVersion != "velox.job.v1" {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error_code": "UNSUPPORTED_CONTRACT_VERSION", "message": "unsupported contract_version"})
+			return
+		}
+		if strings.TrimSpace(req.IdempotencyKey) == "" {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error_code": "INVALID_IDEMPOTENCY_KEY", "message": "idempotency_key is required"})
 			return
 		}
 
@@ -126,16 +140,18 @@ func (h *Handler) createJob() gin.HandlerFunc {
 		}
 
 		job, err := h.deps.Service.CreateJob(c.Request.Context(), CreateJobCmd{
-			WorkspaceID:  claims.WorkspaceID,
-			ProjectID:    req.ProjectID,
-			RenderSpec:   req.RenderSpec,
-			Destinations: dsts,
+			WorkspaceID:     claims.WorkspaceID,
+			ProjectID:       req.ProjectID,
+			ContractVersion: req.ContractVersion,
+			IdempotencyKey:  req.IdempotencyKey,
+			RenderSpec:      req.RenderSpec,
+			Destinations:    dsts,
 		})
 		if err != nil {
 			writeServiceError(c, err)
 			return
 		}
-		c.JSON(http.StatusCreated, job)
+		c.JSON(http.StatusAccepted, job)
 	}
 }
 
@@ -222,6 +238,8 @@ func writeServiceError(c *gin.Context, err error) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	case errors.Is(err, ErrInvalidPayload), errors.Is(err, ErrDestinationUnknown), errors.Is(err, ErrDestinationDisabled):
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+	case errors.Is(err, creatorflow.ErrIdempotencyKeyReused):
+		c.JSON(http.StatusConflict, gin.H{"error_code": "IDEMPOTENCY_CONFLICT", "message": "idempotency key was already used with a different payload"})
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	}

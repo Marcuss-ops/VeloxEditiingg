@@ -28,6 +28,7 @@ func loadAuthConfig() AuthConfig {
 	// instaeditauth verifier is not configured; the middleware
 	// surfaces 503 so a misconfigured deployment fails loudly.
 	c.InstaeditControlJWTSecret = os.Getenv("INSTAEDIT_CONTROL_JWT_SECRET")
+	c.VeloxWebhookSecret = os.Getenv("VELOX_WEBHOOK_SECRET")
 	return c
 }
 
@@ -70,10 +71,10 @@ func loadPipelineConfig() PipelineConfig {
 //     handle full-day videos via a sequence of submits, not one.
 func loadM2MConfig() M2MConfig {
 	return M2MConfig{
-		DefaultRPS:                         intFromEnv("VELOX_M2M_DEFAULT_RPS", 5, 1),
-		DefaultBurst:                       intFromEnv("VELOX_M2M_DEFAULT_BURST", 10, 1),
-		MaxScenesPerRequest:                intFromEnv("VELOX_M2M_MAX_SCENES_PER_REQUEST", 1000, 1),
-		MaxTotalDurationSecondsPerRequest:  floatFromEnv("VELOX_M2M_MAX_TOTAL_DURATION_SECS", 3600, 0),
+		DefaultRPS:                        intFromEnv("VELOX_M2M_DEFAULT_RPS", 5, 1),
+		DefaultBurst:                      intFromEnv("VELOX_M2M_DEFAULT_BURST", 10, 1),
+		MaxScenesPerRequest:               intFromEnv("VELOX_M2M_MAX_SCENES_PER_REQUEST", 1000, 1),
+		MaxTotalDurationSecondsPerRequest: floatFromEnv("VELOX_M2M_MAX_TOTAL_DURATION_SECS", 3600, 0),
 	}
 }
 

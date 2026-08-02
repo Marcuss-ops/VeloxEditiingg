@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"velox-server/internal/identity"
+	"velox-server/internal/inputsecurity"
 )
 
 // RewriteVideoClipSegments trims local master-side clip sources and rewrites
@@ -177,6 +178,11 @@ func (s *AssetService) materializeVideoSource(ctx context.Context, sourceRef str
 		if !info.Mode().IsRegular() {
 			return "", func() {}, fmt.Errorf("video source is not a regular file")
 		}
+		if s.security != nil {
+			if _, err := s.security.ValidateFile(ctx, sourceRef, inputsecurity.KindUnknown, ""); err != nil {
+				return "", func() {}, fmt.Errorf("validate local video source: %w", err)
+			}
+		}
 		return sourceRef, func() {}, nil
 	}
 	if s.registry == nil {
@@ -190,15 +196,37 @@ func (s *AssetService) materializeVideoSource(ctx context.Context, sourceRef str
 		return "", func() {}, fmt.Errorf("resolve video source %q: %w", sourceRef, err)
 	}
 	defer source.Reader.Close()
-	tmp, err := os.CreateTemp("", ".velox-video-source-*.bin")
+	if s.security == nil {
+		return "", func() {}, fmt.Errorf("video source security validator unavailable")
+	}
+	policy := s.security.Policy()
+	if strings.TrimSpace(policy.TempDir) == "" {
+		return "", func() {}, fmt.Errorf("video source security temp directory unavailable")
+	}
+	if err := os.MkdirAll(policy.TempDir, 0o700); err != nil {
+		return "", func() {}, fmt.Errorf("create materialized video source directory: %w", err)
+	}
+	tmp, err := os.CreateTemp(policy.TempDir, ".velox-video-source-*.bin")
 	if err != nil {
 		return "", func() {}, fmt.Errorf("create materialized video source: %w", err)
 	}
 	path := tmp.Name()
-	if _, err := io.Copy(tmp, source.Reader); err != nil {
+	maxBytes := policy.MaxBytes
+	if maxBytes <= 0 {
+		_ = tmp.Close()
+		_ = os.Remove(path)
+		return "", func() {}, fmt.Errorf("video source security byte limit unavailable")
+	}
+	written, err := io.Copy(tmp, io.LimitReader(source.Reader, maxBytes+1))
+	if err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(path)
 		return "", func() {}, fmt.Errorf("materialize video source: %w", err)
+	}
+	if written > maxBytes {
+		_ = tmp.Close()
+		_ = s.security.Quarantine(path, inputsecurity.KindClip, inputsecurity.ErrDownloadTooLarge, "materialized video source exceeded the input byte limit")
+		return "", func() {}, inputsecurity.NewError(inputsecurity.KindClip, inputsecurity.ErrDownloadTooLarge, "materialized video source exceeds the input byte limit", nil)
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
@@ -208,6 +236,10 @@ func (s *AssetService) materializeVideoSource(ctx context.Context, sourceRef str
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(path)
 		return "", func() {}, fmt.Errorf("close materialized video source: %w", err)
+	}
+	if _, err := s.security.ValidateFile(ctx, path, inputsecurity.KindClip, source.MIMEType); err != nil {
+		_ = s.security.Quarantine(path, inputsecurity.KindClip, inputsecurity.CodeOf(err), err.Error())
+		return "", func() {}, fmt.Errorf("validate materialized video source: %w", err)
 	}
 	return path, func() { _ = os.Remove(path) }, nil
 }
@@ -228,7 +260,14 @@ func (s *AssetService) registerPreparedVideoFile(ctx context.Context, preparedPa
 		return nil, fmt.Errorf("open prepared segment: %w", err)
 	}
 	hasher := sha256.New()
-	written, copyErr := io.Copy(io.MultiWriter(staging, hasher), input)
+	maxBytes := int64(0)
+	if s.security != nil {
+		maxBytes = s.security.Policy().MaxBytes
+	}
+	if maxBytes <= 0 {
+		maxBytes = 256 * 1024 * 1024
+	}
+	written, copyErr := io.Copy(io.MultiWriter(staging, hasher), io.LimitReader(input, maxBytes+1))
 	closeInputErr := input.Close()
 	closeStagingErr := staging.Close()
 	if copyErr != nil || closeInputErr != nil || closeStagingErr != nil {
@@ -241,9 +280,19 @@ func (s *AssetService) registerPreparedVideoFile(ctx context.Context, preparedPa
 		}
 		return nil, fmt.Errorf("close segment staging file: %w", closeStagingErr)
 	}
+	if written > maxBytes {
+		_ = s.security.Quarantine(stagingPath, inputsecurity.KindClip, inputsecurity.ErrDownloadTooLarge, "prepared video segment exceeded the input byte limit")
+		return nil, inputsecurity.NewError(inputsecurity.KindClip, inputsecurity.ErrDownloadTooLarge, "prepared video segment exceeds the input byte limit", nil)
+	}
 	if written <= 0 {
 		_ = s.blobStore.RemoveStaging(stagingPath)
 		return nil, fmt.Errorf("prepared video segment is empty")
+	}
+	if s.security != nil {
+		if _, err := s.security.ValidateFile(ctx, stagingPath, inputsecurity.KindClip, "video/mp4"); err != nil {
+			_ = s.security.Quarantine(stagingPath, inputsecurity.KindClip, inputsecurity.CodeOf(err), err.Error())
+			return nil, fmt.Errorf("validate prepared video segment: %w", err)
+		}
 	}
 	if err := syncPreparedSegment(stagingPath); err != nil {
 		_ = s.blobStore.RemoveStaging(stagingPath)

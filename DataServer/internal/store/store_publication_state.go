@@ -3,11 +3,14 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	"velox-server/internal/audittrail"
 	"velox-server/internal/publicationstate"
 )
 
@@ -60,6 +63,34 @@ func (s *SQLiteStore) GetPublicationState(ctx context.Context, publicationID str
 		return nil, fmt.Errorf("get publication state: %w", err)
 	}
 	return state, nil
+}
+
+// GetPublicationIDForArtifact resolves the publication control-plane row for
+// a delivery whose metadata does not carry the optional publication_id. The
+// enqueue transaction creates this relation through job_id before any
+// artifact can become deliverable.
+func (s *SQLiteStore) GetPublicationIDForArtifact(ctx context.Context, artifactID string) (string, error) {
+	var publicationID string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT ps.publication_id
+		FROM publication_states ps
+		JOIN artifacts a ON a.job_id = ps.job_id
+		WHERE a.id = ?
+		ORDER BY ps.created_at ASC, ps.publication_id ASC
+		LIMIT 1`, strings.TrimSpace(artifactID)).Scan(&publicationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Legacy rows created before job_id was populated can still be
+		// resolved safely when the database has exactly one publication.
+		err = s.db.QueryRowContext(ctx, `
+			SELECT publication_id FROM publication_states
+			WHERE (job_id IS NULL OR job_id = '')
+			  AND (SELECT COUNT(*) FROM publication_states WHERE job_id IS NULL OR job_id = '') = 1
+			ORDER BY created_at ASC, publication_id ASC LIMIT 1`).Scan(&publicationID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrPublicationStateNotFound
+		}
+	}
+	return publicationID, err
 }
 
 // TransitionPublicationState performs a CAS-guarded formal transition. A
@@ -128,11 +159,15 @@ func (s *SQLiteStore) transitionPublicationState(ctx context.Context, publicatio
 	if affected, _ := result.RowsAffected(); affected != 1 {
 		return nil, fmt.Errorf("%w: publication=%s revision=%d", ErrPublicationPhaseConflict, publicationID, current.Revision)
 	}
+	fromState := current.State
 	current.State = next.State
 	current.RetryFrom = next.RetryFrom
 	current.Revision = next.Revision
 	current.LastErrorCode = strings.TrimSpace(errorCode)
 	current.UpdatedAt = now
+	if err := appendPublicationTransitionAuditTx(ctx, tx, current, fromState, to, errorCode); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -179,6 +214,164 @@ func (s *SQLiteStore) CompletePublicationPhaseEffect(ctx context.Context, public
 		return ErrPublicationPhaseConflict
 	}
 	return nil
+}
+
+// RetryPublicationPhaseEffect re-opens a phase effect that failed before the
+// delivery was released for retry. A RUNNING effect is deliberately left
+// untouched: after a crash its provider-side idempotency key is the authority.
+func (s *SQLiteStore) RetryPublicationPhaseEffect(ctx context.Context, publicationID string, phase publicationstate.State, operation string) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE publication_phase_effects
+		SET status = 'RUNNING', error_code = NULL, updated_at = ?
+		WHERE publication_id = ? AND phase = ? AND operation = ? AND status = 'FAILED'`,
+		time.Now().UTC().Format(time.RFC3339), strings.TrimSpace(publicationID), phase, strings.TrimSpace(operation))
+	if err != nil {
+		return err
+	}
+	if affected, _ := result.RowsAffected(); affected > 1 {
+		return ErrPublicationPhaseConflict
+	}
+	return nil
+}
+
+// GetPublicationPhaseEffectStatus returns the durable status of one phase
+// operation. It lets the runner distinguish a succeeded effect (safe to skip)
+// from a RUNNING effect left by a crash (safe to replay with the same key).
+func (s *SQLiteStore) GetPublicationPhaseEffectStatus(ctx context.Context, publicationID string, phase publicationstate.State, operation string) (string, error) {
+	var status string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT status FROM publication_phase_effects
+		WHERE publication_id = ? AND phase = ? AND operation = ?`,
+		strings.TrimSpace(publicationID), phase, strings.TrimSpace(operation)).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return status, err
+}
+
+// PersistPublicationVideoCreated is the upload checkpoint. The remote
+// identity and VIDEO_CREATED state are committed together before metadata or
+// verification can run, preventing a restart from issuing a second upload.
+func (s *SQLiteStore) PersistPublicationVideoCreated(ctx context.Context, publicationID, artifactID, remoteID, remoteURL string) (*PublicationState, error) {
+	publicationID = strings.TrimSpace(publicationID)
+	if publicationID == "" || strings.TrimSpace(remoteID) == "" {
+		return nil, fmt.Errorf("store: publication video checkpoint requires publication_id and remote_id")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	row := tx.QueryRowContext(ctx, `
+		SELECT publication_id, COALESCE(job_id, ''), state, COALESCE(retry_from, ''),
+		       COALESCE(artifact_id, ''), COALESCE(remote_id, ''), COALESCE(remote_url, ''),
+		       revision, COALESCE(last_error_code, ''), created_at, updated_at
+		FROM publication_states WHERE publication_id = ?`, publicationID)
+	current, err := scanPublicationState(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrPublicationStateNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if current.State != publicationstate.Uploading && current.State != publicationstate.VideoCreated {
+		return nil, fmt.Errorf("%w: video checkpoint from %s", ErrPublicationPhaseConflict, current.State)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	nextRevision := current.Revision
+	nextState := current.State
+	if current.State == publicationstate.Uploading {
+		nextState = publicationstate.VideoCreated
+		nextRevision++
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE publication_states
+		SET state = ?, retry_from = NULL, artifact_id = COALESCE(NULLIF(?, ''), artifact_id),
+		    remote_id = ?, remote_url = COALESCE(NULLIF(?, ''), remote_url),
+		    revision = ?, last_error_code = NULL, updated_at = ?
+		WHERE publication_id = ? AND state = ? AND revision = ?`,
+		nextState, artifactID, remoteID, remoteURL, nextRevision, now,
+		publicationID, current.State, current.Revision)
+	if err != nil {
+		return nil, err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return nil, ErrPublicationPhaseConflict
+	}
+	current.State = nextState
+	current.RetryFrom = ""
+	current.ArtifactID = artifactID
+	current.RemoteID = remoteID
+	if remoteURL != "" {
+		current.RemoteURL = remoteURL
+	}
+	current.Revision = nextRevision
+	current.LastErrorCode = ""
+	current.UpdatedAt = now
+	if err := appendPublicationTransitionAuditTx(ctx, tx, current, publicationstate.Uploading, publicationstate.VideoCreated, ""); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return current, nil
+}
+
+func appendPublicationTransitionAuditTx(ctx context.Context, tx *sql.Tx, state *PublicationState, from, to publicationstate.State, errorCode string) error {
+	type auditRecord struct{ action, phase string }
+	var records []auditRecord
+	if publicationPhaseName(from) != "" {
+		switch {
+		case to == publicationstate.RetryWait || to == publicationstate.Partial || to == publicationstate.Failed:
+			records = append(records, auditRecord{"PUBLICATION_PHASE_FAILED", publicationPhaseName(from)})
+		case to != from:
+			records = append(records, auditRecord{"PUBLICATION_PHASE_SUCCEEDED", publicationPhaseName(from)})
+		}
+	}
+	switch to {
+	case publicationstate.Uploading, publicationstate.MetadataApplying, publicationstate.Verifying:
+		records = append(records, auditRecord{"PUBLICATION_PHASE_STARTED", publicationPhaseName(to)})
+	case publicationstate.Published:
+		records = append(records, auditRecord{"PUBLICATION_COMPLETED", ""})
+	}
+	for _, record := range records {
+		metadata, err := json.Marshal(map[string]string{
+			"publication_id": state.PublicationID,
+			"phase":          record.phase,
+			"status":         string(to),
+			"error_code":     strings.TrimSpace(errorCode),
+			"remote_id":      state.RemoteID,
+		})
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `
+		INSERT INTO audit_events
+		(id, occurred_at, actor_type, actor_id, action, resource_type, resource_id,
+		 request_id, trace_id, before_hash, after_hash, metadata_json)
+		VALUES (?, ?, 'service', 'delivery_runner', ?, 'publication', ?, '', '', '', '', ?)`,
+			uuid.NewString(), time.Now().UTC().Format(time.RFC3339Nano), record.action,
+			state.PublicationID, audittrail.RedactMetadata(string(metadata)))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func publicationPhaseName(state publicationstate.State) string {
+	switch state {
+	case publicationstate.Uploading:
+		return "UPLOAD_MEDIA"
+	case publicationstate.MetadataApplying:
+		return "APPLY_METADATA"
+	case publicationstate.LocalizationsApplying:
+		return "APPLY_LOCALIZATIONS"
+	case publicationstate.Verifying:
+		return "VERIFY"
+	default:
+		return ""
+	}
 }
 
 type publicationScanner interface{ Scan(...any) error }

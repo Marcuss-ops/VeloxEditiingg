@@ -111,9 +111,10 @@ type MetricsRouteDeps struct {
 // group. The verifier is created from INSTAEDIT_CONTROL_JWT_SECRET at
 // boot; when it is nil the whole group is skipped (dev/test mode).
 type InstaEditRouteDeps struct {
-	Verifier    *instaeditauth.Verifier
-	Service     *instaedithandler.Service
-	DarkHandler *darkeditor.Handler
+	Verifier      *instaeditauth.Verifier
+	Service       *instaedithandler.Service
+	DarkHandler   *darkeditor.Handler
+	WebhookSecret string
 }
 
 // FleetRouteDeps carries the deps for the /api/v1/admin/operations

@@ -31,6 +31,7 @@ package socialclient
 // any drift between runner and socialclient is detected at marshal
 // time rather than producing a silent malformed JSON POST.
 type DeliverArtifactRequest struct {
+	ContractVersion       string `json:"contract_version"`
 	ExternalDeliveryID    string `json:"external_delivery_id"`
 	IdempotencyKey        string `json:"idempotency_key"`
 	ExternalDestinationID string `json:"external_destination_id"`
@@ -48,8 +49,8 @@ type DeliverArtifactRequest struct {
 	// schedule the publish outside Velox's loop. RFC3339 string.
 	PublishAt string `json:"publish_at,omitempty"`
 
-	// CallbackURL is the per-delivery webhook the social_repo will POST
-	// to when the publish completes. Empty omits the field.
+	// CallbackURL is the canonical Velox event endpoint the social_repo
+	// will POST to when publication state changes. Empty omits the field.
 	CallbackURL string `json:"callback_url,omitempty"`
 }
 

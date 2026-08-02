@@ -85,6 +85,9 @@ func (e *Enqueuer) resolveEnqueueAssets(ctx context.Context, payloadMap map[stri
 		if err := e.Voiceover.RewriteVideoClipSegments(ctx, payloadMap); err != nil {
 			return err
 		}
+		if err := e.Voiceover.RewriteRemoteInputPayload(ctx, payloadMap); err != nil {
+			return err
+		}
 	}
 	return nil
 }

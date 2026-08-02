@@ -92,6 +92,36 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 		return credentialErr
 	}
 
+	// Resumable providers enter the phase executor after all durable inputs and
+	// the short-lived credential lease have been resolved. Legacy providers
+	// intentionally continue through Deliver below and remain non-resumable.
+	if executor, ok := r.registry.ResolvePhaseExecutor(lease.Provider); ok {
+		publicationID := publicationIDFromMetadata(dest.DeliveryMetadataJSON)
+		if publicationID == "" {
+			publicationID, _ = r.dbStore.GetPublicationIDForArtifact(ctx, lease.ArtifactID)
+		}
+		if publicationID == "" {
+			err := fmt.Errorf("%w: publication_id is required for resumable delivery", ErrProviderPermanent)
+			_ = r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "PUBLICATION_ID_REQUIRED", err.Error())
+			return err
+		}
+		runErr := r.runPublicationPhases(ctx, publicationPhaseContext{
+			lease: lease, publicationID: publicationID, artifact: artifact,
+			destination: dest, credentialLease: credentialLease,
+		}, executor)
+		if credentialLease != nil && r.vault != nil {
+			success := runErr == nil
+			code := ""
+			if !success {
+				code = classifyErrorCode(runErr)
+			}
+			if auditErr := r.vault.RecordLeaseResult(ctx, credentialLease, success, code); auditErr != nil {
+				log.Printf("[DELIVERY] credential usage audit failed for %s: %v", lease.DeliveryID, auditErr)
+			}
+		}
+		return runErr
+	}
+
 	// Start a heartbeat goroutine to renew the lease periodically while
 	// provider.Deliver is executing. If renewal fails (CAS conflict, e.g.
 	// another runner reclaimed the lease), cancel the deliver context to

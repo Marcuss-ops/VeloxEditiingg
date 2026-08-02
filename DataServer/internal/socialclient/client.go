@@ -22,6 +22,15 @@ type Client struct {
 	client *http.Client
 }
 
+type DeliveryStatusResponse struct {
+	ID               string `json:"id"`
+	Status           string `json:"status"`
+	PlatformMediaID  string `json:"platform_media_id"`
+	PlatformURL      string `json:"platform_url"`
+	LastErrorCode    string `json:"last_error_code"`
+	LastErrorMessage string `json:"last_error_message"`
+}
+
 // New builds a Client from a validated Config. If the Config has
 // BaseURL == "", New still returns a non-nil Client so the caller can
 // decide what to do at DeliverArtifact time (typically: return
@@ -78,6 +87,39 @@ func (c *Client) DeliverArtifact(ctx context.Context, req DeliverArtifactRequest
 // access token supplied by the central credential vault.
 func (c *Client) DeliverArtifactWithAccessToken(ctx context.Context, req DeliverArtifactRequest, accessToken string) (*DeliverArtifactResponse, error) {
 	return c.deliverArtifact(ctx, req, strings.TrimSpace(accessToken))
+}
+
+// GetDelivery is the reconciliation read path. It is intentionally
+// separate from DeliverArtifact so a lost callback never causes another
+// upload or changes the idempotency key.
+func (c *Client) GetDelivery(ctx context.Context, deliveryID string) (*DeliveryStatusResponse, error) {
+	if c == nil || c.cfg.BaseURL == "" || strings.TrimSpace(deliveryID) == "" {
+		return nil, ErrNotConfigured
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("/internal/v1/deliveries/"+url.PathEscape(deliveryID)), nil)
+	if err != nil {
+		return nil, fmt.Errorf("%w: build reconciliation request: %v", ErrTransient, err)
+	}
+	if c.cfg.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: reconciliation request failed: %v", ErrTransient, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, classifyStatusError(resp.StatusCode, credentials.JSON(string(bytes.TrimSpace(body))))
+	}
+	var out DeliveryStatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("%w: decode reconciliation response: %v", ErrTransient, err)
+	}
+	if out.ID == "" {
+		out.ID = deliveryID
+	}
+	return &out, nil
 }
 
 func (c *Client) deliverArtifact(ctx context.Context, req DeliverArtifactRequest, bearerToken string) (*DeliverArtifactResponse, error) {
@@ -141,7 +183,10 @@ func (c *Client) CallbackURL(deliveryID string) string {
 	if c == nil || c.cfg.CallbackBaseURL == "" || deliveryID == "" {
 		return ""
 	}
-	return c.cfg.CallbackBaseURL + "/api/internal/deliveries/" + deliveryID + "/callback"
+	// The callback is a control-plane event stream, not a per-delivery
+	// browser/webhook URL. Velox owns deduplication and ordering by the
+	// event_id + sequence carried in the signed body.
+	return strings.TrimRight(c.cfg.CallbackBaseURL, "/") + "/internal/v1/instaedit/delivery-events"
 }
 
 // ValidateDestination pre-flights a social destination against the

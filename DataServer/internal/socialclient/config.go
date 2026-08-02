@@ -54,7 +54,7 @@ type Config struct {
 	// CallbackBaseURL is Velox's publicly reachable URL, used to build
 	// the artifact download_url (`<CallbackBaseURL>/api/internal/artifacts/<id>/download`)
 	// and the post-publish callback URL
-	// (`<CallbackBaseURL>/api/internal/deliveries/<deliveryID>/callback`).
+	// (`<CallbackBaseURL>/internal/v1/instaedit/delivery-events`).
 	// Empty disables both derived URLs.
 	CallbackBaseURL string
 

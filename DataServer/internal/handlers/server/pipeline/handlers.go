@@ -24,6 +24,7 @@ type Handlers struct {
 	enqueuer        *enqueue.Enqueuer
 	client          *remoteengine.Client
 	resolver        *creatorflow.Resolver
+	submission      *creatorflow.JobSubmissionService
 	socialClient    *socialclient.Client
 	targetResolver  *targetpublishing.TargetResolver
 	jobs            JobsDeps
@@ -90,6 +91,7 @@ func HandlersFactory(
 		enqueuer:     enqueuer,
 		client:       client,
 		resolver:     resolver,
+		submission:   creatorflow.NewJobSubmissionService(resolver),
 		socialClient: socialclient.New(socialclient.ConfigFromEnv()),
 		jobs:         JobsDeps{Reader: jobsReader, Writer: jobsWriter, CmdMgr: cmdMgr},
 	}

@@ -19,7 +19,7 @@ import (
 // DriveDownloader is the minimal authenticated Drive surface required by resolvers.
 type DriveDownloader interface {
 	GetFileMetadata(ctx context.Context, fileID string) (*driveapi.File, error)
-	DownloadFile(ctx context.Context, fileID string, destPath string) error
+	DownloadFileWithLimit(ctx context.Context, fileID string, destPath string, maxBytes int64) error
 }
 
 // ── New-style resolvers (Scheme + Open + ServerOnly) ──
@@ -216,14 +216,7 @@ func (r *driveResolver) Open(ctx context.Context, reference string) (*Source, er
 	}
 	tmpPath := tmp.Name()
 	_ = tmp.Close()
-	var downloadErr error
-	if bounded, ok := r.drive.(interface {
-		DownloadFileWithLimit(context.Context, string, string, int64) error
-	}); ok {
-		downloadErr = bounded.DownloadFileWithLimit(ctx, fileID, tmpPath, r.store.maxBytes)
-	} else {
-		downloadErr = r.drive.DownloadFile(ctx, fileID, tmpPath)
-	}
+	downloadErr := r.drive.DownloadFileWithLimit(ctx, fileID, tmpPath, r.store.maxBytes)
 	if downloadErr != nil {
 		_ = os.Remove(tmpPath)
 		return nil, newAcquisitionError("reference", "drive", "Drive download failed", downloadErr)

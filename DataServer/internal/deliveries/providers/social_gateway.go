@@ -77,6 +77,23 @@ func (s *SocialGatewayProvider) DeliverWithCredential(ctx context.Context, artif
 	return s.deliver(ctx, artifact, destination, deliveryID, idempotencyKey, lease.AccessToken)
 }
 
+func (s *SocialGatewayProvider) Reconcile(ctx context.Context, deliveryID, remoteID string) (*deliveries.Result, error) {
+	if s == nil || s.client == nil {
+		return nil, deliveries.ErrProviderNotConfigured
+	}
+	status, err := s.client.GetDelivery(ctx, remoteID)
+	if err != nil {
+		return nil, mapSocialClientError(err)
+	}
+	return &deliveries.Result{
+		Success:      status.Status == "published" || status.Status == "completed",
+		Status:       status.Status,
+		RemoteID:     status.PlatformMediaID,
+		RemoteURL:    status.PlatformURL,
+		ProviderMeta: map[string]interface{}{"error_code": status.LastErrorCode, "error_message": status.LastErrorMessage},
+	}, nil
+}
+
 func (s *SocialGatewayProvider) deliver(ctx context.Context, artifact *store.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey, accessToken string) (*deliveries.Result, error) {
 	if s == nil || s.client == nil {
 		return nil, deliveries.ErrProviderNotConfigured
@@ -125,6 +142,7 @@ func (s *SocialGatewayProvider) deliver(ctx context.Context, artifact *store.Art
 // contract.
 func (s *SocialGatewayProvider) buildRequest(artifact *store.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string) (socialclient.DeliverArtifactRequest, error) {
 	req := socialclient.DeliverArtifactRequest{
+		ContractVersion:       "velox.delivery.v1",
 		ExternalDeliveryID:    deliveryID,
 		IdempotencyKey:        idempotencyKey,
 		ExternalDestinationID: destination.ExternalDestinationID,

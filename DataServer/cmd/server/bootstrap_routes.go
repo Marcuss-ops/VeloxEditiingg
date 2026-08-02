@@ -75,9 +75,10 @@ func (c *appComponents) routerBundle() RouterBundle {
 			BenchmarkRuns: store.NewSQLitePerformanceRepository(c.persistence.SQLite),
 		},
 		InstaEdit: InstaEditRouteDeps{
-			Verifier:    c.instaeditVerifier,
-			Service:     instaedithandler.NewServiceFromSQLite(c.persistence.SQLite, c.jobs.Repository, store.NewSQLiteAssetRepository(c.persistence.SQLite), c.modules.Enqueuer),
-			DarkHandler: deHandler,
+			Verifier:      c.instaeditVerifier,
+			Service:       instaedithandler.NewServiceFromSQLite(c.persistence.SQLite, c.jobs.Repository, store.NewSQLiteAssetRepository(c.persistence.SQLite), c.modules.Enqueuer, c.resolver),
+			DarkHandler:   deHandler,
+			WebhookSecret: c.cfg.Auth.VeloxWebhookSecret,
 		},
 	}
 }

@@ -224,6 +224,7 @@ type AuthConfig struct {
 	// instaeditauth.New constructor enforces this at boot. Loaded
 	// from INSTAEDIT_CONTROL_JWT_SECRET.
 	InstaeditControlJWTSecret string
+	VeloxWebhookSecret        string
 }
 
 // M2MConfig holds the runtime knobs controlling the

@@ -14,13 +14,13 @@ import (
 // --- In-memory port mocks -------------------------------------------------
 
 type memoryJobGateway struct {
-	jobs                     []map[string]any
-	getByID                  map[string]map[string]any
-	deliveries               []store.JobDelivery
-	destinations             map[string]*store.DeliveryDestination
-	cancelled                []string
-	cancelErr                error
-	listJobDeliveriesErr     error
+	jobs                      []map[string]any
+	getByID                   map[string]map[string]any
+	deliveries                []store.JobDelivery
+	destinations              map[string]*store.DeliveryDestination
+	cancelled                 []string
+	cancelErr                 error
+	listJobDeliveriesErr      error
 	getDeliveryDestinationErr error
 }
 
@@ -134,8 +134,8 @@ func TestService_GetJob_NotFound(t *testing.T) {
 func TestService_CreateJob_RequiresProjectID(t *testing.T) {
 	svc := NewService(nil, nil, nil, nil)
 	_, err := svc.CreateJob(context.Background(), CreateJobCmd{
-		WorkspaceID: 45,
-		Destinations:  []CreateDestinationCmd{{ExternalDestinationID: "ext-1"}},
+		WorkspaceID:  45,
+		Destinations: []CreateDestinationCmd{{ExternalDestinationID: "ext-1"}},
 	})
 	if !errors.Is(err, ErrInvalidPayload) {
 		t.Fatalf("expected ErrInvalidPayload, got %v", err)
@@ -318,8 +318,8 @@ func TestService_GetJob_DeliveryLoadFailure_PropagatesError(t *testing.T) {
 func TestService_GetJob_DestinationLookupFailure_PropagatesError(t *testing.T) {
 	want := errors.New("db: destination lookup failed")
 	jobs := &memoryJobGateway{
-		getByID: map[string]map[string]any{"job-1": {"job_id": "job-1", "status": "PENDING", "project_id": "p-1"}},
-		deliveries: []store.JobDelivery{{DeliveryID: "d-1", DestinationID: "dest-1"}},
+		getByID:                   map[string]map[string]any{"job-1": {"job_id": "job-1", "status": "PENDING", "project_id": "p-1"}},
+		deliveries:                []store.JobDelivery{{DeliveryID: "d-1", DestinationID: "dest-1"}},
 		getDeliveryDestinationErr: want,
 	}
 	svc := NewService(jobs, nil, nil, nil)

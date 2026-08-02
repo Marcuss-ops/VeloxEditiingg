@@ -24,6 +24,7 @@ import (
 //     ("result not complete — caller should keep polling").
 type ResolveRequest struct {
 	ForwardingID     string
+	WorkspaceID      int64
 	SourceProvider   string
 	SourceJobID      string
 	TargetExecutorID string

@@ -270,7 +270,11 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOut
 	// validates it and compiles TaskSpec.DeliveryPlan, while its renderer
 	// projection removes the same fields from TaskSpec.Payload.
 	preparePayload := preparePayloadWithControlPlaneDelivery(workerPayload, req.DeliveryPlan)
-	job, spec, priority, err := r.enqueuer.PrepareJobAndTask(ctx, preparePayload, costmodel.DefaultRequirements())
+	var enqueueOpts []enqueue.EnqueueOption
+	if req.WorkspaceID > 0 {
+		enqueueOpts = append(enqueueOpts, enqueue.WithWorkspaceID(req.WorkspaceID))
+	}
+	job, spec, priority, err := r.enqueuer.PrepareJobAndTask(ctx, preparePayload, costmodel.DefaultRequirements(), enqueueOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("creatorflow: Resolve prepare job/task: %w", err)
 	}

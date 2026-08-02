@@ -17,7 +17,6 @@ import (
 	"velox-server/internal/forwarding"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/jobs/enqueue"
-	"velox-server/internal/metricscenter"
 	"velox-server/internal/observability"
 	"velox-server/internal/platform/clock"
 	"velox-server/internal/remoteengine"
@@ -251,15 +250,12 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 		log.Printf("[BOOTSTRAP] Observability REST API registered")
 	}
 
-	// ── Metrics Center Dashboard UI ────────────────────────────────
-	registry.Register(metricscenter.NewModule())
-	log.Printf("[BOOTSTRAP] Metrics Center dashboard registered")
-
 	// ── Delivery runner ─────────────────────────────────────────────
 	deliveryReg := deliveries.NewRegistry()
 	if driveMod != nil {
 		driveProvider := deliveryProviders.NewDriveProvider(driveMod.Service(), p.BlobStore)
 		deliveryReg.Register(driveProvider)
+		deliveryReg.RegisterLegacyPhaseProvider(driveProvider)
 		log.Printf("[BOOTSTRAP] Delivery provider registered: drive")
 	}
 
@@ -275,7 +271,11 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	// the validator and the provider share a single Config source.
 	socialGatewayProvider := deliveryProviders.NewSocialGatewayProvider(socialClientCfg)
 	deliveryReg.Register(socialGatewayProvider)
+	deliveryReg.RegisterLegacyPhaseProvider(socialGatewayProvider)
 	log.Printf("[BOOTSTRAP] Delivery provider registered: %s (%s)", socialGatewayProvider.Name(), socialClientCfg)
+	if err := deliveryReg.ValidateCredentialContracts(); err != nil {
+		return nil, fmt.Errorf("delivery provider credential contract: %w", err)
+	}
 
 	deliveryRunner := deliveries.NewDeliveryRunner(
 		deliveries.DefaultRunnerConfig(),

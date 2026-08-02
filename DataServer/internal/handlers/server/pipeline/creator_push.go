@@ -165,6 +165,23 @@ func (h *Handlers) resolveCompletedPayload(
 	deliveryPlan map[string]interface{},
 	publicationSpecs []publication.Spec,
 ) (map[string]interface{}, error) {
+	if h.submission != nil {
+		out, err := h.submission.Submit(ctx, creatorflow.CanonicalJobSubmission{
+			SourceProvider:   sourceProvider,
+			SourceJobID:      sourceJobID,
+			TargetExecutorID: targetExecutorID,
+			Payload:          result,
+			DeliveryPlan:     deliveryPlan,
+			PublicationSpecs: publicationSpecs,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if out == nil {
+			return nil, nil
+		}
+		return out.Response, nil
+	}
 	if h.resolver == nil {
 		return nil, fmt.Errorf("pipeline handler requires a wired resolver (composition root MUST pass creatorflow.Resolver)")
 	}

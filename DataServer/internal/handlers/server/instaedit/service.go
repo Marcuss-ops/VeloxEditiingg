@@ -11,6 +11,7 @@ import (
 	"velox-shared/contract"
 
 	"velox-server/internal/costmodel"
+	"velox-server/internal/creatorflow"
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/store"
@@ -66,10 +67,14 @@ type JobEnqueuer interface {
 // Service is the InstaEdit BFF application layer. It owns validation,
 // payload canonicalisation, workspace isolation, and error semantics.
 type Service struct {
-	jobs     JobGateway
-	workers  WorkerReader
-	assets   AssetReader
-	enqueuer JobEnqueuer
+	jobs           JobGateway
+	workers        WorkerReader
+	assets         AssetReader
+	enqueuer       JobEnqueuer
+	submission     *creatorflow.JobSubmissionService
+	deliveryEvents interface {
+		ApplyInstaEditDeliveryEvent(context.Context, store.InstaEditDeliveryEvent) (bool, error)
+	}
 }
 
 // NewService wires the service to the supplied ports.
@@ -85,13 +90,25 @@ func NewService(jobs JobGateway, workers WorkerReader, assets AssetReader, enque
 // NewServiceFromSQLite is a convenience constructor for the production
 // composition root. It adapts the concrete SQLite/enqueuer types to the
 // service's consumer-owned ports.
-func NewServiceFromSQLite(sqlite *store.SQLiteStore, jobsRepo jobs.Repository, assets store.AssetRepository, enq *enqueue.Enqueuer) *Service {
-	return NewService(
+func NewServiceFromSQLite(sqlite *store.SQLiteStore, jobsRepo jobs.Repository, assets store.AssetRepository, enq *enqueue.Enqueuer, resolvers ...*creatorflow.Resolver) *Service {
+	s := NewService(
 		&sqliteJobGateway{storeReader: sqlite, jobs: jobsRepo},
 		sqlite,
 		assets,
 		&enqueuerAdapter{enq: enq},
 	)
+	if len(resolvers) > 0 {
+		s.submission = creatorflow.NewJobSubmissionService(resolvers[0])
+	}
+	s.deliveryEvents = sqlite
+	return s
+}
+
+func (s *Service) ApplyDeliveryEvent(ctx context.Context, event store.InstaEditDeliveryEvent) (bool, error) {
+	if s == nil || s.deliveryEvents == nil {
+		return false, fmt.Errorf("delivery callback persistence is not configured")
+	}
+	return s.deliveryEvents.ApplyInstaEditDeliveryEvent(ctx, event)
 }
 
 // sqliteJobGateway adapts a storeReader and a jobs.Repository into a
@@ -153,6 +170,18 @@ func (s *Service) CreateJob(ctx context.Context, cmd CreateJobCmd) (*jobResponse
 	if err := contract.StrictValidatePayload(renderSpec); err != nil {
 		return nil, fmt.Errorf("%w: invalid render_spec: %v", ErrInvalidPayload, err)
 	}
+	// The resolver consumes the canonical worker projection. Preserve the
+	// scene list in its stable JSON form so the completion gate and the
+	// renderer see the same scene snapshot on every retry.
+	if _, present := renderSpec["scenes_json"]; !present {
+		if scenes, present := renderSpec["scenes"]; present {
+			encoded, marshalErr := json.Marshal(scenes)
+			if marshalErr != nil {
+				return nil, fmt.Errorf("%w: invalid scenes: %v", ErrInvalidPayload, marshalErr)
+			}
+			renderSpec["scenes_json"] = string(encoded)
+		}
+	}
 
 	deliveryPlan := make([]map[string]any, 0, len(cmd.Destinations))
 	for i, d := range cmd.Destinations {
@@ -197,13 +226,45 @@ func (s *Service) CreateJob(ctx context.Context, cmd CreateJobCmd) (*jobResponse
 		return nil, fmt.Errorf("build canonical payload: %w", err)
 	}
 	payload["project_id"] = cmd.ProjectID
+	// This adapter submits a fully assembled render request (unlike the
+	// remote-engine polling path), so mark the canonical handoff complete
+	// for the resolver's completion gate. The enqueue normalizer still owns
+	// the persisted worker lifecycle status.
+	payload["status"] = "completed"
 
-	result, err := s.enqueuer.Enqueue(ctx, payload, cmd.WorkspaceID)
-	if err != nil {
-		return nil, err
-	}
-	if result == nil {
-		return nil, errors.New("enqueue returned nil result")
+	var result map[string]interface{}
+	duplicate := false
+	if s.submission != nil {
+		if strings.TrimSpace(cmd.IdempotencyKey) == "" {
+			return nil, fmt.Errorf("%w: idempotency_key is required", ErrInvalidPayload)
+		}
+		sourceID := fmt.Sprintf("workspace:%d:%s", cmd.WorkspaceID, strings.TrimSpace(cmd.IdempotencyKey))
+		resolved, submitErr := s.submission.Submit(ctx, creatorflow.CanonicalJobSubmission{
+			ContractVersion:  cmd.ContractVersion,
+			WorkspaceID:      cmd.WorkspaceID,
+			SourceProvider:   "instaedit_bff",
+			SourceJobID:      sourceID,
+			TargetExecutorID: "scene.composite.v1",
+			Payload:          payload,
+		})
+		if submitErr != nil {
+			return nil, submitErr
+		}
+		if resolved == nil || resolved.Response == nil {
+			return nil, errors.New("job submission returned nil result")
+		}
+		result = resolved.Response
+		if created, ok := result["created"].(bool); ok {
+			duplicate = !created
+		}
+	} else {
+		result, err = s.enqueuer.Enqueue(ctx, payload, cmd.WorkspaceID)
+		if err != nil {
+			return nil, err
+		}
+		if result == nil {
+			return nil, errors.New("enqueue returned nil result")
+		}
 	}
 
 	jobID := asString(result["job_id"])
@@ -219,6 +280,7 @@ func (s *Service) CreateJob(ctx context.Context, cmd CreateJobCmd) (*jobResponse
 		return nil, fmt.Errorf("job created but not found")
 	}
 	j := mapJob(row, cmd.WorkspaceID)
+	j.Duplicate = duplicate
 	return &j, nil
 }
 
@@ -236,7 +298,7 @@ func (s *Service) GetJob(ctx context.Context, workspaceID int64, jobID string) (
 		return nil, err
 	}
 	return &jobDetailResponse{
-		Job:        mapJob(row, workspaceID),
+		Job:        mapJobWithDeliveries(row, workspaceID, deliveries),
 		Deliveries: deliveries,
 	}, nil
 }
@@ -324,6 +386,12 @@ func (s *Service) loadDeliveries(ctx context.Context, jobID string) ([]deliveryR
 			ExternalDestinationID: externalID,
 			SocialDeliveryID:      row.DeliveryID,
 			Status:                row.Status,
+			Phase:                 row.Status,
+			Attempt:               row.AttemptCount,
+			NextRetryAt:           row.NextAttemptAt,
+			LastErrorCode:         row.LastError,
+			LastErrorMessage:      row.LastErrorMessage,
+			RetryFrom:             row.Status,
 			PlatformMediaID:       row.RemoteID,
 			PlatformURL:           row.RemoteURL,
 		})
@@ -344,6 +412,47 @@ func mapJob(row map[string]any, workspaceID int64) jobResponse {
 	}
 	if j.RenderStatus == "" {
 		j.RenderStatus = "PENDING"
+	}
+	j.PublicationStatus = "pending"
+	j.OverallStatus = strings.ToLower(j.RenderStatus)
+	return j
+}
+
+func mapJobWithDeliveries(row map[string]any, workspaceID int64, deliveries []deliveryResponse) jobResponse {
+	j := mapJob(row, workspaceID)
+	if len(deliveries) == 0 {
+		return j
+	}
+	allSucceeded := true
+	anyFailed := false
+	anyActive := false
+	for _, d := range deliveries {
+		switch strings.ToUpper(d.Status) {
+		case "SUCCEEDED", "PUBLISHED", "COMPLETED":
+		default:
+			allSucceeded = false
+		}
+		switch strings.ToUpper(d.Status) {
+		case "FAILED", "BLOCKED_AUTH", "CANCELLED":
+			anyFailed = true
+		case "RUNNING", "RETRY_WAIT", "CLAIMED", "PENDING":
+			anyActive = true
+		}
+	}
+	switch {
+	case allSucceeded:
+		j.PublicationStatus = "published"
+	case anyFailed:
+		j.PublicationStatus = "failed"
+	case anyActive:
+		j.PublicationStatus = "publishing"
+	default:
+		j.PublicationStatus = "pending"
+	}
+	if strings.EqualFold(j.RenderStatus, "succeeded") || strings.EqualFold(j.RenderStatus, "completed") {
+		j.OverallStatus = j.PublicationStatus
+	} else {
+		j.OverallStatus = strings.ToLower(j.RenderStatus)
 	}
 	return j
 }

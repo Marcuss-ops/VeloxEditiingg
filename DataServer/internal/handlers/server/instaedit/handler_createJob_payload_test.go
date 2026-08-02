@@ -12,6 +12,10 @@ import (
 
 func postCreateJob(t *testing.T, r *gin.Engine, token string, body map[string]any) *httptest.ResponseRecorder {
 	t.Helper()
+	if body != nil {
+		body["contract_version"] = "velox.job.v1"
+		body["idempotency_key"] = "instaedit:test:payload"
+	}
 	var reqBody []byte
 	if body != nil {
 		reqBody, _ = json.Marshal(body)
@@ -31,7 +35,7 @@ func TestCreateJob_InvalidRenderSpecJSON_Returns400(t *testing.T) {
 	token := mintToken(t, validClaims())
 
 	body := map[string]any{
-		"project_id": "proj-1",
+		"project_id":  "proj-1",
 		"render_spec": "not-json",
 		"delivery_plan": map[string]any{
 			"destinations": []map[string]any{
@@ -53,7 +57,7 @@ func TestCreateJob_LegacyVoiceoverPathAlias_Returns422(t *testing.T) {
 	body := map[string]any{
 		"project_id": "proj-1",
 		"render_spec": map[string]any{
-			"video_name":    "Legacy Alias Test",
+			"video_name":     "Legacy Alias Test",
 			"voiceover_path": "/audio.mp3",
 		},
 		"delivery_plan": map[string]any{
@@ -76,8 +80,8 @@ func TestCreateJob_UnknownTopLevelKey_Returns422(t *testing.T) {
 	body := map[string]any{
 		"project_id": "proj-1",
 		"render_spec": map[string]any{
-			"video_name": "Unknown Key Test",
-			"scenes":     []map[string]any{},
+			"video_name":  "Unknown Key Test",
+			"scenes":      []map[string]any{},
 			"unknown_key": "forbidden",
 		},
 		"delivery_plan": map[string]any{
@@ -92,5 +96,3 @@ func TestCreateJob_UnknownTopLevelKey_Returns422(t *testing.T) {
 		t.Fatalf("expected 422 for unknown key, got %d: %s", w.Code, w.Body.String())
 	}
 }
-
-

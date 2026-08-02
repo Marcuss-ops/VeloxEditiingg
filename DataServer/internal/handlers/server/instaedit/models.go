@@ -7,10 +7,12 @@ import (
 
 // CreateJobCmd is the typed input for Service.CreateJob.
 type CreateJobCmd struct {
-	WorkspaceID  int64
-	ProjectID    string
-	RenderSpec   json.RawMessage
-	Destinations []CreateDestinationCmd
+	WorkspaceID     int64
+	ProjectID       string
+	ContractVersion string
+	IdempotencyKey  string
+	RenderSpec      json.RawMessage
+	Destinations    []CreateDestinationCmd
 }
 
 // CreateDestinationCmd is a single destination inside CreateJobCmd.
@@ -21,9 +23,11 @@ type CreateDestinationCmd struct {
 
 // createJobRequest is the HTTP request body for POST /jobs.
 type createJobRequest struct {
-	ProjectID    string          `json:"project_id"`
-	RenderSpec   json.RawMessage `json:"render_spec"`
-	DeliveryPlan deliveryPlanReq `json:"delivery_plan"`
+	ContractVersion string          `json:"contract_version"`
+	IdempotencyKey  string          `json:"idempotency_key"`
+	ProjectID       string          `json:"project_id"`
+	RenderSpec      json.RawMessage `json:"render_spec"`
+	DeliveryPlan    deliveryPlanReq `json:"delivery_plan"`
 }
 
 // deliveryPlanReq is the HTTP wrapper for delivery destinations.
@@ -39,12 +43,15 @@ type deliveryDestinationReq struct {
 
 // jobResponse is the InstaEdit view of a Job.
 type jobResponse struct {
-	ID           string    `json:"id"`
-	WorkspaceID  int64     `json:"workspace_id"`
-	ProjectID    string    `json:"project_id,omitempty"`
-	RenderStatus string    `json:"render_status"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID                string    `json:"id"`
+	Duplicate         bool      `json:"duplicate,omitempty"`
+	WorkspaceID       int64     `json:"workspace_id"`
+	ProjectID         string    `json:"project_id,omitempty"`
+	RenderStatus      string    `json:"render_status"`
+	PublicationStatus string    `json:"publication_status"`
+	OverallStatus     string    `json:"overall_status"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // deliveryResponse is the InstaEdit view of a job delivery.
@@ -52,6 +59,12 @@ type deliveryResponse struct {
 	ExternalDestinationID string `json:"external_destination_id"`
 	SocialDeliveryID      string `json:"social_delivery_id"`
 	Status                string `json:"status"`
+	Phase                 string `json:"phase,omitempty"`
+	Attempt               int    `json:"attempt,omitempty"`
+	NextRetryAt           string `json:"next_retry_at,omitempty"`
+	LastErrorCode         string `json:"last_error_code,omitempty"`
+	LastErrorMessage      string `json:"last_error_message,omitempty"`
+	RetryFrom             string `json:"retry_from,omitempty"`
 	PlatformMediaID       string `json:"platform_media_id,omitempty"`
 	PlatformURL           string `json:"platform_url,omitempty"`
 }

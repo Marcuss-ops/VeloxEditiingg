@@ -87,7 +87,7 @@ func TestGetJob_ListDeliveriesFailure_Returns500(t *testing.T) {
 
 func TestGetJob_GetDestinationFailure_Returns500(t *testing.T) {
 	mock := &failingStore{
-		listJobDeliveriesResult: []store.JobDelivery{{DeliveryID: "d-1", DestinationID: "dest-1"}},
+		listJobDeliveriesResult:   []store.JobDelivery{{DeliveryID: "d-1", DestinationID: "dest-1"}},
 		getDeliveryDestinationErr: errors.New("db: destination lookup failed"),
 	}
 	r := newFailingRouter(mock)
@@ -120,7 +120,7 @@ func TestListJobDeliveries_ListDeliveriesFailure_Returns500(t *testing.T) {
 
 func TestListJobDeliveries_GetDestinationFailure_Returns500(t *testing.T) {
 	mock := &failingStore{
-		listJobDeliveriesResult: []store.JobDelivery{{DeliveryID: "d-1", DestinationID: "dest-1"}},
+		listJobDeliveriesResult:   []store.JobDelivery{{DeliveryID: "d-1", DestinationID: "dest-1"}},
 		getDeliveryDestinationErr: errors.New("db: destination lookup failed"),
 	}
 	r := newFailingRouter(mock)

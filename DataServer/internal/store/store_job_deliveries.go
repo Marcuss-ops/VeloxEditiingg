@@ -57,7 +57,10 @@ func (s *SQLiteStore) ListJobDeliveriesByJob(jobID string) ([]JobDelivery, error
 		        jd.status,
 		        COALESCE(jd.idempotency_key,''), COALESCE(jd.remote_id,''),
 		        COALESCE(jd.remote_url,''),
-		        jd.created_at, jd.updated_at
+		        jd.created_at, jd.updated_at,
+		        COALESCE(jd.next_attempt_at,''), jd.attempt_count,
+		        COALESCE(jd.last_error_code,''), COALESCE(jd.last_error_message,''),
+		        jd.max_attempts, COALESCE(jd.completed_at,'')
 		 FROM job_deliveries jd
 		 JOIN artifacts a ON a.id = jd.artifact_id
 		 WHERE a.job_id = ?
@@ -71,7 +74,9 @@ func (s *SQLiteStore) ListJobDeliveriesByJob(jobID string) ([]JobDelivery, error
 		var jd JobDelivery
 		if err := rows.Scan(&jd.DeliveryID, &jd.ArtifactID, &jd.DestinationID,
 			&jd.Status, &jd.IdempotencyKey, &jd.RemoteID,
-			&jd.RemoteURL, &jd.CreatedAt, &jd.UpdatedAt); err != nil {
+			&jd.RemoteURL, &jd.CreatedAt, &jd.UpdatedAt,
+			&jd.NextAttemptAt, &jd.AttemptCount, &jd.LastError,
+			&jd.LastErrorMessage, &jd.MaxAttempts, &jd.CompletedAt); err != nil {
 			continue
 		}
 		out = append(out, jd)
@@ -103,4 +108,46 @@ func (s *SQLiteStore) GetJobDelivery(ctx context.Context, deliveryID string) (*J
 	jd.RemoteID = remoteID
 	jd.RemoteURL = remoteURL
 	return &jd, nil
+}
+
+func (s *SQLiteStore) ListDeliveryReconciliationCandidates(ctx context.Context, limit int) ([]JobDelivery, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT delivery_id, artifact_id, destination_id, status,
+		       COALESCE(remote_id,''), COALESCE(remote_url,''),
+		       created_at, updated_at
+		FROM job_deliveries
+		WHERE COALESCE(remote_id,'') <> ''
+		  AND status IN ('RUNNING','RETRY_WAIT','SUCCEEDED')
+		  AND updated_at >= datetime('now','-15 minutes')
+		ORDER BY updated_at ASC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []JobDelivery
+	for rows.Next() {
+		var d JobDelivery
+		if err := rows.Scan(&d.DeliveryID, &d.ArtifactID, &d.DestinationID, &d.Status, &d.RemoteID, &d.RemoteURL, &d.CreatedAt, &d.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) ApplyReconciledDelivery(ctx context.Context, deliveryID, status, remoteID, remoteURL, errorCode, errorMessage string) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE job_deliveries
+		SET status = ?, remote_id = CASE WHEN ? <> '' THEN ? ELSE remote_id END,
+		    remote_url = CASE WHEN ? <> '' THEN ? ELSE remote_url END,
+		    last_error_code = CASE WHEN ? <> '' THEN ? ELSE last_error_code END,
+		    last_error_message = CASE WHEN ? <> '' THEN ? ELSE last_error_message END,
+		    updated_at = ?
+		WHERE delivery_id = ?`, status, remoteID, remoteID, remoteURL, remoteURL,
+		errorCode, errorCode, errorMessage, errorMessage, now, deliveryID)
+	return err
 }

@@ -19,9 +19,11 @@ package deliveries
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"velox-server/internal/credentials"
+	"velox-server/internal/publicationstate"
 	"velox-server/internal/store"
 )
 
@@ -166,6 +168,49 @@ type CredentialScopeProvider interface {
 	RequiredCredentialScopes() []string
 }
 
+// PublicationPhaseContext is the only input a resumable provider receives for
+// one publication phase. RemoteID is populated for every phase after media
+// creation; providers must use SideEffectKey as their idempotency boundary.
+type PublicationPhaseContext struct {
+	Artifact        *store.Artifact
+	Destination     *Destination
+	CredentialLease *credentials.AccessLease
+	PublicationID   string
+	DeliveryID      string
+	RemoteID        string
+	RemoteURL       string
+	SideEffectKey   string
+}
+
+// PublicationPhaseExecutor is the resumable provider contract. A provider
+// may support only the phases it can execute independently; unsupported
+// phases are skipped by the runner. The legacy Deliver contract remains
+// available during migration and is explicitly non-resumable.
+type PublicationPhaseExecutor interface {
+	ExecutePhase(context.Context, publicationstate.State, *PublicationPhaseContext) (*Result, error)
+	Capabilities() map[publicationstate.State]bool
+}
+
+// legacyPublicationPhaseExecutor is the migration adapter for providers that
+// still expose one monolithic Deliver call. It deliberately advertises only
+// UPLOAD_MEDIA and remains non-resumable; the durable checkpoint still records
+// the remote identity as soon as that call returns.
+type legacyPublicationPhaseExecutor struct{ provider Provider }
+
+func (l legacyPublicationPhaseExecutor) Capabilities() map[publicationstate.State]bool {
+	return map[publicationstate.State]bool{publicationstate.Uploading: true}
+}
+
+func (l legacyPublicationPhaseExecutor) ExecutePhase(ctx context.Context, phase publicationstate.State, input *PublicationPhaseContext) (*Result, error) {
+	if phase != publicationstate.Uploading {
+		return nil, fmt.Errorf("%w: legacy provider cannot execute %s", ErrProviderPermanent, phase)
+	}
+	if credentialProvider, ok := l.provider.(CredentialLeaseProvider); ok {
+		return credentialProvider.DeliverWithCredential(ctx, input.Artifact, input.Destination, input.DeliveryID, input.SideEffectKey, input.CredentialLease)
+	}
+	return l.provider.Deliver(ctx, input.Artifact, input.Destination, input.DeliveryID, input.SideEffectKey)
+}
+
 // Destination is the typed view of a delivery_destinations row.
 //
 // Opaque-mode (Residuo 2 + Residuo 4 + Residuo 5 of the YouTube→Social
@@ -201,9 +246,17 @@ type Destination struct {
 // JobViewAssembler can surface them on the legacy view.
 type Result struct {
 	Success      bool
+	Status       string
 	RemoteID     string
 	RemoteURL    string
 	ProviderMeta map[string]interface{}
+}
+
+// DeliveryReconciler is optional and is implemented by asynchronous
+// providers. It lets DeliveryRunner repair a lost callback by polling the
+// provider's authoritative delivery record.
+type DeliveryReconciler interface {
+	Reconcile(ctx context.Context, deliveryID, remoteID string) (*Result, error)
 }
 
 // ── Registry ─────────────────────────────────────────────────────────────────
@@ -211,12 +264,13 @@ type Result struct {
 // Registry is the in-process lookup of providers keyed by canonical name.
 // The runner resolves destinations through this map.
 type Registry struct {
-	providers map[string]Provider
+	providers      map[string]Provider
+	phaseExecutors map[string]PublicationPhaseExecutor
 }
 
 // NewRegistry builds an empty registry. Use Register to add providers.
 func NewRegistry() *Registry {
-	return &Registry{providers: make(map[string]Provider)}
+	return &Registry{providers: make(map[string]Provider), phaseExecutors: make(map[string]PublicationPhaseExecutor)}
 }
 
 // Register adds a provider under its Name() into the registry. Re-registration
@@ -226,6 +280,59 @@ func (r *Registry) Register(p Provider) {
 		return
 	}
 	r.providers[p.Name()] = p
+	if executor, ok := p.(PublicationPhaseExecutor); ok {
+		r.phaseExecutors[p.Name()] = executor
+	}
+}
+
+// RegisterPhaseExecutor associates the resumable contract with a provider
+// without forcing a provider implementation to change its legacy adapter in
+// one release.
+func (r *Registry) RegisterPhaseExecutor(provider string, executor PublicationPhaseExecutor) {
+	if r == nil || executor == nil || provider == "" {
+		return
+	}
+	if r.phaseExecutors == nil {
+		r.phaseExecutors = make(map[string]PublicationPhaseExecutor)
+	}
+	r.phaseExecutors[provider] = executor
+}
+
+// RegisterLegacyPhaseProvider makes the migration boundary explicit at
+// bootstrap. It is intentionally not used by Register, so unit and new
+// providers cannot silently be treated as resumable.
+func (r *Registry) RegisterLegacyPhaseProvider(provider Provider) {
+	if r == nil || provider == nil {
+		return
+	}
+	if r.phaseExecutors == nil {
+		r.phaseExecutors = make(map[string]PublicationPhaseExecutor)
+	}
+	r.phaseExecutors[provider.Name()] = legacyPublicationPhaseExecutor{provider: provider}
+}
+
+func (r *Registry) ResolvePhaseExecutor(provider string) (PublicationPhaseExecutor, bool) {
+	if r == nil {
+		return nil, false
+	}
+	executor, ok := r.phaseExecutors[provider]
+	return executor, ok
+}
+
+// ValidateCredentialContracts fails closed at bootstrap for providers that
+// declare credential scopes but cannot consume a short-lived lease.
+func (r *Registry) ValidateCredentialContracts() error {
+	if r == nil {
+		return nil
+	}
+	for name, provider := range r.providers {
+		if _, sensitive := provider.(CredentialScopeProvider); sensitive {
+			if _, leaseAware := provider.(CredentialLeaseProvider); !leaseAware {
+				return errors.New("deliveries: provider " + name + " declares credential scopes but not CredentialLeaseProvider")
+			}
+		}
+	}
+	return nil
 }
 
 // Resolve returns the provider for the registered name, or

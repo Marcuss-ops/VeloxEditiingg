@@ -13,6 +13,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"velox-server/internal/config"
+	"velox-server/internal/creatorflow"
 	"velox-server/internal/instaeditauth"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/store"
@@ -65,7 +67,8 @@ func setupIntegrationRouter(t *testing.T) (*gin.Engine, *store.SQLiteStore) {
 	planResolver := &testPlanResolver{db: db.DB()}
 	enq := enqueue.NewEnqueuer(atomic, jobRepo, nil, planResolver)
 
-	svc := NewServiceFromSQLite(db, jobRepo, store.NewSQLiteAssetRepository(db), enq)
+	resolver := creatorflow.NewResolver(&config.Config{}, enq, db)
+	svc := NewServiceFromSQLite(db, jobRepo, store.NewSQLiteAssetRepository(db), enq, resolver)
 	handler := NewHandler(HandlerDeps{
 		Verifier: verifier,
 		Service:  svc,
@@ -128,9 +131,12 @@ func TestInstaEditBFF_EndToEnd(t *testing.T) {
 
 	// 1. Create a job through the BFF.
 	createBody := map[string]any{
-		"project_id": "proj-e2e-01",
+		"contract_version": "velox.job.v1",
+		"idempotency_key":  "instaedit:workspace_45:e2e-01",
+		"project_id":       "proj-e2e-01",
 		"render_spec": map[string]any{
-			"video_name": "E2E Test Video",
+			"video_name":      "E2E Test Video",
+			"script_text":     "E2E render script",
 			"voiceover_paths": []string{"https://example.com/voice.mp3"},
 			"scenes": []map[string]any{
 				{"text": "scene one", "image_link": "https://example.com/img.png"},
@@ -150,8 +156,8 @@ func TestInstaEditBFF_EndToEnd(t *testing.T) {
 	}
 
 	wCreate := doRequest(http.MethodPost, "/api/v1/instaedit/jobs", createBody)
-	if wCreate.Code != http.StatusCreated {
-		t.Fatalf("POST /jobs want 201, got %d: %s", wCreate.Code, wCreate.Body.String())
+	if wCreate.Code != http.StatusAccepted {
+		t.Fatalf("POST /jobs want 202, got %d: %s", wCreate.Code, wCreate.Body.String())
 	}
 	var created jobResponse
 	if err := json.Unmarshal(wCreate.Body.Bytes(), &created); err != nil {
@@ -162,6 +168,26 @@ func TestInstaEditBFF_EndToEnd(t *testing.T) {
 	}
 	if created.WorkspaceID != 45 {
 		t.Fatalf("expected workspace_id 45, got %d", created.WorkspaceID)
+	}
+
+	// 1b. An identical retry converges on the same durable job.
+	wReplay := doRequest(http.MethodPost, "/api/v1/instaedit/jobs", createBody)
+	if wReplay.Code != http.StatusAccepted {
+		t.Fatalf("identical replay want 202, got %d: %s", wReplay.Code, wReplay.Body.String())
+	}
+	var replayed jobResponse
+	if err := json.Unmarshal(wReplay.Body.Bytes(), &replayed); err != nil {
+		t.Fatalf("decode replay response: %v", err)
+	}
+	if replayed.ID != created.ID || !replayed.Duplicate {
+		t.Fatalf("replay did not converge: created=%+v replay=%+v", created, replayed)
+	}
+
+	// 1c. Reusing the key for a different canonical payload is a conflict.
+	createBody["render_spec"].(map[string]any)["script_text"] = "different payload"
+	wConflict := doRequest(http.MethodPost, "/api/v1/instaedit/jobs", createBody)
+	if wConflict.Code != http.StatusConflict {
+		t.Fatalf("conflicting replay want 409, got %d: %s", wConflict.Code, wConflict.Body.String())
 	}
 
 	// 2. Retrieve the job.

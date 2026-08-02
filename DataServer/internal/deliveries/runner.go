@@ -167,6 +167,9 @@ func (r *DeliveryRunner) Stop() {
 // processing immediately — the claim batch is capped at Concurrency so
 // no row sits idle in memory with a ticking lease and no heartbeat.
 func (r *DeliveryRunner) tick(ctx context.Context) error {
+	if err := r.reconcileRecent(ctx); err != nil {
+		log.Printf("[DELIVERY] reconciliation sweep: %v", err)
+	}
 	batch := r.cfg.ClaimBatch
 	if r.cfg.Concurrency > 0 && batch > r.cfg.Concurrency {
 		batch = r.cfg.Concurrency

@@ -15,7 +15,7 @@ import (
 	"velox-server/internal/handlers/server/darkeditor"
 	instaedithandler "velox-server/internal/handlers/server/instaedit"
 	"velox-server/internal/handlers/server/pipeline"
-	scripthandlers	"velox-server/internal/handlers/server/script"
+	scripthandlers "velox-server/internal/handlers/server/script"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/store"
 )
@@ -37,6 +37,11 @@ import (
 //     dependency is nil: the function returns an error so the master
 //     refuses to start in a misconfigured state.
 func registerInstaEditRoutes(r *gin.Engine, deps InstaEditRouteDeps) error {
+	if deps.Service != nil && deps.WebhookSecret != "" {
+		instaedithandler.NewHandler(instaedithandler.HandlerDeps{
+			Service: deps.Service, WebhookSecret: deps.WebhookSecret,
+		}).RegisterInternalCallbackRoute(r)
+	}
 	if deps.Verifier == nil {
 		log.Printf("[ROUTES] InstaEdit BFF routes skipped: verifier=nil (INSTAEDIT_CONTROL_JWT_SECRET not configured)")
 		return nil
@@ -48,9 +53,10 @@ func registerInstaEditRoutes(r *gin.Engine, deps InstaEditRouteDeps) error {
 		return fmt.Errorf("InstaEdit BFF routes enabled but dark editor handler is nil")
 	}
 	instaedithandler.NewHandler(instaedithandler.HandlerDeps{
-		Verifier:    deps.Verifier,
-		Service:     deps.Service,
-		DarkHandler: deps.DarkHandler,
+		Verifier:      deps.Verifier,
+		Service:       deps.Service,
+		DarkHandler:   deps.DarkHandler,
+		WebhookSecret: deps.WebhookSecret,
 	}).RegisterRoutes(r)
 	return nil
 }
@@ -255,4 +261,3 @@ func registerFleetOperationsRoutes(r *gin.Engine, auth gin.HandlerFunc, deps Fle
 	adminOps.GET("/:operation_id", deps.Handler.GetAdminOperation())
 	log.Printf("[ROUTES] Fleet operations audit routes mounted under /api/v1/admin/operations")
 }
-

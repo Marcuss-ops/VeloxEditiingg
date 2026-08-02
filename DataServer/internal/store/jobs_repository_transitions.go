@@ -265,6 +265,26 @@ func (b *baseJobRepository) Cancel(ctx context.Context, id, reason string, revis
 
 	_ = p.InsertHistoryTx(ctx, tx, id, "CANCELLED", "" /* workerID */, "Cancelled: "+reason)
 	_ = p.InsertEventTx(ctx, tx, id, "job_cancelled", map[string]interface{}{"reason": reason})
+	// Stop local deliveries that have not created a remote object yet. A
+	// delivery with a remote_id is deliberately left in place: cancelling
+	// Velox cannot delete an object already created by InstaEdit, so the
+	// runner keeps the row for reconciliation and records the request.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE job_deliveries
+		SET status = 'CANCELLED', updated_at = `+p.Placeholder(1)+`, completed_at = `+p.Placeholder(2)+`
+		WHERE artifact_id IN (SELECT id FROM artifacts WHERE job_id = `+p.Placeholder(3)+`)
+		  AND COALESCE(remote_id, '') = ''
+		  AND status IN ('PENDING', 'CLAIMED', 'RETRY_WAIT', 'RUNNING')`, now, now, id); err != nil {
+		return fmt.Errorf("cancel deliveries: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE job_deliveries
+		SET last_error_code = 'CANCEL_REQUESTED', updated_at = `+p.Placeholder(1)+`
+		WHERE artifact_id IN (SELECT id FROM artifacts WHERE job_id = `+p.Placeholder(2)+`)
+		  AND COALESCE(remote_id, '') <> ''
+		  AND status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED')`, now, id); err != nil {
+		return fmt.Errorf("mark remote deliveries cancel requested: %w", err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("cancel commit: %w", err)
