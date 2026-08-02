@@ -256,10 +256,16 @@ func (s *ChunkedUploadService) ReceiveChunked(ctx context.Context, uploadID stri
 			return nil, fmt.Errorf("artifacts: ReceiveChunked: missing chunk %d for upload=%s", i, uploadID)
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(session.TemporaryStorageKey), 0o755); err != nil {
+	// Assemble into a distinct file. Receive writes the verified stream to
+	// session.TemporaryStorageKey; using that same path as the reader would
+	// truncate the input before io.Copy reads it, producing a zero-byte
+	// artifact and a SHA-256 of the empty string.
+	assemblyPath := session.TemporaryStorageKey + ".assembled"
+	if err := os.MkdirAll(filepath.Dir(assemblyPath), 0o755); err != nil {
 		return nil, fmt.Errorf("%w: mkdir assembly: %v", ErrBlobWriteFailed, err)
 	}
-	out, err := os.OpenFile(filepath.Clean(session.TemporaryStorageKey), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	defer os.Remove(assemblyPath)
+	out, err := os.OpenFile(filepath.Clean(assemblyPath), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("%w: create assembly: %v", ErrBlobWriteFailed, err)
 	}
@@ -283,7 +289,7 @@ func (s *ChunkedUploadService) ReceiveChunked(ctx context.Context, uploadID stri
 	if err := out.Close(); err != nil {
 		return nil, fmt.Errorf("%w: close assembly: %v", ErrBlobWriteFailed, err)
 	}
-	assembled, err := os.Open(filepath.Clean(session.TemporaryStorageKey))
+	assembled, err := os.Open(filepath.Clean(assemblyPath))
 	if err != nil {
 		return nil, fmt.Errorf("artifacts: ReceiveChunked: open assembled: %w", err)
 	}
@@ -326,11 +332,15 @@ func (s *ChunkedUploadService) CompleteChunked(ctx context.Context, cmd ChunkedC
 		}
 	}
 
-	// Assemble chunks into the temporary_storage_key.
-	assemblyPath := session.TemporaryStorageKey
+	// Assemble into a distinct file. Receive writes the verified stream to
+	// session.TemporaryStorageKey; using that same path as the reader would
+	// truncate the input before io.Copy reads it, producing a zero-byte
+	// artifact and a SHA-256 of the empty string.
+	assemblyPath := session.TemporaryStorageKey + ".assembled"
 	if err := os.MkdirAll(filepath.Dir(assemblyPath), 0o755); err != nil {
 		return nil, fmt.Errorf("%w: mkdir assembly: %v", ErrBlobWriteFailed, err)
 	}
+	defer os.Remove(assemblyPath)
 
 	out, err := os.OpenFile(filepath.Clean(assemblyPath), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
