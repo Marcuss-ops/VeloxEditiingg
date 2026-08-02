@@ -211,3 +211,14 @@ DataServer/api-docs-gen
 # so the directory itself stays tracked even when empty.
 tests/smoke/full_payload/evidence/*
 !tests/smoke/full_payload/evidence/.gitkeep
+
+# ── Repo-hygiene cleanup (2026-08-02) ────────────────────────────────
+# Artifacts accidentally committed at the repo root / under dist/: empty
+# sentinel files (Pipeline, Pipeline\, bash-n, end_scenario), a one-shot
+# pilot trigger, and test-run artifacts. They were removed from tracking;
+# the patterns keep them out of future commits.
+Pipeline
+bash-n
+end_scenario
+.finalize-requested-split-trigger
+dist/
