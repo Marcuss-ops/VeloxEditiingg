@@ -69,7 +69,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 	} else {
 		dest.DeliveryMetadataJSON = metadata
 	}
-	credentialRef, refErr := credentials.ReferenceFromJSON(dest.DeliveryMetadataJSON)
+	credentialRef, refErr := resolveCredentialReference(dest.DeliveryMetadataJSON, dest.ConfigurationJSON)
 	if refErr != nil {
 		if markErr := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "CREDENTIAL_REF_INVALID", refErr.Error()); markErr != nil {
 			log.Printf("[DELIVERY] mark credential reference failure for %s: %v", lease.DeliveryID, markErr)
@@ -229,6 +229,20 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 		}
 		return nil
 	}
+}
+
+// resolveCredentialReference keeps credential material out of the job
+// payload. The BFF carries only the opaque external destination ID; the
+// destination catalog is therefore the authoritative fallback when a
+// delivery plan has no per-publication credential_ref override. An explicit
+// metadata value still wins, and an invalid explicit value remains a hard
+// error rather than silently falling back to a different credential.
+func resolveCredentialReference(metadataJSON, configurationJSON string) (string, error) {
+	ref, err := credentials.ReferenceFromJSON(metadataJSON)
+	if err != nil || ref != "" {
+		return ref, err
+	}
+	return credentials.ReferenceFromJSON(configurationJSON)
 }
 
 func (r *DeliveryRunner) issueCredentialLease(ctx context.Context, provider Provider, destination *Destination, lease store.DeliveryLease) (*credentials.AccessLease, error) {
