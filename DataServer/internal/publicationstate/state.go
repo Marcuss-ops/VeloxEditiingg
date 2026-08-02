@@ -32,7 +32,7 @@ const (
 )
 
 var (
-	ErrInvalidTransition = errors.New("publicationstate: invalid transition")
+	ErrInvalidTransition  = errors.New("publicationstate: invalid transition")
 	ErrInvalidPublication = errors.New("publicationstate: invalid publication")
 )
 
@@ -51,8 +51,8 @@ var transitions = map[State]map[State]struct{}{
 	// compatibility with callers that only have a state value. Snapshot
 	// transitions below enforce the persisted RetryFrom checkpoint and do not
 	// allow a retry to jump back to UPLOADING accidentally.
-	RetryWait:             {WaitingForRender: {}, ArtifactBound: {}, Uploading: {}, MetadataApplying: {}, LocalizationsApplying: {}, Verifying: {}, Cancelled: {}, Failed: {}},
-	Partial:               {LocalizationsApplying: {}, MetadataApplying: {}, Verifying: {}, Published: {}, RetryWait: {}, Cancelled: {}},
+	RetryWait: {WaitingForRender: {}, ArtifactBound: {}, Uploading: {}, MetadataApplying: {}, LocalizationsApplying: {}, Verifying: {}, Cancelled: {}, Failed: {}},
+	Partial:   {LocalizationsApplying: {}, MetadataApplying: {}, Verifying: {}, Published: {}, RetryWait: {}, Cancelled: {}},
 }
 
 func ValidateTransition(from, to State) error {
@@ -87,9 +87,9 @@ func SideEffectKey(publicationID string, phase State, operation string) string {
 // of LOCALIZATIONS_APPLYING must never restart UPLOADING.
 type Snapshot struct {
 	PublicationID string
-	State        State
-	RetryFrom    State
-	Revision     uint64
+	State         State
+	RetryFrom     State
+	Revision      uint64
 }
 
 func NewSnapshot(publicationID string) (Snapshot, error) {
@@ -150,7 +150,10 @@ func ResumeAfterFailure(state State) State {
 	if state == RetryWait {
 		return Uploading // legacy fallback; Snapshot never loses RetryFrom
 	}
-	return retryCheckpoint(state)
+	if checkpoint := retryCheckpoint(state); checkpoint != "" {
+		return checkpoint
+	}
+	return state
 }
 
 func (s Snapshot) withState(state, retryFrom State) Snapshot {

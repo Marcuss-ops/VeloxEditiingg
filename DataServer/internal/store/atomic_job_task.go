@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -167,6 +168,9 @@ func (c *AtomicJobTaskCreator) CreateJobWithTaskTx(
 	if err := insertDeliveryPlanTx(ctx, tx, job.ID, deliveryPlan, now); err != nil {
 		return fmt.Errorf("atomic creator delivery plan: %w", err)
 	}
+	if err := insertPublicationStatesTx(ctx, tx, job.ID, taskSpec.PublicationSpecs, now); err != nil {
+		return fmt.Errorf("atomic creator publication state: %w", err)
+	}
 
 	// 3. Insert Task (exactly one per job).
 	taskID := uuid.NewString()
@@ -215,6 +219,28 @@ func (c *AtomicJobTaskCreator) CreateJobWithTaskTx(
 		}
 	}
 
+	return nil
+}
+
+// insertPublicationStatesTx makes publication intents durable at the same
+// enqueue boundary as Job, TaskSpec and delivery plans. A later retry can
+// therefore recover the phase checkpoint even if the process dies before the
+// first delivery attempt starts.
+func insertPublicationStatesTx(ctx context.Context, tx *sql.Tx, jobID string, specs []map[string]interface{}, now string) error {
+	for index, spec := range specs {
+		publicationID, ok := spec["publication_id"].(string)
+		publicationID = strings.TrimSpace(publicationID)
+		if !ok || publicationID == "" {
+			return fmt.Errorf("publication_specs.%d.publication_id is required", index)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO publication_states
+			(publication_id, job_id, state, revision, created_at, updated_at)
+			VALUES (?, ?, 'PENDING', 0, ?, ?)
+			ON CONFLICT(publication_id) DO NOTHING`, publicationID, jobID, now, now); err != nil {
+			return fmt.Errorf("publication %q: %w", publicationID, err)
+		}
+	}
 	return nil
 }
 
