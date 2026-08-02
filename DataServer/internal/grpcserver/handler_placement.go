@@ -1,0 +1,231 @@
+// Package grpcserver / handler_placement.go
+//
+// Push-mode placement pipeline (PR #4): worker notification loop, the
+// check→select→claim→send TaskOffer flow with pre/post-claim fencing,
+// and placement rejection recording. Extracted from handler_workers.go
+// (split per responsabilità) so heartbeat lifecycle and task placement
+// stay in separate files.
+package grpcserver
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"time"
+
+	"velox-server/internal/placement"
+	"velox-server/internal/taskattempts"
+	"velox-server/internal/taskgraph"
+	"velox-shared/controltransport"
+	pb "velox-shared/controltransport/pb"
+
+	"github.com/google/uuid"
+	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+// notifyTasksAvailable checks for READY tasks and sends TaskOffers (push mode, PR #4).
+func (h *Handler) notifyTasksAvailable(ctx context.Context, workerID string, trigger <-chan struct{}, done <-chan struct{}) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			return
+		case <-trigger:
+		case <-ticker.C:
+		}
+
+		if h.config.PushMode {
+			h.sendPushTaskOffer(ctx, workerID)
+		}
+	}
+}
+
+// sendPushTaskOffer runs the placement pipeline: snapshot the worker,
+// list READY candidates, select the best match via the placement
+// matcher, atomically claim that specific task, and send a TaskOffer.
+// Fencing is applied before and after the claim so a stale session or
+// capability bump tears the offer down cleanly.
+func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
+	sess := h.getSession(workerID)
+	if sess == nil {
+		return
+	}
+
+	// Serialize the check+select+claim+send flow to prevent TOCTOU races.
+	sess.claimMu.Lock()
+	defer sess.claimMu.Unlock()
+
+	// If a previous offer is still pending, skip.
+	if sess.pendingTaskOffer != nil {
+		return
+	}
+
+	snapshot := sess.placementSnapshot(workerID)
+
+	candidates, err := h.taskRepo.ListReadyCandidates(ctx, 64)
+	if err != nil {
+		log.Printf("[PLACEMENT] ListReadyCandidates failed worker=%s: %v", workerID, err)
+		return
+	}
+
+	result := h.placementMatcher.Select(snapshot, candidates)
+
+	if result.Candidate == nil {
+		h.recordPlacementRejections(snapshot, result.Rejections)
+		return
+	}
+
+	// ── Fencing pre-claim ────────────────────────────────────────────
+	// After building the snapshot and selecting a candidate, verify
+	// the session hasn't been replaced by a reconnect. If it has,
+	// the chosen candidate belongs to a stale view of the worker.
+	current := h.getSession(workerID)
+	if current != sess || current.sessionID != snapshot.SessionID {
+		return
+	}
+
+	candidate := result.Candidate
+	leaseID := fmt.Sprintf("l-%s-%s", workerID, uuid.NewString()[:8])
+
+	tws, attempt, err := h.taskRepo.ClaimTaskForWorkerAtomic(ctx, taskgraph.ClaimTaskForWorkerCommand{
+		TaskID:               candidate.TaskID,
+		ExpectedTaskRevision: candidate.Revision,
+		WorkerID:             workerID,
+		SessionID:            snapshot.SessionID,
+		WorkerSnapshotID:     sess.workerSnapshotID,
+		LeaseID:              leaseID,
+		ExecutorID:           candidate.Executor.ID,
+		ExecutorVersion:      candidate.Executor.Version,
+		CapabilityRevision:   snapshot.CapabilityRevision,
+	})
+
+	if err != nil {
+		if errors.Is(err, taskgraph.ErrTransitionConflict) {
+			// The task was claimed by a concurrent dispatcher between
+			// ListReadyCandidates and our Claim — harmless, retry on
+			// the next tick.
+			return
+		}
+		log.Printf("[PLACEMENT] ClaimTaskForWorkerAtomic failed worker=%s task=%s: %v", workerID, candidate.TaskID, err)
+		return
+	}
+	if tws == nil || tws.ID == "" || attempt == nil {
+		return
+	}
+
+	// ── Fencing post-claim ───────────────────────────────────────────
+	// After the claim has been committed, verify the session is still
+	// the current one AND the capability revision hasn't changed. If
+	// the worker reconnected between the claim and this check, release
+	// the lease immediately so it can be re-dispatched.
+	current = h.getSession(workerID)
+	if current != sess ||
+		current.sessionID != snapshot.SessionID ||
+		current.capabilityRevision.Load() != snapshot.CapabilityRevision {
+
+		if releaseErr := h.taskRepo.ReleaseLease(ctx, tws.ID, workerID, leaseID); releaseErr != nil {
+			log.Printf("[PLACEMENT] ReleaseLease after fencing failure worker=%s task=%s: %v", workerID, tws.ID, releaseErr)
+		}
+		return
+	}
+
+	h.sendClaimedTaskOffer(ctx, sess, tws, attempt, leaseID)
+}
+
+// sendClaimedTaskOffer builds the protobuf TaskOffer envelope from a
+// successfully claimed task+attempt and sends it via the session's
+// sendCh. Extracted from sendPushTaskOffer to keep the placement
+// pipeline readable. On send failure the claim is released.
+func (h *Handler) sendClaimedTaskOffer(
+	ctx context.Context,
+	sess *workerSession,
+	tws *taskgraph.TaskWithSpec,
+	attempt *taskattempts.TaskAttempt,
+	leaseID string,
+) {
+	workerPayload, projectionErr := projectPayloadForWorker(tws.SpecPayload, tws.ExecutorVersion)
+	if projectionErr != nil {
+		log.Printf("[PLACEMENT] Failed to project payload for worker %s task %s: %v", sess.workerID, tws.ID, projectionErr)
+		if releaseErr := h.taskRepo.ReleaseLease(ctx, tws.ID, sess.workerID, leaseID); releaseErr != nil {
+			log.Printf("[PLACEMENT] Failed to release claim for task %s after payload projection failure: %v", tws.ID, releaseErr)
+		}
+		return
+	}
+
+	var taskSpecPB *structpb.Struct
+	if workerPayload != nil {
+		var err error
+		taskSpecPB, err = structpb.NewStruct(workerPayload)
+		if err != nil {
+			log.Printf("[PLACEMENT] Failed to encode TaskOffer payload for worker %s task %s: %v", sess.workerID, tws.ID, err)
+			if releaseErr := h.taskRepo.ReleaseLease(ctx, tws.ID, sess.workerID, leaseID); releaseErr != nil {
+				log.Printf("[PLACEMENT] Failed to release claim for task %s after TaskOffer payload encoding failure: %v", tws.ID, releaseErr)
+			}
+			return
+		}
+	}
+
+	leaseDeadline := time.Now().UTC().Add(30 * time.Minute)
+	jobRevision := int32(0)
+	if h.jobsRepo != nil {
+		job, err := h.jobsRepo.Get(ctx, tws.JobID)
+		if err != nil {
+			log.Printf("[PLACEMENT] Failed to load job revision for task %s job %s: %v", tws.ID, tws.JobID, err)
+		} else if job != nil {
+			jobRevision = int32(job.Revision)
+		}
+	}
+
+	env := &pb.MasterToWorkerEnvelope{
+		MessageId:       fmt.Sprintf("taskoffer-%s-%s", sess.workerID, tws.ID),
+		WorkerId:        sess.workerID,
+		SentAt:          timestamppb.Now(),
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+		Msg: &pb.MasterToWorkerEnvelope_TaskOffer{
+			TaskOffer: &pb.TaskOffer{
+				TaskId:          tws.ID,
+				JobId:           tws.JobID,
+				AttemptId:       attempt.ID,
+				ExecutorId:      tws.ExecutorID,
+				ExecutorVersion: int32(tws.ExecutorVersion),
+				TaskSpec:        taskSpecPB,
+				LeaseId:         leaseID,
+				LeaseDeadline:   timestamppb.New(leaseDeadline),
+				AttemptNumber:   int32(attempt.AttemptNumber),
+				Revision:        int32(tws.Revision),
+				JobRevision:     jobRevision,
+			},
+		},
+	}
+
+	if !safeSend(sess.sendCh, &outboundMessage{Envelope: env}) {
+		log.Printf("[PLACEMENT] sendCh full/closed for TaskOffer to worker %s — releasing claim for task %s", sess.workerID, tws.ID)
+		if releaseErr := h.taskRepo.ReleaseLease(ctx, tws.ID, sess.workerID, leaseID); releaseErr != nil {
+			log.Printf("[PLACEMENT] Failed to release claim for task %s after send failure: %v", tws.ID, releaseErr)
+		}
+		return
+	}
+
+	sess.pendingTaskOffer = tws
+	log.Printf("[PLACEMENT] TaskOffer queued for worker %s: task=%s job=%s attempt=%s lease=%s executor=%s@%d rev=%d",
+		sess.workerID, tws.ID, tws.JobID, attempt.ID, leaseID, tws.ExecutorID, tws.ExecutorVersion, tws.Revision)
+}
+
+// recordPlacementRejections logs the rejection reasons produced by the
+// placement matcher and increments the per-reason Prometheus counter
+// via the PlacementRejectionSink (when wired).
+func (h *Handler) recordPlacementRejections(snapshot placement.WorkerSnapshot, rejections []placement.Rejection) {
+	for _, r := range rejections {
+		log.Printf("[PLACEMENT] Rejection worker=%s task=%s code=%s detail=%s",
+			snapshot.WorkerID, r.TaskID, r.Code, r.Detail)
+		if h.placementRejectionSink != nil {
+			h.placementRejectionSink.RecordPlacementRejection(string(r.Code))
+		}
+	}
+}

@@ -91,3 +91,27 @@ func capabilitiesBoolMap(raw map[string]interface{}) map[string]bool {
 	}
 	return result
 }
+
+// extractSupportedJobTypes parses a supported_job_types value from a
+// capabilities map extracted from protobuf Struct. structpb normalises
+// Go slices to []interface{}, so both Worker→Master paths (Hello
+// capabilities and heartbeat Extra) share this helper.
+func extractSupportedJobTypes(capsMap map[string]interface{}) []string {
+	sjt, ok := capsMap["supported_job_types"]
+	if !ok {
+		return nil
+	}
+	switch list := sjt.(type) {
+	case []interface{}:
+		types := make([]string, 0, len(list))
+		for _, item := range list {
+			if s, ok := item.(string); ok {
+				types = append(types, s)
+			}
+		}
+		return types
+	case []string:
+		return list
+	}
+	return nil
+}
