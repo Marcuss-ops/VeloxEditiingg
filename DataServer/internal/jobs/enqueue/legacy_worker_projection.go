@@ -28,5 +28,10 @@ func ProjectLegacyWorkerPayload(canonical map[string]interface{}) (map[string]in
 
 	attachLegacySceneClipTimeline(legacy)
 	legacy["payload_contract_version"] = contract.PayloadContractVersionLegacy
+	// The worker admission adapter treats the string version as the
+	// legacy render-plan discriminator. A canonical payload may carry
+	// version="v2"; forwarding that value on the legacy wire path makes
+	// a v1-capable worker reject an otherwise valid compatibility payload.
+	legacy["version"] = "v1"
 	return legacy, nil
 }

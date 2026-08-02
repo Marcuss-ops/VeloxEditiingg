@@ -30,6 +30,9 @@ func TestProjectLegacyWorkerPayload_ProjectsOnlyWorkerCopy(t *testing.T) {
 	if got := legacy["payload_contract_version"]; got != contract.PayloadContractVersionLegacy {
 		t.Fatalf("legacy payload_contract_version = %v, want %d", got, contract.PayloadContractVersionLegacy)
 	}
+	if got := legacy["version"]; got != "v1" {
+		t.Fatalf("legacy version = %v, want v1", got)
+	}
 	if _, ok := legacy["items"]; !ok {
 		t.Fatalf("legacy payload missing items: %#v", legacy)
 	}
