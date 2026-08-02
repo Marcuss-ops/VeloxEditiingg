@@ -79,14 +79,19 @@ func TestFetchBlocksPrivateAndMetadataNetworks(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		host string
+		kind Kind
 	}{
-		{name: "private", host: "private.test"},
-		{name: "metadata", host: "metadata.test"},
-		{name: "loopback_literal", host: "127.0.0.1"},
-		{name: "localhost", host: "localhost"},
+		{name: "private_clip", host: "private.test", kind: KindClip},
+		{name: "metadata_image", host: "metadata.test", kind: KindImage},
+		{name: "loopback_audio", host: "127.0.0.1", kind: KindAudio},
+		{name: "localhost_voiceover", host: "localhost", kind: KindVoiceover},
+		{name: "private_subtitle", host: "private.test", kind: KindSubtitle},
+		{name: "private_manifest", host: "private.test", kind: KindManifest},
+		{name: "private_font", host: "private.test", kind: KindFont},
+		{name: "private_thumbnail", host: "private.test", kind: KindThumbnail},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := fetcher.Fetch(context.Background(), "http://"+tc.host+"/asset", KindImage)
+			_, err := fetcher.Fetch(context.Background(), "http://"+tc.host+"/asset", tc.kind)
 			if CodeOf(err) != ErrPrivateNetwork {
 				t.Fatalf("error code = %s, want %s (err=%v)", CodeOf(err), ErrPrivateNetwork, err)
 			}
@@ -163,6 +168,42 @@ func TestFetchUsesSystemTempWhenPolicyOmitsTempDir(t *testing.T) {
 	defer os.Remove(fetched.Path)
 	if !strings.HasPrefix(filepath.Clean(fetched.Path), filepath.Clean(os.TempDir())+string(filepath.Separator)) {
 		t.Fatalf("download path = %q, want system temp directory", fetched.Path)
+	}
+	if strings.Contains(fetched.SuggestedName, "input") == false || strings.Contains(fetched.SuggestedName, "example.test") {
+		t.Fatalf("suggested name = %q, want system-generated name without URL data", fetched.SuggestedName)
+	}
+}
+
+func TestValidateFileRejectsSymlinkEscapeAndRecordsMetric(t *testing.T) {
+	policy := testPolicy(t)
+	outside := filepath.Join(t.TempDir(), "outside.json")
+	if err := os.WriteFile(outside, []byte(`{"safe":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	symlink := filepath.Join(policy.TempDir, "linked.json")
+	if err := os.Symlink(outside, symlink); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	fetcher := NewFetcher(policy)
+	if _, err := fetcher.ValidateFile(context.Background(), symlink, KindManifest, "application/json"); CodeOf(err) != ErrPathViolation {
+		t.Fatalf("symlink error code = %s, want %s (err=%v)", CodeOf(err), ErrPathViolation, err)
+	}
+	if got := policy.Metrics.Snapshot().Rejections["manifest:INPUT_PATH_VIOLATION"]; got != 1 {
+		t.Fatalf("path rejection metric = %d, want 1", got)
+	}
+}
+
+func TestQuarantineRejectsUncontrolledPath(t *testing.T) {
+	policy := testPolicy(t)
+	suspicious := filepath.Join(t.TempDir(), "outside.bin")
+	if err := os.WriteFile(suspicious, []byte("not controlled"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewFetcher(policy).Quarantine(suspicious, KindImage, ErrMIMEUnsupported, "outside"); CodeOf(err) != ErrPathViolation {
+		t.Fatalf("quarantine error code = %s, want %s (err=%v)", CodeOf(err), ErrPathViolation, err)
+	}
+	if _, err := os.Stat(suspicious); err != nil {
+		t.Fatalf("uncontrolled file was changed: %v", err)
 	}
 }
 

@@ -80,6 +80,16 @@ func (s *AssetService) SecurityMetrics() *inputsecurity.Metrics {
 	return s.security.Metrics()
 }
 
+// SecurityPolicy exposes the single acquisition policy to HTTP upload
+// boundaries so multipart staging uses the same byte and directory controls
+// as remote resolvers.
+func (s *AssetService) SecurityPolicy() inputsecurity.Policy {
+	if s == nil || s.security == nil {
+		return inputsecurity.DefaultPolicy()
+	}
+	return s.security.Policy()
+}
+
 // Get retrieves an asset by ID.
 func (s *AssetService) Get(ctx context.Context, assetID string) (*Asset, error) {
 	if s == nil || s.repo == nil {

@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -140,12 +138,12 @@ func (f *Fetcher) Fetch(ctx context.Context, rawURL string, kind Kind) (*Fetched
 	// partial policy. Validate against that effective policy, otherwise a
 	// valid download created in os.TempDir would fail its own path allowlist.
 	validator := &Fetcher{policy: policy}
-	validation, validationErr := validator.ValidateFile(ctx, tmpPath, kind, resp.Header.Get("Content-Type"))
+	validation, validationErr := validator.validateFile(ctx, tmpPath, kind, resp.Header.Get("Content-Type"))
 	if validationErr != nil {
 		_ = f.quarantineOrRemove(tmpPath, kind, CodeOf(validationErr), validationErr.Error())
 		return nil, f.reject(kind, validationErr, uint64(maxInt64(written)))
 	}
-	return &Fetched{Path: tmpPath, SuggestedName: filenameFromURL(rawURL), MIMEType: validation.MIMEType, ExpectedSize: written, SourceType: "https"}, nil
+	return &Fetched{Path: tmpPath, SuggestedName: generatedName("input", extensionForMIME(validation.MIMEType)), MIMEType: validation.MIMEType, ExpectedSize: written, SourceType: "https"}, nil
 }
 
 func (f *Fetcher) httpClient(policy Policy) *http.Client {
@@ -204,24 +202,6 @@ func (f *Fetcher) quarantineOrRemove(path string, kind Kind, code ErrorCode, rea
 		return err
 	}
 	return nil
-}
-
-func filenameFromURL(raw string) string {
-	parsed, err := urlParse(raw)
-	if err != nil {
-		return ""
-	}
-	base := filepath.Base(parsed.Path)
-	if base == "." || base == "/" || base == "" {
-		return "download"
-	}
-	return filepath.Base(base)
-}
-
-// urlParse is kept tiny so filename extraction cannot accidentally consult
-// the filesystem or execute any client-provided path.
-func urlParse(raw string) (*url.URL, error) {
-	return url.Parse(strings.TrimSpace(raw))
 }
 
 func maxInt64(value int64) int64 {

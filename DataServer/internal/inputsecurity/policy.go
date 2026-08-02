@@ -42,6 +42,7 @@ type IPResolver interface {
 }
 
 func DefaultPolicy() Policy {
+	tempDir := os.TempDir()
 	return Policy{
 		MaxBytes:              256 * 1024 * 1024,
 		MaxRedirects:          5,
@@ -50,6 +51,8 @@ func DefaultPolicy() Policy {
 		ResponseHeaderTimeout: 15 * time.Second,
 		TransferTimeout:       5 * time.Minute,
 		ProbeTimeout:          20 * time.Second,
+		TempDir:               tempDir,
+		QuarantineDir:         filepath.Join(tempDir, "velox-input-quarantine"),
 		Resolver:              net.DefaultResolver,
 		Metrics:               NewMetrics(),
 	}
@@ -77,6 +80,12 @@ func (p Policy) withDefaults() Policy {
 	}
 	if p.ProbeTimeout <= 0 {
 		p.ProbeTimeout = d.ProbeTimeout
+	}
+	if strings.TrimSpace(p.TempDir) == "" {
+		p.TempDir = d.TempDir
+	}
+	if strings.TrimSpace(p.QuarantineDir) == "" {
+		p.QuarantineDir = filepath.Join(p.TempDir, "quarantine")
 	}
 	if p.Resolver == nil {
 		p.Resolver = d.Resolver
@@ -215,8 +224,11 @@ func (p Policy) quarantine(path string, kind Kind, code ErrorCode, reason string
 	if strings.TrimSpace(path) == "" {
 		return nil
 	}
+	if !(&Fetcher{policy: p}).allowedPath(path) {
+		return newError(kind, ErrPathViolation, "suspicious file is outside the controlled input roots", nil)
+	}
 	if strings.TrimSpace(p.QuarantineDir) == "" {
-		return os.Remove(path)
+		return newError(kind, ErrQuarantineFailed, "quarantine directory is not configured", nil)
 	}
 	if err := os.MkdirAll(p.QuarantineDir, 0o700); err != nil {
 		return newError(kind, ErrQuarantineFailed, "cannot create quarantine directory", err)

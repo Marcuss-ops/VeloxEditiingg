@@ -311,7 +311,7 @@ func (h *Handlers) CreatorPush() gin.HandlerFunc {
 }
 
 func creatorPushError(c *gin.Context, status int, code, message string, detail any) {
-	body := gin.H{"ok": false, "error": code, "message": message}
+	body := gin.H{"ok": false, "error": code, "error_code": code, "message": message}
 	if detail != nil {
 		body["details"] = []any{detail}
 	}

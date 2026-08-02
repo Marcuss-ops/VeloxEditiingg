@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 )
@@ -23,6 +24,14 @@ func (f *Fetcher) ValidateFile(ctx context.Context, path string, kind Kind, decl
 	if f == nil {
 		return Validation{}, newError(kind, ErrPathViolation, "input validator is unavailable", nil)
 	}
+	validation, err := f.validateFile(ctx, path, kind, declaredMIME)
+	if err != nil {
+		f.reject(kind, err, 0)
+	}
+	return validation, err
+}
+
+func (f *Fetcher) validateFile(ctx context.Context, path string, kind Kind, declaredMIME string) (Validation, error) {
 	if !f.allowedPath(path) {
 		return Validation{}, newError(kind, ErrPathViolation, "file path is not a system-controlled input path", nil)
 	}
@@ -94,6 +103,17 @@ func (f *Fetcher) allowedPath(path string) bool {
 	}
 	abs, err := filepath.Abs(clean)
 	if err != nil {
+		return false
+	}
+	info, err := os.Lstat(abs)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return false
+	}
+	if resolved != abs {
 		return false
 	}
 	if f.policy.TempDir != "" && withinRoot(abs, f.policy.TempDir) {
@@ -241,8 +261,9 @@ func (f *Fetcher) ffprobe(ctx context.Context, path string, kind Kind) error {
 	// No shell, no user-controlled working directory, no network protocols:
 	// ffprobe receives only a generated local path and a read-only format
 	// inspection request.
-	cmd := exec.CommandContext(probeCtx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-show_entries", "format=duration:stream=codec_type", "-of", "json", path)
+	cmd := exec.CommandContext(probeCtx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-safe", "1", "-max_alloc", "67108864", "-show_entries", "format=duration:stream=codec_type", "-of", "json", path)
 	cmd.Dir = f.policy.TempDir
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "LANG=C", "LC_ALL=C"}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		code := ErrProbeFailed
@@ -259,4 +280,45 @@ func (f *Fetcher) ffprobe(ctx context.Context, path string, kind Kind) error {
 		return newError(kind, ErrMediaCorrupt, "ffprobe returned invalid media metadata", nil)
 	}
 	return nil
+}
+
+var safeMIMEExtension = regexp.MustCompile(`^[a-z0-9]{1,8}$`)
+
+func extensionForMIME(mimeType string) string {
+	mimeType = normalizeMIME(mimeType)
+	var ext string
+	switch mimeType {
+	case "image/jpeg":
+		ext = "jpg"
+	case "image/png":
+		ext = "png"
+	case "image/gif":
+		ext = "gif"
+	case "image/webp":
+		ext = "webp"
+	case "video/mp4":
+		ext = "mp4"
+	case "audio/mpeg":
+		ext = "mp3"
+	case "audio/wav":
+		ext = "wav"
+	case "audio/ogg":
+		ext = "ogg"
+	case "audio/flac":
+		ext = "flac"
+	case "application/json":
+		ext = "json"
+	case "font/ttf":
+		ext = "ttf"
+	case "font/woff":
+		ext = "woff"
+	case "font/woff2":
+		ext = "woff2"
+	default:
+		ext = "bin"
+	}
+	if !safeMIMEExtension.MatchString(ext) {
+		return ".bin"
+	}
+	return "." + ext
 }

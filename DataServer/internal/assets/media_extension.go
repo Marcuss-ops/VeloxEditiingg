@@ -7,19 +7,11 @@ import "strings"
 // the on-disk file extension from the source's suggested name or
 // MIME type before staging the asset bytes.
 
-// extensionFromName returns the canonical on-disk extension for an
-// asset, preferring a name-suffix when available and falling back to a
-// MIME-derived extension for the supported media families.
-func extensionFromName(name, mimeType string) string {
-	name = strings.TrimSpace(name)
-	if name != "" {
-		if idx := strings.LastIndex(name, "."); idx >= 0 {
-			ext := name[idx:]
-			if ext != "" {
-				return ext
-			}
-		}
-	}
+// extensionFromName returns a system-selected extension. The name argument
+// is retained for call-site compatibility, but remote/provider names are
+// untrusted and must never influence a filesystem suffix.
+func extensionFromName(_ string, mimeType string) string {
+	mimeType = strings.ToLower(strings.TrimSpace(mimeType))
 	switch {
 	case strings.HasPrefix(mimeType, "audio/mpeg"):
 		return ".mp3"
