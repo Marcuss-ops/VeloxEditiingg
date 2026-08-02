@@ -20,15 +20,17 @@
 //     RESTRICT — a careless DELETE that would orphan a client's
 //     history is rejected at the DB level. Soft-disable
 //     (is_active=0) is the supported revocation path.
+//
+// Layout of this package:
+//   - m2m_keys.go — types + m2m_api_keys CRUD + row scanning.
+//   - m2m_keys_audit.go — m2m_audit_log append/list.
+//   - m2m_keys_crypto.go — secret generation/hashing/constant-time match.
+//   - m2m_keys_effective.go — per-key effective limits + shared helpers.
 package store
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -68,18 +70,18 @@ type M2MQuotas struct {
 // idempotency_key; the original key is NOT recorded because it can
 // carry client PII (e.g., embedded customer IDs, file paths).
 type M2MAuditEntry struct {
-	ID                  int64
-	ClientID            string
-	IdemKeyHash         string
-	Method              string
-	Path                string
-	StatusCode          int
-	Scope               string
-	SceneCount          int
+	ID                   int64
+	ClientID             string
+	IdemKeyHash          string
+	Method               string
+	Path                 string
+	StatusCode           int
+	Scope                string
+	SceneCount           int
 	TotalDurationSeconds float64
-	IPAddress           string
-	RejectReason        sql.NullString
-	CreatedAt           time.Time
+	IPAddress            string
+	RejectReason         sql.NullString
+	CreatedAt            time.Time
 }
 
 // =====================================================================
@@ -278,253 +280,4 @@ func scanM2MAPIKey(row rowScanner) (*M2MAPIKey, error) {
 		UpdatedAt:      updatedT,
 		LastUsedAt:     lastUsed,
 	}, nil
-}
-
-// =====================================================================
-// Audit log
-// =====================================================================
-
-// AppendM2MAuditLog writes one row. The caller (middleware) supplies
-// the post-handler status_code + reject_reason so the row reflects
-// what the client actually saw. Failures are not propagated — the
-// audit log is best-effort: callers log warnings but do NOT rewind
-// the response.
-func (s *SQLiteStore) AppendM2MAuditLog(ctx context.Context, e M2MAuditEntry) error {
-	if e.Method == "" {
-		e.Method = "POST"
-	}
-	if e.Path == "" {
-		e.Path = "/api/v1/jobs"
-	}
-	if e.Scope == "" {
-		e.Scope = "jobs.submit"
-	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO m2m_audit_log (
-			client_id, idem_key_hash, method, path, status_code, scope,
-			scene_count, total_duration_seconds, ip_address, reject_reason
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`,
-		strings.TrimSpace(e.ClientID),
-		strings.ToLower(strings.TrimSpace(e.IdemKeyHash)),
-		e.Method,
-		e.Path,
-		e.StatusCode,
-		e.Scope,
-		e.SceneCount,
-		e.TotalDurationSeconds,
-		strings.TrimSpace(e.IPAddress),
-		e.RejectReason,
-	)
-	if err != nil {
-		return fmt.Errorf("store: AppendM2MAuditLog: %w", err)
-	}
-	return nil
-}
-
-// ListM2MAuditLog returns latest-first audit entries, optionally
-// filtered by client_id. Limit caps rows returned (0 → 100).
-func (s *SQLiteStore) ListM2MAuditLog(ctx context.Context, clientID string, limit int) ([]M2MAuditEntry, error) {
-	if limit <= 0 || limit > 1000 {
-		limit = 100
-	}
-	query := `
-		SELECT id, client_id, idem_key_hash, method, path, status_code, scope,
-			scene_count, total_duration_seconds, ip_address, reject_reason, created_at
-		FROM m2m_audit_log`
-	args := []any{}
-	if clientID = strings.TrimSpace(clientID); clientID != "" {
-		query += " WHERE client_id = ?"
-		args = append(args, clientID)
-	}
-	query += " ORDER BY id DESC LIMIT ?"
-	args = append(args, limit)
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("store: ListM2MAuditLog: %w", err)
-	}
-	defer rows.Close()
-
-	var out []M2MAuditEntry
-	for rows.Next() {
-		var (
-			id, status, sceneCount int64
-			clientID, idemHash, method, path, scope, ip string
-			dur                                            float64
-			rejectReason                                   sql.NullString
-			createdAt                                      string
-		)
-		if err := rows.Scan(&id, &clientID, &idemHash, &method, &path, &status, &scope,
-			&sceneCount, &dur, &ip, &rejectReason, &createdAt); err != nil {
-			return nil, fmt.Errorf("store: ListM2MAuditLog scan: %w", err)
-		}
-		createdT, _ := parseSQLiteTime(createdAt)
-		out = append(out, M2MAuditEntry{
-			ID:                   id,
-			ClientID:             clientID,
-			IdemKeyHash:          idemHash,
-			Method:               method,
-			Path:                 path,
-			StatusCode:           int(status),
-			Scope:                scope,
-			SceneCount:           int(sceneCount),
-			TotalDurationSeconds: dur,
-			IPAddress:            ip,
-			RejectReason:         rejectReason,
-			CreatedAt:            createdT,
-		})
-	}
-	return out, rows.Err()
-}
-
-// =====================================================================
-// Helpers
-// =====================================================================
-
-// GenerateM2MSecret returns a 32-byte (64 hex-char) high-entropy
-// plaintext secret suitable as the bearer value of an M2M API key.
-// Hex output keeps the secret URL-safe AND copy-paste safe. crypto/rand
-// panics on entropy failure (the system is broken). Sits next to
-// HashM2MSecret so the create/lookup pair are auditable in one file.
-//
-// This is paired with HashM2MSecret: the admin POST endpoint calls
-// GenerateM2MSecret() to create the plaintext, then HashM2MSecret()
-// to obtain the value stored in m2m_api_keys.secret_hash. The
-// plaintext is returned to the operator ONCE.
-func GenerateM2MSecret() string {
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		panic("store: GenerateM2MSecret: crypto/rand.Read failed: " + err.Error())
-	}
-	return hex.EncodeToString(buf)
-}
-
-// HashM2MSecret computes the hex-encoded SHA-256 of secret. The
-// canonical form is the lowercase hex of the SHA-256 digest. The
-// middleware calls this on every request so the helper MUST be
-// constant-time-ish; the actual constant-time compare happens in
-// M2MSecretMatches.
-func HashM2MSecret(secret string) string {
-	sum := sha256.Sum256([]byte(secret))
-	return hex.EncodeToString(sum[:])
-}
-
-// M2MSecretMatches reports whether storedHash (hex-encoded SHA-256)
-// matches the hash of secret. Constant-time on length matched
-// (Go's subtle.ConstantTimeCompare).
-//
-// NOTE: With 256-bit entropy tokens, the SQLite equality lookup
-// (in GetActiveM2MAPIKeyBySecretHash) is non-constant-time on the
-// hash value but brute-force from timing remains computationally
-// infeasible — a side-channel attacker would need to leak log2 bits
-// of position over millions of requests. The in-Go ConstantTimeCompare
-// here is the belt-and-braces second line of defense.
-func M2MSecretMatches(storedHash, secret string) bool {
-	storedHash = strings.ToLower(strings.TrimSpace(storedHash))
-	candidate := HashM2MSecret(secret)
-	if len(storedHash) != len(candidate) {
-		// Length mismatch => cannot match; return false without
-		// touching the substring compare so timing of this path is
-		// independent of storedHash content.
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(storedHash), []byte(candidate)) == 1
-}
-
-// HasScope reports whether the key entry's scope list contains want.
-// Useful at middleware boundaries where scope-check is
-// scope-presence-only (no override ordering).
-func (k *M2MAPIKey) HasScope(want string) bool {
-	want = strings.TrimSpace(want)
-	if want == "" {
-		return false
-	}
-	for _, s := range k.Scopes {
-		if strings.EqualFold(strings.TrimSpace(s), want) {
-			return true
-		}
-	}
-	return false
-}
-
-// EffectiveRateLimitRPS resolves the per-key override or falls back
-// to the operator-supplied default. The two-sided shape lets the
-// middleware call one function in the hot path.
-func (k *M2MAPIKey) EffectiveRateLimitRPS(defaultRPS int) int {
-	if k == nil {
-		return defaultRPS
-	}
-	if k.RateLimitRPS > 0 {
-		return k.RateLimitRPS
-	}
-	return defaultRPS
-}
-
-// EffectiveBurst mirrors EffectiveRateLimitRPS for the burst cap.
-func (k *M2MAPIKey) EffectiveBurst(defaultBurst int) int {
-	if k == nil {
-		return defaultBurst
-	}
-	if k.RateLimitBurst > 0 {
-		return k.RateLimitBurst
-	}
-	return defaultBurst
-}
-
-// EffectiveMaxScenes mirrors the pattern for the per-request scene
-// quota (caller passes cfg.M2M.MaxScenesPerRequest as the default).
-func (k *M2MAPIKey) EffectiveMaxScenes(defaultMax int) int {
-	if k == nil {
-		return defaultMax
-	}
-	if k.Quotas.MaxScenes > 0 {
-		return k.Quotas.MaxScenes
-	}
-	return defaultMax
-}
-
-// EffectiveMaxTotalDurationS mirrors MaxScenes for the per-request
-// duration cap (cfg.M2M.MaxTotalDurationSecondsPerRequest).
-func (k *M2MAPIKey) EffectiveMaxTotalDurationS(defaultMax float64) float64 {
-	if k == nil {
-		return defaultMax
-	}
-	if k.Quotas.MaxTotalDurationS > 0 {
-		return k.Quotas.MaxTotalDurationS
-	}
-	return defaultMax
-}
-
-func splitCSV(s string) []string {
-	parts := strings.Split(s, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-// parseSQLiteTime parses datetime('now') outputs (UTC, no
-// timezone). Returns zero time on error so the callers' signature
-// stays simple.
-func parseSQLiteTime(s string) (time.Time, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return time.Time{}, nil
-	}
-	// SQLite without timezone: try several common layouts.
-	for _, layout := range []string{
-		"2006-01-02 15:04:05",
-		"2006-01-02T15:04:05Z",
-		time.RFC3339,
-	} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t.UTC(), nil
-		}
-	}
-	return time.Time{}, fmt.Errorf("unrecognized sqlite timestamp: %q", s)
 }

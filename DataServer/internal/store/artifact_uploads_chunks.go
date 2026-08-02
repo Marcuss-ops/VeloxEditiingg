@@ -1,0 +1,81 @@
+// Package store / artifact_uploads_chunks.go
+//
+// Per-chunk CRUD over artifact_upload_chunks rows (resumable chunked
+// uploads). Part of the UploadRepository contract; see
+// artifact_uploads.go for the interface and wiring.
+package store
+
+import (
+	"context"
+	"fmt"
+	"time"
+)
+
+// InsertChunk persists a single chunk record.
+func (r *SQLiteUploadRepository) InsertChunk(ctx context.Context, c ChunkRecord) error {
+	if c.UploadID == "" {
+		return fmt.Errorf("store: InsertChunk: empty uploadID")
+	}
+	now := c.ReceivedAt.UTC().Format(time.RFC3339)
+	if c.ReceivedAt.IsZero() {
+		now = time.Now().UTC().Format(time.RFC3339)
+	}
+	_, err := r.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO artifact_upload_chunks
+		 (upload_id, chunk_index, size_bytes, sha256, storage_key, received_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		c.UploadID, c.ChunkIndex, c.SizeBytes, nilOrString(c.SHA256),
+		c.StorageKey, now,
+	)
+	if err != nil {
+		return fmt.Errorf("store: InsertChunk: %w", err)
+	}
+	return nil
+}
+
+// ListChunks returns all chunks for an upload, ordered by chunk_index.
+func (r *SQLiteUploadRepository) ListChunks(ctx context.Context, uploadID string) ([]ChunkRecord, error) {
+	if uploadID == "" {
+		return nil, fmt.Errorf("store: ListChunks: empty uploadID")
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT upload_id, chunk_index, size_bytes,
+		       COALESCE(sha256, ''), storage_key, received_at
+		FROM artifact_upload_chunks
+		WHERE upload_id = ?
+		ORDER BY chunk_index ASC`, uploadID)
+	if err != nil {
+		return nil, fmt.Errorf("store: ListChunks: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ChunkRecord
+	for rows.Next() {
+		var c ChunkRecord
+		var receivedAt string
+		if err := rows.Scan(&c.UploadID, &c.ChunkIndex, &c.SizeBytes,
+			&c.SHA256, &c.StorageKey, &receivedAt); err != nil {
+			return nil, fmt.Errorf("store: ListChunks scan: %w", err)
+		}
+		if t, perr := time.Parse(time.RFC3339, receivedAt); perr == nil {
+			c.ReceivedAt = t
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: ListChunks rows: %w", err)
+	}
+	return out, nil
+}
+
+// DeleteChunks removes all chunk records for an upload (cleanup after finalize).
+func (r *SQLiteUploadRepository) DeleteChunks(ctx context.Context, uploadID string) error {
+	if uploadID == "" {
+		return fmt.Errorf("store: DeleteChunks: empty uploadID")
+	}
+	if _, err := r.db.ExecContext(ctx,
+		`DELETE FROM artifact_upload_chunks WHERE upload_id = ?`, uploadID); err != nil {
+		return fmt.Errorf("store: DeleteChunks: %w", err)
+	}
+	return nil
+}

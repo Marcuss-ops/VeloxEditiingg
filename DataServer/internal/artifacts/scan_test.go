@@ -5,7 +5,9 @@
 // AUDITABILITY: every file that contains this fragment is either:
 //
 //	(a) the single legal writer of jobs.status='SUCCEEDED' for the
-//	    verified-finalization lifecycle, OR
+//	    verified-finalization lifecycle (markJobSucceededTx in
+//	    internal/artifacts/finalize_phases.go, part of the
+//	    SQLiteFinalizeWriter split), OR
 //	(b) a SEPARATE lifecycle writer (job_deliveries, workflow_steps,
 //	    workflow_runs), OR
 //	(c) this test file (regex literal as documentation).
@@ -42,7 +44,7 @@ var forbiddenSUCCEEDEDWrite = regexp.MustCompile(`(?i)SET\s+status\s*=\s*['"]SUC
 // allowedWriters is the EXPLICIT audited allowlist of files that
 // legitimately contain `SET status='SUCCEEDED'`.
 //
-// Sole-writer contract: only sqlite_finalize_writer.go may flip
+// Sole-writer contract: only the artifacts finalize writer may flip
 // jobs.status='SUCCEEDED'. The other entries here are SEPARATE
 // lifecycles (delivery, workflow) — listing them explicitly records
 // the audit trail so a future regression that DOES target jobs.status
@@ -53,6 +55,10 @@ var forbiddenSUCCEEDEDWrite = regexp.MustCompile(`(?i)SET\s+status\s*=\s*['"]SUC
 var allowedWriters = map[string]bool{
 	// Sole writer of jobs.status='SUCCEEDED' for the verified-
 	// finalization lifecycle (sole-writer enforced by scan_test.go).
+	// The jobs CAS (markJobSucceededTx) lives in finalize_phases.go;
+	// the tx orchestrator stays in sqlite_finalize_writer.go. The
+	// SUCCEEDED-flip count tripwire below reads finalize_phases.go.
+	filepath.Join("internal", "artifacts", "finalize_phases.go"): true,
 	filepath.Join("internal", "artifacts", "sqlite_finalize_writer.go"): true,
 	// Coordinator.CommitAttempt is the canonical atomic SUCCEEDED tx
 	// writer for tasks + task_attempts + jobs in the Completion flow.
@@ -246,11 +252,15 @@ func TestSucceededWriterIsFinalizationOnly(t *testing.T) {
 //   - At most a small upper bound — small ceiling to catch a
 //     accidental copy-paste regression inside the writer.
 //
+// The jobs CAS (markJobSucceededTx) moved to finalize_phases.go when
+// the finalize writer was split by responsibility; sqlite_finalize_writer.go
+// now hosts only the tx orchestrator + precondition helper.
+//
 // If you add a legitimate 3rd flip, UPDATE this test (with
 // reasoning) — the bound is a tripwire, not a permanent spec.
 func TestSucceededWriterCount(t *testing.T) {
 	root := findInternalRoot(t)
-	path := filepath.Join(root, "internal", "artifacts", "sqlite_finalize_writer.go")
+	path := filepath.Join(root, "internal", "artifacts", "finalize_phases.go")
 	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read writer: %v", err)
