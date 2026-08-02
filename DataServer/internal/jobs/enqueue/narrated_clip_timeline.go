@@ -294,7 +294,7 @@ func firstClipURL(scene map[string]interface{}) string {
 	if scene == nil {
 		return ""
 	}
-	if s := payload.FirstString(scene, "clip_link", "drive_link"); s != "" {
+	if s := payload.FirstString(scene, "clip_link", "drive_link", "image_link", "image"); s != "" {
 		return s
 	}
 	if links := payload.NormalizeStringList(scene, "clip_links", "drive_links"); len(links) > 0 {

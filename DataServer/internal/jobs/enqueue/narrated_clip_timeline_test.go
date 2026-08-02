@@ -555,6 +555,9 @@ func TestSceneURLHelpers(t *testing.T) {
 		if got := firstClipURL(map[string]interface{}{"drive_link": "drive-clip"}); got != "drive-clip" {
 			t.Errorf("drive_link: got %q; want drive-clip", got)
 		}
+		if got := firstClipURL(map[string]interface{}{"image_link": "scene-image"}); got != "scene-image" {
+			t.Errorf("image_link: got %q; want scene-image", got)
+		}
 		if got := firstClipURL(map[string]interface{}{"clip_links": []string{"a", "b"}}); got != "a" {
 			t.Errorf("clip_links[0]: got %q; want a", got)
 		}
