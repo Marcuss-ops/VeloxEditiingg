@@ -1,8 +1,16 @@
 // Package worker — initialization and lifecycle management.
+//
+// File split:
+//   - worker_init.go          : Option types + all With* setters + New().
+//   - worker_status.go        : Status/setStatus/canTransitionTo/IsStopped/
+//     IsDraining/cancelJob + SetExitFunc.
+//   - worker_commands.go      : processCommand + autoUndrainAfter (command
+//     dispatch, pre-existing).
+//   - worker_command_dedup.go : commandKey/markCommandSeen/cleanupSeenCommands
+//     (command dedup state).
 package worker
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"os"
@@ -330,172 +338,4 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 	w.loadLocalState()
 
 	return w, nil
-}
-
-const (
-	seenCommandTTL        = 30 * time.Minute
-	seenCommandMaxEntries = 10000 // Hard limit to prevent memory growth
-)
-
-func commandKey(cmd api.WorkerCommand) string {
-	// Gap #4 fix: use CommandID as primary dedup key when available;
-	// fall back to command+timestamp for backward compatibility.
-	cid := strings.TrimSpace(cmd.CommandID)
-	if cid != "" {
-		return "id:" + cid
-	}
-	ts := strings.TrimSpace(cmd.Timestamp)
-	if ts == "" {
-		ts = "no-timestamp"
-	}
-	return fmt.Sprintf("%s|%s", strings.TrimSpace(cmd.Command), ts)
-}
-
-func (w *Worker) markCommandSeen(cmd api.WorkerCommand) bool {
-	key := commandKey(cmd)
-	now := time.Now().UTC()
-
-	w.commandMu.Lock()
-	defer w.commandMu.Unlock()
-
-	// Opportunistic cleanup to keep the in-memory map bounded.
-	for k, t := range w.seenCommands {
-		if now.Sub(t) > seenCommandTTL {
-			delete(w.seenCommands, k)
-		}
-	}
-
-	// Enforce hard limit: evict oldest entries if we're at capacity
-	if len(w.seenCommands) >= seenCommandMaxEntries {
-		// Remove the oldest 10% of entries
-		toRemove := seenCommandMaxEntries / 10
-		// Since maps don't have order, just remove entries past the limit
-		count := 0
-		for k := range w.seenCommands {
-			if count >= toRemove {
-				break
-			}
-			delete(w.seenCommands, k)
-			count++
-		}
-	}
-
-	if firstSeenAt, ok := w.seenCommands[key]; ok && now.Sub(firstSeenAt) <= seenCommandTTL {
-		return true
-	}
-
-	w.seenCommands[key] = now
-	return false
-}
-
-// cleanupSeenCommands performs a full cleanup of expired command entries.
-// Call this periodically (e.g., every 10 minutes) to bound map growth.
-func (w *Worker) cleanupSeenCommands() {
-	now := time.Now().UTC()
-
-	w.commandMu.Lock()
-	defer w.commandMu.Unlock()
-
-	for k, t := range w.seenCommands {
-		if now.Sub(t) > seenCommandTTL {
-			delete(w.seenCommands, k)
-		}
-	}
-}
-
-// SetExitFunc sets a custom exit function for tests and controlled shutdowns.
-func (w *Worker) SetExitFunc(fn ExitFunc) {
-	w.exitFunc = fn
-}
-
-// Status returns the current worker status, derived from activeTasks count and error state.
-// Busy = at least one active task. Error = last task failed (status field). Idle = none.
-func (w *Worker) Status() Status {
-	if w.stopped.Load() {
-		return StatusStopped
-	}
-	w.activeTasksMu.RLock()
-	activeCount := len(w.activeTasks)
-	w.activeTasksMu.RUnlock()
-	if activeCount > 0 {
-		return StatusBusy
-	}
-	w.mu.RLock()
-	s := w.status
-	w.mu.RUnlock()
-	if s == StatusError {
-		return StatusError
-	}
-	return StatusIdle
-}
-
-// setStatus updates the persisted error/idle state.
-// Busy is derived from activeJobs and should NOT be set via this method.
-func (w *Worker) setStatus(s Status) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	oldStatus := w.status
-	w.status = s
-	w.logger.Debug("Status transition: %s -> %s", oldStatus, s)
-}
-
-// canTransitionTo checks if a status transition is valid.
-// Current status is derived from activeJobs and error state.
-func (w *Worker) canTransitionTo(newStatus Status) bool {
-	currentStatus := w.Status()
-
-	switch currentStatus {
-	case StatusIdle:
-		return newStatus == StatusBusy || newStatus == StatusStopped
-	case StatusBusy:
-		return newStatus == StatusIdle || newStatus == StatusError || newStatus == StatusStopped
-	case StatusError:
-		return newStatus == StatusIdle || newStatus == StatusStopped
-	case StatusStopped:
-		return false
-	default:
-		return false
-	}
-}
-
-// IsStopped returns true if shutdown has been requested.
-func (w *Worker) IsStopped() bool {
-	return w.stopped.Load()
-}
-
-// IsDraining returns true if the worker is in drain mode.
-func (w *Worker) IsDraining() bool {
-	return w.drainMode.Load()
-}
-
-// cancelJob cancels all running tasks for a job by looking up taskIDsByJob.
-// Called by MsgCancelJob + MsgLeaseRevoked + recovery directive handlers.
-// Snapshots cancel funcs under activeTasksMu, then calls them outside the
-// lock to avoid blocking heartbeat/Status readers during cancellation.
-func (w *Worker) cancelJob(jobID string) bool {
-	w.activeTasksMu.Lock()
-	taskIDs := w.taskIDsByJob[jobID]
-	if len(taskIDs) == 0 {
-		w.activeTasksMu.Unlock()
-		w.logger.Warn("[CANCEL] No active tasks for job %s", jobID)
-		return false
-	}
-	// Snapshot cancel funcs before unlocking to avoid holding the write
-	// lock during context cancellation (which may trigger defers that
-	// try to RLock activeTasksMu in heartbeat/Status paths).
-	cancels := make([]context.CancelFunc, 0, len(taskIDs))
-	for _, taskID := range taskIDs {
-		if at, ok := w.activeTasks[taskID]; ok && at.Cancel != nil {
-			cancels = append(cancels, at.Cancel)
-		}
-	}
-	w.activeTasksMu.Unlock()
-
-	cancelled := 0
-	for _, cancel := range cancels {
-		cancel()
-		cancelled++
-	}
-	w.logger.Info("[CANCEL] Cancelled %d/%d tasks for job %s", cancelled, len(taskIDs), jobID)
-	return cancelled > 0
 }

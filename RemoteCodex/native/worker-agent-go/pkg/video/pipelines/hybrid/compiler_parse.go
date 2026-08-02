@@ -1,0 +1,312 @@
+// Package hybrid / compiler_parse.go
+//
+// Input parsing for the hybrid.v1 compiler: map → Request, including
+// the role-aware URL/duration routing against scenes[], the legacy
+// images/clips fallback, and the typed coercion helpers
+// (toString*, toFloat64Default, toBoolDefault, toSliceString).
+package hybrid
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"velox-worker-agent/pkg/video/plan"
+)
+
+func parseRequest(input map[string]interface{}) *Request {
+	// audio_url is the canonical field; voiceover_url is accepted as
+	// an alias for parity with payloads emitted by enqueue_clips.go
+	// (which uses "voiceover_url" for the shared voiceover track).
+	// audio_url wins when both are set.
+	req := &Request{
+		AudioURL:  toStringDefault(input["audio_url"], toString(input["voiceover_url"])),
+		Fit:       toStringDefault(input["fit"], "contain"),
+		Layers:    parseLayers(input["layers"]),
+		Subtitles: parseSubtitleTracks(input["subtitle_tracks"]),
+	}
+
+	if rawTracks, ok := input["audio_tracks"].([]interface{}); ok {
+		for _, item := range rawTracks {
+			trackMap, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			track := AudioTrackInput{
+				SourceURL:       toStringDefault(trackMap["source_url"], toString(trackMap["url"])),
+				Volume:          toFloat64Default(trackMap["volume"], 1.0),
+				StartTimeOffset: toFloat64Default(trackMap["start_time_offset"], 0.0),
+				DurationSeconds: toFloat64Default(trackMap["duration_seconds"], 0.0),
+				Role:            toString(trackMap["role"]),
+				Loop:            toBoolDefault(trackMap["loop"], false),
+				FadeInSeconds:   toFloat64Default(trackMap["fade_in_seconds"], 0.0),
+				FadeOutSeconds:  toFloat64Default(trackMap["fade_out_seconds"], 0.0),
+				DuckingEnabled:  toBoolDefault(trackMap["ducking_enabled"], false),
+			}
+			// Detect explicit user config: if ANY of the
+			// loop/fade/ducking keys exist in the raw map,
+			// the user explicitly configured BGM behaviour.
+			for _, key := range []string{"loop", "fade_in_seconds", "fade_out_seconds", "ducking_enabled"} {
+				if _, exists := trackMap[key]; exists {
+					track.hasExplicitBGMConfig = true
+					break
+				}
+			}
+			req.AudioTracks = append(req.AudioTracks, track)
+		}
+	}
+
+	// Try explicit items array first. When present, this is the
+	// CANONICAL timeline; the `clips` / `images` fallback below is
+	// only used when items is absent (legacy compatibility index).
+	//
+	// Canonical-purity contract (Step 2/8): when items[] carries a
+	// (role, scene) reference, resolve the URL and (when missing) the
+	// duration from scene-level metadata rather than reconstructing
+	// from clips[]/stock_clip_paths. scenes[] MAY be absent (legacy
+	// callers pre-resolve URLs in items[]); in that case items[i].url
+	// and items[i].duration are honored verbatim.
+	var scenes []map[string]interface{}
+	if rawScenes, ok := input["scenes"].([]interface{}); ok {
+		for _, s := range rawScenes {
+			if sm, ok := s.(map[string]interface{}); ok {
+				scenes = append(scenes, sm)
+			}
+		}
+	}
+	if items, ok := input["items"].([]interface{}); ok {
+		for _, item := range items {
+			im, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			itemType := toStringDefault(im["type"], "image")
+			itemURL := toString(im["url"])
+			itemDuration := toFloat64Default(im["duration"], 4.0)
+			itemFit := toStringDefault(im["fit"], req.Fit)
+			itemHasDuration := toFloat64Default(im["duration"], 0.0) > 0
+
+			// Role-based URL + (optional) duration routing.
+			if role := toString(im["role"]); role != "" {
+				sceneIdx := -1
+				switch v := im["scene"].(type) {
+				case int:
+					sceneIdx = v
+				case int64:
+					sceneIdx = int(v)
+				case float64:
+					sceneIdx = int(v)
+				}
+				if sceneIdx >= 0 && sceneIdx < len(scenes) {
+					scene := scenes[sceneIdx]
+					switch role {
+					case "voiceover_bed":
+						if s := toString(scene["stock_link"]); s != "" {
+							itemURL = s
+						}
+						if !itemHasDuration {
+							if d := toFloat64Default(scene["voiceover_duration_seconds"], 0.0); d > 0 {
+								itemDuration = d
+							}
+						}
+					case "scene_clip":
+						if s := toString(scene["clip_link"]); s != "" {
+							itemURL = s
+						}
+						if !itemHasDuration {
+							if d := toFloat64Default(scene["final_clip_duration_seconds"], 0.0); d > 0 {
+								itemDuration = d
+							}
+						}
+					}
+				}
+			}
+			req.Items = append(req.Items, ItemInput{
+				Type:                     itemType,
+				URL:                      itemURL,
+				ColorHex:                 toStringDefault(im["color_hex"], "#000000"),
+				Duration:                 itemDuration,
+				Fit:                      itemFit,
+				Role:                     toString(im["role"]),
+				VoiceoverDurationSeconds: toFloat64Default(im["voiceover_duration_seconds"], 0.0),
+				FinalClipDurationSeconds: toFloat64Default(im["final_clip_duration_seconds"], 0.0),
+				IncludeAudio:             toBoolDefault(im["include_audio"], false),
+			})
+		}
+		return req
+	}
+
+	// The public Master contract carries per-scene media in scenes_json.
+	// Convert clip entries into the canonical timeline while preserving
+	// the clip's own audio; voiceover audio remains a separate concern.
+	if encoded, ok := input["scenes_json"].(string); ok && strings.TrimSpace(encoded) != "" {
+		var scenes []map[string]interface{}
+		if err := json.Unmarshal([]byte(encoded), &scenes); err == nil {
+			for _, scene := range scenes {
+				clipURL := toString(scene["clip_link"])
+				if clip, ok := scene["clip"].(map[string]interface{}); ok {
+					clipURL = toStringDefault(clip["url"], clipURL)
+				}
+				if clipURL == "" {
+					continue
+				}
+				req.Items = append(req.Items, ItemInput{
+					Type:         "video",
+					URL:          clipURL,
+					Duration:     toFloat64Default(scene["duration_seconds"], 4.0),
+					Fit:          req.Fit,
+					IncludeAudio: true,
+				})
+			}
+		}
+		if len(req.Items) > 0 {
+			return req
+		}
+	}
+
+	// Fallback: build from images + clips arrays
+	images := toSliceString(input["images"])
+	clips := toSliceString(input["clips"])
+
+	for _, url := range images {
+		req.Items = append(req.Items, ItemInput{
+			Type:     "image",
+			URL:      url,
+			Duration: 5.0,
+			Fit:      "cover",
+		})
+	}
+	for _, url := range clips {
+		req.Items = append(req.Items, ItemInput{
+			Type:     "video",
+			URL:      url,
+			Duration: 4.0,
+			Fit:      "contain",
+		})
+	}
+
+	return req
+}
+
+func toString(v interface{}) string {
+	if s, ok := v.(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return ""
+}
+
+func toStringDefault(v interface{}, fallback string) string {
+	s := toString(v)
+	if s == "" {
+		return fallback
+	}
+	return s
+}
+
+func toFloat64Default(v interface{}, fallback float64) float64 {
+	switch val := v.(type) {
+	case float64:
+		return val
+	case int:
+		return float64(val)
+	case int64:
+		return float64(val)
+	}
+	return fallback
+}
+
+func toBoolDefault(v interface{}, fallback bool) bool {
+	switch val := v.(type) {
+	case bool:
+		return val
+	case string:
+		switch strings.ToLower(strings.TrimSpace(val)) {
+		case "1", "true", "yes", "y":
+			return true
+		case "0", "false", "no", "n":
+			return false
+		}
+	}
+	return fallback
+}
+
+func parseLayers(raw interface{}) []plan.Layer {
+	items, ok := raw.([]interface{})
+	if !ok {
+		return nil
+	}
+	result := make([]plan.Layer, 0, len(items))
+	for index, rawItem := range items {
+		item, ok := rawItem.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		id := toString(item["id"])
+		if id == "" {
+			id = fmt.Sprintf("layer_%d", index)
+		}
+		layer := plan.Layer{
+			ID:              id,
+			Type:            toString(item["type"]),
+			Role:            toString(item["role"]),
+			Text:            toString(item["text"]),
+			Asset:           toString(item["asset"]),
+			Source:          toString(item["source"]),
+			Font:            toString(item["font"]),
+			FontSize:        toFloat64Default(item["font_size"], 0),
+			StartSeconds:    toFloat64Default(item["start_seconds"], 0),
+			DurationSeconds: toFloat64Default(item["duration_seconds"], 0),
+			Preset:          toString(item["preset"]),
+			Animation:       toString(item["animation"]),
+		}
+		if position, ok := item["position"].([]interface{}); ok {
+			for _, value := range position {
+				layer.Position = append(layer.Position, toFloat64Default(value, 0))
+			}
+		}
+		if layer.Type != "" {
+			result = append(result, layer)
+		}
+	}
+	return result
+}
+
+func parseSubtitleTracks(raw interface{}) []plan.SubtitleTrack {
+	items, ok := raw.([]interface{})
+	if !ok {
+		return nil
+	}
+	result := make([]plan.SubtitleTrack, 0, len(items))
+	for _, rawItem := range items {
+		item, ok := rawItem.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		track := plan.SubtitleTrack{
+			Source: toString(item["source"]),
+			Preset: toString(item["preset"]),
+			Font:   toString(item["font"]),
+		}
+		if track.Source != "" {
+			result = append(result, track)
+		}
+	}
+	return result
+}
+
+func toSliceString(v interface{}) []string {
+	switch val := v.(type) {
+	case []interface{}:
+		result := make([]string, 0, len(val))
+		for _, item := range val {
+			if s, ok := item.(string); ok {
+				result = append(result, strings.TrimSpace(s))
+			}
+		}
+		return result
+	case []string:
+		return val
+	}
+	return nil
+}

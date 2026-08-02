@@ -16,19 +16,17 @@
 //
 // File split:
 //   - runner.go          : TaskRunner struct, NewTaskRunner, With* setters,
-//     Run orchestrator, runPhase, completeError, now,
-//     specVersion, workerExecLogger adapter.
+//     Run orchestrator, runPhase, now, specVersion.
+//   - runner_report.go   : completeError, attachDetailedPhases,
+//     AppendDetailedPhases — report finalization.
+//   - runner_logger.go   : workerExecLogger adapter + formatFields.
 //   - execution.go       : runExecute — the panic-contained Execute wrapper
-//     and the post-Execute ctx check.
-//   - upload_lifecycle.go: runUpload — the upload-phase stub (PR-3.7
-//     wires real upload).
-//   - error_mapping.go   : isPanicErr, isPanicContained, mapCtxErr — the
-//     error-classification helpers used by Run to
-//     turn free-form errors into closed Code* values.
-//   - report_metrics.go  : mergeStatsInto + the positiveIntegerToInt64 /
-//     stringFromMap / floatFromMap / boolFromMap
-//     type-coercion helpers used to project the
-//     dotted-key map into telemetry.TypedExecutionMetrics.
+//     and the post-Execute ctx check (pre-existing).
+//   - upload_lifecycle.go: runUpload — the upload-phase stub (pre-existing).
+//   - error_mapping.go   : isPanicErr, isPanicContained, mapCtxErr —
+//     the error-classification helpers (pre-existing).
+//   - report_metrics.go  : mergeStatsInto + the type-coercion helpers
+//     (pre-existing).
 //
 // PR-3.7: mergeStatsInto reads cache.CacheStats / blob.BlobStats values
 // through the CacheStatsProvider / BlobStatsProvider interfaces declared
@@ -44,8 +42,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	"velox-worker-agent/internal/executor"
@@ -337,102 +333,6 @@ func (r *TaskRunner) runPhase(rec *telemetry.EventRecorder, name string, fn func
 	return m
 }
 
-// completeError finalizes the report under the given code and detail,
-// then runs the report phase to keep the 5-phase invariant intact.
-// PR-3.7: failure paths also surface cache + blob counters so operators
-// see real hit/miss/eviction activity on failed-task reports rather
-// than a misleading zero-map.
-func (r *TaskRunner) completeError(rec *telemetry.EventRecorder, report *TaskExecutionReport, appendPhase func(PhaseMarker), code, detail string) TaskExecutionReport {
-	report.Status = "failed"
-	report.ErrorCode = code
-	report.ErrorDetail = detail
-	report.CompletedAt = r.now()
-	// Record the failure as the terminal worker-origin event so the
-	// detailed phase stream shows how the attempt ended, even when the
-	// failure happened before any canonical phase ran.
-	if rec != nil {
-		now := r.now()
-		rec.Record(telemetry.EventSpec{
-			Origin:    telemetry.OriginWorker,
-			Scope:     telemetry.ScopeAttempt,
-			Component: "runner",
-			Action:    "run",
-		}, now, now, 0, telemetry.StatusFailed, code, detail)
-	}
-	// Always have at least one marker (the report phase) so consumers
-	// that check `len(phaseMarkers) == 0` can rely on truth: failure
-	// means a phase WAS run.
-	appendPhase(PhaseMarker{Name: PhaseReport, StartedAt: r.now(), CompletedAt: r.now(), Status: "ok", Notes: "failure recorded"})
-	// Preserve the typed mirror on failure as well; native phases often
-	// explain why the executor failed and must remain wire-visible.
-	if report.Metrics == nil {
-		report.Metrics = make(map[string]interface{})
-	}
-	r.mergeStatsInto(report, report.Metrics)
-	r.attachDetailedPhases(rec, report)
-	return *report
-}
-
-// attachDetailedPhases drains the recorder onto the report as the
-// ordered DetailedPhases list, numbering events 1..N across the whole
-// attempt. Identity fields come from the report's canonical executor
-// tuple; lease/snapshot identity is stamped at the submit boundary and
-// overridden by the master at ingest.
-func (r *TaskRunner) attachDetailedPhases(rec *telemetry.EventRecorder, report *TaskExecutionReport) {
-	if rec == nil {
-		return
-	}
-	execID := report.ExecutorID
-	execVersion := int32(0)
-	if key := report.ExecutorKey; key != "" {
-		if i := strings.LastIndexByte(key, '@'); i >= 0 {
-			if v, err := strconv.Atoi(key[i+1:]); err == nil {
-				execVersion = int32(v)
-			}
-		}
-	}
-	phases := rec.Snapshot()
-	report.AttemptRecorderOffset = len(phases)
-	if len(phases) == 0 {
-		return
-	}
-	// Preserve detailed native phases already attached from the executor;
-	// worker lifecycle events are appended in recorder order. Both sources
-	// retain their canonical per-origin event_index values.
-	start := len(report.DetailedPhases) + 1
-	for i, p := range phases {
-		report.DetailedPhases = append(report.DetailedPhases, fromRecordedPhase(p, start+i, execID, execVersion, ""))
-	}
-}
-
-// AppendDetailedPhases drains events recorded after TaskRunner.Run returned
-// (for example the worker's output upload and commit lifecycle) onto the
-// existing report. Run uses Snapshot so the attempt recorder remains alive
-// until the outer worker boundary has completed the entire attempt.
-func AppendDetailedPhases(report *TaskExecutionReport, rec *telemetry.EventRecorder) {
-	if report == nil || rec == nil {
-		return
-	}
-	phases := rec.DrainFrom(report.AttemptRecorderOffset)
-	if len(phases) == 0 {
-		return
-	}
-	report.AttemptRecorderOffset += len(phases)
-	execID := report.ExecutorID
-	execVersion := int32(0)
-	if key := report.ExecutorKey; key != "" {
-		if i := strings.LastIndexByte(key, '@'); i >= 0 {
-			if v, err := strconv.Atoi(key[i+1:]); err == nil {
-				execVersion = int32(v)
-			}
-		}
-	}
-	start := len(report.DetailedPhases) + 1
-	for i, p := range phases {
-		report.DetailedPhases = append(report.DetailedPhases, fromRecordedPhase(p, start+i, execID, execVersion, ""))
-	}
-}
-
 func (r *TaskRunner) now() time.Time {
 	if r.clock != nil {
 		return r.clock.Now()
@@ -451,79 +351,4 @@ func (r *TaskRunner) specVersion(_ executor.TaskSpec) int {
 		return r.version
 	}
 	return 1
-}
-
-// ── Logger adapter ────────────────────────────────────────────────────────
-
-// workerExecLogger wraps pkg/logger.Logger so it satisfies the
-// executor.Logger interface (Info/Warn/Error taking a string + fields).
-// PR-3.2 invariant: every log line emitted from an executor surfaces
-// the executor_id + job_id fields.
-type workerExecLogger struct {
-	inner  *logger.Logger
-	fields map[string]interface{}
-}
-
-func (w *workerExecLogger) prefix() string {
-	if w.fields == nil || len(w.fields) == 0 {
-		return ""
-	}
-	// Stable, deterministic field order isn't required for human logs.
-	keys := make([]string, 0, len(w.fields))
-	for k := range w.fields {
-		keys = append(keys, k)
-	}
-	out := ""
-	for i, k := range keys {
-		if i > 0 {
-			out += " "
-		}
-		out += fmt.Sprintf("%s=%v", k, w.fields[k])
-	}
-	return "[" + out + "]"
-}
-
-func (w *workerExecLogger) with(msg string, fields map[string]interface{}) string {
-	return w.prefix() + " " + msg + " " + formatFields(fields)
-}
-
-func (w *workerExecLogger) Info(msg string, fields map[string]interface{}) {
-	if w.inner == nil {
-		return
-	}
-	w.inner.Info("%s", w.with(msg, fields))
-}
-
-func (w *workerExecLogger) Warn(msg string, fields map[string]interface{}) {
-	if w.inner == nil {
-		return
-	}
-	w.inner.Warn("%s", w.with(msg, fields))
-}
-
-func (w *workerExecLogger) Error(msg string, err error, fields map[string]interface{}) {
-	if w.inner == nil {
-		return
-	}
-	extra := formatFields(fields)
-	if err != nil {
-		extra += " err=" + err.Error()
-	}
-	w.inner.Error("%s %s %s", w.prefix(), msg, extra)
-}
-
-func formatFields(fields map[string]interface{}) string {
-	if len(fields) == 0 {
-		return ""
-	}
-	out := ""
-	first := true
-	for k, v := range fields {
-		if !first {
-			out += " "
-		}
-		first = false
-		out += fmt.Sprintf("%s=%v", k, v)
-	}
-	return out
 }
