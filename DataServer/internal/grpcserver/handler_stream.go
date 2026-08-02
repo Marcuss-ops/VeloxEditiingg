@@ -1,7 +1,12 @@
 // Package grpcserver / handler_stream.go
 //
 // Stream lifecycle and session management for the WorkerControl gRPC handler.
-// Extracted from handler.go to keep the core types file focused.
+// This file holds the Stream() entry point: mTLS identity extraction, Hello
+// handshake, worker admission (allowlist, credential_hash, protocol version),
+// runtime snapshot minting, session registration, and the main message loop.
+//
+// Message routing lives in handler_stream_messages.go (dispatchMessage) and
+// session registry/writer helpers in handler_stream_session.go.
 package grpcserver
 
 import (
@@ -330,7 +335,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		}
 	}()
 
-	// Main message loop — type-switch on the oneof Msg field, while
+	// Main message loop — routes envelopes via dispatchMessage while
 	// also watching writerErr/sessionCtx to drive clean teardown.
 	for {
 		select {
@@ -380,195 +385,13 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 				sess.lastRecvSeq = env.SequenceNumber
 			}
 
-			switch m := env.Msg.(type) {
-			case *pb.WorkerToMasterEnvelope_Heartbeat:
-				h.handleHeartbeat(workerID, sessionID, m.Heartbeat)
-				h.dispatchCommands(workerID, sess)
-				if notifyCh != nil {
-					select {
-					case notifyCh <- struct{}{}:
-					default:
-					}
+			if err := h.dispatchMessage(workerID, sessionID, env, sess, notifyCh); err != nil {
+				// Goodbye is a clean end-of-stream: do not surface an error.
+				if errors.Is(err, errStreamGoodbye) {
+					return nil
 				}
-			case *pb.WorkerToMasterEnvelope_TaskLeaseRenewal:
-				h.handleTaskRenewal(workerID, m.TaskLeaseRenewal, sess)
-
-			case *pb.WorkerToMasterEnvelope_TaskAccepted:
-				h.handleTaskAccepted(workerID, m.TaskAccepted, sess)
-
-			case *pb.WorkerToMasterEnvelope_TaskRejected:
-				h.handleTaskRejected(workerID, m.TaskRejected, sess)
-
-			case *pb.WorkerToMasterEnvelope_TaskResult:
-				h.handleTaskResult(workerID, m.TaskResult, sess)
-
-			case *pb.WorkerToMasterEnvelope_CommandAck:
-				h.handleCommandAck(workerID, m.CommandAck)
-
-			case *pb.WorkerToMasterEnvelope_ArtifactUploaded:
-				// Blocco 1 final-wire (P0 #2, #3, #4): invoke the
-				// capability gate before delegating. ArtifactUploaded
-				// is the on-the-wire "artifact.commit.v1" message and
-				// the canonical write path through artifacts.Service.
-				// A misconfigured/spool-broken/transport-empty master
-				// MUST NOT accept a commit because that would yield a
-				// SUCCEEDED job with no on-disk blob. See
-				// handler_artifacts.go::checkArtifactCommitGate for
-				// the fail-closed semantic (PermissionDenied).
-				if gateErr := h.checkArtifactCommitGate(workerID); gateErr != nil {
-					return gateErr
-				}
-				h.handleArtifactUploaded(workerID, m.ArtifactUploaded)
-
-			case *pb.WorkerToMasterEnvelope_Goodbye:
-				return nil
-
-			default:
-				log.Printf("[GRPC] Unknown message type from worker %s: %T", workerID, env.Msg)
+				return err
 			}
 		}
 	}
-}
-
-// closeOldSessionLocked removes any existing session for the given workerID
-// and signals its notifier goroutine to stop. Must be called with h.mu held.
-func (h *Handler) closeOldSessionLocked(workerID string) {
-	oldSID, ok := h.workerSessions[workerID]
-	if !ok {
-		return
-	}
-	oldSess, exists := h.sessions[oldSID]
-	if exists {
-		log.Printf("[GRPC] Worker %s reconnecting — removing old session %s", workerID, oldSID)
-		// P0 #6: close the done channel to stop the old notifier goroutine.
-		// Messages from the old session's main loop are dropped by isCurrentSession().
-		oldSess.doneOnce.Do(func() {
-			close(oldSess.done)
-		})
-		// Issue 6 fix: cancel the old session's context to stop its goroutines.
-		if oldSess.cancel != nil {
-			oldSess.cancel()
-		}
-		// PR #4: release any pendingTaskOffer held by the old session
-		// so the claim is returned promptly on reconnect.
-		oldSess.claimMu.Lock()
-		if oldSess.pendingTaskOffer != nil {
-			if releaseErr := h.taskRepo.ReleaseLease(context.Background(), oldSess.pendingTaskOffer.ID, oldSess.workerID, oldSess.pendingTaskOffer.LeaseID); releaseErr != nil {
-				log.Printf("[GRPC] Failed to release old pendingTaskOffer for task %s during reconnect: %v", oldSess.pendingTaskOffer.ID, releaseErr)
-			}
-			oldSess.pendingTaskOffer = nil
-		}
-		oldSess.claimMu.Unlock()
-		// Issue 7 fix: revoke the old session in SQLite.
-		if h.dbStore != nil {
-			_ = h.dbStore.RevokeSession(oldSID)
-		}
-	}
-	delete(h.sessions, oldSID)
-	delete(h.workerSessions, workerID)
-}
-
-// isCurrentSession returns true if the given sessionID is still the active
-// session for workerID. Used to drop messages from stale/zombie connections.
-func (h *Handler) isCurrentSession(workerID, sessionID string) bool {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	sid, ok := h.workerSessions[workerID]
-	return ok && sid == sessionID
-}
-
-// isCurrentSessionLocked is the lock-held variant used when a lifecycle CAS
-// must be fenced against reconnect between ownership validation and mutation.
-// It compares both the registry entry and pointer identity; the latter also
-// keeps lightweight handler tests safe when a session has no generated ID.
-// Callers must hold h.mu.RLock or h.mu.Lock.
-func (h *Handler) isCurrentSessionLocked(workerID string, sess *workerSession) bool {
-	if sess == nil || sess.workerID != workerID {
-		return false
-	}
-	sid, ok := h.workerSessions[workerID]
-	if !ok {
-		return false
-	}
-	current, ok := h.sessions[sid]
-	return ok && current == sess && (sess.sessionID == "" || sid == sess.sessionID)
-}
-
-// sessionWriter is the sole goroutine allowed to call stream.Send().
-// All message producers write outboundMessage values to sendCh; this
-// goroutine drains and sends. OnSent callbacks are invoked after a
-// successful stream.Send so that producers can confirm delivery only
-// after the real network write.
-//
-// Exits when sendCh is closed (signaling session teardown) OR when a
-// stream.Send() failure surfaces the error to the main loop via writerErr.
-//
-// Phase 4.2: a write failure MUST NOT be silently absorbed — publish to
-// writerErr so the main loop tears the session down promptly. We also
-// drain the channel before exiting so producers do not block on a full
-// sendCh during the close sequence.
-func (h *Handler) sessionWriter(sess *workerSession) {
-	for out := range sess.sendCh {
-		if err := sess.stream.Send(out.Envelope); err != nil {
-			log.Printf("[GRPC] sessionWriter send error for worker %s (session %s): %v",
-				sess.workerID, sess.sessionID, err)
-			// Best-effort publish (cap 1, non-blocking).
-			select {
-			case sess.writerErr <- err:
-			default:
-			}
-			// Fast-drain remaining messages so producers attached to sendCh
-			// are not blocked as the main loop winds down. We do NOT attempt
-			// to resend them — they belong to a session that is about to die.
-			// OnSent callbacks are NOT invoked for drained messages so
-			// commands remain pending for retry on next dispatch cycle.
-			for range sess.sendCh {
-			}
-			break
-		}
-		switch msg := out.Envelope.Msg.(type) {
-		case *pb.MasterToWorkerEnvelope_TaskOffer:
-			if msg.TaskOffer != nil {
-				log.Printf("[GRPC] TaskOffer sent to worker %s (session %s): task=%s job=%s attempt=%s lease=%s",
-					sess.workerID, sess.sessionID,
-					msg.TaskOffer.GetTaskId(), msg.TaskOffer.GetJobId(),
-					msg.TaskOffer.GetAttemptId(), msg.TaskOffer.GetLeaseId())
-			}
-		case *pb.MasterToWorkerEnvelope_TaskLeaseGranted:
-			if msg.TaskLeaseGranted != nil {
-				log.Printf("[GRPC] TaskLeaseGranted sent to worker %s (session %s): task=%s job=%s attempt=%s lease=%s",
-					sess.workerID, sess.sessionID,
-					msg.TaskLeaseGranted.GetTaskId(), msg.TaskLeaseGranted.GetJobId(),
-					msg.TaskLeaseGranted.GetAttemptId(), msg.TaskLeaseGranted.GetLeaseId())
-			}
-		}
-		// Call OnSent callback after successful send (gap #1 fix).
-		if out.OnSent != nil {
-			out.OnSent()
-		}
-	}
-	log.Printf("[GRPC] sessionWriter exiting for worker %s (session %s)", sess.workerID, sess.sessionID)
-}
-
-// safeSend attempts to send an outboundMessage on the channel, returning true on success.
-// Returns false if the channel is full or closed (uses recover to handle closed channel panic).
-func safeSend(ch chan *outboundMessage, out *outboundMessage) bool {
-	defer func() { recover() }()
-	select {
-	case ch <- out:
-		return true
-	default:
-		return false
-	}
-}
-
-// getSession returns the active session for a workerID, or nil if none.
-func (h *Handler) getSession(workerID string) *workerSession {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	sid, ok := h.workerSessions[workerID]
-	if !ok {
-		return nil
-	}
-	return h.sessions[sid]
 }
