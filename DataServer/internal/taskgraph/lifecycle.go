@@ -200,14 +200,6 @@ func (l *LifecycleService) ExpireTaskLease(ctx context.Context, candidate Requeu
 	return res, nil
 }
 
-// now normalizes a time to UTC. If t is zero, returns current time.
-func now(t time.Time) time.Time {
-	if t.IsZero() {
-		t = time.Now().UTC()
-	}
-	return t.UTC()
-}
-
 // TickReadiness evaluates PENDING tasks and transitions them to READY
 // when their dependencies are resolved (PR #4: real dependency verification).
 //

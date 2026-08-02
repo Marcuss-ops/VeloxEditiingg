@@ -1,13 +1,9 @@
-// Status endpoint + remote-status classification helper for the pipeline
-// HTTP layer.
+// Status endpoint handler for the pipeline HTTP layer.
 //
-// PR-DI-pipeline: these two symbols were previously co-located in
-// pipeline_lifecycle.go alongside Cancel(). They are extracted here so
+// PR-DI-pipeline: this handler was previously co-located in
+// pipeline_lifecycle.go alongside Cancel(). It is extracted here so
 // each handler -- status, cancel -- lives in its own focused file with
-// the imports it actually needs. isTerminalStatus is a pure
-// package-level helper (no receiver) that classifies a remote-engine
-// status string into "stop polling" vs "keep polling" buckets; it is
-// consumed by the forwarding loop in generate.go.
+// the imports it actually needs.
 //
 // Step 5 of the original pipeline.go split. Diff is move-only.
 package pipeline
@@ -15,18 +11,9 @@ package pipeline
 import (
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 )
-
-// isTerminalStatus is the pure helper that classifies a remote-engine
-// status string into "stop polling" vs "keep polling". Kept package-level
-// (not a method) because it takes no receiver dependency.
-func isTerminalStatus(status string) bool {
-	s := strings.ToLower(strings.TrimSpace(status))
-	return s == "completed" || s == "succeeded" || s == "done" || s == "failed" || s == "error"
-}
 
 // Status handles GET /api/remote/pipeline/status/:trace_id.
 //

@@ -218,9 +218,6 @@ func resolveRequiredCapabilities(executorID string) []string {
 	}
 	return nil
 }
-func sceneVideoFingerprint(parts ...interface{}) string {
-	return sceneVideoFingerprintContext(context.Background(), parts...)
-}
 
 func sceneVideoFingerprintContext(ctx context.Context, parts ...interface{}) string {
 	h := sha256.New()

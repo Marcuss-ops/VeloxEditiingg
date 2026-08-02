@@ -94,8 +94,8 @@ func NewDispatcher(store *Store, registry *Registry, cfg Config) *Dispatcher {
 // Run starts the polling loop. Blocks until ctx is cancelled or Stop
 // is called.
 //
-// Verdetto P1 #10 (Blocco 4): panic recovery previously lived in
-// safeTick (per-cycle swallowing); that hid runaway panics from the
+// Verdetto P1 #10 (Blocco 4): panic recovery previously lived in a
+// per-cycle swallowing helper; that hid runaway panics from the
 // BackgroundSupervisor's restart-on-panic machinery. The dispatcher
 // now propagates panics upward — the BackgroundSupervisor's
 // safeCall(..., RestartOnPanic) decides whether to convert them to
@@ -165,20 +165,6 @@ func (d *Dispatcher) Stop() {
 		return
 	}
 	close(d.cancel)
-}
-
-// safeTick swallows panics per-cycle so a buggy handler cannot kill
-// the loop for the entire master process.
-//
-// Deprecated as of Blocco 4 (Verdetto P1 #10): panic recovery now
-// lives at the BackgroundSupervisor level via safeCall(...
-// RestartOnPanic). The dispatcher intentionally propagates panics
-// upward so the supervisor's restart-on-panic policy decides the
-// fate of a misbehaving handler. Retained as a no-op stub so
-// existing call sites that invoke d.safeTick continue to compile;
-// new call sites should call d.Poll directly inside Run.
-func (d *Dispatcher) safeTick(ctx context.Context) {
-	_ = ctx
 }
 
 func (d *Dispatcher) markStopped() {

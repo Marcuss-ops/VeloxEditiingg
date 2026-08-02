@@ -3,7 +3,6 @@ package assets
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	neturl "net/url"
 	"os"
@@ -280,13 +279,6 @@ func (c *cleanupCloser) Close() error {
 	_ = os.Remove(c.path)
 	return err
 }
-
-// readCloser wraps an io.Reader as io.ReadCloser (no-op Close).
-type readCloser struct {
-	io.Reader
-}
-
-func (r *readCloser) Close() error { return nil }
 
 func looksLikeDriveURL(reference string) bool {
 	trimmed := strings.TrimSpace(reference)

@@ -212,7 +212,6 @@ type Collector struct {
 	// Book-keeping for diffs.
 	stateMu  sync.Mutex
 	lastSeen map[string]time.Time // worker_id → last heartbeat timestamp
-	mu       sync.RWMutex
 }
 
 // NewCollector returns a Collector with all 12 scorecard family +

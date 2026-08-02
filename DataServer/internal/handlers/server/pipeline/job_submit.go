@@ -12,8 +12,6 @@
 //   - asset_projection.go (nested asset map builders)
 //   - worker_payload_projection.go (submitRequestToRawPayload and worker projection)
 //   - enqueue_persistence.go (GetSubmittedJob polling)
-//   - response_shaping.go (submitJobAcceptedStatus,
-//     buildSubmittedJobLocation)
 //   - telemetry.go (isLegacyCompatShape,
 //     countScenesWithClipLink, legacyBodySinkOrNoop)
 //

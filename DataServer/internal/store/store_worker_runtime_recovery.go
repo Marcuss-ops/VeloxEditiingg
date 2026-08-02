@@ -1,7 +1,6 @@
 package store
 
 import (
-	"encoding/json"
 	"time"
 )
 
@@ -29,9 +28,6 @@ import (
 //     connectionStatePartitionedSuspected / connectionStatePartitioned)
 //     and the pure computeConnectionState helper that derives the
 //     canonical state from a heartbeat timestamp + threshold pair.
-//   - eventJSONDetails: small JSON helper for the audit-trail details
-//     column in worker_events (shared with the heartbeat path which
-//     also writes audit rows).
 //   - reason_code constants: package-level audit-trail labels for
 //     both worker-level and task-level events.
 //
@@ -160,19 +156,6 @@ func computeConnectionState(lastHB string, now time.Time, staleSeconds, partitio
 	default:
 		return connectionStateConnected
 	}
-}
-
-// eventJSONDetails is a tiny helper that marshals a map to its
-// canonical JSON string form for storage in worker_events.
-// details_json. Returns "" if marshalling fails (the event row is
-// still inserted with an empty details column so a single bad
-// payload never blocks the audit ledger).
-func eventJSONDetails(v map[string]any) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return ""
-	}
-	return string(b)
 }
 
 // Canonical reason_code values surfaced on the worker_events rows

@@ -56,9 +56,8 @@
 //	pipeline_run_validator.go — ValidateCreateRequest + ValidationError.
 //	pipeline_scripts.go    — ScriptSimple / ScriptBatch.
 //
-// Status (`Status()`) and Cancel (`Cancel()`) handlers as well as
-// isTerminalStatus live in `pipeline_lifecycle.go` until that file is
-// dissolved into status.go + cancel.go.
+// Status (`Status()`) and Cancel (`Cancel()`) handlers live in
+// status.go + cancel.go.
 package pipeline
 
 import (

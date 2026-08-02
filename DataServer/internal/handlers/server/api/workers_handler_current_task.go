@@ -73,13 +73,3 @@ func (l *sqliteCurrentTaskLoader) LoadCurrentTask(ctx context.Context, workerID 
 		StartedAt: row.StartedAt,
 	}, nil
 }
-
-// noopCurrentTaskLoader is the fallback used when the handler is wired
-// without a DB (unit tests). Returns nil on every call so the handler's
-// nil-check suppresses current_task in the JSON response without
-// emitting an error.
-type noopCurrentTaskLoader struct{}
-
-func (noopCurrentTaskLoader) LoadCurrentTask(context.Context, string) (*TaskSummary, error) {
-	return nil, nil
-}

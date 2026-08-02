@@ -1,8 +1,7 @@
 // Package pipeline: generate.go isolates the legacy POST /api/remote/pipeline/generate
 // handler into its own file. Same package as the rest of the split pipeline
 // package (so package-internal symbols — pipelineLog, firstStringResolver,
-// forwardPipelineResultToWorker, isTerminalStatus — are visible without
-// re-export).
+// forwardPipelineResultToWorker — are visible without re-export).
 //
 // What this file owns:
 //   - h.Generate(): the handler.

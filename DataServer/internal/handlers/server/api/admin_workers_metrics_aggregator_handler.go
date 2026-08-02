@@ -24,16 +24,12 @@ package api
 // dashboard via the snapshotted_at timestamp.
 //
 // Compute fresh on stale: if the per-worker row is older than
-// MaxSnapshotAge (5 min default) AND a fleet.AggregatorDataSource
-// is wired, the handler invokes the per-worker aggregator path
-// inline before responding. This is the "best of both worlds"
-// pattern: scheduled-snapshot-driven under normal load, hot-
-// freshness-driven on the first read after bootstrap or when
-// the scheduler is falling behind.
+// MaxSnapshotAge (5 min default) the handler serves the persisted
+// snapshot as-is (the scheduled 5-minute snapshot cadence guarantees
+// fresh-enough rows under normal load).
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -42,7 +38,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"velox-server/internal/fleet"
 	"velox-server/internal/store"
 )
 
@@ -56,15 +51,11 @@ type AdminWorkersMetricsAggregatorHandler struct {
 		GetLatestWorkerMetricsForWorker(ctx context.Context, workerID string) (store.WorkerMetricsSnapshot, error)
 		ListLatestWorkerMetrics(ctx context.Context, limit int) ([]store.WorkerMetricsSnapshot, error)
 	}
-	aggregator     fleet.AggregatorDataSource
 	maxSnapshotAge time.Duration
-	now            func() time.Time
 }
 
 // NewAdminWorkersMetricsAggregatorHandler builds the handler with
-// the production defaults. Use SetAggregator for tests that wire
-// a stub AggregatorDataSource; nil aggregator is acceptable — the
-// handler just refuses to compute fresh on stale.
+// the production defaults.
 func NewAdminWorkersMetricsAggregatorHandler(s StoreLike, maxAge time.Duration) *AdminWorkersMetricsAggregatorHandler {
 	if maxAge <= 0 {
 		maxAge = 5 * time.Minute
@@ -72,7 +63,6 @@ func NewAdminWorkersMetricsAggregatorHandler(s StoreLike, maxAge time.Duration) 
 	return &AdminWorkersMetricsAggregatorHandler{
 		store:          s,
 		maxSnapshotAge: maxAge,
-		now:            func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -84,21 +74,8 @@ type StoreLike interface {
 	ListLatestWorkerMetrics(ctx context.Context, limit int) ([]store.WorkerMetricsSnapshot, error)
 }
 
-// SetAggregator optionally wires a live aggregator for the
-// "compute fresh on stale" path. Idempotent; nil disables the
-// path.
-func (h *AdminWorkersMetricsAggregatorHandler) SetAggregator(a interface {
-	ComputeForWorker(ctx context.Context, db *sql.DB, workerID string, now time.Time) (store.WorkerMetricsSnapshot, error)
-}) {
-	// Adapter not exposed at this layer; the production binding
-	// happens via helper closures below. Kept as a settable hook
-	// for future tests.
-	_ = a
-}
-
 // GetWorkerMetrics serves GET /api/v1/admin/workers/{worker_id}/metrics.
-// On miss (no snapshot yet for the worker, OR snapshotted_at older
-// than maxSnapshotAge AND no aggregator wired), returns 404 with
+// On miss (no snapshot yet for the worker), returns 404 with
 // a stable JSON error so the dashboard differentiates from
 // 401/500.
 func (h *AdminWorkersMetricsAggregatorHandler) GetWorkerMetrics() gin.HandlerFunc {

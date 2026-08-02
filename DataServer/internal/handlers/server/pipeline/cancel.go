@@ -9,8 +9,8 @@
 //
 // This is a verbatim move of the Cancel method that previously lived in
 // pipeline_lifecycle.go. pipeline_lifecycle.go is removed in this same step
-// (its entire contents have been redistributed: Status + isTerminalStatus
-// already moved to status.go in Step 5, Cancel now moved here in Step 6).
+// (its entire contents have been redistributed: Status already moved to
+// status.go in Step 5, Cancel now moved here in Step 6).
 //
 // No signature changes, no body changes, no behaviour changes. The only
 // intent is to keep each handler's lifecycle stage in its own file so that

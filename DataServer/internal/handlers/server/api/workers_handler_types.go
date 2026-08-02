@@ -7,9 +7,8 @@
 //	                        ExecutorEntry, WorkersListResponse, HostSummary,
 //	                        ExecutorSummary, TaskSummary), the WorkerInfo
 //	                        alias, ConnectionStaleThreshold, the
-//	                        Reason* / FilterStatus* canonical enum
-//	                        constants, and the Filters struct + IsZero()
-//	                        method.
+//	                        FilterStatus* canonical enum constants, and the
+//	                        Filters struct + IsZero() method.
 //	workers_sanitise.go   - security-critical hostname redaction surface
 //	                        (sanitiseHostname, redactIPv4/IPv6/secretHex,
 //	                        path/hex/IP regexes). RW-PROD-005 §3 A6.
@@ -29,8 +28,7 @@
 //	workers_filters.go    - GET param parsing and in-memory filter applier.
 //
 //	workers_mapper.go     - top-level worker→DTO conversion orchestration
-//	                        (sanitizeWorker, heartbeatAgeSeconds,
-//	                        canonicalReason).
+//	                        (sanitizeWorker, heartbeatAgeSeconds).
 //
 // Single-instance contract enforced by this split:
 //   - sanitiseHostname exists only on the package api, only in
@@ -38,9 +36,9 @@
 //     redaction branch.
 //   - The IP / hex / path regexes used by sanitiseHostname are package
 //     vars declared only in workers_sanitise.go.
-//   - The 3-element Reason taxonomy (ReasonDrain / ReasonDetachedSession /
-//     ReasonHeartbeatStale) is declared only in workers_dto.go; the
-//     canonicalReason mapper consumes those constants verbatim.
+//   - The 3-element Reason taxonomy is owned by the workers registry
+//     (internal/workers); the API DTO mirrors the registry's reason
+//     string verbatim and must not invent ad-hoc literals.
 //   - The Filters struct + IsZero method lives in workers_dto.go; the
 //     ParseFilters / ApplyFilters mapper functions live in
 //     workers_filters.go (same package, free cross-file visibility).
@@ -51,5 +49,5 @@
 // (WorkerResponse, ActiveTaskRuntime, ExecutorEntry,
 // WorkersListResponse, HostSummary, ExecutorSummary, TaskSummary,
 // Filters + IsZero, WorkerInfo alias, ConnectionStaleThreshold,
-// Reason* / FilterStatus* constants) is unchanged.
+// FilterStatus* constants) is unchanged.
 package api

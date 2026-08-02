@@ -99,22 +99,6 @@ func parseDurationConfig(envName string) time.Duration {
 	return d
 }
 
-// parseBoolConfig reads a boolean env var. Returns false for unset or
-// malformed values so the bootstrap path stays opt-in by default.
-// Used for one-shot opt-in flags where unset → no is the safe default
-// (e.g. insecure transport toggles, dev-only bypasses).
-func parseBoolConfig(envName string) bool {
-	raw := os.Getenv(envName)
-	if raw == "" {
-		return false
-	}
-	v, err := strconv.ParseBool(raw)
-	if err != nil {
-		return false
-	}
-	return v
-}
-
 // parseBoolConfigDefaultTrue reads a boolean env var with a REVERSED
 // safe default: unset / empty / malformed → true, ONLY an explicit
 // "false" (or "0" / "off" / "no") opts out. Used for the schema-bootstrap
@@ -123,9 +107,8 @@ func parseBoolConfig(envName string) bool {
 // default-on-upgrade would silently break existing deployments whose
 // schema state advances only through the embedded runner.
 //
-// Sets TO TRUE on unset (unlike parseBoolConfig which defaults false)
-// to preserve backward compatibility across the master upgrade that
-// landed this field.
+// Sets TO TRUE on unset to preserve backward compatibility across the
+// master upgrade that landed this field.
 func parseBoolConfigDefaultTrue(envName string) bool {
 	raw := os.Getenv(envName)
 	if raw == "" {

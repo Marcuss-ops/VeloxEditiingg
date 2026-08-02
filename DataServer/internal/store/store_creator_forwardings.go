@@ -344,11 +344,6 @@ func (s *SQLiteStore) UpsertCreatorForwardingPayload(ctx context.Context, forwar
 	return nil
 }
 
-// defaultForwardingLeaseTTL is the lease TTL written by
-// ClaimCreatorForwardings. 5 minutes matches the delivery runner's
-// default and is short enough to recover quickly from runner crashes.
-const defaultForwardingLeaseTTL = 5 * time.Minute
-
 // ── Metrics ───────────────────────────────────────────────────────────────
 
 // ForwardingQueueMetrics is a point-in-time snapshot of the forwarding

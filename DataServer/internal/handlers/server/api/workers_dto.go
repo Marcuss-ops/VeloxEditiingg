@@ -13,8 +13,9 @@
 //     patterns with "[redacted-...]" tokens.
 //   - Bundle_hash / credential_hash / TLS file paths / worker secret /
 //     raw IP addresses of any kind are NEVER carried into the response.
-//   - Reasons are an enumerated 3-element taxonomy (see Reason* consts);
-//     ad-hoc string literals must not be added at call sites.
+//   - Reasons are an enumerated 3-element taxonomy (drain /
+//     detached_session / heartbeat_stale, owned by the workers
+//     registry); ad-hoc string literals must not be added at call sites.
 package api
 
 import (
@@ -32,25 +33,11 @@ type WorkerInfo = workersreg.WorkerInfo
 // definition to make sense of the inconsistency.
 var ConnectionStaleThreshold = workersreg.ConnectionStaleThreshold
 
-// Reason canonical taxonomy (RW-PROD-005 §2.2).
-//
-//	drain             — Drain=true overrides everything (precedence 1).
-//	detached_session  — session_active=false (stream closed), all other
-//	                    signals ignored (precedence 2). Mirrors spec
-//	                    "Stream chiuso → detached_session senza
-//	                    aspettare 150s".
-//	heartbeat_stale   — session_active=true but last_heartbeat is stale,
-//	                    empty, or unparseable. With a fresh session the
-//	                    canonical state is STALE (150s-5min). With an old
-//	                    session the state is DISCONNECTED but the reason
-//	                    is still heartbeat_stale (the session is up but
-//	                    the heartbeat has stopped).
-//	""                — fresh: status=CONNECTED, no reason emitted.
-const (
-	ReasonDrain           = "drain"
-	ReasonDetachedSession = "detached_session"
-	ReasonHeartbeatStale  = "heartbeat_stale"
-)
+// Reason taxonomy (RW-PROD-005 §2.2): the canonical three-element
+// taxonomy (drain / detached_session / heartbeat_stale) is owned by the
+// workers registry (internal/workers); WorkerResponse mirrors the
+// registry's reason string verbatim. The API layer must not invent
+// ad-hoc reason literals at call sites.
 
 // WorkerResponse is the sanitized, operator-facing JSON shape for a single
 // worker. It carries derived fields (status, reason, heartbeat_age_seconds,

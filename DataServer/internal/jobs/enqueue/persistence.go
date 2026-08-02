@@ -31,12 +31,9 @@ import (
 	"velox-shared/payload"
 )
 
-// compileSceneVideoJob builds a canonical *jobs.Job and *taskgraph.TaskSpec
-// from a normalized scene-video payload. The caller owns the atomic creation.
-func compileSceneVideoJob(normalized map[string]interface{}, req costmodel.JobRequirements) (*jobs.Job, *taskgraph.TaskSpec, int, error) {
-	return compileSceneVideoJobContext(context.Background(), normalized, req)
-}
-
+// compileSceneVideoJobContext builds a canonical *jobs.Job and
+// *taskgraph.TaskSpec from a normalized scene-video payload. The caller
+// owns the atomic creation.
 func compileSceneVideoJobContext(ctx context.Context, normalized map[string]interface{}, req costmodel.JobRequirements) (*jobs.Job, *taskgraph.TaskSpec, int, error) {
 	jobID, _ := normalized["job_id"].(string)
 	videoName, _ := normalized["video_name"].(string)
