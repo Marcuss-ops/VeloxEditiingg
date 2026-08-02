@@ -2,6 +2,8 @@ package instaedit
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,7 @@ import (
 	"time"
 
 	"velox-shared/contract"
+	"velox-shared/publication"
 
 	"velox-server/internal/costmodel"
 	"velox-server/internal/creatorflow"
@@ -183,7 +186,13 @@ func (s *Service) CreateJob(ctx context.Context, cmd CreateJobCmd) (*jobResponse
 		}
 	}
 
+	videoName, _ := renderSpec["video_name"].(string)
+	if strings.TrimSpace(videoName) == "" {
+		videoName = cmd.ProjectID
+		renderSpec["video_name"] = videoName
+	}
 	deliveryPlan := make([]map[string]any, 0, len(cmd.Destinations))
+	publicationSpecs := make([]publication.Spec, 0, len(cmd.Destinations))
 	for i, d := range cmd.Destinations {
 		externalID := strings.TrimSpace(d.ExternalDestinationID)
 		if externalID == "" {
@@ -206,6 +215,11 @@ func (s *Service) CreateJob(ctx context.Context, cmd CreateJobCmd) (*jobResponse
 				return nil, fmt.Errorf("%w: invalid metadata for destination[%d]: %v", ErrInvalidPayload, i, err)
 			}
 		}
+		publicationID := strings.TrimSpace(d.PublicationID)
+		if publicationID == "" {
+			publicationID = defaultPublicationID(cmd.IdempotencyKey, externalID)
+		}
+		metadata["publication_id"] = publicationID
 
 		deliveryPlan = append(deliveryPlan, map[string]any{
 			"destination_id": dest.DestinationID,
@@ -213,11 +227,21 @@ func (s *Service) CreateJob(ctx context.Context, cmd CreateJobCmd) (*jobResponse
 			"retry_budget":   contract.DefaultDeliveryRetryBudget,
 			"metadata":       metadata,
 		})
+		retryBudget := contract.DefaultDeliveryRetryBudget
+		publicationSpecs = append(publicationSpecs, publication.Spec{
+			Version:       publication.Version,
+			PublicationID: publicationID,
+			OutputRef:     publication.OutputRef{ArtifactRole: "final_video"},
+			Language:      stringValue(metadata["language"]),
+			Metadata:      publicationMetadataFromMap(metadata, videoName),
+			Destinations: []publication.Destination{{
+				DestinationID: dest.DestinationID,
+				Priority:      i,
+				RetryBudget:   &retryBudget,
+			}},
+		})
 	}
 
-	if _, ok := renderSpec["video_name"]; !ok {
-		renderSpec["video_name"] = cmd.ProjectID
-	}
 	renderSpec["delivery_plan"] = deliveryPlan
 
 	typedPayload := contract.NewJobPayloadV2(renderSpec)
@@ -246,6 +270,7 @@ func (s *Service) CreateJob(ctx context.Context, cmd CreateJobCmd) (*jobResponse
 			SourceJobID:      sourceID,
 			TargetExecutorID: "scene.composite.v1",
 			Payload:          payload,
+			PublicationSpecs: publicationSpecs,
 		})
 		if submitErr != nil {
 			return nil, submitErr
@@ -495,6 +520,57 @@ func mapAsset(a *store.AssetRecord, workspaceID int64) assetResponse {
 		SizeBytes:   a.SizeBytes,
 		MimeType:    a.MimeType,
 		DownloadURL: "",
+	}
+}
+
+func defaultPublicationID(idempotencyKey, externalDestinationID string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(idempotencyKey) + "\x00" + strings.TrimSpace(externalDestinationID)))
+	return "pub_" + hex.EncodeToString(sum[:8])
+}
+
+func stringValue(value any) string {
+	if value, ok := value.(string); ok {
+		return strings.TrimSpace(value)
+	}
+	return ""
+}
+
+func publicationMetadataFromMap(metadata map[string]any, videoName string) publication.Metadata {
+	title := stringValue(metadata["title"])
+	if title == "" {
+		title = videoName
+	}
+	privacy := stringValue(metadata["final_privacy"])
+	if privacy == "" {
+		privacy = stringValue(metadata["privacy_status"])
+	}
+	if privacy == "" {
+		privacy = stringValue(metadata["privacy"])
+	}
+	return publication.Metadata{
+		Title:       title,
+		Description: stringValue(metadata["description"]),
+		Tags:        stringSlice(metadata["tags"]),
+		CategoryID:  stringValue(metadata["category_id"]),
+		Privacy:     privacy,
+		PublishAt:   stringValue(metadata["publish_at"]),
+	}
+}
+
+func stringSlice(value any) []string {
+	switch values := value.(type) {
+	case []string:
+		return append([]string(nil), values...)
+	case []any:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			if item := stringValue(value); item != "" {
+				out = append(out, item)
+			}
+		}
+		return out
+	default:
+		return nil
 	}
 }
 

@@ -189,6 +189,7 @@ func (tm *TokenManager) GenerateToken(workerID string) string {
 		if err := tm.store.EnsureWorkerRecord(workerID); err != nil {
 			registryLog.ErrorWithMsg("token.gen.fail", "Failed to bootstrap worker record",
 				map[string]interface{}{"worker_id": workerID, "err": err.Error()})
+			return ""
 		}
 		sess := &store.PersistedSession{
 			SessionID:   sessionID,
@@ -200,6 +201,7 @@ func (tm *TokenManager) GenerateToken(workerID string) string {
 		if err := tm.store.InsertSession(sess); err != nil {
 			registryLog.ErrorWithMsg("token.gen.fail", "Failed to persist session",
 				map[string]interface{}{"worker_id": workerID, "err": err.Error()})
+			return ""
 		}
 	}
 

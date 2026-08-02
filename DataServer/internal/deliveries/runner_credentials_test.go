@@ -77,3 +77,14 @@ func TestDeliveryRunnerIssuesShortLeaseAndAuditsResult(t *testing.T) {
 		t.Fatalf("credential audit uses = %#v", repo.uses)
 	}
 }
+
+func TestCredentialReferenceFallsBackToDestinationCatalog(t *testing.T) {
+	const ref = "cred_0123456789abcdef0123456789abcdef0123"
+	got, err := credentialReference(`{"publication_id":"pub-1"}`, `{"credential_ref":"`+ref+`"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != ref {
+		t.Fatalf("credential ref = %q, want %q", got, ref)
+	}
+}

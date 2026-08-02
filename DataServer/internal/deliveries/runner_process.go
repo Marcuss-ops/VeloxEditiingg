@@ -69,7 +69,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 	} else {
 		dest.DeliveryMetadataJSON = metadata
 	}
-	credentialRef, refErr := credentials.ReferenceFromJSON(dest.DeliveryMetadataJSON)
+	credentialRef, refErr := credentialReference(dest.DeliveryMetadataJSON, dest.ConfigurationJSON)
 	if refErr != nil {
 		if markErr := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "CREDENTIAL_REF_INVALID", refErr.Error()); markErr != nil {
 			log.Printf("[DELIVERY] mark credential reference failure for %s: %v", lease.DeliveryID, markErr)
@@ -229,6 +229,19 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 		}
 		return nil
 	}
+}
+
+// credentialReference resolves the opaque lease reference from the
+// publication snapshot first.  When the caller intentionally keeps
+// credentials out of the job payload, the destination catalog is the
+// durable server-side source of the same reference.  Only the reference is
+// copied; provider secrets never enter either payload.
+func credentialReference(metadataJSON, destinationConfigJSON string) (string, error) {
+	ref, err := credentials.ReferenceFromJSON(metadataJSON)
+	if err != nil || ref != "" {
+		return ref, err
+	}
+	return credentials.ReferenceFromJSON(destinationConfigJSON)
 }
 
 func (r *DeliveryRunner) issueCredentialLease(ctx context.Context, provider Provider, destination *Destination, lease store.DeliveryLease) (*credentials.AccessLease, error) {

@@ -18,6 +18,7 @@ type CreateJobCmd struct {
 // CreateDestinationCmd is a single destination inside CreateJobCmd.
 type CreateDestinationCmd struct {
 	ExternalDestinationID string
+	PublicationID         string
 	Metadata              json.RawMessage
 }
 
@@ -38,6 +39,7 @@ type deliveryPlanReq struct {
 // deliveryDestinationReq is the HTTP wrapper for a single destination.
 type deliveryDestinationReq struct {
 	ExternalDestinationID string          `json:"external_destination_id"`
+	PublicationID         string          `json:"publication_id,omitempty"`
 	Metadata              json.RawMessage `json:"metadata"`
 }
 

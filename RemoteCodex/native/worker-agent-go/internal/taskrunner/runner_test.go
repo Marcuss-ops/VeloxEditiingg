@@ -453,3 +453,18 @@ func TestRunner_Failure_DetailedPhases(t *testing.T) {
 		t.Error("expected failure error_code on the terminal event")
 	}
 }
+
+func TestDetailedPhasesFromExecutorNormalizesNativeTaxonomy(t *testing.T) {
+	got := detailedPhasesFromExecutor([]executor.DetailedPhaseTiming{{
+		Origin:    "engine",
+		Scope:     "attempt",
+		Component: "worker.temp",
+		Action:    "create",
+	}})
+	if len(got) != 1 {
+		t.Fatalf("got %d phases, want 1", len(got))
+	}
+	if got[0].Origin != "worker" || got[0].Scope != "artifact" {
+		t.Fatalf("origin/scope = %q/%q, want worker/artifact", got[0].Origin, got[0].Scope)
+	}
+}

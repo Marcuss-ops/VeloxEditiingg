@@ -77,7 +77,11 @@ func (w *Worker) resolveCommonAssetValue(ctx context.Context, value interface{},
 					continue
 				}
 			}
-			childMedia := (assetContext && isMediaValueField(key)) || isMediaContainerField(key) || isMediaReferenceField(key)
+			// `source` is a job provenance field at the top level (for
+			// example `pipeline_generate_with_images`), not a media
+			// reference. It remains a media field inside an explicit asset
+			// envelope so legacy audio/video envelopes keep working.
+			childMedia := (assetContext && (isMediaValueField(key) || isAssetSourceField(key))) || isMediaContainerField(key) || isMediaReferenceField(key)
 			resolved, err := w.resolveCommonAssetValue(ctx, item, index, fieldPath(field, key), childMedia)
 			if err != nil {
 				return nil, err
@@ -168,7 +172,7 @@ func collectAssetMetadata(value interface{}, index assetMetadataIndex) error {
 				continue
 			}
 			ref, ok := raw.(string)
-			if !ok || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(ref)), "velox-asset://") || !isAssetReferenceField(key) {
+			if !ok || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(ref)), "velox-asset://") || (!isAssetReferenceField(key) && !(isAssetSourceField(key) && isAssetEnvelope(typed))) {
 				continue
 			}
 			if sha == "" || size <= 0 {
@@ -266,11 +270,15 @@ func isMediaReferenceField(field string) bool {
 
 func isAssetReferenceField(field string) bool {
 	switch strings.ToLower(strings.TrimSpace(field)) {
-	case "uri", "url", "source_url", "source", "audio_path", "video_url", "video_path", "voiceover_path", "voiceover", "voiceover_url", "voiceover_paths", "audio_url", "music", "music_path", "music_url", "effect", "effects", "effect_path", "effect_url", "sfx", "sfx_path", "sfx_url", "subtitle", "subtitles", "subtitle_path", "subtitle_url", "caption", "captions", "caption_path", "caption_url", "clip", "clips", "clip_link", "clip_links", "image", "images", "image_link", "image_links", "scene_image_paths":
+	case "uri", "url", "source_url", "audio_path", "video_url", "video_path", "voiceover_path", "voiceover", "voiceover_url", "voiceover_paths", "audio_url", "music", "music_path", "music_url", "effect", "effects", "effect_path", "effect_url", "sfx", "sfx_path", "sfx_url", "subtitle", "subtitles", "subtitle_path", "subtitle_url", "caption", "captions", "caption_path", "caption_url", "clip", "clips", "clip_link", "clip_links", "image", "images", "image_link", "image_links", "scene_image_paths":
 		return true
 	default:
 		return false
 	}
+}
+
+func isAssetSourceField(field string) bool {
+	return strings.EqualFold(strings.TrimSpace(field), "source")
 }
 
 func fieldPath(parent, child string) string {

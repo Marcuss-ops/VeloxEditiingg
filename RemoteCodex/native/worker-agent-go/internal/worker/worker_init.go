@@ -21,7 +21,6 @@ import (
 
 	"velox-shared/controltransport"
 	"velox-worker-agent/internal/executor"
-	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/spool"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
@@ -322,7 +321,13 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		// logs the diagnostic to stderr + os.Exit(17).
 		onWorkerIDCollision: wo.onWorkerIDCollision,
 		taskRunner:          tr,
-		publisherRegistry:   publisher.NewRegistry(),
+		// The master-side typed ArtifactUploadPlan/TaskCommitAck stream is
+		// not part of the production gRPC handler yet. Keep the durable
+		// spool available for recovery tooling, but use the verified
+		// multipart upload endpoint on the live render path until both
+		// sides of that protocol are wired. A non-nil registry would make
+		// every real render block waiting for an unhandled protobuf.
+		publisherRegistry:   nil,
 		outputSpool:         outputSpool,
 		// Resource sampler. Empty procRoot/sysRoot
 		// defaults to /proc + /sys. cfg.WorkDir may be empty on

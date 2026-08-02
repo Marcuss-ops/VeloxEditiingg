@@ -69,7 +69,7 @@ readonly MASTER_PORT="${PILOT_MASTER_PORT:-$(pick_free_port)}"
 readonly GRPC_PORT="${PILOT_GRPC_PORT:-$(pick_free_port)}"
 readonly WORKER_HEALTH_PORT="${PILOT_WORKER_HEALTH_PORT:-$(pick_free_port)}"
 readonly ADMIN_TOKEN="test-admin-token"
-readonly WORKER_ID="pilot-worker-1"
+readonly WORKER_ID="${PILOT_WORKER_ID:-pilot-worker-1}"
 readonly DESTINATION_ID="e2e-local"
 
 # Binaries (built from repo)

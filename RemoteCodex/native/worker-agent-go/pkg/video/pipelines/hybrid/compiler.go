@@ -14,6 +14,7 @@ package hybrid
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"velox-worker-agent/internal/oteltrace"
 	"velox-worker-agent/pkg/video/plan"
@@ -85,6 +86,9 @@ type AudioTrackInput struct {
 func Validate(input map[string]interface{}) error {
 	items := input["items"]
 	if items == nil {
+		if scenesJSON, ok := input["scenes_json"].(string); ok && strings.TrimSpace(scenesJSON) != "" {
+			return nil
+		}
 		// Fallback: check for images + clips arrays
 		images := toSliceString(input["images"])
 		clips := toSliceString(input["clips"])

@@ -38,6 +38,16 @@ func TestExtractVoiceoverPathsCharacterizationAcceptsStringList(t *testing.T) {
 	}
 }
 
+func TestExtractVoiceoverPathsDoesNotTreatPipelineSourceAsAudio(t *testing.T) {
+	got := extractVoiceoverPaths(map[string]interface{}{
+		"source":        "pipeline_generate_with_images",
+		"submitted_via": "pipeline_generate_with_images",
+	})
+	if len(got) != 0 {
+		t.Fatalf("pipeline metadata must not become voiceover input: %#v", got)
+	}
+}
+
 func TestNormalizeAudioAndSubtitleTracksHaveSameShapeBehavior(t *testing.T) {
 	tests := []struct {
 		name string

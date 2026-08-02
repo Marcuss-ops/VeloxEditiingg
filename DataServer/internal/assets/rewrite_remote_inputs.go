@@ -2,7 +2,9 @@ package assets
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"velox-server/internal/inputsecurity"
@@ -67,7 +69,100 @@ func (s *AssetService) RewriteRemoteInputPayload(ctx context.Context, payload ma
 			}
 		}
 	}
+	return s.attachAssetMetadata(ctx, payload)
+}
+
+// attachAssetMetadata publishes the verified registry record for every
+// canonical asset reference in the worker payload. The worker intentionally
+// refuses to materialize a velox-asset URI without these integrity fields, so
+// this is part of the same acquisition boundary as the rewrite above.
+func (s *AssetService) attachAssetMetadata(ctx context.Context, payload map[string]interface{}) error {
+	if s == nil || s.repo == nil || payload == nil {
+		return nil
+	}
+	refs := make(map[string]struct{})
+	collectVeloxAssetReferences(payload, refs)
+	if len(refs) == 0 {
+		return nil
+	}
+
+	orderedRefs := make([]string, 0, len(refs))
+	for reference := range refs {
+		orderedRefs = append(orderedRefs, reference)
+	}
+	sort.Strings(orderedRefs)
+	metadata := make([]map[string]interface{}, 0, len(orderedRefs))
+	for _, reference := range orderedRefs {
+		assetID := strings.TrimSpace(strings.TrimPrefix(reference, VeloxAssetScheme+"://"))
+		record, err := s.repo.GetByID(ctx, assetID)
+		if err != nil {
+			return fmt.Errorf("asset metadata lookup %s: %w", reference, err)
+		}
+		if record == nil || record.Status != AssetStatusReady || strings.TrimSpace(record.SHA256) == "" || record.SizeBytes <= 0 {
+			return fmt.Errorf("asset metadata incomplete for %s", reference)
+		}
+		metadata = append(metadata, map[string]interface{}{
+			"id":         record.AssetID,
+			"uri":        VeloxAssetScheme + "://" + record.AssetID,
+			"kind":       record.Kind,
+			"sha256":     record.SHA256,
+			"size_bytes": record.SizeBytes,
+			"mime_type":  record.MimeType,
+		})
+	}
+
+	// Preserve any existing declarations and append only references resolved
+	// by this acquisition pass. This keeps manifest-provided metadata stable
+	// while ensuring newly registered inputs are worker-verifiable.
+	var existing []interface{}
+	switch typed := payload["assets"].(type) {
+	case []interface{}:
+		existing = append(existing, typed...)
+	case []map[string]interface{}:
+		for _, item := range typed {
+			existing = append(existing, item)
+		}
+	}
+	for _, item := range metadata {
+		existing = append(existing, item)
+	}
+	payload["assets"] = existing
 	return nil
+}
+
+func collectVeloxAssetReferences(value interface{}, refs map[string]struct{}) {
+	switch typed := value.(type) {
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if strings.HasPrefix(strings.ToLower(trimmed), VeloxAssetScheme+"://") {
+			refs[trimmed] = struct{}{}
+		}
+	case map[string]interface{}:
+		for key, item := range typed {
+			if key == "scenes_json" {
+				if encoded, ok := item.(string); ok && strings.TrimSpace(encoded) != "" {
+					var decoded interface{}
+					if json.Unmarshal([]byte(encoded), &decoded) == nil {
+						collectVeloxAssetReferences(decoded, refs)
+					}
+				}
+				continue
+			}
+			collectVeloxAssetReferences(item, refs)
+		}
+	case []interface{}:
+		for _, item := range typed {
+			collectVeloxAssetReferences(item, refs)
+		}
+	case []map[string]interface{}:
+		for _, item := range typed {
+			collectVeloxAssetReferences(item, refs)
+		}
+	case []string:
+		for _, item := range typed {
+			collectVeloxAssetReferences(item, refs)
+		}
+	}
 }
 
 func rewriteRemoteInputValue(ctx context.Context, s *AssetService, value interface{}) error {

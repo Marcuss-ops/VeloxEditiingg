@@ -112,6 +112,16 @@ func detailedPhasesFromExecutor(phases []executor.DetailedPhaseTiming) []Detaile
 	}
 	out := make([]DetailedPhaseTiming, 0, len(phases))
 	for i, p := range phases {
+		// Native sidecars are an execution detail and their origin/scope
+		// fields are not authoritative.  Normalize them at the worker
+		// transport boundary from the same closed taxonomy used by the
+		// recorder.  This keeps the real TaskResult path compatible with
+		// the master's fail-closed event validation without weakening that
+		// validation for malformed callers.
+		origin, scope := p.Origin, p.Scope
+		if spec, ok := telemetry.LookupCanonicalPhaseSpec(p.Component, p.Action); ok {
+			origin, scope = spec.Origin, spec.Scope
+		}
 		out = append(out, DetailedPhaseTiming{
 			PhaseOrder:       i + 1,
 			Component:        p.Component,
@@ -126,8 +136,8 @@ func detailedPhasesFromExecutor(phases []executor.DetailedPhaseTiming) []Detaile
 			BytesOut:         p.BytesOut,
 			Frames:           p.Frames,
 			MetadataJSON:     p.MetadataJSON,
-			Origin:           p.Origin,
-			Scope:            p.Scope,
+			Origin:           origin,
+			Scope:            scope,
 			EventType:        p.EventType,
 			EventName:        p.EventName,
 			EventIndex:       p.EventIndex,

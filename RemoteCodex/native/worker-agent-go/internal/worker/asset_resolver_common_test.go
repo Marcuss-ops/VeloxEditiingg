@@ -143,6 +143,30 @@ func TestCommonAssetResolverRewritesScenesJSONAndPreservesInput(t *testing.T) {
 	}
 }
 
+func TestCommonAssetResolverIgnoresTopLevelPipelineSource(t *testing.T) {
+	body := []byte("scene-image-bytes")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+	w := &Worker{config: &config.WorkerConfig{MasterURL: server.URL, WorkDir: t.TempDir()}, apiClient: api.NewClient(server.URL)}
+	payload := map[string]interface{}{
+		"source":      "pipeline_generate_with_images",
+		"assets":      []interface{}{assetEnvelope("image-001", "image", body)},
+		"scenes_json": `[{"image":"velox-asset://image-001"}]`,
+	}
+	resolved, err := w.resolveCommonAssetPayload(context.Background(), payload)
+	if err != nil {
+		t.Fatalf("canonical pipeline source was treated as media: %v", err)
+	}
+	if resolved["source"] != "pipeline_generate_with_images" {
+		t.Fatalf("top-level source changed: %v", resolved["source"])
+	}
+	if !strings.Contains(resolved["scenes_json"].(string), w.config.WorkDir) {
+		t.Fatalf("scene image was not resolved: %s", resolved["scenes_json"])
+	}
+}
+
 func TestCommonAssetResolverRejectsRawURLsLocalPathsAndIncompleteMetadata(t *testing.T) {
 	w := &Worker{config: &config.WorkerConfig{MasterURL: "http://127.0.0.1:1", WorkDir: t.TempDir()}, apiClient: api.NewClient("http://127.0.0.1:1")}
 	cases := []struct {

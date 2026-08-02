@@ -81,6 +81,10 @@ func TestValidateTaskPayload_AllowsOnlyExplicitLegacyAdapter(t *testing.T) {
 	if err := ValidateTaskPayload(currentMasterPayload); err != nil {
 		t.Fatalf("explicit payload_contract_version adapter rejected: %v", err)
 	}
+	currentMasterPayload["version"] = "v2"
+	if err := ValidateTaskPayload(currentMasterPayload); err != nil {
+		t.Fatalf("canonical payload with version=v2 rejected: %v", err)
+	}
 
 	delete(currentMasterPayload, "payload_contract_version")
 	if err := ValidateTaskPayload(currentMasterPayload); err == nil {

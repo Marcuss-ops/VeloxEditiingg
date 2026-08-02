@@ -135,6 +135,7 @@ func (h *Handler) createJob() gin.HandlerFunc {
 		for _, d := range req.DeliveryPlan.Destinations {
 			dsts = append(dsts, CreateDestinationCmd{
 				ExternalDestinationID: d.ExternalDestinationID,
+				PublicationID:         d.PublicationID,
 				Metadata:              d.Metadata,
 			})
 		}

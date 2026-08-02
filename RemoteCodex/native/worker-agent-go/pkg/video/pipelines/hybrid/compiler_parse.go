@@ -148,16 +148,28 @@ func parseRequest(input map[string]interface{}) *Request {
 				if clip, ok := scene["clip"].(map[string]interface{}); ok {
 					clipURL = toStringDefault(clip["url"], clipURL)
 				}
-				if clipURL == "" {
+				if clipURL != "" {
+					req.Items = append(req.Items, ItemInput{
+						Type:         "video",
+						URL:          clipURL,
+						Duration:     toFloat64Default(scene["duration_seconds"], 4.0),
+						Fit:          req.Fit,
+						IncludeAudio: true,
+					})
 					continue
 				}
-				req.Items = append(req.Items, ItemInput{
-					Type:         "video",
-					URL:          clipURL,
-					Duration:     toFloat64Default(scene["duration_seconds"], 4.0),
-					Fit:          req.Fit,
-					IncludeAudio: true,
-				})
+				imageURL := toString(scene["image"])
+				if imageURL == "" {
+					imageURL = toString(scene["image_link"])
+				}
+				if imageURL != "" {
+					req.Items = append(req.Items, ItemInput{
+						Type:     "image",
+						URL:      imageURL,
+						Duration: toFloat64Default(scene["duration_seconds"], 4.0),
+						Fit:      req.Fit,
+					})
+				}
 			}
 		}
 		if len(req.Items) > 0 {

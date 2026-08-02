@@ -134,6 +134,26 @@ func TestCompile_ItemsWithoutAudio_ProducesSilentTimeline(t *testing.T) {
 	}
 }
 
+func TestCompile_ScenesJSONImageProducesTimelineItem(t *testing.T) {
+	input := map[string]interface{}{
+		"scenes_json": `[{"image":"velox-asset://image-001","duration_seconds":2}]`,
+	}
+
+	plan, err := Compile(context.Background(), "job-scenes-image", input, "/tmp/out.mp4", nil)
+	if err != nil {
+		t.Fatalf("Compile(scenes_json image): %v", err)
+	}
+	if len(plan.Timeline) != 1 {
+		t.Fatalf("want one timeline item, got %d", len(plan.Timeline))
+	}
+	if got := plan.Timeline[0].Source.URL; got != "velox-asset://image-001" {
+		t.Fatalf("want image reference preserved, got %q", got)
+	}
+	if got := plan.Timeline[0].DurationSeconds; got != 2 {
+		t.Fatalf("want duration 2, got %v", got)
+	}
+}
+
 func TestCompile_VideoItemCanPreserveOriginalAudio(t *testing.T) {
 	input := map[string]interface{}{
 		"items": []interface{}{
