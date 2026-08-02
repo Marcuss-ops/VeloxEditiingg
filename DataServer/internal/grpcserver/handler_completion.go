@@ -72,8 +72,8 @@ func (h *Handler) handleTaskOutputDeclared(workerID string, msg *pb.TaskOutputDe
 			}
 			session, beginErr := h.chunkedUploadSvc.InitChunkedSession(ctxForTaskSession(sess), artifacts.BeginUploadCommand{
 				JobID: msg.GetJobId(), WorkerID: workerID, LeaseID: msg.GetLeaseId(),
-				AttemptNumber: int(msg.GetAttemptNumber()), ExpectedRevision: int(msg.GetRevision()),
-				Kind: m.OutputKind, MimeType: m.MimeType, ExpectedSizeBytes: m.SizeBytes, ExpectedSHA256: m.SHA256,
+				AttemptNumber: int(msg.GetAttemptNumber()),
+				Kind:          m.OutputKind, MimeType: m.MimeType, ExpectedSizeBytes: m.SizeBytes, ExpectedSHA256: m.SHA256,
 			})
 			if beginErr != nil {
 				log.Printf("[GRPC] TaskOutputDeclared task=%s begin upload output=%s failed: %v", msg.GetTaskId(), m.LogicalName, beginErr)
