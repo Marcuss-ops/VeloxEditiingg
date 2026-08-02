@@ -25,6 +25,12 @@ func ProjectLegacyWorkerPayload(canonical map[string]interface{}) (map[string]in
 	if err := json.Unmarshal(encoded, &legacy); err != nil {
 		return nil, fmt.Errorf("decode canonical worker payload clone: %w", err)
 	}
+	// `source` is canonical lifecycle metadata (for example,
+	// "pipeline_generate_with_images"), not a media URI. The v1 worker's
+	// broad asset walker treats that key as a media reference, so keep it
+	// out of the compatibility envelope. The persisted canonical payload is
+	// never changed.
+	delete(legacy, "source")
 
 	attachLegacySceneClipTimeline(legacy)
 	// The v1 worker adapter reads render inputs from the RenderPlan's

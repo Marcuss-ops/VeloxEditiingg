@@ -10,6 +10,7 @@ import (
 func TestProjectLegacyWorkerPayload_ProjectsOnlyWorkerCopy(t *testing.T) {
 	canonical := map[string]interface{}{
 		"payload_contract_version": contract.PayloadContractVersionCanonical,
+		"source":                   "pipeline_generate_with_images",
 		"video_name":               "Legacy worker projection",
 		"script_text":              "Narrated clip",
 		"voiceover_paths":          []interface{}{"velox-asset://voice-1"},
@@ -41,6 +42,9 @@ func TestProjectLegacyWorkerPayload_ProjectsOnlyWorkerCopy(t *testing.T) {
 	}
 	if _, ok := legacy["video_mode"]; !ok {
 		t.Fatalf("legacy payload missing video_mode: %#v", legacy)
+	}
+	if _, ok := legacy["source"]; ok {
+		t.Fatalf("legacy payload leaked lifecycle source metadata: %#v", legacy)
 	}
 	parameters, ok := legacy["parameters"].(map[string]interface{})
 	if !ok {
