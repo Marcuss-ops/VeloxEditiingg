@@ -86,7 +86,9 @@ var allowedWriters = map[string]bool{
 	// inside the same audited transaction gateway as coordinator.go. The SQL
 	// moved from sqlite_uow.go into this responsibility-specific file.
 	filepath.Join("internal", "completion", "sqlite_uow_repos.go"):  true,
-	filepath.Join("internal", "store", "store_deliveries_lease.go"): true,
+	// Separate delivery lifecycle: the terminal/retry SQL moved from
+	// store_deliveries_lease.go into the responsibility-specific marks file.
+	filepath.Join("internal", "store", "store_deliveries_marks.go"): true,
 	// SEPARATE lifecycles: UPDATE workflow_steps / workflow_runs SET
 	// status='SUCCEEDED' is workflow-completion (NOT jobs).
 	filepath.Join("internal", "workflow", "sqlite_repository.go"):         true,
