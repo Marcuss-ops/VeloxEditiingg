@@ -25,10 +25,15 @@ import (
 
 // Scope constants used by the JWT-protected route group.
 const (
-	ScopeJobsRead    = "velox:jobs:read"
-	ScopeJobsWrite   = "velox:jobs:write"
-	ScopeWorkersRead = "velox:workers:read"
-	ScopeAssetsRead  = "velox:assets:read"
+	// Keep the route-local names for readability, but source their wire
+	// values from the canonical scope vocabulary. The InstaEdit BFF signs
+	// these exact values; duplicating the strings here previously allowed
+	// the two repositories to drift and made every BFF request fail with
+	// 403 insufficient scope.
+	ScopeJobsRead    = instaeditauth.ScopeEditorProjectRead
+	ScopeJobsWrite   = instaeditauth.ScopeEditorProjectWrite
+	ScopeWorkersRead = instaeditauth.ScopeEditorProjectRead
+	ScopeAssetsRead  = instaeditauth.ScopeEditorProjectRead
 )
 
 // HandlerDeps carries the dependencies required by the InstaEdit BFF

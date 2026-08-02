@@ -51,7 +51,7 @@ func validClaims() instaeditauth.Claims {
 		Audience:    "velox",
 		Subject:     "123",
 		WorkspaceID: 45,
-		Scopes:      []string{"velox:jobs:read", "velox:jobs:write", "velox:workers:read", "velox:assets:read"},
+		Scopes:      []string{ScopeJobsRead, ScopeJobsWrite},
 		ExpiresAt:   time.Now().Add(5 * time.Minute).Unix(),
 		JTI:         "test-jti",
 	}
@@ -84,7 +84,7 @@ func TestInstaEditRoutes_MissingToken_401(t *testing.T) {
 func TestInstaEditRoutes_MissingScope_403(t *testing.T) {
 	r := setupRouter()
 	claims := validClaims()
-	claims.Scopes = []string{"velox:workers:read"} // no jobs write
+	claims.Scopes = []string{ScopeJobsRead} // no jobs write
 	token := mintToken(t, claims)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/instaedit/jobs", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -139,7 +139,7 @@ func TestInstaEditRoutes_ExpiredToken_401(t *testing.T) {
 func TestInstaEditRoutes_AssetRoute_RequiresAssetScope(t *testing.T) {
 	r := setupRouter()
 	claims := validClaims()
-	claims.Scopes = []string{"velox:jobs:read"} // no assets read
+	claims.Scopes = []string{ScopeJobsWrite} // no assets read
 	token := mintToken(t, claims)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/instaedit/assets/asset-1", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
