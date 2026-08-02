@@ -71,6 +71,11 @@ func (r *Resolver) PersistPendingRemoteForwarding(
 //	(b) INSERTs a fresh PENDING row and promotes it to READY_TO_FORWARD via
 //	    the leaseless MarkCreatorForwardingReadySync (handler sync path).
 //
+// If the insert is an idempotent duplicate, the persisted row is authoritative:
+// an already READY_TO_FORWARD row is reused without attempting a second
+// transition. This is required when the request crashed after the forwarding
+// row was committed but before the job enqueue transaction completed.
+//
 // The payload is JSON-serialized here so both paths pass the same shape
 // into the atomic write. A marshal failure is treated as a fatal input
 // error (the caller decides whether to surface it to the user).
@@ -110,11 +115,33 @@ func (r *Resolver) ensureReadyForwarding(ctx context.Context, req ResolveRequest
 		return "", fmt.Errorf("creatorflow: Resolve: insert returned empty row")
 	}
 
+	persisted := inserted.Forwarding
+	if !inserted.Created {
+		// The unique source key makes this the canonical row for the retry.
+		// Never allow a different payload to reuse the same idempotency key.
+		if persisted.PayloadSHA256 != "" && persisted.PayloadSHA256 != payloadSHA256 {
+			return "", ErrIdempotencyKeyReused
+		}
+
+		switch store.CreatorForwardingStatus(persisted.Status) {
+		case store.CFStatusReadyToForward:
+			log.Printf("[CREATORFLOW] sync handler path: reusing %s already READY_TO_FORWARD (source=%s source_job=%s target_executor=%s)",
+				persisted.ForwardingID, req.SourceProvider, req.SourceJobID, targetExecutor)
+			return persisted.ForwardingID, nil
+		case store.CFStatusPending, store.CFStatusPolling:
+			// Continue below and promote the existing row. These are the only
+			// non-terminal states accepted by the synchronous promotion CAS.
+		default:
+			return "", fmt.Errorf("creatorflow: Resolve: existing forwarding %s is in non-promotable status %s",
+				persisted.ForwardingID, persisted.Status)
+		}
+	}
+
 	// Promote PENDING → READY_TO_FORWARD via the leaseless sync method.
-	if err := r.forwardRepo.MarkCreatorForwardingReadySync(ctx, inserted.Forwarding.ForwardingID, payloadJSON, payloadSHA256); err != nil {
+	if err := r.forwardRepo.MarkCreatorForwardingReadySync(ctx, persisted.ForwardingID, payloadJSON, payloadSHA256); err != nil {
 		return "", fmt.Errorf("creatorflow: Resolve mark READY_TO_FORWARD: %w", err)
 	}
 	log.Printf("[CREATORFLOW] sync handler path: promoted %s to READY_TO_FORWARD (source=%s source_job=%s target_executor=%s)",
-		inserted.Forwarding.ForwardingID, req.SourceProvider, req.SourceJobID, targetExecutor)
-	return inserted.Forwarding.ForwardingID, nil
+		persisted.ForwardingID, req.SourceProvider, req.SourceJobID, targetExecutor)
+	return persisted.ForwardingID, nil
 }

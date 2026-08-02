@@ -68,6 +68,11 @@ func (f *fakeForwardingRepo) InsertCreatorForwarding(ctx context.Context, cf *st
 	if f.insertErr != nil {
 		return nil, f.insertErr
 	}
+	if f.bySource != nil {
+		if existing := f.bySource[keyForSource(cf.SourceProvider, cf.SourceJobID, cf.TargetExecutorID)]; existing != nil {
+			return &store.InsertCreatorForwardingResult{Created: false, Forwarding: existing}, nil
+		}
+	}
 	return &store.InsertCreatorForwardingResult{Created: true, Forwarding: cf}, nil
 }
 
@@ -490,6 +495,53 @@ func TestEnsureReadyForwarding(t *testing.T) {
 		}
 		if repo.markReadyPayloads[0] == "" || repo.markReadyHashes[0] == "" {
 			t.Fatalf("expected non-empty payload and hash in mark ready, got %q / %q", repo.markReadyPayloads[0], repo.markReadyHashes[0])
+		}
+	})
+
+	t.Run("handler retry reuses an existing ready row", func(t *testing.T) {
+		_, storedHash := resolverMarshalPayload(map[string]interface{}{"ok": true})
+		existing := &store.CreatorForwarding{
+			ForwardingID:     "cf-existing",
+			SourceProvider:   "remote_engine",
+			SourceJobID:      "job-1",
+			TargetExecutorID: "scene.composite.v1",
+			PayloadSHA256:    storedHash,
+			Status:           string(store.CFStatusReadyToForward),
+		}
+		repo := &fakeForwardingRepo{bySource: map[string]*store.CreatorForwarding{
+			keyForSource("remote_engine", "job-1", "scene.composite.v1"): existing,
+		}}
+		r := &Resolver{forwardRepo: repo}
+		forwardingID, err := r.ensureReadyForwarding(context.Background(),
+			ResolveRequest{SourceProvider: "remote_engine", SourceJobID: "job-1"},
+			"scene.composite.v1", map[string]interface{}{"ok": true})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if forwardingID != existing.ForwardingID {
+			t.Fatalf("want existing forwarding id %q, got %q", existing.ForwardingID, forwardingID)
+		}
+		if len(repo.markReadyCalls) != 0 {
+			t.Fatalf("must not promote an already-ready row, got %v", repo.markReadyCalls)
+		}
+	})
+
+	t.Run("handler retry rejects a changed payload", func(t *testing.T) {
+		_, storedHash := resolverMarshalPayload(map[string]interface{}{"ok": true})
+		existing := &store.CreatorForwarding{
+			ForwardingID: "cf-existing", SourceProvider: "remote_engine", SourceJobID: "job-1",
+			TargetExecutorID: "scene.composite.v1", PayloadSHA256: storedHash,
+			Status: string(store.CFStatusReadyToForward),
+		}
+		repo := &fakeForwardingRepo{bySource: map[string]*store.CreatorForwarding{
+			keyForSource("remote_engine", "job-1", "scene.composite.v1"): existing,
+		}}
+		r := &Resolver{forwardRepo: repo}
+		_, err := r.ensureReadyForwarding(context.Background(),
+			ResolveRequest{SourceProvider: "remote_engine", SourceJobID: "job-1"},
+			"scene.composite.v1", map[string]interface{}{"ok": false})
+		if !errors.Is(err, ErrIdempotencyKeyReused) {
+			t.Fatalf("expected idempotency conflict, got %v", err)
 		}
 	})
 
