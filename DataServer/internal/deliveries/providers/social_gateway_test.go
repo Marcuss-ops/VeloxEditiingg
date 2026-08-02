@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"velox-server/internal/credentials"
 	"velox-server/internal/deliveries"
 	"velox-server/internal/socialclient"
 	"velox-server/internal/store"
@@ -341,5 +342,48 @@ func TestSocialGatewayProvider_RetryIdempotencyStable(t *testing.T) {
 	}
 	if res1.RemoteID != stableRemoteID || res2.RemoteID != stableRemoteID {
 		t.Fatalf("want stable remote_id on both attempts, got res1=%q res2=%q", res1.RemoteID, res2.RemoteID)
+	}
+}
+
+func TestSocialGatewayProvider_RedactsCredentialMetadata(t *testing.T) {
+	provider := NewSocialGatewayProvider(socialclient.Config{BaseURL: "https://social.example", CallbackBaseURL: "https://velox.example"})
+	destination := &deliveries.Destination{
+		ExternalDestinationID: "external-destination",
+		DeliveryMetadataJSON:  `{"credential_ref":"cred_0123456789abcdef0123456789abcdef0123","access_token":"access-secret","title":"safe"}`,
+	}
+	req, err := provider.buildRequest(sampleArtifact(), destination, "delivery-redaction", "idem-redaction")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("access-secret")) || bytes.Contains(raw, []byte("credential_ref")) {
+		t.Fatalf("provider request leaked credential metadata: %s", raw)
+	}
+	if !bytes.Contains(raw, []byte("[REDACTED]")) {
+		t.Fatalf("provider request did not contain the central redaction marker: %s", raw)
+	}
+}
+
+func TestSocialGatewayProvider_UsesLeaseToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer short-lived-token" {
+			t.Errorf("Authorization = %q; want lease token", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"social_delivery_id":"social-lease-1"}`))
+	}))
+	defer server.Close()
+
+	provider := newLiveProviderForServer(t, server.URL, server.URL, "legacy-config-token")
+	lease := &credentials.AccessLease{AccessToken: "short-lived-token"}
+	result, err := provider.DeliverWithCredential(context.Background(), sampleArtifact(), sampleDestination(), "delivery-lease", "idem-lease", lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RemoteID != "social-lease-1" {
+		t.Fatalf("remote id = %q", result.RemoteID)
 	}
 }

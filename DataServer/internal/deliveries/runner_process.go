@@ -6,11 +6,14 @@ package deliveries
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
+	"velox-server/internal/credentials"
 	"velox-server/internal/store"
 )
 
@@ -66,12 +69,27 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 	} else {
 		dest.DeliveryMetadataJSON = metadata
 	}
+	credentialRef, refErr := credentials.ReferenceFromJSON(dest.DeliveryMetadataJSON)
+	if refErr != nil {
+		if markErr := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "CREDENTIAL_REF_INVALID", refErr.Error()); markErr != nil {
+			log.Printf("[DELIVERY] mark credential reference failure for %s: %v", lease.DeliveryID, markErr)
+		}
+		return fmt.Errorf("credential reference: %w", refErr)
+	}
+	dest.CredentialRef = credentialRef
 	artifact, err := r.hydrateArtifact(ctx, lease.ArtifactID)
 	if err != nil {
 		if err := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "ARTIFACT_NOT_FOUND", err.Error()); err != nil {
 			log.Printf("[DELIVERY] mark failed for %s: %v", lease.DeliveryID, err)
 		}
 		return fmt.Errorf("hydrate artifact: %w", err)
+	}
+	credentialLease, credentialErr := r.issueCredentialLease(ctx, provider, dest, lease)
+	if credentialErr != nil {
+		if markErr := r.dbStore.MarkDeliveryBlockedAuth(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, credentialErrorCode(credentialErr), credentialErr.Error()); markErr != nil {
+			log.Printf("[DELIVERY] mark credential auth failure for %s: %v", lease.DeliveryID, markErr)
+		}
+		return credentialErr
 	}
 
 	// Start a heartbeat goroutine to renew the lease periodically while
@@ -88,11 +106,27 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 			cancelDeliver()
 		})
 
-	res, runErr := provider.Deliver(deliverCtx, artifact, dest, lease.DeliveryID, lease.DeliveryID)
+	var res *Result
+	var runErr error
+	if credentialProvider, ok := provider.(CredentialLeaseProvider); ok {
+		res, runErr = credentialProvider.DeliverWithCredential(deliverCtx, artifact, dest, lease.DeliveryID, lease.DeliveryID, credentialLease)
+	} else {
+		res, runErr = provider.Deliver(deliverCtx, artifact, dest, lease.DeliveryID, lease.DeliveryID)
+	}
 
 	// Stop the heartbeat goroutine and wait for it to exit.
 	cancelDeliver()
 	<-heartbeatDone
+	if credentialLease != nil && r.vault != nil {
+		success := runErr == nil && res != nil && res.Success
+		errorCode := ""
+		if !success {
+			errorCode = classifyErrorCode(runErr)
+		}
+		if auditErr := r.vault.RecordLeaseResult(ctx, credentialLease, success, errorCode); auditErr != nil {
+			log.Printf("[DELIVERY] credential usage audit failed for %s: %v", lease.DeliveryID, auditErr)
+		}
+	}
 
 	// ── Success ──
 	if runErr == nil && res != nil && res.Success {
@@ -165,6 +199,57 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 		}
 		return nil
 	}
+}
+
+func (r *DeliveryRunner) issueCredentialLease(ctx context.Context, provider Provider, destination *Destination, lease store.DeliveryLease) (*credentials.AccessLease, error) {
+	credentialProvider, needsCredential := provider.(CredentialLeaseProvider)
+	if !needsCredential {
+		return nil, nil
+	}
+	if destination == nil || destination.CredentialRef == "" {
+		return nil, fmt.Errorf("%w: credential_ref is required", ErrProviderAuth)
+	}
+	if r.vault == nil {
+		return nil, fmt.Errorf("%w: credential vault unavailable", ErrProviderAuth)
+	}
+	scopes := []string{"publish"}
+	if scoped, ok := credentialProvider.(CredentialScopeProvider); ok {
+		scopes = scoped.RequiredCredentialScopes()
+	}
+	publicationID := lease.DeliveryID
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(destination.DeliveryMetadataJSON), &metadata); err == nil {
+		if value, ok := metadata["publication_id"].(string); ok && value != "" {
+			publicationID = value
+		}
+	}
+	accessLease, err := r.vault.IssueAccessLease(ctx, destination.CredentialRef, r.identity, publicationID, scopes)
+	if err != nil {
+		return nil, fmt.Errorf("%w: issue credential lease: %v", ErrProviderAuth, err)
+	}
+	return accessLease, nil
+}
+
+func credentialErrorCode(err error) string {
+	if err == nil {
+		return "CREDENTIAL_AUTH"
+	}
+	message := strings.ToLower(err.Error())
+	for _, item := range []struct {
+		marker string
+		code   string
+	}{
+		{"credential_ref is required", "CREDENTIAL_REF_REQUIRED"},
+		{"vault unavailable", "CREDENTIAL_VAULT_UNAVAILABLE"},
+		{"credential revoked", "CREDENTIAL_REVOKED"},
+		{"credential expired", "CREDENTIAL_EXPIRED"},
+		{"scope", "CREDENTIAL_SCOPE_DENIED"},
+	} {
+		if strings.Contains(message, item.marker) {
+			return item.code
+		}
+	}
+	return "CREDENTIAL_AUTH"
 }
 
 // renewDeliveryLeaseLoop extends the lease periodically (every

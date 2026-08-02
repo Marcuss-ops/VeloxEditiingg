@@ -43,6 +43,7 @@ import (
 	"sync"
 	"time"
 
+	"velox-server/internal/credentials"
 	"velox-server/internal/store"
 	"velox-server/internal/supervisor"
 )
@@ -52,6 +53,7 @@ type DeliveryRunner struct {
 	cfg      *RunnerConfig
 	registry *Registry
 	dbStore  *store.SQLiteStore
+	vault    *credentials.Vault
 
 	sem chan struct{} // bounded concurrency
 
@@ -62,6 +64,15 @@ type DeliveryRunner struct {
 	// identity holds a stable per-runner id written on delivery_attempts
 	// so concurrent runners do not race on the same row.
 	identity string
+}
+
+// WithCredentialVault connects the runner to the central credential
+// boundary. Credential-aware providers fail closed when it is not set.
+func (r *DeliveryRunner) WithCredentialVault(vault *credentials.Vault) *DeliveryRunner {
+	if r != nil {
+		r.vault = vault
+	}
+	return r
 }
 
 // NewDeliveryRunner wires a runner. dbStore is the durable anchor;

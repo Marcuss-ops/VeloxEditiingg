@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"velox-server/internal/credentials"
 )
 
 // PublishingCatalogRequest asks the Social API for every channel and group
@@ -134,7 +136,7 @@ func (c *Client) ListPublishingCatalog(ctx context.Context, workspaceID int64, p
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, classifyStatusError(resp.StatusCode, string(bytes.TrimSpace(respBody)))
+		return nil, classifyStatusError(resp.StatusCode, credentials.JSON(string(bytes.TrimSpace(respBody))))
 	}
 
 	var out PublishingTargetCatalogResponse

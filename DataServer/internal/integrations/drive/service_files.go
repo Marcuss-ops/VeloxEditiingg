@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"velox-server/internal/credentials"
 )
 
 const defaultDownloadMaxBytes int64 = 256 * 1024 * 1024
@@ -91,11 +93,10 @@ func (s *Service) UploadFile(ctx context.Context, filePath string, folderID stri
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		var errResp map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&errResp)
+		raw, _ := io.ReadAll(resp.Body)
 		return &UploadResult{
 			Success: false,
-			Error:   fmt.Sprintf("upload failed (%d): %v", resp.StatusCode, errResp),
+			Error:   fmt.Sprintf("upload failed (%d): %s", resp.StatusCode, credentials.JSON(string(raw))),
 		}, nil
 	}
 
@@ -117,6 +118,15 @@ func (s *Service) UploadFile(ctx context.Context, filePath string, folderID stri
 		WebViewLink: result.WebViewLink,
 		FolderLink:  folderLink,
 	}, nil
+}
+
+// UploadVideoWithAccessToken performs one upload with the short-lived token
+// issued by the central credential vault.
+func (s *Service) UploadVideoWithAccessToken(ctx context.Context, filePath, projectName, parentFolderID, deliveryID, accessToken string) (*UploadResult, error) {
+	if strings.TrimSpace(accessToken) == "" {
+		return nil, fmt.Errorf("drive access token is required")
+	}
+	return s.UploadVideo(WithAccessToken(ctx, accessToken), filePath, projectName, parentFolderID, deliveryID)
 }
 
 // DownloadFile downloads a file from Drive

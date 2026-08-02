@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 
+	"velox-server/internal/credentials"
 	"velox-server/internal/deliveries"
 	"velox-server/internal/socialclient"
 	"velox-server/internal/store"
@@ -53,6 +54,10 @@ func NewSocialGatewayProvider(cfg socialclient.Config) *SocialGatewayProvider {
 // matching migration on the destination rows + provider registry.
 func (s *SocialGatewayProvider) Name() string { return "social_gateway" }
 
+func (s *SocialGatewayProvider) RequiredCredentialScopes() []string {
+	return []string{"publish"}
+}
+
 // Deliver sends artifact metadata to the Social Service through the
 // socialclient and returns the social_delivery_id provided by the
 // remote service.
@@ -62,6 +67,17 @@ func (s *SocialGatewayProvider) Name() string { return "social_gateway" }
 // ClassifyError can decide retry semantics without needing to know
 // about socialclient internals.
 func (s *SocialGatewayProvider) Deliver(ctx context.Context, artifact *store.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string) (*deliveries.Result, error) {
+	return s.deliver(ctx, artifact, destination, deliveryID, idempotencyKey, "")
+}
+
+func (s *SocialGatewayProvider) DeliverWithCredential(ctx context.Context, artifact *store.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string, lease *credentials.AccessLease) (*deliveries.Result, error) {
+	if lease == nil || lease.AccessToken == "" {
+		return nil, deliveries.ErrProviderAuth
+	}
+	return s.deliver(ctx, artifact, destination, deliveryID, idempotencyKey, lease.AccessToken)
+}
+
+func (s *SocialGatewayProvider) deliver(ctx context.Context, artifact *store.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey, accessToken string) (*deliveries.Result, error) {
 	if s == nil || s.client == nil {
 		return nil, deliveries.ErrProviderNotConfigured
 	}
@@ -80,7 +96,12 @@ func (s *SocialGatewayProvider) Deliver(ctx context.Context, artifact *store.Art
 		return nil, err
 	}
 
-	resp, err := s.client.DeliverArtifact(ctx, req)
+	var resp *socialclient.DeliverArtifactResponse
+	if accessToken != "" {
+		resp, err = s.client.DeliverArtifactWithAccessToken(ctx, req, accessToken)
+	} else {
+		resp, err = s.client.DeliverArtifact(ctx, req)
+	}
 	if err != nil {
 		return nil, mapSocialClientError(err)
 	}
@@ -129,6 +150,8 @@ func (s *SocialGatewayProvider) buildRequest(artifact *store.Artifact, destinati
 			return socialclient.DeliverArtifactRequest{}, fmt.Errorf("%w: invalid delivery metadata: %v",
 				deliveries.ErrProviderPermanent, err)
 		}
+		delete(meta, "credential_ref")
+		meta = credentials.Map(meta)
 		req.Metadata = meta
 		if v, ok := meta["publish_at"].(string); ok && v != "" {
 			req.PublishAt = v

@@ -15,7 +15,16 @@ import (
 	"time"
 
 	"velox-server/internal/config"
+	"velox-server/internal/credentials"
 )
+
+type accessTokenContextKey struct{}
+
+// WithAccessToken supplies an ephemeral access token for one operation. It is
+// held only in the in-memory request context and is never persisted or logged.
+func WithAccessToken(ctx context.Context, accessToken string) context.Context {
+	return context.WithValue(ctx, accessTokenContextKey{}, strings.TrimSpace(accessToken))
+}
 
 // NewService creates a new Drive service
 func NewService(cfg *ServiceConfig) (*Service, error) {
@@ -59,6 +68,9 @@ func (s *Service) SetToken(token *Token) {
 
 // getToken returns the current token, refreshing if necessary
 func (s *Service) getToken(ctx context.Context) (*Token, error) {
+	if accessToken, ok := ctx.Value(accessTokenContextKey{}).(string); ok && accessToken != "" {
+		return &Token{AccessToken: accessToken, TokenType: "Bearer"}, nil
+	}
 	s.mu.RLock()
 	token := s.currentToken
 	s.mu.RUnlock()
@@ -113,9 +125,8 @@ func (s *Service) doAPIRequest(ctx context.Context, method, endpoint string, bod
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		var errResp map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&errResp)
-		return fmt.Errorf("API error (%d): %v", resp.StatusCode, errResp)
+		raw, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error (%d): %s", resp.StatusCode, credentials.JSON(string(raw)))
 	}
 
 	if result != nil {

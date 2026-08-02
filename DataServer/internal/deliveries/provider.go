@@ -21,6 +21,7 @@ import (
 	"errors"
 	"time"
 
+	"velox-server/internal/credentials"
 	"velox-server/internal/store"
 )
 
@@ -152,6 +153,19 @@ type Provider interface {
 	Deliver(ctx context.Context, artifact *store.Artifact, destination *Destination, deliveryID, idempotencyKey string) (*Result, error)
 }
 
+// CredentialLeaseProvider opts into the central credential boundary. The
+// runner issues a short-lived lease immediately before delivery and never
+// passes a permanent refresh token to the provider.
+type CredentialLeaseProvider interface {
+	DeliverWithCredential(ctx context.Context, artifact *store.Artifact, destination *Destination, deliveryID, idempotencyKey string, lease *credentials.AccessLease) (*Result, error)
+}
+
+// CredentialScopeProvider declares the minimum fixed scopes needed by a
+// provider. Request metadata cannot enlarge this list.
+type CredentialScopeProvider interface {
+	RequiredCredentialScopes() []string
+}
+
 // Destination is the typed view of a delivery_destinations row.
 //
 // Opaque-mode (Residuo 2 + Residuo 4 + Residuo 5 of the YouTube→Social
@@ -179,6 +193,7 @@ type Destination struct {
 	Configuration         []byte
 	ConfigurationJSON     string
 	DeliveryMetadataJSON  string
+	CredentialRef         string
 }
 
 // Result captures the post-upload state. RemoteID/RemoteURL are the

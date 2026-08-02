@@ -11,6 +11,7 @@ import (
 	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/credentials"
 	"velox-server/internal/deliveries"
 	deliveryProviders "velox-server/internal/deliveries/providers"
 	"velox-server/internal/forwarding"
@@ -282,6 +283,14 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 		p.SQLite,
 		fmt.Sprintf("delivery-runner-%d", time.Now().UnixNano()),
 	)
+	if keys, keyErr := credentials.LoadKeyring(); keyErr == nil {
+		if vault, vaultErr := credentials.NewVault(p.SQLite, keys); vaultErr == nil {
+			deliveryRunner.WithCredentialVault(vault)
+			log.Printf("[BOOTSTRAP] Delivery credential vault enabled")
+		}
+	} else {
+		log.Printf("[BOOTSTRAP] Delivery credential vault unavailable: %v", keyErr)
+	}
 
 	// ── Creator Forwarding runner ───────────────────────────────────
 	var fwdRunner *forwarding.CreatorForwardingRunner

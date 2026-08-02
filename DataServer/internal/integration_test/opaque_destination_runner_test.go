@@ -10,10 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"velox-server/internal/credentials"
 	"velox-server/internal/deliveries"
 	"velox-server/internal/deliveries/providers"
+	"velox-server/internal/jobs"
 	"velox-server/internal/socialclient"
 	"velox-server/internal/store"
+	"velox-server/internal/taskgraph"
 )
 
 func TestIntegration_DeliveryRunnerForwardsOpaqueDestinationID(t *testing.T) {
@@ -39,6 +42,7 @@ func TestIntegration_DeliveryRunnerForwardsOpaqueDestinationID(t *testing.T) {
 	const (
 		localDestinationID    = "instaedit_ext-group-a"
 		externalDestinationID = "ext-group-a"
+		jobID                 = "job-runner-opaque"
 		artifactID            = "artifact-runner-opaque"
 		deliveryID            = "delivery-runner-opaque"
 	)
@@ -51,10 +55,47 @@ func TestIntegration_DeliveryRunnerForwardsOpaqueDestinationID(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("InsertDeliveryDestination: %v", err)
 	}
+	keys, err := credentials.NewKeyring(1, map[int][]byte{1: []byte("01234567890123456789012345678901")})
+	if err != nil {
+		t.Fatalf("NewKeyring: %v", err)
+	}
+	vault, err := credentials.NewVault(db, keys)
+	if err != nil {
+		t.Fatalf("NewVault: %v", err)
+	}
+	credentialRef, err := vault.Put(context.Background(), "social_gateway", "integration-test", []string{"publish"}, time.Now().Add(time.Hour), time.Time{}, credentials.Material{AccessToken: "runner-short-lived-token"})
+	if err != nil {
+		t.Fatalf("Put credential: %v", err)
+	}
+	if err := store.NewAtomicJobTaskCreator(db).CreateJobWithTask(context.Background(), &jobs.Job{
+		ID:         jobID,
+		VideoName:  "opaque destination test",
+		ProjectID:  "integration-test",
+		RunID:      jobID + "-run",
+		MaxRetries: 1,
+	}, &taskgraph.TaskSpec{
+		Version:    taskgraph.SpecVersion,
+		JobID:      jobID,
+		ExecutorID: "scene.composite.v1",
+		DeliveryPlan: map[string]interface{}{
+			"delivery_plan": []interface{}{
+				map[string]interface{}{
+					"destination_id": localDestinationID,
+					"retry_budget":   3,
+					"metadata": map[string]interface{}{
+						"credential_ref": credentialRef,
+						"publication_id": "publication-runner-opaque",
+					},
+				},
+			},
+		},
+	}, 0); err != nil {
+		t.Fatalf("CreateJobWithTask: %v", err)
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	if err := db.InsertArtifact(&store.Artifact{
 		ID:              artifactID,
-		JobID:           "job-runner-opaque",
+		JobID:           jobID,
 		Type:            "video",
 		StorageProvider: "local",
 		StorageKey:      filepath.Join(t.TempDir(), "opaque.mp4"),
@@ -95,6 +136,7 @@ func TestIntegration_DeliveryRunnerForwardsOpaqueDestinationID(t *testing.T) {
 			10 * time.Millisecond,
 		},
 	}, registry, db, "runner-opaque-integration")
+	runner.WithCredentialVault(vault)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

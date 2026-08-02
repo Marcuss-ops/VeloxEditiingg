@@ -307,6 +307,15 @@ func (v *Vault) IssueAccessLease(ctx context.Context, ref, workerID, publication
 	return &AccessLease{CredentialRef: record.Ref, Provider: record.Provider, WorkerID: workerID, PublicationID: publicationID, AccessToken: material.AccessToken, TokenType: "Bearer", Scopes: scopes, ExpiresAt: leaseExpires}, nil
 }
 
+// RecordLeaseResult appends the provider outcome to the credential usage
+// audit. The lease's access token is intentionally never persisted.
+func (v *Vault) RecordLeaseResult(ctx context.Context, lease *AccessLease, success bool, errorCode string) error {
+	if v == nil || lease == nil || !validRef(lease.CredentialRef) {
+		return ErrInvalidReference
+	}
+	return v.recordUse(ctx, lease.CredentialRef, lease.WorkerID, lease.PublicationID, lease.Scopes, v.now().UTC(), success, strings.TrimSpace(errorCode))
+}
+
 func (v *Vault) recordUse(ctx context.Context, ref, workerID, publicationID string, scopes []string, at time.Time, success bool, errorCode string) error {
 	return v.repo.RecordCredentialUse(ctx, ref, UsageEvent{WorkerID: workerID, PublicationID: publicationID, Scope: scopes, UsedAt: at, Success: success, ErrorCode: errorCode})
 }

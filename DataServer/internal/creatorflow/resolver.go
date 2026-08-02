@@ -271,8 +271,11 @@ func publicationSpecToMap(spec publication.Spec) map[string]interface{} {
 	} else {
 		destinations := make([]interface{}, len(spec.Destinations))
 		for i, destination := range spec.Destinations {
-			value := make(map[string]interface{}, 5)
+			value := make(map[string]interface{}, 6)
 			value["destination_id"] = destination.DestinationID
+			if destination.CredentialRef != "" {
+				value["credential_ref"] = destination.CredentialRef
+			}
 			if destination.Priority != 0 {
 				value["priority"] = destination.Priority
 			}

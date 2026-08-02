@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"velox-server/internal/credentials"
 )
 
 // Client is the typed Velox-side boundary against the social_repo.
@@ -69,6 +71,16 @@ func (c *Client) endpoint(path string) string {
 //	network/timeout/cancelled → ErrUpstreamTransient
 //	missing social_delivery_id → ErrUpstreamPermanent
 func (c *Client) DeliverArtifact(ctx context.Context, req DeliverArtifactRequest) (*DeliverArtifactResponse, error) {
+	return c.deliverArtifact(ctx, req, c.cfg.APIKey)
+}
+
+// DeliverArtifactWithAccessToken sends one request with the short-lived
+// access token supplied by the central credential vault.
+func (c *Client) DeliverArtifactWithAccessToken(ctx context.Context, req DeliverArtifactRequest, accessToken string) (*DeliverArtifactResponse, error) {
+	return c.deliverArtifact(ctx, req, strings.TrimSpace(accessToken))
+}
+
+func (c *Client) deliverArtifact(ctx context.Context, req DeliverArtifactRequest, bearerToken string) (*DeliverArtifactResponse, error) {
 	if c == nil {
 		return nil, ErrNotConfigured
 	}
@@ -86,8 +98,8 @@ func (c *Client) DeliverArtifact(ctx context.Context, req DeliverArtifactRequest
 		return nil, fmt.Errorf("%w: build request: %v", ErrTransient, err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	if c.cfg.APIKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+	if bearerToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+bearerToken)
 	}
 
 	resp, err := c.client.Do(httpReq)
@@ -98,7 +110,7 @@ func (c *Client) DeliverArtifact(ctx context.Context, req DeliverArtifactRequest
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, classifyStatusError(resp.StatusCode, string(bytes.TrimSpace(respBody)))
+		return nil, classifyStatusError(resp.StatusCode, credentials.JSON(string(bytes.TrimSpace(respBody))))
 	}
 
 	var out DeliverArtifactResponse
@@ -187,7 +199,7 @@ func (c *Client) ValidateDestination(ctx context.Context, socialDestID string) e
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
-		return classifyStatusError(resp.StatusCode, string(bytes.TrimSpace(respBody)))
+		return classifyStatusError(resp.StatusCode, credentials.JSON(string(bytes.TrimSpace(respBody))))
 	}
 	return nil
 }
