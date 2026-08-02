@@ -5,20 +5,9 @@
 package pipeline
 
 import (
-	"strings"
 	"sync"
 	"time"
-
-	"database/sql"
 )
-
-// sqlNullString is a tiny helper used by the audit helpers below
-// to lift a string into sql.NullString without repeating the
-// Valid=len>0 ceremony at every call site.
-func sqlNullString(s string) sql.NullString {
-	s = strings.TrimSpace(s)
-	return sql.NullString{String: s, Valid: s != ""}
-}
 
 // =====================================================================
 // Per-client rate limiter (in-memory token bucket).

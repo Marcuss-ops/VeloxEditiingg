@@ -216,9 +216,11 @@ tests/smoke/full_payload/evidence/*
 # Artifacts accidentally committed at the repo root / under dist/: empty
 # sentinel files (Pipeline, Pipeline\, bash-n, end_scenario), a one-shot
 # pilot trigger, and test-run artifacts. They were removed from tracking;
-# the patterns keep them out of future commits.
-Pipeline
-bash-n
-end_scenario
-.finalize-requested-split-trigger
-dist/
+# the patterns keep them out of future commits. Anchored to the repo root
+# so same-named files elsewhere in the tree are not silently ignored.
+/Pipeline
+/Pipeline\\
+/bash-n
+/end_scenario
+/.finalize-requested-split-trigger
+/dist/

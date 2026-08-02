@@ -5,6 +5,7 @@
 package pipeline
 
 import (
+	"database/sql"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,6 +15,14 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/store"
 )
+
+// sqlNullString is a tiny helper used by the audit helpers below
+// to lift a string into sql.NullString without repeating the
+// Valid=len>0 ceremony at every call site.
+func sqlNullString(s string) sql.NullString {
+	s = strings.TrimSpace(s)
+	return sql.NullString{String: s, Valid: s != ""}
+}
 
 // =====================================================================
 // Audit writer (response-capturing wrapper)

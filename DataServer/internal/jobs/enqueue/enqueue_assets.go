@@ -1,8 +1,9 @@
 package enqueue
 
 // enqueue_assets.go: asset-rewrite + response-builder helpers of the
-// Enqueuer. Split out of enqueue.go; the core orchestration lives in
-// enqueue.go, the shared plan types in enqueue_plan_types.go.
+// Enqueuer. Split out of enqueue.go; the core orchestration and the
+// shared plan types (PlanDestination / ResolvedPlan / PlanResolver)
+// live in enqueue.go.
 
 import (
 	"context"
