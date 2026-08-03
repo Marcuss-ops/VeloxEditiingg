@@ -15,26 +15,21 @@
       "index": 0,
       "kind": "intro",
       "text": "Cinque campioni, cinque carriere leggendarie e cinque storie. Dietro i titoli, le luci e gli applausi si celano enormi sacrifici, pressione costante, battute d'arresto inaspettate e decisioni che possono cambiare il destino di un atleta. Questa introduzione chiede al pubblico di guardare oltre lo spettacolo: ogni movimento riflette disciplina, paura, ambizione e carattere. La domanda centrale è semplice: quanto può costare diventare una leggenda?",
-      "clip_link": "velox-asset://1Fjhxg2TE0mGcoUURnQjsf9biCJFaaORm",
-      "clip_links": ["velox-asset://1Fjhxg2TE0mGcoUURnQjsf9biCJFaaORm"],
       "duration_seconds": 5,
       "reference_voiceover": "/home/pierone/src/go-master/projects/Pyt/VeloxEditing/refactored/data/media/voiceovers/Five legendary boxers_scene-0_it_8ba0ed208f3c1eba.mp3",
-      "stock_fallback": false
+      "stock_links": ["velox-asset://1Fjhxg2TE0mGcoUURnQjsf9biCJFaaORm"],
+      "stock_fallback": true
     },
     {
       "id": "scene-1",
       "index": 1,
       "kind": "clip",
       "text": "Mike Tyson costruì la sua leggenda attraverso potenza esplosiva, velocità sorprendente e pressione capace di cambiare un incontro in pochi secondi. La sua ascesa nel pugilato professionistico fu eccezionalmente rapida, trasformando ogni ingresso in un evento e ogni vittoria precoce in prova di un nuovo campione dominante. Tyson avanzava con disciplina, chiudeva rapidamente le distanze e rendeva pericolose brevi combinazioni perché il suo tempismo e la forza fisica arrivavano insieme. L'immagine pubblica di forza assoluta coesisteva anche accanto a difficoltà personali e professionali che alterarono la direzione della sua carriera.",
-      "clip_link": "velox-asset://1HFkluM6tikQ-usiyuwP3Brg1SQe8r-RM",
-      "clip_links": ["velox-asset://1HFkluM6tikQ-usiyuwP3Brg1SQe8r-RM"],
       "duration_seconds": 7,
       "reference_voiceover": "/home/pierone/src/go-master/projects/Pyt/VeloxEditing/refactored/data/media/voiceovers/Five legendary boxers_scene-1_it_ef672de52f283fdf.mp3",
-      "stock": {
-        "asset_id": "1XZzqiEKfR3HVY-JiW0TxgiWV6vF1Bjpv",
-        "name": "Mike Tyson B-roll",
-        "drive_link": "https://drive.google.com/file/d/1XZzqiEKfR3HVY-JiW0TxgiWV6vF1Bjpv/view?usp=drivesdk"
-      },
+      "stock_folder_id": "1jz2Y_EWtSck-CcZssDQ5PLsIO6Aa0M03",
+      "stock_folder_link": "https://drive.google.com/drive/folders/1jz2Y_EWtSck-CcZssDQ5PLsIO6Aa0M03?usp=drive_link",
+      "stock_links": ["https://drive.google.com/drive/folders/1jz2Y_EWtSck-CcZssDQ5PLsIO6Aa0M03?usp=drive_link"],
       "stock_fallback": true
     },
     {
@@ -42,15 +37,11 @@
       "index": 2,
       "kind": "clip",
       "text": "Muhammad Ali trasformò il pugilato attraverso movimento, ritmo, gioco di gambe e controllo della distanza. Non cercava semplicemente di colpire con i pugni; faceva inseguire un avversario a un tempo che poteva cambiare attraverso equilibrio, velocità e accelerazione improvvisa. La sua personalità pubblica espanse la sua presenza oltre il ring. Ali usò fiducia in sé stesso, umorismo e una voce potente per diventare un'icona inconfondibile, mentre i suoi successi sportivi e coraggio culturale crearono un ricordo che raggiunse un vasto pubblico.",
-      "clip_link": "velox-asset://1dIqRQ47h1ZyK6Yf94Lg3ipfjlldsxA25",
-      "clip_links": ["velox-asset://1dIqRQ47h1ZyK6Yf94Lg3ipfjlldsxA25"],
       "duration_seconds": 7,
       "reference_voiceover": "/home/pierone/src/go-master/projects/Pyt/VeloxEditing/refactored/data/media/voiceovers/Five legendary boxers_scene-2_it_ef6094ca005d6fcd.mp3",
-      "stock": {
-        "asset_id": "15ymEj0EDKUr9gg3uTC2bKhOtZ7Y6WsgT",
-        "name": "Muhammad Ali B-roll",
-        "drive_link": "https://drive.google.com/file/d/15ymEj0EDKUr9gg3uTC2bKhOtZ7Y6WsgT/view?usp=drivesdk"
-      },
+      "stock_folder_id": "1umtTRm4Aw9_pjPl0jkWkHpsBBnwWnanJ",
+      "stock_folder_link": "https://drive.google.com/drive/folders/1umtTRm4Aw9_pjPl0jkWkHpsBBnwWnanJ?usp=drive_link",
+      "stock_links": ["https://drive.google.com/drive/folders/1umtTRm4Aw9_pjPl0jkWkHpsBBnwWnanJ?usp=drive_link"],
       "stock_fallback": true
     },
     {
@@ -58,15 +49,11 @@
       "index": 3,
       "kind": "clip",
       "text": "Evander Holyfield rappresenta l'indurimento fisico e mentale portato al limite. La sua carriera si basò su disciplina quotidiana, preparazione e la capacità di continuare a combattere quando la pressione diventava enorme. Holyfield affrontò la rivalità con tenacia pratica: assorbiva la fatica, rimaneva concentrato e cercava soluzioni negli scambi più duri. La sua forza non fu solo la potenza di un pugno, ma anche la lucidità e l'impegno richiesti per rimanere coinvolto per un intero incontro.",
-      "clip_link": "velox-asset://1bMB5j6jAQmPU_nY9WXZSUtPJcB_VDHxf",
-      "clip_links": ["velox-asset://1bMB5j6jAQmPU_nY9WXZSUtPJcB_VDHxf"],
       "duration_seconds": 7,
       "reference_voiceover": "/home/pierone/src/go-master/projects/Pyt/VeloxEditing/refactored/data/media/voiceovers/Five legendary boxers_scene-3_it_2c0cc46fd9a2acf8.mp3",
-      "stock": {
-        "asset_id": "1of11gWahxStDrVkP8fpVwG8n7XTSWcpE",
-        "name": "Evander Holyfield B-roll",
-        "drive_link": "https://drive.google.com/file/d/1of11gWahxStDrVkP8fpVwG8n7XTSWcpE/view?usp=drivesdk"
-      },
+      "stock_folder_id": "1dbVj0SUd0c2tBSLKHIXkKqp-4S-6LTgB",
+      "stock_folder_link": "https://drive.google.com/drive/folders/1dbVj0SUd0c2tBSLKHIXkKqp-4S-6LTgB?usp=drive_link",
+      "stock_links": ["https://drive.google.com/drive/folders/1dbVj0SUd0c2tBSLKHIXkKqp-4S-6LTgB?usp=drive_link"],
       "stock_fallback": true
     },
     {
@@ -74,15 +61,11 @@
       "index": 4,
       "kind": "clip",
       "text": "Floyd Mayweather costruì il suo successo su difesa, precisione e la lettura attenta di un avversario. Il suo stile controllava la distanza, riduceva il rischio e trasformava un errore in un'opportunità calcolata. Mayweather preparava ogni incontro, studiava i tempi e sceglieva con cura quando attaccare, ritirarsi o cambiare ritmo. Questa disciplina tecnica supportò una carriera professionale invincibile e trasformò il ring in un problema che poteva essere analizzato e risolto.",
-      "clip_link": "velox-asset://1HMnwah01A6fdAmCjf1d25DqqBZn4jiA2",
-      "clip_links": ["velox-asset://1HMnwah01A6fdAmCjf1d25DqqBZn4jiA2"],
       "duration_seconds": 7,
       "reference_voiceover": "/home/pierone/src/go-master/projects/Pyt/VeloxEditing/refactored/data/media/voiceovers/Five legendary boxers_scene-4_it_f6c61752cec18b48.mp3",
-      "stock": {
-        "asset_id": "1kiFpDrNpxENu1m62lMA2Jqc2qh_BhF52",
-        "name": "Floyd Mayweather B-roll",
-        "drive_link": "https://drive.google.com/file/d/1kiFpDrNpxENu1m62lMA2Jqc2qh_BhF52/view?usp=drivesdk"
-      },
+      "stock_folder_id": "1EL7rpQsl-PkmhrPpFgMKGBadmAek1_fR",
+      "stock_folder_link": "https://drive.google.com/drive/folders/1EL7rpQsl-PkmhrPpFgMKGBadmAek1_fR?usp=drive_link",
+      "stock_links": ["https://drive.google.com/drive/folders/1EL7rpQsl-PkmhrPpFgMKGBadmAek1_fR?usp=drive_link"],
       "stock_fallback": true
     },
     {
@@ -90,15 +73,11 @@
       "index": 5,
       "kind": "outro",
       "text": "Sugar Ray Robinson chiude il documentario come simbolo di completezza tecnica, velocità, ritmo, adattabilità e longevità. Il suo stile combinava movimento fluido, rapide combinazioni e potenza capaci di cambiare la direzione di un incontro. Robinson rappresentava più di una qualità: la sua statura derivava dall'equilibrio tra talento naturale, preparazione e capacità di adattarsi a situazioni mutevoli. Una leggenda non è solo chi vince, ma chi lascia un modello che sopravvive al tempo.",
-      "clip_link": "velox-asset://1g2jydV_tKqgUjAICu2efadrSNSkUNLB7",
-      "clip_links": ["velox-asset://1g2jydV_tKqgUjAICu2efadrSNSkUNLB7"],
       "duration_seconds": 6,
       "reference_voiceover": "/home/pierone/src/go-master/projects/Pyt/VeloxEditing/refactored/data/media/voiceovers/Five legendary boxers_scene-5_it_24e9bcf8e15a299a.mp3",
-      "stock": {
-        "asset_id": "1qaBv8WDKxb7C37l-apKOT6r2lFwfqEu2",
-        "name": "Sugar Ray Robinson B-roll",
-        "drive_link": "https://drive.google.com/file/d/1qaBv8WDKxb7C37l-apKOT6r2lFwfqEu2/view?usp=drivesdk"
-      },
+      "stock_folder_id": "1xxnNHfperYJ6sZiLcNadgvYIR6wG_jB8",
+      "stock_folder_link": "https://drive.google.com/drive/folders/1xxnNHfperYJ6sZiLcNadgvYIR6wG_jB8?usp=drive_link",
+      "stock_links": ["https://drive.google.com/drive/folders/1xxnNHfperYJ6sZiLcNadgvYIR6wG_jB8?usp=drive_link"],
       "stock_fallback": true
     }
   ]

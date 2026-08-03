@@ -509,6 +509,35 @@ func TestBuildNarratedClipPayload_MultipleStockRandomLoopCoversVoiceover(t *test
 	}
 }
 
+func TestBuildNarratedClipPayload_StockOnlyDoesNotCreateSyntheticClip(t *testing.T) {
+	scenes := []map[string]interface{}{{
+		"text":                       "Stock only",
+		"stock_links":                []interface{}{"https://stock/folder/one"},
+		"reference_voiceover":        "https://voice/scene.mp3",
+		"voiceover_duration_seconds": 6.0,
+	}}
+
+	_, items, clips, audioTracks, mode, err := buildNarratedClipPayload(scenes, narratedClipOptions{randomSeed: "stock-only"})
+	if err != nil {
+		t.Fatalf("buildNarratedClipPayload: %v", err)
+	}
+	if mode != "clip_stock" {
+		t.Fatalf("mode = %q, want clip_stock", mode)
+	}
+	if len(items) != 1 || items[0]["role"] != "voiceover_bed" {
+		t.Fatalf("items = %#v, want only one voiceover_bed item", items)
+	}
+	if got := asFloat(items[0]["duration"]); got != 6.0 {
+		t.Fatalf("stock duration = %v, want 6", got)
+	}
+	if len(clips) != 0 {
+		t.Fatalf("clips = %#v, want no primary clips", clips)
+	}
+	if len(audioTracks) != 1 || audioTracks[0]["role"] != "voiceover" {
+		t.Fatalf("audio tracks = %#v, want only voiceover", audioTracks)
+	}
+}
+
 // =====================================================================
 // Scene URL helpers: priority order for aliases. Pinned explicitly so
 // future renames of one alias don't silently invert the priority.

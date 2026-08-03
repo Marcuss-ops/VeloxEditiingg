@@ -92,9 +92,6 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 		if len(narrationURLs) == 0 {
 			narrationURLs = []string{finalClipURL}
 		}
-		if finalClipURL == "" {
-			finalClipURL = narrationURLs[0]
-		}
 
 		voiceoverDuration, err := resolveSceneVoiceoverDuration(scene, voiceoverURL, probe)
 		if err != nil {
@@ -103,7 +100,10 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 		// A narrated scene must not inherit the generic 4s presentation
 		// placeholder. When no explicit final duration is supplied, probe
 		// the actual clip so the complete source video is shown.
-		finalClipDuration := resolveSceneFinalClipDurationWithProbe(scene, finalClipURL, probe)
+		finalClipDuration := 0.0
+		if finalClipURL != "" {
+			finalClipDuration = resolveSceneFinalClipDurationWithProbe(scene, finalClipURL, probe)
+		}
 		totalDuration := voiceoverDuration + finalClipDuration
 
 		normalized := make(map[string]interface{}, len(scene)+6)
@@ -160,21 +160,23 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 			})
 		}
 
-		items = append(items, map[string]interface{}{
-			"type":     "video",
-			"url":      finalClipURL,
-			"duration": finalClipDuration,
-			"fit":      "contain",
-			"role":     "scene_clip",
-		})
-		audioTracks = append(audioTracks, map[string]interface{}{
-			"source_url":        finalClipURL,
-			"volume":            1.0,
-			"start_time_offset": offsetSeconds + voiceoverDuration,
-			"duration_seconds":  finalClipDuration,
-			"role":              "scene_clip_audio",
-		})
-		clips = append(clips, finalClipURL)
+		if finalClipURL != "" {
+			items = append(items, map[string]interface{}{
+				"type":     "video",
+				"url":      finalClipURL,
+				"duration": finalClipDuration,
+				"fit":      "contain",
+				"role":     "scene_clip",
+			})
+			audioTracks = append(audioTracks, map[string]interface{}{
+				"source_url":        finalClipURL,
+				"volume":            1.0,
+				"start_time_offset": offsetSeconds + voiceoverDuration,
+				"duration_seconds":  finalClipDuration,
+				"role":              "scene_clip_audio",
+			})
+			clips = append(clips, finalClipURL)
+		}
 		offsetSeconds += totalDuration
 	}
 
@@ -242,7 +244,7 @@ func stockURLs(raw interface{}) []string {
 }
 
 func firstStockURL(raw map[string]interface{}) string {
-	return payload.FirstString(raw, "url", "link", "drive_link", "clip_link")
+	return payload.FirstString(raw, "url", "link", "drive_link", "folder_link", "clip_link")
 }
 
 func sceneNarrationClipDuration(scene map[string]interface{}, url string) float64 {
@@ -381,7 +383,7 @@ func sceneNarrationClipURL(scene map[string]interface{}, fallbackURLs []string, 
 	}
 	if bindings, ok := scene["bindings"].(map[string]interface{}); ok {
 		if stock, ok := bindings["stock"].(map[string]interface{}); ok {
-			if url := payload.FirstString(stock, "drive_link", "url", "clip_link"); url != "" {
+			if url := payload.FirstString(stock, "drive_link", "folder_link", "url", "clip_link"); url != "" {
 				return url
 			}
 		}

@@ -169,7 +169,7 @@ func recipeClip(raw map[string]interface{}) *SubmitClip {
 		EndMS:       int64(recipeFloat(raw["end_ms"])),
 		DurationMS:  int64(recipeFloat(raw["duration_ms"])),
 	}
-	clip.URL = firstRecipeString(raw, "url", "link", "drive_link")
+	clip.URL = firstRecipeString(raw, "url", "link", "drive_link", "folder_link")
 	if clip.URL == "" && clip.AssetID != "" {
 		clip.URL = "velox-asset://" + clip.AssetID
 	}
