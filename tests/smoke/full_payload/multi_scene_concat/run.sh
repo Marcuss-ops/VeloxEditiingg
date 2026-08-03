@@ -199,10 +199,11 @@ assert_no_forbidden "$PAYLOAD" || { rm -f "$PAYLOAD_FILE"; exit 9; }
 
 if [[ "$MODE" == "selftest" ]]; then
   echo "──── MULTI-SCENE CONCAT SELFTEST (mode=selftest, no HTTP) ────"
-  printf '%s' "$PAYLOAD" | jq '{schema, idempotency_key, video_name, project_id, target_executor_id,
+  printf '%s' "$PAYLOAD" | jq '{idempotency_key, job_type, template_id, template_version, video_name,
+                                placement_pin_worker_id,
                                 scene_count: (.scenes | length),
                                 scenes_kinds: [.scenes[] | .kind],
-                                voiceover_paths: .voiceover_paths,
+                                scene_assets: [.scenes[] | {clip: .clip.asset_id, voiceover: .voiceover.asset_id}],
                                 expected_duration_seconds: ([.scenes[].duration_seconds] | add),
                                 delivery_plan: .delivery_plan}'
   log_info "selftest OK"
@@ -212,9 +213,10 @@ fi
 
 if [[ "$MODE" == "dry" ]]; then
   echo "──── MULTI-SCENE CONCAT DRY RUN (mode=dry, no HTTP) ────"
-  printf '%s' "$PAYLOAD" | jq '{idempotency_key, video_name, project_id, target_executor_id,
+  printf '%s' "$PAYLOAD" | jq '{idempotency_key, job_type, template_id, template_version, video_name,
+                                placement_pin_worker_id,
                                 num_scenes: (.scenes | length),
-                                num_voiceover_paths: (.voiceover_paths | length),
+                                num_scene_voiceovers: ([.scenes[] | select(.voiceover != null)] | length),
                                 expected_duration_seconds: ([.scenes[].duration_seconds] | add),
                                 delivery_plan: .delivery_plan}'
   rm -f "$PAYLOAD_FILE"

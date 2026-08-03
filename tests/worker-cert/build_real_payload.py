@@ -33,6 +33,7 @@ import time
 from pathlib import Path
 
 # --- Forbidden patterns (intentional anti-pattern from earlier failures) ----
+# Legacy body keys are checked separately by assert_canonical_shape below.
 # Matches any velox-asset://<scheme>/<file>.<ext> shape — i.e. references that
 # try to back into a server-local file path. The canonical codec only accepts
 # `velox-asset://<asset_id>` regardless of kind (voiceover/clip/subtitle/
@@ -125,39 +126,39 @@ def build_payload(
     n_clips = len(fixtures["clips"])
     n_vo = len(fixtures["voiceover"])
     # Modulo-cycle: scene i uses clips[i % n_clips] and voiceover[i % n_vo].
-    # Pure-cycle (i -> i % n) is intentionally simple and proven correct:
-    # the canonical chain (enqueue.go + normalize.go) does not require
-    # per-scene uniqueness of clip_link references, only that each
-    # velox-asset://<asset_id> resolves to a known asset_id.
-    scenes = [
-        {
-            "text": f"Scene {i} — multi-scene concat {worker_id} (idx={i} clip={i % n_clips} vo={i % n_vo})",
-            "clip_link": f"velox-asset://{pick_asset_id(fixtures, 'clips', i % n_clips)}",
-            "duration_seconds": duration_per_scene,
-        }
-        for i in range(scenes_count)
-    ]
-    # One voiceover_paths entry per unique voiceover index in scene set.
-    # For multi_scene_concat, that's typically ceil(scenes_count / n_vo) distinct
-    # references; for the canonical 2-scene smoke (the default), only one
-    # entry is emitted to match the original smoke_one.sh payload shape.
-    seen_vo = []
+    # Every asset is attached to its scene so the request has no positional
+    # top-level arrays and remains valid when scenes are reordered.
+    scenes = []
     for i in range(scenes_count):
+        clip_id = pick_asset_id(fixtures, "clips", i % n_clips)
         vo_id = pick_asset_id(fixtures, "voiceover", i % n_vo)
-        if vo_id not in seen_vo:
-            seen_vo.append(vo_id)
+        scenes.append({
+            "scene_id": f"scene-{i}",
+            "index": i,
+            "kind": "clip",
+            "text": f"Scene {i} — multi-scene concat {worker_id} (clip={i % n_clips} vo={i % n_vo})",
+            "duration_seconds": duration_per_scene,
+            "clip": {
+                "asset_id": clip_id,
+                "url": f"velox-asset://{clip_id}",
+                "duration_ms": duration_per_scene * 1000,
+            },
+            "voiceover": {
+                "asset_id": vo_id,
+                "url": f"velox-asset://{vo_id}",
+                "duration_ms": duration_per_scene * 1000,
+            },
+        })
+    idem_suffix = f"-{idempotency_key_suffix}" if idempotency_key_suffix else ""
     return {
-        "idempotency_key": f"smoke-one-{worker_id}-{now_epoch}",
+        "idempotency_key": f"smoke-one-{worker_id}-{now_epoch}{idem_suffix}",
+        "job_type": "scene.composite.v1",
+        "template_id": "worker-cert.smoke",
+        "template_version": 1,
         "video_name": f"Real-asset smoke for {worker_id}@{now_epoch} (scenes={scenes_count})",
-        "project_id": "worker-cert-smoke",
-        # Executor is pinned explicitly (does NOT rely on the placement
-        # matcher's default derivation; canonical chain referenced in
-        # DataServer/internal/jobs/enqueue/normalize.go + the corresponding
-        # e2e tests). On master deployments WITH env var
-        # VELOX_PLACEMENT_PIN_WORKER_ID=<worker_id>, this is doubly-pinned:
-        # same executor AND same worker.
-        "target_executor_id": target_executor_id,
-        "voiceover_paths": [f"velox-asset://{v}" for v in seen_vo],
+        "script_text": f"Real-asset worker certification for {worker_id}.",
+        "output": {"width": 1280, "height": 720, "fps": 30, "format": "mp4"},
+        "placement_pin_worker_id": worker_id,
         "scenes": scenes,
         "delivery_plan": [
             {
@@ -166,16 +167,50 @@ def build_payload(
                 "retry_budget": 1,
             }
         ],
-        # Audit-only diagnostic; the smoke_one.sh harness will read this off
-        # the JSON when it parses --payload-file or stdin.
-        "_audit": {
-            "generator": "tests/worker-cert/build_real_payload.py",
-            "generator_rev": 1,
-            "generation_time_epoch": now_epoch,
-            "idempotency_key_suffix": idempotency_key_suffix,
-            "fixture_path": None,  # populated by main() at write time
-        },
     }
+
+
+def assert_canonical_shape(payload: dict) -> list[str]:
+    """Return paths for legacy body keys that must never reach POST /api/v1/jobs."""
+    hits: list[str] = []
+    forbidden_top = ("voiceover_paths", "subtitle_tracks", "clip_link", "image_link", "project_id", "target_executor_id", "_audit")
+    if any(key in payload for key in forbidden_top):
+        hits.extend(f"$.{key}" for key in payload if key in forbidden_top)
+    required = ("idempotency_key", "job_type", "template_id", "template_version", "video_name", "scenes", "output", "delivery_plan", "placement_pin_worker_id")
+    hits.extend(f"$.{key} (missing)" for key in required if key not in payload)
+    if not isinstance(payload.get("job_type"), str) or not payload["job_type"].strip():
+        hits.append("$.job_type (empty)")
+    if not isinstance(payload.get("template_id"), str) or not payload["template_id"].strip():
+        hits.append("$.template_id (empty)")
+    if not isinstance(payload.get("template_version"), int) or payload["template_version"] < 1:
+        hits.append("$.template_version (not positive integer)")
+    if not isinstance(payload.get("video_name"), str) or not payload["video_name"].strip():
+        hits.append("$.video_name (empty)")
+    for i, scene in enumerate(payload.get("scenes", [])):
+        if not isinstance(scene, dict):
+            hits.append(f"$.scenes[{i}]")
+            continue
+        for key in ("clip_link", "clip_links", "image_link", "image_links", "voiceover_path", "local_path", "bindings", "stock_clip_sources", "drive_links"):
+            if key in scene:
+                hits.append(f"$.scenes[{i}].{key}")
+        for key in ("clip", "voiceover"):
+            asset = scene.get(key)
+            if not isinstance(asset, dict) or not asset.get("url"):
+                hits.append(f"$.scenes[{i}].{key}.url")
+        if "subtitles" in scene and (not isinstance(scene["subtitles"], dict) or not scene["subtitles"].get("url")):
+            hits.append(f"$.scenes[{i}].subtitles.url")
+    output = payload.get("output")
+    if not isinstance(output, dict):
+        hits.append("$.output (not object)")
+    elif not all(isinstance(output.get(key), int) and output[key] > 0 for key in ("width", "height", "fps")):
+        hits.append("$.output (invalid dimensions/fps)")
+    if not isinstance(payload.get("delivery_plan"), list) or not payload.get("delivery_plan"):
+        hits.append("$.delivery_plan (empty or not array)")
+    else:
+        for i, entry in enumerate(payload["delivery_plan"]):
+            if not isinstance(entry, dict) or not isinstance(entry.get("destination_id"), str) or not entry["destination_id"].strip():
+                hits.append(f"$.delivery_plan[{i}].destination_id (empty)")
+    return hits
 
 
 def assert_no_forbidden(payload: dict, *, path: str = "$") -> list[str]:
@@ -206,10 +241,8 @@ def cmd_build(args: argparse.Namespace) -> int:
         scenes_count=args.scenes_count,
         duration_per_scene=args.duration_per_scene,
     )
-    payload["_audit"]["fixture_path"] = str(fixtures_path)
-
     if args.strict:
-        hits = assert_no_forbidden(payload)
+        hits = assert_canonical_shape(payload) + assert_no_forbidden(payload)
         if hits:
             print(
                 f"ERROR: {len(hits)} forbidden pattern(s) detected (script regressed?):",
@@ -246,10 +279,13 @@ def cmd_selftest(args: argparse.Namespace) -> int:
         scenes_count=args.scenes_count,
         duration_per_scene=args.duration_per_scene,
     )
-    hits = assert_no_forbidden(payload)
+    hits = assert_canonical_shape(payload) + assert_no_forbidden(payload)
     print(f"selftest: built payload with {len(payload.get('scenes'))} scene(s)", file=sys.stderr)
-    print(f"selftest: voiceover_paths={payload['voiceover_paths']}", file=sys.stderr)
-    print(f"selftest: scenes[*].clip_link={[s['clip_link'] for s in payload['scenes']]}", file=sys.stderr)
+    print(f"selftest: placement_pin_worker_id={payload['placement_pin_worker_id']}", file=sys.stderr)
+    print(
+        f"selftest: scene assets={[{'clip': s['clip']['asset_id'], 'voiceover': s['voiceover']['asset_id']} for s in payload['scenes']]}",
+        file=sys.stderr,
+    )
     if hits:
         print(f"selftest: FAIL ({len(hits)} forbidden hit(s))", file=sys.stderr)
         return 4
