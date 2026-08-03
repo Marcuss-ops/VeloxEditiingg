@@ -150,6 +150,14 @@ ENV VELOX_HEALTH_PORT=8081
 
 WORKDIR /app
 
+# The bootstrap gate resolves the self-render baseline relative to the
+# configured worker work-dir. Keep the immutable certification fixture in
+# the image so legacy remote workers do not need to bind-mount the source
+# tree over /app (which would hide image contents).
+RUN mkdir -p /app/RemoteCodex/tests/fixtures
+COPY RemoteCodex/native/worker-agent-go/tests/fixtures/engine_selftest_baseline.sha256 \
+     /app/RemoteCodex/tests/fixtures/engine_selftest_baseline.sha256
+
 # Runtime deps ONLY. Nothing build-time belongs here.
 #   * ca-certificates: outbound TLS (master handshake + Social API / Unity builds remote API).
 #   * ffmpeg:          runtime dep of the video engine.
