@@ -445,6 +445,7 @@ func TestGenerate_SourceClips_EnqueuesClipJob(t *testing.T) {
 		}, "scenes": []interface{}{
 			map[string]interface{}{
 				"text": "Intro clip", "kind": "intro",
+
 				"clip":      map[string]interface{}{"asset_id": "clip-intro", "url": "velox-asset://clip-intro", "duration_ms": 4000},
 				"stock":     []interface{}{map[string]interface{}{"asset_id": "stock-intro", "url": "velox-asset://stock-intro", "duration_ms": 5000}},
 				"voiceover": map[string]interface{}{"asset_id": "voice-intro", "url": "velox-asset://voice-intro", "duration_ms": 3500},

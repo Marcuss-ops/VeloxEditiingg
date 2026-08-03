@@ -1,4 +1,4 @@
-// Package enqueue — clip input normalization (scenes, clips, JSON).
+// Package enqueue — canonical clip input normalization.
 package enqueue
 
 import (
@@ -6,94 +6,287 @@ import (
 	"fmt"
 	"strings"
 
+	sharedmedia "velox-shared/media"
 	"velox-shared/payload"
 )
 
-// normalizeClipPayload is a thin dispatcher over three explicit
-// input-shape adapters. No registry, no per-format interface, no
-// scene factory, no generic pipeline. Each branch is a pure function
-// over a distinct input form:
-//
-//   - scenes array           → normalizeScenesInput
-//   - scenes_json string     → normalizeScenesJSONInput
-//   - raw clips array/string → normalizeClipsInput
-//
-// The canonical 6-tuple return is identical for all three; the
-// dispatcher only inspects the input shape to pick the right adapter.
+// normalizeClipPayload accepts only canonical scene assets. A clip scene is
+// represented by scene.clip, optional scene.stock[], and optional
+// scene.voiceover; every asset must contain asset_id and url. The raw clips
+// and alias-based adapters were intentionally retired so the renderer cannot
+// reconstruct media from bindings, paths, or positional lists.
 func normalizeClipPayload(rawPayload map[string]interface{}) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
-	if scenes := normalizeSceneArray(rawPayload["scenes"]); len(scenes) > 0 {
-		return normalizeScenesInput(rawPayload, scenes)
+	if rawPayload == nil {
+		return nil, nil, nil, nil, "", fmt.Errorf("canonical scenes are required")
+	}
+	if err := rejectTopLevelNarratedAliases(rawPayload); err != nil {
+		return nil, nil, nil, nil, "", err
+	}
+
+	if raw, present := rawPayload["scenes"]; present {
+		scenes, err := canonicalSceneArray(raw)
+		if err != nil {
+			return nil, nil, nil, nil, "", err
+		}
+		if len(scenes) > 0 {
+			return normalizeScenesInput(rawPayload, scenes)
+		}
 	}
 	if raw := payload.FirstString(rawPayload, "scenes_json"); raw != "" {
 		return normalizeScenesJSONInput(rawPayload, raw)
 	}
-	if rawClips, ok := rawPayload["clips"]; ok {
-		return normalizeClipsInput(rawClips)
+	if _, present := rawPayload["clips"]; present {
+		return nil, nil, nil, nil, "", fmt.Errorf("legacy clips input is unsupported; use scenes[].clip with asset_id, url, duration_ms")
 	}
-	return nil, nil, nil, nil, "", fmt.Errorf("scenes, scenes_json, or clips are required")
+	return nil, nil, nil, nil, "", fmt.Errorf("canonical scenes or scenes_json are required")
 }
 
-// normalizeScenesInput handles the canonical scenes array input.
-// When any scene carries a voiceover binding it routes to the
-// narrated-clip timeline builder; otherwise it emits a flat
-// per-scene clip_item list.
+func canonicalAsset(raw map[string]interface{}) map[string]interface{} {
+	if raw == nil {
+		return nil
+	}
+	assetID := strings.TrimSpace(payload.FirstString(raw, "asset_id"))
+	url := strings.TrimSpace(payload.FirstString(raw, "url"))
+	if assetID == "" || url == "" || !strings.HasPrefix(strings.ToLower(url), canonicalAssetURLPrefix) || strings.TrimPrefix(url, canonicalAssetURLPrefix) != assetID {
+		return nil
+	}
+	out := map[string]interface{}{"asset_id": assetID, "url": url}
+	if durationMS := canonicalDurationMS(raw); durationMS > 0 {
+		out["duration_ms"] = durationMS
+	}
+	return out
+}
+
+func canonicalStockAssets(scene map[string]interface{}) ([]map[string]interface{}, error) {
+	if scene == nil {
+		return nil, nil
+	}
+	rawValue, present := scene["stock"]
+	if !present || rawValue == nil {
+		return nil, nil
+	}
+	var raw []interface{}
+	switch value := rawValue.(type) {
+	case []interface{}:
+		raw = value
+	case []map[string]interface{}:
+		for _, item := range value {
+			raw = append(raw, item)
+		}
+	default:
+		return nil, fmt.Errorf("canonical stock must be an array of asset objects")
+	}
+	out := make([]map[string]interface{}, 0, len(raw))
+	for index, value := range raw {
+		asset, ok := value.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("stock[%d]: canonical asset must be an object", index)
+		}
+		canonical := canonicalAsset(asset)
+		if canonical == nil {
+			return nil, fmt.Errorf("stock[%d]: canonical asset must include asset_id and url", index)
+		}
+		out = append(out, canonical)
+	}
+	return out, nil
+}
+
+func sceneAsset(scene map[string]interface{}, key string) map[string]interface{} {
+	if scene == nil {
+		return nil
+	}
+	asset, _ := scene[key].(map[string]interface{})
+	return asset
+}
+
+func canonicalSceneArray(value interface{}) ([]map[string]interface{}, error) {
+	var raw []interface{}
+	switch scenes := value.(type) {
+	case []interface{}:
+		raw = scenes
+	case []map[string]interface{}:
+		for _, scene := range scenes {
+			raw = append(raw, scene)
+		}
+	default:
+		return nil, fmt.Errorf("scenes must be an array of canonical scene objects")
+	}
+
+	out := make([]map[string]interface{}, 0, len(raw))
+	for index, value := range raw {
+		scene, ok := value.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("scenes[%d]: canonical scene must be an object", index)
+		}
+		canonical, err := canonicalScene(scene, index)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, canonical)
+	}
+	return out, nil
+}
+
+var retiredNarratedKeys = map[string]struct{}{
+	"clip_link":             {},
+	"clip_links":            {},
+	"image_link":            {},
+	"image_links":           {},
+	"image":                 {},
+	"drive_link":            {},
+	"drive_links":           {},
+	"local_path":            {},
+	"bindings":              {},
+	"reference_voiceover":   {},
+	"reference_voiceovers":  {},
+	"voiceover_link":        {},
+	"voiceover_path":        {},
+	"voiceover_paths":       {},
+	"stock_clip_paths":      {},
+	"stock_clip_sources":    {},
+	"intro_clip_paths":      {},
+	"start_clip_paths":      {},
+	"stock_links":           {},
+	"stock_clip_links":      {},
+	"clip_duration_seconds": {},
+	"duration_seconds":      {},
+}
+
+func rejectTopLevelNarratedAliases(payloadMap map[string]interface{}) error {
+	for key := range retiredNarratedKeys {
+		if _, present := payloadMap[key]; present {
+			return fmt.Errorf("top-level legacy field %q is unsupported; use scenes[].clip, scenes[].stock[], and scenes[].voiceover assets", key)
+		}
+	}
+	return nil
+}
+
+func requiredCanonicalSceneAsset(scene map[string]interface{}, key string) (map[string]interface{}, error) {
+	if scene == nil {
+		return nil, fmt.Errorf("canonical %s asset is required", key)
+	}
+	raw, present := scene[key]
+	if !present || raw == nil {
+		return nil, fmt.Errorf("canonical %s asset is required", key)
+	}
+	asset, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("canonical %s asset must be an object", key)
+	}
+	canonical := canonicalAsset(asset)
+	if canonical == nil {
+		return nil, fmt.Errorf("canonical %s asset must include asset_id and url", key)
+	}
+	return canonical, nil
+}
+
+func optionalCanonicalSceneAsset(scene map[string]interface{}, key string) (map[string]interface{}, error) {
+	if scene == nil {
+		return nil, nil
+	}
+	raw, present := scene[key]
+	if !present || raw == nil {
+		return nil, nil
+	}
+	asset, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("canonical %s asset must be an object", key)
+	}
+	canonical := canonicalAsset(asset)
+	if canonical == nil {
+		return nil, fmt.Errorf("canonical %s asset must include asset_id and url", key)
+	}
+	return canonical, nil
+}
+
+func canonicalScene(scene map[string]interface{}, index int) (map[string]interface{}, error) {
+	for key := range scene {
+		if _, retired := retiredNarratedKeys[key]; retired {
+			return nil, fmt.Errorf("scenes[%d]: legacy field %q is unsupported; use clip, stock, and voiceover asset objects", index, key)
+		}
+	}
+
+	clip, err := optionalCanonicalSceneAsset(scene, "clip")
+	if err != nil {
+		return nil, fmt.Errorf("scenes[%d]: %w", index, err)
+	}
+	stock, err := canonicalStockAssets(scene)
+	if err != nil {
+		return nil, fmt.Errorf("scenes[%d]: %w", index, err)
+	}
+	voiceover, err := optionalCanonicalSceneAsset(scene, "voiceover")
+	if err != nil {
+		return nil, fmt.Errorf("scenes[%d]: %w", index, err)
+	}
+	if clip == nil && len(stock) == 0 {
+		return nil, fmt.Errorf("scenes[%d]: canonical clip or stock asset is required", index)
+	}
+
+	out := make(map[string]interface{}, 3)
+	for _, key := range []string{"scene_id", "index", "kind", "text", "subtitles"} {
+		if value, present := scene[key]; present && value != nil {
+			out[key] = value
+		}
+	}
+	if clip != nil {
+		out["clip"] = clip
+	}
+	if len(stock) > 0 {
+		out["stock"] = stock
+	}
+	if voiceover != nil {
+		out["voiceover"] = voiceover
+	}
+	return out, nil
+}
+
+// normalizeScenesInput handles canonical scenes with or without a voiceover.
+// Narrated scenes use the strict timeline builder; non-narrated scenes still
+// use the same canonical asset vocabulary and duration rules.
 func normalizeScenesInput(rawPayload map[string]interface{}, scenes []map[string]interface{}) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
 	if supportsNarratedClipScenes(scenes) {
 		sfxSources, sfxDB := transitionSoundEffectConfig(rawPayload)
 		entries, items, clips, generatedAudio, mode, err := buildNarratedClipPayload(scenes, narratedClipOptions{
-			randomSeed:              payload.FirstString(rawPayload, "job_id", "script_id", "video_name", "title"),
+			randomSeed:              payload.FirstString(rawPayload, "job_id", "script_id", "video_name"),
 			transitionSoundEffects:  sfxSources,
 			transitionSoundEffectDB: sfxDB,
 		})
 		if err != nil {
 			return nil, nil, nil, nil, "", err
 		}
-		// Preserve global audio layers supplied by the canonical request
-		// (for example background_music). The narrated-scene builder adds
-		// per-scene voiceover tracks; it must not replace the caller's
-		// already-declared tracks.
 		return entries, items, clips, mergeAudioTracks(rawPayload["audio_tracks"], generatedAudio), mode, nil
 	}
 
-	sceneEntries := make([]map[string]interface{}, 0, len(scenes))
+	probe := sharedmedia.DetectAudioDurationSecs
+	entries := make([]map[string]interface{}, 0, len(scenes))
 	items := make([]map[string]interface{}, 0, len(scenes))
 	clips := make([]string, 0, len(scenes))
 	for i, scene := range scenes {
-		url := ingestionSceneClipURL(scene)
-		if url == "" {
-			return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: clip url is required", i)
+		clip := sceneAsset(scene, "clip")
+		url := assetURL(clip)
+		duration, err := resolveSceneFinalClipDurationWithProbe(scene, url, probe)
+		if err != nil {
+			return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: %w", i, err)
 		}
-		duration := payload.NormalizedDuration(scene["duration_seconds"])
-		if duration <= 0 {
-			duration = 4.0
-		}
-
-		normalized := make(map[string]interface{}, len(scene)+4)
-		for k, v := range scene {
-			normalized[k] = v
-		}
-		normalized["clip_link"] = url
-		normalized["clip_links"] = []string{url}
-		normalized["duration_seconds"] = duration
-		if text := payload.FirstString(scene, "text", "description"); text != "" {
-			normalized["text"] = text
-		}
-
-		sceneEntries = append(sceneEntries, normalized)
+		setCanonicalDurationMS(clip, duration)
+		entry := cloneCanonicalScene(scene)
+		entries = append(entries, entry)
 		items = append(items, map[string]interface{}{
-			"type":     "video",
-			"url":      url,
-			"duration": duration,
-			"fit":      "contain",
+			"type": "video", "url": url, "duration": duration, "fit": "contain", "role": "scene_clip",
 		})
 		clips = append(clips, url)
 	}
-	return sceneEntries, items, payload.DedupeStrings(clips), nil, "clips", nil
+	return entries, items, payload.DedupeStrings(clips), nil, "clips", nil
 }
 
-// transitionSoundEffectConfig reads the optional render-time sound pool. It
-// is intentionally consumed at the master boundary and compiled into normal
-// audio_tracks, so the worker receives only the canonical audio timeline.
+func cloneCanonicalScene(scene map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(scene))
+	for key, value := range scene {
+		out[key] = value
+	}
+	return out
+}
+
 func transitionSoundEffectConfig(rawPayload map[string]interface{}) ([]string, float64) {
 	config, ok := rawPayload["transition_sound_effects"].(map[string]interface{})
 	if !ok {
@@ -130,113 +323,16 @@ func mergeAudioTracks(raw interface{}, generated []map[string]interface{}) []map
 	return unique
 }
 
-// normalizeScenesJSONInput parses a scenes_json string and routes to
-// normalizeScenesInput. The rawPayload is carried through so the
-// narrated-clip fallback URL pool (top-level stock_clip_paths /
-// intro_clip_paths) is preserved across the JSON parse hop.
 func normalizeScenesJSONInput(rawPayload map[string]interface{}, scenesJSON string) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
 	var scenes []map[string]interface{}
 	if err := json.Unmarshal([]byte(scenesJSON), &scenes); err != nil {
 		return nil, nil, nil, nil, "", fmt.Errorf("invalid scenes_json: %w", err)
 	}
-	return normalizeScenesInput(rawPayload, scenes)
+	return normalizeClipPayload(map[string]interface{}{"scenes": scenes, "audio_tracks": rawPayload["audio_tracks"], "job_id": rawPayload["job_id"], "video_name": rawPayload["video_name"], "transition_sound_effects": rawPayload["transition_sound_effects"]})
 }
 
-// normalizeClipsInput handles the raw clips array (string entries or
-// map entries) and the string-slice variant. Each entry becomes one
-// synthetic scene with a default 4s duration; missing URLs are
-// rejected. The clips input form has no use for the raw payload map
-// (no top-level fallback pool to extract), so it is not threaded in.
-// ingestionSceneClipURL is used only by the non-narrated flat-scene adapter.
-// The narrated renderer never calls it and therefore never interprets these
-// aliases; narrated scenes must already contain scene.clip.
-func ingestionSceneClipURL(scene map[string]interface{}) string {
-	if scene == nil {
-		return ""
-	}
-	if clip, ok := scene["clip"].(map[string]interface{}); ok {
-		if url := strings.TrimSpace(payload.FirstString(clip, "url")); url != "" {
-			return url
-		}
-	}
-	return strings.TrimSpace(payload.FirstString(scene, "clip_link", "drive_link", "image_link", "image"))
-}
-
+// normalizeClipsInput remains as an explicit rejection point for callers that
+// have not migrated from raw clip arrays. It is not a renderer adapter.
 func normalizeClipsInput(rawClips interface{}) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
-	switch clips := rawClips.(type) {
-	case []interface{}:
-		return normalizeClipsAsInterface(clips)
-	case []string:
-		return normalizeClipsAsInterface(toInterfaceSlice(clips))
-	default:
-		return nil, nil, nil, nil, "", fmt.Errorf("clips: unsupported shape %T", rawClips)
-	}
-}
-
-func normalizeClipsAsInterface(rawClips []interface{}) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
-	sceneEntries := make([]map[string]interface{}, 0, len(rawClips))
-	items := make([]map[string]interface{}, 0, len(rawClips))
-	clips := make([]string, 0, len(rawClips))
-	for i, item := range rawClips {
-		switch clip := item.(type) {
-		case string:
-			url := strings.TrimSpace(clip)
-			if url == "" {
-				return nil, nil, nil, nil, "", fmt.Errorf("clips[%d]: url is required", i)
-			}
-			sceneEntries = append(sceneEntries, map[string]interface{}{
-				"text":             fmt.Sprintf("Clip %d", i+1),
-				"clip_link":        url,
-				"clip_links":       []string{url},
-				"duration_seconds": 4.0,
-			})
-			items = append(items, map[string]interface{}{
-				"type":     "video",
-				"url":      url,
-				"duration": 4.0,
-				"fit":      "contain",
-			})
-			clips = append(clips, url)
-		case map[string]interface{}:
-			url := payload.FirstString(clip, "url", "clip_link", "drive_link")
-			if url == "" {
-				urls := payload.NormalizeStringList(clip, "clip_links", "drive_links")
-				if len(urls) > 0 {
-					url = urls[0]
-				}
-			}
-			if url == "" {
-				return nil, nil, nil, nil, "", fmt.Errorf("clips[%d]: url is required", i)
-			}
-			duration := payload.NormalizedDuration(clip["duration"])
-			if duration <= 0 {
-				duration = payload.NormalizedDuration(clip["duration_seconds"])
-			}
-			if duration <= 0 {
-				duration = 4.0
-			}
-			sceneEntries = append(sceneEntries, map[string]interface{}{
-				"text":             payload.FirstString(clip, "text", "description"),
-				"clip_link":        url,
-				"clip_links":       []string{url},
-				"duration_seconds": duration,
-			})
-			items = append(items, map[string]interface{}{
-				"type":     "video",
-				"url":      url,
-				"duration": duration,
-				"fit":      "contain",
-			})
-			clips = append(clips, url)
-		}
-	}
-	return sceneEntries, items, payload.DedupeStrings(clips), nil, "clips", nil
-}
-
-func toInterfaceSlice(values []string) []interface{} {
-	out := make([]interface{}, 0, len(values))
-	for _, value := range values {
-		out = append(out, value)
-	}
-	return out
+	return nil, nil, nil, nil, "", fmt.Errorf("legacy clips input is unsupported; use scenes[].clip with asset_id, url, duration_ms (got %T)", rawClips)
 }

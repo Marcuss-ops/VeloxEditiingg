@@ -5,6 +5,27 @@ import (
 	"testing"
 )
 
+func TestBuildClipPayloadForMasterDoesNotReemitVoiceoverPaths(t *testing.T) {
+	result, err := BuildClipPayloadForMaster(map[string]interface{}{
+		"video_name": "Canonical narrated clip",
+		"scenes": []interface{}{
+			map[string]interface{}{
+				"clip":      map[string]interface{}{"asset_id": "clip-1", "url": "velox-asset://clip-1", "duration_ms": 2000},
+				"voiceover": map[string]interface{}{"asset_id": "voice-1", "url": "velox-asset://voice-1", "duration_ms": 3000},
+			},
+		},
+	}, t.TempDir(), t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("BuildClipPayloadForMaster: %v", err)
+	}
+	if _, present := result["voiceover_paths"]; present {
+		t.Fatalf("retired top-level voiceover_paths must not be emitted: %#v", result["voiceover_paths"])
+	}
+	if _, present := result["audio_tracks"]; !present {
+		t.Fatal("canonical narrated payload must retain generated audio_tracks")
+	}
+}
+
 func TestBuildNarratedClipPayloadUsesCanonicalDurations(t *testing.T) {
 	scenes := []map[string]interface{}{{
 		"clip":      map[string]interface{}{"asset_id": "clip-1", "url": "velox-asset://clip-1", "duration_ms": 2500},
@@ -18,8 +39,13 @@ func TestBuildNarratedClipPayloadUsesCanonicalDurations(t *testing.T) {
 	if mode != "clip_stock" || len(entries) != 1 || len(items) != 2 || len(clips) != 1 || len(tracks) != 2 {
 		t.Fatalf("mode=%q entries=%d items=%d clips=%d tracks=%d", mode, len(entries), len(items), len(clips), len(tracks))
 	}
-	if got := entries[0]["duration_seconds"]; got != 9.75 {
-		t.Fatalf("total duration=%v want 9.75", got)
+	clipAsset := entries[0]["clip"].(map[string]interface{})
+	voiceAsset := entries[0]["voiceover"].(map[string]interface{})
+	if got := clipAsset["duration_ms"]; got != int64(2500) {
+		t.Fatalf("clip duration_ms=%v want 2500", got)
+	}
+	if got := voiceAsset["duration_ms"]; got != int64(7250) {
+		t.Fatalf("voiceover duration_ms=%v want 7250", got)
 	}
 	if got := items[0]["duration"]; got != 7.25 {
 		t.Fatalf("stock duration=%v want 7.25", got)

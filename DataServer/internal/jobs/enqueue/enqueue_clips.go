@@ -3,17 +3,14 @@
 // BuildClipPayloadForMaster is the canonical script-with-clip payload
 // orchestrator. It is a linear flow that delegates:
 //
-//   - clip_input_normalizer.go    input-shape adapters + URL extractors
-//     (three explicit input forms; no registry,
-//     no per-format interface, no scene factory,
-//     no generic pipeline).
+//   - clip_input_normalizer.go    canonical scene asset validation
+//     and renderer input normalization (clip, stock[], voiceover).
 //   - narrated_clip_timeline.go   voiceover-bed + final-clip timeline
-//     builder used when any scene carries a
-//     voiceover URL.
+//     builder for canonical narrated scenes.
 //
-// Hard constraint: no format registry, no per-format interface, no scene
-// factory, no generic pipeline builder. Three explicit functions cover
-// the three input forms.
+// Hard constraint: the renderer receives only canonical nested assets;
+// legacy paths, bindings, links, and positional clip pools are rejected
+// before timeline construction.
 package enqueue
 
 import (
@@ -30,9 +27,9 @@ import (
 )
 
 // BuildClipPayloadForMaster builds the canonical script-with-clips payload.
-// Accepts either a SpecScene-style `scenes` payload (with optional
-// drive_links / clip_links / voiceover_link), a `scenes_json` JSON string,
-// or a flat `clips` payload. The output map is ready for Enqueuer.Enqueue
+// Accepts a canonical `scenes` array or `scenes_json` containing scenes
+// with clip, stock[], and optional voiceover asset objects. The output map
+// is ready for Enqueuer.Enqueue
 // and ultimately for the scene.composite worker executor.
 //
 // Linear flow:
@@ -41,8 +38,8 @@ import (
 //     audioTracks, videoMode) from the input.
 //  3. Build script text from explicit fields, scene-level text,
 //     or buildScriptText fallback.
-//  4. Build voiceover paths from top-level field, or extract from
-//     audioTracks if present.
+//  4. Derive the canonical voiceover path list from generated audio tracks
+//     for the legacy envelope; scene assets remain the renderer source.
 //  5. Resolve identity fields (job_id / job_run_id / correlation_id).
 //  6. Strip legacy aliases (id / run_id / title / voiceover_path / audio_path).
 //  7. Fill a contract.NewJobPayloadV2 envelope and project to the output map.
@@ -136,8 +133,11 @@ func BuildClipPayloadForMaster(rawPayload map[string]interface{}, dataDir, video
 	v2.Scenes = sceneEntries
 	v2.ScenesJSON = payload.MustJSON(sceneEntries)
 	v2.SceneCount = len(sceneEntries)
-	v2.VoiceoverPaths = append([]string{}, voiceoverPaths...)
-	v2.VoiceoverCount = len(voiceoverPaths)
+	// Narrated clip rendering is sourced exclusively from scene.voiceover
+	// assets. Do not re-emit the retired top-level voiceover_paths alias;
+	// generated audio_tracks carry the renderer timeline instead.
+	v2.VoiceoverPaths = nil
+	v2.VoiceoverCount = 0
 	v2.AudioLanguage = audioLanguage
 	v2.VideoMode = videoMode
 	v2.OutputPath = outputPath

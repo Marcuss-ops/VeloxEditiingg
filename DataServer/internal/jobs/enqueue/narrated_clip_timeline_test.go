@@ -54,8 +54,13 @@ func TestBuildNarratedClipPayloadPreservesCanonicalAssetsAndDurations(t *testing
 	if got := entries[0]["voiceover"].(map[string]interface{})["url"]; got != "velox-asset://voice-asset" {
 		t.Fatalf("voiceover url = %v", got)
 	}
-	if got := entries[0]["duration_seconds"]; got != 19.0 {
-		t.Fatalf("total duration = %v, want 19", got)
+	clipAsset := entries[0]["clip"].(map[string]interface{})
+	voiceAsset := entries[0]["voiceover"].(map[string]interface{})
+	if got := clipAsset["duration_ms"]; got != int64(7000) {
+		t.Fatalf("clip duration_ms = %v, want 7000", got)
+	}
+	if got := voiceAsset["duration_ms"]; got != int64(12000) {
+		t.Fatalf("voiceover duration_ms = %v, want 12000", got)
 	}
 	if got := items[0]["duration"]; got != 12.0 {
 		t.Fatalf("stock duration = %v, want 12", got)
@@ -161,7 +166,7 @@ func TestBuildNarratedClipPayloadRejectsIncompleteCanonicalAsset(t *testing.T) {
 
 func TestBuildNarratedClipPayloadRejectsMalformedVoiceoverAndStock(t *testing.T) {
 	cases := []map[string]interface{}{
-		{"clip": map[string]interface{}{"asset_id": "clip", "url": "velox-asset://clip", "duration_ms": 1000}, "voiceover": nil},
+		{"clip": map[string]interface{}{"asset_id": "clip", "url": "velox-asset://clip", "duration_ms": 1000}, "voiceover": map[string]interface{}{"asset_id": "voice"}},
 		{"clip": map[string]interface{}{"asset_id": "clip", "url": "velox-asset://clip", "duration_ms": 1000}, "voiceover": map[string]interface{}{"asset_id": "voice", "url": "velox-asset://voice", "duration_ms": 1000}, "stock": []interface{}{map[string]interface{}{"asset_id": "stock"}}},
 	}
 	for i, scene := range cases {

@@ -61,7 +61,7 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 	offsetSeconds := 0.0
 
 	for i, scene := range scenes {
-		clip, err := requiredCanonicalSceneAsset(scene, "clip")
+		clip, err := optionalCanonicalSceneAsset(scene, "clip")
 		if err != nil {
 			return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: %w", i, err)
 		}
@@ -70,7 +70,7 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 		if err != nil {
 			return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: %w", i, err)
 		}
-		voiceover, err := requiredCanonicalSceneAsset(scene, "voiceover")
+		voiceover, err := optionalCanonicalSceneAsset(scene, "voiceover")
 		if err != nil {
 			return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: %w", i, err)
 		}
@@ -83,12 +83,14 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 		if err != nil {
 			return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: %w", i, err)
 		}
+		setCanonicalDurationMS(voiceover, voiceoverDuration)
 		clipDuration := 0.0
 		if clipURL != "" {
 			clipDuration, err = resolveSceneFinalClipDurationWithProbe(scene, clipURL, probe)
 			if err != nil {
 				return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: %w", i, err)
 			}
+			setCanonicalDurationMS(clip, clipDuration)
 		}
 
 		// Preserve only canonical scene data at the renderer boundary.
@@ -107,7 +109,6 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 		if voiceover != nil {
 			normalized["voiceover"] = voiceover
 		}
-		normalized["duration_seconds"] = voiceoverDuration + clipDuration
 		sceneEntries = append(sceneEntries, normalized)
 
 		if voiceoverURL != "" {
@@ -129,6 +130,7 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 					if durationErr != nil {
 						return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: stock[%d]: %w", i, stockIndex%len(bedAssets), durationErr)
 					}
+					setCanonicalDurationMS(asset, stockDuration)
 					if stockDuration > remaining {
 						stockDuration = remaining
 					}
@@ -210,95 +212,6 @@ func appendTransitionSoundEffects(tracks *[]map[string]interface{}, opts narrate
 	}
 }
 
-func canonicalStockAssets(scene map[string]interface{}) ([]map[string]interface{}, error) {
-	if scene == nil {
-		return nil, nil
-	}
-	rawValue, present := scene["stock"]
-	if !present || rawValue == nil {
-		return nil, nil
-	}
-	var raw []interface{}
-	switch value := rawValue.(type) {
-	case []interface{}:
-		raw = value
-	case []map[string]interface{}:
-		for _, item := range value {
-			raw = append(raw, item)
-		}
-	case map[string]interface{}:
-		raw = []interface{}{value}
-	default:
-		return nil, fmt.Errorf("canonical stock must be an array of asset objects")
-	}
-	out := make([]map[string]interface{}, 0, len(raw))
-	for index, value := range raw {
-		asset, ok := value.(map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("stock[%d]: canonical asset must be an object", index)
-		}
-		canonical := canonicalAsset(asset)
-		if canonical == nil {
-			return nil, fmt.Errorf("stock[%d]: canonical asset must include asset_id and url", index)
-		}
-		out = append(out, canonical)
-	}
-	return out, nil
-}
-
-func sceneAsset(scene map[string]interface{}, key string) map[string]interface{} {
-	if scene == nil {
-		return nil
-	}
-	asset, _ := scene[key].(map[string]interface{})
-	return asset
-}
-
-func requiredCanonicalSceneAsset(scene map[string]interface{}, key string) (map[string]interface{}, error) {
-	if scene == nil {
-		return nil, nil
-	}
-	raw, present := scene[key]
-	if !present {
-		return nil, nil
-	}
-	if raw == nil {
-		return nil, fmt.Errorf("canonical %s asset must be an object", key)
-	}
-	asset, ok := raw.(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("canonical %s asset must be an object", key)
-	}
-	canonical := canonicalAsset(asset)
-	if canonical == nil {
-		return nil, fmt.Errorf("canonical %s asset must include asset_id and url", key)
-	}
-	return canonical, nil
-}
-
-func canonicalAsset(raw map[string]interface{}) map[string]interface{} {
-	if raw == nil {
-		return nil
-	}
-	url := strings.TrimSpace(payload.FirstString(raw, "url"))
-	assetID := strings.TrimSpace(payload.FirstString(raw, "asset_id"))
-	if url == "" || assetID == "" {
-		return nil
-	}
-	prefix := canonicalAssetURLPrefix
-	if !strings.HasPrefix(strings.ToLower(url), prefix) || strings.TrimPrefix(url, prefix) != assetID {
-		return nil
-	}
-	out := map[string]interface{}{
-		"asset_id": assetID,
-		"url":      url,
-	}
-	if durationMS := canonicalDurationMS(raw); durationMS > 0 {
-		out["duration_ms"] = durationMS
-	}
-	return out
-}
-
 func assetURL(asset map[string]interface{}) string {
 	if asset == nil {
 		return ""
@@ -315,6 +228,13 @@ func canonicalDurationMS(asset map[string]interface{}) int64 {
 		return 0
 	}
 	return int64(value)
+}
+
+func setCanonicalDurationMS(asset map[string]interface{}, durationSeconds float64) {
+	if asset == nil || durationSeconds <= 0 {
+		return
+	}
+	asset["duration_ms"] = int64(math.Round(durationSeconds * 1000))
 }
 
 func canonicalAssetDuration(asset map[string]interface{}, probe audioDurationProbe) (float64, error) {
