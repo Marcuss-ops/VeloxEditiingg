@@ -25,14 +25,13 @@ func TestProjectPayloadForWorker_VersionMatrix(t *testing.T) {
 	before := payloadJSONForTest(canonical)
 
 	for _, tc := range []struct {
-		name       string
-		executorV  int
-		wantLegacy bool
+		name      string
+		executorV int
 	}{
-		{name: "unknown", executorV: 0, wantLegacy: true},
-		{name: "legacy", executorV: 1, wantLegacy: true},
-		{name: "canonical", executorV: 2, wantLegacy: false},
-		{name: "newer-canonical", executorV: 3, wantLegacy: false},
+		{name: "unknown", executorV: 0},
+		{name: "legacy", executorV: 1},
+		{name: "canonical", executorV: 2},
+		{name: "newer-canonical", executorV: 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			wire, err := projectPayloadForWorker(canonical, tc.executorV)
@@ -46,24 +45,13 @@ func TestProjectPayloadForWorker_VersionMatrix(t *testing.T) {
 			if !ok {
 				t.Fatalf("payload_contract_version type = %T, want JSON number", wire["payload_contract_version"])
 			}
-			wantVersion := contract.PayloadContractVersionCanonical
-			if tc.wantLegacy {
-				wantVersion = contract.PayloadContractVersionLegacy
-				if _, ok := wire["items"]; !ok {
-					t.Fatalf("legacy wire payload missing items: %#v", wire)
-				}
-				if _, ok := wire["clips"]; !ok {
-					t.Fatalf("legacy wire payload missing clips: %#v", wire)
-				}
-			} else {
-				for _, legacyKey := range []string{"items", "clips", "video_mode"} {
-					if _, ok := wire[legacyKey]; ok {
-						t.Fatalf("canonical wire payload unexpectedly contains legacy %q: %#v", legacyKey, wire)
-					}
+			for _, legacyKey := range []string{"items", "clips", "video_mode", "parameters", "version"} {
+				if _, ok := wire[legacyKey]; ok {
+					t.Fatalf("canonical wire payload unexpectedly contains legacy %q: %#v", legacyKey, wire)
 				}
 			}
-			if int(gotVersion) != wantVersion {
-				t.Fatalf("payload_contract_version = %v, want %d", gotVersion, wantVersion)
+			if int(gotVersion) != contract.PayloadContractVersionCanonical {
+				t.Fatalf("payload_contract_version = %v, want %d", gotVersion, contract.PayloadContractVersionCanonical)
 			}
 		})
 	}
@@ -75,13 +63,12 @@ func TestProjectPayloadForWorker_VersionMatrix(t *testing.T) {
 
 func TestSendClaimedTaskOffer_UsesWorkerSpecificPayloadContract(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		executorV  int
-		wantLegacy bool
+		name      string
+		executorV int
 	}{
-		{name: "unknown-worker", executorV: 0, wantLegacy: true},
-		{name: "legacy-worker", executorV: 1, wantLegacy: true},
-		{name: "canonical-worker", executorV: 2, wantLegacy: false},
+		{name: "unknown-worker", executorV: 0},
+		{name: "legacy-worker", executorV: 1},
+		{name: "canonical-worker", executorV: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			payload := map[string]interface{}{
@@ -105,23 +92,13 @@ func TestSendClaimedTaskOffer_UsesWorkerSpecificPayloadContract(t *testing.T) {
 				t.Fatal("sendClaimedTaskOffer did not enqueue a TaskOffer")
 			}
 			wire := out.Envelope.GetTaskOffer().GetTaskSpec().AsMap()
-			if tc.wantLegacy {
-				if _, ok := wire["items"]; !ok {
-					t.Fatalf("legacy TaskOffer missing items: %#v", wire)
-				}
-			} else {
-				for _, legacyKey := range []string{"items", "clips", "video_mode"} {
-					if _, ok := wire[legacyKey]; ok {
-						t.Fatalf("canonical TaskOffer unexpectedly contains legacy %q: %#v", legacyKey, wire)
-					}
+			for _, legacyKey := range []string{"items", "clips", "video_mode", "parameters", "version"} {
+				if _, ok := wire[legacyKey]; ok {
+					t.Fatalf("canonical TaskOffer unexpectedly contains legacy %q: %#v", legacyKey, wire)
 				}
 			}
-			wantVersion := float64(contract.PayloadContractVersionCanonical)
-			if tc.wantLegacy {
-				wantVersion = float64(contract.PayloadContractVersionLegacy)
-			}
-			if got := wire["payload_contract_version"]; got != wantVersion {
-				t.Fatalf("TaskOffer payload_contract_version = %v, want %v", got, wantVersion)
+			if got := wire["payload_contract_version"]; got != float64(contract.PayloadContractVersionCanonical) {
+				t.Fatalf("TaskOffer payload_contract_version = %v, want %v", got, float64(contract.PayloadContractVersionCanonical))
 			}
 			if got := payloadJSONForTest(payload); got != original {
 				t.Fatalf("canonical payload mutated by TaskOffer projection:\nbefore=%s\nafter=%s", original, got)

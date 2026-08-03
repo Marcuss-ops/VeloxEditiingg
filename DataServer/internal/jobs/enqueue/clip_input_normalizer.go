@@ -91,8 +91,19 @@ func normalizeScenesInput(rawPayload map[string]interface{}, scenes []map[string
 
 func mergeAudioTracks(raw interface{}, generated []map[string]interface{}) []map[string]interface{} {
 	merged := normalizeAudioTracks(raw)
-	merged = append(merged, generated...)
-	return merged
+	seen := make(map[string]struct{}, len(merged)+len(generated))
+	unique := make([]map[string]interface{}, 0, len(merged)+len(generated))
+	for _, track := range append(merged, generated...) {
+		key := audioTrackKey(track)
+		if key != "" {
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+		unique = append(unique, track)
+	}
+	return unique
 }
 
 // normalizeScenesJSONInput parses a scenes_json string and routes to

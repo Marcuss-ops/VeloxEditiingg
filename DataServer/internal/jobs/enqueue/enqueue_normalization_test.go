@@ -254,51 +254,6 @@ func TestBuildPipelinePayload(t *testing.T) {
 	})
 }
 
-func TestNormalizeSceneVideoPayload_AttachesLegacyClipTimeline(t *testing.T) {
-	t.Parallel()
-
-	normalized, err := normalizeSceneVideoPayload(map[string]interface{}{
-		"video_name":  "Legacy clip smoke",
-		"script_text": "Narrated legacy clip body.",
-		"voiceover_paths": []interface{}{
-			"velox-asset://voiceovers/scene-1.mp3",
-		},
-		"scenes": []interface{}{
-			map[string]interface{}{
-				"text":             "Scene 1",
-				"clip_link":        "https://drive.example.com/clip-1.mp4",
-				"duration_seconds": float64(5),
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("normalizeSceneVideoPayload: %v", err)
-	}
-	normalized, err = ProjectLegacyWorkerPayload(normalized)
-	if err != nil {
-		t.Fatalf("ProjectLegacyWorkerPayload: %v", err)
-	}
-
-	items, ok := normalized["items"].([]map[string]interface{})
-	if !ok || len(items) != 1 {
-		t.Fatalf("items = %#v, want one timeline item", normalized["items"])
-	}
-	if got := items[0]["url"]; got != "https://drive.example.com/clip-1.mp4" {
-		t.Fatalf("items[0].url = %v", got)
-	}
-	clips, ok := normalized["clips"].([]string)
-	if !ok || len(clips) != 1 || clips[0] != "https://drive.example.com/clip-1.mp4" {
-		t.Fatalf("clips = %#v", normalized["clips"])
-	}
-	tracks, ok := normalized["audio_tracks"].([]map[string]interface{})
-	if !ok || len(tracks) != 1 {
-		t.Fatalf("audio_tracks = %#v, want one voiceover track", normalized["audio_tracks"])
-	}
-	if got := tracks[0]["source_url"]; got != "velox-asset://voiceovers/scene-1.mp3" {
-		t.Fatalf("audio_tracks[0].source_url = %v", got)
-	}
-}
-
 func TestNormalizeSceneVideoPayload_PreservesBackgroundMusicAndMergesTwoVoiceovers(t *testing.T) {
 	t.Parallel()
 
@@ -334,17 +289,9 @@ func TestNormalizeSceneVideoPayload_PreservesBackgroundMusicAndMergesTwoVoiceove
 	if err != nil {
 		t.Fatalf("normalizeSceneVideoPayload: %v", err)
 	}
-	normalized, err = ProjectLegacyWorkerPayload(normalized)
-	if err != nil {
-		t.Fatalf("ProjectLegacyWorkerPayload: %v", err)
-	}
-
-	tracks, ok := normalized["audio_tracks"].([]map[string]interface{})
-	if !ok {
-		t.Fatalf("audio_tracks = %#v, want []map[string]interface{}", normalized["audio_tracks"])
-	}
-	if len(tracks) != 3 {
-		t.Fatalf("audio_tracks len = %d, want 3 (background music + two voiceovers)", len(tracks))
+	tracks := normalizeAudioTracks(normalized["audio_tracks"])
+	if len(tracks) != 1 {
+		t.Fatalf("audio_tracks len = %d, want 1 canonical global music track", len(tracks))
 	}
 
 	bySource := make(map[string]map[string]interface{}, len(tracks))
@@ -374,8 +321,6 @@ func TestNormalizeSceneVideoPayload_PreservesBackgroundMusicAndMergesTwoVoiceove
 	}
 
 	assertTrack("velox-asset://background-music", "background_music", 0.12, 0, 12)
-	assertTrack("velox-asset://voiceover-scene-0", "voiceover", 1, 0, 6)
-	assertTrack("velox-asset://voiceover-scene-1", "voiceover", 1, 6, 6)
 }
 
 func TestNormalizeSceneVideoPayload_DeduplicatesCombinedAudioTracks(t *testing.T) {
@@ -421,17 +366,9 @@ func TestNormalizeSceneVideoPayload_DeduplicatesCombinedAudioTracks(t *testing.T
 	if err != nil {
 		t.Fatalf("normalizeSceneVideoPayload: %v", err)
 	}
-	normalized, err = ProjectLegacyWorkerPayload(normalized)
-	if err != nil {
-		t.Fatalf("ProjectLegacyWorkerPayload: %v", err)
-	}
-
-	tracks, ok := normalized["audio_tracks"].([]map[string]interface{})
-	if !ok {
-		t.Fatalf("audio_tracks = %#v, want []map[string]interface{}", normalized["audio_tracks"])
-	}
+	tracks := normalizeAudioTracks(normalized["audio_tracks"])
 	if len(tracks) != 3 {
-		t.Fatalf("audio_tracks len = %d, want 3 (duplicate removed, distinct offset and voiceover kept)", len(tracks))
+		t.Fatalf("audio_tracks len = %d, want 3 explicit canonical tracks", len(tracks))
 	}
 	if got := tracks[0]["role"]; got != "background_music" {
 		t.Errorf("first track role = %v, want background_music", got)
@@ -444,15 +381,6 @@ func TestNormalizeSceneVideoPayload_DeduplicatesCombinedAudioTracks(t *testing.T
 	}
 	if got := asFloat(tracks[0]["duration_seconds"]); got != 12 {
 		t.Errorf("first track duration = %v, want 12", got)
-	}
-	if got := asFloat(tracks[1]["start_time_offset"]); got != 6 {
-		t.Errorf("second track offset = %v, want 6", got)
-	}
-	if got := tracks[2]["role"]; got != "voiceover" {
-		t.Errorf("third track role = %v, want voiceover", got)
-	}
-	if got := tracks[2]["source_url"]; got != "velox-asset://voiceover-scene-0" {
-		t.Errorf("third track source = %v, want voiceover asset", got)
 	}
 }
 
@@ -484,31 +412,16 @@ func TestNormalizeSceneVideoPayload_UsesNestedVoiceoverDurationForClipTimeline(t
 	if err != nil {
 		t.Fatalf("normalizeSceneVideoPayload: %v", err)
 	}
-	normalized, err = ProjectLegacyWorkerPayload(normalized)
-	if err != nil {
-		t.Fatalf("ProjectLegacyWorkerPayload: %v", err)
-	}
-
-	items, ok := normalized["items"].([]map[string]interface{})
-	if !ok || len(items) != 1 {
-		t.Fatalf("items = %#v, want one timeline item", normalized["items"])
-	}
-	if got := asFloat(items[0]["duration"]); got != 24.216 {
-		t.Fatalf("items[0].duration = %v, want 24.216", got)
-	}
-	tracks, ok := normalized["audio_tracks"].([]map[string]interface{})
-	if !ok || len(tracks) != 1 {
-		t.Fatalf("audio_tracks = %#v, want one voiceover track", normalized["audio_tracks"])
-	}
-	if got := asFloat(tracks[0]["duration_seconds"]); got != 24.216 {
-		t.Fatalf("audio_tracks[0].duration_seconds = %v, want 24.216", got)
+	tracks := normalizeAudioTracks(normalized["audio_tracks"])
+	if len(tracks) != 0 {
+		t.Fatalf("audio_tracks = %#v, want no implicit legacy voiceover track", tracks)
 	}
 	scenes, ok := normalized["scenes"].([]map[string]interface{})
 	if !ok || len(scenes) != 1 {
 		t.Fatalf("scenes = %#v, want one scene", normalized["scenes"])
 	}
-	if got := asFloat(scenes[0]["duration_seconds"]); got != 24.216 {
-		t.Fatalf("scenes[0].duration_seconds = %v, want 24.216", got)
+	if got := asFloat(scenes[0]["duration_seconds"]); got != 5 {
+		t.Fatalf("scenes[0].duration_seconds = %v, want canonical scene duration 5", got)
 	}
 }
 
@@ -550,12 +463,7 @@ func TestNormalizeSceneVideoPayload_PreservesVisualTimelineFields(t *testing.T) 
 	if err != nil {
 		t.Fatalf("normalizeSceneVideoPayload: %v", err)
 	}
-	normalized, err = ProjectLegacyWorkerPayload(normalized)
-	if err != nil {
-		t.Fatalf("ProjectLegacyWorkerPayload: %v", err)
-	}
-
-	if got, ok := normalized["subtitle_tracks"].([]map[string]interface{}); !ok || len(got) != 1 {
+	if got := normalizeSubtitleTracks(normalized["subtitle_tracks"]); len(got) != 1 {
 		t.Fatalf("subtitle_tracks = %#v, want one preserved track", normalized["subtitle_tracks"])
 	}
 	if got, ok := normalized["layers"].([]interface{}); !ok || len(got) != 1 {
@@ -589,20 +497,9 @@ func TestNormalizeSceneVideoPayload_DerivesSubtitleTrackFromSceneSubtitles(t *te
 	if err != nil {
 		t.Fatalf("normalizeSceneVideoPayload: %v", err)
 	}
-	normalized, err = ProjectLegacyWorkerPayload(normalized)
-	if err != nil {
-		t.Fatalf("ProjectLegacyWorkerPayload: %v", err)
-	}
-
-	tracks, ok := normalized["subtitle_tracks"].([]map[string]interface{})
-	if !ok || len(tracks) != 1 {
-		t.Fatalf("subtitle_tracks = %#v, want one derived track", normalized["subtitle_tracks"])
-	}
-	if got := tracks[0]["source"]; got != "velox-asset://subtitle-1" {
-		t.Fatalf("subtitle_tracks[0].source = %v, want velox-asset://subtitle-1", got)
-	}
-	if got := tracks[0]["format"]; got != "srt" {
-		t.Fatalf("subtitle_tracks[0].format = %v, want srt", got)
+	tracks := normalizeSubtitleTracks(normalized["subtitle_tracks"])
+	if len(tracks) != 0 {
+		t.Fatalf("subtitle_tracks = %#v, want no implicit legacy track", normalized["subtitle_tracks"])
 	}
 }
 
