@@ -99,7 +99,14 @@ ADMIN_TOKEN=$(resolve_admin_token) || exit 2
 # ─── M2M provisioning ─────────────────────────────────────────────────────
 M2M_BEARER=""
 PROVISIONED_CLIENT_ID=""
+TMP_HDRS=""
+TMP_BODY=""
+cleanup_smoke_one() {
+  [[ -n "$TMP_HDRS" && -e "$TMP_HDRS" ]] && rm -f "$TMP_HDRS"
+  [[ -n "$TMP_BODY" && -e "$TMP_BODY" ]] && rm -f "$TMP_BODY"
+}
 on_signals() {
+  cleanup_smoke_one
   if [[ -n "$PROVISIONED_CLIENT_ID" && -n "$ADMIN_TOKEN" ]]; then
     curl -sS -m 5 -X DELETE \
       -H "Authorization: Bearer $ADMIN_TOKEN" \
@@ -145,34 +152,23 @@ log_info "assets: vo=$ASSET_VO clip_a=$ASSET_CLIP_A clip_b=$ASSET_CLIP_B sub=$AS
 
 EPOCH=$(date +%s)
 IDEM_KEY="smoke-one-${TARGET_WORKER_ID}-${EPOCH}"
-# Payload uses only fields accepted by SubmitJobRequest (apiwire.go).
-# project_id and target_executor_id are NOT in the schema — removed.
-# The executor is derived server-side (scene.composite.v1@1 default).
-PAYLOAD=$(cat <<JSON
-{
-  "idempotency_key": "${IDEM_KEY}",
-  "video_name": "smoke_one for ${TARGET_WORKER_ID}@${EPOCH}",
-  "voiceover_paths": [
-    "velox-asset://${ASSET_VO}"
-  ],
-  "scenes": [
-    {
-      "text": "Smoke scene 1 — per-worker cert ${TARGET_WORKER_ID}",
-      "clip_link": "velox-asset://${ASSET_CLIP_A}",
-      "duration_seconds": 3
-    },
-    {
-      "text": "Smoke scene 2 — per-worker cert ${TARGET_WORKER_ID}",
-      "clip_link": "velox-asset://${ASSET_CLIP_B}",
-      "duration_seconds": 3
-    }
-  ],
-  "delivery_plan": [
-    { "destination_id": "${SMOKE_DESTINATION_ID}", "priority": 100, "retry_budget": 1 }
-  ]
-}
-JSON
-)
+# Build the strict canonical SubmitJobRequest shape. The shared builder
+# attaches clip + voiceover to each scene and emits the technical envelope;
+# no positional voiceover_paths or scene.clip_link aliases cross the wire.
+PAYLOAD_FILE=$(mktemp)
+if ! python3 "${REPO_ROOT}/tests/worker-cert/build_real_payload.py" \
+      --fixtures "$ASSETS_FILE" \
+      --worker-id "$TARGET_WORKER_ID" \
+      --destination "$SMOKE_DESTINATION_ID" \
+      --strict \
+      --output "$PAYLOAD_FILE" >/dev/null 2>&1; then
+  log_error "canonical payload builder failed"; rm -f "$PAYLOAD_FILE"; exit 4
+fi
+PAYLOAD=$(cat "$PAYLOAD_FILE")
+rm -f "$PAYLOAD_FILE"
+# Preserve the exact smoke idempotency key while keeping the builder's
+# canonical placement pin and nested scene assets.
+PAYLOAD=$(printf '%s' "$PAYLOAD" | jq --arg idem "$IDEM_KEY" ".idempotency_key = \$idem")
 
 # ─── POST /api/v1/jobs ─────────────────────────────────────────────────────
 TMP_HDRS=$(mktemp); TMP_BODY=$(mktemp)
@@ -185,7 +181,7 @@ curl -sS -m 30 -X POST \
   -D "$TMP_HDRS" -o "$TMP_BODY" 2>/dev/null
 POST_STATUS=$(awk 'NR==1 && $1 ~ /^[Hh][Tt][Tt][Pp]\// {print $2; exit}' "$TMP_HDRS")
 POST_BODY=$(cat "$TMP_BODY")
-rm -f "$TMP_HDRS" "$TMP_BODY"
+cleanup_smoke_one
 if [[ "$POST_STATUS" != "202" ]]; then
   log_error "POST /api/v1/jobs returned HTTP $POST_STATUS"
   log_error "  body: $(printf '%s' "$POST_BODY" | head -c 400)"
