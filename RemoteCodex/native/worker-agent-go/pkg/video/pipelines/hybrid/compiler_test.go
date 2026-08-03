@@ -158,6 +158,35 @@ func TestCompile_VideoItemCanPreserveOriginalAudio(t *testing.T) {
 	}
 }
 
+func TestCompile_VoiceoverBedAlwaysSuppressesSourceAudio(t *testing.T) {
+	input := map[string]interface{}{
+		"items": []interface{}{
+			map[string]interface{}{
+				"type":          "video",
+				"url":           "https://example.com/short-stock.mp4",
+				"duration":      30.0,
+				"role":          "voiceover_bed",
+				"include_audio": true,
+			},
+		},
+		"audio_tracks": []interface{}{
+			map[string]interface{}{
+				"source_url":       "https://example.com/voiceover.mp3",
+				"duration_seconds": 30.0,
+				"role":             "voiceover",
+			},
+		},
+	}
+
+	plan, err := Compile(context.Background(), "job-voiceover-bed", input, "/tmp/out.mp4", nil)
+	if err != nil {
+		t.Fatalf("Compile(voiceover bed): %v", err)
+	}
+	if plan.Timeline[0].IncludeAudio {
+		t.Fatal("voiceover_bed must not preserve source audio")
+	}
+}
+
 func TestCompile_AudioTracks_ProducesOffsetMixPlan(t *testing.T) {
 	input := map[string]interface{}{
 		"items": []interface{}{

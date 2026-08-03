@@ -122,6 +122,14 @@ func parseRequest(input map[string]interface{}) *Request {
 					}
 				}
 			}
+			includeAudio := toBoolDefault(im["include_audio"], false)
+			// A voiceover_bed is visual stock only. Its audio is supplied by
+			// audio_tracks, and allowing source audio here would make the
+			// native codec use -shortest and truncate a looped stock segment
+			// at the source clip's real duration.
+			if strings.EqualFold(toString(im["role"]), "voiceover_bed") {
+				includeAudio = false
+			}
 			req.Items = append(req.Items, ItemInput{
 				Type:                     itemType,
 				URL:                      itemURL,
@@ -131,7 +139,7 @@ func parseRequest(input map[string]interface{}) *Request {
 				Role:                     toString(im["role"]),
 				VoiceoverDurationSeconds: toFloat64Default(im["voiceover_duration_seconds"], 0.0),
 				FinalClipDurationSeconds: toFloat64Default(im["final_clip_duration_seconds"], 0.0),
-				IncludeAudio:             toBoolDefault(im["include_audio"], false),
+				IncludeAudio:             includeAudio,
 			})
 		}
 		return req
