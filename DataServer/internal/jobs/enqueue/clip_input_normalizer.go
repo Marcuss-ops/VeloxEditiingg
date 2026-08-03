@@ -39,10 +39,18 @@ func normalizeClipPayload(rawPayload map[string]interface{}) ([]map[string]inter
 // per-scene clip_item list.
 func normalizeScenesInput(rawPayload map[string]interface{}, scenes []map[string]interface{}) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
 	if supportsNarratedClipScenes(scenes) {
-		return buildNarratedClipPayload(scenes, narratedClipOptions{
+		entries, items, clips, generatedAudio, mode, err := buildNarratedClipPayload(scenes, narratedClipOptions{
 			fallbackNarrationClipURLs: sceneFallbackNarrationClipURLs(rawPayload),
 			randomSeed:                payload.FirstString(rawPayload, "job_id", "script_id", "video_name", "title"),
 		})
+		if err != nil {
+			return nil, nil, nil, nil, "", err
+		}
+		// Preserve global audio layers supplied by the canonical request
+		// (for example background_music). The narrated-scene builder adds
+		// per-scene voiceover tracks; it must not replace the caller's
+		// already-declared tracks.
+		return entries, items, clips, mergeAudioTracks(rawPayload["audio_tracks"], generatedAudio), mode, nil
 	}
 
 	sceneEntries := make([]map[string]interface{}, 0, len(scenes))
@@ -79,6 +87,12 @@ func normalizeScenesInput(rawPayload map[string]interface{}, scenes []map[string
 		clips = append(clips, url)
 	}
 	return sceneEntries, items, payload.DedupeStrings(clips), nil, "clips", nil
+}
+
+func mergeAudioTracks(raw interface{}, generated []map[string]interface{}) []map[string]interface{} {
+	merged := normalizeAudioTracks(raw)
+	merged = append(merged, generated...)
+	return merged
 }
 
 // normalizeScenesJSONInput parses a scenes_json string and routes to

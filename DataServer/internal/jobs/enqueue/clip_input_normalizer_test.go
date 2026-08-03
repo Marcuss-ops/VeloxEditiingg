@@ -132,6 +132,41 @@ func TestNormalizeClipPayload_Dispatch(t *testing.T) {
 	})
 }
 
+func TestNormalizeScenesInput_PreservesGlobalAudioTracks(t *testing.T) {
+	raw := map[string]interface{}{
+		"video_name": "audio-merge-test",
+		"audio_tracks": []interface{}{map[string]interface{}{
+			"source_url":       "https://music.example/bed.mp3",
+			"role":             "background_music",
+			"volume":           0.001,
+			"loop":             true,
+			"duration_seconds": 20.0,
+		}},
+		"scenes": []interface{}{map[string]interface{}{
+			"stock_links":                []string{"https://stock.example/a.mp4"},
+			"reference_voiceover":        "https://voice.example/scene.mp3",
+			"voiceover_duration_seconds": 4.0,
+		}},
+	}
+
+	_, _, _, tracks, _, err := normalizeClipPayload(raw)
+	if err != nil {
+		t.Fatalf("normalizeClipPayload: %v", err)
+	}
+	if len(tracks) != 2 {
+		t.Fatalf("audio tracks = %d, want global music + generated voiceover", len(tracks))
+	}
+	if got := tracks[0]["role"]; got != "background_music" {
+		t.Fatalf("first track role = %v, want background_music", got)
+	}
+	if got := tracks[0]["loop"]; got != true {
+		t.Fatalf("first track loop = %v, want true", got)
+	}
+	if got := tracks[1]["role"]; got != "voiceover" {
+		t.Fatalf("second track role = %v, want voiceover", got)
+	}
+}
+
 // =====================================================================
 // normalizeScenesInput: flat path (no voiceover) vs narrated routing.
 // =====================================================================
