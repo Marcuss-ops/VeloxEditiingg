@@ -119,6 +119,9 @@ func TestSocialGatewayProvider_OpaqueDestinationWireContract(t *testing.T) {
 	if err := json.Unmarshal(raw, &wire); err != nil {
 		t.Fatalf("decode Social API request: %v; body=%s", err, raw)
 	}
+	if got, _ := wire["contract_version"].(string); got != socialclient.ContractVersionDelivery {
+		t.Fatalf("contract_version=%q, want %q; body=%s", got, socialclient.ContractVersionDelivery, raw)
+	}
 	if got, _ := wire["external_destination_id"].(string); got != externalDestinationID {
 		t.Fatalf("external_destination_id=%q, want opaque %q; body=%s", got, externalDestinationID, raw)
 	}

@@ -333,12 +333,10 @@ publishing_discover_target
 # ---- POST /api/v1/jobs ----------------------------------------------------
 # The metadata block is the JOB-side pass-through blob that the Velox
 # worker forwards to InstaeditLogin at POST /internal/v1/deliveries.
-# Per the user's spec the metadata MUST pin contract_version="velox.instaedit.publish.v1"
-# (this is the JOB-side discriminator literal — the InstaeditLogin
-# /internal/v1/deliveries CONTRACT discriminator is a separate value,
-# `ContractVersionV1 = "velox-instaedit.v1"` (dashes), used at the
-# worker hand-off boundary; both literals coexist because they tag
-# different wire boundaries on the cross-repo flow). All other fields
+# Its metadata discriminator is distinct from the delivery HTTP envelope
+# emitted by SocialGatewayProvider (`velox.delivery.v1`). Do not add the
+# retired `velox-instaedit.v1` envelope here: the delivery client owns the
+# sole canonical version at the actual delivery boundary. All other fields
 # are hardcoded per the user spec: privacy_status=private,
 # final_privacy=public, require_thumbnail=true.
 

@@ -1,5 +1,12 @@
 package socialclient
 
+import "fmt"
+
+// ContractVersionDelivery is the only contract accepted by the
+// social_repo delivery endpoint. Keep this value at the client boundary
+// so every Velox delivery producer uses the same wire discriminator.
+const ContractVersionDelivery = "velox.delivery.v1"
+
 // DeliverArtifactRequest is the typed payload Velox POSTs to the
 // social_repo's `/internal/v1/deliveries` endpoint.
 //
@@ -52,6 +59,15 @@ type DeliverArtifactRequest struct {
 	// CallbackURL is the canonical Velox event endpoint the social_repo
 	// will POST to when publication state changes. Empty omits the field.
 	CallbackURL string `json:"callback_url,omitempty"`
+}
+
+// Validate enforces the single delivery wire contract before any HTTP
+// request is sent. Obsolete, empty, or unknown versions fail closed.
+func (r DeliverArtifactRequest) Validate() error {
+	if r.ContractVersion != ContractVersionDelivery {
+		return fmt.Errorf("unsupported delivery contract_version %q", r.ContractVersion)
+	}
+	return nil
 }
 
 // ArtifactPayload is the typed view of the artifact reference inside

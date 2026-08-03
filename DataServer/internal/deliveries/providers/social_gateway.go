@@ -142,7 +142,7 @@ func (s *SocialGatewayProvider) deliver(ctx context.Context, artifact *store.Art
 // contract.
 func (s *SocialGatewayProvider) buildRequest(artifact *store.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string) (socialclient.DeliverArtifactRequest, error) {
 	req := socialclient.DeliverArtifactRequest{
-		ContractVersion:       "velox.delivery.v1",
+		ContractVersion:       socialclient.ContractVersionDelivery,
 		ExternalDeliveryID:    deliveryID,
 		IdempotencyKey:        idempotencyKey,
 		ExternalDestinationID: destination.ExternalDestinationID,

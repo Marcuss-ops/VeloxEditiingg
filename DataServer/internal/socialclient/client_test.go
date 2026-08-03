@@ -56,6 +56,7 @@ func TestClient_DeliverArtifact_HappyPath(t *testing.T) {
 
 	c := New(Config{BaseURL: server.URL, APIKey: "tok"})
 	got, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{
+		ContractVersion:       ContractVersionDelivery,
 		ExternalDeliveryID:    "ext-1",
 		IdempotencyKey:        "idem-1",
 		ExternalDestinationID: "external_dest_happy_test",
@@ -70,12 +71,49 @@ func TestClient_DeliverArtifact_HappyPath(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Contract version
+// ─────────────────────────────────────────────────────────────────────
+
+func TestClient_DeliverArtifact_RejectsObsoleteContractVersions(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	for _, version := range []string{"", "velox-instaedit.v1", "velox.job.v1", "velox.delivery.v0", "unknown"} {
+		t.Run(version, func(t *testing.T) {
+			c := New(Config{BaseURL: server.URL})
+			_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{ContractVersion: version})
+			if !errors.Is(err, ErrPermanent) {
+				t.Fatalf("contract_version=%q: want ErrPermanent, got %v", version, err)
+			}
+		})
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("obsolete contract requests reached the server: %d", got)
+	}
+}
+
+func TestDeliverArtifactRequest_ValidateAcceptsOnlyCanonicalVersion(t *testing.T) {
+	if err := (DeliverArtifactRequest{ContractVersion: ContractVersionDelivery}).Validate(); err != nil {
+		t.Fatalf("canonical contract rejected: %v", err)
+	}
+	for _, version := range []string{"", "velox-instaedit.v1", "velox.job.v1"} {
+		if err := (DeliverArtifactRequest{ContractVersion: version}).Validate(); err == nil {
+			t.Fatalf("contract_version=%q unexpectedly accepted", version)
+		}
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Not configured (empty BaseURL)
 // ─────────────────────────────────────────────────────────────────────
 
 func TestClient_DeliverArtifact_NotConfigured(t *testing.T) {
 	c := New(Config{BaseURL: ""})
-	_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{})
+	_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{ContractVersion: ContractVersionDelivery})
 	if !errors.Is(err, ErrNotConfigured) {
 		t.Fatalf("want ErrNotConfigured, got %v", err)
 	}
@@ -93,7 +131,7 @@ func TestClient_DeliverArtifact_AuthError(t *testing.T) {
 			}))
 			defer server.Close()
 			c := New(Config{BaseURL: server.URL})
-			_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{})
+			_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{ContractVersion: ContractVersionDelivery})
 			if !errors.Is(err, ErrAuth) {
 				t.Fatalf("HTTP %d: want ErrAuth, got %v", code, err)
 			}
@@ -111,7 +149,7 @@ func TestClient_DeliverArtifact_RateLimit(t *testing.T) {
 	}))
 	defer server.Close()
 	c := New(Config{BaseURL: server.URL})
-	_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{})
+	_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{ContractVersion: ContractVersionDelivery})
 	if !errors.Is(err, ErrRateLimit) {
 		t.Fatalf("want ErrRateLimit, got %v", err)
 	}
@@ -129,7 +167,7 @@ func TestClient_DeliverArtifact_Transient(t *testing.T) {
 			}))
 			defer server.Close()
 			c := New(Config{BaseURL: server.URL})
-			_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{})
+			_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{ContractVersion: ContractVersionDelivery})
 			if !errors.Is(err, ErrTransient) {
 				t.Fatalf("HTTP %d: want ErrTransient, got %v", code, err)
 			}
@@ -149,7 +187,7 @@ func TestClient_DeliverArtifact_Permanent4xx(t *testing.T) {
 			}))
 			defer server.Close()
 			c := New(Config{BaseURL: server.URL})
-			_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{})
+			_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{ContractVersion: ContractVersionDelivery})
 			if !errors.Is(err, ErrPermanent) {
 				t.Fatalf("HTTP %d: want ErrPermanent, got %v", code, err)
 			}
@@ -169,7 +207,7 @@ func TestClient_DeliverArtifact_MissingSocialDeliveryID(t *testing.T) {
 	}))
 	defer server.Close()
 	c := New(Config{BaseURL: server.URL})
-	_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{})
+	_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{ContractVersion: ContractVersionDelivery})
 	if !errors.Is(err, ErrPermanent) {
 		t.Fatalf("want ErrPermanent for 2xx missing social_delivery_id, got %v", err)
 	}
@@ -195,7 +233,7 @@ func TestClient_DeliverArtifact_NetworkError(t *testing.T) {
 	}
 
 	c := New(Config{BaseURL: dead, Timeout: 200 * time.Millisecond})
-	_, err = c.DeliverArtifact(context.Background(), DeliverArtifactRequest{})
+	_, err = c.DeliverArtifact(context.Background(), DeliverArtifactRequest{ContractVersion: ContractVersionDelivery})
 	if !errors.Is(err, ErrTransient) {
 		t.Fatalf("want ErrTransient on network error, got %v", err)
 	}
@@ -233,6 +271,7 @@ func TestClient_DeliverArtifact_IdempotencyKeyStable(t *testing.T) {
 	const key = "stable-key"
 	for i := 0; i < 3; i++ {
 		_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{
+			ContractVersion:    ContractVersionDelivery,
 			ExternalDeliveryID: "ext",
 			IdempotencyKey:     key,
 		})
@@ -270,7 +309,7 @@ func TestClient_DeliverArtifact_ContextCancelled(t *testing.T) {
 	c := New(Config{BaseURL: server.URL, Timeout: 5 * time.Second})
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	_, err := c.DeliverArtifact(ctx, DeliverArtifactRequest{})
+	_, err := c.DeliverArtifact(ctx, DeliverArtifactRequest{ContractVersion: ContractVersionDelivery})
 	if err == nil {
 		t.Fatal("want error on ctx cancel, got nil")
 	}
@@ -324,6 +363,7 @@ func TestClient_DeliverArtifact_WireShape_Minimal(t *testing.T) {
 
 	c := New(Config{BaseURL: server.URL})
 	_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{
+		ContractVersion:       ContractVersionDelivery,
 		ExternalDeliveryID:    "delivery_wm_min",
 		IdempotencyKey:        "idem_wm_min",
 		ExternalDestinationID: "external_dest_wm_min",
@@ -378,6 +418,7 @@ func TestClient_DeliverArtifact_WireShape_Full(t *testing.T) {
 
 	c := New(Config{BaseURL: server.URL})
 	_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{
+		ContractVersion:       ContractVersionDelivery,
 		ExternalDeliveryID:    "delivery_wm_full",
 		IdempotencyKey:        "idem_wm_full",
 		ExternalDestinationID: "external_dest_wm_full",
@@ -431,6 +472,7 @@ func TestClient_DeliverArtifact_WireShape_LegacyKeysNeverPresent(t *testing.T) {
 
 	c := New(Config{BaseURL: server.URL})
 	_, _ = c.DeliverArtifact(context.Background(), DeliverArtifactRequest{
+		ContractVersion:       ContractVersionDelivery,
 		ExternalDeliveryID:    "ext",
 		IdempotencyKey:        "idem",
 		ExternalDestinationID: "external",

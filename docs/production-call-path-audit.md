@@ -143,6 +143,28 @@ client esterni. Questo è un limite dell'evidenza disponibile, non una
 misurazione di traffico zero; l'eventuale verifica residua richiede accesso
 alla sorgente Prometheus/telemetria dell'ambiente operativo.
 
+## Audit migrazione contratto delivery — 2026-08-03
+
+La verifica dei client Velox ha individuato un solo producer del DTO di
+consegna `DeliverArtifactRequest`: `SocialGatewayProvider.buildRequest`, ora
+vincolato alla costante `socialclient.ContractVersionDelivery`, pari a
+`velox.delivery.v1`. Il client `socialclient` rifiuta prima dell’invio HTTP
+la versione vuota, `velox-instaedit.v1`, `velox.job.v1`, versioni obsolete o
+valori sconosciuti. I test wire verificano inoltre che il producer invii
+sempre la versione canonica.
+
+Nel tree di `main` il ramo server legacy e i simboli richiesti
+(`VeloxDeliverContractRequest`, `validateContractRequest`,
+`synthesizeContractDeliveryID`, `synthesizeContractDestinationID`,
+`isContractPath`) risultavano già assenti; non è stata quindi inventata una
+rimozione di codice non presente. La modifica chiude il lato Velox con una
+sola DTO, una validazione e una persistence path verso
+`POST /internal/v1/deliveries`.
+
+I riferimenti `velox.instaedit.publish.v1` nei job metadata e
+`velox.delivery.event.v1` nei callback restano invariati: sono contratti
+separati e non rappresentano la versione dell’envelope delivery.
+
 ## Sequenza autorizzata dopo questo audit
 
 1. chiudere soltanto i bypass reali della matrice;

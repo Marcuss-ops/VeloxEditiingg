@@ -129,6 +129,9 @@ func (c *Client) deliverArtifact(ctx context.Context, req DeliverArtifactRequest
 	if c.cfg.BaseURL == "" {
 		return nil, ErrNotConfigured
 	}
+	if err := req.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
+	}
 
 	body, err := json.Marshal(req)
 	if err != nil {
