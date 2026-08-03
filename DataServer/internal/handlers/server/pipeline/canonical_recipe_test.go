@@ -2,6 +2,12 @@ package pipeline
 
 import "testing"
 
+func TestRecipeRegistry_RejectsRemovedLegacyRenderType(t *testing.T) {
+	if _, ok := ResolveRecipe("legacy.render.v1"); ok {
+		t.Fatal("legacy.render.v1 must not be registered")
+	}
+}
+
 func TestNormalizeCanonicalRecipe_SpecSceneBindings(t *testing.T) {
 	req := SubmitJobRequest{
 		IdempotencyKey: "recipe-1",
@@ -60,8 +66,8 @@ func TestNormalizeCanonicalRecipe_ProjectsMultipleBindingStocks(t *testing.T) {
 		JobType:        "scene.composite.v1",
 		Spec: map[string]interface{}{
 			"scenes": []interface{}{map[string]interface{}{
-				"text":          "Portrait",
-				"duration_ms":   float64(10000),
+				"text":        "Portrait",
+				"duration_ms": float64(10000),
 				"bindings": map[string]interface{}{
 					"stock": []interface{}{
 						map[string]interface{}{"drive_link": "https://stock/a.mp4"},
