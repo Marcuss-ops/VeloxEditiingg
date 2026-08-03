@@ -12,8 +12,8 @@
     {
       "source_url": "https://drive.google.com/uc?id=1OXND5tIzQjTNv1T-XIS6lFBlLfJPOp6g",
       "role": "background_music",
-      "volume_db": -60,
-      "volume": 0.001,
+      "volume_db": -35,
+      "volume": 0.0177828,
       "loop": true,
       "ducking_enabled": false,
       "duration_seconds": 191.664
