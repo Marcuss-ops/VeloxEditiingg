@@ -121,27 +121,109 @@ La ricerca dei call site produttivi ha evidenziato:
 - `audittrail.AppendAuditEvent`: schema e repository presenti, ma nessun
   chiamante produttivo per gli eventi di job/delivery/publication richiesti.
 
-## Audit rimozione endpoint legacy InstaEdit — 2026-08-03
+## Audit utilizzo endpoint legacy InstaEdit — 2026-08-03
 
-La verifica richiesta dopo la certificazione canonica ha controllato la route
-`POST /api/v1/velox/jobs` e i simboli associati (`SubmitLegacy`,
-adaptLegacyRequest, validateLegacyRequest, `SubmissionResult.Legacy`). Nella
-working tree di `main` corrente non è presente alcuna di queste route o
-implementazioni: il percorso montato è quello canonico sotto
-`/api/v1/instaedit/jobs`.
+La route è ancora montata su `main`:
 
-È stata aggiunta una regressione in
-`DataServer/cmd/server/router_instaedit_failfast_test.go` che verifica, quando
-il gruppo InstaEdit è configurato, la presenza della route canonica e il
-mancato montaggio della vecchia POST `/api/v1/velox/jobs`.
+```text
+POST /api/v1/velox/jobs → velox.createJob → SubmitLegacy
+```
 
-La metrica richiesta `legacy_job_endpoint_usage_total` non è presente nel
-repository e non è disponibile alcun endpoint Prometheus configurato nella
-working tree locale. Di conseguenza non è possibile certificare un valore
-`accepted = 0`, né ricostruire traffico storico o dichiarare assenza di
-client esterni. Questo è un limite dell'evidenza disponibile, non una
-misurazione di traffico zero; l'eventuale verifica residua richiede accesso
-alla sorgente Prometheus/telemetria dell'ambiente operativo.
+La route canonica è separata:
+
+```text
+POST /api/v1/jobs → velox.createCanonicalJob → SubmitCanonical
+```
+
+La verifica è stata quindi mantenuta non distruttiva: **la route legacy non è
+stata rimossa** e nessun codice di compatibilità è stato modificato.
+
+### Metrica individuata
+
+La metrica richiesta esiste nel repository InstaEdit:
+
+```text
+InstaeditLogin/pkg/metrics/legacy_jobs.go
+legacy_job_endpoint_usage_total{endpoint, outcome}
+```
+
+Il call site è in:
+
+```text
+InstaeditLogin/pkg/api/velox/jobs_handlers.go:createJob
+```
+
+La richiesta viene registrata sempre; gli outcome ammessi includono:
+`accepted`, `auth_error`, `bad_request`, `validation_error`,
+`upstream_error` e `workspace_mismatch`. Il test locale
+`TestCreateJob_UsesSubmissionAdapterAndRecordsUsage` verifica l'incremento
+della serie `endpoint="/api/v1/velox/jobs", outcome="accepted"`.
+
+### Verifica degli ultimi 7 giorni
+
+**Esito: NON VERIFICABILE in questa sessione.** Non è stata fornita una URL
+Prometheus operativa né credenziali per il metrics endpoint di InstaEdit; le
+probe locali non hanno trovato un Prometheus su `127.0.0.1:9090` o
+`127.0.0.1:9091`. Il codice configura l'esposizione InstaEdit tramite:
+
+```text
+GET /api/v1/metrics        (Basic Auth)
+METRICS_PORT > 0           → listener /metrics separato, default 127.0.0.1
+```
+
+La query obbligatoria da eseguire sulla sorgente Prometheus di produzione è:
+
+```promql
+sum by (outcome) (
+  increase(
+    legacy_job_endpoint_usage_total{
+      endpoint="/api/v1/velox/jobs"
+    }[7d]
+  )
+)
+```
+
+La condizione per procedere in sicurezza è che la riga `outcome="accepted"`
+abbia valore `0`; le altre righe servono a identificare richieste fallite o
+client ancora attivi. Per interrogare direttamente soltanto l'outcome
+rilevante si può usare:
+
+```promql
+sum(
+  increase(
+    legacy_job_endpoint_usage_total{
+      endpoint="/api/v1/velox/jobs",
+      outcome="accepted"
+    }[7d]
+  )
+)
+```
+
+Un risultato vuoto non equivale automaticamente a `0`: va verificata anche
+l'esistenza della serie e la sua data di raccolta, ad esempio con:
+
+```promql
+count(
+  legacy_job_endpoint_usage_total{
+    endpoint="/api/v1/velox/jobs",
+    outcome="accepted"
+  }
+)
+```
+
+Non è corretto trasformare l'assenza di accesso a Prometheus in
+`accepted = 0`: l'esito documentato è un **blocco operativo per mancanza di
+dati storici**, non traffico zero. Servono l'URL Prometheus, l'intervallo
+UTC della query e l'output JSON/CSV della risposta per chiudere questa
+verifica.
+
+### Stato Git della verifica
+
+La verifica è stata eseguita su `main` allineato a `origin/main`, con working
+tree già sporca in entrambi i repository. Le modifiche preesistenti non sono
+state sovrascritte; questa sezione documenta soltanto l'audit e non include
+la route né i file applicativi nel perimetro di rimozione.
+
 
 ## Audit migrazione contratto delivery — 2026-08-03
 
