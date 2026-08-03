@@ -39,6 +39,7 @@ std::vector<SceneRuntime> parseScenes(const std::string& requestJson) {
         scene.text = json::extractJsonStringValue(obj, "text");
         scene.image_link = json::extractJsonStringValue(obj, "image_link");
         scene.image_links = json::extractArrayStrings(obj, "image_links");
+        scene.stock_links = json::extractArrayStrings(obj, "stock_links");
         scene.duration_seconds = json::extractJsonNumberValue(obj, "duration_seconds", 0.0);
         if (scene.image_link.empty() && !scene.image_links.empty()) {
             scene.image_link = scene.image_links.front();

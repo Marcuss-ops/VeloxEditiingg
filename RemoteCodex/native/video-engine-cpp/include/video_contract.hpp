@@ -11,6 +11,7 @@ struct SceneAsset {
     std::string text;
     std::string image_link;
     std::vector<std::string> image_links;
+    std::vector<std::string> stock_links;
     double duration_seconds{0.0};
 };
 

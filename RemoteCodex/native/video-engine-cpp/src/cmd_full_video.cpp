@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -66,6 +67,21 @@ int ffmpegThreadsForSceneWorkers(size_t workerCount) {
     }
     const size_t threads = std::max<size_t>(1, static_cast<size_t>(hw / workerCount));
     return static_cast<int>(threads);
+}
+
+std::vector<std::string> shuffledStockClipPaths(
+    const std::vector<std::string>& stockClipPaths,
+    const std::string& jobId
+) {
+    std::vector<std::string> shuffled = stockClipPaths;
+    if (shuffled.size() < 2) return shuffled;
+
+    // Stable per job: the visual order changes between jobs but a retry of
+    // the same job remains reproducible.
+    std::seed_seq seed(jobId.begin(), jobId.end());
+    std::mt19937 generator(seed);
+    std::shuffle(shuffled.begin(), shuffled.end(), generator);
+    return shuffled;
 }
 
 struct SceneWorkResult {
@@ -201,6 +217,11 @@ int cmdFullVideo(int argc, char** argv) {
     if (stockClipPaths.empty())
         stockClipPaths = parseStringListField(requestJson, "stock_clip_sources");
     const auto scenes = parseScenes(requestJson);
+    if (stockClipPaths.empty()) {
+        for (const auto& scene : scenes) {
+            stockClipPaths.insert(stockClipPaths.end(), scene.stock_links.begin(), scene.stock_links.end());
+        }
+    }
     const auto clipSegments = parseClipSegments(requestJson);
 
     double voiceoverDurationSeconds = 0.0;
@@ -299,22 +320,38 @@ int cmdFullVideo(int argc, char** argv) {
             segments.push_back(segmentPath);
             ++segmentIndex;
         }
-        // Stock clip segments
-        for (size_t i = 0; i < stockClipPaths.size(); ++i) {
-            std::vector<std::string> candidates = {stockClipPaths[i]};
+        // Stock clip segments. Multiple stock assets are shuffled per job
+        // and cycled until the voiceover duration is covered. The last
+        // segment is trimmed to the exact remaining duration.
+        const auto shuffledStocks = shuffledStockClipPaths(stockClipPaths, jobId);
+        const bool coverVoiceover = voiceoverDurationSeconds > 0.0 && !shuffledStocks.empty();
+        double stockCoveredSeconds = 0.0;
+        size_t stockIndex = 0;
+        while (!shuffledStocks.empty() &&
+               (!coverVoiceover || stockIndex < shuffledStocks.size() || stockCoveredSeconds < voiceoverDurationSeconds)) {
+            const auto& stockURL = shuffledStocks[stockIndex % shuffledStocks.size()];
+            std::vector<std::string> candidates = {stockURL};
             fs::path clipPath = firstAvailableClip(candidates, workDir, segmentIndex, assetCacheDir);
             if (clipPath.empty()) {
-                std::cerr << "errore: failed to resolve stock clip segment " << i << "\n";
+                std::cerr << "errore: failed to resolve stock clip segment " << stockIndex << "\n";
                 return 1;
             }
             fs::path segmentPath = workDir / ("segment_" + std::to_string(segmentIndex) + ".mp4");
-            if (!media::buildVideoSegment(clipPath, segmentPath, 5.0)) {
-                std::cerr << "errore: failed to build stock clip segment " << i << "\n";
+            double segmentDuration = 5.0;
+            if (coverVoiceover) {
+                segmentDuration = std::min(segmentDuration, voiceoverDurationSeconds - stockCoveredSeconds);
+                if (segmentDuration <= 0.0) break;
+            }
+            if (!media::buildVideoSegment(clipPath, segmentPath, segmentDuration)) {
+                std::cerr << "errore: failed to build stock clip segment " << stockIndex << "\n";
                 return 1;
             }
             segments.push_back(segmentPath);
             ++segmentIndex;
-            int totalClips = introClipPaths.size() + clipSegments.size() + stockClipPaths.size();
+            ++stockIndex;
+            stockCoveredSeconds += segmentDuration;
+            int totalClips = static_cast<int>(introClipPaths.size() + clipSegments.size() +
+                                              std::max<size_t>(stockClipPaths.size(), stockIndex));
             int pct = 10 + static_cast<int>((static_cast<double>(segmentIndex) / static_cast<double>(std::max<size_t>(1, totalClips))) * 70);
             emitProgress(pct, static_cast<int>(segmentIndex), static_cast<int>(totalClips), "building_clip");
         }
