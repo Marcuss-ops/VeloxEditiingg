@@ -76,7 +76,6 @@ type JobPayloadV2 struct {
 	Layers           []map[string]any `json:"layers,omitempty"`
 	Items            []map[string]any `json:"items,omitempty"`
 	AudioTracks      []map[string]any `json:"audio_tracks,omitempty"`
-	SubtitleTracks   []map[string]any `json:"subtitle_tracks,omitempty"`
 	VoiceoverPaths   []string         `json:"voiceover_paths,omitempty"`
 	AudioLanguage    string           `json:"audio_language_for_srt,omitempty"`
 	VideoMode        string           `json:"video_mode,omitempty"`
@@ -202,9 +201,6 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 	if audioTracksVal, ok := raw["audio_tracks"]; ok {
 		p.AudioTracks = normalizeObjectList(audioTracksVal)
 	}
-	if subtitleTracksVal, ok := raw["subtitle_tracks"]; ok {
-		p.SubtitleTracks = normalizeObjectList(subtitleTracksVal)
-	}
 	if p.JobID == "" {
 		p.JobID = "scriptimg_" + uuid.NewString()
 	}
@@ -303,9 +299,6 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 	}
 	if len(p.AudioTracks) > 0 {
 		out["audio_tracks"] = p.AudioTracks
-	}
-	if len(p.SubtitleTracks) > 0 {
-		out["subtitle_tracks"] = p.SubtitleTracks
 	}
 	if len(p.VoiceoverPaths) > 0 {
 		out["voiceover_paths"] = p.VoiceoverPaths

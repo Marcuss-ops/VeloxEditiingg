@@ -78,13 +78,6 @@ func TestToWorkerPayload_Golden(t *testing.T) {
 				"text": "Golden render",
 			},
 		},
-		"subtitle_tracks": []interface{}{
-			map[string]interface{}{
-				"source": "velox-asset://subtitles/opening.srt",
-				"preset": "default",
-				"font":   "Inter",
-			},
-		},
 		"audio_tracks": []interface{}{
 			map[string]interface{}{
 				"source_url": "velox-asset://audio/music.mp3",

@@ -48,6 +48,10 @@ func TestCanonicalBuilderParity_RichPayload(t *testing.T) {
 					"url":         "velox-asset://voice/rich.mp3",
 					"duration_ms": 5000.0,
 				},
+				"subtitles": map[string]interface{}{
+					"url":    "velox-asset://subtitle/rich.srt",
+					"format": "srt",
+				},
 			},
 		},
 		"layers": []interface{}{
@@ -60,12 +64,6 @@ func TestCanonicalBuilderParity_RichPayload(t *testing.T) {
 				"font_size":        48.0,
 				"start_seconds":    0.0,
 				"duration_seconds": 5.0,
-			},
-		},
-		"subtitle_tracks": []interface{}{
-			map[string]interface{}{
-				"source": "velox-asset://subtitle/rich.srt",
-				"preset": "default",
 			},
 		},
 		"audio_tracks": []interface{}{
@@ -164,7 +162,6 @@ func richWorkerProjection(payload map[string]interface{}) map[string]interface{}
 		"audio_language_for_srt",
 		"video_metadata",
 		"layers",
-		"subtitle_tracks",
 		"audio_tracks",
 	} {
 		value, ok := payload[key]

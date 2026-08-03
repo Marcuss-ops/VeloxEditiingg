@@ -61,16 +61,6 @@ func (s *AssetService) RewriteRemoteInputPayload(ctx context.Context, payload ma
 			}
 		}
 	}
-	if tracks, ok := payload["subtitle_tracks"]; ok {
-		for _, track := range mapList(tracks) {
-			if err := rewriteFirstMapField(ctx, s, track, inputsecurity.KindSubtitle, "source", "source_url", "url"); err != nil {
-				return fmt.Errorf("subtitle_tracks: %w", err)
-			}
-			if err := rewriteStringField(ctx, s, track, "font", inputsecurity.KindFont); err != nil {
-				return fmt.Errorf("subtitle_tracks.font: %w", err)
-			}
-		}
-	}
 	if layers, ok := payload["layers"]; ok {
 		for _, layer := range mapList(layers) {
 			if err := rewriteStringField(ctx, s, layer, "font", inputsecurity.KindFont); err != nil {
@@ -226,13 +216,6 @@ func rewriteRemoteInputMap(ctx context.Context, s *AssetService, item map[string
 	if tracks, ok := item["audio_tracks"]; ok {
 		for _, track := range mapList(tracks) {
 			if err := rewriteFirstMapField(ctx, s, track, inputsecurity.KindAudio, "source_url", "source", "url"); err != nil {
-				return err
-			}
-		}
-	}
-	if tracks, ok := item["subtitle_tracks"]; ok {
-		for _, track := range mapList(tracks) {
-			if err := rewriteFirstMapField(ctx, s, track, inputsecurity.KindSubtitle, "source", "source_url", "url"); err != nil {
 				return err
 			}
 		}

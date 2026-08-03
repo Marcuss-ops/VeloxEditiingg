@@ -47,6 +47,7 @@ func RenderOnlyPayload(payload map[string]interface{}) (map[string]interface{}, 
 // data and are forbidden at every nested level of the renderer payload.
 var rendererForbiddenKeys = map[string]struct{}{
 	"voiceover_paths":       {},
+	"subtitle_tracks":       {},
 	"clip_link":             {},
 	"image_link":            {},
 	"local_path":            {},

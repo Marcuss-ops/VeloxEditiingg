@@ -373,14 +373,6 @@ type SubmitLayer struct {
 	Animation       string    `json:"animation,omitempty"`
 }
 
-// SubmitSubtitleTrack is an independent subtitle payload the Chronon
-// compositor renders in parallel to the visual layers.
-type SubmitSubtitleTrack struct {
-	Source string `json:"source" validate:"required,min=1"`
-	Preset string `json:"preset,omitempty"`
-	Font   string `json:"font,omitempty"`
-}
-
 // SubmitAudioTrack is a top-level audio track mixed into the final render.
 // Independent from per-scene voiceover — this is for global audio layers
 // such as background music, ambient sound, or narration beds.

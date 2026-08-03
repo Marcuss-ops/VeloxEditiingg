@@ -438,13 +438,10 @@ func TestNormalizeSceneVideoPayload_PreservesVisualTimelineFields(t *testing.T) 
 				"text":             "Scene 1",
 				"clip_link":        "velox-asset://clip-1",
 				"duration_seconds": float64(5),
-			},
-		},
-		"subtitle_tracks": []interface{}{
-			map[string]interface{}{
-				"source": "velox-asset://subtitles-1",
-				"preset": "active_word_pop",
-				"font":   "Inter",
+				"subtitles": map[string]interface{}{
+					"url":    "velox-asset://subtitles-1",
+					"format": "srt",
+				},
 			},
 		},
 		"layers": []interface{}{
@@ -462,8 +459,13 @@ func TestNormalizeSceneVideoPayload_PreservesVisualTimelineFields(t *testing.T) 
 	if err != nil {
 		t.Fatalf("normalizeSceneVideoPayload: %v", err)
 	}
-	if got := normalizeSubtitleTracks(normalized["subtitle_tracks"]); len(got) != 1 {
-		t.Fatalf("subtitle_tracks = %#v, want one preserved track", normalized["subtitle_tracks"])
+	scenes, ok := normalized["scenes"].([]map[string]interface{})
+	if !ok || len(scenes) != 1 {
+		t.Fatalf("scenes = %#v, want one canonical scene", normalized["scenes"])
+	}
+	subtitles, ok := scenes[0]["subtitles"].(map[string]interface{})
+	if !ok || subtitles["url"] != "velox-asset://subtitles-1" {
+		t.Fatalf("scene subtitles = %#v, want canonical nested subtitles", scenes[0]["subtitles"])
 	}
 	if got, ok := normalized["layers"].([]interface{}); !ok || len(got) != 1 {
 		t.Fatalf("layers = %#v, want one preserved layer", normalized["layers"])
@@ -496,9 +498,15 @@ func TestNormalizeSceneVideoPayload_DerivesSubtitleTrackFromSceneSubtitles(t *te
 	if err != nil {
 		t.Fatalf("normalizeSceneVideoPayload: %v", err)
 	}
-	tracks := normalizeSubtitleTracks(normalized["subtitle_tracks"])
-	if len(tracks) != 0 {
-		t.Fatalf("subtitle_tracks = %#v, want no implicit legacy track", normalized["subtitle_tracks"])
+	scenes, ok := normalized["scenes"].([]map[string]interface{})
+	if !ok || len(scenes) != 1 {
+		t.Fatalf("scenes = %#v, want one canonical scene", normalized["scenes"])
+	}
+	if _, ok := scenes[0]["subtitles"].(map[string]interface{}); !ok {
+		t.Fatalf("scene subtitles = %#v, want canonical nested subtitles", scenes[0]["subtitles"])
+	}
+	if _, present := normalized["subtitle_tracks"]; present {
+		t.Fatalf("normalized payload contains retired top-level subtitle_tracks")
 	}
 }
 

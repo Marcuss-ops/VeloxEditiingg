@@ -1060,18 +1060,6 @@ components:
                 - duration_seconds
                 - text
             type: object
-        SubmitSubtitleTrack:
-            properties:
-                font:
-                    type: string
-                preset:
-                    type: string
-                source:
-                    minLength: 1
-                    type: string
-            required:
-                - source
-            type: object
         SubmitSubtitles:
             properties:
                 asset_id:

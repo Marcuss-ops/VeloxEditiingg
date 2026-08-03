@@ -60,7 +60,6 @@ func mustPayloadV2Map(t *testing.T) map[string]any {
 		Layers:         []map[string]any{{"id": "layer-1"}},
 		Items:          []map[string]any{{"role": "scene"}},
 		AudioTracks:    []map[string]any{{"source_url": "audio.mp3"}},
-		SubtitleTracks: []map[string]any{{"source": "subtitles.srt"}},
 		VoiceoverPaths: []string{"voiceover.mp3"},
 		AudioLanguage:  "en", VideoMode: "scene_image", Effect: "slow_zoom", Orientation: "landscape", OutputPath: "/tmp/video.mp4",
 		DriveOutput: "drive-folder", ChannelID: "channel-1", OutputVideoID: "output-1",
@@ -118,16 +117,16 @@ func assertKeySetEqual(t *testing.T, leftName string, left map[string]bool, righ
 
 func TestNewJobPayloadV2PreservesRenderTimelineArrays(t *testing.T) {
 	raw := map[string]any{"assets": []any{map[string]any{"id": "asset-1"}},
-		"items":           []any{map[string]any{"role": "scene"}},
-		"audio_tracks":    []any{map[string]any{"source_url": "audio.mp3"}},
-		"subtitle_tracks": []any{map[string]any{"source": "subtitles.srt"}},
+		"items":        []any{map[string]any{"role": "scene"}},
+		"audio_tracks": []any{map[string]any{"source_url": "audio.mp3"}},
+		"scenes":       []any{map[string]any{"text": "scene", "subtitles": map[string]any{"url": "subtitles.srt", "format": "srt"}}},
 	}
 	payload := NewJobPayloadV2(raw)
 	mapped, err := payload.ToMap()
 	if err != nil {
 		t.Fatalf("JobPayloadV2.ToMap(): %v", err)
 	}
-	for _, key := range []string{"assets", "items", "audio_tracks", "subtitle_tracks"} {
+	for _, key := range []string{"assets", "items", "audio_tracks"} {
 		values, ok := mapped[key].([]map[string]any)
 		if !ok || len(values) != 1 {
 			t.Fatalf("%s = %#v, want one object", key, mapped[key])
@@ -140,9 +139,8 @@ func TestJobPayloadV2JSONAndToMapHaveTheSameKeys(t *testing.T) {
 		ContractVersion: 2, PayloadContractVersion: 2, JobID: "job-1", JobRunID: "run-1", CorrelationID: "corr-1",
 		JobType: "process_video", Version: "v2", CreatedAt: "now", UpdatedAt: "now",
 		VideoName: "video", ScriptText: "script", Priority: 1, TimeoutSecs: 1,
-		Items:          []map[string]any{{"role": "scene"}},
-		AudioTracks:    []map[string]any{{"source_url": "audio.mp3"}},
-		SubtitleTracks: []map[string]any{{"source": "subtitles.srt"}},
+		Items:       []map[string]any{{"role": "scene"}},
+		AudioTracks: []map[string]any{{"source_url": "audio.mp3"}},
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {

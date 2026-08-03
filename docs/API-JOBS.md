@@ -128,7 +128,7 @@ Body:
 | `voiceover_paths[]` | no | items must satisfy egress SSRF policy; either `velox-asset://…` or `https?://…` reachable URL |
 | `scenes[]` | yes | 1..10000 entries, each with non-empty `text` and `0.1 ≤ duration_seconds ≤ 86400` |
 | `layers[]` | no | independent compositing layers |
-| `subtitle_tracks[]` | no | SRT/VTT/Chronon sources |
+| `scenes[].subtitles` | no | Per-scene SRT/VTT/ASS asset object; follows the scene timeline |
 | `delivery_plan[].destination_id` | yes | non-empty |
 | `delivery_plan[].retry_budget` | no | integer; explicit `0` round-trips distinct from omitted (handled via `*int`) |
 

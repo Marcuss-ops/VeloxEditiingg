@@ -6,7 +6,7 @@
 //   - CanonicalTopLevelKeys / LegacyAliasKeys integrity (no duplicates,
 //     no missing must-have anchors, mirror maps populated).
 //   - ValidatePayload canonical accept (full + minimal + empty).
-//   - ValidatePayload legacy alias rejection (5 denylisted aliases).
+//   - ValidatePayload legacy alias rejection (including retired subtitle_tracks).
 //   - ValidatePayload shape anomaly rejection (non-string job_id,
 //     non-array scenes/voiceover_paths, wrong-type delivery_plan root).
 //   - StrictValidatePayload drift-key rejection.
@@ -35,7 +35,7 @@ func TestCanonicalTopLevelKeys_Integrity(t *testing.T) {
 		"job_id", "job_run_id", "correlation_id",
 		"video_name", "script_text",
 		"scenes", "assets", "voiceover_paths", "items",
-		"audio_tracks", "subtitle_tracks", "delivery_plan",
+		"audio_tracks", "delivery_plan",
 		"priority", "timeout_secs",
 		"status",
 	}
@@ -67,7 +67,7 @@ func TestCanonicalTopLevelKeys_Integrity(t *testing.T) {
 
 func TestLegacyAliasKeys_Locked(t *testing.T) {
 	// The denylist is the binding contract for Step 7/8 — pin it.
-	expected := []string{"id", "run_id", "title", "voiceover_path", "audio_path"}
+	expected := []string{"id", "run_id", "title", "voiceover_path", "audio_path", "subtitle_tracks"}
 	if len(LegacyAliasKeys) != len(expected) {
 		t.Fatalf("LegacyAliasKeys shape drift: got %d, want %d (entries was %v)",
 			len(LegacyAliasKeys), len(expected), LegacyAliasKeys)

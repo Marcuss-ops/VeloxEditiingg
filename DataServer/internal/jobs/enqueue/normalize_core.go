@@ -167,7 +167,6 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 		// and clip-pool aliases are projected at the worker offer
 		// boundary, never persisted in the master payload.
 		"audio_tracks",
-		"subtitle_tracks",
 		"layers",
 		// Preserve legacy delivery keys through normalization so
 		// taskSpec.Payload still satisfies AtomicJobTaskCreator's parse-time

@@ -62,6 +62,9 @@ func wrapEnqueuePhase(phase EnqueuePhase, err error) error {
 }
 
 func (e *Enqueuer) validateEnqueueInput(payloadMap map[string]interface{}) (string, bool, error) {
+	if _, present := payloadMap["subtitle_tracks"]; present {
+		return "", false, fmt.Errorf("subtitle_tracks is retired; use scenes[].subtitles")
+	}
 	if e == nil || e.Creator == nil {
 		return "", false, fmt.Errorf("creator unavailable")
 	}

@@ -110,7 +110,7 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 		return nil, err
 	}
 	// Preserve timeline fields that the typed V2 envelope doesn't carry
-	// natively — audio_tracks, subtitle_tracks, layers, and renderable
+	// natively — audio_tracks, layers, and renderable
 	// media keys. copyTimelinePayloadFields mirrors the same preservation
 	// done in normalizeSceneVideoPayload.
 	copyTimelinePayloadFields(out, flat)

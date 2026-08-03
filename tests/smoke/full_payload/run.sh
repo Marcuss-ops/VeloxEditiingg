@@ -16,7 +16,7 @@
 #   - docs/operations/04-velox-final-smoke-checklist.md §4 (layers example)
 #   - DataServer/internal/apiwire/apiwire.go SubmitJobRequest
 #   - DataServer/internal/jobs/enqueue/enqueue_normalization_test.go
-#     (subtitle_tracks + scene.voiceover nested)
+#     (scene.subtitles + scene.voiceover nested)
 #   - tests/worker-cert/smoke_one.sh (canonical M2M + POST + poll plumbing)
 #
 # Modes:
@@ -275,7 +275,7 @@ if [[ "$MODE" == "selftest" ]]; then
                                 scene_durations: [.scenes[] | .duration_seconds],
                                 voiceover_paths: .voiceover_paths,
                                 audio_tracks: .audio_tracks,
-                                derived_subtitle_tracks: [{
+                                scene_subtitles: [{
                                   source: .scenes[0].subtitles.url,
                                   format: .scenes[0].subtitles.format
                                 }],

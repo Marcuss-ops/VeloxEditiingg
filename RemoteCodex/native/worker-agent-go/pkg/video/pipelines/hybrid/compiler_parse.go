@@ -23,7 +23,7 @@ func parseRequest(input map[string]interface{}) *Request {
 		AudioURL:  toStringDefault(input["audio_url"], toString(input["voiceover_url"])),
 		Fit:       toStringDefault(input["fit"], "contain"),
 		Layers:    parseLayers(input["layers"]),
-		Subtitles: parseSubtitleTracks(input["subtitle_tracks"]),
+		Subtitles: parseSceneSubtitleTracks(input),
 	}
 
 	if rawTracks, ok := input["audio_tracks"].([]interface{}); ok {
@@ -280,21 +280,35 @@ func parseLayers(raw interface{}) []plan.Layer {
 	return result
 }
 
-func parseSubtitleTracks(raw interface{}) []plan.SubtitleTrack {
-	items, ok := raw.([]interface{})
-	if !ok {
-		return nil
+// parseSceneSubtitleTracks derives the worker's internal subtitle tracks from
+// the canonical per-scene asset objects. The RenderPlan keeps a flat
+// subtitle_tracks array because the renderer consumes that format, but the
+// HTTP/enqueue contract has exactly one source of truth: scenes[].subtitles.
+func parseSceneSubtitleTracks(input map[string]interface{}) []plan.SubtitleTrack {
+	var scenes []map[string]interface{}
+	if encoded, ok := input["scenes_json"].(string); ok && strings.TrimSpace(encoded) != "" {
+		_ = json.Unmarshal([]byte(encoded), &scenes)
 	}
-	result := make([]plan.SubtitleTrack, 0, len(items))
-	for _, rawItem := range items {
-		item, ok := rawItem.(map[string]interface{})
+	if len(scenes) == 0 {
+		if raw, ok := input["scenes"].([]interface{}); ok {
+			for _, value := range raw {
+				if scene, ok := value.(map[string]interface{}); ok {
+					scenes = append(scenes, scene)
+				}
+			}
+		}
+	}
+
+	result := make([]plan.SubtitleTrack, 0, len(scenes))
+	for _, scene := range scenes {
+		subtitles, ok := scene["subtitles"].(map[string]interface{})
 		if !ok {
 			continue
 		}
 		track := plan.SubtitleTrack{
-			Source: toString(item["source"]),
-			Preset: toString(item["preset"]),
-			Font:   toString(item["font"]),
+			Source: toStringDefault(subtitles["url"], toString(subtitles["source"])),
+			Preset: toString(subtitles["preset"]),
+			Font:   toString(subtitles["font"]),
 		}
 		if track.Source != "" {
 			result = append(result, track)

@@ -42,9 +42,9 @@ import (
 // then routing/audit — matching the JSON marshaling order of
 // JobPayloadV2 (see payload_v2.go).
 //
-//	// The render timeline fields (items, audio_tracks, subtitle_tracks) and
+//	// The render timeline fields (items and audio_tracks) and delivery_plan
 //
-// delivery_plan are part of the JobPayloadV2 typed projection and are
+// are part of the JobPayloadV2 typed projection and are
 // emitted at the top level by canonical writers.
 var CanonicalTopLevelKeys = []string{
 	// Lifecycle / canonical identity
@@ -60,7 +60,7 @@ var CanonicalTopLevelKeys = []string{
 	"voiceover_paths",
 	"layers",
 	"items", // Step 2/8: items[].role scene/clip contract (worker payload layer)
-	"audio_tracks", "subtitle_tracks",
+	"audio_tracks",
 	"video_metadata",
 	"audio_language_for_srt",
 	"video_mode", "effect", "orientation", "output_path",
@@ -92,6 +92,7 @@ var CanonicalTopLevelKeys = []string{
 //   - title          → video_name            (legacy submission field)
 //   - voiceover_path → voiceover_paths[]     (legacy single-source field)
 //   - audio_path     → voiceover_paths[]     (creatorflow single-source fallback)
+//   - subtitle_tracks → scenes[].subtitles   (per-scene canonical asset)
 //
 // All other legacy middle aliases (script_id, script, source_text,
 // project_name, audio_lang, language, output_directory, source_media,
@@ -106,6 +107,7 @@ var LegacyAliasKeys = []string{
 	"title",
 	"voiceover_path",
 	"audio_path",
+	"subtitle_tracks",
 }
 
 // canonicalKeySet is an O(1) lookup mirror of CanonicalTopLevelKeys.
@@ -157,7 +159,7 @@ var ErrNonCanonicalKey = errors.New("contract: non-canonical key rejected")
 // Validation rules, in order:
 //  1. Payload must be a non-nil map[string]interface{}.
 //  2. No key may appear in LegacyAliasKeys (id, run_id, title,
-//     voiceover_path, audio_path).
+//     voiceover_path, audio_path, subtitle_tracks).
 //  3. Canonical string fields, when present, must be string-shaped:
 //     - job_id, video_name, script_text
 //  4. Canonical array fields, when present, must be array-shaped:
@@ -198,7 +200,8 @@ func ValidatePayload(payload map[string]interface{}) error {
 	}
 
 	// Rule 4 — array-shaped canonical fields.
-	arrayFields := []string{"scenes", "assets", "voiceover_paths", "scene_image_paths", "layers", "items", "audio_tracks", "subtitle_tracks"}
+	arrayFields := []string{"scenes", "assets", "voiceover_paths", "scene_image_paths", "layers", "items", "audio_tracks"}
+
 	for _, field := range arrayFields {
 		v, ok := payload[field]
 		if !ok || v == nil {

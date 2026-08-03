@@ -42,7 +42,7 @@ func (r *Resolver) buildAndRewritePayload(reqPayload map[string]interface{}, fwd
 		}
 		// BuildSceneImagePayloadForMaster creates a fresh typed V2
 		// envelope that drops timeline fields. Preserve audio_tracks,
-		// subtitle_tracks, layers, etc. from the pre-rewrite payload.
+		// layers, etc. from the pre-rewrite payload.
 		enqueue.CopyTimelinePayloadFields(workerPayload, reqPayload)
 	}
 

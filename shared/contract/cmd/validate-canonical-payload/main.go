@@ -6,8 +6,8 @@
 //
 // Why ValidatePayload (and not StrictValidatePayload)?
 //
-//   - ValidatePayload rejects the 5 forbidden legacy aliases
-//     (id/run_id/title/voiceover_path/audio_path) and the typed-shape
+//   - ValidatePayload rejects the forbidden legacy aliases
+//     (id/run_id/title/voiceover_path/audio_path/subtitle_tracks) and the typed-shape
 //     anomalies on the canonical key set. This is the same gate the
 //     master enqueue preflight invokes at runtime, so the validator
 //     answers the operator-facing question "will this fixture survive

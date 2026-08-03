@@ -5,7 +5,7 @@
 //   - compiler.go          : Request/ItemInput/AudioTrackInput types,
 //     Validate, Compile (the orchestrator).
 //   - compiler_parse.go    : parseRequest + parseLayers +
-//     parseSubtitleTracks + the toString*/toFloat64Default/
+//     parseSceneSubtitleTracks + the toString*/toFloat64Default/
 //     toBoolDefault/toSliceString coercion helpers.
 //   - compiler_timeline.go : compileItemsToTimeline + sourceForItem +
 //     effectiveDuration + effectiveFit (role-aware timeline building).

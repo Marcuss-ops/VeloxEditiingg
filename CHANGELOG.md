@@ -811,7 +811,7 @@ PipelineGen migration to `manifest_ref` is overdue.
 **Detection criteria** (any of):
 - `voiceover_paths` (top-level array, non-empty).
 - any `scenes[i].clip_link` non-empty after trim.
-- `subtitle_tracks` (top-level array, non-empty).
+- `subtitle_tracks` (top-level array, non-empty; now rejected as a retired alias).
 
 A scene carrying the new nested `clip{}` / `voiceover{}` /
 `subtitles{}` objects is NOT a legacy-shape signal (the per-scene
