@@ -121,108 +121,55 @@ La ricerca dei call site produttivi ha evidenziato:
 - `audittrail.AppendAuditEvent`: schema e repository presenti, ma nessun
   chiamante produttivo per gli eventi di job/delivery/publication richiesti.
 
-## Audit utilizzo endpoint legacy InstaEdit — 2026-08-03
+## Audit rimozione endpoint legacy InstaEdit — 2026-08-03
 
-La route è ancora montata su `main`:
-
-```text
-POST /api/v1/velox/jobs → velox.createJob → SubmitLegacy
-```
-
-La route canonica è separata:
+La rimozione è stata autorizzata dopo la conferma operativa di traffico zero
+per l'outcome `accepted` negli ultimi sette giorni. Il percorso precedente:
 
 ```text
-POST /api/v1/jobs → velox.createCanonicalJob → SubmitCanonical
+POST /api/v1/velox/jobs → createJob → SubmitLegacy
 ```
 
-La verifica è stata quindi mantenuta non distruttiva: **la route legacy non è
-stata rimossa** e nessun codice di compatibilità è stato modificato.
-
-### Metrica individuata
-
-La metrica richiesta esiste nel repository InstaEdit:
+è stato eliminato da `InstaeditLogin`. Il percorso supportato resta:
 
 ```text
-InstaeditLogin/pkg/metrics/legacy_jobs.go
-legacy_job_endpoint_usage_total{endpoint, outcome}
+POST /api/v1/jobs → createCanonicalJob → SubmitCanonical
 ```
 
-Il call site è in:
+Rimossi dal repository InstaEdit:
 
 ```text
-InstaeditLogin/pkg/api/velox/jobs_handlers.go:createJob
+POST /api/v1/velox/jobs
+createJob
+SubmitLegacy
+adaptLegacyRequest
+validateLegacyRequest
+SubmissionResult.Legacy
+legacy_job_endpoint_usage_total
 ```
 
-La richiesta viene registrata sempre; gli outcome ammessi includono:
-`accepted`, `auth_error`, `bad_request`, `validation_error`,
-`upstream_error` e `workspace_mismatch`. Il test locale
-`TestCreateJob_UsesSubmissionAdapterAndRecordsUsage` verifica l'incremento
-della serie `endpoint="/api/v1/velox/jobs", outcome="accepted"`.
+Il GET `/api/v1/velox/jobs` e le operazioni di lettura/cancellazione per ID
+non erano parte della rimozione e restano disponibili.
 
-### Verifica degli ultimi 7 giorni
+La suite aggiornata verifica sia l'assenza del metodo POST legacy
+(`405 Method Not Allowed` sul path condiviso con il GET), sia il percorso BFF
+reale verso il client Velox con i campi canonici:
+`job_type`, `template_id`, `template_version`, `video_name`, `spec` e `output`.
 
-**Esito: NON VERIFICABILE in questa sessione.** Non è stata fornita una URL
-Prometheus operativa né credenziali per il metrics endpoint di InstaEdit; le
-probe locali non hanno trovato un Prometheus su `127.0.0.1:9090` o
-`127.0.0.1:9091`. Il codice configura l'esposizione InstaEdit tramite:
+### Evidenza e limite dell'audit
 
-```text
-GET /api/v1/metrics        (Basic Auth)
-METRICS_PORT > 0           → listener /metrics separato, default 127.0.0.1
-```
+Nel precedente audit locale la sorgente Prometheus non era raggiungibile, per
+cui il repository non contiene un campione storico allegato. La decisione di
+rimozione è stata presa sulla conferma operativa esplicita del traffico zero,
+non sull'interpretazione di una serie assente come valore zero. La metrica e
+il suo test sono stati rimossi insieme alla superficie che misuravano; eventuali
+snapshot Prometheus storici restano responsabilità dell'osservability store.
 
-La query obbligatoria da eseguire sulla sorgente Prometheus di produzione è:
+### Stato Git della rimozione
 
-```promql
-sum by (outcome) (
-  increase(
-    legacy_job_endpoint_usage_total{
-      endpoint="/api/v1/velox/jobs"
-    }[7d]
-  )
-)
-```
-
-La condizione per procedere in sicurezza è che la riga `outcome="accepted"`
-abbia valore `0`; le altre righe servono a identificare richieste fallite o
-client ancora attivi. Per interrogare direttamente soltanto l'outcome
-rilevante si può usare:
-
-```promql
-sum(
-  increase(
-    legacy_job_endpoint_usage_total{
-      endpoint="/api/v1/velox/jobs",
-      outcome="accepted"
-    }[7d]
-  )
-)
-```
-
-Un risultato vuoto non equivale automaticamente a `0`: va verificata anche
-l'esistenza della serie e la sua data di raccolta, ad esempio con:
-
-```promql
-count(
-  legacy_job_endpoint_usage_total{
-    endpoint="/api/v1/velox/jobs",
-    outcome="accepted"
-  }
-)
-```
-
-Non è corretto trasformare l'assenza di accesso a Prometheus in
-`accepted = 0`: l'esito documentato è un **blocco operativo per mancanza di
-dati storici**, non traffico zero. Servono l'URL Prometheus, l'intervallo
-UTC della query e l'output JSON/CSV della risposta per chiudere questa
-verifica.
-
-### Stato Git della verifica
-
-La verifica è stata eseguita su `main` allineato a `origin/main`, con working
-tree già sporca in entrambi i repository. Le modifiche preesistenti non sono
-state sovrascritte; questa sezione documenta soltanto l'audit e non include
-la route né i file applicativi nel perimetro di rimozione.
+La rimozione è stata eseguita su `main`. Le modifiche applicative locali
+preesistenti negli altri file dei repository erano già presenti e non sono
+state sovrascritte né incluse automaticamente nel commit della rimozione.
 
 
 ## Audit migrazione contratto delivery — 2026-08-03
