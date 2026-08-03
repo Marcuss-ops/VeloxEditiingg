@@ -9,6 +9,8 @@ package grpcserver
 import (
 	"encoding/json"
 	"fmt"
+
+	"velox-shared/contract"
 )
 
 // projectPayloadForWorker emits the canonical wire contract for every worker.
@@ -17,7 +19,10 @@ import (
 // timeline during compatibility translation.
 func projectPayloadForWorker(canonical map[string]interface{}, executorVersion int) (map[string]interface{}, error) {
 	_ = executorVersion
-	workerPayload := canonical
+	workerPayload, err := contract.RenderOnlyPayload(canonical)
+	if err != nil {
+		return nil, fmt.Errorf("project render-only worker payload: %w", err)
+	}
 
 	// The protobuf Struct boundary accepts JSON-native arrays/maps. The
 	// enqueue adapter intentionally preserves Go collection types for its

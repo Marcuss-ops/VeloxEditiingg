@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"velox-server/internal/remoteengine"
-	"velox-shared/compatibility"
 )
 
 // projectWorkerPayload follows the canonical remoteengine DTO path.
@@ -20,7 +19,15 @@ func projectWorkerPayload(req *SubmitJobRequest) map[string]interface{} {
 		return map[string]interface{}{"_canonical_projection_error": fmt.Sprintf("parse remote pipeline result: %v", err)}
 	}
 	workerPayload := dto.ToWorkerPayload()
-	preserveWorkerPayloadFields(workerPayload, rawPayload, "subtitle_tracks", "audio_tracks", "layers", "_placement_pin_worker_id")
+	// The shared RemotePipelineResult DTO still serves Creator Push and may
+	// synthesize compatibility aliases. POST /api/v1/jobs has a strict,
+	// canonical scene contract, so remove those aliases at this intake
+	// boundary rather than changing the Creator contract underneath it.
+	delete(workerPayload, "voiceover_paths")
+	delete(workerPayload, "subtitle_tracks")
+	delete(workerPayload, "clip_link")
+	delete(workerPayload, "image_link")
+	preserveWorkerPayloadFields(workerPayload, rawPayload, "audio_tracks", "layers", "_placement_pin_worker_id")
 	return workerPayload
 }
 
@@ -33,11 +40,10 @@ func preserveWorkerPayloadFields(dst, src map[string]interface{}, keys ...string
 			dst[key] = value
 		}
 	}
-}
-
-// submitRequestToRawPayload builds the canonical flat-map shape consumed
+} // submitRequestToRawPayload builds the canonical flat-map shape consumed
 // by remoteengine.ParseRemotePipelineResult. It owns the DTO boundary,
-// nested scene projection, legacy aliases, and delivery retry defaults.
+// nested scene projection, and delivery retry defaults.
+
 // Identity-bearing URLs and IDs are trimmed; content fields remain verbatim.
 func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 	m := map[string]interface{}{
@@ -83,23 +89,9 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 	if req.ResolvedManifestSHA256 != "" {
 		m["manifest_sha256"] = req.ResolvedManifestSHA256
 	}
-	if len(req.VoiceoverPaths) > 0 {
-		// NormalizeToStrings shape matches what
-		// extractVoiceoverPathsDTO scans for.
-		//
-		// Phase-2 note: the per-scene voiceover.url (when present)
-		// is the SOURCE OF TRUTH; this top-level array is preserved
-		// for back-compat with legacy worker consumers that read
-		// voiceover_paths[] directly. ToWorkerPayload (remoteengine
-		// side) merges both sources into a single deduped array
-		// so the legacy field stays consistent for old workers
-		// even when new clients send only the per-scene form.
-		m[compatibility.VoiceoverPathsKey] = req.VoiceoverPaths
-	}
-
 	if len(req.Scenes) > 0 {
 		scenes := make([]interface{}, 0, len(req.Scenes))
-		for i, s := range req.Scenes {
+		for _, s := range req.Scenes {
 			scene := map[string]interface{}{
 				"text":             s.Text,
 				"duration_seconds": s.DurationSeconds,
@@ -113,24 +105,11 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 			if s.Kind != "" {
 				scene["kind"] = strings.TrimSpace(s.Kind)
 			}
-			// Legacy flat-shape alias keys: preserved verbatim when
-			// supplied, so old clients that haven't migrated still
-			// see a working round-trip. When the nested Clip{}
-			// also carries a URL, BOTH end up in the map — the
-			// worker's scenes_json consumer picks the nested form
-			// (authoritative) but the legacy key remains visible
-			// to any code that still reads `clip_link` directly.
-			if s.ClipLink != "" {
-				scene["clip_link"] = strings.TrimSpace(s.ClipLink)
-			}
-			if s.ImageLink != "" {
-				scene["image_link"] = strings.TrimSpace(s.ImageLink)
-			}
 			// Per-scene nested objects (Phase 2): clip / voiceover /
 			// subtitles carry their own asset references so the
 			// worker reads the canonical URL directly from
 			// scenes_json[i].voiceover.url (no more positional
-			// coupling with top-level voiceover_paths[]).
+			// coupling with any top-level positional array.
 			if s.Clip != nil {
 				scene["clip"] = clipToMap(s.Clip)
 			}
@@ -145,10 +124,6 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 			}
 			if s.Voiceover != nil {
 				scene["voiceover"] = voiceoverToMap(s.Voiceover)
-			} else if i < len(req.VoiceoverPaths) && strings.TrimSpace(req.VoiceoverPaths[i]) != "" {
-				scene["voiceover"] = map[string]interface{}{
-					"url": strings.TrimSpace(req.VoiceoverPaths[i]),
-				}
 			}
 			if s.Subtitles != nil {
 				scene["subtitles"] = subtitlesToMap(s.Subtitles)
@@ -174,13 +149,6 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 			layers = append(layers, entry)
 		}
 		m["layers"] = layers
-	}
-	if len(req.SubtitleTracks) > 0 {
-		subtitles := make([]interface{}, 0, len(req.SubtitleTracks))
-		for _, track := range req.SubtitleTracks {
-			subtitles = append(subtitles, map[string]interface{}{"source": strings.TrimSpace(track.Source), "preset": track.Preset, "font": track.Font})
-		}
-		m["subtitle_tracks"] = subtitles
 	}
 	if len(req.AudioTracks) > 0 {
 		audioTracks := make([]interface{}, 0, len(req.AudioTracks))

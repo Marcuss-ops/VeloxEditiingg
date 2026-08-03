@@ -12,8 +12,6 @@
 //   - asset_projection.go (nested asset map builders)
 //   - worker_payload_projection.go (submitRequestToRawPayload and worker projection)
 //   - enqueue_persistence.go (GetSubmittedJob polling)
-//   - telemetry.go (isLegacyCompatShape,
-//     countScenesWithClipLink, legacyBodySinkOrNoop)
 //
 // Decoding strategy: json.NewDecoder(...).Decode with
 // DisallowUnknownFields — NOT c.ShouldBindJSON. The strict
@@ -144,8 +142,8 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 		}
 
 		// SSRF URL validator (P1 admin-audit trail step #2): every
-		// voiceover_path, scene.clip_link, scene.image_link MUST
-		// satisfy the hybrid blocklist+allowlist policy. Runs AFTER
+		// nested scene asset URL MUST satisfy the hybrid
+		// blocklist+allowlist policy. Runs AFTER
 		// byte-level + cross-field validators so attackers can't
 		// probe private IP classification on bodies that fail
 		// earlier checks (which would leak validation gaps).

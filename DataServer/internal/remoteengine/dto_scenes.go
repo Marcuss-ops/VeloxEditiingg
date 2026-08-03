@@ -34,11 +34,10 @@ func extractScenesDTO(flat map[string]interface{}) []SceneResult {
 // convertRawScenes converts a []interface{} of map[string]interface{}
 // into typed []SceneResult.
 //
-// Phase 2 of the render-manifest plan: scene_id / index / kind /
-// clip{} / voiceover{} / subtitles{} nested objects are read from
-// the flat-map raw input so the typed DTO carries the canonical
-// per-scene enrichment. The flat clip_link / image_link keys
-// remain supported for back-compat with legacy creator outputs.
+// Scene identity and canonical clip / voiceover / subtitles objects are read
+// from the raw input so the typed DTO carries the per-scene enrichment.
+// Flat aliases are parsed only at ingestion; ToWorkerPayload never serializes
+// them into the renderer payload.
 func convertRawScenes(raw []interface{}) []SceneResult {
 	scenes := make([]SceneResult, 0, len(raw))
 	for _, item := range raw {

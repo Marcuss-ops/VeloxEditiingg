@@ -14,24 +14,6 @@ import (
 )
 
 func buildCalendarJobPayload(event *store.CalendarEvent, jobRunID string) map[string]interface{} {
-	clipPaths := func(clips []store.VideoClip) []string {
-		out := make([]string, 0, len(clips))
-		for _, clip := range clips {
-			path := calendarClipPath(clip)
-			if path != "" {
-				out = append(out, path)
-			}
-		}
-		return out
-	}
-
-	voiceovers := make([]string, 0, len(event.VoiceoverPaths))
-	for _, s := range event.VoiceoverPaths {
-		if trimmed := strings.TrimSpace(s); trimmed != "" {
-			voiceovers = append(voiceovers, trimmed)
-		}
-	}
-
 	if strings.TrimSpace(jobRunID) == "" {
 		jobRunID = "run_" + uuid.NewString()
 	}
@@ -61,13 +43,87 @@ func buildCalendarJobPayload(event *store.CalendarEvent, jobRunID string) map[st
 		"category":             event.Category,
 		"titles":               event.Titles,
 		"script_text":          event.ScriptText,
-		"start_clip_paths":     clipPaths(event.InitialClips),
-		"middle_clip_paths":    clipPaths(event.IntermediateClips),
-		"end_clip_paths":       clipPaths(event.FinalClips),
-		"stock_clip_paths":     clipPaths(event.StockFootage),
-		"voiceover_paths":      voiceovers,
+		"scenes":               calendarScenes(event),
+		"audio_tracks":         calendarAudioTracks(event),
 	}
 	return payload
+}
+
+// calendarScenes is the canonical calendar-to-render projection. Each scene
+// owns its clip, optional stock fallback, voiceover, and duration; no
+// top-level arrays or positional voiceover correlation cross the job boundary.
+func calendarScenes(event *store.CalendarEvent) []map[string]interface{} {
+	if event == nil {
+		return nil
+	}
+	clips := make([]struct {
+		kind string
+		clip store.VideoClip
+	}, 0, len(event.InitialClips)+len(event.IntermediateClips)+len(event.FinalClips))
+	for _, group := range []struct {
+		kind  string
+		items []store.VideoClip
+	}{
+		{kind: "intro", items: event.InitialClips},
+		{kind: "clip", items: event.IntermediateClips},
+		{kind: "outro", items: event.FinalClips},
+	} {
+		for _, clip := range group.items {
+			if calendarClipPath(clip) != "" {
+				clips = append(clips, struct {
+					kind string
+					clip store.VideoClip
+				}{kind: group.kind, clip: clip})
+			}
+		}
+	}
+	for _, clip := range event.StockFootage {
+		if calendarClipPath(clip) != "" {
+			clips = append(clips, struct {
+				kind string
+				clip store.VideoClip
+			}{kind: "stock", clip: clip})
+		}
+	}
+	out := make([]map[string]interface{}, 0, len(clips))
+	for i, entry := range clips {
+		duration := entry.clip.Duration
+		if duration <= 0 {
+			// A canonical scene must carry a declared duration. Do not
+			// invent timing for calendar assets that have not been probed
+			// or explicitly measured yet.
+			continue
+		}
+		scene := map[string]interface{}{
+			"scene_id":         fmt.Sprintf("calendar-scene-%d", i),
+			"index":            i,
+			"kind":             entry.kind,
+			"text":             event.Title,
+			"duration_seconds": float64(duration),
+			"clip": map[string]interface{}{
+				"url":         calendarClipPath(entry.clip),
+				"duration_ms": duration * 1000,
+			},
+		}
+		out = append(out, scene)
+	}
+	return out
+}
+
+func calendarAudioTracks(event *store.CalendarEvent) []map[string]interface{} {
+	if event == nil || len(event.VoiceoverPaths) == 0 {
+		return nil
+	}
+	tracks := make([]map[string]interface{}, 0, len(event.VoiceoverPaths))
+	for _, path := range event.VoiceoverPaths {
+		if path = strings.TrimSpace(path); path != "" {
+			tracks = append(tracks, map[string]interface{}{
+				"source_url": path,
+				"role":       "voiceover",
+			})
+		}
+	}
+	return tracks
 }
 
 func existingJobRunID(job *jobs.QueueItem) string {

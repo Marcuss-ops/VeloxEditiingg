@@ -264,7 +264,7 @@ func TestSubmitJobE2E_M2MRateLimitAndQuota(t *testing.T) {
 		body := validSubmitJobBody("e2e-m2m-quota-001")
 		body.Scenes = append(body.Scenes, SubmitScene{
 			Text:            "Extra scene",
-			ClipLink:        "velox-asset://clips/extra.mp4",
+			Clip:            &SubmitClip{URL: "velox-asset://clips/extra.mp4"},
 			DurationSeconds: 2.0,
 		})
 		w := m2mPost(t, r, body, bundle.plaintext)

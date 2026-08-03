@@ -4,6 +4,7 @@ package enqueue
 import (
 	"fmt"
 	"hash/fnv"
+	"math"
 	"math/rand"
 	"strings"
 
@@ -20,8 +21,10 @@ type audioDurationProbe func(string) float64
 // ingestion fallbacks do not belong here: ingestion must resolve them into
 // canonical nested assets before this builder is called.
 type narratedClipOptions struct {
-	probe      audioDurationProbe
-	randomSeed string
+	probe                   audioDurationProbe
+	randomSeed              string
+	transitionSoundEffects  []string
+	transitionSoundEffectDB float64
 }
 
 // supportsNarratedClipScenes selects the narrated path only for canonical
@@ -158,10 +161,53 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 			})
 			clips = append(clips, clipURL)
 		}
+		appendTransitionSoundEffects(&audioTracks, opts, offsetSeconds, voiceoverDuration, clipDuration, i, len(scenes))
 		offsetSeconds += voiceoverDuration + clipDuration
 	}
 
 	return sceneEntries, items, payload.DedupeStrings(clips), audioTracks, "clip_stock", nil
+}
+
+// appendTransitionSoundEffects adds one short effect at every visual
+// transition in the narrated clip/stock timeline. The timeline is:
+//
+//	stock (voiceover bed) -> clip -> next scene's stock -> clip ...
+//
+// Therefore a sound is needed at the start of each clip and at the boundary
+// between scenes, but not twice at the same boundary. The selected source is
+// deterministic for a given job seed, which keeps retries/cache keys stable
+// while still distributing the configured pool across transitions.
+func appendTransitionSoundEffects(tracks *[]map[string]interface{}, opts narratedClipOptions, offset, voiceoverDuration, clipDuration float64, sceneIndex, sceneCount int) {
+	if len(opts.transitionSoundEffects) == 0 || tracks == nil {
+		return
+	}
+	volume := 1.0
+	if opts.transitionSoundEffectDB != 0 {
+		volume = math.Pow(10, opts.transitionSoundEffectDB/20)
+	}
+	if volume <= 0 {
+		volume = 0.1
+	}
+
+	appendEffect := func(at float64, transitionIndex int) {
+		seed := fnv.New32a()
+		_, _ = seed.Write([]byte(fmt.Sprintf("%s:sfx:%d", opts.randomSeed, transitionIndex)))
+		selected := opts.transitionSoundEffects[int(seed.Sum32())%len(opts.transitionSoundEffects)]
+		*tracks = append(*tracks, map[string]interface{}{
+			"source_url":        selected,
+			"volume":            volume,
+			"start_time_offset": at,
+			"role":              "sfx",
+		})
+	}
+
+	// Stock/voiceover → clip.
+	appendEffect(offset+voiceoverDuration, sceneIndex*2)
+	// Clip → next scene's stock. This is the same instant as the next scene's
+	// stock start, so the next iteration must not add another effect there.
+	if sceneIndex < sceneCount-1 {
+		appendEffect(offset+voiceoverDuration+clipDuration, sceneIndex*2+1)
+	}
 }
 
 func canonicalStockAssets(scene map[string]interface{}) ([]map[string]interface{}, error) {

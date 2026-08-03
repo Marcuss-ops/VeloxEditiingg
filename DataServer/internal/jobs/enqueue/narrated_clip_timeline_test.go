@@ -68,6 +68,42 @@ func TestBuildNarratedClipPayloadPreservesCanonicalAssetsAndDurations(t *testing
 	}
 }
 
+func TestBuildNarratedClipPayloadAddsRandomTransitionSoundEffects(t *testing.T) {
+	scenes := []map[string]interface{}{
+		canonicalNarratedScene("velox-asset://clip-asset", "velox-asset://voice-asset", 7_000, 12_000),
+		canonicalNarratedScene("velox-asset://clip-asset", "velox-asset://voice-asset", 5_000, 8_000),
+	}
+	_, _, _, tracks, _, err := buildNarratedClipPayload(scenes, narratedClipOptions{
+		randomSeed:              "boxers-test",
+		transitionSoundEffects:  []string{"https://effects/a.mp3", "https://effects/b.mp3"},
+		transitionSoundEffectDB: -20,
+	})
+	if err != nil {
+		t.Fatalf("buildNarratedClipPayload: %v", err)
+	}
+	if len(tracks) != 7 { // 2 voiceovers + 2 clip audio + 3 transitions
+		t.Fatalf("tracks = %d, want 7", len(tracks))
+	}
+	wantOffsets := []float64{12, 19, 27}
+	sfxIndex := 0
+	for i, track := range tracks {
+		if track["role"] != "sfx" {
+			continue
+		}
+		want := wantOffsets[sfxIndex]
+		if got := track["start_time_offset"]; got != want {
+			t.Fatalf("track[%d] offset = %v, want %v", i, got, want)
+		}
+		if got := track["volume"]; got != 0.1 {
+			t.Fatalf("track[%d] volume = %v, want 0.1 (-20 dB)", i, got)
+		}
+		sfxIndex++
+	}
+	if sfxIndex != len(wantOffsets) {
+		t.Fatalf("sfx count = %d, want %d", sfxIndex, len(wantOffsets))
+	}
+}
+
 func TestBuildNarratedClipPayloadProbesMissingCanonicalDuration(t *testing.T) {
 	scene := map[string]interface{}{
 		"clip":      map[string]interface{}{"asset_id": "clip", "url": "velox-asset://clip"},

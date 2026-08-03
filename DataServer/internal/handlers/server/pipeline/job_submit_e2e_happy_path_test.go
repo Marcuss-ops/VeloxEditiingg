@@ -82,13 +82,11 @@ func validSubmitJobBody(idemKey string) SubmitJobRequest {
 		IdempotencyKey: idemKey,
 		VideoName:      "E2E Submit Test",
 		ScriptText:     "Submitted via POST /api/v1/jobs e2e harness.",
-		VoiceoverPaths: []string{
-			"velox-asset://voiceovers/e2e-narrator.mp3",
-		},
 		Scenes: []SubmitScene{
 			{
 				Text:            "Opening scene",
-				ClipLink:        "velox-asset://clips/opening.mp4",
+				Clip:            &SubmitClip{URL: "velox-asset://clips/opening.mp4"},
+				Voiceover:       &SubmitVoiceover{URL: "velox-asset://voiceovers/opening.mp3"},
 				DurationSeconds: 3.5,
 			},
 		},

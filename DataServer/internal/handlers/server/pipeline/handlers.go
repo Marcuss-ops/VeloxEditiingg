@@ -30,7 +30,6 @@ type Handlers struct {
 	jobs            JobsDeps
 	store           *store.SQLiteStore
 	intakeSink      CreatorIntakeSink
-	legacyBodySink  LegacyBodySink
 	assetService    *voiceoverassets.AssetService
 	inputPolicy     *inputsecurity.Policy
 	credentialVault *credentials.Vault
@@ -130,11 +129,6 @@ func (h *Handlers) WithSocialClient(client *socialclient.Client) *Handlers {
 
 func (h *Handlers) WithIntakeSink(sink CreatorIntakeSink) *Handlers {
 	h.intakeSink = sink
-	return h
-}
-
-func (h *Handlers) WithLegacyBodySink(sink LegacyBodySink) *Handlers {
-	h.legacyBodySink = sink
 	return h
 }
 

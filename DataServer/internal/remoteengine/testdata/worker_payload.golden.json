@@ -26,7 +26,6 @@
         "start_ms": 100,
         "url": "velox-asset://clips/opening.mp4"
       },
-      "clip_link": "velox-asset://clips/opening.mp4",
       "duration_seconds": 4.5,
       "index": 0,
       "kind": "clip",
@@ -44,14 +43,13 @@
     },
     {
       "duration_seconds": 2,
-      "image_link": "velox-asset://images/closing.jpg",
       "index": 1,
       "kind": "image",
       "scene_id": "scene-1",
       "text": "Closing scene"
     }
   ],
-  "scenes_json": "[{\"text\":\"Opening scene\",\"scene_id\":\"scene-0\",\"kind\":\"clip\",\"clip_link\":\"velox-asset://clips/opening.mp4\",\"duration_seconds\":4.5,\"clip\":{\"asset_id\":\"clip-001\",\"url\":\"velox-asset://clips/opening.mp4\",\"start_ms\":100,\"end_ms\":4600},\"voiceover\":{\"url\":\"velox-asset://audio/scene-0.mp3\",\"language\":\"en\"},\"subtitles\":{\"format\":\"srt\",\"url\":\"velox-asset://subtitles/opening.srt\",\"language\":\"en\"}},{\"text\":\"Closing scene\",\"scene_id\":\"scene-1\",\"index\":1,\"kind\":\"image\",\"image_link\":\"velox-asset://images/closing.jpg\",\"duration_seconds\":2}]",
+  "scenes_json": "[{\"clip\":{\"asset_id\":\"clip-001\",\"end_ms\":4600,\"start_ms\":100,\"url\":\"velox-asset://clips/opening.mp4\"},\"duration_seconds\":4.5,\"kind\":\"clip\",\"scene_id\":\"scene-0\",\"subtitles\":{\"format\":\"srt\",\"language\":\"en\",\"url\":\"velox-asset://subtitles/opening.srt\"},\"text\":\"Opening scene\",\"voiceover\":{\"language\":\"en\",\"url\":\"velox-asset://audio/scene-0.mp3\"}},{\"duration_seconds\":2,\"index\":1,\"kind\":\"image\",\"scene_id\":\"scene-1\",\"text\":\"Closing scene\"}]",
   "script_text": "A deterministic worker payload.",
   "status": "completed",
   "subtitle_tracks": [
@@ -67,9 +65,5 @@
     "height": 1080,
     "width": 1920
   },
-  "video_name": "Golden render",
-  "voiceover_paths": [
-    "velox-asset://audio/scene-0.mp3",
-    "velox-asset://audio/legacy.mp3"
-  ]
+  "video_name": "Golden render"
 }

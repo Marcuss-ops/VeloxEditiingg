@@ -66,7 +66,7 @@ benchmark_substitute_payload() {
       end
       | (.voiceover.url = $vo)
     )
-    | .subtitle_tracks[0].source = $subs
+    | (.scenes[0].subtitles.url = $subs)
     | .audio_tracks[0].source_url = $music
   ' "${BENCHMARK_PAYLOAD_FILE}"
 }

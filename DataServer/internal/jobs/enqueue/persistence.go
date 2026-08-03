@@ -27,6 +27,7 @@ import (
 	"velox-server/internal/jobs"
 	"velox-server/internal/taskgraph"
 	"velox-server/internal/telemetry"
+	"velox-shared/contract"
 	"velox-shared/contract/deliveryplan"
 	"velox-shared/payload"
 )
@@ -48,7 +49,10 @@ func compileSceneVideoJobContext(ctx context.Context, normalized map[string]inte
 	}
 	priority := payload.EnsureInt(normalized["priority"], 5)
 
-	rendererPayload := cloneRendererPayload(normalized)
+	rendererPayload, err := contract.RenderOnlyPayload(normalized)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("marshal renderer payload: %w", err)
+	}
 	telemetry.RecordEnqueueJSONMarshal(ctx)
 	raw, err := json.Marshal(rendererPayload)
 	if err != nil {
@@ -91,6 +95,6 @@ func compileSceneVideoJobContext(ctx context.Context, normalized map[string]inte
 // cloneRendererPayload creates the final worker-facing map from the
 // normalized canonical map. Delivery routing is consumed by the control
 // plane and persisted separately, so it is deliberately absent here.
-func cloneRendererPayload(normalized map[string]interface{}) map[string]interface{} {
-	return deliveryplan.StripEnvelope(normalized)
+func cloneRendererPayload(normalized map[string]interface{}) (map[string]interface{}, error) {
+	return contract.RenderOnlyPayload(normalized)
 }

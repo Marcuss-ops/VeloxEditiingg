@@ -39,8 +39,11 @@ func normalizeClipPayload(rawPayload map[string]interface{}) ([]map[string]inter
 // per-scene clip_item list.
 func normalizeScenesInput(rawPayload map[string]interface{}, scenes []map[string]interface{}) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
 	if supportsNarratedClipScenes(scenes) {
+		sfxSources, sfxDB := transitionSoundEffectConfig(rawPayload)
 		entries, items, clips, generatedAudio, mode, err := buildNarratedClipPayload(scenes, narratedClipOptions{
-			randomSeed: payload.FirstString(rawPayload, "job_id", "script_id", "video_name", "title"),
+			randomSeed:              payload.FirstString(rawPayload, "job_id", "script_id", "video_name", "title"),
+			transitionSoundEffects:  sfxSources,
+			transitionSoundEffectDB: sfxDB,
 		})
 		if err != nil {
 			return nil, nil, nil, nil, "", err
@@ -86,6 +89,28 @@ func normalizeScenesInput(rawPayload map[string]interface{}, scenes []map[string
 		clips = append(clips, url)
 	}
 	return sceneEntries, items, payload.DedupeStrings(clips), nil, "clips", nil
+}
+
+// transitionSoundEffectConfig reads the optional render-time sound pool. It
+// is intentionally consumed at the master boundary and compiled into normal
+// audio_tracks, so the worker receives only the canonical audio timeline.
+func transitionSoundEffectConfig(rawPayload map[string]interface{}) ([]string, float64) {
+	config, ok := rawPayload["transition_sound_effects"].(map[string]interface{})
+	if !ok {
+		return nil, 0
+	}
+	if enabled, present := config["enabled"].(bool); present && !enabled {
+		return nil, 0
+	}
+	sources := payload.ToSliceString(config["sources"])
+	if len(sources) == 0 {
+		return nil, 0
+	}
+	volumeDB := -20.0
+	if _, present := config["volume_db"]; present {
+		volumeDB = payload.AsFloat(config["volume_db"])
+	}
+	return payload.DedupeStrings(sources), volumeDB
 }
 
 func mergeAudioTracks(raw interface{}, generated []map[string]interface{}) []map[string]interface{} {

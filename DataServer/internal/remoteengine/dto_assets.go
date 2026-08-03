@@ -49,47 +49,9 @@ func convertSubtitlesAsset(m map[string]interface{}) *SubtitlesAsset {
 	}
 }
 
-// mergeVoiceoverPaths produces the merged voiceover_paths[] for the
-// worker payload (Phase-2 back-compat strategy). Per-scene URLs
-// (scenes[i].voiceover.url) come FIRST (authoritative source); the
-// top-level r.Voiceover.Paths come SECOND (legacy creator-machine
-// source); duplicates (same trimmed URL) are deduped. Returns nil
-// when no source supplies any URL — the worker payload then has no
-// voiceover_paths key at all (vs. an empty array, which would
-// surface as a falsy check on legacy worker consumers).
-func mergeVoiceoverPaths(r *RemotePipelineResult) []string {
-	seen := map[string]struct{}{}
-	var merged []string
-
-	// Per-scene voiceover URLs first.
-	for _, s := range r.Scenes {
-		if s.Voiceover == nil {
-			continue
-		}
-		if trimmed := strings.TrimSpace(s.Voiceover.URL); trimmed != "" {
-			if _, dup := seen[trimmed]; !dup {
-				seen[trimmed] = struct{}{}
-				merged = append(merged, trimmed)
-			}
-		}
-	}
-
-	// Top-level voiceover.Paths second (legacy creator source).
-	for _, p := range r.Voiceover.Paths {
-		if trimmed := strings.TrimSpace(p); trimmed != "" {
-			if _, dup := seen[trimmed]; !dup {
-				seen[trimmed] = struct{}{}
-				merged = append(merged, trimmed)
-			}
-		}
-	}
-
-	return merged
-}
-
-// extractVoiceoverPathsDTO extracts voiceover paths from the flat map.
-// Supports multiple key shapes: voiceover_paths ([]string or []interface{}),
-// voiceover_path (string), voiceover.local_path, voiceover_info.local_path.
+// extractVoiceoverPathsDTO extracts voiceover references at the ingestion boundary.
+// These values support parsing legacy producer responses but are never emitted
+// by ToWorkerPayload; canonical scenes own worker-facing audio references.
 func extractVoiceoverPathsDTO(flat map[string]interface{}) []string {
 	candidates := compatibility.ReadStringList(flat, compatibility.VoiceoverPathsKey)
 

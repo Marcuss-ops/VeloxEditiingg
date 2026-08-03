@@ -116,11 +116,11 @@ func TestSubmitJobE2E_ValidationFailures(t *testing.T) {
 			name: "ssrf_loopback_in_voiceover",
 			make: func() SubmitJobRequest {
 				b := validSubmitJobBody("e2e-ssrf-loopback-001")
-				b.VoiceoverPaths = []string{"http://127.0.0.1:8000/leak.mp3"}
+				b.Scenes[0].Voiceover = &SubmitVoiceover{URL: "http://127.0.0.1:8000/leak.mp3"}
 				return b
 			},
-			want: wantShape{
-				detailsPath:  "voiceover_paths/0",
+			want: wantShape{detailsPath: "scenes.0.voiceover.url",
+
 				detailsIssue: "ssrf_rejected",
 			},
 		},
@@ -193,8 +193,8 @@ func TestSubmitJobE2E_ValidationFailures(t *testing.T) {
 					if !ok {
 						t.Fatalf("ssrf details[0] not object: %T", details[0])
 					}
-					if got, _ := first["path"].(string); got != "voiceover_paths/0" {
-						t.Errorf("ssrf details[0].path = %q, want voiceover_paths/0", got)
+					if got, _ := first["path"].(string); got != "scenes.0.voiceover.url" {
+						t.Errorf("ssrf details[0].path = %q, want scenes.0.voiceover.url", got)
 					}
 					if got, _ := first["reason"].(string); got != "ip_loopback" {
 						t.Errorf("ssrf details[0].reason = %q, want ip_loopback", got)

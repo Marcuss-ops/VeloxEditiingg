@@ -60,10 +60,8 @@ type SubmitJobRequest struct {
 	IdempotencyKey   string                    `json:"idempotency_key" validate:"required,min=1,max=128"`
 	VideoName        string                    `json:"video_name,omitempty" validate:"omitempty,max=300"`
 	ScriptText       string                    `json:"script_text,omitempty"`
-	VoiceoverPaths   []string                  `json:"voiceover_paths,omitempty" validate:"omitempty,dive"`
 	Scenes           []SubmitScene             `json:"scenes,omitempty" validate:"omitempty,max=10000"`
 	Layers           []SubmitLayer             `json:"layers,omitempty" validate:"omitempty,dive"`
-	SubtitleTracks   []SubmitSubtitleTrack     `json:"subtitle_tracks,omitempty" validate:"omitempty,dive"`
 	AudioTracks      []SubmitAudioTrack        `json:"audio_tracks,omitempty" validate:"omitempty,dive"`
 	DeliveryPlan     []SubmitDeliveryPlanEntry `json:"delivery_plan,omitempty" validate:"omitempty,dive"`
 	PublishingTarget *SubmitPublishingTarget   `json:"publishing_target,omitempty" validate:"omitempty"`
@@ -301,8 +299,6 @@ type SubmitScene struct {
 	// wire-DTO bridge uniform across submit + creator paths.
 	Index           int64            `json:"index,omitempty" validate:"omitempty,gte=0"`
 	Kind            string           `json:"kind,omitempty" validate:"omitempty,max=32"`
-	ClipLink        string           `json:"clip_link,omitempty" validate:"omitempty,max=2048"`
-	ImageLink       string           `json:"image_link,omitempty" validate:"omitempty,max=2048"`
 	DurationSeconds float64          `json:"duration_seconds" validate:"required,gte=0.1,lte=86400"`
 	Clip            *SubmitClip      `json:"clip,omitempty" validate:"omitempty"`
 	Stock           *SubmitClip      `json:"stock,omitempty" validate:"omitempty"`
@@ -391,7 +387,7 @@ type SubmitSubtitleTrack struct {
 type SubmitAudioTrack struct {
 	AssetID         string  `json:"asset_id,omitempty" validate:"omitempty,max=128"`
 	SourceURL       string  `json:"source_url,omitempty" validate:"omitempty,url,max=2048"`
-	Role            string  `json:"role,omitempty" validate:"omitempty,oneof=voiceover scene_clip_audio background_music"`
+	Role            string  `json:"role,omitempty" validate:"omitempty,oneof=voiceover scene_clip_audio background_music sfx"`
 	Volume          float64 `json:"volume,omitempty" validate:"omitempty,gte=0,lte=2"`
 	StartTimeOffset float64 `json:"start_time_offset,omitempty" validate:"omitempty,gte=0"`
 	DurationSeconds float64 `json:"duration_seconds,omitempty" validate:"omitempty,gte=0"`

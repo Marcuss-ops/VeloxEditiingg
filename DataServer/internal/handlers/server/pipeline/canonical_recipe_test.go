@@ -16,20 +16,12 @@ func TestNormalizeCanonicalRecipe_SpecSceneBindings(t *testing.T) {
 		Spec: map[string]interface{}{
 			"scenes": []interface{}{
 				map[string]interface{}{
-					"id":          "scene-0",
-					"kind":        "intro",
-					"text":        "Intro",
-					"duration_ms": float64(5000),
-					"bindings": map[string]interface{}{
-						"clip": map[string]interface{}{
-							"clip_id": "clip-0",
-							"end_ms":  float64(5000),
-						},
-						"voiceover": map[string]interface{}{
-							"asset_id":    "voice-0",
-							"duration_ms": float64(5000),
-						},
-					},
+					"id":               "scene-0",
+					"kind":             "intro",
+					"text":             "Intro",
+					"duration_seconds": 5.0,
+					"clip":             map[string]interface{}{"asset_id": "clip-0", "url": "velox-asset://clip-0", "duration_ms": float64(5000)},
+					"voiceover":        map[string]interface{}{"asset_id": "voice-0", "url": "velox-asset://voice-0", "duration_ms": float64(5000)},
 				},
 			},
 		},
@@ -63,18 +55,17 @@ func TestNormalizeCanonicalRecipe_RejectsUnknownJobType(t *testing.T) {
 func TestNormalizeCanonicalRecipe_ProjectsMultipleBindingStocks(t *testing.T) {
 	req := SubmitJobRequest{
 		IdempotencyKey: "recipe-stocks",
-		JobType:        "scene.composite.v1",
-		Spec: map[string]interface{}{
-			"scenes": []interface{}{map[string]interface{}{
-				"text":        "Portrait",
-				"duration_ms": float64(10000),
-				"bindings": map[string]interface{}{
+		JobType:        "scene.composite.v1", Spec: map[string]interface{}{
+			"scenes": []interface{}{
+				map[string]interface{}{
+					"text":             "Portrait",
+					"duration_seconds": 5.0,
 					"stock": []interface{}{
-						map[string]interface{}{"drive_link": "https://stock/a.mp4"},
+						map[string]interface{}{"url": "https://stock/a.mp4"},
 						map[string]interface{}{"asset_id": "stock-b"},
 					},
 				},
-			}},
+			},
 		},
 	}
 

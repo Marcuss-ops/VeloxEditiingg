@@ -22,12 +22,12 @@ JOBS_PAYLOAD=$(jq -nc \
     idempotency_key: $idem,
     video_name: $ts,
     script_text: "Smoke script for publishing flow E2E.",
-    voiceover_paths: ["velox-asset://voiceovers/pub-smoke.mp3"],
     scenes: [
       {
         text: "Smoke scene",
-        clip_link: "velox-asset://clips/pub-smoke.mp4",
-        duration_seconds: 3
+        duration_seconds: 3,
+        clip: {url: "velox-asset://clips/pub-smoke.mp4", duration_ms: 3000},
+        voiceover: {url: "velox-asset://voiceovers/pub-smoke.mp3", duration_ms: 3000}
       }
     ],
     delivery_plan: [
@@ -82,8 +82,7 @@ DRYINNER
       idempotency_key: $idem,
       video_name: ("publishing_flow_smoke epoch=" + $epoch),
       script_text: "Smoke script for publishing flow E2E.",
-      voiceover_paths: ["velox-asset://voiceovers/pub-smoke.mp3"],
-      scenes: [ { text: "Smoke scene", clip_link: "velox-asset://clips/pub-smoke.mp4", duration_seconds: 3 } ],
+      scenes: [ { text: "Smoke scene", duration_seconds: 3, clip: {url: "velox-asset://clips/pub-smoke.mp4", duration_ms: 3000}, voiceover: {url: "velox-asset://voiceovers/pub-smoke.mp3", duration_ms: 3000} } ],
       delivery_plan: [
         {
           destination_id: $dest,

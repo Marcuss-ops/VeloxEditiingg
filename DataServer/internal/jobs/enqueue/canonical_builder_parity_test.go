@@ -105,7 +105,11 @@ func TestCanonicalBuilderParity_RichPayload(t *testing.T) {
 	}
 	remotePayload := dto.ToWorkerPayload()
 
-	want := richWorkerProjection(normalized)
+	wantPayload, err := cloneRendererPayload(normalized)
+	if err != nil {
+		t.Fatalf("project normalized renderer payload: %v", err)
+	}
+	want := richWorkerProjection(wantPayload)
 	for name, payload := range map[string]map[string]interface{}{
 		"pipeline":      pipelinePayload,
 		"remote_engine": remotePayload,
@@ -152,7 +156,6 @@ func richWorkerProjection(payload map[string]interface{}) map[string]interface{}
 		"video_name",
 		"script_text",
 		"scenes_json",
-		"voiceover_paths",
 		"output_path",
 		"drive_output_folder",
 		"audio_language_for_srt",

@@ -83,15 +83,22 @@ validate_image() {
 
 run_digest_rollout() {
     local action=$1 worker_id=$2 image=$3 reason=${4:-fleetctl-$action}
-    local inventory=${FLEET_INVENTORY:-$ROOT/deploy/inventory/production.ini}
+    local inventory=${FLEET_INVENTORY:-$ROOT/deploy/ansible/inventory.ini}
     local playbook=${FLEET_ROLLOUT_PLAYBOOK:-$ROOT/deploy/playbooks/rollout-worker-digest.yml}
     command -v ansible-playbook >/dev/null 2>&1 || die 'ansible-playbook is required for host rollout'
     [[ -r "$inventory" ]] || die "Ansible inventory not readable: $inventory"
     [[ -r "$playbook" ]] || die "rollout playbook not readable: $playbook"
     validate_image "$image"
     require_idle_worker "$worker_id"
+    local inventory_host
+    inventory_host=$(ansible-inventory -i "$inventory" --list 2>/dev/null \
+        | jq -r --arg worker_id "$worker_id" \
+            '._meta.hostvars | to_entries[] | select(.value.worker_id == $worker_id) | .key' \
+        | head -n 1)
+    [[ -n "$inventory_host" && "$inventory_host" != "null" ]] \
+        || die "worker_id $worker_id is not mapped to an Ansible inventory host in $inventory"
     printf 'fleetctl: %s worker=%s image=%s reason=%s\n' "$action" "$worker_id" "$image" "$reason" >&2
-    ansible-playbook -i "$inventory" "$playbook" --limit "$worker_id" \
+    ansible-playbook -i "$inventory" "$playbook" --limit "$inventory_host" \
         -e "master_url=$MASTER_URL" \
         -e "target_image=$image" \
         -e "deployment_reason=$reason"

@@ -28,6 +28,9 @@ func (s *AssetService) RewriteRemoteInputPayload(ctx context.Context, payload ma
 	if err := rewriteStringListField(ctx, s, payload, "scene_image_paths", inputsecurity.KindImage); err != nil {
 		return err
 	}
+	if err := rewriteTransitionSoundEffects(ctx, s, payload); err != nil {
+		return err
+	}
 
 	for _, key := range []string{"scenes", "render_manifest"} {
 		if value, ok := payload[key]; ok {
@@ -82,6 +85,83 @@ func (s *AssetService) RewriteRemoteInputPayload(ctx context.Context, payload ma
 			}
 		}
 	}
+	return nil
+}
+
+// rewriteTransitionSoundEffects resolves the configured SFX pool before the
+// narrated timeline is built. The normalizer creates audio_tracks from this
+// pool later, so the asset declarations must already be present in the
+// canonical payload for workers to verify and cache those tracks.
+func rewriteTransitionSoundEffects(ctx context.Context, s *AssetService, payload map[string]interface{}) error {
+	config, ok := payload["transition_sound_effects"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	if enabled, present := config["enabled"].(bool); present && !enabled {
+		return nil
+	}
+	values, ok := config["sources"]
+	if !ok {
+		return nil
+	}
+	var sources []string
+	switch typed := values.(type) {
+	case []string:
+		sources = typed
+	case []interface{}:
+		for _, value := range typed {
+			if source, ok := value.(string); ok {
+				sources = append(sources, source)
+			}
+		}
+	default:
+		return nil
+	}
+
+	declarations := map[string]map[string]interface{}{}
+	rewritten := make([]string, 0, len(sources))
+	for _, source := range sources {
+		canonical, err := rewriteReference(ctx, s, source, inputsecurity.KindAudio)
+		if err != nil {
+			return fmt.Errorf("transition_sound_effects.sources: %w", err)
+		}
+		rewritten = append(rewritten, canonical)
+		assetID := strings.TrimPrefix(canonical, VeloxAssetScheme+"://")
+		if assetID == canonical || assetID == "" {
+			continue
+		}
+		asset, err := s.Get(ctx, assetID)
+		if err != nil {
+			return fmt.Errorf("transition_sound_effects asset %q: %w", assetID, err)
+		}
+		if asset == nil || asset.SHA256 == "" || asset.SizeBytes <= 0 {
+			return fmt.Errorf("transition_sound_effects asset %q has incomplete integrity metadata", assetID)
+		}
+		declarations[assetID] = map[string]interface{}{
+			"id":         asset.AssetID,
+			"uri":        canonical,
+			"kind":       "sfx",
+			"sha256":     asset.SHA256,
+			"size_bytes": asset.SizeBytes,
+		}
+	}
+	config["sources"] = rewritten
+	if len(declarations) == 0 {
+		return nil
+	}
+	assets := mapList(payload["assets"])
+	seen := make(map[string]bool, len(assets)+len(declarations))
+	for _, item := range assets {
+		if id, ok := item["id"].(string); ok {
+			seen[id] = true
+		}
+	}
+	for id, declaration := range declarations {
+		if !seen[id] {
+			assets = append(assets, declaration)
+		}
+	}
+	payload["assets"] = assets
 	return nil
 }
 

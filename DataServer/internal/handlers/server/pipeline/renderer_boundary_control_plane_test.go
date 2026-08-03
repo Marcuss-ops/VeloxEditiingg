@@ -15,7 +15,7 @@ func TestNormalizeExternalJobSubmissionKeepsControlPlaneOutOfWorkerPayload(t *te
 		Scenes: []SubmitScene{{
 			Text:            "A scene",
 			DurationSeconds: 3,
-			ImageLink:       "velox-asset://image/scene.png",
+			Clip:            &SubmitClip{URL: "velox-asset://image/scene.png"},
 		}},
 		DeliveryPlan: []SubmitDeliveryPlanEntry{{
 			DestinationID: "youtube-en",

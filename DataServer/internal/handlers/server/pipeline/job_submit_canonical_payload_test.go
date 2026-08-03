@@ -31,9 +31,9 @@ import (
 //	(5) worker_payload["job_id"]            == trimmed idempotency_key.
 //	(6) worker_payload["video_name"]        (when set on req).
 //	(7) worker_payload["script_text"]       (when set on req).
-//	(8) worker_payload["voiceover_paths"]   (slice with the same entries).
+//	(8) per-scene voiceover.url and subtitles remain inside scenes_json.
 //	(9) worker_payload["scenes_json"]       — JSON-encoding of the
-//	    scene list with text + duration_seconds + clip_link / image_link
+//	    scene list with text + duration_seconds + nested clip / voiceover / subtitles
 //	    fields carried through.
 //
 // (10) canonical.DeliveryPlan              — preserved as the
@@ -49,10 +49,9 @@ func TestNormalizeExternalJobSubmission_ProducesCanonicalPayload(t *testing.T) {
 		IdempotencyKey: "test-job-123",
 		VideoName:      "Test Video",
 		ScriptText:     "Hello world",
-		VoiceoverPaths: []string{"velox-asset://voiceovers/intro.mp3"},
 		Scenes: []SubmitScene{
-			{Text: "Scene 1", ClipLink: "velox-asset://clips/scene1.mp4", DurationSeconds: 5},
-			{Text: "Scene 2", ImageLink: "velox-asset://images/scene2.jpg", DurationSeconds: 3},
+			{Text: "Scene 1", DurationSeconds: 5, Clip: &SubmitClip{URL: "velox-asset://clips/scene1.mp4"}, Voiceover: &SubmitVoiceover{URL: "velox-asset://voiceovers/intro.mp3"}},
+			{Text: "Scene 2", DurationSeconds: 3, Clip: &SubmitClip{URL: "velox-asset://images/scene2.jpg"}},
 		},
 		DeliveryPlan: []SubmitDeliveryPlanEntry{
 			{DestinationID: "drive", Priority: 1, RetryBudget: intPtr(3)},
@@ -96,14 +95,14 @@ func TestNormalizeExternalJobSubmission_ProducesCanonicalPayload(t *testing.T) {
 		t.Errorf("worker_payload[script_text] = %v, want Hello world", got)
 	}
 	// (8)
-	vos, ok := wp["voiceover_paths"].([]string)
-	if !ok || len(vos) != 1 || vos[0] != "velox-asset://voiceovers/intro.mp3" {
-		t.Errorf("worker_payload[voiceover_paths] = %v, want [velox-asset://voiceovers/intro.mp3]", wp["voiceover_paths"])
+	scenesJSON, ok := wp["scenes_json"].(string)
+	if !ok || !strings.Contains(scenesJSON, "velox-asset://voiceovers/intro.mp3") {
+		t.Errorf("scenes_json missing canonical voiceover: %v", wp["scenes_json"])
 	}
 	// (9) scenes_json: must be a non-empty JSON string. Decoding is
 	// covered by the parity test in TestNormalizeExternalJobSubmission_MatchesCreatorPushShape;
 	// here we lock just the surface key.
-	scenesJSON, ok := wp["scenes_json"].(string)
+	scenesJSON, ok = wp["scenes_json"].(string)
 	if !ok || scenesJSON == "" {
 		t.Errorf("worker_payload[scenes_json] missing or empty: %v", wp["scenes_json"])
 	}
@@ -129,17 +128,15 @@ func TestCanonicalPayloadParity_PipelinePreservesCanonicalKeys(t *testing.T) {
 		IdempotencyKey: "contract-parity-pipeline-001",
 		VideoName:      "Parity pipeline video",
 		ScriptText:     "Parity pipeline script",
-		VoiceoverPaths: []string{"velox-asset://voiceover/parity.mp3"},
 		Scenes: []SubmitScene{{
 			Text:            "Parity scene",
-			ClipLink:        "velox-asset://clip/parity.mp4",
+			Clip:            &SubmitClip{URL: "velox-asset://clip/parity.mp4"},
+			Voiceover:       &SubmitVoiceover{URL: "velox-asset://voiceover/parity.mp3"},
+			Subtitles:       &SubmitSubtitles{URL: "velox-asset://subtitle/parity.srt", Format: "srt"},
 			DurationSeconds: 5,
 		}},
 		Layers: []SubmitLayer{{
 			ID: "layer-parity", Type: "text", Role: "title", Text: "Parity",
-		}},
-		SubtitleTracks: []SubmitSubtitleTrack{{
-			Source: "velox-asset://subtitle/parity.srt", Preset: "default", Font: "Inter",
 		}},
 		AudioTracks: []SubmitAudioTrack{{
 			SourceURL: "velox-asset://audio/parity.mp3", Role: "music", Volume: 1,
@@ -209,8 +206,8 @@ func TestCanonicalPayloadParity_PipelinePreservesCanonicalKeys(t *testing.T) {
 // content through BOTH intake paths — creator_push envelopes and
 // /api/v1/jobs flat — and asserts that the resulting
 // CanonicalCompletedPayload structures produce equivalent worker
-// payloads (same job_id, status, voiceover_paths, scenes_json content,
-// delivery_plan). This locks the [P1] invariant: a future PR that
+// payloads (same job_id, status, canonical scene content, and delivery_plan).
+// This locks the [P1] invariant: a future PR that
 // diverges the two paths — e.g., by adding a private field on one
 // path's worker_payload — will fail this test loudly.
 //
@@ -231,9 +228,8 @@ func TestNormalizeExternalJobSubmission_MatchesCreatorPushShape(t *testing.T) {
 		IdempotencyKey: jobID,
 		VideoName:      videoName,
 		ScriptText:     scriptText,
-		VoiceoverPaths: []string{voiceover},
 		Scenes: []SubmitScene{
-			{Text: "Parity scene A", ClipLink: "velox-asset://clips/parity-a.mp4", DurationSeconds: 5},
+			{Text: "Parity scene A", Clip: &SubmitClip{URL: "velox-asset://clips/parity-a.mp4"}, Voiceover: &SubmitVoiceover{URL: voiceover}, DurationSeconds: 5},
 		},
 		DeliveryPlan: []SubmitDeliveryPlanEntry{
 			{DestinationID: "drive", Priority: 1, RetryBudget: intPtr(3)},
@@ -245,20 +241,15 @@ func TestNormalizeExternalJobSubmission_MatchesCreatorPushShape(t *testing.T) {
 		SourceJobID:      jobID,
 		TargetExecutorID: executorID,
 		Payload: map[string]interface{}{
-			"status":          "completed",
-			"job_id":          jobID,
-			"video_name":      videoName,
-			"script_text":     scriptText,
-			"voiceover_paths": []interface{}{voiceover},
+			"status":      "completed",
+			"job_id":      jobID,
+			"video_name":  videoName,
+			"script_text": scriptText,
 			"scenes": []interface{}{
-				// duration_seconds is float64 (NOT int 5) because
-				// remoteengine.convertRawScenes performs a float64 type
-				// assertion; an int 5 would silently drop duration_seconds
-				// from scenes_json and break the parity test.
 				map[string]interface{}{
 					"text":             "Parity scene A",
-					"clip_link":        "velox-asset://clips/parity-a.mp4",
 					"duration_seconds": float64(5),
+					"voiceover":        map[string]interface{}{"url": voiceover},
 				},
 			},
 			"delivery_plan": []interface{}{
@@ -302,18 +293,14 @@ func TestNormalizeExternalJobSubmission_MatchesCreatorPushShape(t *testing.T) {
 		}
 	}
 
-	// voiceover_paths: both must carry a single string equal to `voiceover`.
+	// The canonical nested scene voiceover must survive both paths.
 	for label, payload := range map[string]map[string]interface{}{
 		"submit":  submitCanonical.WorkerPayload,
 		"creator": creatorCanonical.WorkerPayload,
 	} {
-		vos, ok := payload["voiceover_paths"].([]string)
-		if !ok {
-			t.Errorf("%s voiceover_paths not []string: %T", label, payload["voiceover_paths"])
-			continue
-		}
-		if len(vos) != 1 || vos[0] != voiceover {
-			t.Errorf("%s voiceover_paths = %v, want [%s]", label, vos, voiceover)
+		scenesJSON, ok := payload["scenes_json"].(string)
+		if !ok || !strings.Contains(scenesJSON, voiceover) {
+			t.Errorf("%s scenes_json missing canonical voiceover %q: %v", label, voiceover, payload["scenes_json"])
 		}
 	}
 

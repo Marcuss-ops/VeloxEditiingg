@@ -680,6 +680,7 @@ components:
                                     - voiceover
                                     - scene_clip_audio
                                     - background_music
+                                    - sfx
                                 type: string
                             source_url:
                                 format: uri
@@ -853,11 +854,6 @@ components:
                 spec:
                     additionalProperties: {}
                     type: object
-                subtitle_tracks:
-                    items:
-                        $ref: '#/components/schemas/SubmitSubtitleTrack'
-                    minItems: 0
-                    type: array
                 template_id:
                     type: string
                 template_version:
@@ -865,11 +861,6 @@ components:
                 video_name:
                     maxLength: 300
                     type: string
-                voiceover_paths:
-                    items:
-                        type: string
-                    minItems: 0
-                    type: array
             required:
                 - idempotency_key
             type: object
@@ -1035,17 +1026,11 @@ components:
             properties:
                 clip:
                     $ref: '#/components/schemas/SubmitClip'
-                clip_link:
-                    maxLength: 2048
-                    type: string
                 duration_seconds:
                     format: float
                     maximum: 86400
                     minimum: 0.1
                     type: number
-                image_link:
-                    maxLength: 2048
-                    type: string
                 index:
                     minimum: 0
                     type: integer

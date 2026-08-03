@@ -5,7 +5,6 @@
   "skip_creator": true,
   "video_name": "Velox Worker Smoke — Chronon Text Image",
   "project_id": "velox-worker-smoke",
-  "voiceover_paths": ["/opt/velox/current/.velox/data/test_voice.mp3"],
   "total_duration_secs": 4,
   "render_video": true,
   "save_to_db": true,
@@ -16,9 +15,9 @@
       "index": 0,
       "kind": "image",
       "text": "Nome Speciale: Ada Lovelace — FRASE IMPORTANTE — parola IMPORTANTE",
-      "clip_link": "https://dummyimage.com/1280x720/1e90ff/ffffff.png&text=VELOX+IMAGE+ASSET",
-      "image_link": "https://dummyimage.com/1280x720/1e90ff/ffffff.png&text=VELOX+IMAGE+ASSET",
-      "duration_seconds": 4
+      "duration_seconds": 4,
+      "clip": {"url": "https://dummyimage.com/1280x720/1e90ff/ffffff.png&text=VELOX+IMAGE+ASSET", "duration_ms": 4000},
+      "voiceover": {"url": "/opt/velox/current/.velox/data/test_voice.mp3", "duration_ms": 4000}
     }
   ],
   "layers": [

@@ -67,6 +67,14 @@ func TestCommonAssetResolverColdWarmCacheAcrossMediaKinds(t *testing.T) {
 				map[string]interface{}{"kind": "sfx", "events": []interface{}{map[string]interface{}{"uri": "velox-asset://effect-001"}}},
 				map[string]interface{}{"kind": "captions", "events": []interface{}{map[string]interface{}{"uri": "velox-asset://subtitle-001"}}},
 			},
+			"audio_tracks": []interface{}{
+				map[string]interface{}{
+					"source_url":        "velox-asset://effect-001",
+					"role":              "sfx",
+					"volume":            0.1,
+					"start_time_offset": 12.0,
+				},
+			},
 		},
 	}
 	before := mustJSON(t, payload)
@@ -84,12 +92,30 @@ func TestCommonAssetResolverColdWarmCacheAcrossMediaKinds(t *testing.T) {
 		}
 	}
 	assertResolvedManifestAssets(t, cold, assets, workerDir)
+	manifest, ok := cold["render_manifest"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("resolved render_manifest has unexpected type %T", cold["render_manifest"])
+	}
+	resolvedTracks := manifest["audio_tracks"].([]interface{})
+	resolvedSFX := resolvedTracks[0].(map[string]interface{})["source_url"].(string)
+	if strings.HasPrefix(resolvedSFX, "velox-asset://") || !strings.HasPrefix(resolvedSFX, workerDir) {
+		t.Fatalf("sfx audio track was not resolved to worker-local path: %q", resolvedSFX)
+	}
 
 	warm, err := w.resolveCommonAssetPayload(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("warm-cache resolve: %v", err)
 	}
 	assertResolvedManifestAssets(t, warm, assets, workerDir)
+	// A new Worker instance represents a new job/process boundary. The
+	// persistent asset directory must still produce a cache hit.
+	wRestart := &Worker{
+		config:    &config.WorkerConfig{MasterURL: server.URL, WorkDir: workerDir},
+		apiClient: api.NewClient(server.URL),
+	}
+	if _, err := wRestart.resolveCommonAssetPayload(context.Background(), payload); err != nil {
+		t.Fatalf("cross-job cache resolve: %v", err)
+	}
 	for assetID := range assets {
 		if requests[assetID] != 1 {
 			t.Errorf("warm request count for %s = %d, want unchanged 1", assetID, requests[assetID])

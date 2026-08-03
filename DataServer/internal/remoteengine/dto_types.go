@@ -96,11 +96,10 @@ type ClipAsset struct {
 }
 
 // VoiceoverAsset is the per-scene voiceover asset reference typed DTO.
-// Mirrors apiwire.SubmitVoiceover. The nested form REPLACES the legacy
+// Mirrors apiwire.SubmitVoiceover. The nested form replaces the legacy
 // position-coupled voiceover_paths[N] ↔ scenes[N] relationship: a
-// single scene carries its own voiceover URL directly. See
-// ToWorkerPayload for the merge-into-voiceover_paths[] back-compat
-// strategy that keeps legacy worker consumers working.
+// single scene carries its own voiceover URL directly. Only this nested
+// form is serialized into the renderer payload.
 type VoiceoverAsset struct {
 	AssetID     string `json:"asset_id,omitempty"`
 	DriveFileID string `json:"drive_file_id,omitempty"`
@@ -120,15 +119,9 @@ type SubtitlesAsset struct {
 	Language string `json:"language,omitempty"`
 }
 
-// SceneResult holds a single scene with its text and image reference.
-//
-// Phase 2 of the render-manifest plan: the per-scene Clip / Voiceover
-// / Subtitles nested objects are the canonical SOURCE OF TRUTH for
-// asset URLs. The legacy top-level VoiceoverResult.Paths is preserved
-// for back-compat with the creator-machine wire shape (and to keep
-// the typed DTO surface stable for tests); ToWorkerPayload merges
-// both sources into the worker payload (per-scene voiceover.url
-// FIRST, top-level Paths second, deduped by URL).
+// SceneResult holds a single scene with its text and canonical asset references.
+// The per-scene Clip / Voiceover / Subtitles nested objects are the source of
+// truth for renderer asset URLs; legacy flat aliases are never serialized.
 type SceneResult struct {
 	Text      string `json:"text"`
 	SceneID   string `json:"scene_id,omitempty"`
@@ -155,14 +148,9 @@ type SceneResult struct {
 	Subtitles       *SubtitlesAsset `json:"subtitles,omitempty"`
 }
 
-// VoiceoverResult holds the voiceover audio reference(s).
-//
-// Phase 2 of the render-manifest plan: the per-scene voiceover.url
-// is the canonical SOURCE OF TRUTH (a single scene carries its own
-// voiceover URL). The top-level Paths field is preserved for
-// back-compat with the creator-machine wire shape — both inputs
-// are merged into the worker payload (per-scene voiceover.url first,
-// top-level Paths second, deduped by URL) by ToWorkerPayload.
+// VoiceoverResult holds voiceover references extracted at ingestion. Paths are
+// retained for parsing/validation compatibility but are not worker payload data;
+// scenes must carry their own canonical voiceover asset objects.
 type VoiceoverResult struct {
 	Paths []string // local paths or URLs to voiceover audio files
 }

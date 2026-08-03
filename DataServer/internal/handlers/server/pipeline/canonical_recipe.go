@@ -55,9 +55,6 @@ func NormalizeCanonicalRecipe(req *SubmitJobRequest) error {
 	if req.ScriptText == "" {
 		req.ScriptText = firstRecipeString(req.Spec, "script_text", "script")
 	}
-	if len(req.VoiceoverPaths) == 0 {
-		req.VoiceoverPaths = recipeStrings(req.Spec["voiceover_paths"])
-	}
 	if len(req.DeliveryPlan) == 0 {
 		// DeliveryPlan is intentionally typed at the public boundary. Recipe
 		// producers should use the same canonical field, not a second route.
@@ -98,31 +95,22 @@ func canonicalRecipeScene(raw map[string]interface{}, index int) (SubmitScene, e
 	scene.Text = firstRecipeString(raw, "text", "description")
 	scene.DurationSeconds = recipeFloat(raw["duration_seconds"])
 	if scene.DurationSeconds <= 0 {
-		scene.DurationSeconds = recipeFloat(raw["duration_ms"]) / 1000
-	}
-	if scene.DurationSeconds <= 0 {
-		scene.DurationSeconds = 5
+		return scene, fmt.Errorf("spec.scenes[%d].duration_seconds must be positive", index)
 	}
 	if rawClip, ok := raw["clip"].(map[string]interface{}); ok {
 		scene.Clip = recipeClip(rawClip)
 	}
-	if rawBindings, ok := raw["bindings"].(map[string]interface{}); ok {
-		if rawClip, ok := rawBindings["clip"].(map[string]interface{}); ok && scene.Clip == nil {
-			scene.Clip = recipeClip(rawClip)
-		}
-		if rawVoiceover, ok := rawBindings["voiceover"].(map[string]interface{}); ok {
-			scene.Voiceover = recipeVoiceover(rawVoiceover)
-		}
-		if rawStock, ok := rawBindings["stock"]; ok {
-			applyRecipeStocks(&scene, rawStock)
-		}
-	}
-	if rawVoiceover, ok := raw["voiceover"].(map[string]interface{}); ok && scene.Voiceover == nil {
+	if rawVoiceover, ok := raw["voiceover"].(map[string]interface{}); ok {
 		scene.Voiceover = recipeVoiceover(rawVoiceover)
+	}
+	if rawSubtitles, ok := raw["subtitles"].(map[string]interface{}); ok {
+		scene.Subtitles = recipeSubtitles(rawSubtitles)
 	}
 	if rawStock, ok := raw["stock"]; ok {
 		applyRecipeStocks(&scene, rawStock)
-		scene.StockFallback, _ = raw["stock_fallback"].(bool)
+		if explicit, ok := raw["stock_fallback"].(bool); ok {
+			scene.StockFallback = explicit
+		}
 	}
 	if rawStock, ok := raw["stock_links"]; ok {
 		scene.StockLinks = recipeStrings(rawStock)
@@ -174,6 +162,19 @@ func recipeClip(raw map[string]interface{}) *SubmitClip {
 		clip.URL = "velox-asset://" + clip.AssetID
 	}
 	return clip
+}
+
+func recipeSubtitles(raw map[string]interface{}) *SubmitSubtitles {
+	if raw == nil {
+		return nil
+	}
+	return &SubmitSubtitles{
+		AssetID:  firstRecipeString(raw, "asset_id"),
+		Format:   firstRecipeString(raw, "format"),
+		URL:      firstRecipeString(raw, "url"),
+		SHA256:   firstRecipeString(raw, "sha256"),
+		Language: firstRecipeString(raw, "language"),
+	}
 }
 
 func recipeVoiceover(raw map[string]interface{}) *SubmitVoiceover {

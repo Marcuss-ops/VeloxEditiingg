@@ -113,19 +113,18 @@ PAYLOAD=$(cat <<'JSON'
     "job_id": "creator-job-001",
     "video_name": "Smoke-test video",
     "script_text": "Creator-push smoke test: voiceover + stock + clip + scene scenario.",
-    "voiceover_paths": [
-      "velox-asset://voiceovers/smoke-audio.mp3"
-    ],
     "scenes": [
       {
         "text": "Smoke scene 1",
-        "clip_link": "velox-asset://clips/smoke-clip-01.mp4",
-        "duration_seconds": 5
+        "duration_seconds": 5,
+        "clip": {"url": "velox-asset://clips/smoke-clip-01.mp4", "duration_ms": 5000},
+        "voiceover": {"url": "velox-asset://voiceovers/smoke-audio.mp3", "duration_ms": 5000}
       },
       {
         "text": "Smoke scene 2",
-        "clip_link": "velox-asset://clips/smoke-clip-02.mp4",
-        "duration_seconds": 5
+        "duration_seconds": 5,
+        "clip": {"url": "velox-asset://clips/smoke-clip-02.mp4", "duration_ms": 5000},
+        "voiceover": {"url": "velox-asset://voiceovers/smoke-audio.mp3", "duration_ms": 5000}
       }
     ],
     "delivery_plan": [

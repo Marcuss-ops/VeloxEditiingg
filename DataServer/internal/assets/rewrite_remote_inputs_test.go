@@ -81,3 +81,25 @@ func TestRewriteRemoteInputPayloadRejectsUnregisteredCanonicalAsset(t *testing.T
 		t.Fatalf("want unregistered canonical asset error, got %v", err)
 	}
 }
+
+func TestRewriteRemoteInputPayloadDeclaresTransitionSoundEffects(t *testing.T) {
+	payload := map[string]interface{}{
+		"transition_sound_effects": map[string]interface{}{
+			"enabled": true,
+			"sources": []interface{}{"velox-asset://sfx-1"},
+		},
+	}
+	service := &AssetService{repo: &rewriteAssetRepository{assets: map[string]*AssetRecord{
+		"sfx-1": {AssetID: "sfx-1", Kind: "sfx", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SizeBytes: 1234},
+	}}}
+	if err := service.RewriteRemoteInputPayload(context.Background(), payload); err != nil {
+		t.Fatalf("RewriteRemoteInputPayload: %v", err)
+	}
+	assets, ok := payload["assets"].([]map[string]interface{})
+	if !ok || len(assets) != 1 {
+		t.Fatalf("assets = %#v, want one declaration", payload["assets"])
+	}
+	if assets[0]["uri"] != "velox-asset://sfx-1" || assets[0]["kind"] != "sfx" || assets[0]["size_bytes"] != int64(1234) {
+		t.Fatalf("unexpected SFX declaration: %#v", assets[0])
+	}
+}

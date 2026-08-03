@@ -238,18 +238,17 @@ JOBS_PAYLOAD=$(cat <<JSON
   "idempotency_key": "${IDEM_KEY}",
   "video_name": "jobs_smoke at ${EPOCH}",
   "script_text": "Smoke-test scenario: voiceover + clip + scene.",
-  "voiceover_paths": [
-    "velox-asset://voiceovers/smoke-${EPOCH}.mp3"
-  ],
   "scenes": [
     {
       "text": "Smoke scene 1",
-      "clip_link": "velox-asset://clips/smoke-${EPOCH}-01.mp4",
+      "clip": { "url": "velox-asset://clips/smoke-${EPOCH}-01.mp4", "duration_ms": 3000 },
+      "voiceover": { "url": "velox-asset://voiceovers/smoke-${EPOCH}.mp3", "duration_ms": 3000 },
       "duration_seconds": 3
     },
     {
       "text": "Smoke scene 2",
-      "clip_link": "velox-asset://clips/smoke-${EPOCH}-02.mp4",
+      "clip": { "url": "velox-asset://clips/smoke-${EPOCH}-02.mp4", "duration_ms": 3000 },
+      "voiceover": { "url": "velox-asset://voiceovers/smoke-${EPOCH}.mp3", "duration_ms": 3000 },
       "duration_seconds": 3
     }
   ],

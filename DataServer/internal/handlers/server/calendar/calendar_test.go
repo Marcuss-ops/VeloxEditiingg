@@ -125,10 +125,11 @@ func makeAgentEvent(d time.Time, externalID, title, script string) store.Calenda
 		ScriptText:        script,
 		Titles:            []string{"Caitlin Clark Just Changed Everything", "The WNBA Was Not Ready For This"},
 		Status:            "scheduled",
-		StockFootage:      []store.VideoClip{{Type: "stock", URL: "https://example.com/stock1.mp4"}},
-		InitialClips:      []store.VideoClip{{Type: "clip", URL: "https://example.com/intro.mp4"}},
-		IntermediateClips: []store.VideoClip{{Type: "clip", URL: "https://example.com/middle.mp4"}},
-		FinalClips:        []store.VideoClip{{Type: "clip", URL: "https://example.com/final.mp4"}},
+		VoiceoverPaths:    []string{"velox-asset://calendar/voiceover.mp3"},
+		StockFootage:      []store.VideoClip{{Type: "stock", URL: "https://example.com/stock1.mp4", Duration: 5}},
+		InitialClips:      []store.VideoClip{{Type: "clip", URL: "https://example.com/intro.mp4", Duration: 5}},
+		IntermediateClips: []store.VideoClip{{Type: "clip", URL: "https://example.com/middle.mp4", Duration: 6}},
+		FinalClips:        []store.VideoClip{{Type: "clip", URL: "https://example.com/final.mp4", Duration: 4}},
 	}
 }
 
@@ -275,10 +276,11 @@ func TestCalendarAPI_UpdateCompletesQueuedJobWithoutDuplicate(t *testing.T) {
 	created := decodeEvent(t, w)
 
 	update := store.CalendarEvent{
-		StockFootage:      []store.VideoClip{{Type: "stock", URL: "https://example.com/stock1.mp4"}},
-		InitialClips:      []store.VideoClip{{Type: "clip", URL: "https://example.com/intro.mp4"}},
-		IntermediateClips: []store.VideoClip{{Type: "clip", URL: "https://example.com/middle.mp4"}},
-		FinalClips:        []store.VideoClip{{Type: "clip", URL: "https://example.com/final.mp4"}},
+		VoiceoverPaths:    []string{"velox-asset://calendar/voiceover.mp3"},
+		StockFootage:      []store.VideoClip{{Type: "stock", URL: "https://example.com/stock1.mp4", Duration: 5}},
+		InitialClips:      []store.VideoClip{{Type: "clip", URL: "https://example.com/intro.mp4", Duration: 5}},
+		IntermediateClips: []store.VideoClip{{Type: "clip", URL: "https://example.com/middle.mp4", Duration: 6}},
+		FinalClips:        []store.VideoClip{{Type: "clip", URL: "https://example.com/final.mp4", Duration: 4}},
 	}
 	w = putJSON(t, r, "/api/v1/calendar/events/"+created.ID, update)
 	if w.Code != http.StatusOK {

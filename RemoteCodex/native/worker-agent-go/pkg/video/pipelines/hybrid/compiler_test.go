@@ -235,6 +235,34 @@ func TestCompile_AudioTracks_ProducesOffsetMixPlan(t *testing.T) {
 	}
 }
 
+func TestCompile_SFXTrackPreservesRoleVolumeAndOffset(t *testing.T) {
+	input := map[string]interface{}{
+		"items": []interface{}{map[string]interface{}{
+			"type":     "video",
+			"url":      "worker-local/clip.mp4",
+			"duration": 4.0,
+		}},
+		"audio_tracks": []interface{}{map[string]interface{}{
+			"source_url":        "worker-local/effect.mp3",
+			"role":              "sfx",
+			"volume":            0.1,
+			"start_time_offset": 2.5,
+		}},
+	}
+
+	renderPlan, err := Compile(context.Background(), "job-sfx", input, "/tmp/out.mp4", nil)
+	if err != nil {
+		t.Fatalf("Compile(sfx): %v", err)
+	}
+	if len(renderPlan.AudioTracks) != 1 {
+		t.Fatalf("audio tracks = %d, want 1", len(renderPlan.AudioTracks))
+	}
+	track := renderPlan.AudioTracks[0]
+	if track.Role != "sfx" || track.Volume != 0.1 || track.StartTimeOffset != 2.5 {
+		t.Fatalf("sfx track = %+v, want role=sfx volume=0.1 offset=2.5", track)
+	}
+}
+
 func TestCompile_BackgroundMusic_RoleEnablesLoopFadeDucking(t *testing.T) {
 	input := map[string]interface{}{
 		"items": []interface{}{

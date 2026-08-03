@@ -47,7 +47,6 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"path"
 	"strings"
 
 	"velox-server/internal/config"
@@ -62,7 +61,7 @@ import (
 // exposing internal-only information:
 //
 //	Path:    JSON-pointer-style path to the offending URL in the
-//	         request body (e.g. "voiceover_paths.0", "scenes.3.clip_link")
+//	         request body (e.g. "scenes.3.clip.url")
 //	URL:     the raw value as sent by the client (echo for debug)
 //	Reason:  short machine token: "scheme", "ip_private",
 //	         "ip_loopback", "ip_link_local", "ip_metadata",
@@ -344,9 +343,8 @@ func hostnameAllowed(host string, allowDomains []string) bool {
 	return false
 }
 
-// ValidateAllExternalURLs walks the SubmitJobRequest URL-bearing
-// fields (voiceover_paths, each scene's clip_link / image_link) and
-// returns a non-nil error iff any URL fails the SSRF policy. On
+// ValidateAllExternalURLs walks the canonical nested scene asset
+// URLs and returns a non-nil error iff any URL fails the SSRF policy. On
 // failure the returned slice-cumulative error encodes every
 // violation so the client sees the full picture in one round trip.
 //
@@ -363,35 +361,8 @@ func ValidateAllExternalURLs(req SubmitJobRequest, cfg *config.Config) []SSRFVal
 	allowLoopbackHTTP := cfg.Runtime.AllowLoopbackAdminAuthDev
 
 	var errs []SSRFValidationError
-	for i, u := range req.VoiceoverPaths {
-		p := path.Join("voiceover_paths", fmt.Sprintf("%d", i))
-		if err := ValidateExternalURL(u, domains, allowLoopbackHTTP); err != nil {
-			if se, ok := err.(*SSRFValidationError); ok {
-				if se.Path == "" {
-					se.Path = p
-				}
-				errs = append(errs, *se)
-			}
-		}
-	}
 	for i, s := range req.Scenes {
 		base := fmt.Sprintf("scenes.%d", i)
-		if err := ValidateExternalURL(s.ClipLink, domains, allowLoopbackHTTP); err != nil {
-			if se, ok := err.(*SSRFValidationError); ok {
-				if se.Path == "" {
-					se.Path = base + ".clip_link"
-				}
-				errs = append(errs, *se)
-			}
-		}
-		if err := ValidateExternalURL(s.ImageLink, domains, allowLoopbackHTTP); err != nil {
-			if se, ok := err.(*SSRFValidationError); ok {
-				if se.Path == "" {
-					se.Path = base + ".image_link"
-				}
-				errs = append(errs, *se)
-			}
-		}
 		if s.Clip != nil {
 			if err := ValidateExternalURL(s.Clip.URL, domains, allowLoopbackHTTP); err != nil {
 				if se, ok := err.(*SSRFValidationError); ok {

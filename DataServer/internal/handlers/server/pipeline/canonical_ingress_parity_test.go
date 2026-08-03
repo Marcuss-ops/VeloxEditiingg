@@ -27,13 +27,14 @@ func TestCanonicalIngressParity(t *testing.T) {
 		IdempotencyKey: "ingress-parity-001",
 		VideoName:      "Parity render name",
 		ScriptText:     "The same render script.",
-		VoiceoverPaths: []string{"velox-asset://voiceover/parity.mp3"},
 		Scenes: []SubmitScene{{
 			Text:            "Parity scene",
 			SceneID:         "scene-0",
 			Index:           0,
 			Kind:            "clip",
-			ClipLink:        "velox-asset://clip/parity.mp4",
+			Clip:            &SubmitClip{URL: "velox-asset://clip/parity.mp4"},
+			Voiceover:       &SubmitVoiceover{URL: "velox-asset://voiceover/parity.mp3"},
+			Subtitles:       &SubmitSubtitles{URL: "velox-asset://subtitles/parity.srt", Format: "srt"},
 			DurationSeconds: 5,
 		}},
 		Layers: []SubmitLayer{{
@@ -45,11 +46,6 @@ func TestCanonicalIngressParity(t *testing.T) {
 			FontSize:        48,
 			StartSeconds:    0,
 			DurationSeconds: 5,
-		}},
-		SubtitleTracks: []SubmitSubtitleTrack{{
-			Source: "velox-asset://subtitles/parity.srt",
-			Preset: "default",
-			Font:   "Inter",
 		}},
 		AudioTracks: []SubmitAudioTrack{{
 			SourceURL:       "velox-asset://audio/parity.mp3",
@@ -75,8 +71,8 @@ func TestCanonicalIngressParity(t *testing.T) {
 		t.Fatalf("API control-plane delivery plan was lost: %#v", canonicalAPI.DeliveryPlan)
 	}
 	for _, key := range []string{
-		"video_name", "script_text", "scenes_json", "voiceover_paths",
-		"audio_tracks", "subtitle_tracks", "layers",
+		"video_name", "script_text", "scenes_json",
+		"audio_tracks", "layers",
 	} {
 		if _, ok := apiPayload[key]; !ok {
 			t.Fatalf("API baseline is missing required common worker field %q", key)
@@ -132,9 +128,7 @@ func canonicalWorkerProjection(payload map[string]interface{}) map[string]interf
 		videoName       = "video_name"
 		scriptText      = "script_text"
 		scenesJSON      = "scenes_json"
-		voiceoverPaths  = "voiceover_paths"
 		audioTracks     = "audio_tracks"
-		subtitleTracks  = "subtitle_tracks"
 		layers          = "layers"
 		videoMetadata   = "video_metadata"
 		outputPath      = "output_path"
@@ -149,9 +143,9 @@ func canonicalWorkerProjection(payload map[string]interface{}) map[string]interf
 	)
 	projection := make(map[string]interface{})
 	for _, key := range []string{
-		videoName, scriptText, scenesJSON, voiceoverPaths, audioTracks,
-		subtitleTracks, layers, videoMetadata, outputPath, driveOutput,
-		audioLanguage, videoMode, sceneImagePaths, imageSourceMap, items,
+		videoName, scriptText, scenesJSON, audioTracks, layers, videoMetadata, outputPath, driveOutput,
+
+		audioLanguage, videoMode, sceneImagePaths, imageSourceMap,
 		clips, images,
 	} {
 		value, ok := payload[key]

@@ -105,7 +105,7 @@ func registerPipelineRoutes(r *gin.Engine, auth, m2mAuth gin.HandlerFunc, deps P
 		pipeline.NewRemoteClientFromConfig(deps.Cfg),
 		deps.Resolver,
 		deps.JobsRepo, deps.JobsRepo, deps.CmdMgr,
-	).WithStore(deps.SQLiteStore).WithTaskReader(deps.TaskReader).WithAssetService(deps.AssetService).WithIntakeSink(velmetrics.NewCreatorIntakeSink()).WithLegacyBodySink(velmetrics.NewCreatorBodyWarningSink()).RegisterRoutes(r, auth, m2mAuth)
+	).WithStore(deps.SQLiteStore).WithTaskReader(deps.TaskReader).WithAssetService(deps.AssetService).WithIntakeSink(velmetrics.NewCreatorIntakeSink()).RegisterRoutes(r, auth, m2mAuth)
 }
 
 // registerDarkeditorRoutes mounts the legacy /api/darkeditor/dark_editor_v2

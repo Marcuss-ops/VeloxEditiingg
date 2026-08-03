@@ -7,7 +7,7 @@
 #
 # The frozen payload (five_legendary_boxers_it.generate.json) already
 # carries real asset references (velox-asset:// voiceovers + Drive stock
-# links + background music), so no substitution is needed. It is submitted
+# links + background music + transition sound-effect pool), so no substitution is needed. It is submitted
 # through the legacy generate endpoint, mirroring
 # submit_jackie_chan_doc_voiceover_clips.sh.
 #

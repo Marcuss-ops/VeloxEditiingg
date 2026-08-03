@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"velox-shared/contract"
 	"velox-shared/payload"
 )
 
@@ -124,8 +125,8 @@ func ParseRemotePipelineResult(raw map[string]interface{}) (*RemotePipelineResul
 //   - video_name (from Script.Title)
 //   - script_text (from Script.Text)
 //   - scenes_json (serialized from Scenes)
-//   - voiceover_paths (from Voiceover.Paths)
-//   - video_metadata (from Metadata)
+//   - canonical nested scene assets (from Scenes)
+//   - technical video metadata (from Metadata)
 //   - json_path / markdown_path (from Script, for on-disk fallback)
 func (r *RemotePipelineResult) ToWorkerPayload() map[string]interface{} {
 	if r == nil {
@@ -170,28 +171,14 @@ func (r *RemotePipelineResult) ToWorkerPayload() map[string]interface{} {
 		}
 	}
 
-	// Phase-2 voiceover_paths[] merge strategy (Phase 2 of the
-	// render-manifest plan): the per-scene voiceover.url is the
-	// SOURCE OF TRUTH, but the legacy worker consumer still reads
-	// from the top-level voiceover_paths[] array. To keep both
-	// paths consistent we merge both sources into a single deduped
-	// array, with per-scene URLs FIRST (the authoritative source)
-	// and top-level r.Voiceover.Paths SECOND (preserved for the
-	// creator-machine path that doesn't yet use per-scene nested).
-	//
-	// Note: scenes_json is set above regardless of voiceover; the
-	// new worker consumers should read from scenes_json[i].voiceover.url
-	// directly (no positional coupling). The merged voiceover_paths[]
-	// is purely a back-compat shim for legacy worker code.
-	if merged := mergeVoiceoverPaths(r); len(merged) > 0 {
-		m["voiceover_paths"] = merged
-	}
-
 	// Enforce the renderer boundary after all typed overlays. This removes
 	// publication metadata even when it arrived under a legacy raw key or
 	// nested inside delivery_plan entries.
-	stripRendererPublicationFields(m)
-	return m
+	projected, err := contract.RenderOnlyPayload(m)
+	if err != nil {
+		return map[string]interface{}{}
+	}
+	return projected
 }
 
 func stripRendererPublicationFields(payload map[string]interface{}) {

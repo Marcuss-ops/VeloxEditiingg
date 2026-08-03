@@ -24,21 +24,18 @@ func TestCreatorPushAndExternalSubmitConvergeToTheSameCanonicalContract(t *testi
 		IdempotencyKey: jobID,
 		VideoName:      "Equivalence video",
 		ScriptText:     "The same canonical script.",
-		VoiceoverPaths: []string{voiceover},
 		Scenes: []SubmitScene{{
 			Text:            "Equivalence scene",
 			SceneID:         "scene-0",
 			Index:           0,
 			Kind:            "clip",
-			ClipLink:        "velox-asset://clip/equivalence.mp4",
+			Clip:            &SubmitClip{URL: "velox-asset://clip/equivalence.mp4"},
 			DurationSeconds: 5,
 			Voiceover:       &SubmitVoiceover{URL: voiceover, Language: "en"},
+			Subtitles:       &SubmitSubtitles{URL: "velox-asset://subtitle/equivalence.srt", Format: "srt"},
 		}},
 		Layers: []SubmitLayer{{
 			ID: "title", Type: "text", Role: "title", Text: "Equivalence",
-		}},
-		SubtitleTracks: []SubmitSubtitleTrack{{
-			Source: "velox-asset://subtitle/equivalence.srt", Preset: "default",
 		}},
 		AudioTracks: []SubmitAudioTrack{{
 			SourceURL: "velox-asset://audio/equivalence.mp3", Role: "background_music", Volume: 0.2,
@@ -85,26 +82,23 @@ func TestCreatorPushAndExternalSubmitConvergeToTheSameCanonicalContract(t *testi
 	// test must detect drift between the two intake adapters rather than
 	// compare one adapter's output with itself.
 	creatorPayload := map[string]interface{}{
-		"status":          "completed",
-		"job_id":          jobID,
-		"video_name":      "Equivalence video",
-		"script_text":     "The same canonical script.",
-		"voiceover_paths": []interface{}{voiceover},
+		"status":      "completed",
+		"job_id":      jobID,
+		"video_name":  "Equivalence video",
+		"script_text": "The same canonical script.",
 		"scenes": []interface{}{
 			map[string]interface{}{
 				"text":             "Equivalence scene",
 				"scene_id":         "scene-0",
 				"kind":             "clip",
-				"clip_link":        "velox-asset://clip/equivalence.mp4",
+				"clip":             map[string]interface{}{"url": "velox-asset://clip/equivalence.mp4"},
 				"duration_seconds": float64(5),
 				"voiceover":        map[string]interface{}{"url": voiceover, "language": "en"},
+				"subtitles":        map[string]interface{}{"url": "velox-asset://subtitle/equivalence.srt", "format": "srt"},
 			},
 		},
 		"layers": []interface{}{
 			map[string]interface{}{"id": "title", "type": "text", "role": "title", "text": "Equivalence"},
-		},
-		"subtitle_tracks": []interface{}{
-			map[string]interface{}{"source": "velox-asset://subtitle/equivalence.srt", "preset": "default", "font": ""},
 		},
 		"audio_tracks": []interface{}{
 			map[string]interface{}{"source_url": "velox-asset://audio/equivalence.mp3", "role": "background_music", "volume": 0.2},
@@ -133,8 +127,12 @@ func TestCreatorPushAndExternalSubmitConvergeToTheSameCanonicalContract(t *testi
 		t.Fatalf("producer identity unexpectedly collapsed to %q", externalCanonical.SourceProvider)
 	}
 
+	// Creator Push retains its historical top-level compatibility aliases;
+	// compare only the shared canonical render contract here. The external
+	// /api/v1/jobs projection removes these aliases at its own strict boundary.
+	creatorWorker := cloneCanonicalWorkerPayload(creatorCanonical.WorkerPayload)
 	wantWorker := canonicalJSONValue(t, externalCanonical.WorkerPayload)
-	gotWorker := canonicalJSONValue(t, creatorCanonical.WorkerPayload)
+	gotWorker := canonicalJSONValue(t, creatorWorker)
 	if !reflect.DeepEqual(wantWorker, gotWorker) {
 		t.Fatalf("worker payloads diverged:\nexternal=%s\ncreator=%s", mustCanonicalJSON(t, wantWorker), mustCanonicalJSON(t, gotWorker))
 	}
@@ -158,6 +156,17 @@ func TestCreatorPushAndExternalSubmitConvergeToTheSameCanonicalContract(t *testi
 			}
 		}
 	}
+}
+
+func cloneCanonicalWorkerPayload(payload map[string]interface{}) map[string]interface{} {
+	clone := make(map[string]interface{}, len(payload))
+	for key, value := range payload {
+		clone[key] = value
+	}
+	for _, alias := range []string{"voiceover_paths", "subtitle_tracks", "clip_link", "image_link"} {
+		delete(clone, alias)
+	}
+	return clone
 }
 
 func intPointer(value int) *int { return &value }

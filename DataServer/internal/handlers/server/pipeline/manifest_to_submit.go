@@ -113,8 +113,6 @@ func renderManifestToSubmitRequest(base SubmitJobRequest, manifest map[string]in
 	base.Scenes = scenes
 	base.DeliveryPlan = plan
 	base.AudioTracks = audioTracks
-	base.VoiceoverPaths = nil
-	base.SubtitleTracks = nil
 	base.Layers = nil
 	return base, details
 }

@@ -372,13 +372,8 @@ func TestToWorkerPayload_RoundTrip(t *testing.T) {
 		t.Fatalf("parsed scenes: got %+v", parsed)
 	}
 
-	// voiceover_paths should be []string.
-	vp, ok := m["voiceover_paths"].([]string)
-	if !ok {
-		t.Fatalf("voiceover_paths should be []string, got %T", m["voiceover_paths"])
-	}
-	if len(vp) != 1 || vp[0] != "/tmp/voice.mp3" {
-		t.Fatalf("voiceover_paths: got %v", vp)
+	if _, present := m["voiceover_paths"]; present {
+		t.Fatalf("voiceover_paths must not cross the renderer boundary: %v", m["voiceover_paths"])
 	}
 
 	// Publication metadata belongs to the control plane and must not be

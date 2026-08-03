@@ -511,6 +511,17 @@ the typed DTO `DataServer/internal/remoteengine/dto.go::RemotePipelineResult`):
 NOTE: The forward-looking `python3 -c "import yaml; ..."` one-liner and the stale `wc -l 527` from the prior draft were removed. Every claim in this footer is backed by an ACTUAL command run during commit-time verification (captured outputs in `/tmp/velox_openapi_push/*`).
 ## [Unreleased] - 2026-07-28
 
+### `POST /api/v1/jobs`: canonical per-scene asset intake
+
+The external job intake now accepts one canonical scene asset shape: nested
+`scene.clip`, `scene.voiceover`, and `scene.subtitles` objects. The removed
+flat/top-level aliases (`voiceover_paths`, `subtitle_tracks`, `scene.clip_link`,
+and `scene.image_link`) are rejected by strict JSON decoding with
+`invalid_json`; they are no longer projected into the worker payload. Calendar
+jobs emit per-scene clip objects and use top-level `audio_tracks` for global
+voiceover paths. Creator Push compatibility remains separate and unchanged.
+
+
 ### `POST /api/v1/jobs`: optional `manifest_ref` field on the wire
 
 The Master `/api/v1/jobs` contract now accepts an OPTIONAL `manifest_ref`

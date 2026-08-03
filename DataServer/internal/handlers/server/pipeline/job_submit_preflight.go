@@ -62,16 +62,16 @@ func writeIdempotencyKeyError(c *gin.Context, vErr *IdempotencyKeyError) {
 // can disambiguate:
 //
 //   - NOT_FOUND       → target_error_code=DESTINATION_NOT_FOUND
-//                       (id was unknown; producer must re-pick
-//                       from /publishing/targets, never
-//                       invent destinations).
+//     (id was unknown; producer must re-pick
+//     from /publishing/targets, never
+//     invent destinations).
 //   - DISABLED        → target_error_code=BLOCKED_VELOX_DISABLED
-//                       (Velox-side delivery_destinations
-//                       .enabled flipped to 0; remediation is
-//                       `UPDATE delivery_destinations SET
-//                       enabled = 1 WHERE destination_id=...`
-//                       OR re-sync the catalog via
-//                       POST /api/v1/admin/destinations/sync).
+//     (Velox-side delivery_destinations
+//     .enabled flipped to 0; remediation is
+//     `UPDATE delivery_destinations SET
+//     enabled = 1 WHERE destination_id=...`
+//     OR re-sync the catalog via
+//     POST /api/v1/admin/destinations/sync).
 //   - ENABLED         → no detail, enqueue proceeds.
 //
 // The catalog-side BLOCKED_NO_PUBLISHABLE_CHANNEL is owned by

@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"velox-server/internal/taskattempts"
@@ -17,7 +18,11 @@ func TestProjectPayloadForWorker_VersionMatrix(t *testing.T) {
 		"video_name":               "Version matrix",
 		"scenes": []interface{}{
 			map[string]interface{}{
-				"clip_link":        "velox-asset://clip-1",
+				"clip": map[string]interface{}{
+					"asset_id":    "clip-1",
+					"url":         "velox-asset://clip-1",
+					"duration_ms": 5000,
+				},
 				"duration_seconds": 5.0,
 			},
 		},
@@ -45,11 +50,7 @@ func TestProjectPayloadForWorker_VersionMatrix(t *testing.T) {
 			if !ok {
 				t.Fatalf("payload_contract_version type = %T, want JSON number", wire["payload_contract_version"])
 			}
-			for _, legacyKey := range []string{"items", "clips", "video_mode", "parameters", "version"} {
-				if _, ok := wire[legacyKey]; ok {
-					t.Fatalf("canonical wire payload unexpectedly contains legacy %q: %#v", legacyKey, wire)
-				}
-			}
+			assertNoForbiddenWorkerKeys(t, wire)
 			if int(gotVersion) != contract.PayloadContractVersionCanonical {
 				t.Fatalf("payload_contract_version = %v, want %d", gotVersion, contract.PayloadContractVersionCanonical)
 			}
@@ -75,7 +76,14 @@ func TestSendClaimedTaskOffer_UsesWorkerSpecificPayloadContract(t *testing.T) {
 				"payload_contract_version": contract.PayloadContractVersionCanonical,
 				"video_name":               "Task offer",
 				"scenes": []interface{}{
-					map[string]interface{}{"clip_link": "velox-asset://clip-1", "duration_seconds": 5.0},
+					map[string]interface{}{
+						"clip": map[string]interface{}{
+							"asset_id":    "clip-1",
+							"url":         "velox-asset://clip-1",
+							"duration_ms": 5000,
+						},
+						"duration_seconds": 5.0,
+					},
 				},
 			}
 			original := payloadJSONForTest(payload)
@@ -92,11 +100,7 @@ func TestSendClaimedTaskOffer_UsesWorkerSpecificPayloadContract(t *testing.T) {
 				t.Fatal("sendClaimedTaskOffer did not enqueue a TaskOffer")
 			}
 			wire := out.Envelope.GetTaskOffer().GetTaskSpec().AsMap()
-			for _, legacyKey := range []string{"items", "clips", "video_mode", "parameters", "version"} {
-				if _, ok := wire[legacyKey]; ok {
-					t.Fatalf("canonical TaskOffer unexpectedly contains legacy %q: %#v", legacyKey, wire)
-				}
-			}
+			assertNoForbiddenWorkerKeys(t, wire)
 			if got := wire["payload_contract_version"]; got != float64(contract.PayloadContractVersionCanonical) {
 				t.Fatalf("TaskOffer payload_contract_version = %v, want %v", got, float64(contract.PayloadContractVersionCanonical))
 			}
@@ -105,6 +109,35 @@ func TestSendClaimedTaskOffer_UsesWorkerSpecificPayloadContract(t *testing.T) {
 			}
 		})
 	}
+}
+
+func assertNoForbiddenWorkerKeys(t *testing.T, payload map[string]interface{}) {
+	t.Helper()
+	forbidden := map[string]struct{}{}
+	for _, key := range []string{
+		"voiceover_paths", "clip_link", "image_link", "local_path", "bindings",
+		"project_id", "render_spec", "delivery_plan", "publications", "publication_specs",
+		"metadata", "title", "description", "privacy_status", "destination_id", "destination_ids",
+	} {
+		forbidden[key] = struct{}{}
+	}
+	var walk func(interface{}, string)
+	walk = func(value interface{}, path string) {
+		switch typed := value.(type) {
+		case map[string]interface{}:
+			for key, child := range typed {
+				if _, blocked := forbidden[key]; blocked {
+					t.Errorf("forbidden worker key %q at %s", key, path)
+				}
+				walk(child, path+"."+key)
+			}
+		case []interface{}:
+			for index, child := range typed {
+				walk(child, fmt.Sprintf("%s[%d]", path, index))
+			}
+		}
+	}
+	walk(payload, "payload")
 }
 
 func payloadJSONForTest(input map[string]interface{}) string {

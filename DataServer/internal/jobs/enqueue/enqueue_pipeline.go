@@ -134,7 +134,11 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 	// canonical delivery envelope available to callers that extracted it
 	// before this step, but never send routing/control-plane fields to the
 	// renderer.
-	return cloneRendererPayload(out), nil
+	workerPayload, err := cloneRendererPayload(out)
+	if err != nil {
+		return nil, fmt.Errorf("project renderer payload: %w", err)
+	}
+	return workerPayload, nil
 }
 
 // FlattenPipelineResult flattens a nested pipeline result by merging top-level

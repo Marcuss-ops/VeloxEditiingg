@@ -235,7 +235,6 @@ func TestSubmitScene_PerSceneNestedAssets_Roundtrip(t *testing.T) {
 		SceneID:         "scene-intro-001",
 		Index:           0,
 		Kind:            "intro",
-		ClipLink:        "https://legacy.example.com/clip.mp4",
 		DurationSeconds: 7.2,
 		Clip: &SubmitClip{
 			AssetID:     "clip_123",
@@ -282,9 +281,6 @@ func TestSubmitScene_PerSceneNestedAssets_Roundtrip(t *testing.T) {
 	}
 	if back.Kind != original.Kind {
 		t.Errorf("kind: got %q want %q", back.Kind, original.Kind)
-	}
-	if back.ClipLink != original.ClipLink {
-		t.Errorf("clip_link (legacy): got %q want %q", back.ClipLink, original.ClipLink)
 	}
 	if back.DurationSeconds != original.DurationSeconds {
 		t.Errorf("duration_seconds: got %v want %v", back.DurationSeconds, original.DurationSeconds)

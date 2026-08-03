@@ -32,10 +32,6 @@ type SubmitJobRequest struct {
 	// here; matches the creator path's tolerance.
 	ScriptText string `json:"script_text,omitempty"`
 
-	// VoiceoverPaths are voiceover audio references. Each entry MUST
-	// be a velox-asset:// URI or a fully-qualified reachable URL.
-	VoiceoverPaths []string `json:"voiceover_paths,omitempty"`
-
 	// Scenes is the scene list. Each scene drives one composited
 	// segment. At least one scene is required; max MaxScenes (10k).
 	Scenes []SubmitScene `json:"scenes"`
@@ -44,9 +40,6 @@ type SubmitJobRequest struct {
 	// additional media. They are not folded into Scenes, so callers can
 	// submit a video, images and any combination of overlays together.
 	Layers []SubmitLayer `json:"layers,omitempty"`
-
-	// SubtitleTracks are independent from visual layers and media.
-	SubtitleTracks []SubmitSubtitleTrack `json:"subtitle_tracks,omitempty"`
 
 	// AudioTracks are top-level audio layers mixed into the final
 	// render (background music, ambient sound, global narration).
@@ -122,7 +115,7 @@ type SubmitOutput struct {
 //
 // Per-scene enrichment (Phase 2 of the render-manifest plan): the
 // Clip / Voiceover / Subtitles nested objects REPLACE the legacy
-// position-coupled relationship where `voiceover_paths[N]` matched
+// position-coupled relationship where a top-level array matched
 // `scenes[N]` by index (a fragile contract that broke when a scene
 // was reordered or removed). A single scene now carries its own
 // clip / voiceover / subtitles assets directly; the worker reads
@@ -163,15 +156,6 @@ type SubmitScene struct {
 	// caps it at 32 bytes.
 	Kind string `json:"kind,omitempty"`
 
-	// ClipLink is a velox-asset:// clip URI or reachable URL.
-	// PRESERVED for back-compat with legacy clients; when both
-	// ClipLink and Clip.URL are supplied, the nested form wins
-	// (submitRequestToRawPayload's documented tie-break).
-	ClipLink string `json:"clip_link,omitempty"`
-
-	// ImageLink is an optional image fallback.
-	ImageLink string `json:"image_link,omitempty"`
-
 	// DurationSeconds is the intended duration of the scene. Must be
 	// in [MinSceneDurationSeconds, MaxSceneDurationSeconds].
 	DurationSeconds float64 `json:"duration_seconds"`
@@ -192,7 +176,7 @@ type SubmitScene struct {
 
 	// Voiceover is the per-scene voiceover asset reference. Same
 	// pointer semantics as Clip. The nested form REPLACES the legacy
-	// top-level voiceover_paths[N] positional coupling.
+	// top-level positional coupling.
 	Voiceover *SubmitVoiceover `json:"voiceover,omitempty"`
 
 	// Subtitles is the per-scene subtitles asset reference. Same
@@ -255,14 +239,6 @@ type SubmitLayer struct {
 	Animation       string    `json:"animation,omitempty"`
 }
 
-// SubmitSubtitleTrack is a separate subtitle API payload. SRT, VTT and
-// Chronon-compatible JSON sources are supported by the renderer.
-type SubmitSubtitleTrack struct {
-	Source string `json:"source"`
-	Preset string `json:"preset,omitempty"`
-	Font   string `json:"font,omitempty"`
-}
-
 // SubmitAudioTrack is a top-level audio track mixed into the final render.
 // Independent from per-scene voiceover — this is for global audio layers
 // such as background music, ambient sound, or narration beds that span the
@@ -273,11 +249,12 @@ type SubmitSubtitleTrack struct {
 //   - "voiceover"          narration / speech (volume ~1.0)
 //   - "scene_clip_audio"   original audio from timeline clips
 //   - "background_music"   background music bed (volume 0.10-0.18 recommended)
+//   - "sfx"                short transition or impact sound (volume ~0.1)
 //
 // Initial release rules (no loop/fade/ducking yet):
 //   - volume in [0.0, 2.0]
 //   - source_url must match the http(s) + velox-asset:// allow-list
-//   - role must be one of the three canonical values
+//   - role must be one of the four canonical values
 //   - asset_id is optional; when present, the Master resolves it to a URL
 type SubmitAudioTrack struct {
 	AssetID         string  `json:"asset_id,omitempty"`

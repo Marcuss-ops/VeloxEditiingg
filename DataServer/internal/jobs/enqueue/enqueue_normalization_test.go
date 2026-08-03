@@ -212,9 +212,8 @@ func TestBuildPipelinePayload(t *testing.T) {
 			},
 		}
 		payload, _ := BuildPipelinePayload(result)
-		paths, _ := payload["voiceover_paths"].([]string)
-		if len(paths) != 2 {
-			t.Errorf("want 2 paths, got %d", len(paths))
+		if _, present := payload["voiceover_paths"]; present {
+			t.Errorf("renderer payload must not contain positional voiceover_paths: %#v", payload["voiceover_paths"])
 		}
 	})
 
