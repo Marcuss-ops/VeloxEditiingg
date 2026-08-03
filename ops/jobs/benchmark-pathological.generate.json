@@ -1,0 +1,89 @@
+{
+  "idempotency_key": "benchmark-pathological",
+  "job_type": "scene.composite.v1",
+  "template_id": "benchmark.pathological",
+  "template_version": 1,
+  "video_name": "Benchmark pathological",
+  "script_text": "Pathological generator certification workload. This payload is INTENTIONALLY intake-valid (all durations >= 0.1s, all URLs on the velox-asset:// scheme) so the master ACCEPTS it (202) and the failure happens at asset resolution / probe / render time. The expected outcome is a clean terminal FAILED — never a hang, never a corrupted cache. Each scene encodes one pathology: huge asset, slow URL, corrupt clip (sha256 mismatch), unusual codec, missing audio, wrong declared duration (voiceover longer than scene). The missing-font layer forces a render-time failure.",
+  "scenes": [
+    {
+      "scene_id": "path-huge-asset",
+      "index": 0,
+      "kind": "clip",
+      "text": "Pathological scene: asset molto grande.",
+      "duration_seconds": 5,
+      "clip": {"url": "velox-asset://benchmark-pathological/huge-asset-0001", "duration_ms": 5000},
+      "voiceover": {"url": "velox-asset://benchmark-pathological/voiceover-0001", "duration_ms": 5000, "language": "it"}
+    },
+    {
+      "scene_id": "path-slow-url",
+      "index": 1,
+      "kind": "clip",
+      "text": "Pathological scene: URL lento.",
+      "duration_seconds": 5,
+      "clip": {"url": "velox-asset://benchmark-pathological/slow-url-0002", "duration_ms": 5000},
+      "voiceover": {"url": "velox-asset://benchmark-pathological/voiceover-0002", "duration_ms": 5000, "language": "it"}
+    },
+    {
+      "scene_id": "path-corrupt-clip",
+      "index": 2,
+      "kind": "clip",
+      "text": "Pathological scene: clip corrotta (sha256 mismatch).",
+      "duration_seconds": 5,
+      "clip": {"url": "velox-asset://benchmark-pathological/corrupt-clip-0003", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "duration_ms": 5000},
+      "voiceover": {"url": "velox-asset://benchmark-pathological/voiceover-0003", "duration_ms": 5000, "language": "it"}
+    },
+    {
+      "scene_id": "path-wrong-codec",
+      "index": 3,
+      "kind": "clip",
+      "text": "Pathological scene: codec diverso.",
+      "duration_seconds": 5,
+      "clip": {"url": "velox-asset://benchmark-pathological/odd-codec-0004", "duration_ms": 5000},
+      "voiceover": {"url": "velox-asset://benchmark-pathological/voiceover-0004", "duration_ms": 5000, "language": "it"}
+    },
+    {
+      "scene_id": "path-missing-audio",
+      "index": 4,
+      "kind": "clip",
+      "text": "Pathological scene: audio assente (no voiceover object).",
+      "duration_seconds": 5,
+      "clip": {"url": "velox-asset://benchmark-pathological/clip-0005", "duration_ms": 5000}
+    },
+    {
+      "scene_id": "path-wrong-duration",
+      "index": 5,
+      "kind": "clip",
+      "text": "Pathological scene: durata dichiarata errata (voiceover 30s vs scene 5s).",
+      "duration_seconds": 5,
+      "clip": {"url": "velox-asset://benchmark-pathological/clip-0006", "duration_ms": 5000},
+      "voiceover": {"url": "velox-asset://benchmark-pathological/voiceover-0006", "duration_ms": 30000, "language": "it"}
+    }
+  ],
+  "layers": [
+    {
+      "id": "missing-font-layer",
+      "type": "text",
+      "role": "title",
+      "text": "Font mancante",
+      "font": "__NONEXISTENT_FONT__",
+      "font_size": 64,
+      "position": [960, 180],
+      "start_seconds": 0,
+      "duration_seconds": 5
+    }
+  ],
+  "output": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "format": "mp4"
+  },
+  "delivery_plan": [
+    {
+      "destination_id": "drive",
+      "priority": 1,
+      "retry_budget": 0
+    }
+  ]
+}

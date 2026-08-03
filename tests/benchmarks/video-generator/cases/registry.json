@@ -1,9 +1,9 @@
 {
   "schema": "velox.video-generator-certification.v1",
   "cases": [
-    {"id": "minimal", "kind": "correctness_performance", "payload": "minimal.json"},
+    {"id": "minimal", "kind": "correctness_performance", "payload": "../../../../ops/jobs/benchmark-minimal.generate.json"},
     {"id": "five-legendary-boxers", "kind": "representative", "payload": "../../../../ops/jobs/five_legendary_boxers_it.generate.json"},
-    {"id": "heavy", "kind": "scalability", "payload": "heavy.json"},
-    {"id": "pathological", "kind": "resilience", "payload": "pathological.json"}
+    {"id": "heavy", "kind": "scalability", "payload": "../../../../ops/jobs/benchmark-heavy.generate.json"},
+    {"id": "pathological", "kind": "resilience", "payload": "../../../../ops/jobs/benchmark-pathological.generate.json"}
   ]
 }

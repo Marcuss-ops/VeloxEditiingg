@@ -1,0 +1,73 @@
+{
+  "idempotency_key": "benchmark-heavy",
+  "job_type": "scene.composite.v1",
+  "template_id": "benchmark.heavy",
+  "template_version": 1,
+  "video_name": "Benchmark heavy",
+  "script_text": "Heavy generator certification workload. 24 scenes with alternating clip/stock assets, long voiceover, subtitles, background music and a title overlay. Targets RAM growth, temp amplification, concat cost and worker limits.",
+  "scenes": [
+    {"scene_id": "scene-00", "index": 0, "kind": "clip", "text": "Heavy scene 0", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-a-0000", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-a-0000"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0000", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-01", "index": 1, "kind": "clip", "text": "Heavy scene 1", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-b-0001", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-b-0001"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0001", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-02", "index": 2, "kind": "clip", "text": "Heavy scene 2", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-a-0002", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-a-0002"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0002", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-03", "index": 3, "kind": "clip", "text": "Heavy scene 3", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-b-0003", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-b-0003"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0003", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-04", "index": 4, "kind": "clip", "text": "Heavy scene 4", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-a-0004", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-a-0004"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0004", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-05", "index": 5, "kind": "clip", "text": "Heavy scene 5", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-b-0005", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-b-0005"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0005", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-06", "index": 6, "kind": "clip", "text": "Heavy scene 6", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-a-0006", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-a-0006"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0006", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-07", "index": 7, "kind": "clip", "text": "Heavy scene 7", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-b-0007", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-b-0007"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0007", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-08", "index": 8, "kind": "clip", "text": "Heavy scene 8", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-a-0008", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-a-0008"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0008", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-09", "index": 9, "kind": "clip", "text": "Heavy scene 9", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-b-0009", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-b-0009"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0009", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-10", "index": 10, "kind": "clip", "text": "Heavy scene 10", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-a-0010", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-a-0010"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0010", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-11", "index": 11, "kind": "clip", "text": "Heavy scene 11", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-b-0011", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-b-0011"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0011", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-12", "index": 12, "kind": "clip", "text": "Heavy scene 12", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-a-0012", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-a-0012"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0012", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-13", "index": 13, "kind": "clip", "text": "Heavy scene 13", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-b-0013", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-b-0013"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0013", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-14", "index": 14, "kind": "clip", "text": "Heavy scene 14", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-a-0014", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-a-0014"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0014", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-15", "index": 15, "kind": "clip", "text": "Heavy scene 15", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-b-0015", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-b-0015"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0015", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-16", "index": 16, "kind": "clip", "text": "Heavy scene 16", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-a-0016", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-a-0016"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0016", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-17", "index": 17, "kind": "clip", "text": "Heavy scene 17", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-b-0017", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-b-0017"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0017", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-18", "index": 18, "kind": "clip", "text": "Heavy scene 18", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-a-0018", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-a-0018"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0018", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-19", "index": 19, "kind": "clip", "text": "Heavy scene 19", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-b-0019", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-b-0019"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0019", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-20", "index": 20, "kind": "clip", "text": "Heavy scene 20", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-a-0020", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-a-0020"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0020", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-21", "index": 21, "kind": "clip", "text": "Heavy scene 21", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-b-0021", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-b-0021"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0021", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-22", "index": 22, "kind": "clip", "text": "Heavy scene 22", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-a-0022", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-a-0022"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0022", "duration_ms": 8000, "language": "it"}},
+    {"scene_id": "scene-23", "index": 23, "kind": "clip", "text": "Heavy scene 23", "duration_seconds": 8, "clip": {"url": "velox-asset://benchmark-heavy/clip-b-0023", "duration_ms": 8000}, "stock": {"url": "velox-asset://benchmark-heavy/stock-b-0023"}, "stock_fallback": true, "voiceover": {"url": "velox-asset://benchmark-heavy/voiceover-0023", "duration_ms": 8000, "language": "it"}}
+  ],
+  "layers": [
+    {
+      "id": "title-overlay",
+      "type": "text",
+      "role": "title",
+      "text": "Benchmark heavy",
+      "font_size": 72,
+      "position": [960, 120],
+      "start_seconds": 0,
+      "duration_seconds": 192
+    }
+  ],
+  "subtitle_tracks": [
+    {
+      "source": "velox-asset://benchmark-heavy/subtitles-0001",
+      "preset": "default"
+    }
+  ],
+  "audio_tracks": [
+    {
+      "source_url": "velox-asset://benchmark-heavy/music-0001",
+      "role": "background_music",
+      "volume": 0.12,
+      "loop": true
+    }
+  ],
+  "output": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "format": "mp4"
+  },
+  "delivery_plan": [
+    {
+      "destination_id": "drive",
+      "priority": 1,
+      "retry_budget": 3
+    }
+  ]
+}

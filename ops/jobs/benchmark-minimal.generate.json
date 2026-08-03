@@ -1,0 +1,39 @@
+{
+  "idempotency_key": "benchmark-minimal",
+  "job_type": "scene.composite.v1",
+  "template_id": "benchmark.minimal",
+  "template_version": 1,
+  "video_name": "Benchmark minimal",
+  "script_text": "Minimal generator certification workload. One short scene, one short clip, one short voiceover, 1080p output, no stock, no complex layers. Measures fixed scheduling / worker-start / parsing / download / FFmpeg-open / upload overhead.",
+  "scenes": [
+    {
+      "scene_id": "scene-0",
+      "index": 0,
+      "kind": "clip",
+      "text": "Minimal benchmark scene.",
+      "duration_seconds": 5,
+      "clip": {
+        "url": "velox-asset://benchmark-minimal/clip-0001",
+        "duration_ms": 5000
+      },
+      "voiceover": {
+        "url": "velox-asset://benchmark-minimal/voiceover-0001",
+        "duration_ms": 5000,
+        "language": "it"
+      }
+    }
+  ],
+  "output": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "format": "mp4"
+  },
+  "delivery_plan": [
+    {
+      "destination_id": "drive",
+      "priority": 1,
+      "retry_budget": 3
+    }
+  ]
+}
