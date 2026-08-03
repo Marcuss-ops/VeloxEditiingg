@@ -63,6 +63,8 @@ type JobPayloadV2 struct {
 	// Business fields
 	VideoName        string           `json:"video_name"`
 	ScriptText       string           `json:"script_text"`
+	Spec             map[string]any   `json:"spec,omitempty"`
+	Output           map[string]any   `json:"output,omitempty"`
 	RenderManifest   map[string]any   `json:"render_manifest,omitempty"`
 	Assets           []map[string]any `json:"assets,omitempty"`
 	ManifestRef      map[string]any   `json:"manifest_ref,omitempty"`
@@ -155,6 +157,12 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 	}
 	if p.JobType == "" {
 		p.JobType = "process_video"
+	}
+	if spec, ok := raw["spec"].(map[string]any); ok {
+		p.Spec = cloneObject(spec)
+	}
+	if output, ok := raw["output"].(map[string]any); ok {
+		p.Output = cloneObject(output)
 	}
 	if metadata, ok := raw["video_metadata"].(map[string]any); ok {
 		p.VideoMetadata = cloneObject(metadata)
@@ -253,6 +261,12 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 	}
 	if p.ScenesJSON != "" {
 		out["scenes_json"] = p.ScenesJSON
+	}
+	if len(p.Spec) > 0 {
+		out["spec"] = cloneObject(p.Spec)
+	}
+	if len(p.Output) > 0 {
+		out["output"] = cloneObject(p.Output)
 	}
 	if p.TemplateID != "" {
 		out["template_id"] = p.TemplateID

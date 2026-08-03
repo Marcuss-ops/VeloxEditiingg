@@ -331,6 +331,112 @@ func TestSubmitJobE2E_SuccessAndReplay(t *testing.T) {
 	}
 }
 
+// TestSubmitJobE2E_CanonicalRecipePassthrough pins the complete canonical
+// InstaEdit producer contract, POST /api/v1/jobs, through
+// the persisted Job row and final TaskSpec. This intentionally exercises the
+// canonical `/api/v1/jobs` producer contract, not the compatibility BFF
+// `/api/v1/instaedit/jobs`, whose old project_id + render_spec adapter is
+// retained until this passthrough is certified. These values must remain data
+// supplied by the caller rather than being reconstructed from project_id/
+// render_spec or replaced by recipe defaults.
+func TestSubmitJobE2E_CanonicalRecipePassthrough(t *testing.T) {
+	h, db := newSubmitJobE2EStack(t)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
+
+	const idem = "canonical-audit-passthrough-001"
+	body := validSubmitJobBody(idem)
+	body.JobType = "scene.composite.v1"
+	body.TemplateID = "audit.canonical"
+	body.TemplateVersion = 17
+	body.VideoName = "CANONICAL AUDIT"
+	body.Spec = map[string]interface{}{
+		"audit_marker": "CANONICAL SPEC",
+	}
+	body.Output = &SubmitOutput{Width: 1280, Height: 720, FPS: 24, Format: "mp4"}
+
+	w := postSubmitJob(t, r, body)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("canonical POST: want 202, got %d body=%s", w.Code, w.Body.String())
+	}
+	var response map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode canonical response: %v", err)
+	}
+	jobID, ok := response["job_id"].(string)
+	if !ok || jobID == "" {
+		t.Fatalf("canonical response missing job_id: %s", w.Body.String())
+	}
+
+	var videoName, requestJSON string
+	if err := db.DB().QueryRow(
+		`SELECT video_name, request_json FROM jobs WHERE job_id = ?`, jobID,
+	).Scan(&videoName, &requestJSON); err != nil {
+		t.Fatalf("read persisted job: %v", err)
+	}
+	if videoName != body.VideoName {
+		t.Fatalf("jobs.video_name = %q, want %q", videoName, body.VideoName)
+	}
+
+	var persistedJob map[string]interface{}
+	if err := json.Unmarshal([]byte(requestJSON), &persistedJob); err != nil {
+		t.Fatalf("decode jobs.request_json: %v", err)
+	}
+	assertCanonicalRecipeFields(t, "jobs.request_json", persistedJob)
+
+	var taskID, taskSpecJSON string
+	if err := db.DB().QueryRow(
+		`SELECT t.task_id, s.payload_json
+		 FROM tasks t JOIN task_specs s ON s.task_id = t.task_id
+		 WHERE t.job_id = ?`, jobID,
+	).Scan(&taskID, &taskSpecJSON); err != nil {
+		t.Fatalf("read persisted TaskSpec: %v", err)
+	}
+	if taskID == "" {
+		t.Fatal("persisted TaskSpec has empty task_id")
+	}
+	var taskSpec map[string]interface{}
+	if err := json.Unmarshal([]byte(taskSpecJSON), &taskSpec); err != nil {
+		t.Fatalf("decode task_specs.payload_json: %v", err)
+	}
+	assertCanonicalRecipeFields(t, "task_specs.payload_json", taskSpec)
+}
+
+func assertCanonicalRecipeFields(t *testing.T, surface string, payload map[string]interface{}) {
+	t.Helper()
+	if got := payload["job_type"]; got != "scene.composite.v1" {
+		t.Errorf("%s job_type = %v, want scene.composite.v1", surface, got)
+	}
+	if got := payload["template_id"]; got != "audit.canonical" {
+		t.Errorf("%s template_id = %v, want audit.canonical", surface, got)
+	}
+	if got := payload["template_version"]; got != float64(17) && got != 17 {
+		t.Errorf("%s template_version = %v, want 17", surface, got)
+	}
+	if got := payload["video_name"]; got != "CANONICAL AUDIT" {
+		t.Errorf("%s video_name = %v, want CANONICAL AUDIT", surface, got)
+	}
+
+	spec, ok := payload["spec"].(map[string]interface{})
+	if !ok || spec["audit_marker"] != "CANONICAL SPEC" {
+		t.Errorf("%s spec = %#v, want audit_marker=CANONICAL SPEC", surface, payload["spec"])
+	}
+	output, ok := payload["output"].(map[string]interface{})
+	if !ok {
+		t.Errorf("%s output = %#v, want output object", surface, payload["output"])
+		return
+	}
+	for key, want := range map[string]float64{"width": 1280, "height": 720, "fps": 24} {
+		if got := output[key]; got != want && got != int(want) {
+			t.Errorf("%s output.%s = %v, want %v", surface, key, got, want)
+		}
+	}
+	if got := output["format"]; got != "mp4" {
+		t.Errorf("%s output.format = %v, want mp4", surface, got)
+	}
+}
+
 // ── Scenarios 6, 7, 8, 9 — rejection suite ─────────────────────
 
 // TestSubmitJobE2E_ValidationFailures is table-driven.

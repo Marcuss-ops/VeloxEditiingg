@@ -53,7 +53,7 @@ var CanonicalTopLevelKeys = []string{
 	"job_type", "template_id", "template_version", "version", "created_at", "updated_at",
 
 	// Business fields
-	"video_name", "script_text",
+	"video_name", "script_text", "spec", "output",
 	"render_manifest", "assets", "manifest_ref", "manifest_sha256",
 	"render_plan_json", "render_plan_sha256",
 	"scenes_json", "scenes",
@@ -210,10 +210,12 @@ func ValidatePayload(payload map[string]interface{}) error {
 		}
 	}
 
-	if v, ok := payload["video_metadata"]; ok && v != nil {
-		if _, ok := v.(map[string]interface{}); !ok {
-			return fmt.Errorf("%w: %q must be an object (got %T)",
-				ErrShapeAnomaly, "video_metadata", v)
+	for _, field := range []string{"video_metadata", "spec", "output"} {
+		if v, ok := payload[field]; ok && v != nil {
+			if _, ok := v.(map[string]interface{}); !ok {
+				return fmt.Errorf("%w: %q must be an object (got %T)",
+					ErrShapeAnomaly, field, v)
+			}
 		}
 	}
 	for _, field := range []string{"render_manifest", "manifest_ref"} {

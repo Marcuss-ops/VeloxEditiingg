@@ -63,6 +63,17 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 	if req.ScriptText != "" {
 		m["script_text"] = req.ScriptText
 	}
+	if len(req.Spec) > 0 {
+		m["spec"] = req.Spec
+	}
+	if req.Output != nil {
+		m["output"] = map[string]interface{}{
+			"width":  req.Output.Width,
+			"height": req.Output.Height,
+			"fps":    req.Output.FPS,
+			"format": req.Output.Format,
+		}
+	}
 	if req.ResolvedManifest != nil {
 		m["render_manifest"] = req.ResolvedManifest
 	}
