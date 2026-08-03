@@ -183,6 +183,8 @@ func recipeVoiceover(raw map[string]interface{}) *SubmitVoiceover {
 	voiceover := &SubmitVoiceover{
 		AssetID:     firstRecipeString(raw, "asset_id", "voiceover_id"),
 		DriveFileID: firstRecipeString(raw, "drive_file_id"),
+		SHA256:      firstRecipeString(raw, "sha256"),
+		SizeBytes:   int64(recipeFloat(raw["size_bytes"])),
 		DurationMS:  int64(recipeFloat(raw["duration_ms"])),
 		Language:    firstRecipeString(raw, "language"),
 	}

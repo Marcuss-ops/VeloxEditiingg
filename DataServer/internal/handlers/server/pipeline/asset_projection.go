@@ -49,6 +49,9 @@ func voiceoverToMap(v *SubmitVoiceover) map[string]interface{} {
 	if v.SHA256 != "" {
 		out["sha256"] = v.SHA256
 	}
+	if v.SizeBytes > 0 {
+		out["size_bytes"] = v.SizeBytes
+	}
 	if v.DurationMS > 0 {
 		out["duration_ms"] = v.DurationMS
 	}
