@@ -157,6 +157,7 @@ WORKDIR /app
 RUN mkdir -p /app/RemoteCodex/tests/fixtures
 COPY RemoteCodex/native/worker-agent-go/tests/fixtures/engine_selftest_baseline.sha256 \
      /app/RemoteCodex/tests/fixtures/engine_selftest_baseline.sha256
+COPY RemoteCodex/BUNDLE_HASH.txt /app/RemoteCodex/BUNDLE_HASH.txt
 
 # Runtime deps ONLY. Nothing build-time belongs here.
 #   * ca-certificates: outbound TLS (master handshake + Social API / Unity builds remote API).
