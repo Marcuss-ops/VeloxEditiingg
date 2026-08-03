@@ -82,6 +82,7 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 	tr.ReportVersion = 1
 
 	if report != nil {
+		attachWorkerIdentityAndTimings(w, report)
 		tr.ExecutorKey = report.ExecutorKey
 
 		// Build typed execution_metrics. Reports assembled outside TaskRunner

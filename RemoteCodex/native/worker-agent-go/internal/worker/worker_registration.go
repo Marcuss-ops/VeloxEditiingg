@@ -14,6 +14,8 @@ package worker
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"net"
 	"os"
 	"runtime"
 	"strings"
@@ -40,7 +42,7 @@ func (w *Worker) buildHello() controltransport.WorkerHello {
 
 	hello := controltransport.WorkerHello{
 		WorkerID:        w.config.WorkerID,
-		WorkerName:      w.config.WorkerName,
+		WorkerName:      workerDisplayName(hostname),
 		Hostname:        hostname,
 		Version:         w.version,
 		BundleVersion:   w.config.BundleVersion,
@@ -62,6 +64,36 @@ func (w *Worker) buildHello() controltransport.WorkerHello {
 	}
 
 	return hello
+}
+
+// workerDisplayName is intentionally derived at runtime so the master UI and
+// task history identify the physical worker without an operator-maintained
+// alias. The configured worker_id remains the stable routing identity.
+func workerDisplayName(hostname string) string {
+	if strings.TrimSpace(hostname) == "" {
+		hostname, _ = os.Hostname()
+	}
+	ip := "unknown-ip"
+	if conn, err := net.Dial("udp", "8.8.8.8:80"); err == nil {
+		if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok && addr.IP != nil {
+			ip = addr.IP.String()
+		}
+		_ = conn.Close()
+	} else if interfaces, err := net.Interfaces(); err == nil {
+		for _, iface := range interfaces {
+			addrs, _ := iface.Addrs()
+			for _, addr := range addrs {
+				if ipnet, ok := addr.(*net.IPNet); ok && ipnet.IP.To4() != nil && !ipnet.IP.IsLoopback() {
+					ip = ipnet.IP.String()
+					break
+				}
+			}
+			if ip != "unknown-ip" {
+				break
+			}
+		}
+	}
+	return fmt.Sprintf("worker_%s_%s", strings.TrimSpace(hostname), strings.ReplaceAll(ip, ":", "_"))
 }
 
 // capabilitiesMap is the SINGLE source of truth for the worker's
