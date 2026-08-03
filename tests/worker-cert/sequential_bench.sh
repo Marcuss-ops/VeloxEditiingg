@@ -267,6 +267,9 @@ submit_and_poll_job() {
   payload=$(cat <<JSON
 {
   "idempotency_key": "${idem_key}",
+  "job_type": "scene.composite.v1",
+  "template_id": "benchmark.clip-stock",
+  "template_version": 1,
   "video_name": "sequential_bench ${target_worker} run ${run_idx}",
   "script_text": "Benchmark test script for sequential worker evaluation.",
   "placement_pin_worker_id": "${target_worker}",
@@ -289,6 +292,9 @@ submit_and_poll_job() {
       "text":"Bench scene 1 — ${target_worker}",
       "clip_link":"velox-asset://${ASSET_CLIP_A}",
       "duration_seconds":3,
+      "stock_links":["velox-asset://${ASSET_CLIP_A}","velox-asset://${ASSET_CLIP_B}"],
+      "stock_fallback":true,
+      "voiceover":{"url":"velox-asset://${ASSET_VO}","duration_ms":3000,"language":"it"},
       "subtitles": {
         "asset_id":"${BENCH_SUBTITLE_ASSET_ID}",
         "format":"ass",
@@ -297,7 +303,7 @@ submit_and_poll_job() {
         "language":"it"
       }
     },
-    {"text":"Bench scene 2 — ${target_worker}","clip_link":"velox-asset://${ASSET_CLIP_B}","duration_seconds":3}
+    {"text":"Bench scene 2 — ${target_worker}","clip_link":"velox-asset://${ASSET_CLIP_B}","duration_seconds":3,"stock_links":["velox-asset://${ASSET_CLIP_B}","velox-asset://${ASSET_CLIP_A}"],"stock_fallback":true,"voiceover":{"url":"velox-asset://${ASSET_VO}","duration_ms":3000,"language":"it"}}
   ],
   "delivery_plan": [
     {
@@ -636,7 +642,7 @@ cat > "$TMP_OUT" <<JSON
   "destination_id": "${DESTINATION_ID}",
   "media_profile": "stock_clip_voiceover_background_music_ass",
   "asset_uri_scheme": "velox-asset",
-  "video_duration_ms": 6000,
+  "video_duration_ms": 12000,
   "background_music_duration_seconds": ${BENCH_BACKGROUND_MUSIC_DURATION_SECONDS},
   "subtitle_format": "ass",
   "no_drain": $([[ $NO_DRAIN -eq 1 ]] && echo true || echo false),

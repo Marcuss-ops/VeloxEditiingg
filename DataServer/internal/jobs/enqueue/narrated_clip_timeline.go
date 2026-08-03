@@ -3,6 +3,8 @@ package enqueue
 
 import (
 	"fmt"
+	"hash/fnv"
+	"math/rand"
 	"strings"
 
 	sharedmedia "velox-shared/media"
@@ -21,6 +23,7 @@ type audioDurationProbe func(string) float64
 type narratedClipOptions struct {
 	fallbackNarrationClipURLs []string
 	probe                     audioDurationProbe
+	randomSeed                string
 }
 
 // sceneFallbackNarrationClipURLs returns the top-level stock paths
@@ -80,17 +83,17 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 	offsetSeconds := 0.0
 
 	for i, scene := range scenes {
-		narrationURL := sceneNarrationClipURL(scene, opts.fallbackNarrationClipURLs, i)
+		narrationURLs := sceneNarrationClipURLs(scene, opts.fallbackNarrationClipURLs, i)
 		finalClipURL := sceneFinalClipURL(scene)
 		voiceoverURL := sceneVoiceoverURL(scene)
-		if finalClipURL == "" && narrationURL == "" {
+		if finalClipURL == "" && len(narrationURLs) == 0 {
 			return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: clip url is required", i)
 		}
-		if narrationURL == "" {
-			narrationURL = finalClipURL
+		if len(narrationURLs) == 0 {
+			narrationURLs = []string{finalClipURL}
 		}
 		if finalClipURL == "" {
-			finalClipURL = narrationURL
+			finalClipURL = narrationURLs[0]
 		}
 
 		voiceoverDuration, err := resolveSceneVoiceoverDuration(scene, voiceoverURL, probe)
@@ -118,13 +121,36 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 		sceneEntries = append(sceneEntries, normalized)
 
 		if voiceoverURL != "" {
-			items = append(items, map[string]interface{}{
-				"type":     "video",
-				"url":      narrationURL,
-				"duration": voiceoverDuration,
-				"fit":      "contain",
-				"role":     "voiceover_bed",
-			})
+			narrationURLs = shuffledURLs(narrationURLs, opts.randomSeed, i)
+			if len(narrationURLs) == 1 {
+				items = append(items, map[string]interface{}{
+					"type":     "video",
+					"url":      narrationURLs[0],
+					"duration": voiceoverDuration,
+					"fit":      "contain",
+					"role":     "voiceover_bed",
+				})
+			} else {
+				remaining := voiceoverDuration
+				for stockIndex := 0; remaining > 0; stockIndex++ {
+					stockURL := narrationURLs[stockIndex%len(narrationURLs)]
+					stockDuration := sceneNarrationClipDuration(scene, stockURL)
+					if stockDuration > remaining {
+						stockDuration = remaining
+					}
+					items = append(items, map[string]interface{}{
+						"type":     "video",
+						"url":      stockURL,
+						"duration": stockDuration,
+						"fit":      "contain",
+						"role":     "voiceover_bed",
+					})
+					remaining -= stockDuration
+					if stockIndex > 10000 {
+						return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: stock loop exceeded safety limit", i)
+					}
+				}
+			}
 			audioTracks = append(audioTracks, map[string]interface{}{
 				"source_url":        voiceoverURL,
 				"volume":            1.0,
@@ -153,6 +179,103 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 	}
 
 	return sceneEntries, items, payload.DedupeStrings(clips), audioTracks, "clip_stock", nil
+}
+
+// sceneNarrationClipURLs returns the full stock pool. A pool is shuffled per
+// job/scene and then looped by buildNarratedClipPayload until the voiceover
+// duration is covered. The deterministic seed preserves reproducible output
+// while still varying the stock order between jobs.
+func sceneNarrationClipURLs(scene map[string]interface{}, fallbackURLs []string, sceneIndex int) []string {
+	if scene == nil {
+		return append([]string(nil), fallbackURLs...)
+	}
+	var urls []string
+	for _, key := range []string{"stock_links", "stock_clip_links", "drive_links"} {
+		urls = append(urls, payload.NormalizeStringList(scene, key)...)
+	}
+	for _, key := range []string{"stock", "stocks"} {
+		switch value := scene[key].(type) {
+		case []interface{}:
+			for _, item := range value {
+				if object, ok := item.(map[string]interface{}); ok {
+					urls = append(urls, firstStockURL(object))
+				}
+			}
+		case map[string]interface{}:
+			urls = append(urls, firstStockURL(value))
+		}
+	}
+	if bindings, ok := scene["bindings"].(map[string]interface{}); ok {
+		if stock, ok := bindings["stock"]; ok {
+			urls = append(urls, stockURLs(stock)...)
+		}
+	}
+	if len(urls) == 0 {
+		urls = append(urls, fallbackURLs...)
+	}
+	if len(urls) == 0 {
+		if single := sceneNarrationClipURL(scene, fallbackURLs, sceneIndex); single != "" {
+			urls = []string{single}
+		}
+	}
+	return payload.DedupeStrings(urls)
+}
+
+func stockURLs(raw interface{}) []string {
+	switch value := raw.(type) {
+	case []interface{}:
+		var out []string
+		for _, item := range value {
+			if object, ok := item.(map[string]interface{}); ok {
+				out = append(out, firstStockURL(object))
+			}
+		}
+		return out
+	case map[string]interface{}:
+		out := payload.NormalizeStringList(value, "urls", "links", "drive_links", "clip_links")
+		if len(out) > 0 {
+			return out
+		}
+		return []string{firstStockURL(value)}
+	}
+	return nil
+}
+
+func firstStockURL(raw map[string]interface{}) string {
+	return payload.FirstString(raw, "url", "link", "drive_link", "clip_link")
+}
+
+func sceneNarrationClipDuration(scene map[string]interface{}, url string) float64 {
+	if scene == nil {
+		return 0
+	}
+	for _, key := range []string{"stock", "stocks"} {
+		if values, ok := scene[key].([]interface{}); ok {
+			for _, value := range values {
+				if object, ok := value.(map[string]interface{}); ok && firstStockURL(object) == url {
+					if duration := payload.NormalizedDuration(object["duration_seconds"]); duration > 0 {
+						return duration
+					}
+					if duration := payload.NormalizedDuration(object["duration_ms"]); duration > 0 {
+						return duration / 1000
+					}
+				}
+			}
+		}
+	}
+	return 4.0
+}
+
+func shuffledURLs(urls []string, seed string, sceneIndex int) []string {
+	out := append([]string(nil), urls...)
+	if len(out) < 2 {
+		return out
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(fmt.Sprintf("%s:%d", seed, sceneIndex)))
+	rng := rand.New(rand.NewSource(int64(h.Sum64())))
+	rng.Shuffle(len(out), func(i, j int) { out[i], out[j] = out[j], out[i] })
+	return out
 }
 
 // resolveSceneVoiceoverDuration returns the authoritative voiceover

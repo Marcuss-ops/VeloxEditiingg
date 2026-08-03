@@ -114,6 +114,11 @@ func (h *Handlers) SubmitJobBatch() gin.HandlerFunc {
 		var totalScenes int
 		var totalDuration float64
 		for index, item := range batch.Items {
+			if err := NormalizeCanonicalRecipe(&item); err != nil {
+				results[index] = SubmitJobBatchItemResult{Index: index, IdempotencyKey: item.IdempotencyKey, Status: "rejected", Errors: []string{err.Error()}}
+				continue
+			}
+			batch.Items[index] = item
 			totalScenes += len(item.Scenes)
 			for _, scene := range item.Scenes {
 				totalDuration += scene.DurationSeconds

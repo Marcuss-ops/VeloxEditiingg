@@ -50,7 +50,7 @@ var CanonicalTopLevelKeys = []string{
 	// Lifecycle / canonical identity
 	"contract_version", "payload_contract_version",
 	"job_id", "job_run_id", "correlation_id",
-	"job_type", "version", "created_at", "updated_at",
+	"job_type", "template_id", "template_version", "version", "created_at", "updated_at",
 
 	// Business fields
 	"video_name", "script_text",
@@ -63,7 +63,7 @@ var CanonicalTopLevelKeys = []string{
 	"audio_tracks", "subtitle_tracks",
 	"video_metadata",
 	"audio_language_for_srt",
-	"video_mode", "output_path",
+	"video_mode", "effect", "orientation", "output_path",
 	"drive_output_folder",
 	"channel_id", "output_video_id",
 	"scene_image_paths", "image_source_map",

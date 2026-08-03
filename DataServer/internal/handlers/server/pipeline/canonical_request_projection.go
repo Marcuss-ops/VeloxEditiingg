@@ -21,11 +21,19 @@ func (h *Handlers) NormalizeExternalJobSubmission(req SubmitJobRequest) *Canonic
 	return &CanonicalCompletedPayload{
 		SourceProvider:   ExternalAPISourceProvider,
 		SourceJobID:      req.IdempotencyKey,
-		TargetExecutorID: JobSubmitTargetExecutorID,
+		TargetExecutorID: targetExecutorForJobType(req.JobType),
 		WorkerPayload:    workerPayload,
 		DeliveryPlan:     deliveryplan.ExtractEnvelope(rawPayload),
 		PublicationSpecs: projectPublicationSpecs(req.Publications),
 	}
+}
+
+func targetExecutorForJobType(jobType string) string {
+	// Recipe names are intentionally decoupled from worker executor IDs.
+	// Until dedicated executors are registered, all supported recipes compile
+	// through the existing scene composite worker.
+	_ = jobType
+	return JobSubmitTargetExecutorID
 }
 
 // projectPublicationSpecs converts intake DTOs into the canonical control-plane

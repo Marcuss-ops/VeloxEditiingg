@@ -1,0 +1,13 @@
+{
+  "idempotency_key": "benchmark-pathological",
+  "job_type": "clip.stock.v1",
+  "template_id": "benchmark.pathological",
+  "template_version": 1,
+  "video_name": "Benchmark pathological",
+  "script_text": "This workload must fail validation or asset resolution cleanly.",
+  "scenes": [
+    {"scene_id":"bad-duration","index":0,"text":"Invalid duration","duration_seconds":0,"clip":{"url":"velox-asset://__CORRUPT_ASSET__"},"voiceover":{"url":"velox-asset://__MISSING_VOICEOVER__","duration_ms":10000,"language":"it"}},
+    {"scene_id":"bad-url","index":1,"text":"Unsupported local input","duration_seconds":5,"clip":{"url":"file:///tmp/corrupt.mp4"},"voiceover":{"url":"/tmp/missing.mp3","duration_ms":5000,"language":"it"}}
+  ],
+  "output": {"width": 1920, "height": 1080, "fps": 30, "format": "mp4"}
+}

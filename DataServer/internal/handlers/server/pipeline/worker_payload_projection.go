@@ -44,6 +44,18 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 		"status": "completed",
 		"job_id": strings.TrimSpace(req.IdempotencyKey),
 	}
+	if req.JobType != "" {
+		m["job_type"] = strings.TrimSpace(req.JobType)
+	}
+	if req.TemplateID != "" {
+		m["template_id"] = strings.TrimSpace(req.TemplateID)
+	}
+	if req.TemplateVersion > 0 {
+		m["template_version"] = req.TemplateVersion
+	}
+	if mode := rendererModeForJobType(req.JobType); mode != "" {
+		m["video_mode"] = mode
+	}
 
 	if req.VideoName != "" {
 		m["video_name"] = strings.TrimSpace(req.VideoName)
@@ -110,6 +122,15 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 			// coupling with top-level voiceover_paths[]).
 			if s.Clip != nil {
 				scene["clip"] = clipToMap(s.Clip)
+			}
+			if s.Stock != nil {
+				scene["stock"] = clipToMap(s.Stock)
+			}
+			if len(s.StockLinks) > 0 {
+				scene["stock_links"] = append([]string(nil), s.StockLinks...)
+			}
+			if s.StockFallback {
+				scene["stock_fallback"] = true
 			}
 			if s.Voiceover != nil {
 				scene["voiceover"] = voiceoverToMap(s.Voiceover)
@@ -186,4 +207,12 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 	}
 
 	return m
+}
+
+func rendererModeForJobType(jobType string) string {
+	recipe, ok := ResolveRecipe(jobType)
+	if !ok {
+		return ""
+	}
+	return recipe.RendererMode
 }

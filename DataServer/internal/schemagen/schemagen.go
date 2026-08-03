@@ -10,10 +10,10 @@
 // project's wire contracts — no new dependency added):
 //
 //   - required               → emits the field name into the parent
-//                              schema's `required` array.
+//     schema's `required` array.
 //   - max=N / min=N          → string → maxLength/minLength;
-//                              numeric → maximum/minimum;
-//                              array   → maxItems/minItems.
+//     numeric → maximum/minimum;
+//     array   → maxItems/minItems.
 //   - len=N                  → string/array → sets both min/max + length.
 //   - oneof=a b c            → enum: [a, b, c].
 //   - gte=N / lte=N          → numeric inclusive → minimum/maximum.
@@ -256,7 +256,13 @@ func setTypeFromGo(t reflect.Type, out map[string]any, reg map[string]bool) {
 	case reflect.Map:
 		out["type"] = "object"
 		if t.Key().Kind() == reflect.String {
-			valSchema, _ := fieldSchema(t.Elem(), "", reg)
+			// map[string]any is an intentionally open JSON object. An
+			// interface value must not be rendered as type: object because
+			// recipe specs legitimately contain strings, arrays and numbers.
+			valSchema := map[string]any{}
+			if t.Elem().Kind() != reflect.Interface {
+				valSchema, _ = fieldSchema(t.Elem(), "", reg)
+			}
 			out["additionalProperties"] = valSchema
 		} else {
 			out["additionalProperties"] = true

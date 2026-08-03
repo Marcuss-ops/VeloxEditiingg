@@ -54,6 +54,8 @@ type JobPayloadV2 struct {
 	JobRunID               string `json:"job_run_id"`
 	CorrelationID          string `json:"correlation_id"`
 	JobType                string `json:"job_type"`
+	TemplateID             string `json:"template_id,omitempty"`
+	TemplateVersion        int    `json:"template_version,omitempty"`
 	Version                string `json:"version"`
 	CreatedAt              string `json:"created_at"`
 	UpdatedAt              string `json:"updated_at"`
@@ -126,7 +128,9 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 		JobID:                  payload.FirstString(raw, "job_id", "script_id"),
 		JobRunID:               payload.FirstString(raw, "job_run_id", "run_id"),
 		CorrelationID:          payload.FirstString(raw, "correlation_id"),
-		JobType:                "process_video",
+		JobType:                payload.FirstString(raw, "job_type"),
+		TemplateID:             payload.FirstString(raw, "template_id"),
+		TemplateVersion:        payload.EnsureInt(raw["template_version"], 0),
 		Version:                "v2",
 		CreatedAt:              payload.EnsureRFC3339(payload.FirstString(raw, "created_at"), now),
 		UpdatedAt:              payload.EnsureRFC3339(payload.FirstString(raw, "updated_at"), now),
@@ -148,6 +152,9 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 		Source:                 payload.FirstString(raw, "source"),
 		Status:                 "PENDING",
 		DeliveryPlan:           raw["delivery_plan"],
+	}
+	if p.JobType == "" {
+		p.JobType = "process_video"
 	}
 	if metadata, ok := raw["video_metadata"].(map[string]any); ok {
 		p.VideoMetadata = cloneObject(metadata)
@@ -246,6 +253,12 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 	}
 	if p.ScenesJSON != "" {
 		out["scenes_json"] = p.ScenesJSON
+	}
+	if p.TemplateID != "" {
+		out["template_id"] = p.TemplateID
+	}
+	if p.TemplateVersion > 0 {
+		out["template_version"] = p.TemplateVersion
 	}
 	if len(p.RenderManifest) > 0 {
 		out["render_manifest"] = cloneObject(p.RenderManifest)

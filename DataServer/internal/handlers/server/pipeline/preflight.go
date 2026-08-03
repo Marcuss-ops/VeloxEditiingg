@@ -25,6 +25,10 @@ func (h *Handlers) ValidateJob() gin.HandlerFunc {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error_code": vErr.Code, "details": gin.H{"path": "idempotency_key", "reason": vErr.Reason}})
 			return
 		}
+		if err := NormalizeCanonicalRecipe(&req); err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error_code": "UNSUPPORTED_RECIPE", "error": err.Error()})
+			return
+		}
 		if vErr, bad := ValidateSubmitJobRequest(req); bad {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error_code": vErr.Code, "message": vErr.Message, "details": vErr.Details})
 			return
@@ -43,6 +47,10 @@ func (h *Handlers) EstimateJob() gin.HandlerFunc {
 		var req SubmitJobRequest
 		if err := decodeStrictJSON(c.Request.Body, &req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error_code": "INVALID_JSON", "error": err.Error()})
+			return
+		}
+		if err := NormalizeCanonicalRecipe(&req); err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error_code": "UNSUPPORTED_RECIPE", "error": err.Error()})
 			return
 		}
 		if vErr, bad := ValidateSubmitJobRequest(req); bad {
@@ -64,6 +72,10 @@ func (h *Handlers) PreviewPublication() gin.HandlerFunc {
 		var req SubmitJobRequest
 		if err := decodeStrictJSON(c.Request.Body, &req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error_code": "INVALID_JSON", "error": err.Error()})
+			return
+		}
+		if err := NormalizeCanonicalRecipe(&req); err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error_code": "UNSUPPORTED_RECIPE", "error": err.Error()})
 			return
 		}
 		if vErr, bad := ValidateSubmitJobRequest(req); bad {

@@ -62,6 +62,15 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 		// carry the same canonical value into the resolver, response, and
 		// logs so retries with surrounding whitespace cannot diverge.
 		req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
+		if err := NormalizeCanonicalRecipe(&req); err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"ok":      false,
+				"error":   "unsupported_recipe",
+				"message": err.Error(),
+				"details": []gin.H{{"path": "job_type/spec", "issue": "invalid_recipe"}},
+			})
+			return
+		}
 
 		// SubmitJob-level validation: video_name byte-length, scenes
 		// count + each scene (text, duration bounds), each delivery

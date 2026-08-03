@@ -473,6 +473,42 @@ func TestBuildNarratedClipPayload_FallbackPoolCoveredBySceneIndex(t *testing.T) 
 	}
 }
 
+func TestBuildNarratedClipPayload_MultipleStockRandomLoopCoversVoiceover(t *testing.T) {
+	t.Parallel()
+	scene := map[string]interface{}{
+		"voiceover_link":              "https://voice/long.mp3",
+		"voiceover_duration_seconds":  10.0,
+		"clip_link":                   "https://clip/final.mp4",
+		"stock_links":                 []interface{}{"https://stock/a.mp4", "https://stock/b.mp4"},
+		"final_clip_duration_seconds": 1.0,
+	}
+	_, itemsA, _, _, _, err := buildNarratedClipPayload([]map[string]interface{}{scene}, narratedClipOptions{randomSeed: "job-a"})
+	if err != nil {
+		t.Fatalf("first build: %v", err)
+	}
+	_, itemsB, _, _, _, err := buildNarratedClipPayload([]map[string]interface{}{scene}, narratedClipOptions{randomSeed: "job-a"})
+	if err != nil {
+		t.Fatalf("second build: %v", err)
+	}
+	var stockDuration float64
+	stockItems := 0
+	for i := range itemsA {
+		if itemsA[i]["role"] == "voiceover_bed" {
+			stockItems++
+			stockDuration += asFloat(itemsA[i]["duration"])
+		}
+		if itemsA[i]["url"] != itemsB[i]["url"] || itemsA[i]["duration"] != itemsB[i]["duration"] {
+			t.Fatalf("same seed produced different stock timeline: A=%#v B=%#v", itemsA, itemsB)
+		}
+	}
+	if stockItems < 3 {
+		t.Fatalf("stock items = %d, want looped multi-stock timeline", stockItems)
+	}
+	if stockDuration != 10.0 {
+		t.Fatalf("stock duration = %v, want exactly voiceover duration 10", stockDuration)
+	}
+}
+
 // =====================================================================
 // Scene URL helpers: priority order for aliases. Pinned explicitly so
 // future renames of one alias don't silently invert the priority.

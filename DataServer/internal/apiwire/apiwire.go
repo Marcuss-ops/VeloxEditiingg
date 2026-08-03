@@ -52,6 +52,11 @@ package apiwire
 // format and the schemagen doesn't know how to express the
 // http(s) + velox-asset:// scheme choice cleanly.
 type SubmitJobRequest struct {
+	JobType          string                    `json:"job_type,omitempty"`
+	TemplateID       string                    `json:"template_id,omitempty"`
+	TemplateVersion  int                       `json:"template_version,omitempty"`
+	Spec             map[string]any            `json:"spec,omitempty"`
+	Output           *SubmitOutput             `json:"output,omitempty"`
 	IdempotencyKey   string                    `json:"idempotency_key" validate:"required,min=1,max=128"`
 	VideoName        string                    `json:"video_name,omitempty" validate:"omitempty,max=300"`
 	ScriptText       string                    `json:"script_text,omitempty"`
@@ -76,6 +81,13 @@ type SubmitJobRequest struct {
 	// see the actual worker_id that executed the job, providing
 	// authoritative placement verification.
 	PlacementPinWorkerID string `json:"placement_pin_worker_id,omitempty" validate:"omitempty,max=128"`
+}
+
+type SubmitOutput struct {
+	Width  int    `json:"width,omitempty" validate:"omitempty,gte=1,lte=16384"`
+	Height int    `json:"height,omitempty" validate:"omitempty,gte=1,lte=16384"`
+	FPS    int    `json:"fps,omitempty" validate:"omitempty,gte=1,lte=240"`
+	Format string `json:"format,omitempty" validate:"omitempty,oneof=mp4 mov webm"`
 }
 
 // SubmitPublishingTarget selects one server-resolved channel or group.
@@ -293,6 +305,9 @@ type SubmitScene struct {
 	ImageLink       string           `json:"image_link,omitempty" validate:"omitempty,max=2048"`
 	DurationSeconds float64          `json:"duration_seconds" validate:"required,gte=0.1,lte=86400"`
 	Clip            *SubmitClip      `json:"clip,omitempty" validate:"omitempty"`
+	Stock           *SubmitClip      `json:"stock,omitempty" validate:"omitempty"`
+	StockLinks      []string         `json:"stock_links,omitempty"`
+	StockFallback   bool             `json:"stock_fallback,omitempty"`
 	Voiceover       *SubmitVoiceover `json:"voiceover,omitempty" validate:"omitempty"`
 	Subtitles       *SubmitSubtitles `json:"subtitles,omitempty" validate:"omitempty"`
 }

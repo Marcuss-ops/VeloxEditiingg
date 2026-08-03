@@ -8,6 +8,15 @@ package pipeline
 const MaxSubmitJobBatchItems = 50
 
 type SubmitJobRequest struct {
+	// Canonical recipe envelope. Existing scene fields remain the typed
+	// projection used by the renderer; spec is accepted only as the input
+	// recipe body and is normalized before validation/enqueue.
+	JobType         string                 `json:"job_type,omitempty"`
+	TemplateID      string                 `json:"template_id,omitempty"`
+	TemplateVersion int                    `json:"template_version,omitempty"`
+	Spec            map[string]interface{} `json:"spec,omitempty"`
+	Output          *SubmitOutput          `json:"output,omitempty"`
+
 	// IdempotencyKey is required. 1..128 bytes after UTF-8 trim, valid
 	// UTF-8, no control bytes, no ':' or '%' separators. See
 	// ValidateIdempotencyKey in idempotency_validation.go for the
@@ -96,6 +105,14 @@ type SubmitJobRequest struct {
 	ResolvedManifestSHA256 string                 `json:"-"`
 }
 
+// SubmitOutput contains renderer output constraints shared by every recipe.
+type SubmitOutput struct {
+	Width  int    `json:"width,omitempty"`
+	Height int    `json:"height,omitempty"`
+	FPS    int    `json:"fps,omitempty"`
+	Format string `json:"format,omitempty"`
+}
+
 // SubmitScene is a single scene in the simplified job submission format.
 //
 // Field validation rules — submitted scenes MUST satisfy:
@@ -163,6 +180,15 @@ type SubmitScene struct {
 	// render-manifest plan). Pointer nil = "no clip for this scene".
 	// Pointer non-nil with empty body = rejected with aggregated 422.
 	Clip *SubmitClip `json:"clip,omitempty"`
+
+	// Stock is an optional secondary/fallback visual for recipe-driven
+	// composite jobs. It is kept separate from Clip so the compiler can
+	// preserve the primary clip and the stock fallback independently.
+	Stock *SubmitClip `json:"stock,omitempty"`
+	// StockLinks is the supplemental clip pool. It is shuffled per
+	// job/scene and cycled until the scene voiceover ends.
+	StockLinks    []string `json:"stock_links,omitempty"`
+	StockFallback bool     `json:"stock_fallback,omitempty"`
 
 	// Voiceover is the per-scene voiceover asset reference. Same
 	// pointer semantics as Clip. The nested form REPLACES the legacy
