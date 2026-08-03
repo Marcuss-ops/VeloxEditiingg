@@ -212,7 +212,10 @@ func allowedMIME(kind Kind, mimeType string, data []byte) bool {
 		return strings.HasPrefix(mimeType, "video/")
 	}
 	if kind == KindAudio || kind == KindVoiceover {
-		return strings.HasPrefix(mimeType, "audio/")
+		// Some providers deliver music beds in a video container with an
+		// embedded audio stream (for example MP4/AAC). ffprobe below still
+		// validates the media before it is accepted as an audio input.
+		return strings.HasPrefix(mimeType, "audio/") || mimeType == "video/mp4"
 	}
 	return len(data) > 0
 }
