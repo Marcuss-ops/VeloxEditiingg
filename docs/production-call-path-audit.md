@@ -121,6 +121,28 @@ La ricerca dei call site produttivi ha evidenziato:
 - `audittrail.AppendAuditEvent`: schema e repository presenti, ma nessun
   chiamante produttivo per gli eventi di job/delivery/publication richiesti.
 
+## Audit rimozione endpoint legacy InstaEdit — 2026-08-03
+
+La verifica richiesta dopo la certificazione canonica ha controllato la route
+`POST /api/v1/velox/jobs` e i simboli associati (`SubmitLegacy`,
+adaptLegacyRequest, validateLegacyRequest, `SubmissionResult.Legacy`). Nella
+working tree di `main` corrente non è presente alcuna di queste route o
+implementazioni: il percorso montato è quello canonico sotto
+`/api/v1/instaedit/jobs`.
+
+È stata aggiunta una regressione in
+`DataServer/cmd/server/router_instaedit_failfast_test.go` che verifica, quando
+il gruppo InstaEdit è configurato, la presenza della route canonica e il
+mancato montaggio della vecchia POST `/api/v1/velox/jobs`.
+
+La metrica richiesta `legacy_job_endpoint_usage_total` non è presente nel
+repository e non è disponibile alcun endpoint Prometheus configurato nella
+working tree locale. Di conseguenza non è possibile certificare un valore
+`accepted = 0`, né ricostruire traffico storico o dichiarare assenza di
+client esterni. Questo è un limite dell'evidenza disponibile, non una
+misurazione di traffico zero; l'eventuale verifica residua richiede accesso
+alla sorgente Prometheus/telemetria dell'ambiente operativo.
+
 ## Sequenza autorizzata dopo questo audit
 
 1. chiudere soltanto i bypass reali della matrice;

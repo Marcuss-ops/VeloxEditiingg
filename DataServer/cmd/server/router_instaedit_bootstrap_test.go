@@ -52,7 +52,7 @@ func newRouterWithInstaEditBundle(t *testing.T, ie InstaEditRouteDeps) (*gin.Eng
 	}
 
 	bundle := RouterBundle{
-		Metrics: MetricsRouteDeps{Registry: metrics.NewRegistry()},
+		Metrics:   MetricsRouteDeps{Registry: metrics.NewRegistry()},
 		InstaEdit: ie,
 	}
 
@@ -115,6 +115,9 @@ func TestNewRouter_InstaEditEnabledAndWired_MountsRoutes(t *testing.T) {
 	found := false
 	editorFound := false
 	for _, route := range router.Routes() {
+		if route.Method == "POST" && route.Path == "/api/v1/velox/jobs" {
+			t.Fatal("legacy POST /api/v1/velox/jobs route must not be mounted")
+		}
 		if route.Path == "/api/v1/instaedit/jobs" {
 			found = true
 		}

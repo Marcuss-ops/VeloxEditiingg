@@ -5,8 +5,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/handlers/server/darkeditor"
-	"velox-server/internal/instaeditauth"
 	instaedithandler "velox-server/internal/handlers/server/instaedit"
+	"velox-server/internal/instaeditauth"
 )
 
 func TestRegisterInstaEditRoutes_DisabledWhenVerifierNil(t *testing.T) {
@@ -56,7 +56,9 @@ func TestRegisterInstaEditRoutes_SucceedsWithService(t *testing.T) {
 	for _, route := range r.Routes() {
 		if route.Path == "/api/v1/instaedit/jobs" {
 			found = true
-			break
+		}
+		if route.Method == "POST" && route.Path == "/api/v1/velox/jobs" {
+			t.Fatal("legacy POST /api/v1/velox/jobs route must not be mounted")
 		}
 	}
 	if !found {
