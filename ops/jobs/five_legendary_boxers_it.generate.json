@@ -6,6 +6,12 @@
   "audio_language_for_srt": "it",
   "render_video": true,
   "save_to_db": true,
+  "delivery_plan": [
+    {
+      "destination_id": "five_boxers_test_drive",
+      "retry_budget": 3
+    }
+  ],
   "fit": "contain",
   "video_mode": "clip_stock",
   "audio_tracks": [
