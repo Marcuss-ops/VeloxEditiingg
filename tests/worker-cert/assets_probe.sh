@@ -238,34 +238,60 @@ fi
 # ─── Submit probe job (1 scene, all 4 asset types) ─────────────────────────
 EPOCH=$(date +%s)
 IDEM_KEY="assets-probe-${TARGET_WORKER_ID}-${EPOCH}"
-# target_executor_id=scene.composite.v1@1 explicit; voiceover_paths +
-# clip_link + subtitle_paths (extension) + image_paths (extension) — submit
-# payload uses ALL 4 asset types so a single run probes them all. JSON
-# fields: voiceover_paths (top), clip_link (per-scene), subtitle_paths
-# (per-scene, optional), image_paths (per-scene, optional) — per the
-# canonical submit schema observed in smoke_one.sh + job_submit_e2e_happy_path_test.go.
-PAYLOAD=$(cat <<JSON
-{
-  "idempotency_key": "${IDEM_KEY}",
-  "video_name": "assets_probe for ${TARGET_WORKER_ID}@${EPOCH}",
-  "project_id": "worker-cert-assets-probe",
-  "target_executor_id": "scene.composite.v1@1",
-  "voiceover_paths": ["velox-asset://${ASSET_VO}"],
-  "scenes": [
-    {
-      "text": "Assets-probe scene for ${TARGET_WORKER_ID}",
-      "clip_link": "velox-asset://${ASSET_CLIP}",
-      "subtitle_paths": ["velox-asset://${ASSET_SUB}"],
-      "image_paths": ["velox-asset://${ASSET_IMAGE}"],
-      "duration_seconds": 3
-    }
-  ],
-  "delivery_plan": [
-    {"destination_id":"${PROBE_DESTINATION_ID}","priority":100,"retry_budget":1}
-  ]
-}
-JSON
-)
+# Build the public request through the shared canonical producer. The
+# subtitle remains scene-local and the image is an independent canonical
+# layer; neither uses the old positional/top-level aliases.
+TMP_PAYLOAD=$(mktemp)
+if ! python3 "${SCRIPT_DIR}/build_real_payload.py" \
+      --fixtures "$ASSETS_FILE" \
+      --worker-id "$TARGET_WORKER_ID" \
+      --destination "$PROBE_DESTINATION_ID" \
+      --scenes-count 1 \
+      --duration-per-scene 3 \
+      --strict \
+      --output "$TMP_PAYLOAD" >/dev/null 2>&1; then
+  log_error "canonical assets probe payload build failed"
+  rm -f "$TMP_PAYLOAD"
+  exit 4
+fi
+PAYLOAD=$(jq --arg idem "$IDEM_KEY" \
+                  --arg video "assets_probe for ${TARGET_WORKER_ID}@${EPOCH}" \
+                  --arg subtitle "$ASSET_SUB" \
+                  --arg image "$ASSET_IMAGE" \
+  '.idempotency_key = $idem
+   | .video_name = $video
+   | .scenes[0].subtitles = {
+       asset_id: $subtitle,
+       url: ("velox-asset://" + $subtitle),
+       format: "srt",
+       language: "it"
+     }
+   | .layers = [{
+       id: "assets-probe-image",
+       type: "image",
+       asset: ("velox-asset://" + $image),
+       source: ("velox-asset://" + $image),
+       duration_seconds: 3
+     }]' "$TMP_PAYLOAD")
+rm -f "$TMP_PAYLOAD"
+
+if ! printf '%s' "$PAYLOAD" | jq -e '
+  (. as $root
+   | (["idempotency_key","job_type","template_id","template_version","video_name","scenes","output","delivery_plan"]
+      | all(. as $key | $root | has($key)))
+   and ($root.scenes | length == 1)
+   and ($root.scenes[0].clip.url | startswith("velox-asset://"))
+   and ($root.scenes[0].voiceover.url | startswith("velox-asset://"))
+   and ($root.scenes[0].subtitles.url | startswith("velox-asset://"))
+   and ($root.layers | any(.type == "image" and (.asset | startswith("velox-asset://"))))
+   and ((["voiceover_paths","subtitle_tracks","clip_link","image_link","image_paths","project_id","target_executor_id"]
+         | any(. as $key | $root | has($key))) | not))
+' >/dev/null; then
+  log_error "canonical assets probe payload validation failed"
+  exit 4
+fi
+
+ASSET_IMAGE="$(printf '%s' "$PAYLOAD" | jq -r '.layers[] | select(.type == "image") | .asset' | sed 's#^velox-asset://##' | head -1)"
 
 TMP_HDRS=$(mktemp); TMP_BODY=$(mktemp)
 curl -sS -m 30 -X POST \
