@@ -21,6 +21,14 @@ var ValidJobTypes = map[string]bool{
 	"process_video": true,
 	"process_audio": true,
 	"health_check":  true,
+	// Canonical Velox recipes are admitted by the worker's versioned
+	// compatibility envelope and execute through the render path. The
+	// executor identity remains scene.composite.v1; these names are the
+	// job-level recipe selected by the single canonical HTTP endpoint.
+	"scene.composite.v1": true,
+	"clip.stock.v1":      true,
+	"scene.image.v1":     true,
+	"slideshow.v1":       true,
 }
 
 var ValidPriorities = map[int]bool{
@@ -133,7 +141,7 @@ func ValidateRenderPlan(plan *RenderPlan) error {
 		})
 	}
 
-	if plan.JobType == "render" || plan.JobType == "process_video" {
+	if isVideoRenderJobType(plan.JobType) {
 		if err := validateAnyClipVoiceover(plan); err != nil {
 			errs = append(errs, err)
 		}
@@ -143,6 +151,15 @@ func ValidateRenderPlan(plan *RenderPlan) error {
 		return errs
 	}
 	return nil
+}
+
+func isVideoRenderJobType(jobType string) bool {
+	switch jobType {
+	case "render", "process_video", "scene.composite.v1", "clip.stock.v1", "scene.image.v1", "slideshow.v1":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateAnyClipVoiceover(plan *RenderPlan) *PlanError {
