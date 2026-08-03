@@ -2,6 +2,7 @@ package assets
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -34,6 +35,20 @@ func (s *AssetService) RewriteRemoteInputPayload(ctx context.Context, payload ma
 				return fmt.Errorf("%s: %w", key, err)
 			}
 		}
+	}
+	if encoded, ok := payload["scenes_json"].(string); ok && strings.TrimSpace(encoded) != "" {
+		var scenes []map[string]interface{}
+		if err := json.Unmarshal([]byte(encoded), &scenes); err != nil {
+			return fmt.Errorf("scenes_json: %w", err)
+		}
+		if err := rewriteRemoteInputValue(ctx, s, scenes); err != nil {
+			return fmt.Errorf("scenes_json: %w", err)
+		}
+		rewritten, err := json.Marshal(scenes)
+		if err != nil {
+			return fmt.Errorf("scenes_json: marshal rewritten scenes: %w", err)
+		}
+		payload["scenes_json"] = string(rewritten)
 	}
 
 	if tracks, ok := payload["audio_tracks"]; ok {
@@ -104,12 +119,19 @@ func rewriteRemoteInputMap(ctx context.Context, s *AssetService, item map[string
 		return err
 	}
 	if nested, ok := item["clip"].(map[string]interface{}); ok {
-		if err := rewriteFirstMapField(ctx, s, nested, inputsecurity.KindClip, "url", "clip_link"); err != nil {
+		if err := rewriteCanonicalAssetMap(ctx, s, nested, inputsecurity.KindClip); err != nil {
 			return err
 		}
 	}
+	if stock, ok := item["stock"]; ok {
+		for _, asset := range mapList(stock) {
+			if err := rewriteCanonicalAssetMap(ctx, s, asset, inputsecurity.KindClip); err != nil {
+				return fmt.Errorf("stock: %w", err)
+			}
+		}
+	}
 	if nested, ok := item["voiceover"].(map[string]interface{}); ok {
-		if err := rewriteFirstMapField(ctx, s, nested, inputsecurity.KindVoiceover, "url", "source", "source_url"); err != nil {
+		if err := rewriteCanonicalAssetMap(ctx, s, nested, inputsecurity.KindVoiceover); err != nil {
 			return err
 		}
 	}
@@ -142,6 +164,46 @@ func rewriteRemoteInputMap(ctx context.Context, s *AssetService, item map[string
 			}
 		}
 	}
+	return nil
+}
+
+func rewriteCanonicalAssetMap(ctx context.Context, s *AssetService, item map[string]interface{}, kind inputsecurity.Kind) error {
+	if item == nil {
+		return nil
+	}
+	raw, ok := item["url"].(string)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return fmt.Errorf("canonical asset url is required")
+	}
+	reference := strings.TrimSpace(raw)
+	if strings.HasPrefix(strings.ToLower(reference), VeloxAssetScheme+"://") {
+		assetID := strings.TrimSpace(strings.TrimPrefix(reference, VeloxAssetScheme+"://"))
+		if assetID == "" {
+			return fmt.Errorf("canonical asset id is required")
+		}
+		if s.repo == nil {
+			return fmt.Errorf("canonical asset registry unavailable")
+		}
+		registered, err := s.Get(ctx, assetID)
+		if err != nil {
+			return fmt.Errorf("lookup canonical asset %q: %w", assetID, err)
+		}
+		if registered == nil || registered.AssetID != assetID {
+			return fmt.Errorf("canonical asset %q is not registered", assetID)
+		}
+		item["asset_id"] = assetID
+		item["url"] = VeloxAssetScheme + "://" + assetID
+		return nil
+	}
+	asset, err := s.ResolveAndRegister(ctx, ResolveAssetCommand{Kind: string(kind), Reference: reference})
+	if err != nil {
+		return err
+	}
+	if asset == nil || asset.AssetID == "" || asset.Reference() == "" {
+		return fmt.Errorf("asset resolver returned incomplete canonical asset")
+	}
+	item["asset_id"] = asset.AssetID
+	item["url"] = asset.Reference()
 	return nil
 }
 

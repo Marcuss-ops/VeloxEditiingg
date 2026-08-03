@@ -40,8 +40,7 @@ func normalizeClipPayload(rawPayload map[string]interface{}) ([]map[string]inter
 func normalizeScenesInput(rawPayload map[string]interface{}, scenes []map[string]interface{}) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
 	if supportsNarratedClipScenes(scenes) {
 		entries, items, clips, generatedAudio, mode, err := buildNarratedClipPayload(scenes, narratedClipOptions{
-			fallbackNarrationClipURLs: sceneFallbackNarrationClipURLs(rawPayload),
-			randomSeed:                payload.FirstString(rawPayload, "job_id", "script_id", "video_name", "title"),
+			randomSeed: payload.FirstString(rawPayload, "job_id", "script_id", "video_name", "title"),
 		})
 		if err != nil {
 			return nil, nil, nil, nil, "", err
@@ -57,7 +56,7 @@ func normalizeScenesInput(rawPayload map[string]interface{}, scenes []map[string
 	items := make([]map[string]interface{}, 0, len(scenes))
 	clips := make([]string, 0, len(scenes))
 	for i, scene := range scenes {
-		url := firstClipURL(scene)
+		url := ingestionSceneClipURL(scene)
 		if url == "" {
 			return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: clip url is required", i)
 		}
@@ -123,6 +122,21 @@ func normalizeScenesJSONInput(rawPayload map[string]interface{}, scenesJSON stri
 // synthetic scene with a default 4s duration; missing URLs are
 // rejected. The clips input form has no use for the raw payload map
 // (no top-level fallback pool to extract), so it is not threaded in.
+// ingestionSceneClipURL is used only by the non-narrated flat-scene adapter.
+// The narrated renderer never calls it and therefore never interprets these
+// aliases; narrated scenes must already contain scene.clip.
+func ingestionSceneClipURL(scene map[string]interface{}) string {
+	if scene == nil {
+		return ""
+	}
+	if clip, ok := scene["clip"].(map[string]interface{}); ok {
+		if url := strings.TrimSpace(payload.FirstString(clip, "url")); url != "" {
+			return url
+		}
+	}
+	return strings.TrimSpace(payload.FirstString(scene, "clip_link", "drive_link", "image_link", "image"))
+}
+
 func normalizeClipsInput(rawClips interface{}) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
 	switch clips := rawClips.(type) {
 	case []interface{}:

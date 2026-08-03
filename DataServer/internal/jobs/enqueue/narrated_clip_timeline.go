@@ -11,65 +11,40 @@ import (
 	"velox-shared/payload"
 )
 
-// audioDurationProbe is the function type for probing audio duration.
+const canonicalAssetURLPrefix = "velox-asset://"
+
+// audioDurationProbe is injected by tests and probes canonical media URLs.
 type audioDurationProbe func(string) float64
 
-// narratedClipOptions bundles the optional knobs for the narrated-clip
-// timeline builder. Top-level stock_clip_paths / intro_clip_paths from
-// the raw payload act as per-scene fallback URLs for the narration
-// bed when a scene does not declare its own stock_link /
-// narration_clip_link. The probe field lets tests substitute the
-// audio-duration detector without touching the canonical code path.
+// narratedClipOptions contains only renderer controls. Asset aliases and
+// ingestion fallbacks do not belong here: ingestion must resolve them into
+// canonical nested assets before this builder is called.
 type narratedClipOptions struct {
-	fallbackNarrationClipURLs []string
-	probe                     audioDurationProbe
-	randomSeed                string
+	probe      audioDurationProbe
+	randomSeed string
 }
 
-// sceneFallbackNarrationClipURLs returns the top-level stock paths
-// declared at the payload root (rather than per-scene bindings). Used
-// when a scene has no explicit `stock_link` / `narration_clip_link`
-// but the operator wants each scene to borrow a stock clip from the
-// payload-level pool. Priority:
-//   - stock_clip_paths (preferred; alias: stock_clip_sources)
-//   - intro_clip_paths (alias: start_clip_paths)
-func sceneFallbackNarrationClipURLs(rawPayload map[string]interface{}) []string {
-	if rawPayload == nil {
-		return nil
-	}
-	if urls := payload.NormalizeStringList(rawPayload, "stock_clip_paths", "stock_clip_sources"); len(urls) > 0 {
-		return urls
-	}
-	return payload.NormalizeStringList(rawPayload, "intro_clip_paths", "start_clip_paths")
-}
-
-// supportsNarratedClipScenes returns true when any scene carries a
-// voiceover binding — signalling the narrated-clip timeline path.
+// supportsNarratedClipScenes selects the narrated path only for canonical
+// scene.voiceover objects with a canonical URL.
 func supportsNarratedClipScenes(scenes []map[string]interface{}) bool {
 	for _, scene := range scenes {
-		if sceneVoiceoverURL(scene) != "" {
+		// Presence of the nested voiceover field selects the narrated
+		// renderer even when malformed, so invalid canonical input fails
+		// closed instead of bypassing strict validation through the flat
+		// adapter. Legacy aliases without scene.voiceover remain outside
+		// this renderer and are rejected by the canonical intake path.
+		if _, present := scene["voiceover"]; present {
 			return true
 		}
 	}
 	return false
 }
 
-// buildNarratedClipPayload is the canonical "voiceover bed + final clip"
-// timeline builder. Voiceover timing must come from an explicit
-// voiceover_duration_seconds value or from probing the actual audio asset.
-// Generic scene duration_seconds is deliberately ignored here because it
-// is a presentation placeholder, not an audio timing contract.
-//
-// Audio contract:
-//   - the voiceover emits an audio_track starting at the scene offset
-//   - the final clip emits an audio_track starting after the voiceover
-//     bed so the original clip audio survives the worker's final mux step
-//
-// opts carries detection-time overrides. probe=nil keeps the default
-// sharedmedia.DetectAudioDurationSecs detector; fallbackNarrationClipURLs
-// (raw payload's top-level stock_clip_paths / intro_clip_paths pool) is
-// the per-scene fallback narration URL pool. Pass narratedClipOptions{}
-// for production defaults.
+// buildNarratedClipPayload builds the canonical voiceover-bed + final-clip
+// timeline. Every asset is read from scene.clip, scene.stock[] or
+// scene.voiceover and must carry a canonical URL. Durations come from the
+// nested duration_ms field or probing that URL. There is deliberately no
+// synthetic four-second duration.
 func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClipOptions) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
 	probe := opts.probe
 	if probe == nil {
@@ -79,197 +54,238 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 	sceneEntries := make([]map[string]interface{}, 0, len(scenes))
 	items := make([]map[string]interface{}, 0, len(scenes)*2)
 	clips := make([]string, 0, len(scenes))
-	audioTracks := make([]map[string]interface{}, 0, len(scenes))
+	audioTracks := make([]map[string]interface{}, 0, len(scenes)*2)
 	offsetSeconds := 0.0
 
 	for i, scene := range scenes {
-		narrationURLs := sceneNarrationClipURLs(scene, opts.fallbackNarrationClipURLs, i)
-		finalClipURL := sceneFinalClipURL(scene)
-		voiceoverURL := sceneVoiceoverURL(scene)
-		if finalClipURL == "" && len(narrationURLs) == 0 {
-			return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: clip url is required", i)
+		clip, err := requiredCanonicalSceneAsset(scene, "clip")
+		if err != nil {
+			return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: %w", i, err)
 		}
-		if len(narrationURLs) == 0 {
-			narrationURLs = []string{finalClipURL}
+		clipURL := assetURL(clip)
+		stock, err := canonicalStockAssets(scene)
+		if err != nil {
+			return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: %w", i, err)
+		}
+		voiceover, err := requiredCanonicalSceneAsset(scene, "voiceover")
+		if err != nil {
+			return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: %w", i, err)
+		}
+		voiceoverURL := assetURL(voiceover)
+		if clipURL == "" && len(stock) == 0 {
+			return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: canonical clip or stock asset url is required", i)
 		}
 
 		voiceoverDuration, err := resolveSceneVoiceoverDuration(scene, voiceoverURL, probe)
 		if err != nil {
 			return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: %w", i, err)
 		}
-		// A narrated scene must not inherit the generic 4s presentation
-		// placeholder. When no explicit final duration is supplied, probe
-		// the actual clip so the complete source video is shown.
-		finalClipDuration := 0.0
-		if finalClipURL != "" {
-			finalClipDuration = resolveSceneFinalClipDurationWithProbe(scene, finalClipURL, probe)
+		clipDuration := 0.0
+		if clipURL != "" {
+			clipDuration, err = resolveSceneFinalClipDurationWithProbe(scene, clipURL, probe)
+			if err != nil {
+				return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: %w", i, err)
+			}
 		}
-		totalDuration := voiceoverDuration + finalClipDuration
 
-		normalized := make(map[string]interface{}, len(scene)+6)
-		for k, v := range scene {
-			normalized[k] = v
+		// Preserve only canonical scene data at the renderer boundary.
+		normalized := map[string]interface{}{}
+		for _, key := range []string{"scene_id", "index", "kind", "text"} {
+			if value, ok := scene[key]; ok && value != nil {
+				normalized[key] = value
+			}
 		}
-		normalized["clip_link"] = finalClipURL
-		normalized["clip_links"] = []string{finalClipURL}
-		normalized["duration_seconds"] = totalDuration
-		normalized["voiceover_duration_seconds"] = voiceoverDuration
-		normalized["final_clip_duration_seconds"] = finalClipDuration
-		if text := payload.FirstString(scene, "text", "description"); text != "" {
-			normalized["text"] = text
+		if clip != nil {
+			normalized["clip"] = clip
 		}
+		if len(stock) > 0 {
+			normalized["stock"] = stock
+		}
+		if voiceover != nil {
+			normalized["voiceover"] = voiceover
+		}
+		normalized["duration_seconds"] = voiceoverDuration + clipDuration
 		sceneEntries = append(sceneEntries, normalized)
 
 		if voiceoverURL != "" {
-			narrationURLs = shuffledURLs(narrationURLs, opts.randomSeed, i)
-			if len(narrationURLs) == 1 {
+			bedAssets := stock
+			if len(bedAssets) == 0 && clip != nil {
+				bedAssets = []map[string]interface{}{clip}
+			}
+			bedAssets = shuffledAssets(bedAssets, opts.randomSeed, i)
+			if len(bedAssets) == 1 {
 				items = append(items, map[string]interface{}{
-					"type":     "video",
-					"url":      narrationURLs[0],
-					"duration": voiceoverDuration,
-					"fit":      "contain",
-					"role":     "voiceover_bed",
+					"type": "video", "url": assetURL(bedAssets[0]),
+					"duration": voiceoverDuration, "fit": "contain", "role": "voiceover_bed",
 				})
 			} else {
 				remaining := voiceoverDuration
 				for stockIndex := 0; remaining > 0; stockIndex++ {
-					stockURL := narrationURLs[stockIndex%len(narrationURLs)]
-					stockDuration := sceneNarrationClipDuration(scene, stockURL)
+					asset := bedAssets[stockIndex%len(bedAssets)]
+					stockDuration, durationErr := canonicalAssetDuration(asset, probe)
+					if durationErr != nil {
+						return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: stock[%d]: %w", i, stockIndex%len(bedAssets), durationErr)
+					}
 					if stockDuration > remaining {
 						stockDuration = remaining
 					}
 					items = append(items, map[string]interface{}{
-						"type":     "video",
-						"url":      stockURL,
-						"duration": stockDuration,
-						"fit":      "contain",
-						"role":     "voiceover_bed",
+						"type": "video", "url": assetURL(asset),
+						"duration": stockDuration, "fit": "contain", "role": "voiceover_bed",
 					})
 					remaining -= stockDuration
 					if stockIndex > 10000 {
-						return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: stock loop exceeded safety limit", i)
+						return nil, nil, nil, nil, "", fmt.Errorf("stock loop exceeded safety limit")
 					}
 				}
 			}
 			audioTracks = append(audioTracks, map[string]interface{}{
-				"source_url":        voiceoverURL,
-				"volume":            1.0,
-				"start_time_offset": offsetSeconds,
-				"duration_seconds":  voiceoverDuration,
-				"role":              "voiceover",
+				"source_url": voiceoverURL, "volume": 1.0,
+				"start_time_offset": offsetSeconds, "duration_seconds": voiceoverDuration,
+				"role": "voiceover",
 			})
 		}
 
-		if finalClipURL != "" {
+		if clipURL != "" {
 			items = append(items, map[string]interface{}{
-				"type":     "video",
-				"url":      finalClipURL,
-				"duration": finalClipDuration,
-				"fit":      "contain",
-				"role":     "scene_clip",
+				"type": "video", "url": clipURL, "duration": clipDuration,
+				"fit": "contain", "role": "scene_clip",
 			})
 			audioTracks = append(audioTracks, map[string]interface{}{
-				"source_url":        finalClipURL,
-				"volume":            1.0,
+				"source_url": clipURL, "volume": 1.0,
 				"start_time_offset": offsetSeconds + voiceoverDuration,
-				"duration_seconds":  finalClipDuration,
-				"role":              "scene_clip_audio",
+				"duration_seconds":  clipDuration, "role": "scene_clip_audio",
 			})
-			clips = append(clips, finalClipURL)
+			clips = append(clips, clipURL)
 		}
-		offsetSeconds += totalDuration
+		offsetSeconds += voiceoverDuration + clipDuration
 	}
 
 	return sceneEntries, items, payload.DedupeStrings(clips), audioTracks, "clip_stock", nil
 }
 
-// sceneNarrationClipURLs returns the full stock pool. A pool is shuffled per
-// job/scene and then looped by buildNarratedClipPayload until the voiceover
-// duration is covered. The deterministic seed preserves reproducible output
-// while still varying the stock order between jobs.
-func sceneNarrationClipURLs(scene map[string]interface{}, fallbackURLs []string, sceneIndex int) []string {
+func canonicalStockAssets(scene map[string]interface{}) ([]map[string]interface{}, error) {
 	if scene == nil {
-		return append([]string(nil), fallbackURLs...)
+		return nil, nil
 	}
-	var urls []string
-	for _, key := range []string{"stock_links", "stock_clip_links", "drive_links"} {
-		urls = append(urls, payload.NormalizeStringList(scene, key)...)
+	rawValue, present := scene["stock"]
+	if !present || rawValue == nil {
+		return nil, nil
 	}
-	for _, key := range []string{"stock", "stocks"} {
-		switch value := scene[key].(type) {
-		case []interface{}:
-			for _, item := range value {
-				if object, ok := item.(map[string]interface{}); ok {
-					urls = append(urls, firstStockURL(object))
-				}
-			}
-		case map[string]interface{}:
-			urls = append(urls, firstStockURL(value))
-		}
-	}
-	if bindings, ok := scene["bindings"].(map[string]interface{}); ok {
-		if stock, ok := bindings["stock"]; ok {
-			urls = append(urls, stockURLs(stock)...)
-		}
-	}
-	if len(urls) == 0 {
-		urls = append(urls, fallbackURLs...)
-	}
-	if len(urls) == 0 {
-		if single := sceneNarrationClipURL(scene, fallbackURLs, sceneIndex); single != "" {
-			urls = []string{single}
-		}
-	}
-	return payload.DedupeStrings(urls)
-}
-
-func stockURLs(raw interface{}) []string {
-	switch value := raw.(type) {
+	var raw []interface{}
+	switch value := rawValue.(type) {
 	case []interface{}:
-		var out []string
+		raw = value
+	case []map[string]interface{}:
 		for _, item := range value {
-			if object, ok := item.(map[string]interface{}); ok {
-				out = append(out, firstStockURL(object))
-			}
+			raw = append(raw, item)
 		}
-		return out
 	case map[string]interface{}:
-		out := payload.NormalizeStringList(value, "urls", "links", "drive_links", "clip_links")
-		if len(out) > 0 {
-			return out
-		}
-		return []string{firstStockURL(value)}
+		raw = []interface{}{value}
+	default:
+		return nil, fmt.Errorf("canonical stock must be an array of asset objects")
 	}
-	return nil
+	out := make([]map[string]interface{}, 0, len(raw))
+	for index, value := range raw {
+		asset, ok := value.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("stock[%d]: canonical asset must be an object", index)
+		}
+		canonical := canonicalAsset(asset)
+		if canonical == nil {
+			return nil, fmt.Errorf("stock[%d]: canonical asset must include asset_id and url", index)
+		}
+		out = append(out, canonical)
+	}
+	return out, nil
 }
 
-func firstStockURL(raw map[string]interface{}) string {
-	return payload.FirstString(raw, "url", "link", "drive_link", "folder_link", "clip_link")
-}
-
-func sceneNarrationClipDuration(scene map[string]interface{}, url string) float64 {
+func sceneAsset(scene map[string]interface{}, key string) map[string]interface{} {
 	if scene == nil {
+		return nil
+	}
+	asset, _ := scene[key].(map[string]interface{})
+	return asset
+}
+
+func requiredCanonicalSceneAsset(scene map[string]interface{}, key string) (map[string]interface{}, error) {
+	if scene == nil {
+		return nil, nil
+	}
+	raw, present := scene[key]
+	if !present {
+		return nil, nil
+	}
+	if raw == nil {
+		return nil, fmt.Errorf("canonical %s asset must be an object", key)
+	}
+	asset, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("canonical %s asset must be an object", key)
+	}
+	canonical := canonicalAsset(asset)
+	if canonical == nil {
+		return nil, fmt.Errorf("canonical %s asset must include asset_id and url", key)
+	}
+	return canonical, nil
+}
+
+func canonicalAsset(raw map[string]interface{}) map[string]interface{} {
+	if raw == nil {
+		return nil
+	}
+	url := strings.TrimSpace(payload.FirstString(raw, "url"))
+	assetID := strings.TrimSpace(payload.FirstString(raw, "asset_id"))
+	if url == "" || assetID == "" {
+		return nil
+	}
+	prefix := canonicalAssetURLPrefix
+	if !strings.HasPrefix(strings.ToLower(url), prefix) || strings.TrimPrefix(url, prefix) != assetID {
+		return nil
+	}
+	out := map[string]interface{}{
+		"asset_id": assetID,
+		"url":      url,
+	}
+	if durationMS := canonicalDurationMS(raw); durationMS > 0 {
+		out["duration_ms"] = durationMS
+	}
+	return out
+}
+
+func assetURL(asset map[string]interface{}) string {
+	if asset == nil {
+		return ""
+	}
+	return strings.TrimSpace(payload.FirstString(asset, "url"))
+}
+
+func canonicalDurationMS(asset map[string]interface{}) int64 {
+	if asset == nil {
 		return 0
 	}
-	for _, key := range []string{"stock", "stocks"} {
-		if values, ok := scene[key].([]interface{}); ok {
-			for _, value := range values {
-				if object, ok := value.(map[string]interface{}); ok && firstStockURL(object) == url {
-					if duration := payload.NormalizedDuration(object["duration_seconds"]); duration > 0 {
-						return duration
-					}
-					if duration := payload.NormalizedDuration(object["duration_ms"]); duration > 0 {
-						return duration / 1000
-					}
-				}
-			}
-		}
+	value := payload.NormalizedDuration(asset["duration_ms"])
+	if value <= 0 {
+		return 0
 	}
-	return 4.0
+	return int64(value)
 }
 
-func shuffledURLs(urls []string, seed string, sceneIndex int) []string {
-	out := append([]string(nil), urls...)
+func canonicalAssetDuration(asset map[string]interface{}, probe audioDurationProbe) (float64, error) {
+	if durationMS := canonicalDurationMS(asset); durationMS > 0 {
+		return float64(durationMS) / 1000, nil
+	}
+	url := assetURL(asset)
+	if url != "" && probe != nil {
+		if duration := probe(url); duration > 0 {
+			return duration, nil
+		}
+	}
+	return 0, fmt.Errorf("duration_ms is required or asset must be probeable")
+}
+
+func shuffledAssets(assets []map[string]interface{}, seed string, sceneIndex int) []map[string]interface{} {
+	out := append([]map[string]interface{}(nil), assets...)
 	if len(out) < 2 {
 		return out
 	}
@@ -280,155 +296,52 @@ func shuffledURLs(urls []string, seed string, sceneIndex int) []string {
 	return out
 }
 
-// resolveSceneVoiceoverDuration returns the authoritative voiceover
-// duration for a narrated scene. It checks:
-//  1. Explicit voiceover_duration_seconds field (top-level).
-//  2. Nested voiceover.duration_seconds / voiceover.duration_ms fields
-//     (the canonical typed-envelope shape used by the
-//     normalize.go scene-builder path).
-//  3. Probe of the actual audio file.
-//
-// If the voiceover exists but is unmeasurable, it returns an error —
-// generic duration_seconds is deliberately ignored here.
 func resolveSceneVoiceoverDuration(scene map[string]interface{}, voiceoverURL string, probe audioDurationProbe) (float64, error) {
 	if voiceoverURL == "" {
 		return 0, nil
 	}
-	if duration := sceneVoiceoverDurationSeconds(scene); duration > 0 {
-		return duration, nil
+	if voiceover := canonicalAsset(sceneAsset(scene, "voiceover")); voiceover != nil {
+		if durationMS := canonicalDurationMS(voiceover); durationMS > 0 {
+			return float64(durationMS) / 1000, nil
+		}
 	}
 	if probe != nil {
 		if duration := probe(voiceoverURL); duration > 0 {
 			return duration, nil
 		}
 	}
-	return 0, fmt.Errorf("voiceover duration unavailable for %q; provide voiceover_duration_seconds or a probeable audio asset", voiceoverURL)
+	return 0, fmt.Errorf("voiceover duration unavailable; duration_ms is required or asset must be probeable")
 }
 
-// resolveSceneFinalClipDuration returns the authoritative final clip
-// duration. Canonical key: final_clip_duration_seconds. Legacy alias:
-// clip_duration_seconds. Generic duration_seconds is intentionally NOT
-// consulted — it is a presentation placeholder, not a clip timing contract.
 func resolveSceneFinalClipDuration(scene map[string]interface{}) float64 {
-	if duration := payload.NormalizedDuration(scene["final_clip_duration_seconds"]); duration > 0 {
-		return duration
+	if clip := canonicalAsset(sceneAsset(scene, "clip")); clip != nil {
+		if durationMS := canonicalDurationMS(clip); durationMS > 0 {
+			return float64(durationMS) / 1000
+		}
 	}
-	if duration := payload.NormalizedDuration(scene["clip_duration_seconds"]); duration > 0 {
-		return duration
-	}
-	return 4.0
+	return 0
 }
 
-// resolveSceneFinalClipDurationWithProbe preserves explicit timing fields,
-// then uses the real source-video duration. The 4s fallback is retained only
-// for legacy/unprobeable inputs.
-func resolveSceneFinalClipDurationWithProbe(scene map[string]interface{}, clipURL string, probe audioDurationProbe) float64 {
-	// sceneClipDurationSeconds already handles the canonical typed-envelope
-	// shape (clip.duration_ms / clip.duration_seconds / final_clip_duration_seconds
-	// / clip_duration_seconds). Reuse it so the nested-clip and top-level scene
-	// alias keys are honoured uniformly across both timeline builders.
-	if duration := sceneClipDurationSeconds(scene); duration > 0 {
-		return duration
+func resolveSceneFinalClipDurationWithProbe(scene map[string]interface{}, clipURL string, probe audioDurationProbe) (float64, error) {
+	if duration := resolveSceneFinalClipDuration(scene); duration > 0 {
+		return duration, nil
 	}
 	if clipURL != "" && probe != nil {
 		if duration := probe(clipURL); duration > 0 {
-			return duration
+			return duration, nil
 		}
 	}
-	return 4.0
+	return 0, fmt.Errorf("clip duration unavailable; duration_ms is required or asset must be probeable")
 }
 
-// sceneVoiceoverURL extracts the voiceover audio URL from a narrated scene.
 func sceneVoiceoverURL(scene map[string]interface{}) string {
-	if scene == nil {
-		return ""
-	}
-	if url := payload.FirstString(scene, "voiceover_link", "reference_voiceover", "voiceover_path"); url != "" {
-		return url
-	}
-	if voiceover, ok := scene["voiceover"].(map[string]interface{}); ok {
-		if url := payload.FirstString(voiceover, "link", "url", "drive_link", "local_path"); url != "" {
-			return url
-		}
-	}
-	if bindings, ok := scene["bindings"].(map[string]interface{}); ok {
-		if voiceover, ok := bindings["voiceover"].(map[string]interface{}); ok {
-			if url := payload.FirstString(voiceover, "link", "url", "drive_link", "local_path"); url != "" {
-				return url
-			}
-		}
-	}
-	return ""
+	return assetURL(canonicalAsset(sceneAsset(scene, "voiceover")))
 }
 
-// sceneNarrationClipURL extracts the narration bed clip URL from a
-// narrated scene. The optional fallbackURLs pool lets the caller
-// supply a top-level stock_clip_paths / intro_clip_paths array whose
-// i-th entry is borrowed as narration bed when the scene itself does
-// not declare a stock_link. Behaviour:
-//
-//   - scene.stock_link / scene.narration_clip_link / bindings.stock.*
-//     → use it (per-scene wins over pool);
-//   - else, if sceneIndex is in range for fallbackURLs, use that;
-//   - else, fall through to sceneFinalClipURL.
-//
-// The fallbackURLs+sceneIndex parameters are safe to pass as (nil, 0)
-// for legacy single-frame call sites.
-func sceneNarrationClipURL(scene map[string]interface{}, fallbackURLs []string, sceneIndex int) string {
-	if scene == nil {
-		return ""
-	}
-	if url := payload.FirstString(scene, "stock_link", "narration_clip_link"); url != "" {
-		return url
-	}
-	if bindings, ok := scene["bindings"].(map[string]interface{}); ok {
-		if stock, ok := bindings["stock"].(map[string]interface{}); ok {
-			if url := payload.FirstString(stock, "drive_link", "folder_link", "url", "clip_link"); url != "" {
-				return url
-			}
-		}
-	}
-	if sceneIndex >= 0 && sceneIndex < len(fallbackURLs) {
-		if url := strings.TrimSpace(fallbackURLs[sceneIndex]); url != "" {
-			return url
-		}
-	}
-	return sceneFinalClipURL(scene)
-}
-
-// sceneFinalClipURL extracts the final clip URL from a narrated scene.
-func sceneFinalClipURL(scene map[string]interface{}) string {
-	if scene == nil {
-		return ""
-	}
-	if url := firstClipURL(scene); url != "" {
-		return url
-	}
-	if bindings, ok := scene["bindings"].(map[string]interface{}); ok {
-		if clip, ok := bindings["clip"].(map[string]interface{}); ok {
-			if url := payload.FirstString(clip, "drive_link", "url", "clip_link"); url != "" {
-				return url
-			}
-		}
-	}
-	return ""
-}
-
-// firstClipURL returns the first available clip URL from a scene.
 func firstClipURL(scene map[string]interface{}) string {
-	if scene == nil {
-		return ""
-	}
-	if s := payload.FirstString(scene, "clip_link", "drive_link", "image_link", "image"); s != "" {
-		return s
-	}
-	if links := payload.NormalizeStringList(scene, "clip_links", "drive_links"); len(links) > 0 {
-		return links[0]
-	}
-	if clip, ok := scene["clip"].(map[string]interface{}); ok {
-		if s := payload.FirstString(clip, "url", "drive_link"); s != "" {
-			return s
-		}
-	}
-	return ""
+	return assetURL(canonicalAsset(sceneAsset(scene, "clip")))
+}
+
+func sceneFinalClipURL(scene map[string]interface{}) string {
+	return firstClipURL(scene)
 }

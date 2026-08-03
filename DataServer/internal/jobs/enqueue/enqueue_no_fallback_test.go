@@ -18,24 +18,24 @@ import (
 //
 // The four invariants:
 //
-//   (a) NO auto-select: missing destination_id (empty plan / empty entry /
-//       empty string) MUST be rejected at the SHAPE layer. The system does
-//       NOT auto-pick the first enabled destination in delivery_destinations.
+//	(a) NO auto-select: missing destination_id (empty plan / empty entry /
+//	    empty string) MUST be rejected at the SHAPE layer. The system does
+//	    NOT auto-pick the first enabled destination in delivery_destinations.
 //
-//   (b) NO select-by-name: destination_id pointing to a non-existent row
-//       (even if a similar-named destination exists) MUST be rejected at the
-//       EXISTENCE layer. The system does NOT fuzzy-match, prefix-match, or
-//       substring-match destination_id values.
+//	(b) NO select-by-name: destination_id pointing to a non-existent row
+//	    (even if a similar-named destination exists) MUST be rejected at the
+//	    EXISTENCE layer. The system does NOT fuzzy-match, prefix-match, or
+//	    substring-match destination_id values.
 //
-//   (c) NO cross-workspace: destination_id pointing to a destination that
-//       is not in delivery_destinations (the Velox-side proxy for "owned by
-//       another workspace") MUST be rejected at the EXISTENCE layer. The
-//       system does NOT fall back to any other destination in the
-//       delivery_destinations table.
+//	(c) NO cross-workspace: destination_id pointing to a destination that
+//	    is not in delivery_destinations (the Velox-side proxy for "owned by
+//	    another workspace") MUST be rejected at the EXISTENCE layer. The
+//	    system does NOT fall back to any other destination in the
+//	    delivery_destinations table.
 //
-//   (d) Fail-closed: all rejections return a typed *validationError with a
-//       precise field path / envelope. NO silent pass-through, NO 500 panic,
-//       NO partial success, NO fallback substitution.
+//	(d) Fail-closed: all rejections return a typed *validationError with a
+//	    precise field path / envelope. NO silent pass-through, NO 500 panic,
+//	    NO partial success, NO fallback substitution.
 //
 // These invariants span both validation layers:
 //

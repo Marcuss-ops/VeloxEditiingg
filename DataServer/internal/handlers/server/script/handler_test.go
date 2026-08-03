@@ -442,41 +442,18 @@ func TestGenerate_SourceClips_EnqueuesClipJob(t *testing.T) {
 		},
 		"delivery_plan": []interface{}{
 			map[string]interface{}{"destination_id": "destination-main", "retry_budget": 3, "priority": 0},
-		},
-		"scenes": []interface{}{
+		}, "scenes": []interface{}{
 			map[string]interface{}{
-				"text":                        "Intro clip",
-				"kind":                        "intro",
-				"voiceover_duration_seconds":  3.5,
-				"final_clip_duration_seconds": 4.0,
-				"bindings": map[string]interface{}{
-					"voiceover": map[string]interface{}{
-						"link": "https://example.com/voice-intro.mp3",
-					},
-					"stock": map[string]interface{}{
-						"drive_link": "https://example.com/stock-intro.mp4",
-					},
-					"clip": map[string]interface{}{
-						"drive_link": "https://example.com/clip-intro.mp4",
-					},
-				},
+				"text": "Intro clip", "kind": "intro",
+				"clip":      map[string]interface{}{"asset_id": "clip-intro", "url": "velox-asset://clip-intro", "duration_ms": 4000},
+				"stock":     []interface{}{map[string]interface{}{"asset_id": "stock-intro", "url": "velox-asset://stock-intro", "duration_ms": 5000}},
+				"voiceover": map[string]interface{}{"asset_id": "voice-intro", "url": "velox-asset://voice-intro", "duration_ms": 3500},
 			},
 			map[string]interface{}{
-				"text":                        "Second clip",
-				"kind":                        "clip",
-				"voiceover_duration_seconds":  5.0,
-				"final_clip_duration_seconds": 6.0,
-				"bindings": map[string]interface{}{
-					"voiceover": map[string]interface{}{
-						"link": "https://example.com/voice-scene-2.mp3",
-					},
-					"stock": map[string]interface{}{
-						"drive_link": "https://example.com/stock-scene-2.mp4",
-					},
-					"clip": map[string]interface{}{
-						"drive_link": "https://example.com/clip-scene-2.mp4",
-					},
-				},
+				"text": "Second clip", "kind": "clip",
+				"clip":      map[string]interface{}{"asset_id": "clip-scene-2", "url": "velox-asset://clip-scene-2", "duration_ms": 6000},
+				"stock":     []interface{}{map[string]interface{}{"asset_id": "stock-scene-2", "url": "velox-asset://stock-scene-2", "duration_ms": 5000}},
+				"voiceover": map[string]interface{}{"asset_id": "voice-scene-2", "url": "velox-asset://voice-scene-2", "duration_ms": 5000},
 			},
 		},
 	}
@@ -530,7 +507,7 @@ func TestGenerate_SourceClips_EnqueuesClipJob(t *testing.T) {
 	if !ok {
 		t.Fatalf("want first audio track object, got %#v", audioTracks[0])
 	}
-	if got := firstTrack["source_url"]; got != "https://example.com/voice-intro.mp3" {
+	if got := firstTrack["source_url"]; got != "velox-asset://voice-intro" {
 		t.Fatalf("want first audio source preserved, got %#v", got)
 	}
 	secondTrack, ok := audioTracks[2].(map[string]interface{})

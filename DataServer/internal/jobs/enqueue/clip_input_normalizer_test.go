@@ -108,13 +108,11 @@ func TestNormalizeClipPayload_Dispatch(t *testing.T) {
 		raw := map[string]interface{}{
 			"scenes": []interface{}{
 				map[string]interface{}{
-					"clip_link":                   "https://clip/1.mp4",
-					"duration_seconds":            3.0,
-					"voiceover_duration_seconds":  3.0,
-					"final_clip_duration_seconds": 1.0,
-					"bindings": map[string]interface{}{
-						"voiceover": map[string]interface{}{"link": "https://voice/1.mp3"},
-						"clip":      map[string]interface{}{"drive_link": "https://clip/1.mp4"},
+					"clip": map[string]interface{}{
+						"asset_id": "clip-1", "url": "velox-asset://clip-1", "duration_ms": 1000,
+					},
+					"voiceover": map[string]interface{}{
+						"asset_id": "voice-1", "url": "velox-asset://voice-1", "duration_ms": 3000,
 					},
 				},
 			},
@@ -143,9 +141,15 @@ func TestNormalizeScenesInput_PreservesGlobalAudioTracks(t *testing.T) {
 			"duration_seconds": 20.0,
 		}},
 		"scenes": []interface{}{map[string]interface{}{
-			"stock_links":                []string{"https://stock.example/a.mp4"},
-			"reference_voiceover":        "https://voice.example/scene.mp3",
-			"voiceover_duration_seconds": 4.0,
+			"clip": map[string]interface{}{
+				"asset_id": "clip-1", "url": "velox-asset://clip-1", "duration_ms": 2000,
+			},
+			"stock": []interface{}{map[string]interface{}{
+				"asset_id": "stock-1", "url": "velox-asset://stock-1", "duration_ms": 5000,
+			}},
+			"voiceover": map[string]interface{}{
+				"asset_id": "voice-1", "url": "velox-asset://voice-1", "duration_ms": 4000,
+			},
 		}},
 	}
 
@@ -153,8 +157,8 @@ func TestNormalizeScenesInput_PreservesGlobalAudioTracks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeClipPayload: %v", err)
 	}
-	if len(tracks) != 2 {
-		t.Fatalf("audio tracks = %d, want global music + generated voiceover", len(tracks))
+	if len(tracks) != 3 {
+		t.Fatalf("audio tracks = %d, want global music + generated voiceover + scene clip audio", len(tracks))
 	}
 	if got := tracks[0]["role"]; got != "background_music" {
 		t.Fatalf("first track role = %v, want background_music", got)
@@ -165,6 +169,9 @@ func TestNormalizeScenesInput_PreservesGlobalAudioTracks(t *testing.T) {
 	if got := tracks[1]["role"]; got != "voiceover" {
 		t.Fatalf("second track role = %v, want voiceover", got)
 	}
+	if got := tracks[2]["role"]; got != "scene_clip_audio" {
+		t.Fatalf("third track role = %v, want scene_clip_audio", got)
+	}
 }
 
 // =====================================================================
@@ -174,8 +181,8 @@ func TestNormalizeScenesInput_PreservesGlobalAudioTracks(t *testing.T) {
 func TestNormalizeScenesInput_FlatPath(t *testing.T) {
 	t.Parallel()
 	scenes := []map[string]interface{}{
-		{"clip_link": "https://clip/A.mp4", "duration_seconds": 5.0},
-		{"clip_link": "https://clip/B.mp4"}, // → default 4.0
+		{"clip": map[string]interface{}{"asset_id": "clip-a", "url": "velox-asset://clip-a", "duration_ms": 5000}},
+		{"clip": map[string]interface{}{"asset_id": "clip-b", "url": "velox-asset://clip-b", "duration_ms": 4000}},
 	}
 	entries, items, clips, audioTracks, mode, err := normalizeScenesInput(
 		map[string]interface{}{}, scenes,
@@ -377,4 +384,16 @@ func TestToInterfaceSlice_NilAndEmpty(t *testing.T) {
 	if out2 != nil && len(out2) != 0 {
 		t.Errorf("empty input: got %v; want empty/nil", out2)
 	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

@@ -287,24 +287,16 @@ esac
 		"video_name": "Narrated Clips",
 		"scenes": []interface{}{
 			map[string]interface{}{
-				"text":                        "Scene 1",
-				"duration_seconds":            4.0,
-				"final_clip_duration_seconds": 2.0,
-				"bindings": map[string]interface{}{
-					"voiceover": map[string]interface{}{"link": "https://example.com/voice-1.mp3"},
-					"stock":     map[string]interface{}{"drive_link": "https://example.com/stock-1.mp4"},
-					"clip":      map[string]interface{}{"drive_link": "https://example.com/clip-1.mp4"},
-				},
+				"text":      "Scene 1",
+				"clip":      map[string]interface{}{"asset_id": "clip-1", "url": "velox-asset://clip-1", "duration_ms": 2000},
+				"stock":     []interface{}{map[string]interface{}{"asset_id": "stock-1", "url": "velox-asset://stock-1", "duration_ms": 5000}},
+				"voiceover": map[string]interface{}{"asset_id": "voice-1", "url": "velox-asset://voice-1", "duration_ms": 11000},
 			},
 			map[string]interface{}{
-				"text":                        "Scene 2",
-				"duration_seconds":            4.0,
-				"final_clip_duration_seconds": 3.0,
-				"bindings": map[string]interface{}{
-					"voiceover": map[string]interface{}{"link": "https://example.com/voice-2.mp3"},
-					"stock":     map[string]interface{}{"drive_link": "https://example.com/stock-2.mp4"},
-					"clip":      map[string]interface{}{"drive_link": "https://example.com/clip-2.mp4"},
-				},
+				"text":      "Scene 2",
+				"clip":      map[string]interface{}{"asset_id": "clip-2", "url": "velox-asset://clip-2", "duration_ms": 3000},
+				"stock":     []interface{}{map[string]interface{}{"asset_id": "stock-2", "url": "velox-asset://stock-2", "duration_ms": 5000}},
+				"voiceover": map[string]interface{}{"asset_id": "voice-2", "url": "velox-asset://voice-2", "duration_ms": 13000},
 			},
 		},
 	}
