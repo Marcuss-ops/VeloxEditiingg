@@ -107,7 +107,7 @@ for v in "$POLL_TIMEOUT_S" "$JOBS_PER_WORKER"; do
   fi
 done
 
-for bin in curl jq awk sed grep date; do
+for bin in curl jq awk sed grep date python3; do
   if ! command -v "$bin" >/dev/null 2>&1; then
     log_error "FATAL: required binary not in PATH: $bin"; exit 2
   fi
@@ -241,20 +241,28 @@ wait_active_jobs_zero() {
   return 1
 }
 
-# ─── Helper: static payload URI validation ─────────────────────────────────
+# ─── Helper: static canonical payload validation ───────────────────────────
 validate_benchmark_payload() {
   local payload_json="$1"
   jq -e '
-    ([.voiceover_paths[]?]
-      + [.scenes[]?.clip_link]
-      + [.scenes[]?.clip.url]
-      + [.audio_tracks[]?.source_url]
-      + [.subtitle_tracks[]?.source]
-      + [.scenes[]?.subtitles.url])
-    | map(select(. != null)) as $media
-    | (($media | length > 0)
-       and (all($media[]; type == "string" and startswith("velox-asset://")))
-       and ([.. | strings | select(startswith("file://") or startswith("http://") or startswith("https://"))] | length == 0))
+    (. as $root
+     | (["idempotency_key","job_type","template_id","template_version","video_name","scenes","output","delivery_plan","placement_pin_worker_id"]
+        | all(. as $key | $root | has($key)))
+     and ($root.scenes | length == 2)
+     and ((["voiceover_paths","voiceover_path","subtitle_tracks","clip_link","image_link","image_paths","project_id","target_executor_id","local_path","bindings","stock_clip_sources","drive_links"]
+           | any(. as $key | $root | has($key))) | not)
+     and ([$root.scenes[]
+           | (. as $scene
+              | has("clip") and has("voiceover")
+              and ((["clip_link","clip_links","image_link","image_links","image_paths","subtitle_paths","voiceover_path","local_path","bindings","stock_clip_sources","drive_links"]
+                    | any(. as $key | $scene | has($key))) | not)
+              and (.clip.url | startswith("velox-asset://"))
+              and (.voiceover.url | startswith("velox-asset://"))
+              and (.stock_links | all(.[]; startswith("velox-asset://")))
+              and (.subtitles.url | startswith("velox-asset://"))))] | all)
+     and ($root.audio_tracks | length == 1)
+     and ($root.audio_tracks[0].source_url | startswith("velox-asset://"))
+     and ([.. | strings | select(startswith("file://") or startswith("http://") or startswith("https://"))] | length == 0))
   ' <<<"$payload_json" >/dev/null 2>&1
 }
 
@@ -263,59 +271,65 @@ submit_and_poll_job() {
   local target_worker="$1" run_idx="$2" epoch="$3"
   local idem_key="seqbench-${target_worker}-${epoch}-$(date +%s%N)-${run_idx}"
 
-  local payload
-  payload=$(cat <<JSON
-{
-  "idempotency_key": "${idem_key}",
-  "job_type": "scene.composite.v1",
-  "template_id": "benchmark.clip-stock",
-  "template_version": 1,
-  "video_name": "sequential_bench ${target_worker} run ${run_idx}",
-  "script_text": "Benchmark test script for sequential worker evaluation.",
-  "placement_pin_worker_id": "${target_worker}",
-  "voiceover_paths": [
-    "velox-asset://${ASSET_VO}",
-    "velox-asset://${ASSET_VO}"
-  ],
-  "audio_tracks": [
-    {
-      "asset_id": "${BENCH_BACKGROUND_MUSIC_ASSET_ID}",
-      "source_url": "velox-asset://${BENCH_BACKGROUND_MUSIC_ASSET_ID}",
-      "role": "background_music",
-      "volume": 0.12,
-      "start_time_offset": 0,
-      "duration_seconds": ${BENCH_BACKGROUND_MUSIC_DURATION_SECONDS}
-    }
-  ],
-  "scenes": [
-    {
-      "text":"Bench scene 1 — ${target_worker}",
-      "clip_link":"velox-asset://${ASSET_CLIP_A}",
-      "duration_seconds":3,
-      "stock_links":["velox-asset://${ASSET_CLIP_A}","velox-asset://${ASSET_CLIP_B}"],
-      "stock_fallback":true,
-      "voiceover":{"url":"velox-asset://${ASSET_VO}","duration_ms":3000,"language":"it"},
-      "subtitles": {
-        "asset_id":"${BENCH_SUBTITLE_ASSET_ID}",
-        "format":"ass",
-        "url":"velox-asset://${BENCH_SUBTITLE_ASSET_ID}",
-        "sha256":"${BENCH_SUBTITLE_ASSET_ID}",
-        "language":"it"
-      }
-    },
-    {"text":"Bench scene 2 — ${target_worker}","clip_link":"velox-asset://${ASSET_CLIP_B}","duration_seconds":3,"stock_links":["velox-asset://${ASSET_CLIP_B}","velox-asset://${ASSET_CLIP_A}"],"stock_fallback":true,"voiceover":{"url":"velox-asset://${ASSET_VO}","duration_ms":3000,"language":"it"}}
-  ],
-  "delivery_plan": [
-    {
-      "destination_id":"${DESTINATION_ID}",
-      "priority":100,
-      "retry_budget":1,
-      "metadata":{"test_type":"sequential_stock_voiceover_music_ass"}
-    }
-  ]
-}
-JSON
-)
+  local payload tmp_payload
+  tmp_payload=$(mktemp)
+  if ! python3 "${SCRIPT_DIR}/build_real_payload.py" \
+        --fixtures "$ASSETS_FILE" \
+        --worker-id "$target_worker" \
+        --destination "$DESTINATION_ID" \
+        --scenes-count 2 \
+        --duration-per-scene 3 \
+        --strict \
+        --output "$tmp_payload" >/dev/null 2>&1; then
+    rm -f "$tmp_payload"
+    log_error "[submit ${target_worker} #${run_idx}] canonical payload builder failed"
+    printf '{"job_id":"","status":"PAYLOAD_INVALID","error":"canonical builder failed"}\n'
+    return 1
+  fi
+  payload=$(jq --arg idem "$idem_key" \
+                    --arg video "sequential_bench ${target_worker} run ${run_idx}" \
+                    --arg vo "$ASSET_VO" \
+                    --arg clip_a "$ASSET_CLIP_A" \
+                    --arg clip_b "$ASSET_CLIP_B" \
+                    --arg music "$BENCH_BACKGROUND_MUSIC_ASSET_ID" \
+                    --arg music_duration "$BENCH_BACKGROUND_MUSIC_DURATION_SECONDS" \
+                    --arg subtitle "$BENCH_SUBTITLE_ASSET_ID" \
+  '.idempotency_key = $idem
+   | .template_id = "benchmark.clip-stock"
+   | .video_name = $video
+   | .script_text = "Benchmark test script for sequential worker evaluation."
+   | .scenes[0] += {
+       stock_links: [("velox-asset://" + $clip_a), ("velox-asset://" + $clip_b)],
+       stock_fallback: true,
+       subtitles: {
+         asset_id: $subtitle,
+         format: "ass",
+         url: ("velox-asset://" + $subtitle),
+         sha256: $subtitle,
+         language: "it"
+       }
+     }
+   | .scenes[1] += {
+       stock_links: [("velox-asset://" + $clip_b), ("velox-asset://" + $clip_a)],
+       stock_fallback: true,
+       subtitles: {
+         asset_id: $subtitle,
+         format: "ass",
+         url: ("velox-asset://" + $subtitle),
+         sha256: $subtitle,
+         language: "it"
+       }
+     }
+   | .audio_tracks = [{
+       asset_id: $music,
+       source_url: ("velox-asset://" + $music),
+       role: "background_music",
+       volume: 0.12,
+       start_time_offset: 0,
+       duration_seconds: ($music_duration | tonumber)
+     }]
+   | .delivery_plan[0].metadata = {test_type: "sequential_stock_voiceover_music_ass"}' "$tmp_payload")
+  rm -f "$tmp_payload"
 
   # Static contract guard: this benchmark must never submit local paths or
   # ordinary HTTP URLs, and every media reference must use velox-asset://.
