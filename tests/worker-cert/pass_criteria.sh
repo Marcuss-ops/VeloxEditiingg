@@ -196,30 +196,19 @@ fi
 # ─── Build real-asset payload (canonical pattern, scene.composite.v1@1) ───
 ASSETS_FILE="${SCRIPT_DIR}/fixtures/assets.json"
 [[ -r "$ASSETS_FILE" ]] || { log_error "fixtures not readable: $ASSETS_FILE"; exit 2; }
-ASSET_VO=$(     jq -er '.voiceover[0].asset_id' "$ASSETS_FILE")
-ASSET_CLIP_A=$( jq -er '.clips[0].asset_id'     "$ASSETS_FILE")
-ASSET_CLIP_B=$( jq -er '.clips[1].asset_id'     "$ASSETS_FILE")
-log_info "assets: vo=$ASSET_VO clip_a=$ASSET_CLIP_A clip_b=$ASSET_CLIP_B"
-
 EPOCH=$(date +%s)
 IDEM_KEY="pass-criteria-${TARGET_WORKER_ID}-${EPOCH}"
-PAYLOAD=$(cat <<JSON
-{
-  "idempotency_key": "${IDEM_KEY}",
-  "video_name": "pass_criteria for ${TARGET_WORKER_ID}@${EPOCH}",
-  "project_id": "worker-cert-pass-criteria",
-  "target_executor_id": "scene.composite.v1@1",
-  "voiceover_paths": ["velox-asset://${ASSET_VO}"],
-  "scenes": [
-    {"text":"PASS scene 1 ${TARGET_WORKER_ID}","clip_link":"velox-asset://${ASSET_CLIP_A}","duration_seconds":3},
-    {"text":"PASS scene 2 ${TARGET_WORKER_ID}","clip_link":"velox-asset://${ASSET_CLIP_B}","duration_seconds":3}
-  ],
-  "delivery_plan": [
-    {"destination_id":"${PASS_DESTINATION_ID}","priority":100,"retry_budget":1}
-  ]
-}
-JSON
-)
+PAYLOAD_FILE=$(mktemp)
+if ! python3 "${REPO_ROOT}/tests/worker-cert/build_real_payload.py" \
+      --fixtures "$ASSETS_FILE" \
+      --worker-id "$TARGET_WORKER_ID" \
+      --destination "$PASS_DESTINATION_ID" \
+      --strict \
+      --output "$PAYLOAD_FILE" >/dev/null 2>&1; then
+  log_error "canonical payload builder failed"; rm -f "$PAYLOAD_FILE"; exit 4
+fi
+PAYLOAD=$(jq --arg idem "$IDEM_KEY" '.idempotency_key = $idem' "$PAYLOAD_FILE")
+rm -f "$PAYLOAD_FILE"
 
 TMP_HDRS=$(mktemp); TMP_BODY=$(mktemp)
 curl -sS -m 30 -X POST \
