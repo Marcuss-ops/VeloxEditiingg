@@ -1,8 +1,9 @@
 // Package grpcserver / handler_payload_projection.go
 //
-// Wire-contract projection for TaskOffers: selects the canonical vs
-// legacy payload shape from the executor capability negotiated during
-// the worker Hello handshake. Extracted from handler_workers.go
+// Wire-contract projection for TaskOffers. Every admitted worker receives
+// the same canonical renderer payload; executor version remains executor
+// identity metadata, not a legacy payload projection switch. Extracted from
+// handler_workers.go.
 // (split per responsabilità).
 package grpcserver
 
@@ -14,7 +15,7 @@ import (
 )
 
 // projectPayloadForWorker emits the canonical wire contract for every worker.
-// Legacy worker projections were removed; all admitted workers now consume
+// All admitted workers now consume
 // the same scene.composite payload and therefore cannot create a second audio
 // timeline during compatibility translation.
 func projectPayloadForWorker(canonical map[string]interface{}, executorVersion int) (map[string]interface{}, error) {

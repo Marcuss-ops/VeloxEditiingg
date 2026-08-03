@@ -145,7 +145,10 @@ func TestClient_CompletedWithoutScenes(t *testing.T) {
 		t.Fatalf("Voiceover.Paths: got %v", dto.Voiceover.Paths)
 	}
 	// The worker payload should have scenes_json empty/missing.
-	wp := dto.ToWorkerPayload()
+	wp, err := dto.ToWorkerPayloadChecked()
+	if err != nil {
+		t.Fatalf("ToWorkerPayloadChecked: %v", err)
+	}
 	if scenesJSON, ok := wp["scenes_json"].(string); ok && scenesJSON != "" {
 		t.Fatalf("scenes_json should be empty, got %q", scenesJSON)
 	}

@@ -109,7 +109,7 @@ func ParseRemotePipelineResult(raw map[string]interface{}) (*RemotePipelineResul
 	return result, nil
 }
 
-// ToWorkerPayload converts the typed DTO into a map[string]interface{}
+// ToWorkerPayloadChecked converts the typed DTO into a map[string]interface{}
 // that enqueue.BuildPipelinePayload can consume. This ensures the worker
 // receives a payload DERIVED from the typed DTO, not the raw remote map
 // passed through unchecked.
@@ -128,9 +128,9 @@ func ParseRemotePipelineResult(raw map[string]interface{}) (*RemotePipelineResul
 //   - canonical nested scene assets (from Scenes)
 //   - technical video metadata (from Metadata)
 //   - json_path / markdown_path (from Script, for on-disk fallback)
-func (r *RemotePipelineResult) ToWorkerPayload() map[string]interface{} {
+func (r *RemotePipelineResult) ToWorkerPayloadChecked() (map[string]interface{}, error) {
 	if r == nil {
-		return map[string]interface{}{}
+		return map[string]interface{}{}, nil
 	}
 
 	// Start with the flattened raw map as a base so render-only fields
@@ -176,72 +176,9 @@ func (r *RemotePipelineResult) ToWorkerPayload() map[string]interface{} {
 	// nested inside delivery_plan entries.
 	projected, err := contract.RenderOnlyPayload(m)
 	if err != nil {
-		return map[string]interface{}{}
+		return nil, fmt.Errorf("project renderer payload: %w", err)
 	}
-	return projected
-}
-
-func stripRendererPublicationFields(payload map[string]interface{}) {
-	if payload == nil {
-		return
-	}
-	// These top-level fields are control-plane publication contracts, not
-	// renderer inputs. Remove them even when they arrived from a legacy raw
-	// remote response rather than the typed SubmitJobRequest path. `video_name`
-	// is intentionally retained: it is the technical render/job name, not the
-	// publication title and is required by the renderer contract.
-	rawVideoMetadata := payload["video_metadata"]
-	for _, key := range []string{
-		"publications",
-		"publication_specs",
-		"destinations",
-		"delivery_destinations",
-		"delivery_metadata",
-		"destination_id",
-		"destination_ids",
-		"metadata",
-		"metadata_override",
-		"localizations",
-		"description",
-		"tags",
-		"privacy",
-		"privacy_status",
-		"publish_at",
-		"schedule",
-		"scheduling",
-		"title",
-	} {
-		delete(payload, key)
-	}
-	if technical := rendererTechnicalMetadata(rawVideoMetadata); len(technical) > 0 {
-		payload["video_metadata"] = technical
-	} else {
-		delete(payload, "video_metadata")
-	}
-
-	// Delivery routing, destinations, and their metadata are control-plane
-	// data. They must never cross the renderer boundary, even in the legacy
-	// compatibility shape.
-	delete(payload, "delivery_plan")
-}
-
-func rendererTechnicalMetadata(value interface{}) map[string]interface{} {
-	metadata, ok := value.(map[string]interface{})
-	if !ok {
-		return nil
-	}
-	allowed := map[string]struct{}{
-		"width": {}, "height": {}, "fps_num": {}, "fps_den": {},
-		"pixel_format": {}, "sample_rate": {}, "audio_sample_rate": {},
-		"audio_channels": {}, "video_codec": {}, "audio_codec": {},
-	}
-	filtered := make(map[string]interface{})
-	for key, item := range metadata {
-		if _, ok := allowed[key]; ok {
-			filtered[key] = item
-		}
-	}
-	return filtered
+	return projected, nil
 }
 
 // flattenResult merges top-level keys with the nested "result" map.

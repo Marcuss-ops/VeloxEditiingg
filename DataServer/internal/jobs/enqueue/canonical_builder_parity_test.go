@@ -103,7 +103,10 @@ func TestCanonicalBuilderParity_RichPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseRemotePipelineResult: %v", err)
 	}
-	remotePayload := dto.ToWorkerPayload()
+	remotePayload, err := dto.ToWorkerPayloadChecked()
+	if err != nil {
+		t.Fatalf("remote-engine worker projection: %v", err)
+	}
 
 	wantPayload, err := cloneRendererPayload(normalized)
 	if err != nil {

@@ -101,7 +101,10 @@ func TestCanonicalIngressParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("remote-engine parse: %v", err)
 	}
-	remotePayload := remoteDTO.ToWorkerPayload()
+	remotePayload, err := remoteDTO.ToWorkerPayloadChecked()
+	if err != nil {
+		t.Fatalf("remote worker projection: %v", err)
+	}
 
 	projections := map[string]map[string]interface{}{
 		"api":           apiPayload,

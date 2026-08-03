@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"velox-server/internal/jobs"
@@ -143,10 +144,9 @@ func TestBuildAndRewritePayload_InjectsForwardingKey(t *testing.T) {
 	reqPayload := map[string]interface{}{
 		"status": "completed",
 		"result": map[string]interface{}{
-			"video_name":     "Test Video",
-			"script_text":    "script content",
-			"scenes_json":    `[{"text":"Scene 1","image_link":"https://example.com/scene.png"}]`,
-			"voiceover_path": "https://example.com/voice.mp3",
+			"video_name":  "Test Video",
+			"script_text": "script content",
+			"scenes_json": `[{"text":"Scene 1","image":{"asset_id":"scene-image","url":"velox-asset://scene-image"},"voiceover":{"asset_id":"voice","url":"velox-asset://voice","duration_ms":5000}}]`,
 		},
 	}
 	fwdKey := routing.FormatForwardingKey("remote_engine", "job-123", "scene.composite.v1")
@@ -166,8 +166,12 @@ func TestBuildAndRewritePayload_InjectsForwardingKey(t *testing.T) {
 	if workerPayload["source"] != "pipeline_generate_with_images" {
 		t.Fatalf("want source from BuildPipelinePayload, got %v", workerPayload["source"])
 	}
-	if _, ok := workerPayload["voiceover_paths"]; !ok {
-		t.Fatalf("want voiceover_paths in worker payload")
+	if _, ok := workerPayload["voiceover_paths"]; ok {
+		t.Fatalf("voiceover_paths must not cross the renderer boundary")
+	}
+	scenesJSON, ok := workerPayload["scenes_json"].(string)
+	if !ok || !strings.Contains(scenesJSON, `"voiceover"`) {
+		t.Fatalf("want canonical nested voiceover in scenes_json, got %v", workerPayload["scenes_json"])
 	}
 }
 

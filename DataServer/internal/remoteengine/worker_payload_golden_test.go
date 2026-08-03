@@ -54,11 +54,19 @@ func TestToWorkerPayload_Golden(t *testing.T) {
 				},
 			},
 			map[string]interface{}{
-				"scene_id":         "scene-1",
-				"index":            float64(1),
-				"kind":             "image",
-				"text":             "Closing scene",
-				"image_link":       "velox-asset://images/closing.jpg",
+				"scene_id": "scene-1",
+				"index":    float64(1),
+				"kind":     "image",
+				"text":     "Closing scene",
+				"image": map[string]interface{}{
+					"asset_id": "images/closing.jpg",
+					"url":      "velox-asset://images/closing.jpg",
+				},
+				"voiceover": map[string]interface{}{
+					"asset_id":    "audio/closing.mp3",
+					"url":         "velox-asset://audio/closing.mp3",
+					"duration_ms": float64(2000),
+				},
 				"duration_seconds": float64(2),
 			},
 		},
@@ -112,7 +120,10 @@ func TestToWorkerPayload_Golden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseRemotePipelineResult: %v", err)
 	}
-	payload := dto.ToWorkerPayload()
+	payload, err := dto.ToWorkerPayloadChecked()
+	if err != nil {
+		t.Fatalf("ToWorkerPayloadChecked: %v", err)
+	}
 	encoded, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal worker payload: %v", err)

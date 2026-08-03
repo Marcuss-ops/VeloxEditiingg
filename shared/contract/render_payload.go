@@ -19,12 +19,19 @@ func RenderOnlyPayload(payload map[string]interface{}) (map[string]interface{}, 
 		return nil, fmt.Errorf("render-only payload contains non-JSON value: %w", err)
 	}
 	projected := renderOnlyValue(payload).(map[string]interface{})
-	if raw, ok := projected["scenes_json"].(string); ok && strings.TrimSpace(raw) != "" {
+	if scenes, ok := payload["scenes"]; ok {
+		projected["scenes"] = canonicalizeScenesValue(scenes)
+	}
+	if raw, ok := payload["scenes_json"].(string); ok && strings.TrimSpace(raw) != "" {
 		var scenes interface{}
 		if err := json.Unmarshal([]byte(raw), &scenes); err != nil {
 			return nil, fmt.Errorf("render-only scenes_json: %w", err)
 		}
-		projected["scenes_json"] = mustRenderOnlyJSON(scenes)
+		canonicalScenes := canonicalizeScenesValue(scenes)
+		projected["scenes_json"] = mustRenderOnlyJSON(canonicalScenes)
+		if _, present := projected["scenes"]; !present {
+			projected["scenes"] = canonicalScenes
+		}
 	}
 	if metadata, ok := projected["video_metadata"].(map[string]interface{}); ok {
 		projected["video_metadata"] = rendererTechnicalMetadata(metadata)
@@ -99,6 +106,67 @@ func renderOnlyValue(value interface{}) interface{} {
 	default:
 		return value
 	}
+}
+
+func canonicalizeScenesValue(value interface{}) interface{} {
+	switch scenes := value.(type) {
+	case []interface{}:
+		out := make([]interface{}, 0, len(scenes))
+		for _, scene := range scenes {
+			out = append(out, canonicalizeSceneValue(scene))
+		}
+		return out
+	case []map[string]interface{}:
+		out := make([]map[string]interface{}, 0, len(scenes))
+		for _, scene := range scenes {
+			out = append(out, canonicalizeSceneValue(scene).(map[string]interface{}))
+		}
+		return out
+	default:
+		return renderOnlyValue(value)
+	}
+}
+
+func canonicalizeSceneValue(value interface{}) interface{} {
+	scene, ok := value.(map[string]interface{})
+	if !ok {
+		return renderOnlyValue(value)
+	}
+	out := make(map[string]interface{}, len(scene)+3)
+	for key, item := range scene {
+		out[key] = item
+	}
+	if _, hasClip := out["clip"]; !hasClip {
+		if url, ok := out["clip_link"].(string); ok && strings.TrimSpace(url) != "" {
+			out["clip"] = canonicalAsset(url, out["duration_seconds"])
+		}
+	}
+	if _, hasImage := out["image"]; !hasImage {
+		if url, ok := out["image_link"].(string); ok && strings.TrimSpace(url) != "" {
+			out["image"] = canonicalAsset(url, nil)
+		}
+	}
+	return renderOnlyValue(out)
+}
+
+func canonicalAsset(url string, duration interface{}) map[string]interface{} {
+	asset := map[string]interface{}{"url": strings.TrimSpace(url)}
+	if strings.HasPrefix(asset["url"].(string), "velox-asset://") {
+		asset["asset_id"] = strings.TrimPrefix(asset["url"].(string), "velox-asset://")
+	}
+	if duration != nil {
+		switch value := duration.(type) {
+		case float64:
+			if value > 0 {
+				asset["duration_ms"] = int64(value * 1000)
+			}
+		case int:
+			if value > 0 {
+				asset["duration_ms"] = value * 1000
+			}
+		}
+	}
+	return asset
 }
 
 func mustRenderOnlyJSON(value interface{}) string {

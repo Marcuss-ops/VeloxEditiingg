@@ -14,7 +14,10 @@ const JobSubmitTargetExecutorID = "scene.composite.v1"
 
 func (h *Handlers) NormalizeExternalJobSubmission(req SubmitJobRequest) *CanonicalCompletedPayload {
 	rawPayload := submitRequestToRawPayload(&req)
-	workerPayload := projectWorkerPayload(&req)
+	workerPayload, err := projectWorkerPayload(&req)
+	if err != nil {
+		return nil
+	}
 
 	return &CanonicalCompletedPayload{
 		SourceProvider:   ExternalAPISourceProvider,

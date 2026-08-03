@@ -13,7 +13,7 @@ import (
 // TestNormalizeExternalJobSubmission_ProducesCanonicalPayload below —
 // the worker payload is no longer hand-built; it is produced through
 // remoteengine.ParseRemotePipelineResult → RemotePipelineResult.
-// ToWorkerPayload. The shape assertion that previously read
+// ToWorkerPayloadChecked. The shape assertion that previously read
 // payload["scenes"].([]interface{}) is now payload["scenes_json"]
 // (string) because the canonical typed-DTO path encodes scenes as a
 // JSON string rather than a nested []interface{}. Tests for the

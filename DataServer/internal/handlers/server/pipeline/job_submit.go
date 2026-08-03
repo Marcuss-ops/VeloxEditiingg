@@ -202,6 +202,14 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 		// takes, so the resolver sees one canonical shape regardless of
 		// the producer (creator workstation vs external /api/v1/jobs).
 		canonical := h.NormalizeExternalJobSubmission(req)
+		if canonical == nil {
+			c.JSON(http.StatusBadGateway, gin.H{
+				"ok":      false,
+				"error":   "canonical_projection_failed",
+				"message": "unable to build the renderer-only payload",
+			})
+			return
+		}
 
 		// Delegate to the same resolver used by CreatorPush.
 		forwarded, err := h.resolveCompletedPayload(

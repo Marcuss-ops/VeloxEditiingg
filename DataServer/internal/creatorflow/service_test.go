@@ -201,8 +201,7 @@ func TestResolverEnqueuesWorkerJob(t *testing.T) {
 		"trace_id": "creator-complete-1",
 		"result": map[string]interface{}{
 			"video_name": "Creator Video", "script_text": "Creator script",
-			"scenes_json":    `[{"text":"Scene 1","image_link":"https://example.com/scene1.png"}]`,
-			"voiceover_path": "https://example.com/voice.mp3",
+			"scenes_json": `[{"text":"Scene 1","image":{"asset_id":"scene-image","url":"velox-asset://scene-image"},"voiceover":{"asset_id":"voice","url":"velox-asset://voice","duration_ms":5000}}]`,
 			"delivery_plan": []interface{}{
 				map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
 			},
@@ -266,28 +265,14 @@ func TestResolverEnqueuesWorkerJob(t *testing.T) {
 	if j.VideoName != "Creator Video" {
 		t.Fatalf("want video name Creator Video, got %s", j.VideoName)
 	}
-	// PR15.6: drop the legacy `run_id` JSON tag assertion. The queue Job
-	// struct still maps RunID from the `run_id` alias. The canonical
-	// key under the persisted payload is `job_run_id`.
+	// The worker payload keeps only canonical nested scene assets.
 	payload := jobs.ToPayloadMap(j)
-	var vpFirst interface{}
-	switch v := payload["voiceover_paths"].(type) {
-	case []string:
-		if len(v) > 0 {
-			vpFirst = v[0]
-		}
-	case []interface{}:
-		if len(v) > 0 {
-			vpFirst = v[0]
-		}
-	default:
-		t.Fatalf("want voiceover_paths to be []string or []interface{}, got %T (%v)", payload["voiceover_paths"], payload["voiceover_paths"])
+	if _, present := payload["voiceover_paths"]; present {
+		t.Fatalf("voiceover_paths must not be present in canonical creator payload")
 	}
-	if vpFirst != "https://example.com/voice.mp3" {
-		t.Fatalf("want voiceover_paths[0] preserved as https://example.com/voice.mp3, got %v", vpFirst)
-	}
-	if _, present := payload["voiceover_path"]; present {
-		t.Fatalf("voiceover_path alias must NOT be present in canonical creator payload, got %v", payload["voiceover_path"])
+	scenesJSON, ok := payload["scenes_json"].(string)
+	if !ok || !strings.Contains(scenesJSON, `"voiceover"`) {
+		t.Fatalf("want canonical nested voiceover in persisted payload, got %v", payload["scenes_json"])
 	}
 	// Pipeline results carry their own provenance. normalizeSceneVideoPayload
 	// preserves caller-provided values rather than overwriting them.

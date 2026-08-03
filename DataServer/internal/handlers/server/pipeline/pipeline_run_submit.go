@@ -128,8 +128,16 @@ func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 		// Area 2: Parse the raw result into the typed DTO and derive
 		// the worker payload. The remote result must NOT be passed
 		// raw to the worker.
-		dto, _ := remoteengine.ParseRemotePipelineResult(result)
-		workerPayload := dto.ToWorkerPayload()
+		dto, parseErr := remoteengine.ParseRemotePipelineResult(result)
+		if parseErr != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": parseErr.Error()})
+			return
+		}
+		workerPayload, projectionErr := dto.ToWorkerPayloadChecked()
+		if projectionErr != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": projectionErr.Error()})
+			return
+		}
 
 		jobID := firstStringResolver(workerPayload, "job_id", "trace_id", "id")
 		if jobID != "" {

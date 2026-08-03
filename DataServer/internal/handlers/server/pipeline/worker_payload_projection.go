@@ -9,26 +9,21 @@ import (
 )
 
 // projectWorkerPayload follows the canonical remoteengine DTO path.
-func projectWorkerPayload(req *SubmitJobRequest) map[string]interface{} {
+func projectWorkerPayload(req *SubmitJobRequest) (map[string]interface{}, error) {
 	rawPayload := submitRequestToRawPayload(req)
 	dto, err := remoteengine.ParseRemotePipelineResult(rawPayload)
 	if err != nil {
-		// This helper predates the error-returning canonical facade. Keep its
-		// map return shape for compatibility, but fail closed instead of
-		// silently projecting an empty DTO.
-		return map[string]interface{}{"_canonical_projection_error": fmt.Sprintf("parse remote pipeline result: %v", err)}
+		// This facade is consumed by the typed submission envelope. A
+		// projection failure must remain an error state; never encode it as
+		// a payload key that could be persisted or offered to a worker.
+		return nil, fmt.Errorf("parse canonical submission: %w", err)
 	}
-	workerPayload := dto.ToWorkerPayload()
-	// The shared RemotePipelineResult DTO still serves Creator Push and may
-	// synthesize compatibility aliases. POST /api/v1/jobs has a strict,
-	// canonical scene contract, so remove those aliases at this intake
-	// boundary rather than changing the Creator contract underneath it.
-	delete(workerPayload, "voiceover_paths")
-	delete(workerPayload, "subtitle_tracks")
-	delete(workerPayload, "clip_link")
-	delete(workerPayload, "image_link")
+	workerPayload, projectionErr := dto.ToWorkerPayloadChecked()
+	if projectionErr != nil {
+		return nil, fmt.Errorf("project canonical submission: %w", projectionErr)
+	}
 	preserveWorkerPayloadFields(workerPayload, rawPayload, "audio_tracks", "layers", "_placement_pin_worker_id")
-	return workerPayload
+	return workerPayload, nil
 }
 
 func preserveWorkerPayloadFields(dst, src map[string]interface{}, keys ...string) {

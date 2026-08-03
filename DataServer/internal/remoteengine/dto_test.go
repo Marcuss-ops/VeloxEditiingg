@@ -341,7 +341,10 @@ func TestToWorkerPayload_RoundTrip(t *testing.T) {
 		},
 	}
 
-	m := dto.ToWorkerPayload()
+	m, err := dto.ToWorkerPayloadChecked()
+	if err != nil {
+		t.Fatalf("ToWorkerPayloadChecked: %v", err)
+	}
 
 	if m["job_id"] != "job_123" {
 		t.Fatalf("job_id: got %v", m["job_id"])
@@ -403,7 +406,10 @@ func TestToWorkerPayload_StripsPublicationFieldsFromRawPayload(t *testing.T) {
 	}
 
 	dto := &RemotePipelineResult{RemoteJobID: "job_publication_fields", Script: ScriptResult{Title: "Renderer name", Text: "Render script"}, Raw: raw}
-	m := dto.ToWorkerPayload()
+	m, err := dto.ToWorkerPayloadChecked()
+	if err != nil {
+		t.Fatalf("ToWorkerPayloadChecked: %v", err)
+	}
 	for _, key := range []string{"video_metadata", "publications", "publication_specs"} {
 		if _, present := m[key]; present {
 			t.Fatalf("%s leaked into renderer payload: %#v", key, m[key])
@@ -428,7 +434,10 @@ func TestToWorkerPayload_PreservesRawFields(t *testing.T) {
 		Raw:         raw,
 	}
 
-	m := dto.ToWorkerPayload()
+	m, err := dto.ToWorkerPayloadChecked()
+	if err != nil {
+		t.Fatalf("ToWorkerPayloadChecked: %v", err)
+	}
 
 	// Delivery routing is control-plane data and must not cross the
 	// renderer boundary. Render-only fields such as output_path remain.
@@ -443,7 +452,10 @@ func TestToWorkerPayload_PreservesRawFields(t *testing.T) {
 
 func TestToWorkerPayload_NilReceiver(t *testing.T) {
 	var dto *RemotePipelineResult
-	m := dto.ToWorkerPayload()
+	m, err := dto.ToWorkerPayloadChecked()
+	if err != nil {
+		t.Fatalf("ToWorkerPayloadChecked: %v", err)
+	}
 	if len(m) != 0 {
 		t.Fatalf("nil receiver should return empty map, got %d keys", len(m))
 	}
@@ -451,7 +463,10 @@ func TestToWorkerPayload_NilReceiver(t *testing.T) {
 
 func TestToWorkerPayload_EmptyDTO(t *testing.T) {
 	dto := &RemotePipelineResult{}
-	m := dto.ToWorkerPayload()
+	m, err := dto.ToWorkerPayloadChecked()
+	if err != nil {
+		t.Fatalf("ToWorkerPayloadChecked: %v", err)
+	}
 	// No Raw, no fields set — should be empty map.
 	if len(m) != 0 {
 		t.Fatalf("empty DTO should return empty map, got %d keys: %v", len(m), m)

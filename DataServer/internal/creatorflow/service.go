@@ -115,8 +115,14 @@ func (s *Service) StartOrPersistForwarding(ctx context.Context, rawPayload map[s
 		// Area 2: Parse the raw result into the typed DTO and derive
 		// the worker payload. The remote result must NOT be passed
 		// raw to the worker.
-		dto, _ := remoteengine.ParseRemotePipelineResult(creatorResult)
-		workerPayload := dto.ToWorkerPayload()
+		dto, parseErr := remoteengine.ParseRemotePipelineResult(creatorResult)
+		if parseErr != nil {
+			return nil, false, fmt.Errorf("creatorflow: parse remote result: %w", parseErr)
+		}
+		workerPayload, payloadErr := dto.ToWorkerPayloadChecked()
+		if payloadErr != nil {
+			return nil, false, fmt.Errorf("creatorflow: project worker payload: %w", payloadErr)
+		}
 
 		// PR-forwarding-deterministic-id: stamp the forwarding key into
 		// the payload so Resolver.Resolve derives the canonical job_id

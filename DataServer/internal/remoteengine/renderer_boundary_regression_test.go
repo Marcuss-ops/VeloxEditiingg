@@ -81,7 +81,10 @@ func TestToWorkerPayload_RejectsAllControlPlanePublicationAndDeliveryData(t *tes
 	if err != nil {
 		t.Fatalf("ParseRemotePipelineResult: %v", err)
 	}
-	workerPayload := dto.ToWorkerPayload()
+	workerPayload, err := dto.ToWorkerPayloadChecked()
+	if err != nil {
+		t.Fatalf("ToWorkerPayloadChecked: %v", err)
+	}
 
 	technical, ok := workerPayload["video_metadata"].(map[string]interface{})
 	if !ok {

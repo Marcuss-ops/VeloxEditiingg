@@ -83,7 +83,7 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 	p.ScriptText = scriptText
 	// BuildPipelinePayload is also called directly by legacy/runner paths,
 	// so enforce the same renderer boundary here as normalizeSceneVideoPayload
-	// and remoteengine.ToWorkerPayload. Only technical render options may
+	// and remoteengine.ToWorkerPayloadChecked. Only technical render options may
 	// survive; publication title/description/tags/privacy/scheduling and
 	// localizations never enter the canonical worker map.
 	if rawMetadata, ok := flat["video_metadata"]; ok {
@@ -196,8 +196,10 @@ func hasRenderableMedia(flat map[string]interface{}) bool {
 				if payload.FirstString(scene, "clip_link", "image_link") != "" {
 					return true
 				}
-				if clip, ok := scene["clip"].(map[string]interface{}); ok && payload.FirstString(clip, "url", "asset_id") != "" {
-					return true
+				for _, key := range []string{"clip", "image", "stock", "voiceover"} {
+					if asset, ok := scene[key].(map[string]interface{}); ok && payload.FirstString(asset, "url", "asset_id") != "" {
+						return true
+					}
 				}
 			}
 		}

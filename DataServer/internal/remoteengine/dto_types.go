@@ -65,7 +65,7 @@ type RemotePipelineResult struct {
 	// Raw preserves the original map for backward-compatibility with
 	// enqueue.BuildPipelinePayload which still operates on maps. Callers
 	// that need the typed fields should access them directly; callers
-	// that need to feed BuildPipelinePayload can use ToWorkerPayload.
+	// that need to feed BuildPipelinePayload can use ToWorkerPayloadChecked.
 	Raw map[string]interface{}
 }
 

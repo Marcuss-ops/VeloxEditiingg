@@ -68,7 +68,7 @@ type normalizedCreatorPush struct {
 // converge on before the resolver entry point. It binds the dedup
 // identity tuple (source_provider, source_job_id, target_executor_id)
 // to the canonical worker payload — the map shape that flows through
-// ParseRemotePipelineResult → ToWorkerPayload.
+// ParseRemotePipelineResult → ToWorkerPayloadChecked.
 //
 // Concretely:
 //
@@ -77,10 +77,10 @@ type normalizedCreatorPush struct {
 //     converge on the same Velox job.
 //
 //   - WorkerPayload is the canonical typed-DTO output that the
-//     Resolver consumes. It is NOT the wire format and not the flat
-//     request body; it is what ParseRemotePipelineResult.ToWorkerPayload
-//     produces. Callers MUST NOT hand-build this map; the canonical
-//     path is the typed DTO.
+//     Resolver consumes. It is NOT the wire format and not the flat// request body; it is what ParseRemotePipelineResult.ToWorkerPayloadChecked
+// produces. Callers MUST NOT hand-build this map; the canonical
+
+//	path is the typed DTO.
 //
 // Created by normalizeCreatorPushRequest (creator_push) and
 // NormalizeExternalJobSubmission (/api/v1/jobs). Both paths produce
@@ -112,7 +112,10 @@ func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush
 	if err != nil {
 		return nil, fmt.Errorf("parse creator payload: %w", err)
 	}
-	workerPayload := dto.ToWorkerPayload()
+	workerPayload, projectionErr := dto.ToWorkerPayloadChecked()
+	if projectionErr != nil {
+		return nil, fmt.Errorf("project creator payload: %w", projectionErr)
+	}
 
 	sourceProvider := strings.TrimSpace(req.SourceProvider)
 	if sourceProvider == "" {

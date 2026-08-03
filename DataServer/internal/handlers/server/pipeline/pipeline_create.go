@@ -182,8 +182,16 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 		// the worker payload. The remote result must NOT be passed
 		// raw to the worker — it must first be converted to a typed
 		// RemotePipelineResult.
-		dto, _ := remoteengine.ParseRemotePipelineResult(result)
-		workerPayload := dto.ToWorkerPayload()
+		dto, parseErr := remoteengine.ParseRemotePipelineResult(result)
+		if parseErr != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": parseErr.Error()})
+			return
+		}
+		workerPayload, projectionErr := dto.ToWorkerPayloadChecked()
+		if projectionErr != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": projectionErr.Error()})
+			return
+		}
 
 		// ── Extract remote job id ─────────────────────────────────────
 		jobID := firstStringResolver(workerPayload, "job_id", "trace_id", "id")

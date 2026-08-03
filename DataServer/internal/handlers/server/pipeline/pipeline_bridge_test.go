@@ -40,13 +40,14 @@ func TestBuildSceneVideoPayloadFromPipelineResult(t *testing.T) {
 	tempDir := t.TempDir()
 
 	jsonPath := filepath.Join(tempDir, "script.json")
-	if err := os.WriteFile(jsonPath, []byte(`{
-  "scenes": [
+	if err := os.WriteFile(jsonPath, []byte(`{			"scenes": [
     {
       "text": "Scene 1",
-      "image_link": "https://example.com/scene1.png"
+      "image": {"asset_id": "scene-image", "url": "velox-asset://scene-image"},
+      "voiceover": {"asset_id": "voice", "url": "velox-asset://voice", "duration_ms": 5000}
     }
   ]
+
 }`), 0o644); err != nil {
 		t.Fatalf("write json: %v", err)
 	}
@@ -93,27 +94,17 @@ func TestBuildSceneVideoPayloadFromPipelineResult(t *testing.T) {
 	if payload["scenes_json"] == "" {
 		t.Fatalf("want scenes_json, got empty")
 	}
-	// PR15.6 canonical-only payload: on disk + on the wire voiceover is
-	// `voiceover_paths` (a slice); singular `voiceover_path` is the legacy
-	// alias that the HTTP-edge adapter reads from old rows only.
-	// BuildPipelinePayload returns the native []string it constructed; an
-	// HTTP-edge JSON round-trip would surface []interface{} instead, so
-	// accept both shapes.
-	var vpFirst interface{}
-	switch v := payload["voiceover_paths"].(type) {
-	case []string:
-		if len(v) > 0 {
-			vpFirst = v[0]
-		}
-	case []interface{}:
-		if len(v) > 0 {
-			vpFirst = v[0]
-		}
-	default:
-		t.Fatalf("want voiceover_paths to be []string or []interface{}, got %T (%v)", payload["voiceover_paths"], payload["voiceover_paths"])
+	// Canonical worker payloads carry voiceover under each scene and never
+	// emit the legacy top-level voiceover_paths array.
+	if _, present := payload["voiceover_paths"]; present {
+		t.Fatalf("voiceover_paths must not cross the renderer boundary")
 	}
-	if vpFirst != voicePath {
-		t.Fatalf("want voiceover path %q at voiceover_paths[0], got %v", voicePath, payload["voiceover_paths"])
+	var scenes []map[string]interface{}
+	if err := json.Unmarshal([]byte(payload["scenes_json"].(string)), &scenes); err != nil {
+		t.Fatalf("decode scenes_json: %v", err)
+	}
+	if len(scenes) != 1 || scenes[0]["voiceover"] == nil {
+		t.Fatalf("want canonical nested voiceover scene, got %#v", scenes)
 	}
 	if payload["job_run_id"] != "trace_123" {
 		t.Fatalf("want job_run_id trace_123, got %v", payload["job_run_id"])
@@ -127,13 +118,14 @@ func TestPipelineGenerateForwardsCompletedResultToQueue(t *testing.T) {
 	tempDir := t.TempDir()
 
 	jsonPath := filepath.Join(tempDir, "script.json")
-	if err := os.WriteFile(jsonPath, []byte(`{
-  "scenes": [
+	if err := os.WriteFile(jsonPath, []byte(`{			"scenes": [
     {
       "text": "Scene 1",
-      "image_link": "https://example.com/scene1.png"
+      "image": {"asset_id": "scene-image", "url": "velox-asset://scene-image"},
+      "voiceover": {"asset_id": "voice", "url": "velox-asset://voice", "duration_ms": 5000}
     }
   ]
+
 }`), 0o644); err != nil {
 		t.Fatalf("write json: %v", err)
 	}
