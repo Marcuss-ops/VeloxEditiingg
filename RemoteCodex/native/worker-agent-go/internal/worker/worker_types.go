@@ -143,6 +143,10 @@ type Worker struct {
 	// heartbeatWake publishes task start/finish edges immediately instead of
 	// waiting for the previous idle ticker to expire.
 	heartbeatWake chan struct{}
+	// jobDone is signalled after every task terminal path. It is consumed by
+	// the remote shared-asset cleanup loop to run cleanup immediately after a
+	// job, in addition to the periodic interval.
+	jobDone chan struct{}
 
 	// Active task executions: keyed by taskID for collision-free multi-task DAGs.
 	// taskIDsByJob provides the reverse-lookup needed for CancelJob.

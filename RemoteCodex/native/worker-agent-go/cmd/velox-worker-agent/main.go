@@ -28,6 +28,7 @@ import (
 	"velox-worker-agent/internal/taskrunner/executors"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/worker"
+	"velox-worker-agent/internal/workercache"
 	"velox-worker-agent/pkg/blob"
 	"velox-worker-agent/pkg/bootstrap"
 	"velox-worker-agent/pkg/cache"
@@ -340,6 +341,48 @@ func main() {
 		logger.LogRegisterFailed("(initial)", cfg.MasterURL, workerErr)
 		os.Exit(1)
 	}
+
+	// Remote shared-asset cache: this SQLite index and its files live under
+	// StateDir, never under a per-job workspace. The worker's existing
+	// integrity-aware resolver owns byte downloads; this index owns durable
+	// leases and eviction safety across jobs and process restarts.
+	clipCacheDB := boot.EnvOr("VELOX_WORKER_CLIP_CACHE_DB", filepath.Join(cfg.StateDir, "clip-cache", "cache.db"))
+	if err := os.MkdirAll(filepath.Dir(clipCacheDB), 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to create remote clip-cache directory: %v\n", err)
+		os.Exit(1)
+	}
+	clipCache, clipCacheErr := workercache.Open(clipCacheDB)
+	if clipCacheErr != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to open remote clip-cache index at %s: %v\n", clipCacheDB, clipCacheErr)
+		os.Exit(1)
+	}
+	defer clipCache.Close()
+	w.AttachClipCache(clipCache)
+	// w was constructed before this index so its authenticated API client is
+	// the one populated by the control-plane registration handshake.
+	if w.APIClient() == nil {
+		fmt.Fprintln(os.Stderr, "Error: worker API client unavailable for protected-assets polling")
+		os.Exit(1)
+	}
+	pollInterval := 30 * time.Second
+	if raw := boot.EnvOr("VELOX_CACHE_SNAPSHOT_INTERVAL", ""); raw != "" {
+		if parsed, parseErr := time.ParseDuration(raw); parseErr == nil && parsed > 0 {
+			pollInterval = parsed
+		}
+	}
+	protectedPoller := worker.NewProtectedAssetsPoller(w.APIClient(), pollInterval)
+	cleanupPolicy := workercache.LoadCleanupPolicy()
+	cleanupLoop := &workercache.CleanupLoop{
+		Cache: clipCache, Policy: cleanupPolicy, Snapshot: protectedPoller,
+		Interval: cleanupPolicy.CleanupInterval, JobDone: w.JobDone(),
+		OnTick: func(stats workercache.CleanupStats, err error) {
+			if err != nil {
+				logger.Warn("[CACHE_CLEANUP] inspected=%d removed=%d skipped_protected=%d skipped_leased=%d err=%v", stats.Inspected, stats.Removed, stats.SkippedProtected, stats.SkippedLeased, err)
+				return
+			}
+			logger.Info("[CACHE_CLEANUP] inspected=%d removed=%d skipped_protected=%d skipped_leased=%d", stats.Inspected, stats.Removed, stats.SkippedProtected, stats.SkippedLeased)
+		},
+	}
 	// RW-PROD-004 §3 A4: MarkBootstrapped(true) is set here because
 	// Dispatch has already returned (with err==nil) and the
 	// package-level bootstrap.Ok() gate is therefore true. We do NOT
@@ -356,6 +399,16 @@ func main() {
 	// Set up context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	go func() {
+		if err := protectedPoller.Run(ctx); err != nil && ctx.Err() == nil {
+			logger.Warn("[CACHE_SNAPSHOT] poller stopped: %v", err)
+		}
+	}()
+	go func() {
+		if err := cleanupLoop.Run(ctx); err != nil && ctx.Err() == nil {
+			logger.Warn("[CACHE_CLEANUP] loop stopped: %v", err)
+		}
+	}()
 
 	// Step 6/8: fail-fast self-check on cfg.StateDir writability.
 	// Runs BEFORE any cache/blob wiring or disk-watcher startup so a

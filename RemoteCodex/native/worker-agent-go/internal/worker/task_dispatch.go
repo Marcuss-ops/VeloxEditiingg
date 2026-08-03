@@ -98,6 +98,7 @@ func (w *Worker) runJobTask(ctx context.Context, pte *PendingTaskExecution) (*ta
 //  5. fix/artifact-metadata: validate every output artifact has a
 //     non-empty Hash before declaring the task succeeded.
 func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecution) (*taskrunner.TaskExecutionReport, error) {
+	defer w.signalJobDone()
 	if w.taskRunner == nil {
 		return nil, fmt.Errorf("worker has no taskRunner configured; call worker.New with options to install one")
 	}

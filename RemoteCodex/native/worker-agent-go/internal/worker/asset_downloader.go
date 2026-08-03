@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"velox-worker-agent/internal/telemetry"
+	"velox-worker-agent/internal/workercache"
 )
 
 // downloadVeloxAssetWithMetadata is the integrity-aware asset path. A cache
@@ -50,6 +52,9 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 				LocalPath:           existing,
 				Source:              "master_asset_bridge",
 			})
+			if err := w.syncClipCache(ctx, assetID, existing, expectedSizeBytes); err != nil {
+				return "", fmt.Errorf("record cached asset %s: %w", assetID, err)
+			}
 			return existing, nil
 		}
 	}
@@ -148,6 +153,9 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 			LocalPath:      localPath,
 			Source:         "master_asset_bridge",
 		})
+		if err := w.syncClipCache(ctx, assetID, localPath, downloadedBytes); err != nil {
+			return "", fmt.Errorf("record downloaded asset %s: %w", assetID, err)
+		}
 		return localPath, nil
 	}
 
@@ -155,4 +163,23 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 		lastErr = fmt.Errorf("download failed")
 	}
 	return "", fmt.Errorf("failed to download velox asset %s: %w", assetID, lastErr)
+}
+
+// syncClipCache records a verified asset in the durable remote-worker index.
+// The content-addressed byte cache remains the data source; this index owns
+// leases, protected snapshots and eviction decisions.
+func (w *Worker) syncClipCache(ctx context.Context, assetID, localPath string, sizeBytes int64) error {
+	if w.clipCache == nil {
+		return nil
+	}
+	entry := workercache.Entry{DriveFileID: assetID, LocalPath: localPath, SizeBytes: sizeBytes, DownloadComplete: true}
+	if err := w.clipCache.Store(ctx, entry); err != nil {
+		if !errors.Is(err, workercache.ErrDuplicate) {
+			return err
+		}
+		if err := w.clipCache.MarkDownloadComplete(ctx, assetID, localPath, sizeBytes); err != nil {
+			return err
+		}
+	}
+	return w.clipCache.MarkUsed(ctx, assetID)
 }

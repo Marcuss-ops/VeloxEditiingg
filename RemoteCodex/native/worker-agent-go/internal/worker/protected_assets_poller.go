@@ -238,3 +238,18 @@ func (p *ProtectedAssetsPoller) Snapshot() *api.ProtectedAssetSnapshot {
 	defer p.mu.RUnlock()
 	return p.snap
 }
+
+// Current adapts the poller's last successful snapshot to the
+// workercache.SnapshotSource contract. A failed or not-yet-completed poll
+// deliberately returns a zero timestamp, so cleanup remains fail-safe.
+func (p *ProtectedAssetsPoller) Current(_ context.Context) (time.Time, []string, error) {
+	snap := p.Snapshot()
+	if snap == nil {
+		return time.Time{}, nil, nil
+	}
+	generatedAt, err := time.Parse(time.RFC3339Nano, snap.GeneratedAt)
+	if err != nil {
+		return time.Time{}, nil, fmt.Errorf("parse protected-assets generated_at: %w", err)
+	}
+	return generatedAt.UTC(), append([]string(nil), snap.DriveFileIDs...), nil
+}

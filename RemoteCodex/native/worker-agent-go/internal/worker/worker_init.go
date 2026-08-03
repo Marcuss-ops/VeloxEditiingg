@@ -289,6 +289,7 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		status:           StatusIdle,
 		stopChan:         make(chan struct{}),
 		heartbeatWake:    make(chan struct{}, 1),
+		jobDone:          make(chan struct{}, 1),
 		heartbeatBackoff: &backoffConfig{
 			initialInterval: 5 * time.Second,
 			maxInterval:     60 * time.Second,
@@ -338,4 +339,46 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 	w.loadLocalState()
 
 	return w, nil
+}
+
+// APIClient returns the authenticated data-plane client used by the worker.
+// The registration handshake populates its bearer token; long-lived remote
+// services such as the protected-assets poller must therefore share this
+// exact client rather than constructing an unauthenticated second client.
+func (w *Worker) APIClient() *api.Client {
+	if w == nil {
+		return nil
+	}
+	return w.apiClient
+}
+
+// JobDone returns a notification channel which receives a best-effort signal
+// after each task reaches a terminal path. The channel is intentionally
+// buffered/coalescing: cleanup needs a prompt wake-up, not one event per DAG
+// subtask.
+func (w *Worker) JobDone() <-chan struct{} {
+	if w == nil {
+		return nil
+	}
+	return w.jobDone
+}
+
+// AttachClipCache is used only by the composition root while the worker is
+// still stopped. It keeps construction of the durable SQLite index next to
+// the process lifecycle while preserving the existing Option API for tests.
+func (w *Worker) AttachClipCache(c *workercache.Cache) {
+	if w == nil || c == nil {
+		panic("worker.AttachClipCache: cache is required")
+	}
+	w.clipCache = c
+}
+
+func (w *Worker) signalJobDone() {
+	if w == nil || w.jobDone == nil {
+		return
+	}
+	select {
+	case w.jobDone <- struct{}{}:
+	default:
+	}
 }
