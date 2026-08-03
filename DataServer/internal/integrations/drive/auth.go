@@ -175,12 +175,24 @@ func (tm *TokenManager) LoadToken(name string) (*Token, error) {
 		return nil, fmt.Errorf("failed to read token file: %w", err)
 	}
 
+	var envelope encryptedTokenFile
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return nil, fmt.Errorf("failed to parse token file: %w", err)
+	}
+	if envelope.Format != "velox-credential-v1" || envelope.KeyVersion <= 0 || len(envelope.Ciphertext) == 0 {
+		// Tokens written by the pre-vault Drive integration are plain JSON.
+		// Keep them readable for migration and delivery continuity, but never
+		// write new tokens in this format: SaveToken remains fail-closed when
+		// VELOX_CREDENTIAL_KEY is unavailable.
+		var legacy Token
+		if err := json.Unmarshal(data, &legacy); err != nil || legacy.AccessToken == "" {
+			return nil, fmt.Errorf("refusing invalid token file")
+		}
+		log.Printf("[AUTH] WARN loading legacy unencrypted Drive token %s; configure VELOX_CREDENTIAL_KEY and re-authenticate to migrate it", tokenPath)
+		return &legacy, nil
+	}
 	if tm.keyring == nil {
 		return nil, credentials.ErrKeyUnavailable
-	}
-	var envelope encryptedTokenFile
-	if err := json.Unmarshal(data, &envelope); err != nil || envelope.Format != "velox-credential-v1" || envelope.KeyVersion <= 0 || len(envelope.Ciphertext) == 0 {
-		return nil, fmt.Errorf("refusing unencrypted or invalid token file")
 	}
 	plain, err := tm.keyring.Open(envelope.KeyVersion, envelope.Ciphertext)
 	if err != nil {

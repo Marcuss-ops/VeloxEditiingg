@@ -255,7 +255,6 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	if driveMod != nil {
 		driveProvider := deliveryProviders.NewDriveProvider(driveMod.Service(), p.BlobStore)
 		deliveryReg.Register(driveProvider)
-		deliveryReg.RegisterLegacyPhaseProvider(driveProvider)
 		log.Printf("[BOOTSTRAP] Delivery provider registered: drive")
 	}
 

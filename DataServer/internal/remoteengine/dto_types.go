@@ -137,6 +137,11 @@ type SceneResult struct {
 	ImageLink string `json:"image_link,omitempty"`
 	// ClipLink is an alternative to ImageLink for video-clip-based scenes.
 	ClipLink string `json:"clip_link,omitempty"`
+	// StockLinks is the ordered pool of visual stock sources for a narrated
+	// scene. The worker timeline builder shuffles this pool per scene and
+	// loops it until the scene voiceover duration is covered.
+	StockLinks    []string `json:"stock_links,omitempty"`
+	StockFallback bool     `json:"stock_fallback,omitempty"`
 	// DurationSeconds is the intended duration of the scene in seconds.
 	// The OpenAPI contract on SubmitScene enforces 0.1 <= duration_seconds
 	// <= 86400; the type is float64 so sub-second values (e.g. 0.1) survive

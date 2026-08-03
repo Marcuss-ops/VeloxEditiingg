@@ -16,8 +16,8 @@
       "kind": "intro",
       "text": "Cinque campioni, cinque carriere leggendarie e cinque storie. Dietro i titoli, le luci e gli applausi si celano enormi sacrifici, pressione costante, battute d'arresto inaspettate e decisioni che possono cambiare il destino di un atleta. Questa introduzione chiede al pubblico di guardare oltre lo spettacolo: ogni movimento riflette disciplina, paura, ambizione e carattere. La domanda centrale è semplice: quanto può costare diventare una leggenda?",
       "duration_seconds": 5,
-      "reference_voiceover": "/home/pierone/src/go-master/projects/Pyt/VeloxEditing/refactored/data/media/voiceovers/Five legendary boxers_scene-0_it_8ba0ed208f3c1eba.mp3",
-      "stock_links": ["velox-asset://1Fjhxg2TE0mGcoUURnQjsf9biCJFaaORm"],
+      "reference_voiceover": "velox-asset://29ae0987880d1f30f6604acd4f8cc9837bfdf4a30d7dd27fff3015f73ebb5f2a",
+      "stock_links": ["velox-asset://b47867237750ac210fa191d5bf718f5adc0f244578544a8ecdfb7e74f33e7816"],
       "stock_fallback": true
     },
     {
@@ -26,10 +26,10 @@
       "kind": "clip",
       "text": "Mike Tyson costruì la sua leggenda attraverso potenza esplosiva, velocità sorprendente e pressione capace di cambiare un incontro in pochi secondi. La sua ascesa nel pugilato professionistico fu eccezionalmente rapida, trasformando ogni ingresso in un evento e ogni vittoria precoce in prova di un nuovo campione dominante. Tyson avanzava con disciplina, chiudeva rapidamente le distanze e rendeva pericolose brevi combinazioni perché il suo tempismo e la forza fisica arrivavano insieme. L'immagine pubblica di forza assoluta coesisteva anche accanto a difficoltà personali e professionali che alterarono la direzione della sua carriera.",
       "duration_seconds": 7,
-      "reference_voiceover": "/home/pierone/src/go-master/projects/Pyt/VeloxEditing/refactored/data/media/voiceovers/Five legendary boxers_scene-1_it_ef672de52f283fdf.mp3",
+      "reference_voiceover": "velox-asset://a6117eaafb621aa18a3d5b766f0c684269dd51238ca30e7e6138f99c6a86fc54",
       "stock_folder_id": "1jz2Y_EWtSck-CcZssDQ5PLsIO6Aa0M03",
       "stock_folder_link": "https://drive.google.com/drive/folders/1jz2Y_EWtSck-CcZssDQ5PLsIO6Aa0M03?usp=drive_link",
-      "stock_links": ["https://drive.google.com/drive/folders/1jz2Y_EWtSck-CcZssDQ5PLsIO6Aa0M03?usp=drive_link"],
+      "stock_links": ["https://drive.google.com/uc?id=1HFkluM6tikQ-usiyuwP3Brg1SQe8r-RM", "https://drive.google.com/uc?id=1bw-8IB2W6GGqTb0zBUOaHgLMzDNbQScJ", "https://drive.google.com/uc?id=1hVOtTaLk-7SvLlAAWkxdj8z8AZsxmKDs", "https://drive.google.com/uc?id=1PjO-ARMKWrACVXFJlVhNtOhZqb5TgPyO", "https://drive.google.com/uc?id=1OFyFMN0LbjwMGcOSNqtc3yslwfMFU2aa"],
       "stock_fallback": true
     },
     {
@@ -38,10 +38,10 @@
       "kind": "clip",
       "text": "Muhammad Ali trasformò il pugilato attraverso movimento, ritmo, gioco di gambe e controllo della distanza. Non cercava semplicemente di colpire con i pugni; faceva inseguire un avversario a un tempo che poteva cambiare attraverso equilibrio, velocità e accelerazione improvvisa. La sua personalità pubblica espanse la sua presenza oltre il ring. Ali usò fiducia in sé stesso, umorismo e una voce potente per diventare un'icona inconfondibile, mentre i suoi successi sportivi e coraggio culturale crearono un ricordo che raggiunse un vasto pubblico.",
       "duration_seconds": 7,
-      "reference_voiceover": "/home/pierone/src/go-master/projects/Pyt/VeloxEditing/refactored/data/media/voiceovers/Five legendary boxers_scene-2_it_ef6094ca005d6fcd.mp3",
+      "reference_voiceover": "velox-asset://79ab5044b98b3731d422939a65bb74a3fb8a0bc4461aadefb80edd9e07c12e9c",
       "stock_folder_id": "1umtTRm4Aw9_pjPl0jkWkHpsBBnwWnanJ",
       "stock_folder_link": "https://drive.google.com/drive/folders/1umtTRm4Aw9_pjPl0jkWkHpsBBnwWnanJ?usp=drive_link",
-      "stock_links": ["https://drive.google.com/drive/folders/1umtTRm4Aw9_pjPl0jkWkHpsBBnwWnanJ?usp=drive_link"],
+      "stock_links": ["https://drive.google.com/uc?id=1dIqRQ47h1ZyK6Yf94Lg3ipfjlldsxA25", "https://drive.google.com/uc?id=1XYdw_exK3--Nh5eM2yg9lO5PqwCMiJ9a", "https://drive.google.com/uc?id=1rBjiFeox7GQhR4juoyEcYdBJUdi3elLR", "https://drive.google.com/uc?id=1li8yia48YhskN9FzoovmiglaR_9aooSs", "https://drive.google.com/uc?id=1w2jiBlAFDByBQkkE9dOghkj2EbqqK7AR"],
       "stock_fallback": true
     },
     {
@@ -50,10 +50,10 @@
       "kind": "clip",
       "text": "Evander Holyfield rappresenta l'indurimento fisico e mentale portato al limite. La sua carriera si basò su disciplina quotidiana, preparazione e la capacità di continuare a combattere quando la pressione diventava enorme. Holyfield affrontò la rivalità con tenacia pratica: assorbiva la fatica, rimaneva concentrato e cercava soluzioni negli scambi più duri. La sua forza non fu solo la potenza di un pugno, ma anche la lucidità e l'impegno richiesti per rimanere coinvolto per un intero incontro.",
       "duration_seconds": 7,
-      "reference_voiceover": "/home/pierone/src/go-master/projects/Pyt/VeloxEditing/refactored/data/media/voiceovers/Five legendary boxers_scene-3_it_2c0cc46fd9a2acf8.mp3",
+      "reference_voiceover": "velox-asset://07bb2118fa15aafa60d2f9cff2a9560a39ce5c8e5209a57cc97051a4036f9c83",
       "stock_folder_id": "1dbVj0SUd0c2tBSLKHIXkKqp-4S-6LTgB",
       "stock_folder_link": "https://drive.google.com/drive/folders/1dbVj0SUd0c2tBSLKHIXkKqp-4S-6LTgB?usp=drive_link",
-      "stock_links": ["https://drive.google.com/drive/folders/1dbVj0SUd0c2tBSLKHIXkKqp-4S-6LTgB?usp=drive_link"],
+      "stock_links": ["https://drive.google.com/uc?id=1bMB5j6jAQmPU_nY9WXZSUtPJcB_VDHxf", "https://drive.google.com/uc?id=1of11gWahxStDrVkP8fpVwG8n7XTSWcpE", "https://drive.google.com/uc?id=1YBv7yWlQ6T5WNs8xUtGaCHI3dWsnzOB6", "https://drive.google.com/uc?id=18Sr9DPhS1hhxg7VOev50o6TkFax7WFuk", "https://drive.google.com/uc?id=1S5QpsxWymVnBC49R1-_Qx50NseMxVp9i"],
       "stock_fallback": true
     },
     {
@@ -62,10 +62,10 @@
       "kind": "clip",
       "text": "Floyd Mayweather costruì il suo successo su difesa, precisione e la lettura attenta di un avversario. Il suo stile controllava la distanza, riduceva il rischio e trasformava un errore in un'opportunità calcolata. Mayweather preparava ogni incontro, studiava i tempi e sceglieva con cura quando attaccare, ritirarsi o cambiare ritmo. Questa disciplina tecnica supportò una carriera professionale invincibile e trasformò il ring in un problema che poteva essere analizzato e risolto.",
       "duration_seconds": 7,
-      "reference_voiceover": "/home/pierone/src/go-master/projects/Pyt/VeloxEditing/refactored/data/media/voiceovers/Five legendary boxers_scene-4_it_f6c61752cec18b48.mp3",
+      "reference_voiceover": "velox-asset://96f210efeaddb76d1be7df160da34c90c884f8683e83354ecc958f601d47581b",
       "stock_folder_id": "1EL7rpQsl-PkmhrPpFgMKGBadmAek1_fR",
       "stock_folder_link": "https://drive.google.com/drive/folders/1EL7rpQsl-PkmhrPpFgMKGBadmAek1_fR?usp=drive_link",
-      "stock_links": ["https://drive.google.com/drive/folders/1EL7rpQsl-PkmhrPpFgMKGBadmAek1_fR?usp=drive_link"],
+      "stock_links": ["https://drive.google.com/uc?id=1HMnwah01A6fdAmCjf1d25DqqBZn4jiA2", "https://drive.google.com/uc?id=1ESUYU_mHX-IrD82Sv0ehj8WfDWSdHfPQ", "https://drive.google.com/uc?id=1t6RLFBRJiooPf2YJp10BPRPfwTLs1O3G", "https://drive.google.com/uc?id=1zo_jxIx-bx32NnwuHqHFMYcWau6PZp7n", "https://drive.google.com/uc?id=1iabAo0ORuV-H0lnRBr8Tmq_T_B1RHI63"],
       "stock_fallback": true
     },
     {
@@ -74,10 +74,10 @@
       "kind": "outro",
       "text": "Sugar Ray Robinson chiude il documentario come simbolo di completezza tecnica, velocità, ritmo, adattabilità e longevità. Il suo stile combinava movimento fluido, rapide combinazioni e potenza capaci di cambiare la direzione di un incontro. Robinson rappresentava più di una qualità: la sua statura derivava dall'equilibrio tra talento naturale, preparazione e capacità di adattarsi a situazioni mutevoli. Una leggenda non è solo chi vince, ma chi lascia un modello che sopravvive al tempo.",
       "duration_seconds": 6,
-      "reference_voiceover": "/home/pierone/src/go-master/projects/Pyt/VeloxEditing/refactored/data/media/voiceovers/Five legendary boxers_scene-5_it_24e9bcf8e15a299a.mp3",
+      "reference_voiceover": "velox-asset://070354a75f75aef4d2d2f3d1013a5116e578f18c236bbf06e6958e45d63c29a6",
       "stock_folder_id": "1xxnNHfperYJ6sZiLcNadgvYIR6wG_jB8",
       "stock_folder_link": "https://drive.google.com/drive/folders/1xxnNHfperYJ6sZiLcNadgvYIR6wG_jB8?usp=drive_link",
-      "stock_links": ["https://drive.google.com/drive/folders/1xxnNHfperYJ6sZiLcNadgvYIR6wG_jB8?usp=drive_link"],
+      "stock_links": ["https://drive.google.com/uc?id=1TwVU-11JCggSBuHtavhKMevMZna-xr51", "https://drive.google.com/uc?id=1g9Ir3FrzdH1u2DmOrzSKVhTm15Mw5Zqn", "https://drive.google.com/uc?id=1S5HWNgy6QYoFQhFdj91Z0XGqC5-szhVG", "https://drive.google.com/uc?id=166GQ1J5OUr9IOlklGRJdXs6yFmcReJVS", "https://drive.google.com/uc?id=1ccZ0okmPv0sqWLsjBDqVjBnqZUe54eyF"],
       "stock_fallback": true
     }
   ]

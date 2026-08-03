@@ -114,6 +114,22 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 	// media keys. copyTimelinePayloadFields mirrors the same preservation
 	// done in normalizeSceneVideoPayload.
 	copyTimelinePayloadFields(out, flat)
+	// The canonical API projection carries scenes_json, while the remote
+	// hybrid executor consumes the compiled timeline as items. Build that
+	// timeline here for narrated stock recipes so stock-only scenes remain
+	// visual, randomised per scene, and exactly cover each voiceover.
+	if strings.EqualFold(payload.FirstString(flat, "video_mode"), "clip_stock") {
+		_, items, _, audioTracks, _, timelineErr := normalizeClipPayload(flat)
+		if timelineErr != nil {
+			return nil, fmt.Errorf("build clip-stock timeline: %w", timelineErr)
+		}
+		if len(items) > 0 {
+			out["items"] = items
+		}
+		if len(audioTracks) > 0 {
+			out["audio_tracks"] = audioTracks
+		}
+	}
 	// BuildPipelinePayload is the worker-facing projection. Keep the
 	// canonical delivery envelope available to callers that extracted it
 	// before this step, but never send routing/control-plane fields to the

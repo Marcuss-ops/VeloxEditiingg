@@ -21,7 +21,7 @@ func TestTokenUnmarshalAcceptsPipelineGenAccessToken(t *testing.T) {
 	}
 }
 
-func TestTokenManagerEncryptsAndRejectsPlaintext(t *testing.T) {
+func TestTokenManagerEncryptsAndReadsLegacyPlaintext(t *testing.T) {
 	t.Setenv("VELOX_CREDENTIAL_KEY", "01234567890123456789012345678901")
 	tm, err := NewTokenManager(t.TempDir())
 	if err != nil {
@@ -46,7 +46,8 @@ func TestTokenManagerEncryptsAndRejectsPlaintext(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"access_token":"plaintext"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tm.LoadToken("default"); err == nil {
-		t.Fatal("plaintext token file was accepted")
+	legacy, err := tm.LoadToken("default")
+	if err != nil || legacy.AccessToken != "plaintext" {
+		t.Fatalf("legacy plaintext token = %#v, err=%v", legacy, err)
 	}
 }

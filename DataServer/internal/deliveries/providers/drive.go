@@ -8,7 +8,6 @@ package providers
 import (
 	"context"
 
-	"velox-server/internal/credentials"
 	"velox-server/internal/deliveries"
 	integrationsDrive "velox-server/internal/integrations/drive"
 	"velox-server/internal/store"
@@ -28,31 +27,6 @@ func NewDriveProvider(svc *integrationsDrive.Service, blobStore store.BlobStore)
 
 // Name returns "drive".
 func (d *DriveProvider) Name() string { return "drive" }
-
-func (d *DriveProvider) RequiredCredentialScopes() []string {
-	return []string{"https://www.googleapis.com/auth/drive.file"}
-}
-
-func (d *DriveProvider) DeliverWithCredential(ctx context.Context, artifact *store.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string, lease *credentials.AccessLease) (*deliveries.Result, error) {
-	if lease == nil || lease.AccessToken == "" {
-		return nil, deliveries.ErrProviderAuth
-	}
-	if d == nil || d.service == nil {
-		return nil, deliveries.ErrProviderNotConfigured
-	}
-	if destination == nil {
-		return nil, deliveries.ErrProviderPermanent
-	}
-	filePath, err := resolveArtifactFilePath(d.blobStore, artifact)
-	if err != nil {
-		return nil, err
-	}
-	uploadRes, err := d.service.UploadVideoWithAccessToken(ctx, filePath, artifact.ID, destination.FolderID, deliveryID, lease.AccessToken)
-	if err != nil {
-		return nil, err
-	}
-	return &deliveries.Result{Success: uploadRes.Success, RemoteID: uploadRes.FileID, RemoteURL: uploadRes.WebViewLink, ProviderMeta: map[string]interface{}{"folder_link": uploadRes.FolderLink}}, nil
-}
 
 // Deliver pushes an artifact file to Drive.
 //

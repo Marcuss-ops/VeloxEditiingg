@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"velox-shared/compatibility"
 	"velox-shared/payload"
 )
 
@@ -46,12 +47,16 @@ func convertRawScenes(raw []interface{}) []SceneResult {
 			continue
 		}
 		scene := SceneResult{
-			Text:      payload.FirstString(m, "text", "description", "narration"),
-			SceneID:   payload.FirstString(m, "scene_id"),
-			Index:     intFromAnyMap(m["index"]),
-			Kind:      payload.FirstString(m, "kind"),
-			ImageLink: payload.FirstString(m, "image_link", "image_url", "image"),
-			ClipLink:  payload.FirstString(m, "clip_link", "clip_url", "video_link"),
+			Text:       payload.FirstString(m, "text", "description", "narration"),
+			SceneID:    payload.FirstString(m, "scene_id"),
+			Index:      intFromAnyMap(m["index"]),
+			Kind:       payload.FirstString(m, "kind"),
+			ImageLink:  payload.FirstString(m, "image_link", "image_url", "image"),
+			ClipLink:   payload.FirstString(m, "clip_link", "clip_url", "video_link"),
+			StockLinks: append(append(compatibility.ReadStringList(m, "stock_links"), compatibility.ReadStringList(m, "stock_clip_links")...), compatibility.ReadStringList(m, "drive_links")...),
+		}
+		if fallback, ok := m["stock_fallback"].(bool); ok {
+			scene.StockFallback = fallback
 		}
 		if dur, ok := m["duration_seconds"].(float64); ok {
 			scene.DurationSeconds = dur
