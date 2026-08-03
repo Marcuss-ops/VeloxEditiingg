@@ -436,6 +436,13 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             std::ostringstream audioFilter;
             std::ostringstream audioInputs;
             for (size_t t = 0; t < downloadedTracks.size(); ++t) {
+                if (downloadedTracks[t].second->loop) {
+                    // Looping tracks (notably background music) are bounded
+                    // by their declared duration below; they must never
+                    // extend the video or shorten it when the source file is
+                    // shorter than the final render.
+                    audioInputs << " -stream_loop -1";
+                }
                 audioInputs << " -i " << file::shellQuote(downloadedTracks[t].first.string());
                 if (t > 0) audioFilter << ";";
                 double vol = downloadedTracks[t].second->volume;

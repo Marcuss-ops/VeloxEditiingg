@@ -40,6 +40,7 @@ struct AudioTrack {
     double start_time_offset{0.0};
     double duration_seconds{0.0};
     std::string role;
+    bool loop{false};
 };
 
 struct SubtitleTrack {

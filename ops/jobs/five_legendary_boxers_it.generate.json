@@ -8,6 +8,17 @@
   "save_to_db": true,
   "fit": "contain",
   "video_mode": "clip_stock",
+  "audio_tracks": [
+    {
+      "source_url": "https://drive.google.com/uc?id=1OXND5tIzQjTNv1T-XIS6lFBlLfJPOp6g",
+      "role": "background_music",
+      "volume_db": -60,
+      "volume": 0.001,
+      "loop": true,
+      "ducking_enabled": false,
+      "duration_seconds": 191.664
+    }
+  ],
   "script_text": "Cinque campioni, cinque carriere leggendarie e cinque storie. Dietro i titoli, le luci e gli applausi si celano enormi sacrifici, pressione costante, battute d'arresto inaspettate e decisioni che possono cambiare il destino di un atleta. Mike Tyson costruì la sua leggenda attraverso potenza esplosiva, velocità sorprendente e pressione capace di cambiare un incontro in pochi secondi. Muhammad Ali trasformò il pugilato attraverso movimento, ritmo, gioco di gambe e controllo della distanza. Evander Holyfield rappresenta l'indurimento fisico e mentale portato al limite. Floyd Mayweather costruì il suo successo su difesa, precisione e la lettura attenta di un avversario. Sugar Ray Robinson chiude il documentario come simbolo di completezza tecnica, velocità, ritmo, adattabilità e longevità.",
   "scenes": [
     {
