@@ -88,19 +88,37 @@ func (r *StaleExecutionReconciler) Scan(ctx context.Context, now time.Time, limi
 	if limit <= 0 {
 		limit = 500
 	}
-	findings := make([]StaleExecutionFinding, 0)
-	var err error
-	for _, scan := range []func(context.Context, time.Time, int, []StaleExecutionFinding) ([]StaleExecutionFinding, error){
+	// Scan each category independently, then interleave the results. This
+	// preserves the caller's global limit without allowing an early category
+	// (for example, a large expired-lease backlog) to starve later categories.
+	scanners := []func(context.Context, time.Time, int, []StaleExecutionFinding) ([]StaleExecutionFinding, error){
 		r.scanExpiredLeases, r.scanOrphanTasks, r.scanCommittedArtifactDrift,
 		r.scanUnconfirmedSpool, r.scanOfflineWorkers,
-	} {
-		findings, err = scan(ctx, now, limit, findings)
-		if err != nil {
-			return nil, err
+	}
+	perCategory := make([][]StaleExecutionFinding, len(scanners))
+	for i, scan := range scanners {
+		var scanErr error
+		perCategory[i], scanErr = scan(ctx, now, limit, nil)
+		if scanErr != nil {
+			return nil, scanErr
 		}
 	}
-	if len(findings) > limit {
-		findings = findings[:limit]
+	findings := make([]StaleExecutionFinding, 0, limit)
+	for offset := 0; len(findings) < limit; offset++ {
+		added := false
+		for category := range perCategory {
+			if offset >= len(perCategory[category]) {
+				continue
+			}
+			findings = append(findings, perCategory[category][offset])
+			added = true
+			if len(findings) == limit {
+				break
+			}
+		}
+		if !added {
+			break
+		}
 	}
 	return findings, nil
 }
@@ -174,17 +192,17 @@ func (r *StaleExecutionReconciler) scanOrphanTasks(ctx context.Context, now time
 }
 
 func (r *StaleExecutionReconciler) scanCommittedArtifactDrift(ctx context.Context, now time.Time, limit int, out []StaleExecutionFinding) ([]StaleExecutionFinding, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT MIN(a.id), a.job_id, ac.commit_id, ac.attempt_id, ac.task_id, j.status FROM artifacts a JOIN task_output_declarations d ON d.artifact_id=a.id JOIN attempt_commits ac ON ac.commit_id=d.commit_id AND ac.status='COMMITTED' JOIN jobs j ON j.job_id=a.job_id WHERE a.status='READY' AND j.status IN ('RUNNING','LEASED','AWAITING_ARTIFACT') GROUP BY a.job_id, ac.commit_id, ac.attempt_id, ac.task_id, j.status ORDER BY MIN(a.id) LIMIT ?`, limit)
+	rows, err := r.db.QueryContext(ctx, `SELECT MIN(a.id), a.job_id, ac.commit_id, ac.attempt_id, ac.task_id, ac.worker_id, ac.lease_id, j.status FROM artifacts a JOIN task_output_declarations d ON d.artifact_id=a.id JOIN attempt_commits ac ON ac.commit_id=d.commit_id AND ac.job_id=a.job_id AND ac.task_id=d.task_id AND ac.attempt_id=d.attempt_id AND ac.status='COMMITTED' JOIN jobs j ON j.job_id=a.job_id WHERE a.status='READY' AND j.status IN ('RUNNING','LEASED') GROUP BY a.job_id, ac.commit_id, ac.attempt_id, ac.task_id, ac.worker_id, ac.lease_id, j.status ORDER BY MIN(a.id) LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("scan committed artifact drift: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var artifactID, jobID, commitID, attemptID, taskID, jobStatus string
-		if err := rows.Scan(&artifactID, &jobID, &commitID, &attemptID, &taskID, &jobStatus); err != nil {
+		var artifactID, jobID, commitID, attemptID, taskID, workerID, leaseID, jobStatus string
+		if err := rows.Scan(&artifactID, &jobID, &commitID, &attemptID, &taskID, &workerID, &leaseID, &jobStatus); err != nil {
 			return nil, err
 		}
-		out = append(out, StaleExecutionFinding{Category: StaleCommittedArtifact, ResourceType: "job", ResourceID: jobID, JobID: jobID, TaskID: taskID, AttemptID: attemptID, ArtifactID: artifactID, CommitID: commitID, OldStatus: jobStatus, ProposedStatus: "AWAITING_ARTIFACT", Reason: "READY artifact and COMMITTED attempt exist while job is non-terminal", ObservedAt: now.UTC()})
+		out = append(out, StaleExecutionFinding{Category: StaleCommittedArtifact, ResourceType: "job", ResourceID: jobID, JobID: jobID, TaskID: taskID, AttemptID: attemptID, ArtifactID: artifactID, CommitID: commitID, WorkerID: workerID, LeaseID: leaseID, OldStatus: jobStatus, ProposedStatus: "SUCCEEDED", Reason: "READY artifact and COMMITTED attempt exist while job is non-terminal", ObservedAt: now.UTC()})
 	}
 	return out, rows.Err()
 }
@@ -225,7 +243,7 @@ func (r *StaleExecutionReconciler) scanOfflineWorkers(ctx context.Context, now t
 func (r *StaleExecutionReconciler) applyFinding(ctx context.Context, f StaleExecutionFinding, actor string, now time.Time) (bool, error) {
 	switch f.Category {
 	case StaleLeaseExpired:
-		changed, err := r.applyExpiredLease(ctx, f, actor)
+		changed, err := r.applyExpiredLease(ctx, f, actor, now)
 		if err != nil || !changed {
 			return changed, err
 		}
@@ -243,29 +261,35 @@ func (r *StaleExecutionReconciler) applyFinding(ctx context.Context, f StaleExec
 	}
 }
 
-func (r *StaleExecutionReconciler) applyExpiredLease(ctx context.Context, f StaleExecutionFinding, actor string) (bool, error) {
-	candidates, err := r.tasks.RequeueExpiredLeases(ctx, time.Now().UTC().Format(time.RFC3339Nano), 100)
+func (r *StaleExecutionReconciler) applyExpiredLease(ctx context.Context, f StaleExecutionFinding, actor string, now time.Time) (bool, error) {
+	// Target the finding directly instead of rescanning the first N expired
+	// rows. This keeps apply correct when the finding was beyond the reaper's
+	// bounded scan window and preserves the canonical CAS in the repository.
+	var leaseExpiresAt string
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COALESCE(lease_expires_at,'') FROM tasks
+		 WHERE task_id=? AND worker_id=? AND lease_id=?
+		   AND status IN ('LEASED','RUNNING')
+		   AND COALESCE(lease_expires_at,'')<>'' AND lease_expires_at < ?`,
+		f.TaskID, f.WorkerID, f.LeaseID, now.UTC().Format(time.RFC3339Nano)).Scan(&leaseExpiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
-	for _, c := range candidates {
-		if c.ID != f.TaskID || c.LeaseID != f.LeaseID {
-			continue
+	maxRetries := 3
+	if f.JobID != "" {
+		if job, jerr := r.jobs.Get(ctx, f.JobID); jerr == nil && job != nil && job.MaxRetries > 0 {
+			maxRetries = job.MaxRetries
 		}
-		maxRetries := 3
-		if f.JobID != "" {
-			if job, jerr := r.jobs.Get(ctx, f.JobID); jerr == nil && job != nil && job.MaxRetries > 0 {
-				maxRetries = job.MaxRetries
-			}
-		}
-		event := r.auditEventForFinding(f, actor, time.Now().UTC())
-		_, err := r.tasks.ExpireTaskLeaseAtomicAudited(ctx, c.ID, c.LeaseID, c.LeaseExpiresAt, maxRetries, event)
-		if errors.Is(err, taskgraph.ErrTransitionConflict) {
-			return false, nil
-		}
-		return err == nil, err
 	}
-	return false, nil
+	event := r.auditEventForFinding(f, actor, now)
+	_, err = r.tasks.ExpireTaskLeaseAtomicAudited(ctx, f.TaskID, f.LeaseID, leaseExpiresAt, maxRetries, event)
+	if errors.Is(err, taskgraph.ErrTransitionConflict) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func (r *StaleExecutionReconciler) applyOrphanTask(ctx context.Context, f StaleExecutionFinding, actor string, now time.Time) (bool, error) {
@@ -302,13 +326,99 @@ func (r *StaleExecutionReconciler) applyCommittedArtifact(ctx context.Context, f
 	}
 	defer tx.Rollback()
 	nowStr := now.UTC().Format(time.RFC3339Nano)
-	res, err := tx.ExecContext(ctx, `UPDATE jobs SET status=?, revision=revision+1, updated_at=? WHERE job_id=? AND status IN ('RUNNING','LEASED')`, string(jobs.StatusAwaitingArtifact), nowStr, f.JobID)
+
+	// Reconstruct the terminal commit transition in one transaction. The
+	// evidence is stronger than a mere job roll-up: the attempt commit is
+	// already COMMITTED and its output artifact is READY. Mark the matching
+	// attempt/task terminal, then let the job CAS require that every task is
+	// SUCCEEDED before it becomes SUCCEEDED itself.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE task_attempts
+		   SET status='SUCCEEDED', completed_at=COALESCE(completed_at, ?),
+		       report_version=report_version+1, updated_at=?
+		 WHERE id=? AND task_id=? AND job_id=? AND worker_id=? AND lease_id=?
+		   AND status NOT IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT')`,
+		nowStr, nowStr, f.AttemptID, f.TaskID, f.JobID, f.WorkerID, f.LeaseID); err != nil {
+		return false, err
+	}
+	taskRes, err := tx.ExecContext(ctx, `
+		UPDATE tasks
+		   SET status='SUCCEEDED', completed_at=COALESCE(completed_at, ?),
+		       winning_attempt_id=?, winning_attempt_committed_at=?,
+		       winning_attempt_terminal_pending=0, revision=revision+1, updated_at=?
+		 WHERE task_id=? AND attempt_id=? AND worker_id=? AND lease_id=?
+		   AND status IN ('RUNNING','LEASED')`,
+		nowStr, f.AttemptID, nowStr, nowStr, f.TaskID, f.AttemptID, f.WorkerID, f.LeaseID)
+	if err != nil {
+		return false, err
+	}
+	if taskRows, _ := taskRes.RowsAffected(); taskRows != 1 {
+		// A replay may have completed the exact task concurrently. Accept
+		// only that terminal identity; never roll up an unrelated task.
+		var status, attemptID, workerID, leaseID, winningAttemptID string
+		err := tx.QueryRowContext(ctx, `
+			SELECT status, COALESCE(attempt_id,''), COALESCE(worker_id,''),
+			       COALESCE(lease_id,''), COALESCE(winning_attempt_id,'')
+			  FROM tasks WHERE task_id=?`, f.TaskID).Scan(&status, &attemptID, &workerID, &leaseID, &winningAttemptID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return false, nil
+			}
+			return false, err
+		}
+		if status != string(taskgraph.StatusSucceeded) ||
+			(attemptID != f.AttemptID && winningAttemptID != f.AttemptID) ||
+			(workerID != "" && workerID != f.WorkerID) ||
+			(leaseID != "" && leaseID != f.LeaseID) {
+			return false, nil
+		}
+	}
+	res, err := tx.ExecContext(ctx, `
+		UPDATE jobs
+		   SET status=?, completed_at=COALESCE(completed_at, ?), revision=revision+1, updated_at=?
+		 WHERE job_id=? AND status IN ('RUNNING','LEASED','AWAITING_ARTIFACT')
+		   AND EXISTS (SELECT 1 FROM tasks WHERE job_id=? AND status='SUCCEEDED')
+		   AND NOT EXISTS (SELECT 1 FROM tasks WHERE job_id=? AND status<>'SUCCEEDED')`,
+		string(jobs.StatusSucceeded), nowStr, nowStr, f.JobID, f.JobID, f.JobID)
 	if err != nil {
 		return false, err
 	}
 	n, _ := res.RowsAffected()
 	if n != 1 {
 		return false, nil
+	}
+
+	// Delivery reconstruction is deliberately plan-scoped. There is no
+	// global-destination fallback here; a missing plan produces no delivery
+	// rows and remains visible to the operator rather than routing output
+	// implicitly.
+	if _, err := tx.ExecContext(ctx, `
+		INSERT OR IGNORE INTO job_deliveries
+		    (delivery_id, artifact_id, destination_id, status, max_attempts,
+		     idempotency_key, created_at, updated_at)
+		SELECT 'reconcile_' || a.id || '_' || p.destination_id,
+		       a.id, p.destination_id, 'PENDING',
+		       CASE WHEN p.retry_budget > 0 THEN p.retry_budget ELSE 5 END,
+		       a.id || '_' || p.destination_id, ?, ?
+		  FROM artifacts a
+		  JOIN job_delivery_plans p ON p.job_id=a.job_id AND p.enabled=1
+		 WHERE a.id=? AND a.status='READY'`, nowStr, nowStr, f.ArtifactID); err != nil {
+		return false, err
+	}
+	// Recreate the durable commit-protocol notification idempotently so
+	// downstream consumers can converge exactly as they do on the normal
+	// completion path. Marshal the payload rather than concatenating IDs.
+	payload, err := json.Marshal(map[string]string{"commit_id": f.CommitID, "attempt_id": f.AttemptID, "job_id": f.JobID})
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT OR IGNORE INTO outbox_events
+		    (event_id, aggregate_type, aggregate_id, event_type, payload_json,
+		     status, available_at, attempt_count, created_at)
+		VALUES (?, 'task', ?, 'commit_protocol.committed', ?, 'PENDING', ?, 0, ?)`,
+		"reconcile_commit_"+f.CommitID, f.TaskID, string(payload), nowStr, nowStr); err != nil {
+		return false, err
 	}
 	if err := appendReconcileAuditTx(ctx, tx, f, actor, now); err != nil {
 		return false, err
@@ -364,46 +474,90 @@ func (r *StaleExecutionReconciler) applyOfflineWorker(ctx context.Context, f Sta
 	if err := appendReconcileAuditTx(ctx, tx, f, actor, now); err != nil {
 		return false, err
 	}
+
+	// Keep partitioning and expired-lease recovery in the same transaction.
+	// A valid lease remains fenced until its persisted TTL expires; expired
+	// leases are recovered with the owning job's retry budget.
+	rows, err := tx.QueryContext(ctx, `
+		SELECT t.task_id, t.job_id, t.lease_id, t.lease_expires_at,
+		       t.attempt_count, t.attempt_number
+		  FROM tasks t
+		 WHERE t.worker_id=? AND t.status IN ('LEASED','RUNNING')
+		   AND COALESCE(t.lease_id,'')<>''
+		   AND COALESCE(t.lease_expires_at,'')<>''
+		   AND t.lease_expires_at < ?`, f.WorkerID, nowStr)
+	if err != nil {
+		return false, err
+	}
+	type expiredLease struct {
+		taskID, jobID, leaseID, leaseExpiresAt string
+		attemptCount, attemptNumber            int
+	}
+	var leases []expiredLease
+	for rows.Next() {
+		var lease expiredLease
+		if err := rows.Scan(&lease.taskID, &lease.jobID, &lease.leaseID, &lease.leaseExpiresAt, &lease.attemptCount, &lease.attemptNumber); err != nil {
+			rows.Close()
+			return false, err
+		}
+		leases = append(leases, lease)
+	}
+	if err := rows.Close(); err != nil {
+		return false, err
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	for _, lease := range leases {
+		maxRetries := 3
+		var configured int
+		if err := tx.QueryRowContext(ctx, `SELECT max_retries FROM jobs WHERE job_id=?`, lease.jobID).Scan(&configured); err == nil && configured > 0 {
+			maxRetries = configured
+		}
+		effectiveAttempt := maxAttemptOrdinal(lease.attemptCount, lease.attemptNumber)
+		newStatus := "READY"
+		if effectiveAttempt >= maxRetries+1 {
+			newStatus = "FAILED"
+		}
+		taskRes, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET status=?, completed_at=?, worker_id='', lease_id='',
+			    lease_expires_at=NULL, attempt_count=?, attempt_id='', attempt_number=0,
+			    revision=revision+1, updated_at=?
+			 WHERE task_id=? AND worker_id=? AND lease_id=?
+			   AND lease_expires_at=? AND status IN ('LEASED','RUNNING')`,
+			newStatus, nowStr, effectiveAttempt, nowStr, lease.taskID, f.WorkerID, lease.leaseID, lease.leaseExpiresAt)
+		if err != nil {
+			return false, err
+		}
+		taskRows, _ := taskRes.RowsAffected()
+		if taskRows != 1 {
+			// A renewal or another reaper won the CAS. Do not mutate the
+			// attempt or emit a recovery audit for the stale observation.
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE task_attempts
+			   SET status='TIMED_OUT', completed_at=?, error_code='LEASE_EXPIRED',
+			       error_message='offline worker lease expired', report_version=report_version+1, updated_at=?
+			 WHERE task_id=? AND worker_id=? AND lease_id=?
+			   AND status NOT IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT')`,
+			nowStr, nowStr, lease.taskID, f.WorkerID, lease.leaseID); err != nil {
+			return false, err
+		}
+		finding := StaleExecutionFinding{
+			Category: StaleLeaseExpired, ResourceType: "task", ResourceID: lease.taskID,
+			JobID: lease.jobID, TaskID: lease.taskID, WorkerID: f.WorkerID,
+			LeaseID: lease.leaseID, OldStatus: "RUNNING", ProposedStatus: newStatus,
+			Reason: "worker is offline and persisted lease expired", ObservedAt: now.UTC(),
+		}
+		if err := appendReconcileAuditTx(ctx, tx, finding, actor, now); err != nil {
+			return false, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return false, err
 	}
-
-	// Partitioning is fail-safe: only leases already past their persisted
-	// deadline are recovered. A valid lease remains fenced until its TTL
-	// expires, even when the worker heartbeat is absent.
-	_, err = r.recoverOfflineWorkerLeases(ctx, f.WorkerID, actor, now)
-	if err != nil {
-		return false, err
-	}
 	return true, nil
-}
-
-func (r *StaleExecutionReconciler) recoverOfflineWorkerLeases(ctx context.Context, workerID, actor string, now time.Time) (int, error) {
-	candidates, err := r.tasks.RequeueExpiredLeases(ctx, now.UTC().Format(time.RFC3339Nano), 500)
-	if err != nil {
-		return 0, err
-	}
-	recovered := 0
-	for _, c := range candidates {
-		if c.WorkerID != workerID {
-			continue
-		}
-		finding := StaleExecutionFinding{
-			Category: StaleLeaseExpired, ResourceType: "task", ResourceID: c.ID,
-			TaskID: c.ID, WorkerID: c.WorkerID, LeaseID: c.LeaseID,
-			ProposedStatus: "READY or FAILED", Reason: "worker is offline and persisted lease expired",
-			ObservedAt: now.UTC(),
-		}
-		event := r.auditEventForFinding(finding, actor, now)
-		if _, err := r.tasks.ExpireTaskLeaseAtomicAudited(ctx, c.ID, c.LeaseID, c.LeaseExpiresAt, 3, event); err != nil {
-			if errors.Is(err, taskgraph.ErrTransitionConflict) {
-				continue
-			}
-			return recovered, err
-		}
-		recovered++
-	}
-	return recovered, nil
 }
 
 func (r *StaleExecutionReconciler) auditEventForFinding(f StaleExecutionFinding, actor string, now time.Time) audittrail.Event {

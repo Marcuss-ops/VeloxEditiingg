@@ -82,6 +82,11 @@ var allowedWriters = map[string]bool{
 	// SEPARATE lifecycle: UPDATE job_deliveries SET status='SUCCEEDED'
 	// is delivery-completion (NOT jobs).
 	filepath.Join("internal", "store", "store_deliveries.go"): true,
+	// Operator recovery lifecycle: a READY artifact with a COMMITTED attempt
+	// can repair a job/task/attempt left non-terminal by a crash. The writer
+	// is confined to the stale reconciler, uses one transaction plus
+	// append-only audit, and is not a second normal completion path.
+	filepath.Join("internal", "store", "stale_execution_reconciler.go"): true,
 	// Completion UoW repository split: these task/job status writes remain
 	// inside the same audited transaction gateway as coordinator.go. The SQL
 	// moved from sqlite_uow.go into this responsibility-specific file.
