@@ -98,6 +98,18 @@ func TestDownloader_HappyPath(t *testing.T) {
 	if finalPath != f.finalPath {
 		t.Errorf("finalPath=%q want %q", finalPath, f.finalPath)
 	}
+	secondID := "TYSON002"
+	secondPart := filepath.Join(f.dir, secondID+".mp4.part")
+	if err := f.cache.Store(context.Background(), Entry{DriveFileID: secondID, LocalPath: secondPart}); err != nil {
+		t.Fatalf("Store metadata placeholder: %v", err)
+	}
+	metadata, metadataErr := dl.DownloadDriveFileWithMetadata(context.Background(), secondID)
+	if metadataErr != nil {
+		t.Fatalf("DownloadDriveFileWithMetadata: %v", metadataErr)
+	}
+	if metadata.Path == "" || metadata.Bytes == 0 || len(metadata.SHA256) != 64 || metadata.HashDuration <= 0 {
+		t.Errorf("download metadata = %+v, want path/bytes/SHA-256/hash duration", metadata)
+	}
 
 	// On-disk: .part gone, final present with the bytes we wrote.
 	if _, err := os.Stat(f.partPath); !errors.Is(err, os.ErrNotExist) {

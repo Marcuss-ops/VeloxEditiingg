@@ -105,15 +105,15 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 			Name: "velox_asset_cache_misses_total", Help: "Total asset cache misses (low-cardinality)",
 			values: make(map[string]float64),
 		},
-		assetCacheRequests:               &CounterVec{Name: "velox_cache_requests_total", Help: "Asset cache requests by result", values: make(map[string]float64)},
-		assetCacheEvictions:              &CounterVec{Name: "velox_cache_evictions_total", Help: "Asset cache evictions by reason", values: make(map[string]float64)},
+		assetCacheRequests:               &CounterVec{Name: "velox_cache_requests_total", Help: "Asset cache requests by result", Label: "result", values: make(map[string]float64)},
+		assetCacheEvictions:              &CounterVec{Name: "velox_cache_evictions_total", Help: "Asset cache evictions by reason", Label: "reason", values: make(map[string]float64)},
 		assetCacheDownloads:              &CounterVec{Name: "velox_cache_downloads_total", Help: "Completed local asset downloads", values: make(map[string]float64)},
 		assetCacheDownloadBytes:          &CounterVec{Name: "velox_cache_download_bytes_total", Help: "Bytes downloaded into the local asset cache", values: make(map[string]float64)},
 		assetCacheDownloadMS:             &HistogramVec{Name: "velox_cache_download_duration_seconds", Help: "Asset cache download duration", Buckets: []float64{.01, .1, 1, 5, 30, 120, 600}, values: make(map[string]*histogramData)},
 		assetDownloadSecondsCanonical:    &HistogramVec{Name: "velox_asset_download_seconds", Help: "Asset download duration", Buckets: []float64{.01, .1, 1, 5, 30, 120, 600}, values: make(map[string]*histogramData)},
 		assetCacheVerifyMS:               &HistogramVec{Name: "velox_cache_sha_verify_duration_seconds", Help: "Asset cache verification duration", Buckets: []float64{.001, .01, .1, 1, 5, 30}, values: make(map[string]*histogramData)},
 		assetCacheCleanupMS:              &HistogramVec{Name: "velox_cache_cleanup_duration_seconds", Help: "Asset cache cleanup duration", Buckets: []float64{.001, .01, .1, 1, 5, 30}, values: make(map[string]*histogramData)},
-		assetCacheCleanupSkip:            &CounterVec{Name: "velox_cache_cleanup_skipped_total", Help: "Asset cache cleanup skips by reason", values: make(map[string]float64)},
+		assetCacheCleanupSkip:            &CounterVec{Name: "velox_cache_cleanup_skipped_total", Help: "Asset cache cleanup skips by reason", Label: "reason", values: make(map[string]float64)},
 		assetCacheProtectedSkipCanonical: &CounterVec{Name: "velox_cache_protected_skips_total", Help: "Asset cache entries skipped because they are protected", values: make(map[string]float64)},
 		assetCacheSizeBytes:              &GaugeVec{Name: "velox_cache_size_bytes", Help: "Current local asset cache size", values: make(map[string]float64)},
 		assetCacheEntries:                &GaugeVec{Name: "velox_cache_entries", Help: "Current local asset cache entries", values: make(map[string]float64)},
@@ -138,7 +138,7 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 		taskResultSubmitSeconds: &HistogramVec{Name: "velox_task_result_submit_seconds", Help: "TaskResult persistence and send duration", Buckets: []float64{.001, .01, .1, 1, 5, 30, 120}, values: make(map[string]*histogramData)},
 		taskResultAckSeconds:    &HistogramVec{Name: "velox_task_result_ack_seconds", Help: "TaskResult acknowledgement wait duration", Buckets: []float64{.001, .01, .1, 1, 5, 30, 120}, values: make(map[string]*histogramData)},
 		taskResultAcksTotal:     &CounterVec{Name: "velox_task_result_acks_total", Help: "TaskResult acknowledgements received", values: make(map[string]float64)},
-		telemetryInvalidEvents:  &CounterVec{Name: "velox_telemetry_invalid_events_total", Help: "Telemetry events rejected by the worker catalog and forwarded for master quarantine", values: make(map[string]float64)},
+		telemetryInvalidEvents:  &CounterVec{Name: "velox_telemetry_invalid_events_total", Help: "Telemetry events rejected by the worker catalog and forwarded for master quarantine", Label: "reason", values: make(map[string]float64)},
 	}
 }
 
@@ -169,11 +169,44 @@ func (m *PrometheusMetrics) RecordAssetCacheMiss(_ string) {
 	m.assetCacheMiss.inc("asset")
 	m.assetCacheMissesCanonical.inc("total")
 }
-func (m *PrometheusMetrics) RecordCacheRequest(result string)  { m.assetCacheRequests.inc(result) }
-func (m *PrometheusMetrics) RecordCacheEviction(reason string) { m.assetCacheEvictions.inc(reason) }
+func normalizeCacheResult(result string) string {
+	switch result {
+	case "hit", "miss":
+		return result
+	default:
+		return "other"
+	}
+}
+
+func normalizeCacheReason(reason string) string {
+	switch reason {
+	case "pressure", "ttl", "invalid", "protected", "leased", "grace", "in_flight", "stale_snapshot", "no_snapshot", "error":
+		return reason
+	default:
+		return "other"
+	}
+}
+
+func (m *PrometheusMetrics) RecordCacheRequest(result string) {
+	m.assetCacheRequests.inc(normalizeCacheResult(result))
+}
+
+// CacheRequestCount returns the current low-cardinality cache-request count.
+// It is intended for diagnostics and deterministic tests, not labels.
+func (m *PrometheusMetrics) CacheRequestCount(result string) float64 {
+	return m.assetCacheRequests.get(normalizeCacheResult(result))
+}
+
+// CacheEvictionCount returns the current low-cardinality eviction count.
+func (m *PrometheusMetrics) CacheEvictionCount(reason string) float64 {
+	return m.assetCacheEvictions.get(normalizeCacheReason(reason))
+}
+func (m *PrometheusMetrics) RecordCacheEviction(reason string) {
+	m.assetCacheEvictions.inc(normalizeCacheReason(reason))
+}
 func (m *PrometheusMetrics) RecordCacheEvictions(reason string, count int) {
 	if count > 0 {
-		m.assetCacheEvictions.add(reason, float64(count))
+		m.assetCacheEvictions.add(normalizeCacheReason(reason), float64(count))
 	}
 }
 func (m *PrometheusMetrics) RecordCacheDownload(bytes int64, duration time.Duration) {
@@ -189,11 +222,11 @@ func (m *PrometheusMetrics) RecordCacheCleanup(duration time.Duration) {
 	m.assetCacheCleanupMS.observe("pass", duration.Seconds())
 }
 func (m *PrometheusMetrics) RecordCacheCleanupSkip(reason string) {
-	m.assetCacheCleanupSkip.inc(reason)
+	m.assetCacheCleanupSkip.inc(normalizeCacheReason(reason))
 }
 func (m *PrometheusMetrics) RecordCacheCleanupSkips(reason string, count int) {
 	if count > 0 {
-		m.assetCacheCleanupSkip.add(reason, float64(count))
+		m.assetCacheCleanupSkip.add(normalizeCacheReason(reason), float64(count))
 		if reason == "protected" {
 			m.assetCacheProtectedSkipCanonical.add("total", float64(count))
 		}

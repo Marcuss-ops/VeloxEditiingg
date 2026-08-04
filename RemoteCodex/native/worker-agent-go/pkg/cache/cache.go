@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"velox-worker-agent/internal/oteltrace"
+	"velox-worker-agent/internal/telemetry"
 )
 
 // ErrCacheCorruption is returned by Get when the on-disk content's
@@ -165,9 +166,11 @@ func (c *PersistedLocalCache) Get(ctx context.Context, hash string) ([]byte, boo
 				c.mu.Unlock()
 			}
 			c.misses.Add(1)
+			telemetry.GetPrometheusMetrics().RecordCacheRequest("miss")
 			return nil, false, nil
 		}
 		c.misses.Add(1)
+		telemetry.GetPrometheusMetrics().RecordCacheRequest("miss")
 		return nil, false, fmt.Errorf("cache: read %s: %w", hash, err)
 	}
 
@@ -186,6 +189,7 @@ func (c *PersistedLocalCache) Get(ctx context.Context, hash string) ([]byte, boo
 	}
 
 	c.hits.Add(1)
+	telemetry.GetPrometheusMetrics().RecordCacheRequest("hit")
 
 	if !hasIndex {
 		// Survived-restart on-disk entry; lazily index.
@@ -352,6 +356,9 @@ func (c *PersistedLocalCache) evictIfOver() {
 		evictedPaths = append(evictedPaths, c.entryPath(k.hash))
 		bytes -= k.size
 		c.evictions.Add(1)
+	}
+	if len(evictedPaths) > 0 {
+		telemetry.GetPrometheusMetrics().RecordCacheEvictions("pressure", len(evictedPaths))
 	}
 	c.mu.Unlock()
 

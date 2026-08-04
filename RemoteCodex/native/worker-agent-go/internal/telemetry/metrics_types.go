@@ -23,8 +23,11 @@ type histogramData struct {
 
 // CounterVec represents a Prometheus counter metric.
 type CounterVec struct {
-	Name   string
-	Help   string
+	Name string
+	Help string
+	// Label is the semantic Prometheus label name for this family.
+	// Empty preserves the legacy `label` name used by generic metrics.
+	Label  string
 	mu     sync.RWMutex
 	values map[string]float64
 }
@@ -153,12 +156,12 @@ func (c *CounterVec) export() string {
 	var output string
 	output += fmt.Sprintf("# HELP %s %s\n", c.Name, c.Help)
 	output += fmt.Sprintf("# TYPE %s counter\n", c.Name)
+	labelName := c.Label
+	if labelName == "" {
+		labelName = "label"
+	}
 	for label, value := range c.values {
-		if c.Name == "velox_fallback_count_total" || c.Name == "velox_python_emergency_path_total" {
-			output += fmt.Sprintf("%s{reason=\"%s\"} %g\n", c.Name, label, value)
-		} else {
-			output += fmt.Sprintf("%s{label=\"%s\"} %g\n", c.Name, label, value)
-		}
+		output += fmt.Sprintf("%s{%s=\"%s\"} %g\n", c.Name, labelName, label, value)
 	}
 	return output
 }

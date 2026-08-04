@@ -36,6 +36,8 @@ package workercache
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -85,6 +87,17 @@ type Downloader struct {
 	verify VerifyMedia
 }
 
+// DownloadMetadata describes a completed Drive-cache download. SHA256 is
+// computed while streaming, so callers can build content-addressed logs
+// without rereading the entire file.
+type DownloadMetadata struct {
+	Path           string
+	Bytes          int64
+	SHA256         string
+	HashDuration   time.Duration
+	VerifyDuration time.Duration
+}
+
 // NewDownloader wires the canonical dependencies. Panics on a nil
 // cache or source — the fields are required for any meaningful
 // download, and silent fall-backs would mask operator config bugs.
@@ -129,9 +142,19 @@ func (d *Downloader) WithVerify(v VerifyMedia) *Downloader {
 // cache.MarkDownloadComplete on success, which keeps the row schema
 // invariant (drive_file_id is the only PK, local_path is mutable).
 func (d *Downloader) DownloadDriveFile(ctx context.Context, driveID string) (string, error) {
+	result, err := d.DownloadDriveFileWithMetadata(ctx, driveID)
+	if err != nil {
+		return "", err
+	}
+	return result.Path, nil
+}
+
+// DownloadDriveFileWithMetadata is the metadata-returning form of
+// DownloadDriveFile. It preserves the same atomic and cache-row semantics.
+func (d *Downloader) DownloadDriveFileWithMetadata(ctx context.Context, driveID string) (DownloadMetadata, error) {
 	started := time.Now()
 	if driveID == "" {
-		return "", ErrEmptyID
+		return DownloadMetadata{}, ErrEmptyID
 	}
 
 	partPath := filepath.Join(d.dir, driveID+".mp4.part")
@@ -140,32 +163,36 @@ func (d *Downloader) DownloadDriveFile(ctx context.Context, driveID string) (str
 	// 1. Open the source stream.
 	src, err := d.source.Open(ctx, driveID)
 	if err != nil {
-		return "", fmt.Errorf("%w: drive_id=%s: %v", ErrSourceOpen, driveID, err)
+		return DownloadMetadata{}, fmt.Errorf("%w: drive_id=%s: %v", ErrSourceOpen, driveID, err)
 	}
 	defer src.Close()
 
 	// 2. Stream into .part.
 	partFile, err := os.Create(partPath)
 	if err != nil {
-		return "", fmt.Errorf("workercache.Downloader: create %s: %w", partPath, err)
+		return DownloadMetadata{}, fmt.Errorf("workercache.Downloader: create %s: %w", partPath, err)
 	}
-	written, copyErr := io.Copy(partFile, src)
+	hasher := sha256.New()
+	hashStarted := time.Now()
+	written, copyErr := io.Copy(partFile, io.TeeReader(src, hasher))
+	hashDuration := time.Since(hashStarted)
 	closeErr := partFile.Close()
 	if copyErr != nil {
 		_ = os.Remove(partPath)
-		return "", fmt.Errorf("workercache.Downloader: copy to .part: %w", copyErr)
+		return DownloadMetadata{}, fmt.Errorf("workercache.Downloader: copy to .part: %w", copyErr)
 	}
 	if closeErr != nil {
 		_ = os.Remove(partPath)
-		return "", fmt.Errorf("workercache.Downloader: close .part: %w", closeErr)
+		return DownloadMetadata{}, fmt.Errorf("workercache.Downloader: close .part: %w", closeErr)
 	}
 
 	// 3. Verify — re-open so the verifier inspects the on-disk file.
+	verifyDuration := time.Duration(0)
 	if d.verify != nil {
 		reop, reopenErr := os.Open(partPath)
 		if reopenErr != nil {
 			_ = os.Remove(partPath)
-			return "", fmt.Errorf("workercache.Downloader: re-open .part for verify: %w", reopenErr)
+			return DownloadMetadata{}, fmt.Errorf("workercache.Downloader: re-open .part for verify: %w", reopenErr)
 		}
 		verifyStarted := time.Now()
 		verifyErr := d.verify(reop)
@@ -173,7 +200,7 @@ func (d *Downloader) DownloadDriveFile(ctx context.Context, driveID string) (str
 		_ = reop.Close()
 		if verifyErr != nil {
 			_ = os.Remove(partPath)
-			return "", fmt.Errorf("%w: drive_id=%s: %v", ErrVerifyFailed, driveID, verifyErr)
+			return DownloadMetadata{}, fmt.Errorf("%w: drive_id=%s: %v", ErrVerifyFailed, driveID, verifyErr)
 		}
 	}
 
@@ -182,7 +209,7 @@ func (d *Downloader) DownloadDriveFile(ctx context.Context, driveID string) (str
 	// cleaner can lawfully delete this row when its lease drops.
 	if renameErr := os.Rename(partPath, finalPath); renameErr != nil {
 		_ = os.Remove(partPath)
-		return "", fmt.Errorf("%w: drive_id=%s: %v", ErrRename, driveID, renameErr)
+		return DownloadMetadata{}, fmt.Errorf("%w: drive_id=%s: %v", ErrRename, driveID, renameErr)
 	}
 
 	// 5. Flip the cache row to download_complete=1. Without this
@@ -197,11 +224,15 @@ func (d *Downloader) DownloadDriveFile(ctx context.Context, driveID string) (str
 		// at download_complete=false (placeholder) so the next
 		// retry can rebuild from a fresh .part.
 		_ = os.Remove(finalPath)
-		return "", fmt.Errorf("workercache.Downloader: mark complete: %w", mErr)
+		return DownloadMetadata{}, fmt.Errorf("workercache.Downloader: mark complete: %w", mErr)
 	}
 	telemetry.GetPrometheusMetrics().RecordCacheDownload(written, time.Since(started))
 
-	return finalPath, nil
+	return DownloadMetadata{
+		Path: finalPath, Bytes: written,
+		SHA256:       hex.EncodeToString(hasher.Sum(nil)),
+		HashDuration: hashDuration, VerifyDuration: verifyDuration,
+	}, nil
 }
 
 // defaultVerifyMedia returns nil iff the bytes look like real

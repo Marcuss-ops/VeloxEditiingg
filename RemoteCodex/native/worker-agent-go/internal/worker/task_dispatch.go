@@ -112,6 +112,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	ctx = telemetry.WithRecorder(ctx, rec)
 	ctx = withAssetOperationTracker(ctx, assetTracker)
 	ctx = withCacheAccessContext(ctx, pte.JobID, "asset")
+	ctx = telemetry.WithCacheAccessWorkerID(ctx, w.config.WorkerID)
 	partialReport := &taskrunner.TaskExecutionReport{
 		JobID:           pte.JobID,
 		ExecutorID:      pte.ExecutorID,

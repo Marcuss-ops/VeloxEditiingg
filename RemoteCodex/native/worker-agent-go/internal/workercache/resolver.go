@@ -42,10 +42,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/sync/singleflight"
 	"velox-worker-agent/internal/telemetry"
@@ -146,10 +146,10 @@ func (r *Resolver) resolveInner(ctx context.Context, driveID string) (string, er
 		return "", fmt.Errorf("workercache.Resolve(%s): cache.Find: %w", driveID, err)
 	}
 
+	lookupStarted := time.Now()
 	if ok && entry.DownloadComplete && fileExists(entry.LocalPath) {
 		telemetry.GetPrometheusMetrics().RecordAssetCacheHit("asset")
-		telemetry.GetPrometheusMetrics().RecordCacheRequest("hit")
-		log.Printf(`{"event":"ASSET_CACHE_ACCESS","asset_key":%q,"result":"hit","downloaded_bytes":0}`, driveID)
+		telemetry.LogAssetCacheAccess(ctx, "", driveID, "hit", 0, time.Since(lookupStarted).Milliseconds(), 0)
 		// Cache hit fast path. MarkUsed is best-effort; a SQLite
 		// error here must not mask the resolved path (the cleanup
 		// loop can rebuild last_used_at via MarkDownloadComplete
@@ -164,13 +164,13 @@ func (r *Resolver) resolveInner(ctx context.Context, driveID string) (string, er
 	}
 
 	// Cache miss OR incomplete OR on-disk missing: drive the
-	// Downloader. Ensure a placeholder row exists so the
-	// Downloader's MarkDownloadComplete call (Pass 10) lands on a
-	// valid row.
+	// Downloader. Count all three states as misses, but emit one
+	// request event per resolver operation.
+	telemetry.GetPrometheusMetrics().RecordAssetCacheMiss("asset")
+	telemetry.GetPrometheusMetrics().RecordCacheRequest("miss")
 	if !ok {
-		telemetry.GetPrometheusMetrics().RecordAssetCacheMiss("asset")
-		telemetry.GetPrometheusMetrics().RecordCacheRequest("miss")
-		log.Printf(`{"event":"ASSET_CACHE_ACCESS","asset_key":%q,"result":"miss"}`, driveID)
+		// Ensure a placeholder row exists so Downloader's
+		// MarkDownloadComplete call lands on a valid row.
 		partPath := r.partPathFor(driveID)
 		if sErr := r.Cache.Store(ctx, Entry{
 			DriveFileID: driveID,
@@ -209,11 +209,13 @@ func (r *Resolver) resolveInner(ctx context.Context, driveID string) (string, er
 		}
 	}
 
-	finalPath, dlErr := r.Downloader.DownloadDriveFile(ctx, driveID)
+	download, dlErr := r.Downloader.DownloadDriveFileWithMetadata(ctx, driveID)
 	if dlErr != nil {
 		return "", fmt.Errorf("workercache.Resolve(%s): downloader: %w", driveID, dlErr)
 	}
-	return finalPath, nil
+	telemetry.LogAssetCacheAccess(ctx, "", "sha256:"+download.SHA256, "miss", download.Bytes,
+		time.Since(lookupStarted).Milliseconds(), download.VerifyDuration.Milliseconds())
+	return download.Path, nil
 }
 
 // partPathFor is the canonical `<dir>/<driveID>.mp4.part` path the

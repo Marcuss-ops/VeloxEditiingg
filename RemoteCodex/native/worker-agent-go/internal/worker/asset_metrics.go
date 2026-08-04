@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"velox-worker-agent/internal/taskrunner"
+	"velox-worker-agent/internal/telemetry"
 )
 
 // AssetOperationRecord is the report shape for one asset materialization.
@@ -36,52 +36,17 @@ type assetOperationTracker struct {
 }
 
 type assetOperationTrackerKey struct{}
-type cacheAccessContextKey struct{}
-
-type cacheAccessContext struct {
-	JobID string
-	Role  string
-}
 
 func withAssetOperationTracker(ctx context.Context, tracker *assetOperationTracker) context.Context {
 	return context.WithValue(ctx, assetOperationTrackerKey{}, tracker)
 }
 
 func withCacheAccessContext(ctx context.Context, jobID, role string) context.Context {
-	current := cacheAccessContextFromContext(ctx)
-	if jobID == "" {
-		jobID = current.JobID
-	}
-	if role == "" {
-		role = current.Role
-	}
-	return context.WithValue(ctx, cacheAccessContextKey{}, cacheAccessContext{JobID: jobID, Role: role})
-}
-
-func cacheAccessContextFromContext(ctx context.Context) cacheAccessContext {
-	if ctx == nil {
-		return cacheAccessContext{}
-	}
-	value, _ := ctx.Value(cacheAccessContextKey{}).(cacheAccessContext)
-	return value
+	return telemetry.WithCacheAccessContext(ctx, jobID, role)
 }
 
 func logAssetCacheAccess(ctx context.Context, workerID, assetKey, result string, downloadedBytes, lookupMS, shaVerifyMS int64) {
-	meta := cacheAccessContextFromContext(ctx)
-	payload := map[string]interface{}{
-		"event":            "ASSET_CACHE_ACCESS",
-		"job_id":           meta.JobID,
-		"worker_id":        workerID,
-		"asset_key":        assetKey,
-		"role":             meta.Role,
-		"result":           result,
-		"downloaded_bytes": downloadedBytes,
-		"lookup_ms":        lookupMS,
-		"sha_verify_ms":    shaVerifyMS,
-	}
-	if encoded, err := json.Marshal(payload); err == nil {
-		log.Print(string(encoded))
-	}
+	telemetry.LogAssetCacheAccess(ctx, workerID, assetKey, result, downloadedBytes, lookupMS, shaVerifyMS)
 }
 
 func assetOperationTrackerFromContext(ctx context.Context) *assetOperationTracker {

@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"velox-worker-agent/internal/telemetry"
 )
 
 // resolverFixture installs a fresh in-memory cache + dest dir + a
@@ -150,6 +152,7 @@ func TestResolver_CacheMiss_TriggersDownload(t *testing.T) {
 func TestResolver_IncompleteRow_TriggersReDownload(t *testing.T) {
 	f := newResolverFixture(t)
 	ctx := context.Background()
+	beforeMisses := telemetry.GetPrometheusMetrics().CacheRequestCount("miss")
 
 	partPath := filepath.Join(f.dir, "TYSON001.mp4.part")
 	if err := f.cache.Store(ctx, Entry{
@@ -181,6 +184,9 @@ func TestResolver_IncompleteRow_TriggersReDownload(t *testing.T) {
 	}
 	if e.LocalPath != want {
 		t.Errorf("row.local_path=%q want %q", e.LocalPath, want)
+	}
+	if got := telemetry.GetPrometheusMetrics().CacheRequestCount("miss") - beforeMisses; got != 1 {
+		t.Errorf("incomplete-row cache miss count delta=%v, want 1", got)
 	}
 }
 
@@ -228,6 +234,7 @@ func TestResolver_FailedDownload_LeavesRowInInFlight(t *testing.T) {
 func TestResolver_FileMissingRecovery(t *testing.T) {
 	f := newResolverFixture(t)
 	ctx := context.Background()
+	beforeMisses := telemetry.GetPrometheusMetrics().CacheRequestCount("miss")
 
 	// Deliberately DO NOT create the file on disk. The cache row
 	// lies, the filesystem is honest.
@@ -285,6 +292,9 @@ func TestResolver_FileMissingRecovery(t *testing.T) {
 	// No .part leftover from the recovery.
 	if _, err := os.Stat(filepath.Join(f.dir, "TYSON001.mp4.part")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf(".part exists post-recovery; want absent. stat err=%v", err)
+	}
+	if got := telemetry.GetPrometheusMetrics().CacheRequestCount("miss") - beforeMisses; got != 1 {
+		t.Errorf("missing-file cache miss count delta=%v, want 1", got)
 	}
 }
 

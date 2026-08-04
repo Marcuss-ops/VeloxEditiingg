@@ -52,7 +52,6 @@ func (w *Worker) downloadVeloxAssetWithMetadataSingle(ctx context.Context, asset
 			}
 			completed := time.Now().UTC()
 			telemetry.GetPrometheusMetrics().RecordAssetCacheHit("asset")
-			telemetry.GetPrometheusMetrics().RecordCacheRequest("hit")
 			logAssetCacheAccess(ctx, w.config.WorkerID, cacheAssetKey(assetID, expectedSHA256), "hit", 0, time.Since(accessStarted).Milliseconds(), verifyDuration.Milliseconds())
 			recordAssetOperation(ctx, AssetOperationRecord{
 				AssetID:             assetID,
@@ -75,7 +74,6 @@ func (w *Worker) downloadVeloxAssetWithMetadataSingle(ctx context.Context, asset
 	}
 
 	telemetry.GetPrometheusMetrics().RecordAssetCacheMiss("asset")
-	telemetry.GetPrometheusMetrics().RecordCacheRequest("miss")
 	if rec := telemetry.RecorderFromContext(ctx); rec != nil {
 		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeArtifact, Component: "worker.cache", Action: "miss"}, telemetry.StatusOK, "", "")
 	}

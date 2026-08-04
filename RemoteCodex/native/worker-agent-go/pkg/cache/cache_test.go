@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"velox-worker-agent/internal/telemetry"
 )
 
 // testHash returns the canonical SHA-256 hex of data.
@@ -122,6 +124,23 @@ func TestCache_LRUEvictionPicksLeastRecentlyUsed(t *testing.T) {
 	}
 	if _, found, err := c.Get(ctx, hashC); err != nil || !found {
 		t.Fatalf("C should still be present; found=%v err=%v", found, err)
+	}
+}
+
+func TestCache_PressureEvictionExportsMetric(t *testing.T) {
+	c := makeCache(t, 4)
+	ctx := context.Background()
+	beforePressure := telemetry.GetPrometheusMetrics().CacheEvictionCount("pressure")
+	data := []byte("12345")
+	hash := testHash(t, data)
+	if err := c.Put(ctx, hash, data); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if c.Stats().Evictions == 0 {
+		t.Fatal("expected byte-budget pressure eviction")
+	}
+	if got := telemetry.GetPrometheusMetrics().CacheEvictionCount("pressure") - beforePressure; got < 1 {
+		t.Fatalf("pressure eviction metric count=%v, want at least 1", got)
 	}
 }
 
