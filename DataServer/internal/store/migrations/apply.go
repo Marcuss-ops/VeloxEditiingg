@@ -32,10 +32,14 @@ func applyMigration(db *sql.DB, m Migration) error {
 	stmts := splitStatements(m.SQL)
 	for _, stmt := range stmts {
 		if _, err := tx.Exec(stmt); err != nil {
-			// Tolerate "no such column" for DROP COLUMN — the column
-			// may have been removed by a prior partial run or never existed.
-			if strings.Contains(strings.ToLower(stmt), "drop column") &&
-				strings.Contains(strings.ToLower(err.Error()), "no such column") {
+			// Tolerate missing tables/columns for DROP COLUMN. This keeps
+			// historical destructive migrations executable on fresh schemas
+			// that no longer contain an extracted domain, while remaining
+			// idempotent for partially upgraded databases.
+			stmtLower := strings.ToLower(stmt)
+			errLower := strings.ToLower(err.Error())
+			if strings.Contains(stmtLower, "drop column") &&
+				(strings.Contains(errLower, "no such column") || strings.Contains(errLower, "no such table")) {
 				continue
 			}
 			// Tolerate "duplicate column name" for ADD COLUMN — the column

@@ -130,6 +130,48 @@ func TestRunMigrations_ChecksumMismatch(t *testing.T) {
 	}
 }
 
+// TestRunMigrations_LegacyDarkEditorChecksumsTolerated verifies the
+// sanctioned one-time exception that lets installs which applied the
+// ORIGINAL (pre-Dark-Editor-exit) 001 and 090 migrations boot against
+// the amended files: a recorded checksum equal to the exact legacy
+// values is tolerated, while any OTHER tamper is still rejected.
+func TestRunMigrations_LegacyDarkEditorChecksumsTolerated(t *testing.T) {
+	db := openTestDB(t)
+
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
+		t.Fatalf("first RunMigrations failed: %v", err)
+	}
+
+	// Simulate a pre-existing install that applied the ORIGINAL 001 and
+	// 090 contents: rewrite their recorded checksums to the legacy values.
+	for _, tc := range []struct {
+		version  int
+		checksum string
+	}{
+		{1, "90d2c1512ac2954c7b201c62b2abe3ba2b9f7b478c88880e56d64906b7deee8d"},
+		{90, "0fde3e988fe74b596b42aaa8f920eb6e64ba0dbd21d67a9585d8c5c538593f4b"},
+	} {
+		if _, err := db.Exec(`UPDATE schema_migrations SET checksum = ? WHERE version = ?`, tc.checksum, tc.version); err != nil {
+			t.Fatalf("set legacy checksum for v%d: %v", tc.version, err)
+		}
+	}
+
+	// Second run must succeed: the legacy checksums are accepted and the
+	// pending chain (091..128) is still applied.
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
+		t.Fatalf("expected legacy checksums to be tolerated, got: %v", err)
+	}
+
+	// An unrelated version tampered to a value outside the allowlist must
+	// still fail — the exception is narrow.
+	if _, err := db.Exec(`UPDATE schema_migrations SET checksum = 'tampered' WHERE version = 120`); err != nil {
+		t.Fatalf("tamper v120: %v", err)
+	}
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err == nil {
+		t.Fatal("expected checksum mismatch for tampered v120, got nil")
+	}
+}
+
 // ============================================================
 // applyMigration per-statement tolerance tests
 // ============================================================
@@ -289,5 +331,42 @@ func applyAllMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
 	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
 		t.Fatalf("RunMigrations failed: %v", err)
+	}
+}
+
+// applyMigrationsUpTo applies only the migrations with Version <= maxVersion,
+// replicating the RunMigrations loop (skip already-applied, pre-flight gates,
+// per-migration apply) so a test can inspect an intermediate schema state.
+// Historical migration tests use this to pin what a specific migration
+// actually did before later migrations (e.g. the Dark Editor drop) run.
+func applyMigrationsUpTo(t *testing.T, db *sql.DB, maxVersion int) {
+	t.Helper()
+	migs, err := discoverMigrations(testMigrationsFS, "testdata")
+	if err != nil {
+		t.Fatalf("discover migrations: %v", err)
+	}
+	if err := EnsureSchemaTable(db); err != nil {
+		t.Fatalf("ensure schema table: %v", err)
+	}
+	applied, err := listApplied(db)
+	if err != nil {
+		t.Fatalf("list applied: %v", err)
+	}
+	for _, m := range migs {
+		if m.Version > maxVersion {
+			break
+		}
+		if _, ok := applied[m.Version]; ok {
+			continue
+		}
+		if err := MustDropLegacyOrchestrator(db, m.Version); err != nil {
+			t.Fatalf("pre_check %03d_%s: %v", m.Version, m.Name, err)
+		}
+		if err := MustEnsureNoStorageKeyDuplicates(db, m.Version); err != nil {
+			t.Fatalf("pre_check %03d_%s: %v", m.Version, m.Name, err)
+		}
+		if err := applyMigration(db, m); err != nil {
+			t.Fatalf("apply %03d_%s: %v", m.Version, m.Name, err)
+		}
 	}
 }

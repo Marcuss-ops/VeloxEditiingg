@@ -130,6 +130,21 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 		}
 	}
 
+	// ---- Phase 4b: Migration 128 — Dark Editor domain dropped ----
+	darkEditorTables := []string{
+		"dark_editor_temp_files",
+		"dark_editor_generations",
+		"dark_editor_assets",
+		"dark_editor_templates",
+		"dark_editor_projects",
+		"dark_editor_folders",
+	}
+	for _, table := range darkEditorTables {
+		if tableExists(t, db, table) {
+			t.Errorf("migration 128 should have dropped %s", table)
+		}
+	}
+
 	// ---- Phase 5: Migration 004 — Ansible CRUD ----
 
 	// 5a. Insert hosts

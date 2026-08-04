@@ -48,8 +48,42 @@ migration(s) listed below.
 
 | Dialect  | Drop |
 | -------- | ---- |
-| SQLite   | `sqlite/090_drop_youtube_domain.sql` (+ `testdata/090_drop_youtube_domain.sql`) — drops `youtube_channels`, `youtube_groups`, `youtube_group_channels`, `youtube_oauth_tokens`, `youtube_tracked_niches`, plus YouTube metrics/cache tables, **and** the columns `calendar_events.youtube_group`, `calendar_events.youtube_links_json`, `dark_editor_folders.youtube_group`. |
+| SQLite   | `sqlite/090_drop_youtube_domain.sql` (+ `testdata/090_drop_youtube_domain.sql`) — drops `youtube_channels`, `youtube_groups`, `youtube_group_channels`, `youtube_oauth_tokens`, `youtube_tracked_niches`, plus YouTube metrics/cache tables, **and** the columns `calendar_events.youtube_group`, `calendar_events.youtube_links_json`. |
 | Postgres | `postgres/010_drop_youtube_domain.sql` (+ `testdata/010_drop_youtube_domain.sql`) — drops `youtube_videos`, `youtube_oauth_tokens`, `youtube_group_channels`, `youtube_groups`, `youtube_channels`. |
+
+## Dark Editor domain exit
+
+The Dark Editor (browser editor) is no longer a Velox concern: the
+frontend lives in VeloxFrontend and project/workspace/session state is
+owned by InstaeditLogin. Velox only receives the canonical render job.
+The storage domain is removed through a fresh-schema cleanup plus a
+forward-only compatibility migration:
+
+1. **Historical migration 001 amended (one-time sanctioned exception).**
+   `sqlite/001_initial.sql` no longer creates the `dark_editor_*` tables.
+   This is an edit to an applied migration, normally forbidden by the
+   checksum gate. It is permitted here because `runner.go` accepts the
+   exact pre-exit checksum of the original 001, so installs that applied
+   the original boot and proceed to 128. Migration 090 remains immutable;
+   its historical `ALTER TABLE dark_editor_folders` is tolerated as a
+   no-op when that table is absent on a fresh database. The allowlist is
+   narrow: any OTHER recorded-checksum mismatch still fails boot.
+2. **Forward-only drop.** `sqlite/128_drop_dark_editor_domain.sql`
+   (+ `testdata/128_drop_dark_editor_domain.sql`) `DROP TABLE IF EXISTS`
+   on all six `dark_editor_*` tables, so pre-existing databases converge
+   to a schema with zero Dark Editor tables.
+
+### Dark Editor migration chain outcome
+
+DB state after applying the chain on a fresh database:
+
+1. 001 creates no `dark_editor_*` tables; 090 drops the YouTube domain.
+2. 128 drops the (absent) Dark Editor tables as a no-op.
+3. End state has **zero** Dark Editor tables or columns.
+
+An existing install that applied the original 001/090 keeps its live
+`dark_editor_*` tables until 128 runs; the legacy checksum allowlist
+keeps the boot green through that step.
 
 ### Migration chain outcome
 
