@@ -3,6 +3,7 @@ package telemetry
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -12,30 +13,39 @@ import (
 type PrometheusMetrics struct {
 	mu sync.RWMutex
 
-	jobQueueWaitMs          *HistogramVec
-	jobDispatchMs           *HistogramVec
-	jobRuntimeMs            *HistogramVec
-	jobCompleteAckMs        *HistogramVec
-	jobIdempotencyConflicts *CounterVec
-	jobRetryCount           *HistogramVec
-	jobResumeSuccess        *CounterVec
-	jobResumeTotal          *CounterVec
-	assetCacheHit           *CounterVec
-	assetCacheMiss          *CounterVec
-	assetCacheRequests      *CounterVec
-	assetCacheEvictions     *CounterVec
-	assetCacheDownloads     *CounterVec
-	assetCacheDownloadBytes *CounterVec
-	assetCacheDownloadMS    *HistogramVec
-	assetCacheVerifyMS      *HistogramVec
-	assetCacheCleanupMS     *HistogramVec
-	assetCacheCleanupSkip   *CounterVec
-	assetCacheSizeBytes     *GaugeVec
-	assetCacheEntries       *GaugeVec
-	workerActiveJobs        *GaugeVec
-	workerStatus            *GaugeVec
-	fallbackCount           *CounterVec
-	pythonEmergencyPath     *CounterVec
+	jobQueueWaitMs                   *HistogramVec
+	jobDispatchMs                    *HistogramVec
+	jobRuntimeMs                     *HistogramVec
+	jobCompleteAckMs                 *HistogramVec
+	jobIdempotencyConflicts          *CounterVec
+	jobRetryCount                    *HistogramVec
+	jobResumeSuccess                 *CounterVec
+	jobResumeTotal                   *CounterVec
+	assetCacheHit                    *CounterVec
+	assetCacheMiss                   *CounterVec
+	assetCacheHitsCanonical          *CounterVec
+	assetCacheMissesCanonical        *CounterVec
+	assetCacheRequests               *CounterVec
+	assetCacheEvictions              *CounterVec
+	assetCacheDownloads              *CounterVec
+	assetCacheDownloadBytes          *CounterVec
+	assetCacheDownloadMS             *HistogramVec
+	assetDownloadSecondsCanonical    *HistogramVec
+	assetCacheVerifyMS               *HistogramVec
+	assetCacheCleanupMS              *HistogramVec
+	assetCacheCleanupSkip            *CounterVec
+	assetCacheProtectedSkipCanonical *CounterVec
+	assetCacheSizeBytes              *GaugeVec
+	assetCacheEntries                *GaugeVec
+	workerActiveJobs                 *GaugeVec
+	workerStatus                     *GaugeVec
+	fallbackCount                    *CounterVec
+	pythonEmergencyPath              *CounterVec
+	renderSeconds                    *HistogramVec
+	artifactUploadSeconds            *HistogramVec
+	taskResultSubmitSeconds          *HistogramVec
+	taskResultAckSeconds             *HistogramVec
+	taskResultAcksTotal              *CounterVec
 }
 
 // NewPrometheusMetrics creates a new Prometheus metrics collector.
@@ -86,16 +96,26 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 			Name: "velox_asset_cache_miss_total", Help: "Total asset cache misses",
 			values: make(map[string]float64),
 		},
-		assetCacheRequests:      &CounterVec{Name: "velox_cache_requests_total", Help: "Asset cache requests by result", values: make(map[string]float64)},
-		assetCacheEvictions:     &CounterVec{Name: "velox_cache_evictions_total", Help: "Asset cache evictions by reason", values: make(map[string]float64)},
-		assetCacheDownloads:     &CounterVec{Name: "velox_cache_downloads_total", Help: "Completed local asset downloads", values: make(map[string]float64)},
-		assetCacheDownloadBytes: &CounterVec{Name: "velox_cache_download_bytes_total", Help: "Bytes downloaded into the local asset cache", values: make(map[string]float64)},
-		assetCacheDownloadMS:    &HistogramVec{Name: "velox_cache_download_duration_seconds", Help: "Asset cache download duration", Buckets: []float64{.01, .1, 1, 5, 30, 120, 600}, values: make(map[string]*histogramData)},
-		assetCacheVerifyMS:      &HistogramVec{Name: "velox_cache_sha_verify_duration_seconds", Help: "Asset cache verification duration", Buckets: []float64{.001, .01, .1, 1, 5, 30}, values: make(map[string]*histogramData)},
-		assetCacheCleanupMS:     &HistogramVec{Name: "velox_cache_cleanup_duration_seconds", Help: "Asset cache cleanup duration", Buckets: []float64{.001, .01, .1, 1, 5, 30}, values: make(map[string]*histogramData)},
-		assetCacheCleanupSkip:   &CounterVec{Name: "velox_cache_cleanup_skipped_total", Help: "Asset cache cleanup skips by reason", values: make(map[string]float64)},
-		assetCacheSizeBytes:     &GaugeVec{Name: "velox_cache_size_bytes", Help: "Current local asset cache size", values: make(map[string]float64)},
-		assetCacheEntries:       &GaugeVec{Name: "velox_cache_entries", Help: "Current local asset cache entries", values: make(map[string]float64)},
+		assetCacheHitsCanonical: &CounterVec{
+			Name: "velox_asset_cache_hits_total", Help: "Total asset cache hits (low-cardinality)",
+			values: make(map[string]float64),
+		},
+		assetCacheMissesCanonical: &CounterVec{
+			Name: "velox_asset_cache_misses_total", Help: "Total asset cache misses (low-cardinality)",
+			values: make(map[string]float64),
+		},
+		assetCacheRequests:               &CounterVec{Name: "velox_cache_requests_total", Help: "Asset cache requests by result", values: make(map[string]float64)},
+		assetCacheEvictions:              &CounterVec{Name: "velox_cache_evictions_total", Help: "Asset cache evictions by reason", values: make(map[string]float64)},
+		assetCacheDownloads:              &CounterVec{Name: "velox_cache_downloads_total", Help: "Completed local asset downloads", values: make(map[string]float64)},
+		assetCacheDownloadBytes:          &CounterVec{Name: "velox_cache_download_bytes_total", Help: "Bytes downloaded into the local asset cache", values: make(map[string]float64)},
+		assetCacheDownloadMS:             &HistogramVec{Name: "velox_cache_download_duration_seconds", Help: "Asset cache download duration", Buckets: []float64{.01, .1, 1, 5, 30, 120, 600}, values: make(map[string]*histogramData)},
+		assetDownloadSecondsCanonical:    &HistogramVec{Name: "velox_asset_download_seconds", Help: "Asset download duration", Buckets: []float64{.01, .1, 1, 5, 30, 120, 600}, values: make(map[string]*histogramData)},
+		assetCacheVerifyMS:               &HistogramVec{Name: "velox_cache_sha_verify_duration_seconds", Help: "Asset cache verification duration", Buckets: []float64{.001, .01, .1, 1, 5, 30}, values: make(map[string]*histogramData)},
+		assetCacheCleanupMS:              &HistogramVec{Name: "velox_cache_cleanup_duration_seconds", Help: "Asset cache cleanup duration", Buckets: []float64{.001, .01, .1, 1, 5, 30}, values: make(map[string]*histogramData)},
+		assetCacheCleanupSkip:            &CounterVec{Name: "velox_cache_cleanup_skipped_total", Help: "Asset cache cleanup skips by reason", values: make(map[string]float64)},
+		assetCacheProtectedSkipCanonical: &CounterVec{Name: "velox_cache_protected_skips_total", Help: "Asset cache entries skipped because they are protected", values: make(map[string]float64)},
+		assetCacheSizeBytes:              &GaugeVec{Name: "velox_cache_size_bytes", Help: "Current local asset cache size", values: make(map[string]float64)},
+		assetCacheEntries:                &GaugeVec{Name: "velox_cache_entries", Help: "Current local asset cache entries", values: make(map[string]float64)},
 		workerActiveJobs: &GaugeVec{
 			Name: "velox_worker_active_jobs", Help: "Number of active jobs per worker",
 			values: make(map[string]float64),
@@ -112,6 +132,11 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 			Name: "velox_python_emergency_path_total", Help: "Total Python emergency path usages (should be 0 in production)",
 			values: make(map[string]float64),
 		},
+		renderSeconds:           &HistogramVec{Name: "velox_render_seconds", Help: "Render duration", Buckets: []float64{.1, 1, 5, 10, 30, 60, 300, 900, 1800}, values: make(map[string]*histogramData)},
+		artifactUploadSeconds:   &HistogramVec{Name: "velox_artifact_upload_seconds", Help: "Artifact upload duration", Buckets: []float64{.01, .1, 1, 5, 30, 120, 600}, values: make(map[string]*histogramData)},
+		taskResultSubmitSeconds: &HistogramVec{Name: "velox_task_result_submit_seconds", Help: "TaskResult persistence and send duration", Buckets: []float64{.001, .01, .1, 1, 5, 30, 120}, values: make(map[string]*histogramData)},
+		taskResultAckSeconds:    &HistogramVec{Name: "velox_task_result_ack_seconds", Help: "TaskResult acknowledgement wait duration", Buckets: []float64{.001, .01, .1, 1, 5, 30, 120}, values: make(map[string]*histogramData)},
+		taskResultAcksTotal:     &CounterVec{Name: "velox_task_result_acks_total", Help: "TaskResult acknowledgements received", values: make(map[string]float64)},
 	}
 }
 
@@ -134,10 +159,16 @@ func (m *PrometheusMetrics) RecordIdempotencyConflict(reason string) {
 func (m *PrometheusMetrics) RecordJobRetry(jobType string, count float64) {
 	m.jobRetryCount.observe(jobType, count)
 }
-func (m *PrometheusMetrics) RecordAssetCacheHit(assetType string)  { m.assetCacheHit.inc(assetType) }
-func (m *PrometheusMetrics) RecordAssetCacheMiss(assetType string) { m.assetCacheMiss.inc(assetType) }
-func (m *PrometheusMetrics) RecordCacheRequest(result string)      { m.assetCacheRequests.inc(result) }
-func (m *PrometheusMetrics) RecordCacheEviction(reason string)     { m.assetCacheEvictions.inc(reason) }
+func (m *PrometheusMetrics) RecordAssetCacheHit(_ string) {
+	m.assetCacheHit.inc("asset")
+	m.assetCacheHitsCanonical.inc("total")
+}
+func (m *PrometheusMetrics) RecordAssetCacheMiss(_ string) {
+	m.assetCacheMiss.inc("asset")
+	m.assetCacheMissesCanonical.inc("total")
+}
+func (m *PrometheusMetrics) RecordCacheRequest(result string)  { m.assetCacheRequests.inc(result) }
+func (m *PrometheusMetrics) RecordCacheEviction(reason string) { m.assetCacheEvictions.inc(reason) }
 func (m *PrometheusMetrics) RecordCacheEvictions(reason string, count int) {
 	if count > 0 {
 		m.assetCacheEvictions.add(reason, float64(count))
@@ -147,6 +178,7 @@ func (m *PrometheusMetrics) RecordCacheDownload(bytes int64, duration time.Durat
 	m.assetCacheDownloads.inc("asset")
 	m.assetCacheDownloadBytes.add("asset", float64(bytes))
 	m.assetCacheDownloadMS.observe("asset", duration.Seconds())
+	m.assetDownloadSecondsCanonical.observe("total", duration.Seconds())
 }
 func (m *PrometheusMetrics) RecordCacheVerify(duration time.Duration) {
 	m.assetCacheVerifyMS.observe("asset", duration.Seconds())
@@ -160,17 +192,35 @@ func (m *PrometheusMetrics) RecordCacheCleanupSkip(reason string) {
 func (m *PrometheusMetrics) RecordCacheCleanupSkips(reason string, count int) {
 	if count > 0 {
 		m.assetCacheCleanupSkip.add(reason, float64(count))
+		if reason == "protected" {
+			m.assetCacheProtectedSkipCanonical.add("total", float64(count))
+		}
 	}
 }
 func (m *PrometheusMetrics) SetCacheSize(entries int, bytes int64) {
 	m.assetCacheEntries.set("total", float64(entries))
 	m.assetCacheSizeBytes.set("total", float64(bytes))
 }
-func (m *PrometheusMetrics) SetWorkerActiveJobs(workerID string, count float64) {
-	m.workerActiveJobs.set(workerID, count)
+func (m *PrometheusMetrics) SetWorkerActiveJobs(_ string, count float64) {
+	m.workerActiveJobs.set("total", count)
 }
-func (m *PrometheusMetrics) SetWorkerStatus(workerID string, status float64) {
-	m.workerStatus.set(workerID, status)
+func (m *PrometheusMetrics) SetWorkerStatus(_ string, status float64) {
+	m.workerStatus.set("total", status)
+}
+func (m *PrometheusMetrics) RecordRender(duration time.Duration) {
+	m.renderSeconds.observe("total", duration.Seconds())
+}
+func (m *PrometheusMetrics) RecordArtifactUpload(duration time.Duration) {
+	m.artifactUploadSeconds.observe("total", duration.Seconds())
+}
+func (m *PrometheusMetrics) RecordTaskResultSubmit(duration time.Duration) {
+	m.taskResultSubmitSeconds.observe("total", duration.Seconds())
+}
+func (m *PrometheusMetrics) RecordTaskResultAck(duration time.Duration) {
+	m.taskResultAckSeconds.observe("total", duration.Seconds())
+}
+func (m *PrometheusMetrics) RecordTaskResultAckReceived() {
+	m.taskResultAcksTotal.inc("total")
 }
 func (m *PrometheusMetrics) RecordFallback(reason string) { m.fallbackCount.inc(reason) }
 func (m *PrometheusMetrics) RecordPythonEmergencyPath(reason string) {
@@ -235,20 +285,29 @@ func (m *PrometheusMetrics) ExportPrometheus() string {
 	output += m.jobResumeTotal.export()
 	output += m.assetCacheHit.export()
 	output += m.assetCacheMiss.export()
+	output += m.assetCacheHitsCanonical.export()
+	output += m.assetCacheMissesCanonical.export()
 	output += m.assetCacheRequests.export()
 	output += m.assetCacheEvictions.export()
 	output += m.assetCacheDownloads.export()
 	output += m.assetCacheDownloadBytes.export()
 	output += m.assetCacheDownloadMS.export()
+	output += m.assetDownloadSecondsCanonical.export()
 	output += m.assetCacheVerifyMS.export()
 	output += m.assetCacheCleanupMS.export()
 	output += m.assetCacheCleanupSkip.export()
+	output += m.assetCacheProtectedSkipCanonical.export()
 	output += m.assetCacheSizeBytes.export()
 	output += m.assetCacheEntries.export()
 	output += m.fallbackCount.export()
 	output += m.pythonEmergencyPath.export()
 	output += m.workerActiveJobs.export()
 	output += m.workerStatus.export()
+	output += m.renderSeconds.export()
+	output += m.artifactUploadSeconds.export()
+	output += m.taskResultSubmitSeconds.export()
+	output += m.taskResultAckSeconds.export()
+	output += m.taskResultAcksTotal.export()
 	return output
 }
 
@@ -262,14 +321,21 @@ func GetPrometheusMetrics() *PrometheusMetrics {
 
 // StartPrometheusServer starts an HTTP server for Prometheus metrics scraping.
 func StartPrometheusServer(port int) error {
+	if port <= 0 || port > 65535 {
+		return fmt.Errorf("invalid Prometheus port %d", port)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		fmt.Fprint(w, globalPrometheus.ExportPrometheus())
 	})
-	server := &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: mux}
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return fmt.Errorf("listen Prometheus port %d: %w", port, err)
+	}
+	server := &http.Server{Handler: mux}
 	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			fmt.Printf("Prometheus server error: %v\n", err)
 		}
 	}()

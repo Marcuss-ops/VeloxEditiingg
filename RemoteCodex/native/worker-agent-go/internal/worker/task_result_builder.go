@@ -36,6 +36,7 @@ import (
 	sharedtelemetry "velox-shared/telemetry"
 	"velox-worker-agent/internal/spool"
 	"velox-worker-agent/internal/taskrunner"
+	"velox-worker-agent/internal/telemetry"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -202,10 +203,13 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 		// Hand-built legacy test workers do not open the production spool.
 		// Keep those fixtures usable while New() remains fail-closed with a
 		// durable outbox in every real worker.
+		submitStartedAt := time.Now()
 		if sendErr := w.transport.Send(ctx, controltransport.NewTypedMessage(controltransport.MsgTaskResult, w.config.WorkerID, w.config.ProtocolVersion, tr)); sendErr != nil {
+			telemetry.GetPrometheusMetrics().RecordTaskResultSubmit(time.Since(submitStartedAt))
 			w.logger.Error("[TASK] Failed to submit TaskResult for %s: %v", taskID, sendErr)
 			return
 		}
+		telemetry.GetPrometheusMetrics().RecordTaskResultSubmit(time.Since(submitStartedAt))
 		artifactCount := artifactReportOutputCount(report)
 		w.logger.Info("[TASK] TaskResult submitted for %s (status: %s, artifacts: %d)", taskID, status, artifactCount)
 		w.logArtifactProtocol("TASK_RESULT_SENT", pte, resultStartedAt, "", "", "", map[string]interface{}{
@@ -216,7 +220,9 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 		// exists on this path.
 		return
 	}
+	submitStartedAt := time.Now()
 	if err := w.persistTaskResult(ctx, tr); err != nil {
+		telemetry.GetPrometheusMetrics().RecordTaskResultSubmit(time.Since(submitStartedAt))
 		w.logger.Error("[TASK_RESULT_OUTBOX] Failed to persist TaskResult for %s: %v", taskID, err)
 		w.logArtifactProtocol("TASK_RESULT_OUTBOX_PERSIST_FAILED", pte, resultStartedAt, "", "", "", map[string]interface{}{
 			"status": status, "report_hash": tr.GetReportHash(), "error": err.Error(),
@@ -225,6 +231,7 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 	}
 	payload, marshalErr := proto.Marshal(tr)
 	if marshalErr != nil {
+		telemetry.GetPrometheusMetrics().RecordTaskResultSubmit(time.Since(submitStartedAt))
 		w.logger.Error("[TASK_RESULT_OUTBOX] Failed to marshal TaskResult for %s: %v", taskID, marshalErr)
 		return
 	}
@@ -235,6 +242,7 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 	ackCh := w.registerTaskResultAck(pte.JobID, taskID, attemptID)
 	defer w.unregisterTaskResultAck(pte.JobID, taskID, attemptID)
 	if sendErr := w.sendTaskResultAttempt(ctx, entry); sendErr != nil {
+		telemetry.GetPrometheusMetrics().RecordTaskResultSubmit(time.Since(submitStartedAt))
 		w.logger.Error("[TASK_RESULT_OUTBOX] Failed to submit TaskResult for %s: %v", taskID, sendErr)
 		w.logArtifactProtocol("TASK_RESULT_SEND_FAILED", pte, resultStartedAt, "", "", "", map[string]interface{}{
 			"status": status, "report_hash": tr.GetReportHash(), "error": sendErr.Error(),
@@ -248,11 +256,15 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 			ackWait = remaining
 		}
 	}
+	telemetry.GetPrometheusMetrics().RecordTaskResultSubmit(time.Since(submitStartedAt))
+	ackWaitStartedAt := time.Now()
+	ackReceived := false
 	if ackWait > 0 {
 		timer := time.NewTimer(ackWait)
 		select {
 		case ack := <-ackCh:
 			timer.Stop()
+			ackReceived = taskResultAckIsTerminal(ack)
 			if !taskResultAckIsTerminal(ack) {
 				w.logger.Warn("[TASK_RESULT_OUTBOX] TaskResultAck was non-terminal task=%s attempt=%s error=%q; replay remains durable", taskID, attemptID, ack.GetError())
 			}
@@ -261,6 +273,9 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 		case <-ctx.Done():
 			timer.Stop()
 		}
+	}
+	if ackReceived {
+		telemetry.GetPrometheusMetrics().RecordTaskResultAck(time.Since(ackWaitStartedAt))
 	}
 	artifactCount := artifactReportOutputCount(report)
 	w.logger.Info("[TASK] TaskResult submitted for %s (status: %s, artifacts: %d)", taskID, status, artifactCount)

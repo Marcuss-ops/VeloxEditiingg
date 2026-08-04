@@ -115,6 +115,14 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	}
 
 	duration := time.Since(startTime)
+	if report != nil {
+		if renderMS, ok := report.Metrics["pipeline.render_ms"].(int64); ok && renderMS >= 0 {
+			duration = time.Duration(renderMS) * time.Millisecond
+		} else if renderMS, ok := report.Metrics["pipeline.render_ms"].(float64); ok && renderMS >= 0 {
+			duration = time.Duration(renderMS) * time.Millisecond
+		}
+	}
+	telemetry.GetPrometheusMetrics().RecordRender(duration)
 
 	if execErr == nil {
 		if uploadErr := w.uploadTaskOutputs(jobCtx, pte, report); uploadErr != nil {

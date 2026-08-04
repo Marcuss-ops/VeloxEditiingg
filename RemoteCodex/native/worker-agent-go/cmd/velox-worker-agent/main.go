@@ -510,11 +510,15 @@ func main() {
 	if prometheusPort == 0 {
 		logger.Info("[TELEMETRY] Prometheus metrics disabled (port=0)")
 	} else {
-		go func() {
-			if err := telemetry.StartPrometheusServer(prometheusPort); err != nil {
-				logger.Warn("Prometheus server failed: %v", err)
-			}
-		}()
+		// StartPrometheusServer binds synchronously so a port collision is
+		// reported before the worker announces startup. The serving loop is
+		// still asynchronous after the listener is acquired.
+		if err := telemetry.StartPrometheusServer(prometheusPort); err != nil {
+			logger.Error("[TELEMETRY] Prometheus metrics server failed on :%d: %v", prometheusPort, err)
+			// Production workers must not claim readiness while the
+			// configured observability endpoint is unavailable.
+			os.Exit(1)
+		}
 		logger.Info("[TELEMETRY] Prometheus metrics server starting on :%d", prometheusPort)
 	}
 

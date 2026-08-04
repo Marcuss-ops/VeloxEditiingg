@@ -52,6 +52,9 @@ const (
 	// EnvWorkerProfile selects the runtime profile for this worker.
 	// "creator" disables the C++ video pipeline and scene.composite.v1.
 	EnvWorkerProfile = "VELOX_WORKER_PROFILE"
+	// EnvPrometheusPort controls the worker Prometheus scrape endpoint.
+	// Set to 0 to disable the endpoint explicitly.
+	EnvPrometheusPort = "VELOX_PROMETHEUS_PORT"
 )
 
 // EnvBindings is the set of env-var names this package inspects.
@@ -70,6 +73,7 @@ var EnvBindings = []string{
 	EnvRolloutGroup,
 	EnvStateDir,
 	EnvWorkerProfile,
+	EnvPrometheusPort,
 }
 
 // envTruthy reports whether a string from os.Getenv should be interpreted
@@ -151,5 +155,10 @@ func applyEnvOverrides(cfg *WorkerConfig) {
 	}
 	if v := strings.TrimSpace(os.Getenv(EnvWorkerProfile)); v != "" {
 		cfg.WorkerProfile = v
+	}
+	if v := strings.TrimSpace(os.Getenv(EnvPrometheusPort)); v != "" {
+		if port, perr := strconv.Atoi(v); perr == nil && port >= 0 && port <= 65535 {
+			cfg.PrometheusPort = port
+		}
 	}
 }

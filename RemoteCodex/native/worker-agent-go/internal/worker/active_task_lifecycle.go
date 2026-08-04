@@ -121,6 +121,10 @@ func (w *Worker) recordTaskFinish() {
 // Scorecard v2 / Step 15: starts an "upload" span for distributed
 // tracing. The span is closed on function return via defer span.End().
 func (w *Worker) uploadTaskOutputs(ctx context.Context, pte *PendingTaskExecution, report *taskrunner.TaskExecutionReport) (err error) {
+	uploadStarted := time.Now()
+	defer func() {
+		telemetry.GetPrometheusMetrics().RecordArtifactUpload(time.Since(uploadStarted))
+	}()
 	ctx, span := oteltrace.StartSpan(ctx, "upload",
 		oteltrace.AttrJobID(pte.JobID),
 		oteltrace.AttrTaskID(pte.TaskID),

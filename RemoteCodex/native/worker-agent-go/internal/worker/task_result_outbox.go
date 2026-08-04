@@ -9,6 +9,7 @@ import (
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/spool"
+	"velox-worker-agent/internal/telemetry"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -171,6 +172,7 @@ func (w *Worker) handleTaskResultAck(ack *pb.TaskResultAck) {
 	if !deleted {
 		return
 	}
+	telemetry.GetPrometheusMetrics().RecordTaskResultAckReceived()
 	// This is the authoritative terminal boundary, including ACKs that
 	// arrive after executeTask's synchronous wait or after a reconnect.
 	w.signalTaskTerminal()
