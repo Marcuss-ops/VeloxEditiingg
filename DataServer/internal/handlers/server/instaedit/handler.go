@@ -29,10 +29,10 @@ const (
 	// these exact values; duplicating the strings here previously allowed
 	// the two repositories to drift and made every BFF request fail with
 	// 403 insufficient scope.
-	ScopeJobsRead    = instaeditauth.ScopeEditorProjectRead
-	ScopeJobsWrite   = instaeditauth.ScopeEditorProjectWrite
-	ScopeWorkersRead = instaeditauth.ScopeEditorProjectRead
-	ScopeAssetsRead  = instaeditauth.ScopeEditorProjectRead
+	ScopeJobsRead    = instaeditauth.ScopeJobsRead
+	ScopeJobsWrite   = instaeditauth.ScopeJobsWrite
+	ScopeWorkersRead = instaeditauth.ScopeWorkersRead
+	ScopeAssetsRead  = instaeditauth.ScopeAssetsRead
 )
 
 // HandlerDeps carries the dependencies required by the InstaEdit BFF

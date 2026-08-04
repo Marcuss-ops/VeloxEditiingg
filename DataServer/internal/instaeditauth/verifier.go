@@ -25,7 +25,7 @@
 //	  "aud": "velox",
 //	  "sub": "123",
 //	  "workspace_id": 45,
-//	  "scopes": ["velox:jobs:read", "velox:jobs:write", "velox:workers:read"],
+//	  "scopes": ["jobs.read", "jobs.write", "workers.read"],
 //	  "exp": 1780000000,
 //	  "jti": "random-id"
 //	}

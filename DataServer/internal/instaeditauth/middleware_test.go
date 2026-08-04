@@ -135,7 +135,7 @@ func TestMiddleware_FreeXWorkspaceID_Rejected(t *testing.T) {
 func TestMiddleware_ScopeEnforcement_Pass(t *testing.T) {
 	v, _ := New(testSecret)
 	r := setupGin()
-	r.GET("/test", Middleware(v, []string{"velox:jobs:read"}), func(c *gin.Context) {
+	r.GET("/test", Middleware(v, []string{"jobs.read"}), func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})
 
@@ -153,7 +153,7 @@ func TestMiddleware_ScopeEnforcement_Pass(t *testing.T) {
 func TestMiddleware_ScopeEnforcement_Fail_403(t *testing.T) {
 	v, _ := New(testSecret)
 	r := setupGin()
-	r.GET("/test", Middleware(v, []string{"velox:assets:write"}), func(c *gin.Context) {
+	r.GET("/test", Middleware(v, []string{"assets.write"}), func(c *gin.Context) {
 		c.JSON(200, gin.H{"ok": true})
 	})
 

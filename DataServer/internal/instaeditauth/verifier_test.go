@@ -42,7 +42,7 @@ func validClaims() Claims {
 		Audience:    ExpectedAudience,
 		Subject:     "123",
 		WorkspaceID: 45,
-		Scopes:      []string{"velox:jobs:read", "velox:jobs:write", "velox:workers:read"},
+		Scopes:      []string{"jobs.read", "jobs.write", "workers.read"},
 		ExpiresAt:   time.Now().Add(5 * time.Minute).Unix(),
 		JTI:         "test-jti",
 	}
@@ -193,12 +193,12 @@ func TestVerify_WithClock_Expired(t *testing.T) {
 }
 
 func TestHasScope(t *testing.T) {
-	c := &Claims{Scopes: []string{"velox:jobs:read", "velox:workers:read"}}
-	if !c.HasScope("velox:jobs:read") {
-		t.Fatal("expected HasScope to find velox:jobs:read")
+	c := &Claims{Scopes: []string{"jobs.read", "workers.read"}}
+	if !c.HasScope("jobs.read") {
+		t.Fatal("expected HasScope to find jobs.read")
 	}
-	if c.HasScope("velox:assets:read") {
-		t.Fatal("expected HasScope to NOT find velox:assets:read")
+	if c.HasScope("assets.read") {
+		t.Fatal("expected HasScope to NOT find assets.read")
 	}
 }
 
@@ -238,7 +238,7 @@ func TestVerifyAlgNoneAttack(t *testing.T) {
 func TestVerify_DifferentScopesRoundTrip(t *testing.T) {
 	v, _ := New(testSecret)
 	c := validClaims()
-	c.Scopes = []string{"velox:assets:read", "velox:assets:write"}
+	c.Scopes = []string{"assets.read", "assets.write"}
 	token := mintToken(t, testSecret, c)
 	claims, err := v.Verify(token)
 	if err != nil {
@@ -247,8 +247,8 @@ func TestVerify_DifferentScopesRoundTrip(t *testing.T) {
 	if len(claims.Scopes) != 2 {
 		t.Fatalf("expected 2 scopes, got %d", len(claims.Scopes))
 	}
-	if !claims.HasScope("velox:assets:write") {
-		t.Fatal("expected velox:assets:write scope")
+	if !claims.HasScope("assets.write") {
+		t.Fatal("expected assets.write scope")
 	}
 }
 

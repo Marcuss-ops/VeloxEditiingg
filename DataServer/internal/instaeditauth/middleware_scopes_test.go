@@ -9,7 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// scopeDenialBodyFor is a tiny decode-and-assert helper that the
+// decodeDenialBody is a tiny decode-and-assert helper that the
 // matrix tests reuse so each test reads as one short block.
 //
 // The HTTP body shape MUST match the struct in middleware.go exactly
@@ -27,8 +27,7 @@ func decodeDenialBody(t *testing.T, body []byte) map[string]interface{} {
 
 // validClaimsWithScopes clones validClaims() and overrides the Scopes
 // field with the supplied slice. Used by the new-taxonomy tests so
-// they don't have to bake the legacy "velox:jobs:read"-shaped scopes
-// into the verified Claims.
+// they don't have to bake legacy-shaped scopes into the verified Claims.
 func validClaimsWithScopes(scopes []string) Claims {
 	c := validClaims()
 	c.Scopes = scopes
@@ -38,19 +37,19 @@ func validClaimsWithScopes(scopes []string) Claims {
 // TestMiddleware_403ContainsClearMessageWithRouteAndOperation —
 // architect verdict Q3. The enriched body shape MUST have all 6
 // fields (error, required_scopes, presented_scopes, operation,
-// route, hint). Operating tags route=URL path + operation="publish_thumbnail".
+// route, hint). Operating tags route=URL path + operation="create_job".
 func TestMiddleware_403ContainsClearMessageWithRouteAndOperation(t *testing.T) {
 	v, _ := New(testSecret)
 	r := setupGin()
-	r.POST("/api/v1/instaedit/editor/sessions/abc/publish",
-		MiddlewareWithOperation(v, []string{ScopeEditorProjectWrite}, "publish_thumbnail"),
+	r.POST("/api/v1/instaedit/jobs",
+		MiddlewareWithOperation(v, []string{ScopeJobsWrite}, "create_job"),
 		func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) },
 	)
 
-	// JWT carries only the read scope — the publish route demands write.
-	c := validClaimsWithScopes([]string{ScopeEditorProjectRead})
+	// JWT carries only the read scope — the create route demands write.
+	c := validClaimsWithScopes([]string{ScopeJobsRead})
 	token := mintToken(t, testSecret, c)
-	req := httptest.NewRequest("POST", "/api/v1/instaedit/editor/sessions/abc/publish", nil)
+	req := httptest.NewRequest("POST", "/api/v1/instaedit/jobs", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -68,22 +67,22 @@ func TestMiddleware_403ContainsClearMessageWithRouteAndOperation(t *testing.T) {
 	if body["error"] != "insufficient scope" {
 		t.Fatalf("error: got %v, want 'insufficient scope'", body["error"])
 	}
-	if body["operation"] != "publish_thumbnail" {
-		t.Fatalf("operation: got %v, want 'publish_thumbnail'", body["operation"])
+	if body["operation"] != "create_job" {
+		t.Fatalf("operation: got %v, want 'create_job'", body["operation"])
 	}
-	if body["route"] != "/api/v1/instaedit/editor/sessions/abc/publish" {
+	if body["route"] != "/api/v1/instaedit/jobs" {
 		t.Fatalf("route: got %v", body["route"])
 	}
 	if body["hint"] == "" {
 		t.Fatal("hint empty; expected remediation text")
 	}
 	required, _ := body["required_scopes"].([]interface{})
-	if len(required) != 1 || required[0] != ScopeEditorProjectWrite {
-		t.Fatalf("required_scopes: got %v, want [%q]", required, ScopeEditorProjectWrite)
+	if len(required) != 1 || required[0] != ScopeJobsWrite {
+		t.Fatalf("required_scopes: got %v, want [%q]", required, ScopeJobsWrite)
 	}
 	presented, _ := body["presented_scopes"].([]interface{})
-	if len(presented) != 1 || presented[0] != ScopeEditorProjectRead {
-		t.Fatalf("presented_scopes: got %v, want [%q]", presented, ScopeEditorProjectRead)
+	if len(presented) != 1 || presented[0] != ScopeJobsRead {
+		t.Fatalf("presented_scopes: got %v, want [%q]", presented, ScopeJobsRead)
 	}
 }
 
@@ -96,13 +95,13 @@ func TestMiddleware_403ContainsClearMessageWithRouteAndOperation(t *testing.T) {
 func TestMiddleware_Generic_MarksOperationAsDash(t *testing.T) {
 	v, _ := New(testSecret)
 	r := setupGin()
-	r.GET("/api/v1/instaedit/editor/projects/proj-1",
-		Middleware(v, []string{ScopeEditorProjectWrite}),
+	r.GET("/api/v1/instaedit/jobs/job-1",
+		Middleware(v, []string{ScopeJobsWrite}),
 		func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) },
 	)
-	c := validClaimsWithScopes([]string{ScopeEditorProjectRead})
+	c := validClaimsWithScopes([]string{ScopeJobsRead})
 	token := mintToken(t, testSecret, c)
-	req := httptest.NewRequest("GET", "/api/v1/instaedit/editor/projects/proj-1", nil)
+	req := httptest.NewRequest("GET", "/api/v1/instaedit/jobs/job-1", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -114,7 +113,7 @@ func TestMiddleware_Generic_MarksOperationAsDash(t *testing.T) {
 	if body["operation"] != "-" {
 		t.Fatalf("operation: got %v, want '-'", body["operation"])
 	}
-	if body["route"] != "/api/v1/instaedit/editor/projects/proj-1" {
+	if body["route"] != "/api/v1/instaedit/jobs/job-1" {
 		t.Fatalf("route mismatch: %v", body["route"])
 	}
 }
@@ -124,13 +123,13 @@ func TestMiddleware_Generic_MarksOperationAsDash(t *testing.T) {
 func TestMiddleware_AllowsRequestWithExactScope(t *testing.T) {
 	v, _ := New(testSecret)
 	r := setupGin()
-	r.POST("/api/v1/instaedit/editor/sessions/abc/publish",
-		MiddlewareWithOperation(v, []string{ScopeEditorProjectWrite}, "publish_thumbnail"),
+	r.POST("/api/v1/instaedit/jobs",
+		MiddlewareWithOperation(v, []string{ScopeJobsWrite}, "create_job"),
 		func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) },
 	)
-	c := validClaimsWithScopes([]string{ScopeEditorProjectWrite})
+	c := validClaimsWithScopes([]string{ScopeJobsWrite})
 	token := mintToken(t, testSecret, c)
-	req := httptest.NewRequest("POST", "/api/v1/instaedit/editor/sessions/abc/publish", nil)
+	req := httptest.NewRequest("POST", "/api/v1/instaedit/jobs", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -141,19 +140,18 @@ func TestMiddleware_AllowsRequestWithExactScope(t *testing.T) {
 
 // TestMiddleware_AllowsRequestWithSupersetScopes — Velox accepts
 // "exact OR superset" (HasAllScopes semantics) so a BFF-superset
-// JWT (e.g. the AllScopesSuperset during the cutover window) is
-// accepted on every protected route. This guards the
-// EditorBFFModule cutover story.
+// JWT (e.g. the AllScopesSuperset) is accepted on every protected
+// route. This guards the BFF cutover story.
 func TestMiddleware_AllowsRequestWithSupersetScopes(t *testing.T) {
 	v, _ := New(testSecret)
 	r := setupGin()
-	r.POST("/api/v1/instaedit/editor/sessions/abc/publish",
-		MiddlewareWithOperation(v, []string{ScopeEditorProjectWrite}, "publish_thumbnail"),
+	r.POST("/api/v1/instaedit/jobs",
+		MiddlewareWithOperation(v, []string{ScopeJobsWrite}, "create_job"),
 		func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) },
 	)
-	c := validClaimsWithScopes(AllScopesSuperset) // all 4 scopes
+	c := validClaimsWithScopes(AllScopesSuperset) // all 5 scopes
 	token := mintToken(t, testSecret, c)
-	req := httptest.NewRequest("POST", "/api/v1/instaedit/editor/sessions/abc/publish", nil)
+	req := httptest.NewRequest("POST", "/api/v1/instaedit/jobs", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -162,12 +160,12 @@ func TestMiddleware_AllowsRequestWithSupersetScopes(t *testing.T) {
 	}
 }
 
-// TestMiddleware_DeniesInsufficientScope_ForEachOfTheFourEditorScopes —
-// matrix: for each of the 4 editor.* scopes, a JWT carrying only
-// the OTHER 3 is denied on the route demanding the target scope.
-func TestMiddleware_DeniesInsufficientScope_ForEachOfTheFourEditorScopes(t *testing.T) {
+// TestMiddleware_DeniesInsufficientScope_ForEachOfTheFiveScopes —
+// matrix: for each of the 5 scopes, a JWT carrying only the OTHER 4
+// is denied on the route demanding the target scope.
+func TestMiddleware_DeniesInsufficientScope_ForEachOfTheFiveScopes(t *testing.T) {
 	v, _ := New(testSecret)
-	all := []string{ScopeEditorProjectRead, ScopeEditorProjectWrite, ScopeEditorAssetUpload, ScopeYouTubeSessionPublish}
+	all := []string{ScopeJobsRead, ScopeJobsWrite, ScopeWorkersRead, ScopeAssetsRead, ScopeAssetsWrite}
 	for _, required := range all {
 		t.Run(required, func(t *testing.T) {
 			presented := make([]string, 0, len(all)-1)
@@ -177,13 +175,13 @@ func TestMiddleware_DeniesInsufficientScope_ForEachOfTheFourEditorScopes(t *test
 				}
 			}
 			r := setupGin()
-			r.GET("/api/v1/instaedit/editor/projects/proj-1",
+			r.GET("/api/v1/instaedit/jobs/job-1",
 				MiddlewareWithOperation(v, []string{required}, "test_op"),
 				func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) },
 			)
 			c := validClaimsWithScopes(presented)
 			token := mintToken(t, testSecret, c)
-			req := httptest.NewRequest("GET", "/api/v1/instaedit/editor/projects/proj-1", nil)
+			req := httptest.NewRequest("GET", "/api/v1/instaedit/jobs/job-1", nil)
 			req.Header.Set("Authorization", "Bearer "+token)
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, req)
@@ -210,13 +208,13 @@ func TestMiddleware_DeniesInsufficientScope_ForEachOfTheFourEditorScopes(t *test
 func TestMiddleware_FreeHeadersStillRejectedWith401(t *testing.T) {
 	v, _ := New(testSecret)
 	r := setupGin()
-	r.GET("/api/v1/instaedit/editor/projects/proj-1",
-		MiddlewareWithOperation(v, []string{ScopeEditorProjectRead}, "read_project"),
+	r.GET("/api/v1/instaedit/jobs/job-1",
+		MiddlewareWithOperation(v, []string{ScopeJobsRead}, "read_job"),
 		func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) },
 	)
-	c := validClaimsWithScopes([]string{ScopeEditorProjectRead})
+	c := validClaimsWithScopes([]string{ScopeJobsRead})
 	token := mintToken(t, testSecret, c)
-	req := httptest.NewRequest("GET", "/api/v1/instaedit/editor/projects/proj-1", nil)
+	req := httptest.NewRequest("GET", "/api/v1/instaedit/jobs/job-1", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-User-ID", "999")
 	w := httptest.NewRecorder()

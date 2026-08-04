@@ -94,11 +94,11 @@ func Middleware(verifier *Verifier, requiredScopes []string) gin.HandlerFunc {
 // the response can grep the InstaEdit BFF source / Velox route table
 // for the label without having to cross-reference path wildcards.
 //
-// "publish_thumbnail_session", "read_editor_project", "upload_editor_asset",
-// "list_editor_workers" are example operation labels.
+// "create_job", "read_job", "list_workers", "get_asset" are example
+// operation labels.
 //
 // The label MUST be a stable identifier — the architecture roadmap
-// tracks it as a contract the editor UI's "why rejected" panel
+// tracks it as a contract the InstaEdit BFF's "why rejected" panel
 // may display verbatim.
 func MiddlewareWithOperation(verifier *Verifier, requiredScopes []string, operation string) gin.HandlerFunc {
 	return func(c *gin.Context) {
