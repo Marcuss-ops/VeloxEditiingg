@@ -24,6 +24,8 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SPOOL_DB="$WORKER_STATE_DIR/executor_spool/worker_output_spool.sqlite3"
+[[ -f "$SPOOL_DB" ]] || { echo "FATAL: worker spool database not found: $SPOOL_DB" >&2; exit 1; }
+[[ -f "$WORKER_LOG" ]] || { echo "FATAL: worker log not found: $WORKER_LOG" >&2; exit 1; }
 exec "$REPO_ROOT/scripts/ci/check-ac-taskresult-convergence.sh" \
   --db "$DB" \
   --job-id "$JOB_ID" \

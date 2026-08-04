@@ -29,6 +29,9 @@ on:
     paths:
       - "scripts/gen-worker-certs.sh"
       - "scripts/ci/golden-e2e.sh"
+      - "scripts/ci/check-ac-taskresult-convergence.sh"
+      - "scripts/ci/test-ac-taskresult-convergence.sh"
+      - "scripts/e2e/verify-ac-taskresult-convergence.sh"
       - "DataServer/**"
       - "RemoteCodex/**"
       - "shared/**"

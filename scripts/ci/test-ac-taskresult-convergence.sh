@@ -72,6 +72,12 @@ expect_failure() {
 
 expect_failure "running-task" "UPDATE tasks SET status='RUNNING' WHERE task_id='$TASK';"
 sqlite3 "$DB" "UPDATE tasks SET status='SUCCEEDED' WHERE task_id='$TASK';"
+expect_failure "missing-winning-attempt" "UPDATE tasks SET winning_attempt_id='' WHERE task_id='$TASK';"
+sqlite3 "$DB" "UPDATE tasks SET winning_attempt_id='$ATTEMPT' WHERE task_id='$TASK';"
+expect_failure "non-terminal-delivery" "UPDATE job_deliveries SET status='PENDING' WHERE delivery_id='$DELIVERY';"
+sqlite3 "$DB" "UPDATE job_deliveries SET status='COMPLETED' WHERE delivery_id='$DELIVERY';"
+expect_failure "expired-lease" "UPDATE tasks SET status='LEASED', lease_expires_at='2000-01-01T00:00:00Z' WHERE task_id='$TASK';"
+sqlite3 "$DB" "UPDATE tasks SET status='SUCCEEDED', lease_expires_at='' WHERE task_id='$TASK';"
 expect_failure "missing-drive-id" "UPDATE job_deliveries SET remote_id='' WHERE delivery_id='$DELIVERY';"
 sqlite3 "$DB" "UPDATE job_deliveries SET remote_id='drive-file-canonical-123' WHERE delivery_id='$DELIVERY';"
 sqlite3 "$SPOOL" "INSERT INTO task_result_outbox VALUES ('$TASK','$ATTEMPT','hash');"
@@ -82,6 +88,14 @@ if run_gate >"$TMP/pending-task-result.out" 2>&1; then
 fi
 echo "OK: negative case pending-task-result rejected"
 sqlite3 "$SPOOL" "DELETE FROM task_result_outbox;"
+sqlite3 "$SPOOL" "INSERT INTO worker_output_spool VALUES ('stale-spool','$TASK','UPLOADING','2000-01-01T00:00:00Z');"
+if run_gate >"$TMP/stale-spool.out" 2>&1; then
+  cat "$TMP/stale-spool.out" >&2
+  echo "FAIL: negative case stale-spool unexpectedly passed" >&2
+  exit 1
+fi
+echo "OK: negative case stale-spool rejected"
+sqlite3 "$SPOOL" "DELETE FROM worker_output_spool;"
 # Remove the worker-side commit ACK marker; the DB remains converged, so
 # this specifically proves the worker-consumed ACK evidence is mandatory.
 TEMP_LOG="$TMP/worker-without-commit-ack.log"
