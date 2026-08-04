@@ -30,7 +30,6 @@ import (
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/worker"
 	"velox-worker-agent/internal/workercache"
-	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/blob"
 	"velox-worker-agent/pkg/bootstrap"
 	"velox-worker-agent/pkg/cache"
@@ -376,14 +375,6 @@ func main() {
 	cleanupPolicy := workercache.LoadCleanupPolicy()
 	protectedPoller.SnapshotMaxAge = cleanupPolicy.SnapshotMaxAge
 	telemetry.MarkCacheProtectionReady(false)
-	protectedPoller.OnSuccess = func(snap *api.ProtectedAssetSnapshot) {
-		telemetry.MarkCacheProtectionReady(protectedPoller.IsReady())
-		if snap != nil {
-			if generated, err := time.Parse(time.RFC3339Nano, snap.GeneratedAt); err == nil {
-				telemetry.SetProtectedSnapshotGeneratedAt(generated)
-			}
-		}
-	}
 	cleanupLoop := &workercache.CleanupLoop{
 		Cache: clipCache, Policy: cleanupPolicy, Snapshot: protectedPoller,
 		Barrier:  protectedPoller,

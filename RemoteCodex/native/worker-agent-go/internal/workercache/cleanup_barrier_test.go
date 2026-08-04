@@ -50,13 +50,23 @@ func TestCleanupLoop_RunWaitsForProtectionBarrier(t *testing.T) {
 	defer cache.Close()
 
 	barrier := &testProtectionBarrier{started: make(chan struct{}), release: make(chan struct{})}
+	var ticksMu sync.Mutex
 	var ticks int
+	readTicks := func() int {
+		ticksMu.Lock()
+		defer ticksMu.Unlock()
+		return ticks
+	}
 	loop := &CleanupLoop{
 		Cache:    cache,
 		Policy:   CleanupPolicy{CleanupInterval: time.Hour},
 		Interval: time.Hour,
 		Barrier:  barrier,
-		OnTick:   func(CleanupStats, error) { ticks++ },
+		OnTick: func(CleanupStats, error) {
+			ticksMu.Lock()
+			ticks++
+			ticksMu.Unlock()
+		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -69,13 +79,13 @@ func TestCleanupLoop_RunWaitsForProtectionBarrier(t *testing.T) {
 		t.Fatal("cleanup did not wait on protection barrier")
 	}
 	time.Sleep(20 * time.Millisecond)
-	if ticks != 0 {
-		t.Fatalf("cleanup ticked before barrier opened: %d", ticks)
+	if got := readTicks(); got != 0 {
+		t.Fatalf("cleanup ticked before barrier opened: %d", got)
 	}
 	close(barrier.release)
 	// The first tick should run immediately after the barrier opens.
 	deadline := time.After(time.Second)
-	for ticks == 0 {
+	for readTicks() == 0 {
 		select {
 		case <-deadline:
 			t.Fatal("cleanup did not run after barrier opened")
@@ -92,8 +102,8 @@ func TestCleanupLoop_RunWaitsForProtectionBarrier(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("cleanup loop did not stop after cancellation")
 	}
-	if ticks != 1 {
-		t.Fatalf("ticks=%d, want exactly one initial tick after barrier", ticks)
+	if got := readTicks(); got != 1 {
+		t.Fatalf("ticks=%d, want exactly one initial tick after barrier", got)
 	}
 }
 
@@ -105,15 +115,31 @@ func TestCleanupLoop_RunBarrierCancellationIsFailSafe(t *testing.T) {
 	defer cache.Close()
 
 	barrier := &testProtectionBarrier{started: make(chan struct{}), release: make(chan struct{})}
+	var ticksMu sync.Mutex
 	ticks := 0
-	loop := &CleanupLoop{Cache: cache, Barrier: barrier, Interval: time.Hour, OnTick: func(CleanupStats, error) { ticks++ }}
+	loop := &CleanupLoop{Cache: cache, Barrier: barrier, Interval: time.Hour, OnTick: func(CleanupStats, error) {
+		ticksMu.Lock()
+		ticks++
+		ticksMu.Unlock()
+	}}
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() { _ = loop.Run(ctx) }()
+	done := make(chan error, 1)
+	go func() { done <- loop.Run(ctx) }()
 	<-barrier.started
 	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run returned %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cleanup loop did not stop after barrier cancellation")
+	}
 	// The goroutine must leave WaitReady; no cleanup tick may happen.
-	time.Sleep(30 * time.Millisecond)
-	if ticks != 0 {
-		t.Fatalf("ticks=%d, want 0 when barrier wait is canceled", ticks)
+	ticksMu.Lock()
+	got := ticks
+	ticksMu.Unlock()
+	if got != 0 {
+		t.Fatalf("ticks=%d, want 0 when barrier wait is canceled", got)
 	}
 }

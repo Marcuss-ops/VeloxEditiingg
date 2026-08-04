@@ -588,12 +588,14 @@ func TestPoller_Run_PeriodicTickerFires(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go p.Run(ctx)
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx) }()
 
 	// Wait long enough for at least initial tick + 2-3 ticks
 	// on the 50ms ticker.
 	time.Sleep(250 * time.Millisecond)
 	cancel()
+	<-done
 
 	mu.Lock()
 	got := counter

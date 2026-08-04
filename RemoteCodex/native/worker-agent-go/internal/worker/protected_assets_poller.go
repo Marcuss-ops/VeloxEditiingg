@@ -13,10 +13,10 @@
 //  1. Tick failure NEVER overwrites the in-memory snapshot.
 //     HTTP 4xx/5xx, transport timeout, JSON decode error, and
 //     circuit-breaker rejection all leave p.snap untouched. The
-//     cleanup loop's SnapshotMaxAge rule is the ONLY mechanism
-//     that ever considers a snapshot "stale enough to ignore";
-//     the poller itself never self-evicts. This is what the
-//     user-spec requires: "Se lo snapshot fallisce, NON
+//     cleanup loop receives an error from Current and performs no
+//     destructive pass until a later valid 200 clears lastPollErr.
+//     The poller never evicts or clears the last valid snapshot. This
+//     is what the user-spec requires: "Se lo snapshot fallisce, NON
 //     svuotare la cache locale."
 //
 //  2. A successful poll with empty DriveFileIDs is NOT a
@@ -123,8 +123,9 @@ type ProtectedAssetsPoller struct {
 	// readers.
 	OnSuccess func(snap *api.ProtectedAssetSnapshot)
 
-	mu   sync.RWMutex
-	snap *api.ProtectedAssetSnapshot
+	mu          sync.RWMutex
+	snap        *api.ProtectedAssetSnapshot
+	lastPollErr error
 
 	// readyCh closes exactly once after the first valid snapshot. It is
 	// deliberately independent from snap so a later 401/503 preserves
@@ -246,6 +247,9 @@ func (p *ProtectedAssetsPoller) TickOnce(ctx context.Context) error {
 func (p *ProtectedAssetsPoller) runTickOnce(ctx context.Context, label string) error {
 	snap, err := p.Client.GetProtectedAssets(ctx)
 	if err != nil {
+		p.mu.Lock()
+		p.lastPollErr = err
+		p.mu.Unlock()
 		if p.OnError != nil {
 			if label != "" {
 				p.OnError(fmt.Errorf("%s: %w", label, err))
@@ -256,6 +260,9 @@ func (p *ProtectedAssetsPoller) runTickOnce(ctx context.Context, label string) e
 		return err
 	}
 	if snap == nil {
+		p.mu.Lock()
+		p.lastPollErr = ErrProtectedSnapshotNil
+		p.mu.Unlock()
 		if p.OnError != nil {
 			p.OnError(ErrProtectedSnapshotNil)
 		}
@@ -267,12 +274,18 @@ func (p *ProtectedAssetsPoller) runTickOnce(ctx context.Context, label string) e
 		if parseErr != nil {
 			err = fmt.Errorf("%w: %v", ErrProtectedSnapshotInvalid, parseErr)
 		}
+		p.mu.Lock()
+		p.lastPollErr = err
+		p.mu.Unlock()
 		if p.OnError != nil {
 			p.OnError(err)
 		}
 		return err
 	}
 	if p.SnapshotMaxAge > 0 && time.Since(generatedAt) > p.SnapshotMaxAge {
+		p.mu.Lock()
+		p.lastPollErr = ErrProtectedSnapshotStale
+		p.mu.Unlock()
 		if p.OnError != nil {
 			p.OnError(ErrProtectedSnapshotStale)
 		}
@@ -292,6 +305,9 @@ func (p *ProtectedAssetsPoller) runTickOnce(ctx context.Context, label string) e
 				older = !generatedAt.After(previousAt)
 			}
 			if older {
+				p.mu.Lock()
+				p.lastPollErr = ErrProtectedSnapshotStale
+				p.mu.Unlock()
 				if p.OnError != nil {
 					p.OnError(ErrProtectedSnapshotStale)
 				}
@@ -367,9 +383,23 @@ func (p *ProtectedAssetsPoller) IsReady() bool {
 // one place — future enhancements (e.g. monotonic-version
 // checking) plug in here without touching TickOnce.
 func (p *ProtectedAssetsPoller) applySnapshot(snap *api.ProtectedAssetSnapshot) {
+	generatedAt, err := time.Parse(time.RFC3339Nano, snap.GeneratedAt)
+	if err != nil {
+		// runTickOnce validates GeneratedAt before calling applySnapshot;
+		// retain a defensive guard so readiness can never open from an
+		// invalid snapshot if this helper is reused later.
+		return
+	}
 	p.mu.Lock()
 	p.snap = snap
+	p.lastPollErr = nil
 	p.mu.Unlock()
+
+	// Publish readiness before releasing the cleanup barrier. This keeps
+	// /health/ready and destructive cleanup ordered behind the same first
+	// valid 200 snapshot.
+	telemetry.MarkCacheProtectionReady(true)
+	telemetry.SetProtectedSnapshotGeneratedAt(generatedAt)
 	p.readyOnce.Do(func() { close(p.readyCh) })
 	if p.OnSuccess != nil {
 		p.OnSuccess(snap)
@@ -387,11 +417,18 @@ func (p *ProtectedAssetsPoller) Snapshot() *api.ProtectedAssetSnapshot {
 }
 
 // Current adapts the poller's last successful snapshot to the
-// workercache.SnapshotSource contract. A failed or not-yet-completed poll
-// deliberately returns a zero timestamp, so cleanup remains fail-safe.
+// workercache.SnapshotSource contract. A failed poll returns the last
+// snapshot together with lastPollErr, so cleanup remains fail-safe while
+// readiness and diagnostics can still inspect the last valid snapshot.
 func (p *ProtectedAssetsPoller) Current(_ context.Context) (time.Time, []string, error) {
-	snap := p.Snapshot()
+	p.mu.RLock()
+	snap := p.snap
+	pollErr := p.lastPollErr
+	p.mu.RUnlock()
 	if snap == nil {
+		if pollErr != nil {
+			return time.Time{}, nil, pollErr
+		}
 		return time.Time{}, nil, nil
 	}
 	generatedAt, err := time.Parse(time.RFC3339Nano, snap.GeneratedAt)
@@ -400,5 +437,8 @@ func (p *ProtectedAssetsPoller) Current(_ context.Context) (time.Time, []string,
 	}
 	ids := append([]string(nil), snap.DriveFileIDs...)
 	ids = append(ids, snap.ProtectedAssetKeys...)
+	if pollErr != nil {
+		return generatedAt.UTC(), ids, pollErr
+	}
 	return generatedAt.UTC(), ids, nil
 }
