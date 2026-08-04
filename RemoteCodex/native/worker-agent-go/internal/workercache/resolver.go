@@ -42,11 +42,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"golang.org/x/sync/singleflight"
+	"velox-worker-agent/internal/telemetry"
 )
 
 // Resolver composes a Cache, a Downloader, and the destination
@@ -145,6 +147,9 @@ func (r *Resolver) resolveInner(ctx context.Context, driveID string) (string, er
 	}
 
 	if ok && entry.DownloadComplete && fileExists(entry.LocalPath) {
+		telemetry.GetPrometheusMetrics().RecordAssetCacheHit("asset")
+		telemetry.GetPrometheusMetrics().RecordCacheRequest("hit")
+		log.Printf(`{"event":"ASSET_CACHE_ACCESS","asset_key":%q,"result":"hit","downloaded_bytes":0}`, driveID)
 		// Cache hit fast path. MarkUsed is best-effort; a SQLite
 		// error here must not mask the resolved path (the cleanup
 		// loop can rebuild last_used_at via MarkDownloadComplete
@@ -163,6 +168,9 @@ func (r *Resolver) resolveInner(ctx context.Context, driveID string) (string, er
 	// Downloader's MarkDownloadComplete call (Pass 10) lands on a
 	// valid row.
 	if !ok {
+		telemetry.GetPrometheusMetrics().RecordAssetCacheMiss("asset")
+		telemetry.GetPrometheusMetrics().RecordCacheRequest("miss")
+		log.Printf(`{"event":"ASSET_CACHE_ACCESS","asset_key":%q,"result":"miss"}`, driveID)
 		partPath := r.partPathFor(driveID)
 		if sErr := r.Cache.Store(ctx, Entry{
 			DriveFileID: driveID,

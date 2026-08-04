@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,9 +36,52 @@ type assetOperationTracker struct {
 }
 
 type assetOperationTrackerKey struct{}
+type cacheAccessContextKey struct{}
+
+type cacheAccessContext struct {
+	JobID string
+	Role  string
+}
 
 func withAssetOperationTracker(ctx context.Context, tracker *assetOperationTracker) context.Context {
 	return context.WithValue(ctx, assetOperationTrackerKey{}, tracker)
+}
+
+func withCacheAccessContext(ctx context.Context, jobID, role string) context.Context {
+	current := cacheAccessContextFromContext(ctx)
+	if jobID == "" {
+		jobID = current.JobID
+	}
+	if role == "" {
+		role = current.Role
+	}
+	return context.WithValue(ctx, cacheAccessContextKey{}, cacheAccessContext{JobID: jobID, Role: role})
+}
+
+func cacheAccessContextFromContext(ctx context.Context) cacheAccessContext {
+	if ctx == nil {
+		return cacheAccessContext{}
+	}
+	value, _ := ctx.Value(cacheAccessContextKey{}).(cacheAccessContext)
+	return value
+}
+
+func logAssetCacheAccess(ctx context.Context, workerID, assetKey, result string, downloadedBytes, lookupMS, shaVerifyMS int64) {
+	meta := cacheAccessContextFromContext(ctx)
+	payload := map[string]interface{}{
+		"event":            "ASSET_CACHE_ACCESS",
+		"job_id":           meta.JobID,
+		"worker_id":        workerID,
+		"asset_key":        assetKey,
+		"role":             meta.Role,
+		"result":           result,
+		"downloaded_bytes": downloadedBytes,
+		"lookup_ms":        lookupMS,
+		"sha_verify_ms":    shaVerifyMS,
+	}
+	if encoded, err := json.Marshal(payload); err == nil {
+		log.Print(string(encoded))
+	}
 }
 
 func assetOperationTrackerFromContext(ctx context.Context) *assetOperationTracker {
@@ -67,6 +112,33 @@ func (t *assetOperationTracker) snapshot() []AssetOperationRecord {
 
 func recordAssetOperation(ctx context.Context, record AssetOperationRecord) {
 	assetOperationTrackerFromContext(ctx).add(record)
+}
+
+func cacheAssetKey(assetID, expectedSHA256 string) string {
+	if expectedSHA256 != "" {
+		return "sha256:" + expectedSHA256
+	}
+	return assetID
+}
+
+func cacheRole(field string) string {
+	field = strings.ToLower(field)
+	switch {
+	case strings.Contains(field, "voiceover"):
+		return "voiceover"
+	case strings.Contains(field, "stock"), strings.Contains(field, "clip"):
+		return "stock"
+	case strings.Contains(field, "music"):
+		return "music"
+	case strings.Contains(field, "effect"), strings.Contains(field, "sfx"):
+		return "effect"
+	case strings.Contains(field, "image"):
+		return "image"
+	case strings.Contains(field, "subtitle"), strings.Contains(field, "caption"):
+		return "subtitle"
+	default:
+		return "asset"
+	}
 }
 
 func expectedAssetSHA256(fields map[string]interface{}) string {

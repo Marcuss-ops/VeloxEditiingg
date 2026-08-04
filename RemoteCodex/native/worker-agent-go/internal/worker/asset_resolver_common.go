@@ -7,9 +7,10 @@ import (
 	"strings"
 )
 
-// assetMetadata is the integrity contract required before a transport asset
-// can be materialized. A URI without both fields is never downloaded or
-// accepted from cache.
+// assetMetadata carries optional integrity hints. Folder-backed Drive assets
+// are allowed to arrive with only their canonical asset ID; the worker still
+// validates that the response is non-empty/media-like and computes the SHA
+// while writing it to the persistent cache.
 type assetMetadata struct {
 	ID        string
 	URI       string
@@ -54,10 +55,18 @@ func (w *Worker) resolveCommonAssetValue(ctx context.Context, value interface{},
 		if ref == "" || !mediaContext {
 			return value, nil
 		}
-		return w.resolveVerifiedAssetReference(ctx, ref, index, field)
+		return w.resolveVerifiedAssetReference(withCacheAccessContext(ctx, "", cacheRole(field)), ref, index, field)
 	case map[string]interface{}:
 		assetContext := mediaContext || isAssetEnvelope(typed)
 		for key, item := range typed {
+			// `source` is also used as a top-level job provenance field
+			// (for example, "script_generate_with_images"). It is a media
+			// reference only inside a media envelope/context; treating the
+			// provenance value as a file makes every canonical job fail before
+			// rendering with "raw URL or local path rejected".
+			if field == "" && strings.EqualFold(key, "source") {
+				continue
+			}
 			if strings.EqualFold(key, "scenes_json") {
 				encoded, ok := item.(string)
 				if ok && strings.TrimSpace(encoded) != "" {
@@ -135,12 +144,15 @@ func (w *Worker) resolveVerifiedAssetReference(ctx context.Context, reference st
 	if !validAssetReferenceID(assetID) {
 		return "", fmt.Errorf("common asset resolver: %s: invalid velox-asset:// reference", field)
 	}
-	metadata, ok := lookupAssetMetadata(index, reference, assetID)
-	if !ok {
-		return "", fmt.Errorf("common asset resolver: %s: SHA-256 and positive size_bytes are required for %s", field, reference)
+	metadata, _ := lookupAssetMetadata(index, reference, assetID)
+	if metadata.ID == "" {
+		metadata.ID = assetID
 	}
-	if !validSHA256(metadata.SHA256) || metadata.SizeBytes <= 0 {
-		return "", fmt.Errorf("common asset resolver: %s: invalid SHA-256 or size_bytes for %s", field, reference)
+	if metadata.SHA256 != "" && !validSHA256(metadata.SHA256) {
+		return "", fmt.Errorf("common asset resolver: %s: invalid SHA-256 for %s", field, reference)
+	}
+	if metadata.SizeBytes < 0 {
+		return "", fmt.Errorf("common asset resolver: %s: invalid size_bytes for %s", field, reference)
 	}
 	resolved, err := w.downloadVeloxAssetWithMetadata(ctx, assetID, metadata.SHA256, metadata.SizeBytes)
 	if err != nil {
@@ -249,7 +261,7 @@ func isAssetEnvelope(fields map[string]interface{}) bool {
 
 func isMediaContainerField(field string) bool {
 	switch strings.ToLower(strings.TrimSpace(field)) {
-	case "scenes", "scene", "scenes_json", "items", "audio_tracks", "voiceover_paths", "voiceover_path", "audio_path", "video", "video_url", "video_path", "clip_segments", "clips", "images", "scene_image_paths", "voiceover", "voiceover_url", "music", "music_url", "music_path", "effects", "effect", "effect_url", "effect_path", "sfx", "sfx_url", "sfx_path", "subtitles", "subtitle_tracks", "subtitle_url", "subtitle_path", "captions", "caption_url", "caption_path", "tracks", "assets", "render_manifest":
+	case "scenes", "scene", "scenes_json", "items", "audio_tracks", "voiceover_paths", "voiceover_path", "audio_path", "video", "video_url", "video_path", "clip_segments", "clips", "stock", "images", "scene_image_paths", "voiceover", "voiceover_url", "music", "music_url", "music_path", "effects", "effect", "effect_url", "effect_path", "sfx", "sfx_url", "sfx_path", "subtitles", "subtitle_tracks", "subtitle_url", "subtitle_path", "captions", "caption_url", "caption_path", "tracks", "assets", "render_manifest":
 		return true
 	default:
 		return false
@@ -266,7 +278,7 @@ func isMediaReferenceField(field string) bool {
 
 func isAssetReferenceField(field string) bool {
 	switch strings.ToLower(strings.TrimSpace(field)) {
-	case "uri", "url", "source_url", "source", "audio_path", "video_url", "video_path", "voiceover_path", "voiceover", "voiceover_url", "voiceover_paths", "audio_url", "music", "music_path", "music_url", "effect", "effects", "effect_path", "effect_url", "sfx", "sfx_path", "sfx_url", "subtitle", "subtitles", "subtitle_path", "subtitle_url", "caption", "captions", "caption_path", "caption_url", "clip", "clips", "clip_link", "clip_links", "image", "images", "image_link", "image_links", "scene_image_paths":
+	case "uri", "url", "source_url", "source", "audio_path", "video_url", "video_path", "voiceover_path", "voiceover", "voiceover_url", "voiceover_paths", "audio_url", "music", "music_path", "music_url", "effect", "effects", "effect_path", "effect_url", "sfx", "sfx_path", "sfx_url", "subtitle", "subtitles", "subtitle_path", "subtitle_url", "caption", "captions", "caption_path", "caption_url", "clip", "clips", "stock", "clip_link", "clip_links", "image", "images", "image_link", "image_links", "scene_image_paths":
 		return true
 	default:
 		return false

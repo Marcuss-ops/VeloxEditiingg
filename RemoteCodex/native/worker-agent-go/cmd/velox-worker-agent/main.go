@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -29,6 +30,7 @@ import (
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/worker"
 	"velox-worker-agent/internal/workercache"
+	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/blob"
 	"velox-worker-agent/pkg/bootstrap"
 	"velox-worker-agent/pkg/cache"
@@ -371,12 +373,43 @@ func main() {
 		}
 	}
 	protectedPoller := worker.NewProtectedAssetsPoller(w.APIClient(), pollInterval)
+	telemetry.MarkCacheProtectionReady(false)
+	protectedPoller.OnSuccess = func(snap *api.ProtectedAssetSnapshot) {
+		telemetry.MarkCacheProtectionReady(true)
+		if snap != nil {
+			if generated, err := time.Parse(time.RFC3339Nano, snap.GeneratedAt); err == nil {
+				telemetry.SetProtectedSnapshotAge(time.Since(generated))
+			}
+		}
+	}
 	cleanupPolicy := workercache.LoadCleanupPolicy()
 	cleanupLoop := &workercache.CleanupLoop{
 		Cache: clipCache, Policy: cleanupPolicy, Snapshot: protectedPoller,
 		Interval: cleanupPolicy.CleanupInterval, JobDone: w.JobDone(),
 		OnTick: func(stats workercache.CleanupStats, err error) {
+			metrics := telemetry.GetPrometheusMetrics()
+			metrics.RecordCacheEvictions("ttl", stats.Removed)
+			metrics.RecordCacheCleanup(time.Duration(stats.DurationMS) * time.Millisecond)
+			metrics.RecordCacheCleanupSkips("protected", stats.SkippedProtected)
+			metrics.RecordCacheCleanupSkips("leased", stats.SkippedLeased)
+			metrics.RecordCacheCleanupSkips("grace", stats.SkippedGrace)
+			metrics.RecordCacheCleanupSkips("in_flight", stats.SkippedInFlight)
+			metrics.RecordCacheCleanupSkips("stale_snapshot", stats.SkippedSnapshotStale)
+			metrics.RecordCacheCleanupSkips("no_snapshot", stats.SkippedSnapshotUnavailable)
+			if entries, bytes, sizeErr := clipCache.Size(context.Background()); sizeErr == nil {
+				metrics.SetCacheSize(entries, bytes)
+			}
 			if err != nil {
+				reason := "error"
+				if errors.Is(err, workercache.ErrSnapshotUnavailable) {
+					reason = "no_snapshot"
+				}
+				if errors.Is(err, workercache.ErrSnapshotStale) {
+					reason = "stale_snapshot"
+				}
+				if stats.SkippedSnapshotStale == 0 && stats.SkippedSnapshotUnavailable == 0 {
+					metrics.RecordCacheCleanupSkip(reason)
+				}
 				logger.Warn("[CACHE_CLEANUP] inspected=%d removed=%d skipped_protected=%d skipped_leased=%d err=%v", stats.Inspected, stats.Removed, stats.SkippedProtected, stats.SkippedLeased, err)
 				return
 			}

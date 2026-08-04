@@ -43,6 +43,7 @@ func DefaultConfig(workDir string) *WorkerConfig {
 		ProtocolVersion: "v3",
 		MaxActiveJobs:   1,    // 1 main job per VPS
 		HealthPort:      8081, // Health HTTP endpoint for Docker HEALTHCHECK
+		PrometheusPort:  9090, // Prometheus metrics endpoint
 		WorkerSecret:    "",   // Set via VELOX_WORKER_SECRET env var
 	}
 }
@@ -55,6 +56,9 @@ func (c *WorkerConfig) applyDefaults() {
 	}
 	if c.HealthPort == 0 {
 		c.HealthPort = 8081
+	}
+	if c.PrometheusPort == 0 {
+		c.PrometheusPort = 9090
 	}
 	// RW-PROD-004: default disk-free floor in MiB. The disk watcher
 	// (composition root) downsamples to bytes for ReadyState.SetDiskState.

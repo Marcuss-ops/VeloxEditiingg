@@ -37,19 +37,23 @@ func (w *Worker) downloadVeloxAssetWithMetadataSingle(ctx context.Context, asset
 	}
 
 	operationStarted := time.Now().UTC()
+	accessStarted := time.Now()
 
 	// Cache hit fast path: reuse an entry only when both integrity metadata
 	// values are available. Bare or partially-described legacy URIs are
 	// intentionally treated as misses, because an incompletely verified file
 	// must never be reused as a valid hit.
 	if expectedSHA256 != "" && expectedSizeBytes > 0 {
-		if existing, err := cachedAssetPath(cacheDir, assetID, expectedSHA256, expectedSizeBytes); err == nil && existing != "" {
+		if existing, verifyDuration, err := cachedAssetPathTimed(cacheDir, assetID, expectedSHA256, expectedSizeBytes); err == nil && existing != "" {
 			if rec := telemetry.RecorderFromContext(ctx); rec != nil {
 				h := rec.Begin(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeArtifact, Component: "worker.cache", Action: "hit_read"})
 				h.SetMetadata("asset_id", assetID)
 				h.Complete()
 			}
 			completed := time.Now().UTC()
+			telemetry.GetPrometheusMetrics().RecordAssetCacheHit("asset")
+			telemetry.GetPrometheusMetrics().RecordCacheRequest("hit")
+			logAssetCacheAccess(ctx, w.config.WorkerID, cacheAssetKey(assetID, expectedSHA256), "hit", 0, time.Since(accessStarted).Milliseconds(), verifyDuration.Milliseconds())
 			recordAssetOperation(ctx, AssetOperationRecord{
 				AssetID:             assetID,
 				CacheStatus:         "hit",
@@ -70,6 +74,8 @@ func (w *Worker) downloadVeloxAssetWithMetadataSingle(ctx context.Context, asset
 		}
 	}
 
+	telemetry.GetPrometheusMetrics().RecordAssetCacheMiss("asset")
+	telemetry.GetPrometheusMetrics().RecordCacheRequest("miss")
 	if rec := telemetry.RecorderFromContext(ctx); rec != nil {
 		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeArtifact, Component: "worker.cache", Action: "miss"}, telemetry.StatusOK, "", "")
 	}
@@ -143,15 +149,22 @@ func (w *Worker) downloadVeloxAssetWithMetadataSingle(ctx context.Context, asset
 			transferHandle = transfer.Begin(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask, Component: "worker.asset", Action: "transfer"})
 			transferHandle.SetMetadata("asset_id", assetID)
 		}
-		localPath, downloadedBytes, err := writeVeloxAssetToCache(cacheDir, assetID, expectedSHA256, expectedSizeBytes, resp)
+		localPath, downloadedBytes, verifyDuration, err := writeVeloxAssetToCache(cacheDir, assetID, expectedSHA256, expectedSizeBytes, resp)
 		resp.Body.Close()
 		if err != nil {
-			transferHandle.Abort("asset_transfer", err.Error())
+			telemetry.GetPrometheusMetrics().RecordCacheVerify(verifyDuration)
+			if transferHandle != nil {
+				transferHandle.Abort("asset_transfer", err.Error())
+			}
 			lastErr = err
 			continue
 		}
-		transferHandle.CompleteWith(downloadedBytes, downloadedBytes, 0, telemetry.StatusOK, "", "")
+		telemetry.GetPrometheusMetrics().RecordCacheVerify(verifyDuration)
+		if transferHandle != nil {
+			transferHandle.CompleteWith(downloadedBytes, downloadedBytes, 0, telemetry.StatusOK, "", "")
+		}
 		completed := time.Now().UTC()
+		logAssetCacheAccess(ctx, w.config.WorkerID, cacheAssetKey(assetID, expectedSHA256), "miss", downloadedBytes, time.Since(accessStarted).Milliseconds(), verifyDuration.Milliseconds())
 		recordAssetOperation(ctx, AssetOperationRecord{
 			AssetID:             assetID,
 			CacheStatus:         "miss",
@@ -164,6 +177,7 @@ func (w *Worker) downloadVeloxAssetWithMetadataSingle(ctx context.Context, asset
 			LocalPath:      localPath,
 			Source:         "master_asset_bridge",
 		})
+		telemetry.GetPrometheusMetrics().RecordCacheDownload(downloadedBytes, completed.Sub(operationStarted))
 		if err := w.syncClipCache(ctx, assetID, localPath, downloadedBytes); err != nil {
 			return "", fmt.Errorf("record downloaded asset %s: %w", assetID, err)
 		}

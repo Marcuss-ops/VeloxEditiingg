@@ -56,6 +56,7 @@ type CleanupStats struct {
 	SkippedSnapshotUnavailable int
 	Removed                    int
 	RemoveErrors               int
+	DurationMS                 int64
 }
 
 // Cleanup removes entries that are NOT leased, NOT in flight, and NOT

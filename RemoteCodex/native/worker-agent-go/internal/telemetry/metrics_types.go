@@ -124,6 +124,12 @@ func (c *CounterVec) inc(label string) {
 	c.values[label]++
 }
 
+func (c *CounterVec) add(label string, value float64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.values[label] += value
+}
+
 func (c *CounterVec) get(label string) float64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

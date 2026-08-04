@@ -11,6 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"velox-worker-agent/internal/telemetry"
 )
 
 // assetCacheDir returns the directory where downloaded audio assets are
@@ -75,11 +78,27 @@ func cacheKeyPrefix(assetID string, sha256Prefix string) string {
 // Any invalid entry is removed individually and reported as a miss so the
 // caller re-downloads it from the Master.
 func cachedAssetPath(cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64) (string, error) {
-	// A cache hit is never valid without both pieces of integrity metadata.
-	// Keep this invariant here as well as in the downloader so future callers
-	// cannot accidentally bypass complete validation.
+	path, _, err := cachedAssetPathTimed(cacheDir, assetID, expectedSHA256, expectedSizeBytes)
+	return path, err
+}
+
+func cachedAssetPathTimed(cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64) (string, time.Duration, error) {
+	// Folder-backed assets may have no expected hash/size in the job payload.
+	// In that mode reuse the asset-ID cache entry after a basic regular-file
+	// check; the downloader computed the SHA while creating the file.
 	if expectedSHA256 == "" || expectedSizeBytes <= 0 {
-		return "", nil
+		prefix := cacheKeyPrefix(assetID, "")
+		matches, err := filepath.Glob(filepath.Join(cacheDir, prefix+".*"))
+		if err != nil || len(matches) == 0 {
+			return "", 0, err
+		}
+		for _, candidate := range matches {
+			info, statErr := os.Stat(candidate)
+			if statErr == nil && info.Mode().IsRegular() && info.Size() > 0 {
+				return candidate, 0, nil
+			}
+		}
+		return "", 0, nil
 	}
 	prefix := cacheKeyPrefix(assetID, expectedSHA256)
 	matches, err := filepath.Glob(filepath.Join(cacheDir, prefix+".*"))
@@ -92,10 +111,10 @@ func cachedAssetPath(cacheDir, assetID string, expectedSHA256 string, expectedSi
 			if legacyErr == nil && len(legacyMatches) > 0 {
 				// Legacy cache entry exists but has no SHA-256 guarantee.
 				// Treat as cache miss so we re-download with integrity.
-				return "", nil
+				return "", 0, nil
 			}
 		}
-		return "", err
+		return "", 0, err
 	}
 	cachedPath := matches[0]
 
@@ -103,24 +122,31 @@ func cachedAssetPath(cacheDir, assetID string, expectedSHA256 string, expectedSi
 	if err != nil || !info.Mode().IsRegular() {
 		// Remove only this invalid entry; the rest of the cache remains
 		// untouched and the caller re-downloads the asset.
+		telemetry.GetPrometheusMetrics().RecordCacheEviction("invalid")
 		_ = os.Remove(cachedPath)
-		return "", nil
+		return "", 0, nil
 	}
+	verifyDuration := time.Duration(0)
 	if expectedSizeBytes > 0 && info.Size() != expectedSizeBytes {
+		telemetry.GetPrometheusMetrics().RecordCacheEviction("invalid")
 		_ = os.Remove(cachedPath)
-		return "", nil // size mismatch → re-download
+		return "", 0, nil // size mismatch → re-download
 	}
 	if expectedSHA256 != "" {
+		verifyStarted := time.Now()
 		actual, err := sha256File(cachedPath)
+		verifyDuration = time.Since(verifyStarted)
+		telemetry.GetPrometheusMetrics().RecordCacheVerify(verifyDuration)
 		if err != nil || actual != expectedSHA256 {
 			// A cache hit is valid only after the digest matches. Remove
 			// this corrupt entry atomically from the cache namespace before
 			// reacquiring it; never clear the entire cache.
+			telemetry.GetPrometheusMetrics().RecordCacheEviction("invalid")
 			_ = os.Remove(cachedPath)
-			return "", nil // hash mismatch → re-download
+			return "", verifyDuration, nil // hash mismatch → re-download
 		}
 	}
-	return cachedPath, nil
+	return cachedPath, verifyDuration, nil
 }
 
 func validSHA256(value string) bool {
@@ -151,19 +177,19 @@ func sha256File(path string) (string, error) {
 // of the payload to refuse HTML responses from misconfigured upstreams.
 // When expectedSHA256 is non-empty, the cached filename embeds the SHA-256
 // prefix so different asset versions don't collide.
-func writeVeloxAssetToCache(cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64, resp *http.Response) (string, int64, error) {
+func writeVeloxAssetToCache(cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64, resp *http.Response) (string, int64, time.Duration, error) {
 	mediaType := strings.TrimSpace(resp.Header.Get("Content-Type"))
 	if idx := strings.Index(mediaType, ";"); idx >= 0 {
 		mediaType = strings.TrimSpace(mediaType[:idx])
 	}
 	if isHTMLMediaType(mediaType) {
-		return "", 0, fmt.Errorf("unexpected HTML response while downloading asset")
+		return "", 0, 0, fmt.Errorf("unexpected HTML response while downloading asset")
 	}
 
 	reader := bufio.NewReader(resp.Body)
 	peek, _ := reader.Peek(512)
 	if isHTMLPayload(peek) {
-		return "", 0, fmt.Errorf("unexpected HTML response while downloading asset")
+		return "", 0, 0, fmt.Errorf("unexpected HTML response while downloading asset")
 	}
 	if mediaType == "" {
 		mediaType = http.DetectContentType(peek)
@@ -177,43 +203,52 @@ func writeVeloxAssetToCache(cacheDir, assetID string, expectedSHA256 string, exp
 	prefix := cacheKeyPrefix(assetID, expectedSHA256)
 	tmp, err := os.CreateTemp(cacheDir, prefix+"-*")
 	if err != nil {
-		return "", 0, err
+		return "", 0, 0, err
 	}
 	tmpPath := tmp.Name()
 	defer tmp.Close()
 
-	// Tee the download into a SHA-256 hasher so we can verify integrity
-	// before promoting to cache. Even when no expectedSHA256 is supplied,
-	// we compute the hash for future caller-side verification.
+	// Tee the download into a SHA-256 hasher so the bytes are still
+	// fingerprinted while streaming. The authoritative verification
+	// timing below reads the completed file, so it measures the actual
+	// integrity check rather than the network transfer.
 	hasher := sha256.New()
 	teeReader := io.TeeReader(reader, hasher)
 	written, err := io.Copy(tmp, teeReader)
 	if err != nil {
 		_ = os.Remove(tmpPath)
-		return "", 0, err
+		return "", 0, 0, err
 	}
 	if written <= 0 {
 		_ = os.Remove(tmpPath)
-		return "", 0, fmt.Errorf("downloaded asset is empty")
+		return "", 0, 0, fmt.Errorf("downloaded asset is empty")
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = os.Remove(tmpPath)
-		return "", 0, err
+		return "", 0, 0, err
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		return "", 0, err
+		return "", 0, 0, err
 	}
 
 	// Verify all supplied integrity metadata before promoting the file.
+	verifyStarted := time.Now()
 	if expectedSizeBytes > 0 && written != expectedSizeBytes {
 		_ = os.Remove(tmpPath)
-		return "", 0, fmt.Errorf("downloaded asset size mismatch (got %d, want %d)", written, expectedSizeBytes)
+		return "", 0, time.Since(verifyStarted), fmt.Errorf("downloaded asset size mismatch (got %d, want %d)", written, expectedSizeBytes)
 	}
 	actualSHA256 := fmt.Sprintf("%x", hasher.Sum(nil))
+	if expectedSHA256 != "" {
+		actualSHA256, err = sha256File(tmpPath)
+		if err != nil {
+			_ = os.Remove(tmpPath)
+			return "", 0, time.Since(verifyStarted), err
+		}
+	}
 	if expectedSHA256 != "" && actualSHA256 != expectedSHA256 {
 		_ = os.Remove(tmpPath)
-		return "", 0, fmt.Errorf("downloaded asset SHA-256 mismatch (got %s, want %s)", actualSHA256[:16], expectedSHA256[:16])
+		return "", 0, time.Since(verifyStarted), fmt.Errorf("downloaded asset SHA-256 mismatch (got %s, want %s)", actualSHA256[:16], expectedSHA256[:16])
 	}
 
 	finalPath := filepath.Join(cacheDir, prefix+ext)
@@ -222,9 +257,9 @@ func writeVeloxAssetToCache(cacheDir, assetID string, expectedSHA256 string, exp
 	// silently retained because the filename already exists.
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		_ = os.Remove(tmpPath)
-		return "", 0, err
+		return "", 0, time.Since(verifyStarted), err
 	}
-	return finalPath, written, nil
+	return finalPath, written, time.Since(verifyStarted), nil
 }
 
 // isHTMLMediaType reports whether a Content-Type looks like HTML.

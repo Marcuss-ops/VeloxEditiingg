@@ -134,7 +134,9 @@ func CleanupWithPolicy(
 	policy CleanupPolicy,
 	now time.Time,
 ) (CleanupStats, error) {
+	started := time.Now()
 	var stats CleanupStats
+	defer func() { stats.DurationMS = time.Since(started).Milliseconds() }()
 
 	if c == nil {
 		return stats, fmt.Errorf("workercache.CleanupWithPolicy: nil cache")

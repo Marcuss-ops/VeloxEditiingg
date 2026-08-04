@@ -365,6 +365,18 @@ func (c *Cache) List(ctx context.Context) ([]Entry, error) {
 	return out, rows.Err()
 }
 
+// Size returns the current number of indexed entries and their recorded byte
+// total. It is a read-only snapshot for low-cardinality cache gauges.
+func (c *Cache) Size(ctx context.Context) (entries int, bytes int64, err error) {
+	if c == nil || c.db == nil {
+		return 0, 0, fmt.Errorf("workercache.Size: nil cache")
+	}
+	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(1), COALESCE(SUM(size_bytes), 0) FROM cached_assets`).Scan(&entries, &bytes); err != nil {
+		return 0, 0, fmt.Errorf("workercache.Size: %w", err)
+	}
+	return entries, bytes, nil
+}
+
 // ReadyKeys returns the canonical asset keys currently materialized on disk.
 // It is a read-only, bounded heartbeat projection used by master placement;
 // callers must not treat it as a lease or as proof that a file cannot be

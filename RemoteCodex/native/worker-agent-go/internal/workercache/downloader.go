@@ -41,6 +41,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
+
+	"velox-worker-agent/internal/telemetry"
 )
 
 // Sentinel errors so callers (and tests) can branch via errors.Is.
@@ -126,6 +129,7 @@ func (d *Downloader) WithVerify(v VerifyMedia) *Downloader {
 // cache.MarkDownloadComplete on success, which keeps the row schema
 // invariant (drive_file_id is the only PK, local_path is mutable).
 func (d *Downloader) DownloadDriveFile(ctx context.Context, driveID string) (string, error) {
+	started := time.Now()
 	if driveID == "" {
 		return "", ErrEmptyID
 	}
@@ -163,7 +167,9 @@ func (d *Downloader) DownloadDriveFile(ctx context.Context, driveID string) (str
 			_ = os.Remove(partPath)
 			return "", fmt.Errorf("workercache.Downloader: re-open .part for verify: %w", reopenErr)
 		}
+		verifyStarted := time.Now()
 		verifyErr := d.verify(reop)
+		telemetry.GetPrometheusMetrics().RecordCacheVerify(time.Since(verifyStarted))
 		_ = reop.Close()
 		if verifyErr != nil {
 			_ = os.Remove(partPath)
@@ -193,6 +199,7 @@ func (d *Downloader) DownloadDriveFile(ctx context.Context, driveID string) (str
 		_ = os.Remove(finalPath)
 		return "", fmt.Errorf("workercache.Downloader: mark complete: %w", mErr)
 	}
+	telemetry.GetPrometheusMetrics().RecordCacheDownload(written, time.Since(started))
 
 	return finalPath, nil
 }
