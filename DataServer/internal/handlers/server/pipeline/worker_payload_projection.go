@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"velox-server/internal/remoteengine"
+	"velox-shared/compatibility"
 )
 
 // projectWorkerPayload follows the canonical remoteengine DTO path.
@@ -149,6 +150,18 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 		audioTracks := make([]interface{}, 0, len(req.AudioTracks))
 		for _, track := range req.AudioTracks {
 			audioTracks = append(audioTracks, audioTrackToMap(track))
+		}
+		m["audio_tracks"] = audioTracks
+	} else if legacyVoiceovers := compatibility.ReadStringList(req.Spec, compatibility.VoiceoverPathsKey); len(legacyVoiceovers) > 0 {
+		// Compatibility aliases are read only at this boundary and are
+		// immediately projected into the canonical renderer shape. They
+		// must never cross the worker boundary as positional fields.
+		audioTracks := make([]interface{}, 0, len(legacyVoiceovers))
+		for _, sourceURL := range legacyVoiceovers {
+			audioTracks = append(audioTracks, map[string]interface{}{
+				"source_url": sourceURL,
+				"role":       "voiceover",
+			})
 		}
 		m["audio_tracks"] = audioTracks
 	}

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"velox-shared/compatibility"
 )
 
 func TestSubmitJobRequestCanonicalSceneAssetsRoundtrip(t *testing.T) {
@@ -22,7 +24,7 @@ func TestSubmitJobRequestCanonicalSceneAssetsRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded := string(data)
-	for _, legacy := range []string{"voiceover_paths", "subtitle_tracks", "clip_link", "image_link"} {
+	for _, legacy := range []string{compatibility.VoiceoverPathsKey, "subtitle_tracks", "clip_link", "image_link"} {
 		if strings.Contains(encoded, legacy) {
 			t.Fatalf("canonical request emitted legacy field %q: %s", legacy, encoded)
 		}
