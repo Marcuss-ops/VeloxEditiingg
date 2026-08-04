@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"velox-shared/compatibility"
 	sharedmedia "velox-shared/media"
 	"velox-shared/payload"
 )
@@ -133,30 +134,42 @@ func canonicalSceneArray(value interface{}) ([]map[string]interface{}, error) {
 	return out, nil
 }
 
-var retiredNarratedKeys = map[string]struct{}{
-	"clip_link":             {},
-	"clip_links":            {},
-	"image_link":            {},
-	"image_links":           {},
-	"image":                 {},
-	"drive_link":            {},
-	"drive_links":           {},
-	"local_path":            {},
-	"bindings":              {},
-	"reference_voiceover":   {},
-	"reference_voiceovers":  {},
-	"voiceover_link":        {},
-	"voiceover_path":        {},
-	"voiceover_paths":       {},
-	"stock_clip_paths":      {},
-	"stock_clip_sources":    {},
-	"intro_clip_paths":      {},
-	"start_clip_paths":      {},
-	"stock_links":           {},
-	"stock_clip_links":      {},
-	"clip_duration_seconds": {},
-	"duration_seconds":      {},
-}
+var retiredNarratedKeys = func() map[string]struct{} {
+	keys := map[string]struct{}{
+		"clip_link":             {},
+		"clip_links":            {},
+		"image_link":            {},
+		"image_links":           {},
+		"image":                 {},
+		"drive_link":            {},
+		"drive_links":           {},
+		"local_path":            {},
+		"bindings":              {},
+		"reference_voiceover":   {},
+		"reference_voiceovers":  {},
+		"voiceover_link":        {},
+		"stock_clip_paths":      {},
+		"stock_clip_sources":    {},
+		"intro_clip_paths":      {},
+		"start_clip_paths":      {},
+		"stock_links":           {},
+		"stock_clip_links":      {},
+		"clip_duration_seconds": {},
+		"duration_seconds":      {},
+	}
+	if entry, ok := compatibility.Lookup(compatibility.VoiceoverPathsKey); ok {
+		keys[entry.CanonicalKey] = struct{}{}
+		for _, alias := range entry.Aliases {
+			// Only top-level voiceover path/link aliases belong in this
+			// retired-field set. The scene-level canonical key "voiceover"
+			// is a structured asset and must remain valid.
+			if strings.HasPrefix(alias, "voiceover_") {
+				keys[alias] = struct{}{}
+			}
+		}
+	}
+	return keys
+}()
 
 func rejectTopLevelNarratedAliases(payloadMap map[string]interface{}) error {
 	for key := range retiredNarratedKeys {
