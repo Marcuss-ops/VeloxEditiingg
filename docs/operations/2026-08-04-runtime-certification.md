@@ -135,3 +135,58 @@ Fase 2 is not complete until 4/4 certify. The immediate blockers:
    bundle hash onto one canonical value (Ansible, Fase 3).
 
 Then re-run `scripts/ops/runtime-cert.sh --fleet` and expect 4× PASS.
+
+## Failure-window log analysis — 2026-08-04 10:45–10:52
+
+> Evidence produced by `scripts/ops/worker-failure-log.sh` +
+> `scripts/ops/window-stats.sh` (journalctl per unit, window
+> `2026-08-04 10:45:00` → `10:52:00`). The "first real error" below is the
+> first application-level error/FAIL line in the window, **not** the
+> systemd "Main process exited" boilerplate.
+
+### Per-worker first real error
+
+| Worker | lines | First real error (chronological) | Bootstrap gate involved? |
+| --- | --- | --- | --- |
+| `host_57_129_132_133` | 234 | `[CONNECT] Registration failed (attempt 1): … credential validation failed: worker host_57_129_132_133: credential required (existing credential stored)` — then backoff 5m12s | ❌ no — bootstrap passed (verdict READY) on the 10:49 restart |
+| `host_57_131_20_173` | 144 | `[CIRCUIT_BREAKER] Request rejected — circuit is open (endpoint: /api/v1/workers/cache/protected-assets)` (7×) + `[CACHE_CLEANUP] … err=workercache: no valid protection snapshot, skipping cleanup: rows_inspected=0` | ❌ no — bootstrap READY on restart |
+| `velox-worker-13197` | 3900 | `[BOOTSTRAP] step=engine_self_render status=FAIL code=engine_selftest_baseline_mismatch … actual=9247ff97… expected=f180058d…` (39 starts / 39 exits / 36 scheduled restarts in window) | ✅ **YES** — restart loop every ~10s driven by the gate |
+| `velox-worker-523925eb` | 144 | `[CIRCUIT_BREAKER] Request rejected — circuit is open (endpoint: /api/v1/workers/cache/protected-assets)` (7×) + `[CACHE_CLEANUP] … no valid protection snapshot, skipping cleanup` | ❌ no — bootstrap READY on restart |
+
+### Findings
+
+1. **`velox-worker-13197` is the only worker where the bootstrap gate is
+   the root cause.** 39 bootstrap gate FAILs in 7 minutes, all identical:
+   engine self-render produces `9247ff97…` but the on-disk baseline file
+   still says `f180058d…` (old bundle). The gate is doing its job — the
+   **baseline file is stale**, not the engine. Do NOT disable the gate;
+   refresh the baseline to `9247ff97…` (the value the 3 healthy workers
+   use) in the canonical Ansible path.
+2. **`host_57_129_132_133` had a registration/credential failure in the
+   window**: the master rejected its hello with
+   `credential required (existing credential stored)`, then the worker
+   backed off 5m12s. This matches verdict finding #2 (worker credentials
+   not managed by the canonical deploy). It self-resolved on the 10:49
+   redeploy (came up READY + CONNECTED) — but the next deploy can
+   reproduce it.
+3. **`host_57_131_20_173` and `velox-worker-523925eb` share a cache
+   circuit-breaker failure**: `GET /api/v1/workers/cache/protected-assets`
+   rejected 7× (circuit open) and cache cleanup skipped with
+   `no valid protection snapshot`. The workers are UP and registered, but
+   the cache-protection endpoint is unreachable from them — cleanup is
+   effectively disabled, so no cache metrics can be trusted (verdict
+   finding #11).
+4. **No `CONFIG_ERROR` in the window on any worker** — the config-parse
+   failures (`invalid character '\n' in string literal` seen at ~10:10
+   pre-window) were already fixed before 10:45.
+
+### Commands used (reproducible)
+
+```bash
+# Per worker (timestamps space-free; SSH re-splits args otherwise):
+ssh <user>@<host> bash -s -- <unit> 2026-08-04 10:45:00 10:52:00 \
+  < scripts/ops/worker-failure-log.sh
+# Counts:
+ssh <user>@<host> bash -s -- <unit> 2026-08-04 10:45:00 10:52:00 \
+  < scripts/ops/window-stats.sh
+```
