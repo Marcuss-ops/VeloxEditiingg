@@ -2,22 +2,22 @@
 //
 // The user-spec awk flow is a 6-phase pipeline:
 //
-//   Phase 1 — Resolve asset       (BackendAssetResolver)
-//   Phase 2 — Insert PENDING row  (BackendSmokeRuns)
-//   Phase 3 — Acquire smoke lease (BackendLeaseStore; sets
-//                                      WorkerInfo.Drain=true so
-//                                      placement excludes the worker
-//                                      during the test)
-//   Phase 4 — Download asset      (BackendWorkerExec; SSH +
-//                                      curl-or-equivalent pickup)
-//   Phase 5 — ffmpeg render        (BackendWorkerExec; produces
-//                                      artifact on worker filesystem)
-//   Phase 6 — Upload to Drive     (BackendDriveUploader; produces
-//                                      driveFileID and stores in
-//                                      smoke_runs.artifact_drive_id)
-//   Phase 7 — Mark SUCCEEDED       (BackendSmokeRuns; stamps
-//                                      duration_ms for analytics
-//                                      baseline)
+//	Phase 1 — Resolve asset       (BackendAssetResolver)
+//	Phase 2 — Insert PENDING row  (BackendSmokeRuns)
+//	Phase 3 — Acquire smoke lease (BackendLeaseStore; sets
+//	                                   WorkerInfo.Drain=true so
+//	                                   placement excludes the worker
+//	                                   during the test)
+//	Phase 4 — Download asset      (BackendWorkerExec; SSH +
+//	                                   curl-or-equivalent pickup)
+//	Phase 5 — ffmpeg render        (BackendWorkerExec; produces
+//	                                   artifact on worker filesystem)
+//	Phase 6 — Upload to Drive     (BackendDriveUploader; produces
+//	                                   driveFileID and stores in
+//	                                   smoke_runs.artifact_drive_id)
+//	Phase 7 — Mark SUCCEEDED       (BackendSmokeRuns; stamps
+//	                                   duration_ms for analytics
+//	                                   baseline)
 //
 // On any forward failure (Phase 1-6):
 //   - Mark FAILED on the smoke_runs row (with duration_ms + err)
@@ -52,15 +52,15 @@ import (
 // defaults that match the user's spec's "5-15s render" envelope
 // with 4x headroom.
 const (
-	timeoutAssetResolve     = 30 * time.Second
-	timeoutSmokeInsert      = 5 * time.Second
-	timeoutLeaseAcquire     = 5 * time.Second
-	timeoutAssetDownload    = 30 * time.Second
-	timeoutFFmpegRender     = 5 * time.Minute
-	timeoutDriveUpload      = 60 * time.Second
-	timeoutSmokeFinal       = 5 * time.Second
-	timeoutCleanupWorker    = 30 * time.Second
-	defaultSmokeBudget      = 10 * time.Minute
+	timeoutAssetResolve  = 30 * time.Second
+	timeoutSmokeInsert   = 5 * time.Second
+	timeoutLeaseAcquire  = 5 * time.Second
+	timeoutAssetDownload = 30 * time.Second
+	timeoutFFmpegRender  = 5 * time.Minute
+	timeoutDriveUpload   = 60 * time.Second
+	timeoutSmokeFinal    = 5 * time.Second
+	timeoutCleanupWorker = 30 * time.Second
+	defaultSmokeBudget   = 10 * time.Minute
 )
 
 // LevelDSmokeExecutor is the Step 12/15 OperationExecutor binding
@@ -262,8 +262,9 @@ func (e *LevelDSmokeExecutor) parsePayload(op *store.Operation) (SmokePayload, e
 // markFailed.)
 //
 // Sequence:
-//   1. Mark smoke_runs row FAILED with duration_ms + phaseErr.
-//   2. Best-effort worker temp cleanup (warning-only on failure).
+//  1. Mark smoke_runs row FAILED with duration_ms + phaseErr.
+//  2. Best-effort worker temp cleanup (warning-only on failure).
+//
 // Lease release is handled by the deferred func at Phase 3 —
 // not duplicated here.
 //

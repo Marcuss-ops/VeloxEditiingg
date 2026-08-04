@@ -41,13 +41,13 @@ import (
 
 // WorkerRegistryEntry holds the connectivity details for a single worker.
 type WorkerRegistryEntry struct {
-	WorkerID            string // canonical id (e.g. "velox-worker-523925eb")
-	Host                string // IP or hostname
-	SSHUser             string // SSH username (e.g. debian, ubuntu)
-	SSHPort             int    // SSH port (0 means default 22)
-	HostKeyFingerprint  string // expected host key fingerprint (SHA256:...) — for known_hosts population
-	HealthPort          int    // HTTP health endpoint port (0 means default 8081)
-	WorkDir             string // worker data directory (empty means /var/lib/velox-worker)
+	WorkerID           string // canonical id (e.g. "velox-worker-523925eb")
+	Host               string // IP or hostname
+	SSHUser            string // SSH username (e.g. debian, ubuntu)
+	SSHPort            int    // SSH port (0 means default 22)
+	HostKeyFingerprint string // expected host key fingerprint (SHA256:...) — for known_hosts population
+	HealthPort         int    // HTTP health endpoint port (0 means default 8081)
+	WorkDir            string // worker data directory (empty means /var/lib/velox-worker)
 }
 
 // ---------------------------------------------------------------------------

@@ -3,29 +3,29 @@
 //
 // Test list:
 //
-//   Publish path:
-//     TestController_Publish_AssignsIDAndPersists          — generates UUIDv4 + writes row
-//     TestController_Publish_InFlightDedupReturnsSentinel — ErrOperationInFlight on duplicate
-//     TestController_Publish_PayloadPreserved             — payload survives round-trip
+//	Publish path:
+//	  TestController_Publish_AssignsIDAndPersists          — generates UUIDv4 + writes row
+//	  TestController_Publish_InFlightDedupReturnsSentinel — ErrOperationInFlight on duplicate
+//	  TestController_Publish_PayloadPreserved             — payload survives round-trip
 //
-//   Tick path:
-//     TestController_Tick_LifecycleNoop                   — QUEUED → RUNNING → SUCCEEDED
-//     TestController_Tick_FailedExecutorCapturesErrorMsg  — QUEUED → RUNNING → FAILED
+//	Tick path:
+//	  TestController_Tick_LifecycleNoop                   — QUEUED → RUNNING → SUCCEEDED
+//	  TestController_Tick_FailedExecutorCapturesErrorMsg  — QUEUED → RUNNING → FAILED
 //
-//   Lifecycle:
-//     TestController_StartStop_Lifecycle                   — Start/Stop semantics, Done() closes
-//     TestController_Done_SatisfiableBeforeStart          — Done() always usable pre-Start
+//	Lifecycle:
+//	  TestController_StartStop_Lifecycle                   — Start/Stop semantics, Done() closes
+//	  TestController_Done_SatisfiableBeforeStart          — Done() always usable pre-Start
 //
-//   Executor registry:
-//     TestExecutorRegistry_RegistersAllKinds              — every AllOperationKinds has default
-//     TestExecutorRegistry_RegisterRejectsUnknownKind     — Registry.Register guards enum
-//     TestExecutorRegistry_RegisterNilExecutor            — nil executor is rejected
+//	Executor registry:
+//	  TestExecutorRegistry_RegistersAllKinds              — every AllOperationKinds has default
+//	  TestExecutorRegistry_RegisterRejectsUnknownKind     — Registry.Register guards enum
+//	  TestExecutorRegistry_RegisterNilExecutor            — nil executor is rejected
 //
-//   Operation ID:
-//     TestNewOperationID_Format                            — UUIDv4 RFC 4122 §4.4 layout
+//	Operation ID:
+//	  TestNewOperationID_Format                            — UUIDv4 RFC 4122 §4.4 layout
 //
-//   Op kind canonical:
-//     TestAllOperationKinds_MatchesSchemaCheck           — every kind is also CHECK-acceptable
+//	Op kind canonical:
+//	  TestAllOperationKinds_MatchesSchemaCheck           — every kind is also CHECK-acceptable
 package fleet
 
 import (

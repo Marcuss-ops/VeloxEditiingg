@@ -96,16 +96,16 @@ func (h *BundleRebuildHandler) EventType() string {
 // Error mapping (canonical, see outbox.HandlerError):
 //   - payload decode failure          → Permanent (malformed payload)
 //   - velox-bundler binary missing    → Permanent (won't heal without
-//                                       operator intervention; the
-//                                       binary path was validated at
-//                                       enqueue-time, so a missing
-//                                       binary at dispatch-time is
-//                                       an operator-fixable hazard)
+//     operator intervention; the
+//     binary path was validated at
+//     enqueue-time, so a missing
+//     binary at dispatch-time is
+//     an operator-fixable hazard)
 //   - subprocess exit non-zero + output → Transient (could be a
-//                                       transient fs lock or a
-//                                       memory-pressure condition;
-//                                       retry bounds behaviour to
-//                                       MaxAttempts before FAILED)
+//     transient fs lock or a
+//     memory-pressure condition;
+//     retry bounds behaviour to
+//     MaxAttempts before FAILED)
 //
 // Returning nil marks the event PROCESSED; the dispatcher never
 // re-runs it.

@@ -24,15 +24,16 @@
 //
 // The 9-state enum splits these axes so the operator dashboard
 // can drive sequencing directly:
-//   HEALTHY     — fresh, idle, otherwise quiet
-//   BUSY        — fresh, actively rendering (active_jobs > 0)
-//   DRAINING    — operator-set drain (no new leases)
-//   UPDATING    — target_digest != current (forward deploy in progress)
-//   RESTARTING  — fleet-controller-driven explicit restart
-//   DEGRADED    — recent smoke fail OR heartbeat in stale window
-//   OFFLINE     — non-live gate (session-dead or heartbeat > 5min)
-//   QUARANTINED — operator-mute (excluded from placement)
-//   ROLLBACK    — automatic rollback in progress (is_rollback=true)
+//
+//	HEALTHY     — fresh, idle, otherwise quiet
+//	BUSY        — fresh, actively rendering (active_jobs > 0)
+//	DRAINING    — operator-set drain (no new leases)
+//	UPDATING    — target_digest != current (forward deploy in progress)
+//	RESTARTING  — fleet-controller-driven explicit restart
+//	DEGRADED    — recent smoke fail OR heartbeat in stale window
+//	OFFLINE     — non-live gate (session-dead or heartbeat > 5min)
+//	QUARANTINED — operator-mute (excluded from placement)
+//	ROLLBACK    — automatic rollback in progress (is_rollback=true)
 //
 // The 4-state connection_status is preserved on the diagnostic
 // surface via ConnectionStatusForInfo; do not migrate that
@@ -228,9 +229,9 @@ func Health(
 // the SQL query that produces these inputs; not wired in
 // Step 3/15 so atomic-commit scope stays tight).
 //
-//   status=PENDING  + is_rollback=false → HealthDeploymentUpdating
-//   status=PENDING  + is_rollback=true  → HealthDeploymentRollback
-//   status=SUCCEEDED | FAILED | ROLLED_BACK (terminal) or "" (no row) → ""
+//	status=PENDING  + is_rollback=false → HealthDeploymentUpdating
+//	status=PENDING  + is_rollback=true  → HealthDeploymentRollback
+//	status=SUCCEEDED | FAILED | ROLLED_BACK (terminal) or "" (no row) → ""
 //
 // The "" return tells Health() to skip the deployment slot and
 // fall through to DRAINING / DEGRADED / BUSY / HEALTHY.

@@ -58,7 +58,7 @@ var allowedWriters = map[string]bool{
 	// The jobs CAS (markJobSucceededTx) lives in finalize_phases.go;
 	// the tx orchestrator stays in sqlite_finalize_writer.go. The
 	// SUCCEEDED-flip count tripwire below reads finalize_phases.go.
-	filepath.Join("internal", "artifacts", "finalize_phases.go"): true,
+	filepath.Join("internal", "artifacts", "finalize_phases.go"):        true,
 	filepath.Join("internal", "artifacts", "sqlite_finalize_writer.go"): true,
 	// Coordinator.CommitAttempt is the canonical atomic SUCCEEDED tx
 	// writer for tasks + task_attempts + jobs in the Completion flow.
@@ -85,7 +85,7 @@ var allowedWriters = map[string]bool{
 	// Completion UoW repository split: these task/job status writes remain
 	// inside the same audited transaction gateway as coordinator.go. The SQL
 	// moved from sqlite_uow.go into this responsibility-specific file.
-	filepath.Join("internal", "completion", "sqlite_uow_repos.go"):  true,
+	filepath.Join("internal", "completion", "sqlite_uow_repos.go"): true,
 	// Separate delivery lifecycle: the terminal/retry SQL moved from
 	// store_deliveries_lease.go into the responsibility-specific marks file.
 	filepath.Join("internal", "store", "store_deliveries_marks.go"): true,

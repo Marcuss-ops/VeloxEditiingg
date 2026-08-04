@@ -4,9 +4,9 @@
 // deploy request MUST obey before reaching the deployment_records
 // ledger:
 //
-//   * the image ref is parseable and pinned (sha256-only, no
+//   - the image ref is parseable and pinned (sha256-only, no
 //     :latest/:main/:stable references)
-//   * the target_digest, if verified end-to-end, passes a Cosign
+//   - the target_digest, if verified end-to-end, passes a Cosign
 //     signature check (the actual verify call is in the cosign
 //     sub-package — the validator surface stops at "is the ref
 //     typed correctly").
@@ -17,9 +17,9 @@
 // the same shape documented in deploy/validate-master-env.sh:91.
 //
 // WHAT THIS PACKAGE DOES NOT OWN:
-//   * The DB ledger (lives in internal/store/store_deployment_records.go)
-//   * The Cosign verifier impl (lives in internal/deploy/cosign/verifier.go)
-//   * The drain/resume/rollback state machine (lands in Step 6)
+//   - The DB ledger (lives in internal/store/store_deployment_records.go)
+//   - The Cosign verifier impl (lives in internal/deploy/cosign/verifier.go)
+//   - The drain/resume/rollback state machine (lands in Step 6)
 package deploy
 
 import (

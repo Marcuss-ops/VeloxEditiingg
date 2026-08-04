@@ -136,8 +136,8 @@ func TestEvaluateDriveDeliveryFailedFromArtifactID(t *testing.T) {
 	ctx := CallCtx{Now: time.Now()}
 	status := "FAILED"
 	snap := &WorkerSnapshot{
-		WorkerID:                 "w1",
-		LatestSmokeStatus:        &status,
+		WorkerID:                   "w1",
+		LatestSmokeStatus:          &status,
 		LatestSmokeArtifactDriveID: nil, // missing → drive_delivery triggers
 	}
 	hits := Evaluate(ctx, snap)

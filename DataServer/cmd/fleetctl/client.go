@@ -5,8 +5,8 @@
 //   - nil baseURL     → loadClientConfig flags it as misuse (exit 2).
 //   - empty token     → loadClientConfig flags it as misuse (exit 2).
 //   - non-2xx HTTP    → Caller's handlers map to canonical exit
-//                       codes (4 / 5 / 6 / 7 / 8 / 1) per Q3 of
-//                       the design review.
+//     codes (4 / 5 / 6 / 7 / 8 / 1) per Q3 of
+//     the design review.
 //
 // All requests carry Authorization: Bearer <token>. Body shape
 // for POST mutations matches the Step 6/15 + Step 12/15 handler
@@ -133,12 +133,12 @@ func newFleetClient(cfg *clientConfig) (*fleetClient, error) {
 // doJSON sends a request + decodes the response body into `out`.
 // Returns:
 //
-//   (status, err)
+//	(status, err)
 //
-//     status=HTTP code, err=nil on success AND on non-2xx
-//       (caller maps status via MapHTTPStatusToOpExit)
-//     status=HTTP code, err=non-nil on decode failure (2xx with bad JSON)
-//     status=0, err=non-nil on request build / transport failure
+//	  status=HTTP code, err=nil on success AND on non-2xx
+//	    (caller maps status via MapHTTPStatusToOpExit)
+//	  status=HTTP code, err=non-nil on decode failure (2xx with bad JSON)
+//	  status=0, err=non-nil on request build / transport failure
 //
 // Callers map non-2xx to canonical exit codes per exit_codes.go.
 func (c *fleetClient) doJSON(ctx context.Context, method, path string, body any, out any) (int, error) {

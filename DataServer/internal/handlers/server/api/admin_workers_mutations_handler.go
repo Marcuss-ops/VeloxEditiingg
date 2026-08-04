@@ -9,18 +9,18 @@
 //     the HTTP layer NEVER executes anything directly. Each
 //     handler:
 //
-//       1. Validates the worker_id and looks up the worker via
-//          the in-process registry (404 on miss, 400 on empty).
-//       2. Synchronously flips the worker-card flag (Drain /
-//          Quarantined) via Registry.SetWorkerDrain /
-//          SetWorkerQuarantine so the placement matcher
-//          immediately reflects the change (no lease can be
-//          granted mid-transition).
-//       3. Publishes a fleet_operations ledger row via
-//          ControllerPublisher.PublishOperation so the audit
-//          dashboard renders the row's QUEUED→RUNNING→
-//          SUCCEEDED lifecycle.
-//       4. Returns 202 Accepted with the new operation_id.
+//     1. Validates the worker_id and looks up the worker via
+//     the in-process registry (404 on miss, 400 on empty).
+//     2. Synchronously flips the worker-card flag (Drain /
+//     Quarantined) via Registry.SetWorkerDrain /
+//     SetWorkerQuarantine so the placement matcher
+//     immediately reflects the change (no lease can be
+//     granted mid-transition).
+//     3. Publishes a fleet_operations ledger row via
+//     ControllerPublisher.PublishOperation so the audit
+//     dashboard renders the row's QUEUED→RUNNING→
+//     SUCCEEDED lifecycle.
+//     4. Returns 202 Accepted with the new operation_id.
 //
 //     The async Operations Runner (FleetController tick goroutine
 //     — Step 4/15 wires the abstraction; the supervisor wiring
@@ -375,6 +375,7 @@ func (h *AdminWorkersMutationsHandler) UpdateWorker() gin.HandlerFunc {
 //   - Synchronously: WorkerInfo.Drain := false AND
 //     WorkerInfo.Quarantined := false (resume undoes both;
 //     drain and quarantine are independent operator-set flags).
+//
 //   - Asynchronously: publish a fleet_operations op="resume" row.
 //
 // Idempotency:

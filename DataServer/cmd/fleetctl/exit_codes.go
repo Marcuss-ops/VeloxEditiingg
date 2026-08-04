@@ -3,14 +3,14 @@
 //
 // Mapping table:
 //
-//   0  ExitOK              operation completed (sync read or polled to SUCCEEDED)
-//   1  ExitUnexpected      transport / decode / unexpected HTTP 5xx
-//   2  ExitMisuse          bad flag, missing arg, missing token, invalid --digest
-//   4  ExitWorkerNotFound  Master returned 404 for /admin/workers/{id}
-//   5  ExitLeaseUnavailable Master returned 409 (operation in-flight for worker)
-//   6  ExitSmokeFailed     smoke polled to FAILED in fleet_operations ledger
-//   7  ExitImageInvalid    --digest rejected by client-side validator OR Master (Step 5/15 invariant)
-//   8  ExitRollbackFailed  rollback polled to FAILED / ROLLBACK in fleet_operations ledger
+//	0  ExitOK              operation completed (sync read or polled to SUCCEEDED)
+//	1  ExitUnexpected      transport / decode / unexpected HTTP 5xx
+//	2  ExitMisuse          bad flag, missing arg, missing token, invalid --digest
+//	4  ExitWorkerNotFound  Master returned 404 for /admin/workers/{id}
+//	5  ExitLeaseUnavailable Master returned 409 (operation in-flight for worker)
+//	6  ExitSmokeFailed     smoke polled to FAILED in fleet_operations ledger
+//	7  ExitImageInvalid    --digest rejected by client-side validator OR Master (Step 5/15 invariant)
+//	8  ExitRollbackFailed  rollback polled to FAILED / ROLLBACK in fleet_operations ledger
 //
 // The matrix is exported so operator scripts can pattern-match
 // on $? without parsing stderr. Examples do not exist in the
@@ -24,14 +24,14 @@ import "fmt"
 // categories without first updating deploy/fleetctl/README.md
 // so dashboards stay in sync with shell scripts.
 const (
-	ExitOK              = 0
-	ExitUnexpected      = 1
-	ExitMisuse          = 2
-	ExitWorkerNotFound  = 4
+	ExitOK               = 0
+	ExitUnexpected       = 1
+	ExitMisuse           = 2
+	ExitWorkerNotFound   = 4
 	ExitLeaseUnavailable = 5
-	ExitSmokeFailed     = 6
-	ExitImageInvalid    = 7
-	ExitRollbackFailed  = 8
+	ExitSmokeFailed      = 6
+	ExitImageInvalid     = 7
+	ExitRollbackFailed   = 8
 )
 
 // exitCodeName returns a stable lowercase string for the exit

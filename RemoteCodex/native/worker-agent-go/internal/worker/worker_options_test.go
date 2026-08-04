@@ -124,14 +124,14 @@ func TestNew_WithNilOptionIgnored(t *testing.T) {
 // (RW-PROD-005 §3 anti-collision invariant).
 //
 // Behaviour asserted:
-//   * WithCollisionObserver(fn) installs fn on the returned Worker as
+//   - WithCollisionObserver(fn) installs fn on the returned Worker as
 //     w.onWorkerIDCollision. The lifecycle in worker_lifecycle.go
 //     Start() reads the field directly after a Connect-error so the
 //     production main.go's os.Exit(17) only fires if wiring is intact.
-//   * The observer is invoked with the original ErrWorkerIDCollision-
+//   - The observer is invoked with the original ErrWorkerIDCollision-
 //     wrapped error; errors.Is(err, controltransport.ErrWorkerIDCollision)
 //     continues to match (the typed sentinel survives the wrap).
-//   * WithCollisionObserver(nil) is the no-op opt-out: w.onWorkerIDCollision
+//   - WithCollisionObserver(nil) is the no-op opt-out: w.onWorkerIDCollision
 //     stays nil and Start() safely skips invocation.
 func TestNew_WithCollisionObserverWiresThrough(t *testing.T) {
 	calls := 0

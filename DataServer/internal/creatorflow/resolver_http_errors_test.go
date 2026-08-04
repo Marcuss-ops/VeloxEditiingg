@@ -20,18 +20,18 @@ func init() { gin.SetMode(gin.TestMode) }
 // WriteResolverError. Each row asserts (status, error code,
 // details shape) for the canonical mapping canon:
 //
-//   errors.Is(err, ErrResolverNotComplete)               → 422 payload_incomplete
-//   errors.Is(err, ErrIdempotencyKeyReused)             → 409 + path-from-typed-or-default
-//   validationFieldExtractor(err) != ""                  → 422 invalid_payload + typed path
-//   strings.Contains(strings.ToLower(err.Error()), "required") → 422 invalid_payload
-//   default                                              → 500 resolver_failure
+//	errors.Is(err, ErrResolverNotComplete)               → 422 payload_incomplete
+//	errors.Is(err, ErrIdempotencyKeyReused)             → 409 + path-from-typed-or-default
+//	validationFieldExtractor(err) != ""                  → 422 invalid_payload + typed path
+//	strings.Contains(strings.ToLower(err.Error()), "required") → 422 invalid_payload
+//	default                                              → 500 resolver_failure
 //
 // The two paths the helper family supports (POST /api/v1/creator/jobs
 // pushes the typed validationError wrapped over the inner "payload";
 // POST /api/v1/jobs surfaces the un-typed error) both round-trip
 // through the helper with no callsite-provided path annotation.
 //
-// The "ValidationErrorField != ''" branch is covered by stashing a
+// The "ValidationErrorField != ”" branch is covered by stashing a
 // fake extractor via the `validationFieldExtractor` package-private
 // indirection — enqueue's *validationError type is unexported and
 // can't be constructed from outside the enqueue package without

@@ -459,8 +459,7 @@ func TestSubmitTaskResult_PreservesTenDistinctEngineEncodeEventsOnSuccessAndFail
 				ExecutorKey:    "scene.composite.v1@1",
 				DetailedPhases: phases,
 			}
-			pte := &PendingTaskExecution{					JobID: "job-encode-events", ExecutorID: "scene.composite.v1", ExecutorVersion: 1, LeaseID: "lease-encode-events",
-				}
+			pte := &PendingTaskExecution{JobID: "job-encode-events", ExecutorID: "scene.composite.v1", ExecutorVersion: 1, LeaseID: "lease-encode-events"}
 
 			w.submitTaskResult(context.Background(), pte, "task-encode-events", "attempt-encode-events", report, tc.err)
 

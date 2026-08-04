@@ -3,13 +3,13 @@
 //
 // Surface:
 //
-//   GET /api/v1/admin/workers/:worker_id/health
-//     ?level=A        → return HealthReport{level:"A"}
-//     ?level=B        → return HealthReport{level:"B"}
-//     ?level=C        → return HealthReport{level:"C"}
-//     ?level=D        → return HealthReport{level:"D"}
-//     (no level)      → aggregate {worker_id, reports: [A,B,C,D]}
-//     ?level=invalid  → 400 Bad Request
+//	GET /api/v1/admin/workers/:worker_id/health
+//	  ?level=A        → return HealthReport{level:"A"}
+//	  ?level=B        → return HealthReport{level:"B"}
+//	  ?level=C        → return HealthReport{level:"C"}
+//	  ?level=D        → return HealthReport{level:"D"}
+//	  (no level)      → aggregate {worker_id, reports: [A,B,C,D]}
+//	  ?level=invalid  → 400 Bad Request
 //
 // Auth: mounted under the existing adminWorkers adminAuth-gated
 // group (adminAuth middleware from VELOX_ADMIN_TOKEN). Same
@@ -18,10 +18,10 @@
 //
 // Failure modes (mirrors admin_workers_handler.go §1/15):
 //
-//   reg == nil            → 503 Service Unavailable
-//   empty worker_id       → 400 Bad Request
-//   unknown worker_id     → 404 Not Found
-//   invalid ?level=       → 400 Bad Request
+//	reg == nil            → 503 Service Unavailable
+//	empty worker_id       → 400 Bad Request
+//	unknown worker_id     → 404 Not Found
+//	invalid ?level=       → 400 Bad Request
 //
 // Each per-level probe is a PURE function in fleet.ProbeLevelX;
 // the handler is a thin shell that picks the right probe based
@@ -118,11 +118,12 @@ type AggregatedHealth struct {
 // CheckResult map; we do NOT 503 the whole response.
 //
 // Return semantics (the JSON envelope shape):
-//   200 + AggregatedHealth       — no ?level=
-//   200 + fleet.HealthReport     — ?level=A|B|C|D
-//   400 Bad Request              — empty worker_id OR invalid level
-//   404 Not Found                — unknown worker
-//   503 Service Unavailable      — registry not wired
+//
+//	200 + AggregatedHealth       — no ?level=
+//	200 + fleet.HealthReport     — ?level=A|B|C|D
+//	400 Bad Request              — empty worker_id OR invalid level
+//	404 Not Found                — unknown worker
+//	503 Service Unavailable      — registry not wired
 func (h *AdminWorkersHealthHandler) GetWorkerHealth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// ── handler-level preconditions ─────────────────────────

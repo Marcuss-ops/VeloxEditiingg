@@ -49,7 +49,7 @@ func TestUnifiedGenerateRejectsUnsupportedSourceType(t *testing.T) {
 	r := newUnifiedGenerateTestRouter(t)
 	body, _ := json.Marshal(map[string]any{
 		"video_name": "unsupported",
-		"source": map[string]any{"type": "unknown"},
+		"source":     map[string]any{"type": "unknown"},
 	})
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/script/generate", bytes.NewReader(body))

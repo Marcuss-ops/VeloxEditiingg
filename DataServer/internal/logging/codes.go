@@ -73,8 +73,8 @@ const (
 
 // Migration codes
 const (
-	CodeDriveLinkMigrateSkip      = "DRIVE_LINK_MIGRATE_SKIP"
-	CodeMasterFolderMigrateSkip   = "MASTER_FOLDER_MIGRATE_SKIP"
+	CodeDriveLinkMigrateSkip    = "DRIVE_LINK_MIGRATE_SKIP"
+	CodeMasterFolderMigrateSkip = "MASTER_FOLDER_MIGRATE_SKIP"
 )
 
 // Worker update lifecycle (replaces log.Printf in worker_update_*.go)
@@ -255,8 +255,8 @@ var CodeDescriptions = map[string]string{
 	CodeNoTargets:   "No target computers selected",
 
 	// Migrations.
-	CodeDriveLinkMigrateSkip:      "Skipping drive link during migration",
-	CodeMasterFolderMigrateSkip:   "Skipping master folder during migration",
+	CodeDriveLinkMigrateSkip:    "Skipping drive link during migration",
+	CodeMasterFolderMigrateSkip: "Skipping master folder during migration",
 
 	// Worker update lifecycle.
 	CodeWorkerUpdateDownloaded:        "Worker update downloaded",

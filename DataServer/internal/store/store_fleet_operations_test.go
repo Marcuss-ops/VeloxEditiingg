@@ -4,36 +4,36 @@
 // Coverage rationale (each test exists for a specific
 // invariant the dashboard or tick path relies on):
 //
-//   * InsertAndGet               — canonical GET round-trip
-//   * AcceptsAllOperationKinds   — schema CHECK covers every
-//                                  canonical kind (debug fix
-//                                  when a new kind lands outside
-//                                  sqlite/104 + postgres/014)
-//   * RejectsUnknownKind         — schema CHECK rejects typo'd
-//                                  kinds (e.g. "drainning"); the
-//                                  audit surface stays clean
-//   * InFlightDedup              — partial UNIQUE INDEX fires on
-//                                  duplicate (worker_id, op) while
-//                                  a prior row is QUEUED/RUNNING
-//   * AllowsReissueAfterTerminal — partial UNIQUE INDEX does NOT
-//                                  fire on a re-issue after the
-//                                  prior run terminates (Monday +
-//                                  Tuesday reboots are both legit)
-//   * LifecycleTransitions       — QUEUED → RUNNING → SUCCEEDED
-//                                  chain writing started_at and
-//                                  finished_at
-//   * FailedCapturesErrorMessage — FAILED with non-empty
-//                                  error_message so the dashboard
-//                                  renders a cause
-//   * NotFound                   — ErrOperationNotFound sentinel
-//                                  for unknown operation_id
-//   * ListsOrdered               — DESC by queued_at on the audit
-//                                  surface
-//   * ListFilters                — worker_id + status filters
-//                                  combine cleanly
-//   * QueuedListOrdered          — FIFO by queued_at ASC on the
-//                                  tick dispatch path
-//   * ListLimit                  — limit > 0 caps the rows
+//   - InsertAndGet               — canonical GET round-trip
+//   - AcceptsAllOperationKinds   — schema CHECK covers every
+//     canonical kind (debug fix
+//     when a new kind lands outside
+//     sqlite/104 + postgres/014)
+//   - RejectsUnknownKind         — schema CHECK rejects typo'd
+//     kinds (e.g. "drainning"); the
+//     audit surface stays clean
+//   - InFlightDedup              — partial UNIQUE INDEX fires on
+//     duplicate (worker_id, op) while
+//     a prior row is QUEUED/RUNNING
+//   - AllowsReissueAfterTerminal — partial UNIQUE INDEX does NOT
+//     fire on a re-issue after the
+//     prior run terminates (Monday +
+//     Tuesday reboots are both legit)
+//   - LifecycleTransitions       — QUEUED → RUNNING → SUCCEEDED
+//     chain writing started_at and
+//     finished_at
+//   - FailedCapturesErrorMessage — FAILED with non-empty
+//     error_message so the dashboard
+//     renders a cause
+//   - NotFound                   — ErrOperationNotFound sentinel
+//     for unknown operation_id
+//   - ListsOrdered               — DESC by queued_at on the audit
+//     surface
+//   - ListFilters                — worker_id + status filters
+//     combine cleanly
+//   - QueuedListOrdered          — FIFO by queued_at ASC on the
+//     tick dispatch path
+//   - ListLimit                  — limit > 0 caps the rows
 package store
 
 import (

@@ -2,25 +2,25 @@
 //
 // Coverage map:
 //
-//   List endpoint:
-//     TestListAdminOperations_NilController       — 503 path
-//     TestListAdminOperations_Success             — 200 + sort
-//     TestListAdminOperations_EmptyRegistry        — 200 + []
-//     TestListAdminOperations_EnvelopeShape       — envelope keys
-//     TestListAdminOperations_FilterApplied       — query params
-//     TestListAdminOperations_InternalError       — 500 path
+//	List endpoint:
+//	  TestListAdminOperations_NilController       — 503 path
+//	  TestListAdminOperations_Success             — 200 + sort
+//	  TestListAdminOperations_EmptyRegistry        — 200 + []
+//	  TestListAdminOperations_EnvelopeShape       — envelope keys
+//	  TestListAdminOperations_FilterApplied       — query params
+//	  TestListAdminOperations_InternalError       — 500 path
 //
-//   Get endpoint:
-//     TestGetAdminOperation_NilController         — 503 path
-//     TestGetAdminOperation_NotFound              — 404 path
-//     TestGetAdminOperation_EmptyID               — 400 path
-//     TestGetAdminOperation_TrimWhitespace        — 400 path
-//     TestGetAdminOperation_Success               — 200 + body
+//	Get endpoint:
+//	  TestGetAdminOperation_NilController         — 503 path
+//	  TestGetAdminOperation_NotFound              — 404 path
+//	  TestGetAdminOperation_EmptyID               — 400 path
+//	  TestGetAdminOperation_TrimWhitespace        — 400 path
+//	  TestGetAdminOperation_Success               — 200 + body
 //
-//   Mapper:
-//     TestBuildOperationCard_AllFields            — happy-path fields
-//     TestBuildOperationCard_NilInfo              — zero default
-//     TestBuildOperationCard_OmitsEmptyTerminal   — omitempty
+//	Mapper:
+//	  TestBuildOperationCard_AllFields            — happy-path fields
+//	  TestBuildOperationCard_NilInfo              — zero default
+//	  TestBuildOperationCard_OmitsEmptyTerminal   — omitempty
 package api
 
 import (
@@ -87,8 +87,8 @@ func TestListAdminOperations_Success(t *testing.T) {
 			return []store.Operation{
 				{OperationID: "op-b", WorkerID: "wicket", Op: "update",
 					RequestedBy: "ops", Reason: "second",
-					Status:    store.OperationStatusSucceeded,
-					QueuedAt:  queued, StartedAt: &started, FinishedAt: &finished},
+					Status:   store.OperationStatusSucceeded,
+					QueuedAt: queued, StartedAt: &started, FinishedAt: &finished},
 				{OperationID: "op-a", WorkerID: "wicket", Op: "drain",
 					RequestedBy: "ops", Reason: "first",
 					Status: store.OperationStatusQueued, QueuedAt: queued.Add(-time.Hour)},

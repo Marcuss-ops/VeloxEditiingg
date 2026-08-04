@@ -3,39 +3,39 @@
 // Coverage (each per-level test exercises a single decision
 // branch in the per-level pure-function contract):
 //
-//   Level A (host) — 8 tests:
-//     TestProbeLevelA_HappyPath          — all 6 sub-checks pass with golden values
-//     TestProbeLevelA_NilSSH             — nil ssh dep → single ssh_deps sentinel
-//     TestProbeLevelA_SSHUnreachable     — `true` returns error → ssh_up fail + cascades
-//     TestProbeLevelA_LoadOverThreshold  — /proc/loadavg = 5.0 → fail
-//     TestProbeLevelA_MemoryBelowMin     — MemAvailable = 64 → fail
-//     TestProbeLevelA_DiskOverMax        — Used% = 92 → fail
-//     TestProbeLevelA_DockerEmpty        — ServerVersion empty → fail
-//     TestProbeLevelA_NTPUnsynced        — NTPSynchronized=yes absent → fail
+//	Level A (host) — 8 tests:
+//	  TestProbeLevelA_HappyPath          — all 6 sub-checks pass with golden values
+//	  TestProbeLevelA_NilSSH             — nil ssh dep → single ssh_deps sentinel
+//	  TestProbeLevelA_SSHUnreachable     — `true` returns error → ssh_up fail + cascades
+//	  TestProbeLevelA_LoadOverThreshold  — /proc/loadavg = 5.0 → fail
+//	  TestProbeLevelA_MemoryBelowMin     — MemAvailable = 64 → fail
+//	  TestProbeLevelA_DiskOverMax        — Used% = 92 → fail
+//	  TestProbeLevelA_DockerEmpty        — ServerVersion empty → fail
+//	  TestProbeLevelA_NTPUnsynced        — NTPSynchronized=yes absent → fail
 //
-//   Level B (container) — 7 tests:
-//     TestProbeLevelB_HappyPath           — all 4 sub-checks pass
-//     TestProbeLevelB_NilSSH              — nil ssh dep → single ssh_deps sentinel
-//     TestProbeLevelB_ContainerNotRunning — State.Running=false → fail
-//     TestProbeLevelB_HealthReadyFail    — curl exit non-zero → fail
-//     TestProbeLevelB_ImageDigestNoRow    — no ledger row → fail with detail
-//     TestProbeLevelB_ImageDigestMatch    — running == ledger.TargetDigest → pass
-//     TestProbeLevelB_RestartLoop         — RestartCount=10 → fail
-//     TestProbeLevelB_PendingAccepted     — ledger status=PENDING → pass (in-flight)
+//	Level B (container) — 7 tests:
+//	  TestProbeLevelB_HappyPath           — all 4 sub-checks pass
+//	  TestProbeLevelB_NilSSH              — nil ssh dep → single ssh_deps sentinel
+//	  TestProbeLevelB_ContainerNotRunning — State.Running=false → fail
+//	  TestProbeLevelB_HealthReadyFail    — curl exit non-zero → fail
+//	  TestProbeLevelB_ImageDigestNoRow    — no ledger row → fail with detail
+//	  TestProbeLevelB_ImageDigestMatch    — running == ledger.TargetDigest → pass
+//	  TestProbeLevelB_RestartLoop         — RestartCount=10 → fail
+//	  TestProbeLevelB_PendingAccepted     — ledger status=PENDING → pass (in-flight)
 //
-//   Level C (master) — 7 tests:
-//     TestProbeLevelC_HappyPath           — all 6 sub-checks pass
-//     TestProbeLevelC_NilRegistry         — nil gater → registry_deps sentinel
-//     TestProbeLevelC_WorkerNotInReg      — GetWorker returns nil → fail
-//     TestProbeLevelC_StatusNotConnected  — ConnectionStatus=DISCONNECTED → fail
-//     TestProbeLevelC_SessionInactive     — SessionActive=false → fail
-//     TestProbeLevelC_NoExecutorAds       — empty Capabilities.supported_executors → fail
-//     TestProbeLevelC_HeartbeatStale      — LastHB 200s ago → fail
+//	Level C (master) — 7 tests:
+//	  TestProbeLevelC_HappyPath           — all 6 sub-checks pass
+//	  TestProbeLevelC_NilRegistry         — nil gater → registry_deps sentinel
+//	  TestProbeLevelC_WorkerNotInReg      — GetWorker returns nil → fail
+//	  TestProbeLevelC_StatusNotConnected  — ConnectionStatus=DISCONNECTED → fail
+//	  TestProbeLevelC_SessionInactive     — SessionActive=false → fail
+//	  TestProbeLevelC_NoExecutorAds       — empty Capabilities.supported_executors → fail
+//	  TestProbeLevelC_HeartbeatStale      — LastHB 200s ago → fail
 //
-//   Level D (smoke) — 3 tests:
-//     TestProbeLevelD_HappyPath           — non-empty artifact_id without err → pass
-//     TestProbeLevelD_NilSmoke            — nil dep → smoke_deps sentinel
-//     TestProbeLevelD_RunnerError         — RunLevelD returns error → fail
+//	Level D (smoke) — 3 tests:
+//	  TestProbeLevelD_HappyPath           — non-empty artifact_id without err → pass
+//	  TestProbeLevelD_NilSmoke            — nil dep → smoke_deps sentinel
+//	  TestProbeLevelD_RunnerError         — RunLevelD returns error → fail
 package fleet
 
 import (
@@ -70,8 +70,8 @@ func (s stubSSH) Run(ctx context.Context, workerID, command string) (string, err
 // stubDeployments is the per-test stub for BackendDeploymentRepo.
 // Only GetLatestDeploymentForWorker is exercised by ProbeLevelB.
 type stubDeployments struct {
-	rec  *store.DeploymentRecord
-	err  error
+	rec *store.DeploymentRecord
+	err error
 }
 
 func (s stubDeployments) GetLatestDeploymentForWorker(_ context.Context, _ string) (*store.DeploymentRecord, error) {
@@ -148,12 +148,12 @@ func TestProbeLevelA_HappyPath(t *testing.T) {
 		t.Errorf("happy-path Level A not healthy: %+v", rep.Checks)
 	}
 	for k, want := range map[string]string{
-		"ssh_up":                 "ok",
-		"cpu_load_1m":            "0.42",
-		"memory_available_mb":    "4096",
-		"disk_used_pct":          "44",
-		"docker_active":          "24.0.7",
-		"ntp_synced":             "yes",
+		"ssh_up":              "ok",
+		"cpu_load_1m":         "0.42",
+		"memory_available_mb": "4096",
+		"disk_used_pct":       "44",
+		"docker_active":       "24.0.7",
+		"ntp_synced":          "yes",
 	} {
 		c, ok := rep.Checks[k]
 		if !ok {

@@ -39,9 +39,9 @@ func TestHealth_Quarantined(t *testing.T) {
 func TestHealth_Offline(t *testing.T) {
 	now := canonicalNow()
 	cases := []struct {
-		name           string
-		sessionActive  bool
-		lastHB         string
+		name          string
+		sessionActive bool
+		lastHB        string
 	}{
 		{"session dead", false, freshHB(now, 30*time.Second)},
 		{"empty heartbeat", true, ""},

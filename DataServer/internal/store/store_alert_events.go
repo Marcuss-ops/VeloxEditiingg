@@ -51,16 +51,16 @@ var ErrAlertEventNotFound = errors.New("no active alert event for (worker_id, ru
 // dashboard can distinguish "still active" (NULL) from "resolved
 // with a value" (timestamp + value).
 type AlertEvent struct {
-	EventID         string
-	WorkerID        string
-	RuleID          string
-	Severity        string
-	State           string
-	FiredAt         time.Time
-	ResolvedAt      sql.NullTime
-	LastObservedAt  time.Time
-	CurrentValue    sql.NullString
-	Message         string
+	EventID        string
+	WorkerID       string
+	RuleID         string
+	Severity       string
+	State          string
+	FiredAt        time.Time
+	ResolvedAt     sql.NullTime
+	LastObservedAt time.Time
+	CurrentValue   sql.NullString
+	Message        string
 }
 
 // CreateAlertEventsTableIfNotExists is the test/dev-only bootstrap
@@ -315,11 +315,11 @@ ORDER BY fired_at DESC`
 // resolved_at; informational rows may have NULL current_value).
 func scanAlertEvent(rows *sql.Rows) (*AlertEvent, error) {
 	var (
-		ev            AlertEvent
-		firedAt       string
-		resolvedAt    sql.NullString
-		lastObserved  string
-		currentValue  sql.NullString
+		ev           AlertEvent
+		firedAt      string
+		resolvedAt   sql.NullString
+		lastObserved string
+		currentValue sql.NullString
 	)
 	if err := rows.Scan(
 		&ev.EventID, &ev.WorkerID, &ev.RuleID, &ev.Severity, &ev.State,

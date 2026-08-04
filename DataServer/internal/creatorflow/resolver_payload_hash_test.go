@@ -41,14 +41,14 @@ func TestPayloadHashIdempotency(t *testing.T) {
 	// same SHA across runs; mutated payloads produce a different
 	// SHA.
 	payloadA := map[string]interface{}{
-		"scenes":      []interface{}{"Opening", "Closing"},
-		"video_name":  "Version A",
-		"total_secs":  10.0,
+		"scenes":     []interface{}{"Opening", "Closing"},
+		"video_name": "Version A",
+		"total_secs": 10.0,
 	}
 	payloadB := map[string]interface{}{
-		"scenes":      []interface{}{"Opening", "MIDDLE", "Closing"},
-		"video_name":  "Version B",
-		"total_secs":  18.0,
+		"scenes":     []interface{}{"Opening", "MIDDLE", "Closing"},
+		"video_name": "Version B",
+		"total_secs": 18.0,
 	}
 
 	_, shaA := resolverMarshalPayload(payloadA)

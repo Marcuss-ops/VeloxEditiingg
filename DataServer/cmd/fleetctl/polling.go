@@ -15,11 +15,11 @@
 //
 // Default budgets match the per-step opTimeout values:
 //
-//   drain    10 min  (Step 6/15 budget)
-//   resume     5 min  (no specific budget; shorter surface)
-//   update    30 min  (Step 9/15 cascade)
-//   smoke     12 min  (Step 12/15 sub-budget)
-//   rollback  30 min  (Step 9/15 rollback)
+//	drain    10 min  (Step 6/15 budget)
+//	resume     5 min  (no specific budget; shorter surface)
+//	update    30 min  (Step 9/15 cascade)
+//	smoke     12 min  (Step 12/15 sub-budget)
+//	rollback  30 min  (Step 9/15 rollback)
 //
 // --wait=<duration> flag overrides per-run.
 package main
@@ -35,12 +35,12 @@ import (
 // declaring timeout. Indexed by OperationKind — ANY sub-command
 // using pollOperationLedger passes the matching kind.
 var defaultWaitBudget = map[string]time.Duration{
-	"smoke":     12 * time.Minute,
-	"drain":     10 * time.Minute,
-	"resume":    5 * time.Minute,
+	"smoke":      12 * time.Minute,
+	"drain":      10 * time.Minute,
+	"resume":     5 * time.Minute,
 	"quarantine": 5 * time.Minute,
-	"update":    30 * time.Minute,
-	"rollback":  30 * time.Minute,
+	"update":     30 * time.Minute,
+	"rollback":   30 * time.Minute,
 }
 
 // pollInterval is the steady-state poll period. 5s matches the
@@ -52,14 +52,14 @@ const pollInterval = 5 * time.Second
 // polledOperationRow is the slice of GET /api/v1/admin/operations/{id}
 // we read. Mirrors fleet_operations ledger columns.
 type polledOperationRow struct {
-	OperationID string `json:"operation_id"`
-	WorkerID    string `json:"worker_id"`
-	Op          string `json:"op"`
-	Status      string `json:"status"`
+	OperationID  string `json:"operation_id"`
+	WorkerID     string `json:"worker_id"`
+	Op           string `json:"op"`
+	Status       string `json:"status"`
 	ErrorMessage string `json:"error_message"`
-	QueuedAt    string `json:"queued_at"`
-	StartedAt   string `json:"started_at,omitempty"`
-	FinishedAt  string `json:"finished_at,omitempty"`
+	QueuedAt     string `json:"queued_at"`
+	StartedAt    string `json:"started_at,omitempty"`
+	FinishedAt   string `json:"finished_at,omitempty"`
 }
 
 // terminalStatuses returns true when the row has reached a

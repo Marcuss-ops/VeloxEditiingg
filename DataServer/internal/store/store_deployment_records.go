@@ -62,11 +62,11 @@ var ErrDeploymentNotFound = errors.New("no deployment records for worker")
 // from "forward deploy". Step 6's rollback path sets this flag
 // when a previously-FAILED forward deploy triggers an automatic
 // rollback. It is meaningful only with a terminal status:
-//   * status=SUCCEEDED + IsRollback=false — canonical forward happy
+//   - status=SUCCEEDED + IsRollback=false — canonical forward happy
 //     path (target_digest was deployed and the worker came up).
-//   * status=SUCCEEDED + IsRollback=true  — rollback itself succeeded
+//   - status=SUCCEEDED + IsRollback=true  — rollback itself succeeded
 //     (the worker is now on previous_digest, the operator's intent).
-//   * status=ROLLED_BACK + IsRollback=true — forward failed, the
+//   - status=ROLLED_BACK + IsRollback=true — forward failed, the
 //     auto-rollback transition row is logged.
 //
 // status=FAILED + IsRollback=true is unreachable through the
@@ -196,14 +196,14 @@ UPDATE deployment_records SET is_rollback = ? WHERE deployment_id = ?`,
 // row (status=PENDING, is_rollback=true from creation) for the
 // rollback cascade, then transitions it on completion.
 //
-//   rollbackOK=true  → status=ROLLED_BACK (rollback finished
-//                      cleanly; the worker is back on
-//                      previous_digest).
-//   rollbackOK=false → status=FAILED (rollback also failed;
-//                      operator intervention required; Health
-//                      derives ROLLBACK from is_rollback=true
-//                      in both cases so the operator always
-//                      sees the rollback attempt at-glance).
+//	rollbackOK=true  → status=ROLLED_BACK (rollback finished
+//	                   cleanly; the worker is back on
+//	                   previous_digest).
+//	rollbackOK=false → status=FAILED (rollback also failed;
+//	                   operator intervention required; Health
+//	                   derives ROLLBACK from is_rollback=true
+//	                   in both cases so the operator always
+//	                   sees the rollback attempt at-glance).
 //
 // The atomic UPDATE prevents a torn state where status was
 // updated but is_rollback wasn't (or vice versa) which would

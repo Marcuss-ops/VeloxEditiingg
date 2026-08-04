@@ -80,11 +80,11 @@ func (s *SQLiteStore) ListM2MAuditLog(ctx context.Context, clientID string, limi
 	var out []M2MAuditEntry
 	for rows.Next() {
 		var (
-			id, status, sceneCount int64
+			id, status, sceneCount                      int64
 			clientID, idemHash, method, path, scope, ip string
-			dur                                            float64
-			rejectReason                                   sql.NullString
-			createdAt                                      string
+			dur                                         float64
+			rejectReason                                sql.NullString
+			createdAt                                   string
 		)
 		if err := rows.Scan(&id, &clientID, &idemHash, &method, &path, &status, &scope,
 			&sceneCount, &dur, &ip, &rejectReason, &createdAt); err != nil {

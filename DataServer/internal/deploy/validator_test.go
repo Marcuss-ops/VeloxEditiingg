@@ -76,15 +76,15 @@ func TestValidateImageRef_RejectsEmpty(t *testing.T) {
 // circuit).
 func TestValidateImageRef_RejectsNonDigest(t *testing.T) {
 	cases := []string{
-		"ghcr.io/o/r",                            // bare ref, no @sha256:
-		"ghcr.io/o/r@sha256:abc",                 // short digest
-		"ghcr.io/o/r@sha256:" + canonicalSHA('g'), // non-hex digest char
+		"ghcr.io/o/r",                                   // bare ref, no @sha256:
+		"ghcr.io/o/r@sha256:abc",                        // short digest
+		"ghcr.io/o/r@sha256:" + canonicalSHA('g'),       // non-hex digest char
 		"ghcr.io/o/r@sha256:" + canonicalSHA('a') + "0", // 65 chars (regex requires exactly 64)
 		"docker.io/o/r@sha256:" + canonicalSHA('a'),     // wrong host (docker.io)
-		"quay.io/o/r@sha256:" + canonicalSHA('a'),      // wrong host (quay.io)
-		"garbage",                                  // arbitrary non-shape string
-		"ghcr.io//r@sha256:" + canonicalSHA('a'),        // empty owner
-		"ghcr.io/o/@sha256:" + canonicalSHA('a'),        // empty repo
+		"quay.io/o/r@sha256:" + canonicalSHA('a'),       // wrong host (quay.io)
+		"garbage",                                // arbitrary non-shape string
+		"ghcr.io//r@sha256:" + canonicalSHA('a'), // empty owner
+		"ghcr.io/o/@sha256:" + canonicalSHA('a'), // empty repo
 		"ghcr.io/Marcuss-Ops/Velox-Worker@sha256:" + canonicalSHA('a'), // mixed-case owner (lowercase-only contract)
 		"ghcr.io/UPPER/repo@sha256:" + canonicalSHA('a'),               // uppercase anywhere
 	}

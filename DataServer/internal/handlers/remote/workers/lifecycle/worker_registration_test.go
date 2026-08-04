@@ -191,7 +191,7 @@ func TestRegisterV2_EmptyAllowlist_DenyInProduction(t *testing.T) {
 // TestRegisterV2_EmptyAllowlist_DenyInProduction).
 func TestRegisterV2_EmptyAllowlist_AllowInDev(t *testing.T) {
 	h := newRegistrationTestHandler(t,
-		"", // empty CSV — dev mode intentionally permissive
+		"",   // empty CSV — dev mode intentionally permissive
 		true, // GRPCAllowInsecureDev=true → dev bypass
 	)
 

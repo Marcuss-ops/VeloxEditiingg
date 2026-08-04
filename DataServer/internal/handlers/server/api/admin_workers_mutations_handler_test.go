@@ -2,34 +2,35 @@
 //
 // Coverage map:
 //
-//   Drain:
-//     TestDrainWorker_NilHandler             — nil publisher/reg → 503
-//     TestDrainWorker_EmptyWorkerID          — trim-empty → 400
-//     TestDrainWorker_WorkerNotFound         — unknown worker → 404
-//     TestDrainWorker_HappyPath              — Drain=true + audit row + 202
-//     TestDrainWorker_AlreadyDraining        — already drain=true → 409
-//     TestDrainWorker_InFlightConflict       — publisher returns ErrOperationInFlight → 409
+//	Drain:
+//	  TestDrainWorker_NilHandler             — nil publisher/reg → 503
+//	  TestDrainWorker_EmptyWorkerID          — trim-empty → 400
+//	  TestDrainWorker_WorkerNotFound         — unknown worker → 404
+//	  TestDrainWorker_HappyPath              — Drain=true + audit row + 202
+//	  TestDrainWorker_AlreadyDraining        — already drain=true → 409
+//	  TestDrainWorker_InFlightConflict       — publisher returns ErrOperationInFlight → 409
 //
-//   Quarantine:
-//     TestQuarantineWorker_NilHandler        — 503
-//     TestQuarantineWorker_HappyPath         — Quarantined=true + audit row + 202
-//     TestQuarantineWorker_AlreadyQuarantined — already quarantined → 409
-//     TestQuarantineWorker_InFlightConflict  — ErrOperationInFlight → 409
+//	Quarantine:
+//	  TestQuarantineWorker_NilHandler        — 503
+//	  TestQuarantineWorker_HappyPath         — Quarantined=true + audit row + 202
+//	  TestQuarantineWorker_AlreadyQuarantined — already quarantined → 409
+//	  TestQuarantineWorker_InFlightConflict  — ErrOperationInFlight → 409
 //
-//   Resume:
-//     TestResumeWorker_NilHandler            — 503
-//     TestResumeWorker_AlreadyHealthy        — already !Drain && !Quarantined → 409
-//     TestResumeWorker_ClearsDrain           — Drain=false → publish op=resume
-//     TestResumeWorker_ClearsQuarantine      — Quarantined=false → publish op=resume
-//     TestResumeWorker_InFlightConflict      — ErrOperationInFlight → 409
+//	Resume:
+//	  TestResumeWorker_NilHandler            — 503
+//	  TestResumeWorker_AlreadyHealthy        — already !Drain && !Quarantined → 409
+//	  TestResumeWorker_ClearsDrain           — Drain=false → publish op=resume
+//	  TestResumeWorker_ClearsQuarantine      — Quarantined=false → publish op=resume
+//	  TestResumeWorker_InFlightConflict      — ErrOperationInFlight → 409
 //
-//   Defaults:
-//     TestMutationRequest_DefaultsReason     — body omitted → "triggered via admin API"
+//	Defaults:
+//	  TestMutationRequest_DefaultsReason     — body omitted → "triggered via admin API"
 //
 // Tests use stubPublisher (no real SQLite) + workersreg.New(nil)
 // (in-memory registry). The mutation handler depends on:
-//   1. Registry.GetWorker / SetWorkerDrain / SetWorkerQuarantine
-//   2. ControllerPublisher.PublishOperation
+//  1. Registry.GetWorker / SetWorkerDrain / SetWorkerQuarantine
+//  2. ControllerPublisher.PublishOperation
+//
 // Both are swapped for in-process stubs so the test does not
 // stand up SQLite or run the migration sweep.
 package api

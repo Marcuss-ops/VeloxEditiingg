@@ -74,17 +74,17 @@ func NewTxManager(s *SQLiteStore) *TxManager {
 //
 // Behavior contracts (locked by sqlite_tx_manager_test.go):
 //
-//   1. fn returns nil → tx.Commit() runs; if Commit fails, RunInTx
-//      returns the Commit error. The fn's writes are NOT visible.
-//   2. fn returns non-nil → tx.Rollback() runs; if Rollback fails,
-//      RunInTx returns the fn error wrapped with the Rollback error
-//      in an extra annotation ("rollback also failed: ...") so the
-//      diagnostic is preserved without losing the root cause.
-//   3. fn panics → tx.Rollback runs via the deferred recover-cleanup
-//      path (std lib tx semantics); panic propagates unchanged.
-//      (We do NOT add an explicit recover — std lib *sql.Tx handles
-//      this; the explicit defer-rollback pattern in
-//      pre-RunInTx callers is itself the proven panic-safety shape.)
+//  1. fn returns nil → tx.Commit() runs; if Commit fails, RunInTx
+//     returns the Commit error. The fn's writes are NOT visible.
+//  2. fn returns non-nil → tx.Rollback() runs; if Rollback fails,
+//     RunInTx returns the fn error wrapped with the Rollback error
+//     in an extra annotation ("rollback also failed: ...") so the
+//     diagnostic is preserved without losing the root cause.
+//  3. fn panics → tx.Rollback runs via the deferred recover-cleanup
+//     path (std lib tx semantics); panic propagates unchanged.
+//     (We do NOT add an explicit recover — std lib *sql.Tx handles
+//     this; the explicit defer-rollback pattern in
+//     pre-RunInTx callers is itself the proven panic-safety shape.)
 //
 // Caller invariants:
 //

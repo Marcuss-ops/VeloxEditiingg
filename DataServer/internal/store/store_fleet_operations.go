@@ -16,9 +16,9 @@
 // prior run to terminate.
 //
 // Repository shape mirrors store_deployment_records.go:
-//   * Operation struct mirrors the SQL columns 1:1 (json.RawMessage
+//   - Operation struct mirrors the SQL columns 1:1 (json.RawMessage
 //     payload, *time.Time for optional started_at/finished_at).
-//   * CRUD + sentinel errors + boolToIntSQLite-style helpers are
+//   - CRUD + sentinel errors + boolToIntSQLite-style helpers are
 //     not needed here because the schema uses TEXT for booleans.
 //
 // This file is scope-tight to Step 4/15. Future steps that wire
@@ -143,14 +143,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_ops_worker_op_inflight
 // strings leak into the response).
 //
 // Validation runs eagerly:
-//   * Status MUST be QUEUED (terminal statuses confuse the
+//   - Status MUST be QUEUED (terminal statuses confuse the
 //     in-flight de-dup contract — they would lift the partial
 //     UNIQUE immediately, allowing a duplicate re-issue).
-//   * OperationID, WorkerID, Op, RequestedBy, Reason MUST be
+//   - OperationID, WorkerID, Op, RequestedBy, Reason MUST be
 //     non-empty (mirror of the schema CHECK constraints; eager
 //     rejection gives the caller a clearer error than a SQL
 //     CHECK violation).
-//   * Payload is normalised to "{}" when nil/empty. The schema
+//   - Payload is normalised to "{}" when nil/empty. The schema
 //     CHECK refuses an empty string, but a JSON `{}` is the
 //     canonical no-args marker an executor receives; this lets
 //     callers omit EmptyObject boilerplate.

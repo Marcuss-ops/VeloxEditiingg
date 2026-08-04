@@ -3,40 +3,40 @@
 //
 // Coverage map:
 //
-//   TestValidateDigest_AcceptsCanonicalLowercase
-//     ^sha256:[0-9a-f]{64}$ → nil err.
+//	TestValidateDigest_AcceptsCanonicalLowercase
+//	  ^sha256:[0-9a-f]{64}$ → nil err.
 //
-//   TestValidateDigest_RejectsUppercase
-//     uppercase hex fails the regex (Cosign emits lowercase;
-//     mixed-case input is operator error).
+//	TestValidateDigest_RejectsUppercase
+//	  uppercase hex fails the regex (Cosign emits lowercase;
+//	  mixed-case input is operator error).
 //
-//   TestValidateDigest_RejectsLengthTooShort
-//     sha256: + <64 chars → exit-code 7 surface via error message.
+//	TestValidateDigest_RejectsLengthTooShort
+//	  sha256: + <64 chars → exit-code 7 surface via error message.
 //
-//   TestValidateDigest_RejectsMobileRefs
-//     :latest / :main / :stable get a specific message rather
-//     than generic regex mismatch (better operator UX).
+//	TestValidateDigest_RejectsMobileRefs
+//	  :latest / :main / :stable get a specific message rather
+//	  than generic regex mismatch (better operator UX).
 //
-//   TestRunStatus_StatusOK_PrettyPrintsCard
-//     Mock HTTP server returns worker list; handler prints
-//     status table; assert ExitOK + stdout contains worker_id.
+//	TestRunStatus_StatusOK_PrettyPrintsCard
+//	  Mock HTTP server returns worker list; handler prints
+//	  status table; assert ExitOK + stdout contains worker_id.
 //
-//   TestRunInspect_StatusOK_WorkerNotFound
-//     Mock returns 404; handler returns ExitWorkerNotFound (4).
+//	TestRunInspect_StatusOK_WorkerNotFound
+//	  Mock returns 404; handler returns ExitWorkerNotFound (4).
 //
-//   TestRunUpdate_BadDigestReturnsExitImageInvalid
-//     Handler called with --digest=:latest → exit 7 without
-//     hitting HTTP at all (client-side gate).
+//	TestRunUpdate_BadDigestReturnsExitImageInvalid
+//	  Handler called with --digest=:latest → exit 7 without
+//	  hitting HTTP at all (client-side gate).
 //
-//   TestMapHTTPStatusToOpExit
-//     Pin the matrix: 404 → 4, 409 → 5, 422 → 7, 401 → 2, 500
-//     → 1.
+//	TestMapHTTPStatusToOpExit
+//	  Pin the matrix: 404 → 4, 409 → 5, 422 → 7, 401 → 2, 500
+//	  → 1.
 //
-//   TestMapOperationKindToExit
-//     smoke→6, rollback→8, drain→1 (generic).
+//	TestMapOperationKindToExit
+//	  smoke→6, rollback→8, drain→1 (generic).
 //
-//   TestResolveTokenAdvanced
-//     env var + file precedence stable.
+//	TestResolveTokenAdvanced
+//	  env var + file precedence stable.
 package main
 
 import (
@@ -124,12 +124,12 @@ func TestMapHTTPStatusToOpExit(t *testing.T) {
 
 func TestMapOperationKindToExit(t *testing.T) {
 	cases := map[string]int{
-		"smoke":     ExitSmokeFailed,
-		"rollback":  ExitRollbackFailed,
-		"update":    ExitUnexpected,
-		"drain":     ExitUnexpected,
-		"resume":    ExitUnexpected,
-		"unknown":   ExitUnexpected,
+		"smoke":    ExitSmokeFailed,
+		"rollback": ExitRollbackFailed,
+		"update":   ExitUnexpected,
+		"drain":    ExitUnexpected,
+		"resume":   ExitUnexpected,
+		"unknown":  ExitUnexpected,
 	}
 	for kind, want := range cases {
 		got := MapOperationKindToExit(kind)
@@ -170,23 +170,23 @@ func TestRunStatus_StatusOK_PrettyPrintsCard(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"workers": []map[string]any{
 				{
-					"worker_id":        "velox-worker-13197",
-					"status":           "CONNECTED",
-					"health":           "HEALTHY",
+					"worker_id":         "velox-worker-13197",
+					"status":            "CONNECTED",
+					"health":            "HEALTHY",
 					"executor":          "scene.composite.v1",
-					"executor_version": "1",
-					"active_jobs":      0.0,
-					"max_active_jobs":  1.0,
+					"executor_version":  "1",
+					"active_jobs":       0.0,
+					"max_active_jobs":   1.0,
 					"last_smoke_status": "SUCCEEDED",
 				},
 				{
-					"worker_id":        "velox-worker-523925eb",
-					"status":           "CONNECTED",
-					"health":           "DEGRADED",
+					"worker_id":         "velox-worker-523925eb",
+					"status":            "CONNECTED",
+					"health":            "DEGRADED",
 					"executor":          "scene.composite.v1",
-					"executor_version": "1",
-					"active_jobs":      1.0,
-					"max_active_jobs":  1.0,
+					"executor_version":  "1",
+					"active_jobs":       1.0,
+					"max_active_jobs":   1.0,
 					"last_smoke_status": "FAILED",
 				},
 			},

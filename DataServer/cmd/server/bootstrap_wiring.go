@@ -19,9 +19,9 @@ import (
 	"strings"
 	"time"
 
+	"velox-server/internal/fleet"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/ingest"
-	"velox-server/internal/fleet"
 )
 
 // wirePostBuild connects dependencies that cross build-layer

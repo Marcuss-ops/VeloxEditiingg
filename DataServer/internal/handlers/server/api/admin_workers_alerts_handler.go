@@ -104,9 +104,9 @@ func (h *AdminWorkersAlertsHandler) listWorkerAlertsHandler(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"data":     rows,
-		"count":    len(rows),
-		"has_more": len(rows) == limit,
+		"data":      rows,
+		"count":     len(rows),
+		"has_more":  len(rows) == limit,
 		"worker_id": workerID,
 	})
 }
@@ -133,9 +133,9 @@ func (h *AdminWorkersAlertsHandler) listFleetActiveAlertsHandler(c *gin.Context)
 	// Group by severity for the dashboard's at-a-glance counters.
 	bySev := groupBySeverity(rows)
 	c.JSON(http.StatusOK, gin.H{
-		"data":      rows,
-		"count":     len(rows),
-		"has_more":  len(rows) == limit,
+		"data":        rows,
+		"count":       len(rows),
+		"has_more":    len(rows) == limit,
 		"by_severity": bySev,
 	})
 }

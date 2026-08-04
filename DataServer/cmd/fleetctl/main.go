@@ -9,13 +9,14 @@
 // (status/inspect).
 //
 // Sub-command set (matches the user spec verbatim — 7 listed):
-//   status                       GET  /api/v1/admin/workers
-//   inspect <worker_id>          GET  /api/v1/admin/workers/{id}
-//   drain    <worker_id>         POST /api/v1/admin/workers/{id}/drain
-//   update   <worker_id> [--digest sha256:...]   POST /api/v1/admin/workers/{id}/update
-//   smoke    <worker_id>         POST /api/v1/admin/workers/{id}/smoke
-//   resume   <worker_id>         POST /api/v1/admin/workers/{id}/resume
-//   rollback <worker_id>         POST /api/v1/admin/workers/{id}/rollback
+//
+//	status                       GET  /api/v1/admin/workers
+//	inspect <worker_id>          GET  /api/v1/admin/workers/{id}
+//	drain    <worker_id>         POST /api/v1/admin/workers/{id}/drain
+//	update   <worker_id> [--digest sha256:...]   POST /api/v1/admin/workers/{id}/update
+//	smoke    <worker_id>         POST /api/v1/admin/workers/{id}/smoke
+//	resume   <worker_id>         POST /api/v1/admin/workers/{id}/resume
+//	rollback <worker_id>         POST /api/v1/admin/workers/{id}/rollback
 //
 // Sub-commands 7-only is INTENTIONAL — restart + logs are not in
 // the user's literal spec. Step 11/15 already ships the

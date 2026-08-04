@@ -12,28 +12,28 @@
 //
 // Failure-injection keystones:
 //
-//   1. TestTxManager_HappyPath_commit_visible
-//        → commits on fn success; writes visible after RunInTx returns.
+//  1. TestTxManager_HappyPath_commit_visible
+//     → commits on fn success; writes visible after RunInTx returns.
 //
-//   2. TestTxManager_RollsBackOnFnError_no_writes
-//        → rolls back when fn returns non-nil; ALL writes done inside
-//          fn (pre-failure sub-ops included) are NOT visible.
+//  2. TestTxManager_RollsBackOnFnError_no_writes
+//     → rolls back when fn returns non-nil; ALL writes done inside
+//     fn (pre-failure sub-ops included) are NOT visible.
 //
-//   3. TestTxManager_ConflictPropagation_returns_ErrTransitionConflict
-//        → CAS rows-affected=0 inside fn surfaces ErrTransitionConflict
-//          through RunInTx as a typed error; writes are NOT committed.
+//  3. TestTxManager_ConflictPropagation_returns_ErrTransitionConflict
+//     → CAS rows-affected=0 inside fn surfaces ErrTransitionConflict
+//     through RunInTx as a typed error; writes are NOT committed.
 //
-//   4. TestTxManager_ContextCancelMidFn_rolls_back
-//        → ctx cancellation during fn surfaces context.Canceled and
-//          triggers rollback; partial writes NOT visible.
+//  4. TestTxManager_ContextCancelMidFn_rolls_back
+//     → ctx cancellation during fn surfaces context.Canceled and
+//     triggers rollback; partial writes NOT visible.
 //
-//   5. TestTxManager_PanicSafety_rolls_back
-//        → a panic inside fn does NOT leak tx state; std lib *sql.Tx
-//          rollback path cleans up automatically.
+//  5. TestTxManager_PanicSafety_rolls_back
+//     → a panic inside fn does NOT leak tx state; std lib *sql.Tx
+//     rollback path cleans up automatically.
 //
-//   6. TestTxManager_NilGuards_return_clean_error
-//        → NewTxManager(nil).RunInTx(...) and RunInTx with nil
-//          callback return typed sentinel errors instead of panicking.
+//  6. TestTxManager_NilGuards_return_clean_error
+//     → NewTxManager(nil).RunInTx(...) and RunInTx with nil
+//     callback return typed sentinel errors instead of panicking.
 package store
 
 import (
@@ -315,9 +315,9 @@ func TestTxManager_ConcurrentCallersOnlyOneWins(t *testing.T) {
 
 	const concurrency = 8
 	var (
-		wg       sync.WaitGroup
-		mu       sync.Mutex
-		winners  int
+		wg        sync.WaitGroup
+		mu        sync.Mutex
+		winners   int
 		noWinners int
 	)
 	wg.Add(concurrency)

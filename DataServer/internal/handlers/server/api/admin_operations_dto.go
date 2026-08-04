@@ -2,11 +2,11 @@
 // fleet_operations ledger.
 //
 // The shape mirrors admin_workers_dto.go's envelope discipline:
-//   * GET /api/v1/admin/operations          → AdminOperationsListResponse
+//   - GET /api/v1/admin/operations          → AdminOperationsListResponse
 //     (envelope { count, operations[] }) so the dashboard can
 //     render the dashboard widget shape unchanged when migrations
 //     or new fields land.
-//   * GET /api/v1/admin/operations/{id}     → OperationCard alone,
+//   - GET /api/v1/admin/operations/{id}     → OperationCard alone,
 //     NOT wrapped (consistent with /api/v1/admin/workers/{id}:
 //     the single-row endpoint returns the entity directly).
 //

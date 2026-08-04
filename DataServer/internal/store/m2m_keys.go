@@ -49,8 +49,8 @@ type M2MAPIKey struct {
 	Scopes         []string // parsed from the comma-separated DB column
 	IsActive       bool
 	Description    string
-	RateLimitRPS   int      // 0 → cfg.M2M.DefaultRPS
-	RateLimitBurst int      // 0 → cfg.M2M.DefaultBurst
+	RateLimitRPS   int // 0 → cfg.M2M.DefaultRPS
+	RateLimitBurst int // 0 → cfg.M2M.DefaultBurst
 	Quotas         M2MQuotas
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
@@ -250,7 +250,7 @@ func scanM2MAPIKey(row rowScanner) (*M2MAPIKey, error) {
 	var (
 		clientID, secretHash, scopes, description string
 		isActive                                  int
-		rateRPS, rateBurst, maxScenes              int
+		rateRPS, rateBurst, maxScenes             int
 		maxDur                                    float64
 		createdAt, updatedAt                      string
 		lastUsed                                  sql.NullTime

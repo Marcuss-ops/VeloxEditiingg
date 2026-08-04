@@ -57,7 +57,6 @@ type RuntimeConfig struct {
 	// VELOX_GRPC_ALLOW_INSECURE_DEV=true.
 	GRPCAllowInsecureDev bool
 
-
 	// ReleaseChannel mirrors VELOX_RELEASE_CHANNEL
 	// ("dev" | "staging" | "production"). PR-5 P0: when != "dev",
 	// GRPCAllowInsecureDev=true is treated as a fatal misconfiguration

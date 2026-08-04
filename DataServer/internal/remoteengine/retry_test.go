@@ -151,8 +151,8 @@ func TestShouldStop_PermanentByDefault(t *testing.T) {
 	policy := DefaultRetryPolicy(3)
 
 	tests := []struct {
-		name    string
-		err     error
+		name     string
+		err      error
 		wantStop bool
 	}{
 		{"nil", nil, false},

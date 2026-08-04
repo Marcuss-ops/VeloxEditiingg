@@ -8,11 +8,11 @@
 //
 // Endpoints:
 //
-//   POST   /api/v1/admin/m2m/keys                       → IssueM2MKey
-//   GET    /api/v1/admin/m2m/keys                       → ListM2MKeys
-//   GET    /api/v1/admin/m2m/keys/:client_id            → GetM2MKey (no plaintext)
-//   DELETE /api/v1/admin/m2m/keys/:client_id            → DisableM2MKey (soft)
-//   GET    /api/v1/admin/m2m/audit?client_id=…&limit=…  → ListM2MAudit
+//	POST   /api/v1/admin/m2m/keys                       → IssueM2MKey
+//	GET    /api/v1/admin/m2m/keys                       → ListM2MKeys
+//	GET    /api/v1/admin/m2m/keys/:client_id            → GetM2MKey (no plaintext)
+//	DELETE /api/v1/admin/m2m/keys/:client_id            → DisableM2MKey (soft)
+//	GET    /api/v1/admin/m2m/audit?client_id=…&limit=…  → ListM2MAudit
 //
 // The plaintext secret is returned ONCE at creation (POST). It is
 // never persisted — the store only holds SHA-256(secret). If the
@@ -53,13 +53,13 @@ import (
 //   - QuotaMaxScenes:     0 → cfg.M2M.MaxScenesPerRequest
 //   - QuotaMaxTotalS:     0 → cfg.M2M.MaxTotalDurationSecondsPerRequest
 type issueM2MKeyRequest struct {
-	ClientID            string   `json:"client_id"`
-	Description         string   `json:"description"`
-	Scopes              []string `json:"scopes"`
-	RateLimitRPS        *int     `json:"rate_limit_rps"`
-	RateLimitBurst      *int     `json:"rate_limit_burst"`
-	QuotaMaxScenes      *int     `json:"quota_max_scenes"`
-	QuotaMaxTotalSecs   *float64 `json:"quota_max_total_secs"`
+	ClientID          string   `json:"client_id"`
+	Description       string   `json:"description"`
+	Scopes            []string `json:"scopes"`
+	RateLimitRPS      *int     `json:"rate_limit_rps"`
+	RateLimitBurst    *int     `json:"rate_limit_burst"`
+	QuotaMaxScenes    *int     `json:"quota_max_scenes"`
+	QuotaMaxTotalSecs *float64 `json:"quota_max_total_secs"`
 }
 
 // issueM2MKeyResponse is the JSON returned by POST on success.
@@ -67,17 +67,17 @@ type issueM2MKeyRequest struct {
 // admin's clipboard; the row in `m2m_api_keys` contains only its
 // SHA-256 hash.
 type issueM2MKeyResponse struct {
-	ClientID       string    `json:"client_id"`
-	PlaintextSecret string   `json:"plaintext_secret"` // returned ONCE
-	SecretHash     string    `json:"secret_hash"`
-	Scopes         []string  `json:"scopes"`
-	IsActive       bool      `json:"is_active"`
-	Description    string    `json:"description"`
-	RateLimitRPS   *int      `json:"rate_limit_rps"`
-	RateLimitBurst *int      `json:"rate_limit_burst"`
-	QuotaMaxScenes *int      `json:"quota_max_scenes"`
-	QuotaMaxTotalS *float64  `json:"quota_max_total_secs"`
-	CreatedAt      time.Time `json:"created_at"`
+	ClientID        string    `json:"client_id"`
+	PlaintextSecret string    `json:"plaintext_secret"` // returned ONCE
+	SecretHash      string    `json:"secret_hash"`
+	Scopes          []string  `json:"scopes"`
+	IsActive        bool      `json:"is_active"`
+	Description     string    `json:"description"`
+	RateLimitRPS    *int      `json:"rate_limit_rps"`
+	RateLimitBurst  *int      `json:"rate_limit_burst"`
+	QuotaMaxScenes  *int      `json:"quota_max_scenes"`
+	QuotaMaxTotalS  *float64  `json:"quota_max_total_secs"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // =====================================================================
@@ -123,7 +123,7 @@ func validateIssueM2MKeyRequest(req *issueM2MKeyRequest) error {
 // 400 envelope consistent with the rest of the API admin surface.
 type adminBadRequest struct{ msg string }
 
-func (e *adminBadRequest) Error() string { return e.msg }
+func (e *adminBadRequest) Error() string  { return e.msg }
 func errAdminBadRequest(msg string) error { return &adminBadRequest{msg: msg} }
 
 // =====================================================================
@@ -161,8 +161,8 @@ func IssueM2MKey(st *store.SQLiteStore) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_payload", "message": err.Error()})
 			return
 		}
-	plaintext := store.GenerateM2MSecret()
-	hash := store.HashM2MSecret(plaintext)
+		plaintext := store.GenerateM2MSecret()
+		hash := store.HashM2MSecret(plaintext)
 		scopes := req.Scopes
 		if len(scopes) == 0 {
 			scopes = []string{"jobs.submit"}
@@ -236,18 +236,18 @@ func ListM2MKeys(st *store.SQLiteStore) gin.HandlerFunc {
 		out := make([]gin.H, 0, len(rows))
 		for _, r := range rows {
 			out = append(out, gin.H{
-				"client_id":          r.ClientID,
-				"secret_hash":        r.SecretHash,
-				"scopes":             r.Scopes,
-				"is_active":          r.IsActive,
-				"description":        r.Description,
-				"rate_limit_rps":     r.RateLimitRPS,
-				"rate_limit_burst":   r.RateLimitBurst,
-				"quota_max_scenes":   r.Quotas.MaxScenes,
-				"quota_max_total_s":  r.Quotas.MaxTotalDurationS,
-				"created_at":         r.CreatedAt,
-				"updated_at":         r.UpdatedAt,
-				"last_used_at":       nilOrTime(r.LastUsedAt),
+				"client_id":         r.ClientID,
+				"secret_hash":       r.SecretHash,
+				"scopes":            r.Scopes,
+				"is_active":         r.IsActive,
+				"description":       r.Description,
+				"rate_limit_rps":    r.RateLimitRPS,
+				"rate_limit_burst":  r.RateLimitBurst,
+				"quota_max_scenes":  r.Quotas.MaxScenes,
+				"quota_max_total_s": r.Quotas.MaxTotalDurationS,
+				"created_at":        r.CreatedAt,
+				"updated_at":        r.UpdatedAt,
+				"last_used_at":      nilOrTime(r.LastUsedAt),
 			})
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "keys": out})

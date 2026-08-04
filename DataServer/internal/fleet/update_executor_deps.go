@@ -35,10 +35,10 @@ import (
 // (validated via deploy.ValidateImageRef in the executor's
 // input-validation phase). The schema accepts either:
 //
-//   * Both set: caller supplies the snapshot explicitly.
+//   - Both set: caller supplies the snapshot explicitly.
 //     Snapshot-from-DB is skipped (useful for manual operator
 //     rollbacks against a known prior digest).
-//   * Only target_digest set: snapshot is read from
+//   - Only target_digest set: snapshot is read from
 //     deployment_records via GetLatestDeploymentForWorker —
 //     canonical production path.
 //
@@ -68,11 +68,11 @@ type BackendSSHClient interface {
 // surface. Each method corresponds to one step in the forward
 // or rollback pipeline:
 //
-//   PullImage — docker pull <imageRef> on the worker.
-//   ComposeRestart — `docker compose -p velox-worker-<id> restart`
-//     on the worker to pick up the new image.
-//   ContainerRunning — sanity check after restart; returns
-//     (true, nil) when the container reports running.
+//	PullImage — docker pull <imageRef> on the worker.
+//	ComposeRestart — `docker compose -p velox-worker-<id> restart`
+//	  on the worker to pick up the new image.
+//	ContainerRunning — sanity check after restart; returns
+//	  (true, nil) when the container reports running.
 //
 // All three MAY return ErrContainerUnhealthy (sentinel exposed
 // from this package) to signal "the container is broken but
@@ -128,16 +128,16 @@ type BackendRegistryGater interface {
 // BackendDeploymentRepo is the typed surface for the
 // deployment_records table. The executor's contract:
 //
-//   * GetLatestDeploymentForWorker MUST return
+//   - GetLatestDeploymentForWorker MUST return
 //     store.ErrDeploymentNotFound when no row exists — NOT
 //     a wrapped error. The executor maps this sentinel to
 //     ErrEmptyRegistry.
-//   * InsertDeploymentRecord is called with Status=PENDING —
+//   - InsertDeploymentRecord is called with Status=PENDING —
 //     a 2-tuple call (insert + later UpdateDeploymentStatus)
 //     rather than a 3-tuple (insert + status change + flag
 //     change), so partial failure mid-cascade can be reasoned
 //     about row-by-row.
-//   * MarkDeploymentRolledBack atomically sets
+//   - MarkDeploymentRolledBack atomically sets
 //     status=ROLLED_BACK AND is_rollback=true in one UPDATE
 //     so the dashboard's transition row is never observed in
 //     a torn (status=RolledBack, flag=0) state.

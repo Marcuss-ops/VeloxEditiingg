@@ -45,38 +45,38 @@ func (h *Handler) RegisterV2Handler() gin.HandlerFunc {
 			return
 		}
 
-	if body.WorkerID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "worker_id is required"})
-		return
-	}
+		if body.WorkerID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "worker_id is required"})
+			return
+		}
 
-	// ── Allowlist gate (HTTP 403 path) ────────────────────────────
-	// Mirrors the gRPC stream path's allowlist check
-	// (grpcserver/handler_stream.go::Stream — `worker %q is not
-	// in VELOX_ALLOWED_WORKERS`). A worker not in the master-side
-	// allowlist is rejected HERE with HTTP 403, so the failure
-	// surfaces at the HTTP layer (operator-visible via curl,
-	// worker logs, dashboards) rather than later as a gRPC
-	// PermissionDenied after a wasted session-token round-trip.
-	//
-	// Order matters: this check runs AFTER JSON parse +
-	// worker_id non-empty (so 400 still wins on malformed bodies
-	// — see handler.go::IsWorkerAllowed for the empty-string
-	// guard) and BEFORE credential validation + registry insert
-	// (so we do NOT store credentials for, or register, an
-	// unlisted worker). The IsWorkerAllowed helper mirrors
-	// grpcserver/allowlistAuthorizer::IsAllowed so the two paths
-	// cannot drift at the byte level.
-	if !h.IsWorkerAllowed(body.WorkerID) {
-		log.Printf("[REGISTER] worker %s rejected: not in VELOX_ALLOWED_WORKERS",
-			body.WorkerID[:min(16, len(body.WorkerID))]+"...")
-		c.JSON(http.StatusForbidden, gin.H{
-			"ok":      false,
-			"error":   "worker_not_allowed",
-			"message": "worker_id is not in VELOX_ALLOWED_WORKERS on this master",
-		})
-		return
-	}
+		// ── Allowlist gate (HTTP 403 path) ────────────────────────────
+		// Mirrors the gRPC stream path's allowlist check
+		// (grpcserver/handler_stream.go::Stream — `worker %q is not
+		// in VELOX_ALLOWED_WORKERS`). A worker not in the master-side
+		// allowlist is rejected HERE with HTTP 403, so the failure
+		// surfaces at the HTTP layer (operator-visible via curl,
+		// worker logs, dashboards) rather than later as a gRPC
+		// PermissionDenied after a wasted session-token round-trip.
+		//
+		// Order matters: this check runs AFTER JSON parse +
+		// worker_id non-empty (so 400 still wins on malformed bodies
+		// — see handler.go::IsWorkerAllowed for the empty-string
+		// guard) and BEFORE credential validation + registry insert
+		// (so we do NOT store credentials for, or register, an
+		// unlisted worker). The IsWorkerAllowed helper mirrors
+		// grpcserver/allowlistAuthorizer::IsAllowed so the two paths
+		// cannot drift at the byte level.
+		if !h.IsWorkerAllowed(body.WorkerID) {
+			log.Printf("[REGISTER] worker %s rejected: not in VELOX_ALLOWED_WORKERS",
+				body.WorkerID[:min(16, len(body.WorkerID))]+"...")
+			c.JSON(http.StatusForbidden, gin.H{
+				"ok":      false,
+				"error":   "worker_not_allowed",
+				"message": "worker_id is not in VELOX_ALLOWED_WORKERS on this master",
+			})
+			return
+		}
 
 		// ── Persistent credential validation ──────────────────────────
 		if body.Credential != "" {

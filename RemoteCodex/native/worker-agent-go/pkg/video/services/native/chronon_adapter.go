@@ -36,9 +36,9 @@ func chrononPlanJSON(p *plan.RenderPlan) ([]byte, error) {
 		Canvas: map[string]int{
 			"width": p.Canvas.Width, "height": p.Canvas.Height, "fps": p.Canvas.Fps,
 		},
-		Layers: make([]map[string]any, 0, len(p.Timeline)),
+		Layers:      make([]map[string]any, 0, len(p.Timeline)),
 		AudioTracks: make([]map[string]any, 0, len(p.AudioTracks)),
-		Output: map[string]string{"path": p.OutputPath, "format": "mp4"},
+		Output:      map[string]string{"path": p.OutputPath, "format": "mp4"},
 	}
 	for _, track := range p.AudioTracks {
 		if strings.TrimSpace(track.SourceURL) == "" {

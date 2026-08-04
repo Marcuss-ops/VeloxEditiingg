@@ -17,7 +17,7 @@
 //
 // URL/auth convention matches admin_workers_handler.go:
 //
-//   /api/v1/admin/operations  → adminAuth (VELOX_ADMIN_TOKEN)
+//	/api/v1/admin/operations  → adminAuth (VELOX_ADMIN_TOKEN)
 //
 // Operator-facing dashboard enumeration: GET list (with optional
 // ?worker_id= and ?status= filters) + GET by id.

@@ -10,14 +10,14 @@
 //     the HTTP layer NEVER executes smoke steps directly. The
 //     handler:
 //
-//       1. Validates the worker_id and looks up the worker via
-//          the in-process registry (404 on miss, 400 on empty).
-//       2. Parses an OPTIONAL SmokeRequest body (asset_id,
-//          render_plan, timeout_sec, reason).
-//       3. Publishes a fleet_operations ledger row with
-//          kind=OperationKindSmoke via ControllerPublisher.
-//       4. Returns 202 Accepted with MutationResponse shape
-//          (operation_id, queued_at, asset_id echoed).
+//     1. Validates the worker_id and looks up the worker via
+//     the in-process registry (404 on miss, 400 on empty).
+//     2. Parses an OPTIONAL SmokeRequest body (asset_id,
+//     render_plan, timeout_sec, reason).
+//     3. Publishes a fleet_operations ledger row with
+//     kind=OperationKindSmoke via ControllerPublisher.
+//     4. Returns 202 Accepted with MutationResponse shape
+//     (operation_id, queued_at, asset_id echoed).
 //
 //   - The async FleetController tick goroutine (Step 4/15 wires
 //     the abstraction; Step 9/15 wires the UpdateExecutor for
@@ -36,7 +36,7 @@
 // URL/auth convention matches admin_workers_handler.go (Step 1/15)
 // + admin_workers_mutations_handler.go (Step 6/15):
 //
-//\t/api/v1/admin/workers/:worker_id/smoke → adminAuth
+// \t/api/v1/admin/workers/:worker_id/smoke → adminAuth
 package api
 
 import (
@@ -108,15 +108,19 @@ func NewAdminWorkersSmokeHandler(reg *workersreg.Registry, pub ControllerPublish
 //
 // Failure modes:
 //
-//\tpublisher==nil or reg==nil → 503 Service Unavailable
-//\tempty worker_id (after trim) → 400 Bad Request
-//\tunknown worker                → 404 Not Found
-//\tzero asset_id in body         → 400 Bad Request (handler-side;
-//	                                  tighter than the executor's
-//	                                  "payload empty" guard)
-//\tpublisher error other than
-//	  ErrOperationInFlight         → 500 Internal Server Error
-//\tErrOperationInFlight          → 409 Conflict (in-flight de-dup)
+// \tpublisher==nil or reg==nil → 503 Service Unavailable
+// \tempty worker_id (after trim) → 400 Bad Request
+// \tunknown worker                → 404 Not Found
+// \tzero asset_id in body         → 400 Bad Request (handler-side;
+//
+//	tighter than the executor's
+//	"payload empty" guard)
+//
+// \tpublisher error other than
+//
+//	ErrOperationInFlight         → 500 Internal Server Error
+//
+// \tErrOperationInFlight          → 409 Conflict (in-flight de-dup)
 //
 // Success: 202 Accepted with MutationResponse. The audit row's
 // QUEUED→RUNNING→SUCCEEDED/FAILED lifecycle renders through
@@ -220,4 +224,4 @@ type SmokePayload struct {
 // handler trace propagation). Kept as a comment block rather
 // than an executable line so the lint pass stays clean.
 var _ = func(ctx context.Context) {} //nolint:staticcheck // symmetry with handler pattern in mutations_handler.go
-var _ = fmt.Sprintf //nolint:staticcheck
+var _ = fmt.Sprintf                  //nolint:staticcheck
