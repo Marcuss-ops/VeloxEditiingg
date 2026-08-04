@@ -579,7 +579,7 @@ phase8_verify_storage() {
   )
   [[ -n "${artifact_id}" && -n "${upload_id}" ]] || die "READY artifact identity row missing" 2
   if [[ -n "${decl_attempt}" ]]; then
-    [[ "${decl_attempt}" == "${upload_attempt}" ]] || die "declaration attempt=${decl_attempt}, upload attempt=${upload_attempt}" 2
+    [[ "${decl_attempt}" == "${ta_id}" ]] || die "declaration attempt=${decl_attempt}, task attempt=${ta_id}" 2
   fi
   [[ "${ta_id}" == "${winner_id}" ]] || die "upload attempt resolves to ${ta_id}, winner=${winner_id}" 2
   [[ "${artifact_attempt}" == "${upload_attempt}" ]] || die "artifact.attempt_id=${artifact_attempt}, upload.attempt_number=${upload_attempt}" 2

@@ -80,7 +80,7 @@ IFS='|' read -r ARTIFACT LOCAL_PATH STORAGE_KEY SHA ART_ATTEMPT DECL_ATTEMPT UPL
      WHERE a.job_id='$JOB_ID' AND a.output_kind='final_video' AND a.status='READY';"
 )
 [[ -n "$ARTIFACT" && -n "$UPLOAD_ID" ]] || { echo "FAIL: READY artifact identity row missing" >&2; exit 2; }
-[[ -z "$DECL_ATTEMPT" || "$DECL_ATTEMPT" == "$UPLOAD_ATTEMPT" ]] || { echo "FAIL: declaration/upload attempt mismatch" >&2; exit 2; }
+[[ -z "$DECL_ATTEMPT" || "$DECL_ATTEMPT" == "$TA_ID" ]] || { echo "FAIL: declaration/task attempt mismatch" >&2; exit 2; }
 [[ "$TA_ID" == "$WINNER" && "$ART_ATTEMPT" == "$UPLOAD_ATTEMPT" ]] || { echo "FAIL: artifact does not identify the winning attempt" >&2; exit 2; }
 [[ "$UPLOAD_WORKER" == "$TA_WORKER" && "$UPLOAD_LEASE" == "$TA_LEASE" ]] || { echo "FAIL: upload fence differs from TaskAttempt" >&2; exit 2; }
 [[ "$SHA" =~ ^[0-9a-fA-F]{64}$ ]] || { echo "FAIL: invalid artifact SHA" >&2; exit 2; }
