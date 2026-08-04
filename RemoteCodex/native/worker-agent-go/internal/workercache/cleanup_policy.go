@@ -55,6 +55,16 @@ var ErrSnapshotUnavailable = errors.New("workercache: no valid protection snapsh
 // Constructed via LoadCleanupPolicy (which reads VELOX_CACHE_*) and
 // used by the daemon's ticker to schedule + execute cleanup passes.
 type CleanupPolicy struct {
+	// AuditLogger receives one structured decision for every cache entry
+	// inspected by CleanupWithPolicy. Nil uses the package's structured
+	// standard logger.
+	AuditLogger CleanerAuditLogger
+
+	// AssetMetadata supplies optional semantic role and future-reference
+	// information for audit events. Missing metadata is represented as
+	// role=unknown and future_reference_count=0.
+	AssetMetadata map[string]CleanerAssetMetadata
+
 	// CleanupInterval is the cadence at which the daemon runs the
 	// cleanup loop. Not consulted by CleanupWithPolicy itself; carried
 	// here so a single LoadCleanupPolicy(...) call returns all the
@@ -154,6 +164,9 @@ func CleanupWithPolicy(
 		}
 		stats.Inspected = len(entries)
 		stats.SkippedSnapshotUnavailable = len(entries)
+		for _, e := range entries {
+			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", "snapshot_unavailable", now)
+		}
 		return stats, fmt.Errorf("%w: rows_inspected=%d", ErrSnapshotUnavailable, len(entries))
 	}
 
@@ -170,6 +183,9 @@ func CleanupWithPolicy(
 		}
 		stats.Inspected = len(entries)
 		stats.SkippedSnapshotStale = len(entries)
+		for _, e := range entries {
+			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", "snapshot_stale", now)
+		}
 		return stats, fmt.Errorf("%w: snapshot_age=%v max_age=%v rows_inspected=%d",
 			ErrSnapshotStale,
 			now.Sub(snapshotGeneratedAt), policy.SnapshotMaxAge, len(entries))
@@ -189,19 +205,23 @@ func CleanupWithPolicy(
 	for _, e := range entries {
 		if e.ActiveJobID != "" {
 			stats.SkippedLeased++
+			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", "active_lease", now)
 			continue
 		}
 		if !e.DownloadComplete {
 			stats.SkippedInFlight++
+			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", "download_in_flight", now)
 			continue
 		}
 		if _, keep := protected[e.DriveFileID]; keep {
 			stats.SkippedProtected++
+			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", "protected_snapshot", now)
 			continue
 		}
 		// Pass 12 grace rule — the new layer.
 		if policy.RecentUseGrace > 0 && now.Sub(e.LastUsedAt) < policy.RecentUseGrace {
 			stats.SkippedGrace++
+			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", "recent_use_grace", now)
 			continue
 		}
 
@@ -211,16 +231,20 @@ func CleanupWithPolicy(
 			// failure.
 			if errors.Is(err, ErrNotFound) {
 				stats.SkippedLeased++
+				emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", "lease_acquired_during_cleanup", now)
 				continue
 			}
 			stats.RemoveErrors++
+			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", "index_delete_failed", now)
 			continue
 		}
 		if err := os.Remove(e.LocalPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			stats.RemoveErrors++
+			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "index_removed", "physical_remove_error", now)
 			continue
 		}
 		stats.Removed++
+		emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "removed", "not_protected_and_grace_expired", now)
 	}
 	return stats, nil
 }

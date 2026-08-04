@@ -62,6 +62,7 @@ type Entry struct {
 	DownloadComplete bool
 	CreatedAt        time.Time
 	LastUsedAt       time.Time
+	ActiveLeaseCount int
 }
 
 // Sentinel errors so callers can branch via errors.Is, not string match.

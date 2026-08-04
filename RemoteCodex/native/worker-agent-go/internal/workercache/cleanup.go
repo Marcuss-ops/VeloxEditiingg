@@ -36,6 +36,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 )
 
 // CleanupStats summarises the outcome of one Cleanup pass. All fields
@@ -75,6 +76,14 @@ type CleanupStats struct {
 // ACTIVE state of each row, so the rule in (1) holds even when a
 // concurrent Acquire fires between List and Delete of a different row.
 func Cleanup(ctx context.Context, c *Cache, protected map[string]struct{}) (CleanupStats, error) {
+	return CleanupWithAudit(ctx, c, protected, nil, nil)
+}
+
+// CleanupWithAudit runs the legacy cleanup predicate while emitting one
+// structured decision for every listed cache entry. The legacy Cleanup API
+// remains unchanged; callers that need semantic metadata should use this
+// helper or CleanupPolicy.AssetMetadata with CleanupWithPolicy.
+func CleanupWithAudit(ctx context.Context, c *Cache, protected map[string]struct{}, audit CleanerAuditLogger, metadata map[string]CleanerAssetMetadata) (CleanupStats, error) {
 	var stats CleanupStats
 
 	if c == nil {
@@ -86,34 +95,43 @@ func Cleanup(ctx context.Context, c *Cache, protected map[string]struct{}) (Clea
 		return stats, fmt.Errorf("workercache.Cleanup: list: %w", err)
 	}
 	stats.Inspected = len(entries)
+	now := time.Now().UTC()
 
 	for _, e := range entries {
 		if e.ActiveJobID != "" {
 			stats.SkippedLeased++
+			emitCleanerAudit(audit, e, metadata, "kept", "active_lease", now)
 			continue
 		}
 		if !e.DownloadComplete {
 			stats.SkippedInFlight++
+			emitCleanerAudit(audit, e, metadata, "kept", "download_in_flight", now)
 			continue
 		}
 		if _, keep := protected[e.DriveFileID]; keep {
 			stats.SkippedProtected++
+			emitCleanerAudit(audit, e, metadata, "kept", "protected_snapshot", now)
 			continue
 		}
 
-		// Order matters: remove the row first so a later pass does
-		// not re-attempt os.Remove on a path that no longer has a
-		// matching index row. Remove errors on the file do NOT
-		// block the index delete — the row is the durable truth.
+		// Delete the index row first: the row is the durable eviction truth.
 		if err := c.DeleteIfUnleased(ctx, e.DriveFileID); err != nil {
-			stats.RemoveErrors++
+			if errors.Is(err, ErrNotFound) {
+				stats.SkippedLeased++
+				emitCleanerAudit(audit, e, metadata, "kept", "lease_acquired_during_cleanup", now)
+			} else {
+				stats.RemoveErrors++
+				emitCleanerAudit(audit, e, metadata, "kept", "index_delete_failed", now)
+			}
 			continue
 		}
 		if err := os.Remove(e.LocalPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			stats.RemoveErrors++
+			emitCleanerAudit(audit, e, metadata, "index_removed", "physical_remove_error", now)
 			continue
 		}
 		stats.Removed++
+		emitCleanerAudit(audit, e, metadata, "removed", "not_protected_and_grace_expired", now)
 	}
 	return stats, nil
 }

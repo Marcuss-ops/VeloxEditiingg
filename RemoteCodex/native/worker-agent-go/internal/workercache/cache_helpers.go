@@ -59,7 +59,9 @@ CREATE INDEX IF NOT EXISTS idx_cached_asset_leases_asset
 `
 
 const selectCols = `drive_file_id, local_path, size_bytes, active_job_id,
-    download_complete, created_at, last_used_at`
+    download_complete, created_at, last_used_at,
+    (SELECT COUNT(1) FROM cached_asset_leases l WHERE l.drive_file_id = cached_assets.drive_file_id),
+    COALESCE((SELECT MIN(job_id) FROM cached_asset_leases l2 WHERE l2.drive_file_id = cached_assets.drive_file_id), '')`
 
 // scanDBI lets scanEntry work for both *sql.Row and *sql.Rows.
 type scanDBI interface {
@@ -68,15 +70,17 @@ type scanDBI interface {
 
 func scanEntry(r scanDBI) (*Entry, error) {
 	var (
-		e         Entry
-		dlInt     int
-		activeJob sql.NullString
-		createdS  string
-		usedS     string
+		e          Entry
+		dlInt      int
+		activeJob  sql.NullString
+		createdS   string
+		usedS      string
+		leaseCount int
+		leaseJob   string
 	)
 	err := r.Scan(
 		&e.DriveFileID, &e.LocalPath, &e.SizeBytes, &activeJob,
-		&dlInt, &createdS, &usedS,
+		&dlInt, &createdS, &usedS, &leaseCount, &leaseJob,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -84,7 +88,17 @@ func scanEntry(r scanDBI) (*Entry, error) {
 		}
 		return nil, fmt.Errorf("workercache.scanEntry: %w", err)
 	}
-	e.ActiveJobID = activeJob.String
+	// The many-to-many lease table is authoritative for shared assets. Keep
+	// legacy active_job_id rows visible as one lease during migration, then
+	// expose the deterministic MIN(job_id) representative for audit output.
+	if leaseCount == 0 && activeJob.Valid && activeJob.String != "" {
+		leaseCount = 1
+		leaseJob = activeJob.String
+	}
+	if leaseCount > 0 {
+		e.ActiveJobID = leaseJob
+	}
+	e.ActiveLeaseCount = leaseCount
 	e.DownloadComplete = dlInt != 0
 	if e.CreatedAt, err = parseRFC3339Nano(createdS); err != nil {
 		return nil, fmt.Errorf("workercache.scanEntry: created_at: %w", err)
