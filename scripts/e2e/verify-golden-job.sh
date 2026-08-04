@@ -62,8 +62,9 @@ WINNER="$(scalar "SELECT COALESCE(winning_attempt_id,'') FROM tasks WHERE task_i
 assert_count "Task SUCCEEDED" 1 "$(scalar "SELECT COUNT(*) FROM tasks WHERE task_id='$TASK_ID' AND status='SUCCEEDED';")"
 assert_count "winning TaskAttempt" 1 "$(scalar "SELECT COUNT(*) FROM task_attempts WHERE task_id='$TASK_ID' AND id='$WINNER' AND status='SUCCEEDED';")"
 assert_count "non-terminal Tasks" 0 "$(scalar "SELECT COUNT(*) FROM tasks WHERE job_id='$JOB_ID' AND status NOT IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT');")"
-assert_count "Artifact READY" 1 "$(scalar "SELECT COUNT(*) FROM artifacts WHERE job_id='$JOB_ID' AND status='READY';")"
-assert_count "ArtifactUpload COMPLETED" 1 "$(scalar "SELECT COUNT(*) FROM artifact_uploads WHERE job_id='$JOB_ID' AND status='COMPLETED';")"
+assert_count "final_video Artifact READY" 1 "$(scalar "SELECT COUNT(*) FROM artifacts WHERE job_id='$JOB_ID' AND output_kind='final_video' AND status='READY';")"
+assert_count "all declared Artifacts READY" 2 "$(scalar "SELECT COUNT(*) FROM artifacts WHERE job_id='$JOB_ID' AND status='READY';")"
+assert_count "ArtifactUpload COMPLETED" 2 "$(scalar "SELECT COUNT(*) FROM artifact_uploads WHERE job_id='$JOB_ID' AND status='COMPLETED';")"
 assert_count "Artifact STAGING/VERIFYING" 0 "$(scalar "SELECT COUNT(*) FROM artifacts WHERE job_id='$JOB_ID' AND status IN ('STAGING','VERIFYING');")"
 assert_count "open ArtifactUploads" 0 "$(scalar "SELECT COUNT(*) FROM artifact_uploads WHERE job_id='$JOB_ID' AND status IN ('CREATED','UPLOADING','RECEIVED','FINALIZING');")"
 
@@ -76,7 +77,7 @@ IFS='|' read -r ARTIFACT LOCAL_PATH STORAGE_KEY SHA ART_ATTEMPT DECL_ATTEMPT UPL
       FROM artifacts a LEFT JOIN task_output_declarations d ON d.artifact_id=a.id
       JOIN artifact_uploads au ON au.artifact_id=a.id AND au.status='COMPLETED'
       LEFT JOIN task_attempts ta ON ta.task_id='$TASK_ID' AND ta.attempt_number=au.attempt_number
-     WHERE a.job_id='$JOB_ID' AND a.status='READY';"
+     WHERE a.job_id='$JOB_ID' AND a.output_kind='final_video' AND a.status='READY';"
 )
 [[ -n "$ARTIFACT" && -n "$UPLOAD_ID" ]] || { echo "FAIL: READY artifact identity row missing" >&2; exit 2; }
 [[ -z "$DECL_ATTEMPT" || "$DECL_ATTEMPT" == "$UPLOAD_ATTEMPT" ]] || { echo "FAIL: declaration/upload attempt mismatch" >&2; exit 2; }
