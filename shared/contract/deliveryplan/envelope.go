@@ -5,6 +5,10 @@ package deliveryplan
 // it belongs to the control-plane publication contract, never the renderer
 // payload.
 var envelopeKeys = [...]string{
+	// render_only is a control-plane opt-out: it explicitly permits a job
+	// to have no delivery plan. It is kept alongside the envelope so the
+	// atomic creator can enforce the same contract as enqueue validation.
+	"render_only",
 	"delivery_plan",
 	"delivery_destination_ids",
 	"delivery_destination_id",

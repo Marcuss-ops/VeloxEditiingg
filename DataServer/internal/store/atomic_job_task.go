@@ -117,7 +117,11 @@ func (c *AtomicJobTaskCreator) CreateJobWithTaskTx(
 	if err != nil {
 		return fmt.Errorf("atomic creator: invalid delivery plan: %w", err)
 	}
-	if c.requireExplicitDeliveryPlan && len(deliveryPlan) == 0 {
+	renderOnly := false
+	if controlPlanePayload != nil {
+		renderOnly, _ = controlPlanePayload["render_only"].(bool)
+	}
+	if c.requireExplicitDeliveryPlan && len(deliveryPlan) == 0 && !renderOnly {
 		return fmt.Errorf(
 			"atomic creator: explicit delivery plan required; provide delivery_plan, delivery_destination_ids, or delivery_destination_id",
 		)
