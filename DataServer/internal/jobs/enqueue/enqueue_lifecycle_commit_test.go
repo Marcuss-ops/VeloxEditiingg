@@ -150,7 +150,7 @@ func TestEnqueue_Precondition_RejectsMissingPlan(t *testing.T) {
 		store.NewAtomicJobTaskCreator(db),
 		store.NewSQLiteJobRepository(db),
 		nil,
-		&mockPlanResolver{err: errors.New("deliveries: no explicit delivery plan and global fallback is disabled: job_id=test")},
+		&mockPlanResolver{err: errors.New("deliveries: no explicit delivery plan: job_id=test")},
 	)
 
 	payload := map[string]interface{}{
@@ -431,7 +431,7 @@ func TestRenderHTTPBoundaryJobResponse(t *testing.T) {
 // that the precondition:
 //
 //  1. Reads from job_delivery_plans (NOT the global delivery_destinations
-//     fallback) when GlobalFallback is disabled (production mode).
+//     global destination selection is disabled.
 //  2. Propagates max(retry_budget) across destinations to job.MaxRetries.
 //  3. Accepts a multi-destination plan with varying retry_budget values.
 //
@@ -487,8 +487,8 @@ func TestEnforceDeliveryPlanPrecondition_IntegrationWithRealResolver(t *testing.
 		}
 	}
 
-	// Real DB-backed resolver, production mode (no global fallback).
-	realResolver := deliveries.NewSQLiteDeliveryPlanResolver(db.DB(), false)
+	// Real DB-backed resolver, explicit-plan-only mode.
+	realResolver := deliveries.NewSQLiteDeliveryPlanResolver(db.DB())
 	adapter := &planResolverAdapter{inner: realResolver}
 
 	enq := NewEnqueuer(
@@ -508,8 +508,8 @@ func TestEnforceDeliveryPlanPrecondition_IntegrationWithRealResolver(t *testing.
 }
 
 // TestEnforceDeliveryPlanPrecondition_IntegrationRejectsMissingPlan
-// exercises the production rejection path: GlobalFallback=false (no
-// fallback to global delivery_destinations) AND no per-job
+// exercises the fail-closed rejection path: no global
+// delivery_destinations fallback AND no per-job
 // job_delivery_plans rows → the precondition must reject with a
 // validation error whose message mentions "delivery_plan" so operators
 // know exactly what to do (create the missing plan rows).
@@ -525,9 +525,9 @@ func TestEnforceDeliveryPlanPrecondition_IntegrationRejectsMissingPlan(t *testin
 	const jobID = "missing-plan-job-1"
 
 	// Real resolver, production mode. job_delivery_plans is empty for
-	// this job_id and GlobalFallback is false, so the precondition must
+	// this job_id has no explicit plan, so the precondition must
 	// surface deliveries.ErrNoExplicitPlan wrapped in a validationError.
-	realResolver := deliveries.NewSQLiteDeliveryPlanResolver(db.DB(), false)
+	realResolver := deliveries.NewSQLiteDeliveryPlanResolver(db.DB())
 	adapter := &planResolverAdapter{inner: realResolver}
 
 	enq := NewEnqueuer(

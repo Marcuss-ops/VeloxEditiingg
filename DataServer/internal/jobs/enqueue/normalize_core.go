@@ -175,11 +175,13 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 		// persisted or offered to a worker.
 		"project_id",
 		"render_spec",
+		"render_only",
 		"publications",
 		"publication_specs",
 		// Preserve legacy delivery keys through normalization so
 		// taskSpec.DeliveryPlan can satisfy the atomic creator's parse-time
 		// delivery-plan requirement without putting them in Payload.
+		"delivery_plan",
 		"delivery_destination_ids",
 		"delivery_destination_id",
 		"destination_ids",

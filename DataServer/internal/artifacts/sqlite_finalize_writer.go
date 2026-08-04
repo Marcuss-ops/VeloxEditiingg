@@ -88,17 +88,16 @@ type FinalizationWriter interface {
 type SQLiteFinalizeWriter struct {
 	db     *sql.DB
 	reader ArtifactReader
-	// resolver is optional: nil falls through to the all-enabled
-	// destinations SELECT inside the tx. Wired at construction so the
-	// resolved destination set is computed inside the same tx that
-	// INSERTs into job_deliveries (transactional safety for the
-	// per-job delivery plan).
+	// resolver is optional for render-only/test finalization paths. When
+	// a delivery is required, a nil resolver fails closed rather than
+	// selecting global destinations. Wired at construction so the
+	// explicit destination set is resolved alongside finalization.
 	resolver DeliveryPlanResolver
 }
 
 // NewSQLiteFinalizeWriter wires the finalize writer. The reader is
-// required (post-tx SELECT); resolver is optional (nil = all-enabled
-// fallback).
+// required (post-tx SELECT); a nil resolver is fail-closed for
+// delivery finalization.
 func NewSQLiteFinalizeWriter(db *sql.DB, reader ArtifactReader, resolver DeliveryPlanResolver) *SQLiteFinalizeWriter {
 	if db == nil {
 		panic("artifacts: NewSQLiteFinalizeWriter requires a non-nil *sql.DB")

@@ -32,7 +32,7 @@
 // existing creatorflow.WriteResolverError detection path,
 // integration_test golden assertions, and substring-matched log
 // callers continue to work without any test-side change. The shape
-// rules themselves (allowed payload shapes, legacy fallback, per-
+// rules themselves (allowed payload shapes, legacy aliases, per-
 // entry invariants, field paths) live in shared/contract/
 // deliveryplan/parser.go as the single source of truth; this
 // package constructs only the enqueue-layer-specific precondition

@@ -54,7 +54,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	// delivery-plan resolver is wired into the finalize writer
 	// constructor (NOT method-chained) so the per-job destination set
 	// is resolved inside the same tx that INSERTs job_deliveries.
-	planResolver := deliveries.NewSQLiteDeliveryPlanResolver(p.SQLite.DB(), cfg.Runtime.DeliveryGlobalFallback)
+	planResolver := deliveries.NewSQLiteDeliveryPlanResolver(p.SQLite.DB())
 	uploadRepo := store.NewSQLiteUploadRepository(p.SQLite.DB())
 	artifactReader := store.NewSQLiteArtifactReader(p.SQLite.DB())
 	authReader := store.NewSQLiteAuthReader(p.SQLite.DB())

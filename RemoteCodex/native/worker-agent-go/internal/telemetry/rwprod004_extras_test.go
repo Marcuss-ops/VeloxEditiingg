@@ -113,6 +113,7 @@ func TestReady_AllCanonicalReasonsReachable(t *testing.T) {
 		MarkRegistered(true)
 		MarkBootstrapped(true)
 		MarkCacheReady(true)
+		MarkCacheProtectionReady(true)
 		MarkBlobReady(true)
 		// Defensive: drain_mode is sticky across rounds; an earlier
 		// subtest that flipped drain=true would otherwise leak here.
@@ -136,6 +137,8 @@ func TestReady_AllCanonicalReasonsReachable(t *testing.T) {
 				SetExecutorsCount(0)
 			case "cache.not_initialized":
 				MarkCacheReady(false)
+			case "cache.protection_not_ready":
+				MarkCacheProtectionReady(false)
 			case "blob.not_initialized":
 				MarkBlobReady(false)
 			case "disk.critical":
@@ -245,6 +248,7 @@ func TestHealth_Legacy_DeprecationHeader_OnEveryCall(t *testing.T) {
 	MarkRegistered(true)
 	MarkBootstrapped(true)
 	MarkCacheReady(true)
+	MarkCacheProtectionReady(true)
 	MarkBlobReady(true)
 	SetExecutorsCount(1)
 	SetDiskState(1<<30, 256*1024*1024)

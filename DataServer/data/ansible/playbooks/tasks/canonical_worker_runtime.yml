@@ -342,7 +342,7 @@
         "engine_version": "{{ engine_version | default(version_number | default('v1.0.6')) }}",
         "environment": "staging",
         "max_active_jobs": 1,
-        "prometheus_port": 0,
+        "prometheus_port": {{ velox_worker_prometheus_port | default(9090) }},
         "health_port": {{ velox_worker_health_port }},
         "control_grpc_url": "{{ velox_worker_control_grpc_url }}",
         "tls_cert_file": "/etc/velox/certs/worker.crt",

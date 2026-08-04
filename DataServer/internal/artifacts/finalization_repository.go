@@ -10,8 +10,9 @@
 package artifacts
 
 import (
-	"context"
 	"time"
+
+	"velox-server/internal/deliverycontract"
 )
 
 // CreateArtifactAndUploadSessionCommand is the input to
@@ -67,9 +68,9 @@ type FinalizeVerifiedCommand struct {
 
 	VerifiedAt time.Time
 
-	// DestinationID is the delivery destination to create a job_deliveries
-	// row for. If empty, the delivery-plan resolver (or fallback
-	// all-enabled destinations SELECT inside the tx) chooses.
+	// DestinationID is an explicit delivery destination override. Empty
+	// means the explicit per-job delivery-plan resolver must provide the
+	// targets; it never selects a global destination.
 	DestinationID string
 }
 
@@ -84,25 +85,19 @@ type FinalizeVerifiedCommand struct {
 // restarts and runner crashes.
 //
 // MaxAttempts == 0 is allowed in the projection but the writer
-// applies schema DEFAULT 5 at INSERT time so legacy plans inserted
-// before migration 069 (no retry_budget column) continue to behave
-// identically to the historical all-enable-destinations SELECT path.
-type DeliveryDestination struct {
-	DestinationID string
-	MaxAttempts   int
-}
+// applies schema DEFAULT 5 at INSERT time for legacy plan rows that
+// omit retry_budget.
+type DeliveryDestination = deliverycontract.DeliveryDestination
 
 // DeliveryPlanResolver returns the per-destination set the finalize
 // writer should insert into job_deliveries. The writer consumes the
 // resolved set inside the same *sql.Tx that INSERTs job_deliveries.
 //
-// Implementations decide the per-job destination set (per-job plans +
-// optional global fallback); the resolver stays outside the writer
-// lock so the planning logic is independently testable.
+// Implementations decide the per-job explicit destination set; the
+// resolver stays outside the writer lock so the planning logic is
+// independently testable.
 //
 // Step 5/8: the interface returns []DeliveryDestination (with
 // MaxAttempts) rather than []string. Older callers that only need the
 // destination IDs can ignore MaxAttempts; the writer always reads it.
-type DeliveryPlanResolver interface {
-	ResolveDestinations(ctx context.Context, jobID, artifactID string) ([]DeliveryDestination, error)
-}
+type DeliveryPlanResolver = deliverycontract.DeliveryPlanResolver

@@ -148,7 +148,10 @@ func (s *Service) GetAbout(ctx context.Context) (map[string]interface{}, error) 
 // ListFiles lists files in a folder
 func (s *Service) ListFiles(ctx context.Context, folderID string, pageSize int) ([]File, error) {
 	if pageSize == 0 {
-		pageSize = 100
+		pageSize = 50
+	}
+	if pageSize > 50 {
+		pageSize = 50
 	}
 	folderID = strings.TrimSpace(folderID)
 	if folderID == "" || folderID == "." {
@@ -156,17 +159,27 @@ func (s *Service) ListFiles(ctx context.Context, folderID string, pageSize int) 
 	}
 
 	query := url.QueryEscape(fmt.Sprintf("'%s' in parents and trashed=false", folderID))
-	endpoint := fmt.Sprintf("/files?q=%s&pageSize=%d&fields=files(id,name,mimeType,iconLink,webViewLink,size,createdTime,modifiedTime)&orderBy=folder,name", query, pageSize)
-
-	var result struct {
-		Files []File `json:"files"`
+	fields := "files(id,name,mimeType,iconLink,webViewLink,size,videoMediaMetadata(durationMillis),createdTime,modifiedTime),nextPageToken"
+	all := make([]File, 0, pageSize)
+	pageToken := ""
+	for {
+		endpoint := fmt.Sprintf("/files?q=%s&pageSize=%d&fields=%s&orderBy=folder,name", query, pageSize, url.QueryEscape(fields))
+		if pageToken != "" {
+			endpoint += "&pageToken=" + url.QueryEscape(pageToken)
+		}
+		var result struct {
+			Files         []File `json:"files"`
+			NextPageToken string `json:"nextPageToken"`
+		}
+		if err := s.doAPIRequest(ctx, "GET", endpoint, nil, &result); err != nil {
+			return nil, err
+		}
+		all = append(all, result.Files...)
+		if result.NextPageToken == "" {
+			return all, nil
+		}
+		pageToken = result.NextPageToken
 	}
-
-	if err := s.doAPIRequest(ctx, "GET", endpoint, nil, &result); err != nil {
-		return nil, err
-	}
-
-	return result.Files, nil
 }
 
 // GetFolder finds a folder by name within a parent folder

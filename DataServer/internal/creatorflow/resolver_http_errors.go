@@ -24,8 +24,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"velox-server/internal/deliverycontract"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/store"
+	"velox-shared/contract/deliveryplan"
 )
 
 // validationFieldExtractor is the indirection point used by
@@ -172,6 +174,12 @@ func WriteResolverError(c *gin.Context, err error) {
 			"idempotency_key_reused",
 			err.Error(),
 			gin.H{"path": path, "issue": "hash_mismatch"})
+	case errors.Is(err, deliveryplan.ErrDeliveryTargetRequired),
+		errors.Is(err, deliverycontract.ErrNoExplicitPlan):
+		writeErrorEnvelope(c, http.StatusUnprocessableEntity,
+			"DELIVERY_TARGET_REQUIRED",
+			"an explicit Drive destination is required",
+			gin.H{"path": "delivery_plan", "issue": "required"})
 	case extractUnifiedFieldPath(err) != "":
 		field := extractUnifiedFieldPath(err)
 		writeErrorEnvelope(c, http.StatusUnprocessableEntity,

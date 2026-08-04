@@ -26,6 +26,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/require"
 
+	"velox-server/internal/deliveries"
 	"velox-server/internal/store"
 	"velox-server/internal/store/migrations"
 )
@@ -110,7 +111,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 	artifactReader := store.NewSQLiteArtifactReader(db)
 	authReader := store.NewSQLiteAuthReader(db)
 	uploadWriter := NewSQLiteUploadSessionWriter(db)
-	finalizeWriter := NewSQLiteFinalizeWriter(db, artifactReader, nil)
+	finalizeWriter := NewSQLiteFinalizeWriter(db, artifactReader, deliveries.NewSQLiteDeliveryPlanResolver(db))
 	jobCounter := store.NewSQLiteJobDeliveryCounter(db)
 	svc := NewService(repo, uploadWriter, finalizeWriter, artifactReader, bs, authReader, clk, jobCounter)
 
@@ -152,6 +153,11 @@ func (e *testEnv) seedJob(jobID, status, assignedTo, leaseID string, revision in
 		jobID, status, revision, now, now, now,
 	)
 	require.NoError(e.t, err, "seedJob "+jobID)
+	_, err = e.db.Exec(`
+		INSERT INTO job_delivery_plans
+			(job_id, destination_id, enabled, priority, retry_budget, created_at, updated_at)
+		VALUES (?, 'primary', 1, 0, 5, ?, ?)`, jobID, now, now)
+	require.NoError(e.t, err, "seed explicit delivery plan "+jobID)
 }
 
 func (e *testEnv) seedAttempt(jobID string, attemptNumber int, status, workerID, leaseID string) {

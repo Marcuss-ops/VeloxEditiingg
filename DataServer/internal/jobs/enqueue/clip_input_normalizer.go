@@ -51,6 +51,12 @@ func canonicalAsset(raw map[string]interface{}) map[string]interface{} {
 		return nil
 	}
 	out := map[string]interface{}{"asset_id": assetID, "url": url}
+	if sha := strings.TrimSpace(payload.FirstString(raw, "sha256")); sha != "" {
+		out["sha256"] = sha
+	}
+	if size := payload.IntParam(raw, 0, "size_bytes"); size > 0 {
+		out["size_bytes"] = size
+	}
 	if durationMS := canonicalDurationMS(raw); durationMS > 0 {
 		out["duration_ms"] = durationMS
 	}

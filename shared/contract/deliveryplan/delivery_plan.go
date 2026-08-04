@@ -39,6 +39,12 @@ import (
 	"fmt"
 )
 
+// ErrDeliveryTargetRequired identifies a delivery request that omitted
+// every explicit destination. Render-only jobs do not invoke Parse; once
+// a delivery envelope is present, this sentinel gives HTTP callers a
+// stable machine-readable failure code.
+var ErrDeliveryTargetRequired = errors.New("delivery target required")
+
 // ValidationError is the typed rejection surface. Cross-package
 // callers reach the structured field path via errors.As + .Field
 // and chain the underlying cause via errors.Is + Unwrap. The
@@ -103,6 +109,16 @@ func (e *ValidationError) Unwrap() error {
 // call site that builds a typed error from outside the parser path.
 func NewValidationError(fieldPath, msg string) *ValidationError {
 	return &ValidationError{FieldPath: fieldPath, Msg: msg}
+}
+
+// NewDeliveryTargetRequiredError constructs the canonical missing-target
+// validation error while preserving errors.Is through the HTTP boundary.
+func NewDeliveryTargetRequiredError() *ValidationError {
+	return NewValidationErrorWrapped(
+		"delivery_plan",
+		"explicit delivery plan required; an explicit Drive destination is required",
+		ErrDeliveryTargetRequired,
+	)
 }
 
 // NewValidationErrorWrapped constructs a typed error that wraps

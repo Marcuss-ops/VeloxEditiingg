@@ -1,0 +1,499 @@
+#!/usr/bin/env python3
+"""Certify the existing worker concurrency limiter at MaxActiveJobs 1, 2, 3.
+
+This harness deliberately owns no placement, lease, download, or cleanup logic.
+It only changes the operator-selected worker cap through an explicit command,
+submits the canonical real-asset jobs concurrently, polls their lifecycle, and
+samples already-exported Prometheus metrics.
+
+A live run requires:
+  VELOX_MASTER_URL, VELOX_ADMIN_TOKEN (or TOKEN_FILE),
+  PARALLEL_BENCH_WORKER_ID, PARALLEL_BENCH_SET_CAP_CMD,
+  PARALLEL_BENCH_METRICS_URL (worker /metrics or a master projection), and
+  the canonical assets fixture used by build_real_payload.py.
+
+The cap command is intentionally explicit and operator-owned. It may contain
+{cap}, {worker_id}, and {master_url}, for example:
+  PARALLEL_BENCH_SET_CAP_CMD='ssh velox-worker "sudo velox-admin-worker set-max-active-jobs {cap}"'
+
+No result is called certified when required metrics are unavailable.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import shlex
+import statistics
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, asdict
+from pathlib import Path
+from typing import Any
+
+
+CAPS = (1, 2, 3)
+REQUIRED_METRICS = (
+    "cpu_utilization_ratio",
+    "rss_bytes",
+    "disk_wait_ratio",
+    "cache_hits",
+    "cache_misses",
+    "downloads",
+    "duplicate_downloads",
+    "errors",
+)
+
+
+def now_ms() -> int:
+    return time.monotonic_ns() // 1_000_000
+
+
+def percentile(values: list[float], fraction: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * fraction
+    low = math.floor(position)
+    high = math.ceil(position)
+    if low == high:
+        return ordered[low]
+    return ordered[low] + (ordered[high] - ordered[low]) * (position - low)
+
+
+def read_token() -> str:
+    value = os.getenv("VELOX_ADMIN_TOKEN", "").strip()
+    if not value and os.getenv("TOKEN_FILE"):
+        path = Path(os.environ["TOKEN_FILE"])
+        if path.is_file():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if line.startswith("VELOX_ADMIN_TOKEN="):
+                    value = line.split("=", 1)[1].strip().strip("'\"")
+                    break
+    if not value or any(ch in value for ch in "\r\n"):
+        raise RuntimeError("VELOX_ADMIN_TOKEN or TOKEN_FILE is required")
+    return value
+
+
+def http_json(method: str, url: str, token: str, body: Any = None, timeout: float = 30) -> tuple[int, dict[str, Any], dict[str, str]]:
+    data = None
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+            return response.status, json.loads(raw) if raw else {}, dict(response.headers)
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8")
+        try:
+            payload = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            payload = {"raw": raw[:500]}
+        return exc.code, payload, dict(exc.headers)
+
+
+def scrape_text(url: str, token: str) -> str:
+    request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.read().decode("utf-8", errors="replace")
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
+        return ""
+
+
+def parse_prometheus(text: str) -> dict[str, float]:
+    """Parse exposition values, retaining metric-family sums by base name.
+
+    Labels are intentionally ignored: the caller supplies one worker endpoint
+    or a master projection scoped to the worker. This also avoids introducing
+    job/asset labels into the certification result.
+    """
+    values: dict[str, float] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or " " not in line:
+            continue
+        name, raw = line.split(None, 1)
+        raw = raw.split()[0]
+        try:
+            value = float(raw)
+        except ValueError:
+            continue
+        base = name.split("{", 1)[0]
+        if base.endswith("_bucket") or base.endswith("_sum") or base.endswith("_count"):
+            continue
+        values[base] = values.get(base, 0.0) + value
+    return values
+
+
+def metric(values: dict[str, float], *names: str) -> float | None:
+    for name in names:
+        if name in values:
+            return values[name]
+    return None
+
+
+def normalize_ratio(value: float | None) -> float | None:
+    if value is None:
+        return None
+    # Master collector encodes ratio gauges in micro-units; worker telemetry
+    # emits the raw ratio. Accept both wire representations.
+    return value / 1_000_000 if value > 1.0 else value
+
+
+def extract_observations(values: dict[str, float]) -> dict[str, float | None]:
+    return {
+        "cpu_utilization_ratio": normalize_ratio(metric(values, "velox_worker_cpu_utilization_ratio", "velox_cpu_utilization_ratio")),
+        "rss_bytes": metric(values, "velox_worker_process_rss_bytes", "velox_worker_process_rss_peak_bytes", "process_resident_memory_bytes"),
+        "disk_wait_ratio": normalize_ratio(metric(values, "velox_worker_cpu_iowait_ratio", "velox_cpu_iowait_ratio", "velox_disk_wait_ratio")),
+        "cache_hits": metric(values, "velox_cache_requests_total{result=\"hit\"}", "velox_asset_cache_hits_total", "velox_asset_cache_hit_total"),
+        "cache_misses": metric(values, "velox_cache_requests_total{result=\"miss\"}", "velox_asset_cache_misses_total", "velox_asset_cache_miss_total"),
+        "downloads": metric(values, "velox_cache_downloads_total", "velox_asset_cache_download_total"),
+        "duplicate_downloads": metric(values, "velox_cache_duplicate_downloads_total", "velox_cache_duplicate_download_bytes_total", "velox_duplicate_downloads_total"),
+        "errors": metric(values, "velox_worker_errors_total", "velox_compute_failure_reasons_total", "velox_task_errors_total"),
+    }
+
+
+def delta(before: float | None, after: float | None) -> float | None:
+    if before is None or after is None:
+        return None
+    return max(0.0, after - before)
+
+
+@dataclass
+class JobResult:
+    job_id: str
+    status: str
+    latency_ms: float | None
+    error: str = ""
+
+
+@dataclass
+class CapResult:
+    max_active_jobs: int
+    status: str
+    wall_time_ms: float
+    throughput_jobs_per_hour: float
+    succeeded: int
+    failed: int
+    error_rate: float
+    latency_mean_ms: float | None
+    latency_p95_ms: float | None
+    cpu_avg_ratio: float | None
+    cpu_peak_ratio: float | None
+    rss_avg_bytes: float | None
+    rss_peak_bytes: float | None
+    disk_wait_avg_ratio: float | None
+    cache_hits: float | None
+    cache_misses: float | None
+    cache_hit_ratio: float | None
+    downloads: float | None
+    duplicate_downloads: float | None
+    errors: float | None
+    missing_metrics: list[str]
+    jobs: list[JobResult]
+    efficient: bool | None = None
+    decision: str = ""
+
+
+def command_for(template: str, cap: int, worker_id: str, master_url: str) -> str:
+    return template.format(
+        cap=cap,
+        worker_id=worker_id,
+        master_url=master_url,
+    )
+
+
+def run_cap_command(template: str, cap: int, worker_id: str, master_url: str, dry_run: bool) -> None:
+    command = command_for(template, cap, worker_id, master_url)
+    if dry_run:
+        print(f"DRY-RUN set cap={cap}: {command}")
+        return
+    completed = subprocess.run(command, shell=True, text=True)
+    if completed.returncode:
+        raise RuntimeError(f"cap command failed for {cap}: exit={completed.returncode}")
+
+
+def build_payload(builder: Path, fixtures: Path, worker_id: str, destination: str, suffix: int) -> dict[str, Any]:
+    command = [
+        sys.executable,
+        str(builder),
+        "--fixtures", str(fixtures),
+        "--worker-id", worker_id,
+        "--destination", destination,
+        "--idempotency-suffix", str(suffix),
+        "--strict",
+    ]
+    output = subprocess.check_output(command, text=True, stderr=subprocess.PIPE)
+    return json.loads(output)
+
+
+def provision_m2m(master_url: str, admin_token: str) -> tuple[str, str]:
+    client_id = f"parallel-bench-{int(time.time())}-{os.getpid()}"
+    status, body, _ = http_json("POST", f"{master_url}/api/v1/admin/m2m/keys", admin_token, {
+        "client_id": client_id,
+        "description": "parallelism certification ephemeral client",
+        "scopes": ["jobs.submit"],
+        "rate_limit_rps": 20,
+        "rate_limit_burst": 40,
+        "quota_max_scenes": 100,
+        "quota_max_total_secs": 3600,
+    })
+    if status != 201 or not body.get("plaintext_secret"):
+        raise RuntimeError(f"M2M provisioning failed: HTTP {status}: {body}")
+    return client_id, str(body["plaintext_secret"])
+
+
+def delete_m2m(master_url: str, admin_token: str, client_id: str) -> None:
+    http_json("DELETE", f"{master_url}/api/v1/admin/m2m/keys/{urllib.parse.quote(client_id)}", admin_token, timeout=10)
+
+
+def wait_cap(master_url: str, admin_token: str, worker_id: str, cap: int, timeout_s: int) -> None:
+    deadline = time.monotonic() + timeout_s
+    url = f"{master_url}/api/v1/admin/workers/{urllib.parse.quote(worker_id)}"
+    last: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        status, last, _ = http_json("GET", url, admin_token, timeout=10)
+        if status == 200 and int(last.get("max_active_jobs", -1)) == cap and int(last.get("active_jobs", 0)) == 0:
+            return
+        time.sleep(1)
+    raise RuntimeError(f"worker cap did not converge to {cap}: {last}")
+
+
+def submit_and_poll(master_url: str, bearer: str, payload: dict[str, Any], timeout_s: int) -> JobResult:
+    start = now_ms()
+    status, body, _ = http_json("POST", f"{master_url}/api/v1/jobs", bearer, payload, timeout=30)
+    if status != 202 or not body.get("job_id"):
+        return JobResult("", "SUBMIT_FAILED", None, f"HTTP {status}: {body}")
+    job_id = str(body["job_id"])
+    deadline = time.monotonic() + timeout_s
+    last_status = ""
+    last_body: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        status, last_body, _ = http_json("GET", f"{master_url}/api/v1/jobs/{urllib.parse.quote(job_id)}", bearer, timeout=15)
+        if status != 200:
+            return JobResult(job_id, "POLL_FAILED", None, f"HTTP {status}: {last_body}")
+        last_status = str(last_body.get("status", ""))
+        if last_status in {"SUCCEEDED", "FAILED", "CANCELLED"}:
+            latency = float(now_ms() - start)
+            return JobResult(job_id, last_status, latency, "" if last_status == "SUCCEEDED" else str(last_body.get("error", last_status)))
+        time.sleep(1)
+    return JobResult(job_id, "TIMEOUT", None, f"last_status={last_status}")
+
+
+class Sampler:
+    def __init__(self, urls: list[str], token: str, interval_s: float) -> None:
+        self.urls = urls
+        self.token = token
+        self.interval_s = interval_s
+        self.samples: list[dict[str, float | None]] = []
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def finish(self) -> None:
+        self.stop.set()
+        self.thread.join(timeout=max(2.0, self.interval_s * 2))
+
+    def _run(self) -> None:
+        while not self.stop.is_set():
+            merged: dict[str, float] = {}
+            for url in self.urls:
+                for name, value in parse_prometheus(scrape_text(url, self.token)).items():
+                    merged[name] = merged.get(name, 0.0) + value
+            if merged:
+                self.samples.append(extract_observations(merged))
+            self.stop.wait(self.interval_s)
+
+
+def aggregate_gauge(samples: list[dict[str, float | None]], key: str, fn: str) -> float | None:
+    values = [float(s[key]) for s in samples if s.get(key) is not None]
+    if not values:
+        return None
+    return statistics.mean(values) if fn == "avg" else max(values)
+
+
+def run_one_cap(args: argparse.Namespace, cap: int, admin_token: str, m2m_token: str) -> CapResult:
+    run_start = time.monotonic()
+    run_before: dict[str, float] = {}
+    for url in args.metrics_url:
+        for name, value in parse_prometheus(scrape_text(url, admin_token)).items():
+            run_before[name] = run_before.get(name, 0.0) + value
+    before_obs = extract_observations(run_before)
+    sampler = Sampler(args.metrics_url, admin_token, args.sample_interval_s)
+    sampler.start()
+    jobs: list[JobResult] = []
+    try:
+        payloads = [build_payload(args.builder, args.fixtures, args.worker_id, args.destination, cap * 10000 + i) for i in range(args.jobs)]
+        with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            futures = [pool.submit(submit_and_poll, args.master_url, m2m_token, p, args.poll_timeout_s) for p in payloads]
+            for future in as_completed(futures):
+                jobs.append(future.result())
+    finally:
+        sampler.finish()
+    run_after: dict[str, float] = {}
+    for url in args.metrics_url:
+        for name, value in parse_prometheus(scrape_text(url, admin_token)).items():
+            run_after[name] = run_after.get(name, 0.0) + value
+    after_obs = extract_observations(run_after)
+    wall_ms = (time.monotonic() - run_start) * 1000
+    succeeded = sum(j.status == "SUCCEEDED" for j in jobs)
+    failed = len(jobs) - succeeded
+    latencies = [j.latency_ms for j in jobs if j.latency_ms is not None and j.status == "SUCCEEDED"]
+    samples = sampler.samples
+    missing = [key for key in REQUIRED_METRICS if before_obs.get(key) is None or after_obs.get(key) is None]
+    hits = delta(before_obs.get("cache_hits"), after_obs.get("cache_hits"))
+    misses = delta(before_obs.get("cache_misses"), after_obs.get("cache_misses"))
+    hit_ratio = (hits / (hits + misses)) if hits is not None and misses is not None and hits + misses > 0 else None
+    error_counter = delta(before_obs.get("errors"), after_obs.get("errors"))
+    errors_count = float(failed) if error_counter is None else max(float(failed), error_counter)
+    return CapResult(
+        max_active_jobs=cap,
+        status="PASS" if failed == 0 and not missing else "INCOMPLETE" if failed == 0 else "FAIL",
+        wall_time_ms=wall_ms,
+        throughput_jobs_per_hour=(succeeded / (wall_ms / 3_600_000)) if wall_ms > 0 else 0,
+        succeeded=succeeded,
+        failed=failed,
+        error_rate=(failed / len(jobs)) if jobs else 1.0,
+        latency_mean_ms=statistics.mean(latencies) if latencies else None,
+        latency_p95_ms=percentile(latencies, 0.95),
+        cpu_avg_ratio=aggregate_gauge(samples, "cpu_utilization_ratio", "avg"),
+        cpu_peak_ratio=aggregate_gauge(samples, "cpu_utilization_ratio", "max"),
+        rss_avg_bytes=aggregate_gauge(samples, "rss_bytes", "avg"),
+        rss_peak_bytes=aggregate_gauge(samples, "rss_bytes", "max"),
+        disk_wait_avg_ratio=aggregate_gauge(samples, "disk_wait_ratio", "avg"),
+        cache_hits=hits,
+        cache_misses=misses,
+        cache_hit_ratio=hit_ratio,
+        downloads=delta(before_obs.get("downloads"), after_obs.get("downloads")),
+        duplicate_downloads=delta(before_obs.get("duplicate_downloads"), after_obs.get("duplicate_downloads")),
+        errors=errors_count,
+        missing_metrics=missing,
+        jobs=jobs,
+    )
+
+
+def choose_limit(results: list[CapResult], min_gain_pct: float, max_p95_ms: float | None, max_error_rate: float, max_iowait: float) -> None:
+    previous: CapResult | None = None
+    for result in results:
+        checks: list[str] = []
+        if result.status != "PASS":
+            checks.append(result.status.lower())
+        if result.error_rate > max_error_rate:
+            checks.append(f"error_rate>{max_error_rate}")
+        if max_p95_ms is not None and (result.latency_p95_ms is None or result.latency_p95_ms > max_p95_ms):
+            checks.append("p95_limit")
+        if result.disk_wait_avg_ratio is not None and result.disk_wait_avg_ratio > max_iowait:
+            checks.append("iowait_limit")
+        gain = None
+        if previous and previous.throughput_jobs_per_hour > 0:
+            gain = (result.throughput_jobs_per_hour / previous.throughput_jobs_per_hour - 1) * 100
+            if gain < min_gain_pct:
+                checks.append(f"throughput_gain<{min_gain_pct}%")
+        result.efficient = not checks
+        result.decision = "eligible" if result.efficient else "; ".join(checks)
+        previous = result
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--worker-id", default=os.getenv("PARALLEL_BENCH_WORKER_ID", ""))
+    parser.add_argument("--master-url", default=os.getenv("VELOX_MASTER_URL", "http://127.0.0.1:8000").rstrip("/"))
+    parser.add_argument("--metrics-url", action="append", default=[])
+    parser.add_argument("--set-cap-command", default=os.getenv("PARALLEL_BENCH_SET_CAP_CMD", ""))
+    parser.add_argument("--builder", type=Path, default=Path(__file__).with_name("build_real_payload.py"))
+    parser.add_argument("--fixtures", type=Path, default=Path(__file__).with_name("fixtures") / "assets.json")
+    parser.add_argument("--destination", default=os.getenv("BENCH_DESTINATION_ID", "comedy_test"))
+    parser.add_argument("--jobs", type=int, default=int(os.getenv("PARALLEL_BENCH_JOBS", "6")))
+    parser.add_argument("--poll-timeout-s", type=int, default=int(os.getenv("BENCH_POLL_TIMEOUT_S", "300")))
+    parser.add_argument("--wait-cap-timeout-s", type=int, default=120)
+    parser.add_argument("--sample-interval-s", type=float, default=2.0)
+    parser.add_argument("--min-throughput-gain-pct", type=float, default=5.0)
+    parser.add_argument("--max-p95-ms", type=float, default=None)
+    parser.add_argument("--max-error-rate", type=float, default=0.0)
+    parser.add_argument("--max-iowait-ratio", type=float, default=0.35)
+    parser.add_argument("--output", type=Path, default=Path("parallelism-certification.json"))
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--leave-cap", action="store_true", help="Do not restore MaxActiveJobs=1 after the matrix")
+    args = parser.parse_args()
+    if not args.metrics_url:
+        env_urls = os.getenv("PARALLEL_BENCH_METRICS_URL", "")
+        args.metrics_url = [u.strip() for u in env_urls.split(",") if u.strip()]
+    args.master_url = args.master_url.rstrip("/")
+    return args
+
+
+def main() -> int:
+    args = parse_args()
+    if args.jobs < 1 or not args.worker_id or not args.set_cap_command or not args.metrics_url:
+        print("live certification requires --worker-id, --set-cap-command, and --metrics-url", file=sys.stderr)
+        return 2
+    if not args.builder.is_file() or not args.fixtures.is_file():
+        print("canonical payload builder or assets fixture is missing", file=sys.stderr)
+        return 2
+    if args.dry_run:
+        print(json.dumps({"caps": CAPS, "worker_id": args.worker_id, "jobs": args.jobs, "set_cap_commands": [command_for(args.set_cap_command, c, args.worker_id, args.master_url) for c in CAPS]}, indent=2))
+        return 0
+
+    try:
+        admin_token = read_token()
+        client_id, m2m_token = provision_m2m(args.master_url, admin_token)
+    except Exception as exc:  # fail closed before changing cap
+        print(f"prerequisite failure: {exc}", file=sys.stderr)
+        return 2
+
+    results: list[CapResult] = []
+    try:
+        for cap in CAPS:
+            run_cap_command(args.set_cap_command, cap, args.worker_id, args.master_url, False)
+            wait_cap(args.master_url, admin_token, args.worker_id, cap, args.wait_cap_timeout_s)
+            results.append(run_one_cap(args, cap, admin_token, m2m_token))
+    except Exception as exc:
+        print(f"certification failed: {exc}", file=sys.stderr)
+        return 3
+    finally:
+        if not args.leave_cap:
+            try:
+                run_cap_command(args.set_cap_command, 1, args.worker_id, args.master_url, False)
+            except Exception as exc:
+                print(f"WARNING: failed to restore MaxActiveJobs=1: {exc}", file=sys.stderr)
+        delete_m2m(args.master_url, admin_token, client_id)
+
+    choose_limit(results, args.min_throughput_gain_pct, args.max_p95_ms, args.max_error_rate, args.max_iowait_ratio)
+    eligible = [r.max_active_jobs for r in results if r.efficient]
+    efficient_limit = max(eligible) if eligible else None
+    report = {
+        "schema": "velox.parallelism-certification.v1",
+        "worker_id": args.worker_id,
+        "master_url": args.master_url,
+        "caps": list(CAPS),
+        "jobs_per_cap": args.jobs,
+        "metrics_urls": args.metrics_url,
+        "protocol": {"lease_owner": "master", "singleflight_owner": "worker-cache", "cap_selection": "operator command hook"},
+        "efficient_limit": efficient_limit,
+        "certified": efficient_limit is not None and all(r.status == "PASS" for r in results),
+        "results": [{**asdict(r), "jobs": [asdict(j) for j in r.jobs]} for r in results],
+    }
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    print(json.dumps({"certified": report["certified"], "efficient_limit": efficient_limit, "output": str(args.output)}, indent=2))
+    return 0 if report["certified"] else 4
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

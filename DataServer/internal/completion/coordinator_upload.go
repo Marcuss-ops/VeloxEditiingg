@@ -13,7 +13,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"mime"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"velox-server/internal/artifacts"
@@ -141,7 +145,23 @@ func (c *coordinator) CompleteUpload(ctx context.Context, cmd CompleteUploadComm
 			UPDATE artifacts
 			   SET storage_provider = 'local', storage_key = ?, sha256 = ?, size_bytes = ?
 			 WHERE id = ?`, storageKey, cmd.ServerSHA256, uploadState.SizeBytes, uploadState.ArtifactID); uerr != nil {
-			return fmt.Errorf("completion.CompleteUpload: stamp canonical artifact: %w", uerr)
+			// Canonical blobs are content-addressed, so identical outputs can
+			// legitimately race for the same physical key. The artifact row
+			// still needs its own manifest key; materialize a hardlink/copy
+			// and retry the row update rather than leaving the commit blocked.
+			if !strings.Contains(uerr.Error(), "UNIQUE constraint failed: artifacts.storage_provider, artifacts.storage_key") {
+				return fmt.Errorf("completion.CompleteUpload: stamp canonical artifact: %w", uerr)
+			}
+			altKey := duplicateCanonicalKey(storageKey, uploadState.ArtifactID)
+			if err := materializeCanonicalDuplicate(c.blobStore, storageKey, altKey); err != nil {
+				return fmt.Errorf("completion.CompleteUpload: materialize duplicate artifact: %w", err)
+			}
+			if _, retryErr := tx.ExecContext(ctx, `
+				UPDATE artifacts
+				   SET storage_provider = 'local', storage_key = ?, sha256 = ?, size_bytes = ?
+				 WHERE id = ?`, altKey, cmd.ServerSHA256, uploadState.SizeBytes, uploadState.ArtifactID); retryErr != nil {
+				return fmt.Errorf("completion.CompleteUpload: stamp duplicate canonical artifact: %w", retryErr)
+			}
 		}
 	}
 
@@ -179,4 +199,41 @@ func (c *coordinator) CompleteUpload(ctx context.Context, cmd CompleteUploadComm
 	// so a fresh streak starts next time for THIS commit only.
 	c.recordAttemptCommitsCAS("commit:"+state.CommitID, nil)
 	return nil
+}
+
+func duplicateCanonicalKey(storageKey, artifactID string) string {
+	ext := filepath.Ext(storageKey)
+	return strings.TrimSuffix(storageKey, ext) + ".dup-" + artifactID + ext
+}
+
+func materializeCanonicalDuplicate(blobStore interface{ FinalDir() string }, sourceKey, targetKey string) error {
+	if blobStore == nil {
+		return fmt.Errorf("blob store unavailable")
+	}
+	source := filepath.Join(blobStore.FinalDir(), filepath.FromSlash(sourceKey))
+	target := filepath.Join(blobStore.FinalDir(), filepath.FromSlash(targetKey))
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	if _, err := os.Stat(target); err == nil {
+		return nil
+	}
+	if err := os.Link(source, target); err == nil {
+		return nil
+	}
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(target)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		_ = os.Remove(target)
+		return err
+	}
+	return out.Close()
 }

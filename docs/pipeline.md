@@ -8,8 +8,8 @@ API esterna**.  Velox possiede soltanto: sottomissione → dispatch → esecuzio
 → finalizzazione (con promozione artefatto) → consegna → (opzionale) retry.
 Le preoccupazioni di social-platform (OAuth, canali, token, quota, stato di
 pubblicazione, scheduling) sono di proprietà della **repo social esterna**;
-Velox parla con essa attraverso il `socialclient` (HTTP) o, in fallback,
-attraverso il provider di consegna `social_gateway`.
+Velox parla con essa attraverso il `socialclient` (HTTP) o attraverso
+il provider di consegna `social_gateway`.
 
 Un singolo job attraversa 6 fasi principali: **sottomissione → dispatch →
 esecuzione → finalizzazione (con promozione artefatto) → consegna →
@@ -350,11 +350,12 @@ Tutta la logica HTTP `POST /internal/v1/deliveries` vive qui
 
 File: `DataServer/internal/deliveries/plan_resolver.go:28`
 
-**Production mode** (`GlobalFallback=false`):
-- Richiede un piano esplicito in `job_delivery_plans` per ogni job
-- Nessun piano → `ErrNoExplicitPlan` → nessuna delivery generata
-- Il piano definisce: `destination_id`, `priority`, `retry_budget`
-- L'operatore crea il piano via SQL o tool admin
+**Contratto esplicito:**
+- Ogni job con delivery richiede un piano esplicito in `job_delivery_plans`.
+- Un job senza piano fallisce con `ErrNoExplicitPlan`/`DELIVERY_TARGET_REQUIRED`;
+  non vengono consultate destinazioni globali e non viene generata alcuna delivery.
+- Un job render-only deve dichiarare esplicitamente `render_only=true`.
+- Il piano definisce: `destination_id`, `priority`, `retry_budget`.
 
 ### Destinazioni
 
@@ -452,7 +453,7 @@ DataServer/
 │   │   ├── runner.go                     # DeliveryRunner (Run, tick, processLease)
 │   │   ├── provider.go                   # Interfaccia Provider + error sentinelle
 │   │   ├── registry.go                   # Provider registry
-│   │   ├── plan_resolver.go              # DeliveryPlanResolver (per-job o global fallback)
+│   │   ├── plan_resolver.go              # DeliveryPlanResolver (per-job explicit targets)
 │   │   ├── providers/
 │   │   │   ├── drive.go                  # DriveProvider (Deliver)
 │   │   │   ├── social_gateway.go         # SocialGatewayProvider (delega via socialclient)

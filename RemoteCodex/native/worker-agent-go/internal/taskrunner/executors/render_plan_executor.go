@@ -173,6 +173,9 @@ func validateRenderPlan(p *plan.RenderPlan, taskJobID string) error {
 		if track.Volume < 0 {
 			return fmt.Errorf("render-plan executor: audio_tracks[%d].volume must not be negative", i)
 		}
+		if track.Loop && track.DurationSeconds < 0 {
+			return fmt.Errorf("render-plan executor: audio_tracks[%d].duration_seconds must be non-negative", i)
+		}
 	}
 	endOfTimeline := totalDuration(p)
 	for i, subtitle := range p.Subtitles {

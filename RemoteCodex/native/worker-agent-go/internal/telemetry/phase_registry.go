@@ -344,7 +344,7 @@ func CanonicalizeEventSpec(spec *EventSpec) bool {
 	}
 	sharedSpec := sharedtelemetry.TelemetryEventSpec{
 		Origin: spec.Origin, Scope: spec.Scope, Component: spec.Component,
-		Action: spec.Action, SchemaVersion: sharedtelemetry.SchemaVersion,
+		Action: spec.Action, SchemaVersion: spec.SchemaVersion,
 	}
 	if err := sharedtelemetry.Catalog.Normalize(&sharedSpec); err != nil {
 		return false
@@ -356,6 +356,7 @@ func CanonicalizeEventSpec(spec *EventSpec) bool {
 	if spec.Origin != canonical.Origin || spec.Scope != canonical.Scope {
 		return false
 	}
+	spec.SchemaVersion = sharedSpec.SchemaVersion
 	spec.Phase = canonical.Phase
 	if spec.EventType == "" {
 		spec.EventType = canonical.EventType

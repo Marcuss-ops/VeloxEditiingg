@@ -2,6 +2,7 @@ package artifacts_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -21,7 +22,7 @@ func TestFinalizeVerified_StampsRetryBudgetFromPlan(t *testing.T) {
 		{"single destination retry_budget=3", []phase5Plan{{"primary", 1, 3, true}}, map[string]int{"primary": 3}},
 		{"two destinations retry_budget=2 and 5", []phase5Plan{{"primary", 1, 2, true}, {"secondary", 2, 5, true}}, map[string]int{"primary": 2, "secondary": 5}},
 		{"retry_budget=1", []phase5Plan{{"primary", 1, 1, true}}, map[string]int{"primary": 1}},
-		{"retry_budget=0 falls back", []phase5Plan{{"primary", 1, 0, true}}, map[string]int{"primary": 5}},
+		{"retry_budget=0 uses schema default", []phase5Plan{{"primary", 1, 0, true}}, map[string]int{"primary": 5}},
 		{"retry_budget=10", []phase5Plan{{"primary", 1, 10, true}}, map[string]int{"primary": 10}},
 	}
 	for _, c := range cases {
@@ -29,7 +30,7 @@ func TestFinalizeVerified_StampsRetryBudgetFromPlan(t *testing.T) {
 			db := openPropagationDB(t)
 			seedPhase5Fixture(t, db, phase5Fixture{JobID: "J-prop", WorkerID: "w", LeaseID: "l", Revision: 1, AttemptNumber: 1, ArtifactID: "art-prop", UploadID: "up-prop"})
 			seedDeliveryPlans(t, db, "J-prop", c.plans)
-			resolver := deliveries.NewSQLiteDeliveryPlanResolver(db, false)
+			resolver := deliveries.NewSQLiteDeliveryPlanResolver(db)
 			runFinalize(t, db, resolver, artifacts.FinalizeVerifiedCommand{UploadID: "up-prop", ArtifactID: "art-prop", JobID: "J-prop", WorkerID: "w", LeaseID: "l", AttemptNumber: 1, ExpectedRevision: 1, StorageProvider: "local", StorageKey: "artifacts/J-prop/1", SHA256: "deadbeef", SizeBytes: 1024, MIMEType: "video/mp4", VerifiedAt: time.Now().UTC()})
 			for destID, expected := range c.expected {
 				var got int
@@ -44,30 +45,22 @@ func TestFinalizeVerified_StampsRetryBudgetFromPlan(t *testing.T) {
 	}
 }
 
-func TestFinalizeVerified_FallbackMaxAttemptsWhenNoResolver(t *testing.T) {
+func TestFinalizeVerified_MissingPlanFailsClosedWithoutDeliveries(t *testing.T) {
 	db := openPropagationDB(t)
-	seedPhase5Fixture(t, db, phase5Fixture{JobID: "J-fb", WorkerID: "w", LeaseID: "l", Revision: 1, AttemptNumber: 1, ArtifactID: "art-fb", UploadID: "up-fb"})
-	resolver := deliveries.NewSQLiteDeliveryPlanResolver(db, true)
-	runFinalize(t, db, resolver, artifacts.FinalizeVerifiedCommand{UploadID: "up-fb", ArtifactID: "art-fb", JobID: "J-fb", WorkerID: "w", LeaseID: "l", AttemptNumber: 1, ExpectedRevision: 1, StorageProvider: "local", StorageKey: "artifacts/J-fb/1", SHA256: "deadbeef", SizeBytes: 1024, MIMEType: "video/mp4", VerifiedAt: time.Now().UTC()})
-	rows, err := db.Query(`SELECT destination_id, max_attempts FROM job_deliveries WHERE artifact_id = ? ORDER BY destination_id`, "art-fb")
-	if err != nil {
+	seedPhase5Fixture(t, db, phase5Fixture{JobID: "J-no-plan", WorkerID: "w", LeaseID: "l", Revision: 1, AttemptNumber: 1, ArtifactID: "art-no-plan", UploadID: "up-no-plan"})
+	resolver := deliveries.NewSQLiteDeliveryPlanResolver(db)
+	reader := store.NewSQLiteArtifactReader(db)
+	writer := artifacts.NewSQLiteFinalizeWriter(db, reader, resolver)
+	_, err := writer.FinalizeVerified(context.Background(), artifacts.FinalizeVerifiedCommand{UploadID: "up-no-plan", ArtifactID: "art-no-plan", JobID: "J-no-plan", WorkerID: "w", LeaseID: "l", AttemptNumber: 1, ExpectedRevision: 1, StorageProvider: "local", StorageKey: "artifacts/J-no-plan/1", SHA256: "deadbeef", SizeBytes: 1024, MIMEType: "video/mp4", VerifiedAt: time.Now().UTC()})
+	if err == nil || !errors.Is(err, deliveries.ErrNoExplicitPlan) {
+		t.Fatalf("missing explicit plan error = %v, want ErrNoExplicitPlan", err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM job_deliveries WHERE artifact_id='art-no-plan'`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
-	count := 0
-	for rows.Next() {
-		var d string
-		var m int
-		if err := rows.Scan(&d, &m); err != nil {
-			t.Fatal(err)
-		}
-		count++
-		if m != 5 {
-			t.Errorf("fallback %s max_attempts=%d want 5", d, m)
-		}
-	}
-	if count != 2 {
-		t.Fatalf("expected 2 fallback rows, got %d", count)
+	if count != 0 {
+		t.Fatalf("missing explicit plan created %d deliveries, want 0", count)
 	}
 }
 

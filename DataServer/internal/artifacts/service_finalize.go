@@ -51,7 +51,7 @@ func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*s
 	// Gated on the env var VELOX_FFPROBE_VERIFY_ON_FINALIZE=true —
 	// no-op when unset. Mirrors the resolution order of
 	// SQLiteFinalizeWriter::resolveDeliveryDestinationsTx (override
-	// → job_delivery_plans WHERE enabled=1 → fallback all-enabled).
+	// → explicit job_delivery_plans WHERE enabled=1).
 	if err := s.runPreCommitFFProbeInvariant(ctx, cmd.JobID, cmd.DestinationID,
 		filepath.Join(s.blobStore.FinalDir(), filepath.FromSlash(storageKey)),
 	); err != nil {

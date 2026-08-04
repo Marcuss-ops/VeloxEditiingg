@@ -13,17 +13,17 @@ func ValidateTaskPayload(raw map[string]interface{}) error {
 	if _, present := raw["render_plan_version"]; present {
 		return ValidateVersionedRenderPlan(raw)
 	}
-	if version, ok := raw["version"].(string); ok {
-		if version == LegacyRenderPlanVersion {
-			return validateLegacyV1Payload(raw)
-		}
-		return planError(ERR_PLAN_UNSUPPORTED_VERSION, "version", fmt.Sprintf("unsupported legacy version %q", version))
-	}
 	// The current master emits payload_contract_version while the fleet
 	// migrates to the compiled RenderPlan envelope. This is still an
 	// explicitly versioned compatibility path and is temporary by design.
 	if version, ok := numericInt(raw["payload_contract_version"]); ok && version > 0 {
 		return validateLegacyPayloadContract(raw, version)
+	}
+	if version, ok := raw["version"].(string); ok {
+		if version == LegacyRenderPlanVersion {
+			return validateLegacyV1Payload(raw)
+		}
+		return planError(ERR_PLAN_UNSUPPORTED_VERSION, "version", fmt.Sprintf("unsupported legacy version %q", version))
 	}
 	return planError(ERR_PLAN_REQUIRED_FIELD, "render_plan_version", "must be declared; legacy payloads require an explicit version")
 }

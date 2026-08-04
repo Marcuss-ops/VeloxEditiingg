@@ -2,6 +2,7 @@ package enqueue
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -107,6 +108,55 @@ func TestBuildNarratedClipPayloadAddsRandomTransitionSoundEffects(t *testing.T) 
 	}
 	if sfxIndex != len(wantOffsets) {
 		t.Fatalf("sfx count = %d, want %d", sfxIndex, len(wantOffsets))
+	}
+}
+
+func TestBuildNarratedClipPayloadRandomizesStockPoolPerJob(t *testing.T) {
+	stock := make([]interface{}, 0, 60)
+	for i := 0; i < 60; i++ {
+		id := fmt.Sprintf("tyson-stock-%02d", i)
+		stock = append(stock, map[string]interface{}{
+			"asset_id": id, "url": "velox-asset://" + id, "duration_ms": 7000,
+		})
+	}
+
+	makeScene := func() map[string]interface{} {
+		return map[string]interface{}{
+			"clip":      map[string]interface{}{"asset_id": "tyson-clip", "url": "velox-asset://tyson-clip", "duration_ms": 5000},
+			"stock":     stock,
+			"voiceover": map[string]interface{}{"asset_id": "tyson-voice", "url": "velox-asset://tyson-voice", "duration_ms": 7000},
+		}
+	}
+
+	permutations := make(map[string]struct{}, 10)
+	for i := 0; i < 10; i++ {
+		_, items, _, _, _, err := buildNarratedClipPayload([]map[string]interface{}{makeScene()}, narratedClipOptions{
+			randomSeed: fmt.Sprintf("tyson-job-%02d", i),
+		})
+		if err != nil {
+			t.Fatalf("job %d: %v", i, err)
+		}
+		if len(items) != 2 {
+			t.Fatalf("job %d produced %d items, want one stock segment and one clip", i, len(items))
+		}
+		permutations[items[0]["asset_id"].(string)] = struct{}{}
+	}
+	if len(permutations) < 2 {
+		t.Fatalf("10 job seeds selected the same first stock asset: %v", permutations)
+	}
+
+	// Retries of the same job must keep the same order so a retry can reuse
+	// the same cache keys and does not change the rendered composition.
+	_, first, _, _, _, err := buildNarratedClipPayload([]map[string]interface{}{makeScene()}, narratedClipOptions{randomSeed: "tyson-job-retry"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, second, _, _, _, err := buildNarratedClipPayload([]map[string]interface{}{makeScene()}, narratedClipOptions{randomSeed: "tyson-job-retry"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first[0]["asset_id"] != second[0]["asset_id"] {
+		t.Fatalf("same job seed changed stock selection: %v != %v", first[0]["asset_id"], second[0]["asset_id"])
 	}
 }
 

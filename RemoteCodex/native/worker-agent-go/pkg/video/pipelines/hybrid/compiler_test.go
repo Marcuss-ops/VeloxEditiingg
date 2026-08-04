@@ -310,6 +310,45 @@ func TestCompile_BackgroundMusic_RoleEnablesLoopFadeDucking(t *testing.T) {
 	}
 }
 
+func TestCompile_BackgroundMusic_WithoutDurationDefersToEngineVideoDuration(t *testing.T) {
+	input := map[string]interface{}{
+		"items": []interface{}{
+			map[string]interface{}{
+				"type":     "video",
+				"url":      "https://example.com/video.mp4",
+				"duration": 85.0,
+			},
+		},
+		"audio_tracks": []interface{}{
+			map[string]interface{}{
+				"source_url": "https://example.com/music.mp3",
+				"role":       "background_music",
+				// Deliberately omit duration_seconds. The C++ engine owns
+				// the final frame-accurate video duration and must bind the
+				// loop to that value rather than accepting an infinite mix.
+			},
+		},
+	}
+
+	renderPlan, err := Compile(context.Background(), "job-bgm-implicit-duration", input, "/tmp/out.mp4", nil)
+	if err != nil {
+		t.Fatalf("Compile(background music without duration): %v", err)
+	}
+	if len(renderPlan.AudioTracks) != 1 {
+		t.Fatalf("audio tracks = %d, want 1", len(renderPlan.AudioTracks))
+	}
+	track := renderPlan.AudioTracks[0]
+	if !track.Loop {
+		t.Fatal("background music without explicit config must be looped")
+	}
+	if track.DurationSeconds != 0 {
+		t.Fatalf("DurationSeconds = %v, want 0 so engine applies final video duration", track.DurationSeconds)
+	}
+	if got := renderPlan.Timeline[0].DurationSeconds; got != 85.0 {
+		t.Fatalf("video duration = %v, want 85", got)
+	}
+}
+
 func TestCompile_VoiceoverRole_NoAutoLoopFadeDucking(t *testing.T) {
 	input := map[string]interface{}{
 		"items": []interface{}{

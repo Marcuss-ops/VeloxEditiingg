@@ -13,9 +13,8 @@
 //
 // Why a separate reader (vs wiring the resolver through Service):
 // CountExpectedDeliveries mirrors the writer's resolution order
-// (job_delivery_plans WHERE enabled=1, else fall back to all-enabled
-// delivery_destinations) so the gate and the INSERT agree on
-// exactly the same count without sharing a resolver instance.
+// (explicit override or enabled per-job job_delivery_plans) so the gate
+// and the INSERT agree without selecting global destinations.
 // Mirroring is small and read-only; if it ever drifts from the
 // writer, the gate will fire ErrFFProbeAudioCountMismatch and fail
 // CI loudly.
@@ -48,10 +47,8 @@ type JobDeliveryCounter interface {
 	//     branch 1).
 	//   - job_delivery_plans WHERE job_id = ? AND enabled = 1 has
 	//     ≥1 row → that count (production plan path).
-	//   - Otherwise, count of delivery_destinations WHERE enabled = 1
-	//     (legacy fallback path — only relevant in tests or dev
-	//     mode; production GlobalFallback is false so the writer
-	//     will reach the writer's ErrNoExplicitPlan branch).
+	//   - Otherwise, no explicit plan exists and finalization must fail
+	//     closed; global delivery_destinations are never selected.
 	//
 	// Mirror policy: this method intentionally mirrors the
 	// SQLiteFinalizeWriter's resolution order so the gate's

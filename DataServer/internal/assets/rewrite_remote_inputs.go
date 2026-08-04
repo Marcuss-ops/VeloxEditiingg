@@ -252,7 +252,13 @@ func rewriteCanonicalAssetMap(ctx context.Context, s *AssetService, item map[str
 			return fmt.Errorf("lookup canonical asset %q: %w", assetID, err)
 		}
 		if registered == nil || registered.AssetID != assetID {
-			return fmt.Errorf("canonical asset %q is not registered", assetID)
+			// Drive-backed canonical references are materialized lazily by the
+			// worker-assets endpoint. This keeps folder imports lightweight:
+			// the enqueue path does not have to stage/hash every Drive file
+			// before dispatching the job.
+			if !isDriveAssetID(assetID) {
+				return fmt.Errorf("canonical asset %q is not registered", assetID)
+			}
 		}
 		item["asset_id"] = assetID
 		item["url"] = VeloxAssetScheme + "://" + assetID
@@ -268,6 +274,20 @@ func rewriteCanonicalAssetMap(ctx context.Context, s *AssetService, item map[str
 	item["asset_id"] = asset.AssetID
 	item["url"] = asset.Reference()
 	return nil
+}
+
+func isDriveAssetID(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) < 16 || len(value) > 128 {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func rewriteFirstMapField(ctx context.Context, s *AssetService, item map[string]interface{}, kind inputsecurity.Kind, keys ...string) error {

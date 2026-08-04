@@ -175,7 +175,7 @@ func parseDeliveryPlanPayload(payload map[string]interface{}) ([]deliveryPlanEnt
 
 // marshalEntryMetadata JSON-encodes the canonical Entry.Metadata
 // map into the SQLite string column. Nil metadata maps to "{}"
-// (the legacy fallback behaviour pinned by the previous store
+// (the legacy alias behaviour pinned by the previous store
 // parser; this preserves the no-metadata rejection path the
 // parse-time tests relied on).
 func marshalEntryMetadata(metadata map[string]interface{}) (string, error) {
@@ -188,5 +188,3 @@ func marshalEntryMetadata(metadata map[string]interface{}) (string, error) {
 	}
 	return string(data), nil
 }
-
-

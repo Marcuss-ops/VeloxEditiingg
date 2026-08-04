@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"velox-server/internal/deliverycontract"
 )
 
 // SQLiteJobDeliveryCounter is the production implementation of the
@@ -63,9 +65,8 @@ func (c *SQLiteJobDeliveryCounter) CountExpectedDeliveries(ctx context.Context, 
 		jobID,
 	).Scan(&n); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			// Defensive: COUNT(*) never returns ErrNoRows; treat
-			// any such driver quirk as zero-plan (fall through to
-			// fallback below so we don't silently miscount).
+			// Defensive: COUNT(*) never returns ErrNoRows; treat it
+			// as an absent explicit plan and fail closed below.
 			n = 0
 		} else {
 			return 0, fmt.Errorf("store: JobDeliveryCounter.CountExpectedDeliveries plans count: %w", err)
@@ -74,17 +75,7 @@ func (c *SQLiteJobDeliveryCounter) CountExpectedDeliveries(ctx context.Context, 
 	if n > 0 {
 		return n, nil
 	}
-	// Branch 2: legacy fallback — all-enabled global destinations.
-	// Mirrors the writer's `delivery_destinations WHERE enabled = 1`
-	// SELECT in resolveDeliveryDestinationsTx branch 3.
-	if err := c.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM delivery_destinations WHERE enabled = 1`,
-	).Scan(&n); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("store: JobDeliveryCounter.CountExpectedDeliveries fallback count: %w", err)
-	}
-	return n, nil
+	// No explicit plan exists. Never count unrelated global
+	// delivery_destinations: finalization must fail closed.
+	return 0, fmt.Errorf("%w: job_id=%s", deliverycontract.ErrNoExplicitPlan, jobID)
 }
-

@@ -219,13 +219,14 @@ func TestFinalize_DeliveryIsIdempotent(t *testing.T) {
 	require.NoError(t, env.db.QueryRow(`SELECT COUNT(*) FROM job_deliveries WHERE artifact_id=? AND destination_id='primary'`, sess.ArtifactID).Scan(&n))
 	require.Equal(t, 1, n)
 
-	// Manually re-run the delivery INSERT to verify WHERE NOT EXISTS
-	// makes it a no-op.
+	// Manually re-run the delivery INSERT to verify the unique
+	// (artifact_id, destination_id) constraint makes it a no-op.
 	now := env.clock.Now().UTC().Format(time.RFC3339)
-	_, err = env.db.Exec(`INSERT INTO job_deliveries (artifact_id, destination_id, status, created_at)
-		SELECT ?, 'primary', 'PENDING', ?
-		WHERE NOT EXISTS (SELECT 1 FROM job_deliveries WHERE artifact_id=? AND destination_id='primary')`,
-		sess.ArtifactID, now, sess.ArtifactID)
+	_, err = env.db.Exec(`INSERT INTO job_deliveries
+		(delivery_id, artifact_id, destination_id, status, max_attempts, idempotency_key, created_at, updated_at)
+		VALUES (?, ?, 'primary', 'PENDING', 5, ?, ?, ?)
+		ON CONFLICT(artifact_id, destination_id) DO NOTHING`,
+		"duplicate-delivery", sess.ArtifactID, sess.ArtifactID+"_primary", now, now)
 	require.NoError(t, err)
 	require.NoError(t, env.db.QueryRow(`SELECT COUNT(*) FROM job_deliveries WHERE artifact_id=? AND destination_id='primary'`, sess.ArtifactID).Scan(&n))
 	require.Equal(t, 1, n)

@@ -9,7 +9,7 @@ import (
 	"velox-server/internal/telemetry"
 )
 
-func TestResolvePlanRecordsRealPlanAndFallbackQueries(t *testing.T) {
+func TestResolvePlanRecordsExplicitPlanQueriesAndRejectsMissingPlan(t *testing.T) {
 	db, err := store.NewSQLiteStore(t.TempDir() + "/resolver-metrics.sqlite")
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
@@ -35,7 +35,7 @@ func TestResolvePlanRecordsRealPlanAndFallbackQueries(t *testing.T) {
 		t.Fatalf("seed job delivery plan: %v", err)
 	}
 
-	resolver := NewSQLiteDeliveryPlanResolver(db.DB(), true)
+	resolver := NewSQLiteDeliveryPlanResolver(db.DB())
 	ctx, metrics := telemetry.WithEnqueueMetrics(context.Background(), false)
 
 	planned, err := resolver.ResolvePlan(ctx, "planned-job", "")
@@ -46,22 +46,15 @@ func TestResolvePlanRecordsRealPlanAndFallbackQueries(t *testing.T) {
 		t.Fatalf("explicit plan = %#v, want one destination", planned)
 	}
 
-	fallback, err := resolver.ResolvePlan(ctx, "fallback-job", "")
-	if err != nil {
-		t.Fatalf("ResolvePlan fallback: %v", err)
-	}
-	if fallback == nil || len(fallback.Destinations) != 1 {
-		t.Fatalf("fallback plan = %#v, want one destination", fallback)
+	if _, err := resolver.ResolvePlan(ctx, "missing-plan-job", ""); err == nil {
+		t.Fatal("missing explicit plan must fail closed")
 	}
 
 	snapshot := metrics.Snapshot()
-	if snapshot.ResolverQueries != 3 {
-		t.Fatalf("resolver query count = %d, want 3 (plans + plans + fallback)", snapshot.ResolverQueries)
+	if snapshot.ResolverQueries != 2 {
+		t.Fatalf("resolver query count = %d, want 2", snapshot.ResolverQueries)
 	}
 	if snapshot.ResolverPlanQueries != 2 {
 		t.Fatalf("plan query count = %d, want 2", snapshot.ResolverPlanQueries)
-	}
-	if snapshot.ResolverFallbackQueries != 1 {
-		t.Fatalf("fallback query count = %d, want 1", snapshot.ResolverFallbackQueries)
 	}
 }

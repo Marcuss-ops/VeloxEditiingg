@@ -166,10 +166,8 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	assetSvc := voiceoverassets.NewAssetService(assetRepo, p.BlobStore, assetRegistry, clock.System{})
 
 	// ── Enqueuer (needs atomic creator + jobs repository + asset service) ──
-	// Production requires an explicit delivery plan. The same switch that
-	// permits the resolver's dev fallback also relaxes enqueue-time validation,
-	// so creation and finalization can never disagree about plan requirements.
-	t.AtomicCreator.WithDeliveryPlanPolicy(!cfg.Runtime.DeliveryGlobalFallback)
+	// Delivery routing is explicit: there is no global destination fallback.
+	t.AtomicCreator.WithDeliveryPlanPolicy(true)
 
 	// PR-delivery-plan-precondition: wire the real DB-backed delivery plan
 	// resolver into the Enqueuer. ResolvePlan (NOT ResolveDestinations) is
@@ -177,7 +175,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	// propagated to job.MaxRetries upfront, eliminating the late re-resolve
 	// in FinalizeVerified. The local adapter bridges the concrete deliveries
 	// resolver to the enqueue.PlanResolver interface (see type above).
-	planResolver := deliveries.NewSQLiteDeliveryPlanResolver(p.SQLite.DB(), cfg.Runtime.DeliveryGlobalFallback)
+	planResolver := deliveries.NewSQLiteDeliveryPlanResolver(p.SQLite.DB())
 	planAdapter := &deliveryPlanResolverAdapter{inner: planResolver}
 	enqueuer := enqueue.NewEnqueuer(t.AtomicCreator, j.Repository, assetSvc, planAdapter)
 
@@ -224,7 +222,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	// ── Register modules ────────────────────────────────────────────
 	healthMod := app.NewHealthModule()
 	registry.Register(healthMod)
-	workersModule := app.NewWorkersModule(cfg, w.Registry, w.Lifecycle, w.UpdateHandler, auth, assetSvc, p.BlobStore)
+	workersModule := app.NewWorkersModule(cfg, w.Registry, w.Lifecycle, w.UpdateHandler, auth, assetSvc, p.BlobStore, driveMod.Service())
 	if p.SQLite != nil {
 		reader := api.NewSQLDBReader(p.SQLite.DB())
 		if reader != nil {

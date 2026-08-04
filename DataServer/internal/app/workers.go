@@ -11,6 +11,7 @@ import (
 	"velox-server/internal/handlers/remote/workers/assets"
 	"velox-server/internal/handlers/remote/workers/lifecycle"
 	"velox-server/internal/handlers/server/api"
+	driveintegration "velox-server/internal/integrations/drive"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 )
@@ -49,17 +50,21 @@ type WorkersModule struct {
 }
 
 // NewWorkersModule creates a new workers module.
-func NewWorkersModule(cfg *config.Config, reg *workersreg.Registry, lifecycle *lifecycle.Handler, updateHandler *workersapi.WorkerUpdateHandler, adminAuth gin.HandlerFunc, assetSvc *voiceoverassets.AssetService, blobStore store.BlobStore) *WorkersModule {
+func NewWorkersModule(cfg *config.Config, reg *workersreg.Registry, lifecycle *lifecycle.Handler, updateHandler *workersapi.WorkerUpdateHandler, adminAuth gin.HandlerFunc, assetSvc *voiceoverassets.AssetService, blobStore store.BlobStore, driveSvcs ...*driveintegration.Service) *WorkersModule {
 	var tokenMgr *workersreg.TokenManager
 	if lifecycle != nil {
 		tokenMgr = lifecycle.GetTokenManager()
+	}
+	var driveSvc *driveintegration.Service
+	if len(driveSvcs) > 0 {
+		driveSvc = driveSvcs[0]
 	}
 	return &WorkersModule{
 		reg:                 reg,
 		workerLifecycle:     lifecycle,
 		workerUpdateHandler: updateHandler,
 		adminAuth:           adminAuth,
-		workerAssetHandler:  assets.NewHandler(cfg, tokenMgr, assetSvc, blobStore),
+		workerAssetHandler:  assets.NewHandler(cfg, tokenMgr, assetSvc, blobStore, driveSvc),
 		workersHandler:      api.NewWorkersHandler(reg),
 		adminWorkersHandler: api.NewAdminWorkersHandler(reg),
 		protectedAssetsAuth: api.WorkerOrAdminAuthMiddleware(cfg, tokenMgr),
@@ -209,30 +214,32 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 	}
 
 	// PR 4 — canonical worker read-model endpoints.
-	// Protected by admin auth (local IP + read-only GET bypass for dashboards).
+	// The protected-assets snapshot is consumed by workers with their worker
+	// session token, so it must not be nested under the admin-only group.
 	if m.workersHandler != nil {
 		v1Workers := r.Group("/api/v1/workers")
-		if m.adminAuth != nil {
-			v1Workers.Use(m.adminAuth)
-		}
-		v1Workers.GET("", m.workersHandler.ListWorkers())
 		if m.protectedAssetsHandler != nil {
 			v1Workers.GET("/cache/protected-assets", m.protectedAssetsAuth, m.protectedAssetsHandler.Snapshot())
 		}
-		v1Workers.GET("/:worker_id", m.workersHandler.GetWorker())
+		adminWorkers := r.Group("/api/v1/workers")
+		if m.adminAuth != nil {
+			adminWorkers.Use(m.adminAuth)
+		}
+		adminWorkers.GET("", m.workersHandler.ListWorkers())
+		adminWorkers.GET("/:worker_id", m.workersHandler.GetWorker())
 		// Per-worker metrics / sessions / events read endpoints
 		// (RW-PROD-005). Each is registered only when the
 		// corresponding handler was wired via the Set* setters so
 		// a no-store configuration (tests, partial bootstrap)
 		// does not register routes that would 503 every request.
 		if m.metricsHandler != nil {
-			v1Workers.GET("/:worker_id/metrics", m.metricsHandler.ListWorkerMetrics())
+			adminWorkers.GET("/:worker_id/metrics", m.metricsHandler.ListWorkerMetrics())
 		}
 		if m.sessionsHandler != nil {
-			v1Workers.GET("/:worker_id/sessions", m.sessionsHandler.ListWorkerSessions())
+			adminWorkers.GET("/:worker_id/sessions", m.sessionsHandler.ListWorkerSessions())
 		}
 		if m.eventsHandler != nil {
-			v1Workers.GET("/:worker_id/events", m.eventsHandler.ListWorkerEvents())
+			adminWorkers.GET("/:worker_id/events", m.eventsHandler.ListWorkerEvents())
 		}
 	}
 

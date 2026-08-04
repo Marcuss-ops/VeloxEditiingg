@@ -35,6 +35,7 @@ func buildCalendarJobPayload(event *store.CalendarEvent, jobRunID string) map[st
 		"status":               "PENDING",
 		"submitted_via":        "calendar",
 		"source":               event.Source,
+		"render_only":          true,
 		"external_id":          event.ExternalID,
 		"calendar_event_id":    event.ID,
 		"calendar_date":        event.Date,

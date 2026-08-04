@@ -274,7 +274,19 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 		if h.sqliteDB != nil {
 			db = h.sqliteDB.DB()
 		}
-		normalized, err := enqueue.BuildSceneImagePayloadForMaster(payload, h.dataDir, cfg.Runtime.VideosDir, resolvedMasterURL, db)
+		// `generate-with-images` is also used by the canonical clip/stock
+		// intake. Preserve that explicit mode instead of forcing the image
+		// builder (which drops the narrated `items` timeline required by
+		// hybrid.v1).
+		var (
+			normalized map[string]interface{}
+			err        error
+		)
+		if strings.EqualFold(firstStringValue(payload, "video_mode"), "clip_stock") {
+			normalized, err = enqueue.BuildClipPayloadForMaster(payload, h.dataDir, cfg.Runtime.VideosDir, resolvedMasterURL, db)
+		} else {
+			normalized, err = enqueue.BuildSceneImagePayloadForMaster(payload, h.dataDir, cfg.Runtime.VideosDir, resolvedMasterURL, db)
+		}
 		if err != nil {
 			if assetErr, ok := voiceoverassets.AsAcquisitionError(err); ok {
 				c.JSON(http.StatusUnprocessableEntity, gin.H{
@@ -319,7 +331,7 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 			"correlation_id":      response["correlation_id"],
 			"job_type":            response["job_type"],
 			"status":              response["status"],
-			"video_mode":          scriptSceneMode,
+			"video_mode":          firstStringValue(normalized, "video_mode"),
 			"video_name":          normalized["video_name"],
 			"output_path":         normalized["output_path"],
 			"drive_output_folder": normalized["drive_output_folder"],

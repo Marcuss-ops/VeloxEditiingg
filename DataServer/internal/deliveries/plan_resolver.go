@@ -1,12 +1,10 @@
-// sql-allowlist: deliveries SQLiteDeliveryPlanResolver — per-job delivery_plan lookup (job_delivery_plans + delivery_destinations fallback). Consumed by artifacts.FinalizeVerified at the point of job_deliveries INSERT. Read-only contract; future refactor candidate for internal/store typed repos.
+// sql-allowlist: deliveries SQLiteDeliveryPlanResolver — per-job delivery_plan lookup (job_delivery_plans only). Consumed by artifact finalization at the point of job_deliveries INSERT.
 
 // Package deliveries / plan_resolver.go — PR delivery plan resolver.
 //
 // SQLiteDeliveryPlanResolver implements artifacts.DeliveryPlanResolver by
-// querying job_delivery_plans first. In production, it REQUIRES an explicit
-// plan — no global delivery_destinations fallback is performed. A
-// configurable dev-mode flag (GlobalFallback) restores the legacy fallback
-// for development environments.
+// querying the explicit per-job job_delivery_plans table. A job without an
+// explicit plan is never routed to an unrelated global destination.
 //
 // Phase 5.1-5.5: per-plan retry_budget. Each row in job_delivery_plans
 // carries an integer retry_budget; the resolver exposes it via
@@ -20,19 +18,15 @@ package deliveries
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 
-	"velox-server/internal/artifacts"
+	"velox-server/internal/deliverycontract"
 	"velox-server/internal/telemetry"
 )
 
-// ErrNoExplicitPlan is returned when no per-job delivery plan exists and
-// the global fallback to all enabled delivery_destinations is disabled.
-// The caller (typically FinalizeVerified) should surface this as a
-// WAITING_FOR_PLAN status so operators can create the missing plan rows.
-var ErrNoExplicitPlan = errors.New("deliveries: no explicit delivery plan and global fallback is disabled")
+// ErrNoExplicitPlan is returned when no per-job delivery plan exists.
+var ErrNoExplicitPlan = deliverycontract.ErrNoExplicitPlan
 
 // PlanContext is the per-destination slice of the resolver's result.
 // One row per (destination_id, retry_budget, priority). The runner
@@ -63,21 +57,19 @@ type Plan struct {
 	ResolvedAt   time.Time
 }
 
-// SQLiteDeliveryPlanResolver implements artifacts.DeliveryPlanResolver
-// against a *sql.DB. It queries job_delivery_plans first; only falls back
-// to all enabled delivery_destinations when GlobalFallback is true.
+// SQLiteDeliveryPlanResolver implements deliverycontract.DeliveryPlanResolver
+// against a *sql.DB. It queries only explicit job_delivery_plans rows.
 type SQLiteDeliveryPlanResolver struct {
-	db             *sql.DB
-	GlobalFallback bool // true = dev mode: fall back to all delivery_destinations
+	db *sql.DB
 }
 
 // NewSQLiteDeliveryPlanResolver creates a resolver backed by *sql.DB.
-// globalFallback enables the legacy global-destinations fallback (dev only).
-func NewSQLiteDeliveryPlanResolver(db *sql.DB, globalFallback bool) *SQLiteDeliveryPlanResolver {
-	return &SQLiteDeliveryPlanResolver{db: db, GlobalFallback: globalFallback}
+// Every delivery must be present in the explicit per-job plan.
+func NewSQLiteDeliveryPlanResolver(db *sql.DB) *SQLiteDeliveryPlanResolver {
+	return &SQLiteDeliveryPlanResolver{db: db}
 }
 
-// ResolveDestinations implements artifacts.DeliveryPlanResolver.
+// ResolveDestinations implements deliverycontract.DeliveryPlanResolver.
 //
 // Returns one artifacts.DeliveryDestination per resolved target so the
 // finalize writer can stamp durable max_attempts onto job_deliveries
@@ -86,15 +78,9 @@ func NewSQLiteDeliveryPlanResolver(db *sql.DB, globalFallback bool) *SQLiteDeliv
 // non-positive retry_budget — covers pre-migration-069 plans read
 // from SQLite with the implicit DEFAULT.
 //
-// Resolution order:
-//
-//  1. Look for per-job plans in job_delivery_plans WHERE enabled = 1.
-//     Returns these only (exact match for the "piano esplicito").
-//  2. If no per-job plans exist AND GlobalFallback is true, fall back to
-//     all enabled delivery_destinations (legacy dev mode).
-//  3. If no per-job plans exist AND GlobalFallback is false, return
-//     ErrNoExplicitPlan (production mode — operator must create a plan).
-func (r *SQLiteDeliveryPlanResolver) ResolveDestinations(ctx context.Context, jobID, artifactID string) ([]artifacts.DeliveryDestination, error) {
+// Resolution: look for enabled per-job plans and return ErrNoExplicitPlan
+// when none exist. No global destination query is permitted.
+func (r *SQLiteDeliveryPlanResolver) ResolveDestinations(ctx context.Context, jobID, artifactID string) ([]deliverycontract.DeliveryDestination, error) {
 	plan, err := r.ResolvePlan(ctx, jobID, artifactID)
 	if err != nil {
 		return nil, err
@@ -102,7 +88,7 @@ func (r *SQLiteDeliveryPlanResolver) ResolveDestinations(ctx context.Context, jo
 	if plan == nil {
 		return nil, nil
 	}
-	out := make([]artifacts.DeliveryDestination, 0, len(plan.Destinations))
+	out := make([]deliverycontract.DeliveryDestination, 0, len(plan.Destinations))
 	for _, pc := range plan.Destinations {
 		budget := pc.RetryBudget
 		if budget <= 0 {
@@ -115,7 +101,7 @@ func (r *SQLiteDeliveryPlanResolver) ResolveDestinations(ctx context.Context, jo
 			// delivery on attempt 1.
 			budget = 5
 		}
-		out = append(out, artifacts.DeliveryDestination{
+		out = append(out, deliverycontract.DeliveryDestination{
 			DestinationID: pc.DestinationID,
 			MaxAttempts:   budget,
 		})
@@ -179,35 +165,6 @@ func (r *SQLiteDeliveryPlanResolver) ResolvePlan(ctx context.Context, jobID, art
 		return plan, nil
 	}
 
-	// Step 2: if GlobalFallback is disabled (production), require an explicit plan.
-	if !r.GlobalFallback {
-		return nil, fmt.Errorf("%w: job_id=%s (create a job_delivery_plans row for this job)",
-			ErrNoExplicitPlan, jobID)
-	}
-
-	// Step 3: fallback — all enabled global destinations (dev mode only).
-	telemetry.RecordEnqueueResolverQuery(ctx, "fallback")
-	fallback, err := r.db.QueryContext(ctx,
-		`SELECT destination_id FROM delivery_destinations WHERE enabled = 1
-		 ORDER BY destination_id ASC`)
-	if err != nil {
-		return nil, fmt.Errorf("deliveries: ResolvePlan fallback query: %w", err)
-	}
-	defer fallback.Close()
-
-	for fallback.Next() {
-		var id string
-		if err := fallback.Scan(&id); err != nil {
-			return nil, fmt.Errorf("deliveries: ResolvePlan fallback scan: %w", err)
-		}
-		// Default retry_budget = 5 (matches DefaultRunnerConfig.MaxAttempts)
-		// when no explicit plan is in effect (dev mode).
-		plan.Destinations = append(plan.Destinations, PlanContext{
-			DestinationID: id,
-			Priority:      100,
-			RetryBudget:   5,
-			AcquiredAt:    plan.ResolvedAt,
-		})
-	}
-	return plan, fallback.Err()
+	return nil, fmt.Errorf("%w: job_id=%s (create a job_delivery_plans row for this job)",
+		deliverycontract.ErrNoExplicitPlan, jobID)
 }

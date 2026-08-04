@@ -7,6 +7,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"velox-server/internal/deliverycontract"
 )
 
 // PostgresJobDeliveryCounter is the pgx-native Postgres implementation
@@ -66,10 +68,8 @@ func (c *PostgresJobDeliveryCounter) CountExpectedDeliveries(ctx context.Context
 		jobID,
 	).Scan(&n); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			// Defensive: COUNT(*) should never return ErrNoRows,
-			// but pgx drivers can surface it in pathological cases;
-			// treat as zero-plan and fall through to the fallback
-			// branch below so we don't silently miscount.
+			// Defensive: COUNT(*) should never return ErrNoRows;
+			// treat it as an absent explicit plan and fail closed below.
 			n = 0
 		} else {
 			return 0, fmt.Errorf("store: JobDeliveryCounter.CountExpectedDeliveries plans count: %w", err)
@@ -78,16 +78,7 @@ func (c *PostgresJobDeliveryCounter) CountExpectedDeliveries(ctx context.Context
 	if n > 0 {
 		return n, nil
 	}
-	// Branch 2: legacy fallback — all-enabled global destinations.
-	// Mirrors the writer's `delivery_destinations WHERE enabled = 1`
-	// SELECT in resolveDeliveryDestinationsTx branch 3.
-	if err := c.pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM delivery_destinations WHERE enabled = 1`,
-	).Scan(&n); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("store: JobDeliveryCounter.CountExpectedDeliveries fallback count: %w", err)
-	}
-	return n, nil
+	// No explicit plan exists. Never count unrelated global
+	// delivery_destinations: finalization must fail closed.
+	return 0, fmt.Errorf("%w: job_id=%s", deliverycontract.ErrNoExplicitPlan, jobID)
 }

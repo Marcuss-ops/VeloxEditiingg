@@ -10,10 +10,7 @@ import (
 
 func validatePlanPayload(plan *ResolvedPlan, job *jobs.Job) error {
 	if plan == nil || len(plan.Destinations) == 0 {
-		return deliveryplan.NewValidationError(
-			"delivery_plan",
-			"no explicit delivery plan; create job_delivery_plans rows for this job before enqueueing",
-		)
+		return deliveryplan.NewDeliveryTargetRequiredError()
 	}
 	maxRetry := 0
 	for i, d := range plan.Destinations {

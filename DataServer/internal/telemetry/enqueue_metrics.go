@@ -25,9 +25,8 @@ type EnqueueMetrics struct {
 	jsonMarshal   uint64
 	jsonUnmarshal uint64
 
-	resolverQueries         uint64
-	resolverPlanQueries     uint64
-	resolverFallbackQueries uint64
+	resolverQueries     uint64
+	resolverPlanQueries uint64
 
 	measureAllocations bool
 }
@@ -140,8 +139,7 @@ func RecordEnqueueJSONUnmarshal(ctx context.Context) {
 	}
 }
 
-// RecordEnqueueResolverQuery records a resolver SQL query. kind is a bounded
-// internal category: "plans" or "fallback".
+// RecordEnqueueResolverQuery records an explicit per-job plan query.
 func RecordEnqueueResolverQuery(ctx context.Context, kind string) {
 	metrics := EnqueueMetricsFromContext(ctx)
 	if metrics == nil {
@@ -149,11 +147,8 @@ func RecordEnqueueResolverQuery(ctx context.Context, kind string) {
 	}
 	metrics.mu.Lock()
 	metrics.resolverQueries++
-	switch kind {
-	case "plans":
+	if kind == "plans" {
 		metrics.resolverPlanQueries++
-	case "fallback":
-		metrics.resolverFallbackQueries++
 	}
 	metrics.mu.Unlock()
 }
@@ -177,7 +172,6 @@ func (m *EnqueueMetrics) RecordOnSpan(span trace.Span) {
 		attribute.Int64("velox.enqueue.json_unmarshal_count", int64(m.jsonUnmarshal)),
 		attribute.Int64("velox.enqueue.delivery_plan_resolver_queries", int64(m.resolverQueries)),
 		attribute.Int64("velox.enqueue.delivery_plan_plan_queries", int64(m.resolverPlanQueries)),
-		attribute.Int64("velox.enqueue.delivery_plan_fallback_queries", int64(m.resolverFallbackQueries)),
 	}
 	for phase, duration := range m.phaseDuration {
 		attrs = append(attrs, attribute.Int64("velox.enqueue.phase."+phase+".duration_ms", duration.Milliseconds()))
@@ -197,7 +191,6 @@ type EnqueueMetricsSnapshot struct {
 	JSONUnmarshalCount      uint64
 	ResolverQueries         uint64
 	ResolverPlanQueries     uint64
-	ResolverFallbackQueries uint64
 	AllocationMeasurementOn bool
 }
 
@@ -224,7 +217,6 @@ func (m *EnqueueMetrics) Snapshot() EnqueueMetricsSnapshot {
 		JSONUnmarshalCount:      m.jsonUnmarshal,
 		ResolverQueries:         m.resolverQueries,
 		ResolverPlanQueries:     m.resolverPlanQueries,
-		ResolverFallbackQueries: m.resolverFallbackQueries,
 		AllocationMeasurementOn: m.measureAllocations,
 	}
 }

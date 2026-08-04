@@ -147,6 +147,13 @@ func (noopDestinationValidator) ValidateDestination(ctx context.Context, socialD
 //	                            delivery runner cannot apply a known
 //	                            retry policy to it.
 func validateDeliveryPlanRequires(ctx context.Context, payloadMap map[string]interface{}, validator DestinationValidator) error {
+	// Render-only jobs intentionally carry no delivery envelope. They must
+	// not be forced through the delivery parser; finalization likewise
+	// creates no delivery rows when no explicit intent exists.
+	if !deliveryIntentPresent(payloadMap) {
+		return nil
+	}
+
 	// Parse owns the shape rules + duplicate detection + per-entry
 	// validation (retry_budget<0, priority<0, dup, disabled,
 	// missing destination_id, wrong root type, etc.). Every emit
@@ -223,6 +230,43 @@ func validateDeliveryPlanRequires(ctx context.Context, payloadMap map[string]int
 // runs minus the per-entry pre-flight. Callers that want both
 // shape + pre-flight must route through
 // validateDeliveryPlanRequires.
+func deliveryIntentPresent(payload map[string]interface{}) bool {
+	if payload == nil {
+		return true
+	}
+	// Render-only is an explicit producer contract. An omitted delivery
+	// envelope remains the legacy validation error for normal jobs, while
+	// render_only=true is the unambiguous no-delivery mode.
+	if renderOnly, ok := payload["render_only"].(bool); ok && renderOnly {
+		return false
+	}
+	for _, key := range []string{
+		"delivery_plan", "delivery_destination_ids", "delivery_destination_id",
+		"destination_ids", "destination_id", "delivery_metadata",
+		"destinations", "delivery_destinations",
+	} {
+		if value, ok := payload[key]; ok && value != nil {
+			return true
+		}
+	}
+	if publications, ok := payload["publications"].([]interface{}); ok {
+		for _, raw := range publications {
+			if publication, ok := raw.(map[string]interface{}); ok {
+				if destinations, present := publication["destinations"]; present && destinations != nil {
+					return true
+				}
+			}
+		}
+	}
+	// A normal render request without an explicit render_only marker is
+	// still a delivery-capable request and must fail closed rather than
+	// silently becoming render-only. Producers that intentionally want
+	// no delivery set render_only=true above.
+	return true
+}
+
+// validateDeliveryPlanShapeOnly validates only when the payload declares
+// delivery intent; render-only payloads remain valid without a target.
 func validateDeliveryPlanShapeOnly(payloadMap map[string]interface{}) error {
 	return validateDeliveryPlanRequires(context.Background(), payloadMap, nil)
 }

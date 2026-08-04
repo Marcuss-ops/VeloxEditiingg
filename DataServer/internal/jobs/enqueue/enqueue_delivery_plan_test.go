@@ -55,7 +55,8 @@ func TestPrepareJobAndTask_AcceptsLegacyDeliveryDestinationIDs(t *testing.T) {
 	t.Parallel()
 	enq := newTestEnqueuer(t)
 
-	// Legacy fallback honored because FinalizeVerified honors it too.
+	// Legacy payload aliases remain accepted at enqueue; finalization still
+	// requires an explicit per-job plan and never selects global destinations.
 	// The validator's job is to ensure SCHEDULE-ABILITY, not to break
 	// consumers that the existing finalize path already supports.
 	payload := map[string]interface{}{
@@ -67,7 +68,7 @@ func TestPrepareJobAndTask_AcceptsLegacyDeliveryDestinationIDs(t *testing.T) {
 	}
 
 	if _, _, _, err := enq.PrepareJobAndTask(context.Background(), payload, costmodel.DefaultRequirements()); err != nil {
-		t.Fatalf("PrepareJobAndTask: want no error (legacy fallback honored), got %v", err)
+		t.Fatalf("PrepareJobAndTask: want no error for legacy destination aliases, got %v", err)
 	}
 }
 

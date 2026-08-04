@@ -22,6 +22,10 @@ const defaultDownloadMaxBytes int64 = 256 * 1024 * 1024
 
 // UploadFile uploads a file to Drive
 func (s *Service) UploadFile(ctx context.Context, filePath string, folderID string, deliveryID string) (*UploadResult, error) {
+	folderID = strings.TrimSpace(folderID)
+	if folderID == "" {
+		return nil, fmt.Errorf("DELIVERY_TARGET_REQUIRED: an explicit Drive destination is required")
+	}
 	token, err := s.getToken(ctx)
 	if err != nil {
 		return nil, err
@@ -48,10 +52,8 @@ func (s *Service) UploadFile(ctx context.Context, filePath string, folderID stri
 
 	// Write metadata part
 	meta := map[string]interface{}{
-		"name": fileName,
-	}
-	if folderID != "" {
-		meta["parents"] = []string{folderID}
+		"name":    fileName,
+		"parents": []string{folderID},
 	}
 	// Stamp deliveryID as a public properties key so retries of the same
 	// delivery are traceable to the canonical delivery_id without requiring
@@ -221,47 +223,50 @@ func (s *Service) DownloadFilesFromFolder(ctx context.Context, folderID string, 
 	}
 
 	var downloadedFiles []string
+	var failures []string
 	for _, file := range files {
 		// Skip folders
 		if file.MimeType == "application/vnd.google-apps.folder" {
 			continue
 		}
 
-		destPath := filepath.Join(destDir, file.Name)
+		// Drive folders are allowed to contain duplicate names. The Tyson
+		// folder does exactly that (10 variants for each clip_00N.mp4), so a
+		// basename-only destination would silently overwrite valid assets.
+		ext := filepath.Ext(file.Name)
+		stem := strings.TrimSuffix(file.Name, ext)
+		destPath := filepath.Join(destDir, fmt.Sprintf("%s_%s%s", stem, file.ID, ext))
 		if err := s.DownloadFile(ctx, file.ID, destPath); err != nil {
 			log.Printf("[WARN] Failed to download %s: %v", file.Name, err)
+			failures = append(failures, fmt.Sprintf("%s (%s): %v", file.Name, file.ID, err))
 			continue
 		}
 		downloadedFiles = append(downloadedFiles, destPath)
 	}
 
+	if len(failures) > 0 {
+		return downloadedFiles, fmt.Errorf("folder download incomplete: %d/%d files failed: %s", len(failures), len(files), strings.Join(failures, "; "))
+	}
 	return downloadedFiles, nil
 }
 
-// UploadVideo uploads a video file to a project folder.
-// deliveryID is passed through from the runner as an idempotency key;
-// Drive-native resumable upload sessions handle dedup internally.
+// UploadVideo uploads a video file below the explicitly selected parent
+// folder. An empty parent is a contract violation: Drive must never invent
+// a project folder or route output to an implicit root destination.
+// deliveryID is passed through from the runner as an idempotency key.
 func (s *Service) UploadVideo(ctx context.Context, filePath string, projectName string, parentFolderID string, deliveryID string) (*UploadResult, error) {
-	// Create or reuse a project subfolder under the resolved parent folder.
-	// If no parent is provided we fall back to a top-level folder with the project name.
-	var folderID string
-	if parentFolderID != "" {
-		if strings.TrimSpace(projectName) != "" {
-			folder, err := s.GetOrCreateFolder(ctx, projectName, parentFolderID)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get/create project folder: %w", err)
-			}
-			folderID = folder.ID
-		} else {
-			folderID = parentFolderID
-		}
-	} else {
-		folder, err := s.GetOrCreateFolder(ctx, projectName, "")
+	parentFolderID = strings.TrimSpace(parentFolderID)
+	if parentFolderID == "" {
+		return nil, fmt.Errorf("DELIVERY_TARGET_REQUIRED: an explicit Drive destination is required")
+	}
+
+	folderID := parentFolderID
+	if strings.TrimSpace(projectName) != "" {
+		folder, err := s.GetOrCreateFolder(ctx, projectName, parentFolderID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get/create project folder: %w", err)
 		}
 		folderID = folder.ID
 	}
-
 	return s.UploadFile(ctx, filePath, folderID, deliveryID)
 }

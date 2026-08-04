@@ -59,10 +59,7 @@ type Entry struct {
 // DisabledFalsyRetryBudgetTripOrder test below.
 func Parse(payload map[string]interface{}) ([]Entry, error) {
 	if payload == nil {
-		return nil, NewValidationError(
-			"delivery_plan",
-			"explicit delivery plan required; provide delivery_plan, delivery_destination_ids, or delivery_destination_id",
-		)
+		return nil, NewDeliveryTargetRequiredError()
 	}
 
 	raw, present := payload["delivery_plan"]
@@ -134,10 +131,7 @@ func Parse(payload map[string]interface{}) ([]Entry, error) {
 	}
 
 	if len(entries) == 0 {
-		return nil, NewValidationError(
-			"delivery_plan",
-			"explicit delivery plan required; provide delivery_plan, delivery_destination_ids, or delivery_destination_id",
-		)
+		return nil, NewDeliveryTargetRequiredError()
 	}
 
 	// Duplicate detection + id-trim pass (parity with both pre-refactor

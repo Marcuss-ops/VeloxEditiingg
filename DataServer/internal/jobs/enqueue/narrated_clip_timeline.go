@@ -132,10 +132,12 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 			}
 			bedAssets = shuffledAssets(bedAssets, opts.randomSeed, i)
 			if len(bedAssets) == 1 {
-				items = append(items, map[string]interface{}{
+				item := map[string]interface{}{
 					"type": "video", "url": assetURL(bedAssets[0]),
 					"duration": voiceoverDuration, "fit": "contain", "role": "voiceover_bed",
-				})
+				}
+				copyAssetIntegrity(item, bedAssets[0])
+				items = append(items, item)
 			} else {
 				remaining := voiceoverDuration
 				for stockIndex := 0; remaining > 0; stockIndex++ {
@@ -147,21 +149,25 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 					if stockDuration > remaining {
 						stockDuration = remaining
 					}
-					items = append(items, map[string]interface{}{
+					item := map[string]interface{}{
 						"type": "video", "url": assetURL(asset),
 						"duration": stockDuration, "fit": "contain", "role": "voiceover_bed",
-					})
+					}
+					copyAssetIntegrity(item, asset)
+					items = append(items, item)
 					remaining -= stockDuration
 					if stockIndex > 10000 {
 						return nil, nil, nil, nil, "", fmt.Errorf("stock loop exceeded safety limit")
 					}
 				}
 			}
-			audioTracks = append(audioTracks, map[string]interface{}{
+			voiceTrack := map[string]interface{}{
 				"source_url": voiceoverURL, "volume": 1.0,
 				"start_time_offset": offsetSeconds, "duration_seconds": voiceoverDuration,
 				"role": "voiceover",
-			})
+			}
+			copyAssetIntegrity(voiceTrack, voiceover)
+			audioTracks = append(audioTracks, voiceTrack)
 		}
 
 		if clipURL != "" {
@@ -169,11 +175,13 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 				"type": "video", "url": clipURL, "duration": clipDuration,
 				"fit": "contain", "role": "scene_clip",
 			})
-			audioTracks = append(audioTracks, map[string]interface{}{
+			clipTrack := map[string]interface{}{
 				"source_url": clipURL, "volume": 1.0,
 				"start_time_offset": offsetSeconds + voiceoverDuration,
 				"duration_seconds":  clipDuration, "role": "scene_clip_audio",
-			})
+			}
+			copyAssetIntegrity(clipTrack, clip)
+			audioTracks = append(audioTracks, clipTrack)
 			clips = append(clips, clipURL)
 		}
 		appendTransitionSoundEffects(&audioTracks, opts, offsetSeconds, voiceoverDuration, clipDuration, i, len(scenes))
@@ -181,6 +189,17 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 	}
 
 	return sceneEntries, items, payload.DedupeStrings(clips), audioTracks, "clip_stock", nil
+}
+
+func copyAssetIntegrity(dst, asset map[string]interface{}) {
+	if dst == nil || asset == nil {
+		return
+	}
+	for _, key := range []string{"asset_id", "sha256", "size_bytes"} {
+		if value, ok := asset[key]; ok && value != nil {
+			dst[key] = value
+		}
+	}
 }
 
 // appendTransitionSoundEffects adds one short effect at every visual

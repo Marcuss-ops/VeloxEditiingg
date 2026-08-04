@@ -13,15 +13,15 @@ func TestEnqueueMetricsRecordsPhaseJSONAndResolverObservations(t *testing.T) {
 	RecordEnqueueJSONMarshal(ctx)
 	RecordEnqueueJSONUnmarshal(ctx)
 	RecordEnqueueResolverQuery(ctx, "plans")
-	RecordEnqueueResolverQuery(ctx, "fallback")
+	RecordEnqueueResolverQuery(ctx, "plans")
 	finish()
 
 	snapshot := metrics.Snapshot()
 	if snapshot.JSONMarshalCount != 1 || snapshot.JSONUnmarshalCount != 1 {
 		t.Fatalf("JSON counts = %d/%d, want 1/1", snapshot.JSONMarshalCount, snapshot.JSONUnmarshalCount)
 	}
-	if snapshot.ResolverQueries != 2 || snapshot.ResolverPlanQueries != 1 || snapshot.ResolverFallbackQueries != 1 {
-		t.Fatalf("resolver counts = total %d plans %d fallback %d, want 2/1/1", snapshot.ResolverQueries, snapshot.ResolverPlanQueries, snapshot.ResolverFallbackQueries)
+	if snapshot.ResolverQueries != 2 || snapshot.ResolverPlanQueries != 2 {
+		t.Fatalf("resolver counts = total %d plans %d, want 2/2", snapshot.ResolverQueries, snapshot.ResolverPlanQueries)
 	}
 	if snapshot.PhaseDuration["normalize_scene_video_payload"] <= 0 {
 		t.Fatal("phase duration was not recorded")

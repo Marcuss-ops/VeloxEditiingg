@@ -11,7 +11,7 @@ import (
 	"velox-server/internal/telemetry"
 )
 
-func TestResolvePlanManyDestinationsUsesDeliberateFallbackQueries(t *testing.T) {
+func TestResolvePlanManyDestinationsUsesExplicitPlanQueries(t *testing.T) {
 	const destinationCount = 256
 
 	db, resolver := newManyDestinationResolver(t, destinationCount)
@@ -33,33 +33,17 @@ func TestResolvePlanManyDestinationsUsesDeliberateFallbackQueries(t *testing.T) 
 		}
 	}
 
-	fallback, err := resolver.ResolvePlan(ctx, "job-without-explicit-plan", "")
-	if err != nil {
-		t.Fatalf("ResolvePlan fallback: %v", err)
-	}
-	if fallback == nil || len(fallback.Destinations) != destinationCount {
-		t.Fatalf("fallback destination count = %d, want %d", len(fallback.Destinations), destinationCount)
-	}
-	for i, destination := range fallback.Destinations {
-		if destination.Priority != 100 {
-			t.Fatalf("fallback destination %d priority = %d, want 100", i, destination.Priority)
-		}
-		if destination.RetryBudget != 5 {
-			t.Fatalf("fallback destination %d retry budget = %d, want 5", i, destination.RetryBudget)
-		}
+	_, err = resolver.ResolvePlan(ctx, "job-without-explicit-plan", "")
+	if err == nil {
+		t.Fatal("missing explicit plan must fail closed")
 	}
 
 	snapshot := metrics.Snapshot()
-	// One query checks the explicit plan. The fallback path deliberately
-	// performs its plan probe and then its global-destinations query.
 	if snapshot.ResolverPlanQueries != 2 {
 		t.Fatalf("plan query count = %d, want 2", snapshot.ResolverPlanQueries)
 	}
-	if snapshot.ResolverFallbackQueries != 1 {
-		t.Fatalf("fallback query count = %d, want 1", snapshot.ResolverFallbackQueries)
-	}
-	if snapshot.ResolverQueries != 3 {
-		t.Fatalf("total resolver query count = %d, want 3", snapshot.ResolverQueries)
+	if snapshot.ResolverQueries != 2 {
+		t.Fatalf("total resolver query count = %d, want 2", snapshot.ResolverQueries)
 	}
 
 	_ = db
@@ -83,18 +67,14 @@ func BenchmarkResolvePlanManyDestinations(b *testing.B) {
 			}
 		})
 
-		b.Run(fmt.Sprintf("fallback_%d", destinationCount), func(b *testing.B) {
+		b.Run(fmt.Sprintf("missing_plan_%d", destinationCount), func(b *testing.B) {
 			_, resolver := newManyDestinationResolver(b, destinationCount)
 			ctx := context.Background()
 			b.ResetTimer()
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				plan, err := resolver.ResolvePlan(ctx, "job-without-explicit-plan", "")
-				if err != nil {
-					b.Fatal(err)
-				}
-				if len(plan.Destinations) != destinationCount {
-					b.Fatalf("destination count = %d, want %d", len(plan.Destinations), destinationCount)
+				if _, err := resolver.ResolvePlan(ctx, "job-without-explicit-plan", ""); err == nil {
+					b.Fatal("missing explicit plan must fail closed")
 				}
 			}
 		})
@@ -103,9 +83,9 @@ func BenchmarkResolvePlanManyDestinations(b *testing.B) {
 
 // newManyDestinationResolver prepares a real migrated SQLite database. The
 // setup is intentionally outside the benchmark timer: the benchmark measures
-// only ResolvePlan. The shared destination table is populated for both paths;
-// the explicit job has one plan row per destination, while the fallback job
-// has no plan rows and therefore exercises the deliberate two-query fallback.
+// only ResolvePlan. The explicit job has one plan row per destination, while
+// the missing-plan job has no plan rows and must fail closed without reading
+// the global destination catalog.
 func newManyDestinationResolver(tb testing.TB, destinationCount int) (*store.SQLiteStore, *SQLiteDeliveryPlanResolver) {
 	tb.Helper()
 
@@ -156,5 +136,5 @@ func newManyDestinationResolver(tb testing.TB, destinationCount int) (*store.SQL
 		tb.Fatalf("commit seed transaction: %v", err)
 	}
 
-	return db, NewSQLiteDeliveryPlanResolver(db.DB(), true)
+	return db, NewSQLiteDeliveryPlanResolver(db.DB())
 }

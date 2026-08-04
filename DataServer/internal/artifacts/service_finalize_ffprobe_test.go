@@ -153,8 +153,8 @@ func TestFinalize_FFProbeInvariant_Mismatch(t *testing.T) {
 	// Seed 3 enabled rows in job_delivery_plans for this job —
 	// mirrors what a per-job plan with 3 destinations would look
 	// like in production. The gate's CountExpectedDeliveries
-	// reads this table first; fallback to delivery_destinations
-	// only kicks in when this is empty.
+	// reads only this explicit per-job plan; an empty plan fails closed
+	// instead of consulting delivery_destinations globally.
 	now := env.clock.Now().UTC().Format(time.RFC3339)
 	dests := []string{"mismatch-yt", "mismatch-drive", "mismatch-s3"}
 	for i, did := range dests {

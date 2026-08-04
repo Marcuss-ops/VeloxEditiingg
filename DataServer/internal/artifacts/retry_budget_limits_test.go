@@ -14,7 +14,7 @@ func TestFinalizeVerified_BudgetConsumedBy429Retries(t *testing.T) {
 	db := openPropagationDB(t)
 	seedPhase5Fixture(t, db, phase5Fixture{JobID: "J-429", WorkerID: "w", LeaseID: "l", Revision: 1, AttemptNumber: 1, ArtifactID: "art-429", UploadID: "up-429"})
 	seedDeliveryPlans(t, db, "J-429", []phase5Plan{{"primary", 1, 3, true}})
-	resolver := deliveries.NewSQLiteDeliveryPlanResolver(db, false)
+	resolver := deliveries.NewSQLiteDeliveryPlanResolver(db)
 	runFinalize(t, db, resolver, artifacts.FinalizeVerifiedCommand{UploadID: "up-429", ArtifactID: "art-429", JobID: "J-429", WorkerID: "w", LeaseID: "l", AttemptNumber: 1, ExpectedRevision: 1, StorageProvider: "local", StorageKey: "artifacts/J-429/1", SHA256: "deadbeef", SizeBytes: 1024, MIMEType: "video/mp4", VerifiedAt: time.Now().UTC()})
 	var maxAttempts int
 	if err := db.QueryRow(`SELECT max_attempts FROM job_deliveries WHERE artifact_id=? AND destination_id='primary'`, "art-429").Scan(&maxAttempts); err != nil {
@@ -81,7 +81,7 @@ func TestFinalizeVerified_ClosesAllStateTablesAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedDeliveryPlans(t, db, jobID, []phase5Plan{{"primary", 1, 3, true}})
-	resolver := deliveries.NewSQLiteDeliveryPlanResolver(db, false)
+	resolver := deliveries.NewSQLiteDeliveryPlanResolver(db)
 	runFinalize(t, db, resolver, artifacts.FinalizeVerifiedCommand{UploadID: uploadID, ArtifactID: artifactID, JobID: jobID, WorkerID: "w", LeaseID: "l", AttemptNumber: 1, ExpectedRevision: 1, StorageProvider: "local", StorageKey: "artifacts/" + jobID + "/1", SHA256: "deadbeef", SizeBytes: 1024, MIMEType: "video/mp4", VerifiedAt: time.Now().UTC()})
 	checks := []struct{ q, want string }{{`SELECT status FROM jobs WHERE job_id='J-Q5'`, "SUCCEEDED"}, {`SELECT status FROM tasks WHERE job_id='J-Q5'`, "SUCCEEDED"}, {`SELECT status FROM artifacts WHERE id='art-Q5'`, "READY"}, {`SELECT status FROM artifact_uploads WHERE upload_id='up-Q5'`, "COMPLETED"}}
 	for _, c := range checks {

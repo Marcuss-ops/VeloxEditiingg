@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	"velox-server/internal/deliverycontract"
 	"velox-server/internal/identity"
 )
 
@@ -22,12 +23,9 @@ import (
 //
 // Resolution order:
 //  1. cmd.DestinationID explicit override → single-destination plan
-//     with max_attempts=5 (schema default). The cmd-level pin always
-//     wins over a per-job plan because it pins routing to one tail.
+//     with max_attempts=5 (schema default).
 //  2. w.resolver wired → delegated via DeliveryPlanResolver.
-//  3. nil resolver → legacy all-enabled-destinations SELECT inside
-//     the tx. max_attempts defaults to 5 because there is no
-//     per-plan budget to consult.
+//  3. nil resolver → fail closed; no global destination selection.
 //
 // Step 5/8 of the canonical-purity plan: switch from the legacy
 // resolver (which dropped retry_budget at the interface boundary) to
@@ -48,48 +46,29 @@ func (w *SQLiteFinalizeWriter) resolveDeliveryDestinationsTx(ctx context.Context
 			MaxAttempts:   5,
 		}}, nil
 	}
-	if w.resolver != nil {
-		rd, rerr := w.resolver.ResolveDestinations(ctx, cmd.JobID, cmd.ArtifactID)
-		if rerr != nil {
-			return nil, fmt.Errorf("artifacts: FinalizeVerified plan resolver: %w", rerr)
-		}
-		return rd, nil
+	if w.resolver == nil {
+		// No explicit destination and no resolver means this is a
+		// render-only finalization. Do not create delivery rows and do
+		// not select any global destination.
+		return nil, nil
 	}
-	// No resolver wired: legacy all-enabled-destinations SELECT
-	// inside the tx. max_attempts defaults to 5.
-	rows, qerr := tx.QueryContext(ctx,
-		`SELECT destination_id FROM delivery_destinations WHERE enabled = 1`)
-	if qerr != nil {
-		return nil, fmt.Errorf("artifacts: FinalizeVerified destinations SELECT: %w", qerr)
+	rd, rerr := w.resolver.ResolveDestinations(ctx, cmd.JobID, cmd.ArtifactID)
+	if rerr != nil {
+		return nil, fmt.Errorf("artifacts: FinalizeVerified plan resolver: %w", rerr)
 	}
-	defer rows.Close()
-	var resolved []DeliveryDestination
-	for rows.Next() {
-		var did string
-		if err := rows.Scan(&did); err != nil {
-			return nil, fmt.Errorf("artifacts: FinalizeVerified destinations Scan: %w", err)
-		}
-		if did == "" {
-			continue
-		}
-		resolved = append(resolved, DeliveryDestination{
-			DestinationID: did,
-			MaxAttempts:   5,
-		})
+	if len(rd) == 0 {
+		return nil, fmt.Errorf("%w: job_id=%s", deliverycontract.ErrNoExplicitPlan, cmd.JobID)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("artifacts: FinalizeVerified destinations iter: %w", err)
-	}
-	return resolved, nil
+	return rd, nil
 }
 
 // ── Step 5: insertPendingDeliveriesTx ───────────────────────────────────
 
 // insertPendingDeliveriesTx materializes one job_deliveries row per
 // resolved destination, idempotent on (artifact_id, destination_id)
-// via the WHERE NOT EXISTS guard so a re-run of the same tx (e.g.
-// after a transient commit error) cannot create duplicate delivery
-// rows.
+// via the database uniqueness constraint and ON CONFLICT DO NOTHING,
+// so a re-run of the same tx (e.g. after a transient commit error)
+// cannot create duplicate delivery rows.
 //
 // Defense-in-depth: a resolver that returned MaxAttempts=0
 // (e.g. pre-069 plan read returning the table default but also
@@ -99,10 +78,9 @@ func (w *SQLiteFinalizeWriter) resolveDeliveryDestinationsTx(ctx context.Context
 // attempt 1. Re-enforce the schema default (5) here to keep the
 // INSERT contract pinned.
 //
-// idempotency_key = "<artifact_id>_<destination_id>" so the
-// deterministic uniqueness constraint at the SQL layer (see
-// migrations 0xx) is also a no-op when the same (artifact,
-// destination) pair is presented twice.
+// idempotency_key = "<artifact_id>_<destination_id>" and the
+// database uniqueness constraint on (artifact_id, destination_id)
+// make concurrent/replayed finalization a no-op for the same pair.
 func (w *SQLiteFinalizeWriter) insertPendingDeliveriesTx(ctx context.Context, tx *sql.Tx, cmd FinalizeVerifiedCommand, nowStr string, resolved []DeliveryDestination) error {
 	for _, dest := range resolved {
 		deliveryID, err := identity.NewHex128()
@@ -115,14 +93,10 @@ func (w *SQLiteFinalizeWriter) insertPendingDeliveriesTx(ctx context.Context, tx
 		}
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO job_deliveries (delivery_id, artifact_id, destination_id, status, max_attempts, idempotency_key, created_at, updated_at)
-			SELECT ?, ?, ?, 'PENDING', ?, ?, ?, ?
-			WHERE NOT EXISTS (
-				SELECT 1 FROM job_deliveries
-				WHERE artifact_id = ? AND destination_id = ?
-			)`,
+			VALUES (?, ?, ?, 'PENDING', ?, ?, ?, ?)
+			ON CONFLICT(artifact_id, destination_id) DO NOTHING`,
 			deliveryID, cmd.ArtifactID, dest.DestinationID,
 			maxAttempts, cmd.ArtifactID+"_"+dest.DestinationID, nowStr, nowStr,
-			cmd.ArtifactID, dest.DestinationID,
 		)
 		if err != nil {
 			return fmt.Errorf("artifacts: FinalizeVerified job_deliveries insert (dest=%s, max_attempts=%d): %w",
