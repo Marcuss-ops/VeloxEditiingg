@@ -22,6 +22,8 @@
 -- permissive default (matches GetSchedulableWorkers behavior pre-PR-04.5).
 --
 -- SQLite >= 3.35.0 required for ALTER TABLE ADD COLUMN (with DEFAULT).
+-- The historical Dark Editor v44 stub was removed from the embedded
+-- fixtures; version gaps for retired migrations are intentional.
 
 ALTER TABLE jobs ADD COLUMN job_required_resource_class TEXT NOT NULL DEFAULT '';
 

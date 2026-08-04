@@ -51,12 +51,23 @@ migration(s) listed below.
 | SQLite   | `sqlite/090_drop_youtube_domain.sql` (+ `testdata/090_drop_youtube_domain.sql`) — drops `youtube_channels`, `youtube_groups`, `youtube_group_channels`, `youtube_oauth_tokens`, `youtube_tracked_niches`, plus YouTube metrics/cache tables, **and** the columns `calendar_events.youtube_group`, `calendar_events.youtube_links_json`. |
 | Postgres | `postgres/010_drop_youtube_domain.sql` (+ `testdata/010_drop_youtube_domain.sql`) — drops `youtube_videos`, `youtube_oauth_tokens`, `youtube_group_channels`, `youtube_groups`, `youtube_channels`. |
 
+## Historical migration versions 040/044
+
+`sqlite/040_task_specs.sql` and `testdata/040_task_specs.sql` are the
+canonical v40 migration pair and must remain byte-for-byte equivalent.
+The old Dark Editor v44 stub (`044_stub_dark_editor_projects.sql`) was
+retired and is intentionally absent from both embedded tracks. Existing
+databases may still retain a v44 row in `schema_migrations`; the runner
+ignores applied versions that are no longer embedded, preserving their
+record without attempting a checksum comparison. Do not recreate v44.
+
 ## Dark Editor domain exit
 
 The Dark Editor (browser editor) is no longer a Velox concern: the
 frontend lives in VeloxFrontend and project/workspace/session state is
 owned by InstaeditLogin. Velox only receives the canonical render job.
-The storage domain was removed in one combined change:
+The storage domain was removed through a fresh-schema cleanup plus a
+forward-only compatibility migration:
 
 1. **`sqlite/001_initial.sql` amended (one-time sanctioned exception).**
    It no longer creates the `dark_editor_*` tables, so fresh databases

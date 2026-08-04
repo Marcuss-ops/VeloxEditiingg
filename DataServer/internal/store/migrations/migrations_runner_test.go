@@ -110,6 +110,26 @@ func TestRunMigrations_Idempotent(t *testing.T) {
 	}
 }
 
+func TestRunMigrations_IgnoresAppliedRetiredVersion(t *testing.T) {
+	db := openTestDB(t)
+	if err := EnsureSchemaTable(db); err != nil {
+		t.Fatalf("ensure schema_migrations table: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (44, 'stub_dark_editor_projects', 'historical-v44-checksum', datetime('now'))`); err != nil {
+		t.Fatalf("seed retired migration version: %v", err)
+	}
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
+		t.Fatalf("retired applied migration should not block boot: %v", err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 44`).Scan(&count); err != nil {
+		t.Fatalf("query retired migration row: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("retired migration row should remain recorded, got %d", count)
+	}
+}
+
 func TestRunMigrations_ChecksumMismatch(t *testing.T) {
 	db := openTestDB(t)
 
@@ -161,6 +181,29 @@ func TestRunMigrations_LegacyInitialChecksumTolerated(t *testing.T) {
 	}
 	if err := RunMigrations(db, testMigrationsFS, "testdata"); err == nil {
 		t.Fatal("expected checksum mismatch for tampered v120, got nil")
+	}
+}
+
+func TestApplyMigration_DropColumnMissingTableTolerated(t *testing.T) {
+	db := openTestDB(t)
+	if err := EnsureSchemaTable(db); err != nil {
+		t.Fatalf("ensure schema_migrations table: %v", err)
+	}
+	mig := Migration{
+		Version:  902,
+		Name:     "test_drop_column_missing_table",
+		SQL:      "ALTER TABLE dark_editor_folders DROP COLUMN youtube_group;",
+		Checksum: "checksum_drop_missing_table",
+	}
+	if err := applyMigration(db, mig); err != nil {
+		t.Fatalf("missing table DROP COLUMN should be tolerated: %v", err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 902`).Scan(&count); err != nil {
+		t.Fatalf("query migration record: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected migration 902 to be recorded, got %d", count)
 	}
 }
 
