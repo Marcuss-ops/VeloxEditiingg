@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -39,6 +40,9 @@ type Client struct {
 	circuitBreaker *CircuitBreaker
 
 	// Auth token obtained during registration, sent as Bearer token on subsequent requests.
+	// Registration and long-lived pollers run concurrently, so token state is
+	// protected independently from the request configuration.
+	authMu    sync.RWMutex
 	authToken string
 	// adminAuthToken is used only for legacy admin-protected artifact upload
 	// endpoints. Worker asset reads continue using authToken.
@@ -95,18 +99,33 @@ func WithCircuitBreaker(failureThreshold, successThreshold int, timeout time.Dur
 // This token is obtained from the registration response and sent as
 // "Authorization: Bearer <token>" on all subsequent API calls.
 func (c *Client) SetAuthToken(token string) {
-	c.authToken = token
+	c.authMu.Lock()
+	c.authToken = strings.TrimSpace(token)
+	c.authMu.Unlock()
 }
 
 // AuthToken returns the current auth token, if any.
 func (c *Client) AuthToken() string {
+	c.authMu.RLock()
+	defer c.authMu.RUnlock()
 	return c.authToken
+}
+
+// ClearAuthToken invalidates the worker session token when the control
+// session is disconnected. A reconnect must install a fresh credential
+// before protected-assets polling can resume.
+func (c *Client) ClearAuthToken() {
+	c.authMu.Lock()
+	c.authToken = ""
+	c.authMu.Unlock()
 }
 
 // SetAdminAuthToken configures the operator token used by artifact upload
 // endpoints while preserving the worker session token for asset reads.
 func (c *Client) SetAdminAuthToken(token string) {
+	c.authMu.Lock()
 	c.adminAuthToken = strings.TrimSpace(token)
+	c.authMu.Unlock()
 }
 
 func retryBackoff(attempt int, baseInterval time.Duration) time.Duration {
@@ -224,9 +243,10 @@ func (c *Client) doSingleRequest(ctx context.Context, method, path string, body 
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	// Add auth token as Bearer token if available
-	if c.authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	// Add auth token as Bearer token if available. Read it through the
+	// same synchronization used by registration and poller readiness.
+	if authToken := c.AuthToken(); authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+authToken)
 	}
 
 	for key, value := range c.headers {

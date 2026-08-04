@@ -50,6 +50,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -176,10 +177,20 @@ func (p *ProtectedAssetsPoller) Run(ctx context.Context) error {
 		return err
 	}
 
-	// Initial tick so the poller is not empty for the first Interval. The
-	// label passed to runTickOnce lets operators distinguish boot-time
-	// first attempt failures from subsequent periodic failures.
-	p.runTickOnce(ctx, "worker.ProtectedAssetsPoller: initial tick")
+	// Initial bootstrap fetch is retried until a valid 2xx snapshot is
+	// received or the session context is cancelled. Once the registration
+	// and authentication gate opens, a normal bootstrap must not expose a
+	// transient 401 as the first observed poll result.
+	for {
+		if err := p.runTickOnce(ctx, "worker.ProtectedAssetsPoller: initial tick"); err == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 
 	ticker := time.NewTicker(p.Interval)
 	defer ticker.Stop()
@@ -292,15 +303,31 @@ func (p *ProtectedAssetsPoller) runTickOnce(ctx context.Context, label string) e
 	return nil
 }
 
+// waitForRegistration blocks the first request until the worker session is
+// live and the shared API client has a bearer token. The client token may be
+// populated before the gRPC Hello/Ack (for example from environment config),
+// so checking both conditions prevents an early unauthenticated GET during
+// the normal bootstrap race.
 func (p *ProtectedAssetsPoller) waitForRegistration(ctx context.Context) error {
-	for !telemetry.GlobalReady().Snapshot().Registered {
+	for {
+		registered := telemetry.GlobalReady().Snapshot().Registered
+		// Do not assume an arbitrary ProtectedAssetsAPI is authenticated:
+		// production uses *api.Client, but a fake or alternate client must
+		// explicitly expose its current bearer token before Run may issue
+		// the first request.
+		authenticated := false
+		if client, ok := p.Client.(interface{ AuthToken() string }); ok {
+			authenticated = strings.TrimSpace(client.AuthToken()) != ""
+		}
+		if registered && authenticated {
+			return nil
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	return nil
 }
 
 // WaitReady blocks until the first valid protected-assets snapshot has

@@ -68,6 +68,9 @@ func (w *Worker) Start(ctx context.Context) error {
 			w.logger.Warn("[CONNECT] Transport factory returned nil — backing off")
 			w.setConnState(ConnDisconnected)
 			telemetry.SetHealthRegistered(false)
+			if w.apiClient != nil {
+				w.apiClient.ClearAuthToken()
+			}
 			jitter := time.Duration(rand.Float64() * float64(connectionRetryBackoff) * 0.3)
 			sleepDuration := connectionRetryBackoff + jitter
 			select {
@@ -128,6 +131,9 @@ func (w *Worker) Start(ctx context.Context) error {
 			// session is re-established. MarkRegistered queues an
 			// UpdateReady copy-and-store under the process-global atomic.Pointer.
 			telemetry.SetHealthRegistered(false)
+			if w.apiClient != nil {
+				w.apiClient.ClearAuthToken()
+			}
 			_ = w.transport.Close()
 
 			// Use short fixed retry for connection-level errors (reset, refused,
@@ -200,6 +206,9 @@ func (w *Worker) Start(ctx context.Context) error {
 	// final exit point — clearer to drop the flag explicitly here too so a
 	// fresh process after a restart starts from a clean ready slate.
 	telemetry.SetHealthRegistered(false)
+	if w.apiClient != nil {
+		w.apiClient.ClearAuthToken()
+	}
 	telemetry.MarkDrainMode(false)
 	w.logger.Info("Worker stopped")
 	return nil
@@ -267,6 +276,9 @@ func (w *Worker) runSession(ctx context.Context) bool {
 		// readiness snapshot stayed "true" between sessions even though no
 		// Hello+HelloAck roundtrip has been acknowledged yet.
 		telemetry.SetHealthRegistered(false)
+		if w.apiClient != nil {
+			w.apiClient.ClearAuthToken()
+		}
 		// PR-master-restart: snapshot activeTaskLeases + pendingTasks +
 		// activeTasks BEFORE the transport-Close hoists the session
 		// into a terminal state, so the next New() can replay them.

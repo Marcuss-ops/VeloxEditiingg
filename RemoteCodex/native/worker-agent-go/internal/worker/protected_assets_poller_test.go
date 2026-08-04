@@ -73,6 +73,10 @@ func newCountingServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server
 func newPollerWithClient(t *testing.T, srvURL string, opts ...api.ClientOption) *ProtectedAssetsPoller {
 	t.Helper()
 	c := api.NewClient(srvURL, opts...)
+	// Run's bootstrap gate requires both registration and a bearer token;
+	// TickOnce tests remain deterministic while carrying the same
+	// authenticated-client contract as production.
+	c.SetAuthToken("test-worker-session-token")
 	p := NewProtectedAssetsPoller(c, time.Hour)
 	p.SnapshotMaxAge = 0
 	return p
@@ -354,6 +358,170 @@ func TestPoller_Run_RespectsContextDone(t *testing.T) {
 // synchronously on entry, before any sleep. The test verifies
 // this by counting server hits: after a 20ms wait the counter
 // must read 1 (initial tick) and not 0 (ticker hasn't fired yet).
+func TestPoller_Run_WaitsForRegistrationAndAuthenticatedClient(t *testing.T) {
+	telemetry.ResetForTest()
+	t.Cleanup(telemetry.ResetForTest)
+	var statuses []int
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		statuses = append(statuses, func() int {
+			if r.Header.Get("Authorization") == "Bearer session-token" {
+				return http.StatusOK
+			}
+			return http.StatusUnauthorized
+		}())
+		mu.Unlock()
+		if r.Header.Get("Authorization") != "Bearer session-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(snapshotJSON(10, "2026-08-04T12:00:00Z", 1, []string{"BOOTSTRAP"}))
+	}))
+	defer srv.Close()
+
+	client := api.NewClient(srv.URL)
+	poller := NewProtectedAssetsPoller(client, time.Hour)
+	poller.SnapshotMaxAge = 0
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- poller.Run(ctx) }()
+
+	// Neither prerequisite is ready initially: no request is allowed.
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	if len(statuses) != 0 {
+		t.Fatalf("poller issued %d request(s) before registration/token; want 0", len(statuses))
+	}
+	mu.Unlock()
+
+	client.SetAuthToken("session-token")
+	telemetry.MarkRegistered(true)
+	deadline := time.Now().Add(time.Second)
+	for poller.Snapshot() == nil && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if poller.Snapshot() == nil {
+		t.Fatal("poller did not fetch the first snapshot after registration and token readiness")
+	}
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(statuses) != 1 || statuses[0] != http.StatusOK {
+		t.Fatalf("bootstrap GET statuses=%v, want exactly [200] and no normal 401", statuses)
+	}
+}
+
+func TestPoller_Run_ReconnectRequiresFreshToken(t *testing.T) {
+	telemetry.ResetForTest()
+	t.Cleanup(telemetry.ResetForTest)
+	var authorization []string
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		authorization = append(authorization, r.Header.Get("Authorization"))
+		requestNumber := len(authorization)
+		mu.Unlock()
+		if (requestNumber == 1 && r.Header.Get("Authorization") == "Bearer old-session-token") ||
+			(requestNumber > 1 && r.Header.Get("Authorization") == "Bearer new-session-token") {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(snapshotJSON(12, "2026-08-04T12:00:00Z", 1, []string{"RECONNECTED"}))
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	client := api.NewClient(srv.URL)
+	client.SetAuthToken("old-session-token")
+	poller := NewProtectedAssetsPoller(client, 500*time.Millisecond)
+	poller.SnapshotMaxAge = 0
+	telemetry.MarkRegistered(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- poller.Run(ctx) }()
+	authSnapshot := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), authorization...)
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(authSnapshot()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	initialAuth := authSnapshot()
+	if len(initialAuth) != 1 || initialAuth[0] != "Bearer old-session-token" {
+		t.Fatalf("initial authorization=%v, want old token", initialAuth)
+	}
+
+	telemetry.MarkRegistered(false)
+	client.ClearAuthToken()
+	time.Sleep(120 * time.Millisecond)
+	beforeReconnect := len(authSnapshot())
+	if beforeReconnect != 1 {
+		t.Fatalf("requests during disconnected session=%d, want 1 total", beforeReconnect)
+	}
+
+	client.SetAuthToken("new-session-token")
+	telemetry.MarkRegistered(true)
+	deadline = time.Now().Add(time.Second)
+	for len(authSnapshot()) < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	<-done
+
+	finalAuth := authSnapshot()
+	if len(finalAuth) != 2 || finalAuth[0] != "Bearer old-session-token" || finalAuth[1] != "Bearer new-session-token" {
+		t.Fatalf("authorization sequence=%v, want old then new with no stale request", finalAuth)
+	}
+}
+
+func TestPoller_Run_RetriesInitialPollUntil200(t *testing.T) {
+	telemetry.ResetForTest()
+	t.Cleanup(telemetry.ResetForTest)
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(snapshotJSON(11, "2026-08-04T12:00:00Z", 1, []string{"RETRIED"}))
+	}))
+	defer srv.Close()
+
+	client := api.NewClient(srv.URL)
+	client.SetAuthToken("session-token")
+	poller := NewProtectedAssetsPoller(client, time.Hour)
+	poller.SnapshotMaxAge = 0
+	telemetry.MarkRegistered(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- poller.Run(ctx) }()
+	deadline := time.Now().Add(time.Second)
+	for poller.Snapshot() == nil && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if poller.Snapshot() == nil {
+		t.Fatal("poller did not recover the initial protected-assets GET")
+	}
+	cancel()
+	<-done
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("initial poll calls=%d, want 2 (one transient failure then 200)", got)
+	}
+}
+
 func TestPoller_Run_FiresInitialTickOnEntry(t *testing.T) {
 	telemetry.ResetForTest()
 	telemetry.MarkRegistered(true)
@@ -413,7 +581,9 @@ func TestPoller_Run_PeriodicTickerFires(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := api.NewClient(srv.URL)
+	c.SetAuthToken("periodic-session-token")
 	p := NewProtectedAssetsPoller(c, 50*time.Millisecond)
+	p.SnapshotMaxAge = 0
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

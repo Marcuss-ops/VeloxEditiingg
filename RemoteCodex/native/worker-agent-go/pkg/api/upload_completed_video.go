@@ -86,10 +86,12 @@ func (c *Client) UploadCompletedVideo(ctx context.Context, req UploadCompletedVi
 		return nil, fmt.Errorf("upload completed video: create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", writer.FormDataContentType())
+	c.authMu.RLock()
 	authToken := c.adminAuthToken
 	if authToken == "" {
 		authToken = c.authToken
 	}
+	c.authMu.RUnlock()
 	if authToken != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+authToken)
 	}
