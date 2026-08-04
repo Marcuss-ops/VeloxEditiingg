@@ -75,8 +75,22 @@ func TestSendClaimedTaskOffer_UsesWorkerSpecificPayloadContract(t *testing.T) {
 			payload := map[string]interface{}{
 				"payload_contract_version": contract.PayloadContractVersionCanonical,
 				"video_name":               "Task offer",
+				"voiceover_paths":          []interface{}{"legacy-voice"},
+				"clip_link":                "legacy-clip",
+				"image_link":               "legacy-image",
+				"local_path":               "/tmp/legacy",
+				"bindings":                 map[string]interface{}{"clip": "legacy"},
+				"project_id":               "project-legacy",
+				"render_spec":              map[string]interface{}{"legacy": true},
+				"delivery_plan":            []interface{}{map[string]interface{}{"destination_id": "dest"}},
+				"publication_metadata":     map[string]interface{}{"title": "publication"},
+				"publication_specs":        []interface{}{map[string]interface{}{"metadata": map[string]interface{}{"description": "desc"}}},
 				"scenes": []interface{}{
 					map[string]interface{}{
+						"clip_link":  "legacy-scene-clip",
+						"image_link": "legacy-scene-image",
+						"local_path": "/tmp/scene",
+						"bindings":   map[string]interface{}{"voiceover": "legacy"},
 						"clip": map[string]interface{}{
 							"asset_id":    "clip-1",
 							"url":         "velox-asset://clip-1",
@@ -117,7 +131,7 @@ func assertNoForbiddenWorkerKeys(t *testing.T, payload map[string]interface{}) {
 	for _, key := range []string{
 		"voiceover_paths", "clip_link", "image_link", "local_path", "bindings",
 		"project_id", "render_spec", "delivery_plan", "publications", "publication_specs",
-		"metadata", "title", "description", "privacy_status", "destination_id", "destination_ids",
+		"publication_metadata", "publication", "metadata", "title", "description", "privacy_status", "destination_id", "destination_ids",
 	} {
 		forbidden[key] = struct{}{}
 	}

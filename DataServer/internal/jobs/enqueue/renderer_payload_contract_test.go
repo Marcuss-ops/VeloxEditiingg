@@ -2,6 +2,7 @@ package enqueue
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"velox-server/internal/costmodel"
@@ -21,7 +22,14 @@ func TestPrepareJobAndTask_TaskSpecPayloadIsRenderingOnly(t *testing.T) {
 			"metadata":       map[string]interface{}{"title": "publication title"},
 		}},
 		"publications": []interface{}{map[string]interface{}{
-			"metadata": map[string]interface{}{"description": "publication description"},
+			"publication_id": "publication-main",
+			"metadata": map[string]interface{}{
+				"title":       "publication title",
+				"description": "publication description",
+				"tags":        []interface{}{"legacy"},
+				"privacy":     "private",
+				"publish_at":  "2026-08-04T12:00:00Z",
+			},
 		}},
 		"video_metadata": map[string]interface{}{
 			"width": 1920, "height": 1080, "title": "must not leak",
@@ -46,9 +54,22 @@ func TestPrepareJobAndTask_TaskSpecPayloadIsRenderingOnly(t *testing.T) {
 	if spec.DeliveryPlan == nil {
 		t.Fatal("delivery plan must remain available on the control-plane TaskSpec field")
 	}
+	if len(spec.PublicationSpecs) != 1 || spec.PublicationSpecs[0]["publication_id"] != "publication-main" {
+		t.Fatalf("publication specs must remain on the control-plane TaskSpec field: %#v", spec.PublicationSpecs)
+	}
 
-	forbidden := []string{"voiceover_paths", "clip_link", "image_link", "local_path", "bindings", "project_id", "render_spec", "delivery_plan", "publications", "publication_specs", "metadata", "title", "description", "privacy_status"}
+	forbidden := []string{
+		"voiceover_paths", "clip_link", "image_link", "local_path", "bindings",
+		"project_id", "render_spec", "delivery_plan", "publications", "publication_specs",
+		"publication_metadata", "delivery_metadata", "metadata", "metadata_override",
+		"title", "description", "tags", "privacy", "privacy_status", "publish_at",
+	}
 	assertNoForbiddenRendererKeys(t, spec.Payload, forbidden)
+	var persistedPayload map[string]interface{}
+	if err := json.Unmarshal([]byte(job.Payload), &persistedPayload); err != nil {
+		t.Fatalf("decode persisted job payload: %v", err)
+	}
+	assertNoForbiddenRendererKeys(t, persistedPayload, forbidden)
 	if _, ok := spec.Payload["video_metadata"].(map[string]interface{}); !ok {
 		t.Fatal("technical video_metadata should remain in TaskSpec.Payload")
 	}

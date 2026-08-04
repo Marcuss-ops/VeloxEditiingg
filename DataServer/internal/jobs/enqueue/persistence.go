@@ -49,6 +49,8 @@ func compileSceneVideoJobContext(ctx context.Context, normalized map[string]inte
 	}
 	priority := payload.EnsureInt(normalized["priority"], 5)
 
+	publicationSpecs := normalizedPublicationSpecs(normalized)
+
 	rendererPayload, err := contract.RenderOnlyPayload(normalized)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("marshal renderer payload: %w", err)
@@ -83,18 +85,86 @@ func compileSceneVideoJobContext(ctx context.Context, normalized map[string]inte
 		JobID:      jobID,
 		ExecutorID: executorID,
 		Payload:    rendererPayload,
-		// DeliveryPlan is control-plane data. Capture it before the
-		// renderer projection removes the routing keys from Payload.
+		// DeliveryPlan and PublicationSpecs are control-plane data. Capture
+		// them before the renderer projection removes routing/publication
+		// keys from Payload.
 		DeliveryPlan:         deliveryplan.ExtractEnvelope(normalized),
+		PublicationSpecs:     publicationSpecs,
 		RequiredCapabilities: resolveRequiredCapabilities(executorID),
 	}
 
 	return job, spec, priority, nil
 }
 
+// normalizedPublicationSpecs extracts publication intents into the
+// control-plane TaskSpec field. Publication metadata never belongs in the
+// renderer payload, even when a producer supplied it in the temporary
+// normalized envelope.
+func normalizedPublicationSpecs(normalized map[string]interface{}) []map[string]interface{} {
+	if normalized == nil {
+		return nil
+	}
+	for _, key := range []string{"publication_specs", "publications"} {
+		raw, ok := normalized[key]
+		if !ok || raw == nil {
+			continue
+		}
+		var specs []map[string]interface{}
+		switch values := raw.(type) {
+		case []map[string]interface{}:
+			specs = values
+		case []interface{}:
+			for _, value := range values {
+				if spec, ok := value.(map[string]interface{}); ok {
+					specs = append(specs, spec)
+				}
+			}
+		case map[string]interface{}:
+			specs = []map[string]interface{}{values}
+		}
+		if len(specs) > 0 {
+			return clonePublicationSpecMaps(specs)
+		}
+	}
+	return nil
+}
+
+func clonePublicationSpecMaps(specs []map[string]interface{}) []map[string]interface{} {
+	out := make([]map[string]interface{}, len(specs))
+	for index, spec := range specs {
+		out[index] = clonePublicationSpecValue(spec).(map[string]interface{})
+	}
+	return out
+}
+
+func clonePublicationSpecValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(typed))
+		for key, child := range typed {
+			out[key] = clonePublicationSpecValue(child)
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, len(typed))
+		for index, child := range typed {
+			out[index] = clonePublicationSpecValue(child)
+		}
+		return out
+	case []map[string]interface{}:
+		out := make([]map[string]interface{}, len(typed))
+		for index, child := range typed {
+			out[index] = clonePublicationSpecValue(child).(map[string]interface{})
+		}
+		return out
+	default:
+		return value
+	}
+}
+
 // cloneRendererPayload creates the final worker-facing map from the
-// normalized canonical map. Delivery routing is consumed by the control
-// plane and persisted separately, so it is deliberately absent here.
+// normalized canonical map. Delivery routing and publication metadata are
+// consumed by the control plane and are deliberately absent here.
 func cloneRendererPayload(normalized map[string]interface{}) (map[string]interface{}, error) {
 	return contract.RenderOnlyPayload(normalized)
 }

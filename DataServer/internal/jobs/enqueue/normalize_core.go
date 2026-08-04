@@ -168,9 +168,18 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 		// boundary, never persisted in the master payload.
 		"audio_tracks",
 		"layers",
+		// Preserve control-plane inputs through normalization so the
+		// compiler can move them into TaskSpec.DeliveryPlan and
+		// TaskSpec.PublicationSpecs. They are removed again by
+		// RenderOnlyPayload before the renderer-facing TaskSpec payload is
+		// persisted or offered to a worker.
+		"project_id",
+		"render_spec",
+		"publications",
+		"publication_specs",
 		// Preserve legacy delivery keys through normalization so
-		// taskSpec.Payload still satisfies AtomicJobTaskCreator's parse-time
-		// delivery-plan requirement.
+		// taskSpec.DeliveryPlan can satisfy the atomic creator's parse-time
+		// delivery-plan requirement without putting them in Payload.
 		"delivery_destination_ids",
 		"delivery_destination_id",
 		"destination_ids",

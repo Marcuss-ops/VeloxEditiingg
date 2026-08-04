@@ -62,6 +62,8 @@ var rendererForbiddenKeys = map[string]struct{}{
 	"destination_ids":       {},
 	"publications":          {},
 	"publication_specs":     {},
+	"publication_metadata":  {},
+	"publication":           {},
 	"metadata":              {},
 	"metadata_override":     {},
 	"title":                 {},
