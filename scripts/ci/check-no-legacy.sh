@@ -155,6 +155,8 @@ violations=0
 for pattern in "${full_tree_patterns[@]}"; do
   if matches="$(
     git grep -nE "$pattern" -- \
+      :!ROADMAP.md \
+      :!DEPLOY-CHECKLIST.md \
       ':!docs/**' \
       ':!.github/**' \
       ':!deploy/**' \
