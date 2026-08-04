@@ -46,14 +46,14 @@ func testRecord() store.DuplicateDeliveryRecord {
 }
 
 func TestApplyDryRunNeverContactsDriveAndAuditsPlanIdempotently(t *testing.T) {
-	drive := &fakeDrive{}
+	drive := &fakeDrive{metadata: map[string]*FileMetadata{"correct": {ID: "correct"}}}
 	audit := &fakeAudit{}
 	manifest := Manifest{Records: []store.DuplicateDeliveryRecord{testRecord()}}
 	got, err := Apply(context.Background(), drive, audit, manifest, true, "operator-1", time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Deleted != 0 || len(drive.targets) != 0 {
+	if got.Deleted != 0 || got.CanonicalChecked != 1 || len(drive.targets) != 0 {
 		t.Fatalf("dry-run had remote effect: %#v %#v", got, drive.targets)
 	}
 	if len(audit.events) != 1 || audit.events[0].Action != "DRIVE_DUPLICATE_CLEANUP_PLANNED" {

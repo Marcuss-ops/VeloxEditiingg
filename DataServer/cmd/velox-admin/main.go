@@ -161,9 +161,9 @@ func runDriveDuplicateCleanup(args []string, stdout, stderr io.Writer) error {
 	}
 	defer db.Close()
 
-	cfg := config.FromEnv()
 	var client drivecleanup.DriveClient
-	{
+	if *apply || len(manifest.Records) > 0 {
+		cfg := config.FromEnv()
 		service, serviceErr := driveintegration.NewService(&driveintegration.ServiceConfig{
 			ClientID: cfg.Drive.ClientID, ClientSecret: cfg.Drive.ClientSecret,
 			RedirectURI: cfg.Drive.RedirectURI, TokensDir: cfg.Drive.TokensDir,
