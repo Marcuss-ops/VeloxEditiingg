@@ -20,6 +20,17 @@ import (
 
 type accessTokenContextKey struct{}
 
+// APIError preserves the HTTP status returned by Drive so callers can make
+// safe, typed decisions (for example treating only 404 delete responses as
+// idempotent already-absent outcomes).
+type APIError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *APIError) Error() string   { return fmt.Sprintf("API error (%d): %s", e.StatusCode, e.Message) }
+func (e *APIError) HTTPStatus() int { return e.StatusCode }
+
 // WithAccessToken supplies an ephemeral access token for one operation. It is
 // held only in the in-memory request context and is never persisted or logged.
 func WithAccessToken(ctx context.Context, accessToken string) context.Context {
@@ -126,7 +137,7 @@ func (s *Service) doAPIRequest(ctx context.Context, method, endpoint string, bod
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (%d): %s", resp.StatusCode, credentials.JSON(string(raw)))
+		return &APIError{StatusCode: resp.StatusCode, Message: credentials.JSON(string(raw))}
 	}
 
 	if result != nil {
@@ -304,7 +315,7 @@ func (s *Service) GetFileLink(ctx context.Context, fileID string) (string, error
 
 // GetFileMetadata returns the basic metadata needed to validate and stage a Drive file.
 func (s *Service) GetFileMetadata(ctx context.Context, fileID string) (*File, error) {
-	endpoint := fmt.Sprintf("/files/%s?fields=id,name,mimeType,size", fileID)
+	endpoint := fmt.Sprintf("/files/%s?fields=id,name,mimeType,size,trashed", fileID)
 
 	var result File
 	if err := s.doAPIRequest(ctx, "GET", endpoint, nil, &result); err != nil {

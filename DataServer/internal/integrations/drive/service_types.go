@@ -22,6 +22,7 @@ type File struct {
 	} `json:"videoMediaMetadata,omitempty"`
 	CreatedTime  string `json:"createdTime,omitempty"`
 	ModifiedTime string `json:"modifiedTime,omitempty"`
+	Trashed      bool   `json:"trashed,omitempty"`
 }
 
 // Folder represents a Google Drive folder

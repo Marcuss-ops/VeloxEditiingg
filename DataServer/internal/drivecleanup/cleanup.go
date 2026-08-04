@@ -25,7 +25,8 @@ type DriveClient interface {
 
 // FileMetadata is the only remote state needed by the safety check.
 type FileMetadata struct {
-	ID string `json:"id"`
+	ID      string `json:"id"`
+	Trashed bool   `json:"trashed,omitempty"`
 }
 
 // Manifest is the persisted operator input. Records are deterministic; the
@@ -69,9 +70,10 @@ func ParseManifest(raw []byte) (Manifest, error) {
 	return manifest, nil
 }
 
-// Apply executes a manifest. DryRun never contacts Drive and never deletes a
-// remote object. Apply verifies the canonical ID first, then deletes only the
-// duplicate ID. A Drive 404 during deletion is treated as already complete.
+// Apply executes a manifest. Both modes verify that the canonical Drive file
+// exists and is not trashed; dry-run never deletes a remote object. Apply then
+// deletes only the duplicate ID. A Drive 404 during deletion is treated as
+// already complete.
 func Apply(ctx context.Context, client DriveClient, audit auditRepository, manifest Manifest, dryRun bool, actor string, now time.Time) (Result, error) {
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -80,8 +82,8 @@ func Apply(ctx context.Context, client DriveClient, audit auditRepository, manif
 	if actor == "" {
 		actor = "velox-admin"
 	}
-	if !dryRun && client == nil {
-		return Result{}, errors.New("drive duplicate cleanup: Drive client is required for apply")
+	if client == nil {
+		return Result{}, errors.New("drive duplicate cleanup: Drive client is required for canonical verification")
 	}
 	if audit == nil {
 		return Result{}, errors.New("drive duplicate cleanup: audit repository is required")
@@ -108,7 +110,17 @@ func Apply(ctx context.Context, client DriveClient, audit auditRepository, manif
 		if metadata == nil || strings.TrimSpace(metadata.ID) != strings.TrimSpace(record.DriveFileIDCorrect) {
 			return result, fmt.Errorf("verify canonical Drive file %q for delivery %q: metadata ID mismatch", record.DriveFileIDCorrect, record.DeliveryID)
 		}
+		if metadata.Trashed {
+			return result, fmt.Errorf("verify canonical Drive file %q for delivery %q: canonical file is trashed", record.DriveFileIDCorrect, record.DeliveryID)
+		}
 		result.CanonicalChecked++
+		if dryRun {
+			if err := appendAudit(ctx, audit, record, actor, now, "DRIVE_DUPLICATE_CLEANUP_PLANNED", "dry-run-verified", nil); err != nil {
+				return result, err
+			}
+			result.Skipped++
+			continue
+		}
 
 		err = client.DeleteFile(ctx, record.DriveFileIDDuplicate)
 		outcome := "deleted"
@@ -175,6 +187,12 @@ func hashText(value string) string {
 }
 
 func isNotFound(err error) bool {
+	var statusErr interface{ HTTPStatus() int }
+	if errors.As(err, &statusErr) {
+		return statusErr.HTTPStatus() == 404
+	}
+	// Keep compatibility with injected clients that predate the typed API
+	// error, while the production Drive service uses the status-aware path.
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "(404)") || strings.Contains(message, "not found") || strings.Contains(message, "file not found")
 }
