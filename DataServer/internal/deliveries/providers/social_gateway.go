@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"velox-server/internal/credentials"
 	"velox-server/internal/deliveries"
@@ -85,12 +86,15 @@ func (s *SocialGatewayProvider) Reconcile(ctx context.Context, deliveryID, remot
 	if err != nil {
 		return nil, mapSocialClientError(err)
 	}
+	if strings.TrimSpace(status.DeliveryID) == "" || status.DeliveryID != remoteID {
+		return nil, fmt.Errorf("%w: reconciliation response delivery_id %q does not match requested %q", deliveries.ErrProviderPermanent, status.DeliveryID, remoteID)
+	}
+	thumbnailReady := status.ThumbnailStatus == "applied" || status.ThumbnailStatus == "skipped"
 	return &deliveries.Result{
-		Success:      status.Status == "published" || status.Status == "completed",
-		Status:       status.Status,
-		RemoteID:     status.PlatformMediaID,
-		RemoteURL:    status.PlatformURL,
-		ProviderMeta: map[string]interface{}{"error_code": status.LastErrorCode, "error_message": status.LastErrorMessage},
+		Success:      status.PublishStatus == "published" && thumbnailReady,
+		Status:       status.PublishStatus,
+		RemoteID:     status.YouTubeVideoID,
+		ProviderMeta: map[string]interface{}{"error_code": status.LastErrorCode, "error_message": status.LastErrorMessage, "thumbnail_status": status.ThumbnailStatus},
 	}, nil
 }
 
