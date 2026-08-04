@@ -30,6 +30,7 @@ func TestPrometheusWorkerMetricsExportRequiredSurfaceAndNoAssetIDs(t *testing.T)
 		"velox_artifact_upload_seconds",
 		"velox_task_result_submit_seconds",
 		"velox_task_result_ack_seconds",
+		"velox_telemetry_invalid_events_total",
 		"velox_cache_cleanup_duration_seconds",
 		"velox_cache_cleanup_skipped_total",
 		"velox_cache_evictions_total",

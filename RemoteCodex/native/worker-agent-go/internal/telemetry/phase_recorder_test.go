@@ -95,19 +95,55 @@ func TestEventRecorder_PerOriginIndexes(t *testing.T) {
 	}
 }
 
-// TestEventRecorder_RejectsNonCanonical verifies that invalid origin,
-// scope, and component/action values are rejected before persistence.
-func TestEventRecorder_RejectsNonCanonical(t *testing.T) {
+// TestEventRecorder_RetainsNonCanonical verifies that invalid origin,
+// scope, and component/action values remain available for master quarantine.
+func TestEventRecorder_RetainsNonCanonical(t *testing.T) {
 	r := NewEventRecorder()
+	before := GetPrometheusMetrics().telemetryInvalidEvents.total()
 	r.Emit(EventSpec{Origin: "bogus", Scope: "nope", Component: "runner", Action: "cache_lookup"}, "ok", "", "")
 	r.Emit(EventSpec{Origin: OriginWorker, Scope: ScopeAttempt, Component: "runner", Action: "unknown"}, "ok", "", "")
-	if events := r.Flush(); len(events) != 0 {
-		t.Fatalf("invalid taxonomy must emit no events, got %d", len(events))
+	events := r.Flush()
+	if len(events) != 2 {
+		t.Fatalf("invalid taxonomy must remain available for quarantine, got %d events", len(events))
+	}
+	if events[0].Origin != "bogus" || events[0].Scope != "nope" || events[1].Action != "unknown" {
+		t.Fatalf("raw invalid taxonomy was not preserved: %+v", events)
+	}
+	if GetPrometheusMetrics().telemetryInvalidEvents.total() < before+2 {
+		t.Fatalf("invalid telemetry counter did not increase: before=%v after=%v", before, GetPrometheusMetrics().telemetryInvalidEvents.total())
 	}
 }
 
 // TestEventRecorder_RecordExplicitStamps verifies the Record API: the
 // caller's wall stamps and duration pass through untouched.
+func TestEventRecorder_InvalidSchemaVersionIsForwarded(t *testing.T) {
+	r := NewEventRecorder()
+	r.Emit(EventSpec{
+		Origin: OriginWorker, Scope: ScopeAttempt,
+		Component: "runner", Action: "execute", SchemaVersion: SchemaVersion + 1,
+	}, StatusOK, "", "")
+	events := r.Flush()
+	if len(events) != 1 || events[0].SchemaVersion != SchemaVersion+1 {
+		t.Fatalf("invalid schema version was not preserved: %+v", events)
+	}
+}
+
+func TestEventRecorder_InvalidStartedEventIsForwarded(t *testing.T) {
+	r := NewEventRecorder()
+	h := r.Start(EventSpec{
+		Origin: OriginWorker, Scope: ScopeAttempt,
+		Component: "runner", Action: "not_registered",
+	})
+	if h == nil {
+		t.Fatal("invalid event must still receive a completion handle")
+	}
+	h.Complete()
+	events := r.Flush()
+	if len(events) != 1 || events[0].Action != "not_registered" {
+		t.Fatalf("invalid started event was not preserved: %+v", events)
+	}
+}
+
 func TestEventRecorder_RecordExplicitStamps(t *testing.T) {
 	r := NewEventRecorder()
 	start := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)

@@ -22,6 +22,7 @@ type RecordedPhase struct {
 	Phase            string
 	EventType        string
 	EventName        string
+	SchemaVersion    int32
 	EventIndex       int64
 	ArtifactID       string
 	StartedAt        time.Time
@@ -45,8 +46,9 @@ type RecordedPhase struct {
 	FramesOut        int64
 }
 
-// EventSpec describes an event. Origin, scope, and component/action must be
-// registered in phase_registry.go; invalid specs are rejected before recording.
+// EventSpec describes an event. Origin, scope, and component/action should be
+// registered in phase_registry.go. Invalid specs are retained and sent to the
+// master for quarantine rather than being silently dropped at the worker.
 type EventSpec struct {
 	Origin           string
 	Scope            string
@@ -55,6 +57,7 @@ type EventSpec struct {
 	Phase            string
 	EventType        string
 	EventName        string
+	SchemaVersion    int32
 	ArtifactID       string
 	MetadataJSON     string
 	SegmentIndex     int32
@@ -88,8 +91,13 @@ func NewEventRecorder() *EventRecorder {
 // handle owns a monotonic start timestamp and records exactly once when
 // completed. Begin remains as a compatibility alias for existing callers.
 func (r *EventRecorder) Start(spec EventSpec) *EventHandle {
-	if r == nil || !normalizeEventSpec(&spec) {
+	if r == nil {
 		return nil
+	}
+	if !normalizeEventSpec(&spec) {
+		// Invalid events remain on the wire so the master can quarantine
+		// them. They must never disappear silently at the producer boundary.
+		GetPrometheusMetrics().RecordTelemetryInvalidEvent()
 	}
 	now := time.Now()
 	return &EventHandle{rec: r, spec: spec, startWall: now.UTC(), startMono: now}
@@ -101,15 +109,19 @@ func (r *EventRecorder) Begin(spec EventSpec) *EventHandle {
 }
 
 func (r *EventRecorder) Emit(spec EventSpec, status, errCode, errMsg string) {
-	if r == nil || !normalizeEventSpec(&spec) {
+	if r == nil {
 		return
+	}
+	if !normalizeEventSpec(&spec) {
+		GetPrometheusMetrics().RecordTelemetryInvalidEvent()
 	}
 	now := time.Now()
 	eventType := eventTypeFor(spec.EventType, status)
 	r.record(RecordedPhase{
 		Origin: spec.Origin, Scope: spec.Scope, Component: spec.Component,
 		Action: spec.Action, Phase: spec.Phase, EventType: eventType,
-		EventName: spec.EventName, ArtifactID: spec.ArtifactID, StartedAt: now.UTC(), CompletedAt: now.UTC(),
+		EventName: spec.EventName, SchemaVersion: spec.SchemaVersion,
+		ArtifactID: spec.ArtifactID, StartedAt: now.UTC(), CompletedAt: now.UTC(),
 		Status: status, ErrorCode: errCode, ErrorMessage: errMsg,
 		MetadataJSON: spec.MetadataJSON, SegmentIndex: spec.SegmentIndex,
 		TrackKind: spec.TrackKind, TrackIndex: spec.TrackIndex,
@@ -120,13 +132,17 @@ func (r *EventRecorder) Emit(spec EventSpec, status, errCode, errMsg string) {
 }
 
 func (r *EventRecorder) Record(spec EventSpec, startedAt, completedAt time.Time, durationMS int64, status, errCode, errMsg string) {
-	if r == nil || !normalizeEventSpec(&spec) {
+	if r == nil {
 		return
+	}
+	if !normalizeEventSpec(&spec) {
+		GetPrometheusMetrics().RecordTelemetryInvalidEvent()
 	}
 	r.record(RecordedPhase{
 		Origin: spec.Origin, Scope: spec.Scope, Component: spec.Component,
 		Action: spec.Action, Phase: spec.Phase,
-		EventType: eventTypeFor(spec.EventType, status), EventName: spec.EventName, ArtifactID: spec.ArtifactID,
+		EventType: eventTypeFor(spec.EventType, status), EventName: spec.EventName,
+		SchemaVersion: spec.SchemaVersion, ArtifactID: spec.ArtifactID,
 		StartedAt: startedAt.UTC(), CompletedAt: completedAt.UTC(), DurationMS: durationMS,
 		Status: status, ErrorCode: errCode, ErrorMessage: errMsg,
 		MetadataJSON: spec.MetadataJSON, SegmentIndex: spec.SegmentIndex,
@@ -208,7 +224,8 @@ func normalizeEventSpec(spec *EventSpec) bool {
 
 // EventHandle is safe to complete from multiple goroutines; exactly one
 // completion is recorded. Counter and metadata updates are safe before the
-// completion wins the lifecycle race.
+// completion wins the lifecycle race. Handles created from invalid specs
+// preserve the raw taxonomy so the master can quarantine the event.
 type EventHandle struct {
 	rec       *EventRecorder
 	spec      EventSpec
@@ -340,7 +357,8 @@ func (h *EventHandle) complete(bytesIn, bytesOut, frames int64, status, errCode,
 	h.rec.record(RecordedPhase{
 		Origin: h.spec.Origin, Scope: h.spec.Scope, Component: h.spec.Component,
 		Action: h.spec.Action, Phase: h.spec.Phase,
-		EventType: eventTypeFor(h.spec.EventType, status), EventName: h.spec.EventName, ArtifactID: h.spec.ArtifactID,
+		EventType: eventTypeFor(h.spec.EventType, status), EventName: h.spec.EventName,
+		SchemaVersion: h.spec.SchemaVersion, ArtifactID: h.spec.ArtifactID,
 		StartedAt: h.startWall, CompletedAt: endMono.UTC(),
 		DurationMS: endMono.Sub(h.startMono).Milliseconds(), Status: status,
 		ErrorCode: errCode, ErrorMessage: errMsg,

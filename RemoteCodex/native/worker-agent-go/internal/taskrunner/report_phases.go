@@ -19,6 +19,10 @@ import (
 // ToProto converts the detailed phase onto the wire message. Wall stamps
 // are passed through as-is (UTC); duration is authoritative for graphing.
 func (d DetailedPhaseTiming) ToProto() *pb.PhaseTimingDetailed {
+	schemaVersion := d.SchemaVersion
+	if schemaVersion == 0 {
+		schemaVersion = d.TelemetrySchemaVersion
+	}
 	var startedAt, completedAt *timestamppb.Timestamp
 	if !d.StartedAt.IsZero() {
 		startedAt = timestamppb.New(d.StartedAt)
@@ -58,6 +62,6 @@ func (d DetailedPhaseTiming) ToProto() *pb.PhaseTimingDetailed {
 		CpuMs:            d.CPUMS,
 		QueueWaitMs:      d.QueueWaitMS, FramesIn: d.FramesIn,
 		FramesOut:              d.FramesOut,
-		TelemetrySchemaVersion: d.TelemetrySchemaVersion,
+		TelemetrySchemaVersion: schemaVersion,
 	}
 }

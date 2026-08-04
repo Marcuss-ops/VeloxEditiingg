@@ -1,6 +1,35 @@
 package taskrunner
 
-import "testing"
+import (
+	"testing"
+
+	pb "velox-shared/controltransport/pb"
+
+	"google.golang.org/protobuf/proto"
+)
+
+func TestDetailedPhaseTimingToProtoRoundTripPreservesTelemetryContract(t *testing.T) {
+	input := DetailedPhaseTiming{
+		Component: "engine.encode", Action: "setup",
+		Origin: "engine", Scope: "segment", SchemaVersion: 1,
+		EventType: "completed", EventIndex: 7,
+	}
+	wire := input.ToProto()
+	data, err := proto.Marshal(wire)
+	if err != nil {
+		t.Fatalf("marshal phase timing: %v", err)
+	}
+	var roundTrip pb.PhaseTimingDetailed
+	if err := proto.Unmarshal(data, &roundTrip); err != nil {
+		t.Fatalf("unmarshal phase timing: %v", err)
+	}
+	if roundTrip.GetOrigin() != input.Origin || roundTrip.GetScope() != input.Scope ||
+		roundTrip.GetComponent() != input.Component || roundTrip.GetAction() != input.Action ||
+		roundTrip.GetTelemetrySchemaVersion() != input.SchemaVersion || roundTrip.GetEventIndex() != input.EventIndex {
+		t.Fatalf("telemetry contract changed across protobuf: got origin=%q scope=%q component=%q action=%q schema=%d index=%d",
+			roundTrip.GetOrigin(), roundTrip.GetScope(), roundTrip.GetComponent(), roundTrip.GetAction(), roundTrip.GetTelemetrySchemaVersion(), roundTrip.GetEventIndex())
+	}
+}
 
 func TestDetailedPhaseTimingToProtoMapsExtendedFields(t *testing.T) {
 	input := DetailedPhaseTiming{

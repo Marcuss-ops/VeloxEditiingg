@@ -87,10 +87,13 @@ type DetailedPhaseTiming struct {
 	// TelemetrySchemaVersion identifies the shared event catalog used by
 	// this phase. It is zero only for legacy in-process callers.
 	TelemetrySchemaVersion int32
-	EventType              string
-	EventName              string
-	EventIndex             int64
-	Phase                  string
+	// SchemaVersion preserves a producer-invalid version for master
+	// quarantine. Valid events use TelemetrySchemaVersion on the wire.
+	SchemaVersion int32
+	EventType     string
+	EventName     string
+	EventIndex    int64
+	Phase         string
 	// ── Identity (master overrides at ingest) ────────────────────────
 	ExecutorID       string
 	ExecutorVersion  int32
@@ -132,6 +135,7 @@ func detailedPhasesFromExecutor(phases []executor.DetailedPhaseTiming) []Detaile
 			Origin:                 p.Origin,
 			Scope:                  p.Scope,
 			TelemetrySchemaVersion: telemetry.SchemaVersion,
+			SchemaVersion:          telemetry.SchemaVersion,
 			EventType:              p.EventType,
 			EventName:              p.EventName,
 			EventIndex:             p.EventIndex,
@@ -167,7 +171,8 @@ func fromRecordedPhase(p telemetry.RecordedPhase, phaseOrder int, executorID str
 		MetadataJSON:           p.MetadataJSON,
 		Origin:                 p.Origin,
 		Scope:                  p.Scope,
-		TelemetrySchemaVersion: telemetry.SchemaVersion,
+		TelemetrySchemaVersion: p.SchemaVersion,
+		SchemaVersion:          p.SchemaVersion,
 		EventType:              p.EventType,
 		EventName:              p.EventName,
 		EventIndex:             p.EventIndex,

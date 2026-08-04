@@ -46,6 +46,7 @@ type PrometheusMetrics struct {
 	taskResultSubmitSeconds          *HistogramVec
 	taskResultAckSeconds             *HistogramVec
 	taskResultAcksTotal              *CounterVec
+	telemetryInvalidEvents           *CounterVec
 }
 
 // NewPrometheusMetrics creates a new Prometheus metrics collector.
@@ -137,6 +138,7 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 		taskResultSubmitSeconds: &HistogramVec{Name: "velox_task_result_submit_seconds", Help: "TaskResult persistence and send duration", Buckets: []float64{.001, .01, .1, 1, 5, 30, 120}, values: make(map[string]*histogramData)},
 		taskResultAckSeconds:    &HistogramVec{Name: "velox_task_result_ack_seconds", Help: "TaskResult acknowledgement wait duration", Buckets: []float64{.001, .01, .1, 1, 5, 30, 120}, values: make(map[string]*histogramData)},
 		taskResultAcksTotal:     &CounterVec{Name: "velox_task_result_acks_total", Help: "TaskResult acknowledgements received", values: make(map[string]float64)},
+		telemetryInvalidEvents:  &CounterVec{Name: "velox_telemetry_invalid_events_total", Help: "Telemetry events rejected by the worker catalog and forwarded for master quarantine", values: make(map[string]float64)},
 	}
 }
 
@@ -221,6 +223,9 @@ func (m *PrometheusMetrics) RecordTaskResultAck(duration time.Duration) {
 }
 func (m *PrometheusMetrics) RecordTaskResultAckReceived() {
 	m.taskResultAcksTotal.inc("total")
+}
+func (m *PrometheusMetrics) RecordTelemetryInvalidEvent() {
+	m.telemetryInvalidEvents.inc("catalog")
 }
 func (m *PrometheusMetrics) RecordFallback(reason string) { m.fallbackCount.inc(reason) }
 func (m *PrometheusMetrics) RecordPythonEmergencyPath(reason string) {
@@ -308,6 +313,7 @@ func (m *PrometheusMetrics) ExportPrometheus() string {
 	output += m.taskResultSubmitSeconds.export()
 	output += m.taskResultAckSeconds.export()
 	output += m.taskResultAcksTotal.export()
+	output += m.telemetryInvalidEvents.export()
 	return output
 }
 

@@ -391,7 +391,7 @@ func quarantineTelemetryEvent(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ing
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(attempt_id, event_id) DO NOTHING`,
 		cmd.AttemptID, eventID, timing.Origin, timing.Scope, timing.Component,
-		timing.Action, cmd.TelemetrySchemaVersion, reason.Error(), eventJSON,
+		timing.Action, timing.TelemetrySchemaVersion, reason.Error(), eventJSON,
 		time.Now().UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {

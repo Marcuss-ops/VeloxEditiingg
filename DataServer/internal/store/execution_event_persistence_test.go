@@ -467,6 +467,56 @@ func TestPersistExecutionEvents_QuarantinesUnregisteredModernEvent(t *testing.T)
 	}
 }
 
+func TestPersistExecutionEvents_ValidPlusInvalidInvariant(t *testing.T) {
+	db := openExecutionEventPersistenceTestDB(t)
+	seedExecutionEventIdentity(t, db)
+
+	valid := modernExecutionTimings()[:1]
+	invalid := valid[0]
+	invalid.EventID = "quarantined-invariant"
+	invalid.Component = "engine.unknown"
+	invalid.Action = "invented"
+	if err := persistExecutionEventTestBatch(t, db, append(valid, invalid)); err != nil {
+		t.Fatalf("mixed valid/invalid telemetry must not block TaskResult transaction: %v", err)
+	}
+
+	var persisted, quarantined int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_execution_events`).Scan(&persisted); err != nil {
+		t.Fatalf("count persisted events: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM telemetry_event_quarantine`).Scan(&quarantined); err != nil {
+		t.Fatalf("count quarantined events: %v", err)
+	}
+	if persisted != 1 || quarantined != 1 || persisted+quarantined != 2 {
+		t.Fatalf("event accounting persisted=%d quarantined=%d; want 1+1=2", persisted, quarantined)
+	}
+}
+
+func TestPersistExecutionEvents_QuarantineWriteIsBestEffort(t *testing.T) {
+	db := openExecutionEventPersistenceTestDB(t)
+	seedExecutionEventIdentity(t, db)
+	if _, err := db.Exec(`DROP TABLE telemetry_event_quarantine`); err != nil {
+		t.Fatalf("drop optional quarantine table: %v", err)
+	}
+
+	valid := modernExecutionTimings()[:1]
+	invalid := valid[0]
+	invalid.EventID = "quarantine-table-unavailable"
+	invalid.Component = "engine.unknown"
+	invalid.Action = "invented"
+	if err := persistExecutionEventTestBatch(t, db, append(valid, invalid)); err != nil {
+		t.Fatalf("missing quarantine table must not block TaskResult transaction: %v", err)
+	}
+
+	var persisted int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_execution_events`).Scan(&persisted); err != nil {
+		t.Fatalf("count persisted event: %v", err)
+	}
+	if persisted != 1 {
+		t.Fatalf("valid event count=%d, want 1 despite unavailable quarantine table", persisted)
+	}
+}
+
 func TestExecutionEventRegistry_Closed(t *testing.T) {
 	if !isRegisteredExecutionEvent("engine.encode", "setup") {
 		t.Fatal("engine.encode.setup should be registered")
