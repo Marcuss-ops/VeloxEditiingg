@@ -49,6 +49,7 @@ REQUIRED_METRICS = (
     "cache_misses",
     "downloads",
     "duplicate_downloads",
+    "duplicate_download_bytes",
     "errors",
 )
 
@@ -132,10 +133,16 @@ def parse_prometheus(text: str) -> dict[str, float]:
             value = float(raw)
         except ValueError:
             continue
+        # Keep the exact labelled sample as well as the unlabelled family.
+        # Cache hit/miss is distinguished by result=..., while gauges and
+        # counters without labels remain addressable by their base name.
         base = name.split("{", 1)[0]
         if base.endswith("_bucket") or base.endswith("_sum") or base.endswith("_count"):
             continue
-        values[base] = values.get(base, 0.0) + value
+        if "{" in name:
+            values[name] = values.get(name, 0.0) + value
+        else:
+            values[base] = values.get(base, 0.0) + value
     return values
 
 
@@ -149,9 +156,14 @@ def metric(values: dict[str, float], *names: str) -> float | None:
 def normalize_ratio(value: float | None) -> float | None:
     if value is None:
         return None
-    # Master collector encodes ratio gauges in micro-units; worker telemetry
-    # emits the raw ratio. Accept both wire representations.
-    return value / 1_000_000 if value > 1.0 else value
+    # The canonical worker gauges are ratios in [0,1]. Values above one are
+    # accepted only when they are clearly micro-units; ambiguous values fail
+    # closed so a bad scrape cannot influence the cap decision.
+    if 0.0 <= value <= 1.0:
+        return value
+    if 1_000_000 <= value <= 1_000_000_000:
+        return value / 1_000_000
+    return None
 
 
 def extract_observations(values: dict[str, float]) -> dict[str, float | None]:
@@ -162,7 +174,18 @@ def extract_observations(values: dict[str, float]) -> dict[str, float | None]:
         "cache_hits": metric(values, "velox_cache_requests_total{result=\"hit\"}", "velox_asset_cache_hits_total", "velox_asset_cache_hit_total"),
         "cache_misses": metric(values, "velox_cache_requests_total{result=\"miss\"}", "velox_asset_cache_misses_total", "velox_asset_cache_miss_total"),
         "downloads": metric(values, "velox_cache_downloads_total", "velox_asset_cache_download_total"),
-        "duplicate_downloads": metric(values, "velox_cache_duplicate_downloads_total", "velox_cache_duplicate_download_bytes_total", "velox_duplicate_downloads_total"),
+        "duplicate_downloads": metric(
+            values,
+            "velox_cache_duplicate_downloads_total",
+            "velox_duplicate_downloads_total",
+            "velox_task_duplicate_downloads_total",
+        ),
+        "duplicate_download_bytes": metric(
+            values,
+            "velox_cache_duplicate_download_bytes_total",
+            "velox_duplicate_download_bytes_total",
+            "velox_task_duplicate_download_bytes_total",
+        ),
         "errors": metric(values, "velox_worker_errors_total", "velox_compute_failure_reasons_total", "velox_task_errors_total"),
     }
 
@@ -179,6 +202,10 @@ class JobResult:
     status: str
     latency_ms: float | None
     error: str = ""
+    # Correctness is deliberately separate from lifecycle status. A SUCCEEDED
+    # job without an artifact verification result is not a certified video.
+    correct: bool | None = None
+    correctness_error: str = ""
 
 
 @dataclass
@@ -187,6 +214,8 @@ class CapResult:
     status: str
     wall_time_ms: float
     throughput_jobs_per_hour: float
+    correct_videos: int
+    correct_videos_per_hour: float
     succeeded: int
     failed: int
     error_rate: float
@@ -202,6 +231,7 @@ class CapResult:
     cache_hit_ratio: float | None
     downloads: float | None
     duplicate_downloads: float | None
+    duplicate_download_bytes: float | None
     errors: float | None
     missing_metrics: list[str]
     jobs: list[JobResult]
@@ -209,20 +239,31 @@ class CapResult:
     decision: str = ""
 
 
+def render_command(template: str, **values: str | int) -> str:
+    """Substitute trusted placeholders as shell-quoted arguments.
+
+    The command itself is intentionally operator-owned, but job/artifact
+    values come from HTTP responses and must not be interpolated raw.
+    """
+    rendered = template
+    for name, value in values.items():
+        rendered = rendered.replace("{" + name + "}", shlex.quote(str(value)))
+    return rendered
+
+
 def command_for(template: str, cap: int, worker_id: str, master_url: str) -> str:
-    return template.format(
-        cap=cap,
-        worker_id=worker_id,
-        master_url=master_url,
-    )
+    return render_command(template, cap=cap, worker_id=worker_id, master_url=master_url)
 
 
 def run_cap_command(template: str, cap: int, worker_id: str, master_url: str, dry_run: bool) -> None:
+    required = ("{cap}", "{worker_id}", "{master_url}")
+    if any(token not in template for token in required):
+        raise ValueError("set-cap command must include {cap}, {worker_id}, and {master_url}")
     command = command_for(template, cap, worker_id, master_url)
     if dry_run:
         print(f"DRY-RUN set cap={cap}: {command}")
         return
-    completed = subprocess.run(command, shell=True, text=True)
+    completed = subprocess.run(command, shell=True, text=True, timeout=120)
     if completed.returncode:
         raise RuntimeError(f"cap command failed for {cap}: exit={completed.returncode}")
 
@@ -267,13 +308,52 @@ def wait_cap(master_url: str, admin_token: str, worker_id: str, cap: int, timeou
     last: dict[str, Any] = {}
     while time.monotonic() < deadline:
         status, last, _ = http_json("GET", url, admin_token, timeout=10)
-        if status == 200 and int(last.get("max_active_jobs", -1)) == cap and int(last.get("active_jobs", 0)) == 0:
+        advertised_cap = last.get("max_active_jobs", last.get("task_slots", -1))
+        active_jobs = last.get("active_jobs", last.get("active_tasks", 0))
+        if status == 200 and int(advertised_cap) == cap and int(active_jobs) == 0:
             return
         time.sleep(1)
     raise RuntimeError(f"worker cap did not converge to {cap}: {last}")
 
 
-def submit_and_poll(master_url: str, bearer: str, payload: dict[str, Any], timeout_s: int) -> JobResult:
+def run_correctness_command(template: str, job_id: str, worker_id: str, master_url: str, artifact_url: str = "", response_json: str = "") -> tuple[bool | None, str]:
+    """Run the operator-owned artifact verifier for one terminal job.
+
+    The hook must exit 0 only when the produced video passes the site's
+    canonical verification (for example verify_artifact.sh plus a downloaded
+    artifact). Non-zero is an incorrect video; an empty hook is an unknown
+    result and therefore prevents certification rather than becoming zero.
+    """
+    if not template.strip():
+        return None, "correctness hook not configured"
+    if artifact_url:
+        parsed_artifact = urllib.parse.urlparse(artifact_url)
+        parsed_master = urllib.parse.urlparse(master_url)
+        if parsed_artifact.scheme:
+            if parsed_artifact.scheme not in {"http", "https"}:
+                return False, "artifact URL must use http or https"
+            if parsed_artifact.netloc != parsed_master.netloc:
+                return False, "artifact URL host is outside the configured master host"
+    required = ("{job_id}", "{worker_id}", "{master_url}", "{artifact_url}", "{response_json}")
+    if any(token not in template for token in required):
+        return None, "correctness hook must include all job/artifact/response placeholders"
+    command = render_command(
+        template, job_id=job_id, worker_id=worker_id, master_url=master_url,
+        artifact_url=artifact_url, response_json=response_json,
+    )
+    try:
+        completed = subprocess.run(command, shell=True, text=True, capture_output=True, timeout=900)
+    except subprocess.TimeoutExpired:
+        return False, "verifier timeout after 900s"
+    except (OSError, ValueError) as exc:
+        return False, f"verifier invocation failed: {exc}"
+    if completed.returncode == 0:
+        return True, ""
+    detail = (completed.stderr or completed.stdout or "").strip().replace("\n", " ")
+    return False, f"verifier exit={completed.returncode}{(': ' + detail[:300]) if detail else ''}"
+
+
+def submit_and_poll(master_url: str, bearer: str, payload: dict[str, Any], timeout_s: int, correctness_command: str = "", worker_id: str = "", response_dir: Path | None = None) -> JobResult:
     start = now_ms()
     status, body, _ = http_json("POST", f"{master_url}/api/v1/jobs", bearer, payload, timeout=30)
     if status != 202 or not body.get("job_id"):
@@ -289,7 +369,20 @@ def submit_and_poll(master_url: str, bearer: str, payload: dict[str, Any], timeo
         last_status = str(last_body.get("status", ""))
         if last_status in {"SUCCEEDED", "FAILED", "CANCELLED"}:
             latency = float(now_ms() - start)
-            return JobResult(job_id, last_status, latency, "" if last_status == "SUCCEEDED" else str(last_body.get("error", last_status)))
+            if last_status != "SUCCEEDED":
+                return JobResult(job_id, last_status, latency, str(last_body.get("error", last_status)))
+            response_json = ""
+            artifact_url = str(last_body.get("artifact_url") or last_body.get("artifact_path") or last_body.get("output_path") or "")
+            if response_dir is not None:
+                response_dir.mkdir(parents=True, exist_ok=True)
+                safe_job_id = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in job_id)
+                response_path = response_dir / f"{safe_job_id}.json"
+                response_path.write_text(json.dumps(last_body, sort_keys=True), encoding="utf-8")
+                response_json = str(response_path)
+            correct, correctness_error = run_correctness_command(
+                correctness_command, job_id, worker_id, master_url, artifact_url, response_json,
+            )
+            return JobResult(job_id, last_status, latency, "", correct, correctness_error)
         time.sleep(1)
     return JobResult(job_id, "TIMEOUT", None, f"last_status={last_status}")
 
@@ -341,7 +434,10 @@ def run_one_cap(args: argparse.Namespace, cap: int, admin_token: str, m2m_token:
     try:
         payloads = [build_payload(args.builder, args.fixtures, args.worker_id, args.destination, cap * 10000 + i) for i in range(args.jobs)]
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-            futures = [pool.submit(submit_and_poll, args.master_url, m2m_token, p, args.poll_timeout_s) for p in payloads]
+            futures = [pool.submit(
+                submit_and_poll, args.master_url, m2m_token, p, args.poll_timeout_s,
+                args.correctness_command, args.worker_id, args.response_dir,
+            ) for p in payloads]
             for future in as_completed(futures):
                 jobs.append(future.result())
     finally:
@@ -354,7 +450,10 @@ def run_one_cap(args: argparse.Namespace, cap: int, admin_token: str, m2m_token:
     wall_ms = (time.monotonic() - run_start) * 1000
     succeeded = sum(j.status == "SUCCEEDED" for j in jobs)
     failed = len(jobs) - succeeded
+    correct_videos = sum(j.correct is True for j in jobs)
     latencies = [j.latency_ms for j in jobs if j.latency_ms is not None and j.status == "SUCCEEDED"]
+    correctness_missing = any(j.status == "SUCCEEDED" and j.correct is None for j in jobs)
+    correctness_failed = any(j.status == "SUCCEEDED" and j.correct is False for j in jobs)
     samples = sampler.samples
     missing = [key for key in REQUIRED_METRICS if before_obs.get(key) is None or after_obs.get(key) is None]
     hits = delta(before_obs.get("cache_hits"), after_obs.get("cache_hits"))
@@ -364,9 +463,15 @@ def run_one_cap(args: argparse.Namespace, cap: int, admin_token: str, m2m_token:
     errors_count = float(failed) if error_counter is None else max(float(failed), error_counter)
     return CapResult(
         max_active_jobs=cap,
-        status="PASS" if failed == 0 and not missing else "INCOMPLETE" if failed == 0 else "FAIL",
+        status=(
+            "FAIL" if failed > 0 or correctness_failed else
+            "INCOMPLETE" if missing or correctness_missing else
+            "PASS"
+        ),
         wall_time_ms=wall_ms,
         throughput_jobs_per_hour=(succeeded / (wall_ms / 3_600_000)) if wall_ms > 0 else 0,
+        correct_videos=correct_videos,
+        correct_videos_per_hour=(correct_videos / (wall_ms / 3_600_000)) if wall_ms > 0 else 0,
         succeeded=succeeded,
         failed=failed,
         error_rate=(failed / len(jobs)) if jobs else 1.0,
@@ -382,6 +487,7 @@ def run_one_cap(args: argparse.Namespace, cap: int, admin_token: str, m2m_token:
         cache_hit_ratio=hit_ratio,
         downloads=delta(before_obs.get("downloads"), after_obs.get("downloads")),
         duplicate_downloads=delta(before_obs.get("duplicate_downloads"), after_obs.get("duplicate_downloads")),
+        duplicate_download_bytes=delta(before_obs.get("duplicate_download_bytes"), after_obs.get("duplicate_download_bytes")),
         errors=errors_count,
         missing_metrics=missing,
         jobs=jobs,
@@ -389,11 +495,18 @@ def run_one_cap(args: argparse.Namespace, cap: int, admin_token: str, m2m_token:
 
 
 def choose_limit(results: list[CapResult], min_gain_pct: float, max_p95_ms: float | None, max_error_rate: float, max_iowait: float) -> None:
-    previous: CapResult | None = None
-    for result in results:
+    # Cap 1 is the measured baseline. Compare higher caps only with the last
+    # eligible result, so an incomplete/intermittently bad cell cannot poison
+    # every later comparison. If cap 1 is not valid, no higher cap can become
+    # a substitute baseline for this certification.
+    previous_eligible: CapResult | None = None
+    baseline_valid = bool(results) and results[0].max_active_jobs == 1
+    for index, result in enumerate(results):
         checks: list[str] = []
         if result.status != "PASS":
             checks.append(result.status.lower())
+        if result.correct_videos < result.succeeded:
+            checks.append("incorrect_video")
         if result.error_rate > max_error_rate:
             checks.append(f"error_rate>{max_error_rate}")
         if max_p95_ms is not None and (result.latency_p95_ms is None or result.latency_p95_ms > max_p95_ms):
@@ -401,13 +514,18 @@ def choose_limit(results: list[CapResult], min_gain_pct: float, max_p95_ms: floa
         if result.disk_wait_avg_ratio is not None and result.disk_wait_avg_ratio > max_iowait:
             checks.append("iowait_limit")
         gain = None
-        if previous and previous.throughput_jobs_per_hour > 0:
-            gain = (result.throughput_jobs_per_hour / previous.throughput_jobs_per_hour - 1) * 100
+        if index > 0 and previous_eligible is None:
+            checks.append("baseline_unavailable")
+        if previous_eligible and previous_eligible.correct_videos_per_hour > 0:
+            gain = (result.correct_videos_per_hour / previous_eligible.correct_videos_per_hour - 1) * 100
             if gain < min_gain_pct:
-                checks.append(f"throughput_gain<{min_gain_pct}%")
+                checks.append(f"correct_video_gain<{min_gain_pct}%")
+        if index == 0 and not baseline_valid:
+            checks.append("missing_cap_1_baseline")
         result.efficient = not checks
-        result.decision = "eligible" if result.efficient else "; ".join(checks)
-        previous = result
+        result.decision = "baseline" if previous_eligible is None and result.efficient else "eligible" if result.efficient else "; ".join(checks)
+        if result.efficient:
+            previous_eligible = result
 
 
 def parse_args() -> argparse.Namespace:
@@ -427,6 +545,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-p95-ms", type=float, default=None)
     parser.add_argument("--max-error-rate", type=float, default=0.0)
     parser.add_argument("--max-iowait-ratio", type=float, default=0.35)
+    parser.add_argument(
+        "--correctness-command", default=os.getenv("PARALLEL_BENCH_CORRECTNESS_CMD", ""),
+        help="operator-owned verifier command; placeholders: {job_id}, {worker_id}, {master_url}; exit 0 means correct video",
+    )
+    parser.add_argument("--response-dir", type=Path, default=None, help="directory for terminal job JSON responses passed to the correctness hook")
     parser.add_argument("--output", type=Path, default=Path("parallelism-certification.json"))
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--leave-cap", action="store_true", help="Do not restore MaxActiveJobs=1 after the matrix")
@@ -447,8 +570,19 @@ def main() -> int:
         print("canonical payload builder or assets fixture is missing", file=sys.stderr)
         return 2
     if args.dry_run:
-        print(json.dumps({"caps": CAPS, "worker_id": args.worker_id, "jobs": args.jobs, "set_cap_commands": [command_for(args.set_cap_command, c, args.worker_id, args.master_url) for c in CAPS]}, indent=2))
+        print(json.dumps({
+            "caps": CAPS,
+            "worker_id": args.worker_id,
+            "jobs": args.jobs,
+            "set_cap_commands": [command_for(args.set_cap_command, c, args.worker_id, args.master_url) for c in CAPS],
+            "correctness_command": args.correctness_command,
+            "response_dir": str(args.response_dir) if args.response_dir else "",
+            "decision_metric": "correct_videos_per_hour",
+        }, indent=2))
         return 0
+    if not args.correctness_command.strip() or args.response_dir is None:
+        print("live certification requires --correctness-command and --response-dir", file=sys.stderr)
+        return 2
 
     try:
         admin_token = read_token()
@@ -484,6 +618,9 @@ def main() -> int:
         "caps": list(CAPS),
         "jobs_per_cap": args.jobs,
         "metrics_urls": args.metrics_url,
+        "correctness_command_configured": bool(args.correctness_command.strip()),
+        "response_dir": str(args.response_dir) if args.response_dir else "",
+        "decision_metric": "correct_videos_per_hour",
         "protocol": {"lease_owner": "master", "singleflight_owner": "worker-cache", "cap_selection": "operator command hook"},
         "efficient_limit": efficient_limit,
         "certified": efficient_limit is not None and all(r.status == "PASS" for r in results),

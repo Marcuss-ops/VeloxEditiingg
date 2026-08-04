@@ -67,6 +67,7 @@ The report schema is `velox.parallelism-certification.v1` and includes:
 | Measure | Collection method |
 | --- | --- |
 | throughput | successful jobs / batch wall time, normalized to jobs/hour |
+| correct videos/hour | artifact verifier exit-0 count / batch wall time; this is the decision metric |
 | mean latency | arithmetic mean of successful job submit-to-terminal latency |
 | p95 latency | interpolated p95 of successful job latencies |
 | CPU average/peak | worker Prometheus CPU utilization gauge samples |
@@ -75,6 +76,7 @@ The report schema is `velox.parallelism-certification.v1` and includes:
 | cache hit/miss | delta of existing cache request counters |
 | downloads | delta of existing cache download counter |
 | duplicate downloads | delta of an explicitly exported duplicate-download counter; missing means incomplete, never zero |
+| artifact correctness | operator-owned `--correctness-command` hook, with `{job_id}`, `{worker_id}`, `{master_url}`, `{artifact_url}`, and `{response_json}` placeholders; it must run the canonical artifact/media verifier and exit 0 only for a correct video |
 | errors | failed jobs, merged with the existing error counter delta |
 
 Prometheus labels are not copied into the report as dimensions. The harness
@@ -93,16 +95,33 @@ exported. It is never silently treated as zero.
 A cap is eligible when:
 
 1. every job succeeds;
+2. every succeeded job has a correctness result and the canonical verifier passes;
 2. error rate is within the configured limit (default `0`);
 3. p95 is within `--max-p95-ms` when an SLA is supplied;
 4. disk wait is at or below `--max-iowait-ratio` (default `0.35`);
-5. throughput improves by at least `--min-throughput-gain-pct` versus the
-   previous eligible cell (default `5%`).
+5. correct-videos/hour improves by at least `--min-throughput-gain-pct` versus the
+   previous cell (default `5%`). A lifecycle success without a verified output
+   is never counted as a correct video.
 
 The efficient limit is the highest eligible cap. A higher cap is rejected when
-throughput flattens while p95, iowait, RSS, errors, or duplicate downloads
-worsen. A missing duplicate-download metric prevents certification rather than
-being interpreted as “zero duplicates”.
+correct-videos/hour flattens while p95, iowait, RSS, errors, or duplicate
+downloads worsen. A missing duplicate-download metric or correctness hook
+prevents certification rather than being interpreted as “zero duplicates” or
+“correct”.
+
+For a live run, configure the verifier explicitly. The hook receives the
+terminal response in `--response-dir` and the response's artifact URL, for
+example:
+
+```bash
+--response-dir /var/lib/velox/evidence/parallel-responses \\
+--correctness-command 'tests/worker-cert/verify_parallel_artifact.sh --job-id {job_id} --response-json {response_json} --artifact-url {artifact_url} --master-url {master_url}'
+```
+
+The deployment-specific wrapper must download the artifact and invoke the
+canonical `verify_artifact.sh`; the harness does not guess local paths or
+silently validate status alone. A missing hook or missing verifier result keeps
+the cell `INCOMPLETE`.
 
 ## Current certification status
 
