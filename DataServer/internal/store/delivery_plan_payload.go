@@ -144,6 +144,12 @@ func parseDeliveryPlanPayload(payload map[string]interface{}) ([]deliveryPlanEnt
 	if payload == nil {
 		return nil, nil
 	}
+	if renderOnly, ok := payload["render_only"].(bool); ok && renderOnly {
+		// Render-only is an explicit no-delivery contract. Keep the
+		// parser authoritative for normal jobs, but do not manufacture a
+		// delivery-target error for this intentional control-plane mode.
+		return nil, nil
+	}
 
 	entries, err := deliveryplan.Parse(payload)
 	if err != nil {

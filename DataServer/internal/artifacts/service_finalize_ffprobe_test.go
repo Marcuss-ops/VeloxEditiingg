@@ -149,6 +149,10 @@ func TestFinalize_FFProbeInvariant_Mismatch(t *testing.T) {
 	const jobID = "JMIS"
 	env.seedJob(jobID, "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
 	env.seedAttempt(jobID, 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
+	// seedJob installs the generic primary plan used by most finalize tests;
+	// this fixture intentionally replaces it with exactly three destinations.
+	_, err := env.db.Exec(`DELETE FROM job_delivery_plans WHERE job_id = ?`, jobID)
+	require.NoError(t, err)
 
 	// Seed 3 enabled rows in job_delivery_plans for this job —
 	// mirrors what a per-job plan with 3 destinations would look
@@ -161,7 +165,7 @@ func TestFinalize_FFProbeInvariant_Mismatch(t *testing.T) {
 		// Seed destination FK target (some schemas enforce FK
 		// between job_delivery_plans and delivery_destinations;
 		// harmless if the constraint is permissive).
-		_, err := env.db.Exec(`
+		_, err = env.db.Exec(`
 			INSERT OR IGNORE INTO delivery_destinations
 				(destination_id, provider, name, enabled, created_at, updated_at)
 			VALUES (?, 'test', ?, 1, ?, ?)`,
@@ -368,13 +372,17 @@ func TestFinalize_FFProbeInvariant_ShadowMismatch(t *testing.T) {
 	const jobID = "JSMM"
 	env.seedJob(jobID, "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
 	env.seedAttempt(jobID, 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
+	// Replace the generic primary plan from seedJob so the expected count is
+	// exactly the three destinations declared by this shadow fixture.
+	_, err := env.db.Exec(`DELETE FROM job_delivery_plans WHERE job_id = ?`, jobID)
+	require.NoError(t, err)
 
 	// 3 enabled delivery destinations (the canonical regression
 	// fixture: a 6-voice payload collapsed by the C++ engine).
 	now := env.clock.Now().UTC().Format(time.RFC3339)
 	dests := []string{"shadow-mismatch-yt", "shadow-mismatch-drive", "shadow-mismatch-s3"}
 	for i, did := range dests {
-		_, err := env.db.Exec(`
+		_, err = env.db.Exec(`
 			INSERT OR IGNORE INTO delivery_destinations
 				(destination_id, provider, name, enabled, created_at, updated_at)
 			VALUES (?, 'test', ?, 1, ?, ?)`, did, did, now, now)
