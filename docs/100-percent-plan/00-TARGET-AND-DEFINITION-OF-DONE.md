@@ -4,6 +4,12 @@ Status: canonical execution plan
 Owner: Velox architecture  
 Last reconciliation: 2026-06-26
 
+> **Stato architetturale (Agosto 2026):** la separazione in tre repository è
+> completata — Velox è una render farm headless, InstaeditLogin è l'editor/BFF,
+> VeloxFrontend è la UI. Vedi [`ROADMAP.md`](../../ROADMAP.md) (stato per area),
+> [`FUTURE.md`](../../FUTURE.md) (migliorie future) e
+> [`DEPLOY-CHECKLIST.md`](../../DEPLOY-CHECKLIST.md) (playbook di deploy).
+
 This directory is the only completion roadmap for Velox. Historical audits, temporary PR plans and snapshot ticket lists must not be used as active implementation contracts.
 
 A checkbox may be marked complete only when the change is merged into `main`, the required tests pass and the evidence is reproducible. Code that merely compiles is not complete.

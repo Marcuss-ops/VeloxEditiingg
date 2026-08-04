@@ -156,6 +156,19 @@ Every `process_video` payload that crosses the master enqueue boundary must conf
 
 The two halves of Step 7+8 together (SOURCE side grep + DATA side semantic) form the closure: the writer cannot emit a forbidden alias into the source tree, and the operator cannot submit a fixture whose preflight would reject it on the master.
 
+## Project status documents
+
+Three top-level documents track the project's architectural state and
+forward plan (created after the Dark Editor separation was completed):
+
+- [`ROADMAP.md`](ROADMAP.md) — current status per area, the completed
+  three-repo separation (Velox = render farm, InstaeditLogin = editor/BFF,
+  VeloxFrontend = UI), commit history and next phases.
+- [`FUTURE.md`](FUTURE.md) — prioritized catalog of future features and
+  optimizations.
+- [`DEPLOY-CHECKLIST.md`](DEPLOY-CHECKLIST.md) — deploy playbook for the
+  headless master, the InstaEdit BFF JWT contract and the worker fleet.
+
 ## Canonical path to 100%
 
 The active completion roadmap is intentionally limited to five documents:
