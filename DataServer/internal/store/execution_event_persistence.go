@@ -6,11 +6,26 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"log"
+	"sync/atomic"
 	"time"
 
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
+
+	sharedtelemetry "velox-shared/telemetry"
 )
+
+var telemetryQuarantinedEvents atomic.Uint64
+
+// TelemetryQuarantineCount returns the process-local count of invalid
+// telemetry events quarantined (or attempted for quarantine). It is
+// deliberately low-cardinality and increments even when the optional
+// quarantine table is unavailable, so observability never depends on the
+// diagnostic write succeeding.
+func TelemetryQuarantineCount() uint64 {
+	return telemetryQuarantinedEvents.Load()
+}
 
 // persistPhaseTimingsAndExecutionEvents is the single atomic writer for the
 // worker's detailed phase timeline. PhaseTimings is authoritative; the legacy
@@ -77,7 +92,7 @@ func persistPhaseTimingsAndExecutionEvents(ctx context.Context, tx *sql.Tx, cmd 
 	if err := persistPhaseSummary(ctx, tx, cmd.AttemptID, identity, timings); err != nil {
 		return err
 	}
-	if err := persistExecutionEvents(ctx, tx, cmd.AttemptID, identity, timings); err != nil {
+	if err := persistExecutionEvents(ctx, tx, cmd, identity, timings); err != nil {
 		return err
 	}
 	return nil
@@ -150,14 +165,10 @@ func validateExecutionEventTiming(timing taskattempts.PhaseTimingDetailed) error
 	if !isExecutionEventOrigin(timing.Origin) || !isExecutionEventScope(timing.Scope) {
 		return fmt.Errorf("invalid origin/scope %q/%q", timing.Origin, timing.Scope)
 	}
-	registered, ok := canonicalExecutionEventRegistration(timing.Component, timing.Action)
-	if !ok {
-		return fmt.Errorf("unregistered component/action %q.%q", timing.Component, timing.Action)
-	}
-	if timing.Origin != registered.Origin || timing.Scope != registered.Scope {
-		return fmt.Errorf("origin/scope mismatch for %q.%q: got %q/%q, want %q/%q", timing.Component, timing.Action, timing.Origin, timing.Scope, registered.Origin, registered.Scope)
-	}
-	return nil
+	return sharedtelemetry.Catalog.Validate(sharedtelemetry.TelemetryEventSpec{
+		Origin: timing.Origin, Scope: timing.Scope, Component: timing.Component,
+		Action: timing.Action, SchemaVersion: timing.TelemetrySchemaVersion,
+	})
 }
 
 // phaseSummary is the compact component/action aggregate retained in
@@ -272,17 +283,27 @@ func persistPhaseSummary(ctx context.Context, tx *sql.Tx, attemptID string, iden
 	return nil
 }
 
-func persistExecutionEvents(ctx context.Context, tx *sql.Tx, attemptID string, identity phaseTimingIdentity, timings []taskattempts.PhaseTimingDetailed) error {
+func persistExecutionEvents(ctx context.Context, tx *sql.Tx, cmd taskgraph.IngestResultCommand, identity phaseTimingIdentity, timings []taskattempts.PhaseTimingDetailed) error {
+	attemptID := cmd.AttemptID
 	createdAt := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, timing := range timings {
 		if phaseTimingIsLegacy(timing) {
 			continue
 		}
 		if timing.Component == "" || timing.Action == "" {
-			return fmt.Errorf("task ingest atomic execution event requires component and action")
+			quarantineTelemetryEvent(ctx, tx, cmd, timing, fmt.Errorf("component and action are required"))
+			continue
+		}
+		if cmd.TelemetrySchemaVersion != 0 && cmd.TelemetrySchemaVersion != sharedtelemetry.SchemaVersion {
+			quarantineTelemetryEvent(ctx, tx, cmd, timing, fmt.Errorf("unsupported telemetry schema version %d", cmd.TelemetrySchemaVersion))
+			continue
 		}
 		if err := validateExecutionEventTiming(timing); err != nil {
-			return fmt.Errorf("task ingest atomic execution event: %w", err)
+			// Telemetry is best-effort. Quarantine only the invalid event so
+			// one producer taxonomy mistake cannot prevent the canonical
+			// TaskResult/artifact transaction from completing.
+			quarantineTelemetryEvent(ctx, tx, cmd, timing, err)
+			continue
 		}
 		// SQLite enforces artifact_id for artifact-scoped events. A
 		// producer may use a registered generic artifact phase before the
@@ -290,6 +311,7 @@ func persistExecutionEvents(ctx context.Context, tx *sql.Tx, attemptID string, i
 		// and retain the compact phase summary, while omitting only this
 		// malformed timeline row.
 		if timing.Scope == "artifact" && timing.ArtifactID == "" {
+			quarantineTelemetryEvent(ctx, tx, cmd, timing, fmt.Errorf("artifact scope requires artifact_id"))
 			continue
 		}
 		eventID := timing.EventID
@@ -315,7 +337,8 @@ func persistExecutionEvents(ctx context.Context, tx *sql.Tx, attemptID string, i
 			TrackIndex:   trackIndex,
 			ArtifactID:   timing.ArtifactID,
 		}).Validate(); err != nil {
-			return fmt.Errorf("task ingest atomic execution event %s: %w", eventID, err)
+			quarantineTelemetryEvent(ctx, tx, cmd, timing, err)
+			continue
 		}
 		startedAt := formatTimingTime(timing.StartedAt)
 		completedAt := formatTimingTime(timing.CompletedAt)
@@ -352,6 +375,35 @@ func persistExecutionEvents(ctx context.Context, tx *sql.Tx, attemptID string, i
 		}
 	}
 	return nil
+}
+
+func quarantineTelemetryEvent(ctx context.Context, tx *sql.Tx, cmd taskgraph.IngestResultCommand, timing taskattempts.PhaseTimingDetailed, reason error) {
+	telemetryQuarantinedEvents.Add(1)
+	eventID := timing.EventID
+	if eventID == "" {
+		eventID = deterministicEventID(cmd.AttemptID, timing)
+	}
+	eventJSON := fmt.Sprintf(`{"origin":%q,"scope":%q,"component":%q,"action":%q,"event_index":%d,"phase":%q}`, timing.Origin, timing.Scope, timing.Component, timing.Action, timing.EventIndex, timing.Phase)
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO telemetry_event_quarantine (
+			attempt_id, event_id, origin, scope, component, action,
+			schema_version, reason, event_json, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(attempt_id, event_id) DO NOTHING`,
+		cmd.AttemptID, eventID, timing.Origin, timing.Scope, timing.Component,
+		timing.Action, cmd.TelemetrySchemaVersion, reason.Error(), eventJSON,
+		time.Now().UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		// Quarantine is strictly best-effort. In particular, a legacy test
+		// schema or a DB that has not applied migration 130 must not turn a
+		// telemetry taxonomy error into a failed TaskResult transaction.
+		log.Printf("[TELEMETRY_QUARANTINE] attempt=%s event_id=%s component=%s action=%s origin=%s scope=%s err=%v quarantine_write=%v",
+			cmd.AttemptID, eventID, timing.Component, timing.Action, timing.Origin, timing.Scope, reason, err)
+		return
+	}
+	log.Printf("[TELEMETRY_QUARANTINE] attempt=%s event_id=%s component=%s action=%s origin=%s scope=%s err=%v",
+		cmd.AttemptID, eventID, timing.Component, timing.Action, timing.Origin, timing.Scope, reason)
 }
 
 func deterministicEventID(attemptID string, timing taskattempts.PhaseTimingDetailed) string {

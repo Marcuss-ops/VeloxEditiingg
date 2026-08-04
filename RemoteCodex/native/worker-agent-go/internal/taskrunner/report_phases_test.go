@@ -4,21 +4,22 @@ import "testing"
 
 func TestDetailedPhaseTimingToProtoMapsExtendedFields(t *testing.T) {
 	input := DetailedPhaseTiming{
-		PhaseOrder:       4,
-		Component:        "engine.encode",
-		Action:           "frame_submit",
-		Origin:           "engine",
-		Scope:            "segment",
-		EventIndex:       17,
-		SegmentIndex:     3,
-		TrackKind:        "voiceover",
-		TrackIndex:       1,
-		StartedOffsetMS:  1250.5,
-		FinishedOffsetMS: 8420.25,
-		CPUMS:            3799.75,
-		QueueWaitMS:      12.5,
-		FramesIn:         900,
-		FramesOut:        897,
+		PhaseOrder:             4,
+		Component:              "engine.encode",
+		Action:                 "frame_submit",
+		Origin:                 "engine",
+		Scope:                  "segment",
+		TelemetrySchemaVersion: 1,
+		EventIndex:             17,
+		SegmentIndex:           3,
+		TrackKind:              "voiceover",
+		TrackIndex:             1,
+		StartedOffsetMS:        1250.5,
+		FinishedOffsetMS:       8420.25,
+		CPUMS:                  3799.75,
+		QueueWaitMS:            12.5,
+		FramesIn:               900,
+		FramesOut:              897,
 	}
 
 	output := input.ToProto()

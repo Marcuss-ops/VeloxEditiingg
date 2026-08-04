@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"strings"
 	"testing"
 	"time"
 
@@ -59,6 +58,20 @@ CREATE TABLE task_execution_event_replacement_authorizations (
     attempt_id TEXT PRIMARY KEY,
     authorization TEXT NOT NULL,
     created_at TEXT NOT NULL
+);
+CREATE TABLE telemetry_event_quarantine (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    attempt_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    origin TEXT NOT NULL DEFAULT '',
+    scope TEXT NOT NULL DEFAULT '',
+    component TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL DEFAULT '',
+    schema_version INTEGER NOT NULL DEFAULT 0,
+    reason TEXT NOT NULL,
+    event_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    UNIQUE (attempt_id, event_id)
 );
 CREATE TABLE task_execution_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -169,11 +182,11 @@ func persistExecutionEventTestBatch(t *testing.T, db *sql.DB, timings []taskatte
 		return err
 	}
 	cmd := taskgraph.IngestResultCommand{
-		AttemptID:    "attempt-1",
-		TaskID:       "task-1",
-		WorkerID:     "worker-1",
-		LeaseID:      "lease-1",
-		PhaseTimings: timings,
+		AttemptID: "attempt-1",
+		TaskID:    "task-1",
+		WorkerID:  "worker-1", LeaseID: "lease-1",
+		TelemetrySchemaVersion: 1,
+		PhaseTimings:           timings,
 	}
 	if err := persistPhaseTimingsAndExecutionEvents(context.Background(), tx, cmd); err != nil {
 		_ = tx.Rollback()
@@ -391,14 +404,14 @@ func TestPersistExecutionEvents_ReplacementRemovesStaleRowsAndRollsBack(t *testi
 	})
 	err = persistPhaseTimingsAndExecutionEvents(context.Background(), tx, taskgraph.IngestResultCommand{
 		AttemptID: "attempt-1", TaskID: "task-1", WorkerID: "worker-1", LeaseID: "lease-1",
-		PhaseTimings: invalid,
+		TelemetrySchemaVersion: 1, PhaseTimings: invalid,
 	})
-	if err == nil {
+	if err != nil {
 		_ = tx.Rollback()
-		t.Fatal("invalid replacement should fail")
+		t.Fatalf("invalid telemetry replacement must not fail: %v", err)
 	}
-	if rollbackErr := tx.Rollback(); rollbackErr != nil && rollbackErr != sql.ErrTxDone {
-		t.Fatalf("rollback invalid replacement: %v", rollbackErr)
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit quarantined replacement: %v", err)
 	}
 
 	var sentinelPhaseCount, sentinelEventCount, currentEventCount int
@@ -411,12 +424,19 @@ func TestPersistExecutionEvents_ReplacementRemovesStaleRowsAndRollsBack(t *testi
 	if err := db.QueryRow(`SELECT COUNT(*) FROM task_execution_events WHERE event_id = 'encode-segment-0'`).Scan(&currentEventCount); err != nil {
 		t.Fatalf("count committed event after rollback: %v", err)
 	}
-	if sentinelPhaseCount != 1 || sentinelEventCount != 1 || currentEventCount != 1 {
-		t.Fatalf("rollback state phase_sentinel=%d event_sentinel=%d current=%d; want 1/1/1", sentinelPhaseCount, sentinelEventCount, currentEventCount)
+	if sentinelPhaseCount != 0 || sentinelEventCount != 0 || currentEventCount != 1 {
+		t.Fatalf("replacement state phase_sentinel=%d event_sentinel=%d current=%d; want 0/0/1", sentinelPhaseCount, sentinelEventCount, currentEventCount)
+	}
+	var quarantined int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM telemetry_event_quarantine WHERE event_id = 'invalid-replacement'`).Scan(&quarantined); err != nil {
+		t.Fatalf("count quarantined replacement event: %v", err)
+	}
+	if quarantined != 1 {
+		t.Fatalf("quarantined replacement rows=%d, want 1", quarantined)
 	}
 }
 
-func TestPersistExecutionEvents_RejectsUnregisteredModernEvent(t *testing.T) {
+func TestPersistExecutionEvents_QuarantinesUnregisteredModernEvent(t *testing.T) {
 	db := openExecutionEventPersistenceTestDB(t)
 	seedExecutionEventIdentity(t, db)
 
@@ -424,8 +444,8 @@ func TestPersistExecutionEvents_RejectsUnregisteredModernEvent(t *testing.T) {
 	bad[0].EventID = "bad-event"
 	bad[0].Component = "engine.unknown"
 	bad[0].Action = "invented"
-	if err := persistExecutionEventTestBatch(t, db, bad); err == nil || !strings.Contains(err.Error(), "unregistered component/action") {
-		t.Fatalf("error=%v, want unregistered component/action rejection", err)
+	if err := persistExecutionEventTestBatch(t, db, bad); err != nil {
+		t.Fatalf("invalid telemetry must not block TaskResult transaction: %v", err)
 	}
 
 	var events, summaries int
@@ -435,8 +455,15 @@ func TestPersistExecutionEvents_RejectsUnregisteredModernEvent(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM task_phase_timings`).Scan(&summaries); err != nil {
 		t.Fatalf("count summaries after rejected batch: %v", err)
 	}
-	if events != 0 || summaries != 0 {
-		t.Fatalf("rejected transaction persisted events=%d summaries=%d", events, summaries)
+	if events != 0 || summaries != 1 {
+		t.Fatalf("quarantined event should preserve compact summary: events=%d summaries=%d", events, summaries)
+	}
+	var quarantined int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM telemetry_event_quarantine WHERE event_id = 'bad-event'`).Scan(&quarantined); err != nil {
+		t.Fatalf("count quarantined event: %v", err)
+	}
+	if quarantined != 1 {
+		t.Fatalf("quarantined rows=%d, want 1", quarantined)
 	}
 }
 
@@ -457,15 +484,40 @@ func TestExecutionEventRegistry_Closed(t *testing.T) {
 	}
 }
 
-func TestPersistExecutionEvents_RejectsCanonicalOriginScopeMismatch(t *testing.T) {
+func TestPersistExecutionEvents_QuarantinesCanonicalOriginScopeMismatch(t *testing.T) {
 	db := openExecutionEventPersistenceTestDB(t)
 	seedExecutionEventIdentity(t, db)
 
+	before := TelemetryQuarantineCount()
 	bad := modernExecutionTimings()[:1]
 	bad[0].EventID = "wrong-tuple"
 	bad[0].Origin = "worker"
 	bad[0].Scope = "attempt"
-	if err := persistExecutionEventTestBatch(t, db, bad); err == nil || !strings.Contains(err.Error(), "origin/scope mismatch") {
-		t.Fatalf("error=%v, want canonical origin/scope mismatch rejection", err)
+	if err := persistExecutionEventTestBatch(t, db, bad); err != nil {
+		t.Fatalf("origin/scope mismatch must not block TaskResult transaction: %v", err)
+	}
+	if TelemetryQuarantineCount() <= before {
+		t.Fatalf("quarantine counter did not increase: before=%d after=%d", before, TelemetryQuarantineCount())
+	}
+}
+
+func TestPersistExecutionEvents_QuarantinesMissingComponentAction(t *testing.T) {
+	db := openExecutionEventPersistenceTestDB(t)
+	seedExecutionEventIdentity(t, db)
+
+	bad := modernExecutionTimings()[:1]
+	bad[0].EventID = "missing-component-action"
+	bad[0].Component = ""
+	bad[0].Action = ""
+	if err := persistExecutionEventTestBatch(t, db, bad); err != nil {
+		t.Fatalf("missing component/action must not block TaskResult transaction: %v", err)
+	}
+
+	var quarantined int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM telemetry_event_quarantine WHERE event_id = 'missing-component-action'`).Scan(&quarantined); err != nil {
+		t.Fatalf("count quarantined malformed event: %v", err)
+	}
+	if quarantined != 1 {
+		t.Fatalf("quarantined malformed rows=%d, want 1", quarantined)
 	}
 }

@@ -242,6 +242,7 @@ func (w *Worker) runSession(ctx context.Context) bool {
 	go w.receiveLoop(sessionCtx, recvCh)
 
 	w.startPersistenceLoop(sessionCtx)
+	w.startTaskResultReplayLoop(sessionCtx)
 
 	sessionEnded := false
 	select {

@@ -3,6 +3,8 @@ package telemetry
 import (
 	"testing"
 	"time"
+
+	sharedtelemetry "velox-shared/telemetry"
 )
 
 // TestEventRecorder_BeginComplete verifies the begin/complete lifecycle:
@@ -145,6 +147,18 @@ func TestEventRecorder_FlushClears(t *testing.T) {
 
 // TestCanonicalEnumsAndRegistry verifies the closed enum predicates and
 // the phase-spec registry (register → lookup → overwrite).
+func TestWorkerRegistryMatchesSharedCatalog(t *testing.T) {
+	for key, workerSpec := range RegisteredPhaseSpecs() {
+		sharedSpec, ok := sharedtelemetry.Catalog.Lookup(workerSpec.Component, workerSpec.Action)
+		if !ok {
+			t.Fatalf("worker event %s is missing from shared catalog", key)
+		}
+		if sharedSpec.Origin != workerSpec.Origin || sharedSpec.Scope != workerSpec.Scope {
+			t.Fatalf("worker event %s differs from shared catalog: worker=%s/%s shared=%s/%s", key, workerSpec.Origin, workerSpec.Scope, sharedSpec.Origin, sharedSpec.Scope)
+		}
+	}
+}
+
 func TestCanonicalEnumsAndRegistry(t *testing.T) {
 	for _, o := range CanonicalOrigins() {
 		if !IsCanonicalOrigin(o) {

@@ -33,9 +33,12 @@ import (
 
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
+	sharedtelemetry "velox-shared/telemetry"
+	"velox-worker-agent/internal/spool"
 	"velox-worker-agent/internal/taskrunner"
 
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -82,6 +85,7 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 	// send) and report_schema_version tracks the report shape.
 	tr.ReportSchemaVersion = 1
 	tr.ReportVersion = 1
+	tr.TelemetrySchemaVersion = sharedtelemetry.SchemaVersion
 
 	if report != nil {
 		attachWorkerIdentityAndTimings(w, report)
@@ -193,29 +197,72 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 		tr.ReportHash = fmt.Sprintf("%x", sha256.Sum256(reportJSON))
 	}
 
-	resultMsg := controltransport.NewTypedMessage(
-		controltransport.MsgTaskResult,
-		w.config.WorkerID,
-		w.config.ProtocolVersion,
-		tr,
-	)
-
-	if submitErr := w.transport.Send(ctx, resultMsg); submitErr != nil {
-		w.logger.Error("[TASK] Failed to submit TaskResult for %s: %v", taskID, submitErr)
-		w.logArtifactProtocol("TASK_RESULT_SEND_FAILED", pte, resultStartedAt, "", "", "", map[string]interface{}{
-			"status":      status,
-			"report_hash": tr.GetReportHash(),
-			"error":       submitErr.Error(),
-		})
-	} else {
+	if w.outputSpool == nil {
+		// Hand-built legacy test workers do not open the production spool.
+		// Keep those fixtures usable while New() remains fail-closed with a
+		// durable outbox in every real worker.
+		if sendErr := w.transport.Send(ctx, controltransport.NewTypedMessage(controltransport.MsgTaskResult, w.config.WorkerID, w.config.ProtocolVersion, tr)); sendErr != nil {
+			w.logger.Error("[TASK] Failed to submit TaskResult for %s: %v", taskID, sendErr)
+			return
+		}
 		artifactCount := artifactReportOutputCount(report)
 		w.logger.Info("[TASK] TaskResult submitted for %s (status: %s, artifacts: %d)", taskID, status, artifactCount)
 		w.logArtifactProtocol("TASK_RESULT_SENT", pte, resultStartedAt, "", "", "", map[string]interface{}{
-			"status":         status,
-			"report_hash":    tr.GetReportHash(),
-			"artifact_count": artifactCount,
+			"status": status, "report_hash": tr.GetReportHash(), "artifact_count": artifactCount,
 		})
+		return
 	}
+	if err := w.persistTaskResult(ctx, tr); err != nil {
+		w.logger.Error("[TASK_RESULT_OUTBOX] Failed to persist TaskResult for %s: %v", taskID, err)
+		w.logArtifactProtocol("TASK_RESULT_OUTBOX_PERSIST_FAILED", pte, resultStartedAt, "", "", "", map[string]interface{}{
+			"status": status, "report_hash": tr.GetReportHash(), "error": err.Error(),
+		})
+		return
+	}
+	payload, marshalErr := proto.Marshal(tr)
+	if marshalErr != nil {
+		w.logger.Error("[TASK_RESULT_OUTBOX] Failed to marshal TaskResult for %s: %v", taskID, marshalErr)
+		return
+	}
+	entry := spool.TaskResultOutboxEntry{
+		TaskID: taskID, AttemptID: attemptID, ReportHash: tr.GetReportHash(),
+		Payload: payload,
+	}
+	ackCh := w.registerTaskResultAck(pte.JobID, taskID, attemptID)
+	defer w.unregisterTaskResultAck(pte.JobID, taskID, attemptID)
+	if sendErr := w.sendTaskResultAttempt(ctx, entry); sendErr != nil {
+		w.logger.Error("[TASK_RESULT_OUTBOX] Failed to submit TaskResult for %s: %v", taskID, sendErr)
+		w.logArtifactProtocol("TASK_RESULT_SEND_FAILED", pte, resultStartedAt, "", "", "", map[string]interface{}{
+			"status": status, "report_hash": tr.GetReportHash(), "error": sendErr.Error(),
+		})
+		return
+	}
+	ackWait := taskResultAckWait
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining < ackWait {
+			ackWait = remaining
+		}
+	}
+	if ackWait > 0 {
+		timer := time.NewTimer(ackWait)
+		select {
+		case ack := <-ackCh:
+			timer.Stop()
+			if !taskResultAckIsTerminal(ack) {
+				w.logger.Warn("[TASK_RESULT_OUTBOX] TaskResultAck was non-terminal task=%s attempt=%s error=%q; replay remains durable", taskID, attemptID, ack.GetError())
+			}
+		case <-timer.C:
+			w.logger.Warn("[TASK_RESULT_OUTBOX] TaskResultAck not received before wait window task=%s attempt=%s; replay remains durable", taskID, attemptID)
+		case <-ctx.Done():
+			timer.Stop()
+		}
+	}
+	artifactCount := artifactReportOutputCount(report)
+	w.logger.Info("[TASK] TaskResult submitted for %s (status: %s, artifacts: %d)", taskID, status, artifactCount)
+	w.logArtifactProtocol("TASK_RESULT_SENT", pte, resultStartedAt, "", "", "", map[string]interface{}{
+		"status": status, "report_hash": tr.GetReportHash(), "artifact_count": artifactCount,
+	})
 }
 
 // appendDetailedPhaseTimings converts every worker-reported detailed phase

@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -22,7 +23,16 @@ import (
 func (t *GRPCStreamTransport) helloToEnvelope(hello controltransport.WorkerHello) *pb.WorkerToMasterEnvelope {
 	var caps *structpb.Struct
 	if hello.Capabilities != nil {
-		caps, _ = structpb.NewStruct(hello.Capabilities)
+		// Capability reports are assembled from Go-native values (including
+		// ints). structpb.Struct accepts JSON value types, not every Go
+		// numeric type; normalise through JSON before conversion so a single
+		// unsupported value cannot silently drop the entire capability map.
+		if raw, err := json.Marshal(hello.Capabilities); err == nil {
+			var normalized map[string]interface{}
+			if err := json.Unmarshal(raw, &normalized); err == nil {
+				caps, _ = structpb.NewStruct(normalized)
+			}
+		}
 	}
 
 	t.mu.Lock()
@@ -152,6 +162,10 @@ func (t *GRPCStreamTransport) envelopeToMessage(env *pb.MasterToWorkerEnvelope) 
 
 	case *pb.MasterToWorkerEnvelope_Ping:
 		msg.Type = controltransport.MsgPing
+
+	case *pb.MasterToWorkerEnvelope_TaskResultAck:
+		msg.Type = controltransport.MsgTaskResultAck
+		msg.TypedPayload = m.TaskResultAck
 
 	case *pb.MasterToWorkerEnvelope_ArtifactUploadPlan:
 		msg.Type = controltransport.MsgArtifactUploadPlan

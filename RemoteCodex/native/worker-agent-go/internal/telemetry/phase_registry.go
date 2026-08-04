@@ -13,26 +13,31 @@ package telemetry
 
 import (
 	"fmt"
+
+	sharedtelemetry "velox-shared/telemetry"
 )
+
+// SchemaVersion is the shared event catalog version emitted by this worker.
+const SchemaVersion = sharedtelemetry.SchemaVersion
 
 // ── Closed origin enum ─────────────────────────────────────────────────────
 const (
-	OriginMaster     = "master"
-	OriginWorker     = "worker"
-	OriginEngine     = "engine"
-	OriginFFmpeg     = "ffmpeg"
-	OriginUpload     = "upload"
-	OriginValidation = "validation"
+	OriginMaster     = sharedtelemetry.OriginMaster
+	OriginWorker     = sharedtelemetry.OriginWorker
+	OriginEngine     = sharedtelemetry.OriginEngine
+	OriginFFmpeg     = sharedtelemetry.OriginFFmpeg
+	OriginUpload     = sharedtelemetry.OriginUpload
+	OriginValidation = sharedtelemetry.OriginValidation
 )
 
 // canonicalOrigins is private so callers cannot mutate the taxonomy.
 var canonicalOrigins = [...]string{
-	OriginMaster,
-	OriginWorker,
-	OriginEngine,
-	OriginFFmpeg,
-	OriginUpload,
-	OriginValidation,
+	sharedtelemetry.OriginMaster,
+	sharedtelemetry.OriginWorker,
+	sharedtelemetry.OriginEngine,
+	sharedtelemetry.OriginFFmpeg,
+	sharedtelemetry.OriginUpload,
+	sharedtelemetry.OriginValidation,
 }
 
 // CanonicalOrigins returns a defensive copy of the closed origin vocabulary.
@@ -56,24 +61,24 @@ func IsCanonicalOrigin(s string) bool {
 
 // ── Closed scope enum ──────────────────────────────────────────────────────
 const (
-	ScopeJob           = "job"
-	ScopeTask          = "task"
-	ScopeAttempt       = "attempt"
-	ScopeSegment       = "segment"
-	ScopeAudioTrack    = "audio_track"
-	ScopeSubtitleTrack = "subtitle_track"
-	ScopeArtifact      = "artifact"
+	ScopeJob           = sharedtelemetry.ScopeJob
+	ScopeTask          = sharedtelemetry.ScopeTask
+	ScopeAttempt       = sharedtelemetry.ScopeAttempt
+	ScopeSegment       = sharedtelemetry.ScopeSegment
+	ScopeAudioTrack    = sharedtelemetry.ScopeAudioTrack
+	ScopeSubtitleTrack = sharedtelemetry.ScopeSubtitleTrack
+	ScopeArtifact      = sharedtelemetry.ScopeArtifact
 )
 
 // canonicalScopes is private so callers cannot mutate the taxonomy.
 var canonicalScopes = [...]string{
-	ScopeJob,
-	ScopeTask,
-	ScopeAttempt,
-	ScopeSegment,
-	ScopeAudioTrack,
-	ScopeSubtitleTrack,
-	ScopeArtifact,
+	sharedtelemetry.ScopeJob,
+	sharedtelemetry.ScopeTask,
+	sharedtelemetry.ScopeAttempt,
+	sharedtelemetry.ScopeSegment,
+	sharedtelemetry.ScopeAudioTrack,
+	sharedtelemetry.ScopeSubtitleTrack,
+	sharedtelemetry.ScopeArtifact,
 }
 
 // CanonicalScopes returns a defensive copy of the closed scope vocabulary.
@@ -301,8 +306,15 @@ var canonicalPhaseSpecByKey = func() map[string]PhaseSpec {
 // LookupPhaseSpec returns the immutable canonical specification for a
 // component/action pair.
 func LookupPhaseSpec(component, action string) (PhaseSpec, bool) {
+	sharedSpec, ok := sharedtelemetry.Catalog.Lookup(component, action)
+	if !ok {
+		return PhaseSpec{}, false
+	}
 	spec, ok := canonicalPhaseSpecByKey[component+"."+action]
-	return spec, ok
+	if !ok || spec.Origin != sharedSpec.Origin || spec.Scope != sharedSpec.Scope {
+		return PhaseSpec{}, false
+	}
+	return spec, true
 }
 
 // LookupCanonicalPhaseSpec is the explicit name for new callers.
@@ -327,7 +339,14 @@ func CanonicalPhaseSpecCount() int { return len(canonicalPhaseSpecByKey) }
 // phase and default event type for a producer event. Unknown component/action
 // pairs return false and must not be emitted.
 func CanonicalizeEventSpec(spec *EventSpec) bool {
-	if spec == nil || !IsCanonicalOrigin(spec.Origin) || !IsCanonicalScope(spec.Scope) {
+	if spec == nil {
+		return false
+	}
+	sharedSpec := sharedtelemetry.TelemetryEventSpec{
+		Origin: spec.Origin, Scope: spec.Scope, Component: spec.Component,
+		Action: spec.Action, SchemaVersion: sharedtelemetry.SchemaVersion,
+	}
+	if err := sharedtelemetry.Catalog.Normalize(&sharedSpec); err != nil {
 		return false
 	}
 	canonical, ok := LookupPhaseSpec(spec.Component, spec.Action)

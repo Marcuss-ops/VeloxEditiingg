@@ -82,12 +82,15 @@ type DetailedPhaseTiming struct {
 	Frames       int64
 	MetadataJSON string
 	// ── Observability chain / block 1: event taxonomy ────────────────
-	Origin     string
-	Scope      string
-	EventType  string
-	EventName  string
-	EventIndex int64
-	Phase      string
+	Origin string
+	Scope  string
+	// TelemetrySchemaVersion identifies the shared event catalog used by
+	// this phase. It is zero only for legacy in-process callers.
+	TelemetrySchemaVersion int32
+	EventType              string
+	EventName              string
+	EventIndex             int64
+	Phase                  string
 	// ── Identity (master overrides at ingest) ────────────────────────
 	ExecutorID       string
 	ExecutorVersion  int32
@@ -113,34 +116,35 @@ func detailedPhasesFromExecutor(phases []executor.DetailedPhaseTiming) []Detaile
 	out := make([]DetailedPhaseTiming, 0, len(phases))
 	for i, p := range phases {
 		out = append(out, DetailedPhaseTiming{
-			PhaseOrder:       i + 1,
-			Component:        p.Component,
-			Action:           p.Action,
-			StartedAt:        p.StartedAt,
-			CompletedAt:      p.CompletedAt,
-			DurationMS:       p.DurationMS,
-			Status:           p.Status,
-			ErrorCode:        p.ErrorCode,
-			ErrorMessage:     p.ErrorMessage,
-			BytesIn:          p.BytesIn,
-			BytesOut:         p.BytesOut,
-			Frames:           p.Frames,
-			MetadataJSON:     p.MetadataJSON,
-			Origin:           p.Origin,
-			Scope:            p.Scope,
-			EventType:        p.EventType,
-			EventName:        p.EventName,
-			EventIndex:       p.EventIndex,
-			Phase:            p.Phase,
-			SegmentIndex:     p.SegmentIndex,
-			TrackKind:        p.TrackKind,
-			TrackIndex:       p.TrackIndex,
-			StartedOffsetMS:  p.StartedOffsetMS,
-			FinishedOffsetMS: p.FinishedOffsetMS,
-			CPUMS:            p.CPUMS,
-			QueueWaitMS:      p.QueueWaitMS,
-			FramesIn:         p.FramesIn,
-			FramesOut:        p.FramesOut,
+			PhaseOrder:             i + 1,
+			Component:              p.Component,
+			Action:                 p.Action,
+			StartedAt:              p.StartedAt,
+			CompletedAt:            p.CompletedAt,
+			DurationMS:             p.DurationMS,
+			Status:                 p.Status,
+			ErrorCode:              p.ErrorCode,
+			ErrorMessage:           p.ErrorMessage,
+			BytesIn:                p.BytesIn,
+			BytesOut:               p.BytesOut,
+			Frames:                 p.Frames,
+			MetadataJSON:           p.MetadataJSON,
+			Origin:                 p.Origin,
+			Scope:                  p.Scope,
+			TelemetrySchemaVersion: telemetry.SchemaVersion,
+			EventType:              p.EventType,
+			EventName:              p.EventName,
+			EventIndex:             p.EventIndex,
+			Phase:                  p.Phase,
+			SegmentIndex:           p.SegmentIndex,
+			TrackKind:              p.TrackKind,
+			TrackIndex:             p.TrackIndex,
+			StartedOffsetMS:        p.StartedOffsetMS,
+			FinishedOffsetMS:       p.FinishedOffsetMS,
+			CPUMS:                  p.CPUMS,
+			QueueWaitMS:            p.QueueWaitMS,
+			FramesIn:               p.FramesIn,
+			FramesOut:              p.FramesOut,
 		})
 	}
 	return out
@@ -148,37 +152,38 @@ func detailedPhasesFromExecutor(phases []executor.DetailedPhaseTiming) []Detaile
 
 func fromRecordedPhase(p telemetry.RecordedPhase, phaseOrder int, executorID string, executorVersion int32, leaseID string) DetailedPhaseTiming {
 	return DetailedPhaseTiming{
-		PhaseOrder:       phaseOrder,
-		Component:        p.Component,
-		Action:           p.Action,
-		StartedAt:        p.StartedAt,
-		CompletedAt:      p.CompletedAt,
-		DurationMS:       p.DurationMS,
-		Status:           p.Status,
-		ErrorCode:        p.ErrorCode,
-		ErrorMessage:     p.ErrorMessage,
-		BytesIn:          p.BytesIn,
-		BytesOut:         p.BytesOut,
-		Frames:           p.Frames,
-		MetadataJSON:     p.MetadataJSON,
-		Origin:           p.Origin,
-		Scope:            p.Scope,
-		EventType:        p.EventType,
-		EventName:        p.EventName,
-		EventIndex:       p.EventIndex,
-		Phase:            p.Phase,
-		ExecutorID:       executorID,
-		ExecutorVersion:  executorVersion,
-		LeaseID:          leaseID,
-		SegmentIndex:     p.SegmentIndex,
-		TrackKind:        p.TrackKind,
-		TrackIndex:       p.TrackIndex,
-		StartedOffsetMS:  p.StartedOffsetMS,
-		FinishedOffsetMS: p.FinishedOffsetMS,
-		CPUMS:            p.CPUMS,
-		QueueWaitMS:      p.QueueWaitMS,
-		FramesIn:         p.FramesIn,
-		FramesOut:        p.FramesOut,
+		PhaseOrder:             phaseOrder,
+		Component:              p.Component,
+		Action:                 p.Action,
+		StartedAt:              p.StartedAt,
+		CompletedAt:            p.CompletedAt,
+		DurationMS:             p.DurationMS,
+		Status:                 p.Status,
+		ErrorCode:              p.ErrorCode,
+		ErrorMessage:           p.ErrorMessage,
+		BytesIn:                p.BytesIn,
+		BytesOut:               p.BytesOut,
+		Frames:                 p.Frames,
+		MetadataJSON:           p.MetadataJSON,
+		Origin:                 p.Origin,
+		Scope:                  p.Scope,
+		TelemetrySchemaVersion: telemetry.SchemaVersion,
+		EventType:              p.EventType,
+		EventName:              p.EventName,
+		EventIndex:             p.EventIndex,
+		Phase:                  p.Phase,
+		ExecutorID:             executorID,
+		ExecutorVersion:        executorVersion,
+		LeaseID:                leaseID,
+		SegmentIndex:           p.SegmentIndex,
+		TrackKind:              p.TrackKind,
+		TrackIndex:             p.TrackIndex,
+		StartedOffsetMS:        p.StartedOffsetMS,
+		FinishedOffsetMS:       p.FinishedOffsetMS,
+		CPUMS:                  p.CPUMS,
+		QueueWaitMS:            p.QueueWaitMS,
+		FramesIn:               p.FramesIn,
+		FramesOut:              p.FramesOut,
 	}
 }
 

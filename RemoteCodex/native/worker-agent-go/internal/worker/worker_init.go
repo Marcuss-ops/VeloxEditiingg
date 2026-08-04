@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"velox-shared/controltransport"
+	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/spool"
@@ -308,14 +309,16 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		// PR-2 followup: per-task-native lease-state registry. Threaded
 		// by MsgTaskLeaseGranted handler (separate PR) so leaseRenewLoop
 		// can fire MsgTaskLeaseRenewal.
-		activeTaskLeases:   make(map[string]*ActiveTaskLease),
-		connState:          ConnDisconnected,
-		concurrencyLimiter: concurrency.NewConcurrencyLimiter(detectedConcurrency),
-		stageExecutor:      stageExecutor,
-		executorRegistry:   wo.registry,
-		cache:              wo.cache,
-		blobs:              wo.blobs,
-		clipCache:          wo.clipCache,
+		activeTaskLeases:          make(map[string]*ActiveTaskLease),
+		pendingTaskResultAcks:     make(map[string]chan *pb.TaskResultAck),
+		pendingTaskResultAckCache: make(map[string]taskResultAckCacheEntry),
+		connState:                 ConnDisconnected,
+		concurrencyLimiter:        concurrency.NewConcurrencyLimiter(detectedConcurrency),
+		stageExecutor:             stageExecutor,
+		executorRegistry:          wo.registry,
+		cache:                     wo.cache,
+		blobs:                     wo.blobs,
+		clipCache:                 wo.clipCache,
 		// Anti-collision observer (RW-PROD-005 §3): wired from
 		// workerOptions.onWorkerIDCollision (set by
 		// WithCollisionObserver). nil-safe; Start() guards before

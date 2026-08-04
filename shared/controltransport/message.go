@@ -43,6 +43,7 @@ const (
 	MsgConfigurationUpdate ControlMessageType = "configuration_update"
 	MsgLeaseRevoked        ControlMessageType = "lease_revoked"
 	MsgPing                ControlMessageType = "ping"
+	MsgTaskResultAck       ControlMessageType = "task_result_ack"
 
 	// Artifact Commit Protocol (Fase 3.4 / 3.6) — typed
 	// upload-plan-and-commit-ack pipeline. Gated by
@@ -66,7 +67,7 @@ func (t ControlMessageType) IsWorkerToMaster() bool {
 func (t ControlMessageType) IsMasterToWorker() bool {
 	switch t {
 	case MsgHelloAck, MsgTaskOffer, MsgTaskLeaseGranted, MsgCommand, MsgCancelJob,
-		MsgDrain, MsgConfigurationUpdate, MsgLeaseRevoked, MsgPing,
+		MsgDrain, MsgConfigurationUpdate, MsgLeaseRevoked, MsgPing, MsgTaskResultAck,
 		MsgArtifactUploadPlan, MsgTaskCommitAck:
 		return true
 	}

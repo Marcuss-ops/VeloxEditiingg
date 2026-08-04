@@ -313,6 +313,14 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 			case controltransport.MsgHelloAck:
 				w.logger.Debug("[RECEIVE] HelloAck received — session confirmed")
 
+			case controltransport.MsgTaskResultAck:
+				ack, ok := msg.TypedPayload.(*pb.TaskResultAck)
+				if !ok || ack == nil {
+					w.logger.Warn("[RECEIVE] TaskResultAck without typed payload")
+					continue
+				}
+				w.handleTaskResultAck(ack)
+
 			case controltransport.MsgArtifactUploadPlan, controltransport.MsgTaskCommitAck:
 				// Artifact Commit Protocol v1 (Fase 3.4 / 3.6) —
 				// typed master→worker reply on the declare/complete

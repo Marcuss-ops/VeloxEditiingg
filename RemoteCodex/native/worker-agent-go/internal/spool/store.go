@@ -211,4 +211,17 @@ CREATE INDEX IF NOT EXISTS idx_spool_status
     ON worker_output_spool(status);
 CREATE INDEX IF NOT EXISTS idx_spool_task_attempt
     ON worker_output_spool(task_id, attempt_id);
+CREATE TABLE IF NOT EXISTS task_result_outbox (
+    task_id         TEXT NOT NULL,
+    attempt_id      TEXT NOT NULL,
+    report_hash     TEXT NOT NULL,
+    payload         BLOB NOT NULL,
+    attempt_count   INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    PRIMARY KEY (task_id, attempt_id, report_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_task_result_outbox_due
+    ON task_result_outbox(next_attempt_at, created_at);
 `

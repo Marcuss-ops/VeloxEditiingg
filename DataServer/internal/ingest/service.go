@@ -108,9 +108,10 @@ type IngestCommand struct {
 	RawReportReceivedAt time.Time
 	// PerformanceReport metadata supplied by the worker for idempotency
 	// and conflict detection in task_attempt_reports.
-	ReportSchemaVersion int32
-	ReportVersion       int32
-	ReportHash          string
+	ReportSchemaVersion    int32
+	ReportVersion          int32
+	ReportHash             string
+	TelemetrySchemaVersion int32
 	// Scorecard v2 / Step 17: per-segment C++ sidecar timings.
 	SegmentTimings []taskattempts.SegmentTiming
 	// Scorecard v2 / Step 18: partial phase metrics captured when an
@@ -361,9 +362,10 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		RawReportJSON:       rawReportJSON,
 		RawReportReceivedAt: cmd.RawReportReceivedAt,
 		// PerformanceReport metadata supplied by the worker.
-		ReportSchemaVersion: cmd.ReportSchemaVersion,
-		ReportVersion:       cmd.ReportVersion,
-		ReportHash:          cmd.ReportHash,
+		ReportSchemaVersion:    cmd.ReportSchemaVersion,
+		ReportVersion:          cmd.ReportVersion,
+		ReportHash:             cmd.ReportHash,
+		TelemetrySchemaVersion: cmd.TelemetrySchemaVersion,
 		// Scorecard v2 / Step 17: per-segment C++ sidecar timings.
 		SegmentTimings: cmd.SegmentTimings,
 		// Scorecard v2 / Step 18: phase timeline for successful and failed attempts.

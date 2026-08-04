@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"velox-shared/controltransport"
+	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/spool"
@@ -206,6 +207,12 @@ type Worker struct {
 	// and removed on terminal exit or worker Stop.
 	pendingArtifactAcks   map[string]chan controltransport.ControlMessage
 	pendingArtifactAcksMu sync.RWMutex
+
+	// TaskResultAck waiters are separate from artifact protocol replies:
+	// a result may be replayed after the original executeTask returned.
+	pendingTaskResultAcks     map[string]chan *pb.TaskResultAck
+	pendingTaskResultAckCache map[string]taskResultAckCacheEntry
+	pendingTaskResultAcksMu   sync.RWMutex
 
 	// Task completion stats for heartbeat reporting.
 	// Wire keys (jobs_completed / jobs_failed) kept for master compatibility.

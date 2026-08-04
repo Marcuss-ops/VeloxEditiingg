@@ -120,9 +120,10 @@ type IngestResultCommand struct {
 	RawReportReceivedAt time.Time
 	// PerformanceReport metadata supplied by the worker for idempotency
 	// and conflict detection in task_attempt_reports.
-	ReportSchemaVersion int32
-	ReportVersion       int32
-	ReportHash          string
+	ReportSchemaVersion    int32
+	ReportVersion          int32
+	ReportHash             string
+	TelemetrySchemaVersion int32
 	// Scorecard v2 / Step 18: per-segment C++ sidecar timings.
 	SegmentTimings []taskattempts.SegmentTiming
 	// Scorecard v2 / Step 18: partial phase metrics captured when an

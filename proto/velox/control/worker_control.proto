@@ -212,6 +212,11 @@ message TaskResult {
   // on each entry is stamped by the MASTER from the canonical identity
   // tuple at ingest; worker-supplied identity fields are informational.
   repeated PhaseTimingDetailed phase_timings = 20;
+
+  // Version of the shared TelemetryEventCatalog used to produce the
+  // detailed phase stream. Zero means a legacy worker that predates this
+  // field; the master accepts it through the compatibility path.
+  int32 telemetry_schema_version = 21;
 }
 
 message TaskLeaseRenewal {
@@ -310,6 +315,8 @@ message PhaseTimingDetailed {
   // Optional artifact identity for artifact-scoped events. The master
   // still overrides identity fields from canonical database rows.
   string artifact_id = 34;
+  // Version of the shared TelemetryEventCatalog for this event.
+  int32 telemetry_schema_version = 35;
 }
 
 message ArtifactUploaded {

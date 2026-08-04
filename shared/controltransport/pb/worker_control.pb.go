@@ -969,9 +969,13 @@ type TaskResult struct {
 	// identity tuple (job/task/worker/session/snapshot/lease/executor)
 	// on each entry is stamped by the MASTER from the canonical identity
 	// tuple at ingest; worker-supplied identity fields are informational.
-	PhaseTimings  []*PhaseTimingDetailed `protobuf:"bytes,20,rep,name=phase_timings,json=phaseTimings,proto3" json:"phase_timings,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PhaseTimings []*PhaseTimingDetailed `protobuf:"bytes,20,rep,name=phase_timings,json=phaseTimings,proto3" json:"phase_timings,omitempty"`
+	// Version of the shared TelemetryEventCatalog used to produce the
+	// detailed phase stream. Zero means a legacy worker that predates this
+	// field; the master accepts it through the compatibility path.
+	TelemetrySchemaVersion int32 `protobuf:"varint,21,opt,name=telemetry_schema_version,json=telemetrySchemaVersion,proto3" json:"telemetry_schema_version,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *TaskResult) Reset() {
@@ -1142,6 +1146,13 @@ func (x *TaskResult) GetPhaseTimings() []*PhaseTimingDetailed {
 		return x.PhaseTimings
 	}
 	return nil
+}
+
+func (x *TaskResult) GetTelemetrySchemaVersion() int32 {
+	if x != nil {
+		return x.TelemetrySchemaVersion
+	}
+	return 0
 }
 
 type TaskLeaseRenewal struct {
@@ -1390,9 +1401,11 @@ type PhaseTimingDetailed struct {
 	FramesOut        int64   `protobuf:"varint,33,opt,name=frames_out,json=framesOut,proto3" json:"frames_out,omitempty"`
 	// Optional artifact identity for artifact-scoped events. The master
 	// still overrides identity fields from canonical database rows.
-	ArtifactId    string `protobuf:"bytes,34,opt,name=artifact_id,json=artifactId,proto3" json:"artifact_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ArtifactId string `protobuf:"bytes,34,opt,name=artifact_id,json=artifactId,proto3" json:"artifact_id,omitempty"`
+	// Version of the shared TelemetryEventCatalog for this event.
+	TelemetrySchemaVersion int32 `protobuf:"varint,35,opt,name=telemetry_schema_version,json=telemetrySchemaVersion,proto3" json:"telemetry_schema_version,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *PhaseTimingDetailed) Reset() {
@@ -1661,6 +1674,13 @@ func (x *PhaseTimingDetailed) GetArtifactId() string {
 		return x.ArtifactId
 	}
 	return ""
+}
+
+func (x *PhaseTimingDetailed) GetTelemetrySchemaVersion() int32 {
+	if x != nil {
+		return x.TelemetrySchemaVersion
+	}
+	return 0
 }
 
 type ArtifactUploaded struct {
@@ -4311,7 +4331,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"workerSlot\x12\x1f\n" +
 	"\vcpu_threads\x18\x18 \x01(\x05R\n" +
 	"cpuThreads\x12%\n" +
-	"\x0eparallel_group\x18\x19 \x01(\tR\rparallelGroup\"\x92\a\n" +
+	"\x0eparallel_group\x18\x19 \x01(\tR\rparallelGroup\"\xcc\a\n" +
 	"\n" +
 	"TaskResult\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x15\n" +
@@ -4338,7 +4358,8 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\vreport_hash\x18\x12 \x01(\tR\n" +
 	"reportHash\x12V\n" +
 	"\x15partial_phase_metrics\x18\x13 \x03(\v2\".velox.control.PhaseTimingDetailedR\x13partialPhaseMetrics\x12G\n" +
-	"\rphase_timings\x18\x14 \x03(\v2\".velox.control.PhaseTimingDetailedR\fphaseTimings\"\x86\x02\n" +
+	"\rphase_timings\x18\x14 \x03(\v2\".velox.control.PhaseTimingDetailedR\fphaseTimings\x128\n" +
+	"\x18telemetry_schema_version\x18\x15 \x01(\x05R\x16telemetrySchemaVersion\"\x86\x02\n" +
 	"\x10TaskLeaseRenewal\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x1d\n" +
 	"\n" +
@@ -4354,7 +4375,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"started_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12=\n" +
 	"\fcompleted_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vcompletedAt\x12\x16\n" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x12\x14\n" +
-	"\x05notes\x18\x05 \x01(\tR\x05notes\"\x93\t\n" +
+	"\x05notes\x18\x05 \x01(\tR\x05notes\"\xcd\t\n" +
 	"\x13PhaseTimingDetailed\x12\x1f\n" +
 	"\vphase_order\x18\x01 \x01(\x05R\n" +
 	"phaseOrder\x12\x1c\n" +
@@ -4402,7 +4423,8 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\n" +
 	"frames_out\x18! \x01(\x03R\tframesOut\x12\x1f\n" +
 	"\vartifact_id\x18\" \x01(\tR\n" +
-	"artifactId\"\xf3\x02\n" +
+	"artifactId\x128\n" +
+	"\x18telemetry_schema_version\x18# \x01(\x05R\x16telemetrySchemaVersion\"\xf3\x02\n" +
 	"\x10ArtifactUploaded\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x1f\n" +
 	"\vartifact_id\x18\x02 \x01(\tR\n" +
