@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"velox-server/internal/audittrail"
 	"velox-server/internal/taskgraph"
 )
 
@@ -36,6 +37,28 @@ func (r *SQLiteTaskRepository) ExpireTaskLeaseAtomic(
 	ctx context.Context,
 	taskID, leaseID, leaseExpiresAtObserved string,
 	maxRetries int,
+) (taskgraph.ExpireResult, error) {
+	return r.expireTaskLeaseAtomic(ctx, taskID, leaseID, leaseExpiresAtObserved, maxRetries, nil)
+}
+
+// ExpireTaskLeaseAtomicAudited applies the canonical lease reap and inserts
+// the supplied append-only audit event before committing the same transaction.
+// It is the operator-reconciler entry point; a failed audit insert rolls back
+// the task and attempt transition.
+func (r *SQLiteTaskRepository) ExpireTaskLeaseAtomicAudited(
+	ctx context.Context,
+	taskID, leaseID, leaseExpiresAtObserved string,
+	maxRetries int,
+	event audittrail.Event,
+) (taskgraph.ExpireResult, error) {
+	return r.expireTaskLeaseAtomic(ctx, taskID, leaseID, leaseExpiresAtObserved, maxRetries, &event)
+}
+
+func (r *SQLiteTaskRepository) expireTaskLeaseAtomic(
+	ctx context.Context,
+	taskID, leaseID, leaseExpiresAtObserved string,
+	maxRetries int,
+	auditEvent *audittrail.Event,
 ) (taskgraph.ExpireResult, error) {
 	if r.store == nil || r.store.db == nil {
 		return taskgraph.ExpireResult{}, fmt.Errorf("task repository: store not initialized")
@@ -164,6 +187,28 @@ func (r *SQLiteTaskRepository) ExpireTaskLeaseAtomic(
 			taskID, taskgraph.ErrTransitionConflict)
 	}
 
+	if auditEvent != nil {
+		if auditEvent.ID == "" {
+			return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic audit event id is required")
+		}
+		if auditEvent.OccurredAt.IsZero() {
+			auditEvent.OccurredAt = time.Now().UTC()
+		}
+		if auditEvent.MetadataJSON == "" {
+			auditEvent.MetadataJSON = "{}"
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO audit_events
+			(id, occurred_at, actor_type, actor_id, action, resource_type, resource_id,
+			 request_id, trace_id, before_hash, after_hash, metadata_json)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			auditEvent.ID, auditEvent.OccurredAt.UTC().Format(time.RFC3339Nano),
+			auditEvent.ActorType, auditEvent.ActorID, auditEvent.Action,
+			auditEvent.ResourceType, auditEvent.ResourceID, auditEvent.RequestID,
+			auditEvent.TraceID, auditEvent.BeforeHash, auditEvent.AfterHash,
+			audittrail.RedactMetadata(auditEvent.MetadataJSON)); err != nil {
+			return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic audit: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic commit: %w", err)
 	}
