@@ -1,5 +1,61 @@
+package assetref
+
+import (
+	"bytes"
+	"encoding/json"
+	"strings"
+)
+
 // Package assetref — extraction from job payloads.
 //
+// ExtractAssetKeys walks a Velox render-job payload and returns
+// the canonical keys used by the worker cache. Canonical
+// `velox-asset://<id>` references yield `<id>`; legacy Drive URLs
+// yield their Drive file ID for backwards compatibility.
+func ExtractAssetKeys(payload json.RawMessage) map[string]struct{} {
+	out := make(map[string]struct{})
+	if len(payload) == 0 || bytes.Equal(payload, []byte("null")) {
+		return out
+	}
+	var value interface{}
+	if err := json.Unmarshal(payload, &value); err != nil {
+		return out
+	}
+	var walk func(interface{})
+	walk = func(v interface{}) {
+		switch x := v.(type) {
+		case map[string]interface{}:
+			for key, child := range x {
+				if s, ok := child.(string); ok {
+					trimmed := strings.TrimSpace(s)
+					if strings.HasPrefix(strings.ToLower(trimmed), "velox-asset://") {
+						if id := strings.TrimSpace(trimmed[len("velox-asset://"):]); id != "" {
+							out[id] = struct{}{}
+						}
+					} else if key == "clip_link" || key == "video_url" || key == "source_url" {
+						if id, err := DriveFileID(trimmed); err == nil && id != "" {
+							out[id] = struct{}{}
+						}
+					}
+				} else {
+					walk(child)
+				}
+			}
+		case []interface{}:
+			for _, child := range x {
+				walk(child)
+			}
+		}
+	}
+	walk(value)
+	// Keep legacy array-shaped clip_links covered; the recursive canonical
+	// walker intentionally does not attach parent field names to arrays.
+	for id := range ExtractDriveFileIDs(payload) {
+		out[id] = struct{}{}
+	}
+	return out
+}
+
 // ExtractDriveFileIDs walks a Velox render-job payload and returns
 // the set of Drive file IDs referenced as clip links. The extractor
 // shares its single-source-of-truth principle with the parser:
@@ -31,13 +87,6 @@
 // The set is returned as map[string]struct{} for cheap O(1) dedup
 // and zero-payload iteration. Caller does NOT need to free or
 // iterate in any particular order.
-package assetref
-
-import (
-	"bytes"
-	"encoding/json"
-)
-
 // extractSchema is the local-private decode target. The fields
 // below match every clip-bearing slot we know about across the
 // studio-creator and pipeline render paths. Anything outside this

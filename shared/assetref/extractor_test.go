@@ -135,3 +135,13 @@ func TestExtractDriveFileIDs_NeverReturnsNil(t *testing.T) {
 		t.Error("ExtractDriveFileIDs(empty scenes) returned nil; must always return non-nil map")
 	}
 }
+
+func TestExtractAssetKeys_CanonicalClipStockVoiceover(t *testing.T) {
+	payload := []byte(`{"scenes":[{"clip":{"asset_id":"clip-01","url":"velox-asset://clip-01"},"stock":[{"asset_id":"stock-01","url":"velox-asset://stock-01"}],"voiceover":{"asset_id":"voice-01","url":"velox-asset://voice-01"}}]}`)
+	got := ExtractAssetKeys(payload)
+	for _, key := range []string{"clip-01", "stock-01", "voice-01"} {
+		if _, ok := got[key]; !ok {
+			t.Errorf("missing canonical asset key %q in %v", key, got)
+		}
+	}
+}
