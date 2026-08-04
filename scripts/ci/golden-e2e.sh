@@ -286,6 +286,7 @@ phase4_worker() {
   "worker_id": "${WORKER_ID}",
   "worker_name": "${WORKER_NAME}",
   "work_dir": "${TMPDIR}",
+  "environment": "dev",
   "log_level": "info",
   "job_delivery": "push",
   "tls_cert_file": "${CERTS_DIR}/worker.crt",
