@@ -183,13 +183,11 @@ func (cl *CleanupLoop) TickOnce(ctx context.Context) (CleanupStats, error) {
 		if snapErr == nil {
 			generatedAt = snapAt
 			protected = ids
-		} else if cl.OnTick != nil {
-			// Surface the snapshot-fetch failure to OnTick as a
-			// zero-stats + err record so metrics/log lines can
-			// observe it. The pass still runs with the zero-value
-			// snapshot, which exercises the protected-empty +
-			// grace-protected branch naturally.
-			cl.OnTick(CleanupStats{}, fmt.Errorf("snapshot fetch: %w", snapErr))
+		} else {
+			// A failed poll must never be converted into an empty
+			// protected set. Keep the cache untouched until a valid
+			// snapshot is available.
+			return CleanupStats{}, fmt.Errorf("snapshot fetch: %w", snapErr)
 		}
 	}
 

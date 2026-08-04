@@ -105,6 +105,12 @@ func Open(path string) (*Cache, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("workercache.Open: apply schema: %w", err)
 	}
+	// Migrate the legacy single-owner lease into the many-to-many table so
+	// upgrading a worker never silently drops protection for an in-flight job.
+	if _, err := db.Exec(`INSERT OR IGNORE INTO cached_asset_leases (drive_file_id, job_id, acquired_at) SELECT drive_file_id, active_job_id, last_used_at FROM cached_assets WHERE active_job_id IS NOT NULL AND active_job_id != ''`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("workercache.Open: migrate legacy leases: %w", err)
+	}
 	return &Cache{db: db}, nil
 }
 
@@ -257,11 +263,10 @@ func (c *Cache) Acquire(ctx context.Context, driveFileID, jobID string) error {
 	if jobID == "" {
 		return fmt.Errorf("workercache.Acquire: jobID is required")
 	}
-	res, err := c.db.ExecContext(ctx,
-		`UPDATE cached_assets SET active_job_id = ?
-		 WHERE drive_file_id = ?`,
-		jobID, driveFileID,
-	)
+	if _, err := c.db.ExecContext(ctx, `INSERT OR IGNORE INTO cached_asset_leases (drive_file_id, job_id, acquired_at) VALUES (?, ?, ?)`, driveFileID, jobID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return fmt.Errorf("workercache.Acquire(%q, %q): lease insert: %w", driveFileID, jobID, err)
+	}
+	res, err := c.db.ExecContext(ctx, `UPDATE cached_assets SET active_job_id = ? WHERE drive_file_id = ?`, jobID, driveFileID)
 	if err != nil {
 		return fmt.Errorf("workercache.Acquire(%q, %q): %w", driveFileID, jobID, err)
 	}
@@ -282,12 +287,10 @@ func (c *Cache) Release(ctx context.Context, driveFileID, jobID string) error {
 		return fmt.Errorf("workercache.Release: jobID is required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	res, err := c.db.ExecContext(ctx,
-		`UPDATE cached_assets
-		   SET active_job_id = NULL, last_used_at = ?
-		 WHERE drive_file_id = ? AND active_job_id = ?`,
-		now, driveFileID, jobID,
-	)
+	if _, err := c.db.ExecContext(ctx, `DELETE FROM cached_asset_leases WHERE drive_file_id = ? AND job_id = ?`, driveFileID, jobID); err != nil {
+		return fmt.Errorf("workercache.Release(%q, %q): lease delete: %w", driveFileID, jobID, err)
+	}
+	res, err := c.db.ExecContext(ctx, `UPDATE cached_assets SET active_job_id = (SELECT job_id FROM cached_asset_leases WHERE drive_file_id = ? LIMIT 1), last_used_at = ? WHERE drive_file_id = ?`, driveFileID, now, driveFileID)
 	if err != nil {
 		return fmt.Errorf("workercache.Release(%q, %q): %w", driveFileID, jobID, err)
 	}
@@ -309,6 +312,20 @@ func (c *Cache) Release(ctx context.Context, driveFileID, jobID string) error {
 		}
 	}
 	return nil
+}
+
+// DeleteIfUnleased atomically removes an unleased cache row. The lease
+// predicate closes the List→Delete race when another job acquires the same
+// asset while cleanup is scanning.
+func (c *Cache) DeleteIfUnleased(ctx context.Context, driveFileID string) error {
+	if driveFileID == "" {
+		return ErrEmptyID
+	}
+	res, err := c.db.ExecContext(ctx, `DELETE FROM cached_assets WHERE drive_file_id = ? AND NOT EXISTS (SELECT 1 FROM cached_asset_leases WHERE drive_file_id = ?)`, driveFileID, driveFileID)
+	if err != nil {
+		return fmt.Errorf("workercache.DeleteIfUnleased(%q): %w", driveFileID, err)
+	}
+	return mustHaveAffected(res, driveFileID, "DeleteIfUnleased")
 }
 
 // Delete removes the row. Returns ErrNotFound when no row matches.
@@ -346,4 +363,25 @@ func (c *Cache) List(ctx context.Context) ([]Entry, error) {
 		out = append(out, *e)
 	}
 	return out, rows.Err()
+}
+
+// ReadyKeys returns the canonical asset keys currently materialized on disk.
+// It is a read-only, bounded heartbeat projection used by master placement;
+// callers must not treat it as a lease or as proof that a file cannot be
+// evicted before the task acquires its lease.
+func (c *Cache) ReadyKeys(ctx context.Context) ([]string, error) {
+	rows, err := c.db.QueryContext(ctx, `SELECT drive_file_id FROM cached_assets WHERE download_complete = 1 ORDER BY drive_file_id`)
+	if err != nil {
+		return nil, fmt.Errorf("workercache.ReadyKeys: %w", err)
+	}
+	defer rows.Close()
+	var keys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, fmt.Errorf("workercache.ReadyKeys scan: %w", err)
+		}
+		keys = append(keys, key)
+	}
+	return keys, rows.Err()
 }

@@ -12,6 +12,7 @@ package worker
 // Extracted from worker.go (commit 2c5392e → next).
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -134,6 +135,21 @@ func (w *Worker) capabilitiesMap(hostname string) map[string]interface{} {
 	// admission; advertise explicit payload compatibility rather than
 	// overloading executor version numbers for this decision.
 	m[controltransport.CapabilityCanonicalPayloadV2] = true
+	// Cache-affinity is advisory: placement prefers workers that already
+	// have an asset, while lease acquisition remains the correctness gate.
+	if w.clipCache != nil {
+		if keys, err := w.clipCache.ReadyKeys(context.Background()); err == nil {
+			// Keep capability/heartbeat messages bounded. Affinity is a
+			// hint; omission of older keys only loses a bonus, never
+			// correctness because the task still acquires its lease.
+			const maxAdvertisedCacheKeys = 2048
+			if len(keys) > maxAdvertisedCacheKeys {
+				m["asset_cache_keys_truncated"] = true
+				keys = keys[:maxAdvertisedCacheKeys]
+			}
+			m["asset_cache_keys"] = keys
+		}
+	}
 
 	// Creator profile: advertise the creative job types the master uses
 	// to route script, voiceover and image generation work. Without these

@@ -174,7 +174,7 @@ func extractDriveIDsFromJSON(payload map[string]interface{}) []string {
 	if err != nil {
 		return nil
 	}
-	idSet := assetref.ExtractDriveFileIDs(raw)
+	idSet := assetref.ExtractAssetKeys(raw)
 	if len(idSet) == 0 {
 		return nil
 	}

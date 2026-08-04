@@ -20,8 +20,11 @@ func (w *Worker) assetCacheDir() string {
 		if trimmed := strings.TrimSpace(w.config.AssetCacheDir); trimmed != "" {
 			return filepath.Join(trimmed, "assets", "audio")
 		}
+		if trimmed := strings.TrimSpace(w.config.StateDir); trimmed != "" {
+			return filepath.Join(trimmed, "asset-cache", "assets", "audio")
+		}
 		if trimmed := strings.TrimSpace(w.config.WorkDir); trimmed != "" {
-			return filepath.Join(trimmed, "worker_downloads", "assets", "audio")
+			return filepath.Join(trimmed, "asset-cache", "assets", "audio")
 		}
 	}
 	return filepath.Join(os.TempDir(), "velox-worker", "assets", "audio")
@@ -34,8 +37,11 @@ func (w *Worker) assetImageCacheDir() string {
 		if trimmed := strings.TrimSpace(w.config.AssetCacheDir); trimmed != "" {
 			return filepath.Join(trimmed, "assets", "image")
 		}
+		if trimmed := strings.TrimSpace(w.config.StateDir); trimmed != "" {
+			return filepath.Join(trimmed, "asset-cache", "assets", "image")
+		}
 		if trimmed := strings.TrimSpace(w.config.WorkDir); trimmed != "" {
-			return filepath.Join(trimmed, "worker_downloads", "assets", "image")
+			return filepath.Join(trimmed, "asset-cache", "assets", "image")
 		}
 	}
 	return filepath.Join(os.TempDir(), "velox-worker", "assets", "image")

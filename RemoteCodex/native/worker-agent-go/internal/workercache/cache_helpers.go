@@ -47,6 +47,15 @@ CREATE INDEX IF NOT EXISTS idx_cached_assets_active_job_id
     WHERE active_job_id IS NOT NULL AND active_job_id != '';
 CREATE INDEX IF NOT EXISTS idx_cached_assets_last_used_at
     ON cached_assets(last_used_at);
+CREATE TABLE IF NOT EXISTS cached_asset_leases (
+    drive_file_id TEXT NOT NULL,
+    job_id        TEXT NOT NULL,
+    acquired_at   TEXT NOT NULL,
+    PRIMARY KEY (drive_file_id, job_id),
+    FOREIGN KEY (drive_file_id) REFERENCES cached_assets(drive_file_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_cached_asset_leases_asset
+    ON cached_asset_leases(drive_file_id);
 `
 
 const selectCols = `drive_file_id, local_path, size_bytes, active_job_id,

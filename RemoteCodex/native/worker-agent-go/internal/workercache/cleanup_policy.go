@@ -47,6 +47,10 @@ import (
 // reflect the no-op pass (Inspected + SkippedSnapshotStale).
 var ErrSnapshotStale = errors.New("workercache: snapshot too old, skipping cleanup")
 
+// ErrSnapshotUnavailable prevents startup cleanup from interpreting a
+// missing master snapshot as an empty protected set.
+var ErrSnapshotUnavailable = errors.New("workercache: no valid protection snapshot, skipping cleanup")
+
 // CleanupPolicy carries the three tunables governing CleanupWithPolicy.
 // Constructed via LoadCleanupPolicy (which reads VELOX_CACHE_*) and
 // used by the daemon's ticker to schedule + execute cleanup passes.
@@ -139,6 +143,18 @@ func CleanupWithPolicy(
 		return stats, fmt.Errorf("workercache.CleanupWithPolicy: now is zero (callers must inject time.Now().UTC())")
 	}
 
+	// Missing protection data is fail-safe: do not delete anything until the
+	// worker has received at least one valid snapshot from the master.
+	if snapshotGeneratedAt.IsZero() {
+		entries, listErr := c.List(ctx)
+		if listErr != nil {
+			return stats, fmt.Errorf("workercache.CleanupWithPolicy: list (snapshot-unavailable): %w", listErr)
+		}
+		stats.Inspected = len(entries)
+		stats.SkippedSnapshotUnavailable = len(entries)
+		return stats, fmt.Errorf("%w: rows_inspected=%d", ErrSnapshotUnavailable, len(entries))
+	}
+
 	// Staleness short-circuit: only triggers when BOTH
 	// snapshotGeneratedAt is non-zero AND the age exceeds the policy.
 	// A zero value (worker never polled) is treated as "no snapshot
@@ -187,7 +203,14 @@ func CleanupWithPolicy(
 			continue
 		}
 
-		if err := c.Delete(ctx, e.DriveFileID); err != nil {
+		if err := c.DeleteIfUnleased(ctx, e.DriveFileID); err != nil {
+			// A concurrent Acquire can legitimately win between List and
+			// cleanup. Treat that as a protected row, not as a cleanup
+			// failure.
+			if errors.Is(err, ErrNotFound) {
+				stats.SkippedLeased++
+				continue
+			}
 			stats.RemoveErrors++
 			continue
 		}

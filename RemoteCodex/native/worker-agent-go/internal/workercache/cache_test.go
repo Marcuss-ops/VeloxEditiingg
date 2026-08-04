@@ -261,6 +261,38 @@ func TestCache_Release_WrongJobIsNoop(t *testing.T) {
 	}
 }
 
+func TestCache_MultipleLeasesProtectUntilLastRelease(t *testing.T) {
+	t.Parallel()
+	c := newTestCache(t)
+	ctx := context.Background()
+	if err := c.Store(ctx, Entry{DriveFileID: "SHARED", LocalPath: "/tmp/shared.mp4"}); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if err := c.Acquire(ctx, "SHARED", "job-A"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Acquire(ctx, "SHARED", "job-B"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DeleteIfUnleased(ctx, "SHARED"); err == nil {
+		t.Fatal("DeleteIfUnleased removed an asset with active leases")
+	} else if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("DeleteIfUnleased while leased: %v", err)
+	}
+	if err := c.Release(ctx, "SHARED", "job-A"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := c.Find(ctx, "SHARED"); err != nil || !ok {
+		t.Fatalf("asset disappeared after first release: ok=%v err=%v", ok, err)
+	}
+	if err := c.Release(ctx, "SHARED", "job-B"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DeleteIfUnleased(ctx, "SHARED"); err != nil {
+		t.Fatalf("DeleteIfUnleased after last release: %v", err)
+	}
+}
+
 func TestCache_Release_OnMissingRowReturnsErrNotFound(t *testing.T) {
 	t.Parallel()
 	c := newTestCache(t)

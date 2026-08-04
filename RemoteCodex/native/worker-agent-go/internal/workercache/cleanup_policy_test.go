@@ -235,7 +235,7 @@ func TestCleanupPolicy_SnapshotStale_SkipsPass(t *testing.T) {
 // snapshotGeneratedAt is the zero value (worker never polled),
 // the staleness branch is skipped and the cleanup pass runs under
 // lease + in-flight + grace rules alone.
-func TestCleanupPolicy_NoSnapshot_GraceIsStillEffective(t *testing.T) {
+func TestCleanupPolicy_NoSnapshot_IsFailSafe(t *testing.T) {
 	f := newPolicyFixture(t)
 	ctx := context.Background()
 
@@ -251,11 +251,11 @@ func TestCleanupPolicy_NoSnapshot_GraceIsStillEffective(t *testing.T) {
 
 	// snapshotGeneratedAt is the zero value: no snapshot scenario.
 	stats, err := CleanupWithPolicy(ctx, f.cache, time.Time{}, []string{}, policy, cleanupAt)
-	if err != nil {
-		t.Fatalf("CleanupWithPolicy: %v", err)
+	if !errors.Is(err, ErrSnapshotUnavailable) {
+		t.Fatalf("CleanupWithPolicy err=%v; want ErrSnapshotUnavailable", err)
 	}
-	if stats.SkippedGrace != 1 {
-		t.Errorf("SkippedGrace=%d want 1 (RECENT row, no snapshot, grace rule active)", stats.SkippedGrace)
+	if stats.SkippedSnapshotUnavailable != 1 {
+		t.Errorf("SkippedSnapshotUnavailable=%d want 1", stats.SkippedSnapshotUnavailable)
 	}
 	if stats.Removed != 0 {
 		t.Errorf("Removed=%d want 0", stats.Removed)

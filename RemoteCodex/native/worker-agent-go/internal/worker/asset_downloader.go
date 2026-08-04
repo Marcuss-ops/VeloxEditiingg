@@ -20,6 +20,17 @@ import (
 // entries are removed individually by cachedAssetPath, then the asset is
 // downloaded and verified before atomic promotion.
 func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, expectedSHA256 string, expectedSizeBytes int64) (string, error) {
+	key := assetID + ":" + expectedSHA256 + ":" + fmt.Sprint(expectedSizeBytes)
+	value, err, _ := w.assetDownloads.Do(key, func() (interface{}, error) {
+		return w.downloadVeloxAssetWithMetadataSingle(ctx, assetID, expectedSHA256, expectedSizeBytes)
+	})
+	if err != nil {
+		return "", err
+	}
+	return value.(string), nil
+}
+
+func (w *Worker) downloadVeloxAssetWithMetadataSingle(ctx context.Context, assetID, expectedSHA256 string, expectedSizeBytes int64) (string, error) {
 	cacheDir := w.assetCacheDir()
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return "", err

@@ -47,14 +47,15 @@ import (
 // work; new fields are zero-initialised and unused by Pass 9's
 // Cleanup function (which never populates them).
 type CleanupStats struct {
-	Inspected            int
-	SkippedLeased        int
-	SkippedInFlight      int
-	SkippedProtected     int
-	SkippedGrace         int
-	SkippedSnapshotStale int
-	Removed              int
-	RemoveErrors         int
+	Inspected                  int
+	SkippedLeased              int
+	SkippedInFlight            int
+	SkippedProtected           int
+	SkippedGrace               int
+	SkippedSnapshotStale       int
+	SkippedSnapshotUnavailable int
+	Removed                    int
+	RemoveErrors               int
 }
 
 // Cleanup removes entries that are NOT leased, NOT in flight, and NOT
@@ -103,7 +104,7 @@ func Cleanup(ctx context.Context, c *Cache, protected map[string]struct{}) (Clea
 		// not re-attempt os.Remove on a path that no longer has a
 		// matching index row. Remove errors on the file do NOT
 		// block the index delete — the row is the durable truth.
-		if err := c.Delete(ctx, e.DriveFileID); err != nil {
+		if err := c.DeleteIfUnleased(ctx, e.DriveFileID); err != nil {
 			stats.RemoveErrors++
 			continue
 		}

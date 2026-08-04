@@ -3,6 +3,7 @@ package worker
 
 import (
 	"context"
+	"golang.org/x/sync/singleflight"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -136,6 +137,9 @@ type Worker struct {
 	transport        controltransport.ControlTransport        // Current session's transport (recreated per connect)
 	transportFactory func() controltransport.ControlTransport // Factory for new transport instances
 	logger           *logger.Logger
+	// assetDownloads coalesces concurrent cold-cache requests for the same
+	// verified asset across tasks running on this worker.
+	assetDownloads singleflight.Group
 
 	// Status management — error state only; busy/idle derived from activeTasks
 	status Status

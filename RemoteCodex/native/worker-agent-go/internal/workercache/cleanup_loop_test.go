@@ -4,6 +4,7 @@ package workercache
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -81,9 +82,7 @@ func seedRowLoop(_ *testing.T, c *Cache, dir, driveID string, lastUsedAt time.Ti
 // tests
 // ────────────────────────────────────────────────────────────────────────
 
-// TestCleanupLoop_TickOnce_NoSnapshot: nil snapshot source means
-// zero-value time → leass/in-flight/grace rules apply, no
-// staleness short-circuit. TickOnce returns cleanly.
+// TestCleanupLoop_TickOnce_NoSnapshot: nil snapshot source is fail-safe.
 func TestCleanupLoop_TickOnce_NoSnapshot(t *testing.T) {
 	f := newCleanupLoopFixture(t)
 	t.Cleanup(f.cleanup)
@@ -102,11 +101,11 @@ func TestCleanupLoop_TickOnce_NoSnapshot(t *testing.T) {
 		Now: func() time.Time { return T0 },
 	}
 	stats, err := cl.TickOnce(context.Background())
-	if err != nil {
-		t.Fatalf("TickOnce: %v", err)
+	if !errors.Is(err, ErrSnapshotUnavailable) {
+		t.Fatalf("TickOnce err=%v; want ErrSnapshotUnavailable", err)
 	}
-	if stats.SkippedGrace != 1 {
-		t.Errorf("SkippedGrace=%d want 1 (X is within grace window)", stats.SkippedGrace)
+	if stats.SkippedSnapshotUnavailable != 1 {
+		t.Errorf("SkippedSnapshotUnavailable=%d want 1", stats.SkippedSnapshotUnavailable)
 	}
 	if stats.Removed != 0 {
 		t.Errorf("Removed=%d want 0", stats.Removed)

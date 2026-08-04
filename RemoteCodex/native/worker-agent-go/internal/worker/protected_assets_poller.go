@@ -251,5 +251,7 @@ func (p *ProtectedAssetsPoller) Current(_ context.Context) (time.Time, []string,
 	if err != nil {
 		return time.Time{}, nil, fmt.Errorf("parse protected-assets generated_at: %w", err)
 	}
-	return generatedAt.UTC(), append([]string(nil), snap.DriveFileIDs...), nil
+	ids := append([]string(nil), snap.DriveFileIDs...)
+	ids = append(ids, snap.ProtectedAssetKeys...)
+	return generatedAt.UTC(), ids, nil
 }

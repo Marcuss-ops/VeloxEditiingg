@@ -65,7 +65,8 @@ type ProtectedAssetSnapshot struct {
 	// response; the worker cleanup loop must NOT interpret an
 	// empty slice as "evict everything not actively leased"
 	// (see Pass 12 CleanupPolicy / RecentUseGrace).
-	DriveFileIDs []string `json:"drive_file_ids"`
+	DriveFileIDs       []string `json:"drive_file_ids"`
+	ProtectedAssetKeys []string `json:"protected_asset_keys"`
 }
 
 // ProtectedAssetsAPI is the stable interface for the snapshot GET.
