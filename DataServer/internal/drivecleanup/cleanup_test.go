@@ -12,7 +12,7 @@ import (
 
 type fakeHTTPError struct{ status int }
 
-func (e fakeHTTPError) Error() string { return "drive error" }
+func (e fakeHTTPError) Error() string   { return "drive error" }
 func (e fakeHTTPError) HTTPStatus() int { return e.status }
 
 type fakeDrive struct {
