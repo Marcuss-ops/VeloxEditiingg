@@ -80,3 +80,29 @@ endif()
 
 add_test(NAME phase_recorder_tests
          COMMAND velox_phase_recorder_tests)
+
+# Integration smoke test for the mandatory looped-music contract. It uses
+# the system FFmpeg binary to render a short source with loop=true and an
+# omitted duration_seconds, then checks the 95-second output duration and
+# process cleanup. The canonical Docker builder installs FFmpeg; local developers
+# must provide FFmpeg and pgrep to run the full CTest suite.
+add_executable(velox_looped_music_tests
+    tests/test_looped_music.cpp
+    src/core/render_engine.cpp
+    src/services/file_utils.cpp
+    src/services/media_utils.cpp
+    src/services/ffmpeg_progress_parser.cpp
+    src/telemetry/phase_recorder.cpp
+)
+
+target_include_directories(velox_looped_music_tests
+    PRIVATE include src include/velox)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(velox_looped_music_tests PRIVATE -O2)
+endif()
+
+add_test(NAME looped_music_tests
+         COMMAND velox_looped_music_tests)
+set_tests_properties(looped_music_tests PROPERTIES
+    ENVIRONMENT "VELOX_LOOPED_MUSIC_TEST=1")

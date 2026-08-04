@@ -57,7 +57,7 @@ fi
 if [[ ! -s "$ENGINE_SHA_FILE" ]]; then
     fail "Engine verification metadata is missing at $ENGINE_SHA_FILE. Rebuild the canonical image; do not docker cp a binary into runtime."
 fi
-EXPECTED_ENGINE_SHA="$(awk 'NF {print $1; exit}' "$ENGINE_SHA_FILE")"
+EXPECTED_ENGINE_SHA="$(awk 'length($1)==64 && $1 ~ /^[0-9a-fA-F]+$/ {print tolower($1); exit}' "$ENGINE_SHA_FILE")"
 if [[ ! "$EXPECTED_ENGINE_SHA" =~ ^[0-9a-fA-F]{64}$ ]]; then
     fail "Engine verification metadata is not a SHA-256 digest: $ENGINE_SHA_FILE"
 fi

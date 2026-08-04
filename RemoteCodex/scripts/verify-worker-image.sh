@@ -54,7 +54,7 @@ ENGINE_SHA="$(docker run --rm --entrypoint /bin/sh "$IMAGE" -c '
   test -s "$2"
   ldd "$1" 2>&1 | tee /tmp/velox-engine-ldd.txt
   ! grep -q "not found" /tmp/velox-engine-ldd.txt
-  expected=$(awk "NF {print \$1; exit}" "$2")
+  expected=$(awk "length(\$1)==64 && \$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\$1); exit}" "$2")
   actual=$(sha256sum "$1" | awk "{print \$1}")
   test "$expected" = "$actual"
   "$1" --help >/dev/null

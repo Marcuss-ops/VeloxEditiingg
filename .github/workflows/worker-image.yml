@@ -152,6 +152,8 @@ jobs:
           push: ${{ steps.version.outputs.push == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            SOURCE_DATE_EPOCH=0
           provenance: true
           sbom: true
           cache-from: type=gha,scope=${{ github.workflow }}-${{ github.ref_name }}
@@ -234,16 +236,32 @@ jobs:
       # + cap. 11 evidence pack can pin every running worker to a
       # known bundle identity without an extra DB lookup.
       - name: Record baseline manifest (Phase 1)
-        if: steps.digest.outputs.digest != ''
+        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
         env:
           IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           set -euo pipefail
           VERSION="$(tr -d '[:space:]' < VERSION.txt 2>/dev/null || echo '')"
-          BUNDLE_HASH="$(tr -d '[:space:]' < RemoteCodex/BUNDLE_HASH.txt 2>/dev/null || echo '')"
+          BUNDLE_HASH=""
           SOURCE_HASH="$(python3 -c 'import json;print(json.load(open("RemoteCodex/BUILD_INFO.json")).get("source_hash",""))' 2>/dev/null || echo '')"
-          if [[ -z "$VERSION" ]]; then
-            echo "::error::VERSION.txt is empty at the build commit" >&2
+          ENGINE_SHA=""
+          if [[ "${{ steps.version.outputs.push }}" == "true" ]]; then
+            # The builder writes this file into the runtime image. Pull the
+            # exact digest before inspecting it, so the engine hash and image
+            # digest form one identity. This step is skipped for no-push
+            # validation builds because buildx does not load an image locally.
+            IMAGE_REF="${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
+            docker pull "$IMAGE_REF" >/dev/null
+            ENGINE_SHA="$(docker run --rm --entrypoint /bin/sh "$IMAGE_REF" -c 'awk "length(\\$1)==64 && \\$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\\$1); exit}" /usr/local/share/velox/video-engine.sha256' 2>/dev/null || true)"
+            BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE_REF" -c 'awk "length(\\$1)==64 && \\$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\\$1); exit}" /app/RemoteCodex/BUNDLE_HASH.txt' 2>/dev/null || true)"
+            IMAGE_BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE_REF" -c 'set -eu; sha256sum /usr/local/bin/velox-worker-agent /usr/local/bin/velox_video_engine | sha256sum | awk "{print \\$1}"' 2>/dev/null || true)"
+            [[ "$IMAGE_BUNDLE_HASH" == "$BUNDLE_HASH" ]] || {
+              echo "::error::image bundle hash mismatch: embedded=$BUNDLE_HASH actual=$IMAGE_BUNDLE_HASH" >&2
+              exit 1
+            }
+          fi
+          if [[ -z "$VERSION" || ! "$ENGINE_SHA" =~ ^[a-f0-9]{64}$ || ! "$BUNDLE_HASH" =~ ^[a-f0-9]{64}$ || ! "$SOURCE_HASH" =~ ^[a-f0-9]{64}$ ]]; then
+            echo "::error::release metadata missing canonical VERSION, bundle hash, source hash, or engine SHA-256" >&2
             exit 1
           fi
           python3 - <<PYEOF
@@ -256,6 +274,7 @@ jobs:
             "version":        "$VERSION",
             "bundle_hash":    "$BUNDLE_HASH",
             "source_hash":    "$SOURCE_HASH",
+            "engine_sha256":  "$ENGINE_SHA",
             "github_run":     "${{ github.run_id }}",
             "github_run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
             "workflow_file":  "worker-image.yml",
@@ -266,7 +285,7 @@ jobs:
           PYEOF
 
       - name: Upload baseline manifest artifact
-        if: steps.digest.outputs.digest != ''
+        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: worker-baseline-manifest
@@ -284,7 +303,8 @@ jobs:
         run: |
           set -euo pipefail
           IMAGE="${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
-          BUNDLE_HASH="$(tr -d '[:space:]' < RemoteCodex/BUNDLE_HASH.txt 2>/dev/null || echo '')"
+          BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE" -c 'awk "length(\\$1)==64 && \\$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\\$1); exit}" /app/RemoteCodex/BUNDLE_HASH.txt' 2>/dev/null || echo '')"
+          [[ "$BUNDLE_HASH" =~ ^[a-f0-9]{64}$ ]] || { echo "::error::invalid embedded bundle hash"; exit 1; }
           mkdir -p /tmp/velox-real-bootstrap
           jq '
             with_entries(select(.key | startswith("_") | not))
@@ -350,6 +370,17 @@ jobs:
           print(f"OK: real-bootstrap verdict=OK; all 4 step PASS: {steps}")
           PYEOF
 
+      # Engine-specific canary: run the exact immutable image digest, render
+      # loop=true without duration_seconds to 95 seconds, verify engine hash,
+      # duration, and no residual ffmpeg process. This is deliberately after
+      # publication/signing so it certifies the artifact operators will run.
+      - name: "Audio loop canary (95s, immutable digest)"
+        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ci/worker-audio-canary.sh
+          scripts/ci/worker-audio-canary.sh "${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
+
       # Phase 1 also keeps the legacy "stays up" smoke as a fast-fail
       # before the slower real-bootstrap smoke. Companion to the
       # health endpoint probe on the Dockerfile.
@@ -358,7 +389,8 @@ jobs:
         run: |
           set -euo pipefail
           IMAGE="${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
-          BUNDLE_HASH="$(tr -d '[:space:]' < RemoteCodex/BUNDLE_HASH.txt 2>/dev/null || echo '')"
+          BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE" -c 'awk "length(\\$1)==64 && \\$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\\$1); exit}" /app/RemoteCodex/BUNDLE_HASH.txt' 2>/dev/null || echo '')"
+          [[ "$BUNDLE_HASH" =~ ^[a-f0-9]{64}$ ]] || { echo "::error::invalid embedded bundle hash"; exit 1; }
           echo "Smoke testing entrypoint of: $IMAGE"
           mkdir -p /tmp/velox-real-bootstrap/work
           printf '%s\n' "$BUNDLE_HASH" > /tmp/velox-real-bootstrap/work/BUNDLE_HASH.txt

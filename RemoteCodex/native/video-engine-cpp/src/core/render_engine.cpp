@@ -159,7 +159,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     fs::path workDir;
     {
         telemetry::ScopedPhase tempPhase(
-            recorder_, telemetry::kOriginEngine, telemetry::kScopeAttempt,
+            recorder_, telemetry::kOriginWorker, telemetry::kScopeArtifact,
             "worker.temp", "create", "prepare");
         ScopedTimer t(metrics_, "workdir_create_ms");
         workDir = file::makeTempDir(workBase, "plan_job_");
@@ -399,7 +399,11 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 return failRender("audio_copy_failed");
             }
             result.success = true;
-        } else if (downloadedTracks.size() == 1) {
+        } else if (downloadedTracks.size() == 1
+                   && !downloadedTracks[0].second->loop) {
+            // A plain finite track can use the fast mux path. Looped or
+            // filtered tracks must use the bounded filter graph below so
+            // `-stream_loop -1` can never outrun the rendered video.
             fs::path finalMuxed = workDir / "final_muxed.mp4";
             double vol = downloadedTracks[0].second->volume;
             double offset = downloadedTracks[0].second->start_time_offset;
@@ -448,7 +452,15 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 double vol = downloadedTracks[t].second->volume;
                 double offset = downloadedTracks[t].second->start_time_offset;
                 audioFilter << "[" << t << ":a]";
-                const double trackDuration = downloadedTracks[t].second->duration_seconds;
+                // A looped track without an explicit duration must be
+                // bounded by the rendered video. Otherwise ffmpeg receives
+                // both `-stream_loop -1` and `amix=duration=longest` and the
+                // mix never terminates. This is the safe default for
+                // background music; explicit durations still win.
+                const double declaredDuration = downloadedTracks[t].second->duration_seconds;
+                const double trackDuration = declaredDuration > 0.0
+                    ? declaredDuration
+                    : (downloadedTracks[t].second->loop ? duration_seconds_.load() : 0.0);
                 if (trackDuration > 0.0) {
                     audioFilter << "atrim=duration=" << trackDuration
                                 << ",asetpts=PTS-STARTPTS,";
@@ -472,7 +484,8 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             mixCmd << "ffmpeg -y -hide_banner -loglevel error"
                    << audioInputs.str()
                    << " -filter_complex " << file::shellQuote(audioFilter.str())
-                   << " -map \"[aout]\" -c:a aac "
+                   << " -map \"[aout]\" -t " << duration_seconds_.load()
+                   << " -c:a aac "
                    << file::shellQuote(mixedAudio.string());
 
             if (file::runCommand(mixCmd.str())) {

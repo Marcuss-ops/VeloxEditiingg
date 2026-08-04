@@ -53,7 +53,10 @@
 # automation may override it with a fully pinned @sha256 digest; using the
 # same reference in both stages prevents an ABI drift between stages.
 ARG VELOX_DEBIAN_BASE=debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
+ARG SOURCE_DATE_EPOCH=0
 FROM ${VELOX_DEBIAN_BASE} AS cpp-builder
+ARG SOURCE_DATE_EPOCH
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -65,6 +68,7 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         pkg-config \
         ca-certificates \
         ffmpeg \
+        procps \
         libc-bin \
     && rm -rf /var/lib/apt/lists/*
 
@@ -145,6 +149,8 @@ RUN make BIN_DIR=/out agent && \
 
 # ─── Stage 3: runtime — NO compilers, NO cmake, NO binutils ─────────────────
 FROM ${VELOX_DEBIAN_BASE}
+ARG SOURCE_DATE_EPOCH
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
 # Pinned non-root identity. Operators chown 10001:10001 on the writable
 # host bind-mounts (cache, assets_cache, runtime_dir) so files written
@@ -165,9 +171,6 @@ WORKDIR /app
 RUN mkdir -p /app/RemoteCodex/tests/fixtures
 COPY RemoteCodex/native/worker-agent-go/tests/fixtures/engine_selftest_baseline.sha256 \
      /app/RemoteCodex/tests/fixtures/engine_selftest_baseline.sha256
-COPY RemoteCodex/BUNDLE_HASH.txt /tmp/velox-bundle-hash.txt
-RUN tr -d '[:space:]' < /tmp/velox-bundle-hash.txt > /app/RemoteCodex/BUNDLE_HASH.txt && \
-    rm -f /tmp/velox-bundle-hash.txt
 
 # Runtime deps ONLY. Nothing build-time belongs here. The runtime package
 # set is intentionally aligned with the cpp-builder base (Debian Bookworm);
@@ -182,6 +185,7 @@ RUN tr -d '[:space:]' < /tmp/velox-bundle-hash.txt > /app/RemoteCodex/BUNDLE_HAS
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         ca-certificates \
         ffmpeg \
+        procps \
         curl \
         libstdc++6 \
         libc-bin \
@@ -195,6 +199,14 @@ COPY --from=cpp-builder /usr/local/share/velox/video-engine.sha256 /usr/local/sh
 # PR-3: copy the Go worker binary from the go-builder stage — no
 # pre-built bin/ from the build context is required.
 COPY --from=go-builder /out/velox-worker-agent /usr/local/bin/velox-worker-agent
+
+# Derive the runtime bundle identity from the exact binaries that crossed
+# the builder/runtime boundary. The source-tree BUNDLE_HASH.txt is not used
+# as an assertion because it can describe a different host build; this hash
+# is the value operators and the release manifest can actually verify.
+RUN sha256sum /usr/local/bin/velox-worker-agent /usr/local/bin/velox_video_engine \
+      | sha256sum | awk '{print $1}' > /app/RemoteCodex/BUNDLE_HASH.txt && \
+    test "$(wc -c < /app/RemoteCodex/BUNDLE_HASH.txt)" -eq 65
 
 # Entrypoint script (validates + execs; it does NOT rebuild the engine).
 COPY RemoteCodex/scripts/worker-entrypoint.sh /usr/local/bin/worker-entrypoint.sh
