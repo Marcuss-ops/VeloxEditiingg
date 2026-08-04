@@ -32,11 +32,17 @@
           - ansible_os_family == "Debian"
         fail_msg: "OS {{ ansible_os_family }} non supportato — richiesto Debian/Ubuntu"
 
-    - name: Install | Verifica architettura
+    - name: Install | Verifica architettura dell’immagine canonica
       ansible.builtin.assert:
         that:
-          - ansible_architecture in ["x86_64", "aarch64"]
-        fail_msg: "Architettura {{ ansible_architecture }} non supportata"
+          # The pinned Debian base and published worker image are linux/amd64.
+          # Do not claim aarch64 support until a separately pinned multi-arch
+          # base/image manifest is published and verified.
+          - ansible_architecture == "x86_64"
+        fail_msg: >-
+          Architettura {{ ansible_architecture }} non supportata dalla worker
+          image canonica linux/amd64. Pubblicare prima un manifest multi-arch
+          con digest/base pin distinti per riabilitare aarch64.
 
     - name: Install | Verifica comandi essenziali
       ansible.builtin.command: "which {{ item }}"
@@ -71,32 +77,8 @@
         state: directory
         mode: "0755"
 
-    # ── BUILD GO AGENT ON CONTROLLER (idempotent) ─────────────
-    - name: Install | Build Go worker agent on controller
-      ansible.builtin.shell: |
-        set -euo pipefail
-        AGENT_DIR="{{ playbook_dir }}/../../../../RemoteCodex/native/worker-agent-go"
-        BINARY="$AGENT_DIR/bin/velox-worker-agent"
-
-        # Skip build if binary exists and no .go source is newer than it
-        if [ -f "$BINARY" ]; then
-          NEWER=$(find "$AGENT_DIR" -name '*.go' -newer "$BINARY" -print -quit 2>/dev/null)
-          if [ -z "$NEWER" ]; then
-            echo "SKIP: binary up-to-date"
-            exit 0
-          fi
-        fi
-
-        cd "$AGENT_DIR"
-        make agent
-        echo "BUILT"
-      args:
-        executable: /bin/bash
-      delegate_to: localhost
-      become: false
-      run_once: true
-      register: agent_build
-      changed_when: "'BUILT' in (agent_build.stdout | default(''))"
+    # Go and C++ binaries are built inside the canonical multistage Dockerfile.
+    # The controller never injects a host-built executable into the image.
 
     # ── SYNC CODE FROM CONTROLLER ─────────────────────────────
     - name: Install | Ensure code directory exists and is writable
@@ -130,8 +112,6 @@
         file: tasks/deploy_worker_release.yml
       vars:
         bundle_zip_path: ""
-        reinject_agent_src: "{{ playbook_dir }}/../../../../RemoteCodex/native/worker-agent-go/bin/velox-worker-agent"
-        reinject_scripts_dir: "{{ playbook_dir }}/../../../../RemoteCodex/scripts"
 
     - name: Install | Riepilogo installazione
       ansible.builtin.debug:

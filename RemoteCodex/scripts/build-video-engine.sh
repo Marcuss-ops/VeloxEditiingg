@@ -4,6 +4,8 @@ set -euo pipefail
 ENGINE_SRC="${VELOX_VIDEO_ENGINE_SRC:-}"
 OUT_BIN="${VELOX_VIDEO_ENGINE_OUT:-/usr/local/bin/velox_video_engine}"
 BUILD_DIR="${VELOX_VIDEO_ENGINE_BUILD_DIR:-/tmp/velox-video-engine-build}"
+METADATA_DIR="${VELOX_VIDEO_ENGINE_METADATA_DIR:-/usr/local/share/velox}"
+ENGINE_SHA_FILE="${VELOX_VIDEO_ENGINE_SHA_FILE:-${METADATA_DIR}/video-engine.sha256}"
 
 echo "== Velox C++ engine build =="
 echo "Source: $ENGINE_SRC"
@@ -57,6 +59,7 @@ if [ -f "$ENGINE_SRC/CMakeLists.txt" ]; then
       -DCMAKE_BUILD_TYPE=Release
 
   cmake --build "$BUILD_DIR" -j"$(nproc)"
+  ctest --test-dir "$BUILD_DIR" --output-on-failure
 
   if [ -f "$BUILD_DIR/velox_video_engine" ]; then
     install -m 0755 "$BUILD_DIR/velox_video_engine" "$OUT_BIN"
@@ -91,4 +94,18 @@ fi
 echo "== Built binary =="
 ls -lh "$OUT_BIN"
 file "$OUT_BIN" || true
-ldd "$OUT_BIN" || true
+
+# Validate the binary against the same builder image that produced it. This
+# fails the image build before the artifact can cross into the runtime stage.
+# The runtime stage repeats this check through worker-entrypoint.sh.
+LDD_OUTPUT="$(ldd "$OUT_BIN" 2>&1 || true)"
+printf '%s\n' "$LDD_OUTPUT"
+if printf '%s\n' "$LDD_OUTPUT" | grep -q 'not found'; then
+  echo "ERROR: unresolved shared dependencies detected for $OUT_BIN" >&2
+  exit 14
+fi
+
+mkdir -p "$(dirname "$ENGINE_SHA_FILE")"
+sha256sum "$OUT_BIN" > "$ENGINE_SHA_FILE"
+echo "Engine SHA-256: $(awk '{print $1}' "$ENGINE_SHA_FILE")"
+echo "Engine metadata: $ENGINE_SHA_FILE"

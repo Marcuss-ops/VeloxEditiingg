@@ -157,14 +157,24 @@ Requisiti:
 
 ### 3.6 Verifiche del worker image
 
+La verifica canonica controlla l’Image ID locale (o il RepoDigest quando
+l’immagine è stata pubblicata), l’esistenza dell’engine, le dipendenze ELF,
+`--help` e l’hash SHA-256 emesso dal `cpp-builder`:
+
 ```bash
-docker build -f RemoteCodex/native/worker-agent-go/Dockerfile -t velox-worker:test .
-docker run --rm --entrypoint /usr/local/bin/velox-worker-agent velox-worker:test --version
-docker run --rm --entrypoint /usr/local/bin/velox_video_engine velox-worker:test --version || true
-docker inspect velox-worker:test --format '{{.Config.User}}'
+docker build -f RemoteCodex/native/worker-agent-go/Dockerfile \
+  -t velox-worker:test .
+RemoteCodex/scripts/verify-worker-image.sh velox-worker:test
+# Per un’immagine pubblicata:
+RemoteCodex/scripts/verify-worker-image.sh \
+  ghcr.io/marcuss-ops/velox-worker@sha256:<digest> \
+  <engine-sha256> \
+  ghcr.io/marcuss-ops/velox-worker@sha256:<digest>
 ```
 
-Il valore user non deve essere vuoto o `root`.
+Il runtime deve contenere solo il binario prodotto da `cpp-builder` e
+`go-builder`: nessun `docker cp`, nessun binario host pre-iniettato. Il valore
+user non deve essere vuoto o `root`.
 
 ## 4. Hardening dell'immagine master
 

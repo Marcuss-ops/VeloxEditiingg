@@ -173,6 +173,8 @@ if [[ "$SKIP_HEAVY" -ne 1 ]]; then
       -f "$REPO_ROOT/RemoteCodex/native/worker-agent-go/Dockerfile" \
       -t velox-worker:verify \
       "$REPO_ROOT"
+    log "verify canonical worker image: engine ABI + SHA-256 + image ID"
+    "$REPO_ROOT/RemoteCodex/scripts/verify-worker-image.sh" velox-worker:verify
   else
     if [[ "${CI:-}" == "true" ]]; then
       fail "Docker daemon unreachable or Docker not installed (required in CI)"

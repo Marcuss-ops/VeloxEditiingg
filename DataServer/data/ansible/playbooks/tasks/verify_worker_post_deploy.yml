@@ -175,12 +175,18 @@
       - docker
       - exec
       - "{{ velox_worker_container_name }}"
-      - bash
-      - -lc
+      - sh
+      - -c
       - >-
-        test -x /usr/local/bin/velox_video_engine &&
-        ! ldd /usr/local/bin/velox_video_engine | grep -q 'not found' &&
-        /usr/local/bin/velox_video_engine --help >/dev/null
+        set -eu;
+        ENGINE=/usr/local/bin/velox_video_engine;
+        SHA_FILE=/usr/local/share/velox/video-engine.sha256;
+        test -x "$ENGINE" && test -s "$SHA_FILE";
+        ! ldd "$ENGINE" | grep -q 'not found';
+        EXPECTED=$(awk 'NF {print $1; exit}' "$SHA_FILE");
+        ACTUAL=$(sha256sum "$ENGINE" | awk '{print $1}');
+        test "$EXPECTED" = "$ACTUAL";
+        "$ENGINE" --help >/dev/null
   register: _cpp_engine
   changed_when: false
 

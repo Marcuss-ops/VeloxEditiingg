@@ -171,6 +171,23 @@ jobs:
             [ -n "$t" ] && echo "- \`$t\`" >> "$GITHUB_STEP_SUMMARY"
           done <<< "$TAGS"
 
+      # Verify the registry resolves the exact immutable digest emitted by
+      # build-push. This prevents a mutable tag or registry propagation race
+      # from silently changing the release identity after publication.
+      - name: Verify published image digest (canonical)
+        if: steps.build.outputs.digest != '' && steps.version.outputs.push == 'true'
+        run: |
+          set -euo pipefail
+          IMAGE="${{ env.IMAGE_REPO }}"
+          EXPECTED="${{ steps.digest.outputs.digest }}"
+          ACTUAL="$(docker buildx imagetools inspect "${IMAGE}:${{ steps.version.outputs.tag }}" \
+            | awk '/^Digest:/ {print $2; exit}')"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::published digest mismatch: expected=${EXPECTED} actual=${ACTUAL}" >&2
+            exit 1
+          fi
+          echo "Published digest verified: ${IMAGE}@${ACTUAL}"
+
       - name: Upload digest artifact
         if: steps.build.outputs.digest != ''
         uses: actions/upload-artifact@v4

@@ -175,12 +175,15 @@ docker:
 	# The bin/velox-worker-agent that `make agent` would have left is
 	# ignored by the Dockerfile (the COPY --from=go-builder stage
 	# supplies the freshly-built binary instead).
-	cd ../.. && docker build \
-		-f native/worker-agent-go/Dockerfile \
+	cd ../../.. && docker build \
+		-f RemoteCodex/native/worker-agent-go/Dockerfile \
 		-t velox-worker-agent:$(VERSION) \
 		--build-arg "VERSION=$(VERSION)" \
 		--build-arg "BUILD_TIME=$(BUILD_TIME)" \
 		.
+	@echo "Verifying canonical worker image (engine ABI + SHA-256 + image ID)…"
+	@../../../RemoteCodex/scripts/verify-worker-image.sh velox-worker-agent:$(VERSION)
+
 
 # RW-PROD-003 §5: smoke test the bootstrap gate WITHOUT going through
 # the full main() flow. Used by CI as a single-host canary before any

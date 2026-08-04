@@ -49,7 +49,11 @@
 # DataServer/data/ansible/playbooks/tasks/systemd_setup.yml.
 
 # ─── Stage 1: C++ engine builder ─────────────────────────────────────────────
-FROM debian:bookworm-slim AS cpp-builder
+# Keep one explicit base reference for both builder and runtime. Release
+# automation may override it with a fully pinned @sha256 digest; using the
+# same reference in both stages prevents an ABI drift between stages.
+ARG VELOX_DEBIAN_BASE=debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
+FROM ${VELOX_DEBIAN_BASE} AS cpp-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -60,16 +64,20 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         g++ \
         pkg-config \
         ca-certificates \
+        ffmpeg \
+        libc-bin \
     && rm -rf /var/lib/apt/lists/*
 
 # Build context is the repo root — paths MUST reflect that layout.
 COPY RemoteCodex/scripts/build-video-engine.sh /usr/local/bin/build-video-engine.sh
 COPY RemoteCodex/native/video-engine-cpp /app/native/video-engine-cpp
 
-# Compile engine into /usr/local/bin/velox_video_engine. `test -x`
-# hard-fails if the build did not produce the expected binary.
+# Compile and test the engine into /usr/local/bin/velox_video_engine.
+# The builder also writes the canonical binary hash consumed by the runtime
+# verification gate; no host-built or docker-copied binary is accepted.
 RUN /usr/local/bin/build-video-engine.sh && \
-    test -x /usr/local/bin/velox_video_engine
+    test -x /usr/local/bin/velox_video_engine && \
+    test -s /usr/local/share/velox/video-engine.sha256
 
 
 # ─── Stage 2: Go worker-builder ────────────────────────────────────────────
@@ -136,7 +144,7 @@ RUN make BIN_DIR=/out agent && \
 
 
 # ─── Stage 3: runtime — NO compilers, NO cmake, NO binutils ─────────────────
-FROM debian:bookworm-slim
+FROM ${VELOX_DEBIAN_BASE}
 
 # Pinned non-root identity. Operators chown 10001:10001 on the writable
 # host bind-mounts (cache, assets_cache, runtime_dir) so files written
@@ -161,7 +169,9 @@ COPY RemoteCodex/BUNDLE_HASH.txt /tmp/velox-bundle-hash.txt
 RUN tr -d '[:space:]' < /tmp/velox-bundle-hash.txt > /app/RemoteCodex/BUNDLE_HASH.txt && \
     rm -f /tmp/velox-bundle-hash.txt
 
-# Runtime deps ONLY. Nothing build-time belongs here.
+# Runtime deps ONLY. Nothing build-time belongs here. The runtime package
+# set is intentionally aligned with the cpp-builder base (Debian Bookworm);
+# the engine is never rebuilt or replaced after this stage.
 #   * ca-certificates: outbound TLS (master handshake + Social API / Unity builds remote API).
 #   * ffmpeg:          runtime dep of the video engine.
 #   * curl:            HEALTHCHECK below.
@@ -180,6 +190,7 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
 # Copy pre-built C++ engine from stage 1 (compilers are NOT in the runtime
 # image, so the engine cannot be rebuilt here).
 COPY --from=cpp-builder /usr/local/bin/velox_video_engine /usr/local/bin/velox_video_engine
+COPY --from=cpp-builder /usr/local/share/velox/video-engine.sha256 /usr/local/share/velox/video-engine.sha256
 
 # PR-3: copy the Go worker binary from the go-builder stage — no
 # pre-built bin/ from the build context is required.
@@ -187,6 +198,13 @@ COPY --from=go-builder /out/velox-worker-agent /usr/local/bin/velox-worker-agent
 
 # Entrypoint script (validates + execs; it does NOT rebuild the engine).
 COPY RemoteCodex/scripts/worker-entrypoint.sh /usr/local/bin/worker-entrypoint.sh
+
+# OCI labels are supplied by CI/build scripts where available. These static
+# labels make the provenance explicit even for local builds.
+LABEL org.veloxproject.engine.path="/usr/local/bin/velox_video_engine" \
+      org.veloxproject.engine.build="canonical-cpp-builder" \
+      org.veloxproject.engine.runtime="debian:bookworm-slim" \
+      org.veloxproject.engine.sha256-file="/usr/local/share/velox/video-engine.sha256"
 
 # Create non-root runtime user with UID pinned at ${VELOX_UID}. The three
 # binaries are chowned individually (no `chown -R`) because they live in

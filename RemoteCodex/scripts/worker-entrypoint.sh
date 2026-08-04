@@ -13,11 +13,12 @@
 #
 # What this script does:
 #   1. Crash hard if either binary is missing or not executable — the
-#      container is not designed to mint its own binaries at runtime.
-#   2. `ldd`-grep for "not found" so the dynamic linker error surfaces
-#      as a clear FATAL line instead of a confusing kernel-level
-#      ENOEXEC on first use.
-#   3. exec the Go worker with the original argv.
+#      container is not designed to mint its own binaries at runtime.#   2. `ldd`-grep for "not found" so the dynamic linker error surfaces
+#     as a clear FATAL line instead of a confusing kernel-level
+#     ENOEXEC on first use.
+#   3. Verify the immutable SHA-256 metadata emitted by the cpp-builder.
+#   4. exec the Go worker with the original argv.
+
 #
 # Removed from previous version:
 #   * `strings` + GLIBC scrape: required `binutils`, which the slim
@@ -31,6 +32,7 @@ set -Eeuo pipefail
 
 ENGINE_BINARY="${VELOX_VIDEO_ENGINE_CPP_BIN:-/usr/local/bin/velox_video_engine}"
 GO_BINARY="${VELOX_GO_WORKER_BIN:-/usr/local/bin/velox-worker-agent}"
+ENGINE_SHA_FILE="${VELOX_VIDEO_ENGINE_SHA_FILE:-/usr/local/share/velox/video-engine.sha256}"
 
 log() {
     printf '[worker-entrypoint] %s\n' "$*"
@@ -52,8 +54,21 @@ if printf '%s\n' "$LDD_OUTPUT" | grep -q 'not found'; then
     fail "Engine $ENGINE_BINARY references unresolved shared libraries. The slim runtime image is missing one or more dependencies."
 fi
 
+if [[ ! -s "$ENGINE_SHA_FILE" ]]; then
+    fail "Engine verification metadata is missing at $ENGINE_SHA_FILE. Rebuild the canonical image; do not docker cp a binary into runtime."
+fi
+EXPECTED_ENGINE_SHA="$(awk 'NF {print $1; exit}' "$ENGINE_SHA_FILE")"
+if [[ ! "$EXPECTED_ENGINE_SHA" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    fail "Engine verification metadata is not a SHA-256 digest: $ENGINE_SHA_FILE"
+fi
+ACTUAL_ENGINE_SHA="$(sha256sum "$ENGINE_BINARY" | awk '{print $1}')"
+if [[ "$ACTUAL_ENGINE_SHA" != "$EXPECTED_ENGINE_SHA" ]]; then
+    fail "Engine SHA-256 mismatch: expected=$EXPECTED_ENGINE_SHA actual=$ACTUAL_ENGINE_SHA"
+fi
+log "C++ engine SHA-256 verified: $ACTUAL_ENGINE_SHA"
+
 if [[ ! -x "$GO_BINARY" ]]; then
-    fail "Go worker binary missing or not executable at $GO_BINARY. Pre-build it with 'make -C RemoteCodex/native/worker-agent-go agent'."
+    fail "Go worker binary missing or not executable at $GO_BINARY. Rebuild the canonical worker image; the runtime never accepts host-copied binaries."
 fi
 
 log "C++ engine validation passed"

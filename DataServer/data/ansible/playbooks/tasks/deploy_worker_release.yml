@@ -84,36 +84,6 @@
         msg: "VERSION.txt not found in staging"
       when: not _staging_version.stat.exists
 
-    - name: DeployWorker | Ensure agent binary directories exist
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: directory
-        mode: "0755"
-      loop:
-        - "{{ velox_dir }}/current.new/RemoteCodex/bin"
-        - "{{ velox_dir }}/current.new/RemoteCodex/native/worker-agent-go/bin"
-      when: reinject_agent_src | default('') | length > 0
-
-    - name: DeployWorker | Copy fresh Go agent binary
-      ansible.builtin.copy:
-        src: "{{ reinject_agent_src }}"
-        dest: "{{ item }}"
-        mode: "0755"
-      loop:
-        - "{{ velox_dir }}/current.new/RemoteCodex/bin/velox-worker-agent"
-        - "{{ velox_dir }}/current.new/RemoteCodex/native/worker-agent-go/bin/velox-worker-agent"
-      when: reinject_agent_src | default('') | length > 0
-
-    - name: DeployWorker | Copy fresh helper scripts
-      ansible.builtin.copy:
-        src: "{{ reinject_scripts_dir | default('') }}/{{ item }}"
-        dest: "{{ velox_dir }}/current.new/RemoteCodex/scripts/{{ item }}"
-        mode: "0755"
-      loop:
-        - build-video-engine.sh
-        - worker-entrypoint.sh
-      when: reinject_scripts_dir | default('') | length > 0
-
     - name: DeployWorker | Atomic release swap
       ansible.builtin.shell: |
         set -euo pipefail

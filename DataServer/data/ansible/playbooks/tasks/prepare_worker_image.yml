@@ -7,8 +7,8 @@
 #   * Read BUILD_INFO.json from the freshly-staged release
 #   * Derive image tag from (version, git_commit)
 #   * Resolve Dockerfile + build context paths
-#   * Verify the Go worker-agent binary is present in the context
-#   * Always rebuild the image so Go agent updates land
+#   * Build both Go worker-agent and C++ engine inside the canonical Dockerfile
+#   * Always rebuild the image so source updates land
 #   * docker image inspect proves the tag is real
 #
 # This task does NOT touch systemd, runtime directories, watchdog,
@@ -53,19 +53,6 @@
     velox_worker_dockerfile_host: "{{ velox_dir }}/current/RemoteCodex/native/worker-agent-go/Dockerfile"
     velox_worker_docker_context: "{{ velox_dir }}/current"
 
-- name: PrepareImage | Verify worker agent binary is in build context
-  ansible.builtin.stat:
-    path: "{{ velox_worker_docker_context }}/RemoteCodex/native/worker-agent-go/bin/velox-worker-agent"
-  register: worker_agent_binary_stat
-
-- name: PrepareImage | Fail if worker agent binary is missing from build context
-  ansible.builtin.fail:
-    msg: >-
-      Missing velox-worker-agent binary at
-      {{ velox_worker_docker_context }}/RemoteCodex/native/worker-agent-go/bin/velox-worker-agent.
-      Rebuild the agent on the controller before the Docker build.
-  when: not worker_agent_binary_stat.stat.exists
-
 - name: PrepareImage | Build velox-worker Docker image
   ansible.builtin.shell: |
     set -e
@@ -89,7 +76,13 @@
       -t "{{ _worker_image_tag }}" \
       "$CONTEXT"
     /usr/bin/docker image inspect "{{ _worker_image_tag }}" >/dev/null 2>&1
-    echo "Image {{ _worker_image_tag }} built successfully"
+    IMAGE_ID="$(/usr/bin/docker image inspect "{{ _worker_image_tag }}" --format '{{ '{{.Id}}' }}')"
+    # Local host builds have no RepoDigest; verify the immutable Image ID.
+    # Published deployments may additionally provide worker_image_digest,
+    # which the verifier checks as an exact repository@sha256 reference.
+    /usr/bin/bash "{{ velox_current_root }}/RemoteCodex/scripts/verify-worker-image.sh" \
+      "{{ _worker_image_tag }}" "" "{{ worker_image_digest | default('') }}"
+    echo "Image {{ _worker_image_tag }} built successfully (image_id=${IMAGE_ID})"
   args:
     executable: /bin/bash
   register: worker_image_build
