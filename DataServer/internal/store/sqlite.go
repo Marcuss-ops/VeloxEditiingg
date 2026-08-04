@@ -1,6 +1,6 @@
 // Package store provides database access layers for Velox.
-// SQLite is the single database used for jobs, workers, analytics, calendar,
-// drive links, and dark editor projects.
+// SQLite is the single database used for jobs, workers, analytics,
+// calendar, and drive links.
 package store
 
 import (
@@ -279,11 +279,6 @@ func (s *SQLiteStore) Close() error {
 // postMigrationAdjustments handles schema additions that can't be done via CREATE TABLE IF NOT EXISTS
 // (e.g., adding columns to existing tables, backfilling). This runs after all migrations.
 func (s *SQLiteStore) postMigrationAdjustments() error {
-	// Dark Editor: ensure folder_id column on existing databases
-	if err := s.ensureColumn("dark_editor_projects", "folder_id", "TEXT"); err != nil {
-		return fmt.Errorf("store: post-migration adjustments: %w", err)
-	}
-
 	// Calendar: backfill schema additions
 	calendarColumns := []struct {
 		table      string

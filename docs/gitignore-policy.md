@@ -45,7 +45,7 @@ require the "both anchors" rule below.
 | --- | --- | --- | --- |
 | `/<name>/` | Root-level directory only | `/dist/`, `/controltransport/` | Canonical form for top-level orphan build artifacts (e.g. transient `protoc` output dropped at repo root). |
 | `/<name>` | Root-level file or directory (file-or-dir, NOT dir-only) | `/VERSION.txt.bak` | Root-level stray files. Rare — usually you want `/<name>/` instead. |
-| `<subdir>/<name>` | Anchored to `.gitignore` location (= repo root, in this repo) | `DataServer/bin`, `frontend_standalone/web/dark_editor/dist` | Scoped ignores that must NOT match at any other depth. Does **not** recurse. |
+| `<subdir>/<name>` | Anchored to `.gitignore` location (= repo root, in this repo) | `DataServer/bin`, `RemoteCodex/native/worker-agent-go/bin` | Scoped ignores that must NOT match at any other depth. Does **not** recurse. |
 | `<subdir>/**` | Everything under a subdir | `RemoteCodex/native/video-engine-cpp/build/**` | Recursive ignore under one specific subdir. |
 
 Anything not in this table — bare names, trailing-but-not-leading slashes,

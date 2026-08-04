@@ -59,8 +59,6 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 	tables001 := []string{
 		"jobs", "job_history", "job_logs", "workers", "worker_flags",
 		"analytics_cache", "drive_links",
-		"dark_editor_projects", "dark_editor_folders", "dark_editor_assets",
-		"dark_editor_templates", "dark_editor_temp_files", "dark_editor_generations",
 		"calendar_events", "worker_validations",
 	}
 	for _, table := range tables001 {
@@ -116,16 +114,15 @@ func TestIntegration_MigrationRunner_EndToEnd(t *testing.T) {
 	}
 
 	// Migration 090 also drops the historical YouTube columns on
-	// domain tables (calendar_events, dark_editor_folders). Lock the
-	// column removal so a future migration chain regression is caught
-	// by this end-to-end test instead of slipping into a fresh DB.
+	// domain tables (calendar_events). Lock the column removal so a
+	// future migration chain regression is caught by this end-to-end
+	// test instead of slipping into a fresh DB.
 	youtubeColumns := []struct {
 		table string
 		col   string
 	}{
 		{"calendar_events", "youtube_group"},
 		{"calendar_events", "youtube_links_json"},
-		{"dark_editor_folders", "youtube_group"},
 	}
 	for _, cc := range youtubeColumns {
 		if columnExists(t, db, cc.table, cc.col) {

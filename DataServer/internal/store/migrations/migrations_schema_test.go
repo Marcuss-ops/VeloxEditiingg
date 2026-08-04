@@ -42,7 +42,6 @@ func TestMigration090_YouTubeDomainDropped(t *testing.T) {
 	}{
 		{"calendar_events", "youtube_group"},
 		{"calendar_events", "youtube_links_json"},
-		{"dark_editor_folders", "youtube_group"},
 	}
 	for _, cc := range youtubeColumns {
 		if columnExists(t, db, cc.table, cc.col) {

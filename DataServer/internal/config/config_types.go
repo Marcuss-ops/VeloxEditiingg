@@ -289,10 +289,8 @@ type AnsibleConfig struct {
 
 // FrontendConfig holds SPA and frontend settings.
 type FrontendConfig struct {
-	SPADir          string
-	GradioAppURL    string
-	DarkEditorDir   string
-	DarkEditorProxy string
+	SPADir       string
+	GradioAppURL string
 }
 
 // RenderConfig holds remote rendering engine settings.

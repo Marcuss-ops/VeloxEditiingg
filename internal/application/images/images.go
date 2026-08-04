@@ -2,9 +2,8 @@
 // helpers for the Velox editor's application layer.
 //
 // Scope: small, dependency-free, contract surface for the editor's image
-// renderer, the dark-editor thumbnail generator, and the worker bundle
-// uploader. No I/O, no codec, no allocation beyond the Format / Dimension
-// value types.
+// renderer and the worker bundle uploader. No I/O, no codec, no
+// allocation beyond the Format / Dimension value types.
 //
 // Exported symbols (one canonical reference for every public name in this
 // package; per-symbol godoc below carries the full contract):

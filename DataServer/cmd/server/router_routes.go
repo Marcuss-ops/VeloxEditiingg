@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -12,7 +11,6 @@ import (
 	"velox-server/internal/artifacts"
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/handlers/server/api"
-	"velox-server/internal/handlers/server/darkeditor"
 	instaedithandler "velox-server/internal/handlers/server/instaedit"
 	"velox-server/internal/handlers/server/pipeline"
 	scripthandlers "velox-server/internal/handlers/server/script"
@@ -49,13 +47,9 @@ func registerInstaEditRoutes(r *gin.Engine, deps InstaEditRouteDeps) error {
 	if deps.Service == nil {
 		return fmt.Errorf("InstaEdit BFF routes enabled but service is nil")
 	}
-	if deps.DarkHandler == nil {
-		return fmt.Errorf("InstaEdit BFF routes enabled but dark editor handler is nil")
-	}
 	instaedithandler.NewHandler(instaedithandler.HandlerDeps{
 		Verifier:      deps.Verifier,
 		Service:       deps.Service,
-		DarkHandler:   deps.DarkHandler,
 		WebhookSecret: deps.WebhookSecret,
 	}).RegisterRoutes(r)
 	return nil
@@ -107,40 +101,6 @@ func registerPipelineRoutes(r *gin.Engine, auth, m2mAuth gin.HandlerFunc, deps P
 		deps.Resolver,
 		deps.JobsRepo, deps.JobsRepo, deps.CmdMgr,
 	).WithStore(deps.SQLiteStore).WithTaskReader(deps.TaskReader).WithAssetService(deps.AssetService).WithIntakeSink(velmetrics.NewCreatorIntakeSink()).RegisterRoutes(r, auth, m2mAuth)
-}
-
-// registerDarkeditorRoutes mounts the legacy /api/darkeditor/dark_editor_v2
-// routes and reuses the shared handler if one was supplied by the
-// composition root. The InstaEdit-protected editor surface is mounted
-// separately under /api/v1/instaedit/editor by registerInstaEditRoutes.
-func registerDarkeditorRoutes(r *gin.Engine, deps DarkeditorRouteDeps) {
-	if deps.Cfg == nil {
-		return
-	}
-	adminAuth := api.AdminAuthMiddleware(deps.Cfg)
-	var deHandler *darkeditor.Handler
-	if deps.Handler != nil {
-		deHandler = deps.Handler
-	} else {
-		deCfg := &darkeditor.Config{
-			TempDir:      filepath.Join(deps.Cfg.Runtime.DataDir, "dark_editor", "temp"),
-			ProjectsDir:  filepath.Join(deps.Cfg.Runtime.DataDir, "dark_editor", "projects"),
-			LogDir:       filepath.Join(deps.Cfg.Runtime.DataDir, "dark_editor", "logs"),
-			NVIDIAAPIKey: deps.Cfg.NVIDIA.APIKey,
-		}
-		deHandler = darkeditor.NewHandler(deCfg)
-		if deps.SQLiteStore != nil {
-			deHandler.SetDBStore(deps.SQLiteStore)
-		}
-	}
-	// Wrap darkeditor routes with admin auth. The dark editor SPA is
-	// served by the same internal-only master, so it is protected by
-	// the same service-token gate as the rest of the HTTP API.
-	//
-	// NOTE: RegisterAPIRoutes no longer adds its own /dark_editor_v2
-	// prefix, so we mount the legacy surface at
-	// /api/darkeditor/dark_editor_v2/* for backwards compatibility.
-	darkeditor.RegisterAPIRoutes(r.Group("/api/darkeditor/dark_editor_v2", adminAuth), deHandler)
 }
 
 // registerUploadRoutes mounts upload-completed + chunked-upload routes.

@@ -12,7 +12,6 @@ La cartella `handlers` è separata per macro-dominio:
 handlers/
 ├── README.md
 ├── web/
-│   ├── darkeditor/        # Dark Editor web proxy
 │   ├── dashboard/         # Worker dashboard
 │   ├── explorer/          # File explorer
 │   ├── proxy/             # NoRoute handler, compat, landing page
@@ -23,7 +22,6 @@ handlers/
 │   ├── auth/              # User auth (register, login, sessions)
 │   ├── calendar/          # Calendario produzione video (6 file)
 │   ├── collaboration/     # Project collaboration (enterprise)
-│   ├── darkeditor/        # Dark Editor - editor immagini AI (16 file)
 │   ├── diagnostics/       # Data layout diagnostics
 │   ├── drive/             # Google Drive handlers
 │   ├── groups/            # Social destination groups (legacy, removed)

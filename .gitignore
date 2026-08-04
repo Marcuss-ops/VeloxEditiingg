@@ -70,7 +70,6 @@ DataServer/data/drive/tokens/
 # ── Runtime directories (DataServer) ─────────────────────────────────────────
 DataServer/data/analytics/
 DataServer/data/backups/
-DataServer/data/dark_editor/
 DataServer/data/drive/
 DataServer/data/jobs/
 DataServer/data/worker_downloads/

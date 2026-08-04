@@ -13,18 +13,17 @@ package instaeditauth
 // Middleware(requiredScopes), so any mismatch is a hard fail).
 //
 // ROUTING:
-//   editor.project.read      → Velox routes that READ a dark-editor
-//                              project / job / delivery / worker / asset
-//                              (e.g. GET /api/v1/instaedit/editor/projects/{id},
+//   editor.project.read      → Velox routes that READ a project resource
+//                              (job / delivery / worker / asset)
+//                              (e.g. GET /api/v1/instaedit/jobs,
 //                              GET .../jobs, GET .../jobs/{id},
 //                              GET .../jobs/{id}/deliveries,
 //                              GET .../workers, GET .../workers/{id},
 //                              GET .../assets/{id})
-//   editor.project.write     → Velox routes that MUTATE a dark-editor
-//                              project (POST .../jobs, POST .../jobs/{id}/cancel,
-//                              PATCH on projects)
+//   editor.project.write     → Velox routes that MUTATE a project
+//                              (POST .../jobs, POST .../jobs/{id}/cancel)
 //   editor.asset.upload      → Velox routes that upload a render asset
-//                              (PUT/POST /api/v1/instaedit/editor/assets/*)
+//                              (PUT/POST /api/v1/instaedit/assets/*)
 //   youtube.session.publish  → Velox route that publishes a thumbnail
 //                              update to YouTube (POST .../sessions/{id}/publish)
 //
@@ -33,12 +32,12 @@ package instaeditauth
 // the wire format human-readable for the 403 body.
 
 const (
-	// ScopeEditorProjectRead grants read access to a dark-editor
-	// project and its child resources (jobs, deliveries, workers, assets).
+	// ScopeEditorProjectRead grants read access to a project and its
+	// child resources (jobs, deliveries, workers, assets).
 	ScopeEditorProjectRead = "editor.project.read"
 
-	// ScopeEditorProjectRead grants write access to a dark-editor
-	// project lifecycle (create / update / cancel).
+	// ScopeEditorProjectWrite grants write access to a project
+	// lifecycle (create / update / cancel).
 	ScopeEditorProjectWrite = "editor.project.write"
 
 	// ScopeEditorAssetUpload grants permission to upload a render
@@ -56,7 +55,7 @@ const (
 //   - The InstaEdit BFF during the cutover window: when the
 //     EditorBFFModule Proxy(...) call does not yet declare an
 //     explicit per-operation scope, the BFF falls back to this
-//     superset so the dark-editor UI keeps working while the
+//     superset so the editor UI keeps working while the
 //     per-operation wiring lands in a followup commit.
 //   - Velox middleware test fixtures that need a "guaranteed to pass"
 //     scope set to exercise unrelated code paths.

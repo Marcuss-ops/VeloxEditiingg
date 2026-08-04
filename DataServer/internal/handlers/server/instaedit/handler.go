@@ -19,7 +19,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/creatorflow"
-	"velox-server/internal/handlers/server/darkeditor"
 	"velox-server/internal/instaeditauth"
 )
 
@@ -42,7 +41,6 @@ const (
 type HandlerDeps struct {
 	Verifier      *instaeditauth.Verifier
 	Service       *Service
-	DarkHandler   *darkeditor.Handler
 	WebhookSecret string
 }
 
@@ -82,14 +80,6 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		assets.GET("/:id", instaeditauth.Middleware(h.deps.Verifier, []string{ScopeAssetsRead}), h.getAsset())
 	}
 
-	// Editor proxy surface for the Dark Editor SPA. The InstaEdit BFF
-	// signs a short-lived control JWT and forwards the browser's calls
-	// here. Scope enforcement is intentionally disabled because the
-	// control JWT currently only carries identity/workspace claims; the
-	// middleware still authenticates the token.
-	editor := g.Group("/editor")
-	editor.Use(instaeditauth.Middleware(h.deps.Verifier, nil))
-	darkeditor.RegisterAPIRoutes(editor, h.deps.DarkHandler)
 }
 
 // claimsFromContext is a small helper that extracts the verified JWT

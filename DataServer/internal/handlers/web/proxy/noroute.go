@@ -16,7 +16,7 @@ var (
 
 // NoRouteHandler handles all unmatched routes.
 // All /api/* requests are handled natively or return 404.
-func NoRouteHandler(serveSPA gin.HandlerFunc, landing gin.HandlerFunc, darkEditorProxy gin.HandlerFunc) gin.HandlerFunc {
+func NoRouteHandler(serveSPA gin.HandlerFunc, landing gin.HandlerFunc) gin.HandlerFunc {
 
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
@@ -24,7 +24,7 @@ func NoRouteHandler(serveSPA gin.HandlerFunc, landing gin.HandlerFunc, darkEdito
 			path = "/"
 		}
 
-		if path == "/favicon.ico" || path == "/dark_editor_v2/favicon.ico" {
+		if path == "/favicon.ico" {
 			c.Data(http.StatusOK, "image/svg+xml; charset=utf-8", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#ef4444"/><stop offset="100%" stop-color="#f97316"/></linearGradient></defs><rect width="64" height="64" rx="16" fill="#0f172a"/><circle cx="32" cy="32" r="18" fill="url(#g)"/><path d="M25 27h14l-7 14z" fill="#fff"/></svg>`))
 			return
 		}
@@ -40,12 +40,6 @@ func NoRouteHandler(serveSPA gin.HandlerFunc, landing gin.HandlerFunc, darkEdito
 				"method": c.Request.Method,
 				"hint":   "This API endpoint does not exist. Check /api/v1/ for available endpoints.",
 			})
-			return
-		}
-
-		// Dark Editor proxy (all methods: GET, POST, PUT, DELETE, etc.)
-		if darkEditorProxy != nil && strings.HasPrefix(path, "/dark_editor_v2") {
-			darkEditorProxy(c)
 			return
 		}
 

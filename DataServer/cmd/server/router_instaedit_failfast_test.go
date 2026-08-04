@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"velox-server/internal/handlers/server/darkeditor"
 	instaedithandler "velox-server/internal/handlers/server/instaedit"
 	"velox-server/internal/instaeditauth"
 )
@@ -43,9 +42,8 @@ func TestRegisterInstaEditRoutes_SucceedsWithService(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	deps := InstaEditRouteDeps{
-		Verifier:    &instaeditauth.Verifier{},
-		Service:     instaedithandler.NewService(nil, nil, nil, nil),
-		DarkHandler: darkeditor.NewHandler(&darkeditor.Config{}),
+		Verifier: &instaeditauth.Verifier{},
+		Service:  instaedithandler.NewService(nil, nil, nil, nil),
 	}
 
 	if err := registerInstaEditRoutes(r, deps); err != nil {

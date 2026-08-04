@@ -7,7 +7,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/config"
-	"velox-server/internal/handlers/server/darkeditor"
 	instaedithandler "velox-server/internal/handlers/server/instaedit"
 	"velox-server/internal/instaeditauth"
 	"velox-server/internal/metrics"
@@ -104,16 +103,14 @@ func TestNewRouter_InstaEditEnabledAndWired_MountsRoutes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	router, err := newRouterWithInstaEditBundle(t, InstaEditRouteDeps{
-		Verifier:    &instaeditauth.Verifier{},
-		Service:     instaedithandler.NewService(nil, nil, nil, nil),
-		DarkHandler: darkeditor.NewHandler(&darkeditor.Config{}),
+		Verifier: &instaeditauth.Verifier{},
+		Service:  instaedithandler.NewService(nil, nil, nil, nil),
 	})
 	if err != nil {
 		t.Fatalf("newRouter expected no error with full InstaEdit deps, got %v", err)
 	}
 
 	found := false
-	editorFound := false
 	for _, route := range router.Routes() {
 		if route.Method == "POST" && route.Path == "/api/v1/velox/jobs" {
 			t.Fatal("legacy POST /api/v1/velox/jobs route must not be mounted")
@@ -121,14 +118,8 @@ func TestNewRouter_InstaEditEnabledAndWired_MountsRoutes(t *testing.T) {
 		if route.Path == "/api/v1/instaedit/jobs" {
 			found = true
 		}
-		if route.Path == "/api/v1/instaedit/editor/api/projects" {
-			editorFound = true
-		}
 	}
 	if !found {
 		t.Fatal("expected /api/v1/instaedit/jobs to be mounted when InstaEdit is fully wired")
-	}
-	if !editorFound {
-		t.Fatal("expected /api/v1/instaedit/editor/api/projects to be mounted when InstaEdit is fully wired")
 	}
 }

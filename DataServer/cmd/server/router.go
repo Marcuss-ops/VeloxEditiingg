@@ -15,7 +15,6 @@ import (
 	"velox-server/internal/creatorflow"
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/handlers/server/api"
-	"velox-server/internal/handlers/server/darkeditor"
 	instaedithandler "velox-server/internal/handlers/server/instaedit"
 	scripthandlers "velox-server/internal/handlers/server/script"
 	"velox-server/internal/instaeditauth"
@@ -78,16 +77,6 @@ type PipelineRouteDeps struct {
 	AssetService *voiceoverassets.AssetService
 }
 
-// DarkeditorRouteDeps carries the deps for the /api/darkeditor routes
-// (NVIDIA Runway-backed dark-mode editor).
-type DarkeditorRouteDeps struct {
-	Cfg         *config.Config
-	SQLiteStore *store.SQLiteStore
-	// Handler is the shared dark editor handler instance. When nil,
-	// registerDarkeditorRoutes builds one locally.
-	Handler *darkeditor.Handler
-}
-
 // UploadRouteDeps carries the deps for upload POST routes
 // (upload-completed + chunked upload).
 type UploadRouteDeps struct {
@@ -113,7 +102,6 @@ type MetricsRouteDeps struct {
 type InstaEditRouteDeps struct {
 	Verifier      *instaeditauth.Verifier
 	Service       *instaedithandler.Service
-	DarkHandler   *darkeditor.Handler
 	WebhookSecret string
 }
 
@@ -145,13 +133,12 @@ type FleetRouteDeps struct {
 // bundle never carries it — production and tests must converge on the
 // same auth source.
 type RouterBundle struct {
-	Script     ScriptRouteDeps
-	Pipeline   PipelineRouteDeps
-	Darkeditor DarkeditorRouteDeps
-	Upload     UploadRouteDeps
-	Metrics    MetricsRouteDeps
-	InstaEdit  InstaEditRouteDeps
-	Fleet      FleetRouteDeps
+	Script    ScriptRouteDeps
+	Pipeline  PipelineRouteDeps
+	Upload    UploadRouteDeps
+	Metrics   MetricsRouteDeps
+	InstaEdit InstaEditRouteDeps
+	Fleet     FleetRouteDeps
 }
 
 // internalSecurityGuard blocks direct browser access and enforces that
@@ -292,7 +279,6 @@ func newRouter(cfg *config.Config, bundle RouterBundle, registry interface {
 	// that mints the bucket map + middleware closure; tests build
 	// their own directly via pipeline.NewM2MJwAuthMiddleware.
 	registerPipelineRoutes(r, auth, newM2MJwAuthFromBundle(cfg, bundle.Pipeline), bundle.Pipeline)
-	registerDarkeditorRoutes(r, bundle.Darkeditor)
 	registerUploadRoutes(r, bundle.Upload)
 	registerMetricsRoutes(r, bundle.Metrics)
 	registerBenchmarkRoutes(r, bundle.Metrics, cfg)

@@ -71,9 +71,8 @@ const (
 	CodeNoTargets   = "NO_TARGETS"
 )
 
-// Dark-editor / migration codes
+// Migration codes
 const (
-	CodeDarkEditorUpscaleFallback = "DARKEDITOR_UPSCALER_FALLBACK"
 	CodeDriveLinkMigrateSkip      = "DRIVE_LINK_MIGRATE_SKIP"
 	CodeMasterFolderMigrateSkip   = "MASTER_FOLDER_MIGRATE_SKIP"
 )
@@ -181,7 +180,6 @@ const (
 	ComponentUploads          = "uploads"
 	ComponentStore            = "store.sqlite"
 	ComponentDriveLink        = "store.drive_links"
-	ComponentDarkEditor       = "dark_editor"
 )
 
 // Level constants
@@ -256,8 +254,7 @@ var CodeDescriptions = map[string]string{
 	CodeJobFailed:   "Job failed",
 	CodeNoTargets:   "No target computers selected",
 
-	// Dark editor + migrations.
-	CodeDarkEditorUpscaleFallback: "Real-ESRGAN unavailable, falling back to imaging.Lanczos",
+	// Migrations.
 	CodeDriveLinkMigrateSkip:      "Skipping drive link during migration",
 	CodeMasterFolderMigrateSkip:   "Skipping master folder during migration",
 

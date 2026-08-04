@@ -60,7 +60,7 @@ type scopeDenialBody struct {
 
 // scopedHint is the operator-facing remediation string baked into the
 // 403 body. Keep it stable: the BFF may surface it verbatim to the
-// dark-editor SPA's "why was this rejected?" UI.
+// editor SPA's "why was this rejected?" UI.
 const scopedHint = "the InstaEdit BFF must re-mint the control JWT with at least the required_scopes; this is a server-side misconfiguration (or a Velox route demanding a higher grant than the BFF is currently issuing for this operation)."
 
 // Middleware returns a Gin middleware that verifies the InstaEdit JWT
@@ -98,7 +98,7 @@ func Middleware(verifier *Verifier, requiredScopes []string) gin.HandlerFunc {
 // "list_editor_workers" are example operation labels.
 //
 // The label MUST be a stable identifier — the architecture roadmap
-// tracks it as a contract the dark-editor UI's "why rejected" panel
+// tracks it as a contract the editor UI's "why rejected" panel
 // may display verbatim.
 func MiddlewareWithOperation(verifier *Verifier, requiredScopes []string, operation string) gin.HandlerFunc {
 	return func(c *gin.Context) {
