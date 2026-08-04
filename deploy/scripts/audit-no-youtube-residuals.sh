@@ -31,9 +31,14 @@
 #   - DataServer/internal/store/migrations/migrations_integration_test.go
 #     (end-to-end test asserting zero YouTube state on a fresh DB)
 # ────────────────────────────────────────────────────────────────────────────
-set -u
+set -euo pipefail
 
 DB_PATH="${1:-}"
+
+fatal_schema() {
+  echo "FATAL: DB at $DB_PATH is not a readable SQLite Velox database" >&2
+  exit 3
+}
 
 if [[ -z "$DB_PATH" ]]; then
   echo "usage: $0 <path-to-velox.db>" >&2
@@ -45,15 +50,19 @@ if ! command -v sqlite3 >/dev/null 2>&1; then
   exit 4
 fi
 
-if [[ ! -r "$DB_PATH" ]]; then
-  echo "FATAL: DB not readable: $DB_PATH" >&2
+if [[ ! -r "$DB_PATH" || ! -s "$DB_PATH" ]]; then
+  echo "FATAL: DB not readable or empty: $DB_PATH" >&2
   exit 2
 fi
 
 # Sanity: must look like a Velox schema. We probe for the canonical
 # permanent tables; if any are missing the DB is either corrupt, a
-# different product, or a non-Velox SQLite file.
-canonical_found=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('jobs','artifacts','job_deliveries','calendar_events');")
+# different product, or a non-Velox SQLite file. Dark Editor tables are
+# intentionally not part of this contract: that domain is no longer owned
+# by Velox and must not gate a YouTube audit.
+if ! canonical_found=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('jobs','artifacts','job_deliveries','calendar_events');"); then
+  fatal_schema
+fi
 if [[ "$canonical_found" -lt 4 ]]; then
   echo "FATAL: DB at $DB_PATH does not look like a Velox schema" >&2
   echo "(found $canonical_found/4 canonical tables; expected all of: jobs, artifacts," >&2
@@ -65,12 +74,16 @@ fi
 # avoid false positives on any future `social_youtube_*` style names.
 # Uses pragma_table_info as a table-valued function so we can filter
 # inline (SQLite ≥ 3.16).
-residual_tables=$(sqlite3 -separator $'\n' "$DB_PATH" \
-  "SELECT name FROM sqlite_master WHERE type='table' AND lower(name) LIKE 'youtube\_%' ESCAPE '\\' ORDER BY name;")
+if ! residual_tables=$(sqlite3 -separator $'\n' "$DB_PATH" \
+  "SELECT name FROM sqlite_master WHERE type='table' AND lower(name) LIKE 'youtube\_%' ESCAPE '\\' ORDER BY name;"); then
+  fatal_schema
+fi
 
 # Probe 2: youtube_* columns on the historically-leaking table.
-ce_columns=$(sqlite3 -separator $'\n' "$DB_PATH" \
-  "SELECT name FROM pragma_table_info('calendar_events') WHERE lower(name) LIKE 'youtube\_%' ESCAPE '\\' ORDER BY name;")
+if ! ce_columns=$(sqlite3 -separator $'\n' "$DB_PATH" \
+  "SELECT name FROM pragma_table_info('calendar_events') WHERE lower(name) LIKE 'youtube\_%' ESCAPE '\\' ORDER BY name;"); then
+  fatal_schema
+fi
 
 # Compose report.
 residual_count=0

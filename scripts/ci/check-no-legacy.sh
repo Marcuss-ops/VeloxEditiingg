@@ -45,6 +45,15 @@ full_tree_patterns=(
   'store_darkeditor_'                 # SQLite store files (dark editor)
   'darkeditor/processors'             # Image/AI processors (dark editor)
   'VELOX_DARK_EDITOR_'                # Dark editor env vars
+  # Retired BFF scope taxonomy (editor.project.* / editor.asset.upload /
+  # youtube.session.publish renamed to jobs.read|write, workers.read,
+  # assets.read|write) — the old wire strings must not reappear.
+  'ScopeEditorProject'                # Retired: editor.project.read/write
+  'ScopeEditorAsset'                  # Retired: editor.asset.upload
+  'ScopeYouTubeSession'               # Retired: youtube.session.publish
+  'editor\.project\.'                 # Retired wire scope string
+  'editor\.asset\.'                   # Retired wire scope string
+  'youtube\.session\.'                # Retired wire scope string
   # Generic utility packages — use domain-specific packages.
   'internal/util'                     # Removed; use identity/, platform/clock/
   # PR #8: workflow package removed — write method calls must not reappear.
