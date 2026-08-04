@@ -93,6 +93,11 @@ func Apply(ctx context.Context, client DriveClient, audit auditRepository, manif
 		result.Mode = "apply"
 	}
 	for _, record := range manifest.Records {
+		if !dryRun {
+			if err := appendAudit(ctx, audit, record, actor, now, "DRIVE_DUPLICATE_CLEANUP_PLANNED", "apply", nil); err != nil {
+				return result, err
+			}
+		}
 		metadata, err := client.GetFileMetadata(ctx, record.DriveFileIDCorrect)
 		if err != nil {
 			// Canonical absence or any verification error is fail-closed:
@@ -180,11 +185,5 @@ func hashText(value string) string {
 
 func isNotFound(err error) bool {
 	var statusErr interface{ HTTPStatus() int }
-	if errors.As(err, &statusErr) {
-		return statusErr.HTTPStatus() == 404
-	}
-	// Keep compatibility with injected clients that predate the typed API
-	// error, while the production Drive service uses the status-aware path.
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "(404)") || strings.Contains(message, "not found") || strings.Contains(message, "file not found")
+	return errors.As(err, &statusErr) && statusErr.HTTPStatus() == 404
 }

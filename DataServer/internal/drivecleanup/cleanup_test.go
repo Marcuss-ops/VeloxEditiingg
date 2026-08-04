@@ -2,7 +2,6 @@ package drivecleanup
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +9,11 @@ import (
 	"velox-server/internal/audittrail"
 	"velox-server/internal/store"
 )
+
+type fakeHTTPError struct{ status int }
+
+func (e fakeHTTPError) Error() string { return "drive error" }
+func (e fakeHTTPError) HTTPStatus() int { return e.status }
 
 type fakeDrive struct {
 	metadata  map[string]*FileMetadata
@@ -81,7 +85,7 @@ func TestApplyRequiresCanonicalBeforeDeletingDuplicate(t *testing.T) {
 }
 
 func TestApplyDeletesOnlyDuplicateAndTreatsNotFoundAsIdempotent(t *testing.T) {
-	drive := &fakeDrive{metadata: map[string]*FileMetadata{"correct": {ID: "correct"}}, deleteErr: errors.New("API error (404): not found")}
+	drive := &fakeDrive{metadata: map[string]*FileMetadata{"correct": {ID: "correct"}}, deleteErr: fakeHTTPError{status: 404}}
 	audit := &fakeAudit{}
 	got, err := Apply(context.Background(), drive, audit, Manifest{Records: []store.DuplicateDeliveryRecord{testRecord()}}, false, "operator", time.Now())
 	if err != nil {
@@ -90,7 +94,7 @@ func TestApplyDeletesOnlyDuplicateAndTreatsNotFoundAsIdempotent(t *testing.T) {
 	if got.Deleted != 0 || got.AlreadyAbsent != 1 || len(drive.targets) != 1 || drive.targets[0] != "duplicate" {
 		t.Fatalf("result=%#v targets=%v", got, drive.targets)
 	}
-	if len(audit.events) != 1 || audit.events[0].Action != "DRIVE_DUPLICATE_DELETED" {
+	if len(audit.events) != 2 || audit.events[0].Action != "DRIVE_DUPLICATE_CLEANUP_PLANNED" || audit.events[1].Action != "DRIVE_DUPLICATE_DELETED" {
 		t.Fatalf("audit=%#v", audit.events)
 	}
 }

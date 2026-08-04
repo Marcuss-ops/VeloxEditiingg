@@ -3,6 +3,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -100,7 +102,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 		"output_path":      strings.TrimSpace(*outputPath),
 		"remote_deletions": 0,
 	})
-	if err := db.AppendAuditEvent(ctx, audittrail.Event{
+	stableRecords, err := json.Marshal(records)
+	if err != nil {
+		return fmt.Errorf("encode stable manifest identity: %w", err)
+	}
+	manifestHash := sha256.Sum256(stableRecords)
+	if err := db.AppendAuditEventIdempotent(ctx, audittrail.Event{
+		ID:           "duplicate-manifest-" + hex.EncodeToString(manifestHash[:]),
 		ActorType:    "operator",
 		ActorID:      strings.TrimSpace(*actor),
 		Action:       "DUPLICATE_DELIVERY_MANIFEST_GENERATED",
