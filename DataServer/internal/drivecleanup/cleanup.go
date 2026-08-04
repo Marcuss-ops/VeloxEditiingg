@@ -82,7 +82,7 @@ func Apply(ctx context.Context, client DriveClient, audit auditRepository, manif
 	if actor == "" {
 		actor = "velox-admin"
 	}
-	if client == nil {
+	if client == nil && len(manifest.Records) > 0 {
 		return Result{}, errors.New("drive duplicate cleanup: Drive client is required for canonical verification")
 	}
 	if audit == nil {
@@ -93,14 +93,6 @@ func Apply(ctx context.Context, client DriveClient, audit auditRepository, manif
 		result.Mode = "apply"
 	}
 	for _, record := range manifest.Records {
-		if dryRun {
-			if err := appendAudit(ctx, audit, record, actor, now, "DRIVE_DUPLICATE_CLEANUP_PLANNED", "dry-run", nil); err != nil {
-				return result, err
-			}
-			result.Skipped++
-			continue
-		}
-
 		metadata, err := client.GetFileMetadata(ctx, record.DriveFileIDCorrect)
 		if err != nil {
 			// Canonical absence or any verification error is fail-closed:
