@@ -228,7 +228,7 @@ The +42 net over the two-file extract is import-block boilerplate + ingest.go's 
 
 ### 16b.4 Note on `validate.go` collision risk (per-package scoping)
 
-The planned `validate.go` overlaps conceptually with two existing names — `DataServer/internal/handlers/server/darkeditor/processors/*/validation/` and the worker's report-validation path in `RemoteCodex/.../pkg/config/`. Because Go symbol visibility is per-package, the planned `DataServer/internal/completion/validate.go` is unambiguous at the call-site (`completion.Validate` vs. `darkeditor.processors.validation.Validate` vs. `pkgconfig.ValidateReport`). If extracting Stage 1b ever reaches for shared UUID / HMAC primitives, promote those primitives to `internal/jobs` or `shared/contract` first so Stages 1c / 1d can borrow without dragging in the worker-agent tree or the gRPC transport — but keep this pragmatic, not doctrinal; review promotion per call-site, not per project.
+The planned `validate.go` overlaps conceptually with other validation packages and with the worker's report-validation path in `RemoteCodex/.../pkg/config/`. Because Go symbol visibility is per-package, the planned `DataServer/internal/completion/validate.go` is unambiguous at the call-site (`completion.Validate` versus `pkgconfig.ValidateReport`). If extracting Stage 1b ever reaches for shared UUID / HMAC primitives, promote those primitives to `internal/jobs` or `shared/contract` first so Stages 1c / 1d can borrow without dragging in the worker-agent tree or the gRPC transport — but keep this pragmatic, not doctrinal; review promotion per call-site, not per project.
 
 ### 16b.5 Verification (post-push, @ `efdafd4` HeadOfStage1a + rerun @ HEAD)
 

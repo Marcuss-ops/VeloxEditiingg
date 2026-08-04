@@ -171,7 +171,7 @@ Il master serve l'asset tramite `AssetRepository.GetByID()` + `BlobStore.ReadFin
 internal/
 ├── store/                    # 15 src + 3 test (era 28)
 │   ├── sqlite.go             # Core SQLiteStore
-│   ├── store_darkeditor.go   # DarkEditor: projects, folders, assets, templates
+│   ├── store_*.go             # Legacy domain stores (pre-current split)
 │   ├── store_jobs.go         # Jobs: CRUD, claim, queries, history, logs
 │   ├── store_workers.go      # Workers: CRUD, validations, repository
 │   ├── sqlite_youtube.go     # YouTube metrics

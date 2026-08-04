@@ -124,7 +124,7 @@ the heartbeat path NEVER writes PARTITIONED.
 
 ### Out of scope
 
-- **Other domains in `DataServer/internal/store`**: The package has additional `s.db.BeginTx` call sites in `forwarding_claim.go`, `forwarding_transitions.go`, `store_darkeditor_folders.go`, `store_deliveries_lease.go`, etc. These are NOT part of the `worker_runtime` cluster and are governed by their own per-domain contracts. The audit gate (`scripts/ci/run-split-regression.sh`) explicitly scopes to `DataServer/internal/store/store_worker_*.go` (cluster-only) and does NOT apply to the broader package.
+- **Other domains in `DataServer/internal/store`**: The package has additional `s.db.BeginTx` call sites in `forwarding_claim.go`, `forwarding_transitions.go`, `store_deliveries_lease.go`, and other domain-specific files. These are NOT part of the `worker_runtime` cluster and are governed by their own per-domain contracts. The audit gate (`scripts/ci/run-split-regression.sh`) explicitly scopes to `DataServer/internal/store/store_worker_*.go` (cluster-only) and does NOT apply to the broader package.
 
 - **Other Go modules**: `RemoteCodex/native/worker-agent-go` has its own concurrency contracts (worker-agent heartbeat loop, lease renewal, etc.) and is governed separately. The `shared/` module is also out of scope.
 

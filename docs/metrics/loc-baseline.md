@@ -13,7 +13,7 @@
 
 | KPI | Value |
 | --- | --- |
-| Total measured LOC *(top-level areas)* | **198 439** |
+| Total measured LOC *(top-level areas, initial snapshot)* | **198 439** |
 | `.go` LOC total | **161 379** |
 | `.sh` LOC total | **20 754** |
 | `.md` LOC total | **20 739** |
@@ -28,7 +28,7 @@
 
 > Pipeline/ is currently empty in this snapshot (0 LOC tracked). If reintroduced it must be re-measured.
 
-> **Note on totals.** "Total measured LOC (top-level areas) = 198 439" is the sum of the per-area rows in §2 (each row measured by file extensions within its top-level directory). The per-language rows above are computed by walking the whole repository root for each extension (`.go`, `.sh`, `.md`, `.yml`, …). They cover a wider universe (including files outside the seven top-level areas) so they sum to a larger number (~211 661). Both views are correct; the per-area figure is the canonical measure used by §3–§9.
+> **Note on totals.** "Total measured LOC (top-level areas, initial snapshot) = 198 439" is the sum of the per-area rows in §2 (each row measured by file extensions within its top-level directory). These figures are retained as the historical starting point for the refactor plan. The reproducible §12 methodology must be rerun to publish a new baseline after structural removals; this document does not infer current totals by subtracting retired code manually.
 
 ---
 
@@ -60,11 +60,11 @@ Pipeline                                 0  |
 
 ## 3. Heatmap — DataServer/internal per package
 
-Per top-level sub-package inside `DataServer/internal`. Bar scaled to max (`store` = 27 259). The ASCII block above shows the 15 largest sub-packages for visual density; the table below is exhaustive (every direct-child sub-package found by `DataServer/internal/*/`).
+Per top-level sub-package inside `DataServer/internal` in the initial snapshot. Bar scaled to max (`store` = 27 259). The ASCII block above shows the 15 largest sub-packages for visual density; the table below is exhaustive (every direct-child sub-package found by `DataServer/internal/*/`). The retired editor code is retained in this historical package total; the current-scope handlers breakdown is reported separately in §3a.
 
 ```
 store                27259  | ##################################################
-handlers             21235  | ##########################################
+handlers             21235  | ########################################
 jobs                  7229  | ##############
 integrations          6517  | ############
 artifacts             6516  | ############
@@ -124,13 +124,11 @@ assets                1641  | ###
 
 ### 3a. Heatmap — DataServer/internal/handlers (sottopackage)
 
-Every Go file path encountered by `os.walk` under `DataServer/internal/handlers` is bucketed into its deepest file-bearing directory. Rows are listed top-down (parents first, then leaves). Bar scaled to max (`server/youtube` = 2 811). Sum of all rows = **21 235 LOC**, exactly matching the §3 `handlers` package total.
+Every Go file path encountered by `os.walk` under `DataServer/internal/handlers` is bucketed into its deepest file-bearing directory. Rows are listed top-down (parents first, then leaves). This current-scope presentation excludes the retired editor subtree and totals **18 392 LOC**. The initial snapshot total was **21 235 LOC**, including **2 843 LOC** of retired editor code; rerun §12 before using any section as a new repository-wide baseline. Bar scaled to max (`server/youtube` = 2 811).
 
 ```
 server/youtube                  2811  | ##################################################
 remote/ansible                  2049  | ####################################
-server/darkeditor               1658  | ###############################
-server/darkeditor/processors    1185  | ######################
 server/drive                    1485  | ##########################
 server/api                      1466  | ##########################
 remote/workers                  1413  | ##########################
@@ -164,8 +162,6 @@ server/health                    11  | ##
 | server/youtube/creative | 700 |
 | server/youtube/videos | 584 |
 | remote/ansible | 2 049 |
-| server/darkeditor | 1 658 |
-| server/darkeditor/processors | 1 185 |
 | server/drive | 1 485 |
 | server/api | 1 466 |
 | remote/workers | 1 413 |
@@ -189,12 +185,13 @@ server/health                    11  | ##
 | server/jobs | 137 |
 | web/spa | 68 |
 | server/health | 11 |
-| **Total** | **21 235** |
+| **Current-scope total** | **18 392** |
 
 > Notes:
 > * The `<root>` row is `.go` files that live directly in `DataServer/internal/handlers/` (no subpackage).
-> * Sub-directories that contain their own `.go` files are listed as independent rows; they are **not** already summed into the parent row above them. To compute the cost of e.g. the whole `server/darkeditor/` subtree, add `server/darkeditor` and `server/darkeditor/processors`.
-> * Earlier draft of this section used `find -maxdepth` and family and under-counted several intermediate leaves (showing e.g. `darkeditor = 1 658` only). This version uses `os.walk` (any-depth) and is authoritative.
+> * Sub-directories that contain their own `.go` files are listed as independent rows; they are **not** already summed into the parent row above them.
+> * Earlier draft of this section used `find -maxdepth` and under-counted intermediate leaves. This version uses `os.walk` (any-depth) and records the initial snapshot only.
+> * Retired editor packages are intentionally omitted from this current-scope presentation. The initial snapshot total is retained in the section text for comparison; re-run §12 to publish a fully reconciled repository-wide baseline.
 
 ### 3b. Heatmap — DataServer/cmd
 

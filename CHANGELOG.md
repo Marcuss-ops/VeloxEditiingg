@@ -299,7 +299,7 @@ fixes layered on top.
 ### Verified on `main` (commit `6d8e8f1`)
 
 - `python3 scripts/api/validate_openapi.py DataServer/api/openapi.yaml` → `--- TOTAL PASS: 1 openapi file(s) meet all invariants ---` (exit 0)
-- `cd DataServer && go build ./...` → exit 0 (full module, post-`6d8e8f1` dark-editor wire closure)
+- `cd DataServer && go build ./...` → exit 0 (full module, post-`6d8e8f1` legacy editor wire cleanup)
 - `cd DataServer && go vet ./...` → exit 0 (no diagnostic-level findings beyond the unrelated `bootstrap_composition.go` unused-imports warning from pre-session refactor WIP)
 - `go test -run IntakeSinkOrNoop ./internal/handlers/server/pipeline/...` → 3/3 PASS
 - `git push origin v1.3.0-creator-push` → exit 0
@@ -1000,7 +1000,7 @@ Six residues closed on `main` between PR-15.9 + PR-15.10 + PR-15.11 + PR-15.12 +
 
 The six residues, in the order the closure landed:
 
-1. **Migration drop** — `DataServer/internal/store/migrations/sqlite/090_drop_youtube_domain.sql` (sqlite) + `DataServer/internal/store/migrations/postgres/010_drop_youtube_domain.sql` (postgres) drop all 10 YouTube tables + the 3 historical columns on `calendar_events` + `dark_editor_folders`. Operator-facing audit script: `deploy/scripts/audit-no-youtube-residuals.sh` (PR-15.11) returns exit `0 / 1 / 2 / 3 / 4` per outcome (CLEAN / RESIDUAL_FOUND / DB_NOT_FOUND / NOT_VELOX_SCHEMA / ARGV_OR_TOOL).
+1. **Migration drop** — `DataServer/internal/store/migrations/sqlite/090_drop_youtube_domain.sql` (sqlite) + `DataServer/internal/store/migrations/postgres/010_drop_youtube_domain.sql` (postgres) drop all 10 YouTube tables and the historical YouTube columns on `calendar_events`. The separate legacy editor schema cleanup is forward-only in migration 128. Operator-facing audit script: `deploy/scripts/audit-no-youtube-residuals.sh` (PR-15.11) returns exit `0 / 1 / 2 / 3 / 4` per outcome (CLEAN / RESIDUAL_FOUND / DB_NOT_FOUND / NOT_VELOX_SCHEMA / ARGV_OR_TOOL).
 
 2. **Destinazione opaque-mode** — `DataServer/internal/store/migrations/sqlite/091_opaque_destination.sql` DROPs the `account_id / channel_id / language` columns on `delivery_destinations` and ADDs the opaque `social_destination_id` (TEXT, nullable, fail-closed). Runtime guard: `runner.hydrateDestination` rejects empty `social_destination_id` with `ErrDestinationUnmapped` → delivery status code `DESTINATION_UNMAPPED` so operators see exactly which row needs backfill.
 
@@ -1785,15 +1785,15 @@ The audit script reflects the same contract the test suite pins:
 - The schema test
   (`DataServer/internal/store/migrations/migrations_schema_test.go`,
   `TestMigration090_YouTubeDomainDropped`) additionally asserts that
-  the 3 historical columns on `calendar_events` and
-  `dark_editor_folders` are absent.
+  the 3 historical columns on `calendar_events` are absent. Legacy editor
+  tables are covered separately by migration 128.
 
 **Added**:
 
 - `deploy/scripts/audit-no-youtube-residuals.sh` — read-only SQLite
   probe. Takes `<path-to-velox.db>` as argv and reports any leftover
   `youtube_*` tables (anchored `youtube\_%` ESCAPE) plus any
-  `youtube_*` columns on `calendar_events` and `dark_editor_folders`
+  `youtube_*` columns on `calendar_events`
   (via `pragma_table_info` filtered inline). Pattern matches
   case-insensitively so it catches mixed-case identifiers like
   `` `YouTube_Group` ``.
@@ -1806,13 +1806,10 @@ The audit script reflects the same contract the test suite pins:
 | `1` | RESIDUAL_FOUND — see report; remediation hint printed |
 | `2` | DB_NOT_FOUND — path missing / unreadable |
 | `3` | NOT_VELOX_SCHEMA — DB exists but is missing canonical Velox tables |
-| `4` | ARGV_OR_TOOL — `sqlite3` CLI missing or wrong invocation |
-
-**Sanity pre-check**: the script probes for the 5 canonical permanent
-tables (`jobs`, `artifacts`, `job_deliveries`, `calendar_events`,
-`dark_editor_folders`) before reporting residuals, so a non-Velox
-SQLite file is rejected with exit 3 rather than producing a misleading
-`` CLEAN '' report.
+| `4` | ARGV_OR_TOOL — `sqlite3` CLI missing or wrong invocation |**Sanity pre-check**: the script probes for the 4 canonical permanent
+ tables (`jobs`, `artifacts`, `job_deliveries`, `calendar_events`) before
+ reporting residuals, so a non-Velox SQLite file is rejected with exit 3
+ rather than producing a misleading `` CLEAN '' report.
 
 **Operator usage**:
 

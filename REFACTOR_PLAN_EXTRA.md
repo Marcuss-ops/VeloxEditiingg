@@ -10,21 +10,17 @@
   - `RemoteCodex/native/worker-agent-go/` — Go worker agent
   - `RemoteCodex/native/video-engine-cpp/` — C++ video engine
   - `shared/` — Go contracti condivisi
-  - `VeloxFrontend/web/dark_editor/` — React editor (già coperto dal plan principale)
+  - `VeloxFrontend/` — frontend repository; its own refactor plan is maintained separately
 - **Soglia**: ≤ 400 LOC per file post-refactor (`*_test.go` ≤ 600)
 - **Scan**: `find VeloxEditiingg -type f ... | sort -rn | head -30` (2026-07-28, esclusi binari)
 
 ---
 
-## Already covered (cross-ref §VeloxFrontend/REFACTOR_PLAN.md)
+## Frontend scope
 
-I seguenti file `VeloxFrontend/web/dark_editor/` (con LOC > 700) **sono già analizzati** nel piano principale e **non** vengono ri-analizzati qui per evitare duplicazione.
-
-| File | LOC | Sezione di riferimento |
-|---|---:|---|
-| `VeloxFrontend/web/dark_editor/components/editor/ExportDialog.tsx` | 863 | §3.6 (ExportDialog) |
-| `VeloxFrontend/web/dark_editor/components/editor/canvas/CanvasRenderers.tsx` | 816 | §3.10 (CanvasRenderers) |
-| `VeloxFrontend/web/dark_editor/stores/templateStore.ts` | 721 | §3.2 (TemplateStore) |
+The frontend repository is maintained separately and is intentionally excluded
+from this backend/worker refactor inventory. Frontend-specific components and
+its own refactor plan must be reviewed in `VeloxFrontend`, not duplicated here.
 
 ---
 
