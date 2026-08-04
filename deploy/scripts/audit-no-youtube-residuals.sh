@@ -33,17 +33,17 @@
 # ────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-DB_PATH="${1:-}"
+if [[ "$#" -ne 1 ]]; then
+  echo "usage: $0 <path-to-velox.db>" >&2
+  exit 4
+fi
+
+DB_PATH="$1"
 
 fatal_schema() {
   echo "FATAL: DB at $DB_PATH is not a readable SQLite Velox database" >&2
   exit 3
 }
-
-if [[ -z "$DB_PATH" ]]; then
-  echo "usage: $0 <path-to-velox.db>" >&2
-  exit 4
-fi
 
 if ! command -v sqlite3 >/dev/null 2>&1; then
   echo "FATAL: sqlite3 CLI not on PATH (install sqlite3 ≥ 3.16)" >&2

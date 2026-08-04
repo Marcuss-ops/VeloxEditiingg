@@ -73,7 +73,28 @@ EMPTY_DB="$WORK/empty.db"
 : > "$EMPTY_DB"
 run_case 'empty DB returns DB_NOT_FOUND' 2 "$EMPTY_DB"
 run_case 'missing DB returns DB_NOT_FOUND' 2 "$WORK/missing.db"
-run_case 'missing argument returns ARGV_OR_TOOL' 4 ''
+
+actual=0
+set +e
+"$AUDIT_SCRIPT" >/dev/null 2>&1
+actual=$?
+set -e
+if [[ "$actual" -ne 4 ]]; then
+  printf '[FAIL] missing argument returns ARGV_OR_TOOL (want rc=4, got rc=%d)\n' "$actual"
+  exit 1
+fi
+printf '[OK]   missing argument returns ARGV_OR_TOOL (rc=4)\n'
+
+actual=0
+set +e
+"$AUDIT_SCRIPT" "$CLEAN_DB" unexpected >/dev/null 2>&1
+actual=$?
+set -e
+if [[ "$actual" -ne 4 ]]; then
+  printf '[FAIL] extra argument returns ARGV_OR_TOOL (want rc=4, got rc=%d)\n' "$actual"
+  exit 1
+fi
+printf '[OK]   extra argument returns ARGV_OR_TOOL (rc=4)\n'
 
 # Exercise the tool exit code without changing the host installation: provide
 # a PATH containing bash but no sqlite3, then invoke the script by absolute path.
