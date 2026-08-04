@@ -123,3 +123,49 @@ func TestNewRouter_InstaEditEnabledAndWired_MountsRoutes(t *testing.T) {
 		t.Fatal("expected /api/v1/instaedit/jobs to be mounted when InstaEdit is fully wired")
 	}
 }
+
+// TestNewRouter_DarkEditorRoutesNeverMounted is the global negative pin
+// for the Dark Editor removal: the editor runtime surfaces must never
+// be present on the route table, regardless of InstaEdit wiring state.
+func TestNewRouter_DarkEditorRoutesNeverMounted(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	router, err := newRouterWithInstaEditBundle(t, InstaEditRouteDeps{
+		Verifier: &instaeditauth.Verifier{},
+		Service:  instaedithandler.NewService(nil, nil, nil, nil),
+	})
+	if err != nil {
+		t.Fatalf("newRouter expected no error with full InstaEdit deps, got %v", err)
+	}
+
+	forbiddenPrefixes := []string{
+		"/api/darkeditor",
+		"/dark_editor_v2",
+		"/api/v1/instaedit/editor",
+	}
+	for _, route := range router.Routes() {
+		for _, prefix := range forbiddenPrefixes {
+			if strings.HasPrefix(route.Path, prefix) {
+				t.Errorf("Dark Editor route %s %s must not be mounted (forbidden prefix %s)", route.Method, route.Path, prefix)
+			}
+		}
+	}
+
+	// Positive anchors: the InstaEdit BFF contract surfaces are still there.
+	for _, want := range []string{
+		"/api/v1/instaedit/jobs",
+		"/api/v1/instaedit/workers",
+		"/api/v1/instaedit/assets",
+	} {
+		found := false
+		for _, route := range router.Routes() {
+			if strings.HasPrefix(route.Path, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected InstaEdit BFF route under %s to be mounted", want)
+		}
+	}
+}
