@@ -124,10 +124,10 @@ func TestNewRouter_InstaEditEnabledAndWired_MountsRoutes(t *testing.T) {
 	}
 }
 
-// TestNewRouter_DarkEditorRoutesNeverMounted is the global negative pin
-// for the Dark Editor removal: the editor runtime surfaces must never
-// be present on the route table, regardless of InstaEdit wiring state.
-func TestNewRouter_DarkEditorRoutesNeverMounted(t *testing.T) {
+// TestNewRouter_RetiredEditorRoutesNeverMounted is the global negative pin
+// for the retired editor runtime: those surfaces must never be present on
+// the route table, regardless of InstaEdit wiring state.
+func TestNewRouter_RetiredEditorRoutesNeverMounted(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	router, err := newRouterWithInstaEditBundle(t, InstaEditRouteDeps{
@@ -146,7 +146,7 @@ func TestNewRouter_DarkEditorRoutesNeverMounted(t *testing.T) {
 	for _, route := range router.Routes() {
 		for _, prefix := range forbiddenPrefixes {
 			if strings.HasPrefix(route.Path, prefix) {
-				t.Errorf("Dark Editor route %s %s must not be mounted (forbidden prefix %s)", route.Method, route.Path, prefix)
+				t.Errorf("retired editor route %s %s must not be mounted (forbidden prefix %s)", route.Method, route.Path, prefix)
 			}
 		}
 	}
