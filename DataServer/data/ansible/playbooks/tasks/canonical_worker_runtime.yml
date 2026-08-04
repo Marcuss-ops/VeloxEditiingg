@@ -80,7 +80,10 @@
           velox-worker.service|velox-worker-*.service)
             systemctl stop    "$unit" >/dev/null 2>&1 || true
             systemctl disable "$unit" >/dev/null 2>&1 || true
-            systemctl mask    "$unit" >/dev/null 2>&1 || true
+            # --force is required when an old unit file already exists at the
+            # same path; without it systemd leaves the unit merely disabled,
+            # and the post-deploy isolation check correctly rejects it.
+            systemctl mask --force "$unit" >/dev/null 2>&1 || true
             echo "MASKED_UNIT=$unit"
             changed=1
             ;;

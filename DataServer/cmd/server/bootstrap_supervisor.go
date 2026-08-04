@@ -12,8 +12,11 @@ import (
 	"velox-server/internal/alertengine"
 	"velox-server/internal/fleet"
 	"velox-server/internal/fleet/opsalerts"
+	"velox-server/internal/handlers/server/api"
 	velmetrics "velox-server/internal/metrics"
+	"velox-server/internal/protectedasset"
 	"velox-server/internal/supervisor"
+	"velox-shared/dispatchable"
 )
 
 // buildSupervisor registers the long-lived background runners
@@ -53,6 +56,38 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 		InitialBackoff: 500 * time.Millisecond,
 		MaxBackoff:     30 * time.Second,
 		RestartOnPanic: true,
+	}
+
+	// Worker cache protection: the snapshot must use the same dispatchable
+	// query as the scheduler, and must be installed before routes are
+	// registered. Refresh once before exposing the endpoint; until that
+	// succeeds the worker-side cleaner remains fail-safe and removes nothing.
+	if m != nil && m.Workers != nil && p != nil && p.SQLite != nil {
+		env, err := protectedasset.LoadServiceEnv()
+		if err != nil {
+			return nil, fmt.Errorf("protected asset service config: %w", err)
+		}
+		svc := protectedasset.NewService(protectedasset.RepoFunc(func(ctx context.Context, limit int) ([]dispatchable.Job, error) {
+			return dispatchable.ListNextDispatchableJobs(ctx, p.SQLite.DB(), limit)
+		}), env.LookaheadJobs).WithErrorHandler(func(err error) {
+			log.Printf("[CACHE-SNAPSHOT] refresh failed: %v", err)
+		})
+		if err := svc.Refresh(context.Background()); err != nil {
+			log.Printf("[CACHE-SNAPSHOT] initial refresh unavailable; worker cleanup remains fail-safe: %v", err)
+		} else {
+			log.Printf("[CACHE-SNAPSHOT] initial snapshot ready: version=%d protected=%d lookahead=%d", svc.Snapshot().Version, len(svc.Snapshot().ProtectedAssetKeys), env.LookaheadJobs)
+		}
+		m.Workers.SetProtectedAssetsHandler(api.NewProtectedAssetsHandler(svc))
+		if err := sup.Register(supervisor.Runner{
+			Name:   "protected-asset-snapshot",
+			Class:  supervisor.ClassRestartable,
+			Policy: restartablePolicy,
+			Run: func(ctx context.Context) error {
+				return svc.Run(ctx, env.SnapshotInterval)
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("supervisor register protected-asset-snapshot: %w", err)
+		}
 	}
 
 	// ── ClassCritical ────────────────────────────────────────────────

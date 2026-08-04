@@ -35,10 +35,9 @@
 -- Renumbered 039 → 045 because migrations/sqlite/039_tasks.sql already
 -- occupies version 039 on this track (creating the canonical tasks
 -- table for distributed rendering) and 040_task_specs.sql occupies v40
--- (task_specs DDL). Version 045 is the next free slot, and appending
--- past all other sqlite/ migrations keeps the version-order monotonic
--- for new DBs. The historical v44 Dark Editor stub was removed from
--- the embedded track; do not recreate it.
+-- (task_specs DDL). 044_stub_dark_editor_projects.sql occupies v44.
+-- Version 045 is the next free slot, and appending past all other
+-- sqlite/ migrations keeps the version-order monotonic for new DBs.
 --
 -- PRODUCTION IDEMPOTENCY: any pre-Path-B production DB that already
 -- applied the legacy root's 039_add_job_required_resource_columns.sql

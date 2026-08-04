@@ -44,15 +44,16 @@
   register: _active_worker_units
   changed_when: false
 
+- name: Verify | Compute stray active worker units
+  ansible.builtin.set_fact:
+    _stray_active_worker_units: >-
+      {{ _active_worker_units.stdout_lines | default([])
+         | difference([velox_worker_unit_name, 'velox-worker-watchdog.service']) }}
+
 - name: Verify | Assert only canonical and watchdog worker units are active
   ansible.builtin.assert:
     that:
-      - >-
-        {{
-          _active_worker_units.stdout_lines | default([])
-          | difference([velox_worker_unit_name, 'velox-worker-watchdog.service'])
-          | length
-        }} == 0
+      - _stray_active_worker_units | length == 0
     fail_msg: >-
       Stray active velox-worker*.service unit(s) detected. A worker host
       must run only {{ velox_worker_unit_name }} (the canonical unit) and

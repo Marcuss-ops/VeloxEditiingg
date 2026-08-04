@@ -43,7 +43,9 @@ type WorkersModule struct {
 	adminWorkersHealthHandler            *api.AdminWorkersHealthHandler
 	adminWorkersSmokeHandler             *api.AdminWorkersSmokeHandler
 	adminWorkersMetricsAggregatorHandler *api.AdminWorkersMetricsAggregatorHandler
-	adminWorkersAlertsHandler           *api.AdminWorkersAlertsHandler
+	adminWorkersAlertsHandler            *api.AdminWorkersAlertsHandler
+	protectedAssetsHandler               *api.ProtectedAssetsHandler
+	protectedAssetsAuth                  gin.HandlerFunc
 }
 
 // NewWorkersModule creates a new workers module.
@@ -60,7 +62,18 @@ func NewWorkersModule(cfg *config.Config, reg *workersreg.Registry, lifecycle *l
 		workerAssetHandler:  assets.NewHandler(cfg, tokenMgr, assetSvc, blobStore),
 		workersHandler:      api.NewWorkersHandler(reg),
 		adminWorkersHandler: api.NewAdminWorkersHandler(reg),
+		protectedAssetsAuth: api.WorkerOrAdminAuthMiddleware(cfg, tokenMgr),
 	}
+}
+
+// SetProtectedAssetsHandler wires the master lookahead snapshot consumed by
+// worker cache cleaners. The route is intentionally worker-token protected,
+// not admin-only, because every worker polls it during normal operation.
+func (m *WorkersModule) SetProtectedAssetsHandler(h *api.ProtectedAssetsHandler) {
+	if m == nil {
+		return
+	}
+	m.protectedAssetsHandler = h
 }
 
 // Registry exposes the underlying worker registry so the composition
@@ -203,6 +216,9 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 			v1Workers.Use(m.adminAuth)
 		}
 		v1Workers.GET("", m.workersHandler.ListWorkers())
+		if m.protectedAssetsHandler != nil {
+			v1Workers.GET("/cache/protected-assets", m.protectedAssetsAuth, m.protectedAssetsHandler.Snapshot())
+		}
 		v1Workers.GET("/:worker_id", m.workersHandler.GetWorker())
 		// Per-worker metrics / sessions / events read endpoints
 		// (RW-PROD-005). Each is registered only when the
