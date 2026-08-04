@@ -207,6 +207,49 @@ func TestStream_RejectsFalseCanonicalPayloadCapability(t *testing.T) {
 	}
 }
 
+func TestStream_RejectsExecutorVersionOneWithoutCanonicalPayloadCapability(t *testing.T) {
+	h := minimalProtocolHandler(t)
+	stream, cleanup := startProtocolTestServer(t, h)
+	defer cleanup()
+
+	sendHelloWithCapabilities(t, stream, "test-worker-executor-v1-legacy", controltransport.ProtocolVersionCurrent, map[string]interface{}{
+		"executors": []interface{}{
+			map[string]interface{}{"id": "scene.composite.v1", "version": 1},
+		},
+	})
+	_, err := stream.Recv()
+	if err == nil {
+		t.Fatal("expected executorVersion=1 worker without canonical payload capability to be rejected")
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v", err)
+	}
+	if !strings.Contains(st.Message(), controltransport.CapabilityCanonicalPayloadV2) {
+		t.Fatalf("error should mention %s, got %q", controltransport.CapabilityCanonicalPayloadV2, st.Message())
+	}
+}
+
+func TestStream_AcceptsExecutorVersionOneWithCanonicalPayloadCapability(t *testing.T) {
+	h := minimalProtocolHandler(t)
+	stream, cleanup := startProtocolTestServer(t, h)
+	defer cleanup()
+
+	sendHelloWithCapabilities(t, stream, "test-worker-executor-v1-canonical", controltransport.ProtocolVersionCurrent, map[string]interface{}{
+		"executors": []interface{}{
+			map[string]interface{}{"id": "scene.composite.v1", "version": 1},
+		},
+		controltransport.CapabilityCanonicalPayloadV2: true,
+	})
+	resp, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("executorVersion=1 worker with canonical payload capability was rejected: %v", err)
+	}
+	if resp.GetHelloAck() == nil {
+		t.Fatalf("expected HelloAck, got %T", resp.Msg)
+	}
+}
+
 func TestStream_AcceptsCurrentProtocolVersion(t *testing.T) {
 	h := minimalProtocolHandler(t)
 	stream, cleanup := startProtocolTestServer(t, h)
