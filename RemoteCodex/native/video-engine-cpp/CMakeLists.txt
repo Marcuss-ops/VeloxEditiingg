@@ -16,8 +16,12 @@ endif()
 # the highest-impact portable optimisation mix for the FFmpeg-heavy
 # pipeline we link against.
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    add_compile_options(-O3)
-    add_link_options(-flto)
+    add_compile_options(
+        -O3
+        -ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=.
+        -ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=.
+    )
+    add_link_options(-flto -Wl,--build-id=none)
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
 endif()
 

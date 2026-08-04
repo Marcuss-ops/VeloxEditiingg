@@ -61,15 +61,27 @@ ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Build deps only (cmake, g++, build-essential). NOT copied to runtime.
+# Pin the Debian package set as well as the base image. The pinned
+# bookworm snapshot currently resolves these exact versions; an unexpected
+# repository update must fail the build instead of silently changing the
+# compiler/FFmpeg ABI and engine hash.
+ARG BUILD_ESSENTIAL_VERSION=12.9
+ARG CMAKE_VERSION=3.25.1-1
+ARG GXX_VERSION=4:12.2.0-3
+ARG PKG_CONFIG_VERSION=1.8.1-1
+ARG CA_CERTIFICATES_VERSION=20230311+deb12u1
+ARG FFMPEG_VERSION=7:5.1.9-0+deb12u1
+ARG PROCPS_VERSION=2:4.0.2-3
+ARG LIBC_BIN_VERSION=2.36-9+deb12u14
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
-        build-essential \
-        cmake \
-        g++ \
-        pkg-config \
-        ca-certificates \
-        ffmpeg \
-        procps \
-        libc-bin \
+        build-essential=${BUILD_ESSENTIAL_VERSION} \
+        cmake=${CMAKE_VERSION} \
+        g++=${GXX_VERSION} \
+        pkg-config=${PKG_CONFIG_VERSION} \
+        ca-certificates=${CA_CERTIFICATES_VERSION} \
+        ffmpeg=${FFMPEG_VERSION} \
+        procps=${PROCPS_VERSION} \
+        libc-bin=${LIBC_BIN_VERSION} \
     && rm -rf /var/lib/apt/lists/*
 
 # Build context is the repo root — paths MUST reflect that layout.
@@ -182,13 +194,19 @@ COPY RemoteCodex/native/worker-agent-go/tests/fixtures/engine_selftest_baseline.
 #                      (built by g++ in stage 1).
 #   * libc-bin:        entrypoint runs `ldd` / `getconf GNU_LIBC_VERSION`
 #                      for engine validation.
+ARG RUNTIME_CA_CERTIFICATES_VERSION=20230311+deb12u1
+ARG RUNTIME_FFMPEG_VERSION=7:5.1.9-0+deb12u1
+ARG RUNTIME_PROCPS_VERSION=2:4.0.2-3
+ARG RUNTIME_CURL_VERSION=7.88.1-10+deb12u15
+ARG RUNTIME_LIBSTDCPP_VERSION=12.2.0-14+deb12u1
+ARG RUNTIME_LIBC_BIN_VERSION=2.36-9+deb12u14
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        ffmpeg \
-        procps \
-        curl \
-        libstdc++6 \
-        libc-bin \
+        ca-certificates=${RUNTIME_CA_CERTIFICATES_VERSION} \
+        ffmpeg=${RUNTIME_FFMPEG_VERSION} \
+        procps=${RUNTIME_PROCPS_VERSION} \
+        curl=${RUNTIME_CURL_VERSION} \
+        libstdc++6=${RUNTIME_LIBSTDCPP_VERSION} \
+        libc-bin=${RUNTIME_LIBC_BIN_VERSION} \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy pre-built C++ engine from stage 1 (compilers are NOT in the runtime
