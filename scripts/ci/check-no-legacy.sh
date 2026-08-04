@@ -35,7 +35,7 @@ full_tree_patterns=(
   # Dead packages removed in Ondata 1 cleanup — must not reappear.
   'services/joblifecycle'             # Removed dead wrapper (Ondata 1)
   'services/progress'                 # Removed dead wrapper (Ondata 1)
-  'handlers/web/darkeditor'           # Removed dead handler (Ondata 1)
+  'handlers/server/darkeditor'        # Removed Dark Editor server handler
   # Dark Editor subsystem removed from Velox (worker-only repo) — symbols,
   # routes, proxy path, and storage domain must not reappear.
   'DarkeditorRouteDeps'               # Router dep struct (dark editor)
