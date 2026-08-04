@@ -76,14 +76,15 @@ func registerScriptRoutes(r *gin.Engine, deps ScriptRouteDeps) {
 	scripthandlers.RegisterRoutes(v1Group, deps.Cfg, deps.SQLiteStore, deps.Enqueuer, deps.DocCreator)
 }
 
-// registerPipelineRoutes mounts /api/script-* and /api/remote/pipeline.
+// registerPipelineRoutes mounts the canonical pipeline/job routes.
 // jobsRepo is split into Reader + Writer for the Handlers' JobsDeps,
 // but since jobs.Repository (the canonical surface) satisfies BOTH
 // interfaces by structural typing, the same value passes for both.
 //
 // m2mAuth is applied EXCLUSIVELY to /api/v1/jobs (the M2M intake).
-// Every other group keeps the legacy adminAuth. nil m2mAuth falls
-// back to adminAuth so test mounts retain the legacy shape.
+// The remaining canonical pipeline-run routes use adminAuth. A nil
+// m2mAuth falls back to adminAuth so test mounts retain the expected
+// authorization shape.
 //
 // Blocco 4 step #3: the legacy fallback to NewHandlersFull (which
 // constructed a forwarder Service shim) is gone. Resolver is the

@@ -35,11 +35,11 @@ The repository's identifiable operational producers already use canonical surfac
 - frontend/API clients: `POST /api/v1/jobs` and `GET /api/v1/jobs/{id}`;
 - script-with-images server ingress: `POST /api/v1/script/generate-with-images` (and its `/api/v1/script` aliases).
 
-No tracked producer requires a source edit for the five legacy route families. The migration is therefore a route-surface removal plus canonical negative/positive route tests, rather than a fabricated client rewrite.
+No tracked producer required a source edit for the five legacy route families. The migration is therefore a route-surface removal plus canonical negative/positive route tests, rather than a fabricated client rewrite.
 
 ## Removal decision
 
-The legacy inbound routes are scheduled for removal from the Velox router in the next migration commit. This audit records the decision and mapping before that code change; until the removal commit is pushed, the routes remain mounted on the checked-out revision. The canonical routes to retain are:
+The legacy inbound routes have now been removed from the Velox router. The audit decision and mapping above preceded the removal commit; the checked-out revision retains only the canonical routes below:
 
 ```text
 POST   /api/v1/jobs

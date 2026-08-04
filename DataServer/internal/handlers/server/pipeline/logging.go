@@ -19,7 +19,7 @@
 // (cfg.Workers.MasterURL or VELOX_MASTER_URL) at boot.
 //
 // Step 9: the canonical `pipeline.go` was deleted once every unique
-// symbol it had owned (RegisterRoutes, Generate,
+// symbol it had owned (RegisterRoutes,
 // forwardPipelineResultToWorker, firstStringResolver) was extracted
 // into single-responsibility sibling files. The package doc and the
 // package-internal [PIPELINE] logger now live in `logging.go`, which
@@ -32,12 +32,6 @@
 //	handlers.go        — Handlers struct, JobsDeps, public
 //	                     constructors, WithJobsDeps, WithStore,
 //	                     NewRemoteClientFromConfig.
-//	generate.go        — h.Generate() (POST /api/remote/pipeline/generate):
-//	                     request parsing, inline validation,
-//	                     typed-DTO adoption (ParseRemotePipelineResult
-//	                     → ToWorkerPayload), forward decision tree,
-//	                     response envelope + voiceover-asset error
-//	                     mapping.
 //	routes.go          — h.RegisterRoutes() Gin mount surface for all
 //	                     pipeline endpoints.
 //	forwarding.go      — forwardPipelineResultToWorker + firstStringResolver.
@@ -54,10 +48,6 @@
 //	pipeline_run_completion.go — PipelineRunArtifacts + PipelineRunDeliveries
 //	                             (completion phase).
 //	pipeline_run_validator.go — ValidateCreateRequest + ValidationError.
-//	pipeline_scripts.go    — ScriptSimple / ScriptBatch.
-//
-// Status (`Status()`) and Cancel (`Cancel()`) handlers live in
-// status.go + cancel.go.
 package pipeline
 
 import (

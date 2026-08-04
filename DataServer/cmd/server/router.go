@@ -58,9 +58,8 @@ type ScriptRouteDeps struct {
 	DocCreator  scripthandlers.GoogleDocCreator
 }
 
-// PipelineRouteDeps carries the deps for the /api/script-* and
-// /api/remote/pipeline routes (remote-engine fan-out +
-// creatorflow forwarder).
+// PipelineRouteDeps carries the deps for the canonical job and
+// pipeline-run routes (creatorflow forwarder).
 type PipelineRouteDeps struct {
 	Cfg         *config.Config
 	Enqueuer    *enqueue.Enqueuer

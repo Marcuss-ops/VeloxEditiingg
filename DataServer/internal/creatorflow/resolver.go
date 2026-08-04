@@ -7,7 +7,7 @@
 //
 // Prior to this cutover there were two divergent forward-completed paths:
 //
-//   - Handler (sync): HTTP POST /api/remote/pipeline/generate receives a
+//   - Canonical pipeline-run intake receives a
 //     complete result, calls creatorflow.Service.ForwardCompleted which
 //     enqueues via enqueuer.Enqueue. NO creator_forwardings row is
 //     written; no audit trail is generated.
