@@ -1,6 +1,7 @@
 package enqueue
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -88,6 +89,9 @@ func TestNormalizeClipPayloadRejectsMissingDurationWhenUnprobeable(t *testing.T)
 	if err == nil || !strings.Contains(err.Error(), "duration unavailable") {
 		t.Fatalf("want duration error, got %v", err)
 	}
+	if !errors.Is(err, ErrCanonicalAssetDurationUnavailable) {
+		t.Fatalf("want ErrCanonicalAssetDurationUnavailable, got %v", err)
+	}
 }
 
 func TestNormalizeClipPayloadMaterializesProbedDuration(t *testing.T) {
@@ -113,6 +117,33 @@ func TestNormalizeClipPayloadMaterializesProbedDuration(t *testing.T) {
 	}
 	if got := entries[0]["voiceover"].(map[string]interface{})["duration_ms"]; got != int64(4000) {
 		t.Fatalf("voiceover duration_ms = %v, want 4000", got)
+	}
+}
+
+func TestNormalizeClipPayloadRejectsUnprobeableStockOnlyScene(t *testing.T) {
+	scene := map[string]interface{}{
+		"stock": []interface{}{map[string]interface{}{
+			"asset_id": "stock-only", "url": "velox-asset://stock-only",
+		}},
+	}
+	_, _, _, _, _, err := normalizeClipPayload(map[string]interface{}{"scenes": []interface{}{scene}})
+	if err == nil || !errors.Is(err, ErrCanonicalAssetDurationUnavailable) {
+		t.Fatalf("want canonical stock-only duration error, got %v", err)
+	}
+}
+
+func TestNormalizeClipPayloadRejectsUnprobeableStockOnlySceneInMixedBatch(t *testing.T) {
+	narrated := canonicalClipScene()
+	stockOnly := map[string]interface{}{
+		"stock": []interface{}{map[string]interface{}{
+			"asset_id": "stock-only", "url": "velox-asset://stock-only",
+		}},
+	}
+	_, _, _, _, _, err := normalizeClipPayload(map[string]interface{}{
+		"scenes": []interface{}{narrated, stockOnly},
+	})
+	if err == nil || !errors.Is(err, ErrCanonicalAssetDurationUnavailable) {
+		t.Fatalf("want canonical mixed-batch stock duration error, got %v", err)
 	}
 }
 

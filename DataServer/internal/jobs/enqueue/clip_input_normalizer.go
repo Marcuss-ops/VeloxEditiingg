@@ -258,6 +258,11 @@ func normalizeScenesInput(rawPayload map[string]interface{}, scenes []map[string
 	}
 
 	probe := sharedmedia.DetectAudioDurationSecs
+	for i, scene := range scenes {
+		if err := validateCanonicalStockDurations(scene, probe); err != nil {
+			return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: %w", i, err)
+		}
+	}
 	entries := make([]map[string]interface{}, 0, len(scenes))
 	items := make([]map[string]interface{}, 0, len(scenes))
 	clips := make([]string, 0, len(scenes))
@@ -277,6 +282,21 @@ func normalizeScenesInput(rawPayload map[string]interface{}, scenes []map[string
 		clips = append(clips, url)
 	}
 	return entries, items, payload.DedupeStrings(clips), nil, "clips", nil
+}
+
+func validateCanonicalStockDurations(scene map[string]interface{}, probe audioDurationProbe) error {
+	stock, err := canonicalStockAssets(scene)
+	if err != nil {
+		return err
+	}
+	for index, asset := range stock {
+		duration, durationErr := canonicalAssetDuration(asset, probe)
+		if durationErr != nil {
+			return fmt.Errorf("stock[%d]: %w", index, durationErr)
+		}
+		setCanonicalDurationMS(asset, duration)
+	}
+	return nil
 }
 
 func cloneCanonicalScene(scene map[string]interface{}) map[string]interface{} {

@@ -1,6 +1,7 @@
 package enqueue
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -130,6 +131,23 @@ func TestBuildNarratedClipPayloadProbesMissingCanonicalDuration(t *testing.T) {
 	}
 }
 
+func TestBuildNarratedClipPayloadRejectsUnprobeableStockDuration(t *testing.T) {
+	scene := map[string]interface{}{
+		"clip":      map[string]interface{}{"asset_id": "clip", "url": "velox-asset://clip", "duration_ms": 1000},
+		"stock":     []interface{}{map[string]interface{}{"asset_id": "stock", "url": "velox-asset://stock"}},
+		"voiceover": map[string]interface{}{"asset_id": "voice", "url": "velox-asset://voice", "duration_ms": 3000},
+	}
+	_, _, _, _, _, err := buildNarratedClipPayload([]map[string]interface{}{scene}, narratedClipOptions{probe: func(url string) float64 {
+		if url == "velox-asset://stock" {
+			return 0
+		}
+		return 1
+	}})
+	if err == nil || !errors.Is(err, ErrCanonicalAssetDurationUnavailable) {
+		t.Fatalf("want canonical stock duration error, got %v", err)
+	}
+}
+
 func TestBuildNarratedClipPayloadRejectsUnprobeableMissingDuration(t *testing.T) {
 	scene := map[string]interface{}{
 		"clip":      map[string]interface{}{"asset_id": "clip", "url": "velox-asset://clip"},
@@ -138,6 +156,9 @@ func TestBuildNarratedClipPayloadRejectsUnprobeableMissingDuration(t *testing.T)
 	_, _, _, _, _, err := buildNarratedClipPayload([]map[string]interface{}{scene}, narratedClipOptions{probe: func(string) float64 { return 0 }})
 	if err == nil || !strings.Contains(err.Error(), "duration unavailable") {
 		t.Fatalf("want canonical duration error, got %v", err)
+	}
+	if !errors.Is(err, ErrCanonicalAssetDurationUnavailable) {
+		t.Fatalf("want ErrCanonicalAssetDurationUnavailable, got %v", err)
 	}
 }
 

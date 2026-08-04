@@ -2,6 +2,7 @@
 package enqueue
 
 import (
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"math"
@@ -13,6 +14,12 @@ import (
 )
 
 const canonicalAssetURLPrefix = "velox-asset://"
+
+// ErrCanonicalAssetDurationUnavailable is the stable classification for a
+// canonical asset whose duration is neither declared nor probeable. Callers
+// can use errors.Is while retaining the scene/asset context in the wrapped
+// error message.
+var ErrCanonicalAssetDurationUnavailable = errors.New("canonical asset duration unavailable")
 
 // audioDurationProbe is injected by tests and probes canonical media URLs.
 type audioDurationProbe func(string) float64
@@ -70,6 +77,13 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 		if err != nil {
 			return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: %w", i, err)
 		}
+		for stockIndex, asset := range stock {
+			stockDuration, durationErr := canonicalAssetDuration(asset, probe)
+			if durationErr != nil {
+				return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: stock[%d]: %w", i, stockIndex, durationErr)
+			}
+			setCanonicalDurationMS(asset, stockDuration)
+		}
 		voiceover, err := optionalCanonicalSceneAsset(scene, "voiceover")
 		if err != nil {
 			return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: %w", i, err)
@@ -126,11 +140,10 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 				remaining := voiceoverDuration
 				for stockIndex := 0; remaining > 0; stockIndex++ {
 					asset := bedAssets[stockIndex%len(bedAssets)]
-					stockDuration, durationErr := canonicalAssetDuration(asset, probe)
-					if durationErr != nil {
-						return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: stock[%d]: %w", i, stockIndex%len(bedAssets), durationErr)
+					stockDuration := 0.0
+					if durationMS := canonicalDurationMS(asset); durationMS > 0 {
+						stockDuration = float64(durationMS) / 1000
 					}
-					setCanonicalDurationMS(asset, stockDuration)
 					if stockDuration > remaining {
 						stockDuration = remaining
 					}
@@ -247,7 +260,7 @@ func canonicalAssetDuration(asset map[string]interface{}, probe audioDurationPro
 			return duration, nil
 		}
 	}
-	return 0, fmt.Errorf("duration_ms is required or asset must be probeable")
+	return 0, fmt.Errorf("%w: duration_ms is required or asset must be probeable", ErrCanonicalAssetDurationUnavailable)
 }
 
 func shuffledAssets(assets []map[string]interface{}, seed string, sceneIndex int) []map[string]interface{} {
@@ -276,7 +289,7 @@ func resolveSceneVoiceoverDuration(scene map[string]interface{}, voiceoverURL st
 			return duration, nil
 		}
 	}
-	return 0, fmt.Errorf("voiceover duration unavailable; duration_ms is required or asset must be probeable")
+	return 0, fmt.Errorf("%w: voiceover duration unavailable; duration_ms is required or asset must be probeable", ErrCanonicalAssetDurationUnavailable)
 }
 
 func resolveSceneFinalClipDuration(scene map[string]interface{}) float64 {
@@ -297,7 +310,7 @@ func resolveSceneFinalClipDurationWithProbe(scene map[string]interface{}, clipUR
 			return duration, nil
 		}
 	}
-	return 0, fmt.Errorf("clip duration unavailable; duration_ms is required or asset must be probeable")
+	return 0, fmt.Errorf("%w: clip duration unavailable; duration_ms is required or asset must be probeable", ErrCanonicalAssetDurationUnavailable)
 }
 
 func sceneVoiceoverURL(scene map[string]interface{}) string {
