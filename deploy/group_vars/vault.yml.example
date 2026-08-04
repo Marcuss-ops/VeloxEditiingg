@@ -41,6 +41,16 @@ vault_velox_registry_token: ""
 
 # ── Per-worker secrets minted at install time (one entry per worker) ────────
 # MUST be sourced from a secrets manager (1Password, Bitwarden, Vault, etc.)
+#
+# Mapping to a host happens in the inventory: set `worker_secret` on the
+# [velox_workers] line, e.g.
+#   worker_57_129 ansible_host=... worker_id=... worker_secret={{ vault_velox_worker_credential_1 }}
+# canonical_worker_runtime.yml renders `worker_secret` into the canonical
+# EnvironmentFile (/etc/velox-worker-<host>.env, mode 0600) as
+# VELOX_WORKER_SECRET. A vault-supplied value wins over any secret preserved
+# from legacy env files. The deploy FAILS BEFORE RESTART if the env file
+# would end up without a non-empty VELOX_WORKER_SECRET while the master
+# already holds a stored credential for that worker_id.
 vault_velox_worker_credential_1: ""
 vault_velox_worker_credential_2: ""
 vault_velox_worker_credential_3: ""

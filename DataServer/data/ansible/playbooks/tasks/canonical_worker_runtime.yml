@@ -34,9 +34,30 @@
     src: "{{ velox_current_root }}/RemoteCodex/BUNDLE_HASH.txt"
   register: velox_worker_bundle_hash_file
 
-- name: CanonicalRuntime | Resolve release bundle hash
+# BUNDLE_HASH is a single 64-hex SHA256 token. A newline in the source file
+# (historically: `BUNDLE_HASH.txt` with a trailing or embedded `\n`) made the
+# rendered worker_config.json unparseable (`invalid character '\n'`). Strip
+# ALL whitespace — not just trim edges — so a stray newline can never leak
+# into JSON, then assert the canonical 64-hex shape before any consumer
+# touches the value.
+- name: CanonicalRuntime | Sanitize release bundle hash (strip all whitespace)
   ansible.builtin.set_fact:
-    velox_worker_bundle_hash: "{{ bundle_hash | default((velox_worker_bundle_hash_file.content | b64decode | trim), true) }}"
+    velox_worker_bundle_hash: >-
+      {{
+        (bundle_hash | default(velox_worker_bundle_hash_file.content | b64decode, true))
+        | regex_replace('\s', '')
+      }}
+
+- name: CanonicalRuntime | Assert bundle hash is a 64-hex SHA256
+  ansible.builtin.assert:
+    that:
+      - velox_worker_bundle_hash | length == 64
+      - velox_worker_bundle_hash is match('^[0-9a-fA-F]{64}$')
+    fail_msg: >-
+      {{ velox_current_root }}/RemoteCodex/BUNDLE_HASH.txt does not contain a
+      canonical 64-hex SHA256. Resolved value: '{{ velox_worker_bundle_hash }}'
+      ({{ velox_worker_bundle_hash | length }} chars). Fix the bundle source;
+      do not disable this gate.
 
 # ── HOSTILE LEGACY UNIT CLEANUP ───────────────────────────────
 # One host -> one systemd unit. Any non-canonical `velox-worker*.service`
@@ -80,9 +101,16 @@
           velox-worker.service|velox-worker-*.service)
             systemctl stop    "$unit" >/dev/null 2>&1 || true
             systemctl disable "$unit" >/dev/null 2>&1 || true
-            # --force is required when an old unit file already exists at the
-            # same path; without it systemd leaves the unit merely disabled,
-            # and the post-deploy isolation check correctly rejects it.
+            # Some systemd versions still refuse --force when a regular unit
+            # file exists at the target path. The unit is explicitly outside
+            # the canonical runtime, so remove only that exact stale file
+            # before creating the /dev/null mask.
+            unit_path="$(systemctl show -p FragmentPath --value "$unit" 2>/dev/null || true)"
+            case "$unit_path" in
+              /etc/systemd/system/velox-worker*.service|/lib/systemd/system/velox-worker*.service|/usr/lib/systemd/system/velox-worker*.service)
+                rm -f -- "$unit_path"
+                ;;
+            esac
             systemctl mask --force "$unit" >/dev/null 2>&1 || true
             echo "MASKED_UNIT=$unit"
             changed=1
@@ -145,6 +173,41 @@
     - "{{ velox_worker_runtime_host_dir }}/blobs"
     - "{{ velox_worker_runtime_host_dir }}/assets_cache"
 
+- name: CanonicalRuntime | Preserve existing worker credential across env rewrite
+  ansible.builtin.shell: |
+    set -o pipefail
+    target="{{ velox_worker_env_path }}"
+    # Priority 1: the current canonical env file (a previous deploy already
+    # wrote the secret there). Priority 2: any legacy env file. The target is
+    # probed FIRST so a re-deploy never drops a secret that only exists in the
+    # canonical file.
+    for f in "$target" /etc/velox-worker.env; do
+      [ -f "$f" ] || continue
+      grep -m1 -E '^VELOX_WORKER_SECRET=[^[:space:]]' "$f" && exit 0
+    done
+    for f in /etc/velox-worker-*.env; do
+      [ -f "$f" ] || continue
+      [ "$f" = "$target" ] && continue
+      grep -m1 -E '^VELOX_WORKER_SECRET=[^[:space:]]' "$f" && exit 0
+    done
+    exit 0
+  args:
+    executable: /bin/bash
+  register: _existing_worker_secret
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: CanonicalRuntime | Resolve canonical worker credential line (vault wins over preserved)
+  ansible.builtin.set_fact:
+    _worker_secret_line: >-
+      {{
+        ('VELOX_WORKER_SECRET=' ~ worker_secret)
+        if (worker_secret | default('') | length > 0)
+        else (_existing_worker_secret.stdout | default(''))
+      }}
+  no_log: true
+
 - name: CanonicalRuntime | Write per-host env file (consumed by systemd unit EnvironmentFile)
   ansible.builtin.copy:
     dest: "{{ velox_worker_env_path }}"
@@ -172,6 +235,93 @@
       # /var/lib/velox/worker would point at a non-existent path inside
       # the container and state writes would land in an unbacked location.
       VELOX_STATE_DIR={{ velox_worker_runtime_container_dir }}
+      {% if _worker_secret_line | length > 0 %}
+      {{ _worker_secret_line }}
+      {% endif %}
+  no_log: true
+
+- name: CanonicalRuntime | Check canonical env file carries a non-empty worker secret
+  ansible.builtin.shell: |
+    grep -E '^VELOX_WORKER_SECRET=[^[:space:]]' "{{ velox_worker_env_path }}" >/dev/null 2>&1
+  args:
+    executable: /bin/bash
+  register: _env_has_secret
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+# ── PRE-RESTART CREDENTIAL GATE ───────────────────────────────
+# A worker that already holds a stored credential on the master MUST be
+# restarted with that secret present, or it re-enters the `credential
+# required (existing credential stored)` loop (observed on host_57_129 on
+# 2026-08-04). This gate runs BEFORE the canonical unit is (re)started:
+# the env file was just (re)written above, and the master's registration
+# list is probed to classify the worker.
+- name: CanonicalRuntime | Query master registration list (pre-restart credential gate)
+  ansible.builtin.uri:
+    url: "{{ master_verify_url | default(master_url) }}/api/v1/workers"
+    method: GET
+    return_content: true
+    status_code: 200
+    timeout: 10
+  register: _master_workers_gate
+  delegate_to: localhost
+  become: false
+  retries: 12
+  delay: 5
+  until: _master_workers_gate.status == 200
+  ignore_errors: true
+
+- name: CanonicalRuntime | Compute master-side registration state for this worker
+  ansible.builtin.set_fact:
+    _worker_registered_on_master: >-
+      {{
+        (_master_workers_gate.status | default(0) == 200) and
+        ((_master_workers_gate.json | default({})).workers | default([])
+          | selectattr('worker_id', 'equalto', velox_worker_identity)
+          | list
+          | length) > 0
+      }}
+
+- name: CanonicalRuntime | Fail before restart when a registered worker lacks its secret
+  ansible.builtin.fail:
+    msg: >-
+      Worker {{ velox_worker_identity }} is registered on the master
+      (stored credential) but {{ velox_worker_env_path }} does NOT carry a
+      non-empty VELOX_WORKER_SECRET. The worker would restart straight into
+      `credential required (existing credential stored)` and never register.
+      Provide the secret via per-host `worker_secret` (vault-backed) or a
+      legacy env file, then re-run. Aborting BEFORE restarting the canonical
+      unit.
+  when:
+    - _worker_registered_on_master | bool
+    - (_env_has_secret.rc | default(1)) != 0
+
+- name: CanonicalRuntime | Fail before restart when an unregistered worker has no secret
+  ansible.builtin.fail:
+    msg: >-
+      Worker {{ velox_worker_identity }} is NOT yet registered on the master
+      and {{ velox_worker_env_path }} does NOT carry a non-empty
+      VELOX_WORKER_SECRET. On a credential-enforcing master a worker with no
+      secret cannot register at all (`credential required`). Provide the
+      secret via per-host `worker_secret` (vault-backed), then re-run.
+      Aborting BEFORE restarting the canonical unit.
+  when:
+    - not (_worker_registered_on_master | bool)
+    - (_env_has_secret.rc | default(1)) != 0
+    - _master_workers_gate.status | default(0) == 200
+
+- name: CanonicalRuntime | Fail when secret is missing and master cannot be reached
+  ansible.builtin.fail:
+    msg: >-
+      {{ velox_worker_env_path }} does NOT carry a non-empty VELOX_WORKER_SECRET
+      and the master registration list is unreachable
+      (status={{ _master_workers_gate.status | default('error') }}). Cannot
+      certify this worker is safe to restart. Provide the secret via per-host
+      `worker_secret` (vault-backed), then re-run.
+  when:
+    - (_env_has_secret.rc | default(1)) != 0
+    - _master_workers_gate.status | default(0) != 200
 
 - name: CanonicalRuntime | Write canonical worker config outside checkout
   ansible.builtin.copy:
@@ -200,6 +350,21 @@
         "tls_ca_file": "/etc/velox/certs/ca.crt",
         "video_engine_cpp_bin": "/usr/local/bin/velox_video_engine"
       }
+
+# The config above is templated — a stray newline in BUNDLE_HASH (or any
+# template break) would render invalid JSON that the worker chokes on at
+# boot. Validate the rendered file with jq and fail before any restart.
+- name: CanonicalRuntime | Validate worker_config.json with jq
+  ansible.builtin.shell: |
+    set -euo pipefail
+    CFG="{{ velox_worker_runtime_host_dir }}/config/worker_config.json"
+    command -v jq >/dev/null 2>&1 || { echo "jq is required on worker hosts but is not installed"; exit 2; }
+    jq empty "$CFG" && echo "JSON_OK"
+  args:
+    executable: /bin/bash
+  register: _worker_config_jq
+  changed_when: false
+  failed_when: _worker_config_jq.rc != 0
 
 # ── PRESERVE canonical override directory ─────────────────────
 # Admins may drop override files at
@@ -391,11 +556,10 @@
     remote_src: true
     mode: "0644"
 
-- name: CanonicalRuntime | Copy bundle hash into worker workdir
+- name: CanonicalRuntime | Write sanitized bundle hash into worker workdir
   ansible.builtin.copy:
-    src: "{{ velox_current_root }}/RemoteCodex/BUNDLE_HASH.txt"
     dest: "{{ velox_worker_runtime_host_dir }}/work/BUNDLE_HASH.txt"
-    remote_src: true
+    content: "{{ velox_worker_bundle_hash }}\n"
     owner: "10001"
     group: "10001"
     mode: "0644"

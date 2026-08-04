@@ -121,6 +121,54 @@
       Worker image entrypoint is not worker-entrypoint.sh:
       {{ _image_entrypoint.stdout | default('unknown') }}
 
+# ── IMAGE DIGEST PIN ───────────────────────────────────────────
+# A matching tag is not proof the running container uses the build this
+# deploy produced (2026-08-04: tag v1.2.20-capsfix but 3 different image
+# digests across the fleet). Pin the running container to the exact image
+# the canonical tag points at.
+#
+# NOTE: the worker image is built locally (prepare_worker_image.yml,
+# `docker build -t velox-worker:...`, no registry push) so `RepoDigests`
+# is EMPTY — compare image IDs instead: `.Id` of the tag vs `.Image` of
+# the running container (both are `sha256:...` and always populated for
+# locally-built images).
+- name: Verify | Capture built image ID for canonical tag
+  ansible.builtin.command:
+    argv:
+      - docker
+      - image
+      - inspect
+      - "{{ _worker_image_tag | default('velox-worker:latest') }}"
+      - --format
+      - "{{ '{{.Id}}' }}"
+  register: _built_image_id
+  changed_when: false
+  failed_when: false
+
+- name: Verify | Capture running container image ID
+  ansible.builtin.command:
+    argv:
+      - docker
+      - inspect
+      - "{{ velox_worker_container_name }}"
+      - --format
+      - "{{ '{{.Image}}' }}"
+  register: _running_image_id
+  changed_when: false
+  failed_when: false
+
+- name: Verify | Assert running container uses the exact built image ID
+  ansible.builtin.assert:
+    that:
+      - _built_image_id.stdout | default('') != ''
+      - _running_image_id.stdout | default('') == _built_image_id.stdout | default('')
+    fail_msg: >-
+      Running container {{ velox_worker_container_name }} uses image
+      {{ _running_image_id.stdout | default('<unresolved>') }} but the canonical
+      tag {{ _worker_image_tag | default('velox-worker:latest') }} is pinned to
+      {{ _built_image_id.stdout | default('<unresolved>') }}. A container from a
+      different image build is running — re-converge the canonical runtime.
+
 - name: Verify | Check C++ engine binary
   ansible.builtin.command:
     argv:

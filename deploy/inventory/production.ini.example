@@ -51,6 +51,15 @@
 #                      MUST match a value listed in `velox_allowed_workers`
 #                      in deploy/group_vars/all.yml AND mirror
 #                      /etc/velox-server.env `VELOX_ALLOWED_WORKERS`.
+#   worker_secret    — OPTIONAL per-host worker credential (vault-backed, e.g.
+#                      worker_secret={{ vault_velox_worker_credential_1 }}).
+#                      When set, canonical_worker_runtime.yml writes it into the
+#                      canonical EnvironmentFile (/etc/velox-worker-<host>.env,
+#                      mode 0600) as VELOX_WORKER_SECRET and it wins over any
+#                      secret preserved from legacy env files. When unset, the
+#                      deploy preserves an existing secret if one exists, and
+#                      FAILS BEFORE RESTART if the master already holds a
+#                      stored credential for this worker_id.
 
 [velox_master]
 velox-master ansible_host=CHANGE_ME ansible_user=velox-deploy
