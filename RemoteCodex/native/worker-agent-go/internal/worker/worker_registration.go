@@ -130,6 +130,10 @@ func (w *Worker) capabilitiesMap(hostname string) map[string]interface{} {
 	m[controltransport.CapabilityArtifactUploadPlanV1] = true
 	m[controltransport.CapabilityArtifactUploadCompletedV1] = true
 	m[controltransport.CapabilityTaskCommitAckV1] = true
+	// The worker receives only the canonical renderer contract after
+	// admission; advertise explicit payload compatibility rather than
+	// overloading executor version numbers for this decision.
+	m[controltransport.CapabilityCanonicalPayloadV2] = true
 
 	// Creator profile: advertise the creative job types the master uses
 	// to route script, voiceover and image generation work. Without these

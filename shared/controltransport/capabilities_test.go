@@ -19,6 +19,7 @@ func TestCapabilities_KnownConstants(t *testing.T) {
 		"artifact.upload.plan.v1",
 		"artifact.upload.completed.v1",
 		"task.commit.ack.v1",
+		"payload.contract.v2",
 	}
 	if len(AllCapabilities) != len(want) {
 		t.Fatalf("AllCapabilities length: got %d, want %d (orphaned literal?)",
@@ -47,6 +48,7 @@ func TestCapabilities_IsKnownCapability(t *testing.T) {
 		{CapabilityArtifactUploadPlanV1, true},
 		{CapabilityArtifactUploadCompletedV1, true},
 		{CapabilityTaskCommitAckV1, true},
+		{CapabilityCanonicalPayloadV2, true},
 		{"", false},
 		{"artifact.commit.v0", false},      // deprecated-by-naming
 		{"artifact.commit.v2.beta", false}, // not yet a constant
@@ -73,8 +75,8 @@ func TestCapabilities_AllCapabilitiesIsClosedSet(t *testing.T) {
 		CapabilityExecutorHybridV1:          true,
 		CapabilityTaskOutputDeclaredV1:      true,
 		CapabilityArtifactUploadPlanV1:      true,
-		CapabilityArtifactUploadCompletedV1: true,
-		CapabilityTaskCommitAckV1:           true,
+		CapabilityArtifactUploadCompletedV1: true, CapabilityTaskCommitAckV1: true,
+		CapabilityCanonicalPayloadV2: true,
 	}
 	allAsSet := map[string]bool{}
 	for _, c := range AllCapabilities {

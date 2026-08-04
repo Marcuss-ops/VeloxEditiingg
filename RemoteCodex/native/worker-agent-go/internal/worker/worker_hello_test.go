@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"velox-shared/controltransport"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/pkg/api"
 )
@@ -31,6 +32,8 @@ func assertHelloMatchesRegistry(t *testing.T, w *Worker) {
 	t.Helper()
 	hello := w.buildHello()
 	req := require.New(t)
+
+	req.Equal(true, hello.Capabilities[controltransport.CapabilityCanonicalPayloadV2], "canonical payload capability must be advertised")
 
 	// schema_version key MUST be present and equal to the closed constant.
 	sv, ok := hello.Capabilities["schema_version"]

@@ -113,6 +113,12 @@ const (
 	// back to a polling reconciliation against
 	// attempt_commits.status.
 	CapabilityTaskCommitAckV1 = "task.commit.ack.v1"
+
+	// CapabilityCanonicalPayloadV2 — the worker accepts the canonical
+	// renderer payload contract (payload_contract_version=2). This is an
+	// admission capability, not an executor version: executorVersion stays
+	// reserved for exact executor placement matching.
+	CapabilityCanonicalPayloadV2 = "payload.contract.v2"
 )
 
 // AllCapabilities is the canonical closed-set of capabilities the
@@ -127,6 +133,7 @@ var AllCapabilities = []string{
 	CapabilityArtifactUploadPlanV1,
 	CapabilityArtifactUploadCompletedV1,
 	CapabilityTaskCommitAckV1,
+	CapabilityCanonicalPayloadV2,
 }
 
 // IsKnownCapability reports whether the given string is one of the

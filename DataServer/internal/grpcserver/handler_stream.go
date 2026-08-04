@@ -100,6 +100,11 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	if err != nil {
 		return fmt.Errorf("stream: invalid executor capabilities: %w", err)
 	}
+	if supported, ok := caps[controltransport.CapabilityCanonicalPayloadV2].(bool); !ok || !supported {
+		log.Printf("[GRPC] worker %s rejected: canonical payload capability %q missing or false", declaredWorkerID, controltransport.CapabilityCanonicalPayloadV2)
+		return status.Errorf(codes.FailedPrecondition,
+			"worker %s does not support canonical payload contract %s", declaredWorkerID, controltransport.CapabilityCanonicalPayloadV2)
+	}
 
 	// Mint the immutable snapshot before admitting the durable control
 	// session. InsertSession is transactional; if collision or any other

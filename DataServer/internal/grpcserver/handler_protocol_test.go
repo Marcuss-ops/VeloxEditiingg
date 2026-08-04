@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -82,6 +83,17 @@ func startProtocolTestServer(t *testing.T, h *Handler) (pb.WorkerControl_StreamC
 
 func sendHello(t *testing.T, stream pb.WorkerControl_StreamClient, workerID, protocolVersion string) {
 	t.Helper()
+	sendHelloWithCapabilities(t, stream, workerID, protocolVersion, map[string]interface{}{
+		controltransport.CapabilityCanonicalPayloadV2: true,
+	})
+}
+
+func sendHelloWithCapabilities(t *testing.T, stream pb.WorkerControl_StreamClient, workerID, protocolVersion string, capabilities map[string]interface{}) {
+	t.Helper()
+	caps, err := structpb.NewStruct(capabilities)
+	if err != nil {
+		t.Fatalf("NewStruct capabilities: %v", err)
+	}
 	env := &pb.WorkerToMasterEnvelope{
 		MessageId:       "test-hello-" + workerID,
 		WorkerId:        workerID,
@@ -89,8 +101,9 @@ func sendHello(t *testing.T, stream pb.WorkerControl_StreamClient, workerID, pro
 		ProtocolVersion: protocolVersion,
 		Msg: &pb.WorkerToMasterEnvelope_Hello{
 			Hello: &pb.Hello{
-				WorkerName: workerID,
-				Version:    "1.0.0",
+				WorkerName:   workerID,
+				Version:      "1.0.0",
+				Capabilities: caps,
 			},
 		},
 	}
@@ -154,6 +167,46 @@ func TestStream_RejectsUnknownProtocolVersion(t *testing.T) {
 
 // TestStream_AcceptsCurrentProtocolVersion verifies that a Hello with
 // ProtocolVersionCurrent ("v3") is accepted and receives a HelloAck.
+func TestStream_RejectsWorkerWithoutCanonicalPayloadCapability(t *testing.T) {
+	h := minimalProtocolHandler(t)
+	stream, cleanup := startProtocolTestServer(t, h)
+	defer cleanup()
+
+	sendHelloWithCapabilities(t, stream, "test-worker-noncanonical", controltransport.ProtocolVersionCurrent, map[string]interface{}{})
+	_, err := stream.Recv()
+	if err == nil {
+		t.Fatal("expected non-canonical worker to be rejected")
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v", err)
+	}
+	if !strings.Contains(st.Message(), controltransport.CapabilityCanonicalPayloadV2) {
+		t.Fatalf("error should mention %s, got %q", controltransport.CapabilityCanonicalPayloadV2, st.Message())
+	}
+}
+
+func TestStream_RejectsFalseCanonicalPayloadCapability(t *testing.T) {
+	h := minimalProtocolHandler(t)
+	stream, cleanup := startProtocolTestServer(t, h)
+	defer cleanup()
+
+	sendHelloWithCapabilities(t, stream, "test-worker-false-canonical", controltransport.ProtocolVersionCurrent, map[string]interface{}{
+		controltransport.CapabilityCanonicalPayloadV2: false,
+	})
+	_, err := stream.Recv()
+	if err == nil {
+		t.Fatal("expected worker with false canonical payload capability to be rejected")
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v", err)
+	}
+	if !strings.Contains(st.Message(), controltransport.CapabilityCanonicalPayloadV2) {
+		t.Fatalf("error should mention %s, got %q", controltransport.CapabilityCanonicalPayloadV2, st.Message())
+	}
+}
+
 func TestStream_AcceptsCurrentProtocolVersion(t *testing.T) {
 	h := minimalProtocolHandler(t)
 	stream, cleanup := startProtocolTestServer(t, h)
