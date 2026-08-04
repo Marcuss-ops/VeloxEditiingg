@@ -1000,7 +1000,7 @@ Six residues closed on `main` between PR-15.9 + PR-15.10 + PR-15.11 + PR-15.12 +
 
 The six residues, in the order the closure landed:
 
-1. **Migration drop** — `DataServer/internal/store/migrations/sqlite/090_drop_youtube_domain.sql` (sqlite) + `DataServer/internal/store/migrations/postgres/010_drop_youtube_domain.sql` (postgres) drop all 10 YouTube tables and the historical YouTube columns on `calendar_events`. The separate legacy editor schema cleanup is forward-only in migration 128. Operator-facing audit script: `deploy/scripts/audit-no-youtube-residuals.sh` (PR-15.11) returns exit `0 / 1 / 2 / 3 / 4` per outcome (CLEAN / RESIDUAL_FOUND / DB_NOT_FOUND / NOT_VELOX_SCHEMA / ARGV_OR_TOOL).
+1. **Migration drop** — `DataServer/internal/store/migrations/sqlite/090_drop_youtube_domain.sql` (sqlite) + `DataServer/internal/store/migrations/postgres/010_drop_youtube_domain.sql` (postgres) drop all 10 YouTube tables and the historical YouTube columns on `calendar_events`; the shipped sqlite migration also removes the historical `youtube_group` column from the legacy `dark_editor_folders` table when that table exists. The legacy editor tables themselves are removed separately, forward-only, by migration 128; neither is an active Velox runtime surface. Operator-facing audit script: `deploy/scripts/audit-no-youtube-residuals.sh` (PR-15.11) returns exit `0 / 1 / 2 / 3 / 4` per outcome (CLEAN / RESIDUAL_FOUND / DB_NOT_FOUND / NOT_VELOX_SCHEMA / ARGV_OR_TOOL).
 
 2. **Destinazione opaque-mode** — `DataServer/internal/store/migrations/sqlite/091_opaque_destination.sql` DROPs the `account_id / channel_id / language` columns on `delivery_destinations` and ADDs the opaque `social_destination_id` (TEXT, nullable, fail-closed). Runtime guard: `runner.hydrateDestination` rejects empty `social_destination_id` with `ErrDestinationUnmapped` → delivery status code `DESTINATION_UNMAPPED` so operators see exactly which row needs backfill.
 
@@ -1785,8 +1785,11 @@ The audit script reflects the same contract the test suite pins:
 - The schema test
   (`DataServer/internal/store/migrations/migrations_schema_test.go`,
   `TestMigration090_YouTubeDomainDropped`) additionally asserts that
-  the 3 historical columns on `calendar_events` are absent. Legacy editor
-  tables are covered separately by migration 128.
+  the 3 historical columns on `calendar_events` are absent. The shipped
+  sqlite 090 also retains its historical cleanup of
+  `dark_editor_folders.youtube_group` when that legacy table is present;
+  the legacy editor tables themselves are covered separately by migration
+  128 and are not an active runtime surface.
 
 **Added**:
 
