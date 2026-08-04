@@ -44,6 +44,15 @@ type SnapshotSource interface {
 	Current(ctx context.Context) (generatedAt time.Time, protectedIDs []string, err error)
 }
 
+// ProtectionBarrier gates destructive cleanup until the worker has received
+// at least one valid protected-assets snapshot. Implementations must remain
+// fail-safe: transient poll failures do not open the barrier and cancellation
+// must interrupt WaitReady promptly.
+type ProtectionBarrier interface {
+	WaitReady(context.Context) error
+	IsReady() bool
+}
+
 // FixedSnapshotSource is a deterministic SnapshotSource suitable for
 // tests + small daemon wirings. Production wires a polling client
 // in Pass 8. Set `protectedIDs` to nil for "no snapshot ever polled"
@@ -70,9 +79,13 @@ type CleanupLoop struct {
 	Policy CleanupPolicy
 
 	// Snapshot is the master's protected-asset snapshot source.
-	// Optional: when nil, CleanupLoop uses a zero-time snapshot
-	// (no protected set, no staleness short-circuit).
+	// Optional for direct TickOnce callers; production supplies it.
 	Snapshot SnapshotSource
+
+	// Barrier is required for Run startup. Run refuses a nil barrier so a
+	// production wiring mistake cannot bypass the first-snapshot safety gate.
+	// TickOnce remains directly driveable for deterministic unit tests.
+	Barrier ProtectionBarrier
 
 	// Interval is the periodic ticker cadence. Required (> 0).
 	Interval time.Duration
@@ -122,6 +135,18 @@ func (cl *CleanupLoop) Run(ctx context.Context) error {
 	}
 	if cl.Interval <= 0 {
 		return errors.New("workercache.CleanupLoop.Run: Interval must be positive")
+	}
+	if cl.Barrier == nil {
+		return errors.New("workercache.CleanupLoop.Run: nil ProtectionBarrier")
+	}
+
+	// Startup barrier: never perform a destructive cleanup pass against an
+	// unknown protected set. Context cancellation interrupts the wait.
+	if err := cl.Barrier.WaitReady(ctx); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	// Initial tick so the loop isn't empty for the first Interval.

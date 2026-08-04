@@ -373,18 +373,20 @@ func main() {
 		}
 	}
 	protectedPoller := worker.NewProtectedAssetsPoller(w.APIClient(), pollInterval)
+	cleanupPolicy := workercache.LoadCleanupPolicy()
+	protectedPoller.SnapshotMaxAge = cleanupPolicy.SnapshotMaxAge
 	telemetry.MarkCacheProtectionReady(false)
 	protectedPoller.OnSuccess = func(snap *api.ProtectedAssetSnapshot) {
-		telemetry.MarkCacheProtectionReady(true)
+		telemetry.MarkCacheProtectionReady(protectedPoller.IsReady())
 		if snap != nil {
 			if generated, err := time.Parse(time.RFC3339Nano, snap.GeneratedAt); err == nil {
-				telemetry.SetProtectedSnapshotAge(time.Since(generated))
+				telemetry.SetProtectedSnapshotGeneratedAt(generated)
 			}
 		}
 	}
-	cleanupPolicy := workercache.LoadCleanupPolicy()
 	cleanupLoop := &workercache.CleanupLoop{
 		Cache: clipCache, Policy: cleanupPolicy, Snapshot: protectedPoller,
+		Barrier:  protectedPoller,
 		Interval: cleanupPolicy.CleanupInterval, JobDone: w.JobDone(),
 		OnTick: func(stats workercache.CleanupStats, err error) {
 			metrics := telemetry.GetPrometheusMetrics()

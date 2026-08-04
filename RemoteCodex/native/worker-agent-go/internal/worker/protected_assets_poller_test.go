@@ -32,6 +32,7 @@ import (
 	"testing"
 	"time"
 
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/api"
 )
 
@@ -72,7 +73,9 @@ func newCountingServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server
 func newPollerWithClient(t *testing.T, srvURL string, opts ...api.ClientOption) *ProtectedAssetsPoller {
 	t.Helper()
 	c := api.NewClient(srvURL, opts...)
-	return NewProtectedAssetsPoller(c, time.Hour)
+	p := NewProtectedAssetsPoller(c, time.Hour)
+	p.SnapshotMaxAge = 0
+	return p
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -316,6 +319,9 @@ func TestPoller_Timeout_KeepsLastGoodAndRecovery(t *testing.T) {
 // the context is cancelled. Uses a long Interval so the only
 // termination path is via cancellation.
 func TestPoller_Run_RespectsContextDone(t *testing.T) {
+	telemetry.ResetForTest()
+	telemetry.MarkRegistered(true)
+	t.Cleanup(telemetry.ResetForTest)
 	srv, _ := newCountingServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write(snapshotJSON(1, "2026-07-27T12:00:00Z", 1, []string{"A"}))
@@ -349,6 +355,9 @@ func TestPoller_Run_RespectsContextDone(t *testing.T) {
 // this by counting server hits: after a 20ms wait the counter
 // must read 1 (initial tick) and not 0 (ticker hasn't fired yet).
 func TestPoller_Run_FiresInitialTickOnEntry(t *testing.T) {
+	telemetry.ResetForTest()
+	telemetry.MarkRegistered(true)
+	t.Cleanup(telemetry.ResetForTest)
 	srv, count := newCountingServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write(snapshotJSON(1, "2026-07-27T12:00:00Z", 1, []string{"A"}))
@@ -388,6 +397,9 @@ func TestPoller_Run_FiresInitialTickOnEntry(t *testing.T) {
 // actually re-fires on the ticker (not just the initial tick).
 // Drives a 100ms interval in the test.
 func TestPoller_Run_PeriodicTickerFires(t *testing.T) {
+	telemetry.ResetForTest()
+	telemetry.MarkRegistered(true)
+	t.Cleanup(telemetry.ResetForTest)
 	var mu sync.Mutex
 	var counter int
 

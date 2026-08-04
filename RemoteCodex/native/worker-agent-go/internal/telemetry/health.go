@@ -8,12 +8,12 @@
 //	                 that is up but not yet registered.
 //
 //	/health/ready  — 200 iff ReadySnapshot.IsReady() (see ready.go).
-//	                 Six canonical readiness reasons drive the body
+//	                 Eight canonical readiness reasons drive the body
 //	                 so dashboards + canary scripts can grep on the
 //	                 stable string taxonomy (bootstrap_not_run,
 //	                 not_registered, drain_mode, executors.empty,
-//	                 cache.not_initialized, blob.not_initialized,
-//	                 disk.critical).
+//	                 cache.not_initialized, cache.protection_not_ready,
+//	                 blob.not_initialized, disk.critical).
 //
 //	/health        — legacy adapter. Proxies the current ready
 //	                 verdict into the legacy HealthResponse body and

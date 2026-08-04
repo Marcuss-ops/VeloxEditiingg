@@ -53,6 +53,12 @@ type ReadySnapshot struct {
 	// CacheReady is true after the cache/NewPersistedLocalCache
 	// call returned a non-nil cache (composition-root wiring).
 	CacheReady bool
+	// CacheProtectionReady is true after the first valid protected-assets
+	// snapshot has been received. It is informational readiness state;
+	// cleanup itself remains fail-safe when false.
+	CacheProtectionReady        bool
+	ProtectedSnapshotAgeSeconds int64
+	protectedSnapshotAt         time.Time
 	// BlobReady is true after the blob/NewBlobArtifacts call
 	// returned a non-nil store (composition-root wiring).
 	BlobReady bool
@@ -144,6 +150,7 @@ func (s *ReadySnapshot) IsReady() bool {
 //	drain_mode               — drain received, gracefully rejecting new offers
 //	executors.empty          — registry.Len()==0
 //	cache.not_initialized    — pkg/cache.NewPersistedLocalCache returned nil/err
+//	cache.protection_not_ready — first protected-assets snapshot has not arrived
 //	blob.not_initialized     — pkg/blob.NewBlobArtifacts returned nil/err
 //	disk.critical            — DiskFreeBytes < DiskThresholdBytes
 //
@@ -160,6 +167,7 @@ var CanonicalReasons = []string{
 	"drain_mode",
 	"executors.empty",
 	"cache.not_initialized",
+	"cache.protection_not_ready",
 	"blob.not_initialized",
 	"disk.critical",
 }
@@ -184,6 +192,9 @@ func (s *ReadySnapshot) NotReadyReasons() []string {
 	if !s.CacheReady {
 		reasons = append(reasons, "cache.not_initialized")
 	}
+	if !s.CacheProtectionReady {
+		reasons = append(reasons, "cache.protection_not_ready")
+	}
 	if !s.BlobReady {
 		reasons = append(reasons, "blob.not_initialized")
 	}
@@ -203,14 +214,25 @@ func (s *ReadySnapshot) NotReadyReasons() []string {
 // All bool fields are echoed so dashboards can graph transitions
 // without parsing the string-typed reasons array.
 func (s *ReadySnapshot) DetailMap() map[string]interface{} {
-	d := map[string]interface{}{
-		"registered":      s.Registered,
-		"drain_mode":      s.DrainMode,
-		"bootstrapped":    s.Bootstrapped,
-		"executors_count": s.Executors,
-		"cache_ready":     s.CacheReady,
-		"blob_ready":      s.BlobReady,
+	ageSeconds := s.ProtectedSnapshotAgeSeconds
+	if !s.protectedSnapshotAt.IsZero() {
+		age := time.Since(s.protectedSnapshotAt)
+		if age < 0 {
+			age = 0
+		}
+		ageSeconds = int64(age / time.Second)
 	}
+	d := map[string]interface{}{
+		"registered":                     s.Registered,
+		"drain_mode":                     s.DrainMode,
+		"bootstrapped":                   s.Bootstrapped,
+		"executors_count":                s.Executors,
+		"cache_ready":                    s.CacheReady,
+		"cache_protection_ready":         s.CacheProtectionReady,
+		"protected_snapshot_age_seconds": ageSeconds,
+		"blob_ready":                     s.BlobReady,
+	}
+
 	if s.DiskFreeBytes > 0 || s.DiskThresholdBytes > 0 {
 		d["disk_free_bytes"] = s.DiskFreeBytes
 		d["disk_threshold_bytes"] = s.DiskThresholdBytes
@@ -258,6 +280,47 @@ func MarkBootstrapped(b bool) {
 func MarkCacheReady(b bool) {
 	GlobalReady().UpdateReady(func(s *ReadySnapshot) {
 		s.CacheReady = b
+	})
+}
+
+// MarkCacheProtectionReady records the startup barrier state for the
+// protected-assets snapshot. A failed later poll does not clear it; the
+// poller keeps the last valid snapshot and cleanup enforces staleness.
+func MarkCacheProtectionReady(b bool) {
+	GlobalReady().UpdateReady(func(s *ReadySnapshot) { s.CacheProtectionReady = b })
+}
+
+func SetProtectedSnapshotAge(age time.Duration) {
+	if age < 0 {
+		age = 0
+	}
+	GlobalReady().UpdateReady(func(s *ReadySnapshot) {
+		s.ProtectedSnapshotAgeSeconds = int64(age / time.Second)
+		if age == 0 {
+			s.protectedSnapshotAt = time.Now().UTC()
+		} else {
+			s.protectedSnapshotAt = time.Now().UTC().Add(-age)
+		}
+	})
+}
+
+// SetProtectedSnapshotGeneratedAt records the timestamp from the last
+// valid master snapshot. DetailMap derives the age at read time, so a
+// later 401/503 cannot make an old snapshot appear fresh.
+func SetProtectedSnapshotGeneratedAt(generatedAt time.Time) {
+	if generatedAt.IsZero() {
+		return
+	}
+	if generatedAt.After(time.Now()) {
+		generatedAt = time.Now()
+	}
+	GlobalReady().UpdateReady(func(s *ReadySnapshot) {
+		s.protectedSnapshotAt = generatedAt.UTC()
+		age := time.Since(s.protectedSnapshotAt)
+		if age < 0 {
+			age = 0
+		}
+		s.ProtectedSnapshotAgeSeconds = int64(age / time.Second)
 	})
 }
 

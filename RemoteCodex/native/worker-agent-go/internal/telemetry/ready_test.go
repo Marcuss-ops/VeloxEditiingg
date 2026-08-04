@@ -21,6 +21,7 @@ func TestReady_AllOK(t *testing.T) {
 	MarkRegistered(true)
 	MarkBootstrapped(true)
 	MarkCacheReady(true)
+	MarkCacheProtectionReady(true)
 	MarkBlobReady(true)
 	SetExecutorsCount(1)
 	SetDiskState(1<<30, 256*1024*1024)
@@ -73,6 +74,7 @@ func TestReady_DrainMode(t *testing.T) {
 	MarkRegistered(true)
 	MarkBootstrapped(true)
 	MarkCacheReady(true)
+	MarkCacheProtectionReady(true)
 	MarkBlobReady(true)
 	SetExecutorsCount(1)
 	SetDiskState(1<<30, 256*1024*1024)
@@ -98,6 +100,7 @@ func TestReady_NoExecutors(t *testing.T) {
 	MarkRegistered(true)
 	MarkBootstrapped(true)
 	MarkCacheReady(true)
+	MarkCacheProtectionReady(true)
 	MarkBlobReady(true)
 	SetExecutorsCount(0) // empty
 
@@ -126,6 +129,7 @@ func TestReady_DiskCritical(t *testing.T) {
 	MarkRegistered(true)
 	MarkBootstrapped(true)
 	MarkCacheReady(true)
+	MarkCacheProtectionReady(true)
 	MarkBlobReady(true)
 	SetExecutorsCount(1)
 	// Threshold 1 GiB, free 256 MiB — below the floor.
@@ -157,6 +161,7 @@ func TestReady_DiskStateUntilFirstSampleAvoidsFalseAlarm(t *testing.T) {
 	MarkRegistered(true)
 	MarkBootstrapped(true)
 	MarkCacheReady(true)
+	MarkCacheProtectionReady(true)
 	MarkBlobReady(true)
 	SetExecutorsCount(1)
 	SetDiskState(0, 256*1024*1024)
@@ -175,12 +180,13 @@ func TestReady_DetailMap_FieldSet(t *testing.T) {
 	MarkRegistered(true)
 	MarkBootstrapped(true)
 	MarkCacheReady(true)
+	MarkCacheProtectionReady(true)
 	MarkBlobReady(true)
 	SetExecutorsCount(2)
 	SetDiskState(1<<30, 256*1024*1024)
 
 	d := GlobalReady().Snapshot().DetailMap()
-	wantKeys := []string{"registered", "drain_mode", "bootstrapped", "executors_count", "cache_ready", "blob_ready", "disk_free_bytes", "disk_threshold_bytes"}
+	wantKeys := []string{"registered", "drain_mode", "bootstrapped", "executors_count", "cache_ready", "cache_protection_ready", "protected_snapshot_age_seconds", "blob_ready", "disk_free_bytes", "disk_threshold_bytes"}
 	for _, k := range wantKeys {
 		if _, ok := d[k]; !ok {
 			t.Errorf("missing detail map key %q", k)

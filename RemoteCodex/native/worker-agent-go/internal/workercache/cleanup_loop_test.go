@@ -44,6 +44,11 @@ func newCleanupLoopFixture(t *testing.T) *cleanupLoopFixture {
 // or test rigs might mis-pollute). Implemented as a thin wrapper
 // around LoadCleanupPolicy after t.Setenv-clear to provide a stable
 // default policy without environment interference.
+type alwaysReadyProtectionBarrier struct{}
+
+func (alwaysReadyProtectionBarrier) WaitReady(context.Context) error { return nil }
+func (alwaysReadyProtectionBarrier) IsReady() bool                   { return true }
+
 func LoadCleanupPolicyDefaults_CleanupPolicyHelper() CleanupPolicy {
 	var p CleanupPolicy
 	// Match the spec defaults — used by tests that don't override
@@ -162,6 +167,7 @@ func TestCleanupLoop_Run_RespectsContextDone(t *testing.T) {
 		Cache:    f.cache,
 		Policy:   f.policy,
 		Snapshot: &FixedSnapshotSource{},
+		Barrier:  alwaysReadyProtectionBarrier{},
 		Interval: 1 * time.Hour,
 	}
 
@@ -209,6 +215,7 @@ func TestCleanupLoop_Run_JobDoneTriggersTick(t *testing.T) {
 		Snapshot: &FixedSnapshotSource{},
 		Interval: 1 * time.Hour,
 		OnTick:   func(_ CleanupStats, _ error) { ticks = append(ticks, 1) },
+		Barrier:  alwaysReadyProtectionBarrier{},
 		JobDone:  jobDone,
 	}
 

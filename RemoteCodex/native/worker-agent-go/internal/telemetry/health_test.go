@@ -62,6 +62,7 @@ func TestHealth_ReadyAfterHello_AllOK(t *testing.T) {
 	MarkRegistered(true)
 	MarkBootstrapped(true)
 	MarkCacheReady(true)
+	MarkCacheProtectionReady(true)
 	MarkBlobReady(true)
 	SetExecutorsCount(1)
 	SetDiskState(1<<30, 256*1024*1024)
@@ -102,6 +103,7 @@ func TestHealth_ReadyDuringDrain_NotReady(t *testing.T) {
 	MarkRegistered(true)
 	MarkBootstrapped(true)
 	MarkCacheReady(true)
+	MarkCacheProtectionReady(true)
 	MarkBlobReady(true)
 	SetExecutorsCount(1)
 	SetDiskState(1<<30, 256*1024*1024)
@@ -140,6 +142,7 @@ func TestHealth_ReadyNoExecutors_NotReady(t *testing.T) {
 	MarkRegistered(true)
 	MarkBootstrapped(true)
 	MarkCacheReady(true)
+	MarkCacheProtectionReady(true)
 	MarkBlobReady(true)
 	// ExecutorsCount intentionally NOT set — defaults to 0.
 	srv := readyHealthServer(t)
@@ -172,6 +175,7 @@ func TestHealth_ReadyUnderDiskPressure_NotReady(t *testing.T) {
 	MarkRegistered(true)
 	MarkBootstrapped(true)
 	MarkCacheReady(true)
+	MarkCacheProtectionReady(true)
 	MarkBlobReady(true)
 	SetExecutorsCount(1)
 	// Threshold 1 GiB, free 100 MiB — critical.
@@ -210,6 +214,7 @@ func TestHealth_LegacyAdapter_DeprecationHeader(t *testing.T) {
 	MarkRegistered(true)
 	MarkBootstrapped(true)
 	MarkCacheReady(true)
+	MarkCacheProtectionReady(true)
 	MarkBlobReady(true)
 	SetExecutorsCount(1)
 	SetDiskState(1<<30, 256*1024*1024)
@@ -243,6 +248,7 @@ func TestHealth_LegacyAdapter_DowngradeToNotReady(t *testing.T) {
 	MarkRegistered(true)
 	MarkBootstrapped(true)
 	MarkCacheReady(true)
+	MarkCacheProtectionReady(true)
 	MarkBlobReady(true)
 	SetExecutorsCount(0) // intentionally triggers executors.empty
 	srv := readyHealthServer(t)

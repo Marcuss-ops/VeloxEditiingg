@@ -53,6 +53,9 @@ import (
 	"sync"
 	"time"
 
+	"velox-worker-agent/internal/telemetry"
+	"velox-worker-agent/internal/workercache"
+
 	"velox-worker-agent/pkg/api"
 )
 
@@ -62,6 +65,11 @@ import (
 // surfaces the error during bootstrap is exported for callers that
 // prefer hard-fail semantics.
 var ErrPollerInvalidInterval = errors.New("worker.ProtectedAssetsPoller: interval must be > 0; defaulting to 30s")
+var ErrProtectedSnapshotNil = errors.New("worker.ProtectedAssetsPoller: successful response contained no snapshot")
+var ErrProtectedSnapshotInvalid = errors.New("worker.ProtectedAssetsPoller: snapshot generated_at is invalid")
+var ErrProtectedSnapshotStale = errors.New("worker.ProtectedAssetsPoller: snapshot generated_at is older than the last valid snapshot")
+
+var _ workercache.ProtectionBarrier = (*ProtectedAssetsPoller)(nil)
 
 // defaultPollInterval is the user-spec cadence when Interval is
 // not supplied at construction time. Mirrors the master default
@@ -69,6 +77,7 @@ var ErrPollerInvalidInterval = errors.New("worker.ProtectedAssetsPoller: interva
 // on both sides means a 30s cadence stays in lockstep without
 // resync arithmetic.
 const defaultPollInterval = 30 * time.Second
+const defaultSnapshotMaxAge = 2 * time.Minute
 
 // ProtectedAssetsPoller is the worker-side polling surface for
 // the master's protected-asset snapshot. The struct is zero-cost
@@ -87,6 +96,10 @@ type ProtectedAssetsPoller struct {
 	// any interval they want (huge values keep the ticker out
 	// of the way).
 	Interval time.Duration
+
+	// SnapshotMaxAge rejects an already-stale first response before it can
+	// open the startup barrier. It mirrors the cleanup policy threshold.
+	SnapshotMaxAge time.Duration
 
 	// OnError is the observability callback fired when a tick
 	// fails. Optional. BOTH TickOnce and Run fire OnError
@@ -111,6 +124,13 @@ type ProtectedAssetsPoller struct {
 
 	mu   sync.RWMutex
 	snap *api.ProtectedAssetSnapshot
+
+	// readyCh closes exactly once after the first valid snapshot. It is
+	// deliberately independent from snap so a later 401/503 preserves
+	// readiness and the last-good snapshot while cleanup applies its
+	// own staleness policy.
+	readyCh   chan struct{}
+	readyOnce sync.Once
 }
 
 // NewProtectedAssetsPoller constructs the poller. Interval <= 0
@@ -121,8 +141,10 @@ func NewProtectedAssetsPoller(c api.ProtectedAssetsAPI, interval time.Duration) 
 		interval = defaultPollInterval
 	}
 	return &ProtectedAssetsPoller{
-		Client:   c,
-		Interval: interval,
+		Client:         c,
+		Interval:       interval,
+		SnapshotMaxAge: defaultSnapshotMaxAge,
+		readyCh:        make(chan struct{}),
 	}
 }
 
@@ -146,10 +168,17 @@ func (p *ProtectedAssetsPoller) Run(ctx context.Context) error {
 		return errors.New("worker.ProtectedAssetsPoller.Run: zero Interval (call NewProtectedAssetsPoller instead of zeroing after construction)")
 	}
 
-	// Initial tick so the poller is not empty for the first
-	// Interval. The label passed to runTickOnce lets operators
-	// distinguish "boot-time first attempt failed" from
-	// "subsequent periodic attempt failed" in OnError log lines.
+	// Registration establishes the worker credential/session used by the
+	// protected-assets endpoint. Do not poll before that gate is open: an
+	// early request would be an avoidable 401 during bootstrap. Direct
+	// TickOnce callers remain available for deterministic tests.
+	if err := p.waitForRegistration(ctx); err != nil {
+		return err
+	}
+
+	// Initial tick so the poller is not empty for the first Interval. The
+	// label passed to runTickOnce lets operators distinguish boot-time
+	// first attempt failures from subsequent periodic failures.
 	p.runTickOnce(ctx, "worker.ProtectedAssetsPoller: initial tick")
 
 	ticker := time.NewTicker(p.Interval)
@@ -160,10 +189,13 @@ func (p *ProtectedAssetsPoller) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			// Discard the returned error: runTickOnce already
-			// fired OnError if it was set. The Run loop never
-			// stops on a poll failure — resilience is the
-			// whole point of this poller.
+			// Re-check registration on every poll. A reconnect can invalidate
+			// the data-plane credential after the initial barrier opened.
+			if err := p.waitForRegistration(ctx); err != nil {
+				return err
+			}
+			// Discard the returned error: runTickOnce already fired OnError
+			// if it was set. The Run loop never stops on a poll failure.
 			p.runTickOnce(ctx, "worker.ProtectedAssetsPoller: tick")
 		}
 	}
@@ -212,8 +244,95 @@ func (p *ProtectedAssetsPoller) runTickOnce(ctx context.Context, label string) e
 		}
 		return err
 	}
+	if snap == nil {
+		if p.OnError != nil {
+			p.OnError(ErrProtectedSnapshotNil)
+		}
+		return ErrProtectedSnapshotNil
+	}
+	generatedAt, parseErr := time.Parse(time.RFC3339Nano, snap.GeneratedAt)
+	if snap.GeneratedAt == "" || parseErr != nil {
+		err := ErrProtectedSnapshotInvalid
+		if parseErr != nil {
+			err = fmt.Errorf("%w: %v", ErrProtectedSnapshotInvalid, parseErr)
+		}
+		if p.OnError != nil {
+			p.OnError(err)
+		}
+		return err
+	}
+	if p.SnapshotMaxAge > 0 && time.Since(generatedAt) > p.SnapshotMaxAge {
+		if p.OnError != nil {
+			p.OnError(ErrProtectedSnapshotStale)
+		}
+		return ErrProtectedSnapshotStale
+	}
+	if previous := p.Snapshot(); previous != nil {
+		previousAt, previousErr := time.Parse(time.RFC3339Nano, previous.GeneratedAt)
+		if previousErr == nil {
+			older := false
+			switch {
+			case previous.Version > 0 && snap.Version > 0:
+				// Version is authoritative when both snapshots carry it;
+				// timestamps may come from a clock-skewed master.
+				older = snap.Version < previous.Version ||
+					(snap.Version == previous.Version && !generatedAt.After(previousAt))
+			default:
+				older = !generatedAt.After(previousAt)
+			}
+			if older {
+				if p.OnError != nil {
+					p.OnError(ErrProtectedSnapshotStale)
+				}
+				return ErrProtectedSnapshotStale
+			}
+		}
+	}
 	p.applySnapshot(snap)
 	return nil
+}
+
+func (p *ProtectedAssetsPoller) waitForRegistration(ctx context.Context) error {
+	for !telemetry.GlobalReady().Snapshot().Registered {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return nil
+}
+
+// WaitReady blocks until the first valid protected-assets snapshot has
+// been applied or ctx is cancelled. Poll failures intentionally do not
+// return from this method: 401/503 and transport failures keep cleanup
+// behind the barrier until a later poll succeeds.
+func (p *ProtectedAssetsPoller) WaitReady(ctx context.Context) error {
+	if p == nil {
+		return errors.New("worker.ProtectedAssetsPoller.WaitReady: nil poller")
+	}
+	if p.readyCh == nil {
+		return errors.New("worker.ProtectedAssetsPoller.WaitReady: barrier is not initialized")
+	}
+	select {
+	case <-p.readyCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// IsReady reports whether at least one valid snapshot has been applied.
+func (p *ProtectedAssetsPoller) IsReady() bool {
+	if p == nil || p.readyCh == nil {
+		return false
+	}
+	select {
+	case <-p.readyCh:
+		return true
+	default:
+		return false
+	}
 }
 
 // applySnapshot atomically swaps the in-memory snapshot reference.
@@ -224,6 +343,7 @@ func (p *ProtectedAssetsPoller) applySnapshot(snap *api.ProtectedAssetSnapshot) 
 	p.mu.Lock()
 	p.snap = snap
 	p.mu.Unlock()
+	p.readyOnce.Do(func() { close(p.readyCh) })
 	if p.OnSuccess != nil {
 		p.OnSuccess(snap)
 	}
