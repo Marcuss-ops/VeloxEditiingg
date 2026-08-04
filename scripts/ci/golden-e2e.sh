@@ -555,10 +555,11 @@ phase8_verify_storage() {
   assert_count "winning TaskAttempt" 1 "$(sqlite_scalar "SELECT COUNT(*) FROM task_attempts WHERE task_id='${task_id}' AND id='${winner_id}' AND status='SUCCEEDED';")"
   assert_count "non-terminal Tasks" 0 "$(sqlite_scalar "SELECT COUNT(*) FROM tasks WHERE job_id='${JOB_ID}' AND status NOT IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT');")"
 
-  artifact_count="$(sqlite_scalar "SELECT COUNT(*) FROM artifacts WHERE job_id='${JOB_ID}' AND status='READY';")"
-  assert_count "Artifact READY" 1 "${artifact_count}"
+  artifact_count="$(sqlite_scalar "SELECT COUNT(*) FROM artifacts WHERE job_id='${JOB_ID}' AND output_kind='final_video' AND status='READY';")"
+  assert_count "final_video Artifact READY" 1 "${artifact_count}"
+  assert_count "all declared Artifacts READY" 2 "$(sqlite_scalar "SELECT COUNT(*) FROM artifacts WHERE job_id='${JOB_ID}' AND status='READY';")"
   upload_count="$(sqlite_scalar "SELECT COUNT(*) FROM artifact_uploads WHERE job_id='${JOB_ID}' AND status='COMPLETED';")"
-  assert_count "ArtifactUpload COMPLETED" 1 "${upload_count}"
+  assert_count "ArtifactUpload COMPLETED" 2 "${upload_count}"
   assert_count "Artifact STAGING/VERIFYING" 0 "$(sqlite_scalar "SELECT COUNT(*) FROM artifacts WHERE job_id='${JOB_ID}' AND status IN ('STAGING','VERIFYING');")"
   open_uploads="$(sqlite_scalar "SELECT COUNT(*) FROM artifact_uploads WHERE job_id='${JOB_ID}' AND status IN ('CREATED','UPLOADING','RECEIVED','FINALIZING');")"
   assert_count "open ArtifactUploads" 0 "${open_uploads}"
@@ -574,7 +575,7 @@ phase8_verify_storage() {
         LEFT JOIN task_output_declarations d ON d.artifact_id=a.id
         JOIN artifact_uploads au ON au.artifact_id=a.id AND au.status='COMPLETED'
         LEFT JOIN task_attempts ta ON ta.task_id='${task_id}' AND ta.attempt_number=au.attempt_number
-       WHERE a.job_id='${JOB_ID}' AND a.status='READY';"
+       WHERE a.job_id='${JOB_ID}' AND a.output_kind='final_video' AND a.status='READY';"
   )
   [[ -n "${artifact_id}" && -n "${upload_id}" ]] || die "READY artifact identity row missing" 2
   if [[ -n "${decl_attempt}" ]]; then
