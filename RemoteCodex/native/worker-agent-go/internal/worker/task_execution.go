@@ -102,6 +102,17 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	w.logger.Info("[TASK] Executing task %s (job=%s attempt=%s)", taskID, pte.JobID, attemptID)
 
 	report, execErr := w.runJobTask(jobCtx, pte)
+	if execErr == nil {
+		pipelineStatus := pte.ExecutorID
+		if report != nil && report.ExecutorKey != "" {
+			pipelineStatus = report.ExecutorKey
+		}
+		w.logArtifactProtocol("RENDER_COMPLETED", pte, startTime, "", "", "", map[string]interface{}{
+			"executor_id":     pte.ExecutorID,
+			"output_count":    artifactReportOutputCount(report),
+			"pipeline_status": pipelineStatus,
+		})
+	}
 
 	duration := time.Since(startTime)
 

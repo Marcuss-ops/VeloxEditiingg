@@ -29,6 +29,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"time"
 
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
@@ -41,6 +42,7 @@ import (
 
 // submitTaskResult sends a typed pb.TaskResult via the transport.
 func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution, taskID, attemptID string, report *taskrunner.TaskExecutionReport, execErr error) {
+	resultStartedAt := time.Now()
 	status := "succeeded"
 	var errorCode, errorDetail string
 	if report != nil && report.Status == "failed" {
@@ -200,12 +202,19 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 
 	if submitErr := w.transport.Send(ctx, resultMsg); submitErr != nil {
 		w.logger.Error("[TASK] Failed to submit TaskResult for %s: %v", taskID, submitErr)
+		w.logArtifactProtocol("TASK_RESULT_SEND_FAILED", pte, resultStartedAt, "", "", "", map[string]interface{}{
+			"status":      status,
+			"report_hash": tr.GetReportHash(),
+			"error":       submitErr.Error(),
+		})
 	} else {
-		artifactCount := 0
-		if report != nil {
-			artifactCount = len(report.Outputs)
-		}
+		artifactCount := artifactReportOutputCount(report)
 		w.logger.Info("[TASK] TaskResult submitted for %s (status: %s, artifacts: %d)", taskID, status, artifactCount)
+		w.logArtifactProtocol("TASK_RESULT_SENT", pte, resultStartedAt, "", "", "", map[string]interface{}{
+			"status":         status,
+			"report_hash":    tr.GetReportHash(),
+			"artifact_count": artifactCount,
+		})
 	}
 }
 

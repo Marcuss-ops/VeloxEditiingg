@@ -40,6 +40,7 @@ import (
 // than a silent no-op — better to fail loud than to leak TaskResults
 // without ever closing the Attempt.
 func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *workerSession) {
+	protocolStartedAt := time.Now()
 	taskID := tr.GetTaskId()
 	jobID := tr.GetJobId()
 	attemptID := tr.GetAttemptId()
@@ -55,6 +56,11 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 
 	log.Printf("[GRPC] Worker %s reported task %s (attempt %s): status=%s code=%q detail=%q, %d output artifacts",
 		workerID, taskID, attemptID, tr.GetStatus(), tr.GetErrorCode(), tr.GetErrorDetail(), len(tr.GetOutputArtifacts()))
+	logArtifactProtocol("TASK_RESULT_RECEIVED", protocolStartedAt, map[string]interface{}{
+		"worker_id": workerID, "job_id": jobID, "task_id": taskID, "attempt_id": attemptID,
+		"lease_id": leaseID, "status": tr.GetStatus(), "report_hash": tr.GetReportHash(),
+		"artifact_count": len(tr.GetOutputArtifacts()),
+	})
 
 	if h.ingestionSvc == nil {
 		log.Printf("[GRPC] TaskResult from worker %s REJECTED — ingestionSvc not wired (boot misconfig)", workerID)
@@ -226,6 +232,11 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 	} else {
 		log.Printf("[GRPC] TaskResult ingest for task=%s done: closed=%v artNew=%d artSkip=%d jobXn=%v jobStatus=%q",
 			taskID, res.AttemptClosed, res.ArtifactsNew, res.ArtifactsSkips, res.JobTransitioned, res.JobNewStatus)
+		logArtifactProtocol("TASK_RESULT_INGESTED", protocolStartedAt, map[string]interface{}{
+			"worker_id": workerID, "job_id": jobID, "task_id": taskID, "attempt_id": attemptID,
+			"lease_id": leaseID, "status": tr.GetStatus(), "report_hash": tr.GetReportHash(),
+			"artifact_count": len(tr.GetOutputArtifacts()), "attempt_closed": res.AttemptClosed,
+		})
 		// worker_task_runtime is a volatile projection. The canonical
 		// TaskResult ingest has now closed this attempt, so remove the row
 		// immediately instead of waiting for a subsequent heartbeat. This
@@ -254,6 +265,15 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 		}
 		if !safeSend(sess.sendCh, &outboundMessage{Envelope: ackEnv}) {
 			log.Printf("[GRPC] sendCh full/closed for TaskResultAck to worker %s", workerID)
+			logArtifactProtocol("TASK_RESULT_ACK_SEND_FAILED", protocolStartedAt, map[string]interface{}{
+				"worker_id": workerID, "job_id": jobID, "task_id": taskID, "attempt_id": attemptID,
+				"lease_id": leaseID, "error": "send channel unavailable",
+			})
+			return
 		}
+		logArtifactProtocol("TASK_RESULT_ACK_SENT", protocolStartedAt, map[string]interface{}{
+			"worker_id": workerID, "job_id": jobID, "task_id": taskID, "attempt_id": attemptID,
+			"lease_id": leaseID, "ack_error": ackError,
+		})
 	}
 }

@@ -17,6 +17,7 @@ import (
 const masterStreamTransportID = "master-stream.v1"
 
 func (h *Handler) handleTaskOutputDeclared(workerID string, msg *pb.TaskOutputDeclared, sess *workerSession) {
+	protocolStartedAt := time.Now()
 	if h.completionCoord == nil || h.completionStore == nil || h.chunkedUploadSvc == nil || h.masterURL == "" {
 		log.Printf("[GRPC] TaskOutputDeclared from worker %s rejected: completion protocol is not wired", workerID)
 		return
@@ -114,10 +115,22 @@ func (h *Handler) handleTaskOutputDeclared(workerID string, msg *pb.TaskOutputDe
 	}
 	if !safeSend(sess.sendCh, &outboundMessage{Envelope: env}) {
 		log.Printf("[GRPC] TaskOutputDeclared task=%s plan send failed", msg.GetTaskId())
+		logArtifactProtocol("ARTIFACT_UPLOAD_PLAN_SEND_FAILED", protocolStartedAt, map[string]interface{}{
+			"worker_id": workerID, "job_id": msg.GetJobId(), "task_id": msg.GetTaskId(),
+			"attempt_id": msg.GetAttemptId(), "lease_id": msg.GetLeaseId(), "commit_id": plan.CommitID,
+			"error": "send channel unavailable",
+		})
+		return
 	}
+	logArtifactProtocol("ARTIFACT_UPLOAD_PLAN_SENT", protocolStartedAt, map[string]interface{}{
+		"worker_id": workerID, "job_id": msg.GetJobId(), "task_id": msg.GetTaskId(),
+		"attempt_id": msg.GetAttemptId(), "lease_id": msg.GetLeaseId(), "commit_id": plan.CommitID,
+		"target_count": len(targets),
+	})
 }
 
 func (h *Handler) handleArtifactUploadCompleted(workerID string, msg *pb.ArtifactUploadCompleted, sess *workerSession) {
+	protocolStartedAt := time.Now()
 	if h.completionCoord == nil || h.completionStore == nil || h.chunkedUploadSvc == nil || msg == nil {
 		return
 	}
@@ -131,6 +144,11 @@ func (h *Handler) handleArtifactUploadCompleted(workerID string, msg *pb.Artifac
 		log.Printf("[GRPC] ArtifactUploadCompleted upload=%s lookup failed: %v", msg.GetUploadId(), err)
 		return
 	}
+	logArtifactProtocol("ARTIFACT_COMPLETION_RECEIVED", protocolStartedAt, map[string]interface{}{
+		"worker_id": workerID, "task_id": b.TaskID, "attempt_id": b.AttemptID, "lease_id": b.LeaseID,
+		"commit_id": b.CommitID, "artifact_id": b.ArtifactID, "upload_id": b.UploadID,
+		"uploaded_bytes": msg.GetUploadedBytes(),
+	})
 	if err := h.completionCoord.CompleteUpload(ctxForTaskSession(sess), completion.CompleteUploadCommand{
 		Fence:    completion.FenceTuple{TaskID: b.TaskID, AttemptID: b.AttemptID, WorkerID: workerID, LeaseID: b.LeaseID, Revision: b.Revision},
 		UploadID: b.UploadID, UploadedSizeBytes: msg.GetUploadedBytes(), WorkerSHA256: msg.GetWorkerSha256(), ServerSHA256: session.ReceivedSHA256,
@@ -143,6 +161,10 @@ func (h *Handler) handleArtifactUploadCompleted(workerID string, msg *pb.Artifac
 		// Not all outputs may have arrived yet; the last completion retries the
 		// same idempotent commit path and emits the ack.
 		log.Printf("[GRPC] ArtifactUploadCompleted upload=%s awaiting commit: %v", b.UploadID, err)
+		logArtifactProtocol("TASK_COMMIT_WAITING", protocolStartedAt, map[string]interface{}{
+			"worker_id": workerID, "job_id": "", "task_id": b.TaskID, "attempt_id": b.AttemptID,
+			"lease_id": b.LeaseID, "commit_id": b.CommitID, "upload_id": b.UploadID, "error": err.Error(),
+		})
 		return
 	}
 	ack := &pb.MasterToWorkerEnvelope{
@@ -156,5 +178,14 @@ func (h *Handler) handleArtifactUploadCompleted(workerID string, msg *pb.Artifac
 	}
 	if !safeSend(sess.sendCh, &outboundMessage{Envelope: ack}) {
 		log.Printf("[GRPC] ArtifactUploadCompleted task=%s ack send failed", b.TaskID)
+		logArtifactProtocol("TASK_COMMIT_ACK_SEND_FAILED", protocolStartedAt, map[string]interface{}{
+			"worker_id": workerID, "job_id": result.JobID, "task_id": b.TaskID, "attempt_id": b.AttemptID,
+			"lease_id": b.LeaseID, "commit_id": b.CommitID, "error": "send channel unavailable",
+		})
+		return
 	}
+	logArtifactProtocol("TASK_COMMIT_ACK_SENT", protocolStartedAt, map[string]interface{}{
+		"worker_id": workerID, "job_id": result.JobID, "task_id": b.TaskID, "attempt_id": b.AttemptID,
+		"lease_id": b.LeaseID, "commit_id": b.CommitID,
+	})
 }
