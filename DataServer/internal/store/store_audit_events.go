@@ -2,12 +2,24 @@ package store
 
 import (
 	"context"
-	"github.com/google/uuid"
 	"time"
+
+	"github.com/google/uuid"
 	"velox-server/internal/audittrail"
 )
 
 func (s *SQLiteStore) AppendAuditEvent(ctx context.Context, event audittrail.Event) error {
+	return s.insertAuditEvent(ctx, event, false)
+}
+
+// AppendAuditEventIdempotent appends an audit event unless the deterministic
+// event ID already exists. It never updates or deletes an existing event, so
+// retries of an operator action remain append-only and produce one record.
+func (s *SQLiteStore) AppendAuditEventIdempotent(ctx context.Context, event audittrail.Event) error {
+	return s.insertAuditEvent(ctx, event, true)
+}
+
+func (s *SQLiteStore) insertAuditEvent(ctx context.Context, event audittrail.Event, ignoreExisting bool) error {
 	if event.ID == "" {
 		event.ID = uuid.NewString()
 	}
@@ -17,7 +29,11 @@ func (s *SQLiteStore) AppendAuditEvent(ctx context.Context, event audittrail.Eve
 	if event.MetadataJSON == "" {
 		event.MetadataJSON = "{}"
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO audit_events
+	verb := "INSERT"
+	if ignoreExisting {
+		verb = "INSERT OR IGNORE"
+	}
+	_, err := s.db.ExecContext(ctx, verb+` INTO audit_events
 		(id, occurred_at, actor_type, actor_id, action, resource_type, resource_id, request_id, trace_id, before_hash, after_hash, metadata_json)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, event.ID, event.OccurredAt.UTC().Format(time.RFC3339Nano), event.ActorType, event.ActorID, event.Action, event.ResourceType, event.ResourceID, event.RequestID, event.TraceID, event.BeforeHash, event.AfterHash, audittrail.RedactMetadata(event.MetadataJSON))
 	return err

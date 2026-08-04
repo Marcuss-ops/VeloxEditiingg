@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"velox-server/internal/audittrail"
+	"velox-server/internal/config"
+	drivecleanup "velox-server/internal/drivecleanup"
+	driveintegration "velox-server/internal/integrations/drive"
 	"velox-server/internal/store"
 )
 
@@ -31,8 +34,12 @@ func main() {
 func run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprintln(stderr, "usage: velox-admin duplicate-delivery-manifest --db PATH [--output PATH] [--dry-run]")
+		fmt.Fprintln(stderr, "       velox-admin cleanup-drive-duplicates --db PATH --manifest PATH (--dry-run|--apply) [--actor ID]")
 		fmt.Fprintln(stderr, "       velox-admin reconcile-stale-executions --db PATH (--dry-run|--apply) [--output PATH] [--limit N] [--actor ID]")
 		return nil
+	}
+	if args[0] == "cleanup-drive-duplicates" {
+		return runDriveDuplicateCleanup(args[1:], stdout, stderr)
 	}
 	if args[0] == "reconcile-stale-executions" {
 		return runStaleExecutionReconcile(args[1:], stdout, stderr)
@@ -102,6 +109,84 @@ func run(args []string, stdout, stderr io.Writer) error {
 		MetadataJSON: string(metadata),
 	}); err != nil {
 		return fmt.Errorf("append manifest audit event: %w", err)
+	}
+	return nil
+}
+
+type driveCleanupClient struct{ service *driveintegration.Service }
+
+func (c driveCleanupClient) GetFileMetadata(ctx context.Context, fileID string) (*drivecleanup.FileMetadata, error) {
+	file, err := c.service.GetFileMetadata(ctx, fileID)
+	if err != nil {
+		return nil, err
+	}
+	if file == nil {
+		return nil, nil
+	}
+	return &drivecleanup.FileMetadata{ID: file.ID}, nil
+}
+
+func (c driveCleanupClient) DeleteFile(ctx context.Context, fileID string) error {
+	return c.service.DeleteFile(ctx, fileID)
+}
+
+func runDriveDuplicateCleanup(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("cleanup-drive-duplicates", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	dbPath := fs.String("db", "", "SQLite database path")
+	manifestPath := fs.String("manifest", "", "JSON duplicate-delivery manifest")
+	dryRun := fs.Bool("dry-run", false, "verify and report without deleting Drive files")
+	apply := fs.Bool("apply", false, "verify canonical files and trash duplicate Drive files")
+	actor := fs.String("actor", "velox-admin", "audit actor identifier")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*dbPath) == "" || strings.TrimSpace(*manifestPath) == "" {
+		return fmt.Errorf("--db and --manifest are required")
+	}
+	if *dryRun == *apply {
+		return fmt.Errorf("exactly one of --dry-run or --apply is required")
+	}
+	raw, err := os.ReadFile(*manifestPath)
+	if err != nil {
+		return fmt.Errorf("read manifest: %w", err)
+	}
+	manifest, err := drivecleanup.ParseManifest(raw)
+	if err != nil {
+		return err
+	}
+	db, err := store.NewSQLiteStore(*dbPath)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+
+	var client drivecleanup.DriveClient
+	if *apply {
+		cfg := config.FromEnv()
+		service, serviceErr := driveintegration.NewService(&driveintegration.ServiceConfig{
+			ClientID: cfg.Drive.ClientID, ClientSecret: cfg.Drive.ClientSecret,
+			RedirectURI: cfg.Drive.RedirectURI, TokensDir: cfg.Drive.TokensDir,
+		})
+		if serviceErr != nil {
+			return fmt.Errorf("initialize Drive service: %w", serviceErr)
+		}
+		if err := service.LoadFirstToken(); err != nil {
+			return fmt.Errorf("load Drive token: %w", err)
+		}
+		client = driveCleanupClient{service: service}
+	}
+	result, err := drivecleanup.Apply(context.Background(), client, db, manifest, *dryRun, *actor, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	encoded, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode cleanup result: %w", err)
+	}
+	encoded = append(encoded, '\n')
+	if _, err := stdout.Write(encoded); err != nil {
+		return fmt.Errorf("write cleanup result: %w", err)
 	}
 	return nil
 }
