@@ -38,7 +38,7 @@ four-step migration chain:
 
 | Migration | What it does | Forward-only? |
 |---|---|---|
-| `090_drop_youtube_domain.sql` (sqlite) / `010_drop_youtube_domain.sql` (postgres) | DROPs all 10 `youtube_*` tables + the 3 historical `youtube_*` columns on `calendar_events` / `dark_editor_folders` | YES |
+| `090_drop_youtube_domain.sql` (sqlite) / `010_drop_youtube_domain.sql` (postgres) | DROPs all 10 `youtube_*` tables + the 2 historical `youtube_*` columns on `calendar_events` | YES |
 | `091_opaque_destination.sql` | DROPs `account_id` / `channel_id` / `language` from `delivery_destinations`; ADDs `social_destination_id TEXT` (nullable, fail-closed) | YES |
 | `092_rename_social_to_external_destination_id.sql` | ADDs `external_destination_id TEXT`; `UPDATE SET external_destination_id = COALESCE(social_destination_id, '')`; DROPs `social_destination_id` | YES |
 | `093_residuo4_closure_marker.sql` | Idempotent `json_insert` of `$.residuo4_closed_at` ISO-8601 string into `configuration_json` for every row whose JSON is well-formed | YES (idempotent) |
@@ -752,7 +752,7 @@ Run the canonical YouTube-residue audit script on the live DB:
 | 0 | `CLEAN` — no `youtube_*` tables or historical `youtube_*` columns remain | None; §3.2 |
 | 1 | `RESIDUAL_FOUND` — see reported lines; remediation hint printed at the bottom of stdout | Re-run Velox so Migration 090 re-applies on next boot; reload pod |
 | 2 | `DB_NOT_FOUND` — path missing, unreadable, or empty | Verify `VELOX_DATA_DIR` env mounting; verify `velox.db` file is on disk |
-| 3 | `NOT_VELOX_SCHEMA` — DB lacks canonical Velox tables (`jobs`, `artifacts`, `job_deliveries`, `calendar_events`, `dark_editor_folders`) | This is not a Velox DB; abort |
+| 3 | `NOT_VELOX_SCHEMA` — DB lacks canonical Velox tables (`jobs`, `artifacts`, `job_deliveries`, `calendar_events`) | This is not a Velox DB; abort |
 | 4 | `ARGV_OR_TOOL` — `sqlite3` CLI missing from PATH or wrong invocation | Install `sqlite3 ≥ 3.16`; verify arg count |
 
 If exit code is non-zero, fix the underlying issue before §3.2.

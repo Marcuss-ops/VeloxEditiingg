@@ -59,8 +59,8 @@ type scopeDenialBody struct {
 }
 
 // scopedHint is the operator-facing remediation string baked into the
-// 403 body. Keep it stable: the BFF may surface it verbatim to the
-// editor SPA's "why was this rejected?" UI.
+// 403 body. Keep it stable: the BFF may surface it verbatim to its
+// client UI's "why was this rejected?" view.
 const scopedHint = "the InstaEdit BFF must re-mint the control JWT with at least the required_scopes; this is a server-side misconfiguration (or a Velox route demanding a higher grant than the BFF is currently issuing for this operation)."
 
 // Middleware returns a Gin middleware that verifies the InstaEdit JWT

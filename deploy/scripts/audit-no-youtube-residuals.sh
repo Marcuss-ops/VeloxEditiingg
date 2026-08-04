@@ -10,8 +10,8 @@
 #
 # This script probes a Velox SQLite DB and reports any leftover
 # YouTube_* tables or youtube_* columns on the historically-leaking
-# tables `calendar_events` and `dark_editor_folders`. It NEVER writes to
-# the database; it is safe to invoke on the live production DB.
+# table `calendar_events`. It NEVER writes to the database; it is safe
+# to invoke on the live production DB.
 #
 # Exit codes
 #   0  CLEAN              — no YouTube tables or columns remain
@@ -27,7 +27,7 @@
 #   - DataServer/internal/store/migrations/sqlite/090_drop_youtube_domain.sql
 #   - DataServer/internal/store/migrations/testdata/090_drop_youtube_domain.sql
 #   - DataServer/internal/store/migrations/migrations_schema_test.go (test
-#     pinning that 090 drops the tables + the 3 historical columns)
+#     pinning that 090 drops the tables + the historical columns)
 #   - DataServer/internal/store/migrations/migrations_integration_test.go
 #     (end-to-end test asserting zero YouTube state on a fresh DB)
 # ────────────────────────────────────────────────────────────────────────────
@@ -53,11 +53,11 @@ fi
 # Sanity: must look like a Velox schema. We probe for the canonical
 # permanent tables; if any are missing the DB is either corrupt, a
 # different product, or a non-Velox SQLite file.
-canonical_found=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('jobs','artifacts','job_deliveries','calendar_events','dark_editor_folders');")
-if [[ "$canonical_found" -lt 5 ]]; then
+canonical_found=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('jobs','artifacts','job_deliveries','calendar_events');")
+if [[ "$canonical_found" -lt 4 ]]; then
   echo "FATAL: DB at $DB_PATH does not look like a Velox schema" >&2
-  echo "(found $canonical_found/5 canonical tables; expected all of: jobs, artifacts," >&2
-  echo " job_deliveries, calendar_events, dark_editor_folders)" >&2
+  echo "(found $canonical_found/4 canonical tables; expected all of: jobs, artifacts," >&2
+  echo " job_deliveries, calendar_events)" >&2
   exit 3
 fi
 
@@ -68,11 +68,9 @@ fi
 residual_tables=$(sqlite3 -separator $'\n' "$DB_PATH" \
   "SELECT name FROM sqlite_master WHERE type='table' AND lower(name) LIKE 'youtube\_%' ESCAPE '\\' ORDER BY name;")
 
-# Probe 2: youtube_* columns on the two historically-leaking tables.
+# Probe 2: youtube_* columns on the historically-leaking table.
 ce_columns=$(sqlite3 -separator $'\n' "$DB_PATH" \
   "SELECT name FROM pragma_table_info('calendar_events') WHERE lower(name) LIKE 'youtube\_%' ESCAPE '\\' ORDER BY name;")
-df_columns=$(sqlite3 -separator $'\n' "$DB_PATH" \
-  "SELECT name FROM pragma_table_info('dark_editor_folders') WHERE lower(name) LIKE 'youtube\_%' ESCAPE '\\' ORDER BY name;")
 
 # Compose report.
 residual_count=0
@@ -96,15 +94,6 @@ if [[ -n "$ce_columns" ]]; then
   residual_count=$((residual_count + $(printf '%s\n' "$ce_columns" | grep -c . || true)))
 fi
 
-if [[ -n "$df_columns" ]]; then
-  blk="RESIDUAL COLUMNS on dark_editor_folders (should have been dropped by migration 090_drop_youtube_domain.sql):\n"
-  while IFS= read -r c; do
-    blk+="  - dark_editor_folders.${c}\n"
-  done <<< "$df_columns"
-  report+="$blk"
-  residual_count=$((residual_count + $(printf '%s\n' "$df_columns" | grep -c . || true)))
-fi
-
 if [[ "$residual_count" -gt 0 ]]; then
   printf '%s' "$report"
   printf '\nTOTAL RESIDUALS: %d\n' "$residual_count"
@@ -120,7 +109,7 @@ if [[ "$residual_count" -gt 0 ]]; then
   DataServer/internal/store/migrations/migrations_integration_test.go
   (TestIntegration_MigrationRunner_EndToEnd, phase 4) and the schema
   test at migrations_schema_test.go (TestMigration090_YouTubeDomainDropped)
-  which additionally asserts the 3 historical columns are gone.
+  which additionally asserts the historical columns are gone.
 
 REMEDIATION
   exit 1

@@ -466,7 +466,7 @@ Dopo le fix di codice, il sistema è stato deployato e testato live con un worke
 - Auth (`VELOX_ADMIN_TOKEN`)
 - Worker management (`VELOX_MAX_JOB_ATTEMPTS`, `VELOX_WORKER_BUNDLE_DIR`)
 - TLS/gRPC mTLS (commentati, con istruzioni)
-- Drive, YouTube, S3, NVIDIA (opzionali)
+- Drive, YouTube, S3 (opzionali)
 
 #### 2. Migration Checksum Mismatch (×3)
 

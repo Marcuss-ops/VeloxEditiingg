@@ -27,19 +27,20 @@ import (
 	"log"
 )
 
-// legacyChecksums pins the exact checksums of the pre-Dark-Editor-exit
-// variants of the historical migrations that were deliberately amended
-// when the Dark Editor domain was removed from Velox:
+// legacyChecksums pins the exact checksum of the pre-Dark-Editor-exit
+// variant of migration 001_initial.sql, which was deliberately amended
+// when the Dark Editor domain was removed from Velox: it no longer
+// creates the dark_editor_* tables (fresh databases never see them).
 //
-//   - 001_initial.sql no longer creates the dark_editor_* tables
-//     (fresh databases never see them);
-//
-// Installations that already applied the ORIGINAL variant hold this
-// legacy checksum in schema_migrations. Accepting exactly this value
-// preserves their upgrade path to 128 without weakening checksum
-// validation for any other migration or any future edit — a recorded
-// checksum that matches neither the on-disk content nor this allowlist
-// still fails boot. See migrations/README.md §Dark Editor domain exit.
+// Installations that already applied the ORIGINAL 001 hold this legacy
+// checksum in schema_migrations. Accepting exactly this value preserves
+// their upgrade path to the forward-only 128_drop_dark_editor_domain.sql
+// without weakening checksum validation for any other migration or any
+// future edit — a recorded checksum that matches neither the on-disk
+// content nor this allowlist still fails boot. Migration 090 was NOT
+// amended (its historical dark_editor_folders.youtube_group DROP COLUMN
+// is tolerated as a no-op on fresh schemas by apply.go). See
+// migrations/README.md §Dark Editor domain exit.
 var legacyChecksums = map[int]map[string]struct{}{
 	1: {
 		// sha256 of the ORIGINAL 001_initial.sql (pre dark-editor removal).

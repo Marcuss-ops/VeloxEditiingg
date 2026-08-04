@@ -130,36 +130,28 @@ func TestRunMigrations_ChecksumMismatch(t *testing.T) {
 	}
 }
 
-// TestRunMigrations_LegacyDarkEditorChecksumsTolerated verifies the
+// TestRunMigrations_LegacyInitialChecksumTolerated verifies the
 // sanctioned one-time exception that lets installs which applied the
-// ORIGINAL (pre-Dark-Editor-exit) 001 and 090 migrations boot against
-// the amended files: a recorded checksum equal to the exact legacy
-// values is tolerated, while any OTHER tamper is still rejected.
-func TestRunMigrations_LegacyDarkEditorChecksumsTolerated(t *testing.T) {
+// ORIGINAL (pre-Dark-Editor-exit) migration 001 boot against the
+// amended file: a recorded checksum equal to the exact legacy value is
+// tolerated, while any OTHER tamper is still rejected.
+func TestRunMigrations_LegacyInitialChecksumTolerated(t *testing.T) {
 	db := openTestDB(t)
 
 	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
 		t.Fatalf("first RunMigrations failed: %v", err)
 	}
 
-	// Simulate a pre-existing install that applied the ORIGINAL 001 and
-	// 090 contents: rewrite their recorded checksums to the legacy values.
-	for _, tc := range []struct {
-		version  int
-		checksum string
-	}{
-		{1, "90d2c1512ac2954c7b201c62b2abe3ba2b9f7b478c88880e56d64906b7deee8d"},
-		{90, "0fde3e988fe74b596b42aaa8f920eb6e64ba0dbd21d67a9585d8c5c538593f4b"},
-	} {
-		if _, err := db.Exec(`UPDATE schema_migrations SET checksum = ? WHERE version = ?`, tc.checksum, tc.version); err != nil {
-			t.Fatalf("set legacy checksum for v%d: %v", tc.version, err)
-		}
+	// Simulate a pre-existing install that applied the ORIGINAL 001
+	// content: rewrite its recorded checksum to the legacy value.
+	if _, err := db.Exec(`UPDATE schema_migrations SET checksum = '90d2c1512ac2954c7b201c62b2abe3ba2b9f7b478c88880e56d64906b7deee8d' WHERE version = 1`); err != nil {
+		t.Fatalf("set legacy checksum for v1: %v", err)
 	}
 
-	// Second run must succeed: the legacy checksums are accepted and the
+	// Second run must succeed: the legacy checksum is accepted and the
 	// pending chain (091..128) is still applied.
 	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
-		t.Fatalf("expected legacy checksums to be tolerated, got: %v", err)
+		t.Fatalf("expected legacy checksum to be tolerated, got: %v", err)
 	}
 
 	// An unrelated version tampered to a value outside the allowlist must

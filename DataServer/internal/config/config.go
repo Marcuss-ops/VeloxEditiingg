@@ -40,7 +40,6 @@ func FromEnv() *Config {
 	ansible := loadAnsibleConfig(runtime.DataDir)
 	frontend := loadFrontendConfig()
 	render := loadRenderConfig()
-	nvidia := loadNVIDIAConfig()
 
 	pipeline := loadPipelineConfig()
 	m2m := loadM2MConfig()
@@ -58,7 +57,6 @@ func FromEnv() *Config {
 		Ansible:                ansible,
 		Frontend:               frontend,
 		Render:                 render,
-		NVIDIA:                 nvidia,
 		Pipeline:               pipeline,
 		AllowedExternalDomains: allowedDomains,
 	}

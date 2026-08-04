@@ -302,12 +302,6 @@ type RenderConfig struct {
 	RemoteEnginePollInterval int
 }
 
-// NVIDIAConfig holds NVIDIA AI settings.
-type NVIDIAConfig struct {
-	APIKey  string
-	TextURL string
-}
-
 // Config is the top-level configuration.
 type Config struct {
 	// Sub-configs (single source of truth for all settings)
@@ -323,7 +317,6 @@ type Config struct {
 	Ansible   AnsibleConfig
 	Frontend  FrontendConfig
 	Render    RenderConfig
-	NVIDIA    NVIDIAConfig
 	Pipeline  PipelineConfig
 
 	// AllowedExternalDomains is the explicit allowlist applied to

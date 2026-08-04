@@ -36,6 +36,15 @@ full_tree_patterns=(
   'services/joblifecycle'             # Removed dead wrapper (Ondata 1)
   'services/progress'                 # Removed dead wrapper (Ondata 1)
   'handlers/web/darkeditor'           # Removed dead handler (Ondata 1)
+  # Dark Editor subsystem removed from Velox (worker-only repo) — symbols,
+  # routes, proxy path, and storage domain must not reappear.
+  'DarkeditorRouteDeps'               # Router dep struct (dark editor)
+  'RouterBundle\.Darkeditor'          # Router bundle field (dark editor)
+  'DarkHandler'                       # InstaEdit route dep (dark editor)
+  'registerDarkeditorRoutes'          # Route registrar (dark editor)
+  'store_darkeditor_'                 # SQLite store files (dark editor)
+  'darkeditor/processors'             # Image/AI processors (dark editor)
+  'VELOX_DARK_EDITOR_'                # Dark editor env vars
   # Generic utility packages — use domain-specific packages.
   'internal/util'                     # Removed; use identity/, platform/clock/
   # PR #8: workflow package removed — write method calls must not reappear.

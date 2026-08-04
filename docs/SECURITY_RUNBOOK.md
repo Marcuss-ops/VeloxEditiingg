@@ -69,7 +69,6 @@ These are operator-populated, never committed in plaintext form (the
   YouTube-domain env set. The full YouTube-specific rotation story is
   now the Social API repo's concern, not Velox's.)
 - `WORKER_TOKEN` / `VELOX_WORKER_TOKEN` (per-host worker credential)
-- `VELOX_NVIDIA_API_KEY` (optional, only when GPU inference used)
 
 ### 2.5 GitHub / Container Registry
 
@@ -125,7 +124,7 @@ re-used for a different project.
 `VELOX_ADMIN_TOKEN`, `WORKER_TOKEN`, `SOCIAL_API_TOKEN`
 (populated via `vault_velox_social_api_token` in the ansible vault —
 see `deploy/group_vars/vault.yml.example`),
-`VELOX_REMOTE_ENGINE_TOKEN`, `VELOX_NVIDIA_API_KEY`: operator-managed
+`VELOX_REMOTE_ENGINE_TOKEN`: operator-managed
 under `deploy/group_vars/vault.yml` (ansible-vault-encrypted). Use
 `ansible-vault rekey` to rotate. No external issuer involved.
 
