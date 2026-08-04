@@ -43,7 +43,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// submitTaskResult sends a typed pb.TaskResult via the transport.
+// submitTaskResult durably sends a typed pb.TaskResult. Terminal cleanup is
+// signaled by handleTaskResultAck after the master ACK deletes the durable row.
 func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution, taskID, attemptID string, report *taskrunner.TaskExecutionReport, execErr error) {
 	resultStartedAt := time.Now()
 	status := "succeeded"
@@ -210,6 +211,9 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 		w.logArtifactProtocol("TASK_RESULT_SENT", pte, resultStartedAt, "", "", "", map[string]interface{}{
 			"status": status, "report_hash": tr.GetReportHash(), "artifact_count": artifactCount,
 		})
+		// A direct send is retained for legacy/headless fixtures, but it is
+		// not an authoritative terminal confirmation because no TaskResultAck
+		// exists on this path.
 		return
 	}
 	if err := w.persistTaskResult(ctx, tr); err != nil {

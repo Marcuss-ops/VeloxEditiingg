@@ -140,8 +140,9 @@ func TestTaskResultOutbox_DueSchedulingAndAckDeletion(t *testing.T) {
 	if len(entries) != 0 {
 		t.Fatalf("entries before retry = %d, want 0", len(entries))
 	}
-	if err := store.DeleteTaskResultsForAttempt(ctx, "task-2", "attempt-2"); err != nil {
-		t.Fatalf("ACK delete: %v", err)
+	deleted, err := store.DeleteTaskResultsForAttempt(ctx, "task-2", "attempt-2")
+	if err != nil || !deleted {
+		t.Fatalf("ACK delete: deleted=%v err=%v; want true", deleted, err)
 	}
 	count, err := store.PendingTaskResultCount(ctx)
 	if err != nil || count != 0 {

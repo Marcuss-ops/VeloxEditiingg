@@ -163,10 +163,17 @@ func (w *Worker) handleTaskResultAck(ack *pb.TaskResultAck) {
 		w.logger.Warn("[TASK_RESULT_OUTBOX] non-terminal TaskResultAck retained for retry task=%s attempt=%s error=%q", ack.GetTaskId(), ack.GetAttemptId(), ack.GetError())
 		return
 	}
-	if err := w.outputSpool.DeleteTaskResultsForAttempt(context.Background(), ack.GetTaskId(), ack.GetAttemptId()); err != nil {
+	deleted, err := w.outputSpool.DeleteTaskResultsForAttempt(context.Background(), ack.GetTaskId(), ack.GetAttemptId())
+	if err != nil {
 		w.logger.Warn("[TASK_RESULT_OUTBOX] ACK cleanup failed task=%s attempt=%s: %v", ack.GetTaskId(), ack.GetAttemptId(), err)
 		return
 	}
+	if !deleted {
+		return
+	}
+	// This is the authoritative terminal boundary, including ACKs that
+	// arrive after executeTask's synchronous wait or after a reconnect.
+	w.signalTaskTerminal()
 	w.logger.Info("[TASK_RESULT_OUTBOX] TaskResultAck received task=%s attempt=%s error=%q", ack.GetTaskId(), ack.GetAttemptId(), ack.GetError())
 }
 

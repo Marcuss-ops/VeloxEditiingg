@@ -356,9 +356,9 @@ func (w *Worker) APIClient() *api.Client {
 }
 
 // JobDone returns a notification channel which receives a best-effort signal
-// after each task reaches a terminal path. The channel is intentionally
-// buffered/coalescing: cleanup needs a prompt wake-up, not one event per DAG
-// subtask.
+// after the worker receives terminal confirmation for a task result. The
+// channel is intentionally buffered/coalescing: cleanup needs a prompt
+// wake-up, not one event per DAG subtask.
 func (w *Worker) JobDone() <-chan struct{} {
 	if w == nil {
 		return nil
@@ -376,7 +376,10 @@ func (w *Worker) AttachClipCache(c *workercache.Cache) {
 	w.clipCache = c
 }
 
-func (w *Worker) signalJobDone() {
+// signalTaskTerminal wakes the cache cleanup loop only after the master has
+// acknowledged a terminal TaskResult. Render completion, artifact upload,
+// and local task teardown must not signal cleanup on their own.
+func (w *Worker) signalTaskTerminal() {
 	if w == nil || w.jobDone == nil {
 		return
 	}

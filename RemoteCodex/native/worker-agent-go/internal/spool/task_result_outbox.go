@@ -182,14 +182,19 @@ func (s *Store) DeleteTaskResult(ctx context.Context, taskID, attemptID, reportH
 // DeleteTaskResultsForAttempt is the restart-safe ACK path. TaskResultAck
 // intentionally does not echo report_hash; a master ACK for this canonical
 // attempt therefore clears any local replay of that attempt.
-func (s *Store) DeleteTaskResultsForAttempt(ctx context.Context, taskID, attemptID string) error {
+func (s *Store) DeleteTaskResultsForAttempt(ctx context.Context, taskID, attemptID string) (bool, error) {
 	if s == nil || s.db == nil {
-		return errors.New("spool.DeleteTaskResultsForAttempt: store is nil")
+		return false, errors.New("spool.DeleteTaskResultsForAttempt: store is nil")
 	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM task_result_outbox WHERE task_id = ? AND attempt_id = ?`, taskID, attemptID); err != nil {
-		return fmt.Errorf("spool.DeleteTaskResultsForAttempt: %w", err)
+	res, err := s.db.ExecContext(ctx, `DELETE FROM task_result_outbox WHERE task_id = ? AND attempt_id = ?`, taskID, attemptID)
+	if err != nil {
+		return false, fmt.Errorf("spool.DeleteTaskResultsForAttempt: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("spool.DeleteTaskResultsForAttempt: rows affected: %w", err)
+	}
+	return n > 0, nil
 }
 
 // PendingTaskResultCount is used by tests and operator diagnostics.
