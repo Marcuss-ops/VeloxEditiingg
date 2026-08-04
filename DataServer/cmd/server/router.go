@@ -268,7 +268,7 @@ func newRouter(cfg *config.Config, bundle RouterBundle, registry interface {
 	r.Use(accessLogMiddleware())
 	r.Use(addGzipHeaders())
 
-	// ── Module routes (health, workers, drive, ansible, frontend) ──
+	// ── Module routes (health, workers, drive, ansible) ──
 	registry.RegisterRoutes(r)
 
 	// ── Remaining (non-module) routes wired per their own deps bundle ───

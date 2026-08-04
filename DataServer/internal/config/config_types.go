@@ -287,12 +287,6 @@ type AnsibleConfig struct {
 	PlaybookDir string
 }
 
-// FrontendConfig holds SPA and frontend settings.
-type FrontendConfig struct {
-	SPADir       string
-	GradioAppURL string
-}
-
 // RenderConfig holds remote rendering engine settings.
 type RenderConfig struct {
 	RemoteEngineURL          string
@@ -315,7 +309,6 @@ type Config struct {
 	Storage   StorageConfig
 	Drive     DriveConfig
 	Ansible   AnsibleConfig
-	Frontend  FrontendConfig
 	Render    RenderConfig
 	Pipeline  PipelineConfig
 

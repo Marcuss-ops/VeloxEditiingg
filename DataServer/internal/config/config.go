@@ -38,7 +38,6 @@ func FromEnv() *Config {
 	storage := loadStorageConfig()
 	drive := loadDriveConfig(secretsDir, dataDir)
 	ansible := loadAnsibleConfig(runtime.DataDir)
-	frontend := loadFrontendConfig()
 	render := loadRenderConfig()
 
 	pipeline := loadPipelineConfig()
@@ -55,7 +54,6 @@ func FromEnv() *Config {
 		Storage:                storage,
 		Drive:                  drive,
 		Ansible:                ansible,
-		Frontend:               frontend,
 		Render:                 render,
 		Pipeline:               pipeline,
 		AllowedExternalDomains: allowedDomains,

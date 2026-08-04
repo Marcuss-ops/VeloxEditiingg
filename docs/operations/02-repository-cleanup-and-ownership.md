@@ -362,25 +362,24 @@ Prima di spostare file:
 
 ### 9.3 Modifiche core
 
-Dopo la disponibilità del frontend separato:
+Dopo l'estrazione del frontend separato (✅ fatto):
 
-- rimuovere `frontend_standalone/` dal core;
-- rimuovere `DataServer/internal/app/frontend.go`;
-- rimuovere SPA fallback e static file serving;
-- mantenere una landing API minimale soltanto se operativamente utile;
-- configurare CORS tramite config validata, non con host hardcoded nel router;
-- aggiornare Dockerfile master: nessuna dipendenza dal bundle SPA;
-- aggiornare README e deploy.
+- `frontend_standalone/` non fa parte del core;
+- `DataServer/internal/app/frontend.go` è stato rimosso;
+- SPA fallback e static file serving sono stati rimossi dal master;
+- le route API headless e il BFF InstaEdit restano disponibili;
+- il frontend separato consuma i contratti API senza condividere stato o database;
+- Dockerfile, README e deploy non dipendono dal bundle SPA.
 
 ### 9.4 Migrazione sicura
 
-Per una release di transizione è possibile servire il frontend esterno mantenendo il vecchio bundle disabilitato di default. Non mantenere due build pipeline permanenti.
+Il frontend esterno è servito dal proprio repository/deployment e il master non mantiene più un bundle o una pipeline SPA di transizione.
 
 Criteri di completamento:
 
 ```bash
 test ! -d frontend_standalone
-! git grep -n 'VELOX_SPA_DIR\|ServeSPA\|frontend_standalone/web/dist'
+! git grep -n -E 'VELOX_SPA_DIR|VELOX_GRADIO_APP_URL|ServeSPA|FrontendModule|frontend_standalone/web/dist' -- ':!docs/**' ':!CHANGELOG.md' ':!DataServer/internal/store/migrations/**'
 make verify
 ```
 
@@ -462,7 +461,7 @@ git status -sb
 git diff --check
 git grep -n 'intentionally broken\|was dropped' || true
 git grep -n 'internal/obs' || true
-git grep -n 'frontend_standalone/web/dist' || true
+git grep -n -E 'VELOX_SPA_DIR|VELOX_GRADIO_APP_URL|ServeSPA|FrontendModule|frontend_standalone/web/dist' -- ':!docs/**' ':!CHANGELOG.md' ':!DataServer/internal/store/migrations/**' || true
 find . -type d -name node_modules -o -name dist
 for mod in DataServer RemoteCodex/native/worker-agent-go shared; do
   (cd "$mod" && go mod tidy && git diff --exit-code -- go.mod go.sum)

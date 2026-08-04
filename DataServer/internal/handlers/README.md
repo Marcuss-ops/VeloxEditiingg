@@ -2,7 +2,7 @@
 
 La cartella `handlers` è separata per macro-dominio:
 
-- `web`: endpoint e adapter per UI/web layer.
+- `web`: adapter web residui non-UI; il master non serve più una SPA.
 - `server`: logica API/server core.
 - `remote`: orchestrazione worker remoti/ansible.
 
@@ -12,10 +12,7 @@ La cartella `handlers` è separata per macro-dominio:
 handlers/
 ├── README.md
 ├── web/
-│   ├── dashboard/         # Worker dashboard
-│   ├── explorer/          # File explorer
-│   ├── proxy/             # NoRoute handler, compat, landing page
-│   └── spa/               # SPA serving (history fallback)
+│   └── proxy/             # Drive adapter boundary; no SPA/landing fallback
 ├── server/
 │   ├── api/               # Route /api/v1/* (api_v1.go, api_v1_native.go)
 │   ├── analytics/         # Dashboard BI, analytics (10 file)
@@ -45,5 +42,4 @@ handlers/
 - Ogni subpackage mantiene `package <nome>` (es. `package drive`, `package workers`).
 - Gli import usano il nuovo path dominio, ad esempio:
   - `velox-server/internal/handlers/server/drive`
-  - `velox-server/internal/handlers/web/spa`
   - `velox-server/internal/handlers/remote/workers`

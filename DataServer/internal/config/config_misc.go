@@ -103,16 +103,3 @@ func firstNonEmpty(values ...string) string {
 	}
 	return ""
 }
-
-// ── FrontendConfig ─────────────────────────────────────────────────────
-
-func loadFrontendConfig() FrontendConfig {
-	c := FrontendConfig{
-		SPADir:       os.Getenv("VELOX_SPA_DIR"),
-		GradioAppURL: os.Getenv("VELOX_GRADIO_APP_URL"),
-	}
-	if c.GradioAppURL == "" {
-		c.GradioAppURL = "http://127.0.0.1:7860"
-	}
-	return c
-}

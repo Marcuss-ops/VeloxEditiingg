@@ -55,9 +55,6 @@ RemoteCodex/scripts/                    @Marcuss-ops
 RemoteCodex/BUILD_INFO.json             @Marcuss-ops
 RemoteCodex/BUNDLE_HASH.txt             @Marcuss-ops
 
-# ── Frontend (standalone) ───────────────────────────────────────────────────
-frontend_standalone/                    @Marcuss-ops
-
 # ── Shared Go contract ──────────────────────────────────────────────────────
 shared/                                 @Marcuss-ops
 

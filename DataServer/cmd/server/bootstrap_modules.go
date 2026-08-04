@@ -112,7 +112,7 @@ func (a *deliveryPlanResolverAdapter) ResolvePlan(ctx context.Context, jobID, ar
 }
 
 // moduleDeps holds the module-level components built at bootstrap
-// (Drive, Ansible, Frontend) plus the asset-level services that depend
+// (Drive and Ansible) plus the asset-level services that depend
 // on them.
 //
 // PR 1: the canonical Job+Task writer (store.AtomicJobTaskCreator) is
@@ -239,8 +239,6 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 
 	ansibleMod := app.NewAnsibleModule(cfg, cfg.Runtime.DataDir, auth, p.SQLite)
 	registry.Register(ansibleMod)
-
-	registry.Register(app.NewFrontendModule(cfg))
 
 	// ── Observability REST API ─────────────────────────────────────
 	if t.Observability != nil {
