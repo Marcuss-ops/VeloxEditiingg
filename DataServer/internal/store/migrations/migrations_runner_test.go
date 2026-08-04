@@ -110,24 +110,99 @@ func TestRunMigrations_Idempotent(t *testing.T) {
 	}
 }
 
-func TestRunMigrations_IgnoresAppliedRetiredVersion(t *testing.T) {
+func TestRunMigrations_AllowsAuthorizedRetiredVersion(t *testing.T) {
 	db := openTestDB(t)
 	if err := EnsureSchemaTable(db); err != nil {
 		t.Fatalf("ensure schema_migrations table: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (44, 'stub_dark_editor_projects', 'historical-v44-checksum', datetime('now'))`); err != nil {
+	if _, err := db.Exec(`INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (44, 'stub_dark_editor_projects', '40e9918c77bd3cec4e734e51deb95bd4cf43ac73f67904968e01595934d6214f', datetime('now'))`); err != nil {
 		t.Fatalf("seed retired migration version: %v", err)
 	}
 	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
-		t.Fatalf("retired applied migration should not block boot: %v", err)
+		t.Fatalf("authorized retired migration should not block boot: %v", err)
 	}
-	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 44`).Scan(&count); err != nil {
-		t.Fatalf("query retired migration row: %v", err)
+}
+
+func TestRunMigrations_RejectsRetiredVersionWithWrongChecksum(t *testing.T) {
+	db := openTestDB(t)
+	if err := EnsureSchemaTable(db); err != nil {
+		t.Fatalf("ensure schema_migrations table: %v", err)
 	}
-	if count != 1 {
-		t.Fatalf("retired migration row should remain recorded, got %d", count)
+	if _, err := db.Exec(`INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (44, 'stub_dark_editor_projects', 'tampered', datetime('now'))`); err != nil {
+		t.Fatalf("seed tampered retired migration: %v", err)
 	}
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err == nil {
+		t.Fatal("expected retired migration with wrong checksum to fail closed")
+	}
+}
+
+func TestRunMigrations_RejectsUnknownMissingVersion(t *testing.T) {
+	db := openTestDB(t)
+	if err := EnsureSchemaTable(db); err != nil {
+		t.Fatalf("ensure schema_migrations table: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (777, 'unknown_removed_migration', 'tampered', datetime('now'))`); err != nil {
+		t.Fatalf("seed unknown migration version: %v", err)
+	}
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err == nil {
+		t.Fatal("expected unknown missing migration version to fail closed")
+	}
+}
+
+func TestRunMigrations_LegacyV40ChecksumReachesTaskSpecsRepair(t *testing.T) {
+	db := openTestDB(t)
+	if err := EnsureSchemaTable(db); err != nil {
+		t.Fatalf("ensure schema_migrations table: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (40, 'stub_dark_editor_projects', 'b2095b5cf5342e67301c1638c83a4c9f4df7da6e37bb4523de70f8d635e6e4b4', datetime('now'))`); err != nil {
+		t.Fatalf("seed legacy v40 checksum: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE dark_editor_projects (id TEXT PRIMARY KEY, name TEXT, created_at TEXT)`); err != nil {
+		t.Fatalf("seed legacy v40 Dark Editor table: %v", err)
+	}
+	if err := RunMigrations(db, testMigrationsFS, "testdata"); err != nil {
+		t.Fatalf("legacy v40 database should migrate: %v", err)
+	}
+	if tableExists(t, db, "dark_editor_projects") {
+		t.Fatal("legacy Dark Editor table should be removed by migration 128")
+	}
+	if !tableExists(t, db, "task_specs") {
+		t.Fatal("legacy v40 upgrade should restore task_specs")
+	}
+}
+
+func TestRetiredMigrationValidationAcrossStatusAPIs(t *testing.T) {
+	t.Run("authorized retired version", func(t *testing.T) {
+		db := openTestDB(t)
+		if err := EnsureSchemaTable(db); err != nil {
+			t.Fatalf("ensure schema_migrations table: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (44, 'stub_dark_editor_projects', '40e9918c77bd3cec4e734e51deb95bd4cf43ac73f67904968e01595934d6214f', datetime('now'))`); err != nil {
+			t.Fatalf("seed retired migration: %v", err)
+		}
+		if _, err := PendingVersions(db, testMigrationsFS, "testdata"); err != nil {
+			t.Fatalf("PendingVersions should allow authorized retired version: %v", err)
+		}
+		if _, err := ListMigrationStatus(db, testMigrationsFS, "testdata"); err != nil {
+			t.Fatalf("ListMigrationStatus should allow authorized retired version: %v", err)
+		}
+	})
+
+	t.Run("unknown version rejected", func(t *testing.T) {
+		db := openTestDB(t)
+		if err := EnsureSchemaTable(db); err != nil {
+			t.Fatalf("ensure schema_migrations table: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (777, 'unknown_removed_migration', 'tampered', datetime('now'))`); err != nil {
+			t.Fatalf("seed unknown migration: %v", err)
+		}
+		if _, err := PendingVersions(db, testMigrationsFS, "testdata"); err == nil {
+			t.Fatal("PendingVersions should reject unknown missing version")
+		}
+		if _, err := ListMigrationStatus(db, testMigrationsFS, "testdata"); err == nil {
+			t.Fatal("ListMigrationStatus should reject unknown missing version")
+		}
+	})
 }
 
 func TestRunMigrations_ChecksumMismatch(t *testing.T) {

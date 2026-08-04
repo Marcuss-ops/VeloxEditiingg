@@ -105,6 +105,9 @@ func PendingVersions(db *sql.DB, fs embed.FS, dir string) ([]Migration, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateAppliedMigrationSet(applied, all); err != nil {
+		return nil, err
+	}
 
 	var pending []Migration
 	for _, m := range all {

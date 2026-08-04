@@ -44,6 +44,9 @@ func ListMigrationStatus(db *sql.DB, fs embed.FS, dir string) ([]MigrationStatus
 			return nil, err
 		}
 	}
+	if err := validateAppliedMigrationSet(applied, all); err != nil {
+		return nil, err
+	}
 
 	result := make([]MigrationStatus, 0, len(all))
 	for _, m := range all {

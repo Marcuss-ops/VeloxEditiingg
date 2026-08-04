@@ -58,8 +58,11 @@ canonical v40 migration pair and must remain byte-for-byte equivalent.
 The old Dark Editor v44 stub (`044_stub_dark_editor_projects.sql`) was
 retired and is intentionally absent from both embedded tracks. Existing
 databases may still retain a v44 row in `schema_migrations`; the runner
-ignores applied versions that are no longer embedded, preserving their
-record without attempting a checksum comparison. Do not recreate v44.
+preserves it only when its checksum matches the verified historical v44
+checksum, and rejects unknown missing versions. Do not recreate v44.
+Legacy databases that recorded the old v40 Dark Editor fixture are handled
+by the exact v40 checksum allowlist and forward migration 129, which
+restores `task_specs` without rewriting the applied v40 row.
 
 ## Dark Editor domain exit
 

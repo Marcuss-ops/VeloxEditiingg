@@ -27,34 +27,57 @@ import (
 	"log"
 )
 
-// legacyChecksums pins the exact checksum of the pre-Dark-Editor-exit
-// variant of migration 001_initial.sql, which was deliberately amended
-// when the Dark Editor domain was removed from Velox: it no longer
-// creates the dark_editor_* tables (fresh databases never see them).
-//
-// Installations that already applied the ORIGINAL 001 hold this legacy
-// checksum in schema_migrations. Accepting exactly this value preserves
-// their upgrade path to the forward-only 128_drop_dark_editor_domain.sql
-// without weakening checksum validation for any other migration or any
-// future edit — a recorded checksum that matches neither the on-disk
-// content nor this allowlist still fails boot. Migration 090 was NOT
-// amended (its historical dark_editor_folders.youtube_group DROP COLUMN
-// is tolerated as a no-op on fresh schemas by apply.go). See
-// migrations/README.md §Dark Editor domain exit.
+// legacyChecksums contains exact checksums for historical files whose
+// version remains embedded but whose responsibilities changed. These are
+// narrow compatibility exceptions, not a general checksum bypass.
 var legacyChecksums = map[int]map[string]struct{}{
 	1: {
-		// sha256 of the ORIGINAL 001_initial.sql (pre dark-editor removal).
+		// Original 001_initial.sql before the Dark Editor tables were removed.
 		"90d2c1512ac2954c7b201c62b2abe3ba2b9f7b478c88880e56d64906b7deee8d": {},
+	},
+	40: {
+		// Retired testdata/040_stub_dark_editor_projects.sql. Current v40
+		// creates task_specs; migration 129 repairs that table for installs
+		// that recorded the retired v40 checksum.
+		"b2095b5cf5342e67301c1638c83a4c9f4df7da6e37bb4523de70f8d635e6e4b4": {},
 	},
 }
 
-// isAcceptedLegacyChecksum reports whether the recorded (already-applied)
-// checksum for a version is one of the sanctioned pre-dark-editor-exit
-// values, in which case the mismatch against the amended on-disk file is
-// tolerated once so the install can continue to the 128 drop.
+// retiredMigrationChecksums contains exact checksums for migrations that
+// are intentionally no longer embedded. Their schema_migrations rows are
+// preserved, but arbitrary missing versions fail closed so checksum
+// integrity is not weakened by silently ignoring unknown history.
+var retiredMigrationChecksums = map[int]map[string]struct{}{
+	44: {
+		// Original sqlite/044_stub_dark_editor_projects.sql.
+		"40e9918c77bd3cec4e734e51deb95bd4cf43ac73f67904968e01595934d6214f": {},
+	},
+}
+
 func isAcceptedLegacyChecksum(version int, checksum string) bool {
 	_, ok := legacyChecksums[version][checksum]
 	return ok
+}
+
+func isAcceptedRetiredMigration(version int, checksum string) bool {
+	_, ok := retiredMigrationChecksums[version][checksum]
+	return ok
+}
+
+func validateAppliedMigrationSet(applied map[int]appliedMigration, discovered []Migration) error {
+	discoveredVersions := make(map[int]struct{}, len(discovered))
+	for _, m := range discovered {
+		discoveredVersions[m.Version] = struct{}{}
+	}
+	for version, prev := range applied {
+		if _, ok := discoveredVersions[version]; ok {
+			continue
+		}
+		if !isAcceptedRetiredMigration(version, prev.Checksum) {
+			return fmt.Errorf("migrations: applied migration %03d is no longer embedded with an authorized checksum; refusing to ignore unknown migration history", version)
+		}
+	}
+	return nil
 }
 
 // RunMigrations discovers and applies all pending embedded migrations.
@@ -82,6 +105,10 @@ func RunMigrations(db *sql.DB, migrationsFS embed.FS, dir string) error {
 	applied, err := listApplied(db)
 	if err != nil {
 		return fmt.Errorf("migrations: list applied: %w", err)
+	}
+
+	if err := validateAppliedMigrationSet(applied, migs); err != nil {
+		return err
 	}
 
 	for _, m := range migs {
