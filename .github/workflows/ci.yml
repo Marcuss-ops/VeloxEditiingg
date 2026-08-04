@@ -55,6 +55,13 @@ jobs:
           trap 'rm -f "$DB"' EXIT
           (cd DataServer && go run ./cmd/seed-velox-db-fixture "$DB")
           ./scripts/ci/check-completion-protocol-invariants.sh "$DB"
+      - name: Self-test — AC/TaskResult convergence gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/ci/check-ac-taskresult-convergence.sh
+          bash -n scripts/e2e/verify-ac-taskresult-convergence.sh
+          ./scripts/ci/test-ac-taskresult-convergence.sh
       - name: LOC threshold gate
         # ====== DELIBERATE REDUNDANCY — DO NOT REMOVE ======
         # This step is intentionally redundant with the dedicated

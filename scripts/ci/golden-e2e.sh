@@ -538,6 +538,15 @@ phase8_verify_storage() {
     --width "${VIDEO_WIDTH}" --height "${VIDEO_HEIGHT}" --fps "${VIDEO_FPS}" \
     --duration "${VIDEO_DURATION}" --sample-rate "${AUDIO_SAMPLE_RATE}" \
     --channels "${AUDIO_CHANNELS}" --scenes "${SCENE_COUNT}"
+
+  # The media verifier proves bytes and the basic delivery row. This second,
+  # read-only gate proves the complete AC/TaskResult convergence contract,
+  # including the worker-consumed ACKs and zero stale state.
+  bash "${REPO_ROOT}/scripts/e2e/verify-ac-taskresult-convergence.sh" \
+    --db "${DATA_DIR}/velox.db" \
+    --job-id "${JOB_ID}" \
+    --worker-state-dir "${TMPDIR}/state" \
+    --worker-log "${WORKER_LOG}"
   return 0
 
   log "[8/8] Verifying exact Job artifact, lifecycle invariants and media"

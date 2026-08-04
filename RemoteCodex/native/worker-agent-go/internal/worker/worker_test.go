@@ -106,7 +106,8 @@ func TestActiveTaskExecutionFields(t *testing.T) {
 func TestStatusCanTransitionTo(t *testing.T) {
 	// Verify the transition rules in canTransitionTo logic
 	// Idle → Busy (OK), Idle → Stopped (OK)
-	// Busy → Idle (OK), Busy → Error (OK), Busy → Stopped (OK)
+	// Busy → Busy (OK for another concurrent slot), Busy → Idle (OK),
+	// Busy → Error (OK), Busy → Stopped (OK)
 	// Error → Idle (OK), Error → Stopped (OK)
 	// Stopped → anything (NOT OK)
 
@@ -120,6 +121,7 @@ func TestStatusCanTransitionTo(t *testing.T) {
 		{StatusIdle, StatusStopped, true},
 		{StatusIdle, StatusError, false},
 		{StatusBusy, StatusIdle, true},
+		{StatusBusy, StatusBusy, true},
 		{StatusBusy, StatusError, true},
 		{StatusBusy, StatusStopped, true},
 		{StatusError, StatusIdle, true},
@@ -137,7 +139,7 @@ func TestStatusCanTransitionTo(t *testing.T) {
 			case StatusIdle:
 				ok = tr.to == StatusBusy || tr.to == StatusStopped
 			case StatusBusy:
-				ok = tr.to == StatusIdle || tr.to == StatusError || tr.to == StatusStopped
+				ok = tr.to == StatusBusy || tr.to == StatusIdle || tr.to == StatusError || tr.to == StatusStopped
 			case StatusError:
 				ok = tr.to == StatusIdle || tr.to == StatusStopped
 			case StatusStopped:

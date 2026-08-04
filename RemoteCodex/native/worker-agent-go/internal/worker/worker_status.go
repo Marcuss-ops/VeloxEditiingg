@@ -51,7 +51,10 @@ func (w *Worker) canTransitionTo(newStatus Status) bool {
 	case StatusIdle:
 		return newStatus == StatusBusy || newStatus == StatusStopped
 	case StatusBusy:
-		return newStatus == StatusIdle || newStatus == StatusError || newStatus == StatusStopped
+		// Busy is derived from the active-task set. Accepting another
+		// lease while a slot is already running must not be rejected as a
+		// state transition; the limiter has already enforced the cap.
+		return newStatus == StatusBusy || newStatus == StatusIdle || newStatus == StatusError || newStatus == StatusStopped
 	case StatusError:
 		return newStatus == StatusIdle || newStatus == StatusStopped
 	case StatusStopped:
