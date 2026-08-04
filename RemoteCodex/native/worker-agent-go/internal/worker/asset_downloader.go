@@ -46,7 +46,7 @@ func (w *Worker) downloadVeloxAssetWithMetadataSingle(ctx context.Context, asset
 	if expectedSHA256 != "" && expectedSizeBytes > 0 {
 		if existing, verifyDuration, err := cachedAssetPathTimed(cacheDir, assetID, expectedSHA256, expectedSizeBytes); err == nil && existing != "" {
 			if rec := telemetry.RecorderFromContext(ctx); rec != nil {
-				h := rec.Begin(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeArtifact, Component: "worker.cache", Action: "hit_read"})
+				h := rec.Begin(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask, Component: "worker.cache", Action: "hit_read"})
 				h.SetMetadata("asset_id", assetID)
 				h.Complete()
 			}
@@ -75,7 +75,7 @@ func (w *Worker) downloadVeloxAssetWithMetadataSingle(ctx context.Context, asset
 
 	telemetry.GetPrometheusMetrics().RecordAssetCacheMiss("asset")
 	if rec := telemetry.RecorderFromContext(ctx); rec != nil {
-		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeArtifact, Component: "worker.cache", Action: "miss"}, telemetry.StatusOK, "", "")
+		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask, Component: "worker.cache", Action: "miss"}, telemetry.StatusOK, "", "")
 	}
 	downloadURL := strings.TrimRight(strings.TrimSpace(w.config.MasterURL), "/") + "/api/v1/worker-assets/" + neturl.PathEscape(assetID)
 	authToken := ""

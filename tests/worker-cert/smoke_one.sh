@@ -123,7 +123,7 @@ log_info "M2M provisioned: client_id=$PROVISIONED_CLIENT_ID"
 
 # ─── Worker list pre-flight ────────────────────────────────────────────────
 WORKERS_JSON=""
-if ! smoke_workers_list "$M2M_BEARER" "$VELOX_MASTER_URL"; then
+if ! smoke_workers_list "$ADMIN_TOKEN" "$VELOX_MASTER_URL"; then
   log_error "could not list workers"; exit 3
 fi
 TARGET_RECORD=$(smoke_worker_by_id "$TARGET_WORKER_ID")

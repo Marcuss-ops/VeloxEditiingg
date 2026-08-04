@@ -1,8 +1,8 @@
 {
   "_doc": "Real production asset_ids from the master DB (velox.db). Populated 2026-07-29 from the live VPS master. Workers resolve these via velox-asset://<asset_id> which the master serves from its storage layer.",
   "voiceover": [
-    {"asset_id": "ccc7f50e7adc3625d978a483766fe40e5c7e6a74ce8d992cf13b6cf3cd0e706f", "note": "samplelib.com 6s mp3, READY, audio/mpeg, storage_provider=local"},
-    {"asset_id": "b5bc023fbaaf3a49d46e2ed5aca21bbfbfcc62ca4bbcacbb71ec8e399865e3cb", "note": "e2e-smoke voiceover.mp3, READY, audio/mpeg, storage_provider=local"}
+    {"asset_id": "4d027993c4c3c68540eaab5dcecacaca1a9600a5fdf090b8ac1a924e753b1d15", "note": "current READY voiceover blob, audio/mpeg, storage_provider=local"},
+    {"asset_id": "4d027993c4c3c68540eaab5dcecacaca1a9600a5fdf090b8ac1a924e753b1d15", "note": "e2e-smoke voiceover.mp3, READY, audio/mpeg, storage_provider=local"}
   ],
   "clips": [
     {"asset_id": "27063c51bda8444a7b4d98ab4d9828826c9424f12cf1bbdeefe351afc3a4bd5c", "note": "stock_clip, READY, video/mp4"},

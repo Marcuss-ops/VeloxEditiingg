@@ -26,6 +26,17 @@ import (
 	"github.com/google/uuid"
 )
 
+// BuildClipStockTimeline projects canonical scene assets into the renderer's
+// internal narrated-stock timeline. The public API intentionally accepts only
+// scenes; items and audio_tracks are derived here at the worker boundary.
+func BuildClipStockTimeline(rawPayload map[string]interface{}) ([]map[string]interface{}, []map[string]interface{}, error) {
+	_, items, _, audioTracks, _, err := normalizeClipPayload(rawPayload)
+	if err != nil {
+		return nil, nil, err
+	}
+	return items, audioTracks, nil
+}
+
 // BuildClipPayloadForMaster builds the canonical script-with-clips payload.
 // Accepts a canonical `scenes` array or `scenes_json` containing scenes
 // with clip, stock[], and optional voiceover asset objects. The output map

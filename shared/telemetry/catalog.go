@@ -199,10 +199,10 @@ func canonicalOriginScope(component, action string) (string, string) {
 		}
 		return OriginWorker, ScopeTask
 	case strings.HasPrefix(component, "worker.cache"):
-		if action == "lookup" {
-			return OriginWorker, ScopeTask
-		}
-		return OriginWorker, ScopeArtifact
+		// Cache access describes task-scoped resolver work. It does not
+		// identify a committed output artifact, so artifact scope would
+		// require an artifact_id that is unavailable during asset lookup.
+		return OriginWorker, ScopeTask
 	case strings.HasPrefix(component, "worker.engine"):
 		if action == "sidecar_read" || action == "output_stat" {
 			return OriginWorker, ScopeArtifact

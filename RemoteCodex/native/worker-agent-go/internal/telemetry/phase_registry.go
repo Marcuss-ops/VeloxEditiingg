@@ -166,11 +166,11 @@ var canonicalPhaseSpecs = []PhaseSpec{
 	{Origin: OriginWorker, Scope: ScopeArtifact, Component: "worker.asset", Action: "fsync", Phase: PhaseDownload},
 	{Origin: OriginWorker, Scope: ScopeArtifact, Component: "worker.asset", Action: "final_hash", Phase: PhaseDownload},
 	{Origin: OriginWorker, Scope: ScopeTask, Component: "worker.cache", Action: "lookup", Phase: PhaseCacheLookup},
-	{Origin: OriginWorker, Scope: ScopeArtifact, Component: "worker.cache", Action: "metadata_read", Phase: PhaseCacheLookup},
-	{Origin: OriginWorker, Scope: ScopeArtifact, Component: "worker.cache", Action: "hash_verify", Phase: PhaseCacheLookup},
-	{Origin: OriginWorker, Scope: ScopeArtifact, Component: "worker.cache", Action: "hit_read", Phase: PhaseCacheLookup},
-	{Origin: OriginWorker, Scope: ScopeArtifact, Component: "worker.cache", Action: "miss", Phase: PhaseCacheLookup},
-	{Origin: OriginWorker, Scope: ScopeArtifact, Component: "worker.cache", Action: "eviction", Phase: PhaseCacheLookup},
+	{Origin: OriginWorker, Scope: ScopeTask, Component: "worker.cache", Action: "metadata_read", Phase: PhaseCacheLookup},
+	{Origin: OriginWorker, Scope: ScopeTask, Component: "worker.cache", Action: "hash_verify", Phase: PhaseCacheLookup},
+	{Origin: OriginWorker, Scope: ScopeTask, Component: "worker.cache", Action: "hit_read", Phase: PhaseCacheLookup},
+	{Origin: OriginWorker, Scope: ScopeTask, Component: "worker.cache", Action: "miss", Phase: PhaseCacheLookup},
+	{Origin: OriginWorker, Scope: ScopeTask, Component: "worker.cache", Action: "eviction", Phase: PhaseCacheLookup},
 
 	// Worker plan preparation and engine lifecycle.
 	{Origin: OriginWorker, Scope: ScopeTask, Component: "worker.plan", Action: "deserialize", Phase: PhaseCompile},

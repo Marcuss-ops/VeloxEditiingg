@@ -132,6 +132,8 @@ def build_payload(
     for i in range(scenes_count):
         clip_id = pick_asset_id(fixtures, "clips", i % n_clips)
         vo_id = pick_asset_id(fixtures, "voiceover", i % n_vo)
+        clip_url = f"velox-asset://{clip_id}"
+        voiceover_url = f"velox-asset://{vo_id}"
         scenes.append({
             "scene_id": f"scene-{i}",
             "index": i,
@@ -140,19 +142,19 @@ def build_payload(
             "duration_seconds": duration_per_scene,
             "clip": {
                 "asset_id": clip_id,
-                "url": f"velox-asset://{clip_id}",
+                "url": clip_url,
                 "duration_ms": duration_per_scene * 1000,
             },
             "voiceover": {
                 "asset_id": vo_id,
-                "url": f"velox-asset://{vo_id}",
+                "url": voiceover_url,
                 "duration_ms": duration_per_scene * 1000,
             },
         })
     idem_suffix = f"-{idempotency_key_suffix}" if idempotency_key_suffix else ""
     return {
         "idempotency_key": f"smoke-one-{worker_id}-{now_epoch}{idem_suffix}",
-        "job_type": "scene.composite.v1",
+        "job_type": "clip.stock.v1",
         "template_id": "worker-cert.smoke",
         "template_version": 1,
         "video_name": f"Real-asset smoke for {worker_id}@{now_epoch} (scenes={scenes_count})",

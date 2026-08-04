@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/remoteengine"
 	"velox-shared/compatibility"
 )
@@ -24,6 +25,18 @@ func projectWorkerPayload(req *SubmitJobRequest) (map[string]interface{}, error)
 		return nil, fmt.Errorf("project canonical submission: %w", projectionErr)
 	}
 	preserveWorkerPayloadFields(workerPayload, rawPayload, "audio_tracks", "layers", "_placement_pin_worker_id")
+	if strings.EqualFold(rendererModeForJobType(req.JobType), "clip_stock") {
+		items, audioTracks, timelineErr := enqueue.BuildClipStockTimeline(rawPayload)
+		if timelineErr != nil {
+			return nil, fmt.Errorf("build clip-stock timeline: %w", timelineErr)
+		}
+		if len(items) > 0 {
+			workerPayload["items"] = items
+		}
+		if len(audioTracks) > 0 {
+			workerPayload["audio_tracks"] = audioTracks
+		}
+	}
 	return workerPayload, nil
 }
 

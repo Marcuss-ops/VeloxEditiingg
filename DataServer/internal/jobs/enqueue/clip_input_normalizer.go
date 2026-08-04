@@ -220,6 +220,15 @@ func optionalCanonicalSceneAsset(scene map[string]interface{}, key string) (map[
 
 func canonicalScene(scene map[string]interface{}, index int) (map[string]interface{}, error) {
 	for key := range scene {
+		// duration_seconds is a canonical scene field. The retired alias
+		// list only applies to top-level legacy payloads; rejecting it here
+		// would make the public scene contract impossible to normalize.
+		if key == "duration_seconds" {
+			switch scene[key].(type) {
+			case int, int32, int64, float32, float64, json.Number:
+				continue
+			}
+		}
 		if _, retired := retiredNarratedKeys[key]; retired {
 			return nil, fmt.Errorf("scenes[%d]: legacy field %q is unsupported; use clip, stock, and voiceover asset objects", index, key)
 		}
@@ -242,7 +251,7 @@ func canonicalScene(scene map[string]interface{}, index int) (map[string]interfa
 	}
 
 	out := make(map[string]interface{}, 3)
-	for _, key := range []string{"scene_id", "index", "kind", "text", "subtitles"} {
+	for _, key := range []string{"scene_id", "index", "kind", "text", "duration_seconds", "subtitles"} {
 		if value, present := scene[key]; present && value != nil {
 			out[key] = value
 		}
