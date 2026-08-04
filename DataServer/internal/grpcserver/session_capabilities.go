@@ -11,6 +11,8 @@ package grpcserver
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"velox-server/internal/placement"
 )
@@ -76,6 +78,30 @@ func parseExecutorCapabilities(raw map[string]interface{}) (map[placement.Execut
 	}
 
 	return result, nil
+}
+
+func extractAssetCacheKeys(raw map[string]interface{}) []string {
+	value, ok := raw["asset_cache_keys"]
+	if !ok {
+		return nil
+	}
+	var keys []string
+	switch list := value.(type) {
+	case []interface{}:
+		for _, item := range list {
+			if key, ok := item.(string); ok && strings.TrimSpace(key) != "" {
+				keys = append(keys, strings.TrimSpace(key))
+			}
+		}
+	case []string:
+		for _, key := range list {
+			if strings.TrimSpace(key) != "" {
+				keys = append(keys, strings.TrimSpace(key))
+			}
+		}
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // capabilitiesBoolMap normalises the raw capability map to a map[string]bool

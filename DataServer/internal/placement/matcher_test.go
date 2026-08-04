@@ -228,6 +228,36 @@ func TestMatcherSelectsHighestPriorityCompatibleTask(t *testing.T) {
 	}
 }
 
+func TestMatcherPrefersWarmCacheWithinPriority(t *testing.T) {
+	m := NewMatcher()
+	worker := newWorkerSnapshot(
+		executorKeys(ExecutorKey{ID: "scene.composite.v1", Version: 1}),
+		nil, true, false, 1, 1,
+	)
+	worker.CachedAssetKeys = map[string]struct{}{"clip-shared": {}}
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	result := m.Select(worker, []TaskCandidate{
+		{TaskID: "cold", Priority: 10, CreatedAt: now, Executor: ExecutorKey{ID: "scene.composite.v1", Version: 1}, RequiredAssetKeys: []string{"clip-cold"}},
+		{TaskID: "warm", Priority: 10, CreatedAt: now.Add(time.Minute), Executor: ExecutorKey{ID: "scene.composite.v1", Version: 1}, RequiredAssetKeys: []string{"clip-shared"}},
+	})
+	if result.Candidate == nil || result.Candidate.TaskID != "warm" {
+		t.Fatalf("candidate=%v; want warm-cache task", result.Candidate)
+	}
+}
+
+func TestMatcherWarmCacheDoesNotOverrideHigherPriority(t *testing.T) {
+	m := NewMatcher()
+	worker := newWorkerSnapshot(executorKeys(ExecutorKey{ID: "scene.composite.v1", Version: 1}), nil, true, false, 1, 1)
+	worker.CachedAssetKeys = map[string]struct{}{"clip-shared": {}}
+	result := m.Select(worker, []TaskCandidate{
+		{TaskID: "high-cold", Priority: 20, Executor: ExecutorKey{ID: "scene.composite.v1", Version: 1}, RequiredAssetKeys: []string{"clip-cold"}},
+		{TaskID: "low-warm", Priority: 10, Executor: ExecutorKey{ID: "scene.composite.v1", Version: 1}, RequiredAssetKeys: []string{"clip-shared"}},
+	})
+	if result.Candidate == nil || result.Candidate.TaskID != "high-cold" {
+		t.Fatalf("candidate=%v; warm cache must not override priority", result.Candidate)
+	}
+}
+
 func TestMatcherKeepsFIFOWithinSamePriority(t *testing.T) {
 	m := NewMatcher()
 

@@ -7,6 +7,7 @@ package grpcserver
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -79,8 +80,10 @@ type workerSession struct {
 	executorsMu sync.RWMutex
 	executors   map[placement.ExecutorKey]struct{}
 
-	capabilitiesMu sync.RWMutex
-	capabilities   map[string]bool
+	capabilitiesMu   sync.RWMutex
+	capabilities     map[string]bool
+	assetCacheKeysMu sync.RWMutex
+	assetCacheKeys   map[string]struct{}
 
 	capabilityRevision atomic.Uint64
 
@@ -116,6 +119,12 @@ func (s *workerSession) placementSnapshot(workerID string) placement.WorkerSnaps
 		caps[key] = enabled
 	}
 	s.capabilitiesMu.RUnlock()
+	s.assetCacheKeysMu.RLock()
+	assetKeys := make(map[string]struct{}, len(s.assetCacheKeys))
+	for key := range s.assetCacheKeys {
+		assetKeys[key] = struct{}{}
+	}
+	s.assetCacheKeysMu.RUnlock()
 
 	return placement.WorkerSnapshot{
 		WorkerID:           workerID,
@@ -127,12 +136,25 @@ func (s *workerSession) placementSnapshot(workerID string) placement.WorkerSnaps
 		ActiveJobs:         int(s.activeJobsCount.Load()),
 		Executors:          executors,
 		Capabilities:       caps,
+		CachedAssetKeys:    assetKeys,
 		CapabilityRevision: s.capabilityRevision.Load(),
 		LastHeartbeat: time.Unix(
 			s.lastHeartbeatUnix.Load(),
 			0,
 		).UTC(),
 	}
+}
+
+func (s *workerSession) replaceAssetCacheKeys(keys []string) {
+	set := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		if strings.TrimSpace(key) != "" {
+			set[strings.TrimSpace(key)] = struct{}{}
+		}
+	}
+	s.assetCacheKeysMu.Lock()
+	s.assetCacheKeys = set
+	s.assetCacheKeysMu.Unlock()
 }
 
 // replaceCapabilities atomically replaces the session's executor and

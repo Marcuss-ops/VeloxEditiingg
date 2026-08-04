@@ -71,6 +71,9 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 		sess.activeJobsCount.Store(int32(hb.GetActiveJobsCount()))
 		if hb.GetExtra() != nil {
 			extraMap := hb.GetExtra().AsMap()
+			if caps, ok := extraMap["capabilities"].(map[string]interface{}); ok {
+				sess.replaceAssetCacheKeys(extractAssetCacheKeys(caps))
+			}
 			if mpj, ok := extraMap["max_parallel_jobs"]; ok {
 				switch v := mpj.(type) {
 				case float64:

@@ -46,6 +46,9 @@ type Snapshot struct {
 	GeneratedAt   time.Time `json:"generated_at"`
 	LookaheadJobs int       `json:"lookahead_jobs"`
 	DriveFileIDs  []string  `json:"drive_file_ids"`
+	// ProtectedAssetKeys is the canonical cache identity. DriveFileIDs is
+	// retained on the wire for legacy workers; new payloads use asset IDs.
+	ProtectedAssetKeys []string `json:"protected_asset_keys"`
 }
 
 // Repo is the data-source interface the Service consumes. We use this
@@ -151,7 +154,7 @@ func (s *Service) Refresh(ctx context.Context) error {
 
 	protected := make(map[string]struct{}, len(jobs))
 	for _, j := range jobs {
-		for id := range assetref.ExtractDriveFileIDs(j.Payload) {
+		for id := range assetref.ExtractAssetKeys(j.Payload) {
 			protected[id] = struct{}{}
 		}
 	}
@@ -164,10 +167,11 @@ func (s *Service) Refresh(ctx context.Context) error {
 
 	s.mu.Lock()
 	s.snapshot = Snapshot{
-		Version:       s.snapshot.Version + 1,
-		GeneratedAt:   s.now(),
-		LookaheadJobs: len(jobs),
-		DriveFileIDs:  ids,
+		Version:            s.snapshot.Version + 1,
+		GeneratedAt:        s.now(),
+		LookaheadJobs:      len(jobs),
+		DriveFileIDs:       ids,
+		ProtectedAssetKeys: append([]string(nil), ids...),
 	}
 	s.mu.Unlock()
 	return nil

@@ -137,6 +137,14 @@ func (m *Matcher) Select(
 		if ordered[i].Priority != ordered[j].Priority {
 			return ordered[i].Priority > ordered[j].Priority
 		}
+		// Within the same priority, prefer the task whose inputs are
+		// already present on this worker. This is an advisory warm-cache
+		// bonus; a cold worker remains fully eligible.
+		warmI := cachedAssetCount(worker, ordered[i])
+		warmJ := cachedAssetCount(worker, ordered[j])
+		if warmI != warmJ {
+			return warmI > warmJ
+		}
 		return ordered[i].CreatedAt.Before(ordered[j].CreatedAt)
 	})
 
@@ -206,4 +214,17 @@ func (m *Matcher) Select(
 	}
 
 	return result
+}
+
+func cachedAssetCount(worker WorkerSnapshot, candidate TaskCandidate) int {
+	if len(candidate.RequiredAssetKeys) == 0 || len(worker.CachedAssetKeys) == 0 {
+		return 0
+	}
+	count := 0
+	for _, key := range candidate.RequiredAssetKeys {
+		if _, ok := worker.CachedAssetKeys[key]; ok {
+			count++
+		}
+	}
+	return count
 }

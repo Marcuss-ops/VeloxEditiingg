@@ -65,6 +65,9 @@ type TaskCandidate struct {
 	Executor ExecutorKey
 
 	RequiredCapabilities []string
+	// RequiredAssetKeys are canonical input assets referenced by the task.
+	// They are advisory for placement; leases remain the correctness gate.
+	RequiredAssetKeys []string
 
 	// PlacementPinWorkerID is the per-job worker pin extracted from
 	// the task spec payload (_placement_pin_worker_id). When
@@ -89,6 +92,9 @@ type WorkerSnapshot struct {
 
 	Executors    map[ExecutorKey]struct{}
 	Capabilities map[string]bool
+	// CachedAssetKeys is the worker's last heartbeat projection of completed
+	// local assets. It is a placement hint, never a reservation.
+	CachedAssetKeys map[string]struct{}
 
 	CapabilityRevision uint64
 	LastHeartbeat      time.Time

@@ -220,6 +220,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 			sess.maxParallelJobs.Store(int32(mpj))
 		}
 		sess.replaceCapabilities(executors, capabilitiesBoolMap(caps))
+		sess.replaceAssetCacheKeys(extractAssetCacheKeys(caps))
 	}
 	sess.ready.Store(true)
 	sess.draining.Store(false)

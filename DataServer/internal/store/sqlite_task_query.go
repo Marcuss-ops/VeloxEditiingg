@@ -8,10 +8,12 @@ package store
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"velox-server/internal/placement"
 
+	"velox-shared/assetref"
 	"velox-shared/dispatchable"
 )
 
@@ -120,7 +122,18 @@ func (r *SQLiteTaskRepository) ListReadyCandidates(ctx context.Context, limit in
 			Executor:             placement.NormalizeExecutorKey(j.ExecutorID, j.ExecutorVersion),
 			RequiredCapabilities: j.RequiredCapabilities,
 			PlacementPinWorkerID: j.PlacementPinWorkerID,
+			RequiredAssetKeys:    sortedAssetKeys(j.Payload),
 		})
 	}
 	return candidates, nil
+}
+
+func sortedAssetKeys(payload []byte) []string {
+	keys := assetref.ExtractAssetKeys(payload)
+	out := make([]string, 0, len(keys))
+	for key := range keys {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
 }
