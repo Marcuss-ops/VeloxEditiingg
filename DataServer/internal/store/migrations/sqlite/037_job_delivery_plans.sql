@@ -3,8 +3,8 @@
 -- Rationale:
 --   * job_delivery_plans maps a job_id to its explicit delivery plan:
 --     which destinations should receive the artifact and with what priority.
---   * A job without an explicit plan falls back to ALL enabled
---     delivery_destinations (current behavior).
+--   * A job without an explicit plan is rejected at enqueue/finalization;
+--     global delivery_destinations are never selected implicitly.
 --   * The PRIMARY KEY (job_id, destination_id) prevents duplicate
 --     entries and makes upserts trivial.
 --   * The `enabled` column allows per-destination toggling per-job

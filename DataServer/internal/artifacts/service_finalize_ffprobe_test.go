@@ -380,7 +380,7 @@ func TestFinalize_FFProbeInvariant_ShadowMismatch(t *testing.T) {
 	// 3 enabled delivery destinations (the canonical regression
 	// fixture: a 6-voice payload collapsed by the C++ engine).
 	now := env.clock.Now().UTC().Format(time.RFC3339)
-	dests := []string{"shadow-mismatch-yt", "shadow-mismatch-drive", "shadow-mismatch-s3"}
+	dests := []string{"primary", "shadow-mismatch-drive", "shadow-mismatch-s3"}
 	for i, did := range dests {
 		_, err = env.db.Exec(`
 			INSERT OR IGNORE INTO delivery_destinations
