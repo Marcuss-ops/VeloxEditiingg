@@ -65,6 +65,11 @@ type WorkerConfig struct {
 	PrometheusPort int `json:"prometheus_port,omitempty"` // Prometheus metrics port (default: 9090; set via VELOX_PROMETHEUS_PORT=0 to disable)
 	HealthPort     int `json:"health_port"`               // Health HTTP port (default: 8081, 0=disabled)
 
+	// AssetDownloadConcurrency caps the number of simultaneous asset byte
+	// transfers the canonical download manager runs per worker. Binds from
+	// VELOX_ASSET_DOWNLOAD_CONCURRENCY; default 4.
+	AssetDownloadConcurrency int `json:"asset_download_concurrency,omitempty"`
+
 	// ControlGRPCURL is the gRPC endpoint for the persistent worker control stream.
 	// Velox exclusively uses a gRPC-push architecture; this field is mandatory.
 	// Example: "master.example.com:8443"

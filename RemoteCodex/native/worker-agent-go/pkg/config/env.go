@@ -55,6 +55,9 @@ const (
 	// EnvPrometheusPort controls the worker Prometheus scrape endpoint.
 	// Set to 0 to disable the endpoint explicitly.
 	EnvPrometheusPort = "VELOX_PROMETHEUS_PORT"
+	// EnvAssetDownloadConcurrency caps the number of simultaneous asset byte
+	// transfers the canonical download manager runs per worker. Default 4.
+	EnvAssetDownloadConcurrency = "VELOX_ASSET_DOWNLOAD_CONCURRENCY"
 )
 
 // EnvBindings is the set of env-var names this package inspects.
@@ -74,6 +77,7 @@ var EnvBindings = []string{
 	EnvStateDir,
 	EnvWorkerProfile,
 	EnvPrometheusPort,
+	EnvAssetDownloadConcurrency,
 }
 
 // envTruthy reports whether a string from os.Getenv should be interpreted
@@ -159,6 +163,13 @@ func applyEnvOverrides(cfg *WorkerConfig) {
 	if v := strings.TrimSpace(os.Getenv(EnvPrometheusPort)); v != "" {
 		if port, perr := strconv.Atoi(v); perr == nil && port >= 0 && port <= 65535 {
 			cfg.PrometheusPort = port
+		}
+	}
+	// VELOX_ASSET_DOWNLOAD_CONCURRENCY caps the canonical download manager's
+	// simultaneous byte transfers (default 4 in downloader.Config).
+	if v := strings.TrimSpace(os.Getenv(EnvAssetDownloadConcurrency)); v != "" {
+		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
+			cfg.AssetDownloadConcurrency = n
 		}
 	}
 }

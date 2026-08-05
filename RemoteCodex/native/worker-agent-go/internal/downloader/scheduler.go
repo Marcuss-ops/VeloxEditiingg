@@ -1,0 +1,166 @@
+package downloader
+
+// scheduler.go — the concurrency-bounded, priority-stable transfer pool.
+//
+// A fixed number of dispatcher goroutines (Config.Concurrency) drain one
+// priority queue. Dispatch order is stable:
+//
+//	priority  (higher first)
+//	→ queued_at (older first)
+//	→ asset_key (lexicographic tie-break)
+//
+// Enqueuing is O(log n); dispatchers block on a condition variable when the
+// queue is empty, so an idle pool costs no CPU. Close() wakes all dispatchers
+// and joins them.
+
+import (
+	"container/heap"
+	"sync"
+	"time"
+)
+
+// schedItem is one queued transfer. run must be non-blocking-safe to call
+// outside the scheduler lock.
+type schedItem struct {
+	key      string
+	priority int
+	queuedAt time.Time
+	run      func()
+	index    int // maintained by heap.Interface
+}
+
+// schedQueue implements heap.Interface with the stable ordering above.
+type schedQueue []*schedItem
+
+func (q schedQueue) Len() int { return len(q) }
+
+// Less returns true when item i must be dispatched before item j.
+func (q schedQueue) Less(i, j int) bool {
+	a, b := q[i], q[j]
+	if a.priority != b.priority {
+		return a.priority > b.priority
+	}
+	if !a.queuedAt.Equal(b.queuedAt) {
+		return a.queuedAt.Before(b.queuedAt)
+	}
+	return a.key < b.key
+}
+
+func (q schedQueue) Swap(i, j int) {
+	q[i], q[j] = q[j], q[i]
+	q[i].index = i
+	q[j].index = j
+}
+
+func (q *schedQueue) Push(x interface{}) {
+	item := x.(*schedItem)
+	item.index = len(*q)
+	*q = append(*q, item)
+}
+
+func (q *schedQueue) Pop() interface{} {
+	old := *q
+	n := len(old)
+	item := old[n-1]
+	old[n-1] = nil // avoid retaining a dead pointer
+	item.index = -1
+	*q = old[:n-1]
+	return item
+}
+
+// scheduler is a pool of `concurrency` dispatchers draining one stable queue.
+type scheduler struct {
+	concurrency int
+	now         func() time.Time
+
+	mu     sync.Mutex
+	queue  schedQueue
+	cond   *sync.Cond
+	closed bool
+	seq    int64
+
+	wg sync.WaitGroup
+}
+
+func newScheduler(concurrency int, now func() time.Time) *scheduler {
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	s := &scheduler{
+		concurrency: concurrency,
+		now:         now,
+	}
+	s.cond = sync.NewCond(&s.mu)
+	return s
+}
+
+// Start launches the dispatcher goroutines. Must be called before Enqueue.
+func (s *scheduler) Start() {
+	s.wg.Add(s.concurrency)
+	for i := 0; i < s.concurrency; i++ {
+		go s.dispatcher()
+	}
+}
+
+// Enqueue adds a transfer to the stable queue. run is invoked on a
+// dispatcher goroutine once the item reaches the head and a slot is free.
+// Returns false — discarding the item — when the pool is already closed;
+// the caller must then settle the transfer itself (e.g. as cancelled) so no
+// waiter hangs on a transfer that will never run.
+func (s *scheduler) Enqueue(key string, priority int, queuedAt time.Time, run func()) bool {
+	if run == nil {
+		return false
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return false
+	}
+	heap.Push(&s.queue, &schedItem{
+		key:      key,
+		priority: priority,
+		queuedAt: queuedAt,
+		run:      run,
+	})
+	s.cond.Signal()
+	s.mu.Unlock()
+	return true
+}
+
+// Size returns the number of transfers currently queued (not running).
+func (s *scheduler) Size() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.queue)
+}
+
+func (s *scheduler) dispatcher() {
+	defer s.wg.Done()
+	for {
+		s.mu.Lock()
+		for len(s.queue) == 0 && !s.closed {
+			s.cond.Wait()
+		}
+		if len(s.queue) == 0 && s.closed {
+			s.mu.Unlock()
+			return
+		}
+		item := heap.Pop(&s.queue).(*schedItem)
+		s.mu.Unlock()
+
+		item.run()
+	}
+}
+
+// Close stops the pool. Pending queued items are discarded; running runs are
+// not interrupted (transfers observe their own cancellation via the manager
+// context). Close is idempotent and safe to call from any goroutine.
+func (s *scheduler) Close() {
+	s.mu.Lock()
+	if !s.closed {
+		s.closed = true
+		s.cond.Broadcast()
+	}
+	s.mu.Unlock()
+	s.wg.Wait()
+}

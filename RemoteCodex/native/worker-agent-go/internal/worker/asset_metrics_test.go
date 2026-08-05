@@ -167,7 +167,12 @@ func TestDownloadVeloxAssetWithMetadataLogsTerminalHTTPError(t *testing.T) {
 	}
 }
 
-func TestDownloadVeloxAssetWithMetadataRequiresSizeAndSHAForCacheHit(t *testing.T) {
+// TestDownloadVeloxAssetWithMetadataRememberedIntegrityEnablesPartialHits
+// locks the contract that partial integrity metadata alone never hits a
+// fresh cache, while remembered self-verified integrity (from an earlier
+// successful download on the same worker) upgrades later partial-metadata
+// accesses to verified hits without re-downloading.
+func TestDownloadVeloxAssetWithMetadataRememberedIntegrityEnablesPartialHits(t *testing.T) {
 	assetID := "asset-requires-complete-integrity"
 	assetBytes := []byte("complete integrity metadata")
 	digest := sha256.Sum256(assetBytes)
@@ -192,20 +197,105 @@ func TestDownloadVeloxAssetWithMetadataRequiresSizeAndSHAForCacheHit(t *testing.
 		t.Fatalf("complete-metadata download: %v", err)
 	}
 	cacheDir := w.assetCacheDir()
+	// Direct partial-metadata lookups never hit: the legacy branch only
+	// reuses a fully verified entry, never a bare asset-ID file.
 	if got, err := cachedAssetPath(cacheDir, assetID, expectedSHA, 0); err != nil || got != "" {
 		t.Fatalf("SHA-only cache lookup = %q, err=%v; partial metadata must not hit", got, err)
 	}
 	if got, err := cachedAssetPath(cacheDir, assetID, "", completeSize); err != nil || got != "" {
 		t.Fatalf("size-only cache lookup = %q, err=%v; partial metadata must not hit", got, err)
 	}
+	// After the worker remembered the self-verified digest, partial-metadata
+	// accesses become verified hits served from cache (no master round-trip).
 	if _, err := w.downloadVeloxAssetWithMetadata(ctx, assetID, expectedSHA, 0); err != nil {
-		t.Fatalf("SHA-only download: %v", err)
+		t.Fatalf("SHA-only download after self-verify: %v", err)
 	}
 	if _, err := w.downloadVeloxAssetWithMetadata(ctx, assetID, "", completeSize); err != nil {
-		t.Fatalf("size-only download: %v", err)
+		t.Fatalf("size-only download after self-verify: %v", err)
 	}
-	if requestCount != 3 {
-		t.Fatalf("master request count = %d, want 3 (complete + two partial-metadata misses)", requestCount)
+	if requestCount != 1 {
+		t.Fatalf("master request count = %d, want 1 (partial-metadata hits served from remembered integrity)", requestCount)
+	}
+	// A fresh Worker (new job/process boundary) has no remembered digest:
+	// partial metadata stays a forced miss and re-downloads.
+	wFresh := &Worker{
+		config:    &config.WorkerConfig{MasterURL: srv.URL, WorkDir: w.config.WorkDir},
+		apiClient: api.NewClient(srv.URL),
+	}
+	if _, err := wFresh.downloadVeloxAssetWithMetadata(ctx, assetID, expectedSHA, 0); err != nil {
+		t.Fatalf("fresh-worker SHA-only download: %v", err)
+	}
+	if requestCount != 2 {
+		t.Fatalf("master request count after fresh worker = %d, want 2", requestCount)
+	}
+}
+
+// TestDownloadVeloxAssetWithMetadataLegacyReuseAfterSelfVerify locks the
+// expected per-worker behaviour for folder-backed assets referenced without
+// any integrity metadata: primo accesso → MISS + download, accessi successivi
+// → HIT + downloaded_bytes=0 (no repeated downloads of the same stock).
+func TestDownloadVeloxAssetWithMetadataLegacyReuseAfterSelfVerify(t *testing.T) {
+	assetID := "legacy-asset-no-metadata"
+	assetBytes := []byte("legacy stock bytes")
+	requestCount := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write(assetBytes)
+	}))
+	defer srv.Close()
+
+	w := &Worker{
+		config:    &config.WorkerConfig{MasterURL: srv.URL, WorkDir: t.TempDir()},
+		apiClient: api.NewClient(srv.URL),
+	}
+	ctx := context.Background()
+
+	cold, err := w.downloadVeloxAssetWithMetadata(ctx, assetID, "", 0)
+	if err != nil {
+		t.Fatalf("cold resolve: %v", err)
+	}
+	if requestCount != 1 {
+		t.Fatalf("cold request count = %d, want 1", requestCount)
+	}
+	if _, err := os.Stat(cold); err != nil {
+		t.Fatalf("cold cached path %q: %v", cold, err)
+	}
+
+	warm, err := w.downloadVeloxAssetWithMetadata(ctx, assetID, "", 0)
+	if err != nil {
+		t.Fatalf("warm resolve: %v", err)
+	}
+	if requestCount != 1 {
+		t.Fatalf("warm request count = %d, want 1 (legacy reuse must not re-download)", requestCount)
+	}
+	if warm != cold {
+		t.Fatalf("warm path = %q, want cached path %q", warm, cold)
+	}
+
+	// Corrupting the cached file must self-heal: verified mismatch evicts
+	// the entry and re-downloads fresh bytes, then remembers the new digest.
+	if err := os.WriteFile(cold, bytes.Repeat([]byte{'x'}, len(assetBytes)), 0o644); err != nil {
+		t.Fatalf("corrupt cached entry: %v", err)
+	}
+	repaired, err := w.downloadVeloxAssetWithMetadata(ctx, assetID, "", 0)
+	if err != nil {
+		t.Fatalf("corrupt-cache repair: %v", err)
+	}
+	if requestCount != 2 {
+		t.Fatalf("repair request count = %d, want 2", requestCount)
+	}
+	if got, err := os.ReadFile(repaired); err != nil || string(got) != string(assetBytes) {
+		t.Fatalf("repaired bytes = %q, err=%v; want %q", got, err, assetBytes)
+	}
+
+	// And the refreshed digest keeps serving verified hits afterwards.
+	if _, err := w.downloadVeloxAssetWithMetadata(ctx, assetID, "", 0); err != nil {
+		t.Fatalf("post-repair warm resolve: %v", err)
+	}
+	if requestCount != 2 {
+		t.Fatalf("post-repair request count = %d, want 2 (no re-download after repair)", requestCount)
 	}
 }
 

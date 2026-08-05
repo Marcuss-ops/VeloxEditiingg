@@ -3,7 +3,6 @@ package worker
 
 import (
 	"context"
-	"golang.org/x/sync/singleflight"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -11,6 +10,7 @@ import (
 
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
+	"velox-worker-agent/internal/downloader"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/spool"
@@ -138,9 +138,22 @@ type Worker struct {
 	transport        controltransport.ControlTransport        // Current session's transport (recreated per connect)
 	transportFactory func() controltransport.ControlTransport // Factory for new transport instances
 	logger           *logger.Logger
-	// assetDownloads coalesces concurrent cold-cache requests for the same
-	// verified asset across tasks running on this worker.
-	assetDownloads singleflight.Group
+
+	// assetManager is the canonical asset download orchestrator (dedup,
+	// transfer states, bounded pool, shared progress). Constructed lazily on
+	// first use; closed in Stop(). The Transferer it runs is the master-bridge
+	// pipeline (asset_downloader.go).
+	assetManager   *downloader.Manager
+	assetManagerMu sync.Mutex
+
+	// assetIntegrity remembers the self-verified digest+size of the most
+	// recent successful download of each asset (computed while the file was
+	// written). Payloads that reference velox-asset://<id> without sha256 /
+	// size_bytes can then still reach the integrity-verified cache-hit path
+	// on later accesses instead of re-downloading on every use. In-memory
+	// only: after a restart the next access simply re-downloads once.
+	assetIntegrity   map[string]assetIntegrityRecord
+	assetIntegrityMu sync.Mutex
 
 	// Status management — error state only; busy/idle derived from activeTasks
 	status Status

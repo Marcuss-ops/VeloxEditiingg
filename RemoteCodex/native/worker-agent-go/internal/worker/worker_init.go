@@ -302,6 +302,8 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		recentLogs:   recentLogs,
 		activeTasks:  make(map[string]*ActiveTaskExecution),
 		taskIDsByJob: make(map[string][]string),
+		// Remembered self-verified digests for partial-metadata cache hits.
+		assetIntegrity: make(map[string]assetIntegrityRecord),
 		// PR-2: TaskOffer-accepted tasks awaiting TaskLeaseGranted before
 		// executeTask dispatch. Keyed by task_id — one canonical entry per
 		// outstanding offer per session.

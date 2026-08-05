@@ -1,0 +1,328 @@
+package downloader
+
+// manager.go — the canonical AssetDownloadManager implementation.
+//
+// Resolve is the single entry point. It de-duplicates concurrent requests for
+// the same asset key onto one shared Transfer (the byte pipeline runs at most
+// once per key), registers the caller as a waiter, and blocks until the
+// transfer settles or the caller's own context is cancelled. The transfer
+// context is manager-owned, so a cancelled caller only removes its waiter —
+// it never kills the shared download while other jobs still need it.
+//
+// State machine driven here:
+//
+//	QUEUED → CACHE_CHECK → CACHE_HIT → READY        (verified cache hit)
+//	QUEUED → CACHE_CHECK → QUEUED → DOWNLOADING → VERIFYING → READY
+//	... → CANCELLED                                  (last waiter left / close)
+//	... → FAILED                                     (transferer error)
+//
+// READY is reachable only from CACHE_HIT or VERIFYING — never directly from
+// a byte stream. Progress percent is weighted on bytes (bytes_downloaded /
+// bytes_total), never on file counts.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync/atomic"
+	"time"
+)
+
+// ErrEmptyKey is returned by Resolve when a request carries neither an
+// AssetKey nor an AssetID to derive one from.
+var ErrEmptyKey = errors.New("downloader: DownloadRequest has no asset key")
+
+// Config tunes the manager. Zero values are replaced by defaults.
+type Config struct {
+	// Concurrency is the number of simultaneous byte transfers per worker
+	// (VELOX_ASSET_DOWNLOAD_CONCURRENCY). Default 4.
+	Concurrency int
+	// Now is the clock used for all snapshots/timestamps; nil → time.Now.
+	// Tests inject a deterministic clock.
+	Now func() time.Time
+}
+
+func (c *Config) withDefaults() {
+	if c.Concurrency <= 0 {
+		c.Concurrency = 4
+	}
+	if c.Now == nil {
+		c.Now = time.Now
+	}
+}
+
+// AssetDownloadManager is the canonical public surface every consumer (the
+// worker adapter today, renderers tomorrow) uses to obtain a verified local
+// asset path.
+type AssetDownloadManager interface {
+	Resolve(ctx context.Context, request DownloadRequest) (DownloadedAsset, error)
+	Snapshot(assetKey string) (DownloadSnapshot, bool)
+	Subscribe(assetKey string) (<-chan DownloadSnapshot, func())
+	JobSnapshot(jobID string) JobDownloadSnapshot
+}
+
+// Manager implements AssetDownloadManager.
+type Manager struct {
+	cfg        Config
+	transferer Transferer
+	registry   *TransferRegistry
+	sched      *scheduler
+
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	qseq atomic.Int64
+}
+
+// NewManager wires the manager with its transferer and starts the bounded
+// pool. Callers must Close() the manager when the worker shuts down.
+func NewManager(cfg Config, transferer Transferer) *Manager {
+	cfg.withDefaults()
+	ctx, cancel := context.WithCancel(context.Background())
+	m := &Manager{
+		cfg:        cfg,
+		transferer: transferer,
+		registry:   newTransferRegistry(),
+		sched:      newScheduler(cfg.Concurrency, cfg.Now),
+		ctx:        ctx,
+		cancel:     cancel,
+	}
+	m.sched.Start()
+	return m
+}
+
+// Close cancels every transfer, stops the pool and joins its dispatchers.
+// Idempotent. After Close, new transfers settle as cancelled (a cache hit
+// still present on disk may still resolve READY via the cache probe).
+func (m *Manager) Close() {
+	m.cancel()
+	m.sched.Close()
+}
+
+// Resolve returns the verified local path for the requested asset. Concurrent
+// requests for the same AssetKey share one transfer; each request is a
+// waiter.
+func (m *Manager) Resolve(ctx context.Context, req DownloadRequest) (DownloadedAsset, error) {
+	key := req.AssetKey
+	if key == "" {
+		key = req.AssetID
+	}
+	if key == "" {
+		return DownloadedAsset{}, ErrEmptyKey
+	}
+	req.AssetKey = key
+
+	// A transfer cancelled by a racing "last waiter left" must not poison a
+	// caller that just arrived: retry on a fresh transfer.
+	for attempt := 0; attempt < 3; attempt++ {
+		t := m.acquireTransfer(key, req, ctx)
+
+		t.addWaiter(req.JobID, req.TaskID)
+		select {
+		case <-t.doneCh():
+			result, err := t.result()
+			t.removeWaiter(req.JobID, req.TaskID)
+			if err != nil {
+				if errors.Is(err, errTransferCancelled) && ctx.Err() == nil {
+					continue
+				}
+				return DownloadedAsset{}, err
+			}
+			hit, readyAt := t.outcome()
+			return DownloadedAsset{
+				AssetKey:  key,
+				AssetID:   req.AssetID,
+				LocalPath: result.LocalPath,
+				SHA256:    result.SHA256,
+				SizeBytes: result.Bytes,
+				CacheHit:  hit,
+				ReadyAt:   readyAt,
+			}, nil
+
+		case <-ctx.Done():
+			// The caller (job/task) went away. Remove the waiter; only when it
+			// was the LAST waiter may the shared transfer be cancelled.
+			if last := t.removeWaiter(req.JobID, req.TaskID); last {
+				t.requestCancel()
+			}
+			return DownloadedAsset{}, ctx.Err()
+		}
+	}
+	return DownloadedAsset{}, errTransferCancelled
+}
+
+// acquireTransfer returns the live transfer for key, creating one (and
+// starting its run loop) when absent or when the previous transfer reached a
+// terminal state. Terminal transfers stay in the registry for snapshot
+// visibility; new Resolve calls re-check the cache cheaply.
+func (m *Manager) acquireTransfer(key string, req DownloadRequest, reportCtx context.Context) *Transfer {
+	m.registry.mu.Lock()
+	defer m.registry.mu.Unlock()
+	if existing := m.registry.transfers[key]; existing != nil && !existing.isTerminal() {
+		return existing
+	}
+	t := newTransfer(m.ctx, key, req, reportCtx, m.cfg.Now, nextTransferID())
+	m.registry.transfers[key] = t
+	go t.run(m)
+	return t
+}
+
+// Snapshot returns the current snapshot for an asset key.
+func (m *Manager) Snapshot(key string) (DownloadSnapshot, bool) {
+	t := m.registry.Get(key)
+	if t == nil {
+		return DownloadSnapshot{}, false
+	}
+	return t.snapshot(m.cfg.Now()), true
+}
+
+// Subscribe registers a snapshot subscriber for an asset key. The channel
+// delivers every published snapshot (non-blocking, buffered). Returns a nil
+// channel when no transfer exists for the key — call Resolve first. The
+// returned func unsubscribes.
+func (m *Manager) Subscribe(key string) (<-chan DownloadSnapshot, func()) {
+	t := m.registry.Get(key)
+	if t == nil {
+		return nil, func() {}
+	}
+	return t.subscribe()
+}
+
+// JobSnapshot aggregates every transfer the job is waiting on, weighted on
+// bytes. A job is "waiting" on a transfer when it has a registered waiter.
+func (m *Manager) JobSnapshot(jobID string) JobDownloadSnapshot {
+	out := JobDownloadSnapshot{JobID: jobID}
+	now := m.cfg.Now()
+	m.registry.Each(func(_ string, t *Transfer) {
+		if !t.hasWaiter(jobID) {
+			return
+		}
+		snap := t.snapshot(now)
+		out.AssetsTotal++
+		out.BytesTotal += snap.BytesTotal
+		switch snap.State {
+		case DownloadReady:
+			out.AssetsReady++
+			// A READY asset is fully available: weight it on its total size,
+			// not on the bytes its transfer happened to download (a cache hit
+			// downloaded zero).
+			out.BytesDownloaded += snap.BytesTotal
+			if snap.CacheHit {
+				out.CacheHits++
+			} else {
+				out.CacheMisses++
+			}
+		case DownloadQueued:
+			out.AssetsQueued++
+			out.QueuedTransfers++
+		case DownloadRunning, DownloadVerifying:
+			out.AssetsDownloading++
+			out.ActiveTransfers++
+		case DownloadFailed, DownloadCancelled:
+			out.AssetsFailed++
+		}
+	})
+	if out.BytesTotal > 0 {
+		out.ProgressPercent = float64(out.BytesDownloaded) / float64(out.BytesTotal) * 100
+	}
+	return out
+}
+
+// run drives one transfer: cache check first (CACHE_HIT fast path), then the
+// bounded, priority-stable byte transfer.
+func (t *Transfer) run(m *Manager) {
+	t.setState(DownloadCacheCheck)
+
+	hit, err := m.transferer.Check(t.transferContext(), t.reportContext(), t.req)
+	if err != nil {
+		if t.transferContext().Err() != nil {
+			t.finishCancelled()
+			return
+		}
+		t.finish(TransferResult{}, err)
+		return
+	}
+	if hit.CacheHit {
+		// A cache hit downloaded zero bytes: the verified file was already
+		// on disk. The size is known from the request (BytesTotal), but
+		// BytesDownloaded must stay 0 per the plan contract.
+		t.setCacheHit(true)
+		t.setState(DownloadCacheHit)
+		t.finish(TransferResult{LocalPath: hit.LocalPath}, nil)
+		return
+	}
+
+	// Miss: the byte transfer goes through the bounded, stable queue.
+	t.setQueuePos(m.qseq.Add(1))
+	if !m.sched.Enqueue(t.Key, t.req.Priority, t.queuedAtLocked(), func() { t.scheduled(m) }) {
+		// The pool closed between the cache probe and the enqueue: settle the
+		// transfer as cancelled so no waiter hangs on a never-run transfer.
+		t.finishCancelled()
+		return
+	}
+}
+
+// scheduled runs on a scheduler dispatcher goroutine once a slot is free.
+func (t *Transfer) scheduled(m *Manager) {
+	if t.transferContext().Err() != nil {
+		t.finishCancelled()
+		return
+	}
+	t.setDownloading()
+	result, err := m.transferer.Transfer(t.transferContext(), t.reportContext(), t.req)
+	if err != nil {
+		if t.transferContext().Err() != nil {
+			t.finishCancelled()
+			return
+		}
+		t.finish(TransferResult{}, err)
+		return
+	}
+	// Verification completed inside the transferer; VERIFYING → READY keeps
+	// the observable transition faithful before the terminal snapshot.
+	t.setState(DownloadVerifying)
+	t.finish(result, nil)
+}
+
+// requestCancel cancels the transfer context if the transfer is still live.
+// A finished transfer ignores the request.
+func (t *Transfer) requestCancel() {
+	t.mu.Lock()
+	terminal := t.state.Terminal()
+	t.mu.Unlock()
+	if !terminal {
+		t.cancel()
+	}
+}
+
+// outcome reads the cache-hit flag and completion time after done is closed.
+func (t *Transfer) outcome() (cacheHit bool, completedAt time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.cacheHit, t.completedAt
+}
+
+// hasWaiter reports whether the transfer currently has a waiter for jobID.
+func (t *Transfer) hasWaiter(jobID string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for w := range t.waiters {
+		if w.jobID == jobID {
+			return true
+		}
+	}
+	return false
+}
+
+// queuedAtLocked returns the queued timestamp (for the stable queue ordering).
+func (t *Transfer) queuedAtLocked() time.Time {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.queuedAt
+}
+
+var transferSeq atomic.Uint64
+
+func nextTransferID() string {
+	return fmt.Sprintf("xfer-%d", transferSeq.Add(1))
+}

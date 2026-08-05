@@ -358,6 +358,15 @@ func (w *Worker) Stop() {
 		// for stragglers (e.g. dispatcher registered but the
 		// pipeline never read it).
 		w.drainPendingArtifactAcks()
+		// Shut down the canonical asset download manager: cancel every
+		// in-flight transfer and join the bounded pool's dispatchers so
+		// no goroutine outlives the worker.
+		w.assetManagerMu.Lock()
+		if w.assetManager != nil {
+			w.assetManager.Close()
+			w.assetManager = nil
+		}
+		w.assetManagerMu.Unlock()
 	})
 }
 
