@@ -37,6 +37,9 @@ func TestPrometheusWorkerMetricsExportRequiredSurfaceAndNoAssetIDs(t *testing.T)
 		"velox_cache_protected_skips_total",
 		"velox_worker_active_jobs",
 		"velox_worker_status",
+		"velox_cache_duplicate_downloads_total",
+		"velox_cache_duplicate_download_bytes_total",
+		"velox_worker_errors_total",
 	} {
 		if !strings.Contains(export, name) {
 			t.Errorf("Prometheus export missing %s:\n%s", name, export)
@@ -56,5 +59,53 @@ func TestPrometheusWorkerMetricsExportRequiredSurfaceAndNoAssetIDs(t *testing.T)
 	}
 	if !strings.Contains(export, `velox_task_result_submit_seconds_count{label="total"}`) {
 		t.Errorf("TaskResult submit histogram must use the static total label:\n%s", export)
+	}
+}
+
+// TestPrometheusWorker_ParallelismCertificationCounters verifies the
+// counters the parallelism certification harness consumes: pre-seeded
+// zero series (so a before-scrape never looks missing), the
+// singleflight duplicate-download counters, and the worker error
+// counter. All stay on low-cardinality static labels.
+func TestPrometheusWorker_ParallelismCertificationCounters(t *testing.T) {
+	metrics := NewPrometheusMetrics()
+
+	// Pre-seeded series are exported even before any cache access,
+	// so the certification harness's before/after delta is defined.
+	fresh := metrics.ExportPrometheus()
+	for _, series := range []string{
+		`velox_cache_requests_total{result="hit"} 0`,
+		`velox_cache_requests_total{result="miss"} 0`,
+		`velox_cache_downloads_total{label="asset"} 0`,
+		`velox_cache_duplicate_downloads_total{label="asset"} 0`,
+		`velox_cache_duplicate_download_bytes_total{label="asset"} 0`,
+		`velox_worker_errors_total{label="total"} 0`,
+	} {
+		if !strings.Contains(fresh, series) {
+			t.Errorf("fresh export missing pre-seeded series %q:\n%s", series, fresh)
+		}
+	}
+
+	// Recording semantics: count-only (bytes 0) still increments the
+	// request counter; positive bytes accumulate the byte counter.
+	metrics.RecordCacheDuplicateDownload(0)
+	metrics.RecordCacheDuplicateDownload(4096)
+	metrics.RecordWorkerError()
+	if got := metrics.DuplicateDownloadCount(); got != 2 {
+		t.Errorf("DuplicateDownloadCount = %v, want 2", got)
+	}
+	if got := metrics.DuplicateDownloadBytes(); got != 4096 {
+		t.Errorf("DuplicateDownloadBytes = %v, want 4096", got)
+	}
+	if got := metrics.WorkerErrorCount(); got != 1 {
+		t.Errorf("WorkerErrorCount = %v, want 1", got)
+	}
+
+	export := metrics.ExportPrometheus()
+	if !strings.Contains(export, `velox_cache_duplicate_downloads_total{label="asset"} 2`) {
+		t.Errorf("duplicate counter not exported with delta:\n%s", export)
+	}
+	if !strings.Contains(export, `velox_worker_errors_total{label="total"} 1`) {
+		t.Errorf("worker error counter not exported with delta:\n%s", export)
 	}
 }

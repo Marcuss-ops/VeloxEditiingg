@@ -430,6 +430,59 @@ func TestResolver_Singleflight_TwoConcurrentResolves_OneDownload(t *testing.T) {
 	}
 }
 
+// TestResolver_Singleflight_SharedCountsDuplicateDownload: the
+// singleflight shared path MUST increment the duplicate-download
+// telemetry (the parallelism certification metric). Two concurrent
+// Resolves on a cold cache share ONE download; the coalesced caller
+// is recorded as a duplicate (velox_cache_duplicate_downloads_total)
+// with the shared result's byte size.
+func TestResolver_Singleflight_SharedCountsDuplicateDownload(t *testing.T) {
+	f := newResolverFixture(t)
+	ctx := context.Background()
+
+	src := &countingSource{
+		payload: []byte("FAKE MP4 BYTES — first 8 bytes are non-zero"),
+		delay:   200 * time.Millisecond,
+	}
+	dl := NewDownloader(f.cache, f.dir, src)
+	r := &Resolver{Cache: f.cache, Downloader: dl, Dir: f.dir}
+
+	metrics := telemetry.GetPrometheusMetrics()
+	beforeDuplicates := metrics.DuplicateDownloadCount()
+	beforeBytes := metrics.DuplicateDownloadBytes()
+
+	barrier, release := startBarrier()
+	var wg sync.WaitGroup
+	paths := make([]string, 2)
+	errs := make([]error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-barrier
+			paths[i], errs[i] = r.Resolve(ctx, "TYSON001")
+		}(i)
+	}
+	release()
+	wg.Wait()
+
+	if errs[0] != nil || errs[1] != nil {
+		t.Fatalf("concurrent Resolve errors: [0]=%v [1]=%v", errs[0], errs[1])
+	}
+	if paths[0] != paths[1] {
+		t.Fatalf("Resolve paths differ: [0]=%q [1]=%q", paths[0], paths[1])
+	}
+	if got := src.openCount.Load(); got != 1 {
+		t.Fatalf("source.Open fired %d times, want 1 (dedup invariant)", got)
+	}
+	if got := metrics.DuplicateDownloadCount() - beforeDuplicates; got != 1 {
+		t.Errorf("duplicate-download count delta=%v, want 1 (shared singleflight must be recorded)", got)
+	}
+	if got := metrics.DuplicateDownloadBytes() - beforeBytes; got != float64(len(src.payload)) {
+		t.Errorf("duplicate-download bytes delta=%v want %d (shared file size)", got, len(src.payload))
+	}
+}
+
 // TestResolver_Singleflight_ErrorSharedAcrossCallers: companion
 // to the success case. When the inner fn returns an error,
 // singleflight shares the error verbatim across all coalesced

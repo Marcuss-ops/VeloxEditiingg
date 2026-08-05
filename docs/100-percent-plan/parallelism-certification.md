@@ -83,11 +83,38 @@ Prometheus labels are not copied into the report as dimensions. The harness
 uses one worker endpoint (or a worker-scoped projection), so it does not add
 `job_id`, `asset_id`, `hash`, or other high-cardinality labels.
 
-The current worker/master telemetry already provides the resource and cache
-families documented in `docs/metrics-catalog.md`, including
+### Metrics projection (required for the current deployment)
+
+The worker telemetry emits every series with a static label
+(`velox_cache_downloads_total{label="asset"}`, ...) and the master projects
+per-worker resource gauges labelled `worker_id=...`, while the harness
+looks up the unlabelled base names (and the cache hit/miss by
+`result=` label). The local deployment therefore feeds the harness a
+worker-scoped projection instead of the raw endpoints:
+
+```bash
+# serves :9101/metrics, scraping worker :9090 + master :8000/metrics,
+# selecting worker_id=velox-worker-local, normalizing master micro/milli
+# units back to ratios in [0,1], and stripping the static labels.
+TOKEN_FILE=/var/lib/velox/evidence/velox-token.env \
+  python3 tests/worker-cert/metrics_projection.py \
+    --worker-id velox-worker-local --port 9101
+
+python3 tests/worker-cert/parallel_bench.py \
+  --metrics-url http://127.0.0.1:9101/metrics ...
+```
+
+Start the projection with `setsid` (or an equivalent detach) so it survives
+its launching shell for the whole matrix; a died projection makes every
+required measurement missing and voids the run.
+
+The current worker/master telemetry provides the resource and cache families
+documented in `docs/metrics-catalog.md`, including
 `velox_worker_cpu_iowait_ratio`, `velox_worker_process_rss_bytes`,
-`velox_cache_requests_total`, `velox_cache_downloads_total`, and cache size /
-entry gauges. A cell is marked `INCOMPLETE` when a required measurement is not
+`velox_cache_requests_total`, `velox_cache_downloads_total`, and the
+singleflight dedup counters `velox_cache_duplicate_downloads_total` /
+`velox_cache_duplicate_download_bytes_total` (exported by the worker since
+2026-08-05). A cell is marked `INCOMPLETE` when a required measurement is not
 exported. It is never silently treated as zero.
 
 ## Efficient-limit rule
@@ -115,8 +142,15 @@ example:
 
 ```bash
 --response-dir /var/lib/velox/evidence/parallel-responses \\
---correctness-command 'tests/worker-cert/verify_parallel_artifact.sh --job-id {job_id} --response-json {response_json} --artifact-url {artifact_url} --master-url {master_url}'
+--correctness-command 'worker_id={worker_id}; tests/worker-cert/verify_parallel_artifact.sh --job-id {job_id} --response-json {response_json} --artifact-url {artifact_url} --master-url {master_url}'
 ```
+
+The harness validates that the hook template contains all five placeholders
+(`{job_id}`, `{worker_id}`, `{master_url}`, `{artifact_url}`,
+`{response_json}`); `verify_parallel_artifact.sh` only needs four, so prefix
+the template with a harmless `worker_id={worker_id};` assignment to satisfy
+the contract. Omitting `{worker_id}` rejects every job as
+"correctness hook must include all job/artifact/response placeholders".
 
 The deployment-specific wrapper must download the artifact and invoke the
 canonical `verify_artifact.sh`; the harness does not guess local paths or
@@ -125,14 +159,34 @@ the cell `INCOMPLETE`.
 
 ## Current certification status
 
-On the development host checked on 2026-08-04:
+On the development host on 2026-08-05:
 
-- the local master health endpoint responded on `http://127.0.0.1:8000`;
-- worker API access returned `401` without credentials;
-- `VELOX_ADMIN_TOKEN`, `TOKEN_FILE`, and benchmark asset variables were unset;
-- no worker process was running locally.
+- the local master + worker are running under systemd; the worker advertises
+  `max_active_jobs` correctly (heartbeat `task_slots` fix landed same day);
+- the worker now exports the certification counters (`velox_cache_*`,
+  `velox_worker_errors_total`) pre-seeded at zero, so before/after deltas are
+  always defined;
+- a live 1→2→3 matrix was attempted with 6 jobs/cell. The run was
+  **inconclusive and NOT certified** because:
+  1. the metrics projection process died mid-run (all required measurements
+     missing → every cell `INCOMPLETE`);
+  2. the correctness hook template was missing `{worker_id}` (fixed above), so
+     no artifact was verified;
+  3. 2 of 18 jobs failed under a heavily contended host (load ≈ 27 from
+     co-located agent workloads; the two failures were not diagnosed);
+  4. the host was shared with other workloads, so CPU/RAM samples would have
+     been noisy even with a live projection.
 
-Therefore no 1/2/3 performance numbers are claimed. The live matrix is
-blocked until an operator supplies the token, a connected worker, canonical
-READY assets, the worker metrics URL, and the approved cap command. The
+No 1/2/3 performance numbers are claimed from that attempt. Re-run protocol:
+start the projection detached (`setsid`), run the matrix on an idle host with
+all cells pinned to the same worker, then record the evidence JSON. The
 repository contains no fabricated benchmark result.
+
+## Related gate
+
+After a battery, `scripts/ci/check-ac-taskresult-convergence.sh` proves the
+AC/TaskResult convergence contract for every job (job SUCCEEDED → task
+SUCCEEDED → attempt SUCCEEDED → artifact READY → commit ACK → delivery
+COMPLETED with Drive file ID) plus the zero-state checks (no RUNNING
+jobs/tasks, no expired leases, no old spool rows, no non-terminal
+deliveries). It is wired into `golden-e2e.yml` / `ci.yml`.

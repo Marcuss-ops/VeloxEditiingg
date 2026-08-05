@@ -45,6 +45,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -117,11 +118,34 @@ func (r *Resolver) Resolve(ctx context.Context, driveID string) (string, error) 
 	// Dedupe key is the canonical Drive ID. We use the worker's
 	// pre-normalised form (assetref.DriveFileID) so two callers
 	// with semantically-equal URLs hit the same dedupe key.
-	raw, err, _ := r.sf.Do(driveID, func() (interface{}, error) {
+	//
+	// The singleflight `shared` flag is true for the runner too when
+	// other callers coalesced onto it, so a local ranInner flag is
+	// needed to count only the callers that did NOT run the download
+	// (the ones whose request would have produced a duplicate
+	// download without dedup).
+	var ranInner atomic.Bool
+	raw, err, shared := r.sf.Do(driveID, func() (interface{}, error) {
+		ranInner.Store(true)
 		return r.resolveInner(ctx, driveID)
 	})
 	if err != nil {
 		return "", err
+	}
+	if shared && !ranInner.Load() {
+		// A concurrent Resolve for the same asset was coalesced by
+		// singleflight: without it this request would have produced a
+		// duplicate download. Record the deduped request (and the size
+		// of the shared result when it is on disk) so operators can
+		// verify that parallelism does not multiply network downloads
+		// (velox_cache_duplicate_downloads_total / _bytes_total).
+		if p, ok := raw.(string); ok && p != "" {
+			bytes := int64(0)
+			if fi, serr := os.Stat(p); serr == nil {
+				bytes = fi.Size()
+			}
+			telemetry.GetPrometheusMetrics().RecordCacheDuplicateDownload(bytes)
+		}
 	}
 	return raw.(string), nil
 }

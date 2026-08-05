@@ -82,6 +82,7 @@ func (w *Worker) recordTaskOutcome(pte *PendingTaskExecution, execErr error, dur
 			w.setStatus(StatusError)
 			w.tasksFailed.Add(1)
 			telemetry.RecordJobFailure(duration.Milliseconds())
+			telemetry.GetPrometheusMetrics().RecordWorkerError()
 		}
 		telemetry.GetPrometheusMetrics().RecordJobRuntime(pte.ExecutorID, float64(duration.Milliseconds()))
 	} else {

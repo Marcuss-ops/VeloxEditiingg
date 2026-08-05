@@ -65,21 +65,6 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 		extraMap["recent_errors_count"] = len(recentErrors)
 	}
 
-	// Attach typed WorkerResourceCounters. Keep the legacy Extra mirror
-	// below as well so older registry/debug consumers remain compatible.
-	if w.sampler != nil {
-		if snap := w.sampler.Latest(); snap != nil {
-			hb.Resources = snap.ToProto()
-			if m := snap.ToWireMap(); m != nil {
-				extraMap["resources"] = m
-			}
-			// ffmpeg_processes is intentionally carried in the dynamic
-			// Extra map for compatibility with the existing protobuf
-			// schema; the master registry/store already preserves it.
-			extraMap["ffmpeg_processes"] = snap.FFmpegProcesses
-		}
-	}
-
 	hostname := ""
 	if h, err := os.Hostname(); err == nil {
 		hostname = h
@@ -140,6 +125,31 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	extraMap["active_tasks"] = len(activeJobList)
 	if w.concurrencyLimiter != nil {
 		extraMap["task_slots"] = w.concurrencyLimiter.MaxActiveJobs()
+	}
+
+	// Attach typed WorkerResourceCounters. Keep the legacy Extra mirror
+	// below as well so older registry/debug consumers remain compatible.
+	// The sampler does NOT own concurrency state (see SampledResources
+	// doc): we advertise the real task list and limiter cap on a private
+	// copy so the typed proto and the legacy resources wire map both
+	// carry correct values without racing the sampler loop (Latest()
+	// returns the shared atomic slot, which must not be mutated).
+	if w.sampler != nil {
+		if snap := w.sampler.Latest(); snap != nil {
+			snapCopy := *snap
+			snapCopy.ActiveTasks = int32(len(activeJobList))
+			if w.concurrencyLimiter != nil {
+				snapCopy.TaskSlots = int32(w.concurrencyLimiter.MaxActiveJobs())
+			}
+			hb.Resources = snapCopy.ToProto()
+			if m := snapCopy.ToWireMap(); m != nil {
+				extraMap["resources"] = m
+			}
+			// ffmpeg_processes is intentionally carried in the dynamic
+			// Extra map for compatibility with the existing protobuf
+			// schema; the master registry/store already preserves it.
+			extraMap["ffmpeg_processes"] = snapCopy.FFmpegProcesses
+		}
 	}
 	hb.CurrentJob = primaryJobID
 	hb.ActiveJobsCount = int32(len(activeJobList))

@@ -37,6 +37,9 @@ type PrometheusMetrics struct {
 	assetCacheProtectedSkipCanonical *CounterVec
 	assetCacheSizeBytes              *GaugeVec
 	assetCacheEntries                *GaugeVec
+	assetCacheDuplicateDownloads     *CounterVec
+	assetCacheDuplicateDownloadBytes *CounterVec
+	workerErrorsTotal                *CounterVec
 	workerActiveJobs                 *GaugeVec
 	workerStatus                     *GaugeVec
 	fallbackCount                    *CounterVec
@@ -105,9 +108,9 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 			Name: "velox_asset_cache_misses_total", Help: "Total asset cache misses (low-cardinality)",
 			values: make(map[string]float64),
 		},
-		assetCacheRequests:               &CounterVec{Name: "velox_cache_requests_total", Help: "Asset cache requests by result", Label: "result", values: make(map[string]float64)},
+		assetCacheRequests:               &CounterVec{Name: "velox_cache_requests_total", Help: "Asset cache requests by result", Label: "result", values: map[string]float64{"hit": 0, "miss": 0}},
 		assetCacheEvictions:              &CounterVec{Name: "velox_cache_evictions_total", Help: "Asset cache evictions by reason", Label: "reason", values: make(map[string]float64)},
-		assetCacheDownloads:              &CounterVec{Name: "velox_cache_downloads_total", Help: "Completed local asset downloads", values: make(map[string]float64)},
+		assetCacheDownloads:              &CounterVec{Name: "velox_cache_downloads_total", Help: "Completed local asset downloads", values: map[string]float64{"asset": 0}},
 		assetCacheDownloadBytes:          &CounterVec{Name: "velox_cache_download_bytes_total", Help: "Bytes downloaded into the local asset cache", values: make(map[string]float64)},
 		assetCacheDownloadMS:             &HistogramVec{Name: "velox_cache_download_duration_seconds", Help: "Asset cache download duration", Buckets: []float64{.01, .1, 1, 5, 30, 120, 600}, values: make(map[string]*histogramData)},
 		assetDownloadSecondsCanonical:    &HistogramVec{Name: "velox_asset_download_seconds", Help: "Asset download duration", Buckets: []float64{.01, .1, 1, 5, 30, 120, 600}, values: make(map[string]*histogramData)},
@@ -117,6 +120,18 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 		assetCacheProtectedSkipCanonical: &CounterVec{Name: "velox_cache_protected_skips_total", Help: "Asset cache entries skipped because they are protected", values: make(map[string]float64)},
 		assetCacheSizeBytes:              &GaugeVec{Name: "velox_cache_size_bytes", Help: "Current local asset cache size", values: make(map[string]float64)},
 		assetCacheEntries:                &GaugeVec{Name: "velox_cache_entries", Help: "Current local asset cache entries", values: make(map[string]float64)},
+		assetCacheDuplicateDownloads: &CounterVec{
+			Name: "velox_cache_duplicate_downloads_total", Help: "Concurrent duplicate asset downloads coalesced by singleflight",
+			values: map[string]float64{"asset": 0},
+		},
+		assetCacheDuplicateDownloadBytes: &CounterVec{
+			Name: "velox_cache_duplicate_download_bytes_total", Help: "Bytes a duplicate download would have consumed (coalesced by singleflight)",
+			values: map[string]float64{"asset": 0},
+		},
+		workerErrorsTotal: &CounterVec{
+			Name: "velox_worker_errors_total", Help: "Worker task failures",
+			values: map[string]float64{"total": 0},
+		},
 		workerActiveJobs: &GaugeVec{
 			Name: "velox_worker_active_jobs", Help: "Number of active jobs per worker",
 			values: make(map[string]float64),
@@ -197,6 +212,24 @@ func (m *PrometheusMetrics) CacheRequestCount(result string) float64 {
 	return m.assetCacheRequests.get(normalizeCacheResult(result))
 }
 
+// DuplicateDownloadCount returns the singleflight-coalesced duplicate
+// download counter (diagnostics and deterministic tests only).
+func (m *PrometheusMetrics) DuplicateDownloadCount() float64 {
+	return m.assetCacheDuplicateDownloads.get("asset")
+}
+
+// DuplicateDownloadBytes returns the bytes a duplicate download would
+// have consumed (coalesced by singleflight; diagnostics/tests only).
+func (m *PrometheusMetrics) DuplicateDownloadBytes() float64 {
+	return m.assetCacheDuplicateDownloadBytes.get("asset")
+}
+
+// WorkerErrorCount returns the worker-side task-failure counter
+// (diagnostics and deterministic tests only).
+func (m *PrometheusMetrics) WorkerErrorCount() float64 {
+	return m.workerErrorsTotal.get("total")
+}
+
 // CacheEvictionCount returns the current low-cardinality eviction count.
 func (m *PrometheusMetrics) CacheEvictionCount(reason string) float64 {
 	return m.assetCacheEvictions.get(normalizeCacheReason(reason))
@@ -214,6 +247,26 @@ func (m *PrometheusMetrics) RecordCacheDownload(bytes int64, duration time.Durat
 	m.assetCacheDownloadBytes.add("asset", float64(bytes))
 	m.assetCacheDownloadMS.observe("asset", duration.Seconds())
 	m.assetDownloadSecondsCanonical.observe("total", duration.Seconds())
+}
+
+// RecordCacheDuplicateDownload counts a concurrent duplicate asset
+// request that singleflight coalesced onto an in-flight download
+// (the worker-side dedup counter the parallelism certification
+// harness reads via velox_cache_duplicate_downloads_total). The
+// bytes argument is the size of the shared result when it is on
+// disk; 0 is accepted (count-only) when the path is unavailable.
+func (m *PrometheusMetrics) RecordCacheDuplicateDownload(bytes int64) {
+	m.assetCacheDuplicateDownloads.inc("asset")
+	if bytes > 0 {
+		m.assetCacheDuplicateDownloadBytes.add("asset", float64(bytes))
+	}
+}
+
+// RecordWorkerError increments the worker-side task-failure counter
+// (velox_worker_errors_total) at the same site that bumps
+// tasksFailed, so operators can delta it across a batch window.
+func (m *PrometheusMetrics) RecordWorkerError() {
+	m.workerErrorsTotal.inc("total")
 }
 func (m *PrometheusMetrics) RecordCacheVerify(duration time.Duration) {
 	m.assetCacheVerifyMS.observe("asset", duration.Seconds())
@@ -337,6 +390,9 @@ func (m *PrometheusMetrics) ExportPrometheus() string {
 	output += m.assetCacheProtectedSkipCanonical.export()
 	output += m.assetCacheSizeBytes.export()
 	output += m.assetCacheEntries.export()
+	output += m.assetCacheDuplicateDownloads.export()
+	output += m.assetCacheDuplicateDownloadBytes.export()
+	output += m.workerErrorsTotal.export()
 	output += m.fallbackCount.export()
 	output += m.pythonEmergencyPath.export()
 	output += m.workerActiveJobs.export()
