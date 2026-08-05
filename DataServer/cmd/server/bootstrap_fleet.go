@@ -162,17 +162,6 @@ func buildFleet(p *persistenceDeps, workerRegistry *workersreg.Registry) (*Fleet
 	registry.Register(fleet.OperationKindUpdate, fleet.NewUpdateExecutor(updateBackend))
 	log.Printf("[BOOTSTRAP] UpdateExecutor registered for kind=%s (registry drain/active_tasks gate wired; SSH/Docker/Smoke/Drive pending)", fleet.OperationKindUpdate)
 
-	// Resume is gated by the latest persisted Level D smoke result. The
-	// executor clears Drain/Quarantined only after the smoke is green.
-	resumeSmoke := fleet.NewSmokeRunHealthChecker(p.SQLite)
-	if err := registry.Register(fleet.OperationKindResume, fleet.NewResumeExecutor(fleet.ResumeBackend{
-		Registry: workerRegistry,
-		Smoke:    resumeSmoke,
-	})); err != nil {
-		return nil, fmt.Errorf("register resume executor: %w", err)
-	}
-	log.Printf("[BOOTSTRAP] ResumeExecutor registered for kind=%s (smoke gate wired)", fleet.OperationKindResume)
-
 	return &FleetDep{
 		Controller:      controller,
 		Registry:        registry,

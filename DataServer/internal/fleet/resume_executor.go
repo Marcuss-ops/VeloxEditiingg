@@ -2,9 +2,9 @@ package fleet
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
@@ -16,16 +16,17 @@ import (
 var ErrResumeSmokeFailed = errors.New("resume: smoke gate failed")
 
 // ResumeBackend bundles the narrow dependencies required by ResumeExecutor.
-// The registry is intentionally the same in-process registry used by
-// placement, so clearing the flags is atomic with the read model's writes.
+// SmokeExecutor must be the real Level D executor, not the read-only
+// SmokeRunHealthChecker: Resume owns a fresh smoke run and only clears
+// exclusion flags after that executor returns nil.
 type ResumeBackend struct {
-	Registry *workersreg.Registry
-	Smoke    BackendSmokeRunner
+	Registry      *workersreg.Registry
+	SmokeExecutor OperationExecutor
 }
 
 // ResumeExecutor is the sole writer that can make a drained or quarantined
-// worker eligible again. It verifies the persisted Level D smoke result first,
-// then clears both exclusion flags.
+// worker eligible again. It runs a fresh Level D smoke first, then clears both
+// exclusion flags. A stale persisted smoke result is never sufficient.
 type ResumeExecutor struct {
 	backend ResumeBackend
 }
@@ -44,8 +45,8 @@ func (e *ResumeExecutor) Execute(ctx context.Context, op *store.Operation) error
 	if e == nil || e.backend.Registry == nil {
 		return errors.New("resume: worker registry not wired")
 	}
-	if e.backend.Smoke == nil {
-		return fmt.Errorf("%w: smoke runner not wired", ErrResumeSmokeFailed)
+	if e.backend.SmokeExecutor == nil {
+		return fmt.Errorf("%w: Level D smoke executor not wired", ErrResumeSmokeFailed)
 	}
 	info := e.backend.Registry.GetWorker(ctx, op.WorkerID)
 	if info == nil {
@@ -54,17 +55,27 @@ func (e *ResumeExecutor) Execute(ctx context.Context, op *store.Operation) error
 	if !info.Drain && !info.Quarantined {
 		return nil
 	}
-	if op.QueuedAt.IsZero() {
-		return fmt.Errorf("%w: operation queued_at is required for freshness gate", ErrResumeSmokeFailed)
-	}
-	freshSmoke, ok := e.backend.Smoke.(interface {
-		RunLevelDAfter(context.Context, string, time.Time) (string, error)
+	// The nested operation is executed directly so Resume waits for the
+	// actual Level D pipeline. Its smoke_runs row is the durable evidence;
+	// merely reading an older SUCCEEDED row is intentionally impossible.
+	payload, err := json.Marshal(SmokePayload{
+		AssetID: "asset-canary-001",
+		Reason:  "resume Level D smoke gate",
 	})
-	if !ok {
-		return fmt.Errorf("%w: smoke runner does not support freshness gate", ErrResumeSmokeFailed)
+	if err != nil {
+		return fmt.Errorf("%w: build smoke payload: %v", ErrResumeSmokeFailed, err)
 	}
-	_, smokeErr := freshSmoke.RunLevelDAfter(ctx, op.WorkerID, op.QueuedAt)
-	if smokeErr != nil {
+	smokeOp := &store.Operation{
+		OperationID: op.OperationID + ":resume-smoke",
+		WorkerID:    op.WorkerID,
+		Op:          OperationKindSmoke,
+		RequestedBy: op.RequestedBy,
+		Reason:      "resume Level D smoke gate",
+		Payload:     payload,
+		Status:      store.OperationStatusRunning,
+		QueuedAt:    op.QueuedAt,
+	}
+	if smokeErr := e.backend.SmokeExecutor.Execute(ctx, smokeOp); smokeErr != nil {
 		return fmt.Errorf("%w: %v", ErrResumeSmokeFailed, smokeErr)
 	}
 	// Clear quarantine first, then drain. If the second write fails, Drain

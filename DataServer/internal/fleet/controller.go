@@ -251,10 +251,18 @@ func (c *FleetController) Tick(ctx context.Context) {
 	for i := range queued {
 		op := &queued[i]
 		// Per-operation timeout guards against an SSH/ansible
-		// hung session pinning RUNNING indefinitely. Default
-		// 10min is the prod upper-bound; tests override to
-		// sub-second so the case-6 fail-fast surface fires.
+		// hung session pinning RUNNING indefinitely. Resume owns
+		// a real Level D smoke and must not block this single fleet
+		// dispatcher tick while ffmpeg/Drive work runs; it is
+		// dispatched asynchronously and completes its own ledger row.
 		execCtx, cancel := context.WithTimeout(ctx, c.opTimeout)
+		if op.Op == OperationKindResume {
+			go func(op *store.Operation, execCtx context.Context, cancel context.CancelFunc) {
+				defer cancel()
+				c.processOne(execCtx, op)
+			}(op, execCtx, cancel)
+			continue
+		}
 		c.processOne(execCtx, op)
 		cancel()
 	}
