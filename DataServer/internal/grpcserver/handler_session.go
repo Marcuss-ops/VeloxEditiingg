@@ -59,16 +59,10 @@ type workerSession struct {
 	pendingTaskOffer *taskgraph.TaskWithSpec // TaskOffer sent, awaiting TaskAccepted/TaskRejected
 	claimMu          sync.Mutex              // serializes the claim+send+set flow; also guards pendingTaskOffer r/w
 
-	// Worker capacity tracking (atomic — Phase 4.1 fix). The handleHeartbeat
-	// goroutine writes them, sendPushJobOffer reads them under claimMu. Using
-	// atomic.Int32 makes the read lock-free and race-clean in `-race`.
+	// Worker capacity limit from the canonical capability report. Current
+	// occupancy is never stored on the session: placement reads active leases
+	// from the master task store before admission.
 	maxParallelJobs atomic.Int32
-	activeJobsCount atomic.Int32
-
-	// supportedJobTypes is updated by handleHeartbeat from the worker's
-	// capabilities and read by collectAllowedJobTypes under claimMu.
-	// atomic.Value avoids RWMutex overhead while remaining race-clean.
-	supportedJobTypes atomic.Value // []string
 
 	// Sequence numbers for replay protection (Issue 7 fix).
 	lastRecvSeq int64 // last received sequence number from worker
@@ -82,7 +76,7 @@ type workerSession struct {
 	executors   controltransport.ExecutorRegistry
 
 	capabilitiesMu   sync.RWMutex
-	capabilities     map[string]bool
+	capabilities     controltransport.CapabilitySet
 	assetCacheKeysMu sync.RWMutex
 	assetCacheKeys   map[string]struct{}
 
@@ -112,9 +106,9 @@ func (s *workerSession) placementSnapshot(workerID string) placement.WorkerSnaps
 	s.executorsMu.RUnlock()
 
 	s.capabilitiesMu.RLock()
-	caps := make(map[string]bool, len(s.capabilities))
-	for key, enabled := range s.capabilities {
-		caps[key] = enabled
+	caps := append(controltransport.CapabilitySet(nil), s.capabilities...)
+	for i := range caps {
+		caps[i] = strings.TrimSpace(caps[i])
 	}
 	s.capabilitiesMu.RUnlock()
 	s.assetCacheKeysMu.RLock()
@@ -125,13 +119,16 @@ func (s *workerSession) placementSnapshot(workerID string) placement.WorkerSnaps
 	s.assetCacheKeysMu.RUnlock()
 
 	return placement.WorkerSnapshot{
-		WorkerID:           workerID,
-		SessionID:          s.sessionID,
-		Ready:              s.ready.Load(),
-		Draining:           s.draining.Load(),
-		SessionAlive:       true,
-		MaxParallelJobs:    int(s.maxParallelJobs.Load()),
-		ActiveJobs:         int(s.activeJobsCount.Load()),
+		WorkerID:        workerID,
+		SessionID:       s.sessionID,
+		Ready:           s.ready.Load(),
+		Draining:        s.draining.Load(),
+		SessionAlive:    true,
+		MaxParallelJobs: int(s.maxParallelJobs.Load()),
+		// ActiveJobs is replaced by the lease-store projection in the
+		// placement pipeline before Matcher.Select. Zero here prevents a
+		// heartbeat counter from becoming an admission decision.
+		ActiveJobs:         0,
 		ExecutorRegistry:   executorRegistry,
 		Capabilities:       caps,
 		CachedAssetKeys:    assetKeys,
@@ -161,7 +158,7 @@ func (s *workerSession) replaceAssetCacheKeys(keys []string) {
 // built from a stale snapshot can be detected by the fencing check.
 func (s *workerSession) replaceCapabilities(
 	executors controltransport.ExecutorRegistry,
-	capabilities map[string]bool,
+	capabilities controltransport.CapabilitySet,
 ) {
 	s.replaceExecutorRegistry(executors)
 
@@ -177,35 +174,34 @@ func (s *workerSession) replaceExecutorRegistry(executors controltransport.Execu
 	s.capabilityRevision.Add(1)
 }
 
+// maxParallelJobsFromCapabilities reads the worker's capacity from the
+// SINGLE canonical wire representation: capabilities.host.max_parallel_jobs
+// (worker CapabilityReport.AsMap). The legacy top-level
+// capabilities.max_parallel_jobs mirror was removed together with its
+// reader: the protocol-version gate (controltransport.IsSupportedProtocol)
+// admits only v3 workers, and current workers always publish the host
+// block. A top-level-only legacy shape now reads as 0 on purpose.
 func maxParallelJobsFromCapabilities(capsMap map[string]interface{}) int {
 	if capsMap == nil {
 		return 0
 	}
-	if mpj, ok := capsMap["max_parallel_jobs"]; ok {
-		switch v := mpj.(type) {
-		case float64:
-			return int(v)
-		case int:
-			return v
-		case int32:
-			return int(v)
-		case int64:
-			return int(v)
-		}
+	host, ok := capsMap["host"].(map[string]interface{})
+	if !ok {
+		return 0
 	}
-	if host, ok := capsMap["host"].(map[string]interface{}); ok {
-		if mpj, ok := host["max_parallel_jobs"]; ok {
-			switch v := mpj.(type) {
-			case float64:
-				return int(v)
-			case int:
-				return v
-			case int32:
-				return int(v)
-			case int64:
-				return int(v)
-			}
-		}
+	mpj, ok := host["max_parallel_jobs"]
+	if !ok {
+		return 0
+	}
+	switch v := mpj.(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case int32:
+		return int(v)
+	case int64:
+		return int(v)
 	}
 	return 0
 }

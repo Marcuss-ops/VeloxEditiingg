@@ -230,33 +230,6 @@ func DeriveDeploymentHealthState(status string, isRollback bool) string {
 	}
 }
 
-// activeJobsFromMetrics parses the canonical "active_tasks" key
-// out of the heartbeat metrics map. Returns 0 on missing or
-// unconvertible entries. Local helper so the workers package
-// doesn't depend on the api package's typed metrics parser.
-func activeJobsFromMetrics(raw map[string]interface{}) int32 {
-	if raw == nil {
-		return 0
-	}
-	v, ok := raw["active_tasks"]
-	if !ok {
-		return 0
-	}
-	switch t := v.(type) {
-	case float64:
-		return int32(t)
-	case float32:
-		return int32(t)
-	case int:
-		return int32(t)
-	case int64:
-		return int32(t)
-	case int32:
-		return t
-	}
-	return 0
-}
-
 // HealthForInfo populates info.Health from the canonical inputs.
 // Mirror shape of ConnectionStatusForInfo so the registry
 // hydrate path can call both side-by-side without threading
@@ -278,11 +251,10 @@ func HealthForInfo(info *Worker, lastSmokeFail time.Time, deploymentState string
 		info.DeploymentState = NormalizeDeploymentState(deploymentState)
 	}
 	info.ConnectionState = DeriveConnectionState(info.SessionActive, info.LastHB, now)
-	info.SchedulingState = DeriveSchedulingState(
-		info.Drain,
-		info.Quarantined,
-		int(activeJobsFromMetrics(info.Metrics)),
-	)
+	// The lease store owns occupancy. Heartbeat active_tasks is retained
+	// for telemetry but cannot promote a worker to BUSY in the canonical
+	// state projection.
+	info.SchedulingState = DeriveSchedulingState(info.Drain, info.Quarantined, 0)
 	info.HealthState = DeriveHealthState(
 		info.ConnectionState,
 		info.SchedulingState,

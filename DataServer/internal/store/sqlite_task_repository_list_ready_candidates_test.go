@@ -312,7 +312,7 @@ func TestSQLiteTaskRepository_ListReadyCandidates_InteropWithMatcher(t *testing.
 			registry, _ := controltransport.NewExecutorRegistry(controltransport.ExecutorCapability{ID: "scene.composite.v1", Version: 1})
 			return registry
 		}(),
-		Capabilities: map[string]bool{"artifact.commit.v1": true},
+		Capabilities: controltransport.CapabilitySet{"artifact.commit.v1"},
 	}, candidates)
 
 	if result.Candidate == nil {
@@ -334,7 +334,7 @@ func TestSQLiteTaskRepository_ListReadyCandidates_InteropWithMatcher(t *testing.
 			registry, _ := controltransport.NewExecutorRegistry(controltransport.ExecutorCapability{ID: "scene.composite.v1", Version: 1})
 			return registry
 		}(),
-		Capabilities: map[string]bool{}, // no capabilities
+		Capabilities: controltransport.CapabilitySet{}, // no capabilities
 	}, candidates)
 
 	if resultNoCap.Candidate != nil {

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log"
 
+	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 )
 
@@ -68,21 +69,30 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 	// Update capacity tracking on the session (for max_parallel_jobs check).
 	sess := h.getSession(workerID)
 	if sess != nil {
-		sess.activeJobsCount.Store(int32(hb.GetActiveJobsCount()))
 		if hb.GetExtra() != nil {
 			extraMap := hb.GetExtra().AsMap()
 			if caps, ok := extraMap["capabilities"].(map[string]interface{}); ok {
 				sess.replaceAssetCacheKeys(extractAssetCacheKeys(caps))
-				if registry, err := parseExecutorCapabilities(caps); err == nil {
+				registry, err := parseExecutorCapabilities(caps)
+				if err != nil {
+					// A malformed re-advertisement must not leave stale
+					// executor claims active. Fail closed until the worker
+					// sends a valid canonical report again.
+					sess.replaceExecutorRegistry(controltransport.EmptyExecutorRegistry())
+				} else {
 					sess.replaceExecutorRegistry(registry)
 				}
-			}
-			if mpj, ok := extraMap["max_parallel_jobs"]; ok {
-				switch v := mpj.(type) {
-				case float64:
-					sess.maxParallelJobs.Store(int32(v))
-				case int64:
-					sess.maxParallelJobs.Store(int32(v))
+				// Capacity refresh reads the canonical capabilities shape
+				// (host.max_parallel_jobs) only. The legacy top-level
+				// extra["max_parallel_jobs"] read was never written by the
+				// worker and is removed.
+				mpj := maxParallelJobsFromCapabilities(caps)
+				if mpj > 0 {
+					sess.maxParallelJobs.Store(int32(mpj))
+				} else {
+					// Missing or malformed declared capacity must not leave
+					// a stale max-slot value on the session.
+					sess.maxParallelJobs.Store(0)
 				}
 			}
 		}

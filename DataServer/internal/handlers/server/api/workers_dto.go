@@ -81,9 +81,12 @@ type WorkerResponse struct {
 	LastHeartbeatAt     string              `json:"last_heartbeat_at,omitempty"`
 	HeartbeatAgeSeconds int64               `json:"heartbeat_age_seconds"`
 	CurrentTaskID       string              `json:"current_task_id,omitempty"`
-	ActiveTasks         int32               `json:"active_tasks"`
+	ActiveTasks         int32               `json:"active_tasks"` // compatibility alias for active_slots
 	ActiveTaskRuntime   []ActiveTaskRuntime `json:"active_task_runtime,omitempty"`
-	TaskSlots           int32               `json:"task_slots"`
+	TaskSlots           int32               `json:"task_slots"` // compatibility alias for max_slots
+	ActiveSlots         int32               `json:"active_slots"`
+	MaxSlots            int32               `json:"max_slots"`
+	AvailableSlots      int32               `json:"available_slots"`
 	CPUUtilizationRatio float64             `json:"cpu_utilization_ratio"`
 	MemoryUsedBytes     int64               `json:"memory_used_bytes"`
 	DiskFreeBytes       int64               `json:"disk_free_bytes"`

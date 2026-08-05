@@ -52,6 +52,8 @@ func makeCardInfo(id string, opts ...func(*workersreg.Worker)) workersreg.Worker
 		LastHB:               time.Now().UTC().Format(time.RFC3339),
 		ConnectionStatus:     "CONNECTED",
 		SessionActive:        true,
+		DeclaredMaxSlots:     2,
+		Capacity:             workersreg.WorkerCapacity{MaxSlots: 2, ActiveSlots: 0, AvailableSlots: 2, Authoritative: true},
 		Metrics: map[string]interface{}{
 			"active_tasks": float64(0),
 			"task_slots":   float64(2),
@@ -171,7 +173,6 @@ func TestBuildWorkerCard_NilInfo(t *testing.T) {
 // capabilities are nil or carry no "executors" key.
 func TestBuildWorkerCard_NoExecutors(t *testing.T) {
 	info := makeCardInfo("w-no-exec", func(i *workersreg.Worker) {
-		i.Capabilities = nil
 		i.ExecutorCapabilities = controltransport.EmptyExecutorRegistry()
 	})
 	card := buildWorkerCard(&info)
@@ -183,8 +184,6 @@ func TestBuildWorkerCard_NoExecutors(t *testing.T) {
 	}
 
 	info2 := makeCardInfo("w-other-caps", func(i *workersreg.Worker) {
-		i.Capabilities = map[string]interface{}{
-			"other_key": "value"}
 		i.ExecutorCapabilities = controltransport.EmptyExecutorRegistry()
 	})
 	card2 := buildWorkerCard(&info2)
@@ -232,6 +231,7 @@ func TestBuildWorkerCard_RuntimeTelemetry(t *testing.T) {
 		i.DesiredVersion = "worker-v1.9.0"
 		i.DeploymentState = "CURRENT"
 		i.CurrentJob = "job-123"
+		i.Capacity = workersreg.WorkerCapacity{MaxSlots: 2, ActiveSlots: 1, AvailableSlots: 1, Authoritative: true}
 		i.Metrics = map[string]interface{}{
 			"active_tasks":          float64(1),
 			"task_slots":            float64(2),

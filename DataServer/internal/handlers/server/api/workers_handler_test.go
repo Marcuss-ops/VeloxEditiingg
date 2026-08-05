@@ -53,6 +53,7 @@ func TestSanitizeWorker(t *testing.T) {
 		CurrentJob:       "task-456",
 		Drain:            false,
 		Schedulable:      true,
+		Capacity:         workersreg.WorkerCapacity{MaxSlots: 3, ActiveSlots: 1, AvailableSlots: 2, Authoritative: true},
 		Host:             "render-01.example.com",
 		ProtocolVersion:  "v3",
 		EngineVersion:    "1.2.0",

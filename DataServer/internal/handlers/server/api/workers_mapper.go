@@ -69,8 +69,11 @@ func sanitizeWorker(w workersreg.Worker) WorkerResponse {
 	// by the gRPC heartbeat handler (registry_heartbeat.go stores the
 	// proto WorkerResourceCounters fields under the "metrics" key).
 	metrics := ParseWorkerMetrics(w.Metrics)
-	resp.ActiveTasks = metrics.ActiveTasks
-	resp.TaskSlots = metrics.TaskSlots
+	resp.ActiveTasks = int32(w.Capacity.ActiveSlots)
+	resp.TaskSlots = int32(w.Capacity.MaxSlots)
+	resp.ActiveSlots = int32(w.Capacity.ActiveSlots)
+	resp.MaxSlots = int32(w.Capacity.MaxSlots)
+	resp.AvailableSlots = int32(w.Capacity.AvailableSlots)
 	resp.CPUUtilizationRatio = metrics.CPUUtilizationRatio
 	resp.MemoryUsedBytes = metrics.MemoryUsedBytes
 	resp.DiskFreeBytes = metrics.DiskFreeBytes

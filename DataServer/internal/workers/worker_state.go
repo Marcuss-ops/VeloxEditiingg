@@ -37,11 +37,9 @@ const (
 
 // SchedulingState is the canonical scheduling dimension: whether the
 // worker can accept new work. Quarantine and drain are operator-set
-// exclusions; BUSY is derived from an active-task count — never from a
-// "busy"/"on_task" status string. The current registry hydration uses
-// the heartbeat active_tasks metric as a compatibility adapter because
-// the lease-store query is not yet part of this read path; the adapter is
-// isolated here and must be replaced when lease hydration is wired.
+// exclusions; BUSY is derived from an active lease count — never from a
+// "busy"/"on_task" status string. Registry hydration supplies that count
+// from the master lease store; heartbeat active_tasks remains telemetry only.
 type SchedulingState string
 
 const (

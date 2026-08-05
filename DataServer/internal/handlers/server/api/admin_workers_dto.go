@@ -42,8 +42,8 @@ package api
 //	executor_version  Worker.ExecutorCapabilities.All()[0].Version
 //	software_version  Worker.CodeVersion     (worker-reported code)
 //	last_heartbeat_at Worker.LastHB
-//	active_jobs       ParseWorkerMetrics(Worker.Metrics).ActiveTasks
-//	max_active_jobs   ParseWorkerMetrics(Worker.Metrics).TaskSlots
+//	active_jobs       Worker.Capacity.ActiveSlots (compatibility alias)
+//	max_active_jobs   Worker.Capacity.MaxSlots (compatibility alias)
 //
 // `image_digest`, `desired_version`, and `deployment_state` come from
 // heartbeat metadata. `health` is derived by the registry. Smoke and
@@ -78,8 +78,11 @@ type WorkerCard struct {
 	SoftwareVersion     string  `json:"software_version"`
 	DesiredVersion      string  `json:"desired_version,omitempty"`
 	LastHeartbeatAt     string  `json:"last_heartbeat_at,omitempty"`
-	ActiveJobs          int32   `json:"active_jobs"`
-	MaxActiveJobs       int32   `json:"max_active_jobs"`
+	ActiveJobs          int32   `json:"active_jobs"`     // compatibility alias for active_slots
+	MaxActiveJobs       int32   `json:"max_active_jobs"` // compatibility alias for max_slots
+	ActiveSlots         int32   `json:"active_slots"`
+	MaxSlots            int32   `json:"max_slots"`
+	AvailableSlots      int32   `json:"available_slots"`
 	CPUUtilizationRatio float64 `json:"cpu_utilization_ratio,omitempty"`
 	MemoryUsedBytes     int64   `json:"memory_used_bytes,omitempty"`
 	DiskFreeBytes       int64   `json:"disk_free_bytes,omitempty"`

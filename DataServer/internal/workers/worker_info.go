@@ -1,6 +1,8 @@
 package workers
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 
 	"velox-shared/controltransport"
@@ -53,20 +55,20 @@ type Worker struct {
 
 	// RolloutGroup is the operator-assigned rollout cohort used to phase
 	// worker fleets into a new bundle.
-	RolloutGroup    string `json:"rollout_group,omitempty"`
-	CodeVersion     string `json:"code_version"`
-	BundleVersion   string `json:"bundle_version"`
-	BundleHash      string `json:"bundle_hash,omitempty"`
-	ImageDigest     string `json:"image_digest,omitempty"`
-	DesiredVersion  string `json:"desired_version,omitempty"`
-	ProtocolVersion string `json:"protocol_version,omitempty"`
-	EngineVersion   string `json:"engine_version,omitempty"`
+	RolloutGroup     string `json:"rollout_group,omitempty"`
+	CodeVersion      string `json:"code_version"`
+	BundleVersion    string `json:"bundle_version"`
+	BundleHash       string `json:"bundle_hash,omitempty"`
+	ImageDigest      string `json:"image_digest,omitempty"`
+	DesiredVersion   string `json:"desired_version,omitempty"`
+	ProtocolVersion  string `json:"protocol_version,omitempty"`
+	EngineVersion    string `json:"engine_version,omitempty"`
+	DeclaredMaxSlots int    `json:"declared_max_slots,omitempty"`
 
-	// Capabilities is retained at the compatibility boundary. The typed
-	// ExecutorCapabilities registry is the source of truth for executor
-	// discovery and placement.
-	Capabilities         map[string]interface{}            `json:"capabilities,omitempty"`
-	ExecutorCapabilities controltransport.ExecutorRegistry `json:"-"`
+	// ExecutorCapabilities is the sole typed source of executor metadata for
+	// scheduling, health, persistence, and API projections. Legacy capability
+	// maps are decoded only at the registration/heartbeat boundary.
+	ExecutorCapabilities controltransport.ExecutorRegistry `json:"executor_capabilities,omitempty"`
 	BootID               string                            `json:"boot_id,omitempty"`
 	BootTS               string                            `json:"boot_ts,omitempty"`
 
@@ -94,6 +96,10 @@ type Worker struct {
 	RecentLogs   []string               `json:"recent_logs,omitempty"`
 	RecentErrors []string               `json:"recent_errors,omitempty"`
 	Metrics      map[string]interface{} `json:"metrics,omitempty"`
+
+	// Capacity is the authoritative scheduling projection. It is hydrated
+	// from the lease store on read paths; heartbeat counters remain telemetry.
+	Capacity WorkerCapacity `json:"capacity"`
 }
 
 // WorkerInfo is retained as a source-compatible alias during the migration
@@ -103,19 +109,42 @@ type Worker struct {
 // Deprecated: use Worker.
 type WorkerInfo = Worker
 
-// ExecutorRegistrySnapshot returns the typed executor view used by master
-// consumers. Persisted legacy capability maps are decoded only here as a
-// rolling-deployment compatibility adapter; new heartbeats populate the
-// ExecutorCapabilities field directly.
-func (info Worker) ExecutorRegistrySnapshot() controltransport.ExecutorRegistry {
-	if !info.ExecutorCapabilities.IsEmpty() {
-		return info.ExecutorCapabilities
+// UnmarshalJSON restores the typed registry and performs the one-time
+// persistence-boundary migration from the former `capabilities` JSON key.
+// No legacy map is retained on Worker; malformed legacy data fails closed.
+func (info *Worker) UnmarshalJSON(data []byte) error {
+	type workerAlias Worker
+	var decoded workerAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
 	}
-	registry, err := controltransport.ExecutorRegistryFromLegacy(info.Capabilities)
+	*info = Worker(decoded)
+
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return err
+	}
+	legacy, ok := envelope["capabilities"]
+	if !ok || len(legacy) == 0 || string(legacy) == "null" || !info.ExecutorCapabilities.IsEmpty() {
+		return nil
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(legacy, &raw); err != nil {
+		return fmt.Errorf("decode legacy worker capabilities: %w", err)
+	}
+	registry, err := controltransport.ExecutorRegistryFromLegacyStrict(raw)
 	if err != nil {
-		return controltransport.EmptyExecutorRegistry()
+		return fmt.Errorf("decode legacy worker capability registry: %w", err)
 	}
-	return registry
+	info.ExecutorCapabilities = registry
+	return nil
+}
+
+// ExecutorRegistrySnapshot returns the sole typed executor view used by all
+// master consumers. Empty means the worker has not passed typed capability
+// admission; callers fail closed instead of inferring executors from flags.
+func (info Worker) ExecutorRegistrySnapshot() controltransport.ExecutorRegistry {
+	return info.ExecutorCapabilities
 }
 
 // ScrubForPersist zeroes the read-time-hydrated fields on info so a cached
@@ -132,6 +161,7 @@ func ScrubForPersist(info *Worker) {
 	info.SchedulingState = ""
 	info.HealthState = ""
 	info.Health = ""
+	info.Capacity = WorkerCapacity{}
 }
 
 const DefaultWorkerProtocolVersion = "v3"
@@ -186,37 +216,14 @@ func applyMetadataFields(extra map[string]interface{}, info *Worker) {
 		info.RolloutGroup = v
 	}
 	if v, ok := extra["capabilities"]; ok {
-		info.Capabilities = normalizeCapabilities(v)
-		if registry, err := controltransport.ExecutorRegistryFromLegacy(v); err == nil {
+		info.DeclaredMaxSlots = declaredWorkerSlotsFromCapabilities(v)
+		// This is the only legacy wire adapter: immediately decode the
+		// report into the canonical typed registry and never retain the map.
+		if registry, err := controltransport.ExecutorRegistryFromLegacyStrict(v); err == nil {
 			info.ExecutorCapabilities = registry
+		} else {
+			info.ExecutorCapabilities = controltransport.EmptyExecutorRegistry()
 		}
-	}
-	if v, ok := extra["supported_job_types"]; ok {
-		if info.Capabilities == nil {
-			info.Capabilities = map[string]interface{}{}
-		}
-		info.Capabilities["supported_job_types"] = ExtractStringSlice(v)
-	}
-}
-
-func normalizeCapabilities(v interface{}) map[string]interface{} {
-	switch t := v.(type) {
-	case map[string]interface{}:
-		return t
-	case map[string]bool:
-		out := make(map[string]interface{}, len(t))
-		for k, b := range t {
-			out[k] = b
-		}
-		return out
-	case map[string]string:
-		out := make(map[string]interface{}, len(t))
-		for k, s := range t {
-			out[k] = s
-		}
-		return out
-	default:
-		return nil
 	}
 }
 

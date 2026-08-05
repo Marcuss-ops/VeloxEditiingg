@@ -310,10 +310,9 @@ func TestHealthForInfo_PopulatesHealthField(t *testing.T) {
 	}
 }
 
-// TestHealthForInfo_ReadsActiveJobsFromMetrics asserts the
-// metrics["active_tasks"] plumbing: a heartbeat with 2 active
-// jobs lands in BUSY, not HEALTHY.
-func TestHealthForInfo_ReadsActiveJobsFromMetrics(t *testing.T) {
+// TestHealthForInfo_DoesNotReadActiveJobsFromMetrics asserts that
+// heartbeat occupancy telemetry cannot drive the canonical state.
+func TestHealthForInfo_DoesNotReadActiveJobsFromMetrics(t *testing.T) {
 	now := canonicalNow()
 	info := &Worker{
 		WorkerID:      "wicket",
@@ -324,9 +323,9 @@ func TestHealthForInfo_ReadsActiveJobsFromMetrics(t *testing.T) {
 		},
 	}
 	HealthForInfo(info, time.Time{}, "", now)
-	if info.Health != WorkerHealthBusy {
-		t.Errorf("info.Health = %q, want %q (active_tasks=2 via metrics map)",
-			info.Health, WorkerHealthBusy)
+	if info.Health != WorkerHealthHealthy {
+		t.Errorf("info.Health = %q, want %q (active_tasks telemetry must not drive state)",
+			info.Health, WorkerHealthHealthy)
 	}
 }
 

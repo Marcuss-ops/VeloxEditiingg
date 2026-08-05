@@ -22,51 +22,50 @@ func (r *Registry) GetSchedulableWorkers(ctx context.Context) []Worker {
 }
 
 // GetEligibleWorkers is the canonical cost-aware eligibility entry point.
-// It builds a WorkerProfile from each registered worker and accepts only
-// profiles that costmodel.Score marks eligible. Drain, offline and capacity
-// exclusions live in the costmodel path, not in ad-hoc registry filters.
+// Capacity occupancy is hydrated from the lease store before scoring;
+// heartbeat active_tasks/task_slots are never used as admission state.
 func (r *Registry) GetEligibleWorkers(ctx context.Context, req costmodel.JobRequirements) []Worker {
 	now := time.Now().UTC()
-	r.mu.RLock()
-	var result []Worker
-	for _, w := range r.inMem {
-		if r.revoked[w.WorkerID] {
+	_, workers := r.snapshotRegistered(func(id string, w Worker) bool { return true })
+	if len(workers) == 0 {
+		return workers
+	}
+	ids := make([]string, len(workers))
+	for i := range workers {
+		ids[i] = workers[i].WorkerID.String()
+	}
+	r.hydrateBulk(ctx, ids, workers, now)
+
+	result := make([]Worker, 0, len(workers))
+	for _, w := range workers {
+		if w.Quarantined {
 			continue
 		}
-		resources := costmodel.ResourceSnapshotFromMaps(w.Capabilities, w.Metrics)
-		// Connectivity gate at eligibility time: the heartbeat-only arm of
-		// the canonical ConnectionState (IsHeartbeatOffline). The session
-		// arm is hydrated only on the read paths (List/GetWorker) —
-		// eligibility is a hot path and must not run per-worker session
-		// queries under the registry lock. The legacy free-form agent
-		// status string is gone: offline is DERIVED from the heartbeat,
-		// never reported by the agent.
+		resources := costmodel.ResourceSnapshotFromMaps(nil, w.Metrics)
 		isOffline := IsHeartbeatOffline(w.LastHB, now)
+		if !w.Capacity.Authoritative || w.Capacity.MaxSlots <= 0 {
+			// Admission must fail closed when the lease-store read or
+			// declared worker capacity is unavailable; zero occupancy
+			// is not permission to schedule and zero max slots is not
+			// an unlimited worker.
+			continue
+		}
 		profile := costmodel.BuildWorkerProfileFromRegistry(
 			w.WorkerID.String(),
 			w.Schedulable,
 			w.Drain,
 			isOffline,
-			resources.ActiveTasks, resources.TaskSlots,
+			w.Capacity.ActiveSlots,
+			w.Capacity.MaxSlots,
 			w.ExecutorRegistrySnapshot(),
 		)
 		profile.Resources = resources
 		profile.Pressure = costmodel.DerivePressure(resources, costmodel.DefaultAdmissionPolicy())
 		c, _ := costmodel.Score(profile, req)
-		if !c.Eligible {
-			continue
+		if c.Eligible {
+			result = append(result, w)
 		}
-		result = append(result, w)
 	}
-	r.mu.RUnlock()
-	if len(result) == 0 {
-		return result
-	}
-	ids := make([]string, len(result))
-	for i, w := range result {
-		ids[i] = w.WorkerID.String()
-	}
-	r.hydrateBulk(ctx, ids, result, now)
 	return result
 }
 
@@ -98,6 +97,5 @@ func (r *Registry) CleanupStaleWorkers(ctx context.Context, maxAge time.Duration
 		}
 	}
 
-	// No need for bulk save — each deletion already hits SQLite
 	return count
 }

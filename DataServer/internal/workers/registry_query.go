@@ -277,6 +277,7 @@ func (r *Registry) hydrateBulk(ctx context.Context, ids []string, infos []Worker
 	if r.dbStore == nil {
 		for i := range infos {
 			ConnectionStatusForInfo(&infos[i], false, now)
+			infos[i].Capacity = deriveWorkerCapacityWithAuthority(infos[i].DeclaredMaxSlots, 0, false)
 		}
 		return
 	}
@@ -292,9 +293,27 @@ func (r *Registry) hydrateBulk(ctx context.Context, ids []string, infos []Worker
 			map[string]interface{}{"err": err.Error(), "count": len(ids)})
 		sessionMap = map[string]bool{}
 	}
+	capacityMap, capacityErr := r.dbStore.GetWorkerCapacities(ctx, ids, now.Format(time.RFC3339))
+	if capacityErr != nil {
+		registryLog.WarnWithMsg(logging.CodeRegistryLoadSessionsQueryFail,
+			"Workers lease capacity query failed; marking capacity non-authoritative",
+			map[string]interface{}{"err": capacityErr.Error(), "count": len(ids)})
+		capacityMap = map[string]store.WorkerCapacityRow{}
+	}
 	for i := range infos {
 		active := sessionMap[infos[i].WorkerID.String()]
 		ConnectionStatusForInfo(&infos[i], active, now)
+		row := capacityMap[infos[i].WorkerID.String()]
+		infos[i].Capacity = deriveWorkerCapacityWithAuthority(
+			infos[i].DeclaredMaxSlots,
+			row.ActiveSlots,
+			capacityErr == nil,
+		)
+		if capacityErr == nil {
+			applyLeaseCapacityState(&infos[i], row.ActiveSlots, now)
+		} else {
+			applyCapacityUnavailableState(&infos[i], now)
+		}
 	}
 }
 
@@ -307,6 +326,7 @@ func (r *Registry) hydrate(ctx context.Context, info *Worker, now time.Time) {
 	}
 	if r.dbStore == nil {
 		ConnectionStatusForInfo(info, false, now)
+		info.Capacity = deriveWorkerCapacityWithAuthority(info.DeclaredMaxSlots, 0, false)
 		return
 	}
 	active, err := r.dbStore.IsSessionActive(info.WorkerID.String())
@@ -317,6 +337,24 @@ func (r *Registry) hydrate(ctx context.Context, info *Worker, now time.Time) {
 		active = false
 	}
 	ConnectionStatusForInfo(info, active, now)
+	if r.dbStore != nil {
+		row, capErr := r.dbStore.GetWorkerCapacity(ctx, info.WorkerID.String(), now.Format(time.RFC3339))
+		if capErr != nil {
+			registryLog.WarnWithMsg(logging.CodeRegistryLoadSessionsQueryFail,
+				"Worker lease capacity query failed; marking capacity non-authoritative",
+				map[string]interface{}{"worker_id": info.WorkerID.String(), "err": capErr.Error()})
+		}
+		info.Capacity = deriveWorkerCapacityWithAuthority(
+			info.DeclaredMaxSlots,
+			row.ActiveSlots,
+			capErr == nil,
+		)
+		if capErr == nil {
+			applyLeaseCapacityState(info, row.ActiveSlots, now)
+		} else {
+			applyCapacityUnavailableState(info, now)
+		}
+	}
 }
 
 // Reason constants for non-CONNECTED states (RW-PROD-005 A2).
@@ -366,17 +404,42 @@ func ConnectionReason(sessionActive bool, drain bool, lastHB string, now time.Ti
 // independent state dimensions so every read path observes the same tuple.
 // New consumers must read ConnectionState, SchedulingState, DeploymentState,
 // and HealthState rather than reconstructing state from legacy strings.
+// applyCapacityUnavailableState makes a lease-store outage visible in the
+// canonical projection. Admission is already fail-closed; the read model
+// must not claim the worker is healthy and available at the same time.
+func applyCapacityUnavailableState(info *Worker, now time.Time) {
+	if info == nil {
+		return
+	}
+	// Preserve the operator-owned scheduling dimension (drain/quarantine)
+	// rather than fabricating DRAINING on a storage outage. Admission is
+	// independently fail-closed by Capacity.Authoritative in eligibility.
+	info.HealthState = HealthDegraded
+	info.Health = WorkerHealthDegraded
+}
+
+// applyLeaseCapacityState refreshes the canonical scheduling and health
+// projections after the authoritative lease count has been hydrated.
+// Heartbeat metrics are intentionally absent from this path.
+func applyLeaseCapacityState(info *Worker, activeSlots int, now time.Time) {
+	if info == nil {
+		return
+	}
+	info.SchedulingState = DeriveSchedulingState(info.Drain, info.Quarantined, activeSlots)
+	info.HealthState = DeriveHealthState(info.ConnectionState, info.SchedulingState, info.DeploymentState, time.Time{}, now)
+	info.Health = projectHealth9(info.ConnectionState, info.SchedulingState, info.DeploymentState, time.Time{}, now)
+}
+
 func ConnectionStatusForInfo(info *Worker, sessionActive bool, now time.Time) {
 	if info == nil {
 		return
 	}
 	info.SessionActive = sessionActive
 	info.ConnectionState = DeriveConnectionState(sessionActive, info.LastHB, now)
-	info.SchedulingState = DeriveSchedulingState(
-		info.Drain,
-		info.Quarantined,
-		int(activeJobsFromMetrics(info.Metrics)),
-	)
+	// Occupancy is owned by the lease-store capacity projection. The
+	// compatibility adapter does not infer scheduling state from heartbeat
+	// metrics, because those counters are diagnostic telemetry only.
+	info.SchedulingState = DeriveSchedulingState(info.Drain, info.Quarantined, 0)
 	info.HealthState = DeriveHealthState(
 		info.ConnectionState,
 		info.SchedulingState,

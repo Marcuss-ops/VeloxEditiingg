@@ -67,6 +67,22 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 	}
 
 	snapshot := sess.placementSnapshot(workerID)
+	if h.dbStore == nil {
+		log.Printf("[PLACEMENT] authoritative lease store unavailable worker=%s", workerID)
+		return
+	}
+	if snapshot.MaxParallelJobs <= 0 {
+		log.Printf("[PLACEMENT] worker has no declared max slots worker=%s", workerID)
+		return
+	}
+	capacity, err := h.dbStore.GetWorkerCapacity(ctx, workerID, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		log.Printf("[PLACEMENT] authoritative lease capacity query failed worker=%s: %v", workerID, err)
+		return
+	}
+	// Lease store is the sole occupancy source. The session only owns
+	// the declared max slot limit; heartbeat active_jobs is telemetry.
+	snapshot.ActiveJobs = capacity.ActiveSlots
 
 	candidates, err := h.taskRepo.ListReadyCandidates(ctx, 64)
 	if err != nil {
