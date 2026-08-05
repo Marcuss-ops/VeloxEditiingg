@@ -364,7 +364,7 @@ func (t *Transfer) run(m *Manager) {
 		// CACHE_HIT is itself an immediate terminal cache event; persist it
 		// before the subsequent READY transition.
 		t.emitCheckpoint(t.now())
-		t.finish(TransferResult{LocalPath: hit.LocalPath}, nil)
+		t.finish(TransferResult{LocalPath: hit.LocalPath, SHA256: hit.SHA256}, nil)
 		return
 	}
 

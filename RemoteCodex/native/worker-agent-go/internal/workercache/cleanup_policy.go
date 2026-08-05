@@ -129,8 +129,8 @@ func LoadCleanupPolicy() CleanupPolicy {
 //
 // `now` is injected so tests can stamp a deterministic clock; in
 // production the caller passes time.Now().UTC(). `snapshotGeneratedAt`
-// is zero iff no snapshot was ever polled; in that case the grace
-// rule alone protects rows (treated as "no protected set").
+// must be non-zero: a missing snapshot is fail-safe and returns
+// ErrSnapshotUnavailable without deleting rows.
 //
 // On ErrSnapshotStale the function returns the rows-listed
 // Inspection count + SkippedSnapshotStale=len(entries) so callers can
@@ -169,11 +169,8 @@ func CleanupWithPolicy(
 		return stats, fmt.Errorf("%w: rows_inspected=%d", ErrSnapshotUnavailable, len(entries))
 	}
 
-	// Staleness short-circuit: only triggers when BOTH
-	// snapshotGeneratedAt is non-zero AND the age exceeds the policy.
-	// A zero value (worker never polled) is treated as "no snapshot
-	// available" — the cleanup pass still runs under the lease +
-	// in-flight + grace rules.
+	// Staleness short-circuit: the supplied snapshot is too old to
+	// authorize eviction, so the pass becomes a no-op.
 	if !snapshotGeneratedAt.IsZero() && policy.SnapshotMaxAge > 0 &&
 		now.Sub(snapshotGeneratedAt) > policy.SnapshotMaxAge {
 		entries, listErr := c.List(ctx)
@@ -229,7 +226,7 @@ func CleanupWithPolicy(
 			continue
 		}
 
-		if err := c.DeleteIfUnleased(ctx, string(e.AssetKey)); err != nil {
+		if err := c.EvictIfUnleased(ctx, string(e.AssetKey), e.LocalPath); err != nil {
 			// A concurrent Acquire can legitimately win between List and
 			// cleanup. Treat that as a protected row, not as a cleanup
 			// failure.
@@ -239,12 +236,7 @@ func CleanupWithPolicy(
 				continue
 			}
 			stats.RemoveErrors++
-			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", "index_delete_failed", now)
-			continue
-		}
-		if err := os.Remove(e.LocalPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			stats.RemoveErrors++
-			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "index_removed", "physical_remove_error", now)
+			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", "physical_remove_error", now)
 			continue
 		}
 		stats.Removed++

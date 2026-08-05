@@ -62,6 +62,9 @@ type CacheCheckResult struct {
 	CacheHit bool
 	// LocalPath is the verified local path when CacheHit is true.
 	LocalPath string
+	// SHA256 is the verified content identity of a cache hit. It prevents a
+	// read-model sync from erasing the digest already persisted by the cache.
+	SHA256 string
 }
 
 // TransferResult is the outcome of a Transferer.Transfer.

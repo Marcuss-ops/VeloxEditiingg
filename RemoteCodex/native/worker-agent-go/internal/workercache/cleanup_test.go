@@ -177,6 +177,38 @@ func TestCleanup_AllSkippedProtected_NoOp(t *testing.T) {
 	}
 }
 
+func TestCleanup_PhysicalRemoveFailureRetainsIndexRow(t *testing.T) {
+	cache, dir := cleanupFixture(t)
+	ctx := context.Background()
+
+	// Point the index at a non-empty directory. os.Remove cannot remove it,
+	// so eviction must fail without deleting the durable index row.
+	path := filepath.Join(dir, "not-empty")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "child"), []byte("keep"), 0o644); err != nil {
+		t.Fatalf("write child: %v", err)
+	}
+	if err := cache.Store(ctx, Entry{AssetKey: "REMOVE-FAIL", LocalPath: path, DownloadComplete: true}); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if err := cache.MarkDownloadComplete(ctx, "REMOVE-FAIL", path, 4); err != nil {
+		t.Fatalf("MarkDownloadComplete: %v", err)
+	}
+
+	stats, err := Cleanup(ctx, cache, nil)
+	if err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	if stats.RemoveErrors != 1 || stats.Removed != 0 {
+		t.Fatalf("stats=%+v, want one physical remove error and no removal", stats)
+	}
+	if _, ok, err := cache.Find(ctx, "REMOVE-FAIL"); err != nil || !ok {
+		t.Fatalf("failed eviction lost index row: ok=%v err=%v", ok, err)
+	}
+}
+
 func TestCleanup_LocalPathMissingButIndexPresent_StillDeletesIndexRow(t *testing.T) {
 	cache, dir := cleanupFixture(t)
 	ctx := context.Background()

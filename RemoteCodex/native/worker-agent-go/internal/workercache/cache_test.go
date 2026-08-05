@@ -192,6 +192,60 @@ func TestCache_MarkDownloadCompleteWithHashPersistsVerifiedContentHash(t *testin
 	}
 }
 
+func TestCache_ReserveProtectsUntilReleasedOrExpired(t *testing.T) {
+	t.Parallel()
+	c := newTestCache(t)
+	ctx := context.Background()
+	if err := c.Store(ctx, Entry{AssetKey: "RESERVED", LocalPath: "/tmp/reserved.mp4"}); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	if err := c.Reserve(ctx, "RESERVED", "future-job-1", expiresAt); err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	entry, ok, err := c.Find(ctx, "RESERVED")
+	if err != nil || !ok {
+		t.Fatalf("Find after Reserve: ok=%v err=%v", ok, err)
+	}
+	if entry.ActiveReservationCount != 1 {
+		t.Fatalf("ActiveReservationCount=%d, want 1", entry.ActiveReservationCount)
+	}
+	if err := c.DeleteIfUnleased(ctx, "RESERVED"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("DeleteIfUnleased must retain reserved asset, err=%v", err)
+	}
+	if err := c.ReleaseReservation(ctx, "RESERVED", "future-job-1"); err != nil {
+		t.Fatalf("ReleaseReservation: %v", err)
+	}
+	if _, ok, err := c.Find(ctx, "RESERVED"); err != nil || !ok {
+		t.Fatalf("reserved row disappeared after reservation release: ok=%v err=%v", ok, err)
+	}
+	if err := c.DeleteIfUnleased(ctx, "RESERVED"); err != nil {
+		t.Fatalf("DeleteIfUnleased after reservation release: %v", err)
+	}
+	if _, ok, err := c.Find(ctx, "RESERVED"); err != nil || ok {
+		t.Fatalf("reserved row remains after final delete: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestCache_ExpiredReservationDoesNotProtect(t *testing.T) {
+	t.Parallel()
+	c := newTestCache(t)
+	ctx := context.Background()
+	if err := c.Store(ctx, Entry{AssetKey: "EXPIRED-RESERVATION", LocalPath: "/tmp/expired.mp4"}); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if err := c.Reserve(ctx, "EXPIRED-RESERVATION", "future-job-expired", time.Now().UTC().Add(-time.Minute)); err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	entry, ok, err := c.Find(ctx, "EXPIRED-RESERVATION")
+	if err != nil || !ok {
+		t.Fatalf("Find: ok=%v err=%v", ok, err)
+	}
+	if entry.ActiveReservationCount != 0 {
+		t.Fatalf("expired reservation count=%d, want 0", entry.ActiveReservationCount)
+	}
+}
+
 func TestCache_MarkDownloadComplete_TransitionsAndFailsOnMissing(t *testing.T) {
 	t.Parallel()
 	c := newTestCache(t)

@@ -14,29 +14,24 @@
 //  3. Skip rows whose asset_key is in the protected set supplied
 //     by the master snapshot. The protected set is the "next N jobs'
 //     asset-key union" (see protectedasset.Service / Pass 5/6).
-//  4. Otherwise: best-effort os.Remove(local_path), then Delete the
-//     row from the index. A failure on one row does NOT halt the loop.
+//  4. Otherwise: EvictIfUnleased removes local_path and the index row
+//     under one SQLite write fence. A failure on one row does NOT halt the loop.
 //
 // Errors:
-//   - ctx cancellation propagates via the workercache verb the loop
-//     is calling under (List/Find/Delete return ctx.Err early).
-//   - os.Remove errors are counted into RemoveErrors (and the row is
-//     still delete-able from the index so subsequent passes do not
-//     re-attempt the same physical file).
+//   - ctx cancellation propagates via the workercache operations the loop
+//     is calling under (List/Evict return ctx.Err early).
+//   - os.Remove errors are counted into RemoveErrors and the index row is
+//     retained so a later pass can retry the physical eviction.
 //
-// The lease-vs-cleaner race is documented in the design doc: the
-// cached_asset_leases predicates in the worker are atomic at the SQL
-// level, so a Cleanup that begins while a job's lease is still set
-// is correct by construction. The reverse — a job acquires AFTER
-// Cleanup has listed but BEFORE it deletes — is the 3-minute grace
-// window protected by `last_used_at` in the cleanup policy.
+// Physical removal and index deletion are fenced by EvictIfUnleased. A
+// physical failure rolls back the SQL transaction and leaves the row available
+// for retry; a lease or reservation cannot win between the two operations.
 package workercache
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"time"
 )
 
@@ -120,20 +115,14 @@ func CleanupWithAudit(ctx context.Context, c *Cache, protected map[string]struct
 			continue
 		}
 
-		// Delete the index row first: the row is the durable eviction truth.
-		if err := c.DeleteIfUnleased(ctx, string(e.AssetKey)); err != nil {
+		if err := c.EvictIfUnleased(ctx, string(e.AssetKey), e.LocalPath); err != nil {
 			if errors.Is(err, ErrNotFound) {
 				stats.SkippedLeased++
 				emitCleanerAudit(audit, e, metadata, "kept", "lease_acquired_during_cleanup", now)
 			} else {
 				stats.RemoveErrors++
-				emitCleanerAudit(audit, e, metadata, "kept", "index_delete_failed", now)
+				emitCleanerAudit(audit, e, metadata, "kept", "physical_remove_error", now)
 			}
-			continue
-		}
-		if err := os.Remove(e.LocalPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			stats.RemoveErrors++
-			emitCleanerAudit(audit, e, metadata, "index_removed", "physical_remove_error", now)
 			continue
 		}
 		stats.Removed++

@@ -62,7 +62,7 @@ func waitFor(t *testing.T, what string, fn func() bool) {
 func TestManager_CacheHit(t *testing.T) {
 	tf := &fakeTransferer{
 		check: func(ctx context.Context, reportCtx context.Context, req DownloadRequest) (CacheCheckResult, error) {
-			return CacheCheckResult{CacheHit: true, LocalPath: "/cache/verified.mp4"}, nil
+			return CacheCheckResult{CacheHit: true, LocalPath: "/cache/verified.mp4", SHA256: "verified-cache-sha"}, nil
 		},
 		transfer: func(ctx context.Context, reportCtx context.Context, req DownloadRequest, _ func(downloadedBytes int64)) (TransferResult, error) {
 			return TransferResult{}, errors.New("transfer must not run on cache hit")
@@ -79,6 +79,9 @@ func TestManager_CacheHit(t *testing.T) {
 	}
 	if asset.LocalPath != "/cache/verified.mp4" {
 		t.Fatalf("path = %q, want /cache/verified.mp4", asset.LocalPath)
+	}
+	if asset.SHA256 != "verified-cache-sha" {
+		t.Fatalf("cache-hit SHA256 = %q, want verified-cache-sha", asset.SHA256)
 	}
 	if !asset.CacheHit {
 		t.Fatal("asset must be reported as a cache hit")
