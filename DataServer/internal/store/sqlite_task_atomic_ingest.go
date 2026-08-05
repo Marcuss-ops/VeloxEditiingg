@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"velox-server/internal/taskgraph"
+
+	sharedtelemetry "velox-shared/telemetry"
 )
 
 // IngestTaskResultAtomic is the single legal entry point for ingesting
@@ -98,7 +100,7 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 	if err := persistMasterExecutionEventTx(ctx, tx, masterExecutionEvent{
 		EventID:   fmt.Sprintf("master-%s-result-ingest-tx", cmd.AttemptID),
 		AttemptID: cmd.AttemptID, TaskID: cmd.TaskID,
-		Scope: "attempt", Component: "db", Action: "result_ingest_tx", Phase: "finalize",
+		Scope: sharedtelemetry.ScopeAttempt, Component: "db", Action: "result_ingest_tx", Phase: "finalize",
 		StartedAt: ingestStartedAt, CompletedAt: time.Now().UTC(),
 	}); err != nil {
 		return fmt.Errorf("task ingest master telemetry: %w", err)

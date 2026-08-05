@@ -27,6 +27,8 @@ import (
 
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
+
+	sharedtelemetry "velox-shared/telemetry"
 )
 
 // =====================================================================
@@ -179,7 +181,7 @@ func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, w
 		AttemptID: attemptID, JobID: t.JobID, TaskID: t.ID, WorkerID: workerID,
 		WorkerSessionID: workerSessionID, SnapshotID: workerSnapshotID, LeaseID: leaseID,
 		ExecutorID: t.ExecutorID, ExecutorVersion: t.ExecutorVersion,
-		Scope: "task", Component: "master.placement", Action: "match", Phase: "queue",
+		Scope: sharedtelemetry.ScopeTask, Component: "master.placement", Action: "match", Phase: "queue",
 		StartedAt: now, CompletedAt: time.Now().UTC(),
 	}); err != nil {
 		return nil, nil, fmt.Errorf("task claim master telemetry: %w", err)
@@ -188,7 +190,7 @@ func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, w
 		AttemptID: attemptID, JobID: t.JobID, TaskID: t.ID, WorkerID: workerID,
 		WorkerSessionID: workerSessionID, SnapshotID: workerSnapshotID, LeaseID: leaseID,
 		ExecutorID: t.ExecutorID, ExecutorVersion: t.ExecutorVersion,
-		Scope: "task", Component: "master.lease", Action: "issue", Phase: "queue",
+		Scope: sharedtelemetry.ScopeTask, Component: "master.lease", Action: "issue", Phase: "queue",
 		StartedAt: now, CompletedAt: time.Now().UTC(),
 	}); err != nil {
 		return nil, nil, fmt.Errorf("task claim lease telemetry: %w", err)

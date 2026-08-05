@@ -104,6 +104,7 @@ CREATE TABLE task_execution_events (
     frames INTEGER NOT NULL DEFAULT 0,
     metadata_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT '',
+    telemetry_schema_version INTEGER NOT NULL DEFAULT 0,
     segment_index INTEGER,
     track_kind TEXT NOT NULL DEFAULT '',
     track_index INTEGER,
@@ -155,6 +156,7 @@ func modernExecutionTimings() []taskattempts.PhaseTimingDetailed {
 			StartedAt: base, CompletedAt: base.Add(10 * time.Millisecond), DurationMS: 10,
 			StartedOffsetMS: 0, FinishedOffsetMS: 10, CPUMS: 12, QueueWaitMS: 1,
 			Frames: 100, FramesIn: 100, FramesOut: 100, BytesIn: 1000, BytesOut: 500,
+			TelemetrySchemaVersion: 1,
 		},
 		{
 			AttemptID: "attempt-1", Origin: "engine", Scope: "segment",
@@ -163,6 +165,7 @@ func modernExecutionTimings() []taskattempts.PhaseTimingDetailed {
 			StartedAt: base.Add(20 * time.Millisecond), CompletedAt: base.Add(35 * time.Millisecond), DurationMS: 15,
 			StartedOffsetMS: 20, FinishedOffsetMS: 35, CPUMS: 18, QueueWaitMS: 2,
 			Frames: 120, FramesIn: 120, FramesOut: 120, BytesIn: 1200, BytesOut: 600,
+			TelemetrySchemaVersion: 1,
 		},
 		{
 			AttemptID: "attempt-1", Origin: "engine", Scope: "segment",
@@ -171,6 +174,7 @@ func modernExecutionTimings() []taskattempts.PhaseTimingDetailed {
 			StartedAt: base.Add(40 * time.Millisecond), CompletedAt: base.Add(60 * time.Millisecond), DurationMS: 20,
 			StartedOffsetMS: 40, FinishedOffsetMS: 60, CPUMS: 22, QueueWaitMS: 3,
 			Frames: 140, FramesIn: 140, FramesOut: 140, BytesIn: 1400, BytesOut: 700,
+			TelemetrySchemaVersion: 1,
 		},
 	}
 }
@@ -223,16 +227,16 @@ func TestPersistExecutionEvents_RepeatedSegmentsAndCanonicalIdentity(t *testing.
 	}
 
 	var jobID, taskID, workerID, sessionID, snapshotID, executorID string
-	var executorVersion int
+	var executorVersion, telemetrySchemaVersion int
 	if err := db.QueryRow(`
-		SELECT job_id, task_id, worker_id, worker_session_id, worker_snapshot_id, executor_id, executor_version
+		SELECT job_id, task_id, worker_id, worker_session_id, worker_snapshot_id, executor_id, executor_version, telemetry_schema_version
 		FROM task_execution_events WHERE event_id = 'encode-segment-1'`).Scan(
-		&jobID, &taskID, &workerID, &sessionID, &snapshotID, &executorID, &executorVersion); err != nil {
+		&jobID, &taskID, &workerID, &sessionID, &snapshotID, &executorID, &executorVersion, &telemetrySchemaVersion); err != nil {
 		t.Fatalf("read canonical event identity: %v", err)
 	}
 	if jobID != "job-1" || taskID != "task-1" || workerID != "worker-1" || sessionID != "session-1" ||
-		snapshotID != "snapshot-1" || executorID != "executor.canonical" || executorVersion != 7 {
-		t.Fatalf("event identity=%q/%q/%q/%q/%q/%q/%d; want canonical master identity", jobID, taskID, workerID, sessionID, snapshotID, executorID, executorVersion)
+		snapshotID != "snapshot-1" || executorID != "executor.canonical" || executorVersion != 7 || telemetrySchemaVersion != 1 {
+		t.Fatalf("event identity=%q/%q/%q/%q/%q/%q/%d schema=%d; want canonical master identity with schema=1", jobID, taskID, workerID, sessionID, snapshotID, executorID, executorVersion, telemetrySchemaVersion)
 	}
 
 	var segmentIndex, trackIndex sql.NullInt64
@@ -272,6 +276,7 @@ func TestPersistExecutionEvents_MapsAudioTrackIdentityAndTelemetry(t *testing.T)
 		StartedAt: base, CompletedAt: base.Add(25 * time.Millisecond), DurationMS: 25,
 		StartedOffsetMS: 61, FinishedOffsetMS: 86, CPUMS: 31.5, QueueWaitMS: 2.25,
 		BytesIn: 4096, BytesOut: 2048, Frames: 100, FramesIn: 100, FramesOut: 100,
+		TelemetrySchemaVersion: 1,
 	}
 	if err := persistExecutionEventTestBatch(t, db, []taskattempts.PhaseTimingDetailed{track}); err != nil {
 		t.Fatalf("persist audio track event: %v", err)
@@ -517,6 +522,29 @@ func TestPersistExecutionEvents_QuarantineWriteIsBestEffort(t *testing.T) {
 	}
 }
 
+func TestPersistExecutionEvents_RejectsUnsupportedSchemaWithoutBlockingTaskResult(t *testing.T) {
+	db := openExecutionEventPersistenceTestDB(t)
+	seedExecutionEventIdentity(t, db)
+
+	bad := modernExecutionTimings()[:1]
+	bad[0].EventID = "unsupported-schema"
+	bad[0].TelemetrySchemaVersion = 99
+	if err := persistExecutionEventTestBatch(t, db, bad); err != nil {
+		t.Fatalf("unsupported schema must not block TaskResult transaction: %v", err)
+	}
+
+	var events, quarantined int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_execution_events`).Scan(&events); err != nil {
+		t.Fatalf("count persisted events: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM telemetry_event_quarantine WHERE event_id = 'unsupported-schema'`).Scan(&quarantined); err != nil {
+		t.Fatalf("count quarantined event: %v", err)
+	}
+	if events != 0 || quarantined != 1 {
+		t.Fatalf("unsupported schema accounting events=%d quarantined=%d; want 0/1", events, quarantined)
+	}
+}
+
 func TestExecutionEventRegistry_Closed(t *testing.T) {
 	if !isRegisteredExecutionEvent("engine.encode", "setup") {
 		t.Fatal("engine.encode.setup should be registered")
@@ -569,5 +597,63 @@ func TestPersistExecutionEvents_QuarantinesMissingComponentAction(t *testing.T) 
 	}
 	if quarantined != 1 {
 		t.Fatalf("quarantined malformed rows=%d, want 1", quarantined)
+	}
+}
+
+func TestPersistMasterExecutionEvent_PersistsCatalogSchemaVersion(t *testing.T) {
+	db := openExecutionEventPersistenceTestDB(t)
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+	if err := persistMasterExecutionEventTx(context.Background(), tx, masterExecutionEvent{
+		EventID: "master-valid-schema", AttemptID: "attempt-1", TaskID: "task-1",
+		JobID: "job-1", WorkerID: "worker-1", ExecutorID: "executor.canonical",
+		Scope: "task", Component: "master.placement", Action: "match", Phase: "queue",
+	}); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("persist valid master telemetry: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit valid master event: %v", err)
+	}
+	var origin, scope string
+	var schemaVersion int
+	if err := db.QueryRow(`SELECT origin, scope, telemetry_schema_version FROM task_execution_events WHERE event_id = 'master-valid-schema'`).Scan(&origin, &scope, &schemaVersion); err != nil {
+		t.Fatalf("read valid master event: %v", err)
+	}
+	if origin != "master" || scope != "task" || schemaVersion != 1 {
+		t.Fatalf("master event identity=%q/%q schema=%d; want master/task/1", origin, scope, schemaVersion)
+	}
+}
+
+func TestPersistMasterExecutionEvent_QuarantinesInvalidSchemaWithoutBlockingState(t *testing.T) {
+	db := openExecutionEventPersistenceTestDB(t)
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+	before := TelemetryQuarantineCount()
+	err = persistMasterExecutionEventTx(context.Background(), tx, masterExecutionEvent{
+		EventID: "master-invalid-schema", AttemptID: "attempt-1", TaskID: "task-1",
+		Scope: "task", Component: "master.placement", Action: "match", Phase: "queue",
+		TelemetrySchemaVersion: 99,
+	})
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("invalid master telemetry must not fail state transaction: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit quarantined master event: %v", err)
+	}
+	var events, quarantined int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM task_execution_events`).Scan(&events); err != nil {
+		t.Fatalf("count master events: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM telemetry_event_quarantine WHERE event_id = 'master-invalid-schema'`).Scan(&quarantined); err != nil {
+		t.Fatalf("count master quarantine: %v", err)
+	}
+	if events != 0 || quarantined != 1 || TelemetryQuarantineCount() <= before {
+		t.Fatalf("master invalid accounting events=%d quarantined=%d counter_before=%d counter_after=%d; want 0/1/increment", events, quarantined, before, TelemetryQuarantineCount())
 	}
 }

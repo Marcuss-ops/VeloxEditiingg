@@ -3,9 +3,13 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
+
+	sharedtelemetry "velox-shared/telemetry"
 )
 
 type masterExecutionEvent struct {
@@ -17,13 +21,28 @@ type masterExecutionEvent struct {
 	Scope, Component, Action, Phase      string
 	StartedAt, CompletedAt               time.Time
 	Status, MetadataJSON                 string
+	TelemetrySchemaVersion               int32
 }
 
 // persistMasterExecutionEventTx appends a master-owned event in the same
-// transaction as the state transition it describes.
+// transaction as the state transition it describes. Telemetry is best-effort:
+// an invalid event is quarantined and never aborts the state transition.
 func persistMasterExecutionEventTx(ctx context.Context, tx *sql.Tx, event masterExecutionEvent) error {
 	if event.AttemptID == "" || event.TaskID == "" || event.Component == "" || event.Action == "" {
 		return fmt.Errorf("master execution event requires attempt, task, component and action")
+	}
+	if event.TelemetrySchemaVersion == 0 {
+		event.TelemetrySchemaVersion = sharedtelemetry.SchemaVersion
+	}
+	if err := sharedtelemetry.Catalog.Validate(sharedtelemetry.TelemetryEventSpec{
+		Origin:        sharedtelemetry.OriginMaster,
+		Scope:         event.Scope,
+		Component:     event.Component,
+		Action:        event.Action,
+		SchemaVersion: event.TelemetrySchemaVersion,
+	}); err != nil {
+		quarantineMasterTelemetryEvent(ctx, tx, event, err)
+		return nil
 	}
 	if event.JobID == "" || event.WorkerID == "" || event.ExecutorID == "" {
 		var jobID, taskID, workerID, sessionID, snapshotID, leaseID, executorID string
@@ -64,7 +83,7 @@ func persistMasterExecutionEventTx(ctx context.Context, tx *sql.Tx, event master
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COALESCE(MAX(event_index), -1) + 1
 		  FROM task_execution_events
-		 WHERE attempt_id = ? AND origin = 'master'`, event.AttemptID).Scan(&eventIndex); err != nil {
+		 WHERE attempt_id = ? AND origin = ?`, event.AttemptID, sharedtelemetry.OriginMaster).Scan(&eventIndex); err != nil {
 		if strings.Contains(err.Error(), "no such table: task_execution_events") {
 			return nil
 		}
@@ -89,17 +108,55 @@ func persistMasterExecutionEventTx(ctx context.Context, tx *sql.Tx, event master
 			worker_session_id, worker_snapshot_id, lease_id,
 			executor_id, executor_version, event_index, origin, scope,
 			event_type, event_name, component, action, phase, status,
-			started_at, completed_at, duration_ms, metadata_json, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'master', ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			started_at, completed_at, duration_ms, metadata_json, created_at,
+			telemetry_schema_version
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(event_id) DO NOTHING`,
 		eventID, event.AttemptID, event.JobID, event.TaskID, event.WorkerID,
 		event.WorkerSessionID, event.SnapshotID, event.LeaseID,
-		event.ExecutorID, event.ExecutorVersion, eventIndex, event.Scope,
+		event.ExecutorID, event.ExecutorVersion, eventIndex, sharedtelemetry.OriginMaster, event.Scope,
 		event.Action, event.Component, event.Action, event.Phase, event.Status,
 		started, completed, duration, event.MetadataJSON, time.Now().UTC().Format(time.RFC3339Nano),
+		event.TelemetrySchemaVersion,
 	)
 	if err != nil {
 		return fmt.Errorf("master execution event %s.%s: %w", event.Component, event.Action, err)
 	}
 	return nil
+}
+
+// quarantineMasterTelemetryEvent keeps invalid master-owned events out of the
+// execution timeline without allowing telemetry to abort the state transition.
+// The quarantine write is deliberately best-effort because older stores may
+// not have migration 130 yet.
+func quarantineMasterTelemetryEvent(ctx context.Context, tx *sql.Tx, event masterExecutionEvent, reason error) {
+	eventID := event.EventID
+	if eventID == "" {
+		eventID = fmt.Sprintf("master-invalid-%s-%s-%s", event.AttemptID, event.Component, event.Action)
+	}
+	eventJSON, marshalErr := json.Marshal(map[string]any{
+		"origin":         sharedtelemetry.OriginMaster,
+		"scope":          event.Scope,
+		"component":      event.Component,
+		"action":         event.Action,
+		"schema_version": event.TelemetrySchemaVersion,
+	})
+	if marshalErr != nil {
+		log.Printf("[TELEMETRY_QUARANTINE] master event attempt=%s component=%s action=%s reason=%v json=%v", event.AttemptID, event.Component, event.Action, reason, marshalErr)
+		return
+	}
+	telemetryQuarantinedEvents.Add(1)
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO telemetry_event_quarantine (
+			attempt_id, event_id, origin, scope, component, action,
+			schema_version, reason, event_json, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(attempt_id, event_id) DO NOTHING`,
+		event.AttemptID, eventID, sharedtelemetry.OriginMaster, event.Scope,
+		event.Component, event.Action, event.TelemetrySchemaVersion, reason.Error(),
+		string(eventJSON), time.Now().UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		log.Printf("[TELEMETRY_QUARANTINE] master event attempt=%s component=%s action=%s reason=%v write=%v", event.AttemptID, event.Component, event.Action, reason, err)
+	}
 }

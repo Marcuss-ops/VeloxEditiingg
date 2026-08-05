@@ -272,8 +272,7 @@ func persistPhaseSummary(ctx context.Context, tx *sql.Tx, attemptID string, iden
 				executor_version = excluded.executor_version`,
 			attemptID, summary.phase, summary.durationMS, summary.startedAt, summary.completedAt,
 			summary.phaseOrder, summary.component, summary.action, summary.status,
-			summary.errorCode, summary.message, summary.bytesIn, summary.bytesOut, summary.frames,
-			summary.metadata, identity.JobID, identity.TaskID, identity.WorkerID,
+			summary.errorCode, summary.message, summary.bytesIn, summary.bytesOut, summary.frames, summary.metadata, identity.JobID, identity.TaskID, identity.WorkerID,
 			identity.WorkerSnapshotID, identity.ExecutorID, identity.ExecutorVersion,
 		)
 		if err != nil {
@@ -354,11 +353,11 @@ func persistExecutionEvents(ctx context.Context, tx *sql.Tx, cmd taskgraph.Inges
 				event_type, event_name, component, action, phase, status,
 				error_code, error_message, started_at, completed_at, duration_ms,
 				bytes_in, bytes_out, frames, metadata_json, created_at,
-				segment_index, track_kind, track_index, artifact_id,
+				telemetry_schema_version, segment_index, track_kind, track_index, artifact_id,
 				started_offset_ms, finished_offset_ms, cpu_ms, queue_wait_ms,
-				frames_in, frames_out
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-				?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				frames_in, frames_out				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+					?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+
 			ON CONFLICT(event_id) DO NOTHING`,
 			eventID, attemptID, identity.JobID, identity.TaskID, identity.WorkerID,
 			identity.WorkerSessionID, identity.WorkerSnapshotID, identity.LeaseID,
@@ -366,7 +365,7 @@ func persistExecutionEvents(ctx context.Context, tx *sql.Tx, cmd taskgraph.Inges
 			timing.EventType, timing.EventName, timing.Component, timing.Action, phaseName(timing),
 			normalizeEventStatus(timing.Status), timing.ErrorCode, timing.ErrorMessage,
 			startedAt, completedAt, timing.DurationMS, timing.BytesIn, timing.BytesOut, timing.Frames,
-			metadata, createdAt, nullableSegmentIndex(timing), nullableEventString(timing.TrackKind),
+			metadata, createdAt, timing.TelemetrySchemaVersion, nullableSegmentIndex(timing), nullableEventString(timing.TrackKind),
 			nullableTrackIndex(timing), timing.ArtifactID, timing.StartedOffsetMS, timing.FinishedOffsetMS,
 			timing.CPUMS, timing.QueueWaitMS, timing.FramesIn, timing.FramesOut,
 		)

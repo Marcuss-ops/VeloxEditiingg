@@ -13,6 +13,8 @@ import (
 	"velox-server/internal/jobs"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
+
+	sharedtelemetry "velox-shared/telemetry"
 )
 
 // AcceptTaskAtomic atomically transitions a Task from LEASED → RUNNING
@@ -110,7 +112,7 @@ func (r *SQLiteTaskRepository) AcceptTaskAtomic(ctx context.Context, attempt *ta
 		AttemptID: attempt.ID, JobID: attempt.JobID, TaskID: attempt.TaskID,
 		WorkerID: attempt.WorkerID, WorkerSessionID: attempt.WorkerSessionID,
 		SnapshotID: attempt.WorkerSnapshotID, LeaseID: attempt.LeaseID,
-		Scope: "task", Component: "master.offer", Action: "accept_to_start", Phase: "queue",
+		Scope: sharedtelemetry.ScopeTask, Component: "master.offer", Action: "accept_to_start", Phase: "queue",
 		StartedAt: time.Now().UTC(), CompletedAt: time.Now().UTC(),
 	}); err != nil {
 		return fmt.Errorf("task accept master telemetry: %w", err)
