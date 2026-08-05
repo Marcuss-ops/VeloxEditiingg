@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+
+	"velox-shared/identity"
 )
 
 func (c *coordinator) ListUploadBindings(ctx context.Context, commitID string) ([]UploadBinding, error) {
@@ -46,7 +48,7 @@ func (c *coordinator) VerifyUploadToken(ctx context.Context, uploadID, token str
 	if err != nil {
 		return err
 	}
-	derived, _, err := generateDeterministicCommitToken(c, binding.CommitID, FenceTuple{TaskID: binding.TaskID, AttemptID: binding.AttemptID, WorkerID: binding.WorkerID, LeaseID: binding.LeaseID, Revision: binding.Revision})
+	derived, _, err := generateDeterministicCommitToken(c, binding.CommitID, FenceTuple{TaskID: binding.TaskID, AttemptID: binding.AttemptID, WorkerID: identity.ParseWorkerID(binding.WorkerID), LeaseID: binding.LeaseID, Revision: binding.Revision})
 	if err != nil {
 		return err
 	}

@@ -126,7 +126,7 @@ func TestFenceTuple_Read_StaleWorker(t *testing.T) {
 	if !strings.Contains(err.Error(), "impostor-worker") {
 		t.Errorf("error should mention supplied worker_id, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), original.WorkerID) {
+	if !strings.Contains(err.Error(), original.WorkerID.String()) {
 		t.Errorf("error should mention stored worker_id, got: %v", err)
 	}
 	if !strings.Contains(err.Error(), "DECLARED") {

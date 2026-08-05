@@ -101,6 +101,7 @@ import (
 	"velox-server/internal/completion"
 	"velox-server/internal/config"
 	"velox-server/internal/store"
+	"velox-shared/identity"
 )
 
 // cliOptions captures the parsed CLI flags. All fields are
@@ -221,7 +222,7 @@ func recoverOutput(ctx context.Context, opts *cliOptions) (int, error) {
 	fence := completion.FenceTuple{
 		TaskID:    opts.TaskID,
 		AttemptID: opts.AttemptID,
-		WorkerID:  opts.WorkerID,
+		WorkerID:  identity.ParseWorkerID(opts.WorkerID),
 		LeaseID:   opts.LeaseID,
 		Revision:  1,
 	}

@@ -10,6 +10,7 @@ import (
 	"velox-server/internal/completion"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
+	"velox-shared/identity"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -38,7 +39,7 @@ func (h *Handler) handleTaskOutputDeclared(workerID string, msg *pb.TaskOutputDe
 		})
 	}
 	fence := completion.FenceTuple{
-		TaskID: msg.GetTaskId(), AttemptID: msg.GetAttemptId(), WorkerID: workerID,
+		TaskID: msg.GetTaskId(), AttemptID: msg.GetAttemptId(), WorkerID: identity.ParseWorkerID(workerID),
 		LeaseID: msg.GetLeaseId(), Revision: int(msg.GetRevision()),
 	}
 	plan, err := h.completionCoord.DeclareOutputs(ctxForTaskSession(sess), completion.DeclareOutputsCommand{
@@ -150,7 +151,7 @@ func (h *Handler) handleArtifactUploadCompleted(workerID string, msg *pb.Artifac
 		"uploaded_bytes": msg.GetUploadedBytes(),
 	})
 	if err := h.completionCoord.CompleteUpload(ctxForTaskSession(sess), completion.CompleteUploadCommand{
-		Fence:    completion.FenceTuple{TaskID: b.TaskID, AttemptID: b.AttemptID, WorkerID: workerID, LeaseID: b.LeaseID, Revision: b.Revision},
+		Fence:    completion.FenceTuple{TaskID: b.TaskID, AttemptID: b.AttemptID, WorkerID: identity.ParseWorkerID(workerID), LeaseID: b.LeaseID, Revision: b.Revision},
 		UploadID: b.UploadID, UploadedSizeBytes: msg.GetUploadedBytes(), WorkerSHA256: msg.GetWorkerSha256(), ServerSHA256: session.ReceivedSHA256,
 	}); err != nil {
 		log.Printf("[GRPC] ArtifactUploadCompleted upload=%s verification failed: %v", b.UploadID, err)

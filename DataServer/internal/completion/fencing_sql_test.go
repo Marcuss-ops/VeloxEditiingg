@@ -37,7 +37,7 @@ func readFenceForTest(ctx context.Context, tx *sql.Tx, f FenceTuple, allowMissin
 	if err != nil {
 		return nil, err
 	}
-	if worker != f.WorkerID || lease != f.LeaseID || revision != f.Revision {
+	if worker != f.WorkerID.String() || lease != f.LeaseID || revision != f.Revision {
 		return nil, fmt.Errorf("%w: fence mismatch (stored worker_id=%q lease_id=%q revision=%d status=%q; supplied worker_id=%q lease_id=%q revision=%d)", ErrTransitionConflict, worker, lease, revision, status, f.WorkerID, f.LeaseID, f.Revision)
 	}
 	return &AttemptCommitState{CommitID: commitID, Status: status, TaskRevision: revision}, nil

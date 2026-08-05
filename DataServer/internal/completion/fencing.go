@@ -1,11 +1,18 @@
 package completion
 
-import "fmt"
+import (
+	"fmt"
 
+	"velox-shared/identity"
+)
+
+// FenceTuple is the canonical worker-bound lease identity used by the
+// artifact-commit protocol. WorkerID is the typed canonical identity
+// (velox-shared/identity): only a WorkerID may fence a lease.
 type FenceTuple struct {
 	TaskID    string
 	AttemptID string
-	WorkerID  string
+	WorkerID  identity.WorkerID
 	LeaseID   string
 	Revision  int
 }
@@ -17,7 +24,7 @@ func (f FenceTuple) Validate() error {
 	if f.AttemptID == "" {
 		return fmt.Errorf("completion.FenceTuple: AttemptID empty: %+v", f)
 	}
-	if f.WorkerID == "" {
+	if f.WorkerID.IsEmpty() {
 		return fmt.Errorf("completion.FenceTuple: WorkerID empty: %+v", f)
 	}
 	if f.LeaseID == "" {
@@ -38,5 +45,5 @@ func (f FenceTuple) SQLWhere() string {
 }
 
 func (f FenceTuple) SQLArgs() []any {
-	return []any{f.TaskID, f.AttemptID, f.WorkerID, f.LeaseID, f.Revision}
+	return []any{f.TaskID, f.AttemptID, f.WorkerID.String(), f.LeaseID, f.Revision}
 }

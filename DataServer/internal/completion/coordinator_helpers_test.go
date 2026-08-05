@@ -25,6 +25,7 @@ import (
 
 	"velox-server/internal/store"
 	"velox-server/internal/store/migrations"
+	"velox-shared/identity"
 )
 
 // testHMACKey is the deterministic 32-byte HMAC key used by every
@@ -87,7 +88,7 @@ func validFence(taskID, attemptID string) FenceTuple {
 	return FenceTuple{
 		TaskID:    taskID,
 		AttemptID: attemptID,
-		WorkerID:  "worker-" + taskID,
+		WorkerID:  identity.ParseWorkerID("worker-" + taskID),
 		LeaseID:   "lease-" + attemptID,
 		Revision:  1,
 	}

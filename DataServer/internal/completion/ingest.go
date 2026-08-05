@@ -44,7 +44,7 @@ func (c *coordinator) DeclareOutputs(ctx context.Context, cmd DeclareOutputsComm
 		if state == nil {
 			canonical, err := tx.InsertCompletionAttempt(ctx, store.CompletionDeclareParams{
 				CommitID: commitID, TaskID: cmd.Fence.TaskID, AttemptID: cmd.Fence.AttemptID,
-				JobID: cmd.JobID, WorkerID: cmd.Fence.WorkerID, LeaseID: cmd.Fence.LeaseID,
+				JobID: cmd.JobID, WorkerID: cmd.Fence.WorkerID.String(), LeaseID: cmd.Fence.LeaseID,
 				Revision: cmd.Fence.Revision, RequiredOutputCount: len(cmd.OutputManifests),
 				TokenHash: tokenHash, Deadline: now.Add(commitGraceDefault).Format(time.RFC3339Nano), Now: now.Format(time.RFC3339Nano),
 			})
@@ -122,7 +122,7 @@ func (c *coordinator) RecordUploadProgress(ctx context.Context, cmd RecordUpload
 }
 
 func completionFence(f FenceTuple) store.CompletionFence {
-	return store.CompletionFence{TaskID: f.TaskID, AttemptID: f.AttemptID, WorkerID: f.WorkerID, LeaseID: f.LeaseID, Revision: f.Revision}
+	return store.CompletionFence{TaskID: f.TaskID, AttemptID: f.AttemptID, WorkerID: f.WorkerID.String(), LeaseID: f.LeaseID, Revision: f.Revision}
 }
 
 func newUUIDLowerHex() (string, error) {
