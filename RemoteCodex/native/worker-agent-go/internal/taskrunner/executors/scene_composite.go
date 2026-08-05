@@ -293,7 +293,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	var outputSize int64
 	hashStart := time.Now()
 	if rec != nil {
-		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginValidation, Scope: telemetry.ScopeArtifact, Component: "quality", Action: "sha256"}, telemetry.StatusOK, "", "")
+		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginValidation, Scope: telemetry.ScopeAttempt, Component: "quality", Action: "sha256"}, telemetry.StatusOK, "", "")
 	}
 	outputManifest, manifestErr := publisher.ComputeLocalManifest(ctx, outputPath)
 	metrics["output.hash_ms"] = time.Since(hashStart).Milliseconds()
@@ -362,7 +362,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	planHandle.CompleteWith(0, outputSize, runMetrics.RenderMetrics.Frames, telemetry.StatusOK, "", "")
 	planCompleted = true
 	if rec != nil {
-		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginValidation, Scope: telemetry.ScopeArtifact, Component: "quality", Action: "ffprobe"}, telemetry.StatusOK, "", "")
+		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginValidation, Scope: telemetry.ScopeAttempt, Component: "quality", Action: "ffprobe"}, telemetry.StatusOK, "", "")
 	}
 	return executor.ExecutionResult{
 		Status:         "succeeded",

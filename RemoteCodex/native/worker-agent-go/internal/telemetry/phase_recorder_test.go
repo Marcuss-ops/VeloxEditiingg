@@ -237,7 +237,7 @@ func TestCanonicalEnumsAndRegistry(t *testing.T) {
 		{component: "engine.video", action: "decode", origin: OriginEngine, scope: ScopeSegment, phase: PhaseDecode},
 		{component: "engine", action: "simulate", origin: OriginEngine, scope: ScopeSegment, phase: PhaseSimulate},
 		{component: "engine.audio", action: "mix", origin: OriginEngine, scope: ScopeAudioTrack, phase: PhaseComposite},
-		{component: "quality", action: "ffprobe", origin: OriginValidation, scope: ScopeArtifact, phase: PhaseFinalize},
+		{component: "quality", action: "ffprobe", origin: OriginValidation, scope: ScopeAttempt, phase: PhaseFinalize},
 		{component: "db", action: "result_ingest_tx", origin: OriginMaster, scope: ScopeAttempt, phase: PhaseFinalize},
 	} {
 		got, ok := LookupPhaseSpec(assertion.component, assertion.action)

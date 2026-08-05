@@ -190,6 +190,15 @@ func canonicalOriginScope(component, action string) (string, string) {
 	case strings.HasPrefix(component, "master"):
 		return OriginMaster, ScopeTask
 	case strings.HasPrefix(component, "quality"):
+		if action == "sha256" || action == "ffprobe" {
+			// Emitted at render-validation time, BEFORE the master assigns
+			// an artifact_id to the output. Artifact scope would require an
+			// artifact_id that is unavailable here (same reasoning as the
+			// worker.cache comment above), so these two events are
+			// attempt-scoped; the other quality.* checks run once the
+			// artifact identity exists and stay artifact-scoped.
+			return OriginValidation, ScopeAttempt
+		}
 		return OriginValidation, ScopeArtifact
 	case strings.HasPrefix(component, "runner"):
 		return OriginWorker, ScopeAttempt
