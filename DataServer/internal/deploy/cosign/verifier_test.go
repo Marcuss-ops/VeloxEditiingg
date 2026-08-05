@@ -57,6 +57,44 @@ func TestExternalCosignVerifier_Positive(t *testing.T) {
 	}
 }
 
+func TestExternalCosignVerifier_PinsWorkflowIdentity(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix shell stub; Windows is out of scope here")
+	}
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args")
+	script := "#!/usr/bin/env bash\nprintf '%s\n' \"$@\" > \"$COSIGN_ARGS_FILE\"\n"
+	bin := filepath.Join(dir, "cosign-stub.sh")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write argument-capture stub: %v", err)
+	}
+	t.Setenv("COSIGN_ARGS_FILE", argsFile)
+	v := &ExternalCosignVerifier{BinaryPath: bin, VerifyTimeout: 5 * time.Second}
+	ref := "ghcr.io/o/r@sha256:" + strings.Repeat("a", 64)
+	if err := v.Verify(context.Background(), ref); err != nil {
+		t.Fatalf("pinned identity verify: %v", err)
+	}
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read captured args: %v", err)
+	}
+	got := strings.Split(strings.TrimSuffix(string(args), "\n"), "\n")
+	want := []string{
+		"verify",
+		"--certificate-identity-regexp=" + cosignIdentityRegexp,
+		"--certificate-oidc-issuer=" + cosignOIDCIssuer,
+		ref,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("cosign args = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("cosign arg %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 // TestExternalCosignVerifier_Negative asserts a non-zero exit
 // wraps the stderr in the returned error so the audit trail can
 // see what cosign complained about.
@@ -80,11 +118,26 @@ func TestExternalCosignVerifier_Negative(t *testing.T) {
 func TestExternalCosignVerifier_Override(t *testing.T) {
 	bin := stubCosignScript(t, 1, "should not see this")
 	t.Setenv("VELOX_SKIP_COSIGN_VERIFY", "1")
+	t.Setenv("VELOX_COSIGN_OVERRIDE_REASON", "incident-response: registry verification outage")
 	v := &ExternalCosignVerifier{BinaryPath: bin, VerifyTimeout: 5 * time.Second}
 	err := v.Verify(context.Background(),
 		"ghcr.io/o/r@sha256:"+strings.Repeat("a", 64))
 	if !errors.Is(err, ErrSkippedByOverride) {
 		t.Errorf("override path = %v, want ErrSkippedByOverride-wrapped", err)
+	}
+	if !strings.Contains(err.Error(), "incident-response: registry verification outage") {
+		t.Errorf("override path must include audit reason, got %v", err)
+	}
+}
+
+func TestExternalCosignVerifier_OverrideRequiresReason(t *testing.T) {
+	bin := stubCosignScript(t, 0, "should not see this")
+	t.Setenv("VELOX_SKIP_COSIGN_VERIFY", "1")
+	t.Setenv("VELOX_COSIGN_OVERRIDE_REASON", "   ")
+	v := &ExternalCosignVerifier{BinaryPath: bin, VerifyTimeout: 5 * time.Second}
+	err := v.Verify(context.Background(), "ghcr.io/o/r@sha256:"+strings.Repeat("a", 64))
+	if !errors.Is(err, ErrOverrideReasonMissing) {
+		t.Errorf("override without reason = %v, want ErrOverrideReasonMissing-wrapped", err)
 	}
 }
 
