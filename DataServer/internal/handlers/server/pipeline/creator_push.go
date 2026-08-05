@@ -11,6 +11,7 @@ import (
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/remoteengine"
 	"velox-shared/contract/deliveryplan"
+	"velox-shared/contract/domain"
 	"velox-shared/publication"
 )
 
@@ -104,7 +105,7 @@ type CanonicalCompletedPayload = normalizedCreatorPush
 // explicit target to avoid silent fallback.
 func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush, error) {
 	if req.Payload == nil {
-		return nil, fmt.Errorf("payload is required")
+		return nil, domain.NewInvalidPayload("payload", "required", "payload is required")
 	}
 
 	deliveryPlan := deliveryplan.ExtractEnvelope(req.Payload)
@@ -130,7 +131,7 @@ func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush
 		sourceJobID = firstStringResolver(workerPayload, "job_id", "trace_id", "id")
 	}
 	if sourceJobID == "" {
-		return nil, fmt.Errorf("source_job_id is required (set it in the envelope or payload.job_id)")
+		return nil, domain.NewInvalidPayload("source_job_id", "required", "source_job_id is required (set it in the envelope or payload.job_id)")
 	}
 
 	targetExecutorID := strings.TrimSpace(req.TargetExecutorID)
@@ -193,14 +194,14 @@ func (h *Handlers) resolveCompletedPayload(
 
 	sourceProvider = strings.TrimSpace(sourceProvider)
 	if sourceProvider == "" {
-		return nil, fmt.Errorf("source_provider is required")
+		return nil, domain.NewInvalidPayload("source_provider", "required", "source_provider is required")
 	}
 	sourceJobID = strings.TrimSpace(sourceJobID)
 	if sourceJobID == "" {
-		return nil, fmt.Errorf("source_job_id is required")
+		return nil, domain.NewInvalidPayload("source_job_id", "required", "source_job_id is required")
 	}
 	if result == nil {
-		return nil, fmt.Errorf("payload is required")
+		return nil, domain.NewInvalidPayload("payload", "required", "payload is required")
 	}
 
 	out, err := h.resolver.Resolve(ctx, creatorflow.ResolveRequest{

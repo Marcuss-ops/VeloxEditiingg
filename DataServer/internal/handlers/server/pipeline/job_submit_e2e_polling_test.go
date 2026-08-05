@@ -2,14 +2,17 @@
 //
 // This file owns:
 //   - the polling helper getSubmittedJob (GET /api/v1/jobs/{job_id}
-//     issuing under the m2mJobsAuthFake bearer);
+//     issuing under the m2mPollingAuthFake bearer and fixed test client);
 //   - scenarios "polling_chain_happy_path" + "polling_chain_not_found"
 //     (TestSubmitJobE2E_PollingChain_HappyPath + TestSubmitJobE2E_PollingChain_NotFound):
 //     assert the 202 → 200 chain, the Location/status_url round-trip, the
 //     404 envelope (ok:false, error:"job_not_found", message) on GET.
 //
-// The polling path uses the same Body / Header conventions as the
+// The polling path uses the same body/header conventions as the
 // POST path — see the helpers in job_submit_e2e_happy_path_test.go.
+// The fake middleware deliberately supplies pollingTestClientID so the
+// test exercises the production ownership-scoped lookup without using
+// a real M2M key database.
 package pipeline
 
 import (
@@ -49,12 +52,12 @@ func getSubmittedJob(t *testing.T, r *gin.Engine, jobID string) *httptest.Respon
 //     semantics because the resolver fast-path populates the row
 //     before either path returns.
 //
-// The test uses the same m2mJobsAuthFake token fixture for both POST
-// and GET so the focus is on the new envelope + Location header
-// surface, not the auth layer (which has its own dedicated test
-// in M2MAuthEnvelopes).
+// The test uses the same fixed authenticated client fixture for both
+// POST and GET so it verifies the ownership-scoped polling contract;
+// the real token validation matrix has its own dedicated test in
+// M2MAuthEnvelopes.
 func TestSubmitJobE2E_PollingChain_HappyPath(t *testing.T) {
-	h, _ := newSubmitJobE2EStack(t)
+	h, db := newSubmitJobE2EStack(t)
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	h.RegisterRoutes(r, adminAuthFake, m2mPollingAuthFake)
@@ -89,6 +92,17 @@ func TestSubmitJobE2E_PollingChain_HappyPath(t *testing.T) {
 	// Sanity: job_id in the body matches the canonical derivation.
 	if resp["job_id"] != wantJobID {
 		t.Fatalf("POST response.job_id = %v, want %s", resp["job_id"], wantJobID)
+	}
+
+	var persistedClientID string
+	if err := db.DB().QueryRow(
+		`SELECT COALESCE(external_client_id, '') FROM creator_forwardings WHERE target_job_id = ?`,
+		wantJobID,
+	).Scan(&persistedClientID); err != nil {
+		t.Fatalf("read persisted ownership: %v", err)
+	}
+	if persistedClientID != pollingTestClientID {
+		t.Fatalf("persisted external_client_id = %q, want %q", persistedClientID, pollingTestClientID)
 	}
 
 	// GET that job_id and assert the 4-field envelope.

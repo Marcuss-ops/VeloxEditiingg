@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"velox-server/internal/store"
+	"velox-shared/contract/domain"
 )
 
 // PersistPendingRemoteForwarding records an incomplete remote-engine result
@@ -27,14 +28,14 @@ func (r *Resolver) PersistPendingRemoteForwarding(
 	sourceProvider, sourceJobID, targetExecutorID, externalClientID string,
 ) (*store.CreatorForwarding, error) {
 	if r == nil || r.forwardRepo == nil {
-		return nil, fmt.Errorf("creatorflow: persist pending forwarding: resolver database access is required")
+		return nil, domain.NewInvalidPayload("resolver", "unavailable", "resolver database access is required")
 	}
 
 	sourceProvider = strings.TrimSpace(sourceProvider)
 	sourceJobID = strings.TrimSpace(sourceJobID)
 	targetExecutorID = strings.TrimSpace(targetExecutorID)
 	if sourceProvider == "" || sourceJobID == "" {
-		return nil, fmt.Errorf("creatorflow: persist pending forwarding: source provider and source job id are required")
+		return nil, domain.NewInvalidPayload("source_provider/source_job_id", "required", "source provider and source job id are required")
 	}
 	if targetExecutorID == "" {
 		targetExecutorID = "scene.composite.v1"

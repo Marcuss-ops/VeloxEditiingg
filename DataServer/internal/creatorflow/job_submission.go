@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"velox-shared/contract/domain"
 	"velox-shared/publication"
 )
 
@@ -45,16 +46,16 @@ func (s *JobSubmissionService) Submit(ctx context.Context, req CanonicalJobSubmi
 		return nil, fmt.Errorf("job submission service is not configured")
 	}
 	if req.ContractVersion != "" && req.ContractVersion != "velox.job.v1" {
-		return nil, fmt.Errorf("unsupported contract_version: %s", req.ContractVersion)
+		return nil, domain.NewInvalidPayload("contract_version", "unsupported", "unsupported contract_version")
 	}
 	if strings.TrimSpace(req.SourceProvider) == "" {
-		return nil, fmt.Errorf("source_provider is required")
+		return nil, domain.NewInvalidPayload("source_provider", "required", "source_provider is required")
 	}
 	if strings.TrimSpace(req.SourceJobID) == "" {
-		return nil, fmt.Errorf("idempotency_key is required")
+		return nil, domain.NewInvalidPayload("idempotency_key", "required", "idempotency_key is required")
 	}
 	if req.Payload == nil {
-		return nil, fmt.Errorf("payload is required")
+		return nil, domain.NewInvalidPayload("payload", "required", "payload is required")
 	}
 	// These fields are generated at ingress by older adapters. They are
 	// execution metadata, not request content; retaining them in the
