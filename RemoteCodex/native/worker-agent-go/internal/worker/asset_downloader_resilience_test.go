@@ -243,11 +243,17 @@ func TestMasterAssetTransfererRejectsMalformedContentRange(t *testing.T) {
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if requests.Add(1) == 1 {
+			if got := r.Header.Get("Range"); got != "bytes=2-" {
+				t.Errorf("first malformed-range request Range=%q, want bytes=2-", got)
+			}
 			w.Header().Set("Content-Type", "audio/mpeg")
 			w.Header().Set("Content-Range", "bytes 3-9/10")
 			w.WriteHeader(http.StatusPartialContent)
 			_, _ = w.Write(data[3:])
 			return
+		}
+		if got := r.Header.Get("Range"); got != "" {
+			t.Errorf("retry after malformed Content-Range Range=%q, want empty", got)
 		}
 		w.Header().Set("Content-Type", "audio/mpeg")
 		w.WriteHeader(http.StatusOK)
@@ -273,8 +279,11 @@ func TestMasterAssetTransfererRejectsMalformedContentRange(t *testing.T) {
 	if err != nil || string(got) != string(data) {
 		t.Fatalf("final after malformed range = %q/%v, want %q", got, err, data)
 	}
-	if requests.Load() < 2 {
-		t.Fatalf("requests = %d, want retry after malformed range", requests.Load())
+	if requests.Load() != 2 {
+		t.Fatalf("requests = %d, want exactly 2 after malformed range restart", requests.Load())
+	}
+	if _, err := os.Stat(part); !os.IsNotExist(err) {
+		t.Fatalf("partial remains after clean restart, err=%v", err)
 	}
 }
 

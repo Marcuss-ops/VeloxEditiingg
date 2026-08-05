@@ -407,6 +407,10 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 			start, _, _, parseErr := parseAssetContentRange(contentRange)
 			if parseErr != nil || start != resumeOffset {
 				resp.Body.Close()
+				// The upstream did not honor the requested offset safely.
+				// Discard the partial before retrying so the next attempt
+				// cannot concatenate a full/ambiguous response onto it.
+				removeAssetPartial(cacheDir, assetID, req.SHA256)
 				lastErr = fmt.Errorf("invalid Content-Range for resume offset %d: %q", resumeOffset, contentRange)
 				continue
 			}
