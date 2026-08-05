@@ -8,6 +8,15 @@ import (
 	"strings"
 )
 
+// Getenv is the single environment-read boundary for application packages.
+// Keeping this operation here makes the composition root/config package the
+// owner of process configuration while allowing leaf packages to remain
+// independent of os.Getenv semantics.
+func Getenv(key string) string { return os.Getenv(key) }
+
+// LookupEnv is the presence-aware counterpart to Getenv.
+func LookupEnv(key string) (string, bool) { return os.LookupEnv(key) }
+
 // LoadEnvFile reads a .env-style file and sets the key/value pairs as
 // environment variables using os.Setenv. It is intentionally simple and
 // does not support every edge case of the dotenv format; it handles:
@@ -21,6 +30,7 @@ import (
 // file: it returns nil so that production deployments that do not use
 // a .env file are unaffected.
 func LoadEnvFile(path string) error {
+	resetEnvFileKeys()
 	if path == "" {
 		return nil
 	}
@@ -78,7 +88,10 @@ func LoadEnvFile(path string) error {
 
 		// Do not overwrite an already-set environment variable.
 		if _, exists := os.LookupEnv(key); !exists {
-			os.Setenv(key, value)
+			if err := os.Setenv(key, value); err != nil {
+				return fmt.Errorf("config: set env %q: %w", key, err)
+			}
+			markEnvFileKey(key)
 		}
 	}
 

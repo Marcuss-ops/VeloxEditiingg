@@ -13,10 +13,11 @@
 package database
 
 import (
-	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"velox-server/internal/config"
 )
 
 // Driver identifies which SQL backend the Handle speaks.
@@ -71,11 +72,11 @@ const envDefaultDriver = DriverSQLite
 // existing config package Validate() path) use loadEnv directly so they
 // can reject empty Driver explicitly.
 func loadEnv() Config {
-	driverRaw := strings.ToLower(strings.TrimSpace(os.Getenv("VELOX_DB_DRIVER")))
+	driverRaw := strings.ToLower(strings.TrimSpace(config.Getenv("VELOX_DB_DRIVER")))
 	c := Config{
 		Driver:     Driver(driverRaw),
-		URL:        os.Getenv("VELOX_DATABASE_URL"),
-		SQLitePath: os.Getenv("VELOX_DB_PATH"),
+		URL:        config.Getenv("VELOX_DATABASE_URL"),
+		SQLitePath: config.Getenv("VELOX_DB_PATH"),
 	}
 
 	c.MaxOpenConns = parsePositiveInt("VELOX_DB_MAX_OPEN_CONNS")
@@ -105,7 +106,7 @@ func LoadFromEnv() Config {
 // the var is unset, unparseable, or negative. Open() interprets 0 as
 // "apply driver default".
 func parsePositiveInt(envName string) int {
-	raw := os.Getenv(envName)
+	raw := config.Getenv(envName)
 	if raw == "" {
 		return 0
 	}
@@ -120,7 +121,7 @@ func parsePositiveInt(envName string) int {
 // Returns 0 for unset, malformed, or negative durations so Open() can
 // apply driver defaults.
 func parseDurationEnv(envName string) time.Duration {
-	raw := os.Getenv(envName)
+	raw := config.Getenv(envName)
 	if raw == "" {
 		return 0
 	}

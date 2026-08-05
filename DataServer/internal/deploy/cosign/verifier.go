@@ -31,10 +31,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"velox-server/internal/config"
 )
 
 // ErrSkippedByOverride is returned when VELOX_SKIP_COSIGN_VERIFY=1
@@ -117,8 +118,8 @@ func NewExternalCosignVerifier() *ExternalCosignVerifier {
 // returns ErrOverrideReasonMissing. The binary is never invoked by
 // the override path.
 func (e *ExternalCosignVerifier) Verify(ctx context.Context, ref string) error {
-	if os.Getenv("VELOX_SKIP_COSIGN_VERIFY") == "1" {
-		reason := strings.TrimSpace(os.Getenv("VELOX_COSIGN_OVERRIDE_REASON"))
+	if config.Getenv("VELOX_SKIP_COSIGN_VERIFY") == "1" {
+		reason := strings.TrimSpace(config.Getenv("VELOX_COSIGN_OVERRIDE_REASON"))
 		if reason == "" {
 			return ErrOverrideReasonMissing
 		}

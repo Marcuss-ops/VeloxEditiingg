@@ -24,7 +24,9 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
 	"time"
+	"velox-server/internal/config"
 )
 
 // clientConfig carries the values resolved by loadClientConfig.
@@ -68,7 +70,7 @@ func loadClientConfig(args []string) (*clientConfig, error) {
 		}
 	}
 	if masterURL == "" {
-		masterURL = os.Getenv("VELOX_MASTER_URL")
+		masterURL = config.Getenv("VELOX_MASTER_URL")
 	}
 	if masterURL == "" {
 		return nil, errors.New("master URL required: pass --master=https://HOST:8000 or set VELOX_MASTER_URL")
@@ -94,7 +96,7 @@ func resolveToken(explicitFile string) (string, error) {
 	if explicitFile != "" {
 		paths = append(paths, explicitFile)
 	}
-	if v := os.Getenv("VELOX_ADMIN_TOKEN"); v != "" {
+	if v := config.Getenv("VELOX_ADMIN_TOKEN"); v != "" {
 		return strings.TrimSpace(v), nil
 	}
 	paths = append(paths, "/opt/velox/secrets/admin-token")

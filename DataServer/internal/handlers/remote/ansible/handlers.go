@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"velox-server/internal/config"
 )
 
 type AnsibleHandlers struct {
@@ -82,7 +84,7 @@ func (h *AnsibleHandlers) capabilitiesPayload() gin.H {
 	return gin.H{
 		"ansible_ready": h.isReady(),
 		"playbooks_dir": playbooksDir,
-		"version":       os.Getenv("VELOX_VERSION_NUMBER"),
+		"version":       config.Getenv("VELOX_VERSION_NUMBER"),
 		"actions":       actions,
 	}
 }

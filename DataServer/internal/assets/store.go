@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"velox-server/internal/config"
 	"velox-server/internal/inputsecurity"
 )
 
@@ -111,7 +112,7 @@ func (s *Store) allowedLocalPath(source string) bool {
 	// from /tmp/velox-pilot/staging without expanding allowedRoots by structural
 	// surgery on the bootstrap wiring. A loud audit log keeps an engaged bypass
 	// visible in master.log.
-	if os.Getenv("VELOX_ASSET_REWRITE_DEV_BYPASS") == "true" {
+	if config.Getenv("VELOX_ASSET_REWRITE_DEV_BYPASS") == "true" {
 		fmt.Fprintf(os.Stderr, "[ASSETS] WARNING: dev-bypass engaged (VELOX_ASSET_REWRITE_DEV_BYPASS=true) source=%q\n", source)
 		return true
 	}

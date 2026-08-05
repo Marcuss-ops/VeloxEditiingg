@@ -51,9 +51,8 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 		log.Printf("[SUPERVISOR] critical retry budget: infinite (legacy 0=infinite); fail_after=%d (log-WARN threshold)",
 			criticalFailAfter)
 	}
-	const restartableMaxRetries = 5
 	restartablePolicy := supervisor.RestartPolicy{
-		MaxRetries:     restartableMaxRetries,
+		MaxRetries:     cfg.Runtime.Scheduler.RestartableMaxRetries,
 		InitialBackoff: 500 * time.Millisecond,
 		MaxBackoff:     30 * time.Second,
 		RestartOnPanic: true,
@@ -64,10 +63,7 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 	// registered. Refresh once before exposing the endpoint; until that
 	// succeeds the worker-side cleaner remains fail-safe and removes nothing.
 	if m != nil && m.Workers != nil && p != nil && p.SQLite != nil {
-		env, err := protectedasset.LoadServiceEnv()
-		if err != nil {
-			return nil, fmt.Errorf("protected asset service config: %w", err)
-		}
+		env := protectedasset.ServiceEnv{LookaheadJobs: cfg.Runtime.Cache.ProtectedAssetLookaheadJobs, SnapshotInterval: cfg.Runtime.Cache.SnapshotInterval}
 		svc := protectedasset.NewService(protectedasset.RepoFunc(func(ctx context.Context, limit int) ([]dispatchable.Job, error) {
 			return dispatchable.ListNextDispatchableJobs(ctx, p.SQLite.DB(), limit)
 		}), env.LookaheadJobs).WithErrorHandler(func(err error) {
@@ -151,8 +147,8 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 			Class:  supervisor.ClassRestartable,
 			Policy: restartablePolicy,
 			Run: func(ctx context.Context) error {
-				log.Printf("[BOOTSTRAP] artifacts.Reconciler started (4 rules: expired-uploads + staging, orphan-final-blobs, READY-no-blob QUARANTINED, stuck-STAGING; 15m tick)")
-				a.Reconciler.Run(ctx, 15*time.Minute)
+				log.Printf("[BOOTSTRAP] artifacts.Reconciler started (4 rules; tick=%s)", cfg.Runtime.Scheduler.ArtifactReconcileInterval)
+				a.Reconciler.Run(ctx, cfg.Runtime.Scheduler.ArtifactReconcileInterval)
 				return nil
 			},
 		}); err != nil {
@@ -165,7 +161,7 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 			Class:  supervisor.ClassRestartable,
 			Policy: restartablePolicy,
 			Run: func(ctx context.Context) error {
-				ticker := time.NewTicker(2 * time.Second)
+				ticker := time.NewTicker(cfg.Runtime.Scheduler.TaskGraphTick)
 				defer ticker.Stop()
 				for {
 					select {
@@ -207,7 +203,8 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 		alertDeps.DiskFreeGB = cfg.Alerts.DiskFreeGB
 		alertDeps.FFmpegMin = cfg.Alerts.FFmpegMin
 
-		engine := alertengine.New(30*time.Second, alertengine.NewNotifierFromEnv())
+		engine := alertengine.New(cfg.Runtime.Alerts.EvaluationInterval, alertengine.NewNotifier(cfg.Runtime.Alerts.WebhookURL, cfg.Runtime.Alerts.WebhookType))
+		engine.Cooldown = cfg.Runtime.Alerts.Cooldown
 		for _, r := range alertengine.MakeRules(alertDeps) {
 			engine.AddRule(r)
 		}
@@ -223,15 +220,15 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 
 	if metricsCollector != nil && p.SQLite != nil && p.Outbox != nil {
 		labelRes := velmetrics.NewSQLiteLabelResolver(p.SQLite.DB())
-		costFactors := velmetrics.LoadCostFactorsFromEnv()
+		costFactors := velmetrics.CostFactorsFromConfig(cfg.Runtime.Metrics)
 		if err := sup.Register(supervisor.Runner{
 			Name:   "metrics-supervisor",
 			Class:  supervisor.ClassRestartable,
 			Policy: restartablePolicy,
 			Run: func(ctx context.Context) error {
 				supv := velmetrics.NewSupervisor(metricsCollector, labelRes, p.Outbox, costFactors)
-				supv.SetTick(15 * time.Second)
-				supv.SetLimit(1000)
+				supv.SetTick(cfg.Runtime.Metrics.Tick)
+				supv.SetLimit(cfg.Runtime.Metrics.AttemptLimit)
 				return supv.Run(ctx)
 			},
 		}); err != nil {
@@ -257,7 +254,7 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 			Class:  supervisor.ClassRestartable,
 			Policy: restartablePolicy,
 			Run: func(ctx context.Context) error {
-				ticker := time.NewTicker(5 * time.Minute)
+				ticker := time.NewTicker(cfg.Runtime.Scheduler.MetricsSnapshotInterval)
 				defer ticker.Stop()
 				maintain := func() error {
 					if err := p.SQLite.MaintainWorkerResourceSamples(ctx, time.Now().UTC()); err != nil {
@@ -289,7 +286,7 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 			Class:  supervisor.ClassRestartable,
 			Policy: restartablePolicy,
 			Run: func(ctx context.Context) error {
-				ticker := time.NewTicker(5 * time.Minute)
+				ticker := time.NewTicker(cfg.Runtime.Scheduler.MetricsSnapshotInterval)
 				defer ticker.Stop()
 				log.Printf("[FLEET-METRICS] metrics-snapshot-supervisor started (5min tick; computes 13-metric rollup per worker from worker_metric_samples + fleet_operations + smoke_runs + deployment_records)")
 				persist := func() {

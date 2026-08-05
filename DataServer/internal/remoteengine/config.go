@@ -1,28 +1,19 @@
 package remoteengine
 
-import (
-	"os"
-	"strconv"
-)
+import "velox-server/internal/config"
 
-// DefaultConfig returns config from environment.
+// DefaultConfig returns the canonical defaults without reading process
+// environment. Server bootstrap should pass config.Config.Render to callers.
 func DefaultConfig() Config {
-	timeoutMS := 60000 // default 60s
-	if v := os.Getenv("VELOX_REMOTE_ENGINE_TIMEOUT_MS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			timeoutMS = n
-		}
-	}
-	retries := 3
-	if v := os.Getenv("VELOX_REMOTE_ENGINE_RETRIES"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			retries = n
-		}
-	}
+	return Config{TimeoutMS: 60000, Retries: 3}
+}
+
+// ConfigFromRuntime adapts the centrally parsed render configuration.
+func ConfigFromRuntime(c config.RenderConfig) Config {
 	return Config{
-		URL:       os.Getenv("VELOX_REMOTE_ENGINE_URL"),
-		Token:     os.Getenv("VELOX_REMOTE_ENGINE_TOKEN"),
-		TimeoutMS: timeoutMS,
-		Retries:   retries,
+		URL:       c.RemoteEngineURL,
+		Token:     c.RemoteEngineToken,
+		TimeoutMS: c.RemoteEngineTimeoutMS,
+		Retries:   c.RemoteEngineRetries,
 	}
 }

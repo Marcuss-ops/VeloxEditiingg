@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"velox-server/internal/config"
 )
 
 // SecretResolver resolves secret_ref values to actual secrets.
@@ -49,7 +51,7 @@ func (r *SecretResolver) Resolve(secretRef string) (string, error) {
 		// Otherwise, resolve relative to secrets dir
 		return r.resolveFile(filepath.Join(r.secretsDir, value))
 	case "env":
-		if v := os.Getenv(value); v != "" {
+		if v := config.Getenv(value); v != "" {
 			return v, nil
 		}
 		return "", fmt.Errorf("environment variable %s not set", value)

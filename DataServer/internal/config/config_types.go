@@ -25,7 +25,24 @@ type ServerConfig struct {
 
 // RuntimeConfig holds filesystem and data directory settings.
 type RuntimeConfig struct {
-	DataDir      string
+	DataDir string
+
+	// Integration and process settings are parsed at bootstrap and passed to
+	// runtime packages; those packages must not read the process environment.
+	Social    SocialConfig
+	Logging   LoggingConfig
+	Telemetry TelemetryConfig
+
+	// Typed operational domains. These replace direct environment reads in
+	// long-lived runtime consumers; legacy top-level aliases remain during
+	// migration for compatibility with existing constructors.
+	Supervisor SupervisorConfig
+	Cache      CacheConfig
+	Scheduler  SchedulerConfig
+	Metrics    MetricsConfig
+	Alerts     AlertConfig
+	Sources    map[string]RuntimeConfigSource
+
 	RuntimeDir   string
 	VideosDir    string
 	StaticDir    string
@@ -174,11 +191,40 @@ type SupervisorConfig struct {
 }
 
 // AlertConfig contains typed thresholds for the master alert engine.
+type SocialConfig struct {
+	BaseURL         string
+	APIKey          string
+	CallbackBaseURL string
+	Timeout         time.Duration
+	MaxRetries      int
+}
+
+// LoggingConfig controls process-wide structured logging.
+type LoggingConfig struct {
+	Quiet      bool
+	JSONOutput bool
+	Debug      bool
+}
+
+// TelemetryConfig controls tracing and request diagnostics.
+type TelemetryConfig struct {
+	Exporter                  string
+	Endpoint                  string
+	Version                   string
+	Insecure                  bool
+	MeasureEnqueueAllocations bool
+}
+
+// AlertConfig contains typed thresholds for the master alert engine.
 type AlertConfig struct {
-	ErrorRatePct float64
-	P95WallMS    int64
-	DiskFreeGB   float64
-	FFmpegMin    float64
+	ErrorRatePct       float64
+	P95WallMS          int64
+	DiskFreeGB         float64
+	FFmpegMin          float64
+	WebhookURL         string
+	WebhookType        string
+	EvaluationInterval time.Duration
+	Cooldown           time.Duration
 }
 
 // FleetConfig contains typed fleet-operator development/runtime controls.
@@ -325,6 +371,9 @@ type RenderConfig struct {
 
 // Config is the top-level configuration.
 type Config struct {
+	frozen      bool
+	parseErrors []string
+
 	// Sub-configs (single source of truth for all settings)
 	Server        ServerConfig
 	Runtime       RuntimeConfig

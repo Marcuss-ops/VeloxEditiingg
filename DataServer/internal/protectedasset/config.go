@@ -24,11 +24,9 @@
 package protectedasset
 
 import (
-	"fmt"
-	"os"
-	"strconv"
-	"strings"
 	"time"
+
+	"velox-server/internal/config"
 )
 
 // ServiceEnv carries the operator-facing master tunables for the
@@ -51,29 +49,12 @@ type ServiceEnv struct {
 // Empty / unset env vars: defaults are used silently (this is the
 // common path in CI + dev shells).
 func LoadServiceEnv() (ServiceEnv, error) {
-	env := ServiceEnv{
-		LookaheadJobs:    DefaultLookahead,
-		SnapshotInterval: 30 * time.Second,
+	cache, err := config.LoadCacheConfigFromEnv()
+	if err != nil {
+		return ServiceEnv{}, err
 	}
-	if v := strings.TrimSpace(os.Getenv("VELOX_CACHE_LOOKAHEAD_JOBS")); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			return env, fmt.Errorf("protectedasset.LoadServiceEnv: VELOX_CACHE_LOOKAHEAD_JOBS=%q: %w", v, err)
-		}
-		if n <= 0 {
-			return env, fmt.Errorf("protectedasset.LoadServiceEnv: VELOX_CACHE_LOOKAHEAD_JOBS must be > 0, got %d", n)
-		}
-		env.LookaheadJobs = n
-	}
-	if v := strings.TrimSpace(os.Getenv("VELOX_CACHE_SNAPSHOT_INTERVAL")); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return env, fmt.Errorf("protectedasset.LoadServiceEnv: VELOX_CACHE_SNAPSHOT_INTERVAL=%q: %w", v, err)
-		}
-		if d <= 0 {
-			return env, fmt.Errorf("protectedasset.LoadServiceEnv: VELOX_CACHE_SNAPSHOT_INTERVAL must be > 0, got %v", d)
-		}
-		env.SnapshotInterval = d
-	}
-	return env, nil
+	return ServiceEnv{
+		LookaheadJobs:    cache.ProtectedAssetLookaheadJobs,
+		SnapshotInterval: cache.SnapshotInterval,
+	}, nil
 }

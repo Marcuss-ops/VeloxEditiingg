@@ -40,8 +40,7 @@
 package metrics
 
 import (
-	"os"
-	"strconv"
+	"velox-server/internal/config"
 )
 
 // CostFactors is the typed container for the per-EU env-loaded cost
@@ -77,45 +76,21 @@ func DefaultCostFactors() CostFactors {
 	}
 }
 
-// LoadCostFactorsFromEnv reads VELOX_CPU_CORE_SECOND_COST,
-// VELOX_NETWORK_GB_COST, VELOX_STORAGE_GB_COST and falls back to
-// DefaultCostFactors on absence OR on parse failure (parse failure
-// MUST never crash the master — operators can introduce a typo in
-// deployment and silently fall back to defaults is preferable to
-// hard-fail at boot).
-//
-// Negative numbers are clamped to 0 so a misconfigured env var
-// can't produce a negative cost-per-minute gauge (Prometheus rate()
-// math on negative values is undefined and dashboards break).
-func LoadCostFactorsFromEnv() CostFactors {
-	out := DefaultCostFactors()
-	if v := envFloatOrZero("VELOX_CPU_CORE_SECOND_COST"); v > 0 {
-		out.CPUCoreSecondEUR = v
+// CostFactorsFromConfig converts the already-parsed typed runtime metrics
+// configuration into the metrics domain type. Environment loading belongs
+// exclusively to internal/config.
+func CostFactorsFromConfig(c config.MetricsConfig) CostFactors {
+	return CostFactors{
+		CPUCoreSecondEUR: c.CPUCostEUR,
+		NetworkGBEUR:     c.NetworkCostEUR,
+		StorageGBEUR:     c.StorageCostEUR,
 	}
-	if v := envFloatOrZero("VELOX_NETWORK_GB_COST"); v > 0 {
-		out.NetworkGBEUR = v
-	}
-	if v := envFloatOrZero("VELOX_STORAGE_GB_COST"); v > 0 {
-		out.StorageGBEUR = v
-	}
-	return out
 }
 
-// envFloatOrZero is a tiny env-read primitive. Returns 0 (NOT the
-// default) so callers can detect absence vs the floor of env=0.
-func envFloatOrZero(name string) float64 {
-	v := os.Getenv(name)
-	if v == "" {
-		return 0
-	}
-	f, err := strconv.ParseFloat(v, 64)
-	if err != nil {
-		return 0
-	}
-	if f < 0 {
-		return 0
-	}
-	return f
+// LoadCostFactorsFromEnv is retained for package-level test and legacy
+// callers; the actual environment read is delegated to internal/config.
+func LoadCostFactorsFromEnv() CostFactors {
+	return CostFactorsFromConfig(config.FromEnv().Runtime.Metrics)
 }
 
 // CostPerOutputMinute computes the cost per output minute for a

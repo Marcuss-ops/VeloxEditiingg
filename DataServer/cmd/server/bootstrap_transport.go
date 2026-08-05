@@ -150,6 +150,7 @@ func startTransports(cfg *config.Config, c *appComponents) (*transportBundle, er
 			gs, lis, gerr := grpcserver.StartGRPCServer(
 				cfg.Server.GRPCPort, grpcHandler,
 				cfg.Server.GRPCTLSCertFile, cfg.Server.GRPCTLSKeyFile, cfg.Server.GRPCTLSCAFile,
+				insecureDev,
 			)
 			if gerr != nil {
 				// Blocco 1 (P0 #2, #3, #4): when GRPCPort > 0, a gRPC

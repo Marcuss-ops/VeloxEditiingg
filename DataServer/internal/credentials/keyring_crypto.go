@@ -12,6 +12,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"velox-server/internal/config"
 )
 
 // keyring_crypto.go owns the Keyring (key management + AES-GCM
@@ -45,7 +47,7 @@ func NewKeyring(current int, keys map[int][]byte) (*Keyring, error) {
 // keys are loaded from VELOX_CREDENTIAL_KEY_<version>.
 func LoadKeyring() (*Keyring, error) {
 	current := 1
-	if value := strings.TrimSpace(os.Getenv("VELOX_CREDENTIAL_KEY_VERSION")); value != "" {
+	if value := strings.TrimSpace(config.Getenv("VELOX_CREDENTIAL_KEY_VERSION")); value != "" {
 		if _, err := fmt.Sscanf(value, "%d", &current); err != nil || current <= 0 {
 			return nil, ErrKeyUnavailable
 		}
@@ -67,9 +69,9 @@ func LoadKeyring() (*Keyring, error) {
 }
 
 func readKeyEnv(name string) ([]byte, error) {
-	value := strings.TrimSpace(os.Getenv(name))
+	value := strings.TrimSpace(config.Getenv(name))
 	if value == "" {
-		file := strings.TrimSpace(os.Getenv(name + "_FILE"))
+		file := strings.TrimSpace(config.Getenv(name + "_FILE"))
 		if file != "" {
 			data, err := os.ReadFile(file)
 			if err != nil {

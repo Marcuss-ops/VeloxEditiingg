@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strings"
+	"time"
 )
 
 func loadSupervisorConfig() SupervisorConfig {
@@ -15,10 +16,14 @@ func loadSupervisorConfig() SupervisorConfig {
 
 func loadAlertConfig() AlertConfig {
 	return AlertConfig{
-		ErrorRatePct: floatFromEnv("VELOX_ALERT_ERROR_RATE_PCT", 5.0, 0),
-		P95WallMS:    int64(intFromEnv("VELOX_ALERT_P95_WALL_MS", 300000, 0)),
-		DiskFreeGB:   floatFromEnv("VELOX_ALERT_DISK_FREE_GB", 10.0, 0),
-		FFmpegMin:    floatFromEnv("VELOX_ALERT_FFMPEG_MIN", 1.5, 0),
+		ErrorRatePct:       floatFromEnv("VELOX_ALERT_ERROR_RATE_PCT", 5.0, 0),
+		P95WallMS:          int64(intFromEnv("VELOX_ALERT_P95_WALL_MS", 300000, 0)),
+		DiskFreeGB:         floatFromEnv("VELOX_ALERT_DISK_FREE_GB", 10.0, 0),
+		FFmpegMin:          floatFromEnv("VELOX_ALERT_FFMPEG_MIN", 1.5, 0),
+		WebhookURL:         strings.TrimSpace(os.Getenv("VELOX_ALERT_WEBHOOK_URL")),
+		WebhookType:        strings.ToLower(strings.TrimSpace(os.Getenv("VELOX_ALERT_WEBHOOK_TYPE"))),
+		EvaluationInterval: durationFromEnv("VELOX_ALERT_EVALUATION_INTERVAL", 30*time.Second),
+		Cooldown:           durationFromEnv("VELOX_ALERT_COOLDOWN", 5*time.Minute),
 	}
 }
 

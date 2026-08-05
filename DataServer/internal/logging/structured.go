@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"sync"
 	"time"
 )
@@ -26,22 +25,34 @@ type Logger struct {
 	throttler  *Throttler
 	quiet      bool
 	jsonOutput bool
+	debug      bool
 }
 
 // Global default logger
 var defaultLogger = &Logger{
 	throttler:  NewThrottler(5 * time.Minute),
-	quiet:      os.Getenv("VELOX_QUIET_LOGS") == "true",
-	jsonOutput: os.Getenv("VELOX_JSON_LOGS") == "true",
+	quiet:      false,
+	jsonOutput: false,
+	debug:      false,
 }
 
 // NewLogger creates a new logger for a component
+// Configure applies the centrally parsed process logging settings.
+func Configure(quiet, jsonOutput, debug bool) {
+	defaultLogger.mu.Lock()
+	defer defaultLogger.mu.Unlock()
+	defaultLogger.quiet = quiet
+	defaultLogger.jsonOutput = jsonOutput
+	defaultLogger.debug = debug
+}
+
 func NewLogger(component string) *Logger {
 	return &Logger{
 		component:  component,
 		throttler:  defaultLogger.throttler,
 		quiet:      defaultLogger.quiet,
 		jsonOutput: defaultLogger.jsonOutput,
+		debug:      defaultLogger.debug,
 	}
 }
 
@@ -89,9 +100,13 @@ func (l *Logger) ErrorWithMsg(code, message string, fields map[string]interface{
 	l.log(LevelError, code, message, fields)
 }
 
-// Debug logs a debug-level event (only if VELOX_DEBUG=true)
+// Debug logs a debug-level event when debug mode has been enabled by the
+// composition root. The package no longer reads process environment.
 func (l *Logger) Debug(code string, fields map[string]interface{}) {
-	if os.Getenv("VELOX_DEBUG") != "true" {
+	l.mu.Lock()
+	debug := l.debug
+	l.mu.Unlock()
+	if !debug {
 		return
 	}
 	l.log(LevelDebug, code, "", fields)

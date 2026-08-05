@@ -3,11 +3,11 @@ package calendar
 import (
 	"context"
 	"log"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"velox-server/internal/config"
 	"velox-server/internal/jobs"
 	"velox-server/internal/store"
 )
@@ -24,7 +24,7 @@ type CalendarScheduler struct {
 // NewCalendarScheduler creates a scheduler with a sane default interval.
 func NewCalendarScheduler(s *store.SQLiteStore, reader jobs.Reader, atomic *store.AtomicJobTaskCreator) *CalendarScheduler {
 	interval := 30 * time.Second
-	if raw := strings.TrimSpace(os.Getenv("VELOX_CALENDAR_SCHEDULER_INTERVAL_SECONDS")); raw != "" {
+	if raw := strings.TrimSpace(config.Getenv("VELOX_CALENDAR_SCHEDULER_INTERVAL_SECONDS")); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
 			interval = time.Duration(n) * time.Second
 		}

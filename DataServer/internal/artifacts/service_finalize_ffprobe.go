@@ -79,9 +79,11 @@ import (
 	"log"
 	"os"
 	"os/exec"
+
 	"path/filepath"
 	"strings"
 	"time"
+	"velox-server/internal/config"
 )
 
 // ffprobeInvariantTimeout bounds a single ffprobe shell-out. The
@@ -150,7 +152,7 @@ func (m ffprobeInvariantMode) modeString() string {
 // so the operator can flip to OFF (unset the env var) at any time
 // without losing jobs.
 func (s *Service) runPreCommitFFProbeInvariant(ctx context.Context, jobID, overrideDestID, absBlob string) error {
-	mode := parseFFProbeMode(os.Getenv("VELOX_FFPROBE_VERIFY_ON_FINALIZE"))
+	mode := parseFFProbeMode(config.Getenv("VELOX_FFPROBE_VERIFY_ON_FINALIZE"))
 	if mode == ffprobeModeOff {
 		return nil
 	}

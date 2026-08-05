@@ -27,11 +27,11 @@ package contracts
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"velox-server/internal/config"
 	"velox-server/internal/store"
 )
 
@@ -50,7 +50,7 @@ const PostgresDsnEnvVar = "VELOX_TEST_POSTGRES_DSN"
 func NewPostgresArtifactRepositoryFactory(t *testing.T) (store.ArtifactRepository, func()) {
 	t.Helper()
 
-	dsn := os.Getenv(PostgresDsnEnvVar)
+	dsn := config.Getenv(PostgresDsnEnvVar)
 	schema := uniqueSchemaName(t)
 	handle, cleanup := openPostgresForTest(t, withSearchPath(dsn, schema), schema)
 

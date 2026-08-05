@@ -28,9 +28,10 @@ package socialclient
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
+
 	"time"
+	"velox-server/internal/config"
 )
 
 // Config is the typed view of the operator-facing configuration for the
@@ -100,14 +101,18 @@ func (c Config) Validate() error {
 // SOCIAL_API_TIMEOUT_MS defaults to 30000; SOCIAL_API_RETRIES defaults
 // to 0.
 func ConfigFromEnv() Config {
-	c := Config{
-		BaseURL:         os.Getenv("SOCIAL_API_URL"),
-		APIKey:          os.Getenv("SOCIAL_API_TOKEN"),
-		CallbackBaseURL: os.Getenv("SOCIAL_CALLBACK_BASE_URL"),
-		Timeout:         parseDurationMillis(os.Getenv("SOCIAL_API_TIMEOUT_MS"), 30*time.Second),
-		MaxRetries:      parseInt(os.Getenv("SOCIAL_API_RETRIES"), 0),
+	return ConfigFromRuntime(config.FromEnv().Runtime.Social)
+}
+
+// ConfigFromRuntime adapts the centrally parsed social configuration.
+func ConfigFromRuntime(c config.SocialConfig) Config {
+	return Config{
+		BaseURL:         c.BaseURL,
+		APIKey:          c.APIKey,
+		CallbackBaseURL: c.CallbackBaseURL,
+		Timeout:         c.Timeout,
+		MaxRetries:      c.MaxRetries,
 	}
-	return c
 }
 
 func parseDurationMillis(raw string, def time.Duration) time.Duration {

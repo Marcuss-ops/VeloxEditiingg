@@ -2,7 +2,6 @@ package telemetry
 
 import (
 	"context"
-	"os"
 	"runtime"
 	"sync"
 	"time"
@@ -59,7 +58,7 @@ func EnsureEnqueueMetrics(ctx context.Context) (context.Context, *EnqueueMetrics
 	if metrics := EnqueueMetricsFromContext(ctx); metrics != nil {
 		return ctx, metrics
 	}
-	return WithEnqueueMetrics(ctx, os.Getenv("VELOX_ENQUEUE_MEASURE_ALLOCATIONS") == "1")
+	return WithEnqueueMetrics(ctx, telemetryConfig.MeasureEnqueueAllocations)
 }
 
 // EnqueueMetricsFromContext returns the request accumulator, if installed.

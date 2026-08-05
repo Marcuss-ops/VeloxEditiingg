@@ -13,18 +13,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"time"
 )
 
-// NewNotifierFromEnv returns a Notifier based on env vars, or nil
-// when no webhook URL is configured.
-func NewNotifierFromEnv() Notifier {
-	url := os.Getenv("VELOX_ALERT_WEBHOOK_URL")
+// NewNotifier returns a Notifier from already-parsed configuration, or nil
+// when no webhook URL is configured. Environment loading belongs to config.
+func NewNotifier(url, typ string) Notifier {
 	if url == "" {
 		return nil
 	}
-	typ := os.Getenv("VELOX_ALERT_WEBHOOK_TYPE")
 	switch typ {
 	case "telegram":
 		return &TelegramNotifier{url: url, client: &http.Client{Timeout: 10 * time.Second}}

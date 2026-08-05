@@ -15,12 +15,12 @@
 package contracts
 
 import (
-	"os"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"velox-server/internal/config"
 	"velox-server/internal/jobs"
 	"velox-server/internal/store"
 )
@@ -31,7 +31,7 @@ import (
 func NewPostgresJobRepositoryFactory(t *testing.T) (jobs.Repository, func()) {
 	t.Helper()
 
-	dsn := os.Getenv(PostgresDsnEnvVar)
+	dsn := config.Getenv(PostgresDsnEnvVar)
 	schema := uniqueJobsSchemaName(t)
 	handle, cleanup := openPostgresForTest(t, withSearchPath(dsn, schema), schema)
 

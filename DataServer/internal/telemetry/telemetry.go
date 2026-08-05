@@ -23,8 +23,9 @@ package telemetry
 import (
 	"context"
 	"log"
-	"os"
 	"sync"
+
+	"velox-server/internal/config"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -39,14 +40,21 @@ import (
 )
 
 var (
-	tracer     trace.Tracer
-	tracerOnce sync.Once
+	tracer          trace.Tracer
+	tracerOnce      sync.Once
+	telemetryConfig = config.TelemetryConfig{Insecure: true}
 
 	// propagatorOnce ensures W3C propagation is set exactly once.
 	// Called from initStdoutTracer and initOTLPTracer.
 	// The no-op default path does NOT set it — zero overhead when tracing is off.
 	propagatorOnce sync.Once
 )
+
+// Configure applies centrally parsed telemetry settings before the first
+// Tracer call. Calls after initialization are ignored by design.
+func Configure(cfg config.TelemetryConfig) {
+	telemetryConfig = cfg
+}
 
 // Tracer returns the global Velox tracer. Safe for concurrent use.
 // The first call initializes the tracer provider based on VELOX_OTEL_EXPORTER.
@@ -60,9 +68,7 @@ func Tracer() trace.Tracer {
 // initTracer reads VELOX_OTEL_EXPORTER and returns the appropriate tracer.
 // Default is no-op (zero overhead when tracing is disabled).
 func initTracer() trace.Tracer {
-	exporter := os.Getenv("VELOX_OTEL_EXPORTER")
-
-	switch exporter {
+	switch telemetryConfig.Exporter {
 	case "stdout":
 		return initStdoutTracer()
 	case "otlp":
@@ -87,7 +93,7 @@ func buildResource() *resource.Resource {
 	res := resource.NewWithAttributes(
 		semconv.SchemaURL,
 		semconv.ServiceName("velox-server"),
-		semconv.ServiceVersion(os.Getenv("VELOX_VERSION")),
+		semconv.ServiceVersion(telemetryConfig.Version),
 	)
 	return res
 }
@@ -119,7 +125,7 @@ func initStdoutTracer() trace.Tracer {
 // "otel-collector:4317"). Uses insecure credentials by default;
 // set VELOX_OTEL_INSECURE=false to require TLS (not yet wired).
 func initOTLPTracer() trace.Tracer {
-	endpoint := os.Getenv("VELOX_OTEL_ENDPOINT")
+	endpoint := telemetryConfig.Endpoint
 	if endpoint == "" {
 		log.Printf("[TELEMETRY] OTLP exporter requested but VELOX_OTEL_ENDPOINT is empty — falling back to no-op")
 		return noop.NewTracerProvider().Tracer("velox-server")
@@ -127,11 +133,11 @@ func initOTLPTracer() trace.Tracer {
 
 	log.Printf("[TELEMETRY] OTLP gRPC exporter connecting to %s", endpoint)
 
-	exp, err := otlptracegrpc.New(
-		context.Background(),
-		otlptracegrpc.WithEndpoint(endpoint),
-		otlptracegrpc.WithInsecure(),
-	)
+	options := []otlptracegrpc.Option{otlptracegrpc.WithEndpoint(endpoint)}
+	if telemetryConfig.Insecure {
+		options = append(options, otlptracegrpc.WithInsecure())
+	}
+	exp, err := otlptracegrpc.New(context.Background(), options...)
 	if err != nil {
 		log.Printf("[TELEMETRY] OTLP gRPC exporter init failed: %v — falling back to no-op", err)
 		return noop.NewTracerProvider().Tracer("velox-server")

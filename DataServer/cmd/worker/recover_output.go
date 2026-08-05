@@ -99,6 +99,7 @@ import (
 	"time"
 
 	"velox-server/internal/completion"
+	"velox-server/internal/config"
 	"velox-server/internal/store"
 )
 
@@ -158,7 +159,7 @@ func parseOptions(args []string) (*cliOptions, error) {
 	}
 	// Fall-back: VELOX_COMMIT_HMAC_KEY env if --hmac-key missing.
 	if opts.HMACKey == "" {
-		opts.HMACKey = strings.TrimSpace(os.Getenv("VELOX_COMMIT_HMAC_KEY"))
+		opts.HMACKey = strings.TrimSpace(config.Getenv("VELOX_COMMIT_HMAC_KEY"))
 	}
 	if opts.HMACKey == "" {
 		return nil, fmt.Errorf("--hmac-key (or VELOX_COMMIT_HMAC_KEY env) required (must decode to >= 32 raw bytes)")

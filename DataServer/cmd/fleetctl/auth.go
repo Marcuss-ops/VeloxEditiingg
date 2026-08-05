@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"velox-server/internal/config"
 )
 
 // canonicalTokenPaths is the default lookup order for token
@@ -66,7 +68,7 @@ func loadTokenFromFile(path string) (string, error) {
 // Returns ("", nil) when env var is unset so the caller can
 // fall through to the file-based resolver.
 func envToken() (string, bool) {
-	v := os.Getenv("VELOX_ADMIN_TOKEN")
+	v := config.Getenv("VELOX_ADMIN_TOKEN")
 	if v == "" {
 		return "", false
 	}

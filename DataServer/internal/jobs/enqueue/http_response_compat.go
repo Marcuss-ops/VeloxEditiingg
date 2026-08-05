@@ -35,8 +35,7 @@ package enqueue
 
 import (
 	"database/sql"
-	"os"
-
+	"velox-server/internal/config"
 	"velox-shared/payload"
 )
 
@@ -74,7 +73,7 @@ func RenderHTTPBoundaryJobResponse(job map[string]interface{}, full bool, dbs ..
 		"started_at":          job["started_at"],
 		"completed_at":        job["completed_at"],
 		"output_path":         payload.FirstString(job, "output_path"),
-		"drive_output_folder": ResolveDriveOutputFolderReference(os.Getenv("VELOX_DATA_DIR"), payload.FirstString(job, "drive_output_folder"), db),
+		"drive_output_folder": ResolveDriveOutputFolderReference(config.Getenv("VELOX_DATA_DIR"), payload.FirstString(job, "drive_output_folder"), db),
 		"scene_count":         job["scene_count"],
 		"voiceover_count":     job["voiceover_count"],
 		"video_mode":          payload.FirstString(job, "video_mode"),

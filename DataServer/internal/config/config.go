@@ -65,6 +65,7 @@ func FromEnv() *Config {
 		Pipeline:               pipeline,
 		AllowedExternalDomains: allowedDomains,
 	}
+	c.LoadOperationalRuntime()
 	return c
 }
 
@@ -73,6 +74,9 @@ func FromEnv() *Config {
 func (c *Config) Validate() error {
 	if c == nil {
 		return fmt.Errorf("config: nil Config")
+	}
+	if len(c.parseErrors) > 0 {
+		return fmt.Errorf("config: invalid environment values: %s", strings.Join(c.parseErrors, "; "))
 	}
 	if c.Database.DBPath == "" {
 		return fmt.Errorf("config: VELOX_DB_PATH is required (absolute path to SQLite database)")

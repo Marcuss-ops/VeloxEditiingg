@@ -6,6 +6,8 @@ import (
 	"os"
 
 	"velox-server/internal/config"
+	"velox-server/internal/logging"
+	"velox-server/internal/telemetry"
 )
 
 // Build-time metadata, injected via `go build -ldflags "-X main.Version=...
@@ -45,7 +47,17 @@ func main() {
 		}
 	}
 
-	cfg := config.FromEnv()
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		log.Fatalf("config load failed: %v", err)
+	}
+	logging.Configure(cfg.Runtime.Logging.Quiet, cfg.Runtime.Logging.JSONOutput, cfg.Runtime.Logging.Debug)
+	telemetry.Configure(cfg.Runtime.Telemetry)
+	if snapshot, snapshotErr := cfg.SnapshotJSON(); snapshotErr != nil {
+		log.Printf("[BOOTSTRAP] WARNING: config snapshot unavailable: %v", snapshotErr)
+	} else {
+		log.Printf("[BOOTSTRAP] config snapshot: %s", snapshot)
+	}
 	args := os.Args[1:]
 
 	switch {
