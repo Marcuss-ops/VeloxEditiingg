@@ -69,6 +69,7 @@ var ErrPollerInvalidInterval = errors.New("worker.ProtectedAssetsPoller: interva
 var ErrProtectedSnapshotNil = errors.New("worker.ProtectedAssetsPoller: successful response contained no snapshot")
 var ErrProtectedSnapshotInvalid = errors.New("worker.ProtectedAssetsPoller: snapshot generated_at is invalid")
 var ErrProtectedSnapshotStale = errors.New("worker.ProtectedAssetsPoller: snapshot generated_at is older than the last valid snapshot")
+var ErrProtectedSnapshotSessionUnavailable = errors.New("worker.ProtectedAssetsPoller: worker session is not registered")
 
 var _ workercache.ProtectionBarrier = (*ProtectedAssetsPoller)(nil)
 
@@ -130,6 +131,7 @@ type ProtectedAssetsPoller struct {
 	// sessionGated is enabled by Run. Direct TickOnce callers remain
 	// deterministic and do not need to manufacture registration state.
 	sessionGated bool
+	sessionEpoch uint64
 
 	// readyMu protects a re-armable readiness barrier. A disconnect
 	// replaces readyCh with a fresh channel; the next valid snapshot
@@ -298,9 +300,10 @@ func (p *ProtectedAssetsPoller) runTickOnce(ctx context.Context, label string) e
 		}
 		return ErrProtectedSnapshotStale
 	}
-	p.mu.RLock()
+	p.mu.Lock()
 	sessionGated := p.sessionGated
-	p.mu.RUnlock()
+	sessionEpoch := p.sessionEpoch
+	p.mu.Unlock()
 	if sessionGated {
 		ready := telemetry.GlobalReady().Snapshot()
 		authenticated := false
@@ -309,7 +312,7 @@ func (p *ProtectedAssetsPoller) runTickOnce(ctx context.Context, label string) e
 		}
 		if !ready.Registered || !authenticated {
 			p.invalidateReadiness()
-			return fmt.Errorf("%w: worker session is not registered", ErrProtectedSnapshotStale)
+			return ErrProtectedSnapshotSessionUnavailable
 		}
 	}
 	if previous := p.Snapshot(); previous != nil {
@@ -336,7 +339,13 @@ func (p *ProtectedAssetsPoller) runTickOnce(ctx context.Context, label string) e
 			}
 		}
 	}
-	p.applySnapshot(snap)
+	if err := p.applySnapshot(snap, sessionEpoch); err != nil {
+		p.recordPollError(err)
+		if p.OnError != nil {
+			p.OnError(err)
+		}
+		return err
+	}
 	return nil
 }
 
@@ -377,6 +386,12 @@ func (p *ProtectedAssetsPoller) WaitReady(ctx context.Context) error {
 		return errors.New("worker.ProtectedAssetsPoller.WaitReady: nil poller")
 	}
 	for {
+		p.mu.RLock()
+		sessionGated := p.sessionGated
+		p.mu.RUnlock()
+		if sessionGated && !p.sessionAuthenticated() {
+			p.invalidateReadiness()
+		}
 		p.readyMu.Lock()
 		if p.ready {
 			p.readyMu.Unlock()
@@ -406,7 +421,19 @@ func (p *ProtectedAssetsPoller) IsReady() bool {
 	return p.ready
 }
 
+func (p *ProtectedAssetsPoller) sessionAuthenticated() bool {
+	if !telemetry.GlobalReady().Snapshot().Registered {
+		return false
+	}
+	client, ok := p.Client.(interface{ AuthToken() string })
+	return ok && strings.TrimSpace(client.AuthToken()) != ""
+}
+
 func (p *ProtectedAssetsPoller) invalidateReadiness() {
+	p.mu.Lock()
+	p.sessionEpoch++
+	p.lastPollErr = ErrProtectedSnapshotSessionUnavailable
+	p.mu.Unlock()
 	p.readyMu.Lock()
 	if p.ready {
 		// The ready channel is already closed for the completed session;
@@ -423,22 +450,40 @@ func (p *ProtectedAssetsPoller) invalidateReadiness() {
 // Centralised so the grow-only-by-reference invariant lives in
 // one place — future enhancements (e.g. monotonic-version
 // checking) plug in here without touching TickOnce.
-func (p *ProtectedAssetsPoller) applySnapshot(snap *api.ProtectedAssetSnapshot) {
+func (p *ProtectedAssetsPoller) recordPollError(err error) {
+	p.mu.Lock()
+	p.lastPollErr = err
+	p.mu.Unlock()
+}
+
+func (p *ProtectedAssetsPoller) applySnapshot(snap *api.ProtectedAssetSnapshot, expectedEpoch uint64) error {
 	generatedAt, err := time.Parse(time.RFC3339Nano, snap.GeneratedAt)
 	if err != nil {
 		// runTickOnce validates GeneratedAt before calling applySnapshot;
 		// retain a defensive guard so readiness can never open from an
 		// invalid snapshot if this helper is reused later.
-		return
+		return ErrProtectedSnapshotInvalid
 	}
 	p.mu.Lock()
+	if p.sessionGated && p.sessionEpoch != expectedEpoch {
+		p.mu.Unlock()
+		return ErrProtectedSnapshotSessionUnavailable
+	}
+	if p.sessionGated && !p.sessionAuthenticated() {
+		p.mu.Unlock()
+		p.invalidateReadiness()
+		return ErrProtectedSnapshotSessionUnavailable
+	}
 	p.snap = snap
 	p.lastPollErr = nil
-	p.mu.Unlock()
 
-	// Open the cleanup barrier first, then publish readiness. This is
-	// deliberately fail-safe: a probe can briefly report not-ready while
-	// cleanup is already permitted, but never the reverse.
+	// Serialize the complete session transition under p.mu. A disconnect
+	// cannot increment sessionEpoch or publish cache_protection_ready=false
+	// until this snapshot has either opened the barrier or completed its
+	// transition; an old response can therefore never reopen a newer session.
+	// Open the cleanup barrier first, then publish readiness: a probe may
+	// briefly report not-ready while cleanup is permitted, but never the
+	// reverse.
 	telemetry.SetProtectedSnapshotGeneratedAt(generatedAt)
 	p.readyMu.Lock()
 	p.ready = true
@@ -452,9 +497,11 @@ func (p *ProtectedAssetsPoller) applySnapshot(snap *api.ProtectedAssetSnapshot) 
 	}
 	p.readyMu.Unlock()
 	telemetry.MarkCacheProtectionReady(true)
+	p.mu.Unlock()
 	if p.OnSuccess != nil {
 		p.OnSuccess(snap)
 	}
+	return nil
 }
 
 // Snapshot returns the most recent good snapshot pointer (or
