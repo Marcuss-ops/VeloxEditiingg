@@ -104,7 +104,7 @@
     # ── WORKER SERVICE ───────────────────────────────────────
     - name: Preflight | Verifica stato servizio worker
       ansible.builtin.systemd:
-        name: "velox-worker-{{ inventory_hostname }}"
+        name: velox-worker.service
       register: worker_service_status
       failed_when: false
 

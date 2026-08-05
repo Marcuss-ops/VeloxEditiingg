@@ -8,8 +8,8 @@
 
 - name: DeployWorker | Initialize canonical deployment facts
   ansible.builtin.set_fact:
-    velox_worker_unit_name: "velox-worker-{{ inventory_hostname }}.service"
-    velox_worker_container_name: "velox-worker-{{ inventory_hostname }}"
+    velox_worker_unit_name: "velox-worker.service"
+    velox_worker_container_name: "velox-worker"
     _release_swapped: false
 
 - name: DeployWorker | Unified release pipeline

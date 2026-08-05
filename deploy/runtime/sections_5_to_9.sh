@@ -280,7 +280,7 @@ section_9_compose() {
         # shellcheck disable=SC1090
         source "$ENV_FILE"
         set +a
-        docker compose -p "velox-verify-${WORKER_ID}" \
+        docker compose -p velox-worker \
             -f "$compose_yml" config --format json 2>/dev/null
     )"; then
         record 9 "Compose config" FAIL \
@@ -303,8 +303,8 @@ section_9_compose() {
 
     local nname
     nname="$(printf '%s' "$svc_json" | jq -r '.container_name // ""')"
-    [[ "$nname" == "velox-worker-$WORKER_ID" ]] \
-        || failures+=("container_name='$nname' (want velox-worker-$WORKER_ID)")
+    [[ "$nname" == "velox-worker" ]] \
+        || failures+=("container_name='$nname' (want velox-worker)")
 
     [[ "$(printf '%s' "$svc_json" | jq -r '.read_only // false')" == "true" ]] \
         || failures+=("read_only != true")

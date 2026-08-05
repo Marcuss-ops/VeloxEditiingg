@@ -16,19 +16,22 @@
 #   3. Confirms /var/lib/velox-worker/worker_config.json exists and parses
 #      as JSON. This file is rendered by deploy/scripts/apply-local-worker-config.sh
 #      and bind-mounted into the container at /opt/velox/worker_config.json.
-#   4. Creates the directory tree under /opt/velox-worker, /etc/velox-worker,
+#   4. Runs migrate-legacy-worker.sh once to preserve legacy state and retire
+#      per-host units/containers before the canonical runtime is installed.
+#   5. Creates the directory tree under /opt/velox-worker, /etc/velox-worker,
 #      and /var/lib/velox-worker/state|work|cache|output.
-#   5. Sets uid 10001 ownership AND group read+traversal on /etc/velox-worker
+#   6. Sets uid 10001 ownership AND group read+traversal on /etc/velox-worker
 #      so the container's velox user can read mTLS certs + the per-worker
 #      credential through the compose :ro bind-mounts.
-#   6. Installs compose.yml from this repo into /opt/velox-worker/compose.yml.
-#   7. Cosign signature verification (keyless OIDC against the GitHub
+#   7. Installs compose.yml and the canonical systemd unit into
+#      /opt/velox-worker and /etc/systemd/system.
+#   8. Cosign signature verification (keyless OIDC against the GitHub
 #      Actions issuer). Verified images only. Failure aborts; operator
 #      override via VELOX_SKIP_COSIGN_VERIFY=1 plus a non-empty
 #      VELOX_COSIGN_OVERRIDE_REASON for a documented incident response only.
-#   8. 'docker pull's the pinned image digest.
-#   9. Brings the worker up with an isolated project name 'velox-worker-<id>'
-#      so multiple workers on one host do not collide.
+#   9. 'docker pull's the pinned image digest.
+#   10. Enables the single velox-worker.service owner for the fixed
+#       Compose project/container.
 
 set -euo pipefail
 
@@ -36,6 +39,10 @@ set -euo pipefail
 readonly ENV_FILE_DEFAULT="/etc/velox-worker/worker.env"
 readonly COMPOSE_YML_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/compose.yml"
 readonly COMPOSE_YML_DST="/opt/velox-worker/compose.yml"
+readonly MIGRATION_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/migrate-legacy-worker.sh"
+readonly MIGRATION_DST="/opt/velox-worker/migrate-legacy-worker.sh"
+readonly SERVICE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker.service"
+readonly SERVICE_DST="/etc/systemd/system/velox-worker.service"
 readonly IMAGE_UID="10001"
 readonly IMAGE_GID="10001"
 
@@ -68,6 +75,13 @@ docker info >/dev/null 2>&1 \
 # python3 is required for the worker_config.json JSON sanity check below.
 command -v python3 >/dev/null 2>&1 \
     || fail "python3 not found on PATH — required for JSON sanity check on worker_config.json."
+
+# Run migration before reading the canonical env: a legacy host may only have
+# /etc/velox-worker-<inventory>.env, and migration is responsible for
+# materialising /etc/velox-worker/worker.env without losing persistent state.
+log "Migrating legacy worker runtime if present"
+install -o root -g root -m 0755 "$MIGRATION_SRC" "$MIGRATION_DST"
+"$MIGRATION_DST"
 
 ENV_FILE="${ENV_FILE:-$ENV_FILE_DEFAULT}"
 [[ -f "$ENV_FILE" ]] \
@@ -116,7 +130,7 @@ chown "${IMAGE_UID}:${IMAGE_GID}" "$WORKER_CONFIG_FILE"
 chmod 0640 "$WORKER_CONFIG_FILE"
 ok "worker_config.json exists, parses as JSON, owned by ${IMAGE_UID}:${IMAGE_GID} mode 0640"
 
-# ── 1. Directory tree ───────────────────────────────────────────────────────
+# ── 1. Canonical directory tree ────────────────────────────────────────────
 log "Creating /opt, /etc, /var/lib/velox-worker directory tree"
 mkdir -p \
     /opt/velox-worker \
@@ -161,10 +175,11 @@ for spec in \
 done
 ok "cert + secret perms aligned for uid ${IMAGE_GID}"
 
-# ── 3. Install compose.yml ─────────────────────────────────────────────────
+# ── 3. Install canonical runtime definitions ───────────────────────────────
 log "Copying compose.yml to $COMPOSE_YML_DST"
 install -o root -g root -m 0644 "$COMPOSE_YML_SRC" "$COMPOSE_YML_DST"
-ok "compose.yml installed"
+install -o root -g root -m 0644 "$SERVICE_SRC" "$SERVICE_DST"
+ok "compose.yml and velox-worker.service installed"
 
 # ── 3.5. Cosign signature verification ──────────────────────────────────────
 # Worker-image.yml signs the published image with cosign keyless OIDC against
@@ -203,20 +218,15 @@ log "Pulling $VELOX_WORKER_IMAGE"
 docker pull "$VELOX_WORKER_IMAGE"
 ok "image pulled"
 
-# ── 5. Bring up worker ─────────────────────────────────────────────────────
-PROJECT_NAME="velox-worker-${VELOX_WORKER_ID}"
+# ── 5. Bring up the canonical systemd-owned runtime ────────────────────────
 cd /opt/velox-worker
+if [[ -d /run/systemd/system ]] && systemctl daemon-reload >/dev/null 2>&1; then
+    systemctl enable --now velox-worker.service
+    systemctl is-active --quiet velox-worker.service \
+        || fail "velox-worker.service did not become active"
+else
+    fail "systemd is required for the canonical worker runtime"
+fi
 
-log "Bringing up worker under project '$PROJECT_NAME'"
-docker compose \
-    -p "$PROJECT_NAME" \
-    -f "$COMPOSE_YML_DST" \
-    up -d --wait
-
-log "Final state:"
-docker compose \
-    -p "$PROJECT_NAME" \
-    -f "$COMPOSE_YML_DST" \
-    ps
-
-ok "Worker $VELOX_WORKER_ID is up."
+docker compose -p velox-worker -f "$COMPOSE_YML_DST" ps
+ok "Worker $VELOX_WORKER_ID is up under velox-worker.service / velox-worker container."

@@ -1,14 +1,9 @@
 ---
 # fleet-restart — Velox fleet-operator (Step 11/15).
 # ────────────────────────────────────────────────────────────────────────────
-# Restart the worker container for one worker at a time, stop at first
-# fail. Supports two deploy patterns, auto-detected per worker:
-#
-#   COMPOSE MODE  (compose.yml exists at /opt/velox-worker/compose.yml):
-#     docker compose -p velox-worker-<id> -f /opt/velox-worker/compose.yml restart
-#
-#   RAW MODE      (no compose.yml — container launched via docker run):
-#     docker restart velox-worker-<id>
+# Restart the single canonical systemd-owned worker runtime for one worker
+# at a time, stop at first fail. There is intentionally no raw docker or
+# per-worker Compose-project fallback: velox-worker.service is the sole owner.
 #
 # ROUTING: SSH direct on the worker host. The container is bound to the
 # host, not the master. Master has no `docker` socket.
@@ -34,39 +29,15 @@
   become: true
 
   vars:
-    compose_file: /opt/velox-worker/compose.yml
-    # container_name is a per-host inventory var (defaults to velox-worker-<worker_id>).
-    # Override it in inventory.ini when a host uses a non-standard --name convention.
-    _container_name: "{{ container_name | default('velox-worker-' + worker_id) }}"
+    canonical_unit: velox-worker.service
 
   tasks:
-    - name: Detect deploy pattern — check for compose.yml on {{ worker_id }}
-      ansible.builtin.stat:
-        path: "{{ compose_file }}"
-      register: compose_stat
-
-    - name: Restart via docker compose ({{ worker_id }})
-      ansible.builtin.command:
-        cmd: >-
-          docker compose
-          -p "velox-worker-{{ worker_id }}"
-          -f {{ compose_file }}
-          restart
-        chdir: /opt/velox-worker
-      environment:
-        VELOX_WORKER_ID: "{{ worker_id }}"
+    - name: Restart canonical systemd worker runtime ({{ worker_id }})
+      ansible.builtin.systemd:
+        name: "{{ canonical_unit }}"
+        state: restarted
+        daemon_reload: true
       register: restart_run
-      changed_when: restart_run.rc == 0
-      failed_when: restart_run.rc != 0
-      when: compose_stat.stat.exists
-
-    - name: Restart via raw docker restart ({{ worker_id }})
-      ansible.builtin.command:
-        cmd: docker restart {{ _container_name }}
-      register: restart_run
-      changed_when: restart_run.rc == 0
-      failed_when: restart_run.rc != 0
-      when: not compose_stat.stat.exists
 
     - name: Wait for /health/ready on the worker loopback
       ansible.builtin.uri:
@@ -83,6 +54,6 @@
     - name: Announce restart healthy for {{ worker_id }}
       ansible.builtin.debug:
         msg: >-
-          [{{ worker_id }}] {{ 'compose' if compose_stat.stat.exists else 'raw docker' }} restart OK;
+          [{{ worker_id }}] canonical systemd restart OK;
           /health/ready returned 200; the master will see the
           re-registration on the next heartbeat tick (Step 1/15).

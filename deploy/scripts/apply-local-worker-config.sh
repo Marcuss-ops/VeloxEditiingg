@@ -433,7 +433,7 @@ if [[ -f "$DST" && -f "$FINGERPRINT_FILE" ]]; then
   if [[ "$OLD_FINGERPRINT" == "$NEW_FINGERPRINT" && "$OLD_DST_HASH" == "$NEW_DST_HASH" ]]; then
     log "no-op: deployment_fingerprint and JSON hash unchanged on disk."
     log "  worker_id=$WORKER_ID master=$CONTROL_GRPC_URL"
-    log "  next: docker compose -p velox-worker-$WORKER_ID -f $COMPOSE_FILE up -d --force-recreate (only if image or env var changed)"
+    log "  next: systemctl restart velox-worker.service (only if image or env var changed)"
     exit 0
   fi
   log "delta detected: fingerprint OR JSON changed — proceeding with install."
@@ -538,7 +538,7 @@ cat <<NEXT
         echo "$IMAGE_DIGEST" | sed 's|.*@sha256:||' > $WORK_DIR/BUNDLE_HASH.txt
      or set VELOX_BUNDLE_HASH in $ENV_FILE.
   2. Restart worker:
-        docker compose -p velox-worker-$WORKER_ID -f $COMPOSE_FILE up -d --force-recreate
+        systemctl restart velox-worker.service
   3. Tail master log for the registration marker:
         journalctl -u velox-server --since '30s ago' 2>/dev/null | grep -E '$WORKER_ID|hello_ack|session'
         (or:   sudo journalctl -u velox-server -f   to follow live)

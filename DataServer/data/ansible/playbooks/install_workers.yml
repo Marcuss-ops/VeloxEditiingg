@@ -73,7 +73,7 @@
 
     - name: Install | Crea directory per override systemd
       ansible.builtin.file:
-        path: "/etc/systemd/system/velox-worker-{{ inventory_hostname }}.service.d"
+        path: /etc/systemd/system/velox-worker.service.d
         state: directory
         mode: "0755"
 
@@ -118,7 +118,7 @@
         msg: |-
           ✅ Installazione completata per {{ inventory_hostname }}
 
-          Servizio: velox-worker-{{ inventory_hostname }}
+          Servizio: velox-worker.service
           Docker: {{ _worker_image_tag | default('velox-worker:latest') }}
           Directory: {{ velox_dir }}
           Master: {{ master_url }}

@@ -22,7 +22,7 @@
         argv:
           - docker
           - exec
-          - "velox-worker-{{ inventory_hostname }}"
+          - velox-worker
           - sha256sum
           - /usr/local/bin/velox_video_engine
       register: _engine_hash_before
@@ -43,7 +43,7 @@
         argv:
           - docker
           - exec
-          - "velox-worker-{{ inventory_hostname }}"
+          - velox-worker
           - sha256sum
           - /usr/local/bin/velox_video_engine
       register: _engine_hash_after

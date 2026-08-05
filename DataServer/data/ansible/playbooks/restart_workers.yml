@@ -4,7 +4,7 @@
 # ============================================================
 # Azioni:
 #   - Test connesione SSH
-#   - Riavvio servizio systemd velox-worker-HOST
+#   - Riavvio servizio systemd velox-worker.service
 #   - Verifica stato post-riavvio
 # ============================================================
 
@@ -20,7 +20,7 @@
     # ── RIAVVIO ──────────────────────────────────────────────
     - name: Restart | Riavvia servizio worker
       ansible.builtin.systemd:
-        name: "velox-worker-{{ inventory_hostname }}"
+        name: velox-worker.service
         state: restarted
         daemon_reload: true
         enabled: true
@@ -33,7 +33,7 @@
     # ── VERIFICA ─────────────────────────────────────────────
     - name: Restart | Verifica stato servizio
       ansible.builtin.systemd:
-        name: "velox-worker-{{ inventory_hostname }}"
+        name: velox-worker.service
       register: final_status
 
     - name: Restart | Fail if service not active
@@ -48,7 +48,7 @@
 
     - name: Restart | Mostra log recenti del servizio
       ansible.builtin.shell: |
-        journalctl -u "velox-worker-{{ inventory_hostname }}" --no-pager -n 10 2>/dev/null || true
+        journalctl -u velox-worker.service --no-pager -n 10 2>/dev/null || true
       args:
         executable: /bin/bash
       register: journal_output

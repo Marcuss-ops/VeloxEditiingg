@@ -14,7 +14,7 @@
     argv:
       - docker
       - exec
-      - "velox-worker-{{ inventory_hostname }}"
+      - velox-worker
       - bash
       - -lc
       - |

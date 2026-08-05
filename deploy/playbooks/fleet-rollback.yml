@@ -6,7 +6,7 @@
 #
 #   snapshot current (broken) digest
 #   → pull image @previous_digest with Cosign verify
-#   → docker compose -p velox-worker-${id} restart with previous image
+#   → docker compose -p velox-worker restart with previous image
 #   → /health/ready check on the new container
 #   → Master reconnect (CONNECTED + session_active)
 #   → smoke (optional; drive separately via fleet-smoke)

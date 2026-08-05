@@ -46,7 +46,7 @@
     - name: Normalize | Unmask velox-worker service
       ansible.builtin.shell: |
         set -euo pipefail
-        systemctl unmask "velox-worker-{{ inventory_hostname }}" 2>/dev/null || true
+        systemctl unmask velox-worker.service 2>/dev/null || true
       args:
         executable: /bin/bash
       changed_when: false
@@ -74,7 +74,7 @@
         # intentionally narrow-vs-broad, NOT duplicates. Step 2
         # cannot see generator-supplied or /usr/lib units; Step 7
         # catches those.
-        KEEP="velox-worker-{{ inventory_hostname }}.service"
+        KEEP="velox-worker.service"
         for f in /etc/systemd/system/velox-worker-*.service; do
           [ ! -f "$f" ] && continue
           BASE=$(basename "$f")
@@ -95,7 +95,7 @@
     - name: Normalize | Remove old override directories
       ansible.builtin.shell: |
         set -euo pipefail
-        KEEP_DIR="velox-worker-{{ inventory_hostname }}.service.d"
+        KEEP_DIR="velox-worker.service.d"
         for d in /etc/systemd/system/velox-worker-*.service.d; do
           [ ! -d "$d" ] && continue
           BASE=$(basename "$d")
@@ -119,7 +119,7 @@
 
     - name: Normalize | Get journal logs
       ansible.builtin.shell: |
-        journalctl -u "velox-worker-{{ inventory_hostname }}" --no-pager -n 30 2>/dev/null || true
+        journalctl -u velox-worker.service --no-pager -n 30 2>/dev/null || true
       args:
         executable: /bin/bash
       register: journal_output
@@ -171,18 +171,18 @@
       ansible.builtin.assert:
         that:
           - check_remaining_units.stdout_lines | length > 0
-          - "'velox-worker-' ~ inventory_hostname ~ '.service' in check_remaining_units.stdout_lines"
+          - "'velox-worker.service' in check_remaining_units.stdout_lines"
         fail_msg: |-
-          Idempotency fail: canonical unit `velox-worker-{{ inventory_hostname }}.service`
+          Idempotency fail: canonical unit `velox-worker.service`
           is missing from `systemctl list-unit-files`. Surviving: {{ check_remaining_units.stdout_lines | default([]) }}.
-        success_msg: "OK canonical present: velox-worker-{{ inventory_hostname }}.service"
+        success_msg: "OK canonical present: velox-worker.service"
 
     - name: Normalize | Assert no non-canonical stragglers
       ansible.builtin.assert:
         that:
           - >-
             item in [
-              'velox-worker-' ~ inventory_hostname ~ '.service',
+              'velox-worker.service',
               'velox-worker-watchdog.service',
               'velox-auto-update.service'
             ]
@@ -204,7 +204,7 @@
           NORMALIZE COMPLETE — {{ inventory_hostname }}
           ========================================
           Worker ID: {{ worker_id | default(inventory_hostname) }}
-          Service:   velox-worker-{{ inventory_hostname }}
-          Env file:  /etc/velox-worker-{{ inventory_hostname }}.env
+          Service:   velox-worker.service
+          Env file:  /etc/velox-worker/worker.env
           Master:    {{ master_url }}
           ========================================

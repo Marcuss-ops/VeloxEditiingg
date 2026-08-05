@@ -65,29 +65,18 @@ set -u
 WID="$1"
 WIN_S="$2"
 
-# Canonical short name first (exact match), then active/activating loaded
-# unit, then any loaded worker unit. Excludes ghost not-found units and
-# stale double-prefix units from bad deploys.
-SHORT="${WID#velox-worker-}"
-unit="$(systemctl list-units --type=service --all --no-legend 2>/dev/null \
-  | awk -v u="velox-worker-worker_${SHORT}.service" '$2=="loaded" && $1==u {print $1; exit}')"
-[ -z "$unit" ] && unit="$(systemctl list-units --type=service --all --no-legend 2>/dev/null \
-  | awk '$2=="loaded" && ($3=="active" || $3=="activating") && $1 ~ /^velox-worker-/ && $1 !~ /auto-update|watchdog|\.mount|worker_velox-worker/ {print $1; exit}')"
-[ -z "$unit" ] && unit="$(systemctl list-units --type=service --all --no-legend 2>/dev/null \
-  | awk '$2=="loaded" && $1 ~ /^velox-worker-worker_/ && $1 !~ /worker_velox-worker/ {print $1; exit}')"
-[ -z "$unit" ] && unit="velox-worker-worker_${SHORT}.service"
+# The canonical runtime has exactly one unit on every worker host.
+unit="velox-worker.service"
 
 active="$(systemctl is-active "$unit" 2>/dev/null || echo unknown)"
 active_since="$(systemctl show "$unit" -p ActiveEnterTimestamp --value 2>/dev/null)"
 n_restarts="$(systemctl show "$unit" -p NRestarts --value 2>/dev/null || echo 0)"
 recent_restarts="$(journalctl -u "$unit" --since "-$WIN_S seconds" --no-pager 2>/dev/null | grep -c 'Started Velox Worker' || true)"
 
-# Canonical per-host env file: prefer the file referenced by ExecStart, else
-# the canonical /etc/velox-worker-worker_<short>.env.
+# Canonical env file: /etc/velox-worker/worker.env.
 env_file="$(systemctl show "$unit" -p ExecStart --value 2>/dev/null \
   | grep -oE -- '--env-file [^ ]+' | awk '{print $2}' | head -1)"
-[ -z "$env_file" ] && env_file="$(ls /etc/velox-worker-worker_*.env 2>/dev/null | grep -F "$(echo "$unit" | sed 's/^velox-worker-//; s/\.service$//')" | head -1)"
-[ -z "$env_file" ] && env_file="/etc/velox-worker-worker_${WID}.env"
+[ -z "$env_file" ] && env_file="/etc/velox-worker/worker.env"
 
 env_bundle_hash="$(sudo -n grep -E '^VELOX_BUNDLE_HASH=' "$env_file" 2>/dev/null | cut -d= -f2-)"
 env_bundle_ver="$(sudo -n grep -E '^VELOX_BUNDLE_VERSION=' "$env_file" 2>/dev/null | cut -d= -f2-)"
@@ -101,7 +90,7 @@ running_digest="$(sudo -n docker inspect --format '{{index .RepoDigests 0}}' "$c
 bundle_disk="$(cat /opt/velox/current/RemoteCodex/BUNDLE_HASH.txt 2>/dev/null | tr -d '[:space:]')"
 [ -z "$bundle_disk" ] && bundle_disk="$(cat /opt/velox-worker/BUNDLE_HASH.txt 2>/dev/null | tr -d '[:space:]')"
 
-baseline_file="$(find /var/lib/velox/workers -name engine_selftest_baseline.sha256 2>/dev/null | head -1)"
+baseline_file="$(find /var/lib/velox-worker -name engine_selftest_baseline.sha256 2>/dev/null | head -1)"
 baseline_content="$(cat "$baseline_file" 2>/dev/null | awk '{print $1}')"
 engine_sha="$(sha256sum /usr/local/bin/velox_video_engine 2>/dev/null | awk '{print $1}')"
 

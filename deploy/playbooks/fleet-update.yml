@@ -9,7 +9,7 @@
 #   → active_jobs = 0
 #   → snapshot previous_digest (deployment_records row)
 #   → pull image @target_digest with Cosign verify
-#   → docker compose -p velox-worker-${id} restart with new image
+#   → docker compose -p velox-worker restart with new image
 #   → /health/ready check on the new container
 #   → Master reconnect (CONNECTED + session_active)
 #   → optional follow-up smoke (drive separately via fleet-smoke)

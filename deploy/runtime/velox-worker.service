@@ -1,0 +1,22 @@
+[Unit]
+Description=Velox Worker (canonical Compose runtime)
+Documentation=https://github.com/Marcuss-ops/VeloxEditiingg/tree/main/deploy/runtime
+Requires=docker.service
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/velox-worker
+EnvironmentFile=/etc/velox-worker/worker.env
+ExecStartPre=/usr/bin/docker compose --project-name velox-worker --file /opt/velox-worker/compose.yml config
+ExecStart=/usr/bin/docker compose --project-name velox-worker --file /opt/velox-worker/compose.yml up --remove-orphans --no-color
+ExecStop=/usr/bin/docker compose --project-name velox-worker --file /opt/velox-worker/compose.yml down --remove-orphans
+Restart=always
+RestartSec=10
+TimeoutStartSec=120
+TimeoutStopSec=90
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

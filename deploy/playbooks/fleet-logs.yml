@@ -41,13 +41,13 @@
     logs_tail: "{{ logs_tail | default(200) }}"
 
   tasks:
-    - name: Tail last {{ logs_tail }} lines of velox-worker-{{ worker_id }}
+    - name: Tail last {{ logs_tail }} lines of canonical velox-worker
       ansible.builtin.command:
         cmd: >-
           docker compose
-          -p "velox-worker-{{ worker_id }}"
+          -p velox-worker
           -f /opt/velox-worker/compose.yml
-          logs --tail={{ logs_tail }} --no-color --no-log-prefix
+          logs --tail={{ logs_tail }} --no-color --no-log-prefix velox-worker
         chdir: /opt/velox-worker
       register: logs_run
       changed_when: false
@@ -71,7 +71,7 @@
           docker compose logs failed on worker {{ worker_id }} —
           rc={{ logs_run.rc }}, stderr=
           {{ logs_run.stderr | default('') | truncate(400, true, '…') }}.
-          Likely no docker project named velox-worker-{{ worker_id }},
+          Likely the canonical velox-worker project is unavailable,
           OR /opt/velox-worker/compose.yml missing. Operator MUST
           ssh in by hand before re-running fleet-logs.
       when: logs_run.rc != 0

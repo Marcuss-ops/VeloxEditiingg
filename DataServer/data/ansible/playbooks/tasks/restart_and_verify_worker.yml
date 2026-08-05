@@ -13,7 +13,7 @@
 
 - name: RestartVerify | Restart worker (attempt {{ _restart_attempt }})
   ansible.builtin.systemd:
-    name: "velox-worker-{{ inventory_hostname }}"
+    name: velox-worker.service
     state: restarted
 
 - name: RestartVerify | Wait for stabilisation

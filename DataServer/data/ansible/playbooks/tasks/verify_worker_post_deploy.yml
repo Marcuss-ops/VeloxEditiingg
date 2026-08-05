@@ -8,8 +8,8 @@
 - name: Verify | Resolve canonical verification facts
   ansible.builtin.set_fact:
     velox_worker_identity: "{{ velox_worker_identity | default(worker_id | default(inventory_hostname)) }}"
-    velox_worker_unit_name: "{{ velox_worker_unit_name | default('velox-worker-' ~ inventory_hostname ~ '.service') }}"
-    velox_worker_container_name: "{{ velox_worker_container_name | default('velox-worker-' ~ inventory_hostname) }}"
+    velox_worker_unit_name: "{{ velox_worker_unit_name | default('velox-worker.service') }}"
+    velox_worker_container_name: "{{ velox_worker_container_name | default('velox-worker') }}"
 
 - name: Verify | Read canonical worker systemd service
   ansible.builtin.systemd:
@@ -277,7 +277,7 @@
 # ── RUNTIME ISOLATION CONTRACT (P0.4) ───────────────────────────
 # The worker host is read-only under /app (the release checkout) and
 # writable under {{ velox_worker_runtime_container_dir }} (the canonical
-# runtime mount, backed by the host's /var/lib/velox/workers/<host>/).
+# runtime mount, backed by the host's /var/lib/velox-worker/).
 # Mutable state — worker_state.json + .tmp, cache, blobs, assets_cache —
 # MUST live under the runtime dir. These four checks pin that contract.
 

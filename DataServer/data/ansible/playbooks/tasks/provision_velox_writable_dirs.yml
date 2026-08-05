@@ -12,7 +12,7 @@
 # Required vars:
 #   velox_worker_runtime_host_dir — install root for the writable
 #                                   runtime tree (default
-#                                   /var/lib/velox/workers/<host>,
+#                                   /var/lib/velox-worker,
 #                                   matches canonical_worker_runtime.yml)
 #
 # Emits: nothing; this playbook is side-effect only (idempotent
@@ -35,7 +35,7 @@
   hosts: velox_workers
   gather_facts: true
   vars:
-    velox_worker_runtime_host_dir: "/var/lib/velox/workers/{{ inventory_hostname }}"
+    velox_worker_runtime_host_dir: "/var/lib/velox-worker"
     # TODO: extract into group_vars/all.yml as velox_user_uid
     # (shared with canonical_worker_runtime.yml).
     velox_writable_dirs_owner: "10001"

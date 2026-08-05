@@ -1,7 +1,7 @@
 # deploy/runtime/ — worker container runtime
 
-This directory declares the standard worker container runtime for the single co-located worker pair
-(master + velox-worker-1) in `deploy/inventory/production.ini`. It pairs with `deploy/group_vars/`
+This directory declares the standard worker runtime: one `velox-worker.service`, one Compose
+project (`velox-worker`), one container (`velox-worker`), and one persistent state tree. It pairs with `deploy/group_vars/`
 (which the master-side playbooks consume) and with `.github/workflows/
 worker-image.yml` (which builds and publishes the worker image).
 
@@ -9,10 +9,12 @@ worker-image.yml` (which builds and publishes the worker image).
 
 | File | Role |
 |---|---|
-| `compose.yml` | Referenceable Compose v2 service definition. Read-only root fs, `cap_drop: ALL`, `no-new-privileges`, isolated per-worker container name. |
-| `compose.chronon.yml` | Optional overlay selecting the Chronon-backed worker image and `chronon.render-plan.v1` execution. |
-| `worker.env.example` | Template for the per-host env file the worker reads. Copy to `/etc/velox-worker/worker.env` on the host and fill in. |
-| `prepare-host.sh` | Idempotent setup: creates dirs, sets ownership to uid 10001 (matching the image's `velox` user), pulls the pinned image, brings the container up. |
+| `compose.yml` | The sole Compose service definition; fixed project/container names, hardened mounts, and readiness healthcheck. |
+| `velox-worker.service` | The sole systemd owner; systemd starts/stops the fixed Compose project and never runs a second worker process. |
+| `migrate-legacy-worker.sh` | One-time, idempotent migration of per-host units, containers, env files, and persistent state. |
+| `compose.chronon.yml` | Configuration reference for Chronon settings consumed by the canonical Compose service; startup remains owned by `velox-worker.service`. |
+| `worker.env.example` | Template for `/etc/velox-worker/worker.env`, the only runtime env path. |
+| `prepare-host.sh` | Idempotent migration + setup + digest pull + systemd convergence. |
 
 ## First-time setup on a fresh worker host
 
@@ -32,25 +34,32 @@ sudo install -d /etc/velox-worker/certs /etc/velox-worker/secrets
 sudo install -m 0600 worker.crt worker.key ca.crt /etc/velox-worker/certs/
 sudo install -m 0600 worker_credential    /etc/velox-worker/secrets/
 
-# 4. Drop binaries into /etc/velox-worker, then run prepare-host.sh.
+# 4. On a legacy host, migrate once before the first canonical start:
+sudo deploy/runtime/migrate-legacy-worker.sh
+
+# 5. Run the canonical systemd convergence (it repeats migration safely).
 sudo deploy/runtime/prepare-host.sh
 ```
 
 ## Chronon worker
 
 To run the worker with Chronon3D, publish and pin the image built with
-`RemoteCodex/native/worker-agent-go/Dockerfile.chronon`, then set
-`VELOX_CHRONON_WORKER_IMAGE` to its digest and start with the overlay:
+`RemoteCodex/native/worker-agent-go/Dockerfile.chronon`, then update the canonical `/etc/velox-worker/worker.env`:
 
 ```bash
-export VELOX_CHRONON_WORKER_IMAGE=ghcr.io/<owner>/velox-chronon-worker@sha256:<digest>
-docker compose -p velox-worker-<id> \
-  -f deploy/runtime/compose.yml \
-  -f deploy/runtime/compose.chronon.yml up -d
+VELOX_WORKER_IMAGE=ghcr.io/<owner>/velox-chronon-worker@sha256:<digest>
+VELOX_RENDER_BACKEND=chronon
+CHRONON3D_CLI=/opt/chronon3d/bin/chronon3d_cli
 ```
 
-The overlay sets `VELOX_RENDER_BACKEND=chronon`. Without it, Velox keeps the
-existing native engine backend.
+Converge through the sole runtime owner:
+
+```bash
+sudo systemctl restart velox-worker.service
+```
+
+The canonical Compose definition reads these values. Without
+`VELOX_RENDER_BACKEND=chronon`, Velox keeps the existing native engine backend.
 
 ## Image pinning — digest-only
 
@@ -75,7 +84,7 @@ cosign-signed (keyless OIDC).
    ```bash
    sudo deploy/runtime/prepare-host.sh
    ```
-4. Verify health: `docker compose -p velox-worker-<id> -f /opt/velox-worker/compose.yml ps`.
+4. Verify health: `systemctl is-active velox-worker.service` and `docker compose -p velox-worker -f /opt/velox-worker/compose.yml ps`.
 5. Probe the worker over gRPC from the master (`jobs/summary`) to confirm it
    accepted and processed at least one job.
 6. Repeat on subsequent worker hosts as you scale out. Do NOT proceed until
@@ -83,7 +92,7 @@ cosign-signed (keyless OIDC).
 
 ## Rollback
 
-`prepare-host.sh` recreates the container with the pinned digest in
+`prepare-host.sh` recreates the canonical container with the pinned digest in
 `VELOX_WORKER_IMAGE`. To roll back, edit `/etc/velox-worker/worker.env`,
 replace the digest with the previous version's value, then re-run
 `prepare-host.sh`. The persistent directories under `/var/lib/velox-worker/`
@@ -109,14 +118,14 @@ is recycled by `stop_grace_period: 60s`.
 
 ```bash
 # Logs (last 100 lines, followed).
-PROJECT=velox-worker-<id>
-docker compose -p "$PROJECT" -f /opt/velox-worker/compose.yml logs --tail=100 -f
+PROJECT=velox-worker
+docker compose -p "$PROJECT" -f /opt/velox-worker/compose.yml logs --tail=100 -f velox-worker
 
 # Healthcheck state.
-docker inspect "velox-worker-<id>" --format='{{json .State.Health}}' | jq .
+docker inspect velox-worker --format='{{json .State.Health}}' | jq .
 
 # Resource use.
-docker stats "velox-worker-<id>" --no-stream
+docker stats velox-worker --no-stream
 ```
 
 Logs are rotated by the json-file driver (`max-size: 10m`, `max-file: 5`).

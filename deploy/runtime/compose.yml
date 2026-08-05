@@ -1,9 +1,9 @@
 ---
 # PR E — Standardised worker runtime for the single co-located worker pair.
 # ─────────────────────────────────────────────────────────────────────────────
-# One worker per host. `container_name` is parameterised by VELOX_WORKER_ID
-# so the schema accommodates future staging workers on the same host without
-# collision. The image reference MUST be set by the operator via
+# One worker runtime per host. The Compose project and container names are
+# fixed so systemd, Ansible, monitoring, and operators address the same
+# runtime everywhere. The image reference MUST be set by the operator via
 # `${VELOX_WORKER_IMAGE}` (typically exported by prepare-host.sh from a
 # CI digest artifact). The deploy-time gate in prepare-host.sh additionally
 # enforces sha256-pinning so :latest and other mutable refs are rejected.
@@ -19,9 +19,14 @@ services:
   velox-worker:
     image: ${VELOX_WORKER_IMAGE:?VELOX_WORKER_IMAGE must be set — pin to ghcr.io/<owner>/velox-worker@sha256:<digest>}
 
-    container_name: velox-worker-${VELOX_WORKER_ID:?VELOX_WORKER_ID must be set}
+    container_name: velox-worker
 
-    restart: unless-stopped
+    environment:
+      VELOX_RENDER_BACKEND: ${VELOX_RENDER_BACKEND:-native}
+      CHRONON3D_CLI: ${CHRONON3D_CLI:-/opt/chronon3d/bin/chronon3d_cli}
+
+    # systemd velox-worker.service is the sole restart owner; Docker does not
+    # independently re-arm this container.
     # Docker-injected minimal init reaps the C++ engine child processes on
     # shutdown — without this, orphans can survive `docker compose down`.
     init: true
@@ -45,8 +50,8 @@ services:
     # systemd ExecStartPost) reach the endpoint without `docker exec`. Bound
     # to 127.0.0.1 so it`s NEVER exposed on the public interface.
     #
-    # When multiple workers share a single host, override VELOX_HEALTH_PORT
-    # on each per-worker env_file so the loopback ports do not collide.
+    # The canonical runtime owns one worker per host, so the loopback port is
+    # stable and is never derived from inventory hostnames or container names.
     ports:
       - "127.0.0.1:${VELOX_HEALTH_PORT:-8081}:${VELOX_HEALTH_PORT:-8081}"
 

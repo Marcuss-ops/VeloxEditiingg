@@ -17,7 +17,7 @@
 section_11_container() {
     section_header 11 "Container healthy"
 
-    local name="velox-worker-${WORKER_ID}"
+    local name="velox-worker"
 
     local ps_line
     if ! ps_line="$(docker ps --filter "name=${name}" \
@@ -117,7 +117,7 @@ section_13_logs() {
     local since="${VELOX_LOG_SINCE:-10m}"
     section_header 13 "Log scrub (last ${since})"
 
-    local name="velox-worker-${WORKER_ID}"
+    local name="velox-worker"
 
     # If §11 already flagged the container as down, the log-scrub cannot
     # run. SKIP is the polite category — §11 surfaced the root cause.

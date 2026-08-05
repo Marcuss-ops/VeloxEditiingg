@@ -105,16 +105,7 @@ done
 
 # ── 3. Worker container: detect if not explicitly set ──────────────────────
 WORKER_ID="${VELOX_WORKER_ID:-}"
-if [[ -z "$WORKER_ID" ]]; then
-    WORKER_ID="$(docker ps --filter 'label=com.docker.compose.project=velox-worker' \
-        --format '{{.Names}}' 2>/dev/null \
-        | sed 's/^velox-worker-//' | head -1 || true)"
-    [[ -z "$WORKER_ID" ]] && {
-        emit_skip "no running velox-worker-* container detected and VELOX_WORKER_ID unset"
-        exit 255
-    }
-fi
-CONTAINER="velox-worker-${WORKER_ID}"
+CONTAINER="velox-worker"
 docker inspect "$CONTAINER" >/dev/null 2>&1 \
     || { emit_skip "container ${CONTAINER} not found via docker inspect"; exit 255; }
 
