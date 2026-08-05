@@ -1,7 +1,7 @@
 // Package api — workers endpoint conversion / sanitization / parsing.
 //
 // workers_mapper.go owns the high-level mapping from the registry read
-// model (workers.WorkerInfo) to the operator-facing WorkerResponse. The
+// model (workers.Worker) to the operator-facing WorkerResponse. The
 // individual responsibilities are split into focused files:
 //
 //   - workers_sanitise.go — hostname redaction (RW-PROD-005 §3 A6).
@@ -36,16 +36,16 @@ func heartbeatAgeSeconds(lastHB string) int64 {
 	return int64(age)
 }
 
-// sanitizeWorker converts a raw workers.WorkerInfo into the operator-facing
+// sanitizeWorker converts a raw workers.Worker into the operator-facing
 // WorkerResponse, stripping all sensitive fields.
 //
-// Connection status: trust the registry's `WorkerInfo.ConnectionStatus`
+// Connection status: trust the registry's `Worker.ConnectionStatus`
 // (CONNECTED | STALE | DISCONNECTED | DRAINING) since it merges heartbeat
 // freshness with the canonical `session_active` signal from `worker_sessions`.
 // The canonical `workers.ConnectionStatus` always returns one of the four
 // enum strings on every read path (registry_query.go guarantees this),
 // so no legacy/heartbeat-only fallback is needed.
-func sanitizeWorker(w workersreg.WorkerInfo) WorkerResponse {
+func sanitizeWorker(w workersreg.Worker) WorkerResponse {
 	resp := WorkerResponse{
 		WorkerID:            w.WorkerID.String(),
 		WorkerName:          w.WorkerName,

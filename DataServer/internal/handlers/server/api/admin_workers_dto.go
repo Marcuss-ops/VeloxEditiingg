@@ -16,7 +16,7 @@
 //     (≥40-char SHA halves), and credential paths before the value
 //     lands in the response.
 //   - `executor` and `executor_version` are flattened from the
-//     canonical `WorkerInfo.ExecutorCapabilities` registry — the same
+//     canonical `Worker.ExecutorCapabilities` registry — the same
 //     typed source used by dispatch, so the operator projection cannot
 //     drift from master capability admission.
 package api
@@ -25,7 +25,7 @@ package api
 // single registered worker.
 //
 // Schema policy. Fields already in the registry read model
-// (`workers.WorkerInfo`) are populated by `buildWorkerCard` (see
+// (`workers.Worker`) are populated by `buildWorkerCard` (see
 // admin_workers_handler.go). Runtime identity and host telemetry are
 // populated from worker heartbeat metadata. Deployment and smoke-ledger
 // fields remain optional until their corresponding operation has produced
@@ -33,17 +33,17 @@ package api
 //
 // SOURCE MAPPING (see `buildWorkerCard` for the canonical impl):
 //
-//	worker_id         WorkerInfo.WorkerID       (post-NormalizeWorkerID)
-//	hostname          sanitiseHostname(WorkerInfo.WorkerName)
-//	host              sanitiseHostname(WorkerInfo.IPAddress)
-//	status            WorkerInfo.ConnectionStatus  (canonical enum)
-//	session_active    WorkerInfo.SessionActive  (post-hydration)
-//	executor          WorkerInfo.ExecutorCapabilities.All()[0].ID
-//	executor_version  WorkerInfo.ExecutorCapabilities.All()[0].Version
-//	software_version  WorkerInfo.CodeVersion     (worker-reported code)
-//	last_heartbeat_at WorkerInfo.LastHB
-//	active_jobs       ParseWorkerMetrics(WorkerInfo.Metrics).ActiveTasks
-//	max_active_jobs   ParseWorkerMetrics(WorkerInfo.Metrics).TaskSlots
+//	worker_id         Worker.WorkerID       (post-NormalizeWorkerID)
+//	hostname          sanitiseHostname(Worker.WorkerName)
+//	host              sanitiseHostname(Worker.IPAddress)
+//	status            Worker.ConnectionStatus  (canonical enum)
+//	session_active    Worker.SessionActive  (post-hydration)
+//	executor          Worker.ExecutorCapabilities.All()[0].ID
+//	executor_version  Worker.ExecutorCapabilities.All()[0].Version
+//	software_version  Worker.CodeVersion     (worker-reported code)
+//	last_heartbeat_at Worker.LastHB
+//	active_jobs       ParseWorkerMetrics(Worker.Metrics).ActiveTasks
+//	max_active_jobs   ParseWorkerMetrics(Worker.Metrics).TaskSlots
 //
 // `image_digest`, `desired_version`, and `deployment_state` come from
 // heartbeat metadata. `health` is derived by the registry. Smoke and
@@ -57,7 +57,7 @@ package api
 // /api/v1/workers endpoint if the operator needs the staging context.
 //
 // `last_restart_at` is intentionally LEFT EMPTY (no BootTS fallback)
-// because `WorkerInfo.BootTS` is "when the worker process started",
+// because `Worker.BootTS` is "when the worker process started",
 // which is semantically distinct from "when the Fleet Controller
 // restarted the worker". Using BootTS here would mislead the operator
 // when the worker self-restarts due to a crash; the field's semantic

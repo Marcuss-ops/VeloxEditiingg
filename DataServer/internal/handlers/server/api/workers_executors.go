@@ -14,7 +14,7 @@ func extractExecutors(source interface{}) []ExecutorEntry {
 	registry, ok := source.(controltransport.ExecutorRegistry)
 	if !ok {
 		// Compatibility is confined to this API boundary for callers still
-		// holding a decoded legacy capabilities map. Production WorkerInfo
+		// holding a decoded legacy capabilities map. Production Worker
 		// projections always pass ExecutorRegistry.
 		legacy, err := controltransport.ExecutorRegistryFromLegacy(source)
 		if err != nil {
@@ -39,7 +39,7 @@ func extractExecutors(source interface{}) []ExecutorEntry {
 // placement master's responsibility.
 //
 // Returns false on empty Capabilities or absent "executors" key.
-func workerAdvertisesExecutor(w workersreg.WorkerInfo, want string) bool {
+func workerAdvertisesExecutor(w workersreg.Worker, want string) bool {
 	want = strings.TrimSpace(want)
 	if want == "" {
 		return true

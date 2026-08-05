@@ -92,11 +92,11 @@ func (s stubDeployments) MarkDeploymentRolledBack(_ context.Context, _ string, _
 
 // stubLevelCGater is the per-test stub for HealthLevelCGater.
 type stubLevelCGater struct {
-	info *workersreg.WorkerInfo
+	info *workersreg.Worker
 	err  error
 }
 
-func (s stubLevelCGater) GetWorker(_ context.Context, _ string) (*workersreg.WorkerInfo, error) {
+func (s stubLevelCGater) GetWorker(_ context.Context, _ string) (*workersreg.Worker, error) {
 	return s.info, s.err
 }
 
@@ -111,12 +111,12 @@ func (s stubSmoke) RunLevelD(_ context.Context, _ string) (string, error) {
 }
 
 // helper: build a healthy worker at time t0 (LastHB 30s before now).
-func healthyWorkerAt(workerID string, t time.Time) *workersreg.WorkerInfo {
+func healthyWorkerAt(workerID string, t time.Time) *workersreg.Worker {
 	registry, err := controltransport.NewExecutorRegistry(controltransport.ExecutorCapability{ID: "scene.composite.v1", Version: 1})
 	if err != nil {
 		panic(err)
 	}
-	return &workersreg.WorkerInfo{
+	return &workersreg.Worker{
 		WorkerID:             identity.ParseWorkerID(workerID),
 		ExecutorCapabilities: registry,
 		ConnectionStatus:     "CONNECTED",

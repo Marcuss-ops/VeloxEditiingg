@@ -17,7 +17,7 @@ var registryLog = logging.NewLogger("workers.registry")
 // SQLite is the single source of truth; in-memory map is a cache rebuilt at startup.
 type Registry struct {
 	mu      sync.RWMutex
-	inMem   map[identity.WorkerID]WorkerInfo
+	inMem   map[identity.WorkerID]Worker
 	revoked map[identity.WorkerID]bool
 	dbStore *store.SQLiteStore
 }
@@ -25,7 +25,7 @@ type Registry struct {
 // New creates a Registry with SQLite as the backing store.
 func New(dbStore *store.SQLiteStore) *Registry {
 	r := &Registry{
-		inMem:   make(map[identity.WorkerID]WorkerInfo),
+		inMem:   make(map[identity.WorkerID]Worker),
 		revoked: make(map[identity.WorkerID]bool),
 		dbStore: dbStore,
 	}
@@ -48,7 +48,7 @@ func (r *Registry) load() {
 	} else {
 		r.mu.Lock()
 		for _, m := range workers {
-			var info WorkerInfo
+			var info Worker
 			raw, _ := json.Marshal(m)
 			if err := json.Unmarshal(raw, &info); err != nil {
 				continue

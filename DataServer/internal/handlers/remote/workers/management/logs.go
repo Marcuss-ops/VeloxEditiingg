@@ -31,7 +31,7 @@ func parseLogLimit(c *gin.Context, defaultLimit int) int {
 	return limit
 }
 
-func findWorker(list []workersreg.WorkerInfo, key string) *workersreg.WorkerInfo {
+func findWorker(list []workersreg.Worker, key string) *workersreg.Worker {
 	for i := range list {
 		w := &list[i]
 		// worker_id is the canonical identity; worker_name / display_name /
@@ -44,7 +44,7 @@ func findWorker(list []workersreg.WorkerInfo, key string) *workersreg.WorkerInfo
 	return nil
 }
 
-func workerLogsResponse(c *gin.Context, found *workersreg.WorkerInfo, limit int) {
+func workerLogsResponse(c *gin.Context, found *workersreg.Worker, limit int) {
 	logs := found.RecentLogs
 	if limit > 0 && len(logs) > limit {
 		logs = logs[len(logs)-limit:]

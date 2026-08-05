@@ -15,7 +15,7 @@ import (
 // live in health_probe.go.
 //
 // Six sub-checks sourced from the in-process registry read
-// model (WorkerInfo). Each maps directly to a field the user
+// model (Worker). Each maps directly to a field the user
 // spec calls out:
 //
 //	worker_present         — registry.GetWorker returns non-nil
@@ -31,7 +31,7 @@ import (
 //	                         {CURRENT, SUCCEEDED, ""}
 //
 // Level C is the ONLY level that takes ZERO SSH deps — it
-// reads the cached WorkerInfo. It's also the level that's
+// reads the cached Worker. It's also the level that's
 // ALWAYS fast (microseconds) which is why the operator
 // dashboard can poll it on every file-event.
 func ProbeLevelC(ctx context.Context, registry HealthLevelCGater, workerID string, now time.Time) HealthReport {
@@ -54,7 +54,7 @@ func ProbeLevelC(ctx context.Context, registry HealthLevelCGater, workerID strin
 		return r
 	}
 	r.Checks["worker_present"] = CheckResult{Passed: true, Value: info.WorkerID.String()}
-	// status_connected — WorkerInfo.ConnectionStatus is the canonical
+	// status_connected — Worker.ConnectionStatus is the canonical
 	// derivation from registry_query.go (session_active + heartbeat
 	// freshness + drain).
 	r.Checks["status_connected"] = CheckResult{
@@ -105,7 +105,7 @@ func ProbeLevelC(ctx context.Context, registry HealthLevelCGater, workerID strin
 
 // hasExecutorAdvertisement checks the canonical executor registry. Legacy
 // payloads are converted once by the workers registry before health reads it.
-func hasExecutorAdvertisement(info *workersreg.WorkerInfo) bool {
+func hasExecutorAdvertisement(info *workersreg.Worker) bool {
 	return info != nil && !info.ExecutorRegistrySnapshot().IsEmpty()
 }
 
@@ -119,12 +119,12 @@ func hasExecutorAdvertisement(info *workersreg.WorkerInfo) bool {
 // *workersreg.Registry, adapting the registry's no-error
 // GetWorker to the (info, err) signature).
 type HealthLevelCGater interface {
-	GetWorker(ctx context.Context, workerID string) (*workersreg.WorkerInfo, error)
+	GetWorker(ctx context.Context, workerID string) (*workersreg.Worker, error)
 }
 
 // RealRegistryLevelCGater adapts workersreg.Registry (whose
-// GetWorker returns a single *WorkerInfo) to the
-// HealthLevelCGater interface (which expects (*WorkerInfo,
+// GetWorker returns a single *Worker) to the
+// HealthLevelCGater interface (which expects (*Worker,
 // error)). The error is always nil in production — the
 // registry is in-memory and panics on its own corruption —
 // but the interface seam keeps the audit row honest when a
@@ -134,7 +134,7 @@ type RealRegistryLevelCGater struct {
 }
 
 // GetWorker adapts the registry call.
-func (g *RealRegistryLevelCGater) GetWorker(ctx context.Context, workerID string) (*workersreg.WorkerInfo, error) {
+func (g *RealRegistryLevelCGater) GetWorker(ctx context.Context, workerID string) (*workersreg.Worker, error) {
 	if g == nil || g.Reg == nil {
 		return nil, nil
 	}

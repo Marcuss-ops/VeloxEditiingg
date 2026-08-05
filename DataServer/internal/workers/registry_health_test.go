@@ -293,12 +293,12 @@ func TestHealthForInfo_NilInfo(t *testing.T) {
 }
 
 // TestHealthForInfo_PopulatesHealthField covers the round-trip:
-// build a WorkerInfo, call HealthForInfo, assert info.Health is
+// build a Worker, call HealthForInfo, assert info.Health is
 // set to the canonical 9-state vocabulary (one of the 9 enum
 // strings, never empty for a fresh-happy fixture).
 func TestHealthForInfo_PopulatesHealthField(t *testing.T) {
 	now := canonicalNow()
-	info := &WorkerInfo{
+	info := &Worker{
 		WorkerID:      "wicket",
 		LastHB:        freshHB(now, 30*time.Second),
 		SessionActive: true,
@@ -315,7 +315,7 @@ func TestHealthForInfo_PopulatesHealthField(t *testing.T) {
 // jobs lands in BUSY, not HEALTHY.
 func TestHealthForInfo_ReadsActiveJobsFromMetrics(t *testing.T) {
 	now := canonicalNow()
-	info := &WorkerInfo{
+	info := &Worker{
 		WorkerID:      "wicket",
 		LastHB:        freshHB(now, 30*time.Second),
 		SessionActive: true,
@@ -335,7 +335,7 @@ func TestHealthForInfo_ReadsActiveJobsFromMetrics(t *testing.T) {
 // DRAINING, not HEALTHY.
 func TestHealthForInfo_DrainFlag(t *testing.T) {
 	now := canonicalNow()
-	info := &WorkerInfo{
+	info := &Worker{
 		WorkerID:      "wicket",
 		LastHB:        freshHB(now, 30*time.Second),
 		SessionActive: true,
@@ -354,7 +354,7 @@ func TestHealthForInfo_DrainFlag(t *testing.T) {
 // active_jobs would otherwise imply BUSY.
 func TestHealthForInfo_DeploymentStateInput(t *testing.T) {
 	now := canonicalNow()
-	info := &WorkerInfo{
+	info := &Worker{
 		WorkerID:      "wicket",
 		LastHB:        freshHB(now, 30*time.Second),
 		SessionActive: true,
@@ -378,7 +378,7 @@ func TestHealthForInfo_DeploymentStateInput(t *testing.T) {
 // path, so it needs the equivalent pin.
 func TestHealthForInfo_DeploymentStateRollbackWins(t *testing.T) {
 	now := canonicalNow()
-	info := &WorkerInfo{
+	info := &Worker{
 		WorkerID:      "wicket",
 		LastHB:        freshHB(now, 30*time.Second),
 		SessionActive: true,

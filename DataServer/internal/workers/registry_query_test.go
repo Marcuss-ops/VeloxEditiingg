@@ -5,9 +5,9 @@
 // freshness / session-active plumbing is caught independently of the
 // opt-in flag.
 //
-// Build contract note: Registry.inMem is map[string]WorkerInfo (value
+// Build contract note: Registry.inMem is map[string]Worker (value
 // type). Go forbids mutating a map-element value directly; every helper
-// below seeds WorkerInfo fields INSIDE the struct literal. The single
+// below seeds Worker fields INSIDE the struct literal. The single
 // exception is the revoked map[string]bool (a primitive map where
 // element-assignment IS valid).
 package workers
@@ -30,7 +30,7 @@ import (
 func newRegistryWithLastHB(t *testing.T, workerID string, lastHB time.Time, sessionActive bool) *Registry {
 	t.Helper()
 	return &Registry{
-		inMem: map[identity.WorkerID]WorkerInfo{
+		inMem: map[identity.WorkerID]Worker{
 			identity.ParseWorkerID(workerID): {
 				WorkerID:      identity.ParseWorkerID(workerID),
 				LastHB:        lastHB.UTC().Format(time.RFC3339),
@@ -47,7 +47,7 @@ const testLiveWorker = "worker-live-A7"
 
 func TestRegistry_HasAtLeastOneLive_Empty(t *testing.T) {
 	r := &Registry{
-		inMem:   map[identity.WorkerID]WorkerInfo{},
+		inMem:   map[identity.WorkerID]Worker{},
 		revoked: map[identity.WorkerID]bool{},
 	}
 	if r.HasAtLeastOneLive(context.Background()) {
@@ -57,7 +57,7 @@ func TestRegistry_HasAtLeastOneLive_Empty(t *testing.T) {
 
 func TestRegistry_HasAtLeastOneLive_Empty_NeverSet(t *testing.T) {
 	r := &Registry{
-		inMem:   map[identity.WorkerID]WorkerInfo{},
+		inMem:   map[identity.WorkerID]Worker{},
 		revoked: map[identity.WorkerID]bool{},
 	}
 	if r.HasAtLeastOneLive(context.Background()) {
@@ -97,7 +97,7 @@ func TestRegistry_HasAtLeastOneLive_StaleRejected_TwoLiveOk(t *testing.T) {
 	// keeps the gate satisfied (canonical "any one live is enough"
 	// semantics, no per-worker quorum).
 	r := &Registry{
-		inMem: map[identity.WorkerID]WorkerInfo{
+		inMem: map[identity.WorkerID]Worker{
 			identity.ParseWorkerID("stale-A"): {
 				WorkerID:      identity.ParseWorkerID("stale-A"),
 				LastHB:        time.Now().UTC().Add(-2 * time.Minute).Format(time.RFC3339),
@@ -134,7 +134,7 @@ func TestRegistry_HasAtLeastOneLive_NilSafe(t *testing.T) {
 // orthogonal — the master may still be ready while a worker drains.
 func TestRegistry_GetEligibleWorkers_DrainExclusionGuardsHasAtLeastOneLive(t *testing.T) {
 	r := &Registry{
-		inMem: map[identity.WorkerID]WorkerInfo{
+		inMem: map[identity.WorkerID]Worker{
 			identity.ParseWorkerID(testLiveWorker): {
 				WorkerID:      identity.ParseWorkerID(testLiveWorker),
 				LastHB:        time.Now().UTC().Format(time.RFC3339),

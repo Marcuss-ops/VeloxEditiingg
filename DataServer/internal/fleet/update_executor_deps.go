@@ -116,14 +116,14 @@ type BackendDriveVerifier interface {
 // BackendRegistryGater is the typed surface for in-process
 // registry lookups. The worker must be registered BEFORE the
 // update begins; the executor rejects otherwise. The
-// IsActiveJobsZero helper polls WorkerInfo.Metrics["active_tasks"]
+// IsActiveJobsZero helper polls Worker.Metrics["active_tasks"]
 // (the canonical active-job indicator in registry_health.go).
 //
 // WaitForIdle is exposed so tests can drive the timeout-bounded
 // polling without standing up a clock; production calls it with
 // a 5min budget.
 type BackendRegistryGater interface {
-	GetWorker(ctx context.Context, workerID string) (*workers.WorkerInfo, error)
+	GetWorker(ctx context.Context, workerID string) (*workers.Worker, error)
 	IsActiveJobsZero(ctx context.Context, workerID string) bool
 	SetDrainMode(ctx context.Context, workerID string, drain bool) error
 }
@@ -135,7 +135,7 @@ type RealRegistryUpdateGater struct {
 	Reg *workers.Registry
 }
 
-func (g *RealRegistryUpdateGater) GetWorker(ctx context.Context, workerID string) (*workers.WorkerInfo, error) {
+func (g *RealRegistryUpdateGater) GetWorker(ctx context.Context, workerID string) (*workers.Worker, error) {
 	if g == nil || g.Reg == nil {
 		return nil, errors.New("worker registry not wired")
 	}

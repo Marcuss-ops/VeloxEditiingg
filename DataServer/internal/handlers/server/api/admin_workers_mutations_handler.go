@@ -178,13 +178,13 @@ func NewAdminWorkersMutationsHandler(reg *workersreg.Registry, pub ControllerPub
 
 // mutationAction is the per-op closure the unified handler
 // dispatches against. Receives the freshly-looked-up
-// WorkerInfo (snapshot); mutates the registry (Drain /
+// Worker (snapshot); mutates the registry (Drain /
 // Quarantined flag) and returns:
 //
 //   - nil                  — state flipped; proceed to publish
 //   - errAlreadyInDesiredState — already in target state; 409
 //   - any other error      — unexpected; 500
-type mutationAction func(ctx context.Context, info *workersreg.WorkerInfo) error
+type mutationAction func(ctx context.Context, info *workersreg.Worker) error
 
 // mutationHandler is the unified request→publish path used by all
 // 3 mutation endpoints. Each handler is a thin wrapper that
@@ -247,7 +247,7 @@ func (h *AdminWorkersMutationsHandler) mutationHandler(kind string, action mutat
 		}
 
 		// ── Synchronous state change (immediate placement exclusion) ─
-		// Per Q2 design: the handler updates WorkerInfo.Drain /
+		// Per Q2 design: the handler updates Worker.Drain /
 		// Quarantined BEFORE publishing so the placement matcher
 		// (costmodel.Score in registry_query.go:GetEligibleWorkers)
 		// excludes the worker from the next match. The async tick
@@ -312,7 +312,7 @@ func (h *AdminWorkersMutationsHandler) mutationHandler(kind string, action mutat
 // quel worker e attende active_jobs=0 prima di considerare la
 // transizione"):
 //
-//   - Synchronously: WorkerInfo.Drain := true so costmodel.Score
+//   - Synchronously: Worker.Drain := true so costmodel.Score
 //     excludes the worker from GetEligibleWorkers on the next
 //     placement call (immediate lease refusal).
 //   - Asynchronously: publish a fleet_operations op="drain" row.
@@ -326,7 +326,7 @@ func (h *AdminWorkersMutationsHandler) mutationHandler(kind string, action mutat
 //   - Already-draining worker → 409 (errAlreadyInDesiredState).
 //   - In-flight drain op → 409 (ErrOperationInFlight).
 func (h *AdminWorkersMutationsHandler) DrainWorker() gin.HandlerFunc {
-	return h.mutationHandler(fleet.OperationKindDrain, func(ctx context.Context, info *workersreg.WorkerInfo) error {
+	return h.mutationHandler(fleet.OperationKindDrain, func(ctx context.Context, info *workersreg.Worker) error {
 		if info.Drain {
 			return errAlreadyInDesiredState{desired: "DRAINING", current: "DRAINING"}
 		}
@@ -338,7 +338,7 @@ func (h *AdminWorkersMutationsHandler) DrainWorker() gin.HandlerFunc {
 //
 // Behavior (user spec verbatim: "stesso + escluso dal placement"):
 //
-//   - Synchronously: WorkerInfo.Quarantined := true. Health()
+//   - Synchronously: Worker.Quarantined := true. Health()
 //     precedence rank-1 in registry_health.go means QUARANTINED
 //     wins over DRAINING/BUSY/HEALTHY/etc., so the operator
 //     dashboard surfaces the worker as QUARANTINED immediately.
@@ -351,7 +351,7 @@ func (h *AdminWorkersMutationsHandler) DrainWorker() gin.HandlerFunc {
 //   - Already-quarantined worker → 409 (errAlreadyInDesiredState).
 //   - In-flight quarantine op → 409 (ErrOperationInFlight).
 func (h *AdminWorkersMutationsHandler) QuarantineWorker() gin.HandlerFunc {
-	return h.mutationHandler(fleet.OperationKindQuarantine, func(ctx context.Context, info *workersreg.WorkerInfo) error {
+	return h.mutationHandler(fleet.OperationKindQuarantine, func(ctx context.Context, info *workersreg.Worker) error {
 		if info.Quarantined {
 			return errAlreadyInDesiredState{desired: "QUARANTINED", current: "QUARANTINED"}
 		}
@@ -373,7 +373,7 @@ func (h *AdminWorkersMutationsHandler) QuarantineWorker() gin.HandlerFunc {
 //   - In-flight update op for the same worker → 409 (ErrOperationInFlight).
 //   - Malformed or missing target_digest → 400.
 func (h *AdminWorkersMutationsHandler) UpdateWorker() gin.HandlerFunc {
-	return h.mutationHandler(fleet.OperationKindUpdate, func(ctx context.Context, info *workersreg.WorkerInfo) error {
+	return h.mutationHandler(fleet.OperationKindUpdate, func(ctx context.Context, info *workersreg.Worker) error {
 		// No synchronous state flag to flip — the update is purely
 		// async via the FleetController tick goroutine.
 		return nil
@@ -391,8 +391,8 @@ func (h *AdminWorkersMutationsHandler) UpdateWorker() gin.HandlerFunc {
 //     the latest smoke_records row + decides whether to fail the
 //     resume with a smoke-fail error message in the audit row.
 //
-//   - Synchronously: WorkerInfo.Drain := false AND
-//     WorkerInfo.Quarantined := false (resume undoes both;
+//   - Synchronously: Worker.Drain := false AND
+//     Worker.Quarantined := false (resume undoes both;
 //     drain and quarantine are independent operator-set flags).
 //
 //   - Asynchronously: publish a fleet_operations op="resume" row.
@@ -416,16 +416,12 @@ func (h *AdminWorkersMutationsHandler) UpdateWorker() gin.HandlerFunc {
 // lands. Step 7+ smoke-gate executor must NOT assume the
 // pre-call Quarantined state — it should re-read on entry.
 func (h *AdminWorkersMutationsHandler) ResumeWorker() gin.HandlerFunc {
-	return h.mutationHandler(fleet.OperationKindResume, func(ctx context.Context, info *workersreg.WorkerInfo) error {
+	return h.mutationHandler(fleet.OperationKindResume, func(_ context.Context, info *workersreg.Worker) error {
 		if !info.Drain && !info.Quarantined {
 			return errAlreadyInDesiredState{desired: "HEALTHY", current: "HEALTHY"}
 		}
-		if err := h.reg.SetWorkerDrain(ctx, info.WorkerID.String(), false); err != nil {
-			return err
-		}
-		if err := h.reg.SetWorkerQuarantine(ctx, info.WorkerID.String(), false); err != nil {
-			return err
-		}
+		// Keep both exclusion flags until the asynchronous resume executor
+		// observes a green smoke gate.
 		return nil
 	})
 }

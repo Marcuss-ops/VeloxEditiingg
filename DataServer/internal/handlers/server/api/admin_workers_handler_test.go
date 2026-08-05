@@ -10,7 +10,7 @@
 //     registry (503), whitespace-trimmed worker_id semantics.
 //
 // The test helper `makeCardInfo` produces a fully-populated
-// WorkerInfo so we exercise the mapper WITHOUT going through the
+// Worker so we exercise the mapper WITHOUT going through the
 // registry.Get → hydrate pipeline on every test — keeping the
 // mapper-level tests focused, fast, and deterministic on the same
 // fixtures the diagnostic /api/v1/workers tests use.
@@ -31,10 +31,10 @@ import (
 	"velox-shared/identity"
 )
 
-// makeCardInfo returns a fresh, post-hydration WorkerInfo populated
+// makeCardInfo returns a fresh, post-hydration Worker populated
 // with the typical fields the registry produces. Test cases mutate
 // the result via `opts` so the happy-path copy stays small.
-func makeCardInfo(id string, opts ...func(*workersreg.WorkerInfo)) workersreg.WorkerInfo {
+func makeCardInfo(id string, opts ...func(*workersreg.Worker)) workersreg.Worker {
 	registry, err := controltransport.NewExecutorRegistry(
 		controltransport.ExecutorCapability{ID: "scene.composite.v1", Version: 1},
 		controltransport.ExecutorCapability{ID: "asset.prepare.v1", Version: 2},
@@ -42,7 +42,7 @@ func makeCardInfo(id string, opts ...func(*workersreg.WorkerInfo)) workersreg.Wo
 	if err != nil {
 		panic(err)
 	}
-	info := workersreg.WorkerInfo{
+	info := workersreg.Worker{
 		ExecutorCapabilities: registry,
 		WorkerID:             identity.ParseWorkerID(id),
 		WorkerName:           "vps-" + id,
@@ -64,7 +64,7 @@ func makeCardInfo(id string, opts ...func(*workersreg.WorkerInfo)) workersreg.Wo
 }
 
 // TestBuildWorkerCard_Populated asserts the full mapper happy path
-// against a fully-populated WorkerInfo. It is the canonical place
+// against a fully-populated Worker. It is the canonical place
 // to extend when a new field lands in the WorkerCard DTO.
 func TestBuildWorkerCard_Populated(t *testing.T) {
 	// IPAddress override: use "host-10.0.0.5-vm" (a hostname-shaped
@@ -74,7 +74,7 @@ func TestBuildWorkerCard_Populated(t *testing.T) {
 	// net.ParseIP defence and produce the [redacted-ip] token via the
 	// early-return; that path is exercised independently in
 	// TestWorkerCard_SensitiveFieldsDoNotLeak.
-	info := makeCardInfo("velox-worker-13197", func(i *workersreg.WorkerInfo) {
+	info := makeCardInfo("velox-worker-13197", func(i *workersreg.Worker) {
 		i.IPAddress = "host-10.0.0.5-vm"
 	})
 	card := buildWorkerCard(&info)
@@ -170,7 +170,7 @@ func TestBuildWorkerCard_NilInfo(t *testing.T) {
 // TestBuildWorkerCard_NoExecutors asserts graceful default when
 // capabilities are nil or carry no "executors" key.
 func TestBuildWorkerCard_NoExecutors(t *testing.T) {
-	info := makeCardInfo("w-no-exec", func(i *workersreg.WorkerInfo) {
+	info := makeCardInfo("w-no-exec", func(i *workersreg.Worker) {
 		i.Capabilities = nil
 		i.ExecutorCapabilities = controltransport.EmptyExecutorRegistry()
 	})
@@ -182,7 +182,7 @@ func TestBuildWorkerCard_NoExecutors(t *testing.T) {
 		t.Errorf("nil Capabilities → ExecutorVersion = %d, want 0", card.ExecutorVersion)
 	}
 
-	info2 := makeCardInfo("w-other-caps", func(i *workersreg.WorkerInfo) {
+	info2 := makeCardInfo("w-other-caps", func(i *workersreg.Worker) {
 		i.Capabilities = map[string]interface{}{
 			"other_key": "value"}
 		i.ExecutorCapabilities = controltransport.EmptyExecutorRegistry()
@@ -199,7 +199,7 @@ func TestBuildWorkerCard_NoExecutors(t *testing.T) {
 // so the admin card mapper does not regress when a worker omits the
 // "metrics" map entirely.
 func TestBuildWorkerCard_EmptyMetrics(t *testing.T) {
-	info := makeCardInfo("w-no-metrics", func(i *workersreg.WorkerInfo) {
+	info := makeCardInfo("w-no-metrics", func(i *workersreg.Worker) {
 		i.Metrics = nil
 	})
 	card := buildWorkerCard(&info)
@@ -216,7 +216,7 @@ func TestBuildWorkerCard_EmptyMetrics(t *testing.T) {
 // NOT BundleVersion (the staging-bundle label). Reverting this would
 // make the operator dashboard answer the wrong question.
 func TestBuildWorkerCard_BundleVersionNotUsed(t *testing.T) {
-	info := makeCardInfo("w-version", func(i *workersreg.WorkerInfo) {
+	info := makeCardInfo("w-version", func(i *workersreg.Worker) {
 		i.CodeVersion = "worker-v1.8.4"
 		i.BundleVersion = "release-2025-09-01-abcdef"
 	})
@@ -227,7 +227,7 @@ func TestBuildWorkerCard_BundleVersionNotUsed(t *testing.T) {
 }
 
 func TestBuildWorkerCard_RuntimeTelemetry(t *testing.T) {
-	info := makeCardInfo("w-runtime", func(i *workersreg.WorkerInfo) {
+	info := makeCardInfo("w-runtime", func(i *workersreg.Worker) {
 		i.ImageDigest = "sha256:" + strings.Repeat("a", 64)
 		i.DesiredVersion = "worker-v1.9.0"
 		i.DeploymentState = "CURRENT"
@@ -302,7 +302,7 @@ func TestWorkerCard_JSON_OmitsEmptyFields(t *testing.T) {
 }
 
 // TestWorkerCard_SensitiveFieldsDoNotLeak is the security-posture
-// boundary test: even when the WorkerInfo carries sensitive values
+// boundary test: even when the Worker carries sensitive values
 // (IPv4 internal, long-hex SHA halves, credential-ish strings), the
 // WorkerCard JSON must NOT leak them.
 //
@@ -314,7 +314,7 @@ func TestWorkerCard_JSON_OmitsEmptyFields(t *testing.T) {
 // fields, (2) sanitiseHostname redacts any sensitive content that
 // happens to land in the whitelisted WorkerName / IPAddress slots.
 func TestWorkerCard_SensitiveFieldsDoNotLeak(t *testing.T) {
-	info := workersreg.WorkerInfo{
+	info := workersreg.Worker{
 		WorkerID:               identity.ParseWorkerID("w-leak"),
 		WorkerName:             "vps-leak",
 		IPAddress:              "192.168.99.99",
@@ -357,7 +357,7 @@ func TestWorkerCard_SensitiveFieldsDoNotLeak(t *testing.T) {
 
 // TestBuildWorkerCard_HealthFieldPropagates pins the Step 3/15
 // wire: admin WorkerCard.Health MUST reflect the
-// registry-populated WorkerInfo.Health. Uses all 9-state fixtures
+// registry-populated Worker.Health. Uses all 9-state fixtures
 // (one sub-test each) so a future regression that drops a state
 // from the Health vocabulary surfaces here.
 func TestBuildWorkerCard_HealthFieldPropagates(t *testing.T) {
@@ -376,7 +376,7 @@ func TestBuildWorkerCard_HealthFieldPropagates(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.health, func(t *testing.T) {
-			info := makeCardInfo("w-health", func(i *workersreg.WorkerInfo) {
+			info := makeCardInfo("w-health", func(i *workersreg.Worker) {
 				i.Health = tc.health
 			})
 			card := buildWorkerCard(&info)
@@ -388,7 +388,7 @@ func TestBuildWorkerCard_HealthFieldPropagates(t *testing.T) {
 }
 
 // TestBuildWorkerCard_HealthOmitempty asserts the Step 1/15
-// contract: when WorkerInfo.Health is empty, the JSON should
+// contract: when Worker.Health is empty, the JSON should
 // drop the "health" field (no broken/null leaks to the
 // dashboard). Pair with TestWorkerCard_JSON_OmitsEmptyFields.
 func TestBuildWorkerCard_HealthOmitempty(t *testing.T) {
@@ -396,7 +396,7 @@ func TestBuildWorkerCard_HealthOmitempty(t *testing.T) {
 	info.Health = "" // explicit zero
 	card := buildWorkerCard(&info)
 	if card.Health != "" {
-		t.Errorf("expected empty Health for unset WorkerInfo.Health, got %q", card.Health)
+		t.Errorf("expected empty Health for unset Worker.Health, got %q", card.Health)
 	}
 	b, err := json.Marshal(card)
 	if err != nil {
@@ -499,7 +499,7 @@ func TestListAdminWorkers_EmptyRegistry(t *testing.T) {
 }
 
 // TestGetAdminWorker_Success asserts the per-worker endpoint maps
-// the registry hydraTed WorkerInfo into the canonical card.
+// the registry hydraTed Worker into the canonical card.
 func TestGetAdminWorker_Success(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	reg := workersreg.New(nil)
@@ -576,7 +576,7 @@ func TestBuildWorkerCard_CanonicalExecutorOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	info := makeCardInfo("w-multi", func(i *workersreg.WorkerInfo) {
+	info := makeCardInfo("w-multi", func(i *workersreg.Worker) {
 		i.ExecutorCapabilities = registry
 	})
 	card := buildWorkerCard(&info)
@@ -595,7 +595,7 @@ func TestBuildWorkerCard_CanonicalExecutorOrder(t *testing.T) {
 // sanitiseHostname MUST redact it before it lands in the response.
 // Pins the operator-misconfiguration boundary test.
 func TestBuildWorkerCard_PositiveCredentialPathInWorkerName(t *testing.T) {
-	info := makeCardInfo("w-redact", func(i *workersreg.WorkerInfo) {
+	info := makeCardInfo("w-redact", func(i *workersreg.Worker) {
 		i.WorkerName = "/var/lib/velox/secrets/worker-token"
 	})
 	card := buildWorkerCard(&info)

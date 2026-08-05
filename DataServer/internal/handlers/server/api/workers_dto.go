@@ -22,9 +22,16 @@ import (
 	workersreg "velox-server/internal/workers"
 )
 
-// WorkerInfo aliases the canonical registry read-model type so this package
+// Worker aliases the canonical registry read-model type so this package
 // can refer to the worker shape consistently across build, vet, and tests.
-type WorkerInfo = workersreg.WorkerInfo
+type Worker = workersreg.Worker
+
+// WorkerInfo remains an API-package compatibility alias for consumers that
+// have not yet migrated their terminology. It is the same canonical Worker
+// type, not a second model.
+//
+// Deprecated: use Worker.
+type WorkerInfo = workersreg.Worker
 
 // Re-export ConnectionStaleThreshold so the canonical reason is
 // computed against the same threshold the registry uses for STALE.
@@ -41,7 +48,7 @@ var ConnectionStaleThreshold = workersreg.ConnectionStaleThreshold
 
 // WorkerResponse is the sanitized, operator-facing JSON shape for a single
 // worker. It carries derived fields (status, reason, heartbeat_age_seconds,
-// session_active) computed from the raw WorkerInfo. Fields intentionally
+// session_active) computed from the raw Worker. Fields intentionally
 // EXCLUDED: credential hash, TLS file paths, worker secret, raw IP
 // addresses, internal readiness blob.
 //

@@ -17,7 +17,7 @@ import (
 // GetSchedulableWorkers returns workers that can accept new jobs.
 // It routes through GetEligibleWorkers with default permissive
 // requirements so dispatcher callers use the canonical costmodel path.
-func (r *Registry) GetSchedulableWorkers(ctx context.Context) []WorkerInfo {
+func (r *Registry) GetSchedulableWorkers(ctx context.Context) []Worker {
 	return r.GetEligibleWorkers(ctx, costmodel.DefaultRequirements())
 }
 
@@ -25,10 +25,10 @@ func (r *Registry) GetSchedulableWorkers(ctx context.Context) []WorkerInfo {
 // It builds a WorkerProfile from each registered worker and accepts only
 // profiles that costmodel.Score marks eligible. Drain, offline and capacity
 // exclusions live in the costmodel path, not in ad-hoc registry filters.
-func (r *Registry) GetEligibleWorkers(ctx context.Context, req costmodel.JobRequirements) []WorkerInfo {
+func (r *Registry) GetEligibleWorkers(ctx context.Context, req costmodel.JobRequirements) []Worker {
 	now := time.Now().UTC()
 	r.mu.RLock()
-	var result []WorkerInfo
+	var result []Worker
 	for _, w := range r.inMem {
 		if r.revoked[w.WorkerID] {
 			continue

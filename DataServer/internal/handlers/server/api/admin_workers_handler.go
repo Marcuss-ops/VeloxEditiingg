@@ -135,7 +135,7 @@ func (h *AdminWorkersHandler) GetAdminWorker() gin.HandlerFunc {
 // executor flattening: deterministic by the first entry of the typed
 // registry's canonical (ID, Version) ordering. This keeps the operator
 // projection stable and consistent with the master capability registry.
-func buildWorkerCard(info *workersreg.WorkerInfo) WorkerCard {
+func buildWorkerCard(info *workersreg.Worker) WorkerCard {
 	if info == nil {
 		return WorkerCard{}
 	}

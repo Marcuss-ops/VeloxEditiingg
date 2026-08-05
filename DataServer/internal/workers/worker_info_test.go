@@ -145,7 +145,7 @@ func TestConnectionStatus_UnparseableHeartbeat_IsDisconnected(t *testing.T) {
 
 func TestConnectionStatusForInfo_MutatesFields(t *testing.T) {
 	now := time.Now().UTC()
-	info := &WorkerInfo{
+	info := &Worker{
 		WorkerID: "w1",
 		LastHB:   hbOffset(now, 5*time.Second),
 	}

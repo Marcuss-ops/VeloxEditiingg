@@ -15,7 +15,7 @@
 //	  TestUpdate_NilBackend                      — backend not wired
 //
 //	Phase 2/3 (registry + snapshot) errors:
-//	  TestUpdate_UnregisteredWorker              — registry returns nil WorkerInfo
+//	  TestUpdate_UnregisteredWorker              — registry returns nil Worker
 //	  TestUpdate_EmptyRegistry                   — no prior deployment_records row
 //
 //	Phase 4 (drain) errors:
@@ -201,11 +201,11 @@ func (s *stubBackendsState) VerifyDelivery(_ context.Context, _ string, _ int64)
 
 // ── BackendRegistryGater ────────────────────────────────────────────
 
-func (s *stubBackendsState) GetWorker(_ context.Context, id string) (*workers.WorkerInfo, error) {
+func (s *stubBackendsState) GetWorker(_ context.Context, id string) (*workers.Worker, error) {
 	if !s.registeredWorker {
 		return nil, nil
 	}
-	info := &workers.WorkerInfo{
+	info := &workers.Worker{
 		WorkerID:      identity.ParseWorkerID(id),
 		SessionActive: s.sessionActive,
 		LastHB:        s.lastHB,

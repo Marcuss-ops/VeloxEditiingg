@@ -7,7 +7,12 @@ import (
 	"velox-shared/identity"
 )
 
-// WorkerInfo contains all information about a registered worker.
+// Worker is the canonical master-side worker read model.
+//
+// WorkerID is the only identity key. Hostname, IP, container name,
+// systemd unit and display name are operational attributes and must
+// never be used to identify a worker. The JSON wire form remains a
+// plain string at the API/storage boundary.
 //
 // Two fields are NOT persisted in workers.raw_json and are recomputed at
 // READ time on every List/GetWorker call so an explicit DB revoke (or a
@@ -21,13 +26,10 @@ import (
 // See registry_query.go (Hydrate / ConnectionStatusForInfo) for the
 // canonical read-time derivation. Persistence paths in Heartbeat and
 // UpdateWorker explicitly ZERO both fields before UpsertWorker so a
-// cached WorkerInfo returned by a previous GetWorker cannot leak derived
+// cached Worker returned by a previous GetWorker cannot leak derived
 // state across a registry restart.
-type WorkerInfo struct {
+type Worker struct {
 	// WorkerID is the canonical typed worker identity (velox-shared/identity).
-	// It is the ONLY field usable as an identity key: worker_name,
-	// display_name, host, ip_address and node_id are operational
-	// attributes. The JSON wire form stays a plain string.
 	WorkerID               identity.WorkerID `json:"worker_id"`
 	WorkerName             string            `json:"worker_name"`
 	DisplayName            string            `json:"display_name"`
@@ -45,18 +47,12 @@ type WorkerInfo struct {
 	HostFingerprint        string            `json:"host_fingerprint,omitempty"`
 	CertificateFingerprint string            `json:"certificate_fingerprint,omitempty"`
 
-	// Class (RW-PROD-005 §2.1) is the operator-assigned fleet class
-	// (cpu-xlarge / gpu-a100 / mixed / io ...) used by dispatchers
-	// and by the GET /api/v1/workers?class= filter. Empty string
-	// means "unclassified"; the handler ignores empty-class rows
-	// when the filter is active.
+	// Class is the operator-assigned fleet class used by dispatchers and
+	// the GET /api/v1/workers?class= filter.
 	Class string `json:"worker_class,omitempty"`
 
-	// RolloutGroup (RW-PROD-005 §2.1) is the operator-assigned
-	// rollout cohort (v3.4 / canary / holdout ...) used to phase
-	// worker fleets into a new bundle. Empty string means
-	// "unassigned"; the handler ignores empty-rollout rows when
-	// the filter is active.
+	// RolloutGroup is the operator-assigned rollout cohort used to phase
+	// worker fleets into a new bundle.
 	RolloutGroup    string `json:"rollout_group,omitempty"`
 	CodeVersion     string `json:"code_version"`
 	BundleVersion   string `json:"bundle_version"`
@@ -66,65 +62,20 @@ type WorkerInfo struct {
 	DeploymentState string `json:"deployment_state,omitempty"`
 	ProtocolVersion string `json:"protocol_version,omitempty"`
 	EngineVersion   string `json:"engine_version,omitempty"`
-	// Capabilities retains non-executor metadata and the legacy wire map at
-	// the compatibility boundary. ExecutorCapabilities is the typed source of
-	// truth for executor discovery and placement.
+
+	// Capabilities is retained at the compatibility boundary. The typed
+	// ExecutorCapabilities registry is the source of truth for executor
+	// discovery and placement.
 	Capabilities         map[string]interface{}            `json:"capabilities,omitempty"`
 	ExecutorCapabilities controltransport.ExecutorRegistry `json:"-"`
 	BootID               string                            `json:"boot_id,omitempty"`
 	BootTS               string                            `json:"boot_ts,omitempty"`
 
-	// SessionActive — computed at READ time from worker_sessions: true
-	// iff the worker has at least one non-revoked, non-expired auth
-	// session whose last_seen is inside WorkerSessionFreshnessWindow
-	// (5 min — see internal/store/store_worker_control.go). Combined with
-	// heartbeat freshness to derive ConnectionStatus.
-	//
-	// Note: deliberately NOT omitempty. Clients consuming this field
-	// MUST be able to distinguish "session_active=false (offline)" from
-	// "field missing (legacy client)" — the latter is ambiguous.
-	SessionActive bool `json:"session_active"`
-
-	// ConnectionStatus — canonical derived state, one of:
-	//   CONNECTED:    session_active && (now - last_heartbeat) < 150s
-	//   STALE:        session_active && 150s ≤ (now - last_heartbeat) < 5min
-	//   DISCONNECTED: !session_active OR (now - last_heartbeat) ≥ 5min
-	//   DRAINING:     drain=true (overrides heartbeat freshness)
-	// Always serialized (no omitempty) so the legacy/fallback path emits
-	// "" rather than silently dropping the field, which would dodge the
-	// sanitizeWorker invariant Status != "" (see handler-side guard).
+	SessionActive    bool   `json:"session_active"`
 	ConnectionStatus string `json:"connection_status"`
-
-	// Reason — canonical reason code for non-CONNECTED states (RW-PROD-005 A2).
-	// Set by ConnectionStatusForInfo alongside ConnectionStatus. One of:
-	//   drain            — Drain=true (precedence 1).
-	//   detached_session — session_active=false (stream closed).
-	//   heartbeat_stale  — session_active but last_heartbeat is stale/empty/unparseable.
-	//   ""               — status=CONNECTED: no reason emitted.
-	// Always serialized (no omitempty) so clients can distinguish "" from absent.
-	Reason string `json:"reason"`
-
-	// Health — canonical 9-state operator-facing health (Step 3/15
-	// fleet-operator rollout). Pure-function derivation via
-	// HealthForInfo(info, lastSmokeFail, deploymentState, now).
-	// Read-time hydrated by the registry, NEVER persisted to
-	// workers.raw_json (zeroed in ScrubForPersist). Surface
-	// vocabulary: HEALTHY, BUSY, DRAINING, UPDATING, RESTARTING,
-	// DEGRADED, OFFLINE, QUARANTINED, ROLLBACK. The diagnostic
-	// WorkerResponse.Status continues to surface the legacy
-	// 4-state ConnectionStatus for back-compat; admin WorkerCard
-	// surfaces this new 9-state Health.
-	Health string `json:"health"`
-
-	// Quarantined — operator-set flag for "excluded from
-	// placement, do not schedule new jobs". Quarantine beats
-	// every other state in Health() precedence (rank 1); the
-	// future admin endpoint POST /api/v1/admin/workers/{
-	// id}/quarantine (Step 4/15) wires a writer via the
-	// Fleet Controller. Persisted (NOT scrubbed in
-	// ScrubForPersist) so a restart preserves the quarantine
-	// decision. Zero on register until the operator sets it.
-	Quarantined bool `json:"quarantined"`
+	Reason           string `json:"reason"`
+	Health           string `json:"health"`
+	Quarantined      bool   `json:"quarantined"`
 
 	Readiness    map[string]interface{} `json:"readiness,omitempty"`
 	RecentLogs   []string               `json:"recent_logs,omitempty"`
@@ -132,39 +83,18 @@ type WorkerInfo struct {
 	Metrics      map[string]interface{} `json:"metrics,omitempty"`
 }
 
-// ScrubForPersist zeroes the read-time-hydrated fields on `info` so a
-// cached WorkerInfo returned by a previous GetWorker cannot leak its
-// derived state into workers.raw_json (which would re-hydrate stale on
-// the next registry.Load).
+// WorkerInfo is retained as a source-compatible alias during the migration
+// of external consumers. New code must use Worker. The alias does not create
+// a second model or a second identity representation.
 //
-// Persistence call sites that marshal a *WorkerInfo to workers.raw_json
-// (currently ONLY: Heartbeat in registry_heartbeat.go and UpdateWorker
-// in registry_update.go — RegisterWorker builds a fresh struct so it
-// cannot leak) MUST call ScrubForPersist on a COPY of `info` immediately
-// before json.Marshal. The canonical pattern is:
-//
-//	persisted := *info
-//	workers.ScrubForPersist(&persisted)
-//	raw, _ := json.Marshal(persisted)
-//	dbStore.UpsertWorker(raw)
-//
-// IMPORTANT — this helper is ONLY for sites that marshal a *WorkerInfo.
-// Other worker persistence paths (SetWorkerRevoked → worker_flags.raw_json)
-// deliberately persist a DIFFERENT shape — a tiny three-key audit blob —
-// and have no read-time-hydration contract. Calling ScrubForPersist on
-// a hardcoded map there would be a no-op; do NOT "harmonize" the two
-// raw_json paths, or you reintroduce the leak. The shape contract on
-// worker_flags.raw_json is enforced by store_workers_test.go.
-//
-// Treating SessionActive + ConnectionStatus + Reason + Health as
-// "never persisted" preserves the JSON contract across restarts.
-// Quarantined is intentionally NOT scrubbed — it is operator-persisted
-// (a restart preserves the operator's quarantine decision).
+// Deprecated: use Worker.
+type WorkerInfo = Worker
+
 // ExecutorRegistrySnapshot returns the typed executor view used by master
 // consumers. Persisted legacy capability maps are decoded only here as a
 // rolling-deployment compatibility adapter; new heartbeats populate the
 // ExecutorCapabilities field directly.
-func (info WorkerInfo) ExecutorRegistrySnapshot() controltransport.ExecutorRegistry {
+func (info Worker) ExecutorRegistrySnapshot() controltransport.ExecutorRegistry {
 	if !info.ExecutorCapabilities.IsEmpty() {
 		return info.ExecutorCapabilities
 	}
@@ -175,7 +105,10 @@ func (info WorkerInfo) ExecutorRegistrySnapshot() controltransport.ExecutorRegis
 	return registry
 }
 
-func ScrubForPersist(info *WorkerInfo) {
+// ScrubForPersist zeroes the read-time-hydrated fields on info so a cached
+// Worker returned by a previous GetWorker cannot leak derived state into
+// workers.raw_json. Quarantined is intentionally persisted.
+func ScrubForPersist(info *Worker) {
 	if info == nil {
 		return
 	}
@@ -183,12 +116,11 @@ func ScrubForPersist(info *WorkerInfo) {
 	info.ConnectionStatus = ""
 	info.Reason = ""
 	info.Health = ""
-	// Quarantined is intentionally NOT scrubbed: operator-persisted.
 }
 
 const DefaultWorkerProtocolVersion = "v3"
 
-func applyMetadataFields(extra map[string]interface{}, info *WorkerInfo) {
+func applyMetadataFields(extra map[string]interface{}, info *Worker) {
 	if extra == nil || info == nil {
 		return
 	}
@@ -231,9 +163,6 @@ func applyMetadataFields(extra map[string]interface{}, info *WorkerInfo) {
 	if v, ok := extra["certificate_fingerprint"].(string); ok && v != "" {
 		info.CertificateFingerprint = v
 	}
-	// RW-PROD-005 A9: class + rollout_group arrive in Hello metadata
-	// from the worker's buildHello; the master hydrates WorkerInfo.Class
-	// and .RolloutGroup here so the GET /api/v1/workers?class= filter works.
 	if v, ok := extra["worker_class"].(string); ok && v != "" {
 		info.Class = v
 	}

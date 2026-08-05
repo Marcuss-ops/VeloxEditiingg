@@ -46,7 +46,7 @@ func (r *Registry) RegisterWorker(ctx context.Context, workerID, workerName, ipA
 		}
 	}
 
-	info := WorkerInfo{
+	info := Worker{
 		WorkerID:    id,
 		WorkerName:  workerName,
 		DisplayName: displayName,
@@ -198,7 +198,7 @@ func (r *Registry) SetWorkerDrain(ctx context.Context, workerID string, drain bo
 //
 // The flag is operator-persisted (NOT scrubbed in
 // ScrubForPersist) so a registry restart preserves the
-// quarantine decision — see worker_info.go:WorkerInfo.Quarantined
+// quarantine decision — see worker_info.go:Worker.Quarantined
 // doc comment. The companion UpdateWorker map key "quarantine"
 // (added below in UpdateWorker) accepts the same flag from
 // map-driven updates; this helper is the canonical typed-path

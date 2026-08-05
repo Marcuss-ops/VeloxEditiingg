@@ -39,7 +39,7 @@ func TestSanitizeWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := workersreg.WorkerInfo{
+	raw := workersreg.Worker{
 		WorkerID:             "worker-abc",
 		ExecutorCapabilities: registry,
 		WorkerName:           "render-node-1",
@@ -171,7 +171,7 @@ func TestSanitizeWorker_Draining(t *testing.T) {
 	// directly. The canonical derivation is `workers.ConnectionStatus`
 	// (called via `ConnectionStatusForInfo` from `hydrate`/`hydrateBulk`
 	// in `registry_query.go`).
-	raw := workersreg.WorkerInfo{
+	raw := workersreg.Worker{
 		WorkerID:         "w-drain",
 		LastHB:           time.Now().UTC().Format(time.RFC3339),
 		Drain:            true,
@@ -184,7 +184,7 @@ func TestSanitizeWorker_Draining(t *testing.T) {
 }
 
 // TestSanitizeWorker_NoDerivationInvariant pins the no-derivation
-// contract: sanitizeWorker trusts WorkerInfo.ConnectionStatus directly,
+// contract: sanitizeWorker trusts Worker.ConnectionStatus directly,
 // it MUST NOT derive status from heartbeat+drain.
 //
 // Exhaustive 4-state derivation coverage lives in TestConnectionStatus_*
@@ -204,18 +204,18 @@ func TestSanitizeWorker_NoDerivationInvariant(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	cases := []struct {
 		name string
-		raw  workersreg.WorkerInfo
+		raw  workersreg.Worker
 	}{
 		{
 			// Subcase name carries the legacy-fallback pattern so CI `-v`
 			// output names the regression shape even without reading the
 			// table comment above.
 			"drain=true (legacy: DRAINING; new: empty)",
-			workersreg.WorkerInfo{WorkerID: "w-noderive-1", LastHB: now, Drain: true},
+			workersreg.Worker{WorkerID: "w-noderive-1", LastHB: now, Drain: true},
 		},
 		{
 			"drain=false, recent HB (legacy: CONNECTED; new: empty)",
-			workersreg.WorkerInfo{WorkerID: "w-noderive-2", LastHB: now, Drain: false},
+			workersreg.Worker{WorkerID: "w-noderive-2", LastHB: now, Drain: false},
 		},
 	}
 	for _, tc := range cases {
@@ -229,7 +229,7 @@ func TestSanitizeWorker_NoDerivationInvariant(t *testing.T) {
 }
 
 func TestSanitizeWorker_NilMaps(t *testing.T) {
-	raw := workersreg.WorkerInfo{
+	raw := workersreg.Worker{
 		WorkerID: "w-nomaps",
 		LastHB:   time.Now().UTC().Format(time.RFC3339),
 	}
@@ -260,7 +260,7 @@ func TestSanitizeWorker_SessionActiveSurfacesInJSON(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			recent := time.Now().UTC().Format(time.RFC3339)
-			raw := workersreg.WorkerInfo{
+			raw := workersreg.Worker{
 				WorkerID:         "worker-conn",
 				LastHB:           recent,
 				SessionActive:    tc.sessionActive,
@@ -533,7 +533,7 @@ func TestConnectionReason_Canonical(t *testing.T) {
 // the Reason, WorkerClass, and RolloutGroup fields (RW-PROD-005 A2+A9)
 // survive the sanitizeWorker round-trip into the JSON response.
 func TestSanitizeWorker_ReasonAndClassAndRolloutGroup(t *testing.T) {
-	raw := workersreg.WorkerInfo{
+	raw := workersreg.Worker{
 		WorkerID:         "w-rwprod005",
 		LastHB:           time.Now().UTC().Format(time.RFC3339),
 		ConnectionStatus: "STALE",

@@ -21,7 +21,7 @@ import (
 // Note: the previously-paired handler-side `heartbeatStaleThreshold`
 // const + `computeStatusLegacy` heartbeat-only fallback (formerly in
 // DataServer/internal/handlers/server/api/workers_handler.go) have been
-// removed. `sanitizeWorker` now trusts `WorkerInfo.ConnectionStatus`
+// removed. `sanitizeWorker` now trusts `Worker.ConnectionStatus`
 // directly, and ConnectionStatus always returns one of the four enum
 // strings on every read path, so no heartbeat-only fallback is needed.
 //
@@ -85,7 +85,7 @@ func (r *Registry) IsRegistered(ctx context.Context, workerID string) bool {
 // GetWorker returns a single worker's info by ID, with SessionActive +
 // ConnectionStatus hydrated from SQLite (worker_sessions) at read time.
 // Returns nil if the worker is not registered or has been revoked.
-func (r *Registry) GetWorker(ctx context.Context, workerID string) *WorkerInfo {
+func (r *Registry) GetWorker(ctx context.Context, workerID string) *Worker {
 	workerID = identity.NormalizeWorkerID(workerID)
 	r.mu.RLock()
 	info, ok := r.inMem[identity.ParseWorkerID(workerID)]
@@ -100,8 +100,8 @@ func (r *Registry) GetWorker(ctx context.Context, workerID string) *WorkerInfo {
 // List returns every registered, non-revoked worker with SessionActive +
 // ConnectionStatus populated. Bulk-fetches active session state via
 // `dbStore.GetActiveSessionsByWorkerIDs` to avoid N+1 queries.
-func (r *Registry) List(ctx context.Context) []WorkerInfo {
-	ids, infos := r.snapshotRegistered(func(id string, w WorkerInfo) bool { return true })
+func (r *Registry) List(ctx context.Context) []Worker {
+	ids, infos := r.snapshotRegistered(func(id string, w Worker) bool { return true })
 	if len(infos) == 0 {
 		return infos
 	}
@@ -113,7 +113,7 @@ func (r *Registry) List(ctx context.Context) []WorkerInfo {
 // SessionActive + ConnectionStatus populated. Registered excludes
 // revoked entries; live filters by heartbeat freshness plus session
 // active.
-func (r *Registry) StatusSnapshot(ctx context.Context, timeout time.Duration) (registered []WorkerInfo, live []WorkerInfo) {
+func (r *Registry) StatusSnapshot(ctx context.Context, timeout time.Duration) (registered []Worker, live []Worker) {
 	registered = r.List(ctx)
 	live = r.GetActiveWorkers(ctx, timeout)
 	return
@@ -122,7 +122,7 @@ func (r *Registry) StatusSnapshot(ctx context.Context, timeout time.Duration) (r
 // GetStaleWorkers returns registered workers that are not currently
 // "live" (no recent heartbeat). ConnectionStatus is populated so
 // dashboards can disambiguate "STALE" from outright DISCONNECTED.
-func (r *Registry) GetStaleWorkers(ctx context.Context, timeout time.Duration) []WorkerInfo {
+func (r *Registry) GetStaleWorkers(ctx context.Context, timeout time.Duration) []Worker {
 	registered := r.List(ctx)
 	live := r.GetActiveWorkers(ctx, timeout)
 	if len(registered) == 0 {
@@ -132,7 +132,7 @@ func (r *Registry) GetStaleWorkers(ctx context.Context, timeout time.Duration) [
 	for _, w := range live {
 		liveSet[w.WorkerID] = struct{}{}
 	}
-	out := make([]WorkerInfo, 0, len(registered))
+	out := make([]Worker, 0, len(registered))
 	for _, w := range registered {
 		if _, ok := liveSet[w.WorkerID]; ok {
 			continue
@@ -144,10 +144,10 @@ func (r *Registry) GetStaleWorkers(ctx context.Context, timeout time.Duration) [
 
 // GetWorkersByGroup returns all workers in a specific group with
 // SessionActive + ConnectionStatus hydrated.
-func (r *Registry) GetWorkersByGroup(ctx context.Context, group string) []WorkerInfo {
+func (r *Registry) GetWorkersByGroup(ctx context.Context, group string) []Worker {
 	now := time.Now().UTC()
 	r.mu.RLock()
-	var result []WorkerInfo
+	var result []Worker
 	for _, w := range r.inMem {
 		if w.WorkerGroup == group {
 			result = append(result, w)
@@ -207,10 +207,10 @@ const HasAtLeastOneLiveTimeout = ConnectionStaleThreshold
 // GetActiveWorkers returns workers that have a recent heartbeat AND a
 // live session. ConnectionStatus is populated; downstream consumers
 // may filter further on the enum.
-func (r *Registry) GetActiveWorkers(ctx context.Context, timeout time.Duration) []WorkerInfo {
+func (r *Registry) GetActiveWorkers(ctx context.Context, timeout time.Duration) []Worker {
 	now := time.Now().UTC()
 	r.mu.RLock()
-	var result []WorkerInfo
+	var result []Worker
 	for _, w := range r.inMem {
 		if r.revoked[w.WorkerID] {
 			continue
@@ -249,10 +249,10 @@ func (r *Registry) GetActiveWorkers(ctx context.Context, timeout time.Duration) 
 // for callers that bulk-hydrate. Keeps the locking pattern tight: one
 // RLock acquisition for the snapshot, then drops the lock before any
 // per-worker DB round-trip.
-func (r *Registry) snapshotRegistered(keep func(workerID string, w WorkerInfo) bool) ([]string, []WorkerInfo) {
+func (r *Registry) snapshotRegistered(keep func(workerID string, w Worker) bool) ([]string, []Worker) {
 	r.mu.RLock()
 	ids := make([]string, 0, len(r.inMem))
-	infos := make([]WorkerInfo, 0, len(r.inMem))
+	infos := make([]Worker, 0, len(r.inMem))
 	for id, w := range r.inMem {
 		if r.revoked[id] {
 			continue
@@ -270,7 +270,7 @@ func (r *Registry) snapshotRegistered(keep func(workerID string, w WorkerInfo) b
 // hydrateBulk fetches the active-session set for the given workerIDs in
 // ONE DB query (when dbStore is wired), then mutates each info in place
 // with SessionActive + ConnectionStatus derived from canonical helpers.
-func (r *Registry) hydrateBulk(ctx context.Context, ids []string, infos []WorkerInfo, now time.Time) {
+func (r *Registry) hydrateBulk(ctx context.Context, ids []string, infos []Worker, now time.Time) {
 	if len(ids) == 0 {
 		return
 	}
@@ -298,10 +298,10 @@ func (r *Registry) hydrateBulk(ctx context.Context, ids []string, infos []Worker
 	}
 }
 
-// hydrate updates a SINGLE WorkerInfo with SessionActive +
+// hydrate updates a SINGLE Worker with SessionActive +
 // ConnectionStatus. Used by GetWorker (which avoids the bulk query to
 // keep the per-worker path cheap).
-func (r *Registry) hydrate(ctx context.Context, info *WorkerInfo, now time.Time) {
+func (r *Registry) hydrate(ctx context.Context, info *Worker, now time.Time) {
 	if info == nil {
 		return
 	}
@@ -320,7 +320,7 @@ func (r *Registry) hydrate(ctx context.Context, info *WorkerInfo, now time.Time)
 }
 
 // Reason constants for non-CONNECTED states (RW-PROD-005 A2).
-// Consumed by ConnectionReason() and exposed in WorkerInfo.Reason.
+// Consumed by ConnectionReason() and exposed in Worker.Reason.
 const (
 	ReasonDrain           = "drain"
 	ReasonDetachedSession = "detached_session"
@@ -361,7 +361,7 @@ func ConnectionReason(sessionActive bool, drain bool, lastHB string, now time.Ti
 // ConnectionStatusForInfo mutates `info` to set SessionActive,
 // ConnectionStatus, and Reason from the supplied session_active signal.
 // Pure logic — no DB calls — so tests can drive it directly.
-func ConnectionStatusForInfo(info *WorkerInfo, sessionActive bool, now time.Time) {
+func ConnectionStatusForInfo(info *Worker, sessionActive bool, now time.Time) {
 	info.SessionActive = sessionActive
 	info.ConnectionStatus = ConnectionStatus(sessionActive, info.LastHB, info.Drain, now)
 	info.Reason = ConnectionReason(sessionActive, info.Drain, info.LastHB, now)

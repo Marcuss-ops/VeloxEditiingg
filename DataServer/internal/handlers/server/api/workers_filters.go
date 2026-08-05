@@ -63,7 +63,7 @@ func ParseFilters(c *gin.Context) (Filters, error) {
 // from a future bug before reaching operators. Running both reduces
 // the bug surface to a single line; running neither would let a
 // regression in the SQL pass through silently.
-func ApplyFilters(infos []workersreg.WorkerInfo, f Filters) []workersreg.WorkerInfo {
+func ApplyFilters(infos []workersreg.Worker, f Filters) []workersreg.Worker {
 	if f.IsZero() {
 		return infos
 	}

@@ -9,7 +9,7 @@
 //
 // All inputs and outputs are pure: no I/O, no DB. The
 // HealthForInfo helper is the canonical shim that callers use to
-// populate WorkERInfo.Health from a WorkerInfo struct; the
+// populate WorkERInfo.Health from a Worker struct; the
 // registry hydrate path calls HealthForInfo on every List / Get
 // so the field is fresh at read time and not subject to
 // persistence-leak / cache-staleness mismatch.
@@ -45,7 +45,7 @@ import (
 	"time"
 )
 
-// WorkerHealth canonical 9-state enum. Surfaced on WorkerInfo.Health
+// WorkerHealth canonical 9-state enum. Surfaced on Worker.Health
 // (read-time derived) and propagated to the admin /api/v1/admin/
 // workers endpoint via WorkerCard.health (Step 1/15).
 const (
@@ -74,7 +74,7 @@ const (
 // HealthReason canonical audit-trail reason codes for non-default
 // 9-state outcomes. Future-health-reason taxonomy; the legacy
 // 3-element taxonomy (drain / detached_session / heartbeat_stale)
-// stays on WorkerInfo.Reason and WorkerResponse.Reason for
+// stays on Worker.Reason and WorkerResponse.Reason for
 // back-compat. Step 6/15 will produce a migration note when the
 // 9-state dashboard begins surfacing reasons.
 const (
@@ -255,7 +255,7 @@ func activeJobsFromMetrics(raw map[string]interface{}) int32 {
 // manual investigation) pass zero values until Step 6/15 / 9/15
 // close the loop. The function is forward-compatible — adding the
 // upstream queries does NOT change this signature.
-func HealthForInfo(info *WorkerInfo, lastSmokeFail time.Time, deploymentState string, now time.Time) {
+func HealthForInfo(info *Worker, lastSmokeFail time.Time, deploymentState string, now time.Time) {
 	if info == nil {
 		return
 	}

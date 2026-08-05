@@ -36,7 +36,7 @@ func (r *Registry) HeartbeatWithSession(ctx context.Context, sessionID, workerID
 	// Preserve existing state unless explicitly updated by heartbeat payload.
 	existing, hasExisting := r.inMem[id]
 
-	info := WorkerInfo{
+	info := Worker{
 		WorkerID:    id,
 		WorkerName:  workerName,
 		LastHB:      now,
@@ -115,7 +115,7 @@ func (r *Registry) HeartbeatWithSession(ctx context.Context, sessionID, workerID
 	// Persist to SQLite (single source of truth). ONLY heartbeat-derived
 	// state is persisted; the read-time-hydrated SessionActive +
 	// ConnectionStatus fields are scrubbed before UpsertWorker so a
-	// cached WorkerInfo returned by a previous GetWorker cannot leak
+	// cached Worker returned by a previous GetWorker cannot leak
 	// its derived state into workers.raw_json (which would re-hydrate
 	// stale across a registry restart).
 	if r.dbStore != nil {
