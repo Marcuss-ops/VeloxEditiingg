@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 )
 
@@ -60,31 +61,25 @@ func buildDialOptions(certPath, keyPath, caPath string) ([]grpc.DialOption, erro
 }
 
 // buildCapabilities constructs the typed `google.protobuf.Struct` that
-// the master reads for executor-discovery / ClaimNext filtering. Kept
-// intentionally small: one synthetic executor entry so the master's
-// heartbeat capabilities-shape validation accepts the payload even
-// when no real executor registry is wired.
+// the master reads for executor-discovery / ClaimNext filtering. Native Go
+// maps and slices are passed to NewStruct in one call; passing pre-wrapped
+// *structpb.Value values through NewList would fail conversion and silently
+// drop the entire capability report.
 func buildCapabilities(executorID string) *structpb.Struct {
-	item, err := structpb.NewStruct(map[string]any{
-		"id":      executorID,
-		"version": 1,
+	caps, err := structpb.NewStruct(map[string]any{
+		"schema_version": controltransport.CapabilitySchemaVersion,
+		"executors": []any{
+			map[string]any{
+				"id":      executorID,
+				"version": 1,
+			},
+		},
+		controltransport.CapabilityCanonicalPayloadV2: true,
 	})
 	if err != nil {
-		// structpb.NewStruct on a primitive map cannot fail; the
-		// error is purely a runtime diagnostic if the map contains
-		// unsupported types. Falling back to an empty struct keeps
-		// the wire payload valid.
-		return &structpb.Struct{}
+		panic(fmt.Sprintf("failed to build capabilities: %v", err))
 	}
-	list, err := structpb.NewList([]any{structpb.NewStructValue(item)})
-	if err != nil {
-		return &structpb.Struct{}
-	}
-	return &structpb.Struct{
-		Fields: map[string]*structpb.Value{
-			"executors": structpb.NewListValue(list),
-		},
-	}
+	return caps
 }
 
 // runHeartbeatLoop ticks at HeartbeatInterval and sends typed Heartbeats
