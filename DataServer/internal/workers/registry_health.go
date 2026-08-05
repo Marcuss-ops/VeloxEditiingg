@@ -180,47 +180,12 @@ func Health(
 	quarantined bool,
 	now time.Time,
 ) string {
-	// 1. QUARANTINED — operator-mute.
-	if quarantined {
-		return WorkerHealthQuarantined
-	}
-	// 2. OFFLINE — non-live gate.
-	if isOffline(sessionActive, lastHB, now) {
-		return WorkerHealthOffline
-	}
-	// 3-5. Deployment-driven states. The deployment_state string
-	// is mutually exclusive on the row (SetLatestDeployment),
-	// so only one switch arm matches per call.
-	// Precedence order in the switch is significant: rank-3
-	// (ROLLBACK) MUST come before rank-4 (UPDATING) so the
-	// recovery-intervention surface wins over the forward-deploy
-	// surface even when both states could feed the function.
-	switch deploymentState {
-	case HealthDeploymentRollback:
-		return WorkerHealthRollback
-	case HealthDeploymentUpdating:
-		return WorkerHealthUpdating
-	case HealthDeploymentRestarting:
-		return WorkerHealthRestarting
-	}
-	// 6. DRAINING — operator-blocking.
-	if drain {
-		return WorkerHealthDraining
-	}
-	// 7. DEGRADED — fault signals (smoke-fail OR heartbeat-stale).
-	age := heartbeatAge(lastHB, now)
-	if !lastSmokeFail.IsZero() && now.Sub(lastSmokeFail) < time.Hour {
-		return WorkerHealthDegraded
-	}
-	if age >= ConnectionStaleThreshold {
-		return WorkerHealthDegraded
-	}
-	// 8. BUSY — actively rendering.
-	if activeJobs > 0 {
-		return WorkerHealthBusy
-	}
-	// 9. HEALTHY — fresh, idle.
-	return WorkerHealthHealthy
+	// Projection over the canonical typed dimensions (worker_state.go).
+	// The precedence ladder is implemented ONCE, explicitly, in
+	// projectHealth9 — it is no longer a hidden string-laden ladder.
+	cs := DeriveConnectionState(sessionActive, lastHB, now)
+	ss := DeriveSchedulingState(drain, quarantined, int(activeJobs))
+	return projectHealth9(cs, ss, DeploymentState(deploymentState), lastSmokeFail, now)
 }
 
 // DeriveDeploymentHealthState maps a deployment_records row's

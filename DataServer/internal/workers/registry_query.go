@@ -66,28 +66,12 @@ const (
 //  3. sessionActive AND (now - lastHB) ≥ 150s      → STALE
 //  4. sessionActive AND (now - lastHB) < 150s      → CONNECTED
 func ConnectionStatus(sessionActive bool, lastHB string, drain bool, now time.Time) string {
-	if drain {
-		return StatusDraining
-	}
-	if !sessionActive {
-		return StatusDisconnected
-	}
-	if lastHB == "" {
-		return StatusDisconnected
-	}
-	t, err := time.Parse(time.RFC3339, lastHB)
-	if err != nil {
-		return StatusDisconnected
-	}
-	age := now.Sub(t.UTC())
-	switch {
-	case age >= ConnectionDisconnectedThreshold:
-		return StatusDisconnected
-	case age >= ConnectionStaleThreshold:
-		return StatusStale
-	default:
-		return StatusConnected
-	}
+	// Projection of the canonical typed dimensions (worker_state.go):
+	// the 4-state wire vocabulary is derived from ConnectionState +
+	// SchedulingState, never from ad-hoc string checks.
+	cs := DeriveConnectionState(sessionActive, lastHB, now)
+	ss := DeriveSchedulingState(drain, false, 0)
+	return cs.WireStatus(ss)
 }
 
 func (r *Registry) IsRegistered(ctx context.Context, workerID string) bool {
