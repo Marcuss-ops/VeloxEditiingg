@@ -26,6 +26,7 @@ those substrings appearing in this directory.
 - `worker-ranking.json` — Worker and worker-class performance ranking.
 - `version-regression.json` — Executor/version phase regression signals.
 - `recoverable-time.json` — Observed latency and links to p25 baseline/recoverable-time SQL.
+- `asset-download.json` — Worker asset-download operations: active/queued work, retained ready/failed/cache-hit read-model counts, bytes, throughput, ETA and coalesced requests. Uses only low-cardinality static Prometheus series.
 - `cold-warm-cache.json` — Cache hit/miss signals and deterministic benchmark guidance.
 - `parallelism-efficiency.json` — Parallel efficiency, speedup, overlap, idle gap and oversubscription.
 - `quality-vs-speed.json` — Render speed/quality overview with SQL quality drill-down.

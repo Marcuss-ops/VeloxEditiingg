@@ -133,6 +133,17 @@ func (c *CounterVec) add(label string, value float64) {
 	c.values[label] += value
 }
 
+// setMonotonic raises a counter to value atomically. It is used when a
+// producer periodically publishes its cumulative count and several producer
+// goroutines may publish concurrently.
+func (c *CounterVec) setMonotonic(label string, value float64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if value > c.values[label] {
+		c.values[label] = value
+	}
+}
+
 func (c *CounterVec) get(label string) float64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

@@ -59,6 +59,10 @@ type Config struct {
 	// transferer goroutine at most once per throttle interval; MUST be
 	// non-blocking.
 	OnCheckpoint func(snapshot DownloadSnapshot, reportCtx context.Context)
+
+	// OnOperationalSnapshot receives an aggregate low-cardinality view after
+	// lifecycle or throttled progress updates. It must be non-blocking.
+	OnOperationalSnapshot func(snapshot OperationalSnapshot)
 }
 
 func (c *Config) withDefaults() {
@@ -104,6 +108,7 @@ type Manager struct {
 
 	qseq       atomic.Int64
 	generation atomic.Int64
+	coalesced  atomic.Uint64
 }
 
 // NewManager wires the manager with its transferer and starts the bounded
@@ -147,9 +152,13 @@ func (m *Manager) Resolve(ctx context.Context, req DownloadRequest) (DownloadedA
 	// A transfer cancelled by a racing "last waiter left" must not poison a
 	// caller that just arrived: retry on a fresh transfer.
 	for attempt := 0; attempt < 3; attempt++ {
-		t := m.acquireTransfer(key, req, ctx)
+		t, shared := m.acquireTransfer(key, req, ctx)
+		if shared {
+			m.coalesced.Add(1)
+		}
 
 		t.addWaiter(req)
+		m.refreshOperational()
 		select {
 		case <-t.doneCh():
 			result, err := t.result()
@@ -187,11 +196,11 @@ func (m *Manager) Resolve(ctx context.Context, req DownloadRequest) (DownloadedA
 // starting its run loop) when absent or when the previous transfer reached a
 // terminal state. Terminal transfers stay in the registry for snapshot
 // visibility; new Resolve calls re-check the cache cheaply.
-func (m *Manager) acquireTransfer(key string, req DownloadRequest, reportCtx context.Context) *Transfer {
+func (m *Manager) acquireTransfer(key string, req DownloadRequest, reportCtx context.Context) (*Transfer, bool) {
 	m.registry.mu.Lock()
 	defer m.registry.mu.Unlock()
 	if existing := m.registry.transfers[key]; existing != nil && !existing.isTerminal() {
-		return existing
+		return existing, true
 	}
 	generation := m.generation.Add(1)
 	t := newTransfer(m.ctx, key, req, reportCtx, m.cfg.Now, nextTransferID(), generation)
@@ -201,9 +210,44 @@ func (m *Manager) acquireTransfer(key string, req DownloadRequest, reportCtx con
 	t.checkpointInterval = m.cfg.CheckpointInterval
 	t.checkpointBytes = m.cfg.CheckpointBytes
 	t.onCheckpoint = m.cfg.OnCheckpoint
+	t.onOperationalSnapshot = m.refreshOperational
 	m.registry.transfers[key] = t
 	go t.run(m)
-	return t
+	return t, false
+}
+
+// refreshOperational projects the registry into one low-cardinality worker
+// snapshot for Prometheus/Grafana. Terminal transfers remain in the registry
+// for API visibility; ready/failed/cache-hit gauges therefore describe the
+// manager's retained transfer read model, not a short-lived active-only count.
+func (m *Manager) refreshOperational() {
+	if m.cfg.OnOperationalSnapshot == nil {
+		return
+	}
+	out := OperationalSnapshot{CoalescedRequestsTotal: m.coalesced.Load()}
+	m.registry.Each(func(_ string, t *Transfer) {
+		snap := t.snapshot(m.cfg.Now())
+		out.BytesDownloaded += snap.BytesDownloaded
+		out.BytesTotal += snap.BytesTotal
+		switch snap.State {
+		case DownloadRunning, DownloadVerifying:
+			out.ActiveTransfers++
+			out.ThroughputBPS += snap.ThroughputBytesPerSecond
+			if snap.ETASeconds > out.ETASeconds {
+				out.ETASeconds = snap.ETASeconds
+			}
+		case DownloadQueued:
+			out.QueuedTransfers++
+		case DownloadReady:
+			out.ReadyTransfers++
+			if snap.CacheHit {
+				out.CacheHitTransfers++
+			}
+		case DownloadFailed:
+			out.FailedTransfers++
+		}
+	})
+	m.cfg.OnOperationalSnapshot(out)
 }
 
 // Snapshot returns the current snapshot for an asset key.

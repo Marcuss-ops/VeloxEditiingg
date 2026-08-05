@@ -40,6 +40,16 @@ type PrometheusMetrics struct {
 	assetCacheDuplicateDownloads     *CounterVec
 	assetCacheDuplicateDownloadBytes *CounterVec
 	workerErrorsTotal                *CounterVec
+	assetDownloadActive              *GaugeVec
+	assetDownloadQueued              *GaugeVec
+	assetDownloadReady               *GaugeVec
+	assetDownloadFailed              *GaugeVec
+	assetDownloadCacheHits           *GaugeVec
+	assetDownloadBytes               *GaugeVec
+	assetDownloadTotalBytes          *GaugeVec
+	assetDownloadThroughput          *GaugeVec
+	assetDownloadETA                 *GaugeVec
+	assetDownloadCoalesced           *CounterVec
 	workerActiveJobs                 *GaugeVec
 	workerStatus                     *GaugeVec
 	fallbackCount                    *CounterVec
@@ -132,6 +142,16 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 			Name: "velox_worker_errors_total", Help: "Worker task failures",
 			values: map[string]float64{"total": 0},
 		},
+		assetDownloadActive:     &GaugeVec{Name: "velox_asset_download_transfers_active", Help: "Active asset transfers", values: map[string]float64{"total": 0}},
+		assetDownloadQueued:     &GaugeVec{Name: "velox_asset_download_transfers_queued", Help: "Queued asset transfers", values: map[string]float64{"total": 0}},
+		assetDownloadReady:      &GaugeVec{Name: "velox_asset_download_transfers_ready", Help: "Ready asset transfers retained by the manager", values: map[string]float64{"total": 0}},
+		assetDownloadFailed:     &GaugeVec{Name: "velox_asset_download_transfers_failed", Help: "Failed asset transfers retained by the manager", values: map[string]float64{"total": 0}},
+		assetDownloadCacheHits:  &GaugeVec{Name: "velox_asset_download_cache_hits", Help: "Ready asset transfers completed from cache", values: map[string]float64{"total": 0}},
+		assetDownloadBytes:      &GaugeVec{Name: "velox_asset_download_bytes_downloaded", Help: "Bytes downloaded across registered asset transfers", values: map[string]float64{"total": 0}},
+		assetDownloadTotalBytes: &GaugeVec{Name: "velox_asset_download_bytes_total", Help: "Expected bytes across registered asset transfers", values: map[string]float64{"total": 0}},
+		assetDownloadThroughput: &GaugeVec{Name: "velox_asset_download_throughput_bytes_per_second", Help: "Current aggregate asset download throughput", values: map[string]float64{"total": 0}},
+		assetDownloadETA:        &GaugeVec{Name: "velox_asset_download_eta_seconds", Help: "Longest remaining asset transfer ETA", values: map[string]float64{"total": 0}},
+		assetDownloadCoalesced:  &CounterVec{Name: "velox_asset_download_coalesced_requests_total", Help: "Asset requests coalesced onto an existing transfer", values: map[string]float64{"total": 0}},
 		workerActiveJobs: &GaugeVec{
 			Name: "velox_worker_active_jobs", Help: "Number of active jobs per worker",
 			values: make(map[string]float64),
@@ -268,6 +288,23 @@ func (m *PrometheusMetrics) RecordCacheDuplicateDownload(bytes int64) {
 func (m *PrometheusMetrics) RecordWorkerError() {
 	m.workerErrorsTotal.inc("total")
 }
+
+// SetAssetDownloadOperational updates the low-cardinality aggregate asset
+// download gauges and coalescing counter used by the worker dashboard.
+func (m *PrometheusMetrics) SetAssetDownloadOperational(active, queued, ready, failed, cacheHits int, downloaded, total int64, throughput float64, eta float64, coalesced uint64) {
+	m.assetDownloadActive.set("total", float64(active))
+	m.assetDownloadQueued.set("total", float64(queued))
+	m.assetDownloadReady.set("total", float64(ready))
+	m.assetDownloadFailed.set("total", float64(failed))
+	m.assetDownloadCacheHits.set("total", float64(cacheHits))
+	m.assetDownloadBytes.set("total", float64(downloaded))
+	m.assetDownloadTotalBytes.set("total", float64(total))
+	m.assetDownloadThroughput.set("total", throughput)
+	m.assetDownloadETA.set("total", eta)
+	// Counters are monotonic; the manager supplies the current cumulative
+	// value, so only move the exported value forward under one lock.
+	m.assetDownloadCoalesced.setMonotonic("total", float64(coalesced))
+}
 func (m *PrometheusMetrics) RecordCacheVerify(duration time.Duration) {
 	m.assetCacheVerifyMS.observe("asset", duration.Seconds())
 }
@@ -393,6 +430,16 @@ func (m *PrometheusMetrics) ExportPrometheus() string {
 	output += m.assetCacheDuplicateDownloads.export()
 	output += m.assetCacheDuplicateDownloadBytes.export()
 	output += m.workerErrorsTotal.export()
+	output += m.assetDownloadActive.export()
+	output += m.assetDownloadQueued.export()
+	output += m.assetDownloadReady.export()
+	output += m.assetDownloadFailed.export()
+	output += m.assetDownloadCacheHits.export()
+	output += m.assetDownloadBytes.export()
+	output += m.assetDownloadTotalBytes.export()
+	output += m.assetDownloadThroughput.export()
+	output += m.assetDownloadETA.export()
+	output += m.assetDownloadCoalesced.export()
 	output += m.fallbackCount.export()
 	output += m.pythonEmergencyPath.export()
 	output += m.workerActiveJobs.export()

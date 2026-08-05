@@ -1,0 +1,36 @@
+{
+  "annotations": { "list": [] },
+  "description": "Worker asset download operations: bounded transfers, queue pressure, cache reuse, byte progress, throughput, ETA and coalesced requests. All metrics use the static total label; asset/job/task identifiers remain out of Prometheus. Ready/failed/cache-hit and byte gauges describe the manager's retained transfer read model; active/queued/throughput/ETA describe current work.",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "panels": [
+    { "type": "timeseries", "title": "Transfers by lifecycle state", "description": "Active, queued, ready and failed transfer counts retained by the worker manager.", "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 }, "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }, "targets": [
+      { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "velox_asset_download_transfers_active", "legendFormat": "active", "refId": "A" },
+      { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "velox_asset_download_transfers_queued", "legendFormat": "queued", "refId": "B" },
+      { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "velox_asset_download_transfers_ready", "legendFormat": "ready", "refId": "C" },
+      { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "velox_asset_download_transfers_failed", "legendFormat": "failed", "refId": "D" }
+    ] },
+    { "type": "stat", "title": "Cache hits", "description": "Ready transfers satisfied by a verified local cache entry in the manager's retained transfer read model.", "gridPos": { "h": 9, "w": 6, "x": 12, "y": 0 }, "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] } }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "velox_asset_download_cache_hits", "legendFormat": "cache hits", "refId": "A" } ] },
+    { "type": "stat", "title": "Coalesced requests", "description": "Requests joined to an already-running physical transfer; a high value confirms shared-stock deduplication.", "gridPos": { "h": 9, "w": 6, "x": 18, "y": 0 }, "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "velox_asset_download_coalesced_requests_total", "legendFormat": "coalesced", "refId": "A" } ] },
+    { "type": "timeseries", "title": "Downloaded bytes and expected bytes", "description": "Aggregate bytes across the manager's retained transfer read model. Use active/queued/throughput/ETA for current work; retained bytes are deliberately available for read-model continuity.", "gridPos": { "h": 10, "w": 12, "x": 0, "y": 9 }, "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }, "targets": [
+      { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "velox_asset_download_bytes_downloaded", "legendFormat": "downloaded", "refId": "A" },
+      { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "velox_asset_download_bytes_total", "legendFormat": "total", "refId": "B" }
+    ] },
+    { "type": "timeseries", "title": "Throughput and ETA", "description": "Current aggregate throughput and longest active transfer ETA.", "gridPos": { "h": 10, "w": 12, "x": 12, "y": 9 }, "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }, "targets": [
+      { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "velox_asset_download_throughput_bytes_per_second", "legendFormat": "throughput B/s", "refId": "A" },
+      { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "velox_asset_download_eta_seconds", "legendFormat": "ETA seconds", "refId": "B" }
+    ] },
+    { "type": "gauge", "title": "Worker asset progress", "description": "Byte-weighted progress across the worker's registered asset transfers.", "gridPos": { "h": 9, "w": 12, "x": 0, "y": 19 }, "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 60 }, { "color": "green", "value": 90 } ] } }, "overrides": [] }, "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "100 * clamp_max(velox_asset_download_bytes_downloaded / clamp_min(velox_asset_download_bytes_total, 1), 1)", "legendFormat": "progress", "refId": "A" } ] },
+    { "type": "text", "title": "Cardinality contract", "options": { "mode": "markdown", "content": "This dashboard intentionally uses only the static `label=total` series. Asset IDs, job IDs, task IDs, URLs, hashes and error details remain in the asset-progress API/read model, not Prometheus labels." }, "gridPos": { "h": 9, "w": 12, "x": 12, "y": 19 } }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 38,
+  "tags": ["velox", "observability", "worker", "asset-download"],
+  "templating": { "list": [ { "name": "DS_PROMETHEUS", "type": "datasource", "query": "prometheus", "label": "Datasource", "current": { "text": "Prometheus", "value": "Prometheus" } } ] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "",
+  "title": "Velox — Asset Download Operations",
+  "uid": "velox-asset-download",
+  "version": 1
+}

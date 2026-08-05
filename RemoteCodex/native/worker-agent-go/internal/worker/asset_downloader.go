@@ -115,6 +115,14 @@ func (w *Worker) assetDownloadManager() downloader.AssetDownloadManager {
 				progressCtx := context.WithValue(reportCtx, assetProgressWorkerContextKey{}, w)
 				emitAssetProgressCheckpoint(progressCtx, snap)
 			},
+			OnOperationalSnapshot: func(snapshot downloader.OperationalSnapshot) {
+				telemetry.GetPrometheusMetrics().SetAssetDownloadOperational(
+					snapshot.ActiveTransfers, snapshot.QueuedTransfers, snapshot.ReadyTransfers,
+					snapshot.FailedTransfers, snapshot.CacheHitTransfers, snapshot.BytesDownloaded,
+					snapshot.BytesTotal, snapshot.ThroughputBPS, float64(snapshot.ETASeconds),
+					snapshot.CoalescedRequestsTotal,
+				)
+			},
 		}, &masterAssetTransferer{w: w})
 	}
 	return w.assetManager

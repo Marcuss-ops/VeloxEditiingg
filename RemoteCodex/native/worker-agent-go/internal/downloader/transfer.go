@@ -74,11 +74,12 @@ type Transfer struct {
 	lastCheckpointBytes int64
 
 	// Throttle configuration + durable hook (wired from manager.Config).
-	publishInterval    time.Duration
-	publishBytes       int64
-	checkpointInterval time.Duration
-	checkpointBytes    int64
-	onCheckpoint       func(DownloadSnapshot, context.Context)
+	publishInterval       time.Duration
+	publishBytes          int64
+	checkpointInterval    time.Duration
+	checkpointBytes       int64
+	onCheckpoint          func(DownloadSnapshot, context.Context)
+	onOperationalSnapshot func()
 
 	waiters map[waiterKey]struct{}
 	// jobRefs survives waiter removal so JobSnapshot remains a durable
@@ -237,6 +238,14 @@ func (t *Transfer) setState(s DownloadState) {
 	t.updatedAt = now
 	t.mu.Unlock()
 	t.publish(now)
+	t.notifyOperational()
+}
+
+// notifyOperational emits the manager-wide view when configured.
+func (t *Transfer) notifyOperational() {
+	if t.onOperationalSnapshot != nil {
+		t.onOperationalSnapshot()
+	}
 }
 
 // setCacheHit marks a cache-hit outcome before finishing READY.
@@ -267,6 +276,7 @@ func (t *Transfer) setDownloading() {
 	t.lastCheckpointBytes = 0
 	t.mu.Unlock()
 	t.publish(now)
+	t.notifyOperational()
 }
 
 // setQueuePos records the stable-queue sequence assigned by the scheduler.
@@ -278,6 +288,7 @@ func (t *Transfer) setQueuePos(seq int64) {
 	t.updatedAt = now
 	t.mu.Unlock()
 	t.publish(now)
+	t.notifyOperational()
 }
 
 // finish settles the transfer into READY (nil err) or FAILED, publishes the
@@ -301,6 +312,7 @@ func (t *Transfer) finish(result TransferResult, err error) {
 	t.publish(now)
 	t.emitCheckpoint(now)
 	t.once.Do(func() { close(t.done) })
+	t.notifyOperational()
 }
 
 // finishCancelled settles the transfer into CANCELLED. Used when the transfer
@@ -321,6 +333,7 @@ func (t *Transfer) finishCancelled() {
 	t.publish(now)
 	t.emitCheckpoint(now)
 	t.once.Do(func() { close(t.done) })
+	t.notifyOperational()
 }
 
 // reportProgress is the transferer's incremental byte hook: it refreshes the
@@ -382,6 +395,9 @@ func (t *Transfer) reportProgress(downloaded int64) {
 		t.lastPublishAt = now
 		t.lastPublishBytes = downloaded
 		t.mu.Unlock()
+	}
+	if publish || checkpoint {
+		t.notifyOperational()
 	}
 	if checkpoint {
 		t.mu.Lock()

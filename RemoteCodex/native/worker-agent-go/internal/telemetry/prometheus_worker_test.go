@@ -20,6 +20,7 @@ func TestPrometheusWorkerMetricsExportRequiredSurfaceAndNoAssetIDs(t *testing.T)
 	metrics.RecordCacheEvictions("ttl", 1)
 	metrics.SetWorkerActiveJobs("worker-secret-id", 3)
 	metrics.SetWorkerStatus("worker-secret-id", 2)
+	metrics.SetAssetDownloadOperational(2, 3, 4, 1, 2, 4096, 8192, 1024, 7, 9)
 
 	export := metrics.ExportPrometheus()
 	for _, name := range []string{
@@ -40,6 +41,16 @@ func TestPrometheusWorkerMetricsExportRequiredSurfaceAndNoAssetIDs(t *testing.T)
 		"velox_cache_duplicate_downloads_total",
 		"velox_cache_duplicate_download_bytes_total",
 		"velox_worker_errors_total",
+		"velox_asset_download_transfers_active",
+		"velox_asset_download_transfers_queued",
+		"velox_asset_download_transfers_ready",
+		"velox_asset_download_transfers_failed",
+		"velox_asset_download_cache_hits",
+		"velox_asset_download_bytes_downloaded",
+		"velox_asset_download_bytes_total",
+		"velox_asset_download_throughput_bytes_per_second",
+		"velox_asset_download_eta_seconds",
+		"velox_asset_download_coalesced_requests_total",
 	} {
 		if !strings.Contains(export, name) {
 			t.Errorf("Prometheus export missing %s:\n%s", name, export)
@@ -60,6 +71,17 @@ func TestPrometheusWorkerMetricsExportRequiredSurfaceAndNoAssetIDs(t *testing.T)
 	if !strings.Contains(export, `velox_task_result_submit_seconds_count{label="total"}`) {
 		t.Errorf("TaskResult submit histogram must use the static total label:\n%s", export)
 	}
+	for _, series := range []string{
+		`velox_asset_download_transfers_active{label="total"} 2`,
+		`velox_asset_download_bytes_downloaded{label="total"} 4096`,
+		`velox_asset_download_throughput_bytes_per_second{label="total"} 1024`,
+		`velox_asset_download_eta_seconds{label="total"} 7`,
+		`velox_asset_download_coalesced_requests_total{label="total"} 9`,
+	} {
+		if !strings.Contains(export, series) {
+			t.Errorf("asset operational series missing %q:\n%s", series, export)
+		}
+	}
 }
 
 // TestPrometheusWorker_ParallelismCertificationCounters verifies the
@@ -67,6 +89,26 @@ func TestPrometheusWorkerMetricsExportRequiredSurfaceAndNoAssetIDs(t *testing.T)
 // zero series (so a before-scrape never looks missing), the
 // singleflight duplicate-download counters, and the worker error
 // counter. All stay on low-cardinality static labels.
+func TestPrometheusWorker_AssetDownloadOperationalSetIsMonotonicAndLowCardinality(t *testing.T) {
+	metrics := NewPrometheusMetrics()
+	metrics.SetAssetDownloadOperational(2, 1, 3, 0, 2, 100, 200, 50, 4, 8)
+	metrics.SetAssetDownloadOperational(0, 0, 3, 1, 2, 200, 300, 0, 0, 4)
+	export := metrics.ExportPrometheus()
+	for _, series := range []string{
+		`velox_asset_download_transfers_active{label="total"} 0`,
+		`velox_asset_download_transfers_failed{label="total"} 1`,
+		`velox_asset_download_bytes_downloaded{label="total"} 200`,
+		`velox_asset_download_coalesced_requests_total{label="total"} 8`,
+	} {
+		if !strings.Contains(export, series) {
+			t.Errorf("operational series missing %q:\n%s", series, export)
+		}
+	}
+	if strings.Contains(export, "asset-id") || strings.Contains(export, "job-") {
+		t.Fatalf("operational metrics must not expose asset/job identifiers:\n%s", export)
+	}
+}
+
 func TestPrometheusWorker_ParallelismCertificationCounters(t *testing.T) {
 	metrics := NewPrometheusMetrics()
 
