@@ -34,7 +34,7 @@ func TestResolveArtifactFilePathUsesBlobStore(t *testing.T) {
 	}
 }
 
-func TestResolveArtifactFilePathUsesExplicitLegacyFallback(t *testing.T) {
+func TestResolveArtifactFilePathRejectsLegacyLocalPathFallback(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	blobStore, err := store.NewFilesystemBlobStore(filepath.Join(root, "staging"), filepath.Join(root, "final"))
@@ -46,16 +46,31 @@ func TestResolveArtifactFilePathUsesExplicitLegacyFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := resolveArtifactFilePath(blobStore, &store.Artifact{
+	_, err = resolveArtifactFilePath(blobStore, &store.Artifact{
 		ID:         "artifact-1",
 		StorageKey: filepath.Join(root, "missing.mp4"),
 		LocalPath:  legacy,
 	})
-	if err != nil {
-		t.Fatalf("resolve legacy path: %v", err)
+	if err == nil {
+		t.Fatal("legacy LocalPath must not bypass an unreadable canonical storage_key")
 	}
-	if got != legacy {
-		t.Fatalf("path = %q, want %q", got, legacy)
+	if !errors.Is(err, deliveries.ErrProviderPermanent) {
+		t.Fatalf("error = %v, want permanent classification", err)
+	}
+}
+
+func TestResolveArtifactFilePathRejectsLocalPathOnlyArtifact(t *testing.T) {
+	t.Parallel()
+	legacy := filepath.Join(t.TempDir(), "legacy.mp4")
+	if err := os.WriteFile(legacy, []byte("video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := resolveArtifactFilePath(nil, &store.Artifact{ID: "artifact-1", LocalPath: legacy})
+	if err == nil {
+		t.Fatal("artifact with only LocalPath must not be delivered")
+	}
+	if !errors.Is(err, deliveries.ErrProviderPermanent) {
+		t.Fatalf("error = %v, want permanent classification", err)
 	}
 }
 

@@ -257,10 +257,10 @@ type DriveProvider struct {
 
 ### Deliver Flow
 1. Prende `artifact.StorageKey` (relativo dal DB, es. `"artifacts/sha256/e5/..."`)
-2. Se `blobStore` è configurato:
-   - `blobStore.ReadFinal(storageKey)` — verifica esistenza file (ora risolve il path assoluto)
-   - **Se fallisce** → fallback a `artifact.LocalPath` (legacy), altrimenti `ErrProviderPermanent`
-   - **Se OK** → chiude il file, risolve `filePath` a path assoluto con `filepath.Join(blobStore.FinalDir(), storageKey)`
+2. `blobStore.ReadFinal(storageKey)` verifica l'esistenza del file canonico e
+   risolve il path assoluto. Se il `storage_key` non è leggibile, il provider
+   restituisce `ErrProviderPermanent`: non usa percorsi locali legacy e non
+   tenta alcuna destinazione alternativa.
 3. Chiama `service.UploadVideo(ctx, filePath, artifact.ID, destination.FolderID, deliveryID)`
 4. Drive crea/sceglie una sottocartella col nome del progetto, carica il file via multipart upload
 
@@ -362,7 +362,7 @@ File: `DataServer/internal/deliveries/plan_resolver.go:28`
 Tabella `delivery_destinations`:
 | Colonna | Descrizione |
 |---------|-------------|
-| `destination_id` | Identificativo univoco (es. `comedy_test`) |
+| `destination_id` | Identificativo univoco fornito esplicitamente dall'operatore |
 | `provider` | `drive` o `social_gateway` (chiave di **routing** interna a Velox — **NON** social platform) |
 | `folder_id` | Cartella Drive di destinazione (usato solo da `provider=drive`; ignorato da `provider=social_gateway`) |
 | `external_destination_id` | Identificativo **opaco** risolto server-side dalla Social API (canonical post-Migration 092). Vuoto/whitespace-only al claim time del runner → fail-closed `DESTINATION_UNMAPPED`. Vedi blockquote dopo la tabella per la closure narrative (PR-15.13 + PR-15.14). |

@@ -232,6 +232,10 @@ def assert_no_forbidden(payload: dict, *, path: str = "$") -> list[str]:
 
 
 def cmd_build(args: argparse.Namespace) -> int:
+    if not isinstance(args.destination, str) or not args.destination.strip():
+        print("error: --destination must be a non-empty explicit destination_id", file=sys.stderr)
+        return 2
+    args.destination = args.destination.strip()
     fixtures_path = Path(args.fixtures)
     fixtures = load_fixtures(fixtures_path)
     payload = build_payload(
@@ -270,6 +274,10 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 def cmd_selftest(args: argparse.Namespace) -> int:
     """Dry-run without I/O: build a payload, run strict validation, exit."""
+    if not isinstance(args.destination, str) or not args.destination.strip():
+        print("error: --destination must be a non-empty explicit destination_id", file=sys.stderr)
+        return 2
+    args.destination = args.destination.strip()
     fixtures_path = Path(args.fixtures)
     fixtures = load_fixtures(fixtures_path)
     payload = build_payload(
@@ -307,10 +315,10 @@ def main(argv: list[str] | None = None) -> int:
         ),
         epilog=(
             "Examples:\n"
-            "  # Print payload for host_57_131_20_173 (default destination\n"
-            "  # comedy_test, executor scene.composite.v1@1) to stdout:\n"
+            "  # Print payload for a worker and an explicitly selected destination:\n"
             "  python3 tests/worker-cert/build_real_payload.py \\\n"
-            "    --worker-id host_57_131_20_173\n\n"
+            "    --worker-id host_57_131_20_173 \\\n"
+            "    --destination drive-production\n\n"
             "  # Write to a file for shell piping via --payload-file:\n"
             "  python3 tests/worker-cert/build_real_payload.py \\\n"
             "    --worker-id host_57_131_20_173 \\\n"
@@ -332,9 +340,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--destination",
-        default="comedy_test",
-        help="delivery destination_id (default: comedy_test, the canonical "
-        "smoke destination per the runbook)",
+        required=True,
+        help="explicit delivery destination_id; implicit destinations are forbidden",
     )
     parser.add_argument(
         "--target-executor-id",

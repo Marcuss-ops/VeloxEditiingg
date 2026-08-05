@@ -28,7 +28,7 @@
 #       VELOX_ADMIN_TOKEN=... \
 #       ./tests/worker-cert/fleet_distribute.sh
 #
-#   ./tests/worker-cert/fleet_distribute.sh --fleet-job-count 6 --destination-id comedy_test
+#   ./tests/worker-cert/fleet_distribute.sh --fleet-job-count 6 --destination-id drive-production
 #
 # Environment contract:
 #   VELOX_MASTER_URL    base URL of the Velox master (default http://127.0.0.1:8080)
@@ -102,7 +102,7 @@ COOLDOWN_S="${FLEET_COOLDOWN_S:-30}"
 POLL_TIMEOUT_S="${FLEET_POLL_TIMEOUT_S:-300}"
 IDLE_SLEEP_MS="${FLEET_IDLE_SLEEP_MS:-100}"
 REPORT_JSON=""
-DESTINATION_ID="${FLEET_DESTINATION_ID:-comedy_test}"
+DESTINATION_ID="${FLEET_DESTINATION_ID:-}"
 VELOX_MASTER_LOG_PATH="${VELOX_MASTER_LOG_PATH:-}"
 
 while (( $# > 0 )); do
@@ -137,6 +137,10 @@ if ! [[ "$POLL_TIMEOUT_S" =~ ^[0-9]+$ ]] || (( POLL_TIMEOUT_S < 30 )); then
 fi
 if ! [[ "$IDLE_SLEEP_MS" =~ ^[0-9]+$ ]]; then
   log_error "--idle-sleep-ms must be a non-negative integer (got: $IDLE_SLEEP_MS)"
+  exit 2
+fi
+if [[ -z "$DESTINATION_ID" ]]; then
+  log_error "FLEET_DESTINATION_ID or --destination-id is required; implicit Drive destinations are forbidden"
   exit 2
 fi
 
@@ -271,18 +275,13 @@ for i in $(seq 1 "$FLEET_JOB_COUNT"); do
   log_info "[submit ${slot}/${FLEET_JOB_COUNT}] building payload for ${job_slug}"
   if ! python3 "${REPO_ROOT}/tests/worker-cert/build_real_payload.py" \
         --worker-id "${job_slug}" \
+        --destination "$DESTINATION_ID" \
         --strict \
         --output "$payload_file" >/dev/null 2>>"${TMP_LOG_DIR}/${job_slug}.stderr"; then
     log_error "FAIL: payload build for slot=${slot} (see ${TMP_LOG_DIR}/${job_slug}.stderr)"
     OVERALL_FATAL_RC=5
     break
   fi
-
-  # Inject destination_id into the freshly built payload (build_real_payload
-  # defaults to comedy_test, but make it ENV-driven for override).
-  tmp_payload="${payload_file}.tmp"
-  jq --arg dest "$DESTINATION_ID" '.delivery_plan[0].destination_id = $dest' \
-    "$payload_file" > "$tmp_payload" && mv -f "$tmp_payload" "$payload_file"
 
   POST_STATUS=$(curl -sS -m 30 -X POST \
     -H "Authorization: Bearer $M2M_BEARER" \

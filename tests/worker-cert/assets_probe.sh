@@ -6,7 +6,7 @@
 #   ./tests/worker-cert/assets_probe.sh <worker_id>
 #   VELOX_MASTER_URL=https://velox.example.com \
 #     VELOX_ADMIN_TOKEN=... \
-#     PROBE_DESTINATION_ID=comedy_test \
+#     PROBE_DESTINATION_ID=drive-production \
 #     ./tests/worker-cert/assets_probe.sh host_57_131_20_173
 #
 # What the script does (8 probes per the user-spec checklist):
@@ -96,7 +96,7 @@ ensure_command_available sha256sum   || { log_warn "sha256sum missing: probe 6 (
 ensure_command_available awk sed grep || { log_error "awk/sed/grep missing"; exit 2; }
 
 [[ -n "${VELOX_MASTER_URL:-}"    ]] || VELOX_MASTER_URL="http://127.0.0.1:8080"
-[[ -n "${PROBE_DESTINATION_ID:-}" ]] || PROBE_DESTINATION_ID="comedy_test"
+[[ -n "${PROBE_DESTINATION_ID:-}" ]] || { log_error "PROBE_DESTINATION_ID is required; implicit Drive destinations are forbidden"; exit 2; }
 [[ -n "${PROBE_POLL_TIMEOUT_S:-}" ]] || PROBE_POLL_TIMEOUT_S=180
 [[ -n "${PROBE_OUT_ROOT:-}"       ]] || PROBE_OUT_ROOT="${REPO_ROOT}/tests/worker-cert/workers"
 [[ -n "${PROBE_ARTIFACT_DIR:-}"   ]] || PROBE_ARTIFACT_DIR="${REPO_ROOT}/tests/worker-cert/artifacts"

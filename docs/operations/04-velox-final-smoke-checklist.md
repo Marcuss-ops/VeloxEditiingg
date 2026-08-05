@@ -108,7 +108,7 @@ If the smoke fails before submit:
 | `403 public access forbidden` | Application allowlist rejected the client IP. | Add the client source IP to `VELOX_ALLOWED_WORKER_IPS` and restart Master. |
 | `VELOX_M2M_TOKEN=unset` | Client has no submit credential. | Export a valid M2M `plaintext_secret` with `jobs.submit`. |
 | `401` from `/api/v1/jobs` | Token is wrong, inactive, expired, or not known by this Master DB. | Mint/export a new M2M token. |
-| `422 destination_id` | Delivery destination is not registered/enabled. | Use `comedy_test` for the current smoke or register the target destination. |
+| `422 destination_id` | Delivery destination is not registered/enabled. | Register and pass the exact destination ID selected for this run. |
 
 For the current live smoke, use:
 
@@ -116,7 +116,7 @@ For the current live smoke, use:
 {
   "delivery_plan": [
     {
-      "destination_id": "comedy_test",
+      "destination_id": "<explicit-destination-id>",
       "priority": 1,
       "retry_budget": 3
     }
@@ -170,7 +170,7 @@ C:\video\clip.mp4
 - [ ] For the current live smoke use:
 
 ```json
-"destination_id": "comedy_test"
+"destination_id": "<explicit-destination-id>"
 ```
 
 - [ ] Validate JSON before submit.

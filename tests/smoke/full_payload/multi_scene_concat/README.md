@@ -8,7 +8,7 @@ verifies four things:
 |---|---|---|
 | **T1** | `SUCCEEDED` reached via the master state machine | poll `GET /api/v1/jobs/{job_id}` until `.status == SUCCEEDED` (1→2→4→8→16s exp backoff, cap `MULTISCENE_POLL_TIMEOUT_S=600`) |
 | **T2** | duration coherence (sum of `scene.duration_seconds` vs measured output `duration_seconds` via `ffprobe`) | download artifact via the bearer-authed `artifact_url`, run `ffprobe -show_format`, compare against expected `± max(500ms, 5%)` |
-| **T3** | Drive delivery to `comedy_test` destination | `status == SUCCEEDED` ⇒ all `delivery_plan` entries committed (canonical monotonic guarantee per `SubmitJobStatusResponse`) **and** `artifact_size_bytes > 0` (HEAD probe via `smoke_artifact_size`) |
+| **T3** | Drive delivery to the explicitly selected destination | `status == SUCCEEDED` ⇒ all `delivery_plan` entries committed (canonical monotonic guarantee per `SubmitJobStatusResponse`) **and** `artifact_size_bytes > 0` (HEAD probe via `smoke_artifact_size`) |
 | **T4** | placement-pin enforcement (lease was issued to `<worker_id>`) | scrape master log line `TaskLeaseGranted sent to worker <ID> (...) task=<TID> job=<JID> attempt=<AID> lease=<LID>` via `smoke_scrape_lease`; fallback to `current_task_id` race-prone check |
 
 In addition, the smoke records **CPU/RAM/disk** measurement: a worker metrics
@@ -86,7 +86,7 @@ Most-severe-tier ordering on the final exit: `T2 > T4 > T3 > T1`.
 | `VELOX_ADMIN_TOKEN` | unset | admin bearer for `/api/v1/admin/m2m/keys` |
 | `TOKEN_FILE` | unset | dotenv alternative |
 | `MULTISCENE_TARGET_WORKER_ID` | unset | pinned worker_id |
-| `MULTISCENE_DESTINATION_ID` | `comedy_test` | destination_id |
+| `MULTISCENE_DESTINATION_ID` | **required** | destination_id |
 | `MULTISCENE_POLL_TIMEOUT_S` | `600` | poll cap seconds |
 | `VELOX_MASTER_LOG_PATH` | unset | lease-scrape source (fallback: `journalctl -u velox-server`) |
 | `FULLPAYLOAD_TARGET_EXECUTOR_ID` | `scene.composite.v1@1` | executor to pin |

@@ -536,7 +536,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--set-cap-command", default=os.getenv("PARALLEL_BENCH_SET_CAP_CMD", ""))
     parser.add_argument("--builder", type=Path, default=Path(__file__).with_name("build_real_payload.py"))
     parser.add_argument("--fixtures", type=Path, default=Path(__file__).with_name("fixtures") / "assets.json")
-    parser.add_argument("--destination", default=os.getenv("BENCH_DESTINATION_ID", "comedy_test"))
+    parser.add_argument(
+        "--destination",
+        required=not bool(os.getenv("BENCH_DESTINATION_ID", "").strip()),
+        default=os.getenv("BENCH_DESTINATION_ID", "").strip() or None,
+        help="explicit delivery destination_id; implicit destinations are forbidden",
+    )
     parser.add_argument("--jobs", type=int, default=int(os.getenv("PARALLEL_BENCH_JOBS", "6")))
     parser.add_argument("--poll-timeout-s", type=int, default=int(os.getenv("BENCH_POLL_TIMEOUT_S", "300")))
     parser.add_argument("--wait-cap-timeout-s", type=int, default=120)

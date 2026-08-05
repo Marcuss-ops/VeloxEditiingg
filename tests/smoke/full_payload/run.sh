@@ -50,7 +50,7 @@
 #   VELOX_ADMIN_TOKEN                admin bearer for /api/v1/admin/m2m/keys
 #                                    (set this OR TOKEN_FILE)
 #   TOKEN_FILE                       dotenv alternative for VELOX_ADMIN_TOKEN
-#   FULLPAYLOAD_DESTINATION_ID       destination_id override (default: comedy_test)
+#   FULLPAYLOAD_DESTINATION_ID       required explicit destination_id
 #   FULLPAYLOAD_TARGET_EXECUTOR_ID   target_executor_id override
 #                                    (default: scene.composite.v1@1)
 #   FULLPAYLOAD_SCENARIO             scenario.json path override
@@ -117,7 +117,11 @@ done
 # Defaults (overridable via env). Runtime asset/worker values are intentionally
 # required below; inventing them would produce a smoke that cannot run.
 : "${VELOX_MASTER_URL:=http://127.0.0.1:8080}"
-: "${FULLPAYLOAD_DESTINATION_ID:=comedy_test}"
+: "${FULLPAYLOAD_DESTINATION_ID:=}"
+if [[ -z "$FULLPAYLOAD_DESTINATION_ID" ]]; then
+  log_error "FULLPAYLOAD_DESTINATION_ID is required; implicit Drive destinations are forbidden"
+  exit 2
+fi
 : "${FULLPAYLOAD_TARGET_EXECUTOR_ID:=scene.composite.v1@1}"
 : "${FULLPAYLOAD_SCENARIO:=${SCRIPT_DIR}/fixtures/scenario.json}"
 : "${FULLPAYLOAD_EVIDENCE_DIR:=${SCRIPT_DIR}/evidence}"

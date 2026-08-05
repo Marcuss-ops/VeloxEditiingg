@@ -23,7 +23,7 @@
 #      session_active=true, AND that at least 2 CONNECTED workers are
 #      present (so a healthy backup can receive the re-lease).
 #   4. POST /api/v1/jobs with a real-asset payload (velox-asset://<asset_id>,
-#      destination comedy_test, scene.composite.v1@1 explicit). Waits for the
+#      an explicitly selected destination and scene.composite.v1@1. Waits for the
 #      master log to emit TaskLeaseGranted to <target_worker_id>.
 #   5. Snapshots original task_id / attempt_id / lease_id / lease_expires_at.
 #   6. Executes --target-worker-stop-cmd (operator-provided) to gracefully
@@ -87,7 +87,7 @@ NO_FAST_FORWARD=0
 HEARTBEAT_POLL_TIMEOUT_S="${HEARTBEAT_POLL_TIMEOUT_S:-180}"
 SUCCEEDED_POLL_TIMEOUT_S="${SUCCEEDED_POLL_TIMEOUT_S:-300}"
 REAPER_POLL_TIMEOUT_S="${REAPER_POLL_TIMEOUT_S:-90}"
-DESTINATION_ID="${RECOVERY_DESTINATION_ID:-comedy_test}"
+DESTINATION_ID="${RECOVERY_DESTINATION_ID:-}"
 REPORT_JSON=""
 DB_PATH="${VELOX_DB_PATH:-}"
 VELOX_MASTER_LOG_PATH="${VELOX_MASTER_LOG_PATH:-}"
@@ -115,6 +115,9 @@ if [[ -z "$TARGET_WORKER_ID" ]]; then
 fi
 if [[ -z "$STOP_CMD" ]]; then
   log_error "missing required --target-worker-stop-cmd (e.g. 'ssh host kill -TERM <pid>' or 'kill -TERM <pid>' for local)"; exit 2
+fi
+if [[ -z "$DESTINATION_ID" ]]; then
+  log_error "RECOVERY_DESTINATION_ID or --destination-id is required; implicit Drive destinations are forbidden"; exit 2
 fi
 
 # Trailing-slash trim on URL so the join with explicit /api/v1/jobs is clean.
@@ -264,14 +267,13 @@ TMP_PAYLOAD=$(mktemp "${REPO_ROOT}/tests/worker-cert/.tmp-payload.XXXXXX.json")
 log_info "building payload via build_real_payload.py → $TMP_PAYLOAD"
 if ! python3 "${REPO_ROOT}/tests/worker-cert/build_real_payload.py" \
       --worker-id "recovery-${TARGET_WORKER_ID}" \
+      --destination "$DESTINATION_ID" \
       --strict \
       --output "$TMP_PAYLOAD" >/dev/null 2>&1; then
   log_error "FAIL: payload build via build_real_payload.py"; rm -f "$TMP_PAYLOAD"; exit 5
 fi
-# Override destination_id (build_real_payload defaults to comedy_test)
-tmp_p2="${TMP_PAYLOAD}.2"
-jq --arg dest "$DESTINATION_ID" '.delivery_plan[0].destination_id = $dest' \
-  "$TMP_PAYLOAD" > "$tmp_p2" && mv -f "$tmp_p2" "$TMP_PAYLOAD"
+# The builder already received the explicit destination; do not rewrite
+# the payload after validation.
 
 # POST
 TMP_HDRS=$(mktemp); TMP_BODY=$(mktemp)

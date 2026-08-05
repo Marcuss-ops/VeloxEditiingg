@@ -23,7 +23,7 @@ under-stress.
 |---|---|---|
 | **T1** | `SUCCEEDED` reached via the master state machine | poll `GET /api/v1/jobs/{job_id}` until `.status == SUCCEEDED` (1→2→4→8→16s exp backoff, cap `MULTISCENE_POLL_TIMEOUT_S=600`) |
 | **T2** | duration coherence (sum of `scene.duration_seconds` vs measured output `duration_seconds` via `ffprobe`) | download artifact via bearer-authed `artifact_url`, run `ffprobe -show_format`, compare against expected `± max(500ms, 5%)` |
-| **T3** | Drive delivery to `comedy_test` destination | `status == SUCCEEDED` ⇒ all `delivery_plan` entries committed (canonical monotonic guarantee per `SubmitJobStatusResponse`) **and** `artifact_size_bytes > 0` (HEAD probe via `smoke_artifact_size`) |
+| **T3** | Drive delivery to the explicitly selected destination destination | `status == SUCCEEDED` ⇒ all `delivery_plan` entries committed (canonical monotonic guarantee per `SubmitJobStatusResponse`) **and** `artifact_size_bytes > 0` (HEAD probe via `smoke_artifact_size`) |
 | **T4** | placement-pin enforcement | scrape master log line `TaskLeaseGranted sent to worker <ID> (...) task=<TID> job=<JID> attempt=<AID> lease=<LID>` via `smoke_scrape_lease`; fallback to `current_task_id` race-prone check |
 | **T5** | CPU/RAM/disk | snap `GET /api/v1/workers/{id}` BEFORE submit, snap AFTER `SUCCEEDED`, report `disk_used_bytes`, `cpu_utilization_ratio`, `memory_used_bytes` deltas |
 
@@ -125,7 +125,7 @@ Per the openapi `SubmitJobStatusResponse` contract: `status=SUCCEEDED` is
 the canonical monotonic guarantee that (a) the artifact has been committed
 to its destination and (b) all `delivery_plan` entries reached `SUBMITTED`
 state. The harness asserts `status == SUCCEEDED && artifact_size_bytes > 0`
-to confirm Drive delivery to `comedy_test`.
+to confirm Drive delivery to the explicitly selected destination.
 
 **Known limitation:** `status=SUCCEEDED` does NOT expose per-destination
 delivery status — only that ALL `delivery_plan` entries are committed.

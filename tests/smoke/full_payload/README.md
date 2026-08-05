@@ -57,7 +57,7 @@ tests/smoke/full_payload/run.sh
 | `VELOX_MASTER_URL`               | `http://127.0.0.1:8080` | master HTTP base. Trim trailing `/`. |
 | `VELOX_ADMIN_TOKEN`              | _required_ for `--mode=submit` | bearer for `/api/v1/admin/m2m/keys` |
 | `TOKEN_FILE`                     | _unset_                 | dotenv alternative; first `VELOX_ADMIN_TOKEN=` line wins |
-| `FULLPAYLOAD_DESTINATION_ID`     | `comedy_test`           | `delivery_plan[0].destination_id` |
+| `FULLPAYLOAD_DESTINATION_ID`     | **required**            | `delivery_plan[0].destination_id` |
 | `FULLPAYLOAD_TARGET_EXECUTOR_ID` | `scene.composite.v1@1`  | `target_executor_id` |
 | `FULLPAYLOAD_WORKER_ID`          | _required_              | `placement_pin_worker_id` |
 | `FULLPAYLOAD_BACKGROUND_MUSIC_ASSET_ID` | _required_         | registered SHA-256 asset ID |
@@ -111,7 +111,7 @@ back-to-back runs in the same epoch second collision-safe. Schema:
   "job_id": "job_...",
   "status": "SUCCEEDED",
   "target_executor_id": "scene.composite.v1@1",
-  "destination_id": "comedy_test",
+  "destination_id": "<explicit-destination-id>",
   "render_time_ms": 2157,
   "artifact_size_bytes": 1915466,
   "started_at": "2026-07-28T...",

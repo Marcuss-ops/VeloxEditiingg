@@ -163,7 +163,7 @@ The render job can still use a Drive or other registered destination:
 {
   "delivery_plan": [
     {
-      "destination_id": "comedy_test",
+      "destination_id": "<explicit-destination-id>",
       "retry_budget": 3
     }
   ]

@@ -10,7 +10,7 @@
 #   T1  SUCCEEDED reached via the master state machine
 #   T2  duration coherence (sum of scene.duration_seconds vs measured output
 #       duration_seconds via ffprobe on the artifact body)
-#   T3  Drive delivery to comedy_test (status=SUCCEEDED implies all
+#   T3  Drive delivery to the explicitly selected destination (status=SUCCEEDED implies all
 #       delivery_plan entries committed per SubmitJobStatusResponse contract)
 #   T4  worker pin (placement-pin: lease was issued to <worker_id> via
 #       master log scrape; same pattern as tests/worker-cert/smoke_one.sh)
@@ -50,7 +50,7 @@
 #                                   (set this OR TOKEN_FILE)
 #   TOKEN_FILE                      dotenv alternative for VELOX_ADMIN_TOKEN
 #   MULTISCENE_TARGET_WORKER_ID     target worker_id (overridden by --worker-id)
-#   MULTISCENE_DESTINATION_ID       destination_id override (default: comedy_test)
+#   MULTISCENE_DESTINATION_ID       required explicit destination_id
 #   MULTISCENE_POLL_TIMEOUT_S       polling cap seconds (default: 600)
 #   VELOX_MASTER_LOG_PATH           path to velox-server log (lease-scrape source)
 #
@@ -133,7 +133,11 @@ fi
 
 # Defaults (overridable via env).
 : "${VELOX_MASTER_URL:=http://127.0.0.1:8080}"
-: "${MULTISCENE_DESTINATION_ID:=comedy_test}"
+: "${MULTISCENE_DESTINATION_ID:=}"
+if [[ -z "$MULTISCENE_DESTINATION_ID" ]]; then
+  log_error "MULTISCENE_DESTINATION_ID is required; implicit Drive destinations are forbidden"
+  exit 2
+fi
 : "${FULLPAYLOAD_TARGET_EXECUTOR_ID:=scene.composite.v1@1}"
 : "${MULTISCENE_EVIDENCE_DIR:=${SCRIPT_DIR}/evidence}"
 

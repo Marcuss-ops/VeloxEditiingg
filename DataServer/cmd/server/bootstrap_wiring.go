@@ -175,15 +175,10 @@ func wireFleetOperatorHandlers(fleetDep *FleetDep, m *moduleDeps, p *persistence
 					smokeBackend.Drive = &driveUploaderAdapter{svc: svc}
 					log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: production Drive adapter wired (integrations/drive.Service)")
 				} else {
-					log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: Drive module present but Service() is nil — falling back to LocalFileDriveUploader")
+					log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: Drive module present but Service() is nil — smoke remains not wired")
 				}
-			}
-			// Fallback: when Drive is not configured, use local-file
-			// uploader so smoke can still complete Phase 6 (artifact
-			// saved to /tmp/velox-smoke-drive instead of Google Drive).
-			if smokeBackend.Drive == nil {
-				smokeBackend.Drive = fleet.NewLocalFileDriveUploader()
-				log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: Drive not configured — using LocalFileDriveUploader (smoke artifacts saved to /tmp/velox-smoke-drive)")
+			} else {
+				log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: Drive module unavailable — smoke remains not wired")
 			}
 			// Stub asset resolver so Phase 1 resolves a canned pickup
 			// URL. The worker downloads the asset bundle via SSH; the
