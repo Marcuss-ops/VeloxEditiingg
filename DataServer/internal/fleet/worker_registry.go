@@ -33,6 +33,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"velox-shared/identity"
 )
 
 // ---------------------------------------------------------------------------
@@ -41,13 +43,13 @@ import (
 
 // WorkerRegistryEntry holds the connectivity details for a single worker.
 type WorkerRegistryEntry struct {
-	WorkerID           string // canonical id (e.g. "velox-worker-523925eb")
-	Host               string // IP or hostname
-	SSHUser            string // SSH username (e.g. debian, ubuntu)
-	SSHPort            int    // SSH port (0 means default 22)
-	HostKeyFingerprint string // expected host key fingerprint (SHA256:...) — for known_hosts population
-	HealthPort         int    // HTTP health endpoint port (0 means default 8081)
-	WorkDir            string // worker data directory (empty means /var/lib/velox-worker)
+	WorkerID           identity.WorkerID // canonical id (e.g. "velox-worker-523925eb")
+	Host               string            // IP or hostname
+	SSHUser            string            // SSH username (e.g. debian, ubuntu)
+	SSHPort            int               // SSH port (0 means default 22)
+	HostKeyFingerprint string            // expected host key fingerprint (SHA256:...) — for known_hosts population
+	HealthPort         int               // HTTP health endpoint port (0 means default 8081)
+	WorkDir            string            // worker data directory (empty means /var/lib/velox-worker)
 }
 
 // ---------------------------------------------------------------------------
@@ -60,20 +62,20 @@ type WorkerRegistryEntry struct {
 // registry is read-only at runtime.
 type WorkerRegistry struct {
 	mu      sync.RWMutex
-	entries map[string]WorkerRegistryEntry
+	entries map[identity.WorkerID]WorkerRegistryEntry
 }
 
 // NewWorkerRegistry creates an empty registry.
 func NewWorkerRegistry() *WorkerRegistry {
 	return &WorkerRegistry{
-		entries: make(map[string]WorkerRegistryEntry),
+		entries: make(map[identity.WorkerID]WorkerRegistryEntry),
 	}
 }
 
 // AddWorker registers a worker. Returns error on duplicate workerID
 // or invalid fields.
 func (r *WorkerRegistry) AddWorker(e WorkerRegistryEntry) error {
-	if err := validateWorkerID(e.WorkerID); err != nil {
+	if err := validateWorkerID(e.WorkerID.String()); err != nil {
 		return fmt.Errorf("worker registry: %w", err)
 	}
 	if strings.TrimSpace(e.Host) == "" {
@@ -102,10 +104,12 @@ func (r *WorkerRegistry) AddWorker(e WorkerRegistryEntry) error {
 }
 
 // GetWorker returns the entry for workerID, or nil if not found.
+// The string parameter is the wire-boundary form; it is parsed into the
+// canonical WorkerID before the map lookup.
 func (r *WorkerRegistry) GetWorker(workerID string) *WorkerRegistryEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	e, ok := r.entries[workerID]
+	e, ok := r.entries[identity.ParseWorkerID(workerID)]
 	if !ok {
 		return nil
 	}
