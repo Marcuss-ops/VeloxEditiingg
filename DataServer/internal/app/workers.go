@@ -191,23 +191,14 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 		workerAdmin.GET("/revoked", m.workerLifecycle.ListRevokedWorkersHandler())
 		workerAdmin.POST("/drain", m.workerLifecycle.DrainWorkerHandler())
 		workerAdmin.POST("/restart", m.workerLifecycle.RestartWorkerHandler())
-		workerAdmin.POST("/request_update", m.workerLifecycle.RequestUpdateHandler())
 	}
 
-	if m.workerUpdateHandler != nil {
-		r.POST("/bundle/manifest/generate", m.workerUpdateHandler.GenerateManifestV2Handler())
-		// Canonical v2 bundle routes.
-		r.GET("/api/worker/v2/manifest", m.workerUpdateHandler.GetManifestV2Handler())
-		r.GET("/api/worker/v2/chunk/:chunkName", m.workerUpdateHandler.GetChunkV2Handler())
-		// Bundle update + rebuild routes (admin-gated — fleet-wide mutations).
-		adminBundle := r.Group("")
-		if m.adminAuth != nil {
-			adminBundle.Use(m.adminAuth)
-		}
-		adminBundle.POST("/install_worker/force_regenerate_zip", m.workerUpdateHandler.ForceRegenerateZipHandler())
-		adminBundle.POST("/workers/full_update_linux", m.workerUpdateHandler.FullUpdateLinuxHandler())
-		adminBundle.POST("/workers/update_all_latest_bundle", m.workerUpdateHandler.UpdateAllLatestBundleHandler())
-	}
+	// Legacy bundle/update HTTP routes were retired. Bundle generation,
+	// manifest/chunk serving, force rebuild, fleet-wide bundle updates, and
+	// worker-requested updates are intentionally not mounted here; callers
+	// must use the canonical admin worker update operation and the current
+	// worker control protocol. Keeping the handlers available for internal
+	// migration/tests does not expose a legacy HTTP surface.
 
 	if m.workerAssetHandler != nil {
 		r.GET("/api/v1/worker-assets/:asset_id", m.workerAssetHandler.ServeAsset())

@@ -113,27 +113,21 @@ Same shape as a single element of the list. Returns `404` if the worker is not r
 }
 ```
 
-## Worker-update endpoints (unchanged)
+## Canonical worker operations
 
-The following worker-management endpoints are unchanged by the connection-status change; documented for completeness.
+Worker updates are submitted through the authenticated fleet API and tracked
+through the persisted operation ledger:
 
-### GET /api/v1/workers/status
-Dashboard status with master and worker metadata, mismatch warnings.
+### POST /api/v1/admin/workers/:worker_id/update
 
-### POST /api/v1/workers/update_all
-Trigger update on all workers.
+Requires an immutable GHCR image digest in `target_digest` and returns an
+`operation_id` for asynchronous tracking.
 
-### POST /api/v1/workers/rollout_update
-Rollout update to a subset of workers.
+### GET /api/v1/admin/operations/:operation_id
 
-### POST /api/v1/workers/restart_all
-Restart all worker containers.
+Poll the operation until it reaches a terminal state.
 
-### POST /api/v1/workers/send_command_bulk
-Send a command to multiple workers.
-
-### GET /api/v1/workers/commands
-Workers poll for pending commands (heartbeat endpoint).
-
-### POST /api/v1/workers/commands/ack
-Worker acknowledges a command execution.
+Worker registration, command delivery, heartbeats, and acknowledgements use
+the current worker control protocol. The former bundle/update routes are
+retired and are deliberately not documented as active API surfaces; see
+`docs/api/bundle.md` for the complete 404 contract.

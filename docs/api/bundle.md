@@ -1,117 +1,51 @@
 # Bundle API
 
-## POST /bundle/manifest/generate
+## Retired bundle/update routes
 
-Regenerate `manifest_v2.json` from current config and bundle SHA256.
+The legacy bundle and worker-update HTTP surfaces have been removed from the
+Velox router. Every route below is intentionally unmounted and must return
+`HTTP 404` (with or without authentication):
 
-### Response
+```text
+POST /bundle/manifest/generate
+GET  /api/worker/v2/manifest
+GET  /api/worker/v2/chunk/:chunkName
+POST /install_worker/force_regenerate_zip
+POST /workers/full_update_linux
+POST /workers/update_all_latest_bundle
+POST /worker/request_update
+```
+
+The handler implementations may remain in the repository for internal
+migration tooling and focused unit tests, but they are not public HTTP
+surfaces. Do not re-register them in `internal/app.WorkersModule`.
+
+## Canonical replacements
+
+Use the canonical fleet API for worker updates:
+
+```text
+POST /api/v1/admin/workers/:worker_id/update
+GET  /api/v1/admin/operations/:operation_id
+```
+
+The update request requires an immutable GHCR image digest, for example:
 
 ```json
 {
-  "ok": true,
-  "message": "Manifest regenerated",
-  "path": "/path/to/manifest_v2.json",
-  "version": "v1.0.6",
-  "code_version": "v1.0.6",
-  "build_hash": "da65a9fb...",
-  "bundle_path": "/path/to/worker_code_linux_x86_64.zip"
+  "target_digest": "ghcr.io/marcuss-ops/velox-worker@sha256:<64-hex-digits>",
+  "reason": "operator-requested worker update"
 }
 ```
 
-### Manifest V2 schema
+Use the worker control protocol for worker registration, command delivery,
+heartbeats, and acknowledgements. Bundle rebuilds are internal deployment
+operations and are no longer exposed as legacy HTTP endpoints.
 
-```json
-{
-  "version": "v1.0.6",
-  "code_version": "v1.0.6",
-  "bundle_version": "v1.0.6",
-  "build_hash": "<sha256>",
-  "bundle_hash": "<sha256>",
-  "protocol_version": "2026-06-worker-v1",
-  "engine_version": "v1.0.6",
-  "platform": "linux",
-  "arch": "x86_64",
-  "timestamp": "2026-06-12T14:00:36Z",
-  "generated_at": "2026-06-12T14:00:36Z"
-}
-```
+## Supported bundle artifacts
 
-## GET /api/worker/v2/manifest
-
-Serve `manifest_v2.json` directly.
-
-## GET /api/worker/bundle
-
-Download the worker bundle zip.
-
-### Query params
-- `platform` (default: `linux`)
-- `arch` (default: `x86_64`)
-
-### Response headers
-- `X-Bundle-SHA256`: SHA256 of the bundle
-
-## GET /api/worker/bundle/files
-
-List files inside the bundle zip.
-
-### Query params
-- `platform` (default: `linux`)
-- `arch` (default: `x86_64`)
-- `path` / `prefix` - filter by directory prefix
-
-## GET /install_worker/latest
-
-Get latest bundle info with hash.
-
-### Response
-
-```json
-{
-  "bundle_hash": "da65a9fb...",
-  "manifest_url": "/install_worker/manifest/{hash}?platform=linux&arch=x86_64",
-  "updated_at": "2026-06-12T14:00:36Z",
-  "filename": "worker_code_linux_x86_64.zip"
-}
-```
-
-## GET /install_worker/manifest/:bundle_hash
-
-Get bundle file listing for a specific bundle hash.
-
-### Query params
-- `platform` (default: `linux`)
-- `arch` (default: `x86_64`)
-
-### Response
-
-```json
-{
-  "bundle_hash": "da65a9fb...",
-  "platform": "linux",
-  "arch": "x86_64",
-  "file_count": 42,
-  "files": [...],
-  "dir_hash": { "internal/": "...", "cmd/": "..." }
-}
-```
-
-## GET /bundle_manifest.json
-
-Full manifest with protocol_version, version info, and file inspection.
-
-### Response
-
-```json
-{
-  "version": "v1.0.6",
-  "code_version": "v1.0.6",
-  "protocol_version": "2026-06-worker-v1",
-  "platform": "linux",
-  "arch": "x86_64",
-  "sha256": "...",
-  "file_count": 42,
-  "top_dirs": ["internal/", "cmd/"],
-  "runtime": "go1.21"
-}
-```
+Bundle files remain implementation artifacts used by the canonical worker
+runtime and deployment tooling. Their on-disk manifest (`manifest_v2.json`)
+is not itself a public route. Any new download or inspection surface must be
+introduced under an explicitly versioned canonical API and covered by a route
+contract test before registration.
