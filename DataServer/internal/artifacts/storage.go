@@ -146,6 +146,15 @@ func PromoteToCanonical(blobStore store.BlobStore, stagingPath, sha256Hex, exten
 			ErrBlobPromoteFailed, tempPath, finalPath, err)
 	}
 
+	// The canonical copy is durable now; remove the upload staging file so
+	// successful finalization cannot leave a second, non-addressable copy of
+	// the artifact behind. If cleanup fails, surface it rather than silently
+	// claiming the staging area is clean; the already-promoted final blob is
+	// intentionally left for the reconciler to classify as an orphan.
+	if err := os.Remove(filepath.Clean(stagingPath)); err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("%w: remove staging %s: %v", ErrBlobPromoteFailed, stagingPath, err)
+	}
+
 	// 8. fsync the directory entry (POSIX best-effort).
 	if dir, derr := os.Open(filepath.Dir(finalPath)); derr == nil {
 		_ = dir.Sync()

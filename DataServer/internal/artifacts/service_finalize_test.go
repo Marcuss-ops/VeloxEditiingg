@@ -159,6 +159,11 @@ func TestFinalize_BlobPromotedButDBCASMissed(t *testing.T) {
 	_, err = env.svc.Receive(context.Background(), sess.UploadID, uploadBytes(payload))
 	require.NoError(t, err)
 
+	// Capture the detected extension before Finalize removes the staging
+	// source after the atomic promotion. The final path must remain
+	// addressable even when the SQL transaction later rolls back.
+	detectedExt := mimeToExt(detectMIME(sess.TemporaryStorageKey))
+
 	// White-box mutation: flip job status to CANCELED so the CAS in
 	// FinalizeArtifactAndCompleteJob fails. Finalize itself does NOT
 	// pre-check jobs.status — promote happens BEFORE the SQL tx — so
@@ -186,7 +191,6 @@ func TestFinalize_BlobPromotedButDBCASMissed(t *testing.T) {
 	// The finalized extension comes from the detected MIME type, not
 	// the requested upload MIME, so compute it the same way the service
 	// does before asserting the promoted blob path.
-	detectedExt := mimeToExt(detectMIME(sess.TemporaryStorageKey))
 	_, absFinal, err := FinalStorageKey(env.bs, sha256Hex(payload), detectedExt)
 	require.NoError(t, err)
 	_, err = os.Stat(absFinal)
