@@ -38,11 +38,12 @@ import (
 )
 
 // ErrSkippedByOverride is returned when VELOX_SKIP_COSIGN_VERIFY=1
-// is set in the process env. This mirrors the production override
-// path in deploy/runtime/prepare-host.sh:183 — incident-response
-// override for when the cosign infra is down and the operator
-// needs to deploy anyway. MUST be logged + audit-trailed by
-// callers; the security model collapses under the override.
+// is set together with a non-empty VELOX_COSIGN_OVERRIDE_REASON.
+// This mirrors the production override path in
+// deploy/runtime/prepare-host.sh — incident-response override for
+// when the cosign infra is down and the operator needs to deploy
+// anyway. MUST be logged + audit-trailed by callers; the security
+// model collapses under the override.
 var ErrSkippedByOverride = errors.New("cosign verification skipped by VELOX_SKIP_COSIGN_VERIFY=1 override")
 
 // ErrBinaryMissing is returned when the configured cosign binary
@@ -51,6 +52,18 @@ var ErrSkippedByOverride = errors.New("cosign verification skipped by VELOX_SKIP
 // infrastructure is not present" rather than "the signature
 // didn't match", and the operator should treat each differently.
 var ErrBinaryMissing = errors.New("cosign CLI not found at configured path or on PATH")
+
+// ErrOverrideReasonMissing is returned when the emergency bypass is
+// requested without the required audit reason. The bypass must never be
+// silently enabled by a bare environment flag.
+var ErrOverrideReasonMissing = errors.New("cosign override requires VELOX_COSIGN_OVERRIDE_REASON")
+
+const (
+	// cosignIdentityRegexp must match the identity used by the worker-image
+	// GitHub Actions workflow in the canonical repository.
+	cosignIdentityRegexp = `^https://github.com/Marcuss-ops/VeloxEditiingg/\.github/workflows/worker-image\.yml@refs/(tags/worker-v.+|heads/.+)`
+	cosignOIDCIssuer     = "https://token.actions.githubusercontent.com"
+)
 
 // CosignVerifier abstracts the verify surface so callers (the
 // Fleet Controller (Step 2) and admin/dashboard paths) can mock
@@ -100,17 +113,16 @@ func NewExternalCosignVerifier() *ExternalCosignVerifier {
 // missing-binary cases.
 //
 // VELOX_SKIP_COSIGN_VERIFY=1 short-circuits to ErrSkippedByOverride
-// WITHOUT invoking the binary — matches the production override
-// path in deploy/runtime/prepare-host.sh:183.
-//
-// The binary is invoked with no flags besides the ref; keyless
-// OIDC inherits the ambient environment (GITHUB_TOKEN /
-// OIDC_ISSUER etc.) that the operator's pod already has set. A
-// future hardening pass can add explicit `--certificate-identity`
-// / `--certificate-identity-regex` flags for stricter pinning.
+// only when VELOX_COSIGN_OVERRIDE_REASON is non-empty; otherwise it
+// returns ErrOverrideReasonMissing. The binary is never invoked by
+// the override path.
 func (e *ExternalCosignVerifier) Verify(ctx context.Context, ref string) error {
 	if os.Getenv("VELOX_SKIP_COSIGN_VERIFY") == "1" {
-		return ErrSkippedByOverride
+		reason := strings.TrimSpace(os.Getenv("VELOX_COSIGN_OVERRIDE_REASON"))
+		if reason == "" {
+			return ErrOverrideReasonMissing
+		}
+		return fmt.Errorf("%w: reason=%s", ErrSkippedByOverride, reason)
 	}
 	binary := e.BinaryPath
 	if binary == "" {
@@ -124,7 +136,12 @@ func (e *ExternalCosignVerifier) Verify(ctx context.Context, ref string) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, e.VerifyTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(timeoutCtx, path, "verify", ref)
+	cmd := exec.CommandContext(timeoutCtx, path,
+		"verify",
+		"--certificate-identity-regexp="+cosignIdentityRegexp,
+		"--certificate-oidc-issuer="+cosignOIDCIssuer,
+		ref,
+	)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	cmd.Stdout = &bytes.Buffer{} // discard stdout — only exit code matters

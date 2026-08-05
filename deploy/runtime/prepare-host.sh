@@ -24,7 +24,8 @@
 #   6. Installs compose.yml from this repo into /opt/velox-worker/compose.yml.
 #   7. Cosign signature verification (keyless OIDC against the GitHub
 #      Actions issuer). Verified images only. Failure aborts; operator
-#      override via VELOX_SKIP_COSIGN_VERIFY=1 for incident response only.
+#      override via VELOX_SKIP_COSIGN_VERIFY=1 plus a non-empty
+#      VELOX_COSIGN_OVERRIDE_REASON for a documented incident response only.
 #   8. 'docker pull's the pinned image digest.
 #   9. Brings the worker up with an isolated project name 'velox-worker-<id>'
 #      so multiple workers on one host do not collide.
@@ -41,7 +42,7 @@ readonly IMAGE_GID="10001"
 # Cosign verification: whitelist the workflow file + a tag-set / branch ref.
 # Symmetric with what the worker-image workflow stamps (keyless OIDC against
 # the GitHub Actions issuer). Held as a literal here so it's easy to grep.
-readonly COSIGN_IDENTITY_REGEXP='^https://github.com/Marcuss-ops/VeloxLEgit/\.github/workflows/worker-image\.yml@refs/(tags/worker-v.+|heads/.+)'
+readonly COSIGN_IDENTITY_REGEXP='^https://github.com/Marcuss-ops/VeloxEditiingg/\.github/workflows/worker-image\.yml@refs/(tags/worker-v.+|heads/.+)'
 readonly COSIGN_OIDC_ISSUER='https://token.actions.githubusercontent.com'
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -180,13 +181,21 @@ if command -v cosign >/dev/null 2>&1; then
     ok "cosign signature verified"
   else
     if [[ "${VELOX_SKIP_COSIGN_VERIFY:-}" == "1" ]]; then
-      warn "cosign verify FAILED but VELOX_SKIP_COSIGN_VERIFY=1 — proceeding under explicit override (audit-trail concern)"
+      [[ -n "${VELOX_COSIGN_OVERRIDE_REASON:-}" ]] \
+        || fail "cosign verification failed and VELOX_COSIGN_OVERRIDE_REASON is required when VELOX_SKIP_COSIGN_VERIFY=1"
+      warn "cosign verify FAILED but explicit override is active; reason=${VELOX_COSIGN_OVERRIDE_REASON}"
     else
-      fail "cosign signature verification FAILED for $VELOX_WORKER_IMAGE (set VELOX_SKIP_COSIGN_VERIFY=1 to override for incident response only)"
+      fail "cosign signature verification FAILED for $VELOX_WORKER_IMAGE (set VELOX_SKIP_COSIGN_VERIFY=1 and VELOX_COSIGN_OVERRIDE_REASON for incident response only)"
     fi
   fi
 else
-  warn "cosign CLI not present on PATH — skipping signature verification (install cosign for hardened supply-chain integrity)"
+  if [[ "${VELOX_SKIP_COSIGN_VERIFY:-}" == "1" ]]; then
+    [[ -n "${VELOX_COSIGN_OVERRIDE_REASON:-}" ]] \
+      || fail "cosign CLI is missing and VELOX_COSIGN_OVERRIDE_REASON is required when VELOX_SKIP_COSIGN_VERIFY=1"
+    warn "cosign CLI missing; explicit override is active; reason=${VELOX_COSIGN_OVERRIDE_REASON}"
+  else
+    fail "cosign CLI not present on PATH — refusing to continue (set VELOX_SKIP_COSIGN_VERIFY=1 and VELOX_COSIGN_OVERRIDE_REASON for incident response only)"
+  fi
 fi
 
 # ── 4. Pull image ──────────────────────────────────────────────────────────
