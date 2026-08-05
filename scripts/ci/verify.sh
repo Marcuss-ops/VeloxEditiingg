@@ -53,6 +53,9 @@ log "check-no-legacy"
 ./scripts/ci/check-no-legacy.sh
 log "check-secrets"
 ./scripts/ci/check-secrets.sh
+log "check-worker-rollout-compatibility"
+: "${BASE_REF:?BASE_REF must identify an explicitly fetched compatibility base}"
+python3 "$REPO_ROOT/scripts/ci/check-worker-rollout-compatibility.py"
 log "check-migrations"
 ./scripts/ci/check-migrations.sh
 log "check-single-writer"
