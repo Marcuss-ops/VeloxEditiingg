@@ -3,9 +3,17 @@
 #
 # This script is deliberately separate from the steady-state converger. It
 # translates the old per-inventory runtime once, records what it found, and
-# then makes every legacy worker unit unable to start again. It never deletes
-# the persistent worker data tree; the old unit files are copied to the
-# migration evidence directory before they are retired.
+# then makes every legacy worker unit unable to start again. A completion
+# marker makes the boundary explicit: after migration, normal deploys skip
+# legacy discovery and cleanup rather than re-normalizing the host forever.
+# It never deletes the persistent worker data tree; the old unit files are
+# copied to the migration evidence directory before they are retired.
+
+# The marker is intentionally stored in the canonical state tree. It is both
+# the durable migration contract and the audit trail for operators.
+#
+# Canonical steady-state convergence must not call this script as a cleanup
+# mechanism after the marker exists.
 #
 # Canonical contract after a successful run:
 #   unit:      /etc/systemd/system/velox-worker.service
@@ -42,6 +50,12 @@ fail() { printf '[migrate][FAIL] %s\n' "$*" >&2; exit 1; }
 mkdir -p "$CANONICAL_ROOT" "$MIGRATION_DIR" "$CANONICAL_STATE"
 chmod 0750 "$CANONICAL_ROOT" "$CANONICAL_STATE" "$MIGRATION_DIR"
 
+if [[ -f "$MIGRATION_DIR/completed" ]]; then
+  [[ -f "$CANONICAL_ENV" ]] || fail "migration marker exists but canonical env is missing: $CANONICAL_ENV"
+  log "legacy migration already completed; skipping legacy discovery and cleanup"
+  exit 0
+fi
+
 # Resolve the stable logical identity from the canonical env first, then from
 # the old env conventions. Hostnames and inventory aliases are only migration
 # hints; they are not rewritten into the logical identity once it is known.
@@ -77,6 +91,20 @@ fi
 if [[ ! -f "$CANONICAL_ENV" && -n "$legacy_env" ]]; then
   log "Migrating environment $legacy_env → $CANONICAL_ENV"
   install -D -o root -g root -m 0600 "$legacy_env" "$CANONICAL_ENV"
+fi
+
+# A canonical env file may already exist from a partial provisioning run but
+# still lack the worker credential. Preserve the legacy credential exactly
+# once, before the normalizer drops all legacy env discovery. Never overwrite
+# a non-empty canonical credential.
+if ! grep -Eq '^VELOX_WORKER_SECRET=[^[:space:]]' "$CANONICAL_ENV" 2>/dev/null; then
+  for candidate in "$LEGACY_ETC_ROOT/velox-worker.env" "$LEGACY_ETC_ROOT"/velox-worker-*.env; do
+    [[ -f "$candidate" && "$candidate" != "$CANONICAL_ENV" ]] || continue
+    legacy_secret="$(grep -m1 -E '^VELOX_WORKER_SECRET=[^[:space:]]' "$candidate" || true)"
+    [[ -n "$legacy_secret" ]] || continue
+    printf '%s\n' "$legacy_secret" >> "$CANONICAL_ENV"
+    break
+  done
 fi
 
 if [[ -z "$worker_id" && -r "$CANONICAL_ENV" ]]; then

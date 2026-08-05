@@ -207,8 +207,8 @@ fi
 # 10. Canonical worker playbook — structural syntax check.
 # The normalize_worker_systemd.yml playbook guards canonical runtime
 # purity via its STEP 7 strict idempotency assert task: only
-# velox-worker-<inventory_hostname>.service plus the two named
-# siblings (watchdog, auto-update) are tolerated, AND the canonical
+# velox-worker.service plus the two named siblings (watchdog, auto-update)
+# are tolerated, AND the canonical
 # unit must be present in the post-state enumeration. We verify here
 # at PR-time that the YAML parses cleanly (and its include_tasks
 # resolves) so a regression in the assert lands here rather than at

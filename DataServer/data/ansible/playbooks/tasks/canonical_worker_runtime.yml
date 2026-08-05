@@ -24,6 +24,7 @@
     velox_worker_service_source: "{{ velox_current_root }}/deploy/runtime/velox-worker.service"
     velox_worker_compose_source: "{{ velox_current_root }}/deploy/runtime/compose.yml"
     velox_worker_migration_source: "{{ velox_current_root }}/deploy/runtime/migrate-legacy-worker.sh"
+    velox_worker_migration_marker: "/var/lib/velox-worker/migration/completed"
     velox_worker_health_port: 8081
     velox_worker_heartbeat_masters: "{{ master_url }}"
     velox_worker_secondary_master_url: ""
@@ -41,20 +42,30 @@
     state: directory
     mode: "0755"
 
-- name: CanonicalRuntime | Install legacy migration helper
+- name: CanonicalRuntime | Check one-time legacy migration marker
+  ansible.builtin.stat:
+    path: "{{ velox_worker_migration_marker }}"
+  register: velox_worker_migration_done
+
+# Legacy discovery, state copying, and unit retirement belong only to the
+# migration boundary. Once the durable marker exists, steady-state deploys
+# must not scan legacy paths or re-normalize old services.
+- name: CanonicalRuntime | Install one-time legacy migration helper
   ansible.builtin.copy:
     src: "{{ velox_worker_migration_source }}"
     dest: "{{ velox_worker_compose_dir }}/migrate-legacy-worker.sh"
     remote_src: true
     mode: "0755"
+  when: not velox_worker_migration_done.stat.exists
 
-- name: CanonicalRuntime | Migrate legacy runtime before convergence
+- name: CanonicalRuntime | Migrate legacy runtime once before convergence
   ansible.builtin.command:
     argv:
       - "{{ velox_worker_compose_dir }}/migrate-legacy-worker.sh"
   environment:
     WORKER_ID: "{{ velox_worker_identity }}"
     LEGACY_RUNTIME_DIR: ""
+  when: not velox_worker_migration_done.stat.exists
 
 - name: CanonicalRuntime | Read release bundle hash
   ansible.builtin.slurp:
@@ -86,104 +97,10 @@
       ({{ velox_worker_bundle_hash | length }} chars). Fix the bundle source;
       do not disable this gate.
 
-# ── HOSTILE LEGACY UNIT CLEANUP ───────────────────────────────
-# One host -> one systemd unit. Any non-canonical `velox-worker*.service`
-# file (including suffixed per-host units and nested-name siblings) is treated
-# as hostile: stop it (in case it's running), disable it
-# (so it won't come back at boot), and MASK it (so a stray file or
-# symlink can never be re-enabled, even by a future `daemon-reload` or
-# a package install that drops a same-named drop-in). The two exempt
-# units are the canonical worker unit (the only runtime worker) and
-# the per-host watchdog service (an `oneshot` that re-arms the canonical
-# unit). Auto-update is `velox-auto-update.service`, which does NOT
-# match the `velox-worker*.service` glob and falls outside this block.
-# Order matters: stop (runtime) -> disable (boot) -> mask (any future
-# activation). The mask leaves a symlink to /dev/null at the unit file
-# path that systemd treats as a permanent block; the next `daemon-reload`
-# (at task "Reload systemd after cleanup and unit writes") picks it up
-# so any leftover `systemctl start` will fail with "Unit ... is masked."
-- name: CanonicalRuntime | Stop, disable and mask legacy worker units (hostile cleanup)
-  ansible.builtin.shell:
-    cmd: |
-      set -euo pipefail
-      canonical="{{ velox_worker_unit_name }}"
-      declare -A seen=()
-      changed=0
-      consider() {
-        local unit="$1"
-        [ -n "$unit" ] || return 0
-        [ -z "${seen[$unit]:-}" ] || return 0
-        seen[$unit]=1
-        case "$unit" in
-          "$canonical"|velox-worker-watchdog.service)
-            return 0
-            ;;
-          # Template units are not used in the canonical runtime; leave them
-          # alone so a future `velox-worker@<instance>.service` (e.g. from
-          # a transient generator) is not silently masked by our glob.
-          velox-worker@*)
-            return 0
-            ;;
-          velox-worker.service|velox-worker-*.service)
-            systemctl stop    "$unit" >/dev/null 2>&1 || true
-            systemctl disable "$unit" >/dev/null 2>&1 || true
-            # Some systemd versions still refuse --force when a regular unit
-            # file exists at the target path. The unit is explicitly outside
-            # the canonical runtime, so remove only that exact stale file
-            # before creating the /dev/null mask.
-            unit_path="$(systemctl show -p FragmentPath --value "$unit" 2>/dev/null || true)"
-            case "$unit_path" in
-              /etc/systemd/system/velox-worker*.service|/lib/systemd/system/velox-worker*.service|/usr/lib/systemd/system/velox-worker*.service)
-                rm -f -- "$unit_path"
-                ;;
-            esac
-            systemctl mask --force "$unit" >/dev/null 2>&1 || true
-            echo "MASKED_UNIT=$unit"
-            changed=1
-            ;;
-        esac
-      }
-      # 1. Iterate velox-worker*.service FILES (enabled/disabled/masked/static
-      #    drop-ins in /etc/systemd/system or /usr/lib). Catches the common
-      #    case where a previous deploy left a unit file on disk.
-      while read -r unit _; do
-        consider "$unit"
-      done < <(systemctl list-unit-files 'velox-worker*.service' --no-legend --no-pager 2>/dev/null || true)
-      # 2. Also iterate velox-worker*.service UNITS in systemd's runtime
-      #    memory. Catches a unit that was started then file-deleted but
-      #    never daemon-reloaded, or a unit created at runtime by a
-      #    transient generator. Both passes are needed because the file
-      #    view and the runtime view can drift between deploys.
-      while read -r unit _; do
-        consider "$unit"
-      done < <(systemctl list-units 'velox-worker*.service' --all --no-legend --no-pager 2>/dev/null || true)
-      exit 0
-  args:
-    executable: /bin/bash
-  register: legacy_unit_cleanup
-  changed_when: "'MASKED_UNIT=' in (legacy_unit_cleanup.stdout | default(''))"
-
-- name: CanonicalRuntime | Remove stale legacy worker containers
-  ansible.builtin.shell: |
-    set -euo pipefail
-    canonical="{{ velox_worker_container_name }}"
-    while read -r container; do
-      [ -n "$container" ] || continue
-      if [ "$container" = "$canonical" ]; then
-        project="$(/usr/bin/docker inspect -f '{{ "{{ index .Config.Labels \\\"com.docker.compose.project\\\" }}" }}' "$container" 2>/dev/null || true)"
-        [ "$project" = "{{ velox_worker_project_name }}" ] && continue
-      fi
-      case "$container" in
-        velox-worker|velox-worker-*)
-          /usr/bin/docker rm -f "$container" >/dev/null 2>&1 || true
-          echo "REMOVED_CONTAINER=$container"
-          ;;
-      esac
-    done < <(/usr/bin/docker ps -a --format '{{ "{{.Names}}" }}' 2>/dev/null || true)
-  args:
-    executable: /bin/bash
-  register: legacy_container_cleanup
-  changed_when: "'REMOVED_CONTAINER=' in (legacy_container_cleanup.stdout | default(''))"
+# Legacy unit/container cleanup is intentionally not implemented here. The
+# migration helper is the single owner of that one-time transition; keeping a
+# second cleanup implementation in this steady-state task would create two
+# sources of truth and could race the migration marker.
 
 - name: CanonicalRuntime | Create writable runtime directories
   ansible.builtin.file:
@@ -204,19 +121,12 @@
   ansible.builtin.shell: |
     set -o pipefail
     target="{{ velox_worker_env_path }}"
-    # Priority 1: the current canonical env file (a previous deploy already
-    # wrote the secret there). Priority 2: any legacy env file. The target is
-    # probed FIRST so a re-deploy never drops a secret that only exists in the
-    # canonical file.
-    for f in "$target" /etc/velox-worker.env; do
-      [ -f "$f" ] || continue
-      grep -m1 -E '^VELOX_WORKER_SECRET=[^[:space:]]' "$f" && exit 0
-    done
-    for f in /etc/velox-worker-*.env; do
-      [ -f "$f" ] || continue
-      [ "$f" = "$target" ] && continue
-      grep -m1 -E '^VELOX_WORKER_SECRET=[^[:space:]]' "$f" && exit 0
-    done
+    # The canonical env is the steady-state source. During the one-time
+    # migration only, the helper has already copied any legacy credential into
+    # this path; never scan legacy env files during normal convergence.
+    if [ -f "$target" ]; then
+      grep -m1 -E '^VELOX_WORKER_SECRET=[^[:space:]]' "$target" || true
+    fi
     exit 0
   args:
     executable: /bin/bash

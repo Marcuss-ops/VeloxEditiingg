@@ -15,10 +15,14 @@ only inspect state from commands that mutate a worker.
 Do not combine paths in one rollout. In particular, do not build a local image
 on a worker and also claim that the worker is running the certified GHCR image.
 
-## 1. Legacy Ansible bridge for old workers
+## 1. One-time legacy migration for old workers
 
-Use this path only when an old worker must first be normalized to the canonical
-systemd/container layout or cannot yet consume a pinned GHCR image.
+Use this path only once when an old worker must be migrated to the canonical
+systemd/container layout. The migration retires legacy units, containers,
+environment paths, and writable trees, then records
+`/var/lib/velox-worker/migration/completed`. After that marker exists, normal
+rollouts must use the canonical release path and must not rediscover or clean
+legacy paths.
 
 The bridge is:
 
@@ -71,13 +75,15 @@ After the bridge, verify the canonical unit, one container, readiness,
 registration, fresh heartbeat, a real Level-D smoke, and a short canary window.
 Only then resume the worker and continue one host at a time.
 
-### Legacy bridge limitations
+### One-time migration limitations
 
-- It does **not** prove that every worker runs identical image bytes.
+- It does **not** prove that every worker runs identical image bytes; use the
+  digest rollout path for release certification.
 - It must not be used to roll out a mutable Docker tag.
 - It must not be run against all workers concurrently.
 - It must not be used as evidence that a GHCR digest was signed or certified.
-- Retire it after the worker fleet has migrated to the definitive path.
+- Once the completion marker exists, do not re-run legacy cleanup as part of a
+  normal rollout; investigate a missing marker or broken canonical tree first.
 
 ## 2. GHCR Ansible bridge for a controlled canary
 

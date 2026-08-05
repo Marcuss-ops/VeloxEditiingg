@@ -20,10 +20,13 @@ run_migration_test() {
   env_file="$tmp/etc/worker.env"
   state_dir="$tmp/state"
   compose_dir="$tmp/compose"
-  mkdir -p "$(dirname "$env_file")"
+  mkdir -p "$(dirname "$env_file")" "$tmp/legacy"
+  printf 'VELOX_WORKER_SECRET=legacy-secret\n' > "$tmp/legacy/velox-worker-test.env"
+  printf 'VELOX_WORKER_ID=worker-test-01\n' > "$env_file"
   if ! WORKER_ID=worker-test-01 \
       CANONICAL_ETC_ROOT="$tmp/etc" \
       LEGACY_ETC_ROOT="$tmp/legacy" \
+      LEGACY_RUNTIME_DIR="$tmp/legacy-runtime" \
       SYSTEMD_SYSTEM_DIR="$tmp/systemd" \
       SYSTEMD_LIB_DIR="$tmp/systemd-lib" \
       SYSTEMD_USR_LIB_DIR="$tmp/systemd-usr-lib" \
@@ -36,6 +39,8 @@ run_migration_test() {
   fi
   grep -qx 'VELOX_WORKER_ID=worker-test-01' "$env_file" \
     || { rm -rf "$tmp"; fail 'fresh-host migration did not materialise worker identity'; }
+  grep -qx 'VELOX_WORKER_SECRET=legacy-secret' "$env_file" \
+    || { rm -rf "$tmp"; fail 'fresh-host migration did not preserve legacy credential'; }
   grep -qx 'VELOX_WORK_DIR=/var/lib/velox-worker/work' "$env_file" \
     || { rm -rf "$tmp"; fail 'fresh-host migration did not materialise canonical work dir'; }
   [[ -f "$state_dir/migration/manifest.json" ]] \
@@ -43,14 +48,17 @@ run_migration_test() {
   local first_manifest second_manifest
   first_manifest="$(cat "$state_dir/migration/manifest.json")"
   WORKER_ID=worker-test-01 \
-    CANONICAL_ETC="$tmp/etc" \
+    CANONICAL_ETC_ROOT="$tmp/etc" \
+    LEGACY_ETC_ROOT="$tmp/legacy" \
     CANONICAL_ENV="$env_file" \
     CANONICAL_STATE="$state_dir" \
     CANONICAL_ROOT="$compose_dir" \
     bash deploy/runtime/migrate-legacy-worker.sh >/dev/null
   second_manifest="$(cat "$state_dir/migration/manifest.json")"
-  [[ "$first_manifest" != "$second_manifest" ]] \
-    || true # completion is intentionally rewritten with a fresh timestamp
+  [[ "$first_manifest" == "$second_manifest" ]] \
+    || { rm -rf "$tmp"; fail 'completed migration was not idempotent'; }
+  [[ -f "$state_dir/migration/completed" ]] \
+    || { rm -rf "$tmp"; fail 'completed migration marker missing'; }
   rm -rf "$tmp"
 }
 

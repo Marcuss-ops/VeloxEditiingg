@@ -1,15 +1,12 @@
 ---
 # ============================================================
-# NORMALIZE WORKER SYSTEMD — Pulizia e ricostruzione servizi
+# NORMALIZE WORKER SYSTEMD — One-time legacy cutover and verification
 # ============================================================
-# Obiettivo:
-#   - Unmask servizio velox-worker
-#   - Stop e disable di TUTTI i vecchi servizi (velox-worker-*.service)
-#   - Rimozione vecchie unit file e override directories
-#   - include deploy_worker_release (single source of truth)
-#     → prepare_worker_image (image build) + canonical_worker_runtime
-#       (env file, config, systemd unit, watchdog, auto-update)
-#   - Verifica stato + heartbeat sul master
+# This playbook is a migration tool, not the steady-state deploy path.
+# It retires legacy per-host units once, then delegates all future runtime
+# convergence to the canonical worker layout:
+#   velox-worker.service -> Compose project velox-worker -> container velox-worker
+#   /etc/velox-worker/worker.env + /var/lib/velox-worker
 # ============================================================
 
 - name: Normalize worker systemd
@@ -18,96 +15,19 @@
   vars:
     velox_dir: "/opt/velox"
     master_url: "{{ master_url | default('http://127.0.0.1:8000') }}"
+    velox_worker_migration_marker: "/var/lib/velox-worker/migration/completed"
 
   tasks:
-    # ── STEP 1: Pulizia servizi vecchi ────────────────────────
-    - name: Normalize | Stop all old velox-worker services
-      ansible.builtin.shell: |
-        set -euo pipefail
-        for u in $(systemctl list-unit-files 'velox-worker*.service' --no-legend --no-pager 2>/dev/null | awk '{print $1}' | grep -v watchdog | grep -v auto-update || true); do
-          systemctl stop "$u" 2>/dev/null || true
-        done
-      args:
-        executable: /bin/bash
-      changed_when: false
-      failed_when: false
+    - name: Normalize | Check one-time migration marker
+      ansible.builtin.stat:
+        path: "{{ velox_worker_migration_marker }}"
+      register: velox_worker_migration_done
 
-    - name: Normalize | Disable all old velox-worker services
-      ansible.builtin.shell: |
-        set -euo pipefail
-        for u in $(systemctl list-unit-files 'velox-worker*.service' --no-legend --no-pager 2>/dev/null | awk '{print $1}' | grep -v watchdog | grep -v auto-update || true); do
-          systemctl disable "$u" 2>/dev/null || true
-        done
-      args:
-        executable: /bin/bash
-      changed_when: false
-      failed_when: false
-
-    - name: Normalize | Unmask velox-worker service
-      ansible.builtin.shell: |
-        set -euo pipefail
-        systemctl unmask velox-worker.service 2>/dev/null || true
-      args:
-        executable: /bin/bash
-      changed_when: false
-      failed_when: false
-
-    - name: Normalize | Stop and disable any generic velox-worker.service
-      ansible.builtin.shell: |
-        set -euo pipefail
-        systemctl stop velox-worker.service 2>/dev/null || true
-        systemctl disable velox-worker.service 2>/dev/null || true
-        systemctl unmask velox-worker.service 2>/dev/null || true
-      args:
-        executable: /bin/bash
-      changed_when: false
-      failed_when: false
-
-    # ── STEP 2: Rimuovi vecchie unit file ─────────────────────
-    - name: Normalize | Remove old unit files (not the canonical one)
-      ansible.builtin.shell: |
-        set -euo pipefail
-        # Step 2 narrows the cleanup to on-disk files in
-        # /etc/systemd/system/velox-worker-*.service. Step 7
-        # (below) asserts the broader system-wide canonical-only
-        # state via `systemctl list-unit-files`; the two are
-        # intentionally narrow-vs-broad, NOT duplicates. Step 2
-        # cannot see generator-supplied or /usr/lib units; Step 7
-        # catches those.
-        KEEP="velox-worker.service"
-        for f in /etc/systemd/system/velox-worker-*.service; do
-          [ ! -f "$f" ] && continue
-          BASE=$(basename "$f")
-          # Only keep the canonical unit. Watchdog and auto-update
-          # are canonical siblings; Step 7 assert forbids any other
-          # survivors in the post-state enumeration (canonical-only
-          # contract).
-          if [ "$BASE" != "$KEEP" ]; then
-            rm -f "$f"
-            echo "Removed: $f"
-          fi
-        done
-      args:
-        executable: /bin/bash
-      register: removed_units
-      changed_when: "'Removed:' in (removed_units.stdout | default(''))"
-
-    - name: Normalize | Remove old override directories
-      ansible.builtin.shell: |
-        set -euo pipefail
-        KEEP_DIR="velox-worker.service.d"
-        for d in /etc/systemd/system/velox-worker-*.service.d; do
-          [ ! -d "$d" ] && continue
-          BASE=$(basename "$d")
-          if [ "$BASE" != "$KEEP_DIR" ]; then
-            rm -rf "$d"
-            echo "Removed dir: $d"
-          fi
-        done
-      args:
-        executable: /bin/bash
-      register: removed_dirs
-      changed_when: "'Removed dir:' in (removed_dirs.stdout | default(''))"
+    # ── STEP 1/2: One-time legacy cutover ─────────────────────
+    # Legacy discovery, state migration, unit retirement, and container
+    # cleanup are owned by canonical_worker_runtime.yml via the migration
+    # helper. Keeping a second cleanup implementation here would make the
+    # migration order-dependent and would reintroduce two runtime owners.
 
     # ── STEP 3: Unified deploy pipeline (single source of truth) ──
     # deploy_worker_release → stop → staging → validate → swap → Docker build → verify → rollback
@@ -135,7 +55,7 @@
     #
     # Operationally this is a *stricter idempotency gate*: every run
     # must terminate with the host holding exactly one canonical
-    # `velox-worker-<inventory_hostname>.service` plus the two named
+    # `velox-worker.service` plus the two named
     # siblings (watchdog, auto-update). Any other surviving unit, OR
     # the absence of the canonical unit itself, fails the play.
     #
