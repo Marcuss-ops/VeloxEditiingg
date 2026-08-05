@@ -381,8 +381,8 @@ func main() {
 		Interval: cleanupPolicy.CleanupInterval, JobDone: w.JobDone(),
 		OnTick: func(stats workercache.CleanupStats, err error) {
 			metrics := telemetry.GetPrometheusMetrics()
-			metrics.RecordCacheEvictions("ttl", stats.Removed)
 			metrics.RecordCacheCleanup(time.Duration(stats.DurationMS) * time.Millisecond)
+			metrics.RecordCacheEvictions("ttl", stats.Removed)
 			metrics.RecordCacheCleanupSkips("protected", stats.SkippedProtected)
 			metrics.RecordCacheCleanupSkips("leased", stats.SkippedLeased)
 			metrics.RecordCacheCleanupSkips("grace", stats.SkippedGrace)

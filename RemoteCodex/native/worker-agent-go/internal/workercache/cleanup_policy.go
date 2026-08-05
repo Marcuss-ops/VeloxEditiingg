@@ -143,9 +143,8 @@ func CleanupWithPolicy(
 	protectedIDs []string,
 	policy CleanupPolicy,
 	now time.Time,
-) (CleanupStats, error) {
+) (stats CleanupStats, err error) {
 	started := time.Now()
-	var stats CleanupStats
 	defer func() { stats.DurationMS = time.Since(started).Milliseconds() }()
 
 	if c == nil {

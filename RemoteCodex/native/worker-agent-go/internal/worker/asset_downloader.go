@@ -31,13 +31,21 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 }
 
 func (w *Worker) downloadVeloxAssetWithMetadataSingle(ctx context.Context, assetID, expectedSHA256 string, expectedSizeBytes int64) (string, error) {
+	operationStarted := time.Now().UTC()
+	accessStarted := time.Now()
 	cacheDir := w.assetCacheDir()
+	loggedAccess := false
+	defer func() {
+		if !loggedAccess {
+			logAssetCacheAccess(ctx, w.config.WorkerID, cacheAssetKey(assetID, expectedSHA256), "error", 0, time.Since(accessStarted).Milliseconds(), 0)
+		}
+	}()
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return "", err
 	}
 
-	operationStarted := time.Now().UTC()
-	accessStarted := time.Now()
+	// The canonical request counter has only low-cardinality result labels;
+	// per-asset identity remains in the structured access log below.
 
 	// Cache hit fast path: reuse an entry only when both integrity metadata
 	// values are available. Bare or partially-described legacy URIs are
@@ -52,7 +60,7 @@ func (w *Worker) downloadVeloxAssetWithMetadataSingle(ctx context.Context, asset
 			}
 			completed := time.Now().UTC()
 			telemetry.GetPrometheusMetrics().RecordAssetCacheHit("asset")
-			logAssetCacheAccess(ctx, w.config.WorkerID, cacheAssetKey(assetID, expectedSHA256), "hit", 0, time.Since(accessStarted).Milliseconds(), verifyDuration.Milliseconds())
+			telemetry.GetPrometheusMetrics().RecordCacheRequest("hit")
 			recordAssetOperation(ctx, AssetOperationRecord{
 				AssetID:             assetID,
 				CacheStatus:         "hit",
@@ -69,11 +77,14 @@ func (w *Worker) downloadVeloxAssetWithMetadataSingle(ctx context.Context, asset
 			if err := w.syncClipCache(ctx, assetID, existing, expectedSizeBytes); err != nil {
 				return "", fmt.Errorf("record cached asset %s: %w", assetID, err)
 			}
+			logAssetCacheAccess(ctx, w.config.WorkerID, cacheAssetKey(assetID, expectedSHA256), "hit", 0, time.Since(accessStarted).Milliseconds(), verifyDuration.Milliseconds())
+			loggedAccess = true
 			return existing, nil
 		}
 	}
 
 	telemetry.GetPrometheusMetrics().RecordAssetCacheMiss("asset")
+	telemetry.GetPrometheusMetrics().RecordCacheRequest("miss")
 	if rec := telemetry.RecorderFromContext(ctx); rec != nil {
 		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask, Component: "worker.cache", Action: "miss"}, telemetry.StatusOK, "", "")
 	}
@@ -162,7 +173,6 @@ func (w *Worker) downloadVeloxAssetWithMetadataSingle(ctx context.Context, asset
 			transferHandle.CompleteWith(downloadedBytes, downloadedBytes, 0, telemetry.StatusOK, "", "")
 		}
 		completed := time.Now().UTC()
-		logAssetCacheAccess(ctx, w.config.WorkerID, cacheAssetKey(assetID, expectedSHA256), "miss", downloadedBytes, time.Since(accessStarted).Milliseconds(), verifyDuration.Milliseconds())
 		recordAssetOperation(ctx, AssetOperationRecord{
 			AssetID:             assetID,
 			CacheStatus:         "miss",
@@ -179,6 +189,8 @@ func (w *Worker) downloadVeloxAssetWithMetadataSingle(ctx context.Context, asset
 		if err := w.syncClipCache(ctx, assetID, localPath, downloadedBytes); err != nil {
 			return "", fmt.Errorf("record downloaded asset %s: %w", assetID, err)
 		}
+		logAssetCacheAccess(ctx, w.config.WorkerID, cacheAssetKey(assetID, expectedSHA256), "miss", downloadedBytes, time.Since(accessStarted).Milliseconds(), verifyDuration.Milliseconds())
+		loggedAccess = true
 		return localPath, nil
 	}
 

@@ -141,14 +141,16 @@ func (r *Resolver) Resolve(ctx context.Context, driveID string) (string, error) 
 // output via the CleanupLoop → SnapshotSource adapter — they are
 // NOT reimplemented here.
 func (r *Resolver) resolveInner(ctx context.Context, driveID string) (string, error) {
+	lookupStarted := time.Now()
 	entry, ok, err := r.Cache.Find(ctx, driveID)
 	if err != nil {
+		telemetry.LogAssetCacheAccess(ctx, "", driveID, "error", 0, time.Since(lookupStarted).Milliseconds(), 0)
 		return "", fmt.Errorf("workercache.Resolve(%s): cache.Find: %w", driveID, err)
 	}
 
-	lookupStarted := time.Now()
 	if ok && entry.DownloadComplete && fileExists(entry.LocalPath) {
 		telemetry.GetPrometheusMetrics().RecordAssetCacheHit("asset")
+		telemetry.GetPrometheusMetrics().RecordCacheRequest("hit")
 		telemetry.LogAssetCacheAccess(ctx, "", driveID, "hit", 0, time.Since(lookupStarted).Milliseconds(), 0)
 		// Cache hit fast path. MarkUsed is best-effort; a SQLite
 		// error here must not mask the resolved path (the cleanup
@@ -176,8 +178,10 @@ func (r *Resolver) resolveInner(ctx context.Context, driveID string) (string, er
 			DriveFileID: driveID,
 			LocalPath:   partPath,
 		}); sErr != nil && !errors.Is(sErr, ErrDuplicate) {
+			telemetry.LogAssetCacheAccess(ctx, "", driveID, "error", 0, time.Since(lookupStarted).Milliseconds(), 0)
 			return "", fmt.Errorf("workercache.Resolve(%s): cache.Store: %w", driveID, sErr)
 		}
+
 	} else if !entry.DownloadComplete {
 		// Row exists but download_complete=false — the placeholder
 		// local_path was either the .part or a partially renamed
@@ -194,6 +198,7 @@ func (r *Resolver) resolveInner(ctx context.Context, driveID string) (string, er
 				CreatedAt:        entry.CreatedAt,
 				LastUsedAt:       entry.LastUsedAt,
 			}); sErr != nil && !errors.Is(sErr, ErrDuplicate) {
+				telemetry.LogAssetCacheAccess(ctx, "", driveID, "error", 0, time.Since(lookupStarted).Milliseconds(), 0)
 				return "", fmt.Errorf("workercache.Resolve(%s): recover-placeholder: %w", driveID, sErr)
 			}
 		}
@@ -205,12 +210,14 @@ func (r *Resolver) resolveInner(ctx context.Context, driveID string) (string, er
 			`UPDATE cached_assets SET local_path = ?, download_complete = 0
 			 WHERE drive_file_id = ?`,
 			r.partPathFor(driveID), driveID); mErr != nil {
+			telemetry.LogAssetCacheAccess(ctx, "", driveID, "error", 0, time.Since(lookupStarted).Milliseconds(), 0)
 			return "", fmt.Errorf("workercache.Resolve(%s): recover-file-missing: %w", driveID, mErr)
 		}
 	}
 
 	download, dlErr := r.Downloader.DownloadDriveFileWithMetadata(ctx, driveID)
 	if dlErr != nil {
+		telemetry.LogAssetCacheAccess(ctx, "", driveID, "error", 0, time.Since(lookupStarted).Milliseconds(), 0)
 		return "", fmt.Errorf("workercache.Resolve(%s): downloader: %w", driveID, dlErr)
 	}
 	telemetry.LogAssetCacheAccess(ctx, "", "sha256:"+download.SHA256, "miss", download.Bytes,

@@ -79,6 +79,7 @@ func TestResolver_CacheHit_NoDownload(t *testing.T) {
 	// hit short-circuits BEFORE Open is called.
 	dl := NewDownloader(f.cache, f.dir, failingSource(errors.New("should not be called")))
 	r := &Resolver{Cache: f.cache, Downloader: dl, Dir: f.dir}
+	beforeHits := telemetry.GetPrometheusMetrics().CacheRequestCount("hit")
 
 	got, err := r.Resolve(ctx, "TYSON001")
 	if err != nil {
@@ -86,6 +87,9 @@ func TestResolver_CacheHit_NoDownload(t *testing.T) {
 	}
 	if got != path {
 		t.Errorf("got=%q want %q (cache hit must return cached path)", got, path)
+	}
+	if gotHits := telemetry.GetPrometheusMetrics().CacheRequestCount("hit") - beforeHits; gotHits != 1 {
+		t.Errorf("cache-hit request count delta=%v, want 1", gotHits)
 	}
 }
 

@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -124,6 +126,44 @@ func TestDownloadVeloxAssetWithSHA_ReportsMissHitAndCorruptRedownload(t *testing
 	}
 	if records[1].DownloadedBytes != 0 || records[1].DownloadMS != 0 {
 		t.Errorf("hit metrics = bytes:%d ms:%d, want 0/0", records[1].DownloadedBytes, records[1].DownloadMS)
+	}
+}
+
+func TestDownloadVeloxAssetWithMetadataLogsTerminalHTTPError(t *testing.T) {
+	assetID := "asset-terminal-error"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "asset unavailable", http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	w := &Worker{
+		config:    &config.WorkerConfig{WorkerID: "worker-error-test", MasterURL: srv.URL, WorkDir: t.TempDir()},
+		apiClient: api.NewClient(srv.URL),
+	}
+
+	var buffer bytes.Buffer
+	previousWriter := log.Writer()
+	previousFlags := log.Flags()
+	log.SetOutput(&buffer)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+	}()
+
+	if _, err := w.downloadVeloxAssetWithMetadata(context.Background(), assetID, "", 0); err == nil {
+		t.Fatal("download unexpectedly succeeded; want terminal HTTP error")
+	}
+
+	var event map[string]interface{}
+	if err := json.Unmarshal(buffer.Bytes(), &event); err != nil {
+		t.Fatalf("terminal error log is not JSON: %v; output=%q", err, buffer.String())
+	}
+	if event["event"] != "ASSET_CACHE_ACCESS" || event["result"] != "error" {
+		t.Fatalf("terminal error event = %#v, want ASSET_CACHE_ACCESS/error", event)
+	}
+	if event["asset_key"] != assetID {
+		t.Errorf("asset_key = %#v, want %q", event["asset_key"], assetID)
 	}
 }
 
