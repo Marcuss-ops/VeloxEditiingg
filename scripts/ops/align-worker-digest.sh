@@ -27,6 +27,7 @@
 #   VELOX_ADMIN_TOKEN   — operator admin token for fleetctl
 #   VELOX_MASTER_URL    — Master API URL (default http://127.0.0.1:8080)
 #   DIGEST              — target digest for make pin-worker-digest
+#   EXPECTED_COMMIT     — full 40-hex GitHub commit SHA; stale digests are refused
 #   GHCR_OWNER          — GHCR org/user for full image ref
 #
 # Exit codes:
@@ -54,6 +55,7 @@ GHCR_OWNER="${GHCR_OWNER:-}"
 IMAGE_NAME="${IMAGE_NAME:-velox-worker}"
 SKIP_PIN=0
 DRY_RUN=0
+EXPECTED_COMMIT="${EXPECTED_COMMIT:-}"
 ALL_WORKERS=()
 
 while [[ $# -gt 0 ]]; do
@@ -65,6 +67,7 @@ while [[ $# -gt 0 ]]; do
     --image-name)   IMAGE_NAME="$2"; shift 2 ;;
     --workers)      ALL_WORKERS+=("$2"); shift 2 ;;
     --skip-pin)     SKIP_PIN=1; shift ;;
+    --commit)       EXPECTED_COMMIT="$2"; shift 2 ;;
     --dry-run)      DRY_RUN=1; shift ;;
     -h|--help)      usage 0 ;;
     *)              echo "ERROR: unknown flag: $1" >&2; usage 2 ;;
@@ -84,6 +87,10 @@ fi
 # ─── Validate ───────────────────────────────────────────────────────────────
 [[ -n "${WORKER_ID:-}" ]] || { echo "ERROR: --worker-id is required" >&2; usage 2; }
 [[ -n "${TARGET_DIGEST:-}" ]] || TARGET_DIGEST="${DIGEST:-}"
+if [[ ! "$EXPECTED_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  echo "ERROR: --commit or EXPECTED_COMMIT must be a full 40-hex GitHub commit SHA" >&2
+  exit 2
+fi
 [[ -n "${TARGET_DIGEST:-}" ]] || { echo "ERROR: --digest is required (or set DIGEST env)" >&2; usage 2; }
 
 # Normalise: accept both sha256:<hex> and full ghcr.io/...@sha256:<hex>
@@ -126,7 +133,7 @@ need() {
 
 if (( DRY_RUN )); then
   echo "[DRY-RUN] would align $WORKER_ID to $SHA_ONLY"
-  echo "[DRY-RUN] 1. make pin-worker-digest DIGEST=$FULL_DIGEST"
+  echo "[DRY-RUN] 1. make pin-worker-digest DIGEST=$FULL_DIGEST EXPECTED_COMMIT=$EXPECTED_COMMIT"
   echo "[DRY-RUN] 2. fleetctl update $WORKER_ID --digest $SHA_ONLY"
   echo "[DRY-RUN] 3. fleetctl status (verify all workers on $SHA_ONLY)"
   exit 0
@@ -175,7 +182,7 @@ if (( SKIP_PIN == 0 )); then
   fi
 
   echo "→ pinning $FULL_DIGEST ..."
-  DIGEST="$FULL_DIGEST" make -C "$REPO_ROOT" pin-worker-digest || {
+  DIGEST="$FULL_DIGEST" EXPECTED_COMMIT="$EXPECTED_COMMIT" make -C "$REPO_ROOT" pin-worker-digest || {
     echo "ERROR: pin-worker-digest failed for $FULL_DIGEST" >&2
     exit 3
   }

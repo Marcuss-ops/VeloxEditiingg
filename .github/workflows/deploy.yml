@@ -23,6 +23,9 @@ on:
       server_version:
         description: 'Server image version override (semver, e.g. 1.2.3)'
         required: false
+      worker_release_commit:
+        description: 'Full 40-hex commit certified by worker-image.yml (required for manual dispatch)'
+        required: false
 
 # Deploys must NOT cancel one another mid-flight.
 concurrency:
@@ -52,6 +55,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.release_commit || github.sha }}
           fetch-depth: 0
 
       - name: Resolve versions
@@ -91,10 +95,30 @@ jobs:
             SERVER_VERSION="${SERVER_VERSION#v}"
           fi
 
+          WORKER_RELEASE_COMMIT="${GITHUB_SHA}"
+          if [ "${{ github.event_name }}" = 'workflow_dispatch' ]; then
+            WORKER_RELEASE_COMMIT="${{ inputs.worker_release_commit }}"
+          fi
+          if ! [[ "$WORKER_RELEASE_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::worker_release_commit must be a full 40-hex commit SHA; refusing ambiguous worker digest provenance." >&2
+            exit 1
+          fi
+
           echo "default=${DEFAULT_VERSION}" >> "$GITHUB_OUTPUT"
           echo "worker=${WORKER_VERSION}" >> "$GITHUB_OUTPUT"
           echo "server=${SERVER_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Resolved: default=${DEFAULT_VERSION} worker=${WORKER_VERSION} server=${SERVER_VERSION}"
+          echo "worker_release_commit=${WORKER_RELEASE_COMMIT}" >> "$GITHUB_OUTPUT"
+          echo "Resolved: default=${DEFAULT_VERSION} worker=${WORKER_VERSION} server=${SERVER_VERSION} worker_release_commit=${WORKER_RELEASE_COMMIT}"
+
+      - name: Verify checkout matches certified release commits
+        run: |
+          set -euo pipefail
+          CHECKOUT_SHA="$(git rev-parse HEAD)"
+          WORKER_RELEASE_COMMIT="${{ steps.version.outputs.worker_release_commit }}"
+          if [ "$CHECKOUT_SHA" != "$WORKER_RELEASE_COMMIT" ]; then
+            echo "::error::checkout commit ($CHECKOUT_SHA) does not match the certified worker release commit ($WORKER_RELEASE_COMMIT)." >&2
+            exit 1
+          fi
 
       - name: Set up Docker Buildx (for imagetools inspect)
         uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
@@ -193,11 +217,13 @@ jobs:
 
           WORKER_REF="${{ steps.resolve.outputs.worker_ref }}"
           SERVER_REF="${{ steps.resolve.outputs.server_ref }}"
+          WORKER_RELEASE_COMMIT="${{ steps.version.outputs.worker_release_commit }}"
 
           echo "::group::Verifying cosign signature on ${WORKER_REF}"
           cosign verify \
-            --certificate-identity-regexp '.*' \
-            --certificate-oidc-issuer-regexp '.*' \
+            --certificate-github-workflow-sha "${WORKER_RELEASE_COMMIT}" \
+            --certificate-identity-regexp '^https://github.com/Marcuss-ops/VeloxEditiingg/.github/workflows/worker-image\.yml@refs/(tags/worker-v.+|heads/.+)' \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
             "${WORKER_REF}"
           echo "Worker image signature verified."
           echo "::endgroup::"

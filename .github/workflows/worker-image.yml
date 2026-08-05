@@ -50,6 +50,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify release freshness controls
+        run: python3 scripts/ci/test-worker-image-freshness.py
+
+      - name: Verify checkout is the event commit
+        run: |
+          set -euo pipefail
+          CHECKOUT_SHA="$(git rev-parse HEAD)"
+          if [ "$CHECKOUT_SHA" != "$GITHUB_SHA" ]; then
+            echo "::error::checkout commit ($CHECKOUT_SHA) does not match event commit ($GITHUB_SHA). Refusing to certify an ambiguous source tree." >&2
+            exit 1
+          fi
+          echo "Release source commit: $GITHUB_SHA"
+
       - name: Read VERSION.txt (canonical source)
         id: read-version
         run: |
@@ -274,6 +287,7 @@ jobs:
             "version":        "$VERSION",
             "bundle_hash":    "$BUNDLE_HASH",
             "source_hash":    "$SOURCE_HASH",
+            "commit":         "${{ github.sha }}",
             "engine_sha256":  "$ENGINE_SHA",
             "github_run":     "${{ github.run_id }}",
             "github_run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",

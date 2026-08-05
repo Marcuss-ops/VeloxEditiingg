@@ -274,15 +274,20 @@ real-bootstrap:  ## Phase 1 / cap. 2 — REAL bootstrap pass on a published dige
 	@bash scripts/cert/real-bootstrap.sh "$$@"
 
 # Phase 1 / cap. 2 — operator pinner. Records baseline manifest per published
-# digest (registry, tags, version, cosign signature envelope, pinning
-# timestamp, pinning operator) under $EVIDENCE_ROOT/baselines/. Unsigned
-# or wrong-signatory digests are FAIL-CLOSED. Required env: DIGEST.
-pin-worker-digest:  ## Phase 1 / cap. 2 — record a cosign-verified baseline for a digest
+# digest (registry, tags, version, commit, cosign signature envelope, pinning
+# timestamp, pinning operator) under $EVIDENCE_ROOT/baselines/. Unsigned,
+# wrong-signatory, or stale-commit digests are FAIL-CLOSED. Required env:
+# DIGEST + EXPECTED_COMMIT.
+pin-worker-digest:  ## Phase 1 / cap. 2 — record a current-commit cosign baseline
 	@if [ -z "$$DIGEST" ]; then \
 	  echo "DIGEST is required (e.g. export DIGEST=ghcr.io/<owner>/velox-worker@sha256:<64hex>)" ; \
 	  exit 1 ; \
 	fi
-	@bash scripts/cert/pin-worker-digest.sh "$$@"
+	@if [ -z "$$EXPECTED_COMMIT" ]; then \
+	  echo "EXPECTED_COMMIT is required (full 40-hex GitHub commit SHA); stale digest replay is refused" ; \
+	  exit 1 ; \
+	fi
+	@bash scripts/cert/pin-worker-digest.sh "$$@" --digest "$$DIGEST" --commit "$$EXPECTED_COMMIT"
 
 # Operator convenience: align a worker's image digest to the fleet baseline.
 # Runs pin-worker-digest → fleetctl update → fleetctl status verify.
