@@ -110,7 +110,14 @@ func isOffline(sessionActive bool, lastHB string, now time.Time) bool {
 	if err != nil {
 		return true
 	}
-	return now.Sub(t.UTC()) >= ConnectionDisconnectedThreshold
+	t = t.UTC()
+	if t.After(now) {
+		// A future heartbeat is not proof of liveness: clock skew or
+		// malformed producer data must not make an unknown worker
+		// eligible for assignment.
+		return true
+	}
+	return now.Sub(t) >= ConnectionDisconnectedThreshold
 }
 
 // heartbeatAge returns the duration since lastHB, or 0 if

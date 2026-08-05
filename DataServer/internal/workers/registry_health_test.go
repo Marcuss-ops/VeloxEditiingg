@@ -79,6 +79,15 @@ func TestHealth_Updating(t *testing.T) {
 // TestHealth_Rollback covers precedence rank 4: ROLLBACK beats
 // drain and busy. A "fresh + drain + 1 job + ROLLBACK" worker
 // lands in ROLLBACK.
+func TestHealth_FailedDeploymentIsDegraded(t *testing.T) {
+	now := canonicalNow()
+	got := Health(true, false, 0, freshHB(now, 30*time.Second),
+		time.Time{}, string(DeploymentFailed), false, now)
+	if got != WorkerHealthDegraded {
+		t.Errorf("Health = %q, want %q for reachable worker with failed deployment", got, WorkerHealthDegraded)
+	}
+}
+
 func TestHealth_Rollback(t *testing.T) {
 	now := canonicalNow()
 	got := Health(true, true, 1, freshHB(now, 30*time.Second),

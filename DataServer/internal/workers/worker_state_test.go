@@ -21,6 +21,7 @@ func TestDeriveConnectionState(t *testing.T) {
 		{"heartbeat in stale window", true, freshHB(now, 3*time.Minute), ConnectionStale},
 		{"stale edge 150s", true, freshHB(now, ConnectionStaleThreshold), ConnectionStale},
 		{"just under stale edge", true, freshHB(now, ConnectionStaleThreshold-time.Second), ConnectionConnected},
+		{"future heartbeat is offline", true, now.Add(time.Minute).Format(time.RFC3339), ConnectionOffline},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -33,11 +34,11 @@ func TestDeriveConnectionState(t *testing.T) {
 
 func TestDeriveSchedulingState(t *testing.T) {
 	cases := []struct {
-		name       string
-		drain      bool
+		name        string
+		drain       bool
 		quarantined bool
 		activeTasks int
-		want       SchedulingState
+		want        SchedulingState
 	}{
 		{"idle", false, false, 0, SchedulingAvailable},
 		{"busy from tasks", false, false, 2, SchedulingBusy},
@@ -79,18 +80,19 @@ func TestDeriveDeploymentState(t *testing.T) {
 func TestDeriveHealthState(t *testing.T) {
 	now := canonicalNow()
 	cases := []struct {
-		name   string
-		cs     ConnectionState
-		ss     SchedulingState
-		ds     DeploymentState
-		smoke  time.Time
-		want   HealthState
+		name  string
+		cs    ConnectionState
+		ss    SchedulingState
+		ds    DeploymentState
+		smoke time.Time
+		want  HealthState
 	}{
 		{"healthy", ConnectionConnected, SchedulingAvailable, DeploymentNone, time.Time{}, HealthHealthy},
 		{"busy is healthy", ConnectionConnected, SchedulingBusy, DeploymentNone, time.Time{}, HealthHealthy},
 		{"offline is down", ConnectionOffline, SchedulingAvailable, DeploymentNone, time.Time{}, HealthDown},
 		{"quarantined is down", ConnectionConnected, SchedulingQuarantined, DeploymentNone, time.Time{}, HealthDown},
-		{"failed deploy is down", ConnectionConnected, SchedulingAvailable, DeploymentFailed, time.Time{}, HealthDown},
+		{"failed deploy is degraded", ConnectionConnected, SchedulingAvailable, DeploymentFailed, time.Time{}, HealthDegraded},
+		{"updating is degraded", ConnectionConnected, SchedulingAvailable, DeploymentUpdating, time.Time{}, HealthDegraded},
 		{"stale is degraded", ConnectionStale, SchedulingAvailable, DeploymentNone, time.Time{}, HealthDegraded},
 		{"rollback is degraded", ConnectionConnected, SchedulingAvailable, DeploymentRollback, time.Time{}, HealthDegraded},
 		{"recent smoke fail is degraded", ConnectionConnected, SchedulingAvailable, DeploymentNone, now.Add(-30 * time.Minute), HealthDegraded},
@@ -101,6 +103,17 @@ func TestDeriveHealthState(t *testing.T) {
 				t.Errorf("DeriveHealthState = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestIsHeartbeatOfflineRejectsFutureHeartbeat(t *testing.T) {
+	now := canonicalNow()
+	future := now.Add(time.Minute).Format(time.RFC3339)
+	if !IsHeartbeatOffline(future, now) {
+		t.Fatal("future heartbeat must be treated as offline for eligibility")
+	}
+	if IsHeartbeatOffline(freshHB(now, 30*time.Second), now) {
+		t.Fatal("fresh heartbeat must remain eligible")
 	}
 }
 

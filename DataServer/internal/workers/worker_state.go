@@ -14,7 +14,7 @@
 //
 // Rules that hold everywhere in this package:
 //   - No free-form status strings feed the state model. The legacy
-//     WorkerInfo.Status field is display-only back-compat.
+//     Free-form worker status strings are not part of this model.
 //   - No hidden precedence inside string ladders: precedence lives in
 //     projectHealth9 as an explicit, commented, typed switch.
 //   - "busy" / "on_task" / "idle" are never states — BUSY is derived
@@ -131,16 +131,15 @@ func DeriveDeploymentState(status string, isRollback bool) DeploymentState {
 // projection of the connectivity, scheduling and deployment
 // dimensions plus the recent-smoke-fail signal.
 //
-//	DOWN      — unreachable (OFFLINE) OR parked (QUARANTINED) OR
-//	            deployment broken (FAILED)
-//	DEGRADED  — stale heartbeat OR rollback/restart in progress OR
-//	            recent smoke fail
+//	DOWN      — unreachable (OFFLINE) OR parked (QUARANTINED)
+//	DEGRADED  — stale heartbeat OR deployment failed/rolling back /
+//	            restarting OR recent smoke fail
 //	HEALTHY   — everything else (busy is still healthy)
 func DeriveHealthState(cs ConnectionState, ss SchedulingState, ds DeploymentState, lastSmokeFail time.Time, now time.Time) HealthState {
-	if cs == ConnectionOffline || ss == SchedulingQuarantined || ds == DeploymentFailed {
+	if cs == ConnectionOffline || ss == SchedulingQuarantined {
 		return HealthDown
 	}
-	if cs == ConnectionStale || ds == DeploymentRollback || ds == DeploymentRestarting ||
+	if cs == ConnectionStale || ds == DeploymentFailed || ds == DeploymentUpdating || ds == DeploymentRollback || ds == DeploymentRestarting ||
 		(!lastSmokeFail.IsZero() && now.Sub(lastSmokeFail) < time.Hour) {
 		return HealthDegraded
 	}
@@ -166,40 +165,70 @@ func (cs ConnectionState) WireStatus(ss SchedulingState) string {
 }
 
 // projectHealth9 projects the canonical dimensions onto the operator
-// 9-state Health vocabulary. The precedence ladder is EXPLICIT and
-// commented (rank 1 wins) — it is the only place worker-state
-// precedence is decided.
+// 9-state Health vocabulary. The coarse 3-state grade is derived FIRST
+// via DeriveHealthState, so the two projections can never disagree;
+// the 9-state vocabulary is a REFINEMENT of that grade. The precedence
+// ladder below is explicit and commented (rank 1 wins) — it is the only
+// place worker-state precedence is decided.
+//
+// Refinement matrix (coarse grade → 9-state detail):
+//
+//	DOWN      → QUARANTINED (operator-mute, rank 1) | OFFLINE
+//	DEGRADED  → FAILED → ROLLBACK → UPDATING → RESTARTING → DRAINING → DEGRADED
+//	HEALTHY   → DRAINING → BUSY → HEALTHY
+//
+// The within-grade ordering preserves the legacy ladder exactly:
+// quarantine > offline > rollback > updating > restarting > draining
+// > degraded > busy > healthy.
 func projectHealth9(cs ConnectionState, ss SchedulingState, ds DeploymentState, lastSmokeFail time.Time, now time.Time) string {
-	// 1. QUARANTINED — operator-mute beats every other signal.
-	if ss == SchedulingQuarantined {
-		return WorkerHealthQuarantined
-	}
-	// 2. OFFLINE — non-live gate.
-	if cs == ConnectionOffline {
+	switch DeriveHealthState(cs, ss, ds, lastSmokeFail, now) {
+	case HealthDown:
+		// 1. QUARANTINED — operator-mute beats every other signal.
+		if ss == SchedulingQuarantined {
+			return WorkerHealthQuarantined
+		}
+		// 2. OFFLINE — non-live gate. A failed deployment on a
+		// reachable worker is handled by the DEGRADED branch below;
+		// the 9-state vocabulary has no dedicated FAILED state.
 		return WorkerHealthOffline
-	}
-	// 3-5. Deployment-driven states (ROLLBACK before UPDATING so the
-	// recovery intervention wins over the forward deploy).
-	switch ds {
-	case DeploymentRollback:
-		return WorkerHealthRollback
-	case DeploymentUpdating:
-		return WorkerHealthUpdating
-	case DeploymentRestarting:
-		return WorkerHealthRestarting
-	}
-	// 6. DRAINING — operator-blocking.
-	if ss == SchedulingDraining {
-		return WorkerHealthDraining
-	}
-	// 7. DEGRADED — smoke-fail OR heartbeat stale window.
-	if (!lastSmokeFail.IsZero() && now.Sub(lastSmokeFail) < time.Hour) || cs == ConnectionStale {
+	case HealthDegraded:
+		// 3-5. Deployment-driven states (ROLLBACK before UPDATING so the
+		// recovery intervention wins over the forward deploy).
+		switch ds {
+		case DeploymentRollback:
+			return WorkerHealthRollback
+		case DeploymentUpdating:
+			return WorkerHealthUpdating
+		case DeploymentRestarting:
+			return WorkerHealthRestarting
+		}
+		// 6. DRAINING — operator-blocking.
+		if ss == SchedulingDraining {
+			return WorkerHealthDraining
+		}
+		// 7. DEGRADED — smoke-fail OR heartbeat stale window.
 		return WorkerHealthDegraded
+	default: // HealthHealthy
+		// 6. DRAINING — a draining worker is still a scheduling
+		// exclusion even when its connectivity grade is healthy.
+		if ss == SchedulingDraining {
+			return WorkerHealthDraining
+		}
+		// 8. BUSY — actively rendering.
+		if ss == SchedulingBusy {
+			return WorkerHealthBusy
+		}
+		// 9. HEALTHY — fresh, idle, otherwise quiet.
+		return WorkerHealthHealthy
 	}
-	// 8. BUSY — actively rendering.
-	if ss == SchedulingBusy {
-		return WorkerHealthBusy
-	}
-	// 9. HEALTHY — fresh, idle, otherwise quiet.
-	return WorkerHealthHealthy
+}
+
+// IsHeartbeatOffline is the heartbeat-only arm of ConnectionState, for
+// hot paths where the session arm is not available (GetEligibleWorkers
+// must not run per-worker session queries under the registry lock):
+// true iff lastHB is empty, unparseable, or ≥5 minutes old. Session
+// reachability is deliberately assumed satisfiable — the heartbeat arm
+// alone decides connectivity at eligibility time.
+func IsHeartbeatOffline(lastHB string, now time.Time) bool {
+	return isOffline(true, lastHB, now)
 }
