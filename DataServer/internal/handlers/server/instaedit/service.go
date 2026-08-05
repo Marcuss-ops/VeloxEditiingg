@@ -458,10 +458,18 @@ func mapJobWithDeliveries(row map[string]any, workspaceID int64, deliveries []de
 }
 
 func mapWorker(row map[string]any, workspaceID int64) workerResponse {
+	// Status prefers the canonical DERIVED connection_status key when the
+	// reader surfaces it (registry-backed readers); legacy store rows carry
+	// the retired free-form `status` key, which remains the fallback so
+	// already-persisted snapshots keep rendering until re-upserted.
+	status := asString(row["connection_status"])
+	if status == "" {
+		status = asString(row["status"])
+	}
 	w := workerResponse{
 		ID:          asString(row["worker_id"]),
 		WorkspaceID: workspaceID,
-		Status:      asString(row["status"]),
+		Status:      status,
 	}
 	if w.ID == "" {
 		w.ID = asString(row["id"])
