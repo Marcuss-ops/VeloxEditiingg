@@ -25,6 +25,7 @@ const (
 	StaleCommittedArtifact StaleExecutionCategory = "committed_artifact_job_drift"
 	StaleUnconfirmedSpool  StaleExecutionCategory = "unconfirmed_spool"
 	StaleWorkerOffline     StaleExecutionCategory = "worker_offline"
+	StaleOrphanAttempt     StaleExecutionCategory = "orphan_attempt"
 )
 
 // StaleExecutionFinding is a read-only change proposal emitted by Scan.
@@ -93,7 +94,7 @@ func (r *StaleExecutionReconciler) Scan(ctx context.Context, now time.Time, limi
 	// (for example, a large expired-lease backlog) to starve later categories.
 	scanners := []func(context.Context, time.Time, int, []StaleExecutionFinding) ([]StaleExecutionFinding, error){
 		r.scanExpiredLeases, r.scanOrphanTasks, r.scanCommittedArtifactDrift,
-		r.scanUnconfirmedSpool, r.scanOfflineWorkers,
+		r.scanUnconfirmedSpool, r.scanOfflineWorkers, r.scanOrphanAttempts,
 	}
 	perCategory := make([][]StaleExecutionFinding, len(scanners))
 	for i, scan := range scanners {
@@ -171,7 +172,9 @@ func (r *StaleExecutionReconciler) scanExpiredLeases(ctx context.Context, now ti
 }
 
 func (r *StaleExecutionReconciler) scanOrphanTasks(ctx context.Context, now time.Time, limit int, out []StaleExecutionFinding) ([]StaleExecutionFinding, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT t.task_id, COALESCE(t.job_id,''), t.status, COALESCE(t.worker_id,''), COALESCE(t.lease_id,''), COALESCE(t.attempt_id,''), CASE WHEN j.job_id IS NULL THEN 'missing_job' ELSE 'cancelled_job' END FROM tasks t LEFT JOIN jobs j ON j.job_id=t.job_id WHERE t.status IN ('READY','LEASED','RUNNING') AND (j.job_id IS NULL OR j.status='CANCELLED')			AND NOT (t.status IN ('LEASED','RUNNING')
+	rows, err := r.db.QueryContext(ctx, `SELECT t.task_id, COALESCE(t.job_id,''), t.status, COALESCE(t.worker_id,''), COALESCE(t.lease_id,''), COALESCE(t.attempt_id,''), CASE WHEN j.job_id IS NULL THEN 'missing_job' ELSE 'cancelled_job' END FROM tasks t LEFT JOIN jobs j ON j.job_id=t.job_id		 WHERE t.status IN ('READY','LEASED','RUNNING')			AND (j.job_id IS NULL OR j.status IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT'))
+
+			AND NOT (t.status IN ('LEASED','RUNNING')
 			            AND COALESCE(t.lease_expires_at,'')<>''
 			            AND t.lease_expires_at < ?
 			            AND j.job_id IS NOT NULL
@@ -240,6 +243,46 @@ func (r *StaleExecutionReconciler) scanOfflineWorkers(ctx context.Context, now t
 	return out, rows.Err()
 }
 
+func (r *StaleExecutionReconciler) scanOrphanAttempts(ctx context.Context, now time.Time, limit int, out []StaleExecutionFinding) ([]StaleExecutionFinding, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT a.id, a.task_id, COALESCE(a.job_id,''), a.status,
+		       COALESCE(a.worker_id,''), COALESCE(a.lease_id,''),
+		       CASE
+				WHEN t.task_id IS NULL THEN 'missing_task'
+				WHEN t.status IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT') THEN 'terminal_task'
+				WHEN NOT EXISTS (SELECT 1 FROM jobs j WHERE j.job_id=t.job_id) THEN 'missing_job'
+				WHEN EXISTS (SELECT 1 FROM jobs j WHERE j.job_id=t.job_id
+				             AND j.status IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT')) THEN 'terminal_job'
+				ELSE 'inconsistent_task'
+		       END
+		  FROM task_attempts a
+		  LEFT JOIN tasks t ON t.task_id=a.task_id
+		 WHERE a.status NOT IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT')
+		   AND (t.task_id IS NULL OR t.status IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT')
+		        OR NOT EXISTS (SELECT 1 FROM jobs j WHERE j.job_id=t.job_id)
+		        OR EXISTS (SELECT 1 FROM jobs j WHERE j.job_id=t.job_id
+		                   AND j.status IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT')))
+		 ORDER BY a.updated_at, a.id
+		 LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("scan orphan attempts: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var attemptID, taskID, jobID, status, workerID, leaseID, reason string
+		if err := rows.Scan(&attemptID, &taskID, &jobID, &status, &workerID, &leaseID, &reason); err != nil {
+			return nil, err
+		}
+		out = append(out, StaleExecutionFinding{
+			Category: StaleOrphanAttempt, ResourceType: "task_attempt", ResourceID: attemptID,
+			JobID: jobID, TaskID: taskID, AttemptID: attemptID, WorkerID: workerID,
+			LeaseID: leaseID, OldStatus: status, ProposedStatus: "CANCELLED",
+			Reason: "non-terminal attempt has no active parent task: " + reason, ObservedAt: now.UTC(),
+		})
+	}
+	return out, rows.Err()
+}
+
 func (r *StaleExecutionReconciler) applyFinding(ctx context.Context, f StaleExecutionFinding, actor string, now time.Time) (bool, error) {
 	switch f.Category {
 	case StaleLeaseExpired:
@@ -256,6 +299,8 @@ func (r *StaleExecutionReconciler) applyFinding(ctx context.Context, f StaleExec
 		return r.applyUnconfirmedSpool(ctx, f, actor, now)
 	case StaleWorkerOffline:
 		return r.applyOfflineWorker(ctx, f, actor, now)
+	case StaleOrphanAttempt:
+		return r.applyOrphanAttempt(ctx, f, actor, now)
 	default:
 		return false, fmt.Errorf("unknown reconciliation category %q", f.Category)
 	}
@@ -299,7 +344,7 @@ func (r *StaleExecutionReconciler) applyOrphanTask(ctx context.Context, f StaleE
 	}
 	defer tx.Rollback()
 	nowStr := now.UTC().Format(time.RFC3339Nano)
-	res, err := tx.ExecContext(ctx, `UPDATE tasks SET status='CANCELLED', completed_at=?, worker_id='', lease_id='', lease_expires_at=NULL, revision=revision+1, updated_at=? WHERE task_id=? AND status IN ('READY','LEASED','RUNNING') AND (NOT EXISTS (SELECT 1 FROM jobs WHERE job_id=tasks.job_id) OR EXISTS (SELECT 1 FROM jobs WHERE job_id=tasks.job_id AND status='CANCELLED'))`, nowStr, nowStr, f.TaskID)
+	res, err := tx.ExecContext(ctx, `UPDATE tasks SET status='CANCELLED', completed_at=?, worker_id='', lease_id='', lease_expires_at=NULL, revision=revision+1, updated_at=? WHERE task_id=? AND status IN ('READY','LEASED','RUNNING') AND (NOT EXISTS (SELECT 1 FROM jobs WHERE job_id=tasks.job_id) OR EXISTS (SELECT 1 FROM jobs WHERE job_id=tasks.job_id AND status IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT')))`, nowStr, nowStr, f.TaskID)
 	if err != nil {
 		return false, err
 	}
@@ -446,6 +491,44 @@ func (r *StaleExecutionReconciler) applyUnconfirmedSpool(ctx context.Context, f 
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE attempt_commits SET status='EXPIRED', rejected_code='UNCONFIRMED_SPOOL', rejected_message='stale worker spool declaration has no upload', updated_at=? WHERE commit_id=? AND status IN ('DECLARED','UPLOADING','RECEIVED')`, nowStr, f.CommitID); err != nil {
 		return false, err
+	}
+	if err := appendReconcileAuditTx(ctx, tx, f, actor, now); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (r *StaleExecutionReconciler) applyOrphanAttempt(ctx context.Context, f StaleExecutionFinding, actor string, now time.Time) (bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	nowStr := now.UTC().Format(time.RFC3339Nano)
+	res, err := tx.ExecContext(ctx, `
+		UPDATE task_attempts
+		   SET status='CANCELLED', completed_at=COALESCE(completed_at, ?),
+		       error_code='ORPHAN_ATTEMPT',
+		       error_message='parent task is missing or terminal',
+		       report_version=report_version+1, updated_at=?
+		 WHERE id=? AND status NOT IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT')
+		   AND (NOT EXISTS (SELECT 1 FROM tasks WHERE task_id=task_attempts.task_id)
+		        OR EXISTS (SELECT 1 FROM tasks WHERE task_id=task_attempts.task_id
+		                   AND status IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT'))			        OR EXISTS (SELECT 1 FROM tasks t
+			                   WHERE t.task_id=task_attempts.task_id
+			                     AND (NOT EXISTS (SELECT 1 FROM jobs j WHERE j.job_id=t.job_id)
+			                          OR EXISTS (SELECT 1 FROM jobs j WHERE j.job_id=t.job_id
+			                                     AND j.status IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT')))))`,
+		nowStr, nowStr, f.AttemptID)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	if n != 1 {
+		return false, nil
 	}
 	if err := appendReconcileAuditTx(ctx, tx, f, actor, now); err != nil {
 		return false, err
