@@ -4,7 +4,8 @@
 //
 // Cleanup rule (canonical, mirrors the user's specification):
 //
-//  1. Skip rows with active_job_id != ” (currently leased by a job).
+//  1. Skip rows with at least one relation in cached_asset_leases
+//     (currently leased by one or more jobs).
 //     This is the EXPLICIT protection requested by Pass 9 — even if a
 //     row is download_complete and is NOT in the master's protected
 //     snapshot, an in-flight job's lease must keep it on disk.
@@ -24,7 +25,7 @@
 //     re-attempt the same physical file).
 //
 // The lease-vs-cleaner race is documented in the design doc: the
-// Acquire/Release predicates in the worker are atomic at the SQL
+// cached_asset_leases predicates in the worker are atomic at the SQL
 // level, so a Cleanup that begins while a job's lease is still set
 // is correct by construction. The reverse — a job acquires AFTER
 // Cleanup has listed but BEFORE it deletes — is the 3-minute grace
@@ -70,7 +71,7 @@ type CleanupStats struct {
 // ignored.
 //
 // Cleanup is safe to call concurrently with Acquire / Release. The
-// per-row Acquire predicate `UPDATE cached_assets SET active_job_id = ?`
+// per-row Acquire predicate inserts into cached_asset_leases
 // is atomic; List-then-Delete is the documented race window the
 // lease exists to protect. Cleanup NEVER inspects less than the
 // ACTIVE state of each row, so the rule in (1) holds even when a
@@ -98,7 +99,7 @@ func CleanupWithAudit(ctx context.Context, c *Cache, protected map[string]struct
 	now := time.Now().UTC()
 
 	for _, e := range entries {
-		if e.ActiveJobID != "" {
+		if e.ActiveLeaseCount > 0 {
 			stats.SkippedLeased++
 			emitCleanerAudit(audit, e, metadata, "kept", "active_lease", now)
 			continue

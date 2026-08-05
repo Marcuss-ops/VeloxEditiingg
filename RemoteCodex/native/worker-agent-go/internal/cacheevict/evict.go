@@ -91,7 +91,7 @@ func Run(ctx context.Context, opts Options) ([]Item, error) {
 			item.IndexPresent = found
 			if found {
 				item.ActiveJobID = entry.ActiveJobID
-				if entry.ActiveJobID != "" {
+				if entry.ActiveLeaseCount > 0 {
 					item.Action = "blocked"
 					item.Reason = "active cache lease"
 					items = append(items, item)
@@ -294,8 +294,9 @@ func deleteIndexIfUnleased(ctx context.Context, index *workercache.Cache, assetI
 	}
 	res, err := index.DB().ExecContext(ctx,
 		`DELETE FROM cached_assets
-		 WHERE drive_file_id = ? AND (active_job_id IS NULL OR active_job_id = '')`,
-		assetID,
+		 WHERE drive_file_id = ?
+		   AND NOT EXISTS (SELECT 1 FROM cached_asset_leases WHERE drive_file_id = ?)`,
+		assetID, assetID,
 	)
 	if err != nil {
 		return fmt.Errorf("delete cache index %q: %w", assetID, err)
@@ -314,7 +315,7 @@ func deleteIndexIfUnleased(ctx context.Context, index *workercache.Cache, assetI
 	if !found {
 		return fmt.Errorf("%w: drive_file_id=%s", workercache.ErrNotFound, assetID)
 	}
-	if entry.ActiveJobID != "" {
+	if entry.ActiveLeaseCount > 0 {
 		return fmt.Errorf("%w: asset %q has active cache lease %q", ErrActiveLease, assetID, entry.ActiveJobID)
 	}
 	return fmt.Errorf("delete cache index %q: row was not removed", assetID)

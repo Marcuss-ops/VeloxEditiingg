@@ -202,7 +202,7 @@ func CleanupWithPolicy(
 	stats.Inspected = len(entries)
 
 	for _, e := range entries {
-		if e.ActiveJobID != "" {
+		if e.ActiveLeaseCount > 0 {
 			stats.SkippedLeased++
 			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", "active_lease", now)
 			continue

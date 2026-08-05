@@ -31,14 +31,14 @@
 //  2. download_complete transitions false → true atomically via
 //     MarkDownloadComplete; the cleaner never deletes a row whose
 //     download_complete is false (a half-written file is recoverable
-//     by re-running Resolve).
-//  3. active_job_id is the per-asset lease. While non-empty the
-//     cleaner MUST skip the row. Acquire sets it; Release clears it
-//     only if it is still owned by the same job (defensive: a stale
-//     Release from JOB A does not wipe JOB B's lease).
+//     by re-running Resolve).	//  3. cached_asset_leases is the authoritative many-to-many lease
+//     relation. While it contains a row for an asset the cleaner MUST
+//     skip that asset. Acquire inserts a relation; Release removes only
+//     the caller's relation.
 //  4. last_used_at is bumped by every MarkUsed / MarkDownloadComplete /
-//     Release; the cleaner uses it for the 3-minute grace period
-//     (see Pass 11 plan; enforced in the cleaner, not here).
+
+//	Release; the cleaner uses it for the 3-minute grace period
+//	(see Pass 11 plan; enforced in the cleaner, not here).
 //
 // The schema DDL, the row scanner and the helper predicates live in
 // the sibling file cache_helpers.go.
@@ -53,7 +53,10 @@ import (
 )
 
 // Entry is the row shape for cached_assets as exposed to callers.
-// ActiveJobID is empty when no job holds the lease on the asset.
+// ActiveJobID is a deterministic representative of the active leases, or
+// empty when no job holds the lease. ActiveLeaseCount is authoritative.
+// It is derived from cached_asset_leases and is not persisted on cached_assets;
+// the name remains for compatibility with existing audit/eviction payloads.
 type Entry struct {
 	DriveFileID      string
 	LocalPath        string
@@ -102,15 +105,9 @@ func Open(path string) (*Cache, error) {
 	if err != nil {
 		return nil, fmt.Errorf("workercache.Open: sql.Open: %w", err)
 	}
-	if _, err := db.Exec(schemaDDL); err != nil {
+	if err := applySchema(db); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("workercache.Open: apply schema: %w", err)
-	}
-	// Migrate the legacy single-owner lease into the many-to-many table so
-	// upgrading a worker never silently drops protection for an in-flight job.
-	if _, err := db.Exec(`INSERT OR IGNORE INTO cached_asset_leases (drive_file_id, job_id, acquired_at) SELECT drive_file_id, active_job_id, last_used_at FROM cached_assets WHERE active_job_id IS NOT NULL AND active_job_id != ''`); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("workercache.Open: migrate legacy leases: %w", err)
 	}
 	return &Cache{db: db}, nil
 }
@@ -175,10 +172,10 @@ func (c *Cache) Store(ctx context.Context, e Entry) error {
 	}
 	_, err := c.db.ExecContext(ctx,
 		`INSERT INTO cached_assets
-		   (drive_file_id, local_path, size_bytes, active_job_id,
+		   (drive_file_id, local_path, size_bytes,
 		    download_complete, created_at, last_used_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		e.DriveFileID, e.LocalPath, e.SizeBytes, e.ActiveJobID,
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		e.DriveFileID, e.LocalPath, e.SizeBytes,
 		dlInt, e.CreatedAt.Format(time.RFC3339Nano),
 		e.LastUsedAt.Format(time.RFC3339Nano),
 	)
@@ -250,13 +247,9 @@ func (c *Cache) MarkDownloadComplete(ctx context.Context, driveFileID, localPath
 	return mustHaveAffected(res, driveFileID, "MarkDownloadComplete")
 }
 
-// Acquire marks the asset as in-use for jobID (sets active_job_id).
-// The cleaner MUST skip rows with active_job_id != ” so the asset
-// is preserved while the job runs. Acquire does not block: if a
-// different job already holds the lease, this overwrites it. The
-// Pass 11 singleflight wrapper prevents the race at the download
-// layer; here we keep the update unconditional to match the design
-// pseudocode. Returns ErrNotFound when no row matches.
+// Acquire adds the (asset, job) relation to the authoritative lease table.
+// Multiple jobs may hold the same asset lease concurrently. Returns
+// ErrNotFound when no cached asset row matches.
 func (c *Cache) Acquire(ctx context.Context, driveFileID, jobID string) error {
 	if driveFileID == "" {
 		return ErrEmptyID
@@ -264,22 +257,27 @@ func (c *Cache) Acquire(ctx context.Context, driveFileID, jobID string) error {
 	if jobID == "" {
 		return fmt.Errorf("workercache.Acquire: jobID is required")
 	}
-	if _, err := c.db.ExecContext(ctx, `INSERT OR IGNORE INTO cached_asset_leases (drive_file_id, job_id, acquired_at) VALUES (?, ?, ?)`, driveFileID, jobID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	res, err := c.db.ExecContext(ctx, `INSERT OR IGNORE INTO cached_asset_leases (drive_file_id, job_id, acquired_at) SELECT drive_file_id, ?, ? FROM cached_assets WHERE drive_file_id = ?`, jobID, time.Now().UTC().Format(time.RFC3339Nano), driveFileID)
+	if err != nil {
 		return fmt.Errorf("workercache.Acquire(%q, %q): lease insert: %w", driveFileID, jobID, err)
 	}
-	res, err := c.db.ExecContext(ctx, `UPDATE cached_assets SET active_job_id = ? WHERE drive_file_id = ?`, jobID, driveFileID)
-	if err != nil {
-		return fmt.Errorf("workercache.Acquire(%q, %q): %w", driveFileID, jobID, err)
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("workercache.Acquire(%q, %q): rows affected: %w", driveFileID, jobID, err)
+	} else if n == 0 {
+		var found int
+		if err := c.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM cached_assets WHERE drive_file_id = ?`, driveFileID).Scan(&found); err != nil {
+			return fmt.Errorf("workercache.Acquire(%q, %q): probe: %w", driveFileID, jobID, err)
+		}
+		if found == 0 {
+			return fmt.Errorf("%w: drive_file_id=%s", ErrNotFound, driveFileID)
+		}
 	}
-	return mustHaveAffected(res, driveFileID, "Acquire")
+	return nil
 }
 
-// Release clears active_job_id IFF it equals jobID, and bumps
-// last_used_at. A Release from a job that does not own the lease is
-// a benign no-op: this protects against the race scenario where
-// JOB A acquires, JOB B acquires (overwrites), JOB A releases — we
-// must not wipe JOB B's lease. Returns ErrNotFound when the row
-// itself is missing.
+// Release removes only the (asset, job) lease relation and bumps
+// last_used_at. Releasing another job's lease is a benign no-op.
+// Returns ErrNotFound when the asset row itself is missing.
 func (c *Cache) Release(ctx context.Context, driveFileID, jobID string) error {
 	if driveFileID == "" {
 		return ErrEmptyID
@@ -291,28 +289,11 @@ func (c *Cache) Release(ctx context.Context, driveFileID, jobID string) error {
 	if _, err := c.db.ExecContext(ctx, `DELETE FROM cached_asset_leases WHERE drive_file_id = ? AND job_id = ?`, driveFileID, jobID); err != nil {
 		return fmt.Errorf("workercache.Release(%q, %q): lease delete: %w", driveFileID, jobID, err)
 	}
-	res, err := c.db.ExecContext(ctx, `UPDATE cached_assets SET active_job_id = (SELECT job_id FROM cached_asset_leases WHERE drive_file_id = ? LIMIT 1), last_used_at = ? WHERE drive_file_id = ?`, driveFileID, now, driveFileID)
+	res, err := c.db.ExecContext(ctx, `UPDATE cached_assets SET last_used_at = ? WHERE drive_file_id = ?`, now, driveFileID)
 	if err != nil {
 		return fmt.Errorf("workercache.Release(%q, %q): %w", driveFileID, jobID, err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("workercache.Release(%q, %q): rows affected: %w", driveFileID, jobID, err)
-	}
-	if n == 0 {
-		// Either the row is missing, or the lease was owned by a
-		// different job (the latter is a benign no-op).
-		var found int
-		if err := c.db.QueryRowContext(ctx,
-			`SELECT COUNT(1) FROM cached_assets WHERE drive_file_id = ?`,
-			driveFileID).Scan(&found); err != nil {
-			return fmt.Errorf("workercache.Release(%q, %q): probe: %w", driveFileID, jobID, err)
-		}
-		if found == 0 {
-			return fmt.Errorf("%w: drive_file_id=%s", ErrNotFound, driveFileID)
-		}
-	}
-	return nil
+	return mustHaveAffected(res, driveFileID, "Release")
 }
 
 // DeleteIfUnleased atomically removes an unleased cache row. The lease
