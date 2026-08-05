@@ -196,6 +196,10 @@ SELECT a.id, d.delivery_id, d.status, COALESCE(dd.provider,''), COALESCE(d.remot
 # ── Global convergence / zero-state checks ──────────────────────────────────
 run_zero_query "ZERO running jobs" "$DB_PATH" "SELECT job_id, status FROM jobs WHERE status='RUNNING';"
 run_zero_query "ZERO running tasks" "$DB_PATH" "SELECT task_id, status FROM tasks WHERE status='RUNNING';"
+run_zero_query "ZERO non-terminal task attempts" "$DB_PATH" "
+SELECT id, task_id, job_id, status FROM task_attempts
+ WHERE status IS NULL OR status NOT IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT');
+"
 run_zero_query "ZERO expired active task leases" "$DB_PATH" "
 SELECT task_id, status, lease_expires_at FROM tasks
  WHERE status IN ('RUNNING','LEASED')

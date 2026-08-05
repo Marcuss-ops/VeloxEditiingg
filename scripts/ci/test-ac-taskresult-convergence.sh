@@ -72,6 +72,22 @@ expect_failure() {
 
 expect_failure "running-task" "UPDATE tasks SET status='RUNNING' WHERE task_id='$TASK';"
 sqlite3 "$DB" "UPDATE tasks SET status='SUCCEEDED' WHERE task_id='$TASK';"
+sqlite3 "$DB" "UPDATE task_attempts SET status='RUNNING' WHERE id='$ATTEMPT';"
+if run_gate >"$TMP/running-attempt.out" 2>&1; then
+  cat "$TMP/running-attempt.out" >&2
+  echo "FAIL: negative case running-attempt unexpectedly passed" >&2
+  exit 1
+fi
+echo "OK: negative case running-attempt rejected"
+sqlite3 "$DB" "UPDATE task_attempts SET status='SUCCEEDED' WHERE id='$ATTEMPT';"
+sqlite3 "$DB" "UPDATE task_attempts SET status=NULL WHERE id='$ATTEMPT';"
+if run_gate >"$TMP/null-attempt-status.out" 2>&1; then
+  cat "$TMP/null-attempt-status.out" >&2
+  echo "FAIL: negative case null-attempt-status unexpectedly passed" >&2
+  exit 1
+fi
+echo "OK: negative case null-attempt-status rejected"
+sqlite3 "$DB" "UPDATE task_attempts SET status='SUCCEEDED' WHERE id='$ATTEMPT';"
 expect_failure "missing-winning-attempt" "UPDATE tasks SET winning_attempt_id='' WHERE task_id='$TASK';"
 sqlite3 "$DB" "UPDATE tasks SET winning_attempt_id='$ATTEMPT' WHERE task_id='$TASK';"
 expect_failure "non-terminal-delivery" "UPDATE job_deliveries SET status='PENDING' WHERE delivery_id='$DELIVERY';"
