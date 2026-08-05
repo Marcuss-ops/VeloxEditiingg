@@ -13,7 +13,9 @@ import (
 // AssetDownloadProgress returns the latest worker-side asset state projected
 // into the requested job. The aggregate is weighted by bytes rather than by
 // asset count, so a small completed asset cannot make a large pending asset
-// look half complete.
+// look half complete. The aggregate ETA is the conservative maximum ETA of
+// active transfers; queued assets have no measured throughput yet and are
+// therefore intentionally excluded until they start.
 func writeAssetProgressNotFound(c *gin.Context) {
 	c.JSON(http.StatusNotFound, gin.H{
 		"ok":      false,
@@ -46,13 +48,15 @@ func (h *Handlers) AssetDownloadProgress() gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "asset_progress_store_failure"})
 			return
 		}
-		assets, err := h.store.ListAssetDownloadProgressForJob(c.Request.Context(), jobID)
+		assets, err := h.store.ListAssetDownloadProgressForJobForClient(c.Request.Context(), jobID, clientID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "asset_progress_store_failure"})
 			return
 		}
 
 		var downloaded, total int64
+		var throughput float64
+		var etaSeconds int64
 		active := make([]store.AssetDownloadProgressView, 0, len(assets))
 		ready, downloading, queued, failed, cacheHits := 0, 0, 0, 0, 0
 		for _, asset := range assets {
@@ -67,6 +71,12 @@ func (h *Handlers) AssetDownloadProgress() gin.HandlerFunc {
 			case "DOWNLOADING":
 				downloading++
 				active = append(active, asset)
+				if asset.BytesPerSecond > 0 {
+					throughput += asset.BytesPerSecond
+				}
+				if asset.ETASeconds > etaSeconds {
+					etaSeconds = asset.ETASeconds
+				}
 			case "QUEUED", "CACHE_CHECK", "RETRY_WAIT":
 				queued++
 			case "FAILED", "CANCELLED":
@@ -87,11 +97,13 @@ func (h *Handlers) AssetDownloadProgress() gin.HandlerFunc {
 			percent = float64(downloaded) / float64(total) * 100
 		}
 		c.JSON(http.StatusOK, gin.H{
-			"ok":               true,
-			"job_id":           jobID,
-			"progress_percent": percent,
-			"bytes_downloaded": downloaded,
-			"bytes_total":      total,
+			"ok":                          true,
+			"job_id":                      jobID,
+			"progress_percent":            percent,
+			"bytes_downloaded":            downloaded,
+			"bytes_total":                 total,
+			"throughput_bytes_per_second": throughput,
+			"eta_seconds":                 etaSeconds,
 			"assets": gin.H{
 				"total":       len(assets),
 				"ready":       ready,

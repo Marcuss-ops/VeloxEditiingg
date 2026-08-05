@@ -33,6 +33,27 @@ func TestAssetDownloadProgressProjectsByteWeightedLatestState(t *testing.T) {
 			JobRefs:   []store.AssetDownloadJobRef{{JobID: "job-progress", TaskID: "task-1", SceneIDs: []string{"scene-2"}}},
 			UpdatedAt: now.Add(time.Second), ReceivedAt: now.Add(time.Second),
 		},
+		{
+			WorkerID: "worker-1", TransferID: "transfer-active-2", AssetKey: "sha256:active-2",
+			AssetID: "active-2", Role: "clip", State: "DOWNLOADING",
+			BytesDownloaded: 50, BytesTotal: 150, BytesPerSecond: 5, ETASeconds: 20,
+			JobRefs:   []store.AssetDownloadJobRef{{JobID: "job-progress", TaskID: "task-2", SceneIDs: []string{"scene-2b"}}},
+			UpdatedAt: now.Add(1500 * time.Millisecond), ReceivedAt: now.Add(1500 * time.Millisecond),
+		},
+		{
+			WorkerID: "worker-1", TransferID: "transfer-queued", AssetKey: "sha256:queued",
+			AssetID: "queued", Role: "stock", State: "QUEUED",
+			BytesTotal: 300,
+			JobRefs:    []store.AssetDownloadJobRef{{JobID: "job-progress", TaskID: "task-1", SceneIDs: []string{"scene-3"}}},
+			UpdatedAt:  now.Add(2 * time.Second), ReceivedAt: now.Add(2 * time.Second),
+		},
+		{
+			WorkerID: "worker-1", TransferID: "transfer-failed", AssetKey: "sha256:failed",
+			AssetID: "failed", Role: "image", State: "FAILED",
+			BytesTotal: 50, ErrorCode: "verify_failed",
+			JobRefs:   []store.AssetDownloadJobRef{{JobID: "job-progress", TaskID: "task-1", SceneIDs: []string{"scene-4"}}},
+			UpdatedAt: now.Add(3 * time.Second), ReceivedAt: now.Add(3 * time.Second),
+		},
 	} {
 		if err := db.IngestAssetDownloadProgress(context.Background(), record); err != nil {
 			t.Fatalf("ingest %s: %v", record.AssetKey, err)
@@ -40,13 +61,10 @@ func TestAssetDownloadProgressProjectsByteWeightedLatestState(t *testing.T) {
 	}
 
 	if _, err := db.InsertCreatorForwarding(context.Background(), &store.CreatorForwarding{
-		ForwardingID:     "forwarding-progress-owner",
-		ExternalClientID: "client-progress",
-		SourceProvider:   ExternalAPISourceProvider,
-		SourceJobID:      "source-progress",
-		TargetExecutorID: JobSubmitTargetExecutorID,
-		TargetJobID:      "job-progress",
-		Status:           string(store.CFStatusForwarded),
+		ForwardingID: "forwarding-progress-owner", ExternalClientID: "client-progress",
+		SourceProvider: ExternalAPISourceProvider, SourceJobID: "source-progress",
+		TargetExecutorID: JobSubmitTargetExecutorID, TargetJobID: "job-progress",
+		Status: string(store.CFStatusForwarded),
 	}); err != nil {
 		t.Fatalf("seed forwarding: %v", err)
 	}
@@ -54,14 +72,13 @@ func TestAssetDownloadProgressProjectsByteWeightedLatestState(t *testing.T) {
 	h := (&Handlers{}).WithStore(db)
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.GET("/api/v1/jobs/:id/asset-progress", func(c *gin.Context) {
+	h.RegisterRoutes(r, nil, func(c *gin.Context) {
 		c.Set(m2mCtxKeyClientID, "client-progress")
-		h.AssetDownloadProgress()(c)
+		c.Next()
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-progress/asset-progress", nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-progress/asset-progress", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -70,10 +87,14 @@ func TestAssetDownloadProgressProjectsByteWeightedLatestState(t *testing.T) {
 		ProgressPercent float64 `json:"progress_percent"`
 		BytesDownloaded int64   `json:"bytes_downloaded"`
 		BytesTotal      int64   `json:"bytes_total"`
+		Throughput      float64 `json:"throughput_bytes_per_second"`
+		ETASeconds      int64   `json:"eta_seconds"`
 		Assets          struct {
 			Total       int `json:"total"`
 			Ready       int `json:"ready"`
 			Downloading int `json:"downloading"`
+			Queued      int `json:"queued"`
+			Failed      int `json:"failed"`
 			CacheHits   int `json:"cache_hits"`
 		} `json:"assets"`
 		Active []store.AssetDownloadProgressView `json:"active"`
@@ -81,18 +102,62 @@ func TestAssetDownloadProgressProjectsByteWeightedLatestState(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v; body=%s", err, w.Body.String())
 	}
-	if response.BytesDownloaded != 125 || response.BytesTotal != 300 {
-		t.Fatalf("bytes = %d/%d, want 125/300", response.BytesDownloaded, response.BytesTotal)
+	if response.BytesDownloaded != 175 || response.BytesTotal != 800 {
+		t.Fatalf("bytes = %d/%d, want 175/800", response.BytesDownloaded, response.BytesTotal)
 	}
-	wantPercent := float64(125) / 300 * 100
+	wantPercent := float64(175) / 800 * 100
 	if response.ProgressPercent != wantPercent {
 		t.Fatalf("progress_percent = %v, want %v", response.ProgressPercent, wantPercent)
 	}
-	if response.Assets.Total != 2 || response.Assets.Ready != 1 || response.Assets.Downloading != 1 || response.Assets.CacheHits != 1 {
-		t.Fatalf("asset counts = %+v, want total=2 ready=1 downloading=1 cache_hits=1", response.Assets)
+	if response.Throughput != 15 || response.ETASeconds != 20 {
+		t.Fatalf("aggregate performance = throughput=%v eta=%d, want 15/20", response.Throughput, response.ETASeconds)
 	}
-	if len(response.Active) != 1 || response.Active[0].AssetKey != "sha256:active" {
-		t.Fatalf("active = %+v, want active sha256:active", response.Active)
+	if response.Assets.Total != 5 || response.Assets.Ready != 1 || response.Assets.Downloading != 2 || response.Assets.Queued != 1 || response.Assets.Failed != 1 || response.Assets.CacheHits != 1 {
+		t.Fatalf("asset counts = %+v, want total=5 ready=1 downloading=2 queued=1 failed=1 cache_hits=1", response.Assets)
+	}
+	if len(response.Active) != 2 || response.Active[0].AssetKey != "sha256:active-2" || response.Active[1].AssetKey != "sha256:active" {
+		t.Fatalf("active = %+v, want active-2 and active", response.Active)
+	}
+
+}
+
+func TestAssetDownloadProgressReturnsZeroMetricsForKnownJobWithoutAssets(t *testing.T) {
+	db := openHandlerTestDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.InsertCreatorForwarding(context.Background(), &store.CreatorForwarding{
+		ForwardingID: "forwarding-progress-empty", ExternalClientID: "client-empty",
+		SourceProvider: ExternalAPISourceProvider, SourceJobID: "source-empty",
+		TargetExecutorID: JobSubmitTargetExecutorID, TargetJobID: "job-empty",
+		Status: string(store.CFStatusForwarded),
+	}); err != nil {
+		t.Fatalf("seed forwarding: %v", err)
+	}
+
+	h := (&Handlers{}).WithStore(db)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/api/v1/jobs/:id/asset-progress", func(c *gin.Context) {
+		c.Set(m2mCtxKeyClientID, "client-empty")
+		h.AssetDownloadProgress()(c)
+	})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-empty/asset-progress", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var response struct {
+		ProgressPercent float64 `json:"progress_percent"`
+		Throughput      float64 `json:"throughput_bytes_per_second"`
+		ETASeconds      int64   `json:"eta_seconds"`
+		Assets          struct {
+			Total int `json:"total"`
+		} `json:"assets"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, w.Body.String())
+	}
+	if response.ProgressPercent != 0 || response.Throughput != 0 || response.ETASeconds != 0 || response.Assets.Total != 0 {
+		t.Fatalf("empty-job metrics = %+v, want all zero", response)
 	}
 }
 
@@ -104,9 +169,8 @@ func TestAssetDownloadProgressRequiresClientIdentity(t *testing.T) {
 	r := gin.New()
 	r.GET("/api/v1/jobs/:id/asset-progress", h.AssetDownloadProgress())
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-without-client/asset-progress", nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-without-client/asset-progress", nil))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status without client identity = %d, want 404; body=%s", w.Code, w.Body.String())
 	}
@@ -123,21 +187,17 @@ func TestAssetDownloadProgressRejectsCrossClientLookupAsIndistinguishable404(t *
 	db := openHandlerTestDB(t)
 	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.InsertCreatorForwarding(context.Background(), &store.CreatorForwarding{
-		ForwardingID:     "forwarding-progress-owner-2",
-		ExternalClientID: "client-owner",
-		SourceProvider:   ExternalAPISourceProvider,
-		SourceJobID:      "source-progress-2",
-		TargetExecutorID: JobSubmitTargetExecutorID,
-		TargetJobID:      "job-owned",
-		Status:           string(store.CFStatusForwarded),
+		ForwardingID: "forwarding-progress-owner-2", ExternalClientID: "client-owner",
+		SourceProvider: ExternalAPISourceProvider, SourceJobID: "source-progress-2",
+		TargetExecutorID: JobSubmitTargetExecutorID, TargetJobID: "job-owned",
+		Status: string(store.CFStatusForwarded),
 	}); err != nil {
 		t.Fatalf("seed forwarding: %v", err)
 	}
 	if err := db.IngestAssetDownloadProgress(context.Background(), store.AssetDownloadProgressRecord{
 		WorkerID: "worker-1", AssetKey: "sha256:owned", State: "READY",
 		BytesDownloaded: 10, BytesTotal: 10,
-		JobRefs:    []store.AssetDownloadJobRef{{JobID: "job-owned"}},
-		ReceivedAt: time.Now().UTC(),
+		JobRefs: []store.AssetDownloadJobRef{{JobID: "job-owned"}}, ReceivedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("seed progress: %v", err)
 	}
