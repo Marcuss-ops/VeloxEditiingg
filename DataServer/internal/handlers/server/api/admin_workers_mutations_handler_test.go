@@ -149,6 +149,23 @@ func doPOST(t *testing.T, r *gin.Engine, path string, body interface{}) *httptes
 
 // ─── Update ─────────────────────────────────────────────────────────────────
 
+func TestUpdateWorker_RejectsInvalidJSONBeforePublish(t *testing.T) {
+	reg := newRegisteredRegistry(t, "wicket")
+	pub := &stubPublisher{}
+	r := updateRoute(newMutationsHandler(reg, pub))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/workers/wicket/update", strings.NewReader("{not-json"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid JSON -> %d, want 400: %s", w.Code, w.Body.String())
+	}
+	if len(pub.published) != 0 {
+		t.Fatalf("invalid JSON published %d operations, want 0", len(pub.published))
+	}
+}
+
 func TestUpdateWorker_RejectsMissingDigestBeforePublish(t *testing.T) {
 	reg := newRegisteredRegistry(t, "wicket")
 	pub := &stubPublisher{}
@@ -214,6 +231,26 @@ func TestUpdateWorker_RejectsInvalidDigestBeforeWorkerLookup(t *testing.T) {
 	}
 	if len(pub.published) != 0 {
 		t.Fatalf("invalid digest published %d operations, want 0", len(pub.published))
+	}
+}
+
+func TestDrainWorker_DropsUnvalidatedTargetDigest(t *testing.T) {
+	reg := newRegisteredRegistry(t, "wicket")
+	pub := &stubPublisher{}
+	r := drainRoute(newMutationsHandler(reg, pub))
+
+	w := doPOST(t, r, "/api/v1/admin/workers/wicket/drain", MutationRequest{
+		TargetDigest: "latest",
+		Reason:       "drain only",
+	})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("drain with target_digest -> %d, want 202: %s", w.Code, w.Body.String())
+	}
+	if len(pub.published) != 1 {
+		t.Fatalf("published operations=%d, want 1", len(pub.published))
+	}
+	if got := string(pub.published[0].Payload); got != "{}" {
+		t.Fatalf("drain payload=%s, want {} (target_digest is update-only)", got)
 	}
 }
 

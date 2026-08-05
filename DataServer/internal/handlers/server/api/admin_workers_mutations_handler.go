@@ -60,6 +60,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -224,7 +225,10 @@ func (h *AdminWorkersMutationsHandler) mutationHandler(kind string, action mutat
 		// satisfied without forcing the operator to type a custom
 		// string for every click.
 		var req MutationRequest
-		_ = c.ShouldBindJSON(&req)
+		if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request body"})
+			return
+		}
 		req.Reason = strings.TrimSpace(req.Reason)
 		req.TargetDigest = strings.TrimSpace(req.TargetDigest)
 		if req.Reason == "" {
@@ -265,7 +269,7 @@ func (h *AdminWorkersMutationsHandler) mutationHandler(kind string, action mutat
 		// ── Publish operation (audit ledger + downstream executor) ──
 		now := time.Now().UTC()
 		payload := json.RawMessage("{}")
-		if req.TargetDigest != "" {
+		if kind == fleet.OperationKindUpdate {
 			payload, _ = json.Marshal(map[string]string{"target_digest": req.TargetDigest})
 		}
 		op := &store.Operation{

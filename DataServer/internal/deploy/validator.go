@@ -28,28 +28,23 @@ import (
 	"strings"
 )
 
-// CanonicalImageRefRegex is the canonical Go regex for an operator-
-// deployable image ref. It MUST match deploy/runtime/prepare-host.sh:93
-// (`^ghcr\.io/[a-z0-9._-]+/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$`)
-// character-for-character.
+// CanonicalImageRefRegex is the canonical API regex for an operator-
+// deployable image ref. It accepts a GHCR owner/repository path with
+// non-empty lowercase path components and an immutable sha256 digest.
 //
-// The Master and the worker prepare-host.sh MUST agree on accepted
-// refs; a ref the Master records as PENDING but prepare-host.sh later
-// rejects (because of a tighter worker-side pattern) would never
-// transition to SUCCEEDED — the dashboard's "stuck PENDING" view
-// would surface a phantom deploy. Going strict-lowercase (matching
-// bash exactly) eliminates the divergence.
+// The API is intentionally fail-closed: malformed path components are
+// rejected before worker lookup or operation publication. Worker-side
+// deployment scripts still enforce the immutable sha256 suffix before pull.
 //
 // ghcr.io normalises repo paths to lowercase on lookup, so a
 // lowercase-only pattern is the right contract. A future widening
 // (mixed-case owner/repo) would require a coordinated PR against
 // prepare-host.sh's pattern, not a unilateral Go-side change.
 //
-// Single source of truth for both Go-side and bash-side
-// validators. The bash regex's top-of-file comment quotes this
-// pattern verbatim so the two stay in lockstep.
+// This validator is the API boundary; deployment scripts independently
+// enforce their worker-host image-pull invariant.
 var CanonicalImageRefRegex = regexp.MustCompile(
-	`^ghcr\.io/[a-z0-9._-]+/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$`,
+	`^ghcr\.io/[a-z0-9._-]+/[a-z0-9._-]+(/[a-z0-9._-]+)*@sha256:[a-f0-9]{64}$`,
 )
 
 // ErrEmptyImageRef is returned by ValidateImageRef when the input

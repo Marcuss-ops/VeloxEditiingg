@@ -82,9 +82,11 @@ func TestValidateImageRef_RejectsNonDigest(t *testing.T) {
 		"ghcr.io/o/r@sha256:" + canonicalSHA('a') + "0", // 65 chars (regex requires exactly 64)
 		"docker.io/o/r@sha256:" + canonicalSHA('a'),     // wrong host (docker.io)
 		"quay.io/o/r@sha256:" + canonicalSHA('a'),       // wrong host (quay.io)
-		"garbage",                                // arbitrary non-shape string
-		"ghcr.io//r@sha256:" + canonicalSHA('a'), // empty owner
-		"ghcr.io/o/@sha256:" + canonicalSHA('a'), // empty repo
+		"garbage",                                                      // arbitrary non-shape string
+		"ghcr.io//r@sha256:" + canonicalSHA('a'),                       // empty owner
+		"ghcr.io/o/@sha256:" + canonicalSHA('a'),                       // empty repo
+		"ghcr.io/o//r@sha256:" + canonicalSHA('a'),                     // empty path segment
+		"ghcr.io/o/r/@sha256:" + canonicalSHA('a'),                     // trailing path separator
 		"ghcr.io/Marcuss-Ops/Velox-Worker@sha256:" + canonicalSHA('a'), // mixed-case owner (lowercase-only contract)
 		"ghcr.io/UPPER/repo@sha256:" + canonicalSHA('a'),               // uppercase anywhere
 	}
