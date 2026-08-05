@@ -43,5 +43,4 @@ changing production behavior unexpectedly.
 
 `Config.FromEnv` remains available for package tests and compatibility. Server
 bootstrap uses `config.LoadFromEnv`, which validates and freezes the resulting
-configuration before constructing long-lived services. The deprecated
-`VELOX_DISABLE_JOB_REAPER` variable is not supported and has no effect.
+configuration before constructing long-lived services.
