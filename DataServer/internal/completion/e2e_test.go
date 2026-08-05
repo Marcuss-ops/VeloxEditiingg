@@ -81,8 +81,7 @@ func scheduleRowReady(t *testing.T, db *sql.DB, fence FenceTuple, artifactID str
 }
 
 // seedDeliveryDestination seeds one ENABLED destination row so the
-// CommitAttempt cross-join (artifacts × delivery_destinations) has
-// something to fan out as job_deliveries.
+// destination exists for per-job plans referencing it.
 func seedDeliveryDestination(t *testing.T, db *sql.DB, destID, provider string) {
 	t.Helper()
 	if _, err := db.Exec(
@@ -91,6 +90,20 @@ func seedDeliveryDestination(t *testing.T, db *sql.DB, destID, provider string) 
 		destID, provider, "Test "+destID, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z",
 	); err != nil {
 		t.Fatalf("seedDeliveryDestination: %v", err)
+	}
+}
+
+// seedJobDeliveryPlan seeds an ENABLED explicit per-job plan row. The
+// CommitAttempt delivery fan-out reads ONLY job_delivery_plans; without
+// an explicit plan the job gets zero delivery rows (render-only).
+func seedJobDeliveryPlan(t *testing.T, db *sql.DB, jobID, destID string) {
+	t.Helper()
+	if _, err := db.Exec(
+		`INSERT INTO job_delivery_plans (job_id, destination_id, enabled, priority, retry_budget, created_at, updated_at)
+		 VALUES (?, ?, 1, 0, 5, ?, ?)`,
+		jobID, destID, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z",
+	); err != nil {
+		t.Fatalf("seedJobDeliveryPlan: %v", err)
 	}
 }
 
@@ -654,6 +667,7 @@ func TestPhase6_Scenarios16_17_RaceAndDeliveryRestore(t *testing.T) {
 		jobID := "job-s17"
 		seedCompleteUploadFixture(t, db, "up-s17", "art-s17", jobID, strings.Repeat("a", 64))
 		seedDeliveryDestination(t, db, "dest-s17", "drive")
+		seedJobDeliveryPlan(t, db, jobID, "dest-s17")
 		if _, err := db.Exec(`
 		INSERT INTO artifacts (id, job_id, type, output_kind, storage_provider, status, created_at)
 		VALUES (?, ?, 'engine_progress_sidecar', 'engine_progress_sidecar', 'local', 'READY', ?)`,
@@ -713,6 +727,48 @@ func TestPhase6_Scenarios16_17_RaceAndDeliveryRestore(t *testing.T) {
 	})
 }
 
+// TestCommitAttempt_DeliversOnlyToExplicitPlanDestinations locks the
+// Commit-4 delivery contract: CommitAttempt fans out ONLY to the job's
+// explicit job_delivery_plans destinations. A globally enabled
+// delivery_destinations row that is NOT in the job's plan must never
+// receive a delivery row (no implicit routing to unrelated folders).
+func TestCommitAttempt_DeliversOnlyToExplicitPlanDestinations(t *testing.T) {
+	db := openCoordinatorTestDB(t)
+	c := newTestCoordinator(db)
+	fence := validFence("task-dp", "attempt-dp")
+	jobID := "job-dp"
+	seedCompleteUploadFixture(t, db, "up-dp", "art-dp", jobID, strings.Repeat("a", 64))
+	// Two GLOBAL destinations enabled — only one is in the job's plan.
+	seedDeliveryDestination(t, db, "dest-dp-a", "drive")
+	seedDeliveryDestination(t, db, "dest-dp-b", "drive")
+	seedJobDeliveryPlan(t, db, jobID, "dest-dp-a")
+
+	if _, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
+		Fence: fence, JobID: jobID, OutputManifests: validManifests(),
+	}); err != nil {
+		t.Fatalf("dp DeclareOutputs: %v", err)
+	}
+	commitID := scheduleRowReady(t, db, fence, "art-dp")
+	if _, err := c.CommitAttempt(context.Background(), commitID); err != nil {
+		t.Fatalf("dp CommitAttempt: %v", err)
+	}
+
+	var total int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM job_deliveries WHERE artifact_id = ?`, "art-dp").Scan(&total); err != nil {
+		t.Fatalf("dp job_deliveries count: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("dp job_deliveries rows = %d, want exactly 1 (plan destination only)", total)
+	}
+	var planDest string
+	if err := db.QueryRow(`SELECT destination_id FROM job_deliveries WHERE artifact_id = ?`, "art-dp").Scan(&planDest); err != nil {
+		t.Fatalf("dp job_deliveries destination read: %v", err)
+	}
+	if planDest != "dest-dp-a" {
+		t.Fatalf("dp delivery destination = %q, want dest-dp-a (unplanned global dest-dp-b must NOT receive a delivery)", planDest)
+	}
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // Phase 6 smoke gate: a single integration test running a full happy
 // path submit → Drive commit → assert all durable state surfaces.
@@ -725,6 +781,7 @@ func TestPhase6_Acceptance_GoldenPath(t *testing.T) {
 	jobID := "job-acc"
 	seedCompleteUploadFixture(t, db, "up-acc", "art-acc", jobID, strings.Repeat("a", 64))
 	seedDeliveryDestination(t, db, "dest-acc", "drive")
+	seedJobDeliveryPlan(t, db, jobID, "dest-acc")
 
 	_, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
 		Fence:           fence,

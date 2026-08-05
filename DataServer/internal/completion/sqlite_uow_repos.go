@@ -102,21 +102,27 @@ type sqliteDeliveryRepo struct {
 	u *sqliteUnitOfWork
 }
 
-// InsertDeliveriesForJob computes the (final-video artifact × destination)
-// product and idempotently INSERTs job_deliveries rows. Auxiliary outputs
-// such as engine progress sidecars are committed artifacts, but they are
-// not publishable media and must never enter the delivery queue.
+// InsertDeliveriesForJob computes the (final-video artifact × explicit
+// per-job delivery plan) product and idempotently INSERTs job_deliveries
+// rows. Destinations come EXCLUSIVELY from job_delivery_plans (the plan
+// the job was enqueued with): a job is never routed to unrelated global
+// delivery_destinations rows, so delivery_plan [folder A] uploads only to
+// folder A. Jobs without an explicit plan (render-only) produce zero
+// delivery rows. Auxiliary outputs such as engine progress sidecars are
+// committed artifacts, but they are not publishable media and must never
+// enter the delivery queue.
 func (r *sqliteDeliveryRepo) InsertDeliveriesForJob(ctx context.Context, jobID, nowStr string) error {
 	rows, err := r.u.tx.QueryContext(ctx,
-		`SELECT a.id, dd.destination_id
+		`SELECT a.id, p.destination_id
 		   FROM artifacts a
-		   CROSS JOIN delivery_destinations dd
+		   CROSS JOIN job_delivery_plans p
 		  WHERE a.job_id = ?
+		    AND p.job_id = ?
 		    AND a.status = 'READY'
 		    AND (a.output_kind = 'final_video'
 		         OR (a.output_kind = '' AND a.type IN ('video', 'final_video')))
-		    AND dd.enabled = 1`,
-		jobID,
+		    AND p.enabled = 1`,
+		jobID, jobID,
 	)
 	if err != nil {
 		return fmt.Errorf("completion.DeliveryRepository.InsertDeliveriesForJob: cross-join: %w", err)
