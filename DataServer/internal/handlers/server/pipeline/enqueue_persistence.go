@@ -23,7 +23,8 @@ import (
 	"velox-server/internal/store"
 )
 
-// context) is a documented followup.
+// The endpoint is M2M-only and fails closed: a missing middleware client
+// identity is indistinguishable from an unknown job.
 //
 // Edge cases:
 //   - Unknown :id → 404 job_not_found.
@@ -78,9 +79,13 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		// contract here passes them through verbatim; clients
 		// implementing strict status matching should consult the
 		// openapi.yaml schema enum, not the raw forwarding status.
+		// Enrichment is strictly client-scoped: clientID is guaranteed
+		// non-empty here (the handler fails closed above), so every read
+		// goes through the ownership-scoped repository surface. There is
+		// deliberately no unscoped fallback path.
 		status := string(forwarding.Status)
 		var startedAt, completedAt string
-		if clientID != "" && h.store != nil {
+		if h.store != nil {
 			if job, gErr := h.store.GetJobForClient(ctx, jobID, clientID); gErr == nil && job != nil {
 				if s, ok := job["status"].(string); ok {
 					status = s
@@ -92,29 +97,13 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 					completedAt = s
 				}
 			}
-		} else if h.jobs.Reader != nil {
-			if job, gErr := h.jobs.Reader.Get(ctx, jobID); gErr == nil && job != nil {
-				status = string(job.Status)
-				if !job.StartedAt.IsZero() {
-					startedAt = job.StartedAt.UTC().Format("2006-01-02T15:04:05Z")
-				}
-				if !job.CompletedAt.IsZero() {
-					completedAt = job.CompletedAt.UTC().Format("2006-01-02T15:04:05Z")
-				}
-			}
 		}
 
 		// Enrich with artifact info (best-effort; nil store tolerated).
 		var artifactURL string
 		var artifactSizeBytes int64
 		if h.store != nil {
-			var artifacts []store.Artifact
-			var aErr error
-			if clientID != "" {
-				artifacts, aErr = h.store.GetArtifactsByJobForClient(ctx, jobID, clientID, 1)
-			} else {
-				artifacts, aErr = h.store.GetArtifactsByJob(jobID, 1)
-			}
+			artifacts, aErr := h.store.GetArtifactsByJobForClient(ctx, jobID, clientID, 1)
 			if aErr == nil && len(artifacts) > 0 {
 				a := artifacts[0]
 				if a.StorageURL != "" {
@@ -131,13 +120,7 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		// not exist yet when the job is PENDING.
 		var workerID, taskID, attemptID, leaseID string
 		if h.store != nil {
-			var snap *store.TaskAttemptSnapshot
-			var sErr error
-			if clientID != "" {
-				snap, sErr = h.store.GetLatestTaskAttemptForJobForClient(ctx, jobID, clientID)
-			} else {
-				snap, sErr = h.store.GetLatestTaskAttemptForJob(ctx, jobID)
-			}
+			snap, sErr := h.store.GetLatestTaskAttemptForJobForClient(ctx, jobID, clientID)
 			if sErr == nil && snap != nil {
 				workerID = snap.WorkerID
 				taskID = snap.TaskID

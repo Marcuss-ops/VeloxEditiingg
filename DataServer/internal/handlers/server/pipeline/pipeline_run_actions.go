@@ -30,6 +30,12 @@ func (h *Handlers) lookupPipelineRun(ctx context.Context, idParam, externalClien
 		if pr, err := h.store.GetPipelineRunForClient(ctx, idParam, clientID); err == nil && pr != nil {
 			forwarding, fErr := h.store.GetCreatorForwardingByIDForClient(ctx, pr.ForwardingID, clientID)
 			if fErr != nil {
+				// A forwarding-join miss (e.g. an orphaned run row whose
+				// forwarding row is gone) must be indistinguishable from a
+				// missing run for M2M callers.
+				if errors.Is(fErr, store.ErrCreatorForwardingNoRow) {
+					return nil, nil, errPipelineRunNotFound
+				}
 				return nil, nil, fErr
 			}
 			return pr, forwarding, nil
@@ -42,6 +48,9 @@ func (h *Handlers) lookupPipelineRun(ctx context.Context, idParam, externalClien
 		if pr, err := h.store.GetPipelineRunByRequestIDForClient(ctx, idParam, clientID); err == nil && pr != nil {
 			forwarding, fErr := h.store.GetCreatorForwardingByIDForClient(ctx, pr.ForwardingID, clientID)
 			if fErr != nil {
+				if errors.Is(fErr, store.ErrCreatorForwardingNoRow) {
+					return nil, nil, errPipelineRunNotFound
+				}
 				return nil, nil, fErr
 			}
 			return pr, forwarding, nil
