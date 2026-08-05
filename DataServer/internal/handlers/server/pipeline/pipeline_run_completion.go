@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"velox-server/internal/store"
 )
 
 // PipelineRunArtifacts handles GET /api/v1/pipeline-runs/:id/artifacts.
@@ -28,10 +29,15 @@ func (h *Handlers) PipelineRunArtifacts() gin.HandlerFunc {
 		}
 
 		ctx := c.Request.Context()
-		pr, forwarding, err := h.lookupPipelineRun(ctx, idParam, ClientIDFromContext(c))
+		clientID := strings.TrimSpace(ClientIDFromContext(c))
+		pr, forwarding, err := h.lookupPipelineRun(ctx, idParam, clientID)
 		if err != nil {
 			if errors.Is(err, errPipelineRunNotFound) {
-				c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "pipeline run not found"})
+				if clientID != "" {
+					writeM2MJobNotFound(c)
+				} else {
+					c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "pipeline run not found"})
+				}
 				return
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
@@ -52,7 +58,12 @@ func (h *Handlers) PipelineRunArtifacts() gin.HandlerFunc {
 			return
 		}
 
-		artifacts, _ := h.store.GetArtifactsByJob(veloxJobID, 50)
+		var artifacts []store.Artifact
+		if clientID != "" {
+			artifacts, _ = h.store.GetArtifactsByJobForClient(ctx, veloxJobID, clientID, 50)
+		} else {
+			artifacts, _ = h.store.GetArtifactsByJob(veloxJobID, 50)
+		}
 		result := make([]gin.H, 0, len(artifacts))
 		for _, a := range artifacts {
 			result = append(result, gin.H{
@@ -95,10 +106,15 @@ func (h *Handlers) PipelineRunDeliveries() gin.HandlerFunc {
 		}
 
 		ctx := c.Request.Context()
-		pr, forwarding, err := h.lookupPipelineRun(ctx, idParam, ClientIDFromContext(c))
+		clientID := strings.TrimSpace(ClientIDFromContext(c))
+		pr, forwarding, err := h.lookupPipelineRun(ctx, idParam, clientID)
 		if err != nil {
 			if errors.Is(err, errPipelineRunNotFound) {
-				c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "pipeline run not found"})
+				if clientID != "" {
+					writeM2MJobNotFound(c)
+				} else {
+					c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "pipeline run not found"})
+				}
 				return
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
@@ -119,7 +135,12 @@ func (h *Handlers) PipelineRunDeliveries() gin.HandlerFunc {
 			return
 		}
 
-		deliveries, _ := h.store.ListJobDeliveriesByJob(veloxJobID)
+		var deliveries []store.JobDelivery
+		if clientID != "" {
+			deliveries, _ = h.store.ListJobDeliveriesByJobForClient(ctx, veloxJobID, clientID)
+		} else {
+			deliveries, _ = h.store.ListJobDeliveriesByJob(veloxJobID)
+		}
 		result := make([]gin.H, 0, len(deliveries))
 		for _, d := range deliveries {
 			item := gin.H{

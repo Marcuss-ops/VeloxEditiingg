@@ -24,39 +24,29 @@ import (
 func (h *Handlers) lookupPipelineRun(ctx context.Context, idParam, externalClientID string) (*pipelineruns.PipelineRun, *store.CreatorForwarding, error) {
 	clientID := strings.TrimSpace(externalClientID)
 
-	// A pipeline_runs row has no client column of its own. For an M2M
-	// request, ownership is therefore established through its durable
-	// forwarding_id. A missing link or a client mismatch is deliberately
-	// indistinguishable from a missing run.
-	ownershipCheck := func(pr *pipelineruns.PipelineRun) (*store.CreatorForwarding, error) {
-		if clientID == "" {
-			return nil, nil
-		}
-		if pr.ForwardingID == "" {
-			return nil, errPipelineRunNotFound
-		}
-		forwarding, err := h.store.GetCreatorForwardingByIDForClient(ctx, pr.ForwardingID, clientID)
-		if err != nil {
-			if errors.Is(err, store.ErrCreatorForwardingNoRow) {
-				return nil, errPipelineRunNotFound
+	// 1. pipeline_runs by PK. M2M callers use an ownership-scoped
+	// repository query; admin callers retain the legacy lookup.
+	if clientID != "" {
+		if pr, err := h.store.GetPipelineRunForClient(ctx, idParam, clientID); err == nil && pr != nil {
+			forwarding, fErr := h.store.GetCreatorForwardingByIDForClient(ctx, pr.ForwardingID, clientID)
+			if fErr != nil {
+				return nil, nil, fErr
 			}
-			return nil, err
+			return pr, forwarding, nil
 		}
-		return forwarding, nil
-	}
-
-	// 1. pipeline_runs by PK
-	if pr, err := h.store.GetPipelineRun(ctx, idParam); err == nil && pr != nil {
-		if _, ownershipErr := ownershipCheck(pr); ownershipErr != nil {
-			return nil, nil, ownershipErr
-		}
+	} else if pr, err := h.store.GetPipelineRun(ctx, idParam); err == nil && pr != nil {
 		return pr, nil, nil
 	}
 	// 2. pipeline_runs by request_id
-	if pr, err := h.store.GetPipelineRunByRequestID(ctx, idParam); err == nil && pr != nil {
-		if _, ownershipErr := ownershipCheck(pr); ownershipErr != nil {
-			return nil, nil, ownershipErr
+	if clientID != "" {
+		if pr, err := h.store.GetPipelineRunByRequestIDForClient(ctx, idParam, clientID); err == nil && pr != nil {
+			forwarding, fErr := h.store.GetCreatorForwardingByIDForClient(ctx, pr.ForwardingID, clientID)
+			if fErr != nil {
+				return nil, nil, fErr
+			}
+			return pr, forwarding, nil
 		}
+	} else if pr, err := h.store.GetPipelineRunByRequestID(ctx, idParam); err == nil && pr != nil {
 		return pr, nil, nil
 	}
 	// 3-4. Legacy: creator_forwardings. The M2M path uses only the
@@ -120,7 +110,11 @@ func (h *Handlers) CancelPipelineRun() gin.HandlerFunc {
 		pr, forwarding, err := h.lookupPipelineRun(ctx, idParam, ClientIDFromContext(c))
 		if err != nil {
 			if errors.Is(err, errPipelineRunNotFound) {
-				c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "pipeline run not found"})
+				if strings.TrimSpace(ClientIDFromContext(c)) != "" {
+					writeM2MJobNotFound(c)
+				} else {
+					c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "pipeline run not found"})
+				}
 				return
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
@@ -167,21 +161,33 @@ func (h *Handlers) CancelPipelineRun() gin.HandlerFunc {
 			}
 		}
 
-		// 3. Mark the pipeline_run as CANCELLED (only when found in
-		// pipeline_runs table, not the legacy synthesised row).
+		// 3. Mark the pipeline_run as CANCELLED. M2M callers use an
+		// ownership-scoped mutation; admin callers retain the legacy path.
+		clientID := strings.TrimSpace(ClientIDFromContext(c))
 		if forwarding == nil {
-			if err := h.store.UpdatePipelineRunStatus(ctx, pr.ID,
-				pipelineruns.StatusCancelled, "cancelled by user"); err != nil {
-				pipelineLog("CANCEL: failed to mark CANCELLED run=%s: %v", pr.ID, err)
+			var markErr error
+			if clientID != "" {
+				markErr = h.store.UpdatePipelineRunStatusForClient(ctx, pr.ID, clientID,
+					pipelineruns.StatusCancelled, "cancelled by user")
+			} else {
+				markErr = h.store.UpdatePipelineRunStatus(ctx, pr.ID,
+					pipelineruns.StatusCancelled, "cancelled by user")
+			}
+			if markErr != nil {
+				pipelineLog("CANCEL: failed to mark CANCELLED run=%s: %v", pr.ID, markErr)
 			}
 		} else {
-			// Legacy path: mark the creator_forwarding row as CANCELLED
-			// so the runner does not pick it up again.
-			if err := h.store.MarkCreatorForwardingCancelled(ctx,
-				forwarding.ForwardingID, "", "",
-				"CANCELLED_BY_USER", "cancelled by user"); err != nil {
+			var markErr error
+			if clientID != "" {
+				markErr = h.store.MarkCreatorForwardingCancelledForClient(ctx, forwarding.ForwardingID,
+					clientID, "CANCELLED_BY_USER", "cancelled by user")
+			} else {
+				markErr = h.store.MarkCreatorForwardingCancelled(ctx,
+					forwarding.ForwardingID, "", "", "CANCELLED_BY_USER", "cancelled by user")
+			}
+			if markErr != nil {
 				pipelineLog("CANCEL: failed to mark forwarding CANCELLED run=%s fwd=%s: %v",
-					pr.ID, forwarding.ForwardingID, err)
+					pr.ID, forwarding.ForwardingID, markErr)
 			}
 		}
 

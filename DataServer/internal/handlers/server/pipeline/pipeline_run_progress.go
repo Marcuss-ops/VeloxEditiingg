@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/pipelineruns"
+	"velox-server/internal/store"
 )
 
 // PipelineRunTimeline handles GET /api/v1/pipeline-runs/:id/timeline.
@@ -37,10 +38,15 @@ func (h *Handlers) PipelineRunTimeline() gin.HandlerFunc {
 		}
 
 		ctx := c.Request.Context()
-		pr, forwarding, err := h.lookupPipelineRun(ctx, idParam, ClientIDFromContext(c))
+		clientID := strings.TrimSpace(ClientIDFromContext(c))
+		pr, forwarding, err := h.lookupPipelineRun(ctx, idParam, clientID)
 		if err != nil {
 			if errors.Is(err, errPipelineRunNotFound) {
-				c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "pipeline run not found"})
+				if clientID != "" {
+					writeM2MJobNotFound(c)
+				} else {
+					c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "pipeline run not found"})
+				}
 				return
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
@@ -88,7 +94,12 @@ func (h *Handlers) PipelineRunTimeline() gin.HandlerFunc {
 			veloxJobID = forwarding.TargetJobID
 		}
 		if veloxJobID != "" {
-			jobEvents, _ := h.store.ListJobEvents(veloxJobID, 100)
+			var jobEvents []store.JobEvent
+			if clientID != "" {
+				jobEvents, _ = h.store.ListJobEventsForClient(ctx, veloxJobID, clientID, 100)
+			} else {
+				jobEvents, _ = h.store.ListJobEvents(veloxJobID, 100)
+			}
 			for _, e := range jobEvents {
 				events = append(events, gin.H{
 					"timestamp": e.Timestamp,
@@ -100,7 +111,12 @@ func (h *Handlers) PipelineRunTimeline() gin.HandlerFunc {
 			}
 
 			// 3. Job attempts.
-			attempts, _ := h.store.GetJobAttempts(veloxJobID, 50)
+			var attempts []store.JobAttempt
+			if clientID != "" {
+				attempts, _ = h.store.GetJobAttemptsForClient(ctx, veloxJobID, clientID, 50)
+			} else {
+				attempts, _ = h.store.GetJobAttempts(veloxJobID, 50)
+			}
 			for _, a := range attempts {
 				events = append(events, gin.H{
 					"timestamp": a.StartedAt,

@@ -35,14 +35,26 @@ func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 		}
 
 		ctx := c.Request.Context()
-		pr, _, err := h.lookupPipelineRun(ctx, idParam, ClientIDFromContext(c))
+		clientID := strings.TrimSpace(ClientIDFromContext(c))
+		pr, _, err := h.lookupPipelineRun(ctx, idParam, clientID)
 		if err != nil {
 			if errors.Is(err, errPipelineRunNotFound) {
-				c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "pipeline run not found"})
+				if clientID != "" {
+					writeM2MJobNotFound(c)
+				} else {
+					c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "pipeline run not found"})
+				}
 				return
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 			return
+		}
+
+		markRunError := func(code, message, failedStage string) error {
+			if clientID != "" {
+				return h.store.UpdatePipelineRunErrorForClient(ctx, pr.ID, clientID, code, message, failedStage)
+			}
+			return h.store.UpdatePipelineRunError(ctx, pr.ID, code, message, failedStage)
 		}
 
 		// Only FAILED runs can be retried.
@@ -66,13 +78,24 @@ func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 		}
 
 		// Reset the run to ACCEPTED + clear errors.
-		if err := h.store.UpdatePipelineRunStatus(ctx, pr.ID,
-			pipelineruns.StatusAccepted, "retry requested"); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+		var updateErr error
+		if clientID != "" {
+			updateErr = h.store.UpdatePipelineRunStatusForClient(ctx, pr.ID, clientID,
+				pipelineruns.StatusAccepted, "retry requested")
+		} else {
+			updateErr = h.store.UpdatePipelineRunStatus(ctx, pr.ID,
+				pipelineruns.StatusAccepted, "retry requested")
+		}
+		if updateErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": updateErr.Error()})
 			return
 		}
 		// Clear error fields by stamping empty values via a direct update.
-		if err := h.store.ClearPipelineRunError(ctx, pr.ID); err != nil {
+		if clientID != "" {
+			if err := h.store.ClearPipelineRunErrorForClient(ctx, pr.ID, clientID); err != nil {
+				pipelineLog("RETRY: failed to clear error fields run=%s: %v", pr.ID, err)
+			}
+		} else if err := h.store.ClearPipelineRunError(ctx, pr.ID); err != nil {
 			pipelineLog("RETRY: failed to clear error fields run=%s: %v", pr.ID, err)
 		}
 
@@ -103,7 +126,12 @@ func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 		}
 
 		// Transition to REMOTE_SUBMITTING.
-		if err := h.store.UpdatePipelineRunStatus(ctx, pr.ID,
+		if clientID != "" {
+			if err := h.store.UpdatePipelineRunStatusForClient(ctx, pr.ID, clientID,
+				pipelineruns.StatusRemoteSubmitting, "retry: submitting to remote engine"); err != nil {
+				pipelineLog("RETRY: failed to transition to REMOTE_SUBMITTING run=%s: %v", pr.ID, err)
+			}
+		} else if err := h.store.UpdatePipelineRunStatus(ctx, pr.ID,
 			pipelineruns.StatusRemoteSubmitting, "retry: submitting to remote engine"); err != nil {
 			pipelineLog("RETRY: failed to transition to REMOTE_SUBMITTING run=%s: %v", pr.ID, err)
 		}
@@ -111,7 +139,7 @@ func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 		result, remoteErr := h.client.StartPipeline(ctx, remotePayload, pr.ID)
 		if remoteErr != nil {
 			pipelineLog("RETRY: remote call FAILED run=%s: %v", pr.ID, remoteErr)
-			if markErr := h.store.UpdatePipelineRunError(ctx, pr.ID,
+			if markErr := markRunError(
 				"RETRY_REMOTE_FAILED", remoteErr.Error(), "REMOTE_SUBMITTING"); markErr != nil {
 				pipelineLog("RETRY: failed to mark error run=%s: %v", pr.ID, markErr)
 			}
@@ -142,8 +170,14 @@ func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 		jobID := firstStringResolver(workerPayload, "job_id", "trace_id", "id")
 		if jobID != "" {
 			pr.RemoteJobID = jobID
-			if err := h.store.UpdatePipelineRunRemoteJob(ctx, pr.ID, "remote_engine", jobID); err != nil {
-				pipelineLog("RETRY: failed to stamp remote_job_id run=%s: %v", pr.ID, err)
+			var stampErr error
+			if clientID != "" {
+				stampErr = h.store.UpdatePipelineRunRemoteJobForClient(ctx, pr.ID, clientID, "remote_engine", jobID)
+			} else {
+				stampErr = h.store.UpdatePipelineRunRemoteJob(ctx, pr.ID, "remote_engine", jobID)
+			}
+			if stampErr != nil {
+				pipelineLog("RETRY: failed to stamp remote_job_id run=%s: %v", pr.ID, stampErr)
 			}
 		}
 
@@ -154,7 +188,7 @@ func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 		if jobID == "" {
 			// Remote response missing job_id — contract violation.
 			pipelineLog("RETRY: remote response missing job_id run=%s", pr.ID)
-			if markErr := h.store.UpdatePipelineRunError(ctx, pr.ID,
+			if markErr := markRunError(
 				"RETRY_REMOTE_CONTRACT", "remote response missing job_id", "REMOTE_SUBMITTING"); markErr != nil {
 				pipelineLog("RETRY: failed to mark error run=%s: %v", pr.ID, markErr)
 			}
@@ -188,7 +222,7 @@ func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 		)
 		if persistErr != nil {
 			pipelineLog("RETRY: failed to persist forwarding run=%s: %v", pr.ID, persistErr)
-			if markErr := h.store.UpdatePipelineRunError(ctx, pr.ID,
+			if markErr := markRunError(
 				"RETRY_FORWARDING_FAILED", persistErr.Error(), "FORWARDING"); markErr != nil {
 				pipelineLog("RETRY: failed to mark error run=%s: %v", pr.ID, markErr)
 			}
@@ -203,15 +237,28 @@ func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 		}
 
 		pr.ForwardingID = forwarding.ForwardingID
-		if err := h.store.UpdatePipelineRunForwarding(ctx, pr.ID,
-			forwarding.ForwardingID, pipelineruns.StatusRemoteQueued); err != nil {
-			pipelineLog("RETRY: failed to stamp forwarding_id run=%s: %v", pr.ID, err)
+		var forwardingStampErr error
+		if clientID != "" {
+			forwardingStampErr = h.store.UpdatePipelineRunForwardingForClient(ctx, pr.ID, clientID,
+				forwarding.ForwardingID, pipelineruns.StatusRemoteQueued)
+		} else {
+			forwardingStampErr = h.store.UpdatePipelineRunForwarding(ctx, pr.ID,
+				forwarding.ForwardingID, pipelineruns.StatusRemoteQueued)
+		}
+		if forwardingStampErr != nil {
+			pipelineLog("RETRY: failed to stamp forwarding_id run=%s: %v", pr.ID, forwardingStampErr)
 		}
 
 		// Update the run with the result JSON for audit.
 		if resultJSON, mErr := json.Marshal(result); mErr == nil {
-			if err := h.store.UpdatePipelineRunResult(ctx, pr.ID, string(resultJSON)); err != nil {
-				pipelineLog("RETRY: failed to stamp result_json run=%s: %v", pr.ID, err)
+			var resultErr error
+			if clientID != "" {
+				resultErr = h.store.UpdatePipelineRunResultForClient(ctx, pr.ID, clientID, string(resultJSON))
+			} else {
+				resultErr = h.store.UpdatePipelineRunResult(ctx, pr.ID, string(resultJSON))
+			}
+			if resultErr != nil {
+				pipelineLog("RETRY: failed to stamp result_json run=%s: %v", pr.ID, resultErr)
 			}
 		}
 

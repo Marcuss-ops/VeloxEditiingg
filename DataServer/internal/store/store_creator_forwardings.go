@@ -383,8 +383,8 @@ func (s *SQLiteStore) GetCreatorForwardingByRemoteJob(ctx context.Context, provi
 // guarantees an O(log N) lookup under operator-scale table growth.
 // Without the index, every poll is a full-table scan.
 func (s *SQLiteStore) GetCreatorForwardingByTargetJobID(ctx context.Context, targetJobID, externalClientID string) (*CreatorForwarding, error) {
-	if strings.TrimSpace(targetJobID) == "" {
-		return nil, fmt.Errorf("store: GetCreatorForwardingByTargetJobID: empty target_job_id")
+	if strings.TrimSpace(targetJobID) == "" || strings.TrimSpace(externalClientID) == "" {
+		return nil, ErrCreatorForwardingNoRow
 	}
 
 	query := `SELECT forwarding_id, COALESCE(external_client_id, ''),
@@ -399,12 +399,8 @@ func (s *SQLiteStore) GetCreatorForwardingByTargetJobID(ctx context.Context, tar
 		        created_at, updated_at, COALESCE(forwarded_at, '')
 		 FROM creator_forwardings
 		 WHERE target_job_id = ?`
-	args := []any{targetJobID}
-	if clientID := strings.TrimSpace(externalClientID); clientID != "" {
-		query += ` AND external_client_id = ?`
-		args = append(args, clientID)
-	}
-	query += ` ORDER BY created_at DESC LIMIT 1`
+	args := []any{targetJobID, strings.TrimSpace(externalClientID)}
+	query += ` AND external_client_id = ? ORDER BY created_at DESC LIMIT 1`
 
 	return scanCreatorForwardingWithExternalClient(s.db.QueryRowContext(ctx, query, args...))
 }

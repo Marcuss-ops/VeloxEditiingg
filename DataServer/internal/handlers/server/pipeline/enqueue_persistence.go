@@ -80,7 +80,19 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		// openapi.yaml schema enum, not the raw forwarding status.
 		status := string(forwarding.Status)
 		var startedAt, completedAt string
-		if h.jobs.Reader != nil {
+		if clientID != "" && h.store != nil {
+			if job, gErr := h.store.GetJobForClient(ctx, jobID, clientID); gErr == nil && job != nil {
+				if s, ok := job["status"].(string); ok {
+					status = s
+				}
+				if s, ok := job["started_at"].(string); ok {
+					startedAt = s
+				}
+				if s, ok := job["completed_at"].(string); ok {
+					completedAt = s
+				}
+			}
+		} else if h.jobs.Reader != nil {
 			if job, gErr := h.jobs.Reader.Get(ctx, jobID); gErr == nil && job != nil {
 				status = string(job.Status)
 				if !job.StartedAt.IsZero() {
@@ -96,7 +108,13 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		var artifactURL string
 		var artifactSizeBytes int64
 		if h.store != nil {
-			artifacts, aErr := h.store.GetArtifactsByJob(jobID, 1)
+			var artifacts []store.Artifact
+			var aErr error
+			if clientID != "" {
+				artifacts, aErr = h.store.GetArtifactsByJobForClient(ctx, jobID, clientID, 1)
+			} else {
+				artifacts, aErr = h.store.GetArtifactsByJob(jobID, 1)
+			}
 			if aErr == nil && len(artifacts) > 0 {
 				a := artifacts[0]
 				if a.StorageURL != "" {
@@ -113,7 +131,14 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		// not exist yet when the job is PENDING.
 		var workerID, taskID, attemptID, leaseID string
 		if h.store != nil {
-			if snap, sErr := h.store.GetLatestTaskAttemptForJob(ctx, jobID); sErr == nil && snap != nil {
+			var snap *store.TaskAttemptSnapshot
+			var sErr error
+			if clientID != "" {
+				snap, sErr = h.store.GetLatestTaskAttemptForJobForClient(ctx, jobID, clientID)
+			} else {
+				snap, sErr = h.store.GetLatestTaskAttemptForJob(ctx, jobID)
+			}
+			if sErr == nil && snap != nil {
 				workerID = snap.WorkerID
 				taskID = snap.TaskID
 				attemptID = snap.AttemptID

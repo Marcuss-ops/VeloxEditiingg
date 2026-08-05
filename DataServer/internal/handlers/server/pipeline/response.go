@@ -82,7 +82,7 @@ func buildCreateResponse(pr *pipelineruns.PipelineRun, isDuplicate bool) gin.H {
 // buildPipelineRunProjection builds the full status projection from a
 // pipeline_runs row. When the row has a velox_job_id, it enriches the
 // response with worker/artifact/delivery state from the job layer.
-func (h *Handlers) buildPipelineRunProjection(ctx context.Context, pr *pipelineruns.PipelineRun) gin.H {
+func (h *Handlers) buildPipelineRunProjection(ctx context.Context, pr *pipelineruns.PipelineRun, clientID string) gin.H {
 	response := gin.H{
 		"id":              pr.ID,
 		"request_id":      pr.RequestID,
@@ -111,14 +111,27 @@ func (h *Handlers) buildPipelineRunProjection(ctx context.Context, pr *pipeliner
 	if pr.VeloxJobID == "" {
 		return response
 	}
-	job, jobErr := h.store.GetJob(ctx, pr.VeloxJobID)
+	var job map[string]any
+	var jobErr error
+	var artifacts []store.Artifact
+	if clientID != "" {
+		job, jobErr = h.store.GetJobForClient(ctx, pr.VeloxJobID, clientID)
+		artifacts, _ = h.store.GetArtifactsByJobForClient(ctx, pr.VeloxJobID, clientID, 1)
+	} else {
+		job, jobErr = h.store.GetJob(ctx, pr.VeloxJobID)
+		artifacts, _ = h.store.GetArtifactsByJob(pr.VeloxJobID, 1)
+	}
 	if jobErr == nil {
 		response["worker"] = gin.H{"job_id": pr.VeloxJobID, "status": job["status"]}
-		artifacts, _ := h.store.GetArtifactsByJob(pr.VeloxJobID, 1)
 		if len(artifacts) > 0 {
 			a := artifacts[0]
 			response["artifact"] = gin.H{"artifact_id": a.ID, "status": a.Status, "sha256": a.SHA256, "storage_url": a.StorageURL}
-			deliveries, _ := h.store.ListJobDeliveriesByJob(pr.VeloxJobID)
+			var deliveries []store.JobDelivery
+			if clientID != "" {
+				deliveries, _ = h.store.ListJobDeliveriesByJobForClient(ctx, pr.VeloxJobID, clientID)
+			} else {
+				deliveries, _ = h.store.ListJobDeliveriesByJob(pr.VeloxJobID)
+			}
 			if len(deliveries) > 0 {
 				d := deliveries[0]
 				response["delivery"] = gin.H{"delivery_id": d.DeliveryID, "provider": d.DestinationID, "status": d.Status, "remote_id": d.RemoteID, "remote_url": d.RemoteURL}
