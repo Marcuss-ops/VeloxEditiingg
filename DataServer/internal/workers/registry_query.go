@@ -361,8 +361,39 @@ func ConnectionReason(sessionActive bool, drain bool, lastHB string, now time.Ti
 // ConnectionStatusForInfo mutates `info` to set SessionActive,
 // ConnectionStatus, and Reason from the supplied session_active signal.
 // Pure logic — no DB calls — so tests can drive it directly.
+// ConnectionStatusForInfo is the compatibility-boundary adapter for the
+// legacy connection_status/reason fields. It also hydrates the canonical
+// independent state dimensions so every read path observes the same tuple.
+// New consumers must read ConnectionState, SchedulingState, DeploymentState,
+// and HealthState rather than reconstructing state from legacy strings.
 func ConnectionStatusForInfo(info *Worker, sessionActive bool, now time.Time) {
+	if info == nil {
+		return
+	}
 	info.SessionActive = sessionActive
-	info.ConnectionStatus = ConnectionStatus(sessionActive, info.LastHB, info.Drain, now)
+	info.ConnectionState = DeriveConnectionState(sessionActive, info.LastHB, now)
+	info.SchedulingState = DeriveSchedulingState(
+		info.Drain,
+		info.Quarantined,
+		int(activeJobsFromMetrics(info.Metrics)),
+	)
+	info.HealthState = DeriveHealthState(
+		info.ConnectionState,
+		info.SchedulingState,
+		info.DeploymentState,
+		time.Time{},
+		now,
+	)
+
+	// Controlled compatibility projection. These legacy fields are output
+	// only; no state decision may be made from their previous values.
+	info.ConnectionStatus = info.ConnectionState.WireStatus(info.SchedulingState)
 	info.Reason = ConnectionReason(sessionActive, info.Drain, info.LastHB, now)
+	info.Health = projectHealth9(
+		info.ConnectionState,
+		info.SchedulingState,
+		info.DeploymentState,
+		time.Time{},
+		now,
+	)
 }

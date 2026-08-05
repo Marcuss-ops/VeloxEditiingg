@@ -136,9 +136,17 @@ func heartbeatAge(lastHB string, now time.Time) time.Duration {
 	return now.Sub(t.UTC())
 }
 
-// Health computes the canonical 9-state operator-facing worker
-// status. Pure function — no I/O, no DB. Caller passes `now` so
-// the derivation is deterministic in tests.
+// Health is the controlled legacy compatibility adapter for callers that
+// still provide flattened inputs. It must not be used as a state writer:
+// callers that own a Worker should use ConnectionStatusForInfo (which
+// hydrates all four typed dimensions) and read Worker.HealthState. The
+// explicit precedence below belongs only to the legacy 9-state projection.
+//
+// Deprecated: use DeriveConnectionState, DeriveSchedulingState,
+// DeriveDeploymentState, DeriveHealthState, and the typed Worker fields.
+//
+// Pure function — no I/O, no DB. Caller passes `now` so the derivation is
+// deterministic in tests.
 //
 // Precedence (top wins; comment numbering = precedence rank):
 //
@@ -208,14 +216,18 @@ func Health(
 // The "" return tells Health() to skip the deployment slot and
 // fall through to DRAINING / DEGRADED / BUSY / HEALTHY.
 func DeriveDeploymentHealthState(status string, isRollback bool) string {
+	// Legacy adapter intentionally exposes only active deployment signals.
+	// Terminal CURRENT/FAILED values belong to the typed DeploymentState
+	// dimension and historically mapped to an empty Health() input.
 	switch status {
 	case "PENDING":
 		if isRollback {
-			return HealthDeploymentRollback
+			return string(DeploymentRollback)
 		}
-		return HealthDeploymentUpdating
+		return string(DeploymentUpdating)
+	default:
+		return ""
 	}
-	return ""
 }
 
 // activeJobsFromMetrics parses the canonical "active_tasks" key
@@ -259,14 +271,31 @@ func HealthForInfo(info *Worker, lastSmokeFail time.Time, deploymentState string
 	if info == nil {
 		return
 	}
-	info.Health = Health(
-		info.SessionActive,
+	// Compatibility callers may still supply the old deployment string.
+	// Convert it once at this boundary; an empty input preserves an already
+	// canonical state, while a non-empty input is validated and fails closed.
+	if deploymentState != "" {
+		info.DeploymentState = NormalizeDeploymentState(deploymentState)
+	}
+	info.ConnectionState = DeriveConnectionState(info.SessionActive, info.LastHB, now)
+	info.SchedulingState = DeriveSchedulingState(
 		info.Drain,
-		activeJobsFromMetrics(info.Metrics),
-		info.LastHB,
-		lastSmokeFail,
-		deploymentState,
 		info.Quarantined,
+		int(activeJobsFromMetrics(info.Metrics)),
+	)
+	info.HealthState = DeriveHealthState(
+		info.ConnectionState,
+		info.SchedulingState,
+		info.DeploymentState,
+		lastSmokeFail,
+		now,
+	)
+	// Keep the old field as a read-only projection for existing clients.
+	info.Health = projectHealth9(
+		info.ConnectionState,
+		info.SchedulingState,
+		info.DeploymentState,
+		lastSmokeFail,
 		now,
 	)
 }

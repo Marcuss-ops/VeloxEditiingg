@@ -59,7 +59,6 @@ type Worker struct {
 	BundleHash      string `json:"bundle_hash,omitempty"`
 	ImageDigest     string `json:"image_digest,omitempty"`
 	DesiredVersion  string `json:"desired_version,omitempty"`
-	DeploymentState string `json:"deployment_state,omitempty"`
 	ProtocolVersion string `json:"protocol_version,omitempty"`
 	EngineVersion   string `json:"engine_version,omitempty"`
 
@@ -74,8 +73,22 @@ type Worker struct {
 	SessionActive    bool   `json:"session_active"`
 	ConnectionStatus string `json:"connection_status"`
 	Reason           string `json:"reason"`
-	Health           string `json:"health"`
-	Quarantined      bool   `json:"quarantined"`
+
+	// Canonical independent worker-state dimensions. These are populated
+	// at read time from the session/heartbeat, operator scheduling inputs,
+	// deployment metadata, and telemetry. They are the source for new
+	// consumers; the legacy ConnectionStatus and Health strings below are
+	// compatibility projections only.
+	ConnectionState ConnectionState `json:"connection_state"`
+	SchedulingState SchedulingState `json:"scheduling_state"`
+	DeploymentState DeploymentState `json:"deployment_state,omitempty"`
+	HealthState     HealthState     `json:"health_state"`
+	Health          string          `json:"health"`
+	Quarantined     bool            `json:"quarantined"`
+
+	// Deprecated: consume the typed state dimensions above. This field is
+	// retained for clients that still expect the operator 9-state string.
+	// It is written only by the compatibility projection.
 
 	Readiness    map[string]interface{} `json:"readiness,omitempty"`
 	RecentLogs   []string               `json:"recent_logs,omitempty"`
@@ -115,6 +128,9 @@ func ScrubForPersist(info *Worker) {
 	info.SessionActive = false
 	info.ConnectionStatus = ""
 	info.Reason = ""
+	info.ConnectionState = ""
+	info.SchedulingState = ""
+	info.HealthState = ""
 	info.Health = ""
 }
 
@@ -140,7 +156,7 @@ func applyMetadataFields(extra map[string]interface{}, info *Worker) {
 		info.DesiredVersion = v
 	}
 	if v, ok := extra["deployment_state"].(string); ok && v != "" {
-		info.DeploymentState = v
+		info.DeploymentState = NormalizeDeploymentState(v)
 	}
 	if v, ok := extra["protocol_version"].(string); ok && v != "" {
 		info.ProtocolVersion = v

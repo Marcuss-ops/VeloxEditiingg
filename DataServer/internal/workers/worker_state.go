@@ -37,8 +37,11 @@ const (
 
 // SchedulingState is the canonical scheduling dimension: whether the
 // worker can accept new work. Quarantine and drain are operator-set
-// exclusions; BUSY is derived from the active task count (lease
-// store) — never from a "busy"/"on_task" status string.
+// exclusions; BUSY is derived from an active-task count — never from a
+// "busy"/"on_task" status string. The current registry hydration uses
+// the heartbeat active_tasks metric as a compatibility adapter because
+// the lease-store query is not yet part of this read path; the adapter is
+// isolated here and must be replaced when lease hydration is wired.
 type SchedulingState string
 
 const (
@@ -64,8 +67,10 @@ const (
 )
 
 // HealthState is the canonical top-level health grade. It is a pure
-// PROJECTION of the three upstream dimensions plus the smoke signal —
-// it is never stored independently.
+// PROJECTION of the three upstream dimensions plus an optional smoke
+// signal — it is never stored independently. Registry hydration in this
+// tranche has no smoke-ledger dependency, so it passes the zero signal;
+// HealthForInfo remains the explicit adapter for callers with that data.
 type HealthState string
 
 const (
@@ -125,6 +130,18 @@ func DeriveDeploymentState(status string, isRollback bool) DeploymentState {
 		return DeploymentFailed
 	}
 	return DeploymentNone
+}
+
+// NormalizeDeploymentState validates a deployment state crossing a legacy
+// string boundary. Unknown values fail closed to DeploymentNone; callers
+// must not let arbitrary heartbeat metadata become a canonical state.
+func NormalizeDeploymentState(raw string) DeploymentState {
+	switch DeploymentState(raw) {
+	case DeploymentNone, DeploymentCurrent, DeploymentUpdating, DeploymentRollback, DeploymentFailed, DeploymentRestarting:
+		return DeploymentState(raw)
+	default:
+		return DeploymentNone
+	}
 }
 
 // DeriveHealthState is the canonical 3-state health grade — a pure

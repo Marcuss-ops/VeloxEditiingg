@@ -67,6 +67,10 @@ type WorkerCard struct {
 	Hostname            string  `json:"hostname"`
 	Host                string  `json:"host"`
 	Status              string  `json:"status"`
+	ConnectionState     string  `json:"connection_state"`
+	SchedulingState     string  `json:"scheduling_state"`
+	DeploymentState     string  `json:"deployment_state,omitempty"`
+	HealthState         string  `json:"health_state"`
 	SessionActive       bool    `json:"session_active"`
 	Executor            string  `json:"executor"`
 	ExecutorVersion     int32   `json:"executor_version"`
@@ -82,7 +86,6 @@ type WorkerCard struct {
 	Load1               float64 `json:"load1,omitempty"`
 	CurrentJob          string  `json:"current_job,omitempty"`
 	Health              string  `json:"health,omitempty"`
-	DeploymentState     string  `json:"deployment_state,omitempty"`
 	LastSmokeStatus     string  `json:"last_smoke_status,omitempty"`
 	LastSmokeAt         string  `json:"last_smoke_at,omitempty"`
 	LastRestartAt       string  `json:"last_restart_at,omitempty"`

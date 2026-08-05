@@ -92,7 +92,7 @@ func ProbeLevelC(ctx context.Context, registry HealthLevelCGater, workerID strin
 		r.Checks["heartbeat_fresh"] = CheckResult{Passed: false, Detail: "parse: " + info.LastHB}
 	}
 	// deployment_state — accept CURRENT / SUCCEEDED / empty.
-	ds := info.DeploymentState
+	ds := string(info.DeploymentState)
 	okState := ds == "CURRENT" || ds == "SUCCEEDED" || ds == ""
 	r.Checks["deployment_state"] = CheckResult{
 		Passed:   okState,
