@@ -47,6 +47,7 @@ import (
 
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
+	"velox-shared/controltransport"
 	"velox-shared/identity"
 )
 
@@ -111,15 +112,17 @@ func (s stubSmoke) RunLevelD(_ context.Context, _ string) (string, error) {
 
 // helper: build a healthy worker at time t0 (LastHB 30s before now).
 func healthyWorkerAt(workerID string, t time.Time) *workersreg.WorkerInfo {
+	registry, err := controltransport.NewExecutorRegistry(controltransport.ExecutorCapability{ID: "scene.composite.v1", Version: 1})
+	if err != nil {
+		panic(err)
+	}
 	return &workersreg.WorkerInfo{
-		WorkerID:         identity.ParseWorkerID(workerID),
-		ConnectionStatus: "CONNECTED",
-		SessionActive:    true,
-		LastHB:           t.Add(-30 * time.Second).Format(time.RFC3339Nano),
-		DeploymentState:  "CURRENT",
-		Capabilities: map[string]interface{}{
-			"supported_executors": []string{"scene.composite.v1"},
-		},
+		WorkerID:             identity.ParseWorkerID(workerID),
+		ExecutorCapabilities: registry,
+		ConnectionStatus:     "CONNECTED",
+		SessionActive:        true,
+		LastHB:               t.Add(-30 * time.Second).Format(time.RFC3339Nano),
+		DeploymentState:      "CURRENT",
 	}
 }
 
@@ -445,7 +448,7 @@ func TestProbeLevelC_SessionInactive(t *testing.T) {
 func TestProbeLevelC_NoExecutorAds(t *testing.T) {
 	now := time.Date(2026, 7, 28, 17, 0, 0, 0, time.UTC)
 	info := healthyWorkerAt("wkr-1", now)
-	info.Capabilities = map[string]interface{}{} // empty
+	info.ExecutorCapabilities = controltransport.EmptyExecutorRegistry() // empty
 	gater := stubLevelCGater{info: info}
 	rep := ProbeLevelC(context.Background(), gater, "wkr-1", now)
 	if rep.Checks["executor_advertised"].Passed {

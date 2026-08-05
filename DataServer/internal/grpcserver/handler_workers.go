@@ -73,6 +73,9 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 			extraMap := hb.GetExtra().AsMap()
 			if caps, ok := extraMap["capabilities"].(map[string]interface{}); ok {
 				sess.replaceAssetCacheKeys(extractAssetCacheKeys(caps))
+				if registry, err := parseExecutorCapabilities(caps); err == nil {
+					sess.replaceExecutorRegistry(registry)
+				}
 			}
 			if mpj, ok := extraMap["max_parallel_jobs"]; ok {
 				switch v := mpj.(type) {

@@ -103,31 +103,10 @@ func ProbeLevelC(ctx context.Context, registry HealthLevelCGater, workerID strin
 	return r
 }
 
-// hasExecutorAdvertisement returns true if WorkerInfo advertises
-// at least one supported executor via the canonical "executors"
-// key (proto-structured list of {id, version} objects), or the
-// legacy flat-map keys "supported_executors" / "supported_job_types".
+// hasExecutorAdvertisement checks the canonical executor registry. Legacy
+// payloads are converted once by the workers registry before health reads it.
 func hasExecutorAdvertisement(info *workersreg.WorkerInfo) bool {
-	if info == nil || len(info.Capabilities) == 0 {
-		return false
-	}
-	for _, key := range []string{"executors", "supported_executors", "supported_job_types"} {
-		v, ok := info.Capabilities[key]
-		if !ok || v == nil {
-			continue
-		}
-		switch t := v.(type) {
-		case []string:
-			if len(t) > 0 {
-				return true
-			}
-		case []interface{}:
-			if len(t) > 0 {
-				return true
-			}
-		}
-	}
-	return false
+	return info != nil && !info.ExecutorRegistrySnapshot().IsEmpty()
 }
 
 // HealthLevelCGater is the narrow consumer-side surface for

@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"velox-shared/controltransport"
 )
 
 // ExecutorKey is the canonical (id, version) pair that the worker advertises
@@ -90,8 +92,8 @@ type WorkerSnapshot struct {
 	MaxParallelJobs int
 	ActiveJobs      int
 
-	Executors    map[ExecutorKey]struct{}
-	Capabilities map[string]bool
+	ExecutorRegistry controltransport.ExecutorRegistry
+	Capabilities     map[string]bool
 	// CachedAssetKeys is the worker's last heartbeat projection of completed
 	// local assets. It is a placement hint, never a reservation.
 	CachedAssetKeys map[string]struct{}
@@ -102,8 +104,7 @@ type WorkerSnapshot struct {
 
 // HasExecutor returns true when the worker snapshot carries the given key.
 func (w WorkerSnapshot) HasExecutor(key ExecutorKey) bool {
-	_, ok := w.Executors[key]
-	return ok
+	return w.ExecutorRegistry.Has(key.ID, key.Version)
 }
 
 // FreeSlots returns the number of additional tasks the worker can accept.

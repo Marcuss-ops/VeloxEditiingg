@@ -2,6 +2,7 @@
 package api
 
 import (
+	"velox-shared/controltransport"
 	obs "velox-shared/obs"
 )
 
@@ -87,16 +88,10 @@ const CapabilitySchemaVersion = 1
 
 // ExecutorCapability mirrors one executor.Descriptor in the canonical
 // format the master expects to see in the hello payload.
-type ExecutorCapability struct {
-	ID            string   `json:"id"`
-	Version       int      `json:"version"`
-	ResourceClass string   `json:"resource_class"`
-	TemporalMode  string   `json:"temporal_mode"`
-	Deterministic bool     `json:"deterministic"`
-	Cacheable     bool     `json:"cacheable"`
-	SupportsAlpha bool     `json:"supports_alpha"`
-	OutputTypes   []string `json:"output_types,omitempty"`
-}
+// ExecutorCapability is the shared canonical capability type. The alias keeps
+// the worker API package source-compatible while ensuring the master and worker
+// cannot drift into separate descriptor shapes.
+type ExecutorCapability = controltransport.ExecutorCapability
 
 // HostInfo is the static host layer of the report. Fields are pre-shaped
 // so PR-3.6's resource sampler can fill them in without changing the wire

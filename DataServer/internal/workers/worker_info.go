@@ -3,6 +3,7 @@ package workers
 import (
 	"strings"
 
+	"velox-shared/controltransport"
 	"velox-shared/identity"
 )
 
@@ -29,20 +30,20 @@ type WorkerInfo struct {
 	// attributes. The JSON wire form stays a plain string.
 	WorkerID               identity.WorkerID `json:"worker_id"`
 	WorkerName             string            `json:"worker_name"`
-	DisplayName            string `json:"display_name"`
-	LastHB                 string `json:"last_heartbeat"`
-	FirstSeen              string `json:"first_seen"`
-	CurrentJob             string `json:"current_job"`
-	Drain                  bool   `json:"drain"`
-	Schedulable            bool   `json:"schedulable"`
-	WorkerGroup            string `json:"worker_group"`
-	IPAddress              string `json:"ip_address"`
-	Host                   string `json:"host"`
-	NodeID                 string `json:"node_id,omitempty"`
-	NodeRole               string `json:"node_role,omitempty"`
-	ClusterID              string `json:"cluster_id,omitempty"`
-	HostFingerprint        string `json:"host_fingerprint,omitempty"`
-	CertificateFingerprint string `json:"certificate_fingerprint,omitempty"`
+	DisplayName            string            `json:"display_name"`
+	LastHB                 string            `json:"last_heartbeat"`
+	FirstSeen              string            `json:"first_seen"`
+	CurrentJob             string            `json:"current_job"`
+	Drain                  bool              `json:"drain"`
+	Schedulable            bool              `json:"schedulable"`
+	WorkerGroup            string            `json:"worker_group"`
+	IPAddress              string            `json:"ip_address"`
+	Host                   string            `json:"host"`
+	NodeID                 string            `json:"node_id,omitempty"`
+	NodeRole               string            `json:"node_role,omitempty"`
+	ClusterID              string            `json:"cluster_id,omitempty"`
+	HostFingerprint        string            `json:"host_fingerprint,omitempty"`
+	CertificateFingerprint string            `json:"certificate_fingerprint,omitempty"`
 
 	// Class (RW-PROD-005 §2.1) is the operator-assigned fleet class
 	// (cpu-xlarge / gpu-a100 / mixed / io ...) used by dispatchers
@@ -56,18 +57,22 @@ type WorkerInfo struct {
 	// worker fleets into a new bundle. Empty string means
 	// "unassigned"; the handler ignores empty-rollout rows when
 	// the filter is active.
-	RolloutGroup    string                 `json:"rollout_group,omitempty"`
-	CodeVersion     string                 `json:"code_version"`
-	BundleVersion   string                 `json:"bundle_version"`
-	BundleHash      string                 `json:"bundle_hash,omitempty"`
-	ImageDigest     string                 `json:"image_digest,omitempty"`
-	DesiredVersion  string                 `json:"desired_version,omitempty"`
-	DeploymentState string                 `json:"deployment_state,omitempty"`
-	ProtocolVersion string                 `json:"protocol_version,omitempty"`
-	EngineVersion   string                 `json:"engine_version,omitempty"`
-	Capabilities    map[string]interface{} `json:"capabilities,omitempty"`
-	BootID          string                 `json:"boot_id,omitempty"`
-	BootTS          string                 `json:"boot_ts,omitempty"`
+	RolloutGroup    string `json:"rollout_group,omitempty"`
+	CodeVersion     string `json:"code_version"`
+	BundleVersion   string `json:"bundle_version"`
+	BundleHash      string `json:"bundle_hash,omitempty"`
+	ImageDigest     string `json:"image_digest,omitempty"`
+	DesiredVersion  string `json:"desired_version,omitempty"`
+	DeploymentState string `json:"deployment_state,omitempty"`
+	ProtocolVersion string `json:"protocol_version,omitempty"`
+	EngineVersion   string `json:"engine_version,omitempty"`
+	// Capabilities retains non-executor metadata and the legacy wire map at
+	// the compatibility boundary. ExecutorCapabilities is the typed source of
+	// truth for executor discovery and placement.
+	Capabilities         map[string]interface{}            `json:"capabilities,omitempty"`
+	ExecutorCapabilities controltransport.ExecutorRegistry `json:"-"`
+	BootID               string                            `json:"boot_id,omitempty"`
+	BootTS               string                            `json:"boot_ts,omitempty"`
 
 	// SessionActive — computed at READ time from worker_sessions: true
 	// iff the worker has at least one non-revoked, non-expired auth
@@ -155,6 +160,21 @@ type WorkerInfo struct {
 // "never persisted" preserves the JSON contract across restarts.
 // Quarantined is intentionally NOT scrubbed — it is operator-persisted
 // (a restart preserves the operator's quarantine decision).
+// ExecutorRegistrySnapshot returns the typed executor view used by master
+// consumers. Persisted legacy capability maps are decoded only here as a
+// rolling-deployment compatibility adapter; new heartbeats populate the
+// ExecutorCapabilities field directly.
+func (info WorkerInfo) ExecutorRegistrySnapshot() controltransport.ExecutorRegistry {
+	if !info.ExecutorCapabilities.IsEmpty() {
+		return info.ExecutorCapabilities
+	}
+	registry, err := controltransport.ExecutorRegistryFromLegacy(info.Capabilities)
+	if err != nil {
+		return controltransport.EmptyExecutorRegistry()
+	}
+	return registry
+}
+
 func ScrubForPersist(info *WorkerInfo) {
 	if info == nil {
 		return
@@ -222,6 +242,9 @@ func applyMetadataFields(extra map[string]interface{}, info *WorkerInfo) {
 	}
 	if v, ok := extra["capabilities"]; ok {
 		info.Capabilities = normalizeCapabilities(v)
+		if registry, err := controltransport.ExecutorRegistryFromLegacy(v); err == nil {
+			info.ExecutorCapabilities = registry
+		}
 	}
 	if v, ok := extra["supported_job_types"]; ok {
 		if info.Capabilities == nil {

@@ -14,6 +14,7 @@ import (
 
 	"velox-server/internal/placement"
 	"velox-server/internal/taskgraph"
+	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 
 	"google.golang.org/grpc"
@@ -78,7 +79,7 @@ type workerSession struct {
 	// built from these fields under RLock so the snapshot is always
 	// consistent without blocking the main message loop.
 	executorsMu sync.RWMutex
-	executors   map[placement.ExecutorKey]struct{}
+	executors   controltransport.ExecutorRegistry
 
 	capabilitiesMu   sync.RWMutex
 	capabilities     map[string]bool
@@ -107,10 +108,7 @@ type workerSession struct {
 // NOT hold any session mutex when calling this method.
 func (s *workerSession) placementSnapshot(workerID string) placement.WorkerSnapshot {
 	s.executorsMu.RLock()
-	executors := make(map[placement.ExecutorKey]struct{}, len(s.executors))
-	for key := range s.executors {
-		executors[key] = struct{}{}
-	}
+	executorRegistry := s.executors
 	s.executorsMu.RUnlock()
 
 	s.capabilitiesMu.RLock()
@@ -134,7 +132,7 @@ func (s *workerSession) placementSnapshot(workerID string) placement.WorkerSnaps
 		SessionAlive:       true,
 		MaxParallelJobs:    int(s.maxParallelJobs.Load()),
 		ActiveJobs:         int(s.activeJobsCount.Load()),
-		Executors:          executors,
+		ExecutorRegistry:   executorRegistry,
 		Capabilities:       caps,
 		CachedAssetKeys:    assetKeys,
 		CapabilityRevision: s.capabilityRevision.Load(),
@@ -162,17 +160,20 @@ func (s *workerSession) replaceAssetCacheKeys(keys []string) {
 // It bumps the capability revision so any pending claim that was
 // built from a stale snapshot can be detected by the fencing check.
 func (s *workerSession) replaceCapabilities(
-	executors map[placement.ExecutorKey]struct{},
+	executors controltransport.ExecutorRegistry,
 	capabilities map[string]bool,
 ) {
-	s.executorsMu.Lock()
-	s.executors = executors
-	s.executorsMu.Unlock()
+	s.replaceExecutorRegistry(executors)
 
 	s.capabilitiesMu.Lock()
 	s.capabilities = capabilities
 	s.capabilitiesMu.Unlock()
+}
 
+func (s *workerSession) replaceExecutorRegistry(executors controltransport.ExecutorRegistry) {
+	s.executorsMu.Lock()
+	s.executors = executors
+	s.executorsMu.Unlock()
 	s.capabilityRevision.Add(1)
 }
 
@@ -217,7 +218,7 @@ func maxParallelJobsFromCapabilities(capsMap map[string]interface{}) int {
 // incompatible executor until the next Hello re-advertises it.
 func (s *workerSession) invalidateExecutor(key placement.ExecutorKey) {
 	s.executorsMu.Lock()
-	delete(s.executors, key)
+	s.executors = s.executors.Without(key.ID, key.Version)
 	s.executorsMu.Unlock()
 
 	s.capabilityRevision.Add(1)

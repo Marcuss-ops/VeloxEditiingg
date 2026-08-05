@@ -16,10 +16,9 @@
 //     (≥40-char SHA halves), and credential paths before the value
 //     lands in the response.
 //   - `executor` and `executor_version` are flattened from the
-//     canonical `WorkerInfo.Capabilities["executors"][]` entry list —
-//     the same source the dispatcher uses to rank a worker, so the
-//     operator dashboard never sees a different "primary executor"
-//     than the dispatch master.
+//     canonical `WorkerInfo.ExecutorCapabilities` registry — the same
+//     typed source used by dispatch, so the operator projection cannot
+//     drift from master capability admission.
 package api
 
 // WorkerCard is the canonical fleet-operator-facing JSON shape for a
@@ -39,8 +38,8 @@ package api
 //	host              sanitiseHostname(WorkerInfo.IPAddress)
 //	status            WorkerInfo.ConnectionStatus  (canonical enum)
 //	session_active    WorkerInfo.SessionActive  (post-hydration)
-//	executor          WorkerInfo.Capabilities["executors"][0].id
-//	executor_version  WorkerInfo.Capabilities["executors"][0].version
+//	executor          WorkerInfo.ExecutorCapabilities.All()[0].ID
+//	executor_version  WorkerInfo.ExecutorCapabilities.All()[0].Version
 //	software_version  WorkerInfo.CodeVersion     (worker-reported code)
 //	last_heartbeat_at WorkerInfo.LastHB
 //	active_jobs       ParseWorkerMetrics(WorkerInfo.Metrics).ActiveTasks

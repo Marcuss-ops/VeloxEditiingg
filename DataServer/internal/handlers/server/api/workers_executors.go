@@ -4,46 +4,39 @@ import (
 	"strings"
 
 	workersreg "velox-server/internal/workers"
+	"velox-shared/controltransport"
 )
 
-// extractExecutors pulls the canonical executor list from the worker's
-// capabilities map. Supports both the proto-structured form
-// ("executors": [{"id":"...","version":1}]) and the flat-map form.
-func extractExecutors(caps map[string]interface{}) []ExecutorEntry {
-	if caps == nil {
+// extractExecutors projects the canonical registry for the HTTP response.
+// Legacy map decoding is deliberately performed by workers.Registry at the
+// persistence/heartbeat boundary, not by this API package.
+func extractExecutors(source interface{}) []ExecutorEntry {
+	registry, ok := source.(controltransport.ExecutorRegistry)
+	if !ok {
+		// Compatibility is confined to this API boundary for callers still
+		// holding a decoded legacy capabilities map. Production WorkerInfo
+		// projections always pass ExecutorRegistry.
+		legacy, err := controltransport.ExecutorRegistryFromLegacy(source)
+		if err != nil {
+			return nil
+		}
+		registry = legacy
+	}
+	all := registry.All()
+	if len(all) == 0 {
 		return nil
 	}
-	// Proto-structured form: {"executors": [{"id":"...","version":1}]}
-	if raw, ok := caps["executors"]; ok {
-		switch list := raw.(type) {
-		case []interface{}:
-			out := make([]ExecutorEntry, 0, len(list))
-			for _, item := range list {
-				m, ok := item.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				id, _ := m["id"].(string)
-				if id == "" {
-					continue
-				}
-				var ver int32
-				if v, ok := toFloat64(m["version"]); ok {
-					ver = int32(v)
-				}
-				out = append(out, ExecutorEntry{ID: id, Version: ver})
-			}
-			return out
-		}
+	out := make([]ExecutorEntry, 0, len(all))
+	for _, capability := range all {
+		out = append(out, ExecutorEntry{ID: capability.ID, Version: int32(capability.Version)})
 	}
-	return nil
+	return out
 }
 
-// workerAdvertisesExecutor is true iff `infos` Capabilities["executors"]
-// contains an entry whose id matches `want`. The version tail (after
-// "@") is ignored — operators want to filter by capability regardless
-// of which version is currently running, and the dispatch master uses
-// the same logic when ranking.
+// workerAdvertisesExecutor is true iff the typed registry contains an
+// executor whose ID matches `want`. The version tail (after "@") is
+// ignored for the operator filter; exact version matching remains the
+// placement master's responsibility.
 //
 // Returns false on empty Capabilities or absent "executors" key.
 func workerAdvertisesExecutor(w workersreg.WorkerInfo, want string) bool {
@@ -55,32 +48,5 @@ func workerAdvertisesExecutor(w workersreg.WorkerInfo, want string) bool {
 	if at := strings.Index(want, "@"); at >= 0 {
 		wantID = want[:at]
 	}
-	if w.Capabilities == nil {
-		return false
-	}
-	raw, ok := w.Capabilities["executors"]
-	if !ok {
-		return false
-	}
-	switch list := raw.(type) {
-	case []interface{}:
-		for _, item := range list {
-			m, ok := item.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			id, _ := m["id"].(string)
-			if id == wantID {
-				return true
-			}
-		}
-	case []map[string]interface{}:
-		for _, m := range list {
-			id, _ := m["id"].(string)
-			if id == wantID {
-				return true
-			}
-		}
-	}
-	return false
+	return w.ExecutorCapabilities.HasID(wantID)
 }

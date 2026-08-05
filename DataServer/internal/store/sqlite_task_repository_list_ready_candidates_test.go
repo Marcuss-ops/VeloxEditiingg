@@ -17,6 +17,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"velox-server/internal/placement"
+	"velox-shared/controltransport"
 )
 
 // candidatesTestSchema mirrors the columns the production
@@ -307,8 +308,11 @@ func TestSQLiteTaskRepository_ListReadyCandidates_InteropWithMatcher(t *testing.
 		SessionAlive:    true,
 		MaxParallelJobs: 4,
 		ActiveJobs:      0,
-		Executors:       map[placement.ExecutorKey]struct{}{{ID: "scene.composite.v1", Version: 1}: {}},
-		Capabilities:    map[string]bool{"artifact.commit.v1": true},
+		ExecutorRegistry: func() controltransport.ExecutorRegistry {
+			registry, _ := controltransport.NewExecutorRegistry(controltransport.ExecutorCapability{ID: "scene.composite.v1", Version: 1})
+			return registry
+		}(),
+		Capabilities: map[string]bool{"artifact.commit.v1": true},
 	}, candidates)
 
 	if result.Candidate == nil {
@@ -326,8 +330,11 @@ func TestSQLiteTaskRepository_ListReadyCandidates_InteropWithMatcher(t *testing.
 		SessionAlive:    true,
 		MaxParallelJobs: 4,
 		ActiveJobs:      0,
-		Executors:       map[placement.ExecutorKey]struct{}{{ID: "scene.composite.v1", Version: 1}: {}},
-		Capabilities:    map[string]bool{}, // no capabilities
+		ExecutorRegistry: func() controltransport.ExecutorRegistry {
+			registry, _ := controltransport.NewExecutorRegistry(controltransport.ExecutorCapability{ID: "scene.composite.v1", Version: 1})
+			return registry
+		}(),
+		Capabilities: map[string]bool{}, // no capabilities
 	}, candidates)
 
 	if resultNoCap.Candidate != nil {

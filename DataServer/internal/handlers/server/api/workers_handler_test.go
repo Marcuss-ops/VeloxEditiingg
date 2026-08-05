@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	workersreg "velox-server/internal/workers"
+	"velox-shared/controltransport"
 )
 
 func TestHeartbeatAgeSeconds(t *testing.T) {
@@ -31,9 +32,17 @@ func TestSanitizeWorker(t *testing.T) {
 	recent := now.Add(-3 * time.Second).Format(time.RFC3339)
 	firstSeen := now.Add(-1 * time.Hour).Format(time.RFC3339)
 
+	registry, err := controltransport.NewExecutorRegistry(
+		controltransport.ExecutorCapability{ID: "scene.composite.v1", Version: 1},
+		controltransport.ExecutorCapability{ID: "asset.prepare.v1", Version: 1},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	raw := workersreg.WorkerInfo{
-		WorkerID:   "worker-abc",
-		WorkerName: "render-node-1",
+		WorkerID:             "worker-abc",
+		ExecutorCapabilities: registry,
+		WorkerName:           "render-node-1",
 		// Post-hydration ConnectionStatus — sanitizeWorker trusts this
 		// directly. The canonical derivation is `workers.ConnectionStatus`
 		// (called via `ConnectionStatusForInfo` from `hydrate`/`hydrateBulk`
@@ -59,12 +68,6 @@ func TestSanitizeWorker(t *testing.T) {
 			"disk_free_bytes":       float64(120000000000),
 			"jobs_completed":        float64(42),
 			"jobs_failed":           float64(2),
-		},
-		Capabilities: map[string]interface{}{
-			"executors": []interface{}{
-				map[string]interface{}{"id": "scene.composite.v1", "version": float64(1)},
-				map[string]interface{}{"id": "asset.prepare.v1", "version": float64(1)},
-			},
 		},
 	}
 
@@ -136,12 +139,12 @@ func TestSanitizeWorker(t *testing.T) {
 		t.Errorf("JobsFailed = %d, want 2", resp.JobsFailed)
 	}
 
-	// Executors
+	// Executors are emitted in the registry's canonical (ID, Version) order.
 	if len(resp.Executors) != 2 {
 		t.Fatalf("Executors len = %d, want 2", len(resp.Executors))
 	}
-	if resp.Executors[0].ID != "scene.composite.v1" || resp.Executors[0].Version != 1 {
-		t.Errorf("Executors[0] = %+v, want scene.composite.v1@1", resp.Executors[0])
+	if resp.Executors[0].ID != "asset.prepare.v1" || resp.Executors[0].Version != 1 {
+		t.Errorf("Executors[0] = %+v, want canonical asset.prepare.v1@1 ordering", resp.Executors[0])
 	}
 
 	// --- Negative assertions: sensitive fields must NOT leak ---
@@ -419,7 +422,7 @@ func TestExtractExecutors(t *testing.T) {
 				map[string]interface{}{"id": "scene.composite.v1", "version": float64(1)},
 				map[string]interface{}{"id": "asset.prepare.v1", "version": float64(2)},
 			},
-		}, []ExecutorEntry{{"scene.composite.v1", 1}, {"asset.prepare.v1", 2}}},
+		}, []ExecutorEntry{{"asset.prepare.v1", 2}, {"scene.composite.v1", 1}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

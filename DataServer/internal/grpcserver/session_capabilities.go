@@ -14,7 +14,7 @@ import (
 	"sort"
 	"strings"
 
-	"velox-server/internal/placement"
+	"velox-shared/controltransport"
 )
 
 // parseExecutorCapabilities extracts the (executor_id, executor_version)
@@ -34,50 +34,12 @@ import (
 // the caller decides whether that makes the worker ineligible.
 // Returns an error when the executors block is present but malformed
 // (wrong type, missing id/version, or version <= 0).
-func parseExecutorCapabilities(raw map[string]interface{}) (map[placement.ExecutorKey]struct{}, error) {
-	executorsRaw, ok := raw["executors"]
-	if !ok {
-		return make(map[placement.ExecutorKey]struct{}), nil
+func parseExecutorCapabilities(raw map[string]interface{}) (controltransport.ExecutorRegistry, error) {
+	registry, err := controltransport.ExecutorRegistryFromLegacy(raw)
+	if err != nil {
+		return controltransport.ExecutorRegistry{}, fmt.Errorf("decode executor registry: %w", err)
 	}
-
-	execList, ok := executorsRaw.([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("executors key is not an array (got %T)", executorsRaw)
-	}
-
-	result := make(map[placement.ExecutorKey]struct{}, len(execList))
-	for i, item := range execList {
-		entry, ok := item.(map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("executors[%d]: not an object (got %T)", i, item)
-		}
-
-		id, _ := entry["id"].(string)
-		if id == "" {
-			return nil, fmt.Errorf("executors[%d]: missing or empty \"id\"", i)
-		}
-
-		version := 0
-		switch v := entry["version"].(type) {
-		case float64:
-			version = int(v)
-		case int:
-			version = v
-		case int64:
-			version = int(v)
-		default:
-			return nil, fmt.Errorf("executors[%d] (%s): version must be a number (got %T)", i, id, entry["version"])
-		}
-
-		if version <= 0 {
-			return nil, fmt.Errorf("executors[%d] (%s): version must be positive (got %d)", i, id, version)
-		}
-
-		key := placement.ExecutorKey{ID: id, Version: version}
-		result[key] = struct{}{}
-	}
-
-	return result, nil
+	return registry, nil
 }
 
 func extractAssetCacheKeys(raw map[string]interface{}) []string {

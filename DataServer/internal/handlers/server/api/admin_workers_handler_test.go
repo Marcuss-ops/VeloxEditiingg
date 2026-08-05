@@ -27,6 +27,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	workersreg "velox-server/internal/workers"
+	"velox-shared/controltransport"
 	"velox-shared/identity"
 )
 
@@ -34,21 +35,23 @@ import (
 // with the typical fields the registry produces. Test cases mutate
 // the result via `opts` so the happy-path copy stays small.
 func makeCardInfo(id string, opts ...func(*workersreg.WorkerInfo)) workersreg.WorkerInfo {
+	registry, err := controltransport.NewExecutorRegistry(
+		controltransport.ExecutorCapability{ID: "scene.composite.v1", Version: 1},
+		controltransport.ExecutorCapability{ID: "asset.prepare.v1", Version: 2},
+	)
+	if err != nil {
+		panic(err)
+	}
 	info := workersreg.WorkerInfo{
-		WorkerID:         identity.ParseWorkerID(id),
-		WorkerName:       "vps-" + id,
-		IPAddress:        "10.0.0.5",
-		CodeVersion:      "worker-v1.8.4",
-		BundleVersion:    "20260901",
-		LastHB:           time.Now().UTC().Format(time.RFC3339),
-		ConnectionStatus: "CONNECTED",
-		SessionActive:    true,
-		Capabilities: map[string]interface{}{
-			"executors": []interface{}{
-				map[string]interface{}{"id": "scene.composite.v1", "version": float64(1)},
-				map[string]interface{}{"id": "asset.prepare.v1", "version": float64(2)},
-			},
-		},
+		ExecutorCapabilities: registry,
+		WorkerID:             identity.ParseWorkerID(id),
+		WorkerName:           "vps-" + id,
+		IPAddress:            "10.0.0.5",
+		CodeVersion:          "worker-v1.8.4",
+		BundleVersion:        "20260901",
+		LastHB:               time.Now().UTC().Format(time.RFC3339),
+		ConnectionStatus:     "CONNECTED",
+		SessionActive:        true,
 		Metrics: map[string]interface{}{
 			"active_tasks": float64(0),
 			"task_slots":   float64(2),
@@ -105,11 +108,11 @@ func TestBuildWorkerCard_Populated(t *testing.T) {
 	if !card.SessionActive {
 		t.Errorf("SessionActive = false; want true (post-hydration signal)")
 	}
-	if card.Executor != "scene.composite.v1" {
-		t.Errorf("Executor = %q, want scene.composite.v1 (FIRST entry, dispatcher parity)", card.Executor)
+	if card.Executor != "asset.prepare.v1" {
+		t.Errorf("Executor = %q, want asset.prepare.v1 (canonical registry ordering)", card.Executor)
 	}
-	if card.ExecutorVersion != 1 {
-		t.Errorf("ExecutorVersion = %d, want 1", card.ExecutorVersion)
+	if card.ExecutorVersion != 2 {
+		t.Errorf("ExecutorVersion = %d, want 2", card.ExecutorVersion)
 	}
 	if card.SoftwareVersion != "worker-v1.8.4" {
 		t.Errorf("SoftwareVersion = %q, want worker-v1.8.4 (CodeVersion, NOT BundleVersion)", card.SoftwareVersion)
@@ -169,6 +172,7 @@ func TestBuildWorkerCard_NilInfo(t *testing.T) {
 func TestBuildWorkerCard_NoExecutors(t *testing.T) {
 	info := makeCardInfo("w-no-exec", func(i *workersreg.WorkerInfo) {
 		i.Capabilities = nil
+		i.ExecutorCapabilities = controltransport.EmptyExecutorRegistry()
 	})
 	card := buildWorkerCard(&info)
 	if card.Executor != "" {
@@ -179,7 +183,9 @@ func TestBuildWorkerCard_NoExecutors(t *testing.T) {
 	}
 
 	info2 := makeCardInfo("w-other-caps", func(i *workersreg.WorkerInfo) {
-		i.Capabilities = map[string]interface{}{"other_key": "value"}
+		i.Capabilities = map[string]interface{}{
+			"other_key": "value"}
+		i.ExecutorCapabilities = controltransport.EmptyExecutorRegistry()
 	})
 	card2 := buildWorkerCard(&info2)
 	if card2.Executor != "" || card2.ExecutorVersion != 0 {
@@ -410,8 +416,8 @@ func TestListAdminWorkers_Success(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	reg := workersreg.New(nil) // in-memory only (no SQLite store).
-	reg.Heartbeat(nil, "worker-b", "vps-b",		"", nil)
-	reg.Heartbeat(nil, "worker-a", "vps-a",		"", nil)
+	reg.Heartbeat(nil, "worker-b", "vps-b", "", nil)
+	reg.Heartbeat(nil, "worker-a", "vps-a", "", nil)
 
 	h := NewAdminWorkersHandler(reg)
 	r := gin.New()
@@ -497,7 +503,7 @@ func TestListAdminWorkers_EmptyRegistry(t *testing.T) {
 func TestGetAdminWorker_Success(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	reg := workersreg.New(nil)
-	reg.Heartbeat(nil, "wicket", "vps-wicket",		"", nil)
+	reg.Heartbeat(nil, "wicket", "vps-wicket", "", nil)
 
 	h := NewAdminWorkersHandler(reg)
 	r := gin.New()
@@ -558,29 +564,27 @@ func TestGetAdminWorker_NilRegistry(t *testing.T) {
 	}
 }
 
-// TestBuildWorkerCard_FirstExecutorWins pins the canonical flatten
-// rule documented in admin_workers_handler.go:buildWorkerCard — when
-// a worker advertises multiple executors, the FIRST is the "primary"
-// executor that the operator dashboard and the dispatch master agree
-// on. A regression that flips this to "last" or concatenates all
-// entries would mislead the operator about what the worker is
-// currently running.
-func TestBuildWorkerCard_FirstExecutorWins(t *testing.T) {
+// TestBuildWorkerCard_CanonicalExecutorOrder pins the flatten rule:
+// the registry's deterministic (ID, Version) order drives the primary
+// executor shown by the operator dashboard and dispatch projection.
+func TestBuildWorkerCard_CanonicalExecutorOrder(t *testing.T) {
+	registry, err := controltransport.NewExecutorRegistry(
+		controltransport.ExecutorCapability{ID: "scene.composite.v1", Version: 1},
+		controltransport.ExecutorCapability{ID: "asset.prepare.v1", Version: 7},
+		controltransport.ExecutorCapability{ID: "voiceover.render.v1", Version: 2},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	info := makeCardInfo("w-multi", func(i *workersreg.WorkerInfo) {
-		i.Capabilities = map[string]interface{}{
-			"executors": []interface{}{
-				map[string]interface{}{"id": "scene.composite.v1", "version": float64(1)},
-				map[string]interface{}{"id": "asset.prepare.v1", "version": float64(7)},
-				map[string]interface{}{"id": "voiceover.render.v1", "version": float64(2)},
-			},
-		}
+		i.ExecutorCapabilities = registry
 	})
 	card := buildWorkerCard(&info)
-	if card.Executor != "scene.composite.v1" {
-		t.Errorf("Executor = %q, want scene.composite.v1 (FIRST entry, dispatcher parity)", card.Executor)
+	if card.Executor != "asset.prepare.v1" {
+		t.Errorf("Executor = %q, want asset.prepare.v1 (canonical registry ordering)", card.Executor)
 	}
-	if card.ExecutorVersion != 1 {
-		t.Errorf("ExecutorVersion = %d, want 1", card.ExecutorVersion)
+	if card.ExecutorVersion != 7 {
+		t.Errorf("ExecutorVersion = %d, want 7", card.ExecutorVersion)
 	}
 }
 
@@ -611,7 +615,7 @@ func TestBuildWorkerCard_PositiveCredentialPathInWorkerName(t *testing.T) {
 func TestListAdminWorkers_EnvelopeShape(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	reg := workersreg.New(nil)
-	reg.Heartbeat(nil, "w-only", "vps-w-only",		"", nil)
+	reg.Heartbeat(nil, "w-only", "vps-w-only", "", nil)
 	h := NewAdminWorkersHandler(reg)
 	r := gin.New()
 	r.GET("/api/v1/admin/workers", h.ListAdminWorkers())

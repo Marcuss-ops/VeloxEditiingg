@@ -3,6 +3,8 @@ package placement
 import (
 	"testing"
 	"time"
+
+	"velox-shared/controltransport"
 )
 
 // ---------------------------------------------------------------------------
@@ -11,16 +13,28 @@ import (
 
 func newWorkerSnapshot(executors map[ExecutorKey]struct{}, caps map[string]bool, ready bool, draining bool, freeSlots int, maxParallel int) WorkerSnapshot {
 	return WorkerSnapshot{
-		WorkerID:        "w-1",
-		SessionID:       "s-1",
-		Ready:           ready,
-		Draining:        draining,
-		SessionAlive:    true,
-		MaxParallelJobs: maxParallel,
-		ActiveJobs:      maxParallel - freeSlots,
-		Executors:       executors,
-		Capabilities:    caps,
+		WorkerID:         "w-1",
+		SessionID:        "s-1",
+		Ready:            ready,
+		Draining:         draining,
+		SessionAlive:     true,
+		MaxParallelJobs:  maxParallel,
+		ActiveJobs:       maxParallel - freeSlots,
+		ExecutorRegistry: registryFromExecutorKeys(executors),
+		Capabilities:     caps,
 	}
+}
+
+func registryFromExecutorKeys(keys map[ExecutorKey]struct{}) controltransport.ExecutorRegistry {
+	capabilities := make([]controltransport.ExecutorCapability, 0, len(keys))
+	for key := range keys {
+		capabilities = append(capabilities, controltransport.ExecutorCapability{ID: key.ID, Version: key.Version})
+	}
+	registry, err := controltransport.NewExecutorRegistry(capabilities...)
+	if err != nil {
+		panic(err)
+	}
+	return registry
 }
 
 func executorKeys(keys ...ExecutorKey) map[ExecutorKey]struct{} {

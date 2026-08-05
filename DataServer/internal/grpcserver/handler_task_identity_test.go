@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"velox-server/internal/placement"
 	"velox-server/internal/taskgraph"
+	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -241,7 +241,11 @@ func TestHandleTaskRejectedReleaseFailurePreservesOffer(t *testing.T) {
 func TestHandleUnsupportedExecutorReleaseFailurePreservesSessionState(t *testing.T) {
 	h, repo, sess := lifecycleHandler(t)
 	repo.releaseErr = errors.New("lease takeover")
-	sess.replaceCapabilities(map[placement.ExecutorKey]struct{}{{ID: "executor.identity", Version: 7}: {}}, nil)
+	registry, err := controltransport.NewExecutorRegistry(controltransport.ExecutorCapability{ID: "executor.identity", Version: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.replaceCapabilities(registry, nil)
 	wantOffer := sess.pendingTaskOffer
 	h.handleTaskRejected(sess.workerID, &pb.TaskRejected{
 		TaskId:        repo.nowTask.ID,
@@ -259,7 +263,7 @@ func TestHandleUnsupportedExecutorReleaseFailurePreservesSessionState(t *testing
 		t.Fatal("release failure cleared pending offer")
 	}
 	sess.executorsMu.RLock()
-	_, stillAdvertised := sess.executors[placement.ExecutorKey{ID: "executor.identity", Version: 7}]
+	stillAdvertised := sess.executors.Has("executor.identity", 7)
 	sess.executorsMu.RUnlock()
 	if !stillAdvertised {
 		t.Fatal("release failure invalidated session capability")

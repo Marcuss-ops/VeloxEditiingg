@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"velox-server/internal/logging"
+	"velox-shared/controltransport"
 	"velox-shared/identity"
 )
 
@@ -147,6 +148,9 @@ func (r *Registry) UpdateWorker(ctx context.Context, workerID string, updates ma
 	}
 	if v, ok := updates["capabilities"]; ok {
 		info.Capabilities = normalizeCapabilities(v)
+		if registry, err := controltransport.ExecutorRegistryFromLegacy(v); err == nil {
+			info.ExecutorCapabilities = registry
+		}
 	}
 	if v, ok := updates["ip_address"].(string); ok {
 		info.IPAddress = v

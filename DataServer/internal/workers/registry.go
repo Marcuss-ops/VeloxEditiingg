@@ -54,6 +54,7 @@ func (r *Registry) load() {
 				continue
 			}
 			info.WorkerID = info.WorkerID.Normalized()
+			info.ExecutorCapabilities = info.ExecutorRegistrySnapshot()
 			r.inMem[info.WorkerID] = info
 		}
 		r.mu.Unlock()

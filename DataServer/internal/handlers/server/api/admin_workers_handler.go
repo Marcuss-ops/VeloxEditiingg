@@ -132,12 +132,9 @@ func (h *AdminWorkersHandler) GetAdminWorker() gin.HandlerFunc {
 // staging-bundle label remains available through the diagnostic
 // WorkerResponse.BundleVersion field.
 //
-// executor flattening: deterministic by the FIRST advertised
-// executor. This matches `placement.ExecutorKey` selection
-// (dispatch master ranks candidates by the same first-entry rule,
-// see placement/model.go:NormalizeExecutorKey), so the operator view
-// and the dispatch view never disagree on which executor the
-// worker is currently running.
+// executor flattening: deterministic by the first entry of the typed
+// registry's canonical (ID, Version) ordering. This keeps the operator
+// projection stable and consistent with the master capability registry.
 func buildWorkerCard(info *workersreg.WorkerInfo) WorkerCard {
 	if info == nil {
 		return WorkerCard{}
@@ -145,7 +142,7 @@ func buildWorkerCard(info *workersreg.WorkerInfo) WorkerCard {
 	metrics := ParseWorkerMetrics(info.Metrics)
 	var execID string
 	var execVer int32
-	if exs := extractExecutors(info.Capabilities); len(exs) > 0 {
+	if exs := extractExecutors(info.ExecutorRegistrySnapshot()); len(exs) > 0 {
 		execID = exs[0].ID
 		execVer = exs[0].Version
 	}

@@ -62,7 +62,7 @@ func sanitizeWorker(w workersreg.WorkerInfo) WorkerResponse {
 		LastHeartbeatAt:     w.LastHB,
 		HeartbeatAgeSeconds: heartbeatAgeSeconds(w.LastHB),
 		CurrentTaskID:       w.CurrentJob,
-		Executors:           extractExecutors(w.Capabilities),
+		Executors:           extractExecutors(w.ExecutorRegistrySnapshot()),
 	}
 
 	// Resource counters: extracted from the typed metrics map produced

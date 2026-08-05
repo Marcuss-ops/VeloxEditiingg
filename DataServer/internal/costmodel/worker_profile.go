@@ -1,6 +1,10 @@
 package costmodel
 
-import "strings"
+import (
+	"strings"
+
+	"velox-shared/controltransport"
+)
 
 // WorkerProfile is the master-side projection of a worker's
 // capability state. Transient fields (IsDraining, IsOffline,
@@ -67,6 +71,35 @@ func BuildWorkerProfile(
 	}
 	mergeExecutorsInto(&w, caps)
 
+	if w.ResourceClass == "" {
+		w.ResourceClass = ResourceCPU
+	}
+	if w.TemporalMode == "" {
+		w.TemporalMode = TemporalFrameLocal
+	}
+	return w
+}
+
+// BuildWorkerProfileFromRegistry is the canonical typed scheduling projection.
+// The map-based BuildWorkerProfile above remains only as a compatibility adapter
+// for historical cost-model fixtures and callers at older boundaries.
+func BuildWorkerProfileFromRegistry(
+	workerID string,
+	schedulable bool,
+	drain bool,
+	isOffline bool,
+	activeJobs int,
+	maxParallel int,
+	registry controltransport.ExecutorRegistry,
+) WorkerProfile {
+	w := WorkerProfile{
+		WorkerID:    workerID,
+		IsDraining:  drain || !schedulable,
+		IsOffline:   isOffline,
+		ActiveJobs:  activeJobs,
+		MaxParallel: maxParallel,
+	}
+	mergeExecutorRegistryInto(&w, registry)
 	if w.ResourceClass == "" {
 		w.ResourceClass = ResourceCPU
 	}
@@ -220,6 +253,26 @@ func mergeExecutorsInto(w *WorkerProfile, caps map[string]interface{}) {
 				w.LinkBandwidthMbps = bw
 			}
 		}
+	}
+}
+
+func mergeExecutorRegistryInto(w *WorkerProfile, registry controltransport.ExecutorRegistry) {
+	capabilities := registry.All()
+	if len(capabilities) == 0 {
+		return
+	}
+	seenDeterministic := false
+	for _, capability := range capabilities {
+		w.ResourceClass = mergeResourceClass(w.ResourceClass, ResourceClass(capability.ResourceClass))
+		w.TemporalMode = mergeTemporalMode(w.TemporalMode, TemporalMode(capability.TemporalMode))
+		if !seenDeterministic {
+			w.Deterministic = capability.Deterministic
+			seenDeterministic = true
+		} else {
+			w.Deterministic = w.Deterministic && capability.Deterministic
+		}
+		w.Cacheable = w.Cacheable || capability.Cacheable
+		w.SupportsAlpha = w.SupportsAlpha || capability.SupportsAlpha
 	}
 }
 

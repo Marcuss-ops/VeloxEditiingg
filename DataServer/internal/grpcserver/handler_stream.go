@@ -96,7 +96,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	if hello.GetCapabilities() != nil {
 		caps = hello.GetCapabilities().AsMap()
 	}
-	executors, err := parseExecutorCapabilities(caps)
+	executorRegistry, err := parseExecutorCapabilities(caps)
 	if err != nil {
 		return fmt.Errorf("stream: invalid executor capabilities: %w", err)
 	}
@@ -219,7 +219,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		if mpj := maxParallelJobsFromCapabilities(caps); mpj > 0 {
 			sess.maxParallelJobs.Store(int32(mpj))
 		}
-		sess.replaceCapabilities(executors, capabilitiesBoolMap(caps))
+		sess.replaceCapabilities(executorRegistry, capabilitiesBoolMap(caps))
 		sess.replaceAssetCacheKeys(extractAssetCacheKeys(caps))
 	}
 	sess.ready.Store(true)
