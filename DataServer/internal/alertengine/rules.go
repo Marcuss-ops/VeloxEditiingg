@@ -8,10 +8,8 @@ package alertengine
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	"syscall"
-	"velox-server/internal/config"
 
 	"velox-server/internal/observability"
 )
@@ -174,15 +172,4 @@ func ruleFFmpegSpeedRatio(deps RuleDeps) RuleFunc {
 		}
 		return nil
 	}
-}
-
-// EnvFloat reads a float64 from an env var, returning the default when
-// unset or unparseable.
-func EnvFloat(key string, def float64) float64 {
-	if s := config.Getenv(key); s != "" {
-		if v, err := strconv.ParseFloat(s, 64); err == nil {
-			return v
-		}
-	}
-	return def
 }

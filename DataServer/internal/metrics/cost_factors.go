@@ -89,6 +89,8 @@ func CostFactorsFromConfig(c config.MetricsConfig) CostFactors {
 
 // LoadCostFactorsFromEnv is retained for package-level test and legacy
 // callers; the actual environment read is delegated to internal/config.
+// Deprecated: use config.FromEnv and CostFactorsFromConfig at the
+// composition root so configuration is loaded exactly once.
 func LoadCostFactorsFromEnv() CostFactors {
 	return CostFactorsFromConfig(config.FromEnv().Runtime.Metrics)
 }

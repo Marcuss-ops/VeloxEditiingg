@@ -34,8 +34,8 @@ type RuntimeConfig struct {
 	Telemetry TelemetryConfig
 
 	// Typed operational domains. These replace direct environment reads in
-	// long-lived runtime consumers; legacy top-level aliases remain during
-	// migration for compatibility with existing constructors.
+	// long-lived runtime consumers and are the sole runtime configuration
+	// surface.
 	Supervisor SupervisorConfig
 	Cache      CacheConfig
 	Scheduler  SchedulerConfig
@@ -190,7 +190,6 @@ type SupervisorConfig struct {
 	CriticalFailAfter  int
 }
 
-// AlertConfig contains typed thresholds for the master alert engine.
 type SocialConfig struct {
 	BaseURL         string
 	APIKey          string
@@ -382,8 +381,6 @@ type Config struct {
 	Runtime       RuntimeConfig
 	Database      DatabaseConfig
 	Workers       WorkersConfig
-	Supervisor    SupervisorConfig
-	Alerts        AlertConfig
 	Fleet         FleetConfig
 	Compatibility CompatibilityConfig
 	Retention     RetentionConfig

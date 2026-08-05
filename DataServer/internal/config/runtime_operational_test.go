@@ -13,8 +13,11 @@ func TestLoadOperationalRuntimeDefaults(t *testing.T) {
 		"VELOX_TASKGRAPH_TICK", "VELOX_ARTIFACT_RECONCILE_INTERVAL",
 		"VELOX_METRICS_SNAPSHOT_INTERVAL", "VELOX_RESTARTABLE_MAX_RETRIES",
 		"VELOX_METRICS_TICK", "VELOX_CACHE_LOOKAHEAD_JOBS",
-		"VELOX_CACHE_SNAPSHOT_INTERVAL", "VELOX_ALERT_EVALUATION_INTERVAL",
-		"VELOX_ALERT_COOLDOWN",
+		"VELOX_CACHE_SNAPSHOT_INTERVAL", "VELOX_CALENDAR_SCHEDULER_INTERVAL_SECONDS",
+		"VELOX_ALERT_EVALUATION_INTERVAL", "VELOX_ALERT_COOLDOWN",
+		"VELOX_RETENTION_WORKER_METRICS_DAYS", "VELOX_RETENTION_WORKER_EVENTS_DAYS",
+		"VELOX_RETENTION_WORKER_RESOURCE_RAW_DAYS", "VELOX_RETENTION_WORKER_RESOURCE_ROLLUP_DAYS",
+		"VELOX_CPU_CORE_SECOND_COST", "VELOX_NETWORK_GB_COST", "VELOX_STORAGE_GB_COST",
 	} {
 		t.Setenv(key, "")
 	}
@@ -32,6 +35,12 @@ func TestLoadOperationalRuntimeDefaults(t *testing.T) {
 	if cfg.Runtime.Cache.SnapshotInterval != 30*time.Second {
 		t.Fatalf("cache interval = %s", cfg.Runtime.Cache.SnapshotInterval)
 	}
+	if cfg.Runtime.Scheduler.CalendarInterval != 30*time.Second {
+		t.Fatalf("calendar interval = %s", cfg.Runtime.Scheduler.CalendarInterval)
+	}
+	if cfg.Runtime.Metrics.CPUCostEUR != 5e-6 || cfg.Runtime.Metrics.NetworkCostEUR != 0.01 || cfg.Runtime.Metrics.StorageCostEUR != 0.00012 {
+		t.Fatalf("metrics defaults = %+v", cfg.Runtime.Metrics)
+	}
 }
 
 func TestRuntimeSnapshotRedactsSecretsAndIsDeterministic(t *testing.T) {
@@ -42,7 +51,7 @@ func TestRuntimeSnapshotRedactsSecretsAndIsDeterministic(t *testing.T) {
 			CommitHMACKey: strings.Repeat("a", 64),
 			Supervisor:    SupervisorConfig{CriticalMaxRetries: 4},
 			Cache:         CacheConfig{ProtectedAssetLookaheadJobs: 12, SnapshotInterval: 20 * time.Second},
-			Scheduler:     SchedulerConfig{TaskGraphTick: 2 * time.Second, ArtifactReconcileInterval: 15 * time.Minute, MetricsSnapshotInterval: 5 * time.Minute, RestartableMaxRetries: 5},
+			Scheduler:     SchedulerConfig{TaskGraphTick: 2 * time.Second, ArtifactReconcileInterval: 15 * time.Minute, MetricsSnapshotInterval: 5 * time.Minute, CalendarInterval: 30 * time.Second, RestartableMaxRetries: 5},
 			Metrics:       MetricsConfig{Tick: 15 * time.Second, AttemptLimit: 1000},
 			Alerts:        AlertConfig{ErrorRatePct: 5, P95WallMS: 300000, DiskFreeGB: 10, FFmpegMin: 1.5, WebhookURL: "https://secret.example/hook"},
 		},
@@ -75,6 +84,7 @@ func TestMalformedOperationalEnvironmentIsRejected(t *testing.T) {
 	}
 	t.Setenv("VELOX_TASKGRAPH_TICK", "not-a-duration")
 	t.Setenv("VELOX_CACHE_LOOKAHEAD_JOBS", "zero")
+	t.Setenv("VELOX_CALENDAR_SCHEDULER_INTERVAL_SECONDS", "zero")
 	t.Setenv("SOCIAL_API_TIMEOUT_MS", "-1")
 	cfg := &Config{
 		Database: DatabaseConfig{DBPath: t.TempDir() + "/velox.db"},

@@ -26,6 +26,7 @@ type SchedulerConfig struct {
 	TaskGraphTick             time.Duration
 	ArtifactReconcileInterval time.Duration
 	MetricsSnapshotInterval   time.Duration
+	CalendarInterval          time.Duration
 	RestartableMaxRetries     int
 }
 
@@ -107,11 +108,13 @@ func loadOperationalRuntimeConfig() (SupervisorConfig, CacheConfig, SchedulerCon
 		TaskGraphTick:             durationFromEnv("VELOX_TASKGRAPH_TICK", 2*time.Second),
 		ArtifactReconcileInterval: durationFromEnv("VELOX_ARTIFACT_RECONCILE_INTERVAL", 15*time.Minute),
 		MetricsSnapshotInterval:   durationFromEnv("VELOX_METRICS_SNAPSHOT_INTERVAL", 5*time.Minute),
+		CalendarInterval:          time.Duration(intFromEnv("VELOX_CALENDAR_SCHEDULER_INTERVAL_SECONDS", 30, 1)) * time.Second,
 		RestartableMaxRetries:     intFromEnv("VELOX_RESTARTABLE_MAX_RETRIES", 5, 1),
 	}
 	source("scheduler.taskgraph_tick", "VELOX_TASKGRAPH_TICK")
 	source("scheduler.artifact_reconcile_interval", "VELOX_ARTIFACT_RECONCILE_INTERVAL")
 	source("scheduler.metrics_snapshot_interval", "VELOX_METRICS_SNAPSHOT_INTERVAL")
+	source("scheduler.calendar_interval", "VELOX_CALENDAR_SCHEDULER_INTERVAL_SECONDS")
 	source("scheduler.restartable_max_retries", "VELOX_RESTARTABLE_MAX_RETRIES")
 
 	metrics := MetricsConfig{
@@ -183,6 +186,7 @@ func operationalParseErrors() []string {
 		{"VELOX_RESTARTABLE_MAX_RETRIES", 1},
 		{"VELOX_METRICS_ATTEMPT_LIMIT", 1},
 		{"VELOX_METRICS_SEEN_IDS_CAP", 1},
+		{"VELOX_CALENDAR_SCHEDULER_INTERVAL_SECONDS", 1},
 		{"SOCIAL_API_TIMEOUT_MS", 0},
 		{"SOCIAL_API_RETRIES", 0},
 	} {
@@ -258,10 +262,6 @@ func (c *Config) LoadOperationalRuntime() {
 	c.Runtime.Logging = loadLoggingConfig()
 	c.Runtime.Telemetry = loadTelemetryConfig()
 	c.Runtime.Sources = sources
-	// Keep the old top-level fields populated while callers migrate to
-	// RuntimeConfig. New runtime wiring must use c.Runtime.*.
-	c.Supervisor = supervisor
-	c.Alerts = alerts
 }
 
 // LoadFromEnv is the canonical bootstrap pipeline: load, parse, validate,
@@ -309,6 +309,7 @@ func (c *Config) Snapshot() RuntimeSnapshot {
 		"runtime.scheduler.taskgraph_tick":              c.Runtime.Scheduler.TaskGraphTick.String(),
 		"runtime.scheduler.artifact_reconcile_interval": c.Runtime.Scheduler.ArtifactReconcileInterval.String(),
 		"runtime.scheduler.metrics_snapshot_interval":   c.Runtime.Scheduler.MetricsSnapshotInterval.String(),
+		"runtime.scheduler.calendar_interval":           c.Runtime.Scheduler.CalendarInterval.String(),
 		"runtime.scheduler.restartable_max_retries":     fmt.Sprint(c.Runtime.Scheduler.RestartableMaxRetries),
 		"runtime.metrics.tick":                          c.Runtime.Metrics.Tick.String(),
 		"runtime.metrics.attempt_limit":                 fmt.Sprint(c.Runtime.Metrics.AttemptLimit),

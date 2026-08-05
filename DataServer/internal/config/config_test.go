@@ -53,11 +53,11 @@ func TestFromEnv_Defaults(t *testing.T) {
 	if cfg.Workers.MaxJobAttempts != 3 {
 		t.Errorf("expected Workers.MaxJobAttempts=3, got %d", cfg.Workers.MaxJobAttempts)
 	}
-	if cfg.Supervisor.CriticalMaxRetries != 0 || cfg.Supervisor.CriticalFailAfter != 10 {
-		t.Errorf("unexpected supervisor defaults: %+v", cfg.Supervisor)
+	if cfg.Runtime.Supervisor.CriticalMaxRetries != 0 || cfg.Runtime.Supervisor.CriticalFailAfter != 10 {
+		t.Errorf("unexpected supervisor defaults: %+v", cfg.Runtime.Supervisor)
 	}
-	if cfg.Alerts.ErrorRatePct != 5.0 || cfg.Alerts.P95WallMS != 300000 {
-		t.Errorf("unexpected alert defaults: %+v", cfg.Alerts)
+	if cfg.Runtime.Alerts.ErrorRatePct != 5.0 || cfg.Runtime.Alerts.P95WallMS != 300000 {
+		t.Errorf("unexpected alert defaults: %+v", cfg.Runtime.Alerts)
 	}
 }
 
@@ -85,17 +85,30 @@ func TestFromEnv_BootstrapTypedValues(t *testing.T) {
 	t.Setenv("VELOX_ALERT_P95_WALL_MS", "1234")
 	t.Setenv("VELOX_ALERT_DISK_FREE_GB", "2.5")
 	t.Setenv("VELOX_ALERT_FFMPEG_MIN", "1.25")
+	t.Setenv("VELOX_RETENTION_WORKER_METRICS_DAYS", "11")
+	t.Setenv("VELOX_RETENTION_WORKER_EVENTS_DAYS", "22")
+	t.Setenv("VELOX_RETENTION_WORKER_RESOURCE_RAW_DAYS", "33")
+	t.Setenv("VELOX_RETENTION_WORKER_RESOURCE_ROLLUP_DAYS", "44")
+	t.Setenv("VELOX_CPU_CORE_SECOND_COST", "0.000007")
+	t.Setenv("VELOX_NETWORK_GB_COST", "0.02")
+	t.Setenv("VELOX_STORAGE_GB_COST", "0.0003")
 	t.Setenv("VELOX_SMOKE_MODE", "development")
 	t.Setenv("VELOX_SMOKE_DRIVE_FOLDER_ID", "folder-a")
 	t.Setenv("VELOX_GRPC_REQUIRE_TLS", "true")
 	t.Setenv("VELOX_LOG_ROUTES_AT_BOOT", "true")
 
 	cfg := FromEnv()
-	if !cfg.Supervisor.RequireLiveWorkers || cfg.Supervisor.CriticalMaxRetries != 4 || cfg.Supervisor.CriticalFailAfter != 7 {
-		t.Fatalf("unexpected supervisor config: %+v", cfg.Supervisor)
+	if !cfg.Runtime.Supervisor.RequireLiveWorkers || cfg.Runtime.Supervisor.CriticalMaxRetries != 4 || cfg.Runtime.Supervisor.CriticalFailAfter != 7 {
+		t.Fatalf("unexpected supervisor config: %+v", cfg.Runtime.Supervisor)
 	}
-	if cfg.Alerts.ErrorRatePct != 8.5 || cfg.Alerts.P95WallMS != 1234 || cfg.Alerts.DiskFreeGB != 2.5 || cfg.Alerts.FFmpegMin != 1.25 {
-		t.Fatalf("unexpected alert config: %+v", cfg.Alerts)
+	if cfg.Runtime.Alerts.ErrorRatePct != 8.5 || cfg.Runtime.Alerts.P95WallMS != 1234 || cfg.Runtime.Alerts.DiskFreeGB != 2.5 || cfg.Runtime.Alerts.FFmpegMin != 1.25 {
+		t.Fatalf("unexpected alert config: %+v", cfg.Runtime.Alerts)
+	}
+	if cfg.Retention.WorkerMetricsDays != 11 || cfg.Retention.WorkerEventsDays != 22 || cfg.Retention.WorkerResourceRawDays != 33 || cfg.Retention.WorkerResourceRollupDays != 44 {
+		t.Fatalf("unexpected retention config: %+v", cfg.Retention)
+	}
+	if cfg.Runtime.Metrics.CPUCostEUR != 0.000007 || cfg.Runtime.Metrics.NetworkCostEUR != 0.02 || cfg.Runtime.Metrics.StorageCostEUR != 0.0003 {
+		t.Fatalf("unexpected metrics config: %+v", cfg.Runtime.Metrics)
 	}
 	if cfg.Fleet.SmokeMode != "development" || cfg.Fleet.SmokeDriveFolderID != "folder-a" {
 		t.Fatalf("unexpected fleet config: %+v", cfg.Fleet)

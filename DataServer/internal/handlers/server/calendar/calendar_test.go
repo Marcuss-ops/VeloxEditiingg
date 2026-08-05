@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"velox-server/internal/config"
 	"velox-server/internal/jobs"
 	"velox-server/internal/store"
 )
@@ -55,7 +56,7 @@ func setupCalendarTestEnv(t *testing.T) (*store.SQLiteStore, jobs.Repository, *g
 
 	r := gin.New()
 	v1 := r.Group("/api/v1")
-	sched := NewCalendarScheduler(db, jobRepo, atomic)
+	sched := NewCalendarScheduler(db, jobRepo, atomic, config.SchedulerConfig{CalendarInterval: 30 * time.Second})
 	RegisterRoutes(v1, db, jobRepo, atomic, sched)
 
 	return db, jobRepo, r

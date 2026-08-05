@@ -40,6 +40,8 @@ type ServiceEnv struct {
 
 // LoadServiceEnv reads VELOX_CACHE_LOOKAHEAD_JOBS and
 // VELOX_CACHE_SNAPSHOT_INTERVAL from the process env. Defaults:
+// Deprecated: use config.FromEnv and Runtime.Cache at the
+// composition root so configuration is loaded exactly once.
 // LookaheadJobs=10, SnapshotInterval=30s. Malformed values produce
 // a non-nil error — the caller (master bootstrap) MUST surface this
 // to the operator rather than silently fall back to defaults so a

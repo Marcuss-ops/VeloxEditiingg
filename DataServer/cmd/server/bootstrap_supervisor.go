@@ -36,8 +36,8 @@ import (
 func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDeps, w *workerDeps, t *taskDeps, metricsCollector *velmetrics.Collector) (*supervisor.Supervisor, error) {
 	sup := supervisor.New()
 
-	criticalMaxRetries := cfg.Supervisor.CriticalMaxRetries
-	criticalFailAfter := cfg.Supervisor.CriticalFailAfter
+	criticalMaxRetries := cfg.Runtime.Supervisor.CriticalMaxRetries
+	criticalFailAfter := cfg.Runtime.Supervisor.CriticalFailAfter
 	criticalPolicy := supervisor.RestartPolicy{
 		MaxRetries:     criticalMaxRetries,
 		InitialBackoff: 1 * time.Second,
@@ -63,16 +63,16 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 	// registered. Refresh once before exposing the endpoint; until that
 	// succeeds the worker-side cleaner remains fail-safe and removes nothing.
 	if m != nil && m.Workers != nil && p != nil && p.SQLite != nil {
-		env := protectedasset.ServiceEnv{LookaheadJobs: cfg.Runtime.Cache.ProtectedAssetLookaheadJobs, SnapshotInterval: cfg.Runtime.Cache.SnapshotInterval}
+		env := cfg.Runtime.Cache
 		svc := protectedasset.NewService(protectedasset.RepoFunc(func(ctx context.Context, limit int) ([]dispatchable.Job, error) {
 			return dispatchable.ListNextDispatchableJobs(ctx, p.SQLite.DB(), limit)
-		}), env.LookaheadJobs).WithErrorHandler(func(err error) {
+		}), env.ProtectedAssetLookaheadJobs).WithErrorHandler(func(err error) {
 			log.Printf("[CACHE-SNAPSHOT] refresh failed: %v", err)
 		})
 		if err := svc.Refresh(context.Background()); err != nil {
 			log.Printf("[CACHE-SNAPSHOT] initial refresh unavailable; worker cleanup remains fail-safe: %v", err)
 		} else {
-			log.Printf("[CACHE-SNAPSHOT] initial snapshot ready: version=%d protected=%d lookahead=%d", svc.Snapshot().Version, len(svc.Snapshot().ProtectedAssetKeys), env.LookaheadJobs)
+			log.Printf("[CACHE-SNAPSHOT] initial snapshot ready: version=%d protected=%d lookahead=%d", svc.Snapshot().Version, len(svc.Snapshot().ProtectedAssetKeys), env.ProtectedAssetLookaheadJobs)
 		}
 		m.Workers.SetProtectedAssetsHandler(api.NewProtectedAssetsHandler(svc))
 		if err := sup.Register(supervisor.Runner{
@@ -198,10 +198,10 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 		alertDeps := alertengine.DefaultRuleDeps()
 		alertDeps.Obs = t.Observability
 		alertDeps.DataDir = cfg.Runtime.DataDir
-		alertDeps.ErrorRatePct = cfg.Alerts.ErrorRatePct
-		alertDeps.P95WallMs = cfg.Alerts.P95WallMS
-		alertDeps.DiskFreeGB = cfg.Alerts.DiskFreeGB
-		alertDeps.FFmpegMin = cfg.Alerts.FFmpegMin
+		alertDeps.ErrorRatePct = cfg.Runtime.Alerts.ErrorRatePct
+		alertDeps.P95WallMs = cfg.Runtime.Alerts.P95WallMS
+		alertDeps.DiskFreeGB = cfg.Runtime.Alerts.DiskFreeGB
+		alertDeps.FFmpegMin = cfg.Runtime.Alerts.FFmpegMin
 
 		engine := alertengine.New(cfg.Runtime.Alerts.EvaluationInterval, alertengine.NewNotifier(cfg.Runtime.Alerts.WebhookURL, cfg.Runtime.Alerts.WebhookType))
 		engine.Cooldown = cfg.Runtime.Alerts.Cooldown

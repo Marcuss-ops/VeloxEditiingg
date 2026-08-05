@@ -43,11 +43,8 @@ type alertsDeps struct {
 //	┌─ alerts.MultiNotifier
 //	│
 //	├─ LogNotifier("[ALERTS]") — minimum-viable visibility, always on.
-//
-//	Future sinks: append to children here, e.g.:
-//
-//	  &slackNotifier{channel: cfg.Alerts.SlackChannel, token: cfg.Alerts.SlackToken},
-//	  &pagerDutyNotifier{apiKey: cfg.Alerts.PagerDutyKey, ...},
+//	Future sinks can be appended to Children here without changing the
+//	 outbox handler or dispatcher.
 //
 // The MultiNotifier does NOT short-circuit on individual failures, so
 // a Slack outage does NOT silence the log sink.

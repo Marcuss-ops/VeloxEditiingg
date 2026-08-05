@@ -33,8 +33,6 @@ func FromEnv() *Config {
 	runtime := loadRuntimeConfig(dataDir)
 	database := loadDatabaseConfig()
 	workers := loadWorkersConfig()
-	supervisor := loadSupervisorConfig()
-	alerts := loadAlertConfig()
 	fleet := loadFleetConfig()
 	compatibility := loadCompatibilityConfig()
 	retention := loadRetentionConfig()
@@ -51,8 +49,6 @@ func FromEnv() *Config {
 		Server:   server,
 		Runtime:  runtime,
 		Database: database, Workers: workers,
-		Supervisor:             supervisor,
-		Alerts:                 alerts,
 		Fleet:                  fleet,
 		Compatibility:          compatibility,
 		Retention:              retention,
