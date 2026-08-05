@@ -108,6 +108,15 @@ trap on_exit EXIT
 trap 'kill_all TERM; exit 130' INT
 trap 'kill_all TERM; exit 143' TERM
 
+# Worker Prometheus endpoint: pick a free port so the mTLS worker
+# exposes its velox_cache_* metrics (Commit 2 — previously disabled
+# with prometheus_port=0). Overridable via E2E_WORKER_PROMETHEUS_PORT.
+pick_free_port() {
+  python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
+}
+WORKER_PROMETHEUS_PORT="${E2E_WORKER_PROMETHEUS_PORT:-0}"
+if [[ "$WORKER_PROMETHEUS_PORT" == "0" ]]; then WORKER_PROMETHEUS_PORT="$(pick_free_port)"; fi
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Phase 0 — mTLS certs (NEW; replaces plaintext path)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -318,7 +327,7 @@ phase_worker_start() {
   "data_dir": "${WORKDIR}",
   "max_active_jobs": 1,
   "health_port": 0,
-  "prometheus_port": 0,
+  "prometheus_port": ${WORKER_PROMETHEUS_PORT},
   "protocol_version": "v3"
 }
 JSON

@@ -382,7 +382,9 @@ else:
 # (command_poll_interval_secs, use_v2_endpoints) were dropped in PR3 final;
 # the worker is gRPC-push only.
 cfg.setdefault("max_active_jobs", 1)
-cfg.setdefault("prometheus_port", 0)
+# Prometheus is enabled by default (9090) so worker cache metrics are
+# scrapeable out of the box; operators disable via VELOX_PROMETHEUS_PORT=0.
+cfg.setdefault("prometheus_port", 9090)
 
 with open(dst, "w") as f:
     json.dump(cfg, f, indent=2, sort_keys=False)

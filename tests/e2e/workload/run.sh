@@ -55,6 +55,7 @@ WORKER_PIDFILE="$WORKDIR/worker.pid"
 MASTER_PORT="${E2E_MASTER_PORT:-8080}"
 GRPC_PORT="${E2E_GRPC_PORT:-50051}"
 WORKER_HEALTH_PORT="${E2E_WORKER_HEALTH_PORT:-0}"
+WORKER_PROMETHEUS_PORT="${E2E_WORKER_PROMETHEUS_PORT:-0}"
 ADMIN_TOKEN="e2e-workload-token"
 WORKER_ID="e2e-workload-worker-1"
 DESTINATION_ID="e2e-local"
@@ -78,6 +79,7 @@ pick_free_port() {
 if [[ -z "${E2E_MASTER_PORT:-}" ]]; then MASTER_PORT="$(pick_free_port)"; fi
 if [[ -z "${E2E_GRPC_PORT:-}" ]]; then GRPC_PORT="$(pick_free_port)"; fi
 if [[ "$WORKER_HEALTH_PORT" == "0" ]]; then WORKER_HEALTH_PORT="$(pick_free_port)"; fi
+if [[ "$WORKER_PROMETHEUS_PORT" == "0" ]]; then WORKER_PROMETHEUS_PORT="$(pick_free_port)"; fi
 
 assert_port_free() {
   local port="$1"
@@ -296,7 +298,7 @@ phase_worker_start() {
   "state_dir": "${WORKDIR}/state",
   "max_active_jobs": 1,
   "health_port": ${WORKER_HEALTH_PORT},
-  "prometheus_port": 0,
+  "prometheus_port": ${WORKER_PROMETHEUS_PORT},
   "protocol_version": "v3"
 }
 JSON
@@ -609,6 +611,50 @@ print(vid[0].get('codec_name',''))
     fail "DB (d): jobs.completed_at (epoch=$jobs_epoch, ${jobs_completed_at}) is BEFORE artifacts.verified_at (epoch=$art_epoch, ${db_verified_at}) — ordering bug"
     exit 1
   fi
+
+  # ── Verification 7: Worker Prometheus cache metrics (strict) ──
+  # Commit 2 gate: the worker must expose its own Prometheus endpoint
+  # (previously shipped disabled with prometheus_port=0) and export the
+  # low-cardinality velox_cache_* families. The workload fixture does
+  # not guarantee a cache access, so we assert the endpoint is live, the
+  # metric families are registered, and any request samples only carry
+  # the canonical result labels (hit/miss/other — never job/asset/worker
+  # IDs, which would blow up cardinality).
+  info "Verification 7: worker Prometheus /metrics (velox_cache_* families)"
+  if ! grep -q "Prometheus metrics server starting on :${WORKER_PROMETHEUS_PORT}" "$WORKER_LOG"; then
+    fail "worker log missing Prometheus startup line for :${WORKER_PROMETHEUS_PORT}"
+    grep -E "TELEMETRY|Prometheus" "$WORKER_LOG" | tail -5 || true
+    exit 1
+  fi
+  local wmetrics=""
+  for attempt in $(seq 1 10); do
+    wmetrics="$(curl -sS -m 5 "http://127.0.0.1:${WORKER_PROMETHEUS_PORT}/metrics" 2>/dev/null || true)"
+    [[ -n "$wmetrics" ]] && break
+    sleep 1
+  done
+  if [[ -z "$wmetrics" ]]; then
+    fail "worker /metrics on :${WORKER_PROMETHEUS_PORT} returned empty — Prometheus endpoint not serving"
+    exit 1
+  fi
+  for name in \
+    velox_cache_requests_total velox_cache_downloads_total \
+    velox_cache_download_bytes_total velox_cache_download_duration_seconds \
+    velox_cache_sha_verify_duration_seconds velox_cache_cleanup_duration_seconds \
+    velox_cache_evictions_total velox_cache_cleanup_skipped_total \
+    velox_cache_size_bytes velox_cache_entries; do
+    if ! echo "$wmetrics" | grep -qE "^# HELP ${name} "; then
+      fail "worker /metrics missing family ${name}"
+      exit 1
+    fi
+  done
+  local bad_request_labels
+  bad_request_labels="$(echo "$wmetrics" | grep -E '^velox_cache_requests_total\{' | grep -vE 'result="(hit|miss|other)"' || true)"
+  if [[ -n "$bad_request_labels" ]]; then
+    fail "high-cardinality result label detected on velox_cache_requests_total:"
+    echo "$bad_request_labels"
+    exit 1
+  fi
+  pass "worker /metrics live on :${WORKER_PROMETHEUS_PORT} with all velox_cache_* families + low-cardinality labels"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
