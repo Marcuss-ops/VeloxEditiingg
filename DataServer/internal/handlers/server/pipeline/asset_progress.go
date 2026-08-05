@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -13,6 +14,14 @@ import (
 // into the requested job. The aggregate is weighted by bytes rather than by
 // asset count, so a small completed asset cannot make a large pending asset
 // look half complete.
+func writeAssetProgressNotFound(c *gin.Context) {
+	c.JSON(http.StatusNotFound, gin.H{
+		"ok":      false,
+		"error":   "job_not_found",
+		"message": "job_id does not match any known creator forwarding",
+	})
+}
+
 func (h *Handlers) AssetDownloadProgress() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		jobID := strings.TrimSpace(c.Param("id"))
@@ -22,6 +31,19 @@ func (h *Handlers) AssetDownloadProgress() gin.HandlerFunc {
 		}
 		if h.store == nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "asset_progress_unavailable"})
+			return
+		}
+		clientID := strings.TrimSpace(ClientIDFromContext(c))
+		if clientID == "" {
+			writeAssetProgressNotFound(c)
+			return
+		}
+		if _, err := h.store.GetCreatorForwardingByTargetJobID(c.Request.Context(), jobID, clientID); err != nil {
+			if errors.Is(err, store.ErrCreatorForwardingNoRow) {
+				writeAssetProgressNotFound(c)
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "asset_progress_store_failure"})
 			return
 		}
 		assets, err := h.store.ListAssetDownloadProgressForJob(c.Request.Context(), jobID)
