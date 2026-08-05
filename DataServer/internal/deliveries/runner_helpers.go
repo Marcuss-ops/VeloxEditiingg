@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"velox-server/internal/store"
+	"velox-shared/contract/domain"
 )
 
 // resolveRetryAfter extracts the RetryAfter time from a ProviderError.
@@ -46,6 +47,9 @@ func validateProviderResult(res *Result) error {
 func classifyErrorCode(err error) string {
 	if err == nil {
 		return ""
+	}
+	if code := domain.FailureCodeOf(err); code != "" {
+		return code
 	}
 	if errors.Is(err, ErrProviderNotConfigured) {
 		return "PROVIDER_NOT_CONFIGURED"

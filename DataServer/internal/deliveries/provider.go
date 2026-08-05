@@ -25,6 +25,7 @@ import (
 	"velox-server/internal/credentials"
 	"velox-server/internal/publicationstate"
 	"velox-server/internal/store"
+	"velox-shared/contract/domain"
 )
 
 // ── Error sentinels ──────────────────────────────────────────────────────────
@@ -94,6 +95,15 @@ const (
 func ClassifyError(err error) ErrorClass {
 	if err == nil {
 		return ErrorClassTransient
+	}
+	// DomainError is the canonical retry projection for validation and
+	// delivery-plan failures. It takes precedence over provider defaults;
+	// callers must not infer retryability from Error().
+	if derr, ok := domain.AsDomainError(err); ok {
+		if derr.RetryDecision() {
+			return ErrorClassTransient
+		}
+		return ErrorClassPermanent
 	}
 	if errors.Is(err, ErrProviderPermanent) || errors.Is(err, ErrProviderNotConfigured) {
 		return ErrorClassPermanent

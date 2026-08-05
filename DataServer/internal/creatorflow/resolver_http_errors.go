@@ -20,7 +20,6 @@ package creatorflow
 import (
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -28,6 +27,7 @@ import (
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/store"
 	"velox-shared/contract/deliveryplan"
+	"velox-shared/contract/domain"
 )
 
 // validationFieldExtractor is the indirection point used by
@@ -129,16 +129,9 @@ const idempotencyKeyDefault = "idempotency_key"
 //	          destination_id, disabled entry, metadata
 //	          serialization failure)
 //
-//	strings.Contains(strings.ToLower(err.Error()), "required")
-//	    → 422 + "invalid_payload"
-//	      details: nil (no typed field path available)
-//	      Captures resolver-internal un-typed validation messages
-//	      (e.g. "payload is required" or "source_provider and
-//	      source_job_id are required") that would otherwise bubble
-//	      as 500. We deliberately do NOT pattern-match non-required
-//	      keywords — typed errors should flow through the
-//	      validationFieldExtractor branch above; if they don't, fix
-//	      the enqueue layer rather than paper over it here.
+//	DomainError
+//	    → its canonical HTTP status, code, field/issue detail, and
+//	      message. Untyped errors are never classified by their text.
 //
 //	default
 //	    → 500 + "resolver_failure"
@@ -179,25 +172,31 @@ func WriteResolverError(c *gin.Context, err error) {
 			"idempotency_key_reused",
 			err.Error(),
 			gin.H{"path": path, "issue": "hash_mismatch"})
+	case func() bool {
+		var derr *domain.DomainError
+		return errors.As(err, &derr)
+	}():
+		var derr *domain.DomainError
+		if !errors.As(err, &derr) || derr == nil {
+			break
+		}
+		detail := any(nil)
+		if derr.Field != "" {
+			detail = gin.H{"path": derr.Field, "issue": derr.Issue}
+		}
+		writeErrorEnvelope(c, derr.HTTPCode(), derr.Code, derr.PublicText, detail)
+	case extractUnifiedFieldPath(err) != "":
+		// Compatibility for typed ValidationError instances whose
+		// caller supplied only the historical field extractor. This
+		// branch still uses a typed field, never Error() text parsing.
+		field := extractUnifiedFieldPath(err)
+		writeErrorEnvelope(c, http.StatusUnprocessableEntity, "invalid_payload", err.Error(), gin.H{"path": field, "issue": "invalid"})
 	case errors.Is(err, deliveryplan.ErrDeliveryTargetRequired),
 		errors.Is(err, deliverycontract.ErrNoExplicitPlan):
 		writeErrorEnvelope(c, http.StatusUnprocessableEntity,
 			"DELIVERY_TARGET_REQUIRED",
 			"an explicit Drive destination is required",
 			gin.H{"path": "delivery_plan", "issue": "required"})
-	case extractUnifiedFieldPath(err) != "":
-		field := extractUnifiedFieldPath(err)
-		writeErrorEnvelope(c, http.StatusUnprocessableEntity,
-			"invalid_payload",
-			err.Error(),
-			gin.H{"path": field, "issue": "invalid"})
-	case strings.Contains(strings.ToLower(err.Error()), "required"):
-		// Un-typed resolver validation. See comment above on why
-		// we only match "required".
-		writeErrorEnvelope(c, http.StatusUnprocessableEntity,
-			"invalid_payload",
-			err.Error(),
-			nil)
 	default:
 		writeErrorEnvelope(c, http.StatusInternalServerError,
 			"resolver_failure",

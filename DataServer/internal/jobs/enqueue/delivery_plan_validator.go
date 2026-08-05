@@ -9,7 +9,9 @@ import (
 
 	"velox-server/internal/socialclient"
 
+	"google.golang.org/grpc/codes"
 	"velox-shared/contract/deliveryplan"
+	"velox-shared/contract/domain"
 )
 
 // delivery_plan_validator.go — Step 4/8 canonical-purity preflight.
@@ -209,13 +211,25 @@ func validateDeliveryPlanRequires(ctx context.Context, payloadMap map[string]int
 				log.Printf("[PREFLIGHT][enqueue] external_destination_id=%q for destination_id=%q skipped: %v (soft: enqueue continues; runner will re-attempt at finalize)",
 					socialDestID, e.DestinationID, perr)
 			default:
-				// FAIL CLOSED: ErrNotConfigured and every unknown
-				// error must stop enqueue. ErrNotConfigured is
-				// terminal in DeliveryRunner, so accepting it here
-				// would claim recoverability that the runner cannot
-				// provide; unknown errors have no reliable retry
-				// classification at all.
-				return fmt.Errorf("social destination %q preflight returned non-retryable or unclassified error: %w", socialDestID, perr)
+				// FAIL CLOSED: an unclassified provider error is a
+				// typed, terminal domain rejection. The wrapped cause
+				// remains available through errors.Is, but retry policy
+				// is decided by the DomainError contract, not text.
+				return &domain.DomainError{
+					Code:        domain.CodeDeliveryDestinationRejected,
+					Field:       deliveryplan.FieldPath(i, "external_destination_id"),
+					Issue:       "unavailable",
+					Retryable:   false,
+					PublicText:  fmt.Sprintf("social destination %q preflight returned a non-retryable or unclassified error", socialDestID),
+					Cause:       perr,
+					HTTPStatus:  422,
+					GRPCCode:    codes.InvalidArgument,
+					FailureCode: domain.FailureDestinationUnavailable,
+					MetricCode:  domain.MetricDestinationUnavailable,
+					AuditAction: domain.AuditDeliveryPlanRejected,
+					Component:   domain.ComponentEnqueue,
+					Phase:       domain.PhaseValidation,
+				}
 			}
 		}
 	}

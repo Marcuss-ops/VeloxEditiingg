@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/store"
+	"velox-shared/contract/domain"
 )
 
 func init() { gin.SetMode(gin.TestMode) }
@@ -204,29 +205,24 @@ func TestWriteResolverError(t *testing.T) {
 			wantHasDetails:   true,
 		},
 		{
-			// Un-typed resolver-internal validation. Captures
-			// "source_provider and source_job_id are required"
-			// — the canonical upstream check before the helper
-			// was wired. Without this row, a regression to the
-			// default branch would silently emit 500.
-			name:            "untyped 'are required' -> 422 invalid_payload, no details",
-			err:             fmt.Errorf("creatorflow: Resolve: source_provider and source_job_id are required"),
-			wantStatus:      http.StatusUnprocessableEntity,
-			wantCode:        "invalid_payload",
-			wantMsgContains: "are required",
+			name:             "typed source identity required -> 422 invalid_payload + field",
+			err:              domain.NewInvalidPayload("source_provider/source_job_id", "required", "source_provider and source_job_id are required"),
+			wantStatus:       http.StatusUnprocessableEntity,
+			wantCode:         "invalid_payload",
+			wantDetailsPath:  "source_provider/source_job_id",
+			wantDetailsIssue: "required",
+			wantHasDetails:   true,
+			wantMsgContains:  "are required",
 		},
 		{
-			// Un-typed resolver-internal validation. Captures
-			// "payload is required" — the canonical inner
-			// envelope check the original CreatorPush handler
-			// emitted with normalizeCreatorPushRequest's first
-			// line. Without this row, a regression to the
-			// default branch would silently emit 500.
-			name:            "untyped 'payload is required' -> 422 invalid_payload, no details",
-			err:             fmt.Errorf("payload is required"),
-			wantStatus:      http.StatusUnprocessableEntity,
-			wantCode:        "invalid_payload",
-			wantMsgContains: "is required",
+			name:             "typed payload required -> 422 invalid_payload + field",
+			err:              domain.NewInvalidPayload("payload", "required", "payload is required"),
+			wantStatus:       http.StatusUnprocessableEntity,
+			wantCode:         "invalid_payload",
+			wantDetailsPath:  "payload",
+			wantDetailsIssue: "required",
+			wantHasDetails:   true,
+			wantMsgContains:  "is required",
 		},
 		{
 			// Wrapped resolver failure (sql: connection done).

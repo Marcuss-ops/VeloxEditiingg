@@ -37,6 +37,8 @@ package deliveryplan
 import (
 	"errors"
 	"fmt"
+
+	"velox-shared/contract/domain"
 )
 
 // ErrDeliveryTargetRequired identifies a delivery request that omitted
@@ -56,6 +58,11 @@ type ValidationError struct {
 	FieldPath string
 	Msg       string
 	Wrapped   error
+	// Code and Issue are machine-readable projections. They are optional
+	// for source compatibility with older struct literals; constructors
+	// populate them for all canonical delivery-plan rejections.
+	Code  string
+	Issue string
 }
 
 // Error returns the canonical "field: message" envelope. The
@@ -103,22 +110,69 @@ func (e *ValidationError) Unwrap() error {
 	return e.Wrapped
 }
 
+// As exposes the canonical DomainError projection without changing the
+// historical unwrap chain (tests and callers may still inspect Wrapped).
+// This lets transports classify validation failures by fields, not by
+// parsing Error().
+func (e *ValidationError) As(target interface{}) bool {
+	if e == nil {
+		return false
+	}
+	if out, ok := target.(**domain.DomainError); ok {
+		*out = e.DomainError()
+		return true
+	}
+	return false
+}
+
+// DomainError returns the uniform cross-layer classification for this
+// validation failure. Existing callers can continue using ValidationError;
+// new callers should use errors.As(err, **domain.DomainError).
+func (e *ValidationError) DomainError() *domain.DomainError {
+	if e == nil {
+		return nil
+	}
+	code, issue := e.Code, e.Issue
+	if code == "" {
+		code = domain.CodeInvalidPayload
+	}
+	if issue == "" {
+		issue = "invalid"
+	}
+	if code == domain.CodeDeliveryTargetRequired {
+		return domain.NewDeliveryTargetRequired(e.Error(), e.Wrapped)
+	}
+	out := domain.NewInvalidPayload(e.FieldPath, issue, e.Error())
+	out.Code = code
+	out.Cause = e.Wrapped
+	return out
+}
+
 // NewValidationError constructs a plain (no wrapped cause) error.
 // Production callers inside Parse use struct literals directly; this
 // constructor is the canonical entry point for tests + any future
 // call site that builds a typed error from outside the parser path.
 func NewValidationError(fieldPath, msg string) *ValidationError {
-	return &ValidationError{FieldPath: fieldPath, Msg: msg}
+	return NewValidationErrorCode(fieldPath, "invalid", msg)
+}
+
+// NewValidationErrorCode constructs a typed validation error with an explicit
+// machine-readable issue. The old constructor remains source-compatible.
+func NewValidationErrorCode(fieldPath, issue, msg string) *ValidationError {
+	return &ValidationError{FieldPath: fieldPath, Msg: msg, Code: domain.CodeInvalidPayload, Issue: issue}
 }
 
 // NewDeliveryTargetRequiredError constructs the canonical missing-target
 // validation error while preserving errors.Is through the HTTP boundary.
 func NewDeliveryTargetRequiredError() *ValidationError {
-	return NewValidationErrorWrapped(
+	err := NewValidationErrorCode(
 		"delivery_plan",
+		"required",
 		"explicit delivery plan required; an explicit Drive destination is required",
-		ErrDeliveryTargetRequired,
 	)
+	err.Code = domain.CodeDeliveryTargetRequired
+	err.Wrapped = ErrDeliveryTargetRequired
+	return err
 }
 
 // NewValidationErrorWrapped constructs a typed error that wraps
@@ -126,7 +180,7 @@ func NewDeliveryTargetRequiredError() *ValidationError {
 // ErrPermanent/ErrAuth so the wrapped sentinel survives errors.Is at
 // the HTTP envelope layer.
 func NewValidationErrorWrapped(fieldPath, msg string, wrapped error) *ValidationError {
-	return &ValidationError{FieldPath: fieldPath, Msg: msg, Wrapped: wrapped}
+	return &ValidationError{FieldPath: fieldPath, Msg: msg, Wrapped: wrapped, Code: domain.CodeInvalidPayload, Issue: "invalid"}
 }
 
 // FieldPath composes the canonical "delivery_plan.N.<field>" path

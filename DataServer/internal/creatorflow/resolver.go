@@ -64,6 +64,7 @@ import (
 	"velox-server/internal/routing"
 	"velox-server/internal/store"
 	"velox-shared/contract/deliveryplan"
+	"velox-shared/contract/domain"
 )
 
 // Resolver bundles the canonical dependencies for Resolve. Holding them on
@@ -202,13 +203,13 @@ func (r *Resolver) HasDBAccess() bool {
 // for every caller.
 func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOutput, error) {
 	if r == nil || r.enqueuer == nil || r.forwardRepo == nil {
-		return nil, fmt.Errorf("creatorflow: Resolve: resolver dependencies missing")
+		return nil, domain.NewInvalidPayload("resolver", "unavailable", "resolver dependencies missing")
 	}
 	if req.Payload == nil {
-		return nil, fmt.Errorf("creatorflow: Resolve: payload is required")
+		return nil, domain.NewInvalidPayload("payload", "required", "payload is required")
 	}
 	if req.SourceProvider == "" || req.SourceJobID == "" {
-		return nil, fmt.Errorf("creatorflow: Resolve: source_provider and source_job_id are required")
+		return nil, domain.NewInvalidPayload("source_provider/source_job_id", "required", "source_provider and source_job_id are required")
 	}
 	if !enqueue.ShouldForwardPipelineResult(req.Payload) {
 		return nil, ErrResolverNotComplete

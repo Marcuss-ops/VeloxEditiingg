@@ -36,9 +36,10 @@ package store
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 
+	"google.golang.org/grpc/codes"
 	"velox-shared/contract/deliveryplan"
+	"velox-shared/contract/domain"
 )
 
 // =============================================================================
@@ -167,7 +168,21 @@ func parseDeliveryPlanPayload(payload map[string]interface{}) ([]deliveryPlanEnt
 			// the canonical validator. Emit as a typed error so
 			// the chain (errors.Is + Unwrap) sees the marshal
 			// failure cause, not just a substring.
-			return nil, fmt.Errorf("delivery_plan metadata: %w", merr)
+			return nil, &domain.DomainError{
+				Code:        domain.CodeInvalidPayload,
+				Field:       "delivery_plan.metadata",
+				Issue:       "serialization",
+				Retryable:   false,
+				PublicText:  "delivery plan metadata could not be serialized",
+				Cause:       merr,
+				HTTPStatus:  422,
+				GRPCCode:    codes.InvalidArgument,
+				FailureCode: domain.FailureInvalidPayload,
+				MetricCode:  domain.MetricInvalidPayload,
+				AuditAction: domain.AuditDeliveryPlanRejected,
+				Component:   domain.ComponentEnqueue,
+				Phase:       domain.PhaseValidation,
+			}
 		}
 		out = append(out, deliveryPlanEntry{
 			DestinationID: e.DestinationID,

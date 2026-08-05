@@ -15,6 +15,7 @@ import (
 
 	"velox-server/internal/credentials"
 	"velox-server/internal/store"
+	"velox-shared/contract/domain"
 )
 
 // processLease resolves the provider for a claimed delivery and runs
@@ -277,6 +278,9 @@ func (r *DeliveryRunner) issueCredentialLease(ctx context.Context, provider Prov
 func credentialErrorCode(err error) string {
 	if err == nil {
 		return "CREDENTIAL_AUTH"
+	}
+	if code := domain.FailureCodeOf(err); code != "" {
+		return code
 	}
 	message := strings.ToLower(err.Error())
 	for _, item := range []struct {
