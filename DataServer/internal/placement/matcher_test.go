@@ -11,7 +11,7 @@ import (
 // Helpers
 // ---------------------------------------------------------------------------
 
-func newWorkerSnapshot(executors map[ExecutorKey]struct{}, caps map[string]bool, ready bool, draining bool, freeSlots int, maxParallel int) WorkerSnapshot {
+func newWorkerSnapshot(executors map[ExecutorKey]struct{}, caps controltransport.CapabilitySet, ready bool, draining bool, freeSlots int, maxParallel int) WorkerSnapshot {
 	return WorkerSnapshot{
 		WorkerID:         "w-1",
 		SessionID:        "s-1",
@@ -45,12 +45,8 @@ func executorKeys(keys ...ExecutorKey) map[ExecutorKey]struct{} {
 	return m
 }
 
-func capMap(caps ...string) map[string]bool {
-	m := make(map[string]bool, len(caps))
-	for _, c := range caps {
-		m[c] = true
-	}
-	return m
+func capMap(caps ...string) controltransport.CapabilitySet {
+	return controltransport.CapabilitySet(caps)
 }
 
 // ---------------------------------------------------------------------------

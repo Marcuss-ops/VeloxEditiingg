@@ -90,7 +90,15 @@ func sendHello(t *testing.T, stream pb.WorkerControl_StreamClient, workerID, pro
 
 func sendHelloWithCapabilities(t *testing.T, stream pb.WorkerControl_StreamClient, workerID, protocolVersion string, capabilities map[string]interface{}) {
 	t.Helper()
-	caps, err := structpb.NewStruct(capabilities)
+	canonical := make(map[string]interface{}, len(capabilities)+2)
+	canonical["schema_version"] = controltransport.CapabilitySchemaVersion
+	if _, present := capabilities["executors"]; !present {
+		canonical["executors"] = []interface{}{}
+	}
+	for key, value := range capabilities {
+		canonical[key] = value
+	}
+	caps, err := structpb.NewStruct(canonical)
 	if err != nil {
 		t.Fatalf("NewStruct capabilities: %v", err)
 	}

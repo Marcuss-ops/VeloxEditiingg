@@ -25,18 +25,18 @@ const (
 
 // WorkerInfo represents worker identification sent to the master.
 type WorkerInfo struct {
-	WorkerID        string                 `json:"worker_id"`
-	WorkerName      string                 `json:"worker_name"`
-	Capabilities    map[string]interface{} `json:"capabilities"`
-	Hostname        string                 `json:"hostname"`
-	IP              string                 `json:"ip"`
-	Version         string                 `json:"version"`
-	CodeVersion     string                 `json:"code_version,omitempty"`
-	BundleVersion   string                 `json:"bundle_version,omitempty"`
-	BundleHash      string                 `json:"bundle_hash,omitempty"`
-	ProtocolVersion string                 `json:"protocol_version,omitempty"`
-	EngineVersion   string                 `json:"engine_version,omitempty"`
-	Credential      string                 `json:"credential,omitempty"`
+	WorkerID        string                            `json:"worker_id"`
+	WorkerName      string                            `json:"worker_name"`
+	Capabilities    controltransport.CapabilityReport `json:"capabilities"`
+	Hostname        string                            `json:"hostname"`
+	IP              string                            `json:"ip"`
+	Version         string                            `json:"version"`
+	CodeVersion     string                            `json:"code_version,omitempty"`
+	BundleVersion   string                            `json:"bundle_version,omitempty"`
+	BundleHash      string                            `json:"bundle_hash,omitempty"`
+	ProtocolVersion string                            `json:"protocol_version,omitempty"`
+	EngineVersion   string                            `json:"engine_version,omitempty"`
+	Credential      string                            `json:"credential,omitempty"`
 }
 
 // HeartbeatPayload represents a heartbeat message.
@@ -81,77 +81,14 @@ type WorkerCommand struct {
 // CapabilityReport on pkg/api and provide AsMap() to flatten it for
 // heartbeat/hello envelopes without breaking the existing API.
 
-// CapabilitySchemaVersion is the canonical version of the CapabilityReport
-// schema. Bump on every ADDITIVE OR BREAKING shape change. The master uses
-// this to pick the right decoder.
-const CapabilitySchemaVersion = 1
+// CapabilitySchemaVersion is retained as a source-compatible alias. The
+// canonical owner is shared/controltransport so worker and master cannot
+// silently drift to different report versions.
+const CapabilitySchemaVersion = controltransport.CapabilitySchemaVersion
 
-// ExecutorCapability mirrors one executor.Descriptor in the canonical
-// format the master expects to see in the hello payload.
-// ExecutorCapability is the shared canonical capability type. The alias keeps
-// the worker API package source-compatible while ensuring the master and worker
-// cannot drift into separate descriptor shapes.
+// ExecutorCapability, HostInfo, and CapabilityReport are aliases to the
+// shared canonical transport model. The map representation exists only at
+// the protobuf Struct boundary and is produced by CapabilityReport.AsMap.
 type ExecutorCapability = controltransport.ExecutorCapability
-
-// HostInfo is the static host layer of the report. Fields are pre-shaped
-// so PR-3.6's resource sampler can fill them in without changing the wire
-// contract. Unknown fields are zero-valued (never omitted) so the master
-// can distinguish "not sampled" from "actually zero".
-type HostInfo struct {
-	WorkerID        string `json:"worker_id"`
-	Hostname        string `json:"hostname"`
-	CPUCount        int    `json:"cpu_count"`
-	MaxParallelJobs int    `json:"max_parallel_jobs"`
-	HasGPU          bool   `json:"has_gpu"`
-	RAMBytes        int64  `json:"ram_bytes"`
-	DiskFreeBytes   int64  `json:"disk_free_bytes"`
-}
-
-// CapabilityReport is the typed hello/heartbeat capability payload.
-// PR-3.5 derives this entirely from executor.Registry — no duplicate
-// state lives anywhere else.
-type CapabilityReport struct {
-	SchemaVersion int                  `json:"schema_version"`
-	Executors     []ExecutorCapability `json:"executors"`
-	Host          HostInfo             `json:"host"`
-}
-
-// AsMap flattens the typed report into the map envelope used by the
-// control-transport heartbeat/hello wire format. Map ordering is
-// deterministic in Go's encoding/json — callers relying on byte stable
-// output MUST call this rather than building a map by hand.
-func (r CapabilityReport) AsMap() map[string]interface{} {
-	executors := make([]interface{}, 0, len(r.Executors))
-	for _, e := range r.Executors {
-		ec := map[string]interface{}{
-			"id":             e.ID,
-			"version":        e.Version,
-			"resource_class": e.ResourceClass,
-			"temporal_mode":  e.TemporalMode,
-			"deterministic":  e.Deterministic,
-			"cacheable":      e.Cacheable,
-			"supports_alpha": e.SupportsAlpha,
-		}
-		if len(e.OutputTypes) > 0 {
-			outs := make([]interface{}, 0, len(e.OutputTypes))
-			for _, o := range e.OutputTypes {
-				outs = append(outs, o)
-			}
-			ec["output_types"] = outs
-		}
-		executors = append(executors, ec)
-	}
-	return map[string]interface{}{
-		"schema_version": r.SchemaVersion,
-		"executors":      executors,
-		"host": map[string]interface{}{
-			"worker_id":         r.Host.WorkerID,
-			"hostname":          r.Host.Hostname,
-			"cpu_count":         r.Host.CPUCount,
-			"max_parallel_jobs": r.Host.MaxParallelJobs,
-			"has_gpu":           r.Host.HasGPU,
-			"ram_bytes":         r.Host.RAMBytes,
-			"disk_free_bytes":   r.Host.DiskFreeBytes,
-		},
-	}
-}
+type HostInfo = controltransport.HostInfo
+type CapabilityReport = controltransport.CapabilityReport

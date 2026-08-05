@@ -194,7 +194,7 @@ func (m *Matcher) Select(
 
 		missing := ""
 		for _, capability := range candidate.RequiredCapabilities {
-			if !worker.Capabilities[capability] {
+			if !worker.Capabilities.Has(capability) {
 				missing = capability
 				break
 			}

@@ -146,9 +146,28 @@ func (r ExecutorRegistry) Primary() (ExecutorCapability, bool) {
 // capability report remains responsible for the `executors` key.
 func (r ExecutorRegistry) MarshalJSON() ([]byte, error) { return json.Marshal(r.executors) }
 
+// UnmarshalJSON restores the canonical registry from its persisted executor
+// array. Validation remains centralized in NewExecutorRegistry so database
+// reloads cannot admit a malformed capability identity.
+func (r *ExecutorRegistry) UnmarshalJSON(data []byte) error {
+	if r == nil {
+		return fmt.Errorf("cannot unmarshal executor registry into nil receiver")
+	}
+	var capabilities []ExecutorCapability
+	if err := json.Unmarshal(data, &capabilities); err != nil {
+		return err
+	}
+	decoded, err := NewExecutorRegistry(capabilities...)
+	if err != nil {
+		return err
+	}
+	*r = decoded
+	return nil
+}
+
 // ExecutorRegistryFromLegacy decodes the pre-typed capabilities map. It is
-// intentionally the only compatibility adapter used by master admission and
-// persistence boundaries.
+// intentionally the only compatibility adapter used by migration tests and
+// persistence boundaries that already know the payload is legacy.
 func ExecutorRegistryFromLegacy(raw interface{}) (ExecutorRegistry, error) {
 	if raw == nil {
 		return EmptyExecutorRegistry(), nil
@@ -197,6 +216,20 @@ func ExecutorRegistryFromLegacy(raw interface{}) (ExecutorRegistry, error) {
 		return ExecutorRegistry{}, fmt.Errorf("executors must be an array, got %T", executors)
 	}
 	return NewExecutorRegistry(items...)
+}
+
+// ExecutorRegistryFromLegacyStrict decodes a capability report at an
+// authenticated registration/heartbeat boundary. Missing executor metadata
+// is an admission error, not an empty-capability fallback.
+func ExecutorRegistryFromLegacyStrict(raw interface{}) (ExecutorRegistry, error) {
+	m, ok := raw.(map[string]interface{})
+	if !ok || m == nil {
+		return ExecutorRegistry{}, fmt.Errorf("capability report must be an object")
+	}
+	if _, ok := m["executors"]; !ok {
+		return ExecutorRegistry{}, fmt.Errorf("capability report executors array is required")
+	}
+	return ExecutorRegistryFromLegacy(m)
 }
 
 func capabilityFromMap(m map[string]interface{}) (ExecutorCapability, error) {

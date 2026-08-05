@@ -409,33 +409,22 @@ func TestListWorkers_NilRegistry(t *testing.T) {
 }
 
 func TestExtractExecutors(t *testing.T) {
-	cases := []struct {
-		name string
-		caps map[string]interface{}
-		want []ExecutorEntry
-	}{
-		{"nil caps", nil, nil},
-		{"empty caps", map[string]interface{}{}, nil},
-		{"no executors key", map[string]interface{}{"other": 1}, nil},
-		{"proto form", map[string]interface{}{
-			"executors": []interface{}{
-				map[string]interface{}{"id": "scene.composite.v1", "version": float64(1)},
-				map[string]interface{}{"id": "asset.prepare.v1", "version": float64(2)},
-			},
-		}, []ExecutorEntry{{"asset.prepare.v1", 2}, {"scene.composite.v1", 1}}},
+	registry, err := controltransport.NewExecutorRegistry(
+		controltransport.ExecutorCapability{ID: "scene.composite.v1", Version: 1},
+		controltransport.ExecutorCapability{ID: "asset.prepare.v1", Version: 2},
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := extractExecutors(tc.caps)
-			if len(got) != len(tc.want) {
-				t.Fatalf("len = %d, want %d", len(got), len(tc.want))
-			}
-			for i := range got {
-				if got[i] != tc.want[i] {
-					t.Errorf("[%d] = %+v, want %+v", i, got[i], tc.want[i])
-				}
-			}
-		})
+	got := extractExecutors(registry)
+	want := []ExecutorEntry{{"asset.prepare.v1", 2}, {"scene.composite.v1", 1}}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d", len(got), len(want))
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("[%d] = %+v, want %+v", i, got[i], want[i])
+		}
 	}
 }
 

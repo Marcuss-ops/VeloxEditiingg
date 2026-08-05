@@ -5,8 +5,8 @@
 // The wire format is a map[string]interface{} with a top-level
 // "executors" key containing a []interface{} of per-executor objects.
 //
-// supported_job_types is NOT used as the primary source — only
-// the typed executors block drives placement decisions.
+// Only the typed executors block drives placement decisions; legacy
+// supported_job_types flags are intentionally ignored.
 package grpcserver
 
 import (
@@ -35,11 +35,39 @@ import (
 // Returns an error when the executors block is present but malformed
 // (wrong type, missing id/version, or version <= 0).
 func parseExecutorCapabilities(raw map[string]interface{}) (controltransport.ExecutorRegistry, error) {
-	registry, err := controltransport.ExecutorRegistryFromLegacy(raw)
+	if raw == nil {
+		return controltransport.ExecutorRegistry{}, fmt.Errorf("capability report is required")
+	}
+	schemaVersion, ok := capabilityInteger(raw["schema_version"])
+	if !ok || schemaVersion != controltransport.CapabilitySchemaVersion {
+		return controltransport.ExecutorRegistry{}, fmt.Errorf("unsupported capability schema_version %v", raw["schema_version"])
+	}
+	executors, ok := raw["executors"]
+	if !ok {
+		return controltransport.ExecutorRegistry{}, fmt.Errorf("capability report executors array is required")
+	}
+	registry, err := controltransport.ExecutorRegistryFromLegacyStrict(map[string]interface{}{"executors": executors})
 	if err != nil {
 		return controltransport.ExecutorRegistry{}, fmt.Errorf("decode executor registry: %w", err)
 	}
 	return registry, nil
+}
+
+func capabilityInteger(value interface{}) (int, bool) {
+	switch n := value.(type) {
+	case int:
+		return n, true
+	case int32:
+		return int(n), true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), n == float64(int(n))
+	case float32:
+		return int(n), n == float32(int(n))
+	default:
+		return 0, false
+	}
 }
 
 func extractAssetCacheKeys(raw map[string]interface{}) []string {
@@ -66,40 +94,17 @@ func extractAssetCacheKeys(raw map[string]interface{}) []string {
 	return keys
 }
 
-// capabilitiesBoolMap normalises the raw capability map to a map[string]bool
-// by extracting only the boolean entries. Non-boolean values (arrays,
-// objects, numbers, strings) are silently dropped — they are metadata
-// (executors, host, max_parallel_jobs) not capability flags.
-func capabilitiesBoolMap(raw map[string]interface{}) map[string]bool {
-	result := make(map[string]bool, len(raw))
+// capabilitiesBoolMap is retained as a local compatibility name for the
+// protobuf decoder, but returns the typed feature set. Executor metadata and
+// host capacity are deliberately excluded because they have dedicated typed
+// projections.
+func capabilitiesBoolMap(raw map[string]interface{}) controltransport.CapabilitySet {
+	result := make(controltransport.CapabilitySet, 0, len(raw))
 	for key, val := range raw {
-		if b, ok := val.(bool); ok {
-			result[key] = b
+		if enabled, ok := val.(bool); ok && enabled {
+			result = append(result, key)
 		}
 	}
+	sort.Strings(result)
 	return result
-}
-
-// extractSupportedJobTypes parses a supported_job_types value from a
-// capabilities map extracted from protobuf Struct. structpb normalises
-// Go slices to []interface{}, so both Worker→Master paths (Hello
-// capabilities and heartbeat Extra) share this helper.
-func extractSupportedJobTypes(capsMap map[string]interface{}) []string {
-	sjt, ok := capsMap["supported_job_types"]
-	if !ok {
-		return nil
-	}
-	switch list := sjt.(type) {
-	case []interface{}:
-		types := make([]string, 0, len(list))
-		for _, item := range list {
-			if s, ok := item.(string); ok {
-				types = append(types, s)
-			}
-		}
-		return types
-	case []string:
-		return list
-	}
-	return nil
 }

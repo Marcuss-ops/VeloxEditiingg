@@ -8,20 +8,9 @@ import (
 )
 
 // extractExecutors projects the canonical registry for the HTTP response.
-// Legacy map decoding is deliberately performed by workers.Registry at the
-// persistence/heartbeat boundary, not by this API package.
-func extractExecutors(source interface{}) []ExecutorEntry {
-	registry, ok := source.(controltransport.ExecutorRegistry)
-	if !ok {
-		// Compatibility is confined to this API boundary for callers still
-		// holding a decoded legacy capabilities map. Production Worker
-		// projections always pass ExecutorRegistry.
-		legacy, err := controltransport.ExecutorRegistryFromLegacy(source)
-		if err != nil {
-			return nil
-		}
-		registry = legacy
-	}
+// The API layer accepts no legacy map; registration/heartbeat are the only
+// boundaries allowed to decode historical wire payloads.
+func extractExecutors(registry controltransport.ExecutorRegistry) []ExecutorEntry {
 	all := registry.All()
 	if len(all) == 0 {
 		return nil

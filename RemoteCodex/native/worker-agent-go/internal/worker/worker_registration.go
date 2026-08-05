@@ -3,7 +3,7 @@ package worker
 // worker_registration.go: registration / hello handshake metadata
 // — what the worker advertises to the master at Hello time and
 // keeps in sync with heartbeat.Extra.capabilities. Single source of
-// truth (capabilitiesMap) is reused by both worker_registration.go
+// truth (capabilityReport) is reused by both worker_registration.go
 // (buildHello) and worker_comms.go (sendHeartbeat); any wire-shape
 // change must touch one function. Resource sampling lives behind
 // w.sampler (telemetry.Sampler) — see worker_types.go for the field
@@ -23,7 +23,6 @@ import (
 
 	"velox-shared/controltransport"
 	"velox-worker-agent/internal/executor"
-	"velox-worker-agent/pkg/api"
 )
 
 // Canonical capability keys advertised by the creator profile. These
@@ -36,8 +35,8 @@ const (
 
 // buildHello constructs a WorkerHello from the worker configuration.
 // PR-3.5: the capability payload is derived EXCLUSIVELY from
-// w.capabilitiesMap(hostname) — a single helper also used by
-// sendHeartbeat. Any wire-shape change touches one function.
+// w.capabilitiesMap(hostname), the protobuf-boundary projection of the
+// typed capabilityReport. Any wire-shape change touches one function.
 func (w *Worker) buildHello() controltransport.WorkerHello {
 	hostname, _ := os.Hostname()
 
@@ -97,15 +96,53 @@ func workerDisplayName(hostname string) string {
 	return fmt.Sprintf("worker_%s_%s", strings.TrimSpace(hostname), strings.ReplaceAll(ip, ":", "_"))
 }
 
-// capabilitiesMap is the SINGLE source of truth for the worker's
-// capability map. Both buildHello and sendHeartbeat call it; any change
-// to wire shape touches one function, not two.
+// capabilityReport is the typed single source of truth for worker
+// capabilities. The map conversion happens only when the protobuf Struct
+// transport requires it.
+func (w *Worker) capabilityReport(hostname string) controltransport.CapabilityReport {
+	report := executor.BuildCapabilityReport(w.executorRegistry, w.hostInfo(hostname, w.concurrencyLimiter.MaxActiveJobs()))
+	report.Features = []string{
+		controltransport.CapabilityArtifactCommitV1,
+		controltransport.CapabilityTaskOutputDeclaredV1,
+		controltransport.CapabilityArtifactUploadPlanV1,
+		controltransport.CapabilityArtifactUploadCompletedV1,
+		controltransport.CapabilityTaskCommitAckV1,
+		controltransport.CapabilityCanonicalPayloadV2,
+	}
+	if w.config.IsCreatorProfile() {
+		report.Features = append(report.Features,
+			CapabilityScriptGenerate,
+			CapabilityVoiceoverGenerateItem,
+			CapabilityImageGenerateGoogle,
+		)
+	}
+	if w.clipCache != nil {
+		if keys, err := w.clipCache.ReadyKeys(context.Background()); err == nil {
+			const maxAdvertisedCacheKeys = 2048
+			if len(keys) > maxAdvertisedCacheKeys {
+				report.AssetCacheTruncated = true
+				keys = keys[:maxAdvertisedCacheKeys]
+			}
+			report.AssetCacheKeys = keys
+		}
+	}
+	return report
+}
+
+// capabilitiesMap is the sole protobuf-boundary projection of the typed
+// capability report. Both buildHello and sendHeartbeat call it.
 //
+// Any internal consumer must use capabilityReport or ExecutorRegistry,
+// never inspect this map.
+//
+
 // Concurrency invariants:
-//   - max_parallel_jobs is sourced ONCE from w.concurrencyLimiter (host
-//     block). The top-level mirror reads from the SAME host value, so a
-//     ConfigurationUpdate flipped via SetMaxActiveJobs is visible in
-//     BOTH locations atomically per capabilitiesMap call.
+//   - max_parallel_jobs is sourced ONCE from w.concurrencyLimiter and
+//     published in the host block only (capabilities.host.max_parallel_jobs).
+//     A ConfigurationUpdate flipped via SetMaxActiveJobs is visible on the
+//     next capabilitiesMap call. There is no top-level mirror: only
+//     protocol v3 workers are admitted (controltransport.IsSupportedProtocol
+//     == ProtocolVersionCurrent) and current masters read the host block.
 //   - AsMap emits an empty slice (not nil) when the registry is empty so
 //     encoding/json never silently drops the executors key.
 //
@@ -116,49 +153,12 @@ func workerDisplayName(hostname string) string {
 // forward-compat dispatch; the master only consults the umbrella for
 // the v1 cutover.
 func (w *Worker) capabilitiesMap(hostname string) map[string]interface{} {
-	host := w.hostInfo(hostname, w.concurrencyLimiter.MaxActiveJobs())
-	report := executor.BuildCapabilityReport(w.executorRegistry, host)
-	m := report.AsMap()
-	// Top-level mirror of host.max_parallel_jobs for legacy master
-	// decoders that don't walk into the host sub-block. Sourced from
-	// the SAME host field — both paths MUST stay byte-identical.
-	m["max_parallel_jobs"] = host.MaxParallelJobs
-	// Artifact Commit Protocol v1: typed declare/plan/complete/ack
-	// pipeline. The master consults this capability at dispatch and
-	// routes the worker to the typed path only when it is present.
-	m[controltransport.CapabilityArtifactCommitV1] = true
-	m[controltransport.CapabilityTaskOutputDeclaredV1] = true
-	m[controltransport.CapabilityArtifactUploadPlanV1] = true
-	m[controltransport.CapabilityArtifactUploadCompletedV1] = true
-	m[controltransport.CapabilityTaskCommitAckV1] = true
-	// The worker receives only the canonical renderer contract after
-	// admission; advertise explicit payload compatibility rather than
-	// overloading executor version numbers for this decision.
-	m[controltransport.CapabilityCanonicalPayloadV2] = true
-	// Cache-affinity is advisory: placement prefers workers that already
-	// have an asset, while lease acquisition remains the correctness gate.
-	if w.clipCache != nil {
-		if keys, err := w.clipCache.ReadyKeys(context.Background()); err == nil {
-			// Keep capability/heartbeat messages bounded. Affinity is a
-			// hint; omission of older keys only loses a bonus, never
-			// correctness because the task still acquires its lease.
-			const maxAdvertisedCacheKeys = 2048
-			if len(keys) > maxAdvertisedCacheKeys {
-				m["asset_cache_keys_truncated"] = true
-				keys = keys[:maxAdvertisedCacheKeys]
-			}
-			m["asset_cache_keys"] = keys
-		}
-	}
-
-	// Creator profile: advertise the creative job types the master uses
-	// to route script, voiceover and image generation work. Without these
-	// keys the master would never schedule creator jobs on this worker.
-	if w.config.IsCreatorProfile() {
-		m[CapabilityScriptGenerate] = true
-		m[CapabilityVoiceoverGenerateItem] = true
-		m[CapabilityImageGenerateGoogle] = true
-	}
+	m := w.capabilityReport(hostname).AsMap()
+	// max_parallel_jobs has a SINGLE wire representation:
+	// capabilities.host.max_parallel_jobs (see CapabilityReport.AsMap).
+	// The legacy top-level mirror was removed — the v3-only protocol gate
+	// (controltransport.IsSupportedProtocol) guarantees every admitted
+	// worker/master pair can walk into the host sub-block.
 	return m
 }
 
@@ -183,8 +183,8 @@ func normalizeOfferedExecutorID(id string) string {
 // background 5s tick loop. If the sampler hasn't yet booted (pre-tick),
 // the related HostInfo fields default to zero — same wire contract the
 // master has handled for years (zero == "not yet sampled").
-func (w *Worker) hostInfo(hostname string, maxParallel int) api.HostInfo {
-	host := api.HostInfo{
+func (w *Worker) hostInfo(hostname string, maxParallel int) controltransport.HostInfo {
+	host := controltransport.HostInfo{
 		WorkerID:        w.config.WorkerID,
 		Hostname:        hostname,
 		CPUCount:        runtime.NumCPU(),

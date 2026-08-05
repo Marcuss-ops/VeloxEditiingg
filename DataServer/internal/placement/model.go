@@ -93,7 +93,9 @@ type WorkerSnapshot struct {
 	ActiveJobs      int
 
 	ExecutorRegistry controltransport.ExecutorRegistry
-	Capabilities     map[string]bool
+	// Capabilities contains only typed named admission features. Executor
+	// metadata is exclusively represented by ExecutorRegistry.
+	Capabilities controltransport.CapabilitySet
 	// CachedAssetKeys is the worker's last heartbeat projection of completed
 	// local assets. It is a placement hint, never a reservation.
 	CachedAssetKeys map[string]struct{}

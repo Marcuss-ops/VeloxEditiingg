@@ -8,6 +8,7 @@ import (
 
 func TestParseExecutorCapabilitiesReturnsTypedRegistry(t *testing.T) {
 	registry, err := parseExecutorCapabilities(map[string]interface{}{
+		"schema_version": controltransport.CapabilitySchemaVersion,
 		"executors": []interface{}{
 			map[string]interface{}{"id": "scene.composite.v1", "version": float64(1)},
 		},
@@ -22,6 +23,7 @@ func TestParseExecutorCapabilitiesReturnsTypedRegistry(t *testing.T) {
 
 func TestParseExecutorCapabilitiesRejectsMalformedVersion(t *testing.T) {
 	_, err := parseExecutorCapabilities(map[string]interface{}{
+		"schema_version": controltransport.CapabilitySchemaVersion,
 		"executors": []interface{}{
 			map[string]interface{}{"id": "broken", "version": "one"},
 		},
@@ -31,15 +33,13 @@ func TestParseExecutorCapabilitiesRejectsMalformedVersion(t *testing.T) {
 	}
 }
 
-func TestParseExecutorCapabilitiesMissingBlockIsEmpty(t *testing.T) {
-	registry, err := parseExecutorCapabilities(map[string]interface{}{
+func TestParseExecutorCapabilitiesMissingBlockIsRejected(t *testing.T) {
+	_, err := parseExecutorCapabilities(map[string]interface{}{
+		"schema_version": controltransport.CapabilitySchemaVersion,
 		controltransport.CapabilityCanonicalPayloadV2: true,
 	})
-	if err != nil {
-		t.Fatalf("parse missing block: %v", err)
-	}
-	if !registry.IsEmpty() {
-		t.Fatalf("missing executors should produce empty registry: %+v", registry.All())
+	if err == nil {
+		t.Fatal("missing executors array must be rejected")
 	}
 }
 
