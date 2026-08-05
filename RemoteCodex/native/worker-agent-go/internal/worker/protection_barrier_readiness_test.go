@@ -134,7 +134,7 @@ func TestProtectedAssetsBarrier_CleanupBlocksBetweenSessions(t *testing.T) {
 	if err := os.WriteFile(path, []byte("cache"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := cache.Store(context.Background(), workercache.Entry{DriveFileID: "evictable", LocalPath: path, DownloadComplete: true}); err != nil {
+	if err := cache.Store(context.Background(), workercache.Entry{AssetKey: "evictable", LocalPath: path, DownloadComplete: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -166,7 +166,7 @@ func TestProtectedAssetsBarrier_CleanupBlocksBetweenSessions(t *testing.T) {
 	if err := os.WriteFile(path, []byte("cache"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := cache.Store(context.Background(), workercache.Entry{DriveFileID: "evictable", LocalPath: path, DownloadComplete: true}); err != nil {
+	if err := cache.Store(context.Background(), workercache.Entry{AssetKey: "evictable", LocalPath: path, DownloadComplete: true}); err != nil {
 		t.Fatal(err)
 	}
 	telemetry.MarkRegistered(false)

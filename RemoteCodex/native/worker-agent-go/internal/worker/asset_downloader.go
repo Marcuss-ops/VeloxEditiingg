@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"velox-shared/assetref"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/downloader"
@@ -90,7 +91,7 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 			}
 		}
 	}
-	if err := w.syncClipCache(ctx, assetID, asset.LocalPath, syncSize); err != nil {
+	if err := w.syncClipCache(ctx, assetID, asset.LocalPath, syncSize, assetref.ContentHash(asset.SHA256)); err != nil {
 		return "", fmt.Errorf("record downloaded asset %s: %w", assetID, err)
 	}
 	logAssetCacheAccess(ctx, w.config.WorkerID, cacheAssetKey(assetID, expectedSHA256), status, downloadedBytes, time.Since(accessStarted).Milliseconds(), 0)
@@ -295,7 +296,7 @@ func (t *masterAssetTransferer) Check(ctx context.Context, reportCtx context.Con
 				h.SetMetadata("asset_id", req.AssetID)
 				h.Complete()
 			}
-			return downloader.CacheCheckResult{CacheHit: true, LocalPath: existing}, nil
+			return downloader.CacheCheckResult{CacheHit: true, LocalPath: existing, SHA256: probeSHA}, nil
 		}
 	}
 	return downloader.CacheCheckResult{}, nil
@@ -532,16 +533,16 @@ func parseAssetContentRange(value string) (start, end, total int64, err error) {
 // syncClipCache records a verified asset in the durable remote-worker index.
 // The content-addressed byte cache remains the data source; this index owns
 // leases, protected snapshots and eviction decisions.
-func (w *Worker) syncClipCache(ctx context.Context, assetID, localPath string, sizeBytes int64) error {
+func (w *Worker) syncClipCache(ctx context.Context, assetID, localPath string, sizeBytes int64, hash assetref.ContentHash) error {
 	if w.clipCache == nil {
 		return nil
 	}
-	entry := workercache.Entry{DriveFileID: assetID, LocalPath: localPath, SizeBytes: sizeBytes, DownloadComplete: true}
+	entry := workercache.Entry{AssetKey: assetref.AssetKey(assetID), ContentHash: hash, LocalPath: localPath, SizeBytes: sizeBytes, DownloadComplete: true}
 	if err := w.clipCache.Store(ctx, entry); err != nil {
 		if !errors.Is(err, workercache.ErrDuplicate) {
 			return err
 		}
-		if err := w.clipCache.MarkDownloadComplete(ctx, assetID, localPath, sizeBytes); err != nil {
+		if err := w.clipCache.PreserveContentHash(ctx, assetID, localPath, sizeBytes, hash); err != nil {
 			return err
 		}
 	}

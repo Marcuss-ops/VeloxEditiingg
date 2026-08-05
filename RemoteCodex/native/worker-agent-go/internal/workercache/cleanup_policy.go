@@ -207,12 +207,17 @@ func CleanupWithPolicy(
 			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", "active_lease", now)
 			continue
 		}
+		if e.ActiveReservationCount > 0 {
+			stats.SkippedProtected++
+			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", "active_reservation", now)
+			continue
+		}
 		if !e.DownloadComplete {
 			stats.SkippedInFlight++
 			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", "download_in_flight", now)
 			continue
 		}
-		if _, keep := protected[e.DriveFileID]; keep {
+		if _, keep := protected[string(e.AssetKey)]; keep {
 			stats.SkippedProtected++
 			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", "protected_snapshot", now)
 			continue
@@ -224,7 +229,7 @@ func CleanupWithPolicy(
 			continue
 		}
 
-		if err := c.DeleteIfUnleased(ctx, e.DriveFileID); err != nil {
+		if err := c.DeleteIfUnleased(ctx, string(e.AssetKey)); err != nil {
 			// A concurrent Acquire can legitimately win between List and
 			// cleanup. Treat that as a protected row, not as a cleanup
 			// failure.

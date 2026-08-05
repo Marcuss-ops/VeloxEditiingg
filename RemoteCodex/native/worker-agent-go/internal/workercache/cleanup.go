@@ -11,9 +11,9 @@
 //     snapshot, an in-flight job's lease must keep it on disk.
 //  2. Skip rows with download_complete = false (download-in-flight
 //     or half-written). Recovery happens via the resolver, not here.
-//  3. Skip rows whose drive_file_id is in the protected set supplied
+//  3. Skip rows whose asset_key is in the protected set supplied
 //     by the master snapshot. The protected set is the "next N jobs'
-//     Drive clip union" (see protectedasset.Service / Pass 5/6).
+//     asset-key union" (see protectedasset.Service / Pass 5/6).
 //  4. Otherwise: best-effort os.Remove(local_path), then Delete the
 //     row from the index. A failure on one row does NOT halt the loop.
 //
@@ -64,7 +64,7 @@ type CleanupStats struct {
 // Cleanup removes entries that are NOT leased, NOT in flight, and NOT
 // in the protected set.
 //
-// protected is the canonical drive_file_id union from the master's
+// protected is the canonical asset-key union from the master's
 // snapshot service (see protectedasset.Service). Pass nil for
 // "delete everything not leased and not in flight" (e.g., during
 // offline maintenance). The map key set is the API; values are
@@ -104,19 +104,24 @@ func CleanupWithAudit(ctx context.Context, c *Cache, protected map[string]struct
 			emitCleanerAudit(audit, e, metadata, "kept", "active_lease", now)
 			continue
 		}
+		if e.ActiveReservationCount > 0 {
+			stats.SkippedProtected++
+			emitCleanerAudit(audit, e, metadata, "kept", "active_reservation", now)
+			continue
+		}
 		if !e.DownloadComplete {
 			stats.SkippedInFlight++
 			emitCleanerAudit(audit, e, metadata, "kept", "download_in_flight", now)
 			continue
 		}
-		if _, keep := protected[e.DriveFileID]; keep {
+		if _, keep := protected[string(e.AssetKey)]; keep {
 			stats.SkippedProtected++
 			emitCleanerAudit(audit, e, metadata, "kept", "protected_snapshot", now)
 			continue
 		}
 
 		// Delete the index row first: the row is the durable eviction truth.
-		if err := c.DeleteIfUnleased(ctx, e.DriveFileID); err != nil {
+		if err := c.DeleteIfUnleased(ctx, string(e.AssetKey)); err != nil {
 			if errors.Is(err, ErrNotFound) {
 				stats.SkippedLeased++
 				emitCleanerAudit(audit, e, metadata, "kept", "lease_acquired_during_cleanup", now)

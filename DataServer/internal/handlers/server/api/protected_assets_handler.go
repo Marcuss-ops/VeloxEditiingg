@@ -56,7 +56,7 @@ func NewProtectedAssetsHandler(svc *protectedasset.Service) *ProtectedAssetsHand
 //
 //	200 → JSON object with the snapshot fields
 //	      {"version": uint64, "generated_at": RFC3339,
-//	       "lookahead_jobs": int, "drive_file_ids": []string}
+//	       "lookahead_jobs": int, "protected_asset_keys": []string}
 //	503 → service nil OR snapshot not yet generated (Version == 0)
 //	401/403 → never seen here; upstream WorkerOrAdminAuthMiddleware
 //	          aborts the chain before reaching this handler

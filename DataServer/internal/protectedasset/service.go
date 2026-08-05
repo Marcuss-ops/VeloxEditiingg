@@ -45,9 +45,8 @@ type Snapshot struct {
 	Version       uint64    `json:"version"`
 	GeneratedAt   time.Time `json:"generated_at"`
 	LookaheadJobs int       `json:"lookahead_jobs"`
-	DriveFileIDs  []string  `json:"drive_file_ids"`
-	// ProtectedAssetKeys is the canonical cache identity. DriveFileIDs is
-	// retained on the wire for legacy workers; new payloads use asset IDs.
+	// ProtectedAssetKeys is the canonical cache identity: the deduplicated,
+	// canonical assetref keys the worker cleaner MUST keep this round.
 	ProtectedAssetKeys []string `json:"protected_asset_keys"`
 }
 
@@ -165,14 +164,16 @@ func (s *Service) Refresh(ctx context.Context) error {
 	}
 	sort.Strings(ids)
 
-	s.mu.Lock()
-	s.snapshot = Snapshot{
-		Version:            s.snapshot.Version + 1,
-		GeneratedAt:        s.now(),
-		LookaheadJobs:      len(jobs),
-		DriveFileIDs:       ids,
-		ProtectedAssetKeys: append([]string(nil), ids...),
-	}
+	s.mu.Lock()		// ids is freshly allocated per refresh (never shared with callers), so
+		// it can be stored directly. It is ALWAYS non-nil (make([]string, 0, n))
+		// even when the protected set is empty, preserving the wire contract
+		// that an empty list is a valid "no jobs in queue" response.
+		s.snapshot = Snapshot{
+			Version:            s.snapshot.Version + 1,
+			GeneratedAt:        s.now(),
+			LookaheadJobs:      len(jobs),
+			ProtectedAssetKeys: ids,
+		}
 	s.mu.Unlock()
 	return nil
 }

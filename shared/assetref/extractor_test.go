@@ -6,7 +6,10 @@ import (
 	"testing"
 )
 
-func TestExtractDriveFileIDs(t *testing.T) {
+// TestExtractAssetKeys_LegacyClipSlots exercises the canonical walker
+// over the legacy scene slots (clip_link / clip_links / video_url /
+// source_url) that used to be covered by the dedicated Drive extractor.
+func TestExtractAssetKeys_LegacyClipSlots(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -105,7 +108,7 @@ func TestExtractDriveFileIDs(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			gotSet := ExtractDriveFileIDs(json.RawMessage(tc.in))
+			gotSet := ExtractAssetKeys(json.RawMessage(tc.in))
 
 			// Build wantSet as a NON-NIL map so reflect.DeepEqual matches
 			// the extractor's always-non-nil return contract.
@@ -114,25 +117,26 @@ func TestExtractDriveFileIDs(t *testing.T) {
 				wantSet[id] = struct{}{}
 			}
 			if !reflect.DeepEqual(gotSet, wantSet) {
-				t.Errorf("ExtractDriveFileIDs set mismatch:\n got  = %v\n want = %v", gotSet, wantSet)
+				t.Errorf("ExtractAssetKeys set mismatch:\n got  = %v\n want = %v", gotSet, wantSet)
 			}
 		})
 	}
 }
 
-func TestExtractDriveFileIDs_NeverReturnsNil(t *testing.T) {
+// TestExtractAssetKeys_NeverReturnsNil is a regression guard: the
+// snapshot service and worker lease path range over the result without
+// nil-checking. If ExtractAssetKeys ever returns nil on the empty path,
+// those range loops panic.
+func TestExtractAssetKeys_NeverReturnsNil(t *testing.T) {
 	t.Parallel()
-	// Regression guard: handler_workers and the snapshot service range
-	// over the result without nil-checking. If ExtractDriveFileIDs ever
-	// returns nil on the empty path, those range loops panic.
-	if got := ExtractDriveFileIDs(nil); got == nil {
-		t.Error("ExtractDriveFileIDs(nil) returned nil; must always return non-nil map")
+	if got := ExtractAssetKeys(nil); got == nil {
+		t.Error("ExtractAssetKeys(nil) returned nil; must always return non-nil map")
 	}
-	if got := ExtractDriveFileIDs([]byte("")); got == nil {
-		t.Error("ExtractDriveFileIDs(empty) returned nil; must always return non-nil map")
+	if got := ExtractAssetKeys([]byte("")); got == nil {
+		t.Error("ExtractAssetKeys(empty) returned nil; must always return non-nil map")
 	}
-	if got := ExtractDriveFileIDs([]byte(`{"scenes":[]}`)); got == nil {
-		t.Error("ExtractDriveFileIDs(empty scenes) returned nil; must always return non-nil map")
+	if got := ExtractAssetKeys([]byte(`{"scenes":[]}`)); got == nil {
+		t.Error("ExtractAssetKeys(empty scenes) returned nil; must always return non-nil map")
 	}
 }
 

@@ -144,15 +144,15 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	// (so the executor reads leased rows).
 	//
 	// A nil w.clipCache is the documented skip path (legacy
-	// bootstrap profiles, headless tests). A empty driveID slice
+	// bootstrap profiles, headless tests). A empty asset-key slice
 	// is also a skip path (jobs with no clip references — e.g.
 	// audio-only renderings — are legitimate input and must not
 	// panic the dispatch path).
 	var clipLease *ClipLease
 	if w.clipCache != nil {
-		driveIDs := extractDriveIDsFromJSON(spec.Payload)
-		if len(driveIDs) > 0 {
-			leased, leaseErr := AcquireJobClips(ctx, w.clipCache, pte.JobID, driveIDs)
+		assetKeys := extractAssetKeysFromJSON(spec.Payload)
+		if len(assetKeys) > 0 {
+			leased, leaseErr := AcquireJobClips(ctx, w.clipCache, pte.JobID, assetKeys)
 			if leaseErr != nil {
 				return failBeforeRun("clip_lease_failed", fmt.Errorf("acquire clip lease: %w", leaseErr))
 			}

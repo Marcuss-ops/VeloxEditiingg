@@ -46,20 +46,20 @@ import (
 // zero rows after the first release, which workercache releases treats
 // as benign by design.
 type ClipLease struct {
-	cache    *workercache.Cache
-	jobID    string
-	driveIDs []string
+	cache     *workercache.Cache
+	jobID     string
+	assetKeys []string
 }
 
-// DriveIDs returns a copy of the driveID slice in the order they
+// AssetKeys returns a copy of the asset-key slice in the order they
 // were acquired. Useful for log lines and metrics labels; callers
 // must NOT mutate the returned slice (defensive copy).
-func (l *ClipLease) DriveIDs() []string {
+func (l *ClipLease) AssetKeys() []string {
 	if l == nil {
 		return nil
 	}
-	out := make([]string, len(l.driveIDs))
-	copy(out, l.driveIDs)
+	out := make([]string, len(l.assetKeys))
+	copy(out, l.assetKeys)
 	return out
 }
 
@@ -78,7 +78,7 @@ func (l *ClipLease) ReleaseAll(ctx context.Context) error {
 		return nil
 	}
 	var firstErr error
-	for _, id := range l.driveIDs {
+	for _, id := range l.assetKeys {
 		if err := l.cache.Release(ctx, id, l.jobID); err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("worker.ClipLease.ReleaseAll(%s): %w", id, err)
@@ -91,31 +91,31 @@ func (l *ClipLease) ReleaseAll(ctx context.Context) error {
 }
 
 // AcquireJobClips takes a workercache.Cache, a jobID, and a list of
-// canonical drive_file_ids, and acquires the lease on each in order.
+// canonical asset keys, and acquires the lease on each in order.
 // On any mid-loop failure, all rows acquired SO FAR are released
 // before the error surfaces, so an aborted Acquire never leaks a
 // partial lease. The returned error is wrapped with the failing
-// driveID for triage.
+// key for triage.
 //
 // Preconditions:
 //
 //   - cache MUST be non-nil (ErrEmptyID / ErrNotFound propagate as-is).
 //   - jobID MUST be non-empty (validated by workercache.Acquire).
-//   - Each driveID MUST already be present in the cache AND
+//   - Each key MUST already be present in the cache AND
 //     DownloadComplete=true. The resolver is responsible for
 //     Store+MarkDownloadComplete before AcquireJobClips is invoked.
 //     Calling Acquire on a missing row returns ErrNotFound
 //     (acquire-loop rolls back partial state and surfaces this to
 //     the caller).
 //
-// DriveID order matters for the rollback path: Acquire failures
+// Key order matters for the rollback path: Acquire failures
 // trigger reverse-order Release of the rows that were already
 // acquired (workercache.Release is conditional on the per-row lease
 // still being owned by jobID, so the rollback is guaranteed safe
 // even when two AcquireJobClips calls for the same jobID overlap,
 // which is impossible in practice because AcquireJobClips is called
 // once per job).
-func AcquireJobClips(ctx context.Context, cache *workercache.Cache, jobID string, driveIDs []string) (*ClipLease, error) {
+func AcquireJobClips(ctx context.Context, cache *workercache.Cache, jobID string, assetKeys []string) (*ClipLease, error) {
 	if cache == nil {
 		return nil, fmt.Errorf("worker.AcquireJobClips: nil cache")
 	}
@@ -124,19 +124,19 @@ func AcquireJobClips(ctx context.Context, cache *workercache.Cache, jobID string
 	}
 
 	lease := &ClipLease{
-		cache:    cache,
-		jobID:    jobID,
-		driveIDs: append([]string(nil), driveIDs...),
+		cache:     cache,
+		jobID:     jobID,
+		assetKeys: append([]string(nil), assetKeys...),
 	}
 
-	for _, id := range driveIDs {
+	for _, id := range assetKeys {
 		if err := cache.Acquire(ctx, id, jobID); err != nil {
 			// Roll back the rows already acquired in REVERSE order.
 			// Reverse order keeps the latest acquire (whose context
 			// is freshest) at the back, which is the conventional
 			// release-stack idiom.
-			for j := len(lease.driveIDs) - 1; j >= 0; j-- {
-				_ = lease.cache.Release(ctx, lease.driveIDs[j], jobID)
+			for j := len(lease.assetKeys) - 1; j >= 0; j-- {
+				_ = lease.cache.Release(ctx, lease.assetKeys[j], jobID)
 			}
 			return nil, fmt.Errorf("worker.AcquireJobClips(%s) for %s: %w", id, jobID, err)
 		}
@@ -144,9 +144,9 @@ func AcquireJobClips(ctx context.Context, cache *workercache.Cache, jobID string
 	return lease, nil
 }
 
-// extractDriveIDsFromJSON re-marshals `payload` (a map-shaped decoded
+// extractAssetKeysFromJSON re-marshals `payload` (a map-shaped decoded
 // TaskSpec) into JSON and runs Pass 4's canonical assetref extractor
-// on it. The extracted IDs are returned in sorted-deterministic order
+// on it. The extracted keys are returned in sorted-deterministic order
 // so the lease rollback path is stable across retry attempts.
 //
 // Re-marshaling cost is O(|payload|) per dispatch; for typical job
@@ -156,10 +156,10 @@ func AcquireJobClips(ctx context.Context, cache *workercache.Cache, jobID string
 // Velox-specific field into the generic executor package and is
 // rejected for Pass 9.
 //
-// Returns nil when the payload has no resolvable Drive IDs (a job
+// Returns nil when the payload has no resolvable asset keys (a job
 // with no clip references is a legitimate input; the caller MUST
 // treat nil as "no lease to acquire, skip the defer").
-func extractDriveIDsFromJSON(payload map[string]interface{}) []string {
+func extractAssetKeysFromJSON(payload map[string]interface{}) []string {
 	if payload == nil {
 		return nil
 	}

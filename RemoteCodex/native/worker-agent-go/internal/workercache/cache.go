@@ -5,7 +5,7 @@
 // content-addressable on-disk directory. To avoid re-downloading the same
 // asset across jobs and restarts, this package tracks the durable index and
 // lease state. The current persisted key remains the historical
-// DriveFileID field; migration to namespaced asset_key is tracked separately.
+// AssetKey field; migration to namespaced asset_key is tracked separately.
 //
 // The package is a deliberate split from:
 //
@@ -23,7 +23,7 @@
 //
 // Schema invariants:
 //
-//  1. drive_file_id is the primary key. One row per cache entry;
+//  1. asset_key is the primary key. One row per cache entry;
 //     duplicate inserts return ErrDuplicate so the caller can treat
 //     a concurrent Resolve as a benign race.
 //  2. download_complete transitions false → true atomically via
@@ -48,6 +48,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"velox-shared/assetref"
 )
 
 // Entry is the row shape for cached_assets as exposed to callers.
@@ -55,22 +57,31 @@ import (
 // empty when no job holds the lease. ActiveLeaseCount is authoritative.
 // It is derived from cached_asset_leases and is not persisted on cached_assets;
 // the name remains for compatibility with existing audit/eviction payloads.
+// AssetKey aliases the shared canonical asset identity for package-local
+// callers that already depend on workercache.
+type AssetKey = assetref.AssetKey
+
+// ContentHash aliases the shared verified byte identity.
+type ContentHash = assetref.ContentHash
+
 type Entry struct {
-	DriveFileID      string
+	AssetKey         assetref.AssetKey
+	ContentHash      assetref.ContentHash
 	LocalPath        string
 	SizeBytes        int64
 	ActiveJobID      string
 	DownloadComplete bool
 	CreatedAt        time.Time
 	LastUsedAt       time.Time
-	ActiveLeaseCount int
+	ActiveLeaseCount       int
+	ActiveReservationCount int
 }
 
 // Sentinel errors so callers can branch via errors.Is, not string match.
 var (
 	ErrNotFound  = errors.New("workercache: cached asset not found")
 	ErrDuplicate = errors.New("workercache: cached asset already exists")
-	ErrEmptyID   = errors.New("workercache: drive_file_id is required")
+	ErrEmptyID   = errors.New("workercache: asset_key is required")
 )
 
 // Cache is the SQLite-backed index over cached worker assets.
@@ -123,33 +134,33 @@ func (c *Cache) Close() error {
 // (migrations, supervisor scans that need to join across tables).
 func (c *Cache) DB() *sql.DB { return c.db }
 
-// Find returns the entry for driveFileID. The boolean reports
+// Find returns the entry for assetKey. The boolean reports
 // presence: (zero Entry, false, nil) means the row is absent, not
-// that an error occurred. An empty driveFileID returns ErrEmptyID.
-func (c *Cache) Find(ctx context.Context, driveFileID string) (Entry, bool, error) {
-	if driveFileID == "" {
+// that an error occurred. An empty assetKey returns ErrEmptyID.
+func (c *Cache) Find(ctx context.Context, assetKey string) (Entry, bool, error) {
+	if assetKey == "" {
 		return Entry{}, false, ErrEmptyID
 	}
 	row := c.db.QueryRowContext(ctx,
-		`SELECT `+selectCols+` FROM cached_assets WHERE drive_file_id = ?`,
-		driveFileID)
+		`SELECT `+selectCols+` FROM cached_assets WHERE asset_key = ?`,
+		assetKey)
 	e, err := scanEntry(row)
 	if errors.Is(err, ErrNotFound) {
 		return Entry{}, false, nil
 	}
 	if err != nil {
-		return Entry{}, false, fmt.Errorf("workercache.Find(%q): %w", driveFileID, err)
+		return Entry{}, false, fmt.Errorf("workercache.Find(%q): %w", assetKey, err)
 	}
 	return *e, true, nil
 }
 
-// Store inserts a new entry. Returns ErrDuplicate if drive_file_id is
+// Store inserts a new entry. Returns ErrDuplicate if asset_key is
 // already present; callers should treat this as a benign race (a
 // concurrent Resolve already wrote the entry) and reload it via
 // Find. CreatedAt and LastUsedAt default to time.Now().UTC() if
 // zero. LocalPath is required.
 func (c *Cache) Store(ctx context.Context, e Entry) error {
-	if e.DriveFileID == "" {
+	if e.AssetKey == "" {
 		return ErrEmptyID
 	}
 	if e.LocalPath == "" {
@@ -170,18 +181,18 @@ func (c *Cache) Store(ctx context.Context, e Entry) error {
 	}
 	_, err := c.db.ExecContext(ctx,
 		`INSERT INTO cached_assets
-		   (drive_file_id, local_path, size_bytes,
+		   (asset_key, content_hash, local_path, size_bytes,
 		    download_complete, created_at, last_used_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		e.DriveFileID, e.LocalPath, e.SizeBytes,
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		string(e.AssetKey), string(e.ContentHash), e.LocalPath, e.SizeBytes,
 		dlInt, e.CreatedAt.Format(time.RFC3339Nano),
 		e.LastUsedAt.Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		if isUniqueConflict(err) {
-			return fmt.Errorf("%w: drive_file_id=%s", ErrDuplicate, e.DriveFileID)
+			return fmt.Errorf("%w: asset_key=%s", ErrDuplicate, e.AssetKey)
 		}
-		return fmt.Errorf("workercache.Store(%q): %w", e.DriveFileID, err)
+		return fmt.Errorf("workercache.Store(%q): %w", e.AssetKey, err)
 	}
 	return nil
 }
@@ -190,19 +201,19 @@ func (c *Cache) Store(ctx context.Context, e Entry) error {
 // a not-yet-complete entry usable: callers should still check
 // DownloadComplete before opening the local file. Returns
 // ErrNotFound when no row matches.
-func (c *Cache) MarkUsed(ctx context.Context, driveFileID string) error {
-	if driveFileID == "" {
+func (c *Cache) MarkUsed(ctx context.Context, assetKey string) error {
+	if assetKey == "" {
 		return ErrEmptyID
 	}
 	res, err := c.db.ExecContext(ctx,
 		`UPDATE cached_assets SET last_used_at = ?
-		 WHERE drive_file_id = ?`,
-		time.Now().UTC().Format(time.RFC3339Nano), driveFileID,
+		 WHERE asset_key = ?`,
+		time.Now().UTC().Format(time.RFC3339Nano), assetKey,
 	)
 	if err != nil {
-		return fmt.Errorf("workercache.MarkUsed(%q): %w", driveFileID, err)
+		return fmt.Errorf("workercache.MarkUsed(%q): %w", assetKey, err)
 	}
-	return mustHaveAffected(res, driveFileID, "MarkUsed")
+	return mustHaveAffected(res, assetKey, "MarkUsed")
 }
 
 // MarkDownloadComplete transitions a row to the complete state:
@@ -217,8 +228,36 @@ func (c *Cache) MarkUsed(ctx context.Context, driveFileID string) error {
 // resumed or repaired download naturally updates the cached path.
 //
 // Returns ErrNotFound when no row matches.
-func (c *Cache) MarkDownloadComplete(ctx context.Context, driveFileID, localPath string, sizeBytes int64) error {
-	if driveFileID == "" {
+func (c *Cache) MarkDownloadComplete(ctx context.Context, assetKey, localPath string, sizeBytes int64) error {
+	return c.markDownloadComplete(ctx, assetKey, localPath, sizeBytes, "")
+}
+
+// MarkDownloadCompleteWithHash records the verified content identity at the
+// same transition that makes the file READY. A cache row never becomes
+// complete without the manager having first verified and atomically promoted
+// its bytes; an empty hash is retained only for legacy callers.
+func (c *Cache) MarkDownloadCompleteWithHash(ctx context.Context, assetKey, localPath string, sizeBytes int64, hash assetref.ContentHash) error {
+	return c.markDownloadComplete(ctx, assetKey, localPath, sizeBytes, string(hash))
+}
+
+// PreserveContentHash returns the existing verified hash when a caller has no
+// new digest, preventing legacy/cache-hit synchronization from erasing it.
+func (c *Cache) PreserveContentHash(ctx context.Context, assetKey, localPath string, sizeBytes int64, hash assetref.ContentHash) error {
+	if hash != "" {
+		return c.MarkDownloadCompleteWithHash(ctx, assetKey, localPath, sizeBytes, hash)
+	}
+	entry, found, err := c.Find(ctx, assetKey)
+	if err != nil {
+		return err
+	}
+	if found && entry.ContentHash != "" {
+		hash = entry.ContentHash
+	}
+	return c.MarkDownloadCompleteWithHash(ctx, assetKey, localPath, sizeBytes, hash)
+}
+
+func (c *Cache) markDownloadComplete(ctx context.Context, assetKey, localPath string, sizeBytes int64, hash string) error {
+	if assetKey == "" {
 		return ErrEmptyID
 	}
 	if localPath == "" {
@@ -226,40 +265,40 @@ func (c *Cache) MarkDownloadComplete(ctx context.Context, driveFileID, localPath
 	}
 	res, err := c.db.ExecContext(ctx,
 		`UPDATE cached_assets
-		   SET local_path = ?, size_bytes = ?, download_complete = 1, last_used_at = ?
-		 WHERE drive_file_id = ?`,
-		localPath, sizeBytes,
-		time.Now().UTC().Format(time.RFC3339Nano), driveFileID,
+		   SET local_path = ?, size_bytes = ?, content_hash = ?, download_complete = 1, last_used_at = ?
+		 WHERE asset_key = ?`,
+		localPath, sizeBytes, hash,
+		time.Now().UTC().Format(time.RFC3339Nano), assetKey,
 	)
 	if err != nil {
-		return fmt.Errorf("workercache.MarkDownloadComplete(%q): %w", driveFileID, err)
+		return fmt.Errorf("workercache.MarkDownloadComplete(%q): %w", assetKey, err)
 	}
-	return mustHaveAffected(res, driveFileID, "MarkDownloadComplete")
+	return mustHaveAffected(res, assetKey, "MarkDownloadComplete")
 }
 
 // Acquire adds the (asset, job) relation to the authoritative lease table.
 // Multiple jobs may hold the same asset lease concurrently. Returns
 // ErrNotFound when no cached asset row matches.
-func (c *Cache) Acquire(ctx context.Context, driveFileID, jobID string) error {
-	if driveFileID == "" {
+func (c *Cache) Acquire(ctx context.Context, assetKey, jobID string) error {
+	if assetKey == "" {
 		return ErrEmptyID
 	}
 	if jobID == "" {
 		return fmt.Errorf("workercache.Acquire: jobID is required")
 	}
-	res, err := c.db.ExecContext(ctx, `INSERT OR IGNORE INTO cached_asset_leases (drive_file_id, job_id, acquired_at) SELECT drive_file_id, ?, ? FROM cached_assets WHERE drive_file_id = ?`, jobID, time.Now().UTC().Format(time.RFC3339Nano), driveFileID)
+	res, err := c.db.ExecContext(ctx, `INSERT OR IGNORE INTO cached_asset_leases (asset_key, job_id, acquired_at) SELECT asset_key, ?, ? FROM cached_assets WHERE asset_key = ?`, jobID, time.Now().UTC().Format(time.RFC3339Nano), assetKey)
 	if err != nil {
-		return fmt.Errorf("workercache.Acquire(%q, %q): lease insert: %w", driveFileID, jobID, err)
+		return fmt.Errorf("workercache.Acquire(%q, %q): lease insert: %w", assetKey, jobID, err)
 	}
 	if n, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("workercache.Acquire(%q, %q): rows affected: %w", driveFileID, jobID, err)
+		return fmt.Errorf("workercache.Acquire(%q, %q): rows affected: %w", assetKey, jobID, err)
 	} else if n == 0 {
 		var found int
-		if err := c.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM cached_assets WHERE drive_file_id = ?`, driveFileID).Scan(&found); err != nil {
-			return fmt.Errorf("workercache.Acquire(%q, %q): probe: %w", driveFileID, jobID, err)
+		if err := c.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM cached_assets WHERE asset_key = ?`, assetKey).Scan(&found); err != nil {
+			return fmt.Errorf("workercache.Acquire(%q, %q): probe: %w", assetKey, jobID, err)
 		}
 		if found == 0 {
-			return fmt.Errorf("%w: drive_file_id=%s", ErrNotFound, driveFileID)
+			return fmt.Errorf("%w: asset_key=%s", ErrNotFound, assetKey)
 		}
 	}
 	return nil
@@ -268,60 +307,88 @@ func (c *Cache) Acquire(ctx context.Context, driveFileID, jobID string) error {
 // Release removes only the (asset, job) lease relation and bumps
 // last_used_at. Releasing another job's lease is a benign no-op.
 // Returns ErrNotFound when the asset row itself is missing.
-func (c *Cache) Release(ctx context.Context, driveFileID, jobID string) error {
-	if driveFileID == "" {
+func (c *Cache) Release(ctx context.Context, assetKey, jobID string) error {
+	if assetKey == "" {
 		return ErrEmptyID
 	}
 	if jobID == "" {
 		return fmt.Errorf("workercache.Release: jobID is required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := c.db.ExecContext(ctx, `DELETE FROM cached_asset_leases WHERE drive_file_id = ? AND job_id = ?`, driveFileID, jobID); err != nil {
-		return fmt.Errorf("workercache.Release(%q, %q): lease delete: %w", driveFileID, jobID, err)
+	if _, err := c.db.ExecContext(ctx, `DELETE FROM cached_asset_leases WHERE asset_key = ? AND job_id = ?`, assetKey, jobID); err != nil {
+		return fmt.Errorf("workercache.Release(%q, %q): lease delete: %w", assetKey, jobID, err)
 	}
-	res, err := c.db.ExecContext(ctx, `UPDATE cached_assets SET last_used_at = ? WHERE drive_file_id = ?`, now, driveFileID)
+	res, err := c.db.ExecContext(ctx, `UPDATE cached_assets SET last_used_at = ? WHERE asset_key = ?`, now, assetKey)
 	if err != nil {
-		return fmt.Errorf("workercache.Release(%q, %q): %w", driveFileID, jobID, err)
+		return fmt.Errorf("workercache.Release(%q, %q): %w", assetKey, jobID, err)
 	}
-	return mustHaveAffected(res, driveFileID, "Release")
+	return mustHaveAffected(res, assetKey, "Release")
+}
+
+// Reserve protects an asset for an imminent job until expiresAt. Reservations
+// are durable and participate in the same cleanup protection barrier as leases.
+func (c *Cache) Reserve(ctx context.Context, assetKey, reservationID string, expiresAt time.Time) error {
+	if assetKey == "" {
+		return ErrEmptyID
+	}
+	if reservationID == "" || expiresAt.IsZero() {
+		return fmt.Errorf("workercache.Reserve: reservation ID and expiry are required")
+	}
+	res, err := c.db.ExecContext(ctx, `INSERT OR REPLACE INTO cached_asset_reservations (asset_key, reservation_id, expires_at) SELECT asset_key, ?, ? FROM cached_assets WHERE asset_key = ?`, reservationID, expiresAt.UTC().Format(time.RFC3339Nano), assetKey)
+	if err != nil {
+		return fmt.Errorf("workercache.Reserve(%q, %q): %w", assetKey, reservationID, err)
+	}
+	return mustHaveAffected(res, assetKey, "Reserve")
+}
+
+// ReleaseReservation removes one future-job reservation. It is idempotent
+// when the cache row still exists.
+func (c *Cache) ReleaseReservation(ctx context.Context, assetKey, reservationID string) error {
+	if assetKey == "" {
+		return ErrEmptyID
+	}
+	if _, err := c.db.ExecContext(ctx, `DELETE FROM cached_asset_reservations WHERE asset_key = ? AND reservation_id = ?`, assetKey, reservationID); err != nil {
+		return fmt.Errorf("workercache.ReleaseReservation(%q, %q): %w", assetKey, reservationID, err)
+	}
+	return nil
 }
 
 // DeleteIfUnleased atomically removes an unleased cache row. The lease
 // predicate closes the List→Delete race when another job acquires the same
 // asset while cleanup is scanning.
-func (c *Cache) DeleteIfUnleased(ctx context.Context, driveFileID string) error {
-	if driveFileID == "" {
+func (c *Cache) DeleteIfUnleased(ctx context.Context, assetKey string) error {
+	if assetKey == "" {
 		return ErrEmptyID
 	}
-	res, err := c.db.ExecContext(ctx, `DELETE FROM cached_assets WHERE drive_file_id = ? AND NOT EXISTS (SELECT 1 FROM cached_asset_leases WHERE drive_file_id = ?)`, driveFileID, driveFileID)
+	res, err := c.db.ExecContext(ctx, `DELETE FROM cached_assets WHERE asset_key = ? AND NOT EXISTS (SELECT 1 FROM cached_asset_leases WHERE asset_key = ?)`, assetKey, assetKey)
 	if err != nil {
-		return fmt.Errorf("workercache.DeleteIfUnleased(%q): %w", driveFileID, err)
+		return fmt.Errorf("workercache.DeleteIfUnleased(%q): %w", assetKey, err)
 	}
-	return mustHaveAffected(res, driveFileID, "DeleteIfUnleased")
+	return mustHaveAffected(res, assetKey, "DeleteIfUnleased")
 }
 
 // Delete removes the row. Returns ErrNotFound when no row matches.
 // The caller is responsible for removing the on-disk file (the
 // cleaner pattern is: List → for each evictable row: Delete + os.Remove).
-func (c *Cache) Delete(ctx context.Context, driveFileID string) error {
-	if driveFileID == "" {
+func (c *Cache) Delete(ctx context.Context, assetKey string) error {
+	if assetKey == "" {
 		return ErrEmptyID
 	}
 	res, err := c.db.ExecContext(ctx,
-		`DELETE FROM cached_assets WHERE drive_file_id = ?`,
-		driveFileID,
+		`DELETE FROM cached_assets WHERE asset_key = ?`,
+		assetKey,
 	)
 	if err != nil {
-		return fmt.Errorf("workercache.Delete(%q): %w", driveFileID, err)
+		return fmt.Errorf("workercache.Delete(%q): %w", assetKey, err)
 	}
-	return mustHaveAffected(res, driveFileID, "Delete")
+	return mustHaveAffected(res, assetKey, "Delete")
 }
 
-// List returns all rows ordered by drive_file_id (deterministic for
+// List returns all rows ordered by asset_key (deterministic for
 // tests + supervisor scans).
 func (c *Cache) List(ctx context.Context) ([]Entry, error) {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT `+selectCols+` FROM cached_assets ORDER BY drive_file_id ASC`)
+		`SELECT `+selectCols+` FROM cached_assets ORDER BY asset_key ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("workercache.List: %w", err)
 	}
@@ -354,7 +421,7 @@ func (c *Cache) Size(ctx context.Context) (entries int, bytes int64, err error) 
 // callers must not treat it as a lease or as proof that a file cannot be
 // evicted before the task acquires its lease.
 func (c *Cache) ReadyKeys(ctx context.Context) ([]string, error) {
-	rows, err := c.db.QueryContext(ctx, `SELECT drive_file_id FROM cached_assets WHERE download_complete = 1 ORDER BY drive_file_id`)
+	rows, err := c.db.QueryContext(ctx, `SELECT asset_key FROM cached_assets WHERE download_complete = 1 ORDER BY asset_key`)
 	if err != nil {
 		return nil, fmt.Errorf("workercache.ReadyKeys: %w", err)
 	}

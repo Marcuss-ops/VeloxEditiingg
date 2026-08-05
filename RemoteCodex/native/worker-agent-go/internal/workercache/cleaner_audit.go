@@ -59,10 +59,10 @@ func cleanerAuditMetadata(assetKey string, metadata map[string]CleanerAssetMetad
 }
 
 func emitCleanerAudit(logger CleanerAuditLogger, entry Entry, metadata map[string]CleanerAssetMetadata, decision, reason string, at time.Time) {
-	role, futureRefs := cleanerAuditMetadata(entry.DriveFileID, metadata)
+	role, futureRefs := cleanerAuditMetadata(string(entry.AssetKey), metadata)
 	event := CleanerAuditEvent{
 		Event:                cleanerAuditEventName,
-		AssetKey:             entry.DriveFileID,
+		AssetKey:             string(entry.AssetKey),
 		Role:                 role,
 		Decision:             decision,
 		Reason:               reason,

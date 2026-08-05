@@ -271,12 +271,12 @@ func TestPass6_ValidSnapshot_Returns200_FullContract(t *testing.T) {
 		t.Errorf("LookaheadJobs=%d want %d", resp.LookaheadJobs, len(jobs))
 	}
 	wantIDs := []string{"ABC123", "DEF456", "GHI789"} // sorted + deduped
-	if len(resp.DriveFileIDs) != len(wantIDs) {
-		t.Fatalf("DriveFileIDs=%v want %v", resp.DriveFileIDs, wantIDs)
+	if len(resp.ProtectedAssetKeys) != len(wantIDs) {
+		t.Fatalf("ProtectedAssetKeys=%v want %v", resp.ProtectedAssetKeys, wantIDs)
 	}
 	for i, id := range wantIDs {
-		if resp.DriveFileIDs[i] != id {
-			t.Errorf("DriveFileIDs[%d]=%q want %q", i, resp.DriveFileIDs[i], id)
+		if resp.ProtectedAssetKeys[i] != id {
+			t.Errorf("ProtectedAssetKeys[%d]=%q want %q", i, resp.ProtectedAssetKeys[i], id)
 		}
 	}
 	if !resp.GeneratedAt.Equal(testPinnedTimePass6) {

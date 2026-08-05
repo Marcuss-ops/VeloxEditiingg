@@ -74,7 +74,7 @@ func TestApplySchema_UpgradeBackfillsLeaseAndDropsLegacyColumn(t *testing.T) {
 		t.Fatalf("user_version=%d, want %d", version, currentSchemaVersion)
 	}
 	var job string
-	if err := db.QueryRow(`SELECT job_id FROM cached_asset_leases WHERE drive_file_id = 'LEGACY'`).Scan(&job); err != nil {
+	if err := db.QueryRow(`SELECT job_id FROM cached_asset_leases WHERE asset_key = 'LEGACY'`).Scan(&job); err != nil {
 		t.Fatalf("backfilled lease: %v", err)
 	}
 	if job != "old-job" {
@@ -89,6 +89,82 @@ func TestApplySchema_UpgradeBackfillsLeaseAndDropsLegacyColumn(t *testing.T) {
 	}
 }
 
+// openV2CacheDB seeds the v2 schema: asset rows already keyed by
+// drive_file_id WITHOUT the legacy active_job_id mirror column. The
+// forward migration must still converge to asset_key and restore
+// existing leases.
+func openV2CacheDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "v2-cache.db"))
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	_, err = db.Exec(`
+CREATE TABLE cached_assets (
+    drive_file_id TEXT PRIMARY KEY,
+    local_path TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    download_complete INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT NOT NULL
+);
+CREATE INDEX idx_cached_assets_last_used_at ON cached_assets(last_used_at);
+CREATE TABLE cached_asset_leases (
+    drive_file_id TEXT NOT NULL,
+    job_id TEXT NOT NULL,
+    acquired_at TEXT NOT NULL,
+    PRIMARY KEY (drive_file_id, job_id),
+    FOREIGN KEY (drive_file_id) REFERENCES cached_assets(drive_file_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_cached_asset_leases_asset ON cached_asset_leases(drive_file_id);
+PRAGMA user_version = 2;
+INSERT INTO cached_assets
+    (drive_file_id, local_path, size_bytes, download_complete, created_at, last_used_at)
+VALUES ('V2KEY', '/cache/v2.mp4', 99, 1,
+        '2026-08-01T00:00:00Z', '2026-08-01T00:01:00Z');
+INSERT INTO cached_asset_leases (drive_file_id, job_id, acquired_at)
+VALUES ('V2KEY', 'job-v2', '2026-08-01T00:01:00Z')`)
+	if err != nil {
+		t.Fatalf("seed v2 DB: %v", err)
+	}
+	return db
+}
+
+func TestApplySchema_UpgradeFromV2_RestoresAssetKeyAndLeases(t *testing.T) {
+	db := openV2CacheDB(t)
+	if err := applySchema(db); err != nil {
+		t.Fatalf("applySchema: %v", err)
+	}
+	if hasColumn(t, db, "cached_assets", "drive_file_id") {
+		t.Fatal("legacy drive_file_id column remains after forward migration")
+	}
+	if hasColumn(t, db, "cached_assets", "active_job_id") {
+		t.Fatal("legacy active_job_id column remains after forward migration")
+	}
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != currentSchemaVersion {
+		t.Fatalf("user_version=%d, want %d", version, currentSchemaVersion)
+	}
+	var key, job string
+	if err := db.QueryRow(`SELECT asset_key FROM cached_assets WHERE local_path = '/cache/v2.mp4'`).Scan(&key); err != nil {
+		t.Fatalf("migrated asset key: %v", err)
+	}
+	if key != "V2KEY" {
+		t.Fatalf("migrated asset_key=%q, want V2KEY", key)
+	}
+	if err := db.QueryRow(`SELECT job_id FROM cached_asset_leases WHERE asset_key = 'V2KEY'`).Scan(&job); err != nil {
+		t.Fatalf("restored lease: %v", err)
+	}
+	if job != "job-v2" {
+		t.Fatalf("restored lease job=%q, want job-v2", job)
+	}
+}
+
 func TestApplySchema_UpgradeIsIdempotent(t *testing.T) {
 	db := openLegacyCacheDB(t)
 	if err := applySchema(db); err != nil {
@@ -98,7 +174,7 @@ func TestApplySchema_UpgradeIsIdempotent(t *testing.T) {
 		t.Fatalf("second applySchema: %v", err)
 	}
 	var count int
-	if err := db.QueryRow(`SELECT COUNT(1) FROM cached_asset_leases WHERE drive_file_id = 'LEGACY' AND job_id = 'old-job'`).Scan(&count); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(1) FROM cached_asset_leases WHERE asset_key = 'LEGACY' AND job_id = 'old-job'`).Scan(&count); err != nil {
 		t.Fatalf("lease count: %v", err)
 	}
 	if count != 1 {

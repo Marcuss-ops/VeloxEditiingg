@@ -19,7 +19,7 @@
 //     is what the user-spec requires: "Se lo snapshot fallisce, NON
 //     svuotare la cache locale."
 //
-//  2. A successful poll with empty DriveFileIDs is NOT a
+//  2. A successful poll with empty ProtectedAssetKeys is NOT a
 //     failure — it means the master has zero jobs in queue. The
 //     cleanup loop's grace rule (Pass 12 RecentUseGrace)
 //     protects recently-used rows so the local cache is not
@@ -533,8 +533,7 @@ func (p *ProtectedAssetsPoller) Current(_ context.Context) (time.Time, []string,
 	if err != nil {
 		return time.Time{}, nil, fmt.Errorf("parse protected-assets generated_at: %w", err)
 	}
-	ids := append([]string(nil), snap.DriveFileIDs...)
-	ids = append(ids, snap.ProtectedAssetKeys...)
+	ids := append([]string(nil), snap.ProtectedAssetKeys...)
 	if pollErr != nil {
 		return generatedAt.UTC(), ids, pollErr
 	}

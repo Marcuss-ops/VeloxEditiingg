@@ -10,7 +10,7 @@
 //   - 500 error → previous good snapshot is preserved; OnError fires.
 //   - Timeout → no snapshot is set initially; subsequent successful
 //     poll applies a snapshot (last-good retained across failures).
-//   - Empty DriveFileIDs in a 200 response IS success (master
+//   - Empty ProtectedAssetKeys in a 200 response IS success (master
 //     signals zero jobs in queue; cleanup loop's grace rule is the
 //     safety net against accidental mass-eviction).
 //   - Run fires the initial tick immediately on entry (no warm-up
@@ -41,10 +41,10 @@ import (
 // so the test fixtures match the master wire shape EXACTLY.
 func snapshotJSON(version uint64, generatedAt string, lookahead int, ids []string) []byte {
 	body, _ := json.Marshal(api.ProtectedAssetSnapshot{
-		Version:       version,
-		GeneratedAt:   generatedAt,
-		LookaheadJobs: lookahead,
-		DriveFileIDs:  ids,
+		Version:            version,
+		GeneratedAt:        generatedAt,
+		LookaheadJobs:      lookahead,
+		ProtectedAssetKeys: ids,
 	})
 	return body
 }
@@ -87,7 +87,7 @@ func newPollerWithClient(t *testing.T, srvURL string, opts ...api.ClientOption) 
 // ────────────────────────────────────────────────────────────────────────────
 
 // TestPoller_200_HappyPath_AppliesSnapshot: a single 200 response
-// with a non-empty drive_file_ids set is parsed, stored, and
+// with a non-empty protected_asset_keys set is parsed, stored, and
 // retrievable via Snapshot(). OnSuccess fires; OnError does not.
 func TestPoller_200_HappyPath_AppliesSnapshot(t *testing.T) {
 	srv, _ := newCountingServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -123,8 +123,8 @@ func TestPoller_200_HappyPath_AppliesSnapshot(t *testing.T) {
 	if snap.LookaheadJobs != 10 {
 		t.Errorf("LookaheadJobs=%d, want 10", snap.LookaheadJobs)
 	}
-	if got, want := snap.DriveFileIDs, []string{"ABC123", "TYSON001"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Errorf("DriveFileIDs=%v, want %v", got, want)
+	if got, want := snap.ProtectedAssetKeys, []string{"ABC123", "TYSON001"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("ProtectedAssetKeys=%v, want %v", got, want)
 	}
 	if snap.GeneratedAt != "2026-07-27T12:00:00Z" {
 		t.Errorf("GeneratedAt=%q, want %q", snap.GeneratedAt, "2026-07-27T12:00:00Z")
@@ -136,7 +136,7 @@ func TestPoller_200_HappyPath_AppliesSnapshot(t *testing.T) {
 }
 
 // TestPoller_200_EmptyDriveIDs_IsSuccess: master returns 200 with
-// empty drive_file_ids — this is a legit "no jobs in queue"
+// empty protected_asset_keys — this is a legit "no jobs in queue"
 // response, NOT a failure. The poller applies the snapshot (which
 // is empty) and OnSuccess fires. The cleanup loop's grace rule
 // (Pass 12) is the safety net — it must NOT be misinterpreted by
@@ -162,8 +162,8 @@ func TestPoller_200_EmptyDriveIDs_IsSuccess(t *testing.T) {
 	if snap == nil {
 		t.Fatalf("Snapshot() nil after empty-but-valid 200")
 	}
-	if len(snap.DriveFileIDs) != 0 {
-		t.Errorf("DriveFileIDs=%v, want empty", snap.DriveFileIDs)
+	if len(snap.ProtectedAssetKeys) != 0 {
+		t.Errorf("ProtectedAssetKeys=%v, want empty", snap.ProtectedAssetKeys)
 	}
 	if atomic.LoadInt32(&errorCount) != 0 {
 		t.Errorf("OnError fired %d times on 200-with-empty-list, want 0", errorCount)
@@ -210,7 +210,7 @@ func TestPoller_500_KeepsLastGood(t *testing.T) {
 	if firstSnapshot == nil {
 		t.Fatal("Snapshot() nil after first success")
 	}
-	if firstSnapshot.Version != 1 || firstSnapshot.DriveFileIDs[0] != "PRESERVED" {
+	if firstSnapshot.Version != 1 || firstSnapshot.ProtectedAssetKeys[0] != "PRESERVED" {
 		t.Fatalf("unexpected first snapshot %+v", firstSnapshot)
 	}
 
@@ -227,7 +227,7 @@ func TestPoller_500_KeepsLastGood(t *testing.T) {
 	if secondSnapshot != firstSnapshot {
 		t.Errorf("Snapshot() returned a new pointer after 500; want same pointer as before")
 	}
-	if secondSnapshot.Version != 1 || secondSnapshot.DriveFileIDs[0] != "PRESERVED" {
+	if secondSnapshot.Version != 1 || secondSnapshot.ProtectedAssetKeys[0] != "PRESERVED" {
 		t.Errorf("Snapshot mutated by failure: %+v, want v=1 [PRESERVED]", secondSnapshot)
 	}
 
@@ -301,7 +301,7 @@ func TestPoller_Timeout_KeepsLastGoodAndRecovery(t *testing.T) {
 	if good == nil {
 		t.Fatal("phase B: Snapshot() nil after success")
 	}
-	if good.Version != 50 || good.DriveFileIDs[0] != "RECOVERED" {
+	if good.Version != 50 || good.ProtectedAssetKeys[0] != "RECOVERED" {
 		t.Errorf("phase B: Snapshot=%+v, want v=50 [RECOVERED]", good)
 	}
 

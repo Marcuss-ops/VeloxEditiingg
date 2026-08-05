@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"velox-shared/assetref"
 )
 
 // ────────────────────────────────────────────────────────────────────────
@@ -64,23 +66,23 @@ func LoadCleanupPolicyDefaults_CleanupPolicyHelper() CleanupPolicy {
 // last_used_at instant — same shape as cleanup_policy_test.go's
 // helper, repeated locally so each package's tests can run
 // independently.
-func seedRowLoop(_ *testing.T, c *Cache, dir, driveID string, lastUsedAt time.Time) {
+func seedRowLoop(_ *testing.T, c *Cache, dir, assetKey string, lastUsedAt time.Time) {
 	_ = os.MkdirAll(dir, 0o755)
-	path := filepath.Join(dir, driveID+".mp4")
-	_ = os.WriteFile(path, []byte("FAKE VIDEO BYTES "+driveID), 0o644)
+	path := filepath.Join(dir, assetKey+".mp4")
+	_ = os.WriteFile(path, []byte("FAKE VIDEO BYTES "+assetKey), 0o644)
 	_ = c.Store(context.Background(), Entry{
-		DriveFileID:      driveID,
+		AssetKey:         assetref.AssetKey(assetKey),
 		LocalPath:        path,
-		SizeBytes:        int64(len("FAKE VIDEO BYTES " + driveID)),
+		SizeBytes:        int64(len("FAKE VIDEO BYTES " + assetKey)),
 		DownloadComplete: true,
 		CreatedAt:        lastUsedAt,
 		LastUsedAt:       lastUsedAt,
 	})
-	_ = c.MarkDownloadComplete(context.Background(), driveID, path,
-		int64(len("FAKE VIDEO BYTES "+driveID)))
+	_ = c.MarkDownloadComplete(context.Background(), assetKey, path,
+		int64(len("FAKE VIDEO BYTES "+assetKey)))
 	_, _ = c.DB().ExecContext(context.Background(),
-		`UPDATE cached_assets SET last_used_at = ? WHERE drive_file_id = ?`,
-		lastUsedAt.Format(time.RFC3339Nano), driveID)
+		`UPDATE cached_assets SET last_used_at = ? WHERE asset_key = ?`,
+		lastUsedAt.Format(time.RFC3339Nano), assetKey)
 }
 
 // ────────────────────────────────────────────────────────────────────────

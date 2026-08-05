@@ -36,7 +36,7 @@ func TestProtectedAssetsPoller_StaleResponseKeepsLastGoodSnapshot(t *testing.T) 
 	if poller.Snapshot() != good {
 		t.Fatalf("stale response replaced last-good snapshot")
 	}
-	if got := poller.Snapshot().DriveFileIDs; len(got) != 1 || got[0] != "fresh" {
+	if got := poller.Snapshot().ProtectedAssetKeys; len(got) != 1 || got[0] != "fresh" {
 		t.Fatalf("snapshot after stale response=%v, want [fresh]", got)
 	}
 }

@@ -24,6 +24,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"velox-shared/assetref"
 )
 
 // policyFixture is the deterministic test fixture: a fresh in-memory
@@ -56,30 +58,30 @@ func newPolicyFixture(t *testing.T) *policyFixture {
 // value via Cache.DB() — the exporter reserved for migrations and
 // supervisor scans in cache.go. Direct SQL access for test-only
 // timestamp control is documented as a legitimate use.
-func seedRow(t *testing.T, c *Cache, dir, driveID string, lastUsedAt time.Time) {
+func seedRow(t *testing.T, c *Cache, dir, assetKey string, lastUsedAt time.Time) {
 	t.Helper()
-	path := filepath.Join(dir, driveID+".mp4")
-	if err := os.WriteFile(path, []byte("FAKE VIDEO BYTES "+driveID), 0o644); err != nil {
+	path := filepath.Join(dir, assetKey+".mp4")
+	if err := os.WriteFile(path, []byte("FAKE VIDEO BYTES "+assetKey), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
 	if err := c.Store(context.Background(), Entry{
-		DriveFileID:      driveID,
+		AssetKey:         assetref.AssetKey(assetKey),
 		LocalPath:        path,
-		SizeBytes:        int64(len("FAKE VIDEO BYTES " + driveID)),
+		SizeBytes:        int64(len("FAKE VIDEO BYTES " + assetKey)),
 		DownloadComplete: true,
 		CreatedAt:        lastUsedAt,
 		LastUsedAt:       lastUsedAt,
 	}); err != nil {
-		t.Fatalf("Store %s: %v", driveID, err)
+		t.Fatalf("Store %s: %v", assetKey, err)
 	}
-	if err := c.MarkDownloadComplete(context.Background(), driveID, path,
-		int64(len("FAKE VIDEO BYTES "+driveID))); err != nil {
-		t.Fatalf("MarkDownloadComplete %s: %v", driveID, err)
+	if err := c.MarkDownloadComplete(context.Background(), assetKey, path,
+		int64(len("FAKE VIDEO BYTES "+assetKey))); err != nil {
+		t.Fatalf("MarkDownloadComplete %s: %v", assetKey, err)
 	}
 	if _, err := c.DB().ExecContext(context.Background(),
-		`UPDATE cached_assets SET last_used_at = ? WHERE drive_file_id = ?`,
-		lastUsedAt.Format(time.RFC3339Nano), driveID); err != nil {
-		t.Fatalf("override last_used_at for %s: %v", driveID, err)
+		`UPDATE cached_assets SET last_used_at = ? WHERE asset_key = ?`,
+		lastUsedAt.Format(time.RFC3339Nano), assetKey); err != nil {
+		t.Fatalf("override last_used_at for %s: %v", assetKey, err)
 	}
 }
 
@@ -118,8 +120,8 @@ func TestCleanupPolicy_RaceCondition_T0ToT10s_NoDelete(t *testing.T) {
 
 	// Snapshot taken at T0 contains ALPHA only (NOT BETA — BETA is
 	// the recently-renamed-but-not-relisted "old" row).
-	const snapshotDriveIDs = "ALPHA" // and only ALPHA
-	_ = snapshotDriveIDs
+	const snapshotAssetKeys = "ALPHA" // and only ALPHA
+	_ = snapshotAssetKeys
 	protectedIDs := []string{"ALPHA"}
 
 	policy := CleanupPolicy{
@@ -135,7 +137,7 @@ func TestCleanupPolicy_RaceCondition_T0ToT10s_NoDelete(t *testing.T) {
 
 	// ALPHA: kept via lease (Pass 9) — SkippedLeased+=1.
 	if stats.SkippedLeased != 1 {
-		t.Errorf("SkippedLeased=%d want 1 (ALPHA via active_job_id)", stats.SkippedLeased)
+		t.Errorf("SkippedLeased=%d want 1 (ALPHA via active lease)", stats.SkippedLeased)
 	}
 	// BETA: kept via grace (Pass 12) — SkippedGrace+=1.
 	// (Also kept hypothetically because T10s-T0 = 10s is well under

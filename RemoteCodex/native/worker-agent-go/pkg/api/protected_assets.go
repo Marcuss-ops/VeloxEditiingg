@@ -59,13 +59,12 @@ type ProtectedAssetSnapshot struct {
 	// queue was short enough to read every job.
 	LookaheadJobs int `json:"lookahead_jobs"`
 
-	// DriveFileIDs is the deduplicated, canonical (assetref.DriveFileID)
-	// set of file IDs the master considers protected for the
+	// ProtectedAssetKeys is the deduplicated, canonical (assetref.ExtractAssetKeys)
+	// set of asset keys the master considers protected for the
 	// next ~30s. Empty slice is a legitimate "no jobs in queue"
 	// response; the worker cleanup loop must NOT interpret an
 	// empty slice as "evict everything not actively leased"
 	// (see Pass 12 CleanupPolicy / RecentUseGrace).
-	DriveFileIDs       []string `json:"drive_file_ids"`
 	ProtectedAssetKeys []string `json:"protected_asset_keys"`
 }
 

@@ -7,19 +7,21 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"velox-shared/assetref"
 )
 
 // cache_helpers.go owns the storage plumbing of the workercache package:
 // schema creation/migration, the row projection, the scanner and shared
 // predicates. The public CRUD surface lives in cache.go.
 
-const currentSchemaVersion = 2
+const currentSchemaVersion = 3
 
 // schemaDDL is the canonical schema for new databases. Lease ownership is
 // represented only by cached_asset_leases; cached_assets has no lease mirror.
 const schemaDDL = `
 CREATE TABLE IF NOT EXISTS cached_assets (
-    drive_file_id      TEXT PRIMARY KEY,
+    asset_key      TEXT PRIMARY KEY,
+    content_hash   TEXT NOT NULL DEFAULT '',
     local_path         TEXT NOT NULL,
     size_bytes         INTEGER NOT NULL DEFAULT 0,
     download_complete  INTEGER NOT NULL DEFAULT 0,
@@ -28,26 +30,37 @@ CREATE TABLE IF NOT EXISTS cached_assets (
 );
 CREATE INDEX IF NOT EXISTS idx_cached_assets_last_used_at
     ON cached_assets(last_used_at);
+CREATE TABLE IF NOT EXISTS cached_asset_reservations (
+    asset_key TEXT NOT NULL,
+    reservation_id TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    PRIMARY KEY (asset_key, reservation_id),
+    FOREIGN KEY (asset_key) REFERENCES cached_assets(asset_key) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_cached_asset_reservations_expiry
+    ON cached_asset_reservations(expires_at);
 CREATE TABLE IF NOT EXISTS cached_asset_leases (
-    drive_file_id TEXT NOT NULL,
+    asset_key TEXT NOT NULL,
     job_id        TEXT NOT NULL,
     acquired_at   TEXT NOT NULL,
-    PRIMARY KEY (drive_file_id, job_id),
-    FOREIGN KEY (drive_file_id) REFERENCES cached_assets(drive_file_id) ON DELETE CASCADE
+    PRIMARY KEY (asset_key, job_id),
+    FOREIGN KEY (asset_key) REFERENCES cached_assets(asset_key) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_cached_asset_leases_asset
-    ON cached_asset_leases(drive_file_id);
+    ON cached_asset_leases(asset_key);
 `
 
-const selectCols = `drive_file_id, local_path, size_bytes,
+const selectCols = `asset_key, content_hash, local_path, size_bytes,
     download_complete, created_at, last_used_at,
-    (SELECT COUNT(1) FROM cached_asset_leases l WHERE l.drive_file_id = cached_assets.drive_file_id),
-    COALESCE((SELECT MIN(job_id) FROM cached_asset_leases l2 WHERE l2.drive_file_id = cached_assets.drive_file_id), '')`
+    (SELECT COUNT(1) FROM cached_asset_leases l WHERE l.asset_key = cached_assets.asset_key),
+    COALESCE((SELECT MIN(job_id) FROM cached_asset_leases l2 WHERE l2.asset_key = cached_assets.asset_key), ''),
+    (SELECT COUNT(1) FROM cached_asset_reservations r WHERE r.asset_key = cached_assets.asset_key AND r.expires_at > CURRENT_TIMESTAMP)`
 
 // applySchema creates the current schema or upgrades a legacy database. The
-// migration is deliberately forward-only: once version 2 is committed the
-// legacy column is gone and older binaries are not supported against it.
-// Deployment contract: roll out the v2 worker before opening the upgraded DB,
+// migration is deliberately forward-only: legacy drive_file_id / active_job_id
+// columns are gone after upgrade and older binaries are not supported against
+// the migrated DB.
+// Deployment contract: roll out the new worker before opening the upgraded DB,
 // and do not downgrade that worker against the same DB after this migration.
 func applySchema(db *sql.DB) error {
 	// A single connection makes PRAGMA and the migration transaction operate
@@ -65,17 +78,30 @@ func applySchema(db *sql.DB) error {
 		return setSchemaVersion(db, currentSchemaVersion)
 	}
 
-	legacy, err := columnExists(db, "cached_assets", "active_job_id")
+	legacyKey, err := columnExists(db, "cached_assets", "drive_file_id")
 	if err != nil {
 		return err
 	}
-	if legacy {
+	legacyLease, err := columnExists(db, "cached_assets", "active_job_id")
+	if err != nil {
+		return err
+	}
+	if legacyKey || legacyLease {
 		if err := migrateLegacySchema(db); err != nil {
 			return fmt.Errorf("migrate cache schema: %w", err)
 		}
 		return nil
 	}
 
+	hasContentHash, err := columnExists(db, "cached_assets", "content_hash")
+	if err != nil {
+		return err
+	}
+	if !hasContentHash {
+		if _, err := db.Exec(`ALTER TABLE cached_assets ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("add content_hash column: %w", err)
+		}
+	}
 	if _, err := db.Exec(schemaDDL); err != nil {
 		return fmt.Errorf("ensure cache schema: %w", err)
 	}
@@ -161,7 +187,7 @@ func migrateLegacySchemaWithHook(db *sql.DB, afterAssetsRebuild func() error) er
 		return rollback(err)
 	}
 	if !legacyLeasesExists {
-		if _, err := tx.Exec(`CREATE TABLE cached_asset_leases (
+		if _, err := tx.Exec(`CREATE TABLE cached_asset_leases_legacy (
 			drive_file_id TEXT NOT NULL,
 			job_id TEXT NOT NULL,
 			acquired_at TEXT NOT NULL,
@@ -169,23 +195,29 @@ func migrateLegacySchemaWithHook(db *sql.DB, afterAssetsRebuild func() error) er
 		)`); err != nil {
 			return rollback(err)
 		}
+	} else {
+		if _, err := tx.Exec(`DROP INDEX IF EXISTS idx_cached_asset_leases_asset`); err != nil {
+			return rollback(fmt.Errorf("drop legacy lease index: %w", err))
+		}
+		if _, err := tx.Exec(`ALTER TABLE cached_asset_leases RENAME TO cached_asset_leases_legacy`); err != nil {
+			return rollback(fmt.Errorf("preserve legacy leases: %w", err))
+		}
 	}
-	if _, err := tx.Exec(`INSERT OR IGNORE INTO cached_asset_leases
-		(drive_file_id, job_id, acquired_at)
-		SELECT drive_file_id, active_job_id, last_used_at
-		FROM cached_assets
-		WHERE active_job_id IS NOT NULL AND active_job_id != ''`); err != nil {
-		return rollback(fmt.Errorf("backfill legacy leases: %w", err))
+	if active, err := columnExistsTx(tx, "cached_assets", "active_job_id"); err != nil {
+		return rollback(err)
+	} else if active {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO cached_asset_leases_legacy
+			(drive_file_id, job_id, acquired_at)
+			SELECT drive_file_id, active_job_id, last_used_at
+			FROM cached_assets
+			WHERE active_job_id IS NOT NULL AND active_job_id != ''`); err != nil {
+			return rollback(fmt.Errorf("backfill legacy leases: %w", err))
+		}
 	}
 
-	if _, err := tx.Exec(`DROP INDEX IF EXISTS idx_cached_asset_leases_asset`); err != nil {
-		return rollback(fmt.Errorf("drop legacy lease index: %w", err))
-	}
-	if _, err := tx.Exec(`ALTER TABLE cached_asset_leases RENAME TO cached_asset_leases_legacy`); err != nil {
-		return rollback(fmt.Errorf("preserve backfilled leases: %w", err))
-	}
 	if _, err := tx.Exec(`CREATE TABLE cached_assets_new (
-		drive_file_id TEXT PRIMARY KEY,
+		asset_key TEXT PRIMARY KEY,
+		content_hash TEXT NOT NULL DEFAULT '',
 		local_path TEXT NOT NULL,
 		size_bytes INTEGER NOT NULL DEFAULT 0,
 		download_complete INTEGER NOT NULL DEFAULT 0,
@@ -195,8 +227,8 @@ func migrateLegacySchemaWithHook(db *sql.DB, afterAssetsRebuild func() error) er
 		return rollback(fmt.Errorf("create migrated cache table: %w", err))
 	}
 	if _, err := tx.Exec(`INSERT INTO cached_assets_new
-		(drive_file_id, local_path, size_bytes, download_complete, created_at, last_used_at)
-		SELECT drive_file_id, local_path, size_bytes, download_complete, created_at, last_used_at
+		(asset_key, content_hash, local_path, size_bytes, download_complete, created_at, last_used_at)
+		SELECT drive_file_id, '', local_path, size_bytes, download_complete, created_at, last_used_at
 		FROM cached_assets`); err != nil {
 		return rollback(fmt.Errorf("copy cached assets: %w", err))
 	}
@@ -214,32 +246,62 @@ func migrateLegacySchemaWithHook(db *sql.DB, afterAssetsRebuild func() error) er
 			return rollback(fmt.Errorf("injected migration failure after assets rebuild: %w", err))
 		}
 	}
+	if _, err := tx.Exec(`CREATE TABLE cached_asset_reservations (
+		asset_key TEXT NOT NULL,
+		reservation_id TEXT NOT NULL,
+		expires_at TEXT NOT NULL,
+		PRIMARY KEY (asset_key, reservation_id),
+		FOREIGN KEY (asset_key) REFERENCES cached_assets(asset_key) ON DELETE CASCADE
+	)`); err != nil {
+		return rollback(fmt.Errorf("create migrated reservation table: %w", err))
+	}
 	if _, err := tx.Exec(`CREATE TABLE cached_asset_leases (
-		drive_file_id TEXT NOT NULL,
+		asset_key TEXT NOT NULL,
 		job_id TEXT NOT NULL,
 		acquired_at TEXT NOT NULL,
-		PRIMARY KEY (drive_file_id, job_id),
-		FOREIGN KEY (drive_file_id) REFERENCES cached_assets(drive_file_id) ON DELETE CASCADE
+		PRIMARY KEY (asset_key, job_id),
+		FOREIGN KEY (asset_key) REFERENCES cached_assets(asset_key) ON DELETE CASCADE
 	)`); err != nil {
 		return rollback(fmt.Errorf("create migrated lease table: %w", err))
 	}
-	if _, err := tx.Exec(`INSERT INTO cached_asset_leases (drive_file_id, job_id, acquired_at)
-		SELECT drive_file_id, job_id, acquired_at FROM cached_asset_leases_legacy`); err != nil {
+	if _, err := tx.Exec(`INSERT INTO cached_asset_leases (asset_key, job_id, acquired_at)
+		SELECT drive_file_id AS asset_key, job_id, acquired_at FROM cached_asset_leases_legacy`); err != nil {
 		return rollback(fmt.Errorf("restore migrated leases: %w", err))
 	}
 	if _, err := tx.Exec(`DROP TABLE cached_asset_leases_legacy`); err != nil {
 		return rollback(fmt.Errorf("drop temporary lease table: %w", err))
 	}
-	if _, err := tx.Exec(`CREATE INDEX idx_cached_asset_leases_asset ON cached_asset_leases(drive_file_id)`); err != nil {
+	if _, err := tx.Exec(`CREATE INDEX idx_cached_asset_leases_asset ON cached_asset_leases(asset_key)`); err != nil {
 		return rollback(fmt.Errorf("create lease index: %w", err))
 	}
-	if _, err := tx.Exec(`PRAGMA user_version = 2`); err != nil {
+	if _, err := tx.Exec(`PRAGMA user_version = 3`); err != nil {
 		return rollback(fmt.Errorf("set migrated schema version: %w", err))
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit cache migration: %w", err)
 	}
 	return nil
+}
+
+func columnExistsTx(tx *sql.Tx, table, column string) (bool, error) {
+	rows, err := tx.Query(`PRAGMA table_info(` + quoteSQLiteIdentifier(table) + `)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, primaryKey int
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func tableExistsTx(tx *sql.Tx, name string) (bool, error) {
@@ -256,15 +318,18 @@ type scanDBI interface {
 func scanEntry(r scanDBI) (*Entry, error) {
 	var (
 		e          Entry
+		assetKey   string
+		hash       string
 		dlInt      int
 		createdS   string
 		usedS      string
-		leaseCount int
-		leaseJob   string
+		leaseCount       int
+		leaseJob         string
+		reservationCount int
 	)
 	err := r.Scan(
-		&e.DriveFileID, &e.LocalPath, &e.SizeBytes,
-		&dlInt, &createdS, &usedS, &leaseCount, &leaseJob,
+		&assetKey, &hash, &e.LocalPath, &e.SizeBytes,
+		&dlInt, &createdS, &usedS, &leaseCount, &leaseJob, &reservationCount,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -272,9 +337,12 @@ func scanEntry(r scanDBI) (*Entry, error) {
 		}
 		return nil, fmt.Errorf("workercache.scanEntry: %w", err)
 	}
+	e.AssetKey = assetref.AssetKey(assetKey)
+	e.ContentHash = assetref.ContentHash(hash)
 	if leaseCount > 0 {
 		e.ActiveLeaseCount = leaseCount
 		e.ActiveJobID = leaseJob
+		e.ActiveReservationCount = reservationCount
 	}
 	e.DownloadComplete = dlInt != 0
 	if e.CreatedAt, err = parseRFC3339Nano(createdS); err != nil {
@@ -287,13 +355,13 @@ func scanEntry(r scanDBI) (*Entry, error) {
 }
 
 // mustHaveAffected returns ErrNotFound if the result affected zero rows.
-func mustHaveAffected(res sql.Result, driveFileID, op string) error {
+func mustHaveAffected(res sql.Result, assetKey, op string) error {
 	n, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("workercache.%s(%q): rows affected: %w", op, driveFileID, err)
+		return fmt.Errorf("workercache.%s(%q): rows affected: %w", op, assetKey, err)
 	}
 	if n == 0 {
-		return fmt.Errorf("%w: drive_file_id=%s", ErrNotFound, driveFileID)
+		return fmt.Errorf("%w: asset_key=%s", ErrNotFound, assetKey)
 	}
 	return nil
 }

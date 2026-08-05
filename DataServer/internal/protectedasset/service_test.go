@@ -4,7 +4,7 @@
 //  1. Refresh populates Snapshot correctly (Version=1, IDs sorted,
 //     GeneratedAt ≈ now, LookaheadJobs matches row count).
 //  2. 3 successive refreshes → Version goes 1, 2, 3 strictly.
-//  3. Empty result → DriveFileIDs non-nil empty, LookaheadJobs=0,
+//  3. Empty result → ProtectedAssetKeys non-nil empty, LookaheadJobs=0,
 //     Version still increments.
 //  4. Snapshot() before any Refresh returns the zero Snapshot.
 //  5. Concurrent Snapshot() during Refresh() does not panic
@@ -120,8 +120,8 @@ func TestService_Refresh_PopulatesSnapshot(t *testing.T) {
 		t.Errorf("GeneratedAt = %v, want %v", got.GeneratedAt, now)
 	}
 	wantIDs := []string{"AAA", "BBB", "CCC", "DDD"}
-	if !reflect.DeepEqual(got.DriveFileIDs, wantIDs) {
-		t.Errorf("DriveFileIDs = %v, want %v (ascending sort)", got.DriveFileIDs, wantIDs)
+	if !reflect.DeepEqual(got.ProtectedAssetKeys, wantIDs) {
+		t.Errorf("ProtectedAssetKeys = %v, want %v (ascending sort)", got.ProtectedAssetKeys, wantIDs)
 	}
 }
 
@@ -149,7 +149,7 @@ func TestService_Refresh_MonotonicVersion(t *testing.T) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  3. Empty repo → empty non-nil DriveFileIDs, LookaheadJobs=0,
+//  3. Empty repo → empty non-nil ProtectedAssetKeys, LookaheadJobs=0,
 //     Version still increments (we never return the zero snapshot
 //     post-Refresh).
 //
@@ -171,11 +171,11 @@ func TestService_Refresh_EmptyRepo(t *testing.T) {
 	if got.LookaheadJobs != 0 {
 		t.Errorf("LookaheadJobs = %d, want 0", got.LookaheadJobs)
 	}
-	if got.DriveFileIDs == nil {
-		t.Error("DriveFileIDs = nil; want empty non-nil slice so HTTP handler range-loop is safe")
+	if got.ProtectedAssetKeys == nil {
+		t.Error("ProtectedAssetKeys = nil; want empty non-nil slice so HTTP handler range-loop is safe")
 	}
-	if len(got.DriveFileIDs) != 0 {
-		t.Errorf("DriveFileIDs length = %d, want 0", len(got.DriveFileIDs))
+	if len(got.ProtectedAssetKeys) != 0 {
+		t.Errorf("ProtectedAssetKeys length = %d, want 0", len(got.ProtectedAssetKeys))
 	}
 }
 
@@ -195,8 +195,8 @@ func TestService_Snapshot_ZeroBeforeFirstRefresh(t *testing.T) {
 	if !got.GeneratedAt.IsZero() {
 		t.Errorf("GeneratedAt before first Refresh = %v, want zero", got.GeneratedAt)
 	}
-	if got.DriveFileIDs != nil {
-		t.Errorf("DriveFileIDs before first Refresh = %v, want nil", got.DriveFileIDs)
+	if got.ProtectedAssetKeys != nil {
+		t.Errorf("ProtectedAssetKeys before first Refresh = %v, want nil", got.ProtectedAssetKeys)
 	}
 }
 
@@ -225,9 +225,9 @@ func TestService_Refresh_SortingAndDedup(t *testing.T) {
 	}
 
 	want := []string{"AAA", "MMM", "ZZZ"}
-	got := svc.Snapshot().DriveFileIDs
+	got := svc.Snapshot().ProtectedAssetKeys
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("DriveFileIDs = %v, want %v (sorted ascending, dedup)", got, want)
+		t.Errorf("ProtectedAssetKeys = %v, want %v (sorted ascending, dedup)", got, want)
 	}
 }
 

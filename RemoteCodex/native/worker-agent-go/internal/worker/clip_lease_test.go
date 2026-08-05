@@ -51,7 +51,7 @@ func TestClipLease_ReusedAndNewClip(t *testing.T) {
 		t.Fatalf("write A: %v", err)
 	}
 	if err := cache.Store(ctx, workercache.Entry{
-		DriveFileID:      "TYSON001",
+		AssetKey:         "TYSON001",
 		LocalPath:        pathA,
 		SizeBytes:        int64(len("FAKE VIDEO BYTES A")),
 		DownloadComplete: true,
@@ -71,9 +71,9 @@ func TestClipLease_ReusedAndNewClip(t *testing.T) {
 			{"clip_link": "https://drive.google.com/file/d/NEW-CLIP/view?usp=sharing"}
 		]
 	}`)
-	idSet := assetref.ExtractDriveFileIDs(payload)
+	idSet := assetref.ExtractAssetKeys(payload)
 	if len(idSet) != 2 {
-		t.Fatalf("ExtractDriveFileIDs returned %d IDs, want 2 (%v)", len(idSet), idSet)
+		t.Fatalf("ExtractAssetKeys returned %d keys, want 2 (%v)", len(idSet), idSet)
 	}
 	driveIDs := make([]string, 0, len(idSet))
 	for id := range idSet {
@@ -90,7 +90,7 @@ func TestClipLease_ReusedAndNewClip(t *testing.T) {
 		t.Fatalf("write B: %v", err)
 	}
 	if err := cache.Store(ctx, workercache.Entry{
-		DriveFileID:      "NEW-CLIP",
+		AssetKey:         "NEW-CLIP",
 		LocalPath:        pathB,
 		SizeBytes:        int64(len("FAKE VIDEO BYTES B")),
 		DownloadComplete: true,
@@ -189,7 +189,7 @@ func TestClipLease_AcquireMidLoopFailureRollsBackPartial(t *testing.T) {
 			t.Fatalf("write %s: %v", id, err)
 		}
 		if err := cache.Store(ctx, workercache.Entry{
-			DriveFileID:      id,
+			AssetKey:         workercache.AssetKey(id),
 			LocalPath:        path,
 			SizeBytes:        int64(len("FAKE " + id)),
 			DownloadComplete: true,
@@ -264,7 +264,7 @@ func TestClipLease_ReleaseAllIdempotent(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	if err := cache.Store(ctx, workercache.Entry{
-		DriveFileID: "X", LocalPath: path, SizeBytes: 1, DownloadComplete: true,
+		AssetKey: "X", LocalPath: path, SizeBytes: 1, DownloadComplete: true,
 	}); err != nil {
 		t.Fatalf("Store X: %v", err)
 	}

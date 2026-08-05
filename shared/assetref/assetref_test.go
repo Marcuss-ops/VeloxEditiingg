@@ -5,6 +5,33 @@ import (
 	"testing"
 )
 
+func TestParseContentHashCanonicalizesAndValidates(t *testing.T) {
+	t.Parallel()
+	valid := " ABCDEFabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123 "
+	hash, err := ParseContentHash(valid)
+	if err != nil {
+		t.Fatalf("ParseContentHash(valid): %v", err)
+	}
+	if got, want := hash.String(), "abcdefabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123"; got != want {
+		t.Fatalf("hash=%q, want %q", got, want)
+	}
+	for _, raw := range []string{"", "short", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde"} {
+		if _, err := ParseContentHash(raw); err == nil {
+			t.Errorf("ParseContentHash(%q) accepted invalid digest", raw)
+		}
+	}
+}
+
+func TestAssetKeyStringAndEmpty(t *testing.T) {
+	t.Parallel()
+	if got := (AssetKey("clip-1")).String(); got != "clip-1" {
+		t.Fatalf("AssetKey.String()=%q, want clip-1", got)
+	}
+	if !(AssetKey("  ")).Empty() || (AssetKey("clip-1")).Empty() {
+		t.Fatal("AssetKey.Empty() did not distinguish blank and populated keys")
+	}
+}
+
 func TestDriveFileID_FileLinkForm(t *testing.T) {
 	t.Parallel()
 
@@ -35,7 +62,7 @@ func TestDriveFileID_FileLinkForm(t *testing.T) {
 		{"uppercase FILE in path", "https://drive.google.com/FILE/d/ABC123/view", "ABC123"},
 		{"http scheme", "http://drive.google.com/file/d/ABC123/view", "ABC123"},
 		{"leading whitespace", "  https://drive.google.com/file/d/ABC123/view", "ABC123"},
-		{"leading tab and trailing newline", "\thttps://drive.google.com/file/d/ABC123/view\n", "ABC123"},
+		{"leading tab and trailing newline", "	https://drive.google.com/file/d/ABC123/view\n", "ABC123"},
 	}
 
 	for _, tc := range cases {
@@ -145,7 +172,7 @@ func TestDriveFileID_Invalid(t *testing.T) {
 		in   string
 	}{
 		{"empty string", ""},
-		{"whitespace only", "   \t  \n"},
+		{"whitespace only", "   	  \n"},
 		{"non-Drive host", "https://example.com/file/d/ABC/view"},
 		{"accounts host", "https://accounts.google.com/file/d/ABC/view"},
 		{"drive root", "https://drive.google.com/"},

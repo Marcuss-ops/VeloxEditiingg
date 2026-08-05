@@ -33,7 +33,7 @@ func TestRun_DryRunDoesNotMutateFilesOrIndex(t *testing.T) {
 	root := t.TempDir()
 	path := writeCacheFile(t, root, "clip-stock-a_0123456789ab.mp4", []byte("clip"))
 	index := openIndex(t)
-	if err := index.Store(context.Background(), workercache.Entry{DriveFileID: "clip-stock-a", LocalPath: path, DownloadComplete: true}); err != nil {
+	if err := index.Store(context.Background(), workercache.Entry{AssetKey: "clip-stock-a", LocalPath: path, DownloadComplete: true}); err != nil {
 		t.Fatalf("store index: %v", err)
 	}
 
@@ -58,10 +58,10 @@ func TestRun_ExecuteDeletesOnlyExactSelectedAsset(t *testing.T) {
 	unselected := writeCacheFile(t, root, "clip-stock-ab_0123456789ab.mp4", []byte("keep"))
 	other := writeCacheFile(t, root, "production-asset.mp4", []byte("keep"))
 	index := openIndex(t)
-	if err := index.Store(context.Background(), workercache.Entry{DriveFileID: "clip-stock-a", LocalPath: selected, DownloadComplete: true}); err != nil {
+	if err := index.Store(context.Background(), workercache.Entry{AssetKey: "clip-stock-a", LocalPath: selected, DownloadComplete: true}); err != nil {
 		t.Fatalf("store selected: %v", err)
 	}
-	if err := index.Store(context.Background(), workercache.Entry{DriveFileID: "clip-stock-ab", LocalPath: unselected, DownloadComplete: true}); err != nil {
+	if err := index.Store(context.Background(), workercache.Entry{AssetKey: "clip-stock-ab", LocalPath: unselected, DownloadComplete: true}); err != nil {
 		t.Fatalf("store unselected: %v", err)
 	}
 
@@ -92,7 +92,7 @@ func TestRun_ExecuteRefusesActiveLeaseWithoutMutation(t *testing.T) {
 	root := t.TempDir()
 	path := writeCacheFile(t, root, "voiceover-smoke_deadbeefdead.mp3", []byte("voice"))
 	index := openIndex(t)
-	if err := index.Store(context.Background(), workercache.Entry{DriveFileID: "voiceover-smoke", LocalPath: path, DownloadComplete: true}); err != nil {
+	if err := index.Store(context.Background(), workercache.Entry{AssetKey: "voiceover-smoke", LocalPath: path, DownloadComplete: true}); err != nil {
 		t.Fatalf("store: %v", err)
 	}
 	if err := index.Acquire(context.Background(), "voiceover-smoke", "job-1"); err != nil {
@@ -138,7 +138,7 @@ func TestRun_RejectsIndexedPathOutsideRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	index := openIndex(t)
-	if err := index.Store(context.Background(), workercache.Entry{DriveFileID: "outside", LocalPath: outside, DownloadComplete: true}); err != nil {
+	if err := index.Store(context.Background(), workercache.Entry{AssetKey: "outside", LocalPath: outside, DownloadComplete: true}); err != nil {
 		t.Fatalf("store: %v", err)
 	}
 	_, err := Run(context.Background(), Options{Root: root, AssetIDs: []string{"outside"}, Index: index, Execute: true})

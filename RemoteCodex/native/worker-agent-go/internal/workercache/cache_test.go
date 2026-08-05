@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"velox-shared/assetref"
 )
 
 // newTestCache returns a Cache backed by a fresh temp-dir DB; the
@@ -29,7 +31,7 @@ func TestCache_Find_MissingReturnsFalseNoError(t *testing.T) {
 		t.Fatalf("Find unexpected error: %v", err)
 	}
 	if ok {
-		t.Fatal("ok = true, want false for unknown drive_file_id")
+		t.Fatal("ok = true, want false for unknown asset_key")
 	}
 }
 
@@ -49,7 +51,7 @@ func TestCache_StoreAndFind_Roundtrip(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	in := Entry{
-		DriveFileID:      "ABC123",
+		AssetKey:         "ABC123",
 		LocalPath:        "/var/lib/velox-worker/assets/ABC123.mp4",
 		SizeBytes:        48392741,
 		ActiveJobID:      "",
@@ -68,12 +70,12 @@ func TestCache_StoreAndFind_Roundtrip(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true after Store")
 	}
-	if got.DriveFileID != in.DriveFileID ||
+	if got.AssetKey != in.AssetKey ||
 		got.LocalPath != in.LocalPath ||
 		got.SizeBytes != in.SizeBytes ||
 		got.ActiveJobID != in.ActiveJobID ||
 		got.DownloadComplete != in.DownloadComplete {
-		t.Fatalf("Find = %+v, want drive_file_id/local_path/size/active_job_id/download_complete to match Store inputs", got)
+		t.Fatalf("Find = %+v, want asset_key/local_path/size/active_job_id/download_complete to match Store inputs", got)
 	}
 	if !got.CreatedAt.Equal(in.CreatedAt) {
 		t.Errorf("CreatedAt = %v, want %v", got.CreatedAt, in.CreatedAt)
@@ -87,7 +89,7 @@ func TestCache_Store_DuplicateReturnsErrDuplicate(t *testing.T) {
 	t.Parallel()
 	c := newTestCache(t)
 	ctx := context.Background()
-	e := Entry{DriveFileID: "DUPL", LocalPath: "/tmp/d.mp4"}
+	e := Entry{AssetKey: "DUPL", LocalPath: "/tmp/d.mp4"}
 	if err := c.Store(ctx, e); err != nil {
 		t.Fatalf("first Store: %v", err)
 	}
@@ -96,14 +98,14 @@ func TestCache_Store_DuplicateReturnsErrDuplicate(t *testing.T) {
 		t.Fatalf("second Store err = %v, want ErrDuplicate", err)
 	}
 	if !strings.Contains(err.Error(), "DUPL") {
-		t.Errorf("error message should include drive_file_id, got %q", err.Error())
+		t.Errorf("error message should include asset_key, got %q", err.Error())
 	}
 }
 
 func TestCache_Store_MissingLocalPathRejected(t *testing.T) {
 	t.Parallel()
 	c := newTestCache(t)
-	err := c.Store(context.Background(), Entry{DriveFileID: "NOPATH"})
+	err := c.Store(context.Background(), Entry{AssetKey: "NOPATH"})
 	if err == nil || !strings.Contains(err.Error(), "local_path") {
 		t.Fatalf("Store without local_path err = %v, want non-nil mentioning local_path", err)
 	}
@@ -115,7 +117,7 @@ func TestCache_Store_DefaultsCreatedAndLastUsed(t *testing.T) {
 	ctx := context.Background()
 
 	before := time.Now().UTC().Add(-time.Second)
-	if err := c.Store(ctx, Entry{DriveFileID: "DEFAULTS", LocalPath: "/tmp/d.mp4"}); err != nil {
+	if err := c.Store(ctx, Entry{AssetKey: "DEFAULTS", LocalPath: "/tmp/d.mp4"}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 	after := time.Now().UTC().Add(time.Second)
@@ -140,12 +142,12 @@ func TestCache_MarkUsed_BumpsAndFailsOnMissing(t *testing.T) {
 	c := newTestCache(t)
 	ctx := context.Background()
 
-	if err := c.Store(ctx, Entry{DriveFileID: "USE", LocalPath: "/tmp/u.mp4"}); err != nil {
+	if err := c.Store(ctx, Entry{AssetKey: "USE", LocalPath: "/tmp/u.mp4"}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 	// Force an obsolete last_used_at so the bump is observable.
 	if _, err := c.db.ExecContext(ctx,
-		`UPDATE cached_assets SET last_used_at = ? WHERE drive_file_id = ?`,
+		`UPDATE cached_assets SET last_used_at = ? WHERE asset_key = ?`,
 		"2000-01-01T00:00:00Z", "USE"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -170,12 +172,32 @@ func TestCache_MarkUsed_BumpsAndFailsOnMissing(t *testing.T) {
 	}
 }
 
+func TestCache_MarkDownloadCompleteWithHashPersistsVerifiedContentHash(t *testing.T) {
+	t.Parallel()
+	c := newTestCache(t)
+	ctx := context.Background()
+	if err := c.Store(ctx, Entry{AssetKey: "HASHED", LocalPath: "/tmp/hashed.part"}); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	want := assetref.ContentHash("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	if err := c.MarkDownloadCompleteWithHash(ctx, "HASHED", "/tmp/hashed.mp4", 64, want); err != nil {
+		t.Fatalf("MarkDownloadCompleteWithHash: %v", err)
+	}
+	got, ok, err := c.Find(ctx, "HASHED")
+	if err != nil || !ok {
+		t.Fatalf("Find: ok=%v err=%v", ok, err)
+	}
+	if got.ContentHash != want {
+		t.Fatalf("ContentHash=%q, want %q", got.ContentHash, want)
+	}
+}
+
 func TestCache_MarkDownloadComplete_TransitionsAndFailsOnMissing(t *testing.T) {
 	t.Parallel()
 	c := newTestCache(t)
 	ctx := context.Background()
 
-	if err := c.Store(ctx, Entry{DriveFileID: "DL", LocalPath: "/tmp/dl.mp4.part"}); err != nil {
+	if err := c.Store(ctx, Entry{AssetKey: "DL", LocalPath: "/tmp/dl.mp4.part"}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
@@ -215,7 +237,7 @@ func TestCache_AcquireRelease_HappyPath(t *testing.T) {
 	c := newTestCache(t)
 	ctx := context.Background()
 
-	if err := c.Store(ctx, Entry{DriveFileID: "JOB", LocalPath: "/tmp/job.mp4"}); err != nil {
+	if err := c.Store(ctx, Entry{AssetKey: "JOB", LocalPath: "/tmp/job.mp4"}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
@@ -241,7 +263,7 @@ func TestCache_Release_WrongJobIsNoop(t *testing.T) {
 	c := newTestCache(t)
 	ctx := context.Background()
 
-	if err := c.Store(ctx, Entry{DriveFileID: "OWN", LocalPath: "/tmp/o.mp4"}); err != nil {
+	if err := c.Store(ctx, Entry{AssetKey: "OWN", LocalPath: "/tmp/o.mp4"}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 	if err := c.Acquire(ctx, "OWN", "job-A"); err != nil {
@@ -265,7 +287,7 @@ func TestCache_MultipleLeasesProtectUntilLastRelease(t *testing.T) {
 	t.Parallel()
 	c := newTestCache(t)
 	ctx := context.Background()
-	if err := c.Store(ctx, Entry{DriveFileID: "SHARED", LocalPath: "/tmp/shared.mp4"}); err != nil {
+	if err := c.Store(ctx, Entry{AssetKey: "SHARED", LocalPath: "/tmp/shared.mp4"}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 	if err := c.Acquire(ctx, "SHARED", "job-A"); err != nil {
@@ -306,7 +328,7 @@ func TestCache_Acquire_EmptyIDOrEmptyJobRejected(t *testing.T) {
 	t.Parallel()
 	c := newTestCache(t)
 	ctx := context.Background()
-	if err := c.Store(ctx, Entry{DriveFileID: "X", LocalPath: "/tmp/x.mp4"}); err != nil {
+	if err := c.Store(ctx, Entry{AssetKey: "X", LocalPath: "/tmp/x.mp4"}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 	if err := c.Acquire(ctx, "", "job-x"); !errors.Is(err, ErrEmptyID) {
@@ -322,7 +344,7 @@ func TestCache_Delete_HappyAndMissing(t *testing.T) {
 	c := newTestCache(t)
 	ctx := context.Background()
 
-	if err := c.Store(ctx, Entry{DriveFileID: "RM", LocalPath: "/tmp/rm.mp4"}); err != nil {
+	if err := c.Store(ctx, Entry{AssetKey: "RM", LocalPath: "/tmp/rm.mp4"}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 	if err := c.Delete(ctx, "RM"); err != nil {
@@ -351,11 +373,11 @@ func TestCache_List_OrdersByIDAndHandlesEmpty(t *testing.T) {
 		t.Errorf("List on empty = %d entries, want 0", len(list))
 	}
 
-	// Store out of order; List must return sorted by drive_file_id.
+	// Store out of order; List must return sorted by asset_key.
 	in := []Entry{
-		{DriveFileID: "ZZZ", LocalPath: "/tmp/z.mp4"},
-		{DriveFileID: "aaa", LocalPath: "/tmp/a.mp4"},
-		{DriveFileID: "MMM", LocalPath: "/tmp/m.mp4"},
+		{AssetKey: "ZZZ", LocalPath: "/tmp/z.mp4"},
+		{AssetKey: "aaa", LocalPath: "/tmp/a.mp4"},
+		{AssetKey: "MMM", LocalPath: "/tmp/m.mp4"},
 	}
 	for _, e := range in {
 		if err := c.Store(ctx, e); err != nil {
@@ -371,8 +393,8 @@ func TestCache_List_OrdersByIDAndHandlesEmpty(t *testing.T) {
 		t.Fatalf("List length = %d, want %d", len(list), len(wantOrder))
 	}
 	for i, w := range wantOrder {
-		if list[i].DriveFileID != w {
-			t.Errorf("list[%d].DriveFileID = %q, want %q", i, list[i].DriveFileID, w)
+		if string(list[i].AssetKey) != w {
+			t.Errorf("list[%d].AssetKey = %q, want %q", i, list[i].AssetKey, w)
 		}
 	}
 }
@@ -381,7 +403,7 @@ func TestCache_Store_RejectsPreSetActiveJobID(t *testing.T) {
 	t.Parallel()
 	c := newTestCache(t)
 	err := c.Store(context.Background(), Entry{
-		DriveFileID: "LEASE",
+		AssetKey:    "LEASE",
 		LocalPath:   "/tmp/lease.mp4",
 		ActiveJobID: "unexpected-job",
 	})
@@ -413,8 +435,8 @@ func TestCache_ConcurrentStores_SerialisedBySQLite(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		go func() {
 			gotResults <- c.Store(ctx, Entry{
-				DriveFileID: "RACE",
-				LocalPath:   "/tmp/race.mp4",
+				AssetKey:  "RACE",
+				LocalPath: "/tmp/race.mp4",
 			})
 		}()
 	}

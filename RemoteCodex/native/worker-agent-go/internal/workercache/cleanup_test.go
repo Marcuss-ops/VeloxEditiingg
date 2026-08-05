@@ -1,7 +1,6 @@
 // Package workercache — Cleanup test matrix.
-//
-// Each fixture pre-populates the cache via Store+MarkDownloadComplete
-// so the tested rule (active_job_id, download_complete, protected-set)
+//	// Each fixture pre-populates the cache via Store+MarkDownloadComplete
+// so the tested rule (lease, download_complete, protected-set)
 // is the only thing varying.
 
 package workercache
@@ -11,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"velox-shared/assetref"
 )
 
 // cleanupFixture returns a Cache backed by a t.TempDir-backed SQLite
@@ -32,22 +33,22 @@ func cleanupFixture(t *testing.T) (*Cache, string) {
 
 // storeSeeded inserts a fully-downloaded entry with a real on-disk
 // file so os.Remove in Cleanup has something to do.
-func storeSeeded(t *testing.T, c *Cache, dir, driveID string) {
+func storeSeeded(t *testing.T, c *Cache, dir, assetKey string) {
 	t.Helper()
-	path := filepath.Join(dir, driveID+".mp4")
-	if err := os.WriteFile(path, []byte("FAKE VIDEO BYTES "+driveID), 0o644); err != nil {
+	path := filepath.Join(dir, assetKey+".mp4")
+	if err := os.WriteFile(path, []byte("FAKE VIDEO BYTES "+assetKey), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
 	if err := c.Store(context.Background(), Entry{
-		DriveFileID:      driveID,
+		AssetKey:         assetref.AssetKey(assetKey),
 		LocalPath:        path,
-		SizeBytes:        int64(len("FAKE VIDEO BYTES " + driveID)),
+		SizeBytes:        int64(len("FAKE VIDEO BYTES " + assetKey)),
 		DownloadComplete: true,
 	}); err != nil {
-		t.Fatalf("Store %s: %v", driveID, err)
+		t.Fatalf("Store %s: %v", assetKey, err)
 	}
-	if err := c.MarkDownloadComplete(context.Background(), driveID, path, int64(len("FAKE VIDEO BYTES "+driveID))); err != nil {
-		t.Fatalf("MarkDownloadComplete %s: %v", driveID, err)
+	if err := c.MarkDownloadComplete(context.Background(), assetKey, path, int64(len("FAKE VIDEO BYTES "+assetKey))); err != nil {
+		t.Fatalf("MarkDownloadComplete %s: %v", assetKey, err)
 	}
 }
 
@@ -112,9 +113,9 @@ func TestCleanup_InFlightAssetsNeverRemoved(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	if err := cache.Store(ctx, Entry{
-		DriveFileID: "INFLIGHT",
-		LocalPath:   path,
-		SizeBytes:   20,
+		AssetKey:  assetref.AssetKey("INFLIGHT"),
+		LocalPath: path,
+		SizeBytes: 20,
 	}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}

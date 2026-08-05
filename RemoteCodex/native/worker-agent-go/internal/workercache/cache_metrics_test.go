@@ -13,10 +13,10 @@ func TestCacheSizeReportsEntriesAndRecordedBytes(t *testing.T) {
 	defer cache.Close()
 
 	ctx := context.Background()
-	if err := cache.Store(ctx, Entry{DriveFileID: "asset-a", LocalPath: "/cache/a", SizeBytes: 128, DownloadComplete: true}); err != nil {
+	if err := cache.Store(ctx, Entry{AssetKey: "asset-a", LocalPath: "/cache/a", SizeBytes: 128, DownloadComplete: true}); err != nil {
 		t.Fatalf("Store a: %v", err)
 	}
-	if err := cache.Store(ctx, Entry{DriveFileID: "asset-b", LocalPath: "/cache/b", SizeBytes: 256, DownloadComplete: true}); err != nil {
+	if err := cache.Store(ctx, Entry{AssetKey: "asset-b", LocalPath: "/cache/b", SizeBytes: 256, DownloadComplete: true}); err != nil {
 		t.Fatalf("Store b: %v", err)
 	}
 

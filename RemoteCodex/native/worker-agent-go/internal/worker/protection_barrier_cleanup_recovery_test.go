@@ -46,7 +46,7 @@ func TestProtectedAssetsErrorsAfterStartupBlockCleanupUntilRecovery(t *testing.T
 		t.Fatal(err)
 	}
 	if err := cache.Store(context.Background(), workercache.Entry{
-		DriveFileID: "old-cache", LocalPath: cachePath, DownloadComplete: true,
+		AssetKey: "old-cache", LocalPath: cachePath, DownloadComplete: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestProtectedAssetsErrorsAfterStartupBlockCleanupUntilRecovery(t *testing.T
 		t.Fatal(err)
 	}
 	if err := cache.Store(context.Background(), workercache.Entry{
-		DriveFileID: "old-cache", LocalPath: cachePath, DownloadComplete: true,
+		AssetKey: "old-cache", LocalPath: cachePath, DownloadComplete: true,
 	}); err != nil {
 		t.Fatal(err)
 	}

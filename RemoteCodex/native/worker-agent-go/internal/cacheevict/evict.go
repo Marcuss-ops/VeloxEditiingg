@@ -294,8 +294,8 @@ func deleteIndexIfUnleased(ctx context.Context, index *workercache.Cache, assetI
 	}
 	res, err := index.DB().ExecContext(ctx,
 		`DELETE FROM cached_assets
-		 WHERE drive_file_id = ?
-		   AND NOT EXISTS (SELECT 1 FROM cached_asset_leases WHERE drive_file_id = ?)`,
+		 WHERE asset_key = ?
+		   AND NOT EXISTS (SELECT 1 FROM cached_asset_leases WHERE asset_key = ?)`,
 		assetID, assetID,
 	)
 	if err != nil {
@@ -313,7 +313,7 @@ func deleteIndexIfUnleased(ctx context.Context, index *workercache.Cache, assetI
 		return err
 	}
 	if !found {
-		return fmt.Errorf("%w: drive_file_id=%s", workercache.ErrNotFound, assetID)
+		return fmt.Errorf("%w: asset_key=%s", workercache.ErrNotFound, assetID)
 	}
 	if entry.ActiveLeaseCount > 0 {
 		return fmt.Errorf("%w: asset %q has active cache lease %q", ErrActiveLease, assetID, entry.ActiveJobID)
