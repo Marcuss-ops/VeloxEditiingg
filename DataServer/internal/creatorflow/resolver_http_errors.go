@@ -173,11 +173,11 @@ func WriteResolverError(c *gin.Context, err error) {
 			err.Error(),
 			gin.H{"path": path, "issue": "hash_mismatch"})
 	case func() bool {
-		var derr *domain.DomainError
-		return errors.As(err, &derr)
+		_, ok := domain.AsDomainError(err)
+		return ok
 	}():
-		var derr *domain.DomainError
-		if !errors.As(err, &derr) || derr == nil {
+		derr, ok := domain.AsDomainError(err)
+		if !ok || derr == nil {
 			break
 		}
 		detail := any(nil)
@@ -193,10 +193,14 @@ func WriteResolverError(c *gin.Context, err error) {
 		writeErrorEnvelope(c, http.StatusUnprocessableEntity, "invalid_payload", err.Error(), gin.H{"path": field, "issue": "invalid"})
 	case errors.Is(err, deliveryplan.ErrDeliveryTargetRequired),
 		errors.Is(err, deliverycontract.ErrNoExplicitPlan):
-		writeErrorEnvelope(c, http.StatusUnprocessableEntity,
-			"DELIVERY_TARGET_REQUIRED",
-			"an explicit Drive destination is required",
-			gin.H{"path": "delivery_plan", "issue": "required"})
+		// Converge the bare missing-target sentinels through the canonical
+		// DomainError projection so HTTP status, code, message and details
+		// come from the single mapper. Typed ValidationError rejections
+		// (e.g. deliveryplan.NewDeliveryTargetRequiredError) already project
+		// via errors.As above and land in the DomainError branch.
+		derr := domain.NewDeliveryTargetRequired("an explicit Drive destination is required", err)
+		writeErrorEnvelope(c, derr.HTTPCode(), derr.Code, derr.PublicText,
+			gin.H{"path": derr.Field, "issue": derr.Issue})
 	default:
 		writeErrorEnvelope(c, http.StatusInternalServerError,
 			"resolver_failure",

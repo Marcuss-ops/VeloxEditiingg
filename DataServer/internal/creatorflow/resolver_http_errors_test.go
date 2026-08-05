@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/store"
+	"velox-shared/contract/deliveryplan"
 	"velox-shared/contract/domain"
 )
 
@@ -202,6 +203,32 @@ func TestWriteResolverError(t *testing.T) {
 			wantCode:         "invalid_payload",
 			wantDetailsPath:  "delivery_plan.0.external_destination_id",
 			wantDetailsIssue: "invalid",
+			wantHasDetails:   true,
+		},
+		{
+			// The bare missing-target sentinel is routed through the
+			// canonical domain.NewDeliveryTargetRequired projection: the
+			// HTTP shape (422 / DELIVERY_TARGET_REQUIRED / delivery_plan
+			// details) comes from the single DomainError mapper, never a
+			// hardcoded branch with hand-written strings.
+			name:             "bare ErrDeliveryTargetRequired -> 422 DELIVERY_TARGET_REQUIRED via DomainError projection",
+			err:              deliveryplan.ErrDeliveryTargetRequired,
+			wantStatus:       http.StatusUnprocessableEntity,
+			wantCode:         "DELIVERY_TARGET_REQUIRED",
+			wantDetailsPath:  "delivery_plan",
+			wantDetailsIssue: "required",
+			wantHasDetails:   true,
+		},
+		{
+			// The typed ValidationError rejection projects into DomainError
+			// via ValidationError.As, so it lands in the DomainError branch
+			// with the same canonical code/details as the bare sentinel.
+			name:             "typed NewDeliveryTargetRequiredError -> 422 DELIVERY_TARGET_REQUIRED (As projection)",
+			err:              deliveryplan.NewDeliveryTargetRequiredError(),
+			wantStatus:       http.StatusUnprocessableEntity,
+			wantCode:         "DELIVERY_TARGET_REQUIRED",
+			wantDetailsPath:  "delivery_plan",
+			wantDetailsIssue: "required",
 			wantHasDetails:   true,
 		},
 		{

@@ -22,6 +22,7 @@ import (
 	"velox-server/internal/jobs/ingress"
 	"velox-server/internal/store"
 	"velox-server/internal/translation"
+	"velox-shared/contract/domain"
 )
 
 const scriptSceneMode = "scene_image"
@@ -316,9 +317,14 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 				})
 				return
 			}
+			// Single typed mapper: a DomainError carries the canonical HTTP
+			// status (validation rejections surface as 422 with the typed
+			// field path); untyped failures stay 500. The wire envelope keeps
+			// the historical "error" field as the human-readable message —
+			// error text is never inspected for classification.
 			status := http.StatusInternalServerError
-			if strings.Contains(strings.ToLower(err.Error()), "queue unavailable") {
-				status = http.StatusServiceUnavailable
+			if derr, ok := domain.AsDomainError(err); ok {
+				status = derr.HTTPCode()
 			}
 			c.JSON(status, gin.H{"ok": false, "error": err.Error()})
 			return
@@ -430,7 +436,7 @@ func (h *ScriptHandlers) ScriptJobHandler(full bool) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to load job"})
 			return
 		}
-		c.JSON(http.StatusOK, enqueue.RenderHTTPBoundaryJobResponse(job, full, h.sqliteDB.DB()))
+		c.JSON(http.StatusOK, enqueue.RenderHTTPBoundaryJobResponse(job, full, h.dataDir, h.sqliteDB.DB()))
 	}
 }
 
@@ -451,7 +457,7 @@ func (h *ScriptHandlers) ScriptByIDHandler() gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to load script"})
 			return
 		}
-		c.JSON(http.StatusOK, enqueue.RenderHTTPBoundaryJobResponse(job, true, h.sqliteDB.DB()))
+		c.JSON(http.StatusOK, enqueue.RenderHTTPBoundaryJobResponse(job, true, h.dataDir, h.sqliteDB.DB()))
 	}
 }
 

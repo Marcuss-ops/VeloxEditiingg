@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"velox-server/internal/credentials"
@@ -252,10 +251,10 @@ func (r *DeliveryRunner) issueCredentialLease(ctx context.Context, provider Prov
 		return nil, nil
 	}
 	if destination == nil || destination.CredentialRef == "" {
-		return nil, fmt.Errorf("%w: credential_ref is required", ErrProviderAuth)
+		return nil, fmt.Errorf("%w: %w", ErrProviderAuth, ErrCredentialRefRequired)
 	}
 	if r.vault == nil {
-		return nil, fmt.Errorf("%w: credential vault unavailable", ErrProviderAuth)
+		return nil, fmt.Errorf("%w: %w", ErrProviderAuth, ErrCredentialVaultUnavailable)
 	}
 	scopes := []string{"publish"}
 	if scoped, ok := credentialProvider.(CredentialScopeProvider); ok {
@@ -270,11 +269,18 @@ func (r *DeliveryRunner) issueCredentialLease(ctx context.Context, provider Prov
 	}
 	accessLease, err := r.vault.IssueAccessLease(ctx, destination.CredentialRef, r.identity, publicationID, scopes)
 	if err != nil {
-		return nil, fmt.Errorf("%w: issue credential lease: %v", ErrProviderAuth, err)
+		// %w keeps the vault's typed sentinel (ErrRevoked / ErrExpired /
+		// ErrScope / ErrNotFound / ErrKeyUnavailable) reachable through
+		// errors.Is so classification never parses Error() text.
+		return nil, fmt.Errorf("%w: issue credential lease: %w", ErrProviderAuth, err)
 	}
 	return accessLease, nil
 }
 
+// credentialErrorCode derives the machine-readable BLOCKED_AUTH code from
+// the typed error chain only: the credentials vault sentinels and the
+// deliveries credential sentinels. No Error() text is inspected; unclassified
+// auth failures fall back to the generic CREDENTIAL_AUTH code.
 func credentialErrorCode(err error) string {
 	if err == nil {
 		return "CREDENTIAL_AUTH"
@@ -282,22 +288,23 @@ func credentialErrorCode(err error) string {
 	if code := domain.FailureCodeOf(err); code != "" {
 		return code
 	}
-	message := strings.ToLower(err.Error())
-	for _, item := range []struct {
-		marker string
-		code   string
-	}{
-		{"credential_ref is required", "CREDENTIAL_REF_REQUIRED"},
-		{"vault unavailable", "CREDENTIAL_VAULT_UNAVAILABLE"},
-		{"credential revoked", "CREDENTIAL_REVOKED"},
-		{"credential expired", "CREDENTIAL_EXPIRED"},
-		{"scope", "CREDENTIAL_SCOPE_DENIED"},
-	} {
-		if strings.Contains(message, item.marker) {
-			return item.code
-		}
+	switch {
+	case errors.Is(err, credentials.ErrRevoked):
+		return "CREDENTIAL_REVOKED"
+	case errors.Is(err, credentials.ErrExpired):
+		return "CREDENTIAL_EXPIRED"
+	case errors.Is(err, credentials.ErrScope):
+		return "CREDENTIAL_SCOPE_DENIED"
+	case errors.Is(err, credentials.ErrNotFound):
+		return "CREDENTIAL_NOT_FOUND"
+	case errors.Is(err, credentials.ErrKeyUnavailable),
+		errors.Is(err, ErrCredentialVaultUnavailable):
+		return "CREDENTIAL_VAULT_UNAVAILABLE"
+	case errors.Is(err, ErrCredentialRefRequired):
+		return "CREDENTIAL_REF_REQUIRED"
+	default:
+		return "CREDENTIAL_AUTH"
 	}
-	return "CREDENTIAL_AUTH"
 }
 
 // renewDeliveryLeaseLoop extends the lease periodically (every

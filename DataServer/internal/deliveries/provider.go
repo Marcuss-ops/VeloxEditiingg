@@ -66,6 +66,16 @@ var ErrProviderRateLimit = errors.New("deliveries: rate limit exceeded")
 // reference and backfill it.
 var ErrDestinationUnmapped = errors.New("deliveries: destination is unmapped (external_destination_id required)")
 
+// ErrCredentialRefRequired marks a delivery that needs a credential lease but
+// whose destination carries no credential_ref. It is wrapped under
+// ErrProviderAuth so the runner records BLOCKED_AUTH; the sentinel itself is
+// typed so error-code classification never inspects Error() text.
+var ErrCredentialRefRequired = errors.New("credential_ref is required")
+
+// ErrCredentialVaultUnavailable marks a delivery that needs a credential
+// lease but no credential vault is wired. Wrapped under ErrProviderAuth.
+var ErrCredentialVaultUnavailable = errors.New("credential vault unavailable")
+
 // ── Error classification ─────────────────────────────────────────────────────
 
 // ErrorClass enumerates the retry classification of a provider error.
