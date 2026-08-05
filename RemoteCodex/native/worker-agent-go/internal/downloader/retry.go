@@ -109,6 +109,11 @@ func RetryAfter(resp *http.Response) time.Duration {
 	if secs, err := time.ParseDuration(raw); err == nil && secs > 0 {
 		return secs
 	}
+	if when, err := http.ParseTime(raw); err == nil {
+		if wait := time.Until(when); wait > 0 {
+			return wait
+		}
+	}
 	return 0
 }
 

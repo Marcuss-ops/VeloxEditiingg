@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"velox-worker-agent/internal/telemetry"
@@ -171,7 +173,94 @@ func sha256File(path string) (string, error) {
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
-// writeVeloxAssetToCache streams a successful response body to a temp file
+var (
+	ErrAssetVerification = errors.New("worker asset cache: verification failed")
+	ErrAssetIncomplete   = errors.New("worker asset cache: partial asset incomplete")
+)
+
+var activeAssetPartials sync.Map
+
+// assetPartialPath is stable across retry attempts and worker restarts. The
+// partial namespace is deliberately separate from final cache files so an
+// incomplete response can never be mistaken for a ready asset.
+func assetPartialPath(cacheDir, assetID, expectedSHA256 string) string {
+	return filepath.Join(cacheDir, "partial", cacheKeyPrefix(assetID, expectedSHA256)+".part")
+}
+
+func assetPartialSize(cacheDir, assetID, expectedSHA256 string) int64 {
+	info, err := os.Stat(assetPartialPath(cacheDir, assetID, expectedSHA256))
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
+		return 0
+	}
+	return info.Size()
+}
+
+func removeAssetPartial(cacheDir, assetID, expectedSHA256 string) {
+	path := assetPartialPath(cacheDir, assetID, expectedSHA256)
+	_ = os.Remove(path)
+}
+
+func markAssetPartialActive(path string) func() {
+	activeAssetPartials.Store(path, struct{}{})
+	return func() { activeAssetPartials.Delete(path) }
+}
+
+// cleanupOrphanedAssetPartials removes stale partials left by a worker that
+// stopped without completing a transfer. Recent partials are retained so a
+// restarted worker can resume them with HTTP Range.
+// CleanupAssetPartials removes stale partial files for a worker cache. It is
+// safe to call during worker initialization and before individual transfers.
+func CleanupAssetPartials(cacheDir string, maxAge time.Duration) (int, error) {
+	return cleanupOrphanedAssetPartials(cacheDir, maxAge)
+}
+
+func cleanupOrphanedAssetPartials(cacheDir string, maxAge time.Duration) (int, error) {
+	if maxAge <= 0 {
+		maxAge = 24 * time.Hour
+	}
+	partialDir := filepath.Join(cacheDir, "partial")
+	entries, err := os.ReadDir(partialDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	cutoff := time.Now().Add(-maxAge)
+	removed := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".part") {
+			continue
+		}
+		info, statErr := entry.Info()
+		if statErr != nil {
+			continue
+		}
+		if info.ModTime().After(cutoff) {
+			continue
+		}
+		path := filepath.Join(partialDir, entry.Name())
+		if _, active := activeAssetPartials.Load(path); active {
+			continue
+		}
+		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return removed, removeErr
+		}
+		removed++
+	}
+	return removed, nil
+}
+
+func syncAssetDirectory(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
+}
+
+// writeVeloxAssetToCache streams a successful response body to a stable
 // inside the cache directory, then atomically renames to the final path.
 // Sniffs for HTML on both the Content-Type header and the first 512 bytes
 // of the payload to refuse HTML responses from misconfigured upstreams.
@@ -182,6 +271,19 @@ func sha256File(path string) (string, error) {
 // callers can remember the digest for later integrity-verified reuse even
 // when the payload supplied no expected hash.
 func writeVeloxAssetToCache(cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64, resp *http.Response) (string, int64, string, time.Duration, error) {
+	return writeVeloxAssetToCacheAtOffset(cacheDir, assetID, expectedSHA256, expectedSizeBytes, resp, 0)
+}
+
+// writeVeloxAssetToCacheAtOffset appends a 206 response to an existing
+// partial, or truncates/restarts the partial when offset is zero. It never
+// promotes a file until the complete partial has passed size and SHA checks.
+func writeVeloxAssetToCacheAtOffset(cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64, resp *http.Response, offset int64) (string, int64, string, time.Duration, error) {
+	if offset < 0 {
+		return "", 0, "", 0, fmt.Errorf("%w: negative resume offset", ErrAssetVerification)
+	}
+	if err := os.MkdirAll(filepath.Join(cacheDir, "partial"), 0o755); err != nil {
+		return "", 0, "", 0, err
+	}
 	mediaType := strings.TrimSpace(resp.Header.Get("Content-Type"))
 	if idx := strings.Index(mediaType, ";"); idx >= 0 {
 		mediaType = strings.TrimSpace(mediaType[:idx])
@@ -205,54 +307,93 @@ func writeVeloxAssetToCache(cacheDir, assetID string, expectedSHA256 string, exp
 	}
 
 	prefix := cacheKeyPrefix(assetID, expectedSHA256)
-	tmp, err := os.CreateTemp(cacheDir, prefix+"-*")
-	if err != nil {
-		return "", 0, "", 0, err
-	}
-	tmpPath := tmp.Name()
-	defer tmp.Close()
+	partPath := assetPartialPath(cacheDir, assetID, expectedSHA256)
+	deactivatePartial := markAssetPartialActive(partPath)
+	defer deactivatePartial()
 
-	// Tee the download into a SHA-256 hasher so the bytes are still
-	// fingerprinted while streaming. The authoritative verification
-	// timing below reads the completed file, so it measures the actual
-	// integrity check rather than the network transfer.
-	hasher := sha256.New()
-	teeReader := io.TeeReader(reader, hasher)
-	written, err := io.Copy(tmp, teeReader)
-	if err != nil {
-		_ = os.Remove(tmpPath)
-		return "", 0, "", 0, err
-	}
-	if written <= 0 {
-		_ = os.Remove(tmpPath)
-		return "", 0, "", 0, fmt.Errorf("downloaded asset is empty")
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = os.Remove(tmpPath)
-		return "", 0, "", 0, err
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return "", 0, "", 0, err
-	}
-
-	// Verify all supplied integrity metadata before promoting the file.
-	verifyStarted := time.Now()
-	if expectedSizeBytes > 0 && written != expectedSizeBytes {
-		_ = os.Remove(tmpPath)
-		return "", 0, "", time.Since(verifyStarted), fmt.Errorf("downloaded asset size mismatch (got %d, want %d)", written, expectedSizeBytes)
-	}
-	actualSHA256 := fmt.Sprintf("%x", hasher.Sum(nil))
-	if expectedSHA256 != "" {
-		actualSHA256, err = sha256File(tmpPath)
-		if err != nil {
-			_ = os.Remove(tmpPath)
-			return "", 0, "", time.Since(verifyStarted), err
+	effectiveExpectedSize := expectedSizeBytes
+	if resp.StatusCode == http.StatusPartialContent {
+		contentRange := strings.TrimSpace(resp.Header.Get("Content-Range"))
+		start, end, total, rangeErr := parseAssetContentRange(contentRange)
+		if rangeErr != nil || start != offset {
+			return "", 0, "", 0, fmt.Errorf("%w: invalid Content-Range %q", ErrAssetVerification, contentRange)
+		}
+		if resp.ContentLength > 0 && end-start+1 != resp.ContentLength {
+			return "", 0, "", 0, fmt.Errorf("%w: Content-Range length does not match Content-Length", ErrAssetVerification)
+		}
+		if total > 0 {
+			if effectiveExpectedSize > 0 && total != effectiveExpectedSize {
+				return "", 0, "", 0, fmt.Errorf("%w: Content-Range total %d does not match expected size %d", ErrAssetVerification, total, effectiveExpectedSize)
+			}
+			if effectiveExpectedSize <= 0 {
+				effectiveExpectedSize = total
+			}
 		}
 	}
+	if effectiveExpectedSize <= 0 && resp.ContentLength <= 0 {
+		return "", 0, "", 0, fmt.Errorf("%w: response has no verifiable total size", ErrAssetIncomplete)
+	}
+	if effectiveExpectedSize <= 0 {
+		effectiveExpectedSize = resp.ContentLength
+	}
+
+	flags := os.O_CREATE | os.O_WRONLY
+	if offset > 0 {
+		flags |= os.O_APPEND
+	} else {
+		flags |= os.O_TRUNC
+	}
+	partFile, err := os.OpenFile(partPath, flags, 0o644)
+	if err != nil {
+		return "", 0, "", 0, err
+	}
+
+	// Hash the complete partial after each append. This avoids treating the
+	// suffix hash from a resumed response as the asset hash.
+	writtenNow, err := io.Copy(partFile, reader)
+	if err != nil {
+		_ = partFile.Close()
+		// Preserve the partial on stream errors: a later retry/restart can
+		// request the remaining suffix instead of starting over.
+		return "", 0, "", 0, err
+	}
+	if err := partFile.Sync(); err != nil {
+		_ = partFile.Close()
+		return "", 0, "", 0, err
+	}
+	if err := partFile.Close(); err != nil {
+		return "", 0, "", 0, err
+	}
+
+	if resp.ContentLength > 0 && writtenNow != resp.ContentLength {
+		return "", 0, "", 0, fmt.Errorf("%w: response body truncated (got %d, want %d)", ErrAssetIncomplete, writtenNow, resp.ContentLength)
+	}
+	info, err := os.Stat(partPath)
+	if err != nil {
+		return "", 0, "", 0, err
+	}
+	written := info.Size()
+	if written <= 0 {
+		return "", 0, "", 0, fmt.Errorf("%w: downloaded asset is empty", ErrAssetVerification)
+	}
+
+	// Verify all supplied integrity metadata against the complete partial
+	// before promoting it. Verification errors delete the partial because
+	// resuming a corrupt byte sequence cannot produce a valid asset.
+	verifyStarted := time.Now()
+	if effectiveExpectedSize > 0 && written != effectiveExpectedSize {
+		// A short partial is a retryable interrupted transfer. Preserve it
+		// so the next HTTP attempt can request the missing suffix.
+		return "", written, "", time.Since(verifyStarted), fmt.Errorf("%w: downloaded asset size mismatch (got %d, want %d)", ErrAssetIncomplete, written, effectiveExpectedSize)
+	}
+	actualSHA256, err := sha256File(partPath)
+	if err != nil {
+		_ = os.Remove(partPath)
+		return "", 0, "", time.Since(verifyStarted), fmt.Errorf("%w: hash partial: %v", ErrAssetVerification, err)
+	}
 	if expectedSHA256 != "" && actualSHA256 != expectedSHA256 {
-		_ = os.Remove(tmpPath)
-		return "", 0, "", time.Since(verifyStarted), fmt.Errorf("downloaded asset SHA-256 mismatch (got %s, want %s)", actualSHA256[:16], expectedSHA256[:16])
+		_ = os.Remove(partPath)
+		return "", 0, "", time.Since(verifyStarted), fmt.Errorf("%w: downloaded asset SHA-256 mismatch", ErrAssetVerification)
 	}
 
 	// When no expected digest was supplied, embed the computed digest in the
@@ -268,8 +409,18 @@ func writeVeloxAssetToCache(cacheDir, assetID string, expectedSHA256 string, exp
 	// Rename replaces an existing destination atomically. This is important
 	// after a verified cache miss: a corrupt entry must be repaired, not
 	// silently retained because the filename already exists.
-	if err := os.Rename(tmpPath, finalPath); err != nil {
-		_ = os.Remove(tmpPath)
+	if err := os.Rename(partPath, finalPath); err != nil {
+		return "", 0, "", time.Since(verifyStarted), err
+	}
+	// Persist both directory entries after the atomic promotion. If fsync is
+	// unavailable on a platform, return the error rather than claiming the
+	// durable promotion succeeded.
+	if err := syncAssetDirectory(filepath.Join(cacheDir, "partial")); err != nil {
+		_ = os.Remove(finalPath)
+		return "", 0, "", time.Since(verifyStarted), err
+	}
+	if err := syncAssetDirectory(cacheDir); err != nil {
+		_ = os.Remove(finalPath)
 		return "", 0, "", time.Since(verifyStarted), err
 	}
 	return finalPath, written, actualSHA256, time.Since(verifyStarted), nil

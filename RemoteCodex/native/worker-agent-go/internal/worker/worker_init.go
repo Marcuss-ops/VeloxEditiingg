@@ -342,6 +342,12 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 
 	// Load persisted state from previous run (command dedup, job recovery info).
 	w.loadLocalState()
+	// Reclaim stale partial downloads at process startup. Active transfers
+	// are not yet running, so only old files are eligible; fresh partials
+	// remain available for the first DownloadManager request to resume.
+	if _, err := cleanupOrphanedAssetPartials(w.assetCacheDir(), 24*time.Hour); err != nil {
+		log.Warn("[ASSET] startup partial cleanup failed: %v", err)
+	}
 
 	return w, nil
 }

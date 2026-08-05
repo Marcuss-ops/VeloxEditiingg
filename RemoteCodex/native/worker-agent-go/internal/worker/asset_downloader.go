@@ -9,6 +9,7 @@ import (
 	neturl "net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -330,6 +331,15 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 			return nil
 		},
 	}
+	// Reserve this asset's partial before cleanup so an active transfer in
+	// this process cannot be mistaken for an orphan. The cleanup is scoped
+	// to this worker's asset cache and never touches final cache entries.
+	partialPath := assetPartialPath(cacheDir, assetID, req.SHA256)
+	deactivatePartial := markAssetPartialActive(partialPath)
+	defer deactivatePartial()
+	if _, cleanupErr := cleanupOrphanedAssetPartials(cacheDir, 24*time.Hour); cleanupErr != nil {
+		w.logger.Warn("[ASSET] partial cleanup failed: %v", cleanupErr)
+	}
 	backoffs := downloader.BackoffSchedule(downloader.DefaultMaxAttempts, downloader.DefaultBaseBackoff, downloader.DefaultJitter)
 
 	var lastErr error
@@ -343,12 +353,16 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 			}
 		}
 
+		resumeOffset := assetPartialSize(cacheDir, assetID, req.SHA256)
 		reqHTTP, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 		if err != nil {
 			return downloader.TransferResult{}, err
 		}
 		if authToken != "" {
 			reqHTTP.Header.Set("Authorization", "Bearer "+authToken)
+		}
+		if resumeOffset > 0 {
+			reqHTTP.Header.Set("Range", fmt.Sprintf("bytes=%d-", resumeOffset))
 		}
 
 		resp, err := client.Do(reqHTTP)
@@ -357,6 +371,12 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 			continue
 		}
 
+		if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable && resumeOffset > 0 {
+			resp.Body.Close()
+			removeAssetPartial(cacheDir, assetID, req.SHA256)
+			lastErr = fmt.Errorf("range offset %d is no longer valid", resumeOffset)
+			continue
+		}
 		if resp.StatusCode == http.StatusNotFound {
 			resp.Body.Close()
 			return downloader.TransferResult{}, fmt.Errorf("asset not found")
@@ -367,10 +387,29 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 			return downloader.TransferResult{}, fmt.Errorf("asset download failed: %s", strings.TrimSpace(string(body)))
 		}
 		if downloader.IsRetryableStatus(resp.StatusCode) {
+			retryAfter := downloader.RetryAfter(resp)
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 			resp.Body.Close()
 			lastErr = fmt.Errorf("master returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+			if retryAfter > 0 && attempt+1 < len(backoffs)+1 {
+				backoffs[attempt] = retryAfter
+			}
 			continue
+		}
+		if resumeOffset > 0 && resp.StatusCode != http.StatusPartialContent {
+			// A server that ignores Range is safe: the writer truncates the
+			// old partial and starts from byte zero, preventing concatenation
+			// of a complete response onto stale bytes.
+			resumeOffset = 0
+		}
+		if resumeOffset > 0 {
+			contentRange := strings.TrimSpace(resp.Header.Get("Content-Range"))
+			start, _, _, parseErr := parseAssetContentRange(contentRange)
+			if parseErr != nil || start != resumeOffset {
+				resp.Body.Close()
+				lastErr = fmt.Errorf("invalid Content-Range for resume offset %d: %q", resumeOffset, contentRange)
+				continue
+			}
 		}
 
 		transfer := telemetry.RecorderFromContext(reportCtx)
@@ -383,15 +422,17 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 		// progress snapshots (percent, throughput, ETA) stay live during the
 		// transfer.
 		if onProgress != nil {
-			// Each retry is a fresh logical attempt. Reset the manager's
-			// logical byte progress before the new body starts; network bytes
+			// Each retry is a fresh logical attempt. Preserve bytes already
+			// present in a resumable partial before the suffix starts.
 			// from failed attempts must not make a later attempt look READY.
 			if attempt > 0 {
-				onProgress(0)
+				// Preserve the bytes already on disk when a retry resumes a
+				// partial; progress must not regress while the suffix is fetched.
+				onProgress(resumeOffset)
 			}
-			resp.Body = &assetProgressBody{src: resp.Body, onProgress: onProgress}
+			resp.Body = &assetProgressBody{src: resp.Body, onProgress: onProgress, done: resumeOffset}
 		}
-		localPath, downloadedBytes, actualSHA, verifyDuration, err := writeVeloxAssetToCache(cacheDir, assetID, req.SHA256, req.SizeBytes, resp)
+		localPath, downloadedBytes, actualSHA, verifyDuration, err := writeVeloxAssetToCacheAtOffset(cacheDir, assetID, req.SHA256, req.SizeBytes, resp, resumeOffset)
 		resp.Body.Close()
 		if err != nil {
 			telemetry.GetPrometheusMetrics().RecordCacheVerify(verifyDuration)
@@ -399,6 +440,9 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 				transferHandle.Abort("asset_transfer", err.Error())
 			}
 			lastErr = err
+			if errors.Is(err, ErrAssetVerification) {
+				return downloader.TransferResult{}, fmt.Errorf("%w: %v", downloader.ErrVerify, err)
+			}
 			continue
 		}
 		telemetry.GetPrometheusMetrics().RecordCacheVerify(verifyDuration)
@@ -438,6 +482,37 @@ func (p *assetProgressBody) Read(b []byte) (int, error) {
 }
 
 func (p *assetProgressBody) Close() error { return p.src.Close() }
+
+func parseAssetContentRange(value string) (start, end, total int64, err error) {
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(value, "bytes ") {
+		return 0, 0, 0, fmt.Errorf("invalid range unit")
+	}
+	parts := strings.SplitN(strings.TrimPrefix(value, "bytes "), "/", 2)
+	if len(parts) != 2 {
+		return 0, 0, 0, fmt.Errorf("invalid range shape")
+	}
+	bounds := strings.SplitN(parts[0], "-", 2)
+	if len(bounds) != 2 {
+		return 0, 0, 0, fmt.Errorf("invalid range bounds")
+	}
+	start, err = strconv.ParseInt(bounds[0], 10, 64)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	end, err = strconv.ParseInt(bounds[1], 10, 64)
+	if err != nil || end < start {
+		return 0, 0, 0, fmt.Errorf("invalid range end")
+	}
+	if parts[1] == "*" {
+		return start, end, -1, nil
+	}
+	total, err = strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || total <= end {
+		return 0, 0, 0, fmt.Errorf("invalid range total")
+	}
+	return start, end, total, nil
+}
 
 // syncClipCache records a verified asset in the durable remote-worker index.
 // The content-addressed byte cache remains the data source; this index owns
