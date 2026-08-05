@@ -105,7 +105,7 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*sto
 	tempKey := stagingTempKey(s.blobStore, uploadID)
 
 	// Atomic insert of artifacts + artifact_uploads via UploadSessionWriter.
-	if err := s.uploadWriter.CreateArtifactAndUploadSession(ctx, CreateArtifactAndUploadSessionCommand{
+	if err := s.uploadWriter.CreateArtifactAndUploadSession(ctx, store.CreateUploadSessionParams{
 		ArtifactID:          artifactID,
 		UploadID:            uploadID,
 		JobID:               cmd.JobID,

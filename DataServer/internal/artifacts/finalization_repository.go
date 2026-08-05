@@ -10,13 +10,16 @@
 package artifacts
 
 import (
+	"context"
 	"time"
 
 	"velox-server/internal/deliverycontract"
+	"velox-server/internal/store"
 )
 
-// CreateArtifactAndUploadSessionCommand is the input to
-// UploadSessionWriter.CreateArtifactAndUploadSession.
+// CreateArtifactAndUploadSessionCommand is retained as the application-side
+// command used by BeginUpload. The store adapter receives the cycle-free
+// store.CreateUploadSessionParams projection.
 type CreateArtifactAndUploadSessionCommand struct {
 	ArtifactID       string
 	UploadID         string
@@ -101,3 +104,10 @@ type DeliveryDestination = deliverycontract.DeliveryDestination
 // MaxAttempts) rather than []string. Older callers that only need the
 // destination IDs can ignore MaxAttempts; the writer always reads it.
 type DeliveryPlanResolver = deliverycontract.DeliveryPlanResolver
+
+// UploadSessionWriter is the narrow application port for BeginUpload.
+// SQL implementations live in internal/store; artifacts only supplies the
+// persistence projection and never owns a database handle.
+type UploadSessionWriter interface {
+	CreateArtifactAndUploadSession(ctx context.Context, params store.CreateUploadSessionParams) error
+}
