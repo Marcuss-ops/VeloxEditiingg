@@ -66,6 +66,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"velox-server/internal/deploy"
 	"velox-server/internal/fleet"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
@@ -98,6 +99,15 @@ type ControllerPublisher interface {
 type MutationRequest struct {
 	Reason       string `json:"reason"`
 	TargetDigest string `json:"target_digest"`
+}
+
+// validateAdminTargetDigest is the API boundary for worker updates. Reuse
+// deploy.ValidateImageRef so the HTTP path, UpdateExecutor, and worker-side
+// prepare-host validation accept exactly the same immutable GHCR reference.
+// Keep this validation before worker lookup, registry mutation, and operation
+// publication so rejected requests have no observable side effects.
+func validateAdminTargetDigest(ref string) error {
+	return deploy.ValidateImageRef(ref)
 }
 
 // MutationResponse is the unified 202 envelope for all 3 mutations.
@@ -216,8 +226,17 @@ func (h *AdminWorkersMutationsHandler) mutationHandler(kind string, action mutat
 		var req MutationRequest
 		_ = c.ShouldBindJSON(&req)
 		req.Reason = strings.TrimSpace(req.Reason)
+		req.TargetDigest = strings.TrimSpace(req.TargetDigest)
 		if req.Reason == "" {
 			req.Reason = "triggered via admin API"
+		}
+		if kind == fleet.OperationKindUpdate {
+			if err := validateAdminTargetDigest(req.TargetDigest); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error": "target_digest is required and must be a pinned ghcr.io image digest",
+				})
+				return
+			}
 		}
 
 		// ── Worker lookup ─────────────────────────────────────────────
@@ -342,9 +361,9 @@ func (h *AdminWorkersMutationsHandler) QuarantineWorker() gin.HandlerFunc {
 
 // UpdateWorker returns POST /api/v1/admin/workers/:worker_id/update.
 //
-// Accepts {target_digest: "sha256:<64hex>", reason: "..."}. The
-// target_digest is validated against the canonical sha256:<64hex>
-// regex before the operation is published. Unlike drain/resume/
+// Accepts {target_digest: "ghcr.io/<owner>/<repo>@sha256:<64hex>", reason: "..."}.
+// The target_digest is validated with deploy.ValidateImageRef before the
+// operation is published. Unlike drain/resume/
 // quarantine, update has no synchronous state flag to flip — the
 // handler publishes the operation and the FleetController's tick
 // goroutine (Step 7+) dispatches it to the UpdateExecutor which

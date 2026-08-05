@@ -23,6 +23,12 @@
 //	  TestResumeWorker_ClearsQuarantine      — Quarantined=false → publish op=resume
 //	  TestResumeWorker_InFlightConflict      — ErrOperationInFlight → 409
 //
+//	Update:
+//	  TestUpdateWorker_RejectsMissingDigestBeforePublish
+//	  TestUpdateWorker_RejectsMalformedDigestBeforePublish
+//	  TestUpdateWorker_RejectsInvalidDigestBeforeWorkerLookup
+//	  TestUpdateWorker_ValidDigestPublishesOperation
+//
 //	Defaults:
 //	  TestMutationRequest_DefaultsReason     — body omitted → "triggered via admin API"
 //
@@ -112,6 +118,13 @@ func drainRoute(h *AdminWorkersMutationsHandler) *gin.Engine {
 	return r
 }
 
+func updateRoute(h *AdminWorkersMutationsHandler) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/api/v1/admin/workers/:worker_id/update", h.UpdateWorker())
+	return r
+}
+
 // doPOST issues an HTTP POST against the mounted router. body
 // may be nil for "no body". Returns the recorder for
 // assertion-friendly access.
@@ -132,6 +145,101 @@ func doPOST(t *testing.T, r *gin.Engine, path string, body interface{}) *httptes
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	return w
+}
+
+// ─── Update ─────────────────────────────────────────────────────────────────
+
+func TestUpdateWorker_RejectsMissingDigestBeforePublish(t *testing.T) {
+	reg := newRegisteredRegistry(t, "wicket")
+	pub := &stubPublisher{}
+	r := updateRoute(newMutationsHandler(reg, pub))
+
+	w := doPOST(t, r, "/api/v1/admin/workers/wicket/update", MutationRequest{
+		Reason: "missing digest",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("missing target_digest → %d, want 400: %s", w.Code, w.Body.String())
+	}
+	if len(pub.published) != 0 {
+		t.Fatalf("missing target_digest published %d operations, want 0", len(pub.published))
+	}
+	info := reg.GetWorker(context.Background(), "wicket")
+	if info == nil || info.Drain || info.Quarantined {
+		t.Fatalf("invalid update changed worker state: %+v", info)
+	}
+}
+
+func TestUpdateWorker_RejectsMalformedDigestBeforePublish(t *testing.T) {
+	tests := []struct {
+		name   string
+		digest string
+	}{
+		{name: "mobile tag", digest: "ghcr.io/o/r:latest"},
+		{name: "wrong prefix", digest: "ghcr.io/o/r@sha1:" + strings.Repeat("a", 64)},
+		{name: "short sha256", digest: "ghcr.io/o/r@sha256:abc"},
+		{name: "uppercase hex", digest: "ghcr.io/o/r@sha256:" + strings.Repeat("A", 64)},
+		{name: "wrong registry", digest: "docker.io/o/r@sha256:" + strings.Repeat("a", 64)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := newRegisteredRegistry(t, "wicket")
+			pub := &stubPublisher{}
+			r := updateRoute(newMutationsHandler(reg, pub))
+
+			w := doPOST(t, r, "/api/v1/admin/workers/wicket/update", MutationRequest{
+				TargetDigest: tt.digest,
+				Reason:       "malformed digest",
+			})
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("target_digest=%q → %d, want 400: %s", tt.digest, w.Code, w.Body.String())
+			}
+			if len(pub.published) != 0 {
+				t.Fatalf("target_digest=%q published %d operations, want 0", tt.digest, len(pub.published))
+			}
+		})
+	}
+}
+
+func TestUpdateWorker_RejectsInvalidDigestBeforeWorkerLookup(t *testing.T) {
+	pub := &stubPublisher{}
+	r := updateRoute(newMutationsHandler(workersreg.New(nil), pub))
+
+	w := doPOST(t, r, "/api/v1/admin/workers/ghost/update", MutationRequest{
+		TargetDigest: "latest",
+		Reason:       "invalid digest ordering",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid digest for unknown worker → %d, want 400: %s", w.Code, w.Body.String())
+	}
+	if len(pub.published) != 0 {
+		t.Fatalf("invalid digest published %d operations, want 0", len(pub.published))
+	}
+}
+
+func TestUpdateWorker_ValidDigestPublishesOperation(t *testing.T) {
+	reg := newRegisteredRegistry(t, "wicket")
+	pub := &stubPublisher{}
+	r := updateRoute(newMutationsHandler(reg, pub))
+	digest := "ghcr.io/marcuss-ops/velox-worker@sha256:" + strings.Repeat("a", 64)
+
+	w := doPOST(t, r, "/api/v1/admin/workers/wicket/update", MutationRequest{
+		TargetDigest: digest,
+		Reason:       "valid digest",
+	})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("valid target_digest → %d, want 202: %s", w.Code, w.Body.String())
+	}
+	if len(pub.published) != 1 {
+		t.Fatalf("valid target_digest published %d operations, want 1", len(pub.published))
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(pub.published[0].Payload, &payload); err != nil {
+		t.Fatalf("operation payload: %v", err)
+	}
+	if payload["target_digest"] != digest {
+		t.Errorf("operation target_digest = %q, want %q", payload["target_digest"], digest)
+	}
 }
 
 // ─── Drain ─────────────────────────────────────────────────────────────────
