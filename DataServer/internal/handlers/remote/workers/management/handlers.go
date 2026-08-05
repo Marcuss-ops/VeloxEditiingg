@@ -35,7 +35,7 @@ func RenameWorker(reg *workersreg.Registry) gin.HandlerFunc {
 		}
 
 		oldName := workerInfo.WorkerName
-		_ = reg.Heartbeat(c.Request.Context(), body.WorkerID, body.NewName, workerInfo.Status, workerInfo.CurrentJob, nil)
+		_ = reg.Heartbeat(c.Request.Context(), body.WorkerID, body.NewName, workerInfo.CurrentJob, nil)
 
 		c.JSON(http.StatusOK, gin.H{
 			"status":    "ok",
@@ -71,7 +71,7 @@ func SetWorkerGroup(reg *workersreg.Registry) gin.HandlerFunc {
 		extra := map[string]interface{}{
 			"worker_group": body.WorkerGroup,
 		}
-		_ = reg.Heartbeat(c.Request.Context(), body.WorkerID, workerInfo.WorkerName, workerInfo.Status, workerInfo.CurrentJob, extra)
+		_ = reg.Heartbeat(c.Request.Context(), body.WorkerID, workerInfo.WorkerName, workerInfo.CurrentJob, extra)
 
 		c.JSON(http.StatusOK, gin.H{
 			"status":       "ok",

@@ -18,7 +18,7 @@ func TestBuildWorkerProfile_DeterministicAllExecutors(t *testing.T) {
 		},
 	}
 
-	w := BuildWorkerProfile("w-deterministic", true, false, "online", 0, 0, caps)
+	w := BuildWorkerProfile("w-deterministic", true, false, false, 0, 0, caps)
 	if !w.Deterministic {
 		t.Fatalf("Deterministic=false, want true when every executor reports deterministic=true: %+v", w)
 	}
@@ -40,7 +40,7 @@ func TestBuildWorkerProfile_DeterministicMixedExecutors(t *testing.T) {
 		},
 	}
 
-	w := BuildWorkerProfile("w-mixed", true, false, "online", 0, 0, caps)
+	w := BuildWorkerProfile("w-mixed", true, false, false, 0, 0, caps)
 	if w.Deterministic {
 		t.Fatalf("Deterministic=true, want false when any executor reports deterministic=false: %+v", w)
 	}
@@ -56,7 +56,7 @@ func TestBuildWorkerProfile_DeterministicMissingSignalStaysConservative(t *testi
 		},
 	}
 
-	w := BuildWorkerProfile("w-legacy-executor", true, false, "online", 0, 0, caps)
+	w := BuildWorkerProfile("w-legacy-executor", true, false, false, 0, 0, caps)
 	if w.Deterministic {
 		t.Fatalf("Deterministic=true, want conservative false when executors omit the deterministic signal: %+v", w)
 	}

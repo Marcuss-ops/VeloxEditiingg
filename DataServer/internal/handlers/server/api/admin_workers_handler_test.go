@@ -410,8 +410,8 @@ func TestListAdminWorkers_Success(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	reg := workersreg.New(nil) // in-memory only (no SQLite store).
-	reg.Heartbeat(nil, "worker-b", "vps-b", "idle", "", nil)
-	reg.Heartbeat(nil, "worker-a", "vps-a", "idle", "", nil)
+	reg.Heartbeat(nil, "worker-b", "vps-b",		"", nil)
+	reg.Heartbeat(nil, "worker-a", "vps-a",		"", nil)
 
 	h := NewAdminWorkersHandler(reg)
 	r := gin.New()
@@ -497,7 +497,7 @@ func TestListAdminWorkers_EmptyRegistry(t *testing.T) {
 func TestGetAdminWorker_Success(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	reg := workersreg.New(nil)
-	reg.Heartbeat(nil, "wicket", "vps-wicket", "idle", "", nil)
+	reg.Heartbeat(nil, "wicket", "vps-wicket",		"", nil)
 
 	h := NewAdminWorkersHandler(reg)
 	r := gin.New()
@@ -611,7 +611,7 @@ func TestBuildWorkerCard_PositiveCredentialPathInWorkerName(t *testing.T) {
 func TestListAdminWorkers_EnvelopeShape(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	reg := workersreg.New(nil)
-	reg.Heartbeat(nil, "w-only", "vps-w-only", "idle", "", nil)
+	reg.Heartbeat(nil, "w-only", "vps-w-only",		"", nil)
 	h := NewAdminWorkersHandler(reg)
 	r := gin.New()
 	r.GET("/api/v1/admin/workers", h.ListAdminWorkers())

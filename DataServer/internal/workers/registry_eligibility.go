@@ -34,11 +34,18 @@ func (r *Registry) GetEligibleWorkers(ctx context.Context, req costmodel.JobRequ
 			continue
 		}
 		resources := costmodel.ResourceSnapshotFromMaps(w.Capabilities, w.Metrics)
+		// Connectivity gate at eligibility time: the heartbeat arm of the
+		// canonical ConnectionState (worker_state.go). The session arm is
+		// hydrated only on the read paths (List/GetWorker) — eligibility is
+		// a hot path and must not run per-worker session queries under the
+		// registry lock. The legacy free-form agent status string is gone:
+		// offline is DERIVED from the heartbeat, never reported by the agent.
+		isOffline := DeriveConnectionState(true, w.LastHB, now) == ConnectionOffline
 		profile := costmodel.BuildWorkerProfile(
 			w.WorkerID.String(),
 			w.Schedulable,
 			w.Drain,
-			w.Status,
+			isOffline,
 			resources.ActiveTasks, resources.TaskSlots,
 			w.Capabilities,
 		)

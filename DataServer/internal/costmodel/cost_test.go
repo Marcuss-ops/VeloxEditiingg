@@ -136,7 +136,7 @@ func TestBuildWorkerProfile_LegacySynthesized(t *testing.T) {
 	caps := map[string]interface{}{
 		"supported_job_types": []interface{}{"process_video"},
 	}
-	w := BuildWorkerProfile("legacy", true, false, "online", 0, 0, caps)
+	w := BuildWorkerProfile("legacy", true, false, false, 0, 0, caps)
 	if w.ResourceClass != ResourceCPU {
 		t.Fatalf("legacy profile ResourceClass = %q, want cpu", w.ResourceClass)
 	}
@@ -173,7 +173,7 @@ func TestBuildWorkerProfile_MergeExecutors(t *testing.T) {
 			},
 		},
 	}
-	w := BuildWorkerProfile("w1", true, false, "online", 1, 4, caps)
+	w := BuildWorkerProfile("w1", true, false, false, 1, 4, caps)
 	if w.ResourceClass != ResourceGPU {
 		t.Fatalf("merged ResourceClass = %q, want gpu (most-permissive)", w.ResourceClass)
 	}
@@ -192,7 +192,7 @@ func TestBuildWorkerProfile_MergeExecutors(t *testing.T) {
 // boolean-AND's "Schedulable=false" signal is treated as
 // IsDraining=true so the cost model gates this case explicitly.
 func TestBuildWorkerProfile_NotSchedulableBecomesDraining(t *testing.T) {
-	w := BuildWorkerProfile("w", false /* schedulable */, false, "online", 0, 0, nil)
+	w := BuildWorkerProfile("w", false /* schedulable */, false, false, 0, 0, nil)
 	if !w.IsDraining {
 		t.Fatalf("expected IsDraining=true when schedulable=false, got %+v", w)
 	}
@@ -266,7 +266,7 @@ func TestDefaultRequirements_EmptyFieldsPreserveLegacyRouting(t *testing.T) {
 	// profile defaults to {cpu, frame_local}. Eligibility with the
 	// permissive default MUST remain true so today's queue routing
 	// doesn't regress.
-	w := BuildWorkerProfile("legacy", true, false, "online", 0, 0, map[string]interface{}{
+	w := BuildWorkerProfile("legacy", true, false, false, 0, 0, map[string]interface{}{
 		"supported_job_types": []interface{}{"process_video"},
 	})
 	c, exp := Score(w, j)
@@ -391,7 +391,7 @@ func TestBuildWorkerProfile_BandwidthMerge(t *testing.T) {
 			},
 		},
 	}
-	w := BuildWorkerProfile("w", true, false, "online", 0, 0, caps)
+	w := BuildWorkerProfile("w", true, false, false, 0, 0, caps)
 	if w.LinkBandwidthMbps != 5000 {
 		t.Fatalf("merged LinkBandwidthMbps=%v, want 5000 (max-most-permissive)", w.LinkBandwidthMbps)
 	}
@@ -409,7 +409,7 @@ func TestBuildWorkerProfile_BandwidthLegacy(t *testing.T) {
 			},
 		},
 	}
-	w := BuildWorkerProfile("legacy", true, false, "online", 0, 0, caps)
+	w := BuildWorkerProfile("legacy", true, false, false, 0, 0, caps)
 	if w.LinkBandwidthMbps != 0 {
 		t.Fatalf("legacy profile LinkBandwidthMbps=%v, want 0", w.LinkBandwidthMbps)
 	}

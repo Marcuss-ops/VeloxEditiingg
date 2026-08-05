@@ -29,10 +29,10 @@ import (
 // the handler stays purely structural.
 func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) {
 	extra := make(map[string]interface{})
-	// Populate extra from typed fields for backward compat with registry
+	// Populate extra from typed fields for backward compat with registry.
+	// The free-form agent status string (Status/WorkerStatus) is NOT
+	// propagated: worker state is derived master-side (worker_state.go).
 	extra["worker_name"] = hb.GetWorkerName()
-	extra["worker_status"] = hb.GetWorkerStatus()
-	extra["status"] = hb.GetStatus()
 	extra["current_job"] = hb.GetCurrentJob()
 	extra["code_version"] = hb.GetCodeVersion()
 	extra["bundle_version"] = hb.GetBundleVersion()
@@ -90,7 +90,7 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 	// (preserves the existing pre-F2 contract that handleHeartbeat is
 	// safe with no registry; production code always supplies one).
 	if h.registry != nil {
-		if err := h.registry.HeartbeatWithSession(context.Background(), sessionID, workerID, hb.GetWorkerName(), hb.GetStatus(), hb.GetCurrentJob(), extra); err != nil {
+		if err := h.registry.HeartbeatWithSession(context.Background(), sessionID, workerID, hb.GetWorkerName(), hb.GetCurrentJob(), extra); err != nil {
 			log.Printf("[GRPC] Heartbeat failed for worker %s: %v", workerID, err)
 		}
 	}

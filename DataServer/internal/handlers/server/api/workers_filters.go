@@ -72,7 +72,11 @@ func ApplyFilters(infos []workersreg.WorkerInfo, f Filters) []workersreg.WorkerI
 		if f.Class != "" && w.Class != f.Class {
 			continue
 		}
-		if f.Status != "" && w.Status != f.Status {
+		// Status filter matches the canonical DERIVED ConnectionStatus
+		// (CONNECTED | STALE | DISCONNECTED | DRAINING), hydrated at read
+		// time by the registry. The legacy free-form Status field is gone
+		// — it never held the four enum values, so this filter was dead.
+		if f.Status != "" && w.ConnectionStatus != f.Status {
 			continue
 		}
 		if f.RolloutGroup != "" && w.RolloutGroup != f.RolloutGroup {

@@ -292,8 +292,8 @@ func TestListWorkers_Success(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	reg := workersreg.New(nil) // nil store = in-memory only
-	reg.Heartbeat(nil, "worker-a", "w-a", "idle", "", nil)
-	reg.Heartbeat(nil, "worker-b", "w-b", "busy", "", nil)
+	reg.Heartbeat(nil, "worker-a", "w-a", "", nil)
+	reg.Heartbeat(nil, "worker-b", "w-b", "", nil)
 
 	h := NewWorkersHandler(reg)
 	r := gin.New()
@@ -346,7 +346,7 @@ func TestGetWorker_Success(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	reg := workersreg.New(nil)
-	reg.Heartbeat(nil, "worker-x", "W X", "idle", "task-1", nil)
+	reg.Heartbeat(nil, "worker-x", "W X", "task-1", nil)
 
 	h := NewWorkersHandler(reg)
 	r := gin.New()

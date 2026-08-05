@@ -11,15 +11,15 @@ import (
 	"velox-shared/identity"
 )
 
-func (r *Registry) Heartbeat(ctx context.Context, workerID, workerName, status, currentJob string, extra map[string]interface{}) error {
-	return r.HeartbeatWithSession(ctx, "", workerID, workerName, status, currentJob, extra)
+func (r *Registry) Heartbeat(ctx context.Context, workerID, workerName, currentJob string, extra map[string]interface{}) error {
+	return r.HeartbeatWithSession(ctx, "", workerID, workerName, currentJob, extra)
 }
 
 // HeartbeatWithSession is the canonical heartbeat write path. The registry
 // cache and all structured SQLite projections are committed from the same
 // heartbeat snapshot; sessionID is the authenticated gRPC session when the
 // caller has one.
-func (r *Registry) HeartbeatWithSession(ctx context.Context, sessionID, workerID, workerName, status, currentJob string, extra map[string]interface{}) error {
+func (r *Registry) HeartbeatWithSession(ctx context.Context, sessionID, workerID, workerName, currentJob string, extra map[string]interface{}) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	workerID = identity.NormalizeWorkerID(workerID)
@@ -39,7 +39,6 @@ func (r *Registry) HeartbeatWithSession(ctx context.Context, sessionID, workerID
 	info := WorkerInfo{
 		WorkerID:    id,
 		WorkerName:  workerName,
-		Status:      status,
 		LastHB:      now,
 		CurrentJob:  currentJob,
 		Schedulable: true,
@@ -50,7 +49,6 @@ func (r *Registry) HeartbeatWithSession(ctx context.Context, sessionID, workerID
 		if workerName != "" {
 			info.WorkerName = workerName
 		}
-		info.Status = status
 		info.LastHB = now
 		info.CurrentJob = currentJob
 	}

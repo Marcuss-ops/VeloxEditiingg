@@ -53,7 +53,7 @@ func BuildWorkerProfile(
 	workerID string,
 	schedulable bool,
 	drain bool,
-	status string,
+	isOffline bool,
 	activeJobs int,
 	maxParallel int,
 	caps map[string]interface{},
@@ -61,7 +61,7 @@ func BuildWorkerProfile(
 	w := WorkerProfile{
 		WorkerID:    workerID,
 		IsDraining:  drain || !schedulable,
-		IsOffline:   strings.EqualFold(strings.TrimSpace(status), "offline"),
+		IsOffline:   isOffline,
 		ActiveJobs:  activeJobs,
 		MaxParallel: maxParallel,
 	}

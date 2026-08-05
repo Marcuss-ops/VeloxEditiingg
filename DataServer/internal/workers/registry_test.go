@@ -122,7 +122,7 @@ func TestRegistryHeartbeat(t *testing.T) {
 
 	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
 
-	err := reg.Heartbeat(ctx, "w1", "worker-1", "busy", "job-1", nil)
+	err := reg.Heartbeat(ctx, "w1", "worker-1", "job-1", nil)
 	if err != nil {
 		t.Fatalf("Heartbeat failed: %v", err)
 	}
@@ -131,9 +131,9 @@ func TestRegistryHeartbeat(t *testing.T) {
 	if info == nil {
 		t.Fatal("expected worker to exist")
 	}
-	if info.Status != "busy" {
-		t.Errorf("expected status busy, got %s", info.Status)
-	}
+	// The agent's free-form status string is intentionally NOT stored
+	// (worker_state.go): state is derived master-side from the typed
+	// dimensions. The heartbeat's current-job signal survives.
 	if info.CurrentJob != "job-1" {
 		t.Errorf("expected current job job-1, got %s", info.CurrentJob)
 	}
@@ -146,7 +146,7 @@ func TestRegistryHeartbeatRevokedWorker(t *testing.T) {
 	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
 	reg.RevokeWorker(ctx, "w1")
 
-	err := reg.Heartbeat(ctx, "w1", "worker-1", "idle", "", nil)
+	err := reg.Heartbeat(ctx, "w1", "worker-1", "", nil)
 	if err == nil {
 		t.Error("expected error for revoked worker heartbeat")
 	}
@@ -162,7 +162,7 @@ func TestRegistryHeartbeatMetadataPersistence(t *testing.T) {
 	reg := New(s)
 	ctx := context.Background()
 
-	err = reg.Heartbeat(ctx, "w1", "worker-1", "idle", "", map[string]interface{}{
+	err = reg.Heartbeat(ctx, "w1", "worker-1",		"", map[string]interface{}{
 		"code_version":     "v1.0.5",
 		"bundle_version":   "v1.0.5",
 		"bundle_hash":      "abc123",
@@ -291,7 +291,7 @@ func TestRegistryConcurrentAccess(t *testing.T) {
 	// Concurrent heartbeats
 	for i := 0; i < 100; i++ {
 		go func(i int) {
-			_ = reg.Heartbeat(ctx, "w"+string(rune('0'+i%10)), "worker", "idle", "", nil)
+			_ = reg.Heartbeat(ctx, "w"+string(rune('0'+i%10)), "worker",		"", nil)
 		}(i)
 	}
 
@@ -342,8 +342,8 @@ func TestRegistryStatusSnapshotSeparatesRegisteredFromLive(t *testing.T) {
 
 	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
 	_ = reg.RegisterWorker(ctx, "w2", "worker-2", "10.0.0.2", nil)
-	_ = reg.Heartbeat(ctx, "w1", "worker-1", "idle", "", nil)
-	_ = reg.Heartbeat(ctx, "w2", "worker-2", "idle", "", nil)
+	_ = reg.Heartbeat(ctx, "w1", "worker-1",		"", nil)
+	_ = reg.Heartbeat(ctx, "w2", "worker-2",		"", nil)
 
 	reg.mu.Lock()
 	stale := reg.inMem[identity.ParseWorkerID("w2")]
@@ -369,8 +369,8 @@ func TestRegistryGetStaleWorkers(t *testing.T) {
 
 	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
 	_ = reg.RegisterWorker(ctx, "w2", "worker-2", "10.0.0.2", nil)
-	_ = reg.Heartbeat(ctx, "w1", "worker-1", "idle", "", nil)
-	_ = reg.Heartbeat(ctx, "w2", "worker-2", "idle", "", nil)
+	_ = reg.Heartbeat(ctx, "w1", "worker-1",		"", nil)
+	_ = reg.Heartbeat(ctx, "w2", "worker-2",		"", nil)
 
 	reg.mu.Lock()
 	stale := reg.inMem[identity.ParseWorkerID("w2")]
@@ -629,7 +629,7 @@ func TestRegistryHeartbeatJobsCompletedInt64PersistsToMetrics(t *testing.T) {
 	ctx := context.Background()
 
 	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
-	err = reg.Heartbeat(ctx, "w1", "worker-1", "idle", "", map[string]interface{}{
+	err = reg.Heartbeat(ctx, "w1", "worker-1",		"", map[string]interface{}{
 		"jobs_completed": int64(7),
 		"jobs_failed":    int64(2),
 	})
@@ -722,7 +722,7 @@ func TestGetSchedulableWorkers_ExcludesDraining(t *testing.T) {
 	// ── Channel 1: drain = true. Even with schedulable=true and a
 	// fresh heartbeat, the worker is excluded. This is the canonical
 	// "DRAINING" input that surfaces as ConnectionStatus="DRAINING".
-	reg.Heartbeat(ctx, "w-drain-1", "Draining Worker", "idle", "", nil)
+	reg.Heartbeat(ctx, "w-drain-1", "Draining Worker",		"", nil)
 	reg.UpdateWorker(ctx, "w-drain-1", map[string]interface{}{
 		"drain":          true,
 		"last_heartbeat": now,
@@ -734,7 +734,7 @@ func TestGetSchedulableWorkers_ExcludesDraining(t *testing.T) {
 	// IsDraining=true). This worker should ALSO be excluded — a
 	// regression that only checks the drain field would erroneously
 	// pass this case.
-	reg.Heartbeat(ctx, "w-unsched-1", "Unschedulable Worker", "idle", "", nil)
+	reg.Heartbeat(ctx, "w-unsched-1", "Unschedulable Worker",		"", nil)
 	reg.UpdateWorker(ctx, "w-unsched-1", map[string]interface{}{
 		"drain":          false,
 		"last_heartbeat": now,
@@ -743,7 +743,7 @@ func TestGetSchedulableWorkers_ExcludesDraining(t *testing.T) {
 
 	// ── Control case: a healthy, schedulable, NON-draining worker.
 	// Expected to appear in the result; without it the test is ambiguous.
-	reg.Heartbeat(ctx, "w-ok-1", "Healthy Worker", "idle", "", nil)
+	reg.Heartbeat(ctx, "w-ok-1", "Healthy Worker",		"", nil)
 	reg.UpdateWorker(ctx, "w-ok-1", map[string]interface{}{
 		"drain":          false,
 		"last_heartbeat": now,

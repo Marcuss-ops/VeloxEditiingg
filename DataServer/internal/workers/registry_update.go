@@ -49,7 +49,6 @@ func (r *Registry) RegisterWorker(ctx context.Context, workerID, workerName, ipA
 		WorkerID:    id,
 		WorkerName:  workerName,
 		DisplayName: displayName,
-		Status:      "online",
 		LastHB:      now,
 		FirstSeen:   firstSeen,
 		IPAddress:   ipAddress,
@@ -113,9 +112,6 @@ func (r *Registry) UpdateWorker(ctx context.Context, workerID string, updates ma
 	}
 	if v, ok := updates["worker_group"].(string); ok {
 		info.WorkerGroup = v
-	}
-	if v, ok := updates["status"].(string); ok {
-		info.Status = v
 	}
 	if v, ok := updates["drain"].(bool); ok {
 		info.Drain = v

@@ -30,7 +30,6 @@ type WorkerInfo struct {
 	WorkerID               identity.WorkerID `json:"worker_id"`
 	WorkerName             string            `json:"worker_name"`
 	DisplayName            string `json:"display_name"`
-	Status                 string `json:"status"`
 	LastHB                 string `json:"last_heartbeat"`
 	FirstSeen              string `json:"first_seen"`
 	CurrentJob             string `json:"current_job"`
