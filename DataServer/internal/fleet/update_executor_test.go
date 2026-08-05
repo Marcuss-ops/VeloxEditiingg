@@ -51,6 +51,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -85,6 +86,8 @@ func stubBackends(t *testing.T) (UpdateBackend, *stubBackendsState) {
 	st := &stubBackendsState{
 		registeredWorker: true,
 		activeTasksZero:  true,
+		drain:            false,
+		drainCalls:       []bool{},
 		cosignErr:        nil,
 		pullErr:          nil,
 		composeErr:       nil,
@@ -121,6 +124,8 @@ func stubBackends(t *testing.T) (UpdateBackend, *stubBackendsState) {
 type stubBackendsState struct {
 	registeredWorker bool
 	activeTasksZero  bool
+	drain            bool
+	drainCalls       []bool
 	cosignErr        error
 	pullErr          error
 	composeErr       error
@@ -203,12 +208,20 @@ func (s *stubBackendsState) GetWorker(_ context.Context, id string) (*workers.Wo
 		WorkerID:      id,
 		SessionActive: s.sessionActive,
 		LastHB:        s.lastHB,
+		Drain:         s.drain,
+		Metrics:       map[string]interface{}{"active_tasks": float64(0)},
 	}
 	return info, nil
 }
 
 func (s *stubBackendsState) IsActiveJobsZero(_ context.Context, _ string) bool {
 	return s.activeTasksZero
+}
+
+func (s *stubBackendsState) SetDrainMode(_ context.Context, _ string, drain bool) error {
+	s.drain = drain
+	s.drainCalls = append(s.drainCalls, drain)
+	return nil
 }
 
 // ── BackendDeploymentRepo ───────────────────────────────────────────
@@ -373,15 +386,49 @@ func TestUpdate_EmptyRegistry(t *testing.T) {
 
 // ─── Phase 4: drain ────────────────────────────────────────────────
 
-func TestUpdate_ActiveJobsTimeout(t *testing.T) {
+func TestUpdate_DrainsAndReleasesOnSuccess(t *testing.T) {
+	backend, st := stubBackends(t)
+	e := NewUpdateExecutor(backend)
+	if err := e.Execute(context.Background(), mkOp("wkr-1", validImageRef(), "")); err != nil {
+		t.Fatalf("happy path Execute returned err %v", err)
+	}
+	if got, want := st.drainCalls, []bool{true, false}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("drain calls = %v, want %v", got, want)
+	}
+	if st.drain {
+		t.Fatal("worker remained drained after successful update")
+	}
+}
+
+func TestUpdate_PreservesExistingDrain(t *testing.T) {
+	backend, st := stubBackends(t)
+	st.drain = true
+	e := NewUpdateExecutor(backend)
+	if err := e.Execute(context.Background(), mkOp("wkr-1", validImageRef(), "")); err != nil {
+		t.Fatalf("pre-drained worker update returned err %v", err)
+	}
+	if len(st.drainCalls) != 0 {
+		t.Fatalf("executor changed an operator-owned drain: calls=%v", st.drainCalls)
+	}
+	if !st.drain {
+		t.Fatal("executor cleared an operator-owned drain")
+	}
+}
+
+func TestUpdate_ActiveTasksTimeoutReleasesOwnedDrain(t *testing.T) {
 	backend, st := stubBackends(t)
 	st.activeTasksZero = false // stays busy
 	e := NewUpdateExecutor(backend)
 	e.drainTimeout = 10 * time.Millisecond
-	op := mkOp("wkr-1", validImageRef(), "")
-	err := e.Execute(context.Background(), op)
-	if err == nil || !strings.Contains(err.Error(), "active_jobs did not drain") {
-		t.Errorf("active-jobs timeout: want drain fail, got %v", err)
+	err := e.Execute(context.Background(), mkOp("wkr-1", validImageRef(), ""))
+	if err == nil || !strings.Contains(err.Error(), "did not drain to 0") {
+		t.Errorf("active-tasks timeout: want drain fail, got %v", err)
+	}
+	if got, want := st.drainCalls, []bool{true, false}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("drain calls after timeout = %v, want %v", got, want)
+	}
+	if st.drain {
+		t.Fatal("worker remained drained after pre-forward timeout")
 	}
 }
 
@@ -548,6 +595,12 @@ func TestUpdate_RollbackSucceedsAfterForwardFail(t *testing.T) {
 	if ok, found := st.rolledBack[rollbackID]; !found || !ok {
 		t.Errorf("rollback row rolledBack = (%v, %v), want (true, true)", found, ok)
 	}
+	if got, want := st.drainCalls, []bool{true, false}; !reflect.DeepEqual(got, want) {
+		t.Errorf("rollback-success drain calls = %v, want %v", got, want)
+	}
+	if st.drain {
+		t.Error("worker remained drained after successful rollback")
+	}
 }
 
 func TestUpdate_RollbackFailsAfterForwardFail(t *testing.T) {
@@ -565,6 +618,12 @@ func TestUpdate_RollbackFailsAfterForwardFail(t *testing.T) {
 	}
 	if !errors.Is(err, ErrRollbackFailed) {
 		t.Errorf("expected ErrRollbackFailed, got %v", err)
+	}
+	if got, want := st.drainCalls, []bool{true}; !reflect.DeepEqual(got, want) {
+		t.Errorf("rollback-failure drain calls = %v, want %v", got, want)
+	}
+	if !st.drain {
+		t.Error("worker was undrained after failed rollback")
 	}
 }
 

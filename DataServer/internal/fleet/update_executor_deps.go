@@ -20,6 +20,8 @@ package fleet
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"time"
 
 	"velox-server/internal/store"
@@ -123,6 +125,56 @@ type BackendDriveVerifier interface {
 type BackendRegistryGater interface {
 	GetWorker(ctx context.Context, workerID string) (*workers.WorkerInfo, error)
 	IsActiveJobsZero(ctx context.Context, workerID string) bool
+	SetDrainMode(ctx context.Context, workerID string, drain bool) error
+}
+
+// RealRegistryUpdateGater adapts the production worker registry to the
+// UpdateExecutor registry surface. The executor owns the drain transition;
+// this adapter keeps that mutation on the same registry used by placement.
+type RealRegistryUpdateGater struct {
+	Reg *workers.Registry
+}
+
+func (g *RealRegistryUpdateGater) GetWorker(ctx context.Context, workerID string) (*workers.WorkerInfo, error) {
+	if g == nil || g.Reg == nil {
+		return nil, errors.New("worker registry not wired")
+	}
+	return g.Reg.GetWorker(ctx, workerID), nil
+}
+
+func (g *RealRegistryUpdateGater) IsActiveJobsZero(ctx context.Context, workerID string) bool {
+	info, err := g.GetWorker(ctx, workerID)
+	if err != nil || info == nil {
+		return false
+	}
+	value, ok := info.Metrics["active_tasks"]
+	if !ok || value == nil {
+		return false
+	}
+	switch n := value.(type) {
+	case int:
+		return n == 0
+	case int32:
+		return n == 0
+	case int64:
+		return n == 0
+	case float32:
+		return n == 0
+	case float64:
+		return n == 0
+	case json.Number:
+		v, parseErr := n.Int64()
+		return parseErr == nil && v == 0
+	default:
+		return false
+	}
+}
+
+func (g *RealRegistryUpdateGater) SetDrainMode(ctx context.Context, workerID string, drain bool) error {
+	if g == nil || g.Reg == nil {
+		return errors.New("worker registry not wired")
+	}
+	return g.Reg.SetWorkerDrain(ctx, workerID, drain)
 }
 
 // BackendDeploymentRepo is the typed surface for the

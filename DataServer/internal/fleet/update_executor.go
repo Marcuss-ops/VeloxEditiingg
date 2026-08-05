@@ -7,9 +7,10 @@
 //     optional — read from deployment_records if absent).
 //  2. validate worker_id registered AND not in a torn state.
 //  3. snapshot previous_digest from deployment_records.
-//  4. wait for active_jobs=0 (drain side-effect from the
-//     admin endpoint (Step 6/15) is already in effect — the
-//     executor just confirms via polling).
+//  4. set drain=true and wait for active_tasks=0. The executor
+//     owns this transition so callers cannot start an update while
+//     relying on a documentation-only drain step.
+
 //  5. INSERT deployment_records row, status=PENDING,
 //     is_rollback=false. Health() flips to UPDATING via
 //     DeriveDeploymentHealthState precedence rank 4.
@@ -51,7 +52,9 @@
 //   - forward fail,
 //     rollback OK      → ErrForward + ErrRollbackSucceeded wrap
 //     → FCO marks FAILED, error_message
-//     surfaces "rollback_ok to <digest>"
+//     surfaces "rollback_ok to <digest>"; an executor-owned
+//     drain is released after the worker is restored.
+
 //   - forward fail,
 //     rollback fail    → ErrForward + ErrRollbackFailed wrap,
 //     rollback err wrapped.
@@ -268,12 +271,20 @@ func (e *UpdateExecutor) Execute(ctx context.Context, op *store.Operation) error
 	// Logged at every operator-observable transition.
 	log.Printf("[UPDATE] worker=%s target=%s previous=%s", op.WorkerID, targetDigest, previousDigest)
 
-	// ── Phase 4: wait for active_jobs=0 (drain confirm) ─────────────
+	// ── Phase 4: own the drain and wait for active_tasks=0 ───────────
+	// Preserve an operator-owned drain. Only undo the transition that
+	// this executor made; callers must serialize worker mutations while
+	// an update operation is active.
+	drainOwned := !info.Drain
+	if drainOwned {
+		if err := e.backend.Registry.SetDrainMode(ctx, op.WorkerID, true); err != nil {
+			return fmt.Errorf("update: set drain: %w", err)
+		}
+	}
 	if err := e.waitForIdle(ctx, op.WorkerID); err != nil {
-		// Drain didn't complete in budget — DO NOT roll back
-		// the worker state (we never modified it), but surface
-		// the failure. The deployment_records row stays
-		// unwritten because forward never started.
+		if releaseErr := e.releaseOwnedDrain(ctx, op.WorkerID, drainOwned); releaseErr != nil {
+			return fmt.Errorf("update: drain wait: %w (release drain: %v)", err, releaseErr)
+		}
 		return fmt.Errorf("update: drain wait: %w", err)
 	}
 
@@ -290,6 +301,9 @@ func (e *UpdateExecutor) Execute(ctx context.Context, op *store.Operation) error
 		AppliedBy:      op.RequestedBy,
 		IsRollback:     false,
 	}); err != nil {
+		if releaseErr := e.releaseOwnedDrain(ctx, op.WorkerID, drainOwned); releaseErr != nil {
+			return fmt.Errorf("update: insert PENDING: %w (release drain: %v)", err, releaseErr)
+		}
 		return fmt.Errorf("update: insert PENDING: %w", err)
 	}
 
@@ -299,14 +313,36 @@ func (e *UpdateExecutor) Execute(ctx context.Context, op *store.Operation) error
 		if uerr := e.backend.Deployments.MarkFailed(ctx, deploymentID, e.backend.Now(), runErr.Error()); uerr != nil {
 			log.Printf("[UPDATE] mark FAILED for %s: %v", deploymentID, uerr)
 		}
-		return e.runRollback(ctx, op, previousDigest, runErr)
+		rollbackErr := e.runRollback(ctx, op, previousDigest, runErr)
+		if errors.Is(rollbackErr, ErrRollbackSucceeded) {
+			if releaseErr := e.releaseOwnedDrain(ctx, op.WorkerID, drainOwned); releaseErr != nil {
+				return fmt.Errorf("%w: rollback completed but release drain failed: %v", ErrRollbackFailed, releaseErr)
+			}
+		}
+		return rollbackErr
 	}
 
 	// ── Phase 7: forward SUCCEEDED, mark terminal ───────────────────
 	if err := e.backend.Deployments.MarkSucceeded(ctx, deploymentID, e.backend.Now()); err != nil {
 		return fmt.Errorf("update: mark SUCCEEDED for %s: %w", deploymentID, err)
 	}
+	if err := e.releaseOwnedDrain(ctx, op.WorkerID, drainOwned); err != nil {
+		return fmt.Errorf("update: release drain after success: %w", err)
+	}
 	log.Printf("[UPDATE] worker=%s target=%s SUCCEEDED", op.WorkerID, targetDigest)
+	return nil
+}
+
+func (e *UpdateExecutor) releaseOwnedDrain(ctx context.Context, workerID string, owned bool) error {
+	if !owned {
+		return nil
+	}
+	if e.backend.Registry == nil {
+		return errors.New("update: registry gater not wired (cannot release drain)")
+	}
+	if err := e.backend.Registry.SetDrainMode(ctx, workerID, false); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -329,10 +365,10 @@ func (e *UpdateExecutor) parsePayload(op *store.Operation) (string, string, erro
 	return strings.TrimSpace(p.TargetDigest), strings.TrimSpace(p.PreviousDigest), nil
 }
 
-// waitForIdle polls WorkerInfo.Metrics["active_tasks"] until
-// the value reaches 0, or until the poll budget elapses. The
-// default budget is timeoutActiveJobsIdle (5min).
-//
+// waitForIdle polls the registry's canonical active_tasks signal until
+// the value reaches 0, or until the poll budget elapses. The default
+// budget is timeoutActiveJobsIdle (5min).
+
 // Polling is intentional rather than event-driven because
 // the registry's in-memory heartbeat metric is the canonical
 // active-task count and polling exposes a simple deadline to
@@ -353,7 +389,7 @@ func (e *UpdateExecutor) waitForIdle(ctx context.Context, workerID string) error
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return errors.New("active_jobs did not drain to 0 within budget")
+			return errors.New("active_tasks (active_jobs) did not drain to 0 within budget")
 		}
 		select {
 		case <-ctx.Done():

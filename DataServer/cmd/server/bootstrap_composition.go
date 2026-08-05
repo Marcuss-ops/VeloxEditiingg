@@ -212,7 +212,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		return nil, err
 	}
 
-	fleetDep, err := buildFleet(p)
+	fleetDep, err := buildFleet(p, w.Registry)
 	if err != nil {
 		_ = p.SQLite.Close()
 		return nil, fmt.Errorf("bootstrap: fleet: %w", err)

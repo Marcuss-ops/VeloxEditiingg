@@ -15,6 +15,7 @@ import (
 	"velox-server/internal/handlers/server/api"
 	integrationsDrive "velox-server/internal/integrations/drive"
 	"velox-server/internal/supervisor"
+	workersreg "velox-server/internal/workers"
 )
 
 // deployUpdateImageValidator wraps internal/deploy.ValidateImageRef
@@ -136,7 +137,7 @@ func (f *FleetDep) getHandler() *api.AdminOperationsHandler {
 // running check + /health/ready poll (60s) + master connect
 // (30s) + Level D smoke (5min) + Drive verify (60s) +
 // RB-only cascade on failure (15min slack).
-func buildFleet(p *persistenceDeps) (*FleetDep, error) {
+func buildFleet(p *persistenceDeps, workerRegistry *workersreg.Registry) (*FleetDep, error) {
 	if p == nil || p.SQLite == nil {
 		return nil, nil
 	}
@@ -149,16 +150,17 @@ func buildFleet(p *persistenceDeps) (*FleetDep, error) {
 	)
 
 	// Step 9/15 UpdateExecutor — wires the live deps that
-	// bootstrap knows about (deployments repo, cosign validator,
-	// image-ref validator). SSH/Docker/Smoke/Drive are Step 7+
-	// follow-ups; nil-tolerant today.
+	// bootstrap knows about. The registry gater is canonical for
+	// both active_tasks polling and the executor-owned drain toggle;
+	// no operator-side/document-only drain is required.
 	updateBackend := fleet.UpdateBackend{
 		Deployments: p.SQLite,
 		Cosign:      newUpdateCosignVerifier(),
 		Image:       deployUpdateImageValidator{},
+		Registry:    &fleet.RealRegistryUpdateGater{Reg: workerRegistry},
 	}
 	registry.Register(fleet.OperationKindUpdate, fleet.NewUpdateExecutor(updateBackend))
-	log.Printf("[BOOTSTRAP] UpdateExecutor registered for kind=%s (SSH/Docker/Smoke/Drive pending Step 7+/8+)", fleet.OperationKindUpdate)
+	log.Printf("[BOOTSTRAP] UpdateExecutor registered for kind=%s (registry drain/active_tasks gate wired; SSH/Docker/Smoke/Drive pending)", fleet.OperationKindUpdate)
 
 	return &FleetDep{
 		Controller:      controller,
