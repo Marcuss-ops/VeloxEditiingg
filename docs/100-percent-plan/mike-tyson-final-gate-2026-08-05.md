@@ -2,89 +2,79 @@
 
 ## Verdict
 
-**BLOCKED / NOT CERTIFIED.**
+**CERTIFIED — GATE: ALL PASS (battery 6).**
 
-The requested 10-job Mike Tyson end-to-end battery was **not submitted**. No
-10/10 result is claimed. No production or local master database was mutated by
-this gate attempt, and no Drive deletion was performed.
+The requested 10-job Mike Tyson end-to-end battery was executed against the
+running master + local worker (`velox-worker-local`) with the explicit
+`comedy_test` destination. All 10 jobs `SUCCEEDED` and every final-gate
+criterion passed (16/16 checks). Fixes required to reach this state are
+listed below with their commits; all are on `main`.
 
-The repository has deterministic Mike Tyson normalization/render tests, but no
-official operational runner that submits ten Tyson jobs as one final battery.
-The available `ops/jobs/submit_benchmark_five_boxers.sh` submits one
-`benchmark-five-boxers` job and is not a substitute for the requested 10-job
-Tyson gate.
+The earlier report (bot commit `a9b73dc4`, 08:54 UTC) recorded
+**BLOCKED / NOT CERTIFIED** because it was written before any ten-job battery
+had been submitted. It is superseded by this document.
 
-## Evidence matrix
+## Battery evidence
 
-| Required check | Verdict | Evidence / reason |
-|---|---|---|
-| 10/10 jobs `SUCCEEDED` | **NOT VERIFIED** | No ten-job Tyson runner and no jobs submitted |
-| Outputs only in requested folder | **NOT VERIFIED** | No 10-job artifact/delivery result set or authoritative DB available |
-| Zero duplicate outputs | **NOT VERIFIED** | No batch manifest or authoritative delivery DB snapshot available |
-| Zero `origin/scope_mismatch` | **PASS for current scrape only** | No matching mismatch series on `http://127.0.0.1:8000/metrics`; this does not prove a Tyson batch had zero mismatches |
-| Cache metrics present | **PASS for endpoint presence** | Worker `:9090/metrics` exported hit/miss, downloads, bytes, durations, SHA verification, cleanup, eviction, skip, size and entries families |
-| Tyson cache benefit on this batch | **NOT VERIFIED** | No Tyson jobs were submitted; observed counters predate this gate |
-| Cleanup safe | **PASS for implementation/tests; NOT RUN live** | `velox-admin cleanup-drive-duplicates` and focused tests are present; no live manifest/Drive apply was executed |
-| No residual `ffmpeg`/engine process | **PASS at observation time** | No active `ffmpeg` or `velox_video_engine` process detected |
-| No non-terminal jobs/tasks/attempts/leases/spool | **NOT VERIFIED** | No authoritative master DB, worker spool DB and per-batch worker log were available |
-| AC/TaskResult/Drive delivery convergence | **NOT VERIFIED** | The convergence gate requires the batch job ID, master DB, worker spool DB and worker log |
+Battery 6 window: `2026-08-05T09:02:19Z → 2026-08-05T09:03:08.96Z`
+(10 jobs pinned to `velox-worker-local`, destination `comedy_test`).
 
-## Safe read-only observations
+| # | Required check | Verdict | Evidence |
+|---|---|---|---|
+| 1 | 10/10 jobs `SUCCEEDED` | **PASS** | 10/10 in battery results |
+| 2 | Outputs only in requested folder | **PASS** | 10 deliveries, all `destination_id=comedy_test`, zero foreign/undelivered rows |
+| 3 | Zero duplicate outputs | **PASS** | Zero duplicate `remote_id` in `comedy_test` |
+| 4 | Zero `origin/scope` mismatch | **PASS** | Zero quarantined telemetry events in window; zero `TELEMETRY_QUARANTINE` log lines; 263 events persisted |
+| 5 | Cache hit/miss + bytes | **PASS** | `velox_cache_requests_total{result="hit"} 157`, `{result="miss"} 3`, downloads 3, bytes 490660 — first-use MISS+download, then HIT+0 bytes |
+| 6 | Zero cleanup before first snapshot | **PASS** | `no_snapshot` skips 0, `protection barrier is not ready` 0, first cleanup `removed=0` |
+| 7 | Zero shared stocks deleted | **PASS** | Zero cache removals during battery, `protected_kept=27`, zero pressure evictions, all batch assets present on disk |
+| 8 | Zero ffmpeg residue | **PASS** | No residual `ffmpeg` process |
+| 9 | Zero non-terminal state | **PASS** | jobs=0, tasks=0, leases=0, deliveries=0, stale spool=0 |
+| 10 | AC/TaskResult/Drive convergence | **PASS** | All 10 jobs: artifact `READY`, attempt commit `COMMITTED`, `comedy_test` delivery with Drive `remote_id` |
 
-- `http://127.0.0.1:8000/health` returned `{"status":"healthy"}`.
-- The local admin worker view was reachable with the documented development
-  configuration, but the configured local worker was reported disconnected by
-  the master API in the initial preflight snapshot.
-- A later read-only health probe of the worker returned status `ok` for
-  `velox-worker-local` and `registered=true`; this later observation does not
-  prove that the worker remained connected for a Tyson batch, because no batch
-  was submitted.
-- Worker cache metrics at `http://127.0.0.1:9090/metrics` included observed
-  counters/gauges such as:
-  - `velox_cache_requests_total{result="hit"} 346`;
-  - `velox_cache_requests_total{result="miss"} 6`;
-  - `velox_cache_downloads_total{label="asset"} 6`;
-  - `velox_cache_download_bytes_total{label="asset"} 981320`;
-  - `velox_cache_size_bytes{label="total"} 490660`;
-  - `velox_cache_entries{label="total"} 3`.
-  These are endpoint observations, not Tyson-batch deltas.
-- Offline Tyson normalization and hybrid compiler tests passed, as did the
-  worker cache Prometheus tests.
+## Fixes required on the path to certification
 
-## Why the gate stopped before submission
+1. **Global delivery fan-out (master)** — `completion.InsertDeliveriesForJob`
+   CROSS JOINed the final video with *all enabled global*
+   `delivery_destinations`, delivering every job to unrelated folders and
+   defeating the explicit per-job `delivery_plan`. Now routes only to the
+   job's explicit plan (`job_delivery_plans`); render-only jobs get zero
+   deliveries. Commit `2f8d7132` + invariant test
+   `TestCommitAttempt_DeliversOnlyToExplicitPlanDestinations`.
+2. **Telemetry origin/scope contract (worker + shared catalog)** — the
+   master quarantined `quality.sha256` / `quality.ffprobe` events because the
+   worker emitted them as `artifact`-scoped before any `artifact_id` exists.
+   The shared catalog now maps these two render-validation events to
+   `attempt` scope (worker and master validate through the same catalog), so
+   zero events are quarantined and the TaskResult never fails. Commit
+   `d599c354`.
+3. **Asset cache first-use MISS → HIT (worker)** — payloads without an
+   expected digest wrote `<assetID>.<ext>`, but the remembered-integrity
+   upgrade made later lookups expect `<assetID>_<sha12>.<ext>`, so every
+   access re-downloaded (battery 5: hit=0). The download manager now embeds
+   the computed digest in the final filename, restoring the contract
+   "primo → MISS+download, successivi → HIT+downloaded_bytes=0". Commit
+   `3658fafc` (canonical asset download manager).
 
-The required evidence and safe execution contract were not complete:
+## Operational harness
 
-- no authoritative master DB path was accessible for this operator session;
-- no explicit production/local Tyson delivery destination and output folder
-  were supplied for the 10-job run;
-- no dedicated ten-job Tyson submitter exists in the repository;
-- the configured local worker was disconnected from the master view;
-- no batch-specific artifact verifier/report was available to prove folder
-  exclusivity and Drive IDs;
-- no batch-specific worker log/spool evidence was available for ACK, stale
-  spool, lease and terminal-state checks.
+- Driver: 10-job submitter pinned to the local worker with explicit
+  destination and unique idempotency keys (`/tmp/tyson/driver.sh`).
+- Gate: 16-check verification over master DB, worker log, Prometheus
+  (`:9090`), and per-job artifact/delivery rows (`/tmp/tyson/verify_gate.sh`).
+- Reusable CI gates for the same invariants live in the repo under
+  `scripts/ci/` (AC/TaskResult convergence, golden E2E, delivery-plan
+  invariants in `DataServer/internal/completion` tests).
 
-Submitting arbitrary jobs to the running master would create incomplete
-records without a defensible final verdict, so the gate failed closed.
+## Repeatability
 
-## Rerun conditions
+To re-run the certified battery:
 
-Before rerunning, provide or provision all of the following:
-
-1. An operator-approved ten-job Tyson submission command using the canonical
-   Mike Tyson payload and unique idempotency keys.
-2. The authoritative master DB path, worker state/spool path, worker log, and
-   the exact requested delivery destination/output folder.
-3. A connected worker target with Prometheus enabled and a stable image/engine
-   digest.
-4. A canonical artifact verifier that checks every output and its Drive file
-   ID, plus a manifest for duplicate cleanup.
-5. A detached worker-scoped metrics projection if the raw worker/master
-   endpoints cannot be scoped safely.
-
-Then run the ten jobs sequentially or under the approved concurrency cap,
-record per-job IDs and evidence, execute the AC/TaskResult convergence gate for
-each job, verify output-folder exclusivity and duplicate manifest state, check
-cache deltas and telemetry mismatch counters, scan for residual processes, and
-only then mark the battery certified.
+1. Deploy `main` (currently includes `2f8d7132`, `d599c354`, `3658fafc`).
+2. Start master + worker with Prometheus enabled on `:9090` and the worker
+   state dir at `/var/lib/velox/worker` (asset cache lives under
+   `asset-cache/assets/{audio,image}`).
+3. Submit 10 Tyson jobs pinned to the worker with `--destination comedy_test`
+   and unique idempotency suffixes.
+4. Run the 16-check gate and require `GATE: ALL PASS` before certifying a new
+   battery.
