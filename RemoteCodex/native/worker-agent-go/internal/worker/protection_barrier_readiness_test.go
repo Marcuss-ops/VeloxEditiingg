@@ -55,6 +55,57 @@ func TestProtectedAssetsBarrier_UpdatesReadinessOnlyAfterValidSnapshot(t *testin
 	}
 }
 
+func TestProtectedAssetsBarrier_RearmsAfterRegistrationLoss(t *testing.T) {
+	telemetry.ResetForTest()
+	t.Cleanup(telemetry.ResetForTest)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(snapshotJSON(9, time.Now().UTC().Format(time.RFC3339Nano), 1, []string{"session-asset"}))
+	}))
+	defer server.Close()
+
+	client := api.NewClient(server.URL)
+	client.SetAuthToken("session-token")
+	poller := NewProtectedAssetsPoller(client, 20*time.Millisecond)
+	poller.SnapshotMaxAge = time.Minute
+	telemetry.MarkRegistered(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- poller.Run(ctx) }()
+
+	deadline := time.Now().Add(time.Second)
+	for !poller.IsReady() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !poller.IsReady() || !telemetry.GlobalReady().Snapshot().CacheProtectionReady {
+		t.Fatal("initial authenticated snapshot did not open barrier and readiness")
+	}
+
+	telemetry.MarkRegistered(false)
+	client.ClearAuthToken()
+	deadline = time.Now().Add(time.Second)
+	for poller.IsReady() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if poller.IsReady() || telemetry.GlobalReady().Snapshot().CacheProtectionReady {
+		t.Fatal("registration loss left protection barrier/readiness open")
+	}
+
+	client.SetAuthToken("new-session-token")
+	telemetry.MarkRegistered(true)
+	deadline = time.Now().Add(time.Second)
+	for !poller.IsReady() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-done
+	if !poller.IsReady() || !telemetry.GlobalReady().Snapshot().CacheProtectionReady {
+		t.Fatal("fresh authenticated snapshot did not reopen barrier/readiness")
+	}
+}
+
 func TestProtectedAssetsBarrier_503PreservesReadinessAndLastSnapshotAge(t *testing.T) {
 	telemetry.ResetForTest()
 	t.Cleanup(telemetry.ResetForTest)

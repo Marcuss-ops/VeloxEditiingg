@@ -48,6 +48,10 @@ type SnapshotSource interface {
 // at least one valid protected-assets snapshot. Implementations must remain
 // fail-safe: transient poll failures do not open the barrier and cancellation
 // must interrupt WaitReady promptly.
+// ErrProtectionBarrierNotReady is returned to cleanup observability when
+// the current registration session has not yet received a valid snapshot.
+var ErrProtectionBarrierNotReady = errors.New("workercache: protection barrier is not ready")
+
 type ProtectionBarrier interface {
 	WaitReady(context.Context) error
 	IsReady() bool
@@ -180,6 +184,16 @@ func (cl *CleanupLoop) JobDoneNonBlocking() <-chan struct{} {
 // runTick is the per-tick observability wrapper. TickOnce does the
 // real work; this method just dispatches the result.
 func (cl *CleanupLoop) runTick(ctx context.Context) {
+	// Re-check the barrier for every tick, not only at startup. A worker
+	// session can disconnect after the first valid snapshot; in that case
+	// the poller re-arms its barrier and cleanup must wait for the next
+	// authenticated snapshot before touching the cache again.
+	if err := cl.Barrier.WaitReady(ctx); err != nil {
+		if cl.OnTick != nil {
+			cl.OnTick(CleanupStats{}, fmt.Errorf("%w: %v", ErrProtectionBarrierNotReady, err))
+		}
+		return
+	}
 	stats, err := cl.TickOnce(ctx)
 	if cl.OnTick != nil {
 		cl.OnTick(stats, err)

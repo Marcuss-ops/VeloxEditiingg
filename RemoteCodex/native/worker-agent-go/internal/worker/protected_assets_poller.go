@@ -127,12 +127,16 @@ type ProtectedAssetsPoller struct {
 	snap        *api.ProtectedAssetSnapshot
 	lastPollErr error
 
-	// readyCh closes exactly once after the first valid snapshot. It is
-	// deliberately independent from snap so a later 401/503 preserves
-	// readiness and the last-good snapshot while cleanup applies its
-	// own staleness policy.
-	readyCh   chan struct{}
-	readyOnce sync.Once
+	// sessionGated is enabled by Run. Direct TickOnce callers remain
+	// deterministic and do not need to manufacture registration state.
+	sessionGated bool
+
+	// readyMu protects a re-armable readiness barrier. A disconnect
+	// replaces readyCh with a fresh channel; the next valid snapshot
+	// closes that channel and reopens cleanup/readiness atomically.
+	readyMu sync.Mutex
+	ready   bool
+	readyCh chan struct{}
 }
 
 // NewProtectedAssetsPoller constructs the poller. Interval <= 0
@@ -169,6 +173,9 @@ func (p *ProtectedAssetsPoller) Run(ctx context.Context) error {
 	if p.Interval <= 0 {
 		return errors.New("worker.ProtectedAssetsPoller.Run: zero Interval (call NewProtectedAssetsPoller instead of zeroing after construction)")
 	}
+	p.mu.Lock()
+	p.sessionGated = true
+	p.mu.Unlock()
 
 	// Registration establishes the worker credential/session used by the
 	// protected-assets endpoint. Do not poll before that gate is open: an
@@ -291,6 +298,20 @@ func (p *ProtectedAssetsPoller) runTickOnce(ctx context.Context, label string) e
 		}
 		return ErrProtectedSnapshotStale
 	}
+	p.mu.RLock()
+	sessionGated := p.sessionGated
+	p.mu.RUnlock()
+	if sessionGated {
+		ready := telemetry.GlobalReady().Snapshot()
+		authenticated := false
+		if client, ok := p.Client.(interface{ AuthToken() string }); ok {
+			authenticated = strings.TrimSpace(client.AuthToken()) != ""
+		}
+		if !ready.Registered || !authenticated {
+			p.invalidateReadiness()
+			return fmt.Errorf("%w: worker session is not registered", ErrProtectedSnapshotStale)
+		}
+	}
 	if previous := p.Snapshot(); previous != nil {
 		previousAt, previousErr := time.Parse(time.RFC3339Nano, previous.GeneratedAt)
 		if previousErr == nil {
@@ -338,6 +359,7 @@ func (p *ProtectedAssetsPoller) waitForRegistration(ctx context.Context) error {
 		if registered && authenticated {
 			return nil
 		}
+		p.invalidateReadiness()
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -346,36 +368,55 @@ func (p *ProtectedAssetsPoller) waitForRegistration(ctx context.Context) error {
 	}
 }
 
-// WaitReady blocks until the first valid protected-assets snapshot has
-// been applied or ctx is cancelled. Poll failures intentionally do not
-// return from this method: 401/503 and transport failures keep cleanup
-// behind the barrier until a later poll succeeds.
+// WaitReady blocks until the current registration session has received a
+// valid protected-assets snapshot or ctx is cancelled. A lost session
+// re-arms the channel, so a reconnect cannot inherit the previous session's
+// cleanup permission.
 func (p *ProtectedAssetsPoller) WaitReady(ctx context.Context) error {
 	if p == nil {
 		return errors.New("worker.ProtectedAssetsPoller.WaitReady: nil poller")
 	}
-	if p.readyCh == nil {
-		return errors.New("worker.ProtectedAssetsPoller.WaitReady: barrier is not initialized")
-	}
-	select {
-	case <-p.readyCh:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	for {
+		p.readyMu.Lock()
+		if p.ready {
+			p.readyMu.Unlock()
+			return nil
+		}
+		ch := p.readyCh
+		p.readyMu.Unlock()
+		if ch == nil {
+			return errors.New("worker.ProtectedAssetsPoller.WaitReady: barrier is not initialized")
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 }
 
-// IsReady reports whether at least one valid snapshot has been applied.
+// IsReady reports whether the current registration session has a valid
+// protection baseline.
 func (p *ProtectedAssetsPoller) IsReady() bool {
-	if p == nil || p.readyCh == nil {
+	if p == nil {
 		return false
 	}
-	select {
-	case <-p.readyCh:
-		return true
-	default:
-		return false
+	p.readyMu.Lock()
+	defer p.readyMu.Unlock()
+	return p.ready
+}
+
+func (p *ProtectedAssetsPoller) invalidateReadiness() {
+	p.readyMu.Lock()
+	if p.ready {
+		// The ready channel is already closed for the completed session;
+		// waiters have been released. Replace it with an open channel for
+		// the new session so future waiters cannot inherit old readiness.
+		p.ready = false
+		p.readyCh = make(chan struct{})
 	}
+	p.readyMu.Unlock()
+	telemetry.MarkCacheProtectionReady(false)
 }
 
 // applySnapshot atomically swaps the in-memory snapshot reference.
@@ -395,12 +436,22 @@ func (p *ProtectedAssetsPoller) applySnapshot(snap *api.ProtectedAssetSnapshot) 
 	p.lastPollErr = nil
 	p.mu.Unlock()
 
-	// Publish readiness before releasing the cleanup barrier. This keeps
-	// /health/ready and destructive cleanup ordered behind the same first
-	// valid 200 snapshot.
-	telemetry.MarkCacheProtectionReady(true)
+	// Open the cleanup barrier first, then publish readiness. This is
+	// deliberately fail-safe: a probe can briefly report not-ready while
+	// cleanup is already permitted, but never the reverse.
 	telemetry.SetProtectedSnapshotGeneratedAt(generatedAt)
-	p.readyOnce.Do(func() { close(p.readyCh) })
+	p.readyMu.Lock()
+	p.ready = true
+	if p.readyCh == nil {
+		p.readyCh = make(chan struct{})
+	}
+	select {
+	case <-p.readyCh:
+	default:
+		close(p.readyCh)
+	}
+	p.readyMu.Unlock()
+	telemetry.MarkCacheProtectionReady(true)
 	if p.OnSuccess != nil {
 		p.OnSuccess(snap)
 	}
