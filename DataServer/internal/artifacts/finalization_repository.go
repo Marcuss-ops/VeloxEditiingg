@@ -80,7 +80,7 @@ type FinalizeVerifiedCommand struct {
 // DeliveryDestination is the per-destination projection the finalize
 // writer consumes. Resolvers return one of these per (job_id,
 // artifact_id) pair; the writer reads MaxAttempts to stamp durable
-// attempt caps onto job_deliveries at INSERT time.
+// attempt caps onto job_deliveries at materialization time.
 //
 // Step 5/8 of the canonical-purity plan: the rich per-destination
 // retry_budget lives on job_delivery_plans.retry_budget (migration 069)
@@ -88,13 +88,13 @@ type FinalizeVerifiedCommand struct {
 // restarts and runner crashes.
 //
 // MaxAttempts == 0 is allowed in the projection but the writer
-// applies schema DEFAULT 5 at INSERT time for legacy plan rows that
+// applies schema DEFAULT 5 when materializing legacy plan rows that
 // omit retry_budget.
 type DeliveryDestination = deliverycontract.DeliveryDestination
 
 // DeliveryPlanResolver returns the per-destination set the finalize
-// writer should insert into job_deliveries. The writer consumes the
-// resolved set inside the same *sql.Tx that INSERTs job_deliveries.
+// writer should insert into job_deliveries. The store adapter consumes the
+// resolved set inside the same finalization transaction.
 //
 // Implementations decide the per-job explicit destination set; the
 // resolver stays outside the writer lock so the planning logic is
@@ -110,4 +110,10 @@ type DeliveryPlanResolver = deliverycontract.DeliveryPlanResolver
 // persistence projection and never owns a database handle.
 type UploadSessionWriter interface {
 	CreateArtifactAndUploadSession(ctx context.Context, params store.CreateUploadSessionParams) error
+}
+
+// FinalizationWriter is the narrow application port for verified finalization.
+// The store adapter owns the transaction and all SQL statements.
+type FinalizationWriter interface {
+	FinalizeVerified(ctx context.Context, cmd FinalizeVerifiedCommand) (*store.Artifact, error)
 }

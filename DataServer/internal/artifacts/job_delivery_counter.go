@@ -14,7 +14,7 @@
 // Why a separate reader (vs wiring the resolver through Service):
 // CountExpectedDeliveries mirrors the writer's resolution order
 // (explicit override or enabled per-job job_delivery_plans) so the gate
-// and the INSERT agree without selecting global destinations.
+// and the materialized delivery set agree without selecting global destinations.
 // Mirroring is small and read-only; if it ever drifts from the
 // writer, the gate will fire ErrFFProbeAudioCountMismatch and fail
 // CI loudly.

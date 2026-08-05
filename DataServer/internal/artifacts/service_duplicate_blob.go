@@ -28,7 +28,7 @@ import (
 
 // isArtifactStorageKeyConflict classifies a SQLite error as the
 // (storage_provider, storage_key) UNIQUE-constraint conflict raised
-// by FinalizeVerified's INSERT/UPDATE on the artifacts table. Used
+// by FinalizeVerified's unique storage-key conflict on the artifacts table. Used
 // as the discriminator by finalizeWithDuplicateStorageFallback to
 // decide whether to retry with an alt storage_key.
 //

@@ -58,8 +58,8 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	uploadRepo := store.NewSQLiteUploadRepository(p.SQLite.DB())
 	artifactReader := store.NewSQLiteArtifactReader(p.SQLite.DB())
 	authReader := store.NewSQLiteAuthReader(p.SQLite.DB())
-	uploadWriter := artifacts.NewSQLiteUploadSessionWriter(p.SQLite.DB())
-	finalizeWriter := artifacts.NewSQLiteFinalizeWriter(p.SQLite.DB(), artifactReader, planResolver)
+	uploadWriter := artifacts.NewSQLiteUploadSessionWriter(store.NewSQLiteUploadSessionWriter(p.SQLite.DB()))
+	finalizeWriter := artifacts.NewSQLiteFinalizeWriter(store.NewSQLiteArtifactFinalizer(p.SQLite.DB(), planResolver))
 	// JobDeliveryCounter typed reader — required by NewService post
 	// the VELOX_FFPROBE_VERIFY_ON_FINALIZE gate (RW-PROD-008 A4).
 	// Production cannot silently run the gate without it; NewService
@@ -82,7 +82,6 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 		artifactSvc,
 		uploadRepo,
 		p.BlobStore,
-		p.SQLite.DB(),
 	)
 	log.Printf("[BOOTSTRAP] ChunkedUploadService ready (persistent chunked upload via artifact pipeline)")
 
@@ -110,7 +109,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 
 	// ── Reconciler (mandatory — fail-fast if init fails) ──────────
 	reconciler, recErr := artifacts.NewReconciler(
-		p.SQLite.DB(),
+		store.NewArtifactReconcilerRepository(p.SQLite.DB()),
 		p.BlobStore,
 		uploadRepo,
 		nil, // clock.System default (production)

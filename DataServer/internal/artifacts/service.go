@@ -16,12 +16,10 @@
 // transition that the master authorizes + verifies.
 //
 // Persistence is composed from narrowly-scoped readers/writers. The
-// Service never holds *sql.DB directly — read paths go through
+// Service never holds a database handle directly — read paths go through
 // AuthReader, write paths through UploadSessionWriter /
-// FinalizationWriter / ArtifactReader. The Reconciler retains a
-// *sql.DB because its cleanup sweeps operate on tables the typed
-// repos do not yet expose (sql-allowlist marker at top of
-// reconciler.go).
+// FinalizationWriter / ArtifactReader. The Reconciler also delegates
+// every persistence operation to its typed repository.
 package artifacts
 
 import (
@@ -38,7 +36,7 @@ const defaultUploadTTL = 24 * time.Hour
 
 // Service composes the persistence surfaces and the blob store for the
 // three upload-finalization phases. Auth reads are isolated behind
-// AuthReader so the auth path never sees a raw *sql.DB.
+// AuthReader so the auth path never sees a raw database handle.
 //
 // None of these fields are optional at runtime — NewService panics
 // on nil for each so a misconfigured composition fails fast at
@@ -71,7 +69,7 @@ type Service struct {
 //     idempotent COMPLETED path and downstream callers.
 //   - blobStore: FilesystemBlobStore in production, NopBlobStore in tests.
 //   - auth: read-only auth queries (job state, attempt identity,
-//     per-job uniqueness gate). Hides *sql.DB from Service.
+//     per-job uniqueness gate). Hides the database handle from Service.
 //   - c: clock; nil substitutes clock.System (production default).
 //   - deliveryCounter: JobDeliveryCounter typed reader consumed by
 //     the VELOX_FFPROBE_VERIFY_ON_FINALIZE gate (RW-PROD-008 A4).
@@ -80,10 +78,9 @@ type Service struct {
 //     support can swap in a parallel implementation without touching
 //     Service.
 //
-// All artifacts-package SQLite components share the same *sql.DB so
-// the finalize tx can join with concurrent updates on
-// artifact_uploads; the AuthReader holds that DB but Service never
-// sees the handle.
+// All store adapters share the same database pool so the finalization
+// transaction coordinates with concurrent upload-session updates;
+// Service itself never sees the database handle.
 func NewService(
 	repo store.UploadRepository,
 	uploadWriter UploadSessionWriter,

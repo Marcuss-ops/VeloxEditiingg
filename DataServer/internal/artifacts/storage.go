@@ -23,7 +23,7 @@ import (
 // and passed via FinalizeArtifactAndCompleteJobCommand. A retry of
 // FINALIZE produces the same storage_key — so a crashed mid-promote
 // retry is naturally idempotent at the FS layer, complementing the
-// INSERT...ON CONFLICT DO NOTHING idempotency that the spec mandates
+// uniqueness-conflict idempotency that the spec mandates
 // on job_deliveries at the SQL layer.
 
 // CanonicalStorageKey returns the relative storage_key for an artifact.

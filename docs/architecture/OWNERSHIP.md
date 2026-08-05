@@ -12,7 +12,7 @@ legitimately write or read this capability from outside that owner.
 | Responsibility | Canonical owner | Forbidden |
 | --- | --- | --- |
 | Job business state (status, runs identity) | `internal/jobs` repository + `LifecycleService` | Direct SQL writes from handlers or background jobs |
-| Job finalisation (`SUCCEEDED` flip — exclusive gate) | `internal/artifacts.Service` | A second writer that sets `status = 'SUCCEEDED'` outside the service; `maybeTransitionJob → SUCCEEDED` (PR-02 closed it) |
+| Job finalisation (`SUCCEEDED` flip — exclusive gate) | `internal/artifacts.Service` orchestration + `internal/store.SQLiteArtifactFinalizer` SQL gateway | A second writer that sets `status = 'SUCCEEDED'` outside the service; `maybeTransitionJob → SUCCEEDED` (PR-02 closed it) |
 | Asset registry | `internal/assets.ResolverRegistry` | Switch/case trees that pick a resolver by URL scheme |
 | Asset upload / canonicalisation | `internal/assets.Service` | Hand-rolled blob persistence from a job handler |
 | Configuration (env / file) | `internal/config` (loader + validator) | Sparse `os.Getenv` calls in handlers |
@@ -22,6 +22,7 @@ legitimately write or read this capability from outside that owner.
 | Outbox dispatcher registry | `internal/outbox.Registry` (registered in `cmd/server/bootstrap.go`) | Direct handler invocation from a worker goroutine |
 | Worker command acknowledgement | `internal/workers.CommandManager` (registered in `cmd/server/bootstrap.go`) | HTTP fallback routes parallel to gRPC |
 | Persistent state | SQLite via repository layer | JSON files or in-memory maps treated as authoritative |
+| Artifact persistence and reconciliation | `internal/artifacts` orchestration → focused `internal/store` repositories | SQL queries, transactions, or row scans directly in `internal/artifacts` |
 | Binary storage | Filesystem / blob storage | Blobs persisted inside the DB |
 | Versioning | `/VERSION.txt` (single root file) | CI fallback to `git describe`, `dev`, local snapshots |
 | Worker ID minting | `internal/workers.Registry` | Random IDs generated from request payloads |

@@ -1,9 +1,5 @@
-// Package artifacts / cleanup.go — the four cleanup rule passes of the
-// Reconciler. Extracted from reconciler.go: expired uploads (rule 1),
-// orphan final blobs + READY-without-blob quarantine (rules 2+3) and
-// stuck STAGING artifacts (rule 4). Raw SQL here is covered by the
-// reconciler sql-allowlist marker atop reconciler.go (baseline-ratched
-// in scripts/ci/sql-baseline.txt).
+// Package artifacts / cleanup.go — the four filesystem/application cleanup
+// passes of the Reconciler. SQL persistence is owned by internal/store.
 package artifacts
 
 import (
@@ -81,12 +77,18 @@ type readyEntry struct {
 }
 
 func (r *Reconciler) reconcileBlobs(ctx context.Context) (orphans, quarantinedWithEvent, quarantinedStatusOnly int, err error) {
-	// 1. SELECT all artifacts with status='READY' and a verified_at
-	//    timestamp. The map is the source-of-truth for which blob paths
-	//    should exist on disk.
-	dbEntries, err := r.loadReadyEntries(ctx)
+	// Load all READY artifacts through the typed store repository.
+	storedEntries, err := r.artifactRepo.ListReadyArtifacts(ctx)
 	if err != nil {
 		return 0, 0, 0, err
+	}
+	dbEntries := make(map[string]readyEntry, len(storedEntries))
+	for key, entry := range storedEntries {
+		dbEntries[filepath.ToSlash(key)] = readyEntry{
+			artifactID: entry.ArtifactID,
+			storageKey: entry.StorageKey,
+			verifiedAt: entry.VerifiedAt,
+		}
 	}
 
 	// 2. Walk FinalDir. Build the on-disk relative-path set + the
@@ -148,52 +150,6 @@ func (r *Reconciler) reconcileBlobs(ctx context.Context) (orphans, quarantinedWi
 	return orphans, quarantinedWithEvent, quarantinedStatusOnly, nil
 }
 
-// loadReadyEntries selects all READY rows with a non-empty verified_at.
-// No LIMIT: the in-memory map must include every READY row for the
-// (disk - db) / (db - disk) diff to be meaningful.
-//
-// Memory bound: target installs < 1M artifacts (~10MB map). At 10M+
-// READY the map would push >100MB per 15-minute cycle and a future
-// iteration should paginate the SELECT with intermediate disk-set
-// diffing. Within the documented target (<1M) this is acceptable.
-func (r *Reconciler) loadReadyEntries(ctx context.Context) (map[string]readyEntry, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT storage_key, id, COALESCE(verified_at, '')
-		FROM artifacts
-		WHERE status = 'READY'
-		  AND storage_provider = 'local'
-		  AND storage_key <> ''
-		  AND verified_at IS NOT NULL AND verified_at <> ''`)
-	if err != nil {
-		return nil, fmt.Errorf("rule2/3: load READY: %w", err)
-	}
-	defer rows.Close()
-
-	out := make(map[string]readyEntry, 1024)
-	for rows.Next() {
-		var key, id, verifiedStr string
-		if err := rows.Scan(&key, &id, &verifiedStr); err != nil {
-			return nil, fmt.Errorf("rule2/3: scan: %w", err)
-		}
-		var ts time.Time
-		if verifiedStr != "" {
-			if t, perr := time.Parse(time.RFC3339, verifiedStr); perr == nil {
-				ts = t
-			}
-		}
-		// Normalize to forward-slashes so cross-platform path matching works.
-		out[filepath.ToSlash(key)] = readyEntry{
-			artifactID: id,
-			storageKey: key,
-			verifiedAt: ts,
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rule2/3: rows: %w", err)
-	}
-	return out, nil
-}
-
 func (r *Reconciler) walkFinalDir() (map[string]fs.FileInfo, error) {
 	finalDir := r.blobStore.FinalDir()
 	if finalDir == "" {
@@ -243,7 +199,7 @@ func (r *Reconciler) deleteFinalFile(rel string) error {
 // uniformly. Reasons documented inline:
 //
 //   - artifacts.STAGING transitions to FAILED via a single guarded
-//     UPDATE (CAS) which is idempotent under retries — the spec says
+//     CAS transition which is idempotent under retries — the spec says
 //     the resolver "stops at FAILED".
 //   - Artifact rows DO NOT carry the upload-session's expiry; EXPIRED
 //     is reserved for upload session rows. The artifact is "failed"
@@ -256,58 +212,20 @@ func (r *Reconciler) deleteFinalFile(rel string) error {
 // =====================================================================
 
 func (r *Reconciler) reconcileStuckArtifacts(ctx context.Context) (int, error) {
-	cutoff := r.clock.Now().Add(-r.config.StuckArtifactAge).UTC().Format(time.RFC3339)
-
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id FROM artifacts
-		WHERE status = 'STAGING'
-		  AND created_at <> ''
-		  AND created_at < ?
-		ORDER BY created_at ASC
-		LIMIT ?`, cutoff, r.config.BatchLimit)
+	cutoff := r.clock.Now().Add(-r.config.StuckArtifactAge)
+	ids, err := r.artifactRepo.ListStuckArtifacts(ctx, cutoff, r.config.BatchLimit)
 	if err != nil {
-		return 0, fmt.Errorf("rule4: query stuck artifacts: %w", err)
+		return 0, fmt.Errorf("rule4: list stuck artifacts: %w", err)
 	}
-	defer rows.Close()
-
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return 0, fmt.Errorf("rule4: scan: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("rule4: rows: %w", err)
-	}
-	if len(ids) == 0 {
-		return 0, nil
-	}
-
 	var n int
 	for _, id := range ids {
-		// CAS: only flip if still in STAGING. Concurrent foreground
-		// Finalize could have flipped this in the meantime - skip and
-		// let the next pass handle any residuals.
-		res, err := r.db.ExecContext(ctx, `
-			UPDATE artifacts
-			SET status = 'FAILED'
-			WHERE id = ? AND status = 'STAGING'`, id)
+		changed, err := r.artifactRepo.MarkStuckArtifactFailed(ctx, id)
 		if err != nil {
-			log.Printf("[RECONCILER] rule4: UPDATE artifact %s failed: %v", id, err)
+			log.Printf("[RECONCILER] rule4: mark artifact %s failed: %v", id, err)
 			continue
 		}
-		affected, rerr := res.RowsAffected()
-		if rerr != nil {
-			log.Printf("[RECONCILER] rule4: RowsAffected artifact %s failed: %v", id, rerr)
-			continue
-		}
-		if affected == 1 {
-			if _, err := r.db.ExecContext(ctx, `
-				INSERT INTO artifact_gc_candidates (artifact_id, reason, eligible_at, status)
-				VALUES (?, 'stuck_staging', ?, 'ELIGIBLE')
-				ON CONFLICT(artifact_id) DO NOTHING`, id, r.clock.Now().UTC().Format(time.RFC3339)); err != nil {
+		if changed {
+			if err := r.artifactRepo.EnqueueArtifactGC(ctx, id, "stuck_staging", r.clock.Now()); err != nil {
 				log.Printf("[RECONCILER] rule4: enqueue GC candidate %s failed: %v", id, err)
 			}
 			n++

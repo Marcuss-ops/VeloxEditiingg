@@ -60,6 +60,7 @@ var allowedWriters = map[string]bool{
 	// SUCCEEDED-flip count tripwire below reads finalize_phases.go.
 	filepath.Join("internal", "artifacts", "finalize_phases.go"):        true,
 	filepath.Join("internal", "artifacts", "sqlite_finalize_writer.go"): true,
+	filepath.Join("internal", "store", "artifact_finalization.go"):      true,
 	// Coordinator.CommitAttempt is the canonical atomic SUCCEEDED tx
 	// writer for tasks + task_attempts + jobs in the Completion flow.
 	filepath.Join("internal", "completion", "coordinator.go"): true,
@@ -267,7 +268,7 @@ func TestSucceededWriterIsFinalizationOnly(t *testing.T) {
 // reasoning) — the bound is a tripwire, not a permanent spec.
 func TestSucceededWriterCount(t *testing.T) {
 	root := findInternalRoot(t)
-	path := filepath.Join(root, "internal", "artifacts", "finalize_phases.go")
+	path := filepath.Join(root, "internal", "store", "artifact_finalization.go")
 	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read writer: %v", err)

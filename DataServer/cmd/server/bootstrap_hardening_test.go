@@ -160,7 +160,7 @@ func TestBootstrapFailsWhenReconcilerCannotStart(t *testing.T) {
 	defer sqliteStore.Close()
 
 	_, err = artifacts.NewReconciler(
-		sqliteStore.DB(),
+		store.NewArtifactReconcilerRepository(sqliteStore.DB()),
 		nil, // blobStore = nil → fail
 		nil, // repo
 		nil, // clock

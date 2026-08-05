@@ -1,7 +1,7 @@
 // Package artifacts / service_auth.go
 //
 // AuthReader is the read-only persistence surface Service.BeginUpload
-// uses for job / attempt / uniqueness auth. It hides *sql.DB from
+// uses for job / attempt / uniqueness auth. It hides the database handle from
 // Service so the production composition root never injects a raw
 // database handle into the auth path.
 //

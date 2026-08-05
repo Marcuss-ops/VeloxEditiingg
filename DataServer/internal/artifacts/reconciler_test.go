@@ -32,7 +32,7 @@ func setupReconcilerEnv(t *testing.T, env *testEnv) *Reconciler {
 	cfg.QuarantineMinAge = 60 * time.Second
 	cfg.BatchLimit = 200
 
-	rec, err := NewReconciler(env.db, env.bs, env.repo, env.clock, cfg)
+	rec, err := NewReconciler(store.NewArtifactReconcilerRepository(env.db), env.bs, env.repo, env.clock, cfg)
 	require.NoError(t, err)
 	return rec
 }

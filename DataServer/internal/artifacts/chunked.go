@@ -18,7 +18,6 @@ package artifacts
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -66,7 +65,6 @@ type ChunkedUploadService struct {
 	artifactSvc *Service
 	repo        store.UploadRepository
 	blobStore   store.BlobStore
-	db          *sql.DB
 }
 
 // GetUploadByJob returns the active CREATED/UPLOADING upload session for a
@@ -77,12 +75,9 @@ func (s *ChunkedUploadService) GetUploadByJob(ctx context.Context, jobID string)
 }
 
 // NewChunkedUploadService creates a ChunkedUploadService.
-// The *sql.DB must be the same one used by artifactSvc so transactions
-// can join when needed.
-//
-// Migration note: the repo parameter is now store.UploadRepository
-// (typed SQLite CRUD for artifact_uploads + artifact_upload_chunks).
-func NewChunkedUploadService(artifactSvc *Service, repo store.UploadRepository, blobStore store.BlobStore, db *sql.DB) *ChunkedUploadService {
+// The repository owns all upload-session and chunk persistence; the
+// application service only orchestrates file assembly and lifecycle calls.
+func NewChunkedUploadService(artifactSvc *Service, repo store.UploadRepository, blobStore store.BlobStore) *ChunkedUploadService {
 	if artifactSvc == nil {
 		panic("artifacts: NewChunkedUploadService requires a non-nil artifactSvc")
 	}
@@ -93,7 +88,6 @@ func NewChunkedUploadService(artifactSvc *Service, repo store.UploadRepository, 
 		artifactSvc: artifactSvc,
 		repo:        repo,
 		blobStore:   blobStore,
-		db:          db,
 	}
 }
 
@@ -105,7 +99,7 @@ func (s *ChunkedUploadService) InitChunkedSession(ctx context.Context, cmd Begin
 
 // UploadChunk persists a single chunk to blob store staging and records it
 // in artifact_upload_chunks. Idempotent: re-uploading the same chunk_index
-// is a no-op (INSERT OR IGNORE).
+// is a no-op through the repository uniqueness contract.
 func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploadCommand) error {
 	if cmd.UploadID == "" || cmd.Reader == nil {
 		return fmt.Errorf("artifacts: ChunkedUpload: uploadID and reader are required")

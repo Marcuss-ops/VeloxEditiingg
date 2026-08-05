@@ -82,8 +82,7 @@ func seedDeliveryPlans(t *testing.T, db *sql.DB, jobID string, plans []phase5Pla
 }
 func runFinalize(t *testing.T, db *sql.DB, resolver artifacts.DeliveryPlanResolver, cmd artifacts.FinalizeVerifiedCommand) (*artifacts.SQLiteFinalizeWriter, *sql.DB) {
 	t.Helper()
-	reader := store.NewSQLiteArtifactReader(db)
-	fin := artifacts.NewSQLiteFinalizeWriter(db, reader, resolver)
+	fin := artifacts.NewSQLiteFinalizeWriter(store.NewSQLiteArtifactFinalizer(db, resolver))
 	if _, err := fin.FinalizeVerified(context.Background(), cmd); err != nil {
 		t.Fatalf("FinalizeVerified: %v", err)
 	}
