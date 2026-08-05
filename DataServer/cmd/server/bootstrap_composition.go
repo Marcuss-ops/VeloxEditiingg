@@ -206,7 +206,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		log.Printf("[BOOTSTRAP] InstaEdit control JWT verifier configured")
 	}
 
-	supervisor, err := buildSupervisor(a, m, j, p, w, t, metricsCollector)
+	supervisor, err := buildSupervisor(cfg, a, m, j, p, w, t, metricsCollector)
 	if err != nil {
 		_ = p.SQLite.Close()
 		return nil, err
@@ -230,7 +230,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	// metrics / alerts handlers + the shared SSH client) — extracted to
 	// bootstrap_wiring.go so buildAppComponents stays a readable
 	// dependency-ordered composition. Nil-tolerant per step.
-	wireFleetOperatorHandlers(fleetDep, m, p)
+	wireFleetOperatorHandlers(cfg, fleetDep, m, p)
 
 	return &appComponents{
 		cfg:                cfg,

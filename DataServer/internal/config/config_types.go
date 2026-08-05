@@ -13,6 +13,8 @@ type ServerConfig struct {
 	GRPCTLSCertFile string // gRPC server certificate (PEM). Required when GRPCPort > 0 with mTLS.
 	GRPCTLSKeyFile  string // gRPC server private key (PEM)
 	GRPCTLSCAFile   string // CA cert for verifying client certificates (mTLS). Empty = no client auth.
+	GRPCRequireTLS  bool   // Refuse plaintext gRPC when VELOX_GRPC_REQUIRE_TLS=true.
+	LogRoutesAtBoot bool   // Emit the registered HTTP route list when VELOX_LOG_ROUTES_AT_BOOT=true.
 	AllowLocalhost  bool
 
 	// GinMode mirrors GIN_MODE ("debug" | "release" | "test").
@@ -164,6 +166,39 @@ type WorkersConfig struct {
 	PartitionThresholdSeconds int
 }
 
+// SupervisorConfig contains typed controls for long-lived master runners.
+type SupervisorConfig struct {
+	RequireLiveWorkers bool
+	CriticalMaxRetries int
+	CriticalFailAfter  int
+}
+
+// AlertConfig contains typed thresholds for the master alert engine.
+type AlertConfig struct {
+	ErrorRatePct float64
+	P95WallMS    int64
+	DiskFreeGB   float64
+	FFmpegMin    float64
+}
+
+// FleetConfig contains typed fleet-operator development/runtime controls.
+type FleetConfig struct {
+	SmokeMode          string
+	SmokeDriveFolderID string
+}
+
+// RetiredEnvAlias describes a compatibility variable detected at startup.
+type RetiredEnvAlias struct {
+	Env       string
+	Canonical string
+}
+
+// CompatibilityConfig contains compatibility observations that the
+// composition root may report without reading the process environment itself.
+type CompatibilityConfig struct {
+	RetiredSocialAliases []RetiredEnvAlias
+}
+
 // RetentionConfig groups the configurable retention windows for the
 // auxiliary tables the heartbeat path writes to.
 //
@@ -291,18 +326,22 @@ type RenderConfig struct {
 // Config is the top-level configuration.
 type Config struct {
 	// Sub-configs (single source of truth for all settings)
-	Server    ServerConfig
-	Runtime   RuntimeConfig
-	Database  DatabaseConfig
-	Workers   WorkersConfig
-	Retention RetentionConfig
-	Auth      AuthConfig
-	M2M       M2MConfig
-	Storage   StorageConfig
-	Drive     DriveConfig
-	Ansible   AnsibleConfig
-	Render    RenderConfig
-	Pipeline  PipelineConfig
+	Server        ServerConfig
+	Runtime       RuntimeConfig
+	Database      DatabaseConfig
+	Workers       WorkersConfig
+	Supervisor    SupervisorConfig
+	Alerts        AlertConfig
+	Fleet         FleetConfig
+	Compatibility CompatibilityConfig
+	Retention     RetentionConfig
+	Auth          AuthConfig
+	M2M           M2MConfig
+	Storage       StorageConfig
+	Drive         DriveConfig
+	Ansible       AnsibleConfig
+	Render        RenderConfig
+	Pipeline      PipelineConfig
 
 	// AllowedExternalDomains is the explicit allowlist applied to
 	// outgoing URLs submitted via POST /api/v1/jobs

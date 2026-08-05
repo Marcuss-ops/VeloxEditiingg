@@ -53,6 +53,12 @@ func TestFromEnv_Defaults(t *testing.T) {
 	if cfg.Workers.MaxJobAttempts != 3 {
 		t.Errorf("expected Workers.MaxJobAttempts=3, got %d", cfg.Workers.MaxJobAttempts)
 	}
+	if cfg.Supervisor.CriticalMaxRetries != 0 || cfg.Supervisor.CriticalFailAfter != 10 {
+		t.Errorf("unexpected supervisor defaults: %+v", cfg.Supervisor)
+	}
+	if cfg.Alerts.ErrorRatePct != 5.0 || cfg.Alerts.P95WallMS != 300000 {
+		t.Errorf("unexpected alert defaults: %+v", cfg.Alerts)
+	}
 }
 
 func TestFromEnv_CustomValues(t *testing.T) {
@@ -68,6 +74,34 @@ func TestFromEnv_CustomValues(t *testing.T) {
 	}
 	if cfg.Auth.AdminToken != "my-secret-token" {
 		t.Errorf("expected Auth.AdminToken=my-secret-token, got %s", cfg.Auth.AdminToken)
+	}
+}
+
+func TestFromEnv_BootstrapTypedValues(t *testing.T) {
+	t.Setenv("VELOX_REQUIRE_LIVE_WORKERS", "true")
+	t.Setenv("VELOX_CRITICAL_MAX_RETRIES", "4")
+	t.Setenv("VELOX_CRITICAL_FAIL_AFTER", "7")
+	t.Setenv("VELOX_ALERT_ERROR_RATE_PCT", "8.5")
+	t.Setenv("VELOX_ALERT_P95_WALL_MS", "1234")
+	t.Setenv("VELOX_ALERT_DISK_FREE_GB", "2.5")
+	t.Setenv("VELOX_ALERT_FFMPEG_MIN", "1.25")
+	t.Setenv("VELOX_SMOKE_MODE", "development")
+	t.Setenv("VELOX_SMOKE_DRIVE_FOLDER_ID", "folder-a")
+	t.Setenv("VELOX_GRPC_REQUIRE_TLS", "true")
+	t.Setenv("VELOX_LOG_ROUTES_AT_BOOT", "true")
+
+	cfg := FromEnv()
+	if !cfg.Supervisor.RequireLiveWorkers || cfg.Supervisor.CriticalMaxRetries != 4 || cfg.Supervisor.CriticalFailAfter != 7 {
+		t.Fatalf("unexpected supervisor config: %+v", cfg.Supervisor)
+	}
+	if cfg.Alerts.ErrorRatePct != 8.5 || cfg.Alerts.P95WallMS != 1234 || cfg.Alerts.DiskFreeGB != 2.5 || cfg.Alerts.FFmpegMin != 1.25 {
+		t.Fatalf("unexpected alert config: %+v", cfg.Alerts)
+	}
+	if cfg.Fleet.SmokeMode != "development" || cfg.Fleet.SmokeDriveFolderID != "folder-a" {
+		t.Fatalf("unexpected fleet config: %+v", cfg.Fleet)
+	}
+	if !cfg.Server.GRPCRequireTLS || !cfg.Server.LogRoutesAtBoot {
+		t.Fatalf("unexpected server bootstrap config: %+v", cfg.Server)
 	}
 }
 

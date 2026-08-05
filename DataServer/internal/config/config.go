@@ -33,6 +33,10 @@ func FromEnv() *Config {
 	runtime := loadRuntimeConfig(dataDir)
 	database := loadDatabaseConfig()
 	workers := loadWorkersConfig()
+	supervisor := loadSupervisorConfig()
+	alerts := loadAlertConfig()
+	fleet := loadFleetConfig()
+	compatibility := loadCompatibilityConfig()
 	retention := loadRetentionConfig()
 	auth := loadAuthConfig()
 	storage := loadStorageConfig()
@@ -44,10 +48,13 @@ func FromEnv() *Config {
 	m2m := loadM2MConfig()
 	allowedDomains := loadAllowedExternalDomains()
 	c := &Config{
-		Server:                 server,
-		Runtime:                runtime,
-		Database:               database,
-		Workers:                workers,
+		Server:   server,
+		Runtime:  runtime,
+		Database: database, Workers: workers,
+		Supervisor:             supervisor,
+		Alerts:                 alerts,
+		Fleet:                  fleet,
+		Compatibility:          compatibility,
 		Retention:              retention,
 		Auth:                   auth,
 		M2M:                    m2m,

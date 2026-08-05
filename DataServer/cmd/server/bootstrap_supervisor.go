@@ -6,10 +6,10 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"time"
 
 	"velox-server/internal/alertengine"
+	"velox-server/internal/config"
 	"velox-server/internal/fleet"
 	"velox-server/internal/fleet/opsalerts"
 	"velox-server/internal/handlers/server/api"
@@ -33,10 +33,11 @@ import (
 //     removed and the supervisor logs WARN.
 //   - ClassOneShot:     manifest-generator. Run once on startup;
 //     failure is non-fatal (logged WARN).
-func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDeps, w *workerDeps, t *taskDeps, metricsCollector *velmetrics.Collector) (*supervisor.Supervisor, error) {
+func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDeps, w *workerDeps, t *taskDeps, metricsCollector *velmetrics.Collector) (*supervisor.Supervisor, error) {
 	sup := supervisor.New()
 
-	criticalMaxRetries, criticalFailAfter := criticalRetryConfigFromEnv()
+	criticalMaxRetries := cfg.Supervisor.CriticalMaxRetries
+	criticalFailAfter := cfg.Supervisor.CriticalFailAfter
 	criticalPolicy := supervisor.RestartPolicy{
 		MaxRetries:     criticalMaxRetries,
 		InitialBackoff: 1 * time.Second,
@@ -143,20 +144,6 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 		}
 	}
 
-	// ── Legacy Job-side reaper DEPRECATED log (PR-13 → PR-05 cutover) ─
-	if j.Repository != nil {
-		// PR-13 → PR-05 cutover: the Job-side reaper is DEPRECATED.
-		// TaskLeaseReaper is the canonical master-side lease enforcer.
-		// VELOX_DISABLE_JOB_REAPER is preserved for back-compat (the
-		// old flag would otherwise silently break operators depending
-		// on it); the entry just emits a one-line DEPRECATED log.
-		if os.Getenv("VELOX_DISABLE_JOB_REAPER") == "true" {
-			log.Printf("[BOOTSTRAP] DEPRECATED env=VELOX_DISABLE_JOB_REAPER=true (PR-13 superseded by PR-05 TaskLeaseReaper; flag is now a no-op, set VELOX_TASK_LEASE_REAPER_DISABLED=true at the TaskLeaseReaper runner if you need to disable on the canonical path)")
-		} else {
-			log.Printf("[BOOTSTRAP] note=job-side zombie reaper is DEPRECATED; TaskLeaseReaper is the canonical master-side lease enforcer")
-		}
-	}
-
 	// ── ClassRestartable ─────────────────────────────────────────────
 	if a.Reconciler != nil {
 		if err := sup.Register(supervisor.Runner{
@@ -214,11 +201,11 @@ func buildSupervisor(a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDep
 	if t.Observability != nil {
 		alertDeps := alertengine.DefaultRuleDeps()
 		alertDeps.Obs = t.Observability
-		alertDeps.DataDir = os.Getenv("VELOX_DATA_DIR")
-		alertDeps.ErrorRatePct = alertengine.EnvFloat("VELOX_ALERT_ERROR_RATE_PCT", 5.0)
-		alertDeps.P95WallMs = int64(alertengine.EnvFloat("VELOX_ALERT_P95_WALL_MS", 300_000))
-		alertDeps.DiskFreeGB = alertengine.EnvFloat("VELOX_ALERT_DISK_FREE_GB", 10.0)
-		alertDeps.FFmpegMin = alertengine.EnvFloat("VELOX_ALERT_FFMPEG_MIN", 1.5)
+		alertDeps.DataDir = cfg.Runtime.DataDir
+		alertDeps.ErrorRatePct = cfg.Alerts.ErrorRatePct
+		alertDeps.P95WallMs = cfg.Alerts.P95WallMS
+		alertDeps.DiskFreeGB = cfg.Alerts.DiskFreeGB
+		alertDeps.FFmpegMin = cfg.Alerts.FFmpegMin
 
 		engine := alertengine.New(30*time.Second, alertengine.NewNotifierFromEnv())
 		for _, r := range alertengine.MakeRules(alertDeps) {

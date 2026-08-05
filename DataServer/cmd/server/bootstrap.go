@@ -29,8 +29,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -42,49 +40,6 @@ import (
 // site stays readable AND so a future operator-mode (e.g. `velox fleet
 // live-only`) can flip the same flag from a non-env source without
 // rewriting the closure above.
-func requireLiveWorkersEnabled() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv("VELOX_REQUIRE_LIVE_WORKERS")), "true")
-}
-
-// criticalRetryConfigFromEnv reads VELOX_CRITICAL_MAX_RETRIES (int;
-// 0 = infinite for ClassCritical — legacy behaviour) and
-// VELOX_CRITICAL_FAIL_AFTER (int; log-WARN threshold unrelated to
-// the bounded-retry choice — set independently so operators tuning
-// MAX_RETRIES do not lose operational visibility on loops that
-// remain infinite). Both default to a sensible legacy value
-// (MAX_RETRIES=0, FAIL_AFTER=10) so deployments without the env vars
-// keep the pre-Blocco-1 behaviour.
-//
-// Verdetto P0 #4 (Blocco 1): a positive MAX_RETRIES converts the
-// supervisor's ClassCritical failure mode from "infinite backoff +
-// log-WARN" to "bounded retries + cancel supCtx + return error to
-// runServer". Operators opting into the bounded modal then propagate
-// to k8s via the existing fail-loud path.
-func criticalRetryConfigFromEnv() (maxRetries int, failAfter int) {
-	const defaultMaxRetries = 0
-	const defaultFailAfter = 10
-	maxRetries = defaultMaxRetries
-	failAfter = defaultFailAfter
-
-	if v := strings.TrimSpace(os.Getenv("VELOX_CRITICAL_MAX_RETRIES")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			maxRetries = n
-		} else if err != nil {
-			log.Printf("[SUPERVISOR] VELOX_CRITICAL_MAX_RETRIES=%q is not a valid int; using default %d", v, defaultMaxRetries)
-		} else if n < 0 {
-			log.Printf("[SUPERVISOR] VELOX_CRITICAL_MAX_RETRIES=%d is negative; clamping to 0 (infinite)", n)
-			maxRetries = 0
-		}
-	}
-	if v := strings.TrimSpace(os.Getenv("VELOX_CRITICAL_FAIL_AFTER")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			failAfter = n
-		} else if err != nil {
-			log.Printf("[SUPERVISOR] VELOX_CRITICAL_FAIL_AFTER=%q is not a valid int; using default %d", v, defaultFailAfter)
-		}
-	}
-	return maxRetries, failAfter
-}
 
 // runServer is the slim composition root. It delegates to:
 //   - buildAppComponents      (cmd/server/bootstrap_composition.go)

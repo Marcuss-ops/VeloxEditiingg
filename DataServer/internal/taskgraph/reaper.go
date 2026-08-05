@@ -14,10 +14,9 @@
 //     which performs Task CAS + Attempt TIMED_OUT close + retry budget +
 //     post-commit Job aggregate update in one tx (audit §9.5, P0#4, P0#6).
 //
-// TaskLeaseReaper is the canonical master-side lease enforcement. PR-13's
-// job-side reaper (with the VELOX_DISABLE_JOB_REAPER gate) is now a
-// deprecated no-op: once this reaper is registered, Job.LeaseReaperSafe
-// becomes redundant.
+// TaskLeaseReaper is the canonical master-side lease enforcement. The
+// former job-side reaper has been removed; once this reaper is registered,
+// Job.LeaseReaperSafe becomes redundant.
 package taskgraph
 
 import (

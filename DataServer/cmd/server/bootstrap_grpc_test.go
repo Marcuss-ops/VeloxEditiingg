@@ -20,20 +20,18 @@ import (
 //  4. env="true" + all 3 missing → returns non-nil, error lists all three
 func TestEnforceGRPCRequireTLS(t *testing.T) {
 	t.Run("env unset \u2192 no-op", func(t *testing.T) {
-		t.Setenv("VELOX_GRPC_REQUIRE_TLS", "")
 		if err := enforceGRPCRequireTLS(&config.Config{}); err != nil {
 			t.Errorf("expected nil when env unset, got: %v", err)
 		}
 	})
 	t.Run("env whitespace \u2192 no-op", func(t *testing.T) {
-		t.Setenv("VELOX_GRPC_REQUIRE_TLS", "   ")
 		if err := enforceGRPCRequireTLS(&config.Config{}); err != nil {
 			t.Errorf("expected nil for non-'true' whitespace env, got: %v", err)
 		}
 	})
 	t.Run("env=true + all TLS paths populated \u2192 no-op", func(t *testing.T) {
-		t.Setenv("VELOX_GRPC_REQUIRE_TLS", "true")
 		cfg := &config.Config{Server: config.ServerConfig{
+			GRPCRequireTLS:  true,
 			GRPCTLSCertFile: "/opt/velox/certs/master/server.crt",
 			GRPCTLSKeyFile:  "/opt/velox/certs/master/server.key",
 			GRPCTLSCAFile:   "/opt/velox/certs/intermediate/ca.crt",
@@ -43,8 +41,8 @@ func TestEnforceGRPCRequireTLS(t *testing.T) {
 		}
 	})
 	t.Run("env=true + missing cert \u2192 error names env var", func(t *testing.T) {
-		t.Setenv("VELOX_GRPC_REQUIRE_TLS", "true")
 		cfg := &config.Config{Server: config.ServerConfig{
+			GRPCRequireTLS: true,
 			GRPCTLSKeyFile: "/opt/velox/certs/master/server.key",
 			GRPCTLSCAFile:  "/opt/velox/certs/intermediate/ca.crt",
 			// GRPCTLSCertFile intentionally empty
@@ -61,8 +59,7 @@ func TestEnforceGRPCRequireTLS(t *testing.T) {
 		}
 	})
 	t.Run("env=true + all 3 missing \u2192 error lists all", func(t *testing.T) {
-		t.Setenv("VELOX_GRPC_REQUIRE_TLS", "true")
-		err := enforceGRPCRequireTLS(&config.Config{})
+		err := enforceGRPCRequireTLS(&config.Config{Server: config.ServerConfig{GRPCRequireTLS: true}})
 		if err == nil {
 			t.Fatal("expected error when all three TLS paths missing under opt-in")
 		}

@@ -4,7 +4,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -303,8 +302,8 @@ func newRouter(cfg *config.Config, bundle RouterBundle, registry interface {
 	return r, nil
 }
 
-func logRegisteredRoutesAtBoot(r *gin.Engine) {
-	if r == nil || !strings.EqualFold(strings.TrimSpace(os.Getenv("VELOX_LOG_ROUTES_AT_BOOT")), "true") {
+func logRegisteredRoutesAtBoot(r *gin.Engine, cfg *config.Config) {
+	if r == nil || cfg == nil || !cfg.Server.LogRoutesAtBoot {
 		return
 	}
 	for _, route := range r.Routes() {

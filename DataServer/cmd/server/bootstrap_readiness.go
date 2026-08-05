@@ -135,7 +135,7 @@ func registerReadinessChecks(c *appComponents, t *transportBundle) {
 	// opt in when they want stricter pivots.
 	if c.workers != nil && c.workers.Registry != nil {
 		c.modules.Health.AddReadinessCheck("workers_at_least_one_live", func() error {
-			if !requireLiveWorkersEnabled() {
+			if !c.cfg.Supervisor.RequireLiveWorkers {
 				return nil // opt-in not active → gate satisfied
 			}
 			if !c.workers.Registry.HasAtLeastOneLive(context.Background()) {

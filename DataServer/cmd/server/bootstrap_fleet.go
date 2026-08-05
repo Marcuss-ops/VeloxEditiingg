@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"time"
 
@@ -56,7 +55,8 @@ type BackendCosignVerifierIfc interface {
 // fleet.BackendDriveUploader interface. Lives in the composition root
 // (not the fleet package) to keep fleet decoupled from integrations/drive.
 type driveUploaderAdapter struct {
-	svc *integrationsDrive.Service
+	svc      *integrationsDrive.Service
+	folderID string
 }
 
 // UploadArtifact delegates to the real Drive service's UploadFile.
@@ -67,8 +67,7 @@ func (a *driveUploaderAdapter) UploadArtifact(ctx context.Context, runID, srcPat
 	if a == nil || a.svc == nil {
 		return "", fmt.Errorf("drive uploader: service not configured")
 	}
-	folderID := strings.TrimSpace(os.Getenv("VELOX_SMOKE_DRIVE_FOLDER_ID"))
-	result, err := a.svc.UploadFile(ctx, srcPath, folderID, runID)
+	result, err := a.svc.UploadFile(ctx, srcPath, strings.TrimSpace(a.folderID), runID)
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", fleet.ErrDriveUploadFail, err)
 	}

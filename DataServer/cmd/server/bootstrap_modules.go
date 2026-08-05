@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"time"
 
 	"velox-server/internal/app"
@@ -187,14 +186,8 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	// ErrNotConfigured at DeliverArtifact time; this one-line WARN gives
 	// them a clear rename hint at every master boot so the rename
 	// surfaces BEFORE a silent delivery failure.
-	for _, alias := range []struct{ env, canonical string }{
-		{"SOCIAL_GATEWAY_URL", "SOCIAL_API_URL"},
-		{"SOCIAL_GATEWAY_API_KEY", "SOCIAL_API_TOKEN"},
-		{"SOCIAL_GATEWAY_CALLBACK_BASE_URL", "SOCIAL_CALLBACK_BASE_URL"},
-	} {
-		if os.Getenv(alias.env) != "" {
-			log.Printf("[BOOTSTRAP][SOCIALCLIENT] WARN legacy alias env detected: %s is RETIRED (PR-15.10) and NOT honored — rename to %s.", alias.env, alias.canonical)
-		}
+	for _, alias := range cfg.Compatibility.RetiredSocialAliases {
+		log.Printf("[BOOTSTRAP][SOCIALCLIENT] WARN legacy alias env detected: %s is RETIRED (PR-15.10) and NOT honored — rename to %s.", alias.Env, alias.Canonical)
 	}
 
 	// Compute the socialclient.Config ONCE here so the Enqueuer validator

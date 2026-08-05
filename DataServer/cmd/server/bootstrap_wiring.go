@@ -15,9 +15,10 @@ package main
 import (
 	"fmt"
 	"log"
-	"os"
 	"strings"
+
 	"time"
+	"velox-server/internal/config"
 
 	"velox-server/internal/fleet"
 	"velox-server/internal/handlers/server/api"
@@ -71,7 +72,7 @@ func wirePostBuild(j *jobsDeps, t *taskDeps) error {
 //
 // Nil-tolerant: each step re-checks its own deps so a partial boot
 // keeps the routes un-mounted instead of 503-on-every-request.
-func wireFleetOperatorHandlers(fleetDep *FleetDep, m *moduleDeps, p *persistenceDeps) {
+func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *moduleDeps, p *persistenceDeps) {
 	// Step 6/15 fleet-operator: wire the admin worker mutations handler
 	// (POST /api/v1/admin/workers/{id}/{drain,resume,quarantine}).
 	// Composition order: buildFleet returns FleetDep AFTER buildModules
@@ -146,7 +147,7 @@ func wireFleetOperatorHandlers(fleetDep *FleetDep, m *moduleDeps, p *persistence
 	// /api/v1/admin/operations/{id} for terminal state; the
 	// smoke_runs table records the duration_ms baseline.
 	if fleetDep != nil && fleetDep.Registry != nil && m != nil && m.Workers != nil && p != nil && p.SQLite != nil {
-		isDev := strings.ToLower(strings.TrimSpace(os.Getenv("VELOX_SMOKE_MODE"))) == "development"
+		isDev := strings.EqualFold(strings.TrimSpace(cfg.Fleet.SmokeMode), "development")
 
 		smokeBackend := fleet.LevelDSmokeBackend{
 			Lease:     fleet.NewRegistryDrainLease(m.Workers.Registry()),
@@ -172,7 +173,7 @@ func wireFleetOperatorHandlers(fleetDep *FleetDep, m *moduleDeps, p *persistence
 			smokeBackend.Worker = fleet.NewSSHWorkerExec(sharedSSH)
 			if m.Drive != nil {
 				if svc := m.Drive.Service(); svc != nil {
-					smokeBackend.Drive = &driveUploaderAdapter{svc: svc}
+					smokeBackend.Drive = &driveUploaderAdapter{svc: svc, folderID: cfg.Fleet.SmokeDriveFolderID}
 					log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: production Drive adapter wired (integrations/drive.Service)")
 				} else {
 					log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: Drive module present but Service() is nil — smoke remains not wired")

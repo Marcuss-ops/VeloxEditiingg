@@ -16,6 +16,8 @@ func loadServerConfig() ServerConfig {
 		GRPCTLSCertFile: os.Getenv("VELOX_GRPC_TLS_CERT_FILE"),
 		GRPCTLSKeyFile:  os.Getenv("VELOX_GRPC_TLS_KEY_FILE"),
 		GRPCTLSCAFile:   os.Getenv("VELOX_GRPC_TLS_CA_FILE"),
+		GRPCRequireTLS:  boolFromEnv("VELOX_GRPC_REQUIRE_TLS", false),
+		LogRoutesAtBoot: boolFromEnv("VELOX_LOG_ROUTES_AT_BOOT", false),
 		GinMode:         strings.TrimSpace(os.Getenv("GIN_MODE")),
 	}
 	c.AllowLocalhost = boolFromEnv("VELOX_ALLOW_LOCALHOST_MASTER", false) ||

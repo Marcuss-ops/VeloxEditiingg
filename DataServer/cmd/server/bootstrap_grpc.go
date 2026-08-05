@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"net"
-	"os"
 	"strings"
 
 	"velox-server/internal/config"
@@ -40,13 +39,13 @@ func (w *grpcServerWrapper) Stop()         { w.Server.Stop() }
 //  2. cfg.Server.GRPCTLSKeyFile  (master's private key)
 //  3. cfg.Server.GRPCTLSCAFile   (CA used to verify worker client certs)
 //
-// The env is read with TrimSpace so accidental whitespace from copy-paste
-// (a recurring operator mistake) does not silently downgrade behaviour.
-// Production fail-closed: the same VELOX_GRPC_REQUIRE_TLS=true value works
-// in dev (where it would also block, but local dev typically has certs
-// via the gen-worker-certs.sh helper).
+// The typed config is loaded once at process startup, so accidental
+// whitespace is normalized before this composition-root guard runs.
+// Production fail-closed: the same opt-in value works in dev (where it
+// would also block, but local dev typically has certs via the
+// gen-worker-certs.sh helper).
 func enforceGRPCRequireTLS(cfg *config.Config) error {
-	if strings.TrimSpace(os.Getenv("VELOX_GRPC_REQUIRE_TLS")) != "true" {
+	if cfg == nil || !cfg.Server.GRPCRequireTLS {
 		return nil // feature off; existing fail-fast logic in StartGRPCServer applies
 	}
 	var missing []string
