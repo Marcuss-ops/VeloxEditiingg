@@ -36,6 +36,16 @@ func NewArtifactReconcilerRepository(db *sql.DB) *ArtifactReconcilerRepository {
 	return &ArtifactReconcilerRepository{db: db, gcStore: NewArtifactGCStore(db)}
 }
 
+// NewArtifactReconcilerRepositoryFromStore binds artifact cleanup queries to
+// the canonical SQLiteStore. The reconciler receives domain-shaped methods,
+// never a raw database handle.
+func NewArtifactReconcilerRepositoryFromStore(s *SQLiteStore) *ArtifactReconcilerRepository {
+	if s == nil || s.db == nil {
+		panic("store: NewArtifactReconcilerRepositoryFromStore requires a non-nil SQLiteStore")
+	}
+	return &ArtifactReconcilerRepository{db: s.db, gcStore: NewArtifactGCStore(s.db)}
+}
+
 // GCStore returns the typed artifact-GC gateway backed by the same database.
 func (r *ArtifactReconcilerRepository) GCStore() *ArtifactGCStore { return r.gcStore }
 

@@ -207,5 +207,15 @@ func NewSQLiteUploadRepository(db *sql.DB) *SQLiteUploadRepository {
 	return &SQLiteUploadRepository{db: db}
 }
 
+// NewSQLiteUploadRepositoryFromStore binds upload-session and chunk CRUD to
+// the canonical SQLiteStore. The legacy *sql.DB constructor remains for
+// isolated repository tests and compatibility callers.
+func NewSQLiteUploadRepositoryFromStore(s *SQLiteStore) *SQLiteUploadRepository {
+	if s == nil || s.db == nil {
+		panic("store: NewSQLiteUploadRepositoryFromStore requires a non-nil SQLiteStore")
+	}
+	return &SQLiteUploadRepository{db: s.db}
+}
+
 // Compile-time interface check.
 var _ UploadRepository = (*SQLiteUploadRepository)(nil)

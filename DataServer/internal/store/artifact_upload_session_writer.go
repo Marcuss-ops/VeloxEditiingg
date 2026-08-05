@@ -41,6 +41,17 @@ func NewSQLiteUploadSessionWriter(db *sql.DB) *SQLiteUploadSessionWriter {
 	return &SQLiteUploadSessionWriter{db: db}
 }
 
+// NewSQLiteUploadSessionWriterFromStore binds the writer to the canonical
+// SQLiteStore owned by the composition root. Keeping the database handle
+// inside store prevents application packages from constructing persistence
+// adapters from raw *sql.DB values.
+func NewSQLiteUploadSessionWriterFromStore(s *SQLiteStore) *SQLiteUploadSessionWriter {
+	if s == nil || s.db == nil {
+		panic("store: NewSQLiteUploadSessionWriterFromStore requires a non-nil SQLiteStore")
+	}
+	return &SQLiteUploadSessionWriter{db: s.db}
+}
+
 func (w *SQLiteUploadSessionWriter) CreateArtifactAndUploadSession(ctx context.Context, p CreateUploadSessionParams) error {
 	if p.ArtifactID == "" || p.UploadID == "" || p.JobID == "" {
 		return fmt.Errorf("store: CreateArtifactAndUploadSession: artifact_id, upload_id and job_id are required")

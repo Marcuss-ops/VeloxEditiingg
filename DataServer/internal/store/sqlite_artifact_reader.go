@@ -24,6 +24,15 @@ func NewSQLiteArtifactReader(db *sql.DB) *SQLiteArtifactReader {
 	return &SQLiteArtifactReader{db: db}
 }
 
+// NewSQLiteArtifactReaderFromStore binds the read projection to the
+// canonical SQLiteStore and keeps raw database handles inside store.
+func NewSQLiteArtifactReaderFromStore(s *SQLiteStore) *SQLiteArtifactReader {
+	if s == nil || s.db == nil {
+		panic("store: NewSQLiteArtifactReaderFromStore requires a non-nil SQLiteStore")
+	}
+	return &SQLiteArtifactReader{db: s.db}
+}
+
 // Compile-time check that the store adapter satisfies the consumer port.
 // The interface lives in the consumer package (internal/artifacts)
 // so the artifacts domain owns its contract.

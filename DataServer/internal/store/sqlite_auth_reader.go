@@ -44,6 +44,15 @@ func NewSQLiteAuthReader(db *sql.DB) *SQLiteAuthReader {
 	return &SQLiteAuthReader{db: db}
 }
 
+// NewSQLiteAuthReaderFromStore binds the read-only auth projection to the
+// canonical SQLiteStore. Raw database handles remain an internal store detail.
+func NewSQLiteAuthReaderFromStore(s *SQLiteStore) *SQLiteAuthReader {
+	if s == nil || s.db == nil {
+		panic("store: NewSQLiteAuthReaderFromStore requires a non-nil SQLiteStore")
+	}
+	return &SQLiteAuthReader{db: s.db}
+}
+
 // Compile-time assertion using an anonymous interface. The consumer-owned
 // port in internal/artifacts has the identical method signatures, so
 // SQLiteAuthReader satisfies it structurally without forcing an import cycle.

@@ -37,6 +37,16 @@ type ArtifactGCStore struct{ db *sql.DB }
 
 func NewArtifactGCStore(db *sql.DB) *ArtifactGCStore { return &ArtifactGCStore{db: db} }
 
+// NewArtifactGCStoreFromStore binds artifact GC operations to the canonical
+// SQLiteStore. The raw constructor remains for compatibility and isolated
+// repository tests.
+func NewArtifactGCStoreFromStore(s *SQLiteStore) *ArtifactGCStore {
+	if s == nil || s.db == nil {
+		panic("store: NewArtifactGCStoreFromStore requires a non-nil SQLiteStore")
+	}
+	return &ArtifactGCStore{db: s.db}
+}
+
 func (g *ArtifactGCStore) EnqueueArtifactGCCandidate(ctx context.Context, artifactID, reason string, eligibleAt time.Time) error {
 	return (&SQLiteStore{db: g.db}).EnqueueArtifactGCCandidate(ctx, artifactID, reason, eligibleAt)
 }

@@ -55,16 +55,16 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	// constructor (NOT method-chained) so the per-job destination set
 	// is resolved inside the same tx that INSERTs job_deliveries.
 	planResolver := deliveries.NewSQLiteDeliveryPlanResolver(p.SQLite.DB())
-	uploadRepo := store.NewSQLiteUploadRepository(p.SQLite.DB())
-	artifactReader := store.NewSQLiteArtifactReader(p.SQLite.DB())
-	authReader := store.NewSQLiteAuthReader(p.SQLite.DB())
-	uploadWriter := artifacts.NewSQLiteUploadSessionWriter(store.NewSQLiteUploadSessionWriter(p.SQLite.DB()))
-	finalizeWriter := artifacts.NewSQLiteFinalizeWriter(store.NewSQLiteArtifactFinalizer(p.SQLite.DB(), planResolver))
+	uploadRepo := store.NewSQLiteUploadRepositoryFromStore(p.SQLite)
+	artifactReader := store.NewSQLiteArtifactReaderFromStore(p.SQLite)
+	authReader := store.NewSQLiteAuthReaderFromStore(p.SQLite)
+	uploadWriter := artifacts.NewSQLiteUploadSessionWriter(store.NewSQLiteUploadSessionWriterFromStore(p.SQLite))
+	finalizeWriter := artifacts.NewSQLiteFinalizeWriter(store.NewSQLiteArtifactFinalizerFromStore(p.SQLite, planResolver))
 	// JobDeliveryCounter typed reader — required by NewService post
 	// the VELOX_FFPROBE_VERIFY_ON_FINALIZE gate (RW-PROD-008 A4).
 	// Production cannot silently run the gate without it; NewService
 	// panics on nil so a bootstrap miss is loud at startup.
-	deliveryCounter := store.NewSQLiteJobDeliveryCounter(p.SQLite.DB())
+	deliveryCounter := store.NewSQLiteJobDeliveryCounterFromStore(p.SQLite)
 	artifactSvc := artifacts.NewService(
 		uploadRepo,
 		uploadWriter,
@@ -110,7 +110,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 
 	// ── Reconciler (mandatory — fail-fast if init fails) ──────────
 	reconciler, recErr := artifacts.NewReconciler(
-		store.NewArtifactReconcilerRepository(p.SQLite.DB()),
+		store.NewArtifactReconcilerRepositoryFromStore(p.SQLite),
 		p.BlobStore,
 		uploadRepo,
 		nil, // clock.System default (production)

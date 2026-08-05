@@ -47,6 +47,17 @@ func NewSQLiteArtifactFinalizer(db *sql.DB, resolver deliverycontract.DeliveryPl
 	return &SQLiteArtifactFinalizer{db: db, resolver: resolver}
 }
 
+// NewSQLiteArtifactFinalizerFromStore binds the finalizer to the canonical
+// SQLiteStore. The transaction remains entirely store-owned while the
+// application composition root no longer passes a raw database handle into
+// an artifact adapter.
+func NewSQLiteArtifactFinalizerFromStore(s *SQLiteStore, resolver deliverycontract.DeliveryPlanResolver) *SQLiteArtifactFinalizer {
+	if s == nil || s.db == nil {
+		panic("store: NewSQLiteArtifactFinalizerFromStore requires a non-nil SQLiteStore")
+	}
+	return &SQLiteArtifactFinalizer{db: s.db, resolver: resolver}
+}
+
 func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p FinalizeVerifiedParams) (*Artifact, error) {
 	if p.UploadID == "" || p.ArtifactID == "" || p.JobID == "" {
 		return nil, fmt.Errorf("store: FinalizeVerified: upload/artifact/job ids are required")

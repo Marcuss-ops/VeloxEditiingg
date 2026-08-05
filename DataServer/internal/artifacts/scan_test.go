@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -40,6 +41,11 @@ var forbiddenJobAttemptsWrite = regexp.MustCompile(`(?i)(INSERT\s+INTO|UPDATE)\s
 // audited allowlist. Case-insensitive, whitespace-tolerant: a
 // `SET  status='SUCCEEDED'` style still trips the check.
 var forbiddenSUCCEEDEDWrite = regexp.MustCompile(`(?i)SET\s+status\s*=\s*['"]SUCCEEDED['"]`)
+
+// forbiddenDirectDatabaseOwnership catches a regression where the
+// orchestration package starts importing database/sql or executing SQL
+// directly instead of delegating to internal/store.
+var forbiddenDirectDatabaseOwnership = regexp.MustCompile(`(?i)"database/sql"|\bsql\.(DB|Tx)\b|\b(db|tx)\.(Exec|ExecContext|Query|QueryContext|QueryRow|QueryRowContext|BeginTx)\(`)
 
 // allowedWriters is the EXPLICIT audited allowlist of files that
 // legitimately contain `SET status='SUCCEEDED'`.
@@ -197,6 +203,36 @@ func findInternalRoot(t *testing.T) string {
 	t.Skip("scan_test cannot find an ancestor directory containing `internal/`; " +
 		"this test requires `internal/` somewhere above the package dir (typical Go module layout)")
 	return ""
+}
+
+func TestArtifactsProductionHasNoDatabaseOwnership(t *testing.T) {
+	root := findInternalRoot(t)
+	artifactsDir := filepath.Join(root, "internal", "artifacts")
+
+	var violations []string
+	walkErr := filepath.WalkDir(artifactsDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || filepath.Ext(path) != ".go" || strings.HasSuffix(filepath.Base(path), "_test.go") {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, path)
+		b, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if forbiddenDirectDatabaseOwnership.Match(stripGoComments(b)) {
+			violations = append(violations, rel)
+		}
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("walk internal/artifacts: %v", walkErr)
+	}
+	if len(violations) > 0 {
+		t.Fatalf("artifacts production code must delegate database ownership to internal/store; offending files: %v", violations)
+	}
 }
 
 func TestSucceededWriterIsFinalizationOnly(t *testing.T) {

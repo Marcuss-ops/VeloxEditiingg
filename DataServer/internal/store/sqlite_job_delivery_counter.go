@@ -32,6 +32,15 @@ func NewSQLiteJobDeliveryCounter(db *sql.DB) *SQLiteJobDeliveryCounter {
 	return &SQLiteJobDeliveryCounter{db: db}
 }
 
+// NewSQLiteJobDeliveryCounterFromStore binds the read-only counter to the
+// canonical SQLiteStore. Raw database handles remain inside store.
+func NewSQLiteJobDeliveryCounterFromStore(s *SQLiteStore) *SQLiteJobDeliveryCounter {
+	if s == nil || s.db == nil {
+		panic("store: NewSQLiteJobDeliveryCounterFromStore requires a non-nil SQLiteStore")
+	}
+	return &SQLiteJobDeliveryCounter{db: s.db}
+}
+
 // Compile-time assertion using an anonymous interface. The consumer-owned
 // port in internal/artifacts has the identical method signature, so
 // SQLiteJobDeliveryCounter satisfies it structurally without forcing an
