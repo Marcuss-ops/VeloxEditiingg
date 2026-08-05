@@ -19,8 +19,8 @@
 //	Resume:
 //	  TestResumeWorker_NilHandler            — 503
 //	  TestResumeWorker_AlreadyHealthy        — already !Drain && !Quarantined → 409
-//	  TestResumeWorker_ClearsDrain           — Drain=false → publish op=resume
-//	  TestResumeWorker_ClearsQuarantine      — Quarantined=false → publish op=resume
+//	  TestResumeWorker_PreservesDrainUntilSmoke — Drain=true → publish op=resume
+//	  TestResumeWorker_PreservesQuarantineUntilSmoke — Quarantined=true → publish op=resume
 //	  TestResumeWorker_InFlightConflict      — ErrOperationInFlight → 409
 //
 //	Update:
@@ -482,7 +482,7 @@ func TestResumeWorker_AlreadyHealthy(t *testing.T) {
 	}
 }
 
-func TestResumeWorker_ClearsDrain(t *testing.T) {
+func TestResumeWorker_PreservesDrainUntilSmoke(t *testing.T) {
 	reg := newRegisteredRegistry(t, "wicket")
 	if err := reg.SetWorkerDrain(context.Background(), "wicket", true); err != nil {
 		t.Fatalf("seed Drain=true: %v", err)
@@ -499,8 +499,8 @@ func TestResumeWorker_ClearsDrain(t *testing.T) {
 		t.Fatalf("resume happy path → %d, want 202: %s", w.Code, w.Body.String())
 	}
 	info := reg.GetWorker(context.Background(), "wicket")
-	if info == nil || info.Drain {
-		t.Errorf("worker.Drain = %v, want false post-resume", info != nil && info.Drain)
+	if info == nil || !info.Drain {
+		t.Errorf("worker.Drain = %v, want true until async smoke gate succeeds", info != nil && info.Drain)
 	}
 	if len(pub.published) != 1 || pub.published[0].Op != "resume" {
 		t.Errorf("audit row: %+v", pub.published)
@@ -510,7 +510,7 @@ func TestResumeWorker_ClearsDrain(t *testing.T) {
 	}
 }
 
-func TestResumeWorker_ClearsQuarantine(t *testing.T) {
+func TestResumeWorker_PreservesQuarantineUntilSmoke(t *testing.T) {
 	reg := newRegisteredRegistry(t, "wicket")
 	if err := reg.SetWorkerQuarantine(context.Background(), "wicket", true); err != nil {
 		t.Fatalf("seed Quarantined=true: %v", err)
@@ -526,8 +526,8 @@ func TestResumeWorker_ClearsQuarantine(t *testing.T) {
 		t.Fatalf("resume happy path → %d, want 202: %s", w.Code, w.Body.String())
 	}
 	info := reg.GetWorker(context.Background(), "wicket")
-	if info == nil || info.Quarantined {
-		t.Errorf("worker.Quarantined = %v, want false post-resume", info != nil && info.Quarantined)
+	if info == nil || !info.Quarantined {
+		t.Errorf("worker.Quarantined = %v, want true until async smoke gate succeeds", info != nil && info.Quarantined)
 	}
 	if len(pub.published) != 1 || pub.published[0].Op != "resume" {
 		t.Errorf("audit row: %+v", pub.published)

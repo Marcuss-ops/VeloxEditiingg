@@ -333,6 +333,12 @@ func (r *sqliteCompletionTx) MarkCompletionJobSucceededIfTasksDone(ctx context.C
 		Scan(&hasAttempt); err != nil {
 		return fmt.Errorf("store: read completion attempt contract: %w", err)
 	}
+	if hasAttempt && status == "SUCCEEDED" {
+		// Retries after a committed completion are idempotent. The
+		// artifact contract was already satisfied by the original writer;
+		// do not turn a harmless replay into a transition conflict.
+		return nil
+	}
 	if hasAttempt && status != "AWAITING_ARTIFACT" {
 		return fmt.Errorf("%w: completion job %s must be AWAITING_ARTIFACT before SUCCEEDED (status=%s)", ErrCompletionTransitionConflict, jobID, status)
 	}

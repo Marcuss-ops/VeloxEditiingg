@@ -184,7 +184,7 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		jobQuery := `
 			UPDATE jobs SET status = 'DELIVERING', completed_at = completed_at,
 			    updated_at = ?, revision = revision + 1
-			WHERE job_id = ? AND status IN ('RUNNING', 'AWAITING_ARTIFACT')`
+			WHERE job_id = ? AND status = 'AWAITING_ARTIFACT'`
 		args := []interface{}{nowStr, p.JobID}
 		if p.ExpectedRevision != 0 {
 			jobQuery += ` AND revision = ?`

@@ -384,37 +384,22 @@ func (h *AdminWorkersMutationsHandler) UpdateWorker() gin.HandlerFunc {
 //
 // Behavior (user spec verbatim: "ritorna a HEALTHY se smoke verde"):
 //
-//   - Smoke-green enforcement is deferred to the async executor
-//     (Step 7+). Step 6/15 unconditionally clears Drain and
-//     Quarantined so the worker is eligible for placement again;
-//     the executor's smoke-green gate (a Step 7+ concern) reads
-//     the latest smoke_records row + decides whether to fail the
-//     resume with a smoke-fail error message in the audit row.
-//
-//   - Synchronously: Worker.Drain := false AND
-//     Worker.Quarantined := false (resume undoes both;
-//     drain and quarantine are independent operator-set flags).
+//   - Synchronously: keep Worker.Drain and Worker.Quarantined
+//     unchanged, so the worker remains excluded from placement
+//     while the asynchronous executor runs the Level D smoke gate.
 //
 //   - Asynchronously: publish a fleet_operations op="resume" row.
+//     The ResumeExecutor clears both exclusion flags only after
+//     the smoke gate succeeds; a failed smoke leaves the worker
+//     excluded and the operation FAILED.
 //
 // Idempotency:
 //   - Already-healthy worker (no drain, not quarantined) → 409.
 //   - In-flight resume op → 409 (ErrOperationInFlight).
 //
-// Smoke-green follow-up: a future executor failure (smoke not
-// green) lands in the audit row's error_message field; the
-// operator dashboard renders the failure with the smoke-gate
-// reason code.
-//
-// Order-matters invariant: SetWorkerDrain(false) runs BEFORE
-// SetWorkerQuarantine(false). If the first succeeds and the
-// second fails (transient DB issue, worker unregistered mid-
-// update), the worker is left in a half-resumed state
-// (Drain=false, Quarantined=true). The handler surfaces 500
-// to the caller; the in-process partial state is observable
-// via GET /api/v1/admin/workers/{id} until a future retry
-// lands. Step 7+ smoke-gate executor must NOT assume the
-// pre-call Quarantined state — it should re-read on entry.
+// A smoke failure is recorded by the asynchronous operation runner;
+// the handler itself does not make the worker eligible or clear either
+// exclusion flag.
 func (h *AdminWorkersMutationsHandler) ResumeWorker() gin.HandlerFunc {
 	return h.mutationHandler(fleet.OperationKindResume, func(_ context.Context, info *workersreg.Worker) error {
 		if !info.Drain && !info.Quarantined {

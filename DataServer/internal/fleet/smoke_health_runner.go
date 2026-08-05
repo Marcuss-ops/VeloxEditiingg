@@ -16,6 +16,7 @@ package fleet
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"velox-server/internal/store"
 )
@@ -39,6 +40,17 @@ func NewSmokeRunHealthChecker(runs BackendSmokeRuns) *SmokeRunHealthChecker {
 // smoke run's artifact_drive_id on SUCCEEDED, or an error describing
 // the terminal state (FAILED / PENDING / never-run).
 func (c *SmokeRunHealthChecker) RunLevelD(ctx context.Context, workerID string) (string, error) {
+	return c.runLevelD(ctx, workerID, time.Time{})
+}
+
+// RunLevelDAfter is the resume-specific freshness gate. A successful
+// smoke recorded before the resume operation was queued is stale and
+// cannot make a worker eligible again.
+func (c *SmokeRunHealthChecker) RunLevelDAfter(ctx context.Context, workerID string, notBefore time.Time) (string, error) {
+	return c.runLevelD(ctx, workerID, notBefore)
+}
+
+func (c *SmokeRunHealthChecker) runLevelD(ctx context.Context, workerID string, notBefore time.Time) (string, error) {
 	if c == nil || c.runs == nil {
 		return "", fmt.Errorf("smoke health checker: smoke_runs backend not wired")
 	}
@@ -48,6 +60,9 @@ func (c *SmokeRunHealthChecker) RunLevelD(ctx context.Context, workerID string) 
 			return "", fmt.Errorf("no smoke runs recorded for worker %q", workerID)
 		}
 		return "", fmt.Errorf("smoke health checker: query: %w", err)
+	}
+	if !notBefore.IsZero() && !run.StartedAt.After(notBefore) {
+		return "", fmt.Errorf("latest smoke predates resume operation (run_id=%s, started_at=%s, queued_at=%s)", run.RunID, run.StartedAt.Format(time.RFC3339), notBefore.Format(time.RFC3339))
 	}
 	switch run.Status {
 	case store.SmokeStatusSucceeded:
