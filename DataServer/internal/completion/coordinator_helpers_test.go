@@ -23,6 +23,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"velox-server/internal/store"
 	"velox-server/internal/store/migrations"
 )
 
@@ -41,7 +42,7 @@ var testHMACKey = func() []byte {
 // HMAC key for this package. NewCoordinator's >=32-byte guard passes
 // (testHMACKey is exactly 32 bytes).
 func newTestCoordinator(db *sql.DB) Coordinator {
-	c, err := NewCoordinator(CoordinatorConfig{DB: db, HMACKey: testHMACKey})
+	c, err := NewCoordinator(CoordinatorConfig{Store: store.NewSQLiteCompletionStore(db), HMACKey: testHMACKey})
 	if err != nil {
 		panic(err) // test-only; cannot reasonably happen
 	}

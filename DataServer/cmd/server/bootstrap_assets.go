@@ -92,7 +92,8 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 		if decodeErr != nil {
 			return nil, fmt.Errorf("bootstrap: decode VELOX_COMMIT_HMAC_KEY: %w", decodeErr)
 		}
-		coord, coordErr := completion.NewCoordinator(completion.CoordinatorConfig{DB: p.SQLite.DB(), HMACKey: key, BlobStore: p.BlobStore})
+		completionStoreRepo := store.NewSQLiteCompletionStore(p.SQLite.DB())
+		coord, coordErr := completion.NewCoordinator(completion.CoordinatorConfig{Store: completionStoreRepo, HMACKey: key, BlobStore: p.BlobStore})
 		if coordErr != nil {
 			return nil, fmt.Errorf("bootstrap: completion coordinator: %w", coordErr)
 		}

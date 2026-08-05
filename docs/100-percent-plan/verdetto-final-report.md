@@ -35,8 +35,8 @@ followup, not a Becco 1–5 regression.
 
 - **Single-writer contract** (PR 3.5-a): the ONLY legal writer of
   `jobs.status='SUCCEEDED'` is the canonical UoW adapter
-  `DataServer/internal/completion/sqlite_uow.go` (allowlisted as the canonical SQL
-  gateway via commit `c61e28a`). Comment at
+  `DataServer/internal/store/completion_repository.go` (the canonical SQL
+  gateway after the completion store migration). Comment at
   `DataServer/internal/store/artifact_uploads.go:20–21` memorializes the contract.
 - **Verdict gate**: `CompleteUpload` in `coordinator.go` requires
   `ArtifactReady` (line 527); only then does the UoW transcribe the attempt
@@ -139,9 +139,9 @@ followup, not a Becco 1–5 regression.
 
 ### (h) Single canonical path for forwarding/commit/completion/roll-up  — **GREEN**
 
-- **Canonical UoW**: `DataServer/internal/completion/sqlite_uow.go` (declared
-  in `unitofwork.go`). The Coordinator speaks only typed interfaces — see the
-  cross-reference doc at `sqlite_uow.go:10`.
+- **Canonical completion store**: `DataServer/internal/store/completion_repository.go`.
+  The Coordinator speaks only typed `CompletionStore`/`CompletionTx` interfaces;
+  see `docs/architecture/unit-of-work.md`.
 - **Single-writer pool**: enforced at `platform/database/database.go:35` +
   `config.go:40`.
 - **Canonical roll-up**: `DataServer/internal/outbox/production.go` is
@@ -190,7 +190,7 @@ followup, not a Becco 1–5 regression.
      (rationale: SQL-level race resilience; alternative considered: advisory
      locks).
   2. **ADR-0002**: Canonical UoW adapter pattern (allowlist vs. type system)
-     for completion writes — describes `internal/completion/sqlite_uow.go` as
+     for completion writes — describes `internal/store/completion_repository.go` as
      the canonical SQL gateway and the rationale for the artifact→store
      cutover.
   3. **ADR-0003**: Deterministic conflict budget (3rd consecutive = escalate)
@@ -288,7 +288,7 @@ followup, not a Becco 1–5 regression.
 | `0706827` | completion: refine Becco 3 doc vs impl (3 sub-edits) |
 | `f9bfa89` | ci(watchlist): promote watchlist gate to must-pass status |
 | `ce65f5f` | ci(typed-metrics): add must-pass gate locking the 3 typed-metrics sub-tests |
-| `c61e28a` | artifacts: allowlist completion/sqlite_uow.go as canonical UoW SQL gateway |
+| current | completion: move SQL ownership into internal/store/completion_repository.go |
 | `3e36330` | checkpoint: artifacts→store migration (file-1/4) + CI gates consolidation |
 | `07fac7a` | feat(ci): add check-dsn-busy-timeout guard + golden-e2e fixes + worker env export |
 
@@ -386,7 +386,7 @@ through `make verify-fast`.
 
 - The Verdetto P0 #1–#6 *programmatic* goals are met: single canonical
   UoW writers, deterministic conflict-budget, CAS-persisted metric
-  increments, real `/health/ready`, gateway enforcement on `sqlite_uow.go`,
+  increments, real `/health/ready`, typed completion-store enforcement,
   outbox-forwardings rebuild path.
 - The Verdetto P0 #*closure* criterion (`make verify` verde) is **not** met
   today; this report closes on a 7-of-8 partial with one well-scoped,

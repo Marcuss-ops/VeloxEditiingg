@@ -208,8 +208,9 @@ func recoverOutput(ctx context.Context, opts *cliOptions) (int, error) {
 	// var); without it DeclareOutputs cannot derive a
 	// commit_token, and the master will refuse to start (Verdetto
 	// P0 #6).
+	completionStore := store.NewSQLiteCompletionStore(sqliteStore.DB())
 	coord, err := completion.NewCoordinator(completion.CoordinatorConfig{
-		DB:      sqliteStore.DB(),
+		Store:   completionStore,
 		HMACKey: []byte(opts.HMACKey),
 	})
 	if err != nil {

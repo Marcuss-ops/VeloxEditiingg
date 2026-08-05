@@ -10,6 +10,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"velox-server/internal/store"
 	"velox-server/internal/store/migrations"
 )
 
@@ -84,7 +85,7 @@ func setupReconcileDB(t *testing.T) (*sql.DB, *ReconcileSupervisor, *fakeReconci
 
 	metrics := &fakeReconcileMetrics{}
 	coord := newTestCoordinator(db)
-	sup := NewReconcileSupervisor(db, coord, metrics)
+	sup := NewReconcileSupervisor(store.NewSQLiteCompletionStore(db), coord, metrics)
 	// Tight tick / low limit so a single TickOnce is fully
 	// deterministic; no goroutine scheduling involved.
 	sup.Tick = time.Second
@@ -527,10 +528,10 @@ func TestReconcile_DedupPreventsDoubleDispatch(t *testing.T) {
 	}
 }
 
-func TestReconcile_NilDBPanics(t *testing.T) {
+func TestReconcile_NilStorePanics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
-			t.Error("NewReconcileSupervisor with nil db should panic")
+			t.Error("NewReconcileSupervisor with nil store should panic")
 		}
 	}()
 	_ = NewReconcileSupervisor(nil, nil, nil)
@@ -543,7 +544,7 @@ func TestReconcile_NilCoordPanics(t *testing.T) {
 		}
 	}()
 	db, _, _ := setupReconcileDB(t)
-	_ = NewReconcileSupervisor(db, nil, nil)
+	_ = NewReconcileSupervisor(store.NewSQLiteCompletionStore(db), nil, nil)
 }
 
 func TestReconcile_AllCases_CoveredByTestFixtures(t *testing.T) {
@@ -575,7 +576,7 @@ func TestReconcile_DispatchError_IncrementsEscalate(t *testing.T) {
 	// coordinator that returns a synthetic error.
 	db, _, m := setupReconcileDB(t)
 	stubCoord := &failingCoord{err: errSynthetic("reconcile: synthetic failure")}
-	sup := NewReconcileSupervisor(db, stubCoord, m)
+	sup := NewReconcileSupervisor(store.NewSQLiteCompletionStore(db), stubCoord, m)
 	sup.Tick = time.Second
 	sup.Limit = 100
 	// No-op log sink so the expected "synthetic failure" dispatch
@@ -639,7 +640,7 @@ var _ Coordinator = (*failingCoord)(nil)
 func TestReconcile_BadDBDoesNotPanic(t *testing.T) {
 	db, _, m := setupReconcileDB(t)
 	_ = db.Close()
-	sup := NewReconcileSupervisor(db, &failingCoord{err: errSynthetic("x")}, m)
+	sup := NewReconcileSupervisor(store.NewSQLiteCompletionStore(db), &failingCoord{err: errSynthetic("x")}, m)
 	// No-op log sink so the expected "database is closed" log
 	// line doesn't trip `go test`'s "unexpected stderr output"
 	// check. The metric counters (which are the test-facing

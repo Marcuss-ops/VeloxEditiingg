@@ -393,7 +393,7 @@ La transazione finale:
 
 Il gate `TestSucceededWriterIsFinalizationOnly` è stato promosso a must-pass e ora passa.
 
-`internal/completion/sqlite_uow.go` è considerato il gateway SQL autorizzato del Coordinator, nella stessa transazione atomica, non un writer business laterale.
+`internal/store/completion_repository.go` è il gateway SQL autorizzato del Coordinator, nella stessa transazione atomica, non un writer business laterale.
 
 La regola da preservare è:
 

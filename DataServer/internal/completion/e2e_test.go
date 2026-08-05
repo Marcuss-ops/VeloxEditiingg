@@ -5,8 +5,8 @@
 // test on the REAL Coordinator + real *sql.DB (with migrations 001..090 applied
 // via openCoordinatorTestDB / migrations.RunMigrations). We do NOT mock the
 // Coordinator or any repository — every assertion reads the post-call SQLite
-// state directly, so a regression in coordinator.go, sqlite_uow.go, or
-// fencing.go trips the matrix.
+// state directly, so a regression in coordinator.go, store/completion_repository.go,
+// or fencing.go trips the matrix.
 //
 // 17 scenarios → 9 top-level test functions → 14 sub-tests:
 //

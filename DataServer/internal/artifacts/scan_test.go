@@ -64,16 +64,11 @@ var allowedWriters = map[string]bool{
 	// Coordinator.CommitAttempt is the canonical atomic SUCCEEDED tx
 	// writer for tasks + task_attempts + jobs in the Completion flow.
 	filepath.Join("internal", "completion", "coordinator.go"): true,
-	// UoW adapter: the SQL gateway the coordinator speaks through
-	// (six typed repos bound to a single *sql.Tx). The
-	// MarkSucceededIfTasksDone method's `SET status = 'SUCCEEDED'`
-	// is the SAME atomic tx as coordinator.go — the SQL lives in
-	// sqlite_uow.go while the orchestration (BeginTx → CAS → Commit)
-	// lives in coordinator.go. The SQL-ownership shape guard
-	// (scripts/ci/check-sql-ownership.sh) explicitly allows
-	// `internal/completion/sqlite_uow.go` as the second canonical
-	// SQL gateway alongside internal/store/**.
-	filepath.Join("internal", "completion", "sqlite_uow.go"): true,
+	// CompletionStore is the sole SQL gateway for the Coordinator's
+	// transaction-bound repository methods. The application package
+	// owns orchestration only; all SQL and transaction lifecycle live
+	// in internal/store/completion_repository.go.
+	filepath.Join("internal", "store", "completion_repository.go"): true,
 	// Interface + commands: contains the regex literal in a doc
 	// comment EXPLAINING the contract. No executable SQL update.
 	filepath.Join("internal", "artifacts", "finalization_repository.go"): true,
@@ -88,10 +83,6 @@ var allowedWriters = map[string]bool{
 	// is confined to the stale reconciler, uses one transaction plus
 	// append-only audit, and is not a second normal completion path.
 	filepath.Join("internal", "store", "stale_execution_reconciler.go"): true,
-	// Completion UoW repository split: these task/job status writes remain
-	// inside the same audited transaction gateway as coordinator.go. The SQL
-	// moved from sqlite_uow.go into this responsibility-specific file.
-	filepath.Join("internal", "completion", "sqlite_uow_repos.go"): true,
 	// Separate delivery lifecycle: the terminal/retry SQL moved from
 	// store_deliveries_lease.go into the responsibility-specific marks file.
 	filepath.Join("internal", "store", "store_deliveries_marks.go"): true,
