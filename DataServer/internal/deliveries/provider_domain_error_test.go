@@ -172,6 +172,16 @@ func TestDomainErrorPropagatesThroughDeliveryRunner(t *testing.T) {
 				if row.CompletedAt != "" {
 					t.Fatalf("retryable DomainError completed_at=%q, want empty", row.CompletedAt)
 				}
+				var lockedBy, leaseID, leaseExpiresAt string
+				if err := db.DB().QueryRowContext(context.Background(), `
+					SELECT COALESCE(locked_by, ''), COALESCE(lease_id, ''), COALESCE(lease_expires_at, '')
+					FROM job_deliveries WHERE delivery_id = ?`, lease.DeliveryID).
+					Scan(&lockedBy, &leaseID, &leaseExpiresAt); err != nil {
+					t.Fatalf("read retry lease columns: %v", err)
+				}
+				if lockedBy != "" || leaseID != "" || leaseExpiresAt != "" {
+					t.Fatalf("retryable DomainError retained lease: locked_by=%q lease_id=%q expires=%q", lockedBy, leaseID, leaseExpiresAt)
+				}
 			} else {
 				if row.CompletedAt == "" {
 					t.Fatal("terminal DomainError must set completed_at")
