@@ -1,5 +1,10 @@
 # Fleet Operations
 
+> **Path selection:** read `docs/operations/worker-rollout-paths.md` before
+> changing a worker. It distinguishes the legacy bundle bridge, the
+> transitional GHCR Ansible bridge, and the definitive FleetController API
+> path. Do not treat their commands as interchangeable.
+
 `scripts/fleetctl` is the operator facade for the worker fleet. It talks to
 the Master with the admin bearer token and never prints that token.
 
@@ -26,7 +31,13 @@ a real asset job, waits for `SUCCEEDED`, and verifies the lease worker:
 scripts/fleetctl smoke worker-id
 ```
 
-## Digest rollout
+## Digest rollout — transitional GHCR Ansible bridge
+
+For the current implementation, `scripts/fleetctl update` is a host-mutation
+bridge: it checks the Master state and invokes Ansible on exactly one inventory
+host. It is **not** yet the direct FleetController API entrypoint. For the
+complete path map and production prohibitions, see
+`docs/operations/worker-rollout-paths.md`.
 
 The worker must already be `DRAINING` with `active_jobs=0`. The command
 refuses to run otherwise. It invokes Ansible on exactly one inventory host and
@@ -48,7 +59,9 @@ scripts/fleetctl rollback worker-id \
   "rollback after smoke failure"
 ```
 
-Override the inventory with `FLEET_INVENTORY`. The default playbook is
+`FLEET_INVENTORY` must point to an operator-local inventory file; never use
+`deploy/ansible/inventory.ini.example` or another repository template as a
+production inventory. The default playbook is
 `deploy/playbooks/rollout-worker-digest.yml`; override it with
 `FLEET_ROLLOUT_PLAYBOOK` when a host topology uses different paths.
 
@@ -61,10 +74,12 @@ be used only after the worker is drained and has no active jobs:
 scripts/fleetctl restart worker-id "restart after config change"
 ```
 
-Image updates and rollback are deliberately performed by Ansible, where SSH,
-non-interactive sudo, digest pinning, serial rollout, and host-side health
-checks are available. They are not implemented as `sudo` or SSH calls inside
-a Master HTTP handler.
+Image updates and rollback on this transitional bridge are deliberately
+performed by Ansible, where SSH, non-interactive sudo, digest pinning, serial
+rollout, and host-side health checks are available. The definitive target is
+the Master `fleet_operations` / FleetController path described in the rollout
+paths guide; direct `sudo`, SSH, and Docker commands are never a replacement
+for either approved path.
 
 ```bash
 ansible-playbook -i deploy/inventory/production.ini \

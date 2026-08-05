@@ -1,8 +1,20 @@
 # Worker Deployment Guide
 
+> **Choose the rollout path first:**
+> `docs/operations/worker-rollout-paths.md` is the authoritative map. The
+> bundle-based Ansible flow below is a bridge for old workers; the immutable
+> GHCR/FleetController flow is the definitive target. Do not combine them.
+
 ## Overview
 
-Velox workers are deployed via Ansible playbooks from the master server. The deployment pipeline handles:
+Velox workers are deployed via two explicitly separated paths:
+
+1. **Bridge:** Ansible downloads the current bundle and may build the worker
+   image locally on an old host while it is normalized.
+2. **Definitive target:** GitHub Actions builds one signed GHCR image, and the
+   Master/FleetController rolls out its immutable `@sha256:` digest serially.
+
+The deployment pipeline handles:
 1. SSH connectivity and preflight checks
 2. Bundle download and Docker image build
 3. systemd service setup (single source of truth)
@@ -42,13 +54,20 @@ Actions:
 - daemon-reload → enable → start
 - Verify service status and heartbeat on master
 
-### update_workers.yml
-Downloads latest bundle from master, rebuilds Docker image, re-applies systemd setup.
+### update_workers.yml — legacy bridge only
+Downloads the latest bundle from the Master, rebuilds the Docker image locally
+on the worker, and re-applies systemd setup. Use only to normalize or migrate
+an old worker; it does not certify that all workers run identical image bytes.
 
 ```bash
-ansible-playbook -i inventory.ini update_workers.yml \
-  -e "master_url=http://MASTER:8000"
+ansible-playbook -i "$INVENTORY" \
+  DataServer/data/ansible/playbooks/update_workers.yml \
+  --limit <inventory_host> \
+  -e "master_url=$MASTER_URL"
 ```
+
+`$INVENTORY` must be an operator-local inventory. Do not use an `*.example`
+template as production input and do not run this playbook fleet-wide.
 
 ### restart_workers.yml
 Simple restart of existing worker services.
@@ -57,11 +76,14 @@ Simple restart of existing worker services.
 ansible-playbook -i inventory.ini restart_workers.yml
 ```
 
-### preflight_workers.yml
-Read-only checks: SSH, disk, OS, commands, Docker, service status.
+### preflight_workers.yml — diagnostic only
+Read-only checks: SSH, disk, OS, commands, Docker, service status. A passing
+preflight is not a deployment or release certification.
 
 ```bash
-ansible-playbook -i inventory.ini preflight_workers.yml
+ansible-playbook -i "$INVENTORY" \
+  DataServer/data/ansible/playbooks/preflight_workers.yml \
+  --limit <inventory_host>
 ```
 
 ## Worker Compatibility Check
@@ -240,6 +262,19 @@ ExecStart=...
 3. Add `WorkingDirectory=/var/lib/velox/workers/<host>` to the unit.
 4. Include `tasks/provision_velox_writable_dirs.yml` from `canonical_worker_runtime.yml` BEFORE the unit write.
 5. Update `cleanup_worker.yml` to also remove `cache/`, `sessions/`, `scratch/`.
+
+## Production command boundaries
+
+Diagnostic commands include `scripts/fleetctl status`, `scripts/fleetctl
+inspect`, `scripts/fleetctl operations`, `preflight_workers.yml`,
+`systemctl status`, `docker ps`, `docker inspect`, and a local
+`/health/ready` probe. `fleetctl smoke` is an explicit mutating smoke
+operation, not a read-only health check.
+
+Do not use direct `ssh docker pull`, mutable image tags, manual
+`docker compose up`, manual `systemctl restart`, or hand-edited worker env
+files as a production rollout. Use the bridge or the FleetController path in
+`docs/operations/worker-rollout-paths.md`.
 
 ## Adding a New Worker
 
