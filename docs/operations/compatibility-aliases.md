@@ -24,17 +24,21 @@ client identity.
 
 ## Modes
 
-`VELOX_COMPATIBILITY_MODE=compat` is the default. Legacy aliases remain
-accepted and every actual alias read increments the registry counter and the
-Prometheus metric.
+`VELOX_COMPATIBILITY_MODE=strict` is the default for new deployments (config
+bootstrap, `deploy/velox-server.env.example` and the Ansible template). It
+rejects registered aliases at the canonical HTTP submission boundary and
+increments the rejection counter. The response is an `HTTP 422`
+`legacy_alias_rejected` validation error. Existing internal readers also fail
+closed for a registered alias when strict mode is active.
 
-`VELOX_COMPATIBILITY_MODE=strict` rejects registered aliases at the canonical
-HTTP submission boundary and increments the rejection counter. The response is
-an `HTTP 422` `legacy_alias_rejected` validation error. Existing internal
-readers also fail closed for a registered alias when strict mode is active.
+`VELOX_COMPATIBILITY_MODE=compat` is the explicit opt-out for the legacy-
+producer drain window: legacy aliases remain accepted and every actual alias
+read increments the registry counter and the Prometheus metric. Operators who
+still feed legacy payload shapes MUST set this before deploy or their jobs are
+rejected at the submission boundary.
 
 Invalid mode values fail configuration validation. An empty mode in manually
-constructed test configurations is treated as the compatibility default.
+constructed test configurations is treated as strict (the canonical default).
 
 ## Removal workflow
 

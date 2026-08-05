@@ -72,7 +72,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: nil Config")
 	}
 	if c.Compatibility.Mode == "" {
-		c.Compatibility.Mode = "compat"
+		c.Compatibility.Mode = "strict"
 	}
 	if c.Compatibility.Mode != "compat" && c.Compatibility.Mode != "strict" {
 		return fmt.Errorf("config: VELOX_COMPATIBILITY_MODE must be compat or strict, got %q", c.Compatibility.Mode)

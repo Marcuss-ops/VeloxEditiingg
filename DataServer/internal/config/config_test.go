@@ -160,10 +160,10 @@ func TestValidate_EmptyDBPath(t *testing.T) {
 func TestCompatibilityModeDefaultsAndStrictParsing(t *testing.T) {
 	cfg := &Config{Database: DatabaseConfig{DBPath: t.TempDir() + "/velox.db"}, Workers: WorkersConfig{AllowedWorkerIDs: []string{"worker-a", "worker-b"}}}
 	if err := cfg.Validate(); err != nil {
-		t.Fatalf("empty compatibility mode should default to compat: %v", err)
+		t.Fatalf("empty compatibility mode should default to strict: %v", err)
 	}
-	if cfg.Compatibility.Mode != "compat" {
-		t.Fatalf("default compatibility mode = %q, want compat", cfg.Compatibility.Mode)
+	if cfg.Compatibility.Mode != "strict" {
+		t.Fatalf("default compatibility mode = %q, want strict", cfg.Compatibility.Mode)
 	}
 	cfg.Compatibility.Mode = "strict"
 	if err := cfg.Validate(); err != nil {
@@ -172,6 +172,19 @@ func TestCompatibilityModeDefaultsAndStrictParsing(t *testing.T) {
 	cfg.Compatibility.Mode = "invalid"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("invalid compatibility mode accepted")
+	}
+}
+
+// TestLoadCompatibilityConfigDefaultsToStrict locks the canonical boot
+// default: with no VELOX_COMPATIBILITY_MODE the typed Config produced by
+// FromEnv must be strict. The master boot (main.go / bootstrap_composition.go)
+// maps "strict" to compatibility.ModeStrict, so this is the line that flips
+// new deployments to reject registered legacy aliases by default.
+func TestLoadCompatibilityConfigDefaultsToStrict(t *testing.T) {
+	t.Setenv("VELOX_COMPATIBILITY_MODE", "")
+	cfg := FromEnv()
+	if cfg.Compatibility.Mode != "strict" {
+		t.Fatalf("default compatibility mode = %q, want strict", cfg.Compatibility.Mode)
 	}
 }
 

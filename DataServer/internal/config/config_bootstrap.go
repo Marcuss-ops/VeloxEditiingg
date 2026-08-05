@@ -37,7 +37,7 @@ func loadFleetConfig() FleetConfig {
 func loadCompatibilityConfig() CompatibilityConfig {
 	mode := strings.ToLower(strings.TrimSpace(os.Getenv("VELOX_COMPATIBILITY_MODE")))
 	if mode == "" {
-		mode = "compat"
+		mode = "strict"
 	}
 	aliases := []RetiredEnvAlias{
 		{Env: "SOCIAL_GATEWAY_URL", Canonical: "SOCIAL_API_URL"},

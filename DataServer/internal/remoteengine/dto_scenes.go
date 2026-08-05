@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"strings"
 
-	"velox-shared/compatibility"
 	"velox-shared/payload"
 )
 
@@ -46,13 +45,21 @@ func convertRawScenes(raw []interface{}) []SceneResult {
 			continue
 		}
 		scene := SceneResult{
-			Text:       payload.FirstString(m, "text", "description", "narration"),
-			SceneID:    payload.FirstString(m, "scene_id"),
-			Index:      intFromAnyMap(m["index"]),
-			Kind:       payload.FirstString(m, "kind"),
-			ImageLink:  payload.FirstString(m, "image_link", "image_url", "image"),
-			ClipLink:   payload.FirstString(m, "clip_link", "clip_url", "video_link"),
-			StockLinks: append(append(compatibility.ReadStringList(m, "stock_links"), compatibility.ReadStringList(m, "stock_clip_links")...), compatibility.ReadStringList(m, "drive_links")...),
+			Text:      payload.FirstString(m, "text", "description", "narration"),
+			SceneID:   payload.FirstString(m, "scene_id"),
+			Index:     intFromAnyMap(m["index"]),
+			Kind:      payload.FirstString(m, "kind"),
+			ImageLink: payload.FirstString(m, "image_link", "image_url", "image"),
+			ClipLink:  payload.FirstString(m, "clip_link", "clip_url", "video_link"),
+			// StockLinks is intentionally never populated here: the old
+			// compatibility adapter read stock_links / stock_clip_links /
+			// drive_links through ReadStringList on UNREGISTERED canonical
+			// keys (Lookup always missed) and therefore always returned nil.
+			// Those scene keys are legacy input the canonical renderer
+			// boundary rejects; stock sources flow via the typed
+			// scene.stock objects. Keeping the field lets callers rely on
+			// the zero value instead of a no-op that looked alive.
+			StockLinks: nil,
 		}
 		if fallback, ok := m["stock_fallback"].(bool); ok {
 			scene.StockFallback = fallback
