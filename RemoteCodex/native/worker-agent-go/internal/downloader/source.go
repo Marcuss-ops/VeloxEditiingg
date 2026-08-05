@@ -50,22 +50,26 @@ type TransferResult struct {
 // I/O that would abort when that first job is cancelled.
 type Transferer interface {
 	Check(ctx context.Context, reportCtx context.Context, req DownloadRequest) (CacheCheckResult, error)
-	Transfer(ctx context.Context, reportCtx context.Context, req DownloadRequest) (TransferResult, error)
+	// Transfer fetches the asset bytes, invoking onProgress as bytes land on
+	// disk so the manager can refresh byte counters, throughput and ETA and
+	// publish throttled snapshots. onProgress is never nil in production; the
+	// callback is cheap and must be safe to call once per read chunk.
+	Transfer(ctx context.Context, reportCtx context.Context, req DownloadRequest, onProgress func(downloadedBytes int64)) (TransferResult, error)
 }
 
 // TransfererFunc adapts a plain function to the Transferer interface. Both
 // halves share the same function; implementers may branch on req to keep the
 // cache-probe and byte-fetch behaviours distinct. Used by tests.
-type TransfererFunc func(ctx context.Context, reportCtx context.Context, req DownloadRequest, check bool) (CacheCheckResult, TransferResult, error)
+type TransfererFunc func(ctx context.Context, reportCtx context.Context, req DownloadRequest, check bool, onProgress func(downloadedBytes int64)) (CacheCheckResult, TransferResult, error)
 
 // Check implements Transferer.
 func (f TransfererFunc) Check(ctx context.Context, reportCtx context.Context, req DownloadRequest) (CacheCheckResult, error) {
-	hit, _, err := f(ctx, reportCtx, req, true)
+	hit, _, err := f(ctx, reportCtx, req, true, nil)
 	return hit, err
 }
 
 // Transfer implements Transferer.
-func (f TransfererFunc) Transfer(ctx context.Context, reportCtx context.Context, req DownloadRequest) (TransferResult, error) {
-	_, result, err := f(ctx, reportCtx, req, false)
+func (f TransfererFunc) Transfer(ctx context.Context, reportCtx context.Context, req DownloadRequest, onProgress func(downloadedBytes int64)) (TransferResult, error) {
+	_, result, err := f(ctx, reportCtx, req, false, onProgress)
 	return result, err
 }

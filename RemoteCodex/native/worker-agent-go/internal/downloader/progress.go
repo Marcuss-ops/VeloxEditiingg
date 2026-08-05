@@ -32,7 +32,24 @@
 //	}
 package downloader
 
-import "time"
+import (
+	"time"
+)
+
+// Progress throttles. Subscriber snapshots are published at least once per
+// ProgressPublishInterval or per ProgressPublishBytes of newly downloaded
+// bytes, whichever comes first; state changes and terminal transitions always
+// publish immediately (never more than one event per 32 KB buffer).
+//
+// Checkpoints (the durable OnCheckpoint hook) are coarser by design: at least
+// one per ProgressCheckpointInterval or per ProgressCheckpointBytes,
+// whichever comes first, plus always one for the terminal transition.
+const (
+	ProgressPublishInterval    = 500 * time.Millisecond
+	ProgressPublishBytes       = 4 << 20 // 4 MiB
+	ProgressCheckpointInterval = 2 * time.Second
+	ProgressCheckpointBytes    = 16 << 20 // 16 MiB
+)
 
 // AssetRole classifies the semantic role of an asset inside a job. Roles are
 // low-cardinality strings used for diagnostics and future scheduling; they

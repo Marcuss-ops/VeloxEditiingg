@@ -104,9 +104,40 @@ func (w *Worker) assetDownloadManager() downloader.AssetDownloadManager {
 	if w.assetManager == nil {
 		w.assetManager = downloader.NewManager(downloader.Config{
 			Concurrency: w.assetDownloadConcurrency(),
+			// Durable progress checkpoints (throttled ~2s / 16MB by the
+			// manager): emitted as worker-side telemetry events that feed the
+			// master's asset-download read model. Non-blocking by contract.
+			OnCheckpoint: func(snap downloader.DownloadSnapshot, reportCtx context.Context) {
+				emitAssetProgressCheckpoint(reportCtx, snap)
+			},
 		}, &masterAssetTransferer{w: w})
 	}
 	return w.assetManager
+}
+
+// emitAssetProgressCheckpoint records one durable asset-download checkpoint
+// event (origin: worker, scope: task). The manager throttles these to ~2s or
+// 16MB per transfer; terminal transitions always checkpoint. The first
+// waiter's telemetry context supplies the recorder — value-reads only, per
+// the Transferer context contract.
+func emitAssetProgressCheckpoint(ctx context.Context, snap downloader.DownloadSnapshot) {
+	rec := telemetry.RecorderFromContext(ctx)
+	if rec == nil {
+		return
+	}
+	h := rec.Begin(telemetry.EventSpec{
+		Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask,
+		Component: "worker.asset", Action: "progress_checkpoint",
+	})
+	h.SetMetadata("asset_id", snap.AssetID)
+	h.SetMetadata("transfer_id", snap.TransferID)
+	h.SetMetadata("state", string(snap.State))
+	h.SetMetadata("progress_percent", fmt.Sprintf("%.1f", snap.ProgressPercent))
+	h.SetMetadata("bytes_downloaded", snap.BytesDownloaded)
+	h.SetMetadata("bytes_total", snap.BytesTotal)
+	h.SetMetadata("throughput_bps", int64(snap.ThroughputBytesPerSecond))
+	h.SetMetadata("eta_seconds", snap.ETASeconds)
+	h.Complete()
 }
 
 func (w *Worker) assetDownloadConcurrency() int {
@@ -162,7 +193,7 @@ func (t *masterAssetTransferer) Check(ctx context.Context, reportCtx context.Con
 // cache, verifying size and SHA-256 before the file becomes visible. The
 // retry loop is classification-aware: 401/403/404 and other permanent 4xx are
 // terminal; 408/429/5xx and transport errors are retried (1s/2s/4s + jitter).
-func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.Context, req downloader.DownloadRequest) (downloader.TransferResult, error) {
+func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.Context, req downloader.DownloadRequest, onProgress func(downloadedBytes int64)) (downloader.TransferResult, error) {
 	w := t.w
 	assetID := req.AssetID
 	cacheDir := w.assetCacheDir()
@@ -248,6 +279,18 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 			transferHandle = transfer.Begin(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask, Component: "worker.asset", Action: "transfer"})
 			transferHandle.SetMetadata("asset_id", assetID)
 		}
+		// Report streamed bytes to the download manager so throttled
+		// progress snapshots (percent, throughput, ETA) stay live during the
+		// transfer.
+		if onProgress != nil {
+			// Each retry is a fresh logical attempt. Reset the manager's
+			// logical byte progress before the new body starts; network bytes
+			// from failed attempts must not make a later attempt look READY.
+			if attempt > 0 {
+				onProgress(0)
+			}
+			resp.Body = &assetProgressBody{src: resp.Body, onProgress: onProgress}
+		}
 		localPath, downloadedBytes, actualSHA, verifyDuration, err := writeVeloxAssetToCache(cacheDir, assetID, req.SHA256, req.SizeBytes, resp)
 		resp.Body.Close()
 		if err != nil {
@@ -274,6 +317,27 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 	}
 	return downloader.TransferResult{}, fmt.Errorf("failed to download velox asset %s: %w", assetID, lastErr)
 }
+
+// assetProgressBody wraps an http response body to report streamed bytes to
+// the download manager's progress hook (one call per read chunk; the manager
+// throttles its own publishes). Counts bytes actually read, so a partial or
+// aborted stream reports exactly the bytes received.
+type assetProgressBody struct {
+	src        io.ReadCloser
+	onProgress func(downloadedBytes int64)
+	done       int64
+}
+
+func (p *assetProgressBody) Read(b []byte) (int, error) {
+	n, err := p.src.Read(b)
+	if n > 0 {
+		p.done += int64(n)
+		p.onProgress(p.done)
+	}
+	return n, err
+}
+
+func (p *assetProgressBody) Close() error { return p.src.Close() }
 
 // syncClipCache records a verified asset in the durable remote-worker index.
 // The content-addressed byte cache remains the data source; this index owns

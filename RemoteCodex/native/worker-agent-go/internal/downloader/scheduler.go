@@ -152,15 +152,29 @@ func (s *scheduler) dispatcher() {
 	}
 }
 
-// Close stops the pool. Pending queued items are discarded; running runs are
-// not interrupted (transfers observe their own cancellation via the manager
-// context). Close is idempotent and safe to call from any goroutine.
+// Close stops the pool. Pending queued items are drained through their run
+// callbacks after the queue is closed; each callback observes the cancelled
+// transfer context and settles its Transfer as CANCELLED. Running callbacks
+// are allowed to observe the same cancellation. Close is idempotent and safe
+// to call from any goroutine.
 func (s *scheduler) Close() {
 	s.mu.Lock()
-	if !s.closed {
-		s.closed = true
-		s.cond.Broadcast()
+	if s.closed {
+		s.mu.Unlock()
+		s.wg.Wait()
+		return
 	}
+	s.closed = true
+	pending := make([]func(), 0, len(s.queue))
+	for len(s.queue) > 0 {
+		item := heap.Pop(&s.queue).(*schedItem)
+		pending = append(pending, item.run)
+	}
+	s.cond.Broadcast()
 	s.mu.Unlock()
+
+	for _, run := range pending {
+		run()
+	}
 	s.wg.Wait()
 }

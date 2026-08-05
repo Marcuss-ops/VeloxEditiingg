@@ -23,6 +23,7 @@ package downloader
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"time"
 )
@@ -61,7 +62,28 @@ type Transfer struct {
 	updatedAt       time.Time
 	completedAt     time.Time
 
-	waiters     map[waiterKey]struct{}
+	// Progress tracking (refreshed by reportProgress as bytes land):
+	// throughputBPS is the bytes/sec measured across consecutive progress
+	// samples; the publish/checkpoint baselines drive the throttles.
+	throughputBPS       float64
+	lastSampleAt        time.Time
+	lastSampleBytes     int64
+	lastPublishAt       time.Time
+	lastPublishBytes    int64
+	lastCheckpointAt    time.Time
+	lastCheckpointBytes int64
+
+	// Throttle configuration + durable hook (wired from manager.Config).
+	publishInterval    time.Duration
+	publishBytes       int64
+	checkpointInterval time.Duration
+	checkpointBytes    int64
+	onCheckpoint       func(DownloadSnapshot, context.Context)
+
+	waiters map[waiterKey]struct{}
+	// jobRefs survives waiter removal so JobSnapshot remains a durable
+	// per-job read model after an asset reaches READY/FAILED.
+	jobRefs     map[string]struct{}
 	subscribers map[uint64]chan DownloadSnapshot
 	subSeq      uint64
 
@@ -92,6 +114,7 @@ func newTransfer(managerCtx context.Context, key string, req DownloadRequest, re
 		queuedAt:    now(),
 		updatedAt:   now(),
 		waiters:     make(map[waiterKey]struct{}),
+		jobRefs:     make(map[string]struct{}),
 		subscribers: make(map[uint64]chan DownloadSnapshot),
 		done:        make(chan struct{}),
 		transferID:  transferID,
@@ -122,6 +145,9 @@ func (t *Transfer) isTerminal() bool {
 func (t *Transfer) addWaiter(jobID, taskID string) {
 	t.mu.Lock()
 	t.waiters[waiterKey{jobID, taskID}] = struct{}{}
+	if jobID != "" {
+		t.jobRefs[jobID] = struct{}{}
+	}
 	t.updatedAt = t.now()
 	t.mu.Unlock()
 }
@@ -139,6 +165,16 @@ func (t *Transfer) waiterCount() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return len(t.waiters)
+}
+
+// hasJobReference reports whether this transfer belongs to jobID's aggregate.
+// Unlike the active waiter set, it remains true after Resolve returns so the
+// job read model can report the completed asset.
+func (t *Transfer) hasJobReference(jobID string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	_, ok := t.jobRefs[jobID]
+	return ok
 }
 
 // subscribe registers a snapshot subscriber. The returned channel delivers
@@ -191,7 +227,9 @@ func (t *Transfer) setCacheHit(hit bool) {
 	t.mu.Unlock()
 }
 
-// setDownloading records DOWNLOADING start (attempt bump + startedAt).
+// setDownloading records DOWNLOADING start (attempt bump + startedAt) and
+// resets the progress baselines so each attempt re-baselines its rate sample
+// and publishes its first byte report immediately.
 func (t *Transfer) setDownloading() {
 	now := t.now()
 	t.mu.Lock()
@@ -201,6 +239,13 @@ func (t *Transfer) setDownloading() {
 		t.startedAt = now
 	}
 	t.updatedAt = now
+	t.throughputBPS = 0
+	t.lastSampleAt = time.Time{}
+	t.lastSampleBytes = 0
+	t.lastPublishAt = time.Time{}
+	t.lastPublishBytes = 0
+	t.lastCheckpointAt = time.Time{}
+	t.lastCheckpointBytes = 0
 	t.mu.Unlock()
 	t.publish(now)
 }
@@ -217,7 +262,9 @@ func (t *Transfer) setQueuePos(seq int64) {
 }
 
 // finish settles the transfer into READY (nil err) or FAILED, publishes the
-// terminal snapshot and closes done exactly once. Only the run loop calls it.
+// terminal snapshot, emits the terminal checkpoint and closes done exactly
+// once. Only the run loop calls it. Terminal transitions always publish and
+// checkpoint immediately, bypassing the throttles.
 func (t *Transfer) finish(result TransferResult, err error) {
 	now := t.now()
 	t.mu.Lock()
@@ -233,6 +280,7 @@ func (t *Transfer) finish(result TransferResult, err error) {
 	}
 	t.mu.Unlock()
 	t.publish(now)
+	t.emitCheckpoint(now)
 	t.once.Do(func() { close(t.done) })
 }
 
@@ -252,7 +300,86 @@ func (t *Transfer) finishCancelled() {
 	t.updatedAt = now
 	t.mu.Unlock()
 	t.publish(now)
+	t.emitCheckpoint(now)
 	t.once.Do(func() { close(t.done) })
+}
+
+// reportProgress is the transferer's incremental byte hook: it refreshes the
+// byte counter, recomputes throughput, and publishes / checkpoints under the
+// configured throttles (500 ms / 4 MiB publishes; 2 s / 16 MiB checkpoints).
+// State changes and terminal transitions bypass the throttles elsewhere.
+// Safe to call once per read chunk from the transferer goroutine.
+func (t *Transfer) reportProgress(downloaded int64) {
+	now := t.now()
+	var ckptSnap DownloadSnapshot
+	publish := false
+	checkpoint := false
+
+	t.mu.Lock()
+	if downloaded < 0 {
+		downloaded = 0
+	}
+	if t.bytesTotal > 0 && downloaded > t.bytesTotal {
+		downloaded = t.bytesTotal
+	}
+	t.bytesDownloaded = downloaded
+	t.updatedAt = now
+	if downloaded == 0 {
+		// A retry reset starts a new logical attempt. Do not carry the
+		// previous attempt's rate into the new ETA calculation.
+		t.throughputBPS = 0
+	} else if !t.lastSampleAt.IsZero() {
+		if elapsed := now.Sub(t.lastSampleAt).Seconds(); elapsed > 0 && downloaded >= t.lastSampleBytes {
+			t.throughputBPS = float64(downloaded-t.lastSampleBytes) / elapsed
+		}
+	}
+	t.lastSampleAt = now
+	t.lastSampleBytes = downloaded
+
+	if t.lastPublishAt.IsZero() {
+		publish = true
+	} else {
+		publish = now.Sub(t.lastPublishAt) >= t.publishInterval ||
+			downloaded-t.lastPublishBytes >= t.publishBytes
+	}
+	if t.onCheckpoint != nil {
+		if t.lastCheckpointAt.IsZero() {
+			checkpoint = true
+		} else {
+			checkpoint = now.Sub(t.lastCheckpointAt) >= t.checkpointInterval ||
+				downloaded-t.lastCheckpointBytes >= t.checkpointBytes
+		}
+		if checkpoint {
+			ckptSnap = t.snapshotLocked(now)
+			t.lastCheckpointAt = now
+			t.lastCheckpointBytes = downloaded
+		}
+	}
+	t.mu.Unlock()
+
+	if publish {
+		t.publish(now)
+		t.mu.Lock()
+		t.lastPublishAt = now
+		t.lastPublishBytes = downloaded
+		t.mu.Unlock()
+	}
+	if checkpoint {
+		t.onCheckpoint(ckptSnap, t.reportCtx)
+	}
+}
+
+// emitCheckpoint invokes the durable checkpoint hook unconditionally with the
+// current snapshot (used for terminal transitions, which always checkpoint).
+// No-op when no hook is configured. Called outside the transfer mutex.
+func (t *Transfer) emitCheckpoint(now time.Time) {
+	if t.onCheckpoint == nil {
+		return
+	}
+	t.mu.Lock()
+	snap := t.snapshotLocked(now)
+	t.mu.Unlock()
+	t.onCheckpoint(snap, t.reportCtx)
 }
 
 // result returns the settled (result, err) pair. Valid only after done is
@@ -271,10 +398,24 @@ func (t *Transfer) result() (TransferResult, error) {
 func (t *Transfer) publish(now time.Time) {
 	t.mu.Lock()
 	snap := t.snapshotLocked(now)
-	for _, ch := range t.subscribers {
+	for id, ch := range t.subscribers {
 		select {
 		case ch <- snap:
 		default:
+			if snap.State.Terminal() {
+				// Terminal snapshots are contractual: make room by dropping
+				// the oldest intermediate update, then deliver the terminal
+				// snapshot before closing the channel.
+				select {
+				case <-ch:
+				default:
+				}
+				ch <- snap
+			}
+		}
+		if snap.State.Terminal() {
+			close(ch)
+			delete(t.subscribers, id)
 		}
 	}
 	t.mu.Unlock()
@@ -316,6 +457,13 @@ func (t *Transfer) snapshotLocked(now time.Time) DownloadSnapshot {
 	if t.bytesTotal > 0 {
 		s.ProgressPercent = float64(t.bytesDownloaded) / float64(t.bytesTotal) * 100
 	}
+	s.ThroughputBytesPerSecond = t.throughputBPS
+	if t.bytesTotal > 0 && t.throughputBPS > 0 {
+		remaining := t.bytesTotal - t.bytesDownloaded
+		if remaining > 0 {
+			s.ETASeconds = int64(math.Ceil(float64(remaining) / t.throughputBPS))
+		}
+	}
 	return s
 }
 
@@ -347,7 +495,10 @@ func errorDetailOf(err error) string {
 	return err.Error()
 }
 
-// TransferRegistry owns the set of transfers, keyed by AssetKey.
+// TransferRegistry owns the set of transfers, keyed by AssetKey. Terminal
+// transfers and their jobRefs are intentionally retained for the lifetime of
+// the manager so Snapshot/JobSnapshot remain readable after Resolve returns;
+// Manager.Close releases the entire registry with the worker lifecycle.
 type TransferRegistry struct {
 	mu        sync.Mutex
 	transfers map[string]*Transfer

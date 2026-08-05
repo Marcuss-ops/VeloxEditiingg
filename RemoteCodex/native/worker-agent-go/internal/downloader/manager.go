@@ -40,6 +40,25 @@ type Config struct {
 	// Now is the clock used for all snapshots/timestamps; nil → time.Now.
 	// Tests inject a deterministic clock.
 	Now func() time.Time
+
+	// PublishInterval / PublishBytes throttle subscriber snapshots: at least
+	// one publish per interval or per newly-downloaded bytes, whichever comes
+	// first. State changes and terminal transitions always publish
+	// immediately. Defaults: 500ms / 4 MiB.
+	PublishInterval time.Duration
+	PublishBytes    int64
+
+	// CheckpointInterval / CheckpointBytes throttle the durable OnCheckpoint
+	// hook (coarser than publishes). Terminal transitions always checkpoint.
+	// Defaults: 2s / 16 MiB.
+	CheckpointInterval time.Duration
+	CheckpointBytes    int64
+
+	// OnCheckpoint is invoked with the current transfer snapshot for durable
+	// progress records (telemetry events, local persistence). Called on the
+	// transferer goroutine at most once per throttle interval; MUST be
+	// non-blocking.
+	OnCheckpoint func(snapshot DownloadSnapshot, reportCtx context.Context)
 }
 
 func (c *Config) withDefaults() {
@@ -48,6 +67,18 @@ func (c *Config) withDefaults() {
 	}
 	if c.Now == nil {
 		c.Now = time.Now
+	}
+	if c.PublishInterval <= 0 {
+		c.PublishInterval = ProgressPublishInterval
+	}
+	if c.PublishBytes <= 0 {
+		c.PublishBytes = ProgressPublishBytes
+	}
+	if c.CheckpointInterval <= 0 {
+		c.CheckpointInterval = ProgressCheckpointInterval
+	}
+	if c.CheckpointBytes <= 0 {
+		c.CheckpointBytes = ProgressCheckpointBytes
 	}
 }
 
@@ -162,6 +193,12 @@ func (m *Manager) acquireTransfer(key string, req DownloadRequest, reportCtx con
 		return existing
 	}
 	t := newTransfer(m.ctx, key, req, reportCtx, m.cfg.Now, nextTransferID())
+	// Wire the progress throttles and the durable checkpoint hook.
+	t.publishInterval = m.cfg.PublishInterval
+	t.publishBytes = m.cfg.PublishBytes
+	t.checkpointInterval = m.cfg.CheckpointInterval
+	t.checkpointBytes = m.cfg.CheckpointBytes
+	t.onCheckpoint = m.cfg.OnCheckpoint
 	m.registry.transfers[key] = t
 	go t.run(m)
 	return t
@@ -194,19 +231,22 @@ func (m *Manager) JobSnapshot(jobID string) JobDownloadSnapshot {
 	out := JobDownloadSnapshot{JobID: jobID}
 	now := m.cfg.Now()
 	m.registry.Each(func(_ string, t *Transfer) {
-		if !t.hasWaiter(jobID) {
+		if !t.hasJobReference(jobID) {
 			return
 		}
 		snap := t.snapshot(now)
 		out.AssetsTotal++
 		out.BytesTotal += snap.BytesTotal
+		// In-flight bytes count toward the job: sumDownloadedBytes grows with
+		// every transfer, READY assets add their full size (a cache hit
+		// downloaded zero but the file is fully available).
+		out.BytesDownloaded += snap.BytesDownloaded
 		switch snap.State {
 		case DownloadReady:
 			out.AssetsReady++
-			// A READY asset is fully available: weight it on its total size,
-			// not on the bytes its transfer happened to download (a cache hit
-			// downloaded zero).
-			out.BytesDownloaded += snap.BytesTotal
+			// READY assets are fully available: weight them on their total
+			// size regardless of what the transfer happened to download.
+			out.BytesDownloaded += snap.BytesTotal - snap.BytesDownloaded
 			if snap.CacheHit {
 				out.CacheHits++
 			} else {
@@ -215,8 +255,15 @@ func (m *Manager) JobSnapshot(jobID string) JobDownloadSnapshot {
 		case DownloadQueued:
 			out.AssetsQueued++
 			out.QueuedTransfers++
-		case DownloadRunning, DownloadVerifying:
+		case DownloadRunning:
 			out.AssetsDownloading++
+			out.ActiveTransfers++
+			// Job ETA is the longest pole among active transfers.
+			if snap.ETASeconds > out.EstimatedRemainingSeconds {
+				out.EstimatedRemainingSeconds = snap.ETASeconds
+			}
+		case DownloadVerifying:
+			out.AssetsVerifying++
 			out.ActiveTransfers++
 		case DownloadFailed, DownloadCancelled:
 			out.AssetsFailed++
@@ -248,6 +295,9 @@ func (t *Transfer) run(m *Manager) {
 		// BytesDownloaded must stay 0 per the plan contract.
 		t.setCacheHit(true)
 		t.setState(DownloadCacheHit)
+		// CACHE_HIT is itself an immediate terminal cache event; persist it
+		// before the subsequent READY transition.
+		t.emitCheckpoint(t.now())
 		t.finish(TransferResult{LocalPath: hit.LocalPath}, nil)
 		return
 	}
@@ -269,7 +319,7 @@ func (t *Transfer) scheduled(m *Manager) {
 		return
 	}
 	t.setDownloading()
-	result, err := m.transferer.Transfer(t.transferContext(), t.reportContext(), t.req)
+	result, err := m.transferer.Transfer(t.transferContext(), t.reportContext(), t.req, t.reportProgress)
 	if err != nil {
 		if t.transferContext().Err() != nil {
 			t.finishCancelled()
