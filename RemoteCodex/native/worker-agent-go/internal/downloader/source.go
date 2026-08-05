@@ -19,7 +19,42 @@ package downloader
 // cache helpers). Tests wire byte fakes, which is why the package stays free
 // of net/http and worker internals.
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"io"
+)
+
+// SourceMetadata describes the response represented by an AssetSource.Open
+// call. Size is the total asset size when known; it is not the number of bytes
+// remaining after the requested offset. SHA256 and MIMEType are optional
+// source hints and do not replace the manager's final integrity verification.
+type SourceMetadata struct {
+	SizeBytes int64
+	SHA256    string
+	MIMEType  string
+}
+
+// AssetSource is the canonical byte source contract for resumable downloads.
+// Open must return a stream beginning at offset. An offset of zero requests
+// the complete asset; a non-zero offset requests a ranged suffix when
+// SupportsRange reports true. Implementations that do not support ranges must
+// return an error for non-zero offsets rather than silently returning bytes
+// from the beginning, which could corrupt a resumed partial file.
+type AssetSource interface {
+	Open(ctx context.Context, offset int64) (io.ReadCloser, SourceMetadata, error)
+	SupportsRange() bool
+}
+
+// ValidateSourceOffset centralizes the contract's invalid-offset rule for
+// implementations and tests. It is intentionally small so HTTP/file sources
+// can reject invalid input consistently before opening a connection.
+func ValidateSourceOffset(offset int64) error {
+	if offset < 0 {
+		return fmt.Errorf("asset source: negative offset %d", offset)
+	}
+	return nil
+}
 
 // CacheCheckResult is the outcome of a Transferer.Check.
 type CacheCheckResult struct {
