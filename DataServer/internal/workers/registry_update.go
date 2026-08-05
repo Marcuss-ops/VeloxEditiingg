@@ -13,13 +13,14 @@ import (
 // RegisterWorker registers a new worker or updates an existing one
 func (r *Registry) RegisterWorker(ctx context.Context, workerID, workerName, ipAddress string, extra map[string]interface{}) error {
 	workerID = identity.NormalizeWorkerID(workerID)
+	id := identity.ParseWorkerID(workerID)
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	// Check if already registered (preserve first_seen, display_name, worker_group)
-	existing, ok := r.inMem[workerID]
+	existing, ok := r.inMem[id]
 	firstSeen := now
 	displayName := workerName
 	workerGroup := ""
@@ -45,7 +46,7 @@ func (r *Registry) RegisterWorker(ctx context.Context, workerID, workerName, ipA
 	}
 
 	info := WorkerInfo{
-		WorkerID:    workerID,
+		WorkerID:    id,
 		WorkerName:  workerName,
 		DisplayName: displayName,
 		Status:      "online",
@@ -58,7 +59,7 @@ func (r *Registry) RegisterWorker(ctx context.Context, workerID, workerName, ipA
 	}
 	applyMetadataFields(extra, &info)
 
-	r.inMem[workerID] = info
+	r.inMem[id] = info
 
 	// Persist to SQLite. RegisterWorker builds a fresh struct (no prior
 	// SessionActive / ConnectionStatus) so no scrub is needed here.
@@ -79,7 +80,7 @@ func (r *Registry) UnregisterWorker(ctx context.Context, workerID string) error 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	delete(r.inMem, workerID)
+	delete(r.inMem, identity.ParseWorkerID(workerID))
 
 	if r.dbStore != nil {
 		if err := r.dbStore.DeleteWorker(workerID); err != nil {
@@ -94,10 +95,11 @@ func (r *Registry) UnregisterWorker(ctx context.Context, workerID string) error 
 // UpdateWorker updates specific fields of a worker
 func (r *Registry) UpdateWorker(ctx context.Context, workerID string, updates map[string]interface{}) error {
 	workerID = identity.NormalizeWorkerID(workerID)
+	id := identity.ParseWorkerID(workerID)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	info, ok := r.inMem[workerID]
+	info, ok := r.inMem[id]
 	if !ok {
 		return fmt.Errorf("worker not found: %s", workerID)
 	}
@@ -168,7 +170,7 @@ func (r *Registry) UpdateWorker(ctx context.Context, workerID string, updates ma
 	}
 
 	info.LastHB = time.Now().UTC().Format(time.RFC3339)
-	r.inMem[workerID] = info
+	r.inMem[id] = info
 
 	if r.dbStore != nil {
 		persisted := info

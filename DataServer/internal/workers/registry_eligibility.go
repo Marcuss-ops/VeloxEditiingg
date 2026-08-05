@@ -35,7 +35,7 @@ func (r *Registry) GetEligibleWorkers(ctx context.Context, req costmodel.JobRequ
 		}
 		resources := costmodel.ResourceSnapshotFromMaps(w.Capabilities, w.Metrics)
 		profile := costmodel.BuildWorkerProfile(
-			w.WorkerID,
+			w.WorkerID.String(),
 			w.Schedulable,
 			w.Drain,
 			w.Status,
@@ -56,7 +56,7 @@ func (r *Registry) GetEligibleWorkers(ctx context.Context, req costmodel.JobRequ
 	}
 	ids := make([]string, len(result))
 	for i, w := range result {
-		ids[i] = w.WorkerID
+		ids[i] = w.WorkerID.String()
 	}
 	r.hydrateBulk(ctx, ids, result, now)
 	return result
@@ -76,7 +76,7 @@ func (r *Registry) CleanupStaleWorkers(ctx context.Context, maxAge time.Duration
 			if err == nil && now.Sub(t.UTC()) > maxAge {
 				delete(r.inMem, id)
 				if r.dbStore != nil {
-					if err := r.dbStore.DeleteWorker(id); err != nil {
+					if err := r.dbStore.DeleteWorker(id.String()); err != nil {
 						registryLog.ErrorWithMsg(logging.CodeRegistryDeleteStaleWorkerFail,
 							"Failed to delete stale worker",
 							map[string]interface{}{"worker_id": id, "err": err.Error()})

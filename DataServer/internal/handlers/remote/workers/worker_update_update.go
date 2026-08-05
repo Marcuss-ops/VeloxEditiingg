@@ -156,7 +156,7 @@ func (h *WorkerUpdateHandler) RolloutUpdateHandler() gin.HandlerFunc {
 
 		eligible := []string{}
 		for _, info := range allWorkers {
-			if h.reg.IsRevoked(info.WorkerID) {
+			if h.reg.IsRevoked(info.WorkerID.String()) {
 				continue
 			}
 			if info.Drain {
@@ -168,7 +168,7 @@ func (h *WorkerUpdateHandler) RolloutUpdateHandler() gin.HandlerFunc {
 					continue
 				}
 			}
-			eligible = append(eligible, info.WorkerID)
+			eligible = append(eligible, info.WorkerID.String())
 		}
 
 		if len(eligible) == 0 {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"velox-server/internal/store"
+	"velox-shared/identity"
 )
 
 func newTestRegistry(t *testing.T) *Registry {
@@ -216,9 +217,9 @@ func TestRegistryCleanupStaleWorkers(t *testing.T) {
 
 	// Manually set old heartbeat
 	reg.mu.Lock()
-	info := reg.inMem["w1"]
+	info := reg.inMem[identity.ParseWorkerID("w1")]
 	info.LastHB = time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339)
-	reg.inMem["w1"] = info
+	reg.inMem[identity.ParseWorkerID("w1")] = info
 	reg.mu.Unlock()
 
 	count := reg.CleanupStaleWorkers(ctx, time.Hour)
@@ -345,9 +346,9 @@ func TestRegistryStatusSnapshotSeparatesRegisteredFromLive(t *testing.T) {
 	_ = reg.Heartbeat(ctx, "w2", "worker-2", "idle", "", nil)
 
 	reg.mu.Lock()
-	stale := reg.inMem["w2"]
+	stale := reg.inMem[identity.ParseWorkerID("w2")]
 	stale.LastHB = time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339)
-	reg.inMem["w2"] = stale
+	reg.inMem[identity.ParseWorkerID("w2")] = stale
 	reg.mu.Unlock()
 
 	registered, live := reg.StatusSnapshot(ctx, 5*time.Minute)
@@ -372,9 +373,9 @@ func TestRegistryGetStaleWorkers(t *testing.T) {
 	_ = reg.Heartbeat(ctx, "w2", "worker-2", "idle", "", nil)
 
 	reg.mu.Lock()
-	stale := reg.inMem["w2"]
+	stale := reg.inMem[identity.ParseWorkerID("w2")]
 	stale.LastHB = time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339)
-	reg.inMem["w2"] = stale
+	reg.inMem[identity.ParseWorkerID("w2")] = stale
 	reg.mu.Unlock()
 
 	staleWorkers := reg.GetStaleWorkers(ctx, 5*time.Minute)
@@ -431,9 +432,9 @@ func TestRegistryConnectionStatus_SessionDropAndOldHeartbeat(t *testing.T) {
 	setHB := func(workerID string, age time.Duration) {
 		reg.mu.Lock()
 		defer reg.mu.Unlock()
-		info := reg.inMem[workerID]
+		info := reg.inMem[identity.ParseWorkerID(workerID)]
 		info.LastHB = time.Now().UTC().Add(-age).Format(time.RFC3339)
-		reg.inMem[workerID] = info
+		reg.inMem[identity.ParseWorkerID(workerID)] = info
 	}
 
 	// ── 1. CONNECTED — fresh session + fresh heartbeat ─────────────
@@ -562,7 +563,7 @@ func TestRegistryListPopulatesSessionActive_AcrossFleet(t *testing.T) {
 
 	got := make(map[string]WorkerInfo, len(list))
 	for _, w := range list {
-		got[w.WorkerID] = w
+		got[w.WorkerID.String()] = w
 	}
 	if !got["w1"].SessionActive {
 		t.Errorf("w1.SessionActive: want true (active session inserted); got false (info=%+v)", got["w1"])

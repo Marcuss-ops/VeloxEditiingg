@@ -58,6 +58,7 @@ import (
 
 	"velox-server/internal/store"
 	"velox-server/internal/workers"
+	"velox-shared/identity"
 )
 
 // pin to NEW per-test scaffold ---------------------------------------
@@ -205,7 +206,7 @@ func (s *stubBackendsState) GetWorker(_ context.Context, id string) (*workers.Wo
 		return nil, nil
 	}
 	info := &workers.WorkerInfo{
-		WorkerID:      id,
+		WorkerID:      identity.ParseWorkerID(id),
 		SessionActive: s.sessionActive,
 		LastHB:        s.lastHB,
 		Drain:         s.drain,

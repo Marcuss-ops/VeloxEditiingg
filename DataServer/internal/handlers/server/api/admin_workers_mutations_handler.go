@@ -311,7 +311,7 @@ func (h *AdminWorkersMutationsHandler) DrainWorker() gin.HandlerFunc {
 		if info.Drain {
 			return errAlreadyInDesiredState{desired: "DRAINING", current: "DRAINING"}
 		}
-		return h.reg.SetWorkerDrain(ctx, info.WorkerID, true)
+		return h.reg.SetWorkerDrain(ctx, info.WorkerID.String(), true)
 	})
 }
 
@@ -336,7 +336,7 @@ func (h *AdminWorkersMutationsHandler) QuarantineWorker() gin.HandlerFunc {
 		if info.Quarantined {
 			return errAlreadyInDesiredState{desired: "QUARANTINED", current: "QUARANTINED"}
 		}
-		return h.reg.SetWorkerQuarantine(ctx, info.WorkerID, true)
+		return h.reg.SetWorkerQuarantine(ctx, info.WorkerID.String(), true)
 	})
 }
 
@@ -401,10 +401,10 @@ func (h *AdminWorkersMutationsHandler) ResumeWorker() gin.HandlerFunc {
 		if !info.Drain && !info.Quarantined {
 			return errAlreadyInDesiredState{desired: "HEALTHY", current: "HEALTHY"}
 		}
-		if err := h.reg.SetWorkerDrain(ctx, info.WorkerID, false); err != nil {
+		if err := h.reg.SetWorkerDrain(ctx, info.WorkerID.String(), false); err != nil {
 			return err
 		}
-		if err := h.reg.SetWorkerQuarantine(ctx, info.WorkerID, false); err != nil {
+		if err := h.reg.SetWorkerQuarantine(ctx, info.WorkerID.String(), false); err != nil {
 			return err
 		}
 		return nil

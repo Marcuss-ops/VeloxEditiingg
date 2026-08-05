@@ -53,7 +53,7 @@ func ProbeLevelC(ctx context.Context, registry HealthLevelCGater, workerID strin
 		finalize(&r, start)
 		return r
 	}
-	r.Checks["worker_present"] = CheckResult{Passed: true, Value: info.WorkerID}
+	r.Checks["worker_present"] = CheckResult{Passed: true, Value: info.WorkerID.String()}
 	// status_connected — WorkerInfo.ConnectionStatus is the canonical
 	// derivation from registry_query.go (session_active + heartbeat
 	// freshness + drain).

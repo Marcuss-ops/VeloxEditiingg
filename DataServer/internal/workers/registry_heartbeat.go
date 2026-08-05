@@ -23,20 +23,21 @@ func (r *Registry) HeartbeatWithSession(ctx context.Context, sessionID, workerID
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	workerID = identity.NormalizeWorkerID(workerID)
+	id := identity.ParseWorkerID(workerID)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	// Reject heartbeat for revoked workers
-	if r.revoked[workerID] {
+	if r.revoked[id] {
 		return fmt.Errorf("worker %s is revoked", workerID)
 	}
 
 	// Preserve existing state unless explicitly updated by heartbeat payload.
-	existing, hasExisting := r.inMem[workerID]
+	existing, hasExisting := r.inMem[id]
 
 	info := WorkerInfo{
-		WorkerID:    workerID,
+		WorkerID:    id,
 		WorkerName:  workerName,
 		Status:      status,
 		LastHB:      now,
@@ -45,7 +46,7 @@ func (r *Registry) HeartbeatWithSession(ctx context.Context, sessionID, workerID
 	}
 	if hasExisting {
 		info = existing
-		info.WorkerID = workerID
+		info.WorkerID = id
 		if workerName != "" {
 			info.WorkerName = workerName
 		}
@@ -111,7 +112,7 @@ func (r *Registry) HeartbeatWithSession(ctx context.Context, sessionID, workerID
 		}
 	}
 
-	r.inMem[workerID] = info
+	r.inMem[id] = info
 
 	// Persist to SQLite (single source of truth). ONLY heartbeat-derived
 	// state is persisted; the read-time-hydrated SessionActive +

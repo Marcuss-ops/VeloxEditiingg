@@ -1,6 +1,10 @@
 package workers
 
-import "strings"
+import (
+	"strings"
+
+	"velox-shared/identity"
+)
 
 // WorkerInfo contains all information about a registered worker.
 //
@@ -19,8 +23,12 @@ import "strings"
 // cached WorkerInfo returned by a previous GetWorker cannot leak derived
 // state across a registry restart.
 type WorkerInfo struct {
-	WorkerID               string `json:"worker_id"`
-	WorkerName             string `json:"worker_name"`
+	// WorkerID is the canonical typed worker identity (velox-shared/identity).
+	// It is the ONLY field usable as an identity key: worker_name,
+	// display_name, host, ip_address and node_id are operational
+	// attributes. The JSON wire form stays a plain string.
+	WorkerID               identity.WorkerID `json:"worker_id"`
+	WorkerName             string            `json:"worker_name"`
 	DisplayName            string `json:"display_name"`
 	Status                 string `json:"status"`
 	LastHB                 string `json:"last_heartbeat"`

@@ -150,7 +150,7 @@ func buildWorkerCard(info *workersreg.WorkerInfo) WorkerCard {
 		execVer = exs[0].Version
 	}
 	return WorkerCard{
-		WorkerID:            info.WorkerID,
+		WorkerID:            info.WorkerID.String(),
 		Hostname:            sanitiseHostname(info.WorkerName),
 		Host:                sanitiseHostname(info.IPAddress),
 		Status:              info.ConnectionStatus,

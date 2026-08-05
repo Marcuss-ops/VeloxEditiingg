@@ -47,6 +47,7 @@ import (
 
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
+	"velox-shared/identity"
 )
 
 // ── Stub helpers ──────────────────────────────────────────────────────
@@ -111,7 +112,7 @@ func (s stubSmoke) RunLevelD(_ context.Context, _ string) (string, error) {
 // helper: build a healthy worker at time t0 (LastHB 30s before now).
 func healthyWorkerAt(workerID string, t time.Time) *workersreg.WorkerInfo {
 	return &workersreg.WorkerInfo{
-		WorkerID:         workerID,
+		WorkerID:         identity.ParseWorkerID(workerID),
 		ConnectionStatus: "CONNECTED",
 		SessionActive:    true,
 		LastHB:           t.Add(-30 * time.Second).Format(time.RFC3339Nano),

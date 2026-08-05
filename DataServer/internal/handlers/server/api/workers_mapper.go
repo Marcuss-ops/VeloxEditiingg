@@ -47,7 +47,7 @@ func heartbeatAgeSeconds(lastHB string) int64 {
 // so no legacy/heartbeat-only fallback is needed.
 func sanitizeWorker(w workersreg.WorkerInfo) WorkerResponse {
 	resp := WorkerResponse{
-		WorkerID:            w.WorkerID,
+		WorkerID:            w.WorkerID.String(),
 		WorkerName:          w.WorkerName,
 		SessionActive:       w.SessionActive,
 		Status:              w.ConnectionStatus,

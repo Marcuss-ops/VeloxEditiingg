@@ -93,7 +93,7 @@ func ConnectionStatus(sessionActive bool, lastHB string, drain bool, now time.Ti
 func (r *Registry) IsRegistered(ctx context.Context, workerID string) bool {
 	workerID = identity.NormalizeWorkerID(workerID)
 	r.mu.RLock()
-	_, ok := r.inMem[workerID]
+	_, ok := r.inMem[identity.ParseWorkerID(workerID)]
 	r.mu.RUnlock()
 	return ok
 }
@@ -104,7 +104,7 @@ func (r *Registry) IsRegistered(ctx context.Context, workerID string) bool {
 func (r *Registry) GetWorker(ctx context.Context, workerID string) *WorkerInfo {
 	workerID = identity.NormalizeWorkerID(workerID)
 	r.mu.RLock()
-	info, ok := r.inMem[workerID]
+	info, ok := r.inMem[identity.ParseWorkerID(workerID)]
 	r.mu.RUnlock()
 	if !ok {
 		return nil
@@ -144,7 +144,7 @@ func (r *Registry) GetStaleWorkers(ctx context.Context, timeout time.Duration) [
 	if len(registered) == 0 {
 		return nil
 	}
-	liveSet := make(map[string]struct{}, len(live))
+	liveSet := make(map[identity.WorkerID]struct{}, len(live))
 	for _, w := range live {
 		liveSet[w.WorkerID] = struct{}{}
 	}
@@ -175,7 +175,7 @@ func (r *Registry) GetWorkersByGroup(ctx context.Context, group string) []Worker
 	}
 	ids := make([]string, len(result))
 	for i, w := range result {
-		ids[i] = w.WorkerID
+		ids[i] = w.WorkerID.String()
 	}
 	r.hydrateBulk(ctx, ids, result, now)
 	return result
@@ -246,7 +246,7 @@ func (r *Registry) GetActiveWorkers(ctx context.Context, timeout time.Duration) 
 	}
 	ids := make([]string, len(result))
 	for i, w := range result {
-		ids[i] = w.WorkerID
+		ids[i] = w.WorkerID.String()
 	}
 	r.hydrateBulk(ctx, ids, result, now)
 	return result
@@ -273,10 +273,10 @@ func (r *Registry) snapshotRegistered(keep func(workerID string, w WorkerInfo) b
 		if r.revoked[id] {
 			continue
 		}
-		if !keep(id, w) {
+		if !keep(id.String(), w) {
 			continue
 		}
-		ids = append(ids, id)
+		ids = append(ids, id.String())
 		infos = append(infos, w)
 	}
 	r.mu.RUnlock()
@@ -309,7 +309,7 @@ func (r *Registry) hydrateBulk(ctx context.Context, ids []string, infos []Worker
 		sessionMap = map[string]bool{}
 	}
 	for i := range infos {
-		active := sessionMap[infos[i].WorkerID]
+		active := sessionMap[infos[i].WorkerID.String()]
 		ConnectionStatusForInfo(&infos[i], active, now)
 	}
 }
@@ -325,11 +325,11 @@ func (r *Registry) hydrate(ctx context.Context, info *WorkerInfo, now time.Time)
 		ConnectionStatusForInfo(info, false, now)
 		return
 	}
-	active, err := r.dbStore.IsSessionActive(info.WorkerID)
+	active, err := r.dbStore.IsSessionActive(info.WorkerID.String())
 	if err != nil {
 		registryLog.WarnWithMsg(logging.CodeRegistryLoadSessionQueryFail,
 			"worker session query failed; treating worker as DISCONNECTED",
-			map[string]interface{}{"worker_id": info.WorkerID, "err": err.Error()})
+			map[string]interface{}{"worker_id": info.WorkerID.String(), "err": err.Error()})
 		active = false
 	}
 	ConnectionStatusForInfo(info, active, now)

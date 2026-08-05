@@ -34,7 +34,10 @@ func parseLogLimit(c *gin.Context, defaultLimit int) int {
 func findWorker(list []workersreg.WorkerInfo, key string) *workersreg.WorkerInfo {
 	for i := range list {
 		w := &list[i]
-		if w.WorkerID == key || w.WorkerName == key || w.DisplayName == key || w.Host == key || w.IPAddress == key {
+		// worker_id is the canonical identity; worker_name / display_name /
+		// host / ip are operator-convenience aliases that always resolve
+		// back to the canonical WorkerID in the response.
+		if w.WorkerID.String() == key || w.WorkerName == key || w.DisplayName == key || w.Host == key || w.IPAddress == key {
 			return w
 		}
 	}

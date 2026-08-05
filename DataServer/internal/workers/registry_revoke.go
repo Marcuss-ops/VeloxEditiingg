@@ -12,15 +12,16 @@ func (r *Registry) IsRevoked(workerID string) bool {
 	workerID = identity.NormalizeWorkerID(workerID)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.revoked[workerID]
+	return r.revoked[identity.ParseWorkerID(workerID)]
 }
 
 // RevokeWorker marks a worker as revoked and removes it from the active set
 func (r *Registry) RevokeWorker(ctx context.Context, workerID string) {
 	workerID = identity.NormalizeWorkerID(workerID)
+	id := identity.ParseWorkerID(workerID)
 	r.mu.Lock()
-	r.revoked[workerID] = true
-	delete(r.inMem, workerID)
+	r.revoked[id] = true
+	delete(r.inMem, id)
 
 	if r.dbStore != nil {
 		if err := r.dbStore.SetWorkerRevoked(workerID, true); err != nil {
@@ -36,7 +37,7 @@ func (r *Registry) RevokeWorker(ctx context.Context, workerID string) {
 func (r *Registry) UnrevokeWorker(workerID string) {
 	workerID = identity.NormalizeWorkerID(workerID)
 	r.mu.Lock()
-	delete(r.revoked, workerID)
+	delete(r.revoked, identity.ParseWorkerID(workerID))
 
 	if r.dbStore != nil {
 		if err := r.dbStore.SetWorkerRevoked(workerID, false); err != nil {
@@ -54,7 +55,7 @@ func (r *Registry) LoadRevoked(ids []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, id := range ids {
-		normID := identity.NormalizeWorkerID(id)
+		normID := identity.ParseWorkerID(identity.NormalizeWorkerID(id))
 		r.revoked[normID] = true
 		delete(r.inMem, normID)
 	}
@@ -66,7 +67,7 @@ func (r *Registry) ListRevoked() []string {
 	defer r.mu.RUnlock()
 	ids := make([]string, 0, len(r.revoked))
 	for id := range r.revoked {
-		ids = append(ids, id)
+		ids = append(ids, id.String())
 	}
 	return ids
 }

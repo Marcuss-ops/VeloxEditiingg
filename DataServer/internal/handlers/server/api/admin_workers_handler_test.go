@@ -27,6 +27,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	workersreg "velox-server/internal/workers"
+	"velox-shared/identity"
 )
 
 // makeCardInfo returns a fresh, post-hydration WorkerInfo populated
@@ -34,7 +35,7 @@ import (
 // the result via `opts` so the happy-path copy stays small.
 func makeCardInfo(id string, opts ...func(*workersreg.WorkerInfo)) workersreg.WorkerInfo {
 	info := workersreg.WorkerInfo{
-		WorkerID:         id,
+		WorkerID:         identity.ParseWorkerID(id),
 		WorkerName:       "vps-" + id,
 		IPAddress:        "10.0.0.5",
 		CodeVersion:      "worker-v1.8.4",
@@ -308,7 +309,7 @@ func TestWorkerCard_JSON_OmitsEmptyFields(t *testing.T) {
 // happens to land in the whitelisted WorkerName / IPAddress slots.
 func TestWorkerCard_SensitiveFieldsDoNotLeak(t *testing.T) {
 	info := workersreg.WorkerInfo{
-		WorkerID:               "w-leak",
+		WorkerID:               identity.ParseWorkerID("w-leak"),
 		WorkerName:             "vps-leak",
 		IPAddress:              "192.168.99.99",
 		ConnectionStatus:       "CONNECTED",

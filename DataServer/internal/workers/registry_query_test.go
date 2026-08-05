@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"velox-server/internal/costmodel"
+	"velox-shared/identity"
 )
 
 // newRegistryWithLastHB seeds an in-memory worker with the supplied
@@ -29,9 +30,9 @@ import (
 func newRegistryWithLastHB(t *testing.T, workerID string, lastHB time.Time, sessionActive bool) *Registry {
 	t.Helper()
 	return &Registry{
-		inMem: map[string]WorkerInfo{
-			workerID: {
-				WorkerID:      workerID,
+		inMem: map[identity.WorkerID]WorkerInfo{
+			identity.ParseWorkerID(workerID): {
+				WorkerID:      identity.ParseWorkerID(workerID),
 				LastHB:        lastHB.UTC().Format(time.RFC3339),
 				Schedulable:   true,
 				SessionActive: sessionActive,
@@ -39,7 +40,7 @@ func newRegistryWithLastHB(t *testing.T, workerID string, lastHB time.Time, sess
 				Capabilities:  map[string]interface{}{},
 			},
 		},
-		revoked: map[string]bool{},
+		revoked: map[identity.WorkerID]bool{},
 	}
 }
 
@@ -47,8 +48,8 @@ const testLiveWorker = "worker-live-A7"
 
 func TestRegistry_HasAtLeastOneLive_Empty(t *testing.T) {
 	r := &Registry{
-		inMem:   map[string]WorkerInfo{},
-		revoked: map[string]bool{},
+		inMem:   map[identity.WorkerID]WorkerInfo{},
+		revoked: map[identity.WorkerID]bool{},
 	}
 	if r.HasAtLeastOneLive(context.Background()) {
 		t.Fatal("empty fleet must report HasAtLeastOneLive=false")
@@ -57,8 +58,8 @@ func TestRegistry_HasAtLeastOneLive_Empty(t *testing.T) {
 
 func TestRegistry_HasAtLeastOneLive_Empty_NeverSet(t *testing.T) {
 	r := &Registry{
-		inMem:   map[string]WorkerInfo{},
-		revoked: map[string]bool{},
+		inMem:   map[identity.WorkerID]WorkerInfo{},
+		revoked: map[identity.WorkerID]bool{},
 	}
 	if r.HasAtLeastOneLive(context.Background()) {
 		t.Fatal("uninitialised registry must report HasAtLeastOneLive=false")
@@ -86,7 +87,7 @@ func TestRegistry_HasAtLeastOneLive_Revoked(t *testing.T) {
 	// Revoked workers are skipped by GetActiveWorkers via the `r.revoked[w.WorkerID]`
 	// guard. LastHB fresh enough to be CONNECTED.
 	r := newRegistryWithLastHB(t, testLiveWorker, time.Now().UTC(), true)
-	r.revoked[testLiveWorker] = true
+	r.revoked[identity.ParseWorkerID(testLiveWorker)] = true
 	if r.HasAtLeastOneLive(context.Background()) {
 		t.Fatal("revoked worker must be excluded from HasAtLeastOneLive even with fresh HB")
 	}
@@ -97,17 +98,17 @@ func TestRegistry_HasAtLeastOneLive_StaleRejected_TwoLiveOk(t *testing.T) {
 	// keeps the gate satisfied (canonical "any one live is enough"
 	// semantics, no per-worker quorum).
 	r := &Registry{
-		inMem: map[string]WorkerInfo{
-			"stale-A": {
-				WorkerID:      "stale-A",
+		inMem: map[identity.WorkerID]WorkerInfo{
+			identity.ParseWorkerID("stale-A"): {
+				WorkerID:      identity.ParseWorkerID("stale-A"),
 				LastHB:        time.Now().UTC().Add(-2 * time.Minute).Format(time.RFC3339),
 				Schedulable:   true,
 				SessionActive: true,
 				Status:        StatusConnected,
 				Capabilities:  map[string]interface{}{},
 			},
-			testLiveWorker: {
-				WorkerID:      testLiveWorker,
+			identity.ParseWorkerID(testLiveWorker): {
+				WorkerID:      identity.ParseWorkerID(testLiveWorker),
 				LastHB:        time.Now().UTC().Format(time.RFC3339),
 				Schedulable:   true,
 				SessionActive: true,
@@ -115,7 +116,7 @@ func TestRegistry_HasAtLeastOneLive_StaleRejected_TwoLiveOk(t *testing.T) {
 				Capabilities:  map[string]interface{}{},
 			},
 		},
-		revoked: map[string]bool{},
+		revoked: map[identity.WorkerID]bool{},
 	}
 	if !r.HasAtLeastOneLive(context.Background()) {
 		t.Fatal("mixed-stale fleet with at least one fresh worker must satisfy HasAtLeastOneLive")
@@ -136,9 +137,9 @@ func TestRegistry_HasAtLeastOneLive_NilSafe(t *testing.T) {
 // orthogonal — the master may still be ready while a worker drains.
 func TestRegistry_GetEligibleWorkers_DrainExclusionGuardsHasAtLeastOneLive(t *testing.T) {
 	r := &Registry{
-		inMem: map[string]WorkerInfo{
-			testLiveWorker: {
-				WorkerID:      testLiveWorker,
+		inMem: map[identity.WorkerID]WorkerInfo{
+			identity.ParseWorkerID(testLiveWorker): {
+				WorkerID:      identity.ParseWorkerID(testLiveWorker),
 				LastHB:        time.Now().UTC().Format(time.RFC3339),
 				Schedulable:   true,
 				SessionActive: true,
@@ -147,7 +148,7 @@ func TestRegistry_GetEligibleWorkers_DrainExclusionGuardsHasAtLeastOneLive(t *te
 				Capabilities:  map[string]interface{}{"max_parallel_jobs": float64(1)},
 			},
 		},
-		revoked: map[string]bool{},
+		revoked: map[identity.WorkerID]bool{},
 	}
 	// Drain should disqualify from eligibility — but the readiness gate
 	// checks List/GetActiveWorkers semantics, NOT eligibility.

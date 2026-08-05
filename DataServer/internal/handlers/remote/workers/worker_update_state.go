@@ -139,12 +139,12 @@ func (h *WorkerUpdateHandler) GetUpdateStatusHandler() gin.HandlerFunc {
 		status := make(map[string]interface{})
 		targetArtifactSHA := h.computeBundleSHA256()
 
-		for _, info := range allWorkers {
-			if info.WorkerID == "" {
-				continue
-			}
-			pendingCmds := h.cmdMgr.GetPendingCommands(info.WorkerID)
-			hasUpdate := false
+	for _, info := range allWorkers {
+		if info.WorkerID.IsEmpty() {
+			continue
+		}
+		pendingCmds := h.cmdMgr.GetPendingCommands(info.WorkerID.String())
+		hasUpdate := false
 			var updateVersion string
 			for _, pc := range pendingCmds {
 				if pc.Command == "update_code" {
@@ -156,7 +156,7 @@ func (h *WorkerUpdateHandler) GetUpdateStatusHandler() gin.HandlerFunc {
 				}
 			}
 			if hasUpdate {
-				status[info.WorkerID] = map[string]interface{}{
+				status[info.WorkerID.String()] = map[string]interface{}{
 					"worker_name":            info.WorkerName,
 					"target_version":         updateVersion,
 					"target_artifact_sha256": targetArtifactSHA,

@@ -174,7 +174,7 @@ func (h *WorkerUpdateHandler) eligibleWorkers(ctx context.Context, excludeLocal 
 	allWorkers := h.reg.List(ctx)
 	eligible := make([]string, 0, len(allWorkers))
 	for _, info := range allWorkers {
-		if h.reg.IsRevoked(info.WorkerID) {
+		if h.reg.IsRevoked(info.WorkerID.String()) {
 			continue
 		}
 		if info.Drain {
@@ -186,7 +186,7 @@ func (h *WorkerUpdateHandler) eligibleWorkers(ctx context.Context, excludeLocal 
 				continue
 			}
 		}
-		eligible = append(eligible, info.WorkerID)
+		eligible = append(eligible, info.WorkerID.String())
 	}
 	return eligible
 }
