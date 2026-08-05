@@ -63,6 +63,16 @@ type Config struct {
 	// OnOperationalSnapshot receives an aggregate low-cardinality view after
 	// lifecycle or throttled progress updates. It must be non-blocking.
 	OnOperationalSnapshot func(snapshot OperationalSnapshot)
+
+	// OnCoalescedRequest observes a caller that joined an already-running
+	// transfer. It must be non-blocking; the manager invokes it once per
+	// coalesced Resolve call with the requested asset size for duplicate-
+	// download accounting.
+	OnCoalescedRequest func(sizeBytes int64)
+
+	// MaxRetainedTransfers bounds terminal transfers kept for late Snapshot /
+	// JobSnapshot reads. Zero uses the bounded default.
+	MaxRetainedTransfers int
 }
 
 func (c *Config) withDefaults() {
@@ -83,6 +93,9 @@ func (c *Config) withDefaults() {
 	}
 	if c.CheckpointBytes <= 0 {
 		c.CheckpointBytes = ProgressCheckpointBytes
+	}
+	if c.MaxRetainedTransfers <= 0 {
+		c.MaxRetainedTransfers = 1024
 	}
 }
 
@@ -108,6 +121,7 @@ type Manager struct {
 
 	qseq       atomic.Int64
 	generation atomic.Int64
+	waiterSeq  atomic.Uint64
 	coalesced  atomic.Uint64
 }
 
@@ -155,14 +169,18 @@ func (m *Manager) Resolve(ctx context.Context, req DownloadRequest) (DownloadedA
 		t, shared := m.acquireTransfer(key, req, ctx)
 		if shared {
 			m.coalesced.Add(1)
+			if m.cfg.OnCoalescedRequest != nil {
+				m.cfg.OnCoalescedRequest(req.SizeBytes)
+			}
 		}
 
-		t.addWaiter(req)
+		waiterID := m.waiterSeq.Add(1)
+		t.addWaiter(waiterID, req)
 		m.refreshOperational()
 		select {
 		case <-t.doneCh():
 			result, err := t.result()
-			t.removeWaiter(req.JobID, req.TaskID)
+			t.removeWaiter(waiterID)
 			if err != nil {
 				if errors.Is(err, errTransferCancelled) && ctx.Err() == nil {
 					continue
@@ -183,7 +201,7 @@ func (m *Manager) Resolve(ctx context.Context, req DownloadRequest) (DownloadedA
 		case <-ctx.Done():
 			// The caller (job/task) went away. Remove the waiter; only when it
 			// was the LAST waiter may the shared transfer be cancelled.
-			if last := t.removeWaiter(req.JobID, req.TaskID); last {
+			if last := t.removeWaiter(waiterID); last {
 				t.requestCancel()
 			}
 			return DownloadedAsset{}, ctx.Err()
@@ -197,6 +215,7 @@ func (m *Manager) Resolve(ctx context.Context, req DownloadRequest) (DownloadedA
 // terminal state. Terminal transfers stay in the registry for snapshot
 // visibility; new Resolve calls re-check the cache cheaply.
 func (m *Manager) acquireTransfer(key string, req DownloadRequest, reportCtx context.Context) (*Transfer, bool) {
+	m.registry.PruneTerminal(m.cfg.MaxRetainedTransfers)
 	m.registry.mu.Lock()
 	defer m.registry.mu.Unlock()
 	if existing := m.registry.transfers[key]; existing != nil && !existing.isTerminal() {
@@ -248,6 +267,7 @@ func (m *Manager) refreshOperational() {
 		}
 	})
 	m.cfg.OnOperationalSnapshot(out)
+	m.registry.PruneTerminal(m.cfg.MaxRetainedTransfers)
 }
 
 // Snapshot returns the current snapshot for an asset key.
@@ -402,8 +422,10 @@ func (t *Transfer) outcome() (cacheHit bool, completedAt time.Time) {
 func (t *Transfer) hasWaiter(jobID string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for w := range t.waiters {
-		if w.jobID == jobID {
+	// Active waiter identity is intentionally opaque; job membership is
+	// represented by the durable jobRefs map below.
+	for _, ref := range t.jobRefs {
+		if ref.JobID == jobID {
 			return true
 		}
 	}

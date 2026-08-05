@@ -29,7 +29,7 @@
 // level, so a Cleanup that begins while a job's lease is still set
 // is correct by construction. The reverse — a job acquires AFTER
 // Cleanup has listed but BEFORE it deletes — is the 3-minute grace
-// window protected by `last_used_at` in Pass 11 (not in this pass).
+// window protected by `last_used_at` in the cleanup policy.
 package workercache
 
 import (

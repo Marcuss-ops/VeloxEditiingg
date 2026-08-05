@@ -98,11 +98,11 @@ func WithBlobs(b *blob.BlobArtifacts) Option {
 }
 
 // WithClipCache wires the worker-side workercache.Cache into the
-// Worker. When set, dispatchTaskRunner acquires an active-job lease
-// (active_job_id) on every Drive clip referenced by the job payload
-// BEFORE invoking taskRunner.Run, and a defer at the same scope
-// releases it on success/error/panic so the workercache.Cleanup
-// loop never deletes an asset inside an active render.
+// Worker. When set, dispatchTaskRunner acquires a per-job lease relation
+// on every cached asset referenced by the job payload BEFORE invoking
+// taskRunner.Run, and a defer at the same scope releases it on
+// success/error/panic so the workercache.Cleanup loop never deletes an
+// asset inside an active render.
 //
 // Passing nil panics loudly; omit WithClipCache to disable the
 // lease surface entirely (legacy bootstrap profiles, headless

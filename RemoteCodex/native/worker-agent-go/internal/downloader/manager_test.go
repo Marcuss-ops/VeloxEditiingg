@@ -164,6 +164,117 @@ func TestManager_TwoJobsSameAsset_OneUpstream(t *testing.T) {
 	}
 }
 
+// TestManager_CoalescedRequestHook: the manager reports the second caller
+// through the canonical coalescing hook, preserving duplicate-download
+// accounting without a separate singleflight resolver.
+func TestManager_CoalescedRequestHook(t *testing.T) {
+	release := make(chan struct{})
+	var calls atomic.Int32
+	var size atomic.Int64
+	tf := &fakeTransferer{
+		transfer: func(ctx context.Context, reportCtx context.Context, req DownloadRequest, _ func(int64)) (TransferResult, error) {
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return TransferResult{}, ctx.Err()
+			}
+			return TransferResult{LocalPath: "/shared/hook.mp4", Bytes: req.SizeBytes}, nil
+		},
+	}
+	m := NewManager(Config{
+		Concurrency: 1,
+		OnCoalescedRequest: func(bytes int64) {
+			calls.Add(1)
+			size.Store(bytes)
+		},
+	}, tf)
+	t.Cleanup(m.Close)
+
+	request := DownloadRequest{AssetKey: "hook", AssetID: "hook", SizeBytes: 4096}
+	results := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			_, err := m.Resolve(context.Background(), request)
+			results <- err
+		}()
+	}
+	waitFor(t, "coalesced waiter", func() bool {
+		snap, ok := m.Snapshot(request.AssetKey)
+		return ok && snap.SharedWaiters == 2
+	})
+	close(release)
+	for i := 0; i < 2; i++ {
+		if err := <-results; err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("coalesced hook calls = %d, want 1", calls.Load())
+	}
+	if size.Load() != request.SizeBytes {
+		t.Fatalf("coalesced hook size = %d, want %d", size.Load(), request.SizeBytes)
+	}
+}
+
+// TestManager_SameTaskConcurrentWaiters: two independent Resolve calls with
+// identical job/task metadata still represent two waiters. Cancelling one must
+// not remove the other or cancel the shared transfer.
+func TestManager_SameTaskConcurrentWaiters(t *testing.T) {
+	release := make(chan struct{})
+	tf := &fakeTransferer{
+		transfer: func(ctx context.Context, reportCtx context.Context, req DownloadRequest, _ func(int64)) (TransferResult, error) {
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return TransferResult{}, ctx.Err()
+			}
+			return TransferResult{LocalPath: "/shared/same-task.mp4", Bytes: req.SizeBytes, SHA256: "sha"}, nil
+		},
+	}
+	m := newTestManager(t, tf)
+	ctxA, cancelA := context.WithCancel(context.Background())
+	outA := make(chan error, 1)
+	outB := make(chan DownloadedAsset, 1)
+	request := DownloadRequest{JobID: "same-job", TaskID: "same-task", AssetKey: "same-asset", AssetID: "same-asset", SizeBytes: 4096}
+	go func() {
+		_, err := m.Resolve(ctxA, request)
+		outA <- err
+	}()
+	waitFor(t, "first same-task waiter", func() bool {
+		snap, ok := m.Snapshot(request.AssetKey)
+		return ok && snap.SharedWaiters == 1
+	})
+	go func() {
+		asset, err := m.Resolve(context.Background(), request)
+		if err != nil {
+			outB <- DownloadedAsset{}
+			return
+		}
+		outB <- asset
+	}()
+	waitFor(t, "two same-task waiters", func() bool {
+		snap, ok := m.Snapshot(request.AssetKey)
+		return ok && snap.SharedWaiters == 2
+	})
+
+	cancelA()
+	if err := <-outA; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled same-task waiter error = %v, want context.Canceled", err)
+	}
+	waitFor(t, "surviving same-task waiter", func() bool {
+		snap, _ := m.Snapshot(request.AssetKey)
+		return snap.SharedWaiters == 1 && snap.State != DownloadCancelled
+	})
+	close(release)
+	asset := <-outB
+	if asset.LocalPath != "/shared/same-task.mp4" {
+		t.Fatalf("surviving waiter path = %q, want shared path", asset.LocalPath)
+	}
+	if got := tf.transferCalls.Load(); got != 1 {
+		t.Fatalf("transfer calls = %d, want 1", got)
+	}
+}
+
 // TestManager_CancelOneWaiter_KeepsDownload: cancelling job A while job B
 // still uses the asset must NOT interrupt the shared download — the waiter is
 // removed, the transfer continues, and B still receives the path.

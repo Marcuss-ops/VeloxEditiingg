@@ -28,9 +28,10 @@ import (
 	"time"
 )
 
-// waiterKey identifies one logical waiter: a (job, task) pair. The same task
-// resolving the same asset twice registers once (map semantics).
-type waiterKey struct{ jobID, taskID string }
+// waiterKey identifies one logical Resolve call. The request metadata is
+// retained separately in jobRefs; the unique ID prevents two simultaneous
+// resolves from the same job/task from overwriting each other.
+type waiterKey uint64
 
 // errTransferCancelled is the sentinel surfaced to waiters when the transfer
 // was cancelled (last waiter left or the manager closed).
@@ -146,11 +147,11 @@ func (t *Transfer) isTerminal() bool {
 	return t.state.Terminal()
 }
 
-// addWaiter registers one logical waiter. SharedWaiters in snapshots equals
-// the current waiter count.
-func (t *Transfer) addWaiter(req DownloadRequest) {
+// addWaiter registers one logical Resolve call. SharedWaiters in snapshots
+// equals the number of live calls, even when request metadata is identical.
+func (t *Transfer) addWaiter(id uint64, req DownloadRequest) {
 	t.mu.Lock()
-	t.waiters[waiterKey{req.JobID, req.TaskID}] = struct{}{}
+	t.waiters[waiterKey(id)] = struct{}{}
 	if req.JobID != "" {
 		refKey := req.JobID + "\x00" + req.TaskID
 		ref := t.jobRefs[refKey]
@@ -169,10 +170,10 @@ func (t *Transfer) addWaiter(req DownloadRequest) {
 }
 
 // removeWaiter unregisters one waiter and reports whether it was the last one.
-func (t *Transfer) removeWaiter(jobID, taskID string) bool {
+func (t *Transfer) removeWaiter(id uint64) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	delete(t.waiters, waiterKey{jobID, taskID})
+	delete(t.waiters, waiterKey(id))
 	return len(t.waiters) == 0
 }
 
@@ -218,6 +219,16 @@ func (t *Transfer) subscribe() (<-chan DownloadSnapshot, func()) {
 	id := t.subSeq
 	ch := make(chan DownloadSnapshot, 32)
 	t.subscribers[id] = ch
+	// A subscriber may attach after the first streamed chunk has already
+	// been published (for example, an observer first waits for the upstream
+	// request). Replay the current in-flight progress so it cannot miss the
+	// only progress edge before a deliberately blocked test/server chunk.
+	// A zero-byte live snapshot is omitted because the next state/progress
+	// publication will carry it and this preserves the existing throttle
+	// contract for subscribers that attach before transfer bytes arrive.
+	if t.bytesDownloaded > 0 {
+		ch <- t.snapshotLocked(t.now())
+	}
 	var once sync.Once
 	unsub := func() {
 		once.Do(func() {
@@ -544,9 +555,8 @@ func errorDetailOf(err error) string {
 }
 
 // TransferRegistry owns the set of transfers, keyed by AssetKey. Terminal
-// transfers and their jobRefs are intentionally retained for the lifetime of
-// the manager so Snapshot/JobSnapshot remain readable after Resolve returns;
-// Manager.Close releases the entire registry with the worker lifecycle.
+// transfers are retained up to the manager's configured bound so recent
+// Snapshot/JobSnapshot reads remain available without unbounded growth.
 type TransferRegistry struct {
 	mu        sync.Mutex
 	transfers map[string]*Transfer
@@ -574,6 +584,42 @@ func (r *TransferRegistry) GetOrCreate(key string, mk func() *Transfer) (t *Tran
 	t = mk()
 	r.transfers[key] = t
 	return t, true
+}
+
+// PruneTerminal retains at most max terminal transfers. Live transfers are
+// never evicted. The oldest completed terminal entries are removed first.
+func (r *TransferRegistry) PruneTerminal(max int) {
+	if max <= 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	terminalCount := 0
+	for _, t := range r.transfers {
+		if t.isTerminal() {
+			terminalCount++
+		}
+	}
+	for terminalCount > max {
+		oldestKey := ""
+		oldestAt := time.Time{}
+		for key, t := range r.transfers {
+			if !t.isTerminal() {
+				continue
+			}
+			t.mu.Lock()
+			completedAt := t.completedAt
+			t.mu.Unlock()
+			if oldestKey == "" || completedAt.Before(oldestAt) {
+				oldestKey, oldestAt = key, completedAt
+			}
+		}
+		if oldestKey == "" {
+			break
+		}
+		delete(r.transfers, oldestKey)
+		terminalCount--
+	}
 }
 
 // Each visits every registered transfer (deterministic key order).

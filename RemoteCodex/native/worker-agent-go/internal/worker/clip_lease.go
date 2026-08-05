@@ -1,5 +1,5 @@
 // Package worker — ClipLease is the per-job acquisition/release
-// helper that owns the active_job_id lifecycle around asset-using
+// helper that owns the cached-asset lease lifecycle around asset-using
 // jobs (Chronon render + clip-driven executions).
 //
 // This is Pass 9 of the Velox Asset Cache & Protected-Asset Snapshot
@@ -14,19 +14,12 @@
 //
 // Acquire vs Release contract (per workercache.Cache):
 //
-//   - Acquire is unconditional and overwrites active_job_id. A
-//     crashed job from the previous run can leave a stale lease; the
-//     new run's Acquire simply replaces it. This is the documented
-//     trade-off (the alternative — refusing Acquire when leased by
-//     another job — would block legitimate retries on transient
-//     failures). Pass 11 will gate downloads with singleflight so
-//     two simultaneous jobs never download the same file twice;
-//     here we keep the row logic unconditional.
-//   - Release is conditional: it only clears active_job_id if the
-//     row's lease STILL equals jobID. A Release from Job A after Job B
-//     stole the lease does NOT wipe Job B's lease. The conditional
-//     WHERE clause is enforced in workercache.Cache.Release, not
-//     here.
+//   - Acquire inserts the (asset, job) relation in the authoritative
+//     many-to-many lease table. Multiple jobs may hold the same asset
+//     concurrently; duplicate acquisition by one job is idempotent.
+//   - Release removes only the caller's relation. Releasing another
+//     job's lease never clears that job's protection. The conditional
+//     WHERE clause is enforced in workercache.Cache.Release.
 //
 // AcquireJobClips is the single entry point: it acquires all rows in
 // the supplied drive-id slice in order, returning a Lease the caller
@@ -46,7 +39,7 @@ import (
 	"velox-worker-agent/internal/workercache"
 )
 
-// ClipLease holds the set of (driveID, jobID) pairs acquired against
+// ClipLease holds the set of (asset key, jobID) pairs acquired against
 // a workercache.Cache for one job. ReleaseAll releases every entry.
 // Safe to call ReleaseAll more than once — subsequent calls become
 // no-ops because the per-asset Release conditional predicate matches

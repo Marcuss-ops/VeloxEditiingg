@@ -123,6 +123,9 @@ func (w *Worker) assetDownloadManager() downloader.AssetDownloadManager {
 					snapshot.CoalescedRequestsTotal,
 				)
 			},
+			OnCoalescedRequest: func(sizeBytes int64) {
+				telemetry.GetPrometheusMetrics().RecordCacheDuplicateDownload(sizeBytes)
+			},
 		}, &masterAssetTransferer{w: w})
 	}
 	return w.assetManager

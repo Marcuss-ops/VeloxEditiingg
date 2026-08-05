@@ -1,13 +1,11 @@
 // Package workercache is the worker-side durable index over the
 // clip-asset cache.
 //
-// The worker downloads Drive clips into a content-addressable
-// on-disk directory. To avoid re-downloading the same file across
-// jobs and across restarts, the in-flight and historical state of
-// that local cache is tracked here. The cache key is the canonical
-// Google Drive file ID (see DataServer/internal/assetref, although
-// this package does not depend on it: callers are expected to have
-// already normalised URLs before persisting).
+// The canonical worker download manager writes verified assets into a
+// content-addressable on-disk directory. To avoid re-downloading the same
+// asset across jobs and restarts, this package tracks the durable index and
+// lease state. The current persisted key remains the historical
+// DriveFileID field; migration to namespaced asset_key is tracked separately.
 //
 // The package is a deliberate split from:
 //
@@ -211,20 +209,12 @@ func (c *Cache) MarkUsed(ctx context.Context, driveFileID string) error {
 // sets local_path + size_bytes, flips download_complete → true, and
 // bumps last_used_at so the asset is treated as recently-used.
 //
-// Resolver contract (Pass 10 will hardwire this):
-//  1. Resolver inserts a placeholder row via Store with
-//     local_path = "<dir>/<driveID>.mp4.part" and download_complete=false.
-//     The cleaner never deletes such rows (download is in flight).
-//  2. Resolve streams the bytes to the .part path, verifies media.
-//  3. On success, resolver atomically renames .part → final filename
-//     and then calls MarkDownloadComplete with the final
-//     local_path + size_bytes.
-//
-// The cleaner MUST predicate on download_complete=1 before
-// deleting, so a half-completed download survives a crash and is
-// recoverable on the next Resolve. The local_path field is
-// overwritten on each call, so a resumed download naturally
-// updates the cached path.
+// The canonical AssetDownloadManager transferer records a verified
+// download with MarkDownloadComplete after atomic promotion. The cleaner
+// MUST predicate on download_complete=1 before deleting, so an incomplete
+// row survives a crash and can be reconciled without treating it as ready.
+// The local_path field is overwritten on each successful promotion, so a
+// resumed or repaired download naturally updates the cached path.
 //
 // Returns ErrNotFound when no row matches.
 func (c *Cache) MarkDownloadComplete(ctx context.Context, driveFileID, localPath string, sizeBytes int64) error {

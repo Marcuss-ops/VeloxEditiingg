@@ -260,6 +260,10 @@ func syncAssetDirectory(path string) error {
 	return dir.Sync()
 }
 
+// syncAssetDirectoryFn is injectable only for deterministic atomic-promotion
+// failure tests. Production always uses syncAssetDirectory.
+var syncAssetDirectoryFn = syncAssetDirectory
+
 // writeVeloxAssetToCache streams a successful response body to a stable
 // inside the cache directory, then atomically renames to the final path.
 // Sniffs for HTML on both the Content-Type header and the first 512 bytes
@@ -406,22 +410,45 @@ func writeVeloxAssetToCacheAtOffset(cacheDir, assetID string, expectedSHA256 str
 	}
 
 	finalPath := filepath.Join(cacheDir, prefix+ext)
-	// Rename replaces an existing destination atomically. This is important
-	// after a verified cache miss: a corrupt entry must be repaired, not
-	// silently retained because the filename already exists.
+	// Preserve an existing valid destination until both directory fsyncs have
+	// succeeded. A plain rename-overwrite followed by Remove(finalPath) on
+	// fsync failure would otherwise destroy the last known-good copy.
+	backupPath := ""
+	if _, statErr := os.Stat(finalPath); statErr == nil {
+		backupPath = fmt.Sprintf("%s.previous-%d", finalPath, time.Now().UnixNano())
+		if err := os.Rename(finalPath, backupPath); err != nil {
+			return "", 0, "", time.Since(verifyStarted), err
+		}
+	}
+	restorePrevious := func() {
+		if backupPath == "" {
+			return
+		}
+		_ = os.Remove(finalPath)
+		_ = os.Rename(backupPath, finalPath)
+	}
+	// Rename is atomic within the cache directory. Keep the previous final
+	// available for rollback until durability is confirmed.
 	if err := os.Rename(partPath, finalPath); err != nil {
+		restorePrevious()
 		return "", 0, "", time.Since(verifyStarted), err
 	}
 	// Persist both directory entries after the atomic promotion. If fsync is
-	// unavailable on a platform, return the error rather than claiming the
-	// durable promotion succeeded.
-	if err := syncAssetDirectory(filepath.Join(cacheDir, "partial")); err != nil {
-		_ = os.Remove(finalPath)
+	// unavailable on a platform, restore the previous final rather than
+	// claiming the new promotion succeeded.
+	if err := syncAssetDirectoryFn(filepath.Join(cacheDir, "partial")); err != nil {
+		restorePrevious()
 		return "", 0, "", time.Since(verifyStarted), err
 	}
-	if err := syncAssetDirectory(cacheDir); err != nil {
-		_ = os.Remove(finalPath)
+	if err := syncAssetDirectoryFn(cacheDir); err != nil {
+		restorePrevious()
 		return "", 0, "", time.Since(verifyStarted), err
+	}
+	if backupPath != "" {
+		_ = os.Remove(backupPath)
+		// The new final is already durable; failure to persist deletion of the
+		// rollback copy is harmless and will be cleaned on a later cache pass.
+		_ = syncAssetDirectoryFn(cacheDir)
 	}
 	return finalPath, written, actualSHA256, time.Since(verifyStarted), nil
 }

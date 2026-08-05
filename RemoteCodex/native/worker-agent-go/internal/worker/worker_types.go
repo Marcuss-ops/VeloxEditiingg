@@ -274,13 +274,12 @@ type Worker struct {
 	// about the collision signal.
 	onWorkerIDCollision func(err error)
 
-	// Pass 9: optional worker-side clip cache (workercache.Cache).
-	// When non-nil, dispatchTaskRunner acquires an active-job lease
-	// (active_job_id) on every Drive clip referenced by the job
-	// payload, BEFORE invoking taskRunner.Run. A defer at the same
-	// scope releases the lease on success, error, or panic so the
-	// cleanup loop in workercache.Cleanup never deletes an asset
-	// inside an active render.
+	// Optional worker-side clip cache (workercache.Cache). When non-nil,
+	// dispatchTaskRunner acquires a per-job lease relation on every cached
+	// asset referenced by the job payload BEFORE invoking taskRunner.Run.
+	// A defer at the same scope releases the relation on success, error, or
+	// panic so workercache.Cleanup never deletes an asset inside an active
+	// render.
 	//
 	// nil is acceptable: a worker with no clip cache (legacy
 	// bootstrap profile, headless tests, etc.) skips the lease step

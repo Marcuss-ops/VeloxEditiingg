@@ -131,11 +131,11 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 		assetCacheSizeBytes:              &GaugeVec{Name: "velox_cache_size_bytes", Help: "Current local asset cache size", values: make(map[string]float64)},
 		assetCacheEntries:                &GaugeVec{Name: "velox_cache_entries", Help: "Current local asset cache entries", values: make(map[string]float64)},
 		assetCacheDuplicateDownloads: &CounterVec{
-			Name: "velox_cache_duplicate_downloads_total", Help: "Concurrent duplicate asset downloads coalesced by singleflight",
+			Name: "velox_cache_duplicate_downloads_total", Help: "Concurrent duplicate asset downloads coalesced by AssetDownloadManager",
 			values: map[string]float64{"asset": 0},
 		},
 		assetCacheDuplicateDownloadBytes: &CounterVec{
-			Name: "velox_cache_duplicate_download_bytes_total", Help: "Bytes a duplicate download would have consumed (coalesced by singleflight)",
+			Name: "velox_cache_duplicate_download_bytes_total", Help: "Expected bytes a duplicate request would have consumed when coalesced by AssetDownloadManager",
 			values: map[string]float64{"asset": 0},
 		},
 		workerErrorsTotal: &CounterVec{
@@ -232,14 +232,14 @@ func (m *PrometheusMetrics) CacheRequestCount(result string) float64 {
 	return m.assetCacheRequests.get(normalizeCacheResult(result))
 }
 
-// DuplicateDownloadCount returns the singleflight-coalesced duplicate
-// download counter (diagnostics and deterministic tests only).
+// DuplicateDownloadCount returns the AssetDownloadManager-coalesced
+// duplicate download counter (diagnostics and deterministic tests only).
 func (m *PrometheusMetrics) DuplicateDownloadCount() float64 {
 	return m.assetCacheDuplicateDownloads.get("asset")
 }
 
 // DuplicateDownloadBytes returns the bytes a duplicate download would
-// have consumed (coalesced by singleflight; diagnostics/tests only).
+// have consumed (coalesced by AssetDownloadManager; diagnostics/tests only).
 func (m *PrometheusMetrics) DuplicateDownloadBytes() float64 {
 	return m.assetCacheDuplicateDownloadBytes.get("asset")
 }
@@ -270,7 +270,7 @@ func (m *PrometheusMetrics) RecordCacheDownload(bytes int64, duration time.Durat
 }
 
 // RecordCacheDuplicateDownload counts a concurrent duplicate asset
-// request that singleflight coalesced onto an in-flight download
+// request that AssetDownloadManager coalesced onto an in-flight download
 // (the worker-side dedup counter the parallelism certification
 // harness reads via velox_cache_duplicate_downloads_total). The
 // bytes argument is the size of the shared result when it is on
