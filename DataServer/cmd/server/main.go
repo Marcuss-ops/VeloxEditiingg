@@ -8,6 +8,7 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/logging"
 	"velox-server/internal/telemetry"
+	"velox-shared/compatibility"
 )
 
 // Build-time metadata, injected via `go build -ldflags "-X main.Version=...
@@ -50,6 +51,11 @@ func main() {
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
 		log.Fatalf("config load failed: %v", err)
+	}
+	if cfg.Compatibility.Mode == "strict" {
+		compatibility.SetMode(compatibility.ModeStrict)
+	} else {
+		compatibility.SetMode(compatibility.ModeCompat)
 	}
 	logging.Configure(cfg.Runtime.Logging.Quiet, cfg.Runtime.Logging.JSONOutput, cfg.Runtime.Logging.Debug)
 	telemetry.Configure(cfg.Runtime.Telemetry)

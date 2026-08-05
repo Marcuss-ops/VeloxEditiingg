@@ -13,7 +13,10 @@ registry="shared/compatibility/registry.go"
 [[ -f "$registry" ]] || { echo "compatibility registry missing: $registry" >&2; exit 1; }
 grep -q 'type CompatibilityAlias struct' "$registry" || { echo "CompatibilityAlias type missing" >&2; exit 1; }
 grep -q 'CanonicalKey: VoiceoverPathsKey' "$registry" || { echo "voiceover registry entry missing" >&2; exit 1; }
-grep -q 'Sunset:' "$registry" || { echo "alias sunset metadata missing" >&2; exit 1; }
+grep -q 'RemovalDate:' "$registry" || { echo "alias removal date metadata missing" >&2; exit 1; }
+grep -q 'Owner:' "$registry" || { echo "alias owner metadata missing" >&2; exit 1; }
+grep -q 'Consumers:' "$registry" || { echo "alias consumer metadata missing" >&2; exit 1; }
+grep -q 'MinimumVersion:' "$registry" || { echo "alias minimum version metadata missing" >&2; exit 1; }
 
 required_consumers=(
   "shared/contract/payload_v2.go"

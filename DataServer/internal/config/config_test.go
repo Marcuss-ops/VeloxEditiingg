@@ -144,6 +144,24 @@ func TestValidate_EmptyDBPath(t *testing.T) {
 // Without this test, a regression that removes the wildcard iteration
 // loop in Config.Validate would silently let `"*"` slip past the
 // bootstrap fail-fast and generate a master that admits any worker.
+func TestCompatibilityModeDefaultsAndStrictParsing(t *testing.T) {
+	cfg := &Config{Database: DatabaseConfig{DBPath: t.TempDir() + "/velox.db"}, Workers: WorkersConfig{AllowedWorkerIDs: []string{"worker-a", "worker-b"}}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("empty compatibility mode should default to compat: %v", err)
+	}
+	if cfg.Compatibility.Mode != "compat" {
+		t.Fatalf("default compatibility mode = %q, want compat", cfg.Compatibility.Mode)
+	}
+	cfg.Compatibility.Mode = "strict"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("strict compatibility mode rejected: %v", err)
+	}
+	cfg.Compatibility.Mode = "invalid"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("invalid compatibility mode accepted")
+	}
+}
+
 func TestValidate_RejectsWildcardAllowlist(t *testing.T) {
 	cfg := &Config{
 		Database: DatabaseConfig{DBPath: t.TempDir() + "/velox.db"},

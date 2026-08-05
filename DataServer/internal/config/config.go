@@ -75,6 +75,12 @@ func (c *Config) Validate() error {
 	if c == nil {
 		return fmt.Errorf("config: nil Config")
 	}
+	if c.Compatibility.Mode == "" {
+		c.Compatibility.Mode = "compat"
+	}
+	if c.Compatibility.Mode != "compat" && c.Compatibility.Mode != "strict" {
+		return fmt.Errorf("config: VELOX_COMPATIBILITY_MODE must be compat or strict, got %q", c.Compatibility.Mode)
+	}
 	if len(c.parseErrors) > 0 {
 		return fmt.Errorf("config: invalid environment values: %s", strings.Join(c.parseErrors, "; "))
 	}

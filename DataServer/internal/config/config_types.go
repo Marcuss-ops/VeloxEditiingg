@@ -242,6 +242,9 @@ type RetiredEnvAlias struct {
 // CompatibilityConfig contains compatibility observations that the
 // composition root may report without reading the process environment itself.
 type CompatibilityConfig struct {
+	// Mode controls registered payload aliases: "compat" preserves the
+	// temporary migration path, while "strict" rejects legacy aliases.
+	Mode                 string
 	RetiredSocialAliases []RetiredEnvAlias
 }
 

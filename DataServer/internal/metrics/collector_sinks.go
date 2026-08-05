@@ -191,8 +191,13 @@ func (c *Collector) initSinkFamilies() {
 		[]string{"reason"},
 	)
 	c.compatibilityAliasReads = NewCounterFamily(
-		"velox_compat_alias_reads_total",
+		"velox_compatibility_alias_reads_total",
 		"Reads of legacy compatibility aliases by alias and canonical key",
+		[]string{"alias", "canonical"},
+	)
+	c.compatibilityAliasRejections = NewCounterFamily(
+		"velox_compatibility_rejections_total",
+		"Rejections of legacy compatibility aliases by alias and canonical key",
 		[]string{"alias", "canonical"},
 	)
 
@@ -233,6 +238,7 @@ func (c *Collector) sinkFamilies() []*Family {
 		c.commitDeadlineExceeded,
 		c.placementRejections,
 		c.compatibilityAliasReads,
+		c.compatibilityAliasRejections,
 		c.errorClassification,
 		c.conflictStreakReset,
 		c.conflictEscalations,

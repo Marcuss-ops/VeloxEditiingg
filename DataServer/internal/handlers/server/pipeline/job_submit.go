@@ -26,6 +26,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/creatorflow"
+	"velox-shared/compatibility"
 )
 
 // invalid_json BEFORE we touch downstream code. Gin's binding tag
@@ -60,6 +61,14 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 		// carry the same canonical value into the resolver, response, and
 		// logs so retries with surrounding whitespace cannot diverge.
 		req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
+		if err := compatibility.ValidateNoLegacyAliases(req.Spec); err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"ok":      false,
+				"error":   "legacy_alias_rejected",
+				"message": err.Error(),
+			})
+			return
+		}
 		if err := NormalizeCanonicalRecipe(&req); err != nil {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{
 				"ok":      false,

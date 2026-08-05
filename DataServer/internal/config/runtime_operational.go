@@ -302,6 +302,7 @@ func (c *Config) Snapshot() RuntimeSnapshot {
 	values := map[string]string{
 		"runtime.data_dir":                              c.Runtime.DataDir,
 		"runtime.environment":                           c.Runtime.Environment,
+		"compatibility.mode":                            c.Compatibility.Mode,
 		"runtime.supervisor.critical_max_retries":       fmt.Sprint(c.Runtime.Supervisor.CriticalMaxRetries),
 		"runtime.cache.lookahead_jobs":                  fmt.Sprint(c.Runtime.Cache.ProtectedAssetLookaheadJobs),
 		"runtime.cache.snapshot_interval":               c.Runtime.Cache.SnapshotInterval.String(),

@@ -35,6 +35,10 @@ func loadFleetConfig() FleetConfig {
 }
 
 func loadCompatibilityConfig() CompatibilityConfig {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("VELOX_COMPATIBILITY_MODE")))
+	if mode == "" {
+		mode = "compat"
+	}
 	aliases := []RetiredEnvAlias{
 		{Env: "SOCIAL_GATEWAY_URL", Canonical: "SOCIAL_API_URL"},
 		{Env: "SOCIAL_GATEWAY_API_KEY", Canonical: "SOCIAL_API_TOKEN"},
@@ -46,5 +50,5 @@ func loadCompatibilityConfig() CompatibilityConfig {
 			configured = append(configured, alias)
 		}
 	}
-	return CompatibilityConfig{RetiredSocialAliases: configured}
+	return CompatibilityConfig{Mode: mode, RetiredSocialAliases: configured}
 }

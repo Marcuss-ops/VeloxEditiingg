@@ -191,6 +191,12 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		}
 	}
 	compatibility.SetAliasReadObserver(metricsCollector.NewCompatibilityAliasObserver())
+	compatibility.SetAliasRejectedObserver(metricsCollector.NewCompatibilityAliasRejectionObserver())
+	if cfg.Compatibility.Mode == "strict" {
+		compatibility.SetMode(compatibility.ModeStrict)
+	} else {
+		compatibility.SetMode(compatibility.ModeCompat)
+	}
 
 	// Build the InstaEdit control-plane verifier when the shared
 	// secret is configured. A nil verifier means the /api/v1/instaedit

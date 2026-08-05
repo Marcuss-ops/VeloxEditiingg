@@ -23,12 +23,14 @@ func TestRegistryVoiceoverAliases(t *testing.T) {
 			t.Errorf("registry aliases do not contain %q: %v", want, entry.Aliases)
 		}
 	}
-	if entry.Sunset == "" {
-		t.Fatal("registry entry must define sunset metadata")
+	if entry.Owner == "" || len(entry.Consumers) == 0 || entry.RemovalDate == "" || entry.MinimumVersion == "" {
+		t.Fatalf("incomplete lifecycle metadata: %#v", entry)
 	}
 }
 
-func TestReadStringListReportsLegacyAliases(t *testing.T) {
+func TestReadStringListReportsLegacyAliasesAndCounters(t *testing.T) {
+	SetMode(ModeCompat)
+	t.Cleanup(func() { SetMode(ModeCompat); SetAliasReadObserver(nil) })
 	var mu sync.Mutex
 	var events [][2]string
 	SetAliasReadObserver(func(alias, canonical string) {
@@ -36,7 +38,6 @@ func TestReadStringListReportsLegacyAliases(t *testing.T) {
 		defer mu.Unlock()
 		events = append(events, [2]string{alias, canonical})
 	})
-	t.Cleanup(func() { SetAliasReadObserver(nil) })
 
 	got := ReadStringList(map[string]interface{}{
 		"voiceover_paths": []interface{}{"canonical.mp3"},
@@ -50,14 +51,41 @@ func TestReadStringListReportsLegacyAliases(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("observer events = %d, want 2: %v", len(events), events)
 	}
-	for _, event := range events {
-		if event[1] != VoiceoverPathsKey {
-			t.Errorf("event canonical = %q, want %q", event[1], VoiceoverPathsKey)
+	entry, _ := Lookup(VoiceoverPathsKey)
+	if entry.ReadCounter < 2 {
+		t.Fatalf("read counter = %d, want at least 2", entry.ReadCounter)
+	}
+}
+
+func TestStrictModeRejectsLegacyAliasesAndCountsRejection(t *testing.T) {
+	SetMode(ModeStrict)
+	t.Cleanup(func() { SetMode(ModeCompat); SetAliasRejectedObserver(nil) })
+	var rejected [][2]string
+	SetAliasRejectedObserver(func(alias, canonical string) {
+		rejected = append(rejected, [2]string{alias, canonical})
+	})
+	source := map[string]interface{}{"voiceover_path": "legacy.mp3"}
+	if err := ValidateNoLegacyAliases(source); err == nil {
+		t.Fatal("strict validation accepted legacy alias")
+	} else {
+		if _, ok := err.(*AliasRejectionError); !ok {
+			t.Fatalf("error type = %T, want *AliasRejectionError", err)
 		}
+	}
+	if got := ReadStringList(source, VoiceoverPathsKey); got != nil {
+		t.Fatalf("strict ReadStringList = %v, want nil", got)
+	}
+	if len(rejected) != 2 {
+		t.Fatalf("rejection events = %d, want 2 (validation + read): %v", len(rejected), rejected)
+	}
+	entry, _ := Lookup(VoiceoverPathsKey)
+	if entry.RejectionCounter < 2 {
+		t.Fatalf("rejection counter = %d, want at least 2", entry.RejectionCounter)
 	}
 }
 
 func TestReadStringListDoesNotReportCanonicalKey(t *testing.T) {
+	SetMode(ModeCompat)
 	called := false
 	SetAliasReadObserver(func(string, string) { called = true })
 	t.Cleanup(func() { SetAliasReadObserver(nil) })

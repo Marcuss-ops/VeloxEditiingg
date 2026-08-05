@@ -170,8 +170,9 @@ type Collector struct {
 	// placement matcher rejects a candidate (velox_placement_rejections_total)
 	// with a single label `reason` carrying the stable RejectionCode
 	// (e.g. capacity_full, unsupported_executor, missing_capability).
-	placementRejections     *Family // velox_placement_rejections_total{reason}
-	compatibilityAliasReads *Family // velox_compat_alias_reads_total{alias,canonical}
+	placementRejections          *Family // velox_placement_rejections_total{reason}
+	compatibilityAliasReads      *Family // velox_compatibility_alias_reads_total{alias,canonical}
+	compatibilityAliasRejections *Family // velox_compatibility_rejections_total{alias,canonical}
 
 	// Engine phase timing histograms (Scorecard v2 / Step 7).
 	// Two histogram families capture per-phase and per-segment

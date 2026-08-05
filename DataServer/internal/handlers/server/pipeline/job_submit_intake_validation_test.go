@@ -9,7 +9,32 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"velox-shared/compatibility"
 )
+
+func TestSubmitJobStrictModeRejectsRegisteredAlias(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	compatibility.SetMode(compatibility.ModeStrict)
+	t.Cleanup(func() { compatibility.SetMode(compatibility.ModeCompat) })
+	router := gin.New()
+	h := &Handlers{}
+	router.POST("/api/v1/jobs", h.SubmitJob())
+	body := []byte(`{"idempotency_key":"strict-alias-001","spec":{"voiceover_path":"legacy.mp3"},"scenes":[{"text":"scene","duration_seconds":5}]}`)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/v1/jobs", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusUnprocessableEntity, w.Body.String())
+	}
+	var response map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["error"] != "legacy_alias_rejected" {
+		t.Fatalf("error = %v, want legacy_alias_rejected", response["error"])
+	}
+}
 
 func TestSubmitJobRejectsEmptyIdempotencyKey(t *testing.T) {
 	gin.SetMode(gin.TestMode)
