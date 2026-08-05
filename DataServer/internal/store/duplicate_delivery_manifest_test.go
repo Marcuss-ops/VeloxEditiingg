@@ -68,4 +68,22 @@ func TestBuildDuplicateDeliveryManifestGroupsDriveRowsByArtifactAndDestination(t
 	if record.JobID != "job-manifest" || record.ArtifactID != "artifact-canonical" || record.DestinationID != "drive-target" {
 		t.Fatalf("wrong identity fields: %#v", record)
 	}
+	if err := db.VerifyDuplicateDeliveryRecord(context.Background(), record); err != nil {
+		t.Fatalf("fresh manifest verification: %v", err)
+	}
+	for _, mutation := range []string{
+		`UPDATE job_deliveries SET remote_id='drive-file-replaced' WHERE delivery_id='delivery-duplicate'`,
+		`UPDATE job_deliveries SET status='FAILED' WHERE delivery_id='delivery-duplicate'`,
+		`UPDATE job_deliveries SET created_at='2026-08-04T10:09:00Z' WHERE delivery_id='delivery-duplicate'`,
+	} {
+		if _, err := db.DB().Exec(mutation); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.VerifyDuplicateDeliveryRecord(context.Background(), record); err == nil {
+			t.Fatalf("stale manifest verification unexpectedly passed after %s", mutation)
+		}
+		if _, err := db.DB().Exec(`UPDATE job_deliveries SET remote_id='drive-file-duplicate', status='SUCCEEDED', created_at='2026-08-04T10:01:00Z' WHERE delivery_id='delivery-duplicate'`); err != nil {
+			t.Fatal(err)
+		}
+	}
 }

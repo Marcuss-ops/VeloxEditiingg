@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -28,8 +30,72 @@ type duplicateDeliveryRow struct {
 	createdAt, status             string
 }
 
+// VerifyDuplicateDeliveryRecord re-reads the canonical and duplicate delivery
+// rows before a remote deletion. It intentionally lives behind the store API so
+// cleanup cannot act on a stale or operator-edited manifest without proving
+// that every identity and timestamp still matches the current database state.
+func (s *SQLiteStore) VerifyDuplicateDeliveryRecord(ctx context.Context, record DuplicateDeliveryRecord) error {
+	var (
+		jobID, canonicalDeliveryID, canonicalRemoteID, canonicalDestinationID, canonicalCreatedAt           string
+		duplicateDeliveryID, duplicateRemoteID, duplicateDestinationID, duplicateCreatedAt, duplicateStatus string
+	)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT a.job_id,
+		       canonical.delivery_id, COALESCE(canonical.remote_id,''), canonical.destination_id, canonical.created_at,
+		       duplicate.delivery_id, COALESCE(duplicate.remote_id,''), duplicate.destination_id, duplicate.created_at, duplicate.status
+		FROM job_deliveries duplicate
+		JOIN artifacts a ON a.id = duplicate.artifact_id
+		JOIN delivery_destinations dd ON dd.destination_id = duplicate.destination_id
+		JOIN job_deliveries canonical
+		  ON canonical.delivery_id = ?
+		 AND canonical.artifact_id = duplicate.artifact_id
+		 AND canonical.destination_id = duplicate.destination_id
+		WHERE duplicate.delivery_id = ?
+		  AND duplicate.artifact_id = ?
+		  AND duplicate.destination_id = ?
+		  AND LOWER(COALESCE(dd.provider,'')) = 'drive'
+		  AND duplicate.status = 'SUCCEEDED'
+		  AND canonical.status = 'SUCCEEDED'
+		  AND TRIM(COALESCE(canonical.remote_id,'')) <> ''
+		  AND TRIM(COALESCE(duplicate.remote_id,'')) <> ''
+		  AND TRIM(canonical.remote_id) <> TRIM(duplicate.remote_id)`,
+		record.CanonicalDeliveryID, record.DeliveryID, record.ArtifactID, record.DestinationID,
+	).Scan(
+		&jobID,
+		&canonicalDeliveryID, &canonicalRemoteID, &canonicalDestinationID, &canonicalCreatedAt,
+		&duplicateDeliveryID, &duplicateRemoteID, &duplicateDestinationID, &duplicateCreatedAt, &duplicateStatus,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("duplicate manifest delivery rows are missing or no longer share artifact/destination")
+		}
+		return fmt.Errorf("verify duplicate manifest delivery rows: %w", err)
+	}
+	checks := []struct {
+		name, got, want string
+	}{
+		{"job_id", jobID, record.JobID},
+		{"artifact_id", record.ArtifactID, record.ArtifactID},
+		{"canonical_delivery_id", canonicalDeliveryID, record.CanonicalDeliveryID},
+		{"canonical_remote_id", canonicalRemoteID, record.DriveFileIDCorrect},
+		{"canonical_destination_id", canonicalDestinationID, record.DestinationID},
+		{"canonical_created_at", canonicalCreatedAt, record.CreatedAt},
+		{"duplicate_delivery_id", duplicateDeliveryID, record.DeliveryID},
+		{"duplicate_remote_id", duplicateRemoteID, record.DriveFileIDDuplicate},
+		{"duplicate_destination_id", duplicateDestinationID, record.DestinationID},
+		{"duplicate_created_at", duplicateCreatedAt, record.DuplicateCreatedAt},
+		{"duplicate_status", duplicateStatus, record.DuplicateStatus},
+	}
+	for _, check := range checks {
+		if strings.TrimSpace(check.got) != strings.TrimSpace(check.want) {
+			return fmt.Errorf("duplicate manifest %s mismatch: got %q want %q", check.name, check.got, check.want)
+		}
+	}
+	return nil
+}
+
 // BuildDuplicateDeliveryManifest returns deterministic, audit-ready duplicate
-// candidates. It groups by (destination_id, remote_id), keeps the earliest row
+// candidates. It groups by (artifact_id, destination_id), keeps the earliest row
 // as canonical, and reports later rows as duplicates. This is intentionally
 // dry-run only: callers must verify the canonical remote object before any
 // separate deletion operation.
@@ -41,6 +107,7 @@ func (s *SQLiteStore) BuildDuplicateDeliveryManifest(ctx context.Context) ([]Dup
 		JOIN artifacts a ON a.id = jd.artifact_id
 		JOIN delivery_destinations dd ON dd.destination_id = jd.destination_id
 		WHERE LOWER(COALESCE(dd.provider, '')) = 'drive'
+		  AND jd.status = 'SUCCEEDED'
 		  AND TRIM(COALESCE(jd.remote_id, '')) <> ''
 		ORDER BY jd.destination_id ASC, jd.remote_id ASC, jd.created_at ASC, jd.delivery_id ASC`)
 	if err != nil {

@@ -184,7 +184,7 @@ func runDriveDuplicateCleanup(args []string, stdout, stderr io.Writer) error {
 		}
 		client = driveCleanupClient{service: service}
 	}
-	result, err := drivecleanup.Apply(context.Background(), client, db, manifest, *dryRun, *actor, time.Now().UTC())
+	result, err := drivecleanup.Apply(context.Background(), client, db, db, manifest, *dryRun, *actor, time.Now().UTC())
 	if err != nil {
 		return err
 	}
