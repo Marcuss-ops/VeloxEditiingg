@@ -35,7 +35,7 @@ func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 		}
 
 		ctx := c.Request.Context()
-		pr, _, err := h.lookupPipelineRun(ctx, idParam)
+		pr, _, err := h.lookupPipelineRun(ctx, idParam, ClientIDFromContext(c))
 		if err != nil {
 			if errors.Is(err, errPipelineRunNotFound) {
 				c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "pipeline run not found"})
@@ -184,7 +184,7 @@ func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 
 		targetExecutor := firstStringResolver(workerPayload, "executor_id", "pipeline_id")
 		forwarding, persistErr := h.resolver.PersistPendingRemoteForwarding(
-			ctx, "remote_engine", jobID, targetExecutor,
+			ctx, "remote_engine", jobID, targetExecutor, ClientIDFromContext(c),
 		)
 		if persistErr != nil {
 			pipelineLog("RETRY: failed to persist forwarding run=%s: %v", pr.ID, persistErr)

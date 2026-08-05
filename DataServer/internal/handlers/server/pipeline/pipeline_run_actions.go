@@ -21,19 +21,59 @@ import (
 // Returns (run, forwarding, nil) where forwarding is non-nil only when
 // the row was found via the legacy creator_forwardings path. When
 // neither path finds a row, returns (nil, nil, errNotFound).
-func (h *Handlers) lookupPipelineRun(ctx context.Context, idParam string) (*pipelineruns.PipelineRun, *store.CreatorForwarding, error) {
+func (h *Handlers) lookupPipelineRun(ctx context.Context, idParam, externalClientID string) (*pipelineruns.PipelineRun, *store.CreatorForwarding, error) {
+	clientID := strings.TrimSpace(externalClientID)
+
+	// A pipeline_runs row has no client column of its own. For an M2M
+	// request, ownership is therefore established through its durable
+	// forwarding_id. A missing link or a client mismatch is deliberately
+	// indistinguishable from a missing run.
+	ownershipCheck := func(pr *pipelineruns.PipelineRun) (*store.CreatorForwarding, error) {
+		if clientID == "" {
+			return nil, nil
+		}
+		if pr.ForwardingID == "" {
+			return nil, errPipelineRunNotFound
+		}
+		forwarding, err := h.store.GetCreatorForwardingByIDForClient(ctx, pr.ForwardingID, clientID)
+		if err != nil {
+			if errors.Is(err, store.ErrCreatorForwardingNoRow) {
+				return nil, errPipelineRunNotFound
+			}
+			return nil, err
+		}
+		return forwarding, nil
+	}
+
 	// 1. pipeline_runs by PK
 	if pr, err := h.store.GetPipelineRun(ctx, idParam); err == nil && pr != nil {
+		if _, ownershipErr := ownershipCheck(pr); ownershipErr != nil {
+			return nil, nil, ownershipErr
+		}
 		return pr, nil, nil
 	}
 	// 2. pipeline_runs by request_id
 	if pr, err := h.store.GetPipelineRunByRequestID(ctx, idParam); err == nil && pr != nil {
+		if _, ownershipErr := ownershipCheck(pr); ownershipErr != nil {
+			return nil, nil, ownershipErr
+		}
 		return pr, nil, nil
 	}
-	// 3-4. Legacy: creator_forwardings
-	forwarding, err := h.store.GetCreatorForwarding(ctx, idParam)
-	if errors.Is(err, store.ErrCreatorForwardingNoRow) {
-		forwarding, err = h.store.GetCreatorForwardingByRemoteJob(ctx, "remote_engine", idParam)
+	// 3-4. Legacy: creator_forwardings. The M2M path uses only the
+	// ownership-scoped repository methods; admin callers retain the
+	// existing unscoped legacy lookup.
+	var forwarding *store.CreatorForwarding
+	var err error
+	if clientID != "" {
+		forwarding, err = h.store.GetCreatorForwardingByIDForClient(ctx, idParam, clientID)
+		if errors.Is(err, store.ErrCreatorForwardingNoRow) {
+			forwarding, err = h.store.GetCreatorForwardingByRemoteJobForClient(ctx, "remote_engine", idParam, clientID)
+		}
+	} else {
+		forwarding, err = h.store.GetCreatorForwarding(ctx, idParam)
+		if errors.Is(err, store.ErrCreatorForwardingNoRow) {
+			forwarding, err = h.store.GetCreatorForwardingByRemoteJob(ctx, "remote_engine", idParam)
+		}
 	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, store.ErrCreatorForwardingNoRow) {
@@ -77,7 +117,7 @@ func (h *Handlers) CancelPipelineRun() gin.HandlerFunc {
 		}
 
 		ctx := c.Request.Context()
-		pr, forwarding, err := h.lookupPipelineRun(ctx, idParam)
+		pr, forwarding, err := h.lookupPipelineRun(ctx, idParam, ClientIDFromContext(c))
 		if err != nil {
 			if errors.Is(err, errPipelineRunNotFound) {
 				c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "pipeline run not found"})

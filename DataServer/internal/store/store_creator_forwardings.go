@@ -65,6 +65,7 @@ func (s CreatorForwardingStatus) IsLeasable() bool {
 // CreatorForwarding is the typed view of a creator_forwardings row.
 type CreatorForwarding struct {
 	ForwardingID     string `json:"forwarding_id"`
+	ExternalClientID string `json:"external_client_id,omitempty"`
 	SourceProvider   string `json:"source_provider"`
 	SourceJobID      string `json:"source_job_id"`
 	SourceStatus     string `json:"source_status"`
@@ -108,6 +109,10 @@ type CreatorForwardingLease struct {
 
 // ErrCreatorForwardingNoRow is returned when a lookup misses.
 var ErrCreatorForwardingNoRow = errors.New("store: creator forwarding row not found")
+
+// ErrCreatorForwardingOwnershipConflict prevents a caller from reusing an
+// idempotency tuple that is already owned by another M2M client.
+var ErrCreatorForwardingOwnershipConflict = errors.New("store: creator forwarding ownership conflict")
 
 type creatorForwardingRowScanner interface {
 	Scan(dest ...any) error
@@ -176,15 +181,15 @@ func (s *SQLiteStore) InsertCreatorForwarding(ctx context.Context, cf *CreatorFo
 	// violates the NOT NULL constraint on SQLite.
 	res, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO creator_forwardings
-		 (forwarding_id, source_provider, source_job_id, source_status,
+		 (forwarding_id, external_client_id, source_provider, source_job_id, source_status,
 		  target_executor_id, target_job_id, payload_json, payload_sha256,
 		  status, attempt_count, next_attempt_at,
 		  poll_attempts, next_poll_at, last_polled_at, last_remote_status,
 		  locked_by, lease_id, lease_expires_at,
 		  last_error_code, last_error_message, last_error_class,
 		  created_at, updated_at, forwarded_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		cf.ForwardingID, cf.SourceProvider, cf.SourceJobID, cf.SourceStatus,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		cf.ForwardingID, nullIfEmpty(cf.ExternalClientID), cf.SourceProvider, cf.SourceJobID, cf.SourceStatus,
 		cf.TargetExecutorID,
 		nullIfEmpty(cf.TargetJobID),
 		cf.PayloadJSON,
@@ -207,8 +212,17 @@ func (s *SQLiteStore) InsertCreatorForwarding(ctx context.Context, cf *CreatorFo
 		return &InsertCreatorForwardingResult{Created: true, Forwarding: cf}, nil
 	}
 
-	// Duplicate — look up the existing row by its UNIQUE key.
-	existing, err := s.GetCreatorForwardingBySource(ctx, cf.SourceProvider, cf.SourceJobID, cf.TargetExecutorID)
+	// Duplicate — look up the existing row by its UNIQUE key. For M2M
+	// submissions, do not return a row owned by another client.
+	var existing *CreatorForwarding
+	if strings.TrimSpace(cf.ExternalClientID) != "" {
+		existing, err = s.GetCreatorForwardingBySourceForClient(ctx, cf.SourceProvider, cf.SourceJobID, cf.TargetExecutorID, cf.ExternalClientID)
+		if errors.Is(err, ErrCreatorForwardingNoRow) {
+			return nil, ErrCreatorForwardingOwnershipConflict
+		}
+	} else {
+		existing, err = s.GetCreatorForwardingBySource(ctx, cf.SourceProvider, cf.SourceJobID, cf.TargetExecutorID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("store: InsertCreatorForwarding: duplicate lookup: %w", err)
 	}
@@ -233,6 +247,74 @@ func (s *SQLiteStore) GetCreatorForwarding(ctx context.Context, forwardingID str
 		        created_at, updated_at, COALESCE(forwarded_at, '')
 		 FROM creator_forwardings WHERE forwarding_id = ?`, forwardingID)
 	return scanCreatorForwarding(row)
+}
+
+// GetCreatorForwardingBySourceForClient returns a forwarding only when the
+// unique source tuple is owned by externalClientID. A mismatch is hidden as
+// ErrCreatorForwardingNoRow.
+func (s *SQLiteStore) GetCreatorForwardingBySourceForClient(ctx context.Context, provider, sourceJobID, executorID, externalClientID string) (*CreatorForwarding, error) {
+	if strings.TrimSpace(provider) == "" || strings.TrimSpace(sourceJobID) == "" || strings.TrimSpace(executorID) == "" || strings.TrimSpace(externalClientID) == "" {
+		return nil, ErrCreatorForwardingNoRow
+	}
+	query := `SELECT forwarding_id, COALESCE(external_client_id, ''), source_provider, source_job_id, source_status,
+		        target_executor_id, COALESCE(target_job_id, ''),
+		        COALESCE(payload_json, ''), COALESCE(payload_sha256, ''),
+		        status, attempt_count, COALESCE(next_attempt_at, ''),
+		        poll_attempts, COALESCE(next_poll_at, ''), COALESCE(last_polled_at, ''),
+		        COALESCE(last_remote_status, ''), COALESCE(locked_by, ''), COALESCE(lease_id, ''), COALESCE(lease_expires_at, ''),
+		        COALESCE(last_error_code, ''), COALESCE(last_error_message, ''), COALESCE(last_error_class, ''),
+		        created_at, updated_at, COALESCE(forwarded_at, '')
+		 FROM creator_forwardings
+		 WHERE source_provider = ? AND source_job_id = ? AND target_executor_id = ? AND external_client_id = ?
+		 LIMIT 1`
+	return scanCreatorForwardingWithExternalClient(s.db.QueryRowContext(ctx, query, provider, sourceJobID, executorID, externalClientID))
+}
+
+// GetCreatorForwardingByIDForClient returns a forwarding only when it is
+// owned by externalClientID. A missing row and a row owned by another client
+// intentionally return the same ErrCreatorForwardingNoRow result so callers
+// can expose an indistinguishable 404.
+func (s *SQLiteStore) GetCreatorForwardingByIDForClient(ctx context.Context, forwardingID, externalClientID string) (*CreatorForwarding, error) {
+	if strings.TrimSpace(forwardingID) == "" || strings.TrimSpace(externalClientID) == "" {
+		return nil, ErrCreatorForwardingNoRow
+	}
+	query := `SELECT forwarding_id, COALESCE(external_client_id, ''),
+		        source_provider, source_job_id, source_status,
+		        target_executor_id, COALESCE(target_job_id, ''),
+		        COALESCE(payload_json, ''), COALESCE(payload_sha256, ''),
+		        status, attempt_count, COALESCE(next_attempt_at, ''),
+		        poll_attempts, COALESCE(next_poll_at, ''), COALESCE(last_polled_at, ''),
+		        COALESCE(last_remote_status, ''),
+		        COALESCE(locked_by, ''), COALESCE(lease_id, ''), COALESCE(lease_expires_at, ''),
+		        COALESCE(last_error_code, ''), COALESCE(last_error_message, ''), COALESCE(last_error_class, ''),
+		        created_at, updated_at, COALESCE(forwarded_at, '')
+		 FROM creator_forwardings
+		 WHERE forwarding_id = ? AND external_client_id = ?
+		 LIMIT 1`
+	return scanCreatorForwardingWithExternalClient(s.db.QueryRowContext(ctx, query, forwardingID, externalClientID))
+}
+
+// GetCreatorForwardingByRemoteJobForClient is the ownership-scoped variant
+// of GetCreatorForwardingByRemoteJob used by pipeline-run read/action paths.
+// It preserves the same indistinguishable-miss contract as the ID lookup.
+func (s *SQLiteStore) GetCreatorForwardingByRemoteJobForClient(ctx context.Context, provider, sourceJobID, externalClientID string) (*CreatorForwarding, error) {
+	if strings.TrimSpace(provider) == "" || strings.TrimSpace(sourceJobID) == "" || strings.TrimSpace(externalClientID) == "" {
+		return nil, ErrCreatorForwardingNoRow
+	}
+	query := `SELECT forwarding_id, COALESCE(external_client_id, ''),
+		        source_provider, source_job_id, source_status,
+		        target_executor_id, COALESCE(target_job_id, ''),
+		        COALESCE(payload_json, ''), COALESCE(payload_sha256, ''),
+		        status, attempt_count, COALESCE(next_attempt_at, ''),
+		        poll_attempts, COALESCE(next_poll_at, ''), COALESCE(last_polled_at, ''),
+		        COALESCE(last_remote_status, ''),
+		        COALESCE(locked_by, ''), COALESCE(lease_id, ''), COALESCE(lease_expires_at, ''),
+		        COALESCE(last_error_code, ''), COALESCE(last_error_message, ''), COALESCE(last_error_class, ''),
+		        created_at, updated_at, COALESCE(forwarded_at, '')
+		 FROM creator_forwardings
+		 WHERE source_provider = ? AND source_job_id = ? AND external_client_id = ?
+		 ORDER BY created_at DESC LIMIT 1`
+	return scanCreatorForwardingWithExternalClient(s.db.QueryRowContext(ctx, query, provider, sourceJobID, externalClientID))
 }
 
 // GetCreatorForwardingBySource looks up a forwarding by the unique
@@ -280,8 +362,11 @@ func (s *SQLiteStore) GetCreatorForwardingByRemoteJob(ctx context.Context, provi
 }
 
 // GetCreatorForwardingByTargetJobID looks up the canonical forwarding
-// row stamped with target_job_id = :id. This is the read surface for
-// the polling endpoint GET /api/v1/jobs/:id — by the time the resolver
+// row stamped with target_job_id = :id. When externalClientID is non-empty,
+// the lookup is ownership-scoped; a missing row and a row owned by another
+// client both return ErrCreatorForwardingNoRow so callers can expose the
+// same 404 envelope without an existence oracle. This is the read surface
+// for the polling endpoint GET /api/v1/jobs/:id — by the time the resolver
 // commits a request, target_job_id is populated and stable.
 //
 // Lookup invariants:
@@ -297,12 +382,13 @@ func (s *SQLiteStore) GetCreatorForwardingByRemoteJob(ctx context.Context, provi
 // Performance: a B-tree index on target_job_id (migration 102)
 // guarantees an O(log N) lookup under operator-scale table growth.
 // Without the index, every poll is a full-table scan.
-func (s *SQLiteStore) GetCreatorForwardingByTargetJobID(ctx context.Context, targetJobID string) (*CreatorForwarding, error) {
+func (s *SQLiteStore) GetCreatorForwardingByTargetJobID(ctx context.Context, targetJobID, externalClientID string) (*CreatorForwarding, error) {
 	if strings.TrimSpace(targetJobID) == "" {
 		return nil, fmt.Errorf("store: GetCreatorForwardingByTargetJobID: empty target_job_id")
 	}
-	row := s.db.QueryRowContext(ctx,
-		`SELECT forwarding_id, source_provider, source_job_id, source_status,
+
+	query := `SELECT forwarding_id, COALESCE(external_client_id, ''),
+		        source_provider, source_job_id, source_status,
 		        target_executor_id, COALESCE(target_job_id, ''),
 		        COALESCE(payload_json, ''), COALESCE(payload_sha256, ''),
 		        status, attempt_count, COALESCE(next_attempt_at, ''),
@@ -312,9 +398,41 @@ func (s *SQLiteStore) GetCreatorForwardingByTargetJobID(ctx context.Context, tar
 		        COALESCE(last_error_code, ''), COALESCE(last_error_message, ''), COALESCE(last_error_class, ''),
 		        created_at, updated_at, COALESCE(forwarded_at, '')
 		 FROM creator_forwardings
-		 WHERE target_job_id = ?
-		 ORDER BY created_at DESC LIMIT 1`, targetJobID)
-	return scanCreatorForwarding(row)
+		 WHERE target_job_id = ?`
+	args := []any{targetJobID}
+	if clientID := strings.TrimSpace(externalClientID); clientID != "" {
+		query += ` AND external_client_id = ?`
+		args = append(args, clientID)
+	}
+	query += ` ORDER BY created_at DESC LIMIT 1`
+
+	return scanCreatorForwardingWithExternalClient(s.db.QueryRowContext(ctx, query, args...))
+}
+
+// scanCreatorForwardingWithExternalClient is kept separate from the legacy
+// scanner because older forwarding queries intentionally select the original
+// column set. New ownership-sensitive reads select external_client_id
+// explicitly and normalize NULL legacy rows to the empty string.
+func scanCreatorForwardingWithExternalClient(row creatorForwardingRowScanner) (*CreatorForwarding, error) {
+	var cf CreatorForwarding
+	err := row.Scan(
+		&cf.ForwardingID, &cf.ExternalClientID,
+		&cf.SourceProvider, &cf.SourceJobID, &cf.SourceStatus,
+		&cf.TargetExecutorID, &cf.TargetJobID,
+		&cf.PayloadJSON, &cf.PayloadSHA256,
+		&cf.Status, &cf.AttemptCount, &cf.NextAttemptAt,
+		&cf.PollAttempts, &cf.NextPollAt, &cf.LastPolledAt, &cf.LastRemoteStatus,
+		&cf.LockedBy, &cf.LeaseID, &cf.LeaseExpiresAt,
+		&cf.LastErrorCode, &cf.LastErrorMessage, &cf.LastErrorClass,
+		&cf.CreatedAt, &cf.UpdatedAt, &cf.ForwardedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, ErrCreatorForwardingNoRow
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: scan creator forwarding with client: %w", err)
+	}
+	return &cf, nil
 }
 
 // UpsertCreatorForwardingPayload updates payload_json and payload_sha256

@@ -25,6 +25,7 @@ import (
 type ResolveRequest struct {
 	ForwardingID     string
 	WorkspaceID      int64
+	ExternalClientID string
 	SourceProvider   string
 	SourceJobID      string
 	TargetExecutorID string

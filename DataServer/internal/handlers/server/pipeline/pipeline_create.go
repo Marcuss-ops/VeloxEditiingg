@@ -237,7 +237,7 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 
 			targetExecutor := firstStringResolver(workerPayload, "executor_id", "pipeline_id")
 			forwarding, persistErr := h.resolver.PersistPendingRemoteForwarding(
-				c.Request.Context(), "remote_engine", jobID, targetExecutor,
+				c.Request.Context(), "remote_engine", jobID, targetExecutor, ClientIDFromContext(c),
 			)
 			if persistErr != nil {
 				pipelineLog("CREATE: failed to persist forwarding run=%s job=%s: %v",

@@ -100,7 +100,7 @@ func registerPipelineRoutes(r *gin.Engine, auth, m2mAuth gin.HandlerFunc, deps P
 		pipeline.NewRemoteClientFromConfig(deps.Cfg),
 		deps.Resolver,
 		deps.JobsRepo, deps.JobsRepo, deps.CmdMgr,
-	).WithStore(deps.SQLiteStore).WithTaskReader(deps.TaskReader).WithAssetService(deps.AssetService).WithIntakeSink(velmetrics.NewCreatorIntakeSink()).RegisterRoutes(r, auth, m2mAuth)
+	).WithStore(deps.SQLiteStore).WithTaskReader(deps.TaskReader).WithAssetService(deps.AssetService).WithIntakeSink(velmetrics.NewCreatorIntakeSink()).RegisterRoutes(r, auth, m2mAuth, pipeline.NewM2MOrAdminAuthMiddleware(deps.Cfg, deps.SQLiteStore, nil, deps.Cfg.Auth.AdminToken, auth))
 }
 
 // registerUploadRoutes mounts upload-completed + chunked-upload routes.

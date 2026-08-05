@@ -160,6 +160,11 @@ func WriteResolverError(c *gin.Context, err error) {
 			"payload_incomplete",
 			"payload is not complete enough to dispatch",
 			nil)
+	case errors.Is(err, store.ErrCreatorForwardingOwnershipConflict):
+		writeErrorEnvelope(c, http.StatusConflict,
+			"idempotency_key_reused",
+			"idempotency key belongs to another client",
+			gin.H{"path": idempotencyKeyDefault, "issue": "ownership_conflict"})
 	case errors.Is(err, ErrIdempotencyKeyReused):
 		// Derive the 409 detail path from any wrapped
 		// validationError so a hash-conflict raised over a

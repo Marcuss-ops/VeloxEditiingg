@@ -17,6 +17,7 @@ import (
 type CanonicalJobSubmission struct {
 	ContractVersion  string
 	WorkspaceID      int64
+	ExternalClientID string
 	SourceProvider   string
 	SourceJobID      string
 	TargetExecutorID string
@@ -76,6 +77,7 @@ func (s *JobSubmissionService) Submit(ctx context.Context, req CanonicalJobSubmi
 	}
 	return s.resolver.Resolve(ctx, ResolveRequest{
 		WorkspaceID:      req.WorkspaceID,
+		ExternalClientID: req.ExternalClientID,
 		SourceProvider:   req.SourceProvider,
 		SourceJobID:      req.SourceJobID,
 		TargetExecutorID: req.TargetExecutorID,

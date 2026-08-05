@@ -37,7 +37,7 @@ func (h *Handlers) PipelineRunTimeline() gin.HandlerFunc {
 		}
 
 		ctx := c.Request.Context()
-		pr, forwarding, err := h.lookupPipelineRun(ctx, idParam)
+		pr, forwarding, err := h.lookupPipelineRun(ctx, idParam, ClientIDFromContext(c))
 		if err != nil {
 			if errors.Is(err, errPipelineRunNotFound) {
 				c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "pipeline run not found"})

@@ -24,7 +24,7 @@ import (
 // incomplete response from being mistaken for a forwardable worker payload.
 func (r *Resolver) PersistPendingRemoteForwarding(
 	ctx context.Context,
-	sourceProvider, sourceJobID, targetExecutorID string,
+	sourceProvider, sourceJobID, targetExecutorID, externalClientID string,
 ) (*store.CreatorForwarding, error) {
 	if r == nil || r.forwardRepo == nil {
 		return nil, fmt.Errorf("creatorflow: persist pending forwarding: resolver database access is required")
@@ -45,11 +45,15 @@ func (r *Resolver) PersistPendingRemoteForwarding(
 			return nil, fmt.Errorf("creatorflow: lookup pending forwarding: %w", err)
 		}
 	} else if existing != nil {
+		if clientID := strings.TrimSpace(externalClientID); clientID != "" && strings.TrimSpace(existing.ExternalClientID) != clientID {
+			return nil, store.ErrCreatorForwardingOwnershipConflict
+		}
 		return existing, nil
 	}
 
 	inserted, err := r.forwardRepo.InsertCreatorForwarding(ctx, &store.CreatorForwarding{
 		ForwardingID:     "cf_" + uuid.NewString(),
+		ExternalClientID: externalClientID,
 		SourceProvider:   sourceProvider,
 		SourceJobID:      sourceJobID,
 		TargetExecutorID: targetExecutorID,
@@ -99,6 +103,7 @@ func (r *Resolver) ensureReadyForwarding(ctx context.Context, req ResolveRequest
 		ForwardingID:     "cf_" + uuid.NewString(),
 		SourceProvider:   req.SourceProvider,
 		SourceJobID:      req.SourceJobID,
+		ExternalClientID: req.ExternalClientID,
 		TargetExecutorID: targetExecutor,
 		PayloadJSON:      payloadJSON,
 		PayloadSHA256:    payloadSHA256,

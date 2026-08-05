@@ -220,6 +220,7 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 			canonical.WorkerPayload,
 			canonical.DeliveryPlan,
 			canonical.PublicationSpecs,
+			ClientIDFromContext(c),
 		)
 		if err != nil {
 			// P0 contract: every resolver-layer error is mapped
@@ -334,7 +335,8 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 //
 // Auth scope: jobs.submit. The M2M middleware runs before the
 // handler and rejects requests lacking a valid token. Cross-client
-// authorization (a token for client A polling a job created by
-// client B) is intentionally SOFT for v1 — any valid M2M token
-// can poll any job_id. The strict boundary tightening
-// (creator_forwardings.external_client_id == m2m_client_id from
+// authorization is strict: a token for client A can poll only jobs
+// whose creator_forwardings.external_client_id is client A. A missing
+// job and a job owned by another client intentionally share the same
+// 404 job_not_found envelope. The ownership boundary is enforced by
+// store.GetCreatorForwardingByTargetJobID.

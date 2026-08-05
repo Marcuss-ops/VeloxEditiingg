@@ -21,6 +21,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const pollingTestClientID = "e2e-polling-client"
+
+func m2mPollingAuthFake(c *gin.Context) {
+	c.Set(m2mCtxKeyClientID, pollingTestClientID)
+	c.Next()
+}
+
 func getSubmittedJob(t *testing.T, r *gin.Engine, jobID string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+jobID, nil)
@@ -50,7 +57,7 @@ func TestSubmitJobE2E_PollingChain_HappyPath(t *testing.T) {
 	h, _ := newSubmitJobE2EStack(t)
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
+	h.RegisterRoutes(r, adminAuthFake, m2mPollingAuthFake)
 
 	const idem = "e2e-polling-001"
 	body := validSubmitJobBody(idem)
@@ -125,7 +132,7 @@ func TestSubmitJobE2E_PollingChain_NotFound(t *testing.T) {
 	h, _ := newSubmitJobE2EStack(t)
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
+	h.RegisterRoutes(r, adminAuthFake, m2mPollingAuthFake)
 
 	w := getSubmittedJob(t, r, "job_does_not_exist_001")
 	if w.Code != http.StatusNotFound {

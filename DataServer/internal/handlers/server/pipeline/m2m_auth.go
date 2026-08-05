@@ -43,8 +43,10 @@ package pipeline
 
 import (
 	"context"
+	"crypto/subtle"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -54,6 +56,31 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/store"
 )
+
+// NewM2MOrAdminAuthMiddleware accepts either a valid operator admin token or
+// a valid M2M token. It is used for the pipeline-run read/action routes so
+// M2M callers receive the same ownership checks as /api/v1/jobs while the
+// existing admin surface remains backward-compatible.
+//
+// Token selection is fail-closed: only an exact match with the configured
+// admin token enters adminAuth; every other bearer token must pass the M2M
+// middleware. The admin middleware remains responsible for its own origin and
+// loopback policy.
+func NewM2MOrAdminAuthMiddleware(cfg *config.Config, st *store.SQLiteStore, limiter *m2mRateLimiter, adminToken string, adminAuth gin.HandlerFunc) gin.HandlerFunc {
+	m2mAuth := NewM2MJwAuthMiddleware(cfg, st, limiter)
+	return func(c *gin.Context) {
+		token := workersreg.ExtractBearerToken(c.GetHeader("Authorization"), "", "")
+		if strings.TrimSpace(adminToken) != "" && subtle.ConstantTimeCompare([]byte(token), []byte(strings.TrimSpace(adminToken))) == 1 {
+			if adminAuth == nil {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "admin auth not configured"})
+				return
+			}
+			adminAuth(c)
+			return
+		}
+		m2mAuth(c)
+	}
+}
 
 // =====================================================================
 // gin.Context keys

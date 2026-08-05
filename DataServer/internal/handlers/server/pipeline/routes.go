@@ -9,7 +9,7 @@ import (
 // RegisterRoutes mounts all pipeline endpoints on the given engine.
 // m2mJobsAuth protects both job submission and publishing-target discovery:
 // they are two steps of the same trusted machine-to-machine workflow.
-func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth, m2mJobsAuth gin.HandlerFunc) {
+func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth, m2mJobsAuth gin.HandlerFunc, pipelineAuth ...gin.HandlerFunc) {
 	creator := r.Group("/api/v1/creator")
 	if adminAuth != nil {
 		creator.Use(adminAuth)
@@ -43,7 +43,12 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth, m2mJobsAuth gin.Hand
 	publications.POST("/preview", h.PreviewPublication())
 
 	pipelineRuns := r.Group("/api/v1/pipeline-runs")
-	if adminAuth != nil {
+	if len(pipelineAuth) > 0 && pipelineAuth[0] != nil {
+		// Production composition may explicitly provide the combined
+		// admin-or-M2M middleware. Keeping this injectable preserves the
+		// historical admin-only test mounts without weakening production.
+		pipelineRuns.Use(pipelineAuth[0])
+	} else if adminAuth != nil {
 		pipelineRuns.Use(adminAuth)
 	}
 	pipelineRuns.POST("", h.CreatePipelineRun())

@@ -15,9 +15,11 @@ package pipeline
 
 import (
 	"errors"
-	"github.com/gin-gonic/gin"
 	"net/http"
 	"strings"
+
+	"github.com/gin-gonic/gin"
+
 	"velox-server/internal/store"
 )
 
@@ -39,7 +41,19 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 			return
 		}
 		ctx := c.Request.Context()
-		forwarding, err := h.store.GetCreatorForwardingByTargetJobID(ctx, jobID)
+		clientID := strings.TrimSpace(ClientIDFromContext(c))
+		if clientID == "" {
+			// /api/v1/jobs/:id is M2M-only. A missing middleware identity
+			// must fail closed rather than silently reverting to an unscoped
+			// lookup.
+			c.JSON(http.StatusNotFound, gin.H{
+				"ok":      false,
+				"error":   "job_not_found",
+				"message": "job_id does not match any known creator forwarding",
+			})
+			return
+		}
+		forwarding, err := h.store.GetCreatorForwardingByTargetJobID(ctx, jobID, clientID)
 		if err != nil {
 			if errors.Is(err, store.ErrCreatorForwardingNoRow) {
 				c.JSON(http.StatusNotFound, gin.H{
