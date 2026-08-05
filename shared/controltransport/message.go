@@ -30,6 +30,7 @@ const (
 	// CapabilityArtifactUploadCompletedV1.
 	MsgTaskOutputDeclared      ControlMessageType = "task_output_declared"
 	MsgArtifactUploadCompleted ControlMessageType = "artifact_upload_completed"
+	MsgAssetDownloadProgress   ControlMessageType = "asset_download_progress"
 )
 
 // --- Master → Worker ---
@@ -57,7 +58,7 @@ func (t ControlMessageType) IsWorkerToMaster() bool {
 	switch t {
 	case MsgHello, MsgHeartbeat, MsgTaskLeaseRenewal, MsgTaskAccepted, MsgTaskRejected,
 		MsgTaskResult, MsgCommandAck, MsgArtifactUploaded, MsgGoodbye,
-		MsgTaskOutputDeclared, MsgArtifactUploadCompleted:
+		MsgTaskOutputDeclared, MsgArtifactUploadCompleted, MsgAssetDownloadProgress:
 		return true
 	}
 	return false

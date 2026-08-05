@@ -75,7 +75,7 @@ func TestControlMessageTypeClassification(t *testing.T) {
 	workerToMaster := []ControlMessageType{
 		MsgHello, MsgHeartbeat, MsgTaskLeaseRenewal,
 		MsgTaskAccepted, MsgTaskRejected, MsgTaskResult,
-		MsgCommandAck, MsgArtifactUploaded, MsgGoodbye,
+		MsgCommandAck, MsgArtifactUploaded, MsgGoodbye, MsgAssetDownloadProgress,
 	}
 	for _, mt := range workerToMaster {
 		if !mt.IsWorkerToMaster() {

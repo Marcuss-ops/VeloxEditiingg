@@ -62,9 +62,15 @@ message WorkerToMasterEnvelope {
     // successor and is the one referenced by CapabilityArtifactCommitV1.
     TaskOutputDeclared task_output_declared = 32;
     ArtifactUploadCompleted artifact_upload_completed = 33;
+
+    // Worker-side canonical asset download read-model checkpoint.
+    // The physical transfer is shared across jobs; job_ids carries the
+    // current per-job references so the master can project one transfer
+    // into multiple job_asset_refs rows without duplicating the download.
+    AssetDownloadProgress asset_download_progress = 36;
   }
 
-  reserved 12, 13, 14, 15, 17, 34;
+  reserved 12, 13, 14, 15, 17, 34, 35;
 }
 
 message Hello {
@@ -334,6 +340,46 @@ message ArtifactUploaded {
 }
 
 message Goodbye {}
+
+// AssetDownloadProgress is emitted by the worker's canonical
+// DownloadManager checkpoint hook. It is a latest-state message, not an
+// append-only byte event: the master upserts the worker/transfer row and
+// replaces the job references for that physical transfer.
+message AssetJobReference {
+  string job_id = 1;
+  string task_id = 2;
+  repeated string scene_ids = 3;
+}
+
+message AssetDownloadProgress {
+  string worker_id = 1;
+  string transfer_id = 2;
+  string asset_key = 3;
+  string asset_id = 4;
+  string role = 5;
+  string state = 6;
+  int64 bytes_downloaded = 7;
+  int64 bytes_total = 8;
+  double bytes_per_second = 9;
+  int64 eta_seconds = 10;
+  int32 attempt = 11;
+  int32 shared_waiters = 12;
+  bool cache_hit = 13;
+  int64 queued_at_unix_ms = 14;
+  int64 started_at_unix_ms = 15;
+  int64 updated_at_unix_ms = 16;
+  int64 completed_at_unix_ms = 17;
+  repeated string job_ids = 18;
+  string task_id = 19;
+  repeated string scene_ids = 20;
+  string mime_type = 21;
+  string sha256 = 22;
+  string error_code = 23;
+  string error_detail = 24;
+  repeated AssetJobReference job_refs = 25;
+  int64 checkpoint_sequence = 26;
+  int64 transfer_generation = 27;
+}
 
 // ---------------------------------------------------------
 // Master -> Worker

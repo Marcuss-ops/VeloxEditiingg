@@ -8,9 +8,12 @@ import (
 	"net/http"
 	neturl "net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
+	"velox-shared/controltransport"
+	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/downloader"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/workercache"
@@ -108,7 +111,8 @@ func (w *Worker) assetDownloadManager() downloader.AssetDownloadManager {
 			// manager): emitted as worker-side telemetry events that feed the
 			// master's asset-download read model. Non-blocking by contract.
 			OnCheckpoint: func(snap downloader.DownloadSnapshot, reportCtx context.Context) {
-				emitAssetProgressCheckpoint(reportCtx, snap)
+				progressCtx := context.WithValue(reportCtx, assetProgressWorkerContextKey{}, w)
+				emitAssetProgressCheckpoint(progressCtx, snap)
 			},
 		}, &masterAssetTransferer{w: w})
 	}
@@ -121,6 +125,33 @@ func (w *Worker) assetDownloadManager() downloader.AssetDownloadManager {
 // waiter's telemetry context supplies the recorder — value-reads only, per
 // the Transferer context contract.
 func emitAssetProgressCheckpoint(ctx context.Context, snap downloader.DownloadSnapshot) {
+	// The checkpoint hook is deliberately non-blocking with respect to the
+	// downloader. A single FIFO sender owns all progress sends, preserving
+	// checkpoint order while transport reconnects are handled by taking a
+	// synchronized snapshot of the current session at send time.
+	if w, ok := workerFromProgressContext(ctx); ok && w != nil {
+		jobs := append([]string(nil), snap.JobIDs...)
+		sort.Strings(jobs)
+		msg := &pb.AssetDownloadProgress{
+			WorkerId: w.config.WorkerID, TransferId: snap.TransferID,
+			AssetKey: snap.AssetKey, AssetId: snap.AssetID, Role: string(snap.Role),
+			State: string(snap.State), BytesDownloaded: snap.BytesDownloaded,
+			BytesTotal: snap.BytesTotal, BytesPerSecond: snap.ThroughputBytesPerSecond,
+			EtaSeconds: snap.ETASeconds, Attempt: int32(snap.Attempt),
+			SharedWaiters: int32(snap.SharedWaiters), CacheHit: snap.CacheHit,
+			QueuedAtUnixMs: unixMillis(snap.QueuedAt), StartedAtUnixMs: unixMillis(snap.StartedAt),
+			UpdatedAtUnixMs: unixMillis(snap.UpdatedAt), CompletedAtUnixMs: unixMillis(snap.CompletedAt),
+			JobIds: jobs, TaskId: snap.TaskID, SceneIds: append([]string(nil), snap.SceneIDs...),
+			MimeType: snap.MIMEType, Sha256: snap.SHA256, ErrorCode: snap.ErrorCode, ErrorDetail: snap.ErrorDetail,
+			CheckpointSequence: snap.CheckpointSequence,
+			TransferGeneration: snap.TransferGeneration,
+		}
+		for _, ref := range snap.JobRefs {
+			msg.JobRefs = append(msg.JobRefs, &pb.AssetJobReference{JobId: ref.JobID, TaskId: ref.TaskID, SceneIds: append([]string(nil), ref.SceneIDs...)})
+		}
+		w.enqueueAssetProgress(msg)
+	}
+
 	rec := telemetry.RecorderFromContext(ctx)
 	if rec == nil {
 		return
@@ -138,6 +169,75 @@ func emitAssetProgressCheckpoint(ctx context.Context, snap downloader.DownloadSn
 	h.SetMetadata("throughput_bps", int64(snap.ThroughputBytesPerSecond))
 	h.SetMetadata("eta_seconds", snap.ETASeconds)
 	h.Complete()
+}
+
+func unixMillis(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixMilli()
+}
+
+// workerFromProgressContext is intentionally a placeholder until the worker
+// context carrier is wired by the caller; the asset manager callback currently
+// receives only the telemetry report context. It returns false for contexts
+// without the worker carrier, preserving headless tests.
+func workerFromProgressContext(ctx context.Context) (*Worker, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	w, ok := ctx.Value(assetProgressWorkerContextKey{}).(*Worker)
+	return w, ok
+}
+
+type assetProgressWorkerContextKey struct{}
+
+type assetProgressEnvelope struct {
+	message *pb.AssetDownloadProgress
+}
+
+func (w *Worker) enqueueAssetProgress(message *pb.AssetDownloadProgress) {
+	if w == nil || message == nil {
+		return
+	}
+	w.assetProgressOnce.Do(func() {
+		w.assetProgressQueue = make(chan assetProgressEnvelope, 256)
+		go w.assetProgressSender()
+	})
+	select {
+	case w.assetProgressQueue <- assetProgressEnvelope{message: message}:
+	case <-w.stopChan:
+	default:
+		// Progress is diagnostic and throttled. Dropping an intermediate
+		// checkpoint under backpressure is preferable to stalling a byte
+		// transfer; the next checkpoint or terminal event supersedes it.
+		w.logger.Warn("[ASSET_PROGRESS] checkpoint queue full; dropping update")
+	}
+}
+
+func (w *Worker) assetProgressSender() {
+	for {
+		select {
+		case <-w.stopChan:
+			return
+		case envelope := <-w.assetProgressQueue:
+			if envelope.message == nil {
+				continue
+			}
+			w.transportMu.RLock()
+			transport := w.transport
+			w.transportMu.RUnlock()
+			if transport == nil {
+				continue
+			}
+			w.assetProgressSendMu.Lock()
+			err := transport.Send(context.Background(), controltransport.NewTypedMessage(controltransport.MsgAssetDownloadProgress, w.config.WorkerID, w.config.ProtocolVersion, envelope.message))
+			w.assetProgressSendMu.Unlock()
+			if err != nil {
+				w.logger.Warn("[ASSET_PROGRESS] send failed: %v", err)
+			}
+		}
+	}
 }
 
 func (w *Worker) assetDownloadConcurrency() int {

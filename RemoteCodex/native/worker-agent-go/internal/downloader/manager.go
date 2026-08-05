@@ -102,7 +102,8 @@ type Manager struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	qseq atomic.Int64
+	qseq       atomic.Int64
+	generation atomic.Int64
 }
 
 // NewManager wires the manager with its transferer and starts the bounded
@@ -148,7 +149,7 @@ func (m *Manager) Resolve(ctx context.Context, req DownloadRequest) (DownloadedA
 	for attempt := 0; attempt < 3; attempt++ {
 		t := m.acquireTransfer(key, req, ctx)
 
-		t.addWaiter(req.JobID, req.TaskID)
+		t.addWaiter(req)
 		select {
 		case <-t.doneCh():
 			result, err := t.result()
@@ -192,7 +193,8 @@ func (m *Manager) acquireTransfer(key string, req DownloadRequest, reportCtx con
 	if existing := m.registry.transfers[key]; existing != nil && !existing.isTerminal() {
 		return existing
 	}
-	t := newTransfer(m.ctx, key, req, reportCtx, m.cfg.Now, nextTransferID())
+	generation := m.generation.Add(1)
+	t := newTransfer(m.ctx, key, req, reportCtx, m.cfg.Now, nextTransferID(), generation)
 	// Wire the progress throttles and the durable checkpoint hook.
 	t.publishInterval = m.cfg.PublishInterval
 	t.publishBytes = m.cfg.PublishBytes

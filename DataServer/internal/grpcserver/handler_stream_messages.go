@@ -51,6 +51,9 @@ func (h *Handler) dispatchMessage(workerID, sessionID string, env *pb.WorkerToMa
 	case *pb.WorkerToMasterEnvelope_ArtifactUploadCompleted:
 		h.handleArtifactUploadCompleted(workerID, m.ArtifactUploadCompleted, sess)
 
+	case *pb.WorkerToMasterEnvelope_AssetDownloadProgress:
+		h.handleAssetDownloadProgress(workerID, m.AssetDownloadProgress)
+
 	case *pb.WorkerToMasterEnvelope_CommandAck:
 		h.handleCommandAck(workerID, m.CommandAck)
 

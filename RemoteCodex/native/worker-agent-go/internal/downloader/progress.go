@@ -33,6 +33,7 @@
 package downloader
 
 import (
+	"sort"
 	"time"
 )
 
@@ -163,6 +164,15 @@ type DownloadedAsset struct {
 	ReadyAt   time.Time
 }
 
+// DownloadJobReference preserves the per-job ownership metadata for a
+// shared physical transfer. It prevents one job's scene/task metadata from
+// being projected onto another job's job_asset_refs row.
+type DownloadJobReference struct {
+	JobID    string
+	TaskID   string
+	SceneIDs []string
+}
+
 // DownloadSnapshot is the observable state of one transfer. The manager keeps
 // snapshots cheap to produce: they are read under the transfer mutex and never
 // reference live io state that could block.
@@ -191,13 +201,77 @@ type DownloadSnapshot struct {
 
 	CacheHit bool
 
-	ErrorCode   string
-	ErrorDetail string
+	ErrorCode          string
+	ErrorDetail        string
+	CheckpointSequence int64
+	TransferGeneration int64
+
+	// JobIDs is the durable read-model projection of the jobs currently
+	// referencing this shared physical transfer. It is sorted for stable
+	// wire output; it does not affect transfer identity.
+	JobIDs   []string
+	JobRefs  []DownloadJobReference
+	TaskID   string
+	SceneIDs []string
+	MIMEType string
+	SHA256   string
 }
 
 // JobDownloadSnapshot aggregates every transfer a job is waiting on. Progress
 // is weighted on bytes — never on file counts (1 MB complete + one 5 GB
 // empty is NOT 50%).
+// sortedJobIDs returns a deterministic copy for wire/read-model snapshots.
+func mergeStrings(existing, incoming []string) []string {
+	seen := make(map[string]struct{}, len(existing)+len(incoming))
+	out := make([]string, 0, len(existing)+len(incoming))
+	for _, values := range [][]string{existing, incoming} {
+		for _, value := range values {
+			if value == "" {
+				continue
+			}
+			if _, ok := seen[value]; ok {
+				continue
+			}
+			seen[value] = struct{}{}
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func sortedJobIDs(refs map[string]DownloadJobReference) []string {
+	ids := make([]string, 0, len(refs))
+	for id := range refs {
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func sortedSceneIDs(refs map[string]struct{}) []string {
+	ids := make([]string, 0, len(refs))
+	for id := range refs {
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func snapshotJobRefs(refs map[string]DownloadJobReference) []DownloadJobReference {
+	ids := sortedJobIDs(refs)
+	out := make([]DownloadJobReference, 0, len(ids))
+	for _, id := range ids {
+		ref := refs[id]
+		ref.SceneIDs = append([]string(nil), ref.SceneIDs...)
+		out = append(out, ref)
+	}
+	return out
+}
+
 type JobDownloadSnapshot struct {
 	JobID string
 

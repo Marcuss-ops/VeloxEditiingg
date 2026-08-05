@@ -37,6 +37,7 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth, m2mJobsAuth gin.Hand
 	jobs.POST("/validate", h.ValidateJob())
 	jobs.POST("/estimate", h.EstimateJob())
 	jobs.GET("/:id", h.GetSubmittedJob())
+	jobs.GET("/:id/asset-progress", h.AssetDownloadProgress())
 
 	publications := r.Group("/api/v1/publications")
 	publications.Use(m2mJobsAuth)

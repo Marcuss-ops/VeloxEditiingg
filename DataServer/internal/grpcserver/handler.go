@@ -66,6 +66,11 @@ type Handler struct {
 	// surface silently skip the projection (log-only mode).
 	placementRejectionSink velmetrics.PlacementRejectionSink
 
+	// Asset download progress is a latest-state read model. The store
+	// dependency is already owned by Handler; this sink is an optional
+	// setter to keep lightweight handler tests independent of SQLite.
+	assetDownloadProgressSink AssetDownloadProgressSink
+
 	placementMatcher *placement.Matcher
 
 	// capabilityRegistry gates ArtifactUploaded (the on-the-wire

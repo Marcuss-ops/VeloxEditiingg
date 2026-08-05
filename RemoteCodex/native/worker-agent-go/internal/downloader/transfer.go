@@ -83,41 +83,46 @@ type Transfer struct {
 	waiters map[waiterKey]struct{}
 	// jobRefs survives waiter removal so JobSnapshot remains a durable
 	// per-job read model after an asset reaches READY/FAILED.
-	jobRefs     map[string]struct{}
-	subscribers map[uint64]chan DownloadSnapshot
-	subSeq      uint64
+	jobRefs            map[string]DownloadJobReference
+	sceneIDs           map[string]struct{}
+	subscribers        map[uint64]chan DownloadSnapshot
+	checkpointSequence int64
+	subSeq             uint64
 
-	res        TransferResult
-	err        error
-	done       chan struct{}
-	once       sync.Once
-	transferID string
+	res                TransferResult
+	err                error
+	done               chan struct{}
+	once               sync.Once
+	transferID         string
+	transferGeneration int64
 }
 
 // newTransfer builds a transfer with its OWN context (manager-derived), plus
 // the first waiter's report context. A nil reportCtx degrades to
 // context.Background() (caller-scoped telemetry simply missing).
-func newTransfer(managerCtx context.Context, key string, req DownloadRequest, reportCtx context.Context, now func() time.Time, transferID string) *Transfer {
+func newTransfer(managerCtx context.Context, key string, req DownloadRequest, reportCtx context.Context, now func() time.Time, transferID string, transferGeneration int64) *Transfer {
 	if reportCtx == nil {
 		reportCtx = context.Background()
 	}
 	ctx, cancel := context.WithCancel(managerCtx)
 	t := &Transfer{
-		Key:         key,
-		req:         req,
-		transferCtx: ctx,
-		cancel:      cancel,
-		reportCtx:   reportCtx,
-		now:         now,
-		state:       DownloadQueued,
-		bytesTotal:  req.SizeBytes,
-		queuedAt:    now(),
-		updatedAt:   now(),
-		waiters:     make(map[waiterKey]struct{}),
-		jobRefs:     make(map[string]struct{}),
-		subscribers: make(map[uint64]chan DownloadSnapshot),
-		done:        make(chan struct{}),
-		transferID:  transferID,
+		Key:                key,
+		req:                req,
+		transferCtx:        ctx,
+		cancel:             cancel,
+		reportCtx:          reportCtx,
+		now:                now,
+		state:              DownloadQueued,
+		bytesTotal:         req.SizeBytes,
+		queuedAt:           now(),
+		updatedAt:          now(),
+		waiters:            make(map[waiterKey]struct{}),
+		jobRefs:            make(map[string]DownloadJobReference),
+		sceneIDs:           make(map[string]struct{}),
+		subscribers:        make(map[uint64]chan DownloadSnapshot),
+		done:               make(chan struct{}),
+		transferID:         transferID,
+		transferGeneration: transferGeneration,
 	}
 	return t
 }
@@ -142,11 +147,21 @@ func (t *Transfer) isTerminal() bool {
 
 // addWaiter registers one logical waiter. SharedWaiters in snapshots equals
 // the current waiter count.
-func (t *Transfer) addWaiter(jobID, taskID string) {
+func (t *Transfer) addWaiter(req DownloadRequest) {
 	t.mu.Lock()
-	t.waiters[waiterKey{jobID, taskID}] = struct{}{}
-	if jobID != "" {
-		t.jobRefs[jobID] = struct{}{}
+	t.waiters[waiterKey{req.JobID, req.TaskID}] = struct{}{}
+	if req.JobID != "" {
+		refKey := req.JobID + "\x00" + req.TaskID
+		ref := t.jobRefs[refKey]
+		ref.JobID = req.JobID
+		ref.TaskID = req.TaskID
+		ref.SceneIDs = mergeStrings(ref.SceneIDs, req.SceneIDs)
+		t.jobRefs[refKey] = ref
+	}
+	for _, sceneID := range req.SceneIDs {
+		if sceneID != "" {
+			t.sceneIDs[sceneID] = struct{}{}
+		}
 	}
 	t.updatedAt = t.now()
 	t.mu.Unlock()
@@ -173,8 +188,12 @@ func (t *Transfer) waiterCount() int {
 func (t *Transfer) hasJobReference(jobID string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	_, ok := t.jobRefs[jobID]
-	return ok
+	for _, ref := range t.jobRefs {
+		if ref.JobID == jobID {
+			return true
+		}
+	}
+	return false
 }
 
 // subscribe registers a snapshot subscriber. The returned channel delivers
@@ -365,6 +384,10 @@ func (t *Transfer) reportProgress(downloaded int64) {
 		t.mu.Unlock()
 	}
 	if checkpoint {
+		t.mu.Lock()
+		t.checkpointSequence++
+		ckptSnap.CheckpointSequence = t.checkpointSequence
+		t.mu.Unlock()
 		t.onCheckpoint(ckptSnap, t.reportCtx)
 	}
 }
@@ -377,6 +400,7 @@ func (t *Transfer) emitCheckpoint(now time.Time) {
 		return
 	}
 	t.mu.Lock()
+	t.checkpointSequence++
 	snap := t.snapshotLocked(now)
 	t.mu.Unlock()
 	t.onCheckpoint(snap, t.reportCtx)
@@ -436,23 +460,31 @@ func (t *Transfer) snapshotLocked(now time.Time) DownloadSnapshot {
 		queuePos = int(t.queueSeq)
 	}
 	s := DownloadSnapshot{
-		TransferID:      t.transferID,
-		AssetKey:        t.Key,
-		AssetID:         t.req.AssetID,
-		Role:            t.req.Role,
-		State:           state,
-		BytesDownloaded: t.bytesDownloaded,
-		BytesTotal:      t.bytesTotal,
-		Attempt:         t.attempt,
-		QueuePosition:   queuePos,
-		SharedWaiters:   len(t.waiters),
-		QueuedAt:        t.queuedAt,
-		StartedAt:       t.startedAt,
-		UpdatedAt:       t.updatedAt,
-		CompletedAt:     t.completedAt,
-		CacheHit:        t.cacheHit,
-		ErrorCode:       errorCodeOf(t.err),
-		ErrorDetail:     errorDetailOf(t.err),
+		TransferID:         t.transferID,
+		TransferGeneration: t.transferGeneration,
+		AssetKey:           t.Key,
+		AssetID:            t.req.AssetID,
+		Role:               t.req.Role,
+		State:              state,
+		BytesDownloaded:    t.bytesDownloaded,
+		BytesTotal:         t.bytesTotal,
+		Attempt:            t.attempt,
+		QueuePosition:      queuePos,
+		SharedWaiters:      len(t.waiters),
+		QueuedAt:           t.queuedAt,
+		StartedAt:          t.startedAt,
+		UpdatedAt:          t.updatedAt,
+		CompletedAt:        t.completedAt,
+		CacheHit:           t.cacheHit,
+		ErrorCode:          errorCodeOf(t.err),
+		ErrorDetail:        errorDetailOf(t.err),
+		CheckpointSequence: t.checkpointSequence,
+		JobIDs:             sortedJobIDs(t.jobRefs),
+		JobRefs:            snapshotJobRefs(t.jobRefs),
+		TaskID:             t.req.TaskID,
+		SceneIDs:           sortedSceneIDs(t.sceneIDs),
+		MIMEType:           t.req.MIMEType,
+		SHA256:             t.req.SHA256,
 	}
 	if t.bytesTotal > 0 {
 		s.ProgressPercent = float64(t.bytesDownloaded) / float64(t.bytesTotal) * 100

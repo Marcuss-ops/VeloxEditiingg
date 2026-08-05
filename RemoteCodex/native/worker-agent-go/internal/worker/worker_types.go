@@ -143,8 +143,12 @@ type Worker struct {
 	// transfer states, bounded pool, shared progress). Constructed lazily on
 	// first use; closed in Stop(). The Transferer it runs is the master-bridge
 	// pipeline (asset_downloader.go).
-	assetManager   *downloader.Manager
-	assetManagerMu sync.Mutex
+	assetManager        *downloader.Manager
+	assetManagerMu      sync.Mutex
+	transportMu         sync.RWMutex
+	assetProgressQueue  chan assetProgressEnvelope
+	assetProgressSendMu sync.Mutex
+	assetProgressOnce   sync.Once
 
 	// assetIntegrity remembers the self-verified digest+size of the most
 	// recent successful download of each asset (computed while the file was

@@ -107,6 +107,9 @@ func (t *GRPCStreamTransport) messageToEnvelope(msg controltransport.ControlMess
 
 	case *pb.ArtifactUploadCompleted:
 		env.Msg = &pb.WorkerToMasterEnvelope_ArtifactUploadCompleted{ArtifactUploadCompleted: tp}
+
+	case *pb.AssetDownloadProgress:
+		env.Msg = &pb.WorkerToMasterEnvelope_AssetDownloadProgress{AssetDownloadProgress: tp}
 	}
 
 	return env

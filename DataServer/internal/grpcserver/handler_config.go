@@ -45,6 +45,12 @@ func (h *Handler) SetResourceSink(sink velmetrics.WorkerResourceSink) {
 	h.resourceSink = sink
 }
 
+// SetAssetDownloadProgressSink installs the latest-state persistence sink.
+// Nil restores the Handler's dbStore fallback when one is configured.
+func (h *Handler) SetAssetDownloadProgressSink(sink AssetDownloadProgressSink) {
+	h.assetDownloadProgressSink = sink
+}
+
 // SetPlacementRejectionSink installs the PlacementRejectionSink used by
 // the placement pipeline (recordPlacementRejections + handleUnsupportedExecutorRejection).
 // Bootstrap wires metrics.NewCollector here; tests inject a recording stub.

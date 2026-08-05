@@ -62,8 +62,11 @@ func (w *Worker) Start(ctx context.Context) error {
 	for !w.IsStopped() {
 		// P0 reconnect fix: create a fresh transport each session attempt.
 		// After Close(), transports are not reusable (channels + sync.Once).
-		w.transport = w.newTransport()
-		if w.transport == nil {
+		newTransport := w.newTransport()
+		w.transportMu.Lock()
+		w.transport = newTransport
+		w.transportMu.Unlock()
+		if newTransport == nil {
 			w.connFailureCount++
 			w.logger.Warn("[CONNECT] Transport factory returned nil — backing off")
 			w.setConnState(ConnDisconnected)
@@ -91,7 +94,7 @@ func (w *Worker) Start(ctx context.Context) error {
 		if token := strings.TrimSpace(hello.CredentialHash); token != "" && w.apiClient != nil {
 			w.apiClient.SetAuthToken(token)
 		}
-		if err := w.transport.Connect(ctx, hello); err != nil {
+		if err := newTransport.Connect(ctx, hello); err != nil {
 			w.connFailureCount++
 
 			w.logger.Warn("[CONNECT] Registration failed (attempt %d): %v", w.connFailureCount, err)
@@ -134,7 +137,7 @@ func (w *Worker) Start(ctx context.Context) error {
 			if w.apiClient != nil {
 				w.apiClient.ClearAuthToken()
 			}
-			_ = w.transport.Close()
+			_ = newTransport.Close()
 
 			// Use short fixed retry for connection-level errors (reset, refused,
 			// transport unavailable) — the server may just be restarting.
@@ -183,7 +186,12 @@ func (w *Worker) Start(ctx context.Context) error {
 		// Run session: start all loops, manage lifecycle
 		sessionEnded := w.runSession(ctx)
 
-		_ = w.transport.Close()
+		w.transportMu.RLock()
+		currentTransport := w.transport
+		w.transportMu.RUnlock()
+		if currentTransport != nil {
+			_ = currentTransport.Close()
+		}
 
 		// Session ended — either through stop or disconnect
 		if w.IsStopped() {
@@ -218,9 +226,15 @@ func (w *Worker) Start(ctx context.Context) error {
 // ended due to disconnect (should reconnect), false if stopped gracefully.
 func (w *Worker) runSession(ctx context.Context) bool {
 	sessionCtx, cancel := context.WithCancel(ctx)
+	w.transportMu.RLock()
+	sessionTransport := w.transport
+	w.transportMu.RUnlock()
+	if sessionTransport == nil {
+		return false
+	}
 	defer cancel()
 
-	recvCh, errCh, err := w.transport.Receive(sessionCtx)
+	recvCh, errCh, err := sessionTransport.Receive(sessionCtx)
 	if err != nil {
 		w.logger.Error("Failed to start receive channel: %v", err)
 		return false
