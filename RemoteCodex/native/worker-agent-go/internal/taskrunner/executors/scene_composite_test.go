@@ -102,14 +102,16 @@ func (f *fakeRenderClient) RenderWithMetrics(_ context.Context, p *plan.RenderPl
 }
 
 // newTestSceneComposite builds minimal pipeline + executor wiring.
-func newTestSceneComposite(renderErr error) (*SceneComposite, *fakeRenderClient) {
+func newTestSceneComposite(t *testing.T, renderErr error) (*SceneComposite, *fakeRenderClient) {
+	t.Helper()
+	outputBase := t.TempDir()
 	pipeRegistry := pipeline.NewRegistry()
 	pipeRegistry.Register(&fakeCompiler{id: "hybrid.v1", validate: true})
 	pipeRegistry.Register(&fakeCompiler{id: "clips.v1", validate: true})
 
 	rclient := &fakeRenderClient{renderErr: renderErr}
 	runner := pipeline.NewRunner(pipeRegistry, rclient, logger.New(logger.InfoLevel, &strings.Builder{}))
-	return NewSceneComposite(runner, "/tmp/velox/scene-composite-test"), rclient
+	return NewSceneComposite(runner, outputBase), rclient
 }
 
 func goodPayload(jobID string) map[string]interface{} {
@@ -125,7 +127,7 @@ func goodPayload(jobID string) map[string]interface{} {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 func TestSceneComposite_Descriptor(t *testing.T) {
-	exec, _ := newTestSceneComposite(nil)
+	exec, _ := newTestSceneComposite(t, nil)
 	d := exec.Descriptor()
 	if d.ID != SceneCompositeID {
 		t.Errorf("ID = %q, want %q", d.ID, SceneCompositeID)
@@ -151,7 +153,7 @@ func TestSceneComposite_Descriptor(t *testing.T) {
 }
 
 func TestSceneComposite_Validate_NilPayload(t *testing.T) {
-	exec, _ := newTestSceneComposite(nil)
+	exec, _ := newTestSceneComposite(t, nil)
 	spec := executor.TaskSpec{Version: 1, JobID: "j-1", ExecutorID: SceneCompositeID, Payload: nil}
 	// Payload nil: Validate requires at least one media-source slice.
 	if err := exec.Validate(spec); err == nil {
@@ -160,7 +162,7 @@ func TestSceneComposite_Validate_NilPayload(t *testing.T) {
 }
 
 func TestSceneComposite_Validate_NoMediaSources(t *testing.T) {
-	exec, _ := newTestSceneComposite(nil)
+	exec, _ := newTestSceneComposite(t, nil)
 	spec := executor.TaskSpec{
 		Version: 1, JobID: "j-1", ExecutorID: SceneCompositeID,
 		Payload: map[string]interface{}{"script_text": "no media"},
@@ -171,7 +173,7 @@ func TestSceneComposite_Validate_NoMediaSources(t *testing.T) {
 }
 
 func TestSceneComposite_Validate_OK(t *testing.T) {
-	exec, _ := newTestSceneComposite(nil)
+	exec, _ := newTestSceneComposite(t, nil)
 	spec := executor.TaskSpec{
 		Version: 1, JobID: "j-1", ExecutorID: SceneCompositeID,
 		Payload: goodPayload("j-1"),
@@ -182,7 +184,7 @@ func TestSceneComposite_Validate_OK(t *testing.T) {
 }
 
 func TestSceneComposite_Execute_Success(t *testing.T) {
-	exec, rclient := newTestSceneComposite(nil)
+	exec, rclient := newTestSceneComposite(t, nil)
 	spec := executor.TaskSpec{
 		Version: 1, JobID: "j-42", ExecutorID: SceneCompositeID,
 		Payload: goodPayload("j-42"),
@@ -201,7 +203,7 @@ func TestSceneComposite_Execute_Success(t *testing.T) {
 	if len(res.Outputs) != 2 {
 		t.Fatalf("len(Outputs) = %d, want 2 (video + progress sidecar)", len(res.Outputs))
 	}
-	wantURI := filepath.Join("/tmp/velox/scene-composite-test", "j-42.mp4")
+	wantURI := filepath.Join(exec.outputBase, "j-42.mp4")
 	if got, want := res.Outputs[0].URI, wantURI; got != want {
 		t.Errorf("Output URI = %q, want %q (local path, not payload output_path)", got, want)
 	}
@@ -237,7 +239,7 @@ func TestSceneComposite_Execute_Success(t *testing.T) {
 }
 
 func TestSceneComposite_Execute_RenderErrorMapsToFailure(t *testing.T) {
-	exec, rclient := newTestSceneComposite(errors.New("ffmpeg crashed"))
+	exec, rclient := newTestSceneComposite(t, errors.New("ffmpeg crashed"))
 	rclient.partialMetrics = pipeline.RenderMetrics{
 		PhaseMS: map[string]float64{"decode": 12},
 		Segments: []pipeline.SegmentTiming{{
@@ -283,7 +285,7 @@ func TestSceneComposite_Execute_RenderErrorMapsToFailure(t *testing.T) {
 }
 
 func TestSceneComposite_Execute_CancellationPreservesPartialTelemetry(t *testing.T) {
-	exec, rclient := newTestSceneComposite(context.Canceled)
+	exec, rclient := newTestSceneComposite(t, context.Canceled)
 	rclient.partialMetrics = pipeline.RenderMetrics{
 		PhaseMS:  map[string]float64{"decode": 7},
 		Segments: []pipeline.SegmentTiming{{SegmentIndex: 4, StartedOffsetMS: 2, FinishedOffsetMS: 5}},
@@ -311,7 +313,7 @@ func TestSceneComposite_Execute_CancellationPreservesPartialTelemetry(t *testing
 }
 
 func TestSceneComposite_Execute_SynthesizesOutputPath(t *testing.T) {
-	exec, _ := newTestSceneComposite(nil)
+	exec, _ := newTestSceneComposite(t, nil)
 	spec := executor.TaskSpec{
 		Version: 1, JobID: "j-no-path", ExecutorID: SceneCompositeID,
 		Payload: map[string]interface{}{
@@ -326,14 +328,14 @@ func TestSceneComposite_Execute_SynthesizesOutputPath(t *testing.T) {
 		t.Fatalf("res.Status = %q, want succeeded (code=%q detail=%q)",
 			res.Status, res.ErrorCode, res.ErrorDetail)
 	}
-	wantPath := filepath.Join("/tmp/velox/scene-composite-test", "j-no-path.mp4")
+	wantPath := filepath.Join(exec.outputBase, "j-no-path.mp4")
 	if got := res.Outputs[0].URI; got != wantPath {
 		t.Errorf("synthesized path = %q, want %q", got, wantPath)
 	}
 }
 
 func TestSceneComposite_Execute_UsesExplicitPipelineID(t *testing.T) {
-	exec, rclient := newTestSceneComposite(nil)
+	exec, rclient := newTestSceneComposite(t, nil)
 	spec := executor.TaskSpec{
 		Version: 1, JobID: "j-clips", ExecutorID: SceneCompositeID,
 		Payload: map[string]interface{}{

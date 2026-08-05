@@ -51,12 +51,14 @@ func (a *hybridCompilerAdapter) Compile(ctx context.Context, jobID string, input
 
 // newItemsRoleContractWiring wires a SceneComposite executor backed by
 // the production hybrid.v1 compiler, plus a recording render client.
-func newItemsRoleContractWiring() (*SceneComposite, *fakeRenderClient) {
+func newItemsRoleContractWiring(t *testing.T) (*SceneComposite, *fakeRenderClient) {
+	t.Helper()
+	outputBase := t.TempDir()
 	reg := pipeline.NewRegistry()
 	reg.Register(&hybridCompilerAdapter{probe: nil})
 	rc := &fakeRenderClient{}
 	runner := pipeline.NewRunner(reg, rc, logger.New(logger.InfoLevel, &strings.Builder{}))
-	return NewSceneComposite(runner, "/tmp/velox/items-role-contract"), rc
+	return NewSceneComposite(runner, outputBase), rc
 }
 
 // ── Contract test ───────────────────────────────────────────────────────────────
@@ -70,7 +72,7 @@ func TestSceneComposite_ItemsRoleContract(t *testing.T) {
 	// it locks the contract so any regression to clips[] fallback is
 	// caught by CI rather than by users.
 	t.Run("TranslatesRolesToSequentialTimeline", func(t *testing.T) {
-		exec, rc := newItemsRoleContractWiring()
+		exec, rc := newItemsRoleContractWiring(t)
 
 		spec := executor.TaskSpec{
 			Version:    1,
@@ -204,7 +206,7 @@ func TestSceneComposite_ItemsRoleContract(t *testing.T) {
 	// Subtest 2 — defensive length guarantee: 4 items + 20-element
 	// legacy clips[] must yield a length-4 Timeline.
 	t.Run("IgnoresLegacyClipsArrayLength", func(t *testing.T) {
-		exec, rc := newItemsRoleContractWiring()
+		exec, rc := newItemsRoleContractWiring(t)
 
 		var items []interface{}
 		for i := 0; i < 4; i++ {
@@ -262,7 +264,7 @@ func TestSceneComposite_ItemsRoleContract(t *testing.T) {
 	// and the assertion fails. After Step 2 the compiler honours the
 	// role and produces the canonical 4-segment layout.
 	t.Run("HonorsRoleBasedSceneLookup", func(t *testing.T) {
-		exec, rc := newItemsRoleContractWiring()
+		exec, rc := newItemsRoleContractWiring(t)
 
 		spec := executor.TaskSpec{
 			Version:    1,
