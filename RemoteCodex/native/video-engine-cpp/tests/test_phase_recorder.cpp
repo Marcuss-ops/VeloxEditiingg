@@ -370,7 +370,7 @@ void testRenderEngineIntegration() {
 
     velox::core::RenderEngine engine;
     const auto result = engine.render(plan);
-    EXPECT(result.success, "RenderEngine color render must succeed");
+    EXPECT(result.success, "RenderEngine color render must succeed (error=" + result.error + ")");
     EXPECT(fs::exists(output), "render output must exist");
     EXPECT(fs::exists(sidecar), "SidecarGuard must write the progress sidecar");
 

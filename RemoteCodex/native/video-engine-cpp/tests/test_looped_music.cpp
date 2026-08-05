@@ -93,7 +93,7 @@ void testImplicitDurationLoopTerminates() {
 
     velox::core::RenderEngine engine;
     const auto result = engine.render(plan);
-    expect(result.success, "RenderEngine succeeds with looped music without duration_seconds");
+    expect(result.success, "RenderEngine succeeds with looped music without duration_seconds (error=" + result.error + ")");
     expect(fs::exists(output), "rendered output exists");
     expect(engine.durationSeconds() == 95.0, "engine reports the 95-second final video duration");
 

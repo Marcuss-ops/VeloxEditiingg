@@ -6,6 +6,7 @@
 #include <sstream>
 #include <regex>
 #include <iostream>
+#include <unistd.h>
 
 namespace fs = std::filesystem;
 
@@ -140,13 +141,34 @@ bool copyFile(const fs::path& src, const fs::path& dst) {
     return !ec;
 }
 
-fs::path makeTempDir(const fs::path& base, const std::string& prefix) {
-    fs::create_directories(base);
-    for (int i = 0; i < 100; ++i) {
-        auto candidate = base / (prefix + std::to_string(std::rand()));
-        std::error_code ec;
-        if (fs::create_directory(candidate, ec) && !ec) {
-            return candidate;
+fs::path makeTempDir(const fs::path& requestedBase, const std::string& prefix) {
+    // A previous container run can leave a fixed /tmp subdirectory owned by
+    // another UID. Try the requested namespace first, then fall back to a
+    // unique directory directly under the system temp root instead of making
+    // every render fail closed on that stale path.
+    std::vector<fs::path> bases;
+    bases.push_back(requestedBase);
+    std::error_code tempError;
+    const fs::path systemTemp = fs::temp_directory_path(tempError);
+    if (!tempError && systemTemp != requestedBase) {
+        bases.push_back(systemTemp);
+    }
+
+    const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto process = static_cast<long long>(::getpid());
+    for (const auto& base : bases) {
+        std::error_code createError;
+        fs::create_directories(base, createError);
+        if (createError || !fs::is_directory(base)) {
+            continue;
+        }
+        for (int attempt = 0; attempt < 100; ++attempt) {
+            auto candidate = base / (prefix + std::to_string(process) + "_" +
+                                     std::to_string(nonce) + "_" + std::to_string(attempt));
+            std::error_code ec;
+            if (fs::create_directory(candidate, ec) && !ec) {
+                return candidate;
+            }
         }
     }
     return {};
