@@ -24,6 +24,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"velox-server/internal/statemachine"
 )
 
 // ErrArtifactTransitionConflict is returned when TransitionArtifactStatus
@@ -39,6 +41,9 @@ var ErrArtifactNotFound = errors.New("artifact: not found")
 // rollback path. SQL is just the canonical atomic UPDATE with the from-state
 // filter — race-free because SQLite serializes writers.
 func (s *SQLiteStore) TransitionArtifactStatus(ctx context.Context, artifactID, from, to string) error {
+	if err := statemachine.DefaultRegistry().Validate(statemachine.DomainArtifact, from, to, ""); err != nil {
+		return fmt.Errorf("artifact: TransitionArtifactStatus: %w", err)
+	}
 	if artifactID == "" || from == "" || to == "" {
 		return fmt.Errorf("artifact: TransitionArtifactStatus: missing required arg")
 	}
@@ -94,6 +99,9 @@ func (s *SQLiteStore) FinalizeArtifactVerified(ctx context.Context, artifactID, 
 	defer func() { _ = tx.Rollback() }()
 
 	now := time.Now().UTC().Format(time.RFC3339)
+	if err := statemachine.DefaultRegistry().Validate(statemachine.DomainArtifact, "VERIFYING", "READY", ""); err != nil {
+		return nil, fmt.Errorf("artifact: FinalizeArtifactVerified: %w", err)
+	}
 	res, err := tx.ExecContext(ctx,
 		`UPDATE artifacts
 		 SET status = 'READY',

@@ -318,9 +318,48 @@ func (r *sqliteCompletionTx) MarkCompletionTaskSucceeded(ctx context.Context, ta
 }
 
 func (r *sqliteCompletionTx) MarkCompletionJobSucceededIfTasksDone(ctx context.Context, jobID, now string) error {
-	_, err := r.tx.ExecContext(ctx, `UPDATE jobs SET status='SUCCEEDED',completed_at=?,updated_at=?,revision=revision+1 WHERE job_id=? AND status IN ('RUNNING','AWAITING_ARTIFACT') AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.job_id=? AND t.status!='SUCCEEDED')`, now, now, jobID, jobID)
+	// A completion attempt is the durable artifact contract. Such a job must
+	// already be at AWAITING_ARTIFACT; only a legacy job with no attempt_commits
+	// row may retain the direct RUNNING -> SUCCEEDED compatibility path.
+	var status string
+	if err := r.tx.QueryRowContext(ctx,
+		`SELECT COALESCE(status,'') FROM jobs WHERE job_id=?`, jobID).
+		Scan(&status); err != nil {
+		return fmt.Errorf("store: read completion job contract: %w", err)
+	}
+	var hasAttempt bool
+	if err := r.tx.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM attempt_commits WHERE job_id=?)`, jobID).
+		Scan(&hasAttempt); err != nil {
+		return fmt.Errorf("store: read completion attempt contract: %w", err)
+	}
+	if hasAttempt && status != "AWAITING_ARTIFACT" {
+		return fmt.Errorf("%w: completion job %s must be AWAITING_ARTIFACT before SUCCEEDED (status=%s)", ErrCompletionTransitionConflict, jobID, status)
+	}
+	res, err := r.tx.ExecContext(ctx, `
+		UPDATE jobs
+		SET status='SUCCEEDED', completed_at=?, updated_at=?, revision=revision+1
+		WHERE job_id=?
+		  AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.job_id=? AND t.status!='SUCCEEDED')
+		  AND NOT EXISTS (SELECT 1 FROM attempt_commits ac WHERE ac.job_id=? AND ac.required_output_count>ac.ready_output_count)
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM attempt_commits ac
+			JOIN task_output_declarations d ON d.commit_id=ac.commit_id
+			LEFT JOIN artifacts a ON a.id=d.artifact_id
+			WHERE ac.job_id=? AND ac.required_output_count>0
+			  AND (a.id IS NULL OR a.status!='READY'
+			       OR (COALESCE(a.storage_key,'')='' AND COALESCE(a.local_path,'')=''))
+		  )
+		  AND (status='AWAITING_ARTIFACT' OR (status='RUNNING' AND NOT EXISTS (SELECT 1 FROM attempt_commits ac WHERE ac.job_id=?)))`,
+		now, now, jobID, jobID, jobID, jobID, jobID)
 	if err != nil {
 		return fmt.Errorf("store: mark completion job succeeded: %w", err)
+	}
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return fmt.Errorf("store: mark completion job succeeded rows affected: %w", rowsErr)
+	} else if n != 1 {
+		return fmt.Errorf("%w: completion job %s is not at AWAITING_ARTIFACT", ErrCompletionTransitionConflict, jobID)
 	}
 	return nil
 }

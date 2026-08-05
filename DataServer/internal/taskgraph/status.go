@@ -1,7 +1,11 @@
 package taskgraph
 
-// Status is the canonical task state.
-type Status string
+// TaskState is the canonical task lifecycle state.
+type TaskState string
+
+// Status is retained as a source-compatible alias. New code should use
+// TaskState to make the task aggregate boundary explicit.
+type Status = TaskState
 
 const (
 	StatusPending   Status = "PENDING"

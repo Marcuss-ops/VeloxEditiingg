@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"velox-server/internal/statemachine"
 )
 
 // ── Typed terminal/retry marks (PR4e) ───────────────────────────────────────
@@ -23,6 +25,9 @@ import (
 // attempt in mismatched states. CAS-miss surfaces ErrTransitionConflict
 // verbatim so the caller can errors.Is on it.
 func (s *SQLiteStore) MarkDeliverySucceeded(ctx context.Context, deliveryID, runnerID, leaseID, remoteID, remoteURL string) error {
+	if err := statemachine.DefaultRegistry().Validate(statemachine.DomainDelivery, "RUNNING", "SUCCEEDED", ""); err != nil {
+		return fmt.Errorf("store: MarkDeliverySucceeded: %w", err)
+	}
 	if deliveryID == "" || runnerID == "" || leaseID == "" {
 		return fmt.Errorf("store: MarkDeliverySucceeded: missing required fields")
 	}
@@ -60,7 +65,7 @@ func (s *SQLiteStore) MarkDeliverySucceeded(ctx context.Context, deliveryID, run
 		); err != nil {
 			return fmt.Errorf("MarkDeliverySucceeded attempt UPDATE: %w", err)
 		}
-		return nil
+		return completeParentJobIfDeliveriesDone(ctx, tx, deliveryID, now)
 	})
 }
 
@@ -72,6 +77,9 @@ func (s *SQLiteStore) MarkDeliverySucceeded(ctx context.Context, deliveryID, run
 // delivery_attempts close are atomic — a crash cannot leave them
 // mismatched.
 func (s *SQLiteStore) MarkDeliveryRetry(ctx context.Context, deliveryID, runnerID, leaseID, errorCode, errorMsg string, nextAttemptAt time.Time) error {
+	if err := statemachine.DefaultRegistry().Validate(statemachine.DomainDelivery, "RUNNING", "RETRY_WAIT", ""); err != nil {
+		return fmt.Errorf("store: MarkDeliveryRetry: %w", err)
+	}
 	if deliveryID == "" || runnerID == "" || leaseID == "" {
 		return fmt.Errorf("store: MarkDeliveryRetry: missing required fields")
 	}
@@ -123,6 +131,9 @@ func (s *SQLiteStore) MarkDeliveryRetry(ctx context.Context, deliveryID, runnerI
 //
 // Runs through TxManager.RunInTx — delivery + attempt are all-or-nothing.
 func (s *SQLiteStore) MarkDeliveryFailed(ctx context.Context, deliveryID, runnerID, leaseID, errorCode, errorMsg string) error {
+	if err := statemachine.DefaultRegistry().Validate(statemachine.DomainDelivery, "RUNNING", "FAILED", ""); err != nil {
+		return fmt.Errorf("store: MarkDeliveryFailed: %w", err)
+	}
 	if deliveryID == "" || runnerID == "" || leaseID == "" {
 		return fmt.Errorf("store: MarkDeliveryFailed: missing required fields")
 	}
@@ -164,8 +175,41 @@ func (s *SQLiteStore) MarkDeliveryFailed(ctx context.Context, deliveryID, runner
 		); err != nil {
 			return fmt.Errorf("MarkDeliveryFailed attempt UPDATE: %w", err)
 		}
-		return nil
+		return failParentJobForDelivery(ctx, tx, deliveryID, now)
 	})
+}
+
+// completeParentJobIfDeliveriesDone closes only a job currently in the
+// explicit-delivery gate. Render-only jobs are completed by artifact
+// finalization and already-SUCCEEDED jobs are never regressed by delivery
+// callbacks.
+func completeParentJobIfDeliveriesDone(ctx context.Context, tx *sql.Tx, deliveryID, now string) error {
+	_, err := tx.ExecContext(ctx, `
+		UPDATE jobs
+		SET status = 'SUCCEEDED', completed_at = ?, updated_at = ?, revision = revision + 1
+		WHERE job_id = (
+			SELECT a.job_id FROM job_deliveries d JOIN artifacts a ON a.id = d.artifact_id
+			WHERE d.delivery_id = ?
+		)
+		AND status = 'DELIVERING'
+		AND NOT EXISTS (
+			SELECT 1 FROM job_deliveries d2
+			JOIN artifacts a2 ON a2.id = d2.artifact_id
+			WHERE a2.job_id = jobs.job_id AND d2.status <> 'SUCCEEDED'
+		)`, now, now, deliveryID)
+	return err
+}
+
+func failParentJobForDelivery(ctx context.Context, tx *sql.Tx, deliveryID, now string) error {
+	_, err := tx.ExecContext(ctx, `
+		UPDATE jobs
+		SET status = 'FAILED', completed_at = ?, updated_at = ?, revision = revision + 1
+		WHERE job_id = (
+			SELECT a.job_id FROM job_deliveries d JOIN artifacts a ON a.id = d.artifact_id
+			WHERE d.delivery_id = ?
+		)
+		AND status = 'DELIVERING'`, now, now, deliveryID)
+	return err
 }
 
 // MarkDeliveryBlockedAuth moves a RUNNING delivery to BLOCKED_AUTH when the
@@ -175,6 +219,9 @@ func (s *SQLiteStore) MarkDeliveryFailed(ctx context.Context, deliveryID, runner
 //
 // Runs through TxManager.RunInTx — delivery + attempt are all-or-nothing.
 func (s *SQLiteStore) MarkDeliveryBlockedAuth(ctx context.Context, deliveryID, runnerID, leaseID, errorCode, errorMsg string) error {
+	if err := statemachine.DefaultRegistry().Validate(statemachine.DomainDelivery, "RUNNING", "BLOCKED_AUTH", ""); err != nil {
+		return fmt.Errorf("store: MarkDeliveryBlockedAuth: %w", err)
+	}
 	if deliveryID == "" || runnerID == "" || leaseID == "" {
 		return fmt.Errorf("store: MarkDeliveryBlockedAuth: missing required fields")
 	}
@@ -216,6 +263,6 @@ func (s *SQLiteStore) MarkDeliveryBlockedAuth(ctx context.Context, deliveryID, r
 		); err != nil {
 			return fmt.Errorf("MarkDeliveryBlockedAuth attempt UPDATE: %w", err)
 		}
-		return nil
+		return failParentJobForDelivery(ctx, tx, deliveryID, now)
 	})
 }

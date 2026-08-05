@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"velox-server/internal/statemachine"
 )
 
 // ── Typed lease methods (PR4e) ───────────────────────────────────────────────
@@ -36,6 +37,9 @@ import (
 // `claimOneDelivery(tx, claimedRow)` helper and call it from inside
 // RunInTx.
 func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, lease time.Duration, batch int) ([]DeliveryLease, error) {
+	if err := statemachine.DefaultRegistry().Validate(statemachine.DomainDelivery, "PENDING", "RUNNING", ""); err != nil {
+		return nil, fmt.Errorf("ClaimDeliveries: %w", err)
+	}
 	if batch <= 0 {
 		batch = 1
 	}

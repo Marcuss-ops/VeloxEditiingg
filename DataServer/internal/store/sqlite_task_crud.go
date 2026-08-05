@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"velox-server/internal/statemachine"
 	"velox-server/internal/taskgraph"
 )
 
@@ -148,6 +149,9 @@ func (r *SQLiteTaskRepository) List(ctx context.Context, filter taskgraph.Filter
 
 // SetStatus performs a CAS status change from → to, verifying revision.
 func (r *SQLiteTaskRepository) SetStatus(ctx context.Context, id string, from, to taskgraph.Status, revision int) error {
+	if err := statemachine.DefaultRegistry().Validate(statemachine.DomainTask, string(from), string(to), ""); err != nil {
+		return fmt.Errorf("task set status: %w", err)
+	}
 	if id == "" {
 		return fmt.Errorf("task repository: empty id")
 	}

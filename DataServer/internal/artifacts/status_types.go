@@ -9,16 +9,27 @@ package artifacts
 // consumed via taskattempts.AttemptStatusXxx + storage.go string
 // comparisons, and neither table is owned by a typed repository yet.
 
-// ArtifactStatus is the typed status for artifact rows.
-type ArtifactStatus string
+// ArtifactState is the canonical lifecycle state for a produced artifact.
+// Artifact readiness is independent from every delivery attempt: a READY
+// artifact remains READY when a destination is pending or fails.
+type ArtifactState string
 
 const (
-	ArtifactStaging     ArtifactStatus = "STAGING"
-	ArtifactReady       ArtifactStatus = "READY"
-	ArtifactQuarantined ArtifactStatus = "QUARANTINED"
-	ArtifactDeleted     ArtifactStatus = "DELETED"
-	ArtifactFailed      ArtifactStatus = "FAILED"
+	ArtifactStaging     ArtifactState = "STAGING"
+	ArtifactVerifying   ArtifactState = "VERIFYING"
+	ArtifactReady       ArtifactState = "READY"
+	ArtifactQuarantined ArtifactState = "QUARANTINED"
+	ArtifactDeleted     ArtifactState = "DELETED"
+	ArtifactFailed      ArtifactState = "FAILED"
 )
+
+// ArtifactStatus is retained as a source-compatible alias. New code should
+// use ArtifactState to make the artifact/delivery boundary explicit.
+type ArtifactStatus = ArtifactState
+
+func (s ArtifactState) IsTerminal() bool {
+	return s == ArtifactReady || s == ArtifactQuarantined || s == ArtifactDeleted || s == ArtifactFailed
+}
 
 // ── Job attempt statuses (job_attempts table) ──────────────────────────────
 

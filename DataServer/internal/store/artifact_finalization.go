@@ -3,9 +3,12 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
+
+	"velox-server/internal/jobs"
 
 	"velox-server/internal/deliverycontract"
 	"velox-server/internal/identity"
@@ -62,6 +65,12 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 	if p.UploadID == "" || p.ArtifactID == "" || p.JobID == "" {
 		return nil, fmt.Errorf("store: FinalizeVerified: upload/artifact/job ids are required")
 	}
+	// The final job transition is only legal after the verifier has produced
+	// durable content-addressed metadata. Empty keys or hashes must fail
+	// closed; a URL or worker declaration is not proof of a READY artifact.
+	if p.StorageKey == "" || p.SHA256 == "" {
+		return nil, fmt.Errorf("store: FinalizeVerified: verified storage key and sha256 are required")
+	}
 	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("store: FinalizeVerified begin: %w", err)
@@ -96,9 +105,10 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		now = time.Now().UTC()
 	}
 	nowStr := now.UTC().Format(time.RFC3339)
+	var res sql.Result
 
 	if p.AttemptID != "" {
-		res, err := tx.ExecContext(ctx, `
+		res, err = tx.ExecContext(ctx, `
 			UPDATE tasks
 			SET status = ?, completed_at = ?, updated_at = ?,
 			    winning_attempt_id = ?, winning_attempt_committed_at = ?,
@@ -136,20 +146,76 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		}
 	}
 
-	jobQuery := `
-		UPDATE jobs SET status = 'SUCCEEDED', completed_at = ?, updated_at = ?, revision = revision + 1
-		WHERE job_id = ? AND status IN ('RUNNING', 'AWAITING_ARTIFACT')`
-	args := []interface{}{nowStr, nowStr, p.JobID}
-	if p.ExpectedRevision != 0 {
-		jobQuery += ` AND revision = ?`
-		args = append(args, p.ExpectedRevision)
+	// Resolve the explicit per-job delivery plan before deciding the job
+	// terminal state. An absent plan is valid only for a job whose persisted
+	// control-plane contract explicitly says render_only=true. Normal jobs
+	// fail closed; they must never be routed to a global destination.
+	var destinations []deliverycontract.DeliveryDestination
+	if p.DestinationID != "" {
+		destinations = []deliverycontract.DeliveryDestination{{DestinationID: p.DestinationID, MaxAttempts: 5}}
+	} else if w.resolver != nil {
+		resolved, resolveErr := w.resolver.ResolveDestinations(ctx, p.JobID, p.ArtifactID)
+		if resolveErr != nil && !errors.Is(resolveErr, deliverycontract.ErrNoExplicitPlan) {
+			return nil, fmt.Errorf("store: FinalizeVerified plan resolver: %w", resolveErr)
+		}
+		if resolveErr == nil {
+			destinations = resolved
+		}
 	}
-	res, err := tx.ExecContext(ctx, jobQuery, args...)
-	if err != nil {
-		return nil, fmt.Errorf("store: FinalizeVerified jobs CAS: %w", err)
+
+	if len(destinations) == 0 && p.DestinationID == "" {
+		var requestJSON string
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COALESCE(request_json, '{}') FROM jobs WHERE job_id = ?`, p.JobID).
+			Scan(&requestJSON); err != nil {
+			return nil, fmt.Errorf("store: FinalizeVerified render contract: %w", err)
+		}
+		var contract map[string]interface{}
+		if err := json.Unmarshal([]byte(requestJSON), &contract); err != nil {
+			return nil, fmt.Errorf("store: FinalizeVerified render contract: invalid request_json: %w", err)
+		}
+		renderOnly, _ := contract["render_only"].(bool)
+		if !renderOnly {
+			return nil, fmt.Errorf("%w: job_id=%s (set render_only=true or provide an explicit delivery plan)", deliverycontract.ErrNoExplicitPlan, p.JobID)
+		}
 	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		return nil, fmt.Errorf("%w: jobs affected=%d upload=%s", ErrTransitionConflict, n, p.UploadID)
+
+	if len(destinations) > 0 {
+		jobQuery := `
+			UPDATE jobs SET status = 'DELIVERING', completed_at = completed_at,
+			    updated_at = ?, revision = revision + 1
+			WHERE job_id = ? AND status IN ('RUNNING', 'AWAITING_ARTIFACT')`
+		args := []interface{}{nowStr, p.JobID}
+		if p.ExpectedRevision != 0 {
+			jobQuery += ` AND revision = ?`
+			args = append(args, p.ExpectedRevision)
+		}
+		res, err = tx.ExecContext(ctx, jobQuery, args...)
+		if err != nil {
+			return nil, fmt.Errorf("store: FinalizeVerified jobs CAS: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			var current string
+			if scanErr := tx.QueryRowContext(ctx, `SELECT status FROM jobs WHERE job_id = ?`, p.JobID).Scan(&current); scanErr != nil || current != string(jobs.StatusDelivering) {
+				return nil, fmt.Errorf("%w: jobs affected=%d upload=%s", ErrTransitionConflict, n, p.UploadID)
+			}
+		}
+	} else {
+		jobQuery := `
+			UPDATE jobs SET status = 'SUCCEEDED', completed_at = ?, updated_at = ?, revision = revision + 1
+			WHERE job_id = ? AND status = 'AWAITING_ARTIFACT'`
+		args := []interface{}{nowStr, nowStr, p.JobID}
+		if p.ExpectedRevision != 0 {
+			jobQuery += ` AND revision = ?`
+			args = append(args, p.ExpectedRevision)
+		}
+		res, err = tx.ExecContext(ctx, jobQuery, args...)
+		if err != nil {
+			return nil, fmt.Errorf("store: FinalizeVerified jobs CAS: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return nil, fmt.Errorf("%w: jobs affected=%d upload=%s", ErrTransitionConflict, n, p.UploadID)
+		}
 	}
 
 	res, err = tx.ExecContext(ctx, `
@@ -165,26 +231,13 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		return nil, fmt.Errorf("%w: artifacts affected=%d artifact=%s", ErrTransitionConflict, n, p.ArtifactID)
 	}
 
-	if p.DestinationID != "" {
-		if err := insertPendingDelivery(ctx, tx, p.ArtifactID, p.DestinationID, 5, nowStr); err != nil {
+	for _, dest := range destinations {
+		maxAttempts := dest.MaxAttempts
+		if maxAttempts <= 0 {
+			maxAttempts = 5
+		}
+		if err := insertPendingDelivery(ctx, tx, p.ArtifactID, dest.DestinationID, maxAttempts, nowStr); err != nil {
 			return nil, err
-		}
-	} else if w.resolver != nil {
-		dests, err := w.resolver.ResolveDestinations(ctx, p.JobID, p.ArtifactID)
-		if err != nil {
-			return nil, fmt.Errorf("store: FinalizeVerified plan resolver: %w", err)
-		}
-		if len(dests) == 0 {
-			return nil, fmt.Errorf("%w: job_id=%s", deliverycontract.ErrNoExplicitPlan, p.JobID)
-		}
-		for _, dest := range dests {
-			maxAttempts := dest.MaxAttempts
-			if maxAttempts <= 0 {
-				maxAttempts = 5
-			}
-			if err := insertPendingDelivery(ctx, tx, p.ArtifactID, dest.DestinationID, maxAttempts, nowStr); err != nil {
-				return nil, err
-			}
 		}
 	}
 

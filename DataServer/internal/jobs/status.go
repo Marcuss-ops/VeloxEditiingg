@@ -6,7 +6,7 @@
 //
 // State machine:
 //
-//	PENDING → LEASED → RUNNING → AWAITING_ARTIFACT → SUCCEEDED
+//	PENDING → LEASED → RUNNING → AWAITING_ARTIFACT → DELIVERING → SUCCEEDED
 //	              ↓           ↓                 ↓
 //	           CANCELLED  RETRY_WAIT       CANCELLED / artifact-timeout → FAILED
 //	                            ↓
@@ -14,6 +14,9 @@
 //	                                ↓
 //	                            FAILED
 //
+// AWAITING_ARTIFACT and DELIVERING are non-terminal gates between rendering
+// and job success. AWAITING_ARTIFACT is used while the artifact is being
+// verified; DELIVERING is used when explicit delivery attempts are pending.
 // AWAITING_ARTIFACT was added between RUNNING and SUCCEEDED so the
 // maybeTransitionJob roll-up can mark "all tasks succeeded" without
 // writing the terminal SUCCEEDED itself. The actual SUCCEEDED flip is
@@ -26,18 +29,27 @@
 // CANCELLED.
 package jobs
 
-// Status is the canonical job state.
-type Status string
+// JobState is the canonical job lifecycle state.
+type JobState string
+
+// Status is retained as a source-compatible alias. New code should use
+// JobState to make the job aggregate boundary explicit.
+//
+// Deprecated: use JobState.
+type Status = JobState
 
 const (
 	StatusPending          Status = "PENDING"
 	StatusLeased           Status = "LEASED"
 	StatusRunning          Status = "RUNNING"
 	StatusAwaitingArtifact Status = "AWAITING_ARTIFACT"
-	StatusRetryWait        Status = "RETRY_WAIT"
-	StatusSucceeded        Status = "SUCCEEDED"
-	StatusFailed           Status = "FAILED"
-	StatusCancelled        Status = "CANCELLED"
+	// StatusDelivering means the artifact is READY and one or more explicit
+	// required deliveries are still pending. It is intentionally non-terminal.
+	StatusDelivering Status = "DELIVERING"
+	StatusRetryWait  Status = "RETRY_WAIT"
+	StatusSucceeded  Status = "SUCCEEDED"
+	StatusFailed     Status = "FAILED"
+	StatusCancelled  Status = "CANCELLED"
 )
 
 // IsTerminal reports whether a job in this state has finished its lifecycle.

@@ -15,11 +15,15 @@ import (
 	"fmt"
 
 	"velox-server/internal/jobs"
+	"velox-server/internal/statemachine"
 )
 
 // ── jobs.Writer ─────────────────────────────────────────────────────────
 
 func (b *baseJobRepository) SetStatus(ctx context.Context, id string, from, to jobs.Status) error {
+	if err := statemachine.DefaultRegistry().Validate(statemachine.DomainJob, string(from), string(to), ""); err != nil {
+		return fmt.Errorf("setstatus: %w", err)
+	}
 	sj, err := b.getJob(ctx, id)
 	if err != nil {
 		return fmt.Errorf("setstatus: get job %s: %w", id, err)

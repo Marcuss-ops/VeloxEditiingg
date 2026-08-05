@@ -72,6 +72,13 @@ func scheduleRowReady(t *testing.T, db *sql.DB, fence FenceTuple, artifactID str
 		t.Fatalf("scheduleRowReady artifact ready: %v", err)
 	}
 	if _, err := db.Exec(
+		`UPDATE task_output_declarations SET artifact_id = ?
+		 WHERE task_id = ? AND attempt_id = ? AND (artifact_id IS NULL OR artifact_id = ?)`,
+		artifactID, fence.TaskID, fence.AttemptID, artifactID,
+	); err != nil {
+		t.Fatalf("scheduleRowReady declaration binding: %v", err)
+	}
+	if _, err := db.Exec(
 		`UPDATE attempt_commits SET ready_output_count = required_output_count WHERE task_id = ? AND attempt_id = ?`,
 		fence.TaskID, fence.AttemptID,
 	); err != nil {
@@ -749,6 +756,11 @@ func TestCommitAttempt_DeliversOnlyToExplicitPlanDestinations(t *testing.T) {
 		t.Fatalf("dp DeclareOutputs: %v", err)
 	}
 	commitID := scheduleRowReady(t, db, fence, "art-dp")
+	// Artifact-contract jobs must enter the explicit artifact gate before
+	// CommitAttempt can perform the terminal job transition.
+	if _, err := db.Exec(`UPDATE jobs SET status = 'AWAITING_ARTIFACT' WHERE job_id = ?`, jobID); err != nil {
+		t.Fatalf("dp jobs.status pre-set: %v", err)
+	}
 	if _, err := c.CommitAttempt(context.Background(), commitID); err != nil {
 		t.Fatalf("dp CommitAttempt: %v", err)
 	}
@@ -773,6 +785,35 @@ func TestCommitAttempt_DeliversOnlyToExplicitPlanDestinations(t *testing.T) {
 // Phase 6 smoke gate: a single integration test running a full happy
 // path submit → Drive commit → assert all durable state surfaces.
 // ────────────────────────────────────────────────────────────────────────
+
+func TestPhase6_ArtifactContractCannotSkipAwaitingArtifact(t *testing.T) {
+	db := openCoordinatorTestDB(t)
+	c := newTestCoordinator(db)
+	fence := validFence("task-artifact-gate", "attempt-artifact-gate")
+	jobID := "job-artifact-gate"
+	seedCompleteUploadFixture(t, db, "up-artifact-gate", "art-artifact-gate", jobID, strings.Repeat("a", 64))
+
+	if _, err := c.DeclareOutputs(context.Background(), DeclareOutputsCommand{
+		Fence: fence, JobID: jobID, OutputManifests: validManifests(),
+	}); err != nil {
+		t.Fatalf("DeclareOutputs: %v", err)
+	}
+	commitID := scheduleRowReady(t, db, fence, "art-artifact-gate")
+	if _, err := db.Exec(`UPDATE jobs SET status = 'RUNNING' WHERE job_id = ?`, jobID); err != nil {
+		t.Fatalf("set RUNNING: %v", err)
+	}
+
+	if _, err := c.CommitAttempt(context.Background(), commitID); err == nil {
+		t.Fatal("artifact-contract job must reject RUNNING -> SUCCEEDED without AWAITING_ARTIFACT")
+	}
+	var status string
+	if err := db.QueryRow(`SELECT status FROM jobs WHERE job_id = ?`, jobID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "RUNNING" {
+		t.Fatalf("job status after rejected shortcut=%q, want RUNNING", status)
+	}
+}
 
 func TestPhase6_Acceptance_GoldenPath(t *testing.T) {
 	db := openCoordinatorTestDB(t)
@@ -807,10 +848,9 @@ func TestPhase6_Acceptance_GoldenPath(t *testing.T) {
 	}
 	commitID := scheduleRowReady(t, db, fence, "art-acc")
 
-	// Pre-set jobs.status so MarkSucceededIfTasksDone's CAS gate
-	// fires. The seed helper inserts jobs with the schema default;
-	// MarkSucceededIfTasksDone requires status IN ('RUNNING','AWAITING_ARTIFACT').
-	if _, err := db.Exec(`UPDATE jobs SET status = 'RUNNING' WHERE job_id = ?`, jobID); err != nil {
+	// Pre-set jobs.status at the artifact gate. The completion protocol
+	// must never promote an artifact-contract job directly from RUNNING.
+	if _, err := db.Exec(`UPDATE jobs SET status = 'AWAITING_ARTIFACT' WHERE job_id = ?`, jobID); err != nil {
 		t.Fatalf("acc jobs.status pre-set: %v", err)
 	}
 

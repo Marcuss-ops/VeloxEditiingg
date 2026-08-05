@@ -1,8 +1,6 @@
 package store
 
 import (
-	"errors"
-
 	"velox-server/internal/jobs"
 )
 
@@ -19,6 +17,7 @@ const (
 	JobStatusLeased           = jobs.StatusLeased
 	JobStatusRunning          = jobs.StatusRunning
 	JobStatusAwaitingArtifact = jobs.StatusAwaitingArtifact
+	JobStatusDelivering       = jobs.StatusDelivering
 	JobStatusRetryWait        = jobs.StatusRetryWait
 	JobStatusSucceeded        = jobs.StatusSucceeded
 	JobStatusFailed           = jobs.StatusFailed
@@ -96,6 +95,6 @@ type TransitionParams struct {
 
 // ErrTransitionConflict is returned when the CAS predicate does not match
 // (ExpectedStatus wrong OR Revision stale).
-var ErrTransitionConflict = errors.New("store: job transition conflict (status or revision mismatch)")
+var ErrTransitionConflict error = leaseConflictError("store: job transition conflict (status or revision mismatch)")
 
 // fix/remove-job-lease-ops: ErrNoClaimableJob is REMOVED.

@@ -171,11 +171,12 @@ type IngestResult struct {
 // ErrTransitionConflict and the tx rolls back entirely.
 // No in-process lock is needed.
 type TaskReportIngestionService struct {
-	taskRepo      taskgraph.Repository
-	jobsRepo      jobs.Repository
-	attemptRepo   taskattempts.Repository
-	outputArtRepo taskoutput_artifacts.Repository
-	logger        *log.Logger
+	taskRepo       taskgraph.Repository
+	jobsRepo       jobs.Repository
+	jobTransitions *jobs.TransitionService
+	attemptRepo    taskattempts.Repository
+	outputArtRepo  taskoutput_artifacts.Repository
+	logger         *log.Logger
 }
 
 // NewTaskReportIngestionService constructs the ingest service. ALL
@@ -213,12 +214,17 @@ func NewTaskReportIngestionService(
 	if outputArtRepo == nil {
 		return nil, fmt.Errorf("ingest.NewTaskReportIngestionService: outputArtRepo is required")
 	}
+	jobTransitions, err := jobs.NewTransitionService(jobsRepo, nil)
+	if err != nil {
+		return nil, fmt.Errorf("ingest.NewTaskReportIngestionService: job transition service: %w", err)
+	}
 	return &TaskReportIngestionService{
-		taskRepo:      taskRepo,
-		jobsRepo:      jobsRepo,
-		attemptRepo:   attemptRepo,
-		outputArtRepo: outputArtRepo,
-		logger:        log.Default(),
+		taskRepo:       taskRepo,
+		jobsRepo:       jobsRepo,
+		jobTransitions: jobTransitions,
+		attemptRepo:    attemptRepo,
+		outputArtRepo:  outputArtRepo,
+		logger:         log.Default(),
 	}, nil
 }
 

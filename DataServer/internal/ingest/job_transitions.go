@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"velox-server/internal/jobs"
+	"velox-server/internal/statemachine"
 	"velox-server/internal/taskgraph"
 )
 
@@ -105,8 +106,15 @@ func (s *TaskReportIngestionService) maybeTransitionJob(ctx context.Context, job
 		return false, string(job.Status), nil
 	}
 
-	if setErr := s.jobsRepo.SetStatus(ctx, jobID, job.Status, newStatus); setErr != nil {
-		return false, string(job.Status), fmt.Errorf("SetStatus %s→%s: %w", job.Status, newStatus, setErr)
+	if s.jobTransitions == nil {
+		return false, string(job.Status), fmt.Errorf("job transition service is not configured")
+	}
+	actor := statemachine.ActorSystem
+	if newStatus == jobs.StatusCancelled {
+		actor = statemachine.ActorOperator
+	}
+	if setErr := s.jobTransitions.Transition(ctx, jobID, job.Status, newStatus, actor); setErr != nil {
+		return false, string(job.Status), fmt.Errorf("Transition %s→%s: %w", job.Status, newStatus, setErr)
 	}
 	s.logger.Printf("[INGEST] job %s transitioned %s → %s (all sibling tasks terminal)", jobID, job.Status, newStatus)
 	return true, string(newStatus), nil

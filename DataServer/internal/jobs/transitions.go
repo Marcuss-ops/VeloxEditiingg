@@ -1,5 +1,7 @@
 package jobs
 
+import "velox-server/internal/statemachine"
+
 // CanTransition validates the canonical 8-state machine:
 //
 //	"" / PENDING → LEASED, RUNNING, RETRY_WAIT, FAILED, CANCELLED
@@ -26,43 +28,5 @@ package jobs
 // Returns true when the transition is legal; false otherwise.
 // Idempotent transitions (from == to) are always legal.
 func CanTransition(from, to Status) bool {
-	if to == "" {
-		return false
-	}
-	if from == to {
-		return true
-	}
-
-	switch from {
-	case "", StatusPending:
-		switch to {
-		case StatusLeased, StatusRunning, StatusRetryWait, StatusFailed, StatusCancelled:
-			return true
-		}
-	case StatusLeased:
-		switch to {
-		case StatusRunning, StatusFailed, StatusCancelled:
-			return true
-		}
-	case StatusRunning:
-		switch to {
-		case StatusAwaitingArtifact, StatusSucceeded, StatusFailed, StatusRetryWait, StatusCancelled:
-			return true
-		}
-	case StatusAwaitingArtifact:
-		switch to {
-		case StatusSucceeded, StatusFailed, StatusCancelled:
-			return true
-		}
-	case StatusRetryWait:
-		switch to {
-		case StatusPending, StatusFailed, StatusCancelled:
-			return true
-		}
-	case StatusSucceeded, StatusFailed, StatusCancelled:
-		// Terminal states — no transitions out
-		return false
-	}
-
-	return false
+	return statemachine.DefaultRegistry().CanTransition(statemachine.DomainJob, string(from), string(to))
 }
