@@ -46,7 +46,7 @@ func (r *SQLiteTaskRepository) Create(ctx context.Context, task *taskgraph.Task)
 		createdAt, updatedAt,
 	)
 	if err != nil {
-		return fmt.Errorf("task create: %w", err)
+		return wrapDBInfrastructure("task create", err)
 	}
 	return nil
 }
@@ -65,7 +65,7 @@ func (r *SQLiteTaskRepository) Get(ctx context.Context, id string) (*taskgraph.T
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("task get: %w", err)
+		return nil, wrapDBInfrastructure("task get", err)
 	}
 	return t, nil
 }
@@ -84,7 +84,7 @@ func (r *SQLiteTaskRepository) GetByJobID(ctx context.Context, jobID string) (*t
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("task get by job: %w", err)
+		return nil, wrapDBInfrastructure("task get by job", err)
 	}
 	return t, nil
 }
@@ -132,7 +132,7 @@ func (r *SQLiteTaskRepository) List(ctx context.Context, filter taskgraph.Filter
 
 	rows, err := r.store.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("task list: %w", err)
+		return nil, wrapDBInfrastructure("task list", err)
 	}
 	defer rows.Close()
 
@@ -140,11 +140,14 @@ func (r *SQLiteTaskRepository) List(ctx context.Context, filter taskgraph.Filter
 	for rows.Next() {
 		t, err := scanTask(rows)
 		if err != nil {
-			continue
+			return nil, wrapDBInfrastructure("task list scan", err)
 		}
 		results = append(results, *t)
 	}
-	return results, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, wrapDBInfrastructure("task list rows", err)
+	}
+	return results, nil
 }
 
 // SetStatus performs a CAS status change from → to, verifying revision.
@@ -163,11 +166,11 @@ func (r *SQLiteTaskRepository) SetStatus(ctx context.Context, id string, from, t
 		string(to), now, id, string(from), revision,
 	)
 	if err != nil {
-		return fmt.Errorf("task set status: %w", err)
+		return wrapDBInfrastructure("task set status", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("task set status rows: %w", err)
+		return wrapDBInfrastructure("task set status rows", err)
 	}
 	if n == 0 {
 		return fmt.Errorf("task set status %s: %w", id, taskgraph.ErrTransitionConflict)
@@ -189,11 +192,11 @@ func (r *SQLiteTaskRepository) Lease(ctx context.Context, id, workerID, leaseID 
 		workerID, leaseID, now, id,
 	)
 	if err != nil {
-		return fmt.Errorf("task lease: %w", err)
+		return wrapDBInfrastructure("task lease", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("task lease rows: %w", err)
+		return wrapDBInfrastructure("task lease rows", err)
 	}
 	if n == 0 {
 		return fmt.Errorf("task lease %s: %w", id, taskgraph.ErrTransitionConflict)
@@ -216,11 +219,11 @@ func (r *SQLiteTaskRepository) Start(ctx context.Context, id, workerID, leaseID 
 		now, attempt, now, id, workerID, leaseID, revision,
 	)
 	if err != nil {
-		return fmt.Errorf("task start: %w", err)
+		return wrapDBInfrastructure("task start", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("task start rows: %w", err)
+		return wrapDBInfrastructure("task start rows", err)
 	}
 	if n == 0 {
 		return fmt.Errorf("task start %s: %w", id, taskgraph.ErrTransitionConflict)
@@ -241,11 +244,11 @@ func (r *SQLiteTaskRepository) Fail(ctx context.Context, id, reason string, revi
 		now, now, id, revision,
 	)
 	if err != nil {
-		return fmt.Errorf("task fail: %w", err)
+		return wrapDBInfrastructure("task fail", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("task fail rows: %w", err)
+		return wrapDBInfrastructure("task fail rows", err)
 	}
 	if n == 0 {
 		return fmt.Errorf("task fail %s: %w", id, taskgraph.ErrTransitionConflict)
@@ -264,7 +267,7 @@ func (r *SQLiteTaskRepository) IncrementAttempt(ctx context.Context, id string) 
 		now, id,
 	)
 	if err != nil {
-		return fmt.Errorf("task increment attempt: %w", err)
+		return wrapDBInfrastructure("task increment attempt", err)
 	}
 	return nil
 }
@@ -276,7 +279,7 @@ func (r *SQLiteTaskRepository) Delete(ctx context.Context, id string) error {
 	}
 	_, err := r.store.db.ExecContext(ctx, `DELETE FROM tasks WHERE task_id = ?`, id)
 	if err != nil {
-		return fmt.Errorf("task delete: %w", err)
+		return wrapDBInfrastructure("task delete", err)
 	}
 	return nil
 }

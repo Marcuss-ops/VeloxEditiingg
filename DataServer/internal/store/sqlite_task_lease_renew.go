@@ -53,11 +53,11 @@ func (r *SQLiteTaskRepository) RenewLease(ctx context.Context, id, workerID, lea
 		id, workerID, leaseID, revision,
 	)
 	if err != nil {
-		return fmt.Errorf("task renew lease: %w", err)
+		return wrapDBInfrastructure("task renew lease", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("task renew lease rows: %w", err)
+		return wrapDBInfrastructure("task renew lease rows", err)
 	}
 	if n == 0 {
 		return fmt.Errorf("task renew lease %s: %w", id, taskgraph.ErrTransitionConflict)

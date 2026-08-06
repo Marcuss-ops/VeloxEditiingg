@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"velox-server/internal/taskgraph"
 	"velox-shared/contract/domain"
 )
 
@@ -42,6 +43,8 @@ func isExpectedStoreError(err error) bool {
 		ErrCreatorForwardingOwnershipConflict,
 		ErrPublicationStateNotFound,
 		ErrPublicationPhaseConflict,
+		taskgraph.ErrTaskNotFound,
+		taskgraph.ErrLeaseMismatch,
 	} {
 		if sentinel != nil && errors.Is(err, sentinel) {
 			return true

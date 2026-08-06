@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -38,7 +39,7 @@ func validateWorkerRuntimeIdentityTx(
 ) error {
 	available, err := runtimeIdentitySchemaAvailableTx(ctx, tx)
 	if err != nil {
-		return fmt.Errorf("runtime identity schema probe: %w", err)
+		return wrapDBInfrastructure("runtime identity schema probe", err)
 	}
 	if !available {
 		return nil
@@ -54,7 +55,7 @@ func validateWorkerRuntimeIdentityTx(
 		   AND session_type = 'control'
 		   AND status = 'ACTIVE' AND revoked = 0`,
 		sessionID, workerID).Scan(&sessionCount); err != nil {
-		return fmt.Errorf("canonical worker session lookup: %w", err)
+		return wrapDBInfrastructure("canonical worker session lookup", err)
 	}
 	if sessionCount != 1 {
 		return fmt.Errorf("canonical worker session %q is not active for worker %q", sessionID, workerID)
@@ -65,7 +66,7 @@ func validateWorkerRuntimeIdentityTx(
 		SELECT COUNT(*) FROM worker_runtime_snapshots
 		 WHERE snapshot_id = ? AND worker_id = ? AND session_id = ?`,
 		snapshotID, workerID, sessionID).Scan(&snapshotCount); err != nil {
-		return fmt.Errorf("canonical worker snapshot lookup: %w", err)
+		return wrapDBInfrastructure("canonical worker snapshot lookup", err)
 	}
 	if snapshotCount != 1 {
 		return fmt.Errorf("canonical worker snapshot %q is not bound to worker %q/session %q", snapshotID, workerID, sessionID)
@@ -80,12 +81,19 @@ func validateWorkerRuntimeIdentityTx(
 // When the runtime tables are unavailable, empty identity fields preserve
 // compatibility with minimal historical schemas. When they are available,
 // the caller validates the resolved tuple before inserting the attempt.
-func resolveWorkerRuntimeIdentityTx(ctx context.Context, tx *sql.Tx, workerID string) (sessionID, snapshotID string) {
+func resolveWorkerRuntimeIdentityTx(ctx context.Context, tx *sql.Tx, workerID string) (sessionID, snapshotID string, err error) {
 	if tx == nil || workerID == "" {
-		return "", ""
+		return "", "", nil
+	}
+	available, err := runtimeIdentitySchemaAvailableTx(ctx, tx)
+	if err != nil {
+		return "", "", wrapDBInfrastructure("runtime identity schema probe", err)
+	}
+	if !available {
+		return "", "", nil
 	}
 
-	err := tx.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		SELECT session_id
 		  FROM worker_sessions
 		 WHERE worker_id = ?
@@ -94,8 +102,14 @@ func resolveWorkerRuntimeIdentityTx(ctx context.Context, tx *sql.Tx, workerID st
 		   AND revoked = 0
 		 ORDER BY COALESCE(last_seen_at, created_at) DESC, session_id DESC
 		 LIMIT 1`, workerID).Scan(&sessionID)
-	if err != nil || sessionID == "" {
-		return "", ""
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", wrapDBInfrastructure("resolve worker session", err)
+	}
+	if sessionID == "" {
+		return "", "", nil
 	}
 
 	err = tx.QueryRowContext(ctx, `
@@ -103,8 +117,11 @@ func resolveWorkerRuntimeIdentityTx(ctx context.Context, tx *sql.Tx, workerID st
 		  FROM worker_runtime_snapshots
 		 WHERE worker_id = ? AND session_id = ?
 		 LIMIT 1`, workerID, sessionID).Scan(&snapshotID)
-	if err != nil {
-		return sessionID, ""
+	if errors.Is(err, sql.ErrNoRows) {
+		return sessionID, "", nil
 	}
-	return sessionID, snapshotID
+	if err != nil {
+		return "", "", wrapDBInfrastructure("resolve worker snapshot", err)
+	}
+	return sessionID, snapshotID, nil
 }

@@ -19,6 +19,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -86,7 +87,7 @@ func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, w
 
 	tx, err := r.store.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("task claim-with-attempt begin: %w", err)
+		return nil, nil, wrapDBInfrastructure("task claim-with-attempt begin", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -104,7 +105,7 @@ func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, w
 		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("task claim-with-attempt select: %w", err)
+		return nil, nil, wrapDBInfrastructure("task claim-with-attempt select", err)
 	}
 
 	// 2. Self-heal stale attempt_count from immutable attempt history.
@@ -117,7 +118,7 @@ func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, w
 		`SELECT MAX(attempt_number) FROM task_attempts WHERE task_id = ?`,
 		t.ID,
 	).Scan(&maxSeenAttempt); err != nil {
-		return nil, nil, fmt.Errorf("task claim-with-attempt max attempt read: %w", err)
+		return nil, nil, wrapDBInfrastructure("task claim-with-attempt max attempt read", err)
 	}
 	effectiveAttemptCount := t.AttemptCount
 	if maxSeenAttempt.Valid {
@@ -143,11 +144,11 @@ func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, w
 		nowStr, t.ID, t.Revision,
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("task claim-with-attempt cas: %w", err)
+		return nil, nil, wrapDBInfrastructure("task claim-with-attempt cas", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return nil, nil, fmt.Errorf("task claim-with-attempt rows: %w", err)
+		return nil, nil, wrapDBInfrastructure("task claim-with-attempt rows", err)
 	}
 	if n == 0 {
 		// Raced with another claimer — return nil gracefully.
@@ -159,9 +160,12 @@ func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, w
 	// and supplies both IDs directly; this fallback keeps the older atomic
 	// method attributable whenever the production session/snapshot tables
 	// are available, while preserving minimal historical test fixtures.
-	workerSessionID, workerSnapshotID := resolveWorkerRuntimeIdentityTx(ctx, tx, workerID)
+	workerSessionID, workerSnapshotID, err := resolveWorkerRuntimeIdentityTx(ctx, tx, workerID)
+	if err != nil {
+		return nil, nil, err
+	}
 	if err := validateWorkerRuntimeIdentityTx(ctx, tx, workerID, workerSessionID, workerSnapshotID); err != nil {
-		return nil, nil, fmt.Errorf("task claim-with-attempt runtime identity: %w", err)
+		return nil, nil, err
 	}
 
 	// INSERT PENDING TaskAttempt in the same tx.
@@ -175,7 +179,7 @@ func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, w
 		workerSessionID, workerSnapshotID, leaseID, nowStr, nowStr,
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("task claim-with-attempt insert: %w", err)
+		return nil, nil, wrapDBInfrastructure("task claim-with-attempt insert", err)
 	}
 	if err := persistMasterExecutionEventTx(ctx, tx, masterExecutionEvent{
 		AttemptID: attemptID, JobID: t.JobID, TaskID: t.ID, WorkerID: workerID,
@@ -184,7 +188,7 @@ func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, w
 		Scope: sharedtelemetry.ScopeTask, Component: "master.placement", Action: "match", Phase: "queue",
 		StartedAt: now, CompletedAt: time.Now().UTC(),
 	}); err != nil {
-		return nil, nil, fmt.Errorf("task claim master telemetry: %w", err)
+		return nil, nil, wrapDBInfrastructure("task claim master telemetry", err)
 	}
 	if err := persistMasterExecutionEventTx(ctx, tx, masterExecutionEvent{
 		AttemptID: attemptID, JobID: t.JobID, TaskID: t.ID, WorkerID: workerID,
@@ -193,7 +197,7 @@ func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, w
 		Scope: sharedtelemetry.ScopeTask, Component: "master.lease", Action: "issue", Phase: "queue",
 		StartedAt: now, CompletedAt: time.Now().UTC(),
 	}); err != nil {
-		return nil, nil, fmt.Errorf("task claim lease telemetry: %w", err)
+		return nil, nil, wrapDBInfrastructure("task claim lease telemetry", err)
 	}
 
 	// 6. Read task_spec payload (continues ClaimNextReadyTask ergonomics).
@@ -202,12 +206,12 @@ func (r *SQLiteTaskRepository) ClaimNextWithAttemptAtomic(ctx context.Context, w
 		`SELECT payload_json FROM task_specs WHERE task_id = ?`,
 		t.ID,
 	).Scan(&specPayloadJSON)
-	if err != nil && err != sql.ErrNoRows {
-		return nil, nil, fmt.Errorf("task claim-with-attempt spec read: %w", err)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, wrapDBInfrastructure("task claim-with-attempt spec read", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, nil, fmt.Errorf("task claim-with-attempt commit: %w", err)
+		return nil, nil, wrapDBInfrastructure("task claim-with-attempt commit", err)
 	}
 
 	// Update in-memory fields after successful commit.

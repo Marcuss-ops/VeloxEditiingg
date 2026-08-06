@@ -16,6 +16,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -59,7 +60,7 @@ func (r *SQLiteTaskRepository) ClaimNextReadyTask(ctx context.Context, workerID,
 	// Find and CAS-claim the next READY task in a single tx.
 	tx, err := r.store.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("task claim begin: %w", err)
+		return nil, wrapDBInfrastructure("task claim begin", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -73,11 +74,11 @@ func (r *SQLiteTaskRepository) ClaimNextReadyTask(ctx context.Context, workerID,
 		 LIMIT 1`,
 	)
 	t, err := scanTask(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("task claim select: %w", err)
+		return nil, wrapDBInfrastructure("task claim select", err)
 	}
 
 	// CAS: READY → LEASED with workerID + leaseID + lease_expires_at.
@@ -89,11 +90,11 @@ func (r *SQLiteTaskRepository) ClaimNextReadyTask(ctx context.Context, workerID,
 		workerID, leaseID, leaseExpiresAt, nowStr, t.ID, t.Revision,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("task claim cas: %w", err)
+		return nil, wrapDBInfrastructure("task claim cas", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return nil, fmt.Errorf("task claim rows: %w", err)
+		return nil, wrapDBInfrastructure("task claim rows", err)
 	}
 	if n == 0 {
 		// Raced with another claimer — return nil gracefully.
@@ -106,12 +107,12 @@ func (r *SQLiteTaskRepository) ClaimNextReadyTask(ctx context.Context, workerID,
 		`SELECT payload_json FROM task_specs WHERE task_id = ?`,
 		t.ID,
 	).Scan(&specPayloadJSON)
-	if err != nil && err != sql.ErrNoRows {
-		return nil, fmt.Errorf("task claim spec read: %w", err)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, wrapDBInfrastructure("task claim spec read", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("task claim commit: %w", err)
+		return nil, wrapDBInfrastructure("task claim commit", err)
 	}
 
 	// Update in-memory fields after successful commit.
@@ -143,7 +144,7 @@ func (r *SQLiteTaskRepository) ReleaseLease(ctx context.Context, taskID, workerI
 	}
 	tx, err := r.store.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("task release lease begin: %w", err)
+		return wrapDBInfrastructure("task release lease begin", err)
 	}
 	committed := false
 	defer func() {
@@ -163,11 +164,11 @@ func (r *SQLiteTaskRepository) ReleaseLease(ctx context.Context, taskID, workerI
 		now, taskID, workerID, leaseID,
 	)
 	if err != nil {
-		return fmt.Errorf("task release lease task update: %w", err)
+		return wrapDBInfrastructure("task release lease task update", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("task release lease rows: %w", err)
+		return wrapDBInfrastructure("task release lease rows", err)
 	}
 	if n == 0 {
 		return fmt.Errorf("task release lease %s: %w", taskID, taskgraph.ErrTransitionConflict)
@@ -181,7 +182,7 @@ func (r *SQLiteTaskRepository) ReleaseLease(ctx context.Context, taskID, workerI
 		 WHERE task_id = ? AND worker_id = ? AND lease_id = ? AND status = 'PENDING'`,
 		taskID, workerID, leaseID,
 	); err != nil {
-		return fmt.Errorf("task release lease delete pending attempt: %w", err)
+		return wrapDBInfrastructure("task release lease delete pending attempt", err)
 	}
 
 	// Recompute attempt_count from the immutable residual history after
@@ -197,11 +198,11 @@ func (r *SQLiteTaskRepository) ReleaseLease(ctx context.Context, taskID, workerI
 		  WHERE task_id = ?`,
 		taskID, taskID,
 	); err != nil {
-		return fmt.Errorf("task release lease reconcile attempt_count: %w", err)
+		return wrapDBInfrastructure("task release lease reconcile attempt_count", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("task release lease commit: %w", err)
+		return wrapDBInfrastructure("task release lease commit", err)
 	}
 	committed = true
 	return nil
@@ -248,7 +249,7 @@ func (r *SQLiteTaskRepository) ClaimTaskForWorkerAtomic(
 
 	tx, err := r.store.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("task claim-for-worker begin: %w", err)
+		return nil, nil, wrapDBInfrastructure("task claim-for-worker begin", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -271,11 +272,11 @@ func (r *SQLiteTaskRepository) ClaimTaskForWorkerAtomic(
 		cmd.TaskID, cmd.ExpectedTaskRevision, execKey.ID, legacyExecutorID, execKey.Version,
 	)
 	t, err := scanTask(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, fmt.Errorf("task claim-for-worker %s: task not READY or executor/revision mismatch: %w", cmd.TaskID, taskgraph.ErrTransitionConflict)
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("task claim-for-worker select: %w", err)
+		return nil, nil, wrapDBInfrastructure("task claim-for-worker select", err)
 	}
 
 	// 2. Self-heal stale attempt_count from immutable attempt history.
@@ -284,7 +285,7 @@ func (r *SQLiteTaskRepository) ClaimTaskForWorkerAtomic(
 		`SELECT MAX(attempt_number) FROM task_attempts WHERE task_id = ?`,
 		t.ID,
 	).Scan(&maxSeenAttempt); err != nil {
-		return nil, nil, fmt.Errorf("task claim-for-worker max attempt read: %w", err)
+		return nil, nil, wrapDBInfrastructure("task claim-for-worker max attempt read", err)
 	}
 	effectiveAttemptCount := t.AttemptCount
 	if maxSeenAttempt.Valid {
@@ -308,11 +309,11 @@ func (r *SQLiteTaskRepository) ClaimTaskForWorkerAtomic(
 		execKey.ID, legacyExecutorID, execKey.Version,
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("task claim-for-worker cas: %w", err)
+		return nil, nil, wrapDBInfrastructure("task claim-for-worker cas", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return nil, nil, fmt.Errorf("task claim-for-worker rows: %w", err)
+		return nil, nil, wrapDBInfrastructure("task claim-for-worker rows", err)
 	}
 	if n == 0 {
 		return nil, nil, fmt.Errorf("task claim-for-worker %s: CAS raced out (revision/executor mismatch or concurrent claim): %w", cmd.TaskID, taskgraph.ErrTransitionConflict)
@@ -329,7 +330,7 @@ func (r *SQLiteTaskRepository) ClaimTaskForWorkerAtomic(
 		cmd.SessionID, cmd.WorkerSnapshotID, cmd.LeaseID, nowStr, nowStr,
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("task claim-for-worker insert: %w", err)
+		return nil, nil, wrapDBInfrastructure("task claim-for-worker insert", err)
 	}
 
 	// 6. Read task_spec payload.
@@ -338,12 +339,12 @@ func (r *SQLiteTaskRepository) ClaimTaskForWorkerAtomic(
 		`SELECT payload_json FROM task_specs WHERE task_id = ?`,
 		t.ID,
 	).Scan(&specPayloadJSON)
-	if err != nil && err != sql.ErrNoRows {
-		return nil, nil, fmt.Errorf("task claim-for-worker spec read: %w", err)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, wrapDBInfrastructure("task claim-for-worker spec read", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, nil, fmt.Errorf("task claim-for-worker commit: %w", err)
+		return nil, nil, wrapDBInfrastructure("task claim-for-worker commit", err)
 	}
 
 	// Update in-memory fields after successful commit.

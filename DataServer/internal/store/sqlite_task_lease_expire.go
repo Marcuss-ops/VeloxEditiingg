@@ -7,6 +7,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -72,7 +73,7 @@ func (r *SQLiteTaskRepository) expireTaskLeaseAtomic(
 
 	tx, err := r.store.db.BeginTx(ctx, nil)
 	if err != nil {
-		return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic begin: %w", err)
+		return taskgraph.ExpireResult{}, wrapDBInfrastructure("task expire atomic begin", err)
 	}
 	committed := false
 	defer func() {
@@ -99,11 +100,11 @@ func (r *SQLiteTaskRepository) expireTaskLeaseAtomic(
 		 FROM tasks WHERE task_id = ?`,
 		taskID,
 	).Scan(&attemptCount, &currentAttemptNumber, &currentStatus, &currentWorker, &currentLeaseID, &currentLeaseExp)
-	if err == sql.ErrNoRows {
-		return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic %s: not found", taskID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic %s: %w", taskID, taskgraph.ErrTaskNotFound)
 	}
 	if err != nil {
-		return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic read: %w", err)
+		return taskgraph.ExpireResult{}, wrapDBInfrastructure("task expire atomic read", err)
 	}
 
 	if currentStatus != string(taskgraph.StatusLeased) && currentStatus != string(taskgraph.StatusRunning) {
@@ -134,7 +135,7 @@ func (r *SQLiteTaskRepository) expireTaskLeaseAtomic(
 		taskID, currentWorker, leaseID,
 	)
 	if err != nil {
-		return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic attempt cas: %w", err)
+		return taskgraph.ExpireResult{}, wrapDBInfrastructure("task expire atomic attempt cas", err)
 	}
 	attemptRows, _ := attRes.RowsAffected()
 
@@ -145,12 +146,14 @@ func (r *SQLiteTaskRepository) expireTaskLeaseAtomic(
 		 ORDER BY attempt_number DESC LIMIT 1`,
 		taskID, currentWorker, leaseID,
 	).Scan(&attemptID)
-	if idProbeErr != nil {
+	if errors.Is(idProbeErr, sql.ErrNoRows) {
 		// Defensive §9.5 case: task in LEASED/RUNNING with no matching
 		// attempt row. The Task CAS still proceeds (lease recovered),
 		// but AttemptClosed=false so the reaper logs the breach.
 		attemptID = ""
 		attemptRows = 0
+	} else if idProbeErr != nil {
+		return taskgraph.ExpireResult{}, wrapDBInfrastructure("task expire atomic attempt probe", idProbeErr)
 	}
 
 	effectiveAttemptCount := maxAttemptOrdinal(attemptCount, currentAttemptNumber)
@@ -179,7 +182,7 @@ func (r *SQLiteTaskRepository) expireTaskLeaseAtomic(
 		taskID, currentStatus, currentWorker, leaseID,
 	)
 	if err != nil {
-		return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic task cas: %w", err)
+		return taskgraph.ExpireResult{}, wrapDBInfrastructure("task expire atomic task cas", err)
 	}
 	taskRows, _ := taskRes.RowsAffected()
 	if taskRows == 0 {
@@ -206,11 +209,11 @@ func (r *SQLiteTaskRepository) expireTaskLeaseAtomic(
 			auditEvent.ResourceType, auditEvent.ResourceID, auditEvent.RequestID,
 			auditEvent.TraceID, auditEvent.BeforeHash, auditEvent.AfterHash,
 			audittrail.RedactMetadata(auditEvent.MetadataJSON)); err != nil {
-			return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic audit: %w", err)
+			return taskgraph.ExpireResult{}, wrapDBInfrastructure("task expire atomic audit", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic commit: %w", err)
+		return taskgraph.ExpireResult{}, wrapDBInfrastructure("task expire atomic commit", err)
 	}
 	committed = true
 
@@ -270,7 +273,7 @@ func (r *SQLiteTaskRepository) RequeueExpiredLeases(ctx context.Context, nowRFC3
 		nowRFC3339, limit,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("task reaper select: %w", err)
+		return nil, wrapDBInfrastructure("task reaper select", err)
 	}
 	defer rows.Close()
 
@@ -278,12 +281,12 @@ func (r *SQLiteTaskRepository) RequeueExpiredLeases(ctx context.Context, nowRFC3
 	for rows.Next() {
 		var c taskgraph.RequeueCandidate
 		if scanErr := rows.Scan(&c.ID, &c.WorkerID, &c.LeaseID, &c.LeaseExpiresAt, &c.AttemptCount); scanErr != nil {
-			continue
+			return nil, wrapDBInfrastructure("task reaper scan", scanErr)
 		}
 		candidates = append(candidates, c)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("task reaper rows: %w", err)
+		return nil, wrapDBInfrastructure("task reaper rows", err)
 	}
 	return candidates, nil
 }
