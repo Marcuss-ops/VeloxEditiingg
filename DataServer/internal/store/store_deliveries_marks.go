@@ -65,7 +65,7 @@ func (s *SQLiteStore) MarkDeliverySucceeded(ctx context.Context, deliveryID, run
 		); err != nil {
 			return fmt.Errorf("MarkDeliverySucceeded attempt UPDATE: %w", err)
 		}
-		return completeParentJobIfDeliveriesDone(ctx, tx, deliveryID, now)
+		return finalizeParentJobIfDeliveriesDone(ctx, tx, deliveryID, now)
 	}))
 }
 
@@ -175,40 +175,47 @@ func (s *SQLiteStore) MarkDeliveryFailed(ctx context.Context, deliveryID, runner
 		); err != nil {
 			return fmt.Errorf("MarkDeliveryFailed attempt UPDATE: %w", err)
 		}
-		return failParentJobForDelivery(ctx, tx, deliveryID, now)
+		return finalizeParentJobIfDeliveriesDone(ctx, tx, deliveryID, now)
 	}))
 }
 
-// completeParentJobIfDeliveriesDone closes only a job currently in the
-// explicit-delivery gate. Render-only jobs are completed by artifact
-// finalization and already-SUCCEEDED jobs are never regressed by delivery
-// callbacks.
-func completeParentJobIfDeliveriesDone(ctx context.Context, tx *sql.Tx, deliveryID, now string) error {
+// finalizeParentJobIfDeliveriesDone closes only a job currently in the
+// explicit-delivery gate, and only after every per-target child has reached
+// a terminal state. A failed/blocked/cancelled child therefore does not
+// cancel siblings that are still running or waiting for retry; it only
+// contributes to the parent's final aggregate once the whole set is done.
+// Render-only jobs are completed by artifact finalization and already
+// terminal parent jobs are never regressed by delivery callbacks.
+func finalizeParentJobIfDeliveriesDone(ctx context.Context, tx *sql.Tx, deliveryID, now string) error {
 	_, err := tx.ExecContext(ctx, `
 		UPDATE jobs
-		SET status = 'SUCCEEDED', completed_at = ?, updated_at = ?, revision = revision + 1
+		SET status = CASE
+				WHEN EXISTS (
+					SELECT 1
+					FROM job_deliveries d2
+					JOIN artifacts a2 ON a2.id = d2.artifact_id
+					WHERE a2.job_id = jobs.job_id
+					  AND d2.status <> 'SUCCEEDED'
+				) THEN 'FAILED'
+				ELSE 'SUCCEEDED'
+			END,
+			completed_at = ?,
+			updated_at = ?,
+			revision = revision + 1
 		WHERE job_id = (
-			SELECT a.job_id FROM job_deliveries d JOIN artifacts a ON a.id = d.artifact_id
+			SELECT a.job_id
+			FROM job_deliveries d
+			JOIN artifacts a ON a.id = d.artifact_id
 			WHERE d.delivery_id = ?
 		)
 		AND status = 'DELIVERING'
 		AND NOT EXISTS (
-			SELECT 1 FROM job_deliveries d2
-			JOIN artifacts a2 ON a2.id = d2.artifact_id
-			WHERE a2.job_id = jobs.job_id AND d2.status <> 'SUCCEEDED'
+			SELECT 1
+			FROM job_deliveries d3
+			JOIN artifacts a3 ON a3.id = d3.artifact_id
+			WHERE a3.job_id = jobs.job_id
+			  AND d3.status NOT IN ('SUCCEEDED', 'FAILED', 'BLOCKED_AUTH', 'CANCELLED')
 		)`, now, now, deliveryID)
-	return err
-}
-
-func failParentJobForDelivery(ctx context.Context, tx *sql.Tx, deliveryID, now string) error {
-	_, err := tx.ExecContext(ctx, `
-		UPDATE jobs
-		SET status = 'FAILED', completed_at = ?, updated_at = ?, revision = revision + 1
-		WHERE job_id = (
-			SELECT a.job_id FROM job_deliveries d JOIN artifacts a ON a.id = d.artifact_id
-			WHERE d.delivery_id = ?
-		)
-		AND status = 'DELIVERING'`, now, now, deliveryID)
 	return err
 }
 
@@ -263,6 +270,6 @@ func (s *SQLiteStore) MarkDeliveryBlockedAuth(ctx context.Context, deliveryID, r
 		); err != nil {
 			return fmt.Errorf("MarkDeliveryBlockedAuth attempt UPDATE: %w", err)
 		}
-		return failParentJobForDelivery(ctx, tx, deliveryID, now)
+		return finalizeParentJobIfDeliveriesDone(ctx, tx, deliveryID, now)
 	}))
 }

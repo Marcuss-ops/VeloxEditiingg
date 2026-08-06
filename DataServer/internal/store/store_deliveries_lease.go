@@ -74,21 +74,36 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 		     attempt_count = attempt_count + 1,
 		     updated_at = ?
 		 WHERE delivery_id IN (
-		   SELECT jd.delivery_id FROM job_deliveries jd
-		     JOIN delivery_destinations dd ON dd.destination_id = jd.destination_id
-		     JOIN artifacts a ON a.id = jd.artifact_id
-		   WHERE (
-		         (jd.status IN ('PENDING', 'RETRY_WAIT')
-		          AND (jd.next_attempt_at IS NULL OR jd.next_attempt_at <= ?))
-		         OR
-		         (jd.status = 'RUNNING'
-		          AND jd.lease_expires_at IS NOT NULL
-		          AND jd.lease_expires_at < ?)
-		       )
-		     AND dd.enabled = 1
-		     AND a.status = 'READY'
-		     AND a.verified_at IS NOT NULL
-		   ORDER BY jd.created_at ASC
+		   SELECT eligible.delivery_id
+		   FROM (
+		     SELECT jd.delivery_id,
+		            a.job_id AS parent_job_id,
+		            jd.created_at AS delivery_created_at,				ROW_NUMBER() OVER (
+					PARTITION BY a.job_id
+					ORDER BY COALESCE(jd.next_attempt_at, jd.created_at) ASC,
+					         jd.created_at ASC,
+					         jd.delivery_id ASC
+				) AS parent_rank,
+				COALESCE(jd.next_attempt_at, jd.created_at) AS eligible_at
+		     FROM job_deliveries jd
+		       JOIN delivery_destinations dd ON dd.destination_id = jd.destination_id
+		       JOIN artifacts a ON a.id = jd.artifact_id
+		     WHERE (
+		           (jd.status IN ('PENDING', 'RETRY_WAIT')
+		            AND (jd.next_attempt_at IS NULL OR jd.next_attempt_at <= ?))
+		           OR
+		           (jd.status = 'RUNNING'
+		            AND jd.lease_expires_at IS NOT NULL
+		            AND jd.lease_expires_at < ?)
+		         )
+		       AND dd.enabled = 1
+		       AND a.status = 'READY'
+		       AND a.verified_at IS NOT NULL
+		   ) AS eligible			ORDER BY eligible.parent_rank ASC,
+				         eligible.eligible_at ASC,
+				         eligible.parent_job_id ASC,
+				         eligible.delivery_created_at ASC,
+				         eligible.delivery_id ASC
 		   LIMIT ?
 		 )		RETURNING delivery_id, artifact_id, destination_id, attempt_count, max_attempts`,
 		runnerID, provisionalLeaseID, leaseExpiresISO, nowISO,
