@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"velox-server/internal/sqliteerr"
 )
 
 // applyMigration runs a single migration inside a transaction and records it
@@ -37,9 +39,8 @@ func applyMigration(db *sql.DB, m Migration) error {
 			// that no longer contain an extracted domain, while remaining
 			// idempotent for partially upgraded databases.
 			stmtLower := strings.ToLower(stmt)
-			errLower := strings.ToLower(err.Error())
 			if strings.Contains(stmtLower, "drop column") &&
-				(strings.Contains(errLower, "no such column") || strings.Contains(errLower, "no such table")) {
+				(sqliteerr.IsNoSuchColumn(err) || sqliteerr.IsNoSuchTable(err)) {
 				continue
 			}
 			// Tolerate "duplicate column name" for ADD COLUMN — the column
@@ -56,7 +57,7 @@ func applyMigration(db *sql.DB, m Migration) error {
 			// boots would abort.
 			if strings.Contains(strings.ToLower(stmt), "alter table") &&
 				strings.Contains(strings.ToLower(stmt), "add column") &&
-				strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+				sqliteerr.IsDuplicateColumn(err) {
 				continue
 			}
 			return fmt.Errorf("execute migration: %w", err)

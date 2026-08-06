@@ -5,8 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
+
+	"velox-server/internal/sqliteerr"
 )
 
 // CompletionStore is the persistence boundary for the artifact completion
@@ -244,7 +245,7 @@ func (r *sqliteCompletionTx) CompleteCompletionUpload(ctx context.Context, verdi
 func (r *sqliteCompletionTx) StampCompletionArtifact(ctx context.Context, artifactID, storageKey, sha string, size int64) error {
 	_, err := r.tx.ExecContext(ctx, `UPDATE artifacts SET storage_provider='local',storage_key=?,sha256=?,size_bytes=? WHERE id=?`, storageKey, sha, size, artifactID)
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "unique constraint") {
+		if sqliteerr.IsUniqueConstraint(err) {
 			return fmt.Errorf("%w: %v", ErrCompletionCanonicalConflict, err)
 		}
 		return fmt.Errorf("store: stamp completion artifact: %w", err)
