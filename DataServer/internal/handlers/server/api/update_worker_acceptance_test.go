@@ -78,3 +78,48 @@ func TestUpdateWorkerAcceptance_InvalidDigestHasNoWorkerOrLedgerSideEffects(t *t
 		t.Fatalf("invalid digest changed worker state: %+v", worker)
 	}
 }
+
+// TestUpdateWorkerAcceptance_P0InvalidDigestMatrixNoOperation locks the
+// API boundary for the P0 update contract. Every rejected value must fail
+// before worker lookup/publish, return 400, and leave the operation ledger
+// empty. The valid immutable GHCR shape is covered by the handler unit test.
+func TestUpdateWorkerAcceptance_P0InvalidDigestMatrixNoOperation(t *testing.T) {
+	tests := []struct {
+		name   string
+		digest string
+	}{
+		{name: "missing field", digest: ""},
+		{name: "whitespace only", digest: "   "},
+		{name: "plain latest", digest: "latest"},
+		{name: "mutable ghcr tag", digest: "ghcr.io/marcuss-ops/velox-worker:latest"},
+		{name: "mutable version tag", digest: "ghcr.io/marcuss-ops/velox-worker:v2"},
+		{name: "bare sha256", digest: "sha256:" + strings.Repeat("a", 64)},
+		{name: "wrong algorithm", digest: "ghcr.io/marcuss-ops/velox-worker@sha1:" + strings.Repeat("a", 64)},
+		{name: "short sha256", digest: "ghcr.io/marcuss-ops/velox-worker@sha256:abc"},
+		{name: "uppercase digest", digest: "ghcr.io/marcuss-ops/velox-worker@sha256:" + strings.Repeat("A", 64)},
+		{name: "non-ghcr registry", digest: "docker.io/marcuss-ops/velox-worker@sha256:" + strings.Repeat("a", 64)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := newRegisteredRegistry(t, "worker-e2e-a")
+			pub := &stubPublisher{}
+			r := updateRoute(newMutationsHandler(reg, pub))
+
+			response := doPOST(t, r, "/api/v1/admin/workers/worker-e2e-a/update", MutationRequest{
+				TargetDigest: tt.digest,
+				Reason:       "P0 invalid digest",
+			})
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("target_digest=%q status=%d body=%s, want 400", tt.digest, response.Code, response.Body.String())
+			}
+			if len(pub.published) != 0 {
+				t.Fatalf("target_digest=%q published %d operations, want zero", tt.digest, len(pub.published))
+			}
+			worker := reg.GetWorker(context.Background(), "worker-e2e-a")
+			if worker == nil || worker.Drain || worker.Quarantined {
+				t.Fatalf("target_digest=%q changed worker state: %+v", tt.digest, worker)
+			}
+		})
+	}
+}
