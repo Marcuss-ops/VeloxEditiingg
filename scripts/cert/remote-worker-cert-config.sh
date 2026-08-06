@@ -170,6 +170,22 @@ rw_load_config() {
   RW_SMOKE_ASSET_ID="${RW_SMOKE_ASSET_ID:-${VELOX_SMOKE_ASSET_ID:-}}"
   RW_SMOKE_RENDER_PLAN="${RW_SMOKE_RENDER_PLAN:-${VELOX_SMOKE_RENDER_PLAN:-}}"
   RW_SMOKE_VERIFY_CLEANUP="${RW_SMOKE_VERIFY_CLEANUP:-${VELOX_SMOKE_VERIFY_CLEANUP:-1}}"
+  RW_JOB_FIXTURES_FILE="${RW_JOB_FIXTURES_FILE:-${VELOX_JOB_FIXTURES_FILE:-${RW_CERT_CONFIG_DIR}/../../tests/worker-cert/fixtures/assets.json}}"
+  RW_JOB_DESTINATION_ID="${RW_JOB_DESTINATION_ID:-${VELOX_JOB_DESTINATION_ID:-}}"
+  RW_JOB_SCENES_COUNT="${RW_JOB_SCENES_COUNT:-${VELOX_JOB_SCENES_COUNT:-2}}"
+  RW_JOB_DURATION_PER_SCENE="${RW_JOB_DURATION_PER_SCENE:-${VELOX_JOB_DURATION_PER_SCENE:-3}}"
+  RW_JOB_POLL_INTERVAL_S="${RW_JOB_POLL_INTERVAL_S:-${VELOX_JOB_POLL_INTERVAL_S:-2}}"
+  RW_JOB_HTTP_TIMEOUT_S="${RW_JOB_HTTP_TIMEOUT_S:-${VELOX_JOB_HTTP_TIMEOUT_S:-30}}"
+  RW_JOB_ARTIFACT_ID="${RW_JOB_ARTIFACT_ID:-${VELOX_JOB_ARTIFACT_ID:-}}"
+  RW_JOB_ARTIFACT_DOWNLOAD_URL="${RW_JOB_ARTIFACT_DOWNLOAD_URL:-${VELOX_JOB_ARTIFACT_DOWNLOAD_URL:-}}"
+  RW_JOB_EXPECTED_SHA256="${RW_JOB_EXPECTED_SHA256:-${VELOX_JOB_EXPECTED_SHA256:-}}"
+  RW_JOB_PRE_READY_REQUIRED="${RW_JOB_PRE_READY_REQUIRED:-${VELOX_JOB_PRE_READY_REQUIRED:-1}}"
+  RW_JOB_DOWNLOAD_DIR="${RW_JOB_DOWNLOAD_DIR:-${VELOX_JOB_DOWNLOAD_DIR:-${TMPDIR:-/tmp}}}"
+  RW_JOB_VERIFY_FFPROBE="${RW_JOB_VERIFY_FFPROBE:-${VELOX_JOB_VERIFY_FFPROBE:-1}}"
+  RW_JOB_VERIFY_SHA256="${RW_JOB_VERIFY_SHA256:-${VELOX_JOB_VERIFY_SHA256:-1}}"
+  RW_JOB_VERIFY_PRE_READY="${RW_JOB_VERIFY_PRE_READY:-${VELOX_JOB_VERIFY_PRE_READY:-1}}"
+  RW_JOB_ARTIFACT_DOWNLOAD_TIMEOUT_S="${RW_JOB_ARTIFACT_DOWNLOAD_TIMEOUT_S:-${VELOX_JOB_ARTIFACT_DOWNLOAD_TIMEOUT_S:-60}}"
+  RW_JOB_MODE="${RW_JOB_MODE:-0}"
 
   [[ -n "$MASTER_URL" ]] || rw_die "MASTER_URL or VELOX_MASTER_URL is required" || return 1
   rw_validate_url "$MASTER_URL" || return 1
@@ -190,13 +206,57 @@ rw_load_config() {
   rw_validate_restart_command "$RW_WORKER_RESTART_CMD" || return 1
   rw_validate_port MASTER_REST_PORT "$MASTER_REST_PORT" || return 1
   rw_validate_port MASTER_GRPC_PORT "$MASTER_GRPC_PORT" || return 1
-  for numeric in CERT_POLL_TIMEOUT_S RW_NETWORK_TIMEOUT_S RW_SSH_CONNECT_TIMEOUT_S RW_CONNECT_TIMEOUT_S RW_REST_REQUEST_TIMEOUT_S RW_REST_ATTEMPTS RW_REST_INTERVAL_S RW_GRPC_TIMEOUT_S RW_DNS_ATTEMPTS RW_WORKER_HTTP_TIMEOUT_S RW_WORKER_RESTART_TIMEOUT_S RW_WORKER_RECONNECT_TIMEOUT_S RW_WORKER_POLL_INTERVAL_S RW_WORKER_RESTARTS RW_HEARTBEAT_SAMPLES RW_HEARTBEAT_INTERVAL_S RW_HEARTBEAT_MAX_AGE_S RW_OPERATION_TIMEOUT_S RW_OPERATION_POLL_INTERVAL_S; do
+  for numeric in CERT_POLL_TIMEOUT_S RW_NETWORK_TIMEOUT_S RW_SSH_CONNECT_TIMEOUT_S RW_CONNECT_TIMEOUT_S RW_REST_REQUEST_TIMEOUT_S RW_REST_ATTEMPTS RW_REST_INTERVAL_S RW_GRPC_TIMEOUT_S RW_DNS_ATTEMPTS RW_WORKER_HTTP_TIMEOUT_S RW_WORKER_RESTART_TIMEOUT_S RW_WORKER_RECONNECT_TIMEOUT_S RW_WORKER_POLL_INTERVAL_S RW_WORKER_RESTARTS RW_HEARTBEAT_SAMPLES RW_HEARTBEAT_INTERVAL_S RW_HEARTBEAT_MAX_AGE_S RW_OPERATION_TIMEOUT_S RW_OPERATION_POLL_INTERVAL_S RW_JOB_SCENES_COUNT RW_JOB_POLL_INTERVAL_S RW_JOB_HTTP_TIMEOUT_S RW_JOB_ARTIFACT_DOWNLOAD_TIMEOUT_S; do
     [[ "${!numeric}" =~ ^[1-9][0-9]*$ ]] || rw_die "${numeric} must be a positive integer" || return 1
   done
   [[ "$RW_SMOKE_VERIFY_CLEANUP" =~ ^[01]$ ]] || {
     rw_die "RW_SMOKE_VERIFY_CLEANUP must be 0 or 1"
     return 1
   }
+  [[ "$RW_JOB_PRE_READY_REQUIRED" =~ ^[01]$ && "$RW_JOB_VERIFY_FFPROBE" =~ ^[01]$ && "$RW_JOB_VERIFY_SHA256" =~ ^[01]$ && "$RW_JOB_VERIFY_PRE_READY" =~ ^[01]$ ]] || {
+    rw_die "RW_JOB_PRE_READY_REQUIRED, RW_JOB_VERIFY_FFPROBE, RW_JOB_VERIFY_SHA256, and RW_JOB_VERIFY_PRE_READY must be 0 or 1"
+    return 1
+  }
+  [[ "$RW_JOB_DURATION_PER_SCENE" =~ ^[0-9]+([.][0-9]+)?$ && "$RW_JOB_DURATION_PER_SCENE" != 0* ]] || {
+    rw_die "RW_JOB_DURATION_PER_SCENE must be a positive number"
+    return 1
+  }
+  [[ -r "$RW_JOB_FIXTURES_FILE" ]] || {
+    rw_die "RW_JOB_FIXTURES_FILE is missing or unreadable: ${RW_JOB_FIXTURES_FILE}"
+    return 1
+  }
+  if [[ -n "$RW_JOB_DESTINATION_ID" ]]; then
+    [[ "$RW_JOB_DESTINATION_ID" =~ ^[A-Za-z0-9._:-]+$ ]] || {
+      rw_die "RW_JOB_DESTINATION_ID contains unsafe characters"
+      return 1
+    }
+  fi
+  if [[ -n "$RW_JOB_ARTIFACT_ID" ]]; then
+    [[ "$RW_JOB_ARTIFACT_ID" =~ ^[A-Za-z0-9._:-]+$ ]] || {
+      rw_die "RW_JOB_ARTIFACT_ID contains unsafe characters"
+      return 1
+    }
+  fi
+  if [[ -n "$RW_JOB_ARTIFACT_DOWNLOAD_URL" ]]; then
+    [[ "$RW_JOB_ARTIFACT_DOWNLOAD_URL" =~ ^/api/internal/artifacts/[A-Za-z0-9._:-]+/download([?][^[:space:]]*)?$ ]] || {
+      rw_die "RW_JOB_ARTIFACT_DOWNLOAD_URL must be the canonical /api/internal/artifacts/<id>/download path"
+      return 1
+    }
+  fi
+  if [[ -n "$RW_JOB_EXPECTED_SHA256" ]]; then
+    [[ "$RW_JOB_EXPECTED_SHA256" =~ ^[a-f0-9]{64}$ ]] || {
+      rw_die "RW_JOB_EXPECTED_SHA256 must be 64 lowercase hexadecimal characters"
+      return 1
+    }
+  fi
+  [[ -d "$RW_JOB_DOWNLOAD_DIR" && -w "$RW_JOB_DOWNLOAD_DIR" ]] || {
+    rw_die "RW_JOB_DOWNLOAD_DIR must be an existing writable directory: ${RW_JOB_DOWNLOAD_DIR}"
+    return 1
+  }
+  if [[ "$RW_JOB_VERIFY_PRE_READY" == "1" && "$RW_JOB_PRE_READY_REQUIRED" == "1" && -z "$RW_JOB_ARTIFACT_ID" && -z "$RW_JOB_ARTIFACT_DOWNLOAD_URL" ]]; then
+    rw_die "P03 pre-READY verification requires RW_JOB_ARTIFACT_ID or RW_JOB_ARTIFACT_DOWNLOAD_URL because POST /api/v1/jobs does not expose an artifact ID"
+    return 1
+  fi
   if [[ -z "$RW_SMOKE_ASSET_ID" ]]; then
     [[ -r "$RW_SMOKE_FIXTURES_FILE" ]] || {
       rw_die "RW_SMOKE_FIXTURES_FILE is missing or unreadable: ${RW_SMOKE_FIXTURES_FILE}"
@@ -239,6 +299,10 @@ rw_load_config() {
   export RW_WORKER_POLL_INTERVAL_S RW_WORKER_RESTARTS RW_HEARTBEAT_SAMPLES RW_HEARTBEAT_INTERVAL_S RW_HEARTBEAT_MAX_AGE_S
   export RW_WORKER_RESTART_CMD RW_OPERATION_TIMEOUT_S RW_OPERATION_POLL_INTERVAL_S
   export RW_SMOKE_FIXTURES_FILE RW_SMOKE_ASSET_ID RW_SMOKE_RENDER_PLAN RW_SMOKE_VERIFY_CLEANUP
+  export RW_JOB_FIXTURES_FILE RW_JOB_DESTINATION_ID RW_JOB_SCENES_COUNT RW_JOB_DURATION_PER_SCENE
+  export RW_JOB_POLL_INTERVAL_S RW_JOB_HTTP_TIMEOUT_S RW_JOB_ARTIFACT_ID RW_JOB_ARTIFACT_DOWNLOAD_URL
+  export RW_JOB_EXPECTED_SHA256 RW_JOB_PRE_READY_REQUIRED RW_JOB_DOWNLOAD_DIR RW_JOB_VERIFY_FFPROBE
+  export RW_JOB_VERIFY_SHA256 RW_JOB_VERIFY_PRE_READY RW_JOB_ARTIFACT_DOWNLOAD_TIMEOUT_S RW_JOB_MODE
 }
 
 rw_curl_config() {
@@ -1314,6 +1378,333 @@ rw_lifecycle_config_failure() {
   fi
 }
 
+rw_job_record() {
+  local id="$1" name="$2" status="$3" diagnostic="$4" elapsed_ms="$5" evidence="${6:-}"
+  RW_JOB_RESULTS+=("$(jq -cn \
+    --arg id "$id" --arg name "$name" --arg status "$status" \
+    --arg diagnostic "$diagnostic" --arg evidence "$evidence" --argjson elapsed_ms "$elapsed_ms" \
+    '{id:$id,name:$name,status:$status,elapsed_ms:$elapsed_ms,diagnostic:$diagnostic,evidence:(if $evidence == "" then null else $evidence end)}')")
+}
+
+rw_job_curl_config() {
+  local cfg="$1" token="$2"
+  umask 077
+  : >"$cfg" || return 1
+  printf 'header = "Authorization: Bearer %s"\\n' "$token" >"$cfg"
+  printf 'header = "Content-Type: application/json"\\n' >>"$cfg"
+  chmod 600 "$cfg"
+}
+
+rw_job_request() {
+  local method="$1" path="$2" body="${3:-}" token="$4"
+  local cfg response_file status_file rc
+  cfg="$(mktemp "${TMPDIR:-/tmp}/velox-job-curl.XXXXXX")" || return 1
+  response_file="$(mktemp "${TMPDIR:-/tmp}/velox-job-response.XXXXXX")" || { rm -f -- "$cfg"; return 1; }
+  status_file="$(mktemp "${TMPDIR:-/tmp}/velox-job-status.XXXXXX")" || { rm -f -- "$cfg" "$response_file"; return 1; }
+  rw_job_curl_config "$cfg" "$token" || { rm -f -- "$cfg" "$response_file" "$status_file"; return 1; }
+  if [[ -n "$body" ]]; then
+    curl --silent --show-error --connect-timeout "$RW_CONNECT_TIMEOUT_S" --max-time "$RW_JOB_HTTP_TIMEOUT_S" \
+      --request "$method" --data-raw "$body" --config "$cfg" \
+      --output "$response_file" --write-out '%{http_code}' "${MASTER_URL}${path}" >"$status_file"
+    rc=$?
+  else
+    curl --silent --show-error --connect-timeout "$RW_CONNECT_TIMEOUT_S" --max-time "$RW_JOB_HTTP_TIMEOUT_S" \
+      --request "$method" --config "$cfg" --output "$response_file" \
+      --write-out '%{http_code}' "${MASTER_URL}${path}" >"$status_file"
+    rc=$?
+  fi
+  RW_JOB_HTTP_STATUS="$(cat "$status_file" 2>/dev/null || true)"
+  RW_JOB_BODY="$(cat "$response_file" 2>/dev/null || true)"
+  RW_JOB_CURL_RC="$rc"
+  rm -f -- "$cfg" "$response_file" "$status_file"
+  return "$rc"
+}
+
+rw_job_download_to_file() {
+  local url="$1" output="$2" token="$3" cfg status_file rc
+  cfg="$(mktemp "${TMPDIR:-/tmp}/velox-job-download-curl.XXXXXX")" || return 1
+  status_file="$(mktemp "${TMPDIR:-/tmp}/velox-job-download-status.XXXXXX")" || { rm -f -- "$cfg"; return 1; }
+  rw_job_curl_config "$cfg" "$token" || { rm -f -- "$cfg" "$status_file"; return 1; }
+  curl --silent --show-error --connect-timeout "$RW_CONNECT_TIMEOUT_S" --max-time "$RW_JOB_ARTIFACT_DOWNLOAD_TIMEOUT_S" \
+    --request GET --config "$cfg" --output "$output" --write-out '%{http_code}' "$url" >"$status_file"
+  rc=$?
+  RW_JOB_DOWNLOAD_HTTP_STATUS="$(cat "$status_file" 2>/dev/null || true)"
+  RW_JOB_DOWNLOAD_CURL_RC="$rc"
+  rm -f -- "$cfg" "$status_file"
+  return "$rc"
+}
+
+rw_job_artifact_id_from_url() {
+  local value="$1"
+  value="${value%%\?*}"
+  if [[ "$value" =~ /api/internal/artifacts/([A-Za-z0-9._:-]+)/download$ ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+  fi
+}
+
+rw_job_artifact_download_url() {
+  local artifact_id="$1" candidate="${RW_JOB_ARTIFACT_DOWNLOAD_URL:-}"
+  if [[ -n "$candidate" ]]; then
+    [[ "$candidate" =~ ^/api/internal/artifacts/[A-Za-z0-9._:-]+/download([?][^[:space:]]*)?$ ]] || return 1
+    printf '%s%s' "$MASTER_URL" "$candidate"
+  elif [[ -n "$artifact_id" ]]; then
+    [[ "$artifact_id" =~ ^[A-Za-z0-9._:-]+$ ]] || return 1
+    printf '%s/api/internal/artifacts/%s/download' "$MASTER_URL" "$artifact_id"
+  fi
+}
+
+rw_job_checks() {
+  local started finished elapsed body payload job_id status status_url poll_status_url
+  local deadline sequence terminal_status="" diagnostic="" overall="PASS"
+  local artifact_id response_artifact_id artifact_url configured_artifact_id configured_url_id download_url artifact_size expected_sha final_sha
+  local artifact_file probe_json probe_duration probe_size
+  local -a RW_JOB_RESULTS=()
+  local -a statuses=()
+
+  for bin in jq curl sha256sum python3; do
+    command -v "$bin" >/dev/null 2>&1 || {
+      rw_job_record P02-W00 prerequisites FAIL "missing local prerequisite: ${bin}" 0
+      overall="FAIL"
+    }
+  done
+  if [[ "$RW_JOB_VERIFY_FFPROBE" == "1" ]] && ! command -v ffprobe >/dev/null 2>&1; then
+    rw_job_record P03-ffprobe prerequisites FAIL 'missing local prerequisite: ffprobe' 0
+    overall="FAIL"
+  fi
+  if [[ -z "${M2M_TOKEN:-}" ]]; then
+    rw_job_record P02-m2m_token prerequisites FAIL 'M2M_TOKEN/VELOX_M2M_TOKEN is not configured' 0
+    overall="FAIL"
+  fi
+  if [[ "$overall" != "PASS" ]]; then
+    jq -n --arg worker_id "${WORKER_ID:-}" --arg overall "$overall" \
+      --argjson checks "$(printf '%s\n' "${RW_JOB_RESULTS[@]}" | jq -s '.')" \
+      '{schema:"velox.remote_worker.job.v1",worker_id:$worker_id,checks:$checks,overall:$overall,generated_at:(now|todateiso8601)}'
+    return 2
+  fi
+
+  started="$(rw_now_s)"
+  payload=""
+  if [[ -n "${TEST_JOB_JSON:-}" ]]; then
+    payload="$(cat "$TEST_JOB_JSON")"
+    if ! jq -e . >/dev/null 2>&1 <<<"$payload"; then
+      diagnostic="TEST_JOB_JSON is not valid JSON"
+    fi
+  else
+    if [[ -z "${RW_JOB_DESTINATION_ID:-}" ]]; then
+      diagnostic='RW_JOB_DESTINATION_ID is required when TEST_JOB_JSON is unset; implicit destinations are forbidden'
+    else
+      local payload_file
+      payload_file="$(mktemp "${TMPDIR:-/tmp}/velox-job-payload.XXXXXX")"
+      if ! python3 "${RW_CERT_CONFIG_DIR}/../../tests/worker-cert/build_real_payload.py" \
+        --fixtures "$RW_JOB_FIXTURES_FILE" --worker-id "$WORKER_ID" \
+        --destination "$RW_JOB_DESTINATION_ID" --scenes-count "$RW_JOB_SCENES_COUNT" \
+        --duration-per-scene "$RW_JOB_DURATION_PER_SCENE" --strict --output "$payload_file" >/dev/null 2>&1; then
+        diagnostic="canonical job payload builder failed"
+      else
+        payload="$(jq --arg key "remote-worker-${WORKER_ID}-$(date +%s%N)" '.idempotency_key=$key' "$payload_file" 2>/dev/null || true)"
+        [[ -n "$payload" ]] || diagnostic="canonical job payload builder emitted invalid JSON"
+      fi
+      rm -f -- "$payload_file"
+    fi
+  fi
+  finished="$(rw_now_s)"; elapsed=$(( (finished - started) * 1000 ))
+  if [[ -n "$diagnostic" ]]; then
+    rw_job_record P02-payload payload FAIL "$diagnostic" "$elapsed"
+    overall="FAIL"
+  else
+    rw_job_record P02-payload payload PASS "canonical job payload ready; source=$(if [[ -n \"${TEST_JOB_JSON:-}\" ]]; then printf '%s' TEST_JOB_JSON; else printf '%s' build_real_payload.py; fi)" "$elapsed"
+  fi
+
+  started="$(rw_now_s)"
+  if [[ "$overall" == "PASS" ]] && ! rw_job_request POST "/api/v1/jobs" "$payload" "$M2M_TOKEN"; then
+    diagnostic="POST /api/v1/jobs transport failed (rc=${RW_JOB_CURL_RC})"
+  elif [[ "$overall" == "PASS" && "$RW_JOB_HTTP_STATUS" != "202" ]]; then
+    diagnostic="POST /api/v1/jobs returned HTTP ${RW_JOB_HTTP_STATUS}: ${RW_JOB_BODY}"
+  elif [[ "$overall" == "PASS" ]]; then
+    job_id="$(jq -r '.job_id // empty' <<<"$RW_JOB_BODY" 2>/dev/null || true)"
+    status_url="$(jq -r '.status_url // empty' <<<"$RW_JOB_BODY" 2>/dev/null || true)"
+    [[ -n "$job_id" ]] || diagnostic='202 response omitted job_id'
+    [[ "$status_url" == "/api/v1/jobs/${job_id}" ]] || diagnostic="202 response status_url mismatch: ${status_url:-<empty>}"
+  fi
+  finished="$(rw_now_s)"; elapsed=$(( (finished - started) * 1000 ))
+  if [[ -n "$diagnostic" ]]; then
+    rw_job_record P02-submit submit FAIL "$diagnostic" "$elapsed"
+    overall="FAIL"
+  else
+    rw_job_record P02-submit submit PASS "HTTP 202; job_id=${job_id}; status_url=${status_url}" "$elapsed"
+  fi
+
+  if [[ "$overall" == "PASS" && "$RW_JOB_VERIFY_PRE_READY" == "1" && "$RW_JOB_PRE_READY_REQUIRED" == "1" ]]; then
+    download_url="$(rw_job_artifact_download_url "${RW_JOB_ARTIFACT_ID:-}")"
+    if [[ -n "$download_url" ]]; then
+      local pre_ready_file
+      pre_ready_file="$(mktemp "${TMPDIR:-/tmp}/velox-pre-ready.XXXXXX")"
+      rw_job_download_to_file "$download_url" "$pre_ready_file" "$RW_ADMIN_TOKEN" || true
+      if [[ "$RW_JOB_DOWNLOAD_HTTP_STATUS" == "404" ]]; then
+        rw_job_record P03-pre-ready pre_ready_rejection PASS 'artifact download returned HTTP 404 before READY' 0 pre_ready_404
+      else
+        rw_job_record P03-pre-ready pre_ready_rejection FAIL "expected HTTP 404 before READY, got ${RW_JOB_DOWNLOAD_HTTP_STATUS:-<no-status>}" 0
+        overall="FAIL"
+      fi
+      rm -f -- "$pre_ready_file"
+    else
+      rw_job_record P03-pre-ready pre_ready_rejection FAIL 'artifact_id/download URL is not observable at 202; configure RW_JOB_ARTIFACT_ID or RW_JOB_ARTIFACT_DOWNLOAD_URL for the required pre-READY 404 probe' 0 api_observability_limit
+      overall="FAIL"
+    fi
+  fi
+
+  if [[ "$overall" == "PASS" ]]; then
+    deadline=$(( $(date +%s) + CERT_POLL_TIMEOUT_S ))
+    while (( $(date +%s) < deadline )); do
+      if ! rw_job_request GET "/api/v1/jobs/${job_id}" "" "$M2M_TOKEN"; then
+        diagnostic="GET /api/v1/jobs/${job_id} transport failed (rc=${RW_JOB_CURL_RC})"
+        break
+      fi
+      if [[ "$RW_JOB_HTTP_STATUS" == "200" ]]; then
+        body="$RW_JOB_BODY"
+        status="$(jq -r '.status // empty' <<<"$body" 2>/dev/null || true)"
+        [[ -n "$status" ]] && statuses+=("$status")
+        if [[ "$(jq -r '.job_id // empty' <<<"$body" 2>/dev/null || true)" != "$job_id" ]]; then
+          diagnostic="GET /api/v1/jobs/${job_id} returned a mismatched job_id"
+          break
+        fi
+        poll_status_url="$(jq -r '.status_url // empty' <<<"$body" 2>/dev/null || true)"
+        if [[ -n "$poll_status_url" && "$poll_status_url" != "/api/v1/jobs/${job_id}" ]]; then
+          diagnostic="GET /api/v1/jobs/${job_id} returned a mismatched status_url"
+          break
+        fi
+        if [[ "$(jq -r '.created // false' <<<"$body" 2>/dev/null || true)" != "true" ]]; then
+          diagnostic="GET /api/v1/jobs/${job_id} returned created=false"
+          break
+        fi
+        case "$status" in
+          SUCCEEDED|FAILED|CANCELLED)
+            terminal_status="$status"
+            break
+            ;;
+          PENDING|READY|LEASED|RUNNING|AWAITING_ARTIFACT|RETRY_WAIT|POLLING|FORWARDING|FORWARDED|QUEUED)
+            sleep "$RW_JOB_POLL_INTERVAL_S"
+            ;;
+          *)
+            diagnostic="GET /api/v1/jobs/${job_id} returned unexpected status: ${status:-<empty>}"
+            break
+            ;;
+        esac
+      elif [[ "$RW_JOB_HTTP_STATUS" == "404" ]]; then
+        sleep "$RW_JOB_POLL_INTERVAL_S"
+      else
+        diagnostic="GET /api/v1/jobs/${job_id} returned HTTP ${RW_JOB_HTTP_STATUS}: ${RW_JOB_BODY}"
+        break
+      fi
+    done
+    [[ -n "$terminal_status" ]] || [[ -n "$diagnostic" ]] || diagnostic="job polling timed out after ${CERT_POLL_TIMEOUT_S}s"
+    [[ "$terminal_status" == "SUCCEEDED" ]] || [[ -n "$diagnostic" ]] || diagnostic="job reached terminal status ${terminal_status}"
+  fi
+  started="$(rw_now_s)"; finished="$(rw_now_s)"; elapsed=$(( (finished - started) * 1000 ))
+  sequence="$(printf '%s -> ' "${statuses[@]}" | sed 's/ -> $//')"
+  if [[ -n "$diagnostic" ]]; then
+    rw_job_record P02-poll poll FAIL "$diagnostic; states=${sequence:-<none>}" "$elapsed"
+    overall="FAIL"
+  else
+    rw_job_record P02-poll poll PASS "states=${sequence}; terminal=SUCCEEDED" "$elapsed"
+  fi
+
+  response_artifact_id="$(jq -r '.artifact_id // .artifact.id // empty' <<<"${body:-{}}" 2>/dev/null || true)"
+  artifact_id="$response_artifact_id"
+  artifact_url="$(jq -r '.artifact_url // empty' <<<"${body:-{}}" 2>/dev/null || true)"
+  [[ -n "$artifact_id" ]] || artifact_id="$(rw_job_artifact_id_from_url "$artifact_url")"
+  configured_artifact_id="${RW_JOB_ARTIFACT_ID:-}"
+  if [[ -z "$artifact_id" && ( -n "$configured_artifact_id" || -n "${RW_JOB_ARTIFACT_DOWNLOAD_URL:-}" ) ]]; then
+    diagnostic="configured artifact cannot be correlated to submitted job: polling response omitted artifact_id and canonical artifact URL"
+    overall="FAIL"
+  fi
+  configured_url_id="$(rw_job_artifact_id_from_url "${RW_JOB_ARTIFACT_DOWNLOAD_URL:-}")"
+  if [[ -n "$configured_artifact_id" && -n "$configured_url_id" && "$configured_artifact_id" != "$configured_url_id" ]]; then
+    diagnostic="configured artifact ID ${configured_artifact_id} does not match configured download URL artifact ID ${configured_url_id}"
+    overall="FAIL"
+  elif [[ -n "$artifact_id" && -n "$configured_artifact_id" && "$configured_artifact_id" != "$artifact_id" ]]; then
+    diagnostic="configured artifact ID ${configured_artifact_id} does not match submitted job artifact ID ${artifact_id}"
+    overall="FAIL"
+  elif [[ -n "$artifact_id" && -n "$configured_url_id" && "$configured_url_id" != "$artifact_id" ]]; then
+    diagnostic="configured download URL artifact ID ${configured_url_id} does not match submitted job artifact ID ${artifact_id}"
+    overall="FAIL"
+  fi
+  artifact_size="$(jq -r '.artifact_size_bytes // .artifact.size_bytes // 0' <<<"${body:-{}}" 2>/dev/null || printf '0')"
+  expected_sha="${RW_JOB_EXPECTED_SHA256:-$(jq -r '.sha256 // .artifact.sha256 // empty' <<<"${body:-{}}" 2>/dev/null || true)}"
+  [[ -n "$artifact_id" ]] || artifact_id="$(rw_job_artifact_id_from_url "$artifact_url")"
+  download_url="$(rw_job_artifact_download_url "${RW_JOB_ARTIFACT_ID:-${artifact_id}}")"
+  [[ -n "$download_url" ]] || {
+    if [[ -n "$artifact_url" ]]; then
+      if [[ "$artifact_url" == /* ]]; then
+        download_url="${MASTER_URL}${artifact_url}"
+      elif [[ "$artifact_url" == "${MASTER_URL}"/api/internal/artifacts/*/download* ]]; then
+        download_url="$artifact_url"
+      fi
+    fi
+  }
+
+  if [[ "$terminal_status" == "SUCCEEDED" && "$overall" == "PASS" ]]; then
+    [[ -n "$download_url" ]] || diagnostic='job status did not expose artifact_id or a usable artifact download URL; set RW_JOB_ARTIFACT_ID or RW_JOB_ARTIFACT_DOWNLOAD_URL'
+    artifact_file="$(mktemp -p "$RW_JOB_DOWNLOAD_DIR" "remote-worker-${job_id}.XXXXXX.mp4")"
+    if [[ -z "$diagnostic" ]] && ! rw_job_download_to_file "$download_url" "$artifact_file" "$RW_ADMIN_TOKEN"; then
+      diagnostic="artifact download transport failed (rc=${RW_JOB_DOWNLOAD_CURL_RC})"
+    elif [[ -z "$diagnostic" && "$RW_JOB_DOWNLOAD_HTTP_STATUS" != "200" ]]; then
+      diagnostic="artifact download returned HTTP ${RW_JOB_DOWNLOAD_HTTP_STATUS}; expected 200 for READY"
+    elif [[ -z "$diagnostic" && ! -s "$artifact_file" ]]; then
+      diagnostic='artifact download returned HTTP 200 but an empty file'
+    fi
+    if [[ -z "$diagnostic" ]]; then
+      final_sha="$(sha256sum "$artifact_file" | awk '{print $1}')"
+      if [[ -n "$expected_sha" && "$final_sha" != "$expected_sha" ]]; then
+        diagnostic="artifact SHA-256 mismatch: got=${final_sha} expected=${expected_sha}"
+      elif [[ "$RW_JOB_VERIFY_SHA256" == "1" && ! "$final_sha" =~ ^[a-f0-9]{64}$ ]]; then
+        diagnostic="artifact SHA-256 has invalid format: ${final_sha}"
+      fi
+    fi
+    if [[ -z "$diagnostic" && "$RW_JOB_VERIFY_FFPROBE" == "1" ]]; then
+      probe_json="$(ffprobe -v error -show_entries format=duration,size -of json "$artifact_file" 2>/dev/null || true)"
+      probe_duration="$(jq -r '.format.duration // empty' <<<"$probe_json" 2>/dev/null || true)"
+      probe_size="$(jq -r '.format.size // empty' <<<"$probe_json" 2>/dev/null || true)"
+      [[ -n "$probe_json" && -n "$probe_duration" && -n "$probe_size" ]] || diagnostic='ffprobe failed or returned no format.duration/size'
+      if [[ -z "$diagnostic" ]]; then
+        downloaded_bytes="$(stat -c %s "$artifact_file" 2>/dev/null || wc -c <"$artifact_file")"
+        [[ "$probe_size" == "$downloaded_bytes" ]] || diagnostic="ffprobe size mismatch: format.size=${probe_size} downloaded=${downloaded_bytes}"
+      fi
+    fi
+    if [[ -n "$artifact_size" && "$artifact_size" =~ ^[0-9]+$ && "$artifact_size" -gt 0 && -z "$diagnostic" ]]; then
+      [[ "$(stat -c %s "$artifact_file" 2>/dev/null || wc -c <"$artifact_file")" == "$artifact_size" ]] || diagnostic="artifact byte size mismatch: downloaded=$(stat -c %s "$artifact_file" 2>/dev/null || wc -c <"$artifact_file") expected=${artifact_size}"
+    fi
+    if [[ -n "$diagnostic" ]]; then
+      rw_job_record P03-artifact artifact FAIL "$diagnostic" 0 artifact_download
+      overall="FAIL"
+    else
+      rw_job_record P03-artifact artifact PASS "HTTP 200 READY; bytes=$(stat -c %s "$artifact_file" 2>/dev/null || wc -c <"$artifact_file"); sha256=${final_sha}; ffprobe_duration=${probe_duration:-not_run}" 0 artifact_download
+    fi
+    rm -f -- "$artifact_file"
+  else
+    rw_job_record P03-artifact artifact FAIL "artifact verification not attempted because job did not reach SUCCEEDED" 0 artifact_download
+    overall="FAIL"
+  fi
+
+  jq -n --arg schema 'velox.remote_worker.job.v1' --arg worker_id "$WORKER_ID" \
+    --arg job_id "${job_id:-}" --arg terminal_status "${terminal_status:-}" \
+    --arg artifact_id "${RW_JOB_ARTIFACT_ID:-${artifact_id:-}}" \
+    --arg artifact_url "${download_url:-}" --arg overall "$overall" \
+    --argjson checks "$(printf '%s\n' "${RW_JOB_RESULTS[@]}" | jq -s '.')" \
+    '{schema:$schema,worker_id:$worker_id,job_id:$job_id,terminal_status:(if $terminal_status=="" then null else $terminal_status end),artifact_id:(if $artifact_id=="" then null else $artifact_id end),artifact_download_url:(if $artifact_url=="" then null else $artifact_url end),checks:$checks,overall:$overall,generated_at:(now|todateiso8601)}'
+  [[ "$overall" == "PASS" ]]
+}
+
+rw_job_config_failure() {
+  local diagnostic="$1"
+  if command -v jq >/dev/null 2>&1; then
+    jq -n --arg worker_id "${WORKER_ID:-${VELOX_WORKER_ID:-}}" --arg diagnostic "$diagnostic" \
+      '{schema:"velox.remote_worker.job.v1",worker_id:$worker_id,checks:[{id:"P02-W00",name:"configuration",status:"FAIL",elapsed_ms:0,diagnostic:$diagnostic}],overall:"FAIL",generated_at:(now|todateiso8601)}'
+  else
+    printf '%s\n' '{"schema":"velox.remote_worker.job.v1","checks":[{"id":"P02-W00","name":"configuration","status":"FAIL","elapsed_ms":0,"diagnostic":"configuration validation failed"}],"overall":"FAIL"}'
+  fi
+}
+
 rw_smoke_config_failure() {
   local diagnostic="$1"
   if command -v jq >/dev/null 2>&1; then
@@ -1384,7 +1775,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     --smoke|--smoke-json)
       shift
       [[ "$#" -eq 0 ]] || { rw_die "smoke mode does not accept positional arguments"; exit 2; }
-      config_error_file="$(mktemp "${TMPDIR:-/tmp}/velox-worker-config-error.XXXXXX")"
+      config_error_file="$(mktemp "${TMPDIR:-/tmp}/velox-smoke-config-error.XXXXXX")"
       if rw_load_config 2>"$config_error_file"; then
         rm -f -- "$config_error_file"
       else
@@ -1396,13 +1787,29 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
       fi
       rw_smoke_checks
       ;;
+    --job|--job-json)
+      shift
+      [[ "$#" -eq 0 ]] || { rw_die "job mode does not accept positional arguments"; exit 2; }
+      config_error_file="$(mktemp "${TMPDIR:-/tmp}/velox-job-config-error.XXXXXX")"
+      if rw_load_config 2>"$config_error_file"; then
+        rm -f -- "$config_error_file"
+      else
+        config_diagnostic="$(cat "$config_error_file")"
+        rm -f -- "$config_error_file"
+        config_diagnostic="${config_diagnostic//$'\n'/; }"
+        rw_job_config_failure "${config_diagnostic:-configuration validation failed}"
+        exit 2
+      fi
+      rw_job_checks
+      ;;
     --help|-h)
       printf '%s\n' 'Usage: remote-worker-cert-config.sh [--network-json]' \
         'Default mode runs local preflight only.' \
         '--network-json runs R01-R04 and emits one JSON document on stdout.' \
         '--worker-json runs W01-W03 (restart, identity, heartbeat) and emits JSON.' \
         '--lifecycle-json runs W04-W05 (drain, placement, resume, Level D smoke) and emits JSON.' \
-        '--smoke-json runs P01 real Level D smoke and emits JSON.'
+        '--smoke-json runs P01 real Level D smoke and emits JSON.' \
+        '--job-json runs P02 job E2E polling and P03 artifact verification and emits JSON.'
       ;;
     '')
       rw_load_config
