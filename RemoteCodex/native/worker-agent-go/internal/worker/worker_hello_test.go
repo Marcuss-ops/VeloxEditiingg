@@ -8,9 +8,11 @@
 //	    compat shim.
 //	v2 (post-review): dropped supported_job_types mirror; extracted
 //	    Worker.capabilitiesMap() as the single source of truth for
-//	    hello + heartbeat; top-level max_parallel_jobs mirrors
-//	    host.max_parallel_jobs (sourced from same limiter field).
-//	v3 (FINAL): added missing pkg/api import; dropped redundant
+//	    hello + heartbeat.
+//	v4 (FINAL): removed the top-level max_parallel_jobs mirror — the
+//	    v3-only protocol gate guarantees every master reads
+//	    host.max_parallel_jobs; the mirror was a dual wire source.
+//	v3 (superseded): added missing pkg/api import; dropped redundant
 //	    byte-stable-key-order test (covered by
 //	    TestBuildHello_DeterministicAcrossRegistrations); simplified
 //	    the dead-code sweep.
@@ -61,16 +63,17 @@ func assertHelloMatchesRegistry(t *testing.T, w *Worker) {
 	}
 
 	// max_parallel_jobs MUST come from the limiter (single source of
-	// truth) and MUST be byte-identical to host.max_parallel_jobs so a
-	// master reading either location sees the same value.
-	topMax, ok := hello.Capabilities["max_parallel_jobs"].(int)
-	req.True(ok, "max_parallel_jobs must be int")
+	// truth) and MUST be published in ONE wire location:
+	// capabilities.host.max_parallel_jobs. The legacy top-level mirror
+	// is gone — assert its absence so a future contributor cannot
+	// re-introduce a second source of truth.
 	hostBlock, ok := hello.Capabilities["host"].(map[string]interface{})
 	req.True(ok, "host block must be a map")
 	hostMax, ok := hostBlock["max_parallel_jobs"].(int)
 	req.True(ok, "host.max_parallel_jobs must be int")
-	req.Equal(topMax, hostMax, "max_parallel_jobs and host.max_parallel_jobs must agree")
-	req.Equal(w.concurrencyLimiter.MaxActiveJobs(), topMax, "max_parallel_jobs must come from the limiter")
+	req.Equal(w.concurrencyLimiter.MaxActiveJobs(), hostMax, "host.max_parallel_jobs must come from the limiter")
+	_, hasTopMirror := hello.Capabilities["max_parallel_jobs"]
+	req.False(hasTopMirror, "top-level max_parallel_jobs mirror must not be emitted")
 
 	// supported_job_types is GONE in PR-3.5. Hard cutover — master
 	// decoders will see the new schema and must adapt.
@@ -181,8 +184,9 @@ func TestBuildHello_UsesLimiterNotDetectForMaxParallel(t *testing.T) {
 	require.NoError(t, err)
 	w.concurrencyLimiter.SetMaxActiveJobs(7)
 	hello := w.buildHello()
-	require.EqualValues(t, 7, hello.Capabilities["max_parallel_jobs"])
 	require.EqualValues(t, 7, hello.Capabilities["host"].(map[string]interface{})["max_parallel_jobs"])
+	_, hasTopMirror := hello.Capabilities["max_parallel_jobs"]
+	require.False(t, hasTopMirror, "top-level max_parallel_jobs mirror must not be emitted")
 }
 
 func TestBuildHello_CreatorProfile_AdvertisesCreativeCapabilities(t *testing.T) {

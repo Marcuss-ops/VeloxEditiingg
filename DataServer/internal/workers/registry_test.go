@@ -169,8 +169,9 @@ func TestRegistryHeartbeatMetadataPersistence(t *testing.T) {
 		"protocol_version": DefaultWorkerProtocolVersion,
 		"engine_version":   "v1.0.5",
 		"capabilities": map[string]interface{}{
-			"ffmpeg":              true,
-			"supported_job_types": []string{"health_check"},
+			"executors": []interface{}{
+				map[string]interface{}{"id": "health_check", "version": float64(1)},
+			},
 		},
 	})
 	if err != nil {
@@ -197,8 +198,8 @@ func TestRegistryHeartbeatMetadataPersistence(t *testing.T) {
 	if info.EngineVersion != "v1.0.5" {
 		t.Errorf("expected engine_version v1.0.5, got %s", info.EngineVersion)
 	}
-	if info.Capabilities == nil || info.Capabilities["ffmpeg"] != true {
-		t.Errorf("expected capabilities to persist")
+	if !info.ExecutorRegistrySnapshot().Has("health_check", 1) {
+		t.Errorf("expected typed executor capability to persist")
 	}
 }
 
@@ -715,40 +716,57 @@ func TestGetSchedulableWorkers_ExcludesDraining(t *testing.T) {
 	reg := newTestRegistry(t)
 	ctx := context.Background()
 
-	// Pin now so the heartbeat is unambiguously "fresh" instead of
-	// sensitive to clock drift in CI.
-	now := time.Now().UTC().Format(time.RFC3339)
+	// Register each worker before applying state updates so the test
+	// exercises the real persisted registry path.
+	workerIDs := []struct {
+		id, name string
+	}{
+		{"w-drain-1", "Draining Worker"},
+		{"w-unsched-1", "Unschedulable Worker"},
+		{"w-ok-1", "Healthy Worker"},
+	}
+	for _, worker := range workerIDs {
+		if err := reg.RegisterWorker(ctx, worker.id, worker.name, "10.0.0.1", map[string]interface{}{
+			"capabilities": map[string]interface{}{
+				"host": map[string]interface{}{"max_parallel_jobs": float64(1)},
+				"executors": []interface{}{
+					map[string]interface{}{"id": "scene.composite.v1", "version": float64(1)},
+				},
+			},
+		}); err != nil {
+			t.Fatalf("RegisterWorker(%s): %v", worker.id, err)
+		}
+		if err := reg.Heartbeat(ctx, worker.id, worker.name, "", nil); err != nil {
+			t.Fatalf("Heartbeat(%s): %v", worker.id, err)
+		}
+	}
 
-	// ── Channel 1: drain = true. Even with schedulable=true and a
-	// fresh heartbeat, the worker is excluded. This is the canonical
-	// "DRAINING" input that surfaces as ConnectionStatus="DRAINING".
-	reg.Heartbeat(ctx, "w-drain-1", "Draining Worker", "", nil)
-	reg.UpdateWorker(ctx, "w-drain-1", map[string]interface{}{
-		"drain":          true,
-		"last_heartbeat": now,
-		"schedulable":    true, // explicit: scheduled flag-wise, but drain overrides.
-	})
+	// Channel 1: drain=true. Even with schedulable=true and a fresh
+	// heartbeat, the worker is excluded.
+	if err := reg.UpdateWorker(ctx, "w-drain-1", map[string]interface{}{
+		"drain":       true,
+		"schedulable": true,
+	}); err != nil {
+		t.Fatalf("UpdateWorker(w-drain-1): %v", err)
+	}
 
-	// ── Channel 2: schedulable = false (NOT draining per the drain
-	// field, but the costmodel treats `drain || !schedulable` as
-	// IsDraining=true). This worker should ALSO be excluded — a
-	// regression that only checks the drain field would erroneously
-	// pass this case.
-	reg.Heartbeat(ctx, "w-unsched-1", "Unschedulable Worker", "", nil)
-	reg.UpdateWorker(ctx, "w-unsched-1", map[string]interface{}{
-		"drain":          false,
-		"last_heartbeat": now,
-		"schedulable":    false,
-	})
+	// Channel 2: schedulable=false (not draining), but the costmodel
+	// treats drain || !schedulable as IsDraining=true.
+	if err := reg.UpdateWorker(ctx, "w-unsched-1", map[string]interface{}{
+		"drain":       false,
+		"schedulable": false,
+	}); err != nil {
+		t.Fatalf("UpdateWorker(w-unsched-1): %v", err)
+	}
 
-	// ── Control case: a healthy, schedulable, NON-draining worker.
-	// Expected to appear in the result; without it the test is ambiguous.
-	reg.Heartbeat(ctx, "w-ok-1", "Healthy Worker", "", nil)
-	reg.UpdateWorker(ctx, "w-ok-1", map[string]interface{}{
-		"drain":          false,
-		"last_heartbeat": now,
-		"schedulable":    true,
-	})
+	// Control case: healthy, schedulable, non-draining. It must remain
+	// eligible; without this case an empty result would be ambiguous.
+	if err := reg.UpdateWorker(ctx, "w-ok-1", map[string]interface{}{
+		"drain":       false,
+		"schedulable": true,
+	}); err != nil {
+		t.Fatalf("UpdateWorker(w-ok-1): %v", err)
+	}
 
 	schedulable := reg.GetSchedulableWorkers(ctx)
 

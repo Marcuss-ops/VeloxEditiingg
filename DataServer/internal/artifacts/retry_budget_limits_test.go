@@ -51,7 +51,7 @@ func TestFinalizeVerified_MarksTaskSucceeded(t *testing.T) {
 	for _, status := range []string{"RUNNING", "LEASED", "PENDING"} {
 		t.Run(status, func(t *testing.T) {
 			db := openPropagationDB(t)
-			seedPhase5Fixture(t, db, phase5Fixture{JobID: "J-task", WorkerID: "w", LeaseID: "l", Revision: 1, AttemptNumber: 1, ArtifactID: "art-task", UploadID: "up-task"})
+			seedPhase5Fixture(t, db, phase5Fixture{JobID: "J-task", WorkerID: "w", LeaseID: "l", Revision: 1, AttemptNumber: 1, ArtifactID: "art-task", UploadID: "up-task", RequestJSON: `{"render_only":true}`})
 			now := time.Now().UTC().Format(time.RFC3339)
 			_, err := db.Exec(`INSERT INTO tasks (task_id,job_id,project_id,render_plan_id,executor_id,executor_version,status,priority,revision,attempt_count,worker_id,lease_id,created_at,updated_at) VALUES ('task-J-task','J-task','proj','rp','executor.scene_composite',1,?,0,0,0,'w','l',?,?)`, status, now, now)
 			if err != nil {
@@ -83,7 +83,7 @@ func TestFinalizeVerified_ClosesAllStateTablesAtomically(t *testing.T) {
 	seedDeliveryPlans(t, db, jobID, []phase5Plan{{"primary", 1, 3, true}})
 	resolver := deliveries.NewSQLiteDeliveryPlanResolver(db)
 	runFinalize(t, db, resolver, artifacts.FinalizeVerifiedCommand{UploadID: uploadID, ArtifactID: artifactID, JobID: jobID, WorkerID: "w", LeaseID: "l", AttemptNumber: 1, ExpectedRevision: 1, StorageProvider: "local", StorageKey: "artifacts/" + jobID + "/1", SHA256: "deadbeef", SizeBytes: 1024, MIMEType: "video/mp4", VerifiedAt: time.Now().UTC()})
-	checks := []struct{ q, want string }{{`SELECT status FROM jobs WHERE job_id='J-Q5'`, "SUCCEEDED"}, {`SELECT status FROM tasks WHERE job_id='J-Q5'`, "SUCCEEDED"}, {`SELECT status FROM artifacts WHERE id='art-Q5'`, "READY"}, {`SELECT status FROM artifact_uploads WHERE upload_id='up-Q5'`, "COMPLETED"}}
+	checks := []struct{ q, want string }{{`SELECT status FROM jobs WHERE job_id='J-Q5'`, "DELIVERING"}, {`SELECT status FROM tasks WHERE job_id='J-Q5'`, "SUCCEEDED"}, {`SELECT status FROM artifacts WHERE id='art-Q5'`, "READY"}, {`SELECT status FROM artifact_uploads WHERE upload_id='up-Q5'`, "COMPLETED"}}
 	for _, c := range checks {
 		var got string
 		if err := db.QueryRow(c.q).Scan(&got); err != nil {

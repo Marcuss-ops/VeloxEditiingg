@@ -17,12 +17,14 @@ import (
 	"container/heap"
 	"sync"
 	"time"
+
+	"velox-shared/assetref"
 )
 
 // schedItem is one queued transfer. run must be non-blocking-safe to call
 // outside the scheduler lock.
 type schedItem struct {
-	key      string
+	key      assetref.AssetKey
 	priority int
 	queuedAt time.Time
 	run      func()
@@ -107,7 +109,7 @@ func (s *scheduler) Start() {
 // Returns false — discarding the item — when the pool is already closed;
 // the caller must then settle the transfer itself (e.g. as cancelled) so no
 // waiter hangs on a transfer that will never run.
-func (s *scheduler) Enqueue(key string, priority int, queuedAt time.Time, run func()) bool {
+func (s *scheduler) Enqueue(key assetref.AssetKey, priority int, queuedAt time.Time, run func()) bool {
 	if run == nil {
 		return false
 	}

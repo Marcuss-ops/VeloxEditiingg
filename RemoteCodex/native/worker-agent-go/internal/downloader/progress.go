@@ -35,6 +35,8 @@ package downloader
 import (
 	"sort"
 	"time"
+
+	"velox-shared/assetref"
 )
 
 // Progress throttles. Subscriber snapshots are published at least once per
@@ -134,7 +136,9 @@ const DefaultAssetConcurrency = 4
 type DownloadRequest struct {
 	JobID    string
 	TaskID   string
-	AssetKey string
+	AssetKey assetref.AssetKey
+	// AssetID is retained only as a legacy transport/read-model field; it
+	// must not be used for transfer identity or cache ownership.
 	AssetID  string
 	Role     AssetRole
 	SceneIDs []string
@@ -145,7 +149,7 @@ type DownloadRequest struct {
 	// SHA256 and SizeBytes are the integrity contract. A hit is valid only
 	// when both are present and match; with both absent the file is
 	// downloaded and verified for media-like content only.
-	SHA256    string
+	SHA256    assetref.ContentHash
 	SizeBytes int64
 	MIMEType  string
 
@@ -155,10 +159,10 @@ type DownloadRequest struct {
 // DownloadedAsset is the successful outcome of Resolve: a local filesystem
 // path whose bytes were verified (or a previously verified cache hit).
 type DownloadedAsset struct {
-	AssetKey  string
+	AssetKey  assetref.AssetKey
 	AssetID   string
 	LocalPath string
-	SHA256    string
+	SHA256    assetref.ContentHash
 	SizeBytes int64
 	CacheHit  bool
 	ReadyAt   time.Time
@@ -178,10 +182,11 @@ type DownloadJobReference struct {
 // reference live io state that could block.
 type DownloadSnapshot struct {
 	TransferID string
-	AssetKey   string
-	AssetID    string
-	Role       AssetRole
-	State      DownloadState
+	AssetKey   assetref.AssetKey
+	// AssetID remains a legacy wire compatibility field.
+	AssetID string
+	Role    AssetRole
+	State   DownloadState
 
 	BytesDownloaded int64
 	BytesTotal      int64
@@ -214,7 +219,7 @@ type DownloadSnapshot struct {
 	TaskID   string
 	SceneIDs []string
 	MIMEType string
-	SHA256   string
+	SHA256   assetref.ContentHash
 }
 
 // JobDownloadSnapshot aggregates every transfer a job is waiting on. Progress

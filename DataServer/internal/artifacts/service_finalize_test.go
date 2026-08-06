@@ -24,7 +24,9 @@ import (
 
 func TestFinalize_DoubleFinalizeIdempotent(t *testing.T) {
 	env := setupTestEnv(t)
-	env.seedJob("J8", "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
+	// AWAITING_ARTIFACT: the canonical pre-upload state (ingest rolled the
+	// job RUNNING→AWAITING_ARTIFACT when the worker reported render-finished).
+	env.seedJob("J8", "AWAITING_ARTIFACT", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
 	env.seedAttempt("J8", 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
 
 	cmd := beginUploadDefaultCmd("J8")
@@ -69,7 +71,7 @@ func TestFinalize_DoubleFinalizeIdempotent(t *testing.T) {
 
 func TestFinalize_Concurrent(t *testing.T) {
 	env := setupTestEnv(t)
-	env.seedJob("J9", "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
+	env.seedJob("J9", "AWAITING_ARTIFACT", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
 	env.seedAttempt("J9", 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
 
 	cmd := beginUploadDefaultCmd("J9")
@@ -113,9 +115,9 @@ func TestFinalize_Concurrent(t *testing.T) {
 
 	// Either both succeed (idempotent path on slow commit / fast retry),
 	// or exactly one succeeds and the other is rejected by CAS.
-	// What MUST hold: job is SUCCEEDED exactly once; outbox has exactly
-	// one ARTIFACT_READY; delivery has exactly one row; no artifact is
-	// double-finalized.
+	// What MUST hold: the job is DELIVERING until its explicit delivery
+	// plan completes; no legacy ARTIFACT_READY outbox is emitted; the
+	// delivery row is unique; no artifact is double-finalized.
 	var successCount int
 	for i, r := range results {
 		if r.err == nil {
@@ -131,7 +133,7 @@ func TestFinalize_Concurrent(t *testing.T) {
 
 	var jobStatus string
 	require.NoError(t, env.db.QueryRow(`SELECT status FROM jobs WHERE job_id='J9'`).Scan(&jobStatus))
-	require.Equal(t, "SUCCEEDED", jobStatus)
+	require.Equal(t, "DELIVERING", jobStatus, "explicit delivery plans keep the job in DELIVERING")
 
 	var n int
 	require.NoError(t, env.db.QueryRow(`SELECT COUNT(*) FROM outbox_events WHERE event_type='ARTIFACT_READY'`).Scan(&n))
@@ -147,7 +149,7 @@ func TestFinalize_Concurrent(t *testing.T) {
 
 func TestFinalize_BlobPromotedButDBCASMissed(t *testing.T) {
 	env := setupTestEnv(t)
-	env.seedJob("J10", "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
+	env.seedJob("J10", "AWAITING_ARTIFACT", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
 	env.seedAttempt("J10", 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
 
 	cmd := beginUploadDefaultCmd("J10")
@@ -203,7 +205,7 @@ func TestFinalize_BlobPromotedButDBCASMissed(t *testing.T) {
 
 func TestFinalize_DeliveryIsIdempotent(t *testing.T) {
 	env := setupTestEnv(t)
-	env.seedJob("J13", "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
+	env.seedJob("J13", "AWAITING_ARTIFACT", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
 	env.seedAttempt("J13", 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
 	cmd := beginUploadDefaultCmd("J13")
 	payload := []byte("delivery-once")
@@ -247,7 +249,7 @@ func TestFinalize_DeliveryIsIdempotent(t *testing.T) {
 
 func TestFinalize_ArtifactREADYMeansBlobExists(t *testing.T) {
 	env := setupTestEnv(t)
-	env.seedJob("J15", "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
+	env.seedJob("J15", "AWAITING_ARTIFACT", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
 	env.seedAttempt("J15", 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
 	cmd := beginUploadDefaultCmd("J15")
 	payload := []byte("artifact-ready-test-blob-payload")
@@ -287,7 +289,7 @@ func TestFinalize_ArtifactREADYMeansBlobExists(t *testing.T) {
 
 func TestFinalize_DoubleWorkerSameTask_SecondRejected(t *testing.T) {
 	env := setupTestEnv(t)
-	env.seedJob("J16", "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
+	env.seedJob("J16", "AWAITING_ARTIFACT", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
 	env.seedAttempt("J16", 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
 
 	cmd := beginUploadDefaultCmd("J16")

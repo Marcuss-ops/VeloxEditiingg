@@ -74,7 +74,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 		authReader,
 		nil, // clock.System default (production)
 		deliveryCounter,
-	)
+	).WithFFProbeMode(cfg.Runtime.FFProbeVerifyMode)
 	log.Printf("[BOOTSTRAP] artifacts.Service ready (single-tx SUCCEEDED gate via FinalizationWriter + DeliveryPlanResolver)")
 
 	// ── Chunked upload service ───────────────────────────────────────

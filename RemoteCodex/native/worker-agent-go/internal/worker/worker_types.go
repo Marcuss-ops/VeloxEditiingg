@@ -285,6 +285,10 @@ type Worker struct {
 	// bootstrap profile, headless tests, etc.) skips the lease step
 	// without any other behaviour change.
 	clipCache *workercache.Cache
+	// canonicalAssetCache is the typed AssetRegistry → ContentAddressedCache
+	// facade used by the download adapter. clipCache remains for legacy lease
+	// call sites while new paths depend on this single typed boundary.
+	canonicalAssetCache workercache.ContentAddressedCache
 
 	// PR-3.6 / F4: worker-side resource sampler. Powers Heartbeat.resources
 	// (cumulative typed counters → master F2 decodes + delta-converts) AND

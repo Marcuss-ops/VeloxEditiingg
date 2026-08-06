@@ -32,6 +32,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"velox-shared/contract/domain"
 )
 
 // Sentinel errors. Callers MUST use errors.Is to inspect — string match
@@ -46,7 +48,7 @@ var (
 	// ErrTransitionConflict signals that the CAS step was raced by
 	// another writer (concurrent ClaimAttempt or another legitimate
 	// completion path). Caller can re-read and decide.
-	ErrTransitionConflict = errors.New("completion: transition conflict")
+	ErrTransitionConflict = domain.NewLeaseConflict("completion: transition conflict")
 
 	// ErrFenceMismatch signals that the input FenceTuple is malformed
 	// (empty strings or negative revision). This is a programmer error

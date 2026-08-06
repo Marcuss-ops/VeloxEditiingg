@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"velox-shared/assetref"
 )
 
 // fakeTransferer is the byte-pipeline fake used by the manager tests. Each
@@ -32,7 +34,7 @@ func (f *fakeTransferer) Transfer(ctx context.Context, reportCtx context.Context
 	if f.transfer != nil {
 		return f.transfer(ctx, reportCtx, req, onProgress)
 	}
-	return TransferResult{LocalPath: "/fake/" + req.AssetKey + ".mp4", Bytes: req.SizeBytes, SHA256: "sha"}, nil
+	return TransferResult{LocalPath: "/fake/" + string(req.AssetKey) + ".mp4", Bytes: req.SizeBytes, SHA256: "sha"}, nil
 }
 
 // newTestManager builds a manager with a fixed clock and one dispatcher.
@@ -542,9 +544,9 @@ func TestManager_QueueOrdering(t *testing.T) {
 				return TransferResult{}, ctx.Err()
 			}
 			orderMu.Lock()
-			order = append(order, req.AssetKey)
+			order = append(order, string(req.AssetKey))
 			orderMu.Unlock()
-			return TransferResult{LocalPath: "/o/" + req.AssetKey + ".mp4", Bytes: 1, SHA256: "sha"}, nil
+			return TransferResult{LocalPath: "/o/" + string(req.AssetKey) + ".mp4", Bytes: 1, SHA256: "sha"}, nil
 		},
 	}
 	m := newTestManager(t, tf)
@@ -927,7 +929,7 @@ func TestManager_JobSnapshot_ByteWeighted(t *testing.T) {
 				size = bigBytes
 			}
 			_, results[i] = m.Resolve(context.Background(), DownloadRequest{
-				JobID: "job-0", AssetKey: id, AssetID: id, SizeBytes: size, Priority: DefaultPriority,
+				JobID: "job-0", AssetKey: assetref.AssetKey(id), AssetID: id, SizeBytes: size, Priority: DefaultPriority,
 			})
 		}(i, id)
 	}

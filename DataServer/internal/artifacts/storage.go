@@ -105,6 +105,18 @@ func PromoteToCanonical(blobStore store.BlobStore, stagingPath, sha256Hex, exten
 
 	src, err := os.Open(filepath.Clean(stagingPath))
 	if err != nil {
+		// Concurrent-finalize tolerance: a peer finalizer may have already
+		// promoted the SAME content-addressed key and removed the shared
+		// staging file before this caller opened it. The final path is
+		// deterministic from (sha256, ext) — if it already exists, the
+		// promotion happened and this call is an idempotent no-op that
+		// returns the same key (the CAS gate downstream still rejects the
+		// loser with ErrTransitionConflict). Any other failure is real.
+		if os.IsNotExist(err) {
+			if _, statErr := os.Stat(finalPath); statErr == nil {
+				return relKey, nil
+			}
+		}
 		return "", fmt.Errorf("artifacts: PromoteToCanonical open staging: %w", err)
 	}
 	defer src.Close()

@@ -47,7 +47,7 @@ func TestFinalizeVerified_StampsRetryBudgetFromPlan(t *testing.T) {
 
 func TestFinalizeVerified_MissingPlanFailsClosedWithoutDeliveries(t *testing.T) {
 	db := openPropagationDB(t)
-	seedPhase5Fixture(t, db, phase5Fixture{JobID: "J-no-plan", WorkerID: "w", LeaseID: "l", Revision: 1, AttemptNumber: 1, ArtifactID: "art-no-plan", UploadID: "up-no-plan"})
+	seedPhase5Fixture(t, db, phase5Fixture{JobID: "J-no-plan", WorkerID: "w", LeaseID: "l", Revision: 1, AttemptNumber: 1, ArtifactID: "art-no-plan", UploadID: "up-no-plan", RequestJSON: `{}`})
 	resolver := deliveries.NewSQLiteDeliveryPlanResolver(db)
 	writer := artifacts.NewSQLiteFinalizeWriter(store.NewSQLiteArtifactFinalizer(db, resolver))
 	_, err := writer.FinalizeVerified(context.Background(), artifacts.FinalizeVerifiedCommand{UploadID: "up-no-plan", ArtifactID: "art-no-plan", JobID: "J-no-plan", WorkerID: "w", LeaseID: "l", AttemptNumber: 1, ExpectedRevision: 1, StorageProvider: "local", StorageKey: "artifacts/J-no-plan/1", SHA256: "deadbeef", SizeBytes: 1024, MIMEType: "video/mp4", VerifiedAt: time.Now().UTC()})
@@ -60,6 +60,31 @@ func TestFinalizeVerified_MissingPlanFailsClosedWithoutDeliveries(t *testing.T) 
 	}
 	if count != 0 {
 		t.Fatalf("missing explicit plan created %d deliveries, want 0", count)
+	}
+}
+
+func TestFinalizeVerified_RenderOnlySucceedsWithoutPlan(t *testing.T) {
+	db := openPropagationDB(t)
+	seedPhase5Fixture(t, db, phase5Fixture{JobID: "J-render-only", WorkerID: "w", LeaseID: "l", Revision: 1, AttemptNumber: 1, ArtifactID: "art-render-only", UploadID: "up-render-only", RequestJSON: `{"render_only":true}`, Status: "AWAITING_ARTIFACT"})
+	resolver := deliveries.NewSQLiteDeliveryPlanResolver(db)
+	writer := artifacts.NewSQLiteFinalizeWriter(store.NewSQLiteArtifactFinalizer(db, resolver))
+	_, err := writer.FinalizeVerified(context.Background(), artifacts.FinalizeVerifiedCommand{UploadID: "up-render-only", ArtifactID: "art-render-only", JobID: "J-render-only", WorkerID: "w", LeaseID: "l", AttemptNumber: 1, ExpectedRevision: 1, StorageProvider: "local", StorageKey: "artifacts/J-render-only/1", SHA256: "deadbeef", SizeBytes: 1024, MIMEType: "video/mp4", VerifiedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	if err := db.QueryRow(`SELECT status FROM jobs WHERE job_id='J-render-only'`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "SUCCEEDED" {
+		t.Fatalf("job status=%s want SUCCEEDED", status)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM job_deliveries WHERE artifact_id='art-render-only'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("render-only created %d deliveries, want 0", count)
 	}
 }
 

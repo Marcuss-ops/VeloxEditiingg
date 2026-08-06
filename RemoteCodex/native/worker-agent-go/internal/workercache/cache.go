@@ -80,9 +80,10 @@ type Entry struct {
 
 // Sentinel errors so callers can branch via errors.Is, not string match.
 var (
-	ErrNotFound  = errors.New("workercache: cached asset not found")
-	ErrDuplicate = errors.New("workercache: cached asset already exists")
-	ErrEmptyID   = errors.New("workercache: asset_key is required")
+	ErrNotFound           = errors.New("workercache: cached asset not found")
+	ErrDuplicate          = errors.New("workercache: cached asset already exists")
+	ErrEmptyID            = errors.New("workercache: asset_key is required")
+	ErrInvalidContentHash = errors.New("workercache: content_hash must be a SHA-256 digest")
 )
 
 // Cache is the SQLite-backed index over cached worker assets.
@@ -167,6 +168,13 @@ func (c *Cache) Store(ctx context.Context, e Entry) error {
 	if e.LocalPath == "" {
 		return fmt.Errorf("workercache.Store: local_path is required")
 	}
+	if e.ContentHash != "" {
+		canonical, err := assetref.ParseContentHash(string(e.ContentHash))
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidContentHash, err)
+		}
+		e.ContentHash = canonical
+	}
 	if e.CreatedAt.IsZero() {
 		e.CreatedAt = time.Now().UTC()
 	}
@@ -238,6 +246,13 @@ func (c *Cache) MarkDownloadComplete(ctx context.Context, assetKey, localPath st
 // complete without the manager having first verified and atomically promoted
 // its bytes; an empty hash is retained only for legacy callers.
 func (c *Cache) MarkDownloadCompleteWithHash(ctx context.Context, assetKey, localPath string, sizeBytes int64, hash assetref.ContentHash) error {
+	if hash != "" {
+		canonical, err := assetref.ParseContentHash(string(hash))
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidContentHash, err)
+		}
+		hash = canonical
+	}
 	return c.markDownloadComplete(ctx, assetKey, localPath, sizeBytes, string(hash))
 }
 

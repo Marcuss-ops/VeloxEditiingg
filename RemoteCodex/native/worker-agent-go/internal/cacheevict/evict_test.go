@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"velox-worker-agent/internal/workercache"
 )
@@ -85,6 +86,26 @@ func TestRun_ExecuteDeletesOnlyExactSelectedAsset(t *testing.T) {
 	}
 	if _, ok, err := index.Find(context.Background(), "clip-stock-ab"); err != nil || !ok {
 		t.Fatalf("unselected index row changed: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestRun_ExecuteRefusesActiveReservationWithoutMutation(t *testing.T) {
+	root := t.TempDir()
+	path := writeCacheFile(t, root, "future-asset_0123456789ab.mp4", []byte("future"))
+	index := openIndex(t)
+	if err := index.Store(context.Background(), workercache.Entry{AssetKey: "future-asset", LocalPath: path, DownloadComplete: true}); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	if err := index.Reserve(context.Background(), "future-asset", "future-job", time.Now().UTC().Add(time.Hour)); err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+
+	_, err := Run(context.Background(), Options{Root: root, AssetIDs: []string{"future-asset"}, Index: index, Execute: true})
+	if !errors.Is(err, ErrActiveReservation) {
+		t.Fatalf("Run err=%v, want ErrActiveReservation", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("reserved file removed: %v", err)
 	}
 }
 

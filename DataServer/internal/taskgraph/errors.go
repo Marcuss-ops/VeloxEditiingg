@@ -1,13 +1,17 @@
 package taskgraph
 
-import "errors"
+import (
+	"errors"
+
+	"velox-shared/contract/domain"
+)
 
 // ErrTaskNotFound is returned when a task ID does not match any row.
 var ErrTaskNotFound = errors.New("taskgraph: task not found")
 
 // ErrTransitionConflict is returned when the CAS precondition (status or
 // revision) does not match.
-var ErrTransitionConflict = errors.New("taskgraph: transition conflict (status or revision mismatch)")
+var ErrTransitionConflict = domain.NewLeaseConflict("taskgraph: transition conflict (status or revision mismatch)")
 
 // ErrLeaseMismatch is returned when a worker-identity CAS tuple does not
 // match the stored lease.

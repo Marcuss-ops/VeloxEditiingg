@@ -56,7 +56,8 @@ type Service struct {
 	// deployment cannot silently run the gate with no counter.
 	deliveryCounter JobDeliveryCounter
 
-	uploadTTL time.Duration
+	uploadTTL   time.Duration
+	ffprobeMode ffprobeInvariantMode
 }
 
 // NewService composes the dependencies Service needs.
@@ -131,5 +132,15 @@ func NewService(
 // WithUploadTTL adjusts the upload session expiry window (tests).
 func (s *Service) WithUploadTTL(d time.Duration) *Service {
 	s.uploadTTL = d
+	return s
+}
+
+// WithFFProbeMode injects the pre-commit ffprobe invariant mode
+// parsed from the captured config value (VELOX_FFPROBE_VERIFY_ON_FINALIZE
+// is read exactly once at bootstrap; the Service never consults the
+// process environment). Empty/invalid literals stay Off, matching the
+// strict-literal contract documented in service_finalize_ffprobe.go.
+func (s *Service) WithFFProbeMode(mode string) *Service {
+	s.ffprobeMode = parseFFProbeMode(mode)
 	return s
 }

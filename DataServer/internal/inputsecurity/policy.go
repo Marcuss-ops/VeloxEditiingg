@@ -30,6 +30,8 @@ type Policy struct {
 	Resolver              IPResolver
 	Transport             http.RoundTripper
 	Metrics               *Metrics
+	// SystemPath is the captured executable search path from bootstrap.
+	SystemPath string
 
 	// AllowPrivateNetworks exists solely for hermetic unit tests that rewrite
 	// a public provider hostname to httptest.Server. Production construction

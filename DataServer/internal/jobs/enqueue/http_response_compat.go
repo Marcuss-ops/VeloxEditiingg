@@ -35,7 +35,6 @@ package enqueue
 
 import (
 	"database/sql"
-	"velox-server/internal/config"
 	"velox-shared/payload"
 )
 
@@ -52,7 +51,7 @@ import (
 // The legacy alias probe chain tolerates rows written before PR15.6 that
 // still carry `id` (HTTP01 subtest basic_legacy_alias_fallback) — `id` is
 // consulted LAST so canonical `job_id` wins when present.
-func RenderHTTPBoundaryJobResponse(job map[string]interface{}, full bool, dbs ...*sql.DB) map[string]interface{} {
+func RenderHTTPBoundaryJobResponse(job map[string]interface{}, full bool, dataDir string, dbs ...*sql.DB) map[string]interface{} {
 	var db *sql.DB
 	if len(dbs) > 0 {
 		db = dbs[0]
@@ -73,7 +72,7 @@ func RenderHTTPBoundaryJobResponse(job map[string]interface{}, full bool, dbs ..
 		"started_at":          job["started_at"],
 		"completed_at":        job["completed_at"],
 		"output_path":         payload.FirstString(job, "output_path"),
-		"drive_output_folder": ResolveDriveOutputFolderReference(config.Getenv("VELOX_DATA_DIR"), payload.FirstString(job, "drive_output_folder"), db),
+		"drive_output_folder": ResolveDriveOutputFolderReference(dataDir, payload.FirstString(job, "drive_output_folder"), db),
 		"scene_count":         job["scene_count"],
 		"voiceover_count":     job["voiceover_count"],
 		"video_mode":          payload.FirstString(job, "video_mode"),

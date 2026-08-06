@@ -2,7 +2,7 @@ package completion
 
 import (
 	"context"
-	"strings"
+	"errors"
 	"time"
 )
 
@@ -50,13 +50,9 @@ func (s *ReconcileSupervisor) gcSeen() {
 	}
 }
 
-// isReconcileConflict uses substring matching to avoid an import
-// cycle on the sentinel errors defined in types.go. The wording
-// is part of the wire contract.
+// isReconcileConflict uses the typed completion sentinels. Reconcile must
+// never infer a CAS race from a human-readable error message: arbitrary
+// provider/database text must remain an escalation, not a silent no-op.
 func isReconcileConflict(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "transition conflict") || strings.Contains(msg, "stale report")
+	return errors.Is(err, ErrTransitionConflict) || errors.Is(err, ErrStaleReport)
 }

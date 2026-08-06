@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"velox-server/internal/statemachine"
 )
 
 // GetUploadSession returns a session by ID, or (nil, nil) when missing.
@@ -68,6 +70,16 @@ func (r *SQLiteUploadRepository) UpdateUploadStatus(ctx context.Context, uploadI
 	if fields.Status == nil {
 		return fmt.Errorf("store: UpdateUploadStatus: status is required")
 	}
+	var currentStatus string
+	if err := r.db.QueryRowContext(ctx, `SELECT status FROM artifact_uploads WHERE upload_id = ?`, uploadID).Scan(&currentStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: upload=%s", ErrUploadStateInvalid, uploadID)
+		}
+		return fmt.Errorf("store: UpdateUploadStatus: read current status: %w", err)
+	}
+	if err := statemachine.DefaultRegistry().Validate(statemachine.DomainArtifactUpload, currentStatus, *fields.Status, ""); err != nil {
+		return fmt.Errorf("store: UpdateUploadStatus: %w", err)
+	}
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE artifact_uploads
 		SET status = ?,
@@ -100,6 +112,9 @@ func (r *SQLiteUploadRepository) UpdateUploadStatus(ctx context.Context, uploadI
 // match). Used by Service.Finalize to serialize concurrent
 // finalize callers at the SQL layer.
 func (r *SQLiteUploadRepository) TransitionUploadStatus(ctx context.Context, uploadID, from, to string) error {
+	if err := statemachine.DefaultRegistry().Validate(statemachine.DomainArtifactUpload, from, to, ""); err != nil {
+		return fmt.Errorf("store: TransitionUploadStatus: %w", err)
+	}
 	if uploadID == "" || from == "" || to == "" {
 		return fmt.Errorf("store: TransitionUploadStatus: missing required arg")
 	}

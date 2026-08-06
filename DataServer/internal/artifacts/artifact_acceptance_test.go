@@ -47,7 +47,7 @@ func TestArtifactAcceptance_HashMismatchNeverFinalizesAndCleansTemporaryFile(t *
 
 func TestArtifactAcceptance_ReceiveRecordsMasterSHAAndFinalizeReachesReadyWithDurableBlob(t *testing.T) {
 	env := setupTestEnv(t)
-	env.seedJob("J-accept-ready", "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
+	env.seedJob("J-accept-ready", "AWAITING_ARTIFACT", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
 	env.seedAttempt("J-accept-ready", 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
 
 	payload := []byte("small deterministic render payload")
@@ -103,7 +103,7 @@ func TestArtifactAcceptance_FFProbeValidatesRenderedVideoAndRejectsCorruptBytes(
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	env.seedJob("J-accept-media", "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
+	env.seedJob("J-accept-media", "AWAITING_ARTIFACT", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
 	env.seedAttempt("J-accept-media", 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
 	session, err := env.svc.BeginUpload(ctx, beginUploadDefaultCmd("J-accept-media"))
 	require.NoError(t, err)
@@ -117,7 +117,7 @@ func TestArtifactAcceptance_FFProbeValidatesRenderedVideoAndRejectsCorruptBytes(
 	require.NoError(t, err, "ffprobe output=%s", probeOut)
 	require.NotEmpty(t, probeOut)
 
-	t.Setenv("VELOX_FFPROBE_VERIFY_ON_FINALIZE", "enforce")
+	env.svc.WithFFProbeMode("enforce")
 	artifact, err := env.svc.Finalize(ctx, FinalizeArtifactCommand{
 		UploadID: session.UploadID, JobID: "J-accept-media", WorkerID: testWorkerID,
 		LeaseID: testLeaseID, AttemptNumber: 1, ExpectedRevision: testRevision,
@@ -127,7 +127,7 @@ func TestArtifactAcceptance_FFProbeValidatesRenderedVideoAndRejectsCorruptBytes(
 
 	// A corrupt/non-media payload is rejected by ffprobe before it can be
 	// accepted as a rendered video. The upload itself remains unfinalized.
-	env.seedJob("J-accept-corrupt", "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
+	env.seedJob("J-accept-corrupt", "AWAITING_ARTIFACT", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
 	env.seedAttempt("J-accept-corrupt", 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
 	corruptSession, err := env.svc.BeginUpload(ctx, beginUploadDefaultCmd("J-accept-corrupt"))
 	require.NoError(t, err)

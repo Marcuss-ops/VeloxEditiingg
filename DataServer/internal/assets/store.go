@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"velox-server/internal/config"
 	"velox-server/internal/inputsecurity"
 )
 
@@ -39,12 +38,13 @@ func (a *ResolvedAsset) VeloxReference() string {
 
 // Store manages the canonical local asset directory.
 type Store struct {
-	dataDir      string
-	assetDir     string
-	tmpDir       string
-	maxBytes     int64
-	allowedRoots []string
-	security     inputsecurity.Policy
+	dataDir               string
+	assetDir              string
+	tmpDir                string
+	maxBytes              int64
+	allowedRoots          []string
+	security              inputsecurity.Policy
+	allowRewriteDevBypass bool
 }
 
 // NewStore creates a content-addressed store under <dataDir>/worker_downloads/assets/audio.
@@ -61,12 +61,20 @@ func NewStore(dataDir string, maxBytes int64, allowedRoots []string) *Store {
 	policy.QuarantineDir = filepath.Join(trimmed, "worker_downloads", "quarantine")
 	policy.AllowedRoots = append([]string(nil), roots...)
 	return &Store{
-		dataDir:      trimmed,
-		assetDir:     filepath.Join(trimmed, "worker_downloads", "assets", "audio"),
-		tmpDir:       tmpDir,
-		maxBytes:     maxBytes,
-		allowedRoots: roots,
-		security:     policy,
+		dataDir:               trimmed,
+		assetDir:              filepath.Join(trimmed, "worker_downloads", "assets", "audio"),
+		tmpDir:                tmpDir,
+		maxBytes:              maxBytes,
+		allowedRoots:          roots,
+		security:              policy,
+		allowRewriteDevBypass: false,
+	}
+}
+
+// SetRewriteDevBypass configures the explicitly captured development bypass.
+func (s *Store) SetRewriteDevBypass(enabled bool) {
+	if s != nil {
+		s.allowRewriteDevBypass = enabled
 	}
 }
 
@@ -112,8 +120,8 @@ func (s *Store) allowedLocalPath(source string) bool {
 	// from /tmp/velox-pilot/staging without expanding allowedRoots by structural
 	// surgery on the bootstrap wiring. A loud audit log keeps an engaged bypass
 	// visible in master.log.
-	if config.Getenv("VELOX_ASSET_REWRITE_DEV_BYPASS") == "true" {
-		fmt.Fprintf(os.Stderr, "[ASSETS] WARNING: dev-bypass engaged (VELOX_ASSET_REWRITE_DEV_BYPASS=true) source=%q\n", source)
+	if s.allowRewriteDevBypass {
+		fmt.Fprintf(os.Stderr, "[ASSETS] WARNING: dev-bypass engaged source=%q\n", source)
 		return true
 	}
 	trimmed := strings.TrimSpace(source)

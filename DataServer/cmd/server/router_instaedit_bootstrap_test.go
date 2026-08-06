@@ -40,7 +40,6 @@ func newRouterWithInstaEditBundle(t *testing.T, ie InstaEditRouteDeps) (*gin.Eng
 			DBPath: filepath.Join(root, "velox.db"),
 		},
 		Workers: config.WorkersConfig{
-			AllowedWorkers:   "worker-a",
 			AllowedWorkerIDs: []string{"worker-a"},
 			MaxJobAttempts:   3,
 			HeartbeatTimeout: 120,

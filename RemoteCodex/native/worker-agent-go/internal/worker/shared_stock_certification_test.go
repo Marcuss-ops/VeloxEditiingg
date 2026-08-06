@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"velox-shared/assetref"
 	"velox-worker-agent/internal/downloader"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
@@ -170,10 +171,10 @@ func TestSharedStockDownloadProgressCertification(t *testing.T) {
 			results[i].asset, results[i].err = manager.Resolve(context.Background(), downloader.DownloadRequest{
 				JobID:     fmt.Sprintf("shared-stock-job-%02d", i),
 				TaskID:    fmt.Sprintf("shared-stock-task-%02d", i),
-				AssetKey:  "shared-stock-001",
+				AssetKey:  assetref.AssetKey("shared-stock-001"),
 				AssetID:   "shared-stock-001",
 				Role:      downloader.AssetRoleStock,
-				SHA256:    digest,
+				SHA256:    assetref.ContentHash(digest),
 				SizeBytes: int64(len(data)),
 				Priority:  downloader.DefaultPriority,
 			})
@@ -272,10 +273,10 @@ func TestSharedStockDownloadProgressCertification(t *testing.T) {
 	cacheHit, err := manager.Resolve(context.Background(), downloader.DownloadRequest{
 		JobID:     "shared-stock-cache-hit",
 		TaskID:    "shared-stock-cache-hit-task",
-		AssetKey:  "shared-stock-001",
+		AssetKey:  assetref.AssetKey("shared-stock-001"),
 		AssetID:   "shared-stock-001",
 		Role:      downloader.AssetRoleStock,
-		SHA256:    digest,
+		SHA256:    assetref.ContentHash(digest),
 		SizeBytes: int64(len(data)),
 		Priority:  downloader.DefaultPriority,
 	})

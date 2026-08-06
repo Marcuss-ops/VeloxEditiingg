@@ -15,7 +15,7 @@ import (
 )
 
 const phase5Schema = `
-CREATE TABLE jobs (job_id TEXT PRIMARY KEY,status TEXT,revision INTEGER,completed_at TEXT,updated_at TEXT,migrated_at TEXT);
+CREATE TABLE jobs (job_id TEXT PRIMARY KEY,status TEXT,revision INTEGER,completed_at TEXT,updated_at TEXT,migrated_at TEXT,request_json TEXT NOT NULL DEFAULT '{}');
 CREATE TABLE artifacts (id TEXT PRIMARY KEY,job_id TEXT,attempt_id INTEGER,type TEXT,storage_provider TEXT,storage_key TEXT,storage_url TEXT,local_path TEXT,sha256 TEXT,size_bytes INTEGER,duration_seconds REAL,duration_ms INTEGER,mime_type TEXT,status TEXT,verified_at TEXT,created_at TEXT);
 CREATE TABLE artifact_uploads (upload_id TEXT PRIMARY KEY,artifact_id TEXT,job_id TEXT,attempt_number INTEGER,worker_id TEXT,lease_id TEXT,status TEXT,temporary_storage_key TEXT,expected_size_bytes INTEGER,expected_sha256 TEXT,expected_revision INTEGER,received_size_bytes INTEGER,received_sha256 TEXT,created_at TEXT,expires_at TEXT,completed_at TEXT);
 CREATE TABLE outbox_events (aggregate_type TEXT,aggregate_id TEXT,event_type TEXT,payload_json TEXT,status TEXT,available_at TEXT,created_at TEXT);
@@ -45,12 +45,22 @@ type phase5Fixture struct {
 	JobID, WorkerID, LeaseID string
 	Revision, AttemptNumber  int
 	ArtifactID, UploadID     string
+	RequestJSON              string
+	Status                   string
 }
 
 func seedPhase5Fixture(t *testing.T, db *sql.DB, f phase5Fixture) {
 	t.Helper()
 	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := db.Exec(`INSERT INTO jobs (job_id,status,revision,updated_at,migrated_at) VALUES (?,'RUNNING',?,?,?)`, f.JobID, f.Revision, now, now); err != nil {
+	requestJSON := f.RequestJSON
+	if requestJSON == "" {
+		requestJSON = `{}`
+	}
+	status := f.Status
+	if status == "" {
+		status = "AWAITING_ARTIFACT"
+	}
+	if _, err := db.Exec(`INSERT INTO jobs (job_id,status,revision,updated_at,migrated_at,request_json) VALUES (?,?,?,?,?,?)`, f.JobID, status, f.Revision, now, now, requestJSON); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO artifacts (id,job_id,attempt_id,type,storage_provider,status,created_at) VALUES (?,?,?,'render','local','STAGING',?)`, f.ArtifactID, f.JobID, f.AttemptNumber, now); err != nil {

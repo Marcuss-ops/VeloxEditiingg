@@ -44,10 +44,10 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 	jobID, role := telemetry.CacheAccessContextFromContext(ctx)
 	asset, err := w.assetDownloadManager().Resolve(ctx, downloader.DownloadRequest{
 		JobID:     jobID,
-		AssetKey:  assetID,
+		AssetKey:  assetref.AssetKey(assetID),
 		AssetID:   assetID,
 		Role:      downloader.RoleFromString(role),
-		SHA256:    expectedSHA256,
+		SHA256:    assetref.ContentHash(expectedSHA256),
 		SizeBytes: expectedSizeBytes,
 		Source:    "master_asset_bridge",
 		Priority:  downloader.DefaultPriority,
@@ -147,7 +147,7 @@ func emitAssetProgressCheckpoint(ctx context.Context, snap downloader.DownloadSn
 		sort.Strings(jobs)
 		msg := &pb.AssetDownloadProgress{
 			WorkerId: w.config.WorkerID, TransferId: snap.TransferID,
-			AssetKey: snap.AssetKey, AssetId: snap.AssetID, Role: string(snap.Role),
+			AssetKey: string(snap.AssetKey), AssetId: snap.AssetID, Role: string(snap.Role),
 			State: string(snap.State), BytesDownloaded: snap.BytesDownloaded,
 			BytesTotal: snap.BytesTotal, BytesPerSecond: snap.ThroughputBytesPerSecond,
 			EtaSeconds: snap.ETASeconds, Attempt: int32(snap.Attempt),
@@ -155,7 +155,7 @@ func emitAssetProgressCheckpoint(ctx context.Context, snap downloader.DownloadSn
 			QueuedAtUnixMs: unixMillis(snap.QueuedAt), StartedAtUnixMs: unixMillis(snap.StartedAt),
 			UpdatedAtUnixMs: unixMillis(snap.UpdatedAt), CompletedAtUnixMs: unixMillis(snap.CompletedAt),
 			JobIds: jobs, TaskId: snap.TaskID, SceneIds: append([]string(nil), snap.SceneIDs...),
-			MimeType: snap.MIMEType, Sha256: snap.SHA256, ErrorCode: snap.ErrorCode, ErrorDetail: snap.ErrorDetail,
+			MimeType: snap.MIMEType, Sha256: string(snap.SHA256), ErrorCode: snap.ErrorCode, ErrorDetail: snap.ErrorDetail,
 			CheckpointSequence: snap.CheckpointSequence,
 			TransferGeneration: snap.TransferGeneration,
 		}
@@ -281,7 +281,24 @@ type masterAssetTransferer struct{ w *Worker }
 // still be served as a verified hit without a master round-trip.
 func (t *masterAssetTransferer) Check(ctx context.Context, reportCtx context.Context, req downloader.DownloadRequest) (downloader.CacheCheckResult, error) {
 	w := t.w
-	probeSHA, probeSize := req.SHA256, req.SizeBytes
+	key := assetref.AssetKey(req.AssetKey)
+	if w.canonicalAssetCache != nil {
+		if entry, found, err := w.canonicalAssetCache.Find(ctx, key); err != nil {
+			return downloader.CacheCheckResult{}, err
+		} else if found && entry.DownloadComplete {
+			requestedHash := req.SHA256
+			if requestedHash == "" {
+				requestedHash = entry.ContentHash
+			}
+			if (requestedHash == "" || entry.ContentHash == requestedHash) &&
+				(req.SizeBytes <= 0 || entry.SizeBytes == req.SizeBytes) {
+				if info, statErr := os.Stat(entry.LocalPath); statErr == nil && info.Mode().IsRegular() {
+					return downloader.CacheCheckResult{CacheHit: true, LocalPath: entry.LocalPath, SHA256: entry.ContentHash}, nil
+				}
+			}
+		}
+	}
+	probeSHA, probeSize := string(req.SHA256), req.SizeBytes
 	if probeSHA == "" || probeSize <= 0 {
 		if remembered, ok := w.rememberedAssetIntegrity(req.AssetID); ok {
 			probeSHA, probeSize = remembered.SHA256, remembered.SizeBytes
@@ -296,7 +313,7 @@ func (t *masterAssetTransferer) Check(ctx context.Context, reportCtx context.Con
 				h.SetMetadata("asset_id", req.AssetID)
 				h.Complete()
 			}
-			return downloader.CacheCheckResult{CacheHit: true, LocalPath: existing, SHA256: probeSHA}, nil
+			return downloader.CacheCheckResult{CacheHit: true, LocalPath: existing, SHA256: assetref.ContentHash(probeSHA)}, nil
 		}
 	}
 	return downloader.CacheCheckResult{}, nil
@@ -346,7 +363,7 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 	// Reserve this asset's partial before cleanup so an active transfer in
 	// this process cannot be mistaken for an orphan. The cleanup is scoped
 	// to this worker's asset cache and never touches final cache entries.
-	partialPath := assetPartialPath(cacheDir, assetID, req.SHA256)
+	partialPath := assetPartialPath(cacheDir, assetID, string(req.SHA256))
 	deactivatePartial := markAssetPartialActive(partialPath)
 	defer deactivatePartial()
 	if _, cleanupErr := cleanupOrphanedAssetPartials(cacheDir, 24*time.Hour); cleanupErr != nil {
@@ -365,7 +382,7 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 			}
 		}
 
-		resumeOffset := assetPartialSize(cacheDir, assetID, req.SHA256)
+		resumeOffset := assetPartialSize(cacheDir, assetID, string(req.SHA256))
 		reqHTTP, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 		if err != nil {
 			return downloader.TransferResult{}, err
@@ -385,7 +402,7 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 
 		if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable && resumeOffset > 0 {
 			resp.Body.Close()
-			removeAssetPartial(cacheDir, assetID, req.SHA256)
+			removeAssetPartial(cacheDir, assetID, string(req.SHA256))
 			lastErr = fmt.Errorf("range offset %d is no longer valid", resumeOffset)
 			continue
 		}
@@ -422,7 +439,7 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 				// The upstream did not honor the requested offset safely.
 				// Discard the partial before retrying so the next attempt
 				// cannot concatenate a full/ambiguous response onto it.
-				removeAssetPartial(cacheDir, assetID, req.SHA256)
+				removeAssetPartial(cacheDir, assetID, string(req.SHA256))
 				lastErr = fmt.Errorf("invalid Content-Range for resume offset %d: %q", resumeOffset, contentRange)
 				continue
 			}
@@ -448,7 +465,7 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 			}
 			resp.Body = &assetProgressBody{src: resp.Body, onProgress: onProgress, done: resumeOffset}
 		}
-		localPath, downloadedBytes, actualSHA, verifyDuration, err := writeVeloxAssetToCacheAtOffset(cacheDir, assetID, req.SHA256, req.SizeBytes, resp, resumeOffset)
+		localPath, downloadedBytes, actualSHA, verifyDuration, err := writeVeloxAssetToCacheAtOffset(cacheDir, assetID, string(req.SHA256), req.SizeBytes, resp, resumeOffset)
 		resp.Body.Close()
 		if err != nil {
 			telemetry.GetPrometheusMetrics().RecordCacheVerify(verifyDuration)
@@ -469,7 +486,18 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 		// Remember the self-verified digest so later partial-metadata accesses
 		// for the same asset become verified cache hits (no re-download).
 		w.rememberAssetIntegrity(assetID, actualSHA, downloadedBytes)
-		return downloader.TransferResult{LocalPath: localPath, Bytes: downloadedBytes, SHA256: actualSHA}, nil
+		verifiedHash := assetref.ContentHash(actualSHA)
+		if w.canonicalAssetCache != nil {
+			key := assetref.AssetKey(req.AssetKey)
+			entry := workercache.Entry{AssetKey: key, LocalPath: localPath}
+			if err := w.canonicalAssetCache.Store(ctx, entry); err != nil && !errors.Is(err, workercache.ErrDuplicate) {
+				return downloader.TransferResult{}, fmt.Errorf("register verified asset %s: %w", key, err)
+			}
+			if err := w.canonicalAssetCache.MarkDownloadCompleteWithHash(ctx, key, localPath, downloadedBytes, verifiedHash); err != nil {
+				return downloader.TransferResult{}, fmt.Errorf("commit verified asset %s: %w", key, err)
+			}
+		}
+		return downloader.TransferResult{LocalPath: localPath, Bytes: downloadedBytes, SHA256: verifiedHash}, nil
 	}
 
 	if lastErr == nil {
@@ -534,17 +562,18 @@ func parseAssetContentRange(value string) (start, end, total int64, err error) {
 // The content-addressed byte cache remains the data source; this index owns
 // leases, protected snapshots and eviction decisions.
 func (w *Worker) syncClipCache(ctx context.Context, assetID, localPath string, sizeBytes int64, hash assetref.ContentHash) error {
-	if w.clipCache == nil {
+	if w.canonicalAssetCache == nil {
 		return nil
 	}
-	entry := workercache.Entry{AssetKey: assetref.AssetKey(assetID), ContentHash: hash, LocalPath: localPath, SizeBytes: sizeBytes, DownloadComplete: true}
-	if err := w.clipCache.Store(ctx, entry); err != nil {
+	key := assetref.AssetKey(assetID)
+	entry := workercache.Entry{AssetKey: key, ContentHash: hash, LocalPath: localPath, SizeBytes: sizeBytes, DownloadComplete: true}
+	if err := w.canonicalAssetCache.Store(ctx, entry); err != nil {
 		if !errors.Is(err, workercache.ErrDuplicate) {
 			return err
 		}
-		if err := w.clipCache.PreserveContentHash(ctx, assetID, localPath, sizeBytes, hash); err != nil {
+		if err := w.canonicalAssetCache.PreserveContentHash(ctx, key, localPath, sizeBytes, hash); err != nil {
 			return err
 		}
 	}
-	return w.clipCache.MarkUsed(ctx, assetID)
+	return w.canonicalAssetCache.MarkUsed(ctx, key)
 }

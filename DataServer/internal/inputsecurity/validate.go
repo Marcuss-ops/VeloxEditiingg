@@ -13,8 +13,6 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
-
-	"velox-server/internal/config"
 )
 
 type Validation struct {
@@ -268,7 +266,7 @@ func (f *Fetcher) ffprobe(ctx context.Context, path string, kind Kind) error {
 	// inspection request.
 	cmd := exec.CommandContext(probeCtx, "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-safe", "1", "-max_alloc", "67108864", "-show_entries", "format=duration:stream=codec_type", "-of", "json", path)
 	cmd.Dir = f.policy.TempDir
-	cmd.Env = []string{"PATH=" + config.Getenv("PATH"), "LANG=C", "LC_ALL=C"}
+	cmd.Env = []string{"LANG=C", "LC_ALL=C"}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		code := ErrProbeFailed

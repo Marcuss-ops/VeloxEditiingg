@@ -62,10 +62,10 @@ func mapStoreCompletionError(err error) error {
 		return nil
 	}
 	if errorsIsStoreTransition(err) {
-		return fmt.Errorf("%w: %v", ErrTransitionConflict, err)
+		return fmt.Errorf("%w: %w", ErrTransitionConflict, err)
 	}
 	if errorsIsStoreNotFound(err) {
-		return fmt.Errorf("%w: %v", ErrAttemptCommitNotFound, err)
+		return fmt.Errorf("%w: %w", ErrAttemptCommitNotFound, err)
 	}
 	return err
 }

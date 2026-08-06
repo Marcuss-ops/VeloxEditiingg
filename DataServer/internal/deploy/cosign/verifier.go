@@ -94,6 +94,11 @@ type ExternalCosignVerifier struct {
 	// can hang on a registry that's slow to fetch transparency
 	// log entries, so we cap at 30s by default.
 	VerifyTimeout time.Duration
+
+	// SkipVerify and OverrideReason are captured at bootstrap. The verifier
+	// never reads process environment during a request.
+	SkipVerify     bool
+	OverrideReason string
 }
 
 // NewExternalCosignVerifier returns an ExternalCosignVerifier
@@ -102,10 +107,16 @@ type ExternalCosignVerifier struct {
 // and relies on operator supervision, which is incompatible with
 // a server-side deadline.
 func NewExternalCosignVerifier() *ExternalCosignVerifier {
-	return &ExternalCosignVerifier{
-		BinaryPath:    "",
-		VerifyTimeout: 30 * time.Second,
-	}
+	return &ExternalCosignVerifier{BinaryPath: "", VerifyTimeout: 30 * time.Second}
+}
+
+// NewExternalCosignVerifierFromConfig builds the verifier from the typed
+// bootstrap process settings.
+func NewExternalCosignVerifierFromConfig(cfg config.RuntimeConfig) *ExternalCosignVerifier {
+	verifier := NewExternalCosignVerifier()
+	verifier.SkipVerify = cfg.CosignSkipVerify
+	verifier.OverrideReason = cfg.CosignOverrideReason
+	return verifier
 }
 
 // Verify shells to `cosign verify <ref>` and returns nil on a 0
@@ -118,8 +129,8 @@ func NewExternalCosignVerifier() *ExternalCosignVerifier {
 // returns ErrOverrideReasonMissing. The binary is never invoked by
 // the override path.
 func (e *ExternalCosignVerifier) Verify(ctx context.Context, ref string) error {
-	if config.Getenv("VELOX_SKIP_COSIGN_VERIFY") == "1" {
-		reason := strings.TrimSpace(config.Getenv("VELOX_COSIGN_OVERRIDE_REASON"))
+	if e.SkipVerify {
+		reason := strings.TrimSpace(e.OverrideReason)
 		if reason == "" {
 			return ErrOverrideReasonMissing
 		}

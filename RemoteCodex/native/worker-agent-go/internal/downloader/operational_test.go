@@ -5,6 +5,8 @@ import (
 	"errors"
 	"sync"
 	"testing"
+
+	"velox-shared/assetref"
 )
 
 func TestManager_OperationalSnapshotProjectsLowCardinalityMetrics(t *testing.T) {
@@ -30,7 +32,7 @@ func TestManager_OperationalSnapshotProjectsLowCardinalityMetrics(t *testing.T) 
 				return TransferResult{}, ctx.Err()
 			}
 			onProgress(req.SizeBytes / 2)
-			return TransferResult{LocalPath: "/cache/" + req.AssetKey, Bytes: req.SizeBytes, SHA256: "verified"}, nil
+			return TransferResult{LocalPath: "/cache/" + string(req.AssetKey), Bytes: req.SizeBytes, SHA256: "verified"}, nil
 		},
 	}
 	m := NewManager(Config{
@@ -57,7 +59,7 @@ func TestManager_OperationalSnapshotProjectsLowCardinalityMetrics(t *testing.T) 
 	var wg sync.WaitGroup
 	resolve := func(job, task, key string) {
 		defer wg.Done()
-		_, _ = m.Resolve(context.Background(), DownloadRequest{JobID: job, TaskID: task, AssetKey: key, SizeBytes: 100})
+		_, _ = m.Resolve(context.Background(), DownloadRequest{JobID: job, TaskID: task, AssetKey: assetref.AssetKey(key), SizeBytes: 100})
 	}
 	wg.Add(1)
 	go resolve("active-1", "task-1", "active")

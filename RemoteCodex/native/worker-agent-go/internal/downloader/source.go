@@ -23,6 +23,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+
+	"velox-shared/assetref"
 )
 
 // SourceMetadata describes the response represented by an AssetSource.Open
@@ -31,7 +33,7 @@ import (
 // source hints and do not replace the manager's final integrity verification.
 type SourceMetadata struct {
 	SizeBytes int64
-	SHA256    string
+	SHA256    assetref.ContentHash
 	MIMEType  string
 }
 
@@ -64,14 +66,14 @@ type CacheCheckResult struct {
 	LocalPath string
 	// SHA256 is the verified content identity of a cache hit. It prevents a
 	// read-model sync from erasing the digest already persisted by the cache.
-	SHA256 string
+	SHA256 assetref.ContentHash
 }
 
 // TransferResult is the outcome of a Transferer.Transfer.
 type TransferResult struct {
 	LocalPath string
 	Bytes     int64
-	SHA256    string
+	SHA256    assetref.ContentHash
 }
 
 // Transferer is the byte pipeline used by one Transfer. The manager calls

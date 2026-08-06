@@ -83,7 +83,7 @@ func TestFinalize_FFProbeInvariant_HappyPath(t *testing.T) {
 	requireFFMPEGTools(t)
 
 	env := setupTestEnv(t)
-	env.seedJob("JFP", "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
+	env.seedJob("JFP", "AWAITING_ARTIFACT", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
 	env.seedAttempt("JFP", 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
 
 	// Synthesize a 1-second, 1-audio-stream mp4 and write it through
@@ -103,9 +103,10 @@ func TestFinalize_FFProbeInvariant_HappyPath(t *testing.T) {
 	_, err = env.svc.Receive(context.Background(), sess.UploadID, uploadBytes(payload))
 	require.NoError(t, err)
 
-	// Enable the env gate scoped to this test via t.Setenv
-	// (auto-restored on Cleanup; matches bootstrap_test.go convention).
-	t.Setenv("VELOX_FFPROBE_VERIFY_ON_FINALIZE", "true")
+	// Enable the gate on this Service instance (mirrors the bootstrap
+	// injection of cfg.Runtime.FFProbeVerifyMode — the Service never
+	// reads the process environment).
+	env.svc.WithFFProbeMode("true")
 
 	art, err := env.svc.Finalize(context.Background(), FinalizeArtifactCommand{
 		UploadID: sess.UploadID, JobID: "JFP", WorkerID: testWorkerID,
@@ -132,7 +133,7 @@ func TestFinalize_FFProbeInvariant_HappyPath(t *testing.T) {
 // the sentinel and the finalize tx never runs, so every invariant
 // the writer would have stamped also stays at its pre-finalize state:
 //   - artifacts.status remains STAGING (not READY).
-//   - jobs.status remains RUNNING (not SUCCEEDED).
+//   - jobs.status remains AWAITING_ARTIFACT (not SUCCEEDED).
 //   - 0 job_deliveries rows inserted for this artifact.
 //   - The artifact blob exists on disk but is an orphan — the 24h
 //     Reconciler sweep ("blob finale senza riga DB dopo 24h →
@@ -147,7 +148,7 @@ func TestFinalize_FFProbeInvariant_Mismatch(t *testing.T) {
 	// RUNNING → RENDER_FINISHED pipeline; the writer's CAS gates
 	// require them.
 	const jobID = "JMIS"
-	env.seedJob(jobID, "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
+	env.seedJob(jobID, "AWAITING_ARTIFACT", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
 	env.seedAttempt(jobID, 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
 	// seedJob installs the generic primary plan used by most finalize tests;
 	// this fixture intentionally replaces it with exactly three destinations.
@@ -198,9 +199,17 @@ func TestFinalize_FFProbeInvariant_Mismatch(t *testing.T) {
 	_, err = env.svc.Receive(context.Background(), sess.UploadID, uploadBytes(payload))
 	require.NoError(t, err)
 
-	// Enable the env gate scoped to this test via t.Setenv
-	// (auto-restored on Cleanup; matches bootstrap_test.go convention).
-	t.Setenv("VELOX_FFPROBE_VERIFY_ON_FINALIZE", "true")
+	// Enable the gate on this Service instance (mirrors the bootstrap
+	// injection of cfg.Runtime.FFProbeVerifyMode).
+	env.svc.WithFFProbeMode("true")
+
+	// Capture the detected extension BEFORE Finalize: the pre-commit gate
+	// fires after blob promotion, which renames the staging source away, so
+	// detectMIME(staging) would read a missing file after the call. Compute
+	// the canonical key from the bytes the same way PromoteToCanonical does.
+	detectedExt := mimeToExt(detectMIME(sess.TemporaryStorageKey))
+	_, absFinal, err := FinalStorageKey(env.bs, sha256Hex(payload), detectedExt)
+	require.NoError(t, err, "FinalStorageKey derivation")
 
 	// Finalize must surface ErrFFProbeAudioCountMismatch — the gate
 	// sees expected=3 (per-job plan rows) and actual=1 (audio
@@ -227,12 +236,12 @@ func TestFinalize_FFProbeInvariant_Mismatch(t *testing.T) {
 	require.NotEqual(t, "READY", artStatus, "artifact must NOT be READY on gate failure")
 	require.Equal(t, "STAGING", artStatus, "artifact stays in pre-finalize state")
 
-	// (b) jobs.status must NOT be SUCCEEDED. Pre-finalize RUNNING.
+	// (b) jobs.status must NOT be SUCCEEDED. Pre-finalize AWAITING_ARTIFACT.
 	var jobStatus string
 	require.NoError(t, env.db.QueryRow(
 		`SELECT status FROM jobs WHERE job_id = ?`, jobID).Scan(&jobStatus))
 	require.NotEqual(t, "SUCCEEDED", jobStatus, "jobs must NOT be SUCCEEDED on gate failure")
-	require.Equal(t, "RUNNING", jobStatus, "jobs stays in pre-finalize state")
+	require.Equal(t, "AWAITING_ARTIFACT", jobStatus, "jobs stays in pre-finalize state")
 
 	// (c) 0 job_deliveries stamped for this artifact (the writer's
 	//     Step 5 INSERT would have produced 3 rows here; the pre-
@@ -244,15 +253,9 @@ func TestFinalize_FFProbeInvariant_Mismatch(t *testing.T) {
 
 	// (d) The artifact blob DOES exist on disk (promoted before the
 	//     gate ran) — this is the existing orphan-blob pattern the
-	//     24h Reconciler sweep is responsible for. Compute the
-	//     canonical key the same way PromoteToCanonical + the master
-	//     does (per TestFinalize_BlobPromotedButDBCASMissed in
-	//     service_test.go) so the assertion doesn't depend on
-	//     arbitrary-dirspec tree walks that break when the
-	//     storage-key schema changes.
-	detectedExt := mimeToExt(detectMIME(sess.TemporaryStorageKey))
-	_, absFinal, err := FinalStorageKey(env.bs, sha256Hex(payload), detectedExt)
-	require.NoError(t, err, "FinalStorageKey derivation")
+	//     24h Reconciler sweep is responsible for. absFinal was derived
+	//     above (before Finalize removed the staging source); assert the
+	//     promoted blob is addressable at the canonical key.
 	_, err = os.Stat(absFinal)
 	require.NoError(t, err,
 		"orphan blob at %s must exist after pre-commit gate mismatch (Reconciler 24h sweep will reclaim it)",
@@ -324,7 +327,7 @@ func TestFinalize_FFProbeInvariant_ShadowMatch(t *testing.T) {
 	requireFFMPEGTools(t)
 
 	env := setupTestEnv(t)
-	env.seedJob("JSMT", "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
+	env.seedJob("JSMT", "AWAITING_ARTIFACT", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
 	env.seedAttempt("JSMT", 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
 
 	mp4Path := filepath.Join(env.tmpDir, "shadow_match.mp4")
@@ -341,7 +344,7 @@ func TestFinalize_FFProbeInvariant_ShadowMatch(t *testing.T) {
 	_, err = env.svc.Receive(context.Background(), sess.UploadID, uploadBytes(payload))
 	require.NoError(t, err)
 
-	t.Setenv("VELOX_FFPROBE_VERIFY_ON_FINALIZE", "shadow")
+	env.svc.WithFFProbeMode("shadow")
 
 	var logged string
 	captureTripwireLogs(t, func(buf *bytes.Buffer) {
@@ -370,7 +373,7 @@ func TestFinalize_FFProbeInvariant_ShadowMismatch(t *testing.T) {
 
 	env := setupTestEnv(t)
 	const jobID = "JSMM"
-	env.seedJob(jobID, "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
+	env.seedJob(jobID, "AWAITING_ARTIFACT", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
 	env.seedAttempt(jobID, 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
 	// Replace the generic primary plan from seedJob so the expected count is
 	// exactly the three destinations declared by this shadow fixture.
@@ -409,7 +412,7 @@ func TestFinalize_FFProbeInvariant_ShadowMismatch(t *testing.T) {
 	_, err = env.svc.Receive(context.Background(), sess.UploadID, uploadBytes(payload))
 	require.NoError(t, err)
 
-	t.Setenv("VELOX_FFPROBE_VERIFY_ON_FINALIZE", "shadow")
+	env.svc.WithFFProbeMode("shadow")
 
 	var logged string
 	captureTripwireLogs(t, func(buf *bytes.Buffer) {
@@ -438,7 +441,7 @@ func TestFinalize_FFProbeInvariant_ShadowMissingBinary(t *testing.T) {
 	requireFFMPEGTools(t)
 
 	env := setupTestEnv(t)
-	env.seedJob("JSMX", "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
+	env.seedJob("JSMX", "AWAITING_ARTIFACT", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
 	env.seedAttempt("JSMX", 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
 
 	mp4Path := filepath.Join(env.tmpDir, "shadow_missing.mp4")
@@ -458,7 +461,7 @@ func TestFinalize_FFProbeInvariant_ShadowMissingBinary(t *testing.T) {
 	// Strip ffprobe out of PATH while ffmpeg (used by the synth
 	// helper earlier so the fixture is on disk) remains available.
 	stripFFProbeFromPath(t)
-	t.Setenv("VELOX_FFPROBE_VERIFY_ON_FINALIZE", "shadow")
+	env.svc.WithFFProbeMode("shadow")
 
 	var logged string
 	captureTripwireLogs(t, func(buf *bytes.Buffer) {
@@ -485,7 +488,7 @@ func TestFinalize_FFProbeInvariant_EnforceMissingBinary(t *testing.T) {
 	requireFFMPEGTools(t)
 
 	env := setupTestEnv(t)
-	env.seedJob("JENX", "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
+	env.seedJob("JENX", "AWAITING_ARTIFACT", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
 	env.seedAttempt("JENX", 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
 
 	mp4Path := filepath.Join(env.tmpDir, "enforce_missing.mp4")
@@ -503,7 +506,7 @@ func TestFinalize_FFProbeInvariant_EnforceMissingBinary(t *testing.T) {
 	require.NoError(t, err)
 
 	stripFFProbeFromPath(t)
-	t.Setenv("VELOX_FFPROBE_VERIFY_ON_FINALIZE", "enforce")
+	env.svc.WithFFProbeMode("enforce")
 
 	var logged string
 	captureTripwireLogs(t, func(buf *bytes.Buffer) {
@@ -530,7 +533,7 @@ func TestFinalize_FFProbeInvariant_OffNoOp(t *testing.T) {
 	requireFFMPEGTools(t)
 
 	env := setupTestEnv(t)
-	env.seedJob("JOFF", "RUNNING", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
+	env.seedJob("JOFF", "AWAITING_ARTIFACT", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
 	env.seedAttempt("JOFF", 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
 
 	mp4Path := filepath.Join(env.tmpDir, "off_mode.mp4")
@@ -550,7 +553,7 @@ func TestFinalize_FFProbeInvariant_OffNoOp(t *testing.T) {
 	// Cover the typo-fence: "Shadow", "SHADOW", "1", "yes" must
 	// all NOT enable the gate. Run the finalization once with the
 	// typo'd value; assert no error and no tripwire log line.
-	t.Setenv("VELOX_FFPROBE_VERIFY_ON_FINALIZE", "1")
+	env.svc.WithFFProbeMode("1")
 	captureTripwireLogs(t, func(buf *bytes.Buffer) {
 		art, lerr := env.svc.Finalize(context.Background(), FinalizeArtifactCommand{
 			UploadID: sess.UploadID, JobID: "JOFF", WorkerID: testWorkerID,

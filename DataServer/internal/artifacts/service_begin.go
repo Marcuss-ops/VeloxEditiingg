@@ -26,7 +26,10 @@ import (
 // BeginUpload authorizes a worker-side upload session.
 //
 // Validation gates, all resolved via AuthReader:
-//   - job.status = RUNNING
+//   - job.status ∈ {RUNNING, AWAITING_ARTIFACT} — RUNNING covers the
+//     render-then-upload legacy wire; AWAITING_ARTIFACT is the canonical
+//     post-ingest state (ingest rolls the Job to AWAITING_ARTIFACT when
+//     the worker reports render-finished, BEFORE the upload RPC lands).
 //   - job.revision = expected_revision (when supplied)
 //   - attempt.status non-terminal (worker still active)
 //   - attempt.worker_id = cmd.WorkerID
@@ -49,7 +52,8 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*sto
 	if job == nil {
 		return nil, fmt.Errorf("%w: job=%s missing", ErrJobNotRunning, cmd.JobID)
 	}
-	if job.Status != string(store.JobStatusRunning) {
+	if job.Status != string(store.JobStatusRunning) &&
+		job.Status != string(store.JobStatusAwaitingArtifact) {
 		return nil, fmt.Errorf("%w: job=%s status=%s", ErrJobNotRunning, cmd.JobID, job.Status)
 	}
 	if cmd.ExpectedRevision != 0 && job.Revision != cmd.ExpectedRevision {

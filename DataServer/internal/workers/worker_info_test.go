@@ -37,24 +37,6 @@ func TestExtractStringSlice_MixedTypes(t *testing.T) {
 	}
 }
 
-func TestNormalizeCapabilities(t *testing.T) {
-	input := map[string]interface{}{
-		"ffmpeg":              true,
-		"supported_job_types": []string{"health_check"},
-	}
-	got := normalizeCapabilities(input)
-	if got["ffmpeg"] != true {
-		t.Fatalf("want ffmpeg=true, got %v", got["ffmpeg"])
-	}
-}
-
-func TestNormalizeCapabilities_Nil(t *testing.T) {
-	got := normalizeCapabilities(nil)
-	if got != nil {
-		t.Fatalf("want nil, got %v", got)
-	}
-}
-
 // ─────────────────────────────────────────────────────────────────────
 // ConnectionStatus — pure-function state derivation (no DB / Registry)
 // ─────────────────────────────────────────────────────────────────────

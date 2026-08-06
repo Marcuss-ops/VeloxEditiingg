@@ -321,6 +321,7 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		cache:                     wo.cache,
 		blobs:                     wo.blobs,
 		clipCache:                 wo.clipCache,
+		canonicalAssetCache:       workercache.NewCanonicalAssetStore(wo.clipCache),
 		// Anti-collision observer (RW-PROD-005 §3): wired from
 		// workerOptions.onWorkerIDCollision (set by
 		// WithCollisionObserver). nil-safe; Start() guards before
@@ -382,6 +383,7 @@ func (w *Worker) AttachClipCache(c *workercache.Cache) {
 		panic("worker.AttachClipCache: cache is required")
 	}
 	w.clipCache = c
+	w.canonicalAssetCache = workercache.NewCanonicalAssetStore(c)
 }
 
 // signalTaskTerminal wakes the cache cleanup loop only after the master has

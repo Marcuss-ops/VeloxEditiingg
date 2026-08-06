@@ -26,6 +26,8 @@ import (
 	"math"
 	"sync"
 	"time"
+
+	"velox-shared/assetref"
 )
 
 // waiterKey identifies one logical Resolve call. The request metadata is
@@ -39,7 +41,7 @@ var errTransferCancelled = errors.New("downloader: transfer cancelled")
 
 // Transfer is one asset download shared by N waiters.
 type Transfer struct {
-	Key string
+	Key assetref.AssetKey
 	req DownloadRequest
 
 	transferCtx context.Context
@@ -102,7 +104,7 @@ type Transfer struct {
 // newTransfer builds a transfer with its OWN context (manager-derived), plus
 // the first waiter's report context. A nil reportCtx degrades to
 // context.Background() (caller-scoped telemetry simply missing).
-func newTransfer(managerCtx context.Context, key string, req DownloadRequest, reportCtx context.Context, now func() time.Time, transferID string, transferGeneration int64) *Transfer {
+func newTransfer(managerCtx context.Context, key assetref.AssetKey, req DownloadRequest, reportCtx context.Context, now func() time.Time, transferID string, transferGeneration int64) *Transfer {
 	if reportCtx == nil {
 		reportCtx = context.Background()
 	}
@@ -559,15 +561,15 @@ func errorDetailOf(err error) string {
 // Snapshot/JobSnapshot reads remain available without unbounded growth.
 type TransferRegistry struct {
 	mu        sync.Mutex
-	transfers map[string]*Transfer
+	transfers map[assetref.AssetKey]*Transfer
 }
 
 func newTransferRegistry() *TransferRegistry {
-	return &TransferRegistry{transfers: make(map[string]*Transfer)}
+	return &TransferRegistry{transfers: make(map[assetref.AssetKey]*Transfer)}
 }
 
 // Get returns the transfer for key (nil when absent).
-func (r *TransferRegistry) Get(key string) *Transfer {
+func (r *TransferRegistry) Get(key assetref.AssetKey) *Transfer {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.transfers[key]
@@ -575,7 +577,7 @@ func (r *TransferRegistry) Get(key string) *Transfer {
 
 // GetOrCreate returns the transfer for key when it exists, otherwise creates
 // one via mk and stores it. `created` reports whether mk ran.
-func (r *TransferRegistry) GetOrCreate(key string, mk func() *Transfer) (t *Transfer, created bool) {
+func (r *TransferRegistry) GetOrCreate(key assetref.AssetKey, mk func() *Transfer) (t *Transfer, created bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if existing := r.transfers[key]; existing != nil {
@@ -601,7 +603,7 @@ func (r *TransferRegistry) PruneTerminal(max int) {
 		}
 	}
 	for terminalCount > max {
-		oldestKey := ""
+		var oldestKey assetref.AssetKey
 		oldestAt := time.Time{}
 		for key, t := range r.transfers {
 			if !t.isTerminal() {
@@ -623,9 +625,9 @@ func (r *TransferRegistry) PruneTerminal(max int) {
 }
 
 // Each visits every registered transfer (deterministic key order).
-func (r *TransferRegistry) Each(f func(key string, t *Transfer)) {
+func (r *TransferRegistry) Each(f func(key assetref.AssetKey, t *Transfer)) {
 	r.mu.Lock()
-	keys := make([]string, 0, len(r.transfers))
+	keys := make([]assetref.AssetKey, 0, len(r.transfers))
 	for k := range r.transfers {
 		keys = append(keys, k)
 	}

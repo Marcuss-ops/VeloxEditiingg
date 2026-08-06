@@ -117,9 +117,7 @@ func TestExternalCosignVerifier_Negative(t *testing.T) {
 // binary entirely and return ErrSkippedByOverride.
 func TestExternalCosignVerifier_Override(t *testing.T) {
 	bin := stubCosignScript(t, 1, "should not see this")
-	t.Setenv("VELOX_SKIP_COSIGN_VERIFY", "1")
-	t.Setenv("VELOX_COSIGN_OVERRIDE_REASON", "incident-response: registry verification outage")
-	v := &ExternalCosignVerifier{BinaryPath: bin, VerifyTimeout: 5 * time.Second}
+	v := &ExternalCosignVerifier{BinaryPath: bin, VerifyTimeout: 5 * time.Second, SkipVerify: true, OverrideReason: "incident-response: registry verification outage"}
 	err := v.Verify(context.Background(),
 		"ghcr.io/o/r@sha256:"+strings.Repeat("a", 64))
 	if !errors.Is(err, ErrSkippedByOverride) {
@@ -132,9 +130,7 @@ func TestExternalCosignVerifier_Override(t *testing.T) {
 
 func TestExternalCosignVerifier_OverrideRequiresReason(t *testing.T) {
 	bin := stubCosignScript(t, 0, "should not see this")
-	t.Setenv("VELOX_SKIP_COSIGN_VERIFY", "1")
-	t.Setenv("VELOX_COSIGN_OVERRIDE_REASON", "   ")
-	v := &ExternalCosignVerifier{BinaryPath: bin, VerifyTimeout: 5 * time.Second}
+	v := &ExternalCosignVerifier{BinaryPath: bin, VerifyTimeout: 5 * time.Second, SkipVerify: true, OverrideReason: "   "}
 	err := v.Verify(context.Background(), "ghcr.io/o/r@sha256:"+strings.Repeat("a", 64))
 	if !errors.Is(err, ErrOverrideReasonMissing) {
 		t.Errorf("override without reason = %v, want ErrOverrideReasonMissing-wrapped", err)

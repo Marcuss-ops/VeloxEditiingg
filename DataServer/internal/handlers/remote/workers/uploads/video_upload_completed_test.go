@@ -91,9 +91,9 @@ func TestUploadCompletedVideo_ArtifactsPipeline(t *testing.T) {
 	// on task_attempts (per-attempt) — see the seedAttempt helper in
 	// service_test.go for the canonical pattern.
 	_, err = db.Exec(`
-		INSERT INTO jobs (job_id, status, revision, created_at, updated_at, migrated_at)
-		VALUES (?, 'RUNNING', ?, ?, ?, ?)`,
-		jobID, revision, now, now, now)
+		INSERT INTO jobs (job_id, status, revision, created_at, updated_at, migrated_at, request_json)
+		VALUES (?, 'AWAITING_ARTIFACT', ?, ?, ?, ?, ?)`,
+		jobID, revision, now, now, now, `{"render_only":true}`)
 	if err != nil {
 		t.Fatalf("seed job: %v", err)
 	}

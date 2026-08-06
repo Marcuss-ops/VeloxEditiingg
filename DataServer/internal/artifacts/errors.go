@@ -15,6 +15,7 @@ import (
 	"fmt"
 
 	"velox-server/internal/store"
+	"velox-shared/contract/domain"
 )
 
 // Sentinel errors returned by Service methods. Callers should compare
@@ -38,7 +39,7 @@ var (
 	ErrUploadNotFound     = errors.New("artifacts: upload session not found")
 	ErrUploadStateInvalid = errors.New("artifacts: upload session not in expected state")
 	ErrUploadExpired      = errors.New("artifacts: upload session expired")
-	ErrTransitionConflict = errors.New("artifacts: state transition conflict (CAS failed)")
+	ErrTransitionConflict = domain.NewLeaseConflict("artifacts: state transition conflict (CAS failed)")
 	ErrStorageKeyInvalid  = errors.New("artifacts: storage key / sha derivation error")
 	ErrBlobPromoteFailed  = errors.New("artifacts: blob promotion to final storage failed")
 	ErrOrphanedBlob       = errors.New("artifacts: blob promoted but SQL transaction rolled back")

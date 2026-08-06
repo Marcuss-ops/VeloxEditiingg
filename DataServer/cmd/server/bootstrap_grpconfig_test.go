@@ -84,7 +84,7 @@ func TestBuildGRPCHandlerConfig_PropagatesAllowInsecure(t *testing.T) {
 
 	cfg := &config.Config{
 		Server:  config.ServerConfig{GRPCPushMode: true},
-		Workers: config.WorkersConfig{AllowedWorkers: "w1,w2"},
+		Workers: config.WorkersConfig{AllowedWorkerIDs: []string{"w1", "w2"}},
 	}
 
 	// ── insecureDev=true: AllowInsecure must be true ────────────────────────
@@ -100,9 +100,9 @@ func TestBuildGRPCHandlerConfig_PropagatesAllowInsecure(t *testing.T) {
 	if !insecureCfg.PushMode {
 		t.Fatal("PushMode should be propagated from cfg.Server.GRPCPushMode")
 	}
-	if insecureCfg.AllowedWorkers != "w1,w2" {
-		t.Fatalf("AllowedWorkers should be %q, got %q",
-			"w1,w2", insecureCfg.AllowedWorkers)
+	if len(insecureCfg.AllowedWorkerIDs) != 2 || insecureCfg.AllowedWorkerIDs[0] != "w1" || insecureCfg.AllowedWorkerIDs[1] != "w2" {
+		t.Fatalf("AllowedWorkerIDs should be %q, got %q",
+			[]string{"w1", "w2"}, insecureCfg.AllowedWorkerIDs)
 	}
 
 	// ── insecureDev=false: AllowInsecure must be hardened off ─────────────
@@ -118,9 +118,9 @@ func TestBuildGRPCHandlerConfig_PropagatesAllowInsecure(t *testing.T) {
 	if secureCfg.PushMode != true {
 		t.Fatal("PushMode should be propagated regardless of insecureDev")
 	}
-	if secureCfg.AllowedWorkers != "w1,w2" {
-		t.Fatalf("AllowedWorkers should be %q, got %q",
-			"w1,w2", secureCfg.AllowedWorkers)
+	if len(secureCfg.AllowedWorkerIDs) != 2 || secureCfg.AllowedWorkerIDs[0] != "w1" || secureCfg.AllowedWorkerIDs[1] != "w2" {
+		t.Fatalf("AllowedWorkerIDs should be %q, got %q",
+			[]string{"w1", "w2"}, secureCfg.AllowedWorkerIDs)
 	}
 }
 
@@ -134,7 +134,7 @@ func TestBuildGRPCHandlerConfig_EmptyAllowedWorkers(t *testing.T) {
 
 	cfg := &config.Config{
 		Server:  config.ServerConfig{GRPCPushMode: false},
-		Workers: config.WorkersConfig{AllowedWorkers: ""},
+		Workers: config.WorkersConfig{AllowedWorkerIDs: nil},
 	}
 
 	got := buildGRPCHandlerConfig(cfg, false)
@@ -144,8 +144,8 @@ func TestBuildGRPCHandlerConfig_EmptyAllowedWorkers(t *testing.T) {
 	if got.PushMode {
 		t.Fatal("PushMode should reflect cfg.Server.GRPCPushMode=false")
 	}
-	if got.AllowedWorkers != "" {
-		t.Fatalf("AllowedWorkers should be empty, got %q", got.AllowedWorkers)
+	if len(got.AllowedWorkerIDs) != 0 {
+		t.Fatalf("AllowedWorkerIDs should be empty, got %q", got.AllowedWorkerIDs)
 	}
 	if got.AllowInsecure {
 		t.Fatal("AllowInsecure should be false when insecureDev=false")
@@ -172,7 +172,7 @@ func TestBuildGRPCHandlerConfig_EmptyAllowedWorkers(t *testing.T) {
 func TestBuildGRPCHandlerConfig_AllowInsecureFromEnv(t *testing.T) {
 	cfg := &config.Config{
 		Server:  config.ServerConfig{GRPCPushMode: true},
-		Workers: config.WorkersConfig{AllowedWorkers: "w1"},
+		Workers: config.WorkersConfig{AllowedWorkerIDs: []string{"w1"}},
 	}
 
 	// ── env="true" end-to-end ─────────────────────────────────────────────
@@ -196,9 +196,9 @@ func TestBuildGRPCHandlerConfig_AllowInsecureFromEnv(t *testing.T) {
 		if !grpcCfg.PushMode {
 			t.Fatal("PushMode propagation regressed while env parse path was active")
 		}
-		if grpcCfg.AllowedWorkers != "w1" {
-			t.Fatalf("AllowedWorkers propagation regressed: got %q want %q",
-				grpcCfg.AllowedWorkers, "w1")
+		if len(grpcCfg.AllowedWorkerIDs) != 1 || grpcCfg.AllowedWorkerIDs[0] != "w1" {
+			t.Fatalf("AllowedWorkerIDs propagation regressed: got %q want %q",
+				grpcCfg.AllowedWorkerIDs, []string{"w1"})
 		}
 	})
 

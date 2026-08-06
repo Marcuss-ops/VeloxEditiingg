@@ -147,9 +147,12 @@ func (r *Registry) UpdateWorker(ctx context.Context, workerID string, updates ma
 		info.EngineVersion = v
 	}
 	if v, ok := updates["capabilities"]; ok {
-		info.Capabilities = normalizeCapabilities(v)
-		if registry, err := controltransport.ExecutorRegistryFromLegacy(v); err == nil {
+		// Decode legacy update payloads at the boundary; retain only the
+		// canonical typed registry in the worker model.
+		if registry, err := controltransport.ExecutorRegistryFromLegacyStrict(v); err == nil {
 			info.ExecutorCapabilities = registry
+		} else {
+			info.ExecutorCapabilities = controltransport.EmptyExecutorRegistry()
 		}
 	}
 	if v, ok := updates["ip_address"].(string); ok {

@@ -26,6 +26,8 @@ import (
 	"fmt"
 	"sync/atomic"
 	"time"
+
+	"velox-shared/assetref"
 )
 
 // ErrEmptyKey is returned by Resolve when a request carries neither an
@@ -104,8 +106,8 @@ func (c *Config) withDefaults() {
 // asset path.
 type AssetDownloadManager interface {
 	Resolve(ctx context.Context, request DownloadRequest) (DownloadedAsset, error)
-	Snapshot(assetKey string) (DownloadSnapshot, bool)
-	Subscribe(assetKey string) (<-chan DownloadSnapshot, func())
+	Snapshot(assetKey assetref.AssetKey) (DownloadSnapshot, bool)
+	Subscribe(assetKey assetref.AssetKey) (<-chan DownloadSnapshot, func())
 	JobSnapshot(jobID string) JobDownloadSnapshot
 }
 
@@ -156,7 +158,7 @@ func (m *Manager) Close() {
 func (m *Manager) Resolve(ctx context.Context, req DownloadRequest) (DownloadedAsset, error) {
 	key := req.AssetKey
 	if key == "" {
-		key = req.AssetID
+		key = assetref.AssetKey(req.AssetID)
 	}
 	if key == "" {
 		return DownloadedAsset{}, ErrEmptyKey
@@ -189,7 +191,7 @@ func (m *Manager) Resolve(ctx context.Context, req DownloadRequest) (DownloadedA
 			}
 			hit, readyAt := t.outcome()
 			return DownloadedAsset{
-				AssetKey:  key,
+				AssetKey:  assetref.AssetKey(key),
 				AssetID:   req.AssetID,
 				LocalPath: result.LocalPath,
 				SHA256:    result.SHA256,
@@ -214,7 +216,7 @@ func (m *Manager) Resolve(ctx context.Context, req DownloadRequest) (DownloadedA
 // starting its run loop) when absent or when the previous transfer reached a
 // terminal state. Terminal transfers stay in the registry for snapshot
 // visibility; new Resolve calls re-check the cache cheaply.
-func (m *Manager) acquireTransfer(key string, req DownloadRequest, reportCtx context.Context) (*Transfer, bool) {
+func (m *Manager) acquireTransfer(key assetref.AssetKey, req DownloadRequest, reportCtx context.Context) (*Transfer, bool) {
 	m.registry.PruneTerminal(m.cfg.MaxRetainedTransfers)
 	m.registry.mu.Lock()
 	defer m.registry.mu.Unlock()
@@ -244,7 +246,7 @@ func (m *Manager) refreshOperational() {
 		return
 	}
 	out := OperationalSnapshot{CoalescedRequestsTotal: m.coalesced.Load()}
-	m.registry.Each(func(_ string, t *Transfer) {
+	m.registry.Each(func(_ assetref.AssetKey, t *Transfer) {
 		snap := t.snapshot(m.cfg.Now())
 		out.BytesDownloaded += snap.BytesDownloaded
 		out.BytesTotal += snap.BytesTotal
@@ -271,7 +273,7 @@ func (m *Manager) refreshOperational() {
 }
 
 // Snapshot returns the current snapshot for an asset key.
-func (m *Manager) Snapshot(key string) (DownloadSnapshot, bool) {
+func (m *Manager) Snapshot(key assetref.AssetKey) (DownloadSnapshot, bool) {
 	t := m.registry.Get(key)
 	if t == nil {
 		return DownloadSnapshot{}, false
@@ -283,7 +285,7 @@ func (m *Manager) Snapshot(key string) (DownloadSnapshot, bool) {
 // delivers every published snapshot (non-blocking, buffered). Returns a nil
 // channel when no transfer exists for the key — call Resolve first. The
 // returned func unsubscribes.
-func (m *Manager) Subscribe(key string) (<-chan DownloadSnapshot, func()) {
+func (m *Manager) Subscribe(key assetref.AssetKey) (<-chan DownloadSnapshot, func()) {
 	t := m.registry.Get(key)
 	if t == nil {
 		return nil, func() {}
@@ -296,7 +298,7 @@ func (m *Manager) Subscribe(key string) (<-chan DownloadSnapshot, func()) {
 func (m *Manager) JobSnapshot(jobID string) JobDownloadSnapshot {
 	out := JobDownloadSnapshot{JobID: jobID}
 	now := m.cfg.Now()
-	m.registry.Each(func(_ string, t *Transfer) {
+	m.registry.Each(func(_ assetref.AssetKey, t *Transfer) {
 		if !t.hasJobReference(jobID) {
 			return
 		}

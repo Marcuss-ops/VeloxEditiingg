@@ -13,6 +13,7 @@ import (
 
 	"velox-server/internal/artifacts"
 	"velox-server/internal/store"
+	"velox-shared/contract/domain"
 )
 
 func (c *coordinator) CompleteUpload(ctx context.Context, cmd CompleteUploadCommand) error {
@@ -41,10 +42,10 @@ func (c *coordinator) CompleteUpload(ctx context.Context, cmd CompleteUploadComm
 			expected = upload.ReceivedSHA256
 		}
 		if cmd.WorkerSHA256 != "" && expected != "" && cmd.WorkerSHA256 != expected {
-			return fmt.Errorf("%w: upload=%s worker_sha=%s master_declared=%s", ErrStaleReport, cmd.UploadID, cmd.WorkerSHA256, expected)
+			return fmt.Errorf("%w: %w: upload=%s worker_sha=%s master_declared=%s", ErrStaleReport, domain.NewStaleReport(nil), cmd.UploadID, cmd.WorkerSHA256, expected)
 		}
 		if cmd.ServerSHA256 != "" && expected != "" && cmd.ServerSHA256 != expected {
-			return fmt.Errorf("%w: upload=%s server_sha=%s master_declared=%s", ErrStaleReport, cmd.UploadID, cmd.ServerSHA256, expected)
+			return fmt.Errorf("%w: %w: upload=%s server_sha=%s master_declared=%s", ErrStaleReport, domain.NewStaleReport(nil), cmd.UploadID, cmd.ServerSHA256, expected)
 		}
 		verdict := store.CompletionKeepVerifying
 		if cmd.ServerSHA256 != "" && (expected == "" || cmd.ServerSHA256 == expected) {

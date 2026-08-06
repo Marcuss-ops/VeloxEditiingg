@@ -16,11 +16,12 @@ import (
 )
 
 var (
-	ErrNoAssetIDs       = errors.New("cacheevict: at least one asset ID is required")
-	ErrInvalidID        = errors.New("cacheevict: invalid asset ID")
-	ErrUnsafeRoot       = errors.New("cacheevict: cache root must be an absolute directory other than filesystem root")
-	ErrActiveLease      = errors.New("cacheevict: cached asset has an active lease")
-	ErrExecutionNoIndex = errors.New("cacheevict: --execute requires a cache index")
+	ErrNoAssetIDs        = errors.New("cacheevict: at least one asset ID is required")
+	ErrInvalidID         = errors.New("cacheevict: invalid asset ID")
+	ErrUnsafeRoot        = errors.New("cacheevict: cache root must be an absolute directory other than filesystem root")
+	ErrActiveLease       = errors.New("cacheevict: cached asset has an active lease")
+	ErrActiveReservation = errors.New("cacheevict: cached asset has an active reservation")
+	ErrExecutionNoIndex  = errors.New("cacheevict: --execute requires a cache index")
 )
 
 var assetIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
@@ -48,6 +49,7 @@ type Item struct {
 	Bytes        int64    `json:"bytes"`
 	IndexPresent bool     `json:"index_present"`
 	ActiveJobID  string   `json:"active_job_id,omitempty"`
+	IndexPath    string   `json:"-"`
 	CacheStatus  string   `json:"cache_status"`
 	Action       string   `json:"action"`
 	Reason       string   `json:"reason,omitempty"`
@@ -91,9 +93,23 @@ func Run(ctx context.Context, opts Options) ([]Item, error) {
 			item.IndexPresent = found
 			if found {
 				item.ActiveJobID = entry.ActiveJobID
+				if entry.LocalPath != "" {
+					item.IndexPath, err = filepath.Abs(entry.LocalPath)
+					if err != nil {
+						return nil, fmt.Errorf("asset %q index path %q: %w", id, entry.LocalPath, err)
+					}
+				} else {
+					item.IndexPath = ""
+				}
 				if entry.ActiveLeaseCount > 0 {
 					item.Action = "blocked"
 					item.Reason = "active cache lease"
+					items = append(items, item)
+					continue
+				}
+				if entry.ActiveReservationCount > 0 {
+					item.Action = "blocked"
+					item.Reason = "active cache reservation"
 					items = append(items, item)
 					continue
 				}
@@ -118,20 +134,43 @@ func Run(ctx context.Context, opts Options) ([]Item, error) {
 		return items, nil
 	}
 	for i := range items {
-		if items[i].Action == "blocked" {
-			return items, fmt.Errorf("%w: asset %q has active cache lease %q", ErrActiveLease, items[i].AssetID, items[i].ActiveJobID)
+		if items[i].Action != "blocked" {
+			continue
 		}
+		if items[i].Reason == "active cache reservation" {
+			return items, fmt.Errorf("%w: asset %q has an active cache reservation", ErrActiveReservation, items[i].AssetID)
+		}
+		return items, fmt.Errorf("%w: asset %q has active cache lease %q", ErrActiveLease, items[i].AssetID, items[i].ActiveJobID)
 	}
 	for i := range items {
 		item := &items[i]
-		// Remove the durable index row first, with the lease predicate in the
-		// same SQL DELETE. A file is never removed while its row can still be
-		// acquired by a concurrent job. If file removal later fails, the safe
-		// outcome is an orphaned file that a future scan can report, not a
-		// leased index row pointing at a missing file.
+		// Evict the durable index and its indexed file under the same fenced
+		// lease/reservation predicate used by the canonical cleanup policy.
+		// Additional exact matches are removed only after the index fence.
 		if item.IndexPresent {
-			if err := deleteIndexIfUnleased(ctx, opts.Index, item.AssetID); err != nil {
+			if item.IndexPath == "" {
+				item.Action = "blocked"
+				item.Reason = "indexed cache entry has no local path"
+				return items, fmt.Errorf("asset %q index entry has no local path", item.AssetID)
+			}
+			if err := opts.Index.EvictIfUnleased(ctx, item.AssetID, item.IndexPath); err != nil {
 				if errors.Is(err, workercache.ErrNotFound) {
+					// ErrNotFound also represents a protection acquired after
+					// planning. Never remove discovered files while the row is
+					// still present and protected.
+					entry, found, findErr := opts.Index.Find(ctx, item.AssetID)
+					if findErr != nil {
+						return items, findErr
+					}
+					if found {
+						if entry.ActiveReservationCount > 0 {
+							return items, fmt.Errorf("%w: asset %q became reserved during eviction", ErrActiveReservation, item.AssetID)
+						}
+						if entry.ActiveLeaseCount > 0 {
+							return items, fmt.Errorf("%w: asset %q became leased during eviction", ErrActiveLease, item.AssetID)
+						}
+						return items, err
+					}
 					item.IndexPresent = false
 				} else {
 					item.Action = "blocked"
@@ -141,6 +180,9 @@ func Run(ctx context.Context, opts Options) ([]Item, error) {
 			}
 		}
 		for _, path := range item.Paths {
+			if path == item.IndexPath {
+				continue
+			}
 			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return items, fmt.Errorf("remove cache entry %q: %w", path, err)
 			}
@@ -286,37 +328,4 @@ func isWithin(root, path string) bool {
 		}
 	}
 	return true
-}
-
-func deleteIndexIfUnleased(ctx context.Context, index *workercache.Cache, assetID string) error {
-	if index == nil {
-		return ErrExecutionNoIndex
-	}
-	res, err := index.DB().ExecContext(ctx,
-		`DELETE FROM cached_assets
-		 WHERE asset_key = ?
-		   AND NOT EXISTS (SELECT 1 FROM cached_asset_leases WHERE asset_key = ?)`,
-		assetID, assetID,
-	)
-	if err != nil {
-		return fmt.Errorf("delete cache index %q: %w", assetID, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("delete cache index %q: rows affected: %w", assetID, err)
-	}
-	if n > 0 {
-		return nil
-	}
-	entry, found, err := index.Find(ctx, assetID)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return fmt.Errorf("%w: asset_key=%s", workercache.ErrNotFound, assetID)
-	}
-	if entry.ActiveLeaseCount > 0 {
-		return fmt.Errorf("%w: asset %q has active cache lease %q", ErrActiveLease, assetID, entry.ActiveJobID)
-	}
-	return fmt.Errorf("delete cache index %q: row was not removed", assetID)
 }

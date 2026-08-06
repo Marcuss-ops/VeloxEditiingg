@@ -38,6 +38,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stderr, "usage: velox-admin duplicate-delivery-manifest --db PATH [--output PATH] [--dry-run]")
 		fmt.Fprintln(stderr, "       velox-admin cleanup-drive-duplicates --db PATH --manifest PATH (--dry-run|--apply) [--actor ID]")
 		fmt.Fprintln(stderr, "       velox-admin reconcile-stale-executions --db PATH (--dry-run|--apply) [--output PATH] [--limit N] [--actor ID]")
+		fmt.Fprintln(stderr, "       velox-admin audit-invariants --db PATH [--output PATH]")
 		return nil
 	}
 	if args[0] == "cleanup-drive-duplicates" {
@@ -45,6 +46,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	if args[0] == "reconcile-stale-executions" {
 		return runStaleExecutionReconcile(args[1:], stdout, stderr)
+	}
+	if args[0] == "audit-invariants" {
+		return runInvariantAudit(args[1:], stdout, stderr)
 	}
 	if args[0] != "duplicate-delivery-manifest" {
 		return fmt.Errorf("unknown command %q", args[0])

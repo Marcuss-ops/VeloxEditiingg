@@ -172,6 +172,25 @@ func TestCache_MarkUsed_BumpsAndFailsOnMissing(t *testing.T) {
 	}
 }
 
+func TestCache_MarkDownloadCompleteWithHashRejectsNonCanonicalDigest(t *testing.T) {
+	t.Parallel()
+	c := newTestCache(t)
+	ctx := context.Background()
+	if err := c.Store(ctx, Entry{AssetKey: "BAD-HASH", LocalPath: "/tmp/bad.part"}); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if err := c.MarkDownloadCompleteWithHash(ctx, "BAD-HASH", "/tmp/bad.mp4", 3, "not-a-sha"); !errors.Is(err, ErrInvalidContentHash) {
+		t.Fatalf("invalid hash error=%v, want ErrInvalidContentHash", err)
+	}
+	entry, found, err := c.Find(ctx, "BAD-HASH")
+	if err != nil || !found {
+		t.Fatalf("Find after rejection: found=%v err=%v", found, err)
+	}
+	if entry.DownloadComplete {
+		t.Fatal("invalid hash must not make the cache entry complete")
+	}
+}
+
 func TestCache_MarkDownloadCompleteWithHashPersistsVerifiedContentHash(t *testing.T) {
 	t.Parallel()
 	c := newTestCache(t)

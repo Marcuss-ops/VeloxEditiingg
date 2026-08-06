@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"velox-shared/assetref"
 	"velox-worker-agent/internal/downloader"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
@@ -87,8 +88,8 @@ func TestMasterAssetTransfererResumesAfterInterruptedHTTPResponse(t *testing.T) 
 	transferer := &masterAssetTransferer{w: worker}
 	req := downloader.DownloadRequest{
 		AssetID:   "resume-asset",
-		AssetKey:  "resume-asset",
-		SHA256:    digest,
+		AssetKey:  assetref.AssetKey("resume-asset"),
+		SHA256:    assetref.ContentHash(digest),
 		SizeBytes: int64(len(data)),
 	}
 
@@ -106,7 +107,7 @@ func TestMasterAssetTransfererResumesAfterInterruptedHTTPResponse(t *testing.T) 
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for interrupted first response")
 	}
-	part := assetPartialPath(worker.assetCacheDir(), req.AssetID, req.SHA256)
+	part := assetPartialPath(worker.assetCacheDir(), req.AssetID, string(req.SHA256))
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		info, statErr := os.Stat(part)
@@ -168,8 +169,8 @@ func TestMasterAssetTransfererRestartsWhenServerIgnoresRange(t *testing.T) {
 
 	stateDir := t.TempDir()
 	worker := testTransferWorker(srv.URL, stateDir)
-	req := downloader.DownloadRequest{AssetID: "ignored-range", AssetKey: "ignored-range", SHA256: digest, SizeBytes: int64(len(data))}
-	part := assetPartialPath(worker.assetCacheDir(), req.AssetID, req.SHA256)
+	req := downloader.DownloadRequest{AssetID: "ignored-range", AssetKey: assetref.AssetKey("ignored-range"), SHA256: assetref.ContentHash(digest), SizeBytes: int64(len(data))}
+	part := assetPartialPath(worker.assetCacheDir(), req.AssetID, string(req.SHA256))
 	if err := os.MkdirAll(filepath.Dir(part), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -216,8 +217,8 @@ func TestMasterAssetTransfererRestartsAfterRangeNotSatisfiable(t *testing.T) {
 
 	stateDir := t.TempDir()
 	worker := testTransferWorker(srv.URL, stateDir)
-	req := downloader.DownloadRequest{AssetID: "range-reset", AssetKey: "range-reset", SHA256: digest, SizeBytes: int64(len(data))}
-	part := assetPartialPath(worker.assetCacheDir(), req.AssetID, req.SHA256)
+	req := downloader.DownloadRequest{AssetID: "range-reset", AssetKey: assetref.AssetKey("range-reset"), SHA256: assetref.ContentHash(digest), SizeBytes: int64(len(data))}
+	part := assetPartialPath(worker.assetCacheDir(), req.AssetID, string(req.SHA256))
 	if err := os.MkdirAll(filepath.Dir(part), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -263,8 +264,8 @@ func TestMasterAssetTransfererRejectsMalformedContentRange(t *testing.T) {
 
 	stateDir := t.TempDir()
 	worker := testTransferWorker(srv.URL, stateDir)
-	req := downloader.DownloadRequest{AssetID: "malformed-range", AssetKey: "malformed-range", SHA256: digest, SizeBytes: int64(len(data))}
-	part := assetPartialPath(worker.assetCacheDir(), req.AssetID, req.SHA256)
+	req := downloader.DownloadRequest{AssetID: "malformed-range", AssetKey: assetref.AssetKey("malformed-range"), SHA256: assetref.ContentHash(digest), SizeBytes: int64(len(data))}
+	part := assetPartialPath(worker.assetCacheDir(), req.AssetID, string(req.SHA256))
 	if err := os.MkdirAll(filepath.Dir(part), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +324,7 @@ func TestWorkerStopPreservesPartialForRestart(t *testing.T) {
 
 	stateDir := t.TempDir()
 	first := testTransferWorker(srv.URL, stateDir)
-	req := downloader.DownloadRequest{AssetID: "stop-restart", AssetKey: "stop-restart", SHA256: digest, SizeBytes: int64(len(data))}
+	req := downloader.DownloadRequest{AssetID: "stop-restart", AssetKey: assetref.AssetKey("stop-restart"), SHA256: assetref.ContentHash(digest), SizeBytes: int64(len(data))}
 	resolveResult := make(chan error, 1)
 	go func() {
 		_, err := first.assetDownloadManager().Resolve(context.Background(), req)
@@ -334,7 +335,7 @@ func TestWorkerStopPreservesPartialForRestart(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for first worker transfer")
 	}
-	part := assetPartialPath(first.assetCacheDir(), req.AssetID, req.SHA256)
+	part := assetPartialPath(first.assetCacheDir(), req.AssetID, string(req.SHA256))
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		info, statErr := os.Stat(part)
