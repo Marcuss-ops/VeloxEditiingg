@@ -238,12 +238,28 @@ func projectHealth9(cs ConnectionState, ss SchedulingState, ds DeploymentState, 
 	}
 }
 
-// IsHeartbeatOffline is the heartbeat-only arm of ConnectionState, for
-// hot paths where the session arm is not available (GetEligibleWorkers
-// must not run per-worker session queries under the registry lock):
-// true iff lastHB is empty, unparseable, or ≥5 minutes old. Session
-// reachability is deliberately assumed satisfiable — the heartbeat arm
-// alone decides connectivity at eligibility time.
+// IsHeartbeatStale is the heartbeat-only admission gate used by
+// GetEligibleWorkers. A worker becomes ineligible as soon as its heartbeat
+// crosses the canonical STALE threshold, not only after the later
+// DISCONNECTED threshold. This prevents a worker that is visibly STALE from
+// receiving new placement while its persisted session is still active.
+// Future, empty, or malformed heartbeats fail closed as well.
+func IsHeartbeatStale(lastHB string, now time.Time) bool {
+	if lastHB == "" {
+		return true
+	}
+	t, err := time.Parse(time.RFC3339, lastHB)
+	if err != nil || t.After(now) {
+		return true
+	}
+	return now.Sub(t.UTC()) >= ConnectionStaleThreshold
+}
+
+// IsHeartbeatOffline is retained as a source-compatible alias for callers
+// that used the older name. Eligibility semantics are stale-at-admission;
+// callers should prefer IsHeartbeatStale for new code.
+//
+// Deprecated: use IsHeartbeatStale.
 func IsHeartbeatOffline(lastHB string, now time.Time) bool {
-	return isOffline(true, lastHB, now)
+	return IsHeartbeatStale(lastHB, now)
 }

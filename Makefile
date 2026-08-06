@@ -27,7 +27,7 @@ EVIDENCE_ROOT_CAP10     ?= /tmp/velox-cap10-evidence
 
 .PHONY: verify verify-fast verify-heavy fmt fmt-check vet pilot api-docs api-docs-apply \
         jobs-smoke publishing-flow-smoke \
-        e2e-grpc e2e-workload e2e-workload-mtls \
+        e2e-grpc e2e-workload e2e-workload-mtls e2e-master-worker \
         enable-branch-protection disable-branch-protection inspect-branch-protection \
         local-verify-mirror certify-worker certify-worker-bootstrap-mtls \
         real-bootstrap pin-worker-digest align-worker-digest recovery-matrix recovery-matrix-dry \
@@ -216,6 +216,9 @@ e2e-workload:  ## PR 5 — full workload E2E (Hello → HelloAck → Task → Ar
 
 e2e-workload-mtls:  ## PR 7 — full workload E2E over mTLS (channel=staging, environment=staging, fail-closed: NO insecure fallback)
 	@bash tests/e2e/workload-mtls/run.sh
+
+e2e-master-worker:  ## Master/worker lifecycle E2E (bootstrap, collision, heartbeat loss, restart, reconnect)
+	@bash tests/e2e/master-worker-lifecycle/run.sh
 
 # ─── Phase 0 — Branch protection + required-check wiring ────────────────────────────
 # Apply the canonical Phase 0 protection to \`main\` (strict, code-owner review

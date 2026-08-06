@@ -42,7 +42,7 @@ func (r *Registry) GetEligibleWorkers(ctx context.Context, req costmodel.JobRequ
 			continue
 		}
 		resources := costmodel.ResourceSnapshotFromMaps(nil, w.Metrics)
-		isOffline := IsHeartbeatOffline(w.LastHB, now)
+		isStale := IsHeartbeatStale(w.LastHB, now)
 		if !w.Capacity.Authoritative || w.Capacity.MaxSlots <= 0 {
 			// Admission must fail closed when the lease-store read or
 			// declared worker capacity is unavailable; zero occupancy
@@ -54,7 +54,7 @@ func (r *Registry) GetEligibleWorkers(ctx context.Context, req costmodel.JobRequ
 			w.WorkerID.String(),
 			w.Schedulable,
 			w.Drain,
-			isOffline,
+			isStale,
 			w.Capacity.ActiveSlots,
 			w.Capacity.MaxSlots,
 			w.ExecutorRegistrySnapshot(),

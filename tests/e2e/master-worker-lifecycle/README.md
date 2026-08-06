@@ -9,13 +9,17 @@ prove the control-plane lifecycle.
 
 The orchestrator validates:
 
-1. **Clean bootstrap** — starts `velox-server` with a fresh migrated database
-   and waits for `/health/ready`.
-2. **Registration** — first calls the canonical
+1. **Bootstrap fail-fast + clean startup** — first starts `velox-server` with an
+   intentionally unsupported database driver and asserts a bounded non-zero
+   exit before readiness; it then starts the real master with a fresh migrated
+   SQLite database and waits for `/health/ready`.
+2. **Registration + collision** — first calls the canonical
    `POST /api/v1/workers/register` endpoint to persist the worker identity,
    then starts `DataServer/cmd/dev-hello-client`, completes the typed gRPC
    `Hello`/`HelloAck` handshake, and verifies the worker read model is
-   `CONNECTED`.
+   `CONNECTED`. A second real gRPC client using the same `WorkerID` and a
+   different credential must fail with typed `AlreadyExists`, create no second
+   active session, and leave the first session active.
 3. **Heartbeat** — the client sends real typed heartbeats on a short interval;
    the master exposes the worker as connected.
 4. **Persisted operation** — posts an authenticated admin drain mutation,
@@ -23,7 +27,9 @@ The orchestrator validates:
    terminal `SUCCEEDED` row directly in `fleet_operations`.
 5. **Heartbeat loss** — freezes the real client with `SIGSTOP`; after the
    isolated E2E thresholds elapse, the worker becomes `STALE` or
-   `DISCONNECTED`.
+   `DISCONNECTED` while remaining registered, and the canonical API connection
+   state is no longer live. Scheduler admission is covered by the focused Go
+   regression `TestGetSchedulableWorkers_ExcludesStaleHeartbeat`.
 6. **Master restart** — terminates and restarts only the master against the
    same SQLite file; the previously completed operation remains readable via
    both API and database.
@@ -83,6 +89,7 @@ Useful overrides:
 | `E2E_WORKER_ID` | `e2e-master-worker-1` | Canonical worker identity |
 | `E2E_WORKER_SECRET` | `e2e-lifecycle-secret` | Dev client credential input |
 | `E2E_HEARTBEAT_INTERVAL` | `1s` | Synthetic client heartbeat cadence |
+| `E2E_HEARTBEAT_WINDOW` | `30m` | Bounded lifetime of the synthetic worker process |
 | `E2E_STALE_WAIT_SECONDS` | `180` | Wait budget after `SIGSTOP`; canonical read-model stale threshold is 150s |
 | `E2E_OPERATION_TIMEOUT` | `30` | Operation terminal-state budget |
 | `E2E_KEEP_WORKDIR` | `1` | Preserve evidence (`0` removes it) |
@@ -93,7 +100,9 @@ Useful overrides:
 The read model derives status from the canonical store thresholds: `STALE` at
 150 seconds without a fresh heartbeat and `DISCONNECTED` at 300 seconds. The
 suite waits 180 seconds by default, so it verifies the first transition without
-waiting for the five-minute partition threshold. Override
+waiting for the five-minute partition threshold. The synthetic client now stays
+alive with a bounded 30-minute heartbeat window, allowing the SIGSTOP and
+restart/reconnect phases to exercise a real session. Override
 `E2E_STALE_WAIT_SECONDS` only when the deployed read-model contract is known to
 use a different threshold.
 
@@ -113,3 +122,8 @@ sqlite3 /tmp/velox-e2e-master-worker-lifecycle/data/velox.db \
 A failure after master restart should be investigated against the preserved
 SQLite file, not repaired manually. The suite is designed to make persisted
 state and process logs available for post-mortem analysis.
+
+The collision probe temporarily rotates the credential hash only inside the
+isolated test database, starts a second real gRPC client, and restores the
+original hash before reconnect testing. No production credential or secret is
+written to the repository.

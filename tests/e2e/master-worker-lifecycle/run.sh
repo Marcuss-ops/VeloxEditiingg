@@ -41,8 +41,8 @@ WORKER_ID="${E2E_WORKER_ID:-e2e-master-worker-1}"
 WORKER_NAME="${E2E_WORKER_NAME:-e2e-master-worker}"
 WORKER_SECRET="${E2E_WORKER_SECRET:-e2e-lifecycle-secret}"
 HEARTBEAT_INTERVAL="${E2E_HEARTBEAT_INTERVAL:-1s}"
-HEARTBEAT_WINDOW="${E2E_HEARTBEAT_WINDOW:-10m}"
 STALE_WAIT_SECONDS="${E2E_STALE_WAIT_SECONDS:-180}"
+HEARTBEAT_WINDOW="${E2E_HEARTBEAT_WINDOW:-30m}"
 POLL_SECONDS="${E2E_POLL_SECONDS:-1}"
 MASTER_READY_TIMEOUT="${E2E_MASTER_READY_TIMEOUT:-60}"
 OPERATION_TIMEOUT="${E2E_OPERATION_TIMEOUT:-30}"
@@ -125,6 +125,45 @@ wait_http() {
     sleep 1
   done
   return 1
+}
+
+assert_master_fail_fast() {
+  local bad_workdir="$WORKDIR/fail-fast"
+  local bad_env="$bad_workdir/master.env"
+  local bad_log="$bad_workdir/master.log"
+  mkdir -p "$bad_workdir"
+  cat >"$bad_env" <<ENV
+GIN_MODE=release
+VELOX_MASTER_PORT=$(pick_free_port)
+VELOX_GRPC_PORT=$(pick_free_port)
+VELOX_RUNTIME_DIR=$bad_workdir/runtime
+VELOX_DATA_DIR=$bad_workdir/data
+VELOX_DB_PATH=$bad_workdir/data/velox.db
+VELOX_DB_DRIVER=postgres
+VELOX_ADMIN_TOKEN=$ADMIN_TOKEN
+VELOX_ALLOWED_WORKERS=$WORKER_ID
+VELOX_GRPC_ALLOW_INSECURE_DEV=true
+ENV
+  info "probing invalid bootstrap dependency for fail-fast behavior"
+  set +e
+  (
+    set -a
+    # shellcheck disable=SC1090
+    source "$bad_env"
+    set +a
+    timeout 15s "$MASTER_BIN" serve
+  ) >"$bad_log" 2>&1
+  local rc=$?
+  set -e
+  [[ "$rc" -ne 0 && "$rc" -ne 124 ]] || {
+    tail -100 "$bad_log" >&2 || true
+    fail "invalid database driver did not fail fast (rc=$rc)"
+  }
+  if grep -Eq 'Bootstrap complete|listening|health/ready' "$bad_log"; then
+    tail -100 "$bad_log" >&2 || true
+    fail "invalid bootstrap reached runtime readiness"
+  fi
+  pass "invalid bootstrap dependency failed before readiness (rc=$rc)"
 }
 
 admin_get() {
@@ -292,6 +331,9 @@ verify_persisted_operation() {
     "$MASTER_URL/api/v1/admin/workers/${WORKER_ID}/drain")"
   operation_id="$(jq -er '.operation_id' <<<"$response")"
   [[ -n "$operation_id" ]] || fail "drain response did not contain operation_id"
+  [[ "$(jq -r '.worker_id // ""' <<<"$response")" == "$WORKER_ID" ]] || fail "drain response worker_id mismatch"
+  [[ "$(jq -r '.op // ""' <<<"$response")" == "drain" ]] || fail "drain response op mismatch"
+  [[ "$(jq -r '.status // ""' <<<"$response")" =~ ^(QUEUED|RUNNING|SUCCEEDED)$ ]] || fail "drain response has invalid initial status"
   if ! wait_operation "$operation_id" "$OPERATION_TIMEOUT" >/dev/null; then
     fail "operation $operation_id did not reach SUCCEEDED"
   fi
@@ -308,17 +350,75 @@ verify_persisted_operation() {
 }
 
 stop_worker_for_partition() {
-  local pid
+  local pid body status connection deadline
   pid="$(cat "$WORKER_PIDFILE")"
   info "freezing worker pid=$pid to stop heartbeats"
-  kill -STOP "$pid"
-  local body
-  if ! body="$(wait_worker_status '^(STALE|DISCONNECTED)$' "$STALE_WAIT_SECONDS")"; then
-    fail "worker did not become STALE/DISCONNECTED after heartbeat loss"
-  fi
-  [[ "$(jq -r '.status' <<<"$body")" != "CONNECTED" ]] || fail "worker remained CONNECTED after heartbeat loss"
-  [[ -n "$(jq -r '.last_heartbeat_at // ""' <<<"$body")" ]] || fail "heartbeat-loss response omitted last_heartbeat_at"
-  pass "lost heartbeat excluded worker from live status (status=$(jq -r '.status' <<<"$body"))"
+  kill -STOP -- "-$pid" 2>/dev/null || kill -STOP "$pid"
+  deadline=$(( $(date +%s) + STALE_WAIT_SECONDS ))
+  while (( $(date +%s) < deadline )); do
+    body="$(admin_get "/api/v1/admin/workers/${WORKER_ID}" 2>/dev/null || true)"
+    status="$(jq -r '.status // .connection_status // ""' <<<"$body" 2>/dev/null || true)"
+    connection="$(jq -r '.connection_state // ""' <<<"$body" 2>/dev/null || true)"
+    # DRAINING is intentionally higher precedence in the operator status
+    # projection. The placement admission signal is the canonical connection
+    # dimension, so assert that dimension directly while preserving the prior
+    # drain operation.
+    if [[ "$connection" == "STALE" || "$connection" == "OFFLINE" || "$status" == "STALE" || "$status" == "DISCONNECTED" ]]; then
+      break
+    fi
+    sleep "$POLL_SECONDS"
+  done
+  [[ "$connection" == "STALE" || "$connection" == "OFFLINE" || "$status" == "STALE" || "$status" == "DISCONNECTED" ]] || {
+    info "last worker response: ${body:-<none>}"
+    fail "worker did not become stale/disconnected after heartbeat loss"
+  }
+  [[ "$connection" == "STALE" || "$connection" == "OFFLINE" ]] || fail "heartbeat-loss API response omitted canonical connection state"
+  [[ "$(jq -r '.session_active // false' <<<"$body")" == "true" ]] || fail "heartbeat-loss worker unexpectedly lost persisted session before stale classification"
+  [[ "$(jq -r '.last_heartbeat_at // ""' <<<"$body")" != "" ]] || fail "heartbeat-loss response omitted last_heartbeat_at"
+  pass "lost heartbeat excluded worker from live API status (status=$status, connection=$connection)"
+}
+
+verify_worker_id_collision() {
+  local collision_secret="e2e-collision-secret"
+  local collision_credential original_credential collision_log collision_rc
+  collision_credential="$(printf '%s:%s' "$WORKER_ID" "$collision_secret" | sha256sum | awk '{print $1}')"
+  original_credential="$(printf '%s:%s' "$WORKER_ID" "$WORKER_SECRET" | sha256sum | awk '{print $1}')"
+  collision_log="$WORKDIR/worker-collision.log"
+  info "attempting a real second gRPC session with the same WorkerID and a different credential"
+
+  # The gRPC stream validates the declared credential before its session
+  # collision gate. Rotate only the isolated test DB credential so the second
+  # client reaches InsertSession; a subshell EXIT trap restores it even when
+  # the client probe fails.
+  set +e
+  (
+    set -Eeuo pipefail
+    restore_collision_credential() {
+      sqlite3 "$DB" "UPDATE worker_credentials SET credential_hash='${original_credential}' WHERE worker_id='${WORKER_ID}';" >/dev/null 2>&1 || true
+    }
+    trap restore_collision_credential EXIT
+    sqlite3 "$DB" "UPDATE worker_credentials SET credential_hash='${collision_credential}' WHERE worker_id='${WORKER_ID}';"
+    : >"$collision_log"
+    timeout 20s "$HELLO_BIN" \
+      --master "127.0.0.1:$GRPC_PORT" \
+      --worker-id "$WORKER_ID" \
+      --worker-name "e2e-collision-worker" \
+      --credential-hash "$collision_credential" \
+      >"$collision_log" 2>&1
+  )
+  collision_rc=$?
+  set -e
+
+  [[ "$collision_rc" -ne 0 && "$collision_rc" -ne 124 ]] || {
+    cat "$collision_log" >&2 || true
+    fail "duplicate WorkerID gRPC session did not fail fast (rc=$collision_rc)"
+  }
+  grep -Eq 'AlreadyExists|already connected on a different credential|COLLISION' "$collision_log" || {
+    cat "$collision_log" >&2 || true
+    fail "duplicate WorkerID gRPC session did not report the typed collision error"
+  }
+  [[ "$(sqlite3 -noheader "$DB" "SELECT COUNT(*) FROM worker_sessions WHERE worker_id='${WORKER_ID}' AND session_type='control' AND status='ACTIVE' AND revoked=0;")" == "1" ]] || fail "WorkerID collision did not preserve exactly one active session"
+  pass "real duplicate WorkerID gRPC session rejected with collision and first session preserved"
 }
 
 restart_master_and_reconnect() {
@@ -366,6 +466,7 @@ main() {
   rm -f "$DB" "$MASTER_PIDFILE" "$WORKER_PIDFILE" "$WORKDIR/operation.id"
 
   build_binaries
+  assert_master_fail_fast
   info "initializing isolated SQLite schema"
   if ! timeout 120s "$SEED_BIN" "$DB" >"$WORKDIR/seed.log" 2>&1; then
     tail -100 "$WORKDIR/seed.log" >&2 || true
@@ -375,6 +476,7 @@ main() {
   start_master
   register_worker
   start_worker
+  verify_worker_id_collision
   verify_persisted_operation
   stop_worker_for_partition
   restart_master_and_reconnect

@@ -74,12 +74,29 @@ func buildCapabilities(executorID string) *structpb.Struct {
 				"version": 1,
 			},
 		},
+		"host": map[string]any{
+			"max_parallel_jobs": 1,
+		},
 		controltransport.CapabilityCanonicalPayloadV2: true,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("failed to build capabilities: %v", err))
 	}
 	return caps
+}
+
+// buildHeartbeatExtra wraps the canonical capability report in the envelope
+// expected by the master heartbeat handler: Heartbeat.Extra["capabilities"].
+// Hello carries the report directly in Hello.Capabilities, but heartbeats
+// use Extra for the mutable re-advertisement path.
+func buildHeartbeatExtra(executorID string) *structpb.Struct {
+	extra, err := structpb.NewStruct(map[string]any{
+		"capabilities": buildCapabilities(executorID).AsMap(),
+	})
+	if err != nil {
+		panic(fmt.Sprintf("failed to build heartbeat capabilities: %v", err))
+	}
+	return extra
 }
 
 // runHeartbeatLoop ticks at HeartbeatInterval and sends typed Heartbeats
@@ -115,6 +132,7 @@ func runHeartbeatLoop(
 						WorkerStatus:    "idle",
 						Status:          "idle",
 						ProtocolVersion: p.ProtocolVersion,
+						Extra:           buildHeartbeatExtra(p.ExecutorID),
 					},
 				},
 			}
