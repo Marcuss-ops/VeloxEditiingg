@@ -212,6 +212,21 @@ fleet report is `PASS` only when every requested worker passes; failures are
 recorded while the remaining workers continue. Duplicate or malformed worker
 IDs are rejected before any worker is invoked.
 
+The fleet runner installs an EXIT trap and performs idempotent final cleanup:
+network restoration runs only when `RW_FLEET_NETWORK_RULES_APPLIED=1`, and
+worker-start verification runs for every live mode. Only a run-owned `mktemp`
+transit directory and intermediate NDJSON are removed; evidence files remain
+available for audit. Configure `RW_FLEET_RESTORE_NETWORK_CMD` and
+`RW_FLEET_WORKER_START_CMD` with the operator-owned restoration/start commands.
+
+Before the final report, the runner executes the configured
+`RW_FLEET_ORPHAN_CHECK_CMD`. It must emit JSON with non-negative
+`leases`, `jobs`, `tasks`, and `operations` counts. Any non-zero count fails
+the fleet verdict and is recorded under `invariants`; invalid/missing output
+also fails closed. Offline tests may explicitly set
+`RW_FLEET_INVARIANTS_MODE=skip`, but live certification defaults to
+`required`.
+
 ## Machine-readable run evidence
 
 Every CLI certification mode (`--network-json`, `--worker-json`,

@@ -30,6 +30,31 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 SINGLE_RUNNER="${RW_FLEET_SINGLE_RUNNER:-${SCRIPT_DIR}/remote-worker-cert-config.sh}"
 DESTRUCTIVE_RUNNER="${RW_FLEET_DESTRUCTIVE_RUNNER:-${REPO_ROOT}/tests/worker-cert/worker_offline_recovery.sh}"
 
+# Runtime state used by the EXIT trap. Evidence is preserved; only the private
+# transit directory and intermediate NDJSON are removed after finalization.
+FLEET_DIR=""
+FLEET_TMP_DIR=""
+FLEET_RESULTS_FILE=""
+FLEET_REPORT=""
+FLEET_MODE=""
+FLEET_RUN_ID=""
+FLEET_MAIN_STATUS=FAIL
+FLEET_CLEANUP_RUNNING=0
+FLEET_FINALIZING=0
+FLEET_WORKERS=()
+CLEANUP_NETWORK_STATUS=NOT_RUN
+CLEANUP_WORKER_STATUS=NOT_RUN
+CLEANUP_TEMP_STATUS=NOT_RUN
+INVARIANT_STATUS=NOT_RUN
+INVARIANT_CHECKED=0
+INVARIANT_DIAGNOSTIC=""
+INVARIANT_LEASES=null
+INVARIANT_JOBS=null
+INVARIANT_TASKS=null
+INVARIANT_OPERATIONS=null
+
+trap fleet_cleanup EXIT
+
 fleet_die() {
   printf 'certify-remote-fleet: %s\n' "$*" >&2
   return 2
@@ -55,6 +80,14 @@ Environment:
   RW_FLEET_SINGLE_RUNNER          Override single-worker runner for tests/operators.
   RW_FLEET_DESTRUCTIVE_RUNNER     Override destructive runner path.
   RW_FLEET_WORKER_TIMEOUT_S       Optional per-worker timeout (default: 0/unbounded).
+  RW_FLEET_INVARIANTS_MODE        required (default), skip, or command.
+  RW_FLEET_ORPHAN_CHECK_CMD        Command emitting {leases,jobs,tasks,operations} counts.
+  RW_FLEET_RESTORE_NETWORK_CMD     Cleanup command to remove temporary network rules.
+  RW_FLEET_NETWORK_RULES_APPLIED   Set 1 when this run changed network rules.
+  RW_FLEET_WORKER_START_CMD        Cleanup command to ensure a worker is started.
+  RW_FLEET_ENSURE_WORKER_STARTED   Set 1 to require worker-start cleanup in non-destructive modes.
+  RW_FLEET_CLEANUP_TIMEOUT_S       Timeout for each cleanup command (default: 30).
+  RW_FLEET_INVARIANT_TIMEOUT_S     Timeout for orphan check (default: 30).
 
 Destructive safety:
   VELOX_CERT_ENV                   Must explicitly be staging/canary/development/test/local.
@@ -62,6 +95,10 @@ Destructive safety:
   VELOX_CERT_DESTRUCTIVE_ACK=I_UNDERSTAND_DESTRUCTIVE_CERT
   RW_WORKER_CRASH_CMD              Command passed to the recovery runner.
   RW_JOB_DESTINATION_ID            Explicit destination for the recovery job.
+
+Invariant command contract:
+  RW_FLEET_ORPHAN_CHECK_CMD must print one JSON object, for example:
+  {"leases":0,"jobs":0,"tasks":0,"operations":0}
 USAGE
 }
 
@@ -155,6 +192,14 @@ guard_destructive() {
     fleet_die "RW_JOB_DESTINATION_ID is required for destructive mode"
     return 1
   }
+  [[ -n "${RW_FLEET_WORKER_START_CMD:-}" ]] || {
+    fleet_die "RW_FLEET_WORKER_START_CMD is required for destructive cleanup"
+    return 1
+  }
+  if [[ "${RW_FLEET_NETWORK_RULES_APPLIED:-0}" == 1 && -z "${RW_FLEET_RESTORE_NETWORK_CMD:-}" ]]; then
+    fleet_die "RW_FLEET_RESTORE_NETWORK_CMD is required when RW_FLEET_NETWORK_RULES_APPLIED=1"
+    return 1
+  fi
   validate_safe_path_value RW_WORKER_CRASH_CMD "$RW_WORKER_CRASH_CMD" || return 1
   [[ -x "$DESTRUCTIVE_RUNNER" || -f "$DESTRUCTIVE_RUNNER" ]] || {
     fleet_die "destructive runner not found: $DESTRUCTIVE_RUNNER"
@@ -220,6 +265,175 @@ if report.is_file():
     except (OSError, json.JSONDecodeError):
         pass
 PY
+}
+
+run_cleanup_command() {
+  local name="$1" command="$2" output rc timeout_s="${RW_FLEET_CLEANUP_TIMEOUT_S:-30}"
+  [[ "$timeout_s" =~ ^[1-9][0-9]*$ ]] || {
+    printf '%s' FAILED
+    return 1
+  }
+  [[ -n "$command" ]] || {
+    printf '%s' NOT_CONFIGURED
+    return 1
+  }
+  output="$(mktemp "${TMPDIR:-/tmp}/velox-fleet-cleanup.XXXXXX")" || {
+    printf '%s' FAILED
+    return 1
+  }
+  if timeout "$timeout_s" bash -c "$command" >"$output" 2>&1; then
+    rc=0
+  else
+    rc=$?
+  fi
+  rm -f -- "$output"
+  if (( rc == 0 )); then
+    printf '%s' PASS
+    return 0
+  fi
+  printf '%s' FAILED
+  return 1
+}
+
+fleet_check_invariants() {
+  local mode="${RW_FLEET_INVARIANTS_MODE:-required}" command output
+  INVARIANT_STATUS=NOT_RUN
+  INVARIANT_CHECKED=0
+  INVARIANT_DIAGNOSTIC=""
+  INVARIANT_LEASES=null
+  INVARIANT_JOBS=null
+  INVARIANT_TASKS=null
+  INVARIANT_OPERATIONS=null
+  case "$mode" in
+    skip)      INVARIANT_STATUS=SKIPPED
+      INVARIANT_CHECKED=1
+      INVARIANT_DIAGNOSTIC="explicitly skipped by RW_FLEET_INVARIANTS_MODE=skip"
+      return 0
+
+      ;;
+    command|required) ;;
+    *)
+      INVARIANT_STATUS=FAIL
+      INVARIANT_CHECKED=1
+      INVARIANT_DIAGNOSTIC="RW_FLEET_INVARIANTS_MODE must be required, command, or skip"
+      return 1
+      ;;
+  esac
+  command="${RW_FLEET_ORPHAN_CHECK_CMD:-}"
+  if [[ -z "$command" ]]; then    INVARIANT_STATUS=FAIL
+    INVARIANT_CHECKED=1
+    INVARIANT_DIAGNOSTIC="RW_FLEET_ORPHAN_CHECK_CMD is required unless RW_FLEET_INVARIANTS_MODE=skip"
+    return 1
+
+  fi
+  [[ "$command" != *$'\r'* && "$command" != *$'\n'* ]] || {
+    INVARIANT_STATUS=FAIL
+    INVARIANT_CHECKED=1
+    INVARIANT_DIAGNOSTIC="RW_FLEET_ORPHAN_CHECK_CMD contains CR/LF"
+    return 1
+  }
+  output="$(mktemp "${TMPDIR:-/tmp}/velox-fleet-invariants.XXXXXX")" || {
+    INVARIANT_STATUS=FAIL
+    INVARIANT_CHECKED=1
+    INVARIANT_DIAGNOSTIC="cannot create invariant scratch file"
+    return 1
+  }
+  local timeout_s="${RW_FLEET_INVARIANT_TIMEOUT_S:-30}"
+  if ! [[ "$timeout_s" =~ ^[1-9][0-9]*$ ]]; then
+    INVARIANT_STATUS=FAIL
+    INVARIANT_CHECKED=1
+    INVARIANT_DIAGNOSTIC="RW_FLEET_INVARIANT_TIMEOUT_S must be a positive integer"
+    rm -f -- "$output"
+    return 1
+  fi
+  if timeout "$timeout_s" bash -c "$command" >"$output" 2>&1 && jq -e \
+      '(.leases // 0) as $leases |
+       (.jobs // 0) as $jobs |
+       (.tasks // 0) as $tasks |
+       (.operations // 0) as $operations |
+       ($leases|type)=="number" and ($leases % 1 == 0) and ($leases >= 0) and
+       ($jobs|type)=="number" and ($jobs % 1 == 0) and ($jobs >= 0) and
+       ($tasks|type)=="number" and ($tasks % 1 == 0) and ($tasks >= 0) and
+       ($operations|type)=="number" and ($operations % 1 == 0) and ($operations >= 0)' "$output" >/dev/null 2>&1; then
+    INVARIANT_LEASES="$(jq -r '.leases // 0' "$output")"
+    INVARIANT_JOBS="$(jq -r '.jobs // 0' "$output")"
+    INVARIANT_TASKS="$(jq -r '.tasks // 0' "$output")"
+    INVARIANT_OPERATIONS="$(jq -r '.operations // 0' "$output")"
+    INVARIANT_STATUS=PASS
+    INVARIANT_CHECKED=1
+    if (( INVARIANT_LEASES + INVARIANT_JOBS + INVARIANT_TASKS + INVARIANT_OPERATIONS > 0 )); then
+      INVARIANT_STATUS=FAIL
+      INVARIANT_DIAGNOSTIC="orphaned resources detected"
+    fi
+  else
+    INVARIANT_STATUS=FAIL
+    INVARIANT_CHECKED=1
+    INVARIANT_DIAGNOSTIC="orphan check failed or returned invalid JSON"
+  fi
+  rm -f -- "$output"
+  [[ "$INVARIANT_STATUS" == PASS ]]
+}
+
+fleet_cleanup() {
+  local rc=$? network_rc=0 worker_rc=0 temp_rc=0 cleanup_report
+  (( FLEET_CLEANUP_RUNNING == 0 )) || return "$rc"
+  FLEET_CLEANUP_RUNNING=1
+
+  # Early exits still receive a final invariant observation and a durable
+  # cleanup report. Normal runs write the richer fleet report in main().
+  if [[ -n "${FLEET_DIR:-}" && "$INVARIANT_CHECKED" == 0 ]]; then
+    fleet_check_invariants || rc=1
+  fi
+
+  if [[ "${RW_FLEET_NETWORK_RULES_APPLIED:-0}" == 1 ]]; then
+    if CLEANUP_NETWORK_STATUS="$(run_cleanup_command network "${RW_FLEET_RESTORE_NETWORK_CMD:-}")"; then
+      :
+    else
+      network_rc=1
+    fi
+  else
+    CLEANUP_NETWORK_STATUS=NOT_APPLIED
+  fi
+
+  if [[ "${RW_FLEET_ENSURE_WORKER_STARTED:-0}" == 1 ]]; then
+    if CLEANUP_WORKER_STATUS="$(run_cleanup_command worker "${RW_FLEET_WORKER_START_CMD:-}")"; then
+      :
+    else
+      worker_rc=1
+    fi
+  else
+    CLEANUP_WORKER_STATUS=NOT_REQUIRED
+  fi
+
+  if [[ -n "${FLEET_TMP_DIR:-}" && -d "$FLEET_TMP_DIR" ]]; then
+    if rm -rf -- "$FLEET_TMP_DIR"; then
+      CLEANUP_TEMP_STATUS=PASS
+    else
+      CLEANUP_TEMP_STATUS=FAIL
+      temp_rc=1
+    fi
+  else
+    CLEANUP_TEMP_STATUS=NOT_FOUND
+  fi
+  if [[ -n "${FLEET_RESULTS_FILE:-}" && "$FLEET_FINALIZING" != 1 ]]; then
+    rm -f -- "$FLEET_RESULTS_FILE" || temp_rc=1
+  fi
+  if [[ -n "${FLEET_DIR:-}" && "${FLEET_REPORT_WRITTEN:-0}" != 1 ]]; then
+    cleanup_report="${FLEET_DIR}/cleanup-report.json"
+    jq -n --arg schema 'velox.remote_worker.fleet.cleanup.v1' \
+      --arg run_id "${FLEET_RUN_ID:-}" --arg mode "${FLEET_MODE:-}" \
+      --arg status "$([[ "$rc" -eq 0 && "$INVARIANT_STATUS" == PASS ]] && printf PASS || printf FAIL)" \
+      --arg invariant_status "${INVARIANT_STATUS:-NOT_RUN}" \
+      --arg invariant_diagnostic "${INVARIANT_DIAGNOSTIC:-}" \
+      --arg network "${CLEANUP_NETWORK_STATUS:-NOT_RUN}" \
+      --arg worker "${CLEANUP_WORKER_STATUS:-NOT_RUN}" \
+      --arg temporary "${CLEANUP_TEMP_STATUS:-NOT_RUN}" \
+      --argjson leases "${INVARIANT_LEASES:-null}" --argjson jobs "${INVARIANT_JOBS:-null}" \
+      --argjson tasks "${INVARIANT_TASKS:-null}" --argjson operations "${INVARIANT_OPERATIONS:-null}" \
+      '{schema:$schema,run_id:$run_id,mode:$mode,status:$status,cleanup:{network:$network,worker:$worker,temporary:$temporary},invariants:{status:$invariant_status,diagnostic:(if $invariant_diagnostic=="" then null else $invariant_diagnostic end),orphan_leases:$leases,orphan_jobs:$jobs,orphan_tasks:$tasks,orphan_operations:$operations}}' >"$cleanup_report" || rc=1
+  fi
+  (( network_rc == 0 && worker_rc == 0 && temp_rc == 0 )) || rc=1
+  return "$rc"
 }
 
 run_one_worker() {
@@ -331,7 +545,17 @@ main() {
   [[ -n "$workers_csv" ]] || { fleet_die "--workers or VELOX_CERT_WORKERS is required"; return 2; }
   require_command jq || return 2
   require_command python3 || return 2
+  require_command timeout || return 2
   [[ -f "$SINGLE_RUNNER" ]] || { fleet_die "single-worker runner not found: $SINGLE_RUNNER"; return 2; }
+  if [[ "${RW_FLEET_INVARIANTS_MODE:-required}" != skip && -z "${RW_FLEET_ORPHAN_CHECK_CMD:-}" ]]; then
+    fleet_die "RW_FLEET_ORPHAN_CHECK_CMD is required for live certification (use RW_FLEET_INVARIANTS_MODE=skip only for offline/mock runs)"
+    return 2
+  fi
+  if [[ -z "${RW_FLEET_WORKER_START_CMD:-}" ]]; then
+    fleet_die "RW_FLEET_WORKER_START_CMD is required to verify worker-start cleanup"
+    return 2
+  fi
+  export RW_FLEET_ENSURE_WORKER_STARTED=1
   if [[ "$mode" == destructive ]]; then
     guard_destructive || return 2
   fi
@@ -340,9 +564,17 @@ main() {
   fleet_dir="${fleet_dir:-${TMPDIR:-/tmp}/velox-fleet-${run_id}}"
   mkdir -p -- "$fleet_dir" || { fleet_die "cannot create artifact directory: $fleet_dir"; return 2; }
   validate_safe_path_value RW_FLEET_ARTIFACT_DIR "$fleet_dir" || return 2
+  FLEET_DIR="$fleet_dir"
+  FLEET_MODE="$mode"
+  FLEET_RUN_ID="$run_id"
   export RW_FLEET_RUN_ID="$run_id"
-
+  FLEET_TMP_DIR="$(mktemp -d "${fleet_dir}/.tmp.XXXXXX")" || { fleet_die "cannot create temporary directory under evidence dir"; return 2; }
+  if [[ "${RW_FLEET_NETWORK_RULES_APPLIED:-0}" == 1 && -z "${RW_FLEET_RESTORE_NETWORK_CMD:-}" ]]; then
+    fleet_die "RW_FLEET_RESTORE_NETWORK_CMD is required when RW_FLEET_NETWORK_RULES_APPLIED=1"
+    return 2
+  fi
   results_file="${fleet_dir}/.workers.ndjson"
+  FLEET_RESULTS_FILE="$results_file"
   : >"$results_file"
   IFS=',' read -r -a workers <<<"$workers_csv"
   ((${#workers[@]} > 0)) || { fleet_die "worker list is empty"; return 2; }
@@ -365,15 +597,33 @@ main() {
     fi
   done
 
+  if ! fleet_check_invariants; then
+    overall=FAIL
+  fi
+  # Run cleanup before writing the final report so cleanup and invariant
+  # statuses are included. Preserve the NDJSON accumulator until jq has
+  # consumed it; the EXIT trap then remains idempotent.
+  FLEET_FINALIZING=1
+  fleet_cleanup || overall=FAIL
   fleet_report="${fleet_dir}/fleet-report.json"
+  FLEET_REPORT="$fleet_report"
   jq -n --arg run_id "$run_id" --arg mode "$mode" --arg overall "$overall" \
-    --arg artifact_dir "$fleet_dir" --slurpfile worker_results "$results_file" \
-    '{schema:"velox.remote_worker.fleet.v1",run_id:$run_id,mode:$mode,serial:true,artifact_dir:$artifact_dir,overall:$overall,workers:$worker_results}' >"$fleet_report"
+    --arg artifact_dir "$fleet_dir" --arg invariant_status "$INVARIANT_STATUS" \
+    --arg invariant_diagnostic "$INVARIANT_DIAGNOSTIC" \
+    --arg cleanup_network "$CLEANUP_NETWORK_STATUS" --arg cleanup_worker "$CLEANUP_WORKER_STATUS" \
+    --arg cleanup_temp "$CLEANUP_TEMP_STATUS" --slurpfile worker_results "$results_file" \
+    --argjson orphan_leases "$INVARIANT_LEASES" --argjson orphan_jobs "$INVARIANT_JOBS" \
+    --argjson orphan_tasks "$INVARIANT_TASKS" --argjson orphan_operations "$INVARIANT_OPERATIONS" \
+    '{schema:"velox.remote_worker.fleet.v1",run_id:$run_id,mode:$mode,serial:true,artifact_dir:$artifact_dir,overall:$overall,workers:$worker_results,cleanup:{status:(if ($cleanup_network=="FAIL" or $cleanup_worker=="FAIL" or $cleanup_temp=="FAIL") then "FAIL" else "PASS" end),network:$cleanup_network,worker:$cleanup_worker,temporary:$cleanup_temp},invariants:{status:$invariant_status,diagnostic:(if $invariant_diagnostic=="" then null else $invariant_diagnostic end),orphan_leases:$orphan_leases,orphan_jobs:$orphan_jobs,orphan_tasks:$orphan_tasks,orphan_operations:$orphan_operations}}' >"$fleet_report"
   write_fleet_junit "$fleet_report" "${fleet_dir}/fleet-report.junit.xml" "$mode"
   cp -- "$fleet_report" "${fleet_dir}/report.json"
+  FLEET_REPORT_WRITTEN=1
   printf '%s\n' "fleet_report=${fleet_report}" >&2
   cat "$fleet_report"
+  # The report is durable evidence; the NDJSON accumulator is not.
   rm -f -- "$results_file"
+  FLEET_RESULTS_FILE=""
+  FLEET_REPORT_WRITTEN=1
   [[ "$overall" == PASS ]]
 }
 

@@ -40,6 +40,8 @@ chmod +x "$MOCK_SINGLE" "$MOCK_DESTRUCTIVE"
 
 export RW_FLEET_SINGLE_RUNNER="$MOCK_SINGLE"
 export RW_FLEET_DESTRUCTIVE_RUNNER="$MOCK_DESTRUCTIVE"
+export RW_FLEET_ORPHAN_CHECK_CMD='printf %s "{\"leases\":0,\"jobs\":0,\"tasks\":0,\"operations\":0}"'
+export RW_FLEET_WORKER_START_CMD='true'
 export MASTER_URL=https://staging.example.test
 
 run_fleet() {
@@ -52,6 +54,7 @@ run_fleet() {
   test -s "${output_dir}/fleet-report.junit.xml"
   test -s "${output_dir}/report.json"
   test -s "${output_dir}/commands.log"
+test ! -d "${output_dir}/.tmp"
 }
 
 run_fleet quick worker-a,worker-b "${TMP_DIR}/quick"
@@ -81,12 +84,29 @@ if VELOX_CERT_ENV=production VELOX_CERT_ALLOW_DESTRUCTIVE=1 \
   exit 1
 fi
 
+NETWORK_MARKER="${TMP_DIR}/network-restored"
+WORKER_MARKER="${TMP_DIR}/worker-started"
 VELOX_CERT_ENV=test VELOX_CERT_ALLOW_DESTRUCTIVE=1 \
 VELOX_CERT_DESTRUCTIVE_ACK=I_UNDERSTAND_DESTRUCTIVE_CERT \
 RW_WORKER_CRASH_CMD='true' RW_JOB_DESTINATION_ID=destination \
+RW_FLEET_RESTORE_NETWORK_CMD="printf restored > '$NETWORK_MARKER'" \
+RW_FLEET_NETWORK_RULES_APPLIED=1 \
+RW_FLEET_WORKER_START_CMD="printf started > '$WORKER_MARKER'" \
 RW_FLEET_ARTIFACT_DIR="${TMP_DIR}/destructive" \
 bash "$FLEET_RUNNER" --mode destructive --workers worker-a,worker-b --serial >/dev/null
-jq -e '.overall == "PASS" and .mode == "destructive" and (.workers|length) == 2' \
+jq -e '.overall == "PASS" and .mode == "destructive" and (.workers|length) == 2 and .invariants.status == "PASS" and .cleanup.status == "PASS" and .cleanup.network == "PASS" and .cleanup.worker == "PASS" and .cleanup.temporary == "PASS"' \
   "${TMP_DIR}/destructive/fleet-report.json" >/dev/null
+test -f "$NETWORK_MARKER"
+test -f "$WORKER_MARKER"
+test ! -d "${TMP_DIR}/destructive/.tmp"
+test -s "${TMP_DIR}/destructive/report.json"
+
+# A non-zero orphan count must fail the aggregate while still producing the
+# report and preserving both worker results.
+RW_FLEET_ORPHAN_CHECK_CMD='printf %s "{\"leases\":1,\"jobs\":0,\"tasks\":0,\"operations\":0}"' \
+RW_FLEET_ARTIFACT_DIR="${TMP_DIR}/orphan-fail" \
+bash "$FLEET_RUNNER" --mode quick --workers worker-a,worker-b --serial >/dev/null 2>&1 || true
+jq -e '.overall == "FAIL" and .invariants.status == "FAIL" and .invariants.orphan_leases == 1 and (.workers|length) == 2' \
+  "${TMP_DIR}/orphan-fail/fleet-report.json" >/dev/null
 
 printf 'PASS: fleet certification wrapper offline tests\n'
