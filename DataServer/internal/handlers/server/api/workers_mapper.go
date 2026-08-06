@@ -65,6 +65,22 @@ func sanitizeWorker(w workersreg.Worker) WorkerResponse {
 		Executors:           extractExecutors(w.ExecutorRegistrySnapshot()),
 	}
 
+	// ReleaseIdentity certificate (registered at hello/heartbeat time).
+	// Omitted when the worker has not advertised a certified release yet
+	// so dashboards never infer evidence from sibling fields.
+	if !w.ReleaseIdentity.IsEmpty() {
+		resp.ReleaseIdentity = ReleaseIdentityResponse{
+			ImageDigest:      w.ReleaseIdentity.ImageDigest,
+			SourceCommit:     w.ReleaseIdentity.SourceCommit,
+			SourceHash:       w.ReleaseIdentity.SourceHash,
+			BundleHash:       w.ReleaseIdentity.BundleHash,
+			EngineSHA256:     w.ReleaseIdentity.EngineSHA256,
+			SoftwareVersion:  w.ReleaseIdentity.SoftwareVersion,
+			ProtocolVersion:  w.ReleaseIdentity.ProtocolVersion,
+			CapabilitySchema: w.ReleaseIdentity.CapabilitySchema,
+		}
+	}
+
 	// Resource counters: extracted from the typed metrics map produced
 	// by the gRPC heartbeat handler (registry_heartbeat.go stores the
 	// proto WorkerResourceCounters fields under the "metrics" key).

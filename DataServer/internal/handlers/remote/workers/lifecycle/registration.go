@@ -122,9 +122,23 @@ func (h *Handler) RegisterV2Handler() gin.HandlerFunc {
 		// Else: no credential → skip validation (backward compat).
 
 		// ── Registration ─────────────────────────────────────────────
-		// Register the worker in the in-memory registry.
+		// Register the worker in the in-memory registry, forwarding the
+		// hello metadata (version/bundle/protocol/engine + the release
+		// identity certificate when present) so first contact already
+		// carries the release evidence before the first heartbeat lands.
+		extra := map[string]interface{}{
+			"version":          body.Version,
+			"code_version":     body.CodeVersion,
+			"bundle_version":   body.BundleVersion,
+			"bundle_hash":      body.BundleHash,
+			"protocol_version": body.ProtocolVersion,
+			"engine_version":   body.EngineVersion,
+		}
+		if len(body.Capabilities) > 0 {
+			extra["capabilities"] = body.Capabilities
+		}
 		ctx := c.Request.Context()
-		if err := h.reg.RegisterWorker(ctx, body.WorkerID, body.WorkerName, body.IP, nil); err != nil {
+		if err := h.reg.RegisterWorker(ctx, body.WorkerID, body.WorkerName, body.IP, extra); err != nil {
 			log.Printf("[REGISTER] failed to register worker %s in registry: %v",
 				body.WorkerID[:min(16, len(body.WorkerID))]+"...", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to register worker"})

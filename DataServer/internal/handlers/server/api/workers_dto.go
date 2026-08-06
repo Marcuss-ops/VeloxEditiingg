@@ -93,6 +93,26 @@ type WorkerResponse struct {
 	JobsCompleted       int64               `json:"jobs_completed"`
 	JobsFailed          int64               `json:"jobs_failed"`
 	Executors           []ExecutorEntry     `json:"executors,omitempty"`
+
+	// ReleaseIdentity is the worker's single release certificate
+	// (BUILD_INFO.json + engine SHA + image digest), registered at
+	// hello/heartbeat time. Empty means the worker has not advertised
+	// a certified release yet; operators fail closed on rollout.
+	ReleaseIdentity ReleaseIdentityResponse `json:"release_identity,omitempty"`
+}
+
+// ReleaseIdentityResponse is the sanitized release certificate exposed on
+// the operator API. No secrets: only cryptographic evidence + software
+// versions that the worker already publishes in its heartbeat.
+type ReleaseIdentityResponse struct {
+	ImageDigest      string `json:"image_digest,omitempty"`
+	SourceCommit     string `json:"source_commit,omitempty"`
+	SourceHash       string `json:"source_hash,omitempty"`
+	BundleHash       string `json:"bundle_hash,omitempty"`
+	EngineSHA256     string `json:"engine_sha256,omitempty"`
+	SoftwareVersion  string `json:"software_version,omitempty"`
+	ProtocolVersion  string `json:"protocol_version,omitempty"`
+	CapabilitySchema int    `json:"capability_schema,omitempty"`
 }
 
 // ActiveTaskRuntime is the sanitized live projection. Definitive lifecycle

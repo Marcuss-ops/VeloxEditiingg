@@ -257,6 +257,8 @@ jobs:
           VERSION="$(tr -d '[:space:]' < VERSION.txt 2>/dev/null || echo '')"
           BUNDLE_HASH=""
           SOURCE_HASH="$(python3 -c 'import json;print(json.load(open("RemoteCodex/BUILD_INFO.json")).get("source_hash",""))' 2>/dev/null || echo '')"
+          PROTOCOL_VERSION="$(python3 -c 'import json;print(json.load(open("RemoteCodex/BUILD_INFO.json")).get("protocol_version",""))' 2>/dev/null || echo '')"
+          CAPABILITY_SCHEMA="$(python3 -c 'import json;print(json.load(open("RemoteCodex/BUILD_INFO.json")).get("capability_schema",""))' 2>/dev/null || echo '')"
           ENGINE_SHA=""
           if [[ "${{ steps.version.outputs.push }}" == "true" ]]; then
             # The builder writes this file into the runtime image. Pull the
@@ -277,6 +279,10 @@ jobs:
             echo "::error::release metadata missing canonical VERSION, bundle hash, source hash, or engine SHA-256" >&2
             exit 1
           fi
+          if [[ -z "$PROTOCOL_VERSION" || -z "$CAPABILITY_SCHEMA" ]]; then
+            echo "::error::release metadata missing protocol_version or capability_schema (BUILD_INFO.json)" >&2
+            exit 1
+          fi
           python3 - <<PYEOF
           import json, os
           tags = os.environ["IMAGE_TAGS"].split()
@@ -289,6 +295,8 @@ jobs:
             "source_hash":    "$SOURCE_HASH",
             "commit":         "${{ github.sha }}",
             "engine_sha256":  "$ENGINE_SHA",
+            "protocol_version":  "$PROTOCOL_VERSION",
+            "capability_schema": "$CAPABILITY_SCHEMA",
             "github_run":     "${{ github.run_id }}",
             "github_run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
             "workflow_file":  "worker-image.yml",

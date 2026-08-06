@@ -192,6 +192,13 @@ type Worker struct {
 
 	version string
 
+	// releaseIdentity is the immutable per-process release certificate
+	// (image-baked BUILD_INFO.json + engine SHA file + config + env).
+	// Assembled once on first capabilitiesMap call (hello/heartbeat); see
+	// loadReleaseIdentity in release_identity.go.
+	releaseIdentity     controltransport.ReleaseIdentity
+	releaseIdentityOnce sync.Once
+
 	// Command management
 	drainMode    atomic.Bool
 	commandMu    sync.Mutex

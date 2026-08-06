@@ -65,6 +65,19 @@ production inventory. The default playbook is
 `deploy/playbooks/rollout-worker-digest.yml`; override it with
 `FLEET_ROLLOUT_PLAYBOOK` when a host topology uses different paths.
 
+`update` and `rollback` fail closed without the current-commit release
+certificate (the same evidence the `worker-image` workflow publishes in its
+baseline manifest):
+
+```bash
+export FLEET_ROLLOUT_BUNDLE_HASH="<64-hex bundle hash from BUILD_INFO.json>"
+export FLEET_ROLLOUT_ENGINE_SHA="<64-hex engine SHA-256>"
+export FLEET_ROLLOUT_SOURCE_HASH="<64-hex source hash from BUILD_INFO.json>"
+```
+
+All three are required; never omit them, otherwise the rollout playbook
+refuses to mutate the host.
+
 ## Host lifecycle
 
 `restart` sends the existing authenticated worker restart command. It should

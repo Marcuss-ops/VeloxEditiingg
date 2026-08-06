@@ -62,6 +62,12 @@ SOURCE_HASH="$(sha256sum "${REPO_ROOT}/VERSION.txt" | awk '{print $1}')"
 # Protocol version — this is a constant versioned with the gRPC protobuf schema
 PROTOCOL_VERSION="v3"
 
+# Capability schema — the canonical worker capability wire schema version.
+# Must mirror shared/controltransport.CapabilitySchemaVersion (currently 1).
+# The worker publishes it inside the ReleaseIdentity certificate block so the
+# master can reject snapshots with an unsupported schema.
+CAPABILITY_SCHEMA="1"
+
 # ─── Build JSON ──────────────────────────────────────────────────────────────
 # Use $(cat <<JSON ... JSON) — NOT read -r — so multi-line content is captured.
 # Variable expansion inside the heredoc (unquoted JSON marker) is intentional:
@@ -72,6 +78,7 @@ GENERATED_JSON=$(cat <<JSON
   "git_commit": "${GIT_COMMIT}",
   "source_hash": "${SOURCE_HASH}",
   "protocol_version": "${PROTOCOL_VERSION}",
+  "capability_schema": ${CAPABILITY_SCHEMA},
   "engine_version": "${VERSION}",
   "platform": "${PLATFORM}",
   "arch": "${ARCH}",

@@ -65,6 +65,13 @@ type Worker struct {
 	EngineVersion    string `json:"engine_version,omitempty"`
 	DeclaredMaxSlots int    `json:"declared_max_slots,omitempty"`
 
+	// ReleaseIdentity is the single release certificate advertised by the
+	// worker (BUILD_INFO.json + engine SHA + image digest), registered at
+	// hello/heartbeat time and surfaced on the admin API. New consumers
+	// read it here; the flat CodeVersion/BundleHash/ImageDigest/etc fields
+	// above remain the compatibility projections of the same certificate.
+	ReleaseIdentity controltransport.ReleaseIdentity `json:"release_identity,omitempty"`
+
 	// ExecutorCapabilities is the sole typed source of executor metadata for
 	// scheduling, health, persistence, and API projections. Legacy capability
 	// maps are decoded only at the registration/heartbeat boundary.
@@ -223,6 +230,25 @@ func applyMetadataFields(extra map[string]interface{}, info *Worker) {
 			info.ExecutorCapabilities = registry
 		} else {
 			info.ExecutorCapabilities = controltransport.EmptyExecutorRegistry()
+		}
+		// The worker publishes its ReleaseIdentity certificate inside the
+		// same capabilities map (canonical release_identity block with flat
+		// legacy fallback). Decode it once into the typed model. A
+		// malformed certificate (non-64-hex hash fields) fails closed:
+		// it is not stored, so a broken advertisement can never be
+		// certified by a rollout.
+		if caps, ok := v.(map[string]interface{}); ok {
+			if ri, ok := controltransport.ReleaseIdentityFromCapabilities(caps); ok && ri.Validate() == nil {
+				info.ReleaseIdentity = ri
+			}
+		}
+	}
+	if v, ok := extra["release_identity"].(map[string]interface{}); ok {
+		// Direct top-level certificate (explicit register payloads).
+		if ri, ok := controltransport.ReleaseIdentityFromCapabilities(map[string]interface{}{
+			controltransport.CapabilityReleaseIdentityKey: v,
+		}); ok && ri.Validate() == nil {
+			info.ReleaseIdentity = ri
 		}
 	}
 }

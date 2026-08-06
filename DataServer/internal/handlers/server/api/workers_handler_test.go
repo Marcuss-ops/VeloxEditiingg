@@ -27,6 +27,61 @@ func TestHeartbeatAgeSeconds(t *testing.T) {
 	}
 }
 
+func TestSanitizeWorker_ReleaseIdentity(t *testing.T) {
+	raw := workersreg.Worker{
+		WorkerID:         "worker-rel",
+		ConnectionStatus: "CONNECTED",
+		ReleaseIdentity: controltransport.ReleaseIdentity{
+			ImageDigest:      "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+			SourceCommit:     "fbbf7c1",
+			SourceHash:       "f106b007d8f827ae667dfbe1c1a1a31eff4647a71cf2de53b125d7347dbf51ca",
+			BundleHash:       "f106b007d8f827ae667dfbe1c1a1a31eff4647a71cf2de53b125d7347dbf51ca",
+			EngineSHA256:     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			SoftwareVersion:  "v1.2.20",
+			ProtocolVersion:  "v3",
+			CapabilitySchema: 1,
+		},
+	}
+
+	resp := sanitizeWorker(raw)
+
+	if resp.ReleaseIdentity.ImageDigest != raw.ReleaseIdentity.ImageDigest {
+		t.Errorf("ImageDigest = %q, want %q", resp.ReleaseIdentity.ImageDigest, raw.ReleaseIdentity.ImageDigest)
+	}
+	if resp.ReleaseIdentity.SourceCommit != "fbbf7c1" {
+		t.Errorf("SourceCommit = %q, want fbbf7c1", resp.ReleaseIdentity.SourceCommit)
+	}
+	if resp.ReleaseIdentity.SourceHash != raw.ReleaseIdentity.SourceHash {
+		t.Errorf("SourceHash = %q, want %q", resp.ReleaseIdentity.SourceHash, raw.ReleaseIdentity.SourceHash)
+	}
+	if resp.ReleaseIdentity.BundleHash != raw.ReleaseIdentity.BundleHash {
+		t.Errorf("BundleHash = %q, want %q", resp.ReleaseIdentity.BundleHash, raw.ReleaseIdentity.BundleHash)
+	}
+	if resp.ReleaseIdentity.EngineSHA256 != raw.ReleaseIdentity.EngineSHA256 {
+		t.Errorf("EngineSHA256 = %q, want %q", resp.ReleaseIdentity.EngineSHA256, raw.ReleaseIdentity.EngineSHA256)
+	}
+	if resp.ReleaseIdentity.SoftwareVersion != "v1.2.20" {
+		t.Errorf("SoftwareVersion = %q, want v1.2.20", resp.ReleaseIdentity.SoftwareVersion)
+	}
+	if resp.ReleaseIdentity.ProtocolVersion != "v3" {
+		t.Errorf("ProtocolVersion = %q, want v3", resp.ReleaseIdentity.ProtocolVersion)
+	}
+	if resp.ReleaseIdentity.CapabilitySchema != 1 {
+		t.Errorf("CapabilitySchema = %d, want 1", resp.ReleaseIdentity.CapabilitySchema)
+	}
+}
+
+func TestSanitizeWorker_ReleaseIdentityEmpty(t *testing.T) {
+	raw := workersreg.Worker{
+		WorkerID:         "worker-no-rel",
+		ConnectionStatus: "CONNECTED",
+	}
+	resp := sanitizeWorker(raw)
+	if resp.ReleaseIdentity != (ReleaseIdentityResponse{}) {
+		t.Errorf("ReleaseIdentity = %+v, want zero value when certificate absent", resp.ReleaseIdentity)
+	}
+}
+
 func TestSanitizeWorker(t *testing.T) {
 	now := time.Now().UTC()
 	recent := now.Add(-3 * time.Second).Format(time.RFC3339)

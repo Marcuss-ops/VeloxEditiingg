@@ -272,6 +272,7 @@ def test_ghcr_bridge_and_definitive_contract_remain_intact() -> None:
         "target_image | length > 0",
         "rollout_expected_bundle_hash",
         "rollout_expected_engine_sha256",
+        "rollout_expected_source_hash",
         "Verify master reconnect, session and fresh heartbeat",
         "POST Level-D smoke operation for the target worker",
         "Verify persisted Level-D Drive artifact upload",

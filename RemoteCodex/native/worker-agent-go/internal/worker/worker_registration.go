@@ -159,6 +159,18 @@ func (w *Worker) capabilitiesMap(hostname string) map[string]interface{} {
 	// The legacy top-level mirror was removed — the v3-only protocol gate
 	// (controltransport.IsSupportedProtocol) guarantees every admitted
 	// worker/master pair can walk into the host sub-block.
+
+	// ReleaseIdentity is the single release certificate shared with the
+	// master: the canonical block rides under release_identity while the
+	// flat legacy keys keep the master runtime snapshot columns populated.
+	// Both hello and heartbeat publish it because they share this map.
+	ri := w.loadReleaseIdentity()
+	if !ri.IsEmpty() {
+		m[controltransport.CapabilityReleaseIdentityKey] = ri.AsCapabilitiesBlock()
+		for k, v := range ri.FlatLegacyKeys() {
+			m[k] = v
+		}
+	}
 	return m
 }
 
