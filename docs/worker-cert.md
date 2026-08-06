@@ -60,6 +60,41 @@ the operator runs one of the `jq` snippets below and bumps the
 corresponding 3 cells. The snippets read from the canonical per-worker
 JSON output of the worker-cert harness — no manual copy-paste needed.
 
+### Remote worker update certification
+
+Before promoting a pinned worker image, run the update mode against a
+canary worker with the environment in
+`scripts/cert/remote-worker-cert.env.example`:
+
+```bash
+# Load a protected, untracked dotenv file into the child process.
+set -a
+. ./scripts/cert/remote-worker-cert.env
+set +a
+bash scripts/cert/remote-worker-cert-config.sh --update-json > update.json
+jq -e '.overall == "PASS"' update.json
+```
+
+The `U01`–`U06` checks are deliberately observational: the Master API and
+`UpdateExecutor` remain the owners of the mutation. They verify, in order:
+
+1. the pre-update worker is connected and advertises a complete `ReleaseIdentity`;
+2. the update is accepted as HTTP `202` with a queued operation;
+3. automatic drain is visible and the canonical active lease/slot count reaches zero;
+4. the update operation reaches `SUCCEEDED` after restart/readiness and the
+   executor's own Level-D smoke/rollback decision;
+5. the worker reconnects with the requested `ReleaseIdentity.image_digest` and
+   fresh Level-D smoke evidence;
+6. any remaining operator-owned drain/quarantine is cleared only through the
+   canonical asynchronous resume operation, then the worker is placement-eligible.
+
+`RW_UPDATE_TARGET_IMAGE` must be a complete immutable `ghcr.io/...@sha256:<64hex>`
+reference; this exact reference is sent as the API `target_digest` value.
+`RW_UPDATE_TARGET_DIGEST` must match its `sha256:<64hex>` suffix and is used
+for the post-update `ReleaseIdentity.image_digest` comparison.
+Never run update mode against the whole production fleet automatically; use a
+canary first and preserve the JSON report as release evidence.
+
 ### Cert-ready verdict (binary)
 
 ```bash
