@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"velox-server/internal/config"
 	integrationsDrive "velox-server/internal/integrations/drive"
 	driveSvc "velox-server/internal/services/drive"
 )
@@ -43,6 +44,16 @@ func newEmptyCredsHandlers(t *testing.T) *DriveHandlers {
 	}
 }
 
+// testKeyringConfig returns a credential-key config whose inline value is a
+// valid 32-byte AES key, so the Drive TokenManager can encrypt/decrypt token
+// files in tests (SaveToken is fail-closed without a configured keyring).
+func testKeyringConfig() config.CredentialsConfig {
+	return config.CredentialsConfig{
+		CurrentVersion: 1,
+		Current:        config.CredentialKeyConfig{Value: "01234567890123456789012345678901"},
+	}
+}
+
 // helper: create a DriveHandlers with full credentials but no tokens on disk.
 func newCredsNoTokensHandlers(t *testing.T) *DriveHandlers {
 	t.Helper()
@@ -52,6 +63,7 @@ func newCredsNoTokensHandlers(t *testing.T) *DriveHandlers {
 		ClientID:     "test-client-id",
 		ClientSecret: "test-client-secret",
 		TokensDir:    tokensDir,
+		Credentials:  testKeyringConfig(),
 	})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -73,6 +85,7 @@ func newCredsWithTokenHandlers(t *testing.T) *DriveHandlers {
 		ClientID:     "test-client-id",
 		ClientSecret: "test-client-secret",
 		TokensDir:    tokensDir,
+		Credentials:  testKeyringConfig(),
 	})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -374,6 +387,7 @@ func TestDriveHealthCheck_TokenScopeReporting(t *testing.T) {
 		ClientID:     "test-client-id",
 		ClientSecret: "test-client-secret",
 		TokensDir:    tokensDir,
+		Credentials:  testKeyringConfig(),
 	})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -426,6 +440,7 @@ func TestDriveHealthCheck_MultipleTokens(t *testing.T) {
 		ClientID:     "test-client-id",
 		ClientSecret: "test-client-secret",
 		TokensDir:    tokensDir,
+		Credentials:  testKeyringConfig(),
 	})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)

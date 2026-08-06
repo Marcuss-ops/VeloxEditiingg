@@ -10,9 +10,12 @@ import (
 
 func TestNewReturnsErrorOnBadTLS(t *testing.T) {
 	cfg := &config.WorkerConfig{
-		WorkerID:       "test",
-		WorkerName:     "test",
-		WorkDir:        t.TempDir(),
+		WorkerID:   "test",
+		WorkerName: "test",
+		WorkDir:    t.TempDir(),
+		// StateDir must be writable by the test user: the /tmp/velox-worker
+		// default may be owned by another account in shared dev environments.
+		StateDir:       t.TempDir(),
 		LogLevel:       "info",
 		HealthPort:     8081,
 		MasterURL:      "http://localhost:8000",
@@ -26,10 +29,13 @@ func TestNewReturnsErrorOnBadTLS(t *testing.T) {
 
 func TestNewSucceedsWithInsecureDev(t *testing.T) {
 	cfg := &config.WorkerConfig{
-		Environment:       "dev",
-		WorkerID:          "test",
-		WorkerName:        "test",
-		WorkDir:           t.TempDir(),
+		Environment: "dev",
+		WorkerID:    "test",
+		WorkerName:  "test",
+		WorkDir:     t.TempDir(),
+		// StateDir must be writable by the test user: the /tmp/velox-worker
+		// default may be owned by another account in shared dev environments.
+		StateDir:          t.TempDir(),
 		LogLevel:          "info",
 		HealthPort:        8081,
 		MasterURL:         "http://localhost:8000",

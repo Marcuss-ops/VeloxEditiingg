@@ -11,12 +11,15 @@ import (
 func TestNewValidatesTransportTLSConfig(t *testing.T) {
 	makeCfg := func(environment string, allowInsecure bool) *config.WorkerConfig {
 		return &config.WorkerConfig{
-			Environment:       environment,
-			WorkerID:          "two-key-test",
-			WorkerName:        "two-key-test",
-			MasterURL:         "http://localhost:8000",
-			ControlGRPCURL:    "localhost:9000",
-			WorkDir:           t.TempDir(),
+			Environment:    environment,
+			WorkerID:       "two-key-test",
+			WorkerName:     "two-key-test",
+			MasterURL:      "http://localhost:8000",
+			ControlGRPCURL: "localhost:9000",
+			WorkDir:        t.TempDir(),
+			// StateDir must be writable by the test user: the /tmp/velox-worker
+			// default may be owned by another account in shared dev environments.
+			StateDir:          t.TempDir(),
 			LogLevel:          "info",
 			HealthPort:        8081,
 			AllowInsecureGRPC: allowInsecure,

@@ -230,6 +230,9 @@ func (w *Worker) runSession(ctx context.Context) bool {
 	sessionTransport := w.transport
 	w.transportMu.RUnlock()
 	if sessionTransport == nil {
+		// No session goroutines will be spawned, so release the
+		// derived context immediately to avoid leaking its timer.
+		cancel()
 		return false
 	}
 	defer cancel()

@@ -192,21 +192,33 @@ func TestBuildWorkerCard_NoExecutors(t *testing.T) {
 	}
 }
 
-// TestBuildWorkerCard_EmptyMetrics asserts default-zero counters
-// when the metrics blob is missing. Existing WorkerResponse tests
-// cover the same invariant for the diagnostic surface; pinning here
-// so the admin card mapper does not regress when a worker omits the
-// "metrics" map entirely.
+// TestBuildWorkerCard_EmptyMetrics asserts the mapper tolerates a
+// missing metrics blob without panicking and keeps the canonical
+// occupancy projection lease-derived: ActiveJobs/MaxActiveJobs come
+// from Capacity (hydrated from the lease store), NOT from the metrics
+// map. Zero capacity surfaces zero slots; a non-zero declared
+// capacity keeps its projection even when telemetry is absent.
 func TestBuildWorkerCard_EmptyMetrics(t *testing.T) {
 	info := makeCardInfo("w-no-metrics", func(i *workersreg.Worker) {
 		i.Metrics = nil
 	})
 	card := buildWorkerCard(&info)
 	if card.ActiveJobs != 0 {
-		t.Errorf("nil Metrics → ActiveJobs = %d, want 0", card.ActiveJobs)
+		t.Errorf("nil Metrics → ActiveJobs = %d, want 0 (lease-derived Capacity.ActiveSlots)", card.ActiveJobs)
 	}
-	if card.MaxActiveJobs != 0 {
-		t.Errorf("nil Metrics → MaxActiveJobs = %d, want 0", card.MaxActiveJobs)
+	if card.MaxActiveJobs != 2 {
+		t.Errorf("nil Metrics → MaxActiveJobs = %d, want 2 (Capacity.MaxSlots is independent of the metrics blob)", card.MaxActiveJobs)
+	}
+
+	// Zero declared capacity must surface zero slots even with a
+	// populated metrics blob (admission fail-closed semantics).
+	info2 := makeCardInfo("w-zero-capacity", func(i *workersreg.Worker) {
+		i.Metrics = map[string]interface{}{"task_slots": float64(4)}
+		i.Capacity = workersreg.WorkerCapacity{MaxSlots: 0, ActiveSlots: 0, AvailableSlots: 0, Authoritative: true}
+	})
+	card2 := buildWorkerCard(&info2)
+	if card2.MaxActiveJobs != 0 || card2.ActiveJobs != 0 {
+		t.Errorf("zero capacity → MaxActiveJobs/ActiveJobs = %d/%d, want 0/0 (metrics must not resurrect slots)", card2.MaxActiveJobs, card2.ActiveJobs)
 	}
 }
 

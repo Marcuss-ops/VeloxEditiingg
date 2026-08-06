@@ -33,10 +33,13 @@ func (r *regStubExecutor) Execute(_ context.Context, _ executor.ExecutionContext
 func newInsecureDevCfg(t *testing.T) *config.WorkerConfig {
 	t.Helper()
 	return &config.WorkerConfig{
-		Environment:       "dev",
-		WorkerID:          "tests",
-		WorkerName:        "tests",
-		WorkDir:           t.TempDir(),
+		Environment: "dev",
+		WorkerID:    "tests",
+		WorkerName:  "tests",
+		WorkDir:     t.TempDir(),
+		// StateDir must be writable by the test user: the /tmp/velox-worker
+		// default may be owned by another account in shared dev environments.
+		StateDir:          t.TempDir(),
 		LogLevel:          "info",
 		MasterURL:         "http://localhost:8000",
 		ControlGRPCURL:    "localhost:9000",

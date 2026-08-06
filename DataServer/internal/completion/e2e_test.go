@@ -623,6 +623,12 @@ func TestPhase6_Scenarios16_17_RaceAndDeliveryRestore(t *testing.T) {
 			t.Fatalf("S16 DeclareOutputs: %v", err)
 		}
 		commitID := scheduleRowReady(t, db, fence, "art-s16")
+		// Artifact-contract jobs must sit at the artifact gate before
+		// CommitAttempt performs the terminal job transition (same
+		// pre-set the GoldenPath and explicit-plan tests use).
+		if _, err := db.Exec(`UPDATE jobs SET status = 'AWAITING_ARTIFACT' WHERE job_id = ?`, jobID); err != nil {
+			t.Fatalf("S16 jobs.status pre-set: %v", err)
+		}
 
 		var wg sync.WaitGroup
 		results := make([]error, 2)
@@ -690,6 +696,11 @@ func TestPhase6_Scenarios16_17_RaceAndDeliveryRestore(t *testing.T) {
 			t.Fatalf("S17 DeclareOutputs: %v", err)
 		}
 		commitID := scheduleRowReady(t, db, fence, "art-s17")
+		// Artifact-contract jobs must sit at the artifact gate before
+		// CommitAttempt performs the terminal job transition.
+		if _, err := db.Exec(`UPDATE jobs SET status = 'AWAITING_ARTIFACT' WHERE job_id = ?`, jobID); err != nil {
+			t.Fatalf("S17 jobs.status pre-set: %v", err)
+		}
 
 		res, err := c.CommitAttempt(context.Background(), commitID)
 		if err != nil {
