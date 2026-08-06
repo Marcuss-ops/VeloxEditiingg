@@ -11,12 +11,12 @@ import (
 	"velox-server/internal/supervisor"
 )
 
-// TestClosedDB_RealStoreReturnsTypedInfrastructureAfterN exercises the
-// production boundary: a real SQLiteStore is closed, its repository method
-// is called, and the resulting DomainError is passed directly to policy.
-// No test-side domain.NewInfrastructure wrapping is allowed here; this
-// proves the store, not the supervisor test, owns SQL error classification.
-func TestClosedDB_RealStoreReturnsTypedInfrastructureAfterN(t *testing.T) {
+// TestFailureTracker_ClosedStoreEscalatesAfterThreshold exercises the full
+// production path: a real SQLiteStore is closed, its repository method is
+// called, and the resulting DomainError is classified and recorded directly
+// by the FailureTracker. No test-side domain.NewInfrastructure wrapping is
+// allowed here; the store owns SQL error classification.
+func TestFailureTracker_ClosedStoreEscalatesAfterThreshold(t *testing.T) {
 	realStore, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "closed-store.db"))
 	if err != nil {
 		t.Fatalf("open real sqlite store: %v", err)
@@ -48,6 +48,8 @@ func TestClosedDB_RealStoreReturnsTypedInfrastructureAfterN(t *testing.T) {
 			t.Fatalf("attempt %d: classified store error = %v, want infrastructure", attempt, classified)
 		}
 
+		// Feed the actual store error through the production classifier;
+		// do not construct or re-wrap a test-side infrastructure error.
 		escalated := tracker.Record(classified)
 		if attempt < 3 && escalated != nil {
 			t.Fatalf("attempt %d: unexpected escalation: %v", attempt, escalated)
