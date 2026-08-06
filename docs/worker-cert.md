@@ -130,6 +130,46 @@ each case-N matrix row completes, run `pass_criteria.sh <worker_id>` and
 assert exit 0; surface the failing step in the JUnit XML so the CI
 matrix reports a precise root cause.
 
+## Deterministic job fixtures and lifecycle evidence
+
+The P02/P03 job mode accepts `RW_JOB_FIXTURE_FILE` and uses the committed
+fixtures under `tests/worker-cert/fixtures/jobs/`:
+
+- `minimal-render-job.json` — one short clip/voiceover scene;
+- `shared-stock-job.json` — two scenes reusing the same stock asset, proving
+  shared-stock normalization and cache behavior;
+- `invalid-job.json` — `duration_seconds=0.05`, which must be rejected by
+  intake with HTTP 422 and must never enter worker polling.
+
+For a valid fixture, `--job-json` records every response from
+`GET /api/v1/jobs/<job_id>` and fails unless the required ordered sequence is
+observed exactly as configured by `RW_JOB_REQUIRED_STATES` (default:
+`PENDING,LEASED,RUNNING,AWAITING_ARTIFACT,SUCCEEDED`). Intermediate states are
+allowed, but no required state may be skipped or observed out of order. The
+final artifact is downloaded only after `SUCCEEDED`; the runner computes
+SHA-256 and runs `ffprobe -v error -show_entries format=duration,size -of json`,
+checking that the probed byte size matches the downloaded file and any server
+reported size.
+
+Example valid run:
+
+```bash
+set -a; . ./scripts/cert/remote-worker-cert.env; set +a
+RW_JOB_FIXTURE_FILE=./tests/worker-cert/fixtures/jobs/minimal-render-job.json \\
+  bash scripts/cert/remote-worker-cert-config.sh --job-json > job.json
+jq -e '.overall == "PASS" and ([.checks[] | select(.id == "P02-poll" and .status == "PASS")] | length == 1)' job.json
+```
+
+Example intake-negative run:
+
+```bash
+RW_JOB_FIXTURE_FILE=./tests/worker-cert/fixtures/jobs/invalid-job.json \\
+RW_JOB_DESTINATION_ID=drive-certification \\
+RW_JOB_EXPECTED_SUBMIT_STATUS=422 \\
+  bash scripts/cert/remote-worker-cert-config.sh --job-json > invalid-job.json
+jq -e '.overall == "PASS" and .job_id == null' invalid-job.json
+```
+
 ## Cross-references
 
 - `tests/worker-cert/smoke_one.sh` — per-worker SUCCEEDED smoke (writes `smoke.json`)

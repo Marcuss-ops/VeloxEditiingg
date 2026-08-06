@@ -146,7 +146,10 @@ rw_load_config() {
   MASTER_REST_PORT="${MASTER_REST_PORT:-${VELOX_MASTER_REST_PORT:-8000}}"
   MASTER_GRPC_PORT="${MASTER_GRPC_PORT:-${VELOX_MASTER_GRPC_PORT:-9000}}"
   TEST_JOB_JSON="${TEST_JOB_JSON:-${VELOX_TEST_JOB_JSON:-}}"
-  CERT_POLL_TIMEOUT_S="${CERT_POLL_TIMEOUT_S:-${VELOX_CERT_POLL_TIMEOUT_S:-300}}"
+  RW_JOB_FIXTURE_FILE="${RW_JOB_FIXTURE_FILE:-${VELOX_JOB_FIXTURE_FILE:-}}"
+  RW_JOB_EXPECTED_SUBMIT_STATUS="${RW_JOB_EXPECTED_SUBMIT_STATUS:-${VELOX_JOB_EXPECTED_SUBMIT_STATUS:-202}}"
+  RW_JOB_REQUIRED_STATES="${RW_JOB_REQUIRED_STATES:-${VELOX_JOB_REQUIRED_STATES:-PENDING,LEASED,RUNNING,AWAITING_ARTIFACT,SUCCEEDED}}"
+  CERT_POLL_TIMEOUT_S="${CERT_POLL_TIMEOUT_S:-${VELOX_CERT_POLL_TIMEOUT_S:-300}}"},{
   RW_NETWORK_TIMEOUT_S="${RW_NETWORK_TIMEOUT_S:-${VELOX_NETWORK_TIMEOUT_S:-30}}"
   RW_SSH_CONNECT_TIMEOUT_S="${RW_SSH_CONNECT_TIMEOUT_S:-${VELOX_SSH_CONNECT_TIMEOUT_S:-10}}"
   RW_CONNECT_TIMEOUT_S="${RW_CONNECT_TIMEOUT_S:-${VELOX_CONNECT_TIMEOUT_S:-5}}"
@@ -236,6 +239,20 @@ rw_load_config() {
       return 1
     }
   fi
+  if [[ -n "$RW_JOB_FIXTURE_FILE" ]]; then
+    [[ -f "$RW_JOB_FIXTURE_FILE" && -r "$RW_JOB_FIXTURE_FILE" ]] || {
+      rw_die "RW_JOB_FIXTURE_FILE is missing or unreadable: ${RW_JOB_FIXTURE_FILE}"
+      return 1
+    }
+  fi
+  [[ "$RW_JOB_EXPECTED_SUBMIT_STATUS" =~ ^(202|422)$ ]] || {
+    rw_die "RW_JOB_EXPECTED_SUBMIT_STATUS must be 202 (valid fixture) or 422 (invalid fixture)"
+    return 1
+  }
+  [[ "$RW_JOB_REQUIRED_STATES" == *,* ]] || {
+    rw_die "RW_JOB_REQUIRED_STATES must contain a comma-separated lifecycle sequence"
+    return 1
+  }
   if [[ -n "$RW_FAILURE_JOB_JSON" ]]; then
     [[ -f "$RW_FAILURE_JOB_JSON" && -r "$RW_FAILURE_JOB_JSON" ]] || {
       rw_die "RW_FAILURE_JOB_JSON is missing or unreadable: ${RW_FAILURE_JOB_JSON}"
@@ -313,7 +330,7 @@ rw_load_config() {
     rw_die "RW_JOB_DOWNLOAD_DIR must be an existing writable directory: ${RW_JOB_DOWNLOAD_DIR}"
     return 1
   }
-  if [[ "$RW_JOB_VERIFY_PRE_READY" == "1" && "$RW_JOB_PRE_READY_REQUIRED" == "1" && -z "$RW_JOB_ARTIFACT_ID" && -z "$RW_JOB_ARTIFACT_DOWNLOAD_URL" ]]; then
+  if [[ "$RW_JOB_EXPECTED_SUBMIT_STATUS" == "202" && "$RW_JOB_VERIFY_PRE_READY" == "1" && "$RW_JOB_PRE_READY_REQUIRED" == "1" && -z "$RW_JOB_ARTIFACT_ID" && -z "$RW_JOB_ARTIFACT_DOWNLOAD_URL" ]]; then
     rw_die "P03 pre-READY verification requires RW_JOB_ARTIFACT_ID or RW_JOB_ARTIFACT_DOWNLOAD_URL because POST /api/v1/jobs does not expose an artifact ID"
     return 1
   fi
@@ -375,7 +392,7 @@ rw_load_config() {
   fi
 
   export MASTER_URL MASTER_HOST MASTER_EXPECTED_IP M2M_TOKEN WORKER_ID WORKER_SSH_HOST WORKER_SSH_USER
-  export MASTER_REST_PORT MASTER_GRPC_PORT TEST_JOB_JSON CERT_POLL_TIMEOUT_S
+  export MASTER_REST_PORT MASTER_GRPC_PORT TEST_JOB_JSON RW_JOB_FIXTURE_FILE RW_JOB_EXPECTED_SUBMIT_STATUS RW_JOB_REQUIRED_STATES CERT_POLL_TIMEOUT_S
   export RW_NETWORK_TIMEOUT_S RW_SSH_CONNECT_TIMEOUT_S RW_CONNECT_TIMEOUT_S
   export RW_REST_REQUEST_TIMEOUT_S RW_REST_ATTEMPTS RW_REST_INTERVAL_S RW_GRPC_TIMEOUT_S RW_DNS_ATTEMPTS
   export RW_WORKER_HTTP_TIMEOUT_S RW_WORKER_RESTART_TIMEOUT_S RW_WORKER_RECONNECT_TIMEOUT_S
@@ -384,7 +401,7 @@ rw_load_config() {
   export RW_UPDATE_TARGET_IMAGE RW_UPDATE_TARGET_DIGEST RW_UPDATE_REASON
   export RW_UPDATE_LEASE_TIMEOUT_S RW_UPDATE_LEASE_POLL_INTERVAL_S
   export RW_SMOKE_FIXTURES_FILE RW_SMOKE_ASSET_ID RW_SMOKE_RENDER_PLAN RW_SMOKE_VERIFY_CLEANUP
-  export RW_JOB_FIXTURES_FILE RW_JOB_DESTINATION_ID RW_JOB_SCENES_COUNT RW_JOB_DURATION_PER_SCENE
+  export RW_JOB_FIXTURE_FILE RW_JOB_FIXTURES_FILE RW_JOB_DESTINATION_ID RW_JOB_SCENES_COUNT RW_JOB_DURATION_PER_SCENE
   export RW_JOB_POLL_INTERVAL_S RW_JOB_HTTP_TIMEOUT_S RW_JOB_ARTIFACT_ID RW_JOB_ARTIFACT_DOWNLOAD_URL
   export RW_JOB_EXPECTED_SHA256 RW_JOB_PRE_READY_REQUIRED RW_JOB_DOWNLOAD_DIR RW_JOB_VERIFY_FFPROBE
   export RW_JOB_VERIFY_SHA256 RW_JOB_VERIFY_PRE_READY RW_JOB_ARTIFACT_DOWNLOAD_TIMEOUT_S RW_JOB_MODE
@@ -1842,11 +1859,88 @@ rw_job_artifact_download_url() {
   fi
 }
 
+rw_job_lifecycle_monotonic_ok() {
+  local observed="$1" state rank last_rank=-1
+  local -a observed_states=()
+  mapfile -t observed_states <<<"$observed"
+  for state in "${observed_states[@]}"; do
+    [[ -n "$state" ]] || continue
+    case "$state" in
+      QUEUED) rank=0 ;;
+      PENDING) rank=1 ;;
+      RETRY_WAIT) rank=2 ;;
+      READY) rank=3 ;;
+      POLLING) rank=4 ;;
+      LEASED) rank=5 ;;
+      RUNNING) rank=6 ;;
+      AWAITING_ARTIFACT) rank=7 ;;
+      FORWARDING) rank=8 ;;
+      FORWARDED) rank=9 ;;
+      SUCCEEDED) rank=10 ;;
+      FAILED|CANCELLED) rank=99 ;;
+      *)
+        printf 'unknown lifecycle state %s (states=%s)' "$state" "${observed//$'\n'/ -> }"
+        return 1
+        ;;
+    esac
+    if (( rank < last_rank )); then
+      printf 'lifecycle state regressed at %s (states=%s)' "$state" "${observed//$'\n'/ -> }"
+      return 1
+    fi
+    last_rank="$rank"
+  done
+}
+
+rw_job_required_states_ok() {
+  local observed="$1" required_csv="${RW_JOB_REQUIRED_STATES:-PENDING,LEASED,RUNNING,AWAITING_ARTIFACT,SUCCEEDED}"
+  local state required required_index last_required=-1 found index=0
+  local -a required_states=() observed_states=()
+  IFS=',' read -r -a required_states <<<"$required_csv"
+  mapfile -t observed_states <<<"$observed"
+  for state in "${observed_states[@]}"; do
+    [[ -n "$state" ]] || continue
+    required_index=-1
+    for index in "${!required_states[@]}"; do
+      required="${required_states[index]//[[:space:]]/}"
+      [[ "$state" == "$required" ]] && { required_index="$index"; break; }
+    done
+    if (( required_index >= 0 )); then
+      if (( required_index < last_required )); then
+        printf 'lifecycle state regressed at %s (states=%s)' "$state" "${observed//$'\n'/ -> }"
+        return 1
+      fi
+      last_required="$required_index"
+    fi
+  done
+  for required in "${required_states[@]}"; do
+    required="${required//[[:space:]]/}"
+    [[ -n "$required" ]] || continue
+    found=0
+    for state in "${observed_states[@]}"; do
+      [[ "$state" == "$required" ]] && { found=1; break; }
+    done
+    (( found == 1 )) || {
+      printf 'required lifecycle state %s was not observed in order (states=%s)' "$required" "${observed//$'\n'/ -> }"
+      return 1
+    }
+  done
+}
+
+rw_job_fixture_payload() {
+  local fixture="$1" destination="${2:-}" key="remote-worker-${WORKER_ID}-$(date +%s%N)"
+  jq --arg worker "$WORKER_ID" --arg destination "$destination" --arg key "$key" \
+    '.idempotency_key=$key
+     | .placement_pin_worker_id=$worker
+     | if (.delivery_plan | type) == "array" and (.delivery_plan | length) > 0 and $destination != "" then
+         .delivery_plan[0].destination_id=$destination
+       else . end' "$fixture"
+}
+
 rw_job_checks() {
   local started finished elapsed body payload job_id status status_url poll_status_url
   local deadline sequence terminal_status="" diagnostic="" overall="PASS"
   local artifact_id response_artifact_id artifact_url configured_artifact_id configured_url_id download_url artifact_size expected_sha final_sha
-  local artifact_file probe_json probe_duration probe_size
+  local artifact_file probe_json probe_duration probe_size fixture_file expected_submit_status required_states_ok state_error verifier_report verifier_log verifier_rc
   local -a RW_JOB_RESULTS=()
   local -a statuses=()
 
@@ -1873,14 +1967,26 @@ rw_job_checks() {
 
   started="$(rw_now_s)"
   payload=""
+  fixture_file="${RW_JOB_FIXTURE_FILE:-}"
   if [[ -n "${TEST_JOB_JSON:-}" ]]; then
-    payload="$(cat "$TEST_JOB_JSON")"
+    if [[ -n "${RW_JOB_DESTINATION_ID:-}" ]]; then
+      payload="$(rw_job_fixture_payload "$TEST_JOB_JSON" "$RW_JOB_DESTINATION_ID" 2>/dev/null || true)"
+    else
+      payload="$(cat "$TEST_JOB_JSON")"
+    fi
     if ! jq -e . >/dev/null 2>&1 <<<"$payload"; then
       diagnostic="TEST_JOB_JSON is not valid JSON"
     fi
+  elif [[ -n "$fixture_file" ]]; then
+    if [[ -z "${RW_JOB_DESTINATION_ID:-}" ]]; then
+      diagnostic='RW_JOB_DESTINATION_ID is required when RW_JOB_FIXTURE_FILE is set'
+    else
+      payload="$(rw_job_fixture_payload "$fixture_file" "$RW_JOB_DESTINATION_ID" 2>/dev/null || true)"
+      [[ -n "$payload" ]] || diagnostic="RW_JOB_FIXTURE_FILE emitted invalid JSON"
+    fi
   else
     if [[ -z "${RW_JOB_DESTINATION_ID:-}" ]]; then
-      diagnostic='RW_JOB_DESTINATION_ID is required when TEST_JOB_JSON is unset; implicit destinations are forbidden'
+      diagnostic='RW_JOB_DESTINATION_ID is required when no explicit job fixture is configured; implicit destinations are forbidden'
     else
       local payload_file
       payload_file="$(mktemp "${TMPDIR:-/tmp}/velox-job-payload.XXXXXX")"
@@ -1904,11 +2010,24 @@ rw_job_checks() {
     rw_job_record P02-payload payload PASS "canonical job payload ready; source=$(if [[ -n \"${TEST_JOB_JSON:-}\" ]]; then printf '%s' TEST_JOB_JSON; else printf '%s' build_real_payload.py; fi)" "$elapsed"
   fi
 
+  expected_submit_status="${RW_JOB_EXPECTED_SUBMIT_STATUS:-202}"
   started="$(rw_now_s)"
   if [[ "$overall" == "PASS" ]] && ! rw_job_request POST "/api/v1/jobs" "$payload" "$M2M_TOKEN"; then
     diagnostic="POST /api/v1/jobs transport failed (rc=${RW_JOB_CURL_RC})"
-  elif [[ "$overall" == "PASS" && "$RW_JOB_HTTP_STATUS" != "202" ]]; then
-    diagnostic="POST /api/v1/jobs returned HTTP ${RW_JOB_HTTP_STATUS}: ${RW_JOB_BODY}"
+  elif [[ "$overall" == "PASS" && "$RW_JOB_HTTP_STATUS" != "$expected_submit_status" ]]; then
+    diagnostic="POST /api/v1/jobs returned HTTP ${RW_JOB_HTTP_STATUS}; expected ${expected_submit_status}: ${RW_JOB_BODY}"
+  elif [[ "$overall" == "PASS" && "$expected_submit_status" == "422" ]]; then
+    finished="$(rw_now_s)"; elapsed=$(( (finished - started) * 1000 ))
+    if ! jq -e '(.error // .code // .message // .details) != null' >/dev/null 2>&1 <<<"$RW_JOB_BODY"; then
+      diagnostic='HTTP 422 response did not contain a validation error envelope'
+    else
+      rw_job_record P02-submit submit PASS 'HTTP 422; invalid fixture rejected by intake as expected' "$elapsed" intake_422
+      jq -n --arg schema 'velox.remote_worker.job.v1' --arg worker_id "$WORKER_ID" \
+        --arg fixture "${fixture_file:-${TEST_JOB_JSON:-generated}}" --arg overall "$overall" \
+        --argjson checks "$(printf '%s\n' "${RW_JOB_RESULTS[@]}" | jq -s '.')" \
+        '{schema:$schema,worker_id:$worker_id,fixture:$fixture,job_id:null,terminal_status:null,artifact_id:null,checks:$checks,overall:$overall,generated_at:(now|todateiso8601)}'
+      return 0
+    fi
   elif [[ "$overall" == "PASS" ]]; then
     job_id="$(jq -r '.job_id // empty' <<<"$RW_JOB_BODY" 2>/dev/null || true)"
     status_url="$(jq -r '.status_url // empty' <<<"$RW_JOB_BODY" 2>/dev/null || true)"
@@ -1920,7 +2039,7 @@ rw_job_checks() {
     rw_job_record P02-submit submit FAIL "$diagnostic" "$elapsed"
     overall="FAIL"
   else
-    rw_job_record P02-submit submit PASS "HTTP 202; job_id=${job_id}; status_url=${status_url}" "$elapsed"
+    rw_job_record P02-submit submit PASS "HTTP ${expected_submit_status}; job_id=${job_id}; status_url=${status_url}" "$elapsed"
   fi
 
   if [[ "$overall" == "PASS" && "$RW_JOB_VERIFY_PRE_READY" == "1" && "$RW_JOB_PRE_READY_REQUIRED" == "1" ]]; then
@@ -1990,12 +2109,19 @@ rw_job_checks() {
     [[ "$terminal_status" == "SUCCEEDED" ]] || [[ -n "$diagnostic" ]] || diagnostic="job reached terminal status ${terminal_status}"
   fi
   started="$(rw_now_s)"; finished="$(rw_now_s)"; elapsed=$(( (finished - started) * 1000 ))
-  sequence="$(printf '%s -> ' "${statuses[@]}" | sed 's/ -> $//')"
+  sequence="$(printf '%s\n' "${statuses[@]}")"
+  if [[ -z "$diagnostic" ]]; then
+    if ! state_error="$(rw_job_lifecycle_monotonic_ok "$sequence" 2>&1)"; then
+      diagnostic="$state_error"
+    elif ! state_error="$(rw_job_required_states_ok "$sequence" 2>&1)"; then
+      diagnostic="$state_error"
+    fi
+  fi
   if [[ -n "$diagnostic" ]]; then
-    rw_job_record P02-poll poll FAIL "$diagnostic; states=${sequence:-<none>}" "$elapsed"
+    rw_job_record P02-poll poll FAIL "${diagnostic}; states=${sequence//$'\n'/ -> }" "$elapsed"
     overall="FAIL"
   else
-    rw_job_record P02-poll poll PASS "states=${sequence}; terminal=SUCCEEDED" "$elapsed"
+    rw_job_record P02-poll poll PASS "states=${sequence//$'\n'/ -> }; required=${RW_JOB_REQUIRED_STATES:-PENDING,LEASED,RUNNING,AWAITING_ARTIFACT,SUCCEEDED}; terminal=SUCCEEDED" "$elapsed"
   fi
 
   response_artifact_id="$(jq -r '.artifact_id // .artifact.id // empty' <<<"${body:-{}}" 2>/dev/null || true)"
@@ -2051,14 +2177,19 @@ rw_job_checks() {
       fi
     fi
     if [[ -z "$diagnostic" && "$RW_JOB_VERIFY_FFPROBE" == "1" ]]; then
-      probe_json="$(ffprobe -v error -show_entries format=duration,size -of json "$artifact_file" 2>/dev/null || true)"
-      probe_duration="$(jq -r '.format.duration // empty' <<<"$probe_json" 2>/dev/null || true)"
-      probe_size="$(jq -r '.format.size // empty' <<<"$probe_json" 2>/dev/null || true)"
-      [[ -n "$probe_json" && -n "$probe_duration" && -n "$probe_size" ]] || diagnostic='ffprobe failed or returned no format.duration/size'
-      if [[ -z "$diagnostic" ]]; then
-        downloaded_bytes="$(stat -c %s "$artifact_file" 2>/dev/null || wc -c <"$artifact_file")"
-        [[ "$probe_size" == "$downloaded_bytes" ]] || diagnostic="ffprobe size mismatch: format.size=${probe_size} downloaded=${downloaded_bytes}"
+      verifier_report="$(mktemp "${TMPDIR:-/tmp}/velox-artifact-report.XXXXXX.json")"
+      verifier_log="$(mktemp "${TMPDIR:-/tmp}/velox-artifact-verifier.XXXXXX.log")"
+      verifier_rc=0
+      "${RW_CERT_CONFIG_DIR}/../../tests/worker-cert/verify_artifact.sh" "$artifact_file" \
+        --report-json "$verifier_report" >"$verifier_log" 2>&1 || verifier_rc=$?
+      if (( verifier_rc != 0 )); then
+        diagnostic="canonical artifact verifier failed (rc=${verifier_rc})"
+      else
+        probe_duration="$(jq -r '.duration_seconds // empty' "$verifier_report" 2>/dev/null || true)"
+        probe_size="$(jq -r '.bytes // empty' "$verifier_report" 2>/dev/null || true)"
+        [[ -n "$probe_duration" && -n "$probe_size" ]] || diagnostic='canonical artifact verifier returned incomplete ffprobe report'
       fi
+      rm -f -- "$verifier_report" "$verifier_log"
     fi
     if [[ -n "$artifact_size" && "$artifact_size" =~ ^[0-9]+$ && "$artifact_size" -gt 0 && -z "$diagnostic" ]]; then
       [[ "$(stat -c %s "$artifact_file" 2>/dev/null || wc -c <"$artifact_file")" == "$artifact_size" ]] || diagnostic="artifact byte size mismatch: downloaded=$(stat -c %s "$artifact_file" 2>/dev/null || wc -c <"$artifact_file") expected=${artifact_size}"

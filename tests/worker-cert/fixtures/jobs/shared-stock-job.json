@@ -1,0 +1,70 @@
+{
+  "idempotency_key": "worker-cert-shared-stock",
+  "job_type": "clip.stock.v1",
+  "template_id": "worker-cert.shared-stock",
+  "template_version": 1,
+  "video_name": "Worker certification shared stock render",
+  "script_text": "Deterministic two-scene job reusing one shared stock asset.",
+  "placement_pin_worker_id": "RUNTIME_WORKER_ID",
+  "scenes": [
+    {
+      "scene_id": "scene-0",
+      "index": 0,
+      "kind": "clip",
+      "text": "Shared stock scene zero.",
+      "duration_seconds": 3,
+      "clip": {
+        "asset_id": "27063c51bda8444a7b4d98ab4d9828826c9424f12cf1bbdeefe351afc3a4bd5c",
+        "url": "velox-asset://27063c51bda8444a7b4d98ab4d9828826c9424f12cf1bbdeefe351afc3a4bd5c",
+        "duration_ms": 3000
+      },
+      "stock": {
+        "asset_id": "d4382e86b7475fed0b9e5b074cff68055a3ef1a633a9d2913ba4780b21fef561",
+        "url": "velox-asset://d4382e86b7475fed0b9e5b074cff68055a3ef1a633a9d2913ba4780b21fef561",
+        "duration_ms": 3000
+      },
+      "voiceover": {
+        "asset_id": "4d027993c4c3c68540eaab5dcecacaca1a9600a5fdf090b8ac1a924e753b1d15",
+        "url": "velox-asset://4d027993c4c3c68540eaab5dcecacaca1a9600a5fdf090b8ac1a924e753b1d15",
+        "duration_ms": 3000,
+        "language": "it"
+      }
+    },
+    {
+      "scene_id": "scene-1",
+      "index": 1,
+      "kind": "clip",
+      "text": "Shared stock scene one.",
+      "duration_seconds": 3,
+      "clip": {
+        "asset_id": "a01f8acfc7a8c919df3179e14c935c6101fe03fd965dfae80c62b57129f57223",
+        "url": "velox-asset://a01f8acfc7a8c919df3179e14c935c6101fe03fd965dfae80c62b57129f57223",
+        "duration_ms": 3000
+      },
+      "stock": {
+        "asset_id": "d4382e86b7475fed0b9e5b074cff68055a3ef1a633a9d2913ba4780b21fef561",
+        "url": "velox-asset://d4382e86b7475fed0b9e5b074cff68055a3ef1a633a9d2913ba4780b21fef561",
+        "duration_ms": 3000
+      },
+      "voiceover": {
+        "asset_id": "4d027993c4c3c68540eaab5dcecacaca1a9600a5fdf090b8ac1a924e753b1d15",
+        "url": "velox-asset://4d027993c4c3c68540eaab5dcecacaca1a9600a5fdf090b8ac1a924e753b1d15",
+        "duration_ms": 3000,
+        "language": "it"
+      }
+    }
+  ],
+  "output": {
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "format": "mp4"
+  },
+  "delivery_plan": [
+    {
+      "destination_id": "RUNTIME_DESTINATION_ID",
+      "priority": 100,
+      "retry_budget": 1
+    }
+  ]
+}

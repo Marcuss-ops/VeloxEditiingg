@@ -1,0 +1,42 @@
+{
+  "idempotency_key": "worker-cert-minimal",
+  "job_type": "clip.stock.v1",
+  "template_id": "worker-cert.minimal",
+  "template_version": 1,
+  "video_name": "Worker certification minimal render",
+  "script_text": "Deterministic one-scene worker certification job.",
+  "placement_pin_worker_id": "RUNTIME_WORKER_ID",
+  "scenes": [
+    {
+      "scene_id": "scene-0",
+      "index": 0,
+      "kind": "clip",
+      "text": "Deterministic minimal scene.",
+      "duration_seconds": 3,
+      "clip": {
+        "asset_id": "27063c51bda8444a7b4d98ab4d9828826c9424f12cf1bbdeefe351afc3a4bd5c",
+        "url": "velox-asset://27063c51bda8444a7b4d98ab4d9828826c9424f12cf1bbdeefe351afc3a4bd5c",
+        "duration_ms": 3000
+      },
+      "voiceover": {
+        "asset_id": "4d027993c4c3c68540eaab5dcecacaca1a9600a5fdf090b8ac1a924e753b1d15",
+        "url": "velox-asset://4d027993c4c3c68540eaab5dcecacaca1a9600a5fdf090b8ac1a924e753b1d15",
+        "duration_ms": 3000,
+        "language": "it"
+      }
+    }
+  ],
+  "output": {
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "format": "mp4"
+  },
+  "delivery_plan": [
+    {
+      "destination_id": "RUNTIME_DESTINATION_ID",
+      "priority": 100,
+      "retry_budget": 1
+    }
+  ]
+}

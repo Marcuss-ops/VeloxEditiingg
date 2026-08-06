@@ -359,11 +359,10 @@ DURATION_S=$(parse_format_kv "duration")
 [[ -z "$DURATION_S" ]] && DURATION_S="0"
 log_info "ffprobe: format.duration=${DURATION_S}s"
 
-STREAMS_TMP="$TMP_STREAMS"  # alias for legacy variable name in check section
-STREAMS_TMP="$TMP_STREAMS"  # alias for legacy variable name in check section
 # Walk each [STREAM] block independently; emit group lines so caller can
 # pick by index=0,1,... Skip non-stream sections (SIDE_DATA, etc.).
 TMP_STREAMS=$(mktemp)
+STREAMS_TMP="$TMP_STREAMS"  # alias for the legacy variable used below
 awk '
   /^\[STREAM\]/      { idx++; print "==STREAM "idx" =="; next }
   /^\[FORMAT\]|^\[SIDE_DATA|^\[PROGRAM|^\[\/STREAM\]|^\[\/FORMAT\]|^\[\/SIDE_DATA|^\[\/PROGRAM/ { next }
@@ -378,7 +377,7 @@ declare -a A_CODEC=()
 STREAM_IDX=0
 while (( STREAM_IDX < 32 )); do
   STREAM_IDX=$((STREAM_IDX + 1))
-  block=$(awk -v n="$STREAM_IDX" 'BEGIN{p=0} /^==STREAM /{p=($3==n)} p{print}' "$STREAMS_TMP")
+  block=$(awk -v n="$STREAM_IDX" 'BEGIN{p=0} /^==STREAM /{p=($2==n); next} p{print}' "$STREAMS_TMP")
   [[ -z "$block" ]] && break
   ctype=$(printf '%s' "$block" | awk -F= '/^codec_type=/{print $2; exit}')
   case "$ctype" in
