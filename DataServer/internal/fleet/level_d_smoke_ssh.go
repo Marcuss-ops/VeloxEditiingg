@@ -43,6 +43,35 @@ func NewSSHClient(targets map[string]SSHWorkerTarget) BackendSSHClient {
 	return &sshClient{targets: targets}
 }
 
+// NewSSHClientFromRegistry returns a BackendSSHClient whose target map
+// is derived from the canonical WorkerRegistry (itself populated from the
+// persistent `ansible_hosts` worker-node view). This is the Phase 9
+// inventory unification seam: the ONLY sanctioned way to build the SSH
+// client in production is from the WorkerRegistry — never from a
+// hardcoded map. Rows without a host or user are skipped so a partially
+// populated inventory fails per-target at Run time (with a clear error)
+// instead of producing a malformed ssh invocation at build time.
+func NewSSHClientFromRegistry(reg *WorkerRegistry) BackendSSHClient {
+	if reg == nil {
+		return &sshClient{targets: map[string]SSHWorkerTarget{}}
+	}
+	targets := make(map[string]SSHWorkerTarget)
+	for _, e := range reg.ListWorkers() {
+		if strings.TrimSpace(e.Host) == "" || strings.TrimSpace(e.SSHUser) == "" {
+			continue
+		}
+		targets[e.WorkerID.String()] = SSHWorkerTarget{
+			Host: e.Host,
+			User: e.SSHUser,
+			// Canonical key path — NOT "" (sshClient.Run would then fall
+			// back to $HOME/.ssh/id_ed25519_velox, which breaks production
+			// where the key lives at /etc/velox/ssh/id_ed25519_velox).
+			KeyPath: DefaultSSHKeyPath,
+		}
+	}
+	return &sshClient{targets: targets}
+}
+
 // Run executes command on the worker via ssh. Returns the combined
 // stdout+stderr on success, or an error wrapping the ssh exit code.
 //

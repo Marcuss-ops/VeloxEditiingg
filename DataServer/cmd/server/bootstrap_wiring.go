@@ -93,13 +93,13 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 	}
 
 	// Shared SSH client for health probes (Level A + B) and smoke (Level D).
-	// Built once at composition time; nil-tolerant consumers handle nil gracefully.
-	sharedSSH := fleet.NewSSHClient(map[string]fleet.SSHWorkerTarget{
-		"host_57_129_132_133":   {Host: "57.129.132.133", User: "pierone", KeyPath: "/etc/velox/ssh/id_ed25519_velox"},
-		"host_57_131_20_173":    {Host: "57.131.20.173", User: "debian", KeyPath: "/etc/velox/ssh/id_ed25519_velox"},
-		"velox-worker-523925eb": {Host: "51.222.204.158", User: "ubuntu", KeyPath: "/etc/velox/ssh/id_ed25519_velox"},
-		"velox-worker-13197":    {Host: "149.56.131.97", User: "pierone", KeyPath: "/etc/velox/ssh/id_ed25519_velox"},
-	})
+	// Built once at composition time from the canonical WorkerNodeRegistry
+	// (persistent ansible_hosts worker-node view — Phase 9). The registry is
+	// populated by buildWorkerRegistryFromStore; the SSH client derives its
+	// targets from it. There is intentionally NO hardcoded target map here:
+	// an unseeded inventory fails per-target at Run time with a clear error.
+	workerNodeRegistry := buildWorkerRegistryFromStore(p)
+	sharedSSH := fleet.NewSSHClientFromRegistry(workerNodeRegistry)
 
 	// Step 10/15 fleet-operator: wire the 4-level health probe handler
 	// (GET /api/v1/admin/workers/{id}/health?level=A|B|C|D; absent
@@ -121,7 +121,7 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 			},
 		)
 		m.Workers.SetHealthHandler(healthHandler)
-		log.Printf("[BOOTSTRAP] Admin workers health handler wired (SSH=4 targets + Registry + Deployments; level=D smoke pending)")
+		log.Printf("[BOOTSTRAP] Admin workers health handler wired (SSH=%d targets from WorkerNodeRegistry + Registry + Deployments; level=D smoke pending)", workerNodeRegistry.Len())
 	}
 
 	// Step 12/15 fleet-operator: register the LevelDSmokeExecutor
@@ -201,7 +201,7 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 			if smokeBackend.Asset != nil {
 				assetDesc = "StubAsset"
 			}
-			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor registered for kind=%s (Worker=SSHWorkerExec[4 targets], Drive=%s, Asset=%s, Lease=RegistryDrain, SmokeRuns=SQLite)", fleet.OperationKindSmoke, driveDesc, assetDesc)
+			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor registered for kind=%s (Worker=SSHWorkerExec[%d targets], Drive=%s, Asset=%s, Lease=RegistryDrain, SmokeRuns=SQLite)", fleet.OperationKindSmoke, workerNodeRegistry.Len(), driveDesc, assetDesc)
 		}
 		m.Workers.SetSmokeHandler(api.NewAdminWorkersSmokeHandler(m.Workers.Registry(), fleetDep.Controller))
 		if err := fleetDep.Registry.Register(fleet.OperationKindResume, fleet.NewResumeExecutor(fleet.ResumeBackend{
