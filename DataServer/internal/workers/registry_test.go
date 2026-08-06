@@ -240,8 +240,20 @@ func TestRegistryGetSchedulableWorkers(t *testing.T) {
 	reg := newTestRegistry(t)
 	ctx := context.Background()
 
-	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", nil)
-	_ = reg.RegisterWorker(ctx, "w2", "worker-2", "10.0.0.2", nil)
+	// Admission fails closed without declared capacity (host.max_parallel_jobs),
+	// so the fixture MUST register capability-bearing workers just like the
+	// production agent does (worker_info.go derives DeclaredMaxSlots from the
+	// capabilities metadata during registration).
+	capabilities := map[string]interface{}{
+		"capabilities": map[string]interface{}{
+			"host": map[string]interface{}{"max_parallel_jobs": float64(1)},
+			"executors": []interface{}{
+				map[string]interface{}{"id": "scene.composite.v1", "version": float64(1)},
+			},
+		},
+	}
+	_ = reg.RegisterWorker(ctx, "w1", "worker-1", "10.0.0.1", capabilities)
+	_ = reg.RegisterWorker(ctx, "w2", "worker-2", "10.0.0.2", capabilities)
 
 	// Set w1 to drain
 	_ = reg.SetWorkerDrain(ctx, "w1", true)
