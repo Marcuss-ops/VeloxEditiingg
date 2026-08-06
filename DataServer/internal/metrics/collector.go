@@ -110,6 +110,12 @@ type Collector struct {
 	masterOutboxPending *Family
 	heartbeatAge        *Family // per worker; emitted on each refresh
 
+	// HTTP control-plane route usage (Phase 6 API-surface unification).
+	// Counter with {surface, route} labels; surface is one of
+	// agent|admin|fleet|legacy|other, route is the gin route TEMPLATE
+	// (bounded by the route table). See collector_http.go.
+	httpRouteRequests *Family // velox_master_http_route_requests_total{surface,route}
+
 	// Single counter family with labels {error_code, component, phase}
 	// for failure-reason attribution. error_code is the canonical
 	// closed-enum code (CanonicalErrorCode); component/phase are
@@ -233,6 +239,7 @@ func NewCollector(reg *Registry) *Collector {
 	c.initCostFamilies()
 	c.initSinkFamilies()
 	c.initEngineFamilies()
+	c.initHTTPFamilies()
 
 	c.lastSeen = make(map[string]time.Time)
 
@@ -259,5 +266,6 @@ func (c *Collector) allFamilies() []*Family {
 	families = append(families, c.costFamilies()...)
 	families = append(families, c.sinkFamilies()...)
 	families = append(families, c.engineFamilies()...)
+	families = append(families, c.httpFamilies()...)
 	return families
 }

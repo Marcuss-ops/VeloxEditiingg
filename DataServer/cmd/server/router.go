@@ -89,10 +89,15 @@ type UploadRouteDeps struct {
 }
 
 // MetricsRouteDeps carries the deps for the /metrics route (Prometheus
-// exporter mounted when EnableMetricsEnpoint is true).
+// exporter mounted when EnableMetricsEnpoint is true) plus the Phase 6
+// route-usage sink. The sink classifies every control-plane HTTP request
+// into its canonical API surface (agent | admin | fleet | legacy | other)
+// so legacy routes are counted before removal. Nil-safe: a disabled
+// metrics exporter leaves the middleware a no-op.
 type MetricsRouteDeps struct {
 	Registry      *velmetrics.Registry
 	BenchmarkRuns performance.BenchmarkRunRepository
+	RouteUsage    velmetrics.HTTPRouteUsageSink
 }
 
 // InstaEditRouteDeps carries the deps for the /api/v1/instaedit route
@@ -266,6 +271,12 @@ func newRouter(cfg *config.Config, bundle RouterBundle, registry interface {
 	r.Use(requestIDMiddleware())
 	r.Use(accessLogMiddleware())
 	r.Use(addGzipHeaders())
+	// Phase 6 API-surface unification: count every request by canonical
+	// surface (agent | admin | fleet | legacy | other) so the legacy-route
+	// removal decision is evidence-driven. No-op when metrics are off.
+	if bundle.Metrics.RouteUsage != nil {
+		r.Use(routeUsageMiddleware(bundle.Metrics.RouteUsage))
+	}
 
 	// ── Module routes (health, workers, drive, ansible) ──
 	registry.RegisterRoutes(r)

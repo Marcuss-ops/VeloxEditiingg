@@ -158,6 +158,7 @@ by `1e3`. Cost gauges are micro-EUR and are divided by `1e6`.
 | 45 | `velox_master_goroutines`                     | G    | Active goroutines on master                      | count     | _(none)_    | `runtime.NumGoroutine()`         | 90d  | N  |
 | 46 | `velox_master_outbox_pending`                 | G    | Pending outbox events (not yet dispatched)       | count     | _(none)_    | `orchestrator_outbox` COUNT      | 90d  | N  |
 | 47 | `velox_master_worker_heartbeat_age_seconds`   | G    | Seconds since last heartbeat per worker          | seconds   | `worker_id` | `collector.lastSeen` map diff    | 90d  | N  |
+| 48 | `velox_master_http_route_requests_total`      | C    | HTTP requests by API surface × route template (feeds the legacy-route removal decision) | count | `surface`, `route` | Router middleware (gin FullPath template) | 90d | N |
 
 ---
 
@@ -165,11 +166,11 @@ by `1e3`. Cost gauges are micro-EUR and are divided by `1e6`.
 
 | #  | Metric Name                                        | Type | Description                                           | Unit          | Labels         | DB Source                                                     | Ret. | HC |
 | -- | -------------------------------------------------- | ---- | ----------------------------------------------------- | ------------- | -------------- | ------------------------------------------------------------- | ---- | -- |
-| 48 | `velox_cost_cpu_core_seconds_per_output_minute`     | G    | CPU cost per output minute (€ × 1e6)                 | micro-EUR     | `worker_class` | `task_attempt_cost_basis.*` aggregated per tick              | 90d  | N  |
-| 49 | `velox_cost_network_gb_per_output_minute`           | G    | Network egress cost per output minute (€ × 1e6)       | micro-EUR     | `worker_class` | `task_attempt_cost_basis.*` aggregated per tick              | 90d  | N  |
-| 50 | `velox_cost_storage_gb_written_per_output_minute`   | G    | Storage cost per output minute (€ × 1e6)              | micro-EUR     | `worker_class` | `task_attempt_cost_basis.*` aggregated per tick              | 90d  | N  |
-| 51 | `velox_cost_total_per_output_minute`                | G    | Total cost per output minute (€ × 1e6)                | micro-EUR     | `worker_class` | `task_attempt_cost_basis.*` aggregated per tick              | 90d  | N  |
-| 52 | `velox_waste_total`                          | C    | Waste/cost totals by type (retry_count\|wasted_cpu_ms\|wasted_download_bytes\|wasted_cost_estimate) | mixed | `waste_type` | `task_attempt_metrics.retry_count, wasted_cpu_ms, wasted_download_bytes, wasted_cost_estimate` | 90d | N |
+| 49 | `velox_cost_cpu_core_seconds_per_output_minute`     | G    | CPU cost per output minute (€ × 1e6)                 | micro-EUR     | `worker_class` | `task_attempt_cost_basis.*` aggregated per tick              | 90d  | N  |
+| 50 | `velox_cost_network_gb_per_output_minute`           | G    | Network egress cost per output minute (€ × 1e6)       | micro-EUR     | `worker_class` | `task_attempt_cost_basis.*` aggregated per tick              | 90d  | N  |
+| 51 | `velox_cost_storage_gb_written_per_output_minute`   | G    | Storage cost per output minute (€ × 1e6)              | micro-EUR     | `worker_class` | `task_attempt_cost_basis.*` aggregated per tick              | 90d  | N  |
+| 52 | `velox_cost_total_per_output_minute`                | G    | Total cost per output minute (€ × 1e6)                | micro-EUR     | `worker_class` | `task_attempt_cost_basis.*` aggregated per tick              | 90d  | N  |
+| 53 | `velox_waste_total`                          | C    | Waste/cost totals by type (retry_count\|wasted_cpu_ms\|wasted_download_bytes\|wasted_cost_estimate) | mixed | `waste_type` | `task_attempt_metrics.retry_count, wasted_cpu_ms, wasted_download_bytes, wasted_cost_estimate` | 90d | N |
 
 ---
 
@@ -177,8 +178,8 @@ by `1e3`. Cost gauges are micro-EUR and are divided by `1e6`.
 
 | #  | Metric Name                                   | Type | Description                                           | Unit  | Labels          | DB Source                                                     | Ret. | HC |
 | -- | --------------------------------------------- | ---- | ----------------------------------------------------- | ----- | --------------- | ------------------------------------------------------------- | ---- | -- |
-| 53 | `velox_completion_reconcile_total`            | C    | Reconcile supervisor dispatch count by case × action  | count | `case`, `action` | `task_attempts` terminal-state scan + commit deadline check  | 90d  | N  |
-| 54 | `velox_commit_deadline_exceeded_total`        | C    | Attempts whose commit_deadline_at crossed              | count | _(none)_        | `task_attempts.commit_deadline_at < now`                     | 90d  | N  |
+| 54 | `velox_completion_reconcile_total`            | C    | Reconcile supervisor dispatch count by case × action  | count | `case`, `action` | `task_attempts` terminal-state scan + commit deadline check  | 90d  | N  |
+| 55 | `velox_commit_deadline_exceeded_total`        | C    | Attempts whose commit_deadline_at crossed              | count | _(none)_        | `task_attempts.commit_deadline_at < now`                     | 90d  | N  |
 
 ---
 
@@ -186,7 +187,7 @@ by `1e3`. Cost gauges are micro-EUR and are divided by `1e6`.
 
 | #  | Metric Name                                   | Type | Description                                           | Unit  | Labels    | DB Source                              | Ret. | HC |
 | -- | --------------------------------------------- | ---- | ----------------------------------------------------- | ----- | --------- | -------------------------------------- | ---- | -- |
-| 55 | `velox_placement_rejections_total`            | C    | Placement matcher rejections by reason code            | count | `reason`  | `tasks` / placement pipeline          | 90d  | N  |
+| 56 | `velox_placement_rejections_total`            | C    | Placement matcher rejections by reason code            | count | `reason`  | `tasks` / placement pipeline          | 90d  | N  |
 
 ### Placement Rejection Codes
 
@@ -198,10 +199,10 @@ by `1e3`. Cost gauges are micro-EUR and are divided by `1e6`.
 
 | #  | Metric Name                                      | Type | Description                                           | Unit  | Labels | DB Source                                        | Ret. | HC |
 | -- | ------------------------------------------------ | ---- | ----------------------------------------------------- | ----- | ------ | ------------------------------------------------ | ---- | -- |
-| 56 | `velox_conflict_streak_reset_total`               | C    | ConflictBudget streak resets (Record(nil) on non-zero)  | count | _(none)_ | `attempt_commits` CAS path                      | 90d  | N  |
-| 57 | `velox_conflict_escalations_total`                | C    | ConflictBudget escalations to ErrConflictBudgetExhausted | count | _(none)_ | `attempt_commits` CAS path                      | 90d  | N  |
-| 58 | `velox_conflict_stayed_under_threshold_total`     | C    | Conflict observations that incremented streak under threshold | count | _(none)_ | `attempt_commits` CAS path                      | 90d  | N  |
-| 59 | `velox_conflict_streak_length`                    | H    | Distribution of consecutive-conflict streak lengths    | count  | _(none)_ | `attempt_commits` CAS path (buckets: 1,2,3,5,10) | 90d  | N  |
+| 57 | `velox_conflict_streak_reset_total`               | C    | ConflictBudget streak resets (Record(nil) on non-zero)  | count | _(none)_ | `attempt_commits` CAS path                      | 90d  | N  |
+| 58 | `velox_conflict_escalations_total`                | C    | ConflictBudget escalations to ErrConflictBudgetExhausted | count | _(none)_ | `attempt_commits` CAS path                      | 90d  | N  |
+| 59 | `velox_conflict_stayed_under_threshold_total`     | C    | Conflict observations that incremented streak under threshold | count | _(none)_ | `attempt_commits` CAS path                      | 90d  | N  |
+| 60 | `velox_conflict_streak_length`                    | H    | Distribution of consecutive-conflict streak lengths    | count  | _(none)_ | `attempt_commits` CAS path (buckets: 1,2,3,5,10) | 90d  | N  |
 
 ---
 
@@ -250,6 +251,8 @@ These dimensions exist in SQLite / Postgres (`task_attempt_metrics`, `task_attem
 | `result`           | `hit`, `miss`, `corrupt`                            | 3                   |
 | `case`             | Reconcile anomaly cases (closed enum)               | 11                  |
 | `action`           | `noop`, `transition`, `escalate`                    | 3                   |
+| `surface`          | `agent`, `admin`, `fleet`, `legacy`, `other`        | 5                   |
+| `route`            | Gin route templates (closed set = route table)      | ~50–100             |
 
 ### NEVER in Prometheus (use SQL)
 
@@ -361,6 +364,7 @@ Worker (otelgrpc client handler)                    Master (otelgrpc server hand
 | 2026-07-06 | Worker otelgrpc client interceptor (Step 18)       | —         |
 | 2026-07-06 | **Metric catalog updated** (this revision)         | —         |
 | 2026-07-31 | Eight observability dashboards, SQL detail queries and cardinality contract | — |
+| 2026-08-06 | Phase 6 API-surface split: `velox_master_http_route_requests_total{surface,route}` for legacy-route removal decisions | — |
 
 ---
 

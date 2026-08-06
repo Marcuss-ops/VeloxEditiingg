@@ -180,6 +180,25 @@ func (m *WorkersModule) Name() string {
 }
 
 func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
+	// ── Canonical /api/v1/agent namespace (Phase 6 API-surface
+	//    unification) ────────────────────────────────────────────
+	// Worker-AUTHENTICATED traffic only: register, cache snapshot,
+	// asset download. These routes authenticate with the worker session
+	// token (or the worker credential on register); they are NOT
+	// operator surfaces. The legacy pre-canonical paths below remain
+	// mounted for the migration window and are counted as surface=legacy
+	// by the route-usage middleware before removal.
+	if m.workerLifecycle != nil {
+		r.POST("/api/v1/agent/register", m.workerLifecycle.RegisterV2Handler())
+	}
+	if m.workerAssetHandler != nil {
+		r.GET("/api/v1/agent/assets/:asset_id", m.workerAssetHandler.ServeAsset())
+	}
+	if m.workersHandler != nil && m.protectedAssetsHandler != nil {
+		r.GET("/api/v1/agent/cache/protected-assets", m.protectedAssetsAuth, m.protectedAssetsHandler.Snapshot())
+	}
+
+	// ── Legacy agent/admin routes (counted before removal) ───────
 	if m.workerLifecycle != nil {
 		r.POST("/api/v1/workers/register", m.workerLifecycle.RegisterV2Handler())
 		workerAdmin := r.Group("/worker")
@@ -207,6 +226,9 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 	// PR 4 — canonical worker read-model endpoints.
 	// The protected-assets snapshot is consumed by workers with their worker
 	// session token, so it must not be nested under the admin-only group.
+	// Phase 6: this /api/v1/workers diagnostic surface is LEGACY (superseded
+	// by /api/v1/admin/workers + /api/v1/agent/*) and is counted as
+	// surface=legacy by the route-usage middleware before removal.
 	if m.workersHandler != nil {
 		v1Workers := r.Group("/api/v1/workers")
 		if m.protectedAssetsHandler != nil {
@@ -315,12 +337,35 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 			adminWorkers.GET("/:worker_id/alerts", m.adminWorkersAlertsHandler.ListWorkerAlerts())
 		}
 	}
+	// ── Canonical /api/v1/fleet namespace (Phase 6) ───────────────
+	// Aggregated fleet surfaces: the fleet-wide metrics snapshot and the
+	// fleet-wide alert ledger. These are NOT per-worker and NOT agent
+	// traffic — they feed dashboards, so they live under /api/v1/fleet
+	// (adminAuth-gated like the operator surface). The legacy
+	// /api/v1/admin/workers/metrics + /api/v1/admin/alerts paths stay
+	// mounted for the migration window and are counted as surface=legacy
+	// by the route-usage middleware before removal.
+	fleetGroup := r.Group("/api/v1/fleet")
+	if m.adminAuth != nil {
+		fleetGroup.Use(m.adminAuth)
+	}
+	if m.adminWorkersMetricsAggregatorHandler != nil {
+		fleetGroup.GET("/metrics", m.adminWorkersMetricsAggregatorHandler.ListFleetMetrics())
+	}
+	if m.adminWorkersAlertsHandler != nil {
+		fleetGroup.GET("/alerts/active", m.adminWorkersAlertsHandler.ListFleetActiveAlerts())
+		fleetGroup.GET("/alerts/recent", m.adminWorkersAlertsHandler.ListRecentAlerts())
+	}
+
 	// Step 16/15 — fleet-wide ALERT surfaces (NOT mounted under
 	// the /api/v1/admin/workers/:worker_id group because they
 	// are fleet-wide, not per-worker). Mounted separately
 	// under /api/v1/admin/alerts, also gated by adminAuth.
 	// The nil-guard prevents 503-on-every-request when the
-	// store is absent (test/partial bootstrap).
+	// store is absent (test/partial bootstrap). Phase 6: this
+	// /api/v1/admin/alerts surface is LEGACY (superseded by
+	// /api/v1/fleet/alerts/*) and is counted as surface=legacy
+	// by the route-usage middleware before removal.
 	if m.adminWorkersAlertsHandler != nil {
 		adminAlerts := r.Group("/api/v1/admin/alerts")
 		if m.adminAuth != nil {

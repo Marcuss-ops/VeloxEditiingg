@@ -107,6 +107,8 @@ func TestCatalog_RequiredMetricsExist(t *testing.T) {
 		// Scorecard.
 		"scorecard.render_speed_ratio",
 		"scorecard.compute_seconds_total",
+		// Master HTTP route usage (Phase 6 API-surface unification).
+		"master.http_route_requests_total",
 		// Cost.
 		"cost.total_per_output_minute",
 		// Waste.

@@ -113,6 +113,25 @@ Same shape as a single element of the list. Returns `404` if the worker is not r
 }
 ```
 
+## API-surface namespaces (Phase 6)
+
+The worker control-plane API is split into three canonical namespaces. The
+legacy paths remain mounted for a measured migration window and are counted
+by `velox_master_http_route_requests_total{surface="legacy"}` — a legacy
+surface with sustained usage must stay; a quiet one can be retired.
+
+| Namespace | Auth | Surface | Routes |
+| --- | --- | --- | --- |
+| `/api/v1/agent/*` | worker credential / session token | `agent` | `POST /register`, `GET /assets/:asset_id`, `GET /cache/protected-assets` |
+| `/api/v1/admin/workers/*` | `VELOX_ADMIN_TOKEN` | `admin` | list, inspect, mutations (`drain`/`resume`/`quarantine`/`update`), `health`, `smoke`, per-worker `metrics`/`alerts` |
+| `/api/v1/fleet/*` | `VELOX_ADMIN_TOKEN` | `fleet` | `GET /metrics`, `GET /alerts/active`, `GET /alerts/recent` |
+
+Legacy paths (surface `legacy`): `/api/v1/workers`, `/api/v1/workers/:worker_id`
+(+ per-worker `/metrics`/`/sessions`/`/events`), `/api/v1/workers/register`,
+`/api/v1/worker-assets/:asset_id`, `/api/v1/workers/cache/protected-assets`,
+`/api/v1/admin/workers/metrics` (fleet-wide snapshot), `/api/v1/admin/alerts/*`
+and the `/worker/*` admin group.
+
 ## Canonical worker operations
 
 Worker updates are submitted through the authenticated fleet API and tracked

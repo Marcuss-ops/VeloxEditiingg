@@ -123,5 +123,9 @@ func resourcesMetricDefinitions() []MetricDefinition {
 			Name: "master.outbox_pending", Unit: "count", Component: CompMaster, Kind: KindGauge,
 			Description: "Number of pending outbox events",
 		},
+		{
+			Name: "master.http_route_requests_total", Unit: "count", Component: CompMaster, Kind: KindCounter,
+			Description: "HTTP requests served by the master control plane, classified by route template and API surface (agent|admin|fleet|legacy|other). Feeds the legacy-route removal decision: a legacy surface with sustained usage must stay; a quiet one can be retired.",
+		},
 	}
 }

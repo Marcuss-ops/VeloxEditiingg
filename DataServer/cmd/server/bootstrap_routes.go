@@ -57,6 +57,10 @@ func (c *appComponents) routerBundle() RouterBundle {
 		Metrics: MetricsRouteDeps{
 			Registry:      c.metricsRegistry,
 			BenchmarkRuns: store.NewSQLitePerformanceRepository(c.persistence.SQLite),
+			// Phase 6 route-usage counting: the collector implements the
+			// HTTPRouteUsageSink contract and stamps every request's
+			// (surface, route template) onto velox_master_http_route_requests_total.
+			RouteUsage: c.metricsCollector,
 		},
 		InstaEdit: InstaEditRouteDeps{
 			Verifier:      c.instaeditVerifier,
