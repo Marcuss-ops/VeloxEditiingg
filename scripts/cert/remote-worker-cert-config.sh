@@ -54,6 +54,14 @@ rw_validate_worker_id() {
     rw_die "WORKER_ID must be a non-empty path-safe worker identifier"
 }
 
+rw_validate_host() {
+  local name="$1" host="$2"
+  # The current SSH/grpc endpoint builders use host:port syntax. Reject
+  # unbracketed IPv6 until a bracketed-host contract is introduced.
+  [[ "$host" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || \
+    rw_die "${name} must be a hostname or IPv4 address (IPv6 is not supported yet)"
+}
+
 rw_validate_digest() {
   local name="$1" value="$2"
   [[ -z "$value" || "$value" =~ ^sha256:[a-f0-9]{64}$ ]] || \
@@ -113,9 +121,12 @@ rw_resolve_admin_token() {
 }
 
 rw_load_config() {
+  local require_admin=1
+  [[ "${1:-}" == "--network-only" ]] && require_admin=0
   MASTER_URL="${MASTER_URL:-${VELOX_MASTER_URL:-}}"
   MASTER_URL="$(rw_trim_trailing_slash "$MASTER_URL")"
   MASTER_HOST="${MASTER_HOST:-${VELOX_MASTER_HOST:-}}"
+  MASTER_EXPECTED_IP="${MASTER_EXPECTED_IP:-${VELOX_MASTER_EXPECTED_IP:-}}"
   M2M_TOKEN="${M2M_TOKEN:-${VELOX_M2M_TOKEN:-}}"
   WORKER_ID="${WORKER_ID:-${VELOX_WORKER_ID:-}}"
   WORKER_SSH_HOST="${WORKER_SSH_HOST:-${VELOX_WORKER_SSH_HOST:-}}"
@@ -124,11 +135,22 @@ rw_load_config() {
   MASTER_GRPC_PORT="${MASTER_GRPC_PORT:-${VELOX_MASTER_GRPC_PORT:-9000}}"
   TEST_JOB_JSON="${TEST_JOB_JSON:-${VELOX_TEST_JOB_JSON:-}}"
   CERT_POLL_TIMEOUT_S="${CERT_POLL_TIMEOUT_S:-${VELOX_CERT_POLL_TIMEOUT_S:-300}}"
+  RW_NETWORK_TIMEOUT_S="${RW_NETWORK_TIMEOUT_S:-${VELOX_NETWORK_TIMEOUT_S:-30}}"
+  RW_SSH_CONNECT_TIMEOUT_S="${RW_SSH_CONNECT_TIMEOUT_S:-${VELOX_SSH_CONNECT_TIMEOUT_S:-10}}"
+  RW_CONNECT_TIMEOUT_S="${RW_CONNECT_TIMEOUT_S:-${VELOX_CONNECT_TIMEOUT_S:-5}}"
+  RW_REST_REQUEST_TIMEOUT_S="${RW_REST_REQUEST_TIMEOUT_S:-${VELOX_REST_REQUEST_TIMEOUT_S:-10}}"
+  RW_REST_ATTEMPTS="${RW_REST_ATTEMPTS:-${VELOX_REST_ATTEMPTS:-20}}"
+  RW_REST_INTERVAL_S="${RW_REST_INTERVAL_S:-${VELOX_REST_INTERVAL_S:-1}}"
+  RW_GRPC_TIMEOUT_S="${RW_GRPC_TIMEOUT_S:-${VELOX_GRPC_TIMEOUT_S:-5}}"
+  RW_DNS_ATTEMPTS="${RW_DNS_ATTEMPTS:-${VELOX_DNS_ATTEMPTS:-3}}"
 
   [[ -n "$MASTER_URL" ]] || rw_die "MASTER_URL or VELOX_MASTER_URL is required" || return 1
   rw_validate_url "$MASTER_URL" || return 1
   [[ -n "$MASTER_HOST" ]] || rw_die "MASTER_HOST or VELOX_MASTER_HOST is required" || return 1
-  [[ "$MASTER_HOST" != *[[:space:]/@?#\\]* ]] || rw_die "MASTER_HOST contains whitespace or URL/path delimiters" || return 1
+  rw_validate_host MASTER_HOST "$MASTER_HOST" || return 1
+  if [[ -n "$MASTER_EXPECTED_IP" ]]; then
+    [[ "$MASTER_EXPECTED_IP" =~ ^[0-9A-Fa-f:.]+$ ]] || rw_die "MASTER_EXPECTED_IP must be an IP address literal" || return 1
+  fi
   [[ -n "$WORKER_ID" ]] || rw_die "WORKER_ID or VELOX_WORKER_ID is required" || return 1
   rw_validate_worker_id "$WORKER_ID" || return 1
   [[ -n "$WORKER_SSH_HOST" ]] || rw_die "WORKER_SSH_HOST or VELOX_WORKER_SSH_HOST is required" || return 1
@@ -136,9 +158,15 @@ rw_load_config() {
   [[ "$WORKER_SSH_USER" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || rw_die "WORKER_SSH_USER is not a valid SSH login name" || return 1
   rw_validate_port MASTER_REST_PORT "$MASTER_REST_PORT" || return 1
   rw_validate_port MASTER_GRPC_PORT "$MASTER_GRPC_PORT" || return 1
-  [[ "$CERT_POLL_TIMEOUT_S" =~ ^[1-9][0-9]*$ ]] || rw_die "CERT_POLL_TIMEOUT_S must be a positive integer" || return 1
+  for numeric in CERT_POLL_TIMEOUT_S RW_NETWORK_TIMEOUT_S RW_SSH_CONNECT_TIMEOUT_S RW_CONNECT_TIMEOUT_S RW_REST_REQUEST_TIMEOUT_S RW_REST_ATTEMPTS RW_REST_INTERVAL_S RW_GRPC_TIMEOUT_S RW_DNS_ATTEMPTS; do
+    [[ "${!numeric}" =~ ^[1-9][0-9]*$ ]] || rw_die "${numeric} must be a positive integer" || return 1
+  done
 
-  rw_resolve_admin_token || return 1
+  if (( require_admin )); then
+    rw_resolve_admin_token || return 1
+  elif [[ -n "${VELOX_ADMIN_TOKEN:-}" || -n "${TOKEN_FILE:-}" ]]; then
+    rw_resolve_admin_token || return 1
+  fi
   if [[ -n "$M2M_TOKEN" ]]; then
     [[ "$M2M_TOKEN" != *$'\r'* && "$M2M_TOKEN" != *$'\n'* && "$M2M_TOKEN" != *'"'* && "$M2M_TOKEN" != *'\\'* ]] || {
       rw_die "VELOX_M2M_TOKEN contains an unsafe control or config character"
@@ -156,8 +184,10 @@ rw_load_config() {
     }
   fi
 
-  export MASTER_URL MASTER_HOST M2M_TOKEN WORKER_ID WORKER_SSH_HOST WORKER_SSH_USER
+  export MASTER_URL MASTER_HOST MASTER_EXPECTED_IP M2M_TOKEN WORKER_ID WORKER_SSH_HOST WORKER_SSH_USER
   export MASTER_REST_PORT MASTER_GRPC_PORT TEST_JOB_JSON CERT_POLL_TIMEOUT_S
+  export RW_NETWORK_TIMEOUT_S RW_SSH_CONNECT_TIMEOUT_S RW_CONNECT_TIMEOUT_S
+  export RW_REST_REQUEST_TIMEOUT_S RW_REST_ATTEMPTS RW_REST_INTERVAL_S RW_GRPC_TIMEOUT_S RW_DNS_ATTEMPTS
 }
 
 rw_curl_config() {
@@ -240,8 +270,215 @@ rw_remote_worker_preflight() {
   printf '%s\n' '  admin_token: configured (redacted)'
 }
 
+rw_now_s() {
+  date +%s
+}
+
+rw_capture_ssh() {
+  local remote_cmd="$1" out_file err_file rc
+  out_file="$(mktemp "${TMPDIR:-/tmp}/velox-worker-ssh-out.XXXXXX")"
+  err_file="$(mktemp "${TMPDIR:-/tmp}/velox-worker-ssh-err.XXXXXX")"
+  if timeout "${RW_NETWORK_TIMEOUT_S}s" ssh \
+    -o BatchMode=yes \
+    -o ConnectTimeout="${RW_SSH_CONNECT_TIMEOUT_S}" \
+    "${WORKER_SSH_USER}@${WORKER_SSH_HOST}" "$remote_cmd" \
+    >"$out_file" 2>"$err_file"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  # Preserve line structure: R02 counts one result per line and R04 parses
+  # hostname/docker version as separate records. jq performs JSON escaping
+  # later when diagnostics are emitted.
+  RW_LAST_STDOUT="$(head -c 4096 "$out_file")"
+  RW_LAST_STDERR="$(head -c 4096 "$err_file")"
+  RW_LAST_RC="$rc"
+  rm -f -- "$out_file" "$err_file"
+}
+
+rw_record_network_check() {
+  local id="$1" name="$2" status="$3" diagnostic="$4" elapsed_ms="$5"
+  RW_NETWORK_RESULTS+=("$(jq -cn \
+    --arg id "$id" \
+    --arg name "$name" \
+    --arg status "$status" \
+    --arg diagnostic "$diagnostic" \
+    --argjson elapsed_ms "$elapsed_ms" \
+    '{id:$id,name:$name,status:$status,elapsed_ms:$elapsed_ms,diagnostic:$diagnostic}')")
+}
+
+rw_network_diagnostic() {
+  if [[ -n "${RW_LAST_STDERR:-}" ]]; then
+    printf '%s' "$RW_LAST_STDERR"
+  elif [[ -n "${RW_LAST_STDOUT:-}" ]]; then
+    printf '%s' "$RW_LAST_STDOUT"
+  else
+    printf 'command exited with rc=%s' "${RW_LAST_RC:-unknown}"
+  fi
+}
+
+rw_network_prereq_failure() {
+  local diagnostic="$1"
+  if command -v jq >/dev/null 2>&1; then
+    jq -n \
+      --arg diagnostic "$diagnostic" \
+      --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{schema:"velox.remote_worker.network.v1",worker_id:(env.WORKER_ID // ""),master_url:(env.MASTER_URL // ""),master_host:(env.MASTER_HOST // ""),checks:[],overall:"FAIL",diagnostic:$diagnostic,generated_at:$generated_at}'
+  else
+    printf '{"schema":"velox.remote_worker.network.v1","checks":[],"overall":"FAIL","diagnostic":"required JSON encoder unavailable"}\n'
+  fi
+}
+
+rw_network_checks() {
+  local started finished elapsed host_q url_q endpoint_q remote_cmd
+  local status diagnostic rest_count rest_bad dns_count dns_unique dns_ip grpc_mode docker_host docker_version
+  local checks_json overall="PASS" result
+  local -a RW_NETWORK_RESULTS=()
+
+  local bin numeric missing=""
+  for bin in jq ssh timeout; do
+    if ! command -v "$bin" >/dev/null 2>&1; then
+      missing="${missing}${missing:+,}${bin}"
+    fi
+  done
+  if [[ -n "$missing" ]]; then
+    rw_network_prereq_failure "missing local prerequisites: ${missing}"
+    return 2
+  fi
+  [[ -n "${MASTER_URL:-}" && -n "${MASTER_HOST:-}" && -n "${WORKER_ID:-}" ]] || {
+    rw_die "call rw_load_config before rw_network_checks"
+    return 2
+  }
+
+  # R01 — DNS resolution from the worker, not from the operator machine.
+  started="$(rw_now_s)"
+  printf -v host_q '%q' "$MASTER_HOST"
+  remote_cmd="for i in \$(seq 1 ${RW_DNS_ATTEMPTS}); do ip=\$(getent hosts ${host_q} | awk 'NR==1 {print \$1; exit}'); [ -n \"\$ip\" ] || exit 1; printf '%s\\n' \"\$ip\"; done"
+  rw_capture_ssh "$remote_cmd"
+  finished="$(rw_now_s)"
+  elapsed=$(( (finished - started) * 1000 ))
+  dns_count="$(printf '%s\n' "$RW_LAST_STDOUT" | awk 'NF {n++} END {print n+0}')"
+  dns_unique="$(printf '%s\n' "$RW_LAST_STDOUT" | awk 'NF {print $1}' | sort -u | awk 'NF {n++} END {print n+0}')"
+  dns_ip="$(printf '%s\n' "$RW_LAST_STDOUT" | awk 'NF {print $1; exit}')"
+  if [[ "$RW_LAST_RC" -eq 0 && "$dns_count" -eq "$RW_DNS_ATTEMPTS" && "$dns_unique" -eq 1 && ( -z "$MASTER_EXPECTED_IP" || "$dns_ip" == "$MASTER_EXPECTED_IP" ) ]]; then
+    rw_record_network_check R01 dns PASS "resolved_ip=${dns_ip}; stable=${dns_count}/${RW_DNS_ATTEMPTS}" "$elapsed"
+  else
+    diagnostic="resolved=${RW_LAST_STDOUT}"
+    [[ -n "$MASTER_EXPECTED_IP" ]] && diagnostic="${diagnostic}; expected_ip=${MASTER_EXPECTED_IP}"
+    [[ -n "$RW_LAST_STDERR" ]] && diagnostic="${diagnostic}; ${RW_LAST_STDERR}"
+    [[ -n "$diagnostic" ]] || diagnostic="DNS resolution failed (rc=${RW_LAST_RC})"
+    rw_record_network_check R01 dns FAIL "$diagnostic" "$elapsed"
+    overall="FAIL"
+  fi
+
+  # R02 — repeated REST readiness probes from the worker.
+  started="$(rw_now_s)"
+  printf -v url_q '%q' "${MASTER_URL}/health/ready"
+  remote_cmd="for i in \$(seq 1 ${RW_REST_ATTEMPTS}); do curl --silent --show-error --connect-timeout ${RW_CONNECT_TIMEOUT_S} --max-time ${RW_REST_REQUEST_TIMEOUT_S} -o /dev/null -w '%{http_code} %{time_connect} %{time_total}\\n' ${url_q} || printf '000 0 0\\n'; if [ \"\$i\" -lt ${RW_REST_ATTEMPTS} ]; then sleep ${RW_REST_INTERVAL_S}; fi; done"
+  rw_capture_ssh "$remote_cmd"
+  finished="$(rw_now_s)"
+  elapsed=$(( (finished - started) * 1000 ))
+  rest_count="$(printf '%s\n' "$RW_LAST_STDOUT" | awk '$1 != "" {n++} END {print n+0}')"
+  rest_bad="$(printf '%s\n' "$RW_LAST_STDOUT" | awk '$1 != "200" && $1 != "" {n++} END {print n+0}')"
+  if [[ "$RW_LAST_RC" -eq 0 && "$rest_count" -eq "$RW_REST_ATTEMPTS" && "$rest_bad" -eq 0 ]]; then
+    rw_record_network_check R02 rest PASS "${rest_count}/${RW_REST_ATTEMPTS} HTTP 200 readiness responses" "$elapsed"
+  else
+    diagnostic="${RW_LAST_STDOUT}"
+    [[ -n "$RW_LAST_STDERR" ]] && diagnostic="${diagnostic} ${RW_LAST_STDERR}"
+    [[ -n "$diagnostic" ]] || diagnostic="REST readiness probe failed (rc=${RW_LAST_RC})"
+    rw_record_network_check R02 rest FAIL "$diagnostic" "$elapsed"
+    overall="FAIL"
+  fi
+
+  # R03 — prefer grpcurl (application handshake); otherwise use nc as a
+  # clearly-labelled TCP fallback. A fallback is WARN, never a false PASS.
+  started="$(rw_now_s)"
+  printf -v endpoint_q '%q' "${MASTER_HOST}:${MASTER_GRPC_PORT}"
+  grpc_mode="${MASTER_GRPC_TLS_MODE:-tls}"
+  remote_cmd="if command -v grpcurl >/dev/null 2>&1; then grpcurl -connect-timeout ${RW_GRPC_TIMEOUT_S}s"
+  if [[ "$grpc_mode" == "plaintext" ]]; then
+    remote_cmd+=" -plaintext"
+  fi
+  if [[ -n "${GRPCURL_CA_FILE:-}" ]]; then
+    printf -v result '%q' "$GRPCURL_CA_FILE"
+    remote_cmd+=" -cacert ${result}"
+  fi
+  if [[ -n "${GRPCURL_CERT_FILE:-}" && -n "${GRPCURL_KEY_FILE:-}" ]]; then
+    printf -v result '%q' "$GRPCURL_CERT_FILE"
+    remote_cmd+=" -cert ${result}"
+    printf -v result '%q' "$GRPCURL_KEY_FILE"
+    remote_cmd+=" -key ${result}"
+  fi
+  remote_cmd+=" ${endpoint_q} list >/dev/null && printf grpcurl; elif command -v nc >/dev/null 2>&1; then nc -z -w ${RW_GRPC_TIMEOUT_S} ${MASTER_HOST} ${MASTER_GRPC_PORT} && printf nc; else printf missing_grpc_probe; exit 127; fi"
+  rw_capture_ssh "$remote_cmd"
+  finished="$(rw_now_s)"
+  elapsed=$(( (finished - started) * 1000 ))
+  if [[ "$RW_LAST_RC" -eq 0 && "$RW_LAST_STDOUT" == *grpcurl* ]]; then
+    rw_record_network_check R03 grpc PASS "grpcurl application probe succeeded (${grpc_mode})" "$elapsed"
+  elif [[ "$RW_LAST_RC" -eq 0 && "$RW_LAST_STDOUT" == *nc* ]]; then
+    rw_record_network_check R03 grpc WARN "TCP port reachable via nc; grpcurl application handshake unavailable on worker" "$elapsed"
+    [[ "$overall" == "PASS" ]] && overall="WARN"
+  else
+    rw_record_network_check R03 grpc FAIL "$(rw_network_diagnostic)" "$elapsed"
+    overall="FAIL"
+  fi
+
+  # R04 — deployment-plane SSH, sudo, and Docker server-version probe.
+  started="$(rw_now_s)"
+  printf -v result '%q' '{{.Server.Version}}'
+  remote_cmd="hostname && sudo -n true && docker version --format ${result}"
+  rw_capture_ssh "$remote_cmd"
+  finished="$(rw_now_s)"
+  elapsed=$(( (finished - started) * 1000 ))
+  docker_host="$(printf '%s\n' "$RW_LAST_STDOUT" | sed -n '1p')"
+  docker_version="$(printf '%s\n' "$RW_LAST_STDOUT" | sed -n '2p')"
+  if [[ "$RW_LAST_RC" -eq 0 && -n "$docker_host" && -n "$docker_version" ]]; then
+    if [[ -n "${WORKER_EXPECTED_HOSTNAME:-}" && "$docker_host" != "$WORKER_EXPECTED_HOSTNAME" ]]; then
+      rw_record_network_check R04 ssh_docker FAIL "SSH hostname mismatch: got ${docker_host}, expected ${WORKER_EXPECTED_HOSTNAME}" "$elapsed"
+      overall="FAIL"
+    else
+      rw_record_network_check R04 ssh_docker PASS "hostname=${docker_host}; docker_server=${docker_version}" "$elapsed"
+    fi
+  else
+    rw_record_network_check R04 ssh_docker FAIL "$(rw_network_diagnostic)" "$elapsed"
+    overall="FAIL"
+  fi
+
+  checks_json="$(printf '%s\n' "${RW_NETWORK_RESULTS[@]}" | jq -s '.')"
+  jq -n \
+    --arg schema 'velox.remote_worker.network.v1' \
+    --arg worker_id "$WORKER_ID" \
+    --arg master_url "$MASTER_URL" \
+    --arg master_host "$MASTER_HOST" \
+    --arg overall "$overall" \
+    --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --argjson checks "$checks_json" \
+    '{schema:$schema,worker_id:$worker_id,master_url:$master_url,master_host:$master_host,checks:$checks,overall:$overall,generated_at:$generated_at}'
+
+  [[ "$overall" != "FAIL" ]]
+}
+
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   set -euo pipefail
-  rw_load_config
-  rw_remote_worker_preflight
+  case "${1:-}" in
+    --network|--network-json)
+      shift
+      [[ "$#" -eq 0 ]] || { rw_die "network mode does not accept positional arguments"; exit 2; }
+      rw_load_config --network-only
+      rw_network_checks
+      ;;
+    --help|-h)
+      printf '%s\n' 'Usage: remote-worker-cert-config.sh [--network-json]' \
+        'Default mode runs local preflight only.' \
+        '--network-json runs R01-R04 and emits one JSON document on stdout.'
+      ;;
+    '')
+      rw_load_config
+      rw_remote_worker_preflight
+      ;;
+    *)
+      rw_die "unknown option: $1 (use --help)"
+      exit 2
+      ;;
+  esac
 fi
