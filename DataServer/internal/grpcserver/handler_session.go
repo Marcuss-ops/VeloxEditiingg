@@ -94,6 +94,16 @@ type workerSession struct {
 	workerVersion atomic.Value // string
 	engineVersion atomic.Value // string
 	ffmpegVersion atomic.Value // string
+
+	// Canonical typed telemetry snapshot admission (telemetry_snapshot.go).
+	// The gate enforces sequence monotonicity + staleness + worker identity
+	// + schema per session: a reconnecting worker mints a fresh session and
+	// therefore a fresh baseline, matching the worker's per-process sequence
+	// counter. lastTelemetry holds the most recent ACCEPTED snapshot for
+	// admin-API / placement projections.
+	telemetryMu   sync.Mutex
+	telemetryGate *controltransport.TelemetryGate
+	lastTelemetry atomic.Value // *controltransport.WorkerTelemetrySnapshot
 }
 
 // placementSnapshot builds an immutable WorkerSnapshot from the in-memory
@@ -172,6 +182,37 @@ func (s *workerSession) replaceExecutorRegistry(executors controltransport.Execu
 	s.executors = executors
 	s.executorsMu.Unlock()
 	s.capabilityRevision.Add(1)
+}
+
+// acceptTelemetry runs one WorkerTelemetrySnapshot through the per-session
+// admission gate. Returns the reject reason (TelemetryRejectNone == accepted
+// AND recorded as the session's last accepted snapshot). The gate is created
+// lazily on first use, bound to the session's worker identity; the session is
+// single-writer (its stream goroutine), so no cross-goroutine locking is
+// needed beyond the lazily-created gate itself.
+func (s *workerSession) acceptTelemetry(snap controltransport.WorkerTelemetrySnapshot, now time.Time) controltransport.TelemetryRejectReason {
+	s.telemetryMu.Lock()
+	defer s.telemetryMu.Unlock()
+	if s.telemetryGate == nil {
+		s.telemetryGate = controltransport.NewTelemetryGate(s.workerID, 0)
+	}
+	reason := s.telemetryGate.Accept(snap, now)
+	if reason == controltransport.TelemetryRejectNone {
+		copy := snap
+		s.lastTelemetry.Store(&copy)
+	}
+	return reason
+}
+
+// telemetry returns the last ACCEPTED telemetry snapshot, or nil when no
+// snapshot has been admitted on this session yet. Callers must treat the
+// returned pointer as immutable.
+func (s *workerSession) telemetry() *controltransport.WorkerTelemetrySnapshot {
+	v := s.lastTelemetry.Load()
+	if v == nil {
+		return nil
+	}
+	return v.(*controltransport.WorkerTelemetrySnapshot)
 }
 
 // maxParallelJobsFromCapabilities reads the worker's capacity from the

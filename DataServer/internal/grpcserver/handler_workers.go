@@ -135,12 +135,23 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 		}
 	}
 
+	// Canonical typed telemetry snapshot: parse the heartbeat Extra block,
+	// gate it (sequence / staleness / worker identity / schema) and — on
+	// acceptance — surface the typed fields as the state source. A rejected
+	// snapshot is logged and dropped; it never reaches the sink or the
+	// session. The accepted snapshot is stored on the session for admin-API
+	// / placement projections.
+	acceptedTelemetry := ingestTelemetrySnapshot(workerID, sess, extra)
+
 	// F2: forward typed resource counters onto the Prometheus registry
 	// via the sink interface. NIL-tolerant — handlers running WITHOUT a
 	// metrics surface keep the registry.Heartbeat() side active and
-	// silently skip the projection (legacy mode).
+	// silently skip the projection (legacy mode). The accepted typed
+	// snapshot overlays the fields it carries (cache bytes) onto the
+	// decoded proto counters.
 	if h.resourceSink != nil {
 		if snap := decodeWorkerResources(workerID, hb.GetResources()); snap != nil {
+			applyTelemetryToResourceSnapshot(snap, acceptedTelemetry)
 			h.resourceSink.RecordWorker(workerID, snap)
 		}
 	}

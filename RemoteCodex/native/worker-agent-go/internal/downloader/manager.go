@@ -109,6 +109,7 @@ type AssetDownloadManager interface {
 	Snapshot(assetKey assetref.AssetKey) (DownloadSnapshot, bool)
 	Subscribe(assetKey assetref.AssetKey) (<-chan DownloadSnapshot, func())
 	JobSnapshot(jobID string) JobDownloadSnapshot
+	LatestOperational() OperationalSnapshot
 }
 
 // Manager implements AssetDownloadManager.
@@ -125,6 +126,12 @@ type Manager struct {
 	generation atomic.Int64
 	waiterSeq  atomic.Uint64
 	coalesced  atomic.Uint64
+
+	// lastOperational caches the most recent refreshOperational projection so
+	// heartbeat/telemetry consumers can read the current queue depth without
+	// registering as a snapshot subscriber (telemetry_snapshot.go in the
+	// worker agent reads it for WorkerTelemetrySnapshot.DownloadQueue).
+	lastOperational atomic.Pointer[OperationalSnapshot]
 }
 
 // NewManager wires the manager with its transferer and starts the bounded
@@ -242,9 +249,19 @@ func (m *Manager) acquireTransfer(key assetref.AssetKey, req DownloadRequest, re
 // for API visibility; ready/failed/cache-hit gauges therefore describe the
 // manager's retained transfer read model, not a short-lived active-only count.
 func (m *Manager) refreshOperational() {
-	if m.cfg.OnOperationalSnapshot == nil {
-		return
+	out := m.computeOperational()
+	m.lastOperational.Store(&out)
+	if m.cfg.OnOperationalSnapshot != nil {
+		m.cfg.OnOperationalSnapshot(out)
 	}
+	m.registry.PruneTerminal(m.cfg.MaxRetainedTransfers)
+}
+
+// computeOperational projects the transfer registry into one low-cardinality
+// worker snapshot WITHOUT invoking any callback or mutating manager state.
+// Shared by refreshOperational (which forwards it to the callback) and
+// LatestOperational (which serves a cached copy to telemetry consumers).
+func (m *Manager) computeOperational() OperationalSnapshot {
 	out := OperationalSnapshot{CoalescedRequestsTotal: m.coalesced.Load()}
 	m.registry.Each(func(_ assetref.AssetKey, t *Transfer) {
 		snap := t.snapshot(m.cfg.Now())
@@ -268,8 +285,22 @@ func (m *Manager) refreshOperational() {
 			out.FailedTransfers++
 		}
 	})
-	m.cfg.OnOperationalSnapshot(out)
-	m.registry.PruneTerminal(m.cfg.MaxRetainedTransfers)
+	return out
+}
+
+// LatestOperational returns the most recent low-cardinality operational
+// snapshot computed by refreshOperational, or the zero value when no
+// projection has run yet (manager idle since construction). The cached
+// snapshot is refreshed on every lifecycle/progress edge, so telemetry
+// consumers read a live queue depth without subscribing to updates.
+func (m *Manager) LatestOperational() OperationalSnapshot {
+	if m == nil {
+		return OperationalSnapshot{}
+	}
+	if p := m.lastOperational.Load(); p != nil {
+		return *p
+	}
+	return OperationalSnapshot{}
 }
 
 // Snapshot returns the current snapshot for an asset key.

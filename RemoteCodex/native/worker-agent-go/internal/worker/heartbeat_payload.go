@@ -154,6 +154,14 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	hb.CurrentJob = primaryJobID
 	hb.ActiveJobsCount = int32(len(activeJobList))
 
+	// Canonical typed telemetry snapshot: sequence, leases, cache, download
+	// queue, render active, disk free and the release certificate. The master
+	// gates it (out-of-sequence / stale / worker mismatch / unsupported
+	// schema) and uses it as the typed state source instead of free-form
+	// metrics. Rides in the Extra map as a JSON-shaped block, same as the
+	// release_identity capabilities block.
+	extraMap[controltransport.TelemetrySnapshotExtraKey] = w.buildTelemetrySnapshot().AsMap()
+
 	// Serialize extra map to structpb.Struct.
 	if len(extraMap) > 0 {
 		// Structpb accepts JSON-shaped values only.  Several heartbeat

@@ -199,6 +199,11 @@ type Worker struct {
 	releaseIdentity     controltransport.ReleaseIdentity
 	releaseIdentityOnce sync.Once
 
+	// telemetrySeq is the monotonically increasing sequence for the typed
+	// WorkerTelemetrySnapshot emitted on every heartbeat. The master's
+	// TelemetryGate rejects out-of-order / replayed snapshots against it
+	// (shared/controltransport/telemetry_snapshot.go).
+
 	// Command management
 	drainMode    atomic.Bool
 	commandMu    sync.Mutex
@@ -242,6 +247,9 @@ type Worker struct {
 	// Wire keys (jobs_completed / jobs_failed) kept for master compatibility.
 	tasksCompleted atomic.Int64
 	tasksFailed    atomic.Int64
+
+	// Telemetry snapshot sequence (monotonic per process; see telemetry_snapshot.go).
+	telemetrySeq atomic.Uint64
 
 	recentLogs *recentLogBuffer
 
