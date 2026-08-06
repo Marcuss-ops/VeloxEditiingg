@@ -289,10 +289,12 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 				defer ticker.Stop()
 				log.Printf("[FLEET-METRICS] metrics-snapshot-supervisor started (5min tick; computes 13-metric rollup per worker from worker_metric_samples + fleet_operations + smoke_runs + deployment_records)")
 				persist := func() {
+					tickCtx, cancel := context.WithTimeout(ctx, fleet.WorkerMetricsSnapshotTickBudget)
+					defer cancel()
 					ds := fleet.WorkerMetricsAggregatorDataSource{Store: p.SQLite}
-					n, err := fleet.ComputeAndPersistSnapshot(ctx, ds, time.Now().UTC())
+					n, err := fleet.ComputeAndPersistSnapshot(tickCtx, ds, time.Now().UTC())
 					if err != nil {
-						log.Printf("[FLEET-METRICS] snapshot tick failed: %v", err)
+						log.Printf("[FLEET-METRICS] snapshot tick partial/failed: persisted=%d err=%v", n, err)
 						return
 					}
 					log.Printf("[FETCH-METRICS] ticked: persisted %d worker snapshots", n)
