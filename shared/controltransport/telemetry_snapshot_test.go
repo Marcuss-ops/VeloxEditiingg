@@ -130,6 +130,21 @@ func TestTelemetryGate_AcceptsMonotonicSequence(t *testing.T) {
 	}
 }
 
+func TestTelemetryGate_RejectsZeroSequence(t *testing.T) {
+	g := NewTelemetryGate("w-zero", 0)
+	now := time.Now().UTC()
+	snap := WorkerTelemetrySnapshot{WorkerID: "w-zero", Sequence: 0, CapturedAt: now, SchemaVersion: 1}
+	if reason := g.Accept(snap, now); reason != TelemetryRejectOutOfSequence {
+		t.Fatalf("zero sequence reason=%s want out_of_sequence", reason)
+	}
+	// The rejected zero-sequence snapshot must not advance the baseline: a
+	// valid first sequence is still accepted.
+	snap.Sequence = 1
+	if reason := g.Accept(snap, now); reason != TelemetryRejectNone {
+		t.Fatalf("post-zero-reject valid sequence rejected: %s", reason)
+	}
+}
+
 func TestTelemetryGate_RejectsOutOfSequence(t *testing.T) {
 	g := NewTelemetryGate("w-gate", 0)
 	now := time.Now().UTC()

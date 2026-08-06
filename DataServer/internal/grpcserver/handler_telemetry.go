@@ -49,6 +49,14 @@ func ingestTelemetrySnapshot(workerID string, sess *workerSession, extra map[str
 	if !ok {
 		return nil
 	}
+	// Shape validation BEFORE the gate: an empty worker_id, zero sequence or
+	// zero captured_at is malformed regardless of the gate's per-session
+	// state (the gate re-checks these defensively, but Validate() gives the
+	// reject reason precedence and keeps the gate contract tight).
+	if err := snap.Validate(); err != nil {
+		log.Printf("[GRPC] telemetry snapshot from worker %s invalid: %v", workerID, err)
+		return nil
+	}
 
 	var reason controltransport.TelemetryRejectReason
 	if sess != nil {

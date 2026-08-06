@@ -287,6 +287,13 @@ func (g *TelemetryGate) Accept(snap WorkerTelemetrySnapshot, now time.Time) Tele
 	if snap.CapturedAt.IsZero() {
 		return TelemetryRejectStale
 	}
+	// Zero sequence can never be a valid heartbeat snapshot (the worker
+	// mints sequence from 1). Rejecting it fail-closed here — rather than
+	// relying solely on Validate(), which the master ingest path may skip —
+	// guarantees the out-of-order protection actually engages.
+	if snap.Sequence == 0 {
+		return TelemetryRejectOutOfSequence
+	}
 	age := now.Sub(snap.CapturedAt)
 	if age < 0 {
 		// Future-dated snapshot: tolerate small clock skew, reject the rest.

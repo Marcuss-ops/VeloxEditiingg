@@ -43,7 +43,15 @@ func (w *Worker) buildTelemetrySnapshot() controltransport.WorkerTelemetrySnapsh
 	// Download queue depth from the canonical AssetDownloadManager. The
 	// manager caches its last operational projection (refreshOperational) so
 	// this read is lock-free and always current without subscribing.
-	if mgr := w.assetManager; mgr != nil {
+	//
+	// The manager is created lazily by assetDownloadManager() under
+	// assetManagerMu from task-execution goroutines; the heartbeat goroutine
+	// therefore MUST take the same mutex to read the pointer (unsynchronized
+	// read/write on this field is a data race under -race).
+	w.assetManagerMu.Lock()
+	mgr := w.assetManager
+	w.assetManagerMu.Unlock()
+	if mgr != nil {
 		snap.DownloadQueue = mgr.LatestOperational().QueuedTransfers
 	}
 

@@ -1,11 +1,13 @@
 package worker
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
 
 	"velox-shared/controltransport"
+	"velox-worker-agent/internal/downloader"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
 )
@@ -64,6 +66,34 @@ func TestBuildTelemetrySnapshot_StateCounters(t *testing.T) {
 	if snap.DownloadQueue != 0 {
 		t.Errorf("DownloadQueue=%d, want 0 (no manager wired)", snap.DownloadQueue)
 	}
+}
+
+func TestBuildTelemetrySnapshot_DownloadQueueFromManager(t *testing.T) {
+	w := newTelemetryTestWorker("w-queue")
+
+	// A real Manager with a wired operational callback. The manager caches
+	// its latest operational projection on every refresh; a freshly-created
+	// idle manager reports zero queued transfers through the locked read.
+	mgr := downloader.NewManager(downloader.Config{
+		Concurrency:           1,
+		OnOperationalSnapshot: func(downloader.OperationalSnapshot) {},
+	}, &downloaderFakeTransferer{})
+	defer mgr.Close()
+	w.assetManager = mgr
+
+	snap := w.buildTelemetrySnapshot()
+	if snap.DownloadQueue != 0 {
+		t.Errorf("DownloadQueue=%d, want 0 (idle manager)", snap.DownloadQueue)
+	}
+}
+
+type downloaderFakeTransferer struct{}
+
+func (d *downloaderFakeTransferer) Check(context.Context, context.Context, downloader.DownloadRequest) (downloader.CacheCheckResult, error) {
+	return downloader.CacheCheckResult{}, nil
+}
+func (d *downloaderFakeTransferer) Transfer(context.Context, context.Context, downloader.DownloadRequest, func(int64)) (downloader.TransferResult, error) {
+	return downloader.TransferResult{}, nil
 }
 
 func TestBuildTelemetrySnapshot_ReleaseIdentityCarried(t *testing.T) {
