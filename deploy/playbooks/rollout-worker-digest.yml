@@ -39,7 +39,9 @@
     rollout_expected_engine_sha256: "{{ rollout_expected_engine_sha256 | default('') }}"
     # Master REST endpoint + admin token for the post-rollout reconnect and
     # Level-D smoke verification. Same surface fleet-update/fleet-smoke use.
-    velox_master_verify_url: "{{ velox_master_verify_url | default('http://127.0.0.1:8000') }}"
+    # Defaults from the operator-supplied master_url (fleetctl passes it), so
+    # verification never targets the worker host's own loopback by accident.
+    velox_master_verify_url: "{{ velox_master_verify_url | default(master_url | default('http://127.0.0.1:8000')) }}"
     velox_admin_token: "{{ velox_admin_token | default('') }}"
     velox_master_validate_certs: "{{ velox_master_validate_certs | default(false) }}"
     rollout_smoke_asset_id: "{{ rollout_smoke_asset_id | default('asset-canary-001') }}"
@@ -98,7 +100,7 @@
     - name: Extract current image reference
       ansible.builtin.set_fact:
         previous_image: >-
-          {{ (previous_env.content | b64decode | regex_findall('(?m)^VELOX_WORKER_IMAGE=(.+)$') | first) | default('') }}
+          {{ (previous_env.content | b64decode | regex_findall('(?m)^VELOX_WORKER_IMAGE=(.+)$') | first) | default('', true) }}
 
     - name: Require current image reference for rollback
       ansible.builtin.assert:
@@ -165,7 +167,7 @@
           ansible.builtin.shell: |
             set -euo pipefail
             /usr/bin/bash \
-              "{{ prepare_host_path | dirname | dirname }}/RemoteCodex/scripts/verify-worker-image.sh" \
+              "{{ prepare_host_path | dirname | dirname | dirname }}/RemoteCodex/scripts/verify-worker-image.sh" \
               "{{ target_image }}" \
               "{{ rollout_expected_engine_sha256 }}"
           args:
@@ -180,7 +182,7 @@
         # threshold before the rollout is certified.
         - name: Verify master reconnect, session and fresh heartbeat
           ansible.builtin.uri:
-            url: "{{ velox_master_verify_url }}/api/v1/admin/workers/{{ worker_id | default(inventory_hostname) }}"
+            url: "{{ velox_master_verify_url }}/api/v1/admin/workers/{{ worker_id | default(inventory_hostname) | urlencode }}"
             method: GET
             headers:
               Authorization: "Bearer {{ velox_admin_token }}"
@@ -210,7 +212,7 @@
         # the LevelDSmokeExecutor + smoke_runs ledger.
         - name: POST Level-D smoke operation for the target worker
           ansible.builtin.uri:
-            url: "{{ velox_master_verify_url }}/api/v1/admin/workers/{{ worker_id | default(inventory_hostname) }}/smoke"
+            url: "{{ velox_master_verify_url }}/api/v1/admin/workers/{{ worker_id | default(inventory_hostname) | urlencode }}/smoke"
             method: POST
             headers:
               Authorization: "Bearer {{ velox_admin_token }}"
@@ -255,7 +257,7 @@
         # means the upload leg never persisted and the rollout is not proven.
         - name: Verify persisted Level-D Drive artifact upload
           ansible.builtin.uri:
-            url: "{{ velox_master_verify_url }}/api/v1/admin/workers/{{ worker_id | default(inventory_hostname) }}/smokes/latest"
+            url: "{{ velox_master_verify_url }}/api/v1/admin/workers/{{ worker_id | default(inventory_hostname) | urlencode }}/smokes/latest"
             method: GET
             headers:
               Authorization: "Bearer {{ velox_admin_token }}"

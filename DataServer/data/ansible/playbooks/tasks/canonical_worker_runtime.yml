@@ -28,7 +28,20 @@
     velox_worker_health_port: 8081
     velox_worker_heartbeat_masters: "{{ master_url }}"
     velox_worker_secondary_master_url: ""
-    velox_worker_control_grpc_url: "{{ velox_grpc_control_endpoint | default(master_url | regex_replace('^https?://', '') | regex_replace('/.*$', '')) }}"
+    # gRPC control endpoint is the explicit velox_grpc_control_endpoint from
+    # group_vars. The fallback (legacy bridge playbooks that do not load
+    # group_vars) derives the host from master_url but NEVER keeps the REST
+    # port: the port comes from the typed velox_grpc_port variable so a wrong
+    # silent endpoint (REST :8000 as gRPC) cannot be produced.
+    velox_worker_control_grpc_url: >-
+      {{
+        velox_grpc_control_endpoint
+        | default(
+            (master_url | regex_replace('^https?://', '') | regex_replace('/.*$', '') | regex_replace(':[0-9]+$', ''))
+            ~ ':'
+            ~ (velox_grpc_port | default('9000'))
+          )
+      }}
 
 - name: CanonicalRuntime | Ensure canonical Compose directory exists
   ansible.builtin.file:

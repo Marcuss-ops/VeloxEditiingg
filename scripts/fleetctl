@@ -29,6 +29,8 @@ Environment:
   TOKEN_FILE         File containing VELOX_ADMIN_TOKEN=<value>
   FLEET_INVENTORY     Operator-local Ansible inventory (required for host rollout)
   FLEET_ROLLOUT_PLAYBOOK  Digest rollout playbook override
+  FLEET_ROLLOUT_BUNDLE_HASH  Current-commit bundle hash (required for update/rollback)
+  FLEET_ROLLOUT_ENGINE_SHA   Current-commit engine SHA-256 (required for update/rollback)
 EOF
 }
 
@@ -85,6 +87,10 @@ run_digest_rollout() {
     local action=$1 worker_id=$2 image=$3 reason=${4:-fleetctl-$action}
     [[ -n "${FLEET_INVENTORY:-}" ]] \
         || die 'FLEET_INVENTORY is required; use an operator-local inventory file'
+    [[ -n "${FLEET_ROLLOUT_BUNDLE_HASH:-}" ]] \
+        || die 'FLEET_ROLLOUT_BUNDLE_HASH is required; read it from the current-commit release evidence (worker-image workflow)'
+    [[ -n "${FLEET_ROLLOUT_ENGINE_SHA:-}" ]] \
+        || die 'FLEET_ROLLOUT_ENGINE_SHA is required; read it from the current-commit release evidence (worker-image workflow)'
     local inventory=$FLEET_INVENTORY
     local playbook=${FLEET_ROLLOUT_PLAYBOOK:-$ROOT/deploy/playbooks/rollout-worker-digest.yml}
     command -v ansible-playbook >/dev/null 2>&1 || die 'ansible-playbook is required for host rollout'
@@ -102,6 +108,10 @@ run_digest_rollout() {
     printf 'fleetctl: %s worker=%s image=%s reason=%s\n' "$action" "$worker_id" "$image" "$reason" >&2
     ansible-playbook -i "$inventory" "$playbook" --limit "$inventory_host" \
         -e "master_url=$MASTER_URL" \
+        -e "velox_master_verify_url=$MASTER_URL" \
+        -e "velox_admin_token=$TOKEN" \
+        -e "rollout_expected_bundle_hash=$FLEET_ROLLOUT_BUNDLE_HASH" \
+        -e "rollout_expected_engine_sha256=$FLEET_ROLLOUT_ENGINE_SHA" \
         -e "target_image=$image" \
         -e "deployment_reason=$reason"
 }
