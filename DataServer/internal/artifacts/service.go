@@ -58,6 +58,9 @@ type Service struct {
 
 	uploadTTL   time.Duration
 	ffprobeMode ffprobeInvariantMode
+	// probeQueue is wired by bootstrap. When present, Finalize enqueues
+	// asynchronous media validation instead of shelling out synchronously.
+	probeQueue store.MediaProbeEnqueuer
 }
 
 // NewService composes the dependencies Service needs.
@@ -132,6 +135,15 @@ func NewService(
 // WithUploadTTL adjusts the upload session expiry window (tests).
 func (s *Service) WithUploadTTL(d time.Duration) *Service {
 	s.uploadTTL = d
+	return s
+}
+
+// WithMediaProbeQueue wires the persistent asynchronous media probe queue.
+// Production bootstrap always supplies this dependency; leaving it nil keeps
+// the legacy synchronous gate available to older tests/adapters during the
+// migration window.
+func (s *Service) WithMediaProbeQueue(q store.MediaProbeEnqueuer) *Service {
+	s.probeQueue = q
 	return s
 }
 

@@ -33,6 +33,7 @@ type assetDeps struct {
 	Reconciler       *artifacts.Reconciler // mandatory — buildAssets fails fast if init fails
 	OutboxRegistry   *outbox.Registry
 	OutboxDispatcher *outbox.Dispatcher
+	MediaProbeWorker *artifacts.MediaProbeWorker
 }
 
 // buildAssets creates the workflow repository, artifact pipeline,
@@ -65,6 +66,8 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	// Production cannot silently run the gate without it; NewService
 	// panics on nil so a bootstrap miss is loud at startup.
 	deliveryCounter := store.NewSQLiteJobDeliveryCounterFromStore(p.SQLite)
+	probeRepo := store.NewSQLiteMediaProbeRepository(p.SQLite.DB())
+	probeWorker := artifacts.NewMediaProbeWorker(probeRepo, p.BlobStore.FinalDir(), 2, nil)
 	artifactSvc := artifacts.NewService(
 		uploadRepo,
 		uploadWriter,
@@ -74,7 +77,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 		authReader,
 		nil, // clock.System default (production)
 		deliveryCounter,
-	).WithFFProbeMode(cfg.Runtime.FFProbeVerifyMode)
+	).WithFFProbeMode(cfg.Runtime.FFProbeVerifyMode).WithMediaProbeQueue(probeRepo)
 	log.Printf("[BOOTSTRAP] artifacts.Service ready (single-tx SUCCEEDED gate via FinalizationWriter + DeliveryPlanResolver)")
 
 	// ── Chunked upload service ───────────────────────────────────────
@@ -179,5 +182,6 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 		Reconciler:       reconciler,
 		OutboxRegistry:   p.OutboxRegistry,
 		OutboxDispatcher: outboxDispatcher,
+		MediaProbeWorker: probeWorker,
 	}, nil
 }

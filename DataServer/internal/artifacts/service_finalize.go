@@ -39,23 +39,15 @@ func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*s
 		return nil, err
 	}
 
-	// Pre-commit ffprobe invariant (RW-PROD-008 A4). Runs AFTER blob
-	// promotion (file is on disk) and BEFORE the CAS RECEIVED →
-	// FINALIZING transition (so a gate failure aborts cleanly without
-	// any DB write: artifacts.status stays STAGING, jobs.status stays
-	// RUNNING, no job_deliveries stamped). The orphan-blob pattern the
-	// 24h Reconciler sweep already handles ("un blob orfano eliminabile
-	// è preferibile rispetto a (artifact READY con file inesistente)")
-	// covers the promoted-but-never-committed file.
-	//
-	// Gated on the env var VELOX_FFPROBE_VERIFY_ON_FINALIZE=true —
-	// no-op when unset. Mirrors the resolution order of
-	// SQLiteFinalizeWriter::resolveDeliveryDestinationsTx (override
-	// → explicit job_delivery_plans WHERE enabled=1).
-	if err := s.runPreCommitFFProbeInvariant(ctx, cmd.JobID, cmd.DestinationID,
-		filepath.Join(s.blobStore.FinalDir(), filepath.FromSlash(storageKey)),
-	); err != nil {
-		return nil, err
+	// Legacy callers without the persistent queue retain the old optional
+	// pre-commit invariant. Production wires probeQueue and therefore
+	// skips this shell-out entirely.
+	if s.probeQueue == nil {
+		if err := s.runPreCommitFFProbeInvariant(ctx, cmd.JobID, cmd.DestinationID,
+			filepath.Join(s.blobStore.FinalDir(), filepath.FromSlash(storageKey)),
+		); err != nil {
+			return nil, err
+		}
 	}
 
 	// CAS-gate the RECEIVED → FINALIZING transition. This serializes
@@ -89,7 +81,7 @@ func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*s
 			ErrUploadStateInvalid, cmd.UploadID, session.Status)
 	}
 
-	command := s.buildFinalizeVerifiedCommand(cmd, session, storageKey, receivedSHA, receivedSize, mimeType)
+	command := s.buildFinalizeVerifiedCommand(ctx, cmd, session, storageKey, receivedSHA, receivedSize, mimeType)
 	art, err := s.finalizeWithDuplicateStorageFallback(ctx, command)
 	if err != nil {
 		return nil, err
@@ -156,11 +148,8 @@ func (s *Service) validateFinalizeSession(ctx context.Context, cmd FinalizeArtif
 			return nil, nil, fmt.Errorf("%w: completed upload=%s but artifact missing",
 				ErrTransitionConflict, cmd.UploadID)
 		}
-		// Note: the pre-commit gate in the main Finalize path runs the
-		// ffprobe check on the first finalize. This COMPLETED short-
-		// circuit simply returns the cached artifact — no ffprobe re-run
-		// here, since the gate fired (and possibly tripped) before the
-		// tx commit that produced this exact artifact.
+		// The production queue is idempotent by (artifact_id, sha256), so
+		// duplicate finalization does not create duplicate probe work.
 		return nil, art, nil
 	}
 
@@ -201,6 +190,7 @@ func (s *Service) validateFinalizeSession(ctx context.Context, cmd FinalizeArtif
 // Reintroduce it deliberately (not by accident) if a future change
 // adds a fallible mapping (e.g. keyed-JSON-derived artifact_id).
 func (s *Service) buildFinalizeVerifiedCommand(
+	ctx context.Context,
 	cmd FinalizeArtifactCommand,
 	session *store.UploadSession,
 	storageKey, receivedSHA string,
@@ -223,8 +213,21 @@ func (s *Service) buildFinalizeVerifiedCommand(
 		SizeBytes:       receivedSize,
 		MIMEType:        mimeType,
 
-		VerifiedAt: s.clock.Now(),
+		VerifiedAt:           s.clock.Now(),
+		AsyncProbe:           s.probeQueue != nil,
+		ExpectedAudioStreams: s.expectedAudioStreams(ctx, cmd),
 	}
+}
+
+func (s *Service) expectedAudioStreams(ctx context.Context, cmd FinalizeArtifactCommand) int {
+	if s.deliveryCounter == nil {
+		return 0
+	}
+	count, err := s.deliveryCounter.CountExpectedDeliveries(ctx, cmd.JobID, cmd.DestinationID)
+	if err != nil {
+		return 0
+	}
+	return count
 }
 
 // finalizeWithDuplicateStorageFallback invokes the atomic verified-

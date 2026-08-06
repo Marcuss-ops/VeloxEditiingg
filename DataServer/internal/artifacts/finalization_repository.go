@@ -71,10 +71,18 @@ type FinalizeVerifiedCommand struct {
 
 	VerifiedAt time.Time
 
+	// ExpectedAudioStreams is computed from the same explicit delivery plan
+	// before the async finalization transaction and persisted with the probe.
+	ExpectedAudioStreams int
+
 	// DestinationID is an explicit delivery destination override. Empty
 	// means the explicit per-job delivery-plan resolver must provide the
 	// targets; it never selects a global destination.
 	DestinationID string
+
+	// AsyncProbe keeps the artifact in VERIFYING and defers job delivery
+	// materialization to the dedicated media probe worker.
+	AsyncProbe bool
 }
 
 // DeliveryDestination is the per-destination projection the finalize

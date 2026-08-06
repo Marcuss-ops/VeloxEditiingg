@@ -33,6 +33,7 @@ func (w *SQLiteFinalizeWriter) FinalizeVerified(ctx context.Context, cmd Finaliz
 		StorageProvider: cmd.StorageProvider, StorageKey: cmd.StorageKey,
 		SHA256: cmd.SHA256, SizeBytes: cmd.SizeBytes, MIMEType: cmd.MIMEType,
 		VerifiedAt: cmd.VerifiedAt, DestinationID: cmd.DestinationID,
+		AsyncProbe: cmd.AsyncProbe, ExpectedAudioStreams: cmd.ExpectedAudioStreams,
 	})
 	if err != nil {
 		return nil, translateStoreErr(err)

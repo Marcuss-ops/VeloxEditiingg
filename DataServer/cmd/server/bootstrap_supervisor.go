@@ -141,6 +141,19 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 	}
 
 	// ── ClassRestartable ─────────────────────────────────────────────
+	if a.MediaProbeWorker != nil {
+		if err := sup.Register(supervisor.Runner{
+			Name:   "media-probe-worker",
+			Class:  supervisor.ClassRestartable,
+			Policy: restartablePolicy,
+			Run: func(ctx context.Context) error {
+				log.Printf("[BOOTSTRAP] media probe worker started (dedicated pool)")
+				return a.MediaProbeWorker.Run(ctx)
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("supervisor register media-probe-worker: %w", err)
+		}
+	}
 	if a.Reconciler != nil {
 		if err := sup.Register(supervisor.Runner{
 			Name:   "artifact-reconciler",

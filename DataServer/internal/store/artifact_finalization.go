@@ -18,21 +18,23 @@ import (
 // verified artifact finalization transaction. Keeping it in store prevents
 // the SQL gateway from importing the artifacts orchestration package.
 type FinalizeVerifiedParams struct {
-	UploadID         string
-	ArtifactID       string
-	JobID            string
-	AttemptID        string
-	WorkerID         string
-	LeaseID          string
-	AttemptNumber    int
-	ExpectedRevision int
-	StorageProvider  string
-	StorageKey       string
-	SHA256           string
-	SizeBytes        int64
-	MIMEType         string
-	VerifiedAt       time.Time
-	DestinationID    string
+	UploadID             string
+	ArtifactID           string
+	JobID                string
+	AttemptID            string
+	WorkerID             string
+	LeaseID              string
+	AttemptNumber        int
+	ExpectedRevision     int
+	StorageProvider      string
+	StorageKey           string
+	SHA256               string
+	SizeBytes            int64
+	MIMEType             string
+	VerifiedAt           time.Time
+	DestinationID        string
+	AsyncProbe           bool
+	ExpectedAudioStreams int
 }
 
 // SQLiteArtifactFinalizer is the sole store-owned writer for the verified
@@ -144,6 +146,48 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 			"SUCCEEDED", nowStr, nowStr, p.JobID); err != nil {
 			return nil, fmt.Errorf("store: FinalizeVerified tasks sweep: %w", err)
 		}
+	}
+
+	if p.AsyncProbe {
+		// The rendered task is complete, but the artifact is not publishable
+		// until the dedicated media probe approves it. Keep the parent job in
+		// AWAITING_ARTIFACT and do not create job_deliveries yet.
+		res, err = tx.ExecContext(ctx, `
+			UPDATE artifacts SET status = 'VERIFYING', storage_provider = ?, storage_key = ?,
+			    sha256 = ?, size_bytes = ?, mime_type = ?, verified_at = ?
+			WHERE id = ? AND job_id = ? AND status = 'STAGING'`,
+			p.StorageProvider, p.StorageKey, p.SHA256, p.SizeBytes, p.MIMEType,
+			nowStr, p.ArtifactID, p.JobID)
+		if err != nil {
+			return nil, fmt.Errorf("store: FinalizeVerified async artifacts CAS: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return nil, fmt.Errorf("%w: async artifacts affected=%d artifact=%s", ErrTransitionConflict, n, p.ArtifactID)
+		}
+		res, err = tx.ExecContext(ctx, `
+			UPDATE artifact_uploads SET status = 'COMPLETED', completed_at = ?
+			WHERE upload_id = ? AND status = 'FINALIZING'`, nowStr, p.UploadID)
+		if err != nil {
+			return nil, fmt.Errorf("store: FinalizeVerified async upload CAS: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return nil, fmt.Errorf("%w: async upload affected=%d upload=%s", ErrTransitionConflict, n, p.UploadID)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO media_probe_jobs			(artifact_id, sha256, storage_key, expected_audio_streams, destination_id, status,
+			 attempt_count, max_attempts, next_attempt_at, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, 'PENDING', 0, 5, ?, ?, ?)
+
+			ON CONFLICT(artifact_id, sha256) DO NOTHING`,
+			p.ArtifactID, p.SHA256, p.StorageKey, p.ExpectedAudioStreams, p.DestinationID,
+			nowStr, nowStr, nowStr); err != nil {
+			return nil, fmt.Errorf("store: FinalizeVerified async probe enqueue: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("store: FinalizeVerified async commit: %w", err)
+		}
+		committed = true
+		return readArtifact(ctx, w.db, p.ArtifactID)
 	}
 
 	// Resolve the explicit per-job delivery plan before deciding the job
