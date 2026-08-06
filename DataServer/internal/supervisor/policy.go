@@ -36,8 +36,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
+
+	"velox-shared/contract/domain"
+
 	"time"
 )
 
@@ -121,11 +123,12 @@ func DefaultRetryPolicy() RetryPolicy {
 // types above (or returns nil if err is nil). Rules:
 //
 //   - err is nil → nil.
-//   - errors.Is(err, sql.ErrConnDone) OR err message contains
-//     "database is closed" OR "context deadline exceeded" without
-//     a row-mutation context → ErrInfrastructure.
-//   - errors.Is(err, ErrTransitionConflict) (the lease-CAS sentinel
-//     from store types) → ErrLeaseLost.
+//   - errors.Is(err, sql.ErrConnDone) or errors.Is(err, context.DeadlineExceeded)
+//     → ErrInfrastructure.
+//   - a shared DomainError projection or store lease/CAS sentinel
+//     → the corresponding typed supervisor class.
+//   - untyped errors, including messages that happen to contain
+//     classification words, remain ErrElementScoped.
 //   - errors.Is(err, ErrPanicked) → ErrInfrastructure (panics are
 //     not per-element by definition).
 //   - everything else → ErrElementScoped.
@@ -148,6 +151,24 @@ func ClassifyError(err error) error {
 	// shorthand: pick a sentinel by classification rule then
 	// errors.Join it with the original error.
 	sentinel := ErrElementScoped
+	if derr, ok := domain.AsDomainError(err); ok {
+		switch derr.Code {
+		case domain.CodeInfrastructure:
+			sentinel = ErrInfrastructure
+		case domain.CodeLeaseLost:
+			sentinel = ErrLeaseLost
+		case domain.CodeStaleReport:
+			// A stale report is a non-retryable, element-scoped
+			// observation. It does not prove that this runner lost
+			// its lease; only the typed lease-conflict marker does.
+			sentinel = ErrElementScoped
+		default:
+			if derr.Retryable {
+				sentinel = ErrInfrastructure
+			}
+		}
+		return errors.Join(sentinel, err)
+	}
 	switch {
 	case errors.Is(err, sql.ErrConnDone):
 		sentinel = ErrInfrastructure
@@ -159,29 +180,11 @@ func ClassifyError(err error) error {
 		// cancelled ctx on the next iteration and exits cleanly.
 		// Map to element-scoped so the tracker does not count it.
 		sentinel = ErrElementScoped
-	case errors.Is(err, errLeaseLostSentinelValue),
-		strings.Contains(err.Error(), "transition conflict"),
-		strings.Contains(err.Error(), "lease") && strings.Contains(err.Error(), "conflict"):
+	case domain.IsLeaseLost(err):
 		sentinel = ErrLeaseLost
-	case strings.Contains(err.Error(), "database is closed"),
-		strings.Contains(err.Error(), "sql: connection is busy"),
-		strings.Contains(err.Error(), "no such table"):
-		sentinel = ErrInfrastructure
 	}
 	return errors.Join(sentinel, err)
 }
-
-// errLeaseLostSentinel is the canonical lease-lost sentinel value used
-// by the supervisor package's ClassifyError. Verdetto P0 #6 (Blocco 2):
-// it MUST be a package-level var (not constructed on every call via
-// errors.New) so `errors.Is(err, errLeaseLostSentinelValue)` in
-// ClassifyError actually matches — previously the helper returned a
-// fresh `errors.New` on every call which meant errors.Is NEVER matched
-// and the only effective classification was the strings.Contains
-// fallback. The string value mirrors the canonical completion-layer
-// message; the strings.Contains fallback is kept as a belt+braces for
-// the case where a third party wraps the error with a different format.
-var errLeaseLostSentinelValue = errors.New("completion: transition conflict")
 
 // IsInfrastructure reports whether err has been classified as
 // ErrInfrastructure (or chains to it via errors.Is).

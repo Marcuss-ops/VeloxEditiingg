@@ -8,9 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"velox-server/internal/config"
-
 	"github.com/gin-gonic/gin"
+	"velox-server/internal/config"
 )
 
 // Runtime mode constants (RUNTIME_CONTRACT_MINIMALE.md)
@@ -56,12 +55,12 @@ type InstallHandler struct {
 	bundleRoot   string         // Root directory for bundles
 	masterURL    string         // Master URL for generated scripts (fallback)
 	allowlistIPs []string       // Optional IP allowlist
-	cfg          *config.Config // Application config for master URL resolution
+	appCfg       *config.Config // Application configuration snapshot
 }
 
 // Config returns the app config associated with the install handler.
 func (h *InstallHandler) Config() *config.Config {
-	return h.cfg
+	return h.appCfg
 }
 
 // Config holds configuration for InstallHandler
@@ -81,7 +80,8 @@ func NewInstallHandler(cfg *Config) *InstallHandler {
 	// Keep a fallback for backward compatibility.
 	masterURL := cfg.MasterURL
 	if masterURL == "" {
-		masterURL = config.GetMasterURL()
+		// The caller must provide the already-resolved typed MasterURL;
+		// this constructor never reads process environment.
 	}
 	// Only use hardcoded fallback in development mode
 	if masterURL == "" {
@@ -99,13 +99,13 @@ func NewInstallHandler(cfg *Config) *InstallHandler {
 		bundleRoot:   cfg.BundleRoot,
 		masterURL:    masterURL,
 		allowlistIPs: cfg.AllowlistIPs,
-		cfg:          nil, // Will be set via SetConfig if needed
+		appCfg:       nil,
 	}
 }
 
 // SetConfig sets the application config for dynamic master URL resolution
 func (h *InstallHandler) SetConfig(appCfg *config.Config) {
-	h.cfg = appCfg
+	h.appCfg = appCfg
 }
 
 // checkAllowlist verifies if client IP is allowed

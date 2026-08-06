@@ -127,7 +127,7 @@ func NewHandler(
 		artifactSvc:      artifactSvc,
 		dbStore:          dbStore,
 		config:           config,
-		authorizer:       NewAllowlistAuthorizer(config.AllowedWorkers, config.AllowInsecure),
+		authorizer:       NewAllowlistAuthorizer(config.AllowedWorkerIDs, config.AllowInsecure),
 		placementMatcher: placement.NewMatcher(),
 		sessions:         make(map[string]*workerSession),
 		workerSessions:   make(map[string]string),

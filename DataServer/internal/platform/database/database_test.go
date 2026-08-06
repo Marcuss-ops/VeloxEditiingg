@@ -102,43 +102,29 @@ func TestOpen_UnsupportedDriver_Rejected(t *testing.T) {
 
 // TestLoadFromEnv_DefaultsToSQLite verifies that with no VELOX_DB_DRIVER
 // set, LoadFromEnv returns DriverSQLite for backward compatibility.
-func TestLoadFromEnv_DefaultsToSQLite(t *testing.T) {
-	t.Setenv("VELOX_DB_DRIVER", "")
-	t.Setenv("VELOX_DB_PATH", "")
-	t.Setenv("VELOX_DATABASE_URL", "")
-
-	cfg := database.LoadFromEnv()
-	if cfg.Driver != database.DriverSQLite {
-		t.Fatalf("default Driver must be sqlite, got %q", cfg.Driver)
+func TestConfigFromApplication_DefaultsToTypedValues(t *testing.T) {
+	cfg := database.ConfigFromApplication("", "", "/tmp/velox.db", 0, 0, 0)
+	if cfg.Driver != database.DriverUnknown {
+		t.Fatalf("empty application driver must remain unknown until Open, got %q", cfg.Driver)
+	}
+	if cfg.SQLitePath != "/tmp/velox.db" {
+		t.Fatalf("SQLitePath = %q", cfg.SQLitePath)
 	}
 }
 
 // TestLoadFromEnv_ReadsPostgres verifies that VELOX_DB_DRIVER=postgres
 // + VELOX_DATABASE_URL get propagated into the returned Config verbatim.
-func TestLoadFromEnv_ReadsPostgres(t *testing.T) {
+func TestConfigFromApplication_ReadsPostgres(t *testing.T) {
 	const wantURL = "postgres://u:p@host:5432/db?sslmode=disable"
-	t.Setenv("VELOX_DB_DRIVER", "postgres")
-	t.Setenv("VELOX_DATABASE_URL", wantURL)
-	t.Setenv("VELOX_DB_PATH", "/should/be/ignored")
-	t.Setenv("VELOX_DB_MAX_OPEN_CONNS", "32")
-	t.Setenv("VELOX_DB_MAX_IDLE_CONNS", "8")
-	t.Setenv("VELOX_DB_CONN_MAX_LIFETIME", "30s")
-
-	cfg := database.LoadFromEnv()
+	cfg := database.ConfigFromApplication("postgres", wantURL, "/should/be/ignored", 32, 8, 30*time.Second)
 	if cfg.Driver != database.DriverPostgres {
 		t.Fatalf("Driver mismatch: got %q", cfg.Driver)
 	}
 	if cfg.URL != wantURL {
 		t.Fatalf("URL mismatch: got %q want %q", cfg.URL, wantURL)
 	}
-	if cfg.MaxOpenConns != 32 {
-		t.Fatalf("MaxOpenConns mismatch: got %d", cfg.MaxOpenConns)
-	}
-	if cfg.MaxIdleConns != 8 {
-		t.Fatalf("MaxIdleConns mismatch: got %d", cfg.MaxIdleConns)
-	}
-	if cfg.ConnMaxLifetime != 30*time.Second {
-		t.Fatalf("ConnMaxLifetime mismatch: got %v", cfg.ConnMaxLifetime)
+	if cfg.MaxOpenConns != 32 || cfg.MaxIdleConns != 8 || cfg.ConnMaxLifetime != 30*time.Second {
+		t.Fatalf("pool config mismatch: %+v", cfg)
 	}
 }
 

@@ -73,7 +73,7 @@ func NewHandlersWithResolver(
 }
 
 // HandlersFactory is the shared construction helper. The Social API client is
-// created from the canonical SOCIAL_API_* environment adapter once. Empty
+// created from the typed Config snapshot once. Empty
 // configuration remains fail-closed: ListPublishingTargets returns
 // socialclient.ErrNotConfigured and the HTTP handler maps it to 503.
 func HandlersFactory(
@@ -91,7 +91,7 @@ func HandlersFactory(
 		client:       client,
 		resolver:     resolver,
 		submission:   creatorflow.NewJobSubmissionService(resolver),
-		socialClient: socialclient.New(socialclient.ConfigFromEnv()),
+		socialClient: socialclient.New(socialclient.ConfigFromRuntime(cfg.Runtime.Social)),
 		jobs:         JobsDeps{Reader: jobsReader, Writer: jobsWriter, CmdMgr: cmdMgr},
 	}
 	h.targetResolver = targetpublishing.NewTargetResolver(h.socialClient, h.store)
@@ -112,8 +112,10 @@ func (h *Handlers) WithTaskReader(reader taskgraph.Reader) *Handlers {
 
 func (h *Handlers) WithStore(db *store.SQLiteStore) *Handlers {
 	h.store = db
-	if keys, err := credentials.LoadKeyring(); err == nil {
-		h.credentialVault, _ = credentials.NewVault(db, keys)
+	if h.cfg != nil {
+		if keys, err := credentials.LoadKeyring(h.cfg.Runtime.Credentials); err == nil {
+			h.credentialVault, _ = credentials.NewVault(db, keys)
+		}
 	}
 	h.targetResolver = targetpublishing.NewTargetResolver(h.socialClient, h.store)
 	return h

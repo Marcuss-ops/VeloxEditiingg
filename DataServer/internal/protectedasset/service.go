@@ -164,16 +164,16 @@ func (s *Service) Refresh(ctx context.Context) error {
 	}
 	sort.Strings(ids)
 
-	s.mu.Lock()		// ids is freshly allocated per refresh (never shared with callers), so
-		// it can be stored directly. It is ALWAYS non-nil (make([]string, 0, n))
-		// even when the protected set is empty, preserving the wire contract
-		// that an empty list is a valid "no jobs in queue" response.
-		s.snapshot = Snapshot{
-			Version:            s.snapshot.Version + 1,
-			GeneratedAt:        s.now(),
-			LookaheadJobs:      len(jobs),
-			ProtectedAssetKeys: ids,
-		}
+	s.mu.Lock() // ids is freshly allocated per refresh (never shared with callers), so
+	// it can be stored directly. It is ALWAYS non-nil (make([]string, 0, n))
+	// even when the protected set is empty, preserving the wire contract
+	// that an empty list is a valid "no jobs in queue" response.
+	s.snapshot = Snapshot{
+		Version:            s.snapshot.Version + 1,
+		GeneratedAt:        s.now(),
+		LookaheadJobs:      len(jobs),
+		ProtectedAssetKeys: ids,
+	}
 	s.mu.Unlock()
 	return nil
 }

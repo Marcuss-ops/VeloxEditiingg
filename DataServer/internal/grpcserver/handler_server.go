@@ -23,7 +23,7 @@ import (
 
 // StartGRPCServer starts a gRPC server on the configured port and registers
 // the WorkerControl handler. Supports mTLS when certFile/keyFile/caFile are provided.
-func StartGRPCServer(port int, handler *Handler, certFile, keyFile, caFile string) (*grpc.Server, net.Listener, error) {
+func StartGRPCServer(port int, handler *Handler, certFile, keyFile, caFile string, allowInsecure bool) (*grpc.Server, net.Listener, error) {
 	if port <= 0 {
 		return nil, nil, nil // gRPC disabled
 	}
@@ -62,7 +62,6 @@ func StartGRPCServer(port int, handler *Handler, certFile, keyFile, caFile strin
 
 		grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsConfig)))
 	} else {
-		allowInsecure := os.Getenv("VELOX_GRPC_ALLOW_INSECURE_DEV") == "true"
 		if !allowInsecure {
 			return nil, nil, fmt.Errorf("grpc: TLS cert/key required in production (set VELOX_GRPC_ALLOW_INSECURE_DEV=true for dev)")
 		}

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"velox-server/internal/config"
 )
 
 func TestTokenUnmarshalAcceptsPipelineGenAccessToken(t *testing.T) {
@@ -23,7 +25,7 @@ func TestTokenUnmarshalAcceptsPipelineGenAccessToken(t *testing.T) {
 
 func TestTokenManagerEncryptsAndReadsLegacyPlaintext(t *testing.T) {
 	t.Setenv("VELOX_CREDENTIAL_KEY", "01234567890123456789012345678901")
-	tm, err := NewTokenManager(t.TempDir())
+	tm, err := NewTokenManager(t.TempDir(), config.CredentialsConfig{CurrentVersion: 1, Current: config.CredentialKeyConfig{Value: "01234567890123456789012345678901"}})
 	if err != nil {
 		t.Fatal(err)
 	}

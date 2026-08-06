@@ -1,6 +1,7 @@
 package drive
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -123,7 +124,7 @@ func (h *DriveHandlers) UpdateDriveFolderHandler(c *gin.Context) {
 
 	if err := h.svc.UpdateDriveFolder(folderID, req); err != nil {
 		status := http.StatusInternalServerError
-		if err.Error() == "folder not found" {
+		if errors.Is(err, driveSvc.ErrFolderNotFound) {
 			status = http.StatusNotFound
 		}
 		c.JSON(status, gin.H{"success": false, "error": err.Error()})
@@ -140,7 +141,7 @@ func (h *DriveHandlers) DeleteDriveFolderHandler(c *gin.Context) {
 	deletedCount, err := h.svc.DeleteDriveFolder(folderID)
 	if err != nil {
 		status := http.StatusInternalServerError
-		if err.Error() == "folder not found" {
+		if errors.Is(err, driveSvc.ErrFolderNotFound) {
 			status = http.StatusNotFound
 		}
 		c.JSON(status, gin.H{"success": false, "error": err.Error()})

@@ -105,7 +105,7 @@ func startTransports(cfg *config.Config, c *appComponents) (*transportBundle, er
 			if err := enforceGRPCRequireTLS(cfg); err != nil {
 				return nil, fmt.Errorf("gRPC require-TLS guard: %w", err)
 			}
-			if err := grpcserver.ValidateWorkerAllowlist(cfg.Workers.AllowedWorkers, insecureDev); err != nil {
+			if err := grpcserver.ValidateWorkerAllowlist(cfg.Workers.AllowedWorkerIDs, insecureDev); err != nil {
 				return nil, err
 			}
 			grpcHandler := grpcserver.NewHandler(
@@ -115,7 +115,7 @@ func startTransports(cfg *config.Config, c *appComponents) (*transportBundle, er
 				buildGRPCHandlerConfig(cfg, insecureDev),
 			)
 			if c.assets != nil {
-				grpcHandler.SetCompletionProtocol(c.assets.Completion, c.assets.CompletionStore, c.assets.ChunkedUploadSvc, cfg.Workers.MasterURL)
+				grpcHandler.SetCompletionProtocol(c.assets.Completion, c.assets.CompletionStore, c.assets.ChunkedUploadSvc, string(cfg.ControlPlane.RESTPublic))
 			}
 			// feat/task-report-ingestion: install the canonical
 			// TaskReportIngestionService so handleTaskResult delegates

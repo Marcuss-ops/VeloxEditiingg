@@ -89,7 +89,7 @@ func (h *Handler) IsWorkerAllowed(workerID string) bool {
 	if workerID == "" {
 		return false
 	}
-	csv := strings.TrimSpace(h.cfg.Workers.AllowedWorkers)
+	csv := strings.TrimSpace(strings.Join(h.cfg.Workers.AllowedWorkerIDs, ","))
 	// Mirror grpcserver/allowlistAuthorizer::IsAllowed: an empty CSV
 	// OR a CSV of literal "*" are both treated as "no allowlist"
 	// (the dev-bypass surface). Bootstrap rejects "*" via

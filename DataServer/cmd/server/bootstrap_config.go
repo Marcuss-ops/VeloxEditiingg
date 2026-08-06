@@ -8,14 +8,14 @@ import (
 )
 
 func databaseConfigFromConfig(dcfg config.DatabaseConfig) database.Config {
-	return database.Config{
-		Driver:          database.Driver(strings.ToLower(strings.TrimSpace(dcfg.Driver))),
-		SQLitePath:      dcfg.DBPath,
-		URL:             dcfg.URL,
-		MaxOpenConns:    dcfg.MaxOpenConns,
-		MaxIdleConns:    dcfg.MaxIdleConns,
-		ConnMaxLifetime: dcfg.ConnMaxLifetime,
-	}
+	return database.ConfigFromApplication(
+		strings.ToLower(strings.TrimSpace(dcfg.Driver)),
+		dcfg.URL,
+		dcfg.DBPath,
+		dcfg.MaxOpenConns,
+		dcfg.MaxIdleConns,
+		dcfg.ConnMaxLifetime,
+	)
 }
 
 func schemaModeLabel(migrateOnStart bool) string {

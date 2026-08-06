@@ -3,7 +3,6 @@ package app
 import (
 	"log"
 	"os"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -23,13 +22,7 @@ type AnsibleModule struct {
 }
 
 func NewAnsibleModule(cfg *config.Config, dataDir string, adminAuth gin.HandlerFunc, sqliteStore *store.SQLiteStore) *AnsibleModule {
-	masterURL := cfg.Workers.MasterURL
-	if strings.TrimSpace(masterURL) == "" {
-		masterURL = config.GetAnsibleMasterURL()
-	}
-	if strings.TrimSpace(masterURL) == "" {
-		masterURL = remoteansible.DetectLocalMasterURL()
-	}
+	masterURL := string(cfg.ControlPlane.RESTPublic)
 	return &AnsibleModule{
 		cfg:       cfg,
 		dataDir:   dataDir,
@@ -64,6 +57,7 @@ func (m *AnsibleModule) RegisterRoutes(r *gin.Engine) {
 	handlers := remoteansible.NewAnsibleHandlers(ansibleManager)
 	handlers.SetComputerManager(computerMgr, m.dataDir)
 	handlers.SetMasterURL(m.masterURL)
+	handlers.SetVersion(m.cfg.Workers.VersionNumber)
 	m.handlers = handlers
 
 	v1Admin := r.Group("/api/v1/admin")

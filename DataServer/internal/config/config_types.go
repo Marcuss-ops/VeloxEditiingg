@@ -41,7 +41,19 @@ type RuntimeConfig struct {
 	Scheduler  SchedulerConfig
 	Metrics    MetricsConfig
 	Alerts     AlertConfig
-	Sources    map[string]RuntimeConfigSource
+
+	// Process-level controls are resolved once at bootstrap and injected into
+	// runtime components. Consumers must not consult the process environment.
+	CosignSkipVerify      bool
+	CosignOverrideReason  string
+	AssetRewriteDevBypass bool
+	FFProbeVerifyMode     string
+	SystemPath            string
+
+	// Credentials contains the captured key material inputs used to build
+	// encrypted-token/keyring services. It is parsed once at load time; runtime
+	// packages never inspect process environment variables.
+	Credentials CredentialsConfig
 
 	RuntimeDir   string
 	VideosDir    string
@@ -127,13 +139,8 @@ type DatabaseConfig struct {
 
 // WorkersConfig holds worker management settings.
 type WorkersConfig struct {
-	// AllowedWorkers is the raw VELOX_ALLOWED_WORKERS CSV string,
-	// kept for compatibility with the legacy AllowlistAuthorizer.
-	AllowedWorkers string
-	// AllowedWorkerIDs is the parsed, deduped-against-empty slice
-	// of worker IDs the master admits. This is the canonical input
-	// to ValidateProductionWorkers — the raw CSV is only kept so we
-	// can echo it back in the gRPC HandlerConfig unchanged.
+	// AllowedWorkerIDs is the parsed, deduplicated slice of worker IDs
+	// the master admits. It is the canonical runtime allowlist.
 	AllowedWorkerIDs []string
 
 	MaxJobAttempts   int
@@ -142,16 +149,7 @@ type WorkersConfig struct {
 	CodeVersion      string
 	VersionNumber    string
 	ScriptDir        string
-	// MasterURL is the publicly-advertised master URL (workers download bundles through it).
-	// Populated from the MASTER_PUBLIC_URL > VELOX_MASTER_URL > MASTER_URL chain.
-	MasterURL string
-	// MasterServerURL is the server-facing master URL used for upstream proxying
-	// (e.g. draft forwarding to a sibling master). Populated from
-	// VELOX_MASTER_SERVER_URL > VELOX_REMOTE_WORKER_URL. Previously lived at the root
-	// of Config as `MasterServerURL` (formerly exposed as the deprecated
-	// deprecation shim.
-	MasterServerURL string
-	AllowedIPs      []string
+	AllowedIPs       []string
 
 	// PlacementPinWorkerID mirrors VELOX_PLACEMENT_PIN_WORKER_ID. When
 	// non-empty, the placement matcher emits RejectPlacementPinExcluded
@@ -287,6 +285,20 @@ type PipelineConfig struct {
 	OllamaModel string
 }
 
+// CredentialsConfig contains the captured credential-key inputs. Values are
+// intentionally kept in this typed bootstrap configuration so the keyring
+// constructor can consume one snapshot without re-reading the environment.
+type CredentialKeyConfig struct {
+	Value string
+	File  string
+}
+
+type CredentialsConfig struct {
+	CurrentVersion int
+	Current        CredentialKeyConfig
+	Historical     map[int]CredentialKeyConfig
+}
+
 // AuthConfig holds authentication settings.
 type AuthConfig struct {
 	AdminToken string
@@ -373,8 +385,8 @@ type RenderConfig struct {
 
 // Config is the top-level configuration.
 type Config struct {
-	frozen      bool
-	parseErrors []string
+	frozen           bool
+	validationErrors []string
 
 	// Sub-configs (single source of truth for all settings)
 	Server        ServerConfig
@@ -391,6 +403,12 @@ type Config struct {
 	Ansible       AnsibleConfig
 	Render        RenderConfig
 	Pipeline      PipelineConfig
+
+	// ControlPlane and Frontend are the canonical endpoint surfaces. Legacy
+	// URL fields remain only as compatibility projections during migration;
+	// runtime consumers must use these typed values.
+	ControlPlane ControlPlaneEndpoints
+	Frontend     FrontendEndpoints
 
 	// AllowedExternalDomains is the explicit allowlist applied to
 	// outgoing URLs submitted via POST /api/v1/jobs

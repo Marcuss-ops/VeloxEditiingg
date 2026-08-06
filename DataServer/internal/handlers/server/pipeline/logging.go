@@ -16,7 +16,7 @@
 // (cmd/server/bootstrap_composition.go) constructs the canonical
 // Resolver and passes it via NewHandlersWithResolver. MasterURL is no
 // longer discovered via `hostname -I` — it must be set in cfg
-// (cfg.Workers.MasterURL or VELOX_MASTER_URL) at boot.
+// the typed ControlPlane.RESTPublic endpoint at boot.
 //
 // Step 9: the canonical `pipeline.go` was deleted once every unique
 // symbol it had owned (RegisterRoutes,

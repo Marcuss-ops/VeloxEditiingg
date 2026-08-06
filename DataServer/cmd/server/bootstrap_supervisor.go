@@ -280,7 +280,6 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 			return nil, fmt.Errorf("supervisor register worker-resource-maintenance: %w", err)
 		}
 
-		sqlDB := p.SQLite.DB()
 		if err := sup.Register(supervisor.Runner{
 			Name:   "metrics-snapshot-supervisor",
 			Class:  supervisor.ClassRestartable,
@@ -290,13 +289,8 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 				defer ticker.Stop()
 				log.Printf("[FLEET-METRICS] metrics-snapshot-supervisor started (5min tick; computes 13-metric rollup per worker from worker_metric_samples + fleet_operations + smoke_runs + deployment_records)")
 				persist := func() {
-					ds := fleet.WorkerMetricsAggregatorDataSource{
-						Store: p.SQLite,
-						WorkerIDsFn: func(ctx context.Context) ([]string, error) {
-							return fleet.SQLiteWorkerIDs{DB: sqlDB}.WorkerIDs(ctx)
-						},
-					}
-					n, err := fleet.ComputeAndPersistSnapshot(ctx, ds, sqlDB, time.Now().UTC())
+					ds := fleet.WorkerMetricsAggregatorDataSource{Store: p.SQLite}
+					n, err := fleet.ComputeAndPersistSnapshot(ctx, ds, time.Now().UTC())
 					if err != nil {
 						log.Printf("[FLEET-METRICS] snapshot tick failed: %v", err)
 						return

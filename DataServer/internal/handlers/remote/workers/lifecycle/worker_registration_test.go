@@ -41,7 +41,7 @@ func newRegistrationTestHandler(t *testing.T, allowedWorkersCSV string, insecure
 
 	cfg := &config.Config{
 		Workers: config.WorkersConfig{
-			AllowedWorkers: allowedWorkersCSV,
+			AllowedWorkerIDs: parseAllowedWorkerIDs(allowedWorkersCSV),
 		},
 		Runtime: config.RuntimeConfig{
 			GRPCAllowInsecureDev: insecureDev,
@@ -59,6 +59,16 @@ func newRegistrationTestHandler(t *testing.T, allowedWorkersCSV string, insecure
 	// is exercised end-to-end in the test (not just stubbed).
 	reg := workersreg.New(dbStore)
 	return NewHandler(cfg, reg, dbStore)
+}
+
+func parseAllowedWorkerIDs(csv string) []string {
+	var ids []string
+	for _, value := range strings.Split(csv, ",") {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			ids = append(ids, trimmed)
+		}
+	}
+	return ids
 }
 
 // doRegister POSTs a JSON body to the wired /api/v1/workers/register

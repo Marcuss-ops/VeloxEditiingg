@@ -1,37 +1,36 @@
 package config
 
 import (
-	"os"
 	"path/filepath"
 )
 
 // ── StorageConfig (S3/MinIO/R2) ────────────────────────────────────────
 
-func loadStorageConfig() StorageConfig {
+func loadStorageConfig(raw RawConfig) StorageConfig {
 	c := StorageConfig{
 		Region: "us-east-1",
 	}
-	c.Endpoint = os.Getenv("VELOX_S3_ENDPOINT")
-	if r := os.Getenv("VELOX_S3_REGION"); r != "" {
+	c.Endpoint = raw.Get("VELOX_S3_ENDPOINT")
+	if r := raw.Get("VELOX_S3_REGION"); r != "" {
 		c.Region = r
 	}
-	c.Bucket = os.Getenv("VELOX_S3_BUCKET")
-	c.AccessKeyID = os.Getenv("VELOX_S3_ACCESS_KEY_ID")
-	c.SecretKey = os.Getenv("VELOX_S3_SECRET_ACCESS_KEY")
-	c.UseSSL = boolFromEnv("VELOX_S3_USE_SSL", false)
+	c.Bucket = raw.Get("VELOX_S3_BUCKET")
+	c.AccessKeyID = raw.Get("VELOX_S3_ACCESS_KEY_ID")
+	c.SecretKey = raw.Get("VELOX_S3_SECRET_ACCESS_KEY")
+	c.UseSSL = raw.Bool("VELOX_S3_USE_SSL", false)
 	return c
 }
 
 // ── DriveConfig ────────────────────────────────────────────────────────
 
-func loadDriveConfig(secretsDir, dataDir string) DriveConfig {
+func loadDriveConfig(secretsDir, dataDir string, raw RawConfig) DriveConfig {
 	c := DriveConfig{
-		ClientID:     os.Getenv("VELOX_DRIVE_CLIENT_ID"),
-		ClientSecret: os.Getenv("VELOX_DRIVE_CLIENT_SECRET"),
-		RedirectURI:  os.Getenv("VELOX_DRIVE_REDIRECT_URI"),
-		TokensDir:    os.Getenv("VELOX_DRIVE_TOKENS_DIR"),
+		ClientID:     raw.Get("VELOX_DRIVE_CLIENT_ID"),
+		ClientSecret: raw.Get("VELOX_DRIVE_CLIENT_SECRET"),
+		RedirectURI:  raw.Get("VELOX_DRIVE_REDIRECT_URI"),
+		TokensDir:    raw.Get("VELOX_DRIVE_TOKENS_DIR"),
 	}
-	c.CredentialsDir = os.Getenv("VELOX_DRIVE_CREDENTIALS_DIR")
+	c.CredentialsDir = raw.Get("VELOX_DRIVE_CREDENTIALS_DIR")
 	if c.TokensDir == "" {
 		c.TokensDir = firstExistingDir([]string{
 			filepath.Join(secretsDir, "drive", "tokens"),
@@ -55,9 +54,9 @@ func loadDriveConfig(secretsDir, dataDir string) DriveConfig {
 
 // ── AnsibleConfig ──────────────────────────────────────────────────────
 
-func loadAnsibleConfig(dataDir string) AnsibleConfig {
+func loadAnsibleConfig(dataDir string, raw RawConfig) AnsibleConfig {
 	c := AnsibleConfig{
-		PlaybookDir: os.Getenv("VELOX_ANSIBLE_PLAYBOOK_DIR"),
+		PlaybookDir: raw.Get("VELOX_ANSIBLE_PLAYBOOK_DIR"),
 	}
 	if c.PlaybookDir == "" {
 		c.PlaybookDir = filepath.Join(dataDir, "ansible", "playbooks")
@@ -67,13 +66,13 @@ func loadAnsibleConfig(dataDir string) AnsibleConfig {
 
 // ── RenderConfig ───────────────────────────────────────────────────────
 
-func loadRenderConfig() RenderConfig {
+func loadRenderConfig(raw RawConfig) RenderConfig {
 	c := RenderConfig{
-		RemoteEngineURL:   os.Getenv("VELOX_REMOTE_ENGINE_URL"),
-		RemoteEngineToken: os.Getenv("VELOX_REMOTE_ENGINE_TOKEN"),
+		RemoteEngineURL:   raw.Get("VELOX_REMOTE_ENGINE_URL"),
+		RemoteEngineToken: raw.Get("VELOX_REMOTE_ENGINE_TOKEN"),
 	}
-	c.RemoteEngineTimeoutMS = intFromEnv("VELOX_REMOTE_ENGINE_TIMEOUT_MS", 60000, 1)
-	c.RemoteEngineRetries = intFromEnv("VELOX_REMOTE_ENGINE_RETRIES", 3, 1)
-	c.RemoteEnginePollInterval = intFromEnv("VELOX_REMOTE_ENGINE_POLL_INTERVAL", 30, 5)
+	c.RemoteEngineTimeoutMS = raw.Int("VELOX_REMOTE_ENGINE_TIMEOUT_MS", 60000, 1)
+	c.RemoteEngineRetries = raw.Int("VELOX_REMOTE_ENGINE_RETRIES", 3, 1)
+	c.RemoteEnginePollInterval = raw.Int("VELOX_REMOTE_ENGINE_POLL_INTERVAL", 30, 5)
 	return c
 }

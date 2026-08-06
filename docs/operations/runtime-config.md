@@ -6,8 +6,19 @@ Application packages do not read `os.Getenv` directly.
 At startup the composition root performs:
 
 ```text
-load env/.env → parse → validate → freeze → redacted snapshot
+load env/.env → RawConfig snapshot → parse/default → typed Config → validate → freeze → redacted snapshot
 ```
+
+`RawConfig` is transient input only. `config.LoadFromEnv` captures the process
+environment once, maps it into the validated `Config`, and is the only bootstrap
+entry point for long-lived services. Runtime packages receive typed sub-configs;
+they must not call `os.Getenv`, `os.LookupEnv`, or re-run package-level
+`*FromEnv` loaders. `Config.FromEnv` remains only as a compatibility helper for
+unit tests and small tools.
+
+The raw snapshot preserves environment-file precedence and presence separately
+from the parsed value. This means an explicitly empty variable is not confused
+with an unset variable, while defaults are applied exactly once at load time.
 
 The snapshot includes:
 
@@ -43,4 +54,5 @@ changing production behavior unexpectedly.
 
 `Config.FromEnv` remains available for package tests and compatibility. Server
 bootstrap uses `config.LoadFromEnv`, which validates and freezes the resulting
-configuration before constructing long-lived services.
+configuration before constructing long-lived services. Consumers must use the
+fields on that frozen snapshot rather than reading environment variables again.

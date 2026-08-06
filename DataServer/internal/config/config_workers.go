@@ -1,41 +1,30 @@
 package config
 
-import (
-	"os"
-	"strings"
-)
+import "strings"
 
-func loadWorkersConfig() WorkersConfig {
+func loadWorkersConfig(raw RawConfig) WorkersConfig {
 	c := WorkersConfig{
 		MaxJobAttempts:   3,
 		HeartbeatTimeout: 900,
 		VersionNumber:    "v1.0.6",
 	}
-	c.AllowedWorkers = os.Getenv("VELOX_ALLOWED_WORKERS")
 	// parseCommaList drops empty tokens and trims whitespace; the
 	// canonical two-worker validator (ValidateProductionWorkers) is
 	// invoked by Config.Validate() — see internal/config/config.go.
-	c.AllowedWorkerIDs = parseCommaList(c.AllowedWorkers)
-	c.MaxJobAttempts = intFromEnv("VELOX_MAX_JOB_ATTEMPTS", 3, 1)
-	c.BundleDir = os.Getenv("VELOX_WORKER_BUNDLE_DIR")
-	c.CodeVersion = os.Getenv("VELOX_CODE_VERSION")
-	c.VersionNumber = os.Getenv("VELOX_VERSION_NUMBER")
-	if c.VersionNumber == "" {
-		if v, err := os.ReadFile("../../VERSION.txt"); err == nil {
-			c.VersionNumber = strings.TrimSpace(string(v))
-		}
-	}
+	c.AllowedWorkerIDs = parseCommaList(raw.Get("VELOX_ALLOWED_WORKERS"))
+	c.MaxJobAttempts = raw.Int("VELOX_MAX_JOB_ATTEMPTS", 3, 1)
+	c.BundleDir = raw.Get("VELOX_WORKER_BUNDLE_DIR")
+	c.CodeVersion = raw.Get("VELOX_CODE_VERSION")
+	c.VersionNumber = strings.TrimSpace(raw.Get("VELOX_VERSION_NUMBER"))
 	if c.VersionNumber == "" {
 		c.VersionNumber = "v1.0.6"
 	}
 	if c.CodeVersion == "" {
 		c.CodeVersion = c.VersionNumber
 	}
-	c.HeartbeatTimeout = intFromEnv("VELOX_WORKER_HEARTBEAT_TIMEOUT", 900, 1)
-	c.ScriptDir = os.Getenv("VELOX_SCRIPT_DIR")
-	c.MasterURL = GetMasterURL()
-	c.MasterServerURL = GetMasterServerURL()
-	if ips := os.Getenv("VELOX_ALLOWED_WORKER_IPS"); ips != "" {
+	c.HeartbeatTimeout = raw.Int("VELOX_WORKER_HEARTBEAT_TIMEOUT", 900, 1)
+	c.ScriptDir = raw.Get("VELOX_SCRIPT_DIR")
+	if ips := raw.Get("VELOX_ALLOWED_WORKER_IPS"); ips != "" {
 		c.AllowedIPs = parseCommaList(ips)
 	}
 	// Operator-driven deterministic-pick for placement matching: when
@@ -43,14 +32,14 @@ func loadWorkersConfig() WorkersConfig {
 	// every worker_id != the pin (Bootstrap wires this to the Handler
 	// via Handler.SetPlacementPin). Empty value keeps the matcher in
 	// its stateless default.
-	c.PlacementPinWorkerID = strings.TrimSpace(os.Getenv("VELOX_PLACEMENT_PIN_WORKER_ID"))
+	c.PlacementPinWorkerID = strings.TrimSpace(raw.Get("VELOX_PLACEMENT_PIN_WORKER_ID"))
 	// STALE / PARTITIONED thresholds for the persistent state machine
 	// owned by store_worker_runtime_recovery.go (single-writer tx).
 	// Defaults match the canonical read-side thresholds in
 	// workers/registry_query.go (ConnectionStaleThreshold = 150s,
 	// ConnectionDisconnectedThreshold = 5min) so the persistent
 	// mirror and the read-time derivation stay aligned.
-	c.StaleThresholdSeconds = intFromEnv("VELOX_WORKER_STALE_THRESHOLD_SECONDS", 150, 1)
-	c.PartitionThresholdSeconds = intFromEnv("VELOX_WORKER_PARTITION_THRESHOLD_SECONDS", 300, 1)
+	c.StaleThresholdSeconds = raw.Int("VELOX_WORKER_STALE_THRESHOLD_SECONDS", 150, 1)
+	c.PartitionThresholdSeconds = raw.Int("VELOX_WORKER_PARTITION_THRESHOLD_SECONDS", 300, 1)
 	return c
 }

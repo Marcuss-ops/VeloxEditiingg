@@ -76,7 +76,7 @@ func Open(ctx context.Context, cfg Config) (*Handle, error) {
 
 	driver := cfg.Driver
 	if driver == DriverUnknown {
-		driver = envDefaultDriver
+		driver = DriverSQLite
 	}
 
 	switch driver {

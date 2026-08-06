@@ -104,7 +104,7 @@ func NewResolver(cfg *config.Config, enqueuer *enqueue.Enqueuer, dbStore *store.
 		forwardRepo: dbStore,
 		dataDir:     strings.TrimSpace(cfg.Runtime.DataDir),
 		videosDir:   strings.TrimSpace(cfg.Runtime.VideosDir),
-		masterURL:   resolvePublicMasterURL(cfg),
+		masterURL:   string(cfg.ControlPlane.RESTPublic),
 		db:          dbStore.DB(),
 	}
 }

@@ -5,11 +5,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -40,138 +38,55 @@ type MetricsConfig struct {
 	StorageCostEUR float64
 }
 
-// RuntimeConfigSource records where a runtime setting came from.
-type RuntimeConfigSource string
-
-const (
-	SourceDefault RuntimeConfigSource = "default"
-	SourceEnv     RuntimeConfigSource = "env"
-	SourceFile    RuntimeConfigSource = "file"
-)
-
 // RuntimeSnapshot is safe to emit at startup. Values containing credentials
 // are represented by [REDACTED], never by their plaintext content.
 type RuntimeSnapshot struct {
 	SchemaVersion string            `json:"schema_version"`
 	Fingerprint   string            `json:"fingerprint"`
-	Sources       map[string]string `json:"sources"`
 	Values        map[string]string `json:"values"`
 }
 
-var envFileKeys = struct {
-	sync.RWMutex
-	keys map[string]struct{}
-}{keys: make(map[string]struct{})}
-
-func markEnvFileKey(key string) {
-	envFileKeys.Lock()
-	envFileKeys.keys[key] = struct{}{}
-	envFileKeys.Unlock()
-}
-
-func resetEnvFileKeys() {
-	envFileKeys.Lock()
-	envFileKeys.keys = make(map[string]struct{})
-	envFileKeys.Unlock()
-}
-
-func sourceForEnv(key string) RuntimeConfigSource {
-	if _, ok := os.LookupEnv(key); !ok {
-		return SourceDefault
-	}
-	envFileKeys.RLock()
-	_, fromFile := envFileKeys.keys[key]
-	envFileKeys.RUnlock()
-	if fromFile {
-		return SourceFile
-	}
-	return SourceEnv
-}
-
-func loadOperationalRuntimeConfig() (SupervisorConfig, CacheConfig, SchedulerConfig, MetricsConfig, AlertConfig, map[string]RuntimeConfigSource) {
-	sources := make(map[string]RuntimeConfigSource)
-	source := func(field, env string) { sources[field] = sourceForEnv(env) }
-
-	supervisor := loadSupervisorConfig()
-	source("supervisor.require_live_workers", "VELOX_REQUIRE_LIVE_WORKERS")
-	source("supervisor.critical_max_retries", "VELOX_CRITICAL_MAX_RETRIES")
-	source("supervisor.critical_fail_after", "VELOX_CRITICAL_FAIL_AFTER")
+func loadOperationalRuntimeConfig(raw RawConfig) (SupervisorConfig, CacheConfig, SchedulerConfig, MetricsConfig, AlertConfig) {
+	supervisor := loadSupervisorConfig(raw)
 
 	cache := CacheConfig{
-		ProtectedAssetLookaheadJobs: intFromEnv("VELOX_CACHE_LOOKAHEAD_JOBS", 10, 1),
-		SnapshotInterval:            durationFromEnv("VELOX_CACHE_SNAPSHOT_INTERVAL", 30*time.Second),
+		ProtectedAssetLookaheadJobs: raw.Int("VELOX_CACHE_LOOKAHEAD_JOBS", 10, 1),
+		SnapshotInterval:            raw.Duration("VELOX_CACHE_SNAPSHOT_INTERVAL", 30*time.Second),
 	}
-	source("cache.protected_asset_lookahead_jobs", "VELOX_CACHE_LOOKAHEAD_JOBS")
-	source("cache.snapshot_interval", "VELOX_CACHE_SNAPSHOT_INTERVAL")
-
 	scheduler := SchedulerConfig{
-		TaskGraphTick:             durationFromEnv("VELOX_TASKGRAPH_TICK", 2*time.Second),
-		ArtifactReconcileInterval: durationFromEnv("VELOX_ARTIFACT_RECONCILE_INTERVAL", 15*time.Minute),
-		MetricsSnapshotInterval:   durationFromEnv("VELOX_METRICS_SNAPSHOT_INTERVAL", 5*time.Minute),
-		CalendarInterval:          time.Duration(intFromEnv("VELOX_CALENDAR_SCHEDULER_INTERVAL_SECONDS", 30, 1)) * time.Second,
-		RestartableMaxRetries:     intFromEnv("VELOX_RESTARTABLE_MAX_RETRIES", 5, 1),
+		TaskGraphTick:             raw.Duration("VELOX_TASKGRAPH_TICK", 2*time.Second),
+		ArtifactReconcileInterval: raw.Duration("VELOX_ARTIFACT_RECONCILE_INTERVAL", 15*time.Minute),
+		MetricsSnapshotInterval:   raw.Duration("VELOX_METRICS_SNAPSHOT_INTERVAL", 5*time.Minute),
+		CalendarInterval:          time.Duration(raw.Int("VELOX_CALENDAR_SCHEDULER_INTERVAL_SECONDS", 30, 1)) * time.Second,
+		RestartableMaxRetries:     raw.Int("VELOX_RESTARTABLE_MAX_RETRIES", 5, 1),
 	}
-	source("scheduler.taskgraph_tick", "VELOX_TASKGRAPH_TICK")
-	source("scheduler.artifact_reconcile_interval", "VELOX_ARTIFACT_RECONCILE_INTERVAL")
-	source("scheduler.metrics_snapshot_interval", "VELOX_METRICS_SNAPSHOT_INTERVAL")
-	source("scheduler.calendar_interval", "VELOX_CALENDAR_SCHEDULER_INTERVAL_SECONDS")
-	source("scheduler.restartable_max_retries", "VELOX_RESTARTABLE_MAX_RETRIES")
-
 	metrics := MetricsConfig{
-		Tick:           durationFromEnv("VELOX_METRICS_TICK", 15*time.Second),
-		AttemptLimit:   intFromEnv("VELOX_METRICS_ATTEMPT_LIMIT", 1000, 1),
-		SeenIDsCap:     intFromEnv("VELOX_METRICS_SEEN_IDS_CAP", 10000, 1),
-		CPUCostEUR:     floatFromEnv("VELOX_CPU_CORE_SECOND_COST", 5e-6, 0),
-		NetworkCostEUR: floatFromEnv("VELOX_NETWORK_GB_COST", 0.01, 0),
-		StorageCostEUR: floatFromEnv("VELOX_STORAGE_GB_COST", 0.00012, 0),
+		Tick:           raw.Duration("VELOX_METRICS_TICK", 15*time.Second),
+		AttemptLimit:   raw.Int("VELOX_METRICS_ATTEMPT_LIMIT", 1000, 1),
+		SeenIDsCap:     raw.Int("VELOX_METRICS_SEEN_IDS_CAP", 10000, 1),
+		CPUCostEUR:     raw.Float("VELOX_CPU_CORE_SECOND_COST", 5e-6, 0),
+		NetworkCostEUR: raw.Float("VELOX_NETWORK_GB_COST", 0.01, 0),
+		StorageCostEUR: raw.Float("VELOX_STORAGE_GB_COST", 0.00012, 0),
 	}
-	source("metrics.tick", "VELOX_METRICS_TICK")
-	source("metrics.attempt_limit", "VELOX_METRICS_ATTEMPT_LIMIT")
-	source("metrics.seen_ids_cap", "VELOX_METRICS_SEEN_IDS_CAP")
-	source("metrics.cpu_cost_eur", "VELOX_CPU_CORE_SECOND_COST")
-	source("metrics.network_cost_eur", "VELOX_NETWORK_GB_COST")
-	source("metrics.storage_cost_eur", "VELOX_STORAGE_GB_COST")
-
-	alerts := loadAlertConfig()
-	source("alerts.error_rate_pct", "VELOX_ALERT_ERROR_RATE_PCT")
-	source("alerts.p95_wall_ms", "VELOX_ALERT_P95_WALL_MS")
-	source("alerts.disk_free_gb", "VELOX_ALERT_DISK_FREE_GB")
-	source("alerts.ffmpeg_min", "VELOX_ALERT_FFMPEG_MIN")
-	source("alerts.webhook_url", "VELOX_ALERT_WEBHOOK_URL")
-	source("alerts.webhook_type", "VELOX_ALERT_WEBHOOK_TYPE")
-	source("alerts.evaluation_interval", "VELOX_ALERT_EVALUATION_INTERVAL")
-	source("alerts.cooldown", "VELOX_ALERT_COOLDOWN")
-	source("social.base_url", "SOCIAL_API_URL")
-	source("social.api_key", "SOCIAL_API_TOKEN")
-	source("social.callback_base_url", "SOCIAL_CALLBACK_BASE_URL")
-	source("social.timeout", "SOCIAL_API_TIMEOUT_MS")
-	source("social.max_retries", "SOCIAL_API_RETRIES")
-	source("logging.quiet", "VELOX_QUIET_LOGS")
-	source("logging.json_output", "VELOX_JSON_LOGS")
-	source("logging.debug", "VELOX_DEBUG")
-	source("telemetry.exporter", "VELOX_OTEL_EXPORTER")
-	source("telemetry.endpoint", "VELOX_OTEL_ENDPOINT")
-	source("telemetry.version", "VELOX_VERSION")
-	source("telemetry.insecure", "VELOX_OTEL_INSECURE")
-	source("telemetry.measure_enqueue_allocations", "VELOX_ENQUEUE_MEASURE_ALLOCATIONS")
-	return supervisor, cache, scheduler, metrics, alerts, sources
+	alerts := loadAlertConfig(raw)
+	return supervisor, cache, scheduler, metrics, alerts
 }
 
-func operationalParseErrors() []string {
+func operationalParseErrors(raw RawConfig) []string {
 	var errors []string
 	checkDuration := func(key string) {
-		if raw, ok := os.LookupEnv(key); ok && strings.TrimSpace(raw) != "" {
-			value, err := time.ParseDuration(strings.TrimSpace(raw))
+		if rawValue, ok := raw.Lookup(key); ok && strings.TrimSpace(rawValue) != "" {
+			value, err := time.ParseDuration(strings.TrimSpace(rawValue))
 			if err != nil || value <= 0 {
-				errors = append(errors, fmt.Sprintf("%s must be a positive duration, got %q", key, raw))
+				errors = append(errors, fmt.Sprintf("%s must be a positive duration, got %q", key, rawValue))
 			}
 		}
 	}
 	checkInt := func(key string, min int) {
-		if raw, ok := os.LookupEnv(key); ok && strings.TrimSpace(raw) != "" {
-			value, err := strconv.Atoi(strings.TrimSpace(raw))
+		if rawValue, ok := raw.Lookup(key); ok && strings.TrimSpace(rawValue) != "" {
+			value, err := strconv.Atoi(strings.TrimSpace(rawValue))
 			if err != nil || value < min {
-				errors = append(errors, fmt.Sprintf("%s must be an integer >= %d, got %q", key, min, raw))
+				errors = append(errors, fmt.Sprintf("%s must be an integer >= %d, got %q", key, min, rawValue))
 			}
 		}
 	}
@@ -195,81 +110,92 @@ func operationalParseErrors() []string {
 	return errors
 }
 
-func durationFromEnv(key string, fallback time.Duration) time.Duration {
-	raw, ok := os.LookupEnv(key)
-	if !ok || strings.TrimSpace(raw) == "" {
-		return fallback
-	}
-	d, err := time.ParseDuration(strings.TrimSpace(raw))
-	if err != nil || d <= 0 {
-		return fallback
-	}
-	return d
-}
-
-// LoadCacheConfigFromEnv exposes strict parsing for cache consumers while
-// keeping all environment access inside the config package.
-func LoadCacheConfigFromEnv() (CacheConfig, error) {
-	cache := CacheConfig{
-		ProtectedAssetLookaheadJobs: intFromEnv("VELOX_CACHE_LOOKAHEAD_JOBS", 10, 1),
-		SnapshotInterval:            durationFromEnv("VELOX_CACHE_SNAPSHOT_INTERVAL", 30*time.Second),
-	}
-	for _, errText := range operationalParseErrors() {
-		if strings.HasPrefix(errText, "VELOX_CACHE_") {
-			return cache, fmt.Errorf("config: %s", errText)
-		}
-	}
-	return cache, nil
-}
-
-func loadSocialConfig() SocialConfig {
+func loadSocialConfig(raw RawConfig) SocialConfig {
 	return SocialConfig{
-		BaseURL:         strings.TrimSpace(os.Getenv("SOCIAL_API_URL")),
-		APIKey:          os.Getenv("SOCIAL_API_TOKEN"),
-		CallbackBaseURL: strings.TrimSpace(os.Getenv("SOCIAL_CALLBACK_BASE_URL")),
-		Timeout:         time.Duration(intFromEnv("SOCIAL_API_TIMEOUT_MS", 30000, 0)) * time.Millisecond,
-		MaxRetries:      intFromEnv("SOCIAL_API_RETRIES", 0, 0),
+		BaseURL:         strings.TrimSpace(raw.Get("SOCIAL_API_URL")),
+		APIKey:          raw.Get("SOCIAL_API_TOKEN"),
+		CallbackBaseURL: strings.TrimSpace(raw.Get("SOCIAL_CALLBACK_BASE_URL")),
+		Timeout:         time.Duration(raw.Int("SOCIAL_API_TIMEOUT_MS", 30000, 0)) * time.Millisecond,
+		MaxRetries:      raw.Int("SOCIAL_API_RETRIES", 0, 0),
 	}
 }
 
-func loadLoggingConfig() LoggingConfig {
+func loadLoggingConfig(raw RawConfig) LoggingConfig {
 	return LoggingConfig{
-		Quiet:      boolFromEnv("VELOX_QUIET_LOGS", false),
-		JSONOutput: boolFromEnv("VELOX_JSON_LOGS", false),
-		Debug:      boolFromEnv("VELOX_DEBUG", false),
+		Quiet:      raw.Bool("VELOX_QUIET_LOGS", false),
+		JSONOutput: raw.Bool("VELOX_JSON_LOGS", false),
+		Debug:      raw.Bool("VELOX_DEBUG", false),
 	}
 }
 
-func loadTelemetryConfig() TelemetryConfig {
+func loadTelemetryConfig(raw RawConfig) TelemetryConfig {
 	return TelemetryConfig{
-		Exporter:                  strings.ToLower(strings.TrimSpace(os.Getenv("VELOX_OTEL_EXPORTER"))),
-		Endpoint:                  strings.TrimSpace(os.Getenv("VELOX_OTEL_ENDPOINT")),
-		Version:                   strings.TrimSpace(os.Getenv("VELOX_VERSION")),
-		Insecure:                  boolFromEnv("VELOX_OTEL_INSECURE", true),
-		MeasureEnqueueAllocations: strings.TrimSpace(os.Getenv("VELOX_ENQUEUE_MEASURE_ALLOCATIONS")) == "1",
+		Exporter:                  strings.ToLower(strings.TrimSpace(raw.Get("VELOX_OTEL_EXPORTER"))),
+		Endpoint:                  strings.TrimSpace(raw.Get("VELOX_OTEL_ENDPOINT")),
+		Version:                   strings.TrimSpace(raw.Get("VELOX_VERSION")),
+		Insecure:                  raw.Bool("VELOX_OTEL_INSECURE", true),
+		MeasureEnqueueAllocations: strings.TrimSpace(raw.Get("VELOX_ENQUEUE_MEASURE_ALLOCATIONS")) == "1",
 	}
 }
 
-func (c *Config) LoadOperationalRuntime() {
-	supervisor, cache, scheduler, metrics, alerts, sources := loadOperationalRuntimeConfig()
-	c.parseErrors = operationalParseErrors()
+func loadOperationalRuntimeConfigInto(c *Config, raw RawConfig) {
+	supervisor, cache, scheduler, metrics, alerts := loadOperationalRuntimeConfig(raw)
 	c.Runtime.Supervisor = supervisor
 	c.Runtime.Cache = cache
 	c.Runtime.Scheduler = scheduler
 	c.Runtime.Metrics = metrics
 	c.Runtime.Alerts = alerts
-	c.Runtime.Social = loadSocialConfig()
-	c.Runtime.Logging = loadLoggingConfig()
-	c.Runtime.Telemetry = loadTelemetryConfig()
-	c.Runtime.Sources = sources
+	c.Runtime.Social = loadSocialConfig(raw)
+	c.Runtime.Logging = loadLoggingConfig(raw)
+	c.Runtime.Telemetry = loadTelemetryConfig(raw)
+}
+
+func loadProcessConfig(c *Config, raw RawConfig) {
+	c.Runtime.CosignSkipVerify = strings.TrimSpace(raw.Get("VELOX_SKIP_COSIGN_VERIFY")) == "1"
+	c.Runtime.CosignOverrideReason = strings.TrimSpace(raw.Get("VELOX_COSIGN_OVERRIDE_REASON"))
+	c.Runtime.AssetRewriteDevBypass = raw.Bool("VELOX_ASSET_REWRITE_DEV_BYPASS", false)
+	c.Runtime.FFProbeVerifyMode = raw.Get("VELOX_FFPROBE_VERIFY_ON_FINALIZE")
+	c.Runtime.SystemPath = raw.Get("PATH")
+	c.Runtime.Credentials = loadCredentialsConfig(raw)
+}
+
+func loadCredentialsConfig(raw RawConfig) CredentialsConfig {
+	cfg := CredentialsConfig{CurrentVersion: 1, Historical: make(map[int]CredentialKeyConfig)}
+	if version := strings.TrimSpace(raw.Get("VELOX_CREDENTIAL_KEY_VERSION")); version != "" {
+		if parsed, err := strconv.Atoi(version); err == nil && parsed > 0 {
+			cfg.CurrentVersion = parsed
+		}
+	}
+	cfg.Current = CredentialKeyConfig{Value: raw.Get("VELOX_CREDENTIAL_KEY"), File: raw.Get("VELOX_CREDENTIAL_KEY_FILE")}
+	for version := 1; version <= 32; version++ {
+		if version == cfg.CurrentVersion {
+			continue
+		}
+		value := raw.Get(fmt.Sprintf("VELOX_CREDENTIAL_KEY_%d", version))
+		file := raw.Get(fmt.Sprintf("VELOX_CREDENTIAL_KEY_%d_FILE", version))
+		if value != "" || file != "" {
+			cfg.Historical[version] = CredentialKeyConfig{Value: value, File: file}
+		}
+	}
+	return cfg
 }
 
 // LoadFromEnv is the canonical bootstrap pipeline: load, parse, validate,
 // freeze. FromEnv remains available for tests and callers that need to inspect
 // an invalid configuration before deciding how to report it.
 func LoadFromEnv() (*Config, error) {
-	c := FromEnv()
+	return LoadFromRaw(RawConfigFromEnv())
+}
+
+// LoadFromRaw validates and freezes one captured raw snapshot. The optional
+// env-file source information must be attached to that snapshot before this
+// boundary; runtime consumers never reload process environment state.
+func LoadFromRaw(raw RawConfig) (*Config, error) {
+	c := FromRaw(raw)
 	if err := c.Validate(); err != nil {
+		return nil, err
+	}
+	if err := validateBootstrapEndpoints(c); err != nil {
 		return nil, err
 	}
 	if err := c.Freeze(); err != nil {
@@ -347,12 +273,8 @@ func (c *Config) Snapshot() RuntimeSnapshot {
 		"secret.storage_access_key":                     redactPresence(c.Storage.AccessKeyID),
 		"secret.storage_secret_key":                     redactPresence(c.Storage.SecretKey),
 	}
-	sources := make(map[string]string, len(c.Runtime.Sources))
-	for k, v := range c.Runtime.Sources {
-		sources[k] = string(v)
-	}
 	fingerprint := fingerprintSnapshot(values)
-	return RuntimeSnapshot{SchemaVersion: RuntimeConfigSchemaVersion, Fingerprint: fingerprint, Sources: sources, Values: values}
+	return RuntimeSnapshot{SchemaVersion: RuntimeConfigSchemaVersion, Fingerprint: fingerprint, Values: values}
 }
 
 func (c *Config) SnapshotJSON() ([]byte, error) {

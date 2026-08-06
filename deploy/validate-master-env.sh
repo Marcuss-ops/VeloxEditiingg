@@ -190,22 +190,48 @@ else
     fi
 fi
 
-# ─── MASTER_PUBLIC_URL ──────────────────────────────────────────────────────
-MASTER_URL="$(get_env_value "$ENV_FILE" MASTER_PUBLIC_URL)"
-if [[ -z "$MASTER_URL" ]]; then
-    err "MASTER_PUBLIC_URL is empty (workers cannot dial gRPC back to the master)"
+# ─── Typed control-plane endpoints ──────────────────────────────────────────
+# REST_PUBLIC is mandatory; REST_INTERNAL is optional for deployments that
+# do not proxy to a sibling master. GRPC_CONTROL is mandatory for the
+# configured push transport.
+REST_PUBLIC_URL="$(get_env_value "$ENV_FILE" VELOX_CONTROL_PLANE_REST_PUBLIC_URL)"
+if [[ -z "$REST_PUBLIC_URL" ]]; then
+    err "VELOX_CONTROL_PLANE_REST_PUBLIC_URL is empty (workers and API clients cannot reach the master)"
     ERR_COUNT=$((ERR_COUNT + 1))
-elif [[ "$MASTER_URL" =~ CHANGE_ME_ ]]; then
-    err "MASTER_PUBLIC_URL still set to a CHANGE_ME_* placeholder"
+elif [[ "$REST_PUBLIC_URL" =~ CHANGE_ME_ ]]; then
+    err "VELOX_CONTROL_PLANE_REST_PUBLIC_URL still set to a CHANGE_ME_* placeholder"
     ERR_COUNT=$((ERR_COUNT + 1))
 else
-    case "$(is_https_url "$MASTER_URL"; echo $?)" in
-        0) : ;;  # https — ok
-        1) warn "MASTER_PUBLIC_URL uses http:// — only valid behind VPN/front-door TLS. Production must be https://."
+    case "$(is_https_url "$REST_PUBLIC_URL"; echo $?)" in
+        0) : ;;
+        1) warn "VELOX_CONTROL_PLANE_REST_PUBLIC_URL uses http:// — only valid behind VPN/front-door TLS. Production must be https://."
             WARN_COUNT=$((WARN_COUNT + 1)) ;;
-        *) err "MASTER_PUBLIC_URL malformed: '$MASTER_URL' (expected https://host[:port][/path])"
+        *) err "VELOX_CONTROL_PLANE_REST_PUBLIC_URL malformed: '$REST_PUBLIC_URL' (expected https://host[:port][/path])"
             ERR_COUNT=$((ERR_COUNT + 1)) ;;
     esac
+fi
+
+REST_INTERNAL_URL="$(get_env_value "$ENV_FILE" VELOX_CONTROL_PLANE_REST_INTERNAL_URL)"
+if [[ -n "$REST_INTERNAL_URL" ]]; then
+    case "$(is_https_url "$REST_INTERNAL_URL"; echo $?)" in
+        0|1) : ;;
+        *) err "VELOX_CONTROL_PLANE_REST_INTERNAL_URL malformed: '$REST_INTERNAL_URL'"; ERR_COUNT=$((ERR_COUNT + 1)) ;;
+    esac
+fi
+
+GRPC_CONTROL_URL="$(get_env_value "$ENV_FILE" VELOX_CONTROL_PLANE_GRPC_URL)"
+GRPC_PUSH_MODE="$(get_env_value "$ENV_FILE" VELOX_GRPC_PUSH_MODE)"
+if [[ "${GRPC_PUSH_MODE,,}" == "true" || "${GRPC_PUSH_MODE:-}" == "1" ]]; then
+    if [[ -z "$GRPC_CONTROL_URL" ]]; then
+        err "VELOX_CONTROL_PLANE_GRPC_URL is empty while VELOX_GRPC_PUSH_MODE is enabled"
+        ERR_COUNT=$((ERR_COUNT + 1))
+    elif [[ "$GRPC_CONTROL_URL" =~ CHANGE_ME_ ]]; then
+        err "VELOX_CONTROL_PLANE_GRPC_URL still set to a CHANGE_ME_* placeholder"
+        ERR_COUNT=$((ERR_COUNT + 1))
+    elif [[ ! "$GRPC_CONTROL_URL" =~ ^(\[[0-9A-Fa-f:]+\]|[A-Za-z0-9._-]+):[0-9]+$ ]]; then
+        err "VELOX_CONTROL_PLANE_GRPC_URL malformed: '$GRPC_CONTROL_URL' (expected host:port)"
+        ERR_COUNT=$((ERR_COUNT + 1))
+    fi
 fi
 
 # ─── VELOX_SERVER_IMAGE ─────────────────────────────────────────────────────

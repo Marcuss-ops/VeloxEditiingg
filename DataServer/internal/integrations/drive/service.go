@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"velox-server/internal/config"
 	"velox-server/internal/credentials"
 )
 
@@ -43,15 +42,15 @@ func NewService(cfg *ServiceConfig) (*Service, error) {
 		cfg.TokensDir = "data/drive_tokens"
 	}
 
-	tokenManager, err := NewTokenManager(cfg.TokensDir)
+	tokenManager, err := NewTokenManager(cfg.TokensDir, cfg.Credentials)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create token manager: %w", err)
 	}
 
 	scopes := DefaultScopes()
 	if len(cfg.RedirectURI) == 0 {
-		if envRedirect := strings.TrimSpace(config.GetMasterURL()); envRedirect != "" {
-			cfg.RedirectURI = strings.TrimRight(envRedirect, "/") + "/api/drive/oauth/callback"
+		if publicRESTURL := strings.TrimSpace(cfg.PublicRESTURL); publicRESTURL != "" {
+			cfg.RedirectURI = strings.TrimRight(publicRESTURL, "/") + "/api/drive/oauth/callback"
 		}
 	}
 	if len(cfg.RedirectURI) == 0 {

@@ -35,7 +35,14 @@ make_vanilla() {
     cat > "$path" <<'EOF'
 GIN_MODE=release
 VELOX_MASTER_PORT=8000
-MASTER_PUBLIC_URL=https://master.example.com
+VELOX_CONTROL_PLANE_REST_PUBLIC_URL=https://master.example.com
+VELOX_CONTROL_PLANE_REST_INTERNAL_URL=http://127.0.0.1:8000
+VELOX_CONTROL_PLANE_GRPC_URL=master.example.com:9000
+VELOX_SERVER_IMAGE=ghcr.io/example/velox-server@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+SOCIAL_API_URL=https://social.example.com
+SOCIAL_API_TOKEN=test-social-token
+SOCIAL_CALLBACK_BASE_URL=https://master.example.com
+INSTAEDIT_CONTROL_JWT_SECRET=12345678901234567890123456789012
 VELOX_ADMIN_TOKEN=this-is-a-strong-test-token-with-32-char-length-x
 VELOX_ALLOWED_WORKERS=velox-worker-1,velox-worker-2
 VELOX_GRPC_PORT=9000
@@ -118,11 +125,11 @@ make_vanilla "$F"
 sed -i '/^VELOX_GRPC_TLS_/d' "$F"
 check_case "08 TLS unset AND no insecure-dev flag"  1 "$F"
 
-# ── MASTER_PUBLIC_URL malformed → FAIL ──────────────────────────────────────
+# ── typed REST public URL malformed → FAIL ──────────────────────────────────
 F="$WORK/09_bad_url.env"
 make_vanilla "$F"
-sed -i 's|^MASTER_PUBLIC_URL=.*|MASTER_PUBLIC_URL=not-a-url|' "$F"
-check_case "09 MASTER_PUBLIC_URL malformed"         1 "$F"
+sed -i 's|^VELOX_CONTROL_PLANE_REST_PUBLIC_URL=.*|VELOX_CONTROL_PLANE_REST_PUBLIC_URL=not-a-url|' "$F"
+check_case "09 typed REST public URL malformed"      1 "$F"
 
 # ── VELOX_DB_PATH empty → FAIL ─────────────────────────────────────────────
 F="$WORK/10_no_db_path.env"
@@ -139,14 +146,14 @@ check_case "11 VELOX_GRPC_PORT non-numeric"         1 "$F"
 # ── http URL with rest ok → PASS (warning, not hard fail) ───────────────────
 F="$WORK/12_http_url_warn.env"
 make_vanilla "$F"
-sed -i 's|^MASTER_PUBLIC_URL=.*|MASTER_PUBLIC_URL=http://master.example.com|' "$F"
+sed -i 's|^VELOX_CONTROL_PLANE_REST_PUBLIC_URL=.*|VELOX_CONTROL_PLANE_REST_PUBLIC_URL=http://master.example.com|' "$F"
 check_case "12 http:// MASTER_URL (warning only)"   0 "$F"
 
-# ── MASTER_PUBLIC_URL empty → FAIL (no master URL means clients can't reach) ──
+# ── typed REST public URL empty → FAIL ──────────────────────────────────────
 F="$WORK/13_empty_master_url.env"
 make_vanilla "$F"
-sed -i 's|^MASTER_PUBLIC_URL=.*|MASTER_PUBLIC_URL=|' "$F"
-check_case "13 MASTER_PUBLIC_URL empty"             1 "$F"
+sed -i 's|^VELOX_CONTROL_PLANE_REST_PUBLIC_URL=.*|VELOX_CONTROL_PLANE_REST_PUBLIC_URL=|' "$F"
+check_case "13 typed REST public URL empty"         1 "$F"
 
 # ── VELOX_ADMIN_TOKEN with stray literal double-quote → FAIL ────────────────
 # Catches malformed env files where a stray `"` would either be absorbed into
@@ -162,7 +169,7 @@ check_case "14 VELOX_ADMIN_TOKEN literal double-quote" 1 "$F"
 # bracketed IPv6 hosts (RFC 3986 §3.2.2) like `https://[::1]:9000`.
 F="$WORK/15_ipv6_url.env"
 make_vanilla "$F"
-sed -i 's|^MASTER_PUBLIC_URL=.*|MASTER_PUBLIC_URL=https://[::1]:9000|' "$F"
+sed -i 's|^VELOX_CONTROL_PLANE_REST_PUBLIC_URL=.*|VELOX_CONTROL_PLANE_REST_PUBLIC_URL=https://[::1]:9000|' "$F"
 check_case "15 https IPv6 IP-literal"               0 "$F"
 
 # ── Summary ─────────────────────────────────────────────────────────────────

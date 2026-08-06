@@ -185,7 +185,7 @@ fi
 # invalid config'. Single canonical validator at deploy/validate-master-env.sh
 # enforces: no CHANGE_ME_* literals, VELOX_ADMIN_TOKEN non-empty,
 # VELOX_ALLOWED_WORKERS non-empty + non-wildcard + unique IDs,
-# MASTER_PUBLIC_URL parsable, TLS triple consistent, VELOX_DB_PATH non-empty,
+# typed control-plane REST/gRPC endpoints parsable, TLS triple consistent, VELOX_DB_PATH non-empty,
 # VELOX_GRPC_PORT numeric. Same script invoked by deploy/playbooks/*.yml so
 # ansible + bash install paths stay in lock-step.
 VALIDATOR="${SCRIPT_DIR}/validate-master-env.sh"
@@ -219,7 +219,7 @@ case "$validator_rc" in
         fail "could not read env file $ENV_DST (validator rc=2). The file is missing, unreadable, or malformed (e.g. unmatched quote). Operator MUST create/fix $ENV_DST AND ensure line 1 parses before retrying. NOT silently claiming 'Install complete!'."
         ;;
     1)
-        fail "validation of $ENV_DST failed (validator rc=1, see hard-fail errors above). Operator MUST replace every CHANGE_ME_*, set VELOX_ALLOWED_WORKERS / VELOX_ADMIN_TOKEN / MASTER_PUBLIC_URL / etc., then re-run. Refusing to silently claim 'Install complete!'."
+        fail "validation of $ENV_DST failed (validator rc=1, see hard-fail errors above). Operator MUST replace every CHANGE_ME_*, set VELOX_ALLOWED_WORKERS / VELOX_ADMIN_TOKEN / typed control-plane endpoints / etc., then re-run. Refusing to silently claim 'Install complete!'."
         ;;
     0)
         # PASS — fall through to ok below (no body needed; just the terminator).
