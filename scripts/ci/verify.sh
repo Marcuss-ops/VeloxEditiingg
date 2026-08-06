@@ -103,6 +103,12 @@ log "check-dsn-busy-timeout (Blocco 5 / B1 follow-up)"
 log "check-forwarding-resolver-only (Area 3 architectural invariant)"
 ./scripts/ci/check-forwarding-resolver-only.sh
 
+# ── 1.5. Operational harness self-tests ────────────────────────────────────
+# Deterministic offline wrapper test only; live remote-worker certification
+# remains an explicit operator/deploy gate and is never invoked by CI.
+log "test-certify-fleet (offline certification-runner self-test)"
+./scripts/cert/test-certify-remote-fleet.sh
+
 # ── 2. Go modules: gofmt + vet + test (-race) ──────────────────────────────
 #
 # `gofmt -w .` is destructive on purpose: when devs pull main, all files end

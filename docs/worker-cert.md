@@ -219,6 +219,32 @@ transit directory and intermediate NDJSON are removed; evidence files remain
 available for audit. Configure `RW_FLEET_RESTORE_NETWORK_CMD` and
 `RW_FLEET_WORKER_START_CMD` with the operator-owned restoration/start commands.
 
+### Make and CI integration
+
+The deterministic wrapper self-test is part of the canonical repository gate:
+
+```bash
+# Isolated offline self-test; no master, worker, SSH, Docker, or credentials.
+make test-certify-fleet
+
+# Full repository gate; includes the offline self-test above.
+make verify
+```
+
+Both CI workflows that run `make verify` therefore validate the fleet
+orchestrator without duplicating any Go unit or package tests. The live runner
+is intentionally excluded from `make verify` and CI because it needs explicit
+remote-worker credentials, environment safeguards, and operator-owned cleanup
+commands. Run it only as an operational gate:
+
+```bash
+make certify-fleet CERTIFY_FLEET_ARGS="--mode quick --workers worker-canary --serial"
+make certify-fleet CERTIFY_FLEET_ARGS="--mode full --workers worker-canary --serial"
+```
+
+The live target refuses to run without `CERTIFY_FLEET_ARGS`; destructive mode
+retains the runner's separate staging/canary and acknowledgement protections.
+
 Before the final report, the runner executes the configured
 `RW_FLEET_ORPHAN_CHECK_CMD`. It must emit JSON with non-negative
 `leases`, `jobs`, `tasks`, and `operations` counts. Any non-zero count fails

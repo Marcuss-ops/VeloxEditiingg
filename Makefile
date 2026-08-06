@@ -25,7 +25,7 @@ SHELL := /usr/bin/env bash
 EVIDENCE_ROOT_CAP9      ?= /tmp/velox-cap9-evidence
 EVIDENCE_ROOT_CAP10     ?= /tmp/velox-cap10-evidence
 
-.PHONY: verify verify-fast verify-heavy fmt fmt-check vet pilot api-docs api-docs-apply \
+.PHONY: verify verify-fast verify-heavy test-certify-fleet certify-fleet fmt fmt-check vet pilot api-docs api-docs-apply \
         jobs-smoke publishing-flow-smoke \
         e2e-grpc e2e-workload e2e-workload-mtls e2e-master-worker \
         enable-branch-protection disable-branch-protection inspect-branch-protection \
@@ -53,6 +53,8 @@ help:
 	@echo "  make e2e-grpc                     -- PR 3 gRPC control-plane E2E matrix (6 cases, ~90s)"
 	@echo "  make e2e-workload                 -- PR 5 full workload E2E (Hello → artifact, ~3-5 min)"
 	@echo "  make local-verify-mirror          -- reproduce the GitHub Actions pyramid locally"
+	@echo "  make test-certify-fleet            -- deterministic offline fleet-certification gate"
+	@echo "  make certify-fleet CERTIFY_FLEET_ARGS=\"...\" -- live operator fleet certification"
 	@echo ""
 	@echo "  Phase 0 (branch protection, required checks):"
 	@echo "  make enable-branch-protection     -- apply the four required checks on \`main\` (CI gate)"
@@ -201,6 +203,18 @@ publishing-flow-smoke:
 
 verify:        ## Architecture + Go (-race) + cmake + docker (full suite)
 	./scripts/ci/verify.sh
+
+test-certify-fleet:  ## Deterministic offline certification-runner self-test (CI-safe)
+	@bash scripts/cert/test-certify-remote-fleet.sh
+
+# Live operator gate. Keep this separate from `make verify`: it requires
+# configured remote workers and must never run implicitly in CI.
+certify-fleet:  ## Live remote fleet certification (pass args via CERTIFY_FLEET_ARGS)
+	@if [ -z "$(strip $(CERTIFY_FLEET_ARGS))" ]; then \
+	  echo "CERTIFY_FLEET_ARGS is required (for example: --mode quick --workers worker-01 --serial)" >&2; \
+	  exit 2; \
+	fi
+	@bash scripts/cert/certify-remote-fleet.sh $(CERTIFY_FLEET_ARGS)
 
 verify-fast:   ## Architecture + Go (-race) only; skip cmake + docker
 	SKIP_HEAVY=1 ./scripts/ci/verify.sh
