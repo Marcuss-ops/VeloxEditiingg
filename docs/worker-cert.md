@@ -170,6 +170,48 @@ RW_JOB_EXPECTED_SUBMIT_STATUS=422 \\
 jq -e '.overall == "PASS" and .job_id == null' invalid-job.json
 ```
 
+## Fleet certification runner
+
+Use `scripts/cert/certify-remote-fleet.sh` to apply the existing single-worker
+certification contract to an explicit worker list. The runner is serial by
+default (and `--serial` documents the contract), isolates evidence per worker,
+and writes an aggregate `fleet-report.json`, `report.json`,
+`fleet-report.junit.xml`, and `commands.log` under the fleet artifact
+ directory.
+
+```bash
+# Fast post-deploy certification
+bash scripts/cert/certify-remote-fleet.sh \
+  --mode quick --workers worker-01,worker-02 --serial
+
+# Release promotion gate
+bash scripts/cert/certify-remote-fleet.sh \
+  --mode full --workers worker-canary --serial
+```
+
+Mode composition:
+
+- `quick`: runs `--worker-json` for every worker;
+- `full`: runs `--worker-json`, `--lifecycle-json`, `--update-json`, and
+  `--job-json` in that order, stopping later phases for a worker after the
+  first failed prerequisite;
+- `destructive`: invokes `tests/worker-cert/worker_offline_recovery.sh` for
+  each worker and must never be used against production.
+
+Destructive mode is fail-closed. It requires `VELOX_CERT_ENV` to be one of
+`staging`, `canary`, `development`, `test`, or `local`, requires
+`VELOX_CERT_ALLOW_DESTRUCTIVE=1`, the exact acknowledgement
+`VELOX_CERT_DESTRUCTIVE_ACK=I_UNDERSTAND_DESTRUCTIVE_CERT`,
+`RW_WORKER_CRASH_CMD`, and `RW_JOB_DESTINATION_ID`. Production-like environment
+names, `VELOX_PRODUCTION=1`, and production-like master URLs are rejected even
+when the opt-in variables are present. The wrapper never prints or writes
+credential values.
+
+Each worker gets a directory named by its validated worker ID. The aggregate
+fleet report is `PASS` only when every requested worker passes; failures are
+recorded while the remaining workers continue. Duplicate or malformed worker
+IDs are rejected before any worker is invoked.
+
 ## Machine-readable run evidence
 
 Every CLI certification mode (`--network-json`, `--worker-json`,
