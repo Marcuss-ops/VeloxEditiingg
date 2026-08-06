@@ -162,6 +162,8 @@ rw_load_config() {
   RW_HEARTBEAT_INTERVAL_S="${RW_HEARTBEAT_INTERVAL_S:-${VELOX_HEARTBEAT_INTERVAL_S:-10}}"
   RW_HEARTBEAT_MAX_AGE_S="${RW_HEARTBEAT_MAX_AGE_S:-${VELOX_HEARTBEAT_MAX_AGE_S:-30}}"
   RW_WORKER_RESTART_CMD="${RW_WORKER_RESTART_CMD:-${VELOX_WORKER_RESTART_CMD:-sudo systemctl restart velox-worker.service}}"
+  RW_OPERATION_TIMEOUT_S="${RW_OPERATION_TIMEOUT_S:-${VELOX_OPERATION_TIMEOUT_S:-600}}"
+  RW_OPERATION_POLL_INTERVAL_S="${RW_OPERATION_POLL_INTERVAL_S:-${VELOX_OPERATION_POLL_INTERVAL_S:-2}}"
 
   [[ -n "$MASTER_URL" ]] || rw_die "MASTER_URL or VELOX_MASTER_URL is required" || return 1
   rw_validate_url "$MASTER_URL" || return 1
@@ -182,7 +184,7 @@ rw_load_config() {
   rw_validate_restart_command "$RW_WORKER_RESTART_CMD" || return 1
   rw_validate_port MASTER_REST_PORT "$MASTER_REST_PORT" || return 1
   rw_validate_port MASTER_GRPC_PORT "$MASTER_GRPC_PORT" || return 1
-  for numeric in CERT_POLL_TIMEOUT_S RW_NETWORK_TIMEOUT_S RW_SSH_CONNECT_TIMEOUT_S RW_CONNECT_TIMEOUT_S RW_REST_REQUEST_TIMEOUT_S RW_REST_ATTEMPTS RW_REST_INTERVAL_S RW_GRPC_TIMEOUT_S RW_DNS_ATTEMPTS RW_WORKER_HTTP_TIMEOUT_S RW_WORKER_RESTART_TIMEOUT_S RW_WORKER_RECONNECT_TIMEOUT_S RW_WORKER_POLL_INTERVAL_S RW_WORKER_RESTARTS RW_HEARTBEAT_SAMPLES RW_HEARTBEAT_INTERVAL_S RW_HEARTBEAT_MAX_AGE_S; do
+  for numeric in CERT_POLL_TIMEOUT_S RW_NETWORK_TIMEOUT_S RW_SSH_CONNECT_TIMEOUT_S RW_CONNECT_TIMEOUT_S RW_REST_REQUEST_TIMEOUT_S RW_REST_ATTEMPTS RW_REST_INTERVAL_S RW_GRPC_TIMEOUT_S RW_DNS_ATTEMPTS RW_WORKER_HTTP_TIMEOUT_S RW_WORKER_RESTART_TIMEOUT_S RW_WORKER_RECONNECT_TIMEOUT_S RW_WORKER_POLL_INTERVAL_S RW_WORKER_RESTARTS RW_HEARTBEAT_SAMPLES RW_HEARTBEAT_INTERVAL_S RW_HEARTBEAT_MAX_AGE_S RW_OPERATION_TIMEOUT_S RW_OPERATION_POLL_INTERVAL_S; do
     [[ "${!numeric}" =~ ^[1-9][0-9]*$ ]] || rw_die "${numeric} must be a positive integer" || return 1
   done
 
@@ -214,7 +216,7 @@ rw_load_config() {
   export RW_REST_REQUEST_TIMEOUT_S RW_REST_ATTEMPTS RW_REST_INTERVAL_S RW_GRPC_TIMEOUT_S RW_DNS_ATTEMPTS
   export RW_WORKER_HTTP_TIMEOUT_S RW_WORKER_RESTART_TIMEOUT_S RW_WORKER_RECONNECT_TIMEOUT_S
   export RW_WORKER_POLL_INTERVAL_S RW_WORKER_RESTARTS RW_HEARTBEAT_SAMPLES RW_HEARTBEAT_INTERVAL_S RW_HEARTBEAT_MAX_AGE_S
-  export RW_WORKER_RESTART_CMD
+  export RW_WORKER_RESTART_CMD RW_OPERATION_TIMEOUT_S RW_OPERATION_POLL_INTERVAL_S
 }
 
 rw_curl_config() {
@@ -781,6 +783,286 @@ rw_worker_checks() {
   [[ "$overall" == "PASS" ]]
 }
 
+rw_admin_request() {
+  local method="$1" path="$2" body="${3:-}" cfg response_file status_file rc
+  cfg="$(mktemp "${TMPDIR:-/tmp}/velox-admin-curl.XXXXXX")" || return 1
+  response_file="$(mktemp "${TMPDIR:-/tmp}/velox-admin-response.XXXXXX")" || { rm -f -- "$cfg"; return 1; }
+  status_file="$(mktemp "${TMPDIR:-/tmp}/velox-admin-status.XXXXXX")" || { rm -f -- "$cfg" "$response_file"; return 1; }
+  rw_curl_config "$cfg" || { rm -f -- "$cfg" "$response_file" "$status_file"; return 1; }
+  if [[ -n "$body" ]]; then
+    curl --silent --show-error --connect-timeout "$RW_CONNECT_TIMEOUT_S" --max-time "$RW_WORKER_HTTP_TIMEOUT_S" \
+      --request "$method" --data-raw "$body" --config "$cfg" \
+      --output "$response_file" --write-out '%{http_code}' \
+      "${MASTER_URL}${path}" >"$status_file"
+    rc=$?
+  else
+    curl --silent --show-error --connect-timeout "$RW_CONNECT_TIMEOUT_S" --max-time "$RW_WORKER_HTTP_TIMEOUT_S" \
+      --request "$method" --config "$cfg" --output "$response_file" \
+      --write-out '%{http_code}' "${MASTER_URL}${path}" >"$status_file"
+    rc=$?
+  fi
+  RW_LAST_HTTP_STATUS="$(cat "$status_file" 2>/dev/null || true)"
+  RW_LAST_BODY="$(cat "$response_file" 2>/dev/null || true)"
+  RW_LAST_CURL_RC="$rc"
+  rm -f -- "$cfg" "$response_file" "$status_file"
+  return "$rc"
+}
+
+rw_lifecycle_record() {
+  local id="$1" name="$2" status="$3" diagnostic="$4" elapsed_ms="$5"
+  RW_LIFECYCLE_RESULTS+=("$(jq -cn \
+    --arg id "$id" --arg name "$name" --arg status "$status" \
+    --arg diagnostic "$diagnostic" --argjson elapsed_ms "$elapsed_ms" \
+    '{id:$id,name:$name,status:$status,elapsed_ms:$elapsed_ms,diagnostic:$diagnostic}')")
+}
+
+rw_lifecycle_worker_state() {
+  local body="$1" state health scheduling
+  state="$(jq -r '.status // .connection_status // empty' <<<"$body" 2>/dev/null || true)"
+  health="$(jq -r '.health // .health_state // empty' <<<"$body" 2>/dev/null || true)"
+  scheduling="$(jq -r '.scheduling_state // empty' <<<"$body" 2>/dev/null || true)"
+  printf '%s|%s|%s' "$state" "$health" "$scheduling"
+}
+
+rw_lifecycle_operation_matches() {
+  local body="$1" expected_id="$2" expected_op="$3"
+  jq -e --arg id "$expected_id" --arg worker "$WORKER_ID" --arg op "$expected_op" \
+    '.operation_id == $id and .worker_id == $worker and .op == $op' \
+    <<<"$body" >/dev/null 2>&1
+}
+
+rw_lifecycle_poll_operation() {
+  local operation_id="$1" deadline status body
+  deadline=$(( $(date +%s) + RW_OPERATION_TIMEOUT_S ))
+  RW_LIFECYCLE_POLL_ERROR=""
+  while (( $(date +%s) < deadline )); do
+    if ! rw_admin_request GET "/api/v1/admin/operations/${operation_id}"; then
+      RW_LIFECYCLE_POLL_ERROR="operation GET transport failed (rc=${RW_LAST_CURL_RC})"
+      return 1
+    fi
+    if [[ "$RW_LAST_HTTP_STATUS" != "200" ]]; then
+      RW_LIFECYCLE_POLL_ERROR="operation GET returned HTTP ${RW_LAST_HTTP_STATUS}"
+      return 1
+    fi
+    body="$RW_LAST_BODY"
+    status="$(jq -r '.status // empty' <<<"$body" 2>/dev/null || true)"
+    case "$status" in
+      QUEUED|RUNNING)
+        sleep "$RW_OPERATION_POLL_INTERVAL_S"
+        ;;
+      SUCCEEDED)
+        RW_LIFECYCLE_POLL_BODY="$body"
+        return 0
+        ;;
+      FAILED|CANCELLED|ROLLBACK|ROLLED_BACK)
+        RW_LIFECYCLE_POLL_ERROR="operation reached terminal status ${status}: $(jq -r '.error_message // .error // empty' <<<"$body" 2>/dev/null || true)"
+        return 1
+        ;;
+      *)
+        RW_LIFECYCLE_POLL_ERROR="operation returned unexpected status: ${status:-<empty>}"
+        return 1
+        ;;
+    esac
+  done
+  RW_LIFECYCLE_POLL_ERROR="operation polling timed out after ${RW_OPERATION_TIMEOUT_S}s"
+  return 1
+}
+
+rw_lifecycle_checks() {
+  local started finished elapsed body operation_id duplicate_body state health scheduling
+  local diagnostic overall="PASS" health_body health_report smoke_passed smoke_value
+  local resume_queued_at resume_queued_epoch resume_started_at resume_finished_at
+  local resume_started_epoch resume_finished_epoch smoke_collected_at smoke_collected_epoch
+  local -a RW_LIFECYCLE_RESULTS=()
+
+  for bin in jq curl; do
+    command -v "$bin" >/dev/null 2>&1 || {
+      rw_lifecycle_record W00 prerequisites FAIL "missing local prerequisite: ${bin}" 0
+      overall="FAIL"
+    }
+  done
+  if [[ "$overall" != "PASS" ]]; then
+    jq -n --arg worker_id "${WORKER_ID:-}" --arg overall "$overall" \
+      --argjson checks "$(printf '%s\n' "${RW_LIFECYCLE_RESULTS[@]}" | jq -s '.')" \
+      '{schema:"velox.remote_worker.lifecycle.v1",worker_id:$worker_id,checks:$checks,overall:$overall,generated_at:(now|todateiso8601)}'
+    return 2
+  fi
+
+  # W04 — drain immediately excludes the worker from placement and a
+  # second drain is rejected with HTTP 409 without another operation.
+  started="$(rw_now_s)"
+  diagnostic=""
+  if ! rw_admin_request POST "/api/v1/admin/workers/${WORKER_ID}/drain" \
+    "$(jq -nc --arg reason "remote worker W04 drain certification" '{reason:$reason}')"; then
+    diagnostic="drain POST transport failed (rc=${RW_LAST_CURL_RC})"
+  elif [[ "$RW_LAST_HTTP_STATUS" != "202" ]]; then
+    diagnostic="drain POST returned HTTP ${RW_LAST_HTTP_STATUS}: ${RW_LAST_BODY}"
+  else
+    operation_id="$(jq -r '.operation_id // empty' <<<"$RW_LAST_BODY" 2>/dev/null || true)"
+    [[ -n "$operation_id" ]] || diagnostic="drain response omitted operation_id"
+    [[ "$(jq -r '.op // empty' <<<"$RW_LAST_BODY" 2>/dev/null || true)" == "drain" ]] || diagnostic="drain response op is not drain"
+    [[ "$(jq -r '.status // empty' <<<"$RW_LAST_BODY" 2>/dev/null || true)" == "QUEUED" ]] || diagnostic="drain response status is not QUEUED"
+  fi
+  if [[ -z "$diagnostic" ]]; then
+    body="$(rw_worker_admin_get "/api/v1/admin/workers/${WORKER_ID}" 2>/dev/null || true)"
+    state="$(rw_lifecycle_worker_state "$body")"
+    [[ "${state%%|*}" == "CONNECTED" ]] || diagnostic="worker connection state after drain is ${state} (expected CONNECTED with drain exclusion)"
+    [[ "$(jq -r '.drain // false' <<<"$body" 2>/dev/null || true)" == "true" ]] || diagnostic="admin worker drain flag is not true after drain"
+    scheduling="${state##*|}"
+    [[ "$scheduling" == "DRAINING" ]] || diagnostic="worker scheduling state after drain is ${scheduling:-<empty>} (expected DRAINING)"
+  fi
+  if [[ -z "$diagnostic" ]]; then
+    if ! rw_lifecycle_poll_operation "$operation_id"; then
+      diagnostic="${RW_LIFECYCLE_POLL_ERROR}"
+    fi
+  fi
+  if [[ -z "$diagnostic" ]]; then
+    if ! rw_lifecycle_operation_matches "$RW_LIFECYCLE_POLL_BODY" "$operation_id" drain; then
+      diagnostic="drain operation identity mismatch in terminal response"
+    fi
+  fi
+  if [[ -z "$diagnostic" ]]; then
+    if ! rw_admin_request POST "/api/v1/admin/workers/${WORKER_ID}/drain" \
+      '{"reason":"duplicate W04 drain"}'; then
+      diagnostic="duplicate drain transport failed (rc=${RW_LAST_CURL_RC})"
+    elif [[ "$RW_LAST_HTTP_STATUS" != "409" ]]; then
+      diagnostic="duplicate drain returned HTTP ${RW_LAST_HTTP_STATUS}, expected 409"
+    elif [[ "$(jq -r '.error // empty' <<<"$RW_LAST_BODY" 2>/dev/null || true)" != *DRAINING* ]]; then
+      diagnostic="duplicate drain 409 did not explain DRAINING: ${RW_LAST_BODY}"
+    elif [[ -n "$(jq -r '.operation_id // empty' <<<"$RW_LAST_BODY" 2>/dev/null || true)" ]]; then
+      diagnostic="duplicate drain 409 unexpectedly returned operation_id"
+    fi
+  fi
+  finished="$(rw_now_s)"; elapsed=$(( (finished - started) * 1000 ))
+  if [[ -n "$diagnostic" ]]; then
+    rw_lifecycle_record W04 drain_placement FAIL "$diagnostic" "$elapsed"
+    overall="FAIL"
+  else
+    rw_lifecycle_record W04 drain_placement PASS "HTTP 202 + operation SUCCEEDED; CONNECTED with drain=true/scheduling=DRAINING; duplicate drain HTTP 409" "$elapsed"
+  fi
+
+  # W05 — resume is asynchronous and the worker may become HEALTHY only
+  # after a fresh Level D smoke is green. Health D is checked explicitly.
+  started="$(rw_now_s)"
+  diagnostic=""
+  if ! rw_admin_request POST "/api/v1/admin/workers/${WORKER_ID}/resume" \
+    "$(jq -nc --arg reason "remote worker W05 resume certification" '{reason:$reason}')"; then
+    diagnostic="resume POST transport failed (rc=${RW_LAST_CURL_RC})"
+  elif [[ "$RW_LAST_HTTP_STATUS" != "202" ]]; then
+    diagnostic="resume POST returned HTTP ${RW_LAST_HTTP_STATUS}: ${RW_LAST_BODY}"
+  else
+    operation_id="$(jq -r '.operation_id // empty' <<<"$RW_LAST_BODY" 2>/dev/null || true)"
+    resume_queued_at="$(jq -r '.queued_at // empty' <<<"$RW_LAST_BODY" 2>/dev/null || true)"
+    [[ -n "$operation_id" ]] || diagnostic="resume response omitted operation_id"
+    [[ -n "$resume_queued_at" ]] || diagnostic="resume response omitted queued_at"
+    resume_queued_epoch="$(rw_worker_heartbeat_epoch "$resume_queued_at" 2>/dev/null || true)"
+    [[ -n "$resume_queued_epoch" ]] || diagnostic="resume queued_at is not valid RFC3339"
+    [[ "$(jq -r '.op // empty' <<<"$RW_LAST_BODY" 2>/dev/null || true)" == "resume" ]] || diagnostic="resume response op is not resume"
+    [[ "$(jq -r '.status // empty' <<<"$RW_LAST_BODY" 2>/dev/null || true)" == "QUEUED" ]] || diagnostic="resume response status is not QUEUED"
+  fi
+  if [[ -z "$diagnostic" ]]; then
+    if ! rw_lifecycle_poll_operation "$operation_id"; then
+      diagnostic="${RW_LIFECYCLE_POLL_ERROR}"
+    fi
+  fi
+  if [[ -z "$diagnostic" ]]; then
+    if ! rw_lifecycle_operation_matches "$RW_LIFECYCLE_POLL_BODY" "$operation_id" resume; then
+      diagnostic="resume operation identity mismatch in terminal response"
+    fi
+  fi
+  # Require the successful resume operation's fresh Level D gate and then
+  # observe a healthy Level D report after the operation completed.
+  if [[ -z "$diagnostic" ]]; then
+    # A successful resume is the authoritative correlation point: the real
+    # ResumeExecutor runs a fresh Level D smoke synchronously inside the
+    # operation and clears drain only after that smoke succeeds. Require the
+    # terminal operation timestamps so a fake/partial 202 cannot be mistaken
+    # for a completed smoke gate.
+    resume_started_at="$(jq -r '.started_at // empty' <<<"$RW_LIFECYCLE_POLL_BODY" 2>/dev/null || true)"
+    resume_finished_at="$(jq -r '.finished_at // empty' <<<"$RW_LIFECYCLE_POLL_BODY" 2>/dev/null || true)"
+    resume_started_epoch="$(rw_worker_heartbeat_epoch "$resume_started_at" 2>/dev/null || true)"
+    resume_finished_epoch="$(rw_worker_heartbeat_epoch "$resume_finished_at" 2>/dev/null || true)"
+    [[ -n "$resume_started_epoch" ]] || diagnostic="resume operation SUCCEEDED without valid started_at"
+    [[ -n "$resume_finished_epoch" ]] || diagnostic="resume operation SUCCEEDED without valid finished_at"
+    if [[ -z "$diagnostic" ]]; then
+      (( resume_started_epoch >= resume_queued_epoch )) || diagnostic="resume operation started before it was queued (started_at=${resume_started_at}, queued_at=${resume_queued_at})"
+      (( resume_finished_epoch >= resume_started_epoch )) || diagnostic="resume operation finished before it started (finished_at=${resume_finished_at}, started_at=${resume_started_at})"
+    fi
+  fi
+  if [[ -z "$diagnostic" ]]; then
+    if ! rw_admin_request GET "/api/v1/admin/workers/${WORKER_ID}/health?level=D"; then
+      diagnostic="Level D health GET transport failed (rc=${RW_LAST_CURL_RC})"
+    elif [[ "$RW_LAST_HTTP_STATUS" != "200" ]]; then
+      diagnostic="Level D health GET returned HTTP ${RW_LAST_HTTP_STATUS}"
+    else
+      health_body="$RW_LAST_BODY"
+      [[ "$(jq -r '.level // empty' <<<"$health_body" 2>/dev/null || true)" == "D" ]] || diagnostic="health report level is not D"
+      [[ "$(jq -r '.healthy // false' <<<"$health_body" 2>/dev/null || true)" == "true" ]] || diagnostic="Level D smoke report is not healthy: ${health_body}"
+      smoke_passed="$(jq -r '.checks.smoke_ok.passed // false' <<<"$health_body" 2>/dev/null || true)"
+      smoke_value="$(jq -r '.checks.smoke_ok.value // empty' <<<"$health_body" 2>/dev/null || true)"
+      [[ "$smoke_passed" == "true" && -n "$smoke_value" ]] || diagnostic="Level D smoke gate lacks passed smoke_ok/artifact evidence"
+      smoke_collected_at="$(jq -r '.collected_at // empty' <<<"$health_body" 2>/dev/null || true)"
+      smoke_collected_epoch="$(rw_worker_heartbeat_epoch "$smoke_collected_at" 2>/dev/null || true)"
+      # `collected_at` is the health-probe timestamp, not the smoke_runs
+      # timestamp. Do not present it as direct smoke-run evidence. The
+      # authoritative freshness proof is the successful resume operation:
+      # ResumeExecutor runs a new smoke within that operation and only then
+      # clears drain. The D probe is sampled after operation completion and
+      # must still be healthy with a non-empty artifact value.
+      [[ -n "$smoke_collected_epoch" && -n "$resume_finished_epoch" && "$smoke_collected_epoch" -ge "$resume_finished_epoch" ]] || diagnostic="Level D probe was not collected after the successful resume operation (collected_at=${smoke_collected_at:-<empty>}, finished_at=${resume_finished_at:-<empty>})"
+    fi
+  fi
+  if [[ -z "$diagnostic" ]]; then
+    body="$(rw_worker_admin_get "/api/v1/admin/workers/${WORKER_ID}" 2>/dev/null || true)"
+    state="$(rw_lifecycle_worker_state "$body")"
+    [[ "${state%%|*}" == "CONNECTED" ]] || diagnostic="worker connection state after resume is ${state}"
+    health="${state#*|}"; health="${health%%|*}"
+    [[ "$health" == "HEALTHY" ]] || diagnostic="worker health after resume is ${health:-<empty>} (expected HEALTHY)"
+    [[ "$(jq -r '.drain // false' <<<"$body" 2>/dev/null || true)" == "false" ]] || diagnostic="worker drain flag remains true after successful resume"
+    scheduling="${state##*|}"
+    [[ "$scheduling" != "DRAINING" && "$scheduling" != "QUARANTINED" ]] || diagnostic="worker scheduling state remains excluded: ${scheduling}"
+  fi
+  if [[ -z "$diagnostic" ]]; then
+    if ! rw_admin_request POST "/api/v1/admin/workers/${WORKER_ID}/resume" \
+      '{"reason":"duplicate W05 resume"}'; then
+      diagnostic="duplicate resume transport failed (rc=${RW_LAST_CURL_RC})"
+    elif [[ "$RW_LAST_HTTP_STATUS" != "409" ]]; then
+      diagnostic="duplicate resume returned HTTP ${RW_LAST_HTTP_STATUS}, expected 409"
+    elif [[ "$(jq -r '.error // empty' <<<"$RW_LAST_BODY" 2>/dev/null || true)" != *HEALTHY* ]]; then
+      diagnostic="duplicate resume 409 did not explain HEALTHY no-op: ${RW_LAST_BODY}"
+    elif [[ -n "$(jq -r '.operation_id // empty' <<<"$RW_LAST_BODY" 2>/dev/null || true)" ]]; then
+      diagnostic="duplicate resume 409 unexpectedly returned operation_id"
+    fi
+  fi
+  finished="$(rw_now_s)"; elapsed=$(( (finished - started) * 1000 ))
+  if [[ -n "$diagnostic" ]]; then
+    rw_lifecycle_record W05 resume_smoke_gate FAIL "$diagnostic" "$elapsed"
+    overall="FAIL"
+  else
+    rw_lifecycle_record W05 resume_smoke_gate PASS "HTTP 202 + operation SUCCEEDED with started_at/finished_at; fresh Level D smoke gate PASS; worker CONNECTED/HEALTHY; duplicate resume HTTP 409" "$elapsed"
+  fi
+
+  jq -n --arg schema 'velox.remote_worker.lifecycle.v1' \
+    --arg worker_id "$WORKER_ID" --arg overall "$overall" \
+    --argjson checks "$(printf '%s\n' "${RW_LIFECYCLE_RESULTS[@]}" | jq -s '.')" \
+    --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{schema:$schema,worker_id:$worker_id,checks:$checks,overall:$overall,generated_at:$generated_at}'
+  [[ "$overall" == "PASS" ]]
+}
+
+rw_lifecycle_config_failure() {
+  local diagnostic="$1"
+  if command -v jq >/dev/null 2>&1; then
+    jq -n \
+      --arg worker_id "${WORKER_ID:-${VELOX_WORKER_ID:-}}" \
+      --arg diagnostic "$diagnostic" \
+      --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{schema:"velox.remote_worker.lifecycle.v1",worker_id:$worker_id,checks:[{id:"W00",name:"configuration",status:"FAIL",elapsed_ms:0,diagnostic:$diagnostic}],overall:"FAIL",generated_at:$generated_at}'
+  else
+    printf '%s\n' '{"schema":"velox.remote_worker.lifecycle.v1","checks":[{"id":"W00","name":"configuration","status":"FAIL","elapsed_ms":0,"diagnostic":"configuration validation failed"}],"overall":"FAIL"}'
+  fi
+}
+
 rw_worker_config_failure() {
   local diagnostic="$1"
   if command -v jq >/dev/null 2>&1; then
@@ -819,11 +1101,27 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
       fi
       rw_worker_checks
       ;;
+    --lifecycle|--lifecycle-json)
+      shift
+      [[ "$#" -eq 0 ]] || { rw_die "lifecycle mode does not accept positional arguments"; exit 2; }
+      config_error_file="$(mktemp "${TMPDIR:-/tmp}/velox-worker-config-error.XXXXXX")"
+      if rw_load_config 2>"$config_error_file"; then
+        rm -f -- "$config_error_file"
+      else
+        config_diagnostic="$(cat "$config_error_file")"
+        rm -f -- "$config_error_file"
+        config_diagnostic="${config_diagnostic//$'\n'/; }"
+        rw_lifecycle_config_failure "${config_diagnostic:-configuration validation failed}"
+        exit 2
+      fi
+      rw_lifecycle_checks
+      ;;
     --help|-h)
       printf '%s\n' 'Usage: remote-worker-cert-config.sh [--network-json]' \
         'Default mode runs local preflight only.' \
         '--network-json runs R01-R04 and emits one JSON document on stdout.' \
-        '--worker-json runs W01-W03 (restart, identity, heartbeat) and emits JSON.'
+        '--worker-json runs W01-W03 (restart, identity, heartbeat) and emits JSON.' \
+        '--lifecycle-json runs W04-W05 (drain, placement, resume, Level D smoke) and emits JSON.'
       ;;
     '')
       rw_load_config
