@@ -178,12 +178,12 @@ type BackendWorkerExec interface {
 // Production wires integrations/drive.Service.UploadFile; tests
 // wire a stub that returns a canned DriveFileID.
 //
-// expectedBytes is the size enforced on the upload response —
-// Drive returns a 200 with size mismatch when the upload silently
-// truncated the file (network glitch in the middle); the
-// verifier catches the divergence.
+// expectedBytes and expectedSHA256 are the content-addressed metadata
+// verified before an adapter accepts the upload. Concrete adapters must
+// validate the exact bytes they hand to the remote/local sink; this keeps
+// an upload from succeeding with a truncated or substituted file.
 type BackendDriveUploader interface {
-	UploadArtifact(ctx context.Context, runID, srcPath string, expectedBytes int64) (driveFileID string, err error)
+	UploadArtifact(ctx context.Context, runID, srcPath string, expectedBytes int64, expectedSHA256 string) (driveFileID string, err error)
 }
 
 // BackendAssetResolver maps an AssetID to its pickup URL +
@@ -246,6 +246,7 @@ type LevelDSmokeBackend struct {
 	Asset     BackendAssetResolver
 	Lease     BackendLeaseStore
 	SmokeRuns BackendSmokeRuns
+	Verifier  BackendArtifactVerifier
 	Now       NowFunc
 }
 

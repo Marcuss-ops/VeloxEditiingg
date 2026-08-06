@@ -103,7 +103,7 @@ func (e *LevelDSmokeExecutor) Execute(ctx context.Context, op *store.Operation) 
 	// cannot run.
 	if e.backend.Worker == nil || e.backend.Drive == nil ||
 		e.backend.Lease == nil || e.backend.SmokeRuns == nil ||
-		e.backend.Asset == nil {
+		e.backend.Asset == nil || e.backend.Verifier == nil {
 		return fmt.Errorf("%w: required backend missing (worker/drive/lease/asset/smokeruns)", ErrSmokeRunnerNotWired)
 	}
 	// ── Phase 0: parse payload ───────────────────────────────────
@@ -173,12 +173,11 @@ func (e *LevelDSmokeExecutor) Execute(ctx context.Context, op *store.Operation) 
 		return e.runCleanupAndFail(ctx, runID, op.WorkerID, runStart,
 			fmt.Sprintf("%s: %v (after %s)", ErrAssetDownloadFail.Error(), err, "lease_acquired"))
 	}
-	// Cross-check: if the resolver promised N bytes, surface a
-	// warning when the worker's ffmpeg pass would have detected
-	// the truncation; the actual size verification is hooked at
-	// the Drive upload phase (Phase 6) since the master pulls
-	// from the worker via the ffmpeg output stream.
-	_ = expectedBytes // captured below by Phase 6 expectedBytes
+	// The resolver's expectedBytes describes the downloaded input asset;
+	// the rendered output has independent size semantics. The output's
+	// authoritative byte count is verified by the artifact verifier and
+	// uploader at the upload boundary.
+	_ = expectedBytes
 	// ── Phase 5: ffmpeg render via worker exec ───────────────────
 	outputPath := fmt.Sprintf("/var/lib/velox-worker/smoke/%s.mp4", runID)
 	renderCtx, cancel := context.WithTimeout(ctx, timeoutFFmpegRender)
@@ -195,6 +194,16 @@ func (e *LevelDSmokeExecutor) Execute(ctx context.Context, op *store.Operation) 
 		return e.runCleanupAndFail(ctx, runID, op.WorkerID, runStart,
 			fmt.Sprintf("%s: ffmpeg exited 0 but artifact is empty (after %s)", ErrArtifactMissing.Error(), "render"))
 	}
+	// ── Phase 5b: verify artifact bytes/container/hash -------------
+	verifyCtx, cancel := context.WithTimeout(ctx, timeoutFFmpegRender)
+	artifactSHA256, err := e.backend.Verifier.VerifyArtifact(verifyCtx, artifactPathOr(outputPathReturned, outputPath), artifactBytes)
+	cancel()
+	if err != nil {
+		return e.runCleanupAndFail(ctx, runID, op.WorkerID, runStart,
+			fmt.Sprintf("%s: %v (after %s)", ErrArtifactMissing.Error(), err, "artifact_verify"))
+	}
+	log.Printf("[SMOKE] worker=%s run=%s artifact_bytes=%d sha256=%s VERIFIED",
+		op.WorkerID, runID, artifactBytes, artifactSHA256)
 	// ── Phase 6: upload artifact to Drive ────────────────────────
 	// Use the path returned by RunFFmpegRender (may differ from
 	// outputPath when the adapter fetches the artifact locally, e.g.
@@ -204,7 +213,7 @@ func (e *LevelDSmokeExecutor) Execute(ctx context.Context, op *store.Operation) 
 		artifactPath = outputPath
 	}
 	upCtx, cancel := context.WithTimeout(ctx, timeoutDriveUpload)
-	driveFileID, err := e.backend.Drive.UploadArtifact(upCtx, runID, artifactPath, artifactBytes)
+	driveFileID, err := e.backend.Drive.UploadArtifact(upCtx, runID, artifactPath, artifactBytes, artifactSHA256)
 	cancel()
 	if err != nil {
 		return e.runCleanupAndFail(ctx, runID, op.WorkerID, runStart,
@@ -212,7 +221,7 @@ func (e *LevelDSmokeExecutor) Execute(ctx context.Context, op *store.Operation) 
 	}
 	if driveFileID == "" {
 		return e.runCleanupAndFail(ctx, runID, op.WorkerID, runStart,
-			fmt.Sprintf("%s: drive uploader returned empty file_id", ErrDriveUploadFail.Error()))
+			fmt.Sprintf("%s: drive uploader returned empty file_id (sha256=%s)", ErrDriveUploadFail.Error(), artifactSHA256))
 	}
 	// ── Phase 7: mark SUCCEEDED on smoke_runs row ─────────────────
 	finishedAt := e.backend.Now()
@@ -235,6 +244,13 @@ func (e *LevelDSmokeExecutor) Execute(ctx context.Context, op *store.Operation) 
 	log.Printf("[SMOKE] worker=%s run=%s duration_ms=%d artifact_drive_id=%s SUCCEEDED",
 		op.WorkerID, runID, durationMs, driveFileID)
 	return nil
+}
+
+func artifactPathOr(returned, fallback string) string {
+	if returned != "" {
+		return returned
+	}
+	return fallback
 }
 
 // parsePayload unwraps op.Payload into the SmokePayload schema.

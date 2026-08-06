@@ -152,6 +152,7 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 		smokeBackend := fleet.LevelDSmokeBackend{
 			Lease:     fleet.NewRegistryDrainLease(m.Workers.Registry()),
 			SmokeRuns: p.SQLite,
+			Verifier:  fleet.NewFFprobeArtifactVerifier(),
 			// Worker, Drive and Asset default to nil — the executor's
 			// pre-flight check returns ErrSmokeRunnerNotWired, which is
 			// the correct production behavior until real adapters are

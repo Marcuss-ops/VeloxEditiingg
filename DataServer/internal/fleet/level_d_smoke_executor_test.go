@@ -157,7 +157,7 @@ type stubDrive struct {
 	fileID    string
 }
 
-func (s *stubDrive) UploadArtifact(_ context.Context, _, srcPath string, _ int64) (string, error) {
+func (s *stubDrive) UploadArtifact(_ context.Context, _, srcPath string, _ int64, _ string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.uploads = append(s.uploads, srcPath)
@@ -178,6 +178,20 @@ func (s *stubDrive) uploadCount() int {
 }
 
 // stubAsset returns canned URL + size.
+type stubArtifactVerifier struct {
+	verifyErr error
+	sha256    string
+	calls     int
+}
+
+func (s *stubArtifactVerifier) VerifyArtifact(_ context.Context, _ string, _ int64) (string, error) {
+	s.calls++
+	if s.verifyErr != nil {
+		return "", s.verifyErr
+	}
+	return s.sha256, nil
+}
+
 type stubAsset struct {
 	url        string
 	bytes      int64
@@ -284,6 +298,7 @@ func fullBackend(t *testing.T) (LevelDSmokeBackend, *stubLeaseStore, *stubWorker
 	lease := newStubLease()
 	worker := &stubWorker{artifactBytes: 1024 * 1024}
 	drive := &stubDrive{fileID: "drive-file-id-test"}
+	verifier := &stubArtifactVerifier{sha256: strings.Repeat("a", 64)}
 	runs := newStubRuns()
 	asset := stubAsset{url: "asset://canary/run.mp4", bytes: 1024 * 1024}
 	// stubNow returns synthetic timestamps spaced by 1ms so
@@ -302,6 +317,7 @@ func fullBackend(t *testing.T) (LevelDSmokeBackend, *stubLeaseStore, *stubWorker
 		Asset:     asset,
 		Lease:     lease,
 		SmokeRuns: runs,
+		Verifier:  verifier,
 		Now:       stubNow,
 	}
 	return b, lease, worker, drive, asset, runs

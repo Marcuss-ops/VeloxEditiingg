@@ -7,6 +7,8 @@ package fleet
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -153,15 +155,23 @@ func NewLocalFileDriveUploader() *LocalFileDriveUploader {
 
 // UploadArtifact copies srcPath to LocalDriveRoot/<runID>.mp4 and
 // returns a fake Drive file ID.
-func (d *LocalFileDriveUploader) UploadArtifact(_ context.Context, runID, srcPath string, _ int64) (string, error) {
+func (d *LocalFileDriveUploader) UploadArtifact(_ context.Context, runID, srcPath string, expectedBytes int64, expectedSHA256 string) (string, error) {
 	if err := os.MkdirAll(LocalDriveRoot, 0755); err != nil {
 		return "", fmt.Errorf("smoke: mkdir drive root: %w", err)
 	}
-	dst := filepath.Join(LocalDriveRoot, runID+".mp4")
 	src, err := os.ReadFile(srcPath)
 	if err != nil {
 		return "", fmt.Errorf("%w: read artifact: %v", ErrDriveUploadFail, err)
 	}
+	if expectedBytes > 0 && int64(len(src)) != expectedBytes {
+		return "", fmt.Errorf("%w: size=%d want=%d", ErrDriveUploadFail, len(src), expectedBytes)
+	}
+	sum := sha256.Sum256(src)
+	gotSHA256 := hex.EncodeToString(sum[:])
+	if expectedSHA256 != "" && gotSHA256 != expectedSHA256 {
+		return "", fmt.Errorf("%w: sha256=%s want=%s", ErrDriveUploadFail, gotSHA256, expectedSHA256)
+	}
+	dst := filepath.Join(LocalDriveRoot, runID+".mp4")
 	if err := os.WriteFile(dst, src, 0644); err != nil {
 		return "", fmt.Errorf("%w: write local drive: %v", ErrDriveUploadFail, err)
 	}

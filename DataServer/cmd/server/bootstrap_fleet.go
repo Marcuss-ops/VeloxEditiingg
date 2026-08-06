@@ -64,9 +64,12 @@ type driveUploaderAdapter struct {
 // The runID is used as the deliveryID for traceability in Drive properties.
 // A smoke-specific folder can be configured via VELOX_SMOKE_DRIVE_FOLDER_ID;
 // when unset the file is uploaded to the Drive root.
-func (a *driveUploaderAdapter) UploadArtifact(ctx context.Context, runID, srcPath string, expectedBytes int64) (string, error) {
+func (a *driveUploaderAdapter) UploadArtifact(ctx context.Context, runID, srcPath string, expectedBytes int64, expectedSHA256 string) (string, error) {
 	if a == nil || a.svc == nil {
 		return "", fmt.Errorf("drive uploader: service not configured")
+	}
+	if err := fleet.VerifyLocalArtifactDigest(srcPath, expectedBytes, expectedSHA256); err != nil {
+		return "", fmt.Errorf("%w: %v", fleet.ErrDriveUploadFail, err)
 	}
 	result, err := a.svc.UploadFile(ctx, srcPath, strings.TrimSpace(a.folderID), runID)
 	if err != nil {
@@ -78,13 +81,14 @@ func (a *driveUploaderAdapter) UploadArtifact(ctx context.Context, runID, srcPat
 	if result.FileID == "" {
 		return "", fmt.Errorf("%w: drive returned empty file_id", fleet.ErrDriveUploadFail)
 	}
-	// Cross-check: verify the uploaded file size matches expectedBytes
-	// when the caller provides a non-zero expected size.
-	_ = expectedBytes // Drive API does not expose size in the upload response;
-	// a follow-up step can add a files.get metadata call to verify.
-	if expectedBytes > 0 {
-		log.Printf("[SMOKE-DRIVE] uploaded %s → Drive file_id=%s (expected_bytes=%d; size verification pending files.get integration)", runID, result.FileID, expectedBytes)
+	metadata, err := a.svc.GetFileMetadata(ctx, result.FileID)
+	if err != nil {
+		return "", fmt.Errorf("%w: post-upload metadata verification: %v", fleet.ErrDriveUploadFail, err)
 	}
+	if expectedBytes > 0 && metadata.Size != expectedBytes {
+		return "", fmt.Errorf("%w: post-upload size=%d want=%d", fleet.ErrDriveUploadFail, metadata.Size, expectedBytes)
+	}
+	log.Printf("[SMOKE-DRIVE] uploaded %s → Drive file_id=%s (bytes=%d sha256=%s verified)", runID, result.FileID, expectedBytes, expectedSHA256)
 	return result.FileID, nil
 }
 
