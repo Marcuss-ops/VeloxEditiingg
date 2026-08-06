@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"velox-server/internal/credentials"
+	"velox-server/internal/publicationstate"
 	"velox-server/internal/store"
 	"velox-shared/contract/domain"
 )
@@ -69,6 +70,32 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 	} else {
 		dest.DeliveryMetadataJSON = metadata
 	}
+
+	// Idempotency preflight: a completed publication must not resolve
+	// credentials or hydrate the artifact before we discover that there is
+	// no provider work left. This is intentionally before credential_ref
+	// validation, token lease issuance, and provider dispatch (which may
+	// perform account lookup, channel binding, and signed-URL generation).
+	// The phase runner keeps its own state check as a defense in depth for
+	// callers that enter it directly.
+	publicationID := publicationIDFromMetadata(dest.DeliveryMetadataJSON)
+	if publicationID == "" {
+		resolvedID, lookupErr := r.dbStore.GetPublicationIDForArtifact(ctx, lease.ArtifactID)
+		if lookupErr != nil && !errors.Is(lookupErr, store.ErrPublicationStateNotFound) {
+			return fmt.Errorf("resolve publication state: %w", lookupErr)
+		}
+		publicationID = resolvedID
+	}
+	if publicationID != "" {
+		state, stateErr := r.dbStore.GetPublicationState(ctx, publicationID)
+		if stateErr != nil && !errors.Is(stateErr, store.ErrPublicationStateNotFound) {
+			return fmt.Errorf("read publication state: %w", stateErr)
+		}
+		if stateErr == nil && state != nil && state.State == publicationstate.Published {
+			return r.dbStore.MarkDeliverySucceeded(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, state.RemoteID, state.RemoteURL)
+		}
+	}
+
 	credentialRef, refErr := resolveCredentialReference(dest.DeliveryMetadataJSON, dest.ConfigurationJSON)
 	if refErr != nil {
 		if markErr := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "CREDENTIAL_REF_INVALID", refErr.Error()); markErr != nil {
@@ -96,10 +123,6 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 	// the short-lived credential lease have been resolved. Legacy providers
 	// intentionally continue through Deliver below and remain non-resumable.
 	if executor, ok := r.registry.ResolvePhaseExecutor(lease.Provider); ok {
-		publicationID := publicationIDFromMetadata(dest.DeliveryMetadataJSON)
-		if publicationID == "" {
-			publicationID, _ = r.dbStore.GetPublicationIDForArtifact(ctx, lease.ArtifactID)
-		}
 		if publicationID == "" {
 			err := fmt.Errorf("%w: publication_id is required for resumable delivery", ErrProviderPermanent)
 			_ = r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "PUBLICATION_ID_REQUIRED", err.Error())
