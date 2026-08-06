@@ -214,7 +214,7 @@ func NewTaskReportIngestionService(
 	if outputArtRepo == nil {
 		return nil, fmt.Errorf("ingest.NewTaskReportIngestionService: outputArtRepo is required")
 	}
-	jobTransitions, err := jobs.NewTransitionService(jobsRepo, nil)
+	jobTransitions, err := jobs.NewTransitionService(jobsRepo, jobArtifactContractReader{jobs: jobsRepo})
 	if err != nil {
 		return nil, fmt.Errorf("ingest.NewTaskReportIngestionService: job transition service: %w", err)
 	}

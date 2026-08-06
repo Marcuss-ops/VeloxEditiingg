@@ -14,6 +14,8 @@ import (
 	"velox-server/internal/store"
 )
 
+const testSHA256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+
 const phase5Schema = `
 CREATE TABLE jobs (job_id TEXT PRIMARY KEY,status TEXT,revision INTEGER,completed_at TEXT,updated_at TEXT,migrated_at TEXT,request_json TEXT NOT NULL DEFAULT '{}');
 CREATE TABLE artifacts (id TEXT PRIMARY KEY,job_id TEXT,attempt_id INTEGER,type TEXT,storage_provider TEXT,storage_key TEXT,storage_url TEXT,local_path TEXT,sha256 TEXT,size_bytes INTEGER,duration_seconds REAL,duration_ms INTEGER,mime_type TEXT,status TEXT,verified_at TEXT,created_at TEXT);
@@ -66,7 +68,7 @@ func seedPhase5Fixture(t *testing.T, db *sql.DB, f phase5Fixture) {
 	if _, err := db.Exec(`INSERT INTO artifacts (id,job_id,attempt_id,type,storage_provider,status,created_at) VALUES (?,?,?,'render','local','STAGING',?)`, f.ArtifactID, f.JobID, f.AttemptNumber, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO artifact_uploads (upload_id,artifact_id,job_id,attempt_number,worker_id,lease_id,status,created_at,expires_at,completed_at) VALUES (?,?,?,?,?,?,'FINALIZING',?,?,NULL)`, f.UploadID, f.ArtifactID, f.JobID, f.AttemptNumber, f.WorkerID, f.LeaseID, now, time.Now().Add(24*time.Hour).UTC().Format(time.RFC3339)); err != nil {
+	if _, err := db.Exec(`INSERT INTO artifact_uploads (upload_id,artifact_id,job_id,attempt_number,worker_id,lease_id,status,expected_size_bytes,expected_sha256,received_sha256,received_size_bytes,created_at,expires_at,completed_at) VALUES (?,?,?,?,?,?,'FINALIZING',?,?,?,?,?,?,NULL)`, f.UploadID, f.ArtifactID, f.JobID, f.AttemptNumber, f.WorkerID, f.LeaseID, 1024, testSHA256, testSHA256, 1024, now, time.Now().Add(24*time.Hour).UTC().Format(time.RFC3339)); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"velox-server/internal/sqliteerr"
@@ -319,54 +321,105 @@ func (r *sqliteCompletionTx) MarkCompletionTaskSucceeded(ctx context.Context, ta
 }
 
 func (r *sqliteCompletionTx) MarkCompletionJobSucceededIfTasksDone(ctx context.Context, jobID, now string) error {
-	// A completion attempt is the durable artifact contract. Such a job must
-	// already be at AWAITING_ARTIFACT; only a legacy job with no attempt_commits
-	// row may retain the direct RUNNING -> SUCCEEDED compatibility path.
-	var status string
+	// The persisted request contract is authoritative. render_only=true is
+	// the only explicit no-artifact path; every other job must already be at
+	// AWAITING_ARTIFACT and must prove at least one durable READY artifact.
+	var status, requestJSON string
 	if err := r.tx.QueryRowContext(ctx,
-		`SELECT COALESCE(status,'') FROM jobs WHERE job_id=?`, jobID).
-		Scan(&status); err != nil {
+		`SELECT COALESCE(status,''), COALESCE(request_json,'{}') FROM jobs WHERE job_id=?`, jobID).
+		Scan(&status, &requestJSON); err != nil {
 		return fmt.Errorf("store: read completion job contract: %w", err)
 	}
-	var hasAttempt bool
-	if err := r.tx.QueryRowContext(ctx,
-		`SELECT EXISTS (SELECT 1 FROM attempt_commits WHERE job_id=?)`, jobID).
-		Scan(&hasAttempt); err != nil {
-		return fmt.Errorf("store: read completion attempt contract: %w", err)
-	}
-	if hasAttempt && status == "SUCCEEDED" {
-		// Retries after a committed completion are idempotent. The
-		// artifact contract was already satisfied by the original writer;
-		// do not turn a harmless replay into a transition conflict.
+	if status == "SUCCEEDED" {
+		// Completion retries are idempotent after the original terminal
+		// writer committed. Do not turn a harmless replay into a conflict.
 		return nil
 	}
-	if hasAttempt && status != "AWAITING_ARTIFACT" {
+	if strings.TrimSpace(requestJSON) == "" {
+		requestJSON = `{}`
+	}
+	var contract map[string]interface{}
+	if err := json.Unmarshal([]byte(requestJSON), &contract); err != nil {
+		return fmt.Errorf("%w: invalid request_json for job %s: %v", ErrCompletionTransitionConflict, jobID, err)
+	}
+	renderOnly, _ := contract["render_only"].(bool)
+	artifactContract := !renderOnly
+	if artifactContract && status != "AWAITING_ARTIFACT" {
 		return fmt.Errorf("%w: completion job %s must be AWAITING_ARTIFACT before SUCCEEDED (status=%s)", ErrCompletionTransitionConflict, jobID, status)
 	}
-	res, err := r.tx.ExecContext(ctx, `
+	if !artifactContract && status != "RUNNING" && status != "AWAITING_ARTIFACT" {
+		return fmt.Errorf("%w: render-only job %s cannot complete from status=%s", ErrCompletionTransitionConflict, jobID, status)
+	}
+
+	// A READY row is not sufficient by itself: it must carry a verified
+	// timestamp, a canonical lowercase 64-hex SHA-256, and durable storage.
+	// For artifact jobs, require at least one such row and reject every
+	// declared/associated artifact that is not equally publishable.
+	artifactGate := "1=1"
+	if artifactContract {
+		artifactGate = `
+			-- Every artifact-bound completion must have a durable commit
+			-- contract; an unrelated READY artifact can never satisfy it.
+			EXISTS (
+				SELECT 1 FROM attempt_commits ac
+				WHERE ac.job_id=? AND ac.required_output_count>0
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM attempt_commits ac
+				WHERE ac.job_id=? AND ac.required_output_count>0
+				  AND (
+					ac.required_output_count <> (
+						SELECT COUNT(*) FROM task_output_declarations d
+						WHERE d.commit_id=ac.commit_id
+					)
+					OR EXISTS (
+						SELECT 1
+						FROM task_output_declarations d
+						LEFT JOIN artifacts a ON a.id=d.artifact_id
+						LEFT JOIN artifact_uploads u ON u.upload_id=d.upload_id
+						WHERE d.commit_id=ac.commit_id
+						  AND (
+							d.artifact_id IS NULL
+							OR a.job_id<>ac.job_id
+							OR a.status!='READY'
+							OR COALESCE(a.verified_at,'')=''
+							OR length(COALESCE(a.sha256,''))<>64
+							OR COALESCE(a.sha256,'') GLOB '*[^0-9a-f]*'
+							OR (COALESCE(a.storage_key,'')='' AND COALESCE(a.local_path,'')='')
+							OR lower(COALESCE(d.expected_sha256,''))<>lower(COALESCE(a.sha256,''))
+							OR lower(COALESCE(u.received_sha256,''))<>lower(COALESCE(a.sha256,''))
+							OR COALESCE(u.received_size_bytes,-1)<>COALESCE(a.size_bytes,-2)
+							OR d.expected_size_bytes<>COALESCE(a.size_bytes,-1)
+						  )
+					)
+				  )
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM attempt_commits ac
+				WHERE ac.job_id=? AND ac.required_output_count>ac.ready_output_count
+			)`
+	}
+
+	query := `
 		UPDATE jobs
 		SET status='SUCCEEDED', completed_at=?, updated_at=?, revision=revision+1
 		WHERE job_id=?
 		  AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.job_id=? AND t.status!='SUCCEEDED')
-		  AND NOT EXISTS (SELECT 1 FROM attempt_commits ac WHERE ac.job_id=? AND ac.required_output_count>ac.ready_output_count)
-		  AND NOT EXISTS (
-			SELECT 1
-			FROM attempt_commits ac
-			JOIN task_output_declarations d ON d.commit_id=ac.commit_id
-			LEFT JOIN artifacts a ON a.id=d.artifact_id
-			WHERE ac.job_id=? AND ac.required_output_count>0
-			  AND (a.id IS NULL OR a.status!='READY'
-			       OR (COALESCE(a.storage_key,'')='' AND COALESCE(a.local_path,'')=''))
-		  )
-		  AND (status='AWAITING_ARTIFACT' OR (status='RUNNING' AND NOT EXISTS (SELECT 1 FROM attempt_commits ac WHERE ac.job_id=?)))`,
-		now, now, jobID, jobID, jobID, jobID, jobID)
+		  AND ` + artifactGate + `
+		  AND status=?`
+	args := []interface{}{now, now, jobID, jobID}
+	if artifactContract {
+		args = append(args, jobID, jobID, jobID)
+	}
+	args = append(args, status)
+	res, err := r.tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("store: mark completion job succeeded: %w", err)
 	}
 	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
 		return fmt.Errorf("store: mark completion job succeeded rows affected: %w", rowsErr)
 	} else if n != 1 {
-		return fmt.Errorf("%w: completion job %s is not at AWAITING_ARTIFACT", ErrCompletionTransitionConflict, jobID)
+		return fmt.Errorf("%w: completion job %s did not satisfy artifact/status gate (status=%s)", ErrCompletionTransitionConflict, jobID, status)
 	}
 	return nil
 }

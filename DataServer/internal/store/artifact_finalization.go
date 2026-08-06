@@ -3,9 +3,11 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"velox-server/internal/jobs"
@@ -63,6 +65,14 @@ func NewSQLiteArtifactFinalizerFromStore(s *SQLiteStore, resolver deliverycontra
 	return &SQLiteArtifactFinalizer{db: s.db, resolver: resolver}
 }
 
+func isCanonicalSHA256(value string) bool {
+	if len(value) != 64 || value != strings.ToLower(value) {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
 func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p FinalizeVerifiedParams) (*Artifact, error) {
 	if p.UploadID == "" || p.ArtifactID == "" || p.JobID == "" {
 		return nil, fmt.Errorf("store: FinalizeVerified: upload/artifact/job ids are required")
@@ -70,8 +80,8 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 	// The final job transition is only legal after the verifier has produced
 	// durable content-addressed metadata. Empty keys or hashes must fail
 	// closed; a URL or worker declaration is not proof of a READY artifact.
-	if p.StorageKey == "" || p.SHA256 == "" {
-		return nil, fmt.Errorf("store: FinalizeVerified: verified storage key and sha256 are required")
+	if p.StorageKey == "" || !isCanonicalSHA256(p.SHA256) {
+		return nil, fmt.Errorf("store: FinalizeVerified: verified storage key and canonical sha256 are required")
 	}
 	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -84,12 +94,15 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		}
 	}()
 
-	var status, workerID, leaseID string
+	var status, workerID, leaseID, receivedSHA, expectedSHA string
+	var receivedSize, expectedSize sql.NullInt64
 	var attemptNumber int
 	if err := tx.QueryRowContext(ctx, `
-		SELECT status, worker_id, lease_id, attempt_number
+		SELECT status, worker_id, lease_id, COALESCE(received_sha256,''),
+		       COALESCE(expected_sha256,''), received_size_bytes, expected_size_bytes,
+		       attempt_number
 		FROM artifact_uploads WHERE upload_id = ?`, p.UploadID).
-		Scan(&status, &workerID, &leaseID, &attemptNumber); err != nil {
+		Scan(&status, &workerID, &leaseID, &receivedSHA, &expectedSHA, &receivedSize, &expectedSize, &attemptNumber); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("%w: upload_id=%s", ErrUploadNotFound, p.UploadID)
 		}
@@ -100,6 +113,12 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 	}
 	if workerID != p.WorkerID || leaseID != p.LeaseID || attemptNumber != p.AttemptNumber {
 		return nil, fmt.Errorf("%w: upload=%s auth mismatch", ErrTransitionConflict, p.UploadID)
+	}
+	if !isCanonicalSHA256(receivedSHA) || receivedSHA != p.SHA256 ||
+		!isCanonicalSHA256(expectedSHA) || expectedSHA != receivedSHA ||
+		!receivedSize.Valid || receivedSize.Int64 != p.SizeBytes ||
+		!expectedSize.Valid || expectedSize.Int64 != receivedSize.Int64 {
+		return nil, fmt.Errorf("%w: upload=%s expected/master-computed hash/size does not match verified metadata", ErrTransitionConflict, p.UploadID)
 	}
 
 	now := p.VerifiedAt

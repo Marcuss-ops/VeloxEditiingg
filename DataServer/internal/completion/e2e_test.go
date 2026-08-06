@@ -68,13 +68,27 @@ func pastRFC3339() string {
 // deterministic CommitAttempt path.
 func scheduleRowReady(t *testing.T, db *sql.DB, fence FenceTuple, artifactID string) string {
 	t.Helper()
-	if _, err := db.Exec(`UPDATE artifacts SET status = 'READY' WHERE id = ?`, artifactID); err != nil {
+	var declaredSHA string
+	if err := db.QueryRow(`SELECT COALESCE(expected_sha256,'') FROM task_output_declarations WHERE task_id=? AND attempt_id=? LIMIT 1`, fence.TaskID, fence.AttemptID).Scan(&declaredSHA); err != nil {
+		t.Fatalf("scheduleRowReady declaration hash: %v", err)
+	}
+	if len(declaredSHA) != 64 {
+		t.Fatalf("scheduleRowReady declaration hash=%q, want canonical 64-hex SHA-256", declaredSHA)
+	}
+	if _, err := db.Exec(`UPDATE artifacts SET status='READY', verified_at=?, sha256=?, storage_key=? WHERE id=?`,
+		time.Now().UTC().Format(time.RFC3339), declaredSHA, "durable/"+artifactID, artifactID); err != nil {
 		t.Fatalf("scheduleRowReady artifact ready: %v", err)
 	}
+	if _, err := db.Exec(`UPDATE artifact_uploads SET received_sha256=?, received_size_bytes=(SELECT size_bytes FROM artifacts WHERE id=?) WHERE artifact_id=?`,
+		declaredSHA, artifactID, artifactID); err != nil {
+		t.Fatalf("scheduleRowReady upload evidence: %v", err)
+	}
 	if _, err := db.Exec(
-		`UPDATE task_output_declarations SET artifact_id = ?
-		 WHERE task_id = ? AND attempt_id = ? AND (artifact_id IS NULL OR artifact_id = ?)`,
-		artifactID, fence.TaskID, fence.AttemptID, artifactID,
+		`UPDATE task_output_declarations
+		 SET upload_id=(SELECT upload_id FROM artifact_uploads WHERE artifact_id=? LIMIT 1),
+		     artifact_id=?
+		 WHERE task_id=? AND attempt_id=? AND (artifact_id IS NULL OR artifact_id=?)`,
+		artifactID, artifactID, fence.TaskID, fence.AttemptID, artifactID,
 	); err != nil {
 		t.Fatalf("scheduleRowReady declaration binding: %v", err)
 	}
@@ -816,6 +830,14 @@ func TestPhase6_ArtifactContractCannotSkipAwaitingArtifact(t *testing.T) {
 
 	if _, err := c.CommitAttempt(context.Background(), commitID); err == nil {
 		t.Fatal("artifact-contract job must reject RUNNING -> SUCCEEDED without AWAITING_ARTIFACT")
+	}
+	// Readiness alone must not bypass the lifecycle gate: even with a
+	// READY-looking artifact, the contract-bound job remains RUNNING.
+	if _, err := db.Exec(`UPDATE artifacts SET status='READY', verified_at=?, sha256=?, storage_key=? WHERE id=?`, time.Now().UTC().Format(time.RFC3339), strings.Repeat("a", 64), "durable/artifact-gate.mp4", "art-artifact-gate"); err != nil {
+		t.Fatalf("seed ready artifact: %v", err)
+	}
+	if _, err := c.CommitAttempt(context.Background(), commitID); err == nil {
+		t.Fatal("artifact-contract job must reject RUNNING -> SUCCEEDED even when artifact is READY")
 	}
 	var status string
 	if err := db.QueryRow(`SELECT status FROM jobs WHERE job_id = ?`, jobID).Scan(&status); err != nil {
