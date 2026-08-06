@@ -309,6 +309,42 @@ func TestFinalize_DoubleWorkerSameTask_SecondRejected(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrWrongJobOwner), "got %v want ErrWrongJobOwner", err)
 
+	// The rejected worker must not cross any finalization boundary:
+	// the upload remains RECEIVED, the artifact remains STAGING, the
+	// job remains AWAITING_ARTIFACT, and the canonical attempt keeps
+	// its original worker/lease identity.
+	var uploadStatus, artifactStatus, jobStatus, attemptWorker, attemptLease, attemptStatus, taskStatus string
+	var taskRevision int
+	require.NoError(t, env.db.QueryRow(`SELECT status FROM artifact_uploads WHERE upload_id = ?`, sess.UploadID).Scan(&uploadStatus))
+	require.NoError(t, env.db.QueryRow(`SELECT status FROM artifacts WHERE id = ?`, sess.ArtifactID).Scan(&artifactStatus))
+	require.NoError(t, env.db.QueryRow(`SELECT status FROM jobs WHERE job_id = 'J16'`).Scan(&jobStatus))
+	require.NoError(t, env.db.QueryRow(`SELECT worker_id, lease_id, status FROM task_attempts WHERE id = 'J16-attempt'`).Scan(&attemptWorker, &attemptLease, &attemptStatus))
+	require.NoError(t, env.db.QueryRow(`SELECT status, revision FROM tasks WHERE task_id = 'J16-task'`).Scan(&taskStatus, &taskRevision))
+	require.Equal(t, "RECEIVED", uploadStatus)
+	require.Equal(t, "STAGING", artifactStatus)
+	require.Equal(t, "AWAITING_ARTIFACT", jobStatus)
+	require.Equal(t, testWorkerID, attemptWorker)
+	require.Equal(t, testLeaseID, attemptLease)
+	require.Equal(t, "RENDER_FINISHED", attemptStatus)
+	require.Equal(t, "RUNNING", taskStatus)
+	require.Equal(t, 0, taskRevision)
+
+	// The rejected path must not promote the received bytes to the
+	// durable final directory. The legitimate worker performs the
+	// first promotion below, so this check is intentionally before it.
+	var durableFiles []string
+	walkErr := filepath.WalkDir(env.bs.FinalDir(), func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() {
+			durableFiles = append(durableFiles, path)
+		}
+		return nil
+	})
+	require.NoError(t, walkErr)
+	require.Empty(t, durableFiles, "rejected finalization must not create a durable blob")
+
 	// The legitimate worker can still finalize.
 	art, err := env.svc.Finalize(context.Background(), FinalizeArtifactCommand{
 		UploadID: sess.UploadID, JobID: "J16", WorkerID: testWorkerID,
