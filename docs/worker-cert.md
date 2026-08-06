@@ -170,6 +170,35 @@ RW_JOB_EXPECTED_SUBMIT_STATUS=422 \\
 jq -e '.overall == "PASS" and .job_id == null' invalid-job.json
 ```
 
+## Machine-readable run evidence
+
+Every CLI certification mode (`--network-json`, `--worker-json`,
+`--lifecycle-json`, `--update-json`, `--smoke-json`, and `--job-json`) writes a
+run-scoped evidence directory. `RW_RUN_ID` may be supplied explicitly;
+otherwise the runner generates `cert-<UTC timestamp>-<pid>`. The directory is
+selected with `RW_ARTIFACT_DIR` and defaults to `/tmp/velox-cert-<run_id>`.
+
+The runner always creates these files, including when configuration or runtime
+checks fail:
+
+- `report.json` — final `run_id`, mode, exit code, `overall` (`PASS`/`FAIL`),
+  check list, and the raw mode result under `result`;
+- `report.junit.xml` — JUnit-compatible testcase/failure projection of the
+  check list;
+- `commands.log` — sanitized method/path and SSH markers only; credentials and
+  request bodies are never recorded;
+- `worker-before.json` / `worker-after.json` and
+  `master-before.json` / `master-after.json` — first and latest observed JSON
+  snapshots (or `NOT_OBSERVED` markers);
+- `operations.json` — every observed API operation with method, path, HTTP
+  status, response, `run_id`, and final PASS/FAIL status;
+- `artifact-ffprobe.json` — artifact verifier report, SHA-256, file and final
+  PASS/FAIL status when P03 runs (otherwise `NOT_RUN`).
+
+The JSON emitted on stdout remains the mode-specific result for existing
+operators and CI consumers. The evidence files are supplementary and can be
+archived as release evidence.
+
 ## Cross-references
 
 - `tests/worker-cert/smoke_one.sh` — per-worker SUCCEEDED smoke (writes `smoke.json`)

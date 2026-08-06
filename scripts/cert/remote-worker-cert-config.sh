@@ -21,6 +21,132 @@ rw_die() {
   return 1
 }
 
+# Evidence output is initialized only for a CLI certification run. Sourcing this
+# file remains side-effect free until rw_init_artifacts is called.
+rw_init_artifacts() {
+  RW_RUN_ID="${RW_RUN_ID:-${VELOX_CERT_RUN_ID:-cert-$(date -u +%Y%m%dT%H%M%SZ)-$$}}"
+  RW_ARTIFACT_DIR="${RW_ARTIFACT_DIR:-${VELOX_CERT_ARTIFACT_DIR:-${TMPDIR:-/tmp}/velox-cert-${RW_RUN_ID}}}"
+  mkdir -p -- "$RW_ARTIFACT_DIR" || return 1
+  : >"${RW_ARTIFACT_DIR}/commands.log" || return 1
+  printf '%s\n' "run_id=${RW_RUN_ID} mode=${RW_CERT_MODE:-unknown}" >>"${RW_ARTIFACT_DIR}/commands.log"
+  jq -n --arg run_id "$RW_RUN_ID" --arg status NOT_RUN \
+    '{run_id:$run_id,status:$status,operations:[]}' >"${RW_ARTIFACT_DIR}/operations.json"
+  jq -n --arg run_id "$RW_RUN_ID" --arg status NOT_RUN \
+    '{run_id:$run_id,status:$status}' >"${RW_ARTIFACT_DIR}/artifact-ffprobe.json"
+  for snapshot in worker-before worker-after master-before master-after; do
+    jq -n --arg run_id "$RW_RUN_ID" --arg status NOT_OBSERVED \
+      '{run_id:$run_id,status:$status}' >"${RW_ARTIFACT_DIR}/${snapshot}.json"
+  done
+  export RW_RUN_ID RW_ARTIFACT_DIR
+}
+
+rw_log_command() {
+  [[ -n "${RW_ARTIFACT_DIR:-}" ]] || return 0
+  # Callers pass only method/path or an already-sanitized remote command.
+  # Credentials and request bodies are intentionally never logged.
+  printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"${RW_ARTIFACT_DIR}/commands.log"
+}
+
+rw_snapshot_json() {
+  local kind="$1" body="$2" normalized
+  [[ -n "${RW_ARTIFACT_DIR:-}" ]] || return 0
+  if jq -e . >/dev/null 2>&1 <<<"$body"; then
+    normalized="$body"
+  else
+    normalized="$(jq -cn --arg raw "$body" '{raw:$raw}')"
+  fi
+  printf '%s\n' "$normalized" >"${RW_ARTIFACT_DIR}/${kind}-after.json"
+  if [[ ! -s "${RW_ARTIFACT_DIR}/${kind}-before.json" ]] || jq -e '.status == "NOT_OBSERVED"' "${RW_ARTIFACT_DIR}/${kind}-before.json" >/dev/null 2>&1; then
+    printf '%s\n' "$normalized" >"${RW_ARTIFACT_DIR}/${kind}-before.json"
+  fi
+  printf '%s\n' "$normalized" >"${RW_ARTIFACT_DIR}/${kind}.json"
+}
+
+rw_record_operation() {
+  local method="$1" path="$2" http_status="$3" body="${4:-}" operation_json
+  [[ -n "${RW_ARTIFACT_DIR:-}" ]] || return 0
+  operation_json="$(jq -cn --arg run_id "${RW_RUN_ID:-}" --arg method "$method" --arg path "$path" \
+    --arg http_status "$http_status" --arg body "$body" \
+    '{run_id:$run_id,method:$method,path:$path,http_status:($http_status|tonumber? // $http_status),response:(try ($body|fromjson) catch {raw:$body})}')"
+  jq --argjson operation "$operation_json" '.operations += [$operation] | .status="RECORDED"' \
+    "${RW_ARTIFACT_DIR}/operations.json" >"${RW_ARTIFACT_DIR}/operations.json.tmp" \
+    && mv -f -- "${RW_ARTIFACT_DIR}/operations.json.tmp" "${RW_ARTIFACT_DIR}/operations.json"
+}
+
+rw_record_artifact_ffprobe() {
+  local status="$1" artifact_file="${2:-}" sha256="${3:-}" verifier_report="${4:-}" diagnostic="${5:-}"
+  [[ -n "${RW_ARTIFACT_DIR:-}" ]] || return 0
+  if [[ -n "$verifier_report" && -r "$verifier_report" ]] && jq -e . "$verifier_report" >/dev/null 2>&1; then
+    jq --arg run_id "${RW_RUN_ID:-}" --arg status "$status" --arg file "$artifact_file" \
+      --arg sha256 "$sha256" --arg diagnostic "$diagnostic" \
+      '. + {run_id:$run_id,status:$status,artifact_file:$file,sha256:$sha256,diagnostic:$diagnostic}' \
+      "$verifier_report" >"${RW_ARTIFACT_DIR}/artifact-ffprobe.json"
+  else
+    jq -n --arg run_id "${RW_RUN_ID:-}" --arg status "$status" --arg file "$artifact_file" \
+      --arg sha256 "$sha256" --arg diagnostic "$diagnostic" \
+      '{run_id:$run_id,status:$status,artifact_file:$file,sha256:$sha256,diagnostic:$diagnostic}' \
+      >"${RW_ARTIFACT_DIR}/artifact-ffprobe.json"
+  fi
+}
+
+rw_junit_escape() {
+  sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&apos;/g'
+}
+
+rw_write_junit() {
+  local report_file="$1" junit_file="$2" mode="$3" report_json
+  report_json="$(cat "$report_file" 2>/dev/null || printf '%s' '{}')"
+  python3 - "$junit_file" "$mode" "$report_json" <<'PY'
+import json, sys
+from xml.sax.saxutils import escape, quoteattr
+out, mode, raw = sys.argv[1:]
+try:
+    report = json.loads(raw)
+except json.JSONDecodeError:
+    report = {"overall": "FAIL", "checks": [{"id": "REPORT", "status": "FAIL", "diagnostic": "invalid report JSON"}]}
+checks = report.get("checks") or []
+failures = sum(1 for c in checks if c.get("status") == "FAIL")
+if report.get("overall") == "FAIL" and not failures:
+    failures = 1
+with open(out, "w", encoding="utf-8") as fh:
+    fh.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+    fh.write('<testsuite name="velox.remote_worker.%s" tests="%d" failures="%d">\n' % (escape(mode), max(1, len(checks)), failures))
+    if checks:
+        for check in checks:
+            name = str(check.get("id") or check.get("name") or "check")
+            status = check.get("status", "FAIL")
+            diagnostic = str(check.get("diagnostic") or "")
+            fh.write('  <testcase name=%s>' % quoteattr(name))
+            if status == "FAIL":
+                fh.write('<failure message=%s>%s</failure>' % (quoteattr(diagnostic[:500]), escape(diagnostic)))
+            fh.write('</testcase>\n')
+    else:
+        if report.get("overall") == "PASS":
+            fh.write('  <testcase name="certification"/>\n')
+        else:
+            fh.write('  <testcase name="certification"><failure message="no checks"/></testcase>\n')
+    fh.write('</testsuite>\n')
+PY
+}
+
+rw_finalize_artifacts() {
+  local raw_report="$1" rc="$2" mode="$3" report_file="${RW_ARTIFACT_DIR}/report.json"
+  local overall
+  if ! jq -e . "$raw_report" >/dev/null 2>&1; then
+    jq -n --arg run_id "${RW_RUN_ID:-}" --arg mode "$mode" --arg status FAIL --arg diagnostic "runner emitted invalid JSON" \
+      '{run_id:$run_id,mode:$mode,overall:$status,checks:[{id:"REPORT",name:"report",status:$status,diagnostic:$diagnostic}],result:null}' >"$report_file"
+  else
+    overall="$(jq -r --arg fallback "$([[ "$rc" -eq 0 ]] && printf PASS || printf FAIL)" '.overall // $fallback' "$raw_report")"
+    jq --arg run_id "${RW_RUN_ID:-}" --arg mode "$mode" --argjson exit_code "$rc" \
+      --arg artifact_dir "${RW_ARTIFACT_DIR:-}" --arg overall "$overall" \
+      '{run_id:$run_id,mode:$mode,overall:$overall,exit_code:$exit_code,artifact_dir:$artifact_dir,checks:(.checks // []),result:.}' \
+      "$raw_report" >"${report_file}.tmp" && mv -f -- "${report_file}.tmp" "$report_file"
+  fi
+  rw_write_junit "$report_file" "${RW_ARTIFACT_DIR}/report.junit.xml" "$mode"
+  jq --arg status "$(jq -r '.overall' "$report_file")" '.status=$status' "${RW_ARTIFACT_DIR}/operations.json" >"${RW_ARTIFACT_DIR}/operations.json.tmp" \
+    && mv -f -- "${RW_ARTIFACT_DIR}/operations.json.tmp" "${RW_ARTIFACT_DIR}/operations.json"
+}
+
 rw_require_bin() {
   local bin="$1"
   command -v "$bin" >/dev/null 2>&1 || rw_die "required binary not found in PATH: ${bin}"
@@ -149,7 +275,7 @@ rw_load_config() {
   RW_JOB_FIXTURE_FILE="${RW_JOB_FIXTURE_FILE:-${VELOX_JOB_FIXTURE_FILE:-}}"
   RW_JOB_EXPECTED_SUBMIT_STATUS="${RW_JOB_EXPECTED_SUBMIT_STATUS:-${VELOX_JOB_EXPECTED_SUBMIT_STATUS:-202}}"
   RW_JOB_REQUIRED_STATES="${RW_JOB_REQUIRED_STATES:-${VELOX_JOB_REQUIRED_STATES:-PENDING,LEASED,RUNNING,AWAITING_ARTIFACT,SUCCEEDED}}"
-  CERT_POLL_TIMEOUT_S="${CERT_POLL_TIMEOUT_S:-${VELOX_CERT_POLL_TIMEOUT_S:-300}}"},{
+  CERT_POLL_TIMEOUT_S="${CERT_POLL_TIMEOUT_S:-${VELOX_CERT_POLL_TIMEOUT_S:-300}}"
   RW_NETWORK_TIMEOUT_S="${RW_NETWORK_TIMEOUT_S:-${VELOX_NETWORK_TIMEOUT_S:-30}}"
   RW_SSH_CONNECT_TIMEOUT_S="${RW_SSH_CONNECT_TIMEOUT_S:-${VELOX_SSH_CONNECT_TIMEOUT_S:-10}}"
   RW_CONNECT_TIMEOUT_S="${RW_CONNECT_TIMEOUT_S:-${VELOX_CONNECT_TIMEOUT_S:-5}}"
@@ -493,6 +619,7 @@ rw_now_s() {
 
 rw_capture_ssh() {
   local remote_cmd="$1" out_file err_file rc
+  rw_log_command "SSH ${WORKER_SSH_USER:-unknown}@${WORKER_SSH_HOST:-unknown}"
   out_file="$(mktemp "${TMPDIR:-/tmp}/velox-worker-ssh-out.XXXXXX")"
   err_file="$(mktemp "${TMPDIR:-/tmp}/velox-worker-ssh-err.XXXXXX")"
   if timeout "${RW_NETWORK_TIMEOUT_S}s" ssh \
@@ -688,8 +815,18 @@ rw_worker_record() {
 }
 
 rw_worker_admin_get() {
-  local path="$1"
-  admin_api GET "$path" --max-time "$RW_WORKER_HTTP_TIMEOUT_S"
+  local path="$1" body
+  rw_log_command "GET ${path}"
+  if body="$(admin_api GET "$path" --max-time "$RW_WORKER_HTTP_TIMEOUT_S")"; then
+    rw_record_operation GET "$path" 200 "$body"
+    if [[ "$path" == "/api/v1/workers/${WORKER_ID}" ]]; then
+      rw_snapshot_json worker "$body"
+    fi
+    printf '%s' "$body"
+  else
+    rw_record_operation GET "$path" "${RW_LAST_HTTP_STATUS:-000}" "${RW_LAST_BODY:-}"
+    return 1
+  fi
 }
 
 rw_worker_active_session_count() {
@@ -974,6 +1111,7 @@ rw_worker_checks() {
 
 rw_admin_request() {
   local method="$1" path="$2" body="${3:-}" cfg response_file status_file rc
+  rw_log_command "${method} ${path}"
   cfg="$(mktemp "${TMPDIR:-/tmp}/velox-admin-curl.XXXXXX")" || return 1
   response_file="$(mktemp "${TMPDIR:-/tmp}/velox-admin-response.XXXXXX")" || { rm -f -- "$cfg"; return 1; }
   status_file="$(mktemp "${TMPDIR:-/tmp}/velox-admin-status.XXXXXX")" || { rm -f -- "$cfg" "$response_file"; return 1; }
@@ -993,6 +1131,8 @@ rw_admin_request() {
   RW_LAST_HTTP_STATUS="$(cat "$status_file" 2>/dev/null || true)"
   RW_LAST_BODY="$(cat "$response_file" 2>/dev/null || true)"
   RW_LAST_CURL_RC="$rc"
+  rw_record_operation "$method" "$path" "${RW_LAST_HTTP_STATUS:-000}" "${RW_LAST_BODY:-}"
+  rw_snapshot_json master "${RW_LAST_BODY:-}"
   rm -f -- "$cfg" "$response_file" "$status_file"
   return "$rc"
 }
@@ -1803,6 +1943,7 @@ rw_job_curl_config() {
 
 rw_job_request() {
   local method="$1" path="$2" body="${3:-}" token="$4"
+  rw_log_command "${method} ${path}"
   local cfg response_file status_file rc
   cfg="$(mktemp "${TMPDIR:-/tmp}/velox-job-curl.XXXXXX")" || return 1
   response_file="$(mktemp "${TMPDIR:-/tmp}/velox-job-response.XXXXXX")" || { rm -f -- "$cfg"; return 1; }
@@ -1822,6 +1963,8 @@ rw_job_request() {
   RW_JOB_HTTP_STATUS="$(cat "$status_file" 2>/dev/null || true)"
   RW_JOB_BODY="$(cat "$response_file" 2>/dev/null || true)"
   RW_JOB_CURL_RC="$rc"
+  rw_record_operation "$method" "$path" "${RW_JOB_HTTP_STATUS:-000}" "${RW_JOB_BODY:-}"
+  rw_snapshot_json master "${RW_JOB_BODY:-}"
   rm -f -- "$cfg" "$response_file" "$status_file"
   return "$rc"
 }
@@ -1831,6 +1974,7 @@ rw_job_download_to_file() {
   cfg="$(mktemp "${TMPDIR:-/tmp}/velox-job-download-curl.XXXXXX")" || return 1
   status_file="$(mktemp "${TMPDIR:-/tmp}/velox-job-download-status.XXXXXX")" || { rm -f -- "$cfg"; return 1; }
   rw_job_curl_config "$cfg" "$token" || { rm -f -- "$cfg" "$status_file"; return 1; }
+  rw_log_command "GET artifact-download"
   curl --silent --show-error --connect-timeout "$RW_CONNECT_TIMEOUT_S" --max-time "$RW_JOB_ARTIFACT_DOWNLOAD_TIMEOUT_S" \
     --request GET --config "$cfg" --output "$output" --write-out '%{http_code}' "$url" >"$status_file"
   rc=$?
@@ -2189,6 +2333,7 @@ rw_job_checks() {
         probe_size="$(jq -r '.bytes // empty' "$verifier_report" 2>/dev/null || true)"
         [[ -n "$probe_duration" && -n "$probe_size" ]] || diagnostic='canonical artifact verifier returned incomplete ffprobe report'
       fi
+      rw_record_artifact_ffprobe "$([[ "$diagnostic" == "" ]] && printf PASS || printf FAIL)" "${artifact_file:-}" "${final_sha:-}" "${verifier_report:-}" "${diagnostic:-}"
       rm -f -- "$verifier_report" "$verifier_log"
     fi
     if [[ -n "$artifact_size" && "$artifact_size" =~ ^[0-9]+$ && "$artifact_size" -gt 0 && -z "$diagnostic" ]]; then
@@ -2199,11 +2344,17 @@ rw_job_checks() {
       overall="FAIL"
     else
       rw_job_record P03-artifact artifact PASS "HTTP 200 READY; bytes=$(stat -c %s "$artifact_file" 2>/dev/null || wc -c <"$artifact_file"); sha256=${final_sha}; ffprobe_duration=${probe_duration:-not_run}" 0 artifact_download
+      if [[ ! -s "${RW_ARTIFACT_DIR:-}"/artifact-ffprobe.json || "$(jq -r '.status // ""' "${RW_ARTIFACT_DIR}/artifact-ffprobe.json" 2>/dev/null || true)" == NOT_RUN ]]; then
+        rw_record_artifact_ffprobe PASS "$artifact_file" "$final_sha" "${verifier_report:-}" ""
+      fi
     fi
     rm -f -- "$artifact_file"
   else
     rw_job_record P03-artifact artifact FAIL "artifact verification not attempted because job did not reach SUCCEEDED" 0 artifact_download
     overall="FAIL"
+  fi
+  if [[ "$(jq -r '.status // "NOT_RUN"' "${RW_ARTIFACT_DIR:-}/artifact-ffprobe.json" 2>/dev/null || printf 'NOT_RUN')" == "NOT_RUN" ]]; then
+    rw_record_artifact_ffprobe "$([[ "$overall" == "PASS" ]] && printf PASS || printf FAIL)" "${artifact_file:-}" "${final_sha:-}" "${verifier_report:-}" "${diagnostic:-artifact verification not completed}"
   fi
 
   jq -n --arg schema 'velox.remote_worker.job.v1' --arg worker_id "$WORKER_ID" \
@@ -2252,6 +2403,45 @@ rw_worker_config_failure() {
   fi
 }
 
+rw_run_certification() {
+  local mode="$1" runner="$2" failure_renderer="$3" loader_arg="${4:-}" raw_file config_error_file config_diagnostic rc
+  RW_CERT_MODE="$mode"
+  export RW_CERT_MODE
+  rw_init_artifacts || {
+    rw_die "unable to initialize certification artifacts"
+    return 2
+  }
+  raw_file="$(mktemp "${TMPDIR:-/tmp}/velox-cert-raw.XXXXXX")" || return 2
+  config_error_file="$(mktemp "${TMPDIR:-/tmp}/velox-cert-config-error.XXXXXX")" || {
+    rm -f -- "$raw_file"
+    return 2
+  }
+  if [[ "$loader_arg" == "--network-only" ]]; then
+    if rw_load_config --network-only 2>"$config_error_file"; then
+      rm -f -- "$config_error_file"
+      if "$runner" >"$raw_file"; then rc=0; else rc=$?; fi
+    else
+      config_diagnostic="$(cat "$config_error_file")"
+      config_diagnostic="${config_diagnostic//$'\n'/; }"
+      "$failure_renderer" "${config_diagnostic:-configuration validation failed}" >"$raw_file"
+      rc=2
+    fi
+  elif rw_load_config 2>"$config_error_file"; then
+    rm -f -- "$config_error_file"
+    if "$runner" >"$raw_file"; then rc=0; else rc=$?; fi
+  else
+    config_diagnostic="$(cat "$config_error_file")"
+    config_diagnostic="${config_diagnostic//$'\n'/; }"
+    "$failure_renderer" "${config_diagnostic:-configuration validation failed}" >"$raw_file"
+    rc=2
+  fi
+  rm -f -- "$config_error_file"
+  cat "$raw_file"
+  rw_finalize_artifacts "$raw_file" "$rc" "$mode"
+  rm -f -- "$raw_file"
+  return "$rc"
+}
+
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   set -euo pipefail
 
@@ -2259,83 +2449,32 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     --network|--network-json)
       shift
       [[ "$#" -eq 0 ]] || { rw_die "network mode does not accept positional arguments"; exit 2; }
-      rw_load_config --network-only
-      rw_network_checks
+      rw_run_certification network rw_network_checks rw_network_prereq_failure --network-only
       ;;
     --worker|--worker-json)
       shift
       [[ "$#" -eq 0 ]] || { rw_die "worker mode does not accept positional arguments"; exit 2; }
-      config_error_file="$(mktemp "${TMPDIR:-/tmp}/velox-worker-config-error.XXXXXX")"
-      if rw_load_config 2>"$config_error_file"; then
-        rm -f -- "$config_error_file"
-      else
-        config_diagnostic="$(cat "$config_error_file")"
-        rm -f -- "$config_error_file"
-        config_diagnostic="${config_diagnostic//$'\n'/; }"
-        rw_worker_config_failure "${config_diagnostic:-configuration validation failed}"
-        exit 2
-      fi
-      rw_worker_checks
+      rw_run_certification worker rw_worker_checks rw_worker_config_failure
       ;;
     --lifecycle|--lifecycle-json)
       shift
       [[ "$#" -eq 0 ]] || { rw_die "lifecycle mode does not accept positional arguments"; exit 2; }
-      config_error_file="$(mktemp "${TMPDIR:-/tmp}/velox-worker-config-error.XXXXXX")"
-      if rw_load_config 2>"$config_error_file"; then
-        rm -f -- "$config_error_file"
-      else
-        config_diagnostic="$(cat "$config_error_file")"
-        rm -f -- "$config_error_file"
-        config_diagnostic="${config_diagnostic//$'\n'/; }"
-        rw_lifecycle_config_failure "${config_diagnostic:-configuration validation failed}"
-        exit 2
-      fi
-      rw_lifecycle_checks
+      rw_run_certification lifecycle rw_lifecycle_checks rw_lifecycle_config_failure
       ;;
     --update|--update-json)
       shift
       [[ "$#" -eq 0 ]] || { rw_die "update mode does not accept positional arguments"; exit 2; }
-      config_error_file="$(mktemp "${TMPDIR:-/tmp}/velox-update-config-error.XXXXXX")"
-      if rw_load_config 2>"$config_error_file"; then
-        rm -f -- "$config_error_file"
-      else
-        config_diagnostic="$(cat "$config_error_file")"
-        rm -f -- "$config_error_file"
-        config_diagnostic="${config_diagnostic//$'\n'/; }"
-        rw_update_config_failure "${config_diagnostic:-configuration validation failed}"
-        exit 2
-      fi
-      rw_update_checks
+      rw_run_certification update rw_update_checks rw_update_config_failure
       ;;
     --smoke|--smoke-json)
       shift
       [[ "$#" -eq 0 ]] || { rw_die "smoke mode does not accept positional arguments"; exit 2; }
-      config_error_file="$(mktemp "${TMPDIR:-/tmp}/velox-smoke-config-error.XXXXXX")"
-      if rw_load_config 2>"$config_error_file"; then
-        rm -f -- "$config_error_file"
-      else
-        config_diagnostic="$(cat "$config_error_file")"
-        rm -f -- "$config_error_file"
-        config_diagnostic="${config_diagnostic//$'\n'/; }"
-        rw_smoke_config_failure "${config_diagnostic:-configuration validation failed}"
-        exit 2
-      fi
-      rw_smoke_checks
+      rw_run_certification smoke rw_smoke_checks rw_smoke_config_failure
       ;;
     --job|--job-json)
       shift
       [[ "$#" -eq 0 ]] || { rw_die "job mode does not accept positional arguments"; exit 2; }
-      config_error_file="$(mktemp "${TMPDIR:-/tmp}/velox-job-config-error.XXXXXX")"
-      if rw_load_config 2>"$config_error_file"; then
-        rm -f -- "$config_error_file"
-      else
-        config_diagnostic="$(cat "$config_error_file")"
-        rm -f -- "$config_error_file"
-        config_diagnostic="${config_diagnostic//$'\n'/; }"
-        rw_job_config_failure "${config_diagnostic:-configuration validation failed}"
-        exit 2
-      fi
-      rw_job_checks
+      rw_run_certification job rw_job_checks rw_job_config_failure
       ;;
     --help|-h)
       printf '%s\n' 'Usage: remote-worker-cert-config.sh [--network-json]' \

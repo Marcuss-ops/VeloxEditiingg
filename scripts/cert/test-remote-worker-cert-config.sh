@@ -216,6 +216,36 @@ invalid_output="$(cat "${JOB_TMP_DIR}/invalid-job.json")"
 [[ "$(jq -r '.checks[] | select(.id == "P02-submit") | .evidence' <<<"$invalid_output")" == intake_422 ]] || exit 1
 export RW_JOB_EXPECTED_SUBMIT_STATUS=202
 
+# Evidence artifacts are emitted by the same helpers used by the CLI wrapper.
+# Exercise both PASS and FAIL finalization, including the JUnit XML contract,
+# while keeping all data deterministic and offline.
+for verdict in PASS FAIL; do
+  evidence_dir="${JOB_TMP_DIR}/evidence-${verdict}"
+  mkdir -p "$evidence_dir"
+  RW_RUN_ID="offline-${verdict,,}-run"
+  RW_CERT_MODE=offline
+  RW_ARTIFACT_DIR="$evidence_dir"
+  export RW_RUN_ID RW_CERT_MODE RW_ARTIFACT_DIR
+  rw_init_artifacts
+  rw_log_command 'GET /api/v1/workers/worker-test'
+  rw_snapshot_json worker '{"worker_id":"worker-test","status":"CONNECTED"}'
+  rw_snapshot_json master '{"ready":true}'
+  rw_record_operation GET /api/v1/workers/worker-test 200 '{"ok":true}'
+  if [[ "$verdict" == PASS ]]; then
+    printf '%s\n' '{"overall":"PASS","checks":[{"id":"EVIDENCE","status":"PASS","diagnostic":"offline"}]}' >"${evidence_dir}/raw.json"
+  else
+    printf '%s\n' '{"overall":"FAIL","checks":[{"id":"EVIDENCE","status":"FAIL","diagnostic":"offline failure"}]}' >"${evidence_dir}/raw.json"
+  fi
+  rw_finalize_artifacts "${evidence_dir}/raw.json" "$([[ "$verdict" == PASS ]] && printf 0 || printf 1)" offline
+  for artifact in report.json report.junit.xml commands.log operations.json artifact-ffprobe.json worker-before.json worker-after.json master-before.json master-after.json; do
+    [[ -s "${evidence_dir}/${artifact}" ]] || { printf 'FAIL: missing evidence artifact %s\n' "$artifact"; exit 1; }
+  done
+  [[ "$(jq -r '.run_id' "${evidence_dir}/report.json")" == "offline-${verdict,,}-run" ]] || exit 1
+  [[ "$(jq -r '.overall' "${evidence_dir}/report.json")" == "$verdict" ]] || exit 1
+  [[ "$(jq -r '.status' "${evidence_dir}/operations.json")" == "$verdict" ]] || exit 1
+  python3 -c 'import xml.etree.ElementTree as ET,sys; ET.parse(sys.argv[1])' "${evidence_dir}/report.junit.xml"
+done
+
 # Fixture contracts are deterministic and the shared-stock fixture reuses the
 # same stock asset in both scenes.
 for fixture in minimal-render-job shared-stock-job invalid-job; do
