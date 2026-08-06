@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,12 +16,46 @@ import (
 
 type realArtifactWorker struct {
 	root       string
+	fixture    string
 	artifact   string
 	cleanupErr error
 }
 
-func (w *realArtifactWorker) DownloadAsset(_ context.Context, runID, _, _, _ string) error {
-	return os.MkdirAll(filepath.Join(w.root, runID), 0o755)
+func (w *realArtifactWorker) DownloadAsset(_ context.Context, runID, _, pickupURL, _ string) error {
+	dir := filepath.Join(w.root, runID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if pickupURL == "" {
+		return errors.New("fixture pickup URL is empty")
+	}
+	parsed, err := url.Parse(pickupURL)
+	if err != nil {
+		return errors.New("fixture pickup URL is invalid")
+	}
+	if parsed.Scheme == "asset" && w.fixture == "" {
+		// Existing unit fixtures use a symbolic asset URL and a
+		// synthetic render; the lifecycle acceptance test below uses
+		// a real file:// fixture and exercises the download copy.
+		return nil
+	}
+	if parsed.Scheme != "file" || parsed.Path == "" {
+		return errors.New("fixture pickup URL must be a file:// URL")
+	}
+	in, err := os.Open(parsed.Path)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(filepath.Join(dir, "input.mp4"))
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func (w *realArtifactWorker) RunFFmpegRender(ctx context.Context, runID, _, _, _ string) (string, int64, error) {
@@ -27,11 +63,15 @@ func (w *realArtifactWorker) RunFFmpegRender(ctx context.Context, runID, _, _, _
 		return "", 0, err
 	}
 	path := filepath.Join(w.root, runID, "render.mp4")
-	cmd := exec.CommandContext(ctx, "ffmpeg",
-		"-v", "error", "-y",
-		"-f", "lavfi", "-i", "color=c=blue:size=160x120:d=1",
-		"-c:v", "libx264", "-pix_fmt", "yuv420p", path,
-	)
+	input := filepath.Join(w.root, runID, "input.mp4")
+	args := []string{"-v", "error", "-y"}
+	if w.fixture == "" {
+		args = append(args, "-f", "lavfi", "-i", "color=c=blue:size=160x120:d=1")
+	} else {
+		args = append(args, "-i", input)
+	}
+	args = append(args, "-c:v", "libx264", "-pix_fmt", "yuv420p", path)
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return "", 0, errors.New(string(output))
 	}
@@ -52,6 +92,7 @@ func (w *realArtifactWorker) CleanupWorkerTemp(_ context.Context, runID, _ strin
 
 type hashCheckingDrive struct {
 	uploadedPath string
+	durablePath  string
 	hash         string
 	bytes        int64
 }
@@ -71,6 +112,14 @@ func (d *hashCheckingDrive) UploadArtifact(_ context.Context, _, path string, ex
 		return "", errors.New("upload sha256 mismatch")
 	}
 	d.bytes = int64(len(data))
+	if d.durablePath != "" {
+		if err := os.MkdirAll(filepath.Dir(d.durablePath), 0o755); err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(d.durablePath, data, 0o644); err != nil {
+			return "", err
+		}
+	}
 	return "verified-artifact-" + d.hash[:12], nil
 }
 
