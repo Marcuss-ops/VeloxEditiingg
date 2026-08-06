@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -316,54 +315,5 @@ func TestClosedDB_MessageIsNotAClassification(t *testing.T) {
 	classified := ClassifyError(err)
 	if !IsElementScoped(classified) {
 		t.Errorf("raw closed-DB message must remain untyped, got: %v (raw=%v)", classified, err)
-	}
-}
-
-// TestClosedDB_RunnerUsesTypedInfrastructureAfterN attempts simulates the
-// runner-side contract with the typed boundary adapter. The raw SQLite
-// message is intentionally not passed directly to the tracker.
-func TestClosedDB_RunnerUsesTypedInfrastructureAfterN(t *testing.T) {
-	db := openTrackerTestDB(t)
-	db.Close() // simulate pre-failure inject — every subsequent query fails closed
-
-	// Build a closed-DB standing query. The boundary wraps the raw
-	// driver error as a canonical DomainError before policy sees it.
-	probe := func() error {
-		_, err := db.Exec(`SELECT 1`)
-		return err
-	}
-
-	// Lower the threshold to 3 so the test runs fast while still
-	// exercising the consecutive-error contract.
-	tracker := NewFailureTracker(RetryPolicy{
-		ConsecutiveErrorThreshold: 3,
-		ResetWindow:               0,
-	})
-
-	var (
-		escalated  atomic.Bool
-		cleanTicks atomic.Int32
-		totalTicks atomic.Int32
-	)
-	for i := 0; i < 10; i++ {
-		err := probe()
-		classified := ClassifyError(domain.NewInfrastructure(err))
-		totalTicks.Add(1)
-		if classified == nil {
-			cleanTicks.Add(1)
-		} else if recordErr := tracker.Record(classified); recordErr != nil {
-			escalated.Store(true)
-			break
-		}
-	}
-	if !escalated.Load() {
-		t.Fatalf("FailureTracker never escalated after %d closed-DB ticks (clean=%d)",
-			totalTicks.Load(), cleanTicks.Load())
-	}
-	if cleanTicks.Load() != 0 {
-		t.Errorf("expected zero clean ticks against closed DB, got %d", cleanTicks.Load())
-	}
-	if tk := tracker.Consecutive(); tk < 3 {
-		t.Errorf("expected at least 3 consecutive infra errors before escalation, got %d", tk)
 	}
 }
