@@ -16,9 +16,6 @@ import (
 	"velox-server/internal/config"
 )
 
-// keyring_crypto.go owns the Keyring (key management + AES-GCM
-// seal/open primitives). The Vault domain logic lives in vault.go.
-
 type Keyring struct {
 	mu      sync.RWMutex
 	keys    map[int][]byte
@@ -42,55 +39,50 @@ func NewKeyring(current int, keys map[int][]byte) (*Keyring, error) {
 	return &Keyring{keys: copyKeys, current: current}, nil
 }
 
-// LoadKeyring reads the current key from VELOX_CREDENTIAL_KEY or its _FILE
-// sibling. The value may be raw base64 or hexadecimal. Optional historical
-// keys are loaded from VELOX_CREDENTIAL_KEY_<version>.
-func LoadKeyring() (*Keyring, error) {
-	current := 1
-	if value := strings.TrimSpace(config.Getenv("VELOX_CREDENTIAL_KEY_VERSION")); value != "" {
-		if _, err := fmt.Sscanf(value, "%d", &current); err != nil || current <= 0 {
-			return nil, ErrKeyUnavailable
-		}
+// LoadKeyring builds a keyring from the one captured bootstrap snapshot.
+// Key files are read here because their contents are secret material, while
+// their paths and inline values are selected by internal/config.
+func LoadKeyring(cfg config.CredentialsConfig) (*Keyring, error) {
+	current := cfg.CurrentVersion
+	if current <= 0 {
+		current = 1
 	}
-	key, err := readKeyEnv("VELOX_CREDENTIAL_KEY")
+	key, err := readKeyConfig(cfg.Current)
 	if err != nil {
 		return nil, err
 	}
 	keys := map[int][]byte{current: key}
-	for version := 1; version <= 32; version++ {
+	for version, historical := range cfg.Historical {
 		if version == current {
 			continue
 		}
-		if historical, readErr := readKeyEnv(fmt.Sprintf("VELOX_CREDENTIAL_KEY_%d", version)); readErr == nil {
-			keys[version] = historical
+		if decoded, readErr := readKeyConfig(historical); readErr == nil {
+			keys[version] = decoded
 		}
 	}
 	return NewKeyring(current, keys)
 }
 
-func readKeyEnv(name string) ([]byte, error) {
-	value := strings.TrimSpace(config.Getenv(name))
-	if value == "" {
-		file := strings.TrimSpace(config.Getenv(name + "_FILE"))
-		if file != "" {
-			data, err := os.ReadFile(file)
-			if err != nil {
-				return nil, fmt.Errorf("credentials: read %s: %w", name, err)
-			}
-			value = strings.TrimSpace(string(data))
+func readKeyConfig(value config.CredentialKeyConfig) ([]byte, error) {
+	encoded := strings.TrimSpace(value.Value)
+	if encoded == "" && strings.TrimSpace(value.File) != "" {
+		data, err := os.ReadFile(strings.TrimSpace(value.File))
+		if err != nil {
+			return nil, fmt.Errorf("credentials: read key file: %w", err)
 		}
+		encoded = strings.TrimSpace(string(data))
 	}
-	if value == "" {
+	if encoded == "" {
 		return nil, ErrKeyUnavailable
 	}
-	if decoded, err := base64.RawStdEncoding.DecodeString(value); err == nil && len(decoded) == 32 {
+	if decoded, err := base64.RawStdEncoding.DecodeString(encoded); err == nil && len(decoded) == 32 {
 		return decoded, nil
 	}
-	if decoded, err := hex.DecodeString(value); err == nil && len(decoded) == 32 {
+	if decoded, err := hex.DecodeString(encoded); err == nil && len(decoded) == 32 {
 		return decoded, nil
 	}
-	if len(value) == 32 {
-		return []byte(value), nil
+	if len(encoded) == 32 {
+		return []byte(encoded), nil
 	}
 	return nil, ErrKeyUnavailable
 }
@@ -115,8 +107,6 @@ func (k *Keyring) key(version int) ([]byte, error) {
 	return append([]byte(nil), key...), nil
 }
 
-// Seal encrypts bytes with the current key and returns the key version needed
-// to decrypt them. Callers persist only the ciphertext and version.
 func (k *Keyring) Seal(plain []byte) ([]byte, int, error) {
 	version, key, err := k.currentKey()
 	if err != nil {
@@ -129,8 +119,6 @@ func (k *Keyring) Seal(plain []byte) ([]byte, int, error) {
 	return ciphertext, version, nil
 }
 
-// Open decrypts bytes using a specific key version. Historical key versions
-// remain readable during rotation; new values always use the current key.
 func (k *Keyring) Open(version int, ciphertext []byte) ([]byte, error) {
 	key, err := k.key(version)
 	if err != nil {

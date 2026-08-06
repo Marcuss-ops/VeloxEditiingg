@@ -6,7 +6,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"velox-server/internal/config"
 	"velox-server/internal/integrations/drive"
 	driveSvc "velox-server/internal/services/drive"
 	"velox-server/internal/store"
@@ -18,8 +17,8 @@ type DriveHandlers struct {
 }
 
 // NewDriveHandlers creates Drive handlers.
-func NewDriveHandlers(cfg *drive.ServiceConfig, driveService *drive.Service, sqliteStore *store.SQLiteStore) (*DriveHandlers, error) {
-	dataDir := resolveDriveDataDir(cfg.TokensDir)
+func NewDriveHandlers(cfg *drive.ServiceConfig, driveService *drive.Service, sqliteStore *store.SQLiteStore, dataDirs ...string) (*DriveHandlers, error) {
+	dataDir := resolveDriveDataDir(cfg.TokensDir, dataDirs...)
 	return &DriveHandlers{
 		svc: driveSvc.New(cfg.TokensDir, dataDir, driveService, sqliteStore),
 	}, nil
@@ -33,9 +32,9 @@ func (h *DriveHandlers) SetSQLiteStore(s *store.SQLiteStore) {
 	h.svc.SetStore(s)
 }
 
-func resolveDriveDataDir(tokensDir string) string {
-	if dir := config.GetDataDir(); dir != "" {
-		return filepath.Clean(dir)
+func resolveDriveDataDir(tokensDir string, dataDirs ...string) string {
+	if len(dataDirs) > 0 && dataDirs[0] != "" {
+		return filepath.Clean(dataDirs[0])
 	}
 
 	cleaned := filepath.Clean(tokensDir)

@@ -34,4 +34,33 @@ func TestDomainErrorProjectsUniformly(t *testing.T) {
 	if Retryable(err) {
 		t.Fatal("validation error must not be retryable")
 	}
+	mapping := MapError(err)
+	if mapping.HTTPStatus != http.StatusUnprocessableEntity || mapping.GRPCCode != codes.InvalidArgument || mapping.Retryable {
+		t.Fatalf("unexpected unified mapping: %+v", mapping)
+	}
+}
+
+func TestDomainErrorRejectsTextualClassification(t *testing.T) {
+	mapping := MapError(errors.New("database is closed"))
+	if mapping.HTTPStatus != http.StatusInternalServerError || mapping.Retryable {
+		t.Fatalf("untyped message must not be classified by text: %+v", mapping)
+	}
+}
+
+func TestDomainErrorClassifiedProjections(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  *DomainError
+		want ErrorMapping
+	}{
+		{"infrastructure", NewInfrastructure(errors.New("db")), ErrorMapping{HTTPStatus: http.StatusServiceUnavailable, GRPCCode: codes.Unavailable, FailureCode: "INFRASTRUCTURE", MetricCode: "INFRASTRUCTURE", Retryable: true}},
+		{"lease lost", NewLeaseLost(errors.New("cas")), ErrorMapping{HTTPStatus: http.StatusConflict, GRPCCode: codes.Aborted, FailureCode: "LEASE_LOST", MetricCode: "LEASE_LOST", Retryable: true}},
+		{"stale report", NewStaleReport(errors.New("old")), ErrorMapping{HTTPStatus: http.StatusConflict, GRPCCode: codes.Aborted, FailureCode: "STALE_REPORT", MetricCode: "STALE_REPORT", Retryable: false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := MapError(tc.err); got != tc.want {
+				t.Fatalf("MapError=%+v, want %+v", got, tc.want)
+			}
+		})
+	}
 }

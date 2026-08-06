@@ -1,9 +1,12 @@
 package drive
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	driveSvc "velox-server/internal/services/drive"
 )
 
 // GetDriveGroupsHandler builds group structure (clip/stock/voiceover) grouped by language
@@ -87,7 +90,7 @@ func (h *DriveHandlers) DriveFilesHandler(c *gin.Context) {
 	children, err := h.svc.DriveFiles(parentID)
 	if err != nil {
 		status := http.StatusInternalServerError
-		if err.Error() == "parent_id required" {
+		if errors.Is(err, driveSvc.ErrParentIDRequired) {
 			status = http.StatusBadRequest
 		}
 		c.JSON(status, gin.H{"success": false, "error": err.Error()})

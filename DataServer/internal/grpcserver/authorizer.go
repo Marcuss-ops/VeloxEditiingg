@@ -35,23 +35,18 @@ type allowlistAuthorizer struct {
 //   - allowlist empty + insecure dev → allowed (with one-time warning)
 //   - allowlist empty + production → IsAllowed returns false (bootstrap
 //     must have already fail-fast rejected this configuration)
-func NewAllowlistAuthorizer(allowedWorkersCSV string, insecureDev bool) WorkerAuthorizer {
+func NewAllowlistAuthorizer(allowedWorkerIDs []string, insecureDev bool) WorkerAuthorizer {
 	a := &allowlistAuthorizer{
 		workers:  make(map[string]bool),
 		insecure: insecureDev,
 	}
 
-	trimmed := strings.TrimSpace(allowedWorkersCSV)
-	if trimmed == "" || trimmed == "*" {
-		a.emptyList = true
-		return a
-	}
-
-	for _, id := range strings.Split(trimmed, ",") {
+	for _, id := range allowedWorkerIDs {
 		id = strings.TrimSpace(id)
-		if id != "" {
-			a.workers[id] = true
+		if id == "" || id == "*" {
+			continue
 		}
+		a.workers[id] = true
 	}
 	if len(a.workers) == 0 {
 		a.emptyList = true
@@ -87,11 +82,20 @@ func (a *allowlistAuthorizer) IsAllowed(workerID string) bool {
 }
 
 // ValidateWorkerAllowlist is called at bootstrap time to fail-fast when the
-// allowlist is empty in production mode. Returns nil if the configuration is
-// acceptable, or an error describing the problem.
-func ValidateWorkerAllowlist(allowedWorkersCSV string, insecureDev bool) error {
-	trimmed := strings.TrimSpace(allowedWorkersCSV)
-	if trimmed != "" && trimmed != "*" {
+// allowlist is empty in production mode. It consumes the already-typed
+// parsed slice from the application Config (config.Workers.AllowedWorkerIDs)
+// — the process environment is never re-read here. Returns nil if the
+// configuration is acceptable, or an error describing the problem.
+func ValidateWorkerAllowlist(allowedWorkerIDs []string, insecureDev bool) error {
+	hasExplicit := false
+	for _, id := range allowedWorkerIDs {
+		trimmed := strings.TrimSpace(id)
+		if trimmed != "" && trimmed != "*" {
+			hasExplicit = true
+			break
+		}
+	}
+	if hasExplicit {
 		return nil
 	}
 

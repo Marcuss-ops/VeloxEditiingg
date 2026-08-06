@@ -3,11 +3,18 @@
 package drive
 
 import (
+	"errors"
+
 	"velox-server/internal/integrations/drive"
 	"velox-server/internal/store"
 )
 
 // DriveFolder represents a Drive folder entry
+var (
+	ErrFolderNotFound   = errors.New("drive: folder not found")
+	ErrParentIDRequired = errors.New("drive: parent_id required")
+)
+
 type DriveFolder struct {
 	ID              string `json:"id"`
 	Name            string `json:"name"`

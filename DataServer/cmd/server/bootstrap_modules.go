@@ -151,6 +151,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 
 	// ── Asset Service (needs the Drive service) ──────────────
 	voiceoverStore := voiceoverassets.NewStore(cfg.Runtime.DataDir, cfg.Runtime.MaxVoiceoverBytes, []string{cfg.Runtime.DataDir})
+	voiceoverStore.SetRewriteDevBypass(cfg.Runtime.AssetRewriteDevBypass)
 
 	// The drive module's Service() is already non-nil after NewDriveModule.
 	var driveSvc voiceoverassets.DriveDownloader
@@ -193,7 +194,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	// Compute the socialclient.Config ONCE here so the Enqueuer validator
 	// wiring AND the socialGatewayProvider below share the same
 	// configuration source (no risk of two reads disagreeing on the env).
-	socialClientCfg := socialclient.ConfigFromEnv()
+	socialClientCfg := socialclient.ConfigFromRuntime(cfg.Runtime.Social)
 	if err := socialClientCfg.Validate(); err != nil {
 		log.Printf("[BOOTSTRAP] socialclient config invalid: %v — provider will refuse deliveries until fixed", err)
 	}
@@ -271,7 +272,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 		p.SQLite,
 		fmt.Sprintf("delivery-runner-%d", time.Now().UnixNano()),
 	)
-	if keys, keyErr := credentials.LoadKeyring(); keyErr == nil {
+	if keys, keyErr := credentials.LoadKeyring(cfg.Runtime.Credentials); keyErr == nil {
 		if vault, vaultErr := credentials.NewVault(p.SQLite, keys); vaultErr == nil {
 			deliveryRunner.WithCredentialVault(vault)
 			log.Printf("[BOOTSTRAP] Delivery credential vault enabled")

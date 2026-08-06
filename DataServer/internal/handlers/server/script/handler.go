@@ -15,7 +15,6 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/costmodel"
 	"velox-server/internal/creatorflow"
-	remoteansible "velox-server/internal/handlers/remote/ansible"
 	jobshandler "velox-server/internal/handlers/server/jobs"
 	driveintegration "velox-server/internal/integrations/drive"
 	"velox-server/internal/jobs/enqueue"
@@ -240,16 +239,11 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 			payload = map[string]interface{}{}
 		}
 
-		// MasterURL resolution is mandatory in production. The shell-out
-		// `hostname -I` discovery was removed in Blocco 4 step #3: the
-		// creatorflow domain no longer shells out. Production deployments
-		// set cfg.Workers.MasterURL or VELOX_MASTER_URL via the
-		// remoteansible.ResolveMasterURL helper. Local dev/test fall back
-		// to an explicit localhost so the script handler remains
-		// self-contained on a developer's laptop.
-		resolvedMasterURL := remoteansible.ResolveMasterURL(cfg, c, "").URL
-		if resolvedMasterURL == "" || remoteansible.IsLocalhostURL(resolvedMasterURL) {
-			resolvedMasterURL = "http://127.0.0.1:8000"
+		// The endpoint was validated and frozen at bootstrap. Never derive
+		// it from request headers, hostname discovery, or another URL.
+		resolvedMasterURL := ""
+		if cfg != nil {
+			resolvedMasterURL = string(cfg.ControlPlane.RESTPublic)
 		}
 		if h.creator != nil && !shouldBypassCreator(payload) {
 			if creatorResponse, used, err := h.creator.StartOrPersistForwarding(c.Request.Context(), payload); err != nil {
@@ -349,11 +343,7 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 	}
 }
 
-// detectPublicMasterURL was removed in Blocco 4 step #3: hostname
-// discovery (`hostname -I`) was a creatorflow-domain shim. Operators
-// set cfg.Workers.MasterURL or VELOX_MASTER_URL in production; dev/test
-// paths use the explicit `http://127.0.0.1:8000` fallback in
-// GenerateWithImagesHandler.
+// The master URL is exclusively supplied by Config.ControlPlane.RESTPublic.
 
 func shouldBypassCreator(payload map[string]interface{}) bool {
 	if payload == nil {

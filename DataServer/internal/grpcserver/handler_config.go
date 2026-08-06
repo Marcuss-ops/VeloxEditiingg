@@ -23,9 +23,9 @@ type HandlerConfig struct {
 	// AllowInsecure is dev-only: allow insecure gRPC connections
 	// (VELOX_GRPC_ALLOW_INSECURE_DEV).
 	AllowInsecure bool
-	// AllowedWorkers is a P0 comma-separated worker ID allowlist
-	// (VELOX_ALLOWED_WORKERS).
-	AllowedWorkers string
+	// AllowedWorkerIDs is the validated worker ID allowlist captured by
+	// the application Config (VELOX_ALLOWED_WORKERS).
+	AllowedWorkerIDs []string
 }
 
 // SetIngestionSvc installs the canonical TaskReportIngestionService so

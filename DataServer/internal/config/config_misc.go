@@ -1,25 +1,24 @@
 package config
 
 import (
-	"os"
 	"strings"
 )
 
 // ── AuthConfig ──────────────────────────────────────────────────────────
 
-func loadAuthConfig() AuthConfig {
+func loadAuthConfig(raw RawConfig) AuthConfig {
 	c := AuthConfig{
-		AdminToken: os.Getenv("VELOX_ADMIN_TOKEN"),
+		AdminToken: raw.Get("VELOX_ADMIN_TOKEN"),
 	}
 	if c.AdminToken == "" {
-		c.AdminToken = os.Getenv("MASTER_ADMIN_TOKEN")
+		c.AdminToken = raw.Get("MASTER_ADMIN_TOKEN")
 	}
 	// InstaEdit→Velox JWT secret. Distinct from SOCIAL_API_TOKEN
 	// (which authenticates the reverse direction). Empty means the
 	// instaeditauth verifier is not configured; the middleware
 	// surfaces 503 so a misconfigured deployment fails loudly.
-	c.InstaeditControlJWTSecret = os.Getenv("INSTAEDIT_CONTROL_JWT_SECRET")
-	c.VeloxWebhookSecret = os.Getenv("VELOX_WEBHOOK_SECRET")
+	c.InstaeditControlJWTSecret = raw.Get("INSTAEDIT_CONTROL_JWT_SECRET")
+	c.VeloxWebhookSecret = raw.Get("VELOX_WEBHOOK_SECRET")
 	return c
 }
 
@@ -27,11 +26,11 @@ func loadAuthConfig() AuthConfig {
 
 // loadPipelineConfig populates PipelineConfig from environment variables.
 // Spec §8: cfg.Pipeline.JobMasterURL replaces the previously-root Config.JobMasterURL.
-func loadPipelineConfig() PipelineConfig {
+func loadPipelineConfig(raw RawConfig) PipelineConfig {
 	return PipelineConfig{
-		JobMasterURL: os.Getenv("VELOX_JOB_MASTER_URL"),
-		OllamaURL:    firstNonEmpty(os.Getenv("OLLAMA_ADDR"), "http://127.0.0.1:11434"),
-		OllamaModel:  firstNonEmpty(os.Getenv("OLLAMA_MODEL"), "gemma4:e4b"),
+		JobMasterURL: raw.Get("VELOX_JOB_MASTER_URL"),
+		OllamaURL:    firstNonEmpty(raw.Get("OLLAMA_ADDR"), "http://127.0.0.1:11434"),
+		OllamaModel:  firstNonEmpty(raw.Get("OLLAMA_MODEL"), "gemma4:e4b"),
 	}
 }
 
@@ -60,12 +59,12 @@ func loadPipelineConfig() PipelineConfig {
 //   - MaxTotalDurationSecondsPerRequest: 3600s (1h). Again
 //     misconfiguration-vs-abuse trade-off; legitimate producers
 //     handle full-day videos via a sequence of submits, not one.
-func loadM2MConfig() M2MConfig {
+func loadM2MConfig(raw RawConfig) M2MConfig {
 	return M2MConfig{
-		DefaultRPS:                        intFromEnv("VELOX_M2M_DEFAULT_RPS", 5, 1),
-		DefaultBurst:                      intFromEnv("VELOX_M2M_DEFAULT_BURST", 10, 1),
-		MaxScenesPerRequest:               intFromEnv("VELOX_M2M_MAX_SCENES_PER_REQUEST", 1000, 1),
-		MaxTotalDurationSecondsPerRequest: floatFromEnv("VELOX_M2M_MAX_TOTAL_DURATION_SECS", 3600, 0),
+		DefaultRPS:                        raw.Int("VELOX_M2M_DEFAULT_RPS", 5, 1),
+		DefaultBurst:                      raw.Int("VELOX_M2M_DEFAULT_BURST", 10, 1),
+		MaxScenesPerRequest:               raw.Int("VELOX_M2M_MAX_SCENES_PER_REQUEST", 1000, 1),
+		MaxTotalDurationSecondsPerRequest: raw.Float("VELOX_M2M_MAX_TOTAL_DURATION_SECS", 3600, 0),
 	}
 }
 
@@ -77,12 +76,12 @@ func loadM2MConfig() M2MConfig {
 //
 // A wildcard entry `*.foo.com` is preserved as-is — the matcher in
 // ssrf_url.go treats the literal `*.` prefix as a wildcard token.
-func loadAllowedExternalDomains() []string {
-	raw := os.Getenv("VELOX_ALLOWED_EXTERNAL_DOMAINS")
-	if raw = strings.TrimSpace(raw); raw == "" {
+func loadAllowedExternalDomains(raw RawConfig) []string {
+	rawValue := strings.TrimSpace(raw.Get("VELOX_ALLOWED_EXTERNAL_DOMAINS"))
+	if rawValue == "" {
 		return nil
 	}
-	parts := strings.Split(raw, ",")
+	parts := strings.Split(rawValue, ",")
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
 		p = strings.TrimSpace(p)

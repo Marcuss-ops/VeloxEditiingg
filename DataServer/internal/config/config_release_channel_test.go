@@ -12,7 +12,7 @@ import (
 // "dev" is the safe-for-existing-clients choice.
 func TestReleaseChannel_DefaultsToDev(t *testing.T) {
 	os.Unsetenv("VELOX_RELEASE_CHANNEL")
-	c := loadRuntimeConfig("")
+	c := loadRuntimeConfig("", RawConfigFromEnv())
 	if c.ReleaseChannel != "dev" {
 		t.Fatalf("expected ReleaseChannel=dev fallback, got %q", c.ReleaseChannel)
 	}
@@ -39,7 +39,7 @@ func TestReleaseChannel_ExplicitValues(t *testing.T) {
 	}
 	for _, tc := range cases {
 		os.Setenv("VELOX_RELEASE_CHANNEL", tc.in)
-		got := loadRuntimeConfig("").ReleaseChannel
+		got := loadRuntimeConfig("", RawConfigFromEnv()).ReleaseChannel
 		if got != tc.want {
 			t.Errorf("VELOX_RELEASE_CHANNEL=%q → ReleaseChannel=%q (expected %q)", tc.in, got, tc.want)
 		}
@@ -54,7 +54,7 @@ func TestReleaseChannel_ExplicitValues(t *testing.T) {
 // sides of the deploy boundary.
 func TestReleaseChannel_TrimsWhitespace(t *testing.T) {
 	os.Setenv("VELOX_RELEASE_CHANNEL", "   production   ")
-	got := loadRuntimeConfig("").ReleaseChannel
+	got := loadRuntimeConfig("", RawConfigFromEnv()).ReleaseChannel
 	if got != "production" {
 		t.Fatalf("expected trimmed 'production', got %q", got)
 	}
@@ -70,7 +70,7 @@ func TestReleaseChannel_SurvivesOtherVarsUnset(t *testing.T) {
 	os.Unsetenv("VELOX_RELEASE_CHANNEL")
 	os.Unsetenv("VELOX_GRPC_ALLOW_INSECURE_DEV")
 	os.Unsetenv("VELOX_ALLOW_NOP_BLOBSTORE_DEV")
-	c := loadRuntimeConfig("")
+	c := loadRuntimeConfig("", RawConfigFromEnv())
 	if c.ReleaseChannel != "dev" || c.GRPCAllowInsecureDev || c.AllowNopBlobStoreDev {
 		t.Fatalf("expected defaults preserved: ReleaseChannel=dev, GRPCAllowInsecureDev=false, AllowNopBlobStoreDev=false; got %+v", c)
 	}

@@ -38,25 +38,11 @@ type ServiceEnv struct {
 	SnapshotInterval time.Duration
 }
 
-// LoadServiceEnv reads VELOX_CACHE_LOOKAHEAD_JOBS and
-// VELOX_CACHE_SNAPSHOT_INTERVAL from the process env. Defaults:
-// Deprecated: use config.FromEnv and Runtime.Cache at the
-// composition root so configuration is loaded exactly once.
-// LookaheadJobs=10, SnapshotInterval=30s. Malformed values produce
-// a non-nil error — the caller (master bootstrap) MUST surface this
-// to the operator rather than silently fall back to defaults so a
-// typo like "VELOX_CACHE_LOOKAHEAD_JOBS=ten" doesn't masquerade as
-// OK with a 0-row snapshot.
-//
-// Empty / unset env vars: defaults are used silently (this is the
-// common path in CI + dev shells).
-func LoadServiceEnv() (ServiceEnv, error) {
-	cache, err := config.LoadCacheConfigFromEnv()
-	if err != nil {
-		return ServiceEnv{}, err
-	}
+// LoadServiceEnv maps the typed bootstrap cache settings into the
+// protected-asset service settings. It never reads process environment.
+func LoadServiceEnv(cache config.CacheConfig) ServiceEnv {
 	return ServiceEnv{
 		LookaheadJobs:    cache.ProtectedAssetLookaheadJobs,
 		SnapshotInterval: cache.SnapshotInterval,
-	}, nil
+	}
 }

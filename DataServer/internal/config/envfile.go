@@ -17,9 +17,11 @@ func Getenv(key string) string { return os.Getenv(key) }
 // LookupEnv is the presence-aware counterpart to Getenv.
 func LookupEnv(key string) (string, bool) { return os.LookupEnv(key) }
 
-// LoadEnvFile reads a .env-style file and sets the key/value pairs as
-// environment variables using os.Setenv. It is intentionally simple and
-// does not support every edge case of the dotenv format; it handles:
+// loadEnvFile reads a .env-style file and sets the key/value pairs as
+// environment variables using os.Setenv. It returns the keys it actually
+// loaded, allowing RawConfigFromEnvFile to preserve provenance without
+// global mutable state. It is intentionally simple and does not support
+// every edge case of the dotenv format; it handles:
 //   - KEY=VALUE lines
 //   - KEY="VALUE" lines (double quotes only)
 //   - lines starting with # or empty lines (ignored)
@@ -29,26 +31,26 @@ func LookupEnv(key string) (string, bool) { return os.LookupEnv(key) }
 // values keep precedence. The function is safe to call with a missing
 // file: it returns nil so that production deployments that do not use
 // a .env file are unaffected.
-func LoadEnvFile(path string) error {
-	resetEnvFileKeys()
+func loadEnvFile(path string) (map[string]struct{}, error) {
+	loaded := make(map[string]struct{})
 	if path == "" {
-		return nil
+		return loaded, nil
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return loaded, nil
 		}
-		return fmt.Errorf("config: cannot stat env file %q: %w", path, err)
+		return nil, fmt.Errorf("config: cannot stat env file %q: %w", path, err)
 	}
 	if info.IsDir() {
-		return fmt.Errorf("config: env file %q is a directory", path)
+		return nil, fmt.Errorf("config: env file %q is a directory", path)
 	}
 
 	file, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("config: cannot open env file %q: %w", path, err)
+		return nil, fmt.Errorf("config: cannot open env file %q: %w", path, err)
 	}
 	defer file.Close()
 
@@ -89,16 +91,24 @@ func LoadEnvFile(path string) error {
 		// Do not overwrite an already-set environment variable.
 		if _, exists := os.LookupEnv(key); !exists {
 			if err := os.Setenv(key, value); err != nil {
-				return fmt.Errorf("config: set env %q: %w", key, err)
+				return nil, fmt.Errorf("config: set env %q: %w", key, err)
 			}
-			markEnvFileKey(key)
+			loaded[key] = struct{}{}
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("config: error reading env file %q: %w", path, err)
+		return nil, fmt.Errorf("config: error reading env file %q: %w", path, err)
 	}
-	return nil
+	return loaded, nil
+}
+
+// LoadEnvFile is retained as a compatibility helper for callers that only
+// need to populate the process environment. New bootstrap code should call
+// RawConfigFromEnvFile so source provenance stays attached to the snapshot.
+func LoadEnvFile(path string) error {
+	_, err := loadEnvFile(path)
+	return err
 }
 
 // EnvFilePath returns the path to the .env file to load. Precedence:

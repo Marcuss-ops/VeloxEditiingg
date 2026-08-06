@@ -2,17 +2,23 @@ package config
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 )
 
-// FromEnv loads configuration from environment variables.
-// Only sub-configs are populated — no flat field aliases.
+// FromEnv is the compatibility entry point for callers that still need to
+// load directly from the process environment. The canonical bootstrap uses
+// LoadFromEnv, which captures the raw snapshot once and freezes Config.
 func FromEnv() *Config {
+	return FromRaw(RawConfigFromEnv())
+}
+
+// FromRaw maps one captured, unvalidated RawConfig into the typed Config.
+// RawConfig never escapes this loading boundary.
+func FromRaw(raw RawConfig) *Config {
 	// First pass: determine data directory for dependent configs
-	dataDir := GetDataDir()
-	runtimeDir := os.Getenv("VELOX_RUNTIME_DIR")
+	dataDir := dataDirFromRaw(raw)
+	runtimeDir := raw.Get("VELOX_RUNTIME_DIR")
 	if runtimeDir == "" {
 		if dataDir != "" {
 			runtimeDir = filepath.Dir(dataDir)
@@ -23,28 +29,29 @@ func FromEnv() *Config {
 	if dataDir == "" {
 		dataDir = filepath.Join(runtimeDir, "data")
 	}
-	secretsDir := os.Getenv("VELOX_SECRETS_DIR")
+	secretsDir := raw.Get("VELOX_SECRETS_DIR")
 	if secretsDir == "" {
 		secretsDir = filepath.Join(runtimeDir, "secrets")
 	}
 
-	// Load sub-configs
-	server := loadServerConfig()
-	runtime := loadRuntimeConfig(dataDir)
-	database := loadDatabaseConfig()
-	workers := loadWorkersConfig()
-	fleet := loadFleetConfig()
-	compatibility := loadCompatibilityConfig()
-	retention := loadRetentionConfig()
-	auth := loadAuthConfig()
-	storage := loadStorageConfig()
-	drive := loadDriveConfig(secretsDir, dataDir)
-	ansible := loadAnsibleConfig(runtime.DataDir)
-	render := loadRenderConfig()
+	// Load sub-configs.
+	server := loadServerConfig(raw)
+	runtime := loadRuntimeConfig(dataDir, raw)
+	database := loadDatabaseConfig(raw)
+	workers := loadWorkersConfig(raw)
+	fleet := loadFleetConfig(raw)
+	compatibility := loadCompatibilityConfig(raw)
+	retention := loadRetentionConfig(raw)
+	auth := loadAuthConfig(raw)
+	storage := loadStorageConfig(raw)
+	drive := loadDriveConfig(secretsDir, dataDir, raw)
+	ansible := loadAnsibleConfig(runtime.DataDir, raw)
+	render := loadRenderConfig(raw)
 
-	pipeline := loadPipelineConfig()
-	m2m := loadM2MConfig()
-	allowedDomains := loadAllowedExternalDomains()
+	pipeline := loadPipelineConfig(raw)
+	m2m := loadM2MConfig(raw)
+	allowedDomains := loadAllowedExternalDomains(raw)
+	controlPlane, frontend := loadEndpointConfig(raw)
 	c := &Config{
 		Server:   server,
 		Runtime:  runtime,
@@ -59,9 +66,13 @@ func FromEnv() *Config {
 		Ansible:                ansible,
 		Render:                 render,
 		Pipeline:               pipeline,
+		ControlPlane:           controlPlane,
+		Frontend:               frontend,
 		AllowedExternalDomains: allowedDomains,
 	}
-	c.LoadOperationalRuntime()
+	loadProcessConfig(c, raw)
+	loadOperationalRuntimeConfigInto(c, raw)
+	c.validationErrors = operationalParseErrors(raw)
 	return c
 }
 
@@ -77,8 +88,11 @@ func (c *Config) Validate() error {
 	if c.Compatibility.Mode != "compat" && c.Compatibility.Mode != "strict" {
 		return fmt.Errorf("config: VELOX_COMPATIBILITY_MODE must be compat or strict, got %q", c.Compatibility.Mode)
 	}
-	if len(c.parseErrors) > 0 {
-		return fmt.Errorf("config: invalid environment values: %s", strings.Join(c.parseErrors, "; "))
+	if len(c.validationErrors) > 0 {
+		return fmt.Errorf("config: invalid environment values: %s", strings.Join(c.validationErrors, "; "))
+	}
+	if err := validateConfiguredEndpoints(c); err != nil {
+		return err
 	}
 	if c.Database.DBPath == "" {
 		return fmt.Errorf("config: VELOX_DB_PATH is required (absolute path to SQLite database)")

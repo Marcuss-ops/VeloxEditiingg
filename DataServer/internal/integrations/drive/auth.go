@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"velox-server/internal/config"
 	"velox-server/internal/credentials"
 )
 
@@ -114,14 +115,14 @@ type TokenManager struct {
 }
 
 // NewTokenManager creates a new token manager
-func NewTokenManager(tokensDir string) (*TokenManager, error) {
+func NewTokenManager(tokensDir string, credentialConfig config.CredentialsConfig) (*TokenManager, error) {
 	if err := os.MkdirAll(tokensDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create tokens directory: %w", err)
 	}
 	// Construction remains possible for health endpoints, but persistence is
 	// fail-closed when the central encryption key is not configured.
 	var keyring *credentials.Keyring
-	if loaded, loadErr := credentials.LoadKeyring(); loadErr == nil {
+	if loaded, loadErr := credentials.LoadKeyring(credentialConfig); loadErr == nil {
 		keyring = loaded
 	}
 	return &TokenManager{tokensDir: tokensDir, keyring: keyring}, nil

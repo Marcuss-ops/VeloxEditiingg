@@ -91,7 +91,7 @@ func (s *Service) ClipFolderID(folderName, group string) (map[string]interface{}
 		}
 	}
 
-	return nil, fmt.Errorf("folder not found")
+	return nil, fmt.Errorf("%w", ErrFolderNotFound)
 }
 
 // Helpers

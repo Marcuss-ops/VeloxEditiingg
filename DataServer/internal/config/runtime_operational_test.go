@@ -21,8 +21,7 @@ func TestLoadOperationalRuntimeDefaults(t *testing.T) {
 	} {
 		t.Setenv(key, "")
 	}
-	cfg := &Config{Runtime: RuntimeConfig{DataDir: t.TempDir()}, Database: DatabaseConfig{DBPath: t.TempDir() + "/velox.db"}}
-	cfg.LoadOperationalRuntime()
+	cfg := FromRaw(RawConfigFromEnv())
 	if cfg.Runtime.Scheduler.TaskGraphTick != 2*time.Second {
 		t.Fatalf("taskgraph tick = %s", cfg.Runtime.Scheduler.TaskGraphTick)
 	}
@@ -86,11 +85,7 @@ func TestMalformedOperationalEnvironmentIsRejected(t *testing.T) {
 	t.Setenv("VELOX_CACHE_LOOKAHEAD_JOBS", "zero")
 	t.Setenv("VELOX_CALENDAR_SCHEDULER_INTERVAL_SECONDS", "zero")
 	t.Setenv("SOCIAL_API_TIMEOUT_MS", "-1")
-	cfg := &Config{
-		Database: DatabaseConfig{DBPath: t.TempDir() + "/velox.db"},
-		Workers:  WorkersConfig{AllowedWorkerIDs: []string{"worker-a", "worker-b"}},
-	}
-	cfg.LoadOperationalRuntime()
+	cfg := FromRaw(RawConfigFromEnv())
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate accepted malformed operational environment")
 	} else if !strings.Contains(err.Error(), "VELOX_TASKGRAPH_TICK") || !strings.Contains(err.Error(), "VELOX_CACHE_LOOKAHEAD_JOBS") {
@@ -99,11 +94,21 @@ func TestMalformedOperationalEnvironmentIsRejected(t *testing.T) {
 }
 
 func TestRuntimeSourcesTrackEnvFileAndReset(t *testing.T) {
-	os.Unsetenv("VELOX_TASKGRAPH_TICK")
-	defer os.Unsetenv("VELOX_TASKGRAPH_TICK")
-	cfg := &Config{Database: DatabaseConfig{DBPath: t.TempDir() + "/velox.db"}}
-	cfg.LoadOperationalRuntime()
-	if got := cfg.Runtime.Sources["scheduler.taskgraph_tick"]; got != SourceDefault {
+	const key = "VELOX_TASKGRAPH_TICK"
+	oldValue, wasSet := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if wasSet {
+			_ = os.Setenv(key, oldValue)
+		} else {
+			_ = os.Unsetenv(key)
+		}
+	})
+	raw := RawConfigFromEnv()
+	_ = FromRaw(raw)
+	if got := raw.Source("VELOX_TASKGRAPH_TICK"); got != SourceDefault {
 		t.Fatalf("default source = %q, want %q", got, SourceDefault)
 	}
 	// SourceFile is exercised by LoadEnvFile in the config package; use a
@@ -113,18 +118,18 @@ func TestRuntimeSourcesTrackEnvFileAndReset(t *testing.T) {
 	if err := os.WriteFile(path, []byte("VELOX_TASKGRAPH_TICK=7s\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := LoadEnvFile(path); err != nil {
+	raw, err := RawConfigFromEnvFile(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.LoadOperationalRuntime()
-	if got := cfg.Runtime.Sources["scheduler.taskgraph_tick"]; got != SourceFile {
+	_ = FromRaw(raw)
+	if got := raw.Source("VELOX_TASKGRAPH_TICK"); got != SourceFile {
 		t.Fatalf("file source = %q, want %q", got, SourceFile)
 	}
 }
 
 func TestFingerprintChangesForTypedRuntimeValue(t *testing.T) {
-	cfg := &Config{Database: DatabaseConfig{DBPath: t.TempDir() + "/velox.db"}}
-	cfg.LoadOperationalRuntime()
+	cfg := FromRaw(RawConfigFromEnv())
 	first := cfg.Snapshot().Fingerprint
 	cfg.Runtime.Scheduler.TaskGraphTick += time.Second
 	second := cfg.Snapshot().Fingerprint

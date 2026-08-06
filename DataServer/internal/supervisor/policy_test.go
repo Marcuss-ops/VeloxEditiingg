@@ -17,6 +17,8 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"velox-shared/contract/domain"
 )
 
 // ────────────────────────────────────────────────────────────────────────
@@ -39,10 +41,10 @@ func TestClassifyError_SqlConnDone_IsInfrastructure(t *testing.T) {
 	}
 }
 
-func TestClassifyError_DatabaseIsClosed_IsInfrastructure(t *testing.T) {
+func TestClassifyError_DatabaseMessageAloneIsNotInfrastructure(t *testing.T) {
 	got := ClassifyError(fmt.Errorf("sql: database is closed"))
-	if !IsInfrastructure(got) {
-		t.Errorf("ClassifyError(database is closed) = %v, want ErrInfrastructure", got)
+	if !IsElementScoped(got) {
+		t.Errorf("an untyped database message must not be classified by text: %v", got)
 	}
 }
 
@@ -64,10 +66,38 @@ func TestClassifyError_ContextCanceled_IsElementScoped(t *testing.T) {
 	}
 }
 
-func TestClassifyError_TransitionConflict_IsLeaseLost(t *testing.T) {
-	got := ClassifyError(fmt.Errorf("completion: transition conflict: lease_id mismatch"))
+func TestClassifyError_TypedTransitionConflict_IsLeaseLost(t *testing.T) {
+	got := ClassifyError(fmt.Errorf("wrapped CAS: %w", domain.NewLeaseConflict("transition conflict")))
 	if !IsLeaseLost(got) {
-		t.Errorf("ClassifyError(transition conflict) = %v, want ErrLeaseLost", got)
+		t.Errorf("typed transition conflict = %v, want ErrLeaseLost", got)
+	}
+}
+
+func TestClassifyError_TransitionTextAloneIsElementScoped(t *testing.T) {
+	got := ClassifyError(errors.New("transition conflict: arbitrary provider text"))
+	if !IsElementScoped(got) {
+		t.Errorf("untyped transition text must not be lease-lost: %v", got)
+	}
+}
+
+func TestClassifyError_StaleReport_IsElementScoped(t *testing.T) {
+	got := ClassifyError(domain.NewStaleReport(errors.New("old report")))
+	if !IsElementScoped(got) {
+		t.Errorf("stale report = %v, want ErrElementScoped", got)
+	}
+	if IsLeaseLost(got) {
+		t.Errorf("stale report must not be classified as lease lost: %v", got)
+	}
+}
+
+func TestClassifyError_RealSubsystemConflictMarkers(t *testing.T) {
+	for _, err := range []error{
+		domain.NewLeaseConflict("completion: stale report"),
+		domain.NewLeaseConflict("taskgraph: transition conflict"),
+	} {
+		if !IsLeaseLost(ClassifyError(err)) {
+			t.Fatalf("typed subsystem conflict was not classified as lease lost: %v", err)
+		}
 	}
 }
 
@@ -262,13 +292,11 @@ func openTrackerTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// TestClosedDB_ClassifiedAsInfrastructure verifies the canonical
-// injection pattern: open a real sqlite-backed *sql.DB, run an
-// arbitrary Query that succeeds, close the DB, run the same
-// Query — observe that the resulting error classifies as
-// ErrInfrastructure. This is the building block every runner's
-// tick() function will rely on.
-func TestClosedDB_ClassifiedAsInfrastructure(t *testing.T) {
+// TestClosedDB_MessageIsNotAClassification verifies that a raw driver
+// message is not enough to select an infrastructure policy. SQLite
+// adapters must wrap driver failures in domain.NewInfrastructure at their
+// boundary; the supervisor never parses Error().
+func TestClosedDB_MessageIsNotAClassification(t *testing.T) {
 	db := openTrackerTestDB(t)
 	// Sanity: while open, a query succeeds.
 	var one int
@@ -286,23 +314,20 @@ func TestClosedDB_ClassifiedAsInfrastructure(t *testing.T) {
 		t.Fatal("query against closed DB should fail")
 	}
 	classified := ClassifyError(err)
-	if !IsInfrastructure(classified) {
-		t.Errorf("expected ErrInfrastructure from closed-DB query, got: %v (raw=%v)", classified, err)
+	if !IsElementScoped(classified) {
+		t.Errorf("raw closed-DB message must remain untyped, got: %v (raw=%v)", classified, err)
 	}
 }
 
-// TestClosedDB_RunnerReturnsErrInfrastructureAfterN attempts
-// simulates the runner-side of the contract: drive N consecutive
-// closed-DB ticks through a FailureTracker and assert the
-// tracker fires ErrInfrastructure at the threshold.
-func TestClosedDB_RunnerReturnsErrInfrastructureAfterN(t *testing.T) {
+// TestClosedDB_RunnerUsesTypedInfrastructureAfterN attempts simulates the
+// runner-side contract with the typed boundary adapter. The raw SQLite
+// message is intentionally not passed directly to the tracker.
+func TestClosedDB_RunnerUsesTypedInfrastructureAfterN(t *testing.T) {
 	db := openTrackerTestDB(t)
 	db.Close() // simulate pre-failure inject — every subsequent query fails closed
 
-	// Build a closed-DB standing query that surfaces as
-	// "database is closed" or sql.ErrConnDone depending on the
-	// driver — both classification paths must converge on
-	// ErrInfrastructure.
+	// Build a closed-DB standing query. The boundary wraps the raw
+	// driver error as a canonical DomainError before policy sees it.
 	probe := func() error {
 		_, err := db.Exec(`SELECT 1`)
 		return err
@@ -322,7 +347,7 @@ func TestClosedDB_RunnerReturnsErrInfrastructureAfterN(t *testing.T) {
 	)
 	for i := 0; i < 10; i++ {
 		err := probe()
-		classified := ClassifyError(err)
+		classified := ClassifyError(domain.NewInfrastructure(err))
 		totalTicks.Add(1)
 		if classified == nil {
 			cleanTicks.Add(1)

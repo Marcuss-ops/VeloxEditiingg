@@ -34,11 +34,9 @@ import (
 // by the pipeline handler, the script handler, and the
 // CreatorForwardingRunner.
 //
-// MasterURL is mandatory in production (cfg.Workers.MasterURL or
-// VELOX_MASTER_URL). The Resolver skips URL rewriting when masterURL is
-// empty, so an unset masterURL is safe but means the worker fetches
-// scene-image references via the unrewritten URL — only acceptable in
-// dev/test.
+// The public REST control-plane endpoint is required by the production
+// bootstrap. Resolver URL rewriting uses the typed endpoint snapshot and
+// never discovers or derives a URL at runtime.
 //
 // The PR-operation 01 / Fase 2 Job+Task creation surface (RenderPlan,
 // CreateJobWithPlan, deriveJobID) lives in the sibling file service_job.go.
@@ -74,7 +72,7 @@ func New(cfg *config.Config, enqueuer *enqueue.Enqueuer, dbStore *store.SQLiteSt
 		dbStore:   dbStore,
 		dataDir:   strings.TrimSpace(cfg.Runtime.DataDir),
 		videosDir: strings.TrimSpace(cfg.Runtime.VideosDir),
-		masterURL: resolvePublicMasterURL(cfg),
+		masterURL: string(cfg.ControlPlane.RESTPublic),
 	}
 }
 
@@ -238,19 +236,12 @@ func firstString(m map[string]interface{}, keys ...string) string {
 	return ""
 }
 
-// resolvePublicMasterURL returns the master URL from cfg, then from the
-// shared config package, in that order. It does NOT shell out to
-// `hostname -I` — hostname discovery is the responsibility of the
-// ansible remote-resolution package and the dev/test fixtures, not of
-// the creatorflow domain. Production deployments MUST set
-// cfg.Workers.MasterURL (or VELOX_MASTER_URL); an empty return value is
-// safe because Resolver.Resolve skips URL rewriting when masterURL is
-// empty.
+// resolvePublicMasterURL is retained for package-local compatibility. It
+// reads only the typed endpoint snapshot; it never consults the environment
+// or derives one endpoint from another.
 func resolvePublicMasterURL(cfg *config.Config) string {
-	if cfg != nil {
-		if v := strings.TrimSpace(cfg.Workers.MasterURL); v != "" {
-			return v
-		}
+	if cfg == nil {
+		return ""
 	}
-	return strings.TrimSpace(config.GetMasterURL())
+	return strings.TrimSpace(string(cfg.ControlPlane.RESTPublic))
 }

@@ -8,8 +8,6 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-
-	"velox-server/internal/config"
 )
 
 type AnsibleHandlers struct {
@@ -17,6 +15,7 @@ type AnsibleHandlers struct {
 	computers *AnsibleComputerManager
 	dataDir   string
 	masterURL string
+	version   string
 }
 
 func NewAnsibleHandlers(manager *AnsibleRunManager) *AnsibleHandlers {
@@ -30,6 +29,10 @@ func (h *AnsibleHandlers) SetComputerManager(computers *AnsibleComputerManager, 
 
 func (h *AnsibleHandlers) SetMasterURL(masterURL string) {
 	h.masterURL = strings.TrimSpace(masterURL)
+}
+
+func (h *AnsibleHandlers) SetVersion(version string) {
+	h.version = strings.TrimSpace(version)
 }
 
 func (h *AnsibleHandlers) isReady() bool {
@@ -84,7 +87,7 @@ func (h *AnsibleHandlers) capabilitiesPayload() gin.H {
 	return gin.H{
 		"ansible_ready": h.isReady(),
 		"playbooks_dir": playbooksDir,
-		"version":       config.Getenv("VELOX_VERSION_NUMBER"),
+		"version":       h.version,
 		"actions":       actions,
 	}
 }

@@ -207,21 +207,14 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 
 	log.Printf("[GRPC] Worker %s connected (session: %s, name: %s)", workerID, sessionID, hello.GetWorkerName())
 
-	// Extract supported_job_types from Hello capabilities for ClaimNext filtering.
-	// Placement: parse typed executor capabilities from the worker's
-	// capability report and store them on the session. A worker whose
-	// executors block is missing or malformed is NOT eligible for
-	// placement and must be rejected at registration.
-	if len(caps) > 0 {
-		if types := extractSupportedJobTypes(caps); len(types) > 0 {
-			sess.supportedJobTypes.Store(types)
-		}
-		if mpj := maxParallelJobsFromCapabilities(caps); mpj > 0 {
-			sess.maxParallelJobs.Store(int32(mpj))
-		}
-		sess.replaceCapabilities(executorRegistry, capabilitiesBoolMap(caps))
-		sess.replaceAssetCacheKeys(extractAssetCacheKeys(caps))
+	// Placement uses only the validated typed executor registry and the
+	// canonical host capacity/cache projections. Legacy job-type flags
+	// are not admitted or retained.
+	if mpj := maxParallelJobsFromCapabilities(caps); mpj > 0 {
+		sess.maxParallelJobs.Store(int32(mpj))
 	}
+	sess.replaceCapabilities(executorRegistry, capabilitiesBoolMap(caps))
+	sess.replaceAssetCacheKeys(extractAssetCacheKeys(caps))
 	sess.ready.Store(true)
 	sess.draining.Store(false)
 	sess.lastHeartbeatUnix.Store(time.Now().UTC().Unix())

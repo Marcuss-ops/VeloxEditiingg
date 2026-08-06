@@ -38,17 +38,22 @@ func main() {
 	// actually listens. Cheap; no side effects.
 	log.Printf("velox-server %s (built %s)", Version, BuildTime)
 
-	// Load optional .env file before reading configuration from the
-	// environment. This makes local development and end-to-end tests
-	// easier because a single file can carry all variables, while
-	// shell-exported values still take precedence.
+	// Capture the optional .env file and process environment exactly once.
+	// The raw snapshot carries source provenance into the typed Config, while
+	// shell-exported values retain precedence over file values.
+	var raw config.RawConfig
 	if envPath := config.EnvFilePath(); envPath != "" {
-		if err := config.LoadEnvFile(envPath); err != nil {
-			log.Printf("[BOOTSTRAP] WARNING: failed to load env file %s: %v", envPath, err)
+		var rawErr error
+		raw, rawErr = config.RawConfigFromEnvFile(envPath)
+		if rawErr != nil {
+			log.Printf("[BOOTSTRAP] WARNING: failed to load env file %s: %v", envPath, rawErr)
+			raw = config.RawConfigFromEnv()
 		}
+	} else {
+		raw = config.RawConfigFromEnv()
 	}
 
-	cfg, err := config.LoadFromEnv()
+	cfg, err := config.LoadFromRaw(raw)
 	if err != nil {
 		log.Fatalf("config load failed: %v", err)
 	}

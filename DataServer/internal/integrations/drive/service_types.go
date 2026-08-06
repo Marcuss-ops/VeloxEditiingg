@@ -3,6 +3,8 @@ package drive
 import (
 	"net/http"
 	"sync"
+
+	"velox-server/internal/config"
 )
 
 // File represents a Google Drive file
@@ -55,4 +57,8 @@ type ServiceConfig struct {
 	ClientSecret string
 	RedirectURI  string
 	TokensDir    string
+	// PublicRESTURL is supplied by the validated application Config. It is
+	// used only to derive the OAuth callback when RedirectURI is omitted.
+	PublicRESTURL string
+	Credentials   config.CredentialsConfig
 }

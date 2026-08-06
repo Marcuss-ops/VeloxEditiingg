@@ -13,6 +13,10 @@ import (
 
 const (
 	CodeInvalidPayload              = "invalid_payload"
+	CodeInfrastructure              = "INFRASTRUCTURE"
+	CodeLeaseLost                   = "LEASE_LOST"
+	CodeStaleReport                 = "STALE_REPORT"
+	CodeNotFound                    = "NOT_FOUND"
 	CodeDeliveryTargetRequired      = "DELIVERY_TARGET_REQUIRED"
 	CodeDeliveryDestinationRejected = "DELIVERY_TARGET_UNAVAILABLE"
 	FailureInvalidPayload           = "INVALID_PAYLOAD"
@@ -31,6 +35,32 @@ const (
 // transport and stateful consumer should use these fields rather than parsing
 // Error(). Code is the public/API code; FailureCode is persisted on job/task
 // failures; MetricCode and AuditAction are deliberately low-cardinality.
+// LeaseLostError marks a typed CAS/lease ownership loss without importing
+// persistence packages into policy or transport packages.
+type LeaseLostError interface {
+	error
+	LeaseLost() bool
+}
+
+// IsLeaseLost reports whether an error carries the canonical lease-loss marker.
+func IsLeaseLost(err error) bool {
+	var marker LeaseLostError
+	return errors.As(err, &marker) && marker != nil && marker.LeaseLost()
+}
+
+// LeaseConflict preserves a subsystem-specific error message while exposing
+// the common lease-loss marker to retry policy.
+type LeaseConflict struct{ Message string }
+
+func (e *LeaseConflict) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
+}
+func (e *LeaseConflict) LeaseLost() bool             { return e != nil }
+func NewLeaseConflict(message string) *LeaseConflict { return &LeaseConflict{Message: message} }
+
 type DomainError struct {
 	Code        string
 	Field       string
@@ -121,6 +151,50 @@ func AsDomainError(err error) (*DomainError, bool) {
 }
 
 // NewInvalidPayload constructs the default non-retryable validation error.
+// NewClassified constructs a DomainError for non-validation boundaries.
+// Callers provide the stable projections once; transports, jobs, retry policy,
+// and metrics then consume the same mapping instead of inspecting Error().
+func NewClassified(code, field, issue, text string, cause error, retryable bool, httpStatus int, grpcCode codes.Code, failureCode, metricCode, component, phase string) *DomainError {
+	return &DomainError{
+		Code: code, Field: field, Issue: issue, Retryable: retryable,
+		PublicText: text, Cause: cause, HTTPStatus: httpStatus, GRPCCode: grpcCode,
+		FailureCode: failureCode, MetricCode: metricCode, Component: component, Phase: phase,
+	}
+}
+
+func NewInfrastructure(cause error) *DomainError {
+	return NewClassified(CodeInfrastructure, "", "unavailable", "infrastructure failure", cause, true, http.StatusServiceUnavailable, codes.Unavailable, "INFRASTRUCTURE", "INFRASTRUCTURE", "supervisor", "runtime")
+}
+
+func NewLeaseLost(cause error) *DomainError {
+	return NewClassified(CodeLeaseLost, "", "lease_lost", "execution lease was lost", cause, true, http.StatusConflict, codes.Aborted, "LEASE_LOST", "LEASE_LOST", "supervisor", "lease")
+}
+
+func NewStaleReport(cause error) *DomainError {
+	return NewClassified(CodeStaleReport, "", "stale", "stale execution report", cause, false, http.StatusConflict, codes.Aborted, "STALE_REPORT", "STALE_REPORT", "completion", "report")
+}
+
+func NewNotFound(text string, cause error) *DomainError {
+	return NewClassified(CodeNotFound, "", "not_found", text, cause, false, http.StatusNotFound, codes.NotFound, "NOT_FOUND", "NOT_FOUND", "api", "lookup")
+}
+
+// ErrorMapping is the one low-cardinality projection consumed by all
+// adapters. It deliberately carries no request, job, worker, or asset IDs.
+type ErrorMapping struct {
+	HTTPStatus  int
+	GRPCCode    codes.Code
+	FailureCode string
+	MetricCode  string
+	Retryable   bool
+}
+
+func MapError(err error) ErrorMapping {
+	if derr, ok := AsDomainError(err); ok {
+		return ErrorMapping{HTTPStatus: derr.HTTPCode(), GRPCCode: derr.GRPCStatus().Code(), FailureCode: derr.FailureCode, MetricCode: derr.MetricCode, Retryable: derr.Retryable}
+	}
+	return ErrorMapping{HTTPStatus: http.StatusInternalServerError, GRPCCode: codes.Internal, FailureCode: "INTERNAL_ERROR", MetricCode: "INTERNAL_ERROR"}
+}
+
 func NewInvalidPayload(field, issue, text string) *DomainError {
 	return &DomainError{
 		Code: CodeInvalidPayload, Field: field, Issue: issue, Retryable: false,

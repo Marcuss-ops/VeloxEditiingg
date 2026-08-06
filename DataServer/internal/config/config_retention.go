@@ -17,12 +17,12 @@ package config
 // Worker metric/event retention keeps its existing minimum of 1. Resource
 // retention uses minimum 0 so an explicit zero can disable only that prune
 // pass; malformed values still fall back to the defaults.
-func loadRetentionConfig() RetentionConfig {
+func loadRetentionConfig(raw RawConfig) RetentionConfig {
 	return RetentionConfig{
-		WorkerMetricsDays:        intFromEnv("VELOX_RETENTION_WORKER_METRICS_DAYS", 7, 1),
-		WorkerEventsDays:         intFromEnv("VELOX_RETENTION_WORKER_EVENTS_DAYS", 30, 1),
-		WorkerResourceRawDays:    intFromEnv("VELOX_RETENTION_WORKER_RESOURCE_RAW_DAYS", 90, 0),
-		WorkerResourceRollupDays: intFromEnv("VELOX_RETENTION_WORKER_RESOURCE_ROLLUP_DAYS", 365, 0),
+		WorkerMetricsDays:        raw.Int("VELOX_RETENTION_WORKER_METRICS_DAYS", 7, 1),
+		WorkerEventsDays:         raw.Int("VELOX_RETENTION_WORKER_EVENTS_DAYS", 30, 1),
+		WorkerResourceRawDays:    raw.Int("VELOX_RETENTION_WORKER_RESOURCE_RAW_DAYS", 90, 0),
+		WorkerResourceRollupDays: raw.Int("VELOX_RETENTION_WORKER_RESOURCE_ROLLUP_DAYS", 365, 0),
 		// 0 opts out for the resource tables. Defaults: 7 / 30 / 90 / 365.
 	}
 }

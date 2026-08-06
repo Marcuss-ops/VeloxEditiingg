@@ -185,7 +185,7 @@ func (s *Service) UpdateDriveFolder(folderID string, req UpdateDriveFolderReques
 			return nil
 		}
 	}
-	return fmt.Errorf("folder not found")
+	return fmt.Errorf("%w", ErrFolderNotFound)
 }
 
 // DeleteDriveFolder deletes a folder and its children
@@ -236,7 +236,7 @@ func (s *Service) GetDriveFolders(parentID string) ([]DriveFolder, error) {
 // DriveFiles returns folder contents matching parent_id
 func (s *Service) DriveFiles(parentID string) ([]DriveFolder, error) {
 	if parentID == "" {
-		return nil, fmt.Errorf("parent_id required")
+		return nil, fmt.Errorf("%w", ErrParentIDRequired)
 	}
 
 	folders := s.getLinks()

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"velox-server/internal/config"
 	"velox-server/internal/credentials"
 )
 
@@ -20,8 +21,8 @@ type encryptedBackup struct {
 
 // BackupEncryptedSQLite creates a consistent SQLite snapshot and stores only
 // an encrypted, integrity-bound envelope at destination.
-func BackupEncryptedSQLite(ctx context.Context, db *sql.DB, destination string) (Verification, error) {
-	keyring, err := credentials.LoadKeyring()
+func BackupEncryptedSQLite(ctx context.Context, db *sql.DB, destination string, credentialConfig config.CredentialsConfig) (Verification, error) {
+	keyring, err := credentials.LoadKeyring(credentialConfig)
 	if err != nil {
 		return Verification{}, err
 	}
@@ -57,8 +58,8 @@ func BackupEncryptedSQLite(ctx context.Context, db *sql.DB, destination string) 
 
 // RestoreEncryptedSQLite decrypts an envelope into a temporary isolated copy
 // and delegates to the same verified atomic restore path as plain snapshots.
-func RestoreEncryptedSQLite(ctx context.Context, source, destination string) (Verification, error) {
-	keyring, err := credentials.LoadKeyring()
+func RestoreEncryptedSQLite(ctx context.Context, source, destination string, credentialConfig config.CredentialsConfig) (Verification, error) {
+	keyring, err := credentials.LoadKeyring(credentialConfig)
 	if err != nil {
 		return Verification{}, err
 	}

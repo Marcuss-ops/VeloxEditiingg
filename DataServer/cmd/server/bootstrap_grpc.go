@@ -71,8 +71,8 @@ func enforceGRPCRequireTLS(cfg *config.Config) error {
 
 func buildGRPCHandlerConfig(cfg *config.Config, insecureDev bool) *grpcserver.HandlerConfig {
 	return &grpcserver.HandlerConfig{
-		PushMode:       cfg.Server.GRPCPushMode,
-		AllowInsecure:  insecureDev,
-		AllowedWorkers: cfg.Workers.AllowedWorkers,
+		PushMode:         cfg.Server.GRPCPushMode,
+		AllowInsecure:    insecureDev,
+		AllowedWorkerIDs: append([]string(nil), cfg.Workers.AllowedWorkerIDs...),
 	}
 }

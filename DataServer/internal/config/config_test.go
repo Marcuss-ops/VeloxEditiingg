@@ -12,11 +12,15 @@ func TestFromEnv_Defaults(t *testing.T) {
 	os.Unsetenv("VELOX_ADMIN_TOKEN")
 	os.Setenv("VELOX_DB_PATH", t.TempDir()+"/velox.db")
 	os.Setenv("VELOX_GRPC_PORT", "50051")
+	os.Setenv("MASTER_PUBLIC_URL", "https://master.example")
+	os.Setenv("VELOX_GRPC_MASTER_URL", "master.example:50051")
 	// Production allowlist: 2 distinct worker IDs. Without this the
 	// canonical ValidateProductionWorkers check fails the test.
 	os.Setenv("VELOX_ALLOWED_WORKERS", "velox-worker-1,velox-worker-2")
 	defer os.Unsetenv("VELOX_DB_PATH")
 	defer os.Unsetenv("VELOX_GRPC_PORT")
+	defer os.Unsetenv("MASTER_PUBLIC_URL")
+	defer os.Unsetenv("VELOX_GRPC_MASTER_URL")
 	defer os.Unsetenv("VELOX_ALLOWED_WORKERS")
 
 	cfg := FromEnv()
