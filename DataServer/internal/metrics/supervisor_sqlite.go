@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"velox-server/internal/sqliteerr"
 	"velox-server/internal/taskattempts"
 )
 
@@ -51,11 +52,11 @@ func workerClassFromExecutorID(executorID string) string {
 	}
 }
 
+// isNoSuchColumnErr delegates to the canonical SQLite driver classification
+// (internal/sqliteerr). The metrics supervisor must not inspect driver error
+// text; schema-shape adaptation belongs to the single adapter boundary.
 func isNoSuchColumnErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(strings.ToLower(err.Error()), "no such column")
+	return sqliteerr.IsNoSuchColumn(err)
 }
 
 // SQLiteLabelResolver is the production-grade AttemptsDataSource

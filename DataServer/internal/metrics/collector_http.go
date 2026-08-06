@@ -35,32 +35,27 @@ const (
 )
 
 // ClassifyRouteSurface maps a gin route TEMPLATE (FullPath) to its canonical
-// surface. Legacy routes are the ones the Phase-6 migration retires once
-// their usage counter is quiet: the old /api/v1/workers diagnostic surface
-// (list/get + per-worker read endpoints), the /api/v1/worker-assets agent
-// path, and the /worker admin group. Unknown templates classify as other.
+// surface. Legacy routes are the ones the Phase-6 migration still counts
+// before their consumers migrate: the /api/v1/workers diagnostic surface
+// (list/get + per-worker read endpoints), still consumed by the operator
+// runbook and scripts/cert/master_state.sh. The pre-canonical agent paths
+// (/api/v1/worker-assets, /api/v1/workers/register, /api/v1/workers/
+// cache/protected-assets), the /worker admin group, and the legacy fleet
+// aggregates under /api/v1/admin/* were REMOVED once their usage counter
+// showed zero sustained traffic. Unknown templates classify as other.
 func ClassifyRouteSurface(route string) string {
 	switch {
+	case route == "/api/v1/workers/register",
+		route == "/api/v1/workers/cache/protected-assets",
+		route == "/api/v1/admin/workers/metrics":
+		return RouteSurfaceOther
 	case strings.HasPrefix(route, "/api/v1/agent/"):
 		return RouteSurfaceAgent
 	case strings.HasPrefix(route, "/api/v1/fleet/"):
 		return RouteSurfaceFleet
-	// The pre-canonical fleet aggregates that were mounted under the admin
-	// namespace stay legacy: the fleet-wide snapshot
-	// /api/v1/admin/workers/metrics (distinct from the per-worker
-	// /api/v1/admin/workers/:worker_id/metrics, which IS admin) and the
-	// /api/v1/admin/alerts/* fleet-wide alert ledger. Both must be counted
-	// as legacy so their removal window is measurable. Order matters: these
-	// exact/prefix cases must run BEFORE the generic /api/v1/admin/workers
-	// prefix match below.
-	case route == "/api/v1/admin/workers/metrics",
-		strings.HasPrefix(route, "/api/v1/admin/alerts/"):
-		return RouteSurfaceLegacy
 	case strings.HasPrefix(route, "/api/v1/admin/workers"):
 		return RouteSurfaceAdmin
-	case strings.HasPrefix(route, "/api/v1/workers"),
-		strings.HasPrefix(route, "/api/v1/worker-assets"),
-		strings.HasPrefix(route, "/worker/"):
+	case strings.HasPrefix(route, "/api/v1/workers"):
 		return RouteSurfaceLegacy
 	default:
 		return RouteSurfaceOther
