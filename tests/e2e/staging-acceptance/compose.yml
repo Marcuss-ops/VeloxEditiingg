@@ -1,0 +1,107 @@
+# Velox staging acceptance topology.
+#
+# This file intentionally contains no image tags, tokens, certificates, or
+# host paths. The runner supplies all values through a temporary env file.
+# Every image variable must be a complete immutable @sha256:<64 hex> reference.
+
+name: velox-staging-acceptance
+
+services:
+  master:
+    image: ${VELOX_SERVER_IMAGE:?VELOX_SERVER_IMAGE must be a digest-pinned image}
+    container_name: ${VELOX_STAGING_PROJECT:-velox-staging-acceptance}-master
+    environment:
+      GIN_MODE: release
+      VELOX_MASTER_PORT: "8000"
+      VELOX_GRPC_PORT: "9000"
+      VELOX_GRPC_PUSH_MODE: "true"
+      VELOX_GRPC_ALLOW_INSECURE_DEV: "true"
+      VELOX_RUNTIME_DIR: /var/lib/velox
+      VELOX_DATA_DIR: /var/lib/velox/data
+      VELOX_DB_PATH: /var/lib/velox/data/velox.db
+      VELOX_STAGING_DIR: /var/lib/velox/data/staging
+      VELOX_STORAGE_DIR: /var/lib/velox/data/storage
+      VELOX_VIDEOS_DIR: /var/lib/velox/data/videos
+      VELOX_ADMIN_TOKEN: ${VELOX_STAGING_ADMIN_TOKEN:?VELOX_STAGING_ADMIN_TOKEN must be supplied at runtime}
+      VELOX_ALLOWED_WORKERS: ${VELOX_WORKER_ID_A},${VELOX_WORKER_ID_B}
+      VELOX_WORKER_HEARTBEAT_TIMEOUT: ${VELOX_WORKER_HEARTBEAT_TIMEOUT:-60}
+      VELOX_CODE_VERSION: staging-acceptance
+    ports:
+      - "127.0.0.1:${VELOX_STAGING_REST_PORT:-18080}:8000"
+      - "127.0.0.1:${VELOX_STAGING_GRPC_PORT:-19000}:9000"
+    volumes:
+      - ${VELOX_STAGING_WORKDIR:?VELOX_STAGING_WORKDIR must be supplied}/master:/var/lib/velox
+      - ${VELOX_STAGING_WORKDIR}/fixture:/var/lib/velox/fixtures:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health/ready >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      start_period: 30s
+      retries: 12
+    restart: "no"
+
+  worker-a:
+    image: ${VELOX_WORKER_IMAGE_A:?VELOX_WORKER_IMAGE_A must be a digest-pinned image}
+    container_name: ${VELOX_STAGING_PROJECT:-velox-staging-acceptance}-worker-a
+    depends_on:
+      master:
+        condition: service_healthy
+    environment:
+      VELOX_ENV: staging
+      VELOX_ALLOW_INSECURE_GRPC_DEV: "true"
+      VELOX_WORKER_ID: ${VELOX_WORKER_ID_A}
+      VELOX_WORKER_SECRET: ${VELOX_WORKER_SECRET_A}
+      VELOX_GRPC_MASTER_URL: master:9000
+      VELOX_WORK_DIR: /var/lib/velox-worker/work
+      VELOX_STATE_DIR: /var/lib/velox-worker
+      VELOX_WORKER_CACHE_DIR: /var/lib/velox-worker/cache
+      VELOX_WORKER_BLOB_DIR: /var/lib/velox-worker/blobs
+      VELOX_HEALTH_PORT: "8081"
+      VELOX_PROMETHEUS_PORT: "0"
+    command: ["-config", "/opt/velox/worker_config.json", "-master", "master:9000", "-work-dir", "/var/lib/velox-worker/work"]
+    ports:
+      - "127.0.0.1:${VELOX_STAGING_WORKER_A_HEALTH_PORT:-18081}:8081"
+    volumes:
+      - ${VELOX_STAGING_WORKDIR}/worker-a:/var/lib/velox-worker
+      - ${VELOX_STAGING_WORKDIR}/config/worker-a.json:/opt/velox/worker_config.json:ro
+      - ${VELOX_STAGING_WORKDIR}/fixture:/opt/velox/fixtures:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8081/health/ready >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      start_period: 30s
+      retries: 12
+    restart: "no"
+
+  worker-b:
+    image: ${VELOX_WORKER_IMAGE_B:?VELOX_WORKER_IMAGE_B must be a digest-pinned image}
+    container_name: ${VELOX_STAGING_PROJECT:-velox-staging-acceptance}-worker-b
+    depends_on:
+      master:
+        condition: service_healthy
+    environment:
+      VELOX_ENV: staging
+      VELOX_ALLOW_INSECURE_GRPC_DEV: "true"
+      VELOX_WORKER_ID: ${VELOX_WORKER_ID_B}
+      VELOX_WORKER_SECRET: ${VELOX_WORKER_SECRET_B}
+      VELOX_GRPC_MASTER_URL: master:9000
+      VELOX_WORK_DIR: /var/lib/velox-worker/work
+      VELOX_STATE_DIR: /var/lib/velox-worker
+      VELOX_WORKER_CACHE_DIR: /var/lib/velox-worker/cache
+      VELOX_WORKER_BLOB_DIR: /var/lib/velox-worker/blobs
+      VELOX_HEALTH_PORT: "8081"
+      VELOX_PROMETHEUS_PORT: "0"
+    command: ["-config", "/opt/velox/worker_config.json", "-master", "master:9000", "-work-dir", "/var/lib/velox-worker/work"]
+    ports:
+      - "127.0.0.1:${VELOX_STAGING_WORKER_B_HEALTH_PORT:-18082}:8081"
+    volumes:
+      - ${VELOX_STAGING_WORKDIR}/worker-b:/var/lib/velox-worker
+      - ${VELOX_STAGING_WORKDIR}/config/worker-b.json:/opt/velox/worker_config.json:ro
+      - ${VELOX_STAGING_WORKDIR}/fixture:/opt/velox/fixtures:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8081/health/ready >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      start_period: 30s
+      retries: 12
+    restart: "no"
