@@ -48,7 +48,7 @@ func (s *SQLiteStore) ClaimCreatorForwardings(ctx context.Context, runnerID, lea
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, wrapInfrastructureError("ClaimCreatorForwardings begin", err)
+		return nil, wrapDBInfrastructure("ClaimCreatorForwardings begin", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -89,7 +89,7 @@ func (s *SQLiteStore) ClaimCreatorForwardings(ctx context.Context, runnerID, lea
 		nowISO, nowISO, batch,
 	)
 	if err != nil {
-		return nil, wrapInfrastructureError("ClaimCreatorForwardings: UPDATE+RETURNING", err)
+		return nil, wrapDBInfrastructure("ClaimCreatorForwardings: UPDATE+RETURNING", err)
 	}
 
 	type claimedRow struct {
@@ -103,17 +103,17 @@ func (s *SQLiteStore) ClaimCreatorForwardings(ctx context.Context, runnerID, lea
 		if err := rows.Scan(&c.forwardingID, &c.sourceProvider, &c.sourceJobID,
 			&c.targetExecutorID, &c.attemptCount,
 			&c.payloadJSON, &c.payloadSHA256); err != nil {
-			return nil, wrapInfrastructureError("ClaimCreatorForwardings: scan claimed row", err)
+			return nil, wrapDBInfrastructure("ClaimCreatorForwardings: scan claimed row", err)
 		}
 		claimed = append(claimed, c)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, wrapInfrastructureError("ClaimCreatorForwardings: rows iteration", err)
+		return nil, wrapDBInfrastructure("ClaimCreatorForwardings: rows iteration", err)
 	}
 	if len(claimed) == 0 {
 		if err := tx.Commit(); err != nil {
-			return nil, wrapInfrastructureError("ClaimCreatorForwardings: commit empty batch", err)
+			return nil, wrapDBInfrastructure("ClaimCreatorForwardings: commit empty batch", err)
 		}
 		return nil, nil
 	}
@@ -131,7 +131,7 @@ func (s *SQLiteStore) ClaimCreatorForwardings(ctx context.Context, runnerID, lea
 			forwardingLeaseID, c.forwardingID, runnerID, provisionalLeaseID,
 		)
 		if err != nil {
-			return nil, wrapInfrastructureError("ClaimCreatorForwardings: per-record lease stamp", err)
+			return nil, wrapDBInfrastructure("ClaimCreatorForwardings: per-record lease stamp", err)
 		}
 		if n, _ := leaseRes.RowsAffected(); n != 1 {
 			return nil, fmt.Errorf("ClaimCreatorForwardings: per-record lease stamp affected=%d forwarding=%s", n, c.forwardingID)
@@ -152,7 +152,7 @@ func (s *SQLiteStore) ClaimCreatorForwardings(ctx context.Context, runnerID, lea
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, wrapInfrastructureError("ClaimCreatorForwardings commit", err)
+		return nil, wrapDBInfrastructure("ClaimCreatorForwardings commit", err)
 	}
 	return out, nil
 }

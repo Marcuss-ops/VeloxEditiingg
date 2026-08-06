@@ -42,7 +42,7 @@ func (s *SQLiteStore) ExpiredCreatorForwardingLeases(ctx context.Context, nowRFC
 		nowRFC3339, limit,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("store: ExpiredCreatorForwardingLeases: %w", err)
+		return nil, wrapDBInfrastructure("ExpiredCreatorForwardingLeases query", err)
 	}
 	defer rows.Close()
 
@@ -59,11 +59,14 @@ func (s *SQLiteStore) ExpiredCreatorForwardingLeases(ctx context.Context, nowRFC
 			&cf.LastErrorCode, &cf.LastErrorMessage, &cf.LastErrorClass,
 			&cf.CreatedAt, &cf.UpdatedAt, &cf.ForwardedAt,
 		); err != nil {
-			return nil, fmt.Errorf("store: ExpiredCreatorForwardingLeases scan: %w", err)
+			return nil, wrapDBInfrastructure("ExpiredCreatorForwardingLeases scan", err)
 		}
 		result = append(result, cf)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, wrapDBInfrastructure("ExpiredCreatorForwardingLeases rows", err)
+	}
+	return result, nil
 }
 
 // ListReadyToForward returns forwardings in READY_TO_FORWARD state that are
@@ -94,7 +97,7 @@ func (s *SQLiteStore) ListReadyToForward(ctx context.Context, limit int) ([]Crea
 		limit,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("store: ListReadyToForward: %w", err)
+		return nil, wrapDBInfrastructure("ListReadyToForward query", err)
 	}
 	defer rows.Close()
 
@@ -111,9 +114,12 @@ func (s *SQLiteStore) ListReadyToForward(ctx context.Context, limit int) ([]Crea
 			&cf.LastErrorCode, &cf.LastErrorMessage, &cf.LastErrorClass,
 			&cf.CreatedAt, &cf.UpdatedAt, &cf.ForwardedAt,
 		); err != nil {
-			return nil, fmt.Errorf("store: ListReadyToForward scan: %w", err)
+			return nil, wrapDBInfrastructure("ListReadyToForward scan", err)
 		}
 		result = append(result, cf)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, wrapDBInfrastructure("ListReadyToForward rows", err)
+	}
+	return result, nil
 }

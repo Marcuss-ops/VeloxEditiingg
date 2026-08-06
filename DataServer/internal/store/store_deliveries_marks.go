@@ -32,7 +32,7 @@ func (s *SQLiteStore) MarkDeliverySucceeded(ctx context.Context, deliveryID, run
 		return fmt.Errorf("store: MarkDeliverySucceeded: missing required fields")
 	}
 
-	return NewTxManager(s).RunInTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+	return wrapDBInfrastructure("MarkDeliverySucceeded transaction", NewTxManager(s).RunInTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		now := time.Now().UTC().Format(time.RFC3339)
 		result, err := tx.ExecContext(ctx,
 			`UPDATE job_deliveries
@@ -66,7 +66,7 @@ func (s *SQLiteStore) MarkDeliverySucceeded(ctx context.Context, deliveryID, run
 			return fmt.Errorf("MarkDeliverySucceeded attempt UPDATE: %w", err)
 		}
 		return completeParentJobIfDeliveriesDone(ctx, tx, deliveryID, now)
-	})
+	}))
 }
 
 // MarkDeliveryRetry moves a RUNNING delivery to RETRY_WAIT with the next
@@ -84,7 +84,7 @@ func (s *SQLiteStore) MarkDeliveryRetry(ctx context.Context, deliveryID, runnerI
 		return fmt.Errorf("store: MarkDeliveryRetry: missing required fields")
 	}
 
-	return NewTxManager(s).RunInTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+	return wrapDBInfrastructure("MarkDeliveryRetry transaction", NewTxManager(s).RunInTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		now := time.Now().UTC().Format(time.RFC3339)
 		nextISO := nextAttemptAt.UTC().Format(time.RFC3339)
 		result, err := tx.ExecContext(ctx,
@@ -123,7 +123,7 @@ func (s *SQLiteStore) MarkDeliveryRetry(ctx context.Context, deliveryID, runnerI
 			return fmt.Errorf("MarkDeliveryRetry attempt UPDATE: %w", err)
 		}
 		return nil
-	})
+	}))
 }
 
 // MarkDeliveryFailed moves a RUNNING delivery to FAILED (permanent failure).
@@ -138,7 +138,7 @@ func (s *SQLiteStore) MarkDeliveryFailed(ctx context.Context, deliveryID, runner
 		return fmt.Errorf("store: MarkDeliveryFailed: missing required fields")
 	}
 
-	return NewTxManager(s).RunInTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+	return wrapDBInfrastructure("MarkDeliveryFailed transaction", NewTxManager(s).RunInTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		now := time.Now().UTC().Format(time.RFC3339)
 		result, err := tx.ExecContext(ctx,
 			`UPDATE job_deliveries
@@ -176,7 +176,7 @@ func (s *SQLiteStore) MarkDeliveryFailed(ctx context.Context, deliveryID, runner
 			return fmt.Errorf("MarkDeliveryFailed attempt UPDATE: %w", err)
 		}
 		return failParentJobForDelivery(ctx, tx, deliveryID, now)
-	})
+	}))
 }
 
 // completeParentJobIfDeliveriesDone closes only a job currently in the
@@ -226,7 +226,7 @@ func (s *SQLiteStore) MarkDeliveryBlockedAuth(ctx context.Context, deliveryID, r
 		return fmt.Errorf("store: MarkDeliveryBlockedAuth: missing required fields")
 	}
 
-	return NewTxManager(s).RunInTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+	return wrapDBInfrastructure("MarkDeliveryBlockedAuth transaction", NewTxManager(s).RunInTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		now := time.Now().UTC().Format(time.RFC3339)
 		result, err := tx.ExecContext(ctx,
 			`UPDATE job_deliveries
@@ -264,5 +264,5 @@ func (s *SQLiteStore) MarkDeliveryBlockedAuth(ctx context.Context, deliveryID, r
 			return fmt.Errorf("MarkDeliveryBlockedAuth attempt UPDATE: %w", err)
 		}
 		return failParentJobForDelivery(ctx, tx, deliveryID, now)
-	})
+	}))
 }

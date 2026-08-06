@@ -45,7 +45,10 @@ func (s *SQLiteStore) CreatePublicationState(ctx context.Context, publicationID 
 		INSERT OR IGNORE INTO publication_states
 		(publication_id, state, revision, created_at, updated_at)
 		VALUES (?, 'PENDING', 0, ?, ?)`, publicationID, now, now)
-	return err
+	if err != nil {
+		return wrapDBInfrastructure("CreatePublicationState exec", err)
+	}
+	return nil
 }
 
 func (s *SQLiteStore) GetPublicationState(ctx context.Context, publicationID string) (*PublicationState, error) {
@@ -60,7 +63,7 @@ func (s *SQLiteStore) GetPublicationState(ctx context.Context, publicationID str
 		return nil, ErrPublicationStateNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get publication state: %w", err)
+		return nil, wrapDBInfrastructure("GetPublicationState scan", err)
 	}
 	return state, nil
 }
@@ -89,8 +92,14 @@ func (s *SQLiteStore) GetPublicationIDForArtifact(ctx context.Context, artifactI
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", ErrPublicationStateNotFound
 		}
+		if err != nil {
+			return "", wrapDBInfrastructure("GetPublicationIDForArtifact fallback scan", err)
+		}
 	}
-	return publicationID, err
+	if err != nil {
+		return "", wrapDBInfrastructure("GetPublicationIDForArtifact scan", err)
+	}
+	return publicationID, nil
 }
 
 // TransitionPublicationState performs a CAS-guarded formal transition. A
@@ -115,7 +124,7 @@ func (s *SQLiteStore) transitionPublicationState(ctx context.Context, publicatio
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return nil, wrapDBInfrastructure("transitionPublicationState begin", err)
 	}
 	defer tx.Rollback()
 
@@ -130,7 +139,7 @@ func (s *SQLiteStore) transitionPublicationState(ctx context.Context, publicatio
 		return nil, ErrPublicationStateNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read publication state: %w", err)
+		return nil, wrapDBInfrastructure("transitionPublicationState scan", err)
 	}
 	snapshot := publicationstate.Snapshot{PublicationID: current.PublicationID, State: current.State, RetryFrom: current.RetryFrom, Revision: current.Revision}
 	var next publicationstate.Snapshot
@@ -143,7 +152,10 @@ func (s *SQLiteStore) transitionPublicationState(ctx context.Context, publicatio
 		return nil, err
 	}
 	if next == snapshot {
-		return current, tx.Commit()
+		if err := tx.Commit(); err != nil {
+			return nil, wrapDBInfrastructure("transitionPublicationState idempotent commit", err)
+		}
+		return current, nil
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	result, err := tx.ExecContext(ctx, `
@@ -154,7 +166,7 @@ func (s *SQLiteStore) transitionPublicationState(ctx context.Context, publicatio
 		next.State, next.RetryFrom, next.Revision, strings.TrimSpace(errorCode), now,
 		publicationID, current.State, current.Revision)
 	if err != nil {
-		return nil, fmt.Errorf("transition publication state: %w", err)
+		return nil, wrapDBInfrastructure("transitionPublicationState exec", err)
 	}
 	if affected, _ := result.RowsAffected(); affected != 1 {
 		return nil, fmt.Errorf("%w: publication=%s revision=%d", ErrPublicationPhaseConflict, publicationID, current.Revision)
@@ -166,10 +178,10 @@ func (s *SQLiteStore) transitionPublicationState(ctx context.Context, publicatio
 	current.LastErrorCode = strings.TrimSpace(errorCode)
 	current.UpdatedAt = now
 	if err := appendPublicationTransitionAuditTx(ctx, tx, current, fromState, to, errorCode); err != nil {
-		return nil, err
+		return nil, wrapDBInfrastructure("transitionPublicationState audit", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return nil, wrapDBInfrastructure("transitionPublicationState commit", err)
 	}
 	return current, nil
 }
@@ -190,7 +202,7 @@ func (s *SQLiteStore) BeginPublicationPhaseEffect(ctx context.Context, publicati
 		(publication_id, phase, operation, idempotency_key, status, created_at, updated_at)
 		VALUES (?, ?, ?, ?, 'RUNNING', ?, ?)`, publicationID, phase, operation, key, now, now)
 	if err != nil {
-		return "", false, err
+		return "", false, wrapDBInfrastructure("BeginPublicationPhaseEffect exec", err)
 	}
 	affected, _ := result.RowsAffected()
 	return key, affected == 0, nil
@@ -208,7 +220,7 @@ func (s *SQLiteStore) CompletePublicationPhaseEffect(ctx context.Context, public
 		status, strings.TrimSpace(errorCode), time.Now().UTC().Format(time.RFC3339),
 		strings.TrimSpace(publicationID), phase, strings.TrimSpace(operation))
 	if err != nil {
-		return err
+		return wrapDBInfrastructure("CompletePublicationPhaseEffect exec", err)
 	}
 	if affected, _ := result.RowsAffected(); affected != 1 {
 		return ErrPublicationPhaseConflict
@@ -226,7 +238,7 @@ func (s *SQLiteStore) RetryPublicationPhaseEffect(ctx context.Context, publicati
 		WHERE publication_id = ? AND phase = ? AND operation = ? AND status = 'FAILED'`,
 		time.Now().UTC().Format(time.RFC3339), strings.TrimSpace(publicationID), phase, strings.TrimSpace(operation))
 	if err != nil {
-		return err
+		return wrapDBInfrastructure("RetryPublicationPhaseEffect exec", err)
 	}
 	if affected, _ := result.RowsAffected(); affected > 1 {
 		return ErrPublicationPhaseConflict
@@ -246,7 +258,10 @@ func (s *SQLiteStore) GetPublicationPhaseEffectStatus(ctx context.Context, publi
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
-	return status, err
+	if err != nil {
+		return "", wrapDBInfrastructure("GetPublicationPhaseEffectStatus scan", err)
+	}
+	return status, nil
 }
 
 // PersistPublicationVideoCreated is the upload checkpoint. The remote
@@ -258,11 +273,14 @@ func (s *SQLiteStore) PersistPublicationVideoCreated(ctx context.Context, public
 		return nil, fmt.Errorf("store: publication video checkpoint requires publication_id and remote_id")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
+
 	if err != nil {
-		return nil, err
+		return nil, wrapDBInfrastructure("PersistPublicationVideoCreated begin", err)
 	}
 	defer tx.Rollback()
+
 	row := tx.QueryRowContext(ctx, `
+
 		SELECT publication_id, COALESCE(job_id, ''), state, COALESCE(retry_from, ''),
 		       COALESCE(artifact_id, ''), COALESCE(remote_id, ''), COALESCE(remote_url, ''),
 		       revision, COALESCE(last_error_code, ''), created_at, updated_at
@@ -272,7 +290,7 @@ func (s *SQLiteStore) PersistPublicationVideoCreated(ctx context.Context, public
 		return nil, ErrPublicationStateNotFound
 	}
 	if err != nil {
-		return nil, err
+		return nil, wrapDBInfrastructure("PersistPublicationVideoCreated scan", err)
 	}
 	if current.State != publicationstate.Uploading && current.State != publicationstate.VideoCreated {
 		return nil, fmt.Errorf("%w: video checkpoint from %s", ErrPublicationPhaseConflict, current.State)
@@ -293,7 +311,7 @@ func (s *SQLiteStore) PersistPublicationVideoCreated(ctx context.Context, public
 		nextState, artifactID, remoteID, remoteURL, nextRevision, now,
 		publicationID, current.State, current.Revision)
 	if err != nil {
-		return nil, err
+		return nil, wrapDBInfrastructure("PersistPublicationVideoCreated exec", err)
 	}
 	if affected, _ := result.RowsAffected(); affected != 1 {
 		return nil, ErrPublicationPhaseConflict
@@ -309,10 +327,10 @@ func (s *SQLiteStore) PersistPublicationVideoCreated(ctx context.Context, public
 	current.LastErrorCode = ""
 	current.UpdatedAt = now
 	if err := appendPublicationTransitionAuditTx(ctx, tx, current, publicationstate.Uploading, publicationstate.VideoCreated, ""); err != nil {
-		return nil, err
+		return nil, wrapDBInfrastructure("PersistPublicationVideoCreated audit", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return nil, wrapDBInfrastructure("PersistPublicationVideoCreated commit", err)
 	}
 	return current, nil
 }
@@ -353,7 +371,7 @@ func appendPublicationTransitionAuditTx(ctx context.Context, tx *sql.Tx, state *
 			uuid.NewString(), time.Now().UTC().Format(time.RFC3339Nano), record.action,
 			state.PublicationID, audittrail.RedactMetadata(string(metadata)))
 		if err != nil {
-			return err
+			return wrapDBInfrastructure("appendPublicationTransitionAuditTx exec", err)
 		}
 	}
 	return nil

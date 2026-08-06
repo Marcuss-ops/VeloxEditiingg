@@ -3,6 +3,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -43,7 +45,7 @@ func (s *SQLiteStore) RecordCreatorForwardingPoll(ctx context.Context, forwardin
 		forwardingID, runnerID, leaseID, nowISO,
 	)
 	if err != nil {
-		return fmt.Errorf("store: RecordCreatorForwardingPoll: %w", err)
+		return wrapDBInfrastructure("RecordCreatorForwardingPoll exec", err)
 	}
 	affected, _ := result.RowsAffected()
 	if affected != 1 {
@@ -64,7 +66,7 @@ func (s *SQLiteStore) MarkCreatorForwardingReadyToForward(ctx context.Context, f
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("MarkCreatorForwardingReadyToForward begin: %w", err)
+		return wrapDBInfrastructure("MarkCreatorForwardingReadyToForward begin", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -86,14 +88,17 @@ func (s *SQLiteStore) MarkCreatorForwardingReadyToForward(ctx context.Context, f
 		forwardingID, runnerID, leaseID, now,
 	)
 	if err != nil {
-		return fmt.Errorf("MarkCreatorForwardingReadyToForward: %w", err)
+		return wrapDBInfrastructure("MarkCreatorForwardingReadyToForward exec", err)
 	}
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
 		return ErrTransitionConflict
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return wrapDBInfrastructure("MarkCreatorForwardingReadyToForward commit", err)
+	}
+	return nil
 }
 
 // MarkCreatorForwardingForwarding transitions a READY_TO_FORWARD forwarding
@@ -112,7 +117,7 @@ func (s *SQLiteStore) MarkCreatorForwardingForwarding(ctx context.Context, forwa
 		now, forwardingID,
 	)
 	if err != nil {
-		return fmt.Errorf("store: MarkCreatorForwardingForwarding: %w", err)
+		return wrapDBInfrastructure("MarkCreatorForwardingForwarding exec", err)
 	}
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
@@ -138,7 +143,7 @@ func (s *SQLiteStore) MarkCreatorForwardingForwarded(ctx context.Context, forwar
 		targetJobID, now, now, forwardingID,
 	)
 	if err != nil {
-		return fmt.Errorf("store: MarkCreatorForwardingForwarded: %w", err)
+		return wrapDBInfrastructure("MarkCreatorForwardingForwarded exec", err)
 	}
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
@@ -158,7 +163,7 @@ func (s *SQLiteStore) MarkCreatorForwardingRetry(ctx context.Context, forwarding
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("MarkCreatorForwardingRetry begin: %w", err)
+		return wrapDBInfrastructure("MarkCreatorForwardingRetry begin", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -180,14 +185,17 @@ func (s *SQLiteStore) MarkCreatorForwardingRetry(ctx context.Context, forwarding
 		forwardingID, runnerID, leaseID, now,
 	)
 	if err != nil {
-		return fmt.Errorf("MarkCreatorForwardingRetry: %w", err)
+		return wrapDBInfrastructure("MarkCreatorForwardingRetry exec", err)
 	}
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
 		return ErrTransitionConflict
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return wrapDBInfrastructure("MarkCreatorForwardingRetry commit", err)
+	}
+	return nil
 }
 
 // MarkCreatorForwardingFailed moves a leasable forwarding to FAILED
@@ -209,7 +217,7 @@ func (s *SQLiteStore) MarkCreatorForwardingFailed(ctx context.Context, forwardin
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("MarkCreatorForwardingFailed begin: %w", err)
+		return wrapDBInfrastructure("MarkCreatorForwardingFailed begin", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -227,14 +235,17 @@ func (s *SQLiteStore) MarkCreatorForwardingFailed(ctx context.Context, forwardin
 		runnerID, runnerID, leaseID, now,
 	)
 	if err != nil {
-		return fmt.Errorf("MarkCreatorForwardingFailed: %w", err)
+		return wrapDBInfrastructure("MarkCreatorForwardingFailed exec", err)
 	}
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
 		return ErrTransitionConflict
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return wrapDBInfrastructure("MarkCreatorForwardingFailed commit", err)
+	}
+	return nil
 }
 
 // MarkCreatorForwardingCancelled moves a leasable forwarding to CANCELLED
@@ -252,7 +263,7 @@ func (s *SQLiteStore) MarkCreatorForwardingCancelled(ctx context.Context, forwar
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("MarkCreatorForwardingCancelled begin: %w", err)
+		return wrapDBInfrastructure("MarkCreatorForwardingCancelled begin", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -272,14 +283,17 @@ func (s *SQLiteStore) MarkCreatorForwardingCancelled(ctx context.Context, forwar
 		leaseID, leaseID,
 	)
 	if err != nil {
-		return fmt.Errorf("MarkCreatorForwardingCancelled: %w", err)
+		return wrapDBInfrastructure("MarkCreatorForwardingCancelled exec", err)
 	}
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
 		return ErrTransitionConflict
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return wrapDBInfrastructure("MarkCreatorForwardingCancelled commit", err)
+	}
+	return nil
 }
 
 // MarkCreatorForwardingBlocked moves a leasable forwarding to BLOCKED
@@ -296,7 +310,7 @@ func (s *SQLiteStore) MarkCreatorForwardingBlocked(ctx context.Context, forwardi
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("MarkCreatorForwardingBlocked begin: %w", err)
+		return wrapDBInfrastructure("MarkCreatorForwardingBlocked begin", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -314,14 +328,17 @@ func (s *SQLiteStore) MarkCreatorForwardingBlocked(ctx context.Context, forwardi
 		runnerID, runnerID, leaseID, now,
 	)
 	if err != nil {
-		return fmt.Errorf("MarkCreatorForwardingBlocked: %w", err)
+		return wrapDBInfrastructure("MarkCreatorForwardingBlocked exec", err)
 	}
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
 		return ErrTransitionConflict
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return wrapDBInfrastructure("MarkCreatorForwardingBlocked commit", err)
+	}
+	return nil
 }
 
 // ── Idempotent Repair ──────────────────────────────────────────────────
@@ -358,8 +375,11 @@ func (s *SQLiteStore) EnsureForwarded(ctx context.Context, forwardingID, jobID s
 		`SELECT COALESCE(target_job_id, '') FROM creator_forwardings WHERE forwarding_id = ?`,
 		forwardingID,
 	).Scan(&existingJobID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrCreatorForwardingNoRow
+	}
 	if err != nil {
-		return fmt.Errorf("store: EnsureForwarded lookup: %w", err)
+		return wrapDBInfrastructure("EnsureForwarded lookup", err)
 	}
 	if existingJobID == jobID {
 		// Already forwarded to the same job — idempotent no-op.
@@ -384,7 +404,7 @@ func (s *SQLiteStore) EnsureForwarded(ctx context.Context, forwardingID, jobID s
 		jobID, now, now, forwardingID,
 	)
 	if err != nil {
-		return fmt.Errorf("store: EnsureForwarded: %w", err)
+		return wrapDBInfrastructure("EnsureForwarded exec", err)
 	}
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
@@ -397,8 +417,10 @@ func (s *SQLiteStore) EnsureForwarded(ctx context.Context, forwardingID, jobID s
 			`SELECT status, COALESCE(target_job_id, '') FROM creator_forwardings WHERE forwarding_id = ?`,
 			forwardingID,
 		).Scan(&finalStatus, &finalJobID); reErr != nil {
-			return fmt.Errorf("store: EnsureForwarded: %w: re-SELECT failed for forwarding %s: %v",
-				ErrTransitionConflict, forwardingID, reErr)
+			if errors.Is(reErr, sql.ErrNoRows) {
+				return ErrCreatorForwardingNoRow
+			}
+			return wrapDBInfrastructure("EnsureForwarded re-SELECT", reErr)
 		}
 		if finalStatus == "FORWARDED" && finalJobID == jobID {
 			// Idempotent success via race: another caller completed the

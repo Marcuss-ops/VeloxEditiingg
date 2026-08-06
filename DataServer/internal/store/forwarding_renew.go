@@ -40,7 +40,7 @@ func (s *SQLiteStore) RenewCreatorForwardingLease(ctx context.Context, forwardin
 		iso, now, forwardingID, runnerID, leaseID,
 	)
 	if err != nil {
-		return fmt.Errorf("store: RenewCreatorForwardingLease: %w", err)
+		return wrapDBInfrastructure("RenewCreatorForwardingLease exec", err)
 	}
 	affected, _ := result.RowsAffected()
 	if affected == 0 {

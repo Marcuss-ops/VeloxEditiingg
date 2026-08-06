@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -53,6 +54,39 @@ func TestWrapDBInfrastructure_ClassifiesSQLConnDone(t *testing.T) {
 	}
 	if !errors.Is(got, sql.ErrConnDone) {
 		t.Fatalf("wrapped error does not preserve sql.ErrConnDone: %v", got)
+	}
+}
+
+func TestWrapDBInfrastructure_PreservesStoreSentinels(t *testing.T) {
+	for name, sentinel := range map[string]error{
+		"transition conflict":        ErrTransitionConflict,
+		"lease lost":                 ErrLeaseLost,
+		"delivery missing":           ErrDeliveryNoRow,
+		"forwarding missing":         ErrCreatorForwardingNoRow,
+		"publication missing":        ErrPublicationStateNotFound,
+		"publication phase conflict": ErrPublicationPhaseConflict,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := wrapDBInfrastructure("store.operation", sentinel); got != sentinel {
+				t.Fatalf("wrapDBInfrastructure changed sentinel: got %v, want %v", got, sentinel)
+			}
+		})
+	}
+}
+
+func TestSQLiteStore_ClosedDBReturnsInfrastructure(t *testing.T) {
+	db := setupDeliveryTestDB(t)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	_, err := db.GetJobDelivery(context.Background(), "delivery-closed-db")
+	if err == nil {
+		t.Fatal("GetJobDelivery on closed DB returned nil error")
+	}
+	derr, ok := domain.AsDomainError(err)
+	if !ok || derr.Code != domain.CodeInfrastructure {
+		t.Fatalf("closed DB error = %v, want infrastructure DomainError", err)
 	}
 }
 

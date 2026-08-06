@@ -134,7 +134,7 @@ func scanCreatorForwarding(row creatorForwardingRowScanner) (*CreatorForwarding,
 		return nil, ErrCreatorForwardingNoRow
 	}
 	if err != nil {
-		return nil, fmt.Errorf("store: scan creator forwarding: %w", err)
+		return nil, wrapDBInfrastructure("scan creator forwarding", err)
 	}
 	return &cf, nil
 }
@@ -204,7 +204,7 @@ func (s *SQLiteStore) InsertCreatorForwarding(ctx context.Context, cf *CreatorFo
 		cf.ForwardedAt,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("store: InsertCreatorForwarding: %w", err)
+		return nil, wrapDBInfrastructure("InsertCreatorForwarding exec", err)
 	}
 
 	affected, _ := res.RowsAffected()
@@ -224,7 +224,7 @@ func (s *SQLiteStore) InsertCreatorForwarding(ctx context.Context, cf *CreatorFo
 		existing, err = s.GetCreatorForwardingBySource(ctx, cf.SourceProvider, cf.SourceJobID, cf.TargetExecutorID)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("store: InsertCreatorForwarding: duplicate lookup: %w", err)
+		return nil, wrapDBInfrastructure("InsertCreatorForwarding duplicate lookup", err)
 	}
 	return &InsertCreatorForwardingResult{Created: false, Forwarding: existing}, nil
 }
@@ -426,7 +426,7 @@ func scanCreatorForwardingWithExternalClient(row creatorForwardingRowScanner) (*
 		return nil, ErrCreatorForwardingNoRow
 	}
 	if err != nil {
-		return nil, fmt.Errorf("store: scan creator forwarding with client: %w", err)
+		return nil, wrapDBInfrastructure("scan creator forwarding with client", err)
 	}
 	return &cf, nil
 }
@@ -449,7 +449,7 @@ func (s *SQLiteStore) UpsertCreatorForwardingPayload(ctx context.Context, forwar
 		payloadJSON, payloadSHA256, now, forwardingID,
 	)
 	if err != nil {
-		return fmt.Errorf("store: UpsertCreatorForwardingPayload: %w", err)
+		return wrapDBInfrastructure("UpsertCreatorForwardingPayload exec", err)
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {
@@ -482,7 +482,7 @@ func (s *SQLiteStore) GetForwardingQueueMetrics(ctx context.Context) (Forwarding
 		 WHERE status IN ('PENDING', 'RETRY_WAIT')`,
 	).Scan(&m.QueueDepth)
 	if err != nil {
-		return m, fmt.Errorf("store: GetForwardingQueueMetrics depth: %w", err)
+		return m, wrapDBInfrastructure("GetForwardingQueueMetrics depth", err)
 	}
 
 	var ageSeconds sql.NullInt64
@@ -494,8 +494,13 @@ func (s *SQLiteStore) GetForwardingQueueMetrics(ctx context.Context) (Forwarding
 		 WHERE status = 'PENDING'
 		 ORDER BY created_at ASC LIMIT 1`,
 	).Scan(&ageSeconds)
+	if errors.Is(err, sql.ErrNoRows) {
+		// An empty pending queue is a valid metrics state, not a
+		// database failure. Keep the zero-value age.
+		return m, nil
+	}
 	if err != nil {
-		return m, fmt.Errorf("store: GetForwardingQueueMetrics oldest: %w", err)
+		return m, wrapDBInfrastructure("GetForwardingQueueMetrics oldest", err)
 	}
 	if ageSeconds.Valid && ageSeconds.Int64 > 0 {
 		m.OldestPendingAge = time.Duration(ageSeconds.Int64) * time.Second

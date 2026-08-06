@@ -40,7 +40,7 @@ func (s *SQLiteStore) AtomicForwardAndEnqueue(
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("AtomicForwardAndEnqueue begin: %w", err)
+		return wrapDBInfrastructure("AtomicForwardAndEnqueue begin", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -55,7 +55,7 @@ func (s *SQLiteStore) AtomicForwardAndEnqueue(
 		now, forwardingID,
 	)
 	if err != nil {
-		return fmt.Errorf("AtomicForwardAndEnqueue claim: %w", err)
+		return wrapDBInfrastructure("AtomicForwardAndEnqueue claim", err)
 	}
 	affected, _ := claimResult.RowsAffected()
 	if affected == 0 {
@@ -66,7 +66,10 @@ func (s *SQLiteStore) AtomicForwardAndEnqueue(
 	//    path (CreateJobWithTaskTx) so the SQL lives in exactly one place.
 	creator := NewAtomicJobTaskCreator(s)
 	if err := creator.CreateJobWithTaskTx(ctx, tx, job, taskSpec, priority); err != nil {
-		return fmt.Errorf("AtomicForwardAndEnqueue create job+task: %w", err)
+		// CreateJobWithTaskTx classifies its own SQL failures at the
+		// store boundary. Preserve its validation and domain errors
+		// unchanged instead of treating every callback error as SQL.
+		return err
 	}
 
 	// 3. CAS: FORWARDING → FORWARDED
@@ -79,14 +82,17 @@ func (s *SQLiteStore) AtomicForwardAndEnqueue(
 		job.ID, now, now, forwardingID,
 	)
 	if err != nil {
-		return fmt.Errorf("AtomicForwardAndEnqueue forward: %w", err)
+		return wrapDBInfrastructure("AtomicForwardAndEnqueue forward", err)
 	}
 	affected, _ = forwardResult.RowsAffected()
 	if affected == 0 {
 		return fmt.Errorf("store: AtomicForwardAndEnqueue: FORWARDING→FORWARDED CAS failed")
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return wrapDBInfrastructure("AtomicForwardAndEnqueue commit", err)
+	}
+	return nil
 }
 
 // MarkCreatorForwardingReadySync transitions a PENDING/POLLING forwarding to
@@ -121,7 +127,7 @@ func (s *SQLiteStore) MarkCreatorForwardingReadySync(ctx context.Context, forwar
 		payloadJSON, payloadSHA256, now, forwardingID,
 	)
 	if err != nil {
-		return fmt.Errorf("store: MarkCreatorForwardingReadySync: %w", err)
+		return wrapDBInfrastructure("MarkCreatorForwardingReadySync exec", err)
 	}
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
@@ -155,7 +161,7 @@ func (s *SQLiteStore) MarkCreatorForwardingEnqueueRetry(ctx context.Context, for
 		forwardingID,
 	)
 	if err != nil {
-		return fmt.Errorf("store: MarkCreatorForwardingEnqueueRetry: %w", err)
+		return wrapDBInfrastructure("MarkCreatorForwardingEnqueueRetry exec", err)
 	}
 	affected, _ := result.RowsAffected()
 	if affected == 0 {

@@ -68,7 +68,7 @@ func (c *AtomicJobTaskCreator) CreateJobWithTask(
 
 	tx, err := c.store.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("atomic creator begin: %w", err)
+		return wrapDBInfrastructure("atomic creator begin", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -76,7 +76,10 @@ func (c *AtomicJobTaskCreator) CreateJobWithTask(
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return wrapDBInfrastructure("atomic creator commit", err)
+	}
+	return nil
 }
 
 // CreateJobWithTaskTx performs the Job+delivery-plan+Task+TaskSpec INSERTs
@@ -163,7 +166,7 @@ func (c *AtomicJobTaskCreator) CreateJobWithTaskTx(
 		job.WorkspaceID,
 	)
 	if err != nil {
-		return fmt.Errorf("atomic creator job insert: %w", err)
+		return wrapDBInfrastructure("atomic creator job insert", err)
 	}
 
 	// 2. Snapshot and validate the delivery plan while the job insert is still
@@ -191,7 +194,7 @@ func (c *AtomicJobTaskCreator) CreateJobWithTaskTx(
 		priority, now, now,
 	)
 	if err != nil {
-		return fmt.Errorf("atomic creator task insert: %w", err)
+		return wrapDBInfrastructure("atomic creator task insert", err)
 	}
 
 	// 4. Insert TaskSpec (validated immutable spec + hash).
@@ -206,7 +209,7 @@ func (c *AtomicJobTaskCreator) CreateJobWithTaskTx(
 		taskID, taskSpec.Version, specHash, taskSpec.ExecutorID, payloadJSON, now,
 	)
 	if err != nil {
-		return fmt.Errorf("atomic creator task spec insert: %w", err)
+		return wrapDBInfrastructure("atomic creator task spec insert", err)
 	}
 
 	// 4b. Insert TaskRequirements for placement matcher capability gating.
@@ -219,7 +222,7 @@ func (c *AtomicJobTaskCreator) CreateJobWithTaskTx(
 			taskID, capability,
 		)
 		if err != nil {
-			return fmt.Errorf("atomic creator task requirements insert: %w", err)
+			return wrapDBInfrastructure("atomic creator task requirements insert", err)
 		}
 	}
 
@@ -242,7 +245,7 @@ func insertPublicationStatesTx(ctx context.Context, tx *sql.Tx, jobID string, sp
 			(publication_id, job_id, state, revision, created_at, updated_at)
 			VALUES (?, ?, 'PENDING', 0, ?, ?)
 			ON CONFLICT(publication_id) DO NOTHING`, publicationID, jobID, now, now); err != nil {
-			return fmt.Errorf("publication %q: %w", publicationID, err)
+			return wrapDBInfrastructure(fmt.Sprintf("publication %q", publicationID), err)
 		}
 	}
 	return nil
@@ -275,7 +278,7 @@ func insertDeliveryPlanTx(ctx context.Context, tx *sql.Tx, jobID string, plan []
 			entry.MetadataJSON, now, now,
 		)
 		if err != nil {
-			return fmt.Errorf("insert destination_id %q: %w", entry.DestinationID, err)
+			return wrapDBInfrastructure(fmt.Sprintf("insert destination_id %q", entry.DestinationID), err)
 		}
 	}
 	return nil

@@ -6,6 +6,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -47,7 +49,10 @@ func (s *SQLiteStore) InsertJobDelivery(jobD *JobDelivery) error {
 		nullIfEmpty(jobD.LastError), nullIfEmpty(jobD.LastErrorMessage),
 		nullIfEmpty(jobD.CompletedAt),
 	)
-	return err
+	if err != nil {
+		return wrapDBInfrastructure("InsertJobDelivery exec", err)
+	}
+	return nil
 }
 
 // ListJobDeliveriesByJob returns all deliveries for a job's READY artifacts.
@@ -66,7 +71,7 @@ func (s *SQLiteStore) ListJobDeliveriesByJob(jobID string) ([]JobDelivery, error
 		 WHERE a.job_id = ?
 		 ORDER BY jd.delivery_id ASC`, jobID)
 	if err != nil {
-		return nil, err
+		return nil, wrapDBInfrastructure("ListJobDeliveriesByJob query", err)
 	}
 	defer rows.Close()
 	var out []JobDelivery
@@ -77,11 +82,14 @@ func (s *SQLiteStore) ListJobDeliveriesByJob(jobID string) ([]JobDelivery, error
 			&jd.RemoteURL, &jd.CreatedAt, &jd.UpdatedAt,
 			&jd.NextAttemptAt, &jd.AttemptCount, &jd.LastError,
 			&jd.LastErrorMessage, &jd.MaxAttempts, &jd.CompletedAt); err != nil {
-			continue
+			return nil, wrapDBInfrastructure("ListJobDeliveriesByJob scan", err)
 		}
 		out = append(out, jd)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, wrapDBInfrastructure("ListJobDeliveriesByJob rows", err)
+	}
+	return out, nil
 }
 
 // GetJobDelivery retrieves a single job_delivery by ID.
@@ -102,7 +110,10 @@ func (s *SQLiteStore) GetJobDelivery(ctx context.Context, deliveryID string) (*J
 		&remoteURL, &jd.CreatedAt, &jd.UpdatedAt, &jd.CompletedAt,
 		&jd.NextAttemptAt, &jd.LastError, &jd.LastErrorMessage)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrDeliveryNoRow
+		}
+		return nil, wrapDBInfrastructure("GetJobDelivery scan", err)
 	}
 	jd.IdempotencyKey = idempotencyKey
 	jd.RemoteID = remoteID
@@ -124,18 +135,21 @@ func (s *SQLiteStore) ListDeliveryReconciliationCandidates(ctx context.Context, 
 		  AND updated_at >= datetime('now','-15 minutes')
 		ORDER BY updated_at ASC LIMIT ?`, limit)
 	if err != nil {
-		return nil, err
+		return nil, wrapDBInfrastructure("ListDeliveryReconciliationCandidates query", err)
 	}
 	defer rows.Close()
 	var out []JobDelivery
 	for rows.Next() {
 		var d JobDelivery
 		if err := rows.Scan(&d.DeliveryID, &d.ArtifactID, &d.DestinationID, &d.Status, &d.RemoteID, &d.RemoteURL, &d.CreatedAt, &d.UpdatedAt); err != nil {
-			return nil, err
+			return nil, wrapDBInfrastructure("ListDeliveryReconciliationCandidates scan", err)
 		}
 		out = append(out, d)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, wrapDBInfrastructure("ListDeliveryReconciliationCandidates rows", err)
+	}
+	return out, nil
 }
 
 func (s *SQLiteStore) ApplyReconciledDelivery(ctx context.Context, deliveryID, status, remoteID, remoteURL, errorCode, errorMessage string) error {
@@ -153,5 +167,8 @@ func (s *SQLiteStore) ApplyReconciledDelivery(ctx context.Context, deliveryID, s
 		    updated_at = ?
 		WHERE delivery_id = ?`, status, remoteID, remoteID, remoteURL, remoteURL,
 		errorCode, errorCode, errorMessage, errorMessage, now, deliveryID)
-	return err
+	if err != nil {
+		return wrapDBInfrastructure("ApplyReconciledDelivery exec", err)
+	}
+	return nil
 }

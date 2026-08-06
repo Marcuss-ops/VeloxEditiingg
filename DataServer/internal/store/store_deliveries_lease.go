@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -45,7 +47,7 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return nil, wrapDBInfrastructure("ClaimDeliveries begin", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -93,7 +95,7 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 		nowISO, nowISO, batch,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("ClaimDeliveries: UPDATE+RETURNING: %w", err)
+		return nil, wrapDBInfrastructure("ClaimDeliveries: UPDATE+RETURNING", err)
 	}
 
 	type claimedRow struct {
@@ -105,17 +107,17 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 	for rows.Next() {
 		var c claimedRow
 		if err := rows.Scan(&c.deliveryID, &c.artifactID, &c.destID, &c.attemptCount, &c.maxAttempts); err != nil {
-			return nil, fmt.Errorf("ClaimDeliveries: scan claimed row: %w", err)
+			return nil, wrapDBInfrastructure("ClaimDeliveries: scan claimed row", err)
 		}
 		claimed = append(claimed, c)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("ClaimDeliveries: rows iteration: %w", err)
+		return nil, wrapDBInfrastructure("ClaimDeliveries: rows iteration", err)
 	}
 	if len(claimed) == 0 {
 		if err := tx.Commit(); err != nil {
-			return nil, fmt.Errorf("ClaimDeliveries: commit empty batch: %w", err)
+			return nil, wrapDBInfrastructure("ClaimDeliveries: commit empty batch", err)
 		}
 		return nil, nil
 	}
@@ -130,7 +132,10 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 			c.destID,
 		).Scan(&provider, &configJSON)
 		if err != nil {
-			return nil, fmt.Errorf("ClaimDeliveries: hydrate destination: %w", err)
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, ErrDeliveryNoRow
+			}
+			return nil, wrapDBInfrastructure("ClaimDeliveries: hydrate destination", err)
 		}
 
 		// Re-stamp this delivery with its OWN lease_id, overwriting the
@@ -149,7 +154,7 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 			deliveryLeaseID, c.deliveryID, runnerID, provisionalLeaseID,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("ClaimDeliveries: per-delivery lease stamp: %w", err)
+			return nil, wrapDBInfrastructure("ClaimDeliveries: per-delivery lease stamp", err)
 		}
 		if n, _ := leaseRes.RowsAffected(); n != 1 {
 			return nil, fmt.Errorf("ClaimDeliveries: per-delivery lease stamp affected=%d delivery=%s", n, c.deliveryID)
@@ -164,7 +169,7 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 			c.attemptCount, nowISO, nullIfEmpty(runnerID), c.deliveryID,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("ClaimDeliveries: attempts INSERT: %w", err)
+			return nil, wrapDBInfrastructure("ClaimDeliveries: attempts INSERT", err)
 		}
 
 		out = append(out, DeliveryLease{
@@ -188,7 +193,7 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return nil, wrapDBInfrastructure("ClaimDeliveries commit", err)
 	}
 	return out, nil
 }
@@ -217,7 +222,7 @@ func (s *SQLiteStore) RenewDeliveryLease(ctx context.Context, deliveryID, runner
 		iso, now, deliveryID, runnerID, leaseID,
 	)
 	if err != nil {
-		return err
+		return wrapDBInfrastructure("RenewDeliveryLease exec", err)
 	}
 	affected, _ := result.RowsAffected()
 	if affected == 0 {

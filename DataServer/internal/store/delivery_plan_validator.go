@@ -95,7 +95,7 @@ func validateDeliveryDestinationTx(ctx context.Context, tx *sql.Tx, destID strin
 		return fmt.Errorf("%w: destination_id %q does not exist", ErrDestinationNotFound, destID)
 	}
 	if err != nil {
-		return fmt.Errorf("validate destination_id %q: %w", destID, err)
+		return wrapDBInfrastructure(fmt.Sprintf("validate destination_id %q", destID), err)
 	}
 	if globallyEnabled != 1 {
 		// Stable contract string preserved; wrap ErrDestinationDisabled
