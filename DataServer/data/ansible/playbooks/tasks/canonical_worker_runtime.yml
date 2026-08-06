@@ -28,13 +28,7 @@
     velox_worker_health_port: 8081
     velox_worker_heartbeat_masters: "{{ master_url }}"
     velox_worker_secondary_master_url: ""
-    velox_worker_control_grpc_url: >-
-      {{
-        master_url
-        | regex_replace('^https?://', '')
-        | regex_replace('/.*$', '')
-        | regex_replace(':8000$', ':9000')
-      }}
+    velox_worker_control_grpc_url: "{{ velox_grpc_control_endpoint | default(master_url | regex_replace('^https?://', '') | regex_replace('/.*$', '')) }}"
 
 - name: CanonicalRuntime | Ensure canonical Compose directory exists
   ansible.builtin.file:

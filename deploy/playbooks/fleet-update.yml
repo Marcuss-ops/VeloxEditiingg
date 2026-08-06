@@ -89,6 +89,20 @@
       register: update_post
       failed_when: update_post.status not in [202, 409]
 
+    - name: Require operation_id for accepted update responses
+      ansible.builtin.assert:
+        that:
+          - update_post.json.operation_id | default('') | length > 0
+        fail_msg: >-
+          Update for worker {{ worker_id }} returned HTTP
+          {{ update_post.status }} without an operation_id. The Master's
+          fleet_operations ledger contract requires a pollable
+          operation_id for accepted (202) update responses; a 409 MUST
+          also carry one so the operator can triage the in-flight
+          operation. Fail-closed: do not treat a bare response as a
+          successful update.
+      when: update_post.status == 202
+
     - name: Skip polling if update returned 409 (operation in-flight)
       ansible.builtin.debug:
         msg: >-

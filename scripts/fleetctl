@@ -27,7 +27,7 @@ Environment:
   VELOX_MASTER_URL   Master base URL (default: http://127.0.0.1:8000)
   VELOX_ADMIN_TOKEN  Admin bearer token
   TOKEN_FILE         File containing VELOX_ADMIN_TOKEN=<value>
-  FLEET_INVENTORY     Ansible inventory (default: deploy/inventory/production.ini)
+  FLEET_INVENTORY     Operator-local Ansible inventory (required for host rollout)
   FLEET_ROLLOUT_PLAYBOOK  Digest rollout playbook override
 EOF
 }
@@ -83,7 +83,9 @@ validate_image() {
 
 run_digest_rollout() {
     local action=$1 worker_id=$2 image=$3 reason=${4:-fleetctl-$action}
-    local inventory=${FLEET_INVENTORY:-$ROOT/deploy/ansible/inventory.ini}
+    [[ -n "${FLEET_INVENTORY:-}" ]] \
+        || die 'FLEET_INVENTORY is required; use an operator-local inventory file'
+    local inventory=$FLEET_INVENTORY
     local playbook=${FLEET_ROLLOUT_PLAYBOOK:-$ROOT/deploy/playbooks/rollout-worker-digest.yml}
     command -v ansible-playbook >/dev/null 2>&1 || die 'ansible-playbook is required for host rollout'
     [[ -r "$inventory" ]] || die "Ansible inventory not readable: $inventory"
