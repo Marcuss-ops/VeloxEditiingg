@@ -267,6 +267,54 @@ func TestRegistryGetSchedulableWorkers(t *testing.T) {
 	}
 }
 
+func TestRegistryResumeGateSurvivesReconnectAndReload(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.NewSQLiteStore(t.TempDir() + "/resume-gate.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	reg := New(db)
+	caps := map[string]interface{}{
+		"capabilities": map[string]interface{}{
+			"host": map[string]interface{}{"max_parallel_jobs": float64(1)},
+			"executors": []interface{}{
+				map[string]interface{}{"id": "scene.composite.v1", "version": float64(1)},
+			},
+		},
+	}
+	if err := reg.RegisterWorker(ctx, "resume-reconnect", "worker", "127.0.0.1", caps); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.SetWorkerDrain(ctx, "resume-reconnect", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.SetWorkerResumingIfClear(ctx, "resume-reconnect", "resume-operation-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.RegisterWorker(ctx, "resume-reconnect", "worker-reconnected", "127.0.0.2", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	info := reg.GetWorker(ctx, "resume-reconnect")
+	if info == nil || !info.Drain || !info.Resuming {
+		t.Fatalf("reconnect lost resume gates: drain=%v resuming=%v", info != nil && info.Drain, info != nil && info.Resuming)
+	}
+	if got := reg.GetSchedulableWorkers(ctx); len(got) != 0 {
+		t.Fatalf("reconnected worker became placement-eligible: %+v", got)
+	}
+
+	reloaded := New(db)
+	info = reloaded.GetWorker(ctx, "resume-reconnect")
+	if info == nil || !info.Drain || !info.Resuming {
+		t.Fatalf("master reload lost resume gates: drain=%v resuming=%v", info != nil && info.Drain, info != nil && info.Resuming)
+	}
+	if got := reloaded.GetSchedulableWorkers(ctx); len(got) != 0 {
+		t.Fatalf("reloaded worker became placement-eligible: %+v", got)
+	}
+}
+
 func TestRegistryUpdateWorker(t *testing.T) {
 	reg := newTestRegistry(t)
 	ctx := context.Background()

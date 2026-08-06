@@ -47,6 +47,7 @@ const (
 	SchedulingBusy        SchedulingState = "BUSY"
 	SchedulingDraining    SchedulingState = "DRAINING"
 	SchedulingQuarantined SchedulingState = "QUARANTINED"
+	SchedulingResuming    SchedulingState = "RESUMING"
 )
 
 // DeploymentState is the canonical deployment dimension, derived from
@@ -93,10 +94,13 @@ func DeriveConnectionState(sessionActive bool, lastHB string, now time.Time) Con
 }
 
 // DeriveSchedulingState is the canonical scheduling derivation.
-// Precedence: quarantine > drain > busy > available.
-func DeriveSchedulingState(drain, quarantined bool, activeTasks int) SchedulingState {
+// Precedence: quarantine > resuming > drain > busy > available.
+func DeriveSchedulingState(drain, quarantined, resuming bool, activeTasks int) SchedulingState {
 	if quarantined {
 		return SchedulingQuarantined
+	}
+	if resuming {
+		return SchedulingResuming
 	}
 	if drain {
 		return SchedulingDraining
@@ -154,7 +158,7 @@ func DeriveHealthState(cs ConnectionState, ss SchedulingState, ds DeploymentStat
 	if cs == ConnectionOffline || ss == SchedulingQuarantined {
 		return HealthDown
 	}
-	if cs == ConnectionStale || ds == DeploymentFailed || ds == DeploymentUpdating || ds == DeploymentRollback || ds == DeploymentRestarting ||
+	if cs == ConnectionStale || ss == SchedulingResuming || ds == DeploymentFailed || ds == DeploymentUpdating || ds == DeploymentRollback || ds == DeploymentRestarting ||
 		(!lastSmokeFail.IsZero() && now.Sub(lastSmokeFail) < time.Hour) {
 		return HealthDegraded
 	}
@@ -166,7 +170,7 @@ func DeriveHealthState(cs ConnectionState, ss SchedulingState, ds DeploymentStat
 // DRAINING) consumed by /api/v1/workers and dashboards. DRAINING is a
 // scheduling signal surfaced on this wire for back-compat.
 func (cs ConnectionState) WireStatus(ss SchedulingState) string {
-	if ss == SchedulingDraining {
+	if ss == SchedulingDraining || ss == SchedulingResuming {
 		return StatusDraining
 	}
 	switch cs {

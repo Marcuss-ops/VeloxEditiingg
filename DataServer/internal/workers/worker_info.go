@@ -94,6 +94,13 @@ type Worker struct {
 	HealthState     HealthState     `json:"health_state"`
 	Health          string          `json:"health"`
 	Quarantined     bool            `json:"quarantined"`
+	// Resuming is a persisted fail-closed gate: a worker remains
+	// ineligible while the fresh Level D smoke for a resume operation
+	// is running. It is cleared only by the resume executor after a
+	// green smoke, or after a failed operation restores the original
+	// drain/quarantine exclusion.
+	Resuming          bool   `json:"resuming"`
+	ResumeOperationID string `json:"resume_operation_id,omitempty"`
 
 	// Deprecated: consume the typed state dimensions above. This field is
 	// retained for clients that still expect the operator 9-state string.
@@ -156,7 +163,8 @@ func (info Worker) ExecutorRegistrySnapshot() controltransport.ExecutorRegistry 
 
 // ScrubForPersist zeroes the read-time-hydrated fields on info so a cached
 // Worker returned by a previous GetWorker cannot leak derived state into
-// workers.raw_json. Quarantined is intentionally persisted.
+// workers.raw_json. Quarantined and Resuming are intentionally persisted
+// scheduling gates.
 func ScrubForPersist(info *Worker) {
 	if info == nil {
 		return

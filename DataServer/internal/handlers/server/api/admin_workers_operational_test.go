@@ -246,8 +246,8 @@ func TestOperationalResume_ControllerRunsSmokeBeforeFlags(t *testing.T) {
 		t.Fatalf("failed resume ledger lost smoke error: %+v", failedOp)
 	}
 	info := reg.GetWorker(context.Background(), "w-resume-gated")
-	if info == nil || !info.Drain {
-		t.Fatalf("worker became eligible after failed smoke: %+v", info)
+	if info == nil || !info.Drain || info.Resuming {
+		t.Fatalf("worker flags after failed smoke: drain=%v resuming=%v, want drain=true/resuming=false", info != nil && info.Drain, info != nil && info.Resuming)
 	}
 	if eligible := reg.GetSchedulableWorkers(context.Background()); len(eligible) != 0 {
 		t.Fatalf("failed resume left worker placement-eligible: %+v", eligible)
@@ -265,8 +265,8 @@ func TestOperationalResume_ControllerRunsSmokeBeforeFlags(t *testing.T) {
 		t.Fatalf("successful resume missing ledger lifecycle timestamps: %+v", passedOp)
 	}
 	info = reg.GetWorker(context.Background(), "w-resume-gated")
-	if info == nil || info.Drain || info.Quarantined {
-		t.Fatalf("worker flags after green smoke: %+v", info)
+	if info == nil || info.Drain || info.Quarantined || info.Resuming {
+		t.Fatalf("worker flags after green smoke: drain=%v quarantine=%v resuming=%v, want all false", info != nil && info.Drain, info != nil && info.Quarantined, info != nil && info.Resuming)
 	}
 }
 
@@ -285,8 +285,8 @@ func TestOperationalResume_202KeepsExclusionUntilSmokeAndInFlight409(t *testing.
 	}
 	resp := operationFromResponse(t, first)
 	info := reg.GetWorker(context.Background(), "w-resume-operational")
-	if info == nil || !info.Drain {
-		t.Fatalf("resume cleared drain before smoke: %+v", info)
+	if info == nil || !info.Drain || !info.Resuming {
+		t.Fatalf("resume gate before smoke: drain=%v resuming=%v, want both true", info != nil && info.Drain, info != nil && info.Resuming)
 	}
 	if eligible := reg.GetSchedulableWorkers(context.Background()); len(eligible) != 0 {
 		t.Fatalf("worker became placement-eligible before smoke: %+v", eligible)

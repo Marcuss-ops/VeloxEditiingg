@@ -70,7 +70,7 @@ func ConnectionStatus(sessionActive bool, lastHB string, drain bool, now time.Ti
 	// the 4-state wire vocabulary is derived from ConnectionState +
 	// SchedulingState, never from ad-hoc string checks.
 	cs := DeriveConnectionState(sessionActive, lastHB, now)
-	ss := DeriveSchedulingState(drain, false, 0)
+	ss := DeriveSchedulingState(drain, false, false, 0)
 	return cs.WireStatus(ss)
 }
 
@@ -425,7 +425,7 @@ func applyLeaseCapacityState(info *Worker, activeSlots int, now time.Time) {
 	if info == nil {
 		return
 	}
-	info.SchedulingState = DeriveSchedulingState(info.Drain, info.Quarantined, activeSlots)
+	info.SchedulingState = DeriveSchedulingState(info.Drain, info.Quarantined, info.Resuming, activeSlots)
 	info.HealthState = DeriveHealthState(info.ConnectionState, info.SchedulingState, info.DeploymentState, time.Time{}, now)
 	info.Health = projectHealth9(info.ConnectionState, info.SchedulingState, info.DeploymentState, time.Time{}, now)
 }
@@ -439,7 +439,7 @@ func ConnectionStatusForInfo(info *Worker, sessionActive bool, now time.Time) {
 	// Occupancy is owned by the lease-store capacity projection. The
 	// compatibility adapter does not infer scheduling state from heartbeat
 	// metrics, because those counters are diagnostic telemetry only.
-	info.SchedulingState = DeriveSchedulingState(info.Drain, info.Quarantined, 0)
+	info.SchedulingState = DeriveSchedulingState(info.Drain, info.Quarantined, info.Resuming, 0)
 	info.HealthState = DeriveHealthState(
 		info.ConnectionState,
 		info.SchedulingState,

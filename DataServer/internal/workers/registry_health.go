@@ -199,7 +199,7 @@ func Health(
 	// The precedence ladder is implemented ONCE, explicitly, in
 	// projectHealth9 — it is no longer a hidden string-laden ladder.
 	cs := DeriveConnectionState(sessionActive, lastHB, now)
-	ss := DeriveSchedulingState(drain, quarantined, int(activeJobs))
+	ss := DeriveSchedulingState(drain, quarantined, false, int(activeJobs))
 	return projectHealth9(cs, ss, DeploymentState(deploymentState), lastSmokeFail, now)
 }
 
@@ -254,7 +254,7 @@ func HealthForInfo(info *Worker, lastSmokeFail time.Time, deploymentState string
 	// The lease store owns occupancy. Heartbeat active_tasks is retained
 	// for telemetry but cannot promote a worker to BUSY in the canonical
 	// state projection.
-	info.SchedulingState = DeriveSchedulingState(info.Drain, info.Quarantined, 0)
+	info.SchedulingState = DeriveSchedulingState(info.Drain, info.Quarantined, info.Resuming, 0)
 	info.HealthState = DeriveHealthState(
 		info.ConnectionState,
 		info.SchedulingState,

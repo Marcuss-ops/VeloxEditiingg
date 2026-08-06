@@ -37,18 +37,21 @@ func TestDeriveSchedulingState(t *testing.T) {
 		name        string
 		drain       bool
 		quarantined bool
+		resuming    bool
 		activeTasks int
 		want        SchedulingState
 	}{
-		{"idle", false, false, 0, SchedulingAvailable},
-		{"busy from tasks", false, false, 2, SchedulingBusy},
-		{"draining", true, false, 0, SchedulingDraining},
-		{"draining even when busy", true, false, 5, SchedulingDraining},
-		{"quarantined beats drain", true, true, 5, SchedulingQuarantined},
+		{"idle", false, false, false, 0, SchedulingAvailable},
+		{"busy from tasks", false, false, false, 2, SchedulingBusy},
+		{"draining", true, false, false, 0, SchedulingDraining},
+		{"resuming wire status remains exclusion", false, false, true, 0, SchedulingResuming},
+		{"draining even when busy", true, false, false, 5, SchedulingDraining},
+		{"resuming blocks placement", false, false, true, 0, SchedulingResuming},
+		{"quarantined beats resuming", false, true, true, 5, SchedulingQuarantined},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := DeriveSchedulingState(tc.drain, tc.quarantined, tc.activeTasks); got != tc.want {
+			if got := DeriveSchedulingState(tc.drain, tc.quarantined, tc.resuming, tc.activeTasks); got != tc.want {
 				t.Errorf("DeriveSchedulingState = %q, want %q", got, tc.want)
 			}
 		})
@@ -129,6 +132,7 @@ func TestWireStatusProjection(t *testing.T) {
 		{ConnectionOffline, SchedulingAvailable, StatusDisconnected},
 		{ConnectionOffline, SchedulingDraining, StatusDraining}, // wire back-compat: drain wins
 		{ConnectionStale, SchedulingDraining, StatusDraining},
+		{ConnectionConnected, SchedulingResuming, StatusDraining},
 	}
 	for _, tc := range cases {
 		if got := tc.cs.WireStatus(tc.ss); got != tc.want {

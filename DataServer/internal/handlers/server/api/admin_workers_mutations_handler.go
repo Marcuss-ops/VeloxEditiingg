@@ -249,6 +249,10 @@ func (h *AdminWorkersMutationsHandler) mutationHandler(kind string, action mutat
 			c.JSON(http.StatusNotFound, gin.H{"error": "worker not found"})
 			return
 		}
+		if info.Resuming {
+			c.JSON(http.StatusConflict, gin.H{"error": "worker resume smoke gate is already in-flight"})
+			return
+		}
 
 		// ── Synchronous state change (immediate placement exclusion) ─
 		// Per Q2 design: the handler updates Worker.Drain /
@@ -256,13 +260,33 @@ func (h *AdminWorkersMutationsHandler) mutationHandler(kind string, action mutat
 		// (costmodel.Score in registry_query.go:GetEligibleWorkers)
 		// excludes the worker from the next match. The async tick
 		// goroutine + future executor handle the SSH/Ansible path.
-		if err := action(c.Request.Context(), info); err != nil {
+		op := &store.Operation{WorkerID: workerID}
+		if kind == fleet.OperationKindResume {
+			// Generate the operation ID before claiming RESUMING so the
+			// persisted gate has an owner even if publication is concurrent.
+			if opID := fleet.NewOperationID(); opID != "" {
+				op.OperationID = opID
+			}
+			if err := h.reg.SetWorkerResumingIfClear(c.Request.Context(), workerID, op.OperationID); err != nil {
+				if errors.Is(err, workersreg.ErrWorkerResumeInFlight) {
+					c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+					return
+				}
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		} else if err := action(c.Request.Context(), info); err != nil {
 			var already errAlreadyInDesiredState
 			if errors.As(err, &already) {
 				c.JSON(http.StatusConflict, gin.H{"error": already.Error()})
 				return
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if kind == fleet.OperationKindResume && !info.Drain && !info.Quarantined {
+			_ = h.reg.ClearWorkerResumingIfOwner(c.Request.Context(), workerID, op.OperationID)
+			c.JSON(http.StatusConflict, gin.H{"error": "worker is already HEALTHY (no-op)"})
 			return
 		}
 
@@ -272,15 +296,26 @@ func (h *AdminWorkersMutationsHandler) mutationHandler(kind string, action mutat
 		if kind == fleet.OperationKindUpdate {
 			payload, _ = json.Marshal(map[string]string{"target_digest": req.TargetDigest})
 		}
-		op := &store.Operation{
-			WorkerID:    workerID,
-			Op:          kind,
-			RequestedBy: "admin", // Step 6/15: admin auth context does not yet carry an operator identity
-			Reason:      req.Reason,
-			Payload:     payload,
-			QueuedAt:    now,
-		}
+		op.WorkerID = workerID
+		op.Op = kind
+		op.RequestedBy = "admin" // Step 6/15: admin auth context does not yet carry an operator identity
+		op.Reason = req.Reason
+		op.Payload = payload
+		op.QueuedAt = now
+
 		if err := h.publisher.PublishOperation(c.Request.Context(), op); err != nil {
+			// Resume marks the worker RESUMING before publication so
+			// placement is fail-closed immediately. Every failed
+			// publication, including ErrOperationInFlight, must release
+			// only this request's claim: no operation was accepted from
+			// this handler invocation, so leaving the gate set would
+			// permanently block a retry.
+			if kind == fleet.OperationKindResume {
+				if cleanupErr := h.reg.ClearWorkerResumingIfOwner(c.Request.Context(), workerID, op.OperationID); cleanupErr != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("%v; resume gate cleanup failed: %v", err, cleanupErr)})
+					return
+				}
+			}
 			if errors.Is(err, store.ErrOperationInFlight) {
 				// Per Q3 design: 409 with structured payload so the
 				// operator UI can render "your click was acknowledged,
@@ -405,12 +440,13 @@ func (h *AdminWorkersMutationsHandler) UpdateWorker() gin.HandlerFunc {
 // the handler itself does not make the worker eligible or clear either
 // exclusion flag.
 func (h *AdminWorkersMutationsHandler) ResumeWorker() gin.HandlerFunc {
-	return h.mutationHandler(fleet.OperationKindResume, func(_ context.Context, info *workersreg.Worker) error {
+	return h.mutationHandler(fleet.OperationKindResume, func(ctx context.Context, info *workersreg.Worker) error {
 		if !info.Drain && !info.Quarantined {
 			return errAlreadyInDesiredState{desired: "HEALTHY", current: "HEALTHY"}
 		}
-		// Keep both exclusion flags until the asynchronous resume executor
-		// observes a green smoke gate.
+		// RESUMING is claimed atomically by mutationHandler before this
+		// action. Keep the closure as a no-op to preserve the common
+		// mutation shape.
 		return nil
 	})
 }

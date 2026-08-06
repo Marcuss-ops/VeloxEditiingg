@@ -3,6 +3,7 @@ package workers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -25,9 +26,15 @@ func (r *Registry) RegisterWorker(ctx context.Context, workerID, workerName, ipA
 	firstSeen := now
 	displayName := workerName
 	workerGroup := ""
+	var preservedDrain, preservedQuarantine, preservedResuming bool
+	var preservedResumeOperationID string
 
 	if ok {
 		firstSeen = existing.FirstSeen
+		preservedDrain = existing.Drain
+		preservedQuarantine = existing.Quarantined
+		preservedResuming = existing.Resuming
+		preservedResumeOperationID = existing.ResumeOperationID
 		if existing.DisplayName != "" {
 			displayName = existing.DisplayName
 		}
@@ -47,15 +54,19 @@ func (r *Registry) RegisterWorker(ctx context.Context, workerID, workerName, ipA
 	}
 
 	info := Worker{
-		WorkerID:    id,
-		WorkerName:  workerName,
-		DisplayName: displayName,
-		LastHB:      now,
-		FirstSeen:   firstSeen,
-		IPAddress:   ipAddress,
-		Host:        ipAddress,
-		Schedulable: true,
-		WorkerGroup: workerGroup,
+		WorkerID:          id,
+		WorkerName:        workerName,
+		DisplayName:       displayName,
+		LastHB:            now,
+		FirstSeen:         firstSeen,
+		IPAddress:         ipAddress,
+		Host:              ipAddress,
+		Schedulable:       true,
+		WorkerGroup:       workerGroup,
+		Drain:             preservedDrain,
+		Quarantined:       preservedQuarantine,
+		Resuming:          preservedResuming,
+		ResumeOperationID: preservedResumeOperationID,
 	}
 	applyMetadataFields(extra, &info)
 
@@ -115,15 +126,27 @@ func (r *Registry) UpdateWorker(ctx context.Context, workerID string, updates ma
 		info.WorkerGroup = v
 	}
 	if v, ok := updates["drain"].(bool); ok {
+		if info.Resuming && v != info.Drain {
+			return ErrWorkerResumeInFlight
+		}
 		info.Drain = v
 	}
 	if v, ok := updates["quarantine"].(bool); ok {
+		if info.Resuming && v != info.Quarantined {
+			return ErrWorkerResumeInFlight
+		}
 		// Step 6/15 fleet-operator: admin quarantine endpoint writes
 		// via the map-driven path; SetWorkerQuarantine (typed helper)
 		// is the canonical entry. Both paths converge on the same
 		// flag. Persisted (NOT scrubbed in ScrubForPersist) so the
 		// operator's quarantine decision survives a registry restart.
 		info.Quarantined = v
+	}
+	if v, ok := updates["resuming"].(bool); ok {
+		// RESUMING is a persisted, fail-closed scheduling gate. It is
+		// set before the asynchronous smoke operation starts and cleared
+		// only by ResumeExecutor after a terminal smoke outcome.
+		info.Resuming = v
 	}
 	if v, ok := updates["schedulable"].(bool); ok {
 		info.Schedulable = v
@@ -208,6 +231,128 @@ func (r *Registry) SetWorkerDrain(ctx context.Context, workerID string, drain bo
 // entry point.
 func (r *Registry) SetWorkerQuarantine(ctx context.Context, workerID string, quarantined bool) error {
 	return r.UpdateWorker(ctx, workerID, map[string]interface{}{"quarantine": quarantined})
+}
+
+// ErrWorkerResumeInFlight is returned when a second resume admission races
+// with an already active RESUMING gate.
+var ErrWorkerResumeInFlight = errors.New("worker resume smoke gate is already in-flight")
+
+// SetWorkerResuming marks the worker as undergoing a resume smoke gate.
+// The flag is persisted so a master restart cannot accidentally make a
+// worker eligible while the operation is still in flight. New code should
+// use SetWorkerResumingIfClear/ClearWorkerResumingIfOwner for ownership.
+func (r *Registry) SetWorkerResuming(ctx context.Context, workerID string, resuming bool) error {
+	return r.UpdateWorker(ctx, workerID, map[string]interface{}{"resuming": resuming})
+}
+
+// ClearWorkerResumingIfOwner clears only a gate owned by operationID.
+// Stale operation failure/cleanup cannot release a newer resume gate.
+func (r *Registry) ClearWorkerResumingIfOwner(ctx context.Context, workerID, operationID string) error {
+	workerID = identity.NormalizeWorkerID(workerID)
+	id := identity.ParseWorkerID(workerID)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	info, ok := r.inMem[id]
+	if !ok {
+		return fmt.Errorf("worker not found: %s", workerID)
+	}
+	if !info.Resuming || info.ResumeOperationID != operationID {
+		return fmt.Errorf("resume operation %q no longer owns worker gate", operationID)
+	}
+	previous := info
+	info.Resuming = false
+	info.ResumeOperationID = ""
+	info.LastHB = time.Now().UTC().Format(time.RFC3339)
+	r.inMem[id] = info
+	if r.dbStore != nil {
+		persisted := info
+		ScrubForPersist(&persisted)
+		raw, _ := json.Marshal(persisted)
+		if err := r.dbStore.UpsertWorker(raw); err != nil {
+			// Keep the in-memory gate fail-closed when the durable
+			// cleanup did not succeed; a retry must still have the
+			// original owner and exclusion state available.
+			r.inMem[id] = previous
+			return err
+		}
+	}
+	return nil
+}
+
+// SetWorkerResumingIfClear atomically claims the RESUMING gate. This closes
+// the check-then-set race between concurrent admin requests: exactly one
+// request can become responsible for publishing/executing the resume smoke.
+func (r *Registry) SetWorkerResumingIfClear(ctx context.Context, workerID, operationID string) error {
+	workerID = identity.NormalizeWorkerID(workerID)
+	id := identity.ParseWorkerID(workerID)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	info, ok := r.inMem[id]
+	if !ok {
+		return fmt.Errorf("worker not found: %s", workerID)
+	}
+	if info.Resuming {
+		return ErrWorkerResumeInFlight
+	}
+	if operationID == "" {
+		return errors.New("resume operation id required")
+	}
+	info.Resuming = true
+	info.ResumeOperationID = operationID
+	info.LastHB = time.Now().UTC().Format(time.RFC3339)
+	r.inMem[id] = info
+	if r.dbStore != nil {
+		persisted := info
+		ScrubForPersist(&persisted)
+		raw, _ := json.Marshal(persisted)
+		if err := r.dbStore.UpsertWorker(raw); err != nil {
+			// Do not leave an in-memory gate that was never durably
+			// claimed; the caller can safely retry the admission.
+			info.Resuming = false
+			r.inMem[id] = info
+			return err
+		}
+	}
+	return nil
+}
+
+// CompleteResume atomically clears the resume gate and the exclusion flags
+// after a green Level D smoke. External drain/quarantine mutations are
+// rejected while Resuming is true, so this transition cannot erase a
+// concurrent operator decision. The operation ID prevents stale executors
+// from completing a newer resume.
+func (r *Registry) CompleteResume(ctx context.Context, workerID, operationID string) error {
+	workerID = identity.NormalizeWorkerID(workerID)
+	id := identity.ParseWorkerID(workerID)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	info, ok := r.inMem[id]
+	if !ok {
+		return fmt.Errorf("worker not found: %s", workerID)
+	}
+	if !info.Resuming || info.ResumeOperationID != operationID {
+		return fmt.Errorf("resume operation %q no longer owns worker gate", operationID)
+	}
+	previous := info
+	info.Drain = false
+	info.Quarantined = false
+	info.Resuming = false
+	info.ResumeOperationID = ""
+	info.LastHB = time.Now().UTC().Format(time.RFC3339)
+	r.inMem[id] = info
+	if r.dbStore != nil {
+		persisted := info
+		ScrubForPersist(&persisted)
+		raw, _ := json.Marshal(persisted)
+		if err := r.dbStore.UpsertWorker(raw); err != nil {
+			// Do not expose a healthy/eligible in-memory projection
+			// when the durable completion failed. Restore the exact
+			// owner and exclusion snapshot so the operation can retry.
+			r.inMem[id] = previous
+			return err
+		}
+	}
+	return nil
 }
 
 // SetWorkerGroup sets the group for a worker

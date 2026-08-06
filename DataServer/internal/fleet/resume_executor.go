@@ -46,13 +46,20 @@ func (e *ResumeExecutor) Execute(ctx context.Context, op *store.Operation) error
 		return errors.New("resume: worker registry not wired")
 	}
 	if e.backend.SmokeExecutor == nil {
+		// The operation cannot run without a fresh Level D gate. Clear
+		// only the transient marker; the original drain/quarantine
+		// exclusion remains in force. Surface cleanup failure rather
+		// than silently leaving the worker stuck in RESUMING.
+		if cleanupErr := e.backend.Registry.ClearWorkerResumingIfOwner(ctx, op.WorkerID, op.OperationID); cleanupErr != nil {
+			return fmt.Errorf("%w: Level D smoke executor not wired; cleanup failed: %v", ErrResumeSmokeFailed, cleanupErr)
+		}
 		return fmt.Errorf("%w: Level D smoke executor not wired", ErrResumeSmokeFailed)
 	}
 	info := e.backend.Registry.GetWorker(ctx, op.WorkerID)
 	if info == nil {
 		return fmt.Errorf("resume: worker %q not found", op.WorkerID)
 	}
-	if !info.Drain && !info.Quarantined {
+	if !info.Drain && !info.Quarantined && !info.Resuming {
 		return nil
 	}
 	// The nested operation is executed directly so Resume waits for the
@@ -76,15 +83,20 @@ func (e *ResumeExecutor) Execute(ctx context.Context, op *store.Operation) error
 		QueuedAt:    op.QueuedAt,
 	}
 	if smokeErr := e.backend.SmokeExecutor.Execute(ctx, smokeOp); smokeErr != nil {
+		// Preserve the original drain/quarantine flags and clear only
+		// the transient RESUMING marker. Placement therefore remains
+		// excluded after any Level D failure. Surface cleanup failure
+		// because a durable RESUMING gate must never be silent.
+		if cleanupErr := e.backend.Registry.ClearWorkerResumingIfOwner(ctx, op.WorkerID, op.OperationID); cleanupErr != nil {
+			return fmt.Errorf("%w: %v; cleanup failed: %v", ErrResumeSmokeFailed, smokeErr, cleanupErr)
+		}
 		return fmt.Errorf("%w: %v", ErrResumeSmokeFailed, smokeErr)
 	}
-	// Clear quarantine first, then drain. If the second write fails, Drain
-	// remains true and placement stays fail-closed until retry.
-	if err := e.backend.Registry.SetWorkerQuarantine(ctx, op.WorkerID, false); err != nil {
-		return fmt.Errorf("resume: clear quarantine: %w", err)
-	}
-	if err := e.backend.Registry.SetWorkerDrain(ctx, op.WorkerID, false); err != nil {
-		return fmt.Errorf("resume: clear drain: %w", err)
+	// Clear quarantine first, then drain. If either write fails, retain
+	// RESUMING and the remaining exclusion flag so placement stays
+	// fail-closed and the operation can be retried safely.
+	if err := e.backend.Registry.CompleteResume(ctx, op.WorkerID, op.OperationID); err != nil {
+		return fmt.Errorf("resume: complete green smoke transition: %w", err)
 	}
 	return nil
 }

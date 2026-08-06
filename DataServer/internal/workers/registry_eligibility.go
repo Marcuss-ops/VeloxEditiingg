@@ -38,7 +38,7 @@ func (r *Registry) GetEligibleWorkers(ctx context.Context, req costmodel.JobRequ
 
 	result := make([]Worker, 0, len(workers))
 	for _, w := range workers {
-		if w.Quarantined {
+		if w.Quarantined || w.Resuming {
 			continue
 		}
 		resources := costmodel.ResourceSnapshotFromMaps(nil, w.Metrics)
@@ -53,7 +53,7 @@ func (r *Registry) GetEligibleWorkers(ctx context.Context, req costmodel.JobRequ
 		profile := costmodel.BuildWorkerProfileFromRegistry(
 			w.WorkerID.String(),
 			w.Schedulable,
-			w.Drain,
+			w.Drain || w.Resuming,
 			isStale,
 			w.Capacity.ActiveSlots,
 			w.Capacity.MaxSlots,
