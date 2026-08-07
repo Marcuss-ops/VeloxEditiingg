@@ -31,7 +31,7 @@ func TestCommonAssetResolverColdWarmCacheAcrossMediaKinds(t *testing.T) {
 	var mu sync.Mutex
 	requests := make(map[string]int)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assetID := strings.TrimPrefix(r.URL.Path, "/api/v1/worker-assets/")
+		assetID := strings.TrimPrefix(r.URL.Path, "/api/v1/agent/assets/")
 		mu.Lock()
 		requests[assetID]++
 		mu.Unlock()

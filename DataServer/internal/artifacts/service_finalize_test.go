@@ -254,6 +254,7 @@ func TestFinalize_ArtifactREADYMeansBlobExists(t *testing.T) {
 	cmd := beginUploadDefaultCmd("J15")
 	payload := []byte("artifact-ready-test-blob-payload")
 	cmd.ExpectedSizeBytes = int64(len(payload))
+	cmd.ExpectedSHA256 = sha256Hex(payload)
 	cmd.MimeType = "video/mp4"
 	sess, err := env.svc.BeginUpload(context.Background(), cmd)
 	require.NoError(t, err)

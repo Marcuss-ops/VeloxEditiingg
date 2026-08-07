@@ -192,13 +192,15 @@ func (w *Worker) uploadTaskOutputs(ctx context.Context, pte *PendingTaskExecutio
 	}
 
 	resp, err := w.apiClient.UploadCompletedVideo(ctx, api.UploadCompletedVideoRequest{
-		JobID:         pte.JobID,
-		AttemptID:     pte.AttemptID,
-		WorkerID:      w.config.WorkerID,
-		LeaseID:       pte.LeaseID,
-		AttemptNumber: pte.AttemptNumber,
-		Revision:      pte.JobRevision,
-		FilePath:      ref.URI,
+		JobID:             pte.JobID,
+		AttemptID:         pte.AttemptID,
+		WorkerID:          w.config.WorkerID,
+		LeaseID:           pte.LeaseID,
+		AttemptNumber:     pte.AttemptNumber,
+		Revision:          pte.JobRevision,
+		FilePath:          ref.URI,
+		ExpectedSHA256:    ref.Hash,
+		ExpectedSizeBytes: ref.SizeBytes,
 	})
 	if err != nil {
 		return err

@@ -36,7 +36,7 @@ import (
 )
 
 const (
-	testRoutePass6 = "/api/v1/workers/cache/protected-assets"
+	testRoutePass6 = "/api/v1/agent/cache/protected-assets"
 	testAdminPass6 = "test-admin-token-pass-6"
 )
 

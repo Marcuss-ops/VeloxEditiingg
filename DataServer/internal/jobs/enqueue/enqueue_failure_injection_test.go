@@ -2,10 +2,13 @@ package enqueue
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"velox-shared/contract/domain"
 
 	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
@@ -37,8 +40,28 @@ func TestEnqueueFailureInjection_ClosedDatabaseFailsWithoutSuccess(t *testing.T)
 	if response != nil {
 		t.Fatalf("closed database returned an ambiguous response: %#v", response)
 	}
-	if !strings.Contains(strings.ToLower(err.Error()), "closed") && !strings.Contains(strings.ToLower(err.Error()), "conn") {
-		t.Fatalf("closed database error is not explicit enough: %v", err)
+	// The closed-database contract (524c7a12): the driver error is
+	// classified as a canonical infrastructure DomainError (fail-closed,
+	// retryable) with the ORIGINAL driver cause preserved in the chain.
+	// The legacy string-based check (looking for "closed"/"conn" in
+	// Error()) was replaced because Error() now returns the classification
+	// PublicText; the driver cause stays reachable via errors.Is.
+	de, ok := domain.AsDomainError(err)
+	if !ok || de.Code != domain.CodeInfrastructure {
+		t.Fatalf("closed database must classify as infrastructure DomainError, got %T: %v", err, err)
+	}
+	if !de.Retryable {
+		t.Fatalf("closed database infrastructure error must be retryable: %v", err)
+	}
+	// The driver-level cause must survive the classification wrap so ops
+	// can still distinguish "closed database" from other infra failures
+	// (errors.Is across the chain; the sqlite3 driver on a closed pool may
+	// surface sql.ErrConnDone OR a driver-specific text error).
+	if de.Cause == nil {
+		t.Fatalf("closed database infrastructure error lost its driver cause: %v", err)
+	}
+	if !errors.Is(err, sql.ErrConnDone) && !strings.Contains(strings.ToLower(de.Cause.Error()), "closed") {
+		t.Fatalf("closed database driver cause was not preserved in the error chain: %v", err)
 	}
 
 	verify, err := store.NewSQLiteStore(dbPath)

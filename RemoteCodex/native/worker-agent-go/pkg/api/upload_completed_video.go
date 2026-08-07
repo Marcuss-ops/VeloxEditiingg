@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 type UploadCompletedVideoRequest struct {
@@ -22,6 +23,13 @@ type UploadCompletedVideoRequest struct {
 	AttemptNumber int
 	Revision      int
 	FilePath      string
+	// ExpectedSHA256 / ExpectedSizeBytes declare the canonical content
+	// metadata the master's FinalizeVerified gate cross-checks against the
+	// master-computed values. A legacy client that omits them is rejected
+	// at finalize (CAS conflict) — the gRPC completion protocol always
+	// declares both.
+	ExpectedSHA256    string
+	ExpectedSizeBytes int64
 }
 
 type UploadCompletedVideoResponse struct {
@@ -66,6 +74,12 @@ func (c *Client) UploadCompletedVideo(ctx context.Context, req UploadCompletedVi
 	_ = writer.WriteField("lease_id", req.LeaseID)
 	_ = writer.WriteField("attempt", strconv.Itoa(req.AttemptNumber))
 	_ = writer.WriteField("revision", strconv.Itoa(req.Revision))
+	if strings.TrimSpace(req.ExpectedSHA256) != "" {
+		_ = writer.WriteField("expected_sha256", strings.TrimSpace(req.ExpectedSHA256))
+	}
+	if req.ExpectedSizeBytes > 0 {
+		_ = writer.WriteField("expected_size", strconv.FormatInt(req.ExpectedSizeBytes, 10))
+	}
 
 	if err := writer.Close(); err != nil {
 		return nil, fmt.Errorf("upload completed video: close multipart writer: %w", err)

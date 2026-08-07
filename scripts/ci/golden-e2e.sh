@@ -276,7 +276,7 @@ phase4_worker() {
   register_out="$(curl -fsS -m 15 -X POST \
     -H "Content-Type: application/json" \
     --data "{\"worker_id\":\"${WORKER_ID}\",\"worker_name\":\"${WORKER_NAME}\",\"version\":\"${VERSION}\",\"bundle_hash\":\"${BUNDLE_HASH}\",\"protocol_version\":\"v3\"}" \
-    "http://127.0.0.1:${MASTER_PORT}/api/v1/workers/register")" \
+    "http://127.0.0.1:${MASTER_PORT}/api/v1/agent/register")" \
     || die "worker HTTP registration failed: ${register_out:-no response}" 1
   worker_token="$(printf '%s' "${register_out}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("session_id", ""))')"
   [[ -n "${worker_token}" ]] || die "worker registration returned no session token: ${register_out}" 1

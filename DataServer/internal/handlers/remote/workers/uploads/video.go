@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -59,18 +60,29 @@ func UploadCompletedVideo(cfg *config.Config, artifactSvc *artifacts.Service) gi
 		if attempt < 1 {
 			attempt = 1
 		}
+		// Expected hash/size are OPTIONAL on the wire: a worker that
+		// declares them gets the pre-upload verification gate; one that
+		// omits them still passes through BeginUpload/Receive, but the
+		// FinalizeVerified canonical-hash gate (e6aa84c8) rejects the
+		// finalization with a CAS conflict — the legacy HTTP upload path
+		// is superseded by the gRPC completion protocol which always
+		// declares both (handler_completion.go).
+		expectedSHA := strings.TrimSpace(c.PostForm("expected_sha256"))
+		expectedSize, _ := strconv.ParseInt(c.PostForm("expected_size"), 10, 64)
 
 		ctx := c.Request.Context()
 
 		// Step 1: BeginUpload — creates artifacts + artifact_uploads atomically.
 		// Validates job RUNNING, worker/lease ownership, attempt RENDER_FINISHED.
 		session, beginErr := artifactSvc.BeginUpload(ctx, artifacts.BeginUploadCommand{
-			JobID:            jobID,
-			WorkerID:         workerID,
-			LeaseID:          leaseID,
-			AttemptNumber:    attempt,
-			ExpectedRevision: revision,
-			Kind:             ext,
+			JobID:             jobID,
+			WorkerID:          workerID,
+			LeaseID:           leaseID,
+			AttemptNumber:     attempt,
+			ExpectedRevision:  revision,
+			Kind:              ext,
+			ExpectedSHA256:    expectedSHA,
+			ExpectedSizeBytes: expectedSize,
 		})
 		if beginErr != nil {
 			log.Printf("[UPLOAD] BeginUpload failed for %s: %v", jobID, beginErr)

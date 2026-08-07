@@ -37,7 +37,7 @@
                    │   DriveFileIDs[]}
                    │       ▲
                    │       │                ◀── Pass 6
-   GET  /api/v1/workers/cache/protected-assets   Handler{200 | 503}
+   GET  /api/v1/agent/cache/protected-assets   Handler{200 | 503}
                    └───────┼─────────────────┘
                            │ every 30-60 s
                            ▼
@@ -117,7 +117,7 @@ clip, the worker skips the Cleanup eviction.
 | 3    | `shared/dispatchable` | `ListNextDispatchableJobs` shared SQL              |
 | 4    | `shared/assetref`     | `ExtractDriveFileIDs(payload)` + cross-module move |
 | 5    | `protectedasset`      | `Service` with RWMutex + monotonic Version         |
-| 6    | HTTP handler (`api`)  | `GET /api/v1/workers/cache/protected-assets`       |
+| 6    | HTTP handler (`api`)  | `GET /api/v1/agent/cache/protected-assets`       |
 | 7    | Master wiring         | (deferred — boot order + bootstrap_protectedasset) |
 | 8    | Worker polling        | (deferred — pkg/api `GetProtectedAssets`)          |
 | 9    | worker/clip_lease     | `AcquireJobClips` + dispatchTaskRunner integration |

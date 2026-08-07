@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -151,10 +152,18 @@ func TestUploadCompletedVideo_ArtifactsPipeline(t *testing.T) {
 	if _, err := part.Write(videoBytes); err != nil {
 		t.Fatalf("write video: %v", err)
 	}
+	declaredSHA := sha256.Sum256(videoBytes)
 	writer.WriteField("job_id", jobID)
 	writer.WriteField("worker_id", workerID)
 	writer.WriteField("lease_id", leaseID)
 	writer.WriteField("revision", "3")
+	// The legacy HTTP upload path must declare the canonical expected
+	// hash/size so FinalizeVerified's canonical-metadata gate (e6aa84c8)
+	// can cross-check the master-computed values; a worker that omits
+	// them is rejected at finalize (superseded by the gRPC completion
+	// protocol which always declares both).
+	writer.WriteField("expected_sha256", hex.EncodeToString(declaredSHA[:]))
+	writer.WriteField("expected_size", strconv.Itoa(len(videoBytes)))
 	writer.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/video/upload-completed", body)

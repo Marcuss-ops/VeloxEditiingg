@@ -215,17 +215,17 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 		log.Printf("[BOOTSTRAP] Admin workers smoke handler wired (POST /api/v1/admin/workers/{id}/smoke; tick goroutine drives LevelDSmokeExecutor)")
 	}
 
-	// Step 13/15 fleet-operator: wire the dual GET telemetry
-	// endpoints
+	// Step 13/15 fleet-operator: wire the per-worker GET telemetry
+	// endpoint
 	//   GET /api/v1/admin/workers/{id}/metrics
 	//     → LATEST snapshot from worker_metrics_snapshots
 	//       (migration 105). 404 when the scheduler hasn't
 	//       ticked yet for the worker.
-	//   GET /api/v1/admin/workers/metrics
-	//     → {data, has_more, count} envelope with one row per
-	//       worker (the LATEST snapshot per worker_id).
+	// The fleet-wide aggregate lives at GET /api/v1/fleet/metrics
+	// (the canonical Phase 6 fleet namespace); the legacy
+	// /api/v1/admin/workers/metrics alias was removed.
 	//
-	// Both endpoints serve the persisted snapshot (not real-time
+	// Both serve the persisted snapshot (not real-time
 	// aggregation) — the metrics-snapshot-supervisor registered
 	// below in buildSupervisor writes one row per worker every
 	// 5 minutes; the dashboard renders a staleness indicator
@@ -236,14 +236,17 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 	if fleetDep != nil && m != nil && m.Workers != nil && p != nil && p.SQLite != nil {
 		metricsHandler := api.NewAdminWorkersMetricsAggregatorHandler(p.SQLite, 5*time.Minute)
 		m.Workers.SetMetricsAggregatorHandler(metricsHandler)
-		log.Printf("[BOOTSTRAP] Admin workers metrics aggregator handler wired (GET /api/v1/admin/workers/{id}/metrics + /metrics; metrics-snapshot-supervisor ticks every 5min via buildSupervisor)")
+		log.Printf("[BOOTSTRAP] Admin workers metrics aggregator handler wired (GET /api/v1/admin/workers/{id}/metrics; fleet aggregate at GET /api/v1/fleet/metrics; metrics-snapshot-supervisor ticks every 5min via buildSupervisor)")
 	}
 
 	// Step 16/15 fleet-operator: wire the structured alerting
 	// surface (12-rule catalog persisted to alert_events via
 	// migration 107). Read paths: /api/v1/admin/workers/{id}/alerts
-	// + /api/v1/admin/alerts/active + /api/v1/admin/alerts/recent.
-	// All adminAuth-gated; serve the operator dashboard.
+	// (per-worker) + /api/v1/fleet/alerts/active +
+	// /api/v1/fleet/alerts/recent (fleet-wide ledger — the
+	// canonical Phase 6 fleet namespace; the legacy
+	// /api/v1/admin/alerts aliases were removed). All
+	// adminAuth-gated; serve the operator dashboard.
 	// The actual alert EVALUATION runs async in the
 	// alerts-supervisor registered below in buildSupervisor
 	// (ClassRestartable, 5min tick) so HTTP remains read-only.
@@ -254,6 +257,6 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 	if m != nil && m.Workers != nil && p != nil && p.SQLite != nil {
 		alertsHandler := api.NewAdminWorkersAlertsHandler(p.SQLite)
 		m.Workers.SetAlertsHandler(alertsHandler)
-		log.Printf("[BOOTSTRAP] Admin workers alerts handler wired (GET /api/v1/admin/workers/{id}/alerts + /api/v1/admin/alerts/active + /recent; alerts-supervisor ticks every 5min via buildSupervisor)")
+		log.Printf("[BOOTSTRAP] Admin workers alerts handler wired (GET /api/v1/admin/workers/{id}/alerts + /api/v1/fleet/alerts/active + /recent; alerts-supervisor ticks every 5min via buildSupervisor)")
 	}
 }

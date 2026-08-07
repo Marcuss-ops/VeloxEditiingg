@@ -60,8 +60,10 @@ type ValidationError struct {
 	Wrapped   error
 	// Code and Issue are machine-readable projections. They are optional
 	// for source compatibility with older struct literals; constructors
-	// populate them for all canonical delivery-plan rejections.
-	Code  string
+	// populate them for all canonical delivery-plan rejections. Code uses
+	// the typed domain.ErrorCode so the HTTP/gRPC/job/metric projections
+	// never parse Error() text.
+	Code  domain.ErrorCode
 	Issue string
 }
 

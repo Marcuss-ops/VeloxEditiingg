@@ -14,10 +14,11 @@ The orchestrator validates:
    exit before readiness; it then starts the real master with a fresh migrated
    SQLite database and waits for `/health/ready`.
 2. **Registration + collision** — first calls the canonical
-   `POST /api/v1/workers/register` endpoint to persist the worker identity,
-   then starts `DataServer/cmd/dev-hello-client`, completes the typed gRPC
-   `Hello`/`HelloAck` handshake, and verifies the worker read model is
-   `CONNECTED`. A second real gRPC client using the same `WorkerID` and a
+   `POST /api/v1/agent/register` endpoint (the Phase 6 agent namespace;
+   the legacy `/api/v1/workers/register` alias was removed) to persist the
+   worker identity, then starts `DataServer/cmd/dev-hello-client`, completes
+   the typed gRPC `Hello`/`HelloAck` handshake, and verifies the worker read
+   model is `CONNECTED`. A second real gRPC client using the same `WorkerID` and a
    different credential must fail with typed `AlreadyExists`, create no second
    active session, and leave the first session active.
 3. **Heartbeat** — the client sends real typed heartbeats on a short interval;

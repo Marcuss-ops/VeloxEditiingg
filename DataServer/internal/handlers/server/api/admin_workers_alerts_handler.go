@@ -16,16 +16,18 @@ import (
 //   GET /api/v1/admin/workers/:worker_id/alerts
 //     → most-recent N rows (ACTIVE+RESOLVED) for the worker,
 //       ordered fired_at DESC. Limit defaults to 100, cap 1000.
-//   GET /api/v1/admin/alerts/active
+//   GET /api/v1/fleet/alerts/active
 //     → ACTIVE rows across the fleet, grouped by severity
 //       (CRITICAL first, WARNING second, INFO third), order
 //       fired_at ASC. Limit defaults to 200, cap 1000.
-//   GET /api/v1/admin/alerts/recent
+//   GET /api/v1/fleet/alerts/recent
 //     → most-recent N rows (state-mixed) for "recent events"
 //       drill-down. Limit defaults to 50, cap 500.
 //
 // All routes are adminAuth-gated (mounted under
-// /api/v1/admin/workers/{id} by RegisterRoutes in app/workers.go).
+// /api/v1/admin/workers/{id} and /api/v1/fleet/* by
+// RegisterRoutes in app/workers.go — the canonical Phase 6 fleet
+// namespace; the legacy /api/v1/admin/alerts aliases were removed).
 // The handler is nil-tolerant — RegisterRoutes skips the routes
 // when the handler wasn't injected via SetAlertsHandler.
 //
@@ -111,7 +113,7 @@ func (h *AdminWorkersAlertsHandler) listWorkerAlertsHandler(c *gin.Context) {
 	})
 }
 
-// ListFleetActiveAlerts serves GET /api/v1/admin/alerts/active.
+// ListFleetActiveAlerts serves GET /api/v1/fleet/alerts/active.
 func (h *AdminWorkersAlertsHandler) ListFleetActiveAlerts() gin.HandlerFunc {
 	return h.listFleetActiveAlertsHandler
 }
@@ -140,7 +142,7 @@ func (h *AdminWorkersAlertsHandler) listFleetActiveAlertsHandler(c *gin.Context)
 	})
 }
 
-// ListRecentAlerts serves GET /api/v1/admin/alerts/recent.
+// ListRecentAlerts serves GET /api/v1/fleet/alerts/recent.
 func (h *AdminWorkersAlertsHandler) ListRecentAlerts() gin.HandlerFunc {
 	return h.listRecentAlertsHandler
 }

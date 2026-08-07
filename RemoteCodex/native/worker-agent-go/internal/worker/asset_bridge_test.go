@@ -39,7 +39,7 @@ func TestResolveVoiceoverAudioPathDownloadsFromConfiguredMasterURL(t *testing.T)
 		defer mu.Unlock()
 		requestCount++
 		authHeader = r.Header.Get("Authorization")
-		if r.URL.Path != "/api/v1/worker-assets/asset-123" {
+		if r.URL.Path != "/api/v1/agent/assets/asset-123" {
 			http.NotFound(w, r)
 			return
 		}
@@ -93,14 +93,14 @@ func TestResolveVoiceoverAudioPathRetriesTransient5xxAndFailsOn404(t *testing.T)
 		defer mu.Unlock()
 		attempts++
 		switch r.URL.Path {
-		case "/api/v1/worker-assets/transient":
+		case "/api/v1/agent/assets/transient":
 			if attempts < 3 {
 				http.Error(w, "temporary", http.StatusInternalServerError)
 				return
 			}
 			w.Header().Set("Content-Type", "audio/mpeg")
 			_, _ = w.Write([]byte("ID3transient"))
-		case "/api/v1/worker-assets/missing":
+		case "/api/v1/agent/assets/missing":
 			http.NotFound(w, r)
 		default:
 			http.NotFound(w, r)

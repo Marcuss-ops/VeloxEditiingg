@@ -11,24 +11,31 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// ErrorCode is the canonical, typed error code. Every DomainError.Code is an
+// ErrorCode; transports, job failure records, retry policy and metrics consume
+// the typed value instead of parsing Error() text. Keep the set low-cardinality:
+// each code must map 1:1 to a stable projection (HTTP status, gRPC code, retry
+// decision, failure code, metric code).
+type ErrorCode string
+
 const (
-	CodeInvalidPayload              = "invalid_payload"
-	CodeInfrastructure              = "INFRASTRUCTURE"
-	CodeLeaseLost                   = "LEASE_LOST"
-	CodeStaleReport                 = "STALE_REPORT"
-	CodeNotFound                    = "NOT_FOUND"
-	CodeDeliveryTargetRequired      = "DELIVERY_TARGET_REQUIRED"
-	CodeDeliveryDestinationRejected = "DELIVERY_TARGET_UNAVAILABLE"
-	FailureInvalidPayload           = "INVALID_PAYLOAD"
-	FailureDeliveryTarget           = "DELIVERY_TARGET_REQUIRED"
-	FailureDestinationUnavailable   = "DELIVERY_TARGET_UNAVAILABLE"
-	MetricInvalidPayload            = "INVALID_PAYLOAD"
-	MetricDeliveryTarget            = "DELIVERY_TARGET_REQUIRED"
-	MetricDestinationUnavailable    = "DELIVERY_TARGET_UNAVAILABLE"
-	AuditDeliveryPlanRejected       = "DELIVERY_PLAN_REJECTED"
-	ComponentEnqueue                = "enqueue"
-	ComponentDelivery               = "delivery"
-	PhaseValidation                 = "validation"
+	CodeInvalidPayload              ErrorCode = "invalid_payload"
+	CodeInfrastructure              ErrorCode = "INFRASTRUCTURE"
+	CodeLeaseLost                   ErrorCode = "LEASE_LOST"
+	CodeStaleReport                 ErrorCode = "STALE_REPORT"
+	CodeNotFound                    ErrorCode = "NOT_FOUND"
+	CodeDeliveryTargetRequired      ErrorCode = "DELIVERY_TARGET_REQUIRED"
+	CodeDeliveryDestinationRejected ErrorCode = "DELIVERY_TARGET_UNAVAILABLE"
+	FailureInvalidPayload                     = "INVALID_PAYLOAD"
+	FailureDeliveryTarget                     = "DELIVERY_TARGET_REQUIRED"
+	FailureDestinationUnavailable             = "DELIVERY_TARGET_UNAVAILABLE"
+	MetricInvalidPayload                      = "INVALID_PAYLOAD"
+	MetricDeliveryTarget                      = "DELIVERY_TARGET_REQUIRED"
+	MetricDestinationUnavailable              = "DELIVERY_TARGET_UNAVAILABLE"
+	AuditDeliveryPlanRejected                 = "DELIVERY_PLAN_REJECTED"
+	ComponentEnqueue                          = "enqueue"
+	ComponentDelivery                         = "delivery"
+	PhaseValidation                           = "validation"
 )
 
 // DomainError is the canonical, machine-readable error contract. Every
@@ -61,8 +68,14 @@ func (e *LeaseConflict) Error() string {
 func (e *LeaseConflict) LeaseLost() bool             { return e != nil }
 func NewLeaseConflict(message string) *LeaseConflict { return &LeaseConflict{Message: message} }
 
+// VeloxError is the canonical name of the unified error catalog. DomainError is
+// retained as a source-compatible alias; new code should reference VeloxError.
+// The two names denote the same type, so errors.As across the catalog works
+// through either identifier.
+type VeloxError = DomainError
+
 type DomainError struct {
-	Code        string
+	Code        ErrorCode
 	Field       string
 	Issue       string
 	Retryable   bool
@@ -132,7 +145,7 @@ func (e *DomainError) Classification() Classification {
 		return Classification{}
 	}
 	return Classification{
-		Code: e.Code, FailureCode: e.FailureCode, MetricCode: e.MetricCode,
+		Code: string(e.Code), FailureCode: e.FailureCode, MetricCode: e.MetricCode,
 		AuditAction: e.AuditAction, Retryable: e.Retryable,
 		Component: e.Component, Phase: e.Phase,
 	}
@@ -154,7 +167,7 @@ func AsDomainError(err error) (*DomainError, bool) {
 // NewClassified constructs a DomainError for non-validation boundaries.
 // Callers provide the stable projections once; transports, jobs, retry policy,
 // and metrics then consume the same mapping instead of inspecting Error().
-func NewClassified(code, field, issue, text string, cause error, retryable bool, httpStatus int, grpcCode codes.Code, failureCode, metricCode, component, phase string) *DomainError {
+func NewClassified(code ErrorCode, field, issue, text string, cause error, retryable bool, httpStatus int, grpcCode codes.Code, failureCode, metricCode, component, phase string) *DomainError {
 	return &DomainError{
 		Code: code, Field: field, Issue: issue, Retryable: retryable,
 		PublicText: text, Cause: cause, HTTPStatus: httpStatus, GRPCCode: grpcCode,

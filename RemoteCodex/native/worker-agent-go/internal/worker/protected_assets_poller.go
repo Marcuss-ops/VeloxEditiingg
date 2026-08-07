@@ -1,8 +1,9 @@
 // Package worker — protected-asset snapshot poller (Pass 7).
 //
 // The worker periodically fetches GET
-// /api/v1/workers/cache/protected-assets (delivered in Pass 6
-// of the master plan) and keeps the most recent SUCCESSFUL
+// /api/v1/agent/cache/protected-assets (the canonical Phase 6
+// agent namespace; delivered in Pass 6 of the master plan) and
+// keeps the most recent SUCCESSFUL
 // snapshot in memory for the cleanup loop (workercache). The
 // snapshot is consumed by the workercache.CleanupLoop via its
 // SnapshotSource interface; this poller is the concrete

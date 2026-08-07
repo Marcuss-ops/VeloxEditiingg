@@ -40,14 +40,17 @@ func accessLogMiddleware() gin.HandlerFunc {
 // route table regardless of traffic volume. A nil sink (metrics exporter
 // disabled) is a no-op.
 //
-// Legacy surfaces — the old /api/v1/workers diagnostic surface, the
-// /api/v1/worker-assets agent path, the /worker admin group, and the
-// pre-canonical fleet aggregates under /api/v1/admin/* — are deliberately
-// counted under surface=legacy so the removal decision is evidence-driven:
-// a legacy route with sustained usage must stay; a quiet one can be
-// retired. Requests that match NO route template (404 on an unknown path)
-// have an empty FullPath and are dropped by RecordHTTPRoute, so the
-// counter covers only the registered route table by design.
+// Legacy surfaces — currently the /api/v1/workers diagnostic surface
+// (still consumed by scripts/cert/master_state.sh and the operator
+// runbook) — are deliberately counted under surface=legacy so the
+// removal decision is evidence-driven: a legacy route with sustained
+// usage must stay; a quiet one can be retired. The pre-canonical agent
+// paths, the /worker admin group and the legacy fleet aggregates under
+// /api/v1/admin/* were already removed once their counters showed zero
+// sustained traffic. Requests that match NO route template (404 on an
+// unknown path) have an empty FullPath and are dropped by
+// RecordHTTPRoute, so the counter covers only the registered route
+// table by design.
 func routeUsageMiddleware(sink velmetrics.HTTPRouteUsageSink) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Next()

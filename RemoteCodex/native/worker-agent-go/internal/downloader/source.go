@@ -15,7 +15,7 @@ package downloader
 //     is NOT on disk at a verified location.
 //
 // In production the worker wires its master-bridge transferer (HTTP GET on
-// /api/v1/worker-assets/{id} with Bearer auth, atomic write via the worker's
+// /api/v1/agent/assets/{id} with Bearer auth, atomic write via the worker's
 // cache helpers). Tests wire byte fakes, which is why the package stays free
 // of net/http and worker internals.
 

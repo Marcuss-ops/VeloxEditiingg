@@ -101,7 +101,7 @@ If any check fails, the job is rejected with a descriptive reason.
 A remote worker MUST have all five configuration items below to register
 and execute jobs. Each item is a single-valued contract — drift between
 the local worker config and the master's allowlist breaks the handshake
-with `HTTP 403 worker_not_allowed` on `POST /api/v1/workers/register`,
+with `HTTP 403 worker_not_allowed` on `POST /api/v1/agent/register`,
 which is the canonical operator-visible rejection path (see
 `DataServer/internal/handlers/remote/workers/lifecycle/{handler,registration}.go`
 + `DataServer/internal/grpcserver/{authorizer,handler_stream}.go` for the
@@ -178,7 +178,7 @@ export VELOX_GRPC_TLS_CA_FILE=/etc/velox/certs/ca.crt
 
 | Misconfiguration | Master's response |
 |------------------|-------------------|
-| `worker_id` not in `VELOX_ALLOWED_WORKERS` | **HTTP 403 `worker_not_allowed`** on `POST /api/v1/workers/register` (this is the canonical "not on the fleet" rejection path) |
+| `worker_id` not in `VELOX_ALLOWED_WORKERS` | **HTTP 403 `worker_not_allowed`** on `POST /api/v1/agent/register` (this is the canonical "not on the fleet" rejection path) |
 | Cert expired or about to expire (<14d) | Master rejects at gRPC handshake (`FailedPrecondition`) |
 | Key permissions > `0600` (production) | Production boot fails closed; non-prod records a non-fatal `weak_permissions_warn` |
 | `VELOX_GRPC_TLS_*` partial (missing one of three) | `worker-config-validate` rejects with explicit missing-field list |

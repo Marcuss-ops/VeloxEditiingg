@@ -278,7 +278,7 @@ start_master() {
 register_worker() {
   local credential response registered_id
   credential="$(printf '%s:%s' "$WORKER_ID" "$WORKER_SECRET" | sha256sum | awk '{print $1}')"
-  info "registering worker identity through POST /api/v1/workers/register"
+  info "registering worker identity through POST /api/v1/agent/register"
   response="$(curl -fsS --max-time 5 -X POST \
     -H 'Content-Type: application/json' \
     --data "$(jq -nc \
@@ -289,7 +289,7 @@ register_worker() {
       --arg ip "127.0.0.1" \
       --arg protocol_version "v3" \
       '{worker_id:$worker_id,credential:$credential,worker_name:$worker_name,hostname:$hostname,ip:$ip,protocol_version:$protocol_version}')" \
-    "$MASTER_URL/api/v1/workers/register")"
+    "$MASTER_URL/api/v1/agent/register")"
   registered_id="$(jq -er '.worker_id' <<<"$response")"
   [[ "$registered_id" == "$WORKER_ID" ]] || fail "HTTP registration returned unexpected worker_id: $registered_id"
   pass "worker identity registration persisted (worker_id=$registered_id)"

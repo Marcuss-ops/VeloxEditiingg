@@ -214,7 +214,7 @@ func WriteResolverError(c *gin.Context, err error) {
 // when detail is nil so the response stays minimal for 4xx-without-
 // details / 5xx paths (matches openapi.yaml's ErrorEnvelope where
 // `details` is OPTIONAL).
-func writeErrorEnvelope(c *gin.Context, status int, code, message string, detail any) {
+func writeErrorEnvelope(c *gin.Context, status int, code domain.ErrorCode, message string, detail any) {
 	body := gin.H{"ok": false, "error": code, "message": message}
 	if detail != nil {
 		body["details"] = []any{detail}

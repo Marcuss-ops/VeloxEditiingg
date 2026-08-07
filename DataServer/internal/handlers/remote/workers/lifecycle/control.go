@@ -3,30 +3,31 @@ package lifecycle
 import (
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
+// workerIDFromAdminPath extracts the canonical worker_id from the
+// /api/v1/admin/workers/:worker_id path namespace. The legacy /worker/*
+// group identified workers via a JSON body; the canonical operator
+// surface (Phase 6 split) uses the path param exclusively.
+func workerIDFromAdminPath(c *gin.Context) string {
+	return strings.TrimSpace(c.Param("worker_id"))
+}
+
 func (h *Handler) RestartWorkerHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var body struct {
-			WorkerID string `json:"worker_id"`
-		}
-
-		if err := c.ShouldBindJSON(&body); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON body"})
-			return
-		}
-
-		if body.WorkerID == "" {
+		workerID := workerIDFromAdminPath(c)
+		if workerID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "worker_id required"})
 			return
 		}
 
-		h.cmdMgr.PushCommand(body.WorkerID, "restart_worker", nil)
+		h.cmdMgr.PushCommand(workerID, "restart_worker", nil)
 
-		log.Printf("[CONTROL] Restart requested for worker %s", body.WorkerID[:min(16, len(body.WorkerID))]+"...")
+		log.Printf("[CONTROL] Restart requested for worker %s", workerID[:min(16, len(workerID))]+"...")
 
 		c.JSON(http.StatusOK, gin.H{
 			"ok":      true,
@@ -37,26 +38,18 @@ func (h *Handler) RestartWorkerHandler() gin.HandlerFunc {
 
 func (h *Handler) RevokeWorkerHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var body struct {
-			WorkerID string `json:"worker_id"`
-		}
-
-		if err := c.ShouldBindJSON(&body); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON body"})
-			return
-		}
-
-		if body.WorkerID == "" {
+		workerID := workerIDFromAdminPath(c)
+		if workerID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "worker_id required"})
 			return
 		}
 
 		ctx := c.Request.Context()
 
-		h.reg.RevokeWorker(ctx, body.WorkerID)
-		h.tokenMgr.RevokeWorkerTokens(body.WorkerID)
+		h.reg.RevokeWorker(ctx, workerID)
+		h.tokenMgr.RevokeWorkerTokens(workerID)
 
-		log.Printf("Worker revoked: %s", body.WorkerID[:min(16, len(body.WorkerID))]+"...")
+		log.Printf("Worker revoked: %s", workerID[:min(16, len(workerID))]+"...")
 
 		c.JSON(http.StatusOK, gin.H{
 			"ok":      true,
@@ -67,64 +60,19 @@ func (h *Handler) RevokeWorkerHandler() gin.HandlerFunc {
 
 func (h *Handler) UnrevokeWorkerHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var body struct {
-			WorkerID string `json:"worker_id"`
-		}
-
-		if err := c.ShouldBindJSON(&body); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON body"})
-			return
-		}
-
-		if body.WorkerID == "" {
+		workerID := workerIDFromAdminPath(c)
+		if workerID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "worker_id required"})
 			return
 		}
 
-		h.reg.UnrevokeWorker(body.WorkerID)
+		h.reg.UnrevokeWorker(workerID)
 
-		log.Printf("Worker unrevoked: %s", body.WorkerID[:min(16, len(body.WorkerID))]+"...")
+		log.Printf("Worker unrevoked: %s", workerID[:min(16, len(workerID))]+"...")
 
 		c.JSON(http.StatusOK, gin.H{
 			"ok":      true,
 			"message": "Worker unrevoked",
-		})
-	}
-}
-
-func (h *Handler) DrainWorkerHandler() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var body struct {
-			WorkerID string `json:"worker_id"`
-			Drain    bool   `json:"drain"`
-		}
-
-		if err := c.ShouldBindJSON(&body); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON body"})
-			return
-		}
-
-		if body.WorkerID == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "worker_id required"})
-			return
-		}
-
-		ctx := c.Request.Context()
-		if err := h.reg.SetWorkerDrain(ctx, body.WorkerID, body.Drain); err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "worker not found"})
-			return
-		}
-
-		action := "drain"
-		if !body.Drain {
-			action = "undrain"
-		}
-		log.Printf("[CONTROL] Worker %s set to %s", body.WorkerID[:min(16, len(body.WorkerID))]+"...", action)
-
-		c.JSON(http.StatusOK, gin.H{
-			"ok":      true,
-			"drain":   body.Drain,
-			"message": "Worker drain status updated",
 		})
 	}
 }

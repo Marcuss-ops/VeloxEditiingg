@@ -11,11 +11,12 @@ package api
 //       {worker_id}; 404 when no row exists (newly onboarded
 //       worker before the first scheduler tick).
 //
-//   GET /api/v1/admin/workers/metrics
+//   GET /api/v1/fleet/metrics
 //     → reads the LATEST row per worker across the fleet,
 //       returning one row per worker in a {data, has_more}
 //       envelope; each row is the same schema as the per-worker
-//       endpoint.
+//       endpoint. (Canonical Phase 6 fleet namespace; the legacy
+//       /api/v1/admin/workers/metrics alias was removed.)
 //
 // Both surfaces serve the persisted snapshot (table
 // worker_metrics_snapshots, migration 105), NOT a real-time
@@ -105,7 +106,7 @@ func (h *AdminWorkersMetricsAggregatorHandler) GetWorkerMetrics() gin.HandlerFun
 	}
 }
 
-// ListFleetMetrics serves GET /api/v1/admin/workers/metrics. Returns
+// ListFleetMetrics serves GET /api/v1/fleet/metrics. Returns
 // one row per worker (the LATEST snapshot), in {data, has_more}
 // envelope. limit=0 means "all workers" (capped at 1000 inside
 // the store layer; not the dashboard's burst path).

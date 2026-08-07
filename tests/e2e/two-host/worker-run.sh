@@ -25,7 +25,7 @@ WORKER_KEY="${VELOX_WORKER_KEY_FILE:-$CERT_DIR/$WORKER_ID.key}"
 [[ -f "$WORKER_CERT" && -f "$WORKER_KEY" && -f "$CERT_DIR/ca.crt" ]] || { echo "worker PKI missing" >&2; exit 3; }
 mkdir -p "$STATE_DIR" "$OUTPUT_DIR" "$TEMP_DIR" "$(dirname "$CONFIG")" "$(dirname "$LOG")"
 
-REGISTER="$(curl -fsS -X POST -H 'Content-Type: application/json' --data "{\"worker_id\":\"$WORKER_ID\",\"worker_name\":\"$WORKER_NAME\",\"version\":\"$VERSION\",\"bundle_hash\":\"$BUNDLE_HASH\",\"protocol_version\":\"v3\"}" "$MASTER_URL/api/v1/workers/register")"
+REGISTER="$(curl -fsS -X POST -H 'Content-Type: application/json' --data "{\"worker_id\":\"$WORKER_ID\",\"worker_name\":\"$WORKER_NAME\",\"version\":\"$VERSION\",\"bundle_hash\":\"$BUNDLE_HASH\",\"protocol_version\":\"v3\"}" "$MASTER_URL/api/v1/agent/register")"
 TOKEN="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("session_id",""))' <<<"$REGISTER")"
 [[ -n "$TOKEN" ]] || { echo "registration returned no session_id" >&2; exit 1; }
 cat > "$CONFIG" <<JSON

@@ -34,7 +34,7 @@ func TestDownloadVeloxAssetWithSHA_ReportsMissHitAndCorruptRedownload(t *testing
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
-		if r.URL.Path != "/api/v1/worker-assets/"+assetID {
+		if r.URL.Path != "/api/v1/agent/assets/"+assetID {
 			http.NotFound(w, r)
 			return
 		}

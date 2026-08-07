@@ -149,10 +149,12 @@ func (m *WorkersModule) SetSmokeHandler(h *api.AdminWorkersSmokeHandler) {
 }
 
 // SetMetricsAggregatorHandler wires the Step 13/15 admin workers
-// telemetry endpoints (GET /api/v1/admin/workers/{id}/metrics +
-// GET /api/v1/admin/workers/metrics — both serve the persisted
-// 13-metric snapshot written every 5 minutes by the
-// metrics-snapshot-supervisor in cmd/server/bootstrap_composition.go).
+// telemetry endpoint (GET /api/v1/admin/workers/:worker_id/metrics —
+// per-worker snapshot; the fleet-wide aggregate serves from
+// GET /api/v1/fleet/metrics, the canonical Phase 6 fleet namespace).
+// Both read the persisted 13-metric snapshot written every 5 minutes
+// by the metrics-snapshot-supervisor in
+// cmd/server/bootstrap_composition.go.
 //
 // Idempotent — safe to call before RegisterRoutes; passing nil
 // disables the routes so a misconfigured bootstrap (no SQLite
@@ -162,11 +164,13 @@ func (m *WorkersModule) SetMetricsAggregatorHandler(h *api.AdminWorkersMetricsAg
 }
 
 // SetAlertsHandler wires the Step 16/15 admin workers structured
-// alerting endpoints (GET /api/v1/admin/workers/{id}/alerts +
-// GET /api/v1/admin/alerts/active + GET /api/v1/admin/alerts/recent).
-// All three read from the alert_events table (migration 107)
-// populated every 5 minutes by the alerts-supervisor in
-// cmd/server/bootstrap_composition.go.
+// alerting endpoints: per-worker alerts at
+// GET /api/v1/admin/workers/:worker_id/alerts, plus the fleet-wide
+// ledger at GET /api/v1/fleet/alerts/active + GET /api/v1/fleet/
+// alerts/recent (the canonical Phase 6 fleet namespace; the legacy
+// /api/v1/admin/alerts aliases were removed). All read from the
+// alert_events table (migration 107) populated every 5 minutes by
+// the alerts-supervisor in cmd/server/bootstrap_composition.go.
 //
 // Idempotent — safe to call before RegisterRoutes; passing nil
 // disables the routes so a misconfigured bootstrap (no SQLite
@@ -185,9 +189,8 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 	// Worker-AUTHENTICATED traffic only: register, cache snapshot,
 	// asset download. These routes authenticate with the worker session
 	// token (or the worker credential on register); they are NOT
-	// operator surfaces. The legacy pre-canonical paths below remain
-	// mounted for the migration window and are counted as surface=legacy
-	// by the route-usage middleware before removal.
+	// operator surfaces. The legacy pre-canonical paths were removed
+	// once the usage counter showed zero sustained traffic.
 	if m.workerLifecycle != nil {
 		r.POST("/api/v1/agent/register", m.workerLifecycle.RegisterV2Handler())
 	}
@@ -198,20 +201,6 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 		r.GET("/api/v1/agent/cache/protected-assets", m.protectedAssetsAuth, m.protectedAssetsHandler.Snapshot())
 	}
 
-	// ── Legacy agent/admin routes (counted before removal) ───────
-	if m.workerLifecycle != nil {
-		r.POST("/api/v1/workers/register", m.workerLifecycle.RegisterV2Handler())
-		workerAdmin := r.Group("/worker")
-		if m.adminAuth != nil {
-			workerAdmin.Use(m.adminAuth)
-		}
-		workerAdmin.POST("/revoke", m.workerLifecycle.RevokeWorkerHandler())
-		workerAdmin.POST("/unrevoke", m.workerLifecycle.UnrevokeWorkerHandler())
-		workerAdmin.GET("/revoked", m.workerLifecycle.ListRevokedWorkersHandler())
-		workerAdmin.POST("/drain", m.workerLifecycle.DrainWorkerHandler())
-		workerAdmin.POST("/restart", m.workerLifecycle.RestartWorkerHandler())
-	}
-
 	// Legacy bundle/update HTTP routes were retired. Bundle generation,
 	// manifest/chunk serving, force rebuild, fleet-wide bundle updates, and
 	// worker-requested updates are intentionally not mounted here; callers
@@ -219,21 +208,15 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 	// worker control protocol. Keeping the handlers available for internal
 	// migration/tests does not expose a legacy HTTP surface.
 
-	if m.workerAssetHandler != nil {
-		r.GET("/api/v1/worker-assets/:asset_id", m.workerAssetHandler.ServeAsset())
-	}
-
 	// PR 4 — canonical worker read-model endpoints.
 	// The protected-assets snapshot is consumed by workers with their worker
 	// session token, so it must not be nested under the admin-only group.
-	// Phase 6: this /api/v1/workers diagnostic surface is LEGACY (superseded
-	// by /api/v1/admin/workers + /api/v1/agent/*) and is counted as
-	// surface=legacy by the route-usage middleware before removal.
+	// The /api/v1/workers diagnostic surface (list/get + per-worker read
+	// endpoints) is still consumed by the operator runbook and
+	// scripts/cert/master_state.sh; it is counted as surface=legacy by the
+	// route-usage middleware until those consumers migrate to
+	// /api/v1/admin/workers.
 	if m.workersHandler != nil {
-		v1Workers := r.Group("/api/v1/workers")
-		if m.protectedAssetsHandler != nil {
-			v1Workers.GET("/cache/protected-assets", m.protectedAssetsAuth, m.protectedAssetsHandler.Snapshot())
-		}
 		adminWorkers := r.Group("/api/v1/workers")
 		if m.adminAuth != nil {
 			adminWorkers.Use(m.adminAuth)
@@ -273,7 +256,7 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 		adminWorkers.GET("", m.adminWorkersHandler.ListAdminWorkers())
 		adminWorkers.GET("/:worker_id", m.adminWorkersHandler.GetAdminWorker())
 		// Step 6/15 — admin worker mutations (drain / resume /
-		// quarantine). Mounted inside the same adminAuth-gated
+		// quarantine / update). Mounted inside the same adminAuth-gated
 		// group as the read endpoints so the operator dashboard's
 		// canonical auth surface stays single-source-of-truth.
 		// Nil-tolerant via the adminWorkersMutationsHandler nil
@@ -285,6 +268,23 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 			adminWorkers.POST("/:worker_id/resume", m.adminWorkersMutationsHandler.ResumeWorker())
 			adminWorkers.POST("/:worker_id/quarantine", m.adminWorkersMutationsHandler.QuarantineWorker())
 			adminWorkers.POST("/:worker_id/update", m.adminWorkersMutationsHandler.UpdateWorker())
+		}
+		// Legacy /worker/* control actions migrated into the canonical
+		// admin namespace (Phase 6 API-surface unification): revoke /
+		// unrevoke / restart now identify the worker via the :worker_id
+		// path param instead of the legacy JSON body. Drain is served
+		// exclusively by the canonical mutation handler above; the old
+		// /worker/drain route is gone.
+		if m.workerLifecycle != nil {
+			adminWorkers.POST("/:worker_id/revoke", m.workerLifecycle.RevokeWorkerHandler())
+			adminWorkers.POST("/:worker_id/unrevoke", m.workerLifecycle.UnrevokeWorkerHandler())
+			adminWorkers.POST("/:worker_id/restart", m.workerLifecycle.RestartWorkerHandler())
+		}
+		// Legacy GET /worker/revoked migrated to the canonical admin
+		// namespace: GET /api/v1/admin/workers/revoked (list of revoked
+		// worker IDs).
+		if m.workerLifecycle != nil {
+			adminWorkers.GET("/revoked", m.workerLifecycle.ListRevokedWorkersHandler())
 		}
 		// Step 10/15 — 4-level health probe endpoint
 		// (GET /api/v1/admin/workers/:worker_id/health?level=A|B|C|D).
@@ -310,21 +310,20 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 		if m.adminWorkersSmokeHandler != nil {
 			adminWorkers.POST("/:worker_id/smoke", m.adminWorkersSmokeHandler.TriggerSmoke())
 		}
-		// Step 13/15 — fleet telemetry (dual endpoints):
+		// Step 13/15 — fleet telemetry (per-worker endpoint only):
 		//   GET /api/v1/admin/workers/:worker_id/metrics
 		//     → latest snapshot for one worker (404 when no
 		//       snapshot yet for the worker; the scheduler
 		//       writes one within 5 min of bootstrap).
-		//   GET /api/v1/admin/workers/metrics
-		//     → {data, has_more, count} envelope with one row
-		//       per worker (the LATEST snapshot per worker_id).
-		// Both endpoints serve the persisted worker_metrics_snapshots
-		// table (migration 105); the dashboard renders a staleness
+		// Serves the persisted worker_metrics_snapshots table
+		// (migration 105); the dashboard renders a staleness
 		// indicator via the snapshotted_at field rather than
 		// computing on every read. Nil-tolerant via the
-		// adminWorkersMetricsAggregatorHandler nil guard.
+		// adminWorkersMetricsAggregatorHandler nil guard. The
+		// fleet-wide snapshot lives at GET /api/v1/fleet/metrics
+		// (the canonical fleet namespace); the legacy
+		// /api/v1/admin/workers/metrics route was removed.
 		if m.adminWorkersMetricsAggregatorHandler != nil {
-			adminWorkers.GET("/metrics", m.adminWorkersMetricsAggregatorHandler.ListFleetMetrics())
 			adminWorkers.GET("/:worker_id/metrics", m.adminWorkersMetricsAggregatorHandler.GetWorkerMetrics())
 		}
 		// Step 16/15 — fleet operator structured alerting
@@ -342,9 +341,8 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 	// fleet-wide alert ledger. These are NOT per-worker and NOT agent
 	// traffic — they feed dashboards, so they live under /api/v1/fleet
 	// (adminAuth-gated like the operator surface). The legacy
-	// /api/v1/admin/workers/metrics + /api/v1/admin/alerts paths stay
-	// mounted for the migration window and are counted as surface=legacy
-	// by the route-usage middleware before removal.
+	// /api/v1/admin/workers/metrics + /api/v1/admin/alerts aliases were
+	// removed once the usage counter showed zero sustained traffic.
 	fleetGroup := r.Group("/api/v1/fleet")
 	if m.adminAuth != nil {
 		fleetGroup.Use(m.adminAuth)
@@ -355,24 +353,6 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 	if m.adminWorkersAlertsHandler != nil {
 		fleetGroup.GET("/alerts/active", m.adminWorkersAlertsHandler.ListFleetActiveAlerts())
 		fleetGroup.GET("/alerts/recent", m.adminWorkersAlertsHandler.ListRecentAlerts())
-	}
-
-	// Step 16/15 — fleet-wide ALERT surfaces (NOT mounted under
-	// the /api/v1/admin/workers/:worker_id group because they
-	// are fleet-wide, not per-worker). Mounted separately
-	// under /api/v1/admin/alerts, also gated by adminAuth.
-	// The nil-guard prevents 503-on-every-request when the
-	// store is absent (test/partial bootstrap). Phase 6: this
-	// /api/v1/admin/alerts surface is LEGACY (superseded by
-	// /api/v1/fleet/alerts/*) and is counted as surface=legacy
-	// by the route-usage middleware before removal.
-	if m.adminWorkersAlertsHandler != nil {
-		adminAlerts := r.Group("/api/v1/admin/alerts")
-		if m.adminAuth != nil {
-			adminAlerts.Use(m.adminAuth)
-		}
-		adminAlerts.GET("/active", m.adminWorkersAlertsHandler.ListFleetActiveAlerts())
-		adminAlerts.GET("/recent", m.adminWorkersAlertsHandler.ListRecentAlerts())
 	}
 
 	log.Printf("[WORKERS] Routes registered")

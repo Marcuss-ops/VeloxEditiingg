@@ -1,8 +1,10 @@
 // Package lifecycle / worker_registration_test.go
 //
 // HTTP-layer tests for the worker allowlist gate on
-// POST /api/v1/workers/register. Companion to registration_test.go
-// (which covers the credential-validation paths against a mockStore).
+// POST /api/v1/agent/register (the canonical Phase 6 agent
+// namespace; the legacy /api/v1/workers/register alias was removed).
+// Companion to registration_test.go (which covers the
+// credential-validation paths against a mockStore).
 //
 // These tests pin the closed-enum semantics that were added when the
 // HTTP 403 deny rule was introduced: a worker whose worker_id is not
@@ -71,14 +73,14 @@ func parseAllowedWorkerIDs(csv string) []string {
 	return ids
 }
 
-// doRegister POSTs a JSON body to the wired /api/v1/workers/register
+// doRegister POSTs a JSON body to the wired /api/v1/agent/register
 // handler and returns the recorded response. body must be a JSON object.
 func doRegister(h *Handler, body string) *httptest.ResponseRecorder {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.POST("/api/v1/workers/register", h.RegisterV2Handler())
+	r.POST("/api/v1/agent/register", h.RegisterV2Handler())
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/workers/register", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agent/register", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)

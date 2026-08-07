@@ -3,7 +3,10 @@
 // protected_assets_handler.go maps the in-memory `protectedasset.Service`
 // to the worker-facing surface:
 //
-//	GET /api/v1/workers/cache/protected-assets
+//	GET /api/v1/agent/cache/protected-assets
+//
+// (canonical Phase 6 agent namespace; the legacy
+// /api/v1/workers/cache/protected-assets path was removed)
 //
 // Auth is delegated to the upstream `WorkerOrAdminAuthMiddleware` that the
 // router layers on this path — the handler itself does NOT inspect tokens,
@@ -50,7 +53,7 @@ func NewProtectedAssetsHandler(svc *protectedasset.Service) *ProtectedAssetsHand
 	return &ProtectedAssetsHandler{svc: svc}
 }
 
-// Snapshot returns GET /api/v1/workers/cache/protected-assets.
+// Snapshot returns GET /api/v1/agent/cache/protected-assets.
 //
 // Status mapping:
 //
@@ -81,7 +84,7 @@ func NewProtectedAssetsHandler(svc *protectedasset.Service) *ProtectedAssetsHand
 // @Produce       json
 // @Success       200 {object} protectedasset.Snapshot
 // @Failure       503 {object} map[string]string
-// @Router        /api/v1/workers/cache/protected-assets [get]
+// @Router        /api/v1/agent/cache/protected-assets [get]
 func (h *ProtectedAssetsHandler) Snapshot() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if h == nil || h.svc == nil {

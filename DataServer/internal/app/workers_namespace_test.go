@@ -76,9 +76,14 @@ func TestWorkersModule_CanonicalNamespacesRegistered(t *testing.T) {
 		http.MethodPost + " /api/v1/agent/register",
 		http.MethodGet + " /api/v1/agent/assets/:asset_id",
 		http.MethodGet + " /api/v1/agent/cache/protected-assets",
-		// Canonical admin operator namespace.
+		// Canonical admin operator namespace (including the migrated
+		// /worker/* control actions and the revoked list).
 		http.MethodGet + " /api/v1/admin/workers",
 		http.MethodGet + " /api/v1/admin/workers/:worker_id",
+		http.MethodPost + " /api/v1/admin/workers/:worker_id/revoke",
+		http.MethodPost + " /api/v1/admin/workers/:worker_id/unrevoke",
+		http.MethodPost + " /api/v1/admin/workers/:worker_id/restart",
+		http.MethodGet + " /api/v1/admin/workers/revoked",
 		// Canonical fleet aggregate namespace.
 		http.MethodGet + " /api/v1/fleet/metrics",
 		http.MethodGet + " /api/v1/fleet/alerts/active",
@@ -91,29 +96,46 @@ func TestWorkersModule_CanonicalNamespacesRegistered(t *testing.T) {
 	}
 }
 
-// TestWorkersModule_LegacyWorkerRoutesStillMounted pins the migration
-// window: the pre-canonical worker paths remain mounted (counted as
-// legacy by the route-usage middleware) so an in-flight worker or
-// dashboard does not break before removal.
-func TestWorkersModule_LegacyWorkerRoutesStillMounted(t *testing.T) {
+// TestWorkersModule_RemovedLegacyRoutesGone pins the Phase 6 removal
+// decision: the pre-canonical routes whose usage counter showed zero
+// sustained traffic are UNMOUNTED (agent register/assets/protected-assets
+// under legacy paths, the /worker admin group, and the legacy fleet
+// aggregates under /api/v1/admin/*). Only the /api/v1/workers diagnostic
+// surface (list/get + per-worker reads) remains, still consumed by
+// scripts/cert/master_state.sh and the operator runbook.
+func TestWorkersModule_RemovedLegacyRoutesGone(t *testing.T) {
 	m := wiredWorkersModule(t)
 	r := gin.New()
 	m.RegisterRoutes(r)
 	set := routeSet(r)
 
-	want := []string{
+	gone := []string{
 		http.MethodPost + " /api/v1/workers/register",
 		http.MethodGet + " /api/v1/worker-assets/:asset_id",
 		http.MethodGet + " /api/v1/workers/cache/protected-assets",
-		http.MethodGet + " /api/v1/workers",
-		http.MethodGet + " /api/v1/workers/:worker_id",
+		http.MethodPost + " /worker/revoke",
+		http.MethodPost + " /worker/unrevoke",
+		http.MethodGet + " /worker/revoked",
+		http.MethodPost + " /worker/drain",
+		http.MethodPost + " /worker/restart",
 		http.MethodGet + " /api/v1/admin/workers/metrics",
 		http.MethodGet + " /api/v1/admin/alerts/active",
 		http.MethodGet + " /api/v1/admin/alerts/recent",
 	}
-	for _, wantRoute := range want {
-		if _, ok := set[wantRoute]; !ok {
-			t.Errorf("legacy route should still be mounted: %s", wantRoute)
+	for _, goneRoute := range gone {
+		if _, ok := set[goneRoute]; ok {
+			t.Errorf("removed legacy route still mounted: %s", goneRoute)
+		}
+	}
+
+	// The remaining diagnostic surface must stay mounted.
+	for _, kept := range []string{
+		http.MethodGet + " /api/v1/workers",
+		http.MethodGet + " /api/v1/workers/:worker_id",
+		http.MethodGet + " /api/v1/workers/:worker_id/metrics",
+	} {
+		if _, ok := set[kept]; !ok {
+			t.Errorf("diagnostic route should still be mounted: %s", kept)
 		}
 	}
 }

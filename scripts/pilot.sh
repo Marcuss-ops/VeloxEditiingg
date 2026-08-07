@@ -368,7 +368,7 @@ JSON
   WORKER_TOKEN="$(curl -fsS -m 10 -X POST \
     -H "Content-Type: application/json" \
     --data "{\"worker_id\":\"${WORKER_ID}\",\"worker_name\":\"pilot-worker\",\"protocol_version\":\"v3\",\"bundle_hash\":\"${BUNDLE_HASH}\"}" \
-    "http://127.0.0.1:${MASTER_PORT}/api/v1/workers/register" \
+    "http://127.0.0.1:${MASTER_PORT}/api/v1/agent/register" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["session_id"])')" \
     || die "worker HTTP registration/token bootstrap failed" 1
   [[ -n "$WORKER_TOKEN" ]] || die "worker HTTP registration returned an empty token" 1

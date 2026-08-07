@@ -27,10 +27,10 @@ func TestServeAssetRequiresWorkerAuthentication(t *testing.T) {
 	tokenMgr := workersreg.NewTokenManager(db)
 	handler := NewHandler(&config.Config{Runtime: config.RuntimeConfig{DataDir: tempDir}}, tokenMgr, nil, nil)
 	r := gin.New()
-	r.GET("/api/v1/worker-assets/:asset_id", handler.ServeAsset())
+	r.GET("/api/v1/agent/assets/:asset_id", handler.ServeAsset())
 
 	assetID := strings.Repeat("a", 64)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/worker-assets/"+assetID, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agent/assets/"+assetID, nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusUnauthorized {
@@ -54,7 +54,7 @@ func TestServeAssetRejectsTraversalAndUnknownAssets(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(w)
-	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/v1/worker-assets/../etc/passwd", nil)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/v1/agent/assets/../etc/passwd", nil)
 	ctx.Request.Header.Set("Authorization", "Bearer "+token)
 	ctx.Params = gin.Params{{Key: "asset_id", Value: "../etc/passwd"}}
 	handler.ServeAsset()(ctx)
@@ -63,8 +63,8 @@ func TestServeAssetRejectsTraversalAndUnknownAssets(t *testing.T) {
 	}
 
 	r := gin.New()
-	r.GET("/api/v1/worker-assets/:asset_id", handler.ServeAsset())
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/worker-assets/"+strings.Repeat("c", 64), nil)
+	r.GET("/api/v1/agent/assets/:asset_id", handler.ServeAsset())
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agent/assets/"+strings.Repeat("c", 64), nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -88,9 +88,9 @@ func TestServeAssetServiceUnavailable(t *testing.T) {
 
 	handler := NewHandler(&config.Config{Runtime: config.RuntimeConfig{DataDir: tempDir}}, tokenMgr, nil, nil)
 	r := gin.New()
-	r.GET("/api/v1/worker-assets/:asset_id", handler.ServeAsset())
+	r.GET("/api/v1/agent/assets/:asset_id", handler.ServeAsset())
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/worker-assets/"+strings.Repeat("d", 64), nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agent/assets/"+strings.Repeat("d", 64), nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)

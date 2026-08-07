@@ -1,11 +1,12 @@
 // Package api — protected-asset snapshot (Pass 7).
 //
-// The master exposes GET /api/v1/workers/cache/protected-assets
-// (delivered in Pass 6 of the master plan). This file mirrors the
-// JSON shape into the worker's HTTP client so the worker poller
-// (internal/worker/protected_assets_poller.go) can fetch snapshots
-// over the existing `*Client.doRequest` retry + circuit-breaker
-// path without any ad-hoc transport setup.
+// The master exposes GET /api/v1/agent/cache/protected-assets
+// (the canonical Phase 6 agent namespace; the legacy
+// /api/v1/workers/cache/protected-assets path was removed). This
+// file mirrors the JSON shape into the worker's HTTP client so
+// the worker poller (internal/worker/protected_assets_poller.go)
+// can fetch snapshots over the existing `*Client.doRequest` retry
+// + circuit-breaker path without any ad-hoc transport setup.
 //
 // SECURITY posture:
 //   - The DTO is a SEPARATE mirror of
@@ -30,7 +31,7 @@ import (
 )
 
 // ProtectedAssetSnapshot mirrors the master JSON shape returned
-// by GET /api/v1/workers/cache/protected-assets.
+// by GET /api/v1/agent/cache/protected-assets.
 //
 // JSON tags pin the wire shape byte-for-byte. Field order is
 // chosen to mirror the master so a snapshot printed by the master
@@ -81,9 +82,10 @@ type ProtectedAssetsAPI interface {
 // assertion deep in a worker goroutine.
 var _ ProtectedAssetsAPI = (*Client)(nil)
 
-// ProtectedAssetsPath is the canonical path the master publishes.
-// Centralised so a future v2 rename only touches one place.
-const ProtectedAssetsPath = "/api/v1/workers/cache/protected-assets"
+// ProtectedAssetsPath is the canonical path the master publishes
+// under the Phase 6 /api/v1/agent agent namespace. Centralised so
+// a future v2 rename only touches one place.
+const ProtectedAssetsPath = "/api/v1/agent/cache/protected-assets"
 
 // GetProtectedAssets fetches the most recent protected-asset
 // snapshot from the master.

@@ -339,7 +339,7 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask, Component: "worker.cache", Action: "miss"}, telemetry.StatusOK, "", "")
 	}
 
-	downloadURL := strings.TrimRight(strings.TrimSpace(w.config.MasterURL), "/") + "/api/v1/worker-assets/" + neturl.PathEscape(assetID)
+	downloadURL := strings.TrimRight(strings.TrimSpace(w.config.MasterURL), "/") + "/api/v1/agent/assets/" + neturl.PathEscape(assetID)
 	authToken := ""
 	if w.apiClient != nil {
 		authToken = strings.TrimSpace(w.apiClient.AuthToken())

@@ -283,7 +283,7 @@ ORDER BY fired_at DESC`
 
 // ListRecentAlertEvents returns the most recent N rows across
 // the fleet (state-mixed) for the dashboard's "recent events"
-// view. Used for the GET /api/v1/admin/alerts/recent endpoint.
+// view. Used for the GET /api/v1/fleet/alerts/recent endpoint.
 func (s *SQLiteStore) ListRecentAlertEvents(ctx context.Context, limit int) ([]AlertEvent, error) {
 	q := `
 SELECT event_id, worker_id, rule_id, severity, state, fired_at, resolved_at, last_observed_at, current_value, message
