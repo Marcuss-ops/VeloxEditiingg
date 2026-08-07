@@ -476,9 +476,13 @@ print(vid[0].get('codec_name',''))
   pass "SHA-256 matches: ${sha:0:16}..."
 
   # ── Verification 4: Worker visible in API ──────────────────────
+  # Phase 6 API-surface unification moved the legacy /api/v1/workers
+  # diagnostic surface behind adminAuth, so this check must present the
+  # admin bearer token like every other operator-facing curl in this
+  # script.
   info "Verification 4: GET /api/v1/workers"
   local workers_json
-  workers_json="$(curl -sS -m 5 "http://127.0.0.1:${MASTER_PORT}/api/v1/workers" 2>/dev/null || true)"
+  workers_json="$(curl -sS -m 5 -H "Authorization: Bearer ${ADMIN_TOKEN}" "http://127.0.0.1:${MASTER_PORT}/api/v1/workers" 2>/dev/null || true)"
   if echo "$workers_json" | grep -qF "$WORKER_ID"; then
     pass "worker '$WORKER_ID' visible in /api/v1/workers"
   else
@@ -574,8 +578,11 @@ print(vid[0].get('codec_name',''))
   fi
 
   # ── (c) artifacts.sha256 == sha256 of the downloaded file ─────
+  # Scope to the final_video artifact: a job may carry additional
+  # READY artifacts (e.g. engine_progress_sidecar) verified moments
+  # later, so ORDER BY verified_at DESC would pick the wrong sha.
   local db_sha
-  db_sha="$(sql_query "SELECT sha256 FROM artifacts WHERE job_id = '${JOB_ID}' AND status='READY' ORDER BY verified_at DESC LIMIT 1" || true)"
+  db_sha="$(sql_query "SELECT sha256 FROM artifacts WHERE job_id = '${JOB_ID}' AND status='READY' AND type='final_video' ORDER BY verified_at DESC LIMIT 1" || true)"
   if [[ -z "$db_sha" ]]; then
     fail "DB (c): artifacts.sha256 missing/empty for job_id=$JOB_ID"
     exit 1
@@ -592,7 +599,7 @@ print(vid[0].get('codec_name',''))
   # timestamps are acceptable; only TRUE reversal fails.
   local jobs_completed_at db_verified_at jobs_epoch art_epoch
   jobs_completed_at="$(sql_query "SELECT completed_at FROM jobs WHERE job_id = '${JOB_ID}' LIMIT 1" || true)"
-  db_verified_at="$(sql_query "SELECT verified_at FROM artifacts WHERE job_id = '${JOB_ID}' AND status='READY' ORDER BY verified_at DESC LIMIT 1" || true)"
+  db_verified_at="$(sql_query "SELECT verified_at FROM artifacts WHERE job_id = '${JOB_ID}' AND status='READY' AND type='final_video' ORDER BY verified_at DESC LIMIT 1" || true)"
   if [[ -z "$jobs_completed_at" || -z "$db_verified_at" ]]; then
     fail "DB (d): missing timestamp (jobs.completed_at='$jobs_completed_at', artifacts.verified_at='$db_verified_at')"
     exit 1

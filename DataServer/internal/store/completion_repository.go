@@ -344,8 +344,16 @@ func (r *sqliteCompletionTx) MarkCompletionJobSucceededIfTasksDone(ctx context.C
 	}
 	renderOnly, _ := contract["render_only"].(bool)
 	artifactContract := !renderOnly
-	if artifactContract && status != "AWAITING_ARTIFACT" {
-		return fmt.Errorf("%w: completion job %s must be AWAITING_ARTIFACT before SUCCEEDED (status=%s)", ErrCompletionTransitionConflict, jobID, status)
+	// An artifact-contract job may reach the commit while still RUNNING: in
+	// the completion-protocol flow the worker publishes its outputs (declare
+	// → upload → complete) BEFORE the TaskResult whose ingest would normally
+	// roll the job RUNNING→AWAITING_ARTIFACT. The commit therefore performs
+	// that promotion itself (see below) inside the SAME transaction that
+	// writes SUCCEEDED — the intermediate state is never skipped, but it is
+	// finalizer-owned in this flow instead of ingest-owned. A job in any
+	// other state (PENDING/LEASED/FAILED/CANCELLED) is still rejected.
+	if artifactContract && status != "AWAITING_ARTIFACT" && status != "RUNNING" {
+		return fmt.Errorf("%w: completion job %s must be AWAITING_ARTIFACT (or RUNNING) before SUCCEEDED (status=%s)", ErrCompletionTransitionConflict, jobID, status)
 	}
 	if !artifactContract && status != "RUNNING" && status != "AWAITING_ARTIFACT" {
 		return fmt.Errorf("%w: render-only job %s cannot complete from status=%s", ErrCompletionTransitionConflict, jobID, status)
@@ -398,6 +406,32 @@ func (r *sqliteCompletionTx) MarkCompletionJobSucceededIfTasksDone(ctx context.C
 				SELECT 1 FROM attempt_commits ac
 				WHERE ac.job_id=? AND ac.required_output_count>ac.ready_output_count
 			)`
+	}
+
+	// Finalizer-owned RUNNING→AWAITING_ARTIFACT promotion (see contract gate
+	// above). Gated on every sibling task being SUCCEEDED plus the same
+	// artifact contract, so a job whose artifact set is missing/invalid is
+	// NOT promoted — it stays RUNNING and the commit fails closed.
+	if artifactContract && status == "RUNNING" {
+		// Six placeholders: updated_at, job_id, tasks.job_id, plus the
+		// three attempt_commits gates inside artifactGate (all jobID).
+		promoteArgs := []interface{}{now, jobID, jobID, jobID, jobID, jobID}
+		res, promoteErr := r.tx.ExecContext(ctx, `
+			UPDATE jobs
+			SET status='AWAITING_ARTIFACT', updated_at=?, revision=revision+1
+			WHERE job_id=?
+			  AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.job_id=? AND t.status!='SUCCEEDED')
+			  AND `+artifactGate+`
+			  AND status='RUNNING'`, promoteArgs...)
+		if promoteErr != nil {
+			return fmt.Errorf("store: promote completion job RUNNING→AWAITING_ARTIFACT: %w", promoteErr)
+		}
+		if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+			return fmt.Errorf("store: promote completion job rows affected: %w", rowsErr)
+		} else if n != 1 {
+			return fmt.Errorf("%w: completion job %s did not satisfy artifact/status gate for AWAITING_ARTIFACT promotion (status=%s)", ErrCompletionTransitionConflict, jobID, status)
+		}
+		status = "AWAITING_ARTIFACT"
 	}
 
 	query := `

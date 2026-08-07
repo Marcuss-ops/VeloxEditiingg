@@ -98,11 +98,19 @@ followups.
 **2026-07-25 deployment** of this gate surfaced:
 
 - `TestTick_EffectiveClaimBatch_ParallelNoDeadlock` in
-  `DataServer/internal/forwarding/runner_failure_injection_test.go:178`
-  — deterministic deadlock when the mock remote engine at
-  `http://localhost:1` refuses connection; the tick does not release the
-  semaphore on dial failure. Pre-existing on `main` before the gate
-  deployment; tracked as critical followup.
+  `DataServer/internal/forwarding/runner_failure_injection_test.go`
+  — failure message claimed "the tick does not release the semaphore on
+  dial failure". **RESOLVED** (2026-08-07): the semaphore IS released via
+  `defer func() { <-r.sem }()` in `runner_tick.go` (verified across all
+  git history, including `298a8d8e` / `c322182` / `6b21b82`); the
+  reported failure was a slow-test timeout misdiagnosed as a deadlock.
+  The test pointed the client at `http://localhost:1` with `Retries: 0`,
+  but `remoteengine.DefaultRetryPolicy` maps `Retries<=0` to 3 retries
+  (1s+5s+15s backoff ≈ 21-25s per lease), so under full-module gate load
+  the test could exceed its own 30s deadline. Fixed by pointing the three
+  affected tests at a local httptest server returning 404 (PERMANENT →
+  no retry backoff): package runtime dropped 74s → 8s and the tests now
+  pass deterministically (`go test -race ./internal/forwarding/`).
 
 **2026-07-28 re-deployment** of the gate (commit 6b21b82 series) added:
 
@@ -115,3 +123,15 @@ followups.
   Calendar event lifecycle / queue ops. Pre-existing on `main` (well
   before the 2026-07-28 commit) and unrelated to the AGENTS-plan
   test-file refactor; tracked as followups.
+
+  **RESOLVED** (2026-08-07 verification, main HEAD): the four failures
+  were caused by the canonical delivery-plan validator rejecting calendar
+  events (`delivery_plan: explicit delivery plan required`) because
+  `submitCalendarJob` injected no explicit default delivery plan, and the
+  test env had no `calendar_noop` destination row for the validator to
+  admit. Fixes `4630ab2a` (inject explicit default delivery_plan in
+  submitCalendarJob) + `eec0cbfe` (seed `calendar_noop` in the test env),
+  which landed on `agent/production-path-certification` and reached main
+  through the `09940dd6` reconcile commit. `go test -count=1
+  ./internal/handlers/server/calendar/...` now passes, including under
+  `-race`; re-verified with `-count=3`. No further action required.

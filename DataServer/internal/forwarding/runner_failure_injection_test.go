@@ -3,6 +3,8 @@ package forwarding
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -15,6 +17,30 @@ import (
 	"velox-server/internal/store"
 	"velox-server/internal/supervisor"
 )
+
+// fastFailClient returns a remoteengine.Client whose polls fail on the
+// FIRST attempt with a PERMANENT-class error, so the runner's semaphore
+// release path is exercised without waiting through the client's retry
+// backoff.
+//
+// A refused dial (http://localhost:1) is classified TRANSIENT and retried:
+// remoteengine.DefaultRetryPolicy maps Retries<=0 to 3 retries (backoff
+// 1s+5s+15s ≈ 21-25s per lease). That previously made these semaphore
+// tests burn ~24s each and risk tripping their 30s deadline under CI
+// load — the failure was misreported as a tick semaphore deadlock (see
+// AGENTS.md §4 followup). A 404 PERMANENT reply stops the retry loop
+// immediately while still driving the runner through the same
+// poll-failure → handleRetry → semaphore-release path. Note the rows'
+// error_class becomes "PERMANENT" instead of "TRANSIENT" — incidental;
+// no test asserts on error_class and handleRetry only passes it through.
+func fastFailClient(t *testing.T) *remoteengine.Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	return remoteengine.NewClient(remoteengine.Config{URL: srv.URL, Retries: 0})
+}
 
 // TestTick_DBOutage_PropagatesAsInfrastructure verifies that a DB
 // outage during ClaimCreatorForwardings is propagated as an error from
@@ -99,13 +125,12 @@ func TestTick_EffectiveClaimBatch_CappedAtConcurrency(t *testing.T) {
 		BackoffSchedule: []time.Duration{30 * time.Second},
 	}
 
-	// Use a configured client (pointing to a non-existent server) so
-	// tick() proceeds past the IsConfigured guard and actually claims
-	// rows. The remote poll will fail, triggering handleRetry.
-	// This test isolates runner semaphore release. Retry/backoff policy is
-	// covered by internal/remoteengine; disabling it keeps a refused dial
-	// from making the semaphore test wait through several seconds of backoff.
-	client := remoteengine.NewClient(remoteengine.Config{URL: "http://localhost:1", Retries: 0})
+	// Use a configured client so tick() proceeds past the IsConfigured
+	// guard and actually claims rows. The remote poll fails fast (404
+	// PERMANENT → no client retry backoff), triggering handleRetry.
+	// This test isolates runner semaphore release; retry/backoff policy
+	// is covered by internal/remoteengine.
+	client := fastFailClient(t)
 	r := NewCreatorForwardingRunner(cfg, db, client, nil, "test-batch")
 
 	err := r.tick(context.Background())
@@ -165,10 +190,10 @@ func TestTick_EffectiveClaimBatch_ParallelNoDeadlock(t *testing.T) {
 		BackoffSchedule: []time.Duration{30 * time.Second},
 	}
 
-	// This test isolates runner semaphore release. Retry/backoff policy is
-	// covered by internal/remoteengine; disabling it keeps a refused dial
-	// from making the semaphore test wait through several seconds of backoff.
-	client := remoteengine.NewClient(remoteengine.Config{URL: "http://localhost:1", Retries: 0})
+	// This test isolates runner semaphore release. The client fails fast
+	// (404 PERMANENT → no retry backoff) so the semaphore contention path
+	// is exercised without burning ~21s of remoteengine retry backoff.
+	client := fastFailClient(t)
 	r := NewCreatorForwardingRunner(cfg, db, client, nil, "test-par")
 
 	done := make(chan struct{})
@@ -362,12 +387,10 @@ func TestProcessLease_MetricsAfterCAS(t *testing.T) {
 		t.Fatalf("claim forwarding: err=%v len=%d", err, len(leases))
 	}
 
-	// Build a runner with an unconfigured client — processLease will
-	// skip the remote poll and return nil (client not configured check
-	// is in tick, not processLease — but processLease will hit the
-	// GetPipelineStatus call which returns an error for unconfigured
-	// client, triggering handleRetry).
-	client := remoteengine.NewClient(remoteengine.Config{URL: "http://localhost:1"})
+	// Build a runner with a fast-failing client — processLease hits the
+	// GetPipelineStatus call which returns a PERMANENT error on the
+	// first attempt (404, no retry backoff), triggering handleRetry.
+	client := fastFailClient(t)
 	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), db, client, nil, "test-cas")
 
 	// processLease with the claimed lease. The unconfigured client will

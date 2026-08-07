@@ -811,7 +811,16 @@ func TestCommitAttempt_DeliversOnlyToExplicitPlanDestinations(t *testing.T) {
 // path submit → Drive commit → assert all durable state surfaces.
 // ────────────────────────────────────────────────────────────────────────
 
-func TestPhase6_ArtifactContractCannotSkipAwaitingArtifact(t *testing.T) {
+// TestPhase6_ArtifactContractJobPromotesFromRunning pins the
+// finalizer-owned promotion in the completion commit path: an
+// artifact-contract job that reaches CommitAttempt while still RUNNING
+// (the worker publishes its outputs — declare → upload → complete —
+// before the TaskResult whose ingest would normally roll the job
+// RUNNING→AWAITING_ARTIFACT) is promoted to SUCCEEDED inside the same
+// transaction. The gate is the artifact set itself: until the outputs
+// are provably READY the commit must fail closed and the job must stay
+// RUNNING.
+func TestPhase6_ArtifactContractJobPromotesFromRunning(t *testing.T) {
 	db := openCoordinatorTestDB(t)
 	c := newTestCoordinator(db)
 	fence := validFence("task-artifact-gate", "attempt-artifact-gate")
@@ -823,28 +832,37 @@ func TestPhase6_ArtifactContractCannotSkipAwaitingArtifact(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("DeclareOutputs: %v", err)
 	}
-	commitID := scheduleRowReady(t, db, fence, "art-artifact-gate")
 	if _, err := db.Exec(`UPDATE jobs SET status = 'RUNNING' WHERE job_id = ?`, jobID); err != nil {
 		t.Fatalf("set RUNNING: %v", err)
 	}
 
-	if _, err := c.CommitAttempt(context.Background(), commitID); err == nil {
-		t.Fatal("artifact-contract job must reject RUNNING -> SUCCEEDED without AWAITING_ARTIFACT")
-	}
-	// Readiness alone must not bypass the lifecycle gate: even with a
-	// READY-looking artifact, the contract-bound job remains RUNNING.
-	if _, err := db.Exec(`UPDATE artifacts SET status='READY', verified_at=?, sha256=?, storage_key=? WHERE id=?`, time.Now().UTC().Format(time.RFC3339), strings.Repeat("a", 64), "durable/artifact-gate.mp4", "art-artifact-gate"); err != nil {
-		t.Fatalf("seed ready artifact: %v", err)
-	}
-	if _, err := c.CommitAttempt(context.Background(), commitID); err == nil {
-		t.Fatal("artifact-contract job must reject RUNNING -> SUCCEEDED even when artifact is READY")
+	// Fail-closed: while the declared artifact is still STAGING the
+	// commit must be blocked (ready_output_count < required_output_count)
+	// and the contract-bound job must remain RUNNING.
+	if _, err := c.CommitAttempt(context.Background(), readAttemptCommitRow(t, db, fence).CommitID); err == nil {
+		t.Fatal("artifact-contract RUNNING job must fail closed while artifact is not READY")
 	}
 	var status string
 	if err := db.QueryRow(`SELECT status FROM jobs WHERE job_id = ?`, jobID).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
 	if status != "RUNNING" {
-		t.Fatalf("job status after rejected shortcut=%q, want RUNNING", status)
+		t.Fatalf("job status after blocked commit=%q, want RUNNING", status)
+	}
+
+	// Once the artifact set is provably READY (scheduleRowReady bumps
+	// ready_output_count and binds the declaration), the finalizer
+	// promotes the RUNNING job through AWAITING_ARTIFACT to SUCCEEDED
+	// atomically.
+	commitID := scheduleRowReady(t, db, fence, "art-artifact-gate")
+	if _, err := c.CommitAttempt(context.Background(), commitID); err != nil {
+		t.Fatalf("artifact-contract RUNNING job with READY artifact must promote: %v", err)
+	}
+	if err := db.QueryRow(`SELECT status FROM jobs WHERE job_id = ?`, jobID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "SUCCEEDED" {
+		t.Fatalf("job status after promoted commit=%q, want SUCCEEDED", status)
 	}
 }
 

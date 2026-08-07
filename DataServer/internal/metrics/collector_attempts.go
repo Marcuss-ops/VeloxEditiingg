@@ -48,7 +48,10 @@ type AttemptReader interface {
 // interface; this method is the SIMPLE set-to-current-value path used
 // when Scan is wired to load the latest attempt rows.
 func (c *Collector) RecordAttempt(am taskattempts.AttemptMetrics, cache taskattempts.AttemptCacheStats, cost *taskattempts.AttemptCostBasis, execID, execVersion, workerClass string) {
-	labels := []string{execID, execVersion, workerClass}
+	// execVersion is intentionally unused here: the video counter
+	// families are documented (docs/metrics-catalog.md) with the
+	// single executor_id label only, so exec_version is not part of
+	// any label tuple stamped by this method.
 
 	// Render speed ratio.
 	if rs := am.RenderSpeedRatio(); rs > 0 {
@@ -66,15 +69,22 @@ func (c *Collector) RecordAttempt(am taskattempts.AttemptMetrics, cache taskatte
 		c.cacheHits.Inc([]string{"corrupt"}, uint64(cache.CacheCorruptions))
 	}
 
-	// Video encode amplification.
+	// Video encode amplification. The video counter families are
+	// registered (and documented in docs/metrics-catalog.md) with the
+	// single executor_id label only — NOT the 3-label {executor_id,
+	// exec_version, worker_class} tuple used by the attempt gauges.
+	// Passing the wider tuple here used to panic the metrics supervisor
+	// (label len mismatch), blocking the taskrunner/parallelism gauges
+	// from being stamped.
+	videoLabels := []string{execID}
 	if am.FramesEncoded > 0 {
-		c.videoFramesEnc.Inc(labels, uint64(am.FramesEncoded))
+		c.videoFramesEnc.Inc(videoLabels, uint64(am.FramesEncoded))
 	}
 	if am.FramesEncoded > 0 {
-		c.videoOutputFrames.Inc(labels, uint64(am.FramesEncoded)) // upper-bound dedup
+		c.videoOutputFrames.Inc(videoLabels, uint64(am.FramesEncoded)) // upper-bound dedup
 	}
 	if am.EncodePasses > 0 {
-		c.videoEncodePasses.Inc(labels, uint64(am.EncodePasses))
+		c.videoEncodePasses.Inc(videoLabels, uint64(am.EncodePasses))
 	}
 	if am.FinalConcatStreamCopy {
 		c.videoStreamCopy.Inc([]string{}, 1)

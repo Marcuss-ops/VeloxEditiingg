@@ -136,6 +136,49 @@ func TestInc_WrongLabelLen_Panics(t *testing.T) {
 	cf.Inc([]string{"only-one"}, 1)
 }
 
+// TestVideoCounters_ExecutorIDLabelOnly pins the label cardinality of
+// the three video encode-amplification counter families. They are
+// registered (and documented in docs/metrics-catalog.md) with the
+// SINGLE executor_id label. A regression that passes the 3-label
+// {executor_id, exec_version, worker_class} tuple here panics the
+// metrics supervisor on its first terminal-attempt tick (label len
+// mismatch), which in turn blocks the taskrunner/parallelism gauges
+// from being stamped — e2e surfaced exactly this as a supervisor
+// crash-loop. RecordAttempt must stamp them with exactly one label.
+func TestVideoCounters_ExecutorIDLabelOnly(t *testing.T) {
+	reg := NewRegistry()
+	c := NewCollector(reg)
+
+	c.RecordAttempt(taskattempts.AttemptMetrics{
+		FramesEncoded:         240,
+		EncodePasses:          1,
+		FinalConcatStreamCopy: false,
+		ConcatMode:            "reencode",
+	}, taskattempts.AttemptCacheStats{}, nil,
+		"scene.composite.v1", "v1.2.20", "cpu")
+
+	out := dumpRegistryAll(t, reg)
+	for _, want := range []string{
+		`velox_video_frames_encoded_total{executor_id="scene.composite.v1"} 240`,
+		`velox_video_output_frames_total{executor_id="scene.composite.v1"} 240`,
+		`velox_video_encode_passes_total{executor_id="scene.composite.v1"} 1`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	// The 3-label regression must NOT leak: any child carrying
+	// exec_version or worker_class labels is the old panic shape.
+	for _, banned := range []string{
+		`executor_id="scene.composite.v1",exec_version=`,
+		`executor_id="scene.composite.v1",worker_class=`,
+	} {
+		if strings.Contains(out, banned) {
+			t.Errorf("video counter leaked extra labels (%q); regression:\n%s", banned, out)
+		}
+	}
+}
+
 // ─── F: compute-outcome refactor (spec §14) ──────────────────────────────
 
 // TestComputeSeconds_MultipleOutcomesDistinct: the load-bearing test
