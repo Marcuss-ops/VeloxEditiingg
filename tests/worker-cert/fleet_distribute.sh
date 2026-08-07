@@ -189,7 +189,7 @@ log_info "M2M provisioned: client_id=$PROVISIONED_CLIENT_ID"
 
 # ─── Pre-flight: list CONNECTED workers + capture task_slots ──────────────
 WORKERS_JSON=""
-if ! smoke_workers_list "$M2M_BEARER" "$VELOX_MASTER_URL"; then
+if ! smoke_workers_list "$ADMIN_TOKEN" "$VELOX_MASTER_URL"; then
   log_error "could not list workers"
   exit 3
 fi
@@ -523,7 +523,7 @@ fi
 INV_NO_RESIDUAL_OK=1
 RESIDUAL=""
 WORKERS_AFTER_JSON=""
-if ! smoke_workers_list "$M2M_BEARER" "$VELOX_MASTER_URL"; then
+if ! smoke_workers_list "$ADMIN_TOKEN" "$VELOX_MASTER_URL"; then
   log_warn "could not re-list workers for residual check (skipping invariant 6)"
   INV_NO_RESIDUAL_OK=0
 else
