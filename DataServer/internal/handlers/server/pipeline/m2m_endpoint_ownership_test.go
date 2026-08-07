@@ -138,7 +138,9 @@ func TestGetSubmittedJob_OwnerSeesScopedEnrichment(t *testing.T) {
 		t.Fatalf("seed artifact: %v", err)
 	}
 
-	h := &Handlers{store: db}
+	h := &Handlers{store: db, cfg: &config.Config{ControlPlane: config.ControlPlaneEndpoints{
+		RESTPublic: "http://51.91.11.36:8000",
+	}}}
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.GET("/api/v1/jobs/:id", func(c *gin.Context) {
