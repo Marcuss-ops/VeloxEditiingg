@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestCanonicalScopeVocabularyContainsOnlyJobWorkerAssetScopes(t *testing.T) {
+func TestCanonicalScopeVocabularyContainsOnlyNonEditorFixtureScopes(t *testing.T) {
 	want := []string{
 		"jobs.read",
 		"jobs.write",

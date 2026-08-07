@@ -303,6 +303,11 @@ type CredentialsConfig struct {
 type AuthConfig struct {
 	AdminToken string
 
+	// ProjectBridgeContractVersion is the only accepted project-context
+	// contract from InstaEdit. It is a one-way opaque reference and never
+	// enables group/channel catalog synchronization.
+	ProjectBridgeContractVersion string
+
 	// InstaeditControlJWTSecret is the HS256 shared secret used to
 	// verify the short-lived JWT issued by the InstaEdit BFF when
 	// proxying user-facing requests to the Velox master. Distinct

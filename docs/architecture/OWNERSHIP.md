@@ -22,6 +22,9 @@ legitimately write or read this capability from outside that owner.
 | Outbox dispatcher registry | `internal/outbox.Registry` (registered in `cmd/server/bootstrap.go`) | Direct handler invocation from a worker goroutine |
 | Worker command acknowledgement | `internal/workers.CommandManager` (registered in `cmd/server/bootstrap.go`) | HTTP fallback routes parallel to gRPC |
 | Persistent state | SQLite via repository layer | JSON files or in-memory maps treated as authoritative |
+| InstaEdit application catalog (users, workspaces, groups, channels, permissions) | InstaEdit | Any Velox-owned copy, catalog, membership snapshot or sync writer |
+| Project bridge context | InstaEdit `project_id` ↔ opaque `velox_project_id` | `velox_group_id`, `velox_channel_group_id`, workspace copies, bidirectional sync |
+| Editor state and render execution | Velox editor/runtime | InstaEdit domain data, global group/channel enumeration, reverse ownership writes |
 | Artifact persistence and reconciliation | `internal/artifacts` orchestration → focused `internal/store` repositories | SQL queries, transactions, or row scans directly in `internal/artifacts` |
 | Binary storage | Filesystem / blob storage | Blobs persisted inside the DB |
 | Versioning | `/VERSION.txt` (single root file) | CI fallback to `git describe`, `dev`, local snapshots |
@@ -59,6 +62,27 @@ documentation.
 | `RemoteCodex/native/worker-agent-go/internal/costmodel` (worker-side scoring mirror) | PR-04 cleanup (audit §3.6 — `Duplicata in due` resolved as DELETION not mirroring) | master `velox-server/internal/costmodel` is the single scoring owner; worker advertises `WorkerProfile` only |
 | `DataServer/internal/queue` (file-backed JobQueue) | PR-03 collapser into `internal/jobs.LifecycleService` | `internal/jobs.LifecycleService` + `internal/store.AtomicJobTaskCreator` |
 | `DataServer/internal/obs` (early observability placeholder) | superseded by `internal/observability` (canonical aggregator) | `internal/observability` |
+
+## InstaEdit/Velox separation rule
+
+The bridge is one-way and project-scoped:
+
+```text
+InstaEdit (source of truth)
+  project_id + workspace authorization + optional concrete context
+                         │
+                         ▼
+Velox (execution)
+  opaque velox_project_id + editor state + revisions + rendering
+```
+
+Velox MUST NOT list or mutate InstaEdit groups, channels, memberships,
+workspaces or permissions. There is no bidirectional synchronization job,
+shared database, reverse bridge writer, or fallback catalog. A project JWT
+without a matching `project_id` route parameter is rejected with `404`.
+
+The standalone editor SPA is opened by redirect/new-tab from InstaEdit; it is
+not embedded as an iframe ownership surface.
 
 ## The single-writer rule
 

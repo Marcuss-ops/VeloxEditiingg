@@ -82,6 +82,12 @@ func (c *Config) Validate() error {
 	if c == nil {
 		return fmt.Errorf("config: nil Config")
 	}
+	if strings.TrimSpace(c.Auth.ProjectBridgeContractVersion) == "" {
+		c.Auth.ProjectBridgeContractVersion = "instaedit.velox.project-bridge.v1"
+	}
+	if c.Auth.ProjectBridgeContractVersion != "instaedit.velox.project-bridge.v1" {
+		return fmt.Errorf("config: VELOX_PROJECT_BRIDGE_CONTRACT_VERSION must be instaedit.velox.project-bridge.v1")
+	}
 	if c.Compatibility.Mode == "" {
 		c.Compatibility.Mode = "strict"
 	}

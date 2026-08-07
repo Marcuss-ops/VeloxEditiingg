@@ -8,7 +8,8 @@ import (
 
 func loadAuthConfig(raw RawConfig) AuthConfig {
 	c := AuthConfig{
-		AdminToken: raw.Get("VELOX_ADMIN_TOKEN"),
+		AdminToken:                   raw.Get("VELOX_ADMIN_TOKEN"),
+		ProjectBridgeContractVersion: firstNonEmpty(raw.Get("VELOX_PROJECT_BRIDGE_CONTRACT_VERSION"), "instaedit.velox.project-bridge.v1"),
 	}
 	if c.AdminToken == "" {
 		c.AdminToken = raw.Get("MASTER_ADMIN_TOKEN")

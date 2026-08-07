@@ -149,7 +149,7 @@ func TestMiddleware_AllowsRequestWithSupersetScopes(t *testing.T) {
 		MiddlewareWithOperation(v, []string{ScopeJobsWrite}, "create_job"),
 		func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) },
 	)
-	c := validClaimsWithScopes(AllScopesSuperset) // all 5 scopes
+	c := validClaimsWithScopes(AllScopesSuperset) // generic non-editor scopes
 	token := mintToken(t, testSecret, c)
 	req := httptest.NewRequest("POST", "/api/v1/instaedit/jobs", nil)
 	req.Header.Set("Authorization", "Bearer "+token)

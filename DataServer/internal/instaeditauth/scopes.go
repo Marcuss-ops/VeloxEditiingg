@@ -52,7 +52,11 @@ const (
 	ScopeEditorWrite = "editor.write"
 )
 
-// AllScopesSuperset is the union of the BFF scopes. It is used by
+// AllScopesSuperset is the generic job/worker/asset fixture grant. Editor
+// scopes are intentionally excluded: editor permissions are project-scoped
+// and must always be paired with MiddlewareWithProject.
+//
+// It is used by
 // Velox middleware test fixtures that need a "guaranteed to pass"
 // scope set to exercise unrelated code paths.
 //

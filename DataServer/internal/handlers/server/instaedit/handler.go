@@ -83,6 +83,9 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	// Editor access is intentionally project-scoped. The signed project_id
 	// claim must match the route parameter; this group has no catalog/list
 	// endpoint and therefore cannot enumerate global groups or channels.
+	// The accepted bridge contract is one-way: InstaEdit owns application
+	// projects, groups, channels and permissions; Velox owns only editor state
+	// and rendering for the opaque project handle.
 	editor := g.Group("/editor/projects/:project_id")
 	{
 		editor.GET("", instaeditauth.MiddlewareWithProject(h.deps.Verifier, []string{instaeditauth.ScopeEditorRead}, "read_editor_context", "project_id"), h.editorContext())

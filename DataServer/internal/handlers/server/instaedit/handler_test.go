@@ -136,6 +136,35 @@ func TestInstaEditRoutes_ExpiredToken_401(t *testing.T) {
 	}
 }
 
+func TestInstaEditRoutes_EditorSurfaceIsProjectScopedAndHasNoCatalog(t *testing.T) {
+	r := setupRouter()
+	for _, route := range r.Routes() {
+		if route.Path == "/api/v1/instaedit/groups" || route.Path == "/api/v1/instaedit/channels" || route.Path == "/api/v1/instaedit/editor/projects" {
+			t.Fatalf("global catalog route must not be mounted: %s %s", route.Method, route.Path)
+		}
+	}
+	claims := validClaims()
+	claims.ProjectID = "ve_project_123"
+	claims.Scopes = []string{instaeditauth.ScopeEditorRead}
+	token := mintToken(t, claims)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/instaedit/editor/projects/ve_project_123", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("project-scoped editor read: got %d: %s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode editor context: %v", err)
+	}
+	for _, forbidden := range []string{"groups", "channels", "members", "channel_ids"} {
+		if _, ok := body[forbidden]; ok {
+			t.Fatalf("editor context leaked forbidden ownership field %q: %v", forbidden, body)
+		}
+	}
+}
+
 func TestInstaEditRoutes_AssetRoute_RequiresAssetScope(t *testing.T) {
 	r := setupRouter()
 	claims := validClaims()
