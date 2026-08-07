@@ -216,6 +216,14 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	sess.replaceCapabilities(executorRegistry, capabilitiesBoolMap(caps))
 	sess.replaceAssetCacheKeys(extractAssetCacheKeys(caps))
 	sess.ready.Store(true)
+
+	// Bridge the hello-declared capability report into the in-memory
+	// registry so the read model (GET /api/v1/workers) surfaces the
+	// canonical capacity (task_slots = host.max_parallel_jobs). The
+	// legacy HTTP registration path did this via extra["capabilities"];
+	// without the same bridge here, v3-only workers read task_slots=0
+	// in the API even though they advertise max_parallel_jobs=1.
+	h.registerHelloCapabilitiesInRegistry(context.Background(), workerID, hello.GetWorkerName(), h.extractPeerIP(stream), env.ProtocolVersion, caps, hello)
 	sess.draining.Store(false)
 	sess.lastHeartbeatUnix.Store(time.Now().UTC().Unix())
 
