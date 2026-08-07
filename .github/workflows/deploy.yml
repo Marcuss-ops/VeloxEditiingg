@@ -317,6 +317,8 @@ jobs:
         env:
           ANSIBLE_HOST_KEY_CHECKING: 'false'
           ANSIBLE_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
+          VELOX_MASTER_HOST: ${{ vars.VELOX_MASTER_HOST }}
+          VELOX_DEPLOY_SSH_KEY: ${{ secrets.VELOX_DEPLOY_SSH_KEY }}
         run: |
           set -euo pipefail
 
@@ -357,8 +359,27 @@ jobs:
             OPENBAO_EXTRA=(-e @/tmp/openbao-vars.yml)
           fi
 
+          # The production inventory is intentionally not committed. Build a
+          # short-lived Master-only inventory from the canonical GitHub
+          # production environment values; the private key never enters the
+          # workspace or repository and is removed by the EXIT trap.
+          : "${VELOX_MASTER_HOST:?VELOX_MASTER_HOST is required from the production environment}"
+          : "${VELOX_DEPLOY_SSH_KEY:?VELOX_DEPLOY_SSH_KEY is required from the production environment}"
+          DEPLOY_KEY="$(mktemp)"
+          DEPLOY_INVENTORY="$(mktemp)"
+          trap 'rm -f "$DEPLOY_KEY" "$DEPLOY_INVENTORY" /tmp/vault-pass' EXIT
+          printf '%s\n' "$VELOX_DEPLOY_SSH_KEY" > "$DEPLOY_KEY"
+          chmod 600 "$DEPLOY_KEY"
+          printf '%s\n' \
+            '[velox_master]' \
+            "velox-master ansible_host=${VELOX_MASTER_HOST} ansible_user=velox-deploy ansible_ssh_private_key_file=${DEPLOY_KEY}" \
+            '' \
+            '[velox_master:vars]' \
+            'ansible_python_interpreter=/usr/bin/python3' \
+            > "$DEPLOY_INVENTORY"
+
           ansible-playbook \
-            -i deploy/inventory/production.ini \
+            -i "$DEPLOY_INVENTORY" \
             "${VAULT_ARGS[@]}" \
             "${OPENBAO_EXTRA[@]}" \
             -e velox_server_image="${SERVER_REF}" \
