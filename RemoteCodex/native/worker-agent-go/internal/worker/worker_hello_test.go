@@ -92,6 +92,15 @@ func assertHelloMatchesRegistry(t *testing.T, w *Worker) {
 	}
 }
 
+func TestBuildHello_UsesConfiguredWorkerName(t *testing.T) {
+	cfg := newInsecureDevCfg(t)
+	cfg.WorkerName = "velox_worker_readable"
+	w, err := New(cfg, "test")
+	require.NoError(t, err)
+
+	require.Equal(t, "velox_worker_readable", w.buildHello().WorkerName)
+}
+
 func TestBuildHello_MatchesRegistryContents(t *testing.T) {
 	reg := executor.NewRegistry()
 	// Deliberately unsorted registration order — sort responsibility

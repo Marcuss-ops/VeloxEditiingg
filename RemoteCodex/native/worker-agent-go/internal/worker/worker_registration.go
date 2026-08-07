@@ -42,7 +42,7 @@ func (w *Worker) buildHello() controltransport.WorkerHello {
 
 	hello := controltransport.WorkerHello{
 		WorkerID:        w.config.WorkerID,
-		WorkerName:      workerDisplayName(hostname),
+		WorkerName:      w.workerName(hostname),
 		Hostname:        hostname,
 		Version:         w.version,
 		BundleVersion:   w.config.BundleVersion,
@@ -66,9 +66,19 @@ func (w *Worker) buildHello() controltransport.WorkerHello {
 	return hello
 }
 
-// workerDisplayName is intentionally derived at runtime so the master UI and
-// task history identify the physical worker without an operator-maintained
-// alias. The configured worker_id remains the stable routing identity.
+// workerName returns the operator-configured display name when present.
+// WorkerID remains the immutable routing identity; the derived physical-host
+// name is only a compatibility fallback for older configurations.
+func (w *Worker) workerName(hostname string) string {
+	if name := strings.TrimSpace(w.config.WorkerName); name != "" {
+		return name
+	}
+	return workerDisplayName(hostname)
+}
+
+// workerDisplayName is the compatibility fallback for configurations without
+// an explicit worker_name. The configured worker_id remains the stable
+// routing identity.
 func workerDisplayName(hostname string) string {
 	if strings.TrimSpace(hostname) == "" {
 		hostname, _ = os.Hostname()

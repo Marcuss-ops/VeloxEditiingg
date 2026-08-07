@@ -28,7 +28,7 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 
 	// Build typed Heartbeat proto directly instead of map payload.
 	hb := &pb.Heartbeat{
-		WorkerName:      workerDisplayName(func() string { h, _ := os.Hostname(); return h }()),
+		WorkerName:      w.workerName(func() string { h, _ := os.Hostname(); return h }()),
 		WorkerStatus:    string(status),
 		Status:          string(status),
 		CodeVersion:     w.version,
