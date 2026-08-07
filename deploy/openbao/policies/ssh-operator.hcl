@@ -7,7 +7,9 @@
 #
 # Consumatore: script deploy/openbao/scripts/sign-operator-ssh.sh con un token
 # AppRole `ssh-operator` (crea con ./scripts/provision-approle.sh --principal
-# ssh-operator) oppure, in attesa, token admin/root (admin.hcl copre ssh/*).
+# ssh-operator). Nessun token admin/root è un percorso operativo supportato
+# per la firma dei certificati; lo script verifica la policy del token via
+# auth/token/lookup-self prima di firmare.
 #
 # NB: la firma NON è un segreto rivelandolo: il cert firmato ha TTL breve
 # (default 30m) e principals limitati (velox-admin/velox-deploy) — la chiave

@@ -326,6 +326,12 @@ firma i certificati degli operatori (TTL **breve**, default 30m, principals
 
 ```bash
 ./scripts/provision-ssh-ca.sh            # enable engine + CA (idempotente) + role + export pubkey
+# Il token deve provenire dall'AppRole ssh-operator; lo script non usa root-token.
+BAO_TOKEN="$(curl -fsS -k -X POST -H 'Content-Type: application/json' \
+  --data "$(jq -n --arg r "$(cat ../../.velox/openbao/approle/ssh-operator/role-id)" \
+    --arg s "$(cat ../../.velox/openbao/approle/ssh-operator/secret-id)" \
+    '{role_id:$r,secret_id:$s}')" \
+  https://127.0.0.1:8200/v1/auth/approle/login | jq -r '.auth.client_token')" \
 ./scripts/sign-operator-ssh.sh --pubkey-file ~/.ssh/velox.pub      # cert 30m
 ./scripts/verify-ssh-ca.sh               # 11 check (firma di prova + negativo fail-closed)
 ```
@@ -339,7 +345,8 @@ firma i certificati degli operatori (TTL **breve**, default 30m, principals
   `ssh/roles/*`) — AppRole dedicato con `./scripts/provision-approle.sh
   --principal ssh-operator` e verifica in `verify-approle.sh`.
 - `scripts/ci/test-openbao-ssh-ca.sh`: sintassi + check strutturali (sempre) +
-  smoke live completo (se OpenBao è raggiungibile).
+  smoke live completo con login AppRole `ssh-operator` e firma (se OpenBao è
+  raggiungibile).
 
 ## 12. Backup delle chiavi (FATTO SUBITO)
 

@@ -31,7 +31,7 @@
 | `worker-velox-worker-523925eb` | `worker-velox-worker-523925eb` | `velox/production/workers/velox-worker-523925eb/*` | `read, list` | 1h (max 24h) | idem | worker VPS 51.222.204.158 |
 | `master` | `master` | `velox/production/master/*` **+** `velox/production/workers/*` **+** `velox/production/services/registry/*` | `read, list` | 1h (max 24h) | `.velox/openbao/approle/master/{role-id,secret-id}` | deploy master (env, gRPC, fleet, registry pull) |
 | `admin` | `admin` | `velox/*` + `auth/approle/*` + `sys/policies/acl/*` + `ssh/*` + `sys/health` | `create, read, update, delete, list` (velox/approle/policies/ssh); `read` (health) | 1h (max 24h) | `.velox/openbao/approle/admin/{role-id,secret-id}` | operatore (provisioning, rotazione, gestione CA SSH) |
-| `ssh-operator` *(opzionale)* | `ssh-operator` | `ssh/sign/*` (update) + `ssh/config/ca` + `ssh/roles/*` (read) + `sys/health` | `update` (sign); `read` (ca/roles/health) | 1h (max 24h) | `.velox/openbao/approle/ssh-operator/{role-id,secret-id}` | firma certificati SSH operatore (SSH CA, fase 7) |
+| `ssh-operator` | `ssh-operator` | `ssh/sign/*` (update) + `ssh/config/ca` + `ssh/roles/*` (read) + `sys/health` | `update` (sign); `read` (ca/roles/health) | 1h (max 24h) | `.velox/openbao/approle/ssh-operator/{role-id,secret-id}` | unico percorso operativo per firma certificati SSH (fase 7) |
 
 > Fleet canonica: `scripts/ops/align-worker-digest.sh` (righe 80-83) e
 > `scripts/ops/runtime-cert.sh` (righe 46-49). Worker aggiuntivi si registrano con
@@ -39,11 +39,10 @@
 > `./scripts/provision-approle.sh --workers "id1 id2"`. In entrambi gli script
 > `--workers` **sostituisce** la fleet di default (i role/policy dei worker già
 > registrati restano sul server, intatti); `provision-approle.sh` include sempre
-> `master` e `admin` a meno di `--principal` esplicito. `ssh-operator` (firma
-> cert SSH, vedi `docs/openbao-ssh-ca.md`) è un'identità OPZIONALE: si crea con
-> `./scripts/provision-approle.sh --principal ssh-operator` e si verifica con
-> `./scripts/verify-approle.sh --principal ssh-operator` — non è inclusa di
-> default (la firma umana usa di norma admin/root).
+> `master` e `admin` a meno di `--principal` esplicito. `ssh-operator` è la
+> identità dedicata e l'unico percorso operativo per la firma dei certificati:
+> va creata con `./scripts/provision-approle.sh --principal ssh-operator` e
+> verificata con `./scripts/verify-approle.sh --principal ssh-operator`.
 
 ## 3. Gerarchia dei secret vista dalle identità
 

@@ -24,19 +24,18 @@
 #   --role         role SSH (default velox-operator)
 #   --out          file di output (default stdout; se file -> 0600)
 #
-# Auth: BAO_TOKEN (es. token AppRole `ssh-operator`, policy ssh-operator.hcl)
-# o root token dallo state dir. MAI logga la chiave privata (non la vede) e
-# il cert firmato va a stdout/file — non nei log.
+# Auth: BAO_TOKEN ottenuto esclusivamente dal token AppRole `ssh-operator`
+# (policy ssh-operator.hcl). Il token non viene mai creato da uno state file.
+# MAI logga la chiave privata (non la vede) e il cert firmato va a stdout/file
+# — non nei log.
 #
 # Nota sicurezza: il role limita i principals a velox-admin/velox-deploy —
 # principals non consentiti vengono rifiutati dal server (403).
 
 set -euo pipefail
 
-OPENBAO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-STATE_DIR="${OPENBAO_STATE_DIR:-"$OPENBAO_DIR/../../.velox/openbao"}"
+STATE_DIR="${OPENBAO_STATE_DIR:-"$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.velox/openbao" && pwd)"}"
 ADDR="${BAO_ADDR:-https://127.0.0.1:8200}"
-TOKEN_FILE="$STATE_DIR/root-token"
 
 ROLE="${OPENBAO_SSH_ROLE:-velox-operator}"
 PUBKEY_FILE=""
@@ -93,19 +92,30 @@ for p in "${wanted[@]}"; do
 done
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
-if [[ -z "${BAO_TOKEN:-}" ]]; then
-    [[ -f "$TOKEN_FILE" ]] || {
-        echo "FATAL: no BAO_TOKEN and $TOKEN_FILE missing — usa un token AppRole ssh-operator o bootstrap-init.sh" >&2
-        exit 1
-    }
-    BAO_TOKEN="$(cat "$TOKEN_FILE")"
-    export BAO_TOKEN
-fi
+# Il chiamante deve fornire BAO_TOKEN ottenuto dal login AppRole
+# `ssh-operator`; nessun root-token locale è un fallback accettabile.
+[[ -n "${BAO_TOKEN:-}" ]] || {
+    echo "FATAL: BAO_TOKEN required — login with the ssh-operator AppRole first" >&2
+    exit 1
+}
 
 curl_tls=(-k)
 if [[ -f "$STATE_DIR/tls/server.crt" ]]; then
     curl_tls=(--cacert "$STATE_DIR/tls/server.crt")
 fi
+
+# Fail-closed: il token deve portare la policy dedicata. Questo impedisce che
+# un root/admin token esplicitamente esportato in BAO_TOKEN diventi un percorso
+# operativo alternativo per la firma.
+lookup="$(curl -fsS "${curl_tls[@]}" -H "X-Vault-Token: $BAO_TOKEN" \
+    "$ADDR/v1/auth/token/lookup-self" 2>/dev/null || true)"
+echo "$lookup" | jq -e '
+    (.data.policies | index("ssh-operator") != null)
+    and (.data.meta.role_name == "ssh-operator")
+' >/dev/null 2>&1 || {
+    echo "FATAL: BAO_TOKEN is not an ssh-operator AppRole token" >&2
+    exit 1
+}
 
 # ── Firma ────────────────────────────────────────────────────────────────────
 body="$(jq -n --arg k "$pubkey" --arg p "$PRINCIPALS" --arg t "$TTL" \

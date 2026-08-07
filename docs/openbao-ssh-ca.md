@@ -71,8 +71,9 @@ cd deploy/openbao
   (convenzione OpenSSH: usato automaticamente).
 - Il nome del file di output NON deve contenere la chiave privata: il cert è
   pubblico (firmato), la chiave privata non lascia mai la workstation.
-- Auth per la firma: `BAO_TOKEN` (es. token AppRole `ssh-operator`, vedi §5) o
-  root token dallo state dir (fallback bootstrap).
+- Auth per la firma: esclusivamente `BAO_TOKEN` ottenuto tramite login
+  AppRole `ssh-operator` (vedi §5). Il root token di bootstrap non è accettato
+  dallo script operativo.
 
 ## 4. TrustedUserCAKeys sui nodi (bootstrap-ssh.yml)
 
@@ -112,9 +113,19 @@ cd deploy/openbao
 ./scripts/verify-approle.sh --principal ssh-operator             # 6 check fail-closed
 ```
 
-L'AppRole `ssh-operator` consente la firma SENZA il root token:
-`BAO_TOKEN=$(bao write -field=token auth/approle/login role_id=... secret_id=...) \
- ./scripts/sign-operator-ssh.sh --pubkey-file ~/.ssh/velox.pub`
+L'AppRole `ssh-operator` è l'unico percorso operativo per la firma:
+
+```bash
+cd deploy/openbao
+BAO_TOKEN=$(bao write -field=token auth/approle/login \
+  role_id="$(cat ../../.velox/openbao/approle/ssh-operator/role-id)" \
+  secret_id="$(cat ../../.velox/openbao/approle/ssh-operator/secret-id)") \
+  ./scripts/sign-operator-ssh.sh --pubkey-file ~/.ssh/velox.pub
+```
+
+`sign-operator-ssh.sh` rifiuta l'esecuzione se `BAO_TOKEN` non è presente,
+verifica che il token abbia la policy `ssh-operator` e non legge più alcun root
+token locale. Un token admin/root passato manualmente viene quindi rifiutato.
 
 ## 6. Dismissione password / chiavi statiche
 
