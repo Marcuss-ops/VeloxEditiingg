@@ -244,12 +244,16 @@ func (s *ReadySnapshot) DetailMap() map[string]interface{} {
 // Process-global ReadyState (one writer per concern, atomic swap)
 // ------------------------------------------------------------------
 
-var globalReady = NewReadyState()
+var globalReady atomic.Pointer[ReadyState]
+
+func init() {
+	globalReady.Store(NewReadyState())
+}
 
 // GlobalReady returns the process-global ReadyState. The HTTP handler
 // (internal/telemetry/health.go) reads from this; the composition root
 // and the worker run loop write to this through the helpers below.
-func GlobalReady() *ReadyState { return globalReady }
+func GlobalReady() *ReadyState { return globalReady.Load() }
 
 // MarkRegistered flips the registered flag (called from
 // worker.go on ConnReady / ConnDisconnected transitions).
@@ -358,5 +362,5 @@ func SetDiskState(freeBytes, thresholdBytes int64) {
 // ResetForTest wipes the global state. Tests in the same binary call
 // this between RUN/PASS cases. Production code MUST NOT call this.
 func ResetForTest() {
-	globalReady = NewReadyState()
+	globalReady.Store(NewReadyState())
 }
