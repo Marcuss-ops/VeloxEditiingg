@@ -102,9 +102,7 @@ ADMIN_TOKEN=$(resolve_admin_token) || exit 2
 M2M_BEARER=""
 PROVISIONED_CLIENT_ID=""
 STEPS_JSON=""
-MASTER_LOG_PATH_GUESS=""
 PASS_FAIL_STEP=0   # first failing step number; 0 = none yet
-WORKER_LOG_PATH="${VELOX_WORKER_LOG_PATH:-}"  # operator-overridable for step 5/8
 
 on_exit_cleanup() {
   local rc=$?
@@ -176,9 +174,7 @@ fi
 # ─── Step 3 — scene.composite.v1@1 advertised ──────────────────────────────
 EXECUTORS=$(printf '%s' "$TARGET_RECORD" | jq -r '.executors[]? | "\(.id)@\(.version)"' 2>/dev/null \
   || printf '')
-SCENE_V1_FOUND=false
 if printf '%s' "$EXECUTORS" | grep -qx 'scene.composite.v1@1'; then
-  SCENE_V1_FOUND=true
   append_step 3 "scene.composite.v1@1" "PASS" "scene.composite.v1@1 advertised"
 else
   append_step 3 "scene.composite.v1@1" "FAIL" "advertised=[$(printf '%s' "$EXECUTORS" | tr '\n' ',' | sed 's/,$//')]"
@@ -189,7 +185,7 @@ fi
 # so the per-step JSON dump is the canonical post-mortem.
 if (( PASS_FAIL_STEP > 0 )); then
   log_error "aborting before submit: worker not in required state (step $PASS_FAIL_STEP failed)"
-  write_pass_criteria_json SUCCEEDED=false
+  write_pass_criteria_json
   exit $((10 + PASS_FAIL_STEP))
 fi
 
@@ -241,13 +237,11 @@ ARTIFACT_URL=""
 ARTIFACT_SIZE_BYTES=0
 DOWNLOAD_MS=""
 RENDER_MS_ENGINE=""
-RUNTIME_RUNNING_SEEN=false
 LEASE_SEEN=false
 ACCEPTED_SEEN=false
 DOWNLOAD_SEEN=false
 RUNNING_SEEN=false
 RENDERING_SEEN=false
-SUCCEEDED_SEEN=false
 
 # Detect log source once.
 LOG_SRC=""
@@ -288,7 +282,7 @@ while (( elapsed < PASS_POLL_TIMEOUT_S )); do
   last_body="$RESP_BODY"
   sv=$(printf '%s' "$RESP_BODY" | jq -er '.status // empty' 2>/dev/null || true)
   case "$sv" in
-    SUCCEEDED) SUCCEEDED_SEEN=true; terminal_state="$sv"; break ;;
+    SUCCEEDED) terminal_state="$sv"; break ;;
     FAILED|CANCELLED)
       terminal_state="$sv"
       log_error "terminal-fail state $sv after ${elapsed}s"
@@ -338,7 +332,6 @@ while (( elapsed < PASS_POLL_TIMEOUT_S )); do
     line=$(scrape_log_marker "$JOB_ID" 'runtime_status.*RUNNING|state.*RUNNING' || true)
     if [[ -n "$line" ]]; then
       RUNNING_SEEN=true
-      RUNTIME_RUNNING_SEEN=true
       append_step 7 "RUNNING" "PASS" "runtime_status=RUNNING"
     fi
   fi
@@ -364,7 +357,7 @@ if [[ "$terminal_state" != "SUCCEEDED" ]]; then
     [[ "$RUNNING_SEEN"    == "true" ]] || append_step 7 "RUNNING"          "FAIL" "TIMEOUT — no marker in ${PASS_POLL_TIMEOUT_S}s"
     [[ "$RENDERING_SEEN"  == "true" ]] || append_step 8 "rendering"        "FAIL" "TIMEOUT — no marker in ${PASS_POLL_TIMEOUT_S}s"
   fi
-  write_pass_criteria_json SUCCEEDED=false
+  write_pass_criteria_json
   exit $((10 + ${PASS_FAIL_STEP:-0}))
 fi
 log_info "job SUCCEEDED after ${elapsed}s"
@@ -413,15 +406,12 @@ fi
 
 # ─── Atomic JSON report + binary verdict ───────────────────────────────────
 write_pass_criteria_json() {
-  local succeeded="$1"
-  local now_iso worker_rc verdict
+  local now_iso verdict
   now_iso=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
   if (( PASS_FAIL_STEP == 0 )); then
     verdict="PASS"
-    worker_rc=0
   else
     verdict="FAIL"
-    worker_rc=$((10 + PASS_FAIL_STEP))
   fi
   ensure_dir "${PASS_OUT_ROOT}/${TARGET_WORKER_ID}"
   local out_file="${PASS_OUT_ROOT}/${TARGET_WORKER_ID}/pass_criteria.json"
@@ -455,7 +445,7 @@ JSON
   printf '%s\n' "VERDICT=${verdict}"
   printf '%s\n' "FIRST_FAILING_STEP=${PASS_FAIL_STEP:-0}"
 }
-write_pass_criteria_json SUCCEEDED=true
+write_pass_criteria_json
 
 if (( PASS_FAIL_STEP == 0 )); then
   printf '%s\n' "PASS: ${TARGET_WORKER_ID} — all 10 criteria satisfied"

@@ -177,8 +177,6 @@ log_info "DB_PATH=$DB_PATH (readable)"
 TMP_HDRS=""
 TMP_BODY=""
 TMP_OUT=""
-TARGET_PID=""
-INV_DISTINCT_OK=0
 INV_REAPER_OK=0
 INV_NO_DOUBLE_ARTIFACT_OK=0
 INV_ATTEMPT_HISTORY_OK=0
@@ -548,7 +546,6 @@ ensure_dir "$OUT_DIR"
 OUT_FILE="${REPORT_JSON:-${OUT_DIR}/recovery.json}"
 TMP_OUT=$(mktemp "${OUT_DIR}/recovery-XXXXXX.json")
 NOW_ISO=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
-INV_DISTINCT_OK=1  # single-target chaos ⇒ trivially distinct from backup
 cat > "$TMP_OUT" <<JSON
 {
   "schema": "tests/worker-cert/recovery@1",

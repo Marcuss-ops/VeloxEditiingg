@@ -149,6 +149,7 @@ fi
 VELOX_MASTER_URL="$(printf '%s' "$VELOX_MASTER_URL" | sed 's|/*$||')"
 
 log_info "fleet_distribute: jobs=$FLEET_JOB_COUNT master=$VELOX_MASTER_URL dest=$DESTINATION_ID"
+log_info "bearer_env=$BEARER_ENV (fleet requests use the freshly minted M2M bearer)"
 log_info "tunables: cooldown_s=$COOLDOWN_S poll_timeout_s=$POLL_TIMEOUT_S idle_sleep_ms=$IDLE_SLEEP_MS"
 
 # ─── Required binaries ─────────────────────────────────────────────────────
@@ -198,20 +199,17 @@ ALL_WORKER_IDS=()
 declare -A WORKER_SLOTS=()
 declare -A WORKER_STATUS=()
 declare -A WORKER_SESSION=()
-declare -A WORKER_CURRENT_TASK=()
 
 while IFS= read -r row; do
   wid=$(printf '%s' "$row" | jq -er '.worker_id // .id // empty' 2>/dev/null || true)
   [[ -z "$wid" ]] && continue
   sts=$(printf '%s' "$row" | jq -r '.status             // "(unset)"')
   sas=$(printf '%s' "$row" | jq -r '.session_active     // false')
-  cti=$(printf '%s' "$row" | jq -r '.current_task_id    // .currentJobId // "(unset)"')
   tsl=$(printf '%s' "$row" | jq -r '.task_slots         // .max_active_jobs // 1')
   if ! [[ "$tsl" =~ ^[0-9]+$ ]]; then tsl="1"; fi
   ALL_WORKER_IDS+=("$wid")
   WORKER_STATUS["$wid"]="$sts"
   WORKER_SESSION["$wid"]="$sas"
-  WORKER_CURRENT_TASK["$wid"]="$cti"
   WORKER_SLOTS["$wid"]="$tsl"
 done < <(printf '%s' "$WORKERS_JSON" | jq -c '.[]?' 2>/dev/null \
               || printf '%s' "$WORKERS_JSON" | jq -c '.workers[]?')
@@ -257,14 +255,9 @@ declare -a JOB_ARTIFACT_URLS=()
 declare -a JOB_ARTIFACT_SIZES=()
 declare -a JOB_RENDER_TIMES=()
 declare -a JOB_POLL_PIDS=()
-declare -a JOB_POLL_RC=()
 
 ASSETS_FILE="${SCRIPT_DIR}/fixtures/assets.json"
 [[ -r "$ASSETS_FILE" ]] || { log_error "fixtures not readable: $ASSETS_FILE"; exit 2; }
-ASSET_VO=$(jq -er '.voiceover[0].asset_id' "$ASSETS_FILE")
-ASSET_CLIP_A=$(jq -er '.clips[0].asset_id'     "$ASSETS_FILE")
-ASSET_CLIP_B=$(jq -er '.clips[1].asset_id'     "$ASSETS_FILE")
-ASSET_SUB=$(jq -er '.subtitles[0].asset_id'   "$ASSETS_FILE")
 
 IDLE_SLEEP_S=$(awk -v ms="$IDLE_SLEEP_MS" 'BEGIN { printf "%.3f", ms/1000 }')
 
@@ -403,7 +396,6 @@ done
 # authoritative source is the master log; if absent, we degrade to no-op.
 LEASE_SCRAPE_OK=0
 declare -A TASK_TO_LEASE=()
-declare -A TASK_TO_WORKER=()
 declare -A WORKER_TO_LEASES=()
 if [[ -n "$VELOX_MASTER_LOG_PATH" && -r "$VELOX_MASTER_LOG_PATH" ]]; then
   log_info "scraping master log: $VELOX_MASTER_LOG_PATH"
@@ -429,7 +421,6 @@ if [[ -n "$VELOX_MASTER_LOG_PATH" && -r "$VELOX_MASTER_LOG_PATH" ]]; then
   while IFS=$'\t' read -r worker_id task_id lease_id; do
     [[ -z "$task_id" || -z "$worker_id" || -z "$lease_id" ]] && continue
     TASK_TO_LEASE["$task_id"]="${TASK_TO_LEASE[$task_id]:-}$lease_id"
-    TASK_TO_WORKER["$task_id"]="$worker_id"
     WORKER_TO_LEASES["$worker_id"]="${WORKER_TO_LEASES[$worker_id]:-}$lease_id"
     JOB_TASK_IDS+=("$task_id")
     JOB_LEASES+=("$lease_id")
@@ -548,15 +539,12 @@ else
   # pointing to a task NOT in our N are out of scope (legitimate other work).
   declare -A WORKER_BY_TASK=()
   declare -A WORKER_AFTER_STATUS=()
-  declare -A WORKER_AFTER_SAS=()
   while IFS= read -r row; do
     wid=$(printf '%s' "$row" | jq -er '.worker_id // .id // empty' 2>/dev/null || true)
     [[ -z "$wid" ]] && continue
     sts=$(printf '%s' "$row" | jq -r '.status             // "(unset)"')
-    sas=$(printf '%s' "$row" | jq -r '.session_active     // false')
     cti=$(printf '%s' "$row" | jq -er '.current_task_id // .currentJobId // empty' 2>/dev/null || true)
     WORKER_AFTER_STATUS["$wid"]="$sts"
-    WORKER_AFTER_SAS["$wid"]="$sas"
     [[ -n "$cti" ]] && WORKER_BY_TASK["$cti"]="$wid"
   done < <(printf '%s' "$WORKERS_AFTER_JSON" | jq -c '.[]?' 2>/dev/null \
               || printf '%s' "$WORKERS_AFTER_JSON" | jq -c '.workers[]?')

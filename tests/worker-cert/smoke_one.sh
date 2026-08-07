@@ -122,6 +122,7 @@ fi
 log_info "M2M provisioned: client_id=$PROVISIONED_CLIENT_ID"
 
 # ─── Worker list pre-flight ────────────────────────────────────────────────
+# shellcheck disable=SC2034 # populated by smoke_workers_list in sourced pluck.sh
 WORKERS_JSON=""
 if ! smoke_workers_list "$ADMIN_TOKEN" "$VELOX_MASTER_URL"; then
   log_error "could not list workers"; exit 3

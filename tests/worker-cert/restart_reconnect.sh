@@ -214,6 +214,7 @@ artifact_probe() {
 }
 
 # ─── Pre-flight: target CONNECTED + session_active=true ────────────────────
+# shellcheck disable=SC2034 # populated by smoke_workers_list in sourced pluck.sh
 WORKERS_JSON=""
 if ! smoke_workers_list "$M2M_BEARER" "$VELOX_MASTER_URL"; then
   log_error "could not list workers"; exit 3
