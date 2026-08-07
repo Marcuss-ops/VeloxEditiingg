@@ -178,9 +178,6 @@ func ResolveConfig(opts ConfigOptions) (*config.WorkerConfig, string, error) {
 	if cfg.ProtocolVersion == "" {
 		cfg.ProtocolVersion = "v3"
 	}
-	if workerSecret := os.Getenv("VELOX_WORKER_SECRET"); workerSecret != "" {
-		cfg.WorkerSecret = workerSecret
-	}
 	if engineVersion := os.Getenv("VELOX_ENGINE_VERSION"); engineVersion != "" {
 		cfg.EngineVersion = engineVersion
 	}

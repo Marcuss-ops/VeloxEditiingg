@@ -52,6 +52,72 @@ func TestEnvTruthy(t *testing.T) {
 // rule "TLS AND insecure cannot be active simultaneously" forbids
 // setting BOTH paths from env at once — we cover each path in its
 // own t.Run sub-test with a non-conflicting env footprint.
+func TestWorkerCredentialFileFallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	credentialFile := filepath.Join(tmpDir, "worker_credential")
+	if err := os.WriteFile(credentialFile, []byte("file-secret\n"), 0600); err != nil {
+		t.Fatalf("write credential file: %v", err)
+	}
+
+	t.Setenv(EnvWorkerCredentialFile, credentialFile)
+	t.Setenv("VELOX_WORKER_SECRET", "")
+	cfg := &WorkerConfig{}
+	if err := applyEnvOverrides(cfg); err != nil {
+		t.Fatalf("applyEnvOverrides: %v", err)
+	}
+	if cfg.WorkerSecret != "file-secret" {
+		t.Fatalf("WorkerSecret from credential file=%q, want file-secret", cfg.WorkerSecret)
+	}
+
+	t.Setenv("VELOX_WORKER_SECRET", "explicit-secret")
+	cfg = &WorkerConfig{}
+	if err := applyEnvOverrides(cfg); err != nil {
+		t.Fatalf("applyEnvOverrides: %v", err)
+	}
+	if cfg.WorkerSecret != "explicit-secret" {
+		t.Fatalf("explicit WorkerSecret=%q, want explicit-secret", cfg.WorkerSecret)
+	}
+}
+
+func TestWorkerCredentialFileMissingFailsClosed(t *testing.T) {
+	t.Setenv("VELOX_WORKER_SECRET", "")
+	missing := filepath.Join(t.TempDir(), "missing")
+	t.Setenv(EnvWorkerCredentialFile, missing)
+	cfg := &WorkerConfig{}
+	if err := applyEnvOverrides(cfg); err == nil {
+		t.Fatal("missing credential file should fail configuration loading")
+	}
+	if cfg.WorkerSecret != "" {
+		t.Fatalf("missing credential file populated WorkerSecret=%q", cfg.WorkerSecret)
+	}
+
+	configPath := filepath.Join(t.TempDir(), "worker.json")
+	if err := os.WriteFile(configPath, []byte(`{"worker_id":"test-worker-001","work_dir":"/opt/velox","control_grpc_url":"localhost:8443"}`), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := LoadConfig(configPath); err == nil {
+		t.Fatal("LoadConfig should propagate a missing credential-file error")
+	}
+
+	emptyPath := filepath.Join(t.TempDir(), "empty")
+	if err := os.WriteFile(emptyPath, []byte("\n"), 0600); err != nil {
+		t.Fatalf("write empty credential: %v", err)
+	}
+	t.Setenv(EnvWorkerCredentialFile, emptyPath)
+	if _, err := LoadConfig(configPath); err == nil {
+		t.Fatal("LoadConfig should reject an empty credential file")
+	}
+
+	dirPath := filepath.Join(t.TempDir(), "credential-dir")
+	if err := os.Mkdir(dirPath, 0700); err != nil {
+		t.Fatalf("make credential directory: %v", err)
+	}
+	t.Setenv(EnvWorkerCredentialFile, dirPath)
+	if _, err := LoadConfig(configPath); err == nil {
+		t.Fatal("LoadConfig should reject an unreadable credential path")
+	}
+}
+
 func TestEnvOverrides(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "envoverride.json")

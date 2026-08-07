@@ -44,7 +44,7 @@ func DefaultConfig(workDir string) *WorkerConfig {
 		MaxActiveJobs:   1,    // 1 main job per VPS
 		HealthPort:      8081, // Health HTTP endpoint for Docker HEALTHCHECK
 		PrometheusPort:  9090, // Prometheus metrics endpoint
-		WorkerSecret:    "",   // Set via VELOX_WORKER_SECRET env var
+		WorkerSecret:    "",   // Set via EnvWorkerSecret or credential-file fallback
 	}
 }
 

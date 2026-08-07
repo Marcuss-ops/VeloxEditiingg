@@ -183,6 +183,9 @@
     if [ -f "$target" ]; then
       grep -m1 -E '^VELOX_WORKER_SECRET=[^[:space:]]' "$target" || true
     fi
+    if [ -s /etc/velox-worker/secrets/worker_credential ]; then
+      printf 'VELOX_WORKER_CREDENTIAL_FILE=/run/velox/secrets/worker_credential\n'
+    fi
     exit 0
   args:
     executable: /bin/bash
@@ -231,9 +234,11 @@
       {% endif %}
   no_log: true
 
-- name: CanonicalRuntime | Check canonical env file carries a non-empty worker secret
+- name: CanonicalRuntime | Check canonical env or credential file carries a non-empty worker secret
   ansible.builtin.shell: |
-    grep -E '^VELOX_WORKER_SECRET=[^[:space:]]' "{{ velox_worker_env_path }}" >/dev/null 2>&1
+    set -o pipefail
+    grep -E '^VELOX_WORKER_SECRET=[^[:space:]]' "{{ velox_worker_env_path }}" >/dev/null 2>&1 \
+      || test -s /etc/velox-worker/secrets/worker_credential
   args:
     executable: /bin/bash
   register: _env_has_secret
@@ -278,12 +283,12 @@
   ansible.builtin.fail:
     msg: >-
       Worker {{ velox_worker_identity }} is registered on the master
-      (stored credential) but {{ velox_worker_env_path }} does NOT carry a
-      non-empty VELOX_WORKER_SECRET. The worker would restart straight into
-      `credential required (existing credential stored)` and never register.
-      Provide the secret via per-host `worker_secret` (vault-backed) or a
-      legacy env file, then re-run. Aborting BEFORE restarting the canonical
-      unit.
+      (stored credential) but neither {{ velox_worker_env_path }} carries a
+      non-empty VELOX_WORKER_SECRET nor the canonical worker credential file
+      exists. The worker would restart straight into `credential required
+      (existing credential stored)` and never register. Provide the secret via
+      per-host `worker_secret` (vault-backed) or the credential file, then
+      re-run. Aborting BEFORE restarting the canonical unit.
   when:
     - _worker_registered_on_master | bool
     - (_env_has_secret.rc | default(1)) != 0
@@ -292,10 +297,11 @@
   ansible.builtin.fail:
     msg: >-
       Worker {{ velox_worker_identity }} is NOT yet registered on the master
-      and {{ velox_worker_env_path }} does NOT carry a non-empty
-      VELOX_WORKER_SECRET. On a credential-enforcing master a worker with no
-      secret cannot register at all (`credential required`). Provide the
-      secret via per-host `worker_secret` (vault-backed), then re-run.
+      and neither {{ velox_worker_env_path }} carries a non-empty
+      VELOX_WORKER_SECRET nor the canonical credential file exists. On a
+      credential-enforcing master a worker with no secret cannot register at
+      all (`credential required`). Provide the secret via per-host
+      `worker_secret` (vault-backed) or the credential file, then re-run.
       Aborting BEFORE restarting the canonical unit.
   when:
     - not (_worker_registered_on_master | bool)
@@ -305,8 +311,9 @@
 - name: CanonicalRuntime | Fail when secret is missing and master cannot be reached
   ansible.builtin.fail:
     msg: >-
-      {{ velox_worker_env_path }} does NOT carry a non-empty VELOX_WORKER_SECRET
-      and the master registration list is unreachable
+      neither {{ velox_worker_env_path }} carries a non-empty
+      VELOX_WORKER_SECRET nor the canonical credential file exists, and the
+      master registration list is unreachable
       (status={{ _master_workers_gate.status | default('error') }}). Cannot
       certify this worker is safe to restart. Provide the secret via per-host
       `worker_secret` (vault-backed), then re-run.

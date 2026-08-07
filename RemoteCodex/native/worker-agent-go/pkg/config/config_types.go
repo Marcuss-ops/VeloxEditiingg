@@ -88,7 +88,9 @@ type WorkerConfig struct {
 	TLSCAFile string `json:"tls_ca_file,omitempty"`
 
 	// WorkerSecret is the pre-shared secret used to derive the persistent credential hash.
-	// Set via VELOX_WORKER_SECRET env var. Combined with WorkerID to produce SHA-256 credential.
+	// Set via VELOX_WORKER_SECRET or the mounted
+	// VELOX_WORKER_CREDENTIAL_FILE fallback. Combined with WorkerID to
+	// produce the SHA-256 credential hash.
 	WorkerSecret string `json:"-"`
 
 	// AllowInsecureGRPC enables unencrypted gRPC transport. Only valid in

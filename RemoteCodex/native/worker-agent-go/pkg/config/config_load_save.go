@@ -21,7 +21,7 @@ import (
 //  1. JSON unmarshal from `path`
 //  2. applyDefaults() — safe-by-default fallback values
 //  3. applyEnvOverrides() — VELOX_GRPC_TLS_* / VELOX_ALLOW_INSECURE_GRPC_DEV /
-//     VELOX_ENV override the JSON values
+//     VELOX_ENV and the worker credential env/file sources override JSON
 //
 // CLI-flag overrides (highest precedence) are applied by the caller
 // (cmd/velox-worker-agent/main.go) AFTER this returns and BEFORE Validate().
@@ -41,7 +41,9 @@ func LoadConfig(path string) (*WorkerConfig, error) {
 	// PR 1: env vars override JSON-loaded values. CLI flags are still
 	// applied by main.go AFTER this returns — they remain the highest
 	// precedence layer.
-	applyEnvOverrides(&config)
+	if err := applyEnvOverrides(&config); err != nil {
+		return nil, fmt.Errorf("apply environment overrides: %w", err)
+	}
 
 	return &config, nil
 }

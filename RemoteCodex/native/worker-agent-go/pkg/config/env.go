@@ -11,6 +11,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -28,6 +29,12 @@ const (
 	EnvTLSCAFile = "VELOX_GRPC_TLS_CA_FILE"
 	// EnvAllowInsecureGRPCDev toggles plaintext gRPC for local dev only.
 	EnvAllowInsecureGRPCDev = "VELOX_ALLOW_INSECURE_GRPC_DEV"
+	// EnvWorkerSecret is the explicit raw worker secret and takes precedence
+	// over the mounted file fallback.
+	EnvWorkerSecret = "VELOX_WORKER_SECRET"
+	// EnvWorkerCredentialFile points at the migration-mounted raw worker
+	// secret. It is used only when EnvWorkerSecret is absent.
+	EnvWorkerCredentialFile = "VELOX_WORKER_CREDENTIAL_FILE"
 	// EnvMinDiskFreeMB overrides the readiness disk floor (RW-PROD-004 §3 A4).
 	// Operators set this per-host to match the actual scratch-disk size;
 	// the disk watcher in main.go downsamples MiB → bytes for ReadyState.
@@ -69,6 +76,8 @@ var EnvBindings = []string{
 	EnvTLSKeyFile,
 	EnvTLSCAFile,
 	EnvAllowInsecureGRPCDev,
+	EnvWorkerSecret,
+	EnvWorkerCredentialFile,
 	EnvMinDiskFreeMB,
 	EnvReadyzEndpoint,
 	EnvVideoEngineCppBin,
@@ -106,9 +115,9 @@ func envTruthy(v string) bool {
 // Order matters only w.r.t. each individual field — an env var always
 // overrides whatever the JSON had for that field. Cross-field consistency
 // is then enforced by Validate().
-func applyEnvOverrides(cfg *WorkerConfig) {
+func applyEnvOverrides(cfg *WorkerConfig) error {
 	if cfg == nil {
-		return
+		return nil
 	}
 	if v := os.Getenv(EnvEnvironment); v != "" {
 		cfg.Environment = v
@@ -124,6 +133,31 @@ func applyEnvOverrides(cfg *WorkerConfig) {
 	}
 	if v := os.Getenv(EnvAllowInsecureGRPCDev); v != "" {
 		cfg.AllowInsecureGRPC = envTruthy(v)
+	}
+	// VELOX_WORKER_SECRET is the canonical explicit source and wins over
+	// the mounted file. This is intentionally resolved in the same env
+	// layer as the file fallback so validation and registration observe the
+	// same credential.
+	if secret := strings.TrimSpace(os.Getenv(EnvWorkerSecret)); secret != "" {
+		cfg.WorkerSecret = secret
+	}
+	// During the worker-runtime migration, the resolver mounts the raw
+	// per-worker secret at this path. Use it only when the explicit env
+	// secret is absent. A missing/unreadable file leaves WorkerSecret empty;
+	// the existing registration gate then rejects the handshake rather than
+	// inventing a credential or silently authenticating insecurely.
+	if cfg.WorkerSecret == "" {
+		if path := strings.TrimSpace(os.Getenv(EnvWorkerCredentialFile)); path != "" {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return fmt.Errorf("read %s: %w", EnvWorkerCredentialFile, err)
+			}
+			secret := strings.TrimSpace(string(data))
+			if secret == "" {
+				return fmt.Errorf("%s points to an empty credential file", EnvWorkerCredentialFile)
+			}
+			cfg.WorkerSecret = secret
+		}
 	}
 	// RW-PROD-004 §3 A4: MinDiskFreeMB takes the env-var lane (per-host
 	// resource floor). The disk watcher applies cfg.MinDiskFreeMB to the
@@ -172,4 +206,5 @@ func applyEnvOverrides(cfg *WorkerConfig) {
 			cfg.AssetDownloadConcurrency = n
 		}
 	}
+	return nil
 }
