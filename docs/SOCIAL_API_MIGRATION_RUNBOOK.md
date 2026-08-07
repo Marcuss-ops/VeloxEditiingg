@@ -38,7 +38,7 @@ four-step migration chain:
 
 | Migration | What it does | Forward-only? |
 |---|---|---|
-| `090_drop_youtube_domain.sql` (sqlite) / `010_drop_youtube_domain.sql` (postgres) | DROPs all 10 `youtube_*` tables + the 2 historical `youtube_*` columns on `calendar_events` | YES |
+| `090_drop_youtube_domain.sql` (sqlite) / `023_drop_youtube_domain.sql` (postgres) | DROPs all 10 `youtube_*` tables + the 2 historical `youtube_*` columns on `calendar_events` | YES |
 | `091_opaque_destination.sql` | DROPs `account_id` / `channel_id` / `language` from `delivery_destinations`; ADDs `social_destination_id TEXT` (nullable, fail-closed) | YES |
 | `092_rename_social_to_external_destination_id.sql` | ADDs `external_destination_id TEXT`; `UPDATE SET external_destination_id = COALESCE(social_destination_id, '')`; DROPs `social_destination_id` | YES |
 | `093_residuo4_closure_marker.sql` | Idempotent `json_insert` of `$.residuo4_closed_at` ISO-8601 string into `configuration_json` for every row whose JSON is well-formed | YES (idempotent) |

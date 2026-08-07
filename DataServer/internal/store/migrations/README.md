@@ -49,7 +49,7 @@ migration(s) listed below.
 | Dialect  | Drop |
 | -------- | ---- |
 | SQLite   | `sqlite/090_drop_youtube_domain.sql` (+ `testdata/090_drop_youtube_domain.sql`) — drops `youtube_channels`, `youtube_groups`, `youtube_group_channels`, `youtube_oauth_tokens`, `youtube_tracked_niches`, plus YouTube metrics/cache tables, **and** the columns `calendar_events.youtube_group`, `calendar_events.youtube_links_json`. |
-| Postgres | `postgres/010_drop_youtube_domain.sql` (+ `testdata/010_drop_youtube_domain.sql`) — drops `youtube_videos`, `youtube_oauth_tokens`, `youtube_group_channels`, `youtube_groups`, `youtube_channels`. |
+| Postgres | `postgres/023_drop_youtube_domain.sql` — drops `youtube_videos`, `youtube_oauth_tokens`, `youtube_group_channels`, `youtube_groups`, `youtube_channels`. (Renumbered from the original `010_drop_youtube_domain.sql` on 2026-08-07: it collided with `postgres/010_drive.sql` on version 010 and the runner's duplicate-version discovery fails closed, making the drop unreachable.) |
 
 ## Historical migration versions 040/044
 
@@ -111,11 +111,11 @@ fresh database:
 1. CREATE YouTube tables (003, 011, 012 / postgres 009) — temporary,
    only live long enough to be dropped.
 2. Domain work continues to bring Velox forward (`...070..085..`).
-3. Step 90 (SQLite) / 10 (Postgres) drops the entire YouTube domain.
+3. Step 90 (SQLite) / 23 (Postgres) drops the entire YouTube domain.
 4. End state has **zero** YouTube tables or columns.
 
-For installs already past step 90 / 010 with old live YouTube tables,
-step 90 / 010 itself performs the cleanup. Older installs upgrading
+For installs already past step 90 / 023 with old live YouTube tables,
+step 90 / 023 itself performs the cleanup. Older installs upgrading
 must keep applying migrations in numerical order; the checksum gate
 ensures both old and new hosts converge to the same final schema.
 
