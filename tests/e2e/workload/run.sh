@@ -200,6 +200,13 @@ VELOX_DATA_DIR=$DATA_DIR
 VELOX_STAGING_DIR=$STAGING_DIR
 VELOX_STORAGE_DIR=$STORAGE_DIR
 VELOX_ADMIN_TOKEN=$ADMIN_TOKEN
+# Required by the typed artifact publication protocol (artifact.commit.v1):
+# without VELOX_COMMIT_HMAC_KEY the completion coordinator is disabled at
+# bootstrap, TaskOutputDeclared is rejected, and the worker waits forever
+# for an ArtifactUploadPlan (ARTIFACT_UPLOAD_PLAN_WAIT_FAILED after ~4min).
+# 64 hex chars = 32 raw bytes (validator minimum). Same value golden-e2e.sh
+# pins, so the workload run exercises the identical wire path.
+VELOX_COMMIT_HMAC_KEY=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff
 VELOX_ALLOWED_WORKERS=$WORKER_ID
 VELOX_CODE_VERSION=$VERSION
 VELOX_GRPC_ALLOW_INSECURE_DEV=true
