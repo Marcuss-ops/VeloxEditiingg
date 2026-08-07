@@ -438,14 +438,18 @@ probe_one_asset() {
 probe_group() {
   local group="$1"
   local n
-  n=$(jq -er --arg g "$group" ".$g | length" "$ASSETS_FILE" 2>/dev/null) || n="0"
+  n=$(jq -er --arg g "$group" '.[$g] | length' "$ASSETS_FILE" 2>/dev/null) || n="0"
   if (( n == 0 )); then
     log_warn "fixtures has no rows for $group"; return
   fi
   local i="0"
   while (( i < n )); do
     local aid
-    aid=$(jq -er --arg g "$group" --argjson i "$i" ".$g[$i].asset_id" "$ASSETS_FILE" 2>/dev/null) || {
+    aid=$(jq -er \
+      --arg g "$group" \
+      --argjson i "$i" \
+      '.[$g][$i].asset_id' \
+      "$ASSETS_FILE" 2>/dev/null) || {
       log_warn "fixtures[$group][$i] not parseable; skipping"; i=$((i+1)); continue; }
     probe_one_asset "$group" "$aid"
     i=$((i+1))
