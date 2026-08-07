@@ -101,6 +101,7 @@ def build_payload(
     now_epoch: int | None = None,
     scenes_count: int = 2,
     duration_per_scene: int = 3,
+    no_placement_pin: bool = False,
 ) -> dict:
     """Compose a SubmitJobRequest-shaped payload from canonical real assets.
 
@@ -152,7 +153,7 @@ def build_payload(
             },
         })
     idem_suffix = f"-{idempotency_key_suffix}" if idempotency_key_suffix else ""
-    return {
+    payload = {
         "idempotency_key": f"smoke-one-{worker_id}-{now_epoch}{idem_suffix}",
         "job_type": "clip.stock.v1",
         "template_id": "worker-cert.smoke",
@@ -160,7 +161,6 @@ def build_payload(
         "video_name": f"Real-asset smoke for {worker_id}@{now_epoch} (scenes={scenes_count})",
         "script_text": f"Real-asset worker certification for {worker_id}.",
         "output": {"width": 1280, "height": 720, "fps": 30, "format": "mp4"},
-        "placement_pin_worker_id": worker_id,
         "scenes": scenes,
         "delivery_plan": [
             {
@@ -170,6 +170,9 @@ def build_payload(
             }
         ],
     }
+    if not no_placement_pin:
+        payload["placement_pin_worker_id"] = worker_id
+    return payload
 
 
 def assert_canonical_shape(payload: dict) -> list[str]:
@@ -178,7 +181,7 @@ def assert_canonical_shape(payload: dict) -> list[str]:
     forbidden_top = ("voiceover_paths", "subtitle_tracks", "clip_link", "image_link", "project_id", "target_executor_id", "_audit")
     if any(key in payload for key in forbidden_top):
         hits.extend(f"$.{key}" for key in payload if key in forbidden_top)
-    required = ("idempotency_key", "job_type", "template_id", "template_version", "video_name", "scenes", "output", "delivery_plan", "placement_pin_worker_id")
+    required = ("idempotency_key", "job_type", "template_id", "template_version", "video_name", "scenes", "output", "delivery_plan")
     hits.extend(f"$.{key} (missing)" for key in required if key not in payload)
     if not isinstance(payload.get("job_type"), str) or not payload["job_type"].strip():
         hits.append("$.job_type (empty)")
@@ -246,6 +249,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         idempotency_key_suffix=args.idempotency_suffix,
         scenes_count=args.scenes_count,
         duration_per_scene=args.duration_per_scene,
+        no_placement_pin=args.no_placement_pin,
     )
     if args.strict:
         hits = assert_canonical_shape(payload) + assert_no_forbidden(payload)
@@ -288,10 +292,12 @@ def cmd_selftest(args: argparse.Namespace) -> int:
         idempotency_key_suffix=0,
         scenes_count=args.scenes_count,
         duration_per_scene=args.duration_per_scene,
+        no_placement_pin=args.no_placement_pin,
     )
     hits = assert_canonical_shape(payload) + assert_no_forbidden(payload)
     print(f"selftest: built payload with {len(payload.get('scenes'))} scene(s)", file=sys.stderr)
-    print(f"selftest: placement_pin_worker_id={payload['placement_pin_worker_id']}", file=sys.stderr)
+    pin = payload.get("placement_pin_worker_id", "<unpinned>")
+    print(f"selftest: placement_pin_worker_id={pin}", file=sys.stderr)
     print(
         f"selftest: scene assets={[{'clip': s['clip']['asset_id'], 'voiceover': s['voiceover']['asset_id']} for s in payload['scenes']]}",
         file=sys.stderr,
@@ -385,6 +391,13 @@ def main(argv: list[str] | None = None) -> int:
         help="run output against the forbidden-pattern validator (defensive — "
         "this script never emits those by construction, but a regression in "
         "the scene/voiceover composers would surface here)",
+    )
+    parser.add_argument(
+        "--no-placement-pin",
+        action="store_true",
+        help="omit placement_pin_worker_id from the payload so the master "
+        "schedules the job on any eligible worker (default: pin to --worker-id). "
+        "Use for fleet-distribution tests where jobs must fan out across workers.",
     )
 
     sub = parser.add_subparsers(dest="cmd")
