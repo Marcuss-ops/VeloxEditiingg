@@ -147,7 +147,71 @@ inizializzato · **503** sealed.
 
 Con lo stato raggiunto, `docker compose ps` passa a `healthy`.
 
-## 8. Backup delle chiavi (FATTO SUBITO)
+## 8. KV store — gerarchia e provisioning dei secret statici
+
+Mount KV **v2** (con versioning) su `velox/`, gerarchia allineata a
+`docs/secrets-audit.md`:
+
+```text
+velox/ (KV v2)
+└── production/
+    ├── master/
+    │   ├── admin-token
+    │   ├── instaedit-control-jwt-secret
+    │   ├── social-api-token
+    │   ├── social-webhook-secret        (opzionale)
+    │   └── commit-hmac-key              (opzionale)
+    ├── workers/
+    │   └── <worker-id>/credential
+    └── services/
+        └── registry/
+            ├── username                 (opzionale)
+            └── token                    (opzionale)
+```
+
+Ogni foglia contiene un singolo campo `value`. I secret obbligatori sono
+`admin-token`, `instaedit-control-jwt-secret`, `social-api-token` e
+`workers/<id>/credential`; gli altri sono opzionali (vengono saltati se non
+forniti).
+
+### Provisioning idempotente
+
+```bash
+# valori via env (precedenza massima)
+OPENBAO_VALUE_ADMIN_TOKEN=... \
+OPENBAO_VALUE_INSTAEDIT_JWT=... \
+OPENBAO_VALUE_SOCIAL_API_TOKEN=... \
+./scripts/provision-kv.sh
+
+# credential di un worker
+OPENBAO_VALUE_WORKER_CREDENTIAL=... ./scripts/provision-kv.sh --worker host_57_129_132_133
+
+# valori da file gitignored 0600 (.velox/openbao/values.env, formato NOME=valore)
+OPENBAO_VALUES_FILE=.velox/openbao/values.env ./scripts/provision-kv.sh
+
+# sovrascrittura (nuova versione) · simulazione · verifica
+./scripts/provision-kv.sh --force
+./scripts/provision-kv.sh --dry-run
+./scripts/verify-kv.sh
+```
+
+### Regole di sicurezza
+
+- I valori **non provengono MAI da file committati**: env → file gitignored
+  `0600` non tracciato (rifiutato altrimenti, con check `git ls-files` su path
+  assoluto via `realpath`) → prompt interattivo `read -s`.
+- Il file valori (`.velox/openbao/values.env`) è in formato `NOME=valore`,
+  **una riga per secret, LF** (niente CRLF — il CR viene comunque strippato).
+- I secret già presenti vengono **saltati** (idempotenza); `--force` crea una
+  nuova versione KV.
+- La scrittura avviene via **REST API** (`/v1/velox/data/...`) con il valore
+  passato a `jq` dall'ambiente e il body da stdin — **mai in argv**
+  (world-readable via `/proc/<pid>/cmdline`) né in file committati.
+- `verify-kv.sh` stampa solo **path + numero di versione**, mai i valori.
+- Fase attuale: autenticazione con il root token di bootstrap; al passaggio
+  ad AppRole (fase 4) i provisioning useranno token con policy ristrette.
+
+## 9. Backup delle chiavi (FATTO SUBITO)
 
 ```bash
 # fuori dal repo:
@@ -161,7 +225,7 @@ token, i secret in OpenBao sono irrecuperabili. Dopo il backup offline puoi
 eliminare i file locali (il bootstrap li rigenera solo con un re-init, che
 distrugge i dati).
 
-## 9. Operazioni quotidiane
+## 10. Operazioni quotidiane
 
 | Operazione | Comando |
 |---|---|
@@ -172,17 +236,17 @@ distrugge i dati).
 | Upgrade | aggiorna `OPENBAO_VERSION` in `.env`, poi `docker compose pull && docker compose up -d` |
 | Interfaccia UI | https://127.0.0.1:8200/ui (richiede token; cert self-signed → accetta il warning) |
 
-## 10. Prossimi passi della migrazione
+## 11. Prossimi passi della migrazione
 
-1. **KV store** con la gerarchia `velox/production/{master,workers,services}`
-   (vedi `docs/secrets-audit.md` §2.1 per l'elenco dei secret da migrare).
+1. ~~**KV store**~~ ✅ implementato (`deploy/openbao/scripts/provision-kv.sh`,
+   gerarchia in §8 sopra).
 2. **AppRole per-worker** + policy per-worker (least privilege).
 3. Migrazione di `worker_credential` / `VELOX_WORKER_SECRET` dentro OpenBao.
 4. Migrazione dei token master (`VELOX_ADMIN_TOKEN`, `INSTAEDIT_CONTROL_JWT_SECRET`,
    `SOCIAL_API_TOKEN`, `VELOX_COMMIT_HMAC_KEY`).
 5. SSH CA, PKI mTLS, credenziali DB dinamiche, `SecretResolver` in Go.
 
-## 11. Riferimenti
+## 12. Riferimenti
 
 - OpenBao docs: https://openbao.org/docs/
 - Config: `config/bao.hcl` (raft + listener TLS)
