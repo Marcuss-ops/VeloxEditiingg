@@ -27,13 +27,16 @@ cat >"$MOCK_DESTRUCTIVE" <<'MOCK'
 set -eu
 report=''
 worker=''
+inspect=''
 while (($#)); do
   case "$1" in
     --target-worker-id) worker="$2"; shift 2 ;;
+    --target-worker-inspect-cmd) inspect="$2"; shift 2 ;;
     --report-json) report="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
+[[ -n "$worker" && -n "$inspect" && -n "$report" ]]
 jq -n --arg worker "$worker" '{schema:"mock-destructive",worker_id:$worker,status:"SUCCEEDED",overall:"PASS"}' >"$report"
 MOCK
 chmod +x "$MOCK_SINGLE" "$MOCK_DESTRUCTIVE"
@@ -78,9 +81,22 @@ fi
 
 if VELOX_CERT_ENV=production VELOX_CERT_ALLOW_DESTRUCTIVE=1 \
    VELOX_CERT_DESTRUCTIVE_ACK=I_UNDERSTAND_DESTRUCTIVE_CERT \
-   RW_WORKER_CRASH_CMD='true' RW_JOB_DESTINATION_ID=destination \
+   RW_WORKER_CRASH_CMD='true' \
+   RW_WORKER_RESTART_OWNER_CHECK_CMD='printf "%s\\n" "systemd_is_enabled=enabled" "systemd_is_active=active" "systemd_restart=always" "systemd_restart_sec=10s" "docker_restart_policy=no"' \
+   RW_JOB_DESTINATION_ID=destination \
    bash "$FLEET_RUNNER" --mode destructive --workers worker-a --artifact-dir "${TMP_DIR}/prod" >/dev/null 2>&1; then
   printf 'FAIL: destructive production run unexpectedly accepted\n' >&2
+  exit 1
+fi
+
+if VELOX_CERT_ENV=test VELOX_CERT_ALLOW_DESTRUCTIVE=1 \
+   VELOX_CERT_DESTRUCTIVE_ACK=I_UNDERSTAND_DESTRUCTIVE_CERT \
+   RW_WORKER_CRASH_CMD='true' \
+   RW_WORKER_RESTART_OWNER_CHECK_CMD=$'printf valid\\ninvalid\ncommand' \
+   RW_JOB_DESTINATION_ID=destination \
+   RW_FLEET_ARTIFACT_DIR="${TMP_DIR}/newline-command" \
+   bash "$FLEET_RUNNER" --mode destructive --workers worker-a >/dev/null 2>&1; then
+  printf 'FAIL: multiline restart-owner command unexpectedly accepted\\n' >&2
   exit 1
 fi
 
@@ -88,7 +104,9 @@ NETWORK_MARKER="${TMP_DIR}/network-restored"
 WORKER_MARKER="${TMP_DIR}/worker-started"
 VELOX_CERT_ENV=test VELOX_CERT_ALLOW_DESTRUCTIVE=1 \
 VELOX_CERT_DESTRUCTIVE_ACK=I_UNDERSTAND_DESTRUCTIVE_CERT \
-RW_WORKER_CRASH_CMD='true' RW_JOB_DESTINATION_ID=destination \
+RW_WORKER_CRASH_CMD='true' \
+RW_WORKER_RESTART_OWNER_CHECK_CMD='printf "%s\\n" "systemd_is_enabled=enabled" "systemd_is_active=active" "systemd_restart=always" "systemd_restart_sec=10s" "docker_restart_policy=no"' \
+RW_JOB_DESTINATION_ID=destination \
 RW_FLEET_RESTORE_NETWORK_CMD="printf restored > '$NETWORK_MARKER'" \
 RW_FLEET_NETWORK_RULES_APPLIED=1 \
 RW_FLEET_WORKER_START_CMD="printf started > '$WORKER_MARKER'" \

@@ -198,6 +198,39 @@ Mode composition:
 - `destructive`: invokes `tests/worker-cert/worker_offline_recovery.sh` for
   each worker and must never be used against production.
 
+### Recovery restart-owner contract
+
+The destructive recovery test performs a fail-closed preflight before it
+submits a job or stops the target worker. The operator must provide a
+read-only `--target-worker-inspect-cmd` (or
+`RW_WORKER_RESTART_OWNER_CHECK_CMD`) that emits these key/value facts:
+
+```text
+systemd_is_enabled=enabled
+systemd_is_active=active
+systemd_restart=always
+systemd_restart_sec=10s
+docker_restart_policy=no
+```
+
+The leading space in the last line above is not part of the key; the canonical
+line is `docker_restart_policy=no`. `Docker RestartPolicy=no` is intentional:
+`velox-worker.service` is the sole restart owner. The recovery stop command
+must stop that systemd unit, for example:
+
+```text
+ssh worker-host systemctl stop velox-worker.service
+```
+
+Killing only the container or its child process is not an equivalent recovery
+scenario because `Restart=always` may legitimately start the canonical unit
+again. The preflight requires `is-enabled=enabled`, `is-active=active`,
+`Restart=always`, `RestartSec=10` (or `10s`), and Docker policy `no`.
+
+The repository provides `tests/worker-cert/restart_owner_probe.sh` as a
+read-only probe template and `tests/worker-cert/lib/restart_owner.sh` as the
+shared assertion implementation.
+
 Destructive mode is fail-closed. It requires `VELOX_CERT_ENV` to be one of
 `staging`, `canary`, `development`, `test`, or `local`, requires
 `VELOX_CERT_ALLOW_DESTRUCTIVE=1`, the exact acknowledgement

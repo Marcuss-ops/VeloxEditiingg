@@ -93,7 +93,9 @@ Destructive safety:
   VELOX_CERT_ENV                   Must explicitly be staging/canary/development/test/local.
   VELOX_CERT_ALLOW_DESTRUCTIVE=1   Explicit destructive opt-in.
   VELOX_CERT_DESTRUCTIVE_ACK=I_UNDERSTAND_DESTRUCTIVE_CERT
-  RW_WORKER_CRASH_CMD              Command passed to the recovery runner.
+  RW_WORKER_CRASH_CMD              Command passed to the recovery runner; stop the systemd unit.
+  RW_WORKER_RESTART_OWNER_CHECK_CMD Read-only command emitting restart-owner key=value facts.
+  The command is passed to worker_offline_recovery.sh before any job/stop action.
   RW_JOB_DESTINATION_ID            Explicit destination for the recovery job.
 
 Invariant command contract:
@@ -188,6 +190,10 @@ guard_destructive() {
     fleet_die "RW_WORKER_CRASH_CMD is required for destructive mode"
     return 1
   }
+  [[ -n "${RW_WORKER_RESTART_OWNER_CHECK_CMD:-}" ]] || {
+    fleet_die "RW_WORKER_RESTART_OWNER_CHECK_CMD is required for destructive mode"
+    return 1
+  }
   [[ -n "${RW_JOB_DESTINATION_ID:-}" ]] || {
     fleet_die "RW_JOB_DESTINATION_ID is required for destructive mode"
     return 1
@@ -201,6 +207,7 @@ guard_destructive() {
     return 1
   fi
   validate_safe_path_value RW_WORKER_CRASH_CMD "$RW_WORKER_CRASH_CMD" || return 1
+  validate_safe_path_value RW_WORKER_RESTART_OWNER_CHECK_CMD "$RW_WORKER_RESTART_OWNER_CHECK_CMD" || return 1
   [[ -x "$DESTRUCTIVE_RUNNER" || -f "$DESTRUCTIVE_RUNNER" ]] || {
     fleet_die "destructive runner not found: $DESTRUCTIVE_RUNNER"
     return 1
@@ -471,6 +478,7 @@ run_one_worker() {
         timeout "${RW_FLEET_WORKER_TIMEOUT_S}" bash "$DESTRUCTIVE_RUNNER" \
           --target-worker-id "$worker" \
           --target-worker-stop-cmd "$RW_WORKER_CRASH_CMD" \
+          --target-worker-inspect-cmd "$RW_WORKER_RESTART_OWNER_CHECK_CMD" \
           --destination-id "$RW_JOB_DESTINATION_ID" \
           --report-json "${step_dir}/report.json" >"${step_dir}/stdout.log" 2>"${step_dir}/stderr.log"
         rc=$?
@@ -478,6 +486,7 @@ run_one_worker() {
         bash "$DESTRUCTIVE_RUNNER" \
           --target-worker-id "$worker" \
           --target-worker-stop-cmd "$RW_WORKER_CRASH_CMD" \
+          --target-worker-inspect-cmd "$RW_WORKER_RESTART_OWNER_CHECK_CMD" \
           --destination-id "$RW_JOB_DESTINATION_ID" \
           --report-json "${step_dir}/report.json" >"${step_dir}/stdout.log" 2>"${step_dir}/stderr.log"
         rc=$?

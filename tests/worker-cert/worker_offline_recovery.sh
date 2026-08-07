@@ -5,14 +5,27 @@
 # Usage:
 #   ./tests/worker-cert/worker_offline_recovery.sh \
 #       --target-worker-id host_57_131_20_173 \
-#       --target-worker-stop-cmd 'ssh worker-host kill -TERM 12345'
+#       --target-worker-stop-cmd 'ssh worker-host systemctl stop velox-worker.service' \
+#       --target-worker-inspect-cmd 'ssh worker-host bash -s' <restart-owner-probe.sh
+#
+# The inspection command must emit the canonical restart-owner facts as
+# key=value lines (see tests/worker-cert/lib/restart_owner.sh):
+#   systemd_is_enabled=enabled
+#   systemd_is_active=active
+#   systemd_restart=always
+#   systemd_restart_sec=10s
+#   docker_restart_policy=no
+
+# `systemd` owns the worker lifecycle. Docker RestartPolicy=no is intentional
+# and is a PASS, not a recovery failure.
 #
 #   VELOX_MASTER_URL=https://velox.example.com \
 #   VELOX_ADMIN_TOKEN=... \
 #   VELOX_DB_PATH=/var/lib/velox/velox.db \
 #   ./tests/worker-cert/worker_offline_recovery.sh \
 #       --target-worker-id velox-worker-13197 \
-#       --target-worker-stop-cmd 'ssh velox-worker-13197-host systemctl stop velox-worker-agent'
+#       --target-worker-stop-cmd 'ssh velox-worker-13197-host systemctl stop velox-worker.service' \
+#       --target-worker-inspect-cmd 'ssh velox-worker-13197-host bash -s' <restart-owner-probe.sh
 #
 # What the script does:
 #   1. Sources tests/_lib/sh/_lib.sh (logging + pid-trap + ensure +
@@ -71,6 +84,8 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 source "${REPO_ROOT}/tests/_lib/sh/_lib.sh"
 # shellcheck source=tests/worker-cert/lib/pluck.sh
 source "${SCRIPT_DIR}/lib/pluck.sh"
+# shellcheck source=tests/worker-cert/lib/restart_owner.sh
+source "${SCRIPT_DIR}/lib/restart_owner.sh"
 
 # ─── Args / defaults ───────────────────────────────────────────────────────
 usage() {
@@ -83,6 +98,7 @@ fi
 
 TARGET_WORKER_ID=""
 STOP_CMD=""
+RESTART_OWNER_CHECK_CMD="${RW_WORKER_RESTART_OWNER_CHECK_CMD:-}"
 NO_FAST_FORWARD=0
 HEARTBEAT_POLL_TIMEOUT_S="${HEARTBEAT_POLL_TIMEOUT_S:-180}"
 SUCCEEDED_POLL_TIMEOUT_S="${SUCCEEDED_POLL_TIMEOUT_S:-300}"
@@ -96,8 +112,9 @@ SMOKE_STRICT_PIN="${SMOKE_STRICT_PIN:-1}"  # default strict: ≥2 CONNECTED for 
 while (( $# > 0 )); do
   case "$1" in
     --target-worker-id)         TARGET_WORKER_ID="$2"; shift 2 ;;
-    --target-worker-stop-cmd)   STOP_CMD="$2"; shift 2 ;;
-    --no-fast-forward)          NO_FAST_FORWARD=1; shift ;;
+    --target-worker-stop-cmd)    STOP_CMD="$2"; shift 2 ;;
+    --target-worker-inspect-cmd) RESTART_OWNER_CHECK_CMD="$2"; shift 2 ;;
+    --no-fast-forward)           NO_FAST_FORWARD=1; shift ;;
     --heartbeat-poll-timeout-s) HEARTBEAT_POLL_TIMEOUT_S="$2"; shift 2 ;;
     --succeeded-poll-timeout-s) SUCCEEDED_POLL_TIMEOUT_S="$2"; shift 2 ;;
     --reaper-poll-timeout-s)    REAPER_POLL_TIMEOUT_S="$2"; shift 2 ;;
@@ -114,7 +131,10 @@ if [[ -z "$TARGET_WORKER_ID" ]]; then
   log_error "missing required --target-worker-id"; exit 2
 fi
 if [[ -z "$STOP_CMD" ]]; then
-  log_error "missing required --target-worker-stop-cmd (e.g. 'ssh host kill -TERM <pid>' or 'kill -TERM <pid>' for local)"; exit 2
+  log_error "missing required --target-worker-stop-cmd (use 'systemctl stop velox-worker.service' so systemd does not respawn the test target)"; exit 2
+fi
+if [[ -z "$RESTART_OWNER_CHECK_CMD" ]]; then
+  log_error "missing required --target-worker-inspect-cmd (must emit systemd_is_enabled, systemd_is_active, systemd_restart, systemd_restart_sec, docker_restart_policy)"; exit 2
 fi
 if [[ -z "$DESTINATION_ID" ]]; then
   log_error "RECOVERY_DESTINATION_ID or --destination-id is required; implicit Drive destinations are forbidden"; exit 2
@@ -134,6 +154,7 @@ done
 
 log_info "worker_offline_recovery target=$TARGET_WORKER_ID master=$VELOX_MASTER_URL dest=$DESTINATION_ID"
 log_info "tunables: heartbeat_timeout=${HEARTBEAT_POLL_TIMEOUT_S}s reaper_timeout=${REAPER_POLL_TIMEOUT_S}s succeeded_timeout=${SUCCEEDED_POLL_TIMEOUT_S}s fast_forward=$((NO_FAST_FORWARD==0)) db_path=${DB_PATH:-<unset>}"
+log_info "restart owner contract: systemd velox-worker.service enabled+active Restart=always RestartSec=10; Docker RestartPolicy=no"
 
 # ─── Required binaries ─────────────────────────────────────────────────────
 for bin in curl jq python3 awk sed grep; do
@@ -172,6 +193,15 @@ if [[ -z "$DB_PATH" || ! -r "$DB_PATH" ]]; then
   exit 4
 fi
 log_info "DB_PATH=$DB_PATH (readable)"
+
+# ─── Restart-owner contract preflight ──────────────────────────────────────
+# This must run before any job submission or worker stop. A recovery result is
+# not meaningful unless the test records which supervisor owns the lifecycle.
+if ! canonical_restart_owner_check_command "$RESTART_OWNER_CHECK_CMD"; then
+  log_error "FAIL: restart-owner contract preflight"
+  exit 4
+fi
+log_info "restart-owner contract preflight passed: systemd_enabled=${RESTART_OWNER_SYSTEMD_ENABLED} systemd_active=${RESTART_OWNER_SYSTEMD_ACTIVE} restart=${RESTART_OWNER_SYSTEMD_RESTART} restart_sec=${RESTART_OWNER_SYSTEMD_RESTART_SEC} docker_policy=${RESTART_OWNER_DOCKER_POLICY}"
 
 # ─── EXIT trap: cleanup children + scratch + M2M ───────────────────────────
 TMP_HDRS=""
@@ -531,13 +561,14 @@ FINAL_WORKER_JSON=$(curl -sS -m 10 \
   "${VELOX_MASTER_URL}/api/v1/workers/${TARGET_WORKER_ID}" 2>/dev/null || true)
 FINAL_STATUS=$(printf '%s' "$FINAL_WORKER_JSON" | jq -r '.status // "(unset)"' 2>/dev/null || echo "(unset)")
 FINAL_SESSION=$(printf '%s' "$FINAL_WORKER_JSON" | jq -r '.session_active // false' 2>/dev/null || echo "false")
-# After a successful SIGTERM + master-side reaper reap, target should be
-# STALE / DISCONNECTED. A surprise transition back to CONNECTED within the
-# smoke budget indicates the worker process is being respawned (e.g.,
-# systemd Restart=always). That violates the "worker is offline" assumption
-# and is a CHAOS FAIL.
+# The restart-owner preflight above records the intended architecture. The
+# operator stop command must stop the systemd unit (rather than only killing a
+# child process); otherwise Restart=always is expected to bring it back and
+# the offline lease-recovery scenario is invalid. A reconnect after the
+# controlled stop is therefore diagnostic, not evidence that Docker owns
+# restart.
 if [[ "$FINAL_STATUS" == "CONNECTED" || "$FINAL_SESSION" == "true" ]]; then
-  log_warn "target worker post-recovery status=$FINAL_STATUS session_active=$FINAL_SESSION — worker appears to have been respawned (systemd Restart=always?). Documented as CHAOS-WARN, not a hard fail."
+  log_warn "target worker post-recovery status=$FINAL_STATUS session_active=$FINAL_SESSION — systemd unit may have been restarted; inspect stop command and evidence"
 fi
 INV_NO_FINAL_BUSY_OK=1
 
@@ -563,6 +594,13 @@ cat > "$TMP_OUT" <<JSON
   "new_lease_id": "${NEW_LEASE_ID:-}",
   "new_leased_worker_id": "${NEW_LEASED_WORKER}",
   "status": "SUCCEEDED",
+  "restart_owner": {
+    "systemd_is_enabled": "${RESTART_OWNER_SYSTEMD_ENABLED}",
+    "systemd_is_active": "${RESTART_OWNER_SYSTEMD_ACTIVE}",
+    "systemd_restart": "${RESTART_OWNER_SYSTEMD_RESTART}",
+    "systemd_restart_sec": "${RESTART_OWNER_SYSTEMD_RESTART_SEC}",
+    "docker_restart_policy": "${RESTART_OWNER_DOCKER_POLICY}"
+  },
   "connection_status_observed": "${TRANSITION_OBSERVED}",
   "final_target_status": "${FINAL_STATUS}",
   "final_target_session_active": ${FINAL_SESSION},
