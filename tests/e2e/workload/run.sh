@@ -1,33 +1,15 @@
 #!/usr/bin/env bash
 # =============================================================================
-# tests/e2e/workload/run.sh — PR 5 Real Workload E2E
+# tests/e2e/workload/run.sh — PR 5 real workload E2E
 # =============================================================================
-# Full Velox pipeline from zero to verified artifact:
-#   Hello → HelloAck → TaskOffer → TaskAccepted → TaskLeaseGranted
-#   → executor reale → TaskResult → artifact upload → Job SUCCEEDED
-#
-# Minimal deterministic fixture: teal background 1920x1080 + silent audio,
-# encoded as H.264 (~2s). The engine's default canvas is 1920x1080, so the
-# fixture matches it to keep the output native. Output is reproducible
-# byte-for-byte when the same FFmpeg version runs on the same architecture.
-#
-# Verification (no mocking of the critical path):
-#   1. Artifact exists on disk
-#   2. SHA-256 matches expected (deterministic output)
-#   3. ffprobe opens it: duration ≈2s, resolution 320x180, codec h264
-#   4. Master metrics endpoint returns non-zero counters
-#   5. GET /api/v1/workers shows CONNECTED worker
-#   6. DB state assertions (4-part, all blocking):
-#        (a) task_attempts row reached SUCCEEDED for our job_id;
-#        (b) artifacts row marked READY (finalization committed);
-#        (c) artifacts.sha256 == sha256 of the downloaded file;
-#        (d) jobs.completed_at >= artifacts.verified_at — jobs is
-#            promoted to SUCCEEDED only AFTER finalization.
+# Runs the full Hello → artifact → SUCCEEDED pipeline with deterministic
+# fixtures, strict media/SHA checks, metrics checks, worker visibility, and
+# blocking database finalization assertions.
 #
 # Usage:
-#   make e2e-workload                     # full pipeline
+#   make e2e-workload
 #   E2E_WORKDIR=/tmp/vx-wl make e2e-workload
-#   bash tests/e2e/workload/run.sh        # direct invocation
+#   bash tests/e2e/workload/run.sh
 # =============================================================================
 
 set -euo pipefail
@@ -39,12 +21,8 @@ WORKDIR="${E2E_WORKDIR:-/tmp/velox-e2e-workload}"
 # ─── Paths ───────────────────────────────────────────────────────────────────
 BIN_DIR="$WORKDIR/bin"
 DATA_DIR="$WORKDIR/data"
-STAGING_DIR="$WORKDIR/staging"
-# Fixture inputs live INSIDE DATA_DIR because the input-security policy
-# (inputsecurity.ValidateFile) only accepts paths under AllowedRoots
-# (DataDir) / TempDir / QuarantineDir — a file in an unrelated staging
-# dir is rejected with INPUT_PATH_VIOLATION. VELOX_STAGING_DIR above
-# remains the BlobStore spool dir and must NOT hold job inputs.
+# Keep BlobStore spool and fixture inputs under DATA_DIR; inputsecurity.ValidateFile rejects unrelated paths.
+STAGING_DIR="$DATA_DIR/staging"
 FIXTURE_DIR="$DATA_DIR/fixtures"
 STORAGE_DIR="$WORKDIR/storage"
 LOG_DIR="$WORKDIR/logs"
@@ -167,12 +145,18 @@ phase_fixtures() {
     -vcodec png "$FIXTURE_DIR/scene.png" 2>/dev/null || {
     fail "scene.png generation failed"; exit 3; }
 
-  # Silent audio: 2 seconds, AAC in MP4 container (for voiceless render)
-  info "  → silent.aac (2s, AAC)"
+  # Silent audio: 2 seconds, AAC inside an MP4 container named .mp4. The
+  # MP4 container is REQUIRED: inputsecurity sniffs the file header, and
+  # raw ADTS AAC (a bare .aac) is not sniffable by http.DetectContentType
+  # (rejected with INPUT_MIME_UNSUPPORTED). The extension must ALSO be .mp4:
+  # the sniffed MIME for an MP4 container is video/mp4, and an .m4a name
+  # declares audio/mp4 → INPUT_MIME_MISMATCH. video/mp4 is accepted for the
+  # voiceover/audio role by allowedMIME, and ffprobe validates the stream.
+  info "  → silent.mp4 (2s, AAC in MP4 container)"
   ffmpeg -hide_banner -loglevel error -y \
     -f lavfi -i "anullsrc=r=48000:cl=mono" -t 2 \
-    -c:a aac -b:a 64k "$FIXTURE_DIR/silent.aac" 2>/dev/null || {
-    # Try MP3 fallback
+    -c:a aac -b:a 64k "$FIXTURE_DIR/silent.mp4" 2>/dev/null || {
+    # Try MP3 fallback (ID3 tag → audio/mpeg, also accepted)
     ffmpeg -hide_banner -loglevel error -y \
       -f lavfi -i "anullsrc=r=44100:cl=mono" -t 2 \
       -c:a libmp3lame -b:a 64k "$FIXTURE_DIR/silent.mp3" 2>/dev/null || {
@@ -181,7 +165,7 @@ phase_fixtures() {
   }
 
   local scene_path="$FIXTURE_DIR/scene.png"
-  local audio_path="$FIXTURE_DIR/silent.aac"
+  local audio_path="$FIXTURE_DIR/silent.mp4"
   [[ -f "$audio_path" ]] || audio_path="$FIXTURE_DIR/silent.mp3"
 
   ls -la "$scene_path" "$audio_path" 2>/dev/null
@@ -255,10 +239,12 @@ phase_submit() {
   info "Phase 4: submitting job"
 
   local scene_path="$FIXTURE_DIR/scene.png"
-  local audio_path="$FIXTURE_DIR/silent.aac"
+  local audio_path="$FIXTURE_DIR/silent.mp4"
   [[ -f "$audio_path" ]] || audio_path="$FIXTURE_DIR/silent.mp3"
+  local audio_file
+  audio_file="$(basename "$audio_path")"
 
-  "${REPO_ROOT}/scripts/e2e/write-local-workload-fixture.sh" "$WORKDIR/job.json" "$FIXTURE_DIR" "$DESTINATION_ID"
+  "${REPO_ROOT}/scripts/e2e/write-local-workload-fixture.sh" "$WORKDIR/job.json" "$FIXTURE_DIR" "$DESTINATION_ID" "$audio_file"
 
   local submit_out
   submit_out="$(curl -sS -m 15 -X POST \
