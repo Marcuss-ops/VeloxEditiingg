@@ -47,6 +47,7 @@ func (c *appComponents) routerBundle() RouterBundle {
 		},
 		Upload: UploadRouteDeps{
 			Cfg:                     c.cfg,
+			SQLiteStore:             c.persistence.SQLite,
 			WorkerTokens:            c.workers.TokenManager,
 			ArtifactSvc:             c.assets.ArtifactSvc,
 			ArtifactReader:          c.assets.ArtifactReader,

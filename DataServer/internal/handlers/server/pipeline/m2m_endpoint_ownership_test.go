@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"velox-server/internal/config"
 	"velox-server/internal/pipelineruns"
 	"velox-server/internal/store"
 )
@@ -44,7 +45,9 @@ func TestM2MPipelineEndpoints_CrossClientIsIndistinguishableFromMissing(t *testi
 		t.Fatalf("insert pipeline run: %v", err)
 	}
 
-	h := &Handlers{store: db}
+	h := &Handlers{store: db, cfg: &config.Config{ControlPlane: config.ControlPlaneEndpoints{
+		RESTPublic: "http://51.91.11.36:8000",
+	}}}
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	withClient := func(handler gin.HandlerFunc) gin.HandlerFunc {
@@ -162,7 +165,7 @@ func TestGetSubmittedJob_OwnerSeesScopedEnrichment(t *testing.T) {
 	if ownerBody["status"] != "SUCCEEDED" {
 		t.Fatalf("owner status = %v, want SUCCEEDED (jobs.Status wins over forwarding.Status)", ownerBody["status"])
 	}
-	if ownerBody["artifact_url"] != "https://cdn.example/scoped.mp4" {
+	if ownerBody["artifact_url"] != "http://51.91.11.36:8000/api/internal/artifacts/artifact-scoped/download" {
 		t.Fatalf("owner artifact_url = %v, want scoped URL", ownerBody["artifact_url"])
 	}
 	if ownerBody["artifact_size_bytes"] != float64(42) {

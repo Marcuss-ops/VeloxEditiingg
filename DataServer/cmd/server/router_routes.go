@@ -111,9 +111,14 @@ func registerPipelineRoutes(r *gin.Engine, auth, m2mAuth gin.HandlerFunc, deps P
 func registerUploadRoutes(r *gin.Engine, deps UploadRouteDeps) {
 	adminAuth := api.AdminAuthMiddleware(deps.Cfg)
 	workerDataPlaneAuth := api.WorkerOrAdminAuthMiddleware(deps.Cfg, deps.WorkerTokens)
+	artifactReadAuth := adminAuth
+	if deps.SQLiteStore != nil {
+		artifactReadAuth = pipeline.NewM2MOrAdminAuthMiddleware(deps.Cfg, deps.SQLiteStore, nil, deps.Cfg.Auth.AdminToken, adminAuth)
+	}
 	if deps.ArtifactReader != nil && deps.BlobStore != nil {
-		r.GET("/api/internal/artifacts/:artifact_id/download", adminAuth, artifactDownloadHandler(deps.ArtifactReader, deps.BlobStore))
-		r.HEAD("/api/internal/artifacts/:artifact_id/download", adminAuth, artifactDownloadHandler(deps.ArtifactReader, deps.BlobStore))
+		handler := artifactDownloadHandler(deps.ArtifactReader, deps.BlobStore, deps.SQLiteStore)
+		r.GET("/api/internal/artifacts/:artifact_id/download", artifactReadAuth, handler)
+		r.HEAD("/api/internal/artifacts/:artifact_id/download", artifactReadAuth, handler)
 	}
 	if deps.ArtifactSvc != nil {
 		r.POST("/api/v1/video/upload-completed",
@@ -131,7 +136,7 @@ func registerUploadRoutes(r *gin.Engine, deps UploadRouteDeps) {
 	}
 }
 
-func artifactDownloadHandler(reader artifacts.ArtifactReader, blobs store.BlobStore) gin.HandlerFunc {
+func artifactDownloadHandler(reader artifacts.ArtifactReader, blobs store.BlobStore, ownership ...*store.SQLiteStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		a, err := reader.GetByID(c.Request.Context(), c.Param("artifact_id"))
 		if err != nil {
@@ -141,6 +146,14 @@ func artifactDownloadHandler(reader artifacts.ArtifactReader, blobs store.BlobSt
 		if a == nil || a.Status != "READY" {
 			c.AbortWithStatus(http.StatusNotFound)
 			return
+		}
+		if len(ownership) > 0 && ownership[0] != nil {
+			if clientID := pipeline.ClientIDFromContext(c); clientID != "" {
+				if _, err := ownership[0].GetCreatorForwardingByTargetJobID(c.Request.Context(), a.JobID, clientID); err != nil {
+					c.AbortWithStatus(http.StatusNotFound)
+					return
+				}
+			}
 		}
 		f, err := blobs.ReadFinal(a.StorageKey)
 		if err != nil {

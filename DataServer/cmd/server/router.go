@@ -80,6 +80,7 @@ type PipelineRouteDeps struct {
 // (upload-completed + chunked upload).
 type UploadRouteDeps struct {
 	Cfg                     *config.Config
+	SQLiteStore             *store.SQLiteStore
 	WorkerTokens            *workers.TokenManager
 	ArtifactSvc             *artifacts.Service
 	ArtifactReader          artifacts.ArtifactReader

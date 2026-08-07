@@ -103,15 +103,20 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		var artifactURL string
 		var artifactSizeBytes int64
 		if h.store != nil {
-			artifacts, aErr := h.store.GetArtifactsByJobForClient(ctx, jobID, clientID, 1)
-			if aErr == nil && len(artifacts) > 0 {
-				a := artifacts[0]
-				if a.StorageURL != "" {
-					artifactURL = a.StorageURL
-				} else {
-					artifactURL = a.LocalPath
+			artifacts, aErr := h.store.GetArtifactsByJobForClient(ctx, jobID, clientID, 50)
+			if aErr == nil {
+				if a := selectPrimaryReadyArtifact(artifacts); a != nil {
+					if h.cfg != nil {
+						base := strings.TrimRight(string(h.cfg.ControlPlane.RESTPublic), "/")
+						if base != "" {
+							artifactURL = base + "/api/internal/artifacts/" + a.ID + "/download"
+						}
+					}
+					if artifactURL == "" {
+						artifactURL = a.StorageURL
+					}
+					artifactSizeBytes = a.SizeBytes
 				}
-				artifactSizeBytes = a.SizeBytes
 			}
 		}
 
