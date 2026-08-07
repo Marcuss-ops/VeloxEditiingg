@@ -18,6 +18,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 )
@@ -51,4 +52,16 @@ func validateDigest(d string) error {
 		return fmt.Errorf("digest %q does not match ^sha256:[0-9a-f]{64}$", d)
 	}
 	return nil
+}
+
+// workerImageRef converts the operator-facing digest into the full immutable
+// image reference required by the Master update API. The repository can be
+// overridden for non-production environments, while production defaults to
+// the canonical GHCR repository.
+func workerImageRef(digest string) string {
+	repository := strings.TrimRight(strings.TrimSpace(os.Getenv("GHCR_WORKER_REPOSITORY")), "/")
+	if repository == "" {
+		repository = "ghcr.io/marcuss-ops/velox-worker"
+	}
+	return repository + "@" + digest
 }

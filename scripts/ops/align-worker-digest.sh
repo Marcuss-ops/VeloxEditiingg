@@ -197,8 +197,10 @@ echo ""
 echo "--- Step 2: fleetctl update $WORKER_ID ---"
 
 echo "→ triggering update to $SHA_ONLY ..."
-"$FLEETCTL" --master="$VELOX_MASTER_URL" update "$WORKER_ID" --digest "$SHA_ONLY" \
-  --reason="align-worker-digest: unify fleet to $SHA_ONLY" || {
+VELOX_MASTER_URL="$VELOX_MASTER_URL" "$FLEETCTL" update \
+  --digest="$SHA_ONLY" \
+  --reason="align-worker-digest: unify fleet to $SHA_ONLY" \
+  "$WORKER_ID" || {
   echo "ERROR: fleetctl update failed" >&2
   exit 4
 }
@@ -213,7 +215,7 @@ MISMATCH=0
 INSPECT_FAILS=0
 
 for w in "${ALL_WORKERS[@]}"; do
-  INSPECT="$("$FLEETCTL" --master="$VELOX_MASTER_URL" inspect "$w" 2>/dev/null)" || {
+  INSPECT="$(VELOX_MASTER_URL="$VELOX_MASTER_URL" "$FLEETCTL" inspect "$w" 2>/dev/null)" || {
     echo "  ⚠ $w → INSPECT_FAILED (fleetctl returned non-zero)"
     WORKER_DIGESTS["$w"]="INSPECT_FAILED"
     INSPECT_FAILS=$((INSPECT_FAILS + 1))

@@ -148,7 +148,7 @@ func runUpdate(client *fleetClient, args []string) int {
 	}
 	return runMutation(client, "update", workerID,
 		"/api/v1/admin/workers/"+workerID+"/update",
-		map[string]any{"target_digest": *digest, "reason": *reason})
+		map[string]any{"target_digest": workerImageRef(*digest), "reason": *reason})
 }
 
 // runSmoke — POST /api/v1/admin/workers/{id}/smoke;
