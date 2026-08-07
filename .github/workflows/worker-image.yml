@@ -267,9 +267,9 @@ jobs:
             # validation builds because buildx does not load an image locally.
             IMAGE_REF="${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
             docker pull "$IMAGE_REF" >/dev/null
-            ENGINE_SHA="$(docker run --rm --entrypoint /bin/sh "$IMAGE_REF" -c 'awk "length(\\$1)==64 && \\$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\\$1); exit}" /usr/local/share/velox/video-engine.sha256' 2>/dev/null || true)"
-            BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE_REF" -c 'awk "length(\\$1)==64 && \\$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\\$1); exit}" /app/RemoteCodex/BUNDLE_HASH.txt' 2>/dev/null || true)"
-            IMAGE_BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE_REF" -c 'set -eu; sha256sum /usr/local/bin/velox-worker-agent /usr/local/bin/velox_video_engine | sha256sum | awk "{print \\$1}"' 2>/dev/null || true)"
+            ENGINE_SHA="$(docker run --rm --entrypoint /bin/sh "$IMAGE_REF" -c 'awk "length(\$1)==64 && \$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\$1); exit}" /usr/local/share/velox/video-engine.sha256' 2>/dev/null || true)"
+            BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE_REF" -c 'awk "length(\$1)==64 && \$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\$1); exit}" /app/RemoteCodex/BUNDLE_HASH.txt' 2>/dev/null || true)"
+            IMAGE_BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE_REF" -c 'set -eu; sha256sum /usr/local/bin/velox-worker-agent /usr/local/bin/velox_video_engine | sha256sum | awk "{print \$1}"' 2>/dev/null || true)"
             [[ "$IMAGE_BUNDLE_HASH" == "$BUNDLE_HASH" ]] || {
               echo "::error::image bundle hash mismatch: embedded=$BUNDLE_HASH actual=$IMAGE_BUNDLE_HASH" >&2
               exit 1
@@ -325,7 +325,7 @@ jobs:
         run: |
           set -euo pipefail
           IMAGE="${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
-          BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE" -c 'awk "length(\\$1)==64 && \\$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\\$1); exit}" /app/RemoteCodex/BUNDLE_HASH.txt' 2>/dev/null || echo '')"
+          BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE" -c 'awk "length(\$1)==64 && \$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\$1); exit}" /app/RemoteCodex/BUNDLE_HASH.txt' 2>/dev/null || echo '')"
           [[ "$BUNDLE_HASH" =~ ^[a-f0-9]{64}$ ]] || { echo "::error::invalid embedded bundle hash"; exit 1; }
           mkdir -p /tmp/velox-real-bootstrap
           jq '
@@ -411,7 +411,7 @@ jobs:
         run: |
           set -euo pipefail
           IMAGE="${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
-          BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE" -c 'awk "length(\\$1)==64 && \\$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\\$1); exit}" /app/RemoteCodex/BUNDLE_HASH.txt' 2>/dev/null || echo '')"
+          BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE" -c 'awk "length(\$1)==64 && \$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\$1); exit}" /app/RemoteCodex/BUNDLE_HASH.txt' 2>/dev/null || echo '')"
           [[ "$BUNDLE_HASH" =~ ^[a-f0-9]{64}$ ]] || { echo "::error::invalid embedded bundle hash"; exit 1; }
           echo "Smoke testing entrypoint of: $IMAGE"
           mkdir -p /tmp/velox-real-bootstrap/work
