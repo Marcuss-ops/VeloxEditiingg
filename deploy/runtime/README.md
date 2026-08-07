@@ -83,6 +83,12 @@ sudo install -m 0755 scripts/operator/worker-openbao-tunnel-service.sh \
   /usr/local/bin/velox-worker-openbao-tunnel-service
 sudo install -m 0755 scripts/operator/probe-worker-openbao.sh \
   /usr/local/bin/probe-worker-openbao.sh
+sudo install -m 0755 scripts/operator/check-local-velox-tunnel.sh \
+  /usr/local/bin/check-local-velox-tunnel
+sudo install -m 0644 deploy/velox-remote-tunnel.service \
+  /home/pierone/.config/systemd/user/velox-remote-tunnel.service
+systemctl --user daemon-reload
+systemctl --user restart velox-remote-tunnel.service
 install -m 0600 deploy/velox-worker-openbao-tunnel.env.example \
   /home/pierone/.config/velox/worker-openbao/host_57_129_132_133.env
 # Edit only topology/path values in the copied env file; never add passwords.

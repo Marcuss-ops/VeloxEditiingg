@@ -37,6 +37,7 @@ REMOTE_OPENBAO_PORT="${VELOX_REMOTE_OPENBAO_PORT:-8200}"
 STATE_DIR="${VELOX_TUNNEL_STATE_DIR:-${XDG_RUNTIME_DIR:-/tmp}/velox-remote-tunnel}"
 PID_FILE="${STATE_DIR}/tunnel.pid"
 LOG_FILE="${STATE_DIR}/tunnel.log"
+CHECK_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-local-velox-tunnel.sh"
 
 die() { echo "remote-tunnel: $*" >&2; exit 1; }
 log() { echo "remote-tunnel: $*"; }
@@ -55,6 +56,7 @@ check_config() {
   done
   [[ -z "${VELOX_REMOTE_SSH_PASSWORD:-}" ]] || die "password authentication is not supported; use an SSH key/agent"
   command -v ssh >/dev/null || die "ssh is required"
+  [[ -x "$CHECK_SCRIPT" ]] || die "local tunnel checker missing or not executable: $CHECK_SCRIPT"
 }
 
 is_running() {
@@ -67,8 +69,12 @@ is_running() {
 start() {
   check_config
   if is_running; then
-    log "already running (pid=$(<"$PID_FILE"))"
-    return 0
+    if "$CHECK_SCRIPT" "$LOCAL_MASTER_PORT" "$LOCAL_CREATOR_PORT" "$LOCAL_GRPC_PORT" "$LOCAL_OPENBAO_PORT" >/dev/null 2>&1; then
+      log "already running and all forwards ready (pid=$(<"$PID_FILE"))"
+      return 0
+    fi
+    log "existing tunnel is incomplete; stopping it before restart"
+    stop
   fi
   mkdir -p "$STATE_DIR"
   rm -f "$PID_FILE"
@@ -90,13 +96,13 @@ start() {
     -L "127.0.0.1:${LOCAL_OPENBAO_PORT}:127.0.0.1:${REMOTE_OPENBAO_PORT}" \
     "${REMOTE_USER}@${REMOTE_HOST}" >>"$LOG_FILE" 2>&1 &
   echo "$!" >"$PID_FILE"
-  for _ in 1 2 3 4 5; do
-    is_running && { log "started (pid=$(<"$PID_FILE"))"; return 0; }
-    sleep 1
-  done
-  tail -20 "$LOG_FILE" >&2 || true
-  rm -f "$PID_FILE"
-  die "SSH tunnel failed to start"
+  if ! "$CHECK_SCRIPT" "$LOCAL_MASTER_PORT" "$LOCAL_CREATOR_PORT" "$LOCAL_GRPC_PORT" "$LOCAL_OPENBAO_PORT"; then
+    stop
+    tail -20 "$LOG_FILE" >&2 || true
+    die "SSH tunnel started but one or more local forwards are unavailable"
+  fi
+  log "started (pid=$(<"$PID_FILE"))"
+  return 0
 }
 
 stop() {
@@ -119,13 +125,13 @@ stop() {
 
 status() {
   check_config
-  if is_running; then
+  if is_running && "$CHECK_SCRIPT" "$LOCAL_MASTER_PORT" "$LOCAL_CREATOR_PORT" "$LOCAL_GRPC_PORT" "$LOCAL_OPENBAO_PORT" >/dev/null 2>&1; then
     log "running (pid=$(<"$PID_FILE"))"
     printf '  master  http://127.0.0.1:%s\n  creator http://127.0.0.1:%s\n  grpc    127.0.0.1:%s\n  openbao https://127.0.0.1:%s\n' \
       "$LOCAL_MASTER_PORT" "$LOCAL_CREATOR_PORT" "$LOCAL_GRPC_PORT" "$LOCAL_OPENBAO_PORT"
     return 0
   fi
-  log "stopped"
+  log "stopped or incomplete (one or more forwards unavailable)"
   return 1
 }
 
