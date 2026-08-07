@@ -108,7 +108,7 @@ RUN /usr/local/bin/build-video-engine.sh && \
 # are uniformly governed by Makefile.source-of-truth — NOT duplicated in
 # Dockerfile. See RemoteCodex/native/worker-agent-go/Makefile for the
 # contract (VERSION_FILE, BUILD_TIME fallback, LDFLAGS).
-FROM golang:1.25.8-bookworm AS go-builder
+FROM golang:1.25.8-bookworm@sha256:4557cf171e3cdf5053a298d5171b1a5f5734d920260c25f22c79e94760eb2084 AS go-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 

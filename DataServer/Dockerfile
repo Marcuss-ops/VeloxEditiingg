@@ -35,7 +35,7 @@
 # ============================================================================
 
 # ─── Stage 1: builder ──────────────────────────────────────────────────────
-FROM golang:1.25.8-bookworm AS builder
+FROM golang:1.25.8-bookworm@sha256:4557cf171e3cdf5053a298d5171b1a5f5734d920260c25f22c79e94760eb2084 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -76,7 +76,7 @@ RUN go build \
         ./cmd/server
 
 # ─── Stage 2: runtime ──────────────────────────────────────────────────────
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV VELOX_HTTP_PORT=8000

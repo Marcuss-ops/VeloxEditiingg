@@ -13,9 +13,9 @@
 # docker incantation. This script captures the canonical incantation
 # in version control so it stays correct as Postgres versions change.
 #
-# The Postgres version (16-alpine) is pinned so the runner + tooling
+# The Postgres image is pinned by manifest digest so the runner + tooling
 # assumptions stay stable. pgx/v5 supports back to PG 11; bumping
-# 16 → 17 is fine but should be a deliberate bump in this script.
+# 16 → 17 is fine but should be a deliberate digest update in this script.
 #
 # Usage:
 #   DataServer/run-tests-postgres.sh           # spins up + tests + tears down
@@ -32,7 +32,7 @@
 set -euo pipefail
 
 CONTAINER_NAME="velox-postgres-test"
-PG_IMAGE="postgres:16-alpine"
+PG_IMAGE="postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
 PG_PORT="${VELOX_TEST_POSTGRES_PORT:-5432}"
 PG_USER="${VELOX_TEST_POSTGRES_USER:-postgres}"
 PG_PASSWORD="${VELOX_TEST_POSTGRES_PASSWORD:-velox-test-pass}"

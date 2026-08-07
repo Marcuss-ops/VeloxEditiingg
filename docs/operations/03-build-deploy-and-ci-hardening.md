@@ -82,7 +82,7 @@ Aggiornare CI, Makefile e documentazione affinché nessun comando usi più `Remo
 Aggiungere uno stage dedicato:
 
 ```dockerfile
-FROM golang:1.25.8-bookworm AS go-builder
+FROM golang:1.25.8-bookworm@sha256:4557cf171e3cdf5053a298d5171b1a5f5734d920260c25f22c79e94760eb2084 AS go-builder
 
 WORKDIR /src
 COPY shared/go.mod shared/go.sum ./shared/

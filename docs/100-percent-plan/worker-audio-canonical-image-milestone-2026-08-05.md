@@ -43,8 +43,8 @@ engine SHA-256: 6df2c0442d4bbdf4a4592414a25e306607f1ac0136b02d5bb26b3cc7152e9599
 ```
 
 The image reports the intended non-root `velox` user and canonical engine
-labels, including `org.veloxproject.engine.build=canonical-cpp-builder` and
-`org.veloxproject.engine.runtime=debian:bookworm-slim`. The Dockerfile uses a
+labels, including `org.veloxproject.engine.build=canonical-cpp-builder` and`org.veloxproject.engine.runtime=debian:bookworm-slim@sha256:<digest>`.
+ The Dockerfile uses a
 pinned Debian Bookworm digest for C++ builder and runtime; the successful build
 therefore exercised the intended same-base configuration, but no independent
 registry provenance or signature was available.

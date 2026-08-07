@@ -68,10 +68,13 @@ Verifica: `bao version`, `docker compose version`.
 
 ```bash
 cd deploy/openbao
-cp .env.example .env        # modifica solo se serve (versione immagine, porta host)
+cp .env.example .env        # modifica solo se serve (digest immagine, porta host)
 ```
 
-Il file `.env` è gitignored; contiene solo configurazione non-segreta.
+Il file `.env` è gitignored; contiene solo configurazione non-segreta. Dalla
+migrazione al pin immutabile, `OPENBAO_VERSION` non viene più letto: se un `.env`
+esistente lo contiene, sostituiscilo con `OPENBAO_IMAGE` completo di
+`@sha256:<64hex>` (un tag senza digest non è accettato come riferimento operativo).
 
 ## 3. Genera il certificato TLS del listener
 
@@ -360,7 +363,7 @@ distrugge i dati).
 | Re-unseal dopo reboot | `./scripts/bootstrap-unseal.sh` |
 | Log | `docker compose -f deploy/openbao/compose.yml logs -f openbao` |
 | Backup dati (raft) | `docker volume inspect velox-openbao_openbao-data` → snapshot del volume (es. `docker run --rm -v velox-openbao_openbao-data:/data -v $PWD:/backup alpine tar czf /backup/openbao-data.tgz -C /data .`) |
-| Upgrade | aggiorna `OPENBAO_VERSION` in `.env`, poi `docker compose pull && docker compose up -d` |
+| Upgrade | aggiorna `OPENBAO_IMAGE` in `.env` con un riferimento `@sha256`, poi `docker compose pull && docker compose up -d` |
 | Interfaccia UI | https://127.0.0.1:8200/ui (richiede token; cert self-signed → accetta il warning) |
 
 ## 14. Prossimi passi della migrazione
