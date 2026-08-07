@@ -39,10 +39,12 @@ services:
     # base URL, e.g. http://master:8000) and VELOX_WORK_DIR from env_file.
     # The `-master` flag is the worker's MASTER_URL (REST), NOT the gRPC dial
     # target: passing VELOX_GRPC_MASTER_URL (host:port, no scheme) here makes
-    # the worker refuse with `invalid master_url` at boot.
+    # the worker refuse with `invalid master_url` at boot. The :? form
+    # mirrors VELOX_WORKER_IMAGE below — a missing var fails loudly at
+    # `docker compose config` time instead of silently dialing a default.
     command:
       - "-master"
-      - "${VELOX_MASTER_URL:-http://master:8000}"
+      - "${VELOX_MASTER_URL:?VELOX_MASTER_URL must be set — REST base URL, e.g. http://master:8000}"
       - "-work-dir"
       - "${VELOX_WORK_DIR:-/var/lib/velox-worker/work}"
 

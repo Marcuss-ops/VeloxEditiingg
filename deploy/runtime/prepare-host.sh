@@ -95,6 +95,11 @@ set +a
 
 : "${VELOX_WORKER_ID:?VELOX_WORKER_ID is missing from $ENV_FILE}"
 : "${VELOX_WORKER_IMAGE:?VELOX_WORKER_IMAGE is missing from $ENV_FILE}"
+# The compose command passes VELOX_MASTER_URL to the binary's -master flag
+# (REST base URL). Fail fast here rather than letting the worker silently
+# dial a wrong/default target after the image is pulled and the service
+# is armed.
+: "${VELOX_MASTER_URL:?VELOX_MASTER_URL is missing from $ENV_FILE (REST base URL, e.g. http://master:8000)}"
 
 log "Worker ID  : $VELOX_WORKER_ID"
 log "Image      : $VELOX_WORKER_IMAGE"
