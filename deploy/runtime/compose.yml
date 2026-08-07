@@ -35,11 +35,14 @@ services:
       - /etc/velox-worker/worker.env
 
     # The Dockerfile default CMD is `["-master", "http://master:8000"]`. We
-    # override here so the binary actually reads VELOX_GRPC_MASTER_URL and
-    # VELOX_WORK_DIR from env_file.
+    # override here so the binary actually reads VELOX_MASTER_URL (the REST
+    # base URL, e.g. http://master:8000) and VELOX_WORK_DIR from env_file.
+    # The `-master` flag is the worker's MASTER_URL (REST), NOT the gRPC dial
+    # target: passing VELOX_GRPC_MASTER_URL (host:port, no scheme) here makes
+    # the worker refuse with `invalid master_url` at boot.
     command:
       - "-master"
-      - "${VELOX_GRPC_MASTER_URL}"
+      - "${VELOX_MASTER_URL:-http://master:8000}"
       - "-work-dir"
       - "${VELOX_WORK_DIR:-/var/lib/velox-worker/work}"
 
@@ -64,9 +67,10 @@ services:
       # /var/lib/velox-worker/worker_config.json so it stays out of /etc.
       - /var/lib/velox-worker/worker_config.json:/opt/velox/worker_config.json:ro
       # TLS certs and per-worker credentials — read-only mounts into /run.
-      # prepare-host.sh chowns the host-side dirs to root:10001 with mode
-      # 0750 so the in-container velox user (uid 10001) can traverse +
-      # read the worker.key + worker_credential at mode 0640.
+      # prepare-host.sh chowns the host-side dirs to root:${IMAGE_GID} with
+      # mode 0750 so the in-container velox user (uid 10001) can traverse;
+      # worker.key + worker_credential are owned by uid 10001 at mode 0600
+      # (RW-PROD-001 A2) so the container can read them through the mounts.
       - /etc/velox-worker/certs:/run/velox/certs:ro
       - /etc/velox-worker/secrets:/run/velox/secrets:ro
 

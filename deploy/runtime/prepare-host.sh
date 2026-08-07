@@ -162,18 +162,25 @@ ok "/etc/velox-worker/{certs,secrets} mode 0750 root:${IMAGE_GID} (worker can tr
 # the worker_config.json renderer is deploy/scripts/apply-local-worker-config.sh.
 # On the first run after the operator produced those files, this loop aligns
 # ownership without breaking existing content.
+#
+# RW-PROD-001 A2 (config_validate.go): in production the private key must be
+# mode 0600 (no group/other bits) or the worker refuses to start fail-closed.
+# The container's velox user is uid ${IMAGE_UID}, so worker.key +
+# worker_credential must be OWNED by ${IMAGE_UID}:${IMAGE_GID} (not root) or
+# the container cannot read them through the :ro bind-mounts at mode 0600.
 for spec in \
-    /etc/velox-worker/certs/worker.crt:0644 \
-    /etc/velox-worker/certs/ca.crt:0644 \
-    /etc/velox-worker/certs/worker.key:0640 \
-    /etc/velox-worker/secrets/worker_credential:0640 ; do
-    spec_path="${spec%:*}"
-    spec_mode="${spec##*:}"
+    /etc/velox-worker/certs/worker.crt:0644:root \
+    /etc/velox-worker/certs/ca.crt:0644:root \
+    /etc/velox-worker/certs/worker.key:0600:${IMAGE_UID} \
+    /etc/velox-worker/secrets/worker_credential:0600:${IMAGE_UID} ; do
+    spec_path="${spec%:*:*}"
+    spec_mode="${spec#*:}"; spec_mode="${spec_mode%:*}"
+    spec_owner="${spec##*:}"
     [[ -e "$spec_path" ]] || continue
-    chown root:"${IMAGE_GID}" "$spec_path"
+    chown "${spec_owner}:${IMAGE_GID}" "$spec_path"
     chmod "$spec_mode" "$spec_path"
 done
-ok "cert + secret perms aligned for uid ${IMAGE_GID}"
+ok "cert + secret perms aligned for uid ${IMAGE_GID} (key/credential 0600 owner ${IMAGE_UID})"
 
 # ── 3. Install canonical runtime definitions ───────────────────────────────
 log "Copying compose.yml to $COMPOSE_YML_DST"
