@@ -24,7 +24,7 @@ deploy/openbao/
 ├── config/bao.hcl         # config server: raft (/openbao/file) + listener TLS
 ├── .env.example           # template config non-segreta (→ .env, gitignored)
 ├── .gitignore             # guardia extra: mai committare chiavi/token/stato
-├── policies/              # policy HCL: master, admin, worker.hcl.tmpl
+├── policies/              # policy HCL: master, admin, ssh-operator, worker.hcl.tmpl
 ├── scripts/
 │   ├── gen-tls.sh               # certificato TLS listener (state-dir, 0600/0640)
 │   ├── bootstrap-init.sh        # init Shamir: unseal keys + root token (0600)
@@ -36,7 +36,10 @@ deploy/openbao/
 │   ├── provision-approle.sh     # AppRole per principal + role-id/secret-id (0600)
 │   ├── verify-approle.sh        # login reale + check autorizzazioni positivi/negativi
 │   ├── migrate-master-tokens.sh # env → KV (una tantum, --force, fail-closed)
-│   └── resolve-master-tokens.sh # KV → extra-vars Ansible vault_velox_* (0600)
+│   ├── resolve-master-tokens.sh # KV → extra-vars Ansible vault_velox_* (0600)
+│   ├── provision-ssh-ca.sh      # engine ssh + CA (mai rigenerata) + role velox-operator
+│   ├── sign-operator-ssh.sh     # firma cert operatore (TTL breve, principals limitati)
+│   └── verify-ssh-ca.sh         # 11 check: engine, CA, role, firma di prova, negativo
 └── README.md
 ```
 
@@ -310,7 +313,32 @@ impostato: risolve il vars file e lo inietta con `-e @/tmp/openbao-vars.yml`
 (extra-vars condizionali). Senza `OPENBAO_ADDR` il flusso ansible-vault resta
 **identico** — il deploy non si rompe.
 
-## 11. Backup delle chiavi (FATTO SUBITO)
+## 11. SSH Certificate Authority (fase 7)
+
+Guida completa: `docs/openbao-ssh-ca.md`. Il secrets engine `ssh` di OpenBao
+firma i certificati degli operatori (TTL **breve**, default 30m, principals
+`velox-admin`/`velox-deploy`); i nodi fidano della CA con `TrustedUserCAKeys`
+(`deploy/playbooks/bootstrap-ssh.yml`) — niente password SSH statiche, niente
+`authorized_keys` per operatore nel lungo periodo.
+
+```bash
+./scripts/provision-ssh-ca.sh            # enable engine + CA (idempotente) + role + export pubkey
+./scripts/sign-operator-ssh.sh --pubkey-file ~/.ssh/velox.pub      # cert 30m
+./scripts/verify-ssh-ca.sh               # 11 check (firma di prova + negativo fail-closed)
+```
+
+- La **chiave privata della CA vive SOLO in OpenBao** (`ssh/config/ca`, generata
+  una volta — mai sovrascritta: rigenerarla invaliderebbe ogni cert emesso).
+- La **chiave pubblica** è esportata in `$STATE_DIR/ssh-ca.pub` (0644) e
+  distribuita dai nodi come `/etc/ssh/trusted-user-ca-keys.pem`.
+- Policy: `admin.hcl` copre `ssh/*` (gestione CA); `ssh-operator.hcl` è la
+  policy di SOLA firma (`update` su `ssh/sign/*`, `read` su `ssh/config/ca` +
+  `ssh/roles/*`) — AppRole dedicato con `./scripts/provision-approle.sh
+  --principal ssh-operator` e verifica in `verify-approle.sh`.
+- `scripts/ci/test-openbao-ssh-ca.sh`: sintassi + check strutturali (sempre) +
+  smoke live completo (se OpenBao è raggiungibile).
+
+## 12. Backup delle chiavi (FATTO SUBITO)
 
 ```bash
 # fuori dal repo:
@@ -324,7 +352,7 @@ token, i secret in OpenBao sono irrecuperabili. Dopo il backup offline puoi
 eliminare i file locali (il bootstrap li rigenera solo con un re-init, che
 distrugge i dati).
 
-## 12. Operazioni quotidiane
+## 13. Operazioni quotidiane
 
 | Operazione | Comando |
 |---|---|
@@ -335,7 +363,7 @@ distrugge i dati).
 | Upgrade | aggiorna `OPENBAO_VERSION` in `.env`, poi `docker compose pull && docker compose up -d` |
 | Interfaccia UI | https://127.0.0.1:8200/ui (richiede token; cert self-signed → accetta il warning) |
 
-## 13. Prossimi passi della migrazione
+## 14. Prossimi passi della migrazione
 
 1. ~~**KV store**~~ ✅ implementato (`deploy/openbao/scripts/provision-kv.sh`,
    gerarchia in §8 sopra).
@@ -352,9 +380,14 @@ distrugge i dati).
 5. ✅ ~~Migrazione dei token master~~ — `migrate-master-tokens.sh` (env → KV,
    una tantum) + `resolve-master-tokens.sh` (KV → extra-vars Ansible, al deploy),
    integrati in `.github/workflows/deploy.yml` come step opzionale (§10).
-6. SSH CA, PKI mTLS, credenziali DB dinamiche, `SecretResolver` in Go.
+6. ✅ ~~SSH CA~~ — secrets engine `ssh` + CA + role `velox-operator` +
+   firma operatore a TTL breve (§11 + `docs/openbao-ssh-ca.md`); da completare
+   con la dismissione delle `authorized_keys` statiche una volta che tutti gli
+   operatori usano i cert.
+7. PKI mTLS (leaf per-worker dal secrets engine `pki`), credenziali DB
+   dinamiche, `SecretResolver` in Go.
 
-## 14. Riferimenti
+## 15. Riferimenti
 
 - OpenBao docs: https://openbao.org/docs/
 - Config: `config/bao.hcl` (raft + listener TLS)

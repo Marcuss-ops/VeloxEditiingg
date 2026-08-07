@@ -175,6 +175,18 @@ for principal in "${PRINCIPALS[@]}"; do
                 "$tok" "auth/approle/role/x" create
             expect_cap "policy management cap" \
                 "$tok" "sys/policies/acl/x" update
+            expect_cap "ssh CA management cap" \
+                "$tok" "ssh/config/ca" update
+            ;;
+        ssh-operator)
+            expect_cap "sign cap on ssh/sign/velox-operator" \
+                "$tok" "ssh/sign/velox-operator" update
+            expect_cap "read CA pubkey cap (TrustedUserCAKeys)" \
+                "$tok" "ssh/config/ca" read
+            expect_no_cap "NO ssh role management" \
+                "$tok" "ssh/roles/x" create
+            expect_no_cap "NO KV write" \
+                "$tok" "velox/data/production/master/admin-token" update
             ;;
     esac
     # revoca del token di test

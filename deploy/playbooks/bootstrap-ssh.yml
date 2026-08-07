@@ -9,10 +9,21 @@
 #      (no password; SSH-only). Idempotent.
 #   2. Installs the operator's SSH public key into
 #      /home/velox-deploy/.ssh/authorized_keys. Idempotent.
-#   3. Drops a hardening file into /etc/ssh/sshd_config.d/ that disables
+#   3. Installs the OpenBao SSH CA public key into
+#      /etc/ssh/trusted-user-ca-keys.pem and declares it via
+#      TrustedUserCAKeys (when `velox_ssh_ca_pubkey` / vault
+#      `vault_velox_ssh_ca_pubkey` is provided): certificates signed by the
+#      OpenBao CA (TTL breve, principals velox-admin/velox-deploy) are then
+#      accepted — no per-operator authorized_keys entries needed.
+#   4. Drops a hardening file into /etc/ssh/sshd_config.d/ that disables
 #      password authentication and root login. Idempotent.
-#   4. Validates the resulting sshd config with `sshd -t` and reloads.
+#   5. Validates the resulting sshd config with `sshd -t` and reloads.
 #      Reload only fires if the drop-in content actually changed.
+#
+# Transizione dismissione password: PasswordAuthentication no è attivo già
+# oggi. Le authorized_keys statiche restano come fallback finché TUTTI gli
+# operatori usano i certificati OpenBao; poi si rimuove il task 2 (vedi
+# docs/openbao-ssh-ca.md §Dismissione).
 #
 # Required privilege: the host must currently be reachable via SSH as root
 # (or via sudo). After this playbook completes, only key-based SSH as
@@ -48,6 +59,7 @@
       - sudo
       - docker
     sshd_hardening_dropin: /etc/ssh/sshd_config.d/99-velox-hardening.conf
+    sshd_ca_keys_file: /etc/ssh/trusted-user-ca-keys.pem
 
   vars_files:
     - ../group_vars/all.yml
@@ -96,6 +108,19 @@
         state: present
         key: "{{ velox_operator_pubkey | default(vault_velox_operator_pubkey) }}"
 
+    - name: Install OpenBao SSH CA public key (TrustedUserCAKeys)
+      when: (velox_ssh_ca_pubkey | default('')) | length > 0
+            or (vault_velox_ssh_ca_pubkey | default('')) | length > 0
+      ansible.builtin.copy:
+        dest: "{{ sshd_ca_keys_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+        content: "{{ velox_ssh_ca_pubkey | default(vault_velox_ssh_ca_pubkey) }}\n"
+      # Rota la CA pubkey: anche se il drop-in non cambia (TrustedUserCAKeys già
+      # presente), il file va riletto da sshd — notify esplicito.
+      notify: validate and reload sshd
+
     - name: Install SSH hardening drop-in
       ansible.builtin.copy:
         dest: "{{ sshd_hardening_dropin }}"
@@ -108,6 +133,10 @@
           PasswordAuthentication no
           KbdInteractiveAuthentication no
           PermitRootLogin no
+          {% if (velox_ssh_ca_pubkey | default('')) | length > 0
+             or (vault_velox_ssh_ca_pubkey | default('')) | length > 0 %}
+          TrustedUserCAKeys {{ sshd_ca_keys_file }}
+          {% endif %}
           {{ sshd_hardening_extra }}
       notify: validate and reload sshd
 

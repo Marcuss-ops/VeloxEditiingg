@@ -114,10 +114,18 @@ tabella SQLite `worker_credentials` del master (migration `020_worker_control_pl
 | Elemento | Dove | Referente | Tipo |
 |---|---|---|---|
 | Chiave privata operatore | `~/.ssh/velox` (o `~/.ssh/id_ed25519_velox`, vedi fixture test) | `bootstrap-ssh.yml`, inventory `ansible_ssh_private_key_file` | Chiave privata SSH |
-| Chiave pubblica operatore | `vault_velox_operator_pubkey` → `/home/velox-deploy/.ssh/authorized_keys` | accesso SSH ai nodi | Chiave pubblica |
-| Hardening sshd | `PasswordAuthentication no`, `PermitRootLogin no` (`bootstrap-ssh.yml`) | tutti i nodi | Policy |
+| Chiave pubblica operatore (fallback transizione) | `vault_velox_operator_pubkey` → `/home/velox-deploy/.ssh/authorized_keys` | accesso SSH ai nodi | Chiave pubblica |
+| **CA SSH OpenBao (privata)** | **solo dentro OpenBao** (secrets engine `ssh`, config/ca) — `deploy/openbao/scripts/provision-ssh-ca.sh` la genera una volta, MAI esportata | firma certificati operatore | Chiave privata CA (critica) |
+| **CA SSH OpenBao (pubblica)** | `.velox/openbao/ssh-ca.pub` → `/etc/ssh/trusted-user-ca-keys.pem` via `bootstrap-ssh.yml` (`vault_velox_ssh_ca_pubkey`), `TrustedUserCAKeys` | tutti i nodi (verifica cert) | Chiave pubblica CA |
+| **Certificato operatore firmato** | `sign-operator-ssh.sh` → `~/.ssh/<key>-cert.pub`; TTL **breve** (default 30m), principals `velox-admin`/`velox-deploy`; scade da solo (niente revoche manuali) | accesso SSH ai nodi | Certificato SSH (transitorio) |
+| Hardening sshd | `PasswordAuthentication no`, `PermitRootLogin no`, `PubkeyAuthentication yes` (`bootstrap-ssh.yml`) | tutti i nodi | Policy |
 | Sudo | passwordless via `velox-deploy` (no password) | playbook deploy | Policy |
 | SecretResolver SSH | `DataServer/internal/handlers/remote/ansible/secrets.go` — file `ssh_host_<host>` (0600) sotto il secrets dir; la tabella `ansible_hosts` (SQLite) salva solo `secret_ref` (`file:ssh_host_<host>`), mai la password in chiaro | inventory dinamico Ansible (`manager_computers.go`) | Password SSH (transitorie) |
+
+> Dismissione: le `authorized_keys` statiche e le password SSH restano come
+> fallback/transitorie finché TUTTI gli operatori usano i certificati OpenBao;
+> poi si rimuove il task authorized_keys di `bootstrap-ssh.yml` (vedi
+> `docs/openbao-ssh-ca.md` §Dismissione).
 
 ### 2.6 PKI / certificati mTLS (3 livelli)
 
@@ -187,7 +195,9 @@ Documentazione: `docs/operations/PR-6-pki-rotation-runbook.md`, `docs/roadmap/13
 | 11 | root/intermediate CA key | air-gapped / `/opt/velox/certs/intermediate/` | PEM cifrata | PKI 3 livelli | chiave privata CA | **critica** |
 | 12 | server.key master | `/opt/velox/certs/master/server.key` | PEM | gRPC/REST TLS | chiave privata | alta |
 | 13 | chiave privata SSH operatore | `~/.ssh/velox` | chiave ed25519/rsa | accesso nodi | chiave privata SSH | alta |
-| 14 | pubkey operatore | vault → `authorized_keys` | pubkey | bootstrap-ssh | identità | bassa |
+| 14 | pubkey operatore | vault → `authorized_keys` (fallback transizione) | pubkey | bootstrap-ssh | identità | bassa |
+| 14b | **CA SSH OpenBao (privata)** | dentro OpenBao (`ssh/config/ca`) — mai esportata | chiave privata CA | firma cert operatore | critica | critica |
+| 14c | **cert operatore firmato** | `~/.ssh/<key>-cert.pub` (TTL ≤30m default) | cert SSH | accesso nodi | transitorio | bassa (scade) |
 | 15 | password SSH host (transitorie) | SecretResolver → `ssh_host_<host>` (0600); `secret_ref` in SQLite | file | inventory dinamico Ansible | password | media |
 | 16 | OAuth Drive client_secret/token | `DataServer/data/drive/credentials+tokens` (gitignored) | JSON | integrazione Drive | OAuth | alta |
 | 17 | credenziali publish con lease | `credentials.Vault` (SQLite cifrata, lease 15min) | materiale OAuth | delivery runner | dinamico con lease | media (già gestito) |

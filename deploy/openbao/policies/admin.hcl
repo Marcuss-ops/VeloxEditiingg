@@ -5,6 +5,7 @@
 #   auth/approle/*              → gestione machine identity (crea/ruota role,
 #                                 genera secret-id)
 #   sys/policies/acl/*          → gestione policy
+#   ssh/*                       → gestione CA SSH (config/ca, role, firma)
 #   sys/health                  → sola lettura stato
 #
 # Non include path sudo (sys/raw, sys/auth, ecc.): il root token resta
@@ -23,6 +24,10 @@ path "auth/approle/*" {
 }
 
 path "sys/policies/acl/*" {
+  capabilities = ["create", "read", "update", "delete", "list"]
+}
+
+path "ssh/*" {
   capabilities = ["create", "read", "update", "delete", "list"]
 }
 

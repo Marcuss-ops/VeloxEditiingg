@@ -72,3 +72,14 @@ vault_velox_worker_credential_3: ""
 # When set, bootstrap-ssh.yml reads it here instead of requiring the operator
 # to pass --extra-vars on every invocation.
 vault_velox_operator_pubkey: ""
+
+# ── OpenBao SSH CA public key (consumed by bootstrap-ssh.yml) ────────────────
+# ⚠️ MIGRAZIONE SSH CA (fase 7): la chiave PUBBLICA della CA SSH di OpenBao
+#    (deploy/openbao/scripts/provision-ssh-ca.sh → .velox/openbao/ssh-ca.pub).
+#    Copiata su /etc/ssh/trusted-user-ca-keys.pem e dichiarata
+#    TrustedUserCAKeys: i nodi accettano i certificati firmati da OpenBao
+#    (TTL breve, principals velox-admin/velox-deploy). È PUBBLICA (non un
+#    segreto) — sta qui solo per comodità del playbook. Quando TUTTI gli
+#    operatori useranno i cert, si potrà rimuovere vault_velox_operator_pubkey
+#    e il task authorized_keys di bootstrap-ssh.yml.
+vault_velox_ssh_ca_pubkey: ""
