@@ -40,6 +40,12 @@ WORKDIR="${E2E_WORKDIR:-/tmp/velox-e2e-workload}"
 BIN_DIR="$WORKDIR/bin"
 DATA_DIR="$WORKDIR/data"
 STAGING_DIR="$WORKDIR/staging"
+# Fixture inputs live INSIDE DATA_DIR because the input-security policy
+# (inputsecurity.ValidateFile) only accepts paths under AllowedRoots
+# (DataDir) / TempDir / QuarantineDir — a file in an unrelated staging
+# dir is rejected with INPUT_PATH_VIOLATION. VELOX_STAGING_DIR above
+# remains the BlobStore spool dir and must NOT hold job inputs.
+FIXTURE_DIR="$DATA_DIR/fixtures"
 STORAGE_DIR="$WORKDIR/storage"
 LOG_DIR="$WORKDIR/logs"
 
@@ -148,7 +154,7 @@ phase_build() {
 # ═══════════════════════════════════════════════════════════════════════════════
 phase_fixtures() {
   info "Phase 2: generating test fixtures"
-  mkdir -p "$STAGING_DIR"
+  mkdir -p "$FIXTURE_DIR"
 
   command -v ffmpeg >/dev/null 2>&1 || { fail "ffmpeg not found — install ffmpeg"; exit 3; }
 
@@ -158,25 +164,25 @@ phase_fixtures() {
   info "  → scene.png (teal 1920x1080)"
   ffmpeg -hide_banner -loglevel error -y \
     -f lavfi -i "color=c=0x008080:s=1920x1080:d=0.1" -frames:v 1 \
-    -vcodec png "$STAGING_DIR/scene.png" 2>/dev/null || {
+    -vcodec png "$FIXTURE_DIR/scene.png" 2>/dev/null || {
     fail "scene.png generation failed"; exit 3; }
 
   # Silent audio: 2 seconds, AAC in MP4 container (for voiceless render)
   info "  → silent.aac (2s, AAC)"
   ffmpeg -hide_banner -loglevel error -y \
     -f lavfi -i "anullsrc=r=48000:cl=mono" -t 2 \
-    -c:a aac -b:a 64k "$STAGING_DIR/silent.aac" 2>/dev/null || {
+    -c:a aac -b:a 64k "$FIXTURE_DIR/silent.aac" 2>/dev/null || {
     # Try MP3 fallback
     ffmpeg -hide_banner -loglevel error -y \
       -f lavfi -i "anullsrc=r=44100:cl=mono" -t 2 \
-      -c:a libmp3lame -b:a 64k "$STAGING_DIR/silent.mp3" 2>/dev/null || {
+      -c:a libmp3lame -b:a 64k "$FIXTURE_DIR/silent.mp3" 2>/dev/null || {
       fail "audio fixture generation failed"; exit 3; }
     info "  → silent.mp3 (2s, MP3 fallback)"
   }
 
-  local scene_path="$STAGING_DIR/scene.png"
-  local audio_path="$STAGING_DIR/silent.aac"
-  [[ -f "$audio_path" ]] || audio_path="$STAGING_DIR/silent.mp3"
+  local scene_path="$FIXTURE_DIR/scene.png"
+  local audio_path="$FIXTURE_DIR/silent.aac"
+  [[ -f "$audio_path" ]] || audio_path="$FIXTURE_DIR/silent.mp3"
 
   ls -la "$scene_path" "$audio_path" 2>/dev/null
   pass "fixtures ready"
@@ -199,9 +205,12 @@ phase_master_start() {
   sqlite3 "$DATA_DIR/velox.db" \
     "INSERT INTO delivery_destinations (destination_id, provider, name, enabled, configuration_json, created_at, updated_at) VALUES ('$DESTINATION_ID', 'google_drive', 'Local E2E', 1, '{}', datetime('now'), datetime('now'));"
 
+  # Control-plane endpoints required by validateBootstrapEndpoints (REST public + gRPC control).
   cat > "$MASTER_ENV" <<ENV
 VELOX_MASTER_PORT=$MASTER_PORT
 VELOX_GRPC_PORT=$GRPC_PORT
+VELOX_CONTROL_PLANE_REST_PUBLIC_URL=http://127.0.0.1:${MASTER_PORT}
+VELOX_CONTROL_PLANE_GRPC_URL=127.0.0.1:${GRPC_PORT}
 VELOX_DB_PATH=$DATA_DIR/velox.db
 VELOX_DATA_DIR=$DATA_DIR
 VELOX_STAGING_DIR=$STAGING_DIR
@@ -245,11 +254,11 @@ ENV
 phase_submit() {
   info "Phase 4: submitting job"
 
-  local scene_path="$STAGING_DIR/scene.png"
-  local audio_path="$STAGING_DIR/silent.aac"
-  [[ -f "$audio_path" ]] || audio_path="$STAGING_DIR/silent.mp3"
+  local scene_path="$FIXTURE_DIR/scene.png"
+  local audio_path="$FIXTURE_DIR/silent.aac"
+  [[ -f "$audio_path" ]] || audio_path="$FIXTURE_DIR/silent.mp3"
 
-  "${REPO_ROOT}/scripts/e2e/write-local-workload-fixture.sh" "$WORKDIR/job.json" "$STAGING_DIR" "$DESTINATION_ID"
+  "${REPO_ROOT}/scripts/e2e/write-local-workload-fixture.sh" "$WORKDIR/job.json" "$FIXTURE_DIR" "$DESTINATION_ID"
 
   local submit_out
   submit_out="$(curl -sS -m 15 -X POST \
