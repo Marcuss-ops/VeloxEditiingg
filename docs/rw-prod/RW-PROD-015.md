@@ -2,7 +2,7 @@
 
 **Priorità:** P0
 **Dipendenze:** RW-PROD-006, RW-PROD-007, RW-PROD-009, RW-PROD-010, RW-PROD-011, RW-PROD-012
-**Stato attuale:** `tests/e2e/soak-partition/test_recovery.sh` esiste (recovery-oriented), nessun soak duraturo 24h per classe. **Gap**: matrice hardware certificazione, firma digitale report, finestra soak non documentata, integrazione con `scripts/benchmark-classes.sh` (RW-PROD-006).
+**Stato attuale:** `tests/e2e/soak-partition/test_recovery.sh` esiste (recovery-oriented), nessun soak duraturo 24h per classe. La matrice hardware canonica è ora codificata in `deploy/inventory/hardware_matrix.yml` come snapshot metadata-only dei quattro worker. **Gap residui**: firma digitale report, finestra soak non documentata, integrazione con `scripts/benchmark-classes.sh` (RW-PROD-006).
 
 ---
 
@@ -10,7 +10,7 @@
 
 1. **Nessun soak 24h per classe.** Repository ha test brevi (<5min) e "soak-partition" che fa recovery, non durata.
 2. **Nessun firmato output.** Report JSON firmato digitalmente per worker? Attualmente solo JSON testuale.
-3. **Matrice HW non codificata.** Inventory Ansible ha `worker_class` ma non tabella classe → spec / RAM / swap / disk.
+3. **Matrice HW consolidata.** `deploy/inventory/hardware_matrix.yml` codifica la policy classe → RAM/swap/max-active e lo snapshot read-only di CPU, RAM e filesystem root dei quattro worker. L’artefatto non sostituisce `ansible_hosts` né `worker_runtime_snapshots`, che restano le fonti runtime per identità/connettività e capability persistite.
 4. **Gate numerici del runbook (§15):** job persi = 0; doppio READY = 0; OOM = 0; etc. — non esiste script `verify-soak-gates`.
 5. **Inclusione mancanti scenari:** cache cold/warm, restart master, restart worker, network partition, drain, SIGTERM — non sono tutti.
 
@@ -36,11 +36,17 @@
    - Conservazione in `ops/soak-reports/`.
 
 4. **Matrice hardware in `deploy/inventory/hardware_matrix.yml`:**
+   Il file contiene la policy di classe e il blocco `workers` con osservazioni
+   byte-accurate raccolte via SSH read-only. I quattro worker osservati
+   rientrano nella classe `cpu-xlarge` secondo la soglia RAM documentata;
+   l’artefatto mantiene anche `registry` e `coherence` per evidenziare
+   eventuali mapping incompleti senza inferire identità legacy.
+
    ```yaml
    classes:
-     cpu-small: {min_ram_gb:4, max_active:1, recommended_swap_gb:2}
-     cpu-medium: {min_ram_gb:8, max_active:2, recommended_swap_gb:4}
-     cpu-xlarge: {min_ram_gb:16, max_active:4, recommended_swap_gb:8}
+     cpu-small: {min_ram_gb: 4, max_active: 1, recommended_swap_gb: 2}
+     cpu-medium: {min_ram_gb: 8, max_active: 2, recommended_swap_gb: 4}
+     cpu-xlarge: {min_ram_gb: 16, max_active: 4, recommended_swap_gb: 8}
    ```
 
 5. **Output standardizzato:**
@@ -56,7 +62,7 @@
 |---|-----------|--------|
 | A1 | `scripts/soak-run.sh` (nuovo) | Driver soak per worker. |
 | A2 | `scripts/verify-soak-gates.sh` (nuovo) | Gate check su report JSON. |
-| A3 | `deploy/inventory/hardware_matrix.yml` (nuovo) | Tabella classi. |
+| A3 | `deploy/inventory/hardware_matrix.yml` | Policy classi + snapshot hardware dei quattro worker. |
 | A4 | `docs/operations/03-build-deploy-and-ci-hardening.md` | Sezione "Soak test workflow" con gate. |
 | A5 | `tests/e2e/soak/` (nuovo) | Job fixtures (piccoli/medi/pesanti). |
 | A6 | `tests/e2e/soak/fixtures/` | 3 fixture deterministic. |
@@ -95,6 +101,7 @@
 
 ## 6. Evidenze
 
+- `deploy/inventory/hardware_matrix.yml` — snapshot canonico metadata-only di CPU/RAM/disk e coerenza registry.
 - `report-worker-${ID}-${TS}.json` firmato GPG.
 - `ops/soak-reports/index.json` aggregato.
 - Dashboard Grafana `dashboards/soak-status.json`.
