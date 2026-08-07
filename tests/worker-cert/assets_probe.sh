@@ -245,6 +245,7 @@ TMP_PAYLOAD=$(mktemp)
 if ! python3 "${SCRIPT_DIR}/build_real_payload.py" \
       --fixtures "$ASSETS_FILE" \
       --worker-id "$TARGET_WORKER_ID" \
+      --placement-pin-worker-id "$TARGET_WORKER_ID" \
       --destination "$PROBE_DESTINATION_ID" \
       --scenes-count 1 \
       --duration-per-scene 3 \

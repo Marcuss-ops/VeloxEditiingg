@@ -158,6 +158,7 @@ PAYLOAD_FILE="$(mktemp "${EVIDENCE_DIR}/payload-XXXXXX.json")"
 if ! python3 "${REPO_ROOT}/tests/worker-cert/build_real_payload.py" \
       --fixtures "${REPO_ROOT}/tests/worker-cert/fixtures/assets.json" \
       --worker-id "${TARGET_WORKER_ID:-multi-scene-concat-dry}" \
+      --placement-pin-worker-id "${TARGET_WORKER_ID:-}" \
       --destination "${MULTISCENE_DESTINATION_ID}" \
       --target-executor-id "${FULLPAYLOAD_TARGET_EXECUTOR_ID}" \
       --scenes-count "${SCENES_COUNT}" \

@@ -265,6 +265,7 @@ TMP_PAYLOAD=$(mktemp "${REPO_ROOT}/tests/worker-cert/.tmp-payload.XXXXXX.json")
 log_info "building payload via build_real_payload.py → $TMP_PAYLOAD"
 if ! python3 "${REPO_ROOT}/tests/worker-cert/build_real_payload.py" \
       --worker-id "recovery-${TARGET_WORKER_ID}" \
+      --placement-pin-worker-id "$TARGET_WORKER_ID" \
       --destination "$DESTINATION_ID" \
       --strict \
       --output "$TMP_PAYLOAD" >/dev/null 2>&1; then

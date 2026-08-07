@@ -213,6 +213,7 @@ rw_job_checks() {
       payload_file="$(mktemp "${TMPDIR:-/tmp}/velox-job-payload.XXXXXX")"
       if ! python3 "${RW_CERT_CONFIG_DIR}/../../tests/worker-cert/build_real_payload.py" \
         --fixtures "$RW_JOB_FIXTURES_FILE" --worker-id "$WORKER_ID" \
+        --placement-pin-worker-id "$WORKER_ID" \
         --destination "$RW_JOB_DESTINATION_ID" --scenes-count "$RW_JOB_SCENES_COUNT" \
         --duration-per-scene "$RW_JOB_DURATION_PER_SCENE" --strict --output "$payload_file" >/dev/null 2>&1; then
         diagnostic="canonical job payload builder failed"

@@ -52,8 +52,10 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # ─── Cross-test helpers ────────────────────────────────────────────────────
 # shellcheck source=tests/_lib/sh/_lib.sh
+# shellcheck disable=SC1091
 source "${REPO_ROOT}/tests/_lib/sh/_lib.sh"
 # shellcheck source=tests/worker-cert/lib/pluck.sh
+# shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib/pluck.sh"
 
 # ─── Args / env ────────────────────────────────────────────────────────────
@@ -104,6 +106,7 @@ PROVISIONED_CLIENT_ID=""
 STEPS_JSON=""
 PASS_FAIL_STEP=0   # first failing step number; 0 = none yet
 
+# shellcheck disable=SC2329 # invoked indirectly by the EXIT/INT/TERM trap
 on_exit_cleanup() {
   local rc=$?
   [[ -n "$M2M_BEARER" && -n "$PROVISIONED_CLIENT_ID" && -n "$ADMIN_TOKEN" ]] && \
@@ -141,9 +144,23 @@ append_step() {
   fi
 }
 
+# Pre-initialise report fields before the writer can be called on any early
+# failure path. Empty strings are deliberately valid report values.
+JOB_ID=""
+TASK_ID=""
+ATTEMPT_ID=""
+LEASE_ID=""
+LEASE_WORKER=""
+ARTIFACT_URL=""
+ARTIFACT_SIZE_BYTES=0
+DOWNLOAD_MS=""
+RENDER_MS_ENGINE=""
+elapsed=0
+
 # ─── Atomic JSON report function ────────────────────────────────────────
+# shellcheck disable=SC2329 # invoked indirectly by the explicit early-exit paths
 write_pass_criteria_json() {
-  local now_iso verdict
+  local now_iso verdict out_file tmp_out
   now_iso=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
   if (( PASS_FAIL_STEP == 0 )); then
     verdict="PASS"
@@ -151,32 +168,42 @@ write_pass_criteria_json() {
     verdict="FAIL"
   fi
   ensure_dir "${PASS_OUT_ROOT}/${TARGET_WORKER_ID}"
-  local out_file="${PASS_OUT_ROOT}/${TARGET_WORKER_ID}/pass_criteria.json"
-  local tmp_out; tmp_out=$(mktemp "${PASS_OUT_ROOT}/${TARGET_WORKER_ID}/pass-XXXXXX.json")
-  cat > "$tmp_out" <<JSON
-{
-  "schema": "tests/worker-cert/pass_criteria@1",
-  "worker_id": "${TARGET_WORKER_ID}",
-  "verdict": "${verdict}",
-  "first_failing_step": ${PASS_FAIL_STEP:-0},
-  "job_id": "${JOB_ID}",
-  "task_id": "${TASK_ID}",
-  "attempt_id": "${ATTEMPT_ID}",
-  "lease_id": "${LEASE_ID}",
-  "lease_worker": "${LEASE_WORKER}",
-  "artifact_url": "${ARTIFACT_URL}",
-  "artifact_size_bytes": ${ARTIFACT_SIZE_BYTES:-0},
-  "download_ms": "${DOWNLOAD_MS}",
-  "render_ms_engine": "${RENDER_MS_ENGINE}",
-  "master_url": "${VELOX_MASTER_URL}",
-  "destination_id": "${PASS_DESTINATION_ID}",
-  "poll_timeout_s": ${PASS_POLL_TIMEOUT_S},
-  "elapsed_s": ${elapsed},
-  "checked_at": "${now_iso}",
-  "steps": [${STEPS_JSON}]
-}
-JSON
-  mv "$tmp_out" "$out_file"
+  out_file="${PASS_OUT_ROOT}/${TARGET_WORKER_ID}/pass_criteria.json"
+  tmp_out=$(mktemp "${PASS_OUT_ROOT}/${TARGET_WORKER_ID}/pass-XXXXXX.json")
+  if ! jq -n \
+    --arg schema "tests/worker-cert/pass_criteria@1" \
+    --arg worker_id "$TARGET_WORKER_ID" \
+    --arg verdict "$verdict" \
+    --arg job_id "$JOB_ID" \
+    --arg task_id "$TASK_ID" \
+    --arg attempt_id "$ATTEMPT_ID" \
+    --arg lease_id "$LEASE_ID" \
+    --arg lease_worker "$LEASE_WORKER" \
+    --arg artifact_url "$ARTIFACT_URL" \
+    --arg download_ms "$DOWNLOAD_MS" \
+    --arg render_ms_engine "$RENDER_MS_ENGINE" \
+    --arg master_url "$VELOX_MASTER_URL" \
+    --arg destination_id "$PASS_DESTINATION_ID" \
+    --arg checked_at "$now_iso" \
+    --argjson first_failing_step "${PASS_FAIL_STEP:-0}" \
+    --argjson artifact_size_bytes "${ARTIFACT_SIZE_BYTES:-0}" \
+    --argjson poll_timeout_s "$PASS_POLL_TIMEOUT_S" \
+    --argjson elapsed_s "$elapsed" \
+    --argjson steps "[${STEPS_JSON}]" \
+    '{schema: $schema, worker_id: $worker_id, verdict: $verdict,
+      first_failing_step: $first_failing_step, job_id: $job_id,
+      task_id: $task_id, attempt_id: $attempt_id, lease_id: $lease_id,
+      lease_worker: $lease_worker, artifact_url: $artifact_url,
+      artifact_size_bytes: $artifact_size_bytes, download_ms: $download_ms,
+      render_ms_engine: $render_ms_engine, master_url: $master_url,
+      destination_id: $destination_id, poll_timeout_s: $poll_timeout_s,
+      elapsed_s: $elapsed_s, checked_at: $checked_at, steps: $steps}' \
+    >"$tmp_out"; then
+    rm -f "$tmp_out"
+    log_error "could not render pass_criteria report"
+    return 1
+  fi
+  mv -f "$tmp_out" "$out_file"
   log_info "wrote $out_file"
   printf '%s\n' "REPORT_JSON=${out_file}"
   printf '%s\n' "VERDICT=${verdict}"
@@ -222,19 +249,6 @@ else
   append_step 3 "scene.composite.v1@1" "FAIL" "advertised=[$(printf '%s' "$EXECUTORS" | tr '\n' ',' | sed 's/,$//')]"
 fi
 
-# Pre-initialise report variables so write_pass_criteria_json always has
-# safe defaults, even when we bail out before the poll loop runs.
-JOB_ID=""
-TASK_ID=""
-ATTEMPT_ID=""
-LEASE_ID=""
-LEASE_WORKER=""
-ARTIFACT_URL=""
-ARTIFACT_SIZE_BYTES=0
-DOWNLOAD_MS=""
-RENDER_MS_ENGINE=""
-elapsed=0
-
 # Bail early if step 1/2/3 already failed — submitting a job to a non-conforming
 # worker would just produce noise. We still write the report with FAIL steps
 # so the per-step JSON dump is the canonical post-mortem.
@@ -253,6 +267,7 @@ PAYLOAD_FILE=$(mktemp)
 if ! python3 "${REPO_ROOT}/tests/worker-cert/build_real_payload.py" \
       --fixtures "$ASSETS_FILE" \
       --worker-id "$TARGET_WORKER_ID" \
+      --placement-pin-worker-id "$TARGET_WORKER_ID" \
       --destination "$PASS_DESTINATION_ID" \
       --strict \
       --output "$PAYLOAD_FILE" >/dev/null 2>&1; then

@@ -62,9 +62,10 @@ SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # ─── Cross-test helpers ────────────────────────────────────────────────────
-# shellcheck source=tests/_lib/sh/_lib.sh
+# shellcheck disable=SC1091
 source "${REPO_ROOT}/tests/_lib/sh/_lib.sh"
 # shellcheck source=tests/worker-cert/lib/pluck.sh
+# shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib/pluck.sh"
 
 # ─── EXIT trap: cleanup children + mktemp scratch ─────────────────────────
@@ -73,8 +74,10 @@ TMP_LOG_DIR=""
 TMP_REPORT=""
 LEASES_TSV=""
 OVERALL_FATAL_RC=0
+# shellcheck disable=SC2329 # invoked indirectly by the EXIT/INT/TERM trap
 on_exit_cleanup() {
   local rc=$?
+  on_m2m_cleanup
   # Kill any background poll children (lib_kill_all TERM/KILL cascade).
   lib_kill_all TERM 2>/dev/null || true
   # Cleanup tmp dirs created by mktemp -p.
@@ -173,6 +176,7 @@ fi
 # ─── Provision 1 ephemeral M2M client for the fleet ────────────────────────
 M2M_BEARER=""
 PROVISIONED_CLIENT_ID=""
+# shellcheck disable=SC2329 # invoked indirectly from the EXIT trap
 on_m2m_cleanup() {
   if [[ -n "$PROVISIONED_CLIENT_ID" && -n "$ADMIN_TOKEN" && -n "$VELOX_MASTER_URL" ]]; then
     curl -sS -m 5 -X DELETE \
@@ -247,6 +251,7 @@ TMP_LOG_DIR=$(mktemp -d "${REPO_ROOT}/tests/worker-cert/.tmp-logs.XXXXXX")
 log_info "TMP_PAYLOAD_DIR=$TMP_PAYLOAD_DIR TMP_LOG_DIR=$TMP_LOG_DIR"
 
 declare -a JOB_IDS=()
+declare -a JOB_RC=()
 declare -a JOB_TASK_IDS=()
 declare -a JOB_LEASES=()
 declare -a JOB_WORKERS=()
@@ -269,6 +274,7 @@ for i in $(seq 1 "$FLEET_JOB_COUNT"); do
   if ! python3 "${REPO_ROOT}/tests/worker-cert/build_real_payload.py" \
         --worker-id "${job_slug}" \
         --destination "$DESTINATION_ID" \
+        --no-placement-pin \
         --strict \
         --output "$payload_file" >/dev/null 2>>"${TMP_LOG_DIR}/${job_slug}.stderr"; then
     log_error "FAIL: payload build for slot=${slot} (see ${TMP_LOG_DIR}/${job_slug}.stderr)"
@@ -377,7 +383,7 @@ for idx in "${!JOB_IDS[@]}"; do
       render_ms=$(( (c_epoch - s_epoch) * 1000 ))
     fi
   fi
-  JOB_RC[$idx]="$rc"
+  JOB_RC[idx]="$rc"
   JOB_STATUSES+=("$status")
   JOB_ARTIFACT_URLS+=("$artifact_url")
   JOB_ARTIFACT_SIZES+=("$(stat -c %s "$body_file" 2>/dev/null || echo 0)")  # placeholder, real size comes from /jobs/<id> if present
@@ -387,7 +393,7 @@ for idx in "${!JOB_IDS[@]}"; do
     # if both appear: 7 wins for invariant 5.
     OVERALL_FATAL_RC="$rc"
   fi
-  log_info "[job ${slot}=$((idx+1))/${#JOB_IDS[@]}] job_id=${job_id} status=${status} rc=${rc} artifact_url_present=$([ -n "$artifact_url" ] && echo true || echo false) render_ms=${render_ms}"
+  log_info "[job $((idx+1))/${#JOB_IDS[@]}] job_id=${job_id} status=${status} rc=${rc} artifact_url_present=$([ -n "$artifact_url" ] && echo true || echo false) render_ms=${render_ms}"
 done
 
 # ─── Scrape master log for lease lines + per-worker counts ─────────────────
@@ -602,9 +608,9 @@ if [[ -n "$REPORT_JSON" ]]; then
   ensure_dir "$REPORT_DIR"
   TMP_REPORT=$(mktemp -p "$REPORT_DIR" "${REPORT_JSON##*/}.partial.XXXXXX")
   jobs_json_array=$(printf '%s\n' "${JOB_IDS[@]}" \
-    | awk -v status_a="${JOB_STATUSES[*]}" -v rc_a="${JOB_RC[*]}" -v art_a="${JOB_ARTIFACT_URLS[*]}" -v rt_a="${JOB_RENDER_TIMES[*]}" -v task_a="${JOB_TASK_IDS[*]}" -v worker_a="${JOB_WORKERS[*]}" -v lease_a="${JOB_LEASES[*]}" '
+    | awk -v ids_a="${JOB_IDS[*]}" -v status_a="${JOB_STATUSES[*]}" -v rc_a="${JOB_RC[*]}" -v art_a="${JOB_ARTIFACT_URLS[*]}" -v rt_a="${JOB_RENDER_TIMES[*]}" -v task_a="${JOB_TASK_IDS[*]}" -v worker_a="${JOB_WORKERS[*]}" -v lease_a="${JOB_LEASES[*]}" '
     BEGIN {
-      n=split(status_a, sts, " "); split(rc_a, rcs, " "); split(art_a, arts, " ");
+      n=split(ids_a, ids, " "); split(status_a, sts, " "); split(rc_a, rcs, " "); split(art_a, arts, " ");
       split(rt_a, rts, " "); split(task_a, ts, " "); split(worker_a, ws, " ");
       split(lease_a, ls, " ");
       printf("[");

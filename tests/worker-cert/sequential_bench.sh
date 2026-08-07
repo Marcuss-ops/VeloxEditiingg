@@ -280,6 +280,7 @@ submit_and_poll_job() {
   if ! python3 "${SCRIPT_DIR}/build_real_payload.py" \
         --fixtures "$ASSETS_FILE" \
         --worker-id "$target_worker" \
+        --placement-pin-worker-id "$target_worker" \
         --destination "$DESTINATION_ID" \
         --scenes-count 2 \
         --duration-per-scene 3 \

@@ -160,6 +160,7 @@ PAYLOAD_FILE=$(mktemp)
 if ! python3 "${REPO_ROOT}/tests/worker-cert/build_real_payload.py" \
       --fixtures "$ASSETS_FILE" \
       --worker-id "$TARGET_WORKER_ID" \
+      --placement-pin-worker-id "$TARGET_WORKER_ID" \
       --destination "$SMOKE_DESTINATION_ID" \
       --strict \
       --output "$PAYLOAD_FILE" >/dev/null 2>&1; then

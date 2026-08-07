@@ -274,6 +274,7 @@ def build_payload(builder: Path, fixtures: Path, worker_id: str, destination: st
         str(builder),
         "--fixtures", str(fixtures),
         "--worker-id", worker_id,
+        "--placement-pin-worker-id", worker_id,
         "--destination", destination,
         "--idempotency-suffix", str(suffix),
         "--strict",
