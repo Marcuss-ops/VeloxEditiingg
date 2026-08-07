@@ -211,6 +211,14 @@ DataServer/api-docs-gen
 tests/smoke/full_payload/evidence/*
 !tests/smoke/full_payload/evidence/.gitkeep
 
+# ── Local infrastructure experiments (operator-local; not versioned yet) ──
+# `infra/` holds operator-local infrastructure scratch (e.g. infra/openbao —
+# a local OpenBao secrets-manager test stack). The subtree ships its own
+# strict .gitignore for secrets, but the whole directory is deliberately
+# untracked until the design stabilises; re-include (remove the rule) when
+# the infra becomes canonical ship-time tooling.
+/infra/
+
 # ── Repo-hygiene cleanup (2026-08-02) ────────────────────────────────
 # Artifacts accidentally committed at the repo root / under dist/: empty
 # sentinel files (Pipeline, Pipeline\, bash-n, end_scenario), a one-shot
