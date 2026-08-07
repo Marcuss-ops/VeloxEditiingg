@@ -131,6 +131,87 @@ run_migration_symlink_rejection_test() {
 
 run_migration_symlink_rejection_test
 
+run_empty_legacy_dropin_cleanup_test() {
+  local tmp root canonical legacy blocked extra_root
+  tmp="$(mktemp -d)"
+  root="$tmp/systemd"
+  canonical="$root/velox-worker.service.d"
+  legacy="$root/velox-worker-worker-test.service.d"
+  blocked="$root/velox-worker-worker-blocked.service.d"
+  mkdir -p "$canonical" "$legacy" "$blocked"
+  printf 'must remain\n' > "$blocked/override.conf"
+  for extra_root in "$tmp/run" "$tmp/lib" "$tmp/usr-lib"; do
+    mkdir -p "$extra_root/velox-worker-worker-extra.service.d"
+  done
+
+  # The cleanup contract is fail-closed: canonical service drop-ins are not
+  # matched, occupied legacy directories abort, and empty legacy directories
+  # are removable. Preflight must happen before any rmdir.
+  if bash -s "$root" "$tmp/run" "$tmp/lib" "$tmp/usr-lib" <<'DROPIN_TEST'
+set -euo pipefail
+root="$1"
+shift
+roots=("$root" "$@")
+legacy_dirs=()
+for scan_root in "${roots[@]}"; do
+  [ -d "$scan_root" ] && [ -r "$scan_root" ] || exit 2
+  found="$(find "$scan_root" -type d -name 'velox-worker-*.service.d' -print)" || exit 2
+  while IFS= read -r dir; do
+    [ -n "$dir" ] && legacy_dirs+=("$dir")
+  done <<< "$found"
+done
+for dir in "${legacy_dirs[@]}"; do
+  [ -n "$dir" ] || continue
+  entry="$(find "$dir" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)"
+  [ -z "$entry" ] || { echo "legacy worker drop-in directory is not empty: $dir" >&2; exit 1; }
+done
+for dir in "${legacy_dirs[@]}"; do
+  [ -n "$dir" ] || continue
+  rmdir "$dir"
+done
+DROPIN_TEST
+  then
+    rm -rf "$tmp"
+    fail 'legacy drop-in cleanup accepted a non-empty directory'
+  fi
+  [[ -d "$canonical" ]] || { rm -rf "$tmp"; fail 'cleanup matched canonical velox-worker.service.d'; }
+  [[ -d "$legacy" ]] || { rm -rf "$tmp"; fail 'cleanup removed no-longer-empty test legacy directory unexpectedly'; }
+  [[ -d "$blocked" && -f "$blocked/override.conf" ]] \
+    || { rm -rf "$tmp"; fail 'cleanup altered a non-empty legacy directory'; }
+
+  # Atomicity assertion: the empty legacy directory must still exist after
+  # the failed preflight above.
+  [[ -d "$legacy" ]] || { rm -rf "$tmp"; fail 'cleanup partially removed before fail-closed abort'; }
+
+  rm -f "$blocked/override.conf"
+  bash -s "$root" "$tmp/run" "$tmp/lib" "$tmp/usr-lib" <<'DROPIN_TEST'
+set -euo pipefail
+root="$1"
+shift
+roots=("$root" "$@")
+legacy_dirs=()
+for scan_root in "${roots[@]}"; do
+  [ -d "$scan_root" ] && [ -r "$scan_root" ] || exit 2
+  found="$(find "$scan_root" -type d -name 'velox-worker-*.service.d' -print)" || exit 2
+  while IFS= read -r dir; do
+    [ -n "$dir" ] && legacy_dirs+=("$dir")
+  done <<< "$found"
+done
+for dir in "${legacy_dirs[@]}"; do
+  [ -d "$dir" ] || continue
+  entry="$(find "$dir" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)"
+  [ -z "$entry" ] || { echo "legacy worker drop-in directory is not empty: $dir" >&2; exit 1; }
+  rmdir "$dir"
+done
+DROPIN_TEST
+  [[ -d "$canonical" ]] || { rm -rf "$tmp"; fail 'cleanup removed canonical service drop-in directory'; }
+  [[ ! -d "$legacy" && ! -d "$blocked" ]] \
+    || { rm -rf "$tmp"; fail 'cleanup did not remove empty legacy directories'; }
+  rm -rf "$tmp"
+}
+
+run_empty_legacy_dropin_cleanup_test
+
 bash -n deploy/runtime/prepare-host.sh
 bash -n deploy/runtime/migrate-legacy-worker.sh
 bash -n deploy/runtime/checklist-verify.sh
@@ -198,8 +279,10 @@ grep -q 'Create missing bootstrap fixture directory preserving metadata' DataSer
   || fail 'Ansible fixture directory creation does not preserve metadata'
 grep -q 'VELOX_STATE_DIR: "{{ velox_state_dir }}"' DataServer/data/ansible/playbooks/tasks/canonical_worker_runtime.yml \
   || fail 'Ansible migration does not receive VELOX_STATE_DIR'
-grep -q 'Reject legacy worker drop-ins before mutation' DataServer/data/ansible/playbooks/tasks/canonical_worker_runtime.yml \
-  || fail 'Ansible legacy drop-in gate is not before host mutation'
+grep -q 'Remove empty legacy worker drop-in directories' DataServer/data/ansible/playbooks/tasks/canonical_worker_runtime.yml \
+  || fail 'Ansible empty legacy drop-in cleanup is not before host mutation'
+grep -q 'legacy worker drop-in directory is not empty' DataServer/data/ansible/playbooks/tasks/canonical_worker_runtime.yml \
+  || fail 'Ansible legacy drop-in cleanup does not fail closed on non-empty directories'
 grep -q 'remote_src: true' DataServer/data/ansible/playbooks/tasks/canonical_worker_runtime.yml \
   || fail 'canonical Ansible runtime task does not use remote sources'
 

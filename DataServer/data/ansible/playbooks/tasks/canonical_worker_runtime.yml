@@ -55,30 +55,55 @@
       }}
 
 # Fail closed before migration, env rendering, or directory creation. The
-# canonical velox-worker.service.d directory is allowed; only per-worker
-# legacy drop-ins are forbidden.
-- name: CanonicalRuntime | Reject legacy worker drop-ins before mutation
+# canonical velox-worker.service.d directory is allowed. Legacy per-worker
+# drop-in directories are removed only when completely empty; any file,
+# symlink, or nested entry aborts convergence so an operator can inspect it.
+- name: CanonicalRuntime | Remove empty legacy worker drop-in directories
   ansible.builtin.shell: |
     set -euo pipefail
-    found=0
-    shopt -s nullglob
-    for dir in \
-      /etc/systemd/system/velox-worker-*.service.d \
-      /run/systemd/system/velox-worker-*.service.d \
-      /lib/systemd/system/velox-worker-*.service.d \
-      /usr/lib/systemd/system/velox-worker-*.service.d; do
-      [ -d "$dir" ] || continue
-      for entry in "$dir"/*.conf; do
-        [ -e "$entry" ] || [ -L "$entry" ] || continue
-        echo "forbidden worker drop-in: $entry" >&2
-        found=1
-      done
+    roots=(
+      /etc/systemd/system
+      /run/systemd/system
+      /lib/systemd/system
+      /usr/lib/systemd/system
+    )
+    legacy_dirs=()
+    for root in "${roots[@]}"; do
+      [ -d "$root" ] && [ -r "$root" ] || {
+        echo "legacy worker drop-in root is missing or unreadable: $root" >&2
+        exit 1
+      }
+      found="$(find "$root" -type d -name 'velox-worker-*.service.d' -print)" || {
+        echo "cannot scan legacy worker drop-in root: $root" >&2
+        exit 1
+      }
+      while IFS= read -r dir; do
+        [ -n "$dir" ] && legacy_dirs+=("$dir")
+      done <<< "$found"
     done
-    shopt -u nullglob
-    [ "$found" -eq 0 ]
+
+    # Preflight every candidate first. No directory is removed if any
+    # candidate contains a file, symlink, or nested entry.
+    for dir in "${legacy_dirs[@]}"; do
+      [ -n "$dir" ] || continue
+      entry="$(find "$dir" -mindepth 1 -maxdepth 1 -print -quit)" || {
+        echo "cannot inspect legacy worker drop-in directory: $dir" >&2
+        exit 1
+      }
+      if [ -n "$entry" ]; then
+        echo "legacy worker drop-in directory is not empty: $dir" >&2
+        exit 1
+      fi
+    done
+
+    for dir in "${legacy_dirs[@]}"; do
+      [ -n "$dir" ] || continue
+      rmdir "$dir"
+      echo "REMOVED_EMPTY:$dir"
+    done
   args:
     executable: /bin/bash
-  changed_when: false
+  changed_when: "'REMOVED_EMPTY:' in (stdout | default(''))"
 
 - name: CanonicalRuntime | Ensure canonical Compose directory exists
   ansible.builtin.file:
@@ -91,9 +116,9 @@
     path: "{{ velox_worker_migration_marker }}"
   register: velox_worker_migration_done
 
-# Legacy discovery, state copying, and unit retirement belong only to the
-# migration boundary. Once the durable marker exists, steady-state deploys
-# must not scan legacy paths or re-normalize old services.
+# Legacy state discovery and copying belong only to the migration boundary.
+# Empty legacy systemd drop-in directories are retired above; non-empty ones
+# fail closed before steady-state convergence can mutate the host.
 - name: CanonicalRuntime | Install one-time legacy migration helper
   ansible.builtin.copy:
     src: "{{ velox_worker_migration_source }}"
@@ -142,10 +167,9 @@
       ({{ velox_worker_bundle_hash | length }} chars). Fix the bundle source;
       do not disable this gate.
 
-# Legacy unit/container cleanup is intentionally not implemented here. The
-# migration helper is the single owner of that one-time transition; keeping a
-# second cleanup implementation in this steady-state task would create two
-# sources of truth and could race the migration marker.
+# Legacy state discovery and copying remain owned by the migration helper.
+# Empty legacy systemd drop-in directories are retired by the atomic cleanup
+# above; non-empty ones fail closed before steady-state convergence.
 
 - name: CanonicalRuntime | Create missing writable runtime directories without rewriting metadata
   ansible.builtin.shell: |
