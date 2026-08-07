@@ -13,13 +13,15 @@
 #   2. ENFORCES that VELOX_WORKER_IMAGE matches
 #      '^ghcr\.io/[a-z0-9._-]+/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$'
 #      (refs to :latest or any non-digest form are rejected before pull).
-#   3. Confirms /var/lib/velox-worker/worker_config.json exists and parses
-#      as JSON. This file is rendered by deploy/scripts/apply-local-worker-config.sh
-#      and bind-mounted into the container at /opt/velox/worker_config.json.
+#   3. Requires VELOX_STATE_DIR and confirms
+#      $VELOX_STATE_DIR/worker_config.json exists and parses as JSON. This
+#      file is rendered by deploy/scripts/apply-local-worker-config.sh and
+#      bind-mounted into the container at /opt/velox/worker_config.json.
 #   4. Runs migrate-legacy-worker.sh once to preserve legacy state and retire
 #      per-host units/containers before the canonical runtime is installed.
-#   5. Creates the directory tree under /opt/velox-worker, /etc/velox-worker,
-#      and /var/lib/velox-worker/state|work|cache|output.
+#   5. Creates missing paths under /opt/velox-worker, /etc/velox-worker,
+#      and VELOX_STATE_DIR/state|work|cache|output without changing existing
+#      owner, mode, ACLs, or contents.
 #   6. Sets uid 10001 ownership AND group read+traversal on /etc/velox-worker
 #      so the container's velox user can read mTLS certs + the per-worker
 #      credential through the compose :ro bind-mounts.
@@ -65,6 +67,39 @@ ok()   { echo -e "${GREEN}[  OK]${NC} $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 fail() { echo -e "${RED}[FAIL]${NC} $*" >&2; exit 1; }
 
+# Only create missing directories with canonical defaults. Existing state and
+# work directories are operator-owned data surfaces: never recursively chown
+# or chmod them during convergence.
+ensure_dir_preserving() {
+    local path="$1" owner="$2" group="$3" mode="$4"
+    if [[ -e "$path" ]]; then
+        [[ -d "$path" ]] || fail "$path exists but is not a directory"
+        return 0
+    fi
+    mkdir -p "$path"
+    chown "$owner:$group" "$path"
+    chmod "$mode" "$path"
+}
+
+assert_no_legacy_dropins() {
+    local found=0 path entry
+    shopt -s nullglob
+    for path in \
+        /etc/systemd/system/velox-worker-*.service.d \
+        /run/systemd/system/velox-worker-*.service.d \
+        /lib/systemd/system/velox-worker-*.service.d \
+        /usr/lib/systemd/system/velox-worker-*.service.d; do
+        [[ -d "$path" ]] || continue
+        for entry in "$path"/*.conf; do
+            [[ -e "$entry" || -L "$entry" ]] || continue
+            found=1
+            warn "legacy systemd drop-in detected: $entry"
+        done
+    done
+    shopt -u nullglob
+    (( found == 0 )) || fail "velox-worker systemd drop-ins are forbidden; remove or migrate them before convergence"
+}
+
 # ── 0. Preconditions ────────────────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
     fail "This script must run as root (use sudo)."
@@ -82,14 +117,28 @@ docker info >/dev/null 2>&1 \
 command -v python3 >/dev/null 2>&1 \
     || fail "python3 not found on PATH — required for JSON sanity check on worker_config.json."
 
-# Run migration before reading the canonical env: a legacy host may only have
-# /etc/velox-worker-<inventory>.env, and migration is responsible for
-# materialising /etc/velox-worker/worker.env without losing persistent state.
+ENV_FILE="${ENV_FILE:-$ENV_FILE_DEFAULT}"
+
+# Refuse legacy per-worker drop-ins before migration can make any host-side
+# changes. The canonical velox-worker.service.d directory remains allowed;
+# only velox-worker-<id>.service.d directories are legacy.
+assert_no_legacy_dropins
+
+# If the canonical env already exists, load it before migration so the
+# mandatory state root is available to the one-time migrator. A host without
+# an explicit state root fails closed rather than falling back to a guessed
+# /var/lib path.
+if [[ -f "$ENV_FILE" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+    set +a
+fi
+
 log "Migrating legacy worker runtime if present"
 install -o root -g root -m 0755 "$MIGRATION_SRC" "$MIGRATION_DST"
-"$MIGRATION_DST"
+CANONICAL_ENV="$ENV_FILE" VELOX_STATE_DIR="${VELOX_STATE_DIR:-}" "$MIGRATION_DST"
 
-ENV_FILE="${ENV_FILE:-$ENV_FILE_DEFAULT}"
 [[ -f "$ENV_FILE" ]] \
     || fail "env file not found: $ENV_FILE. Copy deploy/runtime/worker.env.example to $ENV_FILE and edit."
 
@@ -101,6 +150,12 @@ set +a
 
 : "${VELOX_WORKER_ID:?VELOX_WORKER_ID is missing from $ENV_FILE}"
 : "${VELOX_WORKER_IMAGE:?VELOX_WORKER_IMAGE is missing from $ENV_FILE}"
+: "${VELOX_STATE_DIR:?VELOX_STATE_DIR is missing from $ENV_FILE}"
+[[ "$VELOX_STATE_DIR" == /* ]] \
+    || fail "VELOX_STATE_DIR must be an absolute path (got: $VELOX_STATE_DIR)"
+STATE_DIR_REAL="$(realpath -m -- "$VELOX_STATE_DIR")"
+[[ "$STATE_DIR_REAL" == "$VELOX_STATE_DIR" ]] \
+    || fail "VELOX_STATE_DIR must be normalized and must not contain traversal (got: $VELOX_STATE_DIR)"
 # The compose command passes VELOX_MASTER_URL to the binary's -master flag
 # (REST base URL). Fail fast here rather than letting the worker silently
 # dial a wrong/default target after the image is pulled and the service
@@ -122,40 +177,33 @@ fi
 ok "image digest shape OK (ghcr.io pinned to sha256)"
 
 # ── 0.6. worker_config.json pre-flight ──────────────────────────────────────
-# The compose bind-mounts /var/lib/velox-worker/worker_config.json:ro into
+# The compose bind-mounts $VELOX_STATE_DIR/worker_config.json:ro into
 # the container at /opt/velox/worker_config.json. Without the file present
 # docker will silently bind-mount a directory in its place (or fail on the
 # JSON load). apply-local-worker-config.sh is the canonical renderer and
 # is NOT chained here by design — the operator workflow is:
-#   1. edit worker.env
+#   1. edit worker.env (including the required VELOX_STATE_DIR)
 #   2. apply-local-worker-config.sh --worker-id ... --control-grpc-url ...
 #   3. prepare-host.sh
 # We refuse to start the worker if step 2 was skipped.
-WORKER_CONFIG_FILE="/var/lib/velox-worker/worker_config.json"
+WORKER_CONFIG_FILE="$VELOX_STATE_DIR/worker_config.json"
 [[ -f "$WORKER_CONFIG_FILE" ]] \
     || fail "$WORKER_CONFIG_FILE missing. Run deploy/scripts/apply-local-worker-config.sh first; it renders the JSON from /opt/velox/worker_config.example.json."
 if ! python3 -m json.tool "$WORKER_CONFIG_FILE" >/dev/null 2>&1; then
     fail "$WORKER_CONFIG_FILE is not valid JSON (re-run apply-local-worker-config.sh; output may be on stdout if --keep-tmp was set)."
 fi
-chown "${IMAGE_UID}:${IMAGE_GID}" "$WORKER_CONFIG_FILE"
-chmod 0640 "$WORKER_CONFIG_FILE"
-ok "worker_config.json exists, parses as JSON, owned by ${IMAGE_UID}:${IMAGE_GID} mode 0640"
+ok "worker_config.json exists and parses as JSON (existing metadata preserved)"
 
 # ── 1. Canonical directory tree ────────────────────────────────────────────
-log "Creating /opt, /etc, /var/lib/velox-worker directory tree"
-mkdir -p \
-    /opt/velox-worker \
-    /etc/velox-worker/certs \
-    /etc/velox-worker/secrets \
-    /var/lib/velox-worker/state \
-    /var/lib/velox-worker/work \
-    /var/lib/velox-worker/cache \
-    /var/lib/velox-worker/output
+log "Creating /opt, /etc, and state directory tree"
+mkdir -p /opt/velox-worker /etc/velox-worker/certs /etc/velox-worker/secrets
+ensure_dir_preserving "$VELOX_STATE_DIR" "$IMAGE_UID" "$IMAGE_GID" 0750
+for state_subdir in state work cache output; do
+    ensure_dir_preserving "$VELOX_STATE_DIR/$state_subdir" "$IMAGE_UID" "$IMAGE_GID" 0750
+done
 
 # ── 2. Permissions ──────────────────────────────────────────────────────────
-log "Setting uid ${IMAGE_UID}:${IMAGE_GID} on /var/lib/velox-worker"
-chown -R "${IMAGE_UID}:${IMAGE_GID}" /var/lib/velox-worker
-ok "/var/lib/velox-worker owned by uid ${IMAGE_UID}:${IMAGE_GID}"
+ok "state/work directories preserved (missing paths use uid ${IMAGE_UID}:${IMAGE_GID} mode 0750)"
 
 # /etc/velox-worker MUST be traversable by uid 10001 (the container's velox
 # user) so the worker can read the mTLS cert triple + the per-worker

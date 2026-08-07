@@ -32,23 +32,45 @@ set -euo pipefail
 CANONICAL_ROOT="${CANONICAL_ROOT:-/opt/velox-worker}"
 CANONICAL_ETC_ROOT="${CANONICAL_ETC_ROOT:-/etc/velox-worker}"
 CANONICAL_ENV="${CANONICAL_ENV:-$CANONICAL_ETC_ROOT/worker.env}"
-CANONICAL_STATE="${CANONICAL_STATE:-/var/lib/velox-worker}"
+if [[ -z "${VELOX_STATE_DIR:-}" && -r "$CANONICAL_ENV" ]]; then
+  VELOX_STATE_DIR="$(awk -F= '$1 == "VELOX_STATE_DIR" {print substr($0, index($0, "=")+1); exit}' "$CANONICAL_ENV" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")"
+fi
+CANONICAL_STATE="${VELOX_STATE_DIR:-}"
 LEGACY_ETC_ROOT="${LEGACY_ETC_ROOT:-/etc}"
 SYSTEMD_SYSTEM_DIR="${SYSTEMD_SYSTEM_DIR:-/etc/systemd/system}"
 SYSTEMD_LIB_DIR="${SYSTEMD_LIB_DIR:-/lib/systemd/system}"
 SYSTEMD_USR_LIB_DIR="${SYSTEMD_USR_LIB_DIR:-/usr/lib/systemd/system}"
-MIGRATION_DIR="$CANONICAL_STATE/migration"
-WORKER_ID_ARG="${WORKER_ID:-}"
-LEGACY_RUNTIME_DIR_ARG="${LEGACY_RUNTIME_DIR:-}"
 
 log() { printf '[migrate] %s\n' "$*"; }
 warn() { printf '[migrate][WARN] %s\n' "$*" >&2; }
 fail() { printf '[migrate][FAIL] %s\n' "$*" >&2; exit 1; }
 
+: "${CANONICAL_STATE:?VELOX_STATE_DIR is required}"
+[[ "$CANONICAL_STATE" == /* ]] || fail "VELOX_STATE_DIR must be an absolute path"
+CANONICAL_STATE_REAL="$(realpath -m -- "$CANONICAL_STATE")"
+[[ "$CANONICAL_STATE_REAL" == "$CANONICAL_STATE" ]] \
+  || fail "VELOX_STATE_DIR must be normalized and must not contain traversal"
+MIGRATION_DIR="$CANONICAL_STATE/migration"
+WORKER_ID_ARG="${WORKER_ID:-}"
+LEGACY_RUNTIME_DIR_ARG="${LEGACY_RUNTIME_DIR:-}"
+
 [[ $EUID -eq 0 ]] || fail 'must run as root'
 
-mkdir -p "$CANONICAL_ROOT" "$MIGRATION_DIR" "$CANONICAL_STATE"
-chmod 0750 "$CANONICAL_ROOT" "$CANONICAL_STATE" "$MIGRATION_DIR"
+ensure_dir_preserving() {
+  local path="$1" mode="$2"
+  if [[ -e "$path" ]]; then
+    [[ -d "$path" ]] || fail "$path exists but is not a directory"
+    return 0
+  fi
+  mkdir -p "$path"
+  chmod "$mode" "$path"
+}
+
+# Do not reset mode or ownership on an existing state tree. Migration may
+# create missing paths, but state/work ownership belongs to the operator.
+ensure_dir_preserving "$CANONICAL_ROOT" 0750
+ensure_dir_preserving "$CANONICAL_STATE" 0750
+ensure_dir_preserving "$MIGRATION_DIR" 0750
 
 if [[ -f "$MIGRATION_DIR/completed" ]]; then
   [[ -f "$CANONICAL_ENV" ]] || fail "migration marker exists but canonical env is missing: $CANONICAL_ENV"
@@ -127,15 +149,17 @@ if [[ ! -f "$CANONICAL_ENV" ]]; then
   install -D -o root -g root -m 0600 /dev/null "$CANONICAL_ENV"
 fi
 tmp_env="$(mktemp "$CANONICAL_ENV.XXXXXX")"
-awk -v id="$worker_id" '
-  BEGIN { seen_id=0; seen_work=0 }
+awk -v id="$worker_id" -v state="$CANONICAL_STATE" '
+  BEGIN { seen_id=0; seen_state=0; seen_work=0 }
   /^VELOX_WORKER_ID=/ { print "VELOX_WORKER_ID=" id; seen_id=1; next }
   /^WORKER_ID=/ { next }
-  /^VELOX_WORK_DIR=/ { print "VELOX_WORK_DIR=/var/lib/velox-worker/work"; seen_work=1; next }
+  /^VELOX_STATE_DIR=/ { print "VELOX_STATE_DIR=" state; seen_state=1; next }
+  /^VELOX_WORK_DIR=/ { print "VELOX_WORK_DIR=" state "/work"; seen_work=1; next }
   { print }
   END {
     if (!seen_id) print "VELOX_WORKER_ID=" id
-    if (!seen_work) print "VELOX_WORK_DIR=/var/lib/velox-worker/work"
+    if (!seen_state) print "VELOX_STATE_DIR=" state
+    if (!seen_work) print "VELOX_WORK_DIR=" state "/work"
   }
 ' "$CANONICAL_ENV" > "$tmp_env"
 install -o root -g root -m 0600 "$tmp_env" "$CANONICAL_ENV"
@@ -155,14 +179,38 @@ if [[ -z "$legacy_runtime" ]]; then
     break
   done
 fi
+copy_missing_tree() {
+  local source="$1" target="$2" entry relative destination
+  while IFS= read -r -d '' entry; do
+    relative="${entry#"$source"/}"
+    destination="$target/$relative"
+    if [[ -e "$destination" || -L "$destination" ]]; then
+      continue
+    fi
+    if [[ -L "$entry" ]]; then
+      fail "refusing to migrate symlink from legacy state: $entry"
+    elif [[ -d "$entry" ]]; then
+      mkdir -p "$destination"
+      chown 10001:10001 "$destination"
+      chmod 0750 "$destination"
+    elif [[ -f "$entry" ]]; then
+      mkdir -p "$(dirname "$destination")"
+      # Do not import legacy owner/mode into the canonical state tree. The
+      # contents and timestamps are useful evidence, but newly created files
+      # receive the worker's canonical metadata; existing destinations were
+      # skipped above and retain their operator-owned metadata.
+      cp --preserve=timestamps "$entry" "$destination"
+      chown 10001:10001 "$destination"
+      chmod 0640 "$destination"
+    else
+      fail "unsupported legacy state entry: $entry"
+    fi
+  done < <(find "$source" -mindepth 1 -print0)
+}
+
 if [[ -n "$legacy_runtime" && -d "$legacy_runtime" && "$legacy_runtime" != "$CANONICAL_STATE" ]]; then
-  if command -v rsync >/dev/null 2>&1; then
-    log "Migrating persistent state $legacy_runtime → $CANONICAL_STATE"
-    rsync -a "$legacy_runtime/" "$CANONICAL_STATE/"
-  else
-    warn "rsync is unavailable; copying persistent state with cp -a"
-    cp -a "$legacy_runtime"/. "$CANONICAL_STATE"/
-  fi
+  log "Migrating missing persistent state entries $legacy_runtime → $CANONICAL_STATE"
+  copy_missing_tree "$legacy_runtime" "$CANONICAL_STATE"
 fi
 
 # Migrate credentials/certs when old deployments kept them outside the
@@ -181,7 +229,8 @@ for source_dir in \
   [[ -d "$source_dir" ]] || continue
   cp -an "$source_dir"/. "$CANONICAL_ETC_ROOT/secrets/" 2>/dev/null || true
 done
-chmod 0750 "$CANONICAL_ETC_ROOT" "$CANONICAL_ETC_ROOT/certs" "$CANONICAL_ETC_ROOT/secrets"
+# Keep existing credential/cert directory modes intact; only the mkdir above
+# establishes missing paths. prepare-host applies file-level secret policy.
 
 # Retire old systemd units. The generic name is reserved for the new
 # canonical unit, so preserve its old file as evidence and remove it rather

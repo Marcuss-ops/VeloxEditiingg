@@ -52,6 +52,11 @@ velox_secrets_dir: /etc/velox/secrets
 #                  (Python repr, NOT a CSV; master fails to start.)
 #   The smoke-test at deploy/scripts/validate-jinja-render.py catches
 #   this regression on every render of the master env.
+# Canonical worker mutable-state root (REQUIRED; no default is permitted by
+# the runtime hardening gate). Use the same absolute path on host/container.
+# Existing owner, mode, ACLs, and contents are preserved during convergence.
+velox_state_dir: /var/lib/velox-worker
+
 velox_allowed_workers: CHANGE_ME_ALLOWED_WORKERS
 velox_max_job_attempts: 3
 velox_worker_heartbeat_timeout: 120

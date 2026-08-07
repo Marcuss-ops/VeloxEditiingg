@@ -27,7 +27,7 @@ sudo install -d /etc/velox-worker
 sudo cp deploy/runtime/worker.env.example /etc/velox-worker/worker.env
 $EDITOR /etc/velox-worker/worker.env
 # Set VELOX_WORKER_ID (must match the inventory), VELOX_GRPC_MASTER_URL
-# (public IP or DNS of the master), VELOX_WORKER_IMAGE
+# (public IP or DNS of the master), VELOX_STATE_DIR, VELOX_WORKER_IMAGE
 # (= ghcr.io/<owner>/velox-worker@sha256:<digest>).
 
 # 3. Drop TLS cert and credential files (read-only):
@@ -107,7 +107,7 @@ cosign-signed (keyless OIDC).
 `prepare-host.sh` recreates the canonical container with the pinned digest in
 `VELOX_WORKER_IMAGE`. To roll back, edit `/etc/velox-worker/worker.env`,
 replace the digest with the previous version's value, then re-run
-`prepare-host.sh`. The persistent directories under `/var/lib/velox-worker/`
+`prepare-host.sh`. The persistent directories under `VELOX_STATE_DIR`
 are not touched, so jobs in flight complete naturally before the container
 is recycled by `stop_grace_period: 60s`.
 
@@ -124,7 +124,9 @@ is recycled by `stop_grace_period: 60s`.
   `root:root` mode 0750 and mounted **read-only** into the container at
   `/run/velox/{certs,secrets}`.
 * The image runs as uid 10001 (non-root `velox` inside the Dockerfile).
-  `/var/lib/velox-worker/` is chowned to 10001:10001 by `prepare-host.sh`.
+  `VELOX_STATE_DIR` is explicit and mounted at the same path in the container;
+  existing state/work owner, mode, ACLs, and contents are preserved, while
+  missing directories receive uid 10001:10001 and mode 0750.
 
 ## Observability
 

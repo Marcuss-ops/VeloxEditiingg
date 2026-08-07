@@ -11,20 +11,31 @@
   ansible.builtin.set_fact:
     velox_current_root: "{{ velox_dir }}/current"
 
+- name: CanonicalRuntime | Require explicit VELOX_STATE_DIR
+  ansible.builtin.assert:
+    that:
+      - velox_state_dir is defined
+      - velox_state_dir | string | length > 0
+      - velox_state_dir is match('^/')
+      - not (velox_state_dir is search('/\.\.?(/|$)'))
+    fail_msg: >-
+      velox_state_dir (the canonical VELOX_STATE_DIR) must be explicitly
+      configured as an absolute path without traversal; no default is allowed.
+
 - name: CanonicalRuntime | Resolve canonical identity and paths
   ansible.builtin.set_fact:
     velox_worker_identity: "{{ worker_id | default(inventory_hostname) }}"
     velox_worker_unit_name: "velox-worker.service"
     velox_worker_container_name: "velox-worker"
     velox_worker_env_path: "/etc/velox-worker/worker.env"
-    velox_worker_runtime_host_dir: "/var/lib/velox-worker"
-    velox_worker_runtime_container_dir: "/var/lib/velox-worker"
+    velox_worker_runtime_host_dir: "{{ velox_state_dir }}"
+    velox_worker_runtime_container_dir: "{{ velox_state_dir }}"
     velox_worker_compose_dir: "/opt/velox-worker"
     velox_worker_project_name: "velox-worker"
     velox_worker_service_source: "{{ velox_current_root }}/deploy/runtime/velox-worker.service"
     velox_worker_compose_source: "{{ velox_current_root }}/deploy/runtime/compose.yml"
     velox_worker_migration_source: "{{ velox_current_root }}/deploy/runtime/migrate-legacy-worker.sh"
-    velox_worker_migration_marker: "/var/lib/velox-worker/migration/completed"
+    velox_worker_migration_marker: "{{ velox_state_dir }}/migration/completed"
     velox_worker_health_port: 8081
     velox_worker_heartbeat_masters: "{{ master_url }}"
     velox_worker_secondary_master_url: ""
@@ -42,6 +53,32 @@
             ~ (velox_grpc_port | default('9000'))
           )
       }}
+
+# Fail closed before migration, env rendering, or directory creation. The
+# canonical velox-worker.service.d directory is allowed; only per-worker
+# legacy drop-ins are forbidden.
+- name: CanonicalRuntime | Reject legacy worker drop-ins before mutation
+  ansible.builtin.shell: |
+    set -euo pipefail
+    found=0
+    shopt -s nullglob
+    for dir in \
+      /etc/systemd/system/velox-worker-*.service.d \
+      /run/systemd/system/velox-worker-*.service.d \
+      /lib/systemd/system/velox-worker-*.service.d \
+      /usr/lib/systemd/system/velox-worker-*.service.d; do
+      [ -d "$dir" ] || continue
+      for entry in "$dir"/*.conf; do
+        [ -e "$entry" ] || [ -L "$entry" ] || continue
+        echo "forbidden worker drop-in: $entry" >&2
+        found=1
+      done
+    done
+    shopt -u nullglob
+    [ "$found" -eq 0 ]
+  args:
+    executable: /bin/bash
+  changed_when: false
 
 - name: CanonicalRuntime | Ensure canonical Compose directory exists
   ansible.builtin.file:
@@ -72,6 +109,7 @@
   environment:
     WORKER_ID: "{{ velox_worker_identity }}"
     LEGACY_RUNTIME_DIR: ""
+    VELOX_STATE_DIR: "{{ velox_state_dir }}"
   when: not velox_worker_migration_done.stat.exists
 
 - name: CanonicalRuntime | Read release bundle hash
@@ -109,20 +147,31 @@
 # second cleanup implementation in this steady-state task would create two
 # sources of truth and could race the migration marker.
 
-- name: CanonicalRuntime | Create writable runtime directories
-  ansible.builtin.file:
-    path: "{{ item }}"
-    state: directory
-    owner: "10001"
-    group: "10001"
-    mode: "0775"
+- name: CanonicalRuntime | Create missing writable runtime directories without rewriting metadata
+  ansible.builtin.shell: |
+    set -euo pipefail
+    ensure_missing() {
+      local path="$1"
+      if [ -e "$path" ]; then
+        [ -d "$path" ] || { echo "$path exists but is not a directory" >&2; return 1; }
+        return 0
+      fi
+      mkdir -p "$path"
+      chown 10001:10001 "$path"
+      chmod 0775 "$path"
+      echo "CREATED:$path"
+    }
+    ensure_missing "{{ item }}"
+  args:
+    executable: /bin/bash
   loop:
-    - "{{ velox_worker_compose_dir }}"
     - "{{ velox_worker_runtime_host_dir }}"
     - "{{ velox_worker_runtime_host_dir }}/work"
     - "{{ velox_worker_runtime_host_dir }}/cache"
     - "{{ velox_worker_runtime_host_dir }}/blobs"
     - "{{ velox_worker_runtime_host_dir }}/assets_cache"
+  register: canonical_runtime_dir_result
+  changed_when: "'CREATED:' in (stdout | default(''))"
 
 - name: CanonicalRuntime | Preserve existing worker credential across env rewrite
   ansible.builtin.shell: |
@@ -169,11 +218,13 @@
       VELOX_WORKER_PROTOCOL_VERSION={{ worker_protocol_version | default('v3') }}
       VELOX_ENGINE_VERSION={{ engine_version | default(version_number | default('v1.0.6')) }}
       VELOX_HEALTH_PORT={{ velox_worker_health_port }}
+      VELOX_MASTER_URL={{ master_url }}
+      VELOX_WORK_DIR={{ velox_worker_runtime_container_dir }}/work
       VELOX_WORKER_IMAGE={{ _worker_image_tag }}
       VELOX_WORKER_IMAGE_VERSION={{ _worker_image_version }}
       VELOX_WORKER_IMAGE_COMMIT={{ _worker_image_commit }}
       # Canonical runtime state is always the fixed host/container path.
-      VELOX_GRPC_MASTER_URL={{ master_url }}
+      VELOX_GRPC_MASTER_URL={{ velox_worker_control_grpc_url }}
       VELOX_STATE_DIR={{ velox_worker_runtime_container_dir }}
       {% if _worker_secret_line | length > 0 %}
       {{ _worker_secret_line }}
@@ -263,12 +314,17 @@
     - (_env_has_secret.rc | default(1)) != 0
     - _master_workers_gate.status | default(0) != 200
 
+- name: CanonicalRuntime | Inspect existing worker config metadata
+  ansible.builtin.stat:
+    path: "{{ velox_worker_runtime_host_dir }}/worker_config.json"
+  register: _worker_config_stat
+
 - name: CanonicalRuntime | Write canonical worker config outside checkout
   ansible.builtin.copy:
     dest: "{{ velox_worker_runtime_host_dir }}/worker_config.json"
-    owner: "10001"
-    group: "10001"
-    mode: "0640"
+    owner: "{{ '10001' if not _worker_config_stat.stat.exists else omit }}"
+    group: "{{ '10001' if not _worker_config_stat.stat.exists else omit }}"
+    mode: "{{ '0640' if not _worker_config_stat.stat.exists else 'preserve' }}"
     content: |
       {
         "master_url": "{{ master_url }}",
@@ -320,18 +376,6 @@
     dest: "/etc/systemd/system/{{ velox_worker_unit_name }}"
     remote_src: true
     mode: "0644"
-
-# ── PRESERVE canonical override directory ─────────────────────
-# Admins may drop override files at
-#   /etc/systemd/system/velox-worker.service.d/*.conf
-# (ResourceControl, MemoryMax, Environment, etc.). The directory
-# itself must exist before the unit is (re)loaded or systemd will
-# silently ignore any drop-ins queued against a missing parent.
-- name: CanonicalRuntime | Create host-specific override directory for unit drop-ins
-  ansible.builtin.file:
-    path: "/etc/systemd/system/velox-worker.service.d"
-    state: directory
-    mode: "0755"
 
 - name: CanonicalRuntime | Install canonical watchdog service
   ansible.builtin.copy:
@@ -475,32 +519,51 @@
     src: "{{ velox_current_root }}/RemoteCodex/native/worker-agent-go/tests/fixtures/engine_selftest_baseline.sha256"
     dest: "{{ velox_current_root }}/RemoteCodex/tests/fixtures/engine_selftest_baseline.sha256"
     remote_src: true
-    mode: "0644"
+    mode: preserve
+
+- name: CanonicalRuntime | Inspect existing bundle hash metadata
+  ansible.builtin.stat:
+    path: "{{ velox_worker_runtime_host_dir }}/work/BUNDLE_HASH.txt"
+  register: _bundle_hash_stat
 
 - name: CanonicalRuntime | Write sanitized bundle hash into worker workdir
   ansible.builtin.copy:
     dest: "{{ velox_worker_runtime_host_dir }}/work/BUNDLE_HASH.txt"
+    owner: "{{ '10001' if not _bundle_hash_stat.stat.exists else omit }}"
+    group: "{{ '10001' if not _bundle_hash_stat.stat.exists else omit }}"
+    mode: "{{ '0644' if not _bundle_hash_stat.stat.exists else 'preserve' }}"
     content: "{{ velox_worker_bundle_hash }}\n"
-    owner: "10001"
-    group: "10001"
-    mode: "0644"
 
-- name: CanonicalRuntime | Ensure bootstrap fixture directory exists in worker workdir
-  ansible.builtin.file:
-    path: "{{ velox_worker_runtime_host_dir }}/work/tests/fixtures"
-    state: directory
-    owner: "10001"
-    group: "10001"
-    mode: "0775"
+- name: CanonicalRuntime | Create missing bootstrap fixture directory preserving metadata
+  ansible.builtin.shell: |
+    set -euo pipefail
+    path="{{ velox_worker_runtime_host_dir }}/work/tests/fixtures"
+    if [ -e "$path" ]; then
+      [ -d "$path" ] || { echo "$path exists but is not a directory" >&2; exit 1; }
+    else
+      mkdir -p "$path"
+      chown 10001:10001 "$path"
+      chmod 0775 "$path"
+      echo "CREATED:$path"
+    fi
+  args:
+    executable: /bin/bash
+  register: worker_fixture_dir_result
+  changed_when: "'CREATED:' in (stdout | default(''))"
+
+- name: CanonicalRuntime | Inspect existing engine baseline metadata
+  ansible.builtin.stat:
+    path: "{{ velox_worker_runtime_host_dir }}/work/tests/fixtures/engine_selftest_baseline.sha256"
+  register: _engine_baseline_stat
 
 - name: CanonicalRuntime | Copy engine selftest baseline fixture into worker workdir
   ansible.builtin.copy:
     src: "{{ velox_current_root }}/RemoteCodex/tests/fixtures/engine_selftest_baseline.sha256"
     dest: "{{ velox_worker_runtime_host_dir }}/work/tests/fixtures/engine_selftest_baseline.sha256"
     remote_src: true
-    owner: "10001"
-    group: "10001"
-    mode: "0644"
+    owner: "{{ '10001' if not _engine_baseline_stat.stat.exists else omit }}"
+    group: "{{ '10001' if not _engine_baseline_stat.stat.exists else omit }}"
+    mode: "{{ '0644' if not _engine_baseline_stat.stat.exists else 'preserve' }}"
 
 - name: CanonicalRuntime | Install canonical auto-update timer (12h)
   ansible.builtin.copy:

@@ -61,13 +61,16 @@ services:
       - "127.0.0.1:${VELOX_HEALTH_PORT:-8081}:${VELOX_HEALTH_PORT:-8081}"
 
     volumes:
-      # Persistent state — survives container recreation.
-      - /var/lib/velox-worker:/var/lib/velox-worker
+      # Persistent state — survives container recreation. The explicit
+      # VELOX_STATE_DIR is required so Compose, apply-local-worker-config,
+      # prepare-host, and the worker all share one mutable-state boundary.
+      # Mount host and container paths identically: a custom state root must
+      # remain the same path in the worker config and inside the container.
+      - ${VELOX_STATE_DIR:?VELOX_STATE_DIR must be set in /etc/velox-worker/worker.env}:${VELOX_STATE_DIR:?VELOX_STATE_DIR must be set in /etc/velox-worker/worker.env}
       # Worker config — bind-mounted read-only at the path the Go binary
       # expects by default (/opt/velox/worker_config.json, hard-coded in
-      # main.go). The host-side file lives at
-      # /var/lib/velox-worker/worker_config.json so it stays out of /etc.
-      - /var/lib/velox-worker/worker_config.json:/opt/velox/worker_config.json:ro
+      # main.go). The host-side file remains inside VELOX_STATE_DIR.
+      - ${VELOX_STATE_DIR:?VELOX_STATE_DIR must be set in /etc/velox-worker/worker.env}/worker_config.json:/opt/velox/worker_config.json:ro
       # TLS certs and per-worker credentials — read-only mounts into /run.
       # prepare-host.sh chowns the host-side dirs to root:${IMAGE_GID} with
       # mode 0750 so the in-container velox user (uid 10001) can traverse;

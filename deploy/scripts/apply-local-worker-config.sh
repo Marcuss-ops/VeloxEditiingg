@@ -3,7 +3,7 @@
 # apply-local-worker-config.sh — operator helper for the co-located worker.
 # ─────────────────────────────────────────────────────────────────────────────
 # Renders deploy/runtime/worker_config.example.json to
-# /var/lib/velox-worker/worker_config.json (uid 10001:10001 mode 0640), validates
+# $VELOX_STATE_DIR/worker_config.json (uid 10001:10001 mode 0640), validates
 # it, and writes a deployment-fingerprint so a subsequent `docker compose up -d`
 # will NOT restart the worker when nothing material has changed.
 #
@@ -50,15 +50,16 @@
 set -euo pipefail
 
 # ─── Constants ──────────────────────────────────────────────────────────────
-readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly REPO_ROOT
 readonly SRC_DEFAULT="${REPO_ROOT}/runtime/worker_config.example.json"
 readonly COMPOSE_FILE_DEFAULT="${REPO_ROOT}/runtime/compose.yml"
-readonly DST="/var/lib/velox-worker/worker_config.json"
-readonly FINGERPRINT_FILE="/var/lib/velox-worker/deployment-fingerprint"
+DST=""
+FINGERPRINT_FILE=""
 readonly IMAGE_UID="10001"
 readonly IMAGE_GID="10001"
 OPENSSL="${OPENSSL:-openssl}"
-readonly BACKUP_DIR="/var/lib/velox-worker/.backups"
+BACKUP_DIR=""
 
 # ─── Defaults (mutable) ─────────────────────────────────────────────────────
 WORKER_ID=""
@@ -70,7 +71,9 @@ BUNDLE_VERSION_SOURCE="auto"      # auto | manual | skip
 BUNDLE_HASH=""
 BUNDLE_HASH_SOURCE="auto"         # auto | manual | env | skip
 HEALTH_PORT="8081"
-WORK_DIR="/var/lib/velox-worker/work"
+WORK_DIR=""
+WORK_DIR_EXPLICIT=false
+DST_EXPLICIT=false
 PROTOCOL_VERSION="2026-06-worker-v1"
 IMAGE="${VELOX_WORKER_IMAGE:-velox-worker:latest}"
 ENVIRONMENT="dev"                 # dev | prod
@@ -87,6 +90,27 @@ KEEP_TMP=false
 log()  { printf '[apply] %s\n' "$*" >&2; }
 warn() { printf '[apply][WARN] %s\n' "$*" >&2; }
 die()  { printf '[apply][FAIL] %s\n' "$*" >&2; exit "${2:-1}"; }
+
+# The canonical velox-worker.service.d directory is allowed. Only
+# per-worker legacy directories (velox-worker-<id>.service.d) are forbidden.
+assert_no_legacy_dropins() {
+  local found=0 path entry
+  shopt -s nullglob
+  for path in \
+    /etc/systemd/system/velox-worker-*.service.d \
+    /run/systemd/system/velox-worker-*.service.d \
+    /lib/systemd/system/velox-worker-*.service.d \
+    /usr/lib/systemd/system/velox-worker-*.service.d; do
+    [[ -d "$path" ]] || continue
+    for entry in "$path"/*.conf; do
+      [[ -e "$entry" || -L "$entry" ]] || continue
+      warn "legacy systemd drop-in detected: $entry"
+      found=1
+    done
+  done
+  shopt -u nullglob
+  (( found == 0 )) || die "velox-worker systemd drop-ins are forbidden; remove or migrate them before applying config" 1
+}
 
 # ─── Usage ───────────────────────────────────────────────────────────────────
 usage() {
@@ -127,7 +151,9 @@ OPTIONAL flags:
                                             write requires VELOX_FORCE_MANUAL_HASH=1).
 
   --health-port            PORT             Default 8081.
-  --work-dir               PATH             Default /var/lib/velox-worker/work.
+  --work-dir               PATH             Optional override below required
+                                            VELOX_STATE_DIR; default is
+                                            VELOX_STATE_DIR/work.
   --protocol-version       STRING           Default 2026-06-worker-v1.
   --image                  NAME_OR_DIGEST   Default velox-worker:latest.
 
@@ -146,7 +172,9 @@ OPTIONAL flags:
   --force-insecure-production              Confirms insecure gRPC in prod.
                                             Prints loud banners.
 
-  --dst                    PATH             Default $DST.
+  --dst                    PATH             Optional path below
+                                            VELOX_STATE_DIR; default is
+                                            VELOX_STATE_DIR/worker_config.json.
   --src                    PATH             Default \${REPO_ROOT}/runtime/worker_config.example.json.
   --compose-file           PATH             Default \${REPO_ROOT}/runtime/compose.yml.
   --env-file               PATH             Default /etc/velox-worker/worker.env.
@@ -175,11 +203,11 @@ while [[ $# -gt 0 ]]; do
     --bundle-hash)            BUNDLE_HASH="$2";              shift 2 ;;
     --bundle-hash-source)     BUNDLE_HASH_SOURCE="$2";       shift 2 ;;
     --health-port)            HEALTH_PORT="$2";              shift 2 ;;
-    --work-dir)               WORK_DIR="$2";                 shift 2 ;;
+    --work-dir)               WORK_DIR="$2"; WORK_DIR_EXPLICIT=true; shift 2 ;;
     --protocol-version)       PROTOCOL_VERSION="$2";         shift 2 ;;
     --image)                  IMAGE="$2";                    shift 2 ;;
     --environment)            ENVIRONMENT="$2";              shift 2 ;;
-    --dst)                    DST="$2";                      shift 2 ;;
+    --dst)                    DST="$2"; DST_EXPLICIT=true;   shift 2 ;;
     --src)                    SRC="$2";                      shift 2 ;;
     --compose-file)           COMPOSE_FILE="$2";             shift 2 ;;
     --env-file)               ENV_FILE="$2";                 shift 2 ;;
@@ -193,9 +221,45 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+assert_no_legacy_dropins
+
 # ─── Arg validation ──────────────────────────────────────────────────────────
 [[ -n "$WORKER_ID" ]]            || die "--worker-id is required" 64
 [[ -n "$CONTROL_GRPC_URL" ]]     || die "--control-grpc-url is required (transport_factory.go rejects empty)" 64
+
+# VELOX_STATE_DIR is deliberately not defaulted here. It is the canonical
+# mutable-state boundary and must be explicit in the process environment or
+# the canonical worker.env; silently falling back would recreate split-brain
+# state between apply, Compose, and the worker binary.
+if [[ -z "${VELOX_STATE_DIR:-}" && -f "$ENV_FILE" ]]; then
+  VELOX_STATE_DIR="$(awk -F= '$1 == "VELOX_STATE_DIR" {print substr($0, index($0, "=")+1); exit}' "$ENV_FILE" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")"
+fi
+: "${VELOX_STATE_DIR:?VELOX_STATE_DIR is required in the environment or $ENV_FILE}"
+[[ "$VELOX_STATE_DIR" == /* ]] \
+  || die "VELOX_STATE_DIR must be an absolute path (got: $VELOX_STATE_DIR)" 64
+[[ "$VELOX_STATE_DIR" != *"/../"* && "$VELOX_STATE_DIR" != ../* && "$VELOX_STATE_DIR" != */.. ]] \
+  || die "VELOX_STATE_DIR must not contain parent-directory traversal (got: $VELOX_STATE_DIR)" 64
+[[ "$VELOX_STATE_DIR" != *$'\n'* && "$VELOX_STATE_DIR" != *$'\r'* ]] \
+  || die "VELOX_STATE_DIR contains a newline" 64
+
+[[ "$WORK_DIR_EXPLICIT" == true ]] || WORK_DIR="$VELOX_STATE_DIR/work"
+[[ "$DST_EXPLICIT" == true ]] || DST="$VELOX_STATE_DIR/worker_config.json"
+FINGERPRINT_FILE="$VELOX_STATE_DIR/deployment-fingerprint"
+BACKUP_DIR="$VELOX_STATE_DIR/.backups"
+[[ "$WORK_DIR" == /* ]] || die "--work-dir must be an absolute path (got: $WORK_DIR)" 64
+STATE_DIR_REAL="$(realpath -m -- "$VELOX_STATE_DIR")"
+[[ "$STATE_DIR_REAL" == "$VELOX_STATE_DIR" ]] \
+  || die "VELOX_STATE_DIR must not be a symlink or contain traversal (got: $VELOX_STATE_DIR)" 64
+WORK_DIR_REAL="$(realpath -m -- "$WORK_DIR")"
+[[ "$WORK_DIR_REAL" == "$WORK_DIR" ]] \
+  || die "--work-dir must not be a symlink or contain traversal (got: $WORK_DIR)" 64
+[[ "$WORK_DIR_REAL" == "$STATE_DIR_REAL"/* ]] \
+  || die "--work-dir must resolve below VELOX_STATE_DIR=$VELOX_STATE_DIR (got: $WORK_DIR)" 64
+if [[ "$DST_EXPLICIT" == true ]]; then
+  DST_REAL="$(realpath -m -- "$DST")"
+  [[ "$DST_REAL" == "$STATE_DIR_REAL"/* ]] \
+    || die "--dst must resolve below VELOX_STATE_DIR=$VELOX_STATE_DIR (got: $DST)" 64
+fi
 [[ "$WORKER_ID" != CHANGE_ME_* ]]    || die "--worker-id still set to placeholder CHANGE_ME_*. Pass a real worker_id." 64
 [[ "$CONTROL_GRPC_URL" != CHANGE_ME_* ]] || die "--control-grpc-url still set to placeholder CHANGE_ME_*. Pass a real URL." 64
 [[ "$ENVIRONMENT" =~ ^(dev|prod)$ ]] || die "--environment must be 'dev' or 'prod' (got: $ENVIRONMENT)" 64
@@ -302,22 +366,30 @@ case "$BUNDLE_HASH_SOURCE" in
 esac
 
 # ─── Prepare directories ─────────────────────────────────────────────────────
-# Persistent state tree — provisioned defensively so apply can succeed on
-# freshly-provisioned hosts before prepare-host.sh has run.
-install -d -o root -g root -m 0755 "$(dirname "$DST")"   # /var/lib/velox-worker
-install -d -o root -g root -m 0750 "$BACKUP_DIR"
-# WorkDir siblings — try chowning to uid 10001 (velox in container). Fall
-# back to root:root if no user with that uid exists on the host yet.
-for sub in "$WORK_DIR" "$WORK_DIR/state" "$WORK_DIR/cache" "$WORK_DIR/output"; do
-  if ! install -d -o "$IMAGE_UID" -g "$IMAGE_GID" -m 0750 "$sub" 2>/dev/null; then
-    install -d -o root -g root -m 0750 "$sub"
-    warn "$sub not chownable to uid $IMAGE_UID on this host (no such user yet) — container writes may fail until prepare-host.sh provisions velox user."
+# Persistent state tree — provision defensively so apply can succeed on a
+# freshly-provisioned host, but NEVER change owner/mode on an existing path.
+# This preserves operator ACLs and ownership across config-only convergence.
+ensure_dir_preserving() {
+  local path="$1" owner="$2" group="$3" mode="$4"
+  if [[ -e "$path" ]]; then
+    [[ -d "$path" ]] || die "$path exists but is not a directory"
+    return 0
   fi
+  mkdir -p "$path"
+  chown "$owner:$group" "$path"
+  chmod "$mode" "$path"
+}
+
+ensure_dir_preserving "$VELOX_STATE_DIR" "$IMAGE_UID" "$IMAGE_GID" 0750
+ensure_dir_preserving "$(dirname "$DST")" "$IMAGE_UID" "$IMAGE_GID" 0750
+ensure_dir_preserving "$BACKUP_DIR" root root 0750
+# WorkDir siblings — only missing paths receive canonical ownership/mode.
+for sub in "$WORK_DIR" "$WORK_DIR/state" "$WORK_DIR/cache" "$WORK_DIR/output"; do
+  ensure_dir_preserving "$sub" "$IMAGE_UID" "$IMAGE_GID" 0750
 done
-# Traversal for the docker group so operators without root can `docker exec`.
-if getent group docker >/dev/null; then
-  chmod o+x "$(dirname "$DST")" 2>/dev/null || true
-fi
+# Existing state directory permissions are intentionally left untouched.
+# Container traversal is part of the host's explicit state-directory contract,
+# not something config rendering may silently broaden.
 
 # ─── Stage TMP JSON ──────────────────────────────────────────────────────────
 TMP="$(mktemp /tmp/apply-local-worker-config.XXXXXX.json)"
@@ -401,14 +473,11 @@ if [[ -f "$DST" ]]; then
     warn "could not backup $DST to $BACKUP_DIR (continuing)"
   fi
   # Keep at most 10 backups; prune older.
+  # shellcheck disable=SC2012
   ls -1tr "$BACKUP_DIR"/worker_config.*.json 2>/dev/null | head -n -10 | xargs -r rm -f --
 fi
 
 # ─── Compute deployment fingerprint ─────────────────────────────────────────
-COMPOSE_HASH=""
-if [[ -f "$COMPOSE_FILE" ]]; then
-  COMPOSE_HASH="$(sha256sum "$COMPOSE_FILE" | awk '{print $1}')"
-fi
 NEW_FINGERPRINT="$(python3 -c '
 import hashlib, sys
 data = open(sys.argv[1], "rb").read()
@@ -440,15 +509,35 @@ if [[ -f "$DST" && -f "$FINGERPRINT_FILE" ]]; then
 fi
 
 # ─── Atomic install ──────────────────────────────────────────────────────────
-chown "${IMAGE_UID}:${IMAGE_GID}" "$TMP" 2>/dev/null || true
+# New files receive canonical metadata. Replacing an existing state file must
+# preserve its owner/mode just like the surrounding state directory.
+DST_UID="$IMAGE_UID"
+DST_GID="$IMAGE_GID"
+DST_MODE=0640
+if [[ -f "$DST" ]]; then
+  DST_UID="$(stat -c '%u' "$DST")"
+  DST_GID="$(stat -c '%g' "$DST")"
+  DST_MODE="$(stat -c '%a' "$DST")"
+fi
+chown "$IMAGE_UID:$IMAGE_GID" "$TMP" 2>/dev/null || true
 chmod 0640 "$TMP"
 if ! mv -f "$TMP" "$DST"; then
   die "atomic install of $DST failed" 6
 fi
-chown "${IMAGE_UID}:${IMAGE_GID}" "$DST"
-chmod 0640 "$DST"
+chown "$DST_UID:$DST_GID" "$DST"
+chmod "$DST_MODE" "$DST"
+
+FINGERPRINT_UID="$IMAGE_UID"
+FINGERPRINT_GID="$IMAGE_GID"
+FINGERPRINT_MODE=0644
+if [[ -f "$FINGERPRINT_FILE" ]]; then
+  FINGERPRINT_UID="$(stat -c '%u' "$FINGERPRINT_FILE")"
+  FINGERPRINT_GID="$(stat -c '%g' "$FINGERPRINT_FILE")"
+  FINGERPRINT_MODE="$(stat -c '%a' "$FINGERPRINT_FILE")"
+fi
 printf '%s\n' "$NEW_FINGERPRINT" > "$FINGERPRINT_FILE"
-chmod 0644 "$FINGERPRINT_FILE"
+chown "$FINGERPRINT_UID:$FINGERPRINT_GID" "$FINGERPRINT_FILE"
+chmod "$FINGERPRINT_MODE" "$FINGERPRINT_FILE"
 
 # ─── Compose schema check ────────────────────────────────────────────────────
 if [[ "$SKIP_COMPOSE_CHECK" == "false" ]]; then
@@ -573,9 +662,7 @@ except Exception:
   serial="$("$OPENSSL" x509 -in "$cert_path" -noout -serial 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || true)"
   [[ -z "$fp" || -z "$serial" ]] && { warn "A8: could not extract fingerprint/serial from $cert_path (corrupt?)"; return 0; }
   local meta="$work_dir/worker_cert.meta"
-  if ! install -d -o 1000 -g 1000 -m 0750 "$(dirname "$meta")" 2>/dev/null; then
-    install -d -o root -g root -m 0750 "$(dirname "$meta")"
-  fi
+  ensure_dir_preserving "$(dirname "$meta")" "$IMAGE_UID" "$IMAGE_GID" 0750
   local now
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   local tmp

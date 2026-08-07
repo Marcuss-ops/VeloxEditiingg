@@ -10,10 +10,9 @@
 # cache/sessions/scratch outside the immutable /app/RemoteCodex tree.
 #
 # Required vars:
-#   velox_worker_runtime_host_dir — install root for the writable
-#                                   runtime tree (default
-#                                   /var/lib/velox-worker,
-#                                   matches canonical_worker_runtime.yml)
+#   velox_state_dir — explicit install root for the writable runtime tree.
+#                     No fallback is allowed; it is the VELOX_STATE_DIR
+#                     contract shared by host and container.
 #
 # Emits: nothing; this playbook is side-effect only (idempotent
 # directory creation with ansible.builtin.file state=directory).
@@ -35,34 +34,43 @@
   hosts: velox_workers
   gather_facts: true
   vars:
-    velox_worker_runtime_host_dir: "/var/lib/velox-worker"
+    velox_worker_runtime_host_dir: "{{ velox_state_dir }}"
     # TODO: extract into group_vars/all.yml as velox_user_uid
     # (shared with canonical_worker_runtime.yml).
     velox_writable_dirs_owner: "10001"
     velox_writable_dirs_group: "10001"
     velox_writable_dirs_mode: "0775"
   tasks:
-    # Parent directory must exist BEFORE the loop: ansible.builtin.file
-    # with state=directory does NOT create intermediate paths, so the
-    # subdir tasks below would fail on a fresh host if this task is
-    # missing. Standalone-safe (does not require canonical_worker_runtime
-    # to have run first).
-    - name: ProvisionVeloxWritableDirs | Ensure parent runtime directory exists
-      ansible.builtin.file:
-        path: "{{ velox_worker_runtime_host_dir }}"
-        state: directory
-        owner: "{{ velox_writable_dirs_owner }}"
-        group: "{{ velox_writable_dirs_group }}"
-        mode: "{{ velox_writable_dirs_mode }}"
+    - name: ProvisionVeloxWritableDirs | Require explicit state directory
+      ansible.builtin.assert:
+        that:
+          - velox_state_dir is defined
+          - velox_state_dir | string | length > 0
+          - velox_state_dir is match('^/')
+          - not (velox_state_dir is search('/\\.\\.?(/|$)'))
+        fail_msg: "velox_state_dir is required and must be an absolute path without traversal"
 
-    - name: ProvisionVeloxWritableDirs | Ensure cache/sessions/scratch subdirs exist
-      ansible.builtin.file:
-        path: "{{ velox_worker_runtime_host_dir }}/{{ item }}"
-        state: directory
-        owner: "{{ velox_writable_dirs_owner }}"
-        group: "{{ velox_writable_dirs_group }}"
-        mode: "{{ velox_writable_dirs_mode }}"
-      loop:
-        - cache
-        - sessions
-        - scratch
+    # Create only missing paths with canonical defaults. Existing owner,
+    # mode, ACLs, and contents are intentionally untouched.
+    - name: ProvisionVeloxWritableDirs | Create missing runtime directories preserving metadata
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ensure_missing() {
+          local path="$1"
+          if [ -e "$path" ]; then
+            [ -d "$path" ] || { echo "$path exists but is not a directory" >&2; return 1; }
+            return 0
+          fi
+          mkdir -p "$path"
+          chown "{{ velox_writable_dirs_owner }}:{{ velox_writable_dirs_group }}" "$path"
+          chmod "{{ velox_writable_dirs_mode }}" "$path"
+          echo "CREATED:$path"
+        }
+        ensure_missing "{{ velox_worker_runtime_host_dir }}"
+        ensure_missing "{{ velox_worker_runtime_host_dir }}/cache"
+        ensure_missing "{{ velox_worker_runtime_host_dir }}/sessions"
+        ensure_missing "{{ velox_worker_runtime_host_dir }}/scratch"
+      args:
+        executable: /bin/bash
+      register: provision_writable_dirs_result
+      changed_when: "'CREATED:' in (stdout | default(''))"
