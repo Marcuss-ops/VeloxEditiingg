@@ -1,9 +1,7 @@
 // Package api — protected-asset snapshot (Pass 7).
 //
-// The deployed master fleet currently serves GET
-// /api/v1/workers/cache/protected-assets. Keep this path until the
-// worker-token middleware is available on the /api/v1/agent route;
-// both paths expose the same snapshot DTO. This
+// The master exposes GET /api/v1/agent/cache/protected-assets in the
+// canonical agent namespace. This
 // file mirrors the JSON shape into the worker's HTTP client so
 // the worker poller (internal/worker/protected_assets_poller.go)
 // can fetch snapshots over the existing `*Client.doRequest` retry
@@ -83,10 +81,8 @@ type ProtectedAssetsAPI interface {
 // assertion deep in a worker goroutine.
 var _ ProtectedAssetsAPI = (*Client)(nil)
 
-// ProtectedAssetsPath is the path served by the current production master.
-// Centralised so the worker can move to the agent namespace once that route's
-// worker-token middleware is deployed consistently across the fleet.
-const ProtectedAssetsPath = "/api/v1/workers/cache/protected-assets"
+// ProtectedAssetsPath is the canonical protected-asset snapshot route.
+const ProtectedAssetsPath = "/api/v1/agent/cache/protected-assets"
 
 // GetProtectedAssets fetches the most recent protected-asset
 // snapshot from the master.
