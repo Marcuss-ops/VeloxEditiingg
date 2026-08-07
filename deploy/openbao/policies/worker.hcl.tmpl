@@ -1,0 +1,21 @@
+# deploy/openbao/policies/worker.hcl.tmpl
+# ─────────────────────────────────────────────────────────────────────────────
+# Policy per-WORKER — least privilege. Template: {{ WORKER_ID }} viene
+# sostituito da provision-policies.sh con l'ID del worker (es.
+# host_57_129_132_133), generando la policy `worker-<id>`.
+#
+# Il worker può leggere SOLO il proprio ramo:
+#   velox/production/workers/<WORKER_ID>/*   (credential + certificato mTLS)
+#
+# Un worker compromesso espone quindi UN SOLO worker, non la fleet:
+# non vede i credential degli altri worker, né i token del master, né
+# i servizi (registry). KV v2 → velox/data/<path> (read) +
+# velox/metadata/<path> (list/versioni).
+
+path "velox/data/production/workers/{{ WORKER_ID }}/*" {
+  capabilities = ["read", "list"]
+}
+
+path "velox/metadata/production/workers/{{ WORKER_ID }}/*" {
+  capabilities = ["read", "list"]
+}

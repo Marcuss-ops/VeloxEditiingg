@@ -24,11 +24,17 @@ deploy/openbao/
 ├── config/bao.hcl         # config server: raft (/openbao/file) + listener TLS
 ├── .env.example           # template config non-segreta (→ .env, gitignored)
 ├── .gitignore             # guardia extra: mai committare chiavi/token/stato
+├── policies/              # policy HCL: master, admin, worker.hcl.tmpl
 ├── scripts/
-│   ├── gen-tls.sh         # genera server.crt/server.key nel state-dir (0600/0640)
-│   ├── bootstrap-init.sh  # init Shamir: unseal keys + root token (0600, gitignored)
-│   ├── bootstrap-unseal.sh# unseal idempotente con le keys salvate
-│   └── status.sh          # stato seal/HA + cross-check /v1/sys/health
+│   ├── gen-tls.sh               # certificato TLS listener (state-dir, 0600/0640)
+│   ├── bootstrap-init.sh        # init Shamir: unseal keys + root token (0600)
+│   ├── bootstrap-unseal.sh      # unseal idempotente con le keys salvate
+│   ├── status.sh                # stato seal/HA + cross-check health
+│   ├── provision-kv.sh          # KV v2 velox/ (idempotente, REST, valori da env/stdin)
+│   ├── verify-kv.sh             # albero KV con versioni (mai valori)
+│   ├── provision-policies.sh    # policy ACL da policies/ (idempotente, change-detection)
+│   ├── provision-approle.sh     # AppRole per principal + role-id/secret-id (0600)
+│   └── verify-approle.sh        # login reale + check autorizzazioni positivi/negativi
 └── README.md
 ```
 
@@ -208,10 +214,43 @@ OPENBAO_VALUES_FILE=.velox/openbao/values.env ./scripts/provision-kv.sh
   passato a `jq` dall'ambiente e il body da stdin — **mai in argv**
   (world-readable via `/proc/<pid>/cmdline`) né in file committati.
 - `verify-kv.sh` stampa solo **path + numero di versione**, mai i valori.
-- Fase attuale: autenticazione con il root token di bootstrap; al passaggio
-  ad AppRole (fase 4) i provisioning useranno token con policy ristrette.
+- Fase attuale: il provisioning KV usa ancora il root token di bootstrap
+  (serve WRITE su `velox/*`, che la policy `admin` copre): al wiring degli
+  AppRole negli strumenti operativi si passerà al token AppRole `admin`
+  (vedi §9 e `docs/openbao-identity-matrix.md`).
 
-## 9. Backup delle chiavi (FATTO SUBITO)
+## 9. AppRole — machine identity per principal
+
+Fase 4: una **identità AppRole distinta** per ogni worker + `master` + `admin`,
+con policy least-privilege. Matrice completa: `docs/openbao-identity-matrix.md`.
+
+```bash
+./scripts/provision-policies.sh   # scrive master/admin/worker-<id> (idempotente)
+./scripts/provision-approle.sh    # abilita approle, crea i role, salva role-id+secret-id
+./scripts/verify-approle.sh       # login reale + check positivi/negativi
+```
+
+- **Policy** (`policies/`): `master.hcl` (read `master/*` + `workers/*`),
+  `admin.hcl` (CRUD `velox/*` + `auth/approle/*` + `sys/policies/acl/*`),
+  `worker.hcl.tmpl` → `worker-<id>` (read SOLO del proprio ramo — credential +
+  futuro cert mTLS sotto `velox/production/workers/<id>/*`).
+- **Materiale**: `role-id` + `secret-id` in
+  `.velox/openbao/approle/<principal>/{role-id,secret-id}` (0600, gitignored) —
+  MAI in repo, MAI stampati da script.
+- **Idempotenza**: la seconda run non tocca nulla; `--force` ruota i secret-id
+  (i vecchi decadono → rollout in due fasi).
+- **Verifica** (`verify-approle.sh`): login reale + capabilities via REST
+  `/v1/sys/capabilities` (il CLI `bao` non ha il comando `capabilities`) —
+  worker A NON legge il ramo di worker B né `master/*`; master legge ma non
+  scrive; admin scrive. Check **fail-closed**: un errore di verifica fa
+  fallire il check (mai pass vacui sui negativi). Esce 1 al primo FAIL.
+- `--workers "id1 id2"` **sostituisce** la fleet di default (come
+  `provision-policies.sh`); `master` e `admin` vengono sempre inclusi a meno
+  di `--principal` esplicito.
+- TTL custom: `OPENBAO_TOKEN_TTL` (1h), `OPENBAO_TOKEN_MAX_TTL` (24h),
+  `OPENBAO_SECRET_ID_TTL` (0 = mai), `OPENBAO_SECRET_ID_NUM_USES` (0).
+
+## 10. Backup delle chiavi (FATTO SUBITO)
 
 ```bash
 # fuori dal repo:
@@ -225,7 +264,7 @@ token, i secret in OpenBao sono irrecuperabili. Dopo il backup offline puoi
 eliminare i file locali (il bootstrap li rigenera solo con un re-init, che
 distrugge i dati).
 
-## 10. Operazioni quotidiane
+## 11. Operazioni quotidiane
 
 | Operazione | Comando |
 |---|---|
@@ -236,17 +275,20 @@ distrugge i dati).
 | Upgrade | aggiorna `OPENBAO_VERSION` in `.env`, poi `docker compose pull && docker compose up -d` |
 | Interfaccia UI | https://127.0.0.1:8200/ui (richiede token; cert self-signed → accetta il warning) |
 
-## 11. Prossimi passi della migrazione
+## 12. Prossimi passi della migrazione
 
 1. ~~**KV store**~~ ✅ implementato (`deploy/openbao/scripts/provision-kv.sh`,
    gerarchia in §8 sopra).
-2. **AppRole per-worker** + policy per-worker (least privilege).
-3. Migrazione di `worker_credential` / `VELOX_WORKER_SECRET` dentro OpenBao.
-4. Migrazione dei token master (`VELOX_ADMIN_TOKEN`, `INSTAEDIT_CONTROL_JWT_SECRET`,
+2. ~~**AppRole per-worker** + policy per-worker (least privilege)~~ ✅ implementato
+   (§9 + `docs/openbao-identity-matrix.md`).
+3. Distribuire `role-id`/`secret-id` sui nodi worker/master (Ansible, 0600, `no_log`).
+4. Migrazione di `worker_credential` / `VELOX_WORKER_SECRET` dentro OpenBao
+   (login AppRole nel worker agent).
+5. Migrazione dei token master (`VELOX_ADMIN_TOKEN`, `INSTAEDIT_CONTROL_JWT_SECRET`,
    `SOCIAL_API_TOKEN`, `VELOX_COMMIT_HMAC_KEY`).
-5. SSH CA, PKI mTLS, credenziali DB dinamiche, `SecretResolver` in Go.
+6. SSH CA, PKI mTLS, credenziali DB dinamiche, `SecretResolver` in Go.
 
-## 12. Riferimenti
+## 13. Riferimenti
 
 - OpenBao docs: https://openbao.org/docs/
 - Config: `config/bao.hcl` (raft + listener TLS)

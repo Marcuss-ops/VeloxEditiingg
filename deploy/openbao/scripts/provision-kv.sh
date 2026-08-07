@@ -20,7 +20,9 @@
 #   * The script NEVER prints secret values.
 #
 # Auth: uses the root token from the state dir (<repo>/.velox/openbao/root-token)
-# until AppRole machine identities land (phase 4). Override with BAO_TOKEN.
+# because provisioning needs WRITE on velox/* (AppRole `admin` covers it — to be
+# wired when operator tooling adopts AppRole, phase 4, see README §9).
+# Override with BAO_TOKEN.
 #
 # Usage:
 #   ./scripts/provision-kv.sh                          # all master+services
