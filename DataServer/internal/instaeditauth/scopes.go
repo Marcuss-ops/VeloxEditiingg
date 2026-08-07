@@ -45,6 +45,11 @@ const (
 	// ScopeAssetsWrite grants permission to upload a render asset
 	// to Velox for a given workspace.
 	ScopeAssetsWrite = "assets.write"
+
+	// Editor scopes are reserved for the project-scoped bridge. They
+	// never grant access to global groups, channels, or workspaces.
+	ScopeEditorRead  = "editor.read"
+	ScopeEditorWrite = "editor.write"
 )
 
 // AllScopesSuperset is the union of the BFF scopes. It is used by

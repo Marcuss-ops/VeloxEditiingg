@@ -140,7 +140,6 @@ func TestNewRouter_RetiredEditorRoutesNeverMounted(t *testing.T) {
 	forbiddenPrefixes := []string{
 		"/api/darkeditor",
 		"/dark_editor_v2",
-		"/api/v1/instaedit/editor",
 	}
 	for _, route := range router.Routes() {
 		for _, prefix := range forbiddenPrefixes {
@@ -155,6 +154,7 @@ func TestNewRouter_RetiredEditorRoutesNeverMounted(t *testing.T) {
 		"/api/v1/instaedit/jobs",
 		"/api/v1/instaedit/workers",
 		"/api/v1/instaedit/assets",
+		"/api/v1/instaedit/editor/projects/:project_id",
 	} {
 		found := false
 		for _, route := range router.Routes() {

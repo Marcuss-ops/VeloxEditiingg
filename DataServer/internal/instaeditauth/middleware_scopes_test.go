@@ -205,6 +205,63 @@ func TestMiddleware_DeniesInsufficientScope_ForEachOfTheFiveScopes(t *testing.T)
 // defense-in-depth must NOT regress when we add MiddlewareWithOperation.
 // A request carrying X-User-ID (forged identity smuggling) still 401s
 // even when paired with a valid signed JWT.
+func TestMiddlewareWithProject_MatchesSignedProject(t *testing.T) {
+	v, _ := New(testSecret)
+	r := setupGin()
+	r.GET("/api/v1/instaedit/editor/projects/:project_id",
+		MiddlewareWithProject(v, []string{ScopeEditorRead}, "read_editor_context", "project_id"),
+		func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) },
+	)
+	claims := validClaimsWithScopes([]string{ScopeEditorRead})
+	claims.ProjectID = "ve_project-1"
+	token := mintToken(t, testSecret, claims)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/instaedit/editor/projects/ve_project-1", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestMiddlewareWithProject_RejectsMismatch(t *testing.T) {
+	v, _ := New(testSecret)
+	r := setupGin()
+	r.GET("/api/v1/instaedit/editor/projects/:project_id",
+		MiddlewareWithProject(v, []string{ScopeEditorRead}, "read_editor_context", "project_id"),
+		func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) },
+	)
+	claims := validClaimsWithScopes([]string{ScopeEditorRead})
+	claims.ProjectID = "ve_project-1"
+	token := mintToken(t, testSecret, claims)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/instaedit/editor/projects/ve_project-2", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for project mismatch, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestMiddlewareWithProject_RejectsMissingProjectClaim(t *testing.T) {
+	v, _ := New(testSecret)
+	r := setupGin()
+	r.GET("/api/v1/instaedit/editor/projects/:project_id",
+		MiddlewareWithProject(v, []string{ScopeEditorRead}, "read_editor_context", "project_id"),
+		func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) },
+	)
+	claims := validClaimsWithScopes([]string{ScopeEditorRead})
+	claims.ProjectID = ""
+	token := mintToken(t, testSecret, claims)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/instaedit/editor/projects/ve_project-1", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing project claim, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestMiddleware_FreeHeadersStillRejectedWith401(t *testing.T) {
 	v, _ := New(testSecret)
 	r := setupGin()

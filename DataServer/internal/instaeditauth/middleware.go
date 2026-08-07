@@ -88,6 +88,14 @@ func Middleware(verifier *Verifier, requiredScopes []string) gin.HandlerFunc {
 	return MiddlewareWithOperation(verifier, requiredScopes, "-")
 }
 
+// MiddlewareWithProject requires a verified project_id claim and
+// compares it with the route project identifier. It is the mandatory
+// gate for editor mutations/reads: project context comes only from
+// the signed InstaEdit token, never from free headers or body fields.
+func MiddlewareWithProject(verifier *Verifier, requiredScopes []string, operation string, projectParam string) gin.HandlerFunc {
+	return middlewareWithOptions(verifier, requiredScopes, operation, projectParam)
+}
+
 // MiddlewareWithOperation is the operation-tagged variant of
 // Middleware. The operation argument is a short snake_case label that
 // the 403 body exposes under the "operation" field. Operators reading
@@ -101,6 +109,10 @@ func Middleware(verifier *Verifier, requiredScopes []string) gin.HandlerFunc {
 // tracks it as a contract the InstaEdit BFF's "why rejected" panel
 // may display verbatim.
 func MiddlewareWithOperation(verifier *Verifier, requiredScopes []string, operation string) gin.HandlerFunc {
+	return middlewareWithOptions(verifier, requiredScopes, operation, "")
+}
+
+func middlewareWithOptions(verifier *Verifier, requiredScopes []string, operation, projectParam string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Defense-in-depth: reject free identity headers up front so
 		// a caller cannot smuggle user_id / workspace_id without a
@@ -153,6 +165,14 @@ func MiddlewareWithOperation(verifier *Verifier, requiredScopes []string, operat
 		if len(requiredScopes) > 0 && !claims.HasAllScopes(requiredScopes...) {
 			abortInsufficientScope(c, requiredScopes, claims.Scopes, operation)
 			return
+		}
+
+		if projectParam != "" {
+			routeProjectID := strings.TrimSpace(c.Param(projectParam))
+			if claims.ProjectID == "" || routeProjectID == "" || claims.ProjectID != routeProjectID {
+				c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "editor project context not found"})
+				return
+			}
 		}
 
 		// Stamp the verified claims into the context for downstream

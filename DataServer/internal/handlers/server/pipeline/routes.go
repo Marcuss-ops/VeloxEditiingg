@@ -3,8 +3,14 @@
 package pipeline
 
 import (
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 )
+
+func retiredCatalogHandler(c *gin.Context) {
+	c.JSON(http.StatusGone, gin.H{"ok": false, "error": "editor_catalog_removed", "owner": "instaedit"})
+}
 
 // RegisterRoutes mounts all pipeline endpoints on the given engine.
 // m2mJobsAuth protects both job submission and publishing-target discovery:
@@ -21,13 +27,12 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth, m2mJobsAuth gin.Hand
 		panic("pipeline.RegisterRoutes: M2M publishing/job routes require m2mJobsAuth")
 	}
 
-	// Social target discovery. The handler calls InstaEdit, synchronizes the
-	// local delivery_destinations registry and returns destination_id values
-	// ready for POST /api/v1/jobs.
+	// Social target discovery is InstaEdit-owned. Velox intentionally does
+	// not expose a global groups/channels catalog; old callers receive 410.
 	publishing := r.Group("/api/v1/publishing")
 	publishing.Use(m2mJobsAuth)
-	publishing.POST("/targets", h.ListPublishingTargets())
-	publishing.POST("/catalog", h.ListPublishingCatalog())
+	publishing.POST("/targets", retiredCatalogHandler)
+	publishing.POST("/catalog", retiredCatalogHandler)
 
 	// Simplified job submission for external M2M automation.
 	jobs := r.Group("/api/v1/jobs")

@@ -2,6 +2,7 @@ package drive
 
 import (
 	"log"
+	"net/http"
 	"path/filepath"
 
 	"github.com/gin-gonic/gin"
@@ -57,11 +58,15 @@ func resolveDriveDataDir(tokensDir string, dataDirs ...string) string {
 	return filepath.Dir(cleaned)
 }
 
-// RegisterDriveRoutes registers Drive Links routes
+func retiredCatalogHandler(c *gin.Context) {
+	c.JSON(http.StatusGone, gin.H{"ok": false, "error": "editor_catalog_removed", "owner": "instaedit"})
+}
+
+// RegisterDriveRoutes registers Drive Links routes.
 func RegisterDriveRoutes(r *gin.Engine, h *DriveHandlers) {
-	// Drive Links CRUD routes
+	// Drive Links CRUD routes.
 	r.GET("/api/drive/links", h.GetDriveLinksHandler)
-	r.GET("/api/drive/links/:group_name", h.GetDriveLinksByGroupHandler)
+	r.GET("/api/drive/links/:group_name", retiredCatalogHandler)
 	r.POST("/api/drive/links/save", h.SaveDriveLinksHandler)
 	r.POST("/api/drive/links/add", h.AddDriveFolderHandler)
 	r.PUT("/api/drive/links/:folder_id", h.UpdateDriveFolderHandler)
@@ -71,11 +76,13 @@ func RegisterDriveRoutes(r *gin.Engine, h *DriveHandlers) {
 	r.GET("/api/drive/oauth/start", h.DriveOAuthStartHandler)
 	r.GET("/api/drive/oauth/callback", h.DriveOAuthCallbackHandler)
 
-	// Drive Groups & Folders routes
-	r.GET("/api/drive/groups", h.GetDriveGroupsHandler)
+	// Drive groups and group-folder associations are InstaEdit-owned.
+	// Keep the routes explicit but fail closed so old clients cannot
+	// accidentally enumerate a second global catalog in Velox.
+	r.GET("/api/drive/groups", retiredCatalogHandler)
 	r.GET("/api/drive/folders/list", h.GetDriveFoldersHandler)
 	r.POST("/api/drive/folders/create", h.CreateDriveFolderHandler)
-	r.GET("/api/drive/folders/group/:group_name", h.GroupFoldersHandler)
+	r.GET("/api/drive/folders/group/:group_name", retiredCatalogHandler)
 	r.GET("/api/drive/folders/clip", h.ClipFolderIDHandler)
 	r.GET("/api/drive/files/list", h.DriveFilesHandler)
 	r.POST("/api/drive/upload/text", h.UploadTextHandler)
@@ -83,10 +90,10 @@ func RegisterDriveRoutes(r *gin.Engine, h *DriveHandlers) {
 	r.GET("/api/drive/outros/:language", h.GetOutroFolderContentsHandler)
 	r.GET("/api/drive/outros-by-id/:folder_id", h.GetOutroFolderContentsByIDHandler)
 
-	// Drive Tokens
+	// Drive Tokens.
 	r.GET("/api/drive/tokens/list", h.ListDriveTokensHandler)
 
-	// Drive Health Check
+	// Drive Health Check.
 	r.GET("/api/drive/health", h.DriveHealthCheckHandler)
 
 	log.Printf("[OK] Drive API routes registered at /api/drive/*")

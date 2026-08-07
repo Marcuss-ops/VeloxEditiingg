@@ -235,6 +235,29 @@ func TestVerifyAlgNoneAttack(t *testing.T) {
 	}
 }
 
+func TestVerify_RejectsInvalidProjectID(t *testing.T) {
+	v, _ := New(testSecret)
+	c := validClaims()
+	c.ProjectID = "global-project"
+	_, err := v.Verify(mintToken(t, testSecret, c))
+	if !isErr(err, ErrInvalidToken) {
+		t.Fatalf("expected invalid project id, got %v", err)
+	}
+}
+
+func TestVerify_ProjectIDRoundTrip(t *testing.T) {
+	v, _ := New(testSecret)
+	c := validClaims()
+	c.ProjectID = "ve_project-123"
+	claims, err := v.Verify(mintToken(t, testSecret, c))
+	if err != nil {
+		t.Fatalf("expected valid project id, got %v", err)
+	}
+	if claims.ProjectID != c.ProjectID {
+		t.Fatalf("project_id = %q, want %q", claims.ProjectID, c.ProjectID)
+	}
+}
+
 func TestVerify_DifferentScopesRoundTrip(t *testing.T) {
 	v, _ := New(testSecret)
 	c := validClaims()

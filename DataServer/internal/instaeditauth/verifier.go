@@ -82,13 +82,16 @@ var (
 // Velox handlers. Scopes is the authorization grant list. JTI is the
 // unique token id (available for future replay-protection layers).
 type Claims struct {
-	Issuer      string   `json:"iss"`
-	Audience    string   `json:"aud"`
-	Subject     string   `json:"sub"`
-	WorkspaceID int64    `json:"workspace_id"`
-	Scopes      []string `json:"scopes"`
-	ExpiresAt   int64    `json:"exp"`
-	JTI         string   `json:"jti"`
+	Issuer      string `json:"iss"`
+	Audience    string `json:"aud"`
+	Subject     string `json:"sub"`
+	WorkspaceID int64  `json:"workspace_id"`
+	// ProjectID is present on editor-scoped control tokens. It is
+	// intentionally optional for legacy jobs/workers/assets tokens.
+	ProjectID string   `json:"project_id,omitempty"`
+	Scopes    []string `json:"scopes"`
+	ExpiresAt int64    `json:"exp"`
+	JTI       string   `json:"jti"`
 }
 
 // Verifier validates InstaEdit-issued JWTs against a shared secret.
@@ -175,6 +178,9 @@ func (v *Verifier) Verify(token string) (*Claims, error) {
 	// Audience check.
 	if claims.Audience != ExpectedAudience {
 		return nil, fmt.Errorf("%w: got %q, want %q", ErrWrongAudience, claims.Audience, ExpectedAudience)
+	}
+	if claims.ProjectID != "" && (len(claims.ProjectID) > 128 || strings.ContainsAny(claims.ProjectID, "\r\n") || !strings.HasPrefix(claims.ProjectID, "ve_")) {
+		return nil, fmt.Errorf("%w: invalid project_id", ErrInvalidToken)
 	}
 	// Workspace_id check. The claim is required and must be a positive
 	// integer so downstream handlers can scope every operation.

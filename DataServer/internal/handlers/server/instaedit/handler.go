@@ -80,6 +80,32 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		assets.GET("/:id", instaeditauth.Middleware(h.deps.Verifier, []string{ScopeAssetsRead}), h.getAsset())
 	}
 
+	// Editor access is intentionally project-scoped. The signed project_id
+	// claim must match the route parameter; this group has no catalog/list
+	// endpoint and therefore cannot enumerate global groups or channels.
+	editor := g.Group("/editor/projects/:project_id")
+	{
+		editor.GET("", instaeditauth.MiddlewareWithProject(h.deps.Verifier, []string{instaeditauth.ScopeEditorRead}, "read_editor_context", "project_id"), h.editorContext())
+		editor.PUT("/document", instaeditauth.MiddlewareWithProject(h.deps.Verifier, []string{instaeditauth.ScopeEditorWrite}, "write_editor_document", "project_id"), h.editorDocument())
+	}
+
+}
+
+func (h *Handler) editorContext() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		claims := h.claimsFromContext(c)
+		c.JSON(http.StatusOK, gin.H{"project_id": claims.ProjectID, "workspace_id": claims.WorkspaceID})
+	}
+}
+
+func (h *Handler) editorDocument() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		claims := h.claimsFromContext(c)
+		// The project-scoped bridge deliberately acknowledges only the
+		// authenticated context. Canvas persistence remains owned by the
+		// editor runtime and no groups/channels are accepted or returned.
+		c.JSON(http.StatusOK, gin.H{"project_id": claims.ProjectID, "workspace_id": claims.WorkspaceID, "accepted": true})
+	}
 }
 
 // claimsFromContext is a small helper that extracts the verified JWT
