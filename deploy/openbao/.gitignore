@@ -1,0 +1,21 @@
+# deploy/openbao — local operator state MUST NEVER be committed.
+# (The root .gitignore also covers `.env`, `*.key`, `*.pem` and `.velox/**`;
+# these rules are a second layer scoped to this subtree.)
+
+# Compose interpolation env (real values, operator-local).
+/.env
+
+# Bootstrap artifacts: unseal keys, root token, TLS material, init JSON.
+# Default state dir is `<repo>/.velox/openbao/` (already gitignored at root);
+# the rules below also guard explicit local overrides (OPENBAO_STATE_DIR).
+/state/
+/.velox/
+/keys/
+/tls/
+/data/
+
+# Cryptographic material (second layer; root rules cover repo-wide).
+*.pem
+*.key
+*.crt
+*.srl
