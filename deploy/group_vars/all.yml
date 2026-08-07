@@ -28,7 +28,7 @@ velox_secrets_dir: /etc/velox/secrets
 
 # ── Worker policy ───────────────────────────────────────────────────────────
 # Each value MUST match a `worker_id` declared on the [velox_workers]
-# hostgroup in deploy/inventory/production.ini (1:1 mapping). Changing this
+# hostgroup in deploy/ansible/inventory.ini (1:1 mapping). Changing this
 # list without a matching inventory update will gate workers out of the fleet.
 #
 # Public-host topology: any N >= 1 remote workers. The fleet size is NOT
@@ -69,7 +69,7 @@ velox_worker_image_repository: ghcr.io/marcuss-ops/velox-worker
 velox_server_image: "CHANGE_ME_SERVER_IMAGE_DIGEST"
 
 # ── SSH hardening drop-in tail (consumed by bootstrap-ssh.yml) ──────────────
-# Free-form snippet appended to /etc/ssh/sshd_config.d/99-velox-hardening.conf.
+# Free-form snippet appended to /etc/ssh/sshd_config.d/00-velox-hardening.conf.
 # Leave empty unless the operator needs an additional AllowUsers / Match block.
 sshd_hardening_extra: ""
 

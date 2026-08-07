@@ -83,14 +83,14 @@ reload) ora:
 2. installa la pubkey operatore in `authorized_keys` (**fallback di transizione**);
 3. installa la CA pubblica OpenBao in `/etc/ssh/trusted-user-ca-keys.pem` (0600)
    quando `velox_ssh_ca_pubkey` / `vault_velox_ssh_ca_pubkey` è valorizzata;
-4. drop-in hardening `/etc/ssh/sshd_config.d/99-velox-hardening.conf`:
+4. drop-in hardening `/etc/ssh/sshd_config.d/00-velox-hardening.conf`:
    `PubkeyAuthentication yes`, `PasswordAuthentication no`,
    `KbdInteractiveAuthentication no`, `PermitRootLogin no` e
    `TrustedUserCAKeys /etc/ssh/trusted-user-ca-keys.pem` (solo se la CA è presente).
 
 ```bash
 # con la CA pub passata inline (o via vault, vedi §7):
-ansible-playbook -i deploy/inventory/production.ini \
+ansible-playbook -i deploy/ansible/inventory.ini \
   --extra-vars "velox_ssh_ca_pubkey=$(cat .velox/openbao/ssh-ca.pub)" \
   deploy/playbooks/bootstrap-ssh.yml
 ```

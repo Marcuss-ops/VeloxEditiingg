@@ -32,19 +32,19 @@
 # Usage:
 #
 #   # From the operator laptop, with the SSH pubkey passed inline:
-#   ansible-playbook -i deploy/inventory/production.ini \
+#   ansible-playbook -i deploy/ansible/inventory.ini \
 #     --extra-vars "velox_operator_pubkey=$(cat ~/.ssh/velox_ovh_admin.pub)" \
 #     deploy/playbooks/bootstrap-ssh.yml
 #
 #   # Same with the pubkey kept inside the vault (preferred in CI):
-#   ansible-playbook -i deploy/inventory/production.ini \
+#   ansible-playbook -i deploy/ansible/inventory.ini \
 #     --ask-vault-pass \
 #     deploy/playbooks/bootstrap-ssh.yml
 #
 # Dry run -- no SSH commands will run, but the playbook will still attempt
 # to gather facts on the target hosts (may fail under --check if Python is
 # missing). Use this for previewing the rendered task graph:
-#   ansible-playbook -i deploy/inventory/production.ini \
+#   ansible-playbook -i deploy/ansible/inventory.ini \
 #     --ask-vault-pass --check
 #     deploy/playbooks/bootstrap-ssh.yml
 - name: Bootstrap SSH access on Velox nodes
@@ -58,7 +58,10 @@
     velox_operator_groups:
       - sudo
       - docker
-    sshd_hardening_dropin: /etc/ssh/sshd_config.d/99-velox-hardening.conf
+    # OpenSSH keeps the first value it parses for most directives.  Load
+    # before cloud-init's 50-cloud-init.conf so these hardening values win.
+    sshd_hardening_dropin: /etc/ssh/sshd_config.d/00-velox-hardening.conf
+    sshd_legacy_hardening_dropin: /etc/ssh/sshd_config.d/99-velox-hardening.conf
     sshd_ca_keys_file: /etc/ssh/trusted-user-ca-keys.pem
 
   vars_files:
@@ -119,6 +122,12 @@
         content: "{{ velox_ssh_ca_pubkey | default(vault_velox_ssh_ca_pubkey) }}\n"
       # Rota la CA pubkey: anche se il drop-in non cambia (TrustedUserCAKeys già
       # presente), il file va riletto da sshd — notify esplicito.
+      notify: validate and reload sshd
+
+    - name: Remove obsolete SSH hardening drop-in
+      ansible.builtin.file:
+        path: "{{ sshd_legacy_hardening_dropin }}"
+        state: absent
       notify: validate and reload sshd
 
     - name: Install SSH hardening drop-in
