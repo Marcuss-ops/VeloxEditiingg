@@ -161,6 +161,8 @@ for principal in "${PRINCIPALS[@]}"; do
                 "$tok" "velox/data/production/master/admin-token" read
             expect_cap "read cap on workers branch" \
                 "$tok" "velox/data/production/workers/${DEFAULT_WORKERS[0]}/credential" read
+            expect_cap "read cap on services/registry (token master migrati)" \
+                "$tok" "velox/data/production/services/registry/token" read
             expect_no_cap "NO write cap on velox/data/*" \
                 "$tok" "velox/data/production/master/admin-token" create
             expect_no_cap "NO approle management" \

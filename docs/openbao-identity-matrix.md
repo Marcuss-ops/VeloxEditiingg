@@ -29,7 +29,7 @@
 | `worker-host_57_131_20_173` | `worker-host_57_131_20_173` | `velox/production/workers/host_57_131_20_173/*` | `read, list` | 1h (max 24h) | idem | worker VPS 57.131.20.173 |
 | `worker-velox-worker-13197` | `worker-velox-worker-13197` | `velox/production/workers/velox-worker-13197/*` | `read, list` | 1h (max 24h) | idem | worker VPS 149.56.131.97 |
 | `worker-velox-worker-523925eb` | `worker-velox-worker-523925eb` | `velox/production/workers/velox-worker-523925eb/*` | `read, list` | 1h (max 24h) | idem | worker VPS 51.222.204.158 |
-| `master` | `master` | `velox/production/master/*` **e** `velox/production/workers/*` | `read, list` | 1h (max 24h) | `.velox/openbao/approle/master/{role-id,secret-id}` | deploy master (env, gRPC, fleet) |
+| `master` | `master` | `velox/production/master/*` **+** `velox/production/workers/*` **+** `velox/production/services/registry/*` | `read, list` | 1h (max 24h) | `.velox/openbao/approle/master/{role-id,secret-id}` | deploy master (env, gRPC, fleet, registry pull) |
 | `admin` | `admin` | `velox/*` + `auth/approle/*` + `sys/policies/acl/*` + `sys/health` | `create, read, update, delete, list` (velox/approle/policies); `read` (health) | 1h (max 24h) | `.velox/openbao/approle/admin/{role-id,secret-id}` | operatore (provisioning, rotazione) |
 
 > Fleet canonica: `scripts/ops/align-worker-digest.sh` (righe 80-83) e
@@ -58,8 +58,8 @@ velox/ (KV v2)
     │   ├── velox-worker-13197/
     │   └── velox-worker-523925eb/
     └── services/
-        └── registry/     ← leggibile da: master? NO — solo admin/root oggi
-            ├── username            (definire referente prima dell'esposizione)
+        └── registry/     ← leggibile da: master, admin  (deploy master/worker image)
+            ├── username
             └── token
 ```
 
@@ -104,7 +104,13 @@ il template `worker.hcl.tmpl` andrà esteso con il path corrispondente.
 3. Worker agent: sostituzione di `VELOX_WORKER_SECRET` come fonte di identità
    (login AppRole diretto nel processo — post-fase, quando OpenBao sarà
    raggiungibile dai nodi senza tunnel).
-4. Master env bootstrap da OpenBao (token AppRole `master` invece di env statici).
+4. ✅ ~~Master env bootstrap da OpenBao~~ — `deploy/openbao/scripts/resolve-master-tokens.sh`
+   (fase 6): login AppRole `master`, legge `master/*` + `services/registry/*` dal
+   KV e scrive le extra-vars Ansible `vault_velox_*` in un file 0600 da passare
+   con `-e @file` (vince su group_vars; senza il file resta il flusso
+   ansible-vault legacy). `migrate-master-tokens.sh` fa la direzione inversa
+   (env → KV, `--force`, fail-closed sui required, mai stampa valori).
+   Integrato in `.github/workflows/deploy.yml` come step opzionale condizionale.
 5. `token_bound_cidrs` per-worker (limitare il login agli IP dei VPS) quando
    OpenBao sarà esposto oltre loopback.
 6. `SecretResolver` Go con backend OpenBao (`docs/secrets-audit.md` §4.2).

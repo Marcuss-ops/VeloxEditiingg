@@ -34,7 +34,9 @@ deploy/openbao/
 │   ├── verify-kv.sh             # albero KV con versioni (mai valori)
 │   ├── provision-policies.sh    # policy ACL da policies/ (idempotente, change-detection)
 │   ├── provision-approle.sh     # AppRole per principal + role-id/secret-id (0600)
-│   └── verify-approle.sh        # login reale + check autorizzazioni positivi/negativi
+│   ├── verify-approle.sh        # login reale + check autorizzazioni positivi/negativi
+│   ├── migrate-master-tokens.sh # env → KV (una tantum, --force, fail-closed)
+│   └── resolve-master-tokens.sh # KV → extra-vars Ansible vault_velox_* (0600)
 └── README.md
 ```
 
@@ -234,10 +236,11 @@ con policy least-privilege. Matrice completa: `docs/openbao-identity-matrix.md`.
 ./scripts/verify-approle.sh       # login reale + check positivi/negativi
 ```
 
-- **Policy** (`policies/`): `master.hcl` (read `master/*` + `workers/*`),
-  `admin.hcl` (CRUD `velox/*` + `auth/approle/*` + `sys/policies/acl/*`),
-  `worker.hcl.tmpl` → `worker-<id>` (read SOLO del proprio ramo — credential +
-  futuro cert mTLS sotto `velox/production/workers/<id>/*`).
+- **Policy** (`policies/`): `master.hcl` (read `master/*` + `workers/*` +
+  `services/registry/*` — per i token migrati), `admin.hcl` (CRUD `velox/*` +
+  `auth/approle/*` + `sys/policies/acl/*`), `worker.hcl.tmpl` → `worker-<id>`
+  (read SOLO del proprio ramo — credential + cert mTLS sotto
+  `velox/production/workers/<id>/*`).
 - **Materiale**: `role-id` + `secret-id` in
   `.velox/openbao/approle/<principal>/{role-id,secret-id}` (0600, gitignored) —
   MAI in repo, MAI stampati da script.
@@ -254,7 +257,60 @@ con policy least-privilege. Matrice completa: `docs/openbao-identity-matrix.md`.
 - TTL custom: `OPENBAO_TOKEN_TTL` (1h), `OPENBAO_TOKEN_MAX_TTL` (24h),
   `OPENBAO_SECRET_ID_TTL` (0 = mai), `OPENBAO_SECRET_ID_NUM_USES` (0).
 
-## 10. Backup delle chiavi (FATTO SUBITO)
+## 10. Migrazione dei token del Master (fase 6)
+
+`VELOX_ADMIN_TOKEN`, `INSTAEDIT_CONTROL_JWT_SECRET`, `SOCIAL_API_TOKEN`,
+`VELOX_COMMIT_HMAC_KEY` e le credenziali registry vengono spostati da
+`vault.yml` a `velox/production/master/*` e `velox/production/services/registry/*`
+in OpenBao. La policy `master` (read-only, §9) copre questi path — il deploy
+risolve i token al momento del rilascio, senza credenziali statiche in repo.
+
+### Migrazione una tantum (env → KV)
+
+```bash
+# da /etc/velox-server.env (default) o con --env-file; MAI stampa valori
+./scripts/migrate-master-tokens.sh
+./scripts/migrate-master-tokens.sh --env-file ./server.env --dry-run
+./scripts/migrate-master-tokens.sh --registry-username u --registry-token t
+```
+
+- Precedenza: `OPENBAO_VALUE_*` (env) > `--env-file` > `/etc/velox-server.env`.
+- **Fail-closed**: un required (admin / instaedit / social) assente → exit 1,
+  nessuna migrazione.
+- Usa `provision-kv.sh --force` (nuova versione KV); verifica con
+  `./scripts/verify-kv.sh`.
+
+### Risoluzione al deploy (KV → extra-vars Ansible)
+
+```bash
+OPENBAO_ADDR=https://127.0.0.1:8200 \
+OPENBAO_ROLE_ID_FILE=/etc/velox/master/approle/role-id \
+OPENBAO_SECRET_ID_FILE=/etc/velox/master/approle/secret-id \
+OPENBAO_VARS_FILE=/tmp/openbao-vars.yml \
+./scripts/resolve-master-tokens.sh [--require-all]
+```
+
+Scrive le **extra-vars** `vault_velox_*` (stessi nomi di `vault.yml`, quindi
+`deploy/templates/velox-server.env.j2` non cambia) in un file **0600** da
+passare ad ansible-playbook con `-e @/tmp/openbao-vars.yml`. Gli extra-vars
+VINCONO su group_vars → i token vengono da OpenBao; senza `OPENBAO_ADDR`
+(exit 0) o senza file, ansible usa `vault.yml` come oggi (fallback legacy).
+
+- KV v2 → lettura via REST `/v1/velox/data/<path>` con il token AppRole.
+- Opzionali (`social-webhook-secret`, `registry/*`) saltati se assenti; con
+  `--require-all` un required assente (admin/instaedit/social) blocca il deploy
+  (exit 1) invece di deployare con token mancanti.
+- **Mai stampa valori**: logga solo i nomi; quoting YAML via `jq -Rs .`
+  (NB: `$v | tojson` senza `-r` verrebbe ri-serializzato da jq ≥ 1.8).
+
+### Integrazione CI (`.github/workflows/deploy.yml`)
+
+Step opzionale `resolve-openbao-tokens` attivo solo con `OPENBAO_ADDR`
+impostato: risolve il vars file e lo inietta con `-e @/tmp/openbao-vars.yml`
+(extra-vars condizionali). Senza `OPENBAO_ADDR` il flusso ansible-vault resta
+**identico** — il deploy non si rompe.
+
+## 11. Backup delle chiavi (FATTO SUBITO)
 
 ```bash
 # fuori dal repo:
@@ -268,7 +324,7 @@ token, i secret in OpenBao sono irrecuperabili. Dopo il backup offline puoi
 eliminare i file locali (il bootstrap li rigenera solo con un re-init, che
 distrugge i dati).
 
-## 11. Operazioni quotidiane
+## 12. Operazioni quotidiane
 
 | Operazione | Comando |
 |---|---|
@@ -279,7 +335,7 @@ distrugge i dati).
 | Upgrade | aggiorna `OPENBAO_VERSION` in `.env`, poi `docker compose pull && docker compose up -d` |
 | Interfaccia UI | https://127.0.0.1:8200/ui (richiede token; cert self-signed → accetta il warning) |
 
-## 12. Prossimi passi della migrazione
+## 13. Prossimi passi della migrazione
 
 1. ~~**KV store**~~ ✅ implementato (`deploy/openbao/scripts/provision-kv.sh`,
    gerarchia in §8 sopra).
@@ -293,11 +349,12 @@ distrugge i dati).
    `velox/production/workers/<id>/cert/{cert,key,ca}` (opzionali).
 4. Distribuire `role-id`/`secret-id` sui nodi worker/master
    (`/etc/velox-worker/secrets/approle/`, 0600, Ansible `no_log`).
-5. Migrazione dei token master (`VELOX_ADMIN_TOKEN`, `INSTAEDIT_CONTROL_JWT_SECRET`,
-   `SOCIAL_API_TOKEN`, `VELOX_COMMIT_HMAC_KEY`).
+5. ✅ ~~Migrazione dei token master~~ — `migrate-master-tokens.sh` (env → KV,
+   una tantum) + `resolve-master-tokens.sh` (KV → extra-vars Ansible, al deploy),
+   integrati in `.github/workflows/deploy.yml` come step opzionale (§10).
 6. SSH CA, PKI mTLS, credenziali DB dinamiche, `SecretResolver` in Go.
 
-## 13. Riferimenti
+## 14. Riferimenti
 
 - OpenBao docs: https://openbao.org/docs/
 - Config: `config/bao.hcl` (raft + listener TLS)

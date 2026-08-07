@@ -17,13 +17,23 @@
 #   * The plain-text form (`vault.yml`, no `.example` suffix) is NOT
 #     committed. Add `deploy/group_vars/vault.yml` to your `.gitignore`.
 #   * The encrypted form IS safe to commit so CI can decrypt at runtime.
+#
+# ⚠️ MIGRAZIONE OpenBao (fase 6): i token del master ora vivono nel KV OpenBao
+#    velox/production/master/* (+ services/registry/*) e il deploy li risolve
+#    con deploy/openbao/scripts/resolve-master-tokens.sh (AppRole), iniettandoli
+#    come extra-vars che VINCONO su group_vars. I valori sotto sono il FALLBACK
+#    legacy durante la transizione: i nomi NON cambiano (velox-server.env.j2 li
+#    consuma identici), cambia solo la provenienza. Quando la migrazione sarà
+#    completa, questi campi possono restare vuoti.
 
 # ── Master REST API token (consumed by velox-server.env.j2) ─────────────────
+# Fallback legacy: OpenBao velox/production/master/admin-token
 vault_velox_admin_token: ""
 
 # ── InstaEdit Control JWT secret (consumed by velox-server.env.j2) ─────────
 # HS256 shared secret verifying InstaEdit BFF's short-lived JWTs.
 # MUST be at least 32 bytes (256 bits). Distinct from SOCIAL_API_TOKEN.
+# Fallback legacy: OpenBao velox/production/master/instaedit-control-jwt-secret
 vault_velox_instaedit_control_jwt_secret: ""
 
 # ── External Social API secrets (consumed by velox-server.env.j2) ──────────
@@ -32,10 +42,13 @@ vault_velox_instaedit_control_jwt_secret: ""
 # destination is configured. These keys are the ONLY Social-API
 # secrets Velox owns; do not introduce `VELOX_YOUTUBE_*` or similar
 # pre-removal naming here.
+# Fallback legacy: OpenBao velox/production/master/social-api-token +
+# velox/production/master/social-webhook-secret
 vault_velox_social_api_token: ""        # → SOCIAL_API_TOKEN (canonical)
 vault_velox_social_webhook_secret: ""   # → SOCIAL_WEBHOOK_SECRET (future-proof)
 
 # ── Container registry pull credentials (used by worker image runtime) ──────
+# Fallback legacy: OpenBao velox/production/services/registry/{username,token}
 vault_velox_registry_username: ""
 vault_velox_registry_token: ""
 

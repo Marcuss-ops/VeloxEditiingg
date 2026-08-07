@@ -239,6 +239,32 @@ jobs:
           echo "## Cosign verification" >> "$GITHUB_STEP_SUMMARY"
           echo ":white_check_mark: Both images verified (keyless OIDC)" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Resolve master tokens from OpenBao (optional; vault legacy otherwise)
+        env:
+          OPENBAO_ADDR: ${{ secrets.OPENBAO_ADDR }}
+          OPENBAO_ROLE_ID: ${{ secrets.OPENBAO_ROLE_ID }}
+          OPENBAO_SECRET_ID: ${{ secrets.OPENBAO_SECRET_ID }}
+          # Cert CA di OpenBao (solo se il listener usa un cert firmato da una
+          # CA che il runner non trusta di default): OPENBAO_CA_FILE.
+        run: |
+          set -euo pipefail
+
+          # I token master vengono risolti da OpenBao (velox/production/master/*
+          # + services/registry/*) via AppRole e scritti in /tmp/openbao-vars.yml
+          # (0600) con i nomi vault_velox_* che il template velox-server.env.j2
+          # consuma. ansible-playbook li riceve come extra-vars (-e @file) e
+          # vincono su group_vars. Se OPENBAO_ADDR non è configurato, lo step è
+          # un no-op e il deploy usa ansible-vault come prima (fallback legacy).
+          if [ -n "${OPENBAO_ADDR:-}" ]; then
+            OPENBAO_VARS_FILE=/tmp/openbao-vars.yml \
+              OPENBAO_ROLE_ID="${OPENBAO_ROLE_ID:-}" \
+              OPENBAO_SECRET_ID="${OPENBAO_SECRET_ID:-}" \
+              bash deploy/openbao/scripts/resolve-master-tokens.sh --require-all
+            ls -la /tmp/openbao-vars.yml
+          else
+            echo "::notice::OPENBAO_ADDR non configurato — token master da ansible-vault (legacy)."
+          fi
+
       - name: Install Ansible
         run: |
           pip install --quiet ansible
@@ -278,9 +304,20 @@ jobs:
           # Run the master config playbook with extra vars to pin the image
           # references. The template velox-server.env.j2 renders
           # VELOX_SERVER_IMAGE={{ velox_server_image }}.
+          #
+          # OpenBao extra-vars (scritti dallo step "Resolve master tokens from
+          # OpenBao"): i vault_velox_* risolti VINCONO su group_vars; se il
+          # file non esiste (OpenBao non configurato) il deploy usa il vault.yml
+          # cifrato come prima — nessun cambio di comportamento.
+          OPENBAO_EXTRA=()
+          if [ -f /tmp/openbao-vars.yml ]; then
+            OPENBAO_EXTRA=(-e @/tmp/openbao-vars.yml)
+          fi
+
           ansible-playbook \
             -i deploy/inventory/production.ini \
             "${VAULT_ARGS[@]}" \
+            "${OPENBAO_EXTRA[@]}" \
             -e velox_server_image="${SERVER_REF}" \
             -e velox_version="${VERSION}" \
             deploy/playbooks/deploy-master-config.yml
