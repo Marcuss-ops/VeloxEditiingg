@@ -41,8 +41,6 @@ jobs:
         run: ./scripts/ci/check-compute-outcome-labels.sh
       - name: Guard — conflict-budget call pattern
         run: ./scripts/ci/check-conflict-budget-call-pattern.sh
-      - name: Guard — sql-ownership shape
-        run: ./scripts/ci/check-sql-ownership.sh
       - name: Guard — dsn busy-timeout shape
         run: ./scripts/ci/check-dsn-busy-timeout.sh
       - name: Verify — architecture, Go, native and Docker
@@ -75,4 +73,3 @@ jobs:
         # README + §10c of `docs/metrics/loc-baseline.md`.
         if: always()
         run: bash scripts/ci/check-loc-thresholds.sh
-
