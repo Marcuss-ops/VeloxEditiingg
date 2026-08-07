@@ -141,13 +141,55 @@ append_step() {
   fi
 }
 
+# ─── Atomic JSON report function ────────────────────────────────────────
+write_pass_criteria_json() {
+  local now_iso verdict
+  now_iso=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+  if (( PASS_FAIL_STEP == 0 )); then
+    verdict="PASS"
+  else
+    verdict="FAIL"
+  fi
+  ensure_dir "${PASS_OUT_ROOT}/${TARGET_WORKER_ID}"
+  local out_file="${PASS_OUT_ROOT}/${TARGET_WORKER_ID}/pass_criteria.json"
+  local tmp_out; tmp_out=$(mktemp "${PASS_OUT_ROOT}/${TARGET_WORKER_ID}/pass-XXXXXX.json")
+  cat > "$tmp_out" <<JSON
+{
+  "schema": "tests/worker-cert/pass_criteria@1",
+  "worker_id": "${TARGET_WORKER_ID}",
+  "verdict": "${verdict}",
+  "first_failing_step": ${PASS_FAIL_STEP:-0},
+  "job_id": "${JOB_ID}",
+  "task_id": "${TASK_ID}",
+  "attempt_id": "${ATTEMPT_ID}",
+  "lease_id": "${LEASE_ID}",
+  "lease_worker": "${LEASE_WORKER}",
+  "artifact_url": "${ARTIFACT_URL}",
+  "artifact_size_bytes": ${ARTIFACT_SIZE_BYTES:-0},
+  "download_ms": "${DOWNLOAD_MS}",
+  "render_ms_engine": "${RENDER_MS_ENGINE}",
+  "master_url": "${VELOX_MASTER_URL}",
+  "destination_id": "${PASS_DESTINATION_ID}",
+  "poll_timeout_s": ${PASS_POLL_TIMEOUT_S},
+  "elapsed_s": ${elapsed},
+  "checked_at": "${now_iso}",
+  "steps": [${STEPS_JSON}]
+}
+JSON
+  mv "$tmp_out" "$out_file"
+  log_info "wrote $out_file"
+  printf '%s\n' "REPORT_JSON=${out_file}"
+  printf '%s\n' "VERDICT=${verdict}"
+  printf '%s\n' "FIRST_FAILING_STEP=${PASS_FAIL_STEP:-0}"
+}
+
 # ─── M2M + workers pre-flight ─────────────────────────────────────────────
 if ! smoke_mint_m2m "$ADMIN_TOKEN" "$VELOX_MASTER_URL"; then
   log_error "M2M provisioning failed"; exit 4
 fi
 log_info "M2M provisioned: client_id=$PROVISIONED_CLIENT_ID"
 
-if ! smoke_workers_list "$M2M_BEARER" "$VELOX_MASTER_URL"; then
+if ! smoke_workers_list "$ADMIN_TOKEN" "$VELOX_MASTER_URL"; then
   log_error "could not list workers"; exit 3
 fi
 TARGET_RECORD=$(smoke_worker_by_id "$TARGET_WORKER_ID")
@@ -179,6 +221,19 @@ if printf '%s' "$EXECUTORS" | grep -qx 'scene.composite.v1@1'; then
 else
   append_step 3 "scene.composite.v1@1" "FAIL" "advertised=[$(printf '%s' "$EXECUTORS" | tr '\n' ',' | sed 's/,$//')]"
 fi
+
+# Pre-initialise report variables so write_pass_criteria_json always has
+# safe defaults, even when we bail out before the poll loop runs.
+JOB_ID=""
+TASK_ID=""
+ATTEMPT_ID=""
+LEASE_ID=""
+LEASE_WORKER=""
+ARTIFACT_URL=""
+ARTIFACT_SIZE_BYTES=0
+DOWNLOAD_MS=""
+RENDER_MS_ENGINE=""
+elapsed=0
 
 # Bail early if step 1/2/3 already failed — submitting a job to a non-conforming
 # worker would just produce noise. We still write the report with FAIL steps
@@ -405,46 +460,6 @@ else
 fi
 
 # ─── Atomic JSON report + binary verdict ───────────────────────────────────
-write_pass_criteria_json() {
-  local now_iso verdict
-  now_iso=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
-  if (( PASS_FAIL_STEP == 0 )); then
-    verdict="PASS"
-  else
-    verdict="FAIL"
-  fi
-  ensure_dir "${PASS_OUT_ROOT}/${TARGET_WORKER_ID}"
-  local out_file="${PASS_OUT_ROOT}/${TARGET_WORKER_ID}/pass_criteria.json"
-  local tmp_out; tmp_out=$(mktemp "${PASS_OUT_ROOT}/${TARGET_WORKER_ID}/pass-XXXXXX.json")
-  cat > "$tmp_out" <<JSON
-{
-  "schema": "tests/worker-cert/pass_criteria@1",
-  "worker_id": "${TARGET_WORKER_ID}",
-  "verdict": "${verdict}",
-  "first_failing_step": ${PASS_FAIL_STEP:-0},
-  "job_id": "${JOB_ID}",
-  "task_id": "${TASK_ID}",
-  "attempt_id": "${ATTEMPT_ID}",
-  "lease_id": "${LEASE_ID}",
-  "lease_worker": "${LEASE_WORKER}",
-  "artifact_url": "${ARTIFACT_URL}",
-  "artifact_size_bytes": ${ARTIFACT_SIZE_BYTES:-0},
-  "download_ms": "${DOWNLOAD_MS}",
-  "render_ms_engine": "${RENDER_MS_ENGINE}",
-  "master_url": "${VELOX_MASTER_URL}",
-  "destination_id": "${PASS_DESTINATION_ID}",
-  "poll_timeout_s": ${PASS_POLL_TIMEOUT_S},
-  "elapsed_s": ${elapsed},
-  "checked_at": "${now_iso}",
-  "steps": [${STEPS_JSON}]
-}
-JSON
-  mv "$tmp_out" "$out_file"
-  log_info "wrote $out_file"
-  printf '%s\n' "REPORT_JSON=${out_file}"
-  printf '%s\n' "VERDICT=${verdict}"
-  printf '%s\n' "FIRST_FAILING_STEP=${PASS_FAIL_STEP:-0}"
-}
 write_pass_criteria_json
 
 if (( PASS_FAIL_STEP == 0 )); then
