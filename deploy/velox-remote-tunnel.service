@@ -1,11 +1,13 @@
 [Unit]
-Description=Persistent Velox SSH forwards (master, creator, gRPC)
+Description=Persistent Velox SSH forwards (master, creator, gRPC, OpenBao)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 EnvironmentFile=%h/.config/velox/remote-tunnel.env
+Environment=VELOX_TUNNEL_OPENBAO_PORT=18200
+Environment=VELOX_REMOTE_OPENBAO_PORT=8200
 ExecStart=/usr/bin/ssh -N -T \
   -p ${VELOX_REMOTE_SSH_PORT} \
   -o BatchMode=yes \
@@ -19,6 +21,7 @@ ExecStart=/usr/bin/ssh -N -T \
   -L 127.0.0.1:${VELOX_TUNNEL_MASTER_PORT}:127.0.0.1:${VELOX_REMOTE_MASTER_PORT} \
   -L 127.0.0.1:${VELOX_TUNNEL_CREATOR_PORT}:127.0.0.1:${VELOX_REMOTE_CREATOR_PORT} \
   -L 127.0.0.1:${VELOX_TUNNEL_GRPC_PORT}:127.0.0.1:${VELOX_REMOTE_GRPC_PORT} \
+  -L 127.0.0.1:${VELOX_TUNNEL_OPENBAO_PORT}:127.0.0.1:${VELOX_REMOTE_OPENBAO_PORT} \
   ${VELOX_REMOTE_SSH_USER}@${VELOX_REMOTE_SSH_HOST}
 Restart=always
 RestartSec=5

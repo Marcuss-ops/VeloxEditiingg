@@ -1,0 +1,14 @@
+[Unit]
+Description=Velox OpenBao reverse tunnel for worker %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/velox/worker-openbao/%i.env
+ExecStart=/usr/local/bin/velox-worker-openbao-tunnel-service
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

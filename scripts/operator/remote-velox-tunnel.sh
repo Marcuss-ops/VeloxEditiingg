@@ -29,9 +29,11 @@ REMOTE_PORT="${VELOX_REMOTE_SSH_PORT:-22}"
 LOCAL_MASTER_PORT="${VELOX_TUNNEL_MASTER_PORT:-18080}"
 LOCAL_CREATOR_PORT="${VELOX_TUNNEL_CREATOR_PORT:-18000}"
 LOCAL_GRPC_PORT="${VELOX_TUNNEL_GRPC_PORT:-18505}"
+LOCAL_OPENBAO_PORT="${VELOX_TUNNEL_OPENBAO_PORT:-18200}"
 REMOTE_MASTER_PORT="${VELOX_REMOTE_MASTER_PORT:-8080}"
 REMOTE_CREATOR_PORT="${VELOX_REMOTE_CREATOR_PORT:-8000}"
 REMOTE_GRPC_PORT="${VELOX_REMOTE_GRPC_PORT:-50051}"
+REMOTE_OPENBAO_PORT="${VELOX_REMOTE_OPENBAO_PORT:-8200}"
 STATE_DIR="${VELOX_TUNNEL_STATE_DIR:-${XDG_RUNTIME_DIR:-/tmp}/velox-remote-tunnel}"
 PID_FILE="${STATE_DIR}/tunnel.pid"
 LOG_FILE="${STATE_DIR}/tunnel.log"
@@ -47,8 +49,8 @@ check_config() {
   [[ -n "$REMOTE_HOST" ]] || die "VELOX_REMOTE_SSH_HOST is required"
   [[ -n "$REMOTE_USER" ]] || die "VELOX_REMOTE_SSH_USER is required"
   [[ "$REMOTE_HOST" != *:* ]] || die "IPv6 hosts must be supplied via SSH config alias"
-  for port in "$REMOTE_PORT" "$LOCAL_MASTER_PORT" "$LOCAL_CREATOR_PORT" "$LOCAL_GRPC_PORT" \
-    "$REMOTE_MASTER_PORT" "$REMOTE_CREATOR_PORT" "$REMOTE_GRPC_PORT"; do
+  for port in "$REMOTE_PORT" "$LOCAL_MASTER_PORT" "$LOCAL_CREATOR_PORT" "$LOCAL_GRPC_PORT" "$LOCAL_OPENBAO_PORT" \
+    "$REMOTE_MASTER_PORT" "$REMOTE_CREATOR_PORT" "$REMOTE_GRPC_PORT" "$REMOTE_OPENBAO_PORT"; do
     valid_port "$port" || die "invalid port: $port"
   done
   [[ -z "${VELOX_REMOTE_SSH_PASSWORD:-}" ]] || die "password authentication is not supported; use an SSH key/agent"
@@ -85,6 +87,7 @@ start() {
     -L "127.0.0.1:${LOCAL_MASTER_PORT}:127.0.0.1:${REMOTE_MASTER_PORT}" \
     -L "127.0.0.1:${LOCAL_CREATOR_PORT}:127.0.0.1:${REMOTE_CREATOR_PORT}" \
     -L "127.0.0.1:${LOCAL_GRPC_PORT}:127.0.0.1:${REMOTE_GRPC_PORT}" \
+    -L "127.0.0.1:${LOCAL_OPENBAO_PORT}:127.0.0.1:${REMOTE_OPENBAO_PORT}" \
     "${REMOTE_USER}@${REMOTE_HOST}" >>"$LOG_FILE" 2>&1 &
   echo "$!" >"$PID_FILE"
   for _ in 1 2 3 4 5; do
@@ -118,8 +121,8 @@ status() {
   check_config
   if is_running; then
     log "running (pid=$(<"$PID_FILE"))"
-    printf '  master  http://127.0.0.1:%s\n  creator http://127.0.0.1:%s\n  grpc    127.0.0.1:%s\n' \
-      "$LOCAL_MASTER_PORT" "$LOCAL_CREATOR_PORT" "$LOCAL_GRPC_PORT"
+    printf '  master  http://127.0.0.1:%s\n  creator http://127.0.0.1:%s\n  grpc    127.0.0.1:%s\n  openbao https://127.0.0.1:%s\n' \
+      "$LOCAL_MASTER_PORT" "$LOCAL_CREATOR_PORT" "$LOCAL_GRPC_PORT" "$LOCAL_OPENBAO_PORT"
     return 0
   fi
   log "stopped"

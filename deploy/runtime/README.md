@@ -56,6 +56,64 @@ sudo deploy/runtime/migrate-legacy-worker.sh
 sudo deploy/runtime/prepare-host.sh
 ```
 
+## OpenBao worker tunnel (loopback-only)
+
+When OpenBao remains bound to the Master's loopback (`127.0.0.1:8200`), the
+operator must first extend the canonical `remote-velox-tunnel` with its local
+forward (`127.0.0.1:18200 -> master:127.0.0.1:8200`). The worker-side helper
+then creates one reverse SSH forward per worker:
+
+```bash
+# On the operator workstation; the master tunnel must already be active.
+HOME=/home/pierone scripts/operator/remote-velox-tunnel.sh status
+HOME=/home/pierone scripts/operator/remote-worker-openbao-tunnel.sh start \
+  host_57_129_132_133 57.129.132.133 pierone
+```
+
+Repeat the helper for the other workers. It binds only worker loopback port
+`8200`, requires strict SSH host-key checking, and refuses password auth. For
+persistence across operator logout/reboot, install the repository template as
+a user service and one mode-`0600` env file per worker:
+
+```bash
+mkdir -p /home/pierone/.config/systemd/user /home/pierone/.config/velox/worker-openbao
+install -m 0644 deploy/velox-worker-openbao-tunnel@.service \
+  /home/pierone/.config/systemd/user/velox-worker-openbao-tunnel@.service
+sudo install -m 0755 scripts/operator/worker-openbao-tunnel-service.sh \
+  /usr/local/bin/velox-worker-openbao-tunnel-service
+sudo install -m 0755 scripts/operator/probe-worker-openbao.sh \
+  /usr/local/bin/probe-worker-openbao.sh
+install -m 0600 deploy/velox-worker-openbao-tunnel.env.example \
+  /home/pierone/.config/velox/worker-openbao/host_57_129_132_133.env
+# Edit only topology/path values in the copied env file; never add passwords.
+systemctl --user daemon-reload
+systemctl --user enable --now velox-worker-openbao-tunnel@host_57_129_132_133.service
+loginctl enable-linger pierone
+```
+
+The service template uses the same strict host-key and TLS health-check
+contract. The helper command remains useful for a one-shot controlled rollout.
+The worker's `/etc/velox-worker/worker.env` must use:
+
+```text
+VELOX_OPENBAO_ADDR=https://127.0.0.1:8200
+VELOX_OPENBAO_CA_FILE=/etc/velox-worker/certs/openbao-ca.crt
+```
+
+After the AppRole material and CA are installed, run the canonical host
+convergence and verify without printing secret values:
+
+```bash
+sudo /opt/velox-worker/openbao-fetch-worker-secrets.sh --check
+sudo /opt/velox-worker/prepare-host.sh
+```
+
+The tunnel is a transport prerequisite, not a secret source; install the
+repository's `scripts/operator/probe-worker-openbao.sh` at the path referenced
+by the user service before enabling that service. AppRole files
+remain `0600` and the fetch script authenticates with the worker's own
+least-privilege identity.
+
 ## Chronon worker
 
 To run the worker with Chronon3D, publish and pin the image built with
