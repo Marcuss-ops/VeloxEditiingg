@@ -44,6 +44,19 @@ fail() {
 
 log "Runtime glibc: $(getconf GNU_LIBC_VERSION 2>/dev/null || echo unknown)"
 
+# ── Credential source diagnostic (migrazione OpenBao) ──────────────────────
+# Il container riceve la credential da /run/velox/secrets (ro). La fonte a
+# monte può essere il file copiato a mano (legacy) oppure il resolver OpenBao
+# (deploy/runtime/openbao-fetch-worker-secrets.sh, AppRole per-worker). Questo
+# log è solo diagnostica: non modifica né fallisce se la fonte cambia.
+if [[ -n "${VELOX_WORKER_SECRET:-}" ]]; then
+    log "credential source: env VELOX_WORKER_SECRET (env-based, canonical)"
+elif [[ -n "${VELOX_WORKER_CREDENTIAL_FILE:-}" && -s "${VELOX_WORKER_CREDENTIAL_FILE:-}" ]]; then
+    log "credential source: file ${VELOX_WORKER_CREDENTIAL_FILE} (file-based; OpenBao resolver attivo se configurato)"
+else
+    log "credential source: NESSUNA credential trovata (env o file) — il master rifiuterà la registrazione senza credential"
+fi
+
 if [[ ! -x "$ENGINE_BINARY" ]]; then
     fail "C++ engine binary missing or not executable at $ENGINE_BINARY. Slim runtime image has no compiler toolchain; rebuild via 'make -C RemoteCodex/native/worker-agent-go docker'."
 fi

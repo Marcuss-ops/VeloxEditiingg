@@ -6,6 +6,7 @@
 #
 #   velox/production/master/...
 #   velox/production/workers/<worker-id>/credential
+#   velox/production/workers/<worker-id>/cert/{cert,key,ca}   (mTLS, opzionali)
 #   velox/production/services/registry/...
 #
 # SECURITY RULES (hard requirements):
@@ -35,6 +36,9 @@
 #   OPENBAO_VALUE_ADMIN_TOKEN=... \
 #   OPENBAO_VALUE_INSTAEDIT_JWT=... \
 #   OPENBAO_VALUE_SOCIAL_API_TOKEN=... \
+#   OPENBAO_VALUE_WORKER_CERT="$(cat worker.crt)" \
+#   OPENBAO_VALUE_WORKER_KEY="$(cat worker.key)" \
+#   OPENBAO_VALUE_WORKER_CA="$(cat ca.crt)" \
 #   OPENBAO_VALUES_FILE=.velox/openbao/values.env \
 #   ./scripts/provision-kv.sh --worker host_57_129_132_133
 
@@ -115,7 +119,16 @@ MANIFEST=(
     "production/services/registry/token|REGISTRY_TOKEN|0"
 )
 if [[ -n "$WORKER_ID" ]]; then
-    MANIFEST+=("production/workers/$WORKER_ID/credential|WORKER_CREDENTIAL|1")
+    MANIFEST+=(
+        "production/workers/$WORKER_ID/credential|WORKER_CREDENTIAL|1"
+        # Coppia mTLS + CA (fetch: deploy/runtime/openbao-fetch-worker-secrets.sh).
+        # ⚠️ I PEM sono multi-line: vanno passati SOLO via env
+        # (OPENBAO_VALUE_WORKER_CERT="$(cat worker.crt)" ...) — il values-file
+        # è line-based e troncherebbe il PEM alla prima riga (chiave corrotta).
+        "production/workers/$WORKER_ID/cert/cert|WORKER_CERT|0"
+        "production/workers/$WORKER_ID/cert/key|WORKER_KEY|0"
+        "production/workers/$WORKER_ID/cert/ca|WORKER_CA|0"
+    )
 fi
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

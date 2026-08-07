@@ -37,11 +37,17 @@ set -euo pipefail
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 readonly ENV_FILE_DEFAULT="/etc/velox-worker/worker.env"
-readonly COMPOSE_YML_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/compose.yml"
+readonly COMPOSE_YML_SRC
+COMPOSE_YML_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/compose.yml"
 readonly COMPOSE_YML_DST="/opt/velox-worker/compose.yml"
-readonly MIGRATION_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/migrate-legacy-worker.sh"
+readonly FETCH_SRC
+FETCH_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/openbao-fetch-worker-secrets.sh"
+readonly FETCH_DST="/opt/velox-worker/openbao-fetch-worker-secrets.sh"
+readonly MIGRATION_SRC
+MIGRATION_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/migrate-legacy-worker.sh"
 readonly MIGRATION_DST="/opt/velox-worker/migrate-legacy-worker.sh"
-readonly SERVICE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker.service"
+readonly SERVICE_SRC
+SERVICE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker.service"
 readonly SERVICE_DST="/etc/systemd/system/velox-worker.service"
 readonly IMAGE_UID="10001"
 readonly IMAGE_GID="10001"
@@ -186,6 +192,33 @@ for spec in \
     chmod "$spec_mode" "$spec_path"
 done
 ok "cert + secret perms aligned for uid ${IMAGE_GID} (key/credential 0600 owner ${IMAGE_UID})"
+
+# ── 2.5. OpenBao secret resolution (migrazione, con fallback sul file) ──────
+# Se VELOX_OPENBAO_ADDR è valorizzato in worker.env, worker_credential + la
+# coppia mTLS vengono risolti da OpenBao via AppRole (machine identity del
+# worker) da deploy/runtime/openbao-fetch-worker-secrets.sh, invece del file
+# copiato a mano. Finché la migrazione non è completata il fallback resta sui
+# file esistenti: se il fetch fallisce ma i file ci sono tutti, si prosegue
+# con un warning (i path canonici non cambiano). Se invece un file manca,
+# il bootstrap fallisce fail-closed.
+log "Installing OpenBao secret resolver (worker_credential + mTLS via AppRole)"
+install -o root -g root -m 0755 "$FETCH_SRC" "$FETCH_DST"
+if ! "$FETCH_DST"; then
+    warn "OpenBao fetch FAILED (migrazione in corso?) — fallback sui file esistenti"
+    for f in \
+        /etc/velox-worker/certs/worker.crt \
+        /etc/velox-worker/certs/worker.key \
+        /etc/velox-worker/certs/ca.crt \
+        /etc/velox-worker/secrets/worker_credential ; do
+        # -s (non vuoto): un file vuoto/rovinato non è un fallback valido —
+        # il worker fallirebbe la registrazione sul master (credential_hash)
+        [[ -s "$f" ]] \
+            || fail "OpenBao fetch fallito e $f mancante O vuoto — completa la migrazione OpenBao o ripristina i file (fallback non disponibile)"
+    done
+    warn "fallback attivo: il worker userà i file esistenti (migrazione OpenBao non completata)"
+else
+    ok "worker secrets risolti (OpenBao) o non configurati (file a mano)"
+fi
 
 # ── 3. Install canonical runtime definitions ───────────────────────────────
 log "Copying compose.yml to $COMPOSE_YML_DST"

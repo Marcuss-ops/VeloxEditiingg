@@ -14,7 +14,8 @@ worker-image.yml` (which builds and publishes the worker image).
 | `migrate-legacy-worker.sh` | One-time, idempotent migration of per-host units, containers, env files, and persistent state. |
 | `compose.chronon.yml` | Configuration reference for Chronon settings consumed by the canonical Compose service; startup remains owned by `velox-worker.service`. |
 | `worker.env.example` | Template for `/etc/velox-worker/worker.env`, the only runtime env path. |
-| `prepare-host.sh` | Idempotent migration + setup + digest pull + systemd convergence. |
+| `openbao-fetch-worker-secrets.sh` | Optional OpenBao resolver: fetches `worker_credential` + mTLS triple via the worker's AppRole identity and writes them to the canonical paths (fallback on hand-copied files until migration completes). |
+| `prepare-host.sh` | Idempotent migration + setup + digest pull + systemd convergence. Runs the OpenBao resolver when `VELOX_OPENBAO_ADDR` is set. |
 
 ## First-time setup on a fresh worker host
 
@@ -33,6 +34,17 @@ $EDITOR /etc/velox-worker/worker.env
 sudo install -d /etc/velox-worker/certs /etc/velox-worker/secrets
 sudo install -m 0600 worker.crt worker.key ca.crt /etc/velox-worker/certs/
 sudo install -m 0600 worker_credential    /etc/velox-worker/secrets/
+
+# 3b. OPTIONAL — resolve the same files from OpenBao (AppRole per-worker)
+# instead of hand-copying them (see docs/openbao-identity-matrix.md).
+# Drop the worker's AppRole material (0600) and set VELOX_OPENBAO_ADDR in
+# /etc/velox-worker/worker.env:
+sudo install -d -m 0700 /etc/velox-worker/secrets/approle
+sudo install -m 0600 role-id   /etc/velox-worker/secrets/approle/role-id
+sudo install -m 0600 secret-id /etc/velox-worker/secrets/approle/secret-id
+# VELOX_OPENBAO_ADDR=https://127.0.0.1:8200   (loopback/tunnel verso il master)
+# prepare-host.sh invokes openbao-fetch-worker-secrets.sh; if the fetch fails
+# and the hand-copied files exist, the bootstrap continues with a warning.
 
 # 4. On a legacy host, migrate once before the first canonical start:
 sudo deploy/runtime/migrate-legacy-worker.sh

@@ -208,6 +208,10 @@ OPENBAO_VALUES_FILE=.velox/openbao/values.env ./scripts/provision-kv.sh
   assoluto via `realpath`) → prompt interattivo `read -s`.
 - Il file valori (`.velox/openbao/values.env`) è in formato `NOME=valore`,
   **una riga per secret, LF** (niente CRLF — il CR viene comunque strippato).
+  ⚠️ **Niente valori multi-line qui**: i PEM dei cert worker
+  (`WORKER_CERT/KEY/CA`) vanno passati SOLO via env
+  (`OPENBAO_VALUE_WORKER_CERT="$(cat worker.crt)"` …), mai nel values-file
+  (troncherebbe il PEM alla prima riga → chiave corrotta).
 - I secret già presenti vengono **saltati** (idempotenza); `--force` crea una
   nuova versione KV.
 - La scrittura avviene via **REST API** (`/v1/velox/data/...`) con il valore
@@ -281,9 +285,14 @@ distrugge i dati).
    gerarchia in §8 sopra).
 2. ~~**AppRole per-worker** + policy per-worker (least privilege)~~ ✅ implementato
    (§9 + `docs/openbao-identity-matrix.md`).
-3. Distribuire `role-id`/`secret-id` sui nodi worker/master (Ansible, 0600, `no_log`).
-4. Migrazione di `worker_credential` / `VELOX_WORKER_SECRET` dentro OpenBao
-   (login AppRole nel worker agent).
+3. ✅ ~~Migrazione `worker_credential` + mTLS in OpenBao~~ — bootstrap worker:
+   `deploy/runtime/openbao-fetch-worker-secrets.sh` (login AppRole, fetch
+   credential + cert dal KV, scrittura nei path canonici, `--check`),
+   integrato in `prepare-host.sh` con fallback sui file esistenti; test in
+   `scripts/ci/test-openbao-worker-secrets.sh`. I secret dei cert vivono in
+   `velox/production/workers/<id>/cert/{cert,key,ca}` (opzionali).
+4. Distribuire `role-id`/`secret-id` sui nodi worker/master
+   (`/etc/velox-worker/secrets/approle/`, 0600, Ansible `no_log`).
 5. Migrazione dei token master (`VELOX_ADMIN_TOKEN`, `INSTAEDIT_CONTROL_JWT_SECRET`,
    `SOCIAL_API_TOKEN`, `VELOX_COMMIT_HMAC_KEY`).
 6. SSH CA, PKI mTLS, credenziali DB dinamiche, `SecretResolver` in Go.

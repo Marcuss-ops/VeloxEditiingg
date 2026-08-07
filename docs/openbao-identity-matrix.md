@@ -92,10 +92,19 @@ il template `worker.hcl.tmpl` andrà esteso con il path corrispondente.
 
 ## 6. Prossimi passi (dipendenti da questa matrice)
 
-1. Distribuire `role-id`/`secret-id` ai nodi (Ansible, materiale 0600, `no_log`).
-2. Wire il worker agent al login AppRole (sostituzione di `VELOX_WORKER_SECRET`
-   come fonte di identità).
-3. Master env bootstrap da OpenBao (token AppRole `master` invece di env statici).
-4. `token_bound_cidrs` per-worker (limitare il login agli IP dei VPS) quando
+1. ✅ ~~Distribuire `role-id`/`secret-id` ai nodi~~ — il materiale vive nello
+   state-dir; su ogni host va copiato in `/etc/velox-worker/secrets/approle/`
+   (0600, Ansible `no_log`).
+2. ✅ ~~Migrazione `worker_credential` + mTLS in OpenBao~~ — risolta a livello
+   di **host bootstrap** (NON del worker agent): `deploy/runtime/openbao-fetch-worker-secrets.sh`
+   fa login AppRole per-worker e scrive `worker_credential` + coppia mTLS nei
+   path canonici (permessi RW-PROD-001 A2), con **fallback sui file esistenti**
+   finché la migrazione non è completa (`prepare-host.sh` §2.5). Verifica:
+   `--check` (sha256 locale vs OpenBao) e `scripts/ci/test-openbao-worker-secrets.sh`.
+3. Worker agent: sostituzione di `VELOX_WORKER_SECRET` come fonte di identità
+   (login AppRole diretto nel processo — post-fase, quando OpenBao sarà
+   raggiungibile dai nodi senza tunnel).
+4. Master env bootstrap da OpenBao (token AppRole `master` invece di env statici).
+5. `token_bound_cidrs` per-worker (limitare il login agli IP dei VPS) quando
    OpenBao sarà esposto oltre loopback.
-5. `SecretResolver` Go con backend OpenBao (`docs/secrets-audit.md` §4.2).
+6. `SecretResolver` Go con backend OpenBao (`docs/secrets-audit.md` §4.2).
