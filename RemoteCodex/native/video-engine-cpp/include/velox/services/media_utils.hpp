@@ -16,6 +16,12 @@ struct SceneSegmentParams {
 
 double probeMediaDurationSeconds(const std::filesystem::path& mediaPath);
 
+// Returns true when the media file contains at least one audio stream.
+// Video clips are allowed to be silent; callers mixing several tracks must
+// omit those files from the audio filter graph rather than referencing a
+// nonexistent :a stream.
+bool hasAudioStream(const std::filesystem::path& mediaPath);
+
 // ─── F5: args-only builders ─────────────────────────────────────────────
 //
 // These return the FFmpeg ARGUMENTS string only — NO `ffmpeg` prefix,

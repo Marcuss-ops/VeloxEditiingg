@@ -150,6 +150,17 @@ double probeMediaDurationSeconds(const fs::path& mediaPath) {
     }
 }
 
+bool hasAudioStream(const fs::path& mediaPath) {
+    if (mediaPath.empty() || !fs::exists(mediaPath)) {
+        return false;
+    }
+    std::ostringstream cmd;
+    cmd << "ffprobe -v error -select_streams a:0"
+        << " -show_entries stream=index -of csv=p=0 "
+        << file::shellQuote(mediaPath.string());
+    return !json::trim(file::captureCommandOutput(cmd.str())).empty();
+}
+
 // ─── F5: args-only builders (canonical, the others are wrappers) ──────
 
 std::string buildColorSegmentArgs(

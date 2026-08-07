@@ -379,7 +379,12 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 const auto& track = plan.audio_tracks[t];
                 fs::path localAudio = workDir / ("audio_track_" + std::to_string(t) + ".m4a");
                 if (file::downloadAsset(track.source_url, localAudio)) {
-                    downloadedTracks.emplace_back(localAudio, &track);
+                    if (media::hasAudioStream(localAudio)) {
+                        downloadedTracks.emplace_back(localAudio, &track);
+                    } else {
+                        std::cerr << "warning: audio track " << t
+                                  << " contains no audio stream, skipping\n";
+                    }
                 } else {
                     std::cerr << "warning: failed to download audio track " << t << "\n";
                 }
