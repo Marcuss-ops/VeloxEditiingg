@@ -119,6 +119,7 @@ printf 'not-used' > "$SECRETS_DIR/approle-secret-id"
 # ── 3. Login fallito → exit 1 ────────────────────────────────────────────────
 if env -i PATH="$PATH" HOME="$HOME" \
     VELOX_OPENBAO_ADDR="http://127.0.0.1:$PORT" \
+    VELOX_OPENBAO_ALLOW_INSECURE_HTTP_TEST=1 \
     VELOX_OPENBAO_ROLE_ID_FILE="$SECRETS_DIR/approle-role-id" \
     VELOX_OPENBAO_SECRET_ID_FILE="$SECRETS_DIR/approle-secret-id" \
     VELOX_WORKER_ID=w1 \
@@ -132,6 +133,7 @@ pass 'login fallito → exit 1 (fail-closed)'
 printf 'valid-secret-id' > "$SECRETS_DIR/approle-secret-id"
 env -i PATH="$PATH" HOME="$HOME" \
     VELOX_OPENBAO_ADDR="http://127.0.0.1:$PORT" \
+    VELOX_OPENBAO_ALLOW_INSECURE_HTTP_TEST=1 \
     VELOX_OPENBAO_ROLE_ID_FILE="$SECRETS_DIR/approle-role-id" \
     VELOX_OPENBAO_SECRET_ID_FILE="$SECRETS_DIR/approle-secret-id" \
     VELOX_WORKER_ID=w1 \
@@ -158,6 +160,7 @@ pass 'fetch completo → credential + 3 cert scritti con permessi canonici'
 # ── 5. Idempotenza ───────────────────────────────────────────────────────────
 env -i PATH="$PATH" HOME="$HOME" \
     VELOX_OPENBAO_ADDR="http://127.0.0.1:$PORT" \
+    VELOX_OPENBAO_ALLOW_INSECURE_HTTP_TEST=1 \
     VELOX_OPENBAO_ROLE_ID_FILE="$SECRETS_DIR/approle-role-id" \
     VELOX_OPENBAO_SECRET_ID_FILE="$SECRETS_DIR/approle-secret-id" \
     VELOX_WORKER_ID=w1 \
@@ -169,6 +172,7 @@ pass 'fetch idempotente'
 # ── 6. --check coerente → exit 0 ─────────────────────────────────────────────
 env -i PATH="$PATH" HOME="$HOME" \
     VELOX_OPENBAO_ADDR="http://127.0.0.1:$PORT" \
+    VELOX_OPENBAO_ALLOW_INSECURE_HTTP_TEST=1 \
     VELOX_OPENBAO_ROLE_ID_FILE="$SECRETS_DIR/approle-role-id" \
     VELOX_OPENBAO_SECRET_ID_FILE="$SECRETS_DIR/approle-secret-id" \
     VELOX_WORKER_ID=w1 \
@@ -181,6 +185,7 @@ pass '--check coerente → exit 0'
 printf 'tampered' > "$SECRETS_DIR/worker_credential"
 if env -i PATH="$PATH" HOME="$HOME" \
     VELOX_OPENBAO_ADDR="http://127.0.0.1:$PORT" \
+    VELOX_OPENBAO_ALLOW_INSECURE_HTTP_TEST=1 \
     VELOX_OPENBAO_ROLE_ID_FILE="$SECRETS_DIR/approle-role-id" \
     VELOX_OPENBAO_SECRET_ID_FILE="$SECRETS_DIR/approle-secret-id" \
     VELOX_WORKER_ID=w1 \
@@ -197,6 +202,7 @@ rm -f "$CERTS_DIR"/worker.crt "$CERTS_DIR"/worker.key "$CERTS_DIR"/ca.crt \
       "$SECRETS_DIR"/worker_credential
 env -i PATH="$PATH" HOME="$HOME" \
     VELOX_OPENBAO_ADDR="http://127.0.0.1:$PORT" \
+    VELOX_OPENBAO_ALLOW_INSECURE_HTTP_TEST=1 \
     VELOX_OPENBAO_ROLE_ID_FILE="$SECRETS_DIR/approle-role-id" \
     VELOX_OPENBAO_SECRET_ID_FILE="$SECRETS_DIR/approle-secret-id" \
     VELOX_WORKER_ID=w2 \
@@ -214,6 +220,7 @@ kill "$MOCK_PID" 2>/dev/null || true
 MOCK_PID=""
 if env -i PATH="$PATH" HOME="$HOME" \
     VELOX_OPENBAO_ADDR="http://127.0.0.1:$PORT" \
+    VELOX_OPENBAO_ALLOW_INSECURE_HTTP_TEST=1 \
     VELOX_OPENBAO_ROLE_ID_FILE="$SECRETS_DIR/approle-role-id" \
     VELOX_OPENBAO_SECRET_ID_FILE="$SECRETS_DIR/approle-secret-id" \
     VELOX_WORKER_ID=w1 \

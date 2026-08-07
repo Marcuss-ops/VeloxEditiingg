@@ -20,8 +20,8 @@
 #   VELOX_OPENBAO_ADDR            es. https://127.0.0.1:8200 (loopback o tunnel)
 #   VELOX_OPENBAO_ROLE_ID_FILE    default /etc/velox-worker/secrets/approle/role-id
 #   VELOX_OPENBAO_SECRET_ID_FILE  default /etc/velox-worker/secrets/approle/secret-id
-#   VELOX_OPENBAO_CA_FILE         opzionale: cert CA di OpenBao → curl --cacert
-#                                 (senza: -k, il listener usa cert self-signed)
+#   VELOX_OPENBAO_CA_FILE         obbligatorio quando OpenBao è configurato:
+#                                 cert CA di OpenBao → curl --cacert
 #   VELOX_WORKER_ID               identità → KV production/workers/<id>/...
 #
 # Output dirs override (solo test): VELOX_WORKER_SECRETS_DIR, VELOX_WORKER_CERTS_DIR
@@ -72,11 +72,15 @@ WORKER_ID="${VELOX_WORKER_ID:-}"
 [[ -f "$ROLE_ID_FILE" && -s "$ROLE_ID_FILE" ]] || fail "role-id mancante: $ROLE_ID_FILE"
 [[ -f "$SECRET_ID_FILE" && -s "$SECRET_ID_FILE" ]] || fail "secret-id mancante: $SECRET_ID_FILE"
 
-CURL_TLS=(-k)
-if [[ -n "${VELOX_OPENBAO_CA_FILE:-}" && -f "$VELOX_OPENBAO_CA_FILE" ]]; then
+if [[ "$ADDR" == https://* ]]; then
+    [[ -n "${VELOX_OPENBAO_CA_FILE:-}" && -s "$VELOX_OPENBAO_CA_FILE" ]] ||
+        fail "VELOX_OPENBAO_CA_FILE mancante o vuoto — TLS verification obbligatoria"
     CURL_TLS=(--cacert "$VELOX_OPENBAO_CA_FILE")
+elif [[ "$ADDR" == http://* && "${VELOX_OPENBAO_ALLOW_INSECURE_HTTP_TEST:-0}" == "1" ]]; then
+    # Only the repository's HTTP mock tests may opt into plaintext transport.
+    CURL_TLS=()
 else
-    log "WARN: TLS senza verifica (-k) — in production imposta VELOX_OPENBAO_CA_FILE"
+    fail "VELOX_OPENBAO_ADDR must use https:// (HTTP is test-only and requires VELOX_OPENBAO_ALLOW_INSECURE_HTTP_TEST=1)"
 fi
 
 KV_ROOT="velox/data/production/workers/$WORKER_ID"

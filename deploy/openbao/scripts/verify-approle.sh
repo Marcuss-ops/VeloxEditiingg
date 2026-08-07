@@ -52,7 +52,13 @@ command -v jq  >/dev/null 2>&1 || { echo "FATAL: 'jq' not found on PATH" >&2; ex
 command -v curl >/dev/null 2>&1 || { echo "FATAL: 'curl' not found on PATH" >&2; exit 1; }
 
 export BAO_ADDR="$ADDR"
-export BAO_SKIP_VERIFY="${BAO_SKIP_VERIFY:-true}"
+TLS_CERT_FILE="${OPENBAO_CA_FILE:-$STATE_DIR/tls/server.crt}"
+[[ -s "$TLS_CERT_FILE" ]] || {
+    echo "FATAL: OpenBao TLS CA certificate missing: $TLS_CERT_FILE" >&2
+    exit 1
+}
+export BAO_CACERT="$TLS_CERT_FILE"
+CURL_TLS=(--cacert "$TLS_CERT_FILE")
 # Caller per /v1/sys/capabilities: serve sudo → root token di bootstrap. Il
 # token AppRole del principal va nel BODY della richiesta, mai in env.
 if [[ -z "${BAO_TOKEN:-}" ]]; then
@@ -78,7 +84,7 @@ check() {
 has_cap() {
     local tok="$1" path="$2" cap="$3" body out rc
     body="$(jq -n --arg t "$tok" --arg p "$path" '{token: $t, path: $p}')"
-    out="$(curl -fsS -k -X POST \
+    out="$(curl -fsS "${CURL_TLS[@]}" -X POST \
             -H "X-Vault-Token: $BAO_TOKEN" \
             --data-binary "$body" \
             "$ADDR/v1/sys/capabilities" 2>/dev/null)" || return 2

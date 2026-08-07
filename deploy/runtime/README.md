@@ -43,6 +43,9 @@ sudo install -d -m 0700 /etc/velox-worker/secrets/approle
 sudo install -m 0600 role-id   /etc/velox-worker/secrets/approle/role-id
 sudo install -m 0600 secret-id /etc/velox-worker/secrets/approle/secret-id
 # VELOX_OPENBAO_ADDR=https://127.0.0.1:8200   (loopback/tunnel verso il master)
+# VELOX_OPENBAO_CA_FILE=/etc/velox-worker/certs/openbao-ca.crt
+# Il certificato pubblico server.crt deve essere distribuito insieme al
+# materiale AppRole; senza CA il resolver fallisce chiuso (mai -k).
 # prepare-host.sh invokes openbao-fetch-worker-secrets.sh; if the fetch fails
 # and the hand-copied files exist, the bootstrap continues with a warning.
 

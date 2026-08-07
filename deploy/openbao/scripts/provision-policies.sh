@@ -54,6 +54,12 @@ if [[ ${#WORKERS[@]} -eq 0 ]]; then WORKERS=("${DEFAULT_WORKERS[@]}"); fi
 command -v bao >/dev/null 2>&1 || { echo "FATAL: 'bao' CLI not found on PATH" >&2; exit 1; }
 
 export BAO_ADDR="$ADDR"
+TLS_CERT_FILE="${OPENBAO_CA_FILE:-$STATE_DIR/tls/server.crt}"
+[[ -s "$TLS_CERT_FILE" ]] || {
+    echo "FATAL: OpenBao TLS CA certificate missing: $TLS_CERT_FILE" >&2
+    exit 1
+}
+export BAO_CACERT="$TLS_CERT_FILE"
 if [[ -z "${BAO_TOKEN:-}" ]]; then
     [[ -f "$TOKEN_FILE" ]] || {
         echo "FATAL: no BAO_TOKEN and $TOKEN_FILE missing — run bootstrap-init.sh first" >&2
@@ -62,7 +68,6 @@ if [[ -z "${BAO_TOKEN:-}" ]]; then
     BAO_TOKEN="$(cat "$TOKEN_FILE")"
     export BAO_TOKEN
 fi
-export BAO_SKIP_VERIFY="${BAO_SKIP_VERIFY:-true}"   # self-signed loopback cert
 
 # policy_write <name> <rendered-hcl-file> — idempotente con change-detection
 policy_write() {

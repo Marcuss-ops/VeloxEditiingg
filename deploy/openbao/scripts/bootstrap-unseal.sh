@@ -33,9 +33,15 @@ command -v jq >/dev/null 2>&1 || {
 }
 
 export BAO_ADDR="$ADDR"
+TLS_CERT_FILE="${OPENBAO_CA_FILE:-$STATE_DIR/tls/server.crt}"
+[[ -s "$TLS_CERT_FILE" ]] || {
+    echo "[unseal] FATAL: OpenBao TLS CA certificate missing: $TLS_CERT_FILE" >&2
+    exit 1
+}
+export BAO_CACERT="$TLS_CERT_FILE"
 
 # If the node is already unsealed there is nothing to do.
-sealed="$(bao status -format=json -tls-skip-verify 2>/dev/null | jq -r .sealed || true)"
+sealed="$(bao status -format=json 2>/dev/null | jq -r .sealed || true)"
 if [[ "$sealed" == "false" ]]; then
     echo "[unseal] already unsealed — nothing to do."
     exit 0
@@ -49,15 +55,15 @@ mapfile -t KEYS < "$KEYS_FILE"
 applied=0
 for key in "${KEYS[@]}"; do
     [[ -n "$key" ]] || continue
-    bao operator unseal -tls-skip-verify "$key" >/dev/null
+    bao operator unseal "$key" >/dev/null
     applied=$((applied + 1))
     # `bao status` exits 2 while the node is still sealed — with
     # set -euo pipefail that would abort the loop, so tolerate the exit
     # code (only the parsed .sealed value matters here).
-    sealed="$(bao status -format=json -tls-skip-verify 2>/dev/null | jq -r .sealed || true)"
+    sealed="$(bao status -format=json 2>/dev/null | jq -r .sealed || true)"
     if [[ "$sealed" == "false" ]]; then
         echo "[unseal] OK — node unsealed after $applied key(s)."
-        bao status -tls-skip-verify
+        bao status
         exit 0
     fi
     echo "[unseal] progress: $applied key(s) applied, still sealed (threshold $THRESHOLD)..."

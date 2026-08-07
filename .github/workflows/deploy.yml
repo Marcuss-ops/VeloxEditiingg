@@ -244,8 +244,9 @@ jobs:
           OPENBAO_ADDR: ${{ secrets.OPENBAO_ADDR }}
           OPENBAO_ROLE_ID: ${{ secrets.OPENBAO_ROLE_ID }}
           OPENBAO_SECRET_ID: ${{ secrets.OPENBAO_SECRET_ID }}
-          # Cert CA di OpenBao (solo se il listener usa un cert firmato da una
-          # CA che il runner non trusta di default): OPENBAO_CA_FILE.
+          # Certificato pubblico CA/server di OpenBao, fornito come secret
+          # PEM nel runner; non è la chiave privata del listener.
+          OPENBAO_CA_PEM: ${{ secrets.OPENBAO_CA_FILE }}
         run: |
           set -euo pipefail
 
@@ -256,9 +257,18 @@ jobs:
           # vincono su group_vars. Se OPENBAO_ADDR non è configurato, lo step è
           # un no-op e il deploy usa ansible-vault come prima (fallback legacy).
           if [ -n "${OPENBAO_ADDR:-}" ]; then
+            OPENBAO_CA_FILE=/tmp/openbao-ca.crt
+            trap 'rm -f "$OPENBAO_CA_FILE" /tmp/openbao-vars.yml' EXIT
+            [ -n "${OPENBAO_CA_PEM:-}" ] || {
+              echo "::error::OPENBAO_CA_FILE secret is required when OPENBAO_ADDR is configured."
+              exit 1
+            }
+            printf '%s\n' "$OPENBAO_CA_PEM" > "$OPENBAO_CA_FILE"
+            chmod 600 "$OPENBAO_CA_FILE"
             OPENBAO_VARS_FILE=/tmp/openbao-vars.yml \
               OPENBAO_ROLE_ID="${OPENBAO_ROLE_ID:-}" \
               OPENBAO_SECRET_ID="${OPENBAO_SECRET_ID:-}" \
+              OPENBAO_CA_FILE="$OPENBAO_CA_FILE" \
               bash deploy/openbao/scripts/resolve-master-tokens.sh --require-all
             ls -la /tmp/openbao-vars.yml
           else

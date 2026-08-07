@@ -54,6 +54,12 @@ mkdir -p "$STATE_DIR"
 chmod 0700 "$STATE_DIR"
 
 export BAO_ADDR="$ADDR"
+TLS_CERT_FILE="${OPENBAO_CA_FILE:-$STATE_DIR/tls/server.crt}"
+[[ -s "$TLS_CERT_FILE" ]] || {
+    echo "[init] FATAL: OpenBao TLS CA certificate missing: $TLS_CERT_FILE" >&2
+    exit 1
+}
+export BAO_CACERT="$TLS_CERT_FILE"
 
 # Reachability + initialization check before touching anything.
 # /v1/sys/seal-status is the unauthenticated status endpoint and answers 200
@@ -62,9 +68,9 @@ export BAO_ADDR="$ADDR"
 # uninitialized. Prefer curl; fall back to `bao status -format=json`.
 seal_json=""
 if command -v curl >/dev/null 2>&1; then
-    seal_json="$(curl -sk -m 5 "$ADDR/v1/sys/seal-status" 2>/dev/null || true)"
+    seal_json="$(curl --cacert "$TLS_CERT_FILE" -sS -m 5 "$ADDR/v1/sys/seal-status" 2>/dev/null || true)"
 else
-    seal_json="$(bao status -format=json -tls-skip-verify 2>/dev/null || true)"
+    seal_json="$(bao status -format=json 2>/dev/null || true)"
 fi
 # NOTE: do NOT use '.initialized // empty' here — jq's `//` treats `false`
 # as falsy, so an initialized:false response would collapse to empty and
@@ -84,8 +90,8 @@ echo "[init] Initializing OpenBao at $ADDR (shares=$SHARES threshold=$THRESHOLD)
 init_json="$(bao operator init \
     -key-shares="$SHARES" \
     -key-threshold="$THRESHOLD" \
-    -format=json \
-    -tls-skip-verify)"
+    -format=json
+    )"
 
 umask 077
 printf '%s\n' "$init_json" | jq -r '.unseal_keys_b64[]' > "$KEYS_FILE"

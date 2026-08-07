@@ -290,6 +290,7 @@ risolve i token al momento del rilascio, senza credenziali statiche in repo.
 
 ```bash
 OPENBAO_ADDR=https://127.0.0.1:8200 \
+OPENBAO_CA_FILE=../../.velox/openbao/tls/server.crt \
 OPENBAO_ROLE_ID_FILE=/etc/velox/master/approle/role-id \
 OPENBAO_SECRET_ID_FILE=/etc/velox/master/approle/secret-id \
 OPENBAO_VARS_FILE=/tmp/openbao-vars.yml \
@@ -327,7 +328,9 @@ firma i certificati degli operatori (TTL **breve**, default 30m, principals
 ```bash
 ./scripts/provision-ssh-ca.sh            # enable engine + CA (idempotente) + role + export pubkey
 # Il token deve provenire dall'AppRole ssh-operator; lo script non usa root-token.
-BAO_TOKEN="$(curl -fsS -k -X POST -H 'Content-Type: application/json' \
+# OPENBAO_CA_FILE può puntare al certificato pubblico server.crt; se omesso,
+# il comando usa ../../.velox/openbao/tls/server.crt e fallisce se manca.
+BAO_TOKEN="$(curl -fsS --cacert "${OPENBAO_CA_FILE:-../../.velox/openbao/tls/server.crt}" -X POST -H 'Content-Type: application/json' \
   --data "$(jq -n --arg r "$(cat ../../.velox/openbao/approle/ssh-operator/role-id)" \
     --arg s "$(cat ../../.velox/openbao/approle/ssh-operator/secret-id)" \
     '{role_id:$r,secret_id:$s}')" \
@@ -371,7 +374,7 @@ distrugge i dati).
 | Log | `docker compose -f deploy/openbao/compose.yml logs -f openbao` |
 | Backup dati (raft) | `docker volume inspect velox-openbao_openbao-data` → snapshot del volume (es. `docker run --rm -v velox-openbao_openbao-data:/data -v $PWD:/backup alpine tar czf /backup/openbao-data.tgz -C /data .`) |
 | Upgrade | aggiorna `OPENBAO_IMAGE` in `.env` con un riferimento `@sha256`, poi `docker compose pull && docker compose up -d` |
-| Interfaccia UI | https://127.0.0.1:8200/ui (richiede token; cert self-signed → accetta il warning) |
+| Interfaccia UI | https://127.0.0.1:8200/ui (richiede token; importa/trusta il certificato pubblico server.crt) |
 
 ## 14. Prossimi passi della migrazione
 

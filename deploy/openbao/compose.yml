@@ -39,7 +39,7 @@ services:
       # Container-internal client defaults (used by the healthcheck and by
       # `docker exec -it velox-openbao bao ...` operator commands).
       BAO_ADDR: https://127.0.0.1:8200
-      BAO_SKIP_VERIFY: "true"
+      BAO_CACERT: /openbao/tls/server.crt
       # Override the default ~/.vault-token home only if needed; the
       # operator-side scripts keep tokens in .velox/openbao/ instead.
       # BAO_TOKEN_PATH: /openbao/data/token
@@ -71,7 +71,7 @@ services:
     # `bao status` exits 0 only when the node is initialized AND unsealed.
     # Sealed (503) / uninitialized (501) states keep the container unhealthy.
     healthcheck:
-      test: ["CMD", "bao", "status", "-tls-skip-verify"]
+      test: ["CMD", "bao", "status"]
       interval: 10s
       timeout: 5s
       start_period: 15s

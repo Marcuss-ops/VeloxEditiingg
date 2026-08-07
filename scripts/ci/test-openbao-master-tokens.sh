@@ -122,6 +122,7 @@ fi
 
 # ── 4. Login fallito → exit 1 ────────────────────────────────────────────────
 if OPENBAO_ADDR="http://127.0.0.1:$PORT" \
+    OPENBAO_ALLOW_INSECURE_HTTP_TEST=1 \
     OPENBAO_ROLE_ID=r OPENBAO_SECRET_ID=wrong \
     OPENBAO_VARS_FILE="$VARS_FILE" bash "$RESOLVE" >/dev/null 2>&1; then
     fail 'secret-id non valido deve far fallire il login (exit 1)'
@@ -131,6 +132,7 @@ pass 'login fallito → exit 1 (fail-closed)'
 # ── 5. Risoluzione completa → vars file 0600 con i 6 valori ─────────────────
 rm -f "$VARS_FILE"
 OPENBAO_ADDR="http://127.0.0.1:$PORT" \
+    OPENBAO_ALLOW_INSECURE_HTTP_TEST=1 \
     OPENBAO_ROLE_ID=r OPENBAO_SECRET_ID=valid-secret-id \
     OPENBAO_VARS_FILE="$VARS_FILE" bash "$RESOLVE" >/dev/null \
     || fail 'risoluzione completa deve uscire 0'
@@ -158,6 +160,7 @@ if [[ -z "$MISSING" ]]; then
     sleep 0.3
 fi
 if OPENBAO_ADDR="http://127.0.0.1:$PORT" \
+    OPENBAO_ALLOW_INSECURE_HTTP_TEST=1 \
     OPENBAO_ROLE_ID=r OPENBAO_SECRET_ID=valid-secret-id \
     OPENBAO_VARS_FILE="$VARS_FILE" bash "$RESOLVE" --require-all >/dev/null 2>&1; then
     fail 'required mancante con --require-all deve uscire 1'

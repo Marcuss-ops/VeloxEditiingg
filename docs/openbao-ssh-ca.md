@@ -117,6 +117,8 @@ L'AppRole `ssh-operator` è l'unico percorso operativo per la firma:
 
 ```bash
 cd deploy/openbao
+export BAO_CACERT="${OPENBAO_CA_FILE:-../../.velox/openbao/tls/server.crt}"
+[[ -s "$BAO_CACERT" ]] || { echo "OpenBao CA certificate missing: $BAO_CACERT" >&2; exit 1; }
 BAO_TOKEN=$(bao write -field=token auth/approle/login \
   role_id="$(cat ../../.velox/openbao/approle/ssh-operator/role-id)" \
   secret_id="$(cat ../../.velox/openbao/approle/ssh-operator/secret-id)") \

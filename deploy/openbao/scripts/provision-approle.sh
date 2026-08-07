@@ -78,6 +78,12 @@ trap 'find "$STATE_DIR/approle" -name "*.tmp" -delete 2>/dev/null || true' EXIT
 command -v bao >/dev/null 2>&1 || { echo "FATAL: 'bao' CLI not found on PATH" >&2; exit 1; }
 
 export BAO_ADDR="$ADDR"
+TLS_CERT_FILE="${OPENBAO_CA_FILE:-$STATE_DIR/tls/server.crt}"
+[[ -s "$TLS_CERT_FILE" ]] || {
+    echo "FATAL: OpenBao TLS CA certificate missing: $TLS_CERT_FILE" >&2
+    exit 1
+}
+export BAO_CACERT="$TLS_CERT_FILE"
 if [[ -z "${BAO_TOKEN:-}" ]]; then
     [[ -f "$TOKEN_FILE" ]] || {
         echo "FATAL: no BAO_TOKEN and $TOKEN_FILE missing — run bootstrap-init.sh first" >&2
@@ -86,7 +92,6 @@ if [[ -z "${BAO_TOKEN:-}" ]]; then
     BAO_TOKEN="$(cat "$TOKEN_FILE")"
     export BAO_TOKEN
 fi
-export BAO_SKIP_VERIFY="${BAO_SKIP_VERIFY:-true}"
 
 # ── 1. abilita auth method approle (idempotente) ─────────────────────────────
 if ! bao auth list -format=json 2>/dev/null | jq -e 'has("approle/")' >/dev/null 2>&1; then

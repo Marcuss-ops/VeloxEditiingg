@@ -26,9 +26,8 @@
 #   OPENBAO_ADDR             es. https://127.0.0.1:8200
 #   OPENBAO_ROLE_ID / OPENBAO_SECRET_ID           (valori, es. secrets CI)
 #   OPENBAO_ROLE_ID_FILE / OPENBAO_SECRET_ID_FILE (file 0600, es. host)
-#   OPENBAO_CA_FILE          opzionale: cert CA di OpenBao (--cacert)
+#   OPENBAO_CA_FILE          cert CA di OpenBao (obbligatorio, --cacert)
 #   OPENBAO_VARS_FILE        path del vars file da scrivere (obbligatorio)
-#   OPENBAO_SKIP_VERIFY      default true (cert self-signed del listener)
 #
 # Flag: --require-all  esci 1 se uno dei required (admin, instaedit, social)
 #                       è assente nel KV.
@@ -71,11 +70,15 @@ else
     fail "materiale AppRole mancante (OPENBAO_ROLE_ID+OPENBAO_SECRET_ID oppure *_FILE)"
 fi
 
-CURL_TLS=(-k)
-if [[ -n "${OPENBAO_CA_FILE:-}" && -f "$OPENBAO_CA_FILE" ]]; then
+if [[ "$ADDR" == https://* ]]; then
+    [[ -n "${OPENBAO_CA_FILE:-}" && -s "$OPENBAO_CA_FILE" ]] ||
+        fail "OPENBAO_CA_FILE mancante o vuoto — TLS verification obbligatoria"
     CURL_TLS=(--cacert "$OPENBAO_CA_FILE")
+elif [[ "$ADDR" == http://* && "${OPENBAO_ALLOW_INSECURE_HTTP_TEST:-0}" == "1" ]]; then
+    # Only the repository's HTTP mock tests may opt into plaintext transport.
+    CURL_TLS=()
 else
-    log "ATTENZIONE: TLS senza verifica (-k) — imposta OPENBAO_CA_FILE per pinnare la CA di OpenBao"
+    fail "OPENBAO_ADDR must use https:// (HTTP is test-only and requires OPENBAO_ALLOW_INSECURE_HTTP_TEST=1)"
 fi
 
 # ── 1. Login AppRole → token (mai stampato) ─────────────────────────────────

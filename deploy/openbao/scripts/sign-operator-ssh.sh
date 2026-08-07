@@ -99,10 +99,13 @@ done
     exit 1
 }
 
-curl_tls=(-k)
-if [[ -f "$STATE_DIR/tls/server.crt" ]]; then
-    curl_tls=(--cacert "$STATE_DIR/tls/server.crt")
-fi
+TLS_CERT_FILE="${OPENBAO_CA_FILE:-$STATE_DIR/tls/server.crt}"
+[[ -s "$TLS_CERT_FILE" ]] || {
+    echo "FATAL: OpenBao TLS CA certificate missing: $TLS_CERT_FILE" >&2
+    exit 1
+}
+curl_tls=(--cacert "$TLS_CERT_FILE")
+export BAO_CACERT="$TLS_CERT_FILE"
 
 # Fail-closed: il token deve portare la policy dedicata. Questo impedisce che
 # un root/admin token esplicitamente esportato in BAO_TOKEN diventi un percorso

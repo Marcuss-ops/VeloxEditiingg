@@ -15,10 +15,18 @@ command -v bao >/dev/null 2>&1 || {
 }
 
 export BAO_ADDR="$ADDR"
-bao status -tls-skip-verify
+OPENBAO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+STATE_DIR="${OPENBAO_STATE_DIR:-"$OPENBAO_DIR/../../.velox/openbao"}"
+TLS_CERT_FILE="${OPENBAO_CA_FILE:-$STATE_DIR/tls/server.crt}"
+[[ -s "$TLS_CERT_FILE" ]] || {
+    echo "[status] FATAL: OpenBao TLS CA certificate missing: $TLS_CERT_FILE" >&2
+    exit 1
+}
+export BAO_CACERT="$TLS_CERT_FILE"
+bao status
 
 if command -v curl >/dev/null 2>&1; then
-    code="$(curl -s -o /dev/null -w '%{http_code}' -k "$ADDR/v1/sys/health" 2>/dev/null || echo 000)"
+    code="$(curl -s --cacert "$TLS_CERT_FILE" -o /dev/null -w '%{http_code}' "$ADDR/v1/sys/health" 2>/dev/null || echo 000)"
     case "$code" in
         200) meaning="ACTIVE + unsealed" ;;
         429) meaning="standby (unsealed)" ;;

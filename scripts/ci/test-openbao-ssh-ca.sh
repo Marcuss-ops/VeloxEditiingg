@@ -42,26 +42,45 @@ grep -q 'vault_velox_ssh_ca_pubkey' "$ROOT/deploy/group_vars/vault.yml.example" 
     || fail 'vault.yml.example non documenta vault_velox_ssh_ca_pubkey'
 grep -q 'ssh-ca.pub' "$PROVISION" \
     || fail 'provision-ssh-ca.sh non esporta la CA public key'
-pass 'check strutturali OK (policy, playbook, vault, export CA)'
+# Strict TLS regression guard: operational OpenBao paths must always verify
+# the server certificate. HTTP is permitted only by the explicit mock-test
+# opt-ins in the dedicated master/worker test scripts.
+if grep -RInE --exclude='test-openbao-ssh-ca.sh' --exclude='test-openbao-master-tokens.sh' \
+    --exclude='test-openbao-worker-secrets.sh' \
+    'curl[^[:cntrl:]]*(-k|--insecure)|BAO_SKIP_VERIFY=true|tls-skip-verify|CURL_TLS=\( -k|curl_tls=\( -k' \
+    "$ROOT/deploy/openbao" "$ROOT/deploy/runtime" \
+    "$ROOT/deploy/openbao/README.md" "$ROOT/docs/openbao-ssh-ca.md" \
+    >/dev/null 2>&1; then
+    fail 'strict TLS regression: insecure OpenBao transport flag found'
+fi
+grep -q 'BAO_CACERT' "$ROOT/deploy/openbao/compose.yml" \
+    || fail 'compose.yml non configura BAO_CACERT'
+pass 'check strutturali OK (policy, playbook, vault, export CA, strict TLS)'
 
 # ── C. Smoke live (solo se OpenBao raggiungibile con root token) ─────────────
 LIVE=0
-if [[ -f "$STATE_DIR/root-token" ]]; then
-    BAO_ADDR="${BAO_ADDR:-https://127.0.0.1:8200}"
-    if curl -fsS -k -H "X-Vault-Token: $(cat "$STATE_DIR/root-token")" \
+BAO_ADDR="${BAO_ADDR:-https://127.0.0.1:8200}"
+TLS_CERT_FILE="${OPENBAO_CA_FILE:-$STATE_DIR/tls/server.crt}"
+if [[ -s "$STATE_DIR/root-token" || -n "${OPENBAO_ADDR:-}" ]]; then
+    [[ -s "$STATE_DIR/root-token" ]] || fail "OpenBao live address is configured but root-token is missing: $STATE_DIR/root-token"
+    [[ -s "$TLS_CERT_FILE" ]] || fail "OpenBao live material exists but TLS CA certificate is missing: $TLS_CERT_FILE"
+    if curl --cacert "$TLS_CERT_FILE" -fsS \
+        -H "X-Vault-Token: $(cat "$STATE_DIR/root-token")" \
         "$BAO_ADDR/v1/sys/health" >/dev/null 2>&1; then
         LIVE=1
     fi
 fi
 if [[ "$LIVE" != "1" ]]; then
-    pass "SKIP smoke live (nessun OpenBao raggiungibile) — gate A+B verdi"
+    pass "SKIP smoke live (nessun materiale live OpenBao configurato) — gate A+B verdi"
     pass 'OK'
     exit 0
 fi
 
 export PATH="$HOME/.local/bin:$PATH"
-export BAO_ADDR="${BAO_ADDR:-https://127.0.0.1:8200}"
-curl_tls=(-k)
+export BAO_ADDR="$BAO_ADDR"
+[[ -s "$TLS_CERT_FILE" ]] || fail "OpenBao TLS CA certificate missing: $TLS_CERT_FILE"
+export BAO_CACERT="$TLS_CERT_FILE"
+curl_tls=(--cacert "$TLS_CERT_FILE")
 
 pass '=== 1. provision-ssh-ca (prima run) ==='
 "$PROVISION" >/dev/null || fail 'provision-ssh-ca prima run fallita'

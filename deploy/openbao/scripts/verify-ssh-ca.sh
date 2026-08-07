@@ -52,10 +52,13 @@ if [[ -z "${BAO_TOKEN:-}" ]]; then
     export BAO_TOKEN
 fi
 
-curl_tls=(-k)
-if [[ -f "$STATE_DIR/tls/server.crt" ]]; then
-    curl_tls=(--cacert "$STATE_DIR/tls/server.crt")
-fi
+TLS_CERT_FILE="${OPENBAO_CA_FILE:-$STATE_DIR/tls/server.crt}"
+[[ -s "$TLS_CERT_FILE" ]] || {
+    echo "FATAL: OpenBao TLS CA certificate missing: $TLS_CERT_FILE" >&2
+    exit 1
+}
+curl_tls=(--cacert "$TLS_CERT_FILE")
+export BAO_CACERT="$TLS_CERT_FILE"
 
 check() {
     # $1 = descrizione, $2 = esito (0 ok / 1 ko)
