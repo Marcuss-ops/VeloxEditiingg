@@ -8,7 +8,7 @@ import (
 
 func newWorkerCapacityTestDB(t *testing.T) *SQLiteStore {
 	t.Helper()
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := sql.Open("sqlite3", ":memory:?_busy_timeout=5000")
 	if err != nil {
 		t.Fatal(err)
 	}
