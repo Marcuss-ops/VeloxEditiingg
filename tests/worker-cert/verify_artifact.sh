@@ -324,7 +324,6 @@ FFPROBE_RC=0
 # check below for the bearer-leak policy).
 timeout "${FFPROBE_TIMEOUT_S}" ffprobe -v error -show_format -show_streams \
   "$OUTPUT_PATH" >"$TMP_FFPROBE" 2>"$TMP_FFPROBE_ERR" || FFPROBE_RC=$?
-FFPROBE_OUT=$(cat "$TMP_FFPROBE")
 rm -f "$TMP_FFPROBE_ERR"
 if (( FFPROBE_RC != 0 )); then
   log_error "FAIL: ffprobe_exec: rc=$FFPROBE_RC"

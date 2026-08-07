@@ -3,7 +3,6 @@ set -uo pipefail
 
 REAL_SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PERF_MATRIX="${SCRIPT_DIR}/perf_matrix.sh"
 INPUT="${SCRIPT_DIR}/workers/benchmark.json"
 
