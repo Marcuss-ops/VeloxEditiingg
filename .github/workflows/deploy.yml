@@ -136,7 +136,7 @@ jobs:
           set -euo pipefail
           WORKER_VERSION="${{ steps.version.outputs.worker }}"
           SERVER_VERSION="${{ steps.version.outputs.server }}"
-          OWNER="${{ env.IMAGE_OWNER }}"
+          OWNER="$(printf '%s' '${{ env.IMAGE_OWNER }}' | tr '[:upper:]' '[:lower:]')"
           REGISTRY="${{ env.REGISTRY }}"
 
           # Retry helper: tag-push fires simultaneously with the image

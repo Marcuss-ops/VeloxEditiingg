@@ -305,6 +305,7 @@ jobs:
           COSIGN_EXPERIMENTAL: '1'
         run: |
           set -euo pipefail
-          IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.digest }}"
+          OWNER_LC="$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          IMAGE="${{ env.REGISTRY }}/${OWNER_LC}/${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.digest }}"
           echo "Signing image: $IMAGE"
           cosign sign --yes "$IMAGE"
