@@ -42,7 +42,7 @@ case "${1:-}" in
     ;;
   inspect)
     [[ "${MOCK_DOCKER_INSPECT_FAIL:-0}" == 1 ]] && exit 42
-    printf '%s\n' "${MOCK_INSPECT_IMAGE:?}"
+    printf '%s true\n' "${MOCK_INSPECT_IMAGE:?}"
     ;;
   *)
     exit 43
@@ -90,7 +90,7 @@ run_helper || fail "happy-path activation failed"
 grep -Fxq "docker pull $IMAGE" "$LOG" || fail "docker pull did not receive expected digest"
 grep -Fxq 'systemctl restart velox-worker.service' "$LOG" || fail "systemd restart was not requested"
 grep -Fxq 'systemctl is-active --quiet velox-worker.service' "$LOG" || fail "systemd active check was not requested"
-grep -Fxq "docker inspect --format {{.Config.Image}} velox-worker" "$LOG" || fail "container digest check was not requested"
+grep -Fxq "docker inspect --format {{.Config.Image}} {{.State.Running}} velox-worker" "$LOG" || fail "container digest/running check was not requested"
 grep -Fq 'curl -fsS --max-time 10 http://127.0.0.1:8081/health/ready' "$LOG" || fail "health/ready was not requested"
 grep -Fxq "VELOX_WORKER_IMAGE=$IMAGE" "$ENV_FILE" || fail "worker.env does not contain the target digest"
 grep -Fxq 'VELOX_WORKER_ID=offline-worker' "$ENV_FILE" || fail "worker.env lost worker identity"
