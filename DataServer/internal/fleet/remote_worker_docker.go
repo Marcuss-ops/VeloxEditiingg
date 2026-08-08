@@ -3,6 +3,8 @@ package fleet
 import (
 	"context"
 	"fmt"
+
+	"velox-server/internal/deploy"
 )
 
 // SSHWorkerDockerClient is the canonical worker container adapter. The
@@ -18,6 +20,13 @@ func (c *SSHWorkerDockerClient) ActivateImage(ctx context.Context, workerID, ima
 	if c == nil || c.SSH == nil {
 		return "", fmt.Errorf("ssh docker: ssh client not wired")
 	}
+	if err := deploy.ValidateImageRef(imageRef); err != nil {
+		return "", fmt.Errorf("ssh docker: invalid image ref: %w", err)
+	}
+	// The fixed, root-owned helper performs the worker-side transaction:
+	// docker pull, atomic VELOX_WORKER_IMAGE replacement, systemd restart,
+	// container image assertion, and /health/ready validation. Only the
+	// validated immutable ref is placed in this fixed command.
 	return c.SSH.Run(ctx, workerID, "sudo -n /usr/local/sbin/velox-worker-activate-image "+imageRef)
 }
 

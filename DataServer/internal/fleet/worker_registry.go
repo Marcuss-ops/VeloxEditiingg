@@ -189,6 +189,9 @@ func NewSecureSSHClient(reg *WorkerRegistry, keyPath, knownHosts string) *Secure
 // Run executes a command on the worker via SSH. The command is validated
 // for shell metacharacters; RunJSON is preferred for parameterized commands.
 func (c *SecureSSHClient) Run(ctx context.Context, workerID string, command string) (string, error) {
+	if c == nil || c.registry == nil {
+		return "", errors.New("ssh: worker registry not wired")
+	}
 	if err := validateWorkerID(workerID); err != nil {
 		return "", fmt.Errorf("ssh: %w", err)
 	}
@@ -215,6 +218,9 @@ func (c *SecureSSHClient) Run(ctx context.Context, workerID string, command stri
 // Parameters travel as JSON on stdin, eliminating shell injection risk.
 // The remote script MUST exist at scriptPath on the worker.
 func (c *SecureSSHClient) RunJSON(ctx context.Context, workerID string, scriptPath string, input interface{}) (string, error) {
+	if c == nil || c.registry == nil {
+		return "", errors.New("ssh: worker registry not wired")
+	}
 	if err := validateWorkerID(workerID); err != nil {
 		return "", fmt.Errorf("ssh: %w", err)
 	}
@@ -270,7 +276,7 @@ func (c *SecureSSHClient) baseSSHArgs(e *WorkerRegistryEntry) []string {
 
 var safeWorkerIDRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
 var safeRunIDRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$`)
-var safeScriptPathRegex = regexp.MustCompile(`^/(var/lib/velox-worker|usr/local/bin|etc/velox)/[a-zA-Z0-9_/.-]+$`)
+var safeScriptPathRegex = regexp.MustCompile(`^/(var/lib/velox-worker|usr/local/bin|usr/local/sbin|etc/velox)/[a-zA-Z0-9_/.-]+$`)
 
 // ErrInvalidWorkerID is returned when a worker_id contains shell metacharacters.
 var ErrInvalidWorkerID = errors.New("invalid worker_id: contains shell metacharacters")
@@ -282,7 +288,7 @@ var ErrInvalidRunID = errors.New("invalid run_id: contains shell metacharacters"
 var ErrInvalidShellCommand = errors.New("invalid shell command: contains metacharacters or unsafe patterns")
 
 // ErrInvalidScriptPath is returned when a script path is outside allowed roots.
-var ErrInvalidScriptPath = errors.New("invalid script path: must be under /var/lib/velox-worker, /usr/local/bin, or /etc/velox")
+var ErrInvalidScriptPath = errors.New("invalid script path: must be under /var/lib/velox-worker, /usr/local/bin, /usr/local/sbin, or /etc/velox")
 
 func validateWorkerID(id string) error {
 	if id == "" {
@@ -310,6 +316,11 @@ func validateShellCommand(cmd string) error {
 		return fmt.Errorf("%w: empty", ErrInvalidShellCommand)
 	}
 	dangerous := []string{";", "&&", "||", "`", "$(", "${", "|", ">", "<", "&"}
+	for _, r := range cmd {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("%w: contains control character", ErrInvalidShellCommand)
+		}
+	}
 	for _, d := range dangerous {
 		if strings.Contains(cmd, d) {
 			return fmt.Errorf("%w: contains %q", ErrInvalidShellCommand, d)

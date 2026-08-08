@@ -220,8 +220,18 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	}
 
 	workerNodeRegistry := buildWorkerRegistryFromStore(p)
+	// Health probes and Level-D smoke still consume the existing shell
+	// command adapter; those probes intentionally use a few composed,
+	// read-only commands. The update executor gets its own hardened client
+	// so remote image activation never bypasses host-key verification or
+	// BatchMode. Both clients read the same canonical WorkerRegistry.
 	sharedSSH := fleet.NewSSHClientFromRegistry(workerNodeRegistry)
-	fleetDep, err := buildFleet(p, w.Registry, sharedSSH)
+	updateSSH := fleet.NewSecureSSHClient(
+		workerNodeRegistry,
+		fleet.DefaultSSHKeyPath,
+		fleet.DefaultKnownHostsPath,
+	)
+	fleetDep, err := buildFleet(p, w.Registry, updateSSH)
 	if err != nil {
 		_ = p.SQLite.Close()
 		return nil, fmt.Errorf("bootstrap: fleet: %w", err)
