@@ -38,8 +38,8 @@ grep -q 'TrustedUserCAKeys' "$ROOT/docs/openbao-ssh-ca.md" \
     || fail 'docs/openbao-ssh-ca.md non documenta TrustedUserCAKeys sui nodi'
 grep -q 'trusted-user-ca-keys.pem' "$ROOT/docs/openbao-ssh-ca.md" \
     || fail 'docs/openbao-ssh-ca.md non documenta /etc/ssh/trusted-user-ca-keys.pem'
-grep -q 'vault_velox_ssh_ca_pubkey' "$ROOT/deploy/group_vars/vault.yml.example" \
-    || fail 'vault.yml.example non documenta vault_velox_ssh_ca_pubkey'
+grep -q 'ssh-ca.pub' "$ROOT/docs/openbao-ssh-ca.md" \
+    || fail 'docs/openbao-ssh-ca.md non documenta la CA public key (ssh-ca.pub)'
 grep -q 'ssh-ca.pub' "$PROVISION" \
     || fail 'provision-ssh-ca.sh non esporta la CA public key'
 # Strict TLS regression guard: operational OpenBao paths must always verify

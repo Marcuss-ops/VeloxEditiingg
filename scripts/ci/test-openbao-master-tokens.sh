@@ -75,9 +75,11 @@ grep -q 'resolve-master-env.sh' "$ROOT/scripts/operator/deploy-production.sh" \
     || fail 'deploy-production.sh non usa il resolver canonical resolve-master-env.sh'
 grep -q 'velox/production/master/admin-token' "$ROOT/deploy/velox-server.env.example" \
     || fail 'velox-server.env.example non documenta l origine OpenBao'
-grep -q 'MIGRAZIONE OpenBao' "$ROOT/deploy/group_vars/vault.yml.example" \
-    || fail 'vault.yml.example non documenta la migrazione OpenBao'
-pass 'check strutturali OK (policy, verify, deploy.yml, deploy-production, template, vault)'
+[[ ! -e "$ROOT/deploy/group_vars/vault.yml.example" ]] \
+    || fail 'group_vars/vault.yml.example (struttura Ansible Vault legacy) deve essere stato eliminato'
+[[ ! -d "$ROOT/deploy/group_vars" ]] \
+    || fail 'deploy/group_vars/ deve essere stato eliminato (OpenBao è l unica origine)'
+pass 'check strutturali OK (policy, verify, deploy.yml, deploy-production, template, group_vars rimosso)'
 
 # ── 2. Non configurato → exit 1, nessun env file ─────────────────────────────
 if OPENBAO_ENV_FILE="$ENV_FILE" bash "$RESOLVE" >/dev/null 2>&1; then

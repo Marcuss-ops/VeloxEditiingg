@@ -119,8 +119,9 @@ Usage: sudo $0 [options]
 
 REQUIRED (no defaults):
   --worker-id              ID               Worker identity; must appear in
-                                            deploy/group_vars/all.yml
-                                            velox_allowed_workers.
+                                            the VELOX_ALLOWED_WORKERS list of
+                                            /etc/velox-server.env (materialized
+                                            by resolve-master-env.sh).
   --control-grpc-url       URL              REQUIRED. gRPC dial target. Accepts
                                             host:port (preferred, no scheme)
                                             OR http(s)://host:port (scheme is

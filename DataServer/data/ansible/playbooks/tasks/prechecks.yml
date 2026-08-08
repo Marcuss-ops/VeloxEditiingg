@@ -209,7 +209,8 @@
       {{ item }} has worker_id={{ hostvars[item].worker_id | default('<unset>') }}.
       worker_id must be a non-empty string and must not be '*'.
       It must match one of the VELOX_ALLOWED_WORKERS entries configured on
-      the master (deploy/group_vars/all.yml `velox_allowed_workers`).
+      the master (VELOX_ALLOWED_WORKERS in /etc/velox-server.env,
+      materialized by deploy/openbao/scripts/resolve-master-env.sh).
   loop: "{{ groups['velox_workers'] | default([]) }}"
   delegate_to: localhost
   become: no
