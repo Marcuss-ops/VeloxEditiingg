@@ -12,6 +12,11 @@ node_modules
 DataServer/.velox
 DataServer/data
 
+# Live worker-certification runtime artifacts (root-owned, 0600: rendered MP4s,
+# pass_criteria/recovery JSON) must never enter build contexts. The images only
+# need RemoteCodex/.../tests/fixtures/engine_selftest_baseline.sha256.
+tests/worker-cert
+
 # Local build outputs are not Docker inputs.
 DataServer/bin
 RemoteCodex/native/worker-agent-go/bin
