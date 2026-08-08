@@ -35,15 +35,20 @@ import (
 )
 
 // WorkerSSHStatus is the per-worker result of SSHConnectivityCheck.
+// WorkerName is the optional operator-facing display name (e.g.
+// "velox-worker-01"), resolved from the persistent workers registry when
+// the caller supplies a name resolver; it is always distinct from the
+// immutable WorkerID (the mTLS-bound security principal).
 type WorkerSSHStatus struct {
-	WorkerID string `json:"worker_id"`
-	Host     string `json:"host"`
-	User     string `json:"user"`
-	Port     int    `json:"port"`
-	SSH      string `json:"ssh"`
-	HostKey  string `json:"hostkey"`
-	Sudo     string `json:"sudo"`
-	Detail   string `json:"detail"`
+	WorkerID   string `json:"worker_id"`
+	WorkerName string `json:"worker_name,omitempty"`
+	Host       string `json:"host"`
+	User       string `json:"user"`
+	Port       int    `json:"port"`
+	SSH        string `json:"ssh"`
+	HostKey    string `json:"hostkey"`
+	Sudo       string `json:"sudo"`
+	Detail     string `json:"detail"`
 }
 
 // Ready reports whether the worker is fully operational from the
@@ -60,12 +65,18 @@ func (s WorkerSSHStatus) Result() string {
 	return "NOT-READY"
 }
 
+// WorkerNameResolver maps an immutable worker_id to its operator-facing
+// worker_name. It is optional: when nil, per-worker rows carry no
+// worker_name and output degrades to the ID-only view.
+type WorkerNameResolver func(workerID string) string
+
 // SSHConnectivityCheck runs the three probes (ssh / hostkey / sudo)
 // across every enabled worker in the registry. KnownHosts must point at
 // the centralized known_hosts file; keyPath at the canonical private
 // key. A nil registry yields an empty slice (nil-tolerant, mirroring
-// the rest of the fleet surface).
-func SSHConnectivityCheck(ctx context.Context, reg *WorkerRegistry, keyPath, knownHosts string) []WorkerSSHStatus {
+// the rest of the fleet surface). nameResolver, when non-nil, labels each
+// row with the operator-facing worker_name for the immutable worker ID.
+func SSHConnectivityCheck(ctx context.Context, reg *WorkerRegistry, keyPath, knownHosts string, nameResolver WorkerNameResolver) []WorkerSSHStatus {
 	if reg == nil {
 		return nil
 	}
@@ -78,17 +89,22 @@ func SSHConnectivityCheck(ctx context.Context, reg *WorkerRegistry, keyPath, kno
 	entries := reg.ListWorkers()
 	out := make([]WorkerSSHStatus, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, checkOneWorker(ctx, e, keyPath, knownHosts))
+		out = append(out, checkOneWorker(ctx, e, keyPath, knownHosts, nameResolver))
 	}
 	return out
 }
 
-func checkOneWorker(_ context.Context, e WorkerRegistryEntry, keyPath, knownHosts string) WorkerSSHStatus {
+func checkOneWorker(_ context.Context, e WorkerRegistryEntry, keyPath, knownHosts string, resolveName WorkerNameResolver) WorkerSSHStatus {
 	status := WorkerSSHStatus{
 		WorkerID: e.WorkerID.String(),
 		Host:     e.Host,
 		User:     e.SSHUser,
 		Port:     e.SSHPort,
+	}
+	if resolveName != nil {
+		if name := resolveName(e.WorkerID.String()); name != "" {
+			status.WorkerName = name
+		}
 	}
 
 	hostKeyFail := hostKeyNotFound(keyPath, knownHosts, e)

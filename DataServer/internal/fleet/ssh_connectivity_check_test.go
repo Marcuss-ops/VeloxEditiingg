@@ -29,7 +29,7 @@ func TestWorkerSSHStatus_Predicates(t *testing.T) {
 // TestSSHConnectivityCheck_NilRegistry returns an empty slice (nil-
 // tolerant, mirroring the rest of the fleet surface) rather than a panic.
 func TestSSHConnectivityCheck_NilRegistry(t *testing.T) {
-	if got := SSHConnectivityCheck(context.Background(), nil, "", ""); got != nil {
+	if got := SSHConnectivityCheck(context.Background(), nil, "", "", nil); got != nil {
 		t.Fatalf("nil registry must return nil slice, got %#v", got)
 	}
 }

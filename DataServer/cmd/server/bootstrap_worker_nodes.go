@@ -54,3 +54,23 @@ func buildWorkerRegistryFromStore(p *persistenceDeps) *fleet.WorkerRegistry {
 	log.Printf("[BOOTSTRAP] WorkerNodeRegistry: loaded %d worker nodes from persistent inventory (enabled + mapped)", added)
 	return reg
 }
+
+// workerNameResolverFromStore returns a fleet.WorkerNameResolver that maps
+// an immutable worker_id to its operator-facing worker_name (the friendly
+// velox-worker-01 style name the dashboard shows). The name is read from
+// the persistent workers registry raw_json; worker_id is the mTLS-bound
+// security principal and is NEVER rewritten here. A nil store yields a
+// nil resolver so callers degrade gracefully to the ID-only view.
+func workerNameResolverFromStore(p *persistenceDeps) fleet.WorkerNameResolver {
+	if p == nil || p.SQLite == nil {
+		return nil
+	}
+	return func(workerID string) string {
+		w, err := p.SQLite.GetWorker(workerID)
+		if err != nil || w == nil {
+			return ""
+		}
+		name, _ := w["worker_name"].(string)
+		return name
+	}
+}

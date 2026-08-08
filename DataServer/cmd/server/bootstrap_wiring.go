@@ -124,7 +124,9 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 	// port, user from the registry (never a hardcoded map) and probes with
 	// the canonical /etc/velox/ssh key + known_hosts. Nil-tolerant.
 	if workerNodeRegistry != nil && m != nil && m.Workers != nil && workerNodeRegistry.Len() >= 0 {
-		sshCheckHandler := api.NewAdminWorkersSSHCheckHandler(workerNodeRegistry, api.SSHCheckDeps{})
+		sshCheckHandler := api.NewAdminWorkersSSHCheckHandler(workerNodeRegistry, api.SSHCheckDeps{
+			ResolveWorkerName: workerNameResolverFromStore(p),
+		})
 		m.Workers.SetSSHCheckHandler(sshCheckHandler)
 		log.Printf("[BOOTSTRAP] Admin workers ssh-check handler wired (GET /api/v1/admin/workers/ssh-check; key=%s known_hosts=%s)", fleet.DefaultSSHKeyPath, fleet.DefaultKnownHostsPath)
 	}

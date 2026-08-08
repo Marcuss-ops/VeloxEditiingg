@@ -43,10 +43,15 @@ import (
 // SSHCheckDeps carries the endpoint's optional overrides. keyPath and
 // knownHosts default to the canonical /etc/velox/ssh paths (see
 // fleet.DefaultSSHKeyPath / fleet.DefaultKnownHostsPath) when empty.
+// ResolveWorkerName, when set, maps an immutable worker_id to its
+// operator-facing worker_name so the diagnostic renders the same friendly
+// name the dashboard shows (worker_name) alongside the security principal
+// (worker_id). Left nil, rows carry only worker_id.
 type SSHCheckDeps struct {
-	Reg        *fleet.WorkerRegistry
-	KeyPath    string
-	KnownHosts string
+	Reg               *fleet.WorkerRegistry
+	KeyPath           string
+	KnownHosts        string
+	ResolveWorkerName fleet.WorkerNameResolver
 }
 
 // AdminWorkersSSHCheckHandler exposes GET /api/v1/admin/workers/ssh-check.
@@ -54,6 +59,7 @@ type AdminWorkersSSHCheckHandler struct {
 	reg        *fleet.WorkerRegistry
 	keyPath    string
 	knownHosts string
+	resolve    fleet.WorkerNameResolver
 }
 
 // NewAdminWorkersSSHCheckHandler wires the SSH diagnostic to the
@@ -67,7 +73,7 @@ func NewAdminWorkersSSHCheckHandler(reg *fleet.WorkerRegistry, deps SSHCheckDeps
 	if kh == "" {
 		kh = fleet.DefaultKnownHostsPath
 	}
-	return &AdminWorkersSSHCheckHandler{reg: reg, keyPath: kp, knownHosts: kh}
+	return &AdminWorkersSSHCheckHandler{reg: reg, keyPath: kp, knownHosts: kh, resolve: deps.ResolveWorkerName}
 }
 
 // SSHCheckResponse is the JSON envelope returned by the endpoint.
@@ -95,7 +101,7 @@ func (h *AdminWorkersSSHCheckHandler) RunSSHCheck() gin.HandlerFunc {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "worker registry not available"})
 			return
 		}
-		workers := fleet.SSHConnectivityCheck(c.Request.Context(), h.reg, h.keyPath, h.knownHosts)
+		workers := fleet.SSHConnectivityCheck(c.Request.Context(), h.reg, h.keyPath, h.knownHosts, h.resolve)
 		sum := SSHCheckSummary{Total: len(workers)}
 		for _, w := range workers {
 			if w.SSH == "PASS" {
