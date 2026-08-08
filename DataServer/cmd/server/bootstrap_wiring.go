@@ -86,10 +86,26 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 	// routes un-mounted (the adminWorkersMutationsHandler nil-guard
 	// in app/workers.go:RegisterRoutes handles it).
 	if fleetDep != nil && fleetDep.Controller != nil && m != nil && m.Workers != nil {
-		m.Workers.SetMutationsHandler(
-			api.NewAdminWorkersMutationsHandler(m.Workers.Registry(), fleetDep.Controller),
-		)
-		log.Printf("[BOOTSTRAP] Admin workers mutations handler wired (drain/resume/quarantine; tick goroutine drives the audit lifecycle)")
+		mutationsHandler := api.NewAdminWorkersMutationsHandler(m.Workers.Registry(), fleetDep.Controller)
+		// Fail-closed update gate (AZIONE 2): POST /update refuses 503
+		// while any critical UpdateExecutor backend is missing, instead
+		// of accepting an operation that fails 30s after the POST. The
+		// closure reads the LIVE executor capability at request time,
+		// so it automatically reflects backends attached later in this
+		// function (fresh Level-D smoke + Drive verifier) once wiring
+		// completes. Drain/resume/quarantine are intentionally not
+		// gated — they have no UpdateExecutor dependency.
+		if fleetDep.Update != nil {
+			mutationsHandler.SetUpdateGate(func() error {
+				if fleetDep.Update.Ready() {
+					return nil
+				}
+				capability := fleetDep.Update.Capability()
+				return fmt.Errorf("missing: %s", strings.Join(capability.Missing, ", "))
+			})
+		}
+		m.Workers.SetMutationsHandler(mutationsHandler)
+		log.Printf("[BOOTSTRAP] Admin workers mutations handler wired (drain/resume/quarantine; update gated on UpdateExecutor capability; tick goroutine drives the audit lifecycle)")
 	}
 
 	// Shared SSH client for health probes (Level A + B) and smoke (Level D).
@@ -215,10 +231,24 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 		}
 		if fleetDep.Update != nil && smokeBackend.Drive != nil {
 			freshSmoke := fleet.NewFreshSmokeRunner(levelDSmokeExecutor, p.SQLite)
-			if err := fleetDep.Update.AttachRuntimeBackends(freshSmoke, &driveVerifierAdapter{svc: m.Drive.Service()}); err != nil {
-				return fmt.Errorf("update runtime backends: %w", err)
+			// Nil-safe Drive attach (AZIONE 2): a Drive module without a
+			// live service leaves the update capability NOT READY rather
+			// than panicking on m.Drive.Service() at boot — the fail-closed
+			// signal the operator can act on.
+			var driveVerifier fleet.BackendDriveVerifier
+			if m.Drive != nil && m.Drive.Service() != nil {
+				driveVerifier = &driveVerifierAdapter{svc: m.Drive.Service()}
 			}
-			log.Printf("[BOOTSTRAP] UpdateExecutor fresh Level-D smoke + Drive verifier wired")
+			if driveVerifier == nil {
+				// AttachRuntimeBackends is atomic (both-or-nothing): with the
+				// Drive service missing neither smoke nor drive is attached,
+				// so the capability verdict lists both — NOT READY by design.
+				log.Printf("[BOOTSTRAP] WARN: update runtime backends NOT attached (Drive service missing) — capability stays NOT READY (smoke, drive missing; POST /update refuses 503; /ready update-capability probe red)")
+			} else if err := fleetDep.Update.AttachRuntimeBackends(freshSmoke, driveVerifier); err != nil {
+				return fmt.Errorf("update runtime backends: %w", err)
+			} else {
+				log.Printf("[BOOTSTRAP] UpdateExecutor fresh Level-D smoke + Drive verifier wired")
+			}
 		}
 		log.Printf("[BOOTSTRAP] Admin workers smoke handler wired (POST /api/v1/admin/workers/{id}/smoke; tick goroutine drives LevelDSmokeExecutor)")
 	}
@@ -266,9 +296,20 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 		m.Workers.SetAlertsHandler(alertsHandler)
 		log.Printf("[BOOTSTRAP] Admin workers alerts handler wired (GET /api/v1/admin/workers/{id}/alerts + /api/v1/fleet/alerts/active + /recent; alerts-supervisor ticks every 5min via buildSupervisor)")
 	}
+	// AZIONE 2 — fail-closed boot verdict. All critical backends were
+	// verified above (SSH/Docker/Cosign/Registry wired in buildFleet;
+	// Smoke/Drive attached here). Instead of hard-failing the master
+	// (which would hide the failure mode behind a crash-loop), the
+	// verdict is EXPOSED: the operator log names the missing deps, the
+	// /ready update-capability probe flips red, and POST /update
+	// refuses with 503. The failure is closed at the boot boundary —
+	// no "docker client not wired" discovered 30s after a POST.
 	if fleetDep != nil && fleetDep.Update != nil {
-		if err := fleetDep.Update.ValidateProductionBackends(); err != nil {
-			return fmt.Errorf("UpdateExecutor production wiring invalid: %w", err)
+		capability := fleetDep.Update.Capability()
+		if capability.Ready {
+			log.Printf("[BOOTSTRAP] Update capability READY: ssh docker deployments cosign image registry smoke drive all wired")
+		} else {
+			log.Printf("[BOOTSTRAP] Update capability NOT READY: missing %s — POST /api/v1/admin/workers/{id}/update refuses with 503 and the /ready update-capability probe is red (fail-closed at boot instead of surfacing mid-update)", strings.Join(capability.Missing, ", "))
 		}
 	}
 	return nil

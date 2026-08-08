@@ -163,6 +163,15 @@ func (e errAlreadyInDesiredState) Error() string {
 type AdminWorkersMutationsHandler struct {
 	reg       *workersreg.Registry
 	publisher ControllerPublisher
+
+	// updateGate is the fail-closed UpdateExecutor capability gate
+	// (AZIONE 2). nil disables the gate (unit-test / legacy wiring).
+	// When set, POST /update refuses with 503 while the gate returns
+	// non-nil — the master no longer accepts an update operation it
+	// will fail ~30s later inside the executor. The closure reads the
+	// LIVE UpdateExecutor capability at request time so backends
+	// attached later during bootstrap are reflected immediately.
+	updateGate func() error
 }
 
 // NewAdminWorkersMutationsHandler wires the mutation handler to the
@@ -175,6 +184,20 @@ type AdminWorkersMutationsHandler struct {
 // lifetime.
 func NewAdminWorkersMutationsHandler(reg *workersreg.Registry, pub ControllerPublisher) *AdminWorkersMutationsHandler {
 	return &AdminWorkersMutationsHandler{reg: reg, publisher: pub}
+}
+
+// SetUpdateGate installs the fail-closed update capability gate.
+// Idempotent; nil disables the gate. The gate is evaluated per
+// request, so wiring it before the UpdateExecutor's runtime backends
+// are attached (fresh Level-D smoke + Drive verifier) is safe: the
+// closure reads live state at POST time.
+//
+// MUST be called during bootstrap before the router starts serving:
+// the field is a plain (unlocked) reference read on every POST /update
+// (same contract as the Set*Handler setters — no mutation after
+// RegisterRoutes).
+func (h *AdminWorkersMutationsHandler) SetUpdateGate(gate func() error) {
+	h.updateGate = gate
 }
 
 // mutationAction is the per-op closure the unified handler
@@ -210,6 +233,25 @@ func (h *AdminWorkersMutationsHandler) mutationHandler(kind string, action mutat
 				"error": "fleet mutation dependencies unavailable",
 			})
 			return
+		}
+
+		// ── Fail-closed update capability gate (AZIONE 2) ────────────
+		// Refuse to publish an update operation while the
+		// UpdateExecutor's critical backends are not fully wired.
+		// Without this gate the master would accept the POST, then
+		// fail ~30s later inside the executor ("docker client not
+		// wired" surfaced only after the tick goroutine dispatched
+		// the op). The gate is update-only: drain / resume /
+		// quarantine have no UpdateExecutor dependency and stay
+		// available even while the update capability is NOT READY.
+		if kind == fleet.OperationKindUpdate && h.updateGate != nil {
+			if err := h.updateGate(); err != nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{
+					"error":  "update capability not ready",
+					"detail": err.Error(),
+				})
+				return
+			}
 		}
 
 		// ── Path-param validation ─────────────────────────────────────

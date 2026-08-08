@@ -674,6 +674,102 @@ func TestResumeWorker_InFlightConflict(t *testing.T) {
 	}
 }
 
+// ─── Update capability gate (AZIONE 2 fail-closed) ─────────────────────────
+
+func TestUpdateWorker_CapabilityGateNotReady_RejectsBeforePublish(t *testing.T) {
+	reg := newRegisteredRegistry(t, "wicket")
+	pub := &stubPublisher{}
+	h := newMutationsHandler(reg, pub)
+	h.SetUpdateGate(func() error { return errors.New("missing: docker") })
+	r := updateRoute(h)
+	digest := "ghcr.io/marcuss-ops/velox-worker@sha256:" + strings.Repeat("a", 64)
+
+	w := doPOST(t, r, "/api/v1/admin/workers/wicket/update", MutationRequest{
+		TargetDigest: digest,
+		Reason:       "gated",
+	})
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("not-ready gate → %d, want 503: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "update capability not ready") {
+		t.Errorf("503 body must surface 'update capability not ready'; got: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "docker") {
+		t.Errorf("503 body detail must name the missing backend; got: %s", w.Body.String())
+	}
+	if len(pub.published) != 0 {
+		t.Fatalf("gated update published %d operations, want 0 (no operation accepted while NOT READY)", len(pub.published))
+	}
+	info := reg.GetWorker(context.Background(), "wicket")
+	if info == nil || info.Drain || info.Quarantined {
+		t.Fatalf("gated update changed worker state: %+v", info)
+	}
+}
+
+func TestUpdateWorker_CapabilityGate_ShortCircuitsBeforeDigestValidation(t *testing.T) {
+	// Fail-fast ordering contract: a NOT READY master must refuse the
+	// update BEFORE body/digest validation — a request with a missing
+	// (or malformed) target_digest returns 503, not 400. The gate is
+	// the first check after the deps nil-guard.
+	reg := newRegisteredRegistry(t, "wicket")
+	pub := &stubPublisher{}
+	h := newMutationsHandler(reg, pub)
+	h.SetUpdateGate(func() error { return errors.New("missing: docker, smoke, drive") })
+	r := updateRoute(h)
+
+	w := doPOST(t, r, "/api/v1/admin/workers/wicket/update", MutationRequest{
+		Reason: "missing digest + not-ready gate",
+	})
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("not-ready gate + missing digest → %d, want 503 (gate wins over 400): %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "update capability not ready") {
+		t.Errorf("503 body must surface 'update capability not ready'; got: %s", w.Body.String())
+	}
+	if len(pub.published) != 0 {
+		t.Fatalf("gated request published %d operations, want 0", len(pub.published))
+	}
+}
+
+func TestUpdateWorker_CapabilityGateReady_Publishes(t *testing.T) {
+	reg := newRegisteredRegistry(t, "wicket")
+	pub := &stubPublisher{}
+	h := newMutationsHandler(reg, pub)
+	h.SetUpdateGate(func() error { return nil })
+	r := updateRoute(h)
+	digest := "ghcr.io/marcuss-ops/velox-worker@sha256:" + strings.Repeat("a", 64)
+
+	w := doPOST(t, r, "/api/v1/admin/workers/wicket/update", MutationRequest{
+		TargetDigest: digest,
+		Reason:       "ready gate",
+	})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("ready gate → %d, want 202: %s", w.Code, w.Body.String())
+	}
+	if len(pub.published) != 1 {
+		t.Fatalf("ready gate published %d operations, want 1", len(pub.published))
+	}
+}
+
+func TestMutation_CapabilityGateDoesNotBlockNonUpdateOps(t *testing.T) {
+	// The update gate is update-only: a NOT READY update capability
+	// must not 503 drain/resume/quarantine (they have no
+	// UpdateExecutor dependency).
+	reg := newRegisteredRegistry(t, "wicket")
+	pub := &stubPublisher{}
+	h := newMutationsHandler(reg, pub)
+	h.SetUpdateGate(func() error { return errors.New("missing: docker, smoke, drive") })
+
+	r := drainRoute(h)
+	w := doPOST(t, r, "/api/v1/admin/workers/wicket/drain", nil)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("drain with not-ready update gate → %d, want 202: %s", w.Code, w.Body.String())
+	}
+	if len(pub.published) != 1 || pub.published[0].Op != "drain" {
+		t.Fatalf("drain audit row not published: %+v", pub.published)
+	}
+}
+
 // ─── Defaults ──────────────────────────────────────────────────────────────
 
 func TestMutationRequest_DefaultsReason(t *testing.T) {

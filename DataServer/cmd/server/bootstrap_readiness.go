@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"velox-server/internal/registry"
 )
@@ -140,6 +141,23 @@ func registerReadinessChecks(c *appComponents, t *transportBundle) {
 			}
 			if !c.workers.Registry.HasAtLeastOneLive(context.Background()) {
 				return fmt.Errorf("VELOX_REQUIRE_LIVE_WORKERS=true but no live worker is registered within 30s")
+			}
+			return nil
+		})
+	}
+
+	// AZIONE 2 — fail-closed update capability probe. The master must
+	// NEVER report itself ready while the update path is half-wired
+	// ("docker client not wired" discovered only 30s after a POST).
+	// The probe reads the live UpdateExecutor verdict: any missing
+	// critical backend (SSH / Docker / Cosign / Registry / Deployments
+	// / Image / Smoke / Drive) flips /ready red with a probe-named
+	// failure. Skip when fleet wiring is absent (test/partial boots).
+	if c.fleet != nil && c.fleet.Update != nil {
+		c.modules.Health.AddReadinessCheck("update-capability", func() error {
+			capability := c.fleet.Update.Capability()
+			if !capability.Ready {
+				return fmt.Errorf("update capability NOT READY: missing %s", strings.Join(capability.Missing, ", "))
 			}
 			return nil
 		})

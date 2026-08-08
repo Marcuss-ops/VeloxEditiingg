@@ -223,11 +223,25 @@ func (e *UpdateExecutor) AttachRuntimeBackends(smoke BackendSmokeRunner, drive B
 	return nil
 }
 
-// ValidateProductionBackends prevents the update endpoint from being exposed
-// with a partially wired production backend.
-func (e *UpdateExecutor) ValidateProductionBackends() error {
+// UpdateCapability is the fail-closed boot verdict for the update
+// path (AZIONE 2: no "docker client not wired" discovered 30s after
+// a POST). Ready is true ONLY when every critical backend is wired:
+// SSH, Docker, Cosign, Registry, Deployments, Image, Smoke and Drive.
+// Missing lists the names of the absent backends so the operator log,
+// the /ready probe and the 503 gate detail all surface the same
+// grep-friendly vocabulary.
+type UpdateCapability struct {
+	Ready   bool
+	Missing []string
+}
+
+// Capability computes the current fail-closed verdict from the
+// executor's live backend surface. Nil-receiver safe so the /ready
+// probe and the POST /update gate can call it on a partially
+// composed executor without a panic.
+func (e *UpdateExecutor) Capability() UpdateCapability {
 	if e == nil {
-		return errors.New("update: nil executor")
+		return UpdateCapability{Missing: []string{"executor"}}
 	}
 	missing := make([]string, 0, 8)
 	if e.backend.SSHCmd == nil {
@@ -254,8 +268,27 @@ func (e *UpdateExecutor) ValidateProductionBackends() error {
 	if e.backend.Drive == nil {
 		missing = append(missing, "drive")
 	}
-	if len(missing) > 0 {
-		return fmt.Errorf("missing dependencies: %s", strings.Join(missing, ", "))
+	return UpdateCapability{Ready: len(missing) == 0, Missing: missing}
+}
+
+// Ready reports whether the update capability is fully wired. This
+// is the fail-closed boot signal: while Ready is false, /ready stays
+// red (update-capability probe) and POST /update refuses with 503
+// instead of accepting an operation that would fail mid-pipeline.
+func (e *UpdateExecutor) Ready() bool { return e.Capability().Ready }
+
+// ValidateProductionBackends prevents the update endpoint from being
+// exposed with a partially wired production backend. Delegates to
+// Capability so boot validation and the runtime gate share exactly
+// one definition of "ready". Error text keeps the
+// "missing dependencies: <list>" shape consumed by dashboards/tests.
+func (e *UpdateExecutor) ValidateProductionBackends() error {
+	if e == nil {
+		return errors.New("update: nil executor")
+	}
+	capability := e.Capability()
+	if !capability.Ready {
+		return fmt.Errorf("missing dependencies: %s", strings.Join(capability.Missing, ", "))
 	}
 	return nil
 }
