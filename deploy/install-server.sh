@@ -186,8 +186,9 @@ fi
 # enforces: no CHANGE_ME_* literals, VELOX_ADMIN_TOKEN non-empty,
 # VELOX_ALLOWED_WORKERS non-empty + non-wildcard + unique IDs,
 # typed control-plane REST/gRPC endpoints parsable, TLS triple consistent, VELOX_DB_PATH non-empty,
-# VELOX_GRPC_PORT numeric. Same script invoked by deploy/playbooks/*.yml so
-# ansible + bash install paths stay in lock-step.
+# VELOX_GRPC_PORT numeric. Same script invoked by
+# scripts/operator/deploy-production.sh (resolve OpenBao → validate → SSH
+# convergence) so the install and operator paths stay in lock-step.
 VALIDATOR="${SCRIPT_DIR}/validate-master-env.sh"
 if [[ ! -r "$VALIDATOR" ]]; then
     fail "validator not found at $VALIDATOR — re-pull deploy/ tree. Audit verdict block #3 requires the validator BEFORE any systemd operation."

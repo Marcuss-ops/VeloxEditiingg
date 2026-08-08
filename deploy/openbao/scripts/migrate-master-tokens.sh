@@ -20,8 +20,8 @@
 #   ./scripts/migrate-master-tokens.sh --env-file ./server.env --dry-run
 #   ./scripts/migrate-master-tokens.sh --registry-username u --registry-token t
 #
-# Dopo la migrazione: verifica con ./scripts/verify-kv.sh e rendi i token in
-# deploy con ./scripts/resolve-master-tokens.sh (vedi .github/workflows/deploy.yml).
+# Dopo la migrazione: verifica con ./scripts/verify-kv.sh e materializza l'env
+# del master con ./scripts/resolve-master-env.sh (vedi scripts/operator/deploy-production.sh).
 
 set -euo pipefail
 
@@ -112,4 +112,4 @@ done
 
 log "sorgente: $ENV_FILE (o env) — provisioning master + registry nel KV (--force, nessun valore stampato)"
 "${ENV_CMD[@]}" "$OPENBAO_DIR/scripts/provision-kv.sh" "${ARGS[@]}"
-log "done — verifica con ./scripts/verify-kv.sh e deploy via ./scripts/resolve-master-tokens.sh"
+log "done — verifica con ./scripts/verify-kv.sh e materializza l'env master via ./scripts/resolve-master-env.sh"

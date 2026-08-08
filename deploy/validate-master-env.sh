@@ -7,8 +7,8 @@
 # invalid config"). Invoked by:
 #
 #   * deploy/install-server.sh          (between Step 6 and Step 7)
-#   * deploy/playbooks/deploy-master-config.yml   (mandatory pre-checks)
-#   * deploy/playbooks/rollback.yml               (post-rollback)
+#   * scripts/operator/deploy-production.sh   (local pre-check on the
+#     resolved env, then re-run remotely before the service restart)
 #
 # Strategy: ACCUMULATE errors. Every check_* call increments ERR_COUNT
 # instead of exiting immediately. Operators see ALL problems in one pass.
