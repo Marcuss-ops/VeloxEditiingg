@@ -12,10 +12,28 @@
 # i servizi (registry). KV v2 → velox/data/<path> (read) +
 # velox/metadata/<path> (list/versioni).
 
-path "velox/data/production/workers/{{ WORKER_ID }}/*" {
-  capabilities = ["read", "list"]
+path "velox/data/production/workers/{{ WORKER_ID }}/credential" {
+  capabilities = ["read"]
 }
 
-path "velox/metadata/production/workers/{{ WORKER_ID }}/*" {
-  capabilities = ["read", "list"]
+path "velox/metadata/production/workers/{{ WORKER_ID }}/credential" {
+  capabilities = ["read"]
+}
+
+# The worker may submit its locally generated CSR only to its own PKI role.
+# The signing endpoint receives the CSR/public key, never worker.key.
+path "pki/sign/worker-{{ WORKER_ID }}" {
+  capabilities = ["update"]
+}
+
+path "pki/issue/worker-{{ WORKER_ID }}" {
+  capabilities = []
+}
+
+path "pki/roles/*" {
+  capabilities = []
+}
+
+path "pki/config/*" {
+  capabilities = []
 }
