@@ -401,6 +401,18 @@ entry MUST be removed when the corresponding refactor lands, per §13.
   pre-existing operational E2E verifier, tracked for Round-4 dedup with
   `tests/e2e/grpc-control-plane/run.sh` into `tests/_lib/sh/` helpers.
 
+### Round-5 carry-over (snapshot 2026-08-08)
+
+| File | LOC | Category | Refactor target | Status |
+| --- | ---: | --- | --- | --- |
+| `tests/e2e/workload/run.sh` | 705 | shell | AGENTS plan step — split workload E2E orchestrator into `tests/_lib/sh/` phase helpers | real refactor target, tracked |
+
+`tests/e2e/workload/run.sh` exceeded the §11 shell threshold (700) when
+the workload E2E orchestration grew (video-counter label cardinality,
+semaphore fast-fail, artifact gate promotion). It is a single-purpose
+operator E2E orchestrator; the refactor split is tracked above and in
+`KNOWN_VIOLATIONS_ROUND3` of `scripts/ci/check-loc-thresholds.sh`.
+
 ### Round-4 carry-over (snapshot 2026-07-28)
 
 The following three files currently exceed the per-category LOC

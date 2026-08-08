@@ -158,6 +158,7 @@
               - "{{ prepare_host_path }}"
           environment:
             ENV_FILE: "{{ worker_env_path }}"
+          changed_when: false   # convergence command; the digest/readiness checks below are the change signal
 
         - name: Verify worker readiness after rollout
           ansible.builtin.uri:
@@ -309,6 +310,7 @@
           environment:
             ENV_FILE: "{{ worker_env_path }}"
           failed_when: false
+          changed_when: false   # rollback convergence; the env-restore + readiness verification are the change signal
 
         - name: Mark deployment rolled back
           ansible.builtin.replace:

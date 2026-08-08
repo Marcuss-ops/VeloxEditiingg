@@ -229,8 +229,8 @@ func (c *Client) ValidateDestination(ctx context.Context, socialDestID string) e
 	if socialDestID == "" {
 		// Refuse an empty path-segment rather than POST
 		// `/internal/v1/destinations//validate`. Empty
-		// social_destination_id is treated as a permanent caller error.
-		return fmt.Errorf("%w: empty social_destination_id", ErrPermanent)
+		// external_destination_id is treated as a permanent caller error.
+		return fmt.Errorf("%w: empty external_destination_id", ErrPermanent)
 	}
 
 	endpoint := c.endpoint("/internal/v1/destinations/" + url.PathEscape(socialDestID) + "/validate")

@@ -29,7 +29,7 @@
 #     -e logs_tail=1000 \
 #     deploy/playbooks/fleet-logs.yml
 
-- name: fleet-logs — tail docker compose logs per worker
+- name: Fleet logs — tail docker compose logs per worker
   hosts: velox_workers
   serial: 1
   any_errors_fatal: true
@@ -41,7 +41,7 @@
     logs_tail: "{{ logs_tail | default(200) }}"
 
   tasks:
-    - name: Tail last {{ logs_tail }} lines of canonical velox-worker
+    - name: Tail canonical velox-worker logs, last {{ logs_tail }}
       ansible.builtin.command:
         cmd: >-
           docker compose
@@ -54,7 +54,7 @@
       failed_when: false   # log-tailing is informational; missing project
                             # is reported via debug, not a hard fail
 
-    - name: Print {{ worker_id }} docker logs
+    - name: Print docker logs for worker {{ worker_id }}
       ansible.builtin.debug:
         msg: |
           ================== [{{ worker_id }}] docker compose logs (last {{ logs_tail }} lines) ==================

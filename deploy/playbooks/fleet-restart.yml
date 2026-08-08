@@ -20,7 +20,7 @@
 #     --ask-vault-pass \
 #     deploy/playbooks/fleet-restart.yml
 
-- name: fleet-restart — container restart per worker (compose or raw)
+- name: Fleet restart — container restart per worker (compose or raw)
   hosts: velox_workers
   serial: 1
   any_errors_fatal: true

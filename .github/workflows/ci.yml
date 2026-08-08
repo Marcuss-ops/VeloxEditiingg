@@ -44,6 +44,12 @@ jobs:
       - name: Guard — dsn busy-timeout shape
         run: ./scripts/ci/check-dsn-busy-timeout.sh
       - name: Verify — architecture, Go, native and Docker
+        env:
+          # Push-event compatibility base: the last commit main pointed
+          # at before this push (fetch-depth: 0 keeps it resolvable).
+          # check-worker-rollout-compatibility refuses to run without
+          # an explicit, fetched BASE_REF.
+          BASE_REF: ${{ github.event.before }}
         run: make verify
       - name: Invariants — completion protocol
         shell: bash

@@ -124,6 +124,17 @@ KNOWN_VIOLATIONS_ROUND2=(
   "DataServer/api/openapi.yaml|Round-4 yaml carry-over (1235 LOC); STRUCTURAL — OpenAPI single-source-of-truth spec, refactor requires spec redesign (Round-5+); see STRUCTURAL_LONG_FILES"
 )
 
+# KNOWN_VIOLATIONS_ROUND3 — Round-5 carry-over (snapshot 2026-08-08).
+# tests/e2e/workload/run.sh exceeded the §11 shell threshold (700) when
+# the e2e workload orchestration grew (video-counter label cardinality,
+# semaphore fast-fail, artifact gate promotion — commit d182ce8e). It is
+# a single-purpose operator E2E orchestrator; a refactor split is
+# tracked under loc-baseline.md §10c (Round-5). Remove the entry when
+# the split lands.
+KNOWN_VIOLATIONS_ROUND3=(
+  "tests/e2e/workload/run.sh|Round-5 shell carry-over (705 LOC); e2e workload orchestration (video-counter / artifact-gate E2E) — refactor split tracked in loc-baseline.md §10c"
+)
+
 # STRUCTURAL_LONG_FILES — files whose LOC naturally exceeds the
 # threshold by design (cumulative / spec-driven). Exempt from the hard
 # gate above, but re-emitted as `::warning` annotations on every run by
@@ -183,7 +194,7 @@ BUILD_NOISE_EXCLUDES=(
   -not -path '*/.pb-cache/*'
 )
 
-KNOWN_VIOLATIONS=("${KNOWN_VIOLATIONS_BASELINE[@]}" "${KNOWN_VIOLATIONS_ROUND1[@]}" "${KNOWN_VIOLATIONS_ROUND2[@]}")
+KNOWN_VIOLATIONS=("${KNOWN_VIOLATIONS_BASELINE[@]}" "${KNOWN_VIOLATIONS_ROUND1[@]}" "${KNOWN_VIOLATIONS_ROUND2[@]}" "${KNOWN_VIOLATIONS_ROUND3[@]}")
 
 VIOLATIONS=0
 KNOWN_HITS=0

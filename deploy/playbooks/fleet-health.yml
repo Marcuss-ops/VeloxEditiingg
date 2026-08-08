@@ -45,8 +45,10 @@
     - ../group_vars/vault.yml
 
   vars:
-    health_level: "{{ health_level | default('A') }}"
-    health_level: "{{ health_level | upper }}"
+    # Single definition: normalize an operator-supplied level (A|B|C|D,
+    # any case) once. The previous two-key form was a YAML duplicate-key
+    # mapping where the second silently shadowed the first.
+    health_level: "{{ health_level | default('A') | upper }}"
     velox_poll_attempts: 1
     velox_poll_delay_sec: 0
 

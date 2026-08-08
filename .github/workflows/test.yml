@@ -48,6 +48,12 @@ jobs:
             shared/go.sum
 
       - name: make verify
+        env:
+          # Push-event compatibility base: the last commit main pointed
+          # at before this push (fetch-depth: 0 keeps it resolvable).
+          # check-worker-rollout-compatibility refuses to run without
+          # an explicit, fetched BASE_REF.
+          BASE_REF: ${{ github.event.before }}
         run: make verify
 
   # ── Ansible playbooks lint (fast, parallel with verify) ──────────────────
