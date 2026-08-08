@@ -8,6 +8,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FETCH="$ROOT/deploy/runtime/openbao-fetch-worker-secrets.sh"
 PREPARE="$ROOT/deploy/runtime/prepare-host.sh"
 PKI_PROVISION="$ROOT/deploy/openbao/scripts/provision-pki.sh"
+PKI_INITIALIZE="$ROOT/deploy/openbao/scripts/initialize-pki-intermediate.sh"
 KV_PROVISION="$ROOT/deploy/openbao/scripts/provision-kv.sh"
 WORKER_POLICY="$ROOT/deploy/openbao/policies/worker.hcl.tmpl"
 OPERATOR_BOOTSTRAP="$ROOT/scripts/operator/provision-worker-openbao.sh"
@@ -36,9 +37,9 @@ trap cleanup EXIT
 trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 
-bash -n "$FETCH" "$PREPARE" "$PKI_PROVISION" "$KV_PROVISION" "$OPERATOR_BOOTSTRAP"
+bash -n "$FETCH" "$PREPARE" "$PKI_PROVISION" "$PKI_INITIALIZE" "$KV_PROVISION" "$OPERATOR_BOOTSTRAP"
 if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck -x "$FETCH" "$PKI_PROVISION" "$KV_PROVISION" "$OPERATOR_BOOTSTRAP" ||
+    shellcheck -x "$FETCH" "$PKI_PROVISION" "$PKI_INITIALIZE" "$KV_PROVISION" "$OPERATOR_BOOTSTRAP" ||
         fail 'shellcheck failed'
 fi
 command -v openssl >/dev/null 2>&1 || fail 'openssl is required for the CSR test'
@@ -60,6 +61,13 @@ grep -q 'rstrip(b"\\r\\n")' "$OPERATOR_BOOTSTRAP" \
     || fail 'operator bootstrap does not normalize terminal line endings before hashing'
 grep -Fq "allowed_uri_sans=\"\$spiffe_uri\"" "$PKI_PROVISION" \
     || fail 'PKI provisioning does not constrain the per-worker SPIFFE URI'
+grep -q 'intermediate/generate/internal' "$PKI_INITIALIZE" \
+    || fail 'PKI ceremony does not generate the intermediate key internally'
+grep -q 'intermediate/set-signed' "$PKI_INITIALIZE" \
+    || fail 'PKI ceremony does not use set-signed'
+if grep -Eq 'OPENBAO_PKI_INTERMEDIATE_(CERT|KEY)|BAO_PKI_KEY|pem_bundle' "$PKI_PROVISION" "$PKI_INITIALIZE"; then
+    fail 'PKI production path reintroduced an external intermediate private key'
+fi
 grep -q 'use_csr_sans=true' "$PKI_PROVISION" \
     || fail 'PKI provisioning does not preserve the CSR URI SAN'
 grep -q 'path "pki/issue/worker-{{ WORKER_ID }}"' "$WORKER_POLICY" \

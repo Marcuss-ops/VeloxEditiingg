@@ -13,8 +13,6 @@
 #
 # Optional environment:
 #   OPENBAO_PKI_MOUNT=pki (canonical; other mount names are rejected)
-#   OPENBAO_PKI_INTERMEDIATE_CERT=/secure/velox/intermediate.crt
-#   OPENBAO_PKI_INTERMEDIATE_KEY=/secure/velox/intermediate.key
 #   OPENBAO_PKI_ROLE_PREFIX=worker-
 #   OPENBAO_PKI_DEFAULT_TTL=168h
 #   OPENBAO_PKI_MAX_TTL=336h
@@ -67,25 +65,9 @@ else
 fi
 
 if [[ "$DRY_RUN" != "1" ]]; then
-    # The Root CA remains offline. On a fresh mount, operators may import the
-    # already-approved OpenBao intermediate certificate/key from protected
-    # paths; the private key is written only into OpenBao's PKI engine.
-    if ! bao read "$MOUNT/config/ca" >/dev/null 2>&1; then
-        [[ -s "${OPENBAO_PKI_INTERMEDIATE_CERT:-}" && -s "${OPENBAO_PKI_INTERMEDIATE_KEY:-}" ]] || {
-            echo "FATAL: no PKI issuer configured; set OPENBAO_PKI_INTERMEDIATE_CERT and OPENBAO_PKI_INTERMEDIATE_KEY to import the approved intermediate (Root CA stays offline)" >&2
-            exit 1
-        }
-        import_body="$(mktemp)"
-        chmod 0600 "$import_body"
-        trap 'rm -f "$import_body"' EXIT
-        BAO_PKI_CERT="$(cat "$OPENBAO_PKI_INTERMEDIATE_CERT")" \
-        BAO_PKI_KEY="$(cat "$OPENBAO_PKI_INTERMEDIATE_KEY")" \
-            jq -n '{pem_bundle: env.BAO_PKI_CERT, private_key: env.BAO_PKI_KEY}' > "$import_body"
-        curl -fsS --cacert "$TLS_CERT_FILE" -X POST \
-            -H "X-Vault-Token: $BAO_TOKEN" -H 'Content-Type: application/json' \
-            --data-binary "@$import_body" "$ADDR/v1/$MOUNT/config/ca" >/dev/null
-        rm -f "$import_body"
-        echo "[pki] imported approved intermediate issuer into OpenBao"
+    if ! bao read "$MOUNT/issuer/default" >/dev/null 2>&1 && ! bao read "$MOUNT/config/ca" >/dev/null 2>&1; then
+        echo "FATAL: ROOT_CA_MATERIAL_UNAVAILABLE: initialize the OpenBao intermediate with initialize-pki-intermediate.sh before provisioning roles" >&2
+        exit 1
     fi
     bao secrets tune -max-lease-ttl="$MAX_TTL" "$MOUNT" >/dev/null
     declare -a config_args=()
@@ -100,7 +82,7 @@ fi
 
 if [[ "$DRY_RUN" != "1" ]]; then
     issuer_present=0
-    if bao read "$MOUNT/config/ca" >/dev/null 2>&1; then issuer_present=1; fi
+    if bao read "$MOUNT/issuer/default" >/dev/null 2>&1 || bao read "$MOUNT/config/ca" >/dev/null 2>&1; then issuer_present=1; fi
     if [[ "$issuer_present" != "1" ]]; then
         echo "FATAL: PKI mount $MOUNT/ has no configured issuer; import or initialize the OpenBao intermediate before creating worker roles" >&2
         exit 1

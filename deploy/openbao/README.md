@@ -34,6 +34,7 @@ deploy/openbao/
 │   ├── verify-kv.sh             # albero KV con versioni (mai valori)
 │   ├── provision-policies.sh    # policy ACL da policies/ (idempotente, change-detection)
 │   ├── provision-approle.sh     # AppRole per principal + role-id/secret-id (0600)
+│   ├── initialize-pki-intermediate.sh # ceremony: internal key + offline-root CSR
 │   ├── provision-pki.sh          # PKI mount + per-worker CSR signing roles
 │   ├── verify-approle.sh        # login reale + check autorizzazioni positivi/negativi
 │   ├── migrate-master-tokens.sh # env → KV (una tantum, --force, fail-closed)
@@ -296,11 +297,11 @@ OPENBAO_VARS_FILE=/tmp/openbao-vars.yml \
 ./scripts/resolve-master-tokens.sh [--require-all]
 ```
 
-Scrive le **extra-vars** `vault_velox_*` (stessi nomi di `vault.yml`, quindi
-`deploy/templates/velox-server.env.j2` non cambia) in un file **0600** da
-passare ad ansible-playbook con `-e @/tmp/openbao-vars.yml`. Gli extra-vars
-VINCONO su group_vars → i token vengono da OpenBao; senza `OPENBAO_ADDR`
-(exit 0) o senza file, ansible usa `vault.yml` come oggi (fallback legacy).
+Scrive le **extra-vars** `vault_velox_*` (projection compatibile con il
+template, non una seconda authority) in un file **0600** da passare ad
+Ansible con `-e @/tmp/openbao-vars.yml`. Gli extra-vars VINCONO su
+`group_vars`: i token vengono da OpenBao. Senza `OPENBAO_ADDR` il resolver
+fallisce chiuso; non esiste un fallback ad Ansible Vault in production.
 
 - KV v2 → lettura via REST `/v1/velox/data/<path>` con il token AppRole.
 - Opzionali (`social-webhook-secret`, `registry/*`) saltati se assenti; con
@@ -309,27 +310,50 @@ VINCONO su group_vars → i token vengono da OpenBao; senza `OPENBAO_ADDR`
 - **Mai stampa valori**: logga solo i nomi; quoting YAML via `jq -Rs .`
   (NB: `$v | tojson` senza `-r` verrebbe ri-serializzato da jq ≥ 1.8).
 
-### Integrazione CI (`.github/workflows/deploy.yml`)
+### Deploy production locale
 
-Step opzionale `resolve-openbao-tokens` attivo solo con `OPENBAO_ADDR`
-impostato: risolve il vars file e lo inietta con `-e @/tmp/openbao-vars.yml`
-(extra-vars condizionali). Senza `OPENBAO_ADDR` il flusso ansible-vault resta
-**identico** — il deploy non si rompe.
+GitHub verifica digest e firme, ma non orchestra la produzione. Il percorso
+canonico è eseguito dalla workstation amministrativa:
+
+```bash
+VELOX_MASTER_HOST=... \
+VELOX_SERVER_IMAGE=ghcr.io/...@sha256:<digest> \
+VELOX_VERSION=... \
+VELOX_MASTER_PUBLIC_URL=https://... \
+VELOX_GRPC_CONTROL_ENDPOINT=...:9000 \
+VELOX_ALLOWED_WORKERS=worker-a,worker-b \
+scripts/operator/deploy-production.sh --check
+
+# solo dopo la revisione del dry-run:
+scripts/operator/deploy-production.sh --apply
+```
+
+Lo script risolve i token Master con AppRole OpenBao, crea extra-vars
+temporanee 0600 e invoca Ansible localmente. Non usare `ANSIBLE_VAULT_PASSWORD`
+o chiavi SSH GitHub per il deploy production.
 
 ## 11. PKI mTLS — key locale, CSR e rinnovo
 
 Il mount PKI dedicato emette i certificati client senza ricevere la private key:
 
 ```bash
-# First run: import the approved online intermediate; keep the Root CA offline.
-OPENBAO_PKI_INTERMEDIATE_CERT=/secure/velox/intermediate.crt \
-OPENBAO_PKI_INTERMEDIATE_KEY=/secure/velox/intermediate.key \
+# One-time ceremony: OpenBao generates and keeps the intermediate private key.
+# The CSR is the only material that leaves OpenBao, for signing by the
+# approved offline Root CA.
+./scripts/initialize-pki-intermediate.sh --generate-csr /secure/velox/velox-production-intermediate.csr
+# After the offline Root CA returns the signed intermediate chain:
+./scripts/initialize-pki-intermediate.sh --set-signed /secure/velox/signed-intermediate-chain.pem
+
+# Only after the issuer is ready, provision the per-worker signing roles.
 ./scripts/provision-pki.sh --workers "host_57_129_132_133 host_57_131_20_173 velox-worker-13197 velox-worker-523925eb"
 ```
 
-Il primo provisioning importa (solo se il mount non ha già un issuer) l’intermediate
-approvato in `pki/config/ca`; la Root CA resta offline e le variabili di import
-sono lette da file protetti, mai dal repository. Per ogni worker viene configurato
+`initialize-pki-intermediate.sh` rifiuta una nuova ceremony se l’issuer è già
+configurato, importa esclusivamente la catena firmata tramite
+`pki/intermediate/set-signed` e non accetta né legge una private key esterna.
+Se la Root CA offline approvata non è disponibile, il comando si ferma con
+`ROOT_CA_MATERIAL_UNAVAILABLE`; non viene generata una nuova trust domain.
+Per ogni worker viene configurato
 `pki/roles/worker-<worker-id>` con CN esatto, `allowed_uri_sans` limitato a
 `spiffe://velox/worker/<worker-id>`, `use_csr_sans=true`,
 TTL e max TTL limitati, EKU `ClientAuth` e policy AppRole che consente solo
@@ -423,8 +447,8 @@ distrugge i dati).
 4. Distribuire `role-id`/`secret-id` sui nodi worker/master
    (`/etc/velox-worker/secrets/approle/`, 0600, Ansible `no_log`).
 5. ✅ ~~Migrazione dei token master~~ — `migrate-master-tokens.sh` (env → KV,
-   una tantum) + `resolve-master-tokens.sh` (KV → extra-vars Ansible, al deploy),
-   integrati in `.github/workflows/deploy.yml` come step opzionale (§10).
+   una tantum) + `resolve-master-tokens.sh` (KV → extra-vars Ansible), usati
+   dal percorso locale `scripts/operator/deploy-production.sh` (§10).
 6. ✅ ~~SSH CA~~ — secrets engine `ssh` + CA + role `velox-operator` +
    firma operatore a TTL breve (§11 + `docs/openbao-ssh-ca.md`); da completare
    con la dismissione delle `authorized_keys` statiche una volta che tutti gli
