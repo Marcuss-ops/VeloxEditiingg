@@ -180,7 +180,7 @@ func (m *Matcher) Select(
 		// checks so the rejection reason is "wrong worker" not
 		// "unsupported executor" — the pin is an operator intent
 		// overlay, not a capability constraint.
-		if candidate.PlacementPinWorkerID != "" && candidate.PlacementPinWorkerID != worker.WorkerID {
+		if candidate.AttemptCount == 0 && candidate.PlacementPinWorkerID != "" && candidate.PlacementPinWorkerID != worker.WorkerID {
 			result.Rejections = append(result.Rejections, Rejection{
 				TaskID: candidate.TaskID,
 				Code:   RejectPlacementPinMismatch,

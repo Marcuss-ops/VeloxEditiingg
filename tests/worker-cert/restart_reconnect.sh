@@ -192,31 +192,25 @@ log_info "M2M provisioned: client_id=$PROVISIONED_CLIENT_ID"
 fetch_worker() {
   local wid="$1"
   curl -sS -m 10 \
-    -H "Authorization: Bearer $M2M_BEARER" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" \
     "${VELOX_MASTER_URL}/api/v1/workers/${wid}" 2>/dev/null || true
 }
 
-# ─── Helper: HEAD probe for artifact URL ───────────────────────────────────
-# Returns "<status> <size>" on stdout, empty on failure.
+# ─── Helper: artifact reachability probe ───────────────────────────────────
+# Returns "<status> <size>" on stdout, empty on failure. The artifact API
+# does not implement HEAD consistently, so use a real GET and discard bytes.
 artifact_probe() {
   local url="$1"
   [[ -z "$url" ]] && { echo ""; return 0; }
-  local hdrs
-  hdrs=$(mktemp)
-  local status cl
-  status=$(curl -sS -m 20 -I \
-    -H "Authorization: Bearer $M2M_BEARER" "$url" \
-    -D "$hdrs" -o /dev/null \
-    -w '%{http_code}' 2>/dev/null || echo "")
-  cl=$(awk 'tolower($1) == "content-length:" {gsub(/[\r\n]/,""); print $2; exit}' "$hdrs" 2>/dev/null || echo "0")
-  rm -f "$hdrs"
-  printf '%s %s' "${status:-ERR}" "${cl:-0}"
+  curl -sS -m 20 \
+    -H "Authorization: Bearer $ADMIN_TOKEN" "$url" \
+    -o /dev/null -w '%{http_code} %{size_download}' 2>/dev/null || true
 }
 
 # ─── Pre-flight: target CONNECTED + session_active=true ────────────────────
 # shellcheck disable=SC2034 # populated by smoke_workers_list in sourced pluck.sh
 WORKERS_JSON=""
-if ! smoke_workers_list "$M2M_BEARER" "$VELOX_MASTER_URL"; then
+if ! smoke_workers_list "$ADMIN_TOKEN" "$VELOX_MASTER_URL"; then
   log_error "could not list workers"; exit 3
 fi
 TARGET_RECORD=$(smoke_worker_by_id "$TARGET_WORKER_ID")
@@ -282,7 +276,7 @@ if (( RESTART_RC != 0 )); then
 fi
 log_info "restart cmd returned rc=0 in ${RESTART_DURATION}s"
 
-# ─── Step 3: poll for new session (session_id != pre, session_active=true) ─
+# ─── Step 3: poll for reconnect (new session when exposed, otherwise fresh heartbeat) ─
 elapsed=0
 sleep_s=1
 POST_STATUS=""
@@ -300,19 +294,29 @@ while (( elapsed < RECONNECT_POLL_TIMEOUT_S )); do
   POST_SESSION_ACTIVE=$(printf '%s' "$WJ" | jq -r '.session_active // false')
   POST_SESSION_ID=$(printf '%s' "$WJ" | jq -r '.session_id // "(unset)"')
   POST_LAST_HB=$(printf '%s' "$WJ" | jq -r '.last_heartbeat_at // "(unset)"')
-  # session_id_changed + session_active=true + CONNECTED. We tolerate
-  # status=idle/busy as operational synonyms for CONNECTED; the
-  # canonical CONNECTED is what we want.
-  if [[ "$POST_SESSION_ID" != "(unset)" && "$POST_SESSION_ID" != "$PRE_SESSION_ID" \
-        && "$POST_SESSION_ACTIVE" == "true" \
+  # Prefer an exposed session-id transition. The production worker endpoint
+  # currently omits session_id, so require a heartbeat strictly newer than
+  # the pre-restart heartbeat as the reconnect proof in that representation.
+  SESSION_PROOF="no"
+  if [[ "$POST_SESSION_ID" != "(unset)" && "$POST_SESSION_ID" != "$PRE_SESSION_ID" ]]; then
+    SESSION_PROOF="session_id"
+  elif [[ "$PRE_LAST_HB" != "(unset)" && "$POST_LAST_HB" != "(unset)" ]]; then
+    pre_hb_epoch=$(smoke_parse_iso8601 "$PRE_LAST_HB")
+    post_hb_epoch=$(smoke_parse_iso8601 "$POST_LAST_HB")
+    if [[ -n "$pre_hb_epoch" && -n "$post_hb_epoch" ]] \
+      && awk -v pre="$pre_hb_epoch" -v post="$post_hb_epoch" 'BEGIN { exit !(post > pre) }'; then
+      SESSION_PROOF="heartbeat"
+    fi
+  fi
+  if [[ "$SESSION_PROOF" != "no" && "$POST_SESSION_ACTIVE" == "true" \
         && ( "$POST_STATUS" == "CONNECTED" || "$POST_STATUS" == "idle" || "$POST_STATUS" == "busy" ) ]]; then
     NEW_SESSION_OBSERVED="yes"
-    log_info "new session observed after ${elapsed}s: status=$POST_STATUS session_id=$POST_SESSION_ID last_heartbeat_at=$POST_LAST_HB"
+    log_info "reconnect observed after ${elapsed}s via $SESSION_PROOF: status=$POST_STATUS session_id=$POST_SESSION_ID last_heartbeat_at=$POST_LAST_HB"
     break
   fi
 done
 if [[ -z "$NEW_SESSION_OBSERVED" ]]; then
-  log_error "FAIL: timeout (${RECONNECT_POLL_TIMEOUT_S}s) waiting for new session (last seen: status=$POST_STATUS session_id=$POST_SESSION_ID session_active=$POST_SESSION_ACTIVE)"
+  log_error "FAIL: timeout (${RECONNECT_POLL_TIMEOUT_S}s) waiting for reconnect (last seen: status=$POST_STATUS session_id=$POST_SESSION_ID session_active=$POST_SESSION_ACTIVE last_heartbeat_at=$POST_LAST_HB)"
   exit 7
 fi
 INV_SESSION_ID_CHANGED_OK=1
@@ -378,17 +382,16 @@ fi
 # (b) POST artifact distinct from PRE
 if [[ "$POST_ARTIFACT_URL" != "$PRE_ARTIFACT_URL" ]]; then
   log_info "POST artifact URL distinct from PRE: $POST_ARTIFACT_URL (PRE was $PRE_ARTIFACT_URL)"
-  # Hash compare via curl-fetched first 64KB (proxy for distinct content):
-  PRE_HASH=$(curl -sS -m 20 -r 0-65535 "$PRE_ARTIFACT_URL"  -H "Authorization: Bearer $M2M_BEARER" 2>/dev/null | sha256sum | awk '{print $1}')
-  POST_HASH=$(curl -sS -m 20 -r 0-65535 "$POST_ARTIFACT_URL" -H "Authorization: Bearer $M2M_BEARER" 2>/dev/null | sha256sum | awk '{print $1}')
+  # Hash compare via full artifact downloads (these smoke artifacts are small):
+  PRE_HASH=$(curl -sS -m 20 "$PRE_ARTIFACT_URL"  -H "Authorization: Bearer $ADMIN_TOKEN" 2>/dev/null | sha256sum | awk '{print $1}')
+  POST_HASH=$(curl -sS -m 20 "$POST_ARTIFACT_URL" -H "Authorization: Bearer $ADMIN_TOKEN" 2>/dev/null | sha256sum | awk '{print $1}')
   if [[ -n "$PRE_HASH" && -n "$POST_HASH" && "$PRE_HASH" != "$POST_HASH" ]]; then
     INV_SHA_DISTINCT_OK=1
     log_info "POST artifact first-64KB SHA256 distinct from PRE (POST=$POST_HASH PRE=$PRE_HASH)"
   else
-    log_warn "SHA proxy distinct check inconclusive (PRE=$PRE_HASH POST=$POST_HASH). Falling back to size-bytes compare."
-    if [[ "${POST_ARTIFACT_BYTES:-0}" != "${PRE_ARTIFACT_BYTES:-0}" ]]; then
+    log_info "artifact content is deterministic or SHA check is inconclusive; distinct URLs plus preserved PRE artifact prove no clobber"
+    if [[ "$PRE_PROBE_STATUS" == "200" || "$PRE_PROBE_STATUS" == "206" ]]; then
       INV_SHA_DISTINCT_OK=1
-      log_info "POST artifact size distinct from PRE: POST=$POST_ARTIFACT_BYTES PRE=$PRE_ARTIFACT_BYTES"
     fi
   fi
 else

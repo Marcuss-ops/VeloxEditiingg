@@ -58,11 +58,14 @@ func VersionedExecutorID(id string, version int) string {
 // TaskCandidate is a lightweight task metadata row used by the matcher.
 // It does NOT carry the full payload JSON.
 type TaskCandidate struct {
-	TaskID    string
-	JobID     string
-	Revision  int
-	Priority  int
-	CreatedAt time.Time
+	TaskID   string
+	JobID    string
+	Revision int
+	Priority int
+	// AttemptCount is zero for the initial dispatch and positive after a
+	// lease has been expired/retried.
+	AttemptCount int
+	CreatedAt    time.Time
 
 	Executor ExecutorKey
 
@@ -74,7 +77,8 @@ type TaskCandidate struct {
 	// PlacementPinWorkerID is the per-job worker pin extracted from
 	// the task spec payload (_placement_pin_worker_id). When
 	// non-empty, the matcher will only match this task to the named
-	// worker; all other workers receive RejectPlacementPinMismatch.
+	// worker on the initial attempt; after a lease expires, retries may move
+	// to another compatible worker for recovery.
 	PlacementPinWorkerID string
 }
 

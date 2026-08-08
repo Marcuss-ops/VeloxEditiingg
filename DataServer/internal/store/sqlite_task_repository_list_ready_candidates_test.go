@@ -44,6 +44,7 @@ CREATE TABLE tasks (
     status           TEXT,
     priority         INTEGER,
     revision         INTEGER NOT NULL DEFAULT 0,
+    attempt_count    INTEGER NOT NULL DEFAULT 0,
     worker_id        TEXT,
     lease_id         TEXT,
     executor_id      TEXT,

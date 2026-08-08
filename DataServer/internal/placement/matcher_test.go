@@ -438,6 +438,38 @@ func TestMatcherAllowsPinnedWorker(t *testing.T) {
 	}
 }
 
+// TestMatcherAllowsPinnedTaskToFailOverAfterFirstAttempt ensures an
+// operator-selected initial worker does not make a retried task permanently
+// unavailable after that worker loses its lease.
+func TestMatcherAllowsPinnedTaskToFailOverAfterFirstAttempt(t *testing.T) {
+	m := NewMatcher()
+
+	worker := newWorkerSnapshot(
+		executorKeys(ExecutorKey{ID: "scene.composite.v1", Version: 1}),
+		capMap("artifact.commit.v1"),
+		true, false, 2, 2,
+	)
+	worker.WorkerID = "w-backup"
+
+	candidate := TaskCandidate{
+		TaskID:               "t-retry",
+		Priority:             10,
+		CreatedAt:            time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC),
+		Executor:             ExecutorKey{ID: "scene.composite.v1", Version: 1},
+		RequiredCapabilities: []string{"artifact.commit.v1"},
+		PlacementPinWorkerID: "w-target",
+		AttemptCount:         1,
+	}
+
+	result := m.Select(worker, []TaskCandidate{candidate})
+	if result.Candidate == nil {
+		t.Fatalf("retry should fail over to a compatible backup worker; rejections: %+v", result.Rejections)
+	}
+	if result.Candidate.TaskID != "t-retry" {
+		t.Fatalf("expected t-retry selected, got %s", result.Candidate.TaskID)
+	}
+}
+
 // TestMatcherPinDisabledByDefault — a freshly-constructed Matcher with
 // no SetPin call behaves exactly as the pre-pin stateless engine: a
 // non-target worker with matching capabilities still gets a candidate.

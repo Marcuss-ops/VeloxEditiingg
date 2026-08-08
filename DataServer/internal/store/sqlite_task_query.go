@@ -118,6 +118,7 @@ func (r *SQLiteTaskRepository) ListReadyCandidates(ctx context.Context, limit in
 			JobID:                j.JobID,
 			Revision:             j.Revision,
 			Priority:             j.Priority,
+			AttemptCount:         j.AttemptCount,
 			CreatedAt:            j.CreatedAt,
 			Executor:             placement.NormalizeExecutorKey(j.ExecutorID, j.ExecutorVersion),
 			RequiredCapabilities: j.RequiredCapabilities,

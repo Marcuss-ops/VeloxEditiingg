@@ -59,6 +59,7 @@ type Job struct {
 	JobID                string
 	Revision             int
 	Priority             int
+	AttemptCount         int
 	CreatedAt            time.Time
 	ExecutorID           string
 	ExecutorVersion      int
@@ -67,7 +68,8 @@ type Job struct {
 
 	// PlacementPinWorkerID is extracted from the task spec payload
 	// (_placement_pin_worker_id). When non-empty, the placement
-	// matcher will only dispatch this task to the named worker.
+	// matcher uses it for the initial dispatch; retries may fail over
+	// to another compatible worker after lease expiry.
 	PlacementPinWorkerID string
 }
 
@@ -87,6 +89,7 @@ SELECT t.task_id,
        t.job_id,
        t.revision,
        t.priority,
+       t.attempt_count,
        t.created_at,
        t.executor_id,
        t.executor_version,
@@ -136,7 +139,7 @@ func ListNextDispatchableJobs(ctx context.Context, db Querier, limit int) ([]Job
 			payloadStr sql.NullString
 		)
 		if err := rows.Scan(
-			&j.TaskID, &j.JobID, &j.Revision, &j.Priority, &createdAt,
+			&j.TaskID, &j.JobID, &j.Revision, &j.Priority, &j.AttemptCount, &createdAt,
 			&j.ExecutorID, &j.ExecutorVersion, &capsConcat, &payloadStr,
 		); err != nil {
 			return nil, fmt.Errorf("dispatchable.ListNextDispatchableJobs: scan: %w", err)

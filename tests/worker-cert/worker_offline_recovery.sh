@@ -238,7 +238,7 @@ log_info "M2M provisioned: client_id=$PROVISIONED_CLIENT_ID"
 
 # ─── Pre-flight: list workers + verify ≥2 CONNECTED + target is CONNECTED ──
 WORKERS_JSON=""
-if ! smoke_workers_list "$M2M_BEARER" "$VELOX_MASTER_URL"; then
+if ! smoke_workers_list "$ADMIN_TOKEN" "$VELOX_MASTER_URL"; then
   log_error "could not list workers"; exit 3
 fi
 
@@ -256,8 +256,9 @@ while IFS= read -r row; do
   if [[ "$sts" == "CONNECTED" && "$sas" == "true" ]]; then
     CONNECTED_IDS+=("$wid")
   fi
-done < <(printf '%s' "$WORKERS_JSON" | jq -c '.[]?' 2>/dev/null \
-            || printf '%s' "$WORKERS_JSON" | jq -c '.workers[]?')
+done < <(printf '%s' "$WORKERS_JSON" | jq -c '
+  if type == "array" then .[]? else .workers[]? end
+')
 
 log_info "pre-flight: CONNECTED=${#CONNECTED_IDS[@]} / total=$(printf '%s' "$WORKERS_JSON" | jq -r '(.workers // .) | length')"
 if (( ${#CONNECTED_IDS[@]} < 2 )); then
@@ -296,6 +297,8 @@ log_info "building payload via build_real_payload.py → $TMP_PAYLOAD"
 if ! python3 "${REPO_ROOT}/tests/worker-cert/build_real_payload.py" \
       --worker-id "recovery-${TARGET_WORKER_ID}" \
       --placement-pin-worker-id "$TARGET_WORKER_ID" \
+      --scenes-count 2 \
+      --duration-per-scene 30 \
       --destination "$DESTINATION_ID" \
       --strict \
       --output "$TMP_PAYLOAD" >/dev/null 2>&1; then
@@ -376,7 +379,7 @@ while (( elapsed < HEARTBEAT_POLL_TIMEOUT_S )); do
   elapsed=$((elapsed + sleep_s))
   sleep_s=$(( sleep_s * 2 )); (( sleep_s > 16 )) && sleep_s=16
   if WORKERS_DURING_JSON=$(curl -sS -m 10 \
-        -H "Authorization: Bearer $M2M_BEARER" \
+        -H "Authorization: Bearer $ADMIN_TOKEN" \
         "${VELOX_MASTER_URL}/api/v1/workers/${TARGET_WORKER_ID}" 2>/dev/null); then
     sts=$(printf '%s' "$WORKERS_DURING_JSON" | jq -r '.status // "(unset)"' 2>/dev/null || echo "(unset)")
     case "$sts" in
@@ -492,7 +495,7 @@ if [[ -n "$STARTED_AT" && -n "$COMPLETED_AT" ]]; then
     render_time_ms=$(( (c_epoch - s_epoch) * 1000 ))
   fi
 fi
-artifact_size_bytes=$(smoke_artifact_size "$ARTIFACT_URL" "$M2M_BEARER" 2>/dev/null || echo 0)
+artifact_size_bytes=$(smoke_artifact_size "$ARTIFACT_URL" "$ADMIN_TOKEN" 2>/dev/null || echo 0)
 log_info "render_time_ms=$render_time_ms artifact_bytes=$artifact_size_bytes artifact_url=$ARTIFACT_URL"
 
 # ─── Invariant checks via SQL (canonical source) ───────────────────────────
@@ -557,7 +560,7 @@ fi
 # ─── Final worker-state cross-check (no false BUSY residual) ──────────────
 sleep "${RECOVERY_FINAL_COOLDOWN_S:-20}"
 FINAL_WORKER_JSON=$(curl -sS -m 10 \
-  -H "Authorization: Bearer $M2M_BEARER" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
   "${VELOX_MASTER_URL}/api/v1/workers/${TARGET_WORKER_ID}" 2>/dev/null || true)
 FINAL_STATUS=$(printf '%s' "$FINAL_WORKER_JSON" | jq -r '.status // "(unset)"' 2>/dev/null || echo "(unset)")
 FINAL_SESSION=$(printf '%s' "$FINAL_WORKER_JSON" | jq -r '.session_active // false' 2>/dev/null || echo "false")

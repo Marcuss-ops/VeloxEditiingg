@@ -89,7 +89,7 @@ smoke_workers_list() {
   WORKERS_JSON=$(curl -sS -m 30 \
     -H "Authorization: Bearer $bearer" \
     "${master_url}/api/v1/workers") || return 3
-  echo "$WORKERS_JSON" | jq -e '.workers | type == "array"' >/dev/null 2>&1 \
+  echo "$WORKERS_JSON" | jq -e 'if type == "array" then true else .workers | type == "array" end' >/dev/null 2>&1 \
     || { log_error "workers list payload malformed"; return 4; }
   export WORKERS_JSON
 }
@@ -99,7 +99,7 @@ smoke_workers_list() {
 smoke_worker_by_id() {
   local worker_id="$1"
   printf '%s' "$WORKERS_JSON" | jq -er --arg w "$worker_id" \
-    '.workers[] | select(.worker_id == $w)' 2>/dev/null || true
+    '(if type == "array" then .[] else .workers[] end) | select(.worker_id == $w)' 2>/dev/null || true
 }
 
 # smoke_assert_pin_clarity <target_worker_id> — count CONNECTED non-target
@@ -113,7 +113,7 @@ smoke_assert_pin_clarity() {
   local count
   count=$(printf '%s' "$WORKERS_JSON" \
     | jq --arg w "$target" \
-       '[.workers[] | select(.worker_id != $w and .status == "CONNECTED" and .session_active == true)] | length')
+       '[(if type == "array" then .[] else .workers[] end) | select(.worker_id != $w and .status == "CONNECTED" and .session_active == true)] | length')
   if (( count > 0 )); then
     log_warn "placement-pin clarity: $count CONNECTED non-target worker(s) present; smoke depends on operator pause/drain for determinism"
     if [[ "${SMOKE_STRICT_PIN:-0}" == "1" ]]; then
