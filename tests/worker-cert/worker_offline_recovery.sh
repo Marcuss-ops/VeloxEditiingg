@@ -507,15 +507,17 @@ log_info "render_time_ms=$render_time_ms artifact_bytes=$artifact_size_bytes art
 # boolean column — "this artifact is the finalized one" is encoded as
 # `verified_at IS NOT NULL`. Set by `sqlite_finalize_writer.go:400-405` during
 # the verified-finalization CAS transition (RECEIVED → FINALIZING → COMPLETED).
-# (a) artifacts WHERE job_id=X AND verified_at IS NOT NULL → ≤1
+# (a) finalized video artifacts WHERE job_id=X AND verified_at IS NOT NULL → ≤1.
+# A successful render also emits an engine-progress sidecar; that is a
+# distinct non-final artifact and must not be counted as a duplicate video.
 ARTIFACTS_FINAL=$(sqlite3 "$DB_PATH" \
-  "SELECT COUNT(*) FROM artifacts WHERE job_id = '${JOB_ID}' AND verified_at IS NOT NULL;" 2>/dev/null || echo "?")
-# (b) artifact_uploads WHERE job_id=X AND status='COMPLETED' → ≤1
+  "SELECT COUNT(*) FROM artifacts WHERE job_id = '${JOB_ID}' AND output_kind = 'final_video' AND verified_at IS NOT NULL;" 2>/dev/null || echo "?")
+# (b) completed uploads for the finalized video WHERE job_id=X → ≤1
 # (canonical defense — per-attempt scoping in artifact_uploads is what
 # physically prevents double-write; the artifacts check is a redundant
 # belt-and-suspenders per the code-reviewer audit log).
 UPLOADS_COMPLETED=$(sqlite3 "$DB_PATH" \
-  "SELECT COUNT(*) FROM artifact_uploads WHERE job_id = '${JOB_ID}' AND status = 'COMPLETED';" 2>/dev/null || echo "?")
+  "SELECT COUNT(*) FROM artifact_uploads u JOIN artifacts a ON a.id = u.artifact_id WHERE u.job_id = '${JOB_ID}' AND a.output_kind = 'final_video' AND u.status = 'COMPLETED';" 2>/dev/null || echo "?")
 # (c) task_attempts for task_id=X → attempt 1 ∈ {TIMED_OUT,FAILED},
 #     attempt 2 exists with worker_id ≠ TARGET_WORKER_ID
 ATTEMPT_1_STATUS=$(sqlite3 "$DB_PATH" \
