@@ -266,18 +266,11 @@ def test_legacy_bridge_remains_explicit_until_migration() -> None:
     )
 
 
-def test_ghcr_bridge_and_definitive_contract_remain_intact() -> None:
-    require(
-        "deploy/playbooks/rollout-worker-digest.yml",
-        "target_image | length > 0",
-        "rollout_expected_bundle_hash",
-        "rollout_expected_engine_sha256",
-        "rollout_expected_source_hash",
-        "Verify master reconnect, session and fresh heartbeat",
-        "POST Level-D smoke operation for the target worker",
-        "Verify persisted Level-D Drive artifact upload",
-        "Restore previous worker env",
-    )
+def test_fleet_update_contract_remains_intact() -> None:
+    # The GHCR host-mutation bridge (deploy/playbooks/rollout-worker-digest.yml)
+    # is retired; the definitive contract is the fleet-update thin delegate,
+    # which MUST keep delegating to the Master's UpdateExecutor via the
+    # canonical API rather than mutating hosts directly.
     require(
         "deploy/playbooks/fleet-update.yml",
         "/api/v1/admin/workers/{{ worker_id }}/update",
@@ -353,7 +346,7 @@ def test_new_legacy_consumers_are_rejected() -> None:
 def main() -> None:
     test_legacy_bridge_files_are_not_removed_implicitly()
     test_legacy_bridge_remains_explicit_until_migration()
-    test_ghcr_bridge_and_definitive_contract_remain_intact()
+    test_fleet_update_contract_remains_intact()
     test_current_worker_release_provenance_and_operator_bridge()
     test_removal_plan_matches_gate_contract()
     test_current_tree_has_no_legacy_removal_marker()

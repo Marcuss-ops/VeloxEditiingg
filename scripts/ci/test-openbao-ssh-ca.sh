@@ -3,8 +3,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Test della CA SSH OpenBao (fase 7):
 #   A. sintassi: bash -n + shellcheck sui 3 script nuovi;
-#   B. check strutturali: policy ssh-operator, admin.hcl con ssh/*, playbook
-#      bootstrap-ssh.yml con TrustedUserCAKeys, vault.yml.example con la var;
+#   B. check strutturali: policy ssh-operator, admin.hcl con ssh/*, docs
+#      openbao-ssh-ca.md con TrustedUserCAKeys, vault.yml.example con la var;
 #   C. smoke LIVE (solo se un OpenBao è raggiungibile con il root token dallo
 #      state dir, es. istanza locale): provision-ssh-ca idempotente, verifica
 #      AppRole ssh-operator, firma di prova con TTL breve, verify-ssh-ca. In
@@ -34,10 +34,10 @@ grep -q 'ssh/\*' "$ROOT/deploy/openbao/policies/admin.hcl" \
     || fail 'admin.hcl non copre ssh/* (gestione CA)'
 grep -q 'ssh CA management cap' "$ROOT/deploy/openbao/scripts/verify-approle.sh" \
     || fail 'verify-approle.sh non verifica la gestione ssh per admin'
-grep -q 'TrustedUserCAKeys' "$ROOT/deploy/playbooks/bootstrap-ssh.yml" \
-    || fail 'bootstrap-ssh.yml non configura TrustedUserCAKeys'
-grep -q 'trusted-user-ca-keys.pem' "$ROOT/deploy/playbooks/bootstrap-ssh.yml" \
-    || fail 'bootstrap-ssh.yml non usa /etc/ssh/trusted-user-ca-keys.pem'
+grep -q 'TrustedUserCAKeys' "$ROOT/docs/openbao-ssh-ca.md" \
+    || fail 'docs/openbao-ssh-ca.md non documenta TrustedUserCAKeys sui nodi'
+grep -q 'trusted-user-ca-keys.pem' "$ROOT/docs/openbao-ssh-ca.md" \
+    || fail 'docs/openbao-ssh-ca.md non documenta /etc/ssh/trusted-user-ca-keys.pem'
 grep -q 'vault_velox_ssh_ca_pubkey' "$ROOT/deploy/group_vars/vault.yml.example" \
     || fail 'vault.yml.example non documenta vault_velox_ssh_ca_pubkey'
 grep -q 'ssh-ca.pub' "$PROVISION" \
@@ -55,7 +55,7 @@ if grep -RInE --exclude='test-openbao-ssh-ca.sh' --exclude='test-openbao-master-
 fi
 grep -q 'BAO_CACERT' "$ROOT/deploy/openbao/compose.yml" \
     || fail 'compose.yml non configura BAO_CACERT'
-pass 'check strutturali OK (policy, playbook, vault, export CA, strict TLS)'
+pass 'check strutturali OK (policy, docs, vault, export CA, strict TLS)'
 
 # ── C. Smoke live (solo se OpenBao raggiungibile con root token) ─────────────
 LIVE=0

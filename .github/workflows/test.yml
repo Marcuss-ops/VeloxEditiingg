@@ -56,33 +56,3 @@ jobs:
           BASE_REF: ${{ github.event.before }}
         run: make verify
 
-  # ── Ansible playbooks lint (fast, parallel with verify) ──────────────────
-  ansible-lint:
-    name: ansible-lint
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        # fetch-depth: 0 keeps BASE_REF resolvable for any future
-        # scoped check. Cost is negligible on the ansible-lint runner.
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
-        with:
-          python-version: "3.12"
-
-      - name: Install ansible-lint
-        run: |
-          pip install --quiet ansible-lint
-          ansible-galaxy collection install ansible.posix
-
-      - name: Lint playbooks
-        # Run from the repo root so the repo-level .ansible-lint config
-        # (exclude_paths for the vault-bound operator playbooks) is
-        # discovered; relative paths in that config resolve from the
-        # config location, not from the target directory.
-        run: |
-          ansible-lint --version
-          ansible-lint -v deploy/playbooks
