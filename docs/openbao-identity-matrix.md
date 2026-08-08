@@ -57,7 +57,7 @@ velox/ (KV v2)
     │   └── commit-hmac-key
     ├── workers/
     │   ├── host_57_129_132_133/   ← leggibile da: worker-host_57_129_132_133, master, admin
-    │   │   └── credential         (+ futuro: cert mTLS nel proprio ramo)
+    │   │   └── credential         (unico dato worker in KV; mTLS via PKI CSR)
     │   ├── host_57_131_20_173/
     │   ├── velox-worker-13197/
     │   └── velox-worker-523925eb/
@@ -71,13 +71,17 @@ velox/ (KV v2)
 `services/*` — verificato da `verify-approle.sh` (check negativi **fail-closed**:
 se la verifica non riesce, il check fallisce — niente pass vacui).
 
-## 4. Certificati (lettura del proprio certificato)
+## 4. Certificati (chiave locale e CSR)
 
-Il policy worker legge il proprio `credential` KV e può usare soltanto
-`pki/sign/worker-<id>`. La private key nasce localmente e il certificato/CA
-vengono materializzati sul worker; nessun `cert/*` e nessuna `worker.key` vive
-nel KV. Il template nega esplicitamente `pki/issue`, `pki/roles/*` e
-`pki/config/*`.
+La policy worker legge il proprio `credential` KV e può usare soltanto
+`pki/sign/worker-<id>`. Ogni ruolo PKI è distinto e vincola il certificato a
+CN=`<id>` e URI SAN esatto `spiffe://velox/worker/<id>`; la private key nasce
+localmente sul worker e non lascia mai il nodo. OpenBao riceve esclusivamente
+il CSR, firma la chiave pubblica e restituisce il certificato e la CA. Il
+resolver confronta sia CN sia URI SAN con `VELOX_WORKER_ID`, quindi un
+certificato di un altro worker viene rifiutato prima della materializzazione.
+Nessun `cert/*`, `worker.key` o bundle mTLS vive nel KV. Il template nega
+esplicitamente `pki/issue`, `pki/roles/*` e `pki/config/*`.
 
 ## 5. Operazioni
 
@@ -95,9 +99,11 @@ nel KV. Il template nega esplicitamente `pki/issue`, `pki/roles/*` e
 
 ## 6. Prossimi passi (dipendenti da questa matrice)
 
-1. ✅ ~~Distribuire `role-id`/`secret-id` ai nodi~~ — il materiale vive nello
-   state-dir; su ogni host va copiato in `/etc/velox-worker/secrets/approle/`
-   (0600, Ansible `no_log`).2. ✅ ~~Worker credential + mTLS CSR flow~~ — `deploy/runtime/openbao-fetch-worker-secrets.sh`
+1. ✅ ~~Distribuire `role-id`/`secret-id` ai nodi~~ — il materiale vive nello    state-dir; su ogni host va copiato in `/etc/velox-worker/secrets/approle/`
+   (0600, Ansible `no_log`).
+
+2. ✅ ~~Worker credential + mTLS CSR flow~~ — `deploy/runtime/openbao-fetch-worker-secrets.sh`
+
    legge `worker_credential` da KV, genera la private key localmente, invia il
    CSR al ruolo PKI dedicato, valida catena/identità/coppia e materializza il
    bundle. `--check` richiede anche la provenienza `.openbao-pki-issued`; test:
@@ -119,5 +125,7 @@ nel KV. Il template nega esplicitamente `pki/issue`, `pki/roles/*` e
    (`vault_velox_ssh_ca_pubkey`). Docs: `docs/openbao-ssh-ca.md`.
 6. `token_bound_cidrs` per-worker (limitare il login agli IP dei VPS) quando
    OpenBao sarà esposto oltre loopback.
-7. PKI mTLS per-worker dal secrets engine `pki`, credenziali DB dinamiche,
-   `SecretResolver` Go con backend OpenBao (`docs/secrets-audit.md` §4.2).
+7. Credenziali DB dinamiche e `SecretResolver` Go con backend OpenBao
+   (`docs/secrets-audit.md` §4.2). Il flusso PKI mTLS per-worker è già operativo:
+   chiave locale, CSR verso `pki/sign/worker-<id>`, certificato/CA materializzati
+   localmente e nessun PEM nel KV.

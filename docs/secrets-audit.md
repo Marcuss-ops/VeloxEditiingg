@@ -9,6 +9,11 @@
 > Nessun valore reale di secret è riportato in questo documento — solo posizione,
 > formato, referente e tipo.
 
+Il registro operativo vincolante per ownership e materializzazione è
+[`docs/operations/credential-registry.md`](operations/credential-registry.md).
+Questo audit resta una fotografia dettagliata dei consumatori e dei percorsi;
+non è una seconda fonte di valori o mapping operativi.
+
 ---
 
 ## 1. Stato attuale in sintesi
@@ -92,9 +97,9 @@ Percorsi canonici installati da `deploy/runtime/prepare-host.sh` (+ verifica in
 | Percorso (host) | Mount (container) | Permessi | Referente | Tipo |
 |---|---|---|---|---|
 | `/etc/velox-worker/secrets/worker_credential` | `/run/velox/secrets/worker_credential` (`VELOX_WORKER_CREDENTIAL_FILE`) | 0600, uid 10001 | worker agent (credential legacy/file-based) | Credential per-worker |
-| `/etc/velox-worker/certs/worker.crt` | `/run/velox/certs/worker.crt` | 0644 root | mTLS gRPC (CN DEVE = `worker_id`, RW-PROD-001 A9) | Certificato client |
-| `/etc/velox-worker/certs/worker.key` | `/run/velox/certs/worker.key` | 0600 uid 10001 | mTLS gRPC | Chiave privata |
-| `/etc/velox-worker/certs/ca.crt` | `/run/velox/certs/ca.crt` | 0644 root | trust chain mTLS | Certificato CA |
+| `/etc/velox-worker/certs/current/worker.crt` | `/run/velox/certs/worker.crt` | 0644 root | mTLS gRPC (CN DEVE = `worker_id`, RW-PROD-001 A9) | Certificato client emesso da OpenBao PKI |
+| `/etc/velox-worker/certs/current/worker.key` | `/run/velox/certs/worker.key` | 0600 uid 10001 | mTLS gRPC | Chiave privata generata localmente; mai in KV |
+| `/etc/velox-worker/certs/current/ca.crt` | `/run/velox/certs/ca.crt` | 0644 root | trust chain mTLS | CA restituita dal flusso CSR; mai in KV |
 | `/etc/velox-worker/worker.env` | env_file del container | 0600 root:root | `VELOX_WORKER_SECRET` + config | Env con secret |
 | `/var/lib/velox-worker/worker_config.json` | `/opt/velox/worker_config.json:ro` | 0640 uid 10001 | solo percorsi TLS (nessun secret) | Config |
 
@@ -190,8 +195,8 @@ Documentazione: `docs/operations/PR-6-pki-rotation-runbook.md`, `docs/roadmap/13
 | 6 | `registry_username/token` | vault.yml.example | credenziali | nessun consumatore tracciato | credenziali registry | media (orfane) |
 | 7 | `VELOX_WORKER_SECRET` | vault → `worker_secret` → `/etc/velox-worker-<host>.env` | stringa | worker agent → `credential_hash` SQLite master | credential per-worker | alta (per-worker) |
 | 8 | `worker_credential` (file) | `/etc/velox-worker/secrets/worker_credential` | file 0600 | worker agent (legacy) | credential per-worker | alta (per-worker) |
-| 9 | `worker.key` | `/etc/velox-worker/certs/worker.key` | PEM 0600 | mTLS gRPC | chiave privata | alta (per-worker) |
-| 10 | `worker.crt` / `ca.crt` | `/etc/velox-worker/certs/` | PEM | mTLS chain | certificati | media |
+| 9 | `worker.key` | `/etc/velox-worker/certs/current/worker.key` | PEM 0600 | mTLS gRPC | chiave privata generata localmente; esclusa da OpenBao KV | alta (per-worker) |
+| 10 | `worker.crt` / `ca.crt` | `/etc/velox-worker/certs/current/` | PEM | mTLS chain emessa dal PKI | certificati materializzati dal CSR; esclusi da KV | media |
 | 11 | root/intermediate CA key | air-gapped / `/opt/velox/certs/intermediate/` | PEM cifrata | PKI 3 livelli | chiave privata CA | **critica** |
 | 12 | server.key master | `/opt/velox/certs/master/server.key` | PEM | gRPC/REST TLS | chiave privata | alta |
 | 13 | chiave privata SSH operatore | `~/.ssh/velox` | chiave ed25519/rsa | accesso nodi | chiave privata SSH | alta |

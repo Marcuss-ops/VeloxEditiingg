@@ -28,26 +28,34 @@ root CA (offline, 5-10 anni)
 
 ## 2. Directory layout
 
+The OpenBao worker flow does not keep worker leaf material on the master.
+OpenBao stores the PKI issuer and role configuration; each worker owns its
+private key and its local runtime bundle:
+
 ```
 /opt/velox/certs/
 ├── root-ca/
-│   ├── ca.crt              # Root CA certificate (committed to deploy repo)
+│   ├── ca.crt              # Root CA certificate (public trust material)
 │   └── ca.key              # NEVER committed — air-gapped device only
 ├── intermediate/
-│   ├── ca.crt              # Intermediate CA cert (committed)
-│   ├── ca.key              # Encrypted at rest (ansible-vault or similar)
+│   ├── ca.crt              # Intermediate CA certificate/public chain
+│   ├── ca.key              # Encrypted at rest; never a worker key
 │   ├── ca.srl              # Serial number counter
 │   └── index.txt           # Issued certificate log
-├── master/
-│   ├── server.crt          # Master's server cert (current)
-│   ├── server.key          # Master's private key
-│   ├── server-next.crt     # Next cert during rotation overlap
-│   └── server-next.key
-└── workers/
-    ├── worker-<id>.crt     # Worker leaf cert
-    ├── worker-<id>.key
-    └── revoked/            # Revoked certificates (CRL-equivalent)
+└── master/
+    ├── server.crt          # Master's server cert (current)
+    └── server.key          # Master's private key
+
+# On each worker; the key never leaves this host:
+/etc/velox-worker/certs/current/
+├── worker.key              # Generated locally; never sent to OpenBao
+├── worker.crt              # Returned by OpenBao after CSR signing
+└── ca.crt                  # Returned trust chain/issuing CA
 ```
+
+The canonical OpenBao paths are `velox/production/workers/<worker-id>/credential`
+in KV and `pki/sign/worker-<worker-id>` in PKI. No worker `worker.key`,
+`worker.crt`, `ca.crt`, or PEM bundle is stored in the KV engine.
 
 ## 3. Generazione iniziale
 
@@ -90,19 +98,37 @@ root CA (offline, 5-10 anni)
   --intermediate-dir /opt/velox/certs/intermediate
 ```
 
-### 3.4 Worker leaf certificates
+> **OpenBao workers — mandatory rule.** Do not execute the legacy master-side
+> worker certificate generation or Ansible/scp distribution snippets below for
+> a worker enrolled in OpenBao. The canonical flow generates `worker.key` on
+> the worker and sends only a CSR to OpenBao PKI; the private key never leaves
+> the worker and no worker PEM is stored in KV.
+
+### 3.4 Worker leaf certificates — canonical OpenBao flow
+
+The worker generates its private key locally and sends only a CSR to its
+per-worker OpenBao PKI role. The operator does not generate or copy
+`worker.key` from the master.
 
 ```bash
-# Uno per worker. CN DEVE corrispondere al worker_id.
-./scripts/gen-production-pki.sh worker \
-  --out-dir /opt/velox/certs/workers \
-  --cn "worker-01" \
-  --days 14 \
-  --intermediate-dir /opt/velox/certs/intermediate
+# On the OpenBao operator/admin side: configure only the PKI role and issuer.
+./deploy/openbao/scripts/provision-pki.sh --worker <worker-id>
+
+# On the worker, after AppRole files and OpenBao CA are installed:
+sudo /opt/velox-worker/openbao-fetch-worker-secrets.sh --provision
+sudo /opt/velox-worker/openbao-fetch-worker-secrets.sh --check
 ```
 
-**Distribuzione:** il triplet `worker-<id>.crt` + `worker-<id>.key` + `intermediate/ca.crt`
-va copiato sul worker via Ansible (`deploy/playbooks/deploy-worker-certs.yml`).
+The resolver generates `/etc/velox-worker/certs/current/worker.key` locally,
+submits the CSR to `pki/sign/worker-<worker-id>`, validates the returned
+certificate/CA chain, and switches the complete bundle atomically. Only the
+public CSR and the resulting signed chain cross the OpenBao boundary; the
+private key is never sent, stored, or provisioned through KV.
+
+> The older `gen-production-pki.sh worker` plus Ansible/scp distribution flow
+> is retained only as a legacy reference for non-OpenBao environments. It must
+> not be used for workers enrolled in the canonical OpenBao PKI flow, and it
+> must never be mixed with the OpenBao AppRole/CSR flow for the same worker.
 
 ## 4. Rotazione automatizzata
 
@@ -303,22 +329,20 @@ openssl ca -revoke /opt/velox/certs/intermediate/ca.crt \
 
 **Sintomi:** un worker non si connette. Log worker: `certificate has expired` / `handshake failure`.
 
-**Procedura:**
-1. Genera nuovo certificato per quel worker sul master:
+**Procedura OpenBao:**
+1. Verifica il tunnel e l'issuer/ruolo PKI per quel worker.
+2. Sul worker esegui il rinnovo locale:
    ```bash
-   ./scripts/gen-production-pki.sh worker \
-     --out-dir /opt/velox/certs/workers \
-     --cn "worker-05" --days 14 \
-     --intermediate-dir /opt/velox/certs/intermediate
+   sudo systemctl start velox-worker-mtls-renew.service
+   sudo /opt/velox-worker/openbao-fetch-worker-secrets.sh --check
    ```
-2. Copia il triplet sul worker:
-   ```bash
-   scp /opt/velox/certs/workers/worker-05.{crt,key} \
-       /opt/velox/certs/intermediate/ca.crt \
-       worker-05:/opt/velox/certs/
-   ```
-3. Il worker carica automaticamente i nuovi cert al prossimo tentativo di connessione (nessun restart).
-4. Verifica: `curl -s http://master:8000/api/v1/workers | grep worker-05`
+3. Il resolver genera una nuova chiave sul worker, invia solo il CSR,
+   valida il certificato e cambia il bundle atomico; non copiare `worker.key`
+   dal master e non scrivere PEM nel KV.
+4. Verifica: `curl -s http://master:8000/api/v1/workers | grep <worker-id>`
+
+Per ambienti non migrati a OpenBao, la procedura legacy può restare in vigore,
+ma non deve essere mescolata con il flusso PKI canonico dello stesso worker.
 
 ### Scenario: chiave privata worker leaked
 

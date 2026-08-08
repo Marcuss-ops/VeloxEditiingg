@@ -111,7 +111,8 @@ fi
 for worker in "${WORKERS[@]}"; do
     [[ "$worker" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]] || { echo "FATAL: invalid worker id: $worker" >&2; exit 1; }
     role="${ROLE_PREFIX}${worker}"
-    echo "[pki] role $role (CN=$worker, ttl=$DEFAULT_TTL max=$MAX_TTL)"
+    spiffe_uri="spiffe://velox/worker/$worker"
+    echo "[pki] role $role (CN=$worker, URI SAN=$spiffe_uri, ttl=$DEFAULT_TTL max=$MAX_TTL)"
     if [[ "$DRY_RUN" == "1" ]]; then continue; fi
     # The role is CSR-signing only: OpenBao signs the public key in the CSR;
     # no issue endpoint and no generated private key are used.
@@ -122,14 +123,31 @@ for worker in "${WORKERS[@]}"; do
         enforce_hostnames=false \
         require_cn=true \
         use_csr_common_name=true \
-        use_csr_sans=false \
+        use_csr_sans=true \
+        allowed_uri_sans="$spiffe_uri" \
         key_usage="Digital Signature,Key Encipherment" \
         ext_key_usage="ClientAuth" \
         ttl="$DEFAULT_TTL" \
         max_ttl="$MAX_TTL" \
         >/dev/null
-    # A read-back proves the role exists before the worker rollout proceeds.
-    bao read "$MOUNT/roles/$role" >/dev/null
+    # Read back the complete role contract before rollout. This prevents a
+    # partially configured role (or a server-side normalization surprise) from
+    # silently issuing a certificate for the wrong worker identity.
+    role_json="$(bao read -format=json "$MOUNT/roles/$role")" || {
+        echo "FATAL: cannot read back PKI role $role" >&2
+        exit 1
+    }
+    jq -e --arg worker "$worker" --arg uri "$spiffe_uri" \
+        '.data.allowed_domains == [$worker]' <<<"$role_json" >/dev/null || {
+        echo "FATAL: PKI role $role allowed_domains is not exactly [$worker]" >&2
+        exit 1
+    }
+    jq -e --arg uri "$spiffe_uri" \
+        '.data.allowed_uri_sans == [$uri] and .data.use_csr_sans == true and .data.use_csr_common_name == true' \
+        <<<"$role_json" >/dev/null || {
+        echo "FATAL: PKI role $role identity constraints are not exact (allowed_uri_sans/use_csr_*)" >&2
+        exit 1
+    }
  done
 
 echo "[pki] done: mount=$MOUNT workers=${#WORKERS[@]}"

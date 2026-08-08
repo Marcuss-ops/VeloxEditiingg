@@ -274,7 +274,7 @@ verify_worker() {
   # Refresh material first so the check compares the runtime cache against
   # OpenBao's normalized value rather than a legacy file that may end in LF.
   local fetch_command
-  fetch_command="sudo -n sh -c 'set -a; . /etc/velox-worker/worker.env; set +a; exec /opt/velox-worker/openbao-fetch-worker-secrets.sh'"
+  fetch_command="sudo -n sh -c 'set -a; . /etc/velox-worker/worker.env; set +a; exec /opt/velox-worker/openbao-fetch-worker-secrets.sh --provision'"
   local check_command
   check_command="sudo -n sh -c 'set -a; . /etc/velox-worker/worker.env; set +a; exec /opt/velox-worker/openbao-fetch-worker-secrets.sh --check'"
   if ssh -o BatchMode=yes -o ConnectTimeout=10 -o ConnectionAttempts=1 \

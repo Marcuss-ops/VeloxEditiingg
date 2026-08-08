@@ -8,6 +8,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FETCH="$ROOT/deploy/runtime/openbao-fetch-worker-secrets.sh"
 PREPARE="$ROOT/deploy/runtime/prepare-host.sh"
 PKI_PROVISION="$ROOT/deploy/openbao/scripts/provision-pki.sh"
+KV_PROVISION="$ROOT/deploy/openbao/scripts/provision-kv.sh"
+WORKER_POLICY="$ROOT/deploy/openbao/policies/worker.hcl.tmpl"
+OPERATOR_BOOTSTRAP="$ROOT/scripts/operator/provision-worker-openbao.sh"
 TMP="$(mktemp -d)"
 MOCK_PID=""
 PORT=$((20000 + RANDOM % 20000))
@@ -22,18 +25,58 @@ pass() { printf 'openbao-worker-secrets: %s\n' "$*"; }
 cleanup() { [[ -z "$MOCK_PID" ]] || kill "$MOCK_PID" 2>/dev/null || true; rm -rf "$TMP"; }
 trap cleanup EXIT
 
-bash -n "$FETCH" "$PREPARE" "$PKI_PROVISION"
-if command -v shellcheck >/dev/null 2>&1; then shellcheck -x "$FETCH" "$PKI_PROVISION"; fi
+bash -n "$FETCH" "$PREPARE" "$PKI_PROVISION" "$KV_PROVISION" "$OPERATOR_BOOTSTRAP"
+if command -v shellcheck >/dev/null 2>&1; then
+    shellcheck -x "$FETCH" "$PKI_PROVISION" "$KV_PROVISION" "$OPERATOR_BOOTSTRAP" ||
+        fail 'shellcheck failed'
+fi
 command -v openssl >/dev/null 2>&1 || fail 'openssl is required for the CSR test'
-pass 'syntax OK (bash -n, shellcheck)'
 
-# Non-configured hosts keep the explicit pre-migration behavior.
+# Static contract: worker mTLS is PKI/CSR material, never a KV leaf. Keep this
+# assertion close to the live mock so a future operator or policy change cannot
+# silently reintroduce worker.key/cert/CA storage in OpenBao KV.
+grep -q 'worker.key never enters the request body or KV' "$FETCH" \
+    || fail 'resolver does not document the local-key/no-KV contract'
+grep -q 'path "velox/data/production/workers/{{ WORKER_ID }}/credential"' "$WORKER_POLICY" \
+    || fail 'worker policy does not expose only its credential KV path'
+grep -q 'pki/sign/worker-{{ WORKER_ID }}' "$WORKER_POLICY" \
+    || fail 'worker policy does not expose its dedicated PKI sign path'
+grep -Fq "allowed_uri_sans=\"\$spiffe_uri\"" "$PKI_PROVISION" \
+    || fail 'PKI provisioning does not constrain the per-worker SPIFFE URI'
+grep -q 'use_csr_sans=true' "$PKI_PROVISION" \
+    || fail 'PKI provisioning does not preserve the CSR URI SAN'
+grep -q 'path "pki/issue/worker-{{ WORKER_ID }}"' "$WORKER_POLICY" \
+    || fail 'worker policy does not explicitly deny the issue path'
+policy_a="$TMP/worker-a.hcl"
+sed 's/{{ WORKER_ID }}/worker-a/g' "$WORKER_POLICY" > "$policy_a"
+grep -q 'velox/data/production/workers/worker-a/credential' "$policy_a" \
+    || fail 'worker-a policy lost its own credential path'
+grep -q 'pki/sign/worker-worker-a' "$policy_a" \
+    || fail 'worker-a policy lost its own PKI role'
+if grep -q 'worker-b' "$policy_a"; then
+    fail 'worker-a policy contains a cross-worker identity'
+fi
+if grep -Eq 'cert/(cert|key|ca)|OPENBAO_VALUE_WORKER_(CERT|KEY|CA)|/etc/velox-worker/certs/(worker\.crt|worker\.key|ca\.crt)' \
+    "$KV_PROVISION" "$OPERATOR_BOOTSTRAP"; then
+    fail 'worker mTLS certificate/key/CA import contract was reintroduced'
+fi
+pass 'syntax + PKI local-key/no-KV contract OK (bash -n, shellcheck, static)'
+
+# Deploy operations are strict: no OpenBao address means no provisioning.
 env -i PATH="$PATH" HOME="$HOME" \
     VELOX_WORKER_SECRETS_DIR="$SECRETS_DIR" VELOX_WORKER_CERTS_DIR="$CERTS_DIR" \
-    VELOX_WORKER_ID=w1 bash "$FETCH" >/dev/null 2>&1 \
-    || fail 'without VELOX_OPENBAO_ADDR the resolver must exit 0'
-[[ ! -d "$CERTS_DIR" ]] || fail 'unconfigured resolver must not create runtime directories'
-pass 'unconfigured host → no writes'
+    VELOX_WORKER_ID=w1 bash "$FETCH" --provision >/dev/null 2>&1 \
+    && fail 'provisioning without VELOX_OPENBAO_ADDR unexpectedly succeeded'
+[[ ! -d "$CERTS_DIR" ]] || fail 'failed provisioning must not create runtime directories'
+pass 'provisioning without OpenBao → fail closed and no writes'
+
+# Cache mode is explicit and read-only; without an OpenBao provenance marker it
+# must reject even otherwise valid-looking local material.
+env -i PATH="$PATH" HOME="$HOME" \
+    VELOX_WORKER_SECRETS_DIR="$SECRETS_DIR" VELOX_WORKER_CERTS_DIR="$CERTS_DIR" \
+    VELOX_WORKER_ID=w1 bash "$FETCH" --runtime-cache >/dev/null 2>&1 \
+    && fail 'unattested runtime cache unexpectedly succeeded'
+pass 'unattested runtime cache → rejected'
 
 mkdir -p "$SECRETS_DIR" "$CERTS_DIR" "$CA_DIR"
 printf 'role-id' > "$SECRETS_DIR/role-id"
@@ -78,7 +121,9 @@ class H(http.server.BaseHTTPRequestHandler):
                 cert_file = os.path.join(d, 'worker.crt')
                 with open(csr_file, 'w') as f: f.write(csr)
                 ext_file = os.path.join(d, 'ext.cnf')
-                with open(ext_file, 'w') as f: f.write('basicConstraints=CA:FALSE\nextendedKeyUsage=clientAuth\nkeyUsage=digitalSignature,keyEncipherment\n')
+                identity = 'w1' if open(MODE_FILE).read().strip() != 'wrong-identity' else 'other-worker'
+                with open(ext_file, 'w') as f:
+                    f.write('basicConstraints=CA:FALSE\nextendedKeyUsage=clientAuth\nkeyUsage=digitalSignature,keyEncipherment\nsubjectAltName=URI:spiffe://velox/worker/' + identity + '\n')
                 p = subprocess.run(['openssl','x509','-req','-in',csr_file,'-CA',CA_CERT,'-CAkey',CA_KEY,'-CAcreateserial','-out',cert_file,'-days','20','-sha256','-extfile',ext_file], capture_output=True)
                 if p.returncode != 0: self._json(500, {'errors':['certificate signing failed']}); return
                 certificate = open(cert_file).read()
@@ -113,7 +158,7 @@ common_env=(
     IMAGE_UID="$(id -u)"
     IMAGE_GID="$(id -g)"
 )
-env -i PATH="$PATH" HOME="$HOME" "${common_env[@]}" bash "$FETCH" >/dev/null \
+env -i PATH="$PATH" HOME="$HOME" "${common_env[@]}" bash "$FETCH" --provision >/dev/null \
     || fail 'initial AppRole + KV + CSR flow failed'
 
 [[ "$(cat "$SECRETS_DIR/worker_credential")" == secret-cred-1 ]] || fail 'credential not resolved from KV'
@@ -123,18 +168,35 @@ env -i PATH="$PATH" HOME="$HOME" "${common_env[@]}" bash "$FETCH" >/dev/null \
 [[ "$(stat -c '%a' "$RUNTIME_CERTS_DIR/worker.crt")" == 644 ]] || fail 'worker.crt must be 0644'
 [[ "$(stat -c '%a' "$RUNTIME_CERTS_DIR/ca.crt")" == 644 ]] || fail 'ca.crt must be 0644'
 openssl verify -CAfile "$RUNTIME_CERTS_DIR/ca.crt" "$RUNTIME_CERTS_DIR/worker.crt" >/dev/null || fail 'issued cert does not verify'
-openssl x509 -in "$RUNTIME_CERTS_DIR/worker.crt" -noout -subject | grep -q 'CN *= *w1' || fail 'certificate identity is not w1'
+openssl x509 -in "$RUNTIME_CERTS_DIR/worker.crt" -noout -subject -nameopt RFC2253 |
+    sed 's/^subject=//' | tr ',' '\n' | grep -Fxq 'CN=w1' || fail 'certificate CN identity is not exact w1'
 python3 - "$TMP/request.json" <<'PY'
 import json, sys
 request = json.load(open(sys.argv[1]))
 assert request['common_name'] == 'w1'
+assert request['uri_sans'] == ['spiffe://velox/worker/w1']
 assert 'csr' in request and 'PRIVATE KEY' not in request['csr']
 PY
-pass 'local key + CSR signing OK; private key was not sent to OpenBao'
+san_output="$(openssl x509 -in "$RUNTIME_CERTS_DIR/worker.crt" -noout -ext subjectAltName |
+    tr -d '[:space:]')"
+[[ "$san_output" == *'URI:spiffe://velox/worker/w1'* ]] || fail 'certificate SPIFFE URI SAN is not exact'
+pass 'local key + CSR signing OK; exact CN + SPIFFE URI SAN; private key was not sent to OpenBao'
+
+# An attested runtime cache is the only allowed outage path. Remove the
+# AppRole inputs to prove this mode is offline/read-only and does not contact
+# OpenBao; provisioning and renewal remain strict modes.
+rm -f "$SECRETS_DIR/role-id" "$SECRETS_DIR/secret-id"
+env -i PATH="$PATH" HOME="$HOME" \
+    VELOX_WORKER_SECRETS_DIR="$SECRETS_DIR" VELOX_WORKER_CERTS_DIR="$CERTS_DIR" \
+    VELOX_WORKER_ID=w1 bash "$FETCH" --runtime-cache >/dev/null \
+    || fail 'attested runtime cache failed during simulated outage'
+pass 'attested runtime cache works without OpenBao/AppRole inputs'
+printf 'role-id' > "$SECRETS_DIR/role-id"
+printf 'valid-secret-id' > "$SECRETS_DIR/secret-id"
 
 key_hash_1="$(sha256sum "$RUNTIME_CERTS_DIR/worker.key" | awk '{print $1}')"
 # Valid cache is not re-signed.
-env -i PATH="$PATH" HOME="$HOME" "${common_env[@]}" bash "$FETCH" >/dev/null || fail 'cache-hit run failed'
+env -i PATH="$PATH" HOME="$HOME" "${common_env[@]}" bash "$FETCH" --provision >/dev/null || fail 'cache-hit run failed'
 key_hash_2="$(sha256sum "$RUNTIME_CERTS_DIR/worker.key" | awk '{print $1}')"
 [[ "$key_hash_1" == "$key_hash_2" ]] || fail 'valid cache unexpectedly rotated'
 pass 'valid mTLS cache is reused'
@@ -144,6 +206,15 @@ env -i PATH="$PATH" HOME="$HOME" "${common_env[@]}" bash "$FETCH" --renew >/dev/
 key_hash_3="$(sha256sum "$RUNTIME_CERTS_DIR/worker.key" | awk '{print $1}')"
 [[ "$key_hash_3" != "$key_hash_2" ]] || fail 'renewal did not generate a fresh local key'
 pass 'forced renewal rotates the local key and certificate'
+
+# A certificate for another worker must be rejected, preserving the valid bundle.
+crt_hash="$(sha256sum "$RUNTIME_CERTS_DIR/worker.crt" | awk '{print $1}')"
+key_hash="$(sha256sum "$RUNTIME_CERTS_DIR/worker.key" | awk '{print $1}')"
+printf 'wrong-identity' > "$MODE_FILE"
+if env -i PATH="$PATH" HOME="$HOME" "${common_env[@]}" bash "$FETCH" --renew >/dev/null 2>&1; then fail 'mismatched worker identity unexpectedly succeeded'; fi
+[[ "$crt_hash" == "$(sha256sum "$RUNTIME_CERTS_DIR/worker.crt" | awk '{print $1}')" ]] || fail 'identity mismatch changed worker.crt'
+[[ "$key_hash" == "$(sha256sum "$RUNTIME_CERTS_DIR/worker.key" | awk '{print $1}')" ]] || fail 'identity mismatch changed worker.key'
+pass 'mismatched SPIFFE identity is rejected and previous bundle is preserved'
 
 # A failed renewal must not destroy the previously valid bundle.
 crt_hash="$(sha256sum "$RUNTIME_CERTS_DIR/worker.crt" | awk '{print $1}')"

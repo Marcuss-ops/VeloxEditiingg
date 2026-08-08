@@ -15,7 +15,7 @@ worker-image.yml` (which builds and publishes the worker image).
 | `migrate-legacy-worker.sh` | One-time, idempotent migration of per-host units, containers, env files, and persistent state. |
 | `compose.chronon.yml` | Configuration reference for Chronon settings consumed by the canonical Compose service; startup remains owned by `velox-worker.service`. |
 | `worker.env.example` | Template for `/etc/velox-worker/worker.env`, the only runtime env path. |
-| `openbao-fetch-worker-secrets.sh` | OpenBao resolver: reads only `worker_credential` from KV, generates the mTLS private key locally, submits a CSR to the per-worker PKI role, and atomically materializes the signed certificate/CA. Configured production hosts fail closed instead of using hand-copied mTLS files. |
+| `openbao-fetch-worker-secrets.sh` | Explicit OpenBao resolver modes: `--provision`, `--renew`, `--check`, and read-only `--runtime-cache` for an attested bundle during a temporary outage. Manual files are never accepted as cache. |
 | `prepare-host.sh` | Idempotent migration + setup + digest pull + systemd convergence. Runs the OpenBao resolver when `VELOX_OPENBAO_ADDR` is set. |
 
 ## First-time setup on a fresh worker host
@@ -41,17 +41,21 @@ sudo install -m 0644 openbao-ca.crt /etc/velox-worker/certs/openbao-ca.crt
 
 # 3b. OpenBao PKI enrollment (AppRole per-worker): the resolver generates
 # worker.key locally, sends only a CSR to pki/sign/worker-<worker-id>, validates
-# the returned chain, and atomically materializes worker.crt/worker.key/ca.crt.
+# the returned chain, and atomically selects a complete
+# worker.crt/worker.key/ca.crt bundle under /etc/velox-worker/certs/current.
 # Set VELOX_OPENBAO_ADDR in /etc/velox-worker/worker.env:
 # VELOX_OPENBAO_ADDR=https://127.0.0.1:8200   (loopback/tunnel verso il master)
 # VELOX_OPENBAO_CA_FILE=/etc/velox-worker/certs/openbao-ca.crt
 # Il certificato pubblico server.crt deve essere distribuito insieme al
 # materiale AppRole; senza CA il resolver fallisce chiuso (mai -k).
-# prepare-host.sh invokes the resolver and enables the daily renewal timer;
+# prepare-host.sh invokes `--provision` and enables the daily renewal timer;
 # configured production hosts do not fall back to manually copied cert/key files.
-# The resolver writes
-# .openbao-pki-issued only after successful CSR enrollment; --check rejects
-# bundles that lack this provenance marker.
+# The resolver writes `.openbao-pki-issued` and
+# `.openbao-credential-issued` only after OpenBao-authoritative materialization.
+# `--runtime-cache` is the only outage path and is read-only; it rejects any
+# bundle or credential without both provenance markers. `--check` still
+# contacts OpenBao and verifies remote/local coherence. No PEM or private key
+# is stored in the OpenBao KV engine.
 
 # 4. On a legacy host, migrate once before the first canonical start:
 sudo deploy/runtime/migrate-legacy-worker.sh

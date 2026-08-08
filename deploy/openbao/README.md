@@ -330,15 +330,18 @@ OPENBAO_PKI_INTERMEDIATE_KEY=/secure/velox/intermediate.key \
 Il primo provisioning importa (solo se il mount non ha già un issuer) l’intermediate
 approvato in `pki/config/ca`; la Root CA resta offline e le variabili di import
 sono lette da file protetti, mai dal repository. Per ogni worker viene configurato
-`pki/roles/worker-<worker-id>` con CN esatto,
+`pki/roles/worker-<worker-id>` con CN esatto, `allowed_uri_sans` limitato a
+`spiffe://velox/worker/<worker-id>`, `use_csr_sans=true`,
 TTL e max TTL limitati, EKU `ClientAuth` e policy AppRole che consente solo
 `pki/sign/worker-<worker-id>`. Il worker esegue il resolver canonico:
 
 1. login AppRole e lettura della sola `worker_credential` da KV;
 2. generazione locale di una nuova chiave EC P-256;
-3. creazione CSR con CN uguale a `VELOX_WORKER_ID`;
-4. POST del solo CSR a `pki/sign/worker-<worker-id>`;
-5. validazione CN, corrispondenza chiave/certificato e catena CA;
+3. creazione CSR con CN uguale a `VELOX_WORKER_ID` e URI SAN esatto
+   `spiffe://velox/worker/<worker-id>`;
+4. POST del solo CSR a `pki/sign/worker-<worker-id>`; il ruolo accetta
+   esclusivamente quell'URI SAN e la policy non consente ruoli di altri worker;
+5. validazione CN **e** URI SAN SPIFFE, corrispondenza chiave/certificato e catena CA;
 6. promozione del bundle tramite staging/rollback guard.
 
 `worker.key` non viene mai scritto in KV, incluso il provisioning legacy. Un
@@ -426,8 +429,10 @@ distrugge i dati).
    firma operatore a TTL breve (§11 + `docs/openbao-ssh-ca.md`); da completare
    con la dismissione delle `authorized_keys` statiche una volta che tutti gli
    operatori usano i cert.
-7. PKI mTLS (leaf per-worker dal secrets engine `pki`), credenziali DB
-   dinamiche, `SecretResolver` in Go.
+7. Credenziali DB dinamiche e `SecretResolver` in Go. Il PKI mTLS
+   per-worker è già operativo: la chiave nasce localmente, il worker invia il
+   CSR a `pki/sign/worker-<id>`, riceve certificato/CA e nessun PEM o private key
+   viene scritto nel KV.
 
 ## 16. Riferimenti
 

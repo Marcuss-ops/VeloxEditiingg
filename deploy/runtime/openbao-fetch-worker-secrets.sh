@@ -28,15 +28,16 @@
 #   VELOX_MTLS_RENEW_BEFORE_SECONDS    default 604800 (7 days)
 #   VELOX_MTLS_FORCE_RENEW             set to 1 to rotate immediately
 #
-# Flags:
-#   --check     authenticate, verify KV credential coherence and validate the
-#               local certificate/key/cache; never writes or renews
-#   --renew     force a renewal (same as VELOX_MTLS_FORCE_RENEW=1)
+# Flags (exactly one is required):
+#   --provision       require OpenBao and materialize credential/PKI data
+#   --renew           require OpenBao and force a new local key/certificate
+#   --check           require OpenBao and verify remote/local coherence
+#   --runtime-cache   use only already-attested runtime material during an
+#                     explicitly declared temporary OpenBao outage; no network
+#                     access, provisioning, or renewal is attempted
 #
-# Exit 0 means OpenBao was authoritative and the runtime material is valid (or
-# the host is explicitly not migrated and legacy files remain in use). Exit 1
-# means a configured OpenBao operation failed; callers must fail closed during
-# deploy/renewal rather than silently copying a manual secret.
+# Deploy/provision/renew/check fail closed when OpenBao is not configured.
+# Manually copied files are never accepted as runtime cache material.
 
 set -euo pipefail
 
@@ -55,15 +56,31 @@ PKI_MOUNT="${VELOX_OPENBAO_PKI_MOUNT:-pki}"
 RENEW_BEFORE_SECONDS="${VELOX_MTLS_RENEW_BEFORE_SECONDS:-604800}"
 CHECK=0
 FORCE_RENEW="${VELOX_MTLS_FORCE_RENEW:-0}"
+MODE=""
+
+select_mode() {
+    [[ -z "$MODE" ]] || {
+        echo "exactly one operation mode is required" >&2
+        exit 2
+    }
+    MODE="$1"
+}
 
 for arg in "$@"; do
     case "$arg" in
-        --check) CHECK=1 ;;
-        --renew) FORCE_RENEW=1 ;;
+        --provision) select_mode provision ;;
+        --runtime-cache) select_mode cache ;;
+        --check) CHECK=1; select_mode check ;;
+        --renew) FORCE_RENEW=1; select_mode renew ;;
         -h|--help) sed -n '2,47p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
 done
+
+[[ -n "$MODE" ]] || {
+    echo "usage: $0 --provision | --renew | --check | --runtime-cache" >&2
+    exit 2
+}
 
 log() { printf '[openbao-fetch] %s\n' "$*"; }
 fail() { printf '[openbao-fetch] FATAL: %s\n' "$*" >&2; exit 1; }
@@ -73,31 +90,28 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# A missing address retains the pre-migration contract for hosts that have not
-# opted into OpenBao yet. Once VELOX_OPENBAO_ADDR is set, every operation below
-# is fail-closed: there is no manual-file fallback.
-if [[ -z "${VELOX_OPENBAO_ADDR:-}" ]]; then
-    if [[ "$CHECK" == "1" ]]; then
-        fail "VELOX_OPENBAO_ADDR non impostato — impossibile certificare OpenBao"
-    fi
-    log "VELOX_OPENBAO_ADDR non impostato — host non migrato; si conservano i file runtime esistenti"
-    exit 0
-fi
-
-command -v curl >/dev/null 2>&1 || fail "curl not found on PATH"
-command -v jq >/dev/null 2>&1 || fail "jq not found on PATH"
 command -v openssl >/dev/null 2>&1 || fail "openssl not found on PATH"
+command -v sha256sum >/dev/null 2>&1 || fail "sha256sum not found on PATH"
 
-ADDR="${VELOX_OPENBAO_ADDR%/}"
+ADDR="${VELOX_OPENBAO_ADDR:-}"
+ADDR="${ADDR%/}"
 WORKER_ID="${VELOX_WORKER_ID:-}"
 [[ "$WORKER_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]] \
     || fail "VELOX_WORKER_ID mancante o non valido"
 [[ "$RENEW_BEFORE_SECONDS" =~ ^[0-9]+$ ]] \
     || fail "VELOX_MTLS_RENEW_BEFORE_SECONDS deve essere un intero non negativo"
-[[ -f "$ROLE_ID_FILE" && -s "$ROLE_ID_FILE" ]] || fail "role-id mancante: $ROLE_ID_FILE"
-[[ -f "$SECRET_ID_FILE" && -s "$SECRET_ID_FILE" ]] || fail "secret-id mancante: $SECRET_ID_FILE"
 
-if [[ "$ADDR" == https://* ]]; then
+if [[ "$MODE" != "cache" ]]; then
+    command -v curl >/dev/null 2>&1 || fail "curl not found on PATH"
+    command -v jq >/dev/null 2>&1 || fail "jq not found on PATH"
+    [[ -n "$ADDR" ]] || fail "VELOX_OPENBAO_ADDR obbligatorio per $MODE — nessun fallback a file locali"
+    [[ -f "$ROLE_ID_FILE" && -s "$ROLE_ID_FILE" ]] || fail "role-id mancante: $ROLE_ID_FILE"
+    [[ -f "$SECRET_ID_FILE" && -s "$SECRET_ID_FILE" ]] || fail "secret-id mancante: $SECRET_ID_FILE"
+fi
+
+if [[ "$MODE" == "cache" ]]; then
+    CURL_TLS=()
+elif [[ "$ADDR" == https://* ]]; then
     [[ -n "${VELOX_OPENBAO_CA_FILE:-}" && -s "$VELOX_OPENBAO_CA_FILE" ]] ||
         fail "VELOX_OPENBAO_CA_FILE mancante o vuoto — TLS verification obbligatoria"
     CURL_TLS=(--cacert "$VELOX_OPENBAO_CA_FILE")
@@ -107,21 +121,23 @@ else
     fail "VELOX_OPENBAO_ADDR must use https:// (HTTP is test-only and requires VELOX_OPENBAO_ALLOW_INSECURE_HTTP_TEST=1)"
 fi
 
-# Serialize renewal/fetches for one host. mkdir is atomic and does not expose
-# secret material. A stale lock can only be cleared explicitly by the operator;
-# silently deleting it could allow two renewal writers to race.
-LOCK_DIR="$CERTS_ROOT/.openbao-fetch.lock"
-mkdir -p "$CERTS_ROOT"
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    fail "another OpenBao fetch/renewal is already running: $LOCK_DIR"
-fi
-chmod 0700 "$LOCK_DIR"
-
+# Cache mode is intentionally read-only and does not create a lock or runtime
+# directories. It is an explicit outage procedure, never an implicit fallback.
+# Both provenance markers are written only after OpenBao-authoritative material
+# has been validated/materialized by this script.
 KV_ROOT="velox/data/production/workers/$WORKER_ID"
 CERT_FILE="$CERTS_DIR/worker.crt"
 KEY_FILE="$CERTS_DIR/worker.key"
 CA_FILE="$CERTS_DIR/ca.crt"
 ISSUED_MARKER="$CERTS_DIR/.openbao-pki-issued"
+CREDENTIAL_MARKER="$SECRETS_DIR/.openbao-credential-issued"
+
+sha_file() { sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
+
+credential_cache_ready() {
+    [[ -s "$SECRETS_DIR/worker_credential" && -s "$CREDENTIAL_MARKER" ]] || return 1
+    [[ "$(sha_file "$SECRETS_DIR/worker_credential")" == "$(cat "$CREDENTIAL_MARKER")" ]]
+}
 
 login_token() {
     jq -n --arg r "$(cat "$ROLE_ID_FILE")" --arg s "$(cat "$SECRET_ID_FILE")" \
@@ -162,13 +178,21 @@ write_atomic() {
     return 0
 }
 
-sha_file() { sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
-
 certificate_matches_key() {
     local cert="$1" key="$2" cert_pub key_pub
     cert_pub="$(openssl x509 -in "$cert" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | sha256sum | awk '{print $1}')" || return 1
     key_pub="$(openssl pkey -in "$key" -pubout -outform DER 2>/dev/null | sha256sum | awk '{print $1}')" || return 1
     [[ -n "$cert_pub" && "$cert_pub" == "$key_pub" ]]
+}
+
+certificate_identity_matches_worker() {
+    local cert="$1" expected_uri="spiffe://velox/worker/$WORKER_ID" cn
+    cn="$(openssl x509 -in "$cert" -noout -subject -nameopt RFC2253 2>/dev/null |
+        sed 's/^subject=//' | tr ',' '\n' | sed -n 's/^CN=//p' | head -n 1)" || return 1
+    [[ "$cn" == "$WORKER_ID" ]] || return 1
+    openssl x509 -in "$cert" -noout -ext subjectAltName 2>/dev/null |
+        tr ',' '\n' | sed 's/^[[:space:]]*//' |
+        grep -Fxq "URI:$expected_uri"
 }
 
 local_certificate_ready() {
@@ -180,10 +204,25 @@ local_certificate_ready() {
     openssl x509 -in "$CERT_FILE" -noout -checkend "$RENEW_BEFORE_SECONDS" >/dev/null 2>&1 || return 1
     openssl verify -CAfile "$CA_FILE" "$CERT_FILE" >/dev/null 2>&1 || return 1
     certificate_matches_key "$CERT_FILE" "$KEY_FILE" || return 1
-    openssl x509 -in "$CERT_FILE" -noout -subject 2>/dev/null |
-        grep -Eq "CN[[:space:]]*=[[:space:]]*$WORKER_ID([,/]|$)" || return 1
+    certificate_identity_matches_worker "$CERT_FILE" || return 1
     return 0
 }
+
+if [[ "$MODE" == "cache" ]]; then
+    credential_cache_ready || fail "credential cache assente o senza attestazione OpenBao"
+    local_certificate_ready || fail "mTLS cache assente, manuale, non valida o scaduta"
+    log "runtime-cache: OK — uso esclusivo di materiale già attestato da OpenBao durante outage"
+    exit 0
+fi
+
+# Serialize provisioning/renewal for one host. mkdir is atomic and does not
+# expose secret material. Cache mode never reaches this path.
+LOCK_DIR="$CERTS_ROOT/.openbao-fetch.lock"
+mkdir -p "$CERTS_ROOT"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    fail "another OpenBao fetch/renewal is already running: $LOCK_DIR"
+fi
+chmod 0700 "$LOCK_DIR"
 
 # ── 1. Authenticate and resolve the only KV value still needed ───────────────
 log "login AppRole verso $ADDR ..."
@@ -193,6 +232,7 @@ TOKEN="$(login_token)" || fail "login AppRole fallito verso $ADDR"
 CRED="$(kv_read credential)" || fail "workers/$WORKER_ID/credential non leggibile da OpenBao"
 
 if [[ "$CHECK" == "1" ]]; then
+    credential_cache_ready || fail "credential locale priva di attestazione OpenBao"
     local_cred_sha="$(sha_file "$SECRETS_DIR/worker_credential")"
     remote_cred_sha="$(printf '%s' "$CRED" | sha256sum | awk '{print $1}')"
     [[ -n "$local_cred_sha" && "$local_cred_sha" == "$remote_cred_sha" ]] ||
@@ -207,12 +247,18 @@ if [[ $EUID -eq 0 ]]; then
     chown "root:$IMAGE_GID" "$SECRETS_DIR" "$CERTS_ROOT" || fail "cannot set runtime directory ownership"
     chmod 0750 "$SECRETS_DIR" "$CERTS_ROOT" || fail "cannot set runtime directory mode"
 fi
-write_atomic "$SECRETS_DIR/worker_credential" "$CRED" 0600 "$IMAGE_UID" || fail "cannot materialize worker credential safely"
-log "scritto worker_credential (sha256 $(sha256sum "$SECRETS_DIR/worker_credential" | awk '{print substr($1,1,12)}')...)"
+materialize_credential() {
+    write_atomic "$SECRETS_DIR/worker_credential" "$CRED" 0600 "$IMAGE_UID" ||
+        fail "cannot materialize worker credential safely"
+    write_atomic "$CREDENTIAL_MARKER" "$(sha_file "$SECRETS_DIR/worker_credential")" 0644 root ||
+        fail "cannot materialize OpenBao credential provenance marker"
+    log "scritto worker_credential (sha256 $(sha256sum "$SECRETS_DIR/worker_credential" | awk '{print substr($1,1,12)}')...)"
+}
 
 # A valid pair is a cache hit. OpenBao was still contacted above, so deploy
 # and renewal cannot silently proceed with an unverified authority.
-if [[ "$FORCE_RENEW" != "1" ]] && local_certificate_ready; then
+if [[ "$MODE" == "provision" && "$FORCE_RENEW" != "1" ]] && local_certificate_ready; then
+    materialize_credential
     log "mTLS cache valida oltre la renewal window — nessuna nuova chiave/CSR necessaria"
     exit 0
 fi
@@ -225,6 +271,8 @@ STAGED_CSR="$WORK_DIR/worker.csr"
 STAGED_CERT="$WORK_DIR/worker.crt"
 STAGED_CA="$WORK_DIR/ca.crt"
 PKI_ROLE="${VELOX_OPENBAO_PKI_ROLE:-worker-$WORKER_ID}"
+[[ "$PKI_ROLE" == "worker-$WORKER_ID" ]] ||
+    fail "VELOX_OPENBAO_PKI_ROLE must be worker-$WORKER_ID; cross-worker role override is forbidden"
 PKI_TTL="${VELOX_OPENBAO_PKI_TTL:-168h}"
 
 # Generate the private key only on this worker. The CSR is the sole key-related
@@ -233,14 +281,16 @@ log "generazione locale della nuova private key e CSR per $WORKER_ID"
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$STAGED_KEY" 2>/dev/null
 chmod 0600 "$STAGED_KEY"
 openssl req -new -sha256 -key "$STAGED_KEY" -subj "/CN=$WORKER_ID/O=Velox/OU=Worker" \
+    -addext "subjectAltName=URI:spiffe://velox/worker/$WORKER_ID" \
     -out "$STAGED_CSR" 2>/dev/null
 chmod 0600 "$STAGED_CSR"
 CSR="$(cat "$STAGED_CSR")"
 
 # OpenBao PKI CSR signing. The role/policy are per-worker and must reject a
 # CSR whose identity does not equal this worker ID.
-REQUEST="$(jq -n --arg csr "$CSR" --arg cn "$WORKER_ID" --arg ttl "$PKI_TTL" \
-    '{csr:$csr, common_name:$cn, ttl:$ttl, format:"pem"}')"
+SPIFFE_URI="spiffe://velox/worker/$WORKER_ID"
+REQUEST="$(jq -n --arg csr "$CSR" --arg cn "$WORKER_ID" --arg uri "$SPIFFE_URI" --arg ttl "$PKI_TTL" \
+    '{csr:$csr, common_name:$cn, uri_sans:[$uri], ttl:$ttl, format:"pem"}')"
 RESPONSE_FILE="$WORK_DIR/sign-response.json"
 HTTP_CODE="$(curl -sS "${CURL_TLS[@]}" -o "$RESPONSE_FILE" -w '%{http_code}' \
     -X POST -H "X-Vault-Token: $TOKEN" -H 'Content-Type: application/json' \
@@ -271,9 +321,8 @@ fi
 openssl x509 -in "$STAGED_CERT" -noout -checkend 1 >/dev/null 2>&1 || fail "certificato PKI già scaduto o non valido"
 openssl verify -CAfile "$STAGED_CA" "$STAGED_CERT" >/dev/null 2>&1 || fail "catena PKI non verificabile con ca_chain"
 certificate_matches_key "$STAGED_CERT" "$STAGED_KEY" || fail "certificato PKI non corrisponde alla private key locale"
-openssl x509 -in "$STAGED_CERT" -noout -subject 2>/dev/null |
-    grep -Eq "CN[[:space:]]*=[[:space:]]*$WORKER_ID([,/]|$)" ||
-    fail "identità certificato diversa da VELOX_WORKER_ID=$WORKER_ID"
+certificate_identity_matches_worker "$STAGED_CERT" ||
+    fail "identità certificato diversa da VELOX_WORKER_ID=$WORKER_ID (CN/SPIFFE URI SAN mismatch)"
 
 # Promote a complete versioned bundle, then atomically switch one symlink.
 # The running container mounts `current`, so it can never observe a mixed
@@ -295,4 +344,5 @@ if [[ -e "$CURRENT_LINK" && ! -L "$CURRENT_LINK" ]]; then
 fi
 ln -s ".bundles/$(basename "$NEW_BUNDLE")" "$SWITCH_LINK" || fail "cannot prepare atomic certificate switch"
 mv -Tf "$SWITCH_LINK" "$CURRENT_LINK" || { rm -f "$SWITCH_LINK"; fail "atomic certificate switch failed"; }
+materialize_credential
 log "mTLS rinnovato da OpenBao PKI: private key generata localmente; bundle versionato selezionato con switch atomico"

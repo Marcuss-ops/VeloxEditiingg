@@ -9,9 +9,6 @@
 #
 # mTLS certificates are issued by the dedicated PKI engine, not stored in KV.
 # The worker private key is generated locally and must never be provisioned here.
-#
-# mTLS certificates are issued by the dedicated PKI engine, not stored in KV.
-# The worker private key is generated locally and must never be provisioned here.
 #   velox/production/services/registry/...
 #
 # SECURITY RULES (hard requirements):
@@ -42,7 +39,7 @@
 #   OPENBAO_VALUE_INSTAEDIT_JWT=... \
 #   OPENBAO_VALUE_SOCIAL_API_TOKEN=... \
 # Worker mTLS material is intentionally absent: use provision-pki.sh and the
-# runtime CSR flow. Never pass worker.key to this script.
+# runtime CSR flow. Never pass worker.key, worker.crt, or ca.crt to this script.
 #   OPENBAO_VALUES_FILE=.velox/openbao/values.env \
 #   ./scripts/provision-kv.sh --worker host_57_129_132_133
 
@@ -128,11 +125,11 @@ MANIFEST=(
     "production/services/registry/token|REGISTRY_TOKEN|0"
 )
 if [[ -n "$WORKER_ID" ]]; then
-    MANIFEST+=(
-        "production/workers/$WORKER_ID/credential|WORKER_CREDENTIAL|1"
-        # mTLS is deliberately not part of KV. The worker uses its AppRole
-        # plus pki/sign/worker-<id> with a locally generated key and CSR.
-    )
+    # This is the only worker material that belongs in KV. mTLS is deliberately
+    # absent: the worker uses its AppRole plus pki/sign/worker-<id> with a
+    # locally generated key and CSR; no certificate bundle or private key is
+    # accepted by this script.
+    MANIFEST+=("production/workers/$WORKER_ID/credential|WORKER_CREDENTIAL|1")
 fi
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
