@@ -43,6 +43,24 @@ func IsUniqueConstraint(err error) bool {
 	return false
 }
 
+// IsBusy reports transient SQLite writer contention. Callers may retry the
+// complete transaction when this is true; the driver exposes both BUSY and
+// LOCKED as typed primary result codes.
+func IsBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	var e sqlite3.Error
+	if errors.As(err, &e) {
+		return e.Code == sqlite3.ErrBusy || e.Code == sqlite3.ErrLocked
+	}
+	var ep *sqlite3.Error
+	if errors.As(err, &ep) && ep != nil {
+		return ep.Code == sqlite3.ErrBusy || ep.Code == sqlite3.ErrLocked
+	}
+	return false
+}
+
 func isConstraintCode(code sqlite3.ErrNoExtended) bool {
 	return code == sqlite3.ErrConstraintUnique || code == sqlite3.ErrConstraintPrimaryKey
 }

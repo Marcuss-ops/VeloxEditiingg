@@ -118,6 +118,8 @@ var (
 
 type SQLiteCompletionStore struct{ db *sql.DB }
 
+const completionBusyRetries = 4
+
 func NewSQLiteCompletionStore(db *sql.DB) *SQLiteCompletionStore {
 	if db == nil {
 		panic("store: NewSQLiteCompletionStore requires a non-nil database")
@@ -129,19 +131,51 @@ func (s *SQLiteCompletionStore) Run(ctx context.Context, fn func(CompletionTx) e
 	if fn == nil {
 		return fmt.Errorf("store: completion transaction callback is nil")
 	}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
-	if err != nil {
-		return fmt.Errorf("store: completion begin: %w", err)
+	for attempt := 0; ; attempt++ {
+		tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+		if err != nil {
+			if sqliteerr.IsBusy(err) && attempt < completionBusyRetries {
+				if err := waitCompletionRetry(ctx, attempt); err != nil {
+					return err
+				}
+				continue
+			}
+			return fmt.Errorf("store: completion begin: %w", err)
+		}
+		ct := &sqliteCompletionTx{tx: tx}
+		if err := fn(ct); err != nil {
+			_ = tx.Rollback()
+			if sqliteerr.IsBusy(err) && attempt < completionBusyRetries {
+				if waitErr := waitCompletionRetry(ctx, attempt); waitErr != nil {
+					return waitErr
+				}
+				continue
+			}
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			if sqliteerr.IsBusy(err) && attempt < completionBusyRetries {
+				if waitErr := waitCompletionRetry(ctx, attempt); waitErr != nil {
+					return waitErr
+				}
+				continue
+			}
+			return fmt.Errorf("store: completion commit: %w", err)
+		}
+		return nil
 	}
-	ct := &sqliteCompletionTx{tx: tx}
-	if err := fn(ct); err != nil {
-		_ = tx.Rollback()
-		return err
+}
+
+func waitCompletionRetry(ctx context.Context, attempt int) error {
+	d := time.Duration(25*(1<<attempt)) * time.Millisecond
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: completion commit: %w", err)
-	}
-	return nil
 }
 
 type sqliteCompletionTx struct{ tx *sql.Tx }
