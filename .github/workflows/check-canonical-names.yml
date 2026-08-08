@@ -145,6 +145,22 @@ jobs:
           set -euo pipefail
           echo "Running canonical-names guard (anti-regression audit)..."
 
+          # ── Documented-history carve-outs (prose comments only) ──
+          # The pathspecs in the git grep command below reference the
+          # deprecated name EXCLUSIVELY in comments / doc blocks that
+          # document the Residuo 4 / migration 092 rename history (the
+          # same class as **/*.md, already excluded), in the active
+          # firstStringField back-compat fallback (parser.go — same
+          # class as delivery_plan_validator.go), or in a test-only
+          # recovery-matrix scenario. None reintroduces an active
+          # identifier or wire-key; runtime code paths use the
+          # canonical external_destination_id. When a history comment
+          # is rewritten to drop the legacy name, remove the
+          # corresponding pathspec in the SAME commit.
+          # NOTE: these comments MUST stay ABOVE the git grep command —
+          # a `#` comment inside the backslash-continued command would
+          # swallow every following pathspec in bash.
+
           matches=$(
             git grep -nE "${REGEX}" -- \
               ':!.github/workflows/check-canonical-names.yml' \
@@ -159,15 +175,6 @@ jobs:
               ':!**/social_contract/**' \
               ':!DataServer/internal/jobs/enqueue/delivery_plan_validator.go' \
               ':!DataServer/internal/socialclient/client_test.go' \
-              # ── Documented-history carve-outs (prose comments only) ──
-              # These files reference the deprecated name EXCLUSIVELY in
-              # comments / doc blocks that document the Residuo 4 /
-              # migration 092 rename history (the same class as **/*.md,
-              # which is already excluded). None reintroduces an active
-              # identifier or wire-key; the runtime code paths use the
-              # canonical external_destination_id. When the history text
-              # is eventually rewritten to drop the legacy name, remove
-              # the corresponding pathspec in the SAME commit.
               ':!DataServer/internal/creatorflow/resolver_http_errors.go' \
               ':!DataServer/internal/deliveries/providers/social_gateway.go' \
               ':!DataServer/internal/socialclient/requests.go' \
@@ -175,13 +182,7 @@ jobs:
               ':!DataServer/internal/store/store_delivery_destinations.go' \
               ':!scripts/ci/enable-branch-protection.sh' \
               ':!.github/workflows/ci-opaque-wire.yml' \
-              # Active back-compat fallback (same class as
-              # delivery_plan_validator.go): the canonical parser
-              # honors the legacy wire-key via firstStringField for
-              # pre-rename payloads; no typed field uses it.
               ':!shared/contract/deliveryplan/parser.go' \
-              # Recovery-matrix test scenario whose comments pin the
-              # canonical rename history (test-only, not shipped code).
               ':!tests/e2e/recovery-matrix/scenarios/19-pipeline-md-stale-field-grep.sh' \
             || true
           )

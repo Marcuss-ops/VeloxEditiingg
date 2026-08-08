@@ -84,9 +84,9 @@ jobs:
         # Mirrors ci.yml; needed because `go build ./...` against
           # execstack helpers transitively links C deps. Cheap
           # apt-get, cached on the runner image.
-        # ubuntu-latest runners already run as root, so `sudo` is a
-        # no-op shell escape that adds noise. Drop it.
-        run: apt-get update && apt-get install -y --no-install-recommends cmake
+        # sudo is required on current runner images (the workflow user
+        # is not root; apt cannot lock /var/lib/apt without elevation).
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake
 
       - name: gofmt check (no auto-write)
         # make fmt-check runs gofmt -l on every Go file in the
