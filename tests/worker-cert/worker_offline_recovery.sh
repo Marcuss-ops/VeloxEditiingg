@@ -443,7 +443,7 @@ while (( elapsed < REAPER_POLL_TIMEOUT_S )); do
   # log-based signal is absent. Production logs may use a different
   # TaskLeaseGranted rendering, while task_attempts remains authoritative.
   if [[ -z "$NEW_ATTEMPT_ID" ]] && command -v sqlite3 >/dev/null 2>&1; then
-    row=$(sqlite3 "$DB_PATH" \
+    row=$(sqlite3 -separator $'\t' "$DB_PATH" \
       "SELECT attempt_number, id, worker_id FROM task_attempts WHERE task_id = '${ORIG_TASK_ID}' ORDER BY attempt_number DESC LIMIT 1;" 2>/dev/null || true)
     if [[ -n "$row" ]]; then
       anum=$(printf '%s' "$row" | awk '{print $1}')
