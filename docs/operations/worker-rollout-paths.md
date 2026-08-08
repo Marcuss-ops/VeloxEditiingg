@@ -8,9 +8,9 @@ only inspect state from commands that mutate a worker.
 
 | Path | Use | Image/source | State owner | Production status |
 |---|---|---|---|---|
-| **Legacy Ansible bridge** | Normalize or upgrade an old worker that still receives bundles | Bundle downloaded from the Master; Docker image is built locally on the worker | Ansible + systemd on the host | Temporary migration path only |
-| **GHCR Ansible bridge** | Controlled canary when the host is not yet managed by FleetController | Existing, signed GHCR `@sha256:` image | Ansible host mutation, Master state | Transitional; one host at a time |
-| **GHCR/FleetController** | Definitive rollout path | One signed GHCR digest produced by `worker-image.yml` | Master `fleet_operations` ledger + FleetController | Canonical target path |
+| **GHCR/FleetController (Master API)** | Definitive rollout path | One signed GHCR digest produced by `worker-image.yml` | Master `fleet_operations` ledger + FleetController/UpdateExecutor | Canonical path |
+| ~~Legacy Ansible bridge~~ | **Retired** — playbooks and static inventory removed | — | — | Historical |
+| ~~GHCR Ansible bridge~~ | **Retired** — `rollout-worker-digest.yml` removed; `fleetctl update` now POSTs the Master API | — | — | Historical |
 
 Do not combine paths in one rollout. In particular, do not build a local image
 on a worker and also claim that the worker is running the certified GHCR image.
@@ -27,7 +27,7 @@ legacy paths.
 The bridge is:
 
 ```text
-operator-local inventory
+WorkerNodeRegistry row (ansible_hosts DB)
   -> preflight_workers.yml
   -> update_workers.yml
   -> bundle download from Master
@@ -36,34 +36,20 @@ operator-local inventory
   -> readiness and registration checks
 ```
 
-The playbook is:
-
-```text
-DataServer/data/ansible/playbooks/update_workers.yml
-```
-
-Use an operator-local inventory, never a repository template or a copied
-production inventory:
+Host convergence runs through the **Master** (`AnsibleComputerManager`): the
+per-operation inventory is generated from the `WorkerNodeRegistry` DB and the
+preflight/update playbooks under `DataServer/data/ansible/playbooks/` are
+invoked server-side (`POST /api/v1/admin/ansible/computers/run_action`). There
+is no operator-side static inventory and no `--vault-password-file`:
 
 ```bash
-export INVENTORY=/path/to/operator-local/inventory.ini
 export MASTER_URL=https://MASTER.example.invalid:8000
 
 # 1. Drain through the Master and wait until active_tasks=0.
 scripts/fleetctl drain <worker_id> "legacy bridge rollout"
 scripts/fleetctl inspect <worker_id>   # repeat until DRAINING and active_tasks=0
-
-ansible-playbook \
-  -i "$INVENTORY" \
-  DataServer/data/ansible/playbooks/preflight_workers.yml \
-  --limit <inventory_host>
-
-ansible-playbook \
-  -i "$INVENTORY" \
-  DataServer/data/ansible/playbooks/update_workers.yml \
-  --limit <inventory_host> \
-  --vault-password-file ~/.vault-velox-pass \
-  -e "master_url=$MASTER_URL"
+# 2. Trigger the Master-side preflight/update for this worker via
+#    POST /api/v1/admin/ansible/computers/run_action (action=update).
 ```
 
 Before proceeding, verify the bundle identity against the commit, version,
@@ -85,60 +71,13 @@ Only then resume the worker and continue one host at a time.
 - Once the completion marker exists, do not re-run legacy cleanup as part of a
   normal rollout; investigate a missing marker or broken canonical tree first.
 
-## 2. GHCR Ansible bridge for a controlled canary
+## 2. GHCR Ansible bridge — RETIRED
 
-When the image is already built and signed, but the host is not yet fully
-managed by FleetController, the transitional host-side playbook is:
-
-```text
-deploy/playbooks/rollout-worker-digest.yml
-```
-
-It requires a complete release-evidence tuple from the worker-image workflow:
-
-```text
-expected_bundle_hash
-expected_engine_sha256
-expected_executor_id
-expected_executor_version
-```
-
-It performs, serially and with rollback on failure:
-
-```text
-drain/idle precondition
-  -> pinned GHCR image
-  -> host convergence
-  -> readiness
-  -> master reconnect/session/heartbeat
-  -> executor identity
-  -> bundle hash + engine SHA + ldd
-  -> Level-D smoke
-  -> Drive artifact verification
-  -> current or rollback
-```
-
-The repository `scripts/fleetctl update` command currently reaches this
-Ansible bridge and therefore requires `FLEET_INVENTORY` to point to an
-operator-local inventory:
-
-```bash
-export FLEET_INVENTORY=/path/to/operator-local/inventory.ini
-export VELOX_MASTER_URL=https://MASTER.example.invalid:8000
-export VELOX_ADMIN_TOKEN='read-from-secure-secret-store'
-
-scripts/fleetctl status                 # read-only
-scripts/fleetctl inspect <worker_id>    # read-only
-scripts/fleetctl drain <worker_id> "canary rollout"
-# wait for the command's idle precondition, then:
-scripts/fleetctl update <worker_id> \
-  ghcr.io/<owner>/velox-worker@sha256:<64-lowercase-hex> \
-  "canary rollout"
-```
-
-This is a useful bridge for a controlled old host, but it is not the final
-FleetController entrypoint while `scripts/fleetctl update` still invokes
-Ansible directly.
+The transitional host-side bridge (`deploy/playbooks/rollout-worker-digest.yml`,
+`FLEET_INVENTORY`, `FLEET_ROLLOUT_PLAYBOOK`, `ansible-playbook`) has been
+retired. `scripts/fleetctl update` / `scripts/fleetctl rollback` now POST the
+pinned digest directly to the Master API and poll the `fleet_operations`
+ledger; see §3.
 
 ## 3. Definitive GHCR/FleetController path
 
@@ -182,26 +121,24 @@ A complete API-delegate invocation is:
 > engine SHA, executor identity/version, and signed provenance. Confirm that
 > the FleetController backends are wired and green. The command below is not a
 > substitute for those checks.
->
-> `fleet-update.yml` accepts `update_target_digest=sha256:<64 hex>` because the
-> Master API payload carries the digest; `scripts/fleetctl update` instead
-> accepts the complete `ghcr.io/<owner>/velox-worker@sha256:<64 hex>` reference.
 
 ```bash
-export INVENTORY=/path/to/operator-local/inventory.ini
-export MASTER_URL=https://MASTER.example.invalid:8000
+export VELOX_MASTER_URL=https://MASTER.example.invalid:8000
+export VELOX_ADMIN_TOKEN='read-from-secure-secret-store'
 
-ansible-playbook \
-  -i "$INVENTORY" \
-  deploy/playbooks/fleet-update.yml \
-  --limit <inventory_host> \
-  --ask-vault-pass \
-  -e "worker_id=<worker_id>" \
-  -e "update_target_digest=sha256:<64-lowercase-hex>" \
-  -e "velox_master_public_url=MASTER.example.invalid" \
-  -e "velox_master_port=8000" \
-  -e "update_reason=certified canary rollout"
+scripts/fleetctl status                 # read-only
+scripts/fleetctl inspect <worker_id>    # read-only
+scripts/fleetctl drain <worker_id> "canary rollout"
+# wait for the drain idle precondition (active_jobs=0), then:
+scripts/fleetctl update <worker_id> \
+  ghcr.io/<owner>/velox-worker@sha256:<64-lowercase-hex> \
+  "canary rollout"
 ```
+
+The internal API-delegate playbook `deploy/playbooks/fleet-update.yml` posts
+the same operation (`POST /api/v1/admin/workers/{worker_id}/update`, with
+`update_target_digest=sha256:<64 hex>`) and polls the ledger — it is the
+server-side equivalent, not an operator entrypoint.
 
 The definitive path must consume an immutable digest, not a version tag:
 
@@ -215,10 +152,10 @@ matches the desired version.
 
 ### Important current distinction
 
-Until the operator entrypoint is fully switched to submit this Master
-operation directly, use `fleet-update.yml` for the API/FleetController route
-and treat `scripts/fleetctl update` as the GHCR Ansible bridge described above.
-Do not document or operate the two commands as interchangeable.
+`scripts/fleetctl update` IS the direct Master API entrypoint. The playbook
+`deploy/playbooks/fleet-update.yml` remains only as an internal API-delegate
+(for server-side orchestration) and is scheduled for removal; the two
+entrypoints are not interchangeable.
 
 ## 4. Diagnostic-only commands
 
@@ -236,15 +173,8 @@ scripts/fleetctl status
 scripts/fleetctl inspect <worker_id>
 scripts/fleetctl operations <worker_id>
 
-# Host read-side checks (run against one inventory host)
-ansible-playbook -i "$INVENTORY" \
-  DataServer/data/ansible/playbooks/preflight_workers.yml \
-  --limit <inventory_host>
-
-# Syntax validation only; no remote connection
-ansible-playbook --syntax-check \
-  -i "$INVENTORY" \
-  DataServer/data/ansible/playbooks/rollout-worker-digest.yml
+# Host read-side checks (Master-side; inventory generated from the DB)
+#   POST /api/v1/admin/ansible/computers/run_action  action=preflight
 
 # Direct host inspection only
 systemctl status velox-worker-<alias> --no-pager
@@ -278,13 +208,14 @@ running docker build on every worker as a release mechanism
 
 Direct host mutation bypasses one or more of the digest, Cosign, drain,
 operation-ledger, rollback, reconnect, smoke, or Drive gates. `prepare-host.sh`
-is an implementation step invoked by the approved Ansible bridge; it is not an
-operator-facing release command.
+is an implementation step invoked by the approved rollout path
+(`velox-worker-activate-image`); it is not an operator-facing release command.
 
 Also forbidden:
 
 - using `latest`, `main`, `stable`, or a mutable semver tag in production;
-- using the committed `*.example` inventory as `-i` input;
+- using a static or committed inventory (the only inventory is the
+  `WorkerNodeRegistry` DB, generated per-operation by the Master);
 - printing admin tokens, vault passwords, SSH private keys, or full env files;
 - updating multiple workers at once;
 - treating `health/ready=200` as proof that rendering and delivery work;
@@ -313,7 +244,8 @@ investigate before touching the next host.
 
 - `docs/operations/fleetctl.md` — operator command reference.
 - `docs/worker_deployment.md` — worker layout and compatibility details.
-- `deploy/playbooks/fleet-update.yml` — Master API/FleetController delegate.
-- `deploy/playbooks/rollout-worker-digest.yml` — GHCR Ansible bridge.
-- `DataServer/data/ansible/playbooks/update_workers.yml` — legacy bundle bridge.
+- `deploy/playbooks/fleet-update.yml` — internal Master API/FleetController
+  delegate (scheduled for removal).
+- `DataServer/data/ansible/playbooks/update_workers.yml` — Master-side legacy
+  bundle bridge (inventory generated from the `WorkerNodeRegistry` DB).
 - `.github/workflows/worker-image.yml` — build, sign, and certify image.

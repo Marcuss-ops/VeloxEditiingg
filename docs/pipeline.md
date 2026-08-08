@@ -564,12 +564,12 @@ cd `<repo-root>/DataServer` && go build -o /tmp/velox-server ./cmd/server
 | `VELOX_DRIVE_CLIENT_ID` | — | Client ID OAuth Google Drive |
 | `VELOX_DRIVE_CLIENT_SECRET` | — | Client Secret OAuth Google Drive |
 | `SOCIAL_API_URL` | — | Base URL del Social API esterno (es. `https://social.example.com`). Letto da `socialclient/internal/socialclient/config.go::ConfigFromEnv()`. |
-| `SOCIAL_API_TOKEN` | — | Bearer inviato come `Authorization: Bearer <token>` verso la Social API. **SEGRETO**: popolato da `vault_velox_social_api_token` nel vault ansible. |
+| `SOCIAL_API_TOKEN` | — | Bearer inviato come `Authorization: Bearer <token>` verso la Social API. **SEGRETO**: materializzato dal resolver OpenBao (`resolve-master-env.sh`) da `velox/production/master/social-api-token`. |
 | `SOCIAL_API_TIMEOUT_MS` | `30000` | Timeout singola chiamata HTTP verso la Social API (default 30s). |
 | `SOCIAL_API_RETRIES` | `3` | Hint di retry (Velox-side BackoffSchedule è canonico). |
 | `SOCIAL_CALLBACK_BASE_URL` | — | URL pubblicamente raggiungibile di Velox, usato per costruire `download_url` e `callback_url` delle delivery. |
 | `SOCIAL_ARTIFACT_PUBLIC_URL` | — | (forward-looking) CDN pubblico per fetch artefatti quando non si usa il meccanismo callback. |
-| `SOCIAL_WEBHOOK_SECRET` | — | (forward-looking, **SEGRETO**) HMAC per i callback `social_repo` → Velox. Da `vault_velox_social_webhook_secret`. |
+| `SOCIAL_WEBHOOK_SECRET` | — | (forward-looking, **SEGRETO**) HMAC per i callback `social_repo` → Velox. Da `velox/production/master/social-webhook-secret` (opzionale). |
 
 ### Worker (`/etc/velox-worker.env`)
 | Variabile | Descrizione |

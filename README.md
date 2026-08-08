@@ -36,18 +36,16 @@ DataServer/                     # Master server (Go/Gin + gRPC)
 │   └── workers/                # Worker registry, sessions, commands and heartbeat
 RemoteCodex/                     # Worker agent (Go) + native video engine (C++/FFmpeg)
 shared/                          # Shared Go contracts, identity, validation and media types
-deploy/                          # Install scripts, systemd, runtime templates and Ansible
+deploy/                          # Install scripts, systemd, runtime templates, OpenBao, fleet
 ├── install-server.sh
-├── velox-server.service
+├── validate-master-env.sh
 ├── velox-server.env.example
-├── ansible.cfg
-├── requirements.yml
-├── group_vars/
-├── inventory/
-├── playbooks/
-├── runtime/
-├── scripts/
-└── templates/
+├── velox-server.service
+├── fleetctl/                     # fleet-operator CLI (Go binary) + docs
+├── openbao/                      # Secrets manager (OpenBao): AppRole, KV, PKI, SSH CA
+├── playbooks/                    # fleet-* API-delegate playbooks
+├── runtime/                      # prepare-host, compose, worker services
+└── scripts/
 docs/                            # Architecture, API, deployment and canonical completion plan
 .github/workflows/               # CI and image release pipelines
 scripts/                         # Canonical CI and repository checks
@@ -58,17 +56,17 @@ VERSION.txt                      # Single source of product version truth
 
 Every IP, hostname, worker ID and credential in versioned files is a `CHANGE_ME_*` placeholder. Production secrets live only in:
 
-- `deploy/group_vars/vault.yml` encrypted with Ansible Vault and never committed;
-- `deploy/ansible/inventory.ini`, copied from the single template and excluded from Git;
-- `/etc/velox-server.env` on the master;
+- OpenBao KV `velox/production/...` (the canonical secrets origin, AppRole `master`/`worker-<id>`);
+- `/etc/velox-server.env` on the master (0600, materialized by the OpenBao resolver `deploy/openbao/scripts/resolve-master-env.sh`);
 - `/etc/velox-worker/worker.env` on each worker.
 
 A `CHANGE_ME_*` token must be replaced before deployment and must never be copied verbatim into production.
 
 The production worker allowlist is validated by `ValidateProductionWorkers` in `DataServer/internal/config/workers_validator.go`. The fleet may scale up or down; the runtime enforces the allowlist shape, uniqueness and absence of wildcards.
 
-Fleet connectivity is runtime-owned by the Master `WorkerNodeRegistry`. The
-Ansible inventory is only a local bootstrap/seed input; see
+Fleet connectivity is runtime-owned by the Master `WorkerNodeRegistry` (the
+`ansible_hosts` DB table — the single inventory source). The static Ansible
+inventory and the one-time seed sync have been retired; see
 [`docs/operations/credential-registry.md`](docs/operations/credential-registry.md)
 for the credential and materialization contract.
 

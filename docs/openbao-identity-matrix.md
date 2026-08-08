@@ -112,17 +112,21 @@ esplicitamente `pki/issue`, `pki/roles/*` e `pki/config/*`.
 3. Worker agent: sostituzione di `VELOX_WORKER_SECRET` come fonte di identità
    (login AppRole diretto nel processo — post-fase, quando OpenBao sarà
    raggiungibile dai nodi senza tunnel).
-4. ✅ ~~Master env bootstrap da OpenBao~~ — `deploy/openbao/scripts/resolve-master-tokens.sh`
+4. ✅ ~~Master env bootstrap da OpenBao~~ — `deploy/openbao/scripts/resolve-master-env.sh`
    (fase 6): login AppRole `master`, legge `master/*` + `services/registry/*` dal
-   KV e scrive le extra-vars Ansible `vault_velox_*` in un file 0600 da passare
-   con `-e @file` (vince su group_vars; senza il file resta il flusso
-   ansible-vault legacy). `migrate-master-tokens.sh` fa la direzione inversa
-   (env → KV, `--force`, fail-closed sui required, mai stampa valori).
-   Integrato in `.github/workflows/deploy.yml` come step opzionale condizionale.
+   KV e materializza l'**env file runtime completo** del Master
+   (`/etc/velox-server.env`, 0600): i secret sotto le chiavi canoniche
+   (`VELOX_ADMIN_TOKEN`, `INSTAEDIT_CONTROL_JWT_SECRET`, `SOCIAL_API_TOKEN`,
+   `SOCIAL_WEBHOOK_SECRET`, `VELOX_COMMIT_HMAC_KEY`) — niente `vault_velox_*`,
+   niente YAML per Ansible (la struttura `deploy/group_vars/` è stata eliminata).
+   `migrate-master-tokens.sh` fa la direzione inversa (env → KV, `--force`,
+   fail-closed sui required, mai stampa valori). Invocato da
+   `scripts/operator/deploy-production.sh`.
 5. ✅ ~~SSH CA~~ (fase 7) — secrets engine `ssh` + CA + role `velox-operator`
-   + identità di firma `ssh-operator` (opzionale); i nodi fidano con
-   `TrustedUserCAKeys` via `deploy/playbooks/bootstrap-ssh.yml`
-   (`vault_velox_ssh_ca_pubkey`). Docs: `docs/openbao-ssh-ca.md`.
+   + identità di firma `ssh-operator` (opzionale); la CA pubblica viene
+   esportata da `provision-ssh-ca.sh` in `$STATE_DIR/ssh-ca.pub` e distribuita
+   sui nodi come `/etc/ssh/trusted-user-ca-keys.pem` (`TrustedUserCAKeys`).
+   Docs: `docs/openbao-ssh-ca.md`.
 6. `token_bound_cidrs` per-worker (limitare il login agli IP dei VPS) quando
    OpenBao sarà esposto oltre loopback.
 7. Credenziali DB dinamiche e `SecretResolver` Go con backend OpenBao

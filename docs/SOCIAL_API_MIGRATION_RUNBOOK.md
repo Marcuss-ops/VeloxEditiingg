@@ -118,10 +118,10 @@ Step 7 — restart the master
 
 2. **`SOCIAL_API_TOKEN`** second. The token authenticates Velox to
    the Social API; the URL alone would be rejected with `401` on
-   the very first probe. **Rotate via the `vault_velox_social_api_token`
-   ansible-vault key** (see `SECURITY_RUNBOOK.md` §2.4 / §3.4);
-   never hand-edit `/etc/velox-server.env` outside the vault-driven
-   deploy path.
+   the very first probe. **Rotate via the OpenBao KV leaf
+   `velox/production/master/social-api-token`** (see `SECURITY_RUNBOOK.md`
+   §2.4 / §3.4); never hand-edit `/etc/velox-server.env` outside the
+   resolver-driven deploy path (`resolve-master-env.sh`).
 
 3. **`SOCIAL_API_TIMEOUT_MS`** third. Default 30s is the
    cross-repo-tested ceiling for chunked artifact delivery. Operators
@@ -1053,8 +1053,8 @@ rebase assigns a PR-N.NN anchor):
   `SOCIAL_CALLBACK_BASE_URL`. The deprecation-cycle aliases
   `SOCIAL_GATEWAY_URL` / `SOCIAL_GATEWAY_API_KEY` /
   `SOCIAL_GATEWAY_CALLBACK_BASE_URL` are NOT honored — operators still carrying
-  these in `/etc/velox-server.env` (or the `vault_velox_social_gateway_api_key`
-  ansible-vault key) MUST rename to the canonical form. The negative-pinning test
+  these in `/etc/velox-server.env` (or the retired
+  `vault_velox_social_gateway_api_key` alias) MUST rename to the canonical form. The negative-pinning test
   `TestConfigFromEnv_DropsLegacySocialGatewayAliases` and its companion
   `TestConfigFromEnv_HonorsCanonicalSocialAPIEnvs` (both in
   `DataServer/internal/socialclient/config_test.go`) lock the boundary closed.

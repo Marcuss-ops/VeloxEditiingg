@@ -58,9 +58,10 @@ operator surface.
 
 `fleetctl` exposes exactly the seven sub-commands listed in the
 Step 15/15 spec. Restart + logs are intentionally NOT in this
-set; operators who need them continue to use the Step 11/15
-[fleet-* Ansible playbooks](../playbooks/) (the binary does
-NOT wrap ansible-playbook invocations in atomic Step 15+).
+set; operators who need them perform them host-side on the
+worker (SSH/systemd, documented in
+[`docs/operations/fleetctl.md`](../../docs/operations/fleetctl.md))
+— the binary does NOT wrap host-side mutations.
 
 ### 3.1 `fleetctl status`
 
@@ -205,31 +206,29 @@ esac
            │ Authorization: Bearer <token>
            │ (HTTPS, :8000)
            ▼
-┌────────────────────────┐  ┌─────────────────────────┐
-│ Master REST :8000      │  │ Ansible Master node     │
-│  Step 1,6,10,12,13     │  │  Step 11/15 playbooks   │
-│  (audit, drain/smoke…) │  │  fleet-restart / logs   │
-└──────────┬─────────────┘  └──────────┬──────────────┘
-           │                            │
-           ▼                            ▼
-   ┌─────────────────────────────┐  ┌───────────────────┐
-   │ FleetController tick         │  │ SSH direct on     │
-   │  Step 4/15 (5min scheduler +  │  │ the worker host   │
-   │  executor lifecycle)         │  │ (docker compose,  │
-   └─────────────────────────────┘  │ healthcheck loop) │
-                                    └───────────────────┘
+┌────────────────────────────────────────┐
+│ Master REST :8000                      │
+│  Step 1,6,10,12,13 (audit, drain/…)    │
+└──────────┬─────────────────────────────┘
+           │ FleetController tick
+           │  Step 4/15 (5min scheduler +
+           │  executor lifecycle)
+           ▼
+┌────────────────────────────────────────┐
+│ UpdateExecutor                         │
+│  drain → cosign → pull → activate-image│
+│  → health → smoke → Drive              │
+└────────────────────────────────────────┘
 ```
 
-`fleetctl` does NOT wrap the ansible side. Operators running
-both sides concurrently do:
+`fleetctl` talks only to the Master REST API; it never SSHes
+to worker hosts and never invokes a host-side playbook. A
+complete rollout is:
 
 ```bash
 # Step 1: HTTP-driven image update + smoke
 fleetctl update worker-13197 --digest=$DIGEST || exit $?
 fleetctl smoke  worker-13197                    || exit $?
-# Step 2 (optional, for transient cleanup):
-ansible-playbook -i deploy/ansible/inventory.ini \
-                 deploy/playbooks/fleet-restart.yml
 ```
 
 ---
@@ -260,12 +259,11 @@ done
 ## 8. FAQ
 
 **Q: Why no `restart` / `logs` sub-command?**
-A: They're not in the Step 15/15 spec. Operators continue to
-use the Step 11/15 Ansible playbooks (`fleet-restart.yml`,
-`fleet-logs.yml`). Adding them to fleetctl would require
-either shelling out to `ansible-playbook` from inside the Go
-binary OR wrapping SSH directly — both are larger scope than
-the atomic Step 15/15 commit.
+A: They're not in the Step 15/15 spec. Operators perform
+restart/logs host-side on the worker (direct SSH/systemd, see
+`docs/operations/fleetctl.md`). Adding them to fleetctl would
+require wrapping SSH directly — larger scope than the atomic
+Step 15/15 commit.
 
 **Q: Why not Cobra / spf13?**
 A: AGENTS.md + the 0-import search across the repo show no
@@ -299,10 +297,10 @@ to 12 min for smokes, 30 min for updates / rollbacks".
 | `--digest sha256:64-hex` client-side validator | ✅ atomic | digest.go |
 | Operation polling (5 s interval, kind-specific deadlines) | ✅ atomic | polling.go |
 | Per-sub-command pretty-printing | ✅ atomic | handlers.go |
-| `restart` / `logs` sub-commands via ansible | ⏳ future | Step 11/15 Ansible playbooks (intentional decoupling) |
+| `restart` / `logs` sub-commands | ⏳ future | host-side SSH/systemd (intentional decoupling) |
 | Cobra CLI parser (vs stdlib flag) | ⏳ future | follow-up if operational payoff |
 | Auditing `fleetctl <sub>` invocations into the operation row's actor log | ⏳ future | Step 4/15 ledger extension |
 
-For unchanged parts, the Step 11/15 [fleet-* playbooks](../playbooks/)
-remain the canonical surface — `fleetctl` and the playbooks
-are complementary, not overlapping.
+The canonical fleet surface is `fleetctl` (Master REST API);
+host-side restart/logs remain operator-managed (SSH/systemd)
+and are not wrapped by the binary.

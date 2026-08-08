@@ -57,9 +57,12 @@ until §3 confirms a fresh rotation date.
 
 ### 2.4 Operator-managed env
 
-These are operator-populated, never committed in plaintext form (the
-`deploy/group_vars/vault.yml.example` template is committed; the real
-`vault.yml` is `ansible-vault`-encrypted locally and `gitignored`):
+These are operator-populated, never committed in plaintext form; the canonical
+origin is OpenBao KV `velox/production/...` (provisioned via
+`deploy/openbao/scripts/provision-kv.sh`), and the Master env is materialized
+by `deploy/openbao/scripts/resolve-master-env.sh` into `/etc/velox-server.env`
+(0600). The retired Ansible-Vault structure (`deploy/group_vars/vault.yml`) has
+been removed:
 
 - `VELOX_ADMIN_TOKEN` (min 32 chars)
 - `VELOX_REMOTE_ENGINE_TOKEN`
@@ -75,7 +78,7 @@ These are operator-populated, never committed in plaintext form (the
 | Entry | Status |
 |---|---|
 | `secrets.GITHUB_TOKEN` (per workflow run, auto-issued) | Auto-managed; no rotation action needed. |
-| Container-registry pull credential (Ansible Vault) | Operator-managed; rotated on personnel change. |
+| Container-registry pull credential (OpenBao `velox/production/services/registry/*`) | Operator-managed; rotated on personnel change. |
 
 ---
 
@@ -121,19 +124,19 @@ re-used for a different project.
 
 ### 3.4 operator-managed env
 
-`VELOX_ADMIN_TOKEN`, `WORKER_TOKEN`, `SOCIAL_API_TOKEN`
-(populated via `vault_velox_social_api_token` in the ansible vault —
-see `deploy/group_vars/vault.yml.example`),
-`VELOX_REMOTE_ENGINE_TOKEN`: operator-managed
-under `deploy/group_vars/vault.yml` (ansible-vault-encrypted). Use
-`ansible-vault rekey` to rotate. No external issuer involved.
+`VELOX_ADMIN_TOKEN`, `WORKER_TOKEN`, `SOCIAL_API_TOKEN`,
+`VELOX_REMOTE_ENGINE_TOKEN`: canonical origin is OpenBao KV
+(`velox/production/master/*`, `velox/production/workers/<id>/credential`,
+`velox/production/services/registry/*`). Rotate by writing a new KV version
+(`bao kv put velox/production/master/social-api-token value=...`, or
+`provision-kv.sh --force` with `OPENBAO_VALUE_*` env), then re-materialize the
+Master env with `resolve-master-env.sh`. No external issuer involved.
 
 Historical note: the YouTube-domain env `VELOX_YT_OAUTH_TOKEN_KEY` is
 **retired**. Any operator carrying that env in their local
-`/etc/velox-server.env` or vault is on a pre-removal hostname; the
-modern equivalent is `vault_velox_social_api_token` in the ansible vault,
-which renders `SOCIAL_API_TOKEN` on the master. Cross-reference:
-deploy notes § 5.2 under `deploy/group_vars/vault.yml.example`.
+`/etc/velox-server.env` is on a pre-removal hostname; the modern equivalent is
+`velox/production/master/social-api-token` in OpenBao, which renders
+`SOCIAL_API_TOKEN` on the master.
 
 ---
 
@@ -231,7 +234,7 @@ across the operator's local checkout is recommended (weekly).
 | Re-rotate a Google OAuth secret | §3.1 |
 | Re-authenticate a Tailscale device (hostname rotation) | §3.2 |
 | Change the DuckDNS subdomain | §3.3 |
-| Re-key the ansible-vault | §3.4 (`ansible-vault rekey deploy/group_vars/vault.yml`) |
+| Rotate an OpenBao KV secret | §3.4 (`bao kv put velox/production/...` / `provision-kv.sh --force`) |
 | Audit the repo for new leaks | §5.3 + `bash scripts/ci/check-secrets.sh --include-untracked` |
 | Scrub historical git blobs | §4 + `bash scripts/ci/operator-history-scrub.sh` |
 | File a post-mortem | §6 |

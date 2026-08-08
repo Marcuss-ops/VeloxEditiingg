@@ -38,7 +38,7 @@ deploy/openbao/
 │   ├── provision-pki.sh          # PKI mount + per-worker CSR signing roles
 │   ├── verify-approle.sh        # login reale + check autorizzazioni positivi/negativi
 │   ├── migrate-master-tokens.sh # env → KV (una tantum, --force, fail-closed)
-│   ├── resolve-master-tokens.sh # KV → extra-vars Ansible vault_velox_* (0600)
+│   ├── resolve-master-env.sh     # KV → /etc/velox-server.env (0600, runtime env)
 │   ├── provision-ssh-ca.sh      # engine ssh + CA (mai rigenerata) + role velox-operator
 │   ├── sign-operator-ssh.sh     # firma cert operatore (TTL breve, principals limitati)
 │   └── verify-ssh-ca.sh         # 11 check: engine, CA, role, firma di prova, negativo
@@ -286,29 +286,33 @@ risolve i token al momento del rilascio, senza credenziali statiche in repo.
 - Usa `provision-kv.sh --force` (nuova versione KV); verifica con
   `./scripts/verify-kv.sh`.
 
-### Risoluzione al deploy (KV → extra-vars Ansible)
+### Risoluzione al deploy (KV → runtime env)
 
 ```bash
 OPENBAO_ADDR=https://127.0.0.1:8200 \
 OPENBAO_CA_FILE=../../.velox/openbao/tls/server.crt \
 OPENBAO_ROLE_ID_FILE=/etc/velox/master/approle/role-id \
 OPENBAO_SECRET_ID_FILE=/etc/velox/master/approle/secret-id \
-OPENBAO_VARS_FILE=/tmp/openbao-vars.yml \
-./scripts/resolve-master-tokens.sh [--require-all]
+OPENBAO_ENV_FILE=/etc/velox-server.env \
+./scripts/resolve-master-env.sh [--require-all]
 ```
 
-Scrive le **extra-vars** `vault_velox_*` (projection compatibile con il
-template, non una seconda authority) in un file **0600** da passare ad
-Ansible con `-e @/tmp/openbao-vars.yml`. Gli extra-vars VINCONO su
-`group_vars`: i token vengono da OpenBao. Senza `OPENBAO_ADDR` il resolver
-fallisce chiuso; non esiste un fallback ad Ansible Vault in production.
+Scrive l'**env file runtime completo** del Master (`/etc/velox-server.env`, 0600):
+i secret materializzano direttamente sotto le chiavi canoniche
+(`VELOX_ADMIN_TOKEN`, `INSTAEDIT_CONTROL_JWT_SECRET`, `SOCIAL_API_TOKEN`,
+`SOCIAL_WEBHOOK_SECRET`, `VELOX_COMMIT_HMAC_KEY`) e i non-secret sotto i
+default canonici. Niente `vault_velox_*`, niente YAML per Ansible: l'output è
+un plain `KEY=VALUE` pronto per `systemd EnvironmentFile=`. Senza
+`OPENBAO_ADDR` il resolver fallisce chiuso; non esiste alcun fallback ad
+Ansible Vault in production.
 
-- KV v2 → lettura via REST `/v1/velox/data/<path>` con il token AppRole.
+- KV v2 → lettura via REST `/v1/velox/data/<path>` con il token AppRole `master`.
 - Opzionali (`social-webhook-secret`, `registry/*`) saltati se assenti; con
   `--require-all` un required assente (admin/instaedit/social) blocca il deploy
   (exit 1) invece di deployare con token mancanti.
-- **Mai stampa valori**: logga solo i nomi; quoting YAML via `jq -Rs .`
-  (NB: `$v | tojson` senza `-r` verrebbe ri-serializzato da jq ≥ 1.8).
+- **Mai stampa valori**: logga solo i nomi. Il TLS gate (tripletta
+  `VELOX_GRPC_TLS_{CERT,KEY,CA}_FILE` o `VELOX_GRPC_ALLOW_INSECURE_DEV=true`)
+  è lo stesso di `deploy/validate-master-env.sh`.
 
 ### Deploy production locale
 
@@ -328,9 +332,11 @@ scripts/operator/deploy-production.sh --check
 scripts/operator/deploy-production.sh --apply
 ```
 
-Lo script risolve i token Master con AppRole OpenBao, crea extra-vars
-temporanee 0600 e invoca Ansible localmente. Non usare `ANSIBLE_VAULT_PASSWORD`
-o chiavi SSH GitHub per il deploy production.
+Lo script risolve i token Master con AppRole OpenBao (`resolve-master-env.sh`)
+e converge l'env sul Master via SSH (scp → install 0640 root:velox →
+validatore remoto bloccante → restart con retry-loop su `is-active`); non
+invoca alcun runtime Ansible. Non usare `ANSIBLE_VAULT_PASSWORD` o chiavi SSH
+GitHub per il deploy production.
 
 ## 11. PKI mTLS — key locale, CSR e rinnovo
 
@@ -380,8 +386,10 @@ file mTLS copiati manualmente.
 Guida completa: `docs/openbao-ssh-ca.md`. Il secrets engine `ssh` di OpenBao
 firma i certificati degli operatori (TTL **breve**, default 30m, principals
 `velox-admin`/`velox-deploy`); i nodi fidano della CA con `TrustedUserCAKeys`
-(`deploy/playbooks/bootstrap-ssh.yml`) — niente password SSH statiche, niente
-`authorized_keys` per operatore nel lungo periodo.
+(la CA pubblica esportata in `$STATE_DIR/ssh-ca.pub` viene distribuita come
+`/etc/ssh/trusted-user-ca-keys.pem` — vedi `docs/openbao-ssh-ca.md` §4) —
+niente password SSH statiche, niente `authorized_keys` per operatore nel lungo
+periodo.
 
 ```bash
 ./scripts/provision-ssh-ca.sh            # enable engine + CA (idempotente) + role + export pubkey
@@ -447,8 +455,8 @@ distrugge i dati).
 4. Distribuire `role-id`/`secret-id` sui nodi worker/master
    (`/etc/velox-worker/secrets/approle/`, 0600, Ansible `no_log`).
 5. ✅ ~~Migrazione dei token master~~ — `migrate-master-tokens.sh` (env → KV,
-   una tantum) + `resolve-master-tokens.sh` (KV → extra-vars Ansible), usati
-   dal percorso locale `scripts/operator/deploy-production.sh` (§10).
+   una tantum) + `resolve-master-env.sh` (KV → runtime env del Master),
+   invocato da `scripts/operator/deploy-production.sh` (§10).
 6. ✅ ~~SSH CA~~ — secrets engine `ssh` + CA + role `velox-operator` +
    firma operatore a TTL breve (§11 + `docs/openbao-ssh-ca.md`); da completare
    con la dismissione delle `authorized_keys` statiche una volta che tutti gli

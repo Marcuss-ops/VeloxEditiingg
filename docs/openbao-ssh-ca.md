@@ -25,9 +25,10 @@ operatore (laptop)                        worker / master (VPS)
 - La **chiave privata della CA** nasce dentro OpenBao (`generate_signing_key`) e
   non viene MAI esportata. Rigenerarla invaliderebbe tutti i certificati emessi:
   `provision-ssh-ca.sh` è idempotente e **rifiuta di sovrascrivere** una CA esistente.
-- La **chiave pubblica** della CA (non segreta) viene distribuita ai nodi da
-  `deploy/playbooks/bootstrap-ssh.yml` → `/etc/ssh/trusted-user-ca-keys.pem` (0600)
-  e dichiarata con `TrustedUserCAKeys`.
+- La **chiave pubblica** della CA (non segreta) viene esportata da
+  `provision-ssh-ca.sh` in `$STATE_DIR/ssh-ca.pub` (0644) e distribuita ai nodi
+  dall'operatore (il playbook `bootstrap-ssh.yml` è stato ritirato) come
+  `/etc/ssh/trusted-user-ca-keys.pem` (0600), dichiarata con `TrustedUserCAKeys`.
 - L'operatore firma la SUA public key per 30 minuti; OpenSSH la usa
   automaticamente come `~/.ssh/<chiave>-cert.pub`.
 
@@ -75,30 +76,32 @@ cd deploy/openbao
   AppRole `ssh-operator` (vedi §5). Il root token di bootstrap non è accettato
   dallo script operativo.
 
-## 4. TrustedUserCAKeys sui nodi (bootstrap-ssh.yml)
+## 4. TrustedUserCAKeys sui nodi
 
-`deploy/playbooks/bootstrap-ssh.yml` (idempotente, esegue `sshd -t` prima del
-reload) ora:
-
-1. crea l'utente `velox-deploy` (no password, PAM locked);
-2. installa la pubkey operatore in `authorized_keys` (**fallback di transizione**);
-3. installa la CA pubblica OpenBao in `/etc/ssh/trusted-user-ca-keys.pem` (0600)
-   quando `velox_ssh_ca_pubkey` / `vault_velox_ssh_ca_pubkey` è valorizzata;
-4. drop-in hardening `/etc/ssh/sshd_config.d/00-velox-hardening.conf`:
-   `PubkeyAuthentication yes`, `PasswordAuthentication no`,
-   `KbdInteractiveAuthentication no`, `PermitRootLogin no` e
-   `TrustedUserCAKeys /etc/ssh/trusted-user-ca-keys.pem` (solo se la CA è presente).
+La distribuzione della CA pubblica ai nodi è un passo **operativo** (il playbook
+Ansible `bootstrap-ssh.yml` è stato ritirato insieme al bridge Ansible):
+`provision-ssh-ca.sh` esporta la chiave PUBBLICA in `$STATE_DIR/ssh-ca.pub`
+(0644) e l'operatore la installa su ogni nodo (master/worker) come
+`/etc/ssh/trusted-user-ca-keys.pem` (0600, root) con il drop-in hardening:
 
 ```bash
-# con la CA pub passata inline (o via vault, vedi §7):
-ansible-playbook -i deploy/ansible/inventory.ini \
-  --extra-vars "velox_ssh_ca_pubkey=$(cat .velox/openbao/ssh-ca.pub)" \
-  deploy/playbooks/bootstrap-ssh.yml
+# sul nodo target (CA pub esportata da provision-ssh-ca.sh):
+scp .velox/openbao/ssh-ca.pub velox-deploy@HOST:/tmp/ssh-ca.pub
+ssh velox-deploy@HOST '
+  sudo install -m 0600 -o root -g root /tmp/ssh-ca.pub /etc/ssh/trusted-user-ca-keys.pem &&
+  sudo rm -f /tmp/ssh-ca.pub &&
+  printf "%s\n" \
+    "PubkeyAuthentication yes" "PasswordAuthentication no" \
+    "KbdInteractiveAuthentication no" "PermitRootLogin no" \
+    "TrustedUserCAKeys /etc/ssh/trusted-user-ca-keys.pem" \
+    | sudo tee /etc/ssh/sshd_config.d/00-velox-hardening.conf >/dev/null &&
+  sudo sshd -t && sudo systemctl reload ssh
+'
 ```
 
 > **Fail-safe**: `sshd -t` valida la config PRIMA del reload; `TrustedUserCAKeys`
-> punta a un file 0600 root. Se la CA non è ancora distribuita, la direttiva non
-> viene scritta (condizione Jinja) — il nodo continua ad accettare solo chiavi.
+> punta a un file 0600 root. Se la CA non è ancora distribuita, la direttiva
+> non viene scritta — il nodo continua ad accettare solo chiavi.
 
 ## 5. Identità di firma least-privilege (AppRole `ssh-operator`)
 
@@ -133,15 +136,14 @@ token locale. Un token admin/root passato manualmente viene quindi rifiutato.
 
 Sequenza consigliata (niente blocchi fuori da tutte le macchine):
 
-1. **CA attiva ovunque**: `bootstrap-ssh.yml` su tutti i nodi (CA pub presente).
+1. **CA attiva ovunque**: distribuire `ssh-ca.pub` su tutti i nodi
+   (`/etc/ssh/trusted-user-ca-keys.pem` + `TrustedUserCAKeys`, §4).
 2. **Operatori su cert**: ogni operatore firma e usa solo certificati per un
    periodo di osservazione (es. 1 settimana).
-3. **Rimozione `authorized_keys`**: togliere il task "Install operator SSH public
-   key" da `bootstrap-ssh.yml` (o svuotare `vault_velox_operator_pubkey`) e
-   pulire `/home/velox-deploy/.ssh/authorized_keys` sui nodi.
+3. **Rimozione `authorized_keys`**: rimuovere manualmente
+   `/home/velox-deploy/.ssh/authorized_keys` sui nodi (la CA non la usa più).
 4. **Password SSH**: già disabilitate da `PasswordAuthentication no` (fase
-   precedente); `vault_velox_sudo_password` rimosso; sudo passwordless
-   `velox-deploy`.
+   precedente); sudo passwordless `velox-deploy`.
 5. **Rotazione CA** (rara): richiede re-bootstrap `TrustedUserCAKeys` + ri-firma
    di tutti gli operatori — da fare solo in caso di compromissione della CA privata.
 
@@ -149,9 +151,8 @@ Sequenza consigliata (niente blocchi fuori da tutte le macchine):
 
 | Variabile | Dove | Uso |
 |---|---|---|
-| `vault_velox_ssh_ca_pubkey` | `deploy/group_vars/vault.yml.example` | CA pubblica per `bootstrap-ssh.yml` |
-| `velox_ssh_ca_pubkey` | extra-var inline (vince su vault) | idem |
-| `sshd_ca_keys_file` | `bootstrap-ssh.yml` (default `/etc/ssh/trusted-user-ca-keys.pem`) | path TrustedUserCAKeys |
+| `ssh-ca.pub` | `$STATE_DIR/ssh-ca.pub` — esportata da `provision-ssh-ca.sh` (0644) | CA pubblica → `/etc/ssh/trusted-user-ca-keys.pem` (0600) sui nodi |
+| `TrustedUserCAKeys` | `/etc/ssh/sshd_config.d/00-velox-hardening.conf` | path `/etc/ssh/trusted-user-ca-keys.pem` |
 | `OPENBAO_SSH_ROLE/TTL/MAX_TTL/ALLOWED_USERS/PRINCIPALS/CA_OUT` | env di `provision-ssh-ca.sh` | parametri role/CA |
 
 ## 8. Sicurezza e limiti noti
@@ -164,12 +165,11 @@ Sequenza consigliata (niente blocchi fuori da tutte le macchine):
 - Il check negativo (`root` rifiutato) è **fail-closed** in `verify-ssh-ca.sh`:
   un errore di verifica fa fallire, mai passare.
 - La chiave privata della CA NON è esportabile da OpenBao: il backup della CA è
-  il backup del volume raft di OpenBao (§11 di `deploy/openbao/README.md`).
+  il backup del volume raft di OpenBao (§13 di `deploy/openbao/README.md`).
 
 ## 9. Riferimenti
 
 - Script: `deploy/openbao/scripts/{provision-ssh-ca,sign-operator-ssh,verify-ssh-ca}.sh`
 - Policy: `deploy/openbao/policies/{admin,ssh-operator}.hcl`
-- Playbook: `deploy/playbooks/bootstrap-ssh.yml`
 - OpenBao SSH engine: https://openbao.org/docs/secrets/ssh/
 - OpenSSH CA: `man ssh-keygen` (`-s`, `-I`, `-n`, `-V`) e `man sshd_config` (`TrustedUserCAKeys`)

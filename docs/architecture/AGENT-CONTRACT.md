@@ -38,8 +38,12 @@ value, the agent MUST source it from the canonical home:
 | --- | --- |
 | `VELOX_MASTER_HOST`, `VELOX_MASTER_URL` | GitHub Environment `production` → `vars.*` |
 | `VELOX_ADMIN_TOKEN` | GitHub Environment `production` → `secrets.VELOX_ADMIN_TOKEN` (scoped per-step, not per-job) |
-| `ANSIBLE_VAULT_PASSWORD` | GitHub Environment `production` → `secrets.ANSIBLE_VAULT_PASSWORD` |
-| `VELOX_DEPLOY_SSH_KEY` | GitHub Environment `production` → `secrets.VELOX_DEPLOY_SSH_KEY` (Ansible-only consumer) |
+
+> The retired Ansible-Vault credential (`ANSIBLE_VAULT_PASSWORD`) and the
+> Ansible-only SSH key (`VELOX_DEPLOY_SSH_KEY`) no longer have a consumer in
+> the repository and are not canonical inputs; production secrets are sourced
+> from OpenBao KV `velox/production/...` and materialized by
+> `deploy/openbao/scripts/resolve-master-env.sh`.
 
 ### 2. Local operator operations read `.velox/production.env`
 
@@ -70,10 +74,12 @@ message, or pasted into a chat / PR / commit:
 
 - `VELOX_ADMIN_TOKEN`
 - GHCR / Docker personal access tokens (classic or fine-grained)
-- `ANSIBLE_VAULT_PASSWORD`
 - SSH private keys (`-----BEGIN ... PRIVATE KEY-----`)
 - the contents of `~/.ssh/id_*`
-- the plain-text values of `vault_velox_*` variables
+- the plain-text values of the secrets materialized by the OpenBao resolver
+  (`VELOX_ADMIN_TOKEN`, `INSTAEDIT_CONTROL_JWT_SECRET`, `SOCIAL_API_TOKEN`,
+  `SOCIAL_WEBHOOK_SECRET`, `VELOX_COMMIT_HMAC_KEY` in `/etc/velox-server.env`,
+  and the OpenBao KV leaves under `velox/production/...`)
 
 Error messages that need a hint MUST reference the canonical
 location — for example
@@ -115,7 +121,7 @@ The single install path is `.github/workflows/deploy.yml`, which:
 2. verifies the digest with cosign (keyless OIDC);
 3. hands the digest to Ansible (`velox_server_image`, etc.).
 
-Production inventory, ansible vars, runbooks, smoke tests, and CI
+Production manifests, runbooks, smoke tests, and CI
 scripts MUST reference `@sha256:` digests. Mutable tags
 (`:latest`, `:v1.2.3`, `:main`, branch refs) MUST NOT appear in any
 versioned file. Two enforcers back this rule:
@@ -151,7 +157,7 @@ Each rule has at least one enforcer:
 
 | Rule | Enforcer |
 | --- | --- |
-| 1 | `.github/workflows/deploy.yml` consumes `vars.VELOX_MASTER_URL`, `secrets.VELOX_ADMIN_TOKEN`, `secrets.ANSIBLE_VAULT_PASSWORD` from environment `production` |
+| 1 | `.github/workflows/deploy.yml` consumes `vars.VELOX_MASTER_URL` and `secrets.VELOX_ADMIN_TOKEN` from environment `production` |
 | 2 | `scripts/operator/with-production-env.sh` (chmod 600 + required vars validation) |
 | 3 | `scripts/ci/check-secrets.sh` + the wrapper's `:?` validation + `set -a` block |
 | 4 | `scripts/ci/check-secrets.sh` regex on mutable GHCR refs |

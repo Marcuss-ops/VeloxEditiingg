@@ -8,8 +8,9 @@
 
 ### 6.1 — Deploy master with new protocol
 
-`deploy/playbooks/deploy-master-config.yml` deploys the master binary
-that contains all of Phase 1–5. Master runs alongside the existing
+`scripts/operator/deploy-production.sh --apply` deploys the master binary
+(OpenBao env resolver → SSH convergence; see `deploy/openbao/README.md` §10).
+Master runs alongside the existing
 workers **without** forcing them to upgrade (they advertise
 `artifact.commit.v1` only after upgrade; master must accept and
 demote legacy TaskResults to the "shadow" path during this window).
@@ -155,7 +156,7 @@ Each entry becomes one case in
 
 ### Operations
 
-- `deploy/playbooks/deploy-master-config.yml` (deploy new master).
+- `scripts/operator/deploy-production.sh` (deploy new master).
 - `scripts/cert/real-bootstrap.sh` (call recover-output helper).
 - `scripts/cert/submit_jackie_chan_doc_voiceover_clips.sh`
   (rewired to use new path).

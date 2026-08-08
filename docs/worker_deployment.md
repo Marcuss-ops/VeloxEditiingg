@@ -25,24 +25,30 @@ The deployment pipeline handles:
 Workers are identified by a sanitized inventory alias:
 - IP `57.129.132.133` → alias `host_57_129_132_133`
 - IP `51.222.204.158` → worker `velox-worker-523925eb` (hostname `vps-523925eb`)
-- The alias becomes both the Ansible `inventory_hostname` and the `worker_id`
+- The alias becomes the canonical `worker_id` (registered in the `WorkerNodeRegistry`/`ansible_hosts` DB)
 
 ## Playbooks
+
+> Host convergence runs through the Master: the per-operation inventory is
+> generated from the `WorkerNodeRegistry` DB (`AnsibleComputerManager
+> .GenerateInventory`) and the playbooks below are invoked server-side
+> (`POST /api/v1/admin/ansible/computers/run_action`). No static `inventory.ini`
+> exists; these playbooks are the internal legacy bridge for old workers.
 
 ### install_workers.yml
 Full installation: preflight → directory setup → Docker build → systemd → start.
 
 ```bash
-ansible-playbook -i inventory.ini install_workers.yml \
-  -e "master_url=http://MASTER:8000"
+# Master-side convergence (inventory from the WorkerNodeRegistry DB):
+#   POST /api/v1/admin/ansible/computers/run_action  action=install
 ```
 
 ### normalize_worker_systemd.yml
 Cleans up old/masked services and writes a single canonical unit per worker.
 
 ```bash
-ansible-playbook -i inventory.ini normalize_worker_systemd.yml \
-  -e "master_url=http://MASTER:8000"
+# Master-side convergence (inventory from the WorkerNodeRegistry DB):
+#   POST /api/v1/admin/ansible/computers/run_action  action=normalize
 ```
 
 Actions:
@@ -60,20 +66,18 @@ on the worker, and re-applies systemd setup. Use only to normalize or migrate
 an old worker; it does not certify that all workers run identical image bytes.
 
 ```bash
-ansible-playbook -i "$INVENTORY" \
-  DataServer/data/ansible/playbooks/update_workers.yml \
-  --limit <inventory_host> \
-  -e "master_url=$MASTER_URL"
+# Master-side convergence (inventory from the WorkerNodeRegistry DB):
+#   POST /api/v1/admin/ansible/computers/run_action  action=update
 ```
 
-`$INVENTORY` must be an operator-local inventory. Do not use an `*.example`
-template as production input and do not run this playbook fleet-wide.
+Do not run this playbook fleet-wide.
 
 ### restart_workers.yml
 Simple restart of existing worker services.
 
 ```bash
-ansible-playbook -i inventory.ini restart_workers.yml
+# Master-side convergence (inventory from the WorkerNodeRegistry DB):
+#   POST /api/v1/admin/ansible/computers/run_action  action=restart
 ```
 
 ### preflight_workers.yml — diagnostic only
@@ -81,9 +85,8 @@ Read-only checks: SSH, disk, OS, commands, Docker, service status. A passing
 preflight is not a deployment or release certification.
 
 ```bash
-ansible-playbook -i "$INVENTORY" \
-  DataServer/data/ansible/playbooks/preflight_workers.yml \
-  --limit <inventory_host>
+# Master-side preflight (inventory from the WorkerNodeRegistry DB):
+#   POST /api/v1/admin/ansible/computers/run_action  action=preflight
 ```
 
 ## Worker Compatibility Check
@@ -278,9 +281,14 @@ files as a production rollout. Use the bridge or the FleetController path in
 
 ## Adding a New Worker
 
-1. Add the worker to `ansible_hosts` table (via SQLite or the `/api/v1/ansible/computers` API) with `worker_id` set to `host_<sanitized_ip>`
-2. Add to `inventory.ini` with `ansible_host=<ip>` and `ansible_user`
-3. Run `normalize_worker_systemd.yml`
+1. Add the worker to the `ansible_hosts` table (`WorkerNodeRegistry` — the
+   single inventory source) via `POST /api/v1/admin/ansible/computers` or
+   SQLite, with `worker_id` set to `host_<sanitized_ip>`, plus `ansible_host`
+   and `ansible_user`.
+2. Provision the OpenBao AppRole material + worker credential on the host:
+   `scripts/operator/provision-worker-openbao.sh --worker <id> --ssh-host <ip> --ssh-user <user>`.
+3. Install the worker runtime on the host (`prepare-host.sh` /
+   `velox-worker-activate-image`).
 4. Verify heartbeat on master: `curl http://MASTER/api/v1/workers/status`
 
 ## Troubleshooting
@@ -301,7 +309,8 @@ systemctl enable --now velox-worker-<alias>
 ### Bundle hash mismatch
 Worker reports `bundle_hash mismatch` — update the worker bundle:
 ```bash
-ansible-playbook -i inventory.ini update_workers.yml -e "master_url=http://MASTER:8000"
+# Master-side convergence (inventory from the WorkerNodeRegistry DB):
+#   POST /api/v1/admin/ansible/computers/run_action  action=update
 ```
 
 ### Protocol version mismatch

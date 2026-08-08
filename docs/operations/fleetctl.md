@@ -31,19 +31,24 @@ a real asset job, waits for `SUCCEEDED`, and verifies the lease worker:
 scripts/fleetctl smoke worker-id
 ```
 
-## Digest rollout — transitional GHCR Ansible bridge
+## Digest rollout — canonical Master API
 
-For the current implementation, `scripts/fleetctl update` is a host-mutation
-bridge: it checks the Master state and invokes Ansible on exactly one inventory
-host. It is **not** yet the direct FleetController API entrypoint. For the
-complete path map and production prohibitions, see
-`docs/operations/worker-rollout-paths.md`.
+`scripts/fleetctl update` and `scripts/fleetctl rollback` route through the
+canonical Master API: `POST /api/v1/admin/workers/{worker_id}/update` with the
+pinned `@sha256:` digest. There is no separate rollback route: `rollback`
+re-posts the previous-known-good digest and the Master `UpdateExecutor` owns
+the drain, cosign verification, activation and the `deployment_records` audit
+cascade.
+
+The canonical chain is:
+
+```text
+fleetctl/API → Master → FleetController → UpdateExecutor →
+WorkerNodeRegistry → hardened SSH → velox-worker-activate-image
+```
 
 The worker must already be `DRAINING` with `active_jobs=0`. The command
-refuses to run otherwise. It invokes Ansible on exactly one inventory host and
-the playbook performs the host-side digest validation, `prepare-host.sh`,
-readiness check, deployment manifest, and automatic restoration of the
-previous env file on failure:
+refuses to run otherwise.
 
 ```bash
 scripts/fleetctl update worker-id \
@@ -59,24 +64,11 @@ scripts/fleetctl rollback worker-id \
   "rollback after smoke failure"
 ```
 
-`FLEET_INVENTORY` must point to an operator-local inventory file; never use
-`deploy/ansible/inventory.ini.example` or another repository template as a
-production inventory. The default playbook is
-`deploy/playbooks/rollout-worker-digest.yml`; override it with
-`FLEET_ROLLOUT_PLAYBOOK` when a host topology uses different paths.
-
-`update` and `rollback` fail closed without the current-commit release
-certificate (the same evidence the `worker-image` workflow publishes in its
-baseline manifest):
-
-```bash
-export FLEET_ROLLOUT_BUNDLE_HASH="<64-hex bundle hash from BUILD_INFO.json>"
-export FLEET_ROLLOUT_ENGINE_SHA="<64-hex engine SHA-256>"
-export FLEET_ROLLOUT_SOURCE_HASH="<64-hex source hash from BUILD_INFO.json>"
-```
-
-All three are required; never omit them, otherwise the rollout playbook
-refuses to mutate the host.
+No `FLEET_INVENTORY`, `FLEET_ROLLOUT_PLAYBOOK`, `FLEET_ROLLOUT_BUNDLE_HASH` or
+`ansible-*` binaries are used: the release-evidence checks live server-side in
+the FleetController/UpdateExecutor gates. Both commands poll the
+`fleet_operations` ledger to terminal state (`FLEETCTL_WAIT_TIMEOUT_SECONDS`,
+default 1800 s).
 
 ## Host lifecycle
 
@@ -87,23 +79,10 @@ be used only after the worker is drained and has no active jobs:
 scripts/fleetctl restart worker-id "restart after config change"
 ```
 
-Image updates and rollback on this transitional bridge are deliberately
-performed by Ansible, where SSH, non-interactive sudo, digest pinning, serial
-rollout, and host-side health checks are available. The definitive target is
-the Master `fleet_operations` / FleetController path described in the rollout
-paths guide; direct `sudo`, SSH, and Docker commands are never a replacement
-for either approved path.
-
-```bash
-ansible-playbook -i deploy/ansible/inventory.ini \
-  DataServer/data/ansible/playbooks/update_workers.yml \
-  --limit worker-id -e "master_url=$VELOX_MASTER_URL"
-
-ansible-playbook -i deploy/ansible/inventory.ini \
-  DataServer/data/ansible/playbooks/restart_workers.yml \
-  --limit worker-id
-```
-
-The Master remains the source of truth for worker state and job placement;
-Ansible remains the source of truth for host mutation. The smoke command is
-the promotion gate after the playbook completes.
+Image updates, rollback and restart are performed by the Master
+(`fleet_operations` ledger + `UpdateExecutor`); direct `sudo`, SSH, and Docker
+commands are never a replacement for the approved path. The host-convergence
+playbooks under `DataServer/data/ansible/playbooks/` remain an internal
+Master-side runtime (inventory generated from the `WorkerNodeRegistry` DB via
+`AnsibleComputerManager.GenerateInventory`), not an operator entrypoint. The
+smoke command is the promotion gate after the operation completes.

@@ -19,8 +19,7 @@ The stable `worker_id` is the join key across all systems:
 ```text
 worker_id
   ├── Master worker registry / worker_credentials
-  ├── WorkerNodeRegistry.ansible_hosts
-  ├── Ansible seed inventory host
+  ├── WorkerNodeRegistry.ansible_hosts  (single inventory source)
   ├── OpenBao secret path: velox/production/workers/<worker_id>/credential
   └── worker certificate identity (CN/SAN; CSR signed by OpenBao PKI)
 ```
@@ -28,19 +27,18 @@ worker_id
 Host alias, IP address, certificate filename, and Vault field name are not
 independent identities. They must resolve to the same `worker_id`.
 
-## Inventory lifecycle
+## Fleet identity lifecycle
 
-1. Copy `deploy/ansible/inventory.ini.example` to the ignored local
-   `deploy/ansible/inventory.ini`.
-2. Validate the seed inventory and provision the host.
-3. Run `velox-admin sync-worker-nodes --dry-run`, review the diff, then run
-   `--apply` against the Master DB.
-4. Use the DB-backed `WorkerNodeRegistry` for runtime health, smoke, and SSH
-   operations. Do not edit a second inventory to change runtime state.
+1. Insert the node into `ansible_hosts` (the `WorkerNodeRegistry` — the single
+   inventory source) via `POST /api/v1/admin/ansible/computers` or SQLite.
+2. Provision host + OpenBao AppRole material:
+   `scripts/operator/provision-worker-openbao.sh --worker <id> --ssh-host <ip> --ssh-user <user>`.
+3. The Master generates any per-operation inventory from the DB
+   (`AnsibleComputerManager.GenerateInventory`); there is no static inventory
+   file, template, or one-time sync.
 
-Existing operator copies of `deploy/ansible/inventory.ini` remain usable from
-the worktree, but the file is no longer versioned. New templates must not be
-added elsewhere.
+Do not edit a second inventory to change runtime state — the DB row is the
+only source.
 
 ## Worker credential repair rule
 

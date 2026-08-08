@@ -29,35 +29,21 @@ inventory. Node connectivity is exclusively the DB.
   with a non-empty `worker_id` — a disabled or unmapped host is not a
   schedulable node and never enters the SSH registry.
   `ListWorkerNodesWithDisabled()` exists for audit tooling.
-- **One-time seed command.** The static `deploy/ansible/inventory.ini` is
-  now a seed/ops reference only.
+- **One-time seed command.** The static `deploy/ansible/inventory.ini` and the
+  `velox-admin sync-worker-nodes` migration command have been **retired**: the
+  DB is the single registry and rows are inserted directly (see below).
 
-## One-time migration from the legacy inventory
+## Registering nodes (no static inventory)
 
-If the DB was provisioned before Phase 9 (or a new node was added to
-`deploy/ansible/inventory.ini`), seed the registry:
+Insert rows directly into `ansible_hosts` with both `worker_id` and
+`ansible_host` set — for example via `POST /api/v1/admin/ansible/computers`
+or SQLite against `/var/lib/velox-server/velox.db`. Rows are canonical only
+when they carry both `worker_id` and `ansible_host`; the alias is preserved as
+`linked_worker_id`, `host_group` becomes the `Environment`. Existing
+operator-side fields (availability, tags, notes, secret_ref) are preserved on
+update.
 
-```bash
-velox-admin sync-worker-nodes \
-    --db /var/lib/velox-server/velox.db \
-    --inventory deploy/ansible/inventory.ini \
-    --apply
-```
-
-`--dry-run` (default per convention) parses and reports without writing.
-Rows are imported only when they carry both `worker_id` and `ansible_host`;
-the alias is preserved as `linked_worker_id`, `host_group` becomes the
-`Environment`. Existing operator-side fields (availability, tags, notes,
-secret_ref) are preserved on re-run.
-
-After seeding, verify:
-
-```bash
-velox-admin sync-worker-nodes --db /var/lib/velox-server/velox.db \
-    --inventory deploy/ansible/inventory.ini --dry-run
-```
-
-and confirm the boot log line:
+Verify with the boot log line:
 
 ```
 [BOOTSTRAP] WorkerNodeRegistry: loaded N worker nodes from persistent inventory
@@ -65,9 +51,11 @@ and confirm the boot log line:
 
 ## Onboarding a new node
 
-1. Provision the host (key auth, sudo, worker runtime):
-   `ansible-playbook -i deploy/ansible/inventory.ini deploy/playbooks/bootstrap-ssh.yml --limit <alias>`
-2. Add the node to the inventory file (seed reference).
-3. Re-run `velox-admin sync-worker-nodes --apply`.
+1. Insert the node into `ansible_hosts` (`POST /api/v1/admin/ansible/computers`
+   or SQLite) with `worker_id` and `ansible_host` set.
+2. Provision the OpenBao AppRole material + worker credential on the host:
+   `scripts/operator/provision-worker-openbao.sh --worker <worker_id> --ssh-host <ip> --ssh-user <user>`.
+3. Install the worker runtime on the host (`prepare-host.sh` /
+   `velox-worker-activate-image` install the canonical unit and the mTLS renew).
 4. Restart the master (or wait for the next boot) so the WorkerRegistry
    picks up the new node.
