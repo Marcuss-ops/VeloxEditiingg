@@ -293,12 +293,19 @@ def test_current_worker_release_provenance_and_operator_bridge() -> None:
         "Verify checkout is the event commit",
         '"commit":         "${{ github.sha }}"',
     )
+    # scripts/fleetctl is the canonical Master-API CLI: update/rollback POST
+    # /api/v1/admin/workers/{worker_id}/update with a pinned target_digest and
+    # poll the fleet_operations ledger. The Ansible host-rollout bridge
+    # (FLEET_INVENTORY / ansible-playbook / rollout-worker-digest.yml) is gone.
     require(
         "scripts/fleetctl",
-        "FLEET_INVENTORY is required; use an operator-local inventory file",
-        "rollout-worker-digest.yml",
-        "ansible-playbook",
+        "/api/v1/admin/workers/",
+        "target_digest",
+        "/api/v1/admin/operations/",
     )
+    assert "FLEET_INVENTORY" not in text("scripts/fleetctl")
+    assert "ansible-playbook" not in text("scripts/fleetctl")
+    assert "ansible-inventory" not in text("scripts/fleetctl")
 
 
 def test_removal_plan_matches_gate_contract() -> None:
