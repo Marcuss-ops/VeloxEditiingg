@@ -24,11 +24,17 @@ CA_DIR="$TMP/ca"
 fail() { printf 'openbao-worker-secrets: FAIL: %s\n' "$*" >&2; exit 1; }
 pass() { printf 'openbao-worker-secrets: %s\n' "$*"; }
 cleanup() {
-    [[ -z "$MOCK_PID" ]] || kill "$MOCK_PID" 2>/dev/null || true
-    [[ -z "$PROVISION_PID" ]] || kill "$PROVISION_PID" 2>/dev/null || true
+    local pid
+    for pid in "${MOCK_PID:-}" "${PROVISION_PID:-}"; do
+        [[ -n "$pid" ]] || continue
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    done
     rm -rf "$TMP"
 }
 trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 
 bash -n "$FETCH" "$PREPARE" "$PKI_PROVISION" "$KV_PROVISION" "$OPERATOR_BOOTSTRAP"
 if command -v shellcheck >/dev/null 2>&1; then
@@ -50,7 +56,7 @@ grep -q 'compare_legacy_hashes' "$OPERATOR_BOOTSTRAP" \
     || fail 'operator bootstrap lacks the fail-closed existing-branch hash gate'
 grep -q 'refusing to continue' "$OPERATOR_BOOTSTRAP" \
     || fail 'operator bootstrap does not stop on hash mismatch'
-grep -q 'rstrip(b"\\\\r\\\\n")' "$OPERATOR_BOOTSTRAP" \
+grep -q 'rstrip(b"\\r\\n")' "$OPERATOR_BOOTSTRAP" \
     || fail 'operator bootstrap does not normalize terminal line endings before hashing'
 grep -Fq "allowed_uri_sans=\"\$spiffe_uri\"" "$PKI_PROVISION" \
     || fail 'PKI provisioning does not constrain the per-worker SPIFFE URI'
@@ -67,6 +73,30 @@ grep -q 'pki/sign/worker-worker-a' "$policy_a" \
 if grep -q 'worker-b' "$policy_a"; then
     fail 'worker-a policy contains a cross-worker identity'
 fi
+# Offline capability model: render two worker policies and verify that each
+# worker can read only its own credential, sign only with its own PKI role, and
+# has no capability on issue/role/configuration endpoints. Live
+# verify-approle.sh remains a separate production-only check.
+python3 - "$WORKER_POLICY" <<'PY'
+import re
+import sys
+
+policy = open(sys.argv[1], encoding="utf-8").read()
+for worker, other in (("worker-a", "worker-b"), ("worker-b", "worker-a")):
+    rendered = policy.replace("{{ WORKER_ID }}", worker)
+    blocks = dict(re.findall(
+        r'path "([^"]+)"\s*\{\s*capabilities = (\[[^]]*\])',
+        rendered,
+    ))
+    assert blocks[f"velox/data/production/workers/{worker}/credential"] == '["read"]'
+    assert blocks[f"velox/metadata/production/workers/{worker}/credential"] == '["read"]'
+    assert blocks[f"pki/sign/worker-{worker}"] == '["update"]'
+    assert f"velox/data/production/workers/{other}/credential" not in blocks
+    assert f"pki/sign/worker-{other}" not in blocks
+    assert blocks[f"pki/issue/worker-{worker}"] == '[]'
+    assert blocks["pki/roles/*"] == '[]'
+    assert blocks["pki/config/*"] == '[]'
+PY
 if grep -Eq 'cert/(cert|key|ca)|OPENBAO_VALUE_WORKER_(CERT|KEY|CA)|/etc/velox-worker/certs/(worker\.crt|worker\.key|ca\.crt)' \
     "$KV_PROVISION" "$OPERATOR_BOOTSTRAP"; then
     fail 'worker mTLS certificate/key/CA import contract was reintroduced'
@@ -96,14 +126,14 @@ printf 'match' > "$PROVISION_MODE"
 : > "$PROVISION_SSH_LOG"
 cat > "$PROVISION_BIN/ansible-inventory" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\\n' '{"_meta":{"hostvars":{"mock-host":{"worker_id":"w1","ansible_host":"127.0.0.1","ansible_user":"mock"}}}}'
+printf '%s\n' '{"_meta":{"hostvars":{"mock-host":{"worker_id":"w1","ansible_host":"127.0.0.1","ansible_user":"mock"}}}}'
 EOF
 cat > "$PROVISION_BIN/ssh" <<'EOF'
 #!/usr/bin/env bash
 command="${*: -1}"
-printf '%s\\n' "$command" >> "${PROVISION_SSH_LOG:?}"
+printf '%s\n' "$command" >> "${PROVISION_SSH_LOG:?}"
 if [[ "$command" == *"sudo -n cat '/etc/velox-worker/secrets/worker_credential'"* ]]; then
-    printf 'secret-cred-1\\r\\n'
+    printf 'secret-cred-1\r\n'
 else
     cat >/dev/null
 fi
@@ -134,7 +164,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if open(mode_file).read().strip() == 'missing':
                 self.reply(404, {'errors': ['missing']})
             else:
-                value = 'secret-cred-1\\r\\n' if open(mode_file).read().strip() == 'match' else 'different-credential'
+                value = 'secret-cred-1\r\n' if open(mode_file).read().strip() == 'match' else 'different-credential'
                 self.reply(200, {'data': {'data': {'value': value}}})
             return
         self.reply(404, {'errors': ['not found']})
@@ -143,8 +173,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         if self.path != '/v1/auth/approle/login':
             with open(os.path.join(os.path.dirname(posts_file), 'all-non-login-posts'), 'ab') as handle:
-                handle.write(self.path.encode() + b' ' + body + b'\\n')
+                handle.write(self.path.encode() + b' ' + body + b'\n')
         if self.path == '/v1/auth/approle/login':
+            try:
+                payload = json.loads(body)
+                if payload.get('role_id') != 'role-id' or payload.get('secret_id') != 'secret-id':
+                    raise ValueError('invalid AppRole material')
+            except (ValueError, json.JSONDecodeError):
+                self.reply(403, {'errors': ['invalid AppRole material']})
+                return
             self.reply(200, {'auth': {'client_token': 'mock-token'}})
             return
         if self.path == '/v1/velox/data/production/workers/w1/credential':
@@ -159,7 +196,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.reply(400, {'errors': ['invalid credential payload']})
                 return
             with open(posts_file, 'ab') as handle:
-                handle.write(body + b'\\n')
+                handle.write(body + b'\n')
+            # Make the imported value visible to the subsequent read-back hash
+            # gate; the test therefore exercises post-write verification.
+            with open(mode_file, 'w') as handle:
+                handle.write('match\n')
             self.reply(200, {'data': {}})
             return
         self.reply(404, {'errors': ['not found']})
@@ -173,6 +214,10 @@ for _ in $(seq 1 50); do
     sleep 0.1
 done
 kill -0 "$PROVISION_PID" 2>/dev/null || fail 'operator mock server did not start'
+cross_code="$(curl -s -o /dev/null -w '%{http_code}' \
+    -H 'X-Vault-Token: root-token' \
+    "http://127.0.0.1:$PROVISION_PORT/v1/velox/data/production/workers/w2/credential")"
+[[ "$cross_code" == "404" ]] || fail 'operator mock exposed another worker branch'
 provision_env=(
     PATH="$PROVISION_BIN:$PATH"
     HOME="$HOME"
@@ -183,7 +228,7 @@ provision_env=(
     VELOX_SSH_KEY="$PROVISION_TMP/ssh-key"
     PROVISION_SSH_LOG="$PROVISION_SSH_LOG"
 )
-printf '[mock inventory]\\n' > "$PROVISION_TMP/inventory.ini"
+printf '[mock inventory]\n' > "$PROVISION_TMP/inventory.ini"
 run_operator() {
     env -i "${provision_env[@]}" bash "$OPERATOR_BOOTSTRAP" --worker w1 "$@"
 }
@@ -271,7 +316,8 @@ class H(http.server.BaseHTTPRequestHandler):
         try: data = json.loads(raw)
         except Exception: self._json(400, {'errors':['invalid json']}); return
         if self.path == '/v1/auth/approle/login':
-            if data.get('secret_id') != SECRET: self._json(403, {'errors':['invalid secret-id']}); return
+            if data.get('role_id') != 'role-id' or data.get('secret_id') != SECRET:
+                self._json(403, {'errors':['invalid AppRole material']}); return
             self._json(200, {'auth': {'client_token': 'mock-token'}}); return
         if self.path == '/v1/pki/sign/worker-w1':
             H.sign_calls += 1
@@ -308,6 +354,10 @@ for _ in $(seq 1 50); do
     sleep 0.1
 done
 kill -0 "$MOCK_PID" 2>/dev/null || fail 'mock server did not start'
+cross_code="$(curl -s -o /dev/null -w '%{http_code}' \
+    -H 'X-Vault-Token: mock-token' \
+    "http://127.0.0.1:$PORT/v1/velox/data/production/workers/w2/credential")"
+[[ "$cross_code" == "404" ]] || fail 'runtime mock exposed another worker branch'
 
 common_env=(
     VELOX_OPENBAO_ADDR="http://127.0.0.1:$PORT"

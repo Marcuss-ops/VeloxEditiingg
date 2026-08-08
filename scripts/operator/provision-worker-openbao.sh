@@ -136,7 +136,7 @@ kv_value_hash() {
     return 0
   fi
   hash="$(jq -erj '.data.data.value // empty' "$out" \
-    | python3 -c 'import sys; sys.stdout.buffer.write(sys.stdin.buffer.read().rstrip(b"\\r\\n"))' \
+    | python3 -c 'import sys; sys.stdout.buffer.write(sys.stdin.buffer.read().rstrip(b"\r\n"))' \
     | sha256sum | awk '{print $1}')" \
     || { rm -f "$out"; die "invalid or empty OpenBao value for $worker/$leaf"; }
   rm -f "$out"
@@ -179,7 +179,7 @@ import_remote_file() {
   log "importing legacy material for $worker/$leaf (value redacted)"
   tmp="$(mktemp)"
   if ! ssh_worker "$worker" "sudo -n cat '$source'" \
-      | python3 -c 'import sys; sys.stdout.buffer.write(sys.stdin.buffer.read().rstrip(b"\\r\\n"))' \
+      | python3 -c 'import sys; sys.stdout.buffer.write(sys.stdin.buffer.read().rstrip(b"\r\n"))' \
       | jq -Rs '{data: {value: .}}' > "$tmp"; then
     rm -f "$tmp"
     die "cannot read legacy source for $worker/$leaf"
@@ -192,7 +192,7 @@ import_remote_file() {
 compare_legacy_hashes() {
   local worker="$1" leaf="$2" source="$3" remote_hash bao_hash
   remote_hash="$(ssh_worker "$worker" "sudo -n cat '$source'" \
-    | python3 -c 'import sys; sys.stdout.buffer.write(sys.stdin.buffer.read().rstrip(b"\\r\\n"))' \
+    | python3 -c 'import sys; sys.stdout.buffer.write(sys.stdin.buffer.read().rstrip(b"\r\n"))' \
     | sha256sum | awk '{print $1}')"
   bao_hash="$(kv_value_hash "$worker" "$leaf")"
   [[ "$remote_hash" =~ ^[[:xdigit:]]{64}$ && "$bao_hash" =~ ^[[:xdigit:]]{64}$ ]] \
@@ -327,6 +327,11 @@ case "$code" in
       log "dry-run $WORKER_ID/$leaf: would import the matching legacy credential"
     else
       import_remote_file "$WORKER_ID" "$leaf" "$source"
+      # A successful HTTP write is not sufficient: re-read the canonical value
+      # and verify it against the unchanged worker file before installing any
+      # AppRole/bootstrap material. This keeps an acknowledged-but-corrupt
+      # import fail-closed.
+      compare_legacy_hashes "$WORKER_ID" "$leaf" "$source"
     fi
     ;;
   *) die "cannot inspect OpenBao leaf $WORKER_ID/$leaf (HTTP $code)" ;;
