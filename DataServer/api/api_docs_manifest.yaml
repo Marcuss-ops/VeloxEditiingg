@@ -113,23 +113,32 @@ routes:
     method: post
     operationId: listPublishingCatalog
     tag: publishing
-    summary: "List channel and group publishing targets for a workspace."
+    summary: "Retired: Velox does not expose the InstaEdit-owned channel/group catalog."
     security: bearerM2MToken
     parameters:
       - AuthorizationHeader
       - XRequestIDHeader
-    requestBody:
-      $ref: "#/components/schemas/PublishingCatalogRequest"
+    requestBody: null
     responses:
-      "200":
-        $ref: "#/components/schemas/PublishingCatalogResponse"
-      "400":
+      "410":
         $ref: "#/components/schemas/ErrorEnvelope"
       "401":
         $ref: "#/components/schemas/ErrorEnvelope"
-      "422":
+
+  - path: /api/v1/publishing/targets
+    method: post
+    operationId: listPublishingTargets
+    tag: publishing
+    summary: "Retired: Velox does not expose the InstaEdit-owned channel catalog."
+    security: bearerM2MToken
+    parameters:
+      - AuthorizationHeader
+      - XRequestIDHeader
+    requestBody: null
+    responses:
+      "410":
         $ref: "#/components/schemas/ErrorEnvelope"
-      "500":
+      "401":
         $ref: "#/components/schemas/ErrorEnvelope"
 
   - path: /api/v1/jobs/{job_id}

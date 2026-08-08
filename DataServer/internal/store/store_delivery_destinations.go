@@ -131,7 +131,7 @@ func (s *SQLiteStore) GetDeliveryDestinationByExternalID(ctx context.Context, ex
 // BatchDeliveryDestinationsStatus. It exists so the handler-layer
 // pre-flight can distinguish the two failure modes that §0.3.4
 // item 4 of the runbook splits (Velox-side enabled=false vs.
-// InstaEdit-side catalog-zero-match) — the previous 2-state
+// an upstream InstaEdit-side verdict) — the previous 2-state
 // batched helper collapsed both into a single `false` and made
 // operator dashboards unable to disambiguate the remediation.
 type DeliveryDestinationStatus int

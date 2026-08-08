@@ -62,22 +62,17 @@ func writeIdempotencyKeyError(c *gin.Context, vErr *IdempotencyKeyError) {
 // can disambiguate:
 //
 //   - NOT_FOUND       → target_error_code=DESTINATION_NOT_FOUND
-//     (id was unknown; producer must re-pick
-//     from /publishing/targets, never
-//     invent destinations).
+//     (id was unknown; producer must obtain a
+//     valid opaque destination from InstaEdit,
+//     never invent destinations).
 //   - DISABLED        → target_error_code=BLOCKED_VELOX_DISABLED
-//     (Velox-side delivery_destinations
-//     .enabled flipped to 0; remediation is
-//     `UPDATE delivery_destinations SET
-//     enabled = 1 WHERE destination_id=...`
-//     OR re-sync the catalog via
-//     POST /api/v1/admin/destinations/sync).
+//     (the locally provisioned opaque delivery
+//     row is disabled; remediation belongs to
+//     the InstaEdit-owned destination lifecycle).
 //   - ENABLED         → no detail, enqueue proceeds.
 //
-// The catalog-side BLOCKED_NO_PUBLISHABLE_CHANNEL is owned by
-// /publishing/targets (publishing_targets.go) and is the §0.2.2
-// cheat-sheet sibling to BLOCKED_VELOX_DISABLED (see
-// docs/SOCIAL_API_MIGRATION_RUNBOOK.md).
+// Catalog-side publishability is owned by InstaEdit. Velox only
+// validates the opaque delivery row supplied by the submitter.
 //
 // Aggregates ALL destination-existence violations into a single 422
 // with details[].path = "delivery_plan.N.destination_id" (same path

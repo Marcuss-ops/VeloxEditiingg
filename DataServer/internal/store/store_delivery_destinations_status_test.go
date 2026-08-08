@@ -34,7 +34,7 @@ func TestBatchDeliveryDestinationsStatus_AllThreeBuckets(t *testing.T) {
 	ctx := context.Background()
 
 	// Seed ENABLED row.
-	if err := s.UpsertSyncedDeliveryDestination(ctx, DeliveryDestination{
+	if err := s.InsertDeliveryDestination(&DeliveryDestination{
 		DestinationID:         "dest-enabled",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "dest-enabled-external",
@@ -44,7 +44,7 @@ func TestBatchDeliveryDestinationsStatus_AllThreeBuckets(t *testing.T) {
 	}
 
 	// Seed DISABLED row.
-	if err := s.UpsertSyncedDeliveryDestination(ctx, DeliveryDestination{
+	if err := s.InsertDeliveryDestination(&DeliveryDestination{
 		DestinationID:         "dest-disabled",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "dest-disabled-external",
@@ -116,7 +116,7 @@ func TestBatchDeliveryDestinationsStatus_DeduplicatesAndTrims(t *testing.T) {
 	defer s.Close()
 
 	ctx := context.Background()
-	if err := s.UpsertSyncedDeliveryDestination(ctx, DeliveryDestination{
+	if err := s.InsertDeliveryDestination(&DeliveryDestination{
 		DestinationID:         "dest-x",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "dest-x-external",
@@ -159,7 +159,7 @@ func TestValidateDeliveryDestinationTx_ErrDestinationDisabledIs(t *testing.T) {
 	defer s.Close()
 
 	ctx := context.Background()
-	if err := s.UpsertSyncedDeliveryDestination(ctx, DeliveryDestination{
+	if err := s.InsertDeliveryDestination(&DeliveryDestination{
 		DestinationID:         "dest-disabled",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "dest-disabled-external",

@@ -11,10 +11,9 @@ import (
 	"velox-server/internal/credentials"
 )
 
-// PublishingCatalogRequest asks the Social API for every channel and group
-// bound to one workspace and platform. The discriminator is fixed to catalog
-// by the client so callers cannot accidentally send a channel/group validation
-// shape.
+// PublishingCatalogRequest is the internal InstaEdit resolve-target request
+// shape retained for the submit resolver. It does not create or persist a
+// Velox catalog or membership mirror.
 type PublishingCatalogRequest struct {
 	WorkspaceID int64  `json:"workspace_id"`
 	Platform    string `json:"platform"`
@@ -23,14 +22,12 @@ type PublishingCatalogRequest struct {
 	} `json:"target"`
 }
 
-// PublishingTargetCatalogRequest is the historical name kept for callers of
-// the channel-only catalog method. It is an alias so both endpoints share the
-// exact same upstream wire shape.
+// PublishingTargetCatalogRequest is a compatibility alias for the internal
+// InstaEdit resolver request. It is not a Velox-owned catalog contract.
 type PublishingTargetCatalogRequest = PublishingCatalogRequest
 
-// PublishingGroupMember is the immutable membership snapshot used to validate
-// all-or-nothing group selection. The upstream service remains authoritative;
-// Velox never infers membership from counts alone.
+// PublishingGroupMember is an upstream InstaEdit membership snapshot used
+// transiently during submit validation. Velox never persists or mirrors it.
 type PublishingGroupMember struct {
 	WorkspaceID             int64                  `json:"workspace_id,omitempty"`
 	PlatformAccountID       int64                  `json:"platform_account_id"`
@@ -42,9 +39,8 @@ type PublishingGroupMember struct {
 	Capabilities            PublishingCapabilities `json:"capabilities"`
 }
 
-// PublishingGroup is a group selection returned by InstaEdit's catalog. Group
-// expansion is deliberately not performed by this client; Velox receives the
-// authoritative membership snapshot and validates it before selection.
+// PublishingGroup is an upstream InstaEdit group snapshot used transiently
+// by the submit resolver. Velox does not own or persist group membership.
 type PublishingGroup struct {
 	WorkspaceID            int64                   `json:"workspace_id,omitempty"`
 	GroupID                int64                   `json:"group_id"`
@@ -59,8 +55,8 @@ type PublishingGroup struct {
 	Members                []PublishingGroupMember `json:"members,omitempty"`
 }
 
-// PublishingCapabilities mirrors the provider-neutral capability block owned
-// by InstaEdit. Velox treats these booleans as discovery data only.
+// PublishingCapabilities carries provider-neutral capability data owned by
+// InstaEdit; Velox treats it as transient validation input only.
 type PublishingCapabilities struct {
 	UploadVideo  bool `json:"upload_video"`
 	SetThumbnail bool `json:"set_thumbnail"`
@@ -68,9 +64,9 @@ type PublishingCapabilities struct {
 	Schedule     bool `json:"schedule"`
 }
 
-// PublishingTarget is one selectable or blocked social channel. The opaque
-// ExternalDestinationID is the only delivery identifier Velox persists;
-// channel/account fields exist for display and audit.
+// PublishingTarget is an upstream InstaEdit channel verdict. The opaque
+// ExternalDestinationID is the only delivery identifier Velox may persist;
+// channel/account fields are transient validation/display data.
 type PublishingTarget struct {
 	WorkspaceID             int64                  `json:"workspace_id,omitempty"`
 	PlatformAccountID       int64                  `json:"platform_account_id"`
@@ -89,7 +85,8 @@ type PublishingTarget struct {
 }
 
 // PublishingTargetCatalogResponse is returned by InstaEdit's canonical
-// resolve-target endpoint for target.type=catalog.
+// resolve-target endpoint and is consumed transiently by submit validation;
+// it is never synchronized into a Velox catalog.
 type PublishingTargetCatalogResponse struct {
 	Valid           bool               `json:"valid"`
 	DestinationID   string             `json:"destination_id,omitempty"`

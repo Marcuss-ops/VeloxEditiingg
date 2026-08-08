@@ -88,11 +88,11 @@ type SubmitOutput struct {
 	Format string `json:"format,omitempty" validate:"omitempty,oneof=mp4 mov webm"`
 }
 
-// SubmitPublishingTarget selects one server-resolved channel or group.
-// Channel targets use the catalog's opaque destination_id; group targets use
-// group_id. The workspace scope is explicit so selection cannot cross a
-// workspace boundary. The handler enforces that this selector is mutually
-// exclusive with a non-empty delivery_plan.
+// SubmitPublishingTarget carries an InstaEdit-owned channel/group selection
+// into the submit adapter. Channel targets use an opaque destination_id;
+// group targets use group_id. The workspace scope is explicit so selection
+// cannot cross a workspace boundary. Velox validates the transient upstream
+// selection but does not own or mirror the catalog.
 type SubmitPublishingTarget struct {
 	WorkspaceID   int64  `json:"workspace_id" validate:"required,gte=1"`
 	Type          string `json:"type" validate:"required,oneof=channel group"`
@@ -123,14 +123,17 @@ type SubmitJobBatchResponse struct {
 	Items   []SubmitJobBatchItemResult `json:"items"`
 }
 
-// PublishingCatalogRequest is the M2M request for the unified channel/group
-// publishing catalog. The handler enforces the supported platform allow-list.
+// PublishingCatalogRequest is a retained legacy schema for the retired
+// publishing catalog route. Runtime catalog discovery is InstaEdit-owned and
+// no Velox handler decodes this type.
 type PublishingCatalogRequest struct {
 	WorkspaceID int64  `json:"workspace_id" validate:"required,gte=1"`
 	Platform    string `json:"platform" validate:"required,min=1"`
 }
 
-// PublishingCatalogCapabilities describes the operations a channel supports.
+// PublishingCatalogCapabilities is a retained legacy schema-only capability
+// block for the retired catalog contract; runtime capability ownership is
+// InstaEdit's.
 type PublishingCatalogCapabilities struct {
 	UploadVideo  bool `json:"upload_video"`
 	SetThumbnail bool `json:"set_thumbnail"`
@@ -138,8 +141,8 @@ type PublishingCatalogCapabilities struct {
 	Schedule     bool `json:"schedule"`
 }
 
-// PublishingCatalogChannel is one concrete channel selectable by an M2M
-// sender. DestinationID is ready for delivery_plan[].destination_id.
+// PublishingCatalogChannel is a retained legacy schema-only channel shape.
+// Runtime channel selection and destination ownership belong to InstaEdit.
 type PublishingCatalogChannel struct {
 	Type              string                        `json:"type" validate:"required,oneof=channel"`
 	DestinationID     string                        `json:"destination_id" validate:"required,min=1"`
@@ -154,8 +157,8 @@ type PublishingCatalogChannel struct {
 	TargetErrorCode   string                        `json:"target_error_code,omitempty"`
 }
 
-// PublishingCatalogGroup is a selectable group summary. Group expansion is
-// performed server-side during job submission, not by the external sender.
+// PublishingCatalogGroup is a retained legacy schema-only group shape.
+// Runtime group membership and expansion belong to InstaEdit.
 type PublishingCatalogGroup struct {
 	Type                   string `json:"type" validate:"required,oneof=group"`
 	GroupID                int64  `json:"group_id" validate:"required,gte=1"`
@@ -169,8 +172,9 @@ type PublishingCatalogGroup struct {
 	TargetErrorCode        string `json:"target_error_code,omitempty"`
 }
 
-// PublishingCatalogResponse is the unified M2M catalog of concrete channels
-// and server-resolvable groups for one workspace and platform.
+// PublishingCatalogResponse is a retained legacy schema for the retired
+// publishing catalog route. It remains registered only for backwards-compatible
+// documentation generation; Velox no longer serves this catalog.
 type PublishingCatalogResponse struct {
 	WorkspaceID int64                      `json:"workspace_id" validate:"required,gte=1"`
 	Platform    string                     `json:"platform" validate:"required,min=1"`

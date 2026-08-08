@@ -7,8 +7,7 @@ components:
             description: |
                 Bearer authorization header. Depending on the route, the
                 token is either the configured `VELOX_ADMIN_TOKEN` or an M2M
-                credential validated by the route's middleware (the publishing
-                catalog requires the `jobs.submit` scope). Example:
+                credential validated by the route's middleware. Example:
                 `Authorization: Bearer eyJhbGciOi...`.
             in: header
             name: Authorization
@@ -1126,9 +1125,9 @@ components:
         bearerM2MToken:
             bearerFormat: opaque
             description: |
-                M2M bearer issued by the Velox administrator. Publishing
-                catalog and job routes require the `jobs.submit` scope and
-                are validated by the M2M key middleware.
+                M2M bearer issued by the Velox administrator. Job routes
+                require the `jobs.submit` scope and are validated by the
+                M2M key middleware.
             scheme: bearer
             type: http
 info:
@@ -1365,46 +1364,46 @@ paths:
             parameters:
                 - $ref: '#/components/parameters/AuthorizationHeader'
                 - $ref: '#/components/parameters/XRequestIDHeader'
-            requestBody:
-                content:
-                    application/json:
-                        schema:
-                            $ref: '#/components/schemas/PublishingCatalogRequest'
-                required: true
             responses:
-                "200":
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/PublishingCatalogResponse'
-                    description: OK.
-                "400":
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/ErrorEnvelope'
-                    description: Bad Request.
                 "401":
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/ErrorEnvelope'
                     description: Unauthorized.
-                "422":
+                "410":
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/ErrorEnvelope'
-                    description: Unprocessable Entity.
-                "500":
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/ErrorEnvelope'
-                    description: Internal Server Error.
+                    description: Gone.
             security:
                 - bearerM2MToken: []
-            summary: List channel and group publishing targets for a workspace.
+            summary: 'Retired: Velox does not expose the InstaEdit-owned channel/group catalog.'
+            tags:
+                - publishing
+    /api/v1/publishing/targets:
+        post:
+            operationId: listPublishingTargets
+            parameters:
+                - $ref: '#/components/parameters/AuthorizationHeader'
+                - $ref: '#/components/parameters/XRequestIDHeader'
+            responses:
+                "401":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorEnvelope'
+                    description: Unauthorized.
+                "410":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorEnvelope'
+                    description: Gone.
+            security:
+                - bearerM2MToken: []
+            summary: 'Retired: Velox does not expose the InstaEdit-owned channel catalog.'
             tags:
                 - publishing
 security:

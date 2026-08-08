@@ -60,6 +60,9 @@ func main() {
 		{"SubmitJobBatchRequest", apiwire.SubmitJobBatchRequest{}},
 		{"SubmitJobBatchItemResult", apiwire.SubmitJobBatchItemResult{}},
 		{"SubmitJobBatchResponse", apiwire.SubmitJobBatchResponse{}},
+		// Retained legacy schemas for the retired publishing catalog route.
+		// InstaEdit owns runtime catalog discovery; these entries preserve
+		// compatibility for consumers that still regenerate historical specs.
 		{"PublishingCatalogRequest", apiwire.PublishingCatalogRequest{}},
 		{"PublishingCatalogCapabilities", apiwire.PublishingCatalogCapabilities{}},
 		{"PublishingCatalogChannel", apiwire.PublishingCatalogChannel{}},

@@ -74,8 +74,8 @@ func NewHandlersWithResolver(
 
 // HandlersFactory is the shared construction helper. The Social API client is
 // created from the typed Config snapshot once. Empty
-// configuration remains fail-closed: ListPublishingTargets returns
-// socialclient.ErrNotConfigured and the HTTP handler maps it to 503.
+// configuration remains fail-closed for the internal publishing resolver;
+// public catalog discovery is retired because InstaEdit owns that catalog.
 func HandlersFactory(
 	cfg *config.Config,
 	enqueuer *enqueue.Enqueuer,
