@@ -12,11 +12,10 @@ worker-image.yml` (which builds and publishes the worker image).
 | `compose.yml` | The sole Compose service definition; fixed project/container names, hardened mounts, and readiness healthcheck. |
 | `velox-worker.service` | The sole systemd owner; systemd starts/stops the fixed Compose project and never runs a second worker process. |
 | `velox-worker-mtls-renew.service` / `.timer` | Daily proactive PKI renewal; the oneshot invokes the canonical CSR resolver and restarts the active worker only after a new bundle is selected. |
-| `migrate-legacy-worker.sh` | One-time, idempotent migration of per-host units, containers, env files, and persistent state. |
 | `compose.chronon.yml` | Configuration reference for Chronon settings consumed by the canonical Compose service; startup remains owned by `velox-worker.service`. |
 | `worker.env.example` | Template for `/etc/velox-worker/worker.env`, the only runtime env path. |
 | `openbao-fetch-worker-secrets.sh` | Explicit OpenBao resolver modes: `--provision`, `--renew`, `--check`, and read-only `--runtime-cache` for an attested bundle during a temporary outage. Manual files are never accepted as cache. |
-| `prepare-host.sh` | Idempotent migration + setup + digest pull + systemd convergence. Runs the OpenBao resolver when `VELOX_OPENBAO_ADDR` is set. |
+| `prepare-host.sh` | Idempotent setup + digest pull + systemd convergence. Runs the OpenBao resolver when `VELOX_OPENBAO_ADDR` is set. |
 
 ## First-time setup on a fresh worker host
 
@@ -57,10 +56,7 @@ sudo install -m 0644 openbao-ca.crt /etc/velox-worker/certs/openbao-ca.crt
 # contacts OpenBao and verifies remote/local coherence. No PEM or private key
 # is stored in the OpenBao KV engine.
 
-# 4. On a legacy host, migrate once before the first canonical start:
-sudo deploy/runtime/migrate-legacy-worker.sh
-
-# 5. Run the canonical systemd convergence (it repeats migration safely).
+# 4. Run the canonical systemd convergence:
 sudo deploy/runtime/prepare-host.sh
 ```
 

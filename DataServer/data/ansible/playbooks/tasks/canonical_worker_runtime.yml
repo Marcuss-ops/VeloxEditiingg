@@ -34,8 +34,6 @@
     velox_worker_project_name: "velox-worker"
     velox_worker_service_source: "{{ velox_current_root }}/deploy/runtime/velox-worker.service"
     velox_worker_compose_source: "{{ velox_current_root }}/deploy/runtime/compose.yml"
-    velox_worker_migration_source: "{{ velox_current_root }}/deploy/runtime/migrate-legacy-worker.sh"
-    velox_worker_migration_marker: "{{ velox_state_dir }}/migration/completed"
     velox_worker_health_port: 8081
     velox_worker_heartbeat_masters: "{{ master_url }}"
     velox_worker_secondary_master_url: ""
@@ -54,8 +52,8 @@
           )
       }}
 
-# Fail closed before migration, env rendering, or directory creation. The
-# canonical velox-worker.service.d directory is allowed. Legacy per-worker
+# Fail closed before env rendering or directory creation. The canonical
+# velox-worker.service.d directory is allowed. Legacy per-worker
 # drop-in directories are removed only when completely empty; any file,
 # symlink, or nested entry aborts convergence so an operator can inspect it.
 - name: CanonicalRuntime | Remove empty legacy worker drop-in directories
@@ -111,32 +109,6 @@
     state: directory
     mode: "0755"
 
-- name: CanonicalRuntime | Check one-time legacy migration marker
-  ansible.builtin.stat:
-    path: "{{ velox_worker_migration_marker }}"
-  register: velox_worker_migration_done
-
-# Legacy state discovery and copying belong only to the migration boundary.
-# Empty legacy systemd drop-in directories are retired above; non-empty ones
-# fail closed before steady-state convergence can mutate the host.
-- name: CanonicalRuntime | Install one-time legacy migration helper
-  ansible.builtin.copy:
-    src: "{{ velox_worker_migration_source }}"
-    dest: "{{ velox_worker_compose_dir }}/migrate-legacy-worker.sh"
-    remote_src: true
-    mode: "0755"
-  when: not velox_worker_migration_done.stat.exists
-
-- name: CanonicalRuntime | Migrate legacy runtime once before convergence
-  ansible.builtin.command:
-    argv:
-      - "{{ velox_worker_compose_dir }}/migrate-legacy-worker.sh"
-  environment:
-    WORKER_ID: "{{ velox_worker_identity }}"
-    LEGACY_RUNTIME_DIR: ""
-    VELOX_STATE_DIR: "{{ velox_state_dir }}"
-  when: not velox_worker_migration_done.stat.exists
-
 - name: CanonicalRuntime | Read release bundle hash
   ansible.builtin.slurp:
     src: "{{ velox_current_root }}/RemoteCodex/BUNDLE_HASH.txt"
@@ -166,10 +138,6 @@
       canonical 64-hex SHA256. Resolved value: '{{ velox_worker_bundle_hash }}'
       ({{ velox_worker_bundle_hash | length }} chars). Fix the bundle source;
       do not disable this gate.
-
-# Legacy state discovery and copying remain owned by the migration helper.
-# Empty legacy systemd drop-in directories are retired by the atomic cleanup
-# above; non-empty ones fail closed before steady-state convergence.
 
 - name: CanonicalRuntime | Create missing writable runtime directories without rewriting metadata
   ansible.builtin.shell: |
@@ -201,9 +169,8 @@
   ansible.builtin.shell: |
     set -o pipefail
     target="{{ velox_worker_env_path }}"
-    # The canonical env is the steady-state source. During the one-time
-    # migration only, the helper has already copied any legacy credential into
-    # this path; never scan legacy env files during normal convergence.
+    # The canonical env is the only steady-state source; never scan legacy
+    # env files during normal convergence.
     if [ -f "$target" ]; then
       grep -m1 -E '^VELOX_WORKER_SECRET=[^[:space:]]' "$target" || true
     fi

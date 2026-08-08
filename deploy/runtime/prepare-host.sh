@@ -17,9 +17,7 @@
 #      $VELOX_STATE_DIR/worker_config.json exists and parses as JSON. This
 #      file is rendered by deploy/scripts/apply-local-worker-config.sh and
 #      bind-mounted into the container at /opt/velox/worker_config.json.
-#   4. Runs migrate-legacy-worker.sh once to preserve legacy state and retire
-#      per-host units/containers before the canonical runtime is installed.
-#   5. Creates missing paths under /opt/velox-worker, /etc/velox-worker,
+#   4. Creates missing paths under /opt/velox-worker, /etc/velox-worker,
 #      and VELOX_STATE_DIR/state|work|cache|output without changing existing
 #      owner, mode, ACLs, or contents.
 #   6. Sets uid 10001 ownership AND group read+traversal on /etc/velox-worker
@@ -52,8 +50,6 @@ readonly MTLS_RENEW_TIMER_DST="/etc/systemd/system/velox-worker-mtls-renew.timer
 ACTIVATE_IMAGE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker-activate-image"
 readonly ACTIVATE_IMAGE_DST="/usr/local/sbin/velox-worker-activate-image"
 readonly ACTIVATE_SUDOERS_DST="/etc/sudoers.d/velox-worker-activate-image"
-MIGRATION_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/migrate-legacy-worker.sh"
-readonly MIGRATION_DST="/opt/velox-worker/migrate-legacy-worker.sh"
 SERVICE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker.service"
 readonly SERVICE_DST="/etc/systemd/system/velox-worker.service"
 readonly IMAGE_UID="10001"
@@ -129,22 +125,14 @@ ENV_FILE="${ENV_FILE:-$ENV_FILE_DEFAULT}"
 # only velox-worker-<id>.service.d directories are legacy.
 assert_no_legacy_dropins
 
-# If the canonical env already exists, load it before migration so the
-# mandatory state root is available to the one-time migrator. A host without
-# an explicit state root fails closed rather than falling back to a guessed
-# /var/lib path.
+# If the canonical env already exists, load it before convergence. A host
+# without an explicit state root fails closed rather than guessing a path.
 if [[ -f "$ENV_FILE" ]]; then
     set -a
     # shellcheck disable=SC1090
     source "$ENV_FILE"
     set +a
 fi
-
-log "Migrating legacy worker runtime if present"
-if [[ "$MIGRATION_SRC" != "$MIGRATION_DST" ]]; then
-  install -o root -g root -m 0755 "$MIGRATION_SRC" "$MIGRATION_DST"
-fi
-CANONICAL_ENV="$ENV_FILE" VELOX_STATE_DIR="${VELOX_STATE_DIR:-}" "$MIGRATION_DST"
 
 [[ -f "$ENV_FILE" ]] \
     || fail "env file not found: $ENV_FILE. Copy deploy/runtime/worker.env.example to $ENV_FILE and edit."
