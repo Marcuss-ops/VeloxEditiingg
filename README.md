@@ -70,6 +70,39 @@ inventory and the one-time seed sync have been retired; see
 [`docs/operations/credential-registry.md`](docs/operations/credential-registry.md)
 for the credential and materialization contract.
 
+### Canonical worker rollout
+
+Production image updates and rollbacks use the Master API through
+`scripts/fleetctl`; operators do not invoke Ansible, SSH, Docker, or systemd
+mutations directly. The canonical path is:
+
+```text
+fleetctl/API → Master → FleetController → UpdateExecutor
+  → WorkerNodeRegistry → SSH → velox-worker-activate-image
+```
+
+`WorkerNodeRegistry` resolves the worker's registered SSH target from
+`ansible_hosts`. `UpdateExecutor` owns drain/idle checks, digest and Cosign
+verification, the remote activation helper, readiness/reconnect, smoke and
+rollback evidence in the operation ledger. Use an immutable GHCR digest and
+promote one worker at a time:
+
+```bash
+scripts/fleetctl drain <worker_id> "canary rollout"
+scripts/fleetctl update <worker_id> \
+  ghcr.io/<owner>/velox-worker@sha256:<64-lowercase-hex> \
+  "canary rollout"
+scripts/fleetctl smoke <worker_id>
+scripts/fleetctl resume <worker_id> "rollout accepted"
+```
+
+The bundle/Ansible path remains only as a server-side migration bridge for
+workers that have not yet reached the canonical runtime; it is not a release
+or rollback entrypoint. See
+[`docs/operations/worker-rollout-paths.md`](docs/operations/worker-rollout-paths.md)
+for the bridge boundary and acceptance gates.
+
+
 The agent operating contract — where canonical values live, what an agent (LLM, scripted, or CI-driven) must never print, and which workflow is allowed to publish an image — is the single source of truth in [`docs/architecture/AGENT-CONTRACT.md`](docs/architecture/AGENT-CONTRACT.md). The seven rules in that document bind every action on `main` and are backed by `scripts/ci/check-secrets.sh`, `deploy/validate-master-env.sh`, and `scripts/operator/with-production-env.sh`.
 
 ## Operator onboarding

@@ -11,7 +11,8 @@ master SQLite DB, exposed through the canonical `WorkerNode` view
 | Node connectivity (host, ssh user, secret ref, enabled) | `ansible_hosts` DB (migration 004) |
 | Canonical fleet registry (in-memory, built at boot) | `fleet.WorkerRegistry` ← `ListWorkerNodes()` |
 | SSH surface (health probes A/B, smoke D) | `fleet.NewSSHClientFromRegistry` |
-| Per-operation Ansible inventory | `AnsibleComputerManager.GenerateInventory` ← `ansible_hosts` |
+| Canonical rollout connectivity | `WorkerNodeRegistry` → `SSHClientFromRegistry` ← `ansible_hosts` |
+| Compatibility-bridge inventory | `AnsibleComputerManager.GenerateInventory` ← `ansible_hosts` (server-side only) |
 
 The runtime worker registry (`/api/v1/workers` — connected sessions)
 continues to describe **active sessions**; it is NOT infrastructure
@@ -32,6 +33,11 @@ inventory. Node connectivity is exclusively the DB.
 - **One-time seed command.** The static `deploy/ansible/inventory.ini` and the
   `velox-admin sync-worker-nodes` migration command have been **retired**: the
   DB is the single registry and rows are inserted directly (see below).
+- **Canonical rollout path.** Production updates and rollbacks are published
+  through the Master FleetController and executed by `UpdateExecutor`, which
+  resolves this registry, uses SSH, and invokes
+  `velox-worker-activate-image`. Ansible inventory generation remains only for
+  the explicitly documented compatibility bridge.
 
 ## Registering nodes (no static inventory)
 

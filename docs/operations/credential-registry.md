@@ -7,8 +7,8 @@ contain a credential value, hash, vault password, or private key.
 
 | Credential | Canonical source | Materialization | Runtime consumer |
 | --- | --- | --- | --- |
-| Master admin token | OpenBao `velox/production/master/admin-token`; Ansible Vault is the fallback during migration | `/etc/velox-server.env` as `VELOX_ADMIN_TOKEN` | Master admin middleware and operator clients |
-| Worker credential | One OpenBao/Ansible-Vault entry keyed by canonical `worker_id` | `/etc/velox-worker/worker.env` as `VELOX_WORKER_SECRET` | Worker agent and Master `worker_credentials` |
+| Master admin token | OpenBao `velox/production/master/admin-token` | `/etc/velox-server.env` as `VELOX_ADMIN_TOKEN` | Master admin middleware and operator clients |
+| Worker credential | OpenBao entry keyed by canonical `worker_id` | `/etc/velox-worker/worker.env` as `VELOX_WORKER_SECRET` | Worker agent and Master `worker_credentials` |
 | Worker mTLS key/certificate | OpenBao PKI CSR workflow keyed by canonical `worker_id` | `/etc/velox-worker/certs/current/worker.{key,crt}` and `ca.crt`; key generated locally | Worker gRPC control plane |
 | SSH operator identity | OpenBao SSH CA; `authorized_keys` is transitional fallback | Host SSH configuration | `velox-deploy` access |
 

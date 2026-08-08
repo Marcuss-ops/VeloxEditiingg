@@ -26,18 +26,18 @@
 #
 # operands (Step 9/15)
 #
-# Usage:
-#   # Pin a new digest onto every worker (one at a time):
-#   ansible-playbook -i deploy/ansible/inventory.ini \
-#     --ask-vault-pass \
-#     -e update_target_digest=sha256:abcdef...123 \
-#     deploy/playbooks/fleet-update.yml
+# Operator usage:
+#   Use scripts/fleetctl, which POSTs directly to the Master API and polls the
+#   fleet_operations ledger. Do not invoke this playbook with a static inventory:
 #
-#   # Use the existing current desired_version pinned in
-#   # group_vars/all.yml (default):
-#   ansible-playbook -i deploy/ansible/inventory.ini \
-#     --ask-vault-pass \
-#     deploy/playbooks/fleet-update.yml
+#     scripts/fleetctl update <worker_id> \
+#       ghcr.io/<owner>/velox-worker@sha256:<64-lowercase-hex> \
+#       "canary rollout"
+#
+# This file is retained only as an internal server-side API delegate for
+# compatibility orchestration; it is not an operator rollout entrypoint. Its
+# historical vars_files still reference the retired Ansible group_vars layout,
+# so it must not be executed directly until separately migrated or removed.
 
 - name: fleet-update — image + digest cascade per worker (Step 9/15)
   hosts: velox_workers

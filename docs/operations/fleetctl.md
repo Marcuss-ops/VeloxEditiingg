@@ -1,9 +1,10 @@
 # Fleet Operations
 
 > **Path selection:** read `docs/operations/worker-rollout-paths.md` before
-> changing a worker. It distinguishes the legacy bundle bridge, the
-> transitional GHCR Ansible bridge, and the definitive FleetController API
-> path. Do not treat their commands as interchangeable.
+> changing a worker. The definitive production path is the FleetController API;
+> the bundle/Ansible path is retained only as a server-side migration bridge for
+> workers that have not yet reached the canonical runtime. Do not treat the
+> bridge and canonical commands as interchangeable.
 
 `scripts/fleetctl` is the operator facade for the worker fleet. It talks to
 the Master with the admin bearer token and never prints that token.
@@ -44,7 +45,7 @@ The canonical chain is:
 
 ```text
 fleetctl/API → Master → FleetController → UpdateExecutor →
-WorkerNodeRegistry → hardened SSH → velox-worker-activate-image
+WorkerNodeRegistry → SSH → velox-worker-activate-image
 ```
 
 The worker must already be `DRAINING` with `active_jobs=0`. The command

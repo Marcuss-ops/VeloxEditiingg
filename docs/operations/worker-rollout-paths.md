@@ -81,7 +81,7 @@ ledger; see §3.
 
 ## 3. Definitive GHCR/FleetController path
 
-The target architecture is:
+The canonical production architecture is:
 
 ```text
 main commit
@@ -89,17 +89,17 @@ main commit
   -> one GHCR image
   -> Cosign signature + SBOM/provenance
   -> baseline manifest bound to the source commit
-  -> Master FleetController operation
-  -> fleet_operations ledger
-  -> UpdateExecutor
-  -> drain + active_tasks=0
-  -> Cosign/Docker/SSH/registry gates
-  -> reconnect + heartbeat + Level-D smoke + Drive
+  -> fleetctl/API -> Master FleetController
+  -> fleet_operations ledger -> UpdateExecutor
+  -> WorkerNodeRegistry (ansible_hosts)
+  -> SSH -> velox-worker-activate-image
+  -> readiness + reconnect + heartbeat + Level-D smoke + Drive
   -> resume on success, rollback and quarantine on failure
 ```
 
-The definitive update operation is the Master API operation represented by
-`deploy/playbooks/fleet-update.yml`. Use this path in production only after
+The definitive update operation is the Master API operation published by
+`scripts/fleetctl` to `POST /api/v1/admin/workers/{worker_id}/update`. Use this
+path in production only after
 the real FleetController backends and all release gates are wired and green;
 the document describes the target contract, not permission to bypass an
 unwired composition root:
@@ -135,10 +135,11 @@ scripts/fleetctl update <worker_id> \
   "canary rollout"
 ```
 
-The internal API-delegate playbook `deploy/playbooks/fleet-update.yml` posts
-the same operation (`POST /api/v1/admin/workers/{worker_id}/update`, with
-`update_target_digest=sha256:<64 hex>`) and polls the ledger — it is the
-server-side equivalent, not an operator entrypoint.
+The internal API-delegate playbook `deploy/playbooks/fleet-update.yml`, where
+still enabled for server-side compatibility orchestration, posts the same
+operation (`POST /api/v1/admin/workers/{worker_id}/update`, with
+`update_target_digest=sha256:<64 hex>`) and polls the ledger. It is not an
+operator entrypoint; operators use `scripts/fleetctl`.
 
 The definitive path must consume an immutable digest, not a version tag:
 
@@ -154,8 +155,8 @@ matches the desired version.
 
 `scripts/fleetctl update` IS the direct Master API entrypoint. The playbook
 `deploy/playbooks/fleet-update.yml` remains only as an internal API-delegate
-(for server-side orchestration) and is scheduled for removal; the two
-entrypoints are not interchangeable.
+(for server-side compatibility orchestration); the two entrypoints are not
+interchangeable.
 
 ## 4. Diagnostic-only commands
 
@@ -237,8 +238,8 @@ diagnostic status/inspect
 ```
 
 Any failed gate stops the rollout. Keep the previous digest and deployment
-record, let the controller/bridge execute rollback, quarantine the worker, and
-investigate before touching the next host.
+record, let the FleetController/UpdateExecutor execute rollback, quarantine the
+worker, and investigate before touching the next host.
 
 ## Related files
 

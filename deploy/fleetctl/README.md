@@ -35,17 +35,16 @@ Token resolution precedence (top wins):
 
 | Precedence | Source | Notes |
 |---:|---|---|
-| 1 | `--token-file=PATH` | chmod-600 file (group/other rejected by client) |
+| 1 | `$TOKEN_FILE` | chmod-600 file containing `VELOX_ADMIN_TOKEN=...` |
 | 2 | `$VELOX_ADMIN_TOKEN` env var | trimmed; no leading/trailing whitespace |
-| 3 | `/opt/velox/secrets/admin-token` | canonical Master-side file |
+| 3 | `/opt/velox/secrets/admin-token` | canonical Master-side file when supported by the installed client |
 
 Master URL resolution:
 
 | Precedence | Source | Notes |
 |---:|---|---|
-| 1 | `--master=https://HOST:8000` | required flag |
-| 2 | `$VELOX_MASTER_URL` env var | fallback |
-| 3 | (none) | surfaced as `fleetctl: misuse: master URL required` |
+| 1 | `$VELOX_MASTER_URL` env var | Master REST base URL |
+| 2 | (none) | the shell entrypoint uses its documented local default when unset |
 
 The canonical Master port is **8000** (REST + admin auth).
 The gRPC control plane on **:9000** is NOT wrapped by fleetctl —
@@ -56,17 +55,19 @@ operator surface.
 
 ## 3. Sub-Commands
 
-`fleetctl` exposes exactly the seven sub-commands listed in the
-Step 15/15 spec. Restart + logs are intentionally NOT in this
-set; operators who need them perform them host-side on the
-worker (SSH/systemd, documented in
-[`docs/operations/fleetctl.md`](../../docs/operations/fleetctl.md))
-— the binary does NOT wrap host-side mutations.
+`fleetctl` is the operator facade for the Master REST API. Production worker
+updates, rollbacks and restarts are API operations; operators do not invoke
+Ansible, SSH, Docker, or systemd mutations directly. The shell entrypoint in
+`scripts/fleetctl` is the repository's canonical command reference; this file
+summarizes the same Master-side contract.
 
-### 3.1 `fleetctl status`
+The supported commands are `status`, `inspect`, `drain`, `resume`,
+`quarantine`, `restart`, `update`, `rollback`, `operations`, and `smoke`.
+
+### 3.1 `scripts/fleetctl status`
 
 ```bash
-fleetctl --master=https://velox.example.com:8000 status
+VELOX_MASTER_URL=https://velox.example.com:8000 scripts/fleetctl status
 ```
 
 Lists every worker registered with the Master + a table-shaped
@@ -80,10 +81,10 @@ velox-worker-523925eb           CONNECTED   DEGRADED   1/1       scene.composite
 …
 ```
 
-### 3.2 `fleetctl inspect <worker_id>`
+### 3.2 `scripts/fleetctl inspect <worker_id>`
 
 ```bash
-fleetctl --master=https://velox.example.com:8000 inspect velox-worker-13197
+VELOX_MASTER_URL=https://velox.example.com:8000 scripts/fleetctl inspect velox-worker-13197
 ```
 
 Prints the full WorkerCard as indented JSON (status, health,
@@ -92,36 +93,60 @@ software_version, desired_version, last_heartbeat_at,
 active_jobs/max, deployment_state, last_smoke_status/at,
 last_restart_at).
 
-### 3.3 `fleetctl drain <worker_id>`
+### 3.3 `scripts/fleetctl drain <worker_id>`
 
 ```bash
-fleetctl --master=https://velox.example.com:8000 drain velox-worker-13197
-# optional: --reason="manual drain for cert rotation"
+VELOX_MASTER_URL=https://velox.example.com:8000 scripts/fleetctl drain velox-worker-13197
+# optional reason is the second positional argument:
+# scripts/fleetctl drain velox-worker-13197 "manual drain for cert rotation"
 ```
 
 Sets the worker's `WorkerInfo.Drain = true` via the Step 6/15
 mutation endpoint, then polls the `fleet_operations` ledger
 until terminal status. Default wait budget: **10 min**.
 
-### 3.4 `fleetctl update <worker_id> --digest sha256:...`
+### 3.4 `scripts/fleetctl quarantine <worker_id>`
 
 ```bash
-DIGEST=sha256:$(curl -s https://registry/foo/bar/manifests/latest | jq -r .digest)
-fleetctl --master=https://velox.example.com:8000 \
-  update velox-worker-13197 --digest "$DIGEST"
+scripts/fleetctl quarantine velox-worker-13197 "asset failures"
+```
+
+Quarantines a worker through the authenticated Master operation path.
+
+### 3.5 `scripts/fleetctl restart <worker_id>`
+
+```bash
+scripts/fleetctl restart velox-worker-13197 "after config change"
+```
+
+Publishes the restart operation; the Master owns the worker-side action.
+
+### 3.6 `scripts/fleetctl operations [worker_id] [status]`
+
+```bash
+scripts/fleetctl operations velox-worker-13197
+```
+
+Reads the `fleet_operations` audit ledger; it does not mutate the worker.
+
+### 3.7 `scripts/fleetctl update <worker_id> <ghcr-image@sha256:digest>`
+
+```bash
+IMAGE=ghcr.io/<owner>/velox-worker@sha256:<64-lowercase-hex>
+scripts/fleetctl update velox-worker-13197 "$IMAGE" "canary rollout"
 ```
 
 Drives the Step 9/15 image update cascade end-to-end via the
 Master REST API (cosign verify + forward + health + rolling
 commit). The `--digest` flag is validated **client-side**
-before any HTTP call — a typo or mobile ref (`:latest`,
+before any HTTP call — a typo or mutable ref (`:latest`,
 `:main`, `:stable`) returns `fleetctl: image-invalid:` with
 exit code 7, no Master call. Default wait budget: **30 min**.
 
-### 3.5 `fleetctl smoke <worker_id>`
+### 3.8 `scripts/fleetctl smoke <worker_id>`
 
 ```bash
-fleetctl --master=https://velox.example.com:8000 smoke velox-worker-13197
+scripts/fleetctl smoke velox-worker-13197
 ```
 
 Issues a Step 12/15 Level-D smoke (lease → download asset →
@@ -130,21 +155,20 @@ ffmpeg → Drive delivery) and polls until terminal. Smoke
 canary defaults (`asset-canary-001` + a 5-second ffmpeg passthrough
 + 600 s). Default wait budget: **12 min**.
 
-### 3.6 `fleetctl resume <worker_id>`
+### 3.9 `scripts/fleetctl resume <worker_id>`
 
 ```bash
-fleetctl --master=https://velox.example.com:8000 \
-  resume velox-worker-13197 --reason="after cert rotation"
+scripts/fleetctl resume velox-worker-13197 "after cert rotation"
 ```
 
 Clears a previous drain / quarantine via the Step 6/15
 `/resume` mutation. Default wait budget: **5 min**.
 
-### 3.7 `fleetctl rollback <worker_id>`
+### 3.10 `scripts/fleetctl rollback <worker_id> <ghcr-image@sha256:digest>`
 
 ```bash
-fleetctl --master=https://velox.example.com:8000 \
-  rollback velox-worker-13197 --reason="image pinned incorrect"
+IMAGE=ghcr.io/<owner>/velox-worker@sha256:<previous-64-lowercase-hex>
+scripts/fleetctl rollback velox-worker-13197 "$IMAGE" "image pinned incorrect"
 ```
 
 Drives the Step 9/15 rollback cascade (`previous_digest`
@@ -172,7 +196,7 @@ without parsing stderr:
 Examples:
 
 ```bash
-fleetctl smoke worker-13197 || rc=$?
+scripts/fleetctl smoke worker-13197 || rc=$?
 case $rc in
   0) echo "smoke OK" ;;
   6) echo "smoke failed — check audit row error_message" ;;
@@ -215,20 +239,22 @@ esac
            │  executor lifecycle)
            ▼
 ┌────────────────────────────────────────┐
-│ UpdateExecutor                         │
+│ FleetController → UpdateExecutor        │
 │  drain → cosign → pull → activate-image│
 │  → health → smoke → Drive              │
+│  WorkerNodeRegistry → SSH → helper     │
 └────────────────────────────────────────┘
 ```
 
-`fleetctl` talks only to the Master REST API; it never SSHes
-to worker hosts and never invokes a host-side playbook. A
-complete rollout is:
+`fleetctl` talks only to the Master REST API; the Master resolves the
+`WorkerNodeRegistry` and its `ansible_hosts` connectivity row, then
+`UpdateExecutor` uses SSH and `velox-worker-activate-image`. The CLI never
+invokes a host-side playbook. A complete rollout is:
 
 ```bash
 # Step 1: HTTP-driven image update + smoke
-fleetctl update worker-13197 --digest=$DIGEST || exit $?
-fleetctl smoke  worker-13197                    || exit $?
+scripts/fleetctl update worker-13197 --digest "$DIGEST" || exit $?
+scripts/fleetctl smoke  worker-13197                       || exit $?
 ```
 
 ---
@@ -237,20 +263,20 @@ fleetctl smoke  worker-13197                    || exit $?
 
 ```bash
 # Canary drain + resume:
-fleetctl drain  worker-523925eb && \
-  fleetctl smoke worker-523925eb && \
-  fleetctl resume worker-523925eb
+scripts/fleetctl drain  worker-523925eb && \
+  scripts/fleetctl smoke worker-523925eb && \
+  scripts/fleetctl resume worker-523925eb
 
 # Image digest update (manifold):
-DIGEST=sha256:...
+IMAGE=ghcr.io/<owner>/velox-worker@sha256:<64-lowercase-hex>
 for w in worker-57_129 worker-57_131 worker-13197 worker-523925; do
   echo "=== $w ==="
-  fleetctl update "$w" --digest "$DIGEST" || { echo "FAIL on $w"; break; }
+  scripts/fleetctl update "$w" "$IMAGE" "serial rollout" || { echo "FAIL on $w"; break; }
 done
 
 # Smoke-everything:
-for w in $(fleetctl status | awk 'NR>2 {print $1}' | grep -v WORKER_ID); do
-  fleetctl smoke "$w" || echo "smoke failed on $w"
+for w in $(scripts/fleetctl status | awk 'NR>2 {print $1}' | grep -v WORKER_ID); do
+  scripts/fleetctl smoke "$w" || echo "smoke failed on $w"
 done
 ```
 
@@ -258,12 +284,12 @@ done
 
 ## 8. FAQ
 
-**Q: Why no `restart` / `logs` sub-command?**
-A: They're not in the Step 15/15 spec. Operators perform
-restart/logs host-side on the worker (direct SSH/systemd, see
-`docs/operations/fleetctl.md`). Adding them to fleetctl would
-require wrapping SSH directly — larger scope than the atomic
-Step 15/15 commit.
+**Q: Where does restart run?**
+A: `scripts/fleetctl restart <worker_id> [reason]` publishes the authenticated
+Master operation. The Master owns the worker-side SSH/systemd action; operators
+must not bypass the operation ledger with direct host mutation. Logs and
+low-level inspection remain diagnostic commands documented in
+`docs/operations/fleetctl.md`.
 
 **Q: Why not Cobra / spf13?**
 A: AGENTS.md + the 0-import search across the repo show no
@@ -273,11 +299,10 @@ A follow-up commit can introduce Cobra if request-completion
 shell / config-file / global-flag ergonomics become
 operationally meaningful.
 
-**Q: Where does the `--master` flag come from?**
-A: `--master=https://HOST:8000` flag, or `$VELOX_MASTER_URL`
-env var. If both are absent the binary surfaces
-`fleetctl: misuse: master URL required` (exit 2) before any
-HTTP call.
+**Q: Where does the Master URL come from?**
+A: Set `$VELOX_MASTER_URL` to the Master REST base URL. The shell entrypoint
+uses `http://127.0.0.1:8000` when it is unset; authentication still requires
+`VELOX_ADMIN_TOKEN` or `TOKEN_FILE`.
 
 **Q: How does `--wait` work?**
 A: The atomic Step 15/15 ships hard-coded wait budgets per
@@ -291,16 +316,18 @@ to 12 min for smokes, 30 min for updates / rollbacks".
 
 | Surface | Status | Where |
 |---|---|---|
-| 7 listed sub-commands (status/inspect/drain/update/smoke/resume/rollback) | ✅ atomic Step 15/15 | this binary |
-| Token resolution (`--token-file` / `$VELOX_ADMIN_TOKEN` / canonical file) | ✅ atomic | client.go + auth.go |
+| Master API commands (status/inspect/drain/resume/quarantine/restart/update/rollback/operations/smoke) | ✅ canonical | `scripts/fleetctl` |
+| Token resolution (`$TOKEN_FILE` / `$VELOX_ADMIN_TOKEN`) | ✅ canonical | `scripts/fleetctl` |
 | Exit-code matrix | ✅ atomic | exit_codes.go |
-| `--digest sha256:64-hex` client-side validator | ✅ atomic | digest.go |
+| Pinned GHCR digest validation | ✅ canonical | `scripts/fleetctl` |
 | Operation polling (5 s interval, kind-specific deadlines) | ✅ atomic | polling.go |
 | Per-sub-command pretty-printing | ✅ atomic | handlers.go |
-| `restart` / `logs` sub-commands | ⏳ future | host-side SSH/systemd (intentional decoupling) |
+| `restart` | ✅ Master API operation | `scripts/fleetctl restart` |
+| `logs` | ⏳ diagnostic-only follow-up | host-side inspection, not a rollout mutation |
 | Cobra CLI parser (vs stdlib flag) | ⏳ future | follow-up if operational payoff |
 | Auditing `fleetctl <sub>` invocations into the operation row's actor log | ⏳ future | Step 4/15 ledger extension |
 
-The canonical fleet surface is `fleetctl` (Master REST API);
-host-side restart/logs remain operator-managed (SSH/systemd)
-and are not wrapped by the binary.
+The canonical fleet surface is `scripts/fleetctl` (Master REST API):
+`FleetController → UpdateExecutor → WorkerNodeRegistry → SSH →
+velox-worker-activate-image`. Host-side mutation is owned by the Master and
+must not be performed as an operator bypass.

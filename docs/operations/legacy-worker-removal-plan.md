@@ -6,10 +6,11 @@ no legacy path is deleted until the compatibility gate for that phase is green.
 
 ## Current decision
 
-Do **not** remove `update_workers.yml`, bundle APIs, or the GHCR Ansible bridge in
-the same change. They still provide the recovery bridge for old hosts, while
-the definitive FleetController path must first be proven with real backends and
-a canary.
+The production rollout path is now the FleetController API. Keep
+`update_workers.yml` and the bundle APIs only as a recovery/migration bridge for
+old hosts; they are not release entrypoints. The definitive path is
+`scripts/fleetctl` → Master FleetController → UpdateExecutor and must remain
+backed by real backends and a canary.
 
 The current paths are:
 
@@ -19,7 +20,7 @@ The current paths are:
 | `tasks/prepare_worker_image.yml` | Local Docker build task included by the bundle release path | No production playbook includes it for a migrated host |
 | Bundle endpoint and `data/worker_downloads/` | Legacy source distribution | No supported worker needs bundle bootstrap or rollback |
 | `deploy/playbooks/rollout-worker-digest.yml` | GHCR host-mutation bridge | FleetController owns the same gates and has passed canary acceptance |
-| `scripts/fleetctl update` | Current operator facade; presently invokes the GHCR Ansible bridge | Direct Master operation path is wired, tested, and documented |
+| `scripts/fleetctl update` | Canonical operator facade; posts to the Master API | Keep the direct Master operation path and its ledger contract |
 | `deploy/playbooks/fleet-update.yml` | Master API/FleetController delegate | Remains canonical; do not remove |
 
 ## Compatibility gate before every removal commit
@@ -53,10 +54,10 @@ transition:
 - the old bridge files and their bundle/build responsibilities are still
   present until their removal phase;
 - the GHCR workflow records current-commit provenance and immutable digests;
-- the GHCR rollout playbook still requires release evidence and rollback;
-- the FleetController delegate still posts and polls a ledger operation;
-- `fleetctl update` still requires an operator-local inventory while it is the
-  Ansible bridge;
+- the internal API delegate, where retained for compatibility, still posts and
+  polls a ledger operation;
+- `fleetctl update` posts directly to the Master API and requires no operator
+  inventory or Ansible binary;
 - the image Dockerfile and runtime verification entrypoints remain available.
 
 Also run the focused syntax and structural checks relevant to the files changed
@@ -76,8 +77,8 @@ that a production canary succeeded.
    - last Level-D smoke and Drive artifact evidence.
 3. Mark any worker still dependent on a bundle or local build as `LEGACY`.
 4. Freeze new production consumers of bundle/build entrypoints. New work must
-   use the GHCR Ansible bridge or the FleetController contract, depending on
-   backend readiness.
+   use the FleetController contract; the bundle path is reserved for migration
+   and recovery of old hosts.
 
 No files are deleted in Phase 0.
 
@@ -103,9 +104,11 @@ The host is eligible for the next phase only when the evidence is persisted and
 rollback to the previous digest has been tested. The old bundle path remains
 available for hosts that have not passed this gate.
 
-## Phase 2 — prove FleetController replacement
+## Phase 2 — FleetController acceptance record
 
-Before retiring the GHCR Ansible bridge, all of the following must be true:
+The direct Master API path is now the production operator path. Retire the
+remaining GHCR Ansible bridge only after the following acceptance evidence is
+recorded for the supported fleet:
 
 - `UpdateExecutor` is constructed with real SSH, Docker, Cosign, Registry,
   Smoke and Drive implementations;
@@ -118,8 +121,10 @@ Before retiring the GHCR Ansible bridge, all of the following must be true:
 - a canary passes with the same image digest used for the real rollout;
 - the compatibility gate and focused tests are green on the exact commit.
 
-Until these conditions are green, `deploy/playbooks/fleet-update.yml` is the
-API contract and target path, not permission to bypass the working GHCR bridge.
+Until these conditions are green for a specific host, keep that host on the
+migration/recovery bridge. `deploy/playbooks/fleet-update.yml` is retained only
+as an internal API-delegate artifact; it is not permission to invoke a static
+inventory or bypass `scripts/fleetctl`.
 
 ## Phase 3 — remove local Docker builds
 
@@ -154,10 +159,11 @@ and incident-response policy permits it.
 
 After FleetController has owned production updates for a complete canary window:
 
-- make `fleetctl update` submit the Master operation directly;
+- keep `fleetctl update` submitting the Master operation directly (completed);
 - keep `status`, `inspect`, `operations` and other read-side diagnostics;
-- remove only the Ansible invocation from the update command after an end-to-
-  end test proves the same ledger, rollback and evidence contract;
+- remove any remaining Ansible invocation from auxiliary rollout entrypoints
+  only after an end-to-end test proves the same ledger, rollback and evidence
+  contract;
 - retire `rollout-worker-digest.yml` only after no automation references it;
 - remove duplicate inventory and systemd/compose rollout documentation;
 - update alerts, runbooks and rollback procedures in the same atomic change.
@@ -172,7 +178,7 @@ After FleetController has owned production updates for a complete canary window:
 - executor, engine SHA and dependency checks;
 - Level-D smoke, artifact commit and Drive delivery verification;
 - deployment ledger, rollback and quarantine evidence;
-- operator-local inventory and secret handling.
+- WorkerNodeRegistry-backed connectivity and secret handling.
 
 ## Commit discipline
 
