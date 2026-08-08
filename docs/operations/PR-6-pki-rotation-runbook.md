@@ -7,22 +7,25 @@ Owner: infrastructure
 ## 1. Architettura a 3 livelli
 
 ```
-root CA (offline, 5-10 anni)
+root CA / issuer approvato (offline o secondo la policy del Master)
   │
-  └── intermediate CA (online, 6-12 mesi)
-        │
-        ├── master server cert (30-90 giorni)
-        ├── worker-01 leaf cert (7-30 giorni)
-        ├── worker-02 leaf cert (7-30 giorni)
-        └── worker-NN leaf cert ...
+  └── Master gRPC/REST server cert (issuer separato, se TLS Master è configurato)
+
+OpenBao production intermediate (interno a OpenBao)
+  │
+  ├── worker-01 leaf cert (7-30 giorni)
+  ├── worker-02 leaf cert (7-30 giorni)
+  └── worker-NN leaf cert ...
+
+OpenBao listener TLS cert (listener/secrets-manager, separato dal worker PKI)
 ```
 
 **Principi non negoziabili:**
 
-1. La root CA **non è mai online**. Generata su un dispositivo air-gapped, la chiave privata vive su supporto fisico in cassaforte.
-2. Solo l'intermediate CA firma certificati operativi. Se compromessa, si revoca e si rigenera dalla root senza toccare i leaf.
+1. La root CA **non è mai online**. Se usata dall'issuer Master, viene gestita secondo la cerimonia approvata e la chiave privata vive su supporto fisico in cassaforte.
+2. L'intermediate OpenBao firma solo i leaf worker del proprio PKI mount; il certificato gRPC/REST del Master segue il suo issuer separato. Se l'intermediate OpenBao è compromessa, si revoca e si rigenera senza toccare l'issuer Master.
 3. I certificati worker scadono in fretta (7-30 giorni) per limitare il blast radius di una fuga di chiave.
-4. Durante la rotazione, vecchio e nuovo certificato coesistono per una finestra di overlap (default: 7 giorni) così il worker può ri-registrarsi senza downtime.
+4. Durante la rotazione, il bundle corrente resta valido fino allo switch atomico del nuovo bundle sul worker, così il worker può ri-registrarsi senza downtime.
 5. La scadenza è **monitorata** con alert a 14, 7 e 2 giorni.
 6. Ogni handshake mTLS **logga l'identità certificata** (CN + serial + fingerprint SHA-256).
 
@@ -43,8 +46,8 @@ private key and its local runtime bundle:
 │   ├── ca.srl              # Serial number counter
 │   └── index.txt           # Issued certificate log
 └── master/
-    ├── server.crt          # Master's server cert (current)
-    └── server.key          # Master's private key
+    ├── server.crt          # Master gRPC/REST cert (se TLS Master è configurato)
+    └── server.key          # Master private key (se TLS Master è configurato)
 
 # On each worker; the key never leaves this host:
 /etc/velox-worker/certs/current/
@@ -54,19 +57,30 @@ private key and its local runtime bundle:
 ```
 
 The canonical OpenBao paths are `velox/production/workers/<worker-id>/credential`
-in KV and `pki/sign/worker-<worker-id>` in PKI. No worker `worker.key`,
+in KV and `pki/sign/worker-<worker-id>` in PKI. The Master gRPC/REST TLS triple
+(`VELOX_GRPC_TLS_CERT_FILE`, `VELOX_GRPC_TLS_KEY_FILE`, `VELOX_GRPC_TLS_CA_FILE`)
+is a separate Master configuration and is not emitted by the worker PKI role.
+No worker `worker.key`,
 `worker.crt`, `ca.crt`, or PEM bundle is stored in the KV engine.
 
 ## 3. Generazione iniziale
 
 ### 3.1 Root CA (air-gapped, una tantum)
 
+La Root CA resta una cerimonia **offline e fuori dal repository**. Non usare un
+secondo generatore OpenSSL locale per la PKI production. L'issuer intermedio
+viene generato e custodito internamente da OpenBao; l'operatore porta fuori
+solo il CSR per la firma approvata della Root CA:
+
 ```bash
-# Eseguito su dispositivo OFFLINE
-./scripts/gen-production-pki.sh root-ca \
-  --out-dir /secure/velox-root-ca \
-  --cn "Velox Root CA" \
-  --days 3650  # 10 anni
+# Su un dispositivo offline: firma il CSR ricevuto da OpenBao secondo il
+# processo PKI approvato e restituisci solo la catena firmata.
+
+# Sul nodo OpenBao, prima/dopo la firma offline:
+./deploy/openbao/scripts/initialize-pki-intermediate.sh \
+  --generate-csr /secure/velox/velox-production-intermediate.csr
+./deploy/openbao/scripts/initialize-pki-intermediate.sh \
+  --set-signed /secure/velox/signed-intermediate-chain.pem
 ```
 
 **Cosa conservare:**
@@ -75,28 +89,32 @@ in KV and `pki/sign/worker-<worker-id>` in PKI. No worker `worker.key`,
 
 ### 3.2 Intermediate CA (online, rinnovabile)
 
-```bash
-# Eseguito sul master
-./scripts/gen-production-pki.sh intermediate \
-  --out-dir /opt/velox/certs/intermediate \
-  --cn "Velox Intermediate CA v1" \
-  --days 270 \
-  --root-ca-cert /secure/velox-root-ca/ca.crt \
-  --root-ca-key /secure/velox-root-ca/ca.key  # chiave root usata solo qui
-```
-
-**Dopo la generazione, la chiave root torna offline.** L'intermediate CA vive sul master.
-
-### 3.3 Master server certificate
+OpenBao mantiene internamente la chiave dell'intermediate. Dopo aver importato
+la catena firmata, verifica l'issuer e configura i ruoli PKI senza esportare
+chiavi private:
 
 ```bash
-./scripts/gen-production-pki.sh server \
-  --out-dir /opt/velox/certs/master \
-  --cn "velox-master.internal.example.com" \
-  --san "DNS:velox-master.internal.example.com,DNS:localhost,IP:127.0.0.1" \
-  --days 90 \
-  --intermediate-dir /opt/velox/certs/intermediate
+./deploy/openbao/scripts/initialize-pki-intermediate.sh --check
+bash ./deploy/openbao/scripts/provision-pki.sh --workers \
+  "<worker-id-1> <worker-id-2>"
 ```
+
+La Root CA torna offline dopo la firma; la chiave dell'intermediate resta
+custodita da OpenBao.
+
+### 3.3 OpenBao listener certificate
+
+Genera il certificato TLS del listener OpenBao con lo script canonical del
+componente, prima di avviare il compose OpenBao:
+
+```bash
+cd deploy/openbao
+./scripts/gen-tls.sh
+```
+
+Il certificato del listener (`.velox/openbao/tls/server.crt`) è distinto dai
+certificati mTLS worker emessi dal mount PKI. Il Master usa il certificato
+pubblico OpenBao come CA di connessione e non genera una seconda PKI production.
 
 > **OpenBao workers — mandatory rule.** Do not execute the legacy master-side
 > worker certificate generation or Ansible/scp distribution snippets below for
@@ -112,7 +130,7 @@ per-worker OpenBao PKI role. The operator does not generate or copy
 
 ```bash
 # On the OpenBao operator/admin side: configure only the PKI role and issuer.
-./deploy/openbao/scripts/provision-pki.sh --worker <worker-id>
+bash ./deploy/openbao/scripts/provision-pki.sh --worker <worker-id>
 
 # On the worker, after AppRole files and OpenBao CA are installed:
 sudo /opt/velox-worker/openbao-fetch-worker-secrets.sh --provision
@@ -125,122 +143,76 @@ certificate/CA chain, and switches the complete bundle atomically. Only the
 public CSR and the resulting signed chain cross the OpenBao boundary; the
 private key is never sent, stored, or provisioned through KV.
 
-> The older `gen-production-pki.sh worker` plus Ansible/scp distribution flow
-> is retained only as a legacy reference for non-OpenBao environments. It must
-> not be used for workers enrolled in the canonical OpenBao PKI flow, and it
-> must never be mixed with the OpenBao AppRole/CSR flow for the same worker.
+> The older local OpenSSL worker-generation and Ansible/scp distribution flow
+> is retired from the canonical repository path. Workers must use the OpenBao
+> AppRole/CSR flow below; do not mix an external leaf certificate with the
+> OpenBao flow for the same worker.
 
 ## 4. Rotazione automatizzata
 
 ### 4.1 Finestra di overlap
 
-Durante la rotazione, il worker ha **due certificati validi**:
-- `worker-<id>.crt` — corrente
-- `worker-<id>-next.crt` — nuovo, generato N giorni prima della scadenza
+La rotazione canonical non gestisce un secondo file `cert-next` sul master.
+Il worker mantiene il bundle corrente fino a quando il resolver OpenBao ha
+validato il nuovo certificato; poi seleziona il nuovo bundle con uno switch
+atomico. Il vecchio bundle versionato resta disponibile localmente come
+rollback tecnico, ma non viene distribuito dal master.
 
-Il worker carica entrambi e prova il nuovo per primo. Se l'handshake fallisce, usa il vecchio.
-Il master accetta entrambi i certificati (stesso CN, serial diverso) durante la finestra.
+### 4.2 Rinnovo automatizzato lato worker
 
-**Timeline (worker leaf da 14 giorni):**
-
-```
-giorno 0:   cert emesso (scade giorno 14)
-giorno 7:   generazione cert-next (scade giorno 21)
-giorno 7-14: finestra overlap (worker ha entrambi, master accetta entrambi)
-giorno 14:  cert corrente scade → rimosso dal worker
-giorno 14-21: cert-next è il nuovo corrente
-giorno 21:  prossima rotazione...
-```
-
-### 4.2 Cron job di rotazione (sul master)
+Il rinnovo è eseguito dal timer systemd installato da `prepare-host.sh`, non da
+un cron job del Master e non da una scansione OpenSSL dei certificati sul Master:
 
 ```bash
-# /etc/cron.daily/velox-cert-rotation
-# Eseguito ogni notte. Genera cert-next per worker che scadono entro 7 giorni.
-
-/opt/velox/scripts/cert-rotation.sh
+# Sul worker, per un rinnovo controllato:
+sudo systemctl start velox-worker-mtls-renew.service
+# Verifica senza esporre valori segreti:
+sudo /opt/velox-worker/openbao-fetch-worker-secrets.sh --check
 ```
 
-Lo script:
-1. Scansiona `/opt/velox/certs/workers/` per file `.crt`
-2. Per ogni certificato, legge la data di scadenza via `openssl x509 -enddate`
-3. Se scade entro 7 giorni E non esiste già un `-next.crt` → genera `worker-<id>-next.{crt,key}`
-4. Se scade entro 1 giorno E il `-next.crt` esiste da > 6 giorni → promuove `-next` a corrente (mv)
-5. Logga ogni azione in `/var/log/velox/cert-rotation.log`
+`velox-worker-mtls-renew.service` invoca il resolver con `--renew`. Il resolver
+genera la chiave privata sul worker, invia solo il CSR a `pki/sign/worker-<id>`,
+valida certificato e catena e seleziona il bundle completo atomically; il worker
+viene riavviato solo quando è stato selezionato un bundle nuovo. Non creare o
+copiare `cert-next`, `worker.key` o PEM worker sul Master.
 
-> **TODO:** Lo script `cert-rotation.sh` non è ancora versionato in repo.
-> Creare da template in `deploy/certs/` e copiare in `/opt/velox/scripts/`.
-> Vedi `scripts/gen-production-pki.sh` per i comandi openssl di generazione.
-> Vedi §4.1 per la logica della finestra di overlap.
+Gli script `cert-rotation.sh` e `alert-cert-expiry.sh` non sono percorsi
+canonical versionati e non devono essere installati come cron del Master. Per
+il monitoraggio usare lo stato del timer, i log del servizio e il controllo
+OpenBao `--check`; il monitoraggio centralizzato può essere aggiunto solo con
+un'integrazione che non materializzi chiavi private sul Master.
 
 ### 4.3 Worker-side reload
 
-Il worker-agent rileva la presenza di un nuovo certificato sul disco e lo carica
-al prossimo tentativo di connessione (nessun restart necessario — PR 1 ha già il
-path `tls_cert_file` nel config JSON).
+Il resolver cambia il bundle atomically e `velox-worker-mtls-renew.service`
+riavvia il worker solo quando è stato selezionato un bundle nuovo. Un cache hit
+non provoca restart; il worker continua a usare il bundle corrente. Il prossimo
+processo/connessione usa quindi il bundle già selezionato dal resolver.
 
 ## 5. Monitoraggio scadenza
 
-### 5.1 Script di controllo
+### 5.1 Controllo scadenza
 
-Vedi `deploy/certs/monitor-expiry.sh` per lo script versionato. Copiare in
-`/opt/velox/scripts/monitor-expiry.sh` sul master.
+Il controllo operativo canonical è eseguito dal resolver sul worker e dal timer
+systemd. Non copiare certificati sul Master e non installare un monitor cron
+basato su una PKI locale rimossa.
 
 ```bash
-# /opt/velox/scripts/monitor-expiry.sh
-# Restituisce exit code 0 se tutto OK, 1/2/3 se ci sono scadenze imminenti.
-
-USAGE: monitor-expiry.sh [--json] [--dir /opt/velox/certs]
-```
-
-**Output JSON (per integrazione con sistema di monitoring):**
-```json
-{
-  "certs": [
-    {
-      "path": "/opt/velox/certs/master/server.crt",
-      "cn": "velox-master.internal.example.com",
-      "serial": "01:AB:CD:...",
-      "expires_at": "2026-08-15T00:00:00Z",
-      "days_left": 52,
-      "status": "ok"
-    },
-    {
-      "path": "/opt/velox/certs/workers/worker-01.crt",
-      "cn": "worker-01",
-      "serial": "02:EF:01:...",
-      "expires_at": "2026-07-05T00:00:00Z",
-      "days_left": 4,
-      "status": "warning"
-    }
-  ],
-  "critical_count": 0,
-  "warning_count": 1
-}
+sudo systemctl is-active velox-worker-mtls-renew.timer
+sudo /opt/velox-worker/openbao-fetch-worker-secrets.sh --check
 ```
 
 ### 5.2 Soglie di alert
 
-| Giorni alla scadenza | Livello | Azione |
-|---|---|---|
-| > 14 | OK | Nessuna |
-| 14 | WARNING | Notifica canale #velox-ops |
-| 7 | WARNING | Notifica + genera cert-next automaticamente |
-| 2 | CRITICAL | Notifica #velox-ops + escalation on-call |
-| 0 | EXPIRED | PagerDuty alert — intervento immediato |
+| Stato | Azione |
+|---|---|
+| Bundle valido oltre la renewal window | Nessuna emissione; il resolver mantiene il bundle corrente |
+| Rinnovo necessario | Il timer avvia `--renew` e il servizio riavvia il worker solo dopo lo switch atomico |
+| OpenBao/issuer non disponibile | Alert operativo; usare solo il cache attestato e non copiare PEM manualmente |
+| Certificato non coerente o scaduto | Fail closed; correggere AppRole/issuer e verificare con `--check` |
 
-### 5.3 Integrazione cron
-
-```bash
-# /etc/cron.d/velox-cert-monitor
-# Eseguito ogni 6 ore
-0 */6 * * * root /opt/velox/scripts/monitor-expiry.sh --json | \
-  /opt/velox/scripts/alert-cert-expiry.sh
-```
-
-> **TODO:** Lo script `alert-cert-expiry.sh` non è ancora versionato in repo.
-> Deve parsare il JSON da stdin e inviare notifiche via Slack webhook,
-> PagerDuty, o email in base ai threshold configurati.
+Il monitoraggio centralizzato deve consumare stato e log del servizio senza
+materializzare chiavi private o reintrodurre `cert-rotation.sh`.
 
 ## 6. Revoca
 
@@ -252,78 +224,67 @@ USAGE: monitor-expiry.sh [--json] [--dir /opt/velox/certs]
 
 ### 6.2 Procedura revoca worker
 
-```bash
-# 1. Genera CRL entry
-openssl ca -revoke /opt/velox/certs/workers/worker-03.crt \
-  -keyfile /opt/velox/certs/intermediate/ca.key \
-  -cert /opt/velox/certs/intermediate/ca.crt \
-  -config /opt/velox/certs/intermediate/openssl.cnf
+La revoca deve essere eseguita nell'engine PKI di OpenBao dall'operatore
+abilitato, senza usare `openssl ca`, senza esportare la chiave dell'intermediate
+e senza spostare PEM dal Master. Questa è una procedura operatore, non un
+comando repository pronto all'uso: il metodo concreto dipende dal token, dalla
+policy e dalla versione OpenBao. Il percorso API canonical è `pki/revoke`,
+invocato con il seriale registrato nel certificato e il token previsto dalla
+policy; consultare il runbook OpenBao dell'ambiente prima di procedere.
 
-# 2. Rigenera CRL
-openssl ca -gencrl \
-  -keyfile /opt/velox/certs/intermediate/ca.key \
-  -cert /opt/velox/certs/intermediate/ca.crt \
-  -out /opt/velox/certs/intermediate/crl.pem \
-  -config /opt/velox/certs/intermediate/openssl.cnf
+Dopo la revoca:
 
-# 3. Sposta il certificato revocato
-mkdir -p /opt/velox/certs/workers/revoked
-mv /opt/velox/certs/workers/worker-03.crt /opt/velox/certs/workers/revoked/
-mv /opt/velox/certs/workers/worker-03.key /opt/velox/certs/workers/revoked/
-
-# 4. Rimuovi il worker dall'allowlist
-# Aggiorna VELOX_ALLOWED_WORKERS per escludere worker-03
-
-# 5. Logga la revoca
-echo "$(date -Iseconds) revoked worker-03 serial=$(openssl x509 -in /opt/velox/certs/workers/revoked/worker-03.crt -serial -noout | cut -d= -f2)" \
-  >> /var/log/velox/cert-revocations.log
-```
+1. Rimuovi o disabilita il worker nel `WorkerNodeRegistry` se è decommissionato.
+2. Sul worker compromesso, interrompi il servizio e conserva i log di audit.
+3. Reinstalla/ruota l'AppRole secondo la procedura operativa OpenBao.
+4. Esegui il rinnovo locale con `velox-worker-mtls-renew.service` solo dopo
+   aver ristabilito l'identità del worker.
+5. Verifica con `openbao-fetch-worker-secrets.sh --check` e con il probe del
+   Master; non copiare `worker.key` dal Master.
 
 ### 6.3 Revoca intermediate CA (emergenza)
 
+La revoca dell'intermediate è una cerimonia OpenBao + Root CA offline: non
+usare `openssl ca` con una chiave dell'intermediate presente sul Master.
+Blocca prima l'emissione sospetta nell'engine PKI, conserva l'evidenza e
+coordina la nuova catena con l'operatore Root CA. Sul nodo OpenBao:
+
 ```bash
-# 1. Recupera la root CA dall'air-gapped storage
-# 2. Revoca l'intermediate
-openssl ca -revoke /opt/velox/certs/intermediate/ca.crt \
-  -keyfile /secure/velox-root-ca/ca.key \
-  -cert /secure/velox-root-ca/ca.crt
-
-# 3. Genera nuova intermediate CA
-./scripts/gen-production-pki.sh intermediate \
-  --out-dir /opt/velox/certs/intermediate-v2 \
-  --cn "Velox Intermediate CA v2" \
-  --days 270 \
-  --root-ca-cert /secure/velox-root-ca/ca.crt \
-  --root-ca-key /secure/velox-root-ca/ca.key
-
-# 4. Ri-emetti TUTTI i certificati leaf
-# 5. Distribuisci a tutti i worker
-# 6. RIavvia i worker o attendi il prossimo reload
+./deploy/openbao/scripts/initialize-pki-intermediate.sh \
+  --generate-csr /secure/velox/velox-production-intermediate-v2.csr
+# Dopo la firma offline approvata:
+./deploy/openbao/scripts/initialize-pki-intermediate.sh \
+  --set-signed /secure/velox/signed-intermediate-chain-v2.pem
+./deploy/openbao/scripts/initialize-pki-intermediate.sh --check
+bash ./deploy/openbao/scripts/provision-pki.sh --workers "<worker-id-1> <worker-id-2>"
 ```
+
+La riemissione dei leaf avviene sui worker tramite il resolver CSR e il timer
+mTLS; non distribuire certificati o chiavi dal Master.
 
 ## 7. Runbook di emergenza
 
-### Scenario: certificato master scaduto
+### Scenario: certificato TLS del listener OpenBao scaduto
 
-**Sintomi:** worker non si connettono. Log: `certificate has expired`.
+**Sintomi:** il Master non riesce a verificare la connessione TLS verso OpenBao.
 
 **Procedura:**
-1. Genera nuovo certificato master:
+1. Sul nodo OpenBao, rigenera solo il certificato del listener OpenBao:
    ```bash
-   ./scripts/gen-production-pki.sh server \
-     --out-dir /opt/velox/certs/master \
-     --cn "velox-master.internal.example.com" \
-     --days 90 \
-     --intermediate-dir /opt/velox/certs/intermediate
+   cd deploy/openbao
+   ./scripts/gen-tls.sh
    ```
-2. Aggiorna il file env del master:
+   Questo comando non emette certificati mTLS per Master o worker.
+2. Riavvia il solo servizio OpenBao secondo il compose/unità dell'ambiente.
+3. Verifica il resolver Master e i test OpenBao senza stampare secret:
    ```bash
-   # /etc/velox-server.env
-   VELOX_GRPC_TLS_CERT_FILE=/opt/velox/certs/master/server.crt
-   VELOX_GRPC_TLS_KEY_FILE=/opt/velox/certs/master/server.key
+   bash scripts/ci/test-openbao-master-tokens.sh
    ```
-3. Riavvia il master: `systemctl restart velox-server`
-4. Verifica: `make e2e-grpc` (casi TLS)
+
+Il certificato gRPC/REST del Master, se configurato separatamente tramite
+`VELOX_GRPC_TLS_CERT_FILE`, `VELOX_GRPC_TLS_KEY_FILE` e `VELOX_GRPC_TLS_CA_FILE`,
+deve essere rinnovato con la procedura del suo issuer; non usare `gen-tls.sh` come generatore
+di una PKI production alternativa.
 
 ### Scenario: certificato worker scaduto — worker isolato
 
@@ -349,11 +310,11 @@ ma non deve essere mescolata con il flusso PKI canonico dello stesso worker.
 **Sintomi:** alert sicurezza, log sospetti.
 
 **Procedura (immediata):**
-1. Revoca il certificato (vedi §6.2)
-2. Rimuovi il worker dall'allowlist
-3. Rigenera nuova chiave + certificato per quel worker
+1. Revoca il certificato nell'engine PKI OpenBao (vedi §6.2)
+2. Rimuovi o disabilita il worker nel `WorkerNodeRegistry`
+3. Ruota l'AppRole del worker e genera nuova chiave/certificato localmente tramite il resolver CSR
 4. Ruota anche gli altri certificati worker se il vettore di attacco è condiviso
-5. Indaga la causa della fuga
+5. Indaga la causa della fuga e conserva l'audit trail
 
 ## 8. Log dell'identità certificata
 
@@ -393,23 +354,22 @@ Rotazione log: 30 giorni, compressi.
 - [ ] Chiave root CA in cassaforte (due copie)
 - [ ] Certificato root CA committato in repo
 - [ ] Intermediate CA generata e configurata
-- [ ] Certificato server master emesso
-- [ ] Certificati worker emessi per tutta la flotta
-- [ ] Script `check-cert-expiry.sh` in esecuzione via cron
-- [ ] Alert configurati (Slack / PagerDuty / email)
-- [ ] Cron di rotazione automatica attivo
+- [ ] Certificato TLS listener OpenBao emesso con `deploy/openbao/scripts/gen-tls.sh`
+- [ ] Certificati worker emessi tramite OpenBao PKI + CSR locale
+- [ ] `velox-worker-mtls-renew.timer` attivo su ogni worker
+- [ ] Alert configurati (Slack / PagerDuty / email) senza materializzare chiavi sul Master
 - [ ] Log `mtls-audit.log` configurato con rotazione
 
 ### Verifica pre-deploy
 - [ ] `make e2e-grpc` passa (6 casi mTLS)
-- [ ] `openssl verify -CAfile /opt/velox/certs/root-ca/ca.crt -untrusted /opt/velox/certs/intermediate/ca.crt /opt/velox/certs/master/server.crt` → OK
-- [ ] `openssl verify -CAfile /opt/velox/certs/root-ca/ca.crt -untrusted /opt/velox/certs/intermediate/ca.crt /opt/velox/certs/workers/worker-01.crt` → OK
-- [ ] `/opt/velox/scripts/check-cert-expiry.sh` → exit 0, nessuna scadenza imminente
+- [ ] `bash scripts/ci/test-openbao-worker-secrets.sh` → PASS
+- [ ] `/opt/velox-worker/openbao-fetch-worker-secrets.sh --check` → exit 0
+- [ ] `systemctl is-active velox-worker-mtls-renew.timer` → active
 
 ### Rotazione periodica (mensile)
-- [ ] `check-cert-expiry.sh --json` → verificare warning/critical count = 0
+- [ ] `openbao-fetch-worker-secrets.sh --check` → verificare coerenza remote/local
 - [ ] `mtls-audit.log` → verificare fingerprint corrispondenti ai serial attesi
-- [ ] `openssl crl -in /opt/velox/certs/intermediate/crl.pem -text` → verificare revoche recenti
+- [ ] audit OpenBao PKI → verificare emissioni/revoche secondo la policy
 
 ### Verifica DR (semestrale)
 - [ ] Root CA accessibile dal supporto fisico
@@ -419,10 +379,12 @@ Rotazione log: 30 giorni, compressi.
 
 ## 10. Riferimenti
 
-- `scripts/gen-production-pki.sh` — generatore PKI a 3 livelli
+- `deploy/openbao/scripts/initialize-pki-intermediate.sh` — cerimonia OpenBao intermediate + firma offline
+- `deploy/openbao/scripts/provision-pki.sh` — ruoli PKI worker per CSR, senza private key in KV (invocare con `bash`)
+- `deploy/openbao/scripts/gen-tls.sh` — certificato TLS del listener OpenBao
 - `scripts/gen-worker-certs.sh` — generatore dev/CI (10 anni, solo self-signed)
 - `tests/e2e/grpc-control-plane/certs/generate-dev-pki.sh` — generatore E2E (7d CA / 1d leaf)
-- `deploy/certs/monitor-expiry.sh` — script di monitoraggio scadenza
+- `deploy/runtime/velox-worker-mtls-renew.service` / `.timer` — rinnovo worker via CSR OpenBao
 - `docs/roadmap/13-mtls.md` — specifica mTLS originale
 - `docs/operations/PR-1-migration.md` — configurazione TLS lato worker (PR 1)
-- `deploy/certs/` — directory per script operativi (cert-rotation.sh, alert-cert-expiry.sh da creare)
+- `deploy/runtime/README.md` — installazione e verifica del runtime worker canonical

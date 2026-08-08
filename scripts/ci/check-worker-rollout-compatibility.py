@@ -317,8 +317,12 @@ def test_current_tree_has_no_legacy_removal_marker() -> None:
     # still describes it as required.
     plan = text("docs/operations/legacy-worker-removal-plan.md")
     assert "No files are deleted in Phase 0." in plan
-    assert "recovery/migration bridge for" in plan
-    assert "they are not release entrypoints" in plan
+    assert "The production rollout path is now the FleetController API." in plan
+    normalized_plan = " ".join(plan.split())
+    assert (
+        "Keep `update_workers.yml` and the bundle APIs only as a "
+        "recovery/migration bridge for old hosts; they are not release entrypoints."
+    ) in normalized_plan
 
 
 def test_new_legacy_consumers_are_rejected() -> None:
