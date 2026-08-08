@@ -31,7 +31,7 @@ import (
 func ProbeLevelB(ctx context.Context, ssh BackendSSHClient, deployments BackendDeploymentRepo, workerID string, now time.Time) HealthReport {
 	start := now
 	r := newReport(workerID, HealthLevelB, now)
-	container := "velox-worker-" + workerID
+	container := "velox-worker"
 	if ssh == nil {
 		r.Checks["ssh_deps"] = CheckResult{Passed: false, Detail: "ssh client not wired (Step 11+ dependency)"}
 		finalize(&r, start)
@@ -54,7 +54,7 @@ func ProbeLevelB(ctx context.Context, ssh BackendSSHClient, deployments BackendD
 	}
 	// image_digest_match — running image vs ledger's latest row
 	var runningDigest string
-	if out, err := ssh.Run(ctx, workerID, fmt.Sprintf("docker inspect -f '{{.Image}}' %s", container)); err == nil {
+	if out, err := ssh.Run(ctx, workerID, fmt.Sprintf("docker inspect --format '{{.Config.Image}}' %s", container)); err == nil {
 		runningDigest = trim(out)
 		if runningDigest == "" {
 			r.Checks["image_digest_match"] = CheckResult{

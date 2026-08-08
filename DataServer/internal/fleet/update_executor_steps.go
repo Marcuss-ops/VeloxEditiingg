@@ -24,22 +24,13 @@ func (e *UpdateExecutor) stepCosignVerify(parent context.Context, ref string) er
 	return e.backend.Cosign.Verify(ctx, ref)
 }
 
-func (e *UpdateExecutor) stepPullImage(parent context.Context, workerID, image string) (string, error) {
+func (e *UpdateExecutor) stepActivateImage(parent context.Context, workerID, image string) (string, error) {
 	if e.backend.Docker == nil {
 		return "", errors.New("docker client not wired")
 	}
 	ctx, cancel := context.WithTimeout(parent, timeoutDockerPull)
 	defer cancel()
-	return e.backend.Docker.PullImage(ctx, workerID, image)
-}
-
-func (e *UpdateExecutor) stepComposeRestart(parent context.Context, workerID string) (string, error) {
-	if e.backend.Docker == nil {
-		return "", errors.New("docker client not wired")
-	}
-	ctx, cancel := context.WithTimeout(parent, timeoutComposeRestart)
-	defer cancel()
-	return e.backend.Docker.ComposeRestart(ctx, workerID)
+	return e.backend.Docker.ActivateImage(ctx, workerID, image)
 }
 
 func (e *UpdateExecutor) stepContainerRunning(parent context.Context, workerID string) error {
@@ -62,7 +53,7 @@ func (e *UpdateExecutor) stepHealthReady(parent context.Context, workerID string
 	// Production: `docker exec velox-worker-<id> curl -fsS http://127.0.0.1:8081/health/ready`.
 	// Tests substitute a stub that returns a canned status. The
 	// implementation is in the BackendDockerClient surface
-	// (PullImage / ComposeRestart / ContainerRunning) — for
+	// (ActivateImage / ContainerRunning) — for
 	// /health/ready we re-use the SSH surface since the health
 	// endpoint is a loopback curl on the worker.
 	if e.backend.SSHCmd == nil {

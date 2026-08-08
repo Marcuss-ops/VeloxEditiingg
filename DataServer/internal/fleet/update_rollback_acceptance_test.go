@@ -16,9 +16,9 @@ type recordingDocker struct {
 	pulls []string
 }
 
-func (d *recordingDocker) PullImage(ctx context.Context, workerID, imageRef string) (string, error) {
+func (d *recordingDocker) ActivateImage(ctx context.Context, workerID, imageRef string) (string, error) {
 	d.pulls = append(d.pulls, imageRef)
-	return d.stubBackendsState.PullImage(ctx, workerID, imageRef)
+	return d.stubBackendsState.ActivateImage(ctx, workerID, imageRef)
 }
 
 func TestUpdateAcceptance_AtoB_PreservesWorkerIDAndUsesPinnedDigests(t *testing.T) {

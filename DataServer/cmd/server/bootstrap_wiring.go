@@ -72,7 +72,7 @@ func wirePostBuild(j *jobsDeps, t *taskDeps) error {
 //
 // Nil-tolerant: each step re-checks its own deps so a partial boot
 // keeps the routes un-mounted instead of 503-on-every-request.
-func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *moduleDeps, p *persistenceDeps) {
+func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *moduleDeps, p *persistenceDeps, workerNodeRegistry *fleet.WorkerRegistry, sharedSSH fleet.BackendSSHClient) error {
 	// Step 6/15 fleet-operator: wire the admin worker mutations handler
 	// (POST /api/v1/admin/workers/{id}/{drain,resume,quarantine}).
 	// Composition order: buildFleet returns FleetDep AFTER buildModules
@@ -98,8 +98,9 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 	// populated by buildWorkerRegistryFromStore; the SSH client derives its
 	// targets from it. There is intentionally NO hardcoded target map here:
 	// an unseeded inventory fails per-target at Run time with a clear error.
-	workerNodeRegistry := buildWorkerRegistryFromStore(p)
-	sharedSSH := fleet.NewSSHClientFromRegistry(workerNodeRegistry)
+	if workerNodeRegistry == nil || sharedSSH == nil {
+		return fmt.Errorf("canonical WorkerNodeRegistry/sharedSSH missing")
+	}
 
 	// Step 10/15 fleet-operator: wire the 4-level health probe handler
 	// (GET /api/v1/admin/workers/{id}/health?level=A|B|C|D; absent
@@ -212,6 +213,13 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 		} else {
 			log.Printf("[BOOTSTRAP] ResumeExecutor registered for kind=%s (fresh Level D smoke gate wired)", fleet.OperationKindResume)
 		}
+		if fleetDep.Update != nil && smokeBackend.Drive != nil {
+			freshSmoke := fleet.NewFreshSmokeRunner(levelDSmokeExecutor, p.SQLite)
+			if err := fleetDep.Update.AttachRuntimeBackends(freshSmoke, &driveVerifierAdapter{svc: m.Drive.Service()}); err != nil {
+				return fmt.Errorf("update runtime backends: %w", err)
+			}
+			log.Printf("[BOOTSTRAP] UpdateExecutor fresh Level-D smoke + Drive verifier wired")
+		}
 		log.Printf("[BOOTSTRAP] Admin workers smoke handler wired (POST /api/v1/admin/workers/{id}/smoke; tick goroutine drives LevelDSmokeExecutor)")
 	}
 
@@ -238,7 +246,6 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 		m.Workers.SetMetricsAggregatorHandler(metricsHandler)
 		log.Printf("[BOOTSTRAP] Admin workers metrics aggregator handler wired (GET /api/v1/admin/workers/{id}/metrics; fleet aggregate at GET /api/v1/fleet/metrics; metrics-snapshot-supervisor ticks every 5min via buildSupervisor)")
 	}
-
 	// Step 16/15 fleet-operator: wire the structured alerting
 	// surface (12-rule catalog persisted to alert_events via
 	// migration 107). Read paths: /api/v1/admin/workers/{id}/alerts
@@ -259,4 +266,10 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 		m.Workers.SetAlertsHandler(alertsHandler)
 		log.Printf("[BOOTSTRAP] Admin workers alerts handler wired (GET /api/v1/admin/workers/{id}/alerts + /api/v1/fleet/alerts/active + /recent; alerts-supervisor ticks every 5min via buildSupervisor)")
 	}
+	if fleetDep != nil && fleetDep.Update != nil {
+		if err := fleetDep.Update.ValidateProductionBackends(); err != nil {
+			return fmt.Errorf("UpdateExecutor production wiring invalid: %w", err)
+		}
+	}
+	return nil
 }

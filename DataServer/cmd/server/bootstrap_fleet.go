@@ -60,6 +60,25 @@ type driveUploaderAdapter struct {
 	folderID string
 }
 
+type driveVerifierAdapter struct{ svc *integrationsDrive.Service }
+
+func (a *driveVerifierAdapter) VerifyDelivery(ctx context.Context, driveFileID string, expectedBytes int64) error {
+	if a == nil || a.svc == nil {
+		return fmt.Errorf("drive verifier: service not configured")
+	}
+	file, err := a.svc.GetFileMetadata(ctx, driveFileID)
+	if err != nil {
+		return fmt.Errorf("drive metadata: %w", err)
+	}
+	if file == nil || file.ID == "" {
+		return fmt.Errorf("drive metadata missing file id")
+	}
+	if expectedBytes > 0 && file.Size != expectedBytes {
+		return fmt.Errorf("drive size=%d want=%d", file.Size, expectedBytes)
+	}
+	return nil
+}
+
 // UploadArtifact delegates to the real Drive service's UploadFile.
 // The runID is used as the deliveryID for traceability in Drive properties.
 // A smoke-specific folder can be configured via VELOX_SMOKE_DRIVE_FOLDER_ID;
@@ -104,6 +123,7 @@ func (a *driveUploaderAdapter) UploadArtifact(ctx context.Context, runID, srcPat
 type FleetDep struct {
 	Controller      *fleet.FleetController
 	Registry        *fleet.ExecutorRegistry
+	Update          *fleet.UpdateExecutor
 	tickWiredAtBoot bool
 }
 
@@ -141,7 +161,7 @@ func (f *FleetDep) getHandler() *api.AdminOperationsHandler {
 // running check + /health/ready poll (60s) + master connect
 // (30s) + Level D smoke (5min) + Drive verify (60s) +
 // RB-only cascade on failure (15min slack).
-func buildFleet(p *persistenceDeps, workerRegistry *workersreg.Registry) (*FleetDep, error) {
+func buildFleet(p *persistenceDeps, workerRegistry *workersreg.Registry, sharedSSH fleet.BackendSSHClient) (*FleetDep, error) {
 	if p == nil || p.SQLite == nil {
 		return nil, nil
 	}
@@ -158,17 +178,21 @@ func buildFleet(p *persistenceDeps, workerRegistry *workersreg.Registry) (*Fleet
 	// both active_tasks polling and the executor-owned drain toggle;
 	// no operator-side/document-only drain is required.
 	updateBackend := fleet.UpdateBackend{
+		SSHCmd:      sharedSSH,
+		Docker:      &fleet.SSHWorkerDockerClient{SSH: sharedSSH},
 		Deployments: p.SQLite,
 		Cosign:      newUpdateCosignVerifier(),
 		Image:       deployUpdateImageValidator{},
 		Registry:    &fleet.RealRegistryUpdateGater{Reg: workerRegistry},
 	}
-	registry.Register(fleet.OperationKindUpdate, fleet.NewUpdateExecutor(updateBackend))
-	log.Printf("[BOOTSTRAP] UpdateExecutor registered for kind=%s (registry drain/active_tasks gate wired; SSH/Docker/Smoke/Drive pending)", fleet.OperationKindUpdate)
+	updateExecutor := fleet.NewUpdateExecutor(updateBackend)
+	registry.Register(fleet.OperationKindUpdate, updateExecutor)
+	log.Printf("[BOOTSTRAP] UpdateExecutor registered for kind=%s (SSH/Docker activation wired; fresh Smoke/Drive attach pending)", fleet.OperationKindUpdate)
 
 	return &FleetDep{
 		Controller:      controller,
 		Registry:        registry,
+		Update:          updateExecutor,
 		tickWiredAtBoot: false,
 	}, nil
 }

@@ -283,7 +283,7 @@ func TestProbeLevelB_HappyPath(t *testing.T) {
 			return "true", nil
 		case strings.Contains(cmd, "curl"):
 			return "ok", nil
-		case strings.Contains(cmd, "{{.Image}}"):
+		case strings.Contains(cmd, "{{.Config.Image}}"):
 			return targetDigest, nil
 		case strings.Contains(cmd, "RestartCount"):
 			return "1", nil

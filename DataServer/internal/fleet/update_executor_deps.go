@@ -70,9 +70,8 @@ type BackendSSHClient interface {
 // surface. Each method corresponds to one step in the forward
 // or rollback pipeline:
 //
-//	PullImage — docker pull <imageRef> on the worker.
-//	ComposeRestart — `docker compose -p velox-worker-<id> restart`
-//	  on the worker to pick up the new image.
+//	ActivateImage — validate, pull, atomically update worker.env and restart
+//	  the canonical velox-worker.service on the worker.
 //	ContainerRunning — sanity check after restart; returns
 //	  (true, nil) when the container reports running.
 //
@@ -81,8 +80,7 @@ type BackendSSHClient interface {
 // the docker daemon is responsive". The executor maps this
 // into the rollback path.
 type BackendDockerClient interface {
-	PullImage(ctx context.Context, workerID string, imageRef string) (output string, err error)
-	ComposeRestart(ctx context.Context, workerID string) (output string, err error)
+	ActivateImage(ctx context.Context, workerID, imageRef string) (output string, err error)
 	ContainerRunning(ctx context.Context, workerID string) (bool, error)
 }
 

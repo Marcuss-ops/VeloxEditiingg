@@ -25,7 +25,8 @@
 //     + heartbeat recency.
 //     g. RunLevelD smoke (returns smoke artifact_id).
 //     h. Drive verifier confirms the smoke artifact landed.
-//     i. MarkSucceeded on the PENDING row → Health HEALTHY.
+//     i. release an executor-owned drain and verify it is released.
+//     j. MarkSucceeded on the PENDING row → Health HEALTHY.
 //  7. on any forward failure (cosign fail / pull fail /
 //     container unhealthy / health non-200 / master offline
 //     / smoke fail / Drive fail), UPDATES the PENDING row to
@@ -33,8 +34,8 @@
 //     a. INSERT a SECOND deployment_records row, status=
 //     PENDING, is_rollback=true. Health flips to
 //     ROLLBACK via rank-3 precedence (beats UPDATING).
-//     b. ssh: docker pull <previous_digest>.
-//     c. ssh: docker compose restart.
+//     b. ssh: activate the previous digest through the canonical helper.
+//     c. systemd restarts the canonical service.
 //     d. ContainerRunning poll.
 //     e. /health/ready poll.
 //     f. health CONTAINER-restart path does NOT re-run
@@ -203,6 +204,59 @@ func NewUpdateExecutor(b UpdateBackend) *UpdateExecutor {
 	return &UpdateExecutor{backend: b, drainTimeout: timeoutActiveJobsIdle}
 }
 
+// AttachRuntimeBackends completes the production composition after the
+// canonical Level-D executor and Drive service have been constructed. It is
+// intentionally atomic at bootstrap time: an update executor with any
+// missing runtime backend is rejected by the composition root.
+func (e *UpdateExecutor) AttachRuntimeBackends(smoke BackendSmokeRunner, drive BackendDriveVerifier) error {
+	if e == nil {
+		return errors.New("update: nil executor")
+	}
+	if smoke == nil || drive == nil {
+		return errors.New("update: fresh smoke and drive verifier are required")
+	}
+	e.backend.Smoke = smoke
+	e.backend.Drive = drive
+	return nil
+}
+
+// ValidateProductionBackends prevents the update endpoint from being exposed
+// with a partially wired production backend.
+func (e *UpdateExecutor) ValidateProductionBackends() error {
+	if e == nil {
+		return errors.New("update: nil executor")
+	}
+	missing := make([]string, 0, 8)
+	if e.backend.SSHCmd == nil {
+		missing = append(missing, "ssh")
+	}
+	if e.backend.Docker == nil {
+		missing = append(missing, "docker")
+	}
+	if e.backend.Deployments == nil {
+		missing = append(missing, "deployments")
+	}
+	if e.backend.Cosign == nil {
+		missing = append(missing, "cosign")
+	}
+	if e.backend.Image == nil {
+		missing = append(missing, "image")
+	}
+	if e.backend.Registry == nil {
+		missing = append(missing, "registry")
+	}
+	if e.backend.Smoke == nil {
+		missing = append(missing, "smoke")
+	}
+	if e.backend.Drive == nil {
+		missing = append(missing, "drive")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing dependencies: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
 // BackendCosignVerifierIfc is the local alias for
 // velox-server/internal/deploy/cosign.CosignVerifier so the
 // executor struct definition here doesn't import the cosign
@@ -322,12 +376,16 @@ func (e *UpdateExecutor) Execute(ctx context.Context, op *store.Operation) error
 		return rollbackErr
 	}
 
-	// ── Phase 7: forward SUCCEEDED, mark terminal ───────────────────
+	// ── Phase 7: release drain, then mark terminal ──────────────────
+	// A successful deployment must never be published while the worker
+	// remains DRAINING. The drain is part of the success invariant, not
+	// cleanup after success; otherwise the fleet ledger and live routing
+	// state can disagree.
+	if err := e.releaseOwnedDrain(ctx, op.WorkerID, drainOwned); err != nil {
+		return fmt.Errorf("update: release drain before success: %w", err)
+	}
 	if err := e.backend.Deployments.MarkSucceeded(ctx, deploymentID, e.backend.Now()); err != nil {
 		return fmt.Errorf("update: mark SUCCEEDED for %s: %w", deploymentID, err)
-	}
-	if err := e.releaseOwnedDrain(ctx, op.WorkerID, drainOwned); err != nil {
-		return fmt.Errorf("update: release drain after success: %w", err)
 	}
 	log.Printf("[UPDATE] worker=%s target=%s SUCCEEDED", op.WorkerID, targetDigest)
 	return nil

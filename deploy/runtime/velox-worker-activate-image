@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ "$#" -eq 1 ]] || {
+  echo "usage: velox-worker-activate-image <immutable-image-ref>" >&2
+  exit 2
+}
+IMAGE="$1"
+ENV_FILE=/etc/velox-worker/worker.env
+
+[[ "$IMAGE" =~ ^ghcr\.io/[a-z0-9._-]+/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]] || {
+  echo "invalid immutable worker image reference" >&2
+  exit 2
+}
+[[ -r "$ENV_FILE" ]] || { echo "worker env missing: $ENV_FILE" >&2; exit 1; }
+
+grep -q '^VELOX_WORKER_IMAGE=' "$ENV_FILE" || {
+  echo "VELOX_WORKER_IMAGE missing from $ENV_FILE" >&2
+  exit 1
+}
+
+docker pull "$IMAGE" >/dev/null
+
+tmp="$(mktemp "${ENV_FILE}.tmp.XXXXXX")"
+trap 'rm -f "$tmp"' EXIT
+awk -v image="$IMAGE" '
+  BEGIN { done=0 }
+  /^VELOX_WORKER_IMAGE=/ {
+    if (!done) { print "VELOX_WORKER_IMAGE=" image; done=1 }
+    next
+  }
+  { print }
+  END { if (!done) exit 1 }
+' "$ENV_FILE" >"$tmp"
+chown --reference="$ENV_FILE" "$tmp"
+chmod --reference="$ENV_FILE" "$tmp"
+mv -f "$tmp" "$ENV_FILE"
+trap - EXIT
+
+systemctl restart velox-worker.service
+systemctl is-active --quiet velox-worker.service
+docker inspect --format '{{.Config.Image}}' velox-worker | grep -Fx "$IMAGE" >/dev/null
+curl -fsS --max-time 10 http://127.0.0.1:8081/health/ready >/dev/null

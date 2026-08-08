@@ -28,14 +28,11 @@ func (e *UpdateExecutor) runForward(ctx context.Context, op *store.Operation, ta
 		return fmt.Errorf("cosign: %w", err)
 	}
 
-	// (b) docker pull <target_digest>.
-	if _, err := e.stepPullImage(ctx, op.WorkerID, targetDigest); err != nil {
-		return fmt.Errorf("docker pull: %w", err)
-	}
-
-	// (c) docker compose restart on the worker.
-	if _, err := e.stepComposeRestart(ctx, op.WorkerID); err != nil {
-		return fmt.Errorf("docker compose restart: %w", err)
+	// (b) atomically activate the pinned image on the canonical worker
+	// runtime. The helper validates, updates worker.env and restarts the
+	// single velox-worker.service owner.
+	if _, err := e.stepActivateImage(ctx, op.WorkerID, targetDigest); err != nil {
+		return fmt.Errorf("activate image: %w", err)
 	}
 
 	// (d) ContainerRunning poll.
@@ -127,11 +124,8 @@ func (e *UpdateExecutor) runRollback(ctx context.Context, op *store.Operation, p
 // partial rollback is reported so the operator sees a faithful
 // audit message. Returns nil on full recovery.
 func (e *UpdateExecutor) runRollbackSteps(ctx context.Context, workerID, previousDigest string) error {
-	if _, err := e.stepPullImage(ctx, workerID, previousDigest); err != nil {
-		return fmt.Errorf("rollback pull previous_digest: %w", err)
-	}
-	if _, err := e.stepComposeRestart(ctx, workerID); err != nil {
-		return fmt.Errorf("rollback compose restart: %w", err)
+	if _, err := e.stepActivateImage(ctx, workerID, previousDigest); err != nil {
+		return fmt.Errorf("rollback activate previous_digest: %w", err)
 	}
 	if err := e.stepContainerRunning(ctx, workerID); err != nil {
 		return fmt.Errorf("rollback container_running: %w", err)

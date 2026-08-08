@@ -15,11 +15,44 @@ package fleet
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"velox-server/internal/store"
 )
+
+// FreshSmokeRunner adapts the real Level-D operation executor to the update
+// pipeline. It always executes a new smoke operation before reading its
+// durable result; an older smoke can never satisfy a post-update gate.
+type FreshSmokeRunner struct {
+	executor OperationExecutor
+	runs     BackendSmokeRuns
+}
+
+func NewFreshSmokeRunner(executor OperationExecutor, runs BackendSmokeRuns) *FreshSmokeRunner {
+	return &FreshSmokeRunner{executor: executor, runs: runs}
+}
+
+func (r *FreshSmokeRunner) RunLevelD(ctx context.Context, workerID string) (string, error) {
+	if r == nil || r.executor == nil || r.runs == nil {
+		return "", fmt.Errorf("fresh smoke runner: real executor not wired")
+	}
+	payload, err := json.Marshal(SmokePayload{AssetID: "asset-canary-001", Reason: "worker update Level D smoke gate"})
+	if err != nil {
+		return "", fmt.Errorf("fresh smoke payload: %w", err)
+	}
+	op := &store.Operation{
+		OperationID: fmt.Sprintf("update-smoke-%s-%d", workerID, time.Now().UnixNano()),
+		WorkerID:    workerID, Op: OperationKindSmoke, RequestedBy: "update-executor",
+		Reason: "worker update Level D smoke gate", Payload: payload,
+		Status: store.OperationStatusRunning, QueuedAt: time.Now().UTC(),
+	}
+	if err := r.executor.Execute(ctx, op); err != nil {
+		return "", err
+	}
+	return NewSmokeRunHealthChecker(r.runs).RunLevelD(ctx, workerID)
+}
 
 // SmokeRunHealthChecker reads the latest smoke run for a worker from
 // the smoke_runs table and surfaces it as a BackendSmokeRunner so

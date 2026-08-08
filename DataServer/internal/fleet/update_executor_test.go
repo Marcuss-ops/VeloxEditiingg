@@ -157,18 +157,14 @@ func (s *stubBackendsState) Run(_ context.Context, _ string, _ string) (string, 
 
 // ── BackendDockerClient ──────────────────────────────────────────────
 
-func (s *stubBackendsState) PullImage(_ context.Context, _ string, _ string) (string, error) {
+func (s *stubBackendsState) ActivateImage(_ context.Context, _ string, _ string) (string, error) {
 	if s.pullErr != nil {
 		return "", s.pullErr
 	}
-	return "pulled digest OK", nil
-}
-
-func (s *stubBackendsState) ComposeRestart(_ context.Context, _ string) (string, error) {
 	if s.composeErr != nil {
 		return "", s.composeErr
 	}
-	return "compose restart OK", nil
+	return "activated digest OK", nil
 }
 
 func (s *stubBackendsState) ContainerRunning(_ context.Context, _ string) (bool, error) {
@@ -468,7 +464,7 @@ func TestUpdate_PullImageFail_RollsBack(t *testing.T) {
 	if err == nil || !errors.Is(err, ErrRollbackFailed) {
 		t.Errorf("pull fail: want ErrRollbackFailed (cascade), got %v", err)
 	}
-	if !strings.Contains(err.Error(), "docker pull") {
+	if !strings.Contains(err.Error(), "activate image") {
 		t.Errorf("pull fail err must mention step name; got %v", err)
 	}
 }

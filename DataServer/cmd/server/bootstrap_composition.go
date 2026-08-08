@@ -17,6 +17,7 @@ import (
 	"velox-server/internal/app"
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/fleet"
 	"velox-server/internal/instaeditauth"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/registry"
@@ -218,7 +219,9 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		return nil, err
 	}
 
-	fleetDep, err := buildFleet(p, w.Registry)
+	workerNodeRegistry := buildWorkerRegistryFromStore(p)
+	sharedSSH := fleet.NewSSHClientFromRegistry(workerNodeRegistry)
+	fleetDep, err := buildFleet(p, w.Registry, sharedSSH)
 	if err != nil {
 		_ = p.SQLite.Close()
 		return nil, fmt.Errorf("bootstrap: fleet: %w", err)
@@ -236,7 +239,10 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	// metrics / alerts handlers + the shared SSH client) — extracted to
 	// bootstrap_wiring.go so buildAppComponents stays a readable
 	// dependency-ordered composition. Nil-tolerant per step.
-	wireFleetOperatorHandlers(cfg, fleetDep, m, p)
+	if err := wireFleetOperatorHandlers(cfg, fleetDep, m, p, workerNodeRegistry, sharedSSH); err != nil {
+		_ = p.SQLite.Close()
+		return nil, fmt.Errorf("bootstrap: fleet operator wiring: %w", err)
+	}
 
 	return &appComponents{
 		cfg:                cfg,
