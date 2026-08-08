@@ -112,6 +112,35 @@ post_mutation() {
     return 1
 }
 
+# post_update_mutation is the update-only POST surface. A 409 is actionable
+# when the Master returns an existing operation_id: poll that operation rather
+# than losing the correlation behind a generic HTTP error. Other mutation
+# commands retain post_mutation's existing behavior.
+post_update_mutation() {
+    local path=$1 body=$2 code out msg operation_id
+    out="$(mktemp)"
+    code="$(curl -sS -o "$out" -w '%{http_code}' -X POST \
+        -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+        --data-raw "$body" "$MASTER_URL$path" 2>/dev/null || true)"
+    if [[ "$code" =~ ^2 ]]; then
+        cat "$out"
+        rm -f "$out"
+        return 0
+    fi
+    if [[ "$code" == "409" ]]; then
+        operation_id="$(jq -r '.operation_id // empty' "$out" 2>/dev/null || true)"
+        if [[ -n "$operation_id" ]]; then
+            cat "$out"
+            rm -f "$out"
+            return 0
+        fi
+    fi
+    msg="$(jq -r '.error // .detail // empty' "$out" 2>/dev/null || true)"
+    rm -f "$out"
+    printf 'fleetctl: POST %s failed (HTTP %s): %s\n' "$path" "$code" "$msg" >&2
+    return 1
+}
+
 # run_digest_update POSTs the pinned image to the canonical Master update API
 # and blocks on the fleet_operations ledger until the cascade is terminal.
 # The same endpoint serves both `update` (a new target digest) and `rollback`
@@ -119,17 +148,90 @@ post_mutation() {
 # forward pipeline (drain → cosign → pull → velox-worker-activate-image →
 # health → smoke → Drive) and records the audit rows in deployment_records.
 run_digest_update() {
-    local action=$1 worker_id=$2 image=$3 reason=${4:-fleetctl-$action}
+    local action=$1 worker_id=$2 image=$3
+    local reason=${4:-fleetctl-$action}
     local path body response op_id
     validate_image "$image"
     path="$(worker_uri "$worker_id")/update"
     body="$(jq -cn --arg target "$image" --arg reason "$reason" '{target_digest:$target, reason:$reason}')"
     printf 'fleetctl: %s worker=%s image=%s reason=%s\n' "$action" "$worker_id" "$image" "$reason" >&2
-    response="$(post_mutation "$path" "$body")"
+    if [[ "$action" == "update" ]]; then
+        response="$(post_update_mutation "$path" "$body")"
+    else
+        response="$(post_mutation "$path" "$body")"
+    fi
     op_id="$(jq -r '.operation_id // empty' <<<"$response")"
     [[ -n "$op_id" ]] || die "update API returned no operation_id: $response"
     printf 'fleetctl: %s queued operation_id=%s\n' "$action" "$op_id" >&2
     poll_operation "$op_id"
+}
+
+# normalize_update_image preserves the historical full-image positional form
+# while accepting the canonical caller form --digest sha256:<64-hex>. The API
+# requires the complete GHCR reference, so bare digests use the configured
+# worker repository (or the production default) before validation and POST.
+normalize_update_image() {
+    local image=$1 repository
+    [[ -n "$image" ]] || die 'pinned image reference is required (use --digest)'
+    if [[ "$image" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+        repository="${GHCR_WORKER_REPOSITORY:-ghcr.io/marcuss-ops/velox-worker}"
+        repository="${repository%/}"
+        [[ "$repository" =~ ^ghcr\.io/[a-z0-9._-]+/[a-z0-9._/-]+$ ]] \
+            || die 'GHCR_WORKER_REPOSITORY must be a valid lowercase ghcr.io repository'
+        printf '%s@%s' "$repository" "$image"
+    else
+        printf '%s' "$image"
+    fi
+}
+
+parse_update_args() {
+    local worker_id='' image='' reason='' arg
+    while [[ $# -gt 0 ]]; do
+        arg=$1
+        case "$arg" in
+            --digest=*)
+                [[ -z "$image" ]] || die 'update digest specified more than once'
+                image=${arg#*=}
+                shift
+                ;;
+            --digest)
+                [[ $# -ge 2 ]] || die '--digest requires a value'
+                [[ -z "$image" ]] || die 'update digest specified more than once'
+                image=$2
+                shift 2
+                ;;
+            --reason=*)
+                [[ -z "$reason" ]] || die 'update reason specified more than once'
+                reason=${arg#*=}
+                shift
+                ;;
+            --reason)
+                [[ $# -ge 2 ]] || die '--reason requires a value'
+                [[ -z "$reason" ]] || die 'update reason specified more than once'
+                reason=$2
+                shift 2
+                ;;
+            -*)
+                die "unknown update option: $arg"
+                ;;
+            *)
+                if [[ -z "$worker_id" ]]; then
+                    worker_id=$arg
+                elif [[ -z "$image" ]]; then
+                    image=$arg
+                elif [[ -z "$reason" ]]; then
+                    reason=$arg
+                else
+                    die "unexpected update argument: $arg"
+                fi
+                shift
+                ;;
+        esac
+    done
+    [[ -n "$worker_id" ]] || die 'worker_id is required'
+    image="$(normalize_update_image "$image")"
+    reason=${reason:-fleetctl-update}
+    run_digest_update update "$worker_id" "$image" "$reason"
 }
 
 # poll_operation blocks until the fleet_operations ledger row is terminal.
@@ -197,12 +299,16 @@ case "$command" in
         api POST "$(worker_uri "$worker_id")/restart" \
             "$(jq -cn --arg reason "$reason" '{reason:$reason}')" | jq .
         ;;
-    update|rollback)
+    update)
+        shift
+        parse_update_args "$@"
+        ;;
+    rollback)
         worker_id=${2:-}
         image=${3:-}
         [[ -n "$worker_id" ]] || die 'worker_id is required'
         [[ -n "$image" ]] || die 'pinned image reference is required (for rollback: the previous-known-good digest)'
-        run_digest_update "$command" "$worker_id" "$image" "${4:-fleetctl-$command}"
+        run_digest_update rollback "$worker_id" "$image" "${4:-fleetctl-rollback}"
         ;;
     operations)
         path=/api/v1/admin/operations
