@@ -93,7 +93,7 @@ func TestHealth_ProbeDispatch_NoPanicOnNilDeps(t *testing.T) {
 		// is non-empty (otherwise image_digest_match short-circuits
 		// on the empty-running-digest check first).
 		sshStub := fakeSSHForLevelB{runFn: func(cmd string) (string, error) {
-			if strings.Contains(cmd, "{{.Image}}") {
+			if strings.Contains(cmd, "{{.Config.Image}}") {
 				return "sha256:fakedigest", nil
 			}
 			return "ok", nil
@@ -287,7 +287,7 @@ func TestHealth_HTTPDispatchesAllLevels(t *testing.T) {
 			return "true", nil
 		case strings.Contains(cmd, "curl"):
 			return "ok", nil
-		case strings.Contains(cmd, "{{.Image}}"):
+		case strings.Contains(cmd, "{{.Config.Image}}"):
 			return "sha256:health-http", nil
 		case strings.Contains(cmd, "RestartCount"):
 			return "0", nil

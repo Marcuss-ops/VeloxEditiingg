@@ -340,7 +340,7 @@ func TestProbeLevelB_HealthReadyFail(t *testing.T) {
 
 func TestProbeLevelB_ImageDigestNoRow(t *testing.T) {
 	ssh := stubSSH{runFn: func(_ context.Context, _, cmd string) (string, error) {
-		if strings.Contains(cmd, "{{.Image}}") {
+		if strings.Contains(cmd, "{{.Config.Image}}") {
 			return "sha256:runningdigest", nil
 		}
 		return "", nil
@@ -358,7 +358,7 @@ func TestProbeLevelB_ImageDigestNoRow(t *testing.T) {
 func TestProbeLevelB_PendingAccepted(t *testing.T) {
 	targetDigest := "sha256:in-flight-target"
 	ssh := stubSSH{runFn: func(_ context.Context, _, cmd string) (string, error) {
-		if strings.Contains(cmd, "{{.Image}}") {
+		if strings.Contains(cmd, "{{.Config.Image}}") {
 			return targetDigest, nil
 		}
 		return "", nil
