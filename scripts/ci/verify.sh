@@ -108,6 +108,8 @@ log "check-forwarding-resolver-only (Area 3 architectural invariant)"
 # remains an explicit operator/deploy gate and is never invoked by CI.
 log "test-certify-fleet (offline certification-runner self-test)"
 ./scripts/cert/test-certify-remote-fleet.sh
+log "test-worker-rollout-offline (Docker activation contract self-test)"
+./scripts/ci/test-worker-rollout-offline.sh
 
 # ── 2. Go modules: gofmt + vet + test (-race) ──────────────────────────────
 #
