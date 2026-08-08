@@ -370,8 +370,8 @@ TTL e max TTL limitati, EKU `ClientAuth` e policy AppRole che consente solo
 
 `worker.key` non viene mai scritto in KV, incluso il provisioning legacy. Un
 rinnovo forzato usa `--renew`; il rinnovo automatico avviene quando il
-certificato entra nella finestra `VELOX_MTLS_RENEW_BEFORE_SECONDS` (default 7
-giorni). Un errore di firma lascia intatto il bundle precedente. Con
+certificato entra nella finestra `VELOX_MTLS_RENEW_BEFORE_SECONDS` (default 48
+ore). Un errore di firma lascia intatto il bundle precedente. Con
 `VELOX_OPENBAO_ADDR` configurato `prepare-host.sh` fallisce chiuso e non usa
 file mTLS copiati manualmente.
 

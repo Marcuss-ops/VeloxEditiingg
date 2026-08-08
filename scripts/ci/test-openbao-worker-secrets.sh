@@ -70,6 +70,8 @@ if grep -Eq 'OPENBAO_PKI_INTERMEDIATE_(CERT|KEY)|BAO_PKI_KEY|pem_bundle' "$PKI_P
 fi
 grep -q 'use_csr_sans=true' "$PKI_PROVISION" \
     || fail 'PKI provisioning does not preserve the CSR URI SAN'
+grep -q 'key_type=ec' "$PKI_PROVISION" \
+    || fail 'PKI provisioning does not match the worker EC P-256 key contract'
 grep -q 'path "pki/issue/worker-{{ WORKER_ID }}"' "$WORKER_POLICY" \
     || fail 'worker policy does not explicitly deny the issue path'
 policy_a="$TMP/worker-a.hcl"
@@ -98,6 +100,7 @@ for worker, other in (("worker-a", "worker-b"), ("worker-b", "worker-a")):
     ))
     assert blocks[f"velox/data/production/workers/{worker}/credential"] == '["read"]'
     assert blocks[f"velox/metadata/production/workers/{worker}/credential"] == '["read"]'
+    assert blocks[f"velox/metadata/production/workers/{worker}/"] == '["list"]'
     assert blocks[f"pki/sign/worker-{worker}"] == '["update"]'
     assert f"velox/data/production/workers/{other}/credential" not in blocks
     assert f"pki/sign/worker-{other}" not in blocks

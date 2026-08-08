@@ -109,6 +109,8 @@ for worker in "${WORKERS[@]}"; do
         allowed_uri_sans="$spiffe_uri" \
         key_usage="Digital Signature,Key Encipherment" \
         ext_key_usage="ClientAuth" \
+        key_type=ec \
+        key_bits=256 \
         ttl="$DEFAULT_TTL" \
         max_ttl="$MAX_TTL" \
         >/dev/null

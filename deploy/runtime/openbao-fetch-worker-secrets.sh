@@ -25,7 +25,7 @@
 #   VELOX_OPENBAO_PKI_MOUNT            default pki
 #   VELOX_OPENBAO_PKI_ROLE             default worker-$VELOX_WORKER_ID
 #   VELOX_OPENBAO_PKI_TTL              default 168h
-#   VELOX_MTLS_RENEW_BEFORE_SECONDS    default 604800 (7 days)
+#   VELOX_MTLS_RENEW_BEFORE_SECONDS    default 172800 (48 hours)
 #   VELOX_MTLS_FORCE_RENEW             set to 1 to rotate immediately
 #
 # Flags (exactly one is required):
@@ -53,7 +53,7 @@ PKI_MOUNT="${VELOX_OPENBAO_PKI_MOUNT:-pki}"
     printf '[openbao-fetch] FATAL: VELOX_OPENBAO_PKI_MOUNT must be the canonical pki mount\n' >&2
     exit 1
 }
-RENEW_BEFORE_SECONDS="${VELOX_MTLS_RENEW_BEFORE_SECONDS:-604800}"
+RENEW_BEFORE_SECONDS="${VELOX_MTLS_RENEW_BEFORE_SECONDS:-172800}"
 CHECK=0
 FORCE_RENEW="${VELOX_MTLS_FORCE_RENEW:-0}"
 MODE=""
@@ -255,6 +255,12 @@ materialize_credential() {
     log "scritto worker_credential (sha256 $(sha256sum "$SECRETS_DIR/worker_credential" | awk '{print substr($1,1,12)}')...)"
 }
 
+# Credential KV and PKI certificate are independent OpenBao authorities. Mark
+# the credential as soon as its OpenBao value has been materialized, before
+# the CSR path runs, so a missing PKI issuer cannot hide a successful KV
+# migration or make the next diagnostic report the wrong failure.
+materialize_credential
+
 # A valid pair is a cache hit. OpenBao was still contacted above, so deploy
 # and renewal cannot silently proceed with an unverified authority.
 if [[ "$MODE" == "provision" && "$FORCE_RENEW" != "1" ]] && local_certificate_ready; then
@@ -344,5 +350,4 @@ if [[ -e "$CURRENT_LINK" && ! -L "$CURRENT_LINK" ]]; then
 fi
 ln -s ".bundles/$(basename "$NEW_BUNDLE")" "$SWITCH_LINK" || fail "cannot prepare atomic certificate switch"
 mv -Tf "$SWITCH_LINK" "$CURRENT_LINK" || { rm -f "$SWITCH_LINK"; fail "atomic certificate switch failed"; }
-materialize_credential
 log "mTLS rinnovato da OpenBao PKI: private key generata localmente; bundle versionato selezionato con switch atomico"

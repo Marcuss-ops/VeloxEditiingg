@@ -22,6 +22,12 @@ path "velox/metadata/production/workers/{{ WORKER_ID }}/credential" {
   capabilities = ["read"]
 }
 
+# KV v2 list operates on the parent metadata prefix. This reveals only the
+# existence of the worker's own credential leaf, never its value or siblings.
+path "velox/metadata/production/workers/{{ WORKER_ID }}/" {
+  capabilities = ["list"]
+}
+
 # The worker may submit its locally generated CSR only to its own PKI role.
 # The signing endpoint receives the CSR/public key, never worker.key.
 path "pki/sign/worker-{{ WORKER_ID }}" {
