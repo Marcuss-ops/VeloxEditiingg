@@ -25,7 +25,7 @@ SHELL := /usr/bin/env bash
 EVIDENCE_ROOT_CAP9      ?= /tmp/velox-cap9-evidence
 EVIDENCE_ROOT_CAP10     ?= /tmp/velox-cap10-evidence
 
-.PHONY: verify verify-fast verify-heavy test-certify-fleet certify-fleet fmt fmt-check vet pilot api-docs api-docs-apply \
+.PHONY: verify verify-fast verify-heavy test-certify-fleet test-canary-worker-rollout canary-worker-rollout certify-fleet fmt fmt-check vet pilot api-docs api-docs-apply \
         jobs-smoke publishing-flow-smoke \
         e2e-grpc e2e-workload e2e-workload-mtls e2e-master-worker \
         enable-branch-protection disable-branch-protection inspect-branch-protection \
@@ -54,6 +54,8 @@ help:
 	@echo "  make e2e-workload                 -- PR 5 full workload E2E (Hello → artifact, ~3-5 min)"
 	@echo "  make local-verify-mirror          -- reproduce the GitHub Actions pyramid locally"
 	@echo "  make test-certify-fleet            -- deterministic offline fleet-certification gate"
+	@echo "  make test-canary-worker-rollout     -- offline single-worker canary self-test"
+	@echo "  make canary-worker-rollout CANARY_ARGS=\"--worker-id ID --dry-run|--apply|--rollback\""
 	@echo "  make certify-fleet CERTIFY_FLEET_ARGS=\"...\" -- live operator fleet certification"
 	@echo ""
 	@echo "  Phase 0 (branch protection, required checks):"
@@ -204,8 +206,18 @@ publishing-flow-smoke:
 verify:        ## Architecture + Go (-race) + cmake + docker (full suite)
 	./scripts/ci/verify.sh
 
+test-canary-worker-rollout:  ## Offline single-worker canary self-test (CI-safe)
+	@bash scripts/ci/test-canary-worker-rollout.sh
+
 test-certify-fleet:  ## Deterministic offline certification-runner self-test (CI-safe)
 	@bash scripts/cert/test-certify-remote-fleet.sh
+
+canary-worker-rollout:  ## Prepare/apply/rollback one worker (pass CANARY_ARGS)
+	@if [ -z "$(strip $(CANARY_ARGS))" ]; then \
+	  echo "CANARY_ARGS is required (for example: --worker-id worker-01 --dry-run)" >&2; \
+	  exit 2; \
+	fi
+	@bash scripts/ops/canary-worker-rollout.sh $(CANARY_ARGS)
 
 # Live operator gate. Keep this separate from `make verify`: it requires
 # configured remote workers and must never run implicitly in CI.
