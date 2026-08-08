@@ -31,7 +31,10 @@ func TestLevelDSmoke_ControllerLifecyclePersistsVerifiedArtifactEvidence(t *test
 	}
 
 	fixture := filepath.Join(t.TempDir(), "fixture.mp4")
-	if output, err := exec.Command("ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:size=160x120:d=1", "-c:v", "libx264", "-pix_fmt", "yuv420p", fixture).CombinedOutput(); err != nil {
+	if output, err := exec.Command("ffmpeg", "-v", "error", "-y",
+		"-f", "lavfi", "-i", "color=c=blue:size=160x120:d=1",
+		"-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+		"-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", fixture).CombinedOutput(); err != nil {
 		t.Fatalf("create fixture: %v: %s", err, output)
 	}
 	durableBlob := filepath.Join(t.TempDir(), "durable", "smoke.mp4")

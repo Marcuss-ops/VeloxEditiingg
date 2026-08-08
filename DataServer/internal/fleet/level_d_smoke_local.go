@@ -67,13 +67,17 @@ func (w *LocalShellWorker) DownloadAsset(_ context.Context, runID, _, pickupURL,
 	}
 
 	// Dev-mode fallback: generate a small test video via ffmpeg lavfi.
+	// The synthetic asset carries one AAC audio track so the canonical
+	// Level D media gate (audio_track_count >= 1, audio_codec=aac) is
+	// exercised identically in dev and production.
 	ffmpeg := w.FFmpegBin
 	if ffmpeg == "" {
 		ffmpeg = "ffmpeg"
 	}
 	cmd := exec.Command(ffmpeg,
 		"-f", "lavfi", "-i", "color=c=blue:size=320x240:d=1",
-		"-c:v", "libx264", "-f", "mp4", "-t", "1", "-y", destPath,
+		"-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+		"-c:v", "libx264", "-c:a", "aac", "-f", "mp4", "-t", "1", "-shortest", "-y", destPath,
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -99,10 +103,12 @@ func (w *LocalShellWorker) RunFFmpegRender(_ context.Context, runID, _, renderPl
 		// /var/lib/velox-worker/smoke/<runID>.in / .mp4).
 		inputPath := filepath.Join(filepath.Dir(outputPath), runID+".in")
 		args = append(args, "-i", inputPath,
-			"-c:v", "libx264", "-t", "2", outputPath)
+			"-c:v", "libx264", "-c:a", "aac", "-t", "2", outputPath)
 	} else {
-		args = append(args, "-f", "lavfi", "-i", "color=c=red:size=320x240:d=2",
-			"-c:v", "libx264", "-t", "2", outputPath)
+		args = append(args,
+			"-f", "lavfi", "-i", "color=c=red:size=320x240:d=2",
+			"-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+			"-c:v", "libx264", "-c:a", "aac", "-t", "2", "-shortest", outputPath)
 	}
 	cmd := exec.Command(ffmpeg, args...)
 	out, err := cmd.CombinedOutput()

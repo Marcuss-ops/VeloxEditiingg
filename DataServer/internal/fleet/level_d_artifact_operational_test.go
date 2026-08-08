@@ -66,11 +66,15 @@ func (w *realArtifactWorker) RunFFmpegRender(ctx context.Context, runID, _, _, _
 	input := filepath.Join(w.root, runID, "input.mp4")
 	args := []string{"-v", "error", "-y"}
 	if w.fixture == "" {
-		args = append(args, "-f", "lavfi", "-i", "color=c=blue:size=160x120:d=1")
+		args = append(args,
+			"-f", "lavfi", "-i", "color=c=blue:size=160x120:d=1",
+			"-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo")
 	} else {
 		args = append(args, "-i", input)
 	}
-	args = append(args, "-c:v", "libx264", "-pix_fmt", "yuv420p", path)
+	// Canonical media gate contract: 1 video + 1 AAC audio track.
+	// Without `-c:a aac` the fixture would fail the Level D audio gate.
+	args = append(args, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", path)
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return "", 0, errors.New(string(output))
@@ -136,7 +140,10 @@ func TestFFprobeArtifactVerifier_RealMP4HashAndSize(t *testing.T) {
 	requireMediaTools(t)
 	root := t.TempDir()
 	path := filepath.Join(root, "fixture.mp4")
-	cmd := exec.Command("ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=red:size=160x120:d=1", "-c:v", "libx264", "-pix_fmt", "yuv420p", path)
+	cmd := exec.Command("ffmpeg", "-v", "error", "-y",
+		"-f", "lavfi", "-i", "color=c=red:size=160x120:d=1",
+		"-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+		"-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", path)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("create fixture: %v: %s", err, output)
 	}
@@ -199,7 +206,10 @@ func TestLevelDSmoke_RealVerifierRejectsSizeMismatch(t *testing.T) {
 	requireMediaTools(t)
 	root := t.TempDir()
 	path := filepath.Join(root, "fixture.mp4")
-	cmd := exec.Command("ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=green:size=160x120:d=1", "-c:v", "libx264", "-pix_fmt", "yuv420p", path)
+	cmd := exec.Command("ffmpeg", "-v", "error", "-y",
+		"-f", "lavfi", "-i", "color=c=green:size=160x120:d=1",
+		"-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+		"-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", path)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("create fixture: %v: %s", err, output)
 	}
