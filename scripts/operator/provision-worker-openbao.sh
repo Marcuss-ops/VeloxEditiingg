@@ -57,11 +57,22 @@ while [[ $# -gt 0 ]]; do
     --import-legacy) IMPORT_LEGACY=1; shift ;;
     --dry-run) DRY_RUN=1; CHECK=0; shift ;;
     --no-check) CHECK=0; shift ;;
-    --worker) SELECTED+=("${2:-}"); shift 2 ;;
+    --worker)
+      [[ $# -ge 2 && -n "${2:-}" && "${2#--}" == "$2" ]] \
+        || die "--worker requires a non-empty worker id"
+      SELECTED+=("$2")
+      shift 2
+      ;;
     -h|--help) usage 0 ;;
     *) die "unknown option: $1" ;;
   esac
 done
+
+[[ ${#SELECTED[@]} -eq 1 ]] \
+  || die "exactly one --worker <worker-id> is required per invocation (got ${#SELECTED[@]})"
+WORKER_ID="${SELECTED[0]}"
+[[ "$WORKER_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]] \
+  || die "invalid worker id: $WORKER_ID"
 
 command -v curl >/dev/null 2>&1 || die "curl is required"
 command -v jq >/dev/null 2>&1 || die "jq is required"
@@ -93,12 +104,6 @@ lookup_worker() {
     | @tsv
   ' <<<"$inventory_json" | head -1
 }
-
-[[ ${#SELECTED[@]} -eq 1 ]] \
-  || die "exactly one --worker <worker-id> is required per invocation (got ${#SELECTED[@]})"
-WORKER_ID="${SELECTED[0]}"
-[[ "$WORKER_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]] \
-  || die "invalid worker id: $WORKER_ID"
 
 api_code() {
   local method="$1" path="$2" body_file="${3:-}" out code
@@ -300,8 +305,10 @@ case "$code" in
         | python3 -c 'import sys; sys.stdout.buffer.write(sys.stdin.buffer.read().rstrip(b"\\r\\n"))' \
         | sha256sum | awk '{print $1}')"
       bao_hash="$(kv_value_hash "$WORKER_ID" "$leaf")"
-      [[ -n "$remote_hash" && "$remote_hash" != "$bao_hash" ]] \
-        && import_remote_file "$WORKER_ID" "$leaf" "$source"
+      [[ -n "$remote_hash" && -n "$bao_hash" ]] \
+        || die "cannot compare legacy credential with OpenBao for $WORKER_ID/$leaf"
+      [[ "$remote_hash" == "$bao_hash" ]] \
+        || die "legacy credential hash mismatch for $WORKER_ID/$leaf; refusing overwrite (local=$remote_hash openbao=$bao_hash)"
     fi
     ;;
   404)
