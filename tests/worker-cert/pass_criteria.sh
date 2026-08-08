@@ -445,11 +445,13 @@ if [[ -n "$ARTIFACT_URL" && "${ARTIFACT_SIZE_BYTES:-0}" -gt 0 ]]; then
      && [[ -s "$TMP_ARTIFACT" ]]; then
     # invoke verify_artifact.sh subprocess on the downloaded artifact
     VERIFY_RC=0
-    VELOX_MASTER_BEARER="$M2M_BEARER" \
+    # The polling loop above already recorded the authoritative SUCCEEDED
+    # transition. Do not repeat the master-side GET here: after finalization
+    # some deployments retire the creator-forwarding lookup row, so a second
+    # GET can return job_not_found even though the artifact and terminal
+    # status are valid. Step 9 is the artifact/media gate; step 10 is the
+    # terminal-status gate.
       bash "${SCRIPT_DIR}/verify_artifact.sh" "$TMP_ARTIFACT" \
-        --job-id "$JOB_ID" \
-        --master-url "$VELOX_MASTER_URL" \
-        --expect-status SUCCEEDED \
         --min-duration-s 1.0 \
         --max-duration-s 86400.0 \
         --min-width 480 --min-height 320 --min-fps 23.976 \
