@@ -47,11 +47,12 @@ const (
 	subSmoke    subCommand = "smoke"
 	subResume   subCommand = "resume"
 	subRollback subCommand = "rollback"
+	subSSHCheck subCommand = "ssh-check"
 )
 
 func (s subCommand) valid() bool {
 	switch s {
-	case subStatus, subInspect, subDrain, subUpdate, subSmoke, subResume, subRollback:
+	case subStatus, subInspect, subDrain, subUpdate, subSmoke, subResume, subRollback, subSSHCheck:
 		return true
 	default:
 		return false
@@ -77,6 +78,7 @@ Sub-commands:
   smoke    <worker_id>    on-demand Level-D smoke (await terminal state)
   resume   <worker_id>    RESUME (RESUMED after drain/quarantine)
   rollback <worker_id>    rollback to previous_digest (Step 9/15 cascade)
+  ssh-check               per-worker SSH connectivity (ssh/hostkey/sudo -n)
 
 Auth (in precedence order):
   1. --token-file=PATH    chmod-600 file holding the bare token
@@ -146,6 +148,8 @@ func runMain(args []string) int {
 		return runResume(client, rest[1:])
 	case subRollback:
 		return runRollback(client, rest[1:])
+	case subSSHCheck:
+		return runSSHCheck(client)
 	}
 	return ExitUnexpected
 }

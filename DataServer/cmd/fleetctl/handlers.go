@@ -52,6 +52,30 @@ type mutationResponse struct {
 	Reason      string `json:"reason"`
 }
 
+// sshCheckResponse matches GET /api/v1/admin/workers/ssh-check.
+type sshCheckResponse struct {
+	CheckedAt  string `json:"checked_at"`
+	KeyFile    string `json:"key_file"`
+	KnownHosts string `json:"known_hosts_file"`
+	Workers    []struct {
+		WorkerID string `json:"worker_id"`
+		Host     string `json:"host"`
+		User     string `json:"user"`
+		Port     int    `json:"port"`
+		SSH      string `json:"ssh"`
+		HostKey  string `json:"hostkey"`
+		Sudo     string `json:"sudo"`
+		Detail   string `json:"detail"`
+	} `json:"workers"`
+	Summary struct {
+		Total    int `json:"total"`
+		SSHPass  int `json:"ssh_pass"`
+		KeyPass  int `json:"key_pass"`
+		SudoPass int `json:"sudo_pass"`
+		Ready    int `json:"ready"`
+	} `json:"summary"`
+}
+
 // runStatus — GET /api/v1/admin/workers; pretty-prints a
 // WorkerCard-shaped table per worker. Synchronous; no polling.
 func runStatus(client *fleetClient) int {
@@ -275,4 +299,46 @@ func safeFirstArg(args []string) string {
 		}
 	}
 	return ""
+}
+
+// runSSHCheck — GET /api/v1/admin/workers/ssh-check. Prints one row
+// per worker in the canonical WorkerNodeRegistry with the ssh / hostkey
+// / sudo -n verdicts plus a fleet summary. Synchronous; no polling.
+func runSSHCheck(client *fleetClient) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*60*1e9)
+	defer cancel()
+	resp := sshCheckResponse{}
+	status, err := client.doJSON(ctx, "GET", "/api/v1/admin/workers/ssh-check", nil, &resp)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, fmtExit(ExitUnexpected, "%v", err))
+		return ExitUnexpected
+	}
+	if status != 200 {
+		ec := MapHTTPStatusToOpExit(status)
+		fmt.Fprintln(os.Stderr, fmtExit(ec, "GET /admin/workers/ssh-check status=%d", status))
+		return ec
+	}
+	fmt.Printf("%-24s  %-5s  %-6s  %-5s  %-10s\n", "WORKER", "SSH", "HOSTKEY", "SUDO", "RESULT")
+	fmt.Printf("%-24s  %-5s  %-6s  %-5s  %-10s\n", strings.Repeat("-", 24), "-----", "------", "-----", "----------")
+	for _, w := range resp.Workers {
+		result := "READY"
+		if w.SSH != "PASS" || w.HostKey != "PASS" || w.Sudo != "PASS" {
+			result = "NOT-READY"
+		}
+		fmt.Printf("%-29s  %-5s  %-6s  %-5s  %-10s\n", w.WorkerID, w.SSH, w.HostKey, w.Sudo, result)
+		if w.Detail != "" && w.SSH != "PASS" {
+			fmt.Fprintf(os.Stderr, "  └─ %s: %s\n", w.WorkerID, w.Detail)
+		}
+	}
+	fmt.Printf("\n%d/%d READY (ssh=%d key=%d sudo=%d)  key=%s known_hosts=%s\n",
+		resp.Summary.Ready, resp.Summary.Total,
+		resp.Summary.SSHPass, resp.Summary.KeyPass, resp.Summary.SudoPass,
+		resp.KeyFile, resp.KnownHosts)
+	if resp.Summary.Total == 0 {
+		return ExitUnexpected
+	}
+	if resp.Summary.Ready != resp.Summary.Total {
+		return ExitUnexpected
+	}
+	return ExitOK
 }

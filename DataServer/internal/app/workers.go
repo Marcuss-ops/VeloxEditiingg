@@ -44,6 +44,7 @@ type WorkersModule struct {
 	adminWorkersHealthHandler            *api.AdminWorkersHealthHandler
 	adminWorkersSmokeHandler             *api.AdminWorkersSmokeHandler
 	adminWorkersMetricsAggregatorHandler *api.AdminWorkersMetricsAggregatorHandler
+	adminWorkersSSHCheckHandler          *api.AdminWorkersSSHCheckHandler
 	adminWorkersAlertsHandler            *api.AdminWorkersAlertsHandler
 	protectedAssetsHandler               *api.ProtectedAssetsHandler
 	protectedAssetsAuth                  gin.HandlerFunc
@@ -175,6 +176,15 @@ func (m *WorkersModule) SetMetricsAggregatorHandler(h *api.AdminWorkersMetricsAg
 // Idempotent — safe to call before RegisterRoutes; passing nil
 // disables the routes so a misconfigured bootstrap (no SQLite
 // store) does not 503-on-every-request.
+// SetSSHCheckHandler wires the Step 17/15 fleet-operator SSH
+// connectivity diagnostic (GET /api/v1/admin/workers/ssh-check).
+// Idempotent — safe to call before RegisterRoutes; passing nil
+// disables the route (the nil-guard inside RegisterRoutes handles
+// the skip).
+func (m *WorkersModule) SetSSHCheckHandler(h *api.AdminWorkersSSHCheckHandler) {
+	m.adminWorkersSSHCheckHandler = h
+}
+
 func (m *WorkersModule) SetAlertsHandler(h *api.AdminWorkersAlertsHandler) {
 	m.adminWorkersAlertsHandler = h
 }
@@ -334,6 +344,15 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 		// adminWorkersAlertsHandler nil guard.
 		if m.adminWorkersAlertsHandler != nil {
 			adminWorkers.GET("/:worker_id/alerts", m.adminWorkersAlertsHandler.ListWorkerAlerts())
+		}
+		// Step 17/15 — fleet-operator SSH connectivity diagnostic.
+		// GET /api/v1/admin/workers/ssh-check — one row per worker in
+		// the canonical WorkerNodeRegistry (ssh / hostkey / sudo -n).
+		// Mounted in the same adminAuth-gated group as the other
+		// read endpoints. Nil-tolerant via the sshCheckHandler nil
+		// guard (silent skip when the registry isn't wired).
+		if m.adminWorkersSSHCheckHandler != nil {
+			adminWorkers.GET("/ssh-check", m.adminWorkersSSHCheckHandler.RunSSHCheck())
 		}
 	}
 	// ── Canonical /api/v1/fleet namespace (Phase 6) ───────────────

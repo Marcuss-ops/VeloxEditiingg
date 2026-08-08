@@ -118,6 +118,17 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 		return fmt.Errorf("canonical WorkerNodeRegistry/sharedSSH missing")
 	}
 
+	// Step 17/15 fleet-operator: SSH connectivity diagnostic.
+	// GET /api/v1/admin/workers/ssh-check — one row per worker in the
+	// canonical WorkerNodeRegistry (ssh / hostkey / sudo -n). Reads host,
+	// port, user from the registry (never a hardcoded map) and probes with
+	// the canonical /etc/velox/ssh key + known_hosts. Nil-tolerant.
+	if workerNodeRegistry != nil && m != nil && m.Workers != nil && workerNodeRegistry.Len() >= 0 {
+		sshCheckHandler := api.NewAdminWorkersSSHCheckHandler(workerNodeRegistry, api.SSHCheckDeps{})
+		m.Workers.SetSSHCheckHandler(sshCheckHandler)
+		log.Printf("[BOOTSTRAP] Admin workers ssh-check handler wired (GET /api/v1/admin/workers/ssh-check; key=%s known_hosts=%s)", fleet.DefaultSSHKeyPath, fleet.DefaultKnownHostsPath)
+	}
+
 	// Step 10/15 fleet-operator: wire the 4-level health probe handler
 	// (GET /api/v1/admin/workers/{id}/health?level=A|B|C|D; absent
 	// returns the aggregated envelope over the 4 levels).

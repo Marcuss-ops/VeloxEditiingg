@@ -218,6 +218,71 @@ func TestRunStatus_StatusOK_PrettyPrintsCard(t *testing.T) {
 	}
 }
 
+func TestRunSSHCheck_AllReady_ReturnsExitOK(t *testing.T) {
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/admin/workers/ssh-check" {
+			http.Error(w, "wrong path: "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"checked_at":       "2026-08-08T00:00:00Z",
+			"key_file":         "/etc/velox/ssh/id_ed25519_velox",
+			"known_hosts_file": "/etc/velox/ssh/known_hosts",
+			"workers": []map[string]any{
+				{"worker_id": "velox-worker-01", "ssh": "PASS", "hostkey": "PASS", "sudo": "PASS", "detail": ""},
+				{"worker_id": "velox-worker-02", "ssh": "PASS", "hostkey": "PASS", "sudo": "PASS", "detail": ""},
+			},
+			"summary": map[string]any{"total": 2, "ssh_pass": 2, "key_pass": 2, "sudo_pass": 2, "ready": 2},
+		})
+	})
+	defer srv.Close()
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	ec := runSSHCheck(c)
+	w.Close()
+	os.Stdout = old
+	out, _ := io.ReadAll(r)
+
+	if ec != ExitOK {
+		t.Errorf("all-ready ssh-check code = %d, want %d", ec, ExitOK)
+	}
+	if !strings.Contains(string(out), "2/2 READY") {
+		t.Errorf("stdout must render 2/2 READY; got:\n%s", out)
+	}
+	if !strings.Contains(string(out), "velox-worker-02") {
+		t.Errorf("stdout must list each worker; got:\n%s", out)
+	}
+}
+
+func TestRunSSH_NotAllReady_ReturnsExitUnexpected(t *testing.T) {
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"workers": []map[string]any{
+				{"worker_id": "velox-worker-01", "ssh": "FAIL", "hostkey": "PASS", "sudo": "SKIP", "detail": "ssh: unreachable"},
+			},
+			"summary": map[string]any{"total": 1, "ssh_pass": 0, "key_pass": 1, "sudo_pass": 0, "ready": 0},
+		})
+	})
+	defer srv.Close()
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	ec := runSSHCheck(c)
+	w.Close()
+	os.Stdout = old
+	out, _ := io.ReadAll(r)
+
+	if ec != ExitUnexpected {
+		t.Errorf("not-ready ssh-check code = %d, want %d", ec, ExitUnexpected)
+	}
+	if !strings.Contains(string(out), "NOT-READY") {
+		t.Errorf("stdout must render NOT-READY verdict; got:\n%s", out)
+	}
+}
+
 func TestRunInspect_NotFoundReturnsExitWorkerNotFound(t *testing.T) {
 	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
