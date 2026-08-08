@@ -19,11 +19,8 @@
 //	rollback <worker_id>         POST /api/v1/admin/workers/{id}/rollback
 //
 // Sub-commands 7-only is INTENTIONAL — restart + logs are not in
-// the user's literal spec. Step 11/15 already ships the
-// deploy/playbooks/fleet-restart.yml + fleet-logs.yml; if/when
-// the operator wants a unified surface for those, they can run
-// fleetctl + ansible-playbook side-by-side (or extend this
-// binary in a future commit).
+// the user's literal spec. Host-side restart/log inspection remain
+// outside this binary and are documented in the operator runbooks.
 //
 // CLI parser: stdlib `flag` per non-dep convention (Q2). Each
 // sub-command is its own FlagSet; the first positional arg
