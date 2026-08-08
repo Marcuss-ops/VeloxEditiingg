@@ -15,16 +15,26 @@
 # tunnel. The operator-side OpenBao API defaults to
 # https://127.0.0.1:18200, forwarded by remote-velox-tunnel.sh.
 #
+# Worker SSH connectivity comes from the operator, mirroring the Master
+# WorkerNodeRegistry (`ansible_hosts` DB table — the canonical source):
+# pass --ssh-host and --ssh-user (or VELOX_WORKER_SSH_HOST/_USER), e.g.
+# the values registered for this worker in the registry.
+#
 # Usage (exactly one worker per invocation):
-#   ./scripts/operator/provision-worker-openbao.sh --worker <worker-id> --import-legacy
-#   ./scripts/operator/provision-worker-openbao.sh --worker <worker-id> --dry-run
+#   ./scripts/operator/provision-worker-openbao.sh --worker <worker-id> \
+#     --ssh-host <host> --ssh-user <user> --import-legacy
+#   ./scripts/operator/provision-worker-openbao.sh --worker <worker-id> \
+#     --ssh-host <host> --ssh-user <user> --dry-run
 #
 # AppRole material remains under the gitignored .velox state tree.
 
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-INVENTORY="${VELOX_WORKER_INVENTORY:-$ROOT/deploy/ansible/inventory.ini}"
+# Worker SSH connectivity (from the Master WorkerNodeRegistry / ansible_hosts
+# table, the canonical source — no static Ansible inventory anymore).
+SSH_HOST="${VELOX_WORKER_SSH_HOST:-}"
+SSH_USER="${VELOX_WORKER_SSH_USER:-}"
 STATE_DIR="${OPENBAO_STATE_DIR:-$ROOT/.velox/openbao}"
 ADDR="${OPENBAO_OPERATOR_ADDR:-https://127.0.0.1:18200}"
 CA_FILE="${OPENBAO_CA_FILE:-$STATE_DIR/tls/server.crt}"
@@ -35,8 +45,9 @@ ROLE_ID_PATH="/etc/velox-worker/secrets/approle/role-id"
 SECRET_ID_PATH="/etc/velox-worker/secrets/approle/secret-id"
 FETCH_PATH="/opt/velox-worker/openbao-fetch-worker-secrets.sh"
 ENV_PATH="/etc/velox-worker/worker.env"
-# The operator's canonical fleet key is the same key used by the inventory.
-# Callers may override it explicitly for a separate administrative setup.
+# The operator's canonical fleet key is the same key used for worker SSH
+# access (WorkerNodeRegistry connectivity). Callers may override it
+# explicitly for a separate administrative setup.
 SSH_KEY="${VELOX_SSH_KEY:-$HOME/.ssh/id_ed25519}"
 TUNNEL_SCRIPT="$ROOT/scripts/operator/remote-worker-openbao-tunnel.sh"
 
@@ -50,7 +61,7 @@ log() { printf '[worker-openbao] %s\n' "$*"; }
 die() { printf '[worker-openbao] FATAL: %s\n' "$*" >&2; exit 1; }
 
 usage() {
-  sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -63,6 +74,18 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 && -n "${2:-}" && "${2#--}" == "$2" ]] \
         || die "--worker requires a non-empty worker id"
       SELECTED+=("$2")
+      shift 2
+      ;;
+    --ssh-host)
+      [[ $# -ge 2 && -n "${2:-}" && "${2#--}" == "$2" ]] \
+        || die "--ssh-host requires a non-empty value"
+      SSH_HOST="$2"
+      shift 2
+      ;;
+    --ssh-user)
+      [[ $# -ge 2 && -n "${2:-}" && "${2#--}" == "$2" ]] \
+        || die "--ssh-user requires a non-empty value"
+      SSH_USER="$2"
       shift 2
       ;;
     -h|--help) usage 0 ;;
@@ -79,8 +102,8 @@ WORKER_ID="${SELECTED[0]}"
 command -v curl >/dev/null 2>&1 || die "curl is required"
 command -v jq >/dev/null 2>&1 || die "jq is required"
 command -v ssh >/dev/null 2>&1 || die "ssh is required"
-command -v ansible-inventory >/dev/null 2>&1 || die "ansible-inventory is required"
-[[ -r "$INVENTORY" ]] || die "inventory missing: $INVENTORY"
+[[ -n "$SSH_HOST" && -n "$SSH_USER" ]] \
+  || die "--ssh-host and --ssh-user are required (worker connectivity from the Master WorkerNodeRegistry / ansible_hosts)"
 [[ -s "$CA_FILE" ]] || die "OpenBao CA file missing: $CA_FILE"
 [[ -s "$TOKEN_FILE" ]] || die "OpenBao root token file missing: $TOKEN_FILE"
 [[ -r "$SSH_KEY" ]] || die "SSH private key missing or not readable: $SSH_KEY"
@@ -92,20 +115,6 @@ CURL_CONFIG="$(mktemp)"
 chmod 0600 "$CURL_CONFIG"
 trap 'rm -f "$CURL_CONFIG"' EXIT
 printf 'header = "X-Vault-Token: %s"\n' "$([[ -n "$(<"$TOKEN_FILE")" ]] && cat "$TOKEN_FILE")" > "$CURL_CONFIG"
-
-inventory_json="$(ansible-inventory -i "$INVENTORY" --list 2>/dev/null)" \
-  || die "cannot read Ansible inventory"
-
-lookup_worker() {
-  local wanted="$1"
-  jq -r --arg wanted "$wanted" '
-    ._meta.hostvars
-    | to_entries[]
-    | select(.value.worker_id == $wanted)
-    | [.value.ansible_host, .value.ansible_user]
-    | @tsv
-  ' <<<"$inventory_json" | head -1
-}
 
 api_code() {
   local method="$1" path="$2" body_file="${3:-}" out code
@@ -167,12 +176,9 @@ verify_approle() {
 }
 
 ssh_worker() {
-  local worker="$1" command="$2" host user
-  IFS=$'\t' read -r host user < <(lookup_worker "$worker") \
-    || die "worker is not in the canonical inventory: $worker"
-  [[ -n "$host" && -n "$user" ]] || die "incomplete inventory entry for worker: $worker"
+  local worker="$1" command="$2"
   ssh -o BatchMode=yes -o ConnectTimeout=10 -o ConnectionAttempts=1 \
-    -o StrictHostKeyChecking=yes -i "$SSH_KEY" "$user@$host" "$command"
+    -o StrictHostKeyChecking=yes -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" "$command"
 }
 
 import_remote_file() {
@@ -211,10 +217,9 @@ send_file() {
 }
 
 install_remote_env() {
-  local worker="$1" host user
-  IFS=$'\t' read -r host user < <(lookup_worker "$worker")
+  local worker="$1"
   ssh -o BatchMode=yes -o ConnectTimeout=10 -o ConnectionAttempts=1 \
-    -o StrictHostKeyChecking=yes -i "$SSH_KEY" "$user@$host" \
+    -o StrictHostKeyChecking=yes -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" \
     sudo -n python3 - "$WORKER_ADDR" "$WORKER_CA_FILE" \
       "$ROLE_ID_PATH" "$SECRET_ID_PATH" "$ENV_PATH" <<'PY'
 import os
@@ -280,11 +285,10 @@ install_worker_bootstrap() {
 }
 
 verify_worker() {
-  local worker="$1" host user
+  local worker="$1"
   [[ "$CHECK" == "1" ]] || return 0
-  IFS=$'\t' read -r host user < <(lookup_worker "$worker")
   log "starting canonical reverse tunnel for $worker"
-  "$TUNNEL_SCRIPT" start "$worker" "$host" "$user" >/dev/null
+  "$TUNNEL_SCRIPT" start "$worker" "$SSH_HOST" "$SSH_USER" >/dev/null
   local check_file
   check_file="$(mktemp)"
   # Refresh material first so the check compares the runtime cache against
@@ -294,10 +298,10 @@ verify_worker() {
   local check_command
   check_command="sudo -n sh -c 'set -a; . /etc/velox-worker/worker.env; set +a; exec /opt/velox-worker/openbao-fetch-worker-secrets.sh --check'"
   if ssh -o BatchMode=yes -o ConnectTimeout=10 -o ConnectionAttempts=1 \
-      -o StrictHostKeyChecking=yes -i "$SSH_KEY" "$user@$host" \
+      -o StrictHostKeyChecking=yes -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" \
       "$fetch_command" >"$check_file" 2>&1 \
     && ssh -o BatchMode=yes -o ConnectTimeout=10 -o ConnectionAttempts=1 \
-      -o StrictHostKeyChecking=yes -i "$SSH_KEY" "$user@$host" \
+      -o StrictHostKeyChecking=yes -i "$SSH_KEY" "$SSH_USER@$SSH_HOST" \
       "$check_command" >>"$check_file" 2>&1; then
     log "PASS $worker fetcher --check"
   else

@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
 # scripts/operator/with-production-env.sh — Source the local production env.
 #
-# Canonical usage (after this redesign):
+# Canonical usage:
 #   source scripts/operator/with-production-env.sh
-#   ansible-playbook -i deploy/ansible/inventory.ini --check --diff <playbook>
-#
-#   # or, for `make canonical-dry`, the make target wraps the source + playbook
-#   # in a single line that is the only supported invocation path.
+#   <command>   # any command needing the canonical production env (curl,
+#               # fleetctl, ops scripts — the Ansible rollout is retired).
 #
 # Legacy direct-exec usage (still works, will be removed in a future release):
 #   scripts/operator/with-production-env.sh <command> [args...]
@@ -23,9 +21,8 @@
 #   - the secret values are never echoed back to the terminal.
 # Agents MUST NOT print VELOX_ADMIN_TOKEN, PATs, vault passwords, or SSH keys.
 #
-# Foot-gun guarded: ansible-playbook -i <script>.sh would parse this file as
-# an inventory script and choke on `exec "$@"`. Source here + pass a separate
-# inventory path (-i deploy/ansible/inventory.ini).
+# Foot-gun guarded: sourcing (not executing) is the only sanctioned path;
+# direct-exec is legacy back-compat and will be removed.
 
 set -euo pipefail
 
@@ -84,7 +81,7 @@ fi
 # Direct-exec mode (legacy): print usage if no args, else exec the child.
 if [[ $# -eq 0 ]]; then
     echo "Usage: $0 <command> [args...]" >&2
-    echo "       (prefer: source $0 && ansible-playbook -i deploy/ansible/inventory.ini <args>)" >&2
+    echo "       (prefer: source $0 && <command>)" >&2
     exit 1
 fi
 

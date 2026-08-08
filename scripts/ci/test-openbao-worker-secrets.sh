@@ -135,10 +135,6 @@ printf 'match' > "$PROVISION_MODE"
 : > "$PROVISION_POSTS"
 : > "$PROVISION_ALL_POSTS"
 : > "$PROVISION_SSH_LOG"
-cat > "$PROVISION_BIN/ansible-inventory" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' '{"_meta":{"hostvars":{"mock-host":{"worker_id":"w1","ansible_host":"127.0.0.1","ansible_user":"mock"}}}}'
-EOF
 cat > "$PROVISION_BIN/ssh" <<'EOF'
 #!/usr/bin/env bash
 command="${*: -1}"
@@ -153,7 +149,7 @@ cat > "$PROVISION_BIN/remote-worker-openbao-tunnel.sh" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
-chmod 0755 "$PROVISION_BIN/ansible-inventory" "$PROVISION_BIN/ssh" "$PROVISION_BIN/remote-worker-openbao-tunnel.sh"
+chmod 0755 "$PROVISION_BIN/ssh" "$PROVISION_BIN/remote-worker-openbao-tunnel.sh"
 cat > "$PROVISION_TMP/mock.py" <<'PYEOF'
 import http.server, json, os, sys
 PORT, mode_file, posts_file = map(str, sys.argv[1:])
@@ -235,11 +231,11 @@ provision_env=(
     OPENBAO_OPERATOR_ADDR="http://127.0.0.1:$PROVISION_PORT"
     OPENBAO_CA_FILE="$PROVISION_STATE/ca.crt"
     OPENBAO_STATE_DIR="$PROVISION_STATE"
-    VELOX_WORKER_INVENTORY="$PROVISION_TMP/inventory.ini"
+    VELOX_WORKER_SSH_HOST="127.0.0.1"
+    VELOX_WORKER_SSH_USER="mock"
     VELOX_SSH_KEY="$PROVISION_TMP/ssh-key"
     PROVISION_SSH_LOG="$PROVISION_SSH_LOG"
 )
-printf '[mock inventory]\n' > "$PROVISION_TMP/inventory.ini"
 run_operator() {
     env -i "${provision_env[@]}" bash "$OPERATOR_BOOTSTRAP" --worker w1 "$@"
 }
