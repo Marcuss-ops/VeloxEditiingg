@@ -317,7 +317,8 @@ def test_current_tree_has_no_legacy_removal_marker() -> None:
     # still describes it as required.
     plan = text("docs/operations/legacy-worker-removal-plan.md")
     assert "No files are deleted in Phase 0." in plan
-    assert "Do **not** remove `update_workers.yml`, bundle APIs" in plan
+    assert "recovery/migration bridge for" in plan
+    assert "they are not release entrypoints" in plan
 
 
 def test_new_legacy_consumers_are_rejected() -> None:
