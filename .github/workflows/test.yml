@@ -79,7 +79,10 @@ jobs:
           ansible-galaxy collection install ansible.posix
 
       - name: Lint playbooks
-        working-directory: deploy/playbooks
+        # Run from the repo root so the repo-level .ansible-lint config
+        # (exclude_paths for the vault-bound operator playbooks) is
+        # discovered; relative paths in that config resolve from the
+        # config location, not from the target directory.
         run: |
           ansible-lint --version
-          ansible-lint -v .
+          ansible-lint -v deploy/playbooks

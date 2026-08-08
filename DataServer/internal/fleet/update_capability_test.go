@@ -130,7 +130,9 @@ func containsString(haystack []string, needle string) bool {
 // that need a non-nil smoke backend without standing up a full executor.
 type stubSmokeRunner struct{}
 
-func (stubSmokeRunner) RunLevelD(_ context.Context, _ string) (string, error) { return "cap-test-artifact", nil }
+func (stubSmokeRunner) RunLevelD(_ context.Context, _ string) (string, error) {
+	return "cap-test-artifact", nil
+}
 
 // stubDriveVerifier is a minimal BackendDriveVerifier for capability
 // tests that need a non-nil Drive backend.

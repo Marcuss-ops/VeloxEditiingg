@@ -68,7 +68,9 @@ func fullyWiredUpdateExecutor(t *testing.T, p *persistenceDeps) *fleet.UpdateExe
 
 type readinessSmokeRunner struct{}
 
-func (readinessSmokeRunner) RunLevelD(_ context.Context, _ string) (string, error) { return "cap-test-artifact", nil }
+func (readinessSmokeRunner) RunLevelD(_ context.Context, _ string) (string, error) {
+	return "cap-test-artifact", nil
+}
 
 type readinessDriveVerifier struct{}
 
