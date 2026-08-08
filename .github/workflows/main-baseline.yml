@@ -102,13 +102,21 @@ jobs:
         run: make vet
 
       - name: go build ./... (workspace)
-        run: go build ./...
+        # Workspace-aware build: walks every module declared in go.work
+        # (DataServer, RemoteCodex/native/worker-agent-go, shared,
+        # internal/application/images, cmd/archcheck/scan). The repo
+        # root itself is NOT a module, so `go build ./...` from the
+        # workspace root errors ("directory prefix . does not contain
+        # modules listed in go.work"); iterating per-module via make
+        # mirrors `make vet` and is the same surface local devs run.
+        run: make build
 
       - name: go test ./... (workspace)
         # Workspace-aware test: counts every test in every module.
         # Race-detector coverage lives in regression-race.yml so this
-        # lane stays fast for the daily green.
-        run: go test -count=1 -timeout 25m ./...
+        # lane stays fast for the daily green. Same per-module
+        # iteration rationale as `go build ./...` above.
+        run: make test
 
       - name: golangci-lint run
         # Reads the canonical .golangci.yml at repo root. The config

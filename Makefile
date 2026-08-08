@@ -124,6 +124,18 @@ vet:           ## go vet ./... on every Go module
 	  (cd $$mod && go vet ./...) || exit 1; \
 	done
 
+build:         ## go build ./... on every Go module (workspace-safe)
+	@for mod in DataServer RemoteCodex/native/worker-agent-go shared; do \
+	  echo "-> go build $$mod"; \
+	  (cd $$mod && go build ./...) || exit 1; \
+	done
+
+test:          ## go test ./... on every Go module (workspace-safe)
+	@for mod in DataServer RemoteCodex/native/worker-agent-go shared; do \
+	  echo "-> go test $$mod"; \
+	  (cd $$mod && go test -count=1 ./...) || exit 1; \
+	done
+
 # Codegen target: regenerates DataServer/api/openapi.yaml from
 # DataServer/api/api_docs_manifest.yaml (paths only; schemas stay hand-curated),
 # then runs the correctness-only OpenAPI validator. Drift surfaces as
