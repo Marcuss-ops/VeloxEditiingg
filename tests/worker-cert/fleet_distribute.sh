@@ -215,8 +215,9 @@ while IFS= read -r row; do
   WORKER_STATUS["$wid"]="$sts"
   WORKER_SESSION["$wid"]="$sas"
   WORKER_SLOTS["$wid"]="$tsl"
-done < <(printf '%s' "$WORKERS_JSON" | jq -c '.[]?' 2>/dev/null \
-              || printf '%s' "$WORKERS_JSON" | jq -c '.workers[]?')
+done < <(printf '%s' "$WORKERS_JSON" | jq -c '
+  if type == "array" then .[]? else .workers[]? end
+')
 
 CONNECTED_COUNT=0
 for w in "${ALL_WORKER_IDS[@]}"; do
@@ -426,8 +427,8 @@ if [[ -n "$VELOX_MASTER_LOG_PATH" && -r "$VELOX_MASTER_LOG_PATH" ]]; then
   sort -u -o "$LEASES_TSV" "$LEASES_TSV"
   while IFS=$'\t' read -r worker_id task_id lease_id; do
     [[ -z "$task_id" || -z "$worker_id" || -z "$lease_id" ]] && continue
-    TASK_TO_LEASE["$task_id"]="${TASK_TO_LEASE[$task_id]:-}$lease_id"
-    WORKER_TO_LEASES["$worker_id"]="${WORKER_TO_LEASES[$worker_id]:-}$lease_id"
+    TASK_TO_LEASE["$task_id"]="${TASK_TO_LEASE[$task_id]:-} $lease_id"
+    WORKER_TO_LEASES["$worker_id"]="${WORKER_TO_LEASES[$worker_id]:-} $lease_id"
     JOB_TASK_IDS+=("$task_id")
     JOB_LEASES+=("$lease_id")
     JOB_WORKERS+=("$worker_id")
@@ -453,7 +454,7 @@ INV_LEASE_ONCE_OK=0
 DUPLICATES=""
 if (( LEASE_SCRAPE_OK == 1 )); then
   for tid in "${!TASK_TO_LEASE[@]}"; do
-    leases_for_tid=$(printf '%s' "${TASK_TO_LEASE[$tid]}" | tr '-' '\n' | grep -c . || echo 0)
+    leases_for_tid=$(wc -w <<<"${TASK_TO_LEASE[$tid]}")
     if (( leases_for_tid > 1 )); then
       DUPLICATES="${DUPLICATES} task_id=${tid}(${leases_for_tid})"
     fi
@@ -470,7 +471,7 @@ INV_CAP_OK=0
 CAP_VIOLATIONS=""
 if (( LEASE_SCRAPE_OK == 1 )); then
   for wid in "${!WORKER_TO_LEASES[@]}"; do
-    leases_on_worker=$(printf '%s' "${WORKER_TO_LEASES[$wid]}" | tr '-' '\n' | grep -c . || echo 0)
+    leases_on_worker=$(wc -w <<<"${WORKER_TO_LEASES[$wid]}")
     slots=${WORKER_SLOTS[$wid]:-1}
     if (( leases_on_worker > slots )); then
       CAP_VIOLATIONS="${CAP_VIOLATIONS} worker=${wid}(slots=${slots} leases=${leases_on_worker})"
