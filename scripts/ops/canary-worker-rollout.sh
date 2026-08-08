@@ -21,6 +21,7 @@
 #   VELOX_ADMIN_TOKEN or the canonical fleetctl token file
 #   VELOX_MASTER_URL (or fleetctl's configured master URL)
 #   fleetctl in PATH (or FLEETCTL_BIN)
+#   --previous-digest for --rollback (the known-good digest to restore)
 #
 # Exit codes:
 #   0 success
@@ -40,6 +41,7 @@ MASTER_URL="${VELOX_MASTER_URL:-}"
 FLEETCTL_BIN="${FLEETCTL_BIN:-fleetctl}"
 MODE=''
 REASON="canary ${TARGET_VERSION}"
+PREVIOUS_DIGEST=''
 
 usage() {
   sed -n '2,/^# ====/p' "$0" | sed 's/^# //' >&2
@@ -71,6 +73,11 @@ while [[ $# -gt 0 ]]; do
     --reason)
       [[ $# -ge 2 ]] || fail '--reason requires a value'
       REASON="$2"
+      shift 2
+      ;;
+    --previous-digest)
+      [[ $# -ge 2 ]] || fail '--previous-digest requires a value'
+      PREVIOUS_DIGEST="$2"
       shift 2
       ;;
     --dry-run|--apply|--rollback)
@@ -141,11 +148,9 @@ card_version() {
 }
 
 verify_healthy_card() {
-  local body="$1" phase="$2" digest version status health active
+  local body="$1" phase="$2" status health active
   [[ -n "$body" ]] || fail "$phase WorkerCard is empty"
   jq -e . <<<"$body" >/dev/null 2>&1 || fail "$phase WorkerCard is not valid JSON"
-  digest="$(card_digest "$body")"
-  version="$(card_version "$body")"
   status="$(card_value "$body" '.status')"
   health="$(card_value "$body" '.health // .health_state')"
   active="$(card_value "$body" '.active_jobs // .active_tasks // .active_slots')"
@@ -162,12 +167,16 @@ inspect_worker() {
 
 print_explicit_rollback() {
   printf '%s\n' "Explicit rollback command (not run automatically):"
+  if [[ -z "$PREVIOUS_DIGEST" ]]; then
+    printf '%s\n' '  previous-known-good digest unavailable; rerun with --previous-digest'
+    return 0
+  fi
   if [[ -n "$MASTER_URL" ]]; then
-    printf '  VELOX_MASTER_URL=%q %q rollback %q --reason %q\n' \
-      "$MASTER_URL" "$FLEETCTL_BIN" "$WORKER_ID" "rollback ${TARGET_VERSION} canary"
+    printf '  VELOX_MASTER_URL=%q %q rollback %q --digest %q --reason %q\n' \
+      "$MASTER_URL" "$FLEETCTL_BIN" "$WORKER_ID" "$PREVIOUS_DIGEST" "rollback ${TARGET_VERSION} canary"
   else
-    printf '  %q rollback %q --reason %q\n' \
-      "$FLEETCTL_BIN" "$WORKER_ID" "rollback ${TARGET_VERSION} canary"
+    printf '  %q rollback %q --digest %q --reason %q\n' \
+      "$FLEETCTL_BIN" "$WORKER_ID" "$PREVIOUS_DIGEST" "rollback ${TARGET_VERSION} canary"
   fi
 }
 
@@ -193,6 +202,8 @@ case "$MODE" in
       exit 4
     }
     verify_healthy_card "$before" 'pre-canary' >/dev/null
+    PREVIOUS_DIGEST="$(card_digest "$before")"
+    [[ "$PREVIOUS_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || fail "pre-canary previous digest is invalid: ${PREVIOUS_DIGEST:-<missing>}"
     printf 'pre-canary: worker %s is CONNECTED/HEALTHY with active=0\n' "$WORKER_ID"
 
     if ! fleetctl update "$WORKER_ID" --digest "$TARGET_DIGEST" --reason "$REASON"; then
@@ -246,6 +257,12 @@ case "$MODE" in
     ;;
 
   rollback)
+    [[ "$PREVIOUS_DIGEST" =~ ^(sha256:[a-f0-9]{64}|ghcr\.io/[a-z0-9._-]+/[a-z0-9._/-]+@sha256:[a-f0-9]{64})$ ]] \
+      || fail 'rollback requires --previous-digest with a pinned sha256 digest or full GHCR image reference'
+    previous_digest_value="$PREVIOUS_DIGEST"
+    if [[ "$previous_digest_value" == *@* ]]; then
+      previous_digest_value="${previous_digest_value##*@}"
+    fi
     before="$(inspect_worker)" || {
       printf '%s\n' 'Pre-rollback inspect failed; no rollback was requested.' >&2
       exit 4
@@ -254,8 +271,10 @@ case "$MODE" in
     pre_rollback_version="$(card_version "$before")"
     [[ "$pre_rollback_digest" == "$TARGET_DIGEST" ]] || fail "pre-rollback digest is ${pre_rollback_digest:-<missing>}; expected active canary digest"
     [[ "$pre_rollback_version" == "$TARGET_VERSION" ]] || fail "pre-rollback version is ${pre_rollback_version:-<missing>}; expected ${TARGET_VERSION}"
-    printf 'pre-rollback: worker %s is on the canary digest/version\n' "$WORKER_ID"
-    if ! fleetctl rollback "$WORKER_ID" --reason "rollback ${TARGET_VERSION} canary"; then
+    [[ "$PREVIOUS_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || fail "previous-known-good digest is invalid: ${PREVIOUS_DIGEST:-<missing>}"
+    [[ "$previous_digest_value" != "$pre_rollback_digest" ]] || fail 'previous-known-good digest equals the active canary digest'
+    printf 'pre-rollback: worker %s is on the canary digest/version; previous digest=%s\n' "$WORKER_ID" "$previous_digest_value"
+    if ! fleetctl rollback "$WORKER_ID" --digest "$PREVIOUS_DIGEST" --reason "rollback ${TARGET_VERSION} canary"; then
       printf '%s\n' 'Explicit rollback operation failed.' >&2
       exit 4
     fi

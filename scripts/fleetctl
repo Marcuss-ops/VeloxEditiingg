@@ -5,10 +5,9 @@
 #   fleetctl/API → Master → FleetController → UpdateExecutor →
 #   WorkerNodeRegistry → hardened SSH → velox-worker-activate-image
 #
-# The Ansible host-rollout bridge (operator-local inventory, rollout
-# playbook, ansible binaries) is retired: update/rollback POST the pinned
-# image to /api/v1/admin/workers/{worker_id}/update and poll the
-# fleet_operations ledger to terminal state.
+# The retired host-rollout bridge is not part of this entry point: update and
+# rollback POST the pinned image to /api/v1/admin/workers/{worker_id}/update
+# and poll the fleet_operations ledger to terminal state.
 #
 # Master API operations are authenticated with VELOX_ADMIN_TOKEN; the smoke
 # command delegates to the repository's real per-worker certification script.
@@ -155,11 +154,7 @@ run_digest_update() {
     path="$(worker_uri "$worker_id")/update"
     body="$(jq -cn --arg target "$image" --arg reason "$reason" '{target_digest:$target, reason:$reason}')"
     printf 'fleetctl: %s worker=%s image=%s reason=%s\n' "$action" "$worker_id" "$image" "$reason" >&2
-    if [[ "$action" == "update" ]]; then
-        response="$(post_update_mutation "$path" "$body")"
-    else
-        response="$(post_mutation "$path" "$body")"
-    fi
+    response="$(post_update_mutation "$path" "$body")"
     op_id="$(jq -r '.operation_id // empty' <<<"$response")"
     [[ -n "$op_id" ]] || die "update API returned no operation_id: $response"
     printf 'fleetctl: %s queued operation_id=%s\n' "$action" "$op_id" >&2
@@ -185,6 +180,8 @@ normalize_update_image() {
 }
 
 parse_update_args() {
+    local action=$1
+    shift
     local worker_id='' image='' reason='' arg
     while [[ $# -gt 0 ]]; do
         arg=$1
@@ -230,8 +227,8 @@ parse_update_args() {
     done
     [[ -n "$worker_id" ]] || die 'worker_id is required'
     image="$(normalize_update_image "$image")"
-    reason=${reason:-fleetctl-update}
-    run_digest_update update "$worker_id" "$image" "$reason"
+    reason=${reason:-fleetctl-$action}
+    run_digest_update "$action" "$worker_id" "$image" "$reason"
 }
 
 # poll_operation blocks until the fleet_operations ledger row is terminal.
@@ -299,16 +296,9 @@ case "$command" in
         api POST "$(worker_uri "$worker_id")/restart" \
             "$(jq -cn --arg reason "$reason" '{reason:$reason}')" | jq .
         ;;
-    update)
+    update|rollback)
         shift
-        parse_update_args "$@"
-        ;;
-    rollback)
-        worker_id=${2:-}
-        image=${3:-}
-        [[ -n "$worker_id" ]] || die 'worker_id is required'
-        [[ -n "$image" ]] || die 'pinned image reference is required (for rollback: the previous-known-good digest)'
-        run_digest_update rollback "$worker_id" "$image" "${4:-fleetctl-rollback}"
+        parse_update_args "$command" "$@"
         ;;
     operations)
         path=/api/v1/admin/operations

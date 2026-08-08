@@ -26,13 +26,13 @@ worker="${worker:-offline-worker}"
 case "${1:-}" in
   inspect)
     if [[ "${MOCK_BAD_INSPECT:-0}" == 1 ]]; then
-      jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"DEGRADED",active_jobs:0,image_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",software_version:"v1.2.27",previous_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+      jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"DEGRADED",active_jobs:0,image_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",software_version:"v1.2.27"}'
     elif [[ -f "${MOCK_ROLLBACK_MARKER:-}" ]]; then
-      jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"HEALTHY",active_jobs:0,image_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",software_version:"v1.2.27",previous_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+      jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"HEALTHY",active_jobs:0,image_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",software_version:"v1.2.27"}'
     elif [[ "${MOCK_CANARY_MARKER:-}" && -f "$MOCK_CANARY_MARKER" ]]; then
-      jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"HEALTHY",active_jobs:0,image_digest:"sha256:beb1cfc48d4ffb591e954cff0572ede8b9bf36fdd215239f05c5a403b8278415",software_version:"v1.2.28-canonical",previous_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+      jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"HEALTHY",active_jobs:0,image_digest:"sha256:beb1cfc48d4ffb591e954cff0572ede8b9bf36fdd215239f05c5a403b8278415",software_version:"v1.2.28-canonical"}'
     else
-      jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"HEALTHY",active_jobs:0,image_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",software_version:"v1.2.27",previous_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+      jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"HEALTHY",active_jobs:0,image_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",software_version:"v1.2.27"}'
     fi
     ;;
   update)
@@ -83,13 +83,17 @@ printf 'PASS: apply is serial and single-worker\n'
 
 : >"$LOG"
 : >"$MOCK_CANARY_MARKER"
-output="$(bash "$SCRIPT" --worker-id "$WORKER" --fleetctl "$MOCK_BIN/fleetctl" --rollback)"
+if bash "$SCRIPT" --worker-id "$WORKER" --fleetctl "$MOCK_BIN/fleetctl" --rollback >/dev/null 2>&1; then
+  echo 'FAIL: rollback without previous digest was accepted' >&2
+  exit 1
+fi
+output="$(bash "$SCRIPT" --worker-id "$WORKER" --fleetctl "$MOCK_BIN/fleetctl" --previous-digest "$PREVIOUS_DIGEST" --rollback)"
 grep -Fq 'ROLLBACK SUCCEEDED' <<<"$output"
-grep -Fq "rollback $WORKER" "$LOG" || { echo 'FAIL: explicit rollback was not invoked' >&2; exit 1; }
+grep -Fq "rollback $WORKER --digest $PREVIOUS_DIGEST" "$LOG" || { echo 'FAIL: explicit rollback did not receive the previous digest' >&2; exit 1; }
 mapfile -t rollback_commands <"$LOG"
 [[ "${#rollback_commands[@]}" -eq 3 ]] || { echo "FAIL: expected inspect/rollback/inspect, got ${#rollback_commands[@]}" >&2; exit 1; }
-[[ "${rollback_commands[0]}" == "inspect $WORKER" && "${rollback_commands[1]}" == "rollback $WORKER --reason rollback v1.2.28-canonical canary" && "${rollback_commands[2]}" == "inspect $WORKER" ]] || { echo 'FAIL: rollback command order/target drifted' >&2; exit 1; }
-printf 'PASS: rollback is explicit and single-worker\n'
+[[ "${rollback_commands[0]}" == "inspect $WORKER" && "${rollback_commands[1]}" == "rollback $WORKER --digest $PREVIOUS_DIGEST --reason rollback v1.2.28-canonical canary" && "${rollback_commands[2]}" == "inspect $WORKER" ]] || { echo 'FAIL: rollback command order/target drifted' >&2; exit 1; }
+printf 'PASS: rollback is explicit, digest-pinned, and single-worker\n'
 
 if bash "$SCRIPT" --apply >/dev/null 2>&1; then
   echo 'FAIL: missing worker ID was accepted' >&2
@@ -110,6 +114,7 @@ if MOCK_FAIL_MUTATION=1 bash "$SCRIPT" --worker-id "$WORKER" --fleetctl "$MOCK_B
 fi
 [[ "$(wc -l <"$LOG")" -eq 2 ]] || { echo 'FAIL: failed update did not stop after inspect/update' >&2; exit 1; }
 grep -Fq 'Explicit rollback command (not run automatically):' /tmp/canary-failure.out || { echo 'FAIL: failed update omitted explicit rollback guidance' >&2; exit 1; }
+grep -Fq -- '--digest' /tmp/canary-failure.out || { echo 'FAIL: rollback guidance omitted previous digest' >&2; exit 1; }
 ! grep -Eq 'smoke|rollback' "$LOG" || { echo 'FAIL: failed update ran smoke/rollback' >&2; exit 1; }
 rm -f -- /tmp/canary-failure.out
 printf 'PASS: missing worker, unhealthy preflight, and mutation failure fail closed\n'
