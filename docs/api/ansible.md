@@ -1,6 +1,17 @@
-# Ansible API
+# Ansible API — compatibility bridge
 
-All endpoints require admin authentication.
+> **Production rollout boundary:** these endpoints are retained for worker
+> migration, host convergence, preflight, and diagnostics. They are not the
+> canonical production path for image updates or rollbacks. Use
+> `scripts/fleetctl`, which publishes to the Master FleetController and lets
+> `UpdateExecutor` resolve `WorkerNodeRegistry` → SSH →
+> `velox-worker-activate-image`.
+>
+> The endpoints below generate per-operation inventory from the
+> `WorkerNodeRegistry`/`ansible_hosts` database view. They do not use a static
+> `inventory.ini`; do not run their playbooks fleet-wide as a release mechanism.
+>
+> All endpoints require admin authentication.
 
 ## POST /api/v1/admin/ansible/computers/run_action
 
@@ -17,12 +28,12 @@ Execute an Ansible action on target computers.
 
 ### Supported actions
 
-- `deploy_workers` - Deploy worker agents to target hosts
-- `rollout_update` - Incremental rollout of updates
-- `install_workers` - Fresh install on new hosts
-- `preflight_workers` - Pre-flight checks (SSH, Docker, disk)
-- `update_workers` - Update existing workers
-- `test_ssh` - Test SSH connectivity
+- `deploy_workers` - Legacy migration deployment for target hosts
+- `rollout_update` - Compatibility-bridge rollout for legacy hosts
+- `install_workers` - Fresh install during worker migration
+- `preflight_workers` - Read-only checks (SSH, Docker, disk)
+- `update_workers` - Legacy bridge update; not a certified release rollout
+- `test_ssh` - Read-only SSH connectivity test
 
 ### Response
 
