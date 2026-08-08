@@ -437,19 +437,22 @@ while (( elapsed < REAPER_POLL_TIMEOUT_S )); do
       break
     done < "$LEASES_TSV"
     [[ -n "$NEW_ATTEMPT_ID" ]] && break
-  else
-    # Fallback: poll task_attempts table directly via sqlite3
-    if command -v sqlite3 >/dev/null 2>&1; then
-      row=$(sqlite3 "$DB_PATH" \
-        "SELECT attempt_number, worker_id FROM task_attempts WHERE task_id = '${ORIG_TASK_ID}' ORDER BY attempt_number DESC LIMIT 1;" 2>/dev/null || true)
-      if [[ -n "$row" ]]; then
-        anum=$(printf '%s' "$row" | awk '{print $1}')
-        wid=$(printf '%s' "$row" | awk '{print $2}')
-        if [[ -n "$anum" && -n "$wid" && "$anum" -ge 2 && "$wid" != "$TARGET_WORKER_ID" ]]; then
-          NEW_ATTEMPT_ID="attempt-${anum}-${ORIG_TASK_ID}"
-          NEW_LEASED_WORKER="$wid"
-          break
-        fi
+  fi
+
+  # Always fall back to the canonical persisted attempt ledger when the
+  # log-based signal is absent. Production logs may use a different
+  # TaskLeaseGranted rendering, while task_attempts remains authoritative.
+  if [[ -z "$NEW_ATTEMPT_ID" ]] && command -v sqlite3 >/dev/null 2>&1; then
+    row=$(sqlite3 "$DB_PATH" \
+      "SELECT attempt_number, id, worker_id FROM task_attempts WHERE task_id = '${ORIG_TASK_ID}' ORDER BY attempt_number DESC LIMIT 1;" 2>/dev/null || true)
+    if [[ -n "$row" ]]; then
+      anum=$(printf '%s' "$row" | awk '{print $1}')
+      aid=$(printf '%s' "$row" | awk '{print $2}')
+      wid=$(printf '%s' "$row" | awk '{print $3}')
+      if [[ -n "$anum" && -n "$aid" && -n "$wid" && "$anum" -ge 2 && "$wid" != "$TARGET_WORKER_ID" ]]; then
+        NEW_ATTEMPT_ID="$aid"
+        NEW_LEASED_WORKER="$wid"
+        break
       fi
     fi
   fi
