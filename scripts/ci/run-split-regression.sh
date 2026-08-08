@@ -83,21 +83,31 @@ run_group() {
 # run_audit_single_writer_begin_tx
 #
 # Worker-runtime cluster single-writer BeginTx audit (commit babcb81 contract).
-# Asserts the worker_runtime cluster contains EXACTLY 2 s.db.BeginTx sites,
-# in EXACTLY store_worker_heartbeat.go + store_worker_recovery_tx.go. Any
-# deviation (extra file, missing file, count mismatch) escalates rc to 2
+# Asserts the worker_runtime cluster contains EXACTLY 3 s.db.BeginTx sites:
+#   store_worker_heartbeat.go        (heartbeat-path opener, #1 of 3)
+#   store_worker_recovery_tx.go      (recovery-path opener,  #2 of 3)
+#   store_worker_resource_samples.go (maintenance-path opener, #3 of 3)
+# Any deviation (extra file, missing file, count mismatch) escalates rc to 2
 # and the overall wrapper exit to 2.
 #
 # Rationale (cross-references):
 #   - store_worker_runtime.go (shell)         — per-package single-writer
 #                                                contract;
-#                                                explicit two-site exception.
+#                                                explicit three-site exception.
 #   - store_worker_heartbeat.go               — heartbeat-path opener
-#                                                (#1 of 2):
+#                                                (#1 of 3):
 #                                                PersistWorkerHeartbeat.
 #   - store_worker_recovery_tx.go             — recovery-path opener
-#                                                (#2 of 2):
+#                                                (#2 of 3):
 #                                                reconcileOnePartition.
+#   - store_worker_resource_samples.go        — maintenance-path opener
+#                                                (#3 of 3):
+#                                                MaintainWorkerResourceSamples
+#                                                (hourly rollups + retention
+#                                                pruning on the analytics
+#                                                tables; supervisor-invoked,
+#                                                not on the worker-runtime
+#                                                state write path).
 #   - store_worker_runtime_recovery.go        — heartbeat-path detector
 #                                                (RECEIVES *sql.Tx; never
 #                                                opens a new one) plus the
@@ -118,11 +128,12 @@ run_audit_single_writer_begin_tx() {
   local cluster_pattern="DataServer/internal/store/store_worker_*.go"
   local allowed1="DataServer/internal/store/store_worker_heartbeat.go"
   local allowed2="DataServer/internal/store/store_worker_recovery_tx.go"
+  local allowed3="DataServer/internal/store/store_worker_resource_samples.go"
   local start_ns end_ns elapsed_s rc_go
 
   log "=== $label ==="
   log "  scope: ${cluster_pattern} (excluding _test.go)"
-  log "  expected: exactly 2 sites — ${allowed1##*/} + ${allowed2##*/}"
+  log "  expected: exactly 3 sites — ${allowed1##*/} + ${allowed2##*/} + ${allowed3##*/}"
 
   start_ns=$(date +%s%N)
 
@@ -167,9 +178,9 @@ run_audit_single_writer_begin_tx() {
   fi
   rc_go=0
 
-  if [[ "$match_count" != "2" ]]; then
+  if [[ "$match_count" != "3" ]]; then
     rc_go=2
-    log "  FAIL: expected exactly 2 s.db.BeginTx sites in worker_runtime cluster; found ${match_count}."
+    log "  FAIL: expected exactly 3 s.db.BeginTx sites in worker_runtime cluster; found ${match_count}."
     if [[ -n "$matches" ]]; then
       printf '%s\n' "$matches" | sed 's/^/    matches: /' || true
     else
@@ -181,7 +192,7 @@ run_audit_single_writer_begin_tx() {
     while IFS= read -r line; do
       [[ -z "$line" ]] && continue
       file="${line%%:*}"
-      if [[ "$file" != "$allowed1" && "$file" != "$allowed2" ]]; then
+      if [[ "$file" != "$allowed1" && "$file" != "$allowed2" && "$file" != "$allowed3" ]]; then
         mismatch="$file"
         rc_go=2
         break
@@ -190,7 +201,7 @@ run_audit_single_writer_begin_tx() {
     if [[ "$rc_go" -eq 2 ]]; then
       log "  FAIL: extraneous s.db.BeginTx site in ${mismatch}."
     else
-      log "  OK: exactly 2 sites — ${allowed1##*/} + ${allowed2##*/} (single-writer contract preserved)."
+      log "  OK: exactly 3 sites — ${allowed1##*/} + ${allowed2##*/} + ${allowed3##*/} (single-writer contract preserved)."
     fi
   fi
 
