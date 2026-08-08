@@ -29,7 +29,7 @@ command -v ssh >/dev/null 2>&1 || die "ssh is required"
 for _ in 1 2 3 4 5; do
   if ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes \
     -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
-    "curl --fail --silent --show-error --connect-timeout 5 --max-time 10 --cacert '$REMOTE_CA_FILE' https://127.0.0.1:${OPENBAO_PORT}/v1/sys/health -o /dev/null"; then
+    "sudo -n curl --fail --silent --show-error --connect-timeout 5 --max-time 10 --cacert '$REMOTE_CA_FILE' https://127.0.0.1:${OPENBAO_PORT}/v1/sys/health -o /dev/null"; then
     printf 'worker-openbao-probe: PASS TLS health worker=%s\n' "$SSH_HOST"
     exit 0
   fi
