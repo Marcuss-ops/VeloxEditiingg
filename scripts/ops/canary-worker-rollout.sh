@@ -137,7 +137,7 @@ card_digest() {
 
 card_version() {
   local body="$1"
-  card_value "$body" '.software_version // .release_identity.software_version // .desired_version'
+  card_value "$body" '.software_version // .release_identity.software_version'
 }
 
 verify_healthy_card() {
@@ -266,7 +266,7 @@ case "$MODE" in
     verify_healthy_card "$after_rollback" 'post-rollback' >/dev/null
     rollback_digest="$(card_digest "$after_rollback")"
     rollback_version="$(card_version "$after_rollback")"
-    [[ "$rollback_digest" != "$TARGET_DIGEST" ]] || fail 'rollback completed but target canary digest is still active'
+    [[ -n "$rollback_digest" && "$rollback_digest" != "$TARGET_DIGEST" ]] || fail 'rollback completed but target canary digest is still active or missing'
     [[ "$rollback_digest" != "$pre_rollback_digest" ]] || fail 'rollback did not change the active digest'
     [[ "$rollback_version" != "$TARGET_VERSION" ]] || fail 'rollback completed but target canary version is still active'
     printf 'ROLLBACK SUCCEEDED: one worker %s returned from %s to previous digest %s (version %s)\n' \

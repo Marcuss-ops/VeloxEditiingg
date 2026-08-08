@@ -25,22 +25,27 @@ done
 worker="${worker:-offline-worker}"
 case "${1:-}" in
   inspect)
-    if [[ -f "${MOCK_ROLLBACK_MARKER:-}" ]]; then
-      jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"HEALTHY",active_jobs:0,image_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",software_version:"v1.2.27"}'
-    elif [[ "${MOCK_BAD_INSPECT:-0}" == 1 ]]; then
-      jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"DEGRADED",active_jobs:0,image_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",software_version:"v1.2.27"}'
-    elif [[ "${MOCK_ROLLED_BACK:-0}" == 1 ]]; then
-      jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"HEALTHY",active_jobs:0,image_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",software_version:"v1.2.27"}'
+    if [[ "${MOCK_BAD_INSPECT:-0}" == 1 ]]; then
+      jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"DEGRADED",active_jobs:0,image_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",software_version:"v1.2.27",previous_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+    elif [[ -f "${MOCK_ROLLBACK_MARKER:-}" ]]; then
+      jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"HEALTHY",active_jobs:0,image_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",software_version:"v1.2.27",previous_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+    elif [[ "${MOCK_CANARY_MARKER:-}" && -f "$MOCK_CANARY_MARKER" ]]; then
+      jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"HEALTHY",active_jobs:0,image_digest:"sha256:beb1cfc48d4ffb591e954cff0572ede8b9bf36fdd215239f05c5a403b8278415",software_version:"v1.2.28-canonical",previous_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
     else
-      jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"HEALTHY",active_jobs:0,image_digest:"sha256:beb1cfc48d4ffb591e954cff0572ede8b9bf36fdd215239f05c5a403b8278415",software_version:"v1.2.28-canonical"}'
+      jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"HEALTHY",active_jobs:0,image_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",software_version:"v1.2.27",previous_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
     fi
     ;;
-  update|smoke)
+  update)
+    [[ "${MOCK_FAIL_MUTATION:-0}" != 1 ]] || exit 1
+    : >"${MOCK_CANARY_MARKER:?}"
+    ;;
+  smoke)
     [[ "${MOCK_FAIL_MUTATION:-0}" != 1 ]] || exit 1
     ;;
   rollback)
     [[ "${MOCK_FAIL_MUTATION:-0}" != 1 ]] || exit 1
     : >"${MOCK_ROLLBACK_MARKER:?}"
+    rm -f -- "${MOCK_CANARY_MARKER:?}"
     ;;
   *) exit 2 ;;
 esac
@@ -50,6 +55,8 @@ chmod +x "$MOCK_BIN/fleetctl"
 export PATH="$MOCK_BIN:/usr/bin:/bin"
 export MOCK_LOG="$LOG"
 export MOCK_ROLLBACK_MARKER="$TMP_DIR/rolled-back"
+export MOCK_CANARY_MARKER="$TMP_DIR/canary-active"
+PREVIOUS_DIGEST='sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 WORKER='offline-worker'
 IMAGE='ghcr.io/marcuss-ops/velox-worker@sha256:beb1cfc48d4ffb591e954cff0572ede8b9bf36fdd215239f05c5a403b8278415'
 DIGEST='sha256:beb1cfc48d4ffb591e954cff0572ede8b9bf36fdd215239f05c5a403b8278415'
@@ -75,6 +82,7 @@ mapfile -t apply_commands <"$LOG"
 printf 'PASS: apply is serial and single-worker\n'
 
 : >"$LOG"
+: >"$MOCK_CANARY_MARKER"
 output="$(bash "$SCRIPT" --worker-id "$WORKER" --fleetctl "$MOCK_BIN/fleetctl" --rollback)"
 grep -Fq 'ROLLBACK SUCCEEDED' <<<"$output"
 grep -Fq "rollback $WORKER" "$LOG" || { echo 'FAIL: explicit rollback was not invoked' >&2; exit 1; }
@@ -87,13 +95,22 @@ if bash "$SCRIPT" --apply >/dev/null 2>&1; then
   echo 'FAIL: missing worker ID was accepted' >&2
   exit 1
 fi
+rm -f -- "$MOCK_ROLLBACK_MARKER" "$MOCK_CANARY_MARKER"
+: >"$LOG"
 if MOCK_BAD_INSPECT=1 bash "$SCRIPT" --worker-id "$WORKER" --fleetctl "$MOCK_BIN/fleetctl" --apply >/dev/null 2>&1; then
   echo 'FAIL: unhealthy worker was accepted' >&2
   exit 1
 fi
-if MOCK_FAIL_MUTATION=1 bash "$SCRIPT" --worker-id "$WORKER" --fleetctl "$MOCK_BIN/fleetctl" --apply >/dev/null 2>&1; then
+! grep -Eq 'update|smoke|rollback' "$LOG" || { echo 'FAIL: unhealthy preflight mutated worker' >&2; exit 1; }
+rm -f -- "$MOCK_ROLLBACK_MARKER" "$MOCK_CANARY_MARKER"
+: >"$LOG"
+if MOCK_FAIL_MUTATION=1 bash "$SCRIPT" --worker-id "$WORKER" --fleetctl "$MOCK_BIN/fleetctl" --apply >/tmp/canary-failure.out 2>&1; then
   echo 'FAIL: failed mutation was accepted' >&2
   exit 1
 fi
+[[ "$(wc -l <"$LOG")" -eq 2 ]] || { echo 'FAIL: failed update did not stop after inspect/update' >&2; exit 1; }
+grep -Fq 'Explicit rollback command (not run automatically):' /tmp/canary-failure.out || { echo 'FAIL: failed update omitted explicit rollback guidance' >&2; exit 1; }
+! grep -Eq 'smoke|rollback' "$LOG" || { echo 'FAIL: failed update ran smoke/rollback' >&2; exit 1; }
+rm -f -- /tmp/canary-failure.out
 printf 'PASS: missing worker, unhealthy preflight, and mutation failure fail closed\n'
 printf 'PASS: canary worker rollout offline self-test\n'
