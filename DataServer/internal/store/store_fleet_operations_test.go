@@ -220,7 +220,7 @@ func TestFleetStore_AllowsReissueAfterTerminal(t *testing.T) {
 	}
 
 	// Lifecycle the Monday row to SUCCEEDED.
-	if err := s.MarkRunning(ctx, monday.OperationID, time.Now().UTC()); err != nil {
+	if _, err := s.MarkRunning(ctx, monday.OperationID, time.Now().UTC()); err != nil {
 		t.Fatalf("monday mark running: %v", err)
 	}
 	if err := s.MarkSucceeded(ctx, monday.OperationID, time.Now().UTC()); err != nil {
@@ -263,7 +263,7 @@ func TestFleetStore_LifecycleTransitions(t *testing.T) {
 	}
 
 	startedAt := queuedAt.Add(2 * time.Second)
-	if err := s.MarkRunning(ctx, op.OperationID, startedAt); err != nil {
+	if _, err := s.MarkRunning(ctx, op.OperationID, startedAt); err != nil {
 		t.Fatalf("mark running: %v", err)
 	}
 
@@ -310,7 +310,7 @@ func TestFleetStore_FailedCapturesErrorMessage(t *testing.T) {
 	if err := s.InsertOperation(ctx, op); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
-	if err := s.MarkRunning(ctx, op.OperationID, time.Now().UTC()); err != nil {
+	if _, err := s.MarkRunning(ctx, op.OperationID, time.Now().UTC()); err != nil {
 		t.Fatalf("mark running: %v", err)
 	}
 	if err := s.MarkFailed(ctx, op.OperationID, time.Now().UTC(), "cosign: signature invalid"); err != nil {
@@ -341,7 +341,7 @@ func TestFleetStore_FailedCapturesErrorMessage(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("second insert: %v", err)
 	}
-	if err := s.MarkRunning(ctx, "op-fail-2", time.Now().UTC()); err != nil {
+	if _, err := s.MarkRunning(ctx, "op-fail-2", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.MarkFailed(ctx, "op-fail-2", time.Now().UTC(), ""); err != nil {
@@ -442,7 +442,7 @@ func TestFleetStore_ListFilters(t *testing.T) {
 	}
 
 	// Terminate op-a cleanly.
-	if err := s.MarkRunning(ctx, "op-a", time.Now().UTC()); err != nil {
+	if _, err := s.MarkRunning(ctx, "op-a", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.MarkSucceeded(ctx, "op-a", time.Now().UTC()); err != nil {
@@ -487,7 +487,7 @@ func TestFleetStore_QueuedListOrdered(t *testing.T) {
 		if err := s.InsertOperation(ctx, op); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.MarkRunning(ctx, op.OperationID, time.Now().UTC()); err != nil {
+		if _, err := s.MarkRunning(ctx, op.OperationID, time.Now().UTC()); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.MarkSucceeded(ctx, op.OperationID, time.Now().UTC()); err != nil {

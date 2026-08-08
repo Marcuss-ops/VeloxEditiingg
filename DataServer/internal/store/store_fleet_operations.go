@@ -230,15 +230,14 @@ func isInflightUniqueConflict(err error) bool {
 // MarkRunning transitions QUEUED → RUNNING, atomically. The
 // WHERE status='QUEUED' guard matches at most once per row, so
 // a duplicate tick-call (e.g. after a controller restart) is a
-// silent no-op rather than a destructive overwrite — the row
-// stays in its current state.
+// guarded no-op rather than a destructive overwrite — the row
+// stays in its current state and the false return tells the
+// controller not to replay the external executor.
 //
-// Returns nil on success AND on no-op (the row was no longer
-// QUEUED when the update ran). The caller does not need to
-// disambiguate; both cases are "ready to proceed to the next
-// transition check".
-func (s *SQLiteStore) MarkRunning(ctx context.Context, operationID string, startedAt time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
+// The bool reports whether this call actually claimed the row. A false
+// result is a guarded no-op and the caller MUST NOT execute the side effect.
+func (s *SQLiteStore) MarkRunning(ctx context.Context, operationID string, startedAt time.Time) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `
 UPDATE fleet_operations
 SET status = ?, started_at = ?
 WHERE operation_id = ? AND status = ?`,
@@ -247,7 +246,11 @@ WHERE operation_id = ? AND status = ?`,
 		operationID,
 		OperationStatusQueued,
 	)
-	return err
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows == 1, err
 }
 
 // MarkSucceeded transitions RUNNING → SUCCEEDED, capturing

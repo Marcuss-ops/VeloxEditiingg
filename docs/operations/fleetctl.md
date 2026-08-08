@@ -95,11 +95,11 @@ paths guide; direct `sudo`, SSH, and Docker commands are never a replacement
 for either approved path.
 
 ```bash
-ansible-playbook -i deploy/inventory/production.ini \
+ansible-playbook -i deploy/ansible/inventory.ini \
   DataServer/data/ansible/playbooks/update_workers.yml \
   --limit worker-id -e "master_url=$VELOX_MASTER_URL"
 
-ansible-playbook -i deploy/inventory/production.ini \
+ansible-playbook -i deploy/ansible/inventory.ini \
   DataServer/data/ansible/playbooks/restart_workers.yml \
   --limit worker-id
 ```

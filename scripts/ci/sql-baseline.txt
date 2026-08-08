@@ -7,7 +7,6 @@
 4 DataServer/internal/handlers/server/api/workers_handler_current_task.go
 2 DataServer/internal/handlers/server/api/workers_metrics_handler.go
 8 DataServer/internal/handlers/server/api/workers_read_adapters.go
-1 DataServer/internal/handlers/server/pipeline/job_submit_preflight.go
 1 DataServer/internal/handlers/server/pipeline/m2m_audit.go
 1 DataServer/internal/handlers/server/pipeline/pipeline_run_actions.go
 1 DataServer/internal/handlers/server/pipeline/pipeline_run_status.go

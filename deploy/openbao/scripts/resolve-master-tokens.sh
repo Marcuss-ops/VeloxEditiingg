@@ -13,14 +13,12 @@
 #   velox/production/services/registry/token          → vault_velox_registry_token (opz.)
 #
 # Il file viene passato ad ansible-playbook con `-e @<file>`: gli extra-vars
-# VINCONO su group_vars → il deploy rende i token da OpenBao. Senza il file,
-# ansible usa vault.yml come oggi (fallback legacy).
+# VINCONO su group_vars → il deploy rende i token da OpenBao. Non esiste più
+# un fallback ad Ansible Vault in production.
 #
-# CONTRATTO DI EXIT (per la CI deploy.yml):
-#   0 = NON configurato (OPENBAO_ADDR vuoto → nessun vars file, flusso vault
-#       legacy invariato) OPPURE risolto e vars file scritto (0600);
-#   1 = configurato ma login/lettura fallito O un required mancante con
-#       --require-all → la CI fallisce invece di deployare con token mancanti.
+# CONTRATTO DI EXIT:
+#   0 = vars file risolto e scritto (0600);
+#   1 = OpenBao non configurato, login/lettura fallita o required mancante.
 #
 # Config (env):
 #   OPENBAO_ADDR             es. https://127.0.0.1:8200
@@ -47,10 +45,9 @@ done
 log() { printf '[resolve-master-tokens] %s\n' "$*"; }
 fail() { printf '[resolve-master-tokens] FATAL: %s\n' "$*" >&2; exit 1; }
 
-# ── 0. Non configurato → flusso vault legacy (nessun vars file) ─────────────
+# ── 0. OpenBao è obbligatorio ───────────────────────────────────────────────
 if [[ -z "${OPENBAO_ADDR:-}" ]]; then
-    log "OPENBAO_ADDR non impostato — i token master restano da ansible-vault (fallback legacy)"
-    exit 0
+    fail "OPENBAO_ADDR non impostato — production deploy senza fallback Ansible Vault"
 fi
 
 command -v curl >/dev/null 2>&1 || fail "curl not found on PATH"

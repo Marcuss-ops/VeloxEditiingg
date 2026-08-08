@@ -1,8 +1,9 @@
 name: deploy
 
 # Triggers on version tags and manual dispatch. Does NOT rebuild images —
-# resolves the pre-built, cosign-signed digests from ghcr.io (published by
-# worker-image.yml and master-image.yml) and feeds them into Ansible.
+# resolves and verifies the pre-built, cosign-signed digests from ghcr.io
+# (published by worker-image.yml and master-image.yml). Production convergence
+# is deliberately local: OpenBao → Ansible is run by the operator workstation.
 #
 # ⚠️  Tag-push trigger fires simultaneously with the image workflows.
 # A retry-with-backoff loop in the resolve step handles the race.
@@ -15,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to deploy (semver, e.g. 1.2.3) — used for BOTH worker and server images'
+        description: 'Version to verify (semver, e.g. 1.2.3) — used for BOTH worker and server images'
         required: false
       worker_version:
         description: 'Worker image version override (semver, e.g. 1.2.3)'
@@ -27,7 +28,7 @@ on:
         description: 'Full 40-hex commit certified by worker-image.yml (required for manual dispatch)'
         required: false
       master_only:
-        description: 'Deploy only the Master; do not resolve or deploy a worker image.'
+        description: 'Verify only the Master; do not resolve a worker image.'
         required: false
         default: 'false'
         type: boolean
@@ -52,10 +53,7 @@ env:
 
 jobs:
   deploy:
-    name: Deploy (resolve digests + verify signatures + Ansible)
-    environment:
-      name: production
-      url: ${{ vars.VELOX_MASTER_URL }}
+    name: Release verification (production deploy is local)
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -272,154 +270,15 @@ jobs:
           echo "## Cosign verification" >> "$GITHUB_STEP_SUMMARY"
           echo ":white_check_mark: Both images verified (keyless OIDC)" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Resolve master tokens from OpenBao (optional; vault legacy otherwise)
-        env:
-          OPENBAO_ADDR: ${{ secrets.OPENBAO_ADDR }}
-          OPENBAO_ROLE_ID: ${{ secrets.OPENBAO_ROLE_ID }}
-          OPENBAO_SECRET_ID: ${{ secrets.OPENBAO_SECRET_ID }}
-          # Certificato pubblico CA/server di OpenBao, fornito come secret
-          # PEM nel runner; non è la chiave privata del listener.
-          OPENBAO_CA_PEM: ${{ secrets.OPENBAO_CA_FILE }}
+      - name: Release verification summary (production deploy is local-only)
         run: |
           set -euo pipefail
-
-          # I token master vengono risolti da OpenBao (velox/production/master/*
-          # + services/registry/*) via AppRole e scritti in /tmp/openbao-vars.yml
-          # (0600) con i nomi vault_velox_* che il template velox-server.env.j2
-          # consuma. ansible-playbook li riceve come extra-vars (-e @file) e
-          # vincono su group_vars. Se OPENBAO_ADDR non è configurato, lo step è
-          # un no-op e il deploy usa ansible-vault come prima (fallback legacy).
-          if [ -n "${OPENBAO_ADDR:-}" ]; then
-            OPENBAO_CA_FILE=/tmp/openbao-ca.crt
-            trap 'rm -f "$OPENBAO_CA_FILE" /tmp/openbao-vars.yml' EXIT
-            [ -n "${OPENBAO_CA_PEM:-}" ] || {
-              echo "::error::OPENBAO_CA_FILE secret is required when OPENBAO_ADDR is configured."
-              exit 1
-            }
-            printf '%s\n' "$OPENBAO_CA_PEM" > "$OPENBAO_CA_FILE"
-            chmod 600 "$OPENBAO_CA_FILE"
-            OPENBAO_VARS_FILE=/tmp/openbao-vars.yml \
-              OPENBAO_ROLE_ID="${OPENBAO_ROLE_ID:-}" \
-              OPENBAO_SECRET_ID="${OPENBAO_SECRET_ID:-}" \
-              OPENBAO_CA_FILE="$OPENBAO_CA_FILE" \
-              bash deploy/openbao/scripts/resolve-master-tokens.sh --require-all
-            ls -la /tmp/openbao-vars.yml
-          else
-            echo "::notice::OPENBAO_ADDR non configurato — token master da ansible-vault (legacy)."
-          fi
-
-      - name: Install Ansible
-        run: |
-          pip install --quiet ansible
-          ansible-galaxy collection install -r deploy/requirements.yml
-
-      - name: Deploy master config (Ansible)
-        env:
-          ANSIBLE_HOST_KEY_CHECKING: 'false'
-          ANSIBLE_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
-          VELOX_MASTER_HOST: ${{ vars.VELOX_MASTER_HOST }}
-          VELOX_DEPLOY_SSH_KEY: ${{ secrets.VELOX_DEPLOY_SSH_KEY }}
-        run: |
-          set -euo pipefail
-
-          SERVER_REF="${{ steps.resolve.outputs.server_ref }}"
-          WORKER_REF="${{ steps.resolve.outputs.worker_ref }}"
-          VERSION="${{ steps.version.outputs.default }}"
-
-          echo "::group::Deploying Velox master config"
-          echo "Server image: ${SERVER_REF}"
-          echo "Worker image:  ${WORKER_REF}"
-          echo "Version:      ${VERSION}"
-
-          # Resolve vault password: prefer ANSIBLE_VAULT_PASSWORD secret,
-          # fall back to ANSIBLE_VAULT_PASSWORD_FILE, then --ask-vault-pass
-          # (interactive, blocks in CI without a secret).
-          VAULT_ARGS=()
-          if [ -n "${ANSIBLE_VAULT_PASSWORD:-}" ]; then
-            echo "${ANSIBLE_VAULT_PASSWORD}" > /tmp/vault-pass
-            chmod 600 /tmp/vault-pass
-            VAULT_ARGS=(--vault-password-file /tmp/vault-pass)
-          elif [ -n "${ANSIBLE_VAULT_PASSWORD_FILE:-}" ]; then
-            VAULT_ARGS=(--vault-password-file "${ANSIBLE_VAULT_PASSWORD_FILE}")
-          else
-            echo "::warning::No vault password configured (ANSIBLE_VAULT_PASSWORD or ANSIBLE_VAULT_PASSWORD_FILE). Ansible will prompt interactively — this will hang in CI without a TTY."
-            VAULT_ARGS=(--ask-vault-pass)
-          fi
-
-          # Run the master config playbook with extra vars to pin the image
-          # references. The template velox-server.env.j2 renders
-          # VELOX_SERVER_IMAGE={{ velox_server_image }}.
-          #
-          # OpenBao extra-vars (scritti dallo step "Resolve master tokens from
-          # OpenBao"): i vault_velox_* risolti VINCONO su group_vars; se il
-          # file non esiste (OpenBao non configurato) il deploy usa il vault.yml
-          # cifrato come prima — nessun cambio di comportamento.
-          OPENBAO_EXTRA=()
-          if [ -f /tmp/openbao-vars.yml ]; then
-            OPENBAO_EXTRA=(-e @/tmp/openbao-vars.yml)
-          fi
-
-          # The production inventory is intentionally not committed. Build a
-          # short-lived Master-only inventory from the canonical GitHub
-          # production environment values; the private key never enters the
-          # workspace or repository and is removed by the EXIT trap.
-          : "${VELOX_MASTER_HOST:?VELOX_MASTER_HOST is required from the production environment}"
-          : "${VELOX_DEPLOY_SSH_KEY:?VELOX_DEPLOY_SSH_KEY is required from the production environment}"
-          DEPLOY_KEY="$(mktemp)"
-          DEPLOY_INVENTORY="$(mktemp)"
-          trap 'rm -f "$DEPLOY_KEY" "$DEPLOY_INVENTORY" /tmp/vault-pass' EXIT
-          printf '%s\n' "$VELOX_DEPLOY_SSH_KEY" > "$DEPLOY_KEY"
-          chmod 600 "$DEPLOY_KEY"
-          printf '%s\n' \
-            '[velox_master]' \
-            "velox-master ansible_host=${VELOX_MASTER_HOST} ansible_user=velox-deploy ansible_ssh_private_key_file=${DEPLOY_KEY}" \
-            '' \
-            '[velox_master:vars]' \
-            'ansible_python_interpreter=/usr/bin/python3' \
-            > "$DEPLOY_INVENTORY"
-
-          ansible-playbook \
-            -i "$DEPLOY_INVENTORY" \
-            "${VAULT_ARGS[@]}" \
-            "${OPENBAO_EXTRA[@]}" \
-            -e velox_server_image="${SERVER_REF}" \
-            -e velox_version="${VERSION}" \
-            deploy/playbooks/deploy-master-config.yml
-
-          echo "::endgroup::"
-
-      - name: Production smoke test
-        env:
-          VELOX_MASTER_URL: ${{ vars.VELOX_MASTER_URL }}
-          VELOX_ADMIN_TOKEN: ${{ secrets.VELOX_ADMIN_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          # Retry with backoff — the master may still be restarting after the
-          # Ansible deploy. Up to 30 s with 5 s intervals.
-          for i in $(seq 1 6); do
-            if curl -sS --fail-with-body \
-              -H "Authorization: Bearer ${VELOX_ADMIN_TOKEN}" \
-              "${VELOX_MASTER_URL}/health/ready"; then
-              echo "::notice::Smoke test PASSED on attempt ${i}"
-              break
-            fi
-            if [ "$i" -eq 6 ]; then
-              echo "::error::Smoke test FAILED after 6 attempts"
-              exit 1
-            fi
-            echo "::notice::Smoke test attempt ${i}/6 failed — retrying in 5 s…"
-            sleep 5
-          done
-
-      - name: Deploy summary
-        run: |
-          echo "## Deploy complete" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Version**: ${{ steps.version.outputs.default }}" >> "$GITHUB_STEP_SUMMARY"
-          if [ -n "${{ steps.resolve.outputs.worker_ref }}" ]; then
-            echo "- **Worker**: \`${{ steps.resolve.outputs.worker_ref }}\`" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "- **Worker**: not deployed (master-only)" >> "$GITHUB_STEP_SUMMARY"
-          fi
-          echo "- **Server**: \`${{ steps.resolve.outputs.server_ref }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Smoke test**: :white_check_mark: /health/ready" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## Release verified"
+            echo "- **Version**: ${{ steps.version.outputs.default }}"
+            echo "- **Worker image**: \`${{ steps.resolve.outputs.worker_ref || 'not resolved (master-only)' }}\`"
+            echo "- **Server image**: \`${{ steps.resolve.outputs.server_ref }}\`"
+            echo "- **Signatures**: verified"
+            echo "- **Production deploy**: local operator only"
+            echo "- **Command**: \`scripts/operator/deploy-production.sh --apply\`"
+          } >> "$GITHUB_STEP_SUMMARY"

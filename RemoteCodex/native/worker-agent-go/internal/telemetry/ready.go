@@ -21,6 +21,7 @@
 package telemetry
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -86,6 +87,11 @@ type ReadySnapshot struct {
 // the new copy). The atomic.Pointer's genericity in Go 1.19+ means the
 // API is type-safe.
 type ReadyState struct {
+	// mu serializes copy/mutate/store sequences. The atomic pointer keeps
+	// Snapshot lock-free for the HTTP readiness path, while the mutex
+	// prevents concurrent writers from losing fields updated by another
+	// writer between Load and Store.
+	mu  sync.Mutex
 	ptr atomic.Pointer[ReadySnapshot]
 }
 
@@ -116,12 +122,14 @@ func (r *ReadyState) Snapshot() *ReadySnapshot {
 // (the copy is owned by the atomic swap; if fn blocks holding it, the
 // next UpdateReady will deadlock reading it under the copy).
 //
-// fn is called while holding NO lock — implementations must be
-// side-effect-free except for the *ReadySnapshot argument.
+// fn is called while holding the writer lock and must be side-effect-free
+// except for the *ReadySnapshot argument.
 func (r *ReadyState) UpdateReady(fn func(*ReadySnapshot)) {
 	if r == nil || fn == nil {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	cur := r.Snapshot()
 	nxt := *cur // struct value copy
 	fn(&nxt)

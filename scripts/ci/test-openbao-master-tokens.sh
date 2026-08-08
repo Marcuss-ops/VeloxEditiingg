@@ -38,10 +38,10 @@ grep -q 'services/registry/\*' "$ROOT/deploy/openbao/policies/master.hcl" \
     || fail 'master.hcl non copre services/registry/*'
 grep -q 'read cap on services/registry' "$ROOT/deploy/openbao/scripts/verify-approle.sh" \
     || fail 'verify-approle.sh non verifica l accesso master a services/registry'
-grep -q 'Resolve master tokens from OpenBao' "$ROOT/.github/workflows/deploy.yml" \
-    || fail 'deploy.yml non contiene lo step di risoluzione OpenBao'
-grep -q '/tmp/openbao-vars.yml' "$ROOT/.github/workflows/deploy.yml" \
-    || fail 'deploy.yml non inietta gli extra-vars OpenBao'
+grep -q 'production deploy is local-only' "$ROOT/.github/workflows/deploy.yml" \
+    || fail 'deploy.yml deve essere CI-only per la produzione'
+grep -q 'scripts/operator/deploy-production.sh' "$ROOT/.github/workflows/deploy.yml" \
+    || fail 'deploy.yml non indirizza al deploy locale OpenBao → Ansible'
 grep -q 'velox/production/master/admin-token' "$ROOT/deploy/velox-server.env.example" \
     || fail 'velox-server.env.example non documenta l origine OpenBao'
 grep -q 'MIGRAZIONE OpenBao' "$ROOT/deploy/group_vars/vault.yml.example" \
@@ -49,11 +49,11 @@ grep -q 'MIGRAZIONE OpenBao' "$ROOT/deploy/group_vars/vault.yml.example" \
 pass 'check strutturali OK (policy, verify, deploy.yml, template, vault)'
 
 # ── 2. Non configurato → exit 0, nessun vars file ────────────────────────────
-if ! OPENBAO_VARS_FILE="$VARS_FILE" bash "$RESOLVE" >/dev/null 2>&1; then
-    fail 'senza OPENBAO_ADDR deve uscire 0 (flusso vault legacy)'
+if OPENBAO_VARS_FILE="$VARS_FILE" bash "$RESOLVE" >/dev/null 2>&1; then
+    fail 'senza OPENBAO_ADDR deve fallire (nessun fallback Vault)'
 fi
 [[ -f "$VARS_FILE" ]] && fail 'non configurato non deve scrivere vars file'
-pass 'non configurato → exit 0, nessun vars file'
+pass 'non configurato → exit 1, nessun vars file'
 
 # ── 3. Mock server ───────────────────────────────────────────────────────────
 cat > "$TMP/mock.py" <<PYEOF

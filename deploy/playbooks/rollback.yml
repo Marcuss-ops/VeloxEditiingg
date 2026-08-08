@@ -15,11 +15,11 @@
 #
 # Usage:
 #
-#   ansible-playbook -i deploy/inventory/production.ini \
+#   ansible-playbook -i deploy/ansible/inventory.ini \
 #     deploy/playbooks/rollback.yml
 #
 #   # Dry run preview:
-#   ansible-playbook -i deploy/inventory/production.ini --check \
+#   ansible-playbook -i deploy/ansible/inventory.ini --check \
 #     deploy/playbooks/rollback.yml
 - name: Roll back velox-server.env on the master
   hosts: velox_master

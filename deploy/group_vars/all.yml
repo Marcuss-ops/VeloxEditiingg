@@ -2,8 +2,9 @@
 # Velox — non-secret group variables.
 # ────────────────────────────────────────────────────────────────────────────
 # This file is committed to the repo. NEVER put secrets here.
-# For secrets: define them as `vault_velox_*` in `deploy/group_vars/vault.yml`
-# (encrypted with `ansible-vault`).
+# Production secrets are resolved from OpenBao into protected Ansible
+# extra-vars by scripts/operator/deploy-production.sh. The old vault.yml
+# example is retained only as migration documentation, never as authority.
 
 # ── Versions ─────────────────────────────────────────────────────────────────
 velox_version: "1.2.0"

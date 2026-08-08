@@ -154,8 +154,8 @@ func (s *Service) CreateJob(ctx context.Context, cmd CreateJobCmd) (*jobResponse
 	if strings.TrimSpace(cmd.ProjectID) == "" {
 		return nil, fmt.Errorf("%w: project_id is required", ErrInvalidPayload)
 	}
-	if len(cmd.Destinations) == 0 {
-		return nil, fmt.Errorf("%w: delivery_plan.destinations is required", ErrInvalidPayload)
+	if !cmd.RenderOnly && len(cmd.Destinations) == 0 {
+		return nil, fmt.Errorf("%w: delivery_plan.destinations is required unless render_only=true", ErrInvalidPayload)
 	}
 
 	var renderSpec map[string]any
@@ -219,6 +219,9 @@ func (s *Service) CreateJob(ctx context.Context, cmd CreateJobCmd) (*jobResponse
 		renderSpec["video_name"] = cmd.ProjectID
 	}
 	renderSpec["delivery_plan"] = deliveryPlan
+	if cmd.RenderOnly {
+		renderSpec["render_only"] = true
+	}
 
 	typedPayload := contract.NewJobPayloadV2(renderSpec)
 	payload, err := typedPayload.ToMap()

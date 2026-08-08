@@ -12,7 +12,7 @@
 
 2. **`reason` non esposto.** Quando `status != CONNECTED` manca un campo stabile che indica perché (es. `disconnected_session`, `heartbeat_stale`, `drain`). Operatori guardano solo `status` e non hanno drill-down.
 
-3. **`worker_class` e `rollout_group` non filitrabili.** `Inventory` Ansible con `worker_class`/group esiste (`deploy/inventory/production.ini.example`) ma non c'è modo di interrogare `GET /api/v1/workers?class=cpu-xlarge`.
+3. **`worker_class` e `rollout_group` non filitrabili.** Il seed inventory Ansible (`deploy/ansible/inventory.ini.example`) non espone ancora un filtro runtime; non c'è modo di interrogare `GET /api/v1/workers?class=cpu-xlarge`.
 
 4. **`current_task` non presente** — spec chiede di esporre `current_task` (id + executor) sui worker connessi che hanno almeno 1 task RUNNING.
 

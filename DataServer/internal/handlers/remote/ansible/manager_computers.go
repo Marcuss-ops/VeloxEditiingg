@@ -54,7 +54,7 @@ type AnsibleComputerStore interface {
 // ── DB-as-source-of-truth inventory (P0.5) ───────────────────────
 //
 // The `ansible_hosts` table (migration 004) is the SINGLE source of
-// truth for inventory. The static `inventory/production.ini.example`
+// truth for inventory. The static `deploy/ansible/inventory.ini.example`
 // file is NON-CANONICAL: it exists only as a developer reference and
 // MUST NOT be used as a deploy input. Every read goes through the
 // SQLite store via ListAnsibleHosts / GetAnsibleHost. Inventory
@@ -308,7 +308,7 @@ type GenerateInventoryOptions struct {
 }
 
 // GenerateInventory builds an Ansible INI inventory string from the
-// `ansible_hosts` DB rows. The static `inventory/production.ini.example`
+// `ansible_hosts` DB rows. The static `deploy/ansible/inventory.ini.example`
 // is non-canonical and MUST NOT be used as a deploy input — this
 // method is the only sanctioned way to produce an inventory at deploy
 // time.

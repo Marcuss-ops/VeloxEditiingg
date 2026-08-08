@@ -14,8 +14,8 @@
 # Optional environment:
 #   OPENBAO_PKI_MOUNT=pki (canonical; other mount names are rejected)
 #   OPENBAO_PKI_ROLE_PREFIX=worker-
-#   OPENBAO_PKI_DEFAULT_TTL=168h
-#   OPENBAO_PKI_MAX_TTL=336h
+#   OPENBAO_PKI_DEFAULT_TTL=504h
+#   OPENBAO_PKI_MAX_TTL=1008h
 #   OPENBAO_PKI_ISSUER_URL=https://...
 #   OPENBAO_PKI_CRL_URL=https://...
 
@@ -27,8 +27,8 @@ ADDR="${BAO_ADDR:-https://127.0.0.1:8200}"
 MOUNT="${OPENBAO_PKI_MOUNT:-pki}"
 [[ "$MOUNT" == "pki" ]] || { echo "FATAL: OPENBAO_PKI_MOUNT must remain the canonical pki mount" >&2; exit 2; }
 ROLE_PREFIX="${OPENBAO_PKI_ROLE_PREFIX:-worker-}"
-DEFAULT_TTL="${OPENBAO_PKI_DEFAULT_TTL:-168h}"
-MAX_TTL="${OPENBAO_PKI_MAX_TTL:-336h}"
+DEFAULT_TTL="${OPENBAO_PKI_DEFAULT_TTL:-504h}"
+MAX_TTL="${OPENBAO_PKI_MAX_TTL:-1008h}"
 DEFAULT_WORKERS=(host_57_129_132_133 host_57_131_20_173 velox-worker-13197 velox-worker-523925eb)
 WORKERS=()
 DRY_RUN=0

@@ -1,14 +1,14 @@
 ---
-# Velox — SECRET group variables (operator-populated, ansible-vault encrypted).
+# Velox — legacy SECRET group variables (migration reference only).
 # ────────────────────────────────────────────────────────────────────────────
-# This file is committed ONLY as a placeholder. The real vault file MUST be
-# created locally and encrypted with `ansible-vault` before use:
+# This file is committed ONLY as a historical migration reference. It is not
+# loaded by the production playbook; production uses OpenBao exclusively.
+# Do not create or populate a production vault file from this example.
 #
-#   1. cp deploy/group_vars/vault.yml.example deploy/group_vars/vault.yml
-#   2. $EDITOR deploy/group_vars/vault.yml   # fill in real values
-#   3. ansible-vault encrypt deploy/group_vars/vault.yml
+# Older recovery documentation may still mention ansible-vault; those steps
+# are not a supported production deployment path.
 #
-# Decryption requires a vault password. Provide via one of:
+# Historical decryption options (not used by production):
 #   --ask-vault-pass                              (interactive)
 #   --vault-password-file ~/.vault-velox          (file; perms 0600)
 #   $ANSIBLE_VAULT_PASSWORD                       (env var; for CI Secrets)
@@ -21,10 +21,10 @@
 # ⚠️ MIGRAZIONE OpenBao (fase 6): i token del master ora vivono nel KV OpenBao
 #    velox/production/master/* (+ services/registry/*) e il deploy li risolve
 #    con deploy/openbao/scripts/resolve-master-tokens.sh (AppRole), iniettandoli
-#    come extra-vars che VINCONO su group_vars. I valori sotto sono il FALLBACK
-#    legacy durante la transizione: i nomi NON cambiano (velox-server.env.j2 li
-#    consuma identici), cambia solo la provenienza. Quando la migrazione sarà
-#    completa, questi campi possono restare vuoti.
+#    come extra-vars che VINCONO su group_vars. Questo file NON è letto dal
+#    production playbook; i nomi restano solo come projection compatibile per
+#    il template. Quando la migrazione sarà completa, questi campi devono
+#    restare vuoti.
 
 # ── Master REST API token (consumed by velox-server.env.j2) ─────────────────
 # Fallback legacy: OpenBao velox/production/master/admin-token

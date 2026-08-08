@@ -43,15 +43,17 @@ import (
 // exercise FleetController-specific logic without standing up a
 // SQLite handle. Not exported; package-internal.
 type stubStore struct {
-	insertErr      error
-	insertCalls    []*store.Operation
-	queuedList     []store.Operation
-	listErr        error
-	listCalls      int
-	markRunningErr error
-	markSucceeded  bool
-	markFailedErr  error
-	markFailedMsg  string
+	insertErr           error
+	insertCalls         []*store.Operation
+	queuedList          []store.Operation
+	listErr             error
+	listCalls           int
+	markRunningErr      error
+	markRunningClaimSet bool
+	markRunningClaim    bool
+	markSucceeded       bool
+	markFailedErr       error
+	markFailedMsg       string
 }
 
 func (s *stubStore) InsertOperation(_ context.Context, op *store.Operation) error {
@@ -71,8 +73,14 @@ func (s *stubStore) ListOperations(_ context.Context, _, _ string, _ int) ([]sto
 func (s *stubStore) GetOperation(_ context.Context, _ string) (*store.Operation, error) {
 	return nil, store.ErrOperationNotFound
 }
-func (s *stubStore) MarkRunning(_ context.Context, _ string, _ time.Time) error {
-	return s.markRunningErr
+func (s *stubStore) MarkRunning(_ context.Context, _ string, _ time.Time) (bool, error) {
+	if s.markRunningErr != nil {
+		return false, s.markRunningErr
+	}
+	if s.markRunningClaimSet {
+		return s.markRunningClaim, nil
+	}
+	return true, nil
 }
 func (s *stubStore) MarkSucceeded(_ context.Context, _ string, _ time.Time) error {
 	s.markSucceeded = true
@@ -233,6 +241,33 @@ func TestController_Tick_FailedExecutorCapturesErrorMsg(t *testing.T) {
 	}
 	if hook.calls != 1 {
 		t.Errorf("hook.calls = %d, want 1", hook.calls)
+	}
+}
+
+func TestController_Tick_DoesNotExecuteWhenClaimIsLost(t *testing.T) {
+	st := &stubStore{
+		markRunningClaimSet: true,
+		markRunningClaim:    false,
+		queuedList: []store.Operation{{
+			OperationID: "op-claim-lost",
+			WorkerID:    "wicket",
+			Op:          OperationKindDrain,
+			Status:      store.OperationStatusQueued,
+		}},
+	}
+	reg := NewExecutorRegistry()
+	hook := &failExecutor{}
+	if err := reg.Register(OperationKindDrain, hook); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	c := NewFleetController(st, reg, time.Second, time.Minute)
+	c.Tick(context.Background())
+
+	if hook.calls != 0 {
+		t.Fatalf("executor calls = %d, want 0 after lost claim", hook.calls)
+	}
+	if st.markSucceeded || st.markFailedMsg != "" {
+		t.Fatalf("lost claim must not write terminal state: succeeded=%v failed=%q", st.markSucceeded, st.markFailedMsg)
 	}
 }
 

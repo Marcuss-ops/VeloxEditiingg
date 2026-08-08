@@ -154,6 +154,10 @@ func (h *Handler) createJob() gin.HandlerFunc {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error_code": "INVALID_IDEMPOTENCY_KEY", "message": "idempotency_key is required"})
 			return
 		}
+		if !req.RenderOnly && len(req.DeliveryPlan.Destinations) == 0 {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error_code": "INVALID_DELIVERY_PLAN", "message": "delivery_plan.destinations is required unless render_only=true"})
+			return
+		}
 
 		dsts := make([]CreateDestinationCmd, 0, len(req.DeliveryPlan.Destinations))
 		for _, d := range req.DeliveryPlan.Destinations {
@@ -170,6 +174,7 @@ func (h *Handler) createJob() gin.HandlerFunc {
 			IdempotencyKey:  req.IdempotencyKey,
 			RenderSpec:      req.RenderSpec,
 			Destinations:    dsts,
+			RenderOnly:      req.RenderOnly,
 		})
 		if err != nil {
 			writeServiceError(c, err)

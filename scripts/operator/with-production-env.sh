@@ -3,7 +3,7 @@
 #
 # Canonical usage (after this redesign):
 #   source scripts/operator/with-production-env.sh
-#   ansible-playbook -i inventory/production.ini --check --diff <playbook>
+#   ansible-playbook -i deploy/ansible/inventory.ini --check --diff <playbook>
 #
 #   # or, for `make canonical-dry`, the make target wraps the source + playbook
 #   # in a single line that is the only supported invocation path.
@@ -25,7 +25,7 @@
 #
 # Foot-gun guarded: ansible-playbook -i <script>.sh would parse this file as
 # an inventory script and choke on `exec "$@"`. Source here + pass a separate
-# inventory path (-i inventory/production.ini).
+# inventory path (-i deploy/ansible/inventory.ini).
 
 set -euo pipefail
 
@@ -84,7 +84,7 @@ fi
 # Direct-exec mode (legacy): print usage if no args, else exec the child.
 if [[ $# -eq 0 ]]; then
     echo "Usage: $0 <command> [args...]" >&2
-    echo "       (prefer: source $0 && ansible-playbook -i inventory/production.ini <args>)" >&2
+    echo "       (prefer: source $0 && ansible-playbook -i deploy/ansible/inventory.ini <args>)" >&2
     exit 1
 fi
 

@@ -77,7 +77,7 @@ type FleetStore interface {
 	ListQueuedOperations(ctx context.Context, limit int) ([]store.Operation, error)
 	ListOperations(ctx context.Context, workerID, statusFilter string, limit int) ([]store.Operation, error)
 	GetOperation(ctx context.Context, operationID string) (*store.Operation, error)
-	MarkRunning(ctx context.Context, id string, startedAt time.Time) error
+	MarkRunning(ctx context.Context, id string, startedAt time.Time) (bool, error)
 	MarkSucceeded(ctx context.Context, id string, finishedAt time.Time) error
 	MarkFailed(ctx context.Context, id string, finishedAt time.Time, errMsg string) error
 }
@@ -266,6 +266,7 @@ func (c *FleetController) Tick(ctx context.Context) {
 		c.processOne(execCtx, op)
 		cancel()
 	}
+	c.reconcileStaleRunning(ctx)
 }
 
 // processOne runs the QUEUED → RUNNING → terminal transition
@@ -275,11 +276,18 @@ func (c *FleetController) Tick(ctx context.Context) {
 // current state and the executor does not run twice.
 func (c *FleetController) processOne(ctx context.Context, op *store.Operation) {
 	now := time.Now().UTC()
-	if err := c.store.MarkRunning(ctx, op.OperationID, now); err != nil {
+	claimed, err := c.store.MarkRunning(ctx, op.OperationID, now)
+	if err != nil {
 		// MarkRunning failure is rare (DB locked, connection
 		// drop mid-transaction). Log and let the next tick
 		// try again — the row is still QUEUED.
 		log.Printf("[FLEET] mark running %s: %v", op.OperationID, err)
+		return
+	}
+	if !claimed {
+		// The SQL status guard rejected this claim because another
+		// dispatcher already owns the row or it is already terminal.
+		// Never replay the external executor on a no-op claim.
 		return
 	}
 	exec, err := c.executors.Lookup(op.Op)
@@ -288,15 +296,77 @@ func (c *FleetController) processOne(ctx context.Context, op *store.Operation) {
 		// with the error string. Audit dashboard surfaces
 		// "no_executor_registered_for_kind_X" so a misconfig
 		// never silently noops.
-		c.store.MarkFailed(ctx, op.OperationID, time.Now().UTC(), err.Error())
+		c.persistFailed(ctx, op.OperationID, err.Error())
 		return
 	}
 	if err := exec.Execute(ctx, op); err != nil {
-		c.store.MarkFailed(ctx, op.OperationID, time.Now().UTC(), err.Error())
+		c.persistFailed(ctx, op.OperationID, err.Error())
 		return
 	}
-	if err := c.store.MarkSucceeded(ctx, op.OperationID, time.Now().UTC()); err != nil {
-		log.Printf("[FLEET] mark succeeded %s: %v", op.OperationID, err)
+	c.persistSucceeded(ctx, op.OperationID)
+}
+
+const terminalPersistAttempts = 3
+
+// persistSucceeded retries only the durable terminal transition. It never
+// re-runs the executor, so an external side effect is performed once even
+// when the ledger connection is temporarily unavailable.
+func (c *FleetController) persistSucceeded(ctx context.Context, operationID string) {
+	var err error
+	for attempt := 0; attempt < terminalPersistAttempts; attempt++ {
+		err = c.store.MarkSucceeded(ctx, operationID, time.Now().UTC())
+		if err == nil {
+			return
+		}
+		if !sleepTerminalRetry(ctx, attempt) {
+			break
+		}
+	}
+	log.Printf("[FLEET] terminal success persistence unresolved %s: %v", operationID, err)
+}
+
+func (c *FleetController) persistFailed(ctx context.Context, operationID, reason string) {
+	var err error
+	for attempt := 0; attempt < terminalPersistAttempts; attempt++ {
+		err = c.store.MarkFailed(ctx, operationID, time.Now().UTC(), reason)
+		if err == nil {
+			return
+		}
+		if !sleepTerminalRetry(ctx, attempt) {
+			break
+		}
+	}
+	log.Printf("[FLEET] terminal failure persistence unresolved %s: %v", operationID, err)
+}
+
+func sleepTerminalRetry(ctx context.Context, attempt int) bool {
+	d := time.Duration(attempt+1) * 25 * time.Millisecond
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+// reconcileStaleRunning closes rows left RUNNING after a process/DB failure.
+// It marks the ledger as failed with an explicit unknown-outcome reason; it
+// does not invoke the executor, because replaying side effects is unsafe.
+func (c *FleetController) reconcileStaleRunning(ctx context.Context) {
+	running, err := c.store.ListOperations(ctx, "", store.OperationStatusRunning, 0)
+	if err != nil {
+		log.Printf("[FLEET] list running operations for reconciliation: %v", err)
+		return
+	}
+	cutoff := time.Now().UTC().Add(-c.opTimeout)
+	for i := range running {
+		op := &running[i]
+		if op.StartedAt == nil || op.StartedAt.After(cutoff) {
+			continue
+		}
+		c.persistFailed(ctx, op.OperationID, "stale RUNNING operation; executor outcome unknown")
 	}
 }
 

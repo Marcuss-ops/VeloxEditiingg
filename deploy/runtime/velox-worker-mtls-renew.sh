@@ -6,7 +6,7 @@ set -euo pipefail
 CERTS_ROOT="${VELOX_WORKER_CERTS_DIR:-/etc/velox-worker/certs}"
 FETCHER="${VELOX_MTLS_FETCHER:-/opt/velox-worker/openbao-fetch-worker-secrets.sh}"
 BEFORE="$(readlink -e "$CERTS_ROOT/current" 2>/dev/null || true)"
-"$FETCHER"
+"$FETCHER" --renew
 AFTER="$(readlink -e "$CERTS_ROOT/current" 2>/dev/null || true)"
 
 if [[ -n "$AFTER" && "$AFTER" != "$BEFORE" ]]; then

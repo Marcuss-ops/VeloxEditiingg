@@ -189,7 +189,7 @@
     fail_msg: >-
       Production requires at least one worker under [velox_workers] (got
       {{ groups['velox_workers'] | default([]) | length }}).
-      Update deploy/inventory/production.ini.
+      Update deploy/ansible/inventory.ini.
   run_once: true
   delegate_to: localhost
   become: no

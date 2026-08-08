@@ -24,7 +24,7 @@
 #   VELOX_OPENBAO_CA_FILE              OpenBao TLS CA (never -k)
 #   VELOX_OPENBAO_PKI_MOUNT            default pki
 #   VELOX_OPENBAO_PKI_ROLE             default worker-$VELOX_WORKER_ID
-#   VELOX_OPENBAO_PKI_TTL              default 168h
+#   VELOX_OPENBAO_PKI_TTL              default 504h
 #   VELOX_MTLS_RENEW_BEFORE_SECONDS    default 172800 (48 hours)
 #   VELOX_MTLS_FORCE_RENEW             set to 1 to rotate immediately
 #
@@ -279,7 +279,7 @@ STAGED_CA="$WORK_DIR/ca.crt"
 PKI_ROLE="${VELOX_OPENBAO_PKI_ROLE:-worker-$WORKER_ID}"
 [[ "$PKI_ROLE" == "worker-$WORKER_ID" ]] ||
     fail "VELOX_OPENBAO_PKI_ROLE must be worker-$WORKER_ID; cross-worker role override is forbidden"
-PKI_TTL="${VELOX_OPENBAO_PKI_TTL:-168h}"
+PKI_TTL="${VELOX_OPENBAO_PKI_TTL:-504h}"
 
 # Generate the private key only on this worker. The CSR is the sole key-related
 # value sent to OpenBao; worker.key never enters the request body or KV.

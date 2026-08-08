@@ -35,7 +35,9 @@ ROLE_ID_PATH="/etc/velox-worker/secrets/approle/role-id"
 SECRET_ID_PATH="/etc/velox-worker/secrets/approle/secret-id"
 FETCH_PATH="/opt/velox-worker/openbao-fetch-worker-secrets.sh"
 ENV_PATH="/etc/velox-worker/worker.env"
-SSH_KEY="${VELOX_SSH_KEY:-$HOME/.ssh/id_ed25519_velox}"
+# The operator's canonical fleet key is the same key used by the inventory.
+# Callers may override it explicitly for a separate administrative setup.
+SSH_KEY="${VELOX_SSH_KEY:-$HOME/.ssh/id_ed25519}"
 TUNNEL_SCRIPT="$ROOT/scripts/operator/remote-worker-openbao-tunnel.sh"
 
 IMPORT_LEGACY=0

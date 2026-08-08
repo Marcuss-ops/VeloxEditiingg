@@ -13,6 +13,7 @@ type CreateJobCmd struct {
 	IdempotencyKey  string
 	RenderSpec      json.RawMessage
 	Destinations    []CreateDestinationCmd
+	RenderOnly      bool
 }
 
 // CreateDestinationCmd is a single destination inside CreateJobCmd.
@@ -28,6 +29,18 @@ type createJobRequest struct {
 	ProjectID       string          `json:"project_id"`
 	RenderSpec      json.RawMessage `json:"render_spec"`
 	DeliveryPlan    deliveryPlanReq `json:"delivery_plan"`
+	RenderOnly      bool            `json:"render_only,omitempty"`
+
+	// Canonical velox.job.v1 fields are accepted at the transport boundary
+	// so the InstaEdit client can use the provider-neutral job contract.
+	// The editor service currently derives execution from render_spec;
+	// these fields remain available for the canonical validator/registry.
+	JobType         string          `json:"job_type,omitempty"`
+	TemplateID      string          `json:"template_id,omitempty"`
+	TemplateVersion int             `json:"template_version,omitempty"`
+	VideoName       string          `json:"video_name,omitempty"`
+	Spec            json.RawMessage `json:"spec,omitempty"`
+	Output          json.RawMessage `json:"output,omitempty"`
 }
 
 // deliveryPlanReq is the HTTP wrapper for delivery destinations.

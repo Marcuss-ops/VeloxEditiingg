@@ -23,7 +23,7 @@
      - `cpu-small` (2 vCPU, 4 GiB RAM)
      - `cpu-medium` (4 vCPU, 8 GiB RAM)
      - `cpu-xlarge` (8 vCPU, 16 GiB RAM)
-   - Mapping da inventario Ansible (`deploy/inventory/production.ini.example`).
+   - Mapping dal seed inventory Ansible (`deploy/ansible/inventory.ini.example`).
 
 2. **Formula `max_active_jobs`**:
    - `max_active_jobs = max(1, floor((RAM_total * MB - RAM_reserved_MB - peak_render_RSS_MB) / peak_render_RSS_MB * 0.7))`

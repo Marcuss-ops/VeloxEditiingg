@@ -59,13 +59,18 @@ VERSION.txt                      # Single source of product version truth
 Every IP, hostname, worker ID and credential in versioned files is a `CHANGE_ME_*` placeholder. Production secrets live only in:
 
 - `deploy/group_vars/vault.yml` encrypted with Ansible Vault and never committed;
-- `deploy/inventory/production.ini`, which is excluded from Git;
+- `deploy/ansible/inventory.ini`, copied from the single template and excluded from Git;
 - `/etc/velox-server.env` on the master;
 - `/etc/velox-worker/worker.env` on each worker.
 
 A `CHANGE_ME_*` token must be replaced before deployment and must never be copied verbatim into production.
 
 The production worker allowlist is validated by `ValidateProductionWorkers` in `DataServer/internal/config/workers_validator.go`. The fleet may scale up or down; the runtime enforces the allowlist shape, uniqueness and absence of wildcards.
+
+Fleet connectivity is runtime-owned by the Master `WorkerNodeRegistry`. The
+Ansible inventory is only a local bootstrap/seed input; see
+[`docs/operations/credential-registry.md`](docs/operations/credential-registry.md)
+for the credential and materialization contract.
 
 The agent operating contract — where canonical values live, what an agent (LLM, scripted, or CI-driven) must never print, and which workflow is allowed to publish an image — is the single source of truth in [`docs/architecture/AGENT-CONTRACT.md`](docs/architecture/AGENT-CONTRACT.md). The seven rules in that document bind every action on `main` and are backed by `scripts/ci/check-secrets.sh`, `deploy/validate-master-env.sh`, and `scripts/operator/with-production-env.sh`.
 

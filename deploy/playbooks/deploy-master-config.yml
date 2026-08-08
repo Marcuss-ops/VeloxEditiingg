@@ -12,20 +12,16 @@
 #
 # Usage:
 #
-#   # Standard rollout (prompts for vault password):
-#   ansible-playbook -i deploy/inventory/production.ini \
-#     --ask-vault-pass \
+#   # Standard rollout: resolve secret variables from OpenBao first, then:
+#   ansible-playbook -i deploy/ansible/inventory.ini \
 #     deploy/playbooks/deploy-master-config.yml
 #
 #   # Dry run — no changes written, no service restart. Validator still runs.
-#   ansible-playbook -i deploy/inventory/production.ini \
-#     --ask-vault-pass --check \
+#   ansible-playbook -i deploy/ansible/inventory.ini \
+#     --check \
 #     deploy/playbooks/deploy-master-config.yml
 #
-#   # CI usage (vault password from file):
-#   ansible-playbook -i deploy/inventory/production.ini \
-#     --vault-password-file ~/.vault-velox \
-#     deploy/playbooks/deploy-master-config.yml
+#   # The supported production entrypoint is scripts/operator/deploy-production.sh.
 - name: Deploy Velox master configuration
   hosts: velox_master
   become: true
@@ -41,7 +37,6 @@
 
   vars_files:
     - ../group_vars/all.yml
-    - ../group_vars/vault.yml
 
   pre_tasks:
     - name: Ensure /opt/velox/current/deploy exists
