@@ -16,18 +16,18 @@ import (
 // deployment_records ledger via BackendDeploymentRepo
 // (no SSH needed for that lookup).
 //
-// Sub-checks:
+// Sub-checks (canonical runtime: one fixed `velox-worker` container):
 //
 //	container_running      — `docker inspect -f {{.State.Running}}
-//	                         velox-worker-<id>` reads "true"
-//	health_ready           — `docker exec velox-worker-<id> curl
+//	                         velox-worker` reads "true"
+//	health_ready           — `docker exec velox-worker curl
 //	                         -fsS http://127.0.0.1:8081/health/ready`
 //	                         returns body without curl exit non-zero
 //	image_digest_match     — running container's image == ledger's
 //	                         latest deployment_records row's
 //	                         TargetDigest (PENDING in-flight is OK)
 //	no_restart_loop        — `docker inspect -f {{.RestartCount}}
-//	                         velox-worker-<id>` < Threshold
+//	                         velox-worker` < Threshold
 func ProbeLevelB(ctx context.Context, ssh BackendSSHClient, deployments BackendDeploymentRepo, workerID string, now time.Time) HealthReport {
 	start := now
 	r := newReport(workerID, HealthLevelB, now)

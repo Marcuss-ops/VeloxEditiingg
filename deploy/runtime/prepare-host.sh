@@ -39,25 +39,21 @@ set -euo pipefail
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 readonly ENV_FILE_DEFAULT="/etc/velox-worker/worker.env"
-readonly COMPOSE_YML_SRC
 COMPOSE_YML_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/compose.yml"
 readonly COMPOSE_YML_DST="/opt/velox-worker/compose.yml"
-readonly FETCH_SRC
 FETCH_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/openbao-fetch-worker-secrets.sh"
 readonly FETCH_DST="/opt/velox-worker/openbao-fetch-worker-secrets.sh"
-readonly MTLS_RENEW_SERVICE_SRC
 MTLS_RENEW_SERVICE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker-mtls-renew.service"
-readonly MTLS_RENEW_WRAPPER_SRC
 MTLS_RENEW_WRAPPER_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker-mtls-renew.sh"
 readonly MTLS_RENEW_WRAPPER_DST="/opt/velox-worker/velox-worker-mtls-renew.sh"
 readonly MTLS_RENEW_SERVICE_DST="/etc/systemd/system/velox-worker-mtls-renew.service"
-readonly MTLS_RENEW_TIMER_SRC
 MTLS_RENEW_TIMER_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker-mtls-renew.timer"
 readonly MTLS_RENEW_TIMER_DST="/etc/systemd/system/velox-worker-mtls-renew.timer"
-readonly MIGRATION_SRC
+ACTIVATE_IMAGE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker-activate-image"
+readonly ACTIVATE_IMAGE_DST="/usr/local/sbin/velox-worker-activate-image"
+readonly ACTIVATE_SUDOERS_DST="/etc/sudoers.d/velox-worker-activate-image"
 MIGRATION_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/migrate-legacy-worker.sh"
 readonly MIGRATION_DST="/opt/velox-worker/migrate-legacy-worker.sh"
-readonly SERVICE_SRC
 SERVICE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker.service"
 readonly SERVICE_DST="/etc/systemd/system/velox-worker.service"
 readonly IMAGE_UID="10001"
@@ -145,7 +141,9 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 
 log "Migrating legacy worker runtime if present"
-install -o root -g root -m 0755 "$MIGRATION_SRC" "$MIGRATION_DST"
+if [[ "$MIGRATION_SRC" != "$MIGRATION_DST" ]]; then
+  install -o root -g root -m 0755 "$MIGRATION_SRC" "$MIGRATION_DST"
+fi
 CANONICAL_ENV="$ENV_FILE" VELOX_STATE_DIR="${VELOX_STATE_DIR:-}" "$MIGRATION_DST"
 
 [[ -f "$ENV_FILE" ]] \
@@ -261,20 +259,32 @@ ok "cert + secret perms aligned for uid ${IMAGE_GID} (key/credential 0600 owner 
 # renewal must prove OpenBao authority. A normal reboot does not run this
 # resolver; it consumes the already materialized runtime cache.
 log "Installing OpenBao credential + PKI resolver (local key + CSR)"
-install -o root -g root -m 0755 "$FETCH_SRC" "$FETCH_DST"
-install -o root -g root -m 0755 "$MTLS_RENEW_WRAPPER_SRC" "$MTLS_RENEW_WRAPPER_DST"
+if [[ "$FETCH_SRC" != "$FETCH_DST" ]]; then
+  install -o root -g root -m 0755 "$FETCH_SRC" "$FETCH_DST"
+fi
+if [[ "$MTLS_RENEW_WRAPPER_SRC" != "$MTLS_RENEW_WRAPPER_DST" ]]; then
+  install -o root -g root -m 0755 "$MTLS_RENEW_WRAPPER_SRC" "$MTLS_RENEW_WRAPPER_DST"
+fi
 install -o root -g root -m 0644 "$MTLS_RENEW_SERVICE_SRC" "$MTLS_RENEW_SERVICE_DST"
 install -o root -g root -m 0644 "$MTLS_RENEW_TIMER_SRC" "$MTLS_RENEW_TIMER_DST"
-if [[ -n "${VELOX_OPENBAO_ADDR:-}" ]]; then
-    "$FETCH_DST" || fail "OpenBao credential/PKI resolution failed — refusing manual-file fallback"
-    ok "worker credential and mTLS material resolved by OpenBao (private key stayed local)"
-else
-    warn "OpenBao is not configured — legacy runtime files remain in use on this host"
-fi
+install -o root -g root -m 0755 "$ACTIVATE_IMAGE_SRC" "$ACTIVATE_IMAGE_DST"
+SSH_OPERATOR="${VELOX_SSH_USER:-${SUDO_USER:-}}"
+[[ -n "$SSH_OPERATOR" ]] || fail "VELOX_SSH_USER or SUDO_USER is required to install the activation sudoers rule"
+printf '%s ALL=(root) NOPASSWD: %s *\n' "$SSH_OPERATOR" "$ACTIVATE_IMAGE_DST" >"$ACTIVATE_SUDOERS_DST"
+chown root:root "$ACTIVATE_SUDOERS_DST"
+chmod 0440 "$ACTIVATE_SUDOERS_DST"
+visudo -cf "$ACTIVATE_SUDOERS_DST" >/dev/null || fail "invalid activation sudoers rule"
+[[ -n "${VELOX_OPENBAO_ADDR:-}" ]] ||
+    fail "VELOX_OPENBAO_ADDR is required for deploy convergence — use --runtime-cache only for an explicitly declared temporary outage"
+"$FETCH_DST" --provision ||
+    fail "OpenBao credential/PKI provisioning failed — refusing manual-file fallback"
+ok "worker credential and mTLS material resolved by OpenBao (private key stayed local)"
 
 # ── 3. Install canonical runtime definitions ───────────────────────────────
 log "Copying compose.yml to $COMPOSE_YML_DST"
-install -o root -g root -m 0644 "$COMPOSE_YML_SRC" "$COMPOSE_YML_DST"
+if [[ "$COMPOSE_YML_SRC" != "$COMPOSE_YML_DST" ]]; then
+  install -o root -g root -m 0644 "$COMPOSE_YML_SRC" "$COMPOSE_YML_DST"
+fi
 install -o root -g root -m 0644 "$SERVICE_SRC" "$SERVICE_DST"
 ok "compose.yml and velox-worker.service installed"
 

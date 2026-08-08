@@ -50,7 +50,8 @@ func (e *UpdateExecutor) stepContainerRunning(parent context.Context, workerID s
 }
 
 func (e *UpdateExecutor) stepHealthReady(parent context.Context, workerID string) error {
-	// Production: `docker exec velox-worker-<id> curl -fsS http://127.0.0.1:8081/health/ready`.
+	// Production: `curl -fsS --max-time 5 http://127.0.0.1:8081/health/ready`
+	// over the shared SSH client (loopback on the worker host).
 	// Tests substitute a stub that returns a canned status. The
 	// implementation is in the BackendDockerClient surface
 	// (ActivateImage / ContainerRunning) — for

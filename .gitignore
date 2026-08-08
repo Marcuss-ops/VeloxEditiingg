@@ -22,19 +22,12 @@ velox-master.pid
 # ── Production deployment artefacts (NEVER commit — see CHANGELOG) ──────────
 # These wrap any depth to catch live operator inventories / env files that
 # are generated next to test data or in sub-checkouts. Templates live under
-# `*.example` (e.g. `deploy/inventory/production.ini.example`) and stay versioned.
-# EXCEPTION (Step 11/15 fleet-operator): `deploy/ansible/inventory.ini` IS
-# the canonical versioned inventory for the new `fleet-*` serial:1 playbooks.
-# It is intentionally NOT operator-local; the canonical worker_id + IP
-# mapping ships in-tree so the playbooks run unchanged across operator
-# laptops and CI. The negation below whitelists that single path; do not
-# add similar whitelists for ad-hoc operator copies — keep the policy
-# general and break it only for the canonical ship-time inventory.
+# `*.example` and stay versioned. Runtime fleet state belongs to the Master
+# DB registry; the working inventory is operator-local.
 **/production.ini
 **/inventory.ini
 **/inventory.yml
 **/inventory.yaml
-!deploy/ansible/inventory.ini
 **/production.env
 **/.env.production
 **/vault.yml
@@ -177,6 +170,15 @@ DataServer/worker
 # it by exact path keeps the rule scoped; a future binary at this location
 # would be discovered manually rather than silently auto-tracked.
 RemoteCodex/native/worker-agent-go/installer.exe
+
+# ── Worker certification run artifacts (generated per run — NEVER commit) ──
+# pass_criteria.sh / fleet_distribute.sh / perf_matrix.sh write per-worker
+# JSON reports + drive MP4 artifacts into these dirs on every certification
+# run. They are throwaway operator-facing outputs, exactly like the other
+# "never commit" blocks above; the certification scripts themselves stay
+# versioned under tests/worker-cert/.
+tests/worker-cert/artifacts/
+tests/worker-cert/workers/
 
 # ── External Courser repo (standalone — developed in Courser/courserpierone/) ────
 Courser/

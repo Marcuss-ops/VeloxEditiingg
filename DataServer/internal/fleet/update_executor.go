@@ -17,16 +17,19 @@
 //  6. forward pipeline:
 //     a. cosign verify target_digest (with VELOX_SKIP_*
 //     override sentinel).
-//     b. ssh: docker pull <target_digest> on the worker.
-//     c. ssh: docker compose -p velox-worker-<id> restart.
-//     d. ContainerRunning poll.
-//     e. /health/ready poll via ssh curl on the worker.
-//     f. master-connection check via Registry.SessionActive
+//     b. ssh: activate <target_digest> on the worker through the
+//     canonical privileged helper (/usr/local/sbin/
+//     velox-worker-activate-image): pull + atomic
+//     VELOX_WORKER_IMAGE swap + velox-worker.service restart.
+//     c. ContainerRunning poll on the fixed `velox-worker`
+//     container (canonical project/service/container name).
+//     d. /health/ready poll via ssh curl on the worker.
+//     e. master-connection check via Registry.SessionActive
 //     + heartbeat recency.
-//     g. RunLevelD smoke (returns smoke artifact_id).
-//     h. Drive verifier confirms the smoke artifact landed.
-//     i. release an executor-owned drain and verify it is released.
-//     j. MarkSucceeded on the PENDING row → Health HEALTHY.
+//     f. RunLevelD smoke (returns smoke artifact_id).
+//     g. Drive verifier confirms the smoke artifact landed.
+//     h. release an executor-owned drain and verify it is released.
+//     i. MarkSucceeded on the PENDING row → Health HEALTHY.
 //  7. on any forward failure (cosign fail / pull fail /
 //     container unhealthy / health non-200 / master offline
 //     / smoke fail / Drive fail), UPDATES the PENDING row to
