@@ -73,7 +73,7 @@ fi
 ensure_command_available curl  || { log_error "curl missing"; exit 2; }
 ensure_command_available jq    || { log_error "jq missing"; exit 2; }
 ensure_command_available ffprobe || { log_warn "ffprobe missing: step 9 (artifact verificato) will be marked SKIPPED instead of FAIL"; }
-[[ -n "${VELOX_MASTER_URL:-}"   ]] || VELOX_MASTER_URL="http://127.0.0.1:8080"
+[[ -n "${VELOX_MASTER_URL:-}"   ]] || VELOX_MASTER_URL="http://127.0.0.1:8000"
 [[ -n "${PASS_DESTINATION_ID:-}"  ]] || { log_error "PASS_DESTINATION_ID is required; implicit Drive destinations are forbidden"; exit 2; }
 [[ -n "${PASS_POLL_TIMEOUT_S:-}"  ]] || PASS_POLL_TIMEOUT_S=180
 [[ -n "${PASS_OUT_ROOT:-}"        ]] || PASS_OUT_ROOT="${REPO_ROOT}/tests/worker-cert/workers"

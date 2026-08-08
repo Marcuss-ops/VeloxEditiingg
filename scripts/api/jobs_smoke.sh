@@ -42,11 +42,13 @@
 #
 # Environment contract:
 #   VELOX_MASTER_URL    (optional) Base URL of the Velox server.
-#                       Default: http://127.0.0.1:8080
+#                       Default: http://127.0.0.1:8000
 #   VELOX_ADMIN_TOKEN   (mandatory) Bearer for the admin surface. Source
 #                       precedence: 1. VELOX_ADMIN_TOKEN env var,
 #                       2. TOKEN_FILE env var (path to dotenv).
 #                       Both unset → exit 2.
+#   JOBS_DESTINATION_ID (optional) Delivery destination for the smoke job.
+#                       Default: drive.
 #   JOBS_IDEM_KEY       (optional) Stable idempotency key override. Default:
 #                       smoke-<hostname>-<epoch_seconds>. Override for CI
 #                       matrices that re-assert the same job on rolling deploys.
@@ -120,8 +122,10 @@ resolve_token() {
 
 ADMIN_TOKEN=$(resolve_token) || exit 2
 
+JOBS_DESTINATION_ID="${JOBS_DESTINATION_ID:-drive}"
+
 # ---- server URL -------------------------------------------------------------
-MASTER_URL="${VELOX_MASTER_URL:-http://127.0.0.1:8080}"
+MASTER_URL="${VELOX_MASTER_URL:-http://127.0.0.1:8000}"
 MASTER_URL="${MASTER_URL%/}"   # strip trailing slash
 ADMIN_KEYS_URL="${MASTER_URL}/api/v1/admin/m2m/keys"
 JOBS_URL="${MASTER_URL}/api/v1/jobs"
@@ -253,7 +257,7 @@ JOBS_PAYLOAD=$(cat <<JSON
     }
   ],
   "delivery_plan": [
-    { "destination_id": "drive", "priority": 1, "retry_budget": 1 }
+    { "destination_id": "${JOBS_DESTINATION_ID}", "priority": 1, "retry_budget": 1 }
   ]
 }
 JSON

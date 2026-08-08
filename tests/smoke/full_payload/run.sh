@@ -46,7 +46,7 @@
 #   9  selftest::forbidden-pattern hit (script regression or scenario.json drift).
 #
 # Environment:
-#   VELOX_MASTER_URL                 master base URL (default: http://127.0.0.1:8080)
+#   VELOX_MASTER_URL                 master base URL (default: http://127.0.0.1:8000)
 #   VELOX_ADMIN_TOKEN                admin bearer for /api/v1/admin/m2m/keys
 #                                    (set this OR TOKEN_FILE)
 #   TOKEN_FILE                       dotenv alternative for VELOX_ADMIN_TOKEN
@@ -116,7 +116,7 @@ done
 
 # Defaults (overridable via env). Runtime asset/worker values are intentionally
 # required below; inventing them would produce a smoke that cannot run.
-: "${VELOX_MASTER_URL:=http://127.0.0.1:8080}"
+: "${VELOX_MASTER_URL:=http://127.0.0.1:8000}"
 : "${FULLPAYLOAD_DESTINATION_ID:=}"
 if [[ -z "$FULLPAYLOAD_DESTINATION_ID" ]]; then
   log_error "FULLPAYLOAD_DESTINATION_ID is required; implicit Drive destinations are forbidden"

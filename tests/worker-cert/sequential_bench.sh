@@ -117,7 +117,7 @@ for bin in curl jq awk sed grep date python3; do
   fi
 done
 
-[[ -n "${VELOX_MASTER_URL:-}" ]] || VELOX_MASTER_URL="http://127.0.0.1:8080"
+[[ -n "${VELOX_MASTER_URL:-}" ]] || VELOX_MASTER_URL="http://127.0.0.1:8000"
 VELOX_MASTER_URL="${VELOX_MASTER_URL%/}"
 DESTINATION_ID="${DESTINATION_ID%/}"
 

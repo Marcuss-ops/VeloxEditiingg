@@ -114,7 +114,7 @@ for v in "$RECONNECT_POLL_TIMEOUT_S" "$RESTART_TIMEOUT_S" "$SMOKE_POLL_TIMEOUT_S
   fi
 done
 
-[[ -n "${VELOX_MASTER_URL:-}" ]] || VELOX_MASTER_URL="http://127.0.0.1:8080"
+[[ -n "${VELOX_MASTER_URL:-}" ]] || VELOX_MASTER_URL="http://127.0.0.1:8000"
 VELOX_MASTER_URL="${VELOX_MASTER_URL%/}"
 
 log_info "restart_reconnect target=$TARGET_WORKER_ID master=$VELOX_MASTER_URL dest=$DESTINATION_ID"

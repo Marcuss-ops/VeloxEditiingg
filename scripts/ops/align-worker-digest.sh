@@ -25,7 +25,7 @@
 #
 # Env vars (alternative to flags):
 #   VELOX_ADMIN_TOKEN   — operator admin token for fleetctl
-#   VELOX_MASTER_URL    — Master API URL (default http://127.0.0.1:8080)
+#   VELOX_MASTER_URL    — Master API URL (default http://127.0.0.1:8000)
 #   DIGEST              — target digest for make pin-worker-digest
 #   EXPECTED_COMMIT     — full 40-hex GitHub commit SHA; stale digests are refused
 #   GHCR_OWNER          — GHCR org/user for full image ref
@@ -111,7 +111,7 @@ else
   exit 2
 fi
 
-VELOX_MASTER_URL="${VELOX_MASTER_URL:-http://127.0.0.1:8080}"
+VELOX_MASTER_URL="${VELOX_MASTER_URL:-http://127.0.0.1:8000}"
 VELOX_MASTER_URL="${VELOX_MASTER_URL%/}"
 
 echo "=== align-worker-digest ==="

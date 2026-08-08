@@ -31,7 +31,7 @@
 #   ./tests/worker-cert/fleet_distribute.sh --fleet-job-count 6 --destination-id drive-production
 #
 # Environment contract:
-#   VELOX_MASTER_URL    base URL of the Velox master (default http://127.0.0.1:8080)
+#   VELOX_MASTER_URL    base URL of the Velox master (default http://127.0.0.1:8000)
 #   VELOX_ADMIN_TOKEN   operator admin token (overridable by TOKEN_FILE=...)
 #   VELOX_MASTER_BEARER bearer for M2M-submitted traffic (opt-in master-side
 #                       checks; the fleet POSTs use a freshly-minted M2M bearer)
@@ -99,7 +99,7 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
 fi
 
 FLEET_JOB_COUNT="${FLEET_JOB_COUNT:-4}"
-VELOX_MASTER_URL="${VELOX_MASTER_URL:-http://127.0.0.1:8080}"
+VELOX_MASTER_URL="${VELOX_MASTER_URL:-http://127.0.0.1:8000}"
 BEARER_ENV="${FLEET_BEARER_ENV:-VELOX_MASTER_BEARER}"
 COOLDOWN_S="${FLEET_COOLDOWN_S:-30}"
 POLL_TIMEOUT_S="${FLEET_POLL_TIMEOUT_S:-300}"

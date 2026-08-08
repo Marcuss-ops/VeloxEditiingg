@@ -82,7 +82,7 @@ Most-severe-tier ordering on the final exit: `T2 > T4 > T3 > T1`.
 
 | Env var | Default | Notes |
 |---|---|---|
-| `VELOX_MASTER_URL` | `http://127.0.0.1:8080` | master base URL |
+| `VELOX_MASTER_URL` | `http://127.0.0.1:8000` | master base URL |
 | `VELOX_ADMIN_TOKEN` | unset | admin bearer for `/api/v1/admin/m2m/keys` |
 | `TOKEN_FILE` | unset | dotenv alternative |
 | `MULTISCENE_TARGET_WORKER_ID` | unset | pinned worker_id |

@@ -180,7 +180,7 @@ wait_for_master_ready() {
   log "waiting ≤${secs}s for velox-server /health/ready..."
   local deadline=$(( $(date +%s) + secs ))
   while (( $(date +%s) < deadline )); do
-    if curl -sS --max-time 2 http://127.0.0.1:8080/health/ready 2>/dev/null | grep -q '"ready":\s*true'; then
+    if curl -sS --max-time 2 http://127.0.0.1:8000/health/ready 2>/dev/null | grep -q '"ready":\s*true'; then
       ok "master is ready"
       return 0
     fi

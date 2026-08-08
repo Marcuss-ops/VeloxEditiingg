@@ -70,7 +70,7 @@ if [[ -z "$TARGET_WORKER_ID" ]]; then
 fi
 ensure_command_available curl  || { log_error "curl missing"; exit 2; }
 ensure_command_available jq    || { log_error "jq missing"; exit 2; }
-[[ -n "${VELOX_MASTER_URL:-}"  ]] || VELOX_MASTER_URL="http://127.0.0.1:8080"
+[[ -n "${VELOX_MASTER_URL:-}"  ]] || VELOX_MASTER_URL="http://127.0.0.1:8000"
 [[ -n "${SMOKE_DESTINATION_ID:-}" ]] || { log_error "SMOKE_DESTINATION_ID is required; implicit Drive destinations are forbidden"; exit 2; }
 [[ -n "${SMOKE_POLL_TIMEOUT_S:-}" ]] || SMOKE_POLL_TIMEOUT_S=180
 [[ -n "${SMOKE_OUT_ROOT:-}"   ]] || SMOKE_OUT_ROOT="${REPO_ROOT}/tests/worker-cert/workers"

@@ -45,7 +45,7 @@
 #   --poll-timeout-s=N        poll cap seconds (default: 600)
 #
 # Environment:
-#   VELOX_MASTER_URL                master base URL (default: http://127.0.0.1:8080)
+#   VELOX_MASTER_URL                master base URL (default: http://127.0.0.1:8000)
 #   VELOX_ADMIN_TOKEN               admin bearer for /api/v1/admin/m2m/keys
 #                                   (set this OR TOKEN_FILE)
 #   TOKEN_FILE                      dotenv alternative for VELOX_ADMIN_TOKEN
@@ -132,7 +132,7 @@ if (( ARTIFACT_VERIFY == 1 )); then
 fi
 
 # Defaults (overridable via env).
-: "${VELOX_MASTER_URL:=http://127.0.0.1:8080}"
+: "${VELOX_MASTER_URL:=http://127.0.0.1:8000}"
 : "${MULTISCENE_DESTINATION_ID:=}"
 if [[ -z "$MULTISCENE_DESTINATION_ID" ]]; then
   log_error "MULTISCENE_DESTINATION_ID is required; implicit Drive destinations are forbidden"

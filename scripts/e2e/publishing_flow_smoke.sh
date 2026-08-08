@@ -57,7 +57,7 @@
 #     200     → { "external_delivery_id": "...", "status": "PRIVATE_UPLOADED|..." }
 #
 # Environment contract:
-#   VELOX_MASTER_URL                 (optional) Default: http://127.0.0.1:8080
+#   VELOX_MASTER_URL                 (optional) Default: http://127.0.0.1:8000
 #   VELOX_ADMIN_TOKEN                (mandatory) Bearer for the admin surface.
 #                                     Same dotenv precedence as
 #                                     scripts/api/jobs_smoke.sh.
@@ -187,7 +187,7 @@ if ! [[ "${PUBLISHING_WORKSPACE_ID}" =~ ^[0-9]+$ ]]; then
 fi
 
 # ---- optional knobs --------------------------------------------------------
-MASTER_URL="${VELOX_MASTER_URL:-http://127.0.0.1:8080}"
+MASTER_URL="${VELOX_MASTER_URL:-http://127.0.0.1:8000}"
 MASTER_URL="${MASTER_URL%/}"
 PLATFORM="${PUBLISHING_PLATFORM:-youtube}"
 PLATFORM_ACCOUNT_ID="${PUBLISHING_PLATFORM_ACCOUNT_ID:-}"

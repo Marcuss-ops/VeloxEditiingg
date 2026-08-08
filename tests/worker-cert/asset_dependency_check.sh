@@ -111,7 +111,7 @@ ensure_command_available df    || log_warn "df missing: probe 7 (disk) will be S
 ensure_command_available ffmpeg  || true   # may legitimately be absent; recorded as FAIL
 ensure_command_available ffprobe || true   # ditto
 
-[[ -n "${VELOX_MASTER_URL:-}"       ]] || VELOX_MASTER_URL="http://127.0.0.1:8080"
+[[ -n "${VELOX_MASTER_URL:-}"       ]] || VELOX_MASTER_URL="http://127.0.0.1:8000"
 [[ -n "${ASSET_CHK_DESTINATION_ID:-}" ]] || { log_error "ASSET_CHK_DESTINATION_ID is required; implicit Drive destinations are forbidden"; exit 2; }
 [[ -n "${ASSET_CHK_MIN_FONTS:-}"     ]] || ASSET_CHK_MIN_FONTS=3
 [[ -n "${ASSET_CHK_MIN_DISK_KB:-}"   ]] || ASSET_CHK_MIN_DISK_KB=5242880   # 5 GiB

@@ -95,7 +95,7 @@ ensure_command_available jq          || { log_error "jq missing"; exit 2; }
 ensure_command_available sha256sum   || { log_warn "sha256sum missing: probe 6 (SHA-256 round-trip) will be SKIPPED"; }
 ensure_command_available awk sed grep || { log_error "awk/sed/grep missing"; exit 2; }
 
-[[ -n "${VELOX_MASTER_URL:-}"    ]] || VELOX_MASTER_URL="http://127.0.0.1:8080"
+[[ -n "${VELOX_MASTER_URL:-}"    ]] || VELOX_MASTER_URL="http://127.0.0.1:8000"
 [[ -n "${PROBE_DESTINATION_ID:-}" ]] || { log_error "PROBE_DESTINATION_ID is required; implicit Drive destinations are forbidden"; exit 2; }
 [[ -n "${PROBE_POLL_TIMEOUT_S:-}" ]] || PROBE_POLL_TIMEOUT_S=180
 [[ -n "${PROBE_OUT_ROOT:-}"       ]] || PROBE_OUT_ROOT="${REPO_ROOT}/tests/worker-cert/workers"

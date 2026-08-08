@@ -42,7 +42,7 @@ tests/smoke/full_payload/run.sh --mode=selftest
 
 # Operator shape: full HTTP submit + poll + evidence (writes
 # tests/smoke/full_payload/evidence/run-<EPOCH>.json).
-VELOX_MASTER_URL=http://127.0.0.1:8080 \
+VELOX_MASTER_URL=http://127.0.0.1:8000 \
 VELOX_ADMIN_TOKEN="$(cat /etc/velox/admin.token)" \
 TOKEN_FILE=/etc/velox/admin.env \
 tests/smoke/full_payload/run.sh
@@ -54,7 +54,7 @@ tests/smoke/full_payload/run.sh
 
 | Variable | Default | Notes |
 |---|---|---|
-| `VELOX_MASTER_URL`               | `http://127.0.0.1:8080` | master HTTP base. Trim trailing `/`. |
+| `VELOX_MASTER_URL`               | `http://127.0.0.1:8000` | master HTTP base. Trim trailing `/`. |
 | `VELOX_ADMIN_TOKEN`              | _required_ for `--mode=submit` | bearer for `/api/v1/admin/m2m/keys` |
 | `TOKEN_FILE`                     | _unset_                 | dotenv alternative; first `VELOX_ADMIN_TOKEN=` line wins |
 | `FULLPAYLOAD_DESTINATION_ID`     | **required**            | `delivery_plan[0].destination_id` |

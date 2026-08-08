@@ -141,7 +141,7 @@ if [[ -z "$DESTINATION_ID" ]]; then
 fi
 
 # Trailing-slash trim on URL so the join with explicit /api/v1/jobs is clean.
-[[ -n "${VELOX_MASTER_URL:-}" ]] || VELOX_MASTER_URL="http://127.0.0.1:8080"
+[[ -n "${VELOX_MASTER_URL:-}" ]] || VELOX_MASTER_URL="http://127.0.0.1:8000"
 VELOX_MASTER_URL="${VELOX_MASTER_URL%/}"
 
 # Numeric-validate the user-provided tunables up front so a typo is rc=2,

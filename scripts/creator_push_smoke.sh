@@ -21,7 +21,9 @@
 #                         2. TOKEN_FILE env var (path to dotenv with KEY=VALUE)
 #                       Either is sufficient; both unset → exit 2.
 #   VELOX_MASTER_URL    (optional) Base URL of the Velox server.
-#                       Default: http://127.0.0.1:8080
+#                       Default: http://127.0.0.1:8000
+#   PUSH_DESTINATION_ID (optional) Delivery destination for the smoke job.
+#                       Default: drive.
 #   CREATOR_PUSH_DEBUG  (optional) If set to "1", curl emits verbose trace and
 #                       the raw response body is dumped to ${CREATOR_PUSH_DEBUG_LOG}.
 #
@@ -93,9 +95,10 @@ resolve_token() {
 ADMIN_TOKEN=$(resolve_token) || exit 2
 
 # ---- server URL -------------------------------------------------------------
-MASTER_URL="${VELOX_MASTER_URL:-http://127.0.0.1:8080}"
+MASTER_URL="${VELOX_MASTER_URL:-http://127.0.0.1:8000}"
 # strip trailing slash to keep URL building deterministic
 MASTER_URL="${MASTER_URL%/}"
+PUSH_DESTINATION_ID="${PUSH_DESTINATION_ID:-drive}"
 ENDPOINT="${MASTER_URL}/api/v1/creator/jobs"
 
 # ---- payload ----------------------------------------------------------------
@@ -134,6 +137,10 @@ PAYLOAD=$(cat <<'JSON'
 }
 JSON
 )
+
+# Override the destination from env (heredoc is quoted, so apply via jq).
+PAYLOAD=$(printf '%s' "$PAYLOAD" | jq --arg dest "$PUSH_DESTINATION_ID" \
+  '.payload.delivery_plan = [.payload.delivery_plan[0] | .destination_id = $dest]')
 
 # ---- curl invocation --------------------------------------------------------
 # -sS   : silent-on-progress, still print errors
