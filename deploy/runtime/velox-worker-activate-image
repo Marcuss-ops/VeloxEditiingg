@@ -39,5 +39,22 @@ trap - EXIT
 
 systemctl restart velox-worker.service
 systemctl is-active --quiet velox-worker.service
-docker inspect --format '{{.Config.Image}}' velox-worker | grep -Fx "$IMAGE" >/dev/null
-curl -fsS --max-time 10 http://127.0.0.1:8081/health/ready >/dev/null
+
+for _ in $(seq 1 60); do
+  if docker inspect --format '{{.Config.Image}} {{.State.Running}}' velox-worker 2>/dev/null \
+      | grep -Fx "$IMAGE true" >/dev/null; then
+    break
+  fi
+  sleep 2
+done
+docker inspect --format '{{.Config.Image}} {{.State.Running}}' velox-worker \
+  | grep -Fx "$IMAGE true" >/dev/null
+
+for _ in $(seq 1 30); do
+  if curl -fsS --max-time 10 http://127.0.0.1:8081/health/ready >/dev/null; then
+    exit 0
+  fi
+  sleep 2
+done
+echo "worker readiness timeout after image activation" >&2
+exit 1
