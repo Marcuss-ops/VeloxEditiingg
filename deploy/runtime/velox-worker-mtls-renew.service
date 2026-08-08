@@ -1,0 +1,14 @@
+[Unit]
+Description=Renew Velox worker mTLS certificate from OpenBao PKI
+Documentation=https://github.com/Marcuss-ops/VeloxEditiingg/tree/main/deploy/runtime
+ConditionPathExists=/etc/velox-worker/worker.env
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/velox-worker/worker.env
+# The resolver renews only inside the configured expiry window; --renew is
+# reserved for an explicit operator-forced rotation.
+ExecStart=/bin/bash /opt/velox-worker/velox-worker-mtls-renew.sh

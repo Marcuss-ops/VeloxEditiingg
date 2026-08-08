@@ -4,8 +4,10 @@
 # sostituito da provision-policies.sh con l'ID del worker (es.
 # host_57_129_132_133), generando la policy `worker-<id>`.
 #
-# Il worker può leggere SOLO il proprio ramo:
-#   velox/production/workers/<WORKER_ID>/*   (credential + certificato mTLS)
+# Il worker può leggere SOLO la propria credential statica in KV:
+#   velox/production/workers/<WORKER_ID>/credential
+# Il materiale mTLS non vive in KV: la chiave privata nasce sul worker e il
+# certificato/CA ritornano dal flusso CSR verso OpenBao PKI.
 #
 # Un worker compromesso espone quindi UN SOLO worker, non la fleet:
 # non vede i credential degli altri worker, né i token del master, né

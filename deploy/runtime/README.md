@@ -11,10 +11,11 @@ worker-image.yml` (which builds and publishes the worker image).
 |---|---|
 | `compose.yml` | The sole Compose service definition; fixed project/container names, hardened mounts, and readiness healthcheck. |
 | `velox-worker.service` | The sole systemd owner; systemd starts/stops the fixed Compose project and never runs a second worker process. |
+| `velox-worker-mtls-renew.service` / `.timer` | Daily proactive PKI renewal; the oneshot invokes the canonical CSR resolver and restarts the active worker only after a new bundle is selected. |
 | `migrate-legacy-worker.sh` | One-time, idempotent migration of per-host units, containers, env files, and persistent state. |
 | `compose.chronon.yml` | Configuration reference for Chronon settings consumed by the canonical Compose service; startup remains owned by `velox-worker.service`. |
 | `worker.env.example` | Template for `/etc/velox-worker/worker.env`, the only runtime env path. |
-| `openbao-fetch-worker-secrets.sh` | Optional OpenBao resolver: fetches `worker_credential` + mTLS triple via the worker's AppRole identity and writes them to the canonical paths (fallback on hand-copied files until migration completes). |
+| `openbao-fetch-worker-secrets.sh` | OpenBao resolver: reads only `worker_credential` from KV, generates the mTLS private key locally, submits a CSR to the per-worker PKI role, and atomically materializes the signed certificate/CA. Configured production hosts fail closed instead of using hand-copied mTLS files. |
 | `prepare-host.sh` | Idempotent migration + setup + digest pull + systemd convergence. Runs the OpenBao resolver when `VELOX_OPENBAO_ADDR` is set. |
 
 ## First-time setup on a fresh worker host
@@ -30,24 +31,27 @@ $EDITOR /etc/velox-worker/worker.env
 # (public IP or DNS of the master), VELOX_STATE_DIR, VELOX_WORKER_IMAGE
 # (= ghcr.io/<owner>/velox-worker@sha256:<digest>).
 
-# 3. Drop TLS cert and credential files (read-only):
-sudo install -d /etc/velox-worker/certs /etc/velox-worker/secrets
-sudo install -m 0600 worker.crt worker.key ca.crt /etc/velox-worker/certs/
-sudo install -m 0600 worker_credential    /etc/velox-worker/secrets/
-
-# 3b. OPTIONAL — resolve the same files from OpenBao (AppRole per-worker)
-# instead of hand-copying them (see docs/openbao-identity-matrix.md).
-# Drop the worker's AppRole material (0600) and set VELOX_OPENBAO_ADDR in
-# /etc/velox-worker/worker.env:
-sudo install -d -m 0700 /etc/velox-worker/secrets/approle
-sudo install -m 0600 role-id   /etc/velox-worker/secrets/approle/role-id
+# 3. Install only bootstrap inputs; never upload worker.key to OpenBao:
+sudo install -d /etc/velox-worker/certs /etc/velox-worker/secrets/approle
+sudo install -m 0600 role-id /etc/velox-worker/secrets/approle/role-id
 sudo install -m 0600 secret-id /etc/velox-worker/secrets/approle/secret-id
+sudo install -m 0644 openbao-ca.crt /etc/velox-worker/certs/openbao-ca.crt
+# The resolver selects /etc/velox-worker/certs/current atomically; the
+# container mounts that selected bundle read-only.
+
+# 3b. OpenBao PKI enrollment (AppRole per-worker): the resolver generates
+# worker.key locally, sends only a CSR to pki/sign/worker-<worker-id>, validates
+# the returned chain, and atomically materializes worker.crt/worker.key/ca.crt.
+# Set VELOX_OPENBAO_ADDR in /etc/velox-worker/worker.env:
 # VELOX_OPENBAO_ADDR=https://127.0.0.1:8200   (loopback/tunnel verso il master)
 # VELOX_OPENBAO_CA_FILE=/etc/velox-worker/certs/openbao-ca.crt
 # Il certificato pubblico server.crt deve essere distribuito insieme al
 # materiale AppRole; senza CA il resolver fallisce chiuso (mai -k).
-# prepare-host.sh invokes openbao-fetch-worker-secrets.sh; if the fetch fails
-# and the hand-copied files exist, the bootstrap continues with a warning.
+# prepare-host.sh invokes the resolver and enables the daily renewal timer;
+# configured production hosts do not fall back to manually copied cert/key files.
+# The resolver writes
+# .openbao-pki-issued only after successful CSR enrollment; --check rejects
+# bundles that lack this provenance marker.
 
 # 4. On a legacy host, migrate once before the first canonical start:
 sudo deploy/runtime/migrate-legacy-worker.sh

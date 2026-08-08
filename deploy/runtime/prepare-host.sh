@@ -45,6 +45,15 @@ readonly COMPOSE_YML_DST="/opt/velox-worker/compose.yml"
 readonly FETCH_SRC
 FETCH_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/openbao-fetch-worker-secrets.sh"
 readonly FETCH_DST="/opt/velox-worker/openbao-fetch-worker-secrets.sh"
+readonly MTLS_RENEW_SERVICE_SRC
+MTLS_RENEW_SERVICE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker-mtls-renew.service"
+readonly MTLS_RENEW_WRAPPER_SRC
+MTLS_RENEW_WRAPPER_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker-mtls-renew.sh"
+readonly MTLS_RENEW_WRAPPER_DST="/opt/velox-worker/velox-worker-mtls-renew.sh"
+readonly MTLS_RENEW_SERVICE_DST="/etc/systemd/system/velox-worker-mtls-renew.service"
+readonly MTLS_RENEW_TIMER_SRC
+MTLS_RENEW_TIMER_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker-mtls-renew.timer"
+readonly MTLS_RENEW_TIMER_DST="/etc/systemd/system/velox-worker-mtls-renew.timer"
 readonly MIGRATION_SRC
 MIGRATION_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/migrate-legacy-worker.sh"
 readonly MIGRATION_DST="/opt/velox-worker/migrate-legacy-worker.sh"
@@ -197,6 +206,8 @@ ok "worker_config.json exists and parses as JSON (existing metadata preserved)"
 # ── 1. Canonical directory tree ────────────────────────────────────────────
 log "Creating /opt, /etc, and state directory tree"
 mkdir -p /opt/velox-worker /etc/velox-worker/certs /etc/velox-worker/secrets
+# The mTLS resolver atomically selects /etc/velox-worker/certs/current;
+# keep the parent traversable and the selected bundle read-only to the worker.
 ensure_dir_preserving "$VELOX_STATE_DIR" "$IMAGE_UID" "$IMAGE_GID" 0750
 for state_subdir in state work cache output; do
     ensure_dir_preserving "$VELOX_STATE_DIR/$state_subdir" "$IMAGE_UID" "$IMAGE_GID" 0750
@@ -228,9 +239,9 @@ ok "/etc/velox-worker/{certs,secrets} mode 0750 root:${IMAGE_GID} (worker can tr
 # worker_credential must be OWNED by ${IMAGE_UID}:${IMAGE_GID} (not root) or
 # the container cannot read them through the :ro bind-mounts at mode 0600.
 for spec in \
-    /etc/velox-worker/certs/worker.crt:0644:root \
-    /etc/velox-worker/certs/ca.crt:0644:root \
-    /etc/velox-worker/certs/worker.key:0600:${IMAGE_UID} \
+    /etc/velox-worker/certs/current/worker.crt:0644:root \
+    /etc/velox-worker/certs/current/ca.crt:0644:root \
+    /etc/velox-worker/certs/current/worker.key:0600:${IMAGE_UID} \
     /etc/velox-worker/secrets/worker_credential:0600:${IMAGE_UID} ; do
     spec_path="${spec%:*:*}"
     spec_mode="${spec#*:}"; spec_mode="${spec_mode%:*}"
@@ -241,31 +252,24 @@ for spec in \
 done
 ok "cert + secret perms aligned for uid ${IMAGE_GID} (key/credential 0600 owner ${IMAGE_UID})"
 
-# ── 2.5. OpenBao secret resolution (migrazione, con fallback sul file) ──────
-# Se VELOX_OPENBAO_ADDR è valorizzato in worker.env, worker_credential + la
-# coppia mTLS vengono risolti da OpenBao via AppRole (machine identity del
-# worker) da deploy/runtime/openbao-fetch-worker-secrets.sh, invece del file
-# copiato a mano. Finché la migrazione non è completata il fallback resta sui
-# file esistenti: se il fetch fallisce ma i file ci sono tutti, si prosegue
-# con un warning (i path canonici non cambiano). Se invece un file manca,
-# il bootstrap fallisce fail-closed.
-log "Installing OpenBao secret resolver (worker_credential + mTLS via AppRole)"
+# ── 2.5. OpenBao credential + PKI mTLS resolution ───────────────────────────
+# When VELOX_OPENBAO_ADDR is configured, the resolver authenticates with this
+# worker's AppRole, reads only its KV credential, generates the mTLS private key
+# locally, submits a CSR to the worker's OpenBao PKI role, and materializes the
+# signed certificate/CA atomically. There is deliberately no fallback to a
+# hand-copied certificate/key once OpenBao is configured: deployment and
+# renewal must prove OpenBao authority. A normal reboot does not run this
+# resolver; it consumes the already materialized runtime cache.
+log "Installing OpenBao credential + PKI resolver (local key + CSR)"
 install -o root -g root -m 0755 "$FETCH_SRC" "$FETCH_DST"
-if ! "$FETCH_DST"; then
-    warn "OpenBao fetch FAILED (migrazione in corso?) — fallback sui file esistenti"
-    for f in \
-        /etc/velox-worker/certs/worker.crt \
-        /etc/velox-worker/certs/worker.key \
-        /etc/velox-worker/certs/ca.crt \
-        /etc/velox-worker/secrets/worker_credential ; do
-        # -s (non vuoto): un file vuoto/rovinato non è un fallback valido —
-        # il worker fallirebbe la registrazione sul master (credential_hash)
-        [[ -s "$f" ]] \
-            || fail "OpenBao fetch fallito e $f mancante O vuoto — completa la migrazione OpenBao o ripristina i file (fallback non disponibile)"
-    done
-    warn "fallback attivo: il worker userà i file esistenti (migrazione OpenBao non completata)"
+install -o root -g root -m 0755 "$MTLS_RENEW_WRAPPER_SRC" "$MTLS_RENEW_WRAPPER_DST"
+install -o root -g root -m 0644 "$MTLS_RENEW_SERVICE_SRC" "$MTLS_RENEW_SERVICE_DST"
+install -o root -g root -m 0644 "$MTLS_RENEW_TIMER_SRC" "$MTLS_RENEW_TIMER_DST"
+if [[ -n "${VELOX_OPENBAO_ADDR:-}" ]]; then
+    "$FETCH_DST" || fail "OpenBao credential/PKI resolution failed — refusing manual-file fallback"
+    ok "worker credential and mTLS material resolved by OpenBao (private key stayed local)"
 else
-    ok "worker secrets risolti (OpenBao) o non configurati (file a mano)"
+    warn "OpenBao is not configured — legacy runtime files remain in use on this host"
 fi
 
 # ── 3. Install canonical runtime definitions ───────────────────────────────
@@ -314,6 +318,9 @@ ok "image pulled"
 # ── 5. Bring up the canonical systemd-owned runtime ────────────────────────
 cd /opt/velox-worker
 if [[ -d /run/systemd/system ]] && systemctl daemon-reload >/dev/null 2>&1; then
+    if [[ -n "${VELOX_OPENBAO_ADDR:-}" ]]; then
+        systemctl enable --now velox-worker-mtls-renew.timer
+    fi
     systemctl enable --now velox-worker.service
     systemctl is-active --quiet velox-worker.service \
         || fail "velox-worker.service did not become active"

@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily Velox worker mTLS renewal check
+Documentation=https://github.com/Marcuss-ops/VeloxEditiingg/tree/main/deploy/runtime
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=24h
+RandomizedDelaySec=30min
+Persistent=true
+Unit=velox-worker-mtls-renew.service
+
+[Install]
+WantedBy=timers.target

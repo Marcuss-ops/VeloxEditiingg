@@ -23,12 +23,12 @@
 
 ## 2. Matrice
 
-| Principal (AppRole role) | Policy OpenBao | Accesso KV (path) | Capabilities | Token TTL | Materiale | Consumatore |
+| Principal (AppRole role) | Policy OpenBao | Accesso KV/PKI | Capabilities | Token TTL | Materiale | Consumatore |
 |---|---|---|---|---|---|---|
-| `worker-host_57_129_132_133` | `worker-host_57_129_132_133` | `velox/production/workers/host_57_129_132_133/*` | `read, list` | 1h (max 24h) | `.velox/openbao/approle/worker-host_57_129_132_133/{role-id,secret-id}` | worker VPS 57.129.132.133 |
-| `worker-host_57_131_20_173` | `worker-host_57_131_20_173` | `velox/production/workers/host_57_131_20_173/*` | `read, list` | 1h (max 24h) | idem | worker VPS 57.131.20.173 |
-| `worker-velox-worker-13197` | `worker-velox-worker-13197` | `velox/production/workers/velox-worker-13197/*` | `read, list` | 1h (max 24h) | idem | worker VPS 149.56.131.97 |
-| `worker-velox-worker-523925eb` | `worker-velox-worker-523925eb` | `velox/production/workers/velox-worker-523925eb/*` | `read, list` | 1h (max 24h) | idem | worker VPS 51.222.204.158 |
+| `worker-host_57_129_132_133` | `worker-host_57_129_132_133` | credential KV + `pki/sign/worker-host_57_129_132_133` | KV `read,list`; PKI `update` only on own sign role | 1h (max 24h) | `.velox/openbao/approle/worker-host_57_129_132_133/{role-id,secret-id}` | worker VPS 57.129.132.133 |
+| `worker-host_57_131_20_173` | `worker-host_57_131_20_173` | credential KV + `pki/sign/worker-host_57_131_20_173` | KV `read,list`; PKI `update` only on own sign role | 1h (max 24h) | idem | worker VPS 57.131.20.173 |
+| `worker-velox-worker-13197` | `worker-velox-worker-13197` | credential KV + `pki/sign/velox-worker-13197` | KV `read,list`; PKI `update` only on own sign role | 1h (max 24h) | idem | worker VPS 149.56.131.97 |
+| `worker-velox-worker-523925eb` | `worker-velox-worker-523925eb` | credential KV + `pki/sign/velox-worker-523925eb` | KV `read,list`; PKI `update` only on own sign role | 1h (max 24h) | idem | worker VPS 51.222.204.158 |
 | `master` | `master` | `velox/production/master/*` **+** `velox/production/workers/*` **+** `velox/production/services/registry/*` | `read, list` | 1h (max 24h) | `.velox/openbao/approle/master/{role-id,secret-id}` | deploy master (env, gRPC, fleet, registry pull) |
 | `admin` | `admin` | `velox/*` + `auth/approle/*` + `sys/policies/acl/*` + `ssh/*` + `sys/health` | `create, read, update, delete, list` (velox/approle/policies/ssh); `read` (health) | 1h (max 24h) | `.velox/openbao/approle/admin/{role-id,secret-id}` | operatore (provisioning, rotazione, gestione CA SSH) |
 | `ssh-operator` | `ssh-operator` | `ssh/sign/*` (update) + `ssh/config/ca` + `ssh/roles/*` (read) + `sys/health` | `update` (sign); `read` (ca/roles/health) | 1h (max 24h) | `.velox/openbao/approle/ssh-operator/{role-id,secret-id}` | unico percorso operativo per firma certificati SSH (fase 7) |
@@ -73,12 +73,11 @@ se la verifica non riesce, il check fallisce — niente pass vacui).
 
 ## 4. Certificati (lettura del proprio certificato)
 
-Il policy worker copre **tutto il proprio ramo**
-(`velox/data/production/workers/<id>/*` + `velox/metadata/.../*`): quando i leaf
-mTLS passeranno a OpenBao (fase PKI), la chiave/cert del worker vivrà nel proprio
-ramo (`velox/production/workers/<id>/cert*`) e sarà già coperta — nessuna policy
-aggiuntiva necessaria. Se in futuro la PKI userà un engine dedicato (`pki/`),
-il template `worker.hcl.tmpl` andrà esteso con il path corrispondente.
+Il policy worker legge il proprio `credential` KV e può usare soltanto
+`pki/sign/worker-<id>`. La private key nasce localmente e il certificato/CA
+vengono materializzati sul worker; nessun `cert/*` e nessuna `worker.key` vive
+nel KV. Il template nega esplicitamente `pki/issue`, `pki/roles/*` e
+`pki/config/*`.
 
 ## 5. Operazioni
 
@@ -98,13 +97,12 @@ il template `worker.hcl.tmpl` andrà esteso con il path corrispondente.
 
 1. ✅ ~~Distribuire `role-id`/`secret-id` ai nodi~~ — il materiale vive nello
    state-dir; su ogni host va copiato in `/etc/velox-worker/secrets/approle/`
-   (0600, Ansible `no_log`).
-2. ✅ ~~Migrazione `worker_credential` + mTLS in OpenBao~~ — risolta a livello
-   di **host bootstrap** (NON del worker agent): `deploy/runtime/openbao-fetch-worker-secrets.sh`
-   fa login AppRole per-worker e scrive `worker_credential` + coppia mTLS nei
-   path canonici (permessi RW-PROD-001 A2), con **fallback sui file esistenti**
-   finché la migrazione non è completa (`prepare-host.sh` §2.5). Verifica:
-   `--check` (sha256 locale vs OpenBao) e `scripts/ci/test-openbao-worker-secrets.sh`.
+   (0600, Ansible `no_log`).2. ✅ ~~Worker credential + mTLS CSR flow~~ — `deploy/runtime/openbao-fetch-worker-secrets.sh`
+   legge `worker_credential` da KV, genera la private key localmente, invia il
+   CSR al ruolo PKI dedicato, valida catena/identità/coppia e materializza il
+   bundle. `--check` richiede anche la provenienza `.openbao-pki-issued`; test:
+   `scripts/ci/test-openbao-worker-secrets.sh`.
+
 3. Worker agent: sostituzione di `VELOX_WORKER_SECRET` come fonte di identità
    (login AppRole diretto nel processo — post-fase, quando OpenBao sarà
    raggiungibile dai nodi senza tunnel).

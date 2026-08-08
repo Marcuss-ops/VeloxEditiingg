@@ -34,6 +34,7 @@ deploy/openbao/
 │   ├── verify-kv.sh             # albero KV con versioni (mai valori)
 │   ├── provision-policies.sh    # policy ACL da policies/ (idempotente, change-detection)
 │   ├── provision-approle.sh     # AppRole per principal + role-id/secret-id (0600)
+│   ├── provision-pki.sh          # PKI mount + per-worker CSR signing roles
 │   ├── verify-approle.sh        # login reale + check autorizzazioni positivi/negativi
 │   ├── migrate-master-tokens.sh # env → KV (una tantum, --force, fail-closed)
 │   ├── resolve-master-tokens.sh # KV → extra-vars Ansible vault_velox_* (0600)
@@ -216,10 +217,8 @@ OPENBAO_VALUES_FILE=.velox/openbao/values.env ./scripts/provision-kv.sh
   assoluto via `realpath`) → prompt interattivo `read -s`.
 - Il file valori (`.velox/openbao/values.env`) è in formato `NOME=valore`,
   **una riga per secret, LF** (niente CRLF — il CR viene comunque strippato).
-  ⚠️ **Niente valori multi-line qui**: i PEM dei cert worker
-  (`WORKER_CERT/KEY/CA`) vanno passati SOLO via env
-  (`OPENBAO_VALUE_WORKER_CERT="$(cat worker.crt)"` …), mai nel values-file
-  (troncherebbe il PEM alla prima riga → chiave corrotta).
+  ⚠️ **Nessun PEM mTLS viene provisionato nel KV**: `worker.key` nasce sul
+  worker e il certificato viene emesso tramite `provision-pki.sh` + CSR.
 - I secret già presenti vengono **saltati** (idempotenza); `--force` crea una
   nuova versione KV.
 - La scrittura avviene via **REST API** (`/v1/velox/data/...`) con il valore
@@ -245,8 +244,8 @@ con policy least-privilege. Matrice completa: `docs/openbao-identity-matrix.md`.
 - **Policy** (`policies/`): `master.hcl` (read `master/*` + `workers/*` +
   `services/registry/*` — per i token migrati), `admin.hcl` (CRUD `velox/*` +
   `auth/approle/*` + `sys/policies/acl/*`), `worker.hcl.tmpl` → `worker-<id>`
-  (read SOLO del proprio ramo — credential + cert mTLS sotto
-  `velox/production/workers/<id>/*`).
+  (read SOLO il proprio credential KV e `update` esclusivamente su
+  `pki/sign/worker-<id>`; nessun accesso a `pki/issue`, ruoli o config).
 - **Materiale**: `role-id` + `secret-id` in
   `.velox/openbao/approle/<principal>/{role-id,secret-id}` (0600, gitignored) —
   MAI in repo, MAI stampati da script.
@@ -317,7 +316,39 @@ impostato: risolve il vars file e lo inietta con `-e @/tmp/openbao-vars.yml`
 (extra-vars condizionali). Senza `OPENBAO_ADDR` il flusso ansible-vault resta
 **identico** — il deploy non si rompe.
 
-## 11. SSH Certificate Authority (fase 7)
+## 11. PKI mTLS — key locale, CSR e rinnovo
+
+Il mount PKI dedicato emette i certificati client senza ricevere la private key:
+
+```bash
+# First run: import the approved online intermediate; keep the Root CA offline.
+OPENBAO_PKI_INTERMEDIATE_CERT=/secure/velox/intermediate.crt \
+OPENBAO_PKI_INTERMEDIATE_KEY=/secure/velox/intermediate.key \
+./scripts/provision-pki.sh --workers "host_57_129_132_133 host_57_131_20_173 velox-worker-13197 velox-worker-523925eb"
+```
+
+Il primo provisioning importa (solo se il mount non ha già un issuer) l’intermediate
+approvato in `pki/config/ca`; la Root CA resta offline e le variabili di import
+sono lette da file protetti, mai dal repository. Per ogni worker viene configurato
+`pki/roles/worker-<worker-id>` con CN esatto,
+TTL e max TTL limitati, EKU `ClientAuth` e policy AppRole che consente solo
+`pki/sign/worker-<worker-id>`. Il worker esegue il resolver canonico:
+
+1. login AppRole e lettura della sola `worker_credential` da KV;
+2. generazione locale di una nuova chiave EC P-256;
+3. creazione CSR con CN uguale a `VELOX_WORKER_ID`;
+4. POST del solo CSR a `pki/sign/worker-<worker-id>`;
+5. validazione CN, corrispondenza chiave/certificato e catena CA;
+6. promozione del bundle tramite staging/rollback guard.
+
+`worker.key` non viene mai scritto in KV, incluso il provisioning legacy. Un
+rinnovo forzato usa `--renew`; il rinnovo automatico avviene quando il
+certificato entra nella finestra `VELOX_MTLS_RENEW_BEFORE_SECONDS` (default 7
+giorni). Un errore di firma lascia intatto il bundle precedente. Con
+`VELOX_OPENBAO_ADDR` configurato `prepare-host.sh` fallisce chiuso e non usa
+file mTLS copiati manualmente.
+
+## 12. SSH Certificate Authority (fase 7)
 
 Guida completa: `docs/openbao-ssh-ca.md`. Il secrets engine `ssh` di OpenBao
 firma i certificati degli operatori (TTL **breve**, default 30m, principals
@@ -351,7 +382,7 @@ BAO_TOKEN="$(curl -fsS --cacert "${OPENBAO_CA_FILE:-../../.velox/openbao/tls/ser
   smoke live completo con login AppRole `ssh-operator` e firma (se OpenBao è
   raggiungibile).
 
-## 12. Backup delle chiavi (FATTO SUBITO)
+## 13. Backup delle chiavi (FATTO SUBITO)
 
 ```bash
 # fuori dal repo:
@@ -365,7 +396,7 @@ token, i secret in OpenBao sono irrecuperabili. Dopo il backup offline puoi
 eliminare i file locali (il bootstrap li rigenera solo con un re-init, che
 distrugge i dati).
 
-## 13. Operazioni quotidiane
+## 14. Operazioni quotidiane
 
 | Operazione | Comando |
 |---|---|
@@ -376,18 +407,16 @@ distrugge i dati).
 | Upgrade | aggiorna `OPENBAO_IMAGE` in `.env` con un riferimento `@sha256`, poi `docker compose pull && docker compose up -d` |
 | Interfaccia UI | https://127.0.0.1:8200/ui (richiede token; importa/trusta il certificato pubblico server.crt) |
 
-## 14. Prossimi passi della migrazione
+## 15. Prossimi passi della migrazione
 
 1. ~~**KV store**~~ ✅ implementato (`deploy/openbao/scripts/provision-kv.sh`,
    gerarchia in §8 sopra).
 2. ~~**AppRole per-worker** + policy per-worker (least privilege)~~ ✅ implementato
    (§9 + `docs/openbao-identity-matrix.md`).
-3. ✅ ~~Migrazione `worker_credential` + mTLS in OpenBao~~ — bootstrap worker:
-   `deploy/runtime/openbao-fetch-worker-secrets.sh` (login AppRole, fetch
-   credential + cert dal KV, scrittura nei path canonici, `--check`),
-   integrato in `prepare-host.sh` con fallback sui file esistenti; test in
-   `scripts/ci/test-openbao-worker-secrets.sh`. I secret dei cert vivono in
-   `velox/production/workers/<id>/cert/{cert,key,ca}` (opzionali).
+3. ✅ ~~Worker credential + mTLS CSR flow~~ — `deploy/runtime/openbao-fetch-worker-secrets.sh`
+   legge la credential da KV, genera la private key sul worker, invia il CSR a
+   `pki/sign/worker-<id>`, valida e materializza cert/CA in modo sicuro; `worker.key`
+   non entra mai in OpenBao. Test: `scripts/ci/test-openbao-worker-secrets.sh`.
 4. Distribuire `role-id`/`secret-id` sui nodi worker/master
    (`/etc/velox-worker/secrets/approle/`, 0600, Ansible `no_log`).
 5. ✅ ~~Migrazione dei token master~~ — `migrate-master-tokens.sh` (env → KV,
@@ -400,7 +429,7 @@ distrugge i dati).
 7. PKI mTLS (leaf per-worker dal secrets engine `pki`), credenziali DB
    dinamiche, `SecretResolver` in Go.
 
-## 15. Riferimenti
+## 16. Riferimenti
 
 - OpenBao docs: https://openbao.org/docs/
 - Config: `config/bao.hcl` (raft + listener TLS)
