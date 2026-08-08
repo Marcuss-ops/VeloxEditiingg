@@ -135,11 +135,11 @@ scripts/fleetctl update <worker_id> \
   "canary rollout"
 ```
 
-The internal API-delegate playbook `deploy/playbooks/fleet-update.yml`, where
-still enabled for server-side compatibility orchestration, posts the same
-operation (`POST /api/v1/admin/workers/{worker_id}/update`, with
-`update_target_digest=sha256:<64 hex>`) and polls the ledger. It is not an
-operator entrypoint; operators use `scripts/fleetctl`.
+The retained API-delegate artifact `deploy/playbooks/fleet-update.yml` documents
+the same operation contract (`POST /api/v1/admin/workers/{worker_id}/update`,
+with `update_target_digest=sha256:<64 hex>`) and polling behavior. It is not
+currently executable because its historical `group_vars` inputs were retired;
+it is not an operator entrypoint. Operators use `scripts/fleetctl`.
 
 The definitive path must consume an immutable digest, not a version tag:
 
@@ -245,8 +245,9 @@ worker, and investigate before touching the next host.
 
 - `docs/operations/fleetctl.md` — operator command reference.
 - `docs/worker_deployment.md` — worker layout and compatibility details.
-- `deploy/playbooks/fleet-update.yml` — internal Master API/FleetController
-  delegate (scheduled for removal).
+- `deploy/playbooks/fleet-update.yml` — retained, non-executable API-contract
+  artifact; do not invoke it directly while its retired `group_vars` inputs
+  remain unresolved.
 - `DataServer/data/ansible/playbooks/update_workers.yml` — Master-side legacy
   bundle bridge (inventory generated from the `WorkerNodeRegistry` DB).
 - `.github/workflows/worker-image.yml` — build, sign, and certify image.
