@@ -124,14 +124,56 @@ followups.
   before the 2026-07-28 commit) and unrelated to the AGENTS-plan
   test-file refactor; tracked as followups.
 
-  **RESOLVED** (2026-08-07 verification, main HEAD): the four failures
-  were caused by the canonical delivery-plan validator rejecting calendar
-  events (`delivery_plan: explicit delivery plan required`) because
-  `submitCalendarJob` injected no explicit default delivery plan, and the
-  test env had no `calendar_noop` destination row for the validator to
-  admit. Fixes `4630ab2a` (inject explicit default delivery_plan in
-  submitCalendarJob) + `eec0cbfe` (seed `calendar_noop` in the test env),
-  which landed on `agent/production-path-certification` and reached main
   through the `09940dd6` reconcile commit. `go test -count=1
   ./internal/handlers/server/calendar/...` now passes, including under
   `-race`; re-verified with `-count=3`. No further action required.
+
+**2026-08-08 deployment** of the gate surfaced:
+
+- `TestEnqueue_ConcurrentForwardingRetriesConverge` in
+  `DataServer/internal/jobs/enqueue/enqueue_forwarding_concurrency_test.go`
+  — fails intermittently (atomic create persistence error) only under the
+  full-module gate load, passes deterministically in isolation
+  (`go test -count=1 -run TestEnqueue_ConcurrentForwardingRetriesConverge
+  ./internal/jobs/enqueue/` passes 3/3). Unrelated to the `ssh-check`
+  worker-name work surfaced alongside it (that surface lives in
+  `internal/fleet` + `internal/handlers/server/api`). Tracked as a
+  followup: likely a timing/concurrency flake under aggregate load rather
+  than a regression; re-verify under `-race` and `-count=3` before
+  classifying.
+
+## 5. Worker identity model: `worker_id` is immutable, `worker_name` is mutable
+
+Codified after the 2026-08-08 rename attempt. Changing a worker's
+`worker_id` is NOT an ordinary rename: the ID is the mTLS-bound security
+principal and the Master **rejects** registration when the client
+certificate's CN does not match the declared `worker_id` (see
+`DataServer/internal/grpcserver/handler_stream.go` — `worker_id
+mismatch: cert=%s, declared=%s`). Attempting to rename `worker_id`
+caused the canary worker to drop to DISCONNECTED until its original ID
+was restored. Do NOT rename `worker_id` for cosmetic/ordering purposes.
+
+### The two identities (never conflate)
+
+| Field | Nature | Examples |
+|-------|--------|----------|
+| `worker_id` | **IMMUTABLE** — mTLS certificate identity, OpenBao identity, Master registration, historical jobs, leases, DB references | `velox-worker-13197`, `velox-worker-523925eb`, `host_57_129_132_133`, `host_57_151_20_173` |
+| `worker_name` | **MUTABLE** — operator-facing display name shown in UI/tools | `velox-worker-01..04` |
+
+### Rules
+
+- `worker_id` MUST stay the value bound to the worker's mTLS certificate.
+  If it must change (a genuine appliance replacement), it is a **security
+  migration** (new OpenBao identity → new cert → allowlist → reconnect →
+  reference migration), never a quick rename.
+- Mutable naming/ordering goes on `worker_name` ONLY — set it in the
+  worker's `worker_config.json` (`worker_name` field; `VELOX_WORKER_ID`
+  env must keep the immutable ID). `worker_name` is NOT env-overridable by
+  the agent (pkg/config: source is the JSON config only).
+- Operator surfaces (dashboard, `fleetctl`, admin API) should render
+  `worker_name` as `NAME` alongside `worker_id` — never rewrite `worker_id`
+  inline. The admin surfaces: `GET /api/v1/admin/workers` (`hostname`
+  field carries the worker_name) and `ssh-check` (now emits
+  `worker_name` alongside `worker_id`).
+- Allowlist `VELOX_ALLOWED_WORKERS` lists **security IDs**
+  (`worker_id`), not display names.
