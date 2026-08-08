@@ -13,6 +13,7 @@ WORKER_POLICY="$ROOT/deploy/openbao/policies/worker.hcl.tmpl"
 OPERATOR_BOOTSTRAP="$ROOT/scripts/operator/provision-worker-openbao.sh"
 TMP="$(mktemp -d)"
 MOCK_PID=""
+PROVISION_PID=""
 PORT=$((20000 + RANDOM % 20000))
 SECRETS_DIR="$TMP/secrets"
 CERTS_DIR="$TMP/certs"
@@ -22,7 +23,11 @@ CA_DIR="$TMP/ca"
 
 fail() { printf 'openbao-worker-secrets: FAIL: %s\n' "$*" >&2; exit 1; }
 pass() { printf 'openbao-worker-secrets: %s\n' "$*"; }
-cleanup() { [[ -z "$MOCK_PID" ]] || kill "$MOCK_PID" 2>/dev/null || true; rm -rf "$TMP"; }
+cleanup() {
+    [[ -z "$MOCK_PID" ]] || kill "$MOCK_PID" 2>/dev/null || true
+    [[ -z "$PROVISION_PID" ]] || kill "$PROVISION_PID" 2>/dev/null || true
+    rm -rf "$TMP"
+}
 trap cleanup EXIT
 
 bash -n "$FETCH" "$PREPARE" "$PKI_PROVISION" "$KV_PROVISION" "$OPERATOR_BOOTSTRAP"
@@ -41,6 +46,12 @@ grep -q 'path "velox/data/production/workers/{{ WORKER_ID }}/credential"' "$WORK
     || fail 'worker policy does not expose only its credential KV path'
 grep -q 'pki/sign/worker-{{ WORKER_ID }}' "$WORKER_POLICY" \
     || fail 'worker policy does not expose its dedicated PKI sign path'
+grep -q 'compare_legacy_hashes' "$OPERATOR_BOOTSTRAP" \
+    || fail 'operator bootstrap lacks the fail-closed existing-branch hash gate'
+grep -q 'refusing to continue' "$OPERATOR_BOOTSTRAP" \
+    || fail 'operator bootstrap does not stop on hash mismatch'
+grep -q 'rstrip(b"\\\\r\\\\n")' "$OPERATOR_BOOTSTRAP" \
+    || fail 'operator bootstrap does not normalize terminal line endings before hashing'
 grep -Fq "allowed_uri_sans=\"\$spiffe_uri\"" "$PKI_PROVISION" \
     || fail 'PKI provisioning does not constrain the per-worker SPIFFE URI'
 grep -q 'use_csr_sans=true' "$PKI_PROVISION" \
@@ -61,6 +72,159 @@ if grep -Eq 'cert/(cert|key|ca)|OPENBAO_VALUE_WORKER_(CERT|KEY|CA)|/etc/velox-wo
     fail 'worker mTLS certificate/key/CA import contract was reintroduced'
 fi
 pass 'syntax + PKI local-key/no-KV contract OK (bash -n, shellcheck, static)'
+
+# Exercise the operator-side credential gate completely offline. The fake SSH
+# command returns the worker's legacy credential and safely consumes all other
+# bootstrap streams; the mock OpenBao server varies only the credential leaf.
+PROVISION_TMP="$TMP/operator"
+PROVISION_BIN="$PROVISION_TMP/bin"
+PROVISION_STATE="$PROVISION_TMP/state"
+PROVISION_PORT=$((40000 + RANDOM % 10000))
+PROVISION_MODE="$PROVISION_TMP/mode"
+PROVISION_POSTS="$PROVISION_TMP/posts"
+PROVISION_ALL_POSTS="$PROVISION_TMP/all-non-login-posts"
+PROVISION_SSH_LOG="$PROVISION_TMP/ssh.log"
+mkdir -p "$PROVISION_BIN" "$PROVISION_STATE/approle/worker-w1"
+printf 'role-id' > "$PROVISION_STATE/approle/worker-w1/role-id"
+printf 'secret-id' > "$PROVISION_STATE/approle/worker-w1/secret-id"
+printf 'root-token' > "$PROVISION_STATE/root-token"
+printf 'test-ca' > "$PROVISION_STATE/ca.crt"
+printf 'ssh-key' > "$PROVISION_TMP/ssh-key"
+printf 'match' > "$PROVISION_MODE"
+: > "$PROVISION_POSTS"
+: > "$PROVISION_ALL_POSTS"
+: > "$PROVISION_SSH_LOG"
+cat > "$PROVISION_BIN/ansible-inventory" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\\n' '{"_meta":{"hostvars":{"mock-host":{"worker_id":"w1","ansible_host":"127.0.0.1","ansible_user":"mock"}}}}'
+EOF
+cat > "$PROVISION_BIN/ssh" <<'EOF'
+#!/usr/bin/env bash
+command="${*: -1}"
+printf '%s\\n' "$command" >> "${PROVISION_SSH_LOG:?}"
+if [[ "$command" == *"sudo -n cat '/etc/velox-worker/secrets/worker_credential'"* ]]; then
+    printf 'secret-cred-1\\r\\n'
+else
+    cat >/dev/null
+fi
+EOF
+cat > "$PROVISION_BIN/remote-worker-openbao-tunnel.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod 0755 "$PROVISION_BIN/ansible-inventory" "$PROVISION_BIN/ssh" "$PROVISION_BIN/remote-worker-openbao-tunnel.sh"
+cat > "$PROVISION_TMP/mock.py" <<'PYEOF'
+import http.server, json, os, sys
+PORT, mode_file, posts_file = map(str, sys.argv[1:])
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+    def reply(self, code, payload):
+        body = json.dumps(payload).encode()
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def do_GET(self):
+        if self.headers.get('X-Vault-Token') != 'root-token':
+            self.reply(403, {'errors': ['invalid token']})
+            return
+        if self.path == '/v1/velox/data/production/workers/w1/credential':
+            if open(mode_file).read().strip() == 'missing':
+                self.reply(404, {'errors': ['missing']})
+            else:
+                value = 'secret-cred-1\\r\\n' if open(mode_file).read().strip() == 'match' else 'different-credential'
+                self.reply(200, {'data': {'data': {'value': value}}})
+            return
+        self.reply(404, {'errors': ['not found']})
+    def do_POST(self):
+        length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(length)
+        if self.path != '/v1/auth/approle/login':
+            with open(os.path.join(os.path.dirname(posts_file), 'all-non-login-posts'), 'ab') as handle:
+                handle.write(self.path.encode() + b' ' + body + b'\\n')
+        if self.path == '/v1/auth/approle/login':
+            self.reply(200, {'auth': {'client_token': 'mock-token'}})
+            return
+        if self.path == '/v1/velox/data/production/workers/w1/credential':
+            if self.headers.get('X-Vault-Token') != 'root-token':
+                self.reply(403, {'errors': ['invalid token']})
+                return
+            try:
+                payload = json.loads(body)
+                if payload.get('data', {}).get('value') != 'secret-cred-1':
+                    raise ValueError('unexpected credential payload')
+            except (ValueError, json.JSONDecodeError):
+                self.reply(400, {'errors': ['invalid credential payload']})
+                return
+            with open(posts_file, 'ab') as handle:
+                handle.write(body + b'\\n')
+            self.reply(200, {'data': {}})
+            return
+        self.reply(404, {'errors': ['not found']})
+http.server.ThreadingHTTPServer(('127.0.0.1', int(PORT)), Handler).serve_forever()
+PYEOF
+python3 "$PROVISION_TMP/mock.py" "$PROVISION_PORT" "$PROVISION_MODE" "$PROVISION_POSTS" >/dev/null 2>&1 &
+PROVISION_PID=$!
+for _ in $(seq 1 50); do
+    code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PROVISION_PORT/v1/nope" 2>/dev/null || true)"
+    [[ "$code" =~ ^[0-9]{3}$ && "$code" != 000 ]] && break
+    sleep 0.1
+done
+kill -0 "$PROVISION_PID" 2>/dev/null || fail 'operator mock server did not start'
+provision_env=(
+    PATH="$PROVISION_BIN:$PATH"
+    HOME="$HOME"
+    OPENBAO_OPERATOR_ADDR="http://127.0.0.1:$PROVISION_PORT"
+    OPENBAO_CA_FILE="$PROVISION_STATE/ca.crt"
+    OPENBAO_STATE_DIR="$PROVISION_STATE"
+    VELOX_WORKER_INVENTORY="$PROVISION_TMP/inventory.ini"
+    VELOX_SSH_KEY="$PROVISION_TMP/ssh-key"
+    PROVISION_SSH_LOG="$PROVISION_SSH_LOG"
+)
+printf '[mock inventory]\\n' > "$PROVISION_TMP/inventory.ini"
+run_operator() {
+    env -i "${provision_env[@]}" bash "$OPERATOR_BOOTSTRAP" --worker w1 "$@"
+}
+run_operator --dry-run >/dev/null 2>&1 \
+    || fail 'matching existing OpenBao branch did not pass the hash gate'
+pass 'matching existing branch → hash equality permits continuation'
+printf 'mismatch' > "$PROVISION_MODE"
+: > "$PROVISION_SSH_LOG"
+: > "$PROVISION_ALL_POSTS"
+if run_operator --dry-run >/dev/null 2>"$PROVISION_TMP/mismatch.log"; then
+    fail 'mismatched existing OpenBao branch unexpectedly continued'
+fi
+if [[ -s "$PROVISION_ALL_POSTS" || -s "$PROVISION_POSTS" ]]; then
+    fail 'hash mismatch caused an unexpected OpenBao write'
+fi
+grep -Fq 'legacy credential hash mismatch for w1/credential; refusing to continue' "$PROVISION_TMP/mismatch.log" \
+    || fail 'hash mismatch did not fail closed with a redacted diagnostic'
+if grep -Eq 'tee|worker\.env|install -d' "$PROVISION_SSH_LOG"; then
+    fail 'hash mismatch reached a remote write or bootstrap command'
+fi
+if grep -Eq 'secret-cred-1|different-credential|[[:xdigit:]]{64}' "$PROVISION_TMP/mismatch.log"; then
+    fail 'hash mismatch diagnostic exposed a secret or hash'
+fi
+pass 'mismatched existing branch → aborts before any write'
+printf 'missing' > "$PROVISION_MODE"
+: > "$PROVISION_POSTS"
+if run_operator --dry-run >/dev/null 2>&1; then
+    fail 'missing OpenBao branch without --import-legacy unexpectedly continued'
+fi
+pass 'missing branch without import authorization → rejected'
+run_operator --import-legacy --dry-run >/dev/null 2>&1 \
+    || fail 'dry-run authorized import unexpectedly failed'
+[[ ! -s "$PROVISION_POSTS" ]] || fail 'dry-run authorized import performed a write'
+pass 'dry-run authorized import → no write'
+run_operator --import-legacy --no-check >/dev/null 2>&1 \
+    || fail 'missing branch with --import-legacy did not import and continue'
+grep -Fq 'secret-cred-1' "$PROVISION_POSTS" \
+    || fail 'authorized legacy import did not write the credential leaf'
+pass 'missing branch with --import-legacy → imports and continues'
+kill "$PROVISION_PID" 2>/dev/null || true
+PROVISION_PID=""
 
 # Deploy operations are strict: no OpenBao address means no provisioning.
 env -i PATH="$PATH" HOME="$HOME" \

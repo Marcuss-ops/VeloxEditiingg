@@ -135,7 +135,9 @@ kv_value_hash() {
     printf 'ABSENT'
     return 0
   fi
-  hash="$(jq -erj '.data.data.value // empty' "$out" | sha256sum | awk '{print $1}')" \
+  hash="$(jq -erj '.data.data.value // empty' "$out" \
+    | python3 -c 'import sys; sys.stdout.buffer.write(sys.stdin.buffer.read().rstrip(b"\\r\\n"))' \
+    | sha256sum | awk '{print $1}')" \
     || { rm -f "$out"; die "invalid or empty OpenBao value for $worker/$leaf"; }
   rm -f "$out"
   printf '%s' "$hash"
@@ -185,6 +187,18 @@ import_remote_file() {
   code="$(api_code POST "velox/data/production/workers/$worker/$leaf" "$tmp")"
   rm -f "$tmp"
   [[ "$code" == "200" ]] || die "OpenBao import failed for $worker/$leaf (HTTP $code)"
+}
+
+compare_legacy_hashes() {
+  local worker="$1" leaf="$2" source="$3" remote_hash bao_hash
+  remote_hash="$(ssh_worker "$worker" "sudo -n cat '$source'" \
+    | python3 -c 'import sys; sys.stdout.buffer.write(sys.stdin.buffer.read().rstrip(b"\\r\\n"))' \
+    | sha256sum | awk '{print $1}')"
+  bao_hash="$(kv_value_hash "$worker" "$leaf")"
+  [[ "$remote_hash" =~ ^[[:xdigit:]]{64}$ && "$bao_hash" =~ ^[[:xdigit:]]{64}$ ]] \
+    || die "cannot compare legacy credential with OpenBao for $worker/$leaf"
+  [[ "$remote_hash" == "$bao_hash" ]] \
+    || die "legacy credential hash mismatch for $worker/$leaf; refusing to continue"
 }
 
 send_file() {
@@ -300,19 +314,20 @@ source="/etc/velox-worker/secrets/worker_credential"
 code="$(kv_code "$WORKER_ID" "$leaf")"
 case "$code" in
   200)
-    if [[ "$IMPORT_LEGACY" == "1" && "$DRY_RUN" != "1" ]]; then
-      remote_hash="$(ssh_worker "$WORKER_ID" "sudo -n cat '$source'" \
-        | python3 -c 'import sys; sys.stdout.buffer.write(sys.stdin.buffer.read().rstrip(b"\\r\\n"))' \
-        | sha256sum | awk '{print $1}')"
-      bao_hash="$(kv_value_hash "$WORKER_ID" "$leaf")"
-      [[ -n "$remote_hash" && -n "$bao_hash" ]] \
-        || die "cannot compare legacy credential with OpenBao for $WORKER_ID/$leaf"
-      [[ "$remote_hash" == "$bao_hash" ]] \
-        || die "legacy credential hash mismatch for $WORKER_ID/$leaf; refusing overwrite (local=$remote_hash openbao=$bao_hash)"
-    fi
+    # An existing branch is authoritative only after the legacy runtime
+    # credential matches byte-for-byte (apart from a terminal CR/LF). This
+    # read-only gate also runs during --dry-run; never overwrite or continue
+    # after a mismatch, even without --import-legacy.
+    compare_legacy_hashes "$WORKER_ID" "$leaf" "$source"
     ;;
   404)
-    [[ "$DRY_RUN" == "1" ]] || import_remote_file "$WORKER_ID" "$leaf" "$source"
+    [[ "$IMPORT_LEGACY" == "1" ]] \
+      || die "OpenBao leaf missing for $WORKER_ID/$leaf; rerun with --import-legacy"
+    if [[ "$DRY_RUN" == "1" ]]; then
+      log "dry-run $WORKER_ID/$leaf: would import the matching legacy credential"
+    else
+      import_remote_file "$WORKER_ID" "$leaf" "$source"
+    fi
     ;;
   *) die "cannot inspect OpenBao leaf $WORKER_ID/$leaf (HTTP $code)" ;;
 esac
