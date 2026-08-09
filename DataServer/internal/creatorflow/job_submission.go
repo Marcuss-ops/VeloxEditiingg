@@ -8,6 +8,7 @@ import (
 	"log"
 	"strings"
 
+	assetbridge "velox-server/internal/assets"
 	"velox-server/internal/jobs/enqueue"
 	"velox-shared/contract/domain"
 	"velox-shared/publication"
@@ -94,7 +95,15 @@ func (s *JobSubmissionService) Submit(ctx context.Context, req CanonicalJobSubmi
 			phase = string(enqueuePhase)
 		}
 		errHash := sha256.Sum256([]byte(err.Error()))
-		log.Printf("[CREATORFLOW] canonical submission rejected phase=%s error_type=%T error_hash=%x", phase, err, errHash[:4])
+		assetCode := ""
+		assetField := ""
+		assetSource := ""
+		if assetErr, ok := assetbridge.AsAcquisitionError(err); ok {
+			assetCode = assetErr.ErrorCode
+			assetField = assetErr.Field
+			assetSource = assetErr.SourceType
+		}
+		log.Printf("[CREATORFLOW] canonical submission rejected phase=%s error_type=%T error_hash=%x asset_error_code=%s asset_field=%s asset_source=%s", phase, err, errHash[:4], assetCode, assetField, assetSource)
 	}
 	return out, err
 }
