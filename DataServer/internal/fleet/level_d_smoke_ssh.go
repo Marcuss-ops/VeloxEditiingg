@@ -147,8 +147,10 @@ func (e *SSHWorkerExec) DownloadAsset(ctx context.Context, runID, workerID, pick
 	}
 
 	// Dev-mode fallback: generate a synthetic test clip via ffmpeg lavfi.
+	// Keep the fallback media contract identical to the artifact verifier:
+	// one H.264 video stream plus one AAC audio stream.
 	cmd := fmt.Sprintf(
-		"mkdir -p %s && ffmpeg -f lavfi -i color=c=blue:size=320x240:d=1 -c:v libx264 -f mp4 -t 1 -y %s",
+		"mkdir -p %s && ffmpeg -f lavfi -i color=c=blue:size=320x240:d=1 -f lavfi -i anullsrc=r=48000:cl=stereo -map 0:v:0 -map 1:a:0 -c:v libx264 -c:a aac -ar 48000 -ac 2 -shortest -f mp4 -t 1 -y %s",
 		filepath.Dir(destPath), destPath,
 	)
 	_, err := e.ssh.Run(ctx, workerID, cmd)
@@ -167,12 +169,12 @@ func (e *SSHWorkerExec) RunFFmpegRender(ctx context.Context, runID, workerID, re
 	if renderPlan != "" {
 		inputPath := filepath.Join(filepath.Dir(outputPath), runID+".in")
 		cmd = fmt.Sprintf(
-			"mkdir -p %s && ffmpeg -y -i %s -c:v libx264 -t 2 %s 2>/dev/null && stat -c%%s %s",
+			"mkdir -p %s && ffmpeg -y -i %s -map 0:v:0 -map 0:a:0? -c:v libx264 -c:a aac -ar 48000 -ac 2 -shortest -t 2 %s 2>/dev/null && stat -c%%s %s",
 			filepath.Dir(outputPath), inputPath, outputPath, outputPath,
 		)
 	} else {
 		cmd = fmt.Sprintf(
-			"mkdir -p %s && ffmpeg -y -f lavfi -i color=c=red:size=320x240:d=2 -c:v libx264 -t 2 %s 2>/dev/null && stat -c%%s %s",
+			"mkdir -p %s && ffmpeg -y -f lavfi -i color=c=red:size=320x240:d=2 -f lavfi -i anullsrc=r=48000:cl=stereo -map 0:v:0 -map 1:a:0 -c:v libx264 -c:a aac -ar 48000 -ac 2 -shortest -t 2 %s 2>/dev/null && stat -c%%s %s",
 			filepath.Dir(outputPath), outputPath, outputPath,
 		)
 	}
