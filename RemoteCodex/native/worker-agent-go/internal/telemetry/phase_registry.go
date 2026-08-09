@@ -162,6 +162,7 @@ var canonicalPhaseSpecs = []PhaseSpec{
 	{Origin: OriginWorker, Scope: ScopeTask, Component: "worker.asset", Action: "connect", Phase: PhaseDownload},
 	{Origin: OriginWorker, Scope: ScopeTask, Component: "worker.asset", Action: "ttfb", Phase: PhaseDownload},
 	{Origin: OriginWorker, Scope: ScopeTask, Component: "worker.asset", Action: "transfer", Phase: PhaseDownload},
+	{Origin: OriginWorker, Scope: ScopeTask, Component: "worker.asset", Action: "progress_checkpoint", Phase: PhaseDownload},
 	{Origin: OriginWorker, Scope: ScopeArtifact, Component: "worker.asset", Action: "disk_write", Phase: PhaseDownload},
 	{Origin: OriginWorker, Scope: ScopeArtifact, Component: "worker.asset", Action: "fsync", Phase: PhaseDownload},
 	{Origin: OriginWorker, Scope: ScopeArtifact, Component: "worker.asset", Action: "final_hash", Phase: PhaseDownload},
