@@ -1,6 +1,6 @@
 // P0.5 tests for the DB-as-source-of-truth inventory generation
 // (manager_computers.go::GenerateInventory). Six tests pin the
-// per-host contract: fail-fast on missing/invalid secret_ref, never
+// per-host contract: fail-fast on missing/invalid SSH auth, never
 // log the resolved secret value, skip disabled hosts, default empty
 // host_group to velox_workers. Uses a stub AnsibleComputerStore
 // backed by a map so the tests stay fast and isolated (no real
@@ -125,7 +125,7 @@ func newTestManager(t *testing.T) (*AnsibleComputerManager, string) {
 }
 
 // writeSecretFile creates a secret file with the given content and
-// returns the canonical file: secret_ref string.
+// returns the canonical file: secret_ref/key auth references.
 func writeSecretFile(t *testing.T, secretsDir, host, content string) string {
 	t.Helper()
 	name := "ssh_host_" + sanitizeSecretFilename(host)
@@ -211,26 +211,26 @@ func TestGenerateInventory_SkipsDisabled(t *testing.T) {
 	}
 }
 
-// TestGenerateInventory_FailsOnMissingSecretRef: a host with
-// SecretRef == "" makes GenerateInventory return an error whose
-// message includes "missing secret_ref". The per-host log line
+// TestGenerateInventory_FailsOnMissingSecretRef: a host with no
+// SecretRef and no SSHKeyPath makes GenerateInventory return an error whose
+// message includes "missing SSH auth". The per-host log line
 // fires BEFORE the error, with secret_status=missing.
 func TestGenerateInventory_FailsOnMissingSecretRef(t *testing.T) {
 	m, _ := newTestManager(t)
 	st := m.store.(*stubAnsibleStore)
 	_ = st.UpsertAnsibleHost(store.AnsibleHostFields{
 		Host: "no-secret", AnsibleUser: "u", Enabled: true,
-		Group: "velox_workers", SecretRef: "", // empty
+		Group: "velox_workers", SecretRef: "", SSHKeyPath: "", // both empty
 	})
 
 	logBuf := captureLog(t)
 
 	_, err := m.GenerateInventory(GenerateInventoryOptions{})
 	if err == nil {
-		t.Fatalf("expected error on missing secret_ref, got nil")
+		t.Fatalf("expected error on missing SSH auth, got nil")
 	}
-	if !strings.Contains(err.Error(), "missing secret_ref") {
-		t.Errorf("error %q should mention 'missing secret_ref'", err.Error())
+	if !strings.Contains(err.Error(), "missing SSH auth") {
+		t.Errorf("error %q should mention 'missing SSH auth'", err.Error())
 	}
 	if !strings.Contains(err.Error(), "host=no-secret") {
 		t.Errorf("error %q should mention 'host=no-secret'", err.Error())
@@ -240,6 +240,23 @@ func TestGenerateInventory_FailsOnMissingSecretRef(t *testing.T) {
 	}
 	if !strings.Contains(logBuf.String(), "secret_status=missing") {
 		t.Errorf("log should say secret_status=missing: %s", logBuf.String())
+	}
+}
+
+func TestGenerateInventory_AllowsSSHKeyWithoutSecretRef(t *testing.T) {
+	m, _ := newTestManager(t)
+	st := m.store.(*stubAnsibleStore)
+	_ = st.UpsertAnsibleHost(store.AnsibleHostFields{
+		Host: "key-only", AnsibleUser: "u", Enabled: true,
+		Group: "velox_workers", SSHKeyPath: "~/.ssh/id_ed25519",
+	})
+
+	ini, err := m.GenerateInventory(GenerateInventoryOptions{})
+	if err != nil {
+		t.Fatalf("GenerateInventory: %v", err)
+	}
+	if !strings.Contains(ini, "key-only ansible_host=key-only") {
+		t.Fatalf("INI missing key-only host: %s", ini)
 	}
 }
 

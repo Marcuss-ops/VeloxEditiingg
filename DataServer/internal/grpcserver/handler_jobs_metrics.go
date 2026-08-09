@@ -32,6 +32,7 @@ import (
 	"sync"
 	"time"
 
+	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/taskattempts"
 
 	pb "velox-shared/controltransport/pb"
@@ -229,21 +230,14 @@ func partialPhaseTimingsFromProto(attemptID, taskID, jobID, workerID, executorID
 	return phaseTimingsFromProto(attemptID, taskID, jobID, workerID, executorID, executorVersion, protoTimings)
 }
 
-// deriveCacheStats builds the per-attempt cache snapshot the persistence
-// layer expects. Today the proto only carries byte volumes, NOT hit/miss/
-// evict/corruption counters; the function therefore:
-//
-//   - sets CacheBytesUsed = BytesFromLocalCache (the only derivable signal),
-//   - leaves CacheHits/Misses/Evictions/Corruptions/Entries = 0,
-//   - emits a one-line breadcrumb on the WAS-WARNED path at most once per
-//     process (callers can downgrade / silence in tests via SetLogger).
-//
-// PR-3 (worker-agent-go resource sampler follow-up) will surface real
-// counters on pb.TaskExecutionMetrics; this helper then becomes a 1:1
-// field mapper rather than a derivation.
+// deriveCacheStats builds the per-attempt cache delta snapshot. New workers
+// carry domain counters on TaskExecutionMetrics; legacy workers still use the
+// byte-only compatibility path and remain explicitly zero for unknown counts.
 func deriveCacheStats(attemptID string, am taskattempts.AttemptMetrics) taskattempts.AttemptCacheStats {
 	cs := taskattempts.AttemptCacheStats{
 		AttemptID:    attemptID,
+		CacheHits:    am.AssetCacheHitCount + am.BlobCacheHitCount + am.RenderCacheHitCount,
+		CacheMisses:  am.AssetCacheMissCount + am.BlobCacheMissCount,
 		CacheEntries: 0,
 		// CacheBytesUsed is the one number we can derive honestly today:
 		// the worker DID report bytes_from_local_cache, which IS the size
@@ -286,12 +280,9 @@ var cacheStatsDerivationWarn sync.Once
 // already on TaskExecutionMetrics.
 //
 //	CPUTimeSecondsTotal = CPUTimeMS / 1000
-//	StorageGBWritten    = TempBytesWritten / 1e9
-//	NetworkGBEgressed   = 0  (no signal today; PR-3 follow-up: C++ engine
-//	                         can emit -progress total_size + transport dump)
-//	OutputMinutesTotal  = MediaDurationSeconds / 60  (0 today; same caveat
-//	                         as wall/ media-duration — they live on the
-//	                         tasks-jobs side and aren't on the typed metrics)
+//	StorageGBWritten    = max(temp_bytes_written, disk_write_bytes) / 1e9
+//	NetworkGBEgressed   = network_tx_bytes / 1e9 (container namespace delta)
+//	OutputMinutesTotal  = MediaDurationSeconds / 60
 //
 // All-zero on a 0-byte / old-worker attempt still produces a valid
 // (zero) cost row so the scorecard exporter has a stable row to roll up.
@@ -307,15 +298,31 @@ func executionMetricsToCostBasis(attemptID string, em *pb.TaskExecutionMetrics) 
 		cb.Compute()
 		return cb
 	}
+	// Prices are master-owned. A worker-provided non-zero value is retained
+	// for compatibility with older deployments, but a zero/missing value is
+	// resolved from the master's configured cost profile so real usage never
+	// produces an all-zero cost row.
+	factors := velmetrics.LoadCostFactorsFromEnv()
 	cb.CPUPricePerSecond = em.GetCpuPricePerSecond()
+	if cb.CPUPricePerSecond <= 0 {
+		cb.CPUPricePerSecond = factors.CPUCoreSecondEUR
+	}
 	cb.StoragePricePerGB = em.GetStoragePricePerGb()
+	if cb.StoragePricePerGB <= 0 {
+		cb.StoragePricePerGB = factors.StorageGBEUR
+	}
 	cb.NetworkPricePerGB = em.GetNetworkPricePerGb()
+	if cb.NetworkPricePerGB <= 0 {
+		cb.NetworkPricePerGB = factors.NetworkGBEUR
+	}
 	cb.CPUTimeSecondsTotal = float64(em.GetCpuTimeMs()) / 1000.0
-	// StorageGBWritten is populated by the worker's typed temp-byte counter.
-	cb.StorageGBWritten = float64(em.GetTempBytesWritten()) / 1e9
-	// NetworkGBEgressed: TODO PR-3 — surface the artifact-upload
-	// transport size on ArtifactUploaded/Heartbeat, then derive here.
-	cb.NetworkGBEgressed = 0
+	storageBytes := em.GetTempBytesWritten()
+	if em.GetDiskWriteBytes() > storageBytes {
+		storageBytes = em.GetDiskWriteBytes()
+	}
+	cb.StorageGBWritten = float64(storageBytes) / 1e9
+	cb.NetworkGBEgressed = float64(em.GetNetworkTxBytes()) / 1e9
+	cb.OutputMinutesTotal = em.GetMediaDurationSeconds() / 60.0
 	cb.Compute() // fills CostPerOutputMinute
 	return cb
 }

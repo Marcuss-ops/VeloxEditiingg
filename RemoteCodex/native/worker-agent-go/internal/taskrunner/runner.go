@@ -163,6 +163,14 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		StartedAt:    overallStart,
 		PhaseMarkers: make([]PhaseMarker, 0, 5),
 	}
+	if r.cacheStats != nil {
+		cs := r.cacheStats.Stats()
+		report.CacheBaseline = map[string]int64{
+			"hits": cs.Hits, "misses": cs.Misses,
+			"evictions": cs.Evictions, "corruptions": cs.Corruptions,
+		}
+		report.CacheBaselineSet = true
+	}
 	// The per-attempt phase recorder accumulates the detailed event
 	// stream that TaskResult.phase_timings (proto field 20) carries to
 	// the master. attachDetailedPhases drains it onto the report before
@@ -314,8 +322,20 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 // task_execution_events detail correlate exactly.
 func (r *TaskRunner) runPhase(rec *telemetry.EventRecorder, name string, fn func() error, fallbackStart time.Time) PhaseMarker {
 	start := r.now()
+	var phaseResources telemetry.PhaseResourceDelta
+	var phaseSnapshot telemetry.PhaseResourceSnapshot
+	if rec != nil {
+		if session := rec.AttemptTelemetry(); session != nil {
+			phaseSnapshot = session.BeginPhase()
+		}
+	}
 	err := fn()
 	end := r.now()
+	if rec != nil {
+		if session := rec.AttemptTelemetry(); session != nil {
+			phaseResources = session.EndPhaseResource(phaseSnapshot)
+		}
+	}
 	m := PhaseMarker{Name: name, StartedAt: start, CompletedAt: end, Status: "ok"}
 	if err != nil {
 		m.Status = "failed"
@@ -323,11 +343,13 @@ func (r *TaskRunner) runPhase(rec *telemetry.EventRecorder, name string, fn func
 	}
 	if rec != nil {
 		rec.Record(telemetry.EventSpec{
-			Origin:    telemetry.OriginWorker,
-			Scope:     telemetry.ScopeAttempt,
-			Component: "runner",
-			Action:    name,
-			Phase:     name,
+			Origin:       telemetry.OriginWorker,
+			Scope:        telemetry.ScopeAttempt,
+			Component:    "runner",
+			Action:       name,
+			Phase:        name,
+			CPUMS:        float64(phaseResources.CPUTimeMs),
+			MetadataJSON: telemetry.PhaseResourceMetadataJSON(phaseResources),
 		}, start, end, end.Sub(start).Milliseconds(), m.Status, "", m.Notes)
 	}
 	return m

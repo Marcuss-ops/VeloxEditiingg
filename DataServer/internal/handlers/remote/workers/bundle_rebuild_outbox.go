@@ -133,6 +133,10 @@ func (h *BundleRebuildHandler) Handle(ctx context.Context, e outbox.Event) error
 			e.EventID, binaryPath, err, strings.TrimSpace(string(out)))
 		return outbox.Transient(fmt.Errorf("velox-bundler exit: %w", err))
 	}
+	if err := ensureWorkerBundleRuntime(p.RepoRoot, p.BundleDir); err != nil {
+		log.Printf("[OUTBOX] worker bundle runtime normalization failed event_id=%s err=%v", e.EventID, err)
+		return outbox.Transient(err)
+	}
 	log.Printf("[OUTBOX] bundle rebuild completed event_id=%s out-path=%s combo=%s",
 		e.EventID, p.BundleDir, strings.TrimSpace(string(out)))
 	return nil

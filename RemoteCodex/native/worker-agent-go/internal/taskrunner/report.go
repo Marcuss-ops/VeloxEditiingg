@@ -57,6 +57,10 @@ type TaskExecutionReport struct {
 	// finished upload/commit. It is transport-local state and never serialized.
 	AttemptRecorder       *telemetry.EventRecorder `json:"-"`
 	AttemptRecorderOffset int                      `json:"-"`
+	// CacheBaseline stores provider counters at attempt start so the report
+	// carries per-attempt deltas rather than worker lifetime totals.
+	CacheBaseline    map[string]int64 `json:"-"`
+	CacheBaselineSet bool             `json:"-"`
 }
 
 // DetailedPhaseTiming is the worker-side mirror of

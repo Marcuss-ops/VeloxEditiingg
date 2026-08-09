@@ -59,9 +59,9 @@ type AnsibleComputerStore interface {
 // used as a deploy input). Every read goes through the SQLite store
 // via ListAnsibleHosts / GetAnsibleHost. Inventory generation at
 // deploy time is driven by GenerateInventory() which
-// builds the INI from DB rows and validates each secret_ref against
-// the SecretResolver. On missing/invalid secret_ref the deploy FAILS
-// LOUDLY — there is no silent fallback to the static file.
+// builds the INI from DB rows and validates configured SSH auth. A host must
+// have either a resolvable secret_ref or an SSHKeyPath; on missing/invalid
+// auth the deploy FAILS LOUDLY — there is no silent fallback to a static file.
 //
 // PR-ANSIBLE-SOT: the previous in-RAM `computers map[string]AnsibleComputer`
 // mirror is REMOVED. SQLite (`ansible_hosts`) is the single source of
@@ -372,23 +372,31 @@ func (m *AnsibleComputerManager) GenerateInventory(opts GenerateInventoryOptions
 		unit := canonicalUnitName(h.Host, group)
 		secretStatus := "ok"
 
-		// (1) SecretRef must be non-empty.
-		if h.SecretRef == "" {
+		// (1) At least one supported SSH auth mechanism must be configured.
+		// Key-based auth is the normal production path; secret_ref is only
+		// required for password-backed inventory entries.
+		if strings.TrimSpace(h.SecretRef) == "" && strings.TrimSpace(h.SSHKeyPath) == "" {
 			secretStatus = "missing"
 			log.Printf("[ANSIBLE_INV] host=%s user=%s unit=%s source=db secret_ref=%s secret_status=%s",
 				h.Host, h.AnsibleUser, unit, h.SecretRef, secretStatus)
-			return "", fmt.Errorf("host=%s: missing secret_ref (DB column secret_ref is NULL/empty); add via /api/v1/ansible/computers PUT", h.Host)
+			return "", fmt.Errorf("host=%s: missing SSH auth (secret_ref or ssh_key_path)", h.Host)
 		}
 
-		// (2) SecretRef must resolve. The resolved password is passed
+		// (2) When present, SecretRef must resolve. The resolved password is passed
 		// to hostINI as ansible_ssh_pass fallback (it appears ONLY in
 		// the temp inventory file, never in any log line).
-		sshPass, err := m.secretResolver.Resolve(h.SecretRef)
-		if err != nil {
-			secretStatus = "missing"
-			log.Printf("[ANSIBLE_INV] host=%s user=%s unit=%s source=db secret_ref=%s secret_status=%s",
-				h.Host, h.AnsibleUser, unit, h.SecretRef, secretStatus)
-			return "", fmt.Errorf("host=%s: invalid secret_ref=%q: %v", h.Host, h.SecretRef, err)
+		sshPass := ""
+		if strings.TrimSpace(h.SecretRef) != "" {
+			var err error
+			sshPass, err = m.secretResolver.Resolve(h.SecretRef)
+			if err != nil {
+				secretStatus = "missing"
+				log.Printf("[ANSIBLE_INV] host=%s user=%s unit=%s source=db secret_ref=%s secret_status=%s",
+					h.Host, h.AnsibleUser, unit, h.SecretRef, secretStatus)
+				return "", fmt.Errorf("host=%s: invalid secret_ref=%q: %v", h.Host, h.SecretRef, err)
+			}
+		} else {
+			secretStatus = "ssh_key"
 		}
 
 		// Success log line. The secret_ref SCHEME appears in the log
@@ -446,8 +454,12 @@ func hostINI(h store.AnsibleHostFields, sshPass string) string {
 	if workerID == "" {
 		workerID = h.Host
 	}
+	keyArg := ""
+	if strings.TrimSpace(h.SSHKeyPath) != "" {
+		keyArg = fmt.Sprintf(" ansible_ssh_private_key_file=%s", h.SSHKeyPath)
+	}
 	return fmt.Sprintf(
-		"%s ansible_host=%s ansible_user=%s ansible_python_interpreter=/usr/bin/python3 worker_id=%s secret_ref=%s",
-		h.Host, h.Host, h.AnsibleUser, workerID, h.SecretRef,
+		"%s ansible_host=%s ansible_user=%s ansible_python_interpreter=/usr/bin/python3 worker_id=%s secret_ref=%s%s",
+		h.Host, h.Host, h.AnsibleUser, workerID, h.SecretRef, keyArg,
 	)
 }

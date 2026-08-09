@@ -52,6 +52,10 @@ func (h *WorkerUpdateHandler) ForceRegenerateZipHandler() gin.HandlerFunc {
 				return "", err
 			}
 			log.Printf("[OK] rebuild bundle V2 completed: %s", strings.TrimSpace(string(out)))
+			if err := ensureWorkerBundleRuntime(repoRoot, outputDir); err != nil {
+				log.Printf("[ERROR] worker bundle runtime normalization failed: %v", err)
+				return "", err
+			}
 			bundlePath, _, err := resolveBundlePath(h.bundleDir, "linux", "x86_64")
 			if err != nil {
 				return "", err
@@ -124,4 +128,24 @@ func (h *WorkerUpdateHandler) ForceRegenerateZipHandler() gin.HandlerFunc {
 			"binary":   bundleBinaryPath,
 		})
 	}
+}
+
+func ensureWorkerBundleRuntime(repoRoot, bundleDir string) error {
+	script := filepath.Join(repoRoot, "scripts", "ops", "ensure-worker-bundle-runtime.sh")
+	if _, err := os.Stat(script); err != nil {
+		if os.IsNotExist(err) {
+			// Test fixtures and older development checkouts may not carry the
+			// production post-processor. Preserve the bundler contract there.
+			return nil
+		}
+		return err
+	}
+	cmd := exec.Command(script, bundleDir)
+	cmd.Dir = repoRoot
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("normalize worker bundle runtime: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	log.Printf("[OK] worker bundle runtime normalized: %s", strings.TrimSpace(string(out)))
+	return nil
 }

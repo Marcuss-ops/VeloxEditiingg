@@ -433,7 +433,12 @@ func newRunID() string {
 }
 
 func buildExtraVars(masterURL string, batchSize int, canaryPercent float64) map[string]string {
-	vars := map[string]string{}
+	// The canonical worker runtime deliberately refuses an implicit state
+	// directory. Keep the rollout API and the playbook contract aligned so a
+	// successful image build cannot be followed by a convergence failure.
+	vars := map[string]string{
+		"velox_state_dir": "/var/lib/velox-worker",
+	}
 	if masterURL != "" {
 		vars["master_url"] = masterURL
 	}

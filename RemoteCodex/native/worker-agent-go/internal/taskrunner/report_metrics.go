@@ -58,6 +58,12 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 		m["cache.misses"] = cs.Misses
 		m["cache.evictions"] = cs.Evictions
 		m["cache.corruptions"] = cs.Corruptions
+		if report != nil && report.CacheBaselineSet {
+			m["cache.hits"] = maxInt64(0, cs.Hits-report.CacheBaseline["hits"])
+			m["cache.misses"] = maxInt64(0, cs.Misses-report.CacheBaseline["misses"])
+			m["cache.evictions"] = maxInt64(0, cs.Evictions-report.CacheBaseline["evictions"])
+			m["cache.corruptions"] = maxInt64(0, cs.Corruptions-report.CacheBaseline["corruptions"])
+		}
 		m["cache.entries"] = cs.Entries
 		m["cache.bytes"] = cs.BytesUsed
 		m["cache.pinned"] = cs.PinnedEntries
@@ -157,17 +163,20 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 		IowaitMs:       positiveIntegerToInt64(m["iowait.ms"]),
 		OpenFdsPeak:    positiveIntegerToInt64(m["open.fds.peak"]),
 
-		AssetCacheHitCount:  positiveIntegerToInt64(m["asset.cache.hit.count"]),
-		AssetCacheMissCount: positiveIntegerToInt64(m["asset.cache.miss.count"]),
-		BlobCacheHitCount:   positiveIntegerToInt64(m["blob.cache.hit.count"]),
-		BlobCacheMissCount:  positiveIntegerToInt64(m["blob.cache.miss.count"]),
+		AssetCacheHitCount:  firstPositive(m["asset.cache.hit.count"], m["cache.hits"]),
+		AssetCacheMissCount: firstPositive(m["asset.cache.miss.count"], m["cache.misses"]),
+		BlobCacheHitCount:   firstPositive(m["blob.cache.hit.count"], m["blob.fetch"]),
+		BlobCacheMissCount:  firstPositive(m["blob.cache.miss.count"], m["blob.fetch_miss"]),
 		RenderCacheHitCount: positiveIntegerToInt64(m["render.cache.hit.count"]),
 
-		WastedCpuMs:         positiveIntegerToInt64(m["wasted.cpu.ms"]),
-		WastedDownloadBytes: positiveIntegerToInt64(m["wasted.download.bytes"]),
-		CompletedSegments:   int32(positiveIntegerToInt64(m["completed.segments"])),
-		ErrorComponent:      stringFromMap(m["error.component"]),
-		ErrorPhase:          stringFromMap(m["error.phase"]),
+		WastedCpuMs:           positiveIntegerToInt64(m["wasted.cpu.ms"]),
+		WastedDownloadBytes:   positiveIntegerToInt64(m["wasted.download.bytes"]),
+		CompletedSegments:     int32(positiveIntegerToInt64(m["completed.segments"])),
+		ErrorComponent:        stringFromMap(m["error.component"]),
+		ErrorPhase:            stringFromMap(m["error.phase"]),
+		TelemetryCoverageJSON: stringFromMap(m["telemetry.coverage.json"]),
+		TelemetryComplete:     boolFromMap(m["telemetry.complete"]),
+		TelemetryCPUSource:    stringFromMap(m["telemetry.cpu.source"]),
 	}
 
 	// CPU capacity is a host-level property, not something the executor
@@ -267,4 +276,18 @@ func boolFromMap(v any) bool {
 		return b
 	}
 	return false
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func firstPositive(primary, fallback any) int64 {
+	if value := positiveIntegerToInt64(primary); value > 0 {
+		return value
+	}
+	return positiveIntegerToInt64(fallback)
 }

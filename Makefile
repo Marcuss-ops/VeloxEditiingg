@@ -25,7 +25,7 @@ SHELL := /usr/bin/env bash
 EVIDENCE_ROOT_CAP9      ?= /tmp/velox-cap9-evidence
 EVIDENCE_ROOT_CAP10     ?= /tmp/velox-cap10-evidence
 
-.PHONY: verify verify-fast verify-heavy test-certify-fleet test-canary-worker-rollout canary-worker-rollout certify-fleet fmt fmt-check vet pilot api-docs api-docs-apply \
+.PHONY: verify verify-fast verify-heavy telemetry-done test-certify-fleet test-canary-worker-rollout canary-worker-rollout certify-fleet fmt fmt-check vet pilot api-docs api-docs-apply \
         jobs-smoke publishing-flow-smoke video-smoke media-smoke \
         e2e-grpc e2e-workload e2e-workload-mtls e2e-master-worker \
         enable-branch-protection disable-branch-protection inspect-branch-protection \
@@ -56,6 +56,7 @@ help:
 	@echo "  make e2e-workload                 -- PR 5 full workload E2E (Hello → artifact, ~3-5 min)"
 	@echo "  make local-verify-mirror          -- reproduce the GitHub Actions pyramid locally"
 	@echo "  make test-certify-fleet            -- deterministic offline fleet-certification gate"
+	@echo "  make telemetry-done                -- fail-closed gate over latest persisted worker attempts"
 	@echo "  make test-canary-worker-rollout     -- offline single-worker canary self-test"
 	@echo "  make canary-worker-rollout CANARY_ARGS=\"--worker-id ID --dry-run|--apply|--rollback\""
 	@echo "  make certify-fleet CERTIFY_FLEET_ARGS=\"...\" -- live operator fleet certification"
@@ -170,6 +171,9 @@ api-docs-apply:
 
 pilot:         ## Full pilot pipeline (build + start + submit + work + poll)
 	./scripts/pilot.sh
+
+telemetry-done: ## Certify latest persisted attempts (override TELEMETRY_DB)
+	./tests/worker-cert/telemetry_done.sh "$${TELEMETRY_DB:-/opt/velox/current/.velox/data/velox.db}"
 
 # Operator smoke for /api/v1/jobs (POST + polling GET). Self-provisions an
 # ephemeral M2M client via the admin surface, submits a job, polls until

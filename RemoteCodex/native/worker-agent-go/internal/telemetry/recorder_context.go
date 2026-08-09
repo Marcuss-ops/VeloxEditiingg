@@ -21,3 +21,23 @@ func RecorderFromContext(ctx context.Context) *EventRecorder {
 	recorder, _ := ctx.Value(recorderContextKey{}).(*EventRecorder)
 	return recorder
 }
+
+type attemptTelemetryContextKey struct{}
+
+// WithAttemptTelemetry binds the attempt resource session to the execution
+// context. Asset resolution, TaskRunner phases and output upload therefore
+// share the same accounting session without a second collector path.
+func WithAttemptTelemetry(ctx context.Context, session *AttemptTelemetrySession) context.Context {
+	if session == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, attemptTelemetryContextKey{}, session)
+}
+
+func AttemptTelemetryFromContext(ctx context.Context) *AttemptTelemetrySession {
+	if ctx == nil {
+		return nil
+	}
+	session, _ := ctx.Value(attemptTelemetryContextKey{}).(*AttemptTelemetrySession)
+	return session
+}

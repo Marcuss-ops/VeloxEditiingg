@@ -98,6 +98,9 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	w.recordTaskStart(pte)
 
 	startTime := time.Now()
+	attemptTelemetry := telemetry.NewAttemptTelemetrySession(w.sampler)
+	attemptTelemetry.Start(jobCtx)
+	jobCtx = telemetry.WithAttemptTelemetry(jobCtx, attemptTelemetry)
 
 	w.logger.Info("[TASK] Executing task %s (job=%s attempt=%s)", taskID, pte.JobID, attemptID)
 
@@ -134,6 +137,14 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	// only after the complete attempt lifecycle, preserving the runner
 	// events already snapshotted in report.DetailedPhases.
 	taskrunner.AppendDetailedPhases(report, reportRecorder(report))
+	if report != nil {
+		result := attemptTelemetry.Stop(context.Background())
+		if report.Metrics == nil {
+			report.Metrics = make(map[string]interface{})
+		}
+		attemptTelemetry.ApplyToMap(report.Metrics, result)
+		report.TypedMetrics = taskrunner.TypedMetricsFromMap(report.Metrics)
+	}
 
 	w.recordTaskOutcome(pte, execErr, duration)
 	w.recordTaskFinish()

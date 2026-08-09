@@ -174,6 +174,24 @@ func NewResourceSampler(procRoot, sysRoot, workDir string, tick time.Duration, e
 	}
 }
 
+// CloneForAttempt returns an independent sampler with the same host paths.
+// Attempt telemetry must not share the CPU/temp baselines with the heartbeat
+// sampler: calling Sample on the heartbeat sampler from an execution would
+// otherwise corrupt the host ratios emitted on the control stream.
+func (s *Sampler) CloneForAttempt() *Sampler {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	procRoot, sysRoot, workDir, tempDir := s.procRoot, s.sysRoot, s.workDir, s.tempDir
+	s.mu.Unlock()
+	clone := NewResourceSampler(procRoot, sysRoot, workDir, time.Second, 1)
+	if tempDir != "" {
+		clone.SetTempDir(tempDir)
+	}
+	return clone
+}
+
 // SetTempDir selects the worker scratch directory whose activity is reported
 // by temp_bytes_written and temp_files_open. It is separate from workDir:
 // workDir is the installation/mount used for disk accounting, while TempDir

@@ -108,6 +108,7 @@ log "Building master/server..."
 
 log "Rebuilding worker bundle..."
 "$ROOT_DIR/DataServer/bin/velox-bundler" --source "$ROOT_DIR" --output "$ROOT_DIR/DataServer/data/worker_downloads"
+"$ROOT_DIR/scripts/ops/ensure-worker-bundle-runtime.sh" "$ROOT_DIR/DataServer/data/worker_downloads"
 
 if [[ "$APPLY_ANSIBLE" != "0" ]]; then
   if [[ -z "$TARGETS" ]]; then

@@ -74,10 +74,11 @@ type EventSpec struct {
 // EventRecorder accumulates events for one attempt. Event indexes are
 // monotonic for the complete attempt and are not reset by Flush.
 type EventRecorder struct {
-	mu        sync.Mutex
-	startedAt time.Time
-	events    []RecordedPhase
-	indexes   map[string]int64
+	mu               sync.Mutex
+	startedAt        time.Time
+	events           []RecordedPhase
+	indexes          map[string]int64
+	attemptTelemetry *AttemptTelemetrySession
 }
 
 func NewEventRecorder() *EventRecorder {
@@ -85,6 +86,24 @@ func NewEventRecorder() *EventRecorder {
 		startedAt: time.Now(),
 		indexes:   make(map[string]int64),
 	}
+}
+
+func (r *EventRecorder) BindAttemptTelemetry(session *AttemptTelemetrySession) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.attemptTelemetry = session
+	r.mu.Unlock()
+}
+
+func (r *EventRecorder) AttemptTelemetry() *AttemptTelemetrySession {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.attemptTelemetry
 }
 
 // Start begins one event using the canonical recorder API. The returned

@@ -737,6 +737,12 @@ message TaskExecutionMetrics {
   int32 logical_cpu_count = 49;      // runtime.NumCPU() on the worker host
   double cpu_quota = 50;            // cgroup CPU quota in cores (0 = unknown/unlimited)
   int32 effective_cpu_count = 51;  // min(logical, ceil(cpu_quota))
+
+  // Attempt telemetry provenance. Coverage is JSON so missing domains are
+  // distinguishable from a measured numeric zero without another migration.
+  string telemetry_coverage_json = 52;
+  bool telemetry_complete = 53;
+  string telemetry_cpu_source = 54; // cgroup_v2, proc, or missing
 }
 
 // WorkerResourceCounters is the typed payload of Heartbeat.resources.

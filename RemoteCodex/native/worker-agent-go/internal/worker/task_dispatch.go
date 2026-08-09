@@ -109,6 +109,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	// cache/download events in the same ordered report as runner/engine
 	// events; it is never global across attempts.
 	rec := telemetry.NewEventRecorder()
+	rec.BindAttemptTelemetry(telemetry.AttemptTelemetryFromContext(ctx))
 	ctx = telemetry.WithRecorder(ctx, rec)
 	ctx = withAssetOperationTracker(ctx, assetTracker)
 	ctx = withCacheAccessContext(ctx, pte.JobID, "asset")

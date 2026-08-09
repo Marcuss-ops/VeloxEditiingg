@@ -31,6 +31,8 @@
 package telemetry
 
 import (
+	"encoding/json"
+
 	pb "velox-shared/controltransport/pb"
 )
 
@@ -118,6 +120,10 @@ type TypedExecutionMetrics struct {
 	LogicalCpuCount   int32   `json:"logical_cpu_count"`
 	CpuQuota          float64 `json:"cpu_quota"`
 	EffectiveCpuCount int32   `json:"effective_cpu_count"`
+
+	TelemetryCoverageJSON string `json:"telemetry_coverage_json,omitempty"`
+	TelemetryComplete     bool   `json:"telemetry_complete"`
+	TelemetryCPUSource    string `json:"telemetry_cpu_source,omitempty"`
 }
 
 // ToProto serializes a TypedExecutionMetrics onto the typed wire
@@ -190,6 +196,10 @@ func (t TypedExecutionMetrics) ToProto() *pb.TaskExecutionMetrics {
 		LogicalCpuCount:   t.LogicalCpuCount,
 		CpuQuota:          t.CpuQuota,
 		EffectiveCpuCount: t.EffectiveCpuCount,
+
+		TelemetryCoverageJson: t.TelemetryCoverageJSON,
+		TelemetryComplete:     t.TelemetryComplete,
+		TelemetryCpuSource:    t.TelemetryCPUSource,
 	}
 }
 
@@ -259,5 +269,22 @@ func FromProto(p *pb.TaskExecutionMetrics) TypedExecutionMetrics {
 		LogicalCpuCount:   p.GetLogicalCpuCount(),
 		CpuQuota:          p.GetCpuQuota(),
 		EffectiveCpuCount: p.GetEffectiveCpuCount(),
+
+		TelemetryCoverageJSON: p.GetTelemetryCoverageJson(),
+		TelemetryComplete:     p.GetTelemetryComplete(),
+		TelemetryCPUSource:    p.GetTelemetryCpuSource(),
 	}
+}
+
+// CoverageMap decodes the optional report coverage block. Invalid or empty
+// JSON is intentionally reported as absent rather than as all-false data.
+func (t TypedExecutionMetrics) CoverageMap() map[string]bool {
+	if t.TelemetryCoverageJSON == "" {
+		return nil
+	}
+	var coverage map[string]bool
+	if err := json.Unmarshal([]byte(t.TelemetryCoverageJSON), &coverage); err != nil {
+		return nil
+	}
+	return coverage
 }
