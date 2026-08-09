@@ -54,16 +54,30 @@ func (s *Service) ProductionDoctor(_ context.Context) (*ProductionDoctorResult, 
 		check("readiness", readinessStatus, detail)
 		desired, _ := worker["target_digest"].(string)
 		running, _ := worker["image_digest"].(string)
+		desiredCanonical := normalizeDigest(desired)
+		runningCanonical := normalizeDigest(running)
 		switch {
-		case desired == "" || running == "":
+		case desiredCanonical == "" || runningCanonical == "":
 			check("digest", "UNKNOWN", "desired or running digest is not reported")
-		case desired != running:
+		case desiredCanonical != runningCanonical:
 			check("digest", "FAIL", "desired="+desired+" running="+running)
 		default:
 			check("digest", "PASS", "running digest matches desired digest")
 		}
 	}
 	return result, nil
+}
+
+// normalizeDigest compares the immutable content digest rather than its
+// transport representation. The Master stores target_digest as a pinned
+// image reference while workers commonly report image_digest as bare
+// sha256:<hex>; both representations identify the same image.
+func normalizeDigest(raw string) string {
+	digest := strings.TrimSpace(raw)
+	if at := strings.LastIndexByte(digest, '@'); at >= 0 {
+		digest = digest[at+1:]
+	}
+	return strings.TrimPrefix(digest, "sha256:")
 }
 
 func readinessVerdict(raw any) (string, string) {

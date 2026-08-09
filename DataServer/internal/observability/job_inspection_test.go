@@ -87,3 +87,20 @@ func TestProductionDoctorDetectsReadinessAndDigestDrift(t *testing.T) {
 		t.Fatalf("checks = %d, want 4", len(result.Checks))
 	}
 }
+
+func TestProductionDoctorNormalizesPinnedImageReference(t *testing.T) {
+	svc, _, _, _, workers := newTestService()
+	workers.workers = []map[string]any{{
+		"worker_id": "worker-1", "worker_name": "velox-worker-01",
+		"status": "CONNECTED", "readiness": map[string]any{"cache_protection_ready": true},
+		"target_digest": "ghcr.io/example/worker@sha256:abc123", "image_digest": "sha256:abc123",
+	}}
+	svc.WithWorkers(workers)
+	result, err := svc.ProductionDoctor(context.Background())
+	if err != nil {
+		t.Fatalf("ProductionDoctor() error: %v", err)
+	}
+	if !result.Healthy {
+		t.Fatalf("ProductionDoctor() reported normalized digest mismatch: %#v", result.Checks)
+	}
+}
