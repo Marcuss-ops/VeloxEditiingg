@@ -173,6 +173,8 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	metrics["native.plan_write_ms"] = runMetrics.RenderMetrics.PlanWriteMs
 	metrics["native.process_wait_ms"] = runMetrics.RenderMetrics.ProcessWaitMs
 	metrics["engine.frames"] = runMetrics.RenderMetrics.Frames
+	metrics["engine.frames_decoded"] = runMetrics.RenderMetrics.FramesDecoded
+	metrics["engine.frames_composited"] = runMetrics.RenderMetrics.FramesComposited
 	metrics["engine.fps"] = runMetrics.RenderMetrics.Fps
 	metrics["engine.speed_x"] = runMetrics.RenderMetrics.SpeedX
 	metrics["engine.encode_passes"] = runMetrics.RenderMetrics.EncodePasses
@@ -194,6 +196,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		segments = append(segments, executor.SegmentTiming{
 			SegmentIndex:     seg.SegmentIndex,
 			SceneWorkerIndex: seg.SceneWorkerIndex,
+			SceneID:          seg.SceneID,
 			SourceType:       seg.SourceType,
 			DurationMS:       seg.DurationMS,
 			AssetDownloadMS:  seg.AssetDownloadMS,
@@ -201,6 +204,9 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 			SourceBytes:      seg.SourceBytes,
 			OutputBytes:      seg.OutputBytes,
 			FramesEncoded:    seg.FramesEncoded,
+			FramesDecoded:    seg.FramesDecoded,
+			FramesComposited: seg.FramesComposited,
+			FfmpegSpeedX:     seg.FfmpegSpeedX,
 			Codec:            seg.Codec,
 			Preset:           seg.Preset,
 			FfmpegThreads:    seg.FfmpegThreads,

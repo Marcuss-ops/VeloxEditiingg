@@ -35,6 +35,7 @@ func compileItemsToTimeline(items []ItemInput, defaultFit string) []plan.Timelin
 	for i, item := range items {
 		timeline[i] = plan.TimelineItem{
 			Source:          sourceForItem(item),
+			SceneID:         item.SceneID,
 			DurationSeconds: effectiveDuration(item),
 			IncludeAudio:    item.IncludeAudio,
 			Transform:       &plan.TransformSpec{ScaleMode: effectiveFit(item, defaultFit)},

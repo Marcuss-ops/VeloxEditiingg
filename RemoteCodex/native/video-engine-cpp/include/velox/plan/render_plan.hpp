@@ -32,6 +32,7 @@ struct TimelineItem {
     double duration_seconds{0.0};
     bool include_audio{false};
     TransformSpec transform;
+    std::string scene_id;
 };
 
 struct AudioTrack {

@@ -14,14 +14,18 @@ namespace velox::core {
 // emitted as part of the sidecar segments[] array.
 struct SegmentTiming {
     size_t index{0};
-    size_t worker_index{0}; // always 0 in the single-threaded --render --plan path
+	size_t worker_index{0}; // always 0 in the single-threaded --render --plan path
+	std::string scene_id;
     std::string source_type;
     double total_ms{0};
     double asset_download_ms{0};
     double ffmpeg_encode_ms{0};
     int64_t source_bytes{0};
     int64_t output_bytes{0};
-    int64_t frames_encoded{0};
+	int64_t frames_encoded{0};
+	int64_t frames_decoded{0};
+	int64_t frames_composited{0};
+	double ffmpeg_speed_x{0};
     std::string codec;
     std::string preset;
     int64_t ffmpeg_threads{0};

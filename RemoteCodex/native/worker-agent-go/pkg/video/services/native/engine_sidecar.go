@@ -15,20 +15,22 @@ import (
 // engineSidecar mirrors the C++ <output>.progress.json sidecar written
 // by RenderEngine::emitSidecar.
 type engineSidecar struct {
-	Frames       int64              `json:"frames"`
-	Fps          float64            `json:"fps"`
-	SpeedX       float64            `json:"speed_x"`
-	EncodePasses int64              `json:"encode_passes"`
-	TempBytes    int64              `json:"temp_bytes"`
-	DurationSec  float64            `json:"duration_seconds"`
-	ConcatMode   string             `json:"concat_mode"`
-	TotalSize    int64              `json:"total_size"`
-	OutTimeUs    int64              `json:"out_time_us"`
-	OutTimeMs    int64              `json:"out_time_ms"`
-	Bitrate      float64            `json:"bitrate"`
-	DupFrames    int64              `json:"dup_frames"`
-	DropFrames   int64              `json:"drop_frames"`
-	PhaseMS      map[string]float64 `json:"phase_ms,omitempty"`
+	Frames           int64              `json:"frames"`
+	FramesDecoded    int64              `json:"frames_decoded"`
+	FramesComposited int64              `json:"frames_composited"`
+	Fps              float64            `json:"fps"`
+	SpeedX           float64            `json:"speed_x"`
+	EncodePasses     int64              `json:"encode_passes"`
+	TempBytes        int64              `json:"temp_bytes"`
+	DurationSec      float64            `json:"duration_seconds"`
+	ConcatMode       string             `json:"concat_mode"`
+	TotalSize        int64              `json:"total_size"`
+	OutTimeUs        int64              `json:"out_time_us"`
+	OutTimeMs        int64              `json:"out_time_ms"`
+	Bitrate          float64            `json:"bitrate"`
+	DupFrames        int64              `json:"dup_frames"`
+	DropFrames       int64              `json:"drop_frames"`
+	PhaseMS          map[string]float64 `json:"phase_ms,omitempty"`
 	// Observability contains optional category summaries emitted by newer
 	// engines. It is intentionally untyped at this compatibility boundary:
 	// counters, ratios, booleans, and error classifications must all survive
@@ -77,6 +79,7 @@ type detailedPhaseTiming struct {
 type segmentTiming struct {
 	Index            int64   `json:"index"`
 	WorkerIndex      int64   `json:"worker_index"`
+	SceneID          string  `json:"scene_id"`
 	SourceType       string  `json:"source_type"`
 	TotalMs          float64 `json:"total_ms"`
 	AssetDownloadMs  float64 `json:"asset_download_ms"`
@@ -84,6 +87,9 @@ type segmentTiming struct {
 	SourceBytes      int64   `json:"source_bytes"`
 	OutputBytes      int64   `json:"output_bytes"`
 	FramesEncoded    int64   `json:"frames_encoded"`
+	FramesDecoded    int64   `json:"frames_decoded"`
+	FramesComposited int64   `json:"frames_composited"`
+	FfmpegSpeedX     float64 `json:"ffmpeg_speed_x"`
 	Codec            string  `json:"codec"`
 	Preset           string  `json:"preset"`
 	FfmpegThreads    int64   `json:"ffmpeg_threads"`

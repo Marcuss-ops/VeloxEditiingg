@@ -191,6 +191,7 @@ type ExecutionContext interface {
 type SegmentTiming struct {
 	SegmentIndex     int
 	SceneWorkerIndex int
+	SceneID          string
 	SourceType       string
 	DurationMS       float64
 	AssetDownloadMS  float64
@@ -198,6 +199,9 @@ type SegmentTiming struct {
 	SourceBytes      int64
 	OutputBytes      int64
 	FramesEncoded    int64
+	FramesDecoded    int64
+	FramesComposited int64
+	FfmpegSpeedX     float64
 	Codec            string
 	Preset           string
 	FfmpegThreads    int

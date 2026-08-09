@@ -170,6 +170,10 @@ message SegmentTiming {
   int32 worker_slot = 23;          // concurrency slot that executed this segment
   int32 cpu_threads = 24;          // FFmpeg threads allocated to this segment
   string parallel_group = 25;      // logical grouping (e.g. "scene_0", "concat")
+  string scene_id = 26;
+  int64 frames_decoded = 27;
+  int64 frames_composited = 28;
+  double ffmpeg_speed_x = 29;
 }
 
 message TaskResult {

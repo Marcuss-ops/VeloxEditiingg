@@ -66,6 +66,21 @@ static std::string ffmpegVideoExtraArgs() {
     return envString("VELOX_FFMPEG_VENC_ARGS", "");
 }
 
+static bool ffmpegDecodeTelemetryEnabled() {
+    const char* value = std::getenv("VELOX_FFMPEG_DECODE_TELEMETRY");
+    if (value == nullptr) {
+        return true;
+    }
+    return std::string(value) != "0" && std::string(value) != "false";
+}
+
+static std::string withDecodeTelemetry(const std::string& filter) {
+    if (!ffmpegDecodeTelemetryEnabled()) {
+        return filter;
+    }
+    return "showinfo," + filter;
+}
+
 static int ffmpegThreadCount() {
     return envInt("VELOX_FFMPEG_THREADS", 0);
 }
@@ -128,7 +143,7 @@ static std::string scaleFilterString(const std::string& scale_mode,
         filter = "scale=" + size + ":force_original_aspect_ratio=increase,crop=" + size + ",format=yuv420p";
     }
     (void)res;
-    return filter;
+    return withDecodeTelemetry(filter);
 }
 
 double probeMediaDurationSeconds(const fs::path& mediaPath) {
@@ -183,6 +198,7 @@ std::string buildColorSegmentArgs(
     std::ostringstream cmd;
     cmd << "-f lavfi -t " << duration
         << " -i " << file::shellQuote("color=c=" + bgColor + ":s=" + res)
+        << (ffmpegDecodeTelemetryEnabled() ? " -vf showinfo" : "")
         << ffmpegRateControlArgsForCodec(ffmpegVideoCodec())
         << " -pix_fmt yuv420p -r " << fps;
     appendFfmpegVideoEncodingArgs(
@@ -222,6 +238,7 @@ std::string buildSceneSegmentArgs(
     } else {
         filter = scaleFilter;
     }
+    filter = withDecodeTelemetry(filter);
 
     std::ostringstream cmd;
     cmd << "-stream_loop -1 -i " << file::shellQuote(imagePath.string())
@@ -258,6 +275,7 @@ std::string buildVideoSegmentArgs(
     } else if (params.scale_mode == "stretch") {
         scale_filter = "scale=" + size + ",format=yuv420p";
     }
+    scale_filter = withDecodeTelemetry(scale_filter);
 
     std::ostringstream cmd;
     if (!includeAudio) {

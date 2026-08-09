@@ -40,6 +40,8 @@ public:
     // Counter accessors (thread-safe; relaxed ordering is sufficient
     // because the only observer is the sidecar writer at finalize).
     int64_t framesEncoded() const { return frames_encoded_.load(); }
+    int64_t framesDecoded() const { return frames_decoded_.load(); }
+    int64_t framesComposited() const { return frames_composited_.load(); }
     int64_t encodePasses() const { return encode_passes_.load(); }
     int64_t tempBytesWritten() const { return temp_bytes_written_.load(); }
     double durationSeconds() const { return duration_seconds_.load(); }
@@ -88,6 +90,8 @@ private:
 
     services::ProgressCallback progress_cb_;
     std::atomic<int64_t> frames_encoded_{0};
+    std::atomic<int64_t> frames_decoded_{0};
+    std::atomic<int64_t> frames_composited_{0};
     std::atomic<int64_t> encode_passes_{0};
     std::atomic<int64_t> temp_bytes_written_{0};
     std::atomic<double> duration_seconds_{0.0};

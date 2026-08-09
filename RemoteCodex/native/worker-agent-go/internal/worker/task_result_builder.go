@@ -141,6 +141,7 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 			tr.SegmentTimings = append(tr.SegmentTimings, &pb.SegmentTiming{
 				SegmentIndex:     int32(seg.SegmentIndex),
 				SceneWorkerIndex: int32(seg.SceneWorkerIndex),
+				SceneId:          seg.SceneID,
 				SourceType:       seg.SourceType,
 				DurationMs:       seg.DurationMS,
 				AssetDownloadMs:  seg.AssetDownloadMS,
@@ -148,6 +149,9 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 				SourceBytes:      seg.SourceBytes,
 				OutputBytes:      seg.OutputBytes,
 				FramesEncoded:    seg.FramesEncoded,
+				FramesDecoded:    seg.FramesDecoded,
+				FramesComposited: seg.FramesComposited,
+				FfmpegSpeedX:     seg.FfmpegSpeedX,
 				Codec:            seg.Codec,
 				Preset:           seg.Preset,
 				FfmpegThreads:    int32(seg.FfmpegThreads),

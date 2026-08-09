@@ -737,6 +737,10 @@ type SegmentTiming struct {
 	WorkerSlot       int32   `protobuf:"varint,23,opt,name=worker_slot,json=workerSlot,proto3" json:"worker_slot,omitempty"`                      // concurrency slot that executed this segment
 	CpuThreads       int32   `protobuf:"varint,24,opt,name=cpu_threads,json=cpuThreads,proto3" json:"cpu_threads,omitempty"`                      // FFmpeg threads allocated to this segment
 	ParallelGroup    string  `protobuf:"bytes,25,opt,name=parallel_group,json=parallelGroup,proto3" json:"parallel_group,omitempty"`              // logical grouping (e.g. "scene_0", "concat")
+	SceneId          string  `protobuf:"bytes,26,opt,name=scene_id,json=sceneId,proto3" json:"scene_id,omitempty"`
+	FramesDecoded    int64   `protobuf:"varint,27,opt,name=frames_decoded,json=framesDecoded,proto3" json:"frames_decoded,omitempty"`
+	FramesComposited int64   `protobuf:"varint,28,opt,name=frames_composited,json=framesComposited,proto3" json:"frames_composited,omitempty"`
+	FfmpegSpeedX     float64 `protobuf:"fixed64,29,opt,name=ffmpeg_speed_x,json=ffmpegSpeedX,proto3" json:"ffmpeg_speed_x,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -944,6 +948,34 @@ func (x *SegmentTiming) GetParallelGroup() string {
 		return x.ParallelGroup
 	}
 	return ""
+}
+
+func (x *SegmentTiming) GetSceneId() string {
+	if x != nil {
+		return x.SceneId
+	}
+	return ""
+}
+
+func (x *SegmentTiming) GetFramesDecoded() int64 {
+	if x != nil {
+		return x.FramesDecoded
+	}
+	return 0
+}
+
+func (x *SegmentTiming) GetFramesComposited() int64 {
+	if x != nil {
+		return x.FramesComposited
+	}
+	return 0
+}
+
+func (x *SegmentTiming) GetFfmpegSpeedX() float64 {
+	if x != nil {
+		return x.FfmpegSpeedX
+	}
+	return 0
 }
 
 type TaskResult struct {
@@ -4662,7 +4694,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\n" +
 	"command_id\x18\x01 \x01(\tR\tcommandId\x12\x18\n" +
 	"\acommand\x18\x02 \x01(\tR\acommand\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error\"\x9f\a\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"\xb4\b\n" +
 	"\rSegmentTiming\x12#\n" +
 	"\rsegment_index\x18\x01 \x01(\x05R\fsegmentIndex\x12,\n" +
 	"\x12scene_worker_index\x18\x02 \x01(\x05R\x10sceneWorkerIndex\x12\x1f\n" +
@@ -4694,7 +4726,11 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"workerSlot\x12\x1f\n" +
 	"\vcpu_threads\x18\x18 \x01(\x05R\n" +
 	"cpuThreads\x12%\n" +
-	"\x0eparallel_group\x18\x19 \x01(\tR\rparallelGroup\"\xcc\a\n" +
+	"\x0eparallel_group\x18\x19 \x01(\tR\rparallelGroup\x12\x19\n" +
+	"\bscene_id\x18\x1a \x01(\tR\asceneId\x12%\n" +
+	"\x0eframes_decoded\x18\x1b \x01(\x03R\rframesDecoded\x12+\n" +
+	"\x11frames_composited\x18\x1c \x01(\x03R\x10framesComposited\x12$\n" +
+	"\x0effmpeg_speed_x\x18\x1d \x01(\x01R\fffmpegSpeedX\"\xcc\a\n" +
 	"\n" +
 	"TaskResult\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x15\n" +

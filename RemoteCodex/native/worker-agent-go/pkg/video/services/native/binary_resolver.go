@@ -87,6 +87,8 @@ func preparePlanTemp(p *plan.RenderPlan) (string, string, int64, int64, error) {
 // ProcessStartMs, ProcessWaitMs, TotalMs) are untouched.
 func mapEngineSidecar(sc *engineSidecar, m *pipeline.RenderMetrics) {
 	m.Frames = sc.Frames
+	m.FramesDecoded = sc.FramesDecoded
+	m.FramesComposited = sc.FramesComposited
 	m.Fps = sc.Fps
 	m.SpeedX = sc.SpeedX
 	m.EncodePasses = sc.EncodePasses
@@ -110,6 +112,7 @@ func mapEngineSidecar(sc *engineSidecar, m *pipeline.RenderMetrics) {
 		m.Segments = append(m.Segments, pipeline.SegmentTiming{
 			SegmentIndex:     int(seg.Index),
 			SceneWorkerIndex: int(seg.WorkerIndex),
+			SceneID:          seg.SceneID,
 			SourceType:       seg.SourceType,
 			DurationMS:       seg.TotalMs,
 			AssetDownloadMS:  seg.AssetDownloadMs,
@@ -117,6 +120,9 @@ func mapEngineSidecar(sc *engineSidecar, m *pipeline.RenderMetrics) {
 			SourceBytes:      seg.SourceBytes,
 			OutputBytes:      seg.OutputBytes,
 			FramesEncoded:    seg.FramesEncoded,
+			FramesDecoded:    seg.FramesDecoded,
+			FramesComposited: seg.FramesComposited,
+			FfmpegSpeedX:     seg.FfmpegSpeedX,
 			Codec:            seg.Codec,
 			Preset:           seg.Preset,
 			FfmpegThreads:    int(seg.FfmpegThreads),

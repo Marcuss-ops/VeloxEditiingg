@@ -40,6 +40,7 @@ type TransformSpec struct {
 // TimelineItem is a single segment in the rendering timeline.
 type TimelineItem struct {
 	Source          MediaSource    `json:"source"`
+	SceneID         string         `json:"scene_id,omitempty"`
 	DurationSeconds float64        `json:"duration_seconds"`
 	IncludeAudio    bool           `json:"include_audio,omitempty"`
 	Transform       *TransformSpec `json:"transform,omitempty"`

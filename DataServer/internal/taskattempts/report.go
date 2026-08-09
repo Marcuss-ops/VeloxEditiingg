@@ -277,6 +277,7 @@ type SegmentTiming struct {
 	WorkerID         string  `json:"worker_id"`
 	SegmentIndex     int     `json:"segment_index"`
 	SceneWorkerIndex int     `json:"scene_worker_index"`
+	SceneID          string  `json:"scene_id,omitempty"`
 	SourceType       string  `json:"source_type"`
 	DurationMS       float64 `json:"duration_ms"`
 	AssetDownloadMS  float64 `json:"asset_download_ms"`
@@ -284,6 +285,9 @@ type SegmentTiming struct {
 	SourceBytes      int64   `json:"source_bytes"`
 	OutputBytes      int64   `json:"output_bytes"`
 	FramesEncoded    int64   `json:"frames_encoded"`
+	FramesDecoded    int64   `json:"frames_decoded"`
+	FramesComposited int64   `json:"frames_composited"`
+	FfmpegSpeedX     float64 `json:"ffmpeg_speed_x"`
 	Codec            string  `json:"codec"`
 	Preset           string  `json:"preset"`
 	FfmpegThreads    int     `json:"ffmpeg_threads"`

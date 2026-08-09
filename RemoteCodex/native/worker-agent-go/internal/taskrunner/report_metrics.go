@@ -84,6 +84,8 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 	// supplied canonical value and only fill aliases when it is absent.
 	for source, target := range map[string]string{
 		"engine.frames":                "frames.encoded",
+		"engine.frames_decoded":        "frames.decoded",
+		"engine.frames_composited":     "frames.composited",
 		"engine.speed_x":               "ffmpeg.speed_ratio",
 		"engine.encode_passes":         "encode.passes",
 		"engine.temp_bytes":            "temp.bytes.written",

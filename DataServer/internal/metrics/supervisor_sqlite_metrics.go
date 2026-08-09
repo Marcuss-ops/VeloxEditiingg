@@ -214,9 +214,10 @@ func (r *SQLiteLabelResolver) GetSegmentTimings(ctx context.Context, attemptID s
 	}
 	rows, err := r.DB.QueryContext(ctx, `
 		SELECT attempt_id, job_id, task_id, worker_id,
-		       segment_index, scene_worker_index, source_type,
+		       segment_index, scene_worker_index, source_type, scene_id,
 		       duration_ms, asset_download_ms, ffmpeg_encode_ms,
 		       source_bytes, output_bytes, frames_encoded,
+		       frames_decoded, frames_composited, ffmpeg_speed_x,
 		       codec, preset, ffmpeg_threads,
 		       status, error_code, error_message,
 		       source_url_hash, cache_key,
@@ -234,9 +235,10 @@ func (r *SQLiteLabelResolver) GetSegmentTimings(ctx context.Context, attemptID s
 	for rows.Next() {
 		var seg taskattempts.SegmentTiming
 		if err := rows.Scan(&seg.AttemptID, &seg.JobID, &seg.TaskID, &seg.WorkerID,
-			&seg.SegmentIndex, &seg.SceneWorkerIndex, &seg.SourceType,
+			&seg.SegmentIndex, &seg.SceneWorkerIndex, &seg.SourceType, &seg.SceneID,
 			&seg.DurationMS, &seg.AssetDownloadMS, &seg.FfmpegEncodeMS,
 			&seg.SourceBytes, &seg.OutputBytes, &seg.FramesEncoded,
+			&seg.FramesDecoded, &seg.FramesComposited, &seg.FfmpegSpeedX,
 			&seg.Codec, &seg.Preset, &seg.FfmpegThreads,
 			&seg.Status, &seg.ErrorCode, &seg.ErrorMessage,
 			&seg.SourceURLHash, &seg.CacheKey,

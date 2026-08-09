@@ -52,6 +52,7 @@ type Request struct {
 type ItemInput struct {
 	Type                     string // "image", "video", "color"
 	URL                      string
+	SceneID                  string
 	ColorHex                 string
 	Duration                 float64
 	Fit                      string

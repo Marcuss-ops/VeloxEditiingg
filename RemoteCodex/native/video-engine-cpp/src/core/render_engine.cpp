@@ -3,6 +3,7 @@
 #include "velox/services/media_utils.hpp"
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -46,10 +47,34 @@ namespace {
         return ec ? 0 : static_cast<int64_t>(sz);
     }
 
+    int64_t decodedFramesFromShowInfo(const std::string& stderr_out) {
+        int64_t maxFrame = -1;
+        size_t cursor = 0;
+        while ((cursor = stderr_out.find(" n:", cursor)) != std::string::npos) {
+            cursor += 3;
+            while (cursor < stderr_out.size() && std::isspace(static_cast<unsigned char>(stderr_out[cursor]))) {
+                ++cursor;
+            }
+            size_t end = cursor;
+            while (end < stderr_out.size() && std::isdigit(static_cast<unsigned char>(stderr_out[end]))) {
+                ++end;
+            }
+            if (end > cursor) {
+                try {
+                    maxFrame = std::max(maxFrame, static_cast<int64_t>(std::stoll(stderr_out.substr(cursor, end - cursor))));
+                } catch (...) {
+                }
+            }
+            cursor = end;
+        }
+        return maxFrame >= 0 ? maxFrame + 1 : 0;
+    }
+
     bool runFfmpegSegmentWithProgress(
         const std::string& full_cmd,
         const services::ProgressCallback& cb,
-        int64_t expected_duration_us
+        int64_t expected_duration_us,
+        int64_t& decoded_frames
     ) {
         if (!cb) {
             return file::runCommand(full_cmd);
@@ -63,6 +88,7 @@ namespace {
             expected_duration_us,
             stderr_out,
             exit_code);
+        decoded_frames = decodedFramesFromShowInfo(stderr_out);
         if (!ok || exit_code != 0) {
             std::cerr << "ffmpeg failed (exit=" << exit_code << "): "
                       << stderr_out << std::endl;
@@ -71,7 +97,11 @@ namespace {
     }
 
     std::string composeSegmentCmd(const std::string& args_only) {
-        return "ffmpeg -y -hide_banner -loglevel error -progress pipe:1 -nostats " + args_only;
+        const char* telemetry = std::getenv("VELOX_FFMPEG_DECODE_TELEMETRY");
+        const bool enabled = telemetry == nullptr ||
+            (std::string(telemetry) != "0" && std::string(telemetry) != "false");
+        return std::string("ffmpeg -y -hide_banner -loglevel ") +
+            (enabled ? "info" : "error") + " -progress pipe:1 -nostats " + args_only;
     }
 
     bool burnSubtitleTrack(
@@ -110,6 +140,8 @@ RenderEngine::SidecarGuard::~SidecarGuard() {
 RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     // Reset accumulators on every fresh render() call.
     frames_encoded_.store(0);
+    frames_decoded_.store(0);
+    frames_composited_.store(0);
     encode_passes_.store(0);
     temp_bytes_written_.store(0);
     duration_seconds_.store(0.0);
@@ -117,22 +149,6 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     last_progress_ = services::EngineProgress{};
     metrics_.reset();
     recorder_.Reset();
-
-    const auto onProgress = progress_cb_;
-    auto recordProgress = [this](const services::EngineProgress& p) {
-        last_progress_ = p;
-        if (p.frame > 0) {
-            int64_t cur = frames_encoded_.load();
-            if (p.frame > cur) frames_encoded_.store(p.frame);
-        }
-    };
-    services::ProgressCallback wrapped_cb;
-    if (onProgress) {
-        wrapped_cb = [onProgress, recordProgress](const services::EngineProgress& p) {
-            recordProgress(p);
-            onProgress(p);
-        };
-    }
 
     RenderResult result;
     result.output_path = plan.output_path;
@@ -206,6 +222,22 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         SegmentTiming seg;
         seg.index = i;
         seg.worker_index = 0;
+        seg.scene_id = item.scene_id;
+        int64_t segmentFrames = 0;
+        int64_t segmentDecodedFrames = 0;
+        services::EngineProgress segmentProgress{};
+        const auto onProgress = progress_cb_;
+        services::ProgressCallback segmentCallback =
+            [this, onProgress, &segmentFrames, &segmentProgress](const services::EngineProgress& p) {
+                segmentProgress = p;
+                if (p.frame > segmentFrames) {
+                    segmentFrames = p.frame;
+                }
+                last_progress_ = p;
+                if (onProgress) {
+                    onProgress(p);
+                }
+            };
         auto segStart = std::chrono::steady_clock::now();
         seg.started_offset_ms = std::chrono::duration<double, std::milli>(
             segStart - renderStart).count();
@@ -232,6 +264,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             seg.asset_download_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - dlStart).count();
             if (gotImage) {
+                seg.source_bytes = fileSize(localImg);
                 args_only = media::buildSceneSegmentArgs(localImg, segmentOut, item.duration_seconds, params);
             } else {
                 std::string hex = extractColorHex(item.source);
@@ -258,6 +291,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 return failRender("asset_download_failed");
             }
             assetPhase.Complete();
+            seg.source_bytes = fileSize(localVid);
             args_only = media::buildVideoSegmentArgs(localVid, segmentOut, item.duration_seconds, params, item.include_audio);
         } else if (std::holds_alternative<plan::ColorSource>(item.source)) {
             seg.source_type = "color";
@@ -279,7 +313,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             auto encStart = std::chrono::steady_clock::now();
             ScopedTimer t(metrics_, "segment_build_ms");
             bool built = runFfmpegSegmentWithProgress(
-                composeSegmentCmd(args_only), wrapped_cb, expected_us);
+                composeSegmentCmd(args_only), segmentCallback, expected_us, segmentDecodedFrames);
             if (!built) {
                 seg.status = telemetry::kStatusFailed;
                 seg.error_code = "encode_failed";
@@ -290,6 +324,15 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             }
             seg.ffmpeg_encode_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - encStart).count();
+            seg.frames_encoded = segmentFrames;
+            seg.frames_decoded = segmentDecodedFrames;
+            // FFmpeg reports the frame count after the filter graph, so it
+            // is the exact composited/output frame count for this segment.
+            seg.frames_composited = segmentFrames;
+            seg.ffmpeg_speed_x = segmentProgress.speed_x;
+            frames_encoded_.fetch_add(segmentFrames);
+            frames_decoded_.fetch_add(segmentDecodedFrames);
+            frames_composited_.fetch_add(segmentFrames);
             seg.status = telemetry::kStatusOk;
             seg.ffmpeg_threads = 0;
             encodePhase.SetDetailedMetrics(
@@ -297,8 +340,8 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 seg.started_offset_ms,
                 std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - renderStart).count(),
-                0.0, 0.0, 0, frames_encoded_.load());
-            encodePhase.Complete(0, fileSize(segmentOut), frames_encoded_.load(),
+                0.0, 0.0, 0, segmentFrames);
+            encodePhase.Complete(0, fileSize(segmentOut), segmentFrames,
                                  telemetry::kStatusOk);
         }
 
@@ -680,6 +723,8 @@ std::string RenderEngine::sidecarJson(const std::string& output_path) const {
     s << "\"progress\":" << static_cast<int>(last.progress_pct);
     s << ",\"progress_pct\":" << static_cast<int>(last.progress_pct);
     s << ",\"frames\":" << frames_encoded_.load();
+    s << ",\"frames_decoded\":" << frames_decoded_.load();
+    s << ",\"frames_composited\":" << frames_composited_.load();
     s << ",\"fps\":" << last.fps;
     s << ",\"speed\":\"" << escapeProgressJsonString(last.speed) << "\"";
     s << ",\"speed_x\":" << last.speed_x;
@@ -719,6 +764,7 @@ std::string RenderEngine::sidecarJson(const std::string& output_path) const {
             s << "{";
             s << "\"index\":" << seg.index;
             s << ",\"worker_index\":" << seg.worker_index;
+            s << ",\"scene_id\":\"" << escapeProgressJsonString(seg.scene_id) << "\"";
             s << ",\"source_type\":\"" << escapeProgressJsonString(seg.source_type) << "\"";
             s << ",\"total_ms\":" << seg.total_ms;
             s << ",\"asset_download_ms\":" << seg.asset_download_ms;
@@ -726,6 +772,9 @@ std::string RenderEngine::sidecarJson(const std::string& output_path) const {
             s << ",\"source_bytes\":" << seg.source_bytes;
             s << ",\"output_bytes\":" << seg.output_bytes;
             s << ",\"frames_encoded\":" << seg.frames_encoded;
+            s << ",\"frames_decoded\":" << seg.frames_decoded;
+            s << ",\"frames_composited\":" << seg.frames_composited;
+            s << ",\"ffmpeg_speed_x\":" << seg.ffmpeg_speed_x;
             s << ",\"codec\":\"" << escapeProgressJsonString(seg.codec) << "\"";
             s << ",\"preset\":\"" << escapeProgressJsonString(seg.preset) << "\"";
             s << ",\"ffmpeg_threads\":" << seg.ffmpeg_threads;

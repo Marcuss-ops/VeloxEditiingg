@@ -38,6 +38,7 @@ func ProgressCallback(ctx context.Context) ProgressFunc {
 type SegmentTiming struct {
 	SegmentIndex     int
 	SceneWorkerIndex int
+	SceneID          string
 	SourceType       string
 	DurationMS       float64
 	AssetDownloadMS  float64
@@ -45,6 +46,9 @@ type SegmentTiming struct {
 	SourceBytes      int64
 	OutputBytes      int64
 	FramesEncoded    int64
+	FramesDecoded    int64
+	FramesComposited int64
+	FfmpegSpeedX     float64
 	Codec            string
 	Preset           string
 	FfmpegThreads    int
@@ -111,23 +115,25 @@ type RenderClient interface {
 // counters. The zero value is safe — executors that don't use native
 // rendering return it unpopulated.
 type RenderMetrics struct {
-	Frames         int64
-	Fps            float64
-	SpeedX         float64
-	EncodePasses   int64
-	TempBytes      int64
-	DurationSec    float64
-	ConcatMode     string
-	TotalSize      int64
-	OutTimeMs      int64
-	Bitrate        float64
-	DupFrames      int64
-	DropFrames     int64
-	PlanMarshalMs  int64
-	PlanWriteMs    int64
-	ProcessStartMs int64
-	ProcessWaitMs  int64
-	TotalMs        int64
+	Frames           int64
+	FramesDecoded    int64
+	FramesComposited int64
+	Fps              float64
+	SpeedX           float64
+	EncodePasses     int64
+	TempBytes        int64
+	DurationSec      float64
+	ConcatMode       string
+	TotalSize        int64
+	OutTimeMs        int64
+	Bitrate          float64
+	DupFrames        int64
+	DropFrames       int64
+	PlanMarshalMs    int64
+	PlanWriteMs      int64
+	ProcessStartMs   int64
+	ProcessWaitMs    int64
+	TotalMs          int64
 	// PhaseMS carries the per-phase engine timings from the C++ sidecar
 	// (engine.asset_download, engine.segment_build, engine.concat, …).
 	// Nil when no sidecar was read.

@@ -366,6 +366,7 @@ void testRenderEngineIntegration() {
     plan.job_id = "phase-recorder-integration";
     plan.canvas = {64, 64, 5};
     plan.timeline.push_back({velox::plan::ColorSource{"#112233"}, 0.2, false, {"stretch", false}});
+    plan.timeline.back().scene_id = "scene-test";
     plan.output_path = output.string();
 
     velox::core::RenderEngine engine;
@@ -373,6 +374,9 @@ void testRenderEngineIntegration() {
     EXPECT(result.success, "RenderEngine color render must succeed (error=" + result.error + ")");
     EXPECT(fs::exists(output), "render output must exist");
     EXPECT(fs::exists(sidecar), "SidecarGuard must write the progress sidecar");
+    EXPECT(engine.framesEncoded() > 0, "FFmpeg progress must report encoded frames");
+    EXPECT(engine.framesDecoded() > 0, "showinfo must report decoded frames");
+    EXPECT(engine.framesComposited() > 0, "FFmpeg progress must report composited frames");
 
     const std::string json = velox::file::readFile(sidecar.string());
     EXPECT(!json.empty(), "integration sidecar must not be empty");
@@ -381,6 +385,8 @@ void testRenderEngineIntegration() {
            "integration sidecar keeps phase_ms");
     EXPECT(std::strstr(json.c_str(), "\"segments\":[") != nullptr,
            "integration sidecar keeps segments");
+    EXPECT(std::strstr(json.c_str(), "\"scene_id\":\"scene-test\"") != nullptr,
+           "integration sidecar preserves scene identity");
     EXPECT(std::strstr(json.c_str(), "\"phases\":[") != nullptr,
            "integration sidecar emits phases");
     EXPECT(std::strstr(json.c_str(), "\"action\":\"render\"") != nullptr,

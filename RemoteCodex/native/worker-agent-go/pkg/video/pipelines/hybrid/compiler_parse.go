@@ -123,6 +123,16 @@ func parseRequest(input map[string]interface{}) *Request {
 				}
 			}
 			includeAudio := toBoolDefault(im["include_audio"], false)
+			sceneID := toString(im["scene_id"])
+			if sceneID == "" {
+				if sceneIdx, ok := numericSceneIndex(im["scene"]); ok && sceneIdx >= 0 {
+					if sceneIdx < len(scenes) {
+						sceneID = toStringDefault(scenes[sceneIdx]["id"], fmt.Sprintf("scene-%d", sceneIdx))
+					} else {
+						sceneID = fmt.Sprintf("scene-%d", sceneIdx)
+					}
+				}
+			}
 			// A voiceover_bed is visual stock only. Its audio is supplied by
 			// audio_tracks, and allowing source audio here would make the
 			// native codec use -shortest and truncate a looped stock segment
@@ -133,6 +143,7 @@ func parseRequest(input map[string]interface{}) *Request {
 			req.Items = append(req.Items, ItemInput{
 				Type:                     itemType,
 				URL:                      itemURL,
+				SceneID:                  sceneID,
 				ColorHex:                 toStringDefault(im["color_hex"], "#000000"),
 				Duration:                 itemDuration,
 				Fit:                      itemFit,
@@ -151,7 +162,7 @@ func parseRequest(input map[string]interface{}) *Request {
 	if encoded, ok := input["scenes_json"].(string); ok && strings.TrimSpace(encoded) != "" {
 		var scenes []map[string]interface{}
 		if err := json.Unmarshal([]byte(encoded), &scenes); err == nil {
-			for _, scene := range scenes {
+			for sceneIndex, scene := range scenes {
 				clipURL := toString(scene["clip_link"])
 				if clip, ok := scene["clip"].(map[string]interface{}); ok {
 					clipURL = toStringDefault(clip["url"], clipURL)
@@ -162,6 +173,7 @@ func parseRequest(input map[string]interface{}) *Request {
 				req.Items = append(req.Items, ItemInput{
 					Type:         "video",
 					URL:          clipURL,
+					SceneID:      toStringDefault(scene["id"], fmt.Sprintf("scene-%d", sceneIndex)),
 					Duration:     toFloat64Default(scene["duration_seconds"], 4.0),
 					Fit:          req.Fit,
 					IncludeAudio: true,
@@ -195,6 +207,19 @@ func parseRequest(input map[string]interface{}) *Request {
 	}
 
 	return req
+}
+
+func numericSceneIndex(v interface{}) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	default:
+		return 0, false
+	}
 }
 
 func toString(v interface{}) string {
