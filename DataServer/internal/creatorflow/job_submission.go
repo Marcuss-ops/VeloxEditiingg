@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"strings"
 
+	"velox-server/internal/jobs/enqueue"
 	"velox-shared/contract/domain"
 	"velox-shared/publication"
 )
@@ -76,7 +78,7 @@ func (s *JobSubmissionService) Submit(ctx context.Context, req CanonicalJobSubmi
 			req.Payload["delivery_plan"] = req.DeliveryPlan
 		}
 	}
-	return s.resolver.Resolve(ctx, ResolveRequest{
+	out, err := s.resolver.Resolve(ctx, ResolveRequest{
 		WorkspaceID:      req.WorkspaceID,
 		ExternalClientID: req.ExternalClientID,
 		SourceProvider:   req.SourceProvider,
@@ -86,4 +88,13 @@ func (s *JobSubmissionService) Submit(ctx context.Context, req CanonicalJobSubmi
 		DeliveryPlan:     req.DeliveryPlan,
 		PublicationSpecs: req.PublicationSpecs,
 	})
+	if err != nil {
+		phase := "unknown"
+		if enqueuePhase, ok := enqueue.EnqueuePhaseOf(err); ok {
+			phase = string(enqueuePhase)
+		}
+		errHash := sha256.Sum256([]byte(err.Error()))
+		log.Printf("[CREATORFLOW] canonical submission rejected phase=%s error_type=%T error_hash=%x", phase, err, errHash[:4])
+	}
+	return out, err
 }
