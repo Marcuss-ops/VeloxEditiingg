@@ -90,6 +90,14 @@ func (m *WorkersModule) SetProtectedAssetsHandler(h *api.ProtectedAssetsHandler)
 // accessor — callers MUST NOT mutate the registry directly.
 func (m *WorkersModule) Registry() *workersreg.Registry { return m.reg }
 
+// SetDeploymentReader wires the read-only deployment ledger into the admin
+// worker cards. Mutations remain owned by FleetController.
+func (m *WorkersModule) SetDeploymentReader(reader api.DeploymentReader) {
+	if m != nil && m.adminWorkersHandler != nil {
+		m.adminWorkersHandler.SetDeploymentReader(reader)
+	}
+}
+
 // SetMutationsHandler wires the Step 6/15 admin mutations handler
 // (POST drain/resume/quarantine). Idempotent — safe to call before
 // RegisterRoutes; passing nil disables the POST routes so a

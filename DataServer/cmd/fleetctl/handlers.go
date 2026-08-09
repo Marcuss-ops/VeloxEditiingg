@@ -31,6 +31,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -79,6 +80,23 @@ type sshCheckResponse struct {
 // runStatus — GET /api/v1/admin/workers; pretty-prints a
 // WorkerCard-shaped table per worker. Synchronous; no polling.
 func runStatus(client *fleetClient) int {
+	return runStatusMode(client, false)
+}
+
+var fullImageDigest = regexp.MustCompile(`@sha256:[0-9a-f]{64}$`)
+
+func digestFromRef(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if digestRegex.MatchString(ref) {
+		return ref
+	}
+	if fullImageDigest.MatchString(ref) {
+		return "sha256:" + strings.TrimPrefix(ref[strings.LastIndex(ref, "@")+1:], "sha256:")
+	}
+	return ""
+}
+
+func runStatusMode(client *fleetClient, production bool) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*1e9)
 	defer cancel()
 	resp := workerListResponse{}
@@ -92,6 +110,31 @@ func runStatus(client *fleetClient) int {
 		return MapHTTPStatusToOpExit(status)
 	}
 	// Pretty-print.
+	if production {
+		fmt.Printf("%-24s  %-32s  %-71s  %-71s  %-8s\n", "NAME", "WORKER_ID", "DESIRED DIGEST", "RUNNING DIGEST", "STATE")
+		fmt.Printf("%-24s  %-32s  %-71s  %-71s  %-8s\n", "----", "---------", "--------------", "--------------", "-----")
+		verified := true
+		for _, w := range resp.Workers {
+			wid, _ := w["worker_id"].(string)
+			name, _ := w["worker_name"].(string)
+			if name == "" {
+				name, _ = w["hostname"].(string)
+			}
+			desired, _ := w["target_digest"].(string)
+			running, _ := w["image_digest"].(string)
+			desiredDigest, runningDigest := digestFromRef(desired), digestFromRef(running)
+			state := "CLEAN"
+			if desiredDigest == "" || runningDigest == "" || desiredDigest != runningDigest {
+				state, verified = "DRIFT", false
+			}
+			fmt.Printf("%-24s  %-32s  %-71s  %-71s  %-8s\n", name, wid, desired, running, state)
+		}
+		if !verified || resp.Count == 0 {
+			return ExitUnexpected
+		}
+		fmt.Printf("\n%d/%d workers verified\n", resp.Count, resp.Count)
+		return ExitOK
+	}
 	fmt.Printf("%-24s  %-32s  %-9s  %-9s  %-9s  %-26s  %-13s\n", "NAME", "WORKER_ID", "STATUS", "HEALTH", "JOBS", "EXECUTOR@VERSION", "LAST_SMOKE")
 	fmt.Printf("%-24s  %-32s  %-9s  %-9s  %-9s  %-26s  %-13s\n", "----", "---------", "------", "------", "----", "--------------", "----------")
 	for _, w := range resp.Workers {

@@ -24,14 +24,24 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 
+	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 )
+
+// DeploymentReader is the read-only ledger seam used to make the desired
+// image visible beside the worker-reported running image. Keeping this seam
+// small lets tests use an in-memory fake and keeps the handler independent of
+// the FleetController mutation path.
+type DeploymentReader interface {
+	GetLatestDeploymentForWorker(context.Context, string) (*store.DeploymentRecord, error)
+}
 
 // AdminWorkersHandler holds the registry dependency for the operator-
 // facing GET /api/v1/admin/workers endpoints.
@@ -41,13 +51,23 @@ import (
 // skips the GET when the handler itself is nil so a misconfigured
 // bootstrap never accidentally mounts an admin endpoint.
 type AdminWorkersHandler struct {
-	reg *workersreg.Registry
+	reg         *workersreg.Registry
+	deployments DeploymentReader
 }
 
 // NewAdminWorkersHandler wires an AdminWorkersHandler to the worker
 // registry read model.
 func NewAdminWorkersHandler(reg *workersreg.Registry) *AdminWorkersHandler {
 	return &AdminWorkersHandler{reg: reg}
+}
+
+// SetDeploymentReader wires the deployment ledger used by production status
+// checks. A nil reader is allowed for lightweight/unit-only deployments, but
+// production consumers must treat missing ledger data as unverified.
+func (h *AdminWorkersHandler) SetDeploymentReader(reader DeploymentReader) {
+	if h != nil {
+		h.deployments = reader
+	}
 }
 
 // ListAdminWorkers returns GET /api/v1/admin/workers — the canonical
@@ -73,7 +93,7 @@ func (h *AdminWorkersHandler) ListAdminWorkers() gin.HandlerFunc {
 		list := h.reg.List(c.Request.Context())
 		cards := make([]WorkerCard, 0, len(list))
 		for i := range list {
-			cards = append(cards, buildWorkerCard(&list[i]))
+			cards = append(cards, h.card(c.Request.Context(), &list[i]))
 		}
 		sort.Slice(cards, func(i, j int) bool {
 			return cards[i].WorkerID < cards[j].WorkerID
@@ -115,8 +135,23 @@ func (h *AdminWorkersHandler) GetAdminWorker() gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "worker not found"})
 			return
 		}
-		c.JSON(http.StatusOK, buildWorkerCard(info))
+		c.JSON(http.StatusOK, h.card(c.Request.Context(), info))
 	}
+}
+
+func (h *AdminWorkersHandler) card(ctx context.Context, info *workersreg.Worker) WorkerCard {
+	card := buildWorkerCard(info)
+	if h == nil || h.deployments == nil || info == nil {
+		return card
+	}
+	rec, err := h.deployments.GetLatestDeploymentForWorker(ctx, info.WorkerID.String())
+	if err != nil || rec == nil {
+		return card
+	}
+	card.TargetDigest = rec.TargetDigest
+	card.PreviousDigest = rec.PreviousDigest
+	card.DigestState = rec.Status
+	return card
 }
 
 // buildWorkerCard translates the registry read model into the

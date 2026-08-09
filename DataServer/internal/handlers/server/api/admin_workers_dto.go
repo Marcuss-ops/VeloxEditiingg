@@ -77,6 +77,9 @@ type WorkerCard struct {
 	Executor            string  `json:"executor"`
 	ExecutorVersion     int32   `json:"executor_version"`
 	ImageDigest         string  `json:"image_digest,omitempty"`
+	TargetDigest        string  `json:"target_digest,omitempty"`
+	PreviousDigest      string  `json:"previous_digest,omitempty"`
+	DigestState         string  `json:"digest_state,omitempty"`
 	SoftwareVersion     string  `json:"software_version"`
 	DesiredVersion      string  `json:"desired_version,omitempty"`
 	LastHeartbeatAt     string  `json:"last_heartbeat_at,omitempty"`

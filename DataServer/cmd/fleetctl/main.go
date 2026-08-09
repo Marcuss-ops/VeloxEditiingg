@@ -135,7 +135,13 @@ func runMain(args []string) int {
 	// os.Exit(exit) directly so tests can assert the integer.
 	switch sub {
 	case subStatus:
-		return runStatus(client)
+		production := false
+		for _, arg := range rest[1:] {
+			if arg == "--production" {
+				production = true
+			}
+		}
+		return runStatusMode(client, production)
 	case subInspect:
 		return runInspect(client, rest[1:])
 	case subDrain:

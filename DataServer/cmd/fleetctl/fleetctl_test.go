@@ -223,6 +223,31 @@ func TestRunStatus_StatusOK_PrettyPrintsCard(t *testing.T) {
 	}
 }
 
+func TestDigestFromRef_RequiresImmutableImageDigest(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	if got := digestFromRef("ghcr.io/example/velox-worker@" + digest); got != digest {
+		t.Fatalf("digestFromRef immutable ref = %q, want %q", got, digest)
+	}
+	if got := digestFromRef("ghcr.io/example/velox-worker:latest"); got != "" {
+		t.Fatalf("digestFromRef mutable tag = %q, want empty", got)
+	}
+}
+
+func TestRunStatusProduction_DriftReturnsNonZero(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(workerListResponse{Count: 1, Workers: []map[string]any{{
+			"worker_id": "worker-1", "worker_name": "velox_worker_1",
+			"target_digest": "ghcr.io/example/velox-worker@" + digest,
+			"image_digest":  "ghcr.io/example/velox-worker@sha256:" + strings.Repeat("b", 64),
+		}}})
+	})
+	defer srv.Close()
+	if got := runStatusMode(c, true); got == ExitOK {
+		t.Fatal("production status must fail on digest drift")
+	}
+}
+
 func TestRunSSHCheck_AllReady_ReturnsExitOK(t *testing.T) {
 	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/admin/workers/ssh-check" {
