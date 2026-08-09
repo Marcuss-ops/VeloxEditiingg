@@ -118,7 +118,7 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 	// hybrid executor consumes the compiled timeline as items. Build that
 	// timeline here for narrated stock recipes so stock-only scenes remain
 	// visual, randomised per scene, and exactly cover each voiceover.
-	if strings.EqualFold(payload.FirstString(flat, "video_mode"), "clip_stock") {
+	if hasCanonicalClipBindings(flat) {
 		_, items, _, audioTracks, _, timelineErr := normalizeClipPayload(flat)
 		if timelineErr != nil {
 			return nil, fmt.Errorf("build clip-stock timeline: %w", timelineErr)
@@ -139,6 +139,62 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 		return nil, fmt.Errorf("project renderer payload: %w", err)
 	}
 	return workerPayload, nil
+}
+
+// hasCanonicalClipBindings identifies the scene-composite form that carries
+// clip/voiceover objects but no explicit video_mode. The hybrid worker
+// consumes the compiled `items` timeline; scenes_json alone is an immutable
+// scene description and is not sufficient to render.
+func hasCanonicalClipBindings(flat map[string]interface{}) bool {
+	if flat == nil {
+		return false
+	}
+	var scenes []map[string]interface{}
+	if raw, ok := flat["scenes"]; ok {
+		scenes = normalizeSceneArray(raw)
+	}
+	if len(scenes) == 0 {
+		if encoded := payload.FirstString(flat, "scenes_json"); encoded != "" {
+			_ = json.Unmarshal([]byte(encoded), &scenes)
+		}
+	}
+	for _, scene := range scenes {
+		voiceover, hasVoiceover := scene["voiceover"].(map[string]interface{})
+		if !hasVoiceover || !isCanonicalTimelineAsset(voiceover) {
+			continue
+		}
+		if asset, ok := scene["clip"].(map[string]interface{}); ok && isCanonicalTimelineAsset(asset) {
+			return true
+		}
+		for _, asset := range pipelineMapList(scene["stock"]) {
+			if isCanonicalTimelineAsset(asset) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func pipelineMapList(value interface{}) []map[string]interface{} {
+	switch typed := value.(type) {
+	case []map[string]interface{}:
+		return typed
+	case []interface{}:
+		out := make([]map[string]interface{}, 0, len(typed))
+		for _, item := range typed {
+			if mapped, ok := item.(map[string]interface{}); ok {
+				out = append(out, mapped)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func isCanonicalTimelineAsset(asset map[string]interface{}) bool {
+	return strings.TrimSpace(payload.FirstString(asset, "asset_id")) != "" &&
+		strings.HasPrefix(strings.TrimSpace(payload.FirstString(asset, "url")), "velox-asset://")
 }
 
 // FlattenPipelineResult flattens a nested pipeline result by merging top-level

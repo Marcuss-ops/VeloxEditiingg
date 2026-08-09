@@ -42,7 +42,8 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 	if lease.MaxAttempts > 0 {
 		maxAttempts = lease.MaxAttempts
 	}
-	provider, err := r.registry.Resolve(lease.Provider)
+	providerName := canonicalProviderName(lease.Provider)
+	provider, err := r.registry.Resolve(providerName)
 	if err != nil {
 		// Provider not configured → permanent failure.
 		if err := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "PROVIDER_NOT_CONFIGURED", err.Error()); err != nil {
@@ -122,7 +123,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 	// Resumable providers enter the phase executor after all durable inputs and
 	// the short-lived credential lease have been resolved. Legacy providers
 	// intentionally continue through Deliver below and remain non-resumable.
-	if executor, ok := r.registry.ResolvePhaseExecutor(lease.Provider); ok {
+	if executor, ok := r.registry.ResolvePhaseExecutor(providerName); ok {
 		if publicationID == "" {
 			err := fmt.Errorf("%w: publication_id is required for resumable delivery", ErrProviderPermanent)
 			_ = r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "PUBLICATION_ID_REQUIRED", err.Error())

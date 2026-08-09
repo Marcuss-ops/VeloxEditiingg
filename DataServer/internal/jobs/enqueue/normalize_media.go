@@ -2,6 +2,7 @@
 package enqueue
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -50,6 +51,14 @@ func extractVoiceoverPaths(p map[string]interface{}) []string {
 			payload.FirstString(nested, "local_path", "path", "drive_link", "url"),
 		)
 	}
+	// Canonical scene-composite input binds narration to each scene. Keep
+	// this fallback here so ShouldForwardPipelineResult and BuildPipelinePayload
+	// recognize that shape without reconstructing positional legacy fields.
+	for _, scene := range canonicalPipelineScenes(p) {
+		if voiceover, ok := scene["voiceover"].(map[string]interface{}); ok {
+			candidates = append(candidates, payload.FirstString(voiceover, "local_path", "path", "drive_link", "url"))
+		}
+	}
 	result := make([]string, 0, len(candidates))
 	seen := make(map[string]struct{}, len(candidates))
 	for _, item := range candidates {
@@ -64,6 +73,24 @@ func extractVoiceoverPaths(p map[string]interface{}) []string {
 		result = append(result, trimmed)
 	}
 	return result
+}
+
+func canonicalPipelineScenes(p map[string]interface{}) []map[string]interface{} {
+	if p == nil {
+		return nil
+	}
+	if scenes := normalizeSceneArray(p["scenes"]); len(scenes) > 0 {
+		return scenes
+	}
+	encoded := payload.FirstString(p, "scenes_json")
+	if encoded == "" {
+		return nil
+	}
+	var scenes []map[string]interface{}
+	if json.Unmarshal([]byte(encoded), &scenes) != nil {
+		return nil
+	}
+	return scenes
 }
 
 // hasAudioTracks reports whether at least one normalized audio track has a

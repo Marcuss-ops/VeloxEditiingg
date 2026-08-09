@@ -202,10 +202,13 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 			} else {
 				entry["retry_budget"] = *d.RetryBudget
 			}
-			// Delivery routing remains available for legacy enqueue logic,
-			// but publication metadata never crosses into the renderer map.
-			// Titles, descriptions, tags, privacy, and scheduling belong to
-			// PublicationSpecs on the control plane.
+			if d.Metadata != nil {
+				// Destination metadata is control-plane routing data. It must
+				// survive the external DTO projection so providers can honor
+				// per-job targets such as a Drive folder, while it remains
+				// excluded from the renderer worker payload.
+				entry["metadata"] = d.Metadata
+			}
 			plan = append(plan, entry)
 		}
 		m["delivery_plan"] = plan

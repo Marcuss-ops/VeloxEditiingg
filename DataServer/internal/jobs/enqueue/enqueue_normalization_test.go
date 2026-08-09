@@ -253,6 +253,33 @@ func TestBuildPipelinePayload(t *testing.T) {
 	})
 }
 
+func TestBuildPipelinePayload_CompilesCanonicalSceneCompositeTimeline(t *testing.T) {
+	result, err := BuildPipelinePayload(map[string]interface{}{
+		"status":      "completed",
+		"video_name":  "Scene composite",
+		"script_text": "Narrated scene",
+		"scenes": []interface{}{
+			map[string]interface{}{
+				"text":             "Scene 1",
+				"duration_seconds": 5.0,
+				"clip":             map[string]interface{}{"asset_id": "clip-1", "url": "velox-asset://clip-1", "duration_ms": 5000},
+				"voiceover":        map[string]interface{}{"asset_id": "voice-1", "url": "velox-asset://voice-1", "duration_ms": 5000},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildPipelinePayload: %v", err)
+	}
+	items, ok := result["items"].([]map[string]interface{})
+	if !ok || len(items) != 2 {
+		t.Fatalf("items = %#v, want narrated bed + scene clip", result["items"])
+	}
+	tracks, ok := result["audio_tracks"].([]map[string]interface{})
+	if !ok || len(tracks) != 2 {
+		t.Fatalf("audio_tracks = %#v, want voiceover + clip audio", result["audio_tracks"])
+	}
+}
+
 func TestNormalizeSceneVideoPayload_PreservesBackgroundMusicAndMergesTwoVoiceovers(t *testing.T) {
 	t.Parallel()
 

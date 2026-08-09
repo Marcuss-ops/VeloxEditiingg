@@ -7,6 +7,8 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 
 	"velox-server/internal/deliveries"
 	integrationsDrive "velox-server/internal/integrations/drive"
@@ -51,7 +53,7 @@ func (d *DriveProvider) Deliver(ctx context.Context, artifact *store.Artifact, d
 	if marker == "" {
 		marker = idempotencyKey
 	}
-	uploadRes, err := d.service.UploadVideo(ctx, filePath, artifact.ID, destination.FolderID, marker)
+	uploadRes, err := d.service.UploadVideo(ctx, filePath, artifact.ID, driveFolderReference(destination), marker)
 	if err != nil {
 		return nil, err
 	}
@@ -63,4 +65,26 @@ func (d *DriveProvider) Deliver(ctx context.Context, artifact *store.Artifact, d
 			"folder_link": uploadRes.FolderLink,
 		},
 	}, nil
+}
+
+func driveFolderReference(destination *deliveries.Destination) string {
+	if destination == nil {
+		return ""
+	}
+	folder := strings.TrimSpace(destination.FolderID)
+	var metadata map[string]interface{}
+	if raw := strings.TrimSpace(destination.DeliveryMetadataJSON); raw != "" {
+		if json.Unmarshal([]byte(raw), &metadata) == nil {
+			if requested, ok := metadata["folder_id"].(string); ok && strings.TrimSpace(requested) != "" {
+				folder = strings.TrimSpace(requested)
+			}
+		}
+	}
+	if marker := strings.Index(folder, "/folders/"); marker >= 0 {
+		folder = folder[marker+len("/folders/"):]
+	}
+	if query := strings.IndexByte(folder, '?'); query >= 0 {
+		folder = folder[:query]
+	}
+	return strings.Trim(folder, "/")
 }

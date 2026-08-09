@@ -91,7 +91,8 @@ func (r *DeliveryRunner) hydrateDestination(ctx context.Context, destID string) 
 	if d == nil {
 		return nil, fmt.Errorf("deliveries: destination %s not found", destID)
 	}
-	if strings.TrimSpace(d.ExternalDestinationID) == "" {
+	providerName := canonicalProviderName(d.Provider)
+	if providerName == "social_gateway" && strings.TrimSpace(d.ExternalDestinationID) == "" {
 		return nil, fmt.Errorf("deliveries: destination %s: %w", destID, ErrDestinationUnmapped)
 	}
 	cfg := d.ConfigurationJSON
@@ -100,7 +101,7 @@ func (r *DeliveryRunner) hydrateDestination(ctx context.Context, destID string) 
 	}
 	return &Destination{
 		DestinationID:         d.DestinationID,
-		Provider:              d.Provider,
+		Provider:              providerName,
 		ExternalDestinationID: d.ExternalDestinationID,
 		FolderID:              d.FolderID,
 		Name:                  d.Name,
@@ -108,6 +109,13 @@ func (r *DeliveryRunner) hydrateDestination(ctx context.Context, destID string) 
 		ConfigurationJSON:     d.ConfigurationJSON,
 		Configuration:         []byte(cfg),
 	}, nil
+}
+
+func canonicalProviderName(provider string) string {
+	if strings.EqualFold(strings.TrimSpace(provider), "google_drive") {
+		return "drive"
+	}
+	return strings.TrimSpace(provider)
 }
 
 // hydrateArtifact reads artifacts by id.

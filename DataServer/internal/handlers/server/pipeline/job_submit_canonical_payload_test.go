@@ -143,6 +143,7 @@ func TestCanonicalPayloadParity_PipelinePreservesCanonicalKeys(t *testing.T) {
 		}},
 		DeliveryPlan: []SubmitDeliveryPlanEntry{{
 			DestinationID: "drive", Priority: 1, RetryBudget: intPtr(3),
+			Metadata: map[string]interface{}{"folder_id": "folder-parity"},
 		}},
 	}
 
@@ -197,6 +198,10 @@ func TestCanonicalPayloadParity_PipelinePreservesCanonicalKeys(t *testing.T) {
 	}
 	if _, leaked := canonical.WorkerPayload["delivery_plan"]; leaked {
 		t.Fatalf("delivery_plan leaked into renderer WorkerPayload: %#v", canonical.WorkerPayload["delivery_plan"])
+	}
+	metadata, ok := dp[0].(map[string]interface{})["metadata"].(map[string]interface{})
+	if !ok || metadata["folder_id"] != "folder-parity" {
+		t.Fatalf("delivery metadata lost during projection: %#v", dp[0])
 	}
 
 }
