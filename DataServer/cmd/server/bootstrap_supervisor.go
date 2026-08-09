@@ -66,7 +66,7 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 		env := cfg.Runtime.Cache
 		svc := protectedasset.NewService(protectedasset.RepoFunc(func(ctx context.Context, limit int) ([]dispatchable.Job, error) {
 			return dispatchable.ListNextDispatchableJobs(ctx, p.SQLite.DB(), limit)
-		}), env.ProtectedAssetLookaheadJobs).WithErrorHandler(func(err error) {
+		}), env.ProtectedAssetLookaheadJobs).SetVersionSeed(uint64(time.Now().UnixNano())).WithErrorHandler(func(err error) {
 			log.Printf("[CACHE-SNAPSHOT] refresh failed: %v", err)
 		})
 		if err := svc.Refresh(context.Background()); err != nil {

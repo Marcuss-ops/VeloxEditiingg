@@ -88,6 +88,7 @@ func (f RepoFunc) ListNextDispatchableJobs(ctx context.Context, limit int) ([]di
 type Service struct {
 	mu       sync.RWMutex
 	snapshot Snapshot
+	version  uint64
 
 	repo    Repo
 	limit   int
@@ -121,6 +122,17 @@ func NewService(repo Repo, limit int) *Service {
 // for constructor-time wiring.
 func (s *Service) SetClock(now func() time.Time) *Service {
 	s.now = now
+	return s
+}
+
+// SetVersionSeed establishes a restart-safe version floor for production
+// snapshots. The worker-side poller treats Version as authoritative when it
+// is present, so an in-memory counter that resets to 1 after a Master restart
+// would make workers reject every newer snapshot until they restart too.
+// Tests intentionally leave the seed at zero to preserve their deterministic
+// 1, 2, 3 sequence.
+func (s *Service) SetVersionSeed(seed uint64) *Service {
+	s.version = seed
 	return s
 }
 
@@ -168,8 +180,13 @@ func (s *Service) Refresh(ctx context.Context) error {
 	// it can be stored directly. It is ALWAYS non-nil (make([]string, 0, n))
 	// even when the protected set is empty, preserving the wire contract
 	// that an empty list is a valid "no jobs in queue" response.
+	nextVersion := s.snapshot.Version + 1
+	if s.version >= nextVersion {
+		nextVersion = s.version + 1
+	}
+	s.version = nextVersion
 	s.snapshot = Snapshot{
-		Version:            s.snapshot.Version + 1,
+		Version:            nextVersion,
 		GeneratedAt:        s.now(),
 		LookaheadJobs:      len(jobs),
 		ProtectedAssetKeys: ids,
