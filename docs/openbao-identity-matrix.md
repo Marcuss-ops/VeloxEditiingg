@@ -119,9 +119,7 @@ esplicitamente `pki/issue`, `pki/roles/*` e `pki/config/*`.
    (`VELOX_ADMIN_TOKEN`, `INSTAEDIT_CONTROL_JWT_SECRET`, `SOCIAL_API_TOKEN`,
    `SOCIAL_WEBHOOK_SECRET`, `VELOX_COMMIT_HMAC_KEY`) — niente `vault_velox_*`,
    niente YAML per Ansible (la struttura `deploy/group_vars/` è stata eliminata).
-   `migrate-master-tokens.sh` fa la direzione inversa (env → KV, `--force`,
-   fail-closed sui required, mai stampa valori). Invocato da
-   `scripts/operator/deploy-production.sh`.
+   La migrazione env → KV è chiusa; non esiste un percorso inverso operativo.
 5. ✅ ~~SSH CA~~ (fase 7) — secrets engine `ssh` + CA + role `velox-operator`
    + identità di firma `ssh-operator` (opzionale); la CA pubblica viene
    esportata da `provision-ssh-ca.sh` in `$STATE_DIR/ssh-ca.pub` e distribuita

@@ -192,9 +192,18 @@ def production_paths_changed(base: str) -> list[str]:
         invalid = sorted(path for path in scope if not path.startswith(allowed_roots))
         if invalid:
             raise AssertionError(f"compatibility scope contains non-production paths: {invalid!r}")
-        missing = sorted(path for path in scope if not (ROOT / path).exists())
+        deleted = set(
+            git("diff", "--name-only", "--diff-filter=D", "HEAD", "--").splitlines()
+        )
+        missing = sorted(
+            path for path in scope
+            if not (ROOT / path).exists() and path not in deleted
+        )
         if missing:
-            raise AssertionError(f"compatibility scope paths are missing: {missing!r}")
+            raise AssertionError(
+                "compatibility scope paths are missing without an explicit "
+                f"deletion diff: {missing!r}"
+            )
         return sorted(all_paths)
     return sorted(all_paths)
 
@@ -269,17 +278,9 @@ def test_legacy_bridge_remains_explicit_until_migration() -> None:
     )
 
 
-def test_fleet_update_contract_remains_intact() -> None:
-    # The GHCR host-mutation bridge (deploy/playbooks/rollout-worker-digest.yml)
-    # is retired; the definitive contract is the fleet-update thin delegate,
-    # which MUST keep delegating to the Master's UpdateExecutor via the
-    # canonical API rather than mutating hosts directly.
-    require(
-        "deploy/playbooks/fleet-update.yml",
-        "/api/v1/admin/workers/{{ worker_id }}/update",
-        "status_code: [202, 409]",
-        "Require operation_id for accepted update responses",
-        "Poll fleet_operations ledger until terminal state",
+def test_fleet_update_delegate_is_removed() -> None:
+    assert not (ROOT / "deploy/playbooks/fleet-update.yml").exists(), (
+        "deploy/playbooks/fleet-update.yml is a retired duplicate operator path"
     )
 
 
@@ -352,7 +353,7 @@ def test_new_legacy_consumers_are_rejected() -> None:
 def main() -> None:
     test_legacy_bridge_files_are_not_removed_implicitly()
     test_legacy_bridge_remains_explicit_until_migration()
-    test_fleet_update_contract_remains_intact()
+    test_fleet_update_delegate_is_removed()
     test_current_worker_release_provenance_and_operator_bridge()
     test_removal_plan_matches_gate_contract()
     test_current_tree_has_no_legacy_removal_marker()

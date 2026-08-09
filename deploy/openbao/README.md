@@ -37,7 +37,6 @@ deploy/openbao/
 │   ├── initialize-pki-intermediate.sh # ceremony: internal key + offline-root CSR
 │   ├── provision-pki.sh          # PKI mount + per-worker CSR signing roles
 │   ├── verify-approle.sh        # login reale + check autorizzazioni positivi/negativi
-│   ├── migrate-master-tokens.sh # env → KV (una tantum, --force, fail-closed)
 │   ├── resolve-master-env.sh     # KV → /etc/velox-server.env (0600, runtime env)
 │   ├── provision-ssh-ca.sh      # engine ssh + CA (mai rigenerata) + role velox-operator
 │   ├── sign-operator-ssh.sh     # firma cert operatore (TTL breve, principals limitati)
@@ -271,20 +270,11 @@ con policy least-privilege. Matrice completa: `docs/openbao-identity-matrix.md`.
 in OpenBao. La policy `master` (read-only, §9) copre questi path — il deploy
 risolve i token al momento del rilascio, senza credenziali statiche in repo.
 
-### Migrazione una tantum (env → KV)
+### Migrazione una tantum (completata)
 
-```bash
-# da /etc/velox-server.env (default) o con --env-file; MAI stampa valori
-./scripts/migrate-master-tokens.sh
-./scripts/migrate-master-tokens.sh --env-file ./server.env --dry-run
-./scripts/migrate-master-tokens.sh --registry-username u --registry-token t
-```
-
-- Precedenza: `OPENBAO_VALUE_*` (env) > `--env-file` > `/etc/velox-server.env`.
-- **Fail-closed**: un required (admin / instaedit / social) assente → exit 1,
-  nessuna migrazione.
-- Usa `provision-kv.sh --force` (nuova versione KV); verifica con
-  `./scripts/verify-kv.sh`.
+La migrazione dei token legacy è chiusa. Non esiste più uno script env→KV:
+`resolve-master-env.sh` è l'unico resolver operativo e legge OpenBao per
+materializzare l'env runtime del Master.
 
 ### Risoluzione al deploy (KV → runtime env)
 
@@ -454,9 +444,9 @@ distrugge i dati).
    non entra mai in OpenBao. Test: `scripts/ci/test-openbao-worker-secrets.sh`.
 4. Distribuire `role-id`/`secret-id` sui nodi worker/master
    (`/etc/velox-worker/secrets/approle/`, 0600, Ansible `no_log`).
-5. ✅ ~~Migrazione dei token master~~ — `migrate-master-tokens.sh` (env → KV,
-   una tantum) + `resolve-master-env.sh` (KV → runtime env del Master),
-   invocato da `scripts/operator/deploy-production.sh` (§10).
+5. ✅ ~~Migrazione dei token master~~ — completata; resta solo
+   `resolve-master-env.sh` (KV → runtime env del Master), invocato da
+   `scripts/operator/deploy-production.sh` (§10).
 6. ✅ ~~SSH CA~~ — secrets engine `ssh` + CA + role `velox-operator` +
    firma operatore a TTL breve (§11 + `docs/openbao-ssh-ca.md`); da completare
    con la dismissione delle `authorized_keys` statiche una volta che tutti gli

@@ -24,7 +24,7 @@ environment paths, and writable trees, then records
 rollouts must use the canonical release path and must not rediscover or clean
 legacy paths.
 
-The bridge is:
+The former bridge was:
 
 ```text
 WorkerNodeRegistry row (ansible_hosts DB)
@@ -34,6 +34,9 @@ WorkerNodeRegistry row (ansible_hosts DB)
   -> local Docker build on the worker
   -> canonical systemd/runtime convergence
   -> readiness and registration checks
+
+This bridge is retired. Fresh hosts use `prepare-host.sh`; release changes use
+only `fleetctl update` with an immutable GHCR digest.
 ```
 
 Host convergence runs through the **Master** (`AnsibleComputerManager`): the
@@ -109,12 +112,7 @@ POST /api/v1/admin/workers/{worker_id}/update
 GET  /api/v1/admin/operations/{operation_id}
 ```
 
-`fleet-update.yml` is an API delegate: it does not SSH to the host or run
-`docker pull` locally. It posts the operation, accepts `202` or an existing
-`409` operation with `operation_id`, and polls the ledger until `SUCCEEDED`,
-`FAILED`, or `ROLLBACK`.
-
-A complete API-delegate invocation is:
+The direct API invocation is:
 
 > **Gate before execution:** confirm the current worker-image certification
 > manifest matches the intended commit and digest, and record its bundle hash,
@@ -135,12 +133,6 @@ scripts/fleetctl update <worker_id> \
   "canary rollout"
 ```
 
-The retained API-delegate artifact `deploy/playbooks/fleet-update.yml` documents
-the same operation contract (`POST /api/v1/admin/workers/{worker_id}/update`,
-with `update_target_digest=sha256:<64 hex>`) and polling behavior. It is not
-currently executable because its historical `group_vars` inputs were retired;
-it is not an operator entrypoint. Operators use `scripts/fleetctl`.
-
 The definitive path must consume an immutable digest, not a version tag:
 
 ```text
@@ -150,13 +142,6 @@ ghcr.io/<owner>/velox-worker@sha256:<64-lowercase-hex>
 The image must come from the current worker-image certification run. Never
 reuse a digest certified for an older commit merely because its version tag
 matches the desired version.
-
-### Important current distinction
-
-`scripts/fleetctl update` IS the direct Master API entrypoint. The playbook
-`deploy/playbooks/fleet-update.yml` remains only as an internal API-delegate
-(for server-side compatibility orchestration); the two entrypoints are not
-interchangeable.
 
 ## 4. Diagnostic-only commands
 
@@ -245,9 +230,7 @@ worker, and investigate before touching the next host.
 
 - `docs/operations/fleetctl.md` — operator command reference.
 - `docs/worker_deployment.md` — worker layout and compatibility details.
-- `deploy/playbooks/fleet-update.yml` — retained, non-executable API-contract
-  artifact; do not invoke it directly while its retired `group_vars` inputs
-  remain unresolved.
+- `scripts/fleetctl` — the only operator API facade for digest updates.
 - `DataServer/data/ansible/playbooks/update_workers.yml` — Master-side legacy
   bundle bridge (inventory generated from the `WorkerNodeRegistry` DB).
 - `.github/workflows/worker-image.yml` — build, sign, and certify image.

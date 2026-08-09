@@ -240,7 +240,6 @@ stop_and_swap() {
     -v "$WORKER_DATA_DIR:/var/lib/velox-worker" \
     -v "$WORKER_CERT_DIR:/etc/velox-worker/certs:ro" \
     -e VELOX_MASTER_URL="$MASTER_URL" \
-    -e VELOX_WORKER_NAME="$WORKER_NAME" \
     "$ref" >"$EV_DIR/docker-run.log" 2>&1 \
     || fail "docker run failed (see $EV_DIR/docker-run.log)"
   ok "$WORKER_NAME is running on $ref"

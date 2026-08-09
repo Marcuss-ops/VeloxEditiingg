@@ -15,7 +15,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RESOLVE="$ROOT/deploy/openbao/scripts/resolve-master-env.sh"
-MIGRATE="$ROOT/deploy/openbao/scripts/migrate-master-tokens.sh"
 VALIDATOR="$ROOT/deploy/validate-master-env.sh"
 TMP="$(mktemp -d)"
 MOCK_PID=""
@@ -53,9 +52,8 @@ REQUIRED_ENV=(
 
 # ── 0. Syntax ────────────────────────────────────────────────────────────────
 bash -n "$RESOLVE"
-bash -n "$MIGRATE"
 if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck -x "$RESOLVE" "$MIGRATE"
+    shellcheck -x "$RESOLVE"
 fi
 pass 'syntax OK (bash -n, shellcheck)'
 
@@ -218,11 +216,9 @@ fi
 [[ -f "$ENV_FILE" ]] && fail 'required mancante non deve scrivere env file'
 pass 'required mancante + --require-all → exit 1, nessun env file (deploy bloccato)'
 
-# ── 7. migrate-master-tokens: fail-closed senza required ─────────────────────
-printf 'VELOX_ADMIN_TOKEN=\nINSTAEDIT_CONTROL_JWT_SECRET=\n' > "$TMP/incomplete.env"
-if OPENBAO_DIR="$ROOT/deploy/openbao" bash "$MIGRATE" --env-file "$TMP/incomplete.env" >/dev/null 2>&1; then
-    fail 'migrate con required mancanti deve uscire 1'
-fi
-pass 'migrate fail-closed (required mancanti → exit 1)'
+# ── 7. One-shot token migration retired ─────────────────────────────────────
+[[ ! -e "$ROOT/deploy/openbao/scripts/migrate-master-tokens.sh" ]] \
+    || fail 'migrate-master-tokens.sh deve restare rimosso dopo la migrazione'
+pass 'migrazione one-shot ritirata; OpenBao resolver canonical attivo'
 
 pass 'OK'

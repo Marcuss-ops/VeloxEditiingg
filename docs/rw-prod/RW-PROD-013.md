@@ -9,7 +9,7 @@
 ## 1. Pain points
 
 1. **Unit audit non automatizzato.** Metriche eterogenee: `velox_worker_heartbeat_age_seconds` (s) bene, ma campioni interni come `velox_worker_temp_bytes` (byte sui worker) arrivano in JSON al master senza unit conversion.
-2. **`alert-cert-expiry.sh` non esiste.** Esiste solo `monitor-expiry.sh` (RW-PROD-014 farà fail-closed), ma manca il wrapper che pubblica su Alertmanager.
+2. Il controllo certificati è parte del percorso fail-closed `doctor --production`; non esiste un monitor shell separato.
 3. **Correlazione log:** `pkg/logger` ha `LogRegisterFailed/CertRejected/SignalReceived`, ma non un campo universale `slog.With("worker_id",...)` per garantire propagation su tutti i log.
 4. **Porte health/metrics pubbliche.** `deploy/runtime/compose.yml` ha `network_mode: host` o pubblica porte; da vincolare con firewall/VPN.
 
@@ -23,7 +23,7 @@
    - Diff → CI failure.
 
 2. **`scripts/alert-cert-expiry.sh`:**
-   - Wrapper per monitor-expiry `--json`, evaluation soglie 14/7/2 giorni, pubblica su `/api/v1/alerts` master.
+   - Il doctor production valuta soglie PKI e pubblica l'esito nel report certificato.
    - Owner: `security.sre`.
 
 3. **Correlazione log obbligatoria:**

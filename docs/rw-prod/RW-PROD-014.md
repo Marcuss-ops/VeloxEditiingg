@@ -2,13 +2,13 @@
 
 **Priorità:** P0
 **Dipendenze:** RW-PROD-001
-**Stato attuale:** `scripts/gen-production-pki.sh` (3 livelli CA), `scripts/gen-worker-certs.sh` (dev), `deploy/certs/monitor-expiry.sh` emette OK/WARN/CRIT/EXPIRED. **Gap critico**: `monitor-expiry.sh` non fail-closed su directory assente / zero certificati / cert illeggibile — attualmente exit 0. Rotation live senza downtime non documentata.
+**Stato attuale:** `scripts/gen-production-pki.sh` (3 livelli CA), `scripts/gen-worker-certs.sh` (dev), rinnovo canonical OpenBao via systemd timer e controllo fail-closed nel doctor production. Non esiste un monitor shell separato.
 
 ---
 
 ## 1. Pain points
 
-1. **`monitor-expiry.sh` directory assente → exit 0**
+1. Il doctor production tratta directory PKI assente, certificati mancanti o illeggibili come FAIL.
    - Lo script usa `find ... -print0` con fallback `|| true`; se directory non esiste, `CERTS=()` vuoto, `worst_exit=0` → ESCI 0 (KO: dovrebbe uscire 4).
 
 2. **Zero cert validi → exit 0**
@@ -30,7 +30,7 @@
 ## 2. Soluzione
 
 1. **Fail-closed su directory assente / vuota:**
-   - `monitor-expiry.sh`:
+   - `doctor --production`:
      ```bash
      if [[ ! -d "$CERT_DIR" ]]; then
        echo '{"error":"cert_dir missing","cert_dir":"'"$CERT_DIR"'"}' >&2
@@ -68,14 +68,14 @@
 
 | # | File:line | Azione |
 |---|-----------|--------|
-| A1 | `deploy/certs/monitor-expiry.sh` | Aggiungere fail-closed su directory assente, vuota, cert illeggibile (vedi snippet sopra). |
+| A1 | `doctor --production` | Fail-closed su directory assente, vuota, cert illeggibile. |
 | A2 | `scripts/gen-production-pki.sh` | Aggiungere exit code con serial tracciato. |
 | A3 | `docs/operations/PR-6-pki-rotation-runbook.md` | Nuova sezione "Rotate worker without downtime" con procedura overlap. |
 | A4 | `DataServer/internal/grpcserver/authorizer.go` | Supportare più cert per worker durante overlap (allowlist serial/fingerprint multipli per worker). |
 | A5 | `deploy/certs/revocation.sh` (nuovo) | Sposta cert in `revoked/` directory, genera evento revoca. |
 | A6 | `DataServer/internal/store/store_worker_control.go` | Nuova tabella `cert_revocations` o campo JSON. |
 | A7 | `scripts/audit-rom-issues.sh` (nuovo) | Lista tutti i cert con `issued_at, expires_at, owner_host`; expiry ranking. |
-| A8 | `deploy/certs/monitor-expiry.sh` | Aggiungere emission evento `cert.renewal.due` su soglie 14/7/2gg. |
+| A8 | `doctor --production` | Esporre soglie 14/7/2gg nel report production. |
 
 ---
 

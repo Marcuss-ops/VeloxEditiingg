@@ -99,7 +99,7 @@ Ogni azione elenca `File:line → Azione`. Lo stato "owner" è indicativo — i 
 
 | ID | File:line | Azione | Ticket | Owner |
 |----|------------|--------|--------|-------|
-| 014-A1 | `deploy/certs/monitor-expiry.sh` | Fail-closed dir assente + zero cert + cert illeggibile | 014 | sec.platform |
+| 014-A1 | `doctor --production` | Fail-closed dir assente + zero cert + cert illeggibile | 014 | sec.platform |
 | 014-A3 | `docs/operations/PR-6-pki-rotation-runbook.md` | Sezione "Rotate worker without downtime" | 014 | sec.platform |
 | 014-A4 | `DataServer/internal/grpcserver/authorizer.go` | Allowlist multi-cert durante overlap | 014 | sec.platform |
 | 014-A5 | `deploy/certs/revocation.sh` (nuovo) | Revoca automatica via `revoked/` | 014 | sec.platform |

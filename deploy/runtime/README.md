@@ -1,9 +1,10 @@
 # deploy/runtime/ — worker container runtime
 
 This directory declares the standard worker runtime: one `velox-worker.service`, one Compose
-project (`velox-worker`), one container (`velox-worker`), and one persistent state tree. It pairs with `deploy/group_vars/`
-(which the master-side playbooks consume) and with `.github/workflows/
-worker-image.yml` (which builds and publishes the worker image).
+project (`velox-worker`), one container (`velox-worker`), and one persistent state tree. Production
+release selection is owned by Master FleetController and an immutable GHCR digest; this runtime
+directory is for bootstrap and host convergence. It pairs with `.github/workflows/worker-image.yml`
+(which builds and publishes the worker image).
 
 ## Files
 
@@ -69,8 +70,8 @@ then creates one reverse SSH forward per worker:
 
 ```bash
 # On the operator workstation; the master tunnel must already be active.
-HOME=/home/pierone scripts/operator/remote-velox-tunnel.sh status
-HOME=/home/pierone scripts/operator/remote-worker-openbao-tunnel.sh start \
+HOME="$HOME" scripts/operator/remote-velox-tunnel.sh status
+HOME="$HOME" scripts/operator/remote-worker-openbao-tunnel.sh start \
   host_57_129_132_133 57.129.132.133 pierone
 ```
 
@@ -80,7 +81,7 @@ persistence across operator logout/reboot, install the repository template as
 a user service and one mode-`0600` env file per worker:
 
 ```bash
-mkdir -p /home/pierone/.config/systemd/user /home/pierone/.config/velox/worker-openbao
+mkdir -p "$HOME/.config/systemd/user" "$HOME/.config/velox/worker-openbao"
 install -m 0644 deploy/velox-worker-openbao-tunnel@.service \
   /home/pierone/.config/systemd/user/velox-worker-openbao-tunnel@.service
 sudo install -m 0755 scripts/operator/worker-openbao-tunnel-service.sh \

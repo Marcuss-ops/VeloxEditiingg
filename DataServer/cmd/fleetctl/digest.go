@@ -2,7 +2,7 @@
 // design Q5 of the Step 15/15 thinker call.
 //
 // Matches the regex enforced server-side by deploy.ValidateImageRef
-// (Step 5/15) + the fleet-update.yml pre_assert in Step 11/15:
+// (Step 5/15) server-side immutable image validation:
 //
 //   ^sha256:[0-9a-f]{64}$  → acceptable
 //   :latest, :main, :stable → rejected (mobile refs)

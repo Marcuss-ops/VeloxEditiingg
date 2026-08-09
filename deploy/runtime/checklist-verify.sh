@@ -93,7 +93,7 @@ Usage: $SCRIPT_NAME [options]
 Options:
   --image <ref>        Worker image reference (must contain @sha256:).
                        Default: read from /etc/velox-worker/worker.env.
-  --worker-id <id>     Expected worker id (matches compose's container_name).
+  --worker-id <id>     Expected logical/mTLS worker id (container is always velox-worker).
                        Default: read from /etc/velox-worker/worker.env.
   --master <base_url>  Master HTTP base URL used by section 14 to query
                        /api/v1/workers. Default: derive from

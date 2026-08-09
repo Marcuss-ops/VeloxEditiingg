@@ -18,7 +18,7 @@
 prepare_host_search_paths=(
     /opt/velox-worker/prepare-host.sh
     /usr/local/bin/velox-worker-prepare-host.sh
-    /root/VeloxLEgit/deploy/runtime/prepare-host.sh
+    "$CHECKLIST_DIR/prepare-host.sh"
 )
 
 # ═════════════════════════════════════════════════════════════════════════════

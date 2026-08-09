@@ -102,7 +102,6 @@ section_7_worker_env() {
 
     local required=(
         VELOX_WORKER_ID
-        VELOX_WORKER_NAME
         VELOX_WORKER_IMAGE
         VELOX_MASTER_URL
         VELOX_GRPC_MASTER_URL

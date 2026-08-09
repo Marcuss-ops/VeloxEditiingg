@@ -6,9 +6,7 @@ no legacy path is deleted until the compatibility gate for that phase is green.
 
 ## Current decision
 
-The production rollout path is now the FleetController API. Keep
-`update_workers.yml` and the bundle APIs only as a recovery/migration bridge for
-old hosts; they are not release entrypoints. The definitive path is
+The production rollout path is now the FleetController API. The definitive path is
 `scripts/fleetctl` → Master FleetController → UpdateExecutor and must remain
 backed by real backends and a canary.
 
@@ -21,7 +19,7 @@ The current paths are:
 | Bundle endpoint and `data/worker_downloads/` | Legacy source distribution | No supported worker needs bundle bootstrap or rollback |
 | `deploy/playbooks/rollout-worker-digest.yml` | GHCR host-mutation bridge | FleetController owns the same gates and has passed canary acceptance |
 | `scripts/fleetctl update` | Canonical operator facade; posts to the Master API | Keep the direct Master operation path and its ledger contract |
-| `deploy/playbooks/fleet-update.yml` | Master API/FleetController delegate | Remains canonical; do not remove |
+| `deploy/playbooks/fleet-update.yml` | Retired duplicate API delegate | Deleted after zero-caller audit |
 
 ## Compatibility gate before every removal commit
 
@@ -121,10 +119,9 @@ recorded for the supported fleet:
 - a canary passes with the same image digest used for the real rollout;
 - the compatibility gate and focused tests are green on the exact commit.
 
-Until these conditions are green for a specific host, keep that host on the
-migration/recovery bridge. `deploy/playbooks/fleet-update.yml` is retained only
-as an internal API-delegate artifact; it is not permission to invoke a static
-inventory or bypass `scripts/fleetctl`.
+Until these conditions are green for a specific host, keep that host on its
+current digest and use rollback through FleetController; there is no alternate
+Ansible release path.
 
 ## Phase 3 — remove local Docker builds
 
@@ -169,7 +166,7 @@ After FleetController has owned production updates for a complete canary window:
 - remove any remaining Ansible invocation from auxiliary rollout entrypoints
   only after an end-to-end test proves the same ledger, rollback and evidence
   contract;
-- retire `rollout-worker-digest.yml` only after no automation references it;
+- retain `ansible_hosts` only as WorkerNodeRegistry connectivity substrate;
 - remove duplicate inventory and systemd/compose rollout documentation;
 - update alerts, runbooks and rollback procedures in the same atomic change.
 
