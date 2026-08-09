@@ -327,7 +327,7 @@
       {
         "master_url": "{{ master_url }}",
         "worker_id": "{{ velox_worker_identity }}",
-        "worker_name": "{{ inventory_hostname }}",
+        "worker_name": "velox_worker_{{ (ansible_host | default(inventory_hostname)) | regex_replace('[.:]', '_') }}",
         "work_dir": "{{ velox_worker_runtime_container_dir }}/work",
         "log_level": "info",
         "bundle_version": "{{ version_number | default('v1.0.6') }}",

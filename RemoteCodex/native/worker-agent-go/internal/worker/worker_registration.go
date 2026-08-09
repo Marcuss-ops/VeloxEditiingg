@@ -76,9 +76,10 @@ func (w *Worker) workerName(hostname string) string {
 	return workerDisplayName(hostname)
 }
 
-// workerDisplayName is the compatibility fallback for configurations without
-// an explicit worker_name. The configured worker_id remains the stable
-// routing identity.
+// workerDisplayName is the fallback for configurations without an explicit
+// worker_name. The configured worker_id remains the stable routing identity;
+// display names use only the physical IP so every fleet surface has one
+// deterministic naming convention.
 func workerDisplayName(hostname string) string {
 	if strings.TrimSpace(hostname) == "" {
 		hostname, _ = os.Hostname()
@@ -103,7 +104,7 @@ func workerDisplayName(hostname string) string {
 			}
 		}
 	}
-	return fmt.Sprintf("worker_%s_%s", strings.TrimSpace(hostname), strings.ReplaceAll(ip, ":", "_"))
+	return fmt.Sprintf("velox_worker_%s", strings.NewReplacer(".", "_", ":", "_").Replace(ip))
 }
 
 // capabilityReport is the typed single source of truth for worker
