@@ -168,6 +168,14 @@ func sniffMIME(data []byte, path string) string {
 	if len(data) >= 3 && bytes.Equal(data[:3], []byte("ID3")) {
 		return "audio/mpeg"
 	}
+	// Valid MPEG audio is not required to carry an ID3 tag. Google Drive
+	// and other object stores commonly return bare MP3 frame streams whose
+	// first bytes are the MPEG sync word (0xffe) followed by a valid layer
+	// header. Treat those streams as audio/mpeg so the role-specific
+	// voiceover/audio validator does not reject an otherwise valid asset.
+	if len(data) >= 2 && data[0] == 0xff && (data[1]&0xe0) == 0xe0 {
+		return "audio/mpeg"
+	}
 	if len(data) >= 12 && bytes.Equal(data[:4], []byte("RIFF")) && bytes.Equal(data[8:12], []byte("WAVE")) {
 		return "audio/wav"
 	}
