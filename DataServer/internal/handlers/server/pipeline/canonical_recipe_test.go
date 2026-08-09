@@ -72,8 +72,8 @@ func TestNormalizeCanonicalRecipe_ProjectsMultipleBindingStocks(t *testing.T) {
 	if err := NormalizeCanonicalRecipe(&req); err != nil {
 		t.Fatalf("NormalizeCanonicalRecipe: %v", err)
 	}
-	if got := req.Scenes[0].StockLinks; len(got) != 2 || got[0] != "https://stock/a.mp4" || got[1] != "velox-asset://stock-b" {
-		t.Fatalf("stock_links = %#v, want both canonical links", got)
+	if got := req.Scenes[0].StockAssets; len(got) != 2 || got[0].URL != "https://stock/a.mp4" || got[1].URL != "velox-asset://stock-b" {
+		t.Fatalf("stock assets = %#v, want both canonical assets", got)
 	}
 	if !req.Scenes[0].StockFallback {
 		t.Fatal("multiple stocks must enable stock fallback mode")

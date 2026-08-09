@@ -30,10 +30,10 @@ func (d *DriveProvider) Name() string { return "drive" }
 
 // Deliver pushes an artifact file to Drive.
 //
-// Idempotency: relies on the upload-idempotency-key stamped on
-// (artifact_id, destination_id) by the runner. Drive treats duplicate
-// uploads as idempotent when the source SHA-256 matches the previously
-// uploaded blob.
+// Idempotency: the Drive adapter persists the delivery ID in Drive file
+// properties and reuses the matching remote file before uploading. The
+// runner's durable lease prevents normal concurrent duplicates; the remote
+// property lookup also covers retries after a lease expires.
 func (d *DriveProvider) Deliver(ctx context.Context, artifact *store.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string) (*deliveries.Result, error) {
 	if d == nil || d.service == nil {
 		return nil, deliveries.ErrProviderNotConfigured
@@ -47,7 +47,11 @@ func (d *DriveProvider) Deliver(ctx context.Context, artifact *store.Artifact, d
 		return nil, err
 	}
 
-	uploadRes, err := d.service.UploadVideo(ctx, filePath, artifact.ID, destination.FolderID, deliveryID)
+	marker := deliveryID
+	if marker == "" {
+		marker = idempotencyKey
+	}
+	uploadRes, err := d.service.UploadVideo(ctx, filePath, artifact.ID, destination.FolderID, marker)
 	if err != nil {
 		return nil, err
 	}

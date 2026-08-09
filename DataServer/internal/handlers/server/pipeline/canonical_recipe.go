@@ -114,9 +114,6 @@ func canonicalRecipeScene(raw map[string]interface{}, index int) (SubmitScene, e
 			stockFallbackExplicit = true
 		}
 	}
-	if rawStock, ok := raw["stock_links"]; ok {
-		scene.StockLinks = recipeStrings(rawStock)
-	}
 	if scene.Stock != nil && !stockFallbackExplicit && !scene.StockFallback {
 		scene.StockFallback = true
 	}
@@ -137,18 +134,16 @@ func applyRecipeStocks(scene *SubmitScene, raw interface{}) {
 			if object, ok := item.(map[string]interface{}); ok {
 				if clip := recipeClip(object); clip != nil && clip.URL != "" {
 					scene.StockAssets = append(scene.StockAssets, *clip)
-					scene.StockLinks = append(scene.StockLinks, clip.URL)
 				}
 			} else if link, ok := item.(string); ok && strings.TrimSpace(link) != "" {
 				trimmed := strings.TrimSpace(link)
 				if clip := recipeClip(map[string]interface{}{"url": trimmed}); clip != nil {
 					scene.StockAssets = append(scene.StockAssets, *clip)
 				}
-				scene.StockLinks = append(scene.StockLinks, trimmed)
 			}
 		}
 	}
-	if len(scene.StockLinks) > 0 {
+	if len(scene.StockAssets) > 0 {
 		scene.StockFallback = true
 	}
 }
@@ -213,20 +208,6 @@ func firstRecipeString(raw map[string]interface{}, keys ...string) string {
 		}
 	}
 	return ""
-}
-
-func recipeStrings(raw interface{}) []string {
-	values, ok := raw.([]interface{})
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if stringValue, ok := value.(string); ok && strings.TrimSpace(stringValue) != "" {
-			out = append(out, strings.TrimSpace(stringValue))
-		}
-	}
-	return out
 }
 
 func recipeFloat(raw interface{}) float64 {

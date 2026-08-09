@@ -172,11 +172,8 @@ type SubmitScene struct {
 	// StockAssets is the internal canonical pool produced when a recipe
 	// supplies more than one stock asset. It is deliberately not a second
 	// public JSON shape: the worker boundary serializes it as scene.stock[].
-	StockAssets []SubmitClip `json:"-"`
-	// StockLinks is the supplemental clip pool. It is shuffled per
-	// job/scene and cycled until the scene voiceover ends.
-	StockLinks    []string `json:"stock_links,omitempty"`
-	StockFallback bool     `json:"stock_fallback,omitempty"`
+	StockAssets   []SubmitClip `json:"-"`
+	StockFallback bool         `json:"stock_fallback,omitempty"`
 
 	// Voiceover is the per-scene voiceover asset reference. Same
 	// pointer semantics as Clip. The nested form REPLACES the legacy

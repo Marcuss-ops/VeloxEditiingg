@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -29,6 +30,17 @@ func (s *Service) UploadFile(ctx context.Context, filePath string, folderID stri
 	token, err := s.getToken(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if existing, err := s.findExistingDelivery(ctx, folderID, deliveryID); err != nil {
+		return nil, fmt.Errorf("check existing Drive delivery: %w", err)
+	} else if existing != nil {
+		log.Printf("[CLOUD] Reusing existing Drive upload for delivery %s (ID: %s)", deliveryID, existing.ID)
+		return &UploadResult{
+			Success:     true,
+			FileID:      existing.ID,
+			WebViewLink: existing.WebViewLink,
+			FolderLink:  fmt.Sprintf("https://drive.google.com/drive/folders/%s", folderID),
+		}, nil
 	}
 
 	// Open the file
@@ -120,6 +132,33 @@ func (s *Service) UploadFile(ctx context.Context, filePath string, folderID stri
 		WebViewLink: result.WebViewLink,
 		FolderLink:  folderLink,
 	}, nil
+}
+
+// findExistingDelivery looks up the marker written by UploadFile before a
+// retry creates another remote object. Drive does not provide an idempotency
+// key for multipart uploads; the durable delivery ID in properties is the
+// application-level idempotency record.
+func (s *Service) findExistingDelivery(ctx context.Context, folderID, deliveryID string) (*File, error) {
+	deliveryID = strings.TrimSpace(deliveryID)
+	if deliveryID == "" {
+		return nil, nil
+	}
+	escape := func(value string) string {
+		return strings.ReplaceAll(strings.ReplaceAll(value, `\`, `\\`), `'`, `\'`)
+	}
+	query := fmt.Sprintf("'%s' in parents and trashed=false and properties has { key='velox_delivery_id' and value='%s' }", escape(folderID), escape(deliveryID))
+	fields := "files(id,name,webViewLink,parents,properties)"
+	endpoint := fmt.Sprintf("/files?q=%s&pageSize=1&fields=%s", url.QueryEscape(query), url.QueryEscape(fields))
+	var result struct {
+		Files []File `json:"files"`
+	}
+	if err := s.doAPIRequest(ctx, http.MethodGet, endpoint, nil, &result); err != nil {
+		return nil, err
+	}
+	if len(result.Files) == 0 {
+		return nil, nil
+	}
+	return &result.Files[0], nil
 }
 
 // UploadVideoWithAccessToken performs one upload with the short-lived token

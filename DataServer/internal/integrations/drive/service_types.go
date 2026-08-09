@@ -9,13 +9,14 @@ import (
 
 // File represents a Google Drive file
 type File struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	MimeType    string   `json:"mimeType"`
-	Parents     []string `json:"parents,omitempty"`
-	WebViewLink string   `json:"webViewLink,omitempty"`
-	IconLink    string   `json:"iconLink,omitempty"`
-	Size        int64    `json:"size,omitempty,string"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	MimeType    string            `json:"mimeType"`
+	Parents     []string          `json:"parents,omitempty"`
+	Properties  map[string]string `json:"properties,omitempty"`
+	WebViewLink string            `json:"webViewLink,omitempty"`
+	IconLink    string            `json:"iconLink,omitempty"`
+	Size        int64             `json:"size,omitempty,string"`
 	// VideoMediaMetadata is returned by Drive for video assets. Duration is
 	// useful when a folder is expanded into canonical stock references before
 	// enqueueing a narrated render.
