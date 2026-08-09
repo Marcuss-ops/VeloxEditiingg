@@ -103,7 +103,22 @@ func (s *JobSubmissionService) Submit(ctx context.Context, req CanonicalJobSubmi
 			assetField = assetErr.Field
 			assetSource = assetErr.SourceType
 		}
-		log.Printf("[CREATORFLOW] canonical submission rejected phase=%s error_type=%T error_hash=%x asset_error_code=%s asset_field=%s asset_source=%s", phase, err, errHash[:4], assetCode, assetField, assetSource)
+		log.Printf("[CREATORFLOW] canonical submission rejected phase=%s error_type=%T error_hash=%x asset_error_code=%s asset_field=%s asset_source=%s error_summary=%q", phase, err, errHash[:4], assetCode, assetField, assetSource, sanitizedErrorSummary(err))
 	}
 	return out, err
+}
+
+// sanitizedErrorSummary gives operators the actionable shape of an enqueue
+// failure while keeping request references and local paths out of logs.
+func sanitizedErrorSummary(err error) string {
+	if err == nil {
+		return ""
+	}
+	words := strings.Fields(err.Error())
+	for i, word := range words {
+		if strings.Contains(word, "://") || strings.HasPrefix(word, "/") {
+			words[i] = "<redacted-reference>"
+		}
+	}
+	return strings.Join(words, " ")
 }
