@@ -68,6 +68,10 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 	offsetSeconds := 0.0
 
 	for i, scene := range scenes {
+		sceneID := strings.TrimSpace(payload.FirstString(scene, "scene_id"))
+		if sceneID == "" {
+			sceneID = fmt.Sprintf("scene-%d", i)
+		}
 		clip, err := optionalCanonicalSceneAsset(scene, "clip")
 		if err != nil {
 			return nil, nil, nil, nil, "", fmt.Errorf("scenes[%d]: %w", i, err)
@@ -135,6 +139,7 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 				item := map[string]interface{}{
 					"type": "video", "url": assetURL(bedAssets[0]),
 					"duration": voiceoverDuration, "fit": "contain", "role": "voiceover_bed",
+					"scene_id": sceneID,
 				}
 				copyAssetIntegrity(item, bedAssets[0])
 				items = append(items, item)
@@ -152,6 +157,7 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 					item := map[string]interface{}{
 						"type": "video", "url": assetURL(asset),
 						"duration": stockDuration, "fit": "contain", "role": "voiceover_bed",
+						"scene_id": sceneID,
 					}
 					copyAssetIntegrity(item, asset)
 					items = append(items, item)
@@ -173,7 +179,7 @@ func buildNarratedClipPayload(scenes []map[string]interface{}, opts narratedClip
 		if clipURL != "" {
 			items = append(items, map[string]interface{}{
 				"type": "video", "url": clipURL, "duration": clipDuration,
-				"fit": "contain", "role": "scene_clip",
+				"fit": "contain", "role": "scene_clip", "scene_id": sceneID,
 			})
 			clipTrack := map[string]interface{}{
 				"source_url": clipURL, "volume": 1.0,
