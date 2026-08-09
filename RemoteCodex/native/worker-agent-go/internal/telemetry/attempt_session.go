@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -26,6 +27,14 @@ type cgroupUsage struct {
 	DiskReadBytes  int64
 	DiskWriteBytes int64
 }
+
+type processCPUUsage struct {
+	userUsec   int64
+	systemUsec int64
+	valid      bool
+}
+
+func (u processCPUUsage) totalUsec() int64 { return u.userUsec + u.systemUsec }
 
 // PhaseResourceDelta is the resource portion available to a detailed phase.
 // CPU is carried in the typed phase field; the remaining values are included
@@ -45,8 +54,10 @@ type AttemptTelemetrySession struct {
 	startedAt      time.Time
 	startResources *SampledResources
 	startCgroup    cgroupUsage
+	startProcess   processCPUUsage
 	lastResources  *SampledResources
 	lastCgroup     cgroupUsage
+	lastProcess    processCPUUsage
 	peakCPUPercent float64
 	peakRSSBytes   int64
 	peakOpenFDs    int64
@@ -69,13 +80,17 @@ type AttemptTelemetry struct {
 type PhaseResourceSnapshot struct {
 	resources *SampledResources
 	cgroup    cgroupUsage
+	process   processCPUUsage
 	at        time.Time
 }
 
 // NewAttemptTelemetrySession creates a session. It is safe to pass nil when a
 // worker was constructed by a legacy/unit-test path without a sampler.
 func NewAttemptTelemetrySession(host *Sampler) *AttemptTelemetrySession {
-	clone := host.CloneForAttempt()
+	var clone *Sampler
+	if host != nil {
+		clone = host.CloneForAttempt()
+	}
 	return &AttemptTelemetrySession{
 		samplers:   []*Sampler{clone},
 		cgroupRoot: detectCgroupRoot(),
@@ -90,9 +105,11 @@ func (s *AttemptTelemetrySession) Start(ctx context.Context) {
 	s.startedAt = time.Now().UTC()
 	s.startResources, _ = s.sampleResources(ctx)
 	s.startCgroup = s.sampleCgroup()
+	s.startProcess = sampleProcessCPU()
 	s.lastResources = s.startResources
 	s.lastCgroup = s.startCgroup
-	s.observe(s.startResources, s.startCgroup, s.startedAt)
+	s.lastProcess = s.startProcess
+	s.observe(s.startResources, s.startCgroup, s.startProcess, s.startedAt)
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -103,7 +120,7 @@ func (s *AttemptTelemetrySession) Start(ctx context.Context) {
 			case <-ticker.C:
 				now := time.Now().UTC()
 				resources, _ := s.sampleResources(ctx)
-				s.observe(resources, s.sampleCgroup(), now)
+				s.observe(resources, s.sampleCgroup(), sampleProcessCPU(), now)
 			case <-s.done:
 				return
 			case <-ctx.Done():
@@ -122,7 +139,8 @@ func (s *AttemptTelemetrySession) Stop(ctx context.Context) AttemptTelemetry {
 	end := time.Now().UTC()
 	resources, _ := s.sampleResources(ctx)
 	cgroup := s.sampleCgroup()
-	s.observe(resources, cgroup, end)
+	process := sampleProcessCPU()
+	s.observe(resources, cgroup, process, end)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -133,8 +151,12 @@ func (s *AttemptTelemetrySession) Stop(ctx context.Context) AttemptTelemetry {
 	if wall < 0 {
 		wall = 0
 	}
+	cpuUsec := cgroup.CPUUsec - s.startCgroup.CPUUsec
+	if s.cgroupRoot == "" {
+		cpuUsec = process.totalUsec() - s.startProcess.totalUsec()
+	}
 	metrics := TypedExecutionMetrics{
-		CpuTimeMs:        positiveDelta(cgroup.CPUUsec-s.startCgroup.CPUUsec) / 1000,
+		CpuTimeMs:        positiveDelta(cpuUsec) / 1000,
 		PeakRssBytes:     s.peakRSSBytes,
 		CpuPercentPeak:   s.peakCPUPercent,
 		WallClockSeconds: wall,
@@ -151,7 +173,7 @@ func (s *AttemptTelemetrySession) Stop(ctx context.Context) AttemptTelemetry {
 	metrics.CpuQuota = cp.CPUQuota
 	metrics.EffectiveCpuCount = int32(cp.EffectiveCPUCount)
 	coverage := map[string]bool{
-		"cpu":          s.startCgroup.CPUUsec > 0 && cgroup.CPUUsec >= s.startCgroup.CPUUsec,
+		"cpu":          (s.cgroupRoot != "" && cgroup.CPUUsec >= s.startCgroup.CPUUsec) || (s.cgroupRoot == "" && s.startProcess.valid && process.valid && process.totalUsec() >= s.startProcess.totalUsec()),
 		"memory":       s.startCgroup.MemoryCurrent > 0 || cgroup.MemoryCurrent > 0 || s.peakRSSBytes > 0,
 		"disk":         resources != nil && s.startResources != nil,
 		"network":      resources != nil && s.startResources != nil,
@@ -202,7 +224,7 @@ func (s *AttemptTelemetrySession) StartPhase() PhaseResourceSnapshot {
 		return PhaseResourceSnapshot{at: time.Now().UTC()}
 	}
 	r, _ := s.sampleResources(context.Background())
-	return PhaseResourceSnapshot{resources: r, cgroup: s.sampleCgroup(), at: time.Now().UTC()}
+	return PhaseResourceSnapshot{resources: r, cgroup: s.sampleCgroup(), process: sampleProcessCPU(), at: time.Now().UTC()}
 }
 
 func (s *AttemptTelemetrySession) EndPhase(start PhaseResourceSnapshot) PhaseResourceDelta {
@@ -211,8 +233,13 @@ func (s *AttemptTelemetrySession) EndPhase(start PhaseResourceSnapshot) PhaseRes
 	}
 	r, _ := s.sampleResources(context.Background())
 	c := s.sampleCgroup()
+	p := sampleProcessCPU()
+	cpuUsec := c.CPUUsec - start.cgroup.CPUUsec
+	if s.cgroupRoot == "" {
+		cpuUsec = p.totalUsec() - start.process.totalUsec()
+	}
 	return PhaseResourceDelta{
-		CPUTimeMs:      positiveDelta(c.CPUUsec-start.cgroup.CPUUsec) / 1000,
+		CPUTimeMs:      positiveDelta(cpuUsec) / 1000,
 		PeakRSSBytes:   max64(start.cgroup.MemoryCurrent, c.MemoryCurrent),
 		DiskReadBytes:  positiveDelta(resourceCounter(r, func(v *SampledResources) int64 { return v.DiskReadBytesTotal }) - resourceCounter(start.resources, func(v *SampledResources) int64 { return v.DiskReadBytesTotal })),
 		DiskWriteBytes: positiveDelta(resourceCounter(r, func(v *SampledResources) int64 { return v.DiskWriteBytesTotal }) - resourceCounter(start.resources, func(v *SampledResources) int64 { return v.DiskWriteBytesTotal })),
@@ -221,7 +248,7 @@ func (s *AttemptTelemetrySession) EndPhase(start PhaseResourceSnapshot) PhaseRes
 	}
 }
 
-func (s *AttemptTelemetrySession) observe(r *SampledResources, c cgroupUsage, now time.Time) {
+func (s *AttemptTelemetrySession) observe(r *SampledResources, c cgroupUsage, p processCPUUsage, now time.Time) {
 	if s == nil {
 		return
 	}
@@ -229,8 +256,17 @@ func (s *AttemptTelemetrySession) observe(r *SampledResources, c cgroupUsage, no
 	defer s.mu.Unlock()
 	if r != nil && s.lastResources != nil && !s.lastResources.SampledAt.IsZero() {
 		elapsed := now.Sub(s.lastResources.SampledAt).Seconds()
-		if elapsed > 0 && c.CPUUsec >= s.lastCgroup.CPUUsec {
-			cpu := float64(c.CPUUsec-s.lastCgroup.CPUUsec) / (elapsed * 1e6) * 100
+		var deltaUsec int64
+		validCPU := false
+		if s.cgroupRoot != "" {
+			deltaUsec = c.CPUUsec - s.lastCgroup.CPUUsec
+			validCPU = deltaUsec >= 0
+		} else if p.valid && s.lastProcess.valid {
+			deltaUsec = p.totalUsec() - s.lastProcess.totalUsec()
+			validCPU = deltaUsec >= 0
+		}
+		if elapsed > 0 && validCPU {
+			cpu := float64(deltaUsec) / (elapsed * 1e6) * 100
 			if cpu > s.peakCPUPercent {
 				s.peakCPUPercent = cpu
 			}
@@ -249,7 +285,27 @@ func (s *AttemptTelemetrySession) observe(r *SampledResources, c cgroupUsage, no
 		s.lastResources = r
 	}
 	s.lastCgroup = c
+	s.lastProcess = p
 	s.sampleCount++
+}
+
+func sampleProcessCPU() processCPUUsage {
+	var self, children syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &self); err != nil {
+		return processCPUUsage{}
+	}
+	if err := syscall.Getrusage(syscall.RUSAGE_CHILDREN, &children); err != nil {
+		return processCPUUsage{}
+	}
+	return processCPUUsage{
+		userUsec:   timevalUsec(self.Utime) + timevalUsec(children.Utime),
+		systemUsec: timevalUsec(self.Stime) + timevalUsec(children.Stime),
+		valid:      true,
+	}
+}
+
+func timevalUsec(tv syscall.Timeval) int64 {
+	return tv.Sec*1_000_000 + tv.Usec
 }
 
 func (s *AttemptTelemetrySession) sampleResources(ctx context.Context) (*SampledResources, error) {

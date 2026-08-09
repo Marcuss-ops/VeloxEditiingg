@@ -80,6 +80,9 @@ func SSHConnectivityCheck(ctx context.Context, reg *WorkerRegistry, keyPath, kno
 	if reg == nil {
 		return nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if keyPath == "" {
 		keyPath = DefaultSSHKeyPath
 	}
@@ -94,7 +97,7 @@ func SSHConnectivityCheck(ctx context.Context, reg *WorkerRegistry, keyPath, kno
 	return out
 }
 
-func checkOneWorker(_ context.Context, e WorkerRegistryEntry, keyPath, knownHosts string, resolveName WorkerNameResolver) WorkerSSHStatus {
+func checkOneWorker(ctx context.Context, e WorkerRegistryEntry, keyPath, knownHosts string, resolveName WorkerNameResolver) WorkerSSHStatus {
 	status := WorkerSSHStatus{
 		WorkerID: e.WorkerID.String(),
 		Host:     e.Host,
@@ -107,7 +110,7 @@ func checkOneWorker(_ context.Context, e WorkerRegistryEntry, keyPath, knownHost
 		}
 	}
 
-	hostKeyFail := hostKeyNotFound(keyPath, knownHosts, e)
+	hostKeyFail := hostKeyNotFound(ctx, knownHosts, e)
 	if hostKeyFail != "" {
 		status.HostKey = "FAIL"
 		status.Detail = "host key absent from known_hosts: " + hostKeyFail
@@ -120,7 +123,7 @@ func checkOneWorker(_ context.Context, e WorkerRegistryEntry, keyPath, knownHost
 	// is no point asserting a passwordless sudo policy over a dead auth
 	// path — but the hostkey verdict is already PASS (it was in the file);
 	// the failure is a network/auth/known_hosts-drift issue.
-	if _, err := runSSH(keyPath, knownHosts, e, "true"); err != nil {
+	if _, err := runSSH(ctx, keyPath, knownHosts, e, "true"); err != nil {
 		status.SSH = "FAIL"
 		status.Sudo = "SKIP"
 		status.Detail = "ssh: " + err.Error()
@@ -130,7 +133,7 @@ func checkOneWorker(_ context.Context, e WorkerRegistryEntry, keyPath, knownHost
 
 	// Probe 2: passwordless sudo, reported independently so a locked
 	// sudoers entry is diagnosable without confusing it for auth failure.
-	if _, err := runSSH(keyPath, knownHosts, e, "sudo -n true"); err != nil {
+	if _, err := runSSH(ctx, keyPath, knownHosts, e, "sudo -n true"); err != nil {
 		status.Sudo = "FAIL"
 		status.Detail = "sudo -n rejected (sudo policy does not allow passwordless): " + err.Error()
 		return status
@@ -142,7 +145,7 @@ func checkOneWorker(_ context.Context, e WorkerRegistryEntry, keyPath, knownHost
 // runSSH shells out to the ssh binary with the same hardened flags the
 // production executors use. It returns the combined output and an error
 // if ssh exits non-zero (or the host key is unknown).
-func runSSH(keyPath, knownHosts string, e WorkerRegistryEntry, command string) (string, error) {
+func runSSH(ctx context.Context, keyPath, knownHosts string, e WorkerRegistryEntry, command string) (string, error) {
 	args := []string{
 		"-i", keyPath,
 		"-o", "StrictHostKeyChecking=yes",
@@ -157,7 +160,7 @@ func runSSH(keyPath, knownHosts string, e WorkerRegistryEntry, command string) (
 	args = append(args, e.SSHHost(), command)
 
 	var stdout, stderr bytes.Buffer
-	cmd := exec.Command("ssh", args...)
+	cmd := exec.CommandContext(ctx, "ssh", args...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -171,12 +174,12 @@ func runSSH(keyPath, knownHosts string, e WorkerRegistryEntry, command string) (
 // probe (it reads known_hosts, it does not dial the host), so it cleanly
 // separates "host key missing from inventory" (a config problem) from
 // "host unreachable" (a network problem).
-func hostKeyNotFound(_ string, knownHosts string, e WorkerRegistryEntry) string {
+func hostKeyNotFound(ctx context.Context, knownHosts string, e WorkerRegistryEntry) string {
 	keyArg := e.Host
 	if e.SSHPort != 0 && e.SSHPort != 22 {
 		keyArg = "[" + e.Host + "]:" + strconv.Itoa(e.SSHPort)
 	}
-	out, err := exec.Command("ssh-keygen", "-F", keyArg, "-f", knownHosts).CombinedOutput()
+	out, err := exec.CommandContext(ctx, "ssh-keygen", "-F", keyArg, "-f", knownHosts).CombinedOutput()
 	if err != nil {
 		return "ssh-keygen error for " + keyArg + ": " + err.Error()
 	}

@@ -50,13 +50,13 @@ func TestAttemptTelemetryApplyIncludesCoverage(t *testing.T) {
 }
 
 func TestAttemptSessionWithoutSamplerIsExplicitlyIncomplete(t *testing.T) {
-	s := &AttemptTelemetrySession{samplers: []*Sampler{nil}, done: make(chan struct{})}
+	s := NewAttemptTelemetrySession(nil)
 	s.Start(context.Background())
 	result := s.Stop(context.Background())
 	if result.Complete {
 		t.Fatalf("nil sampler session must not certify telemetry: %+v", result)
 	}
-	if result.Metrics.TelemetryCPUSource != "missing" {
-		t.Fatalf("cpu source = %q, want missing", result.Metrics.TelemetryCPUSource)
+	if result.Metrics.TelemetryCPUSource != "cgroup_v2" && result.Metrics.TelemetryCPUSource != "proc" {
+		t.Fatalf("cpu source = %q, want cgroup_v2 or proc", result.Metrics.TelemetryCPUSource)
 	}
 }

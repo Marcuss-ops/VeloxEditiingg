@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -u
+set -euo pipefail
 
 MASTER=${VELOX_MASTER_URL:-}
 [ -n "$MASTER" ] || MASTER=http://127.0.0.1:8000
@@ -112,8 +112,10 @@ poll_job() {
     case "$state" in
       SUCCEEDED|FAILED|CANCELLED)
         printf '%s\n' "$body" | jq '{status,job_id,worker_id,assigned_to,lease_worker_id,created,started_at,completed_at,render_time_ms,artifact_url,artifact_path,output_path,error}'
-        [ "$state" = SUCCEEDED ]
-        return
+        if [[ "$state" == SUCCEEDED ]]; then
+          return 0
+        fi
+        return 1
         ;;
     esac
     [ $((now-started)) -lt 900 ] || { echo "[$worker] timeout"; return 7; }
@@ -121,6 +123,7 @@ poll_job() {
   done
 }
 
+overall_status=0
 for WORKER in velox-worker-13197 velox-worker-523925eb host_57_129_132_133 host_57_131_20_173; do
   IDEM="sugar-ray-robinson-$(printf '%s' "$WORKER" | tr '_' '-')-$(date +%s%N)"
   echo
@@ -130,21 +133,37 @@ for WORKER in velox-worker-13197 velox-worker-523925eb host_57_129_132_133 host_
     -H "Authorization: Bearer $M2M" -H "Content-Type: application/json" \
     -H "X-Request-ID: $IDEM" --data-raw "$PAYLOAD" \
     -w '\n%{http_code}' "$MASTER/api/v1/jobs") || {
-      echo "[$WORKER] submit network failure"
-      continue
+    echo "[$WORKER] submit network failure"
+    overall_status=1
+    continue
     }
   HTTP=$(printf '%s\n' "$RESPONSE" | tail -n1)
   BODY=$(printf '%s\n' "$RESPONSE" | sed '$d')
   if [ "$HTTP" != 202 ]; then
     echo "[$WORKER] submit HTTP $HTTP"
     printf '%s\n' "$BODY" | jq . 2>/dev/null || printf '%s\n' "$BODY"
+    overall_status=1
     continue
   fi
-  JOB_ID=$(printf '%s\n' "$BODY" | jq -er '.job_id') || continue
+  if ! JOB_ID=$(printf '%s\n' "$BODY" | jq -er '.job_id'); then
+    echo "[$WORKER] submit response did not contain job_id" >&2
+    overall_status=1
+    continue
+  fi
   echo "[$WORKER] accepted job_id=$JOB_ID"
-  poll_job "$JOB_ID" "$WORKER" || true
+  if ! poll_job "$JOB_ID" "$WORKER"; then
+    overall_status=1
+  fi
 done
 
-curl -sS -m 10 -X DELETE -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "$MASTER/api/v1/admin/m2m/keys/$CLIENT_ID" >/dev/null 2>&1 || true
-echo "fleet job validation complete"
+if ! curl -sS -m 10 -X DELETE -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "$MASTER/api/v1/admin/m2m/keys/$CLIENT_ID" >/dev/null 2>&1; then
+  echo "warning: failed to delete temporary M2M client $CLIENT_ID" >&2
+  overall_status=1
+fi
+if [[ "$overall_status" -eq 0 ]]; then
+  echo "fleet job validation complete: PASS"
+else
+  echo "fleet job validation complete: FAIL" >&2
+fi
+exit "$overall_status"

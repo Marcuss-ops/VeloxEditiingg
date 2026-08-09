@@ -137,8 +137,8 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	// only after the complete attempt lifecycle, preserving the runner
 	// events already snapshotted in report.DetailedPhases.
 	taskrunner.AppendDetailedPhases(report, reportRecorder(report))
+	result := attemptTelemetry.Stop(context.Background())
 	if report != nil {
-		result := attemptTelemetry.Stop(context.Background())
 		if report.Metrics == nil {
 			report.Metrics = make(map[string]interface{})
 		}
