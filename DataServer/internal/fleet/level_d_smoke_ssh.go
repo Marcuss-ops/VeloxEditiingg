@@ -64,8 +64,8 @@ func NewSSHClientFromRegistry(reg *WorkerRegistry) BackendSSHClient {
 			Host: e.Host,
 			User: e.SSHUser,
 			// Canonical key path — NOT "" (sshClient.Run would then fall
-			// back to $HOME/.ssh/id_ed25519_velox, which breaks production
-			// where the key lives at /etc/velox/ssh/id_ed25519_velox).
+			// never fall back to a user-home key; production uses the
+			// root-managed /etc/velox/ssh/id_ed25519_velox key.
 			KeyPath: DefaultSSHKeyPath,
 		}
 	}

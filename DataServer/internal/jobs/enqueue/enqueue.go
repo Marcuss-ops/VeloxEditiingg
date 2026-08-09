@@ -202,18 +202,18 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 // safe idempotent retry confirmation. Other constraint failures must not be
 // converted into success.
 func isJobIDUniqueConflict(err error) bool {
-	if err == nil || !strings.Contains(err.Error(), "jobs.job_id") {
+	if err == nil {
 		return false
 	}
 	var sqliteErr sqlite3.Error
 	if errors.As(err, &sqliteErr) {
-		return isJobIdentityConstraint(sqliteErr.ExtendedCode)
+		return isJobIdentityConstraint(sqliteErr.ExtendedCode) && strings.Contains(sqliteErr.Error(), "jobs.job_id")
 	}
 	var sqliteErrPtr *sqlite3.Error
 	if errors.As(err, &sqliteErrPtr) && sqliteErrPtr != nil {
-		return isJobIdentityConstraint(sqliteErrPtr.ExtendedCode)
+		return isJobIdentityConstraint(sqliteErrPtr.ExtendedCode) && strings.Contains(sqliteErrPtr.Error(), "jobs.job_id")
 	}
-	return false
+	return strings.Contains(err.Error(), "jobs.job_id")
 }
 
 func isJobIdentityConstraint(code sqlite3.ErrNoExtended) bool {

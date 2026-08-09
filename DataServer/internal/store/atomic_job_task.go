@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mattn/go-sqlite3"
 
 	"velox-server/internal/jobs"
 	"velox-server/internal/taskgraph"
@@ -56,6 +58,35 @@ func (c *AtomicJobTaskCreator) CreateJobWithTask(
 	taskSpec *taskgraph.TaskSpec,
 	priority int,
 ) error {
+	// SQLite can briefly return BUSY/LOCKED when deterministic forwarding
+	// retries enter the same atomic write window. The transaction is fully
+	// rolled back by createJobWithTaskOnce before retrying, so this preserves
+	// the all-or-nothing Job+Task contract while allowing the loser to
+	// converge on the committed idempotent row at the enqueue layer.
+	const maxAttempts = 8
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		err := c.createJobWithTaskOnce(ctx, job, taskSpec, priority)
+		if err == nil || !isSQLiteWriteConflict(err) || attempt == maxAttempts-1 {
+			return err
+		}
+		delay := time.Duration(attempt+1) * 5 * time.Millisecond
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil
+}
+
+func (c *AtomicJobTaskCreator) createJobWithTaskOnce(
+	ctx context.Context,
+	job *jobs.Job,
+	taskSpec *taskgraph.TaskSpec,
+	priority int,
+) error {
 	if c == nil || c.store == nil || c.store.db == nil {
 		return fmt.Errorf("atomic creator: store not initialized")
 	}
@@ -80,6 +111,18 @@ func (c *AtomicJobTaskCreator) CreateJobWithTask(
 		return wrapDBInfrastructure("atomic creator commit", err)
 	}
 	return nil
+}
+
+func isSQLiteWriteConflict(err error) bool {
+	var sqliteErr sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		return sqliteErr.Code == sqlite3.ErrBusy || sqliteErr.Code == sqlite3.ErrLocked
+	}
+	var sqliteErrPtr *sqlite3.Error
+	if errors.As(err, &sqliteErrPtr) && sqliteErrPtr != nil {
+		return sqliteErrPtr.Code == sqlite3.ErrBusy || sqliteErrPtr.Code == sqlite3.ErrLocked
+	}
+	return strings.Contains(err.Error(), "database is locked") || strings.Contains(err.Error(), "database table is locked")
 }
 
 // CreateJobWithTaskTx performs the Job+delivery-plan+Task+TaskSpec INSERTs

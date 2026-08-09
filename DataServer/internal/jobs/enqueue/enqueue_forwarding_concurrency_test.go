@@ -21,6 +21,11 @@ func TestEnqueue_ConcurrentForwardingRetriesConverge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sqlite store: %v", err)
 	}
+	// This test targets idempotency convergence, not SQLite connection-pool
+	// throughput. Pin the fixture to SQLite's single-writer model so the
+	// barrier opens one deterministic persistence race without introducing
+	// unrelated pool-level lock noise under -race.
+	db.DB().SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = db.Close() })
 	seedDestinations(t, db, map[string]bool{"drive-main": true})
 
@@ -38,6 +43,7 @@ func TestEnqueue_ConcurrentForwardingRetriesConverge(t *testing.T) {
 	expectedJobID := DeriveForwardingJobID(forwardingKey)
 
 	start := make(chan struct{})
+	ready := make(chan struct{}, callers)
 	responses := make([]map[string]interface{}, callers)
 	errs := make([]error, callers)
 	var wg sync.WaitGroup
@@ -45,6 +51,7 @@ func TestEnqueue_ConcurrentForwardingRetriesConverge(t *testing.T) {
 	for i := 0; i < callers; i++ {
 		go func(index int) {
 			defer wg.Done()
+			ready <- struct{}{}
 			<-start
 			payload := map[string]interface{}{
 				"video_name":             "Concurrent forwarded video",
@@ -66,6 +73,9 @@ func TestEnqueue_ConcurrentForwardingRetriesConverge(t *testing.T) {
 				context.Background(), payload, costmodel.DefaultRequirements(),
 			)
 		}(i)
+	}
+	for i := 0; i < callers; i++ {
+		<-ready
 	}
 	close(start)
 	wg.Wait()
