@@ -46,8 +46,8 @@ import (
 //
 // Empty target_digest is rejected as ErrEmptyImageRef. Empty
 // previous_digest triggers the snapshot-from-DB path; if THAT
-// also surfaces ErrDeploymentNotFound, the executor stops
-// with ErrEmptyRegistry (no rollback — forward never started).
+// also surfaces ErrDeploymentNotFound, production adopts the authenticated
+// runtime digest into a terminal baseline row (no rollout pipeline).
 type UpdatePayload struct {
 	TargetDigest   string `json:"target_digest"`
 	PreviousDigest string `json:"previous_digest,omitempty"`
@@ -126,11 +126,20 @@ type BackendRegistryGater interface {
 	SetDrainMode(ctx context.Context, workerID string, drain bool) error
 }
 
+// BackendRuntimeSnapshotReader returns the runtime identity captured from
+// the worker's authenticated control session. It is used for safe ledger
+// bootstrap and the no-op fast path; it must not be implemented from Docker,
+// worker configuration, or operator input.
+type BackendRuntimeSnapshotReader interface {
+	GetAuthenticatedRuntimeSnapshot(ctx context.Context, workerID string) (*store.WorkerRuntimeSnapshot, error)
+}
+
 // RealRegistryUpdateGater adapts the production worker registry to the
 // UpdateExecutor registry surface. The executor owns the drain transition;
 // this adapter keeps that mutation on the same registry used by placement.
 type RealRegistryUpdateGater struct {
-	Reg *workers.Registry
+	Reg   *workers.Registry
+	Store *store.SQLiteStore
 }
 
 func (g *RealRegistryUpdateGater) GetWorker(ctx context.Context, workerID string) (*workers.Worker, error) {
@@ -175,13 +184,20 @@ func (g *RealRegistryUpdateGater) SetDrainMode(ctx context.Context, workerID str
 	return g.Reg.SetWorkerDrain(ctx, workerID, drain)
 }
 
+func (g *RealRegistryUpdateGater) GetAuthenticatedRuntimeSnapshot(ctx context.Context, workerID string) (*store.WorkerRuntimeSnapshot, error) {
+	if g == nil || g.Store == nil {
+		return nil, errors.New("worker runtime snapshot store not wired")
+	}
+	return g.Store.GetAuthenticatedWorkerRuntimeSnapshot(ctx, workerID)
+}
+
 // BackendDeploymentRepo is the typed surface for the
 // deployment_records table. The executor's contract:
 //
 //   - GetLatestDeploymentForWorker MUST return
 //     store.ErrDeploymentNotFound when no row exists — NOT
-//     a wrapped error. The executor maps this sentinel to
-//     ErrEmptyRegistry.
+//     a wrapped error. The executor uses the authenticated runtime
+//     reader for a terminal bootstrap baseline in production.
 //   - InsertDeploymentRecord is called with Status=PENDING —
 //     a 2-tuple call (insert + later UpdateDeploymentStatus)
 //     rather than a 3-tuple (insert + status change + flag
@@ -197,6 +213,13 @@ type BackendDeploymentRepo interface {
 	MarkSucceeded(ctx context.Context, deploymentID string, finishedAt time.Time) error
 	MarkFailed(ctx context.Context, deploymentID string, finishedAt time.Time, errMsg string) error
 	MarkDeploymentRolledBack(ctx context.Context, deploymentID string, finishedAt time.Time, rollbackOK bool) error
+}
+
+// BackendDeploymentBaselineRepo is the narrow extension used only for a
+// verified ledger bootstrap. Keeping it separate preserves the ordinary
+// rollout invariant that InsertDeploymentRecord always starts PENDING.
+type BackendDeploymentBaselineRepo interface {
+	InsertBaselineDeploymentRecord(ctx context.Context, r store.DeploymentRecord) error
 }
 
 // BackendImageRefValidator wraps the canonical validation in

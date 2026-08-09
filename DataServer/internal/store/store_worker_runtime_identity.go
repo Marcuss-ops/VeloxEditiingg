@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -139,6 +140,87 @@ func (s *SQLiteStore) GetWorkerRuntimeSnapshotBySession(workerID, sessionID stri
 	}
 	if err != nil {
 		return nil, fmt.Errorf("worker runtime snapshot lookup: %w", err)
+	}
+
+	snapshot.NodeID = nodeID.String
+	snapshot.WorkerName = workerName.String
+	snapshot.WorkerClass = workerClass.String
+	snapshot.RolloutGroup = rolloutGroup.String
+	snapshot.GitSHA = gitSHA.String
+	snapshot.WorkerVersion = workerVersion.String
+	snapshot.BundleVersion = bundleVersion.String
+	snapshot.BundleHash = bundleHash.String
+	snapshot.EngineVersion = engineVersion.String
+	snapshot.FFmpegVersion = ffmpegVersion.String
+	snapshot.ProtocolVersion = protocolVersion.String
+	snapshot.ConfigHash = configHash.String
+	snapshot.DockerImageDigest = dockerImageDigest.String
+	snapshot.CPUModel = cpuModel.String
+	snapshot.GPUModel = gpuModel.String
+	snapshot.GPUDriver = gpuDriver.String
+	snapshot.KernelVersion = kernelVersion.String
+	snapshot.OSRelease = osRelease.String
+	snapshot.StorageClass = storageClass.String
+	snapshot.CapabilitiesJSON = capabilitiesJSON.String
+	snapshot.ConnectedAt, _ = time.Parse(time.RFC3339Nano, connectedAt)
+	return &snapshot, nil
+}
+
+// GetAuthenticatedWorkerRuntimeSnapshot returns the immutable runtime
+// snapshot bound to the worker's currently active control session. The
+// session row is the authentication boundary; callers must not use a worker
+// tag, .env value, or operator-supplied digest as a substitute.
+func (s *SQLiteStore) GetAuthenticatedWorkerRuntimeSnapshot(ctx context.Context, workerID string) (*WorkerRuntimeSnapshot, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("worker runtime snapshot: store not initialized")
+	}
+	if workerID == "" {
+		return nil, fmt.Errorf("worker runtime snapshot: worker_id is required")
+	}
+
+	var snapshot WorkerRuntimeSnapshot
+	var connectedAt string
+	var nodeID, workerName, workerClass, rolloutGroup sql.NullString
+	var gitSHA, workerVersion, bundleVersion, bundleHash sql.NullString
+	var engineVersion, ffmpegVersion, protocolVersion sql.NullString
+	var configHash, dockerImageDigest, cpuModel sql.NullString
+	var gpuModel, gpuDriver, kernelVersion, osRelease, storageClass sql.NullString
+	var capabilitiesJSON sql.NullString
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT snap.snapshot_id, snap.worker_id, snap.session_id, snap.hostname,
+		       snap.node_id, snap.worker_name, snap.worker_class, snap.rollout_group,
+		       snap.git_sha, snap.worker_version, snap.bundle_version, snap.bundle_hash,
+		       snap.engine_version, snap.ffmpeg_version, snap.protocol_version,
+		       snap.config_hash, snap.docker_image_digest, snap.cpu_model,
+		       snap.logical_cpu_count, snap.effective_cpu_count, snap.cpu_quota,
+		       snap.total_memory_bytes, snap.gpu_model, snap.gpu_driver,
+		       snap.kernel_version, snap.os_release, snap.storage_class,
+		       snap.capabilities_json, snap.connected_at
+		  FROM worker_runtime_snapshots AS snap
+		  JOIN worker_sessions AS sess
+		    ON sess.worker_id = snap.worker_id
+		   AND sess.session_id = snap.session_id
+		 WHERE sess.worker_id = ?
+		   AND sess.session_type = 'control'
+		   AND sess.status = 'ACTIVE'
+		   AND sess.revoked = 0
+		 ORDER BY COALESCE(sess.last_seen_at, sess.created_at) DESC, sess.session_id DESC
+		 LIMIT 1`, workerID).Scan(
+		&snapshot.SnapshotID, &snapshot.WorkerID, &snapshot.SessionID, &snapshot.Hostname,
+		&nodeID, &workerName, &workerClass, &rolloutGroup,
+		&gitSHA, &workerVersion, &bundleVersion, &bundleHash,
+		&engineVersion, &ffmpegVersion, &protocolVersion,
+		&configHash, &dockerImageDigest, &cpuModel,
+		&snapshot.LogicalCPUCount, &snapshot.EffectiveCPUCount, &snapshot.CPUQuota,
+		&snapshot.TotalMemoryBytes, &gpuModel, &gpuDriver, &kernelVersion,
+		&osRelease, &storageClass, &capabilitiesJSON, &connectedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("authenticated worker runtime snapshot lookup: %w", err)
 	}
 
 	snapshot.NodeID = nodeID.String

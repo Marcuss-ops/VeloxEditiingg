@@ -247,6 +247,37 @@ func TestDeploymentStore_RejectNonPendingInitial(t *testing.T) {
 	}
 }
 
+func TestDeploymentStore_BaselineAllowsMissingRollbackProvenance(t *testing.T) {
+	s := newDeploymentTestStore(t)
+	ctx := context.Background()
+	started := time.Now().UTC().Truncate(time.Second)
+	if err := s.InsertBaselineDeploymentRecord(ctx, DeploymentRecord{
+		DeploymentID: "bootstrap-wicket-1",
+		WorkerID:     "wicket",
+		TargetDigest: deploymentTestDigest('b'),
+		StartedAt:    started,
+		FinishedAt:   &started,
+		Status:       DeployStatusSucceeded,
+		AppliedBy:    "fleetctl",
+	}); err != nil {
+		t.Fatalf("InsertBaselineDeploymentRecord: %v", err)
+	}
+
+	got, err := s.GetLatestDeploymentForWorker(ctx, "wicket")
+	if err != nil {
+		t.Fatalf("GetLatestDeploymentForWorker: %v", err)
+	}
+	if got.Status != DeployStatusSucceeded || got.TargetDigest != deploymentTestDigest('b') {
+		t.Fatalf("baseline row = %+v, want SUCCEEDED with target digest", got)
+	}
+	if got.PreviousDigest != "" {
+		t.Errorf("PreviousDigest = %q, want empty/missing provenance", got.PreviousDigest)
+	}
+	if got.FinishedAt == nil {
+		t.Fatal("FinishedAt = nil, want terminal baseline timestamp")
+	}
+}
+
 // TestDeploymentStore_RollbackFlagToggle asserts
 // UpdateDeploymentRollbackFlag flips is_rollback on an existing
 // row and the next read reflects the change.

@@ -99,6 +99,61 @@ func TestWorkerRuntimeMigrationConstraints(t *testing.T) {
 	}
 }
 
+func TestGetAuthenticatedWorkerRuntimeSnapshotUsesActiveControlSession(t *testing.T) {
+	s, err := NewSQLiteStore(t.TempDir() + "/worker-runtime-authenticated-snapshot.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	const workerID = "authenticated-runtime-worker"
+	if _, err := s.DB().Exec(`
+		INSERT INTO workers(worker_id,worker_name,node_role,raw_json,migrated_at)
+		VALUES(?, ?, 'worker', '{}', datetime('now'))`, workerID, workerID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InsertSession(&PersistedSession{
+		SessionID:   "authenticated-runtime-session",
+		WorkerID:    workerID,
+		SessionType: "control",
+		TokenHash:   "authenticated-token",
+		CreatedAt:   time.Now().UTC(),
+		ExpiresAt:   time.Now().UTC().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetOrCreateWorkerRuntimeSnapshot(WorkerRuntimeSnapshot{
+		WorkerID:          workerID,
+		SessionID:         "authenticated-runtime-session",
+		DockerImageDigest: "sha256:" + "a" + "bcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+		ConnectedAt:       time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.GetAuthenticatedWorkerRuntimeSnapshot(context.Background(), workerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.DockerImageDigest == "" {
+		t.Fatalf("authenticated snapshot = %+v, want current session digest", got)
+	}
+	if got.SessionID != "authenticated-runtime-session" {
+		t.Fatalf("SessionID = %q, want authenticated-runtime-session", got.SessionID)
+	}
+
+	if err := s.RevokeSession("authenticated-runtime-session"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.GetAuthenticatedWorkerRuntimeSnapshot(context.Background(), workerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatalf("revoked session still yielded snapshot: %+v", got)
+	}
+}
+
 // TestInsertSession_CollisionRejectsDifferentTokenHash
 // (RW-PROD-005 §3 anti-collision invariant).
 //

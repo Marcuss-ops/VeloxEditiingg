@@ -177,13 +177,15 @@ func buildFleet(p *persistenceDeps, workerRegistry *workersreg.Registry, sharedS
 	// bootstrap knows about. The registry gater is canonical for
 	// both active_tasks polling and the executor-owned drain toggle;
 	// no operator-side/document-only drain is required.
+	registryGater := &fleet.RealRegistryUpdateGater{Reg: workerRegistry, Store: p.SQLite}
 	updateBackend := fleet.UpdateBackend{
 		SSHCmd:      sharedSSH,
 		Docker:      &fleet.SSHWorkerDockerClient{SSH: sharedSSH},
 		Deployments: p.SQLite,
 		Cosign:      newUpdateCosignVerifier(),
 		Image:       deployUpdateImageValidator{},
-		Registry:    &fleet.RealRegistryUpdateGater{Reg: workerRegistry},
+		Registry:    registryGater,
+		Runtime:     registryGater,
 	}
 	updateExecutor := fleet.NewUpdateExecutor(updateBackend)
 	registry.Register(fleet.OperationKindUpdate, updateExecutor)

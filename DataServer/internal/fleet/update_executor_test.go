@@ -101,7 +101,11 @@ func stubBackends(t *testing.T) (UpdateBackend, *stubBackendsState) {
 		smokeErr:         nil,
 		driveErr:         nil,
 		prevDigest:       "sha256:previousdigest",
+		runtimeDigest:    "",
+		connectionState:  workers.ConnectionConnected,
+		healthState:      workers.HealthHealthy,
 		insertedRows:     []store.DeploymentRecord{},
+		baselineRows:     []store.DeploymentRecord{},
 		markedStatuses:   map[string]string{},
 		rolledBack:       map[string]bool{},
 	}
@@ -139,8 +143,13 @@ type stubBackendsState struct {
 	smokeErr         error
 	driveErr         error
 	prevDigest       string
+	runtimeDigest    string
+	runtimeErr       error
+	connectionState  workers.ConnectionState
+	healthState      workers.HealthState
 
 	insertedRows   []store.DeploymentRecord
+	baselineRows   []store.DeploymentRecord
 	markedStatuses map[string]string // deployment_id -> status
 	rolledBack     map[string]bool   // deployment_id -> rollbackOK
 }
@@ -202,13 +211,27 @@ func (s *stubBackendsState) GetWorker(_ context.Context, id string) (*workers.Wo
 		return nil, nil
 	}
 	info := &workers.Worker{
-		WorkerID:      identity.ParseWorkerID(id),
-		SessionActive: s.sessionActive,
-		LastHB:        s.lastHB,
-		Drain:         s.drain,
-		Metrics:       map[string]interface{}{"active_tasks": float64(0)},
+		WorkerID:         identity.ParseWorkerID(id),
+		SessionActive:    s.sessionActive,
+		LastHB:           s.lastHB,
+		Drain:            s.drain,
+		ConnectionState:  s.connectionState,
+		HealthState:      s.healthState,
+		ConnectionStatus: workers.StatusConnected,
+		Health:           workers.WorkerHealthHealthy,
+		Metrics:          map[string]interface{}{"active_tasks": float64(0)},
 	}
 	return info, nil
+}
+
+func (s *stubBackendsState) GetAuthenticatedRuntimeSnapshot(_ context.Context, _ string) (*store.WorkerRuntimeSnapshot, error) {
+	if s.runtimeErr != nil {
+		return nil, s.runtimeErr
+	}
+	if s.runtimeDigest == "" {
+		return &store.WorkerRuntimeSnapshot{}, nil
+	}
+	return &store.WorkerRuntimeSnapshot{DockerImageDigest: s.runtimeDigest}, nil
 }
 
 func (s *stubBackendsState) IsActiveJobsZero(_ context.Context, _ string) bool {
@@ -238,6 +261,11 @@ func (s *stubBackendsState) GetLatestDeploymentForWorker(_ context.Context, id s
 
 func (s *stubBackendsState) InsertDeploymentRecord(_ context.Context, r store.DeploymentRecord) error {
 	s.insertedRows = append(s.insertedRows, r)
+	return nil
+}
+
+func (s *stubBackendsState) InsertBaselineDeploymentRecord(_ context.Context, r store.DeploymentRecord) error {
+	s.baselineRows = append(s.baselineRows, r)
 	return nil
 }
 
@@ -378,6 +406,104 @@ func TestUpdate_EmptyRegistry(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "wkr-1") {
 		t.Errorf("err must mention worker_id; got %v", err)
+	}
+}
+
+func TestUpdate_BootstrapLedgerFromAuthenticatedRuntime(t *testing.T) {
+	backend, st := stubBackends(t)
+	backend.Runtime = st
+	target := validImageRef()
+	st.prevDigest = ""
+	st.runtimeDigest = target
+
+	if err := NewUpdateExecutor(backend).Execute(context.Background(), mkOp("wkr-1", target, "")); err != nil {
+		t.Fatalf("bootstrap returned err %v", err)
+	}
+	if len(st.baselineRows) != 1 {
+		t.Fatalf("baseline rows = %d, want 1", len(st.baselineRows))
+	}
+	row := st.baselineRows[0]
+	if row.Status != store.DeployStatusSucceeded || row.TargetDigest != target {
+		t.Fatalf("baseline row = %+v, want SUCCEEDED target=%s", row, target)
+	}
+	if row.PreviousDigest != "" || row.FinishedAt == nil {
+		t.Fatalf("baseline rollback provenance = %q/%v, want missing provenance and finished_at", row.PreviousDigest, row.FinishedAt)
+	}
+	if len(st.insertedRows) != 0 || len(st.drainCalls) != 0 {
+		t.Fatalf("bootstrap performed rollout mutations: rows=%d drain=%v", len(st.insertedRows), st.drainCalls)
+	}
+}
+
+func TestUpdate_BootstrapDigestMismatchDoesNotMutate(t *testing.T) {
+	backend, st := stubBackends(t)
+	backend.Runtime = st
+	st.prevDigest = ""
+	st.runtimeDigest = "sha256:" + strings.Repeat("b", 64)
+	err := NewUpdateExecutor(backend).Execute(context.Background(), mkOp("wkr-1", validImageRef(), ""))
+	if err == nil || !errors.Is(err, ErrBootstrapDigestMismatch) {
+		t.Fatalf("digest mismatch err = %v, want ErrBootstrapDigestMismatch", err)
+	}
+	if len(st.baselineRows) != 0 || len(st.insertedRows) != 0 || len(st.drainCalls) != 0 {
+		t.Fatalf("digest mismatch mutated state: baseline=%d rows=%d drain=%v", len(st.baselineRows), len(st.insertedRows), st.drainCalls)
+	}
+}
+
+func TestUpdate_BootstrapMissingDigestFailsClosed(t *testing.T) {
+	backend, st := stubBackends(t)
+	backend.Runtime = st
+	st.prevDigest = ""
+	err := NewUpdateExecutor(backend).Execute(context.Background(), mkOp("wkr-1", validImageRef(), ""))
+	if err == nil || !errors.Is(err, ErrBootstrapUnverifiable) {
+		t.Fatalf("missing runtime digest err = %v, want ErrBootstrapUnverifiable", err)
+	}
+	if len(st.baselineRows) != 0 || len(st.drainCalls) != 0 {
+		t.Fatalf("missing digest mutated state: baseline=%d drain=%v", len(st.baselineRows), st.drainCalls)
+	}
+}
+
+func TestUpdate_BootstrapDisconnectedFailsClosed(t *testing.T) {
+	backend, st := stubBackends(t)
+	backend.Runtime = st
+	st.prevDigest = ""
+	st.runtimeDigest = validImageRef()
+	st.connectionState = workers.ConnectionOffline
+	err := NewUpdateExecutor(backend).Execute(context.Background(), mkOp("wkr-1", validImageRef(), ""))
+	if err == nil || !errors.Is(err, ErrBootstrapWorkerDisconnected) {
+		t.Fatalf("disconnected bootstrap err = %v, want ErrBootstrapWorkerDisconnected", err)
+	}
+	if len(st.baselineRows) != 0 || len(st.drainCalls) != 0 {
+		t.Fatalf("disconnected bootstrap mutated state: baseline=%d drain=%v", len(st.baselineRows), st.drainCalls)
+	}
+}
+
+func TestUpdate_IdempotentAlreadyCurrentSkipsRollout(t *testing.T) {
+	backend, st := stubBackends(t)
+	backend.Runtime = st
+	target := validImageRef()
+	st.prevDigest = target
+	st.runtimeDigest = target
+
+	if err := NewUpdateExecutor(backend).Execute(context.Background(), mkOp("wkr-1", target, "")); err != nil {
+		t.Fatalf("already-current update returned err %v", err)
+	}
+	if len(st.baselineRows) != 0 || len(st.insertedRows) != 0 || len(st.drainCalls) != 0 {
+		t.Fatalf("already-current ran rollout: baseline=%d rows=%d drain=%v", len(st.baselineRows), len(st.insertedRows), st.drainCalls)
+	}
+}
+
+func TestUpdate_NormalRolloutStillUsesLedgerPreviousDigest(t *testing.T) {
+	backend, st := stubBackends(t)
+	backend.Runtime = st
+	previous := "ghcr.io/marcuss-ops/velox-worker@sha256:" + strings.Repeat("b", 64)
+	st.prevDigest = previous
+	st.runtimeDigest = previous
+	target := validImageRef()
+
+	if err := NewUpdateExecutor(backend).Execute(context.Background(), mkOp("wkr-1", target, "")); err != nil {
+		t.Fatalf("normal rollout returned err %v", err)
+	}
+	if len(st.insertedRows) != 1 || st.insertedRows[0].PreviousDigest != previous {
+		t.Fatalf("normal rollout row = %+v, want previous=%s", st.insertedRows, previous)
 	}
 }
 

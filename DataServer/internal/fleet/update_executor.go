@@ -6,7 +6,8 @@
 //  1. parse payload (target_digest required, previous_digest
 //     optional — read from deployment_records if absent).
 //  2. validate worker_id registered AND not in a torn state.
-//  3. snapshot previous_digest from deployment_records.
+//  3. snapshot previous_digest from deployment_records, or adopt a verified
+//     authenticated runtime digest when the ledger is empty.
 //  4. set drain=true and wait for active_tasks=0. The executor
 //     owns this transition so callers cannot start an update while
 //     relying on a documentation-only drain step.
@@ -64,9 +65,8 @@
 //     rollback err wrapped.
 //     → FCO marks FAILED, error_message
 //     surfaces "rollback_failed: <err>"
-//   - empty registry   → ErrEmptyRegistry
-//     → FCO marks FAILED, error_message
-//     surfaces "empty_registry: ..."
+//   - empty registry without an authenticated runtime reader → ErrEmptyRegistry
+//     (production bootstraps a verified baseline instead).
 //   - unregistered     → ErrUnregisteredWorker
 //     → FCO marks FAILED — NO rollback
 //     (forward never started)
@@ -92,18 +92,31 @@ import (
 	"time"
 
 	"velox-server/internal/store"
+	"velox-server/internal/workers"
 )
 
 // Sentinel errors returned by Execute. Each maps to a
 // grep-friendly error_message prefix in the audit ledger so
 // operator dashboards can route on them.
 var (
-	// ErrEmptyRegistry is returned when the worker has no prior
-	// deployment_records row. The executor cannot snapshot a
-	// previous digest in that case, and the operator must
-	// bootstrap the worker into the ledger manually. Forward
-	// never started, so NO rollback is attempted.
+	// ErrEmptyRegistry is retained for partially composed legacy callers that
+	// have no authenticated runtime reader. Production uses the reader to
+	// bootstrap a verified baseline instead. Forward never starts.
 	ErrEmptyRegistry = errors.New("empty_registry")
+
+	// ErrBootstrapUnverifiable means a missing ledger could not be safely
+	// adopted because the authenticated runtime digest was absent or the
+	// bootstrap dependency was not wired.
+	ErrBootstrapUnverifiable = errors.New("bootstrap_unverifiable")
+
+	// ErrBootstrapDigestMismatch means the operator target does not match the
+	// digest reported by the currently authenticated worker session.
+	ErrBootstrapDigestMismatch = errors.New("bootstrap_digest_mismatch")
+
+	// ErrBootstrapWorkerDisconnected and ErrBootstrapWorkerUnhealthy are
+	// fail-closed bootstrap guards. Adoption never changes worker state.
+	ErrBootstrapWorkerDisconnected = errors.New("bootstrap_worker_disconnected")
+	ErrBootstrapWorkerUnhealthy    = errors.New("bootstrap_worker_unhealthy")
 
 	// ErrUnregisteredWorker is returned when the worker_id is
 	// not present in the in-process registry. Forward never
@@ -193,6 +206,7 @@ type UpdateBackend struct {
 	Drive       BackendDriveVerifier
 	Registry    BackendRegistryGater
 	Deployments BackendDeploymentRepo
+	Runtime     BackendRuntimeSnapshotReader
 	Image       BackendImageRefValidator
 	Now         NowFunc
 }
@@ -351,11 +365,32 @@ func (e *UpdateExecutor) Execute(ctx context.Context, op *store.Operation) error
 		rec, err := e.backend.Deployments.GetLatestDeploymentForWorker(ctx, op.WorkerID)
 		if err != nil {
 			if errors.Is(err, store.ErrDeploymentNotFound) {
-				return fmt.Errorf("%w: no previous deployment_records row for worker %s", ErrEmptyRegistry, op.WorkerID)
+				if e.backend.Runtime == nil {
+					// Preserve the explicit failure for partially composed or
+					// legacy test backends. Production wiring always provides
+					// the authenticated runtime reader for adoption.
+					return fmt.Errorf("%w: no previous deployment_records row for worker %s", ErrEmptyRegistry, op.WorkerID)
+				}
+				return e.bootstrapLedger(ctx, op, targetDigest, info)
 			}
 			return fmt.Errorf("update: snapshot previous_digest: %w", err)
 		}
+		if rec == nil {
+			return fmt.Errorf("update: snapshot previous_digest: nil deployment record for worker %s", op.WorkerID)
+		}
 		previousDigest = rec.TargetDigest
+
+		// The authenticated runtime snapshot also enables an idempotent
+		// no-op. If desired, requested, and authenticated running digests
+		// already agree, no drain, Docker, SSH, smoke, or Drive step is
+		// needed.
+		if runningDigest, readErr := e.authenticatedRunningDigest(ctx, op.WorkerID); readErr != nil {
+			return readErr
+		} else if runningDigest != "" && normalizeDigest(rec.TargetDigest) == normalizeDigest(targetDigest) &&
+			normalizeDigest(runningDigest) == normalizeDigest(targetDigest) {
+			log.Printf("[UPDATE] worker=%s target=%s ALREADY_CURRENT", op.WorkerID, targetDigest)
+			return nil
+		}
 	}
 
 	// Logged at every operator-observable transition.
@@ -425,6 +460,88 @@ func (e *UpdateExecutor) Execute(ctx context.Context, op *store.Operation) error
 	}
 	log.Printf("[UPDATE] worker=%s target=%s SUCCEEDED", op.WorkerID, targetDigest)
 	return nil
+}
+
+func (e *UpdateExecutor) authenticatedRunningDigest(ctx context.Context, workerID string) (string, error) {
+	if e.backend.Runtime == nil {
+		return "", nil
+	}
+	snapshot, err := e.backend.Runtime.GetAuthenticatedRuntimeSnapshot(ctx, workerID)
+	if err != nil {
+		return "", fmt.Errorf("update: authenticated runtime snapshot: %w", err)
+	}
+	if snapshot == nil {
+		return "", nil
+	}
+	return strings.TrimSpace(snapshot.DockerImageDigest), nil
+}
+
+func (e *UpdateExecutor) bootstrapLedger(ctx context.Context, op *store.Operation, targetDigest string, info *workers.Worker) error {
+	runningDigest, err := e.authenticatedRunningDigest(ctx, op.WorkerID)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrBootstrapUnverifiable, err)
+	}
+	if runningDigest == "" {
+		return fmt.Errorf("%w: authenticated runtime digest missing for worker %s", ErrBootstrapUnverifiable, op.WorkerID)
+	}
+	if normalizeDigest(runningDigest) != normalizeDigest(targetDigest) {
+		return fmt.Errorf("%w: requested=%s running=%s", ErrBootstrapDigestMismatch, targetDigest, runningDigest)
+	}
+	if !workerConnected(info) {
+		return fmt.Errorf("%w: worker %s is not CONNECTED", ErrBootstrapWorkerDisconnected, op.WorkerID)
+	}
+	if !workerHealthy(info) {
+		return fmt.Errorf("%w: worker %s is not HEALTHY", ErrBootstrapWorkerUnhealthy, op.WorkerID)
+	}
+
+	baselineRepo, ok := e.backend.Deployments.(BackendDeploymentBaselineRepo)
+	if !ok {
+		return fmt.Errorf("%w: deployment baseline writer not wired", ErrBootstrapUnverifiable)
+	}
+	now := e.backend.Now()
+	if err := baselineRepo.InsertBaselineDeploymentRecord(ctx, store.DeploymentRecord{
+		DeploymentID:   fmt.Sprintf("bootstrap-%s-%d", op.WorkerID, now.UnixNano()),
+		WorkerID:       op.WorkerID,
+		PreviousDigest: "", // missing provenance is truthful; never invent it
+		TargetDigest:   targetDigest,
+		StartedAt:      now,
+		FinishedAt:     &now,
+		Status:         store.DeployStatusSucceeded,
+		AppliedBy:      op.RequestedBy,
+		IsRollback:     false,
+	}); err != nil {
+		return fmt.Errorf("%w: insert baseline: %v", ErrBootstrapUnverifiable, err)
+	}
+	log.Printf("[UPDATE] worker=%s target=%s BOOTSTRAPPED (authenticated runtime; no worker mutation)", op.WorkerID, targetDigest)
+	return nil
+}
+
+func normalizeDigest(ref string) string {
+	ref = strings.ToLower(strings.TrimSpace(ref))
+	if at := strings.LastIndexByte(ref, '@'); at >= 0 {
+		return ref[at+1:]
+	}
+	return ref
+}
+
+func workerConnected(info *workers.Worker) bool {
+	if info == nil {
+		return false
+	}
+	if info.ConnectionState != "" {
+		return info.ConnectionState == workers.ConnectionConnected
+	}
+	return info.ConnectionStatus == workers.StatusConnected && info.SessionActive
+}
+
+func workerHealthy(info *workers.Worker) bool {
+	if info == nil {
+		return false
+	}
+	if info.HealthState != "" {
+		return info.HealthState == workers.HealthHealthy
+	}
+	return info.Health == workers.WorkerHealthHealthy
 }
 
 func (e *UpdateExecutor) releaseOwnedDrain(ctx context.Context, workerID string, owned bool) error {

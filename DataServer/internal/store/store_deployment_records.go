@@ -108,7 +108,7 @@ func (s *SQLiteStore) CreateDeploymentRecordsTableIfNotExists() error {
 CREATE TABLE IF NOT EXISTS deployment_records (
   deployment_id TEXT PRIMARY KEY,
   worker_id TEXT NOT NULL,
-  previous_digest TEXT NOT NULL CHECK (length(previous_digest) > 0),
+  previous_digest TEXT CHECK (previous_digest IS NULL OR length(previous_digest) > 0),
   target_digest TEXT NOT NULL CHECK (length(target_digest) > 0),
   started_at TEXT NOT NULL,
   finished_at TEXT,
@@ -155,6 +155,46 @@ VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
 		r.DeploymentID, r.WorkerID, r.PreviousDigest, r.TargetDigest,
 		r.StartedAt.UTC().Format(time.RFC3339),
 		r.Status, r.AppliedBy, boolToIntSQLite(r.IsRollback),
+	)
+	return err
+}
+
+// InsertBaselineDeploymentRecord writes an already-verified runtime state as
+// a terminal ledger row. It is intentionally separate from
+// InsertDeploymentRecord: ordinary rollouts must always begin PENDING, while
+// a bootstrap baseline must never expose a fake in-flight deployment or run
+// any worker mutation.
+//
+// An empty PreviousDigest is persisted as SQL NULL. NULL means rollback
+// provenance is unavailable; it is never replaced with the current digest.
+func (s *SQLiteStore) InsertBaselineDeploymentRecord(ctx context.Context, r DeploymentRecord) error {
+	if r.Status != DeployStatusSucceeded {
+		return fmt.Errorf("InsertBaselineDeploymentRecord: status must be SUCCEEDED, got %q", r.Status)
+	}
+	if r.DeploymentID == "" {
+		return errors.New("InsertBaselineDeploymentRecord: DeploymentID empty")
+	}
+	if r.WorkerID == "" {
+		return errors.New("InsertBaselineDeploymentRecord: WorkerID empty")
+	}
+	if r.TargetDigest == "" {
+		return errors.New("InsertBaselineDeploymentRecord: TargetDigest empty")
+	}
+	finishedAt := r.FinishedAt
+	if finishedAt == nil {
+		finishedAt = &r.StartedAt
+	}
+	var previous interface{}
+	if r.PreviousDigest != "" {
+		previous = r.PreviousDigest
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO deployment_records
+  (deployment_id, worker_id, previous_digest, target_digest, started_at, finished_at, status, applied_by, is_rollback)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+		r.DeploymentID, r.WorkerID, previous, r.TargetDigest,
+		r.StartedAt.UTC().Format(time.RFC3339), finishedAt.UTC().Format(time.RFC3339),
+		r.Status, r.AppliedBy,
 	)
 	return err
 }
@@ -291,12 +331,14 @@ func scanDeploymentRecord(rows *sql.Rows) (*DeploymentRecord, error) {
 		finishedAt    sql.NullString
 		isRollbackInt int
 	)
+	var previousDigest sql.NullString
 	if err := rows.Scan(
-		&r.DeploymentID, &r.WorkerID, &r.PreviousDigest, &r.TargetDigest,
+		&r.DeploymentID, &r.WorkerID, &previousDigest, &r.TargetDigest,
 		&startedAt, &finishedAt, &r.Status, &r.AppliedBy, &isRollbackInt,
 	); err != nil {
 		return nil, err
 	}
+	r.PreviousDigest = previousDigest.String
 	if startedAt != "" {
 		if t, err := time.Parse(time.RFC3339, startedAt); err == nil {
 			r.StartedAt = t
