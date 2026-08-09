@@ -250,19 +250,22 @@ def test_legacy_bridge_files_are_not_removed_implicitly() -> None:
 def test_legacy_bridge_remains_explicit_until_migration() -> None:
     require(
         "DataServer/data/ansible/playbooks/update_workers.yml",
-        "Update | Download worker bundle from master",
-        "Update | Deploy worker release",
-        "api/worker/bundle?platform=linux&arch=x86_64",
+        "update_workers.yml is retired for production",
+        "fleetctl update",
     )
     require(
         "DataServer/data/ansible/playbooks/tasks/prepare_worker_image.yml",
-        "/usr/bin/docker build",
-        "--no-cache",
-        "verify-worker-image.sh",
+        "ACTIVATE WORKER IMAGE — NO REMOTE BUILD",
+        "worker_image_ref",
+        "velox-worker-activate-image",
     )
     require(
         "DataServer/data/ansible/playbooks/tasks/deploy_worker_release.yml",
-        "DeployWorker | Build worker Docker image (sole owner = prepare_worker_image)",
+        "DeployWorker | Activate pinned worker image (no remote build)",
+    )
+    require(
+        "DataServer/data/ansible/playbooks/tasks/canonical_worker_runtime.yml",
+        "Remote bundle update disabled; image activation is FleetController-owned",
     )
 
 
@@ -319,10 +322,8 @@ def test_current_tree_has_no_legacy_removal_marker() -> None:
     assert "No files are deleted in Phase 0." in plan
     assert "The production rollout path is now the FleetController API." in plan
     normalized_plan = " ".join(plan.split())
-    assert (
-        "Keep `update_workers.yml` and the bundle APIs only as a "
-        "recovery/migration bridge for old hosts; they are not release entrypoints."
-    ) in normalized_plan
+    assert "Phase 3 — remove local Docker builds" in normalized_plan
+    assert "Status: COMPLETE" in normalized_plan
 
 
 def test_new_legacy_consumers_are_rejected() -> None:

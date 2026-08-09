@@ -128,6 +128,11 @@ inventory or bypass `scripts/fleetctl`.
 
 ## Phase 3 — remove local Docker builds
 
+**Status: COMPLETE (2026-08-09).** Production worker activation now accepts
+only a signed immutable GHCR reference through FleetController. The Ansible
+legacy guard and auto-update service contain no source download or Docker
+build path.
+
 Only after every supported host is GHCR-native:
 
 1. stop including `tasks/prepare_worker_image.yml` from migrated release paths;

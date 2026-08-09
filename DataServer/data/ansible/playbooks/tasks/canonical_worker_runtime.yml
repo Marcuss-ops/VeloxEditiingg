@@ -421,65 +421,11 @@
       #!/usr/bin/env bash
       set -euo pipefail
 
-      MASTER="${MASTER_URL:-}"
-      VELOX_DIR="{{ velox_dir }}"
       CANONICAL_UNIT="{{ velox_worker_unit_name }}"
-      IMAGE="${VELOX_WORKER_IMAGE:-velox-worker:latest}"
       LOG_PREFIX="[auto-update]"
       log() { echo "$LOG_PREFIX $(date '+%Y-%m-%d %H:%M:%S') $*"; }
-
-      log "Starting OS update"
-      apt-get update -qq 2>&1 | tail -3
-      apt-get upgrade -y -qq --no-install-recommends 2>&1 | tail -5 || log "WARNING: OS upgrade had issues"
-
-      # CANONICAL-ONLY: `$CANONICAL_UNIT` is always set to
-      # `velox-worker.service` (see fact resolution at the top of this file).
-      # Never use a `velox-worker*.service`
-      # wildcard here either — a wildcard could re-introduce a hostile
-      # unit that the cleanup block above just masked.
-      if [ -n "$MASTER" ]; then
-        WORKER_ZIP="/tmp/velox-update-$(date +%s).zip"
-        if curl -sf --max-time 60 "$MASTER/api/worker/bundle?platform=linux&arch=x86_64" -o "$WORKER_ZIP" && [ -s "$WORKER_ZIP" ]; then
-          rm -rf "$VELOX_DIR/current.new"
-          mkdir -p "$VELOX_DIR/current.new"
-          if unzip -qo "$WORKER_ZIP" -d "$VELOX_DIR/current.new"; then
-            if [ -d "$VELOX_DIR/current.new/refactored" ]; then
-              shopt -s dotglob nullglob
-              mv -f "$VELOX_DIR/current.new/refactored"/* "$VELOX_DIR/current.new"/ || true
-              rm -rf "$VELOX_DIR/current.new/refactored"
-            fi
-            if [ -f "$VELOX_DIR/current.new/RemoteCodex/native/worker-agent-go/Dockerfile" ]; then
-              rm -rf "$VELOX_DIR/current.old"
-              [ -d "$VELOX_DIR/current" ] && mv "$VELOX_DIR/current" "$VELOX_DIR/current.old"
-              mv "$VELOX_DIR/current.new" "$VELOX_DIR/current"
-              if /usr/bin/docker build --pull --no-cache \
-                -f "$VELOX_DIR/current/RemoteCodex/native/worker-agent-go/Dockerfile" \
-                -t "$IMAGE" "$VELOX_DIR/current"; then
-                rm -rf "$VELOX_DIR/current.old"
-                log "Bundle and image updated successfully"
-              else
-                log "ERROR: image build failed; restoring previous release"
-                rm -rf "$VELOX_DIR/current.failed"
-                mv "$VELOX_DIR/current" "$VELOX_DIR/current.failed"
-                mv "$VELOX_DIR/current.old" "$VELOX_DIR/current"
-                exit 1
-              fi
-            else
-              rm -rf "$VELOX_DIR/current.new"
-              log "WARNING: downloaded bundle has an invalid layout"
-            fi
-          fi
-          rm -f "$WORKER_ZIP"
-        else
-          rm -f "$WORKER_ZIP"
-          log "Bundle download skipped"
-        fi
-      fi
-
-      systemctl restart "$CANONICAL_UNIT"
-      sleep 5
-      systemctl is-active --quiet "$CANONICAL_UNIT"
-      log "Auto-update completed for $CANONICAL_UNIT"
+      log "Remote bundle update disabled; image activation is FleetController-owned"
+      log "No source download, Docker build, tag mutation, or restart performed"
 
 - name: CanonicalRuntime | Install auto-update service with host env
   ansible.builtin.copy:

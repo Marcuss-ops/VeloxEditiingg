@@ -100,7 +100,7 @@
         _release_swapped: true
 
     # ── CONVERGE ──────────────────────────────────────────────
-    - name: DeployWorker | Build worker Docker image (sole owner = prepare_worker_image)
+    - name: DeployWorker | Activate pinned worker image (no remote build)
       ansible.builtin.include_tasks:
         file: prepare_worker_image.yml
 
