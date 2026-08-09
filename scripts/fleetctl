@@ -269,11 +269,12 @@ case "$command" in
             api GET /api/v1/admin/workers
         else
             rows=$(api GET /api/v1/admin/workers \
-                | jq -r '.workers[] | [.worker_id, (.health // .status // "UNKNOWN"), (.software_version // "-"), ((.active_jobs // 0 | tostring)+"/"+(.max_active_jobs // 0 | tostring)), (.last_smoke_status // "-")] | @tsv')
+                | jq -r '.workers[] | [(.worker_name // .hostname // .worker_id), .worker_id, (.health // .status // "UNKNOWN"), (.software_version // "-"), ((.active_jobs // 0 | tostring)+"/"+(.max_active_jobs // 0 | tostring)), (.last_smoke_status // "-")] | @tsv')
+            header=$'NAME\tWORKER_ID\tHEALTH\tVERSION\tJOBS\tLAST_SMOKE'
             if command -v column >/dev/null 2>&1; then
-                printf '%s\n' "$rows" | column -t -s $'\t'
+                { printf '%s\n' "$header"; printf '%s\n' "$rows"; } | column -t -s $'\t'
             else
-                printf '%s\n' "$rows"
+                { printf '%s\n' "$header"; printf '%s\n' "$rows"; }
             fi
         fi
         ;;

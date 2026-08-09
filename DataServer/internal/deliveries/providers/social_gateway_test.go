@@ -370,6 +370,19 @@ func TestSocialGatewayProvider_RedactsCredentialMetadata(t *testing.T) {
 	}
 }
 
+func TestSocialGatewayProvider_DefaultsMissingVideoMimeType(t *testing.T) {
+	provider := NewSocialGatewayProvider(socialclient.Config{BaseURL: "https://social.example", CallbackBaseURL: "https://velox.example"})
+	artifact := &store.Artifact{ID: "art-video", SHA256: "sha", SizeBytes: 42}
+
+	req, err := provider.buildRequest(artifact, sampleDestination(), "delivery-mime", "idem-mime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := req.Artifact.MimeType, "video/mp4"; got != want {
+		t.Fatalf("mime_type = %q, want %q", got, want)
+	}
+}
+
 func TestSocialGatewayProvider_UsesLeaseToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer short-lived-token" {

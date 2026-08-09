@@ -84,6 +84,9 @@ func TestBuildWorkerCard_Populated(t *testing.T) {
 	if card.WorkerID != "velox-worker-13197" {
 		t.Errorf("WorkerID = %q, want velox-worker-13197", card.WorkerID)
 	}
+	if card.WorkerName != "vps-velox-worker-13197" {
+		t.Errorf("WorkerName = %q, want vps-velox-worker-13197", card.WorkerName)
+	}
 	// WorkerName "vps-velox-worker-13197" is benign (alphanumeric +
 	// dashes) so sanitiseHostname must return it unchanged.
 	if card.Hostname != "vps-velox-worker-13197" {
@@ -295,6 +298,7 @@ func TestWorkerCard_JSON_OmitsEmptyFields(t *testing.T) {
 	}
 	mustHave := []string{
 		`"worker_id":`,
+		`"worker_name":`,
 		`"hostname":`,
 		`"host":`,
 		`"status":`,

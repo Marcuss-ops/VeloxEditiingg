@@ -145,6 +145,14 @@ func (s *SocialGatewayProvider) deliver(ctx context.Context, artifact *store.Art
 // operator-facing observability only and are inert in the wire
 // contract.
 func (s *SocialGatewayProvider) buildRequest(artifact *store.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string) (socialclient.DeliverArtifactRequest, error) {
+	// Rendered Velox video artifacts created by the current executors may not
+	// carry MIME metadata in the persisted row. The Social API requires an
+	// explicit video MIME type, and this provider only handles video delivery.
+	mimeType := strings.TrimSpace(artifact.MimeType)
+	if mimeType == "" {
+		mimeType = "video/mp4"
+	}
+
 	req := socialclient.DeliverArtifactRequest{
 		ContractVersion:       socialclient.ContractVersionDelivery,
 		ExternalDeliveryID:    deliveryID,
@@ -155,7 +163,7 @@ func (s *SocialGatewayProvider) buildRequest(artifact *store.Artifact, destinati
 			ArtifactID:  artifact.ID,
 			SHA256:      artifact.SHA256,
 			SizeBytes:   artifact.SizeBytes,
-			MimeType:    artifact.MimeType,
+			MimeType:    mimeType,
 			DownloadURL: s.client.ArtifactDownloadURL(artifact.ID),
 		},
 	}

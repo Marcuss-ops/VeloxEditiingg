@@ -122,7 +122,9 @@ resolve_token() {
 
 ADMIN_TOKEN=$(resolve_token) || exit 2
 
-JOBS_DESTINATION_ID="${JOBS_DESTINATION_ID:-drive}"
+# Smoke must use the dedicated native Drive destination. Production delivery
+# is intentionally opaque/social_gateway and must never be used by this test.
+JOBS_DESTINATION_ID="${JOBS_DESTINATION_ID:-drive-smoke}"
 
 # ---- server URL -------------------------------------------------------------
 MASTER_URL="${VELOX_MASTER_URL:-http://127.0.0.1:8000}"

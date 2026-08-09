@@ -34,6 +34,7 @@ package api
 // SOURCE MAPPING (see `buildWorkerCard` for the canonical impl):
 //
 //	worker_id         Worker.WorkerID       (post-NormalizeWorkerID)
+//	worker_name       Worker.WorkerName     (operator-facing mutable name)
 //	hostname          sanitiseHostname(Worker.WorkerName)
 //	host              sanitiseHostname(Worker.IPAddress)
 //	status            Worker.ConnectionStatus  (canonical enum)
@@ -64,6 +65,7 @@ package api
 // contract belongs to step §6 of the rollout.
 type WorkerCard struct {
 	WorkerID            string  `json:"worker_id"`
+	WorkerName          string  `json:"worker_name"`
 	Hostname            string  `json:"hostname"`
 	Host                string  `json:"host"`
 	Status              string  `json:"status"`

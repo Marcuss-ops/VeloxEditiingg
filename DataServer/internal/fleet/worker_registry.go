@@ -28,7 +28,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -170,10 +169,7 @@ type SecureSSHClient struct {
 // unified WorkerRegistry.
 func NewSecureSSHClient(reg *WorkerRegistry, keyPath, knownHosts string) *SecureSSHClient {
 	if keyPath == "" {
-		keyPath = os.ExpandEnv("$HOME/.ssh/id_ed25519_velox")
-		if keyPath == "" || strings.HasPrefix(keyPath, "$") {
-			keyPath = DefaultSSHKeyPath
-		}
+		keyPath = DefaultSSHKeyPath
 	}
 	if knownHosts == "" {
 		knownHosts = DefaultKnownHostsPath

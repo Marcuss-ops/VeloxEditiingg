@@ -82,6 +82,31 @@ func NewM2MOrAdminAuthMiddleware(cfg *config.Config, st *store.SQLiteStore, limi
 	}
 }
 
+// NewServiceOrM2MOrAdminAuthMiddleware protects internal artifact reads for
+// the reverse Velox→InstaEdit service contract. The service uses the shared
+// SOCIAL_API_TOKEN for both delivery requests and artifact downloads; M2M and
+// operator-admin tokens remain valid for tooling and backwards compatibility.
+// Browser-origin requests are rejected even when the service token matches.
+func NewServiceOrM2MOrAdminAuthMiddleware(cfg *config.Config, st *store.SQLiteStore, limiter *m2mRateLimiter, adminToken string, adminAuth gin.HandlerFunc) gin.HandlerFunc {
+	m2mOrAdmin := NewM2MOrAdminAuthMiddleware(cfg, st, limiter, adminToken, adminAuth)
+	serviceToken := ""
+	if cfg != nil {
+		serviceToken = strings.TrimSpace(cfg.Runtime.Social.APIKey)
+	}
+	return func(c *gin.Context) {
+		if c.GetHeader("Origin") != "" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "direct browser access forbidden"})
+			return
+		}
+		token := workersreg.ExtractBearerToken(c.GetHeader("Authorization"), "", "")
+		if serviceToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(serviceToken)) == 1 {
+			c.Next()
+			return
+		}
+		m2mOrAdmin(c)
+	}
+}
+
 // =====================================================================
 // gin.Context keys
 // =====================================================================

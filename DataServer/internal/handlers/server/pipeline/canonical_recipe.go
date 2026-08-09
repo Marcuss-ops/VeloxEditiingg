@@ -90,6 +90,7 @@ func NormalizeCanonicalRecipe(req *SubmitJobRequest) error {
 
 func canonicalRecipeScene(raw map[string]interface{}, index int) (SubmitScene, error) {
 	scene := SubmitScene{Index: int64(index)}
+	stockFallbackExplicit := false
 	scene.SceneID = firstRecipeString(raw, "scene_id", "id")
 	scene.Kind = firstRecipeString(raw, "kind")
 	scene.Text = firstRecipeString(raw, "text", "description")
@@ -110,12 +111,13 @@ func canonicalRecipeScene(raw map[string]interface{}, index int) (SubmitScene, e
 		applyRecipeStocks(&scene, rawStock)
 		if explicit, ok := raw["stock_fallback"].(bool); ok {
 			scene.StockFallback = explicit
+			stockFallbackExplicit = true
 		}
 	}
 	if rawStock, ok := raw["stock_links"]; ok {
 		scene.StockLinks = recipeStrings(rawStock)
 	}
-	if scene.Stock != nil && !scene.StockFallback {
+	if scene.Stock != nil && !stockFallbackExplicit && !scene.StockFallback {
 		scene.StockFallback = true
 	}
 	return scene, nil
@@ -134,10 +136,15 @@ func applyRecipeStocks(scene *SubmitScene, raw interface{}) {
 		for _, item := range value {
 			if object, ok := item.(map[string]interface{}); ok {
 				if clip := recipeClip(object); clip != nil && clip.URL != "" {
+					scene.StockAssets = append(scene.StockAssets, *clip)
 					scene.StockLinks = append(scene.StockLinks, clip.URL)
 				}
 			} else if link, ok := item.(string); ok && strings.TrimSpace(link) != "" {
-				scene.StockLinks = append(scene.StockLinks, strings.TrimSpace(link))
+				trimmed := strings.TrimSpace(link)
+				if clip := recipeClip(map[string]interface{}{"url": trimmed}); clip != nil {
+					scene.StockAssets = append(scene.StockAssets, *clip)
+				}
+				scene.StockLinks = append(scene.StockLinks, trimmed)
 			}
 		}
 	}
@@ -160,6 +167,9 @@ func recipeClip(raw map[string]interface{}) *SubmitClip {
 	clip.URL = firstRecipeString(raw, "url", "link", "drive_link", "folder_link")
 	if clip.URL == "" && clip.AssetID != "" {
 		clip.URL = "velox-asset://" + clip.AssetID
+	}
+	if clip.AssetID == "" && strings.HasPrefix(strings.ToLower(clip.URL), "velox-asset://") {
+		clip.AssetID = strings.TrimPrefix(clip.URL, "velox-asset://")
 	}
 	return clip
 }

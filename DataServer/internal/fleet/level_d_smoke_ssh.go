@@ -89,7 +89,7 @@ func (c *sshClient) Run(ctx context.Context, workerID string, command string) (s
 	}
 	keyPath := t.KeyPath
 	if keyPath == "" {
-		keyPath = os.ExpandEnv("$HOME/.ssh/id_ed25519_velox")
+		keyPath = DefaultSSHKeyPath
 	}
 	cmd := exec.CommandContext(ctx, "ssh",
 		"-i", keyPath,

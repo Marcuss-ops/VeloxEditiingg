@@ -23,6 +23,17 @@ scripts/fleetctl quarantine worker-id "asset failures"
 scripts/fleetctl operations worker-id
 ```
 
+### Worker identity
+
+`worker_id` is the immutable security identity: it is bound to the mTLS
+certificate, Master registration, leases, and job history. Use it for every
+`fleetctl` command and never replace it with a display name.
+
+`worker_name` is the mutable operator-facing name. `status` output and worker
+API cards show both values as `NAME` and `WORKER_ID`; changing `worker_name`
+must not require certificate or OpenBao changes. Display names must never be
+added to `VELOX_ALLOWED_WORKERS`.
+
 `drain`, `resume`, and `quarantine` use the canonical admin worker routes and
 return the operation ledger response. `operations` reads the audit ledger.
 The smoke command delegates to `tests/worker-cert/smoke_one.sh`, which submits

@@ -125,8 +125,32 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 			if s.Stock != nil {
 				scene["stock"] = clipToMap(s.Stock)
 			}
-			if len(s.StockLinks) > 0 {
-				scene["stock_links"] = append([]string(nil), s.StockLinks...)
+			if len(s.StockAssets) > 0 {
+				stock := make([]interface{}, 0, len(s.StockAssets))
+				for i := range s.StockAssets {
+					asset := s.StockAssets[i]
+					stock = append(stock, clipToMap(&asset))
+				}
+				scene["stock"] = stock
+			} else if len(s.StockLinks) > 0 && s.Stock == nil {
+				// Keep programmatic callers on the canonical worker shape. The
+				// enqueue layer intentionally rejects scene.stock_links as a
+				// legacy alias, so never emit it across this boundary.
+				stock := make([]interface{}, 0, len(s.StockLinks))
+				for _, link := range s.StockLinks {
+					trimmed := strings.TrimSpace(link)
+					if trimmed == "" {
+						continue
+					}
+					assetID := trimmed
+					if strings.HasPrefix(strings.ToLower(trimmed), "velox-asset://") {
+						assetID = strings.TrimPrefix(trimmed, "velox-asset://")
+					}
+					stock = append(stock, map[string]interface{}{"asset_id": assetID, "url": trimmed})
+				}
+				if len(stock) > 0 {
+					scene["stock"] = stock
+				}
 			}
 			if s.StockFallback {
 				scene["stock_fallback"] = true

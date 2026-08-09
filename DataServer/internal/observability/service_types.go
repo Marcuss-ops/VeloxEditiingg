@@ -178,20 +178,41 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 		timings, err := s.attempts.GetPhaseTimings(ctx, a.ID)
 		if err == nil {
 			var totalDur int64
+			var attemptFirstStart *time.Time
+			var attemptLastEnd *time.Time
 			for _, pt := range timings {
 				as.PhaseBreakdown[pt.Phase] += pt.DurationMS
 				summary.PhaseTotals[pt.Phase] += pt.DurationMS
 				totalDur += pt.DurationMS
+				if !pt.WallStart.IsZero() && (attemptFirstStart == nil || pt.WallStart.Before(*attemptFirstStart)) {
+					start := pt.WallStart
+					attemptFirstStart = &start
+				}
+				if !pt.WallEnd.IsZero() && (attemptLastEnd == nil || pt.WallEnd.After(*attemptLastEnd)) {
+					end := pt.WallEnd
+					attemptLastEnd = &end
+				}
 			}
-			as.DurationMS = totalDur
+			// Phase timings can overlap (for example render contains
+			// compile/encode/audio). Report wall duration for the attempt;
+			// retain the sum only for legacy rows without wall bounds.
+			if attemptFirstStart != nil && attemptLastEnd != nil {
+				as.DurationMS = attemptLastEnd.Sub(*attemptFirstStart).Milliseconds()
+			} else {
+				as.DurationMS = totalDur
+			}
 
-			if len(timings) > 0 {
-				start := timings[0].WallStart
-				end := timings[len(timings)-1].WallEnd
-				if firstStart == nil || start.Before(*firstStart) {
+			for _, timing := range timings {
+				// Summary rows (for example quality/ffprobe) may carry no
+				// wall-clock bounds. Never let a zero timestamp replace a
+				// valid execution bound: time.Time.Sub would otherwise
+				// saturate and expose MaxInt64-like wall times.
+				if !timing.WallStart.IsZero() && (firstStart == nil || timing.WallStart.Before(*firstStart)) {
+					start := timing.WallStart
 					firstStart = &start
 				}
-				if lastEnd == nil || end.After(*lastEnd) {
+				if !timing.WallEnd.IsZero() && (lastEnd == nil || timing.WallEnd.After(*lastEnd)) {
+					end := timing.WallEnd
 					lastEnd = &end
 				}
 			}

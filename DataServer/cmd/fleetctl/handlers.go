@@ -92,10 +92,17 @@ func runStatus(client *fleetClient) int {
 		return MapHTTPStatusToOpExit(status)
 	}
 	// Pretty-print.
-	fmt.Printf("%-32s  %-9s  %-9s  %-9s  %-26s  %-13s\n", "WORKER_ID", "STATUS", "HEALTH", "JOBS", "EXECUTOR@VERSION", "LAST_SMOKE")
-	fmt.Printf("%-32s  %-9s  %-9s  %-9s  %-26s  %-13s\n", "---------", "------", "------", "----", "--------------", "----------")
+	fmt.Printf("%-24s  %-32s  %-9s  %-9s  %-9s  %-26s  %-13s\n", "NAME", "WORKER_ID", "STATUS", "HEALTH", "JOBS", "EXECUTOR@VERSION", "LAST_SMOKE")
+	fmt.Printf("%-24s  %-32s  %-9s  %-9s  %-9s  %-26s  %-13s\n", "----", "---------", "------", "------", "----", "--------------", "----------")
 	for _, w := range resp.Workers {
 		wid, _ := w["worker_id"].(string)
+		name, _ := w["worker_name"].(string)
+		if name == "" {
+			name, _ = w["hostname"].(string)
+		}
+		if name == "" {
+			name = wid
+		}
 		statusS, _ := w["status"].(string)
 		health, _ := w["health"].(string)
 		executor, _ := w["executor"].(string)
@@ -104,8 +111,8 @@ func runStatus(client *fleetClient) int {
 		maxJobs, _ := w["max_active_jobs"].(float64)
 		lastSmoke, _ := w["last_smoke_status"].(string)
 		execLine := fmt.Sprintf("%s@%v", executor, execVer)
-		fmt.Printf("%-32s  %-9s  %-9s  %-9s  %-26s  %-13s\n",
-			wid, statusS, health,
+		fmt.Printf("%-24s  %-32s  %-9s  %-9s  %-9s  %-26s  %-13s\n",
+			name, wid, statusS, health,
 			fmt.Sprintf("%v/%v", active, maxJobs),
 			execLine, lastSmoke)
 	}

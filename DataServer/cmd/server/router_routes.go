@@ -113,7 +113,7 @@ func registerUploadRoutes(r *gin.Engine, deps UploadRouteDeps) {
 	workerDataPlaneAuth := api.WorkerOrAdminAuthMiddleware(deps.Cfg, deps.WorkerTokens)
 	artifactReadAuth := adminAuth
 	if deps.SQLiteStore != nil {
-		artifactReadAuth = pipeline.NewM2MOrAdminAuthMiddleware(deps.Cfg, deps.SQLiteStore, nil, deps.Cfg.Auth.AdminToken, adminAuth)
+		artifactReadAuth = pipeline.NewServiceOrM2MOrAdminAuthMiddleware(deps.Cfg, deps.SQLiteStore, nil, deps.Cfg.Auth.AdminToken, adminAuth)
 	}
 	if deps.ArtifactReader != nil && deps.BlobStore != nil {
 		handler := artifactDownloadHandler(deps.ArtifactReader, deps.BlobStore, deps.SQLiteStore)

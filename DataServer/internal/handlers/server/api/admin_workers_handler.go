@@ -148,6 +148,7 @@ func buildWorkerCard(info *workersreg.Worker) WorkerCard {
 	}
 	return WorkerCard{
 		WorkerID:            info.WorkerID.String(),
+		WorkerName:          sanitiseHostname(info.WorkerName),
 		Hostname:            sanitiseHostname(info.WorkerName),
 		Host:                sanitiseHostname(info.IPAddress),
 		Status:              info.ConnectionStatus,

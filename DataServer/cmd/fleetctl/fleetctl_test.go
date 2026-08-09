@@ -171,6 +171,7 @@ func TestRunStatus_StatusOK_PrettyPrintsCard(t *testing.T) {
 			"workers": []map[string]any{
 				{
 					"worker_id":         "velox-worker-13197",
+					"worker_name":       "velox-worker-01",
 					"status":            "CONNECTED",
 					"health":            "HEALTHY",
 					"executor":          "scene.composite.v1",
@@ -181,6 +182,7 @@ func TestRunStatus_StatusOK_PrettyPrintsCard(t *testing.T) {
 				},
 				{
 					"worker_id":         "velox-worker-523925eb",
+					"worker_name":       "velox-worker-02",
 					"status":            "CONNECTED",
 					"health":            "DEGRADED",
 					"executor":          "scene.composite.v1",
@@ -210,6 +212,9 @@ func TestRunStatus_StatusOK_PrettyPrintsCard(t *testing.T) {
 	if !strings.Contains(string(out), "velox-worker-13197") {
 		t.Errorf("stdout must list both workers; got:\n%s", out)
 	}
+	if !strings.Contains(string(out), "velox-worker-01") {
+		t.Errorf("stdout must render worker_name; got:\n%s", out)
+	}
 	if !strings.Contains(string(out), "HEALTHY") {
 		t.Errorf("stdout must render HEALTHY health; got:\n%s", out)
 	}
@@ -229,8 +234,8 @@ func TestRunSSHCheck_AllReady_ReturnsExitOK(t *testing.T) {
 			"key_file":         "/etc/velox/ssh/id_ed25519_velox",
 			"known_hosts_file": "/etc/velox/ssh/known_hosts",
 			"workers": []map[string]any{
-				{"worker_id": "velox-worker-01", "ssh": "PASS", "hostkey": "PASS", "sudo": "PASS", "detail": ""},
-				{"worker_id": "velox-worker-02", "ssh": "PASS", "hostkey": "PASS", "sudo": "PASS", "detail": ""},
+				{"worker_id": "velox-worker-13197", "ssh": "PASS", "hostkey": "PASS", "sudo": "PASS", "detail": ""},
+				{"worker_id": "velox-worker-523925eb", "ssh": "PASS", "hostkey": "PASS", "sudo": "PASS", "detail": ""},
 			},
 			"summary": map[string]any{"total": 2, "ssh_pass": 2, "key_pass": 2, "sudo_pass": 2, "ready": 2},
 		})
@@ -251,7 +256,7 @@ func TestRunSSHCheck_AllReady_ReturnsExitOK(t *testing.T) {
 	if !strings.Contains(string(out), "2/2 READY") {
 		t.Errorf("stdout must render 2/2 READY; got:\n%s", out)
 	}
-	if !strings.Contains(string(out), "velox-worker-02") {
+	if !strings.Contains(string(out), "velox-worker-523925eb") {
 		t.Errorf("stdout must list each worker; got:\n%s", out)
 	}
 }
@@ -260,7 +265,7 @@ func TestRunSSH_NotAllReady_ReturnsExitUnexpected(t *testing.T) {
 	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"workers": []map[string]any{
-				{"worker_id": "velox-worker-01", "ssh": "FAIL", "hostkey": "PASS", "sudo": "SKIP", "detail": "ssh: unreachable"},
+				{"worker_id": "velox-worker-13197", "ssh": "FAIL", "hostkey": "PASS", "sudo": "SKIP", "detail": "ssh: unreachable"},
 			},
 			"summary": map[string]any{"total": 1, "ssh_pass": 0, "key_pass": 1, "sudo_pass": 0, "ready": 0},
 		})

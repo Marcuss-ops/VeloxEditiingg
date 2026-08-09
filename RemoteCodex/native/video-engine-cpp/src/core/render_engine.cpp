@@ -553,6 +553,12 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     }
 
     reportProgress(100, "completed");
+    // Segment-level FFmpeg progress is best-effort and may stop below 100
+    // when the final concat/mux phases finish without another FFmpeg
+    // progress callback. The render lifecycle is complete here, so make the
+    // persisted sidecar reflect the canonical terminal state.
+    last_progress_.progress_pct = 100.0;
+    last_progress_.finished = true;
 
     return result;
 }

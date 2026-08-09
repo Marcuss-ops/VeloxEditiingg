@@ -169,6 +169,10 @@ type SubmitScene struct {
 	// composite jobs. It is kept separate from Clip so the compiler can
 	// preserve the primary clip and the stock fallback independently.
 	Stock *SubmitClip `json:"stock,omitempty"`
+	// StockAssets is the internal canonical pool produced when a recipe
+	// supplies more than one stock asset. It is deliberately not a second
+	// public JSON shape: the worker boundary serializes it as scene.stock[].
+	StockAssets []SubmitClip `json:"-"`
 	// StockLinks is the supplemental clip pool. It is shuffled per
 	// job/scene and cycled until the scene voiceover ends.
 	StockLinks    []string `json:"stock_links,omitempty"`

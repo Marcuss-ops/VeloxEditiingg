@@ -157,7 +157,7 @@ was restored. Do NOT rename `worker_id` for cosmetic/ordering purposes.
 
 | Field | Nature | Examples |
 |-------|--------|----------|
-| `worker_id` | **IMMUTABLE** — mTLS certificate identity, OpenBao identity, Master registration, historical jobs, leases, DB references | `velox-worker-13197`, `velox-worker-523925eb`, `host_57_129_132_133`, `host_57_151_20_173` |
+| `worker_id` | **IMMUTABLE** — mTLS certificate identity, OpenBao identity, Master registration, historical jobs, leases, DB references | `velox-worker-13197`, `velox-worker-523925eb`, `host_57_129_132_133`, `host_57_131_20_173` |
 | `worker_name` | **MUTABLE** — operator-facing display name shown in UI/tools | `velox-worker-01..04` |
 
 ### Rules

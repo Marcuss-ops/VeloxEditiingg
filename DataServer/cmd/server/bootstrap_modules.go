@@ -28,18 +28,28 @@ import (
 // observability.WorkerReader interface, converting WorkerInfo
 // structs to map[string]any.
 type workerRegistryAdapter struct {
-	reg *workers.Registry
+	reg   *workers.Registry
+	store *store.SQLiteStore
 }
 
 func (a *workerRegistryAdapter) ListWorkers() ([]map[string]any, error) {
 	if a.reg == nil {
+		if a.store != nil {
+			return a.store.ListWorkers()
+		}
 		return nil, nil
 	}
 	infos := a.reg.List(context.Background())
+	if len(infos) == 0 && a.store != nil {
+		return a.store.ListWorkers()
+	}
 	out := make([]map[string]any, len(infos))
 	for i, info := range infos {
 		out[i] = map[string]any{
-			"worker_id":         info.WorkerID,
+			// WorkerID is a typed identity value. Observability's map
+			// boundary intentionally exposes its canonical string form so
+			// downstream aggregation can index workers consistently.
+			"worker_id":         string(info.WorkerID),
 			"worker_name":       info.WorkerName,
 			"status":            info.ConnectionStatus,
 			"last_heartbeat":    info.LastHB,
@@ -62,7 +72,7 @@ func (a *workerRegistryAdapter) GetWorker(workerID string) (map[string]any, erro
 		return nil, nil
 	}
 	return map[string]any{
-		"worker_id":         info.WorkerID,
+		"worker_id":         string(info.WorkerID),
 		"worker_name":       info.WorkerName,
 		"status":            info.ConnectionStatus,
 		"last_heartbeat":    info.LastHB,
@@ -234,7 +244,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 
 	// ── Observability REST API ─────────────────────────────────────
 	if t.Observability != nil {
-		workerReader := &workerRegistryAdapter{reg: w.Registry}
+		workerReader := &workerRegistryAdapter{reg: w.Registry, store: p.SQLite}
 		obsSvc := t.Observability.WithJobs(j.Repository).WithWorkers(workerReader)
 		registry.Register(observability.NewModule(obsSvc, api.AdminAuthMiddleware(cfg)))
 		log.Printf("[BOOTSTRAP] Observability REST API registered")

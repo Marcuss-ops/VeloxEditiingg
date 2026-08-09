@@ -30,6 +30,12 @@ int cmdRenderPlan(int argc, char** argv) {
     }
 
     velox::core::RenderEngine engine;
+    // The CLI has no caller-side progress consumer, but the engine still
+    // needs a callback attached so it parses FFmpeg -progress blocks and
+    // persists the final snapshot in <output>.progress.json. The worker
+    // attaches its own callback through RenderClient; this no-op keeps the
+    // direct canonical CLI path observably equivalent for smoke/tests.
+    engine.setProgressCallback([](const velox::services::EngineProgress&) {});
     auto result = engine.render(planOpt.value());
 
     if (result.success) {

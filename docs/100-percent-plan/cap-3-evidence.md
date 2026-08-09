@@ -137,7 +137,7 @@ EXPECTED_MAX_CONCURRENCY        # optional cross-check vs /api/v1/workers.max_pa
 ssh velox-worker-01 "ls -la /run/velox/certs/"
 # 2. Run the certifier.
 ssh velox-worker-01 "\
-  sudo WORKER_ID=velox-worker-01 \
+  sudo WORKER_ID=velox-worker-13197 \
        WORKER_IMAGE=ghcr.io/marcuss-ops/velox-worker@sha256:abc... \
        EXPECTED_BUNDLE_HASH=$(cat /opt/velox/BUNDLE_HASH.txt) \
        WORKER_CERT_FILE=/run/velox/certs/worker.pem \
@@ -152,7 +152,7 @@ ssh velox-worker-01 "cat /home/velox/evidence/<date>/velox-worker-01/verdict-2c-
 scp -r velox-worker-01:/home/velox/evidence/<date>/velox-worker-01/ evidence/velox-worker-01/
 
 # A diagnostic run when no master is reachable yet:
-sudo WORKER_ID=velox-worker-01 \
+sudo WORKER_ID=velox-worker-13197 \
      WORKER_IMAGE=... \
      EXPECTED_BUNDLE_HASH=... \
      WORKER_CERT_FILE=... WORKER_KEY_FILE=... WORKER_CA_FILE=... \

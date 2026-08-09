@@ -26,7 +26,7 @@ EVIDENCE_ROOT_CAP9      ?= /tmp/velox-cap9-evidence
 EVIDENCE_ROOT_CAP10     ?= /tmp/velox-cap10-evidence
 
 .PHONY: verify verify-fast verify-heavy test-certify-fleet test-canary-worker-rollout canary-worker-rollout certify-fleet fmt fmt-check vet pilot api-docs api-docs-apply \
-        jobs-smoke publishing-flow-smoke \
+        jobs-smoke publishing-flow-smoke video-smoke media-smoke \
         e2e-grpc e2e-workload e2e-workload-mtls e2e-master-worker \
         enable-branch-protection disable-branch-protection inspect-branch-protection \
         local-verify-mirror certify-worker certify-worker-bootstrap-mtls \
@@ -50,6 +50,8 @@ help:
 	@echo "  make pilot                        -- full pilot pipeline (build + start + submit + work + poll)"
 	@echo "  make jobs-smoke                  -- POST + GET polling smoke for /api/v1/jobs (auto-provisions M2M key)"
 	@echo "  make publishing-flow-smoke       -- Cross-repo publishing flow smoke (Velox → InstaeditLogin catalog → /publishing/targets → /jobs → SUCCEEDED → PRIVATE_UPLOADED)"
+	@echo "  make video-smoke                  -- C++ RenderPlan smoke + CTest + MP4/sidecar contract"
+	@echo "  make media-smoke                  -- FFmpeg media contract smokes (audio, subtitle sync, chars, styles)"
 	@echo "  make e2e-grpc                     -- PR 3 gRPC control-plane E2E matrix (6 cases, ~90s)"
 	@echo "  make e2e-workload                 -- PR 5 full workload E2E (Hello → artifact, ~3-5 min)"
 	@echo "  make local-verify-mirror          -- reproduce the GitHub Actions pyramid locally"
@@ -214,6 +216,31 @@ jobs-smoke:
 #   6 missing job_id on 202, 7 FAILED/CANCELLED, 8 poll timeout, 9 PRIVATE_UPLOADED timeout.
 publishing-flow-smoke:
 	@bash scripts/e2e/publishing_flow_smoke.sh
+
+# Deterministic local last-mile smoke for the canonical C++ RenderPlan path.
+# It builds/runs CTest, renders generated fixtures through --render --plan,
+# and validates the final MP4 plus progress sidecar.
+video-smoke:
+	@bash tests/smoke/native_render/run.sh
+
+# Hermetic FFmpeg/libass contract matrix. These tests deliberately run without
+# a master or external assets and mirror the final engine filter graph.
+media-smoke:
+	@set -euo pipefail; \
+	  root="$${MEDIA_SMOKE_DIR:-/tmp/velox-media-smoke/$$(date -u +%Y%m%dT%H%M%SZ)}"; \
+	  mkdir -p "$$root"; \
+	  command -v ffmpeg >/dev/null || { echo "ffmpeg is required for media-smoke" >&2; exit 2; }; \
+	  ffmpeg -y -v error \
+	    -f lavfi -i "color=c=0x1e3a5f:s=640x360:d=3" \
+	    -f lavfi -i "sine=frequency=440:duration=3:sample_rate=48000" \
+	    -f lavfi -i "sine=frequency=880:duration=3:sample_rate=48000" \
+	    -map 0:v:0 -map 1:a:0 -map 2:a:0 -t 3 \
+	    -c:v libx264 -pix_fmt yuv420p -c:a aac -ac 2 "$$root/dual-audio.mp4"; \
+	  bash tests/smoke/full_payload/audio_preservation/check_audio_streams.sh "$$root/dual-audio.mp4"; \
+	  JOB_DIR="$$root/subtitle-sync" bash tests/smoke/full_payload/subtitle_sync/check_subtitle_sync.sh; \
+	  JOB_DIR="$$root/subtitle-special-chars" bash tests/smoke/full_payload/subtitle_special_chars/check_subtitle_burn_in.sh; \
+	  JOB_DIR="$$root/styled-highlights" bash tests/smoke/full_payload/styled_highlights/check_styled_highlights.sh; \
+	  echo "media smoke evidence: $$root"
 
 verify:        ## Architecture + Go (-race) + cmake + docker (full suite)
 	./scripts/ci/verify.sh
