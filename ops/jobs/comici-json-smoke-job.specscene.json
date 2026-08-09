@@ -1,0 +1,239 @@
+{
+  "version": 1,
+  "scenes": [
+    {
+      "id": "scene-0",
+      "index": 0,
+      "text": "Benvenuti nel mondo della comicità. Iniziamo con due momenti spontanei che mostrano il talento e l’energia degli attori.",
+      "kind": "intro",
+      "bindings": {
+        "clip": {
+          "clip_id": "11MRzjKA3o7OZGmYZGJMPTGxM_eNt6qAX",
+          "drive_link": "https://drive.google.com/file/d/11MRzjKA3o7OZGmYZGJMPTGxM_eNt6qAX/view?usp=drivesdk"
+        },
+        "voiceover": {
+          "status": "completed",
+          "links": {
+            "it": "https://drive.google.com/file/d/1lLxBxljlkRQUIbDQ89MuWCUfpgFMIEuH/view"
+          }
+        }
+      }
+    },
+    {
+      "id": "scene-1",
+      "index": 1,
+      "text": "Il primo sguardo ci porta su Paul Giamatti, che condivide alcune riflessioni durante un incontro tra attori, mostrando la sua naturale presenza scenica anche fuori dal palcoscenico.",
+      "kind": "clip",
+      "bindings": {
+        "clip": {
+          "clip_id": "11_5vtQgxOfFdBnsC8FQnCu0UQ2WpfO-c",
+          "drive_link": "https://drive.google.com/file/d/11_5vtQgxOfFdBnsC8FQnCu0UQ2WpfO-c/view?usp=drivesdk"
+        },
+        "voiceover": {
+          "status": "completed",
+          "links": {
+            "it": "https://drive.google.com/file/d/1CIcSEK53NWU44_O1qD6yBwoS3RqXwQJi/view"
+          }
+        }
+      }
+    },
+    {
+      "id": "scene-2",
+      "index": 2,
+      "text": "Successivamente, Andrew Scott partecipa a una conversazione, con un tono vivace mentre parla delle sue esperienze nel settore artistico e del suo approccio al mestiere.",
+      "kind": "clip",
+      "bindings": {
+        "clip": {
+          "clip_id": "128AEiKFTwEZJO4dBUbhe4hu7bzbLAR-W",
+          "drive_link": "https://drive.google.com/file/d/128AEiKFTwEZJO4dBUbhe4hu7bzbLAR-W/view?usp=drivesdk"
+        },
+        "voiceover": {
+          "status": "completed",
+          "links": {
+            "it": "https://drive.google.com/file/d/1QWhTQuI528pklCV-Og6RC4ESUDE0vemN/view"
+          }
+        }
+      }
+    },
+    {
+      "id": "scene-3",
+      "index": 3,
+      "text": "È evidente l'energia che porta nei momenti di scambio tra colleghi.",
+      "kind": "clip",
+      "bindings": {
+        "clip": {
+          "clip_id": "1jDRQz8zDFjg86RpgSuxUIHuIE-DKtuET",
+          "drive_link": "https://drive.google.com/file/d/1jDRQz8zDFjg86RpgSuxUIHuIE-DKtuET/view?usp=drivesdk"
+        },
+        "voiceover": {
+          "status": "completed",
+          "links": {
+            "it": "https://drive.google.com/file/d/1rmbL6lzJRZysT8z-NJbq1snkXADnfOJC/view"
+          }
+        }
+      }
+    },
+    {
+      "id": "scene-4",
+      "index": 4,
+      "text": "Il ritmo cambia con Tom Holland, che risponde in modo schietto durante un quiz dedicato alla sua collaborazione con Zendaya, mantenendo sempre un’aria giocosa e coinvolgente per il pubblico.",
+      "kind": "clip",
+      "bindings": {
+        "clip": {
+          "clip_id": "1HX3_LUx4Yg-mLaQkukKPrKTlEibuPz98",
+          "drive_link": "https://drive.google.com/file/d/1HX3_LUx4Yg-mLaQkukKPrKTlEibuPz98/view?usp=drivesdk"
+        },
+        "voiceover": {
+          "status": "completed",
+          "links": {
+            "it": "https://drive.google.com/file/d/15HRFaDu7tGjizvHK1CX5Ilaw2W27mPwx/view"
+          }
+        }
+      }
+    },
+    {
+      "id": "scene-5",
+      "index": 5,
+      "text": "Proseguendo nel montaggio, troviamo Adam Sandler in un altro momento di intervista. Sembra rilassato ma pieno di aneddoti divertenti da raccontare ai presenti al tavolo rotondo degli attori.",
+      "kind": "clip",
+      "bindings": {
+        "clip": {
+          "clip_id": "1w_wGC43vY4wGtoBOnCErB_r-Hls_bdtO",
+          "drive_link": "https://drive.google.com/file/d/1w_wGC43vY4wGtoBOnCErB_r-Hls_bdtO/view?usp=drivesdk"
+        },
+        "voiceover": {
+          "status": "completed",
+          "links": {
+            "it": "https://drive.google.com/file/d/1iY6V1S6xxi2nOByMBmV_7X42fDLovva-/view"
+          }
+        }
+      }
+    },
+    {
+      "id": "scene-6",
+      "index": 6,
+      "text": "Torniamo ad Adam Sandler che continua a condividere le sue osservazioni e i suoi ricordi del mondo dello spettacolo, mantenendo quel suo umorismo spontaneo tipico delle interviste informali.",
+      "kind": "clip",
+      "bindings": {
+        "clip": {
+          "clip_id": "1dRv4WFUcXgLUf3QvqheZ9pCqvJY3KcFu",
+          "drive_link": "https://drive.google.com/file/d/1dRv4WFUcXgLUf3QvqheZ9pCqvJY3KcFu/view?usp=drivesdk"
+        },
+        "voiceover": {
+          "status": "completed",
+          "links": {
+            "it": "https://drive.google.com/file/d/1QpCO_4Yrp33fmMUdPuu9K0I30L76L9Q2/view"
+          }
+        }
+      }
+    },
+    {
+      "id": "scene-7",
+      "index": 7,
+      "text": "Jeffrey Wright è il prossimo volto in primo piano. Durante la prima parte dell'incontro tra attori, condivide riflessioni acute sul processo creativo e sulla disciplina che richiede l'arte recitare.",
+      "kind": "clip",
+      "bindings": {
+        "clip": {
+          "clip_id": "1Pwng-iqQAVS5VZJmVNGHMBLQBFLsNyOU",
+          "drive_link": "https://drive.google.com/file/d/1Pwng-iqQAVS5VZJmVNGHMBLQBFLsNyOU/view?usp=drivesdk"
+        },
+        "voiceover": {
+          "status": "completed",
+          "links": {
+            "it": "https://drive.google.com/file/d/1C4lCniWS7RrOd96Ji6-NiXKEfN-w2KZD/view"
+          }
+        }
+      }
+    },
+    {
+      "id": "scene-8",
+      "index": 8,
+      "text": "In un secondo momento con gli stessi colleghi, Jeffrey Wright approfondisce ulteriormente questi temi, offrendo spunti di riflessione molto personali sul suo percorso professionale.",
+      "kind": "clip",
+      "bindings": {
+        "clip": {
+          "clip_id": "1xWrSFJSg5K5D_hZTxKILhnddvFytWaHI",
+          "drive_link": "https://drive.google.com/file/d/1xWrSFJSg5K5D_hZTxKILhnddvFytWaHI/view?usp=drivesdk"
+        },
+        "voiceover": {
+          "status": "completed",
+          "links": {
+            "it": "https://drive.google.com/file/d/1-uwiDpK8057IEh0C30NcyilP_WghRJ7z/view"
+          }
+        }
+      }
+    },
+    {
+      "id": "scene-9",
+      "index": 9,
+      "text": "Andrew Scott torna a parlare, questa volta in una diversa fase dell’evento. Le sue parole continuano ad analizzare la complessità del ruolo dell'attore moderno e le sfumature della performance.",
+      "kind": "clip",
+      "bindings": {
+        "clip": {
+          "clip_id": "1qo69v-Kwuouxyr38-rdsqbS1G53exsFW",
+          "drive_link": "https://drive.google.com/file/d/1qo69v-Kwuouxyr38-rdsqbS1G53exsFW/view?usp=drivesdk"
+        },
+        "voiceover": {
+          "status": "completed",
+          "links": {
+            "it": "https://drive.google.com/file/d/1srP-IZG2RYhjZXS0ErdCx3TcJdgTiIMK/view"
+          }
+        }
+      }
+    },
+    {
+      "id": "scene-10",
+      "index": 10,
+      "text": "Mark Ruffalo è al centro dell'attenzione per un altro segmento di conversazione tra attori. Mostra un entusiasmo contagioso mentre discute con i colleghi, toccando aspetti diversi del mestiere.",
+      "kind": "clip",
+      "bindings": {
+        "clip": {
+          "clip_id": "1rsxgdS2fOnIfMAT9LaMpy7U6o07oHtPT",
+          "drive_link": "https://drive.google.com/file/d/1rsxgdS2fOnIfMAT9LaMpy7U6o07oHtPT/view?usp=drivesdk"
+        },
+        "voiceover": {
+          "status": "completed",
+          "links": {
+            "it": "https://drive.google.com/file/d/1qJ4A7F8Tn2Ml9xbUGGzjFo_VroPjkwwI/view"
+          }
+        }
+      }
+    },
+    {
+      "id": "scene-11",
+      "index": 11,
+      "text": "In una prima apparizione nel round table, Mark Ruffalo condivide alcune considerazioni che sembrano quasi spontanee, ma che rivelano una profonda conoscenza del settore artistico.",
+      "kind": "clip",
+      "bindings": {
+        "clip": {
+          "clip_id": "1teqci7OK3ejVaY6wRGhoWAkDcvHAnIOr",
+          "drive_link": "https://drive.google.com/file/d/1teqci7OK3ejVaY6wRGhoWAkDcvHAnIOr/view?usp=drivesdk"
+        },
+        "voiceover": {
+          "status": "completed",
+          "links": {
+            "it": "https://drive.google.com/file/d/1-Bokt1N_cU8rOJsx5dwcH35tBZyQ37nh/view"
+          }
+        }
+      }
+    },
+    {
+      "id": "scene-12",
+      "index": 12,
+      "text": "Un altro momento di riflessione vede Mark Ruffalo parlare nuovamente, approfondendo temi legati alla collaborazione e all'interpretazione dei personaggi sul grande schermo. Il tono si fa più intimo con Demi Moore, che partecipa a un dialogo dedicato alle attrici. Condivide le sue esperienze in modo aperto, rivolgendosi direttamente al pubblico o ai compagni di settore. Infine, concludiamo questo giro di incontri con un altro scambio tra Demi Moore e i colleghi. Le sue parole chiudono questa selezione di momenti comici, lasciando un senso generale di calore e connessione artistica.",
+      "kind": "outro",
+      "bindings": {
+        "clip": {
+          "clip_id": "1tyLaLP_ARFfvaBkEhmNgtg8hLXoGHLsD",
+          "drive_link": "https://drive.google.com/file/d/1tyLaLP_ARFfvaBkEhmNgtg8hLXoGHLsD/view?usp=drivesdk"
+        },
+        "voiceover": {
+          "status": "completed",
+          "links": {
+            "it": "https://drive.google.com/file/d/1mb_P4XB41e3TDtu7OjgOvJNPcAlIRAAj/view"
+          }
+        }
+      }
+    }
+  ]
+}
