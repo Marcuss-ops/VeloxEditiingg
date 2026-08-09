@@ -98,7 +98,7 @@ namespace {
 
     std::string composeSegmentCmd(const std::string& args_only) {
         const char* telemetry = std::getenv("VELOX_FFMPEG_DECODE_TELEMETRY");
-        const bool enabled = telemetry == nullptr ||
+        const bool enabled = telemetry != nullptr &&
             (std::string(telemetry) != "0" && std::string(telemetry) != "false");
         return std::string("ffmpeg -y -hide_banner -loglevel ") +
             (enabled ? "info" : "error") + " -progress pipe:1 -nostats " + args_only;

@@ -370,7 +370,9 @@ void testRenderEngineIntegration() {
     plan.output_path = output.string();
 
     velox::core::RenderEngine engine;
+    ::setenv("VELOX_FFMPEG_DECODE_TELEMETRY", "1", 1);
     const auto result = engine.render(plan);
+    ::unsetenv("VELOX_FFMPEG_DECODE_TELEMETRY");
     EXPECT(result.success, "RenderEngine color render must succeed (error=" + result.error + ")");
     EXPECT(fs::exists(output), "render output must exist");
     EXPECT(fs::exists(sidecar), "SidecarGuard must write the progress sidecar");

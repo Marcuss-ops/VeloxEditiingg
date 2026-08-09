@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -37,6 +38,10 @@ func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgre
 		args = []string{"render-plan", "--input", planPath}
 	}
 	cmd := exec.Command(binaryPath, args...)
+	// The worker path enables exact decoded-frame telemetry in the native
+	// engine. The CLI keeps the probe opt-in so standalone renders are not
+	// burdened with showinfo diagnostics unless explicitly requested.
+	cmd.Env = append(os.Environ(), "VELOX_FFMPEG_DECODE_TELEMETRY=1")
 	// Every Attempt owns an isolated process group. Pdeathsig is the
 	// crash-safety backstop: if the worker agent is SIGKILLed, the
 	// native engine receives SIGKILL from the kernel without

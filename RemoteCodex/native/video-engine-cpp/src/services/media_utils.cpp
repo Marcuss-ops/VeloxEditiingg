@@ -69,7 +69,7 @@ static std::string ffmpegVideoExtraArgs() {
 static bool ffmpegDecodeTelemetryEnabled() {
     const char* value = std::getenv("VELOX_FFMPEG_DECODE_TELEMETRY");
     if (value == nullptr) {
-        return true;
+        return false;
     }
     return std::string(value) != "0" && std::string(value) != "false";
 }
