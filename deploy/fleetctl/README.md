@@ -63,6 +63,8 @@ summarizes the same Master-side contract.
 
 The supported commands are `status`, `inspect`, `drain`, `resume`,
 `quarantine`, `restart`, `update`, `rollback`, `operations`, and `smoke`.
+The Go binary also exposes read-only observability commands `job` and
+`doctor`; these do not require SSH, Docker, or SQLite access on a worker.
 
 ### 3.1 `scripts/fleetctl status`
 
@@ -174,6 +176,46 @@ scripts/fleetctl rollback velox-worker-13197 "$IMAGE" "image pinned incorrect"
 Drives the Step 9/15 rollback cascade (`previous_digest`
 re-issued, cosign re-verified, container restarted). Default
 wait budget: **30 min**.
+
+### 3.11 `fleetctl job inspect <job_id>`
+
+```bash
+fleetctl job inspect job_10b41a3c469bd84d
+```
+
+Returns one JSON read model containing lifecycle, attempts, phase timing,
+typed resource/cache metrics, per-scene segment telemetry, artifacts,
+deliveries, and persisted execution events.
+
+### 3.12 `fleetctl job metrics <job_id>`
+
+```bash
+fleetctl job metrics job_10b41a3c469bd84d
+```
+
+Prints the execution and cache metrics projection, including FFmpeg, frame,
+phase, and cache hit/miss counters.
+
+### 3.13 `fleetctl job watch <job_id>`
+
+```bash
+fleetctl job watch job_10b41a3c469bd84d
+```
+
+Polls the Master event timeline and prints newly observed events until the
+job reaches `SUCCEEDED`, `FAILED`, or `CANCELLED`. `docker logs` remains a
+break-glass diagnostic only.
+
+### 3.14 `fleetctl doctor --production`
+
+```bash
+fleetctl doctor --production
+```
+
+Runs fail-closed checks for immutable worker identity, connection,
+worker-reported readiness, and desired/running image digest. Missing
+readiness telemetry is `UNKNOWN` and makes the production doctor unhealthy.
+`worker_id` remains the mTLS identity; `worker_name` is display-only.
 
 ---
 

@@ -47,4 +47,20 @@ func (m *ObservabilityModule) RegisterRoutes(r *gin.Engine) {
 	v1.GET("/jobs/:job_id", m.handlers.JobDetailHandler())
 	v1.GET("/jobs/:job_id/audit", m.handlers.JobAuditHandler())
 	v1.GET("/workers", m.handlers.WorkersHandler())
+
+	// Canonical operator namespace. The legacy /api/observability routes
+	// remain available for dashboards while fleetctl and new integrations
+	// use the stable /api/v1/admin/jobs surface.
+	admin := r.Group("/api/v1/admin/jobs")
+	if m.auth != nil {
+		admin.Use(m.auth)
+	}
+	admin.GET("/:job_id", m.handlers.JobInspectHandler())
+	admin.GET("/:job_id/metrics", m.handlers.JobMetricsHandler())
+	admin.GET("/:job_id/events", m.handlers.JobEventsHandler())
+	doctor := r.Group("/api/v1/admin/doctor")
+	if m.auth != nil {
+		doctor.Use(m.auth)
+	}
+	doctor.GET("/production", m.handlers.ProductionDoctorHandler())
 }

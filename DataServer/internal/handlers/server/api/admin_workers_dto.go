@@ -97,6 +97,12 @@ type WorkerCard struct {
 	LastSmokeStatus     string  `json:"last_smoke_status,omitempty"`
 	LastSmokeAt         string  `json:"last_smoke_at,omitempty"`
 	LastRestartAt       string  `json:"last_restart_at,omitempty"`
+	// Readiness and Runtime are worker-reported diagnostic snapshots. They
+	// are optional because older agents do not publish these dimensions yet;
+	// absence is explicit and must not be interpreted as PASS.
+	Readiness    map[string]any `json:"readiness,omitempty"`
+	Runtime      map[string]any `json:"runtime,omitempty"`
+	RecentErrors []string       `json:"recent_errors,omitempty"`
 }
 
 // AdminWorkersListResponse is the JSON envelope for

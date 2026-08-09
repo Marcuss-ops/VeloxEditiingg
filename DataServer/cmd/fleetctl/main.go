@@ -48,11 +48,13 @@ const (
 	subResume   subCommand = "resume"
 	subRollback subCommand = "rollback"
 	subSSHCheck subCommand = "ssh-check"
+	subJob      subCommand = "job"
+	subDoctor   subCommand = "doctor"
 )
 
 func (s subCommand) valid() bool {
 	switch s {
-	case subStatus, subInspect, subDrain, subUpdate, subSmoke, subResume, subRollback, subSSHCheck:
+	case subStatus, subInspect, subDrain, subUpdate, subSmoke, subResume, subRollback, subSSHCheck, subJob, subDoctor:
 		return true
 	default:
 		return false
@@ -79,6 +81,10 @@ Sub-commands:
   resume   <worker_id>    RESUME (RESUMED after drain/quarantine)
   rollback <worker_id>    rollback to previous_digest (Step 9/15 cascade)
   ssh-check               per-worker SSH connectivity (ssh/hostkey/sudo -n)
+  job inspect <job_id>    complete job diagnostics (metrics/cache/artifact/delivery)
+  job metrics <job_id>    execution and cache metrics for one job
+  job watch <job_id>      follow the persisted job event timeline
+  doctor --production     fleet/readiness/digest production checks
 
 Auth (in precedence order):
   1. --token-file=PATH    chmod-600 file holding the bare token
@@ -156,6 +162,10 @@ func runMain(args []string) int {
 		return runRollback(client, rest[1:])
 	case subSSHCheck:
 		return runSSHCheck(client)
+	case subJob:
+		return runJob(client, rest[1:])
+	case subDoctor:
+		return runDoctor(client, rest[1:])
 	}
 	return ExitUnexpected
 }

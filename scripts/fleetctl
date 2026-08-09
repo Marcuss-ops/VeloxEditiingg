@@ -31,6 +31,10 @@ Usage:
   scripts/fleetctl rollback <worker_id> <ghcr-image@sha256:digest> [reason]
   scripts/fleetctl operations [worker_id] [status]
   scripts/fleetctl smoke <worker_id>
+  scripts/fleetctl job inspect <job_id>
+  scripts/fleetctl job metrics <job_id>
+  scripts/fleetctl job watch <job_id>
+  scripts/fleetctl doctor --production
 
 Environment:
   VELOX_MASTER_URL   Master base URL (default: http://127.0.0.1:8000)
@@ -316,6 +320,44 @@ case "$command" in
         [[ -n "$worker_id" ]] || die 'worker_id is required'
         VELOX_MASTER_URL="$MASTER_URL" VELOX_ADMIN_TOKEN="$TOKEN" \
             "$ROOT/tests/worker-cert/smoke_one.sh" "$worker_id"
+        ;;
+    job)
+        job_command=${2:-}
+        job_id=${3:-}
+        [[ -n "$job_command" && -n "$job_id" ]] || die 'job requires inspect, metrics, or watch plus a job_id'
+        job_path="/api/v1/admin/jobs/$(printf '%s' "$job_id" | jq -sRr @uri)"
+        case "$job_command" in
+            inspect)
+                api GET "$job_path" | jq .
+                ;;
+            metrics)
+                api GET "$job_path/metrics" | jq .
+                ;;
+            watch)
+                declare -A seen_events=()
+                while :; do
+                    snapshot=$(api GET "$job_path/events")
+                    while IFS= read -r event; do
+                        event_key=$(jq -r '[.timestamp, .event] | join("\u0000")' <<<"$event")
+                        [[ -n "${seen_events[$event_key]:-}" ]] && continue
+                        seen_events[$event_key]=1
+                        jq -r '(.timestamp // "") + " " + (.event // "") + (if (.payload // {}) == {} then "" else " " + ((.payload // {}) | tojson) end)' <<<"$event"
+                    done < <(jq -c '.events[]?' <<<"$snapshot")
+                    terminal=$(jq -r '.status // ""' <<<"$snapshot")
+                    case "$terminal" in
+                        SUCCEEDED|FAILED|CANCELLED) break ;;
+                    esac
+                    sleep 2
+                done
+                ;;
+            *)
+                die "unknown job command: $job_command"
+                ;;
+        esac
+        ;;
+    doctor)
+        [[ "${2:-}" == "--production" ]] || die 'doctor requires --production'
+        api GET /api/v1/admin/doctor/production | jq .
         ;;
     *)
         usage >&2

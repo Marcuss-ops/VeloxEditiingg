@@ -209,5 +209,44 @@ func buildWorkerCard(info *workersreg.Worker) WorkerCard {
 		Load1:               metrics.Load1,
 		CurrentJob:          info.CurrentJob,
 		Health:              info.Health, // Step 3/15 — 9-state operator-facing health
+		Readiness:           cloneAnyMap(info.Readiness),
+		Runtime:             runtimeSnapshot(info.Metrics),
+		RecentErrors:        append([]string(nil), info.RecentErrors...),
 	}
+}
+
+func cloneAnyMap(in map[string]interface{}) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+// runtimeSnapshot projects only runtime-oriented heartbeat keys. This keeps
+// the WorkerCard compact while allowing agents that already report
+// systemd/container/ffmpeg facts to make them visible without SSH.
+func runtimeSnapshot(metrics map[string]interface{}) map[string]any {
+	if len(metrics) == 0 {
+		return nil
+	}
+	allowed := map[string]bool{
+		"systemd_unit": true, "systemd_state": true, "container_state": true,
+		"container_started_at": true, "container_restart_count": true,
+		"image_digest": true, "worker_pid": true, "ffmpeg_processes": true,
+		"ffmpeg_version": true, "uptime_seconds": true,
+	}
+	out := make(map[string]any)
+	for key, value := range metrics {
+		if allowed[key] {
+			out[key] = value
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

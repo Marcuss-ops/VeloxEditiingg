@@ -32,6 +32,68 @@ type workerRegistryAdapter struct {
 	store *store.SQLiteStore
 }
 
+// sqliteJobInspectionAdapter exposes the already persisted job read models
+// through observability's backend-neutral contract. It is intentionally an
+// adapter at the composition root: the observability package must not import
+// SQLite or leak raw database rows into its API.
+type sqliteJobInspectionAdapter struct {
+	store *store.SQLiteStore
+}
+
+func (a *sqliteJobInspectionAdapter) ListJobEvents(_ context.Context, jobID string, limit int) ([]observability.JobEvent, error) {
+	rows, err := a.store.ListJobEvents(jobID, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]observability.JobEvent, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, observability.JobEvent{
+			Timestamp: row.Timestamp,
+			JobID:     row.JobID,
+			Event:     row.Event,
+			Payload:   observability.DecodeJobEventPayload(row.RawJSON),
+		})
+	}
+	return out, nil
+}
+
+func (a *sqliteJobInspectionAdapter) ListArtifacts(_ context.Context, jobID string, limit int) ([]observability.ArtifactSnapshot, error) {
+	rows, err := a.store.GetArtifactsByJob(jobID, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]observability.ArtifactSnapshot, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, observability.ArtifactSnapshot{
+			ID: row.ID, Type: row.Type, Status: row.Status, SHA256: row.SHA256,
+			SizeBytes: row.SizeBytes, DurationSeconds: row.DurationSeconds,
+			MimeType: row.MimeType, CreatedAt: row.CreatedAt, VerifiedAt: row.VerifiedAt,
+		})
+	}
+	return out, nil
+}
+
+func (a *sqliteJobInspectionAdapter) ListDeliveries(_ context.Context, jobID string) ([]observability.DeliverySnapshot, error) {
+	rows, err := a.store.ListJobDeliveriesByJob(jobID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]observability.DeliverySnapshot, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, observability.DeliverySnapshot{
+			DeliveryID: row.DeliveryID, ArtifactID: row.ArtifactID,
+			DestinationID: row.DestinationID, Status: row.Status,
+			RemoteID: row.RemoteID, RemoteURL: row.RemoteURL,
+			AttemptCount: row.AttemptCount, MaxAttempts: row.MaxAttempts,
+			LastError: row.LastError, LastErrorMessage: row.LastErrorMessage,
+			CompletedAt: row.CompletedAt,
+		})
+	}
+	return out, nil
+}
+
+var _ observability.JobInspectionReader = (*sqliteJobInspectionAdapter)(nil)
+
 func (a *workerRegistryAdapter) ListWorkers() ([]map[string]any, error) {
 	if a.reg == nil {
 		if a.store != nil {
@@ -45,6 +107,12 @@ func (a *workerRegistryAdapter) ListWorkers() ([]map[string]any, error) {
 	}
 	out := make([]map[string]any, len(infos))
 	for i, info := range infos {
+		targetDigest := ""
+		if a.store != nil {
+			if deployment, err := a.store.GetLatestDeploymentForWorker(context.Background(), info.WorkerID.String()); err == nil && deployment != nil {
+				targetDigest = deployment.TargetDigest
+			}
+		}
 		out[i] = map[string]any{
 			// WorkerID is a typed identity value. Observability's map
 			// boundary intentionally exposes its canonical string form so
@@ -58,6 +126,12 @@ func (a *workerRegistryAdapter) ListWorkers() ([]map[string]any, error) {
 			"worker_class":      info.Class,
 			"current_job":       info.CurrentJob,
 			"connection_status": info.ConnectionStatus,
+			"health":            info.Health,
+			"health_state":      info.HealthState,
+			"image_digest":      info.ImageDigest,
+			"target_digest":     targetDigest,
+			"readiness":         info.Readiness,
+			"metrics":           info.Metrics,
 		}
 	}
 	return out, nil
@@ -71,6 +145,12 @@ func (a *workerRegistryAdapter) GetWorker(workerID string) (map[string]any, erro
 	if info == nil {
 		return nil, nil
 	}
+	targetDigest := ""
+	if a.store != nil {
+		if deployment, err := a.store.GetLatestDeploymentForWorker(context.Background(), info.WorkerID.String()); err == nil && deployment != nil {
+			targetDigest = deployment.TargetDigest
+		}
+	}
 	return map[string]any{
 		"worker_id":         string(info.WorkerID),
 		"worker_name":       info.WorkerName,
@@ -81,6 +161,12 @@ func (a *workerRegistryAdapter) GetWorker(workerID string) (map[string]any, erro
 		"worker_class":      info.Class,
 		"current_job":       info.CurrentJob,
 		"connection_status": info.ConnectionStatus,
+		"health":            info.Health,
+		"health_state":      info.HealthState,
+		"image_digest":      info.ImageDigest,
+		"target_digest":     targetDigest,
+		"readiness":         info.Readiness,
+		"metrics":           info.Metrics,
 	}, nil
 }
 
@@ -245,7 +331,8 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	// ── Observability REST API ─────────────────────────────────────
 	if t.Observability != nil {
 		workerReader := &workerRegistryAdapter{reg: w.Registry, store: p.SQLite}
-		obsSvc := t.Observability.WithJobs(j.Repository).WithWorkers(workerReader)
+		obsSvc := t.Observability.WithJobs(j.Repository).WithWorkers(workerReader).
+			WithJobInspection(&sqliteJobInspectionAdapter{store: p.SQLite})
 		registry.Register(observability.NewModule(obsSvc, api.AdminAuthMiddleware(cfg)))
 		log.Printf("[BOOTSTRAP] Observability REST API registered")
 	}

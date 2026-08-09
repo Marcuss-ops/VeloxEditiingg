@@ -30,6 +30,13 @@ type AttemptReader interface {
 	GetCacheStats(ctx context.Context, attemptID string) (*taskattempts.AttemptCacheStats, error)
 }
 
+// SegmentReader is optional so deployments with older schemas continue to
+// serve job inspection; newer SQLite repositories expose sidecar segment
+// telemetry through this read-only seam.
+type SegmentReader interface {
+	ListSegmentTimings(ctx context.Context, attemptID string) ([]taskattempts.SegmentTiming, error)
+}
+
 // JobReader provides job queries for observability aggregates.
 type JobReader interface {
 	Get(ctx context.Context, id string) (*jobs.Job, error)
@@ -57,6 +64,76 @@ type AuditReader interface {
 	ListAuditEvents(context.Context, string, int) ([]audittrail.Event, error)
 }
 
+// JobInspectionReader is the optional read model behind the operator-facing
+// job inspection surface. Keeping this as a small local contract means the
+// observability package does not depend on a concrete database backend.
+type JobInspectionReader interface {
+	ListJobEvents(context.Context, string, int) ([]JobEvent, error)
+	ListArtifacts(context.Context, string, int) ([]ArtifactSnapshot, error)
+	ListDeliveries(context.Context, string) ([]DeliverySnapshot, error)
+}
+
+// JobEvent is a normalized event suitable for both JSON clients and the
+// fleetctl watch command. Payload is intentionally decoded by the adapter so
+// the service never exposes raw SQLite blobs.
+type JobEvent struct {
+	Timestamp string         `json:"timestamp"`
+	JobID     string         `json:"job_id"`
+	Event     string         `json:"event"`
+	Payload   map[string]any `json:"payload,omitempty"`
+}
+
+type ArtifactSnapshot struct {
+	ID              string  `json:"id"`
+	Type            string  `json:"type,omitempty"`
+	Status          string  `json:"status"`
+	SHA256          string  `json:"sha256,omitempty"`
+	SizeBytes       int64   `json:"size_bytes"`
+	DurationSeconds float64 `json:"duration_seconds,omitempty"`
+	MimeType        string  `json:"mime_type,omitempty"`
+	CreatedAt       string  `json:"created_at,omitempty"`
+	VerifiedAt      string  `json:"verified_at,omitempty"`
+}
+
+type DeliverySnapshot struct {
+	DeliveryID       string `json:"delivery_id"`
+	ArtifactID       string `json:"artifact_id"`
+	DestinationID    string `json:"destination_id"`
+	Status           string `json:"status"`
+	RemoteID         string `json:"remote_id,omitempty"`
+	RemoteURL        string `json:"remote_url,omitempty"`
+	AttemptCount     int    `json:"attempt_count"`
+	MaxAttempts      int    `json:"max_attempts"`
+	LastError        string `json:"last_error,omitempty"`
+	LastErrorMessage string `json:"last_error_message,omitempty"`
+	CompletedAt      string `json:"completed_at,omitempty"`
+}
+
+// JobInspection is the single read model consumed by `fleetctl job inspect`,
+// `fleetctl job metrics`, and `fleetctl job watch`.
+type JobInspection struct {
+	Job        *jobs.Job          `json:"job,omitempty"`
+	Execution  *ExecutionSummary  `json:"execution,omitempty"`
+	Events     []JobEvent         `json:"events"`
+	Artifacts  []ArtifactSnapshot `json:"artifacts"`
+	Deliveries []DeliverySnapshot `json:"deliveries"`
+}
+
+type DoctorCheck struct {
+	WorkerID string `json:"worker_id"`
+	Name     string `json:"name,omitempty"`
+	Check    string `json:"check"`
+	Status   string `json:"status"`
+	Detail   string `json:"detail,omitempty"`
+}
+
+type ProductionDoctorResult struct {
+	Environment string        `json:"environment"`
+	GeneratedAt string        `json:"generated_at"`
+	Healthy     bool          `json:"healthy"`
+	Checks      []DoctorCheck `json:"checks"`
+}
+
 // VersionMetricSnapshot is a single attempt's metric values indexed
 // by catalog metric name, for regression comparison.
 type VersionMetricSnapshot struct {
@@ -68,34 +145,64 @@ type VersionMetricSnapshot struct {
 
 // ExecutionSummary is the aggregated execution diagnostics for a single task.
 type ExecutionSummary struct {
-	TaskID              string           `json:"task_id"`
-	JobID               string           `json:"job_id"`
-	TaskStatus          taskgraph.Status `json:"task_status"`
-	AttemptCount        int              `json:"attempt_count"`
-	TotalWallTimeMS     int64            `json:"total_wall_time_ms"`
-	PhaseTotals         map[string]int64 `json:"phase_totals"`
-	TotalInputBytes     int64            `json:"total_input_bytes"`
-	TotalOutputBytes    int64            `json:"total_output_bytes"`
-	BytesFromDrive      int64            `json:"bytes_from_drive"`
-	BytesFromBlobstore  int64            `json:"bytes_from_blobstore"`
-	BytesFromLocalCache int64            `json:"bytes_from_local_cache"`
-	CPUTimeMS           int64            `json:"cpu_time_ms"`
-	GPUTimeMS           int64            `json:"gpu_time_ms"`
-	PeakRSSBytes        int64            `json:"peak_rss_bytes"`
-	PeakVRAMBytes       int64            `json:"peak_vram_bytes"`
-	Retries             int              `json:"retries"`
-	Attempts            []AttemptSummary `json:"attempts"`
+	TaskID              string            `json:"task_id"`
+	JobID               string            `json:"job_id"`
+	TaskStatus          taskgraph.Status  `json:"task_status"`
+	AttemptCount        int               `json:"attempt_count"`
+	TotalWallTimeMS     int64             `json:"total_wall_time_ms"`
+	PhaseTotals         map[string]int64  `json:"phase_totals"`
+	TotalInputBytes     int64             `json:"total_input_bytes"`
+	TotalOutputBytes    int64             `json:"total_output_bytes"`
+	BytesFromDrive      int64             `json:"bytes_from_drive"`
+	BytesFromBlobstore  int64             `json:"bytes_from_blobstore"`
+	BytesFromLocalCache int64             `json:"bytes_from_local_cache"`
+	CPUTimeMS           int64             `json:"cpu_time_ms"`
+	GPUTimeMS           int64             `json:"gpu_time_ms"`
+	PeakRSSBytes        int64             `json:"peak_rss_bytes"`
+	PeakVRAMBytes       int64             `json:"peak_vram_bytes"`
+	Cache               CacheSummary      `json:"cache"`
+	Retries             int               `json:"retries"`
+	Attempts            []AttemptSummary  `json:"attempts"`
+	Segments            []SegmentSnapshot `json:"segments,omitempty"`
+}
+
+type SegmentSnapshot struct {
+	AttemptID        string  `json:"attempt_id"`
+	SegmentIndex     int     `json:"segment_index"`
+	SceneID          string  `json:"scene_id,omitempty"`
+	DurationMS       float64 `json:"duration_ms"`
+	AssetDownloadMS  float64 `json:"asset_download_ms"`
+	FFmpegEncodeMS   float64 `json:"ffmpeg_encode_ms"`
+	FramesEncoded    int64   `json:"frames_encoded"`
+	FramesDecoded    int64   `json:"frames_decoded"`
+	FramesComposited int64   `json:"frames_composited"`
+	FFmpegSpeedX     float64 `json:"ffmpeg_speed_x"`
+	Status           string  `json:"status"`
+}
+
+// CacheSummary is the job-level rollup of typed cache counters. A zero
+// value is meaningful: older workers may have reported byte volume without
+// typed hit/miss counters.
+type CacheSummary struct {
+	Hits        int64   `json:"hits"`
+	Misses      int64   `json:"misses"`
+	Evictions   int64   `json:"evictions"`
+	Corruptions int64   `json:"corruptions"`
+	BytesUsed   int64   `json:"bytes_used"`
+	Entries     int64   `json:"entries"`
+	HitRatio    float64 `json:"hit_ratio"`
 }
 
 // AttemptSummary is the aggregated diagnostics for a single attempt.
 type AttemptSummary struct {
-	AttemptID      string                       `json:"attempt_id"`
-	AttemptNumber  int                          `json:"attempt_number"`
-	Status         taskattempts.AttemptStatus   `json:"status"`
-	WorkerID       string                       `json:"worker_id"`
-	DurationMS     int64                        `json:"duration_ms"`
-	PhaseBreakdown map[string]int64             `json:"phase_breakdown"`
-	Metrics        *taskattempts.AttemptMetrics `json:"metrics,omitempty"`
+	AttemptID      string                          `json:"attempt_id"`
+	AttemptNumber  int                             `json:"attempt_number"`
+	Status         taskattempts.AttemptStatus      `json:"status"`
+	WorkerID       string                          `json:"worker_id"`
+	DurationMS     int64                           `json:"duration_ms"`
+	PhaseBreakdown map[string]int64                `json:"phase_breakdown"`
+	Metrics        *taskattempts.AttemptMetrics    `json:"metrics,omitempty"`
+	CacheStats     *taskattempts.AttemptCacheStats `json:"cache_stats,omitempty"`
 }
 
 // Service is the read-only observability aggregation service.
@@ -106,6 +213,7 @@ type Service struct {
 	workers        WorkerReader
 	versionMetrics VersionMetricsReader
 	audit          AuditReader
+	jobInspection  JobInspectionReader
 }
 
 // NewService constructs the observability aggregation service.
@@ -131,6 +239,12 @@ func (s *Service) WithWorkers(r WorkerReader) *Service { s.workers = r; return s
 func (s *Service) WithVersionMetrics(r VersionMetricsReader) *Service { s.versionMetrics = r; return s }
 
 func (s *Service) WithAudit(r AuditReader) *Service { s.audit = r; return s }
+
+// WithJobInspection wires the optional persistence-backed job details.
+func (s *Service) WithJobInspection(r JobInspectionReader) *Service {
+	s.jobInspection = r
+	return s
+}
 
 func (s *Service) ListAudit(ctx context.Context, resourceID string, limit int) ([]audittrail.Event, error) {
 	if s.audit == nil {
@@ -237,6 +351,34 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 			}
 		}
 
+		// Cache counters are a separate typed row because they are not
+		// part of the legacy execution-metrics envelope.
+		cacheStats, cacheErr := s.attempts.GetCacheStats(ctx, a.ID)
+		if cacheErr == nil && cacheStats != nil {
+			as.CacheStats = cacheStats
+			summary.Cache.Hits += cacheStats.CacheHits
+			summary.Cache.Misses += cacheStats.CacheMisses
+			summary.Cache.Evictions += cacheStats.CacheEvictions
+			summary.Cache.Corruptions += cacheStats.CacheCorruptions
+			summary.Cache.BytesUsed += cacheStats.CacheBytesUsed
+			summary.Cache.Entries += int64(cacheStats.CacheEntries)
+		}
+
+		if segmentReader, ok := s.attempts.(SegmentReader); ok {
+			if segments, segmentErr := segmentReader.ListSegmentTimings(ctx, a.ID); segmentErr == nil {
+				for _, segment := range segments {
+					summary.Segments = append(summary.Segments, SegmentSnapshot{
+						AttemptID: segment.AttemptID, SegmentIndex: segment.SegmentIndex,
+						SceneID: segment.SceneID, DurationMS: segment.DurationMS,
+						AssetDownloadMS: segment.AssetDownloadMS, FFmpegEncodeMS: segment.FfmpegEncodeMS,
+						FramesEncoded: segment.FramesEncoded, FramesDecoded: segment.FramesDecoded,
+						FramesComposited: segment.FramesComposited, FFmpegSpeedX: segment.FfmpegSpeedX,
+						Status: segment.Status,
+					})
+				}
+			}
+		}
+
 		summary.Attempts = append(summary.Attempts, as)
 	}
 
@@ -245,6 +387,10 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 	}
 	if task.AttemptCount > 1 {
 		summary.Retries = task.AttemptCount - 1
+	}
+	cacheTotal := summary.Cache.Hits + summary.Cache.Misses
+	if cacheTotal > 0 {
+		summary.Cache.HitRatio = float64(summary.Cache.Hits) / float64(cacheTotal)
 	}
 
 	return summary, nil
