@@ -18,7 +18,6 @@ ROOT = Path(__file__).resolve().parents[2]
 # phase. A new production file may not acquire those entrypoints silently.
 LEGACY_BRIDGE_OWNERS = {
     "DataServer/cmd/velox-bundler/main.go",
-    "DataServer/data/ansible/playbooks/install_workers.yml",
     "DataServer/data/ansible/playbooks/update_workers.yml",
     "DataServer/data/ansible/playbooks/tasks/canonical_worker_runtime.yml",
     "DataServer/data/ansible/playbooks/tasks/deploy_worker_release.yml",
@@ -281,6 +280,12 @@ def test_legacy_bridge_remains_explicit_until_migration() -> None:
 def test_fleet_update_delegate_is_removed() -> None:
     assert not (ROOT / "deploy/playbooks/fleet-update.yml").exists(), (
         "deploy/playbooks/fleet-update.yml is a retired duplicate operator path"
+    )
+
+
+def test_install_workers_delegate_is_removed() -> None:
+    assert not (ROOT / "DataServer/data/ansible/playbooks/install_workers.yml").exists(), (
+        "install_workers.yml is a retired duplicate production rollout path"
     )
 
 

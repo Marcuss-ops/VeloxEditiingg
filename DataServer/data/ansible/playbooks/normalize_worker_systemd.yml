@@ -30,8 +30,8 @@
     # migration order-dependent and would reintroduce two runtime owners.
 
     # ── STEP 3: Unified deploy pipeline (single source of truth) ──
-    # deploy_worker_release → stop → staging → validate → swap → Docker build → verify → rollback
-    - name: Normalize | Deploy and rebuild worker
+    # deploy_worker_release → validate immutable ref → activate → verify → rollback
+    - name: Normalize | Activate pinned worker image
       ansible.builtin.include_tasks:
         file: tasks/deploy_worker_release.yml
       vars:

@@ -162,9 +162,8 @@ log "Image      : $VELOX_WORKER_IMAGE"
 
 # ── 0.5. Image digest gate ─────────────────────────────────────────────────
 # Compose uses '${VELOX_WORKER_IMAGE:?}' which only rejects EMPTY refs.
-# It silently accepts a mutable reference (e.g. the upstream `:latest`
-# tag), which would break the immutability guarantee. We enforce
-# the immutability guarantee. We enforce sha256-pinning here so the worker
+# A mutable reference (e.g. the upstream `:latest` tag) would break the
+# immutability guarantee. We enforce sha256-pinning here so the worker
 # host cannot pull a mutable ref by mistake or by malicious edit to worker.env.
 if ! [[ "$VELOX_WORKER_IMAGE" =~ ^ghcr\.io/[a-z0-9._-]+/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]; then
     fail "VELOX_WORKER_IMAGE must be a lowercase ghcr.io/<owner>/<repo>@sha256:<64 hex> ref (got: $VELOX_WORKER_IMAGE)"

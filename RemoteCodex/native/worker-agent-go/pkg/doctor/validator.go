@@ -43,10 +43,11 @@ type Result struct {
 
 // Report is the aggregate output of a doctor run.
 type Report struct {
-	WorkerID  string   `json:"worker_id"`
-	Verdict   string   `json:"verdict"` // READY | NOT_READY
-	CheckedAt string   `json:"checked_at"`
-	Checks    []Result `json:"checks"`
+	SchemaVersion string   `json:"schema_version"`
+	WorkerID      string   `json:"worker_id"`
+	Verdict       string   `json:"verdict"` // READY | NOT_READY
+	CheckedAt     string   `json:"checked_at"`
+	Checks        []Result `json:"checks"`
 }
 
 // Verdict constants.
@@ -67,10 +68,25 @@ type Validator interface {
 // verdict, and writes the JSON report to w. It returns error if at least
 // one validator returned FAIL, or nil if all passed.
 func Run(ctx context.Context, cfg *config.WorkerConfig, validators []Validator, w io.Writer) error {
+	_, err := RunReport(ctx, cfg, validators, w, false)
+	return err
+}
+
+// RunProduction is the fail-closed production doctor entry point. Production
+// evidence cannot contain WARN: anything not positively verified is FAIL.
+func RunProduction(ctx context.Context, cfg *config.WorkerConfig, validators []Validator, w io.Writer) (Report, error) {
+	return RunReport(ctx, cfg, validators, w, true)
+}
+
+// RunReport executes validators and returns the report as well as emitting it
+// as JSON. failWarnings is reserved for production profiles and makes the
+// verdict fail-closed even if a validator accidentally returns WARN.
+func RunReport(ctx context.Context, cfg *config.WorkerConfig, validators []Validator, w io.Writer, failWarnings bool) (Report, error) {
 	report := Report{
-		WorkerID:  cfg.WorkerID,
-		CheckedAt: time.Now().UTC().Format(time.RFC3339),
-		Checks:    make([]Result, 0, len(validators)),
+		SchemaVersion: "1",
+		WorkerID:      cfg.WorkerID,
+		CheckedAt:     time.Now().UTC().Format(time.RFC3339),
+		Checks:        make([]Result, 0, len(validators)),
 	}
 
 	anyFail := false
@@ -87,7 +103,7 @@ func Run(ctx context.Context, cfg *config.WorkerConfig, validators []Validator, 
 		default:
 			r := v.Run(ctx, cfg)
 			report.Checks = append(report.Checks, r)
-			if r.Status == StatusFail {
+			if r.Status == StatusFail || (failWarnings && r.Status == StatusWarn) {
 				anyFail = true
 			}
 		}
@@ -104,9 +120,9 @@ func Run(ctx context.Context, cfg *config.WorkerConfig, validators []Validator, 
 	_ = enc.Encode(report)
 
 	if anyFail {
-		return fmt.Errorf("doctor: %s (see JSON report for details)", VerdictNotReady)
+		return report, fmt.Errorf("doctor: %s (see JSON report for details)", VerdictNotReady)
 	}
-	return nil
+	return report, nil
 }
 
 // DefaultValidators returns the canonical set of 10 production-readiness

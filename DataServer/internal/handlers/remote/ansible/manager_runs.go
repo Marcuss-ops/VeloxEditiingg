@@ -1,17 +1,9 @@
 package ansible
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-	"time"
 
 	"velox-server/internal/store"
 )
@@ -124,16 +116,10 @@ func (m *AnsibleRunManager) PlaybookDir() string {
 }
 
 func (m *AnsibleRunManager) Ready() bool {
-	if _, err := exec.LookPath("ansible-playbook"); err != nil {
-		return false
-	}
-	if m == nil || m.playbookDir == "" {
-		return false
-	}
-	if _, err := os.Stat(m.playbookDir); err != nil {
-		return false
-	}
-	return true
+	// The production rollout executor was retired. Inventory and historical
+	// run reads may remain available, but this manager is never a deploy
+	// capability.
+	return false
 }
 
 // ansibleRunRecordFromRow converts a typed `ansible_runs` row into the
@@ -323,130 +309,12 @@ func (m *AnsibleRunManager) GetRun(runID string) (AnsibleRunRecord, bool) {
 	return run, true
 }
 
-// RunPlaybook executes ansible-playbook with the given playbook and hosts.
-// It generates inventory from the DB, writes it to a temp file, creates a run
-// record, and starts ansible-playbook in a goroutine. The run_id is returned
-// immediately so the HTTP handler can surface it to the caller.
+// RunPlaybook is a retired compatibility seam. It never generates inventory,
+// starts a subprocess, or mutates a worker; production rollout is owned by
+// FleetController → UpdateExecutor → the restricted activation helper.
 func (m *AnsibleRunManager) RunPlaybook(playbook string, hosts []string, action string, masterURL string, batchSize int, canaryPercent float64) (string, error) {
-	if m.computerMgr == nil {
-		return "", fmt.Errorf("ansible computer manager not configured")
-	}
+	// Fail before inventory generation or any subprocess creation. This is a
+	// compatibility seam only; production rollout is FleetController-owned.
+	return "", ErrExecutorRemoved
 
-	// Generate inventory from DB.
-	inventory, err := m.computerMgr.GenerateInventory(GenerateInventoryOptions{})
-	if err != nil {
-		return "", fmt.Errorf("generate inventory: %w", err)
-	}
-
-	// Create a unique run ID.
-	runID := newRunID()
-	playbookPath := filepath.Join(m.playbookDir, playbook)
-
-	// Build extra vars.
-	extraVars := buildExtraVars(masterURL, batchSize, canaryPercent)
-
-	// Write inventory to a temp file.
-	tmpFile, err := os.CreateTemp("", "velox-ansible-inventory-*.ini")
-	if err != nil {
-		return "", fmt.Errorf("create temp inventory file: %w", err)
-	}
-	if _, err := tmpFile.WriteString(inventory); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpFile.Name())
-		return "", fmt.Errorf("write inventory: %w", err)
-	}
-	tmpFile.Close()
-
-	// Build ansible-playbook command args.
-	args := []string{"-i", tmpFile.Name()}
-	if len(hosts) > 0 {
-		args = append(args, "--limit", strings.Join(hosts, ","))
-	}
-	args = append(args, playbookPath)
-	for k, v := range extraVars {
-		args = append(args, "-e", fmt.Sprintf("%s=%s", k, v))
-	}
-
-	// Create the run record.
-	now := time.Now().Unix()
-	run := AnsibleRunRecord{
-		ID:        runID,
-		Action:    action,
-		Playbook:  playbook,
-		Hosts:     hosts,
-		Status:    "running",
-		StartedAt: now,
-		MasterURL: masterURL,
-	}
-	if err := m.CreateRun(run); err != nil {
-		os.Remove(tmpFile.Name())
-		return "", fmt.Errorf("create run record: %w", err)
-	}
-
-	// Execute ansible-playbook in a goroutine.
-	go func() {
-		defer os.Remove(tmpFile.Name())
-
-		cmd := exec.Command("ansible-playbook", args...)
-		cmd.Env = append(os.Environ(), "ANSIBLE_HOST_KEY_CHECKING=False")
-		output, cmdErr := cmd.CombinedOutput()
-		endTime := time.Now().Unix()
-
-		exitCode := 0
-		status := "ok"
-		if cmdErr != nil {
-			status = "failed"
-			if exitErr, ok := cmdErr.(*exec.ExitError); ok {
-				exitCode = exitErr.ExitCode()
-			} else {
-				exitCode = -1
-			}
-		}
-
-		updateErr := m.UpdateRun(runID, func(r *AnsibleRunRecord) {
-			r.Status = status
-			r.EndedAt = endTime
-			r.ReturnCode = exitCode
-			r.Output = string(output)
-		})
-		if updateErr != nil {
-			log.Printf("[ANSIBLE] UpdateRun %s: %v", runID, updateErr)
-		}
-
-		log.Printf("[ANSIBLE] Run %s %s (rc=%d, hosts=%v)", runID, status, exitCode, hosts)
-	}()
-
-	return runID, nil
-}
-
-func newRunID() string {
-	b := make([]byte, 4)
-	if _, err := rand.Read(b); err != nil {
-		// Fallback: use nanoseconds as entropy.
-		now := time.Now().UnixNano()
-		b[0] = byte(now >> 24)
-		b[1] = byte(now >> 16)
-		b[2] = byte(now >> 8)
-		b[3] = byte(now)
-	}
-	return fmt.Sprintf("run_%d_%s", time.Now().Unix(), hex.EncodeToString(b))
-}
-
-func buildExtraVars(masterURL string, batchSize int, canaryPercent float64) map[string]string {
-	// The canonical worker runtime deliberately refuses an implicit state
-	// directory. Keep the rollout API and the playbook contract aligned so a
-	// successful image build cannot be followed by a convergence failure.
-	vars := map[string]string{
-		"velox_state_dir": "/var/lib/velox-worker",
-	}
-	if masterURL != "" {
-		vars["master_url"] = masterURL
-	}
-	if batchSize > 0 {
-		vars["batch_size"] = fmt.Sprintf("%d", batchSize)
-	}
-	if canaryPercent > 0 {
-		vars["canary_percent"] = fmt.Sprintf("%.2f", canaryPercent)
-	}
-	return vars
 }

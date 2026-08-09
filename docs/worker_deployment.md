@@ -1,93 +1,59 @@
 # Worker Deployment Guide
 
-> **Choose the rollout path first:**
-> `docs/operations/worker-rollout-paths.md` is the authoritative map. The
-> bundle-based Ansible flow below is a bridge for old workers; the immutable
-> GHCR/FleetController flow is the definitive target. Do not combine them.
+> **Production release path:** GitHub Actions publishes one signed GHCR image;
+> FleetController activates its immutable digest. Ansible deployment actions
+> are retired. `prepare-host.sh` remains the one-time bootstrap/convergence
+> tool for a host.
 
 ## Overview
 
-Velox workers are deployed via two explicitly separated paths:
-
-1. **Bridge:** Ansible downloads the current bundle and may build the worker
-   image locally on an old host while it is normalized.
-2. **Definitive target:** GitHub Actions builds one signed GHCR image, and the
-   Master/FleetController rolls out its immutable `@sha256:` digest serially.
+Velox production workers have one release path: GitHub Actions builds and
+signs once, then Master/FleetController rolls out the immutable `@sha256:`
+digest serially. Host bootstrap is separate from release activation.
 
 The deployment pipeline handles:
 1. SSH connectivity and preflight checks
-2. Bundle download and Docker image build
+2. exact-digest image activation
 3. systemd service setup (single source of truth)
 4. Watchdog and auto-update timers
 
 ## Worker Naming Convention
 
-Workers are identified by a sanitized inventory alias:
-- IP `57.129.132.133` → alias `host_57_129_132_133`
-- IP `51.222.204.158` → worker `velox-worker-523925eb` (hostname `vps-523925eb`)
-- The alias becomes the canonical `worker_id` (registered in the `WorkerNodeRegistry`/`ansible_hosts` DB)
+Workers have two identities: immutable `worker_id` (mTLS/OpenBao principal)
+and mutable operator-facing `worker_name`. Inventory/host aliases are
+connectivity data in `ansible_hosts`; they never become the certificate-bound
+worker ID. The Compose container name is always `velox-worker`.
 
-## Playbooks
+## Bootstrap and compatibility files
 
-> Host convergence runs through the Master: the per-operation inventory is
-> generated from the `WorkerNodeRegistry` DB (`AnsibleComputerManager
-> .GenerateInventory`) and the playbooks below are invoked server-side
-> (`POST /api/v1/admin/ansible/computers/run_action`). No static `inventory.ini`
-> exists; these playbooks are the internal legacy bridge for old workers.
-
-### install_workers.yml
-Full installation: preflight → directory setup → Docker build → systemd → start.
-
-```bash
-# Master-side convergence (inventory from the WorkerNodeRegistry DB):
-#   POST /api/v1/admin/ansible/computers/run_action  action=install
-```
+> The old server-side Ansible deployment API is retired and fail-closed. Do
+> not use it for releases; inventory remains a connectivity substrate for
+> `WorkerNodeRegistry`.
 
 ### normalize_worker_systemd.yml
-Cleans up old/masked services and writes a single canonical unit per worker.
+One-time bootstrap cleanup/convergence for a host. It does not build an image;
+release activation remains FleetController-owned.
 
 ```bash
-# Master-side convergence (inventory from the WorkerNodeRegistry DB):
-#   POST /api/v1/admin/ansible/computers/run_action  action=normalize
+# Run only during host bootstrap with the prepared immutable image variables.
 ```
 
 Actions:
 - Stop/disable all `velox-worker-*.service` units
 - Unmask the canonical service
 - Remove stale unit files and override directories
-- Write `/etc/velox-worker.env` with correct `WORKER_NAME`, `VELOX_WORKER_ID`
-- Write `/etc/systemd/system/velox-worker-<alias>.service`
+- Write the canonical worker config while preserving the certificate-bound
+  `VELOX_WORKER_ID`
+- Write the canonical `/etc/systemd/system/velox-worker.service`
 - daemon-reload → enable → start
 - Verify service status and heartbeat on master
 
-### update_workers.yml — legacy bridge only
-Downloads the latest bundle from the Master, rebuilds the Docker image locally
-on the worker, and re-applies systemd setup. Use only to normalize or migrate
-an old worker; it does not certify that all workers run identical image bytes.
+### update_workers.yml — retired guard
+This file exists only to fail closed for stale operators. It cannot download a
+bundle, build Docker, or restart a worker. Use `fleetctl update`.
 
-```bash
-# Master-side convergence (inventory from the WorkerNodeRegistry DB):
-#   POST /api/v1/admin/ansible/computers/run_action  action=update
-```
-
-Do not run this playbook fleet-wide.
-
-### restart_workers.yml
-Simple restart of existing worker services.
-
-```bash
-# Master-side convergence (inventory from the WorkerNodeRegistry DB):
-#   POST /api/v1/admin/ansible/computers/run_action  action=restart
-```
-
-### preflight_workers.yml — diagnostic only
-Read-only checks: SSH, disk, OS, commands, Docker, service status. A passing
-preflight is not a deployment or release certification.
-
-```bash
-# Master-side preflight (inventory from the WorkerNodeRegistry DB):
-#   POST /api/v1/admin/ansible/computers/run_action  action=preflight
-```
+`fleetctl ssh-check` is the canonical connectivity check. A restart is owned
+by the FleetController activation cascade, not by a standalone rollout.
 
 ## Worker Compatibility Check
 

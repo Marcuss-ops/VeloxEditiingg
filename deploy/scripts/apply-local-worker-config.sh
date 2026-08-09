@@ -61,7 +61,7 @@ readonly IMAGE_GID="10001"
 OPENSSL="${OPENSSL:-openssl}"
 BACKUP_DIR=""
 
-# ─── Defaults (mutable) ─────────────────────────────────────────────────────
+# ─── Defaults ───────────────────────────────────────────────────────────────
 WORKER_ID=""
 WORKER_NAME=""
 CONTROL_GRPC_URL=""
@@ -75,7 +75,7 @@ WORK_DIR=""
 WORK_DIR_EXPLICIT=false
 DST_EXPLICIT=false
 PROTOCOL_VERSION="2026-06-worker-v1"
-IMAGE="${VELOX_WORKER_IMAGE:-velox-worker:latest}"
+IMAGE="${VELOX_WORKER_IMAGE:-}"
 ENVIRONMENT="dev"                 # dev | prod
 ALLOW_INSECURE_GRPC=false
 FORCE_INSECURE_PROD=false
@@ -156,7 +156,7 @@ OPTIONAL flags:
                                             VELOX_STATE_DIR; default is
                                             VELOX_STATE_DIR/work.
   --protocol-version       STRING           Default 2026-06-worker-v1.
-  --image                  NAME_OR_DIGEST   Default velox-worker:latest.
+  --image                  GHCR_DIGEST      Required immutable ghcr.io/...@sha256:<64hex>.
 
   --environment            dev|prod         Default dev. prod requires
                                             --force-insecure-production
@@ -264,6 +264,8 @@ fi
 [[ "$WORKER_ID" != CHANGE_ME_* ]]    || die "--worker-id still set to placeholder CHANGE_ME_*. Pass a real worker_id." 64
 [[ "$CONTROL_GRPC_URL" != CHANGE_ME_* ]] || die "--control-grpc-url still set to placeholder CHANGE_ME_*. Pass a real URL." 64
 [[ "$ENVIRONMENT" =~ ^(dev|prod)$ ]] || die "--environment must be 'dev' or 'prod' (got: $ENVIRONMENT)" 64
+[[ "$IMAGE" =~ ^ghcr\.io/[a-z0-9._-]+/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]] \
+  || die "--image/VELOX_WORKER_IMAGE must be an immutable ghcr.io/...@sha256:<64hex> reference" 64
 [[ "$BUNDLE_VERSION_SOURCE" =~ ^(auto|manual|skip)$ ]]    || die "--bundle-version-source must be auto|manual|skip" 64
 [[ "$BUNDLE_HASH_SOURCE" =~ ^(auto|manual|env|skip)$ ]]   || die "--bundle-hash-source must be auto|manual|env|skip" 64
 [[ "$HEALTH_PORT" =~ ^[0-9]+$ ]]  || die "--health-port must be a positive integer (got: $HEALTH_PORT)" 64

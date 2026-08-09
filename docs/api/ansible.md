@@ -1,10 +1,8 @@
 # Ansible API — compatibility bridge
 
-> **Production rollout boundary:** these endpoints are retained for worker
-> migration, host convergence, preflight, and diagnostics. They are not the
-> canonical production path for image updates or rollbacks. Use
-> `scripts/fleetctl`, which publishes to the Master FleetController and lets
-> `UpdateExecutor` resolve `WorkerNodeRegistry` → SSH →
+> **Production rollout boundary:** Ansible deployment actions are retired and
+> fail closed. Use `fleetctl`, which publishes to Master FleetController and
+> lets `UpdateExecutor` resolve `WorkerNodeRegistry` → restricted SSH →
 > `velox-worker-activate-image`.
 >
 > The endpoints below generate per-operation inventory from the
@@ -15,7 +13,8 @@
 
 ## POST /api/v1/admin/ansible/computers/run_action
 
-Execute an Ansible action on target computers.
+Retained compatibility endpoint. Deployment actions return `501 Not
+Implemented`; no Ansible subprocess or remote rollout is started.
 
 ### Request body
 
@@ -26,14 +25,11 @@ Execute an Ansible action on target computers.
 }
 ```
 
-### Supported actions
+### Actions
 
-- `deploy_workers` - Legacy migration deployment for target hosts
-- `rollout_update` - Compatibility-bridge rollout for legacy hosts
-- `install_workers` - Fresh install during worker migration
-- `preflight_workers` - Read-only checks (SSH, Docker, disk)
-- `update_workers` - Legacy bridge update; not a certified release rollout
-- `test_ssh` - Read-only SSH connectivity test
+There are no supported deployment actions. Use `fleetctl ssh-check` for
+connectivity and `fleetctl update <worker_id> <ghcr-image@sha256:digest>` for
+release activation.
 
 ### Response
 

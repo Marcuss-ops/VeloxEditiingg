@@ -107,7 +107,7 @@
       - docker
       - image
       - inspect
-      - "{{ _worker_image_tag | default('velox-worker:latest') }}"
+      - "{{ _worker_image_tag }}"
       - --format
       - "{{ '{{json .Config.Entrypoint}}' }}"
   register: _image_entrypoint
@@ -122,23 +122,23 @@
       {{ _image_entrypoint.stdout | default('unknown') }}
 
 # ── IMAGE DIGEST PIN ───────────────────────────────────────────
-# A matching tag is not proof the running container uses the build this
-# deploy produced (2026-08-04: tag v1.2.20-capsfix but 3 different image
-# digests across the fleet). Pin the running container to the exact image
-# the canonical tag points at.
+# A matching tag is not proof the running container uses the release the
+# Master selected. The only accepted reference is the exact GHCR digest.
 #
-# NOTE: the worker image is built locally (prepare_worker_image.yml,
-# `docker build -t velox-worker:...`, no registry push) so `RepoDigests`
-# is EMPTY — compare image IDs instead: `.Id` of the tag vs `.Image` of
-# the running container (both are `sha256:...` and always populated for
-# locally-built images).
+- name: Verify | Assert worker image reference is immutable
+  ansible.builtin.assert:
+    that:
+      - _worker_image_tag is defined
+      - _worker_image_tag is match('^ghcr\\.io/[a-z0-9._-]+/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$')
+    fail_msg: "Worker image must be a full immutable GHCR digest reference"
+
 - name: Verify | Capture built image ID for canonical tag
   ansible.builtin.command:
     argv:
       - docker
       - image
       - inspect
-      - "{{ _worker_image_tag | default('velox-worker:latest') }}"
+      - "{{ _worker_image_tag }}"
       - --format
       - "{{ '{{.Id}}' }}"
   register: _built_image_id
@@ -165,9 +165,9 @@
     fail_msg: >-
       Running container {{ velox_worker_container_name }} uses image
       {{ _running_image_id.stdout | default('<unresolved>') }} but the canonical
-      tag {{ _worker_image_tag | default('velox-worker:latest') }} is pinned to
+      digest {{ _worker_image_tag }} is pinned to
       {{ _built_image_id.stdout | default('<unresolved>') }}. A container from a
-      different image build is running — re-converge the canonical runtime.
+      different image digest is running — re-converge through FleetController.
 
 - name: Verify | Check C++ engine binary
   ansible.builtin.command:

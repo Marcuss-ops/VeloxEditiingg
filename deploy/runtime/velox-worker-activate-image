@@ -122,6 +122,23 @@ chmod --reference="$ENV_FILE" "$tmp"
 mv -f "$tmp" "$ENV_FILE"
 trap - EXIT
 
+# Preserve the previous immutable ref as explicit runtime evidence for the
+# production doctor. This is metadata for rollback availability; it never
+# selects the active release and is restored with the env backup on rollback.
+tmp="$(mktemp "${ENV_FILE}.tmp.XXXXXX")"
+awk -v rollback="$PREV_IMAGE" '
+  BEGIN { done=0 }
+  /^VELOX_ROLLBACK_IMAGE=/ {
+    if (!done) { print "VELOX_ROLLBACK_IMAGE=" rollback; done=1 }
+    next
+  }
+  { print }
+  END { if (!done) print "VELOX_ROLLBACK_IMAGE=" rollback }
+' "$ENV_FILE" >"$tmp"
+chown --reference="$ENV_FILE" "$tmp"
+chmod --reference="$ENV_FILE" "$tmp"
+mv -f "$tmp" "$ENV_FILE"
+
 # ── 6. Restart the canonical service ────────────────────────────────────────
 systemctl restart velox-worker.service || {
   echo "service restart failed; rolling back to $PREV_IMAGE" >&2

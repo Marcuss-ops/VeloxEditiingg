@@ -43,10 +43,8 @@ var defaultWaitBudget = map[string]time.Duration{
 	"rollback":   30 * time.Minute,
 }
 
-// pollInterval is the steady-state poll period. 5s matches the
-// fleet_smart Ansible playbook convention (Step 11/15) so a
-// fleetctl run + an ansible-playbook run converge on the same
-// audit ledger freshness.
+// pollInterval is the steady-state poll period for the Master operation
+// ledger. FleetController is the sole production mutation owner.
 const pollInterval = 5 * time.Second
 
 // polledOperationRow is the slice of GET /api/v1/admin/operations/{id}
@@ -80,10 +78,8 @@ func terminalStatuses(s string) bool {
 // formatted timeout error message.
 //
 // When verbose is true (mirrors --verbose global flag), each
-// poll cycle writes one line to stderr with the current
-// status. Operators running fleetctl + an ansible-playbook
-// front of the operator's terminal use this when they want
-// to see "DRAINING → QUEUED → RUNNING → SUCCEEDED" trace.
+// poll cycle writes one line to stderr with the current status so operators
+// can see the "DRAINING → QUEUED → RUNNING → SUCCEEDED" trace.
 func pollOperationLedger(ctx context.Context, client *fleetClient, operationID string, deadline time.Duration, verbose bool) (*polledOperationRow, error) {
 	endAt := time.Now().Add(deadline)
 	attempts := 0

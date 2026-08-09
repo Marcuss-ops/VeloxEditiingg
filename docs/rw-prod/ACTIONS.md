@@ -108,14 +108,14 @@ Ogni azione elenca `File:line → Azione`. Lo stato "owner" è indicativo — i 
 | 015-A2 | `scripts/verify-soak-gates.sh` (nuovo) | Gate numerici | 015 | sre+qa |
 | 015-A3 | `deploy/inventory/hardware_matrix.yml` (nuovo) | Tabella classi HW | 015 | infra+arch |
 | 015-A7 | `data/ansible/playbooks/tasks/run_soak.yml` (nuovo) | Playbook Ansible | 015 | sre |
-| 016-A1 | `cmd/velox-worker-agent/main.go` | Nuovo subcommand `doctor` | 016 | infra+qa |
-| 016-A2 | `pkg/doctor/` (nuovo) | Package validatori | 016 | infra |
+| 016-A1 | `RemoteCodex/native/worker-agent-go/cmd/velox-worker-agent/main.go` | `doctor --production [--json]` | 016 | infra+qa |
+| 016-A2 | `RemoteCodex/native/worker-agent-go/pkg/doctor/` | Production validators fail-closed | 016 | infra |
 | 016-A3 | `pkg/doctor/handshake.go` | Dial master + Hello | 016 | infra |
 | 016-A4 | `pkg/doctor/visibility.go` | HTTP GET master `/api/v1/workers/:id` | 016 | infra |
 | 016-A7 | `deploy/scripts/apply-local-worker-config.sh` | Aggiungere `doctor --json` gate | 016 | infra |
-| 017-A1 | `scripts/bump-version-and-deploy.sh` | Gate `doctor` su canary host | 017 | sre |
+| 017-A1 | `scripts/bump-version-and-deploy.sh` | Compatibility wrapper delega esclusivamente a `fleetctl` | 017 | sre |
 | 017-A3 | `DataServer/internal/store/migrations/` | Tabella `worker_deploys` | 017 | infra |
-| 017-A4 | `deploy/playbooks/promote-canary.yml` (nuovo) | Playbook orchestrazione | 017 | sre |
+| 017-A4 | `DataServer/data/ansible/playbooks/` | Rollout Ansible ritirato/fail-closed | 017 | sre |
 | 017-A5 | `tests/e2e/rollback/run.sh` (nuovo) | E2E test rollback | 017 | sre+qa |
 | 017-A6 | `scripts/check-no-rebuild.sh` (nuovo) | Anti-rebuild CI guard | 017 | ci |
 

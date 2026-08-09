@@ -2,7 +2,7 @@
 
 **Priorità:** P0
 **Dipendenze:** RW-PROD-001 → 015
-**Stato attuale:** Non esiste. Solo `--version`, `--generate-config`, `--validate-config`. **Gap**: comando unico deterministico che ritorna `READY` o `NOT_READY` con JSON strutturato.
+**Stato attuale:** Implementato. `doctor --production` è fail-closed e ritorna `READY`/`NOT_READY` con report JSON versionato.
 
 ---
 
@@ -27,7 +27,7 @@ velox-worker-agent doctor \
 
 **Interfaccia** (in `cmd/velox-worker-agent/main.go`):
 - `doctorCmd` FlagSet con `--production`, `--json`, `--canary` (opzionale).
-- Delega a `pkg/doctor.Run(cfg, opts) (Report, error)`.
+- Delega a `pkg/doctor.RunProduction(ctx, cfg, validators, writer)`.
 
 **Controlli (riuso diretto dei validatori RW-PROD-002 + readiness RW-PROD-004 + canary RW-PROD-007):**
 
@@ -52,6 +52,7 @@ velox-worker-agent doctor \
 ```json
 {
   "worker_id":"worker-01",
+  "schema_version":"1",
   "verdict":"READY",
   "checked_at":"2026-06-24T12:00:00Z",
   "checks":[
@@ -70,8 +71,8 @@ velox-worker-agent doctor \
 
 | # | File:line | Azione |
 |---|-----------|--------|
-| A1 | `RemoteCodex/.../cmd/velox-worker-agent/main.go` | Nuovo subcommand `doctorCmd` con FlagSet proprio. |
-| A2 | `RemoteCodex/.../pkg/doctor/` | Nuovo package con i singoli validatori (RW-PROD-002 li crea; qui li riusa + aggiunge handshake + master visibility). |
+| A1 | `RemoteCodex/.../cmd/velox-worker-agent/main.go` | Subcommand `doctor --production [--json]`. ✅ |
+| A2 | `RemoteCodex/.../pkg/doctor/` | Validatori production fail-closed per PKI, health, protocollo, digest, ledger, rollback e rebuild. ✅ |
 | A3 | `RemoteCodex/.../pkg/doctor/handshake.go` | Dial master + Hello → HelloAck → disconnect. |
 | A4 | `RemoteCodex/.../pkg/doctor/visibility.go` | HTTP GET su master `/api/v1/workers/:worker_id`. |
 | A5 | `RemoteCodex/.../pkg/doctor/canary.go` | Wrapper opzionale che delega a `cmd/canary`. |

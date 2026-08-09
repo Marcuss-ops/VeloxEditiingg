@@ -24,6 +24,9 @@ services:
     environment:
       VELOX_RENDER_BACKEND: ${VELOX_RENDER_BACKEND:-native}
       CHRONON3D_CLI: ${CHRONON3D_CLI:-/opt/chronon3d/bin/chronon3d_cli}
+      # Production certification is fail-closed unless the runtime carries
+      # explicit evidence that no privileged remote Docker build is allowed.
+      VELOX_REMOTE_REBUILD_DISABLED: "true"
 
     # systemd velox-worker.service is the sole restart owner; Docker does not
     # independently re-arm this container.

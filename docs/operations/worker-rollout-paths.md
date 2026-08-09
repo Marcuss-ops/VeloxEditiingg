@@ -39,10 +39,9 @@ This bridge is retired. Fresh hosts use `prepare-host.sh`; release changes use
 only `fleetctl update` with an immutable GHCR digest.
 ```
 
-Host convergence runs through the **Master** (`AnsibleComputerManager`): the
-per-operation inventory is generated from the `WorkerNodeRegistry` DB and the
-preflight/update playbooks under `DataServer/data/ansible/playbooks/` are
-invoked server-side (`POST /api/v1/admin/ansible/computers/run_action`). There
+The retired Ansible deployment API no longer executes playbooks. Host
+connectivity remains owned by `WorkerNodeRegistry`/`ansible_hosts`; release
+activation runs only through FleetController. There
 is no operator-side static inventory and no `--vault-password-file`:
 
 ```bash

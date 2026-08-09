@@ -23,7 +23,10 @@
 
 set -uo pipefail
 
-SSH_COMMON=(-i "$HOME/.ssh/id_ed25519_velox" -o StrictHostKeyChecking=accept-new \
+# SSH identity is root-managed and shared with WorkerNodeRegistry. Do not
+# fall back to a personal home-directory key: that creates a second trust
+# source and makes certification depend on the operator account.
+SSH_COMMON=(-i "/etc/velox/ssh/id_ed25519_velox" -o StrictHostKeyChecking=accept-new \
   -o BatchMode=yes -o ConnectTimeout=8 -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
 
 MASTER_HOST="${MASTER_HOST:-51.91.11.36}"

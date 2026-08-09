@@ -53,8 +53,8 @@ Questa cartella contiene l'analisi, i pain points, e le azioni concrete per i 17
 | 14 | Metriche / alert | `internal/telemetry/metrics_types.go:151` espone `velox_fallback_count_total`, `velox_python_emergency_path_total`. `alerts/spec-14-compute-outcomes.yml` — alert su compute-outcomes. `docs/operations/PR-6-pki-rotation-runbook.md:215` — `alert-cert-expiry.sh` **TODO non versionato**. | ⚠️ non tutte le soglie RW-PROD-013 hanno alert; correlazione `worker_id + job_id + task_id + attempt_id + session_id` da verificare. |
 | 15 | Cert expiry check | `doctor --production` integra il controllo PKI fail-closed e il rinnovo canonical OpenBao. | ✅ nessun monitor shell duplicato. |
 | 16 | Soak test | `tests/e2e/soak-partition/test_recovery.sh` esiste. | ⚠️ non sembra essere un 24h per classe. Da definire matrice e firma risultati. |
-| 17 | `doctor` command | Non esiste (flag disponibili: `--version`, `--generate-config`, `--validate-config`). | ❌ da implementare ex novo. |
-| 18 | Rollout / rollback | `DataServer/internal/handlers/remote/ansible/deploy.go:45` `buildDeployPlan` con canary_percent. `scripts/bump-version-and-deploy.sh:127` chiama `deploy_workers` con canary. `deploy/playbooks/rollback.yml` esiste. | ⚠️ manca integrazione esplicita con `doctor --production` prima della promozione; manca versioning dell'image digest nel rollout plan. |
+| 17 | `doctor` command | `velox-worker-agent doctor --production [--json]`; report versionato, WARN fail-closed. | ✅ implementato. |
+| 18 | Rollout / rollback | `fleetctl` → Master FleetController → UpdateExecutor → restricted SSH → exact digest activation; rollback reuses previous digest. | ✅ Ansible rollout retired; desired/running digest and production doctor are fail-closed. |
 
 ---
 

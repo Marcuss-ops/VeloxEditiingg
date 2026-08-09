@@ -14,6 +14,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -98,6 +99,16 @@ func startDiskWatcher(ctx context.Context, cfg *config.WorkerConfig, watchDir st
 var Version = "dev"
 
 func main() {
+	// `doctor` is a subcommand, while the historical process flags remain
+	// shared with the normal worker boot path. Strip only that first token so
+	// the standard flag package can still parse the existing flags and the
+	// production gate can be invoked as `velox-worker-agent doctor --production`.
+	rawArgs := os.Args[1:]
+	doctorCommand := len(rawArgs) > 0 && rawArgs[0] == "doctor"
+	if doctorCommand {
+		os.Args = append([]string{os.Args[0]}, rawArgs[1:]...)
+	}
+
 	// Parse command-line flags
 	configPath := flag.String("config", boot.DefaultConfigPath, "path to config file")
 	workDir := flag.String("work-dir", "", "working directory (overrides config)")
@@ -107,6 +118,8 @@ func main() {
 	showVersion := flag.Bool("version", false, "show version and exit")
 	generateConfig := flag.Bool("generate-config", false, "generate a default config file and exit")
 	validateConfig := flag.Bool("validate-config", false, "validate production-readiness and exit (RW-PROD-002 / pkg/doctor)")
+	productionDoctor := flag.Bool("production", false, "run the fail-closed production doctor (only with the doctor subcommand)")
+	productionJSON := flag.Bool("json", false, "emit only the versioned doctor JSON report")
 	// RW-PROD-004 §3 A9: --ready-endpoint overrides the /health/ready
 	// mount path. Default is /health/ready (canonical). Operators set
 	// this on Kubernetes podspecs where /readyz is the network-policy-
@@ -124,6 +137,14 @@ func main() {
 	// deps, without needing a live mock master.
 	bootstrapReportFlag := flag.Bool("bootstrap-report", false, "run bootstrap.Run() once + dump [BOOTSTRAP_REPORT] JSON to stderr + exit with verdict (Phase 1 of 100% Velox certification plan; cap. 2)")
 	flag.Parse()
+	if *productionDoctor && !doctorCommand {
+		fmt.Fprintln(os.Stderr, "Error: --production is only valid with the doctor subcommand")
+		os.Exit(2)
+	}
+	if doctorCommand && !*productionDoctor {
+		fmt.Fprintln(os.Stderr, "Error: doctor requires --production")
+		os.Exit(2)
+	}
 
 	// Show version and exit
 	if *showVersion {
@@ -158,6 +179,32 @@ func main() {
 	if cfgErr != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", cfgErr)
 		os.Exit(1)
+	}
+
+	if doctorCommand {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		var reportJSON bytes.Buffer
+		report, docErr := doctor.RunProduction(ctx, cfg, doctor.DefaultProductionValidators(), &reportJSON)
+		if *productionJSON {
+			_, _ = os.Stdout.Write(reportJSON.Bytes())
+		} else {
+			fmt.Fprintln(os.Stdout, "VELOX PRODUCTION DOCTOR")
+			fmt.Fprintln(os.Stdout, "================================")
+			for _, check := range report.Checks {
+				fmt.Fprintf(os.Stdout, "%-38s %s\n", check.ID, check.Status)
+			}
+			if docErr == nil {
+				fmt.Fprintln(os.Stdout, "\nPRODUCTION = CERTIFIED")
+			} else {
+				fmt.Fprintln(os.Stdout, "\nPRODUCTION = NOT CERTIFIED")
+			}
+		}
+		if docErr != nil {
+			fmt.Fprintf(os.Stderr, "Production doctor: %v\n", docErr)
+			os.Exit(1)
+		}
+		os.Exit(0)
 	}
 
 	// --validate-config: run the doctor validators and exit.

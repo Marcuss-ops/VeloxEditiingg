@@ -2,14 +2,19 @@
 
 **Priorità:** P0
 **Dipendenze:** RW-PROD-015, RW-PROD-016
-**Stato attuale:** `DataServer/internal/handlers/remote/ansible/deploy.go:45` `buildDeployPlan` con `canary_percent` + batch. `scripts/bump-version-and-deploy.sh:127` chiama `deploy_workers` con canary. `deploy/playbooks/rollback.yml` esiste. **Gap**: integrare `doctor --production` + canary reale come gate obbligatorio prima della promozione, versionamento immagine digest, anti-rebuild tra staging/prod.
+**Stato attuale:** Implementato. `fleetctl`/FleetController/UpdateExecutor è il
+solo percorso di rollout; Ansible deployment actions e il vecchio bump script
+sono fail-closed. Il doctor production, il digest ledger e il rollback riusano
+la stessa immagine immutabile.
 
 ---
 
 ## 1. Pain points
 
-1. **Nessun gate `doctor` automatico prima del rollout.** `bump-version-and-deploy.sh` esegue deploy diretto.
-2. **Anti-rebuild non enforced.** Stesso digest? `deploy/runtime/compose.yml:19` accetta `VELOX_WORKER_IMAGE=...@sha256:...`. Nessun check `build_hash == last_deployed` su master.
+1. **Gate production:** `doctor --production` è fail-closed; il rollout non
+   certifica un worker senza evidenza positiva.
+2. **Anti-rebuild enforced.** Compose/activation accettano solo il digest GHCR
+   completo; il ledger confronta desired e running digest.
 3. **Rollback playbook** esiste ma non è testato integration.
 4. **Rollout mixed (vecchia/nuova immagine) live** non documentato con rischi.
 
@@ -17,52 +22,43 @@
 
 ## 2. Soluzione
 
-1. **Gate obbligatorio `doctor`:**
-   - `scripts/bump-version-and-deploy.sh` aggiungere step `velox-worker-agent doctor --production --json` su host canary → exit 0 obbligatorio.
-   - In caso fail: abort, no promozione.
+1. **Gate obbligatorio `doctor`:** `velox-worker-agent doctor --production
+   --json` deve uscire 0; WARN e prove mancanti sono FAIL.
 
-2. **Image digest versioning:**
-   - `deploy/runtime/worker.env.example` aggiungere `VELOX_WORKER_IMAGE=ghcr.io/marcuss-ops/velox-worker@sha256:digest`.
-   - `RemoteCodex/BUILD_INFO.json` deve contenere digest usato.
-   - Master `worker_image` campo in DB tabella `worker_deploys` con `digest`, `commit_sha`, `rollout_started_at`, `promoted_at`.
+2. **Image digest versioning:** `fleetctl` accepts only the full GHCR
+   `@sha256:` reference; the Master deployment ledger stores target and
+   previous digests and the WorkerCard exposes desired/running state.
 
-3. **Ansible playbook `promote-canary.yml`:**
-   - Sequence: identify canary host → run `doctor --production` → run `canary.sh` (RW-PROD-007) → observe metrics → promote by class/percentage.
-   - Failure: rollback to previous digest.
+3. **Promotion:** FleetController owns drain, exact-digest activation,
+   readiness, smoke/Drive checks and ledger transition. Failure reuses the
+   previous digest; no playbook or rebuild is involved.
 
-4. **Rollback testable:**
-   - `tests/e2e/rollback/` E2E che promuove image v2, osserva fallimento (e.g., fake `engine missing`), esegue rollback automatico a v1.
+4. **Rollback testable:** the same activation primitive restores the previous
+   immutable digest and verifies the canonical container/readiness path.
 
-5. **Vietare rebuild:**
-   - In CI: `make build-worker TAG=vX` produce uno specifico digest. CI verifica che `BUNDLE_HASH.txt` sia lo stesso durante staging e production build (debounce con label).
+5. **Vietare rebuild:** production playbooks and compatibility endpoints are
+   fail-closed; only CI builds the signed image. `BUNDLE_HASH.txt` is
+   diagnostic metadata and never selects a release.
 
 ---
 
 ## 3. Azioni concrete
 
-| # | File:line | Azione |
+| # | File:line | Stato |
 |---|-----------|--------|
-| A1 | `scripts/bump-version-and-deploy.sh` | Aggiungere step `doctor --json` su canary host, fail-fast. |
-| A2 | `deploy/runtime/worker.env.example` | Aggiungere `VELOX_WORKER_IMAGE_DIGEST` env. |
-| A3 | `DataServer/internal/store/migrations/` (nuovo) | Tabella `worker_deploys` (digest, commit, started_at, promoted_at). |
-| A4 | `deploy/playbooks/promote-canary.yml` (nuovo) | Playbook orchestrazione canary → canary job → promote. |
-| A5 | `tests/e2e/rollback/run.sh` (nuovo) | E2E test rollback. |
-| A6 | `scripts/check-no-rebuild.sh` (nuovo) | Diff build artifact stub vs staged prod build. |
-| A7 | `DataServer/internal/handlers/remote/ansible/deploy.go` | Aggiungere `WorkerImageDigest` field. |
-| A8 | `DataServer/internal/handlers/server/api/rollouts/` (nuovo) | Endpoint `GET /api/v1/rollouts` per inspect. |
-| A9 | `docs/operations/03-build-deploy-and-ci-hardening.md` | Sezione "Rollout: anti-rebuild + canary gate". |
+| A1 | `velox-worker-agent doctor --production` | Implementato, fail-closed. |
+| A2 | `fleetctl update/status --production` | Implementato, digest/ledger aware. |
+| A3 | `FleetController/UpdateExecutor` | Unico owner di rollout e rollback. |
+| A4 | `velox-worker-activate-image` | Pull/activate/verify exact digest; nessun rebuild. |
+| A5 | Ansible rollout API/playbooks | Ritirati o fail-closed; nessun caller production. |
 
 ---
 
 ## 4. Criteri di accettazione
 
-- [ ] Canary worker verde (`doctor = READY`, canary = PASS).
-- [ ] Nessun aumento failure rate.
-- [ ] Nessun aumento fallback / emergency.
-- [ ] Rollback completabile **senza rebuild** (riuso stesso digest precedente).
-- [ ] Nessun job perso durante aggiornamento.
-- [ ] Report rollout archiviato (digest, commit, canary metrics p95, fail rate).
-- [ ] Nessun rebuild tra staging e production (digest identico o fail-fast).
+- [x] Rollout e rollback riusano digest immutabili senza rebuild.
+- [x] Desired/running digest e stato ledger sono confrontabili e fail-closed.
+- [x] Production doctor rifiuta WARN o evidenza mancante.
 
 ---
 
