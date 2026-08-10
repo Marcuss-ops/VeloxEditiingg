@@ -77,9 +77,13 @@
 // fails fast rather than running away.
 //
 // File split by responsibility:
-//   - update_executor.go        → struct, Execute, parsePayload, waitForIdle
-//   - update_executor_pipeline.go → runForward / runRollback / runRollbackSteps
-//   - update_executor_steps.go  → per-step helpers (cosign, pull, restart, ...)
+//   - update_executor.go            → struct, Execute, and core lifecycle
+//   - update_executor_defs.go       → sentinels, timeouts, and interfaces
+//   - update_executor_capabilities.go → capability and production wiring
+//   - update_executor_bootstrap.go  → runtime digest and ledger adoption
+//   - update_executor_helpers.go    → payload, drain, and idle helpers
+//   - update_executor_pipeline.go   → runForward / runRollback / runRollbackSteps
+//   - update_executor_steps.go      → per-step helpers (cosign, pull, restart, ...)
 package fleet
 
 import (

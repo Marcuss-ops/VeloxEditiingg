@@ -3,8 +3,8 @@ package fleet
 // update_executor_pipeline.go: runForward / runRollback /
 // runRollbackSteps — the forward pipeline + rollback cascade
 // of UpdateExecutor. Split out of update_executor.go; the
-// struct + Execute + per-step timeouts live in
-// update_executor.go and the per-step helpers in
+// struct + Execute live in update_executor.go, timeout definitions
+// live in update_executor_defs.go, and per-step helpers live in
 // update_executor_steps.go.
 
 import (
