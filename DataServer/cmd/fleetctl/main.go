@@ -49,6 +49,7 @@ const (
 	subRollback   subCommand = "rollback"
 	subOperations subCommand = "operations"
 	subWaitReady  subCommand = "wait-ready"
+	subRollout    subCommand = "rollout"
 	subSSHCheck   subCommand = "ssh-check"
 	subJob        subCommand = "job"
 	subDoctor     subCommand = "doctor"
@@ -56,7 +57,7 @@ const (
 
 func (s subCommand) valid() bool {
 	switch s {
-	case subStatus, subInspect, subDrain, subUpdate, subSmoke, subResume, subRollback, subOperations, subWaitReady, subSSHCheck, subJob, subDoctor:
+	case subStatus, subInspect, subDrain, subUpdate, subSmoke, subResume, subRollback, subOperations, subWaitReady, subRollout, subSSHCheck, subJob, subDoctor:
 		return true
 	default:
 		return false
@@ -84,6 +85,8 @@ Sub-commands:
   rollback <worker_id>    rollback to previous_digest (Step 9/15 cascade)
   operations [worker_id] [status] list operation audit rows
   wait-ready <worker_id>  wait for canonical worker readiness
+  rollout [--digest IMAGE] [--workers all|id1,id2] [--reason R] [--wait-ready]
+                          serial image rollout across selected workers
   ssh-check               per-worker SSH connectivity (ssh/hostkey/sudo -n)
   job inspect <job_id>    complete job diagnostics (metrics/cache/artifact/delivery)
   job metrics <job_id>    execution and cache metrics for one job
@@ -172,6 +175,8 @@ func runMain(args []string) int {
 		return runOperations(client, rest[1:])
 	case subWaitReady:
 		return runWaitReady(client, rest[1:])
+	case subRollout:
+		return runRollout(client, rest[1:])
 	case subSSHCheck:
 		return runSSHCheck(client)
 	case subJob:

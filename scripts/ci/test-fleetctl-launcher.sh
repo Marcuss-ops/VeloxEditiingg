@@ -171,6 +171,20 @@ actual_args="$(cat "$ARGS")"
     exit 1
 }
 
+ARGS="$TMP/rollout-args"
+FLEETCTL_TEST_ARGS="$ARGS" \
+FLEETCTL_TEST_ENV="$ENV_OUT" \
+FLEETCTL_GO_BIN="$MOCK" \
+VELOX_MASTER_URL="https://master.example.test" \
+VELOX_ADMIN_TOKEN='env-token' \
+    "$SCRIPT" rollout --digest sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc --workers worker-1,worker-2 --wait-ready
+expected_args=$'rollout\n--digest\nsha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n--workers\nworker-1,worker-2\n--wait-ready\n--master=https://master.example.test'
+actual_args="$(cat "$ARGS")"
+[[ "$actual_args" == "$expected_args" ]] || {
+    printf 'FAIL: rollout delegation differs\nwant:\n%s\ngot:\n%s\n' "$expected_args" "$actual_args" >&2
+    exit 1
+}
+
 printf '{}\n' >"$TMP/payload.json"
 ARGS="$TMP/job-submit-args"
 LEGACY_ARGS="$TMP/legacy-args"

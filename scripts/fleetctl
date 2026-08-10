@@ -27,7 +27,7 @@ Usage:
   scripts/fleetctl job metrics <job_id>
   scripts/fleetctl job watch <job_id> [--timeout seconds] [--poll seconds] [--json]
 
-Commands not yet implemented by the Go client (quarantine, restart, rollout,
+Commands not yet implemented by the Go client (quarantine, restart,
 job submit/certify) are forwarded to the compatibility bridge:
   scripts/fleetctl-legacy <command> ...
 
@@ -94,7 +94,7 @@ fi
 # boundary limited to auth/URL compatibility and the historical drain/resume
 # positional reason translation.
 case "$command" in
-    update|rollback|operations|wait-ready|inspect|smoke|doctor)
+    update|rollback|operations|wait-ready|rollout|inspect|smoke|doctor)
         exec_go_fleetctl "$@"
         ;;
     status)

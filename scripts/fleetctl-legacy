@@ -109,7 +109,7 @@ resolve_token() {
 # `status --json` is delegated first because its wire output is already a
 # stable machine-readable contract; the human table remains on the legacy
 # path until its output compatibility is migrated explicitly.
-if [[ "$command" == update || "$command" == rollback || "$command" == operations || "$command" == wait-ready || ( "$command" == job && ( "${2:-}" == inspect || "${2:-}" == metrics || "${2:-}" == watch ) ) ]]; then
+if [[ "$command" == update || "$command" == rollback || "$command" == operations || "$command" == wait-ready || "$command" == rollout || ( "$command" == job && ( "${2:-}" == inspect || "${2:-}" == metrics || "${2:-}" == watch ) ) ]]; then
     delegated_args=("$@")
     # The Go client owns typed parsing, HTTP, polling, terminal states and
     # output for these migrated surfaces. Bash only preserves argv/env.
@@ -150,11 +150,6 @@ worker_uri() {
     printf '/api/v1/admin/workers/%s' "$(printf '%s' "$1" | jq -sRr @uri)"
 }
 
-validate_image() {
-    [[ "$1" =~ ^ghcr\.io/[a-z0-9._-]+/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]] \
-        || die 'image must be a pinned lowercase GHCR @sha256:64 reference'
-}
-
 # post_mutation issues a JSON POST and prints the response body. On non-2xx it
 # surfaces the server's JSON error (e.g. 409 "operation already in flight") and
 # returns 1 — curl -f would swallow the error body, leaving only a generic
@@ -176,192 +171,10 @@ post_mutation() {
     return 1
 }
 
-# post_update_mutation is the update-only POST surface. A 409 is actionable
-# when the Master returns an existing operation_id: poll that operation rather
-# than losing the correlation behind a generic HTTP error. Other mutation
-# commands retain post_mutation's existing behavior.
-post_update_mutation() {
-    local path=$1 body=$2 code out msg operation_id
-    out="$(mktemp)"
-    code="$(curl -sS -o "$out" -w '%{http_code}' -X POST \
-        -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-        --data-raw "$body" "$MASTER_URL$path" 2>/dev/null || true)"
-    if [[ "$code" =~ ^2 ]]; then
-        cat "$out"
-        rm -f "$out"
-        return 0
-    fi
-    if [[ "$code" == "409" ]]; then
-        operation_id="$(jq -r '.operation_id // empty' "$out" 2>/dev/null || true)"
-        if [[ -n "$operation_id" ]]; then
-            cat "$out"
-            rm -f "$out"
-            return 0
-        fi
-    fi
-    msg="$(jq -r '.error // .detail // empty' "$out" 2>/dev/null || true)"
-    rm -f "$out"
-    printf 'fleetctl: POST %s failed (HTTP %s): %s\n' "$path" "$code" "$msg" >&2
-    return 1
-}
-
-# run_digest_update POSTs the pinned image to the canonical Master update API
-# and blocks on the fleet_operations ledger until the cascade is terminal.
-# The same endpoint serves both `update` (a new target digest) and `rollback`
-# (the previous-known-good digest): the Master's UpdateExecutor runs the full
-# forward pipeline (drain → cosign → pull → velox-worker-activate-image →
-# health → smoke → Drive) and records the audit rows in deployment_records.
-run_digest_update() {
-    local action=$1 worker_id=$2 image=$3
-    local reason=${4:-fleetctl-$action}
-    local path body response op_id
-    validate_image "$image"
-    path="$(worker_uri "$worker_id")/update"
-    body="$(jq -cn --arg target "$image" --arg reason "$reason" '{target_digest:$target, reason:$reason}')"
-    printf 'fleetctl: %s worker=%s image=%s reason=%s\n' "$action" "$worker_id" "$image" "$reason" >&2
-    response="$(post_update_mutation "$path" "$body")"
-    op_id="$(jq -r '.operation_id // empty' <<<"$response")"
-    [[ -n "$op_id" ]] || die "update API returned no operation_id: $response"
-    printf 'fleetctl: %s queued operation_id=%s\n' "$action" "$op_id" >&2
-    poll_operation "$op_id"
-}
-
-# normalize_update_image preserves the historical full-image positional form
-# while accepting the canonical caller form --digest sha256:<64-hex>. The API
-# requires the complete GHCR reference, so bare digests use the configured
-# worker repository (or the production default) before validation and POST.
-normalize_update_image() {
-    local image=$1 repository
-    [[ -n "$image" ]] || die 'pinned image reference is required (use --digest)'
-    if [[ "$image" =~ ^sha256:[a-f0-9]{64}$ ]]; then
-        repository="${GHCR_WORKER_REPOSITORY:-ghcr.io/marcuss-ops/velox-worker}"
-        repository="${repository%/}"
-        [[ "$repository" =~ ^ghcr\.io/[a-z0-9._-]+/[a-z0-9._/-]+$ ]] \
-            || die 'GHCR_WORKER_REPOSITORY must be a valid lowercase ghcr.io repository'
-        printf '%s@%s' "$repository" "$image"
-    else
-        printf '%s' "$image"
-    fi
-}
-
-parse_update_args() {
-    local action=$1
-    shift
-    local worker_id='' image='' reason='' arg
-    while [[ $# -gt 0 ]]; do
-        arg=$1
-        case "$arg" in
-            --digest=*)
-                [[ -z "$image" ]] || die 'update digest specified more than once'
-                image=${arg#*=}
-                shift
-                ;;
-            --digest)
-                [[ $# -ge 2 ]] || die '--digest requires a value'
-                [[ -z "$image" ]] || die 'update digest specified more than once'
-                image=$2
-                shift 2
-                ;;
-            --reason=*)
-                [[ -z "$reason" ]] || die 'update reason specified more than once'
-                reason=${arg#*=}
-                shift
-                ;;
-            --reason)
-                [[ $# -ge 2 ]] || die '--reason requires a value'
-                [[ -z "$reason" ]] || die 'update reason specified more than once'
-                reason=$2
-                shift 2
-                ;;
-            -*)
-                die "unknown update option: $arg"
-                ;;
-            *)
-                if [[ -z "$worker_id" ]]; then
-                    worker_id=$arg
-                elif [[ -z "$image" ]]; then
-                    image=$arg
-                elif [[ -z "$reason" ]]; then
-                    reason=$arg
-                else
-                    die "unexpected update argument: $arg"
-                fi
-                shift
-                ;;
-        esac
-    done
-    [[ -n "$worker_id" ]] || die 'worker_id is required'
-    image="$(normalize_update_image "$image")"
-    reason=${reason:-fleetctl-$action}
-    run_digest_update "$action" "$worker_id" "$image" "$reason"
-}
-
-# poll_operation blocks until the fleet_operations ledger row is terminal.
-# SUCCEEDED → exit 0; FAILED / ROLLBACK → exit 1 with the audit message;
-# budget exhaustion → exit 1 (operator can re-poll via `fleetctl operations`).
-poll_operation() {
-    local op_id=$1
-    local timeout=${FLEETCTL_WAIT_TIMEOUT_SECONDS:-1800}
-    local poll=${FLEETCTL_WAIT_POLL_SECONDS:-5}
-    local deadline=$(( $(date +%s) + timeout ))
-    local op_uri status card msg
-    op_uri="/api/v1/admin/operations/$(printf '%s' "$op_id" | jq -sRr @uri)"
-    while :; do
-        card="$(api GET "$op_uri")"
-        status="$(jq -r '.status // "UNKNOWN"' <<<"$card")"
-        case "$status" in
-            SUCCEEDED)
-                printf 'fleetctl: operation %s SUCCEEDED\n' "$op_id" >&2
-                return 0
-                ;;
-            FAILED|ROLLBACK)
-                msg="$(jq -r '.error_message // ""' <<<"$card")"
-                printf 'fleetctl: operation %s ended %s: %s\n' "$op_id" "$status" "$msg" >&2
-                return 1
-                ;;
-        esac
-        if (( $(date +%s) >= deadline )); then
-            printf 'fleetctl: timed out waiting for operation %s (last status: %s)\n' "$op_id" "$status" >&2
-            return 1
-        fi
-        sleep "$poll"
-    done
-}
-
-# wait_ready is the one readiness gate used by rollout and by operators. It
-# reads the canonical worker projection; it never reaches a worker over SSH.
-wait_ready() {
-    local worker_id=$1 expected_image=${2:-} timeout=${3:-${FLEETCTL_READY_TIMEOUT_SECONDS:-180}} poll=${4:-${FLEETCTL_READY_POLL_SECONDS:-5}}
-    local deadline=$(( $(date +%s) + timeout )) card ready connection health actual_digest expected_digest
-    [[ -n "$worker_id" ]] || die 'worker_id is required'
-    if [[ -n "$expected_image" ]]; then
-        expected_digest="${expected_image##*@}"
-        [[ "$expected_digest" =~ ^sha256:[a-f0-9]{64}$ ]] || die 'readiness digest must be a pinned image or sha256 digest'
-        expected_digest="${expected_digest#sha256:}"
-    fi
-    while :; do
-        card="$(api GET "$(worker_uri "$worker_id")")"
-        ready="$(jq -r '.readiness.status // "UNKNOWN"' <<<"$card")"
-        connection="$(jq -r '.connection_state // .status // "UNKNOWN"' <<<"$card")"
-        health="$(jq -r '.health // "UNKNOWN"' <<<"$card")"
-        actual_digest="$(jq -r '.image_digest // .digest // ""' <<<"$card")"
-        actual_digest="${actual_digest#sha256:}"
-        printf 'fleetctl: worker=%s connection=%s health=%s readiness=%s digest=%s\n' \
-            "$worker_id" "$connection" "$health" "$ready" "${actual_digest:--}" >&2
-        if [[ "$ready" == "ok" && "$connection" == "CONNECTED" && "$health" == "HEALTHY" ]]; then
-            if [[ -z "$expected_digest" || "$actual_digest" == *"$expected_digest"* ]]; then
-                printf 'fleetctl: worker=%s READY\n' "$worker_id" >&2
-                return 0
-            fi
-        fi
-        if (( $(date +%s) >= deadline )); then
-            printf 'fleetctl: worker=%s did not become READY (connection=%s health=%s readiness=%s digest=%s expected=%s)\n' \
-                "$worker_id" "$connection" "$health" "$ready" "${actual_digest:--}" "${expected_digest:--}" >&2
-            return 1
-        fi
-        sleep "$poll"
-    done
-}
+# NOTE: update/rollback/wait-ready/rollout are fully implemented by the Go
+# client (delegated at the top of this script) and their legacy Bash helpers
+# (run_digest_update, wait_ready, post_update_mutation, poll_operation and
+# parsers) were removed — the shell must not keep dead copies "for safety".
 
 resolve_worker_ids() {
     local selection=${1:-all} worker_id
@@ -373,57 +186,6 @@ resolve_worker_ids() {
     for worker_id in "${selected_workers[@]}"; do
         [[ -n "$worker_id" ]] || die 'worker selection contains an empty worker_id'
         printf '%s\n' "$worker_id"
-    done
-}
-
-parse_wait_ready_args() {
-    local worker_id='' image='' timeout=${FLEETCTL_READY_TIMEOUT_SECONDS:-180} poll=${FLEETCTL_READY_POLL_SECONDS:-5} arg
-    while [[ $# -gt 0 ]]; do
-        arg=$1
-        case "$arg" in
-            --digest=*) image=${arg#*=}; shift ;;
-            --digest) [[ $# -ge 2 ]] || die '--digest requires a value'; image=$2; shift 2 ;;
-            --timeout=*) timeout=${arg#*=}; shift ;;
-            --timeout) [[ $# -ge 2 ]] || die '--timeout requires a value'; timeout=$2; shift 2 ;;
-            --poll=*) poll=${arg#*=}; shift ;;
-            --poll) [[ $# -ge 2 ]] || die '--poll requires a value'; poll=$2; shift 2 ;;
-            -*) die "unknown wait-ready option: $arg" ;;
-            *) [[ -z "$worker_id" ]] || die "unexpected wait-ready argument: $arg"; worker_id=$arg; shift ;;
-        esac
-    done
-    [[ -n "$worker_id" ]] || die 'worker_id is required'
-    if [[ -n "$image" ]]; then image="$(normalize_update_image "$image")"; fi
-    wait_ready "$worker_id" "$image" "$timeout" "$poll"
-}
-
-rollout() {
-    local image='' selection=all reason=fleetctl-rollout wait_for_ready=0 arg worker_id
-    while [[ $# -gt 0 ]]; do
-        arg=$1
-        case "$arg" in
-            --digest=*) image=${arg#*=}; shift ;;
-            --digest) [[ $# -ge 2 ]] || die '--digest requires a value'; image=$2; shift 2 ;;
-            --workers=*) selection=${arg#*=}; shift ;;
-            --workers) [[ $# -ge 2 ]] || die '--workers requires all or a comma-separated worker_id list'; selection=$2; shift 2 ;;
-            --reason=*) reason=${arg#*=}; shift ;;
-            --reason) [[ $# -ge 2 ]] || die '--reason requires a value'; reason=$2; shift 2 ;;
-            --serial) shift ;;
-            --wait-ready) wait_for_ready=1; shift ;;
-            --parallel) die 'rollout is serial-only; omit --parallel and use --serial'
-                ;;
-            -*) die "unknown rollout option: $arg" ;;
-            *) [[ -z "$image" ]] || die "unexpected rollout argument: $arg"; image=$arg; shift ;;
-        esac
-    done
-    image="$(normalize_update_image "$image")"
-    mapfile -t workers < <(resolve_worker_ids "$selection")
-    ((${#workers[@]} > 0)) || die 'no workers selected'
-    printf 'fleetctl: rolling out %s to %d worker(s) serially\n' "$image" "${#workers[@]}" >&2
-    for worker_id in "${workers[@]}"; do
-        run_digest_update update "$worker_id" "$image" "$reason"
-        if (( wait_for_ready )); then
-            wait_ready "$worker_id" "$image"
-        fi
     done
 }
 
@@ -647,14 +409,6 @@ case "$command" in
         reason=${3:-fleetctl-restart}
         api POST "$(worker_uri "$worker_id")/restart" \
             "$(jq -cn --arg reason "$reason" '{reason:$reason}')" | jq .
-        ;;
-    update|rollback)
-        shift
-        parse_update_args "$command" "$@"
-        ;;
-    rollout)
-        shift
-        rollout "$@"
         ;;
     smoke)
         worker_id=${2:-}
