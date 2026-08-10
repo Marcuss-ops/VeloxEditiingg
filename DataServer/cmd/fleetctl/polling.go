@@ -81,13 +81,17 @@ func terminalStatuses(s string) bool {
 // poll cycle writes one line to stderr with the current status so operators
 // can see the "DRAINING → QUEUED → RUNNING → SUCCEEDED" trace.
 func pollOperationLedger(ctx context.Context, client *fleetClient, operationID string, deadline time.Duration, verbose bool) (*polledOperationRow, error) {
+	return pollOperationLedgerWithInterval(ctx, client, operationID, deadline, verbose, pollInterval)
+}
+
+func pollOperationLedgerWithInterval(ctx context.Context, client *fleetClient, operationID string, deadline time.Duration, verbose bool, interval time.Duration) (*polledOperationRow, error) {
 	endAt := time.Now().Add(deadline)
 	attempts := 0
 	last := &polledOperationRow{OperationID: operationID, Status: "QUEUED"}
 	for {
 		attempts++
 		row := &polledOperationRow{}
-		status, err := client.doJSON(ctx, "GET", "/api/v1/admin/operations/"+operationID, nil, row)
+		status, err := client.doJSON(ctx, "GET", operationPath(operationID), nil, row)
 		if err != nil {
 			if verbose {
 				fmt.Fprintf(os.Stderr, "[fleetctl] poll #%d status=%d err=%v\n", attempts, status, err)
@@ -114,7 +118,7 @@ func pollOperationLedger(ctx context.Context, client *fleetClient, operationID s
 		select {
 		case <-ctx.Done():
 			return last, ctx.Err()
-		case <-time.After(pollInterval):
+		case <-time.After(interval):
 		}
 	}
 }

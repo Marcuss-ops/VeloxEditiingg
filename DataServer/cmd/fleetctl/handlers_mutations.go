@@ -3,9 +3,11 @@ package main
 
 import (
 	"context"
-	"flag"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 )
 
 type mutationResponse struct {
@@ -25,32 +27,28 @@ func runDrain(client *fleetClient, args []string) int {
 		return ExitMisuse
 	}
 	reason := parseReasonFlag(args)
-	return runMutation(client, "drain", workerID, "/api/v1/admin/workers/"+workerID+"/drain",
+	return runMutation(client, "drain", workerID, workerPath(workerID, "drain"),
 		map[string]any{"reason": reason})
 }
 
-// runUpdate — POST /api/v1/admin/workers/{id}/update
-// after validating --digest sha256: regex.
+// runUpdate — POST /api/v1/admin/workers/{id}/update.
+// The parser deliberately accepts both the historical positional form
+// (`update WORKER IMAGE REASON`) and the typed-client form
+// (`update WORKER --digest IMAGE --reason REASON`).
 func runUpdate(client *fleetClient, args []string) int {
-	workerID, ok := oneArg(args)
-	if !ok {
-		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "update requires a worker_id"))
-		return ExitMisuse
-	}
-	fs := flag.NewFlagSet("update", flag.ContinueOnError)
-	digest := fs.String("digest", "", "target image digest, must match ^sha256:[0-9a-f]{64}$")
-	reason := fs.String("reason", "fleetctl update", "operator-readable reason (audit row)")
-	if err := fs.Parse(args); err != nil {
+	workerID, image, reason, err := parseImageMutationArgs("update", args)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "%v", err))
 		return ExitMisuse
 	}
-	if err := validateDigest(*digest); err != nil {
+	imageRef, err := normalizeImageArg(image)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, fmtExit(ExitImageInvalid, "%v", err))
 		return ExitImageInvalid
 	}
 	return runMutation(client, "update", workerID,
-		"/api/v1/admin/workers/"+workerID+"/update",
-		map[string]any{"target_digest": workerImageRef(*digest), "reason": *reason})
+		workerPath(workerID, "update"),
+		map[string]any{"target_digest": imageRef, "reason": reason})
 }
 
 // runSmoke — POST /api/v1/admin/workers/{id}/smoke;
@@ -68,7 +66,7 @@ func runSmoke(client *fleetClient, args []string) int {
 	// Allow --asset-id etc. override in future; today's atomic
 	// surface uses the defaults.
 	return runMutation(client, "smoke", workerID,
-		"/api/v1/admin/workers/"+workerID+"/smoke",
+		workerPath(workerID, "smoke"),
 		map[string]any{"asset_id": assetID, "render_plan": renderPlan, "timeout_sec": timeoutSec, "reason": reason})
 }
 
@@ -82,29 +80,140 @@ func runResume(client *fleetClient, args []string) int {
 	}
 	reason := parseReasonFlag(args)
 	return runMutation(client, "resume", workerID,
-		"/api/v1/admin/workers/"+workerID+"/resume",
+		workerPath(workerID, "resume"),
 		map[string]any{"reason": reason})
 }
 
-// runRollback — POST /api/v1/admin/workers/{id}/rollback;
-// polls /admin/operations/{op_id}; on terminal FAILED/ROLLBACK, exit 8.
+// runRollback — POST /api/v1/admin/workers/{id}/update with the
+// previous-known-good pinned image. The Master owns the rollback cascade;
+// there is intentionally no separate rollback HTTP route.
 func runRollback(client *fleetClient, args []string) int {
-	workerID, ok := oneArg(args)
-	if !ok {
-		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "rollback requires a worker_id"))
+	workerID, image, reason, err := parseImageMutationArgs("rollback", args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "%v", err))
 		return ExitMisuse
 	}
-	reason := parseReasonFlag(args)
+	imageRef, err := normalizeImageArg(image)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, fmtExit(ExitImageInvalid, "%v", err))
+		return ExitImageInvalid
+	}
 	return runMutation(client, "rollback", workerID,
-		"/api/v1/admin/workers/"+workerID+"/rollback",
-		map[string]any{"reason": reason})
+		workerPath(workerID, "update"),
+		map[string]any{"target_digest": imageRef, "reason": reason})
+}
+
+// parseImageMutationArgs is the compatibility parser for update and rollback.
+// It consumes only flags owned by the mutation and ignores global client flags
+// that loadClientConfig already handled. Keeping this parser independent from
+// flag.FlagSet is important: Go's standard parser stops at the first positional
+// worker ID and would silently ignore a following positional image/reason.
+func parseImageMutationArgs(action string, args []string) (workerID, image, reason string, err error) {
+	var positional []string
+	var imageSet, reasonSet bool
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--digest" || arg == "--reason" || arg == "--master" || arg == "--token-file":
+			if i+1 >= len(args) {
+				return "", "", "", fmt.Errorf("%s requires a value", arg)
+			}
+			value := args[i+1]
+			switch arg {
+			case "--digest":
+				if imageSet {
+					return "", "", "", errors.New("digest specified more than once")
+				}
+				image, imageSet = value, true
+			case "--reason":
+				if reasonSet {
+					return "", "", "", errors.New("reason specified more than once")
+				}
+				reason, reasonSet = value, true
+			}
+			i++
+		case strings.HasPrefix(arg, "--digest="):
+			if imageSet {
+				return "", "", "", errors.New("digest specified more than once")
+			}
+			image, imageSet = strings.TrimPrefix(arg, "--digest="), true
+		case strings.HasPrefix(arg, "--reason="):
+			if reasonSet {
+				return "", "", "", errors.New("reason specified more than once")
+			}
+			reason, reasonSet = strings.TrimPrefix(arg, "--reason="), true
+		case strings.HasPrefix(arg, "--master=") || strings.HasPrefix(arg, "--token-file=") || arg == "--verbose":
+			// Global flags are resolved before dispatch by loadClientConfig.
+		case strings.HasPrefix(arg, "-"):
+			return "", "", "", fmt.Errorf("unknown %s option %q", action, arg)
+		default:
+			positional = append(positional, arg)
+		}
+	}
+	if len(positional) == 0 {
+		return "", "", "", fmt.Errorf("%s requires a worker_id", action)
+	}
+	if len(positional) > 3 {
+		return "", "", "", fmt.Errorf("%s accepts worker_id, image and optional reason", action)
+	}
+	workerID = positional[0]
+	if !imageSet && len(positional) > 1 {
+		image, imageSet = positional[1], true
+	}
+	if !reasonSet && len(positional) > 2 {
+		reason, reasonSet = positional[2], true
+	}
+	if !imageSet || strings.TrimSpace(image) == "" {
+		return "", "", "", fmt.Errorf("%s requires a pinned image via --digest or positional argument", action)
+	}
+	if !reasonSet {
+		reason = "fleetctl " + action
+	}
+	return workerID, image, reason, nil
+}
+
+func normalizeDigestArg(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if strings.Contains(raw, "@sha256:") {
+		digest := raw[strings.LastIndex(raw, "@")+1:]
+		if err := validateDigest(digest); err != nil {
+			return "", err
+		}
+		return digest, nil
+	}
+	if err := validateDigest(raw); err != nil {
+		return "", err
+	}
+	return raw, nil
+}
+
+// normalizeImageArg validates an operator image argument and preserves a
+// complete pinned reference when one was supplied. Only a bare digest is
+// expanded to the configured worker repository; silently replacing the
+// repository of an explicit image would make rollback target the wrong image.
+func normalizeImageArg(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if digestRegex.MatchString(raw) {
+		return workerImageRef(raw), nil
+	}
+	if !fullImageDigest.MatchString(raw) {
+		return "", fmt.Errorf("image %q must be sha256:<64-hex> or a pinned image@sha256:<64-hex> reference", raw)
+	}
+	if _, err := normalizeDigestArg(raw); err != nil {
+		return "", err
+	}
+	return raw, nil
 }
 
 // runMutation is the shared post+polling helper. Issues the
 // POST then polls until terminal SUCCEEDED (return ExitOK) or
 // terminal FAILED/ROLLBACK (return MapOperationKindToExit).
 func runMutation(client *fleetClient, opKind, workerID, path string, body map[string]any) int {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*60*1e9)
+	budget := defaultWaitBudget[opKind]
+	if budget <= 0 {
+		budget = 5 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	post := mutationResponse{}
 	status, err := client.doJSON(ctx, "POST", path, body, &post)
@@ -124,7 +233,6 @@ func runMutation(client *fleetClient, opKind, workerID, path string, body map[st
 	fmt.Printf("[fleetctl] %s queued: operation_id=%s worker_id=%s queued_at=%s\n",
 		opKind, post.OperationID, post.WorkerID, post.QueuedAt)
 
-	budget := defaultWaitBudget[opKind]
 	row, err := pollOperationLedger(ctx, client, post.OperationID, budget, client.verbose)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, fmtExit(ExitUnexpected, "%v", err))

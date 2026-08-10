@@ -109,6 +109,12 @@ resolve_token() {
 # `status --json` is delegated first because its wire output is already a
 # stable machine-readable contract; the human table remains on the legacy
 # path until its output compatibility is migrated explicitly.
+if [[ "$command" == update || "$command" == rollback ]]; then
+    delegated_args=("$@")
+    # Legacy syntax: update/rollback WORKER IMAGE [REASON]. The Go client
+    # owns digest validation, POST, operation parsing, polling and output.
+    exec_go_fleetctl "${delegated_args[@]}"
+fi
 if [[ "$command" == status && "${2:-}" == "--json" ]]; then
     exec_go_fleetctl "$@"
 fi

@@ -50,9 +50,28 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---------- digest regex ----------
+
+func TestNormalizeDigestArgAcceptsPinnedImageReference(t *testing.T) {
+	ref := "ghcr.io/example/velox-worker@sha256:" + strings.Repeat("a", 64)
+	got, err := normalizeDigestArg(ref)
+	if err != nil {
+		t.Fatalf("normalize pinned image: %v", err)
+	}
+	want := "sha256:" + strings.Repeat("a", 64)
+	if got != want {
+		t.Fatalf("normalized digest = %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeDigestArgRejectsInvalidPinnedImage(t *testing.T) {
+	if _, err := normalizeDigestArg("ghcr.io/example/velox-worker:latest"); err == nil {
+		t.Fatal("mutable image reference must be rejected")
+	}
+}
 
 func TestValidateDigest_AcceptsCanonicalLowercase(t *testing.T) {
 	canonical := "sha256:" + strings.Repeat("a", 64)
@@ -366,6 +385,162 @@ func TestRunUpdate_BadDigestReturnsExitImageInvalid(t *testing.T) {
 	ec := runUpdate(c, []string{"velox-worker-13197", "--digest=ghcr.io/foo/bar:latest"})
 	if ec != ExitImageInvalid {
 		t.Errorf("--digest=ghcr.io/foo/bar:latest must surface ExitImageInvalid (7), got %d", ec)
+	}
+}
+
+func TestParseImageMutationArgsSupportsLegacyAndFlagForms(t *testing.T) {
+	pinned := "ghcr.io/example/velox-worker@sha256:" + strings.Repeat("a", 64)
+	cases := []struct {
+		name   string
+		args   []string
+		action string
+		worker string
+		image  string
+		reason string
+	}{
+		{
+			name: "legacy positional",
+			args: []string{"worker-1", pinned, "manual update"}, action: "update",
+			worker: "worker-1", image: pinned, reason: "manual update",
+		},
+		{
+			name: "flags after worker",
+			args: []string{"worker-1", "--digest", pinned, "--reason", "manual rollback", "--master=http://master"}, action: "rollback",
+			worker: "worker-1", image: pinned, reason: "manual rollback",
+		},
+		{
+			name: "flags before worker",
+			args: []string{"--reason=ordered", "--digest=" + pinned, "worker-1"}, action: "update",
+			worker: "worker-1", image: pinned, reason: "ordered",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			worker, image, reason, err := parseImageMutationArgs(tc.action, tc.args)
+			if err != nil {
+				t.Fatalf("parse args: %v", err)
+			}
+			if worker != tc.worker || image != tc.image || reason != tc.reason {
+				t.Fatalf("parsed = (%q, %q, %q), want (%q, %q, %q)", worker, image, reason, tc.worker, tc.image, tc.reason)
+			}
+		})
+	}
+}
+
+func TestRunUpdate_PreservesPinnedReferenceAndPollsToSuccess(t *testing.T) {
+	pinned := "ghcr.io/example/custom-worker@sha256:" + strings.Repeat("b", 64)
+	var postBody map[string]any
+	var postPath string
+	var pollCount int
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "POST /api/v1/admin/workers/worker-1/update":
+			postPath = r.URL.Path
+			if err := json.NewDecoder(r.Body).Decode(&postBody); err != nil {
+				t.Errorf("decode update body: %v", err)
+			}
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"operation_id":"op-update-1","worker_id":"worker-1","queued_at":"now"}`))
+		case "GET /api/v1/admin/operations/op-update-1":
+			pollCount++
+			_ = json.NewEncoder(w).Encode(polledOperationRow{
+				OperationID: "op-update-1", WorkerID: "worker-1", Status: "SUCCEEDED",
+			})
+		default:
+			http.Error(w, "unexpected request", http.StatusNotFound)
+		}
+	})
+	defer srv.Close()
+
+	ec := runUpdate(c, []string{"worker-1", "--digest", pinned, "--reason", "custom image"})
+	if ec != ExitOK {
+		t.Fatalf("update exit code = %d, want %d", ec, ExitOK)
+	}
+	if postPath != "/api/v1/admin/workers/worker-1/update" || pollCount != 1 {
+		t.Fatalf("requests = path %q, polls %d; want update path and one terminal poll", postPath, pollCount)
+	}
+	if got, _ := postBody["target_digest"].(string); got != pinned {
+		t.Fatalf("target_digest = %q, want original pinned reference %q", got, pinned)
+	}
+	if got, _ := postBody["reason"].(string); got != "custom image" {
+		t.Fatalf("reason = %q, want custom image", got)
+	}
+}
+
+func TestRunRollback_PositionalReferenceUsesUpdateEndpoint(t *testing.T) {
+	pinned := "ghcr.io/example/previous-worker@sha256:" + strings.Repeat("c", 64)
+	var postPath, pollPath string
+	var gotBody map[string]any
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "POST /api/v1/admin/workers/worker-1/update":
+			postPath = r.URL.Path
+			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+				t.Errorf("decode rollback body: %v", err)
+			}
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"operation_id":"op-rollback-1","worker_id":"worker-1"}`))
+		case "GET /api/v1/admin/operations/op-rollback-1":
+			pollPath = r.URL.Path
+			_ = json.NewEncoder(w).Encode(polledOperationRow{OperationID: "op-rollback-1", Status: "SUCCEEDED"})
+		default:
+			http.Error(w, "unexpected rollback request", http.StatusNotFound)
+		}
+	})
+	defer srv.Close()
+
+	ec := runRollback(c, []string{"worker-1", pinned, "restore known-good"})
+	if ec != ExitOK {
+		t.Fatalf("rollback exit code = %d, want %d", ec, ExitOK)
+	}
+	if postPath != "/api/v1/admin/workers/worker-1/update" || pollPath != "/api/v1/admin/operations/op-rollback-1" {
+		t.Fatalf("paths = POST %q, GET %q; want update POST and operation GET", postPath, pollPath)
+	}
+	if got, _ := gotBody["target_digest"].(string); got != pinned {
+		t.Fatalf("rollback target_digest = %q, want %q", got, pinned)
+	}
+	if got, _ := gotBody["reason"].(string); got != "restore known-good" {
+		t.Fatalf("rollback reason = %q, want restore known-good", got)
+	}
+}
+
+func TestPollOperationLedgerWithInterval_ConvergesThroughRunning(t *testing.T) {
+	statuses := []string{"QUEUED", "RUNNING", "SUCCEEDED"}
+	var calls int
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/admin/operations/op-sequence" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		status := statuses[calls]
+		calls++
+		_ = json.NewEncoder(w).Encode(polledOperationRow{OperationID: "op-sequence", Status: status})
+	})
+	defer srv.Close()
+
+	row, err := pollOperationLedgerWithInterval(context.Background(), c, "op-sequence", time.Second, false, time.Millisecond)
+	if err != nil {
+		t.Fatalf("poll sequence: %v", err)
+	}
+	if row.Status != "SUCCEEDED" || calls != len(statuses) {
+		t.Fatalf("final row/calls = %q/%d, want SUCCEEDED/%d", row.Status, calls, len(statuses))
+	}
+}
+
+func TestPollOperationLedgerWithInterval_ReturnsTerminalFailure(t *testing.T) {
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(polledOperationRow{
+			OperationID: "op-failed", Status: "FAILED", ErrorMessage: "activation failed",
+		})
+	})
+	defer srv.Close()
+
+	row, err := pollOperationLedgerWithInterval(context.Background(), c, "op-failed", time.Second, false, time.Millisecond)
+	if err != nil {
+		t.Fatalf("terminal failure must return row without polling error: %v", err)
+	}
+	if row.Status != "FAILED" || row.ErrorMessage != "activation failed" {
+		t.Fatalf("failure row = %+v", row)
 	}
 }
 

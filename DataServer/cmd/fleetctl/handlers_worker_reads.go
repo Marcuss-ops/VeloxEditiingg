@@ -131,7 +131,7 @@ func runInspect(client *fleetClient, args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*1e9)
 	defer cancel()
 	resp := workerCardResponse{}
-	status, err := client.doJSON(ctx, "GET", "/api/v1/admin/workers/"+workerID, nil, &resp)
+	status, err := client.doJSON(ctx, "GET", workerReadPath(workerID), nil, &resp)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, fmtExit(ExitUnexpected, "%v", err))
 		return ExitUnexpected

@@ -2,6 +2,7 @@
 package main
 
 import (
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -46,6 +47,18 @@ func safeFirstArg(args []string) string {
 		}
 	}
 	return ""
+}
+
+func workerPath(workerID, action string) string {
+	return "/api/v1/admin/workers/" + url.PathEscape(workerID) + "/" + action
+}
+
+func workerReadPath(workerID string) string {
+	return "/api/v1/admin/workers/" + url.PathEscape(workerID)
+}
+
+func operationPath(operationID string) string {
+	return "/api/v1/admin/operations/" + url.PathEscape(operationID)
 }
 
 // runSSHCheck — GET /api/v1/admin/workers/ssh-check. Prints one row

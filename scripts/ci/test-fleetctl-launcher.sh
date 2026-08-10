@@ -69,4 +69,32 @@ actual_args="$(cat "$ARGS")"
     exit 1
 }
 
+ARGS="$TMP/update-args"
+FLEETCTL_TEST_ARGS="$ARGS" \
+FLEETCTL_TEST_ENV="$ENV_OUT" \
+FLEETCTL_GO_BIN="$MOCK" \
+VELOX_MASTER_URL="https://master.example.test" \
+VELOX_ADMIN_TOKEN='env-token' \
+    "$SCRIPT" update worker-1 ghcr.io/example/worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "manual update"
+expected_args=$'update\nworker-1\nghcr.io/example/worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nmanual update\n--master=https://master.example.test'
+actual_args="$(cat "$ARGS")"
+[[ "$actual_args" == "$expected_args" ]] || {
+    printf 'FAIL: update delegation differs\nwant:\n%s\ngot:\n%s\n' "$expected_args" "$actual_args" >&2
+    exit 1
+}
+
+ARGS="$TMP/rollback-args"
+FLEETCTL_TEST_ARGS="$ARGS" \
+FLEETCTL_TEST_ENV="$ENV_OUT" \
+FLEETCTL_GO_BIN="$MOCK" \
+VELOX_MASTER_URL="https://master.example.test" \
+VELOX_ADMIN_TOKEN='env-token' \
+    "$SCRIPT" rollback worker-1 --digest sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --reason "restore known-good"
+expected_args=$'rollback\nworker-1\n--digest\nsha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n--reason\nrestore known-good\n--master=https://master.example.test'
+actual_args="$(cat "$ARGS")"
+[[ "$actual_args" == "$expected_args" ]] || {
+    printf 'FAIL: rollback delegation differs\nwant:\n%s\ngot:\n%s\n' "$expected_args" "$actual_args" >&2
+    exit 1
+}
+
 echo 'fleetctl launcher delegation: PASS'
