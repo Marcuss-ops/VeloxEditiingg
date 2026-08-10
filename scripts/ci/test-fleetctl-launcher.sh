@@ -125,4 +125,61 @@ actual_args="$(cat "$ARGS")"
     exit 1
 }
 
+ARGS="$TMP/job-inspect-args"
+FLEETCTL_TEST_ARGS="$ARGS" \
+FLEETCTL_TEST_ENV="$ENV_OUT" \
+FLEETCTL_GO_BIN="$MOCK" \
+VELOX_MASTER_URL="https://master.example.test" \
+VELOX_ADMIN_TOKEN='env-token' \
+    "$SCRIPT" job inspect job-1 --json
+expected_args=$'job\ninspect\njob-1\n--json\n--master=https://master.example.test'
+actual_args="$(cat "$ARGS")"
+[[ "$actual_args" == "$expected_args" ]] || {
+    printf 'FAIL: job inspect delegation differs\nwant:\n%s\ngot:\n%s\n' "$expected_args" "$actual_args" >&2
+    exit 1
+}
+
+ARGS="$TMP/job-watch-args"
+FLEETCTL_TEST_ARGS="$ARGS" \
+FLEETCTL_TEST_ENV="$ENV_OUT" \
+FLEETCTL_GO_BIN="$MOCK" \
+VELOX_MASTER_URL="https://master.example.test" \
+VELOX_ADMIN_TOKEN='env-token' \
+    "$SCRIPT" job watch job-1 --timeout 10 --poll 1 --json
+expected_args=$'job\nwatch\njob-1\n--timeout\n10\n--poll\n1\n--json\n--master=https://master.example.test'
+actual_args="$(cat "$ARGS")"
+[[ "$actual_args" == "$expected_args" ]] || {
+    printf 'FAIL: job watch delegation differs\nwant:\n%s\ngot:\n%s\n' "$expected_args" "$actual_args" >&2
+    exit 1
+}
+
+ARGS="$TMP/job-metrics-args"
+FLEETCTL_TEST_ARGS="$ARGS" \
+FLEETCTL_TEST_ENV="$ENV_OUT" \
+FLEETCTL_GO_BIN="$MOCK" \
+VELOX_MASTER_URL="https://master.example.test" \
+VELOX_ADMIN_TOKEN='env-token' \
+    "$SCRIPT" job metrics job-1
+expected_args=$'job\nmetrics\njob-1\n--master=https://master.example.test'
+actual_args="$(cat "$ARGS")"
+[[ "$actual_args" == "$expected_args" ]] || {
+    printf 'FAIL: job metrics delegation differs\nwant:\n%s\ngot:\n%s\n' "$expected_args" "$actual_args" >&2
+    exit 1
+}
+
+printf '{}\n' >"$TMP/payload.json"
+ARGS="$TMP/job-submit-args"
+FLEETCTL_TEST_ARGS="$ARGS" \
+FLEETCTL_TEST_ENV="$ENV_OUT" \
+FLEETCTL_GO_BIN="$MOCK" \
+VELOX_MASTER_URL="https://master.example.test" \
+VELOX_ADMIN_TOKEN='env-token' \
+    "$SCRIPT" job submit --payload "$TMP/payload.json" 2>/dev/null || true
+# A submit invocation must not be delegated to the Go mock. The Bash path
+# reaches its own payload validation before any network call in this fixture.
+[[ ! -s "$ARGS" ]] || {
+    printf 'FAIL: job submit was delegated unexpectedly\n' >&2
+    exit 1
+}
+
 echo 'fleetctl launcher delegation: PASS'

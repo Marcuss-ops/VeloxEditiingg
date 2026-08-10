@@ -109,7 +109,7 @@ resolve_token() {
 # `status --json` is delegated first because its wire output is already a
 # stable machine-readable contract; the human table remains on the legacy
 # path until its output compatibility is migrated explicitly.
-if [[ "$command" == update || "$command" == rollback || "$command" == operations || "$command" == wait-ready ]]; then
+if [[ "$command" == update || "$command" == rollback || "$command" == operations || "$command" == wait-ready || ( "$command" == job && ( "${2:-}" == inspect || "${2:-}" == metrics || "${2:-}" == watch ) ) ]]; then
     delegated_args=("$@")
     # The Go client owns typed parsing, HTTP, polling, terminal states and
     # output for these migrated surfaces. Bash only preserves argv/env.

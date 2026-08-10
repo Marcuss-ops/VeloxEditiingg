@@ -645,6 +645,95 @@ func TestRunOperationsRejectsInconsistentCount(t *testing.T) {
 	}
 }
 
+func TestRunJobWatch_ParsesFlagsAndConverges(t *testing.T) {
+	jobID, timeout, interval, jsonOutput, err := parseJobWatchArgs([]string{"job-1", "--timeout", "10", "--poll=1", "--json"})
+	if err != nil {
+		t.Fatalf("parse job watch: %v", err)
+	}
+	if jobID != "job-1" || timeout != 10*time.Second || interval != time.Second || !jsonOutput {
+		t.Fatalf("parsed job watch = %q/%s/%s/%t", jobID, timeout, interval, jsonOutput)
+	}
+
+	var calls int
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/admin/jobs/job-1/events" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		calls++
+		status := "RUNNING"
+		if calls > 1 {
+			status = "SUCCEEDED"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": status,
+			"events": []map[string]any{{"timestamp": "2026-08-10T00:00:00Z", "event": "started"}},
+		})
+	})
+	defer srv.Close()
+	if got := runJobWatchWithInterval(c, jobID, time.Second, time.Millisecond, true); got != ExitOK || calls != 2 {
+		t.Fatalf("job watch exit/calls = %d/%d, want 0/2", got, calls)
+	}
+}
+
+func TestRunJobInspect_JSONUsesEscapedJobPath(t *testing.T) {
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() != "/api/v1/admin/jobs/job%2Fone" {
+			http.Error(w, "unexpected escaped path: "+r.URL.EscapedPath(), http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"job": map[string]any{"status": "SUCCEEDED"}})
+	})
+	defer srv.Close()
+	if got := runJob(c, []string{"inspect", "job/one", "--json"}); got != ExitOK {
+		t.Fatalf("job inspect exit = %d, want %d", got, ExitOK)
+	}
+}
+
+func TestRunJobWatch_FailedReturnsNonZero(t *testing.T) {
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "FAILED"})
+	})
+	defer srv.Close()
+	if got := runJobWatchWithInterval(c, "job-failed", time.Second, time.Millisecond, false); got != ExitUnexpected {
+		t.Fatalf("failed job watch exit = %d, want %d", got, ExitUnexpected)
+	}
+}
+
+func TestRunJobWatch_CompletedReturnsSuccess(t *testing.T) {
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "COMPLETED"})
+	})
+	defer srv.Close()
+	if got := runJobWatchWithInterval(c, "job-completed", time.Second, time.Millisecond, false); got != ExitOK {
+		t.Fatalf("completed job watch exit = %d, want %d", got, ExitOK)
+	}
+}
+
+func TestRunJobWatch_CancelledReturnsNonZero(t *testing.T) {
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "CANCELLED"})
+	})
+	defer srv.Close()
+	if got := runJobWatchWithInterval(c, "job-cancelled", time.Second, time.Millisecond, false); got != ExitUnexpected {
+		t.Fatalf("cancelled job watch exit = %d, want %d", got, ExitUnexpected)
+	}
+}
+
+func TestRunJobMetrics_UsesMetricsEndpoint(t *testing.T) {
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/admin/jobs/job-1/metrics" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"duration_ms": 42})
+	})
+	defer srv.Close()
+	if got := runJob(c, []string{"metrics", "job-1"}); got != ExitOK {
+		t.Fatalf("job metrics exit = %d, want %d", got, ExitOK)
+	}
+}
+
 func TestRunWaitReady_DigestMismatchTimesOut(t *testing.T) {
 	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
