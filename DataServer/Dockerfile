@@ -75,6 +75,15 @@ RUN go build \
         -o /out/velox-server \
         ./cmd/server
 
+# The production FleetController performs the canonical worker rollout from
+# inside the Master container. Keep its verification and host-operation
+# dependencies in the image rather than relying on incidental host binaries.
+# The version is pinned to the same cosign release used by the CI signing
+# workflows; the worker digest is still verified at operation time.
+RUN mkdir -p /out/bin && \
+    CGO_ENABLED=0 GOBIN=/out/bin \
+    go install github.com/sigstore/cosign/v2/cmd/cosign@v2.4.1
+
 # ─── Stage 2: runtime ──────────────────────────────────────────────────────
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
 
@@ -92,6 +101,7 @@ ARG VELOX_GID=10001
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        openssh-client \
         tzdata \
     && rm -rf /var/lib/apt/lists/*
 
@@ -99,6 +109,7 @@ WORKDIR /app
 
 # Copy the compiled binary straight into /usr/local/bin.
 COPY --from=builder /out/velox-server /usr/local/bin/velox-server
+COPY --from=builder /out/bin/cosign /usr/local/bin/cosign
 
 # Pinned runtime identity so bind-mounted state on the host can be
 # chowned deterministically by the install/deploy scripts.
