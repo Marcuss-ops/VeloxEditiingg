@@ -22,14 +22,22 @@ import (
 func TestIntegration_DeliveryRunnerForwardsOpaqueDestinationID(t *testing.T) {
 	requestBody := make(chan []byte, 1)
 	socialRepo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw, _ := io.ReadAll(r.Body)
-		select {
-		case requestBody <- raw:
-		default:
-		}
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
-		_, _ = w.Write([]byte(`{"social_delivery_id":"runner-opaque-social-1","status":"accepted"}`))
+		switch r.Method {
+		case http.MethodPost:
+			raw, _ := io.ReadAll(r.Body)
+			select {
+			case requestBody <- raw:
+			default:
+			}
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"social_delivery_id":"runner-opaque-social-1","status":"accepted"}`))
+		case http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"delivery_id":"runner-opaque-social-1","publish_status":"published","thumbnail_status":"applied","youtube_video_id":"runner-opaque-social-1"}`))
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	}))
 	defer socialRepo.Close()
 
@@ -45,6 +53,7 @@ func TestIntegration_DeliveryRunnerForwardsOpaqueDestinationID(t *testing.T) {
 		jobID                 = "job-runner-opaque"
 		artifactID            = "artifact-runner-opaque"
 		deliveryID            = "delivery-runner-opaque"
+		publicationID         = "publication-runner-opaque"
 	)
 	if err := db.InsertDeliveryDestination(&store.DeliveryDestination{
 		DestinationID:         localDestinationID,
@@ -84,13 +93,16 @@ func TestIntegration_DeliveryRunnerForwardsOpaqueDestinationID(t *testing.T) {
 					"retry_budget":   3,
 					"metadata": map[string]interface{}{
 						"credential_ref": credentialRef,
-						"publication_id": "publication-runner-opaque",
+						"publication_id": publicationID,
 					},
 				},
 			},
 		},
 	}, 0); err != nil {
 		t.Fatalf("CreateJobWithTask: %v", err)
+	}
+	if err := db.CreatePublicationState(context.Background(), publicationID); err != nil {
+		t.Fatalf("CreatePublicationState: %v", err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	if err := db.InsertArtifact(&store.Artifact{
@@ -121,20 +133,22 @@ func TestIntegration_DeliveryRunnerForwardsOpaqueDestinationID(t *testing.T) {
 	}
 
 	registry := deliveries.NewRegistry()
-	registry.Register(providers.NewSocialGatewayProvider(socialclient.Config{
+	socialGatewayProvider := providers.NewSocialGatewayProvider(socialclient.Config{
 		BaseURL:         socialRepo.URL,
 		CallbackBaseURL: socialRepo.URL,
 		Timeout:         2 * time.Second,
-	}))
+	})
+	registry.Register(socialGatewayProvider)
+	// Keep the integration setup aligned with production while the social
+	// gateway migrates from Deliver to the resumable phase contract.
+	registry.RegisterLegacyPhaseProvider(socialGatewayProvider)
 	runner := deliveries.NewDeliveryRunner(&deliveries.RunnerConfig{
-		PollInterval:  5 * time.Millisecond,
-		LeaseDuration: time.Second,
-		MaxAttempts:   3,
-		ClaimBatch:    1,
-		Concurrency:   1,
-		BackoffSchedule: []time.Duration{
-			10 * time.Millisecond,
-		},
+		PollInterval:    5 * time.Millisecond,
+		LeaseDuration:   time.Second,
+		MaxAttempts:     3,
+		ClaimBatch:      1,
+		Concurrency:     1,
+		BackoffSchedule: []time.Duration{10 * time.Millisecond},
 	}, registry, db, "runner-opaque-integration")
 	runner.WithCredentialVault(vault)
 
