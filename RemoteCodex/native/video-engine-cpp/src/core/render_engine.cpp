@@ -418,7 +418,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             bool muxOk;
             telemetry::ScopedPhase muxPhase(
                 recorder_, telemetry::kOriginEngine, telemetry::kScopeAudioTrack,
-                "engine.mux", "audio", "encode");
+                "engine.mux", "audio", "audio_mux");
             {
                 ScopedTimer t(metrics_, "mux_audio_ms");
                 muxOk = media::muxAudio(videoForMux, downloadedTracks[0].first, finalMuxed, vol, offset);
@@ -518,7 +518,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 bool muxOk;
                 telemetry::ScopedPhase muxPhase(
                     recorder_, telemetry::kOriginEngine, telemetry::kScopeAudioTrack,
-                    "engine.mux", "audio", "encode");
+                    "engine.mux", "audio", "audio_mux");
                 {
                     ScopedTimer t(metrics_, "mux_audio_ms");
                     muxOk = media::muxAudio(videoForMux, mixedAudio, finalMuxed);
