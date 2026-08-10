@@ -35,6 +35,39 @@ func makeCache(t *testing.T, budget int64) *PersistedLocalCache {
 	return c
 }
 
+func TestNewPersistedLocalCacheStartsEmptyWithoutHydration(t *testing.T) {
+	root := t.TempDir()
+	c, err := NewPersistedLocalCache(CacheOptions{Root: root})
+	if err != nil {
+		t.Fatalf("NewPersistedLocalCache: %v", err)
+	}
+
+	// Cache construction is worker bootstrap only: it creates the local
+	// root/index and must never resolve, download, or materialise job assets.
+	// Asset hydration belongs exclusively to AssetDownloadManager.Resolve after
+	// a job has been assigned.
+	if got := c.Stats(); got.Entries != 0 || got.BytesUsed != 0 || got.Hits != 0 || got.Misses != 0 {
+		t.Fatalf("new cache stats = %+v, want an empty, untouched cache", got)
+	}
+
+	entries := 0
+	err = filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path != root && info.Mode().IsRegular() {
+			entries++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk cache root: %v", err)
+	}
+	if entries != 0 {
+		t.Fatalf("cache bootstrap materialised %d files; want zero", entries)
+	}
+}
+
 func writeOnDisk(t *testing.T, c *PersistedLocalCache, hash string, data []byte) {
 	t.Helper()
 	path := c.entryPath(hash)
