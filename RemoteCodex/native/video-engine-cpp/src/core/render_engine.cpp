@@ -496,7 +496,24 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                    << " -c:a aac "
                    << file::shellQuote(mixedAudio.string());
 
-            if (file::runCommand(mixCmd.str())) {
+            bool mixOk;
+            telemetry::ScopedPhase audioEncodePhase(
+                recorder_, telemetry::kOriginEngine, telemetry::kScopeAudioTrack,
+                "engine.audio", "encode", "audio_encode", "audio", "audio_mix_encode");
+            {
+                // This command performs the multi-track filter graph and AAC
+                // encoding together. Keep it as one truthful timing bucket;
+                // do not invent a separate encode duration that the process
+                // does not expose independently.
+                ScopedTimer t(metrics_, "mix_audio_ms");
+                mixOk = file::runCommand(mixCmd.str());
+            }
+            if (mixOk) {
+                audioEncodePhase.Complete();
+            } else {
+                audioEncodePhase.Abort("audio_mix_failed", "failed to mix audio tracks");
+            }
+            if (mixOk) {
                 fs::path finalMuxed = workDir / "final_muxed.mp4";
                 bool muxOk;
                 telemetry::ScopedPhase muxPhase(
