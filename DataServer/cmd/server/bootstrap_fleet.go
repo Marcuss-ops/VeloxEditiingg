@@ -166,6 +166,19 @@ func buildFleet(p *persistenceDeps, workerRegistry *workersreg.Registry, sharedS
 		return nil, nil
 	}
 	registry := fleet.NewExecutorRegistry()
+	for _, binding := range []struct {
+		kind string
+		exec fleet.OperationExecutor
+	}{
+		{kind: fleet.OperationKindDrain, exec: fleet.NewWorkerStateExecutor(workerRegistry, fleet.OperationKindDrain)},
+		{kind: fleet.OperationKindQuarantine, exec: fleet.NewWorkerStateExecutor(workerRegistry, fleet.OperationKindQuarantine)},
+	} {
+		if err := registry.Register(binding.kind, binding.exec); err != nil {
+			return nil, fmt.Errorf("register %s executor: %w", binding.kind, err)
+		}
+	}
+	log.Printf("[BOOTSTRAP] WorkerStateExecutors registered for kinds=%s,%s", fleet.OperationKindDrain, fleet.OperationKindQuarantine)
+
 	controller := fleet.NewFleetController(
 		p.SQLite,
 		registry,

@@ -290,7 +290,9 @@ func isNoopExecutor(exec OperationExecutor) bool {
 // valid for persistence and fail at dispatch with EXECUTOR_NOT_CONFIGURED
 // until their capability is explicitly wired.
 var ProductionRequiredOperationKinds = []string{
-	OperationKindUpdate,
+	OperationKindDrain,
 	OperationKindResume,
+	OperationKindUpdate,
+	OperationKindQuarantine,
 	OperationKindSmoke,
 }

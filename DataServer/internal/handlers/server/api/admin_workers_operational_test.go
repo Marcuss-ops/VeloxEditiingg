@@ -51,6 +51,13 @@ func newOperationalWorkerRegistry(t *testing.T, db *store.SQLiteStore, workerID 
 	return reg
 }
 
+func newOperationalStateExecutorRegistry(reg *workersreg.Registry) *fleet.ExecutorRegistry {
+	executors := fleet.NewExecutorRegistry()
+	_ = executors.Register(fleet.OperationKindDrain, fleet.NewWorkerStateExecutor(reg, fleet.OperationKindDrain))
+	_ = executors.Register(fleet.OperationKindQuarantine, fleet.NewWorkerStateExecutor(reg, fleet.OperationKindQuarantine))
+	return executors
+}
+
 type operationalSmokeExecutor struct {
 	err error
 }
@@ -123,7 +130,7 @@ func operationFromResponse(t *testing.T, w *httptest.ResponseRecorder) MutationR
 func TestOperationalDrain_202LedgerDuplicate409AndPlacementBlock(t *testing.T) {
 	db := newOperationalFleetStore(t)
 	reg := newOperationalWorkerRegistry(t, db, "w-drain-operational")
-	controller := fleet.NewFleetController(db, fleet.NewExecutorRegistry(), time.Second, time.Minute)
+	controller := fleet.NewFleetController(db, newOperationalStateExecutorRegistry(reg), time.Second, time.Minute)
 	r := operationalRouter(reg, controller)
 
 	first := operationalPost(t, r, "/api/v1/admin/workers/w-drain-operational/drain", map[string]string{"reason": "operational drain"})
@@ -189,7 +196,7 @@ func TestOperationalDrain_202LedgerDuplicate409AndPlacementBlock(t *testing.T) {
 func TestOperationalQuarantine_202Duplicate409AndPlacementBlock(t *testing.T) {
 	db := newOperationalFleetStore(t)
 	reg := newOperationalWorkerRegistry(t, db, "w-quarantine-operational")
-	controller := fleet.NewFleetController(db, fleet.NewExecutorRegistry(), time.Second, time.Minute)
+	controller := fleet.NewFleetController(db, newOperationalStateExecutorRegistry(reg), time.Second, time.Minute)
 	r := operationalRouter(reg, controller)
 
 	first := operationalPost(t, r, "/api/v1/admin/workers/w-quarantine-operational/quarantine", map[string]string{"reason": "quarantine test"})
