@@ -149,3 +149,11 @@ func TestExtractAssetKeys_CanonicalClipStockVoiceover(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractAssetKeys_DeferredDriveWireScheme(t *testing.T) {
+	payload := []byte(`{"scenes":[{"clip":{"asset_id":"drive-file-123456","url":"velox-drive://drive-file-123456"}}]}`)
+	got := ExtractAssetKeys(payload)
+	if _, ok := got["drive-file-123456"]; !ok {
+		t.Errorf("missing deferred drive key %q in %v", "drive-file-123456", got)
+	}
+}

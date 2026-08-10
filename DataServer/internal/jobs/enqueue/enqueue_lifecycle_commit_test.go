@@ -83,9 +83,9 @@ func TestEnqueueCreatesJobAndTaskAtomically(t *testing.T) {
 	}
 }
 
-// TestEnqueueDefaultsPreserved verifies the permissive behavior is
-// intact when no Requirements are published: an empty JobRequirements
-// flows through unchanged.
+// TestEnqueuePreservesDeferredDriveAssetWireAndKind verifies the
+// self-sufficient velox-drive:// wire survives enqueue: the scheme carries
+// the kind, and no legacy asset_ref_kind sibling is persisted.
 func TestEnqueuePreservesDeferredDriveAssetWireAndKind(t *testing.T) {
 	t.Parallel()
 	enq := newTestEnqueuer(t)
@@ -99,9 +99,8 @@ func TestEnqueuePreservesDeferredDriveAssetWireAndKind(t *testing.T) {
 		"scenes": []interface{}{map[string]interface{}{
 			"scene_id": "scene-1",
 			"clip": map[string]interface{}{"asset_id": "drive-file-123456",
-				"url":            "velox-asset://drive-file-123456",
-				"asset_ref_kind": "deferred_drive",
-				"duration_ms":    3000,
+				"url":         "velox-drive://drive-file-123456",
+				"duration_ms": 3000,
 			},
 			"voiceover": map[string]interface{}{
 				"asset_id":    "voice-1",
@@ -132,10 +131,13 @@ func TestEnqueuePreservesDeferredDriveAssetWireAndKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	wire := string(encoded)
-	for _, want := range []string{"velox-asset://drive-file-123456", "drive-file-123456", "deferred_drive"} {
+	for _, want := range []string{"velox-drive://drive-file-123456", "drive-file-123456"} {
 		if !strings.Contains(wire, want) {
 			t.Fatalf("persisted payload lost %q: %s", want, wire)
 		}
+	}
+	if strings.Contains(wire, "asset_ref_kind") || strings.Contains(wire, "deferred_drive") {
+		t.Fatalf("persisted payload must not carry legacy asset_ref_kind: %s", wire)
 	}
 }
 

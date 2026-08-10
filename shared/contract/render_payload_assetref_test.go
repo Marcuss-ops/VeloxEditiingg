@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestRenderOnlyPayloadPreservesAssetWireAndDeferredAnnotation(t *testing.T) {
+func TestRenderOnlyPayloadWritesSelfSufficientAssetWire(t *testing.T) {
 	payload := map[string]interface{}{
 		"scenes": []interface{}{
 			map[string]interface{}{
@@ -24,14 +24,16 @@ func TestRenderOnlyPayloadPreservesAssetWireAndDeferredAnnotation(t *testing.T) 
 	scenes := projected["scenes"].([]interface{})
 	scene := scenes[0].(map[string]interface{})
 	clip := scene["clip"].(map[string]interface{})
-	if got := clip["url"]; got != "https://drive.google.com/file/d/drive-file-123456/view" {
+	// The deferred Drive reference is written as its self-sufficient wire
+	// (velox-drive://) — the scheme carries the kind, no sibling annotation.
+	if got := clip["url"]; got != "velox-drive://drive-file-123456" {
 		t.Fatalf("Drive wire URL = %v", got)
 	}
 	if got := clip["asset_id"]; got != "drive-file-123456" {
 		t.Fatalf("Drive asset_id = %v", got)
 	}
-	if got := clip["asset_ref_kind"]; got != "deferred_drive" {
-		t.Fatalf("Drive asset_ref_kind = %v", got)
+	if _, present := clip["asset_ref_kind"]; present {
+		t.Fatalf("legacy asset_ref_kind leaked into renderer payload: %#v", clip)
 	}
 	image := scene["image"].(map[string]interface{})
 	if got := image["url"]; got != "https://cdn.example.test/image.png" {

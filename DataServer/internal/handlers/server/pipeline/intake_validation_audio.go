@@ -12,8 +12,8 @@ func validateSubmitAudioTracks(req SubmitJobRequest) []gin.H {
 	// Per-audio-track validation: at least one of source_url or asset_id
 	// must be non-empty (the Master resolves asset_id → source_url before
 	// the worker sees the payload). When source_url IS provided, it must
-	// match the http(s) + velox-asset:// allow-list. Role must be in the
-	// closed enum (when supplied). Volume in [0.0, 2.0].
+	// match the http(s) + velox-asset:// + velox-drive:// allow-list.
+	// Role must be in the closed enum (when supplied). Volume in [0.0, 2.0].
 	for i, track := range req.AudioTracks {
 		pathPrefix := fmt.Sprintf("audio_tracks.%d", i)
 		trimmedURL := strings.TrimSpace(track.SourceURL)
@@ -24,12 +24,12 @@ func validateSubmitAudioTracks(req SubmitJobRequest) []gin.H {
 				"issue": "empty",
 				"hint":  "provide source_url or asset_id",
 			})
-		} else if trimmedURL != "" && !manifestRefURLRegexp.MatchString(trimmedURL) {
+		} else if trimmedURL != "" && !assetURLRegexp.MatchString(trimmedURL) {
 			details = append(details, gin.H{
 				"path":     pathPrefix + ".source_url",
 				"issue":    "unsupported_scheme",
 				"observed": trimmedURL,
-				"allowed":  []string{"https://", "http://", "velox-asset://"},
+				"allowed":  []string{"https://", "http://", "velox-asset://", "velox-drive://"},
 			})
 		}
 		if track.Role != "" && !containsString(audioRoleValues, track.Role) {

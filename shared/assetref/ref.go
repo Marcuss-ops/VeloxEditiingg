@@ -6,9 +6,20 @@ import (
 	"strings"
 )
 
+// Wire schemes. The scheme IS the wire-level kind: a canonical reference is
+// self-sufficient — `velox-asset://<id>` is a local content-addressed asset,
+// `velox-drive://<fileID>` is a deferred Drive file materialized by the
+// worker through the authenticated master bridge, and an http(s) URL is a
+// remote reference (must be pre-resolved before worker dispatch). There is
+// no sibling annotation and no heuristic: the scheme alone classifies.
+const (
+	SchemeVeloxAsset = "velox-asset" // local, content-addressed asset
+	SchemeVeloxDrive = "velox-drive" // deferred Drive file (worker bridge)
+)
+
 // RefKind identifies where an asset reference is expected to be materialized.
-// The kind is an internal boundary annotation; the legacy payload still carries
-// a string URL or velox-asset:// URI.
+// It mirrors the wire scheme 1:1 and is retained as the in-memory boundary
+// annotation between typed code and the wire string.
 type RefKind string
 
 const (
@@ -18,8 +29,10 @@ const (
 )
 
 // AssetRef is the typed representation of an asset reference at acquisition
-// boundaries. It deliberately marshals as the existing string wire value so
-// embedding it in map[string]interface{} cannot change payload shape.
+// boundaries. It marshals as the self-sufficient string wire value so
+// embedding it in map[string]interface{} cannot change payload shape: the
+// scheme carries the kind (velox-asset:// local, velox-drive:// deferred
+// Drive, http(s):// remote).
 type AssetRef struct {
 	kind  RefKind
 	value string
@@ -33,17 +46,18 @@ func NewLocal(value string) (AssetRef, error) {
 	if err != nil {
 		return AssetRef{}, err
 	}
-	return AssetRef{kind: RefKindLocal, value: id, wire: "velox-asset://" + id}, nil
+	return AssetRef{kind: RefKindLocal, value: id, wire: SchemeVeloxAsset + "://" + id}, nil
 }
 
 // NewDeferredDrive creates a Drive asset reference that will be materialized
-// by the worker through the authenticated master asset bridge.
+// by the worker through the authenticated master asset bridge. The wire is
+// self-sufficient: `velox-drive://<fileID>`.
 func NewDeferredDrive(fileID string) (AssetRef, error) {
 	fileID, err := canonicalAssetID(fileID)
 	if err != nil {
 		return AssetRef{}, fmt.Errorf("assetref: invalid deferred Drive file ID %q: %w", fileID, err)
 	}
-	return AssetRef{kind: RefKindDeferredDrive, value: fileID, wire: "velox-asset://" + fileID}, nil
+	return AssetRef{kind: RefKindDeferredDrive, value: fileID, wire: SchemeVeloxDrive + "://" + fileID}, nil
 }
 
 // NewRemote creates a remote HTTP(S) reference.
@@ -56,22 +70,46 @@ func NewRemote(rawURL string) (AssetRef, error) {
 	return AssetRef{kind: RefKindRemote, value: rawURL, wire: rawURL}, nil
 }
 
+// WireAssetID extracts the asset ID from a canonical velox wire reference.
+// It reports ok=true only for the two velox schemes (local and deferred
+// Drive); http(s) URLs and bare values are not canonical wire references.
+func WireAssetID(reference string) (id string, ok bool) {
+	trimmed := strings.TrimSpace(reference)
+	lower := strings.ToLower(trimmed)
+	for _, scheme := range []string{SchemeVeloxAsset, SchemeVeloxDrive} {
+		prefix := scheme + "://"
+		if strings.HasPrefix(lower, prefix) {
+			id := strings.TrimSpace(trimmed[len(prefix):])
+			return id, id != ""
+		}
+	}
+	return "", false
+}
+
 // Parse classifies a raw source reference before it is converted to the
-// canonical payload. Google Drive file URLs become explicitly deferred;
-// canonical velox-asset references are local unless a payload envelope carries
-// the deferred_drive annotation.
+// canonical payload. Canonical wire schemes (velox-asset:// local,
+// velox-drive:// deferred) are authoritative; Google Drive file URLs become
+// explicitly deferred; http(s) URLs become remote.
 func Parse(raw string) (AssetRef, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return AssetRef{}, ErrEmpty
 	}
-	if strings.HasPrefix(strings.ToLower(raw), "velox-asset://") {
+	lower := strings.ToLower(raw)
+	if strings.HasPrefix(lower, SchemeVeloxDrive+"://") {
+		id, err := canonicalAssetID(raw[len(SchemeVeloxDrive+"://"):])
+		if err != nil {
+			return AssetRef{}, err
+		}
+		return NewDeferredDrive(id)
+	}
+	if strings.HasPrefix(lower, SchemeVeloxAsset+"://") {
 		return NewLocal(raw)
 	}
 	if id, err := DriveFileID(raw); err == nil {
 		return NewDeferredDrive(id)
 	}
-	if strings.HasPrefix(strings.ToLower(raw), "http://") || strings.HasPrefix(strings.ToLower(raw), "https://") {
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
 		return NewRemote(raw)
 	}
 	id, err := canonicalAssetID(raw)
@@ -81,10 +119,19 @@ func Parse(raw string) (AssetRef, error) {
 	return AssetRef{kind: RefKindLocal, value: id, wire: raw}, nil
 }
 
-// ParseWire classifies a canonical wire URI using an optional explicit kind
-// annotation. It is the inverse boundary used by worker materialization.
+// ParseWire classifies a canonical wire reference. The scheme is
+// authoritative (velox-drive:// is always deferred); the explicit kind
+// argument remains only for legacy callers that carry an external annotation
+// for a bare velox-asset:// reference.
 func ParseWire(raw string, kind RefKind) (AssetRef, error) {
 	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(strings.ToLower(raw), SchemeVeloxDrive+"://") {
+		id, err := canonicalAssetID(raw[len(SchemeVeloxDrive+"://"):])
+		if err != nil {
+			return AssetRef{}, err
+		}
+		return NewDeferredDrive(id)
+	}
 	if kind == RefKindDeferredDrive {
 		id, err := canonicalAssetID(raw)
 		if err != nil {
@@ -118,7 +165,9 @@ func (r AssetRef) Value() string { return r.value }
 // IsDeferredDrive reports whether the worker must materialize a Drive file.
 func (r AssetRef) IsDeferredDrive() bool { return r.kind == RefKindDeferredDrive }
 
-// Wire returns the legacy payload representation.
+// Wire returns the self-sufficient wire representation. For local and
+// deferred references the scheme encodes the kind (velox-asset://,
+// velox-drive://); remote references are their http(s) URL.
 func (r AssetRef) Wire() string {
 	if r.wire != "" {
 		return r.wire
@@ -126,10 +175,13 @@ func (r AssetRef) Wire() string {
 	if r.kind == RefKindRemote {
 		return r.value
 	}
-	return "velox-asset://" + r.value
+	if r.kind == RefKindDeferredDrive {
+		return SchemeVeloxDrive + "://" + r.value
+	}
+	return SchemeVeloxAsset + "://" + r.value
 }
 
-// MarshalJSON preserves the pre-existing string wire shape.
+// MarshalJSON emits the self-sufficient string wire shape.
 func (r AssetRef) MarshalJSON() ([]byte, error) {
 	if r.value == "" {
 		return []byte("null"), nil
@@ -137,7 +189,7 @@ func (r AssetRef) MarshalJSON() ([]byte, error) {
 	return json.Marshal(r.Wire())
 }
 
-// UnmarshalJSON accepts the legacy string wire shape and classifies it.
+// UnmarshalJSON accepts the wire string and classifies it by scheme.
 func (r *AssetRef) UnmarshalJSON(data []byte) error {
 	if r == nil {
 		return fmt.Errorf("assetref: nil AssetRef receiver")
@@ -156,8 +208,8 @@ func (r *AssetRef) UnmarshalJSON(data []byte) error {
 
 func canonicalAssetID(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
-	if strings.HasPrefix(strings.ToLower(raw), "velox-asset://") {
-		raw = strings.TrimSpace(raw[len("velox-asset://"):])
+	if id, ok := WireAssetID(raw); ok {
+		raw = id
 	}
 	if raw == "" || strings.ContainsAny(raw, "\\\x00\r\n") {
 		return "", fmt.Errorf("assetref: empty or invalid asset ID")
@@ -168,21 +220,4 @@ func canonicalAssetID(raw string) (string, error) {
 		}
 	}
 	return raw, nil
-}
-
-// IsLikelyDriveFileID is intentionally conservative. It is used only when a
-// legacy canonical payload has no source annotation and the master must retain
-// the existing deferred-Drive compatibility path.
-func IsLikelyDriveFileID(value string) bool {
-	value = strings.TrimSpace(value)
-	if len(value) < 16 || len(value) > 128 {
-		return false
-	}
-	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			continue
-		}
-		return false
-	}
-	return true
 }

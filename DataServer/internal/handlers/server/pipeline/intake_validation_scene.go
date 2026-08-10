@@ -38,9 +38,9 @@ func validateSubmitScenes(req SubmitJobRequest) []gin.H {
 	//
 	// Shape rules (matching apiwire validate tags):
 	//   - URL: must be non-empty after trim and must match the
-	//     http(s) + velox-asset:// scheme allow-list (same regex
-	//     used for manifest_ref.url; the SSRF blocklist layer
-	//     downstream enforces the egress policy separately).
+	//     http(s) + velox-asset:// + velox-drive:// scheme
+	//     allow-list (the self-sufficient wire; the SSRF blocklist
+	//     layer downstream enforces the egress policy separately).
 	//   - SHA256: must be exactly 64 lowercase hex chars.
 	//   - Subtitles.format: closed enum (ass / srt / vtt).
 	//   - Language: 2-byte ISO 639-1 (best-effort — not strictly
@@ -60,12 +60,12 @@ func validateSubmitScenes(req SubmitJobRequest) []gin.H {
 					"path":  pathPrefix + ".url",
 					"issue": "empty",
 				})
-			} else if !manifestRefURLRegexp.MatchString(trimmed) {
+			} else if !assetURLRegexp.MatchString(trimmed) {
 				details = append(details, gin.H{
 					"path":     pathPrefix + ".url",
 					"issue":    "unsupported_scheme",
 					"observed": trimmed,
-					"allowed":  []string{"https://", "http://", "velox-asset://"},
+					"allowed":  []string{"https://", "http://", "velox-asset://", "velox-drive://"},
 				})
 			}
 			if s.Clip.SHA256 != "" && !manifestRefSHA256Regexp.MatchString(s.Clip.SHA256) {
@@ -84,12 +84,12 @@ func validateSubmitScenes(req SubmitJobRequest) []gin.H {
 					"path":  pathPrefix + ".url",
 					"issue": "empty",
 				})
-			} else if !manifestRefURLRegexp.MatchString(trimmed) {
+			} else if !assetURLRegexp.MatchString(trimmed) {
 				details = append(details, gin.H{
 					"path":     pathPrefix + ".url",
 					"issue":    "unsupported_scheme",
 					"observed": trimmed,
-					"allowed":  []string{"https://", "http://", "velox-asset://"},
+					"allowed":  []string{"https://", "http://", "velox-asset://", "velox-drive://"},
 				})
 			}
 			if s.Voiceover.SHA256 != "" && !manifestRefSHA256Regexp.MatchString(s.Voiceover.SHA256) {
@@ -108,12 +108,12 @@ func validateSubmitScenes(req SubmitJobRequest) []gin.H {
 					"path":  pathPrefix + ".url",
 					"issue": "empty",
 				})
-			} else if !manifestRefURLRegexp.MatchString(trimmed) {
+			} else if !assetURLRegexp.MatchString(trimmed) {
 				details = append(details, gin.H{
 					"path":     pathPrefix + ".url",
 					"issue":    "unsupported_scheme",
 					"observed": trimmed,
-					"allowed":  []string{"https://", "http://", "velox-asset://"},
+					"allowed":  []string{"https://", "http://", "velox-asset://", "velox-drive://"},
 				})
 			}
 			if s.Subtitles.SHA256 != "" && !manifestRefSHA256Regexp.MatchString(s.Subtitles.SHA256) {

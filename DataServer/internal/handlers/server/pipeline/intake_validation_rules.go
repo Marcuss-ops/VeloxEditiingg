@@ -82,14 +82,22 @@ var manifestRefSchemaVersions = []string{
 // failure rather than a silent acceptance asymmetry.
 const MaxManifestRefURLBytes = 2048
 
-// manifestRefURLRegexp matches a URL whose scheme is one of http,
-// https, or velox-asset. The schemagen cannot emit a JSON Schema
-// that distinguishes velox-asset:// from arbitrary URIs natively,
-// so the regex is duplicated here (and in the apiwire validate
-// tag) to keep the wire schema and the runtime validator in
-// lockstep. Compile-once at package init so the validator's hot
-// path doesn't pay the regex-compile cost on every request.
+// manifestRefURLRegexp matches a manifest_ref.url whose scheme is one
+// of http, https, or velox-asset (manifests are local registry assets;
+// deferred velox-drive:// manifests are out of scope). The schemagen
+// cannot emit a JSON Schema that distinguishes velox-asset:// from
+// arbitrary URIs natively, so the regex is duplicated here (and in the
+// apiwire validate tag) to keep the wire schema and the runtime
+// validator in lockstep. Compile-once at package init so the
+// validator's hot path doesn't pay the regex-compile cost on every
+// request.
 var manifestRefURLRegexp = regexp.MustCompile(`^(https?://|velox-asset://).+`)
+
+// assetURLRegexp matches a media asset URL whose scheme is one of
+// http, https, velox-asset (local) or velox-drive (deferred Drive).
+// The wire scheme is self-sufficient: velox-drive://<fileID> declares
+// deferred Drive materialization without any sibling annotation.
+var assetURLRegexp = regexp.MustCompile(`^(https?://|velox-asset://|velox-drive://).+`)
 
 // manifestRefSHA256Regexp matches a 64-character lowercase hex
 // string. The hex-only check is intentionally strict (no

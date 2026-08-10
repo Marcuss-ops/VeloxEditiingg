@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"velox-shared/assetref"
 	"velox-shared/compatibility"
 	sharedmedia "velox-shared/media"
 	"velox-shared/payload"
@@ -48,7 +49,10 @@ func canonicalAsset(raw map[string]interface{}) map[string]interface{} {
 	}
 	assetID := strings.TrimSpace(payload.FirstString(raw, "asset_id"))
 	url := strings.TrimSpace(payload.FirstString(raw, "url"))
-	if assetID == "" || url == "" || !strings.HasPrefix(strings.ToLower(url), canonicalAssetURLPrefix) || strings.TrimPrefix(url, canonicalAssetURLPrefix) != assetID {
+	// The wire is self-sufficient: both velox schemes (local velox-asset://
+	// and deferred velox-drive://) must carry the matching asset_id.
+	wireID, isWire := assetref.WireAssetID(url)
+	if assetID == "" || url == "" || !isWire || wireID != assetID {
 		return nil
 	}
 	out := map[string]interface{}{"asset_id": assetID, "url": url}
@@ -60,9 +64,6 @@ func canonicalAsset(raw map[string]interface{}) map[string]interface{} {
 	}
 	if durationMS := canonicalDurationMS(raw); durationMS > 0 {
 		out["duration_ms"] = durationMS
-	}
-	if refKind := strings.TrimSpace(payload.FirstString(raw, "asset_ref_kind")); refKind != "" {
-		out["asset_ref_kind"] = refKind
 	}
 	return out
 }

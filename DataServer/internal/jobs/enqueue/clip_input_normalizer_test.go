@@ -26,20 +26,19 @@ func TestNormalizeClipPayloadPreservesDeferredDriveAssetBoundary(t *testing.T) {
 	scene := canonicalClipScene()
 	clip := scene["clip"].(map[string]interface{})
 	clip["asset_id"] = "drive-file-123456"
-	clip["url"] = "velox-asset://drive-file-123456"
-	clip["asset_ref_kind"] = "deferred_drive"
+	clip["url"] = "velox-drive://drive-file-123456"
 	entries, _, _, _, _, err := normalizeClipPayload(map[string]interface{}{
 		"scenes": []interface{}{scene},
 	})
 	if err != nil {
 		t.Fatalf("normalizeClipPayload: %v", err)
 	}
-	got := entries[0]["clip"].(map[string]interface{})["asset_ref_kind"]
-	if got != "deferred_drive" {
-		t.Fatalf("asset_ref_kind = %v, want deferred_drive", got)
+	normalized := entries[0]["clip"].(map[string]interface{})
+	if normalized["url"] != "velox-drive://drive-file-123456" {
+		t.Fatalf("deferred wire URL changed: %#v", normalized)
 	}
-	if entries[0]["clip"].(map[string]interface{})["url"] != "velox-asset://drive-file-123456" {
-		t.Fatalf("deferred wire URL changed: %#v", entries[0]["clip"])
+	if _, present := normalized["asset_ref_kind"]; present {
+		t.Fatalf("legacy asset_ref_kind must not be carried: %#v", normalized)
 	}
 }
 

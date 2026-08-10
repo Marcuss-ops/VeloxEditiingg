@@ -240,10 +240,16 @@ func rewriteCanonicalAssetMap(ctx context.Context, s *AssetService, item map[str
 		return fmt.Errorf("canonical asset url is required")
 	}
 	reference := strings.TrimSpace(raw)
-	if strings.HasPrefix(strings.ToLower(reference), VeloxAssetScheme+"://") {
-		assetID := strings.TrimSpace(strings.TrimPrefix(reference, VeloxAssetScheme+"://"))
-		if assetID == "" {
-			return fmt.Errorf("canonical asset id is required")
+	// Self-sufficient canonical wire: the scheme carries the kind. The url
+	// is written as-is and the worker classifies by scheme — no sibling
+	// asset_ref_kind annotation and no shape heuristic exist anymore.
+	if assetID, isWire := assetref.WireAssetID(reference); isWire {
+		item["asset_id"] = assetID
+		item["url"] = reference
+		if strings.HasPrefix(strings.ToLower(reference), assetref.SchemeVeloxDrive+"://") {
+			// velox-drive:// is explicitly deferred: the worker bridge
+			// materializes the Drive file, no local asset row required.
+			return nil
 		}
 		if s.repo == nil {
 			return fmt.Errorf("canonical asset registry unavailable")
@@ -253,22 +259,7 @@ func rewriteCanonicalAssetMap(ctx context.Context, s *AssetService, item map[str
 			return fmt.Errorf("lookup canonical asset %q: %w", assetID, err)
 		}
 		if registered == nil || registered.AssetID != assetID {
-			// Compatibility boundary for payloads produced before asset_ref_kind
-			// existed: only a conservative Drive-ID shape may use deferred
-			// materialization. New producers must emit the explicit annotation
-			// below; this fallback is intentionally not a general asset resolver.
-			if !assetref.IsLikelyDriveFileID(assetID) {
-				return fmt.Errorf("canonical asset %q is not registered", assetID)
-			}
-		}
-		item["asset_id"] = assetID
-		item["url"] = VeloxAssetScheme + "://" + assetID
-		if registered == nil || registered.AssetID != assetID {
-			deferred, err := assetref.NewDeferredDrive(assetID)
-			if err != nil {
-				return fmt.Errorf("canonical asset %q is not a registered local asset or deferred Drive asset: %w", assetID, err)
-			}
-			item["asset_ref_kind"] = string(deferred.Kind())
+			return fmt.Errorf("canonical asset %q is not registered; deferred Drive materialization requires the velox-drive:// scheme", assetID)
 		}
 		return nil
 	}
@@ -282,7 +273,6 @@ func rewriteCanonicalAssetMap(ctx context.Context, s *AssetService, item map[str
 		}
 		item["asset_id"] = deferred.ID()
 		item["url"] = deferred.Wire()
-		item["asset_ref_kind"] = string(deferred.Kind())
 		return nil
 	}
 	asset, err := s.ResolveAndRegister(ctx, ResolveAssetCommand{Kind: string(kind), Reference: reference})
@@ -294,7 +284,6 @@ func rewriteCanonicalAssetMap(ctx context.Context, s *AssetService, item map[str
 	}
 	item["asset_id"] = asset.AssetID
 	item["url"] = asset.Reference()
-	item["asset_ref_kind"] = string(assetref.RefKindLocal)
 	return nil
 }
 
@@ -359,7 +348,12 @@ func rewriteStringListField(ctx context.Context, s *AssetService, item map[strin
 
 func rewriteReference(ctx context.Context, s *AssetService, reference string, kind inputsecurity.Kind) (string, error) {
 	reference = strings.TrimSpace(reference)
-	if reference == "" || strings.HasPrefix(strings.ToLower(reference), VeloxAssetScheme+"://") {
+	// Both self-sufficient wire schemes pass through untouched
+	// (velox-asset:// local, velox-drive:// deferred Drive).
+	if reference == "" {
+		return reference, nil
+	}
+	if _, isWire := assetref.WireAssetID(reference); isWire {
 		return reference, nil
 	}
 	asset, err := s.ResolveAndRegister(ctx, ResolveAssetCommand{Kind: string(kind), Reference: reference})

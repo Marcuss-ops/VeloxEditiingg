@@ -144,19 +144,42 @@ func TestCommonAssetResolverColdWarmCacheAcrossMediaKinds(t *testing.T) {
 	}
 }
 
-func TestCommonAssetResolverRejectsUnknownAssetReferenceKind(t *testing.T) {
-	w := &Worker{config: &config.WorkerConfig{MasterURL: "http://127.0.0.1:1", WorkDir: t.TempDir()}, apiClient: api.NewClient("http://127.0.0.1:1")}
-	_, err := w.resolveCommonAssetPayload(context.Background(), map[string]interface{}{
+func TestCommonAssetResolverSchemeIsKindAuthorityOverLegacyAnnotation(t *testing.T) {
+	body := []byte("deferred-drive-bytes")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agent/assets/drive-file-123456" {
+		http.NotFound(w, r)
+		return
+		}
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+	w := &Worker{config: &config.WorkerConfig{MasterURL: server.URL, WorkDir: t.TempDir()}, apiClient: api.NewClient(server.URL)}
+	// The velox-drive:// scheme is self-sufficient. A contradictory legacy
+	// asset_ref_kind sibling (the annotation is retired) must be ignored:
+	// the scheme is the single source of kind authority.
+	payload := map[string]interface{}{
 		"scenes": []interface{}{map[string]interface{}{
 			"clip": map[string]interface{}{
-				"asset_id":       "annotated-asset",
-				"url":            "velox-asset://annotated-asset",
-				"asset_ref_kind": "unknown_kind",
+				"asset_id":       "drive-file-123456",
+				"url":            "velox-drive://drive-file-123456",
+				"asset_ref_kind": "local",
 			},
 		}},
-	})
-	if err == nil || !strings.Contains(err.Error(), "unknown asset_ref_kind") {
-		t.Fatalf("want unknown asset_ref_kind rejection, got %v", err)
+	}
+	resolved, err := w.resolveCommonAssetPayload(context.Background(), payload)
+	if err != nil {
+		t.Fatalf("resolve deferred Drive asset: %v", err)
+	}
+	scenes := resolved["scenes"].([]interface{})
+	clip := scenes[0].(map[string]interface{})["clip"].(map[string]interface{})
+	path, ok := clip["url"].(string)
+	if !ok || strings.HasPrefix(path, "velox-asset://") || strings.HasPrefix(path, "velox-drive://") || !strings.HasPrefix(path, w.config.WorkDir) {
+		t.Fatalf("resolved deferred Drive path = %q", path)
+	}
+	if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("materialized bytes = %q/%v, want %q", got, err, body)
 	}
 }
 
@@ -175,9 +198,8 @@ func TestCommonAssetResolverMaterializesDeferredDriveAssetWithoutEagerMetadata(t
 	payload := map[string]interface{}{
 		"scenes": []interface{}{map[string]interface{}{
 			"clip": map[string]interface{}{
-				"asset_id":       "drive-file-123456",
-				"url":            "velox-asset://drive-file-123456",
-				"asset_ref_kind": "deferred_drive",
+				"asset_id": "drive-file-123456",
+				"url":      "velox-drive://drive-file-123456",
 			},
 		}},
 	}

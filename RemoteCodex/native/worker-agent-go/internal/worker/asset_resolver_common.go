@@ -140,24 +140,33 @@ func (w *Worker) resolveCommonAssetValue(ctx context.Context, value interface{},
 }
 
 func (w *Worker) resolveVerifiedAssetReference(ctx context.Context, reference string, index assetMetadataIndex, field string) (string, error) {
-	assetID, bridged := parseVeloxAssetReference(reference)
+	assetID, refKind, bridged := parseVeloxAssetReference(reference)
 	if !bridged {
-		return "", fmt.Errorf("common asset resolver: %s: raw URL or local path rejected; use velox-asset://", field)
+		return "", fmt.Errorf("common asset resolver: %s: raw URL or local path rejected; use velox-asset:// (local) or velox-drive:// (deferred Drive)", field)
 	}
 	if !validAssetReferenceID(assetID) {
-		return "", fmt.Errorf("common asset resolver: %s: invalid velox-asset:// reference", field)
+		return "", fmt.Errorf("common asset resolver: %s: invalid velox asset reference", field)
 	}
 	metadata, _ := lookupAssetMetadata(index, reference, assetID)
 	if metadata.ID == "" {
 		metadata.ID = assetID
 	}
-	if metadata.Kind != "" && metadata.Kind != assetref.RefKindLocal && metadata.Kind != assetref.RefKindDeferredDrive && metadata.Kind != assetref.RefKindRemote {
-		return "", fmt.Errorf("common asset resolver: %s: unknown asset_ref_kind %q", field, metadata.Kind)
+	// The self-sufficient wire scheme is the kind authority. Index
+	// metadata (from manifest declarations) may carry a kind for the
+	// same reference; it is consistent by construction today but kept
+	// as the override so a future declaration surface cannot silently
+	// downgrade a deferred Drive reference to local.
+	kind := refKind
+	if metadata.Kind != "" {
+		kind = metadata.Kind
 	}
-	if metadata.Kind == assetref.RefKindRemote {
+	if kind != assetref.RefKindLocal && kind != assetref.RefKindDeferredDrive && kind != assetref.RefKindRemote {
+		return "", fmt.Errorf("common asset resolver: %s: unknown asset reference kind %q", field, kind)
+	}
+	if kind == assetref.RefKindRemote {
 		return "", fmt.Errorf("common asset resolver: %s: remote asset must be resolved before worker dispatch", field)
 	}
-	if metadata.Kind == assetref.RefKindDeferredDrive {
+	if kind == assetref.RefKindDeferredDrive {
 		// Deferred Drive assets intentionally arrive without a local asset
 		// row or eager integrity metadata. The master bridge materializes
 		// and verifies the bytes in downloadVeloxAssetWithMetadata.
@@ -195,17 +204,16 @@ func collectAssetMetadata(value interface{}, index assetMetadataIndex) error {
 				continue
 			}
 			ref, ok := raw.(string)
-			if !ok || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(ref)), "velox-asset://") || !isAssetReferenceField(key) {
+			if !ok || !isAssetReferenceField(key) {
+				continue
+			}
+			if _, _, bridged := parseVeloxAssetReference(ref); !bridged {
 				continue
 			}
 			if sha == "" || size <= 0 {
-				// Any explicit annotation must survive metadata collection,
-				// including malformed values, so resolveVerifiedAssetReference
-				// can reject unknown kinds fail-closed. Deferred Drive is the
-				// supported no-integrity exception.
-				if rawKind := strings.TrimSpace(firstString(typed, "asset_ref_kind")); rawKind != "" {
-					registerAssetMetadata(index, ref, typed, sha, size)
-				}
+				// No-integrity references (deferred Drive, folder-backed
+				// assets) resolve through the wire scheme alone at resolve
+				// time — there is no annotation and nothing to index.
 				continue
 			}
 			registerAssetMetadata(index, ref, typed, sha, size)
@@ -239,28 +247,34 @@ func collectAssetMetadata(value interface{}, index assetMetadataIndex) error {
 
 func registerAssetMetadata(index assetMetadataIndex, reference string, fields map[string]interface{}, sha string, size int64) {
 	ref := strings.TrimSpace(reference)
-	assetID, bridged := parseVeloxAssetReference(ref)
+	assetID, kind, bridged := parseVeloxAssetReference(ref)
 	if !bridged || ref == "" {
 		return
 	}
-	kind := assetref.RefKindLocal
-	if rawKind := strings.TrimSpace(firstString(fields, "asset_ref_kind")); rawKind != "" {
-		kind = assetref.RefKind(rawKind)
-	}
-	canonicalRef := "velox-asset://" + assetID
+	canonicalRef := wireForKind(assetID, kind)
 	metadata := assetMetadata{ID: assetID, URI: canonicalRef, Kind: kind, SHA256: strings.TrimSpace(sha), SizeBytes: size}
 	index[ref] = metadata
 	index[canonicalRef] = metadata
 	if id := firstString(fields, "asset_id", "id"); id != "" {
-		index["velox-asset://"+id] = metadata
+		index[wireForKind(id, kind)] = metadata
 	}
+}
+
+// wireForKind renders the canonical self-sufficient wire reference for a
+// kind: velox-asset://<id> for local, velox-drive://<id> for deferred Drive.
+func wireForKind(assetID string, kind assetref.RefKind) string {
+	if kind == assetref.RefKindDeferredDrive {
+		return assetref.SchemeVeloxDrive + "://" + assetID
+	}
+	return assetref.SchemeVeloxAsset + "://" + assetID
 }
 
 func lookupAssetMetadata(index assetMetadataIndex, reference, assetID string) (assetMetadata, bool) {
 	if metadata, ok := index[reference]; ok {
 		return metadata, true
 	}
-	metadata, ok := index["velox-asset://"+assetID]
+	_, kind, _ := parseVeloxAssetReference(reference)
+	metadata, ok := index[wireForKind(assetID, kind)]
 	return metadata, ok
 }
 
@@ -314,13 +328,22 @@ func fieldPath(parent, child string) string {
 	return parent + "." + child
 }
 
-func parseVeloxAssetReference(reference string) (string, bool) {
-	const scheme = "velox-asset://"
+// parseVeloxAssetReference classifies a self-sufficient wire reference.
+// The scheme IS the kind: velox-asset:// → local, velox-drive:// →
+// deferred Drive. Returns (assetID, kind, bridged); bridged=false for
+// anything that is not a canonical velox reference.
+func parseVeloxAssetReference(reference string) (assetID string, kind assetref.RefKind, bridged bool) {
 	trimmed := strings.TrimSpace(reference)
-	if len(trimmed) < len(scheme) || !strings.EqualFold(trimmed[:len(scheme)], scheme) {
-		return "", false
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, assetref.SchemeVeloxDrive+"://") {
+		id := strings.TrimSpace(trimmed[len(assetref.SchemeVeloxDrive+"://"):])
+		return id, assetref.RefKindDeferredDrive, id != ""
 	}
-	return strings.TrimSpace(trimmed[len(scheme):]), true
+	if strings.HasPrefix(lower, assetref.SchemeVeloxAsset+"://") {
+		id := strings.TrimSpace(trimmed[len(assetref.SchemeVeloxAsset+"://"):])
+		return id, assetref.RefKindLocal, id != ""
+	}
+	return "", "", false
 }
 
 func deepCopyAssetValue(value interface{}) (interface{}, error) {

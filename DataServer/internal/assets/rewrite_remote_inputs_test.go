@@ -77,24 +77,25 @@ func TestRewriteRemoteInputPayloadDefersRawDriveURLWithoutEagerRegistration(t *t
 		t.Fatalf("RewriteRemoteInputPayload: %v", err)
 	}
 	clip := payload["scenes"].([]interface{})[0].(map[string]interface{})["clip"].(map[string]interface{})
-	if got := clip["url"]; got != "velox-asset://ABC123" {
-		t.Fatalf("url = %v, want deferred canonical wire URL", got)
+	// Self-sufficient deferred wire: the scheme carries the kind.
+	if got := clip["url"]; got != "velox-drive://ABC123" {
+		t.Fatalf("url = %v, want deferred velox-drive wire URL", got)
 	}
 	if got := clip["asset_id"]; got != "ABC123" {
 		t.Fatalf("asset_id = %v, want ABC123", got)
 	}
-	if got := clip["asset_ref_kind"]; got != "deferred_drive" {
-		t.Fatalf("asset_ref_kind = %v, want deferred_drive", got)
+	if _, present := clip["asset_ref_kind"]; present {
+		t.Fatalf("legacy asset_ref_kind must not be written: %#v", clip)
 	}
 }
 
-func TestRewriteRemoteInputPayloadMarksDeferredDriveCanonicalAsset(t *testing.T) {
+func TestRewriteRemoteInputPayloadPassesExplicitDeferredDriveScheme(t *testing.T) {
 	payload := map[string]interface{}{
 		"scenes": []interface{}{
 			map[string]interface{}{
 				"clip": map[string]interface{}{
 					"asset_id": "drive-file-123456",
-					"url":      "velox-asset://drive-file-123456",
+					"url":      "velox-drive://drive-file-123456",
 				},
 			},
 		},
@@ -104,11 +105,14 @@ func TestRewriteRemoteInputPayloadMarksDeferredDriveCanonicalAsset(t *testing.T)
 		t.Fatalf("RewriteRemoteInputPayload: %v", err)
 	}
 	clip := payload["scenes"].([]interface{})[0].(map[string]interface{})["clip"].(map[string]interface{})
-	if got := clip["asset_ref_kind"]; got != "deferred_drive" {
-		t.Fatalf("asset_ref_kind = %v, want deferred_drive", got)
+	if got := clip["url"]; got != "velox-drive://drive-file-123456" {
+		t.Fatalf("url = %v, want velox-drive wire value", got)
 	}
-	if got := clip["url"]; got != "velox-asset://drive-file-123456" {
-		t.Fatalf("url = %v, want legacy velox wire value", got)
+	if got := clip["asset_id"]; got != "drive-file-123456" {
+		t.Fatalf("asset_id = %v, want drive-file-123456", got)
+	}
+	if _, present := clip["asset_ref_kind"]; present {
+		t.Fatalf("legacy asset_ref_kind must not be written: %#v", clip)
 	}
 }
 

@@ -99,8 +99,12 @@ func ValidateExternalURL(raw string, allowDomains []string, allowLoopbackHTTP bo
 		return nil
 	}
 
-	// Internal asset scheme bypasses the network entirely.
-	if strings.HasPrefix(strings.ToLower(raw), "velox-asset://") {
+	// Internal asset schemes bypass the network entirely: velox-asset:// is
+	// the content-addressed registry and velox-drive:// is the deferred
+	// Drive bridge — both are materialized by the worker through the
+	// authenticated master bridge, never by an egress fetch of the URL
+	// itself.
+	if strings.HasPrefix(strings.ToLower(raw), "velox-asset://") || strings.HasPrefix(strings.ToLower(raw), "velox-drive://") {
 		return nil
 	}
 

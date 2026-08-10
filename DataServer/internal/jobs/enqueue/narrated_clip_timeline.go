@@ -13,8 +13,6 @@ import (
 	"velox-shared/payload"
 )
 
-const canonicalAssetURLPrefix = "velox-asset://"
-
 // ErrCanonicalAssetDurationUnavailable is the stable classification for a
 // canonical asset whose duration is neither declared nor probeable. Callers
 // can use errors.Is while retaining the scene/asset context in the wrapped

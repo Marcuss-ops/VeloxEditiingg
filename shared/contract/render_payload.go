@@ -159,20 +159,12 @@ func canonicalAsset(url string, duration interface{}) map[string]interface{} {
 	if err != nil {
 		return map[string]interface{}{"url": strings.TrimSpace(url)}
 	}
-	wire := ref.Wire()
-	if ref.IsDeferredDrive() {
-		// Preserve the historical source URL in this renderer projection;
-		// enqueue rewriting owns conversion to velox-asset://. The optional
-		// annotation makes the deferred boundary explicit without changing
-		// the existing URL value.
-		wire = strings.TrimSpace(url)
-	}
-	asset := map[string]interface{}{"url": wire}
-	if ref.ID() != "" && (strings.HasPrefix(strings.ToLower(strings.TrimSpace(url)), "velox-asset://") || ref.IsDeferredDrive()) {
+	// The wire is self-sufficient: the scheme encodes the kind
+	// (velox-asset:// local, velox-drive:// deferred Drive). No sibling
+	// annotation is written — the worker classifies by scheme alone.
+	asset := map[string]interface{}{"url": ref.Wire()}
+	if ref.ID() != "" {
 		asset["asset_id"] = ref.ID()
-	}
-	if ref.IsDeferredDrive() {
-		asset["asset_ref_kind"] = string(ref.Kind())
 	}
 	if duration != nil {
 		switch value := duration.(type) {
