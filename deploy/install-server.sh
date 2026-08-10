@@ -172,6 +172,16 @@ if [[ -d /opt/velox/certs ]]; then
     find /opt/velox/certs -type f -name '*.key' -exec chown root:"${IMAGE_GID}" {} + -exec chmod 640 {} +
     find /opt/velox/certs -type f -name '*.crt' -exec chown root:"${IMAGE_GID}" {} + -exec chmod 640 {} +
 fi
+# The FleetController performs the canonical worker rollout from inside the
+# Master container. Its SSH adapter uses this mounted key and known_hosts;
+# keep the private key non-public while allowing only the image group to
+# traverse the directory and read the files.
+if [[ -d /etc/velox/ssh ]]; then
+    find /etc/velox/ssh -type d -exec chown root:"${IMAGE_GID}" {} + -exec chmod g+rx {} +
+    find /etc/velox/ssh -type f -name '*.key' -exec chown root:"${IMAGE_GID}" {} + -exec chmod 640 {} +
+    find /etc/velox/ssh -type f -name 'id_*' -exec chown root:"${IMAGE_GID}" {} + -exec chmod 640 {} +
+    find /etc/velox/ssh -type f -name 'known_hosts' -exec chown root:"${IMAGE_GID}" {} + -exec chmod 640 {} +
+fi
 ok "Directory tree ready: /opt/velox/current"
 
 # ─── Step 3: Deploy systemd service ─────────────────────────────────────────
