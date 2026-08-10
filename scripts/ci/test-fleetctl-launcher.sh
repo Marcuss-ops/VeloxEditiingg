@@ -6,6 +6,10 @@ SCRIPT="$ROOT/scripts/fleetctl"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+test -x "$SCRIPT"
+test -x "$ROOT/scripts/fleetctl-legacy"
+bash -n "$SCRIPT" "$ROOT/scripts/fleetctl-legacy"
+
 MOCK="$TMP/fleetctl"
 ARGS="$TMP/args"
 ENV_OUT="$TMP/env"
@@ -169,16 +173,26 @@ actual_args="$(cat "$ARGS")"
 
 printf '{}\n' >"$TMP/payload.json"
 ARGS="$TMP/job-submit-args"
+LEGACY_ARGS="$TMP/legacy-args"
+LEGACY="$TMP/legacy"
+cat >"$LEGACY" <<'LEGACY'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" >"$FLEETCTL_TEST_LEGACY_ARGS"
+LEGACY
+chmod +x "$LEGACY"
 FLEETCTL_TEST_ARGS="$ARGS" \
+FLEETCTL_TEST_LEGACY_ARGS="$LEGACY_ARGS" \
 FLEETCTL_TEST_ENV="$ENV_OUT" \
 FLEETCTL_GO_BIN="$MOCK" \
+FLEETCTL_LEGACY_BIN="$LEGACY" \
 VELOX_MASTER_URL="https://master.example.test" \
 VELOX_ADMIN_TOKEN='env-token' \
-    "$SCRIPT" job submit --payload "$TMP/payload.json" 2>/dev/null || true
-# A submit invocation must not be delegated to the Go mock. The Bash path
-# reaches its own payload validation before any network call in this fixture.
-[[ ! -s "$ARGS" ]] || {
-    printf 'FAIL: job submit was delegated unexpectedly\n' >&2
+    "$SCRIPT" job submit --payload "$TMP/payload.json"
+expected_args=$'job\nsubmit\n--payload\n'"$TMP/payload.json"
+actual_args="$(cat "$LEGACY_ARGS")"
+[[ "$actual_args" == "$expected_args" ]] || {
+    printf 'FAIL: job submit was not forwarded to legacy bridge\nwant:\n%s\ngot:\n%s\n' "$expected_args" "$actual_args" >&2
     exit 1
 }
 
