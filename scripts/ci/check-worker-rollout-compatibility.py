@@ -295,19 +295,23 @@ def test_current_worker_release_provenance_and_operator_bridge() -> None:
         "Verify checkout is the event commit",
         '"commit":         "${{ github.sha }}"',
     )
-    # scripts/fleetctl is the canonical Master-API CLI: update/rollback POST
-    # /api/v1/admin/workers/{worker_id}/update with a pinned target_digest and
-    # poll the fleet_operations ledger. The Ansible host-rollout bridge
-    # (FLEET_INVENTORY / ansible-playbook / rollout-worker-digest.yml) is gone.
+    # scripts/fleetctl is only the thin executable launcher now. The canonical
+    # Master-API implementation lives in the typed Go fleetctl package:
+    # update/rollback POST /api/v1/admin/workers/{worker_id}/update with a
+    # pinned target_digest and poll the fleet_operations ledger. The Ansible
+    # host-rollout bridge (FLEET_INVENTORY / ansible-playbook /
+    # rollout-worker-digest.yml) is gone.
     require(
-        "scripts/fleetctl",
+        "DataServer/cmd/fleetctl/handlers_helpers.go",
         "/api/v1/admin/workers/",
-        "target_digest",
         "/api/v1/admin/operations/",
     )
-    assert "FLEET_INVENTORY" not in text("scripts/fleetctl")
-    assert "ansible-playbook" not in text("scripts/fleetctl")
-    assert "ansible-inventory" not in text("scripts/fleetctl")
+    require("DataServer/cmd/fleetctl/handlers_mutations.go", "target_digest")
+    launcher = text("scripts/fleetctl")
+    assert "exec" in launcher
+    assert "FLEET_INVENTORY" not in launcher
+    assert "ansible-playbook" not in launcher
+    assert "ansible-inventory" not in launcher
 
 
 def test_removal_plan_matches_gate_contract() -> None:
