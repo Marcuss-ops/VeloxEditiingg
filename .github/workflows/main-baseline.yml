@@ -124,7 +124,7 @@ jobs:
         # `Error return value of .* is not checked` substring.
         uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.61.0
+          version: v1.64.8
           args: --timeout=5m
           # Cache by go.work so the binary is reused across runs of
           # the same toolchain.
