@@ -28,6 +28,7 @@ type Request struct {
 	Fit         string
 	Layers      []plan.Layer
 	Subtitles   []plan.SubtitleTrack
+	CopyOnly    bool
 }
 
 // ItemInput is a single timeline item.
@@ -177,6 +178,7 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 		Version:     1,
 		JobID:       jobID,
 		Canvas:      plan.DefaultCanvas(),
+		CopyOnly:    req.CopyOnly,
 		Timeline:    timeline_items,
 		AudioTracks: audioTracks,
 		Layers:      req.Layers,

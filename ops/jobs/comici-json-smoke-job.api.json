@@ -8,7 +8,7 @@
   "output": {
     "width": 1920,
     "height": 1080,
-    "fps": 30,
+    "fps": 24,
     "format": "mp4"
   },
   "delivery_plan": [

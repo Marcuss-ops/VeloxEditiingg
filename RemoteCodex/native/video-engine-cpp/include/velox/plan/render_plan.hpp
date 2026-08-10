@@ -60,6 +60,7 @@ struct RenderPlan {
     int version{1};
     std::string job_id;
     CanvasSpec canvas;
+    bool copy_only{false};
     std::vector<TimelineItem> timeline;
     std::vector<AudioTrack> audio_tracks;
     std::vector<SubtitleTrack> subtitle_tracks;

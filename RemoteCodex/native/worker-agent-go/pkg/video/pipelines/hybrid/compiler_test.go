@@ -134,6 +134,27 @@ func TestCompile_ItemsWithoutAudio_ProducesSilentTimeline(t *testing.T) {
 	}
 }
 
+func TestCompile_ClipStockUsesStrictCopyOnlyPlan(t *testing.T) {
+	input := map[string]interface{}{
+		"video_mode": "clip_stock",
+		"items": []interface{}{
+			map[string]interface{}{
+				"type":     "video",
+				"url":      "worker-local/canonical-clip.mp4",
+				"duration": 6.0,
+			},
+		},
+	}
+
+	compiled, err := Compile(context.Background(), "job-copy-only", input, "/tmp/out.mp4", nil)
+	if err != nil {
+		t.Fatalf("Compile(clip_stock): %v", err)
+	}
+	if !compiled.CopyOnly {
+		t.Fatal("clip_stock must compile to a strict copy-only render plan")
+	}
+}
+
 func TestCompile_VideoItemCanPreserveOriginalAudio(t *testing.T) {
 	input := map[string]interface{}{
 		"items": []interface{}{

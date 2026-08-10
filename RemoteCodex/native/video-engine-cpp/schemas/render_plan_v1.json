@@ -36,6 +36,11 @@
       },
       "required": ["width", "height", "fps"]
     },
+    "copy_only": {
+      "type": "boolean",
+      "default": false,
+      "description": "Reject incompatible video assets instead of transcoding them"
+    },
     "timeline": {
       "type": "array",
       "minItems": 1,

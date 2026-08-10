@@ -257,6 +257,15 @@ int cmdFullVideo(int argc, char** argv) {
         || !introClipPaths.empty()
         || !stockClipPaths.empty();
 
+    // The legacy full-video entrypoint must obey the same contract as the
+    // render-plan path: clip jobs are copy-only. The output contract supplies
+    // the expected canvas rate; the renderer does not silently normalize it.
+    media::SceneSegmentParams clipParams;
+    clipParams.width = static_cast<int>(json::extractJsonNumberValue(requestJson, "width", 1920.0));
+    clipParams.height = static_cast<int>(json::extractJsonNumberValue(requestJson, "height", 1080.0));
+    clipParams.fps = static_cast<int>(json::extractJsonNumberValue(requestJson, "fps", 30.0));
+    clipParams.copy_only = clipMode;
+
     // Download voiceover (with asset cache if configured)
     if (!voiceoverPaths.empty()) {
         fs::path audioPath = workDir / "voiceover_audio";
@@ -290,7 +299,7 @@ int cmdFullVideo(int argc, char** argv) {
                 return 1;
             }
             fs::path segmentPath = workDir / ("segment_" + std::to_string(segmentIndex) + ".mp4");
-            if (!media::buildVideoSegment(clipPath, segmentPath, 4.0)) {
+            if (!media::buildVideoSegment(clipPath, segmentPath, 4.0, clipParams)) {
                 std::cerr << "errore: failed to build intro clip segment " << i << "\n";
                 return 1;
             }
@@ -313,7 +322,7 @@ int cmdFullVideo(int argc, char** argv) {
             }
             fs::path segmentPath = workDir / ("segment_" + std::to_string(segmentIndex) + ".mp4");
             double segDuration = clip.duration_seconds > 0.0 ? clip.duration_seconds : 4.0;
-            if (!media::buildVideoSegment(clipPath, segmentPath, segDuration)) {
+            if (!media::buildVideoSegment(clipPath, segmentPath, segDuration, clipParams)) {
                 std::cerr << "errore: failed to build clip segment " << i << "\n";
                 return 1;
             }
@@ -342,7 +351,7 @@ int cmdFullVideo(int argc, char** argv) {
                 segmentDuration = std::min(segmentDuration, voiceoverDurationSeconds - stockCoveredSeconds);
                 if (segmentDuration <= 0.0) break;
             }
-            if (!media::buildVideoSegment(clipPath, segmentPath, segmentDuration)) {
+            if (!media::buildVideoSegment(clipPath, segmentPath, segmentDuration, clipParams)) {
                 std::cerr << "errore: failed to build stock clip segment " << stockIndex << "\n";
                 return 1;
             }

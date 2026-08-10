@@ -9,6 +9,7 @@ struct SceneSegmentParams {
     int width{1920};
     int height{1080};
     int fps{30};
+    bool copy_only{false};
     bool slow_zoom{true};
     std::string scale_mode{"cover"}; // cover, contain, stretch
     std::string color_hex{""};

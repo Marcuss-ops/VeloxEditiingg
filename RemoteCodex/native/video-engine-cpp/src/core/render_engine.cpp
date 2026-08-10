@@ -112,6 +112,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         const auto& item = plan.timeline[i];
         fs::path segmentOut = workDir / ("segment_" + std::to_string(i) + ".mp4");
         auto params = makeParams(plan.canvas, item.transform, extractColorHex(item.source));
+        params.copy_only = plan.copy_only;
 
         const int64_t expected_us = static_cast<int64_t>(item.duration_seconds * 1'000'000.0);
         total_duration_seconds += item.duration_seconds;
@@ -198,6 +199,10 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         }
 
         if (args_only.empty()) {
+            if (params.copy_only && std::holds_alternative<plan::VideoSource>(item.source)) {
+                result.error = "copy_only media contract rejected video segment " + std::to_string(i);
+                return failRender("copy_only_media_incompatible");
+            }
             result.error = "unknown segment source type for " + std::to_string(i);
             return failRender("unknown_segment_source");
         }

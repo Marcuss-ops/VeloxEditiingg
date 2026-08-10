@@ -9,6 +9,7 @@ type RenderPlan struct {
 	Version     int             `json:"version"`
 	JobID       string          `json:"job_id"`
 	Canvas      CanvasSpec      `json:"canvas"`
+	CopyOnly    bool            `json:"copy_only,omitempty"`
 	Timeline    []TimelineItem  `json:"timeline"`
 	AudioTracks []AudioTrack    `json:"audio_tracks"`
 	Layers      []Layer         `json:"layers,omitempty"`

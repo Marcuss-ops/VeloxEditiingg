@@ -165,6 +165,84 @@ double probeMediaDurationSeconds(const fs::path& mediaPath) {
     }
 }
 
+static bool parseFrameRate(const std::string& value, double& out) {
+    const auto slash = value.find('/');
+    try {
+        if (slash == std::string::npos) {
+            out = std::stod(value);
+        } else {
+            const double numerator = std::stod(value.substr(0, slash));
+            const double denominator = std::stod(value.substr(slash + 1));
+            if (denominator == 0.0) {
+                return false;
+            }
+            out = numerator / denominator;
+        }
+    } catch (...) {
+        return false;
+    }
+    return out > 0.0;
+}
+
+static bool nativeVideoStreamCopyCompatible(
+    const fs::path& clipPath,
+    int width,
+    int height,
+    int fps,
+    double requestedDuration) {
+    if (clipPath.empty() || !fs::exists(clipPath) || requestedDuration <= 0.0) {
+        return false;
+    }
+
+    std::ostringstream probe;
+    probe << "ffprobe -v error -select_streams v:0 "
+          << "-show_entries stream=codec_name,width,height,avg_frame_rate,pix_fmt "
+          << "-of csv=p=0 " << file::shellQuote(clipPath.string());
+    const std::string output = json::trim(file::captureCommandOutput(probe.str()));
+    if (output.empty()) {
+        return false;
+    }
+
+    std::istringstream fields(output);
+    std::string codec;
+    std::string widthText;
+    std::string heightText;
+    std::string pixelFormat;
+    std::string frameRateText;
+    if (!std::getline(fields, codec, ',') ||
+        !std::getline(fields, widthText, ',') ||
+        !std::getline(fields, heightText, ',') ||
+        !std::getline(fields, pixelFormat, ',') ||
+        !std::getline(fields, frameRateText, ',')) {
+        return false;
+    }
+
+    double sourceFPS = 0.0;
+    int sourceWidth = 0;
+    int sourceHeight = 0;
+    try {
+        sourceWidth = std::stoi(widthText);
+        sourceHeight = std::stoi(heightText);
+    } catch (...) {
+        return false;
+    }
+    if (!parseFrameRate(frameRateText, sourceFPS)) {
+        return false;
+    }
+
+    // The canonical clip corpus is H.264, yuv420p, 1920x1080 at 24 fps.
+    // Keep this guard conservative: copy-only callers must reject incompatible
+    // media instead of producing a mixed concat stream.
+    if (json::trim(codec) != "h264" || json::trim(pixelFormat) != "yuv420p" ||
+        sourceWidth != width || sourceHeight != height ||
+        std::abs(sourceFPS - static_cast<double>(fps)) > 0.001) {
+        return false;
+    }
+
+    const double sourceDuration = probeMediaDurationSeconds(clipPath);
+    return sourceDuration > 0.0 && requestedDuration <= sourceDuration + 0.05;
+}
+
 bool hasAudioStream(const fs::path& mediaPath) {
     if (mediaPath.empty() || !fs::exists(mediaPath)) {
         return false;
@@ -266,6 +344,29 @@ std::string buildVideoSegmentArgs(
 ) {
     int w, h, fps;
     canvasDims(params, w, h, fps);
+
+    if (params.copy_only && !nativeVideoStreamCopyCompatible(clipPath, w, h, fps, duration)) {
+        // copy_only is a strict contract. The caller must reject or repair
+        // the asset upstream; this renderer must never silently normalize it.
+        return {};
+    }
+
+    if (params.copy_only) {
+        std::ostringstream copyCmd;
+        copyCmd << "-i " << file::shellQuote(clipPath.string())
+                << " -t " << duration
+                << " -map 0:v:0";
+        if (includeAudio) {
+            copyCmd << " -map 0:a:0? -c:a copy";
+        } else {
+            copyCmd << " -an";
+        }
+        copyCmd << " -c:v copy -avoid_negative_ts make_zero"
+                << " -reset_timestamps 1 "
+                << file::shellQuote(segmentPath.string());
+        return copyCmd.str();
+    }
+
     const std::string size = std::to_string(w) + ":" + std::to_string(h);
 
     // contain (default for clips) — fit + pad
@@ -331,6 +432,11 @@ bool buildVideoSegment(const fs::path& clipPath, const fs::path& segmentPath, do
         return false;
     }
     const std::string args = buildVideoSegmentArgs(clipPath, segmentPath, duration, params);
+    if (args.empty()) {
+        std::cerr << "copy-only media contract rejected video segment: "
+                  << clipPath << "\n";
+        return false;
+    }
     const std::string cmd = "ffmpeg -y -hide_banner -loglevel error " + args;
     file::CommandResult r = file::runCommandTimed(cmd);
     std::cerr << "{\"metric\":\"ffmpeg.clip_segment_ms\",\"value\":" << r.wall_ms

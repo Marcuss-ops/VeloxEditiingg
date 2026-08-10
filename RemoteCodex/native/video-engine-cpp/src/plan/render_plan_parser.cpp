@@ -32,6 +32,7 @@ std::optional<RenderPlan> parseRenderPlan(const std::string& jsonStr) {
     plan.canvas.width = static_cast<int>(ju::extractJsonNumberValue(jsonStr, "width", 1920.0));
     plan.canvas.height = static_cast<int>(ju::extractJsonNumberValue(jsonStr, "height", 1080.0));
     plan.canvas.fps = static_cast<int>(ju::extractJsonNumberValue(jsonStr, "fps", 30.0));
+    plan.copy_only = ju::extractJsonBoolValue(jsonStr, "copy_only", false);
 
     // Timeline
     std::string timelineBlock = ju::extractArrayBlock(jsonStr, "timeline");

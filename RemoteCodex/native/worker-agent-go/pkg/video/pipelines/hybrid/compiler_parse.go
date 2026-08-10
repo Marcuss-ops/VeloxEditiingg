@@ -24,6 +24,7 @@ func parseRequest(input map[string]interface{}) *Request {
 		Fit:       toStringDefault(input["fit"], "contain"),
 		Layers:    parseLayers(input["layers"]),
 		Subtitles: parseSceneSubtitleTracks(input),
+		CopyOnly:  toBoolDefault(input["copy_only"], false) || strings.EqualFold(toString(input["video_mode"]), "clip_stock"),
 	}
 
 	if rawTracks, ok := input["audio_tracks"].([]interface{}); ok {
