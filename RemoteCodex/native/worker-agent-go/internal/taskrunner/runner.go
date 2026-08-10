@@ -289,8 +289,15 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		}
 		return r.completeError(rec, report, appendPhase, CodeExecuteFailed, execErr.Error()), nil
 	default:
-		// Executor returned a non-"succeeded" status string.
-		return r.completeError(rec, report, appendPhase, CodeExecuteFailed,
+		// Executor returned a non-"succeeded" status string. Preserve a
+		// canonical executor error code when one is supplied; otherwise use
+		// the generic runner code. This keeps domain failures such as the
+		// strict copy-only contract visible through the central report.
+		code := result.ErrorCode
+		if code == "" {
+			code = CodeExecuteFailed
+		}
+		return r.completeError(rec, report, appendPhase, code,
 			fmt.Sprintf("executor returned non-success status %q (code=%q detail=%q)",
 				result.Status, result.ErrorCode, result.ErrorDetail)), nil
 	}

@@ -327,6 +327,29 @@ func TestRunner_ExecutorReturnsNonSuccessStatus(t *testing.T) {
 	}
 }
 
+func TestRunner_ExecutorErrorCodeSurvivesNonSuccessMapping(t *testing.T) {
+	exec := &fakeExec{
+		desc: makeDesc("copy-only.v1", 1),
+		executeFn: func(_ context.Context, _ executor.ExecutionContext, _ executor.TaskSpec) (executor.ExecutionResult, error) {
+			return executor.ExecutionResult{
+				Status:      "failed",
+				ErrorCode:   "COPY_ONLY_MEDIA_INCOMPATIBLE",
+				ErrorDetail: "video segment 0 is 30fps; expected 24fps",
+			}, nil
+		},
+	}
+	rep, err := newTestRunner(exec).Run(context.Background(), goodSpec("copy-only.v1"))
+	if err != nil {
+		t.Fatalf("Run returned err: %v", err)
+	}
+	if rep.ErrorCode != "COPY_ONLY_MEDIA_INCOMPATIBLE" {
+		t.Fatalf("ErrorCode = %q, want COPY_ONLY_MEDIA_INCOMPATIBLE", rep.ErrorCode)
+	}
+	if !strings.Contains(rep.ErrorDetail, "30fps") {
+		t.Errorf("ErrorDetail = %q, want executor detail", rep.ErrorDetail)
+	}
+}
+
 // TestRunner_NewRequiresRegistry: NewTaskRunner(nil, ...) panics instead of
 // silently misbehaving.
 func TestRunner_NewRequiresRegistry(t *testing.T) {
