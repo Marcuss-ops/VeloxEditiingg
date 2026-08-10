@@ -40,7 +40,7 @@ type SocialGatewayProvider struct {
 
 // NewSocialGatewayProvider constructs a SocialGatewayProvider that
 // owns a long-lived socialclient.Client. The cfg drives the client's
-// BaseURL, APIKey, CallbackBaseURL, Timeout, and MaxRetries.
+// BaseURL, APIKey, CallbackBaseURL, and Timeout.
 //
 // Callers that have not yet wired social_repo (dev / pre-rollout) can
 // pass a Config{} (BaseURL="") — the resulting provider returns
