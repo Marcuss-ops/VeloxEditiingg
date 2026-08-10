@@ -8,13 +8,14 @@
 > `task_attempts.id` è già generato master-side PRIMA dell'offerta
 > e NON è mai derivato dal `lease_id`. Prove in linea:
 >
-> - `RemoteCodex/native/worker-agent-go/internal/worker/job_executor.go:159`
+> - `RemoteCodex/native/worker-agent-go/internal/worker/task_result_builder.go:49`
 >   (`submitTaskResult` consuma un `AttemptID` distinto dal `LeaseID`).
-> - `DataServer/internal/grpcserver/handler_jobs.go:118` (crea
->   `taskattempts.TaskAttempt.ID = uuid.NewString()` lato master prima
->   di inviare il grant).
-> - `DataServer/internal/store/sqlite_task_attempt_repository.go` (la
->   `id` è UUID primario, completamente disaccoppiato da `lease_id`).
+> - `DataServer/internal/store/sqlite_task_atomic.go:128-181`
+>   (`ClaimNextWithAttemptAtomic` genera l'identità e persiste il
+>   `TaskAttempt PENDING` prima dell'offerta).
+> - `DataServer/internal/store/sqlite_task_lease_claim.go`
+>   (`ClaimTaskForWorkerAtomic` applica lo stesso contratto al placement
+>   specifico).
 >
 > **Nessuna modifica di codice è richiesta per chiudere §P0.3.**
 > La presente PR è esclusivamente documentale: il design sotto è
@@ -37,16 +38,17 @@
 > **Branch:** `cutover/pr-03-canonical-attempt-identity`
 > **Dipendenze:** nessuna (chiude P0.3 prima di PR-04 atomic acceptance).
 
-## Contesto
+## Contesto storico
 
-Nel flusso attuale il `TaskOffer` usa il **lease_id come attempt_id**;
-solo successivamente, dopo `TaskAccepted`, il master crea un
-`TaskAttempt` con UUID nuovo. Il worker conserva l'Attempt ID
-iniziale, mentre il DB ne contiene uno diverso. Conseguenza:
+Il flusso pre-PR-2 poteva confondere `lease_id` e `attempt_id` oppure creare
+l'Attempt solo dopo `TaskAccepted`. Il percorso corrente su `main` non lo fa:
+`attempt_id` è generato dal Master durante il claim, viene scritto su `tasks`,
+viene usato per il `TaskAttempt PENDING` e viene inviato nel `TaskOffer`. Il campo
+canonico di assegnazione è `tasks.worker_id`/`task_attempts.worker_id`;
+`assigned_worker_id` non è una colonna o un modello persistente corrente.
 
-- report non correlabile in modo forte,
-- `attempt_id` non è una chiave autorevole,
-- validazione report debole (possibile accettazione di report stale).
+Il worker conserva e riusa quell'identità; il Master valida la tupla completa
+prima di accettare TaskAccepted e TaskResult.
 
 ## Scope
 
@@ -57,19 +59,36 @@ iniziale, mentre il DB ne contiene uno diverso. Conseguenza:
 - Validare ogni `TaskResult` richiedendo la coincidenza esatta di
   `task_id`, `attempt_id`, `job_id`, `worker_id`, `lease_id`.
 
-## Files to touch
+## Files and symbols verified on `main`
+
+Il percorso corrente è già implementato in questi punti:
 
 ```text
-proto/velox/control/worker_control.proto                  # regen descriptor
-velox-server/internal/taskgraph/lifecycle.go              # generazione Attempt ID
-velox-server/internal/taskattempts/repository*.go         # persistence PENDING
-velox-server/internal/taskgraph/dispatch.go (o simile)    # invio TaskOffer
-velox-server/internal/grpcserver/handler_workers.go       # TaskResult validation
-RemoteCodex/native/worker-agent-go/internal/worker/worker.go    # consuma Attempt ID
-RemoteCodex/native/worker-agent-go/internal/worker/job_executor.go
-RemoteCodex/native/worker-agent-go/internal/transport/grpc_stream.go
-scripts/gen-proto.sh                                       # rigenerare pb.go
+DataServer/internal/store/sqlite_task_atomic.go
+  ClaimNextWithAttemptAtomic
+
+DataServer/internal/store/sqlite_task_lease_claim.go
+  ClaimTaskForWorkerAtomic
+
+DataServer/internal/grpcserver/handler_placement.go:157
+  sendClaimedTaskOffer
+
+DataServer/internal/grpcserver/handler_accept.go:39
+  handleTaskAccepted
+
+DataServer/internal/grpcserver/handler_result.go:42
+  handleTaskResult
+
+RemoteCodex/native/worker-agent-go/internal/worker/task_result_builder.go:49
+  submitTaskResult
 ```
+
+Il protobuf non richiede una modifica per questo contratto: `TaskOffer` e
+`TaskResult` trasportano già `attempt_id`; il codice generato in
+`shared/controltransport/pb/worker_control.pb.go` non va modificato
+manualmente. Se in futuro si modifica lo schema wire, la sorgente è
+`shared/controltransport/proto/velox/control/worker_control.proto` e la
+rigenerazione segue `scripts/gen-proto.sh`.
 
 ## Sequenza operativa
 
@@ -92,22 +111,22 @@ scripts/gen-proto.sh                                       # rigenerare pb.go
 
 ## Acceptance criteria
 
-- [ ] `attempt_id` è generato master-side una sola volta per offerta.
-- [ ] `TaskAttempt` esiste con `status=PENDING` **prima** dell'invio del
+- [x] `attempt_id` è generato master-side una sola volta per offerta.
+- [x] `TaskAttempt` esiste con `status=PENDING` **prima** dell'invio del
       `TaskOffer`.
-- [ ] Nessun path che calcola `AttemptID = LeaseID`.
-- [ ] Validazione `TaskResult` rifiuta report con attempt_id non
+- [x] Nessun percorso canonico calcola `AttemptID = LeaseID`.
+- [x] Validazione `TaskResult` rifiuta report con attempt_id non
       corrispondente al DB.
-- [ ] Worker non avvia l'esecuzione prima di `TaskLeaseGranted` (in
-      cooperazione con PR-04).
+- [x] Worker non avvia l'esecuzione prima di `TaskLeaseGranted`.
 
 ## Test
 
 - **Unit:**
-  - `lifecycle_test.go`: il primo `attempt_id` viene persistito prima
-    dell'invio.
-  - `grpc_stream_test.go` lato worker: report con attempt_id errato
-    viene rifiutato.
+  - test del repository `ClaimNextWithAttemptAtomic` /
+    `ClaimTaskForWorkerAtomic`: il primo `attempt_id` viene persistito prima
+    dell'invio;
+  - `handler_task_identity_test.go` e i test di report identity: un report
+    con attempt_id errato viene rifiutato.
 - **Integration:**
   - end-to-end: claim → TaskOffer → Accepted → LeaseGranted → TaskResult
     valido → SUCCEEDED.
@@ -124,20 +143,24 @@ scripts/gen-proto.sh                                       # rigenerare pb.go
 # Vietato: attempt_id\s*[:=]\s*lease_id
 ```
 
-In `check-single-writer.sh` aggiungere la regola che
-`AttemptID` istanziato solo da `taskgraph.identity.NewAttemptID()` (o
-factory equivalente).
+Il guard deve continuare a vietare la derivazione di `AttemptID` da
+`LeaseID` e deve mantenere `ClaimNextWithAttemptAtomic` /
+`ClaimTaskForWorkerAtomic` come punti di generazione master-side. Non esiste
+un requisito di introdurre una factory nominale non presente nel percorso
+corrente.
 
 ## Rischi
 
-- Worker che aveva historical pending job con vecchio Attempt ID = Lease:
-  cleanup migration datata prima del PR (vedi PR-09 per `legacy
-  reader only`).
+- Report o offerte legacy ancora in volo al momento del deploy: la validazione
+  può scartarli; è voluto (meglio un retry che un dato inconsistente).
+- `task_attempts.started_at` deve essere valorizzato nel percorso
+  `AcceptTaskAtomic`; il gap è tracciato in PR-04.
 - Report in volo al momento del deploy: la validazione li può scartare;
   è voluto (meglio un retry che un dato inconsistente).
 
 ## Out of scope
 
-- Transazione `LEASED → RUNNING + Attempt PENDING → RUNNING` (PR-04).
+- Verifica documentale e test aggiuntivi su `task_attempts.started_at` nel
+  percorso `AcceptTaskAtomic` (tracciati in PR-04).
 - Ingestione completa del TaskResult (PR-06).
 - Reaper lease scadute (PR-05).
