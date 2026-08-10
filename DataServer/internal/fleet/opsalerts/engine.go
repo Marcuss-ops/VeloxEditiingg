@@ -3,6 +3,7 @@ package opsalerts
 import (
 	"context"
 	"errors"
+	"reflect"
 	"time"
 
 	"velox-server/internal/store"
@@ -34,15 +35,65 @@ import (
 // multiple concurrent ShouldFire calls (e.g., from tests) race
 // safely.
 //
-// Nil-data-source policy: Step 16/15 ships the engine, dedup
-// state machine, evaluator, alert_events table, REST endpoints,
-// and a Prometheus mirror — but the read-side adapter that
-// translates the live fleet state into WorkerSnapshot values
-// awaits workersreg.Registry surface changes in Step 17+
-// (the registry API today does not expose
-// ListAllWorkerIDs / GetWorkerCard). Bootstrap wired nil as
-// the DataSource; Tick is nil-safe and the engine no-ops
-// (logs once per startup) until a real adapter is plugged in.
+// Data-source policy: an Engine is ready only when a real
+// WorkerAlertsDataSource is supplied. A missing adapter is a
+// configuration error, not an empty fleet: construction fails
+// closed so bootstrap cannot expose a supervisor that silently
+// evaluates nothing.
+
+// ErrDataSourceNotConfigured is returned when an alerts engine is
+// constructed without the read-side adapter required for evaluation.
+var ErrDataSourceNotConfigured = errors.New("opsalerts: worker alerts datasource is not configured")
+
+// ErrAlertStoreNotConfigured is returned when the persistence boundary is
+// missing. It is kept separate so readiness diagnostics identify the
+// unavailable dependency precisely.
+var ErrAlertStoreNotConfigured = errors.New("opsalerts: alert store is not configured")
+
+func configuredInterface(value any) bool {
+	if value == nil {
+		return false
+	}
+	// An interface containing a typed nil pointer is non-nil, but is just as
+	// unusable as a nil interface. Keep constructor readiness fail-closed.
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return !v.IsNil()
+	default:
+		return true
+	}
+}
+
+func configuredDataSource(source WorkerAlertsDataSource) bool {
+	return configuredInterface(source)
+}
+
+func configuredAlertStore(s AlertStore) bool {
+	return configuredInterface(s)
+}
+
+func newEngine(s AlertStore, source WorkerAlertsDataSource, tick time.Duration, maxBatch int) (*Engine, error) {
+	if !configuredAlertStore(s) {
+		return nil, ErrAlertStoreNotConfigured
+	}
+	if !configuredDataSource(source) {
+		return nil, ErrDataSourceNotConfigured
+	}
+	if tick <= 0 {
+		tick = 5 * time.Minute
+	}
+	if maxBatch <= 0 {
+		maxBatch = 500
+	}
+	return &Engine{
+		store:    s,
+		dedup:    NewDedupStore(),
+		source:   source,
+		tick:     tick,
+		maxBatch: maxBatch,
+	}, nil
+}
 
 // AlertStore is the SQLite-backed surface the engine writes
 // to. Production passes *store.SQLiteStore (it satisfies the
@@ -63,11 +114,6 @@ type Engine struct {
 	source   WorkerAlertsDataSource
 	tick     time.Duration
 	maxBatch int
-
-	// sourceWiredOnce guards a one-time startup log so a
-	// nil-data-source bootstrap doesn't fill the supervisor log
-	// with "no source" lines every 5 minutes.
-	sourceWiredOnce bool
 }
 
 // NewEngine builds the orchestrator with sane defaults.
@@ -75,36 +121,18 @@ type Engine struct {
 //     bootstrap_composition.go).
 //   - 500-row per-tick batch (sufficient for a 50-worker fleet
 //     with 12 rules, leaves headroom for fleet growth).
-//   - nil source is allowed (Tick no-ops); the real
-//     RegistryBackedDataSource adapter ships in Step 17+ once
-//     the workersreg.Registry exposes ListAllWorkerIDs +
-//     GetWorkerCard.
-func NewEngine(s AlertStore, source WorkerAlertsDataSource) *Engine {
-	return &Engine{
-		store:    s,
-		dedup:    NewDedupStore(),
-		source:   source,
-		tick:     5 * time.Minute,
-		maxBatch: 500,
-	}
+//
+// The datasource is mandatory. Callers must handle the returned error and
+// must not register a supervisor when ErrDataSourceNotConfigured is returned.
+func NewEngine(s AlertStore, source WorkerAlertsDataSource) (*Engine, error) {
+	return newEngine(s, source, 5*time.Minute, 500)
 }
 
-// NewEngineWithClock builds an Engine with custom tick +
-// batch. Used by tests that want millisecond-rate ticks.
-func NewEngineWithClock(s AlertStore, source WorkerAlertsDataSource, tick time.Duration, maxBatch int) *Engine {
-	if tick <= 0 {
-		tick = 5 * time.Minute
-	}
-	if maxBatch <= 0 {
-		maxBatch = 500
-	}
-	return &Engine{
-		store:    s,
-		dedup:    NewDedupStore(),
-		source:   source,
-		tick:     tick,
-		maxBatch: maxBatch,
-	}
+// NewEngineWithClock builds an Engine with custom tick + batch. Used by
+// tests that want millisecond-rate ticks. It has the same readiness contract
+// as NewEngine and rejects a missing or typed-nil datasource.
+func NewEngineWithClock(s AlertStore, source WorkerAlertsDataSource, tick time.Duration, maxBatch int) (*Engine, error) {
+	return newEngine(s, source, tick, maxBatch)
 }
 
 // Run is the supervisor.Runner.Run signature — the supervisor
@@ -134,22 +162,7 @@ func (e *Engine) Run(ctx context.Context) error {
 // Errors inside Tick are logged + ignored — a transient SQLite
 // blip or a single-worker snapshot failure must not stall the
 // engine. The next tick retries.
-//
-// Nil-data-source guard: if the bootstrap wired nil (Step 17+
-// has not yet shipped the registry adapter), the engine no-ops
-// gracefully. The dedup state machine + alert_events table + REST
-// endpoints remain wired; only the tick evaluates to "no firing"
-// because there is no data.
 func (e *Engine) Tick(ctx context.Context) {
-	if e.source == nil {
-		if !e.sourceWiredOnce {
-			e.sourceWiredOnce = true
-			// One-line startup notice — readable by ops, not alarming.
-			// bootCtx is unused; named for future logger hook if added.
-			_ = ctx
-		}
-		return
-	}
 	cc := CallCtx{Now: time.Now().UTC()}
 	wids, err := e.source.WorkerIDs(cc)
 	if err != nil {
@@ -167,9 +180,6 @@ func (e *Engine) Tick(ctx context.Context) {
 // one worker's SQLite hiccup doesn't poison the rest of the
 // fleet's tick.
 func (e *Engine) tickWorker(ctx context.Context, cc CallCtx, workerID string) {
-	if e.source == nil {
-		return
-	}
 	snap, err := e.source.Snapshot(cc, workerID)
 	if err != nil || snap == nil {
 		return

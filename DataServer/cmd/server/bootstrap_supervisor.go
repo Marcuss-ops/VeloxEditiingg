@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -18,6 +19,30 @@ import (
 	"velox-server/internal/supervisor"
 	"velox-shared/dispatchable"
 )
+
+// registerOpsAlertsSupervisor constructs the fleet alert engine before
+// registering its runner. A missing datasource means the capability is not
+// ready, so the supervisor is deliberately omitted rather than started as a
+// silent no-op. Other construction failures are composition errors.
+func registerOpsAlertsSupervisor(sup *supervisor.Supervisor, store opsalerts.AlertStore, source opsalerts.WorkerAlertsDataSource, policy supervisor.RestartPolicy) error {
+	engine, err := opsalerts.NewEngine(store, source)
+	if err != nil {
+		if errors.Is(err, opsalerts.ErrDataSourceNotConfigured) {
+			log.Printf("[FLEET-ALERTS] alerts-supervisor disabled: datasource is not configured")
+			return nil
+		}
+		return fmt.Errorf("construct alerts engine: %w", err)
+	}
+	if err := sup.Register(supervisor.Runner{
+		Name:   "alerts-supervisor",
+		Class:  supervisor.ClassRestartable,
+		Policy: policy,
+		Run:    engine.Run,
+	}); err != nil {
+		return fmt.Errorf("supervisor register alerts-supervisor: %w", err)
+	}
+	return nil
+}
 
 // buildSupervisor registers the long-lived background runners
 // using the SupervisedRunner taxonomy introduced in Blocco 1:
@@ -327,34 +352,21 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 		}
 	}
 
+	// ── Fleet alerts ────────────────────────────────────────────────
+	// The read-side adapter is not wired yet. registerOpsAlertsSupervisor
+	// constructs first and therefore leaves this capability absent instead
+	// of exposing a healthy-looking runner whose Tick does nothing.
+	if p != nil && p.SQLite != nil && m != nil && m.Workers != nil {
+		if err := registerOpsAlertsSupervisor(sup, p.SQLite, nil, restartablePolicy); err != nil {
+			return nil, err
+		}
+	}
+
 	// ── ClassOneShot ─────────────────────────────────────────────────
 	// Manifest auto-generation: fire-and-forget on startup. Failure
 	// is non-fatal (logged WARN, always returns nil) so no restart
 	// loop is needed even if the manifest endpoint is briefly
 	// unreachable.
-	if p != nil && p.SQLite != nil && m != nil && m.Workers != nil {
-		if err := sup.Register(supervisor.Runner{
-			Name:   "alerts-supervisor",
-			Class:  supervisor.ClassRestartable,
-			Policy: restartablePolicy,
-			Run: func(ctx context.Context) error {
-				// Step 16/15 ships the engine with a nil
-				// DataSource — the registry API does not yet
-				// expose ListAllWorkerIDs / GetWorkerCard so the
-				// real adapter lands in Step 17+ with the
-				// workersreg surface update. The supervisor
-				// still ticks, dedup state machine is wired,
-				// alert_events table is persisted, REST
-				// endpoints serve the (currently empty) table.
-				engine := opsalerts.NewEngine(p.SQLite, nil)
-				log.Printf("[FLEET-ALERTS] alerts-supervisor started (5min tick; 12-rule catalog per the user spec; INFO never persisted, WARNING 5min dedup, CRITICAL fires immediately; data source pending Step 17+ workersreg surface)")
-				return engine.Run(ctx)
-			},
-		}); err != nil {
-			return nil, fmt.Errorf("supervisor register alerts-supervisor: %w", err)
-		}
-	}
-
 	if w.UpdateHandler != nil {
 		if err := sup.Register(supervisor.Runner{
 			Name:  "manifest-generator",
