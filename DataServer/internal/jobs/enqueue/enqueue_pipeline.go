@@ -220,7 +220,12 @@ func ShouldForwardPipelineResult(result map[string]interface{}) bool {
 	}
 	flat := FlattenPipelineResult(result)
 	status := strings.ToLower(strings.TrimSpace(payload.FirstString(flat, "status")))
-	if status != "" && status != "completed" && status != "succeeded" && status != "done" {
+	// The remote-engine/creator handoff uses InputAssemblyCompleted. Do not
+	// accept job-lifecycle aliases here: SUCCEEDED belongs to the Velox job
+	// domain and DONE is not part of the remote-engine contract. Keeping this
+	// gate strict prevents an already-terminal job status from being mistaken
+	// for a producer-side completed input handoff.
+	if status != "" && status != string(contract.InputAssemblyCompleted) {
 		return false
 	}
 	if payload.FirstString(flat, "scenes_json", "json_path") == "" && payload.FirstString(flat, "scenes") == "" {

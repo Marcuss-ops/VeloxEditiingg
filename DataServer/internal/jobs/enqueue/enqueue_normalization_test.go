@@ -563,8 +563,21 @@ func TestShouldForwardPipelineResult(t *testing.T) {
 	if ShouldForwardPipelineResult(nil) {
 		t.Error("want false for nil")
 	}
+	if !ShouldForwardPipelineResult(map[string]interface{}{
+		"scenes_json": sceneJSON,
+	}) {
+		t.Error("want true when status is absent for a legacy payload")
+	}
 	if ShouldForwardPipelineResult(map[string]interface{}{"status": "failed"}) {
 		t.Error("want false for failed")
+	}
+	for _, status := range []string{"succeeded", "done", "published"} {
+		if ShouldForwardPipelineResult(map[string]interface{}{
+			"status":      status,
+			"scenes_json": sceneJSON,
+		}) {
+			t.Errorf("status %q is a lifecycle/publication alias and must not be accepted as input-assembly completion", status)
+		}
 	}
 	if ShouldForwardPipelineResult(map[string]interface{}{"status": "completed", "result": map[string]interface{}{"voiceover_path": voicePath}}) {
 		t.Error("want false for no scenes")
