@@ -2,6 +2,6 @@
 //
 // The external submission projection is split by responsibility across:
 //   - canonical_request_projection.go
-//   - asset_projection.go
-//   - worker_payload_projection.go
+//   - projection/ (neutral renderer payload boundary)
+//   - worker_payload_projection.go (intake adapter)
 package pipeline

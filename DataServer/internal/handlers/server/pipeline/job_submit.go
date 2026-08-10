@@ -9,8 +9,8 @@
 //   - intake_validation.go (DTO types, limit consts, regexes,
 //     SubmitJobValidationError, ValidateSubmitJobRequest)
 //   - canonical_request_projection.go (NormalizeExternalJobSubmission)
-//   - asset_projection.go (nested asset map builders)
-//   - worker_payload_projection.go (submitRequestToRawPayload and worker projection)
+//   - projection/ (neutral nested render mapping and worker projection)
+//   - worker_payload_projection.go (SubmitJobRequest → projection adapter)
 //   - enqueue_persistence.go (GetSubmittedJob polling)
 //
 // Decoding strategy: json.NewDecoder(...).Decode with
