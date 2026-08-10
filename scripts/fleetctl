@@ -33,7 +33,7 @@ Usage:
   scripts/fleetctl rollout [--digest image-or-sha256] [--workers all|id1,id2,...] [--serial] [--wait-ready]
   scripts/fleetctl operations [worker_id] [status]
   scripts/fleetctl smoke <worker_id>
-  scripts/fleetctl job inspect <job_id>
+  scripts/fleetctl job inspect <job_id> [--json]
   scripts/fleetctl job metrics <job_id>
   scripts/fleetctl job watch <job_id> [--timeout seconds] [--poll seconds] [--json]
   scripts/fleetctl job submit --payload FILE [--workers all|id1,id2,...] [--wait]
@@ -437,6 +437,78 @@ print_job_card() {
     ' <<<"$snapshot"
 }
 
+print_job_summary() {
+    local job_id=$1 snapshot=$2
+    jq -r --arg job_id "$job_id" '
+      def ms($v): if ($v // 0) == 0 then "0 ms" else (($v|tostring) + " ms") end;
+      def sec($v): (((($v // 0) / 1000) * 100) | round / 100 | tostring) + " s";
+      def bytes($v): (($v // 0)|tostring) + " B";
+      . as $root |
+      (($root.execution.attempts // []) | if length > 0 then .[-1] else {} end) as $a |
+      ($a.metrics // {}) as $m |
+      ($root.execution.cache // {}) as $cache |
+      [
+        "job:        " + $job_id,
+        "status:     " + (($root.job.status // "UNKNOWN")|tostring),
+        "attempt:    " + (($a.attempt_id // "-")|tostring),
+        "worker:     " + (($a.worker_id // "-")|tostring),
+        "phase:      " + (($a.phase // "-")|tostring),
+        "progress:   " + (if $a.current_scene != null then (($a.current_scene|tostring) + "/" + (($a.total_scenes // "?")|tostring) + " scenes, " + (($a.current_segment // "?")|tostring) + "/" + (($a.total_segments // "?")|tostring) + " segments") else "-" end),
+        "wall:       " + sec($root.execution.total_wall_time_ms),
+        "",
+        "ASSETS",
+        "cache hits: " + (($cache.hits // $a.cache_stats.cache_hits // 0)|tostring),
+        "cache miss: " + (($cache.misses // $a.cache_stats.cache_misses // 0)|tostring),
+        "network RX: " + bytes($m.network_rx_bytes),
+        "network TX: " + bytes($m.network_tx_bytes),
+        "download:   " + ms($m.engine_asset_download_ms),
+        "",
+        "RENDER",
+        "mode:       " + (($m.concat_mode // "-")|tostring),
+        "segments:   " + (($m.segment_count // (($root.execution.segments // [])|length) // 0)|tostring),
+        "copy/build: " + ms($m.engine_segment_build_ms),
+        "encode:     " + (if (($m.encode_passes // 0) == 0) then "0 ms" else ms($a.phase_breakdown.encode) end),
+        "decoded:    " + (($m.frames_decoded // $a.frames_decoded // 0)|tostring),
+        "encoded:    " + (($m.frames_encoded // $a.frames_encoded // 0)|tostring),
+        "composited: " + (($m.frames_composited // $a.frames_composited // 0)|tostring),
+        "",
+        "PHASES",
+        (($a.phase_breakdown // {}) | to_entries | sort_by(.key) | .[] | ("\(.key):       " + (.value|tostring) + " ms")),
+        "",
+        "RESOURCES",
+        "cpu time:   " + ms($m.cpu_time_ms),
+        "cpu peak:   " + (($m.cpu_percent_peak // 0)|tostring) + "%",
+        "rss peak:   " + bytes($m.rss_peak_bytes),
+        "disk read:  " + bytes($m.disk_read_bytes),
+        "disk write: " + bytes($m.disk_write_bytes),
+        "",
+        "AUDIO / ARTIFACT",
+        "audio dl:   " + ms($m.engine_audio_download_ms),
+        "audio mux:  " + ms($m.engine_mux_audio_ms),
+        "ffprobe:    " + (($m.ffprobe_valid // "-")|tostring),
+        "artifact:   " + bytes($m.output_file_size),
+        "sha256:     " + (($m.output_sha256 // "-")|tostring),
+        "",
+        "DELIVERY",
+        (($root.deliveries // [])[] |
+          ("delivery " + (.delivery_id // "-") + ": " + (.status // "UNKNOWN") +
+           " queue=" + ms(.queue_ms) + " upload=" + ms(.upload_ms) + " total=" + ms(.total_ms) +
+           (if (.remote_url // "") != "" then " link=" + .remote_url else "" end))),
+        "",
+        "ASSET TIMINGS",
+        (($root.execution.segments // [])[] |
+          ("segment " + (.segment_index|tostring) +
+           " scene=" + (.scene_id // "-") +
+           " role=" + (.source_type // "-") +
+           " asset=" + (.asset_key // "-") +
+           " download=" + ms(.asset_download_ms) +
+           " source=" + bytes(.source_bytes) +
+           " output=" + bytes(.output_bytes) +
+           " status=" + (.status // "-")))
+      ] | .[] | select(. != null)
+    ' <<<"$snapshot"
+}
+
 job_submit() {
     local payload_file='' selection=all wait_for_jobs=0 idem_prefix="fleetctl-$(date +%s)" arg
     while [[ $# -gt 0 ]]; do
@@ -561,7 +633,20 @@ case "$command" in
         job_path="/api/v1/admin/jobs/$(printf '%s' "$job_id" | jq -sRr @uri)"
         case "$job_command" in
             inspect)
-                api GET "$job_path" | jq .
+                shift 3
+                inspect_json=0
+                while [[ $# -gt 0 ]]; do
+                    case "$1" in
+                        --json) inspect_json=1; shift ;;
+                        *) die "unknown job inspect option: $1" ;;
+                    esac
+                done
+                snapshot=$(api GET "$job_path")
+                if (( inspect_json )); then
+                    printf '%s\n' "$snapshot" | jq .
+                else
+                    print_job_summary "$job_id" "$snapshot"
+                fi
                 ;;
             metrics)
                 api GET "$job_path/metrics" | jq .

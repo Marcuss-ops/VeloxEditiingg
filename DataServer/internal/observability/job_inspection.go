@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // InspectJob composes the canonical job aggregate with the execution
@@ -57,10 +58,49 @@ func (s *Service) InspectJob(ctx context.Context, jobID string) (*JobInspection,
 	}
 	if deliveries, deliveryErr := s.jobInspection.ListDeliveries(ctx, jobID); deliveryErr == nil {
 		result.Deliveries = deliveries
+		for i := range result.Deliveries {
+			result.Deliveries[i].QueueMS, result.Deliveries[i].UploadMS, result.Deliveries[i].TotalMS = deliveryDurations(result.Deliveries[i])
+		}
 	} else {
 		return nil, fmt.Errorf("observability: list deliveries: %w", deliveryErr)
 	}
 	return result, nil
+}
+
+// deliveryDurations derives the delivery waterfall from timestamps persisted
+// by the canonical delivery store. Missing timestamps remain zero; the
+// operator read model must not fabricate timing for pending work.
+func deliveryDurations(d DeliverySnapshot) (queueMS, uploadMS, totalMS int64) {
+	queued, okQueued := parseTelemetryTime(d.QueuedAt)
+	started, okStarted := parseTelemetryTime(d.StartedAt)
+	completed, okCompleted := parseTelemetryTime(d.CompletedAt)
+	if okQueued && okStarted && started.After(queued) {
+		queueMS = started.Sub(queued).Milliseconds()
+	}
+	if okStarted && okCompleted && completed.After(started) {
+		uploadMS = completed.Sub(started).Milliseconds()
+	}
+	if okQueued && okCompleted && completed.After(queued) {
+		totalMS = completed.Sub(queued).Milliseconds()
+	}
+	return queueMS, uploadMS, totalMS
+}
+
+func parseTelemetryTime(raw string) (time.Time, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999Z07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+	} {
+		if parsed, err := time.Parse(layout, raw); err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // DecodeJobEventPayload is shared by the composition-root adapter and tests.

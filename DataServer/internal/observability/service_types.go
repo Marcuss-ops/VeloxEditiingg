@@ -138,7 +138,12 @@ type DeliverySnapshot struct {
 	MaxAttempts      int    `json:"max_attempts"`
 	LastError        string `json:"last_error,omitempty"`
 	LastErrorMessage string `json:"last_error_message,omitempty"`
+	QueuedAt         string `json:"queued_at,omitempty"`
+	StartedAt        string `json:"started_at,omitempty"`
 	CompletedAt      string `json:"completed_at,omitempty"`
+	QueueMS          int64  `json:"queue_ms,omitempty"`
+	UploadMS         int64  `json:"upload_ms,omitempty"`
+	TotalMS          int64  `json:"total_ms,omitempty"`
 }
 
 // JobInspection is the single read model consumed by `fleetctl job inspect`,
@@ -195,7 +200,18 @@ type ExecutionSummary struct {
 	Cache               CacheSummary      `json:"cache"`
 	Retries             int               `json:"retries"`
 	Attempts            []AttemptSummary  `json:"attempts"`
+	PhaseTimings        []PhaseSnapshot   `json:"phase_timings,omitempty"`
 	Segments            []SegmentSnapshot `json:"segments,omitempty"`
+}
+
+// PhaseSnapshot is the ordered, persisted phase timeline. PhaseTotals remains
+// the compact aggregate; this slice is the detail used by job inspect/watch.
+type PhaseSnapshot struct {
+	AttemptID  string    `json:"attempt_id"`
+	Phase      string    `json:"phase"`
+	DurationMS int64     `json:"duration_ms"`
+	WallStart  time.Time `json:"wall_start,omitempty"`
+	WallEnd    time.Time `json:"wall_end,omitempty"`
 }
 
 type SegmentSnapshot struct {
@@ -405,6 +421,10 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 			for _, pt := range timings {
 				as.PhaseBreakdown[pt.Phase] += pt.DurationMS
 				summary.PhaseTotals[pt.Phase] += pt.DurationMS
+				summary.PhaseTimings = append(summary.PhaseTimings, PhaseSnapshot{
+					AttemptID: pt.AttemptID, Phase: pt.Phase, DurationMS: pt.DurationMS,
+					WallStart: pt.WallStart, WallEnd: pt.WallEnd,
+				})
 				totalDur += pt.DurationMS
 				if !pt.WallStart.IsZero() && (attemptFirstStart == nil || pt.WallStart.Before(*attemptFirstStart)) {
 					start := pt.WallStart

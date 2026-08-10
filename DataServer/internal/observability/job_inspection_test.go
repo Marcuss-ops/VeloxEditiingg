@@ -12,6 +12,17 @@ type inspectionJobReader struct {
 	job *jobs.Job
 }
 
+func TestInspectJobDerivesDeliveryTimelineFromPersistedTimestamps(t *testing.T) {
+	delivery := DeliverySnapshot{
+		QueuedAt: "2026-08-09T10:00:00Z", StartedAt: "2026-08-09T10:00:02Z",
+		CompletedAt: "2026-08-09T10:00:12Z",
+	}
+	queue, upload, total := deliveryDurations(delivery)
+	if queue != 2000 || upload != 10000 || total != 12000 {
+		t.Fatalf("delivery durations = %d/%d/%d, want 2000/10000/12000", queue, upload, total)
+	}
+}
+
 func (r *inspectionJobReader) Get(context.Context, string) (*jobs.Job, error) { return r.job, nil }
 func (r *inspectionJobReader) List(context.Context, jobs.Filter) ([]jobs.Job, error) {
 	if r.job == nil {

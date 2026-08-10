@@ -112,6 +112,7 @@ func (a *sqliteJobInspectionAdapter) ListDeliveries(_ context.Context, jobID str
 			RemoteID: row.RemoteID, RemoteURL: row.RemoteURL,
 			AttemptCount: row.AttemptCount, MaxAttempts: row.MaxAttempts,
 			LastError: row.LastError, LastErrorMessage: row.LastErrorMessage,
+			QueuedAt: row.CreatedAt, StartedAt: row.StartedAt,
 			CompletedAt: row.CompletedAt,
 		})
 	}
