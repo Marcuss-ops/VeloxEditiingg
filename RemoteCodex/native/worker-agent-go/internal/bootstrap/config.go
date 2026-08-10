@@ -179,10 +179,9 @@ func ResolveConfig(opts ConfigOptions) (*config.WorkerConfig, string, error) {
 		cfg.ProtocolVersion = "v3"
 	}
 	// EngineVersion is runtime metadata, not a persisted identity. A stale
-	// worker_config.json must never make the report disagree with the binary
-	// that is running. The deployment env is the explicit override used when
-	// the native engine has an independently versioned release; otherwise the
-	// worker build/version is the single source of truth.
+	// worker_config.json or deployment environment must never make the report
+	// disagree with the binary that is running. The worker build/version is the
+	// single source of truth for every attempt and artifact report.
 	cfg.EngineVersion = resolveEngineVersion(resolvedVersion)
 	if strings.TrimSpace(cfg.VideoEngineCppBin) != "" && strings.TrimSpace(os.Getenv("VELOX_VIDEO_ENGINE_CPP_BIN")) == "" {
 		// Make the composition-root config authoritative for the native
@@ -198,10 +197,7 @@ func ResolveConfig(opts ConfigOptions) (*config.WorkerConfig, string, error) {
 }
 
 func resolveEngineVersion(resolvedVersion string) string {
-	if engineVersion := strings.TrimSpace(os.Getenv("VELOX_ENGINE_VERSION")); engineVersion != "" {
-		return engineVersion
-	}
-	return resolvedVersion
+	return strings.TrimSpace(resolvedVersion)
 }
 
 // readVersionFile attempts to read version from VERSION.txt in the work directory

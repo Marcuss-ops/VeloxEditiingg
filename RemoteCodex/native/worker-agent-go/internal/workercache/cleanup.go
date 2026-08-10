@@ -94,24 +94,23 @@ func CleanupWithAudit(ctx context.Context, c *Cache, protected map[string]struct
 	now := time.Now().UTC()
 
 	for _, e := range entries {
-		if e.ActiveLeaseCount > 0 {
+		decision := evaluateEviction(e, protected, 0, now)
+		switch decision {
+		case evictionKeepLease:
 			stats.SkippedLeased++
-			emitCleanerAudit(audit, e, metadata, "kept", "active_lease", now)
+			emitCleanerAudit(audit, e, metadata, "kept", string(decision), now)
 			continue
-		}
-		if e.ActiveReservationCount > 0 {
+		case evictionKeepReservation:
 			stats.SkippedProtected++
-			emitCleanerAudit(audit, e, metadata, "kept", "active_reservation", now)
+			emitCleanerAudit(audit, e, metadata, "kept", string(decision), now)
 			continue
-		}
-		if !e.DownloadComplete {
+		case evictionKeepInFlight:
 			stats.SkippedInFlight++
-			emitCleanerAudit(audit, e, metadata, "kept", "download_in_flight", now)
+			emitCleanerAudit(audit, e, metadata, "kept", string(decision), now)
 			continue
-		}
-		if _, keep := protected[string(e.AssetKey)]; keep {
+		case evictionKeepProtected:
 			stats.SkippedProtected++
-			emitCleanerAudit(audit, e, metadata, "kept", "protected_snapshot", now)
+			emitCleanerAudit(audit, e, metadata, "kept", string(decision), now)
 			continue
 		}
 

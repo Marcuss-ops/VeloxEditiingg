@@ -210,7 +210,6 @@
       VELOX_VERSION_NUMBER={{ version_number | default('v1.0.6') }}
       VELOX_BUNDLE_HASH={{ velox_worker_bundle_hash }}
       VELOX_WORKER_PROTOCOL_VERSION={{ worker_protocol_version | default('v3') }}
-      VELOX_ENGINE_VERSION={{ engine_version | default(version_number | default('v1.0.6')) }}
       VELOX_HEALTH_PORT={{ velox_worker_health_port }}
       VELOX_MASTER_URL={{ master_url }}
       VELOX_WORK_DIR={{ velox_worker_runtime_container_dir }}/work
@@ -333,7 +332,7 @@
         "bundle_version": "{{ version_number | default('v1.0.6') }}",
         "bundle_hash": "{{ velox_worker_bundle_hash }}",
         "protocol_version": "{{ worker_protocol_version | default('v3') }}",
-        "engine_version": "{{ engine_version | default(version_number | default('v1.0.6')) }}",
+        "engine_version": "{{ version_number | default('v1.0.6') }}",
         "environment": "staging",
         "max_active_jobs": 1,
         "prometheus_port": {{ velox_worker_prometheus_port | default(9090) }},

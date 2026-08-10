@@ -199,30 +199,27 @@ func CleanupWithPolicy(
 	stats.Inspected = len(entries)
 
 	for _, e := range entries {
-		if e.ActiveLeaseCount > 0 {
+		decision := evaluateEviction(e, protected, policy.RecentUseGrace, now)
+		switch decision {
+		case evictionKeepLease:
 			stats.SkippedLeased++
-			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", "active_lease", now)
+			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", string(decision), now)
 			continue
-		}
-		if e.ActiveReservationCount > 0 {
+		case evictionKeepReservation:
 			stats.SkippedProtected++
-			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", "active_reservation", now)
+			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", string(decision), now)
 			continue
-		}
-		if !e.DownloadComplete {
+		case evictionKeepInFlight:
 			stats.SkippedInFlight++
-			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", "download_in_flight", now)
+			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", string(decision), now)
 			continue
-		}
-		if _, keep := protected[string(e.AssetKey)]; keep {
+		case evictionKeepProtected:
 			stats.SkippedProtected++
-			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", "protected_snapshot", now)
+			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", string(decision), now)
 			continue
-		}
-		// Pass 12 grace rule — the new layer.
-		if policy.RecentUseGrace > 0 && now.Sub(e.LastUsedAt) < policy.RecentUseGrace {
+		case evictionKeepGrace:
 			stats.SkippedGrace++
-			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", "recent_use_grace", now)
+			emitCleanerAudit(policy.AuditLogger, e, policy.AssetMetadata, "kept", string(decision), now)
 			continue
 		}
 
