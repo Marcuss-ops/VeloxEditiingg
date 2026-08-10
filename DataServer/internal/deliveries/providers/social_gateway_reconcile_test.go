@@ -33,6 +33,25 @@ func TestSocialGatewayProvider_ReconcileCanonicalResponse(t *testing.T) {
 	}
 }
 
+func TestSocialGatewayProvider_ReconcilePublishedWithoutMediaIDIsNotComplete(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"delivery_id":"social-1","publish_status":"PUBLISHED","thumbnail_status":"APPLIED"}`))
+	}))
+	defer server.Close()
+
+	provider := NewSocialGatewayProvider(socialclient.Config{BaseURL: server.URL})
+	result, err := provider.Reconcile(context.Background(), "velox-delivery-1", "social-1")
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if result.Success {
+		t.Fatalf("published response without youtube_video_id must not be terminal: %+v", result)
+	}
+	if result.Status != "published" || result.RemoteID != "" {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 func TestSocialGatewayProvider_ReconcileRejectsMismatchedDeliveryID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"delivery_id":"other","publish_status":"published","thumbnail_status":"applied","youtube_video_id":"yt-1"}`))

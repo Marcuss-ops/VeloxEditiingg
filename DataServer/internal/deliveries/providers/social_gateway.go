@@ -89,12 +89,15 @@ func (s *SocialGatewayProvider) Reconcile(ctx context.Context, deliveryID, remot
 	if strings.TrimSpace(status.DeliveryID) == "" || status.DeliveryID != remoteID {
 		return nil, fmt.Errorf("%w: reconciliation response delivery_id %q does not match requested %q", deliveries.ErrProviderPermanent, status.DeliveryID, remoteID)
 	}
-	thumbnailReady := status.ThumbnailStatus == "applied" || status.ThumbnailStatus == "skipped"
+	publishStatus := strings.ToLower(strings.TrimSpace(status.PublishStatus))
+	thumbnailStatus := strings.ToLower(strings.TrimSpace(status.ThumbnailStatus))
+	thumbnailReady := thumbnailStatus == "applied" || thumbnailStatus == "skipped"
+	finalMediaID := strings.TrimSpace(status.YouTubeVideoID)
 	return &deliveries.Result{
-		Success:      status.PublishStatus == "published" && thumbnailReady,
-		Status:       status.PublishStatus,
-		RemoteID:     status.YouTubeVideoID,
-		ProviderMeta: map[string]interface{}{"error_code": status.LastErrorCode, "error_message": status.LastErrorMessage, "thumbnail_status": status.ThumbnailStatus},
+		Success:      publishStatus == "published" && thumbnailReady && finalMediaID != "",
+		Status:       publishStatus,
+		RemoteID:     finalMediaID,
+		ProviderMeta: map[string]interface{}{"error_code": status.LastErrorCode, "error_message": status.LastErrorMessage, "thumbnail_status": thumbnailStatus},
 	}, nil
 }
 
@@ -127,7 +130,10 @@ func (s *SocialGatewayProvider) deliver(ctx context.Context, artifact *store.Art
 		return nil, mapSocialClientError(err)
 	}
 	return &deliveries.Result{
+		// Success here means only that the remote operation was accepted.
+		// Publication completion is established later by Reconcile.
 		Success:  true,
+		Status:   resp.Status,
 		RemoteID: resp.SocialDeliveryID,
 	}, nil
 }

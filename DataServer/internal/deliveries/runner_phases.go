@@ -44,6 +44,7 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 	go r.renewDeliveryLeaseLoop(deliverCtx, heartbeatDone, input.lease, func(error) { cancel() })
 	defer func() { cancel(); <-heartbeatDone }()
 
+	var finalRemoteID, finalRemoteURL string
 	phase, err := r.preparePublicationState(ctx, input.publicationID, state)
 	if err != nil {
 		return r.phaseFailure(ctx, input.lease, input.publicationID, publicationstate.Uploading, "STATE_TRANSITION", err)
@@ -104,9 +105,31 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 				return r.phaseFailure(ctx, input.lease, input.publicationID, phase, operation, err)
 			}
 		} else {
+			if result != nil {
+				if strings.TrimSpace(result.RemoteID) != "" {
+					finalRemoteID = result.RemoteID
+				}
+				if strings.TrimSpace(result.RemoteURL) != "" {
+					finalRemoteURL = result.RemoteURL
+				}
+			}
 			state, err = r.dbStore.GetPublicationState(ctx, input.publicationID)
 			if err != nil {
 				return r.phaseInfrastructureFailure("PUBLICATION_STATE_READ", err)
+			}
+			// Persist the provider's final media identity while the durable
+			// state is still VERIFYING. If the process exits after this
+			// checkpoint but before the VERIFYING -> PUBLISHED transition,
+			// replay cannot promote the submission/operation ID as the
+			// published media ID.
+			if phase == publicationstate.Verifying && finalRemoteID != "" && finalRemoteID != state.RemoteID {
+				if err := r.dbStore.RecordPublicationRemoteResult(ctx, input.publicationID, state.Revision, state.RemoteID, finalRemoteID, finalRemoteURL); err != nil {
+					return fmt.Errorf("record final publication result: %w", err)
+				}
+				state.RemoteID = finalRemoteID
+				if finalRemoteURL != "" {
+					state.RemoteURL = finalRemoteURL
+				}
 			}
 		}
 		if err := r.dbStore.CompletePublicationPhaseEffect(ctx, input.publicationID, phase, operation, true, ""); err != nil {
@@ -123,7 +146,13 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 	if err != nil {
 		return r.phaseInfrastructureFailure("PUBLICATION_STATE_READ", err)
 	}
-	return r.dbStore.MarkDeliverySucceeded(ctx, input.lease.DeliveryID, input.lease.RunnerID, input.lease.LeaseID, finalState.RemoteID, finalState.RemoteURL)
+	if finalRemoteID == "" {
+		finalRemoteID = finalState.RemoteID
+	}
+	if finalRemoteURL == "" {
+		finalRemoteURL = finalState.RemoteURL
+	}
+	return r.dbStore.MarkDeliverySucceeded(ctx, input.lease.DeliveryID, input.lease.RunnerID, input.lease.LeaseID, finalRemoteID, finalRemoteURL)
 }
 
 func (r *DeliveryRunner) preparePublicationState(ctx context.Context, publicationID string, state *store.PublicationState) (publicationstate.State, error) {
@@ -279,7 +308,11 @@ func (r *DeliveryRunner) phaseFailure(ctx context.Context, lease store.DeliveryL
 	} else {
 		_, _ = r.dbStore.TransitionPublicationPartial(ctx, publicationID, phase, code)
 	}
-	_ = r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, code, runErr.Error())
+	if ClassifyError(runErr) == ErrorClassAuth {
+		_ = r.dbStore.MarkDeliveryBlockedAuth(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, code, runErr.Error())
+	} else {
+		_ = r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, code, runErr.Error())
+	}
 	return runErr
 }
 

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"velox-server/internal/credentials"
@@ -212,16 +213,48 @@ type PublicationPhaseExecutor interface {
 }
 
 // legacyPublicationPhaseExecutor is the migration adapter for providers that
-// still expose one monolithic Deliver call. It deliberately advertises only
-// UPLOAD_MEDIA and remains non-resumable; the durable checkpoint still records
-// the remote identity as soon as that call returns.
+// still expose one monolithic Deliver call. The upload remains non-resumable,
+// but asynchronous providers that also implement DeliveryReconciler get a
+// real VERIFYING phase. Without that bridge, the phase runner would skip every
+// post-upload phase and promote an accepted remote operation to PUBLISHED.
 type legacyPublicationPhaseExecutor struct{ provider Provider }
 
 func (l legacyPublicationPhaseExecutor) Capabilities() map[publicationstate.State]bool {
-	return map[publicationstate.State]bool{publicationstate.Uploading: true}
+	capabilities := map[publicationstate.State]bool{publicationstate.Uploading: true}
+	if _, ok := l.provider.(DeliveryReconciler); ok {
+		capabilities[publicationstate.Verifying] = true
+	}
+	return capabilities
 }
 
 func (l legacyPublicationPhaseExecutor) ExecutePhase(ctx context.Context, phase publicationstate.State, input *PublicationPhaseContext) (*Result, error) {
+	if phase == publicationstate.Verifying {
+		reconciler, ok := l.provider.(DeliveryReconciler)
+		if !ok {
+			return nil, fmt.Errorf("%w: legacy provider cannot execute %s", ErrProviderPermanent, phase)
+		}
+		result, err := reconciler.Reconcile(ctx, input.DeliveryID, input.RemoteID)
+		if err != nil {
+			return nil, err
+		}
+		if result == nil {
+			return nil, fmt.Errorf("%w: reconciliation returned nil result", ErrProviderTransient)
+		}
+		if result.Success {
+			if err := validateProviderResult(result); err != nil {
+				return nil, err
+			}
+			return result, nil
+		}
+		remoteStatus := strings.ToLower(strings.TrimSpace(result.Status))
+		if remoteStatus == "failed" || remoteStatus == "dead_letter" {
+			return nil, fmt.Errorf("%w: remote publication status %q", ErrProviderPermanent, result.Status)
+		}
+		if remoteStatus == "blocked_auth" {
+			return nil, fmt.Errorf("%w: remote publication status %q", ErrProviderAuth, result.Status)
+		}
+		return nil, fmt.Errorf("%w: remote publication still %q", ErrProviderTransient, result.Status)
+	}
 	if phase != publicationstate.Uploading {
 		return nil, fmt.Errorf("%w: legacy provider cannot execute %s", ErrProviderPermanent, phase)
 	}

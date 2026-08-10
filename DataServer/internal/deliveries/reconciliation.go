@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 func (r *DeliveryRunner) reconcileRecent(ctx context.Context) error {
@@ -21,6 +22,13 @@ func (r *DeliveryRunner) reconcileRecent(ctx context.Context) error {
 		}
 		provider, err := r.registry.Resolve(destination.Provider)
 		if err != nil {
+			continue
+		}
+		// Providers with a phase executor own reconciliation through VERIFYING;
+		// applying a second direct terminal projection here could mark only the
+		// delivery row and leave publication state behind. Legacy providers
+		// without a phase executor retain this recovery path.
+		if _, ok := r.registry.ResolvePhaseExecutor(destination.Provider); ok {
 			continue
 		}
 		reconciler, ok := provider.(DeliveryReconciler)
@@ -53,7 +61,7 @@ func (r *DeliveryRunner) reconcileRecent(ctx context.Context) error {
 }
 
 func reconciliationStatus(status string) string {
-	switch status {
+	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "published", "completed":
 		return "SUCCEEDED"
 	case "failed", "dead_letter":

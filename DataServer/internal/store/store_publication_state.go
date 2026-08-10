@@ -267,6 +267,33 @@ func (s *SQLiteStore) GetPublicationPhaseEffectStatus(ctx context.Context, publi
 // PersistPublicationVideoCreated is the upload checkpoint. The remote
 // identity and VIDEO_CREATED state are committed together before metadata or
 // verification can run, preventing a restart from issuing a second upload.
+// RecordPublicationRemoteResult persists the provider's final remote media
+// identity after VERIFYING has established publication. The upload operation
+// ID and the published media ID are distinct for asynchronous providers.
+func (s *SQLiteStore) RecordPublicationRemoteResult(ctx context.Context, publicationID string, expectedRevision uint64, expectedRemoteID, remoteID, remoteURL string) error {
+	publicationID = strings.TrimSpace(publicationID)
+	expectedRemoteID = strings.TrimSpace(expectedRemoteID)
+	remoteID = strings.TrimSpace(remoteID)
+	if publicationID == "" || expectedRemoteID == "" || remoteID == "" {
+		return fmt.Errorf("store: final publication result requires publication_id, expected remote_id, and remote_id")
+	}
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE publication_states
+		SET remote_id = ?, remote_url = COALESCE(NULLIF(?, ''), remote_url),
+		    revision = revision + 1, updated_at = ?
+		WHERE publication_id = ? AND state = 'VERIFYING'
+		  AND revision = ? AND remote_id = ?`,
+		remoteID, strings.TrimSpace(remoteURL), time.Now().UTC().Format(time.RFC3339Nano),
+		publicationID, expectedRevision, expectedRemoteID)
+	if err != nil {
+		return wrapDBInfrastructure("RecordPublicationRemoteResult exec", err)
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return ErrPublicationPhaseConflict
+	}
+	return nil
+}
+
 func (s *SQLiteStore) PersistPublicationVideoCreated(ctx context.Context, publicationID, artifactID, remoteID, remoteURL string) (*PublicationState, error) {
 	publicationID = strings.TrimSpace(publicationID)
 	if publicationID == "" || strings.TrimSpace(remoteID) == "" {
