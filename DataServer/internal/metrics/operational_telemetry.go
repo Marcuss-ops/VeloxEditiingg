@@ -129,7 +129,7 @@ func (t *OperationalTelemetry) ObserveDBTransaction(waitMS, transactionMS float6
 	}
 	if transactionMS >= 0 {
 		t.dbTransactionMS.Observe([]string{}, transactionMS)
-		t.dbLongestTransaction.GaugeSet([]string{}, int64(transactionMS))
+		t.dbLongestTransaction.GaugeMax([]string{}, int64(transactionMS))
 	}
 	if busy {
 		t.dbBusy.Inc([]string{}, 1)

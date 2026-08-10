@@ -60,22 +60,25 @@ type ArtifactSnapshot struct {
 }
 
 type DeliverySnapshot struct {
-	DeliveryID       string `json:"delivery_id"`
-	ArtifactID       string `json:"artifact_id"`
-	DestinationID    string `json:"destination_id"`
-	Status           string `json:"status"`
-	RemoteID         string `json:"remote_id,omitempty"`
-	RemoteURL        string `json:"remote_url,omitempty"`
-	AttemptCount     int    `json:"attempt_count"`
-	MaxAttempts      int    `json:"max_attempts"`
-	LastError        string `json:"last_error,omitempty"`
-	LastErrorMessage string `json:"last_error_message,omitempty"`
-	QueuedAt         string `json:"queued_at,omitempty"`
-	StartedAt        string `json:"started_at,omitempty"`
-	CompletedAt      string `json:"completed_at,omitempty"`
-	QueueMS          int64  `json:"queue_ms,omitempty"`
-	UploadMS         int64  `json:"upload_ms,omitempty"`
-	TotalMS          int64  `json:"total_ms,omitempty"`
+	DeliveryID       string  `json:"delivery_id"`
+	ArtifactID       string  `json:"artifact_id"`
+	DestinationID    string  `json:"destination_id"`
+	Status           string  `json:"status"`
+	RemoteID         string  `json:"remote_id,omitempty"`
+	RemoteURL        string  `json:"remote_url,omitempty"`
+	AttemptCount     int     `json:"attempt_count"`
+	RetryCount       int     `json:"retry_count"`
+	MaxAttempts      int     `json:"max_attempts"`
+	LastError        string  `json:"last_error,omitempty"`
+	LastErrorMessage string  `json:"last_error_message,omitempty"`
+	QueuedAt         string  `json:"queued_at,omitempty"`
+	StartedAt        string  `json:"started_at,omitempty"`
+	CompletedAt      string  `json:"completed_at,omitempty"`
+	QueueMS          int64   `json:"queue_ms,omitempty"`
+	UploadMS         int64   `json:"upload_ms,omitempty"`
+	TotalMS          int64   `json:"total_ms,omitempty"`
+	BytesUploaded    int64   `json:"bytes_uploaded,omitempty"`
+	UploadMbps       float64 `json:"upload_mbps,omitempty"`
 }
 
 // JobInspection is the single read model consumed by `fleetctl job inspect`,
@@ -209,13 +212,15 @@ type SegmentSnapshot struct {
 // value is meaningful: older workers may have reported byte volume without
 // typed hit/miss counters.
 type CacheSummary struct {
-	Hits        int64   `json:"hits"`
-	Misses      int64   `json:"misses"`
-	Evictions   int64   `json:"evictions"`
-	Corruptions int64   `json:"corruptions"`
-	BytesUsed   int64   `json:"bytes_used"`
-	Entries     int64   `json:"entries"`
-	HitRatio    float64 `json:"hit_ratio"`
+	Hits                  int64   `json:"hits"`
+	Misses                int64   `json:"misses"`
+	Evictions             int64   `json:"evictions"`
+	Corruptions           int64   `json:"corruptions"`
+	BytesUsed             int64   `json:"bytes_used"`
+	Entries               int64   `json:"entries"`
+	Lookups               int64   `json:"lookups"`
+	UniqueAssetsRequested int64   `json:"unique_assets_requested"`
+	HitRatio              float64 `json:"hit_ratio"`
 }
 
 // AttemptSummary is the aggregated diagnostics for a single attempt.

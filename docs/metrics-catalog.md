@@ -39,6 +39,30 @@ asset IDs, templates and free-form messages remain SQL-only. The canonical
 Grafana JSON lives in `dashboards/`; the corresponding SQL is
 `prometheus/observability-dashboards.sql`.
 
+### Operational isolation metrics
+
+The delivery/SQLite isolation benchmark consumes the following bounded-label
+families from `/metrics`; they are runtime-wide counters/histograms, not
+per-job labels. Per-job delivery timing and cache totals come from
+`fleetctl job inspect --json`.
+
+| Family | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `velox_delivery_queue_ms` | H | `provider` | time from the current delivery queue timestamp to claim processing |
+| `velox_delivery_upload_ms` / `velox_delivery_total_ms` | H | `provider`, `status` | provider phase and end-to-end delivery durations |
+| `velox_delivery_retry_count` / `velox_delivery_timeout_count` | C | `provider` | scheduled retries and classified timeout failures |
+| `velox_delivery_bytes_uploaded` / `velox_delivery_upload_mbps` | C/H | `provider` | successful artifact bytes and throughput |
+| `velox_db_write_wait_ms` / `velox_db_transaction_ms` | H | none | transaction acquisition and total transaction duration |
+| `velox_db_busy_count` / `velox_db_busy_timeout_count` / `velox_db_retry_count` | C | none | surfaced SQLite lock errors, timeout-classified locks and retries |
+| `velox_db_write_operations` / `velox_db_read_operations` | C | none | instrumented store operation counts |
+| `velox_db_longest_transaction_ms` | G | none | maximum observed transaction duration since process start |
+| `velox_cache_lookups_total` / `velox_cache_hits_total` / `velox_cache_misses_total` | C | `result` or none | cache accounting with `lookups = hits + misses` |
+| `velox_unique_assets_requested` / `velox_cache_invariant_violations_total` | G/C | none | latest unique-asset snapshot and rejected accounting mismatches |
+
+`db_write_wait_ms` measures time to acquire a `database/sql` transaction
+connection; SQLite lock wait inside a deferred transaction is reflected in
+transaction duration and busy/timeout counters.
+
 ### Derived gauge units
 
 The collector stores ratio gauges as integer micro-units to preserve

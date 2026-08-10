@@ -92,6 +92,19 @@ func TestRegistry_TextExposition(t *testing.T) {
 	}
 }
 
+func TestGaugeMaxRetainsMaximum(t *testing.T) {
+	r := NewRegistry()
+	gf := NewGaugeFamily("velox_test_gauge_max", "test", nil)
+	r.Register(gf)
+	gf.GaugeMax(nil, 25)
+	gf.GaugeMax(nil, 10)
+
+	out := dumpRegistryAll(t, r)
+	if !strings.Contains(out, "velox_test_gauge_max 25") {
+		t.Fatalf("GaugeMax lowered the gauge or did not expose it:\n%s", out)
+	}
+}
+
 func TestRegistry_HTTPHandler(t *testing.T) {
 	r := NewRegistry()
 	cf := NewCounterFamily("velox_test_http_total", "x", nil)

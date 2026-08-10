@@ -58,8 +58,22 @@ func (s *Service) InspectJob(ctx context.Context, jobID string) (*JobInspection,
 	}
 	if deliveries, deliveryErr := s.jobInspection.ListDeliveries(ctx, jobID); deliveryErr == nil {
 		result.Deliveries = deliveries
+		artifactSizes := make(map[string]int64, len(result.Artifacts))
+		for _, artifact := range result.Artifacts {
+			artifactSizes[artifact.ID] = artifact.SizeBytes
+		}
 		for i := range result.Deliveries {
-			result.Deliveries[i].QueueMS, result.Deliveries[i].UploadMS, result.Deliveries[i].TotalMS = deliveryDurations(result.Deliveries[i])
+			delivery := &result.Deliveries[i]
+			delivery.QueueMS, delivery.UploadMS, delivery.TotalMS = deliveryDurations(*delivery)
+			if delivery.AttemptCount > 1 {
+				delivery.RetryCount = delivery.AttemptCount - 1
+			}
+			if delivery.Status == "SUCCEEDED" {
+				delivery.BytesUploaded = artifactSizes[delivery.ArtifactID]
+				if delivery.BytesUploaded > 0 && delivery.UploadMS > 0 {
+					delivery.UploadMbps = float64(delivery.BytesUploaded*8) / float64(delivery.UploadMS) / 1000
+				}
+			}
 		}
 	} else {
 		return nil, fmt.Errorf("observability: list deliveries: %w", deliveryErr)

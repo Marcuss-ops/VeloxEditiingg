@@ -67,6 +67,7 @@ type JobDelivery struct {
 	RemoteURL        string `json:"remote_url,omitempty"`
 	CreatedAt        string `json:"created_at"`
 	UpdatedAt        string `json:"updated_at"`
+	QueuedAt         string `json:"queued_at,omitempty"`
 	StartedAt        string `json:"started_at,omitempty"`
 	LockedBy         string `json:"locked_by,omitempty"`
 	LeaseID          string `json:"lease_id,omitempty"`

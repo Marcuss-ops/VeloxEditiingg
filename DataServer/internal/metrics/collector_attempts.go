@@ -49,11 +49,11 @@ type AttemptReader interface {
 // when Scan is wired to load the latest attempt rows.
 func (c *Collector) RecordAttempt(am taskattempts.AttemptMetrics, cache taskattempts.AttemptCacheStats, cost *taskattempts.AttemptCostBasis, execID, execVersion, workerClass string) {
 	if c.operational != nil {
-		// Older workers expose only hit/miss/entry counters. Keep the
-		// The current cache contract exposes hit/miss counters, but not a
-		// unique-asset count. Use -1 so the telemetry sink records the
-		// available lookup totals without fabricating a gauge value.
-		c.operational.RecordCacheSnapshot(-1, cache.CacheHits+cache.CacheMisses, cache.CacheHits, cache.CacheMisses)
+		lookups := cache.CacheLookups
+		if lookups == 0 {
+			lookups = cache.CacheHits + cache.CacheMisses
+		}
+		c.operational.RecordCacheSnapshot(cache.UniqueAssetsRequested, lookups, cache.CacheHits, cache.CacheMisses)
 	}
 	// execVersion is intentionally unused here: the video counter
 	// families are documented (docs/metrics-catalog.md) with the

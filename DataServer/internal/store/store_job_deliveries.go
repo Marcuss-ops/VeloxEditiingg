@@ -70,6 +70,7 @@ func (s *SQLiteStore) ListJobDeliveriesByJob(jobID string) ([]JobDelivery, error
 		        jd.attempt_count, jd.max_attempts,
 		        COALESCE(jd.last_error_code,''), COALESCE(jd.last_error_message,''),
 		        COALESCE(jd.completed_at,''),
+		        COALESCE(jd.queued_at, jd.created_at),
 		        COALESCE((SELECT da.started_at FROM delivery_attempts da
 		                  WHERE da.delivery_id = jd.delivery_id
 		                  ORDER BY da.id DESC LIMIT 1), '')
@@ -89,7 +90,7 @@ func (s *SQLiteStore) ListJobDeliveriesByJob(jobID string) ([]JobDelivery, error
 			&jd.RemoteURL, &jd.CreatedAt, &jd.UpdatedAt,
 			&jd.LockedBy, &jd.LeaseID, &jd.LeaseExpiresAt, &jd.NextAttemptAt,
 			&jd.AttemptCount, &jd.MaxAttempts, &jd.LastError,
-			&jd.LastErrorMessage, &jd.CompletedAt, &jd.StartedAt); err != nil {
+			&jd.LastErrorMessage, &jd.CompletedAt, &jd.QueuedAt, &jd.StartedAt); err != nil {
 			return nil, wrapDBInfrastructure("ListJobDeliveriesByJob scan", err)
 		}
 		out = append(out, jd)
@@ -109,6 +110,7 @@ func (s *SQLiteStore) GetJobDelivery(ctx context.Context, deliveryID string) (*J
 		        COALESCE(idempotency_key,''), COALESCE(remote_id,''),
 		        COALESCE(remote_url,''),
 		        created_at, updated_at, COALESCE(completed_at, ''),
+		        COALESCE(queued_at, created_at),
 		        COALESCE((SELECT da.started_at FROM delivery_attempts da
 		                  WHERE da.delivery_id = job_deliveries.delivery_id
 		                  ORDER BY da.id DESC LIMIT 1), ''),
@@ -121,7 +123,7 @@ func (s *SQLiteStore) GetJobDelivery(ctx context.Context, deliveryID string) (*J
 	var idempotencyKey, remoteID, remoteURL string
 	err := row.Scan(&jd.DeliveryID, &jd.ArtifactID, &jd.DestinationID,
 		&jd.Status, &idempotencyKey, &remoteID,
-		&remoteURL, &jd.CreatedAt, &jd.UpdatedAt, &jd.CompletedAt, &jd.StartedAt,
+		&remoteURL, &jd.CreatedAt, &jd.UpdatedAt, &jd.CompletedAt, &jd.QueuedAt, &jd.StartedAt,
 		&jd.LockedBy, &jd.LeaseID, &jd.LeaseExpiresAt, &jd.NextAttemptAt,
 		&jd.AttemptCount, &jd.MaxAttempts, &jd.LastError, &jd.LastErrorMessage)
 	if err != nil {

@@ -19,7 +19,7 @@
 #
 # Examples:
 #   VELOX_DELIVERY_DISABLED=1 \
-#   VELOX_BENCH_SUBMIT_CMD='scripts/fleetctl-legacy job submit --payload /tmp/p.json --workers all' \
+#   VELOX_BENCH_SUBMIT_CMD='scripts/fleetctl job submit --payload /tmp/p.json --workers all' \
 #     scripts/benchmarks/delivery-isolation.sh render --jobs 8
 #
 #   VELOX_BENCH_SUBMIT_CMD='scripts/prepare-ready-deliveries.sh' \
@@ -86,7 +86,12 @@ watch_one() {
   local safe_id
   safe_id="$(printf '%s' "$job_id" | tr -c 'A-Za-z0-9._-' '_')"
   "$FLEETCTL" job watch "$job_id" --timeout "$TIMEOUT" --poll "$POLL" --json \
-    >"${run_dir}/jobs/${safe_id}.json"
+    >"${run_dir}/jobs/${safe_id}.watch.json"
+  # `job watch --json` is an event stream: it emits one JSON object per poll
+  # and intentionally does not contain execution/delivery metrics. Use the
+  # terminal inspection as the benchmark row so jq never mistakes polling
+  # snapshots for independent jobs.
+  "$FLEETCTL" job inspect "$job_id" --json >"${run_dir}/jobs/${safe_id}.json"
 }
 
 watch_jobs() {
@@ -109,30 +114,34 @@ extract_report() {
   local ids_file="$1"
   jq -n --arg mode "$MODE" --arg concurrency "$CONCURRENCY" --arg jobs "$JOBS" \
     --slurpfile snapshots <(for f in "$run_dir"/jobs/*.json; do jq -c . "$f"; done) '
-    def first($names):
-      [.. | objects | to_entries[] | .key as $k | select($names | index($k)) | .value][0] // null;
-    def number($names): (first($names) // 0) | tonumber;
-    def sha: first(["output_sha256", "artifact_sha256", "sha256"]);
-    ($snapshots) as $rows |
-    ($rows | map({
-      status: (first(["status", "state"]) // "UNKNOWN"),
-      output_sha256: sha,
-      transcode_passes: number(["encode_passes", "transcode_passes"]),
-      delivery_queue_ms: number(["delivery_queue_ms"]),
-      delivery_upload_ms: number(["delivery_upload_ms"]),
-      delivery_total_ms: number(["delivery_total_ms"]),
-      retry_count: number(["retry_count", "delivery_retry_count"]),
-      timeout_count: number(["timeout_count", "delivery_timeout_count"]),
-      bytes_uploaded: number(["bytes_uploaded", "delivery_bytes_uploaded"]),
-      upload_mbps: number(["upload_mbps", "delivery_upload_mbps"]),
-      db_write_wait_ms: number(["db_write_wait_ms"]),
-      db_transaction_ms: number(["db_transaction_ms"]),
-      db_busy_count: number(["db_busy_count"]),
-      db_busy_timeout_count: number(["db_busy_timeout_count"]),
-      db_retry_count: number(["db_retry_count"]),
-      db_write_operations: number(["db_write_operations"]),
-      db_read_operations: number(["db_read_operations"])
-    })) as $jobs |
+    def attempt: (.execution.attempts // []) | if length > 0 then .[-1] else {} end;
+    def metric($a; $name): (($a.metrics // {})[$name] // 0);
+    ($snapshots | map(
+      . as $root |
+      (attempt) as $a |
+      ($root.deliveries // []) as $deliveries |
+      ([ $deliveries[] | .queue_ms // 0 ] | add // 0) as $queue_ms |
+      ([ $deliveries[] | .upload_ms // 0 ] | add // 0) as $upload_ms |
+      ([ $deliveries[] | .total_ms // 0 ] | add // 0) as $total_ms |
+      ([ $deliveries[] | .retry_count // ((.attempt_count // 0) - 1) | if . > 0 then . else 0 end ] | add // 0) as $retries |
+      ([ $deliveries[] | .bytes_uploaded // 0 ] | add // 0) as $bytes |
+      {
+        status: ($root.job.status // "UNKNOWN"),
+        output_sha256: (metric($a; "output_sha256") // null),
+        transcode_passes: (metric($a; "encode_passes") // 0),
+        delivery_queue_ms: $queue_ms,
+        delivery_upload_ms: $upload_ms,
+        delivery_total_ms: $total_ms,
+        retry_count: $retries,
+        timeout_count: null,
+        bytes_uploaded: $bytes,
+        upload_mbps: (if $upload_ms > 0 then (($bytes * 8) / $upload_ms / 1000) else 0 end),
+        cache_unique_assets_requested: ($root.execution.cache.unique_assets_requested // 0),
+        cache_lookups: ($root.execution.cache.lookups // 0),
+        cache_hits: ($root.execution.cache.hits // 0),
+        cache_misses: ($root.execution.cache.misses // 0)
+      }
+    )) as $jobs |
     {
       mode: $mode,
       concurrency: ($concurrency|tonumber),
@@ -146,18 +155,17 @@ extract_report() {
         upload_ms: ($jobs | map(.delivery_upload_ms) | add // 0),
         total_ms: ($jobs | map(.delivery_total_ms) | add // 0),
         retry_count: ($jobs | map(.retry_count) | add // 0),
-        timeout_count: ($jobs | map(.timeout_count) | add // 0),
+        timeout_count: ($jobs | map(select(.timeout_count != null) | .timeout_count) | add // null),
         bytes_uploaded: ($jobs | map(.bytes_uploaded) | add // 0),
         upload_mbps: ($jobs | map(.upload_mbps) | add // 0)
       },
-      database: {
-        write_wait_ms: ($jobs | map(.db_write_wait_ms) | add // 0),
-        transaction_ms: ($jobs | map(.db_transaction_ms) | add // 0),
-        busy_count: ($jobs | map(.db_busy_count) | add // 0),
-        busy_timeout_count: ($jobs | map(.db_busy_timeout_count) | add // 0),
-        retry_count: ($jobs | map(.db_retry_count) | add // 0),
-        write_operations: ($jobs | map(.db_write_operations) | add // 0),
-        read_operations: ($jobs | map(.db_read_operations) | add // 0)
+      database: {note: "DB telemetry is master-global Prometheus state; scrape /metrics before and after the run for deltas."},
+      cache: {
+        lookups: ($jobs | map(.cache_lookups) | add // 0),
+        hits: ($jobs | map(.cache_hits) | add // 0),
+        misses: ($jobs | map(.cache_misses) | add // 0),
+        unique_assets_requested: ($jobs | map(.cache_unique_assets_requested) | add // 0),
+        invariant: (($jobs | map(.cache_lookups) | add // 0) == (($jobs | map(.cache_hits) | add // 0) + ($jobs | map(.cache_misses) | add // 0)))
       },
       jobs: $jobs
     }

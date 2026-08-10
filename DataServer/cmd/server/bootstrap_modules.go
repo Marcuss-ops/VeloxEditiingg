@@ -45,6 +45,22 @@ type sqliteLiveAttemptAdapter struct {
 	store *store.SQLiteStore
 }
 
+func deliveryRetryCount(attempts int) int {
+	if attempts <= 1 {
+		return 0
+	}
+	return attempts - 1
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func (a *sqliteLiveAttemptAdapter) GetWorkerTaskRuntimeByJob(ctx context.Context, jobID string) (*observability.LiveAttempt, error) {
 	row, err := a.store.GetWorkerTaskRuntimeByJob(ctx, jobID)
 	return liveAttemptFromRuntimeRow(row, err)
@@ -121,9 +137,9 @@ func (a *sqliteJobInspectionAdapter) ListDeliveries(_ context.Context, jobID str
 			DeliveryID: row.DeliveryID, ArtifactID: row.ArtifactID,
 			DestinationID: row.DestinationID, Status: row.Status,
 			RemoteID: row.RemoteID, RemoteURL: row.RemoteURL,
-			AttemptCount: row.AttemptCount, MaxAttempts: row.MaxAttempts,
+			AttemptCount: row.AttemptCount, RetryCount: deliveryRetryCount(row.AttemptCount), MaxAttempts: row.MaxAttempts,
 			LastError: row.LastError, LastErrorMessage: row.LastErrorMessage,
-			QueuedAt: row.CreatedAt, StartedAt: row.StartedAt,
+			QueuedAt: firstNonEmptyString(row.QueuedAt, row.CreatedAt), StartedAt: row.StartedAt,
 			CompletedAt: row.CompletedAt,
 		})
 	}

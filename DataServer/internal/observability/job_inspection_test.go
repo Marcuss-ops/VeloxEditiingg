@@ -41,7 +41,11 @@ func (inspectionExtras) ListArtifacts(context.Context, string, int) ([]ArtifactS
 	return []ArtifactSnapshot{{ID: "artifact-1", Status: "READY", SizeBytes: 42}}, nil
 }
 func (inspectionExtras) ListDeliveries(context.Context, string) ([]DeliverySnapshot, error) {
-	return []DeliverySnapshot{{DeliveryID: "delivery-1", Status: "SUCCEEDED"}}, nil
+	return []DeliverySnapshot{{
+		DeliveryID: "delivery-1", ArtifactID: "artifact-1", Status: "SUCCEEDED", AttemptCount: 3,
+		QueuedAt: "2026-08-09T10:00:00Z", StartedAt: "2026-08-09T10:00:02Z",
+		CompletedAt: "2026-08-09T10:00:12Z",
+	}}, nil
 }
 
 func TestInspectJobComposesOperatorReadModel(t *testing.T) {
@@ -65,6 +69,13 @@ func TestInspectJobComposesOperatorReadModel(t *testing.T) {
 	}
 	if len(result.Artifacts) != 1 || len(result.Deliveries) != 1 {
 		t.Fatalf("artifacts/deliveries = %d/%d", len(result.Artifacts), len(result.Deliveries))
+	}
+	delivery := result.Deliveries[0]
+	if delivery.QueueMS != 2000 || delivery.UploadMS != 10000 || delivery.TotalMS != 12000 {
+		t.Fatalf("delivery timings = %d/%d/%d", delivery.QueueMS, delivery.UploadMS, delivery.TotalMS)
+	}
+	if delivery.RetryCount != 2 || delivery.BytesUploaded != 42 || delivery.UploadMbps <= 0 {
+		t.Fatalf("delivery metrics = retries %d, bytes %d, mbps %f", delivery.RetryCount, delivery.BytesUploaded, delivery.UploadMbps)
 	}
 }
 

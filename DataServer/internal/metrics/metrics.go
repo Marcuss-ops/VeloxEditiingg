@@ -200,6 +200,33 @@ func (f *Family) GaugeSet(labelVals []string, value int64) {
 	g.Store(value)
 }
 
+// GaugeMax raises a gauge-family child's value when value is greater than
+// its current value. It is used for monotonic-in-window measurements such as
+// the longest observed transaction; ordinary gauges should continue to use
+// GaugeSet.
+func (f *Family) GaugeMax(labelVals []string, value int64) {
+	if f.Kind != GaugeFamily {
+		panic(fmt.Sprintf("metrics: GaugeMax called on non-gauge family %q", f.Name))
+	}
+	if len(labelVals) != len(f.labels) {
+		panic(fmt.Sprintf("metrics: gauge %q label len mismatch: got %d want %d", f.Name, len(labelVals), len(f.labels)))
+	}
+	key := labelKey(labelVals)
+	f.labelMu.Lock()
+	g, ok := f.gaugeVals[key]
+	if !ok {
+		g = &atomic.Int64{}
+		f.gaugeVals[key] = g
+	}
+	f.labelMu.Unlock()
+	for {
+		current := g.Load()
+		if value <= current || g.CompareAndSwap(current, value) {
+			return
+		}
+	}
+}
+
 // Observe adds one observation `v` to a histogram-family child.
 func (f *Family) Observe(labelVals []string, v float64) {
 	if f.Kind != HistogramFamily {
