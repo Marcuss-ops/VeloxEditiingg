@@ -57,7 +57,9 @@ non un consumer del rollout o della materializzazione production canonical.**
 | `vault_velox_worker_credential_{1,2,3}` | `worker_secret` per-host → `VELOX_WORKER_SECRET` in `/etc/velox-worker-<host>.env` (via legacy bridge `canonical_worker_runtime.yml`, `no_log`) | Worker agent (`internal/bootstrap/config.go:181`) → SHA-256 `credential_hash` → validata contro tabella SQLite `worker_credentials` sul master | Credential per-worker (statica) |
 | `vault_velox_operator_pubkey` | — | legacy `deploy/playbooks/bootstrap-ssh.yml` → `/home/velox-deploy/.ssh/authorized_keys` | Chiave pubblica SSH (identità, bassa segretezza) |
 
-> Nota storica: `vault_velox_sudo_password` e `vault_velox_social_gateway_api_key`
+> Nota storica: le vecchie chiavi di integrazione Social non sono più nomi
+> operativi; usare esclusivamente la configurazione canonica documentata dal
+> master (`SOCIAL_API_URL`, `SOCIAL_API_TOKEN`, `SOCIAL_CALLBACK_BASE_URL`).
 > sono stati **rimossi** (CHANGELOG: commit `09f5c9c`, PR-15.10). Il sudo è
 > passwordless via `velox-deploy`; l'alias gateway è rinominato in `social_api_token`.
 

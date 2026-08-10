@@ -164,8 +164,8 @@ re-applies cleanly).
   honors only `SOCIAL_API_URL / SOCIAL_API_TOKEN / SOCIAL_API_TIMEOUT_MS
   / SOCIAL_CALLBACK_BASE_URL`. The canonical env
   validator on the *Velox* master side is `deploy/validate-master-env.sh`
-  — `bash -n` confirmed, parse-int positive-int helper, regex-tightened
-  legacy `SOCIAL_GATEWAY_*` alias detection.
+  — `bash -n` confirmed, parse-int positive-int helper, and fail-closed
+  rejection of deprecated non-canonical names.
 * Single-script M2M-provisioning anchor: `scripts/api/jobs_smoke.sh`
   (the same `resolve_token` + `trap cleanup EXIT` + exponential backoff
   patterns are inherited).
