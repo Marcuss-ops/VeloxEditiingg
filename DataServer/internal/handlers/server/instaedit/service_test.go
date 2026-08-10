@@ -19,6 +19,10 @@ type memoryJobGateway struct {
 	deliveries                []store.JobDelivery
 	destinations              map[string]*store.DeliveryDestination
 	cancelled                 []string
+	cancelReason              string
+	cancelRevision            int
+	getWorkspaceID            int64
+	getJobID                  string
 	cancelErr                 error
 	listJobDeliveriesErr      error
 	getDeliveryDestinationErr error
@@ -29,6 +33,8 @@ func (m *memoryJobGateway) ListJobsByWorkspace(ctx context.Context, workspaceID 
 }
 
 func (m *memoryJobGateway) GetJobByWorkspace(ctx context.Context, jobID string, workspaceID int64) (map[string]any, error) {
+	m.getWorkspaceID = workspaceID
+	m.getJobID = jobID
 	if row, ok := m.getByID[jobID]; ok {
 		return row, nil
 	}
@@ -40,6 +46,8 @@ func (m *memoryJobGateway) Cancel(ctx context.Context, jobID string, reason stri
 		return m.cancelErr
 	}
 	m.cancelled = append(m.cancelled, jobID)
+	m.cancelReason = reason
+	m.cancelRevision = revision
 	return nil
 }
 
@@ -266,6 +274,12 @@ func TestService_CancelJob_Success(t *testing.T) {
 	}
 	if len(jobs.cancelled) != 1 || jobs.cancelled[0] != "job-1" {
 		t.Fatalf("expected job-1 to be cancelled, got %v", jobs.cancelled)
+	}
+	if jobs.getWorkspaceID != 45 || jobs.getJobID != "job-1" {
+		t.Fatalf("expected ownership lookup for workspace 45/job-1, got workspace=%d job=%q", jobs.getWorkspaceID, jobs.getJobID)
+	}
+	if jobs.cancelReason != "cancelled via InstaEdit BFF" || jobs.cancelRevision != 0 {
+		t.Fatalf("unexpected cancel arguments: reason=%q revision=%d", jobs.cancelReason, jobs.cancelRevision)
 	}
 }
 
