@@ -135,3 +135,36 @@ func TestSecurity_WorkerTokenMustMatchDeclaredWorkerID(t *testing.T) {
 	}
 
 }
+
+func TestSecurity_PersistentWorkerCredentialMustMatchDeclaredWorkerID(t *testing.T) {
+	db, tm, _ := securityStoreAndWorkerToken(t)
+	credential := "persistent-credential-hash"
+	if err := db.SetWorkerCredential(securityWorkerID, credential); err != nil {
+		t.Fatalf("SetWorkerCredential: %v", err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/protected", WorkerOrAdminAuthMiddleware(securityAdminConfig(), tm), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	request := func(workerID, token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("X-Worker-ID", workerID)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+
+	if got := request(securityWorkerID, credential); got.Code != http.StatusNoContent {
+		t.Fatalf("matching persistent credential status=%d want=%d body=%s", got.Code, http.StatusNoContent, got.Body.String())
+	}
+	if got := request("forged-worker", credential); got.Code != http.StatusUnauthorized {
+		t.Fatalf("credential with forged worker ID status=%d want=%d body=%s", got.Code, http.StatusUnauthorized, got.Body.String())
+	}
+	if got := request("", credential); got.Code != http.StatusUnauthorized {
+		t.Fatalf("credential without worker ID status=%d want=%d body=%s", got.Code, http.StatusUnauthorized, got.Body.String())
+	}
+}

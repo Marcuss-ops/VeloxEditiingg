@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"velox-server/internal/store"
@@ -220,6 +221,17 @@ func (tm *TokenManager) ValidateWorkerCommandToken(token string) (string, bool) 
 		return "", false
 	}
 	return sess.WorkerID, true
+}
+
+// ValidateWorkerCredentialToken validates the persistent credential hash used
+// by the mTLS control-plane worker for authenticated data-plane requests.
+// Unlike a command/session token, this credential is bound to the declared
+// worker ID and is not accepted without that binding.
+func (tm *TokenManager) ValidateWorkerCredentialToken(workerID, credentialHash string) (bool, error) {
+	if tm == nil || tm.store == nil || strings.TrimSpace(workerID) == "" || strings.TrimSpace(credentialHash) == "" {
+		return false, nil
+	}
+	return tm.store.ValidateWorkerCredential(workerID, credentialHash)
 }
 
 // RevokeToken revokes a token by revoking its session.

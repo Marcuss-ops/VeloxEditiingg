@@ -82,6 +82,22 @@ func WorkerOrAdminAuthMiddleware(cfg *config.Config, tokenMgr *workersreg.TokenM
 				c.Next()
 				return
 			}
+
+			// The canonical gRPC worker session authenticates with the
+			// persistent credential hash from Hello.credential_hash. The
+			// worker reuses that credential for its authenticated REST
+			// data-plane pollers, including protected-assets. Accept it only
+			// when the explicit X-Worker-ID binding validates against the
+			// same persistent credential row; never treat the credential as
+			// an unbound bearer token.
+			workerID := strings.TrimSpace(c.GetHeader("X-Worker-ID"))
+			if workerID != "" {
+				if valid, err := tokenMgr.ValidateWorkerCredentialToken(workerID, token); err == nil && valid {
+					c.Set("authenticated_worker_id", workerID)
+					c.Next()
+					return
+				}
+			}
 		}
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid worker or admin token"})
 	}
