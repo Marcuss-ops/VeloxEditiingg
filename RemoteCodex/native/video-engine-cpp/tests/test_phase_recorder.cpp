@@ -401,6 +401,55 @@ void testRenderEngineIntegration() {
            "real concat phase emitted");
 }
 
+void testCopyOnlyTelemetryDoesNotClaimVideoEncoding() {
+    SUBCASE("copy-only clips report stream copy rather than encoded frames");
+    namespace fs = std::filesystem;
+    const auto stem = std::string("velox_copy_only_telemetry_") +
+                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const fs::path input = fs::temp_directory_path() / (stem + "_input.mp4");
+    const fs::path output = fs::temp_directory_path() / (stem + "_output.mp4");
+    const fs::path sidecar = fs::path(output.string() + ".progress.json");
+    struct Cleanup {
+        fs::path input;
+        fs::path output;
+        fs::path sidecar;
+        ~Cleanup() {
+            std::error_code ec;
+            fs::remove(input, ec);
+            fs::remove(output, ec);
+            fs::remove(sidecar, ec);
+        }
+    } cleanup{input, output, sidecar};
+
+    const std::string inputCmd =
+        "ffmpeg -y -hide_banner -loglevel error -f lavfi -i "
+        "testsrc=size=64x64:rate=5:duration=0.4 -an -c:v libx264 "
+        "-pix_fmt yuv420p -t 0.4 " + velox::file::shellQuote(input.string());
+    EXPECT(velox::file::runCommand(inputCmd), "compatible copy-only fixture must be created");
+
+    velox::plan::RenderPlan plan;
+    plan.job_id = "copy-only-telemetry";
+    plan.canvas = {64, 64, 5};
+    plan.copy_only = true;
+    plan.timeline.push_back({velox::plan::VideoSource{input.string(), "fixture"}, 0.4, false, {}, "scene-copy"});
+    plan.output_path = output.string();
+
+    velox::core::RenderEngine engine;
+    const auto result = engine.render(plan);
+    EXPECT(result.success, "copy-only fixture render must succeed (error=" + result.error + ")");
+    EXPECT(engine.framesEncoded() == 0, "copy-only render must report zero encoded video frames");
+    EXPECT(engine.framesComposited() == 0, "copy-only render must report zero composited video frames");
+    EXPECT(engine.encodePasses() == 0, "copy-only render must report zero encode passes");
+
+    const std::string json = velox::file::readFile(sidecar.string());
+    EXPECT(std::strstr(json.c_str(), "\"frames\":0") != nullptr,
+           "copy-only sidecar must report zero encoded frames");
+    EXPECT(std::strstr(json.c_str(), "\"encode_passes\":0") != nullptr,
+           "copy-only sidecar must report zero encode passes");
+    EXPECT(std::strstr(json.c_str(), "\"component\":\"ffmpeg\"") == nullptr,
+           "copy-only sidecar must not emit an engine.encode event");
+}
+
 void testReset() {
     SUBCASE("Reset clears events and re-starts indexes at 0");
     vt::PhaseRecorder r;
@@ -441,6 +490,7 @@ int main() {
     testAppendJsonEscapesStrings();
     testCompleteSidecarSchema();
     testRenderEngineIntegration();
+    testCopyOnlyTelemetryDoesNotClaimVideoEncoding();
     testReset();
     testCanonicalEnums();
 

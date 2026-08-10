@@ -11,6 +11,8 @@
 package taskrunner
 
 import (
+	"strings"
+
 	"velox-worker-agent/internal/telemetry"
 )
 
@@ -203,9 +205,13 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 		typed.EncodePasses = int32(v)
 	}
 	// final_concat_stream_copy is conventionally a bool in the proto
-	// and a JSON-style key in the legacy map.
+	// and a JSON-style key in the legacy map. The native sidecar's
+	// canonical concat_mode is authoritative when the legacy bool alias is
+	// absent; stream_copy means the final video stream was never re-encoded.
 	if v, ok := m["final.concat.stream_copy"].(bool); ok {
 		typed.FinalConcatStreamCopy = v
+	} else {
+		typed.FinalConcatStreamCopy = strings.EqualFold(typed.ConcatMode, "stream_copy")
 	}
 	report.TypedMetrics = &typed
 	// ── End typed mirror ─────────────────────────────────────────────

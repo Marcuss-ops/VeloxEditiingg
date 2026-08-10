@@ -6,6 +6,7 @@
 #include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -132,8 +133,9 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         int64_t segmentDecodedFrames = 0;
         services::EngineProgress segmentProgress{};
         const auto onProgress = progress_cb_;
+        const bool copyOnly = params.copy_only;
         services::ProgressCallback segmentCallback =
-            [this, onProgress, &segmentFrames, &segmentProgress, i, totalSegments = plan.timeline.size(), renderStart](const services::EngineProgress& p) {
+            [this, onProgress, &segmentFrames, &segmentProgress, copyOnly, i, totalSegments = plan.timeline.size(), renderStart](const services::EngineProgress& p) {
                 segmentProgress = p;
                 if (p.frame > segmentFrames) {
                     segmentFrames = p.frame;
@@ -142,11 +144,12 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 if (onProgress) {
                     onProgress(p);
                 }
+                const int64_t reportedSegmentFrames = copyOnly ? 0 : segmentFrames;
                 reportDetailedProgress(
                     p, static_cast<int>(i + 1), static_cast<int>(totalSegments),
                     static_cast<int>(i + 1), static_cast<int>(totalSegments),
-                    "building_segments", frames_encoded_.load() + segmentFrames,
-                    frames_decoded_.load(), frames_composited_.load() + segmentFrames,
+                    "building_segments", frames_encoded_.load() + reportedSegmentFrames,
+                    frames_decoded_.load(), frames_composited_.load() + reportedSegmentFrames,
                     std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - renderStart).count());
             };
@@ -221,11 +224,15 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         }
 
         {
-            // Block-1: per-segment encode event (engine origin, segment
-            // scope). Completed with output bytes + cumulative frames.
-            telemetry::ScopedPhase encodePhase(
-                recorder_, telemetry::kOriginEngine, telemetry::kScopeSegment,
-                "ffmpeg", "encode_segment_" + std::to_string(i), "encode");
+            // Stream-copy segments must not be reported as video encoding.
+            // FFmpeg's progress `frame` value is packet/stream progress in
+            // this mode, not frames produced by a video encoder.
+            std::unique_ptr<telemetry::ScopedPhase> encodePhase;
+            if (!params.copy_only) {
+                encodePhase = std::make_unique<telemetry::ScopedPhase>(
+                    recorder_, telemetry::kOriginEngine, telemetry::kScopeSegment,
+                    "ffmpeg", "encode_segment_" + std::to_string(i), "encode");
+            }
             auto encStart = std::chrono::steady_clock::now();
             ScopedTimer t(metrics_, "segment_build_ms");
             bool built = runFfmpegSegmentWithProgress(
@@ -234,34 +241,45 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 seg.status = telemetry::kStatusFailed;
                 seg.error_code = "encode_failed";
                 seg.error_message = "failed to build timeline segment " + std::to_string(i);
-                encodePhase.Abort(seg.error_code, seg.error_message);
+                if (encodePhase) {
+                    encodePhase->Abort(seg.error_code, seg.error_message);
+                }
                 result.error = seg.error_message;
                 return failRender(seg.error_code);
             }
-            seg.ffmpeg_encode_ms = std::chrono::duration<double, std::milli>(
+            const double ffmpegWallMs = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - encStart).count();
-            seg.frames_encoded = segmentFrames;
+            seg.ffmpeg_encode_ms = params.copy_only ? 0.0 : ffmpegWallMs;
+            seg.frames_encoded = params.copy_only ? 0 : segmentFrames;
             seg.frames_decoded = segmentDecodedFrames;
             // FFmpeg reports the frame count after the filter graph, so it
             // is the exact composited/output frame count for this segment.
-            seg.frames_composited = segmentFrames;
+            seg.frames_composited = params.copy_only ? 0 : segmentFrames;
             seg.ffmpeg_speed_x = segmentProgress.speed_x;
-            frames_encoded_.fetch_add(segmentFrames);
+            if (!params.copy_only) {
+                frames_encoded_.fetch_add(segmentFrames);
+            }
             frames_decoded_.fetch_add(segmentDecodedFrames);
-            frames_composited_.fetch_add(segmentFrames);
+            if (!params.copy_only) {
+                frames_composited_.fetch_add(segmentFrames);
+            }
             seg.status = telemetry::kStatusOk;
             seg.ffmpeg_threads = 0;
-            encodePhase.SetDetailedMetrics(
-                static_cast<int32_t>(i), "video", -1,
-                seg.started_offset_ms,
-                std::chrono::duration<double, std::milli>(
-                    std::chrono::steady_clock::now() - renderStart).count(),
-                0.0, 0.0, 0, segmentFrames);
-            encodePhase.Complete(0, fileSize(segmentOut), segmentFrames,
-                                 telemetry::kStatusOk);
+            if (encodePhase) {
+                encodePhase->SetDetailedMetrics(
+                    static_cast<int32_t>(i), "video", -1,
+                    seg.started_offset_ms,
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - renderStart).count(),
+                    0.0, 0.0, 0, segmentFrames);
+                encodePhase->Complete(0, fileSize(segmentOut), segmentFrames,
+                                      telemetry::kStatusOk);
+            }
         }
 
-        encode_passes_.fetch_add(1);
+        if (!params.copy_only) {
+            encode_passes_.fetch_add(1);
+        }
         const int64_t segBytes = fileSize(segmentOut);
         temp_bytes_written_.fetch_add(segBytes);
         segmentPaths.push_back(segmentOut);

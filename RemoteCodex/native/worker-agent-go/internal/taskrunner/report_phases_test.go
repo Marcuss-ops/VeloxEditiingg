@@ -31,6 +31,15 @@ func TestDetailedPhaseTimingToProtoRoundTripPreservesTelemetryContract(t *testin
 	}
 }
 
+func TestTypedMetricsFromMapDerivesFinalStreamCopyFromConcatMode(t *testing.T) {
+	metrics := TypedMetricsFromMap(map[string]interface{}{
+		"engine.concat_mode": "stream_copy",
+	})
+	if metrics == nil || !metrics.FinalConcatStreamCopy || metrics.ConcatMode != "stream_copy" {
+		t.Fatalf("stream-copy projection = %#v, want final_concat_stream_copy=true and concat_mode=stream_copy", metrics)
+	}
+}
+
 func TestDetailedPhaseTimingToProtoMapsExtendedFields(t *testing.T) {
 	input := DetailedPhaseTiming{
 		PhaseOrder:             4,
