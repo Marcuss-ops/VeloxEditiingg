@@ -10,6 +10,7 @@ import (
 
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/remoteengine"
+	"velox-shared/contract"
 	"velox-shared/contract/deliveryplan"
 	"velox-shared/contract/domain"
 	"velox-shared/publication"
@@ -108,8 +109,17 @@ func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush
 		return nil, domain.NewInvalidPayload("payload", "required", "payload is required")
 	}
 
-	deliveryPlan := deliveryplan.ExtractEnvelope(req.Payload)
-	dto, err := remoteengine.ParseRemotePipelineResult(req.Payload)
+	// CreatorPush accepts a fully assembled producer handoff. Interpret the
+	// overloaded wire field in its input-assembly domain before the payload
+	// reaches the resolver; SUCCEEDED is a JobStatus and must never be used
+	// to describe this producer-side boundary.
+	payload, err := normalizeCreatorInputAssemblyPayload(req.Payload)
+	if err != nil {
+		return nil, err
+	}
+
+	deliveryPlan := deliveryplan.ExtractEnvelope(payload)
+	dto, err := remoteengine.ParseRemotePipelineResult(payload)
 	if err != nil {
 		return nil, fmt.Errorf("parse creator payload: %w", err)
 	}
@@ -150,6 +160,32 @@ func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush
 		DeliveryPlan:     deliveryPlan,
 		PublicationSpecs: nil,
 	}, nil
+}
+
+// normalizeCreatorInputAssemblyPayload canonicalizes the CreatorPush wire
+// status without changing the established wire value. Missing status remains
+// accepted for legacy payloads; the resolver's completeness gate handles that
+// case. When present, only InputAssemblyCompleted is a valid completed handoff.
+func normalizeCreatorInputAssemblyPayload(raw map[string]interface{}) (map[string]interface{}, error) {
+	payload := make(map[string]interface{}, len(raw))
+	for key, value := range raw {
+		payload[key] = value
+	}
+
+	rawStatus, present := payload["status"]
+	if !present {
+		return payload, nil
+	}
+	statusText, ok := rawStatus.(string)
+	if !ok {
+		return nil, domain.NewInvalidPayload("payload.status", "invalid", "status must be an input-assembly status")
+	}
+	status, ok := contract.ParseInputAssemblyStatus(statusText)
+	if !ok || status != contract.InputAssemblyCompleted {
+		return nil, domain.NewInvalidPayload("payload.status", "invalid", "CreatorPush status must be input-assembly completed, not a job lifecycle status")
+	}
+	payload["status"] = string(status)
+	return payload, nil
 }
 
 // resolveCompletedPayload is the canonical HTTP-side adapter into

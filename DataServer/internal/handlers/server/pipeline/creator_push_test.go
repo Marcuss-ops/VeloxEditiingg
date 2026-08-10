@@ -1,6 +1,66 @@
 package pipeline
 
-import "testing"
+import (
+	"testing"
+
+	"velox-shared/contract"
+)
+
+func TestNormalizeCreatorInputAssemblyPayloadPreservesWireValue(t *testing.T) {
+	raw := map[string]interface{}{
+		"status": " completed ",
+		"job_id": "creator-wire-001",
+	}
+
+	got, err := normalizeCreatorInputAssemblyPayload(raw)
+	if err != nil {
+		t.Fatalf("normalizeCreatorInputAssemblyPayload() error = %v", err)
+	}
+	if got["status"] != string(contract.InputAssemblyCompleted) {
+		t.Fatalf("normalized status = %v, want wire value %q", got["status"], "completed")
+	}
+	if raw["status"] != " completed " {
+		t.Fatalf("normalization mutated the input status: %v", raw["status"])
+	}
+	if got["job_id"] != raw["job_id"] {
+		t.Fatalf("normalized job_id = %v, want %v", got["job_id"], raw["job_id"])
+	}
+}
+
+func TestNormalizeCreatorInputAssemblyPayloadRejectsJobLifecycleStatuses(t *testing.T) {
+	for _, status := range []string{"SUCCEEDED", "DONE", "RUNNING", "FAILED"} {
+		status := status
+		t.Run(status, func(t *testing.T) {
+			_, err := normalizeCreatorInputAssemblyPayload(map[string]interface{}{
+				"status": status,
+				"job_id": "creator-invalid-status",
+			})
+			if err == nil {
+				t.Fatalf("status %q was accepted, want rejection as job lifecycle status", status)
+			}
+		})
+	}
+}
+
+func TestNormalizeCreatorInputAssemblyPayloadRejectsNonStringStatus(t *testing.T) {
+	if _, err := normalizeCreatorInputAssemblyPayload(map[string]interface{}{
+		"status": true,
+	}); err == nil {
+		t.Fatal("non-string status was accepted, want validation error")
+	}
+}
+
+func TestNormalizeCreatorInputAssemblyPayloadAllowsMissingLegacyStatus(t *testing.T) {
+	got, err := normalizeCreatorInputAssemblyPayload(map[string]interface{}{
+		"job_id": "creator-legacy-001",
+	})
+	if err != nil {
+		t.Fatalf("missing status should remain accepted for legacy payloads: %v", err)
+	}
+	if _, present := got["status"]; present {
+		t.Fatalf("missing status was synthesized: %#v", got["status"])
+	}
+}
 
 func TestNormalizeCreatorPushRequestUsesPayloadIdentityAndDefaults(t *testing.T) {
 	normalized, err := normalizeCreatorPushRequest(creatorPushRequest{
@@ -25,6 +85,9 @@ func TestNormalizeCreatorPushRequestUsesPayloadIdentityAndDefaults(t *testing.T)
 	}
 	if got := firstStringResolver(normalized.WorkerPayload, "job_id"); got != "creator-job-123" {
 		t.Fatalf("WorkerPayload job_id = %q, want creator-job-123", got)
+	}
+	if got := normalized.WorkerPayload["status"]; got != string(contract.InputAssemblyCompleted) {
+		t.Fatalf("WorkerPayload status = %v, want input-assembly wire value %q", got, "completed")
 	}
 }
 
