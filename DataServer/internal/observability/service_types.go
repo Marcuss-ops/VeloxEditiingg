@@ -44,6 +44,14 @@ type LiveAttemptReader interface {
 	GetWorkerTaskRuntimeByJob(ctx context.Context, jobID string) (*LiveAttempt, error)
 }
 
+// LiveAttemptTaskReader is an optional task-scoped refinement of
+// LiveAttemptReader. It prevents a multi-task job from selecting another
+// task's newest runtime row while preserving the older job-scoped contract
+// for compatibility with existing adapters.
+type LiveAttemptTaskReader interface {
+	GetWorkerTaskRuntimeByTask(ctx context.Context, taskID, jobID string) (*LiveAttempt, error)
+}
+
 type LiveAttempt struct {
 	TaskID                 string
 	JobID                  string
@@ -52,6 +60,7 @@ type LiveAttempt struct {
 	WorkerID               string
 	LeaseID                string
 	RuntimeStatus          string
+	WorkerConnectionState  string
 	ProgressPercent        int
 	ProgressPhase          string
 	CurrentScene           int
@@ -402,14 +411,21 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 	// attempt is enriched in place rather than appended twice.
 	var live *LiveAttempt
 	if s.liveAttempts != nil {
-		if candidate, liveErr := s.liveAttempts.GetWorkerTaskRuntimeByJob(ctx, task.JobID); liveErr == nil && candidate != nil && candidate.AttemptID != "" {
+		var candidate *LiveAttempt
+		var liveErr error
+		if taskReader, ok := s.liveAttempts.(LiveAttemptTaskReader); ok {
+			candidate, liveErr = taskReader.GetWorkerTaskRuntimeByTask(ctx, task.ID, task.JobID)
+		} else {
+			candidate, liveErr = s.liveAttempts.GetWorkerTaskRuntimeByJob(ctx, task.JobID)
+		}
+		if liveErr == nil && candidate != nil && candidate.TaskID == task.ID && candidate.AttemptID != "" {
 			live = candidate
 			if live.AttemptNumber > summary.AttemptCount {
 				summary.AttemptCount = live.AttemptNumber
 			}
 		}
 	}
-	liveActive := live != nil && !task.Status.IsTerminal()
+	liveActive := liveAttemptIsEligible(live, task, attempts)
 
 	var firstStart *time.Time
 	var lastEnd *time.Time
@@ -425,20 +441,12 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 			PhaseBreakdown: make(map[string]int64),
 		}
 		as.WorkerName = s.workerDisplayName(as.WorkerID)
-		// The durable attempt is authoritative once it is terminal. A
-		// heartbeat can race with final TaskResult cleanup, so never let a
-		// stale worker_task_runtime row revert a completed Attempt to
-		// RUNNING or overwrite its final report metrics.
-		if live != nil && live.AttemptID == a.ID && a.Status.IsTerminal() {
-			// A volatile row can outlive final report ingest briefly. The
-			// durable Attempt wins, so never expose stale live fields at
-			// the top level once this identity is terminal.
-			liveActive = false
-		}
-		if live != nil && live.AttemptID == a.ID && !a.Status.IsTerminal() {
-			liveActive = true
+		// liveActive is decided once by liveAttemptIsEligible before this
+		// loop. That authority includes the matching durable attempt status,
+		// so merge precedence cannot depend on the order of durable rows.
+		if liveActive && live != nil && live.AttemptID == a.ID && !a.Status.IsTerminal() {
 			as.Live = true
-			as.Status = taskattempts.AttemptStatus(live.RuntimeStatus)
+			as.Status = liveAttemptStatus(live)
 			as.WorkerID = live.WorkerID
 			as.WorkerName = s.workerDisplayName(as.WorkerID)
 			as.Phase = live.ProgressPhase
@@ -529,7 +537,7 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 			if metrics.PeakVRAMBytes > summary.PeakVRAMBytes {
 				summary.PeakVRAMBytes = metrics.PeakVRAMBytes
 			}
-		} else if live != nil && live.AttemptID == a.ID && !a.Status.IsTerminal() {
+		} else if liveActive && live != nil && live.AttemptID == a.ID && !a.Status.IsTerminal() {
 			// Before final TaskResult ingest, expose the same typed metric
 			// shape that the final report will persist. This is a projection
 			// of worker_task_runtime, not a second telemetry store; once the
@@ -585,7 +593,7 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 
 		summary.Attempts = append(summary.Attempts, as)
 	}
-	if live != nil {
+	if liveActive {
 		found := false
 		for _, existing := range summary.Attempts {
 			if existing.AttemptID == live.AttemptID {
@@ -596,7 +604,7 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 		if !found {
 			summary.Attempts = append(summary.Attempts, AttemptSummary{
 				AttemptID: live.AttemptID, AttemptNumber: live.AttemptNumber,
-				Status: taskattempts.AttemptStatus(live.RuntimeStatus), WorkerID: live.WorkerID,
+				Status: liveAttemptStatus(live), WorkerID: live.WorkerID,
 				WorkerName: s.workerDisplayName(live.WorkerID),
 				Metrics:    liveAttemptMetrics(live),
 				Live:       true, Phase: live.ProgressPhase, ProgressPercent: live.ProgressPercent,
@@ -638,6 +646,74 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 	}
 
 	return summary, nil
+}
+
+// liveAttemptIsEligible is the single authority for live overlay precedence.
+// Durable terminal state always wins over volatile worker_task_runtime state;
+// live data is eligible only for a matching non-terminal attempt (or the
+// claim-to-accept visibility window before that durable row exists).
+func liveAttemptIsEligible(live *LiveAttempt, task *taskgraph.Task, attempts []taskattempts.TaskAttempt) bool {
+	if live == nil || task == nil || task.Status.IsTerminal() || live.AttemptID == "" || live.AttemptNumber <= 0 {
+		return false
+	}
+
+	// A runtime row is live only while its attempt is in an execution phase.
+	// PARTITIONED_SUSPECTED is a disconnect signal, not progress: exposing it
+	// as RUNNING would make a dead worker look active until the next retry.
+	switch live.RuntimeStatus {
+	case "ACCEPTED", "STARTING", "RUNNING", "CANCELLING", "UPLOADING", "FINALIZING":
+		// Keep the canonical active execution states below.
+	default:
+		return false
+	}
+	// A worker-level partition/disconnect state invalidates the volatile
+	// runtime row even if the last heartbeat payload still carried RUNNING.
+	// The workers row is the canonical connection-state mirror used by the
+	// recovery path, so this prevents stale progress from being presented as
+	// active after a heartbeat stream stops entirely.
+	switch live.WorkerConnectionState {
+	case "", "CONNECTED":
+		// Empty preserves compatibility with older adapters/fixtures that do
+		// not expose the worker connection-state column.
+	default:
+		return false
+	}
+
+	latestAttemptNumber := 0
+	for _, attempt := range attempts {
+		if attempt.AttemptNumber > latestAttemptNumber {
+			latestAttemptNumber = attempt.AttemptNumber
+		}
+	}
+
+	// During the Claim→Accept visibility window the durable attempt list can
+	// briefly lag the runtime row. Allow a newer live attempt through, but
+	// never resurrect an older attempt after a retry has been created.
+	if live.AttemptNumber < latestAttemptNumber || live.AttemptNumber < task.AttemptCount {
+		return false
+	}
+	for _, attempt := range attempts {
+		if attempt.ID == live.AttemptID {
+			// Durable terminal state is strictly authoritative. This check
+			// is deliberately independent of task status and row ordering.
+			return !attempt.Status.IsTerminal()
+		}
+	}
+	// A runtime row can become visible between claim/accept and durable
+	// attempt persistence. Permit that narrow window, but never an older
+	// attempt (guarded above by attempt number).
+	return true
+}
+
+func liveAttemptStatus(live *LiveAttempt) taskattempts.AttemptStatus {
+	if live == nil {
+		return taskattempts.AttemptStatusRunning
+	}
+	// Runtime phases such as UPLOADING and FINALIZING are deliberately
+	// richer than the durable AttemptStatus enum. The admin summary keeps
+	// the durable wire contract and reports every eligible non-terminal
+	// runtime phase as RUNNING.
+	return taskattempts.AttemptStatusRunning
 }
 
 func liveAttemptMetrics(live *LiveAttempt) *taskattempts.AttemptMetrics {

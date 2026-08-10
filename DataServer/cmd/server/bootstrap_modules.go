@@ -47,24 +47,35 @@ type sqliteLiveAttemptAdapter struct {
 
 func (a *sqliteLiveAttemptAdapter) GetWorkerTaskRuntimeByJob(ctx context.Context, jobID string) (*observability.LiveAttempt, error) {
 	row, err := a.store.GetWorkerTaskRuntimeByJob(ctx, jobID)
+	return liveAttemptFromRuntimeRow(row, err)
+}
+
+func (a *sqliteLiveAttemptAdapter) GetWorkerTaskRuntimeByTask(ctx context.Context, taskID, jobID string) (*observability.LiveAttempt, error) {
+	row, err := a.store.GetWorkerTaskRuntimeByTask(ctx, taskID, jobID)
+	return liveAttemptFromRuntimeRow(row, err)
+}
+
+func liveAttemptFromRuntimeRow(row *store.WorkerTaskRuntimeRow, err error) (*observability.LiveAttempt, error) {
 	if err != nil || row == nil {
 		return nil, err
 	}
 	return &observability.LiveAttempt{
 		TaskID: row.TaskID, JobID: row.JobID, AttemptID: row.AttemptID,
 		AttemptNumber: row.AttemptNumber, WorkerID: row.WorkerID, LeaseID: row.LeaseID,
-		RuntimeStatus: row.RuntimeStatus, ProgressPercent: row.ProgressPercent,
-		ProgressPhase: row.ProgressPhase, CurrentScene: row.CurrentScene,
+		RuntimeStatus: row.RuntimeStatus, WorkerConnectionState: row.WorkerConnectionState,
+		ProgressPercent: row.ProgressPercent,
+		ProgressPhase:   row.ProgressPhase, CurrentScene: row.CurrentScene,
 		TotalScenes: row.TotalScenes, CurrentSegment: row.CurrentSegment,
 		TotalSegments: row.TotalSegments, FramesEncoded: row.FramesEncoded,
 		FramesDecoded: row.FramesDecoded, FramesComposited: row.FramesComposited,
 		FFmpegSpeedX: row.FFmpegSpeedX, ElapsedMS: row.ElapsedMS,
-		CumulativeMetrics: row.CumulativeMetrics, StartedAt: row.StartedAt,
-		LastProgressAt: row.LastProgressAt, UpdatedAt: row.UpdatedAt,
+		CumulativeMetrics: row.CumulativeMetrics, CanonicalAttemptEvents: row.CanonicalAttemptEvents,
+		StartedAt: row.StartedAt, LastProgressAt: row.LastProgressAt, UpdatedAt: row.UpdatedAt,
 	}, nil
 }
 
 var _ observability.LiveAttemptReader = (*sqliteLiveAttemptAdapter)(nil)
+var _ observability.LiveAttemptTaskReader = (*sqliteLiveAttemptAdapter)(nil)
 
 func (a *sqliteJobInspectionAdapter) ListJobEvents(_ context.Context, jobID string, limit int) ([]observability.JobEvent, error) {
 	rows, err := a.store.ListJobEvents(jobID, limit)

@@ -9,6 +9,41 @@ import (
 	"time"
 )
 
+func TestGetWorkerTaskRuntimeByJobJoinsCanonicalWorkerConnectionState(t *testing.T) {
+	s, err := NewSQLiteStore(t.TempDir() + "/worker-runtime-reader-connection-state.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if _, err := s.DB().Exec(`
+		INSERT INTO workers(worker_id,worker_name,node_role,raw_json,migrated_at,connection_state)
+		VALUES(?, ?, 'worker', '{}', ?, 'PARTITIONED')`,
+		"reader-worker", "reader-worker", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB().Exec(`
+		INSERT INTO worker_task_runtime(
+			task_id,job_id,attempt_id,attempt_number,worker_id,session_id,lease_id,
+			executor_id,runtime_status,started_at,updated_at)
+		VALUES(?, ?, ?, 1, ?, 'session-reader', 'lease-reader', 'render', 'RUNNING', ?, ?)`,
+		"reader-task", "reader-job", "reader-attempt", "reader-worker",
+		time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime, err := s.GetWorkerTaskRuntimeByTask(context.Background(), "reader-task", "reader-job")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime == nil || runtime.WorkerConnectionState != "PARTITIONED" {
+		t.Fatalf("runtime worker connection state = %+v; want PARTITIONED from workers read model", runtime)
+	}
+	if runtime, err = s.GetWorkerTaskRuntimeByTask(context.Background(), "missing-task", "reader-job"); err != nil || runtime != nil {
+		t.Fatalf("task-scoped reader selected wrong task: runtime=%+v err=%v", runtime, err)
+	}
+}
+
 func TestPersistWorkerHeartbeatReconcilesRuntimeAtomically(t *testing.T) {
 	s, err := NewSQLiteStore(t.TempDir() + "/worker-runtime.db")
 	if err != nil {

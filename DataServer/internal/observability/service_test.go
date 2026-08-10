@@ -111,6 +111,10 @@ func (r stubLiveAttemptReader) GetWorkerTaskRuntimeByJob(context.Context, string
 	return r.live, nil
 }
 
+func (r stubLiveAttemptReader) GetWorkerTaskRuntimeByTask(context.Context, string, string) (*LiveAttempt, error) {
+	return r.live, nil
+}
+
 type stubWorkerReader struct {
 	workers []map[string]any
 	err     error
@@ -492,6 +496,123 @@ func TestService_SummarizeJobLiveAttemptIdentityIsImmediateAndUnique(t *testing.
 	live := result.Attempts[0]
 	if !live.Live || live.WorkerID != "worker-admin" || live.AttemptID != "A-live-admin" || live.StartedAt == "" {
 		t.Fatalf("canonical live Attempt = %#v; worker_id, attempt_id and started_at must be immediate and non-empty", live)
+	}
+}
+
+func TestService_SummarizeTaskDropsOlderLiveAttemptAfterRetry(t *testing.T) {
+	svc, tasks, attempts, _, _ := newTestService()
+	tasks.tasks["T-retry-live"] = &taskgraph.Task{
+		ID: "T-retry-live", JobID: "J-retry-live", Status: taskgraph.StatusRunning, AttemptCount: 2,
+	}
+	attempts.attempts["T-retry-live"] = []taskattempts.TaskAttempt{{
+		ID: "A-retry-new", TaskID: "T-retry-live", JobID: "J-retry-live", AttemptNumber: 2,
+		WorkerID: "worker-new", Status: taskattempts.AttemptStatusRunning,
+	}}
+	svc.WithLiveAttempts(stubLiveAttemptReader{live: &LiveAttempt{
+		TaskID: "T-retry-live", JobID: "J-retry-live", AttemptID: "A-retry-old", AttemptNumber: 1,
+		WorkerID: "worker-old", RuntimeStatus: "RUNNING", ProgressPercent: 82,
+		ProgressPhase: "building_segments", LastProgressAt: "2026-08-10T10:03:42Z",
+	}})
+
+	result, err := svc.SummarizeTask(context.Background(), "T-retry-live")
+	if err != nil {
+		t.Fatalf("SummarizeTask() error: %v", err)
+	}
+	if len(result.Attempts) != 1 || result.Attempts[0].AttemptID != "A-retry-new" {
+		t.Fatalf("older live attempt was appended after retry: %#v", result.Attempts)
+	}
+	if result.AttemptID != "" || result.WorkerID != "" || result.Progress != nil || result.LastProgressAt != "" {
+		t.Fatalf("older live attempt shadowed the retry at top level: %#v", result)
+	}
+}
+
+func TestService_SummarizeTaskDropsDisconnectedLiveAttempt(t *testing.T) {
+	svc, tasks, _, _, _ := newTestService()
+	tasks.tasks["T-disconnected-live"] = &taskgraph.Task{
+		ID: "T-disconnected-live", JobID: "J-disconnected-live", Status: taskgraph.StatusRunning, AttemptCount: 1,
+	}
+	svc.WithLiveAttempts(stubLiveAttemptReader{live: &LiveAttempt{
+		TaskID: "T-disconnected-live", JobID: "J-disconnected-live", AttemptID: "A-disconnected", AttemptNumber: 1,
+		WorkerID: "worker-disconnected", RuntimeStatus: "PARTITIONED_SUSPECTED", ProgressPercent: 74,
+		ProgressPhase: "building_segments", LastProgressAt: "2026-08-10T10:03:42Z",
+	}})
+
+	result, err := svc.SummarizeTask(context.Background(), "T-disconnected-live")
+	if err != nil {
+		t.Fatalf("SummarizeTask() error: %v", err)
+	}
+	if len(result.Attempts) != 0 {
+		t.Fatalf("partitioned runtime was exposed as a live attempt: %#v", result.Attempts)
+	}
+	if result.AttemptID != "" || result.WorkerID != "" || result.Progress != nil || result.LiveMetrics != nil || result.LastProgressAt != "" {
+		t.Fatalf("partitioned runtime leaked into top-level live projection: %#v", result)
+	}
+}
+
+func TestService_SummarizeTaskDropsLiveRuntimeFromAnotherTask(t *testing.T) {
+	svc, tasks, _, _, _ := newTestService()
+	tasks.tasks["T-current"] = &taskgraph.Task{ID: "T-current", JobID: "J-multi", Status: taskgraph.StatusRunning, AttemptCount: 1}
+	svc.WithLiveAttempts(stubLiveAttemptReader{live: &LiveAttempt{
+		TaskID: "T-other", JobID: "J-multi", AttemptID: "A-other", AttemptNumber: 1,
+		WorkerID: "worker-other", RuntimeStatus: "RUNNING", ProgressPercent: 90,
+	}})
+
+	result, err := svc.SummarizeTask(context.Background(), "T-current")
+	if err != nil {
+		t.Fatalf("SummarizeTask() error: %v", err)
+	}
+	if len(result.Attempts) != 0 || result.AttemptID != "" || result.WorkerID != "" {
+		t.Fatalf("runtime from another task was exposed: %#v", result)
+	}
+}
+
+func TestService_LiveRuntimeStatusesMapToRunningAttemptStatus(t *testing.T) {
+	for _, runtimeStatus := range []string{"ACCEPTED", "STARTING", "RUNNING", "CANCELLING", "UPLOADING", "FINALIZING"} {
+		if got := liveAttemptStatus(&LiveAttempt{RuntimeStatus: runtimeStatus}); got != taskattempts.AttemptStatusRunning {
+			t.Fatalf("runtime status %q mapped to %q; want RUNNING", runtimeStatus, got)
+		}
+	}
+}
+
+func TestService_SummarizeTaskDropsRuntimeForPartitionedWorker(t *testing.T) {
+	svc, tasks, _, _, _ := newTestService()
+	tasks.tasks["T-worker-partitioned"] = &taskgraph.Task{
+		ID: "T-worker-partitioned", JobID: "J-worker-partitioned", Status: taskgraph.StatusRunning, AttemptCount: 1,
+	}
+	svc.WithLiveAttempts(stubLiveAttemptReader{live: &LiveAttempt{
+		TaskID: "T-worker-partitioned", JobID: "J-worker-partitioned", AttemptID: "A-worker-partitioned", AttemptNumber: 1,
+		WorkerID: "worker-partitioned", RuntimeStatus: "RUNNING", WorkerConnectionState: "PARTITIONED",
+		ProgressPercent: 50, ProgressPhase: "building_segments",
+	}})
+
+	result, err := svc.SummarizeTask(context.Background(), "T-worker-partitioned")
+	if err != nil {
+		t.Fatalf("SummarizeTask() error: %v", err)
+	}
+	if len(result.Attempts) != 0 || result.AttemptID != "" || result.WorkerID != "" || result.Progress != nil {
+		t.Fatalf("runtime from partitioned worker was exposed as live: %#v", result)
+	}
+}
+
+func TestService_SummarizeTaskDropsUnmatchedLiveAttemptForTerminalTask(t *testing.T) {
+	svc, tasks, _, _, _ := newTestService()
+	tasks.tasks["T-terminal-ghost"] = &taskgraph.Task{
+		ID: "T-terminal-ghost", JobID: "J-terminal-ghost", Status: taskgraph.StatusFailed, AttemptCount: 1,
+	}
+	svc.WithLiveAttempts(stubLiveAttemptReader{live: &LiveAttempt{
+		TaskID: "T-terminal-ghost", JobID: "J-terminal-ghost", AttemptID: "A-terminal-ghost", AttemptNumber: 1,
+		WorkerID: "worker-ghost", RuntimeStatus: "RUNNING", ProgressPercent: 50,
+	}})
+
+	result, err := svc.SummarizeTask(context.Background(), "T-terminal-ghost")
+	if err != nil {
+		t.Fatalf("SummarizeTask() error: %v", err)
+	}
+	if len(result.Attempts) != 0 {
+		t.Fatalf("unmatched live attempt survived terminal task: %#v", result.Attempts)
+	}
+	if result.AttemptID != "" || result.WorkerID != "" || result.Progress != nil || result.LiveMetrics != nil {
+		t.Fatalf("terminal ghost leaked into top-level projection: %#v", result)
 	}
 }
 

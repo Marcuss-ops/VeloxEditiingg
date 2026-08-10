@@ -17,6 +17,7 @@ type WorkerTaskRuntimeRow struct {
 	WorkerID               string
 	LeaseID                string
 	RuntimeStatus          string
+	WorkerConnectionState  string
 	ProgressPercent        int
 	ProgressPhase          string
 	CurrentScene           int
@@ -35,24 +36,50 @@ type WorkerTaskRuntimeRow struct {
 	UpdatedAt              string
 }
 
-// GetWorkerTaskRuntimeByJob returns the current live Attempt projection for
-// a job. A job normally has one task; newest update wins for defensive
-// compatibility with multi-task jobs.
+// GetWorkerTaskRuntimeByTask returns the current live Attempt projection
+// for one task within a job. Task identity is the canonical selector when
+// the job contains more than one task.
+func (s *SQLiteStore) GetWorkerTaskRuntimeByTask(ctx context.Context, taskID, jobID string) (*WorkerTaskRuntimeRow, error) {
+	if s == nil || s.db == nil || taskID == "" || jobID == "" {
+		return nil, nil
+	}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT r.task_id, r.job_id, r.attempt_id, r.attempt_number, r.worker_id, r.lease_id,
+		       r.runtime_status, w.connection_state, r.progress_percent, r.progress_stage, r.current_scene,
+		       r.total_scenes, r.current_segment, r.total_segments, r.frames_encoded,
+		       r.frames_decoded, r.frames_composited, r.ffmpeg_speed_x, r.elapsed_ms,
+		       r.cumulative_metrics_json, r.canonical_events_json, r.started_at, r.last_progress_at, r.updated_at
+		  FROM worker_task_runtime r
+		  INNER JOIN workers w ON w.worker_id = r.worker_id
+		 WHERE r.task_id=? AND r.job_id=?
+		 ORDER BY r.updated_at DESC, r.task_id DESC
+		 LIMIT 1`, taskID, jobID)
+
+	return scanWorkerTaskRuntimeRow(row)
+}
+
+// GetWorkerTaskRuntimeByJob preserves the legacy job-scoped reader contract.
+// New canonical read paths should use GetWorkerTaskRuntimeByTask so a
+// multi-task job cannot project a different task's Attempt.
 func (s *SQLiteStore) GetWorkerTaskRuntimeByJob(ctx context.Context, jobID string) (*WorkerTaskRuntimeRow, error) {
 	if s == nil || s.db == nil || jobID == "" {
 		return nil, nil
 	}
 	row := s.db.QueryRowContext(ctx, `
-		SELECT task_id, job_id, attempt_id, attempt_number, worker_id, lease_id,
-		       runtime_status, progress_percent, progress_stage, current_scene,
-		       total_scenes, current_segment, total_segments, frames_encoded,
-		       frames_decoded, frames_composited, ffmpeg_speed_x, elapsed_ms,
-		       cumulative_metrics_json, canonical_events_json, started_at, last_progress_at, updated_at
-		  FROM worker_task_runtime
-		 WHERE job_id=?
-		 ORDER BY updated_at DESC, task_id DESC
+		SELECT r.task_id, r.job_id, r.attempt_id, r.attempt_number, r.worker_id, r.lease_id,
+		       r.runtime_status, w.connection_state, r.progress_percent, r.progress_stage, r.current_scene,
+		       r.total_scenes, r.current_segment, r.total_segments, r.frames_encoded,
+		       r.frames_decoded, r.frames_composited, r.ffmpeg_speed_x, r.elapsed_ms,
+		       r.cumulative_metrics_json, r.canonical_events_json, r.started_at, r.last_progress_at, r.updated_at
+		  FROM worker_task_runtime r
+		 INNER JOIN workers w ON w.worker_id = r.worker_id
+		 WHERE r.job_id=?
+		 ORDER BY r.updated_at DESC, r.task_id DESC
 		 LIMIT 1`, jobID)
+	return scanWorkerTaskRuntimeRow(row)
+}
 
+func scanWorkerTaskRuntimeRow(row *sql.Row) (*WorkerTaskRuntimeRow, error) {
 	var runtime WorkerTaskRuntimeRow
 	var metricsJSON sql.NullString
 	var progressPhase sql.NullString
@@ -60,7 +87,7 @@ func (s *SQLiteStore) GetWorkerTaskRuntimeByJob(ctx context.Context, jobID strin
 	var canonicalEventsJSON sql.NullString
 	if err := row.Scan(
 		&runtime.TaskID, &runtime.JobID, &runtime.AttemptID, &runtime.AttemptNumber,
-		&runtime.WorkerID, &runtime.LeaseID, &runtime.RuntimeStatus,
+		&runtime.WorkerID, &runtime.LeaseID, &runtime.RuntimeStatus, &runtime.WorkerConnectionState,
 		&runtime.ProgressPercent, &progressPhase, &runtime.CurrentScene,
 		&runtime.TotalScenes, &runtime.CurrentSegment, &runtime.TotalSegments,
 		&runtime.FramesEncoded, &runtime.FramesDecoded, &runtime.FramesComposited,
