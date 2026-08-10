@@ -120,8 +120,28 @@ full_tree_patterns=(
   'MsgJobRejected'                    # Removed: superseded by MsgTaskRejected (PR #9)
   'MsgJobProgress'                    # Removed: dead constant (PR #9)
   'MsgJobLeaseGranted'                # Removed: superseded by MsgTaskLeaseGranted (PR #9)
-  'MsgLeaseRenewal'                   # Removed: superseded by MsgTaskLeaseRenewal (PR #9)
+  'MsgLeaseRenewal'                    # Removed: superseded by MsgTaskLeaseRenewal (PR #9)
 )
+
+# Retired route registrations are checked separately from client calls. The
+# canonical server must not mount these paths again; callers in remote-engine
+# clients and historical tests remain valid evidence and are intentionally not
+# part of this source-only check.
+# Route registrations in the server surface conventionally use a router
+# receiver (`r`, `router`, `*Group`, `admin*`, or `fleet*`). Restricting the
+# receiver avoids treating an unrelated HTTP client call as a mount.
+retired_route_registration_pattern='^[[:space:]]*(r|router|[[:alnum:]_]*Group|admin[[:alnum:]_]*|fleet[[:alnum:]_]*)\.(GET|POST|PUT|PATCH|DELETE)\([^\"]*\"/(api/v1/velox/jobs|api/script-simple|api/script-multiple|api/remote/pipeline|api/v1/remote/pipeline|api/v1/workers/register|api/v1/worker-assets|api/v1/workers/cache/protected-assets|api/v1/admin/workers/metrics|api/v1/admin/alerts/(active|recent)|worker/revoke|worker/unrevoke|worker/revoked|worker/drain|worker/restart|bundle/manifest/generate|api/worker/v2/manifest|api/worker/v2/chunk|install_worker/force_regenerate_zip|workers/full_update_linux|workers/update_all_latest_bundle|worker/request_update)[^\"]*'
+
+# Generic `status = "completed"` is an input-assembly alias, not a job,
+# attempt, delivery, or publication terminal state. New production writers
+# must use the typed domain status or the explicit InputAssemblyCompleted
+# contract; tests and compatibility readers are excluded from this source
+# guard.
+ambiguous_completed_status_patterns=(
+  '\["status"\][[:space:]]*=[[:space:]]*"completed"'
+  '"status"[[:space:]]*:[[:space:]]*"completed"'
+)
+
 
 # Prohibited patterns checked only on the DIFF (forbidden in new/modified code)
 diff_patterns=(
@@ -141,6 +161,31 @@ diff_patterns=(
 )
 
 violations=0
+
+# Active operational documentation must use canonical Social API env names.
+# Migration runbooks, ADRs, archives, and changelogs intentionally retain
+# historical aliases as evidence and are not included in this check.
+active_doc_pathspecs=(
+  docs/E2E_PUBLISHING_FLOW.md
+  docs/CREATOR-PUSH.md
+  docs/SECURITY_RUNBOOK.md
+  docs/CHANGELOG.md
+  docs/api/**
+  docs/operations/**
+  docs/rw-prod/**
+  docs/pipeline.md
+  docs/production-call-path-audit.md
+  docs/worker_deployment.md
+  DEPLOY-CHECKLIST.md
+  FUTURE.md
+  README.md
+  ':!docs/CHANGELOG.md'
+  ':!docs/SOCIAL_API_MIGRATION_RUNBOOK.md'
+)
+if matches="$(git grep -nE 'SOCIAL_GATEWAY_|vault_velox_social_gateway_api_key' -- "${active_doc_pathspecs[@]}" 2>/dev/null || true)"; [[ -n "$matches" ]]; then
+  printf 'FORBIDDEN (non-canonical Social API env in active documentation):\n%s\n\n' "$matches" >&2
+  violations=$((violations + 1))
+fi
 
 # 1. Full-tree checks
 #
@@ -173,6 +218,33 @@ for pattern in "${full_tree_patterns[@]}"; do
        )"; [[ -n "$matches" ]]; then
     printf 'FORBIDDEN (exists in repository): %s\n%s\n\n' \
       "$pattern" "$matches" >&2
+    violations=$((violations + 1))
+  fi
+done
+
+# 1b. Server route invariant. This is intentionally full-tree: a retired
+# route must not exist in the server registration surface. Client calls and
+# historical tests are outside this source-only registration scan.
+if matches="$(git grep -nE "$retired_route_registration_pattern" -- \
+      DataServer/cmd/server \
+      DataServer/internal/app \
+      DataServer/internal/handlers \
+      ':(exclude)**/*_test.go' 2>/dev/null || true)"; [[ -n "$matches" ]]; then
+  printf 'FORBIDDEN (retired server route registration):\n%s\n\n' "$matches" >&2
+  violations=$((violations + 1))
+fi
+
+# 1c. Input-assembly status invariant. This is diff-scoped so existing
+# compatibility fixtures/readers remain valid. New writer code must use the
+# typed InputAssemblyCompleted contract, not a generic lifecycle status.
+for pattern in "${ambiguous_completed_status_patterns[@]}"; do
+  if matches="$(scoped_grep "$pattern" -- \
+        'DataServer/internal/jobs/enqueue/**' \
+        'DataServer/internal/jobs/ingress/**' \
+        'DataServer/internal/handlers/server/pipeline/**' \
+        ':!*_test.go' \
+        ':!**/http_response_compat.go')"; [[ -n "$matches" ]]; then
+    printf 'FORBIDDEN (ambiguous input-assembly status in new writer): %s\n%s\n\n' "$pattern" "$matches" >&2
     violations=$((violations + 1))
   fi
 done

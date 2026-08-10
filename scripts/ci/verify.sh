@@ -51,6 +51,8 @@ log "check-architecture"
 ./scripts/ci/check-architecture.sh
 log "check-no-legacy"
 ./scripts/ci/check-no-legacy.sh
+log "test-check-no-legacy"
+./scripts/ci/test-check-no-legacy.sh
 log "check-secrets"
 ./scripts/ci/check-secrets.sh
 log "check-worker-rollout-compatibility"
