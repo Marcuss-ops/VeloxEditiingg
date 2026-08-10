@@ -170,6 +170,7 @@ chown -R "${IMAGE_UID}:${IMAGE_GID}" /opt/velox/current/.velox
 if [[ -d /opt/velox/certs ]]; then
     find /opt/velox/certs -type d -exec chown root:"${IMAGE_GID}" {} + -exec chmod g+rx {} +
     find /opt/velox/certs -type f -name '*.key' -exec chown root:"${IMAGE_GID}" {} + -exec chmod 640 {} +
+    find /opt/velox/certs -type f -name '*.crt' -exec chown root:"${IMAGE_GID}" {} + -exec chmod 640 {} +
 fi
 ok "Directory tree ready: /opt/velox/current"
 
