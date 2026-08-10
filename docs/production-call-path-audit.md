@@ -119,10 +119,40 @@ La ricerca dei call site produttivi ha evidenziato:
   render/rollout produttivo;
 - osservability `phases/trends` e `regressions`: endpoint registrati, ma non
   necessari al percorso di consegna e da congelare per il blocco corrente;
-- backup: primitive di backup/restore presenti, senza scheduler o restore
-  operativo collegato;
+- backup: il call-site proof del 2026-08-10 ha trovato solo primitive isolate
+  in `DataServer/internal/backup`, senza import, caller, scheduler, bootstrap,
+  CLI o restore operativo collegato. La rimozione del package e dei test è stata
+  approvata come pulizia di scaffolding irraggiungibile; il requisito residuo
+  appartiene a platform/operations e resta tracciato in `FUTURE.md` e nel
+  runbook backup;
 - `audittrail.AppendAuditEvent`: schema e repository presenti, ma nessun
   chiamante produttivo per gli eventi di job/delivery/publication richiesti.
+
+## Audit rimozione `internal/backup` — 2026-08-10
+
+Il proof completo è stato eseguito sul modulo `DataServer` prima della
+rimozione:
+
+- `git grep` non ha trovato import di `internal/backup` né chiamate a
+  `BackupSQLite`, `RestoreSQLite`, `VerifySQLite`, `BackupEncryptedSQLite`,
+  `RestoreEncryptedSQLite` o `RestoreTest` fuori dal package;
+- `go list ./...` ha mostrato il package come nodo senza reverse importer;
+- non esistono route, bootstrap registration, supervisor runner, scheduler,
+  comando CLI, script operativo o configurazione che lo raggiungano;
+- i soli test erano test white-box del package e passavano esclusivamente con
+  `go test ./internal/backup`;
+- `scripts/ci/sql-baseline.txt` conteneva soltanto le due righe LOC del
+  production code e non rappresentava un consumer.
+
+Decisione: RIMUOVERE. Il package era scaffolding non raggiungibile, non un
+contratto cross-package attivo. La decisione viene chiusa nel commit atomico
+successivo, con il package, i test e il baseline LOC rimossi insieme. Il
+requisito di backup/restore non viene considerato implementato: ownership e
+criteri futuri sono documentati in
+`docs/operations/backup-and-restore.md` sotto platform/operations.
+
+Prima di pubblicare la rimozione sono richiesti `go vet ./...`, `go build ./...`
+e `go test -count=1 ./...` tramite `scripts/ci/pre-removal-verify.sh`.
 
 ## Audit rimozione endpoint legacy InstaEdit — 2026-08-03
 

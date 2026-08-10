@@ -81,7 +81,10 @@ VeloxEditiingg  ──verify─►  iss/aud/exp/workspace_id + scope per route
       sconosciuti; la 001/040/044 storica è tollerata via retired checksums)
 - [ ] Schema finale: assenti `dark_editor_*`; presenti `jobs`, `artifacts`,
       `job_deliveries`, `calendar_events`
-- [ ] Backup pre-deploy + test di restore
+- [ ] Backup pre-deploy + test di restore (procedura manuale approvata;
+      vedere `docs/operations/backup-and-restore.md`; nessun helper runtime
+      automatico è disponibile finché platform/operations non consegna il
+      componente posseduto)
 - [ ] (Se upgrade da DB con Dark Editor) la 128 è **irreversibile** — dati
       editor non recuperabili dal master
 

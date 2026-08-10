@@ -94,7 +94,10 @@
 - [ ] Metriche cleanuploop (row ispezionate, skipped per causa)
 
 ### ⚪ Infra
-- [ ] **Backup automatico SQLite** (retention 30gg) + restore verificato
+- [ ] **Backup automatico SQLite** (retention 30gg) + restore verificato —
+      requisito non implementato; lo scaffolding irraggiungibile rimosso nel
+      call-site proof del 2026-08-10. Reintrodurre solo con owner
+      platform/operations, entrypoint runtime reale e restore verificabile.
 - [ ] **Staging environment** speculare (DB + master + worker + canary)
 - [ ] **Log centralizzato** (aggregazione multi-host)
 - [ ] **Alert su drop conversioni / failure rate** (webhook Slack esistente)
