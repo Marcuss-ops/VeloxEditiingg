@@ -28,12 +28,17 @@ Type=simple
 EnvironmentFile=/etc/velox-server.env
 ExecStartPre=-/usr/bin/docker rm -f velox-server
 ExecStartPre=/usr/bin/docker pull ${VELOX_SERVER_IMAGE}
+# Keep the existing production runtime/database path visible when the
+# converged env points at /opt/velox/current/.velox. The native service used
+# this path; switching to Docker must preserve the same DB rather than
+# creating or copying a second database under /var/lib/velox.
 ExecStart=/usr/bin/docker run --rm \
     --name velox-server \
     --network host \
     --env-file /etc/velox-server.env \
     --env VELOX_HTTP_PORT=${VELOX_MASTER_PORT} \
     --mount type=bind,src=/var/lib/velox,dst=/var/lib/velox \
+    --mount type=bind,src=/opt/velox/current/.velox,dst=/opt/velox/current/.velox \
     --mount type=bind,src=/etc/velox,dst=/etc/velox,readonly \
     ${VELOX_SERVER_IMAGE}
 ExecStop=/usr/bin/docker stop -t 60 velox-server
