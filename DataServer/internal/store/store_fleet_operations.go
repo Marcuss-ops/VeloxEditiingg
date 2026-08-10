@@ -88,8 +88,7 @@ type Operation struct {
 
 // CreateFleetOperationsTableIfNotExists is the in-test bootstrap
 // path. The production migrations/sqlite/104_fleet_operations.sql
-// (and the postgres/014 variant) run via the migration runner on
-// boot.
+// runs via the migration runner on boot.
 //
 // Idempotent: safe to call repeatedly. CREATE TABLE / CREATE INDEX
 // IF NOT EXISTS forms. Does NOT insert into schema_migrations —
@@ -139,8 +138,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_ops_worker_op_inflight
 // InsertOperation persists a new operation row, status=QUEUED.
 // Translates the partial-UNIQUE-INDEX conflict to
 // ErrOperationInFlight so the API layer has a clean sentinel
-// to surface to the operator UI (no raw SQLITE / POSTGRES error
-// strings leak into the response).
+// to surface to the operator UI (no raw SQLITE error strings
+// leak into the response).
 //
 // Validation runs eagerly:
 //   - Status MUST be QUEUED (terminal statuses confuse the
@@ -200,14 +199,11 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 }
 
 // isInflightUniqueConflict narrows SQL-level UNIQUE-INDEX
-// violations to the in-flight (worker_id, op) case. Two engines
-// produce different messages:
+// violations to the in-flight (worker_id, op) case. SQLite
+// produces "UNIQUE constraint failed: fleet_operations.worker_id,
+// fleet_operations.op".
 //
-//   - SQLite:  "UNIQUE constraint failed: fleet_operations.worker_id, fleet_operations.op"
-//   - Postgres: "duplicate key value violates unique constraint
-//     \"idx_fleet_ops_worker_op_inflight\""
-//
-// Cross-dialect safety pins on two substrings: the index name
+// The check pins on two substrings: the index name
 // (post-resolve) AND the (worker_id, op) column pair (when the
 // driver suppresses the index name). Both fire only on the
 // in-flight conflict — operation_id PK collisions happen at the

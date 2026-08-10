@@ -355,8 +355,6 @@ func scanDeploymentRecord(rows *sql.Rows) (*DeploymentRecord, error) {
 
 // boolToIntSQLite returns 1 if b is true, 0 otherwise — the
 // canonical encoding for SQLite's INTEGER-as-BOOLEAN dialect.
-// Mismatch with the Postgres helper (which uses boolean) lives
-// in a sister file in the postgres/ subpackage.
 func boolToIntSQLite(b bool) int {
 	if b {
 		return 1

@@ -31,7 +31,7 @@ func NewSQLiteArtifactRepositoryFactory(t *testing.T) (store.ArtifactRepository,
 
 // ArtifactRepositoryContract runs the cross-backend test suite for artifacts.
 // Spec §5: passed to this function, a factory must produce an ArtifactRepository
-// whose behavior matches across SQLite, Postgres, … backends.
+// whose behavior matches the SQLite backend.
 func ArtifactRepositoryContract(t *testing.T, factory ArtifactRepositoryFactory) {
 	t.Run("Insert+GetByID", func(t *testing.T) {
 		repo, cleanup := factory(t)

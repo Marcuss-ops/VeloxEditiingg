@@ -97,44 +97,6 @@ func TestDiscoverMigrationsRejectsDuplicateVersions(t *testing.T) {
 	}
 }
 
-// TestDiscoverPostgresMigrations_NoDuplicateVersions guards the real
-// postgres/ chain (not the testdata mirror): every version must be
-// unique or RunMigrations fails closed at discovery. Historically
-// postgres/010_drop_youtube_domain.sql collided with
-// postgres/010_drive.sql on version 010 (fixed 2026-08-07 by
-// renumbering the drop to 023) — without this pin the drop becomes
-// silently unreachable again.
-func TestDiscoverPostgresMigrations_NoDuplicateVersions(t *testing.T) {
-	migs, err := discoverMigrations(postgresRootFS, "postgres")
-	if err != nil {
-		t.Fatalf("discoverMigrations(postgres): %v", err)
-	}
-	if len(migs) == 0 {
-		t.Fatal("expected postgres migrations, got 0")
-	}
-	seen := make(map[int]string, len(migs))
-	for _, m := range migs {
-		if prev, ok := seen[m.Version]; ok {
-			t.Fatalf("duplicate postgres migration version %03d: %s and %s", m.Version, prev, m.Name)
-		}
-		seen[m.Version] = m.Name
-	}
-	// The YouTube domain drop must exist and be ordered after the
-	// 009_youtube CREATE chain so the removal actually applies.
-	var dropFound bool
-	for _, m := range migs {
-		if m.Name == "drop_youtube_domain" {
-			dropFound = true
-			if m.Version <= 9 {
-				t.Fatalf("drop_youtube_domain at version %03d must come after 009_youtube", m.Version)
-			}
-		}
-	}
-	if !dropFound {
-		t.Fatal("postgres chain missing drop_youtube_domain migration")
-	}
-}
-
 func TestDiscoverMigrations_ChecksumStable(t *testing.T) {
 	migs1, _ := discoverMigrations(testMigrationsFS, "testdata")
 	migs2, _ := discoverMigrations(testMigrationsFS, "testdata")

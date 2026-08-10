@@ -30,7 +30,7 @@ import (
 )
 
 // CurrentTaskLoader abstracts the SQL backend so tests can pass a
-// fake (sqlite in-mem or pgx) and production passes a store-backed
+// fake (sqlite in-mem) and production passes a store-backed
 // implementation. The canonical SQL query lives in
 // DataServer/internal/store (LoadCurrentTaskRow).
 type CurrentTaskLoader interface {

@@ -20,10 +20,9 @@ import (
 // that test on the next CI run.
 //
 // The READ surface (`GetJobAttempts`, `GetLatestJobAttempt`,
-// `JobAttempt` struct) is preserved as a thin compatibility shim for
-// the postgres path, which still joins `job_attempts.started_at` from
-// `internal/store/postgres_jobs_repository.go` (RequeueExpiredLeases
-// path is being decommissioned alongside PR-07 / job protocol removal).
+// `JobAttempt` struct) is preserved as a thin compatibility shim
+// (RequeueExpiredLeases path is being decommissioned alongside PR-07 /
+// job protocol removal).
 type JobAttempt struct {
 	ID            int    `json:"id"`
 	JobID         string `json:"job_id"`

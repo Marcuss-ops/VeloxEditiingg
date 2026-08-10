@@ -10,7 +10,6 @@ import (
 func databaseConfigFromConfig(dcfg config.DatabaseConfig) database.Config {
 	return database.ConfigFromApplication(
 		strings.ToLower(strings.TrimSpace(dcfg.Driver)),
-		dcfg.URL,
 		dcfg.DBPath,
 		dcfg.MaxOpenConns,
 		dcfg.MaxIdleConns,

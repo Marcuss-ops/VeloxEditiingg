@@ -13,13 +13,13 @@
 //   - the handler files compile without an explicit database/sql
 //     import, so the test surface (which passes fake Readers) does
 //     not need to drag *sql.DB into the test binary.
-//   - a future Postgres backend just adds a sibling workers_read_adapters_pg.go
-//     that implements the same three interfaces against *sql.DB or
-//     pgxpool.Pool, without touching the handler logic.
+//   - a future alternative backend just adds a sibling adapter file
+//     that implements the same three interfaces against its pool,
+//     without touching the handler logic.
 //
 // The adapter holds a *sql.DB (not *SQLiteStore) so the read path
-// can be exercised by a plain in-memory SQLite open or a Postgres
-// connection without pulling the SQLite god-object.
+// can be exercised by a plain in-memory SQLite open without pulling
+// the SQLite god-object.
 package api
 
 import (

@@ -26,11 +26,6 @@ import (
 //go:embed sqlite/*.sql
 var sqliteRootFS embed.FS
 
-// Postgres migrations live under postgres/*.sql.
-//
-//go:embed postgres/*.sql
-var postgresRootFS embed.FS
-
 // SQLiteMigrationsFS exposes the embedded SQLite migration files to
 // callers outside the migrations package (notably internal/store/sqlite.go
 // via NewSQLiteStore and the platform/database tests). Exposed via a
@@ -38,12 +33,6 @@ var postgresRootFS embed.FS
 // in this file remains the single source of truth. The dir parameter
 // passed to RunMigrations should be "sqlite".
 func SQLiteMigrationsFS() embed.FS { return sqliteRootFS }
-
-// PostgresMigrationsFS exposes the embedded Postgres migration files.
-// Same rationale as SQLiteMigrationsFS — function-based export keeps
-// the embed directive as the single source of truth. RunMigrations dir
-// should be "postgres".
-func PostgresMigrationsFS() embed.FS { return postgresRootFS }
 
 // Migration represents a single versioned schema migration.
 type Migration struct {

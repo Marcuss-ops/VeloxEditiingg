@@ -122,12 +122,12 @@ func sqliteStorePoolSize() (int, int, time.Duration) {
 // NewSQLiteStoreFromHandle builds a *SQLiteStore from an already-open
 // *database.Handle. The Handle is the canonical entry point for the
 // platform/database abstraction; production bootstrap (cmd/server/
-// bootstrap.go) calls platform/database.Open for both SQLite and
-// Postgres backends and routes to this constructor when Handle.Driver
-// is DriverSQLite. The 30-or-so test callers of NewSQLiteStore(path)
-// still go through NewSQLiteStore (which now delegates to
-// platform/database.Open then this function), so the SQLite god-object
-// is wired exactly once across the entire codebase.
+// bootstrap.go) calls platform/database.Open and routes to this
+// constructor when Handle.Driver is DriverSQLite. The 30-or-so test
+// callers of NewSQLiteStore(path) still go through NewSQLiteStore
+// (which now delegates to platform/database.Open then this function),
+// so the SQLite god-object is wired exactly once across the entire
+// codebase.
 //
 // The handle is taken by reference so the caller retains Close()
 // ownership — bootstrap owns the connection lifetime so teardown can
@@ -135,8 +135,8 @@ func sqliteStorePoolSize() (int, int, time.Duration) {
 //
 // MigrateOnStart gates the schema bootstrap at boot. The flag's intent
 // is orthogonal to the driver dispatch in bootstrap.go (driver = sqlite
-// vs postgres is decided by VELOX_DB_DRIVER; migration opt-in/out is
-// decided by VELOX_DB_MIGRATE_ON_START). Two paths fall out:
+// is decided by VELOX_DB_DRIVER; migration opt-in/out is decided by
+// VELOX_DB_MIGRATE_ON_START). Two paths fall out:
 //
 //   - migrateOnStart == true (legacy default, tests, default for ops
 //     who do NOT run an external migration tool): run

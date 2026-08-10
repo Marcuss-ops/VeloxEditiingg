@@ -5,8 +5,8 @@
 #
 # Velox delegated the YouTube domain (channels, groups, OAuth tokens,
 # metrics, cache) to the external Social API repository. Migration
-# 090_drop_youtube_domain.sql (sqlite) + 023_drop_youtube_domain.sql (postgres, renumbered from 010)
-# (postgres) are the source-of-truth DROPs that close out that separation.
+# 090_drop_youtube_domain.sql (sqlite) is the source-of-truth DROP
+# that closes out that separation.
 #
 # This script probes a Velox SQLite DB and reports any leftover
 # YouTube_* tables or youtube_* columns on the historically-leaking

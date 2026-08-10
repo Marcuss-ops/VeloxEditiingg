@@ -119,9 +119,8 @@ type RuntimeConfig struct {
 //   - DBPath is the absolute path to the SQLite database file.
 //     Required for the only supported runtime driver, SQLite.
 //   - Driver is empty or "sqlite" for the master runtime. "postgres"
-//     is retained only by env-gated repository contract tests and is
-//     rejected by Config.Validate before the master opens a database.
-//   - URL is the Postgres DSN used only by those isolated contract tests.
+//     is not a supported backend (removed 2026-08-10) and is rejected
+//     by Config.Validate before the master opens a database.
 //   - MaxOpenConns / MaxIdleConns / ConnMaxLifetime are pool knobs.
 //     Zero means "use platform/database.Open() default" — see
 //     internal/platform/database/database.go for the per-driver values.
@@ -134,13 +133,10 @@ type RuntimeConfig struct {
 //     "0" / "off" / "no") so the master skips both the migrations
 //     runner AND the post-migration ensure-column adjustments. The
 //     opt-out path is orthogonal to the SQLite-only runtime dispatch in
-//     cmd/server/bootstrap.go. Postgres migrations and adapters remain
-//     available only to isolated contract tests until a complete runtime
-//     cutover is approved.
+//     cmd/server/bootstrap.go.
 type DatabaseConfig struct {
 	DBPath          string        // SQLite file path (required at runtime)
-	Driver          string        // "sqlite" | "postgres" | "" (master runtime accepts empty/sqlite)
-	URL             string        // Postgres DSN (contract tests only)
+	Driver          string        // "sqlite" | "" (master runtime accepts empty/sqlite)
 	MaxOpenConns    int           // 0 → driver default
 	MaxIdleConns    int           // 0 → driver default
 	ConnMaxLifetime time.Duration // 0 → driver default

@@ -1,5 +1,28 @@
 ## [Unreleased] - 2026-07-29
 
+### Removed — Postgres backend (runtime + test-only adapters)
+
+Postgres is not an active user story for the master. `VELOX_DB_DRIVER=postgres`
+was already rejected by `Config.Validate()` before any database I/O; this
+change removes the entire dormant backend from the production tree:
+
+- `internal/platform/database`: `DriverPostgres`, `openPostgres`, the `URL`
+  connection field and the `pgx` import are gone — SQLite is the only driver.
+- `internal/store`: deleted `postgres_artifact_repository.go`,
+  `postgres_job_delivery_counter.go`, `postgres_jobs_dialect.go` and
+  `postgres_jobs_repository.go`; the `Dialect` contract is now SQLite-only.
+- `internal/store/migrations/postgres/` (24 files) and
+  `PostgresMigrationsFS` removed; the migration runner serves the SQLite chain
+  only.
+- Env-gated Postgres contract tests, `testdb_helpers.go`, the postgres
+  factories and `DataServer/run-tests-postgres.sh` deleted.
+- `github.com/jackc/pgx/v5` dependency dropped.
+
+A future cutover must rebuild the Postgres chain from scratch (see
+`docs/` for the pre-removal audit). `tests/e2e/master-worker-lifecycle`
+keeps `VELOX_DB_DRIVER=postgres` as its master fail-fast probe — the
+config boundary still rejects it.
+
 ### Tracked finding — pre-existing import cycle in `internal/metrics` (uncommitted WIP)
 
 Full-module verification (`go vet ./...` + `go build ./...` +

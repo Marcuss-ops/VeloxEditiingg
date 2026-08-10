@@ -88,7 +88,7 @@ func (c *Config) Validate() error {
 	if c.Auth.ProjectBridgeContractVersion != "instaedit.velox.project-bridge.v1" {
 		return fmt.Errorf("config: VELOX_PROJECT_BRIDGE_CONTRACT_VERSION must be instaedit.velox.project-bridge.v1")
 	}
-	// Postgres is retained only for explicitly env-gated contract tests.
+	// Postgres is not a supported runtime backend (removed 2026-08-10).
 	// Reject it at the configuration boundary so production bootstrap never
 	// reaches database.Open (and therefore never opens or pings a Postgres
 	// connection). Keep this check before DBPath validation so an unsupported

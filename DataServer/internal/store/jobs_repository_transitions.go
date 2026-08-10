@@ -1,10 +1,10 @@
 // Package store / jobs_repository_transitions.go
 //
-// Writer transitions on the shared baseJobRepository used by both
-// SQLiteJobRepository and PostgresJobRepository. Each transition is a
-// CAS-guarded status flip (revision + current-status predicate) with
-// dialect-abstracted audit hooks; the Dialect contract and the Reader
-// (Get / List / Counts / getJob) live in jobs_repository_shared.go.
+// Writer transitions on the shared baseJobRepository used by
+// SQLiteJobRepository. Each transition is a CAS-guarded status flip
+// (revision + current-status predicate) with dialect-abstracted audit
+// hooks; the Dialect contract and the Reader (Get / List / Counts /
+// getJob) live in jobs_repository_shared.go.
 
 package store
 

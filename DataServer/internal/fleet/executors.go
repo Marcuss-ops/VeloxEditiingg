@@ -45,8 +45,8 @@ const (
 )
 
 // AllOperationKinds is the canonical complete-enum set. It drives
-// the schema CHECK source-of-truth (mirrored in sqlite/104_fleet_operations.sql
-// and postgres/014). Production must register concrete executors explicitly;
+// the schema CHECK source-of-truth (mirrored in sqlite/104_fleet_operations.sql).
+// Production must register concrete executors explicitly;
 // this list is not a default-registration list.
 //
 // The set is stable for Step 4/15. Future kinds (e.g.

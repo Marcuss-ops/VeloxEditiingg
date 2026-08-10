@@ -10,15 +10,13 @@ package database
 import "errors"
 
 // ErrUnsupportedDriver is returned by Open when cfg.Driver is not
-// DriverSQLite or DriverPostgres. Pre-existing factories used to
-// silently fall back to SQLite on a bad DSN; the platform layer
-// fails loud here instead.
+// DriverSQLite. Pre-existing factories used to silently fall back to
+// SQLite on a bad DSN; the platform layer fails loud here instead.
 var ErrUnsupportedDriver = errors.New("database: unsupported driver")
 
 // ErrDatabaseNotConfigured is returned by Open when cfg is missing the
 // connection target the selected Driver requires:
 //   - DriverSQLite / DriverUnknown: SQLitePath must be set
-//   - DriverPostgres: URL must be set
 //
 // The message callers will see is wrapped with this sentinel so the
 // driver context is preserved.

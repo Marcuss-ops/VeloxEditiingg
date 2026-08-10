@@ -2,11 +2,10 @@
 
 // Package database — database.go
 //
-// Handle + Open: backend-neutral connection factory. SQLite + Postgres
-// drivers are registered via blank-import side effects (sqlite3 from
-// mattn/go-sqlite3, pgx from jackc/pgx/v5/stdlib). Pool defaults are
-// driver-specific because SQLite serialises writers through the file
-// lock while Postgres handles concurrent writers natively.
+// Handle + Open: backend-neutral connection factory. The SQLite driver
+// is registered via blank-import side effect (sqlite3 from
+// mattn/go-sqlite3). Pool defaults are tuned for SQLite, which
+// serialises writers through the file lock.
 //
 // Open does NOT run migrations. Callers that want implicit migration
 // (historical NewSQLiteStore behaviour) must invoke migrations.Run /
@@ -23,27 +22,17 @@ import (
 	"strings"
 	"time"
 
-	// Register the drivers database/sql resolves by name.
-	// pgx v5 stdlib is the canonical Postgres driver for Velox (chosen
-	// over lib/pq due to upstream maintenance status).
-	_ "github.com/jackc/pgx/v5/stdlib"
 	// mattn/go-sqlite3 is the SQLite driver. CGO required at build time.
 	_ "github.com/mattn/go-sqlite3"
 )
 
 // Driver-specific connection pool defaults. SQLite is intentionally
 // pinned to a single-writer pool because concurrent opens on the same
-// file degrade quickly under write contention. Postgres handles
-// concurrent writers natively, so the defaults are larger and the
-// caller is free to grow them when the workload proves it safe.
+// file degrade quickly under write contention.
 const (
 	sqliteDefaultMaxOpenConns    = 8
 	sqliteDefaultMaxIdleConns    = 4
 	sqliteDefaultConnMaxLifetime = time.Hour
-
-	postgresDefaultMaxOpenConns    = 32
-	postgresDefaultMaxIdleConns    = 8
-	postgresDefaultConnMaxLifetime = 5 * time.Minute
 
 	openPingTimeout = 10 * time.Second
 )
@@ -62,7 +51,7 @@ type Handle struct {
 // and verifies reachability via PingContext. It does NOT run migrations.
 //
 // Returns:
-//   - ErrUnsupportedDriver: cfg.Driver is not SQLite or Postgres
+//   - ErrUnsupportedDriver: cfg.Driver is not SQLite
 //   - ErrDatabaseNotConfigured: target field empty for the chosen driver
 //   - ErrPingFailed (wrapped): driver-level error from PingContext
 //
@@ -82,8 +71,6 @@ func Open(ctx context.Context, cfg Config) (*Handle, error) {
 	switch driver {
 	case DriverSQLite:
 		return openSQLite(ctx, cfg)
-	case DriverPostgres:
-		return openPostgres(ctx, cfg)
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnsupportedDriver, cfg.Driver)
 	}
@@ -143,28 +130,6 @@ func openSQLite(ctx context.Context, cfg Config) (*Handle, error) {
 		return nil, fmt.Errorf("%w (sqlite): %w", ErrPingFailed, err)
 	}
 	return &Handle{DB: db, Driver: DriverSQLite}, nil
-}
-
-// openPostgres opens via the pgx v5 stdlib driver and pings. Caller
-// pool overrides always win over defaults; defaults are conservative
-// until benchmarks prove higher is safe.
-func openPostgres(ctx context.Context, cfg Config) (*Handle, error) {
-	if cfg.URL == "" {
-		return nil, fmt.Errorf("%w: URL is required for Driver=postgres", ErrDatabaseNotConfigured)
-	}
-	db, err := sql.Open("pgx", cfg.URL)
-	if err != nil {
-		return nil, fmt.Errorf("database postgres open: %w", err)
-	}
-	applyPoolDefaults(db, cfg, postgresDefaultMaxOpenConns, postgresDefaultMaxIdleConns, postgresDefaultConnMaxLifetime)
-
-	pingCtx, cancel := context.WithTimeout(ctx, openPingTimeout)
-	defer cancel()
-	if err := db.PingContext(pingCtx); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("%w (postgres): %w", ErrPingFailed, err)
-	}
-	return &Handle{DB: db, Driver: DriverPostgres}, nil
 }
 
 // applyPoolDefaults fills in driver-specific defaults when cfg leaves

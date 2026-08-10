@@ -5,8 +5,6 @@
 //	    store.ArtifactRepositoryContract(t, store.NewSQLiteArtifactRepositoryContractFactory())
 //	}
 //
-// The same suite can later be driven against a Postgres factory once §5b lands.
-//
 // Tests are intentionally placed in a sub-package so the production code in
 // package store is exercised through the public interface — no internal access.
 package contracts

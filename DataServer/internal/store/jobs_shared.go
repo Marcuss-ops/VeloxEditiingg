@@ -25,8 +25,8 @@ func parseTimeOrZero(s string) time.Time {
 	return t
 }
 
-// normalizeStatus uppercases and trims a status string. Used by both
-// SQLite and Postgres job adapters for consistent predicate matching.
+// normalizeStatus uppercases and trims a status string. Used by the
+// job repository adapters for consistent predicate matching.
 func normalizeStatus(s string) string {
 	return strings.ToUpper(strings.TrimSpace(s))
 }

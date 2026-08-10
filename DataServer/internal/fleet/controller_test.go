@@ -412,8 +412,8 @@ func TestController_Run_BlocksUntilStop(t *testing.T) {
 // are intentional; the cross-package contract is "same set of
 // strings", not "same order". A future addition to the enum
 // MUST update both AllOperationKinds AND the schema CHECK
-// (sqlite/104 + postgres/014) — pin failure here catches a
-// drift between the two.
+// (sqlite/104) — pin failure here catches a drift between
+// the two.
 func TestExecutorRegistry_ProductionStartsEmpty(t *testing.T) {
 	reg := NewExecutorRegistry()
 	if got := reg.Kinds(); len(got) != 0 {
@@ -523,7 +523,7 @@ func TestNewOperationID_Format(t *testing.T) {
 
 func TestAllOperationKinds_SchemaCompatible(t *testing.T) {
 	// Defensive pin: if a kind lands in AllOperationKinds without
-	// matching the schema CHECK (sqlite/104 + postgres/014), this
+	// matching the schema CHECK (sqlite/104), this
 	// test should also fail. We assert at the spec-level here —
 	// the SQL-level pin runs in store/ store_fleet_operations_test.
 	kinds := map[string]bool{}

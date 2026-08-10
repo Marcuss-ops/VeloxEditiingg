@@ -1,7 +1,7 @@
 // Package migrations / runner.go
 //
-// RunMigrations is the canonical entry point for the SQLite-+-Postgres
-// migration runner. It composes the discovery (embed.FS file scan +
+// RunMigrations is the canonical entry point for the SQLite migration
+// runner. It composes the discovery (embed.FS file scan +
 // schema_migrations tracking-table ensure) and the apply-loop (per-
 // migration tx + pre-flight gates) from sibling files in this package.
 //
@@ -9,11 +9,10 @@
 //
 //	sqlite/    — SQLite-cumulative .sql files. The only callsite in
 //	             production is internal/store/sqlite.go::NewSQLiteStoreFromHandle.
-//	postgres/  — Postgres-native .sql files.
 //
-// The embed.FS directives + SQLiteMigrationsFS / PostgresMigrationsFS
-// accessors live in discovery.go (where migrations are sourced). This
-// file owns the orchestrator only.
+// The embed.FS directive + SQLiteMigrationsFS accessor live in
+// discovery.go (where migrations are sourced). This file owns the
+// orchestrator only.
 //
 // Note: EnsureApplied was previously exposed here; it was retired in
 // this split because it had no production consumers (only test

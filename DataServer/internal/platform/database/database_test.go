@@ -1,8 +1,7 @@
 // Package database_test — runtime tests for the platform/database
 // abstraction. SQLite-only here so the package compiles on any host
-// (CI/Windows/Mac). Postgres open+ping belongs in an integration test
-// gated by VELOX_TEST_DATABASE_URL — Phase 2 contracts already cover
-// that path via the env-gated factories.
+// (CI/Windows/Mac). The Postgres backend was removed (2026-08-10);
+// SQLite is the only supported runtime driver.
 package database_test
 
 import (
@@ -69,25 +68,10 @@ func TestOpen_SQLiteEmptyPath_Rejected(t *testing.T) {
 	}
 }
 
-// TestOpen_PostgresEmptyURL_Rejected verifies that an empty URL for
-// DriverPostgres surfaces ErrDatabaseNotConfigured.
-func TestOpen_PostgresEmptyURL_Rejected(t *testing.T) {
-	_, err := database.Open(context.Background(), database.Config{
-		Driver: database.DriverPostgres,
-		// URL intentionally omitted.
-	})
-	if err == nil {
-		t.Fatal("expected error for empty URL, got nil")
-	}
-	if !errorContains(err, "URL is required") {
-		t.Fatalf("error message must mention URL: %v", err)
-	}
-}
-
 // TestOpen_UnsupportedDriver_Rejected verifies that an unknown driver
 // name surfaces ErrUnsupportedDriver rather than silently defaulting to
-// SQLite (the historical buggy behaviour of legacy Postgres store
-// helpers that did not validate the driver name).
+// SQLite (the historical buggy behaviour of legacy store helpers that
+// did not validate the driver name).
 func TestOpen_UnsupportedDriver_Rejected(t *testing.T) {
 	_, err := database.Open(context.Background(), database.Config{
 		Driver: "mysql",
@@ -100,31 +84,16 @@ func TestOpen_UnsupportedDriver_Rejected(t *testing.T) {
 	}
 }
 
-// TestLoadFromEnv_DefaultsToSQLite verifies that with no VELOX_DB_DRIVER
-// set, LoadFromEnv returns DriverSQLite for backward compatibility.
+// TestConfigFromApplication_DefaultsToTypedValues verifies that with no
+// VELOX_DB_DRIVER set, ConfigFromApplication leaves the driver unknown
+// until Open defaults it to SQLite.
 func TestConfigFromApplication_DefaultsToTypedValues(t *testing.T) {
-	cfg := database.ConfigFromApplication("", "", "/tmp/velox.db", 0, 0, 0)
+	cfg := database.ConfigFromApplication("", "/tmp/velox.db", 0, 0, 0)
 	if cfg.Driver != database.DriverUnknown {
 		t.Fatalf("empty application driver must remain unknown until Open, got %q", cfg.Driver)
 	}
 	if cfg.SQLitePath != "/tmp/velox.db" {
 		t.Fatalf("SQLitePath = %q", cfg.SQLitePath)
-	}
-}
-
-// TestLoadFromEnv_ReadsPostgres verifies that VELOX_DB_DRIVER=postgres
-// + VELOX_DATABASE_URL get propagated into the returned Config verbatim.
-func TestConfigFromApplication_ReadsPostgres(t *testing.T) {
-	const wantURL = "postgres://u:p@host:5432/db?sslmode=disable"
-	cfg := database.ConfigFromApplication("postgres", wantURL, "/should/be/ignored", 32, 8, 30*time.Second)
-	if cfg.Driver != database.DriverPostgres {
-		t.Fatalf("Driver mismatch: got %q", cfg.Driver)
-	}
-	if cfg.URL != wantURL {
-		t.Fatalf("URL mismatch: got %q want %q", cfg.URL, wantURL)
-	}
-	if cfg.MaxOpenConns != 32 || cfg.MaxIdleConns != 8 || cfg.ConnMaxLifetime != 30*time.Second {
-		t.Fatalf("pool config mismatch: %+v", cfg)
 	}
 }
 

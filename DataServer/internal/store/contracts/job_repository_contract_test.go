@@ -7,7 +7,7 @@
 //
 // This suite targets the narrow jobs.Repository interface and tests
 // behavioral invariants that ANY jobs.Repository implementation must
-// satisfy. SQLite and Postgres adapters drive the same scenarios.
+// satisfy. The SQLite adapter drives the scenarios.
 //
 // Behavioral equivalents:
 //
@@ -243,8 +243,8 @@ func JobRepositoryContractCrossBackend(t *testing.T, newRepo func(t *testing.T) 
 
 		jobID := "job_cancel_" + randSuffix()
 		createJob(t, &jobs.Job{ID: jobID})
-		// Use negative revision as orchestrator-initiated (no CAS) per
-		// postgres_jobs_repository.go's Cancel semantics.
+		// Use negative revision as orchestrator-initiated (no CAS) per the
+		// job repository's Cancel semantics.
 		if err := repo.Cancel(ctx, jobID, "stop", -1); err != nil {
 			t.Fatalf("first Cancel: %v", err)
 		}

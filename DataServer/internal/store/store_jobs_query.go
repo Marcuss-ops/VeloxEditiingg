@@ -211,8 +211,7 @@ func (s *SQLiteStore) GetJobByWorkspace(ctx context.Context, jobID string, works
 // "total" key. toJobsCounts (jobs.Status(k) literal cast) needs canonical
 // keys; non-canonical keys land under Status("pending") and get
 // double-counted by TotalRuns summation and lost under
-// LegacyRunStatusPending in the orchestrator adapter. The PostgreSQL
-// path uses the same canonical-key shape.
+// LegacyRunStatusPending in the orchestrator adapter.
 //
 // Binning and totals are the caller's responsibility (getStats already
 // declares allRunStatuses / allStepStatuses and seeds the map with

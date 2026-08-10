@@ -123,7 +123,7 @@ func TestFromEnv_BootstrapTypedValues(t *testing.T) {
 }
 
 func TestValidate_RejectsPostgresBeforeSQLitePathValidation(t *testing.T) {
-	cfg := &Config{Database: DatabaseConfig{Driver: "postgres", URL: "postgres://user:pass@db.example/velox"}}
+	cfg := &Config{Database: DatabaseConfig{Driver: "postgres"}}
 	err := cfg.Validate()
 	if err == nil {
 		t.Fatal("expected Postgres runtime driver to be rejected")

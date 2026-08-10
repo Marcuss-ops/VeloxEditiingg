@@ -10,13 +10,11 @@ import (
 //
 // The master runtime accepts an empty driver (which database.Open defaults
 // to SQLite) or an explicit "sqlite". "postgres" is loaded only so the
-// configuration boundary can reject it before bootstrap I/O; isolated
-// repository contract tests construct database.Config directly.
+// configuration boundary can reject it before bootstrap I/O.
 //
 // Env vars mapped here:
 //
 //	VELOX_DB_DRIVER          → Driver          (empty|sqlite at runtime; postgres rejected)
-//	VELOX_DATABASE_URL       → URL             (contract tests only)
 //	VELOX_DB_PATH            → DBPath          (SQLite file path; absolute)
 //	VELOX_DB_MAX_OPEN_CONNS  → MaxOpenConns    (int ≥ 0)
 //	VELOX_DB_MAX_IDLE_CONNS  → MaxIdleConns    (int ≥ 0)
@@ -27,7 +25,6 @@ func loadDatabaseConfig(raw RawConfig) DatabaseConfig {
 
 	cfg := DatabaseConfig{
 		Driver: driver,
-		URL:    raw.Get("VELOX_DATABASE_URL"),
 	}
 
 	// SQLitePath keeps the historical symlink-resolution behaviour for

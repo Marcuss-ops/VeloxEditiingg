@@ -8,7 +8,7 @@
 //   - AcceptsAllOperationKinds   — schema CHECK covers every
 //     canonical kind (debug fix
 //     when a new kind lands outside
-//     sqlite/104 + postgres/014)
+//     sqlite/104)
 //   - RejectsUnknownKind         — schema CHECK rejects typo'd
 //     kinds (e.g. "drainning"); the
 //     audit surface stays clean

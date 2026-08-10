@@ -9,15 +9,13 @@ import "time"
 type Driver string
 
 const (
-	DriverSQLite   Driver = "sqlite"
-	DriverPostgres Driver = "postgres"
-	DriverUnknown  Driver = ""
+	DriverSQLite  Driver = "sqlite"
+	DriverUnknown Driver = ""
 )
 
 // Config contains connection-pool and driver selection settings.
 type Config struct {
 	Driver          Driver
-	URL             string
 	SQLitePath      string
 	MaxOpenConns    int
 	MaxIdleConns    int
@@ -26,10 +24,9 @@ type Config struct {
 
 // ConfigFromApplication maps validated application settings to the database
 // package's narrow connection configuration. No process environment is read.
-func ConfigFromApplication(driver, url, sqlitePath string, maxOpen, maxIdle int, lifetime time.Duration) Config {
+func ConfigFromApplication(driver, sqlitePath string, maxOpen, maxIdle int, lifetime time.Duration) Config {
 	return Config{
 		Driver:          Driver(driver),
-		URL:             url,
 		SQLitePath:      sqlitePath,
 		MaxOpenConns:    maxOpen,
 		MaxIdleConns:    maxIdle,

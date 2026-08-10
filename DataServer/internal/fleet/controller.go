@@ -63,10 +63,10 @@ var ErrAlreadyRunning = errors.New("fleet: controller already running")
 // sentinel here is informational and keeps the "running" axis
 // explicit.
 
-// FleetStore is the slice of *store.SQLiteStore (or a future
-// PostgresStore wrapper) the controller actually uses. Defined
-// as an interface so tests can swap in a stub store without
-// standing up a SQLite handle or running the migration sweep.
+// FleetStore is the slice of *store.SQLiteStore the controller
+// actually uses. Defined as an interface so tests can swap in a
+// stub store without standing up a SQLite handle or running the
+// migration sweep.
 //
 // Production: pass *store.SQLiteStore directly (it satisfies
 // the interface via its methods on the receiver; the interface
