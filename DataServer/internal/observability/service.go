@@ -5,7 +5,86 @@ import (
 	"fmt"
 
 	"velox-server/internal/audittrail"
+	"velox-server/internal/jobs"
+	"velox-server/internal/taskattempts"
+	"velox-server/internal/taskgraph"
 )
+
+// TaskReader is the read surface the observability service depends on.
+type TaskReader interface {
+	Get(ctx context.Context, id string) (*taskgraph.Task, error)
+	GetByJobID(ctx context.Context, jobID string) (*taskgraph.Task, error)
+	List(ctx context.Context, filter taskgraph.Filter) ([]taskgraph.Task, error)
+}
+
+// AttemptReader provides attempt queries for aggregation.
+type AttemptReader interface {
+	Get(ctx context.Context, id string) (*taskattempts.TaskAttempt, error)
+	ListByTaskID(ctx context.Context, taskID string) ([]taskattempts.TaskAttempt, error)
+	GetPhaseTimings(ctx context.Context, attemptID string) ([]taskattempts.PhaseTiming, error)
+	GetMetrics(ctx context.Context, attemptID string) (*taskattempts.AttemptMetrics, error)
+	GetCacheStats(ctx context.Context, attemptID string) (*taskattempts.AttemptCacheStats, error)
+}
+
+// SegmentReader is optional so deployments with older schemas continue to
+// serve job inspection; newer SQLite repositories expose sidecar segment
+// telemetry through this read-only seam.
+type SegmentReader interface {
+	ListSegmentTimings(ctx context.Context, attemptID string) ([]taskattempts.SegmentTiming, error)
+}
+
+// LiveAttemptReader is the volatile worker_task_runtime projection.
+// It is an overlay only: durable task_attempts history remains authoritative
+// for identity, status, errors, timestamps, and final metrics. A live row may
+// be exposed temporarily during claim/accept visibility, but is never durable
+// history and must not resurrect a terminal attempt.
+type LiveAttemptReader interface {
+	GetWorkerTaskRuntimeByJob(ctx context.Context, jobID string) (*LiveAttempt, error)
+}
+
+// LiveAttemptTaskReader is an optional task-scoped refinement of
+// LiveAttemptReader. It prevents a multi-task job from selecting another
+// task's newest runtime row while preserving the older job-scoped contract
+// for compatibility with existing adapters.
+type LiveAttemptTaskReader interface {
+	GetWorkerTaskRuntimeByTask(ctx context.Context, taskID, jobID string) (*LiveAttempt, error)
+}
+
+// JobReader provides job queries for observability aggregates.
+type JobReader interface {
+	Get(ctx context.Context, id string) (*jobs.Job, error)
+	List(ctx context.Context, filter jobs.Filter) ([]jobs.Job, error)
+	Counts(ctx context.Context) (jobs.Counts, error)
+}
+
+// WorkerReader provides worker queries for observability.
+type WorkerReader interface {
+	ListWorkers() ([]map[string]any, error)
+	GetWorker(workerID string) (map[string]any, error)
+}
+
+// VersionMetricsReader provides per-version metric queries for
+// regression comparison. Implemented by the store layer on
+// task_attempts + task_attempt_metrics.
+type VersionMetricsReader interface {
+	// ListMetricsByGitSHA returns metric snapshots for all attempts
+	// with the given git_sha. Returns an empty slice when no attempts
+	// match (not an error).
+	ListMetricsByGitSHA(ctx context.Context, gitSHA string) ([]VersionMetricSnapshot, error)
+}
+
+type AuditReader interface {
+	ListAuditEvents(context.Context, string, int) ([]audittrail.Event, error)
+}
+
+// JobInspectionReader is the optional read model behind the operator-facing
+// job inspection surface. Keeping this as a small local contract means the
+// observability package does not depend on a concrete database backend.
+type JobInspectionReader interface {
+	ListJobEvents(context.Context, string, int) ([]JobEvent, error)
+	ListArtifacts(context.Context, string, int) ([]ArtifactSnapshot, error)
+	ListDeliveries(context.Context, string) ([]DeliverySnapshot, error)
+}
 
 // Service is the read-only observability aggregation service.
 type Service struct {
@@ -39,7 +118,10 @@ func (s *Service) WithJobs(r JobReader) *Service { s.jobs = r; return s }
 func (s *Service) WithWorkers(r WorkerReader) *Service { s.workers = r; return s }
 
 // WithVersionMetrics sets the version metrics reader for regression comparison.
-func (s *Service) WithVersionMetrics(r VersionMetricsReader) *Service { s.versionMetrics = r; return s }
+func (s *Service) WithVersionMetrics(r VersionMetricsReader) *Service {
+	s.versionMetrics = r
+	return s
+}
 
 func (s *Service) WithAudit(r AuditReader) *Service { s.audit = r; return s }
 

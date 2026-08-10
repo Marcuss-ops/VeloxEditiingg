@@ -1,11 +1,95 @@
 package observability
 
-import "velox-server/internal/taskattempts"
+import (
+	"velox-server/internal/taskattempts"
+	"velox-server/internal/taskgraph"
+)
+
+// attemptOverlayDecision is the result of the one reconciliation authority
+// used by every observability projection. A nil durable pointer means the
+// live row is a temporary claim/accept overlay only; it never becomes durable
+// history and never overrides a terminal task.
+type attemptOverlayDecision struct {
+	durable  *taskattempts.TaskAttempt
+	eligible bool
+}
+
+// reconcileLiveAttempt is the single authority for live/durable precedence.
+// Durable terminal state always wins over volatile worker_task_runtime state.
+// It also owns task/attempt identity, retry ordering, and worker liveness
+// checks so callers cannot implement subtly different reconciliation rules.
+func reconcileLiveAttempt(live *LiveAttempt, task *taskgraph.Task, attempts []taskattempts.TaskAttempt) attemptOverlayDecision {
+	decision := attemptOverlayDecision{}
+	if live == nil || task == nil || task.Status.IsTerminal() || live.AttemptID == "" || live.AttemptNumber <= 0 {
+		return decision
+	}
+	if (live.TaskID != "" && live.TaskID != task.ID) || (live.JobID != "" && live.JobID != task.JobID) {
+		return decision
+	}
+
+	switch live.RuntimeStatus {
+	case "ACCEPTED", "STARTING", "RUNNING", "CANCELLING", "UPLOADING", "FINALIZING":
+	default:
+		return decision
+	}
+	switch live.WorkerConnectionState {
+	case "", "CONNECTED":
+	default:
+		return decision
+	}
+
+	latestAttemptNumber := 0
+	for i := range attempts {
+		if attempts[i].AttemptNumber > latestAttemptNumber {
+			latestAttemptNumber = attempts[i].AttemptNumber
+		}
+	}
+	if live.AttemptNumber < latestAttemptNumber || live.AttemptNumber < task.AttemptCount {
+		return decision
+	}
+	for i := range attempts {
+		if attempts[i].ID != live.AttemptID {
+			continue
+		}
+		if attempts[i].TaskID != "" && attempts[i].TaskID != task.ID {
+			return decision
+		}
+		if attempts[i].JobID != "" && attempts[i].JobID != task.JobID {
+			return decision
+		}
+		if attempts[i].AttemptNumber > 0 && attempts[i].AttemptNumber != live.AttemptNumber {
+			return decision
+		}
+		decision.durable = &attempts[i]
+		decision.eligible = !attempts[i].Status.IsTerminal()
+		return decision
+	}
+
+	// Claim/accept can publish the volatile identity just before the durable
+	// row is visible. Permit this temporary overlay, but never promote it to
+	// durable state or use it to override a terminal task.
+	decision.eligible = true
+	return decision
+}
+
+func (d attemptOverlayDecision) overlaysAttempt(attemptID string) bool {
+	return d.eligible && d.durable != nil && d.durable.ID == attemptID
+}
+
+func (d attemptOverlayDecision) hasTemporaryOverlay() bool {
+	return d.eligible && d.durable == nil
+}
+
+// liveAttemptIsEligible remains a small compatibility wrapper for focused
+// callers and tests. All reconciliation decisions flow through the helper
+// above; there is no second precedence implementation.
+func liveAttemptIsEligible(live *LiveAttempt, task *taskgraph.Task, attempts []taskattempts.TaskAttempt) bool {
+	return reconcileLiveAttempt(live, task, attempts).eligible
+}
 
 // applyLiveAttemptOverlay copies only volatile execution fields onto a
 // durable/non-terminal summary. Identity, status, errors, timestamps, and
-// final metrics remain owned by the durable attempt; the live row is an
-// explicitly temporary overlay.
+// final metrics remain owned by the durable attempt.
 func applyLiveAttemptOverlay(target *AttemptSummary, live *LiveAttempt) {
 	if target == nil || live == nil {
 		return
@@ -34,10 +118,6 @@ func liveAttemptStatus(live *LiveAttempt) taskattempts.AttemptStatus {
 	if live == nil {
 		return taskattempts.AttemptStatusRunning
 	}
-	// Runtime phases such as UPLOADING and FINALIZING are deliberately
-	// richer than the durable AttemptStatus enum. The admin summary keeps
-	// the durable wire contract and reports every eligible non-terminal
-	// runtime phase as RUNNING.
 	return taskattempts.AttemptStatusRunning
 }
 
