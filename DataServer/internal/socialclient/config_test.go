@@ -16,8 +16,7 @@ import (
 // the package-boundary boundary for the YouTube→Social cleanup.
 //
 // The canonical envs are SOCIAL_API_URL / SOCIAL_API_TOKEN /
-// SOCIAL_CALLBACK_BASE_URL. SOCIAL_API_TIMEOUT_MS and SOCIAL_API_RETRIES
-// never had a legacy alias and are unaffected by this removal.
+// SOCIAL_CALLBACK_BASE_URL and SOCIAL_API_TIMEOUT_MS.
 func TestConfigFromEnv_DropsLegacySocialGatewayAliases(t *testing.T) {
 	// Force every relevant env var to the empty string during this
 	// test, then set ONLY the legacy aliases. t.Setenv registers
@@ -30,7 +29,6 @@ func TestConfigFromEnv_DropsLegacySocialGatewayAliases(t *testing.T) {
 		"SOCIAL_GATEWAY_API_KEY",
 		"SOCIAL_GATEWAY_CALLBACK_BASE_URL",
 		"SOCIAL_API_TIMEOUT_MS",
-		"SOCIAL_API_RETRIES",
 	} {
 		t.Setenv(k, "")
 	}
@@ -51,13 +49,9 @@ func TestConfigFromEnv_DropsLegacySocialGatewayAliases(t *testing.T) {
 		t.Errorf("legacy SOCIAL_GATEWAY_CALLBACK_BASE_URL must NOT be honored: got CallbackBaseURL=%q", cfg.CallbackBaseURL)
 	}
 
-	// Defaults (Timeout=30s, MaxRetries=0) are unaffected by the legacy
-	// alias removal and must remain observable here.
+	// The timeout default remains observable here.
 	if cfg.Timeout != 30*time.Second {
 		t.Errorf("default Timeout expected 30s, got %s", cfg.Timeout)
-	}
-	if cfg.MaxRetries != 0 {
-		t.Errorf("default MaxRetries expected 0, got %d", cfg.MaxRetries)
 	}
 }
 
@@ -72,7 +66,6 @@ func TestConfigFromEnv_HonorsCanonicalSocialAPIEnvs(t *testing.T) {
 		"SOCIAL_API_TOKEN",
 		"SOCIAL_CALLBACK_BASE_URL",
 		"SOCIAL_API_TIMEOUT_MS",
-		"SOCIAL_API_RETRIES",
 	} {
 		t.Setenv(k, "")
 	}
@@ -81,7 +74,6 @@ func TestConfigFromEnv_HonorsCanonicalSocialAPIEnvs(t *testing.T) {
 	t.Setenv("SOCIAL_API_TOKEN", "canonical-token")
 	t.Setenv("SOCIAL_CALLBACK_BASE_URL", "https://canonical-callback.example.com")
 	t.Setenv("SOCIAL_API_TIMEOUT_MS", "7000")
-	t.Setenv("SOCIAL_API_RETRIES", "2")
 
 	cfg := ConfigFromEnv()
 
@@ -96,8 +88,5 @@ func TestConfigFromEnv_HonorsCanonicalSocialAPIEnvs(t *testing.T) {
 	}
 	if cfg.Timeout != 7*time.Second {
 		t.Errorf("SOCIAL_API_TIMEOUT_MS not honored: got %s", cfg.Timeout)
-	}
-	if cfg.MaxRetries != 2 {
-		t.Errorf("SOCIAL_API_RETRIES not honored: got %d", cfg.MaxRetries)
 	}
 }

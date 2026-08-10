@@ -103,7 +103,6 @@ func operationalParseErrors(raw RawConfig) []string {
 		{"VELOX_METRICS_SEEN_IDS_CAP", 1},
 		{"VELOX_CALENDAR_SCHEDULER_INTERVAL_SECONDS", 1},
 		{"SOCIAL_API_TIMEOUT_MS", 0},
-		{"SOCIAL_API_RETRIES", 0},
 	} {
 		checkInt(item.key, item.min)
 	}
@@ -116,7 +115,6 @@ func loadSocialConfig(raw RawConfig) SocialConfig {
 		APIKey:          raw.Get("SOCIAL_API_TOKEN"),
 		CallbackBaseURL: strings.TrimSpace(raw.Get("SOCIAL_CALLBACK_BASE_URL")),
 		Timeout:         time.Duration(raw.Int("SOCIAL_API_TIMEOUT_MS", 30000, 0)) * time.Millisecond,
-		MaxRetries:      raw.Int("SOCIAL_API_RETRIES", 0, 0),
 	}
 }
 
@@ -257,7 +255,6 @@ func (c *Config) Snapshot() RuntimeSnapshot {
 		"runtime.social.api_key":                        redactPresence(c.Runtime.Social.APIKey),
 		"runtime.social.callback_base_url":              c.Runtime.Social.CallbackBaseURL,
 		"runtime.social.timeout":                        c.Runtime.Social.Timeout.String(),
-		"runtime.social.max_retries":                    fmt.Sprint(c.Runtime.Social.MaxRetries),
 		"runtime.logging.quiet":                         fmt.Sprint(c.Runtime.Logging.Quiet),
 		"runtime.logging.json_output":                   fmt.Sprint(c.Runtime.Logging.JSONOutput),
 		"runtime.logging.debug":                         fmt.Sprint(c.Runtime.Logging.Debug),

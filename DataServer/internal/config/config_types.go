@@ -193,7 +193,6 @@ type SocialConfig struct {
 	APIKey          string
 	CallbackBaseURL string
 	Timeout         time.Duration
-	MaxRetries      int
 }
 
 // LoggingConfig controls process-wide structured logging.

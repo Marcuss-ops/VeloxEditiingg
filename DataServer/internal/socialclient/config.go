@@ -28,7 +28,6 @@ package socialclient
 import (
 	"errors"
 	"fmt"
-	"strconv"
 
 	"time"
 	"velox-server/internal/config"
@@ -61,12 +60,6 @@ type Config struct {
 
 	// Timeout bounds a single DeliverArtifact call. Zero means 30s.
 	Timeout time.Duration
-
-	// MaxRetries is currently unused at the client level (the caller
-	// retries per the runner's BackoffSchedule). It is preserved here
-	// so a future socialclient-side retry policy can be added without
-	// breaking the public API.
-	MaxRetries int
 }
 
 // Validate ensures the Config is internally consistent. Empty BaseURL
@@ -75,9 +68,6 @@ type Config struct {
 func (c Config) Validate() error {
 	if c.Timeout < 0 {
 		return errors.New("socialclient: Timeout must be >= 0")
-	}
-	if c.MaxRetries < 0 {
-		return errors.New("socialclient: MaxRetries must be >= 0")
 	}
 	return nil
 }
@@ -95,11 +85,9 @@ func (c Config) Validate() error {
 //	SOCIAL_API_URL                      required for live publish
 //	SOCIAL_API_TOKEN                    optional bearer (empty = dev mode)
 //	SOCIAL_API_TIMEOUT_MS               single-attempt HTTP timeout (default 30000)
-//	SOCIAL_API_RETRIES                  hint only; Velox-runnner-driven retry is canonical
 //	SOCIAL_CALLBACK_BASE_URL            Velox public URL for download_url / callback_url
 //
-// SOCIAL_API_TIMEOUT_MS defaults to 30000; SOCIAL_API_RETRIES defaults
-// to 0.
+// SOCIAL_API_TIMEOUT_MS defaults to 30000.
 func ConfigFromEnv() Config {
 	return ConfigFromRuntime(config.FromEnv().Runtime.Social)
 }
@@ -111,30 +99,7 @@ func ConfigFromRuntime(c config.SocialConfig) Config {
 		APIKey:          c.APIKey,
 		CallbackBaseURL: c.CallbackBaseURL,
 		Timeout:         c.Timeout,
-		MaxRetries:      c.MaxRetries,
 	}
-}
-
-func parseDurationMillis(raw string, def time.Duration) time.Duration {
-	if raw == "" {
-		return def
-	}
-	ms, err := strconv.Atoi(raw)
-	if err != nil || ms < 0 {
-		return def
-	}
-	return time.Duration(ms) * time.Millisecond
-}
-
-func parseInt(raw string, def int) int {
-	if raw == "" {
-		return def
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 0 {
-		return def
-	}
-	return v
 }
 
 // String returns a redacted summary suitable for logs (APIKey is masked).
@@ -143,6 +108,6 @@ func (c Config) String() string {
 	if c.APIKey != "" {
 		masked = "<set>"
 	}
-	return fmt.Sprintf("socialclient.Config{BaseURL=%q APIKey=%s CallbackBaseURL=%q Timeout=%s MaxRetries=%d}",
-		c.BaseURL, masked, c.CallbackBaseURL, c.Timeout, c.MaxRetries)
+	return fmt.Sprintf("socialclient.Config{BaseURL=%q APIKey=%s CallbackBaseURL=%q Timeout=%s}",
+		c.BaseURL, masked, c.CallbackBaseURL, c.Timeout)
 }

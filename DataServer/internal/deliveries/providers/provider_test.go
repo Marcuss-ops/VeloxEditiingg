@@ -58,6 +58,13 @@ func TestLocalExportProvider_FileNotFound(t *testing.T) {
 	}
 }
 
+func TestDeliveryRegistryDoesNotAdvertiseS3WithoutProvider(t *testing.T) {
+	registry := deliveries.NewRegistry()
+	if _, err := registry.Resolve("s3"); !errors.Is(err, deliveries.ErrProviderNotConfigured) {
+		t.Fatalf("s3 must remain unavailable until a real provider is wired, got %v", err)
+	}
+}
+
 func TestLocalExportProvider_Success(t *testing.T) {
 	outDir := t.TempDir()
 	p := NewLocalExportProvider(outDir)
@@ -92,20 +99,5 @@ func TestLocalExportProvider_Success(t *testing.T) {
 	}
 	if string(content) != "fake video content" {
 		t.Fatalf("want copied content, got %q", string(content))
-	}
-}
-
-func TestS3Provider_Name(t *testing.T) {
-	p := NewS3Provider()
-	if p.Name() != "s3" {
-		t.Fatalf("want 's3', got %q", p.Name())
-	}
-}
-
-func TestS3Provider_AlwaysNotConfigured(t *testing.T) {
-	p := NewS3Provider()
-	_, err := p.Deliver(context.Background(), &store.Artifact{}, &deliveries.Destination{}, "", "")
-	if !errors.Is(err, deliveries.ErrProviderNotConfigured) {
-		t.Fatalf("want ErrProviderNotConfigured, got %v", err)
 	}
 }
