@@ -37,6 +37,38 @@ type SegmentReader interface {
 	ListSegmentTimings(ctx context.Context, attemptID string) ([]taskattempts.SegmentTiming, error)
 }
 
+// LiveAttemptReader is the existing volatile worker_task_runtime projection.
+// It supplies the current Attempt state while durable attempt metrics are
+// still being produced and therefore may not exist yet.
+type LiveAttemptReader interface {
+	GetWorkerTaskRuntimeByJob(ctx context.Context, jobID string) (*LiveAttempt, error)
+}
+
+type LiveAttempt struct {
+	TaskID            string
+	JobID             string
+	AttemptID         string
+	AttemptNumber     int
+	WorkerID          string
+	LeaseID           string
+	RuntimeStatus     string
+	ProgressPercent   int
+	ProgressPhase     string
+	CurrentScene      int
+	TotalScenes       int
+	CurrentSegment    int
+	TotalSegments     int
+	FramesEncoded     int64
+	FramesDecoded     int64
+	FramesComposited  int64
+	FFmpegSpeedX      float64
+	ElapsedMS         int64
+	CumulativeMetrics map[string]any
+	StartedAt         string
+	LastProgressAt    string
+	UpdatedAt         string
+}
+
 // JobReader provides job queries for observability aggregates.
 type JobReader interface {
 	Get(ctx context.Context, id string) (*jobs.Job, error)
@@ -195,14 +227,32 @@ type CacheSummary struct {
 
 // AttemptSummary is the aggregated diagnostics for a single attempt.
 type AttemptSummary struct {
-	AttemptID      string                          `json:"attempt_id"`
-	AttemptNumber  int                             `json:"attempt_number"`
-	Status         taskattempts.AttemptStatus      `json:"status"`
-	WorkerID       string                          `json:"worker_id"`
-	DurationMS     int64                           `json:"duration_ms"`
-	PhaseBreakdown map[string]int64                `json:"phase_breakdown"`
-	Metrics        *taskattempts.AttemptMetrics    `json:"metrics,omitempty"`
-	CacheStats     *taskattempts.AttemptCacheStats `json:"cache_stats,omitempty"`
+	AttemptID         string                          `json:"attempt_id"`
+	AttemptNumber     int                             `json:"attempt_number"`
+	Status            taskattempts.AttemptStatus      `json:"status"`
+	WorkerID          string                          `json:"worker_id"`
+	ErrorCode         string                          `json:"error_code,omitempty"`
+	ErrorMessage      string                          `json:"error_message,omitempty"`
+	StartedAt         string                          `json:"started_at,omitempty"`
+	CompletedAt       string                          `json:"completed_at,omitempty"`
+	DurationMS        int64                           `json:"duration_ms"`
+	PhaseBreakdown    map[string]int64                `json:"phase_breakdown"`
+	Metrics           *taskattempts.AttemptMetrics    `json:"metrics,omitempty"`
+	CacheStats        *taskattempts.AttemptCacheStats `json:"cache_stats,omitempty"`
+	Live              bool                            `json:"live,omitempty"`
+	Phase             string                          `json:"phase,omitempty"`
+	ProgressPercent   int                             `json:"progress_percent,omitempty"`
+	CurrentScene      int                             `json:"current_scene,omitempty"`
+	TotalScenes       int                             `json:"total_scenes,omitempty"`
+	CurrentSegment    int                             `json:"current_segment,omitempty"`
+	TotalSegments     int                             `json:"total_segments,omitempty"`
+	FramesEncoded     int64                           `json:"frames_encoded,omitempty"`
+	FramesDecoded     int64                           `json:"frames_decoded,omitempty"`
+	FramesComposited  int64                           `json:"frames_composited,omitempty"`
+	FFmpegSpeedX      float64                         `json:"ffmpeg_speed_x,omitempty"`
+	ElapsedMS         int64                           `json:"elapsed_ms,omitempty"`
+	LastProgressAt    string                          `json:"last_progress_at,omitempty"`
+	CumulativeMetrics map[string]any                  `json:"cumulative_metrics,omitempty"`
 }
 
 // Service is the read-only observability aggregation service.
@@ -214,6 +264,7 @@ type Service struct {
 	versionMetrics VersionMetricsReader
 	audit          AuditReader
 	jobInspection  JobInspectionReader
+	liveAttempts   LiveAttemptReader
 }
 
 // NewService constructs the observability aggregation service.
@@ -243,6 +294,13 @@ func (s *Service) WithAudit(r AuditReader) *Service { s.audit = r; return s }
 // WithJobInspection wires the optional persistence-backed job details.
 func (s *Service) WithJobInspection(r JobInspectionReader) *Service {
 	s.jobInspection = r
+	return s
+}
+
+// WithLiveAttempts wires the existing volatile runtime projection into the
+// admin read model. It does not create or persist a second tracker.
+func (s *Service) WithLiveAttempts(r LiveAttemptReader) *Service {
+	s.liveAttempts = r
 	return s
 }
 
@@ -276,6 +334,39 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 		PhaseTotals:  make(map[string]int64),
 	}
 
+	// Durable metrics are final-report data. Overlay the same canonical
+	// Attempt with the live worker_task_runtime row while it is RUNNING.
+	// This keeps GET /api/v1/admin/jobs/{id} useful during rendering.
+	if s.liveAttempts != nil {
+		if live, liveErr := s.liveAttempts.GetWorkerTaskRuntimeByJob(ctx, task.JobID); liveErr == nil && live != nil {
+			if live.AttemptID != "" {
+				if live.AttemptNumber > summary.AttemptCount {
+					summary.AttemptCount = live.AttemptNumber
+				}
+				alreadyPresent := false
+				for _, existing := range summary.Attempts {
+					if existing.AttemptID == live.AttemptID {
+						alreadyPresent = true
+						break
+					}
+				}
+				if !alreadyPresent {
+					summary.Attempts = append(summary.Attempts, AttemptSummary{
+						AttemptID: live.AttemptID, AttemptNumber: live.AttemptNumber,
+						Status: taskattempts.AttemptStatus(live.RuntimeStatus), WorkerID: live.WorkerID,
+						Live: true, Phase: live.ProgressPhase, ProgressPercent: live.ProgressPercent,
+						CurrentScene: live.CurrentScene, TotalScenes: live.TotalScenes,
+						CurrentSegment: live.CurrentSegment, TotalSegments: live.TotalSegments,
+						FramesEncoded: live.FramesEncoded, FramesDecoded: live.FramesDecoded,
+						FramesComposited: live.FramesComposited, FFmpegSpeedX: live.FFmpegSpeedX,
+						ElapsedMS: live.ElapsedMS, StartedAt: live.StartedAt,
+						LastProgressAt: live.LastProgressAt, CumulativeMetrics: live.CumulativeMetrics,
+					})
+				}
+			}
+		}
+	}
+
 	var firstStart *time.Time
 	var lastEnd *time.Time
 
@@ -285,7 +376,15 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 			AttemptNumber:  a.AttemptNumber,
 			Status:         a.Status,
 			WorkerID:       a.WorkerID,
+			ErrorCode:      a.ErrorCode,
+			ErrorMessage:   a.ErrorMessage,
 			PhaseBreakdown: make(map[string]int64),
+		}
+		if a.StartedAt != nil {
+			as.StartedAt = a.StartedAt.UTC().Format(time.RFC3339Nano)
+		}
+		if a.CompletedAt != nil {
+			as.CompletedAt = a.CompletedAt.UTC().Format(time.RFC3339Nano)
 		}
 
 		// Phase timings

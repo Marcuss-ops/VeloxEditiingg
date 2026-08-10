@@ -102,6 +102,14 @@ func (s *stubJobReader) Counts(_ context.Context) (jobs.Counts, error) {
 	return s.counts, nil
 }
 
+type stubLiveAttemptReader struct {
+	live *LiveAttempt
+}
+
+func (r stubLiveAttemptReader) GetWorkerTaskRuntimeByJob(context.Context, string) (*LiveAttempt, error) {
+	return r.live, nil
+}
+
 type stubWorkerReader struct {
 	workers []map[string]any
 	err     error
@@ -133,7 +141,7 @@ func newTestService() (*Service, *stubTaskReader, *stubAttemptReader, *stubJobRe
 				{ID: "A-1", TaskID: "T-1", WorkerID: "worker-01", Status: taskattempts.AttemptStatusSucceeded, AttemptNumber: 1},
 			},
 			"T-2": {
-				{ID: "A-2", TaskID: "T-2", WorkerID: "worker-02", Status: taskattempts.AttemptStatusFailed, AttemptNumber: 1, ErrorCode: "ASSET_DOWNLOAD_FAILED"},
+				{ID: "A-2", TaskID: "T-2", WorkerID: "worker-02", Status: taskattempts.AttemptStatusFailed, AttemptNumber: 1, ErrorCode: "ASSET_DOWNLOAD_FAILED", ErrorMessage: "asset download failed"},
 				{ID: "A-2b", TaskID: "T-2", WorkerID: "worker-02", Status: taskattempts.AttemptStatusFailed, AttemptNumber: 2},
 			},
 			"T-3": {
@@ -222,6 +230,25 @@ func TestService_Overview(t *testing.T) {
 	}
 	if !found {
 		t.Error("TopErrors should include ASSET_DOWNLOAD_FAILED")
+	}
+}
+
+func TestService_SummarizeTaskIncludesAttemptFailureDetails(t *testing.T) {
+	svc, tasks, _, _, _ := newTestService()
+	tasks.tasks["T-2"] = &taskgraph.Task{ID: "T-2", JobID: "J-2", Status: taskgraph.StatusFailed, ExecutorID: "scene.composite.v1", AttemptCount: 2}
+
+	result, err := svc.SummarizeTask(context.Background(), "T-2")
+	if err != nil {
+		t.Fatalf("SummarizeTask() error: %v", err)
+	}
+	if len(result.Attempts) != 2 {
+		t.Fatalf("attempts = %d, want 2", len(result.Attempts))
+	}
+	if got := result.Attempts[0].ErrorCode; got != "ASSET_DOWNLOAD_FAILED" {
+		t.Fatalf("error_code = %q, want ASSET_DOWNLOAD_FAILED", got)
+	}
+	if got := result.Attempts[0].ErrorMessage; got != "asset download failed" {
+		t.Fatalf("error_message = %q, want canonical message", got)
 	}
 }
 
@@ -345,6 +372,30 @@ func TestService_PhaseTrends_WithExecutor(t *testing.T) {
 	}
 	if result.Samples == 0 {
 		t.Error("Samples should be > 0 when filtering by executor")
+	}
+}
+
+func TestService_SummarizeTaskIncludesLiveAttemptProgress(t *testing.T) {
+	svc, tasks, _, _, _ := newTestService()
+	tasks.tasks["T-live"] = &taskgraph.Task{ID: "T-live", JobID: "J-live", Status: taskgraph.StatusRunning, AttemptCount: 1}
+	svc.WithLiveAttempts(stubLiveAttemptReader{live: &LiveAttempt{
+		TaskID: "T-live", JobID: "J-live", AttemptID: "A-live", AttemptNumber: 1,
+		WorkerID: "worker-live", RuntimeStatus: "RUNNING", ProgressPercent: 46,
+		ProgressPhase: "building_segments", CurrentScene: 7, TotalScenes: 13,
+		CurrentSegment: 12, TotalSegments: 26, FramesEncoded: 18432,
+		FFmpegSpeedX: 2.37, ElapsedMS: 183421, LastProgressAt: "2026-08-10T10:03:42Z",
+	}})
+
+	result, err := svc.SummarizeTask(context.Background(), "T-live")
+	if err != nil {
+		t.Fatalf("SummarizeTask() error: %v", err)
+	}
+	if len(result.Attempts) != 1 || !result.Attempts[0].Live || result.Attempts[0].AttemptID != "A-live" {
+		t.Fatalf("live attempts = %#v", result.Attempts)
+	}
+	live := result.Attempts[0]
+	if live.Phase != "building_segments" || live.CurrentScene != 7 || live.CurrentSegment != 12 || live.FramesEncoded != 18432 || live.LastProgressAt == "" {
+		t.Fatalf("live attempt projection = %#v", live)
 	}
 }
 
