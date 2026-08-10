@@ -23,6 +23,7 @@ Usage:
   scripts/fleetctl rollback <worker_id> <ghcr-image@sha256:digest> [reason]
   scripts/fleetctl operations [worker_id] [status]
   scripts/fleetctl wait-ready <worker_id> [--digest image-or-sha256] [--timeout seconds] [--poll seconds]
+  scripts/fleetctl rollout [--digest image-or-sha256] [--workers all|id1,id2,...] [--reason R] [--wait-ready]
   scripts/fleetctl job inspect <job_id> [--json]
   scripts/fleetctl job metrics <job_id>
   scripts/fleetctl job watch <job_id> [--timeout seconds] [--poll seconds] [--json]

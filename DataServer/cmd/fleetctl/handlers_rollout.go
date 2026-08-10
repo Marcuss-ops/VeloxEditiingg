@@ -142,6 +142,11 @@ func parseRolloutArgs(args []string) (rolloutOptions, error) {
 			return opts, errors.New("rollout is serial-only; omit --parallel and use --serial")
 		case strings.HasPrefix(arg, "--master=") || strings.HasPrefix(arg, "--token-file=") || arg == "--verbose":
 			// Global flags resolved by loadClientConfig before dispatch.
+		case arg == "--master" || arg == "--token-file":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("%s requires a value", arg)
+			}
+			i++
 		case strings.HasPrefix(arg, "-"):
 			return opts, fmt.Errorf("unknown rollout option %q", arg)
 		default:

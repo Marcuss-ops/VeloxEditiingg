@@ -826,6 +826,20 @@ func TestParseRolloutArgs_FlagAndPositionalForms(t *testing.T) {
 	}
 }
 
+func TestParseRolloutArgs_IgnoresSpaceFormGlobalFlags(t *testing.T) {
+	pinned := "ghcr.io/example/velox-worker@sha256:" + strings.Repeat("a", 64)
+	opts, err := parseRolloutArgs([]string{"--digest", pinned, "--master", "http://master:8000", "--token-file", "/tmp/tok", "--verbose"})
+	if err != nil {
+		t.Fatalf("space-form global flags must be ignored: %v", err)
+	}
+	if opts.image != pinned || opts.selection != "all" {
+		t.Fatalf("parsed rollout = %+v", opts)
+	}
+	if _, err := parseRolloutArgs([]string{"--digest", pinned, "--master"}); err == nil {
+		t.Fatal("--master without a value must be rejected")
+	}
+}
+
 func TestParseRolloutArgs_RejectsMisuse(t *testing.T) {
 	pinned := "ghcr.io/example/velox-worker@sha256:" + strings.Repeat("a", 64)
 	cases := [][]string{
