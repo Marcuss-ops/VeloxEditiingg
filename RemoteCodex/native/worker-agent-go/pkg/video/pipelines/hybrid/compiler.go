@@ -114,6 +114,7 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 	}
 
 	req := parseRequest(input)
+	canvas := parseCanvas(input)
 
 	// Build timeline using the role-aware compileItemsToTimeline
 	// helper. When req.Items contains items with role=voiceover_bed or
@@ -177,7 +178,7 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 	return &plan.RenderPlan{
 		Version:     1,
 		JobID:       jobID,
-		Canvas:      plan.DefaultCanvas(),
+		Canvas:      canvas,
 		CopyOnly:    req.CopyOnly,
 		Timeline:    timeline_items,
 		AudioTracks: audioTracks,

@@ -137,6 +137,11 @@ func TestCompile_ItemsWithoutAudio_ProducesSilentTimeline(t *testing.T) {
 func TestCompile_ClipStockUsesStrictCopyOnlyPlan(t *testing.T) {
 	input := map[string]interface{}{
 		"video_mode": "clip_stock",
+		"output": map[string]interface{}{
+			"width":  1920.0,
+			"height": 1080.0,
+			"fps":    24.0,
+		},
 		"items": []interface{}{
 			map[string]interface{}{
 				"type":     "video",
@@ -152,6 +157,9 @@ func TestCompile_ClipStockUsesStrictCopyOnlyPlan(t *testing.T) {
 	}
 	if !compiled.CopyOnly {
 		t.Fatal("clip_stock must compile to a strict copy-only render plan")
+	}
+	if compiled.Canvas.Fps != 24 {
+		t.Fatalf("clip_stock must propagate output.fps into the render plan: got %d", compiled.Canvas.Fps)
 	}
 }
 

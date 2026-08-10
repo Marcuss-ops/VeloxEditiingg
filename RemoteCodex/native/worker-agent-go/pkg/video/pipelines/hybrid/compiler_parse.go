@@ -210,6 +210,18 @@ func parseRequest(input map[string]interface{}) *Request {
 	return req
 }
 
+func parseCanvas(input map[string]interface{}) plan.CanvasSpec {
+	canvas := plan.DefaultCanvas()
+	output, ok := input["output"].(map[string]interface{})
+	if !ok {
+		return canvas
+	}
+	canvas.Width = int(toFloat64Default(output["width"], float64(canvas.Width)))
+	canvas.Height = int(toFloat64Default(output["height"], float64(canvas.Height)))
+	canvas.Fps = int(toFloat64Default(output["fps"], float64(canvas.Fps)))
+	return canvas
+}
+
 func numericSceneIndex(v interface{}) (int, bool) {
 	switch n := v.(type) {
 	case int:
