@@ -35,6 +35,7 @@ add_executable(velox_video_engine
     src/services/media_utils.cpp
     src/services/ffmpeg_progress_parser.cpp
     src/core/render_engine.cpp
+    src/core/render_engine_helpers.cpp
     src/telemetry/phase_recorder.cpp
 )
 
@@ -63,6 +64,24 @@ endif()
 add_test(NAME ffmpeg_progress_parser_tests
          COMMAND velox_ffmpeg_progress_parser_tests)
 
+# Focused tests for the private render-engine command/parsing helpers.
+add_executable(velox_render_engine_helpers_tests
+    tests/test_render_engine_helpers.cpp
+    src/core/render_engine_helpers.cpp
+    src/services/ffmpeg_progress_parser.cpp
+    src/services/file_utils.cpp
+)
+
+target_include_directories(velox_render_engine_helpers_tests
+    PRIVATE include src src/core include/velox)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(velox_render_engine_helpers_tests PRIVATE -O2)
+endif()
+
+add_test(NAME render_engine_helpers_tests
+         COMMAND velox_render_engine_helpers_tests)
+
 # ─── Block-1 phase recorder tests ──────────────────────────────────────
 # Standalone test binary for the telemetry PhaseRecorder + ScopedPhase
 # RAII helper. No GoogleTest dependency — the in-repo expect() macros.
@@ -70,6 +89,7 @@ add_executable(velox_phase_recorder_tests
     tests/test_phase_recorder.cpp
     src/telemetry/phase_recorder.cpp
     src/core/render_engine.cpp
+    src/core/render_engine_helpers.cpp
     src/services/file_utils.cpp
     src/services/media_utils.cpp
     src/services/ffmpeg_progress_parser.cpp
@@ -93,6 +113,7 @@ add_test(NAME phase_recorder_tests
 add_executable(velox_looped_music_tests
     tests/test_looped_music.cpp
     src/core/render_engine.cpp
+    src/core/render_engine_helpers.cpp
     src/services/file_utils.cpp
     src/services/media_utils.cpp
     src/services/ffmpeg_progress_parser.cpp

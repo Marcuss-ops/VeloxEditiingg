@@ -1,12 +1,10 @@
 #include "velox/core/render_engine.hpp"
+#include "render_engine_helpers.hpp"
 #include "velox/services/file_utils.hpp"
 #include "velox/services/media_utils.hpp"
-#include <algorithm>
 #include <atomic>
-#include <cctype>
 #include <chrono>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -17,114 +15,14 @@ namespace fs = std::filesystem;
 namespace velox::core {
 
 namespace {
-    void reportProgress(int percent, const std::string& stage) {
-        std::cerr << "{\"progress\":" << percent
-                  << ",\"percent\":" << percent
-                  << ",\"stage\":\"" << stage << "\"}" << std::endl;
-    }
-
-    media::SceneSegmentParams makeParams(const plan::CanvasSpec& canvas, const plan::TransformSpec& transform, const std::string& color_hex = "") {
-        media::SceneSegmentParams p;
-        p.width = canvas.width;
-        p.height = canvas.height;
-        p.fps = canvas.fps;
-        p.slow_zoom = transform.slow_zoom;
-        p.scale_mode = transform.scale_mode;
-        p.color_hex = color_hex;
-        return p;
-    }
-
-    std::string extractColorHex(const plan::MediaSource& source) {
-        if (std::holds_alternative<plan::ColorSource>(source)) {
-            return std::get<plan::ColorSource>(source).color_hex;
-        }
-        return "";
-    }
-
-    int64_t fileSize(const fs::path& p) {
-        std::error_code ec;
-        auto sz = fs::file_size(p, ec);
-        return ec ? 0 : static_cast<int64_t>(sz);
-    }
-
-    int64_t decodedFramesFromShowInfo(const std::string& stderr_out) {
-        int64_t maxFrame = -1;
-        size_t cursor = 0;
-        while ((cursor = stderr_out.find(" n:", cursor)) != std::string::npos) {
-            cursor += 3;
-            while (cursor < stderr_out.size() && std::isspace(static_cast<unsigned char>(stderr_out[cursor]))) {
-                ++cursor;
-            }
-            size_t end = cursor;
-            while (end < stderr_out.size() && std::isdigit(static_cast<unsigned char>(stderr_out[end]))) {
-                ++end;
-            }
-            if (end > cursor) {
-                try {
-                    maxFrame = std::max(maxFrame, static_cast<int64_t>(std::stoll(stderr_out.substr(cursor, end - cursor))));
-                } catch (...) {
-                }
-            }
-            cursor = end;
-        }
-        return maxFrame >= 0 ? maxFrame + 1 : 0;
-    }
-
-    bool runFfmpegSegmentWithProgress(
-        const std::string& full_cmd,
-        const services::ProgressCallback& cb,
-        int64_t expected_duration_us,
-        int64_t& decoded_frames
-    ) {
-        if (!cb) {
-            return file::runCommand(full_cmd);
-        }
-        std::string stderr_out;
-        int exit_code = 0;
-        bool ok = services::runFfmpegCapturingProgress(
-            full_cmd,
-            fs::current_path(),
-            cb,
-            expected_duration_us,
-            stderr_out,
-            exit_code);
-        decoded_frames = decodedFramesFromShowInfo(stderr_out);
-        if (!ok || exit_code != 0) {
-            std::cerr << "ffmpeg failed (exit=" << exit_code << "): "
-                      << stderr_out << std::endl;
-        }
-        return ok && exit_code == 0;
-    }
-
-    std::string composeSegmentCmd(const std::string& args_only) {
-        const char* telemetry = std::getenv("VELOX_FFMPEG_DECODE_TELEMETRY");
-        const bool enabled = telemetry != nullptr &&
-            (std::string(telemetry) != "0" && std::string(telemetry) != "false");
-        return std::string("ffmpeg -y -hide_banner -loglevel ") +
-            (enabled ? "info" : "error") + " -progress pipe:1 -nostats " + args_only;
-    }
-
-    bool burnSubtitleTrack(
-        const fs::path& inputVideo,
-        const fs::path& subtitleFile,
-        const fs::path& outputVideo
-    ) {
-        std::ostringstream filter;
-        filter << "subtitles=" << file::shellQuote(subtitleFile.string());
-
-        std::ostringstream cmd;
-        cmd << "ffmpeg -y -hide_banner -loglevel error"
-            << " -i " << file::shellQuote(inputVideo.string())
-            << " -vf " << file::shellQuote(filter.str())
-            << " -c:v libx264 -preset veryfast -crf 20"
-            << " -pix_fmt yuv420p -map 0:v:0 -map 0:a? -c:a aac -ar 48000 -ac 2 "
-            << file::shellQuote(outputVideo.string());
-        file::CommandResult r = file::runCommandTimed(cmd.str());
-        std::cerr << "{\"metric\":\"ffmpeg.subtitle_burn_ms\",\"value\":" << r.wall_ms
-                  << ",\"ok\":" << (r.ok ? "true" : "false")
-                  << ",\"exit_code\":" << r.exit_code << "}" << std::endl;
-        return r.ok;
-    }
+    using render_detail::burnSubtitleTrack;
+    using render_detail::composeSegmentCmd;
+    using render_detail::decodedFramesFromShowInfo;
+    using render_detail::extractColorHex;
+    using render_detail::fileSize;
+    using render_detail::makeParams;
+    using render_detail::reportProgress;
+    using render_detail::runFfmpegSegmentWithProgress;
 }
 
 void RenderEngine::setProgressCallback(services::ProgressCallback cb) {
