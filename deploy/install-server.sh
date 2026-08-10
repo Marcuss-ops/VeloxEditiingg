@@ -164,6 +164,13 @@ chown -R "${IMAGE_UID}:${IMAGE_GID}" /var/lib/velox
 # path. Preserve the existing SQLite database and make its directory writable
 # by the image UID; do not create or copy a second database under /var/lib.
 chown -R "${IMAGE_UID}:${IMAGE_GID}" /opt/velox/current/.velox
+# The production gRPC key is intentionally not world-readable. Grant only
+# the image group access to the existing certificate tree so the Docker
+# process can load the configured key without changing its private-key mode.
+if [[ -d /opt/velox/certs ]]; then
+    find /opt/velox/certs -type d -exec chmod g+rx {} +
+    find /opt/velox/certs -type f -name '*.key' -exec chown root:"${IMAGE_GID}" {} + -exec chmod 640 {} +
+fi
 ok "Directory tree ready: /opt/velox/current"
 
 # ─── Step 3: Deploy systemd service ─────────────────────────────────────────
