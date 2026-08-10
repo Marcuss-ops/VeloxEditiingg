@@ -134,13 +134,49 @@ ssh -i /tmp/k1 -o UserKnownHostsFile=/tmp/kh1 pierone@<host> \
   'sudo -n journalctl -u velox-worker.service --since "6 hours ago" --no-pager | grep -c CIRCUIT_BREAKER'
 ```
 
+## Canary recovery verification — plan step 2 (2026-08-10 ~20:26 UTC)
+
+**Outcome: autonomous recovery CONFIRMED — no worker restart performed.**
+The planned restart condition ("if after the timeout it keeps rejecting")
+was never met.
+
+Evidence collected after the last rejection at 20:15:28:
+
+| Signal | Value |
+| --- | --- |
+| `CIRCUIT_BREAKER` lines after 20:15:28 | **0** (the 5 counted at the boundary are all at 20:15:28 itself) |
+| Master `protected-assets 200` (last 15 min) | **93** — poller succeeding continuously |
+| Worker `/health` (127.0.0.1:8081) | `{"status":"ok","worker_id":"host_57_129_132_133","registered":true,"uptime_sec":2237}` |
+| Worker `/health/ready` (127.0.0.1:8081) | `status:ok` — `cache_protection_ready:true, cache_ready:true, bootstrapped:true, blob_ready:true, registered:true, executors_count:5, protected_snapshot_age_seconds:41` |
+| Worker container | `velox-worker` — `Up 37 minutes (healthy)` (no restart in this window) |
+| Master worker card | health DRAINING (isolation), active_jobs 0, snapshot age 39s |
+| Cache cleanup loop | no longer skipped: `[CACHE_CLEANUP] inspected=0 removed=0 skipped_protected=0 skipped_leased=0` (previously `no valid protection snapshot, skipping cleanup`) |
+
+Interpretation: the circuit breaker made the autonomous transition within
+~1 minute of the master returning to service (~20:16), consistent with the
+60 s half-open timeout (failure threshold 5, success threshold 3). The
+poller resumed, snapshots are accepted and fresh (39–41 s), and the
+`cache_protection_ready` readiness gate is open. Cache and assets were
+touched by nothing: no restart, no wipe, no prefetch.
+
+### Observation — one pre-existing failed job on the canary (not a blocker)
+
+At 20:17:39 (during the smoke window, before this verification) a job ran
+on the canary and failed: `job_cf30b525118fbd21`, error `common asset
+resolver: scenes_json[0].clip.url: failed to download velox asset
+13df6d1ef…: asset not found`, attempt_count 1, artifacts 0, deliveries 0.
+It is terminal (active_jobs now 0) and unrelated to the circuit-breaker
+recovery; it points at the smoke-asset pickup gap addressed by
+`fix(fleet): configure production smoke asset` (`88430140`).
+
 ## Next steps (per the certification plan)
 
-1. Confirm canary stays READY (no restart needed so far) → resume
-   `host_57_129_132_133` from DRAINING when the run starts.
-2. Serial rollout of the remaining 3 workers onto the canonical digest
+1. ✅ Canary recovery confirmed (this document) — no restart needed.
+2. Resume `host_57_129_132_133` from DRAINING when the run starts
+   (canonical `fleetctl resume`).
+3. Serial rollout of the remaining 3 workers onto the canonical digest
    (one at a time, `wait-ready` between, never 4 together).
-3. Gate pre-job: 4/4 CONNECTED, 4/4 HEALTHY, 4/4 READY, same digest,
+4. Gate pre-job: 4/4 CONNECTED, 4/4 HEALTHY, 4/4 READY, same digest,
    0 active jobs, 4/4 protection ready, 0 downloads at boot.
-4. Onda 1 (4 pinned comic jobs) → deep verification → Onda 2 (warm cache)
+5. Onda 1 (4 pinned comic jobs) → deep verification → Onda 2 (warm cache)
    → negative copy-only → final report.
