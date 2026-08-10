@@ -85,6 +85,12 @@ func TestNormalizeExternalJobSubmission_ProducesCanonicalPayload(t *testing.T) {
 	if got := wp["status"]; got != string(contract.InputAssemblyCompleted) {
 		t.Errorf("worker_payload[status] = %v, want input-assembly status %s", got, contract.InputAssemblyCompleted)
 	}
+	if canonical.StatusDomains.InputAssembly == nil || *canonical.StatusDomains.InputAssembly != contract.InputAssemblyCompleted {
+		t.Fatalf("canonical input-assembly domain = %#v, want %q", canonical.StatusDomains.InputAssembly, contract.InputAssemblyCompleted)
+	}
+	if canonical.StatusDomains.Job != nil || canonical.StatusDomains.Delivery != nil || canonical.StatusDomains.Publication != nil {
+		t.Fatalf("canonical payload inferred unrelated status domains: %#v", canonical.StatusDomains)
+	}
 	// (5)
 	if got := wp["job_id"]; got != "test-job-123" {
 		t.Errorf("worker_payload[job_id] = %v, want test-job-123", got)

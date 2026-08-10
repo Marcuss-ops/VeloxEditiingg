@@ -7,6 +7,7 @@ import (
 
 	deliverydomain "velox-server/internal/deliveries"
 	"velox-server/internal/jobs"
+	"velox-server/internal/statusboundary"
 	"velox-server/internal/store"
 )
 
@@ -41,34 +42,49 @@ func mapJobWithDeliveries(row map[string]any, workspaceID int64, deliveries []de
 		// The response DTO remains string-based at the HTTP boundary. Parse
 		// it into the delivery domain type before applying publication rules;
 		// legacy PUBLISHED/COMPLETED aliases are accepted only here.
-		deliveryStatus := deliverydomain.DeliveryStatus(strings.ToUpper(d.Status))
-		switch deliveryStatus {
-		case deliverydomain.DeliverySucceeded, deliverydomain.DeliveryStatus("PUBLISHED"), deliverydomain.DeliveryStatus("COMPLETED"):
-		default:
+		rawDeliveryStatus := strings.ToUpper(strings.TrimSpace(d.Status))
+		if rawDeliveryStatus == "PUBLISHED" || rawDeliveryStatus == "COMPLETED" {
+			rawDeliveryStatus = string(deliverydomain.DeliverySucceeded)
+		}
+		deliveryStatus, validDeliveryStatus := statusboundary.ParseDelivery(rawDeliveryStatus)
+		if !validDeliveryStatus || deliveryStatus != deliverydomain.DeliverySucceeded {
 			allSucceeded = false
+		}
+		if rawDeliveryStatus == "CLAIMED" {
+			anyActive = true
 		}
 		switch deliveryStatus {
 		case deliverydomain.DeliveryFailed, deliverydomain.DeliveryBlockedAuth, deliverydomain.DeliveryCancelled:
 			anyFailed = true
-		case deliverydomain.DeliveryRunning, deliverydomain.DeliveryRetryWait, deliverydomain.DeliveryStatus("CLAIMED"), deliverydomain.DeliveryPending:
+		case deliverydomain.DeliveryRunning, deliverydomain.DeliveryRetryWait, deliverydomain.DeliveryPending:
 			anyActive = true
 		}
 	}
+	publicationStatus := "pending"
 	switch {
 	case allSucceeded:
-		j.PublicationStatus = "published"
+		if published, ok := statusboundary.ParsePublication("PUBLISHED"); ok {
+			publicationStatus = strings.ToLower(string(published))
+		}
 	case anyFailed:
-		j.PublicationStatus = "failed"
+		if failed, ok := statusboundary.ParsePublication("FAILED"); ok {
+			publicationStatus = strings.ToLower(string(failed))
+		}
 	case anyActive:
-		j.PublicationStatus = "publishing"
+		// "publishing" is an InstaEdit response projection, not a
+		// PublicationStatus value; keep it as a wire-only view state.
+		publicationStatus = "publishing"
 	default:
-		j.PublicationStatus = "pending"
+		if pending, ok := statusboundary.ParsePublication("PENDING"); ok {
+			publicationStatus = strings.ToLower(string(pending))
+		}
 	}
-	renderStatus := jobs.JobStatus(strings.ToUpper(j.RenderStatus))
+	j.PublicationStatus = publicationStatus
+	renderStatus, validRenderStatus := statusboundary.ParseJob(j.RenderStatus)
 	// COMPLETED is a legacy aggregate response value, not a JobStatus.
 	// Keep accepting it at this HTTP projection boundary without making it
 	// part of the canonical job state machine.
-	if renderStatus == jobs.StatusSucceeded || strings.ToUpper(j.RenderStatus) == "COMPLETED" {
+	if (validRenderStatus && renderStatus == jobs.StatusSucceeded) || strings.EqualFold(strings.TrimSpace(j.RenderStatus), "COMPLETED") {
 		j.OverallStatus = j.PublicationStatus
 	} else {
 		j.OverallStatus = strings.ToLower(j.RenderStatus)

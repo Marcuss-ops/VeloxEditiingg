@@ -26,6 +26,7 @@ func (h *Handlers) NormalizeExternalJobSubmission(req SubmitJobRequest) *Canonic
 		WorkerPayload:    workerPayload,
 		DeliveryPlan:     deliveryplan.ExtractEnvelope(rawPayload),
 		PublicationSpecs: projectPublicationSpecs(req.Publications),
+		StatusDomains:    inputAssemblyStatusDomain(workerPayload),
 	}
 }
 

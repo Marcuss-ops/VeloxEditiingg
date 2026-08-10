@@ -89,6 +89,12 @@ func TestNormalizeCreatorPushRequestUsesPayloadIdentityAndDefaults(t *testing.T)
 	if got := normalized.WorkerPayload["status"]; got != string(contract.InputAssemblyCompleted) {
 		t.Fatalf("WorkerPayload status = %v, want input-assembly wire value %q", got, "completed")
 	}
+	if normalized.StatusDomains.InputAssembly == nil || *normalized.StatusDomains.InputAssembly != contract.InputAssemblyCompleted {
+		t.Fatalf("StatusDomains.InputAssembly = %#v, want %q", normalized.StatusDomains.InputAssembly, contract.InputAssemblyCompleted)
+	}
+	if normalized.StatusDomains.Job != nil || normalized.StatusDomains.Delivery != nil || normalized.StatusDomains.Publication != nil {
+		t.Fatalf("CreatorPush inferred unrelated status domains: %#v", normalized.StatusDomains)
+	}
 }
 
 func TestNormalizeCreatorPushRequestEnvelopeOverridesPayloadIdentity(t *testing.T) {

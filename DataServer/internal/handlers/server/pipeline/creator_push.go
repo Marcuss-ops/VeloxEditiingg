@@ -10,6 +10,7 @@ import (
 
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/remoteengine"
+	"velox-server/internal/statusboundary"
 	"velox-shared/contract"
 	"velox-shared/contract/deliveryplan"
 	"velox-shared/contract/domain"
@@ -63,6 +64,11 @@ type normalizedCreatorPush struct {
 	// intentionally separate from WorkerPayload and must never be serialized
 	// into the renderer task payload sent to the C++ engine.
 	PublicationSpecs []publication.Spec
+
+	// StatusDomains is the typed view of status values known at this
+	// boundary. The wire payload remains in WorkerPayload unchanged; domains
+	// that are not present here stay nil rather than being inferred.
+	StatusDomains statusboundary.Domains `json:"-"`
 }
 
 // CanonicalCompletedPayload is the typed struct every intake path
@@ -159,6 +165,7 @@ func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush
 		WorkerPayload:    workerPayload,
 		DeliveryPlan:     deliveryPlan,
 		PublicationSpecs: nil,
+		StatusDomains:    inputAssemblyStatusDomain(workerPayload),
 	}, nil
 }
 
@@ -166,6 +173,15 @@ func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush
 // status without changing the established wire value. Missing status remains
 // accepted for legacy payloads; the resolver's completeness gate handles that
 // case. When present, only InputAssemblyCompleted is a valid completed handoff.
+func inputAssemblyStatusDomain(payload map[string]interface{}) statusboundary.Domains {
+	status, _ := payload["status"].(string)
+	parsed, ok := statusboundary.ParseInputAssembly(status)
+	if !ok {
+		return statusboundary.Domains{}
+	}
+	return statusboundary.Domains{InputAssembly: &parsed}
+}
+
 func normalizeCreatorInputAssemblyPayload(raw map[string]interface{}) (map[string]interface{}, error) {
 	payload := make(map[string]interface{}, len(raw))
 	for key, value := range raw {

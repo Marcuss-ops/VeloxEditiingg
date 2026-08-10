@@ -3,7 +3,11 @@ package pipeline
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
+
+	"velox-server/internal/statusboundary"
+	"velox-shared/contract"
 )
 
 // TestCreatorPushAndExternalSubmitConvergeToTheSameCanonicalContract verifies
@@ -11,6 +15,23 @@ import (
 // producer label is intentionally different (it is part of forwarding
 // identity), while source job ID, executor, worker payload, and control-plane
 // delivery plan must remain equivalent.
+func TestCanonicalCompletedPayloadOmitsTypedStatusViewFromWire(t *testing.T) {
+	payload := &CanonicalCompletedPayload{
+		WorkerPayload: map[string]interface{}{"status": string(contract.InputAssemblyCompleted)},
+		StatusDomains: statusboundary.Domains{},
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal canonical payload: %v", err)
+	}
+	if strings.Contains(string(encoded), "StatusDomains") || strings.Contains(string(encoded), "status_domains") {
+		t.Fatalf("typed status view leaked into wire payload: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), "completed") {
+		t.Fatalf("canonical worker status missing from wire payload: %s", encoded)
+	}
+}
+
 func TestCreatorPushAndExternalSubmitConvergeToTheSameCanonicalContract(t *testing.T) {
 	t.Parallel()
 
