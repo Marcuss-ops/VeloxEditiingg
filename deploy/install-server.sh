@@ -152,6 +152,7 @@ docker info >/dev/null 2>&1 \
 log "Ensuring target directory tree and permissions..."
 mkdir -p /opt/velox/current
 mkdir -p /opt/velox/current/.velox/data
+mkdir -p /opt/velox/current/.velox
 mkdir -p /var/lib/velox/data
 mkdir -p /var/lib/velox/videos
 mkdir -p /etc/velox/secrets
@@ -159,6 +160,10 @@ mkdir -p /etc/velox/certs
 chown root:root /opt/velox/current
 chmod 755 /opt/velox/current
 chown -R "${IMAGE_UID}:${IMAGE_GID}" /var/lib/velox
+# The legacy native service and the Docker image share this canonical runtime
+# path. Preserve the existing SQLite database and make its directory writable
+# by the image UID; do not create or copy a second database under /var/lib.
+chown -R "${IMAGE_UID}:${IMAGE_GID}" /opt/velox/current/.velox
 ok "Directory tree ready: /opt/velox/current"
 
 # ─── Step 3: Deploy systemd service ─────────────────────────────────────────
