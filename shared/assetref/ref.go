@@ -39,9 +39,9 @@ func NewLocal(value string) (AssetRef, error) {
 // NewDeferredDrive creates a Drive asset reference that will be materialized
 // by the worker through the authenticated master asset bridge.
 func NewDeferredDrive(fileID string) (AssetRef, error) {
-	fileID = strings.TrimSpace(fileID)
-	if !IsLikelyDriveFileID(fileID) {
-		return AssetRef{}, fmt.Errorf("assetref: invalid deferred Drive file ID %q", fileID)
+	fileID, err := canonicalAssetID(fileID)
+	if err != nil {
+		return AssetRef{}, fmt.Errorf("assetref: invalid deferred Drive file ID %q: %w", fileID, err)
 	}
 	return AssetRef{kind: RefKindDeferredDrive, value: fileID, wire: "velox-asset://" + fileID}, nil
 }

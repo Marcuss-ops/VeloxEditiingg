@@ -272,6 +272,19 @@ func rewriteCanonicalAssetMap(ctx context.Context, s *AssetService, item map[str
 		}
 		return nil
 	}
+	// Drive URLs are intentionally deferred at the canonical boundary. The
+	// worker bridge owns authenticated materialization and byte verification;
+	// enqueue must not eagerly download the same source through a second path.
+	if driveID, err := assetref.DriveFileID(reference); err == nil {
+		deferred, err := assetref.NewDeferredDrive(driveID)
+		if err != nil {
+			return err
+		}
+		item["asset_id"] = deferred.ID()
+		item["url"] = deferred.Wire()
+		item["asset_ref_kind"] = string(deferred.Kind())
+		return nil
+	}
 	asset, err := s.ResolveAndRegister(ctx, ResolveAssetCommand{Kind: string(kind), Reference: reference})
 	if err != nil {
 		return err
@@ -281,6 +294,7 @@ func rewriteCanonicalAssetMap(ctx context.Context, s *AssetService, item map[str
 	}
 	item["asset_id"] = asset.AssetID
 	item["url"] = asset.Reference()
+	item["asset_ref_kind"] = string(assetref.RefKindLocal)
 	return nil
 }
 

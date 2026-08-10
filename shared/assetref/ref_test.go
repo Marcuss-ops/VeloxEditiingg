@@ -24,11 +24,11 @@ func TestAssetRefClassifiesLocalRemoteAndDeferredDrive(t *testing.T) {
 		t.Fatalf("remote ref = %#v", remote)
 	}
 
-	deferred, err := Parse("https://drive.google.com/file/d/drive-file-123456/view")
+	deferred, err := Parse("https://drive.google.com/file/d/ABC123/view")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deferred.Kind() != RefKindDeferredDrive || deferred.ID() != "drive-file-123456" || deferred.Wire() != "velox-asset://drive-file-123456" {
+	if deferred.Kind() != RefKindDeferredDrive || deferred.ID() != "ABC123" || deferred.Wire() != "velox-asset://ABC123" {
 		t.Fatalf("deferred ref = %#v", deferred)
 	}
 }

@@ -98,8 +98,7 @@ func TestEnqueuePreservesDeferredDriveAssetWireAndKind(t *testing.T) {
 		}},
 		"scenes": []interface{}{map[string]interface{}{
 			"scene_id": "scene-1",
-			"clip": map[string]interface{}{
-				"asset_id":       "drive-file-123456",
+			"clip": map[string]interface{}{"asset_id": "drive-file-123456",
 				"url":            "velox-asset://drive-file-123456",
 				"asset_ref_kind": "deferred_drive",
 				"duration_ms":    3000,

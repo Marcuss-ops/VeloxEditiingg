@@ -64,6 +64,30 @@ func TestRewriteRemoteInputPayloadRejectsIncompleteCanonicalNestedAsset(t *testi
 	}
 }
 
+func TestRewriteRemoteInputPayloadDefersRawDriveURLWithoutEagerRegistration(t *testing.T) {
+	payload := map[string]interface{}{
+		"scenes": []interface{}{map[string]interface{}{
+			"clip": map[string]interface{}{
+				"url": "https://drive.google.com/file/d/ABC123/view",
+			},
+		}},
+	}
+	service := &AssetService{repo: &rewriteAssetRepository{assets: map[string]*AssetRecord{}}}
+	if err := service.RewriteRemoteInputPayload(context.Background(), payload); err != nil {
+		t.Fatalf("RewriteRemoteInputPayload: %v", err)
+	}
+	clip := payload["scenes"].([]interface{})[0].(map[string]interface{})["clip"].(map[string]interface{})
+	if got := clip["url"]; got != "velox-asset://ABC123" {
+		t.Fatalf("url = %v, want deferred canonical wire URL", got)
+	}
+	if got := clip["asset_id"]; got != "ABC123" {
+		t.Fatalf("asset_id = %v, want ABC123", got)
+	}
+	if got := clip["asset_ref_kind"]; got != "deferred_drive" {
+		t.Fatalf("asset_ref_kind = %v, want deferred_drive", got)
+	}
+}
+
 func TestRewriteRemoteInputPayloadMarksDeferredDriveCanonicalAsset(t *testing.T) {
 	payload := map[string]interface{}{
 		"scenes": []interface{}{
