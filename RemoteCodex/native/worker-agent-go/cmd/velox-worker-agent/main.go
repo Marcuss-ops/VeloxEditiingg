@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -41,14 +42,16 @@ import (
 	"velox-worker-agent/pkg/video/pipeline"
 )
 
-// diskWatcherStarted is the process-global sync.Once that ensures the
-// disk-watch goroutine is started at most once for the lifetime of a
-// process. Repeatedly resetting global telemetry state on hot reload
-// paths was a previous bug pattern; this guard makes the boot sequence
-// single-flight.
-var diskWatcherStarted bool
+// diskWatcher owns the process-lifetime disk watcher. Keeping the
+// single-flight guard on the runtime object avoids mutable package-global
+// state while preserving the invariant that the watcher starts at most once.
+type diskWatcher struct {
+	once    sync.Once
+	onStart func()
+	onStop  func()
+}
 
-// startDiskWatcher (RW-PROD-004 §3 A4) launches a 15s-tier goroutine
+// start (RW-PROD-004 §3 A4) launches a 15s-tier goroutine
 // that polls the engine-output directory's free bytes and forwards the
 // change to telemetry.SetDiskState. Readiness is held until the first
 // sample lands (DiskFreeBytes=0 = unknown) so dashboards do not see a
@@ -59,40 +62,49 @@ var diskWatcherStarted bool
 // the watcher operates on cfg.MinDiskFreeMB and /tmp/velox/scene-composite.
 //
 // Cancel via ctx. The goroutine exits cleanly on ctx.Done().
-func startDiskWatcher(ctx context.Context, cfg *config.WorkerConfig, watchDir string, log *logger.Logger) {
-	if diskWatcherStarted {
+func (w *diskWatcher) start(ctx context.Context, cfg *config.WorkerConfig, watchDir string, log *logger.Logger) {
+	if w == nil {
 		return
 	}
-	diskWatcherStarted = true
-	thresholdBytes := int64(cfg.MinDiskFreeMB) * 1024 * 1024
-	go func() {
-		// Initial sample on startup so /health/ready has a real
-		// disk_free_bytes value before any traffic. Without this
-		// first read, the first 15 seconds of a fresh boot would
-		// have DiskFreeBytes=0 → potentially `disk.critical` if the
-		// threshold is positive, masking actual readiness.
-		if free, err := telemetry.DiskFreeAt(watchDir); err == nil {
-			telemetry.SetDiskState(free, thresholdBytes)
+	w.once.Do(func() {
+		if w.onStart != nil {
+			w.onStart()
 		}
-		ticker := time.NewTicker(15 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				free, err := telemetry.DiskFreeAt(watchDir)
-				if err != nil {
-					log.Warn("[DISK_WATCH] statfs %s failed: %v", watchDir, err)
-					continue
+		thresholdBytes := int64(cfg.MinDiskFreeMB) * 1024 * 1024
+		go func() {
+			defer func() {
+				if w.onStop != nil {
+					w.onStop()
 				}
+			}()
+			// Initial sample on startup so /health/ready has a real
+			// disk_free_bytes value before any traffic. Without this
+			// first read, the first 15 seconds of a fresh boot would
+			// have DiskFreeBytes=0 → potentially `disk.critical` if the
+			// threshold is positive, masking actual readiness.
+			if free, err := telemetry.DiskFreeAt(watchDir); err == nil {
 				telemetry.SetDiskState(free, thresholdBytes)
-				if free < thresholdBytes {
-					log.Warn("[DISK_WATCH] free=%d threshold=%d (below floor)", free, thresholdBytes)
+			}
+			ticker := time.NewTicker(15 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					free, err := telemetry.DiskFreeAt(watchDir)
+					if err != nil {
+						log.Warn("[DISK_WATCH] statfs %s failed: %v", watchDir, err)
+						continue
+					}
+					telemetry.SetDiskState(free, thresholdBytes)
+					if free < thresholdBytes {
+						log.Warn("[DISK_WATCH] free=%d threshold=%d (below floor)", free, thresholdBytes)
+					}
 				}
 			}
-		}
-	}()
+		}()
+	})
 }
 
 // Version is set at build time via -ldflags.
@@ -503,7 +515,8 @@ func main() {
 	// prefix keeps its output separable from main's composition-root log.
 	dwatchLog := logger.New(logger.InfoLevel, os.Stderr)
 	dwatchLog.SetPrefix("[DISK_WATCH]")
-	startDiskWatcher(ctx, cfg, "/tmp/velox/scene-composite", dwatchLog)
+	diskWatch := &diskWatcher{}
+	diskWatch.start(ctx, cfg, "/tmp/velox/scene-composite", dwatchLog)
 
 	// Handle shutdown signals with structured logging
 	sigChan := make(chan os.Signal, 1)
