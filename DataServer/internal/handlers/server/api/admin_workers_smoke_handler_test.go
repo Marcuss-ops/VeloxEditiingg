@@ -203,20 +203,24 @@ func TestSmoke_OperationalKindIn_AllOperationKinds(t *testing.T) {
 	}
 }
 
-func TestSmoke_NoOpExecutor_NoPanicOnSmokeKind(t *testing.T) {
-	// Step 4/15's NewExecutorRegistry pre-registers NoopOperationExecutor
-	// for every AllOperationKinds entry (including smoke). The
-	// smoke kind must NOT be missing from the registry.
+func TestSmoke_ProductionRegistryRequiresExplicitExecutor(t *testing.T) {
+	// Production registries are intentionally empty: a smoke operation
+	// must never succeed through an implicit no-op. The bootstrap wires
+	// LevelDSmokeExecutor explicitly after composing its backends.
 	reg := fleet.NewExecutorRegistry()
-	if !reg.HasKind(fleet.OperationKindSmoke) {
-		t.Fatalf("default registry must pre-register NoopOperationExecutor for kind=smoke")
+	if reg.HasKind(fleet.OperationKindSmoke) {
+		t.Fatal("production registry must not implicitly register smoke")
 	}
-	exec, err := reg.Lookup(fleet.OperationKindSmoke)
-	if err != nil {
-		t.Fatalf("Lookup(smoke) on default registry: %v", err)
+	if _, err := reg.Lookup(fleet.OperationKindSmoke); !errors.Is(err, fleet.ErrExecutorNotConfigured) {
+		t.Fatalf("Lookup(smoke) error = %v, want ErrExecutorNotConfigured", err)
 	}
-	if err := exec.Execute(context.Background(), &store.Operation{WorkerID: "wkr-x", Op: fleet.OperationKindSmoke}); err != nil {
-		t.Errorf("NoopOperationExecutor.Execute(smoke) returns nil unconditionally; got %v", err)
+
+	// Test/dev callers opt into no-op behavior explicitly through the
+	// test registry; this keeps the legacy controller fixtures isolated
+	// from production composition.
+	testReg := fleet.NewTestExecutorRegistry()
+	if _, err := testReg.Lookup(fleet.OperationKindSmoke); err != nil {
+		t.Fatalf("test registry must provide smoke fixture: %v", err)
 	}
 }
 

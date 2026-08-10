@@ -214,16 +214,18 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 				log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: Drive module unavailable — smoke remains not wired")
 			}
 			// Production deliberately leaves Asset nil. The canonical asset
-			// resolver is not wired yet; validation below therefore fails the
-			// boot before this capability or its route can become visible.
-			// Never substitute a canned asset in production.
-			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: production asset resolver unavailable — smoke capability disabled")
+			// resolver is not wired yet; the concrete executor remains
+			// registered but fails smoke operations with
+			// ErrSmokeRunnerNotWired. Never substitute a canned asset in
+			// production.
+			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: production asset resolver unavailable — smoke operations fail closed")
 		}
 
 		levelDSmokeExecutor := fleet.NewLevelDSmokeExecutor(smokeBackend)
-		if err := levelDSmokeExecutor.ValidateProductionBackends(); err != nil {
-			return fmt.Errorf("LevelDSmokeExecutor production capability unavailable: %w", err)
-		}
+		// Register the concrete executor even when production backends are
+		// incomplete. Execute fails closed with ErrSmokeRunnerNotWired,
+		// preserving the operation audit row instead of crashing bootstrap
+		// or silently substituting a no-op executor.
 		if err := fleetDep.Registry.Register(fleet.OperationKindSmoke, levelDSmokeExecutor); err != nil {
 			return fmt.Errorf("register LevelDSmokeExecutor: %w", err)
 		} else {

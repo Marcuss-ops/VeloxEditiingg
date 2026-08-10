@@ -2,7 +2,9 @@ package fleet
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
@@ -18,6 +20,30 @@ func TestWorkerStateExecutor_RequiresConcreteKindAndRegistry(t *testing.T) {
 	}
 	if err := NewWorkerStateExecutor(&workersreg.Registry{}, OperationKindSmoke).ValidateProductionBackends(); err == nil {
 		t.Fatal("unsupported kind must fail production validation")
+	}
+}
+
+func TestController_Tick_SmokeBackendMissingFailsAuditRow(t *testing.T) {
+	st := &stubStore{
+		queuedList: []store.Operation{{
+			OperationID: "op-smoke-not-wired",
+			WorkerID:    "worker-smoke",
+			Op:          OperationKindSmoke,
+			Status:      store.OperationStatusQueued,
+		}},
+	}
+	reg := NewExecutorRegistry()
+	if err := reg.Register(OperationKindSmoke, NewLevelDSmokeExecutor(LevelDSmokeBackend{})); err != nil {
+		t.Fatalf("register smoke executor: %v", err)
+	}
+	controller := NewFleetController(st, reg, time.Second, time.Minute)
+	controller.Tick(context.Background())
+
+	if st.markSucceeded {
+		t.Fatal("smoke with missing backends must not succeed")
+	}
+	if !strings.Contains(st.markFailedMsg, ErrSmokeRunnerNotWired.Error()) {
+		t.Fatalf("MarkFailed msg = %q, want %q", st.markFailedMsg, ErrSmokeRunnerNotWired)
 	}
 }
 
