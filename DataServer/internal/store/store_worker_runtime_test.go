@@ -23,7 +23,11 @@ func TestPersistWorkerHeartbeatReconcilesRuntimeAtomically(t *testing.T) {
 			"job_id": "job-1", "task_id": "task-1", "attempt_id": "attempt-1",
 			"attempt": 1, "lease_id": "lease-1", "job_type": "scene.composite.v1",
 			"progress_percent": 45, "progress_scene": 3, "progress_total": 10,
-			"progress_stage": "building_scene",
+			"progress_segment": 7, "progress_total_segments": 26,
+			"frames_encoded": 18432, "frames_decoded": 19000, "frames_composited": 18432,
+			"ffmpeg_speed_x": 2.37, "elapsed_ms": 183421,
+			"progress_phase":   "building_segments",
+			"progress_metrics": map[string]any{"frames_encoded": 18432},
 		}}},
 	})
 	if err := s.PersistWorkerHeartbeat(context.Background(), raw, ""); err != nil {
@@ -31,6 +35,24 @@ func TestPersistWorkerHeartbeatReconcilesRuntimeAtomically(t *testing.T) {
 	}
 
 	var count int
+	var (
+		progressSegment  int
+		totalSegments    int
+		framesEncoded    int64
+		framesDecoded    int64
+		framesComposited int64
+		speed            float64
+		elapsed          int64
+		metricsJSON      string
+		lastProgress     string
+	)
+	if err := s.DB().QueryRow(`SELECT current_segment,total_segments,frames_encoded,frames_decoded,frames_composited,ffmpeg_speed_x,elapsed_ms,cumulative_metrics_json,last_progress_at FROM worker_task_runtime WHERE task_id='task-1'`).Scan(&progressSegment, &totalSegments, &framesEncoded, &framesDecoded, &framesComposited, &speed, &elapsed, &metricsJSON, &lastProgress); err != nil {
+		t.Fatal(err)
+	}
+	if progressSegment != 7 || totalSegments != 26 || framesEncoded != 18432 || framesDecoded != 19000 || framesComposited != 18432 || speed != 2.37 || elapsed != 183421 || metricsJSON != `{"frames_encoded":18432}` || lastProgress == "" {
+		t.Fatalf("live progress = segment=%d/%d frames=%d/%d/%d speed=%v elapsed=%d metrics=%s last=%q", progressSegment, totalSegments, framesEncoded, framesDecoded, framesComposited, speed, elapsed, metricsJSON, lastProgress)
+	}
+
 	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM worker_task_runtime WHERE task_id='task-1' AND progress_percent=45`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}

@@ -32,7 +32,7 @@ import (
 // SAFETY-CRITICAL: Setpgid + Pdeathsig + 10s SIGTERM grace + SIGKILL
 // hard-kill + <-done reaping are preserved verbatim from the original
 // render_client.go. Do not modify these.
-func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgress ProgressFunc) (processStartMs int64, processWaitMs int64, stderrBuf strings.Builder, stdoutBuf strings.Builder, err error) {
+func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgress DetailedProgressFunc, legacyProgress ProgressFunc) (processStartMs int64, processWaitMs int64, stderrBuf strings.Builder, stdoutBuf strings.Builder, err error) {
 	args := []string{"--render", "--plan", planPath}
 	if chrononBackendEnabled() {
 		args = []string{"render-plan", "--input", planPath}
@@ -67,7 +67,7 @@ func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgre
 	}
 	processStartMs = time.Since(processStart).Milliseconds()
 
-	progressDone := streamEngineOutput(stdoutPipe, stderrPipe, ctx, onProgress, &stderrBuf, &stdoutBuf)
+	progressDone := streamEngineOutput(stdoutPipe, stderrPipe, ctx, onProgress, legacyProgress, &stderrBuf, &stdoutBuf)
 
 	done := make(chan error, 1)
 	go func() {

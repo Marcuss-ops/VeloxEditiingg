@@ -113,12 +113,24 @@ type ActiveTaskLease struct {
 	Revision      int
 }
 
-// JobProgress tracks per-job execution progress.
+// JobProgress is the in-memory projection of the canonical Attempt progress.
+// It is published through active_jobs and is not a second progress tracker.
 type JobProgress struct {
-	Percent     int32
-	Scene       int32
-	TotalScenes int32
-	Stage       string
+	Percent           int32
+	Scene             int32
+	TotalScenes       int32
+	Segment           int32
+	TotalSegments     int32
+	Phase             string
+	Stage             string // legacy alias for phase in older worker consumers
+	FramesEncoded     int64
+	FramesDecoded     int64
+	FramesComposited  int64
+	FfmpegSpeedX      float64
+	ElapsedMS         int64
+	LastProgressAt    time.Time
+	LastPublishedAt   time.Time // heartbeat publication throttle; not a second tracker
+	CumulativeMetrics map[string]float64
 }
 
 // backoffConfig configures exponential backoff for retry operations.

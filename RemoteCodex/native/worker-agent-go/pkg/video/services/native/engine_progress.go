@@ -10,27 +10,9 @@ import (
 	"velox-worker-agent/pkg/video/pipeline"
 )
 
-// engine_progress.go owns the streaming half of the subprocess pipeline:
-// it drains the engine's stdout and stderr pipes line by line. stderr is
-// parsed for JSON progress events ({"percent","scene","total_scenes","stage"})
-// and forwarded to either pipeline.ProgressCallback(ctx) (context-aware)
-// or the caller-supplied fallback onProgress. Plain stdout is accumulated
-// for diagnostic logging on failure.
-//
-// The progressDone channel returned by streamEngineOutput closes when
-// the stderr reader goroutine exits; it is the only sync point the
-// caller uses to wait for output drain. The stdout goroutine is
-// intentionally not synchronised on exit — same shape as the
-// original, since the OS closes both pipes when the subprocess
-// finishes and the readers stop naturally on EOF.
-
-// streamEngineOutput starts two goroutines (stderr + stdout readers)
-// and returns the channel that closes when the stderr reader exits.
-// The buffers are written through pointers so the caller can read
-// their final state after <-progressDone (stderr is guaranteed
-// drained; stdout is best-effort — same race semantics as the
-// original).
-func streamEngineOutput(stdout, stderr io.ReadCloser, ctx context.Context, onProgress ProgressFunc, stderrBuf, stdoutBuf *strings.Builder) chan struct{} {
+// streamEngineOutput starts two goroutines (stderr + stdout readers) and
+// forwards structured native progress through the task-local pipeline callback.
+func streamEngineOutput(stdout, stderr io.ReadCloser, ctx context.Context, onProgress DetailedProgressFunc, legacyProgress ProgressFunc, stderrBuf, stdoutBuf *strings.Builder) chan struct{} {
 	progressDone := make(chan struct{})
 
 	stderrReader := bufio.NewReader(stderr)
@@ -42,17 +24,65 @@ func streamEngineOutput(stdout, stderr io.ReadCloser, ctx context.Context, onPro
 				line = strings.TrimRight(line, "\n\r")
 				stderrBuf.WriteString(line)
 				stderrBuf.WriteString("\n")
+
 				var prog struct {
-					Percent int    `json:"percent"`
-					Scene   int    `json:"scene"`
-					Total   int    `json:"total_scenes"`
-					Stage   string `json:"stage"`
+					Percent          int     `json:"percent"`
+					Scene            int     `json:"scene"`
+					Total            int     `json:"total_scenes"`
+					Segment          int     `json:"segment"`
+					TotalSegments    int     `json:"total_segments"`
+					Stage            string  `json:"stage"`
+					Phase            string  `json:"phase"`
+					FramesEncoded    int64   `json:"frames_encoded"`
+					FramesDecoded    int64   `json:"frames_decoded"`
+					FramesComposited int64   `json:"frames_composited"`
+					FfmpegSpeedX     float64 `json:"speed_x"`
+					ElapsedMS        int64   `json:"elapsed_ms"`
 				}
-				if json.Unmarshal([]byte(line), &prog) == nil && prog.Percent > 0 {
-					if fn := pipeline.ProgressCallback(ctx); fn != nil {
-						fn(prog.Percent, prog.Scene, prog.Total, prog.Stage)
+				if json.Unmarshal([]byte(line), &prog) == nil && prog.Percent >= 0 {
+					// Legacy lifecycle lines contain only percent/stage. Do
+					// not route them through the detailed callback: replacing
+					// a live snapshot with zero scene/segment/frame values
+					// would corrupt the canonical Attempt projection.
+					detailed := prog.Phase != "" || prog.Scene != 0 || prog.Total != 0 ||
+						prog.Segment != 0 || prog.TotalSegments != 0 ||
+						prog.FramesEncoded != 0 || prog.FramesDecoded != 0 ||
+						prog.FramesComposited != 0 || prog.ElapsedMS != 0
+					if !detailed {
+						if legacy := pipeline.ProgressCallback(ctx); legacy != nil {
+							legacy(prog.Percent, prog.Scene, prog.Total, prog.Stage)
+						} else if legacyProgress != nil {
+							legacyProgress(prog.Percent, prog.Scene, prog.Total, prog.Stage)
+						}
+						continue
+					}
+					phase := prog.Phase
+					if phase == "" {
+						phase = prog.Stage
+					}
+					metrics := map[string]float64{
+						"frames_encoded":    float64(prog.FramesEncoded),
+						"frames_decoded":    float64(prog.FramesDecoded),
+						"frames_composited": float64(prog.FramesComposited),
+						"ffmpeg_speed_x":    prog.FfmpegSpeedX,
+						"elapsed_ms":        float64(prog.ElapsedMS),
+					}
+					snapshot := pipeline.ProgressSnapshot{
+						Percent: int32(prog.Percent), Scene: int32(prog.Scene), TotalScenes: int32(prog.Total),
+						Segment: int32(prog.Segment), TotalSegments: int32(prog.TotalSegments), Phase: phase,
+						FramesEncoded: prog.FramesEncoded, FramesDecoded: prog.FramesDecoded,
+						FramesComposited: prog.FramesComposited, FfmpegSpeedX: prog.FfmpegSpeedX,
+						ElapsedMS: prog.ElapsedMS, CumulativeMetrics: metrics,
+					}
+					if legacy := pipeline.ProgressCallback(ctx); legacy != nil {
+						legacy(int(snapshot.Percent), int(snapshot.Scene), int(snapshot.TotalScenes), snapshot.Phase)
+					} else if legacyProgress != nil {
+						legacyProgress(int(snapshot.Percent), int(snapshot.Scene), int(snapshot.TotalScenes), snapshot.Phase)
+					}
+					if fn := pipeline.DetailedProgressCallback(ctx); fn != nil {
+						fn(snapshot)
 					} else if onProgress != nil {
-						onProgress(prog.Percent, prog.Scene, prog.Total, prog.Stage)
+						onProgress(snapshot)
 					}
 				}
 			}

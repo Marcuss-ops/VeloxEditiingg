@@ -239,10 +239,46 @@ func (w *Worker) unregisterActiveTask(taskID string, pte *PendingTaskExecution) 
 // later replace (which the original code does NOT do) would still
 // route to the fresh entry.
 func (w *Worker) withJobProgressCallback(parent context.Context, taskID string) context.Context {
-	return pipeline.WithProgressCallback(parent, func(percent, scene, total int, stage string) {
+	return pipeline.WithDetailedProgressCallback(parent, func(snapshot pipeline.ProgressSnapshot) {
+		now := time.Now().UTC()
 		w.activeTasksMu.Lock()
 		if current := w.activeTasks[taskID]; current != nil {
-			current.Progress = JobProgress{Percent: int32(percent), Scene: int32(scene), TotalScenes: int32(total), Stage: stage}
+			previous := current.Progress
+			phaseChanged := previous.Phase != snapshot.Phase
+			segmentChanged := previous.Segment != snapshot.Segment
+			publishDue := previous.LastPublishedAt.IsZero() ||
+				now.Sub(previous.LastPublishedAt) >= 2*time.Second || phaseChanged || segmentChanged
+
+			metrics := make(map[string]float64, len(snapshot.CumulativeMetrics))
+			for key, value := range snapshot.CumulativeMetrics {
+				metrics[key] = value
+			}
+			// Keep the latest snapshot in the same canonical Attempt
+			// projection even when heartbeat publication is throttled.
+			// LastProgressAt describes the newest engine observation;
+			// LastPublishedAt is only the local wake/throttle clock and
+			// is never serialized as operator telemetry.
+			current.Progress = JobProgress{
+				Percent:           snapshot.Percent,
+				Scene:             snapshot.Scene,
+				TotalScenes:       snapshot.TotalScenes,
+				Segment:           snapshot.Segment,
+				TotalSegments:     snapshot.TotalSegments,
+				Phase:             snapshot.Phase,
+				Stage:             snapshot.Phase,
+				FramesEncoded:     snapshot.FramesEncoded,
+				FramesDecoded:     snapshot.FramesDecoded,
+				FramesComposited:  snapshot.FramesComposited,
+				FfmpegSpeedX:      snapshot.FfmpegSpeedX,
+				ElapsedMS:         snapshot.ElapsedMS,
+				LastProgressAt:    now,
+				LastPublishedAt:   previous.LastPublishedAt,
+				CumulativeMetrics: metrics,
+			}
+			if publishDue {
+				current.Progress.LastPublishedAt = now
+				w.wakeHeartbeat()
+			}
 		}
 		w.activeTasksMu.Unlock()
 	})

@@ -22,6 +22,7 @@ namespace {
     using render_detail::fileSize;
     using render_detail::makeParams;
     using render_detail::reportProgress;
+    using render_detail::reportDetailedProgress;
     using render_detail::runFfmpegSegmentWithProgress;
 }
 
@@ -66,8 +67,11 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         renderPhase.Abort(error_code, result.error);
         return result;
     };
+    auto renderStart = std::chrono::steady_clock::now();
 
     reportProgress(0, "starting");
+    reportDetailedProgress(last_progress_, 0, static_cast<int>(plan.timeline.size()), 0,
+                           static_cast<int>(plan.timeline.size()), "starting", 0, 0, 0, 0);
 
     fs::path workBase = fs::temp_directory_path() / "velox_video_engine_plan";
     fs::path workDir;
@@ -101,12 +105,14 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
 
     // 1. Build timeline segments
     reportProgress(10, "resolving_assets");
+    reportDetailedProgress(last_progress_, 0, static_cast<int>(plan.timeline.size()), 0,
+                           static_cast<int>(plan.timeline.size()), "resolving_assets", 0, 0, 0,
+                           std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - renderStart).count());
 
     std::vector<fs::path> segmentPaths;
     segmentPaths.reserve(plan.timeline.size());
 
     double total_duration_seconds = 0.0;
-    auto renderStart = std::chrono::steady_clock::now();
 
     for (size_t i = 0; i < plan.timeline.size(); ++i) {
         const auto& item = plan.timeline[i];
@@ -127,7 +133,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         services::EngineProgress segmentProgress{};
         const auto onProgress = progress_cb_;
         services::ProgressCallback segmentCallback =
-            [this, onProgress, &segmentFrames, &segmentProgress](const services::EngineProgress& p) {
+            [this, onProgress, &segmentFrames, &segmentProgress, i, totalSegments = plan.timeline.size(), renderStart](const services::EngineProgress& p) {
                 segmentProgress = p;
                 if (p.frame > segmentFrames) {
                     segmentFrames = p.frame;
@@ -136,6 +142,13 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 if (onProgress) {
                     onProgress(p);
                 }
+                reportDetailedProgress(
+                    p, static_cast<int>(i + 1), static_cast<int>(totalSegments),
+                    static_cast<int>(i + 1), static_cast<int>(totalSegments),
+                    "building_segments", frames_encoded_.load() + segmentFrames,
+                    frames_decoded_.load(), frames_composited_.load() + segmentFrames,
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - renderStart).count());
             };
         auto segStart = std::chrono::steady_clock::now();
         seg.started_offset_ms = std::chrono::duration<double, std::milli>(
@@ -262,6 +275,13 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
 
         int pct = 10 + static_cast<int>((static_cast<double>(i + 1) / plan.timeline.size()) * 60);
         reportProgress(pct, "building_segments");
+        reportDetailedProgress(last_progress_, static_cast<int>(i + 1),
+                               static_cast<int>(plan.timeline.size()), static_cast<int>(i + 1),
+                               static_cast<int>(plan.timeline.size()), "building_segments",
+                               frames_encoded_.load(), frames_decoded_.load(),
+                               frames_composited_.load(),
+                               std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now() - renderStart).count());
     }
 
     if (total_duration_seconds > 0.0) {
@@ -270,6 +290,12 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
 
     // 2. Concatenate video segments
     reportProgress(75, "concatenating");
+    reportDetailedProgress(last_progress_, static_cast<int>(plan.timeline.size()),
+                           static_cast<int>(plan.timeline.size()), static_cast<int>(plan.timeline.size()),
+                           static_cast<int>(plan.timeline.size()), "concatenating",
+                           frames_encoded_.load(), frames_decoded_.load(), frames_composited_.load(),
+                           std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::steady_clock::now() - renderStart).count());
     fs::path videoOnly = workDir / "video_only.mp4";
     {
         telemetry::ScopedPhase concatPhase(
@@ -292,6 +318,12 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             recorder_, telemetry::kOriginEngine, telemetry::kScopeSubtitleTrack,
             "subtitle", "burn_in", "subtitle");
         reportProgress(80, "burning_subtitles");
+        reportDetailedProgress(last_progress_, static_cast<int>(plan.timeline.size()),
+                               static_cast<int>(plan.timeline.size()), static_cast<int>(plan.timeline.size()),
+                               static_cast<int>(plan.timeline.size()), "burning_subtitles",
+                               frames_encoded_.load(), frames_decoded_.load(), frames_composited_.load(),
+                               std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now() - renderStart).count());
         const auto& subtitle = plan.subtitle_tracks.front();
         fs::path localSubtitle = workDir / "subtitle_track_0.srt";
         {
@@ -314,6 +346,12 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
 
     // 3. Mix audio tracks (supports multi-track with volume/offset)
     reportProgress(85, "muxing_audio");
+    reportDetailedProgress(last_progress_, static_cast<int>(plan.timeline.size()),
+                           static_cast<int>(plan.timeline.size()), static_cast<int>(plan.timeline.size()),
+                           static_cast<int>(plan.timeline.size()), "muxing_audio",
+                           frames_encoded_.load(), frames_decoded_.load(), frames_composited_.load(),
+                           std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::steady_clock::now() - renderStart).count());
     if (!plan.audio_tracks.empty()) {
         telemetry::ScopedPhase audioPhase(
             recorder_, telemetry::kOriginEngine, telemetry::kScopeAudioTrack,

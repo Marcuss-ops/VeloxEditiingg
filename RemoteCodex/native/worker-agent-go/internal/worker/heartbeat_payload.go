@@ -106,13 +106,21 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 			"status":      "RUNNING",
 			"started_at":  at.StartedAt.UTC().Format(time.RFC3339Nano),
 		}
-		if at.Progress.Percent > 0 {
+		if !at.Progress.LastProgressAt.IsZero() {
 			jobInfo["progress_percent"] = at.Progress.Percent
 			jobInfo["progress_scene"] = at.Progress.Scene
 			jobInfo["progress_total"] = at.Progress.TotalScenes
-			if at.Progress.Stage != "" {
-				jobInfo["progress_stage"] = at.Progress.Stage
-			}
+			jobInfo["progress_segment"] = at.Progress.Segment
+			jobInfo["progress_total_segments"] = at.Progress.TotalSegments
+			jobInfo["progress_phase"] = at.Progress.Phase
+			jobInfo["progress_stage"] = at.Progress.Stage
+			jobInfo["frames_encoded"] = at.Progress.FramesEncoded
+			jobInfo["frames_decoded"] = at.Progress.FramesDecoded
+			jobInfo["frames_composited"] = at.Progress.FramesComposited
+			jobInfo["ffmpeg_speed_x"] = at.Progress.FfmpegSpeedX
+			jobInfo["elapsed_ms"] = at.Progress.ElapsedMS
+			jobInfo["last_progress_at"] = at.Progress.LastProgressAt.UTC().Format(time.RFC3339Nano)
+			jobInfo["progress_metrics"] = at.Progress.CumulativeMetrics
 		}
 		activeJobList = append(activeJobList, jobInfo)
 	}

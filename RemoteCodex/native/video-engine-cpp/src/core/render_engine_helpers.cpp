@@ -19,6 +19,30 @@ void reportProgress(int percent, const std::string& stage) {
               << ",\"stage\":\"" << stage << "\"}" << std::endl;
 }
 
+void reportDetailedProgress(const services::EngineProgress& progress,
+                            int scene, int total_scenes,
+                            int segment, int total_segments,
+                            const std::string& phase,
+                            int64_t frames_encoded,
+                            int64_t frames_decoded,
+                            int64_t frames_composited,
+                            int64_t elapsed_ms) {
+    std::cerr << "{\"progress\":" << static_cast<int>(progress.progress_pct)
+              << ",\"percent\":" << static_cast<int>(progress.progress_pct)
+              << ",\"scene\":" << scene
+              << ",\"total_scenes\":" << total_scenes
+              << ",\"segment\":" << segment
+              << ",\"total_segments\":" << total_segments
+              << ",\"stage\":\"" << phase << "\""
+              << ",\"phase\":\"" << phase << "\""
+              << ",\"frames_encoded\":" << frames_encoded
+              << ",\"frames_decoded\":" << frames_decoded
+              << ",\"frames_composited\":" << frames_composited
+              << ",\"speed_x\":" << progress.speed_x
+              << ",\"elapsed_ms\":" << elapsed_ms
+              << "}" << std::endl;
+}
+
 media::SceneSegmentParams makeParams(
     const plan::CanvasSpec& canvas,
     const plan::TransformSpec& transform,

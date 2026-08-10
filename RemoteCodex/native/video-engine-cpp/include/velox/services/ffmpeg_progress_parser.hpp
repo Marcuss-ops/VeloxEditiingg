@@ -56,6 +56,17 @@ struct EngineProgress {
     int64_t bitrate{0};                  // bits/s (best-effort)
     bool finished{false};                // progress=end observed
     double progress_pct{0.0};            // 0..100 (best-effort, see ExpectedDurationUs)
+
+    // Render-level context attached by RenderEngine around FFmpeg blocks.
+    int32_t scene{0};
+    int32_t total_scenes{0};
+    int32_t segment{0};
+    int32_t total_segments{0};
+    std::string phase{};
+    int64_t frames_encoded{0};
+    int64_t frames_decoded{0};
+    int64_t frames_composited{0};
+    int64_t elapsed_ms{0};
 };
 
 // ProgressCallback is invoked at the end of every parsed block.

@@ -1,8 +1,11 @@
 package worker
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	"velox-worker-agent/pkg/video/pipeline"
 )
 
 func TestConnectionStateTransitions(t *testing.T) {
@@ -81,6 +84,53 @@ func TestJobProgressZeroValues(t *testing.T) {
 	}
 	if p.Stage != "" {
 		t.Errorf("default Stage should be empty, got %q", p.Stage)
+	}
+}
+
+func TestWithJobProgressCallbackPublishesCanonicalSnapshotWithThrottle(t *testing.T) {
+	w := &Worker{
+		activeTasks:   map[string]*ActiveTaskExecution{},
+		heartbeatWake: make(chan struct{}, 4),
+	}
+	w.activeTasks["task-progress"] = &ActiveTaskExecution{TaskID: "task-progress"}
+
+	ctx := w.withJobProgressCallback(context.Background(), "task-progress")
+	callback := pipeline.DetailedProgressCallback(ctx)
+	if callback == nil {
+		t.Fatal("progress callback is nil")
+	}
+
+	callback(pipeline.ProgressSnapshot{
+		Percent: 12, Scene: 2, TotalScenes: 8, Segment: 3, TotalSegments: 16,
+		Phase: "building_segments", FramesEncoded: 100, FramesDecoded: 120,
+		FramesComposited: 100, FfmpegSpeedX: 1.5, ElapsedMS: 2400,
+		CumulativeMetrics: map[string]float64{"frames_encoded": 100},
+	})
+	first := w.activeTasks["task-progress"].Progress
+	if first.Phase != "building_segments" || first.Segment != 3 || first.FramesEncoded != 100 || first.LastProgressAt.IsZero() {
+		t.Fatalf("first canonical progress = %+v", first)
+	}
+	if first.CumulativeMetrics["frames_encoded"] != 100 {
+		t.Fatalf("first cumulative metrics = %#v", first.CumulativeMetrics)
+	}
+
+	// Same phase/segment inside the two-second checkpoint window is
+	// retained in the canonical in-memory Attempt projection, while the
+	// heartbeat publication clock remains throttled.
+	callback(pipeline.ProgressSnapshot{Percent: 20, Scene: 2, TotalScenes: 8, Segment: 3, TotalSegments: 16, Phase: "building_segments", FramesEncoded: 200})
+	second := w.activeTasks["task-progress"].Progress
+	if second.Percent != 20 || second.FramesEncoded != 200 || second.LastProgressAt.IsZero() {
+		t.Fatalf("latest throttled progress was not retained: first=%+v second=%+v", first, second)
+	}
+	if !second.LastPublishedAt.Equal(first.LastPublishedAt) {
+		t.Fatalf("throttled heartbeat publication advanced: first=%+v second=%+v", first, second)
+	}
+
+	// A phase transition bypasses the interval and publishes immediately.
+	callback(pipeline.ProgressSnapshot{Percent: 75, Scene: 8, TotalScenes: 8, Segment: 16, TotalSegments: 16, Phase: "concatenating", FramesEncoded: 200})
+	third := w.activeTasks["task-progress"].Progress
+	if third.Phase != "concatenating" || third.Percent != 75 || third.FramesEncoded != 200 {
+		t.Fatalf("phase transition was not published: %+v", third)
 	}
 }
 

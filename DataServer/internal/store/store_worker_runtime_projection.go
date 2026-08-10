@@ -89,22 +89,34 @@ func reconcileWorkerRuntime(ctx context.Context, tx *sql.Tx, workerID, sessionID
 		_, err := tx.ExecContext(ctx, `INSERT INTO worker_task_runtime
 			(task_id,job_id,attempt_id,attempt_number,worker_id,session_id,lease_id,
 			executor_id,executor_version,runtime_status,progress_percent,progress_stage,
-			current_scene,total_scenes,started_at,last_progress_at,updated_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			current_scene,total_scenes,current_segment,total_segments,frames_encoded,
+			frames_decoded,frames_composited,ffmpeg_speed_x,elapsed_ms,cumulative_metrics_json,
+			started_at,last_progress_at,updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(task_id) DO UPDATE SET
 			job_id=excluded.job_id, attempt_id=excluded.attempt_id, attempt_number=excluded.attempt_number,
 			worker_id=excluded.worker_id, session_id=excluded.session_id, lease_id=excluded.lease_id,
 			executor_id=excluded.executor_id, executor_version=excluded.executor_version,
 			runtime_status=excluded.runtime_status, progress_percent=excluded.progress_percent,
 			progress_stage=excluded.progress_stage, current_scene=excluded.current_scene,
-			total_scenes=excluded.total_scenes, started_at=COALESCE(worker_task_runtime.started_at, excluded.started_at),
+			total_scenes=excluded.total_scenes, current_segment=excluded.current_segment,
+			total_segments=excluded.total_segments, frames_encoded=excluded.frames_encoded,
+			frames_decoded=excluded.frames_decoded, frames_composited=excluded.frames_composited,
+			ffmpeg_speed_x=excluded.ffmpeg_speed_x, elapsed_ms=excluded.elapsed_ms,
+			cumulative_metrics_json=excluded.cumulative_metrics_json,
+			started_at=COALESCE(worker_task_runtime.started_at, excluded.started_at),
 			last_progress_at=excluded.last_progress_at, updated_at=excluded.updated_at,
 			missing_heartbeats=0`,
 			taskID, asString(task["job_id"]), asString(task["attempt_id"]), int64OrDefault(task["attempt"], 1),
 			workerID, sessionID, asString(task["lease_id"]), asString(task["job_type"]), 0,
 			defaultString(task["status"], "RUNNING"), clampPercent(int64Value(task["progress_percent"])),
-			asString(task["progress_stage"]), int64Value(task["progress_scene"]), int64Value(task["progress_total"]),
-			defaultString(task["started_at"], now), now, now)
+			defaultString(task["progress_phase"], defaultString(task["progress_stage"], "")),
+			int64Value(task["progress_scene"]), int64Value(task["progress_total"]),
+			int64Value(task["progress_segment"]), int64Value(task["progress_total_segments"]),
+			int64Value(task["frames_encoded"]), int64Value(task["frames_decoded"]),
+			int64Value(task["frames_composited"]), floatValue(task["ffmpeg_speed_x"]),
+			int64Value(task["elapsed_ms"]), jsonString(task["progress_metrics"]),
+			defaultString(task["started_at"], now), defaultString(task["last_progress_at"], now), now)
 		if err != nil {
 			return fmt.Errorf("upsert worker task runtime %s: %w", taskID, err)
 		}

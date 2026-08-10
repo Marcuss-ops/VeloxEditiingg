@@ -13,6 +13,14 @@ namespace velox::core::render_detail {
 namespace fs = std::filesystem;
 
 void reportProgress(int percent, const std::string& stage);
+void reportDetailedProgress(const services::EngineProgress& progress,
+                            int scene, int total_scenes,
+                            int segment, int total_segments,
+                            const std::string& phase,
+                            int64_t frames_encoded,
+                            int64_t frames_decoded,
+                            int64_t frames_composited,
+                            int64_t elapsed_ms);
 
 media::SceneSegmentParams makeParams(
     const plan::CanvasSpec& canvas,

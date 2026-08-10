@@ -41,6 +41,31 @@ type sqliteJobInspectionAdapter struct {
 	store *store.SQLiteStore
 }
 
+type sqliteLiveAttemptAdapter struct {
+	store *store.SQLiteStore
+}
+
+func (a *sqliteLiveAttemptAdapter) GetWorkerTaskRuntimeByJob(ctx context.Context, jobID string) (*observability.LiveAttempt, error) {
+	row, err := a.store.GetWorkerTaskRuntimeByJob(ctx, jobID)
+	if err != nil || row == nil {
+		return nil, err
+	}
+	return &observability.LiveAttempt{
+		TaskID: row.TaskID, JobID: row.JobID, AttemptID: row.AttemptID,
+		AttemptNumber: row.AttemptNumber, WorkerID: row.WorkerID, LeaseID: row.LeaseID,
+		RuntimeStatus: row.RuntimeStatus, ProgressPercent: row.ProgressPercent,
+		ProgressPhase: row.ProgressPhase, CurrentScene: row.CurrentScene,
+		TotalScenes: row.TotalScenes, CurrentSegment: row.CurrentSegment,
+		TotalSegments: row.TotalSegments, FramesEncoded: row.FramesEncoded,
+		FramesDecoded: row.FramesDecoded, FramesComposited: row.FramesComposited,
+		FFmpegSpeedX: row.FFmpegSpeedX, ElapsedMS: row.ElapsedMS,
+		CumulativeMetrics: row.CumulativeMetrics, StartedAt: row.StartedAt,
+		LastProgressAt: row.LastProgressAt, UpdatedAt: row.UpdatedAt,
+	}, nil
+}
+
+var _ observability.LiveAttemptReader = (*sqliteLiveAttemptAdapter)(nil)
+
 func (a *sqliteJobInspectionAdapter) ListJobEvents(_ context.Context, jobID string, limit int) ([]observability.JobEvent, error) {
 	rows, err := a.store.ListJobEvents(jobID, limit)
 	if err != nil {
@@ -335,7 +360,8 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	if t.Observability != nil {
 		workerReader := &workerRegistryAdapter{reg: w.Registry, store: p.SQLite}
 		obsSvc := t.Observability.WithJobs(j.Repository).WithWorkers(workerReader).
-			WithJobInspection(&sqliteJobInspectionAdapter{store: p.SQLite})
+			WithJobInspection(&sqliteJobInspectionAdapter{store: p.SQLite}).
+			WithLiveAttempts(&sqliteLiveAttemptAdapter{store: p.SQLite})
 		registry.Register(observability.NewModule(obsSvc, api.AdminAuthMiddleware(cfg)))
 		log.Printf("[BOOTSTRAP] Observability REST API registered")
 	}

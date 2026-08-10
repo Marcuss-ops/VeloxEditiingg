@@ -31,15 +31,19 @@ import (
 // (the Setpgid+Pdeathsig+grace-10s+SIGKILL block) and is not touched
 // here — this file only composes it.
 
-// ProgressFunc is called with progress updates from the C++ engine.
-type ProgressFunc func(percent int, scene, total int, stage string)
+// ProgressFunc is the legacy callback contract retained for source
+// compatibility. DetailedProgressFunc is the canonical render telemetry
+// callback used by the worker Attempt projection.
+type ProgressFunc = pipeline.ProgressFunc
+type DetailedProgressFunc = pipeline.DetailedProgressFunc
 
 // RenderClient executes RenderPlans via the C++ video engine.
 type RenderClient struct {
-	binaryPath string
-	logger     *logger.Logger
-	onProgress ProgressFunc
-	tempFiles  []string
+	binaryPath     string
+	logger         *logger.Logger
+	onProgress     DetailedProgressFunc
+	legacyProgress ProgressFunc
+	tempFiles      []string
 }
 
 // NewRenderClient creates a new native render client.
@@ -54,8 +58,15 @@ func NewRenderClient(log *logger.Logger) (*RenderClient, error) {
 	}, nil
 }
 
-// SetProgressCallback sets the progress callback.
+// SetProgressCallback retains the legacy callback API. Legacy callbacks
+// are delivered by the engine stream parser without replacing detailed
+// Attempt telemetry.
 func (c *RenderClient) SetProgressCallback(fn ProgressFunc) {
+	c.legacyProgress = fn
+}
+
+// SetDetailedProgressCallback sets the canonical detailed render callback.
+func (c *RenderClient) SetDetailedProgressCallback(fn DetailedProgressFunc) {
 	c.onProgress = fn
 }
 
@@ -96,7 +107,7 @@ func (c *RenderClient) RenderWithMetrics(ctx context.Context, p *plan.RenderPlan
 
 	c.logger.Info("[NATIVE] Launching: %s --render --plan %s", c.binaryPath, planPath)
 	// SAFETY-CRITICAL subprocess lifecycle lives in engine_process.go.
-	processStartMs, processWaitMs, stderrBuf, stdoutBuf, err := runEngineProcess(ctx, c.binaryPath, planPath, c.onProgress)
+	processStartMs, processWaitMs, stderrBuf, stdoutBuf, err := runEngineProcess(ctx, c.binaryPath, planPath, c.onProgress, c.legacyProgress)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			// Cancellation path — preserve any sidecar phases already

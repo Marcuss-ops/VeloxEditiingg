@@ -336,33 +336,14 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 
 	// Durable metrics are final-report data. Overlay the same canonical
 	// Attempt with the live worker_task_runtime row while it is RUNNING.
-	// This keeps GET /api/v1/admin/jobs/{id} useful during rendering.
+	// Keep the live row aside until durable attempts are loaded so a matching
+	// attempt is enriched in place rather than appended twice.
+	var live *LiveAttempt
 	if s.liveAttempts != nil {
-		if live, liveErr := s.liveAttempts.GetWorkerTaskRuntimeByJob(ctx, task.JobID); liveErr == nil && live != nil {
-			if live.AttemptID != "" {
-				if live.AttemptNumber > summary.AttemptCount {
-					summary.AttemptCount = live.AttemptNumber
-				}
-				alreadyPresent := false
-				for _, existing := range summary.Attempts {
-					if existing.AttemptID == live.AttemptID {
-						alreadyPresent = true
-						break
-					}
-				}
-				if !alreadyPresent {
-					summary.Attempts = append(summary.Attempts, AttemptSummary{
-						AttemptID: live.AttemptID, AttemptNumber: live.AttemptNumber,
-						Status: taskattempts.AttemptStatus(live.RuntimeStatus), WorkerID: live.WorkerID,
-						Live: true, Phase: live.ProgressPhase, ProgressPercent: live.ProgressPercent,
-						CurrentScene: live.CurrentScene, TotalScenes: live.TotalScenes,
-						CurrentSegment: live.CurrentSegment, TotalSegments: live.TotalSegments,
-						FramesEncoded: live.FramesEncoded, FramesDecoded: live.FramesDecoded,
-						FramesComposited: live.FramesComposited, FFmpegSpeedX: live.FFmpegSpeedX,
-						ElapsedMS: live.ElapsedMS, StartedAt: live.StartedAt,
-						LastProgressAt: live.LastProgressAt, CumulativeMetrics: live.CumulativeMetrics,
-					})
-				}
+		if candidate, liveErr := s.liveAttempts.GetWorkerTaskRuntimeByJob(ctx, task.JobID); liveErr == nil && candidate != nil && candidate.AttemptID != "" {
+			live = candidate
+			if live.AttemptNumber > summary.AttemptCount {
+				summary.AttemptCount = live.AttemptNumber
 			}
 		}
 	}
@@ -379,6 +360,25 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 			ErrorCode:      a.ErrorCode,
 			ErrorMessage:   a.ErrorMessage,
 			PhaseBreakdown: make(map[string]int64),
+		}
+		if live != nil && live.AttemptID == a.ID {
+			as.Live = true
+			as.Status = taskattempts.AttemptStatus(live.RuntimeStatus)
+			as.WorkerID = live.WorkerID
+			as.Phase = live.ProgressPhase
+			as.ProgressPercent = live.ProgressPercent
+			as.CurrentScene = live.CurrentScene
+			as.TotalScenes = live.TotalScenes
+			as.CurrentSegment = live.CurrentSegment
+			as.TotalSegments = live.TotalSegments
+			as.FramesEncoded = live.FramesEncoded
+			as.FramesDecoded = live.FramesDecoded
+			as.FramesComposited = live.FramesComposited
+			as.FFmpegSpeedX = live.FFmpegSpeedX
+			as.ElapsedMS = live.ElapsedMS
+			as.StartedAt = live.StartedAt
+			as.LastProgressAt = live.LastProgressAt
+			as.CumulativeMetrics = live.CumulativeMetrics
 		}
 		if a.StartedAt != nil {
 			as.StartedAt = a.StartedAt.UTC().Format(time.RFC3339Nano)
@@ -479,6 +479,28 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 		}
 
 		summary.Attempts = append(summary.Attempts, as)
+	}
+	if live != nil {
+		found := false
+		for _, existing := range summary.Attempts {
+			if existing.AttemptID == live.AttemptID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			summary.Attempts = append(summary.Attempts, AttemptSummary{
+				AttemptID: live.AttemptID, AttemptNumber: live.AttemptNumber,
+				Status: taskattempts.AttemptStatus(live.RuntimeStatus), WorkerID: live.WorkerID,
+				Live: true, Phase: live.ProgressPhase, ProgressPercent: live.ProgressPercent,
+				CurrentScene: live.CurrentScene, TotalScenes: live.TotalScenes,
+				CurrentSegment: live.CurrentSegment, TotalSegments: live.TotalSegments,
+				FramesEncoded: live.FramesEncoded, FramesDecoded: live.FramesDecoded,
+				FramesComposited: live.FramesComposited, FFmpegSpeedX: live.FFmpegSpeedX,
+				ElapsedMS: live.ElapsedMS, StartedAt: live.StartedAt,
+				LastProgressAt: live.LastProgressAt, CumulativeMetrics: live.CumulativeMetrics,
+			})
+		}
 	}
 
 	if firstStart != nil && lastEnd != nil {

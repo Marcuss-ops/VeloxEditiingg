@@ -9,14 +9,38 @@ import (
 	"velox-worker-agent/pkg/video/plan"
 )
 
-// ProgressFunc receives operator-visible progress from the native renderer.
-// It is carried on the execution context so a shared Runner remains safe when
-// multiple tasks render concurrently.
+// ProgressSnapshot is the canonical operator-visible progress emitted by the
+// native renderer. It is carried on the execution context so a shared Runner
+// remains safe when multiple tasks render concurrently.
+type ProgressSnapshot struct {
+	Percent           int32
+	Scene             int32
+	TotalScenes       int32
+	Segment           int32
+	TotalSegments     int32
+	Phase             string
+	FramesEncoded     int64
+	FramesDecoded     int64
+	FramesComposited  int64
+	FfmpegSpeedX      float64
+	ElapsedMS         int64
+	CumulativeMetrics map[string]float64
+}
+
+// ProgressFunc is the legacy operator-visible callback contract. Keep this
+// signature source-compatible for existing clients; detailed progress uses
+// DetailedProgressFunc below.
 type ProgressFunc func(percent, scene, total int, stage string)
 
-type progressContextKey struct{}
+// DetailedProgressFunc receives the canonical incremental Attempt snapshot.
+// The worker stores it in ActiveTaskExecution.Progress; it is not a second
+// progress tracker.
+type DetailedProgressFunc func(ProgressSnapshot)
 
-// WithProgressCallback associates a task-local progress sink with ctx.
+type progressContextKey struct{}
+type detailedProgressContextKey struct{}
+
+// WithProgressCallback associates a legacy task-local progress sink with ctx.
 func WithProgressCallback(ctx context.Context, fn ProgressFunc) context.Context {
 	if fn == nil {
 		return ctx
@@ -24,12 +48,30 @@ func WithProgressCallback(ctx context.Context, fn ProgressFunc) context.Context 
 	return context.WithValue(ctx, progressContextKey{}, fn)
 }
 
-// ProgressCallback returns the task-local progress sink, if any.
+// WithDetailedProgressCallback associates the canonical detailed progress
+// sink with ctx without changing the legacy callback API.
+func WithDetailedProgressCallback(ctx context.Context, fn DetailedProgressFunc) context.Context {
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, detailedProgressContextKey{}, fn)
+}
+
+// ProgressCallback returns the legacy task-local progress sink, if any.
 func ProgressCallback(ctx context.Context) ProgressFunc {
 	if ctx == nil {
 		return nil
 	}
 	fn, _ := ctx.Value(progressContextKey{}).(ProgressFunc)
+	return fn
+}
+
+// DetailedProgressCallback returns the canonical detailed progress sink.
+func DetailedProgressCallback(ctx context.Context) DetailedProgressFunc {
+	if ctx == nil {
+		return nil
+	}
+	fn, _ := ctx.Value(detailedProgressContextKey{}).(DetailedProgressFunc)
 	return fn
 }
 
