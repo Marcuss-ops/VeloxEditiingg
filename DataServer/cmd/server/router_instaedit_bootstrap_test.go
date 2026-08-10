@@ -5,11 +5,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"velox-server/internal/config"
 	instaedithandler "velox-server/internal/handlers/server/instaedit"
 	"velox-server/internal/instaeditauth"
 	"velox-server/internal/metrics"
+
+	"github.com/gin-gonic/gin"
 )
 
 // newRouterWithInstaEditBundle builds a minimal RouterBundle where only

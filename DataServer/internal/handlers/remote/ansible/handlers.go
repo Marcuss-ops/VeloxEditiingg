@@ -1,8 +1,6 @@
 package ansible
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -54,14 +52,6 @@ func (h *AnsibleHandlers) capabilitiesPayload() gin.H {
 		"version":       h.version,
 		"actions":       actions,
 	}
-}
-
-func (h *AnsibleHandlers) playbookExists(name string) bool {
-	if h.manager == nil || h.manager.PlaybookDir() == "" {
-		return false
-	}
-	_, err := os.Stat(filepath.Join(h.manager.PlaybookDir(), name))
-	return err == nil
 }
 
 func (h *AnsibleHandlers) resolveComputerIDs(ids []string) []string {

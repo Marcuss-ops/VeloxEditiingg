@@ -3,9 +3,10 @@ package main
 import (
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	instaedithandler "velox-server/internal/handlers/server/instaedit"
 	"velox-server/internal/instaeditauth"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestRegisterInstaEditRoutes_DisabledWhenVerifierNil(t *testing.T) {

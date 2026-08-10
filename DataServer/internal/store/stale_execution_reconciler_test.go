@@ -7,8 +7,9 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"velox-server/internal/store/migrations"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func openStaleReconcilerTestDB(t *testing.T) (*SQLiteStore, *sql.DB) {

@@ -7,9 +7,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/inputsecurity"
+
+	"github.com/gin-gonic/gin"
 )
 
 // CreatorAssetUpload registers one multipart asset in the canonical,

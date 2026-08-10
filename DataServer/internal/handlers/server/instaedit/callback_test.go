@@ -13,8 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"velox-server/internal/store"
+
+	"github.com/gin-gonic/gin"
 )
 
 type callbackApplierFake struct {

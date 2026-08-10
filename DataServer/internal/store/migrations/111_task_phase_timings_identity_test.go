@@ -2,9 +2,9 @@ package migrations
 
 import (
 	"database/sql"
+	_ "embed"
 	"testing"
 
-	_ "embed"
 	_ "github.com/mattn/go-sqlite3"
 )
 

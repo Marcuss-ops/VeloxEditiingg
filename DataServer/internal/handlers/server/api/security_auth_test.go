@@ -31,30 +31,6 @@ func securityStoreAndWorkerToken(t *testing.T) (*store.SQLiteStore, *workersreg.
 	return db, tm, tm.GenerateToken(securityWorkerID)
 }
 
-func securityRoute(t *testing.T, middleware gin.HandlerFunc) (*gin.Engine, *bool) {
-	t.Helper()
-	gin.SetMode(gin.TestMode)
-
-	handled := false
-	r := gin.New()
-	r.GET("/api/v1/admin/workers/security-probe", middleware, func(c *gin.Context) {
-		handled = true
-		c.Status(http.StatusNoContent)
-	})
-	return r, &handled
-}
-
-func securityRequest(t *testing.T, r *gin.Engine, token string) *httptest.ResponseRecorder {
-	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/workers/security-probe", nil)
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	return w
-}
-
 func securityAdminConfig() *config.Config {
 	return &config.Config{Auth: config.AuthConfig{AdminToken: securityAdminToken}}
 }

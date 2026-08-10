@@ -12,8 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"velox-server/internal/store"
+
+	"github.com/gin-gonic/gin"
 )
 
 const callbackClockSkew = 5 * time.Minute

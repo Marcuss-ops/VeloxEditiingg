@@ -8,8 +8,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"velox-server/internal/store"
+
+	"github.com/gin-gonic/gin"
 )
 
 // PipelineRunArtifacts handles GET /api/v1/pipeline-runs/:id/artifacts.

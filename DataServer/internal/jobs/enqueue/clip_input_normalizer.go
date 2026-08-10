@@ -184,25 +184,6 @@ func rejectTopLevelNarratedAliases(payloadMap map[string]interface{}) error {
 	return nil
 }
 
-func requiredCanonicalSceneAsset(scene map[string]interface{}, key string) (map[string]interface{}, error) {
-	if scene == nil {
-		return nil, fmt.Errorf("canonical %s asset is required", key)
-	}
-	raw, present := scene[key]
-	if !present || raw == nil {
-		return nil, fmt.Errorf("canonical %s asset is required", key)
-	}
-	asset, ok := raw.(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("canonical %s asset must be an object", key)
-	}
-	canonical := canonicalAsset(asset)
-	if canonical == nil {
-		return nil, fmt.Errorf("canonical %s asset must include asset_id and url", key)
-	}
-	return canonical, nil
-}
-
 func optionalCanonicalSceneAsset(scene map[string]interface{}, key string) (map[string]interface{}, error) {
 	if scene == nil {
 		return nil, nil
@@ -381,10 +362,4 @@ func normalizeScenesJSONInput(rawPayload map[string]interface{}, scenesJSON stri
 		return nil, nil, nil, nil, "", fmt.Errorf("invalid scenes_json: %w", err)
 	}
 	return normalizeClipPayload(map[string]interface{}{"scenes": scenes, "audio_tracks": rawPayload["audio_tracks"], "job_id": rawPayload["job_id"], "video_name": rawPayload["video_name"], "transition_sound_effects": rawPayload["transition_sound_effects"]})
-}
-
-// normalizeClipsInput remains as an explicit rejection point for callers that
-// have not migrated from raw clip arrays. It is not a renderer adapter.
-func normalizeClipsInput(rawClips interface{}) ([]map[string]interface{}, []map[string]interface{}, []string, []map[string]interface{}, string, error) {
-	return nil, nil, nil, nil, "", fmt.Errorf("legacy clips input is unsupported; use scenes[].clip with asset_id, url, duration_ms (got %T)", rawClips)
 }

@@ -235,13 +235,3 @@ func firstString(m map[string]interface{}, keys ...string) string {
 	}
 	return ""
 }
-
-// resolvePublicMasterURL is retained for package-local compatibility. It
-// reads only the typed endpoint snapshot; it never consults the environment
-// or derives one endpoint from another.
-func resolvePublicMasterURL(cfg *config.Config) string {
-	if cfg == nil {
-		return ""
-	}
-	return strings.TrimSpace(string(cfg.ControlPlane.RESTPublic))
-}

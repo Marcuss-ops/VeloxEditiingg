@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"velox-server/internal/app"
 	"velox-server/internal/artifacts"
 	"velox-server/internal/config"
@@ -20,6 +19,8 @@ import (
 	"velox-server/internal/store"
 	"velox-server/internal/supervisor"
 	"velox-server/internal/taskgraph"
+
+	"github.com/gin-gonic/gin"
 )
 
 // ── Test: BlobStore unavailable → bootstrap fails ──────────────────────

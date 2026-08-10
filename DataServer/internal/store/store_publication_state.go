@@ -9,9 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"velox-server/internal/audittrail"
 	"velox-server/internal/publicationstate"
+
+	"github.com/google/uuid"
 )
 
 var (

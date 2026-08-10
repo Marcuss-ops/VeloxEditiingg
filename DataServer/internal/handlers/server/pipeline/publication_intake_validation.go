@@ -10,8 +10,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/gin-gonic/gin"
 	"velox-shared/publication"
+
+	"github.com/gin-gonic/gin"
 )
 
 var publicationLanguagePattern = regexp.MustCompile(`^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-(?:[A-Z]{2}|[0-9]{3}))?(?:-[a-z0-9]+)*$`)
@@ -398,7 +399,7 @@ func validateJSONValue(value reflect.Value, path string, active map[providerVisi
 	}
 
 	switch value.Kind() {
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if value.IsNil() {
 			return nil
 		}
@@ -462,7 +463,7 @@ func providerVisitFor(value reflect.Value) (providerVisit, bool) {
 			return providerVisit{}, false
 		}
 		return providerVisit{kind: value.Kind(), typeOf: value.Type(), ptr: value.Pointer()}, true
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if value.IsNil() {
 			return providerVisit{}, false
 		}

@@ -181,10 +181,6 @@ func runJobMetrics(client *fleetClient, jobID string) int {
 	fmt.Println(string(bs))
 	return ExitOK
 }
-func runJobWatch(client *fleetClient, jobID string) int {
-	return runJobWatchWithInterval(client, jobID, envSeconds("FLEETCTL_JOB_TIMEOUT_SECONDS", 3600), envSeconds("FLEETCTL_JOB_POLL_SECONDS", 5), false)
-}
-
 func runJobWatchWithInterval(client *fleetClient, jobID string, timeout, interval time.Duration, jsonOutput bool) int {
 	seen := map[string]bool{}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)

@@ -8,8 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"velox-shared/compatibility"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestSubmitJobStrictModeRejectsRegisteredAlias(t *testing.T) {

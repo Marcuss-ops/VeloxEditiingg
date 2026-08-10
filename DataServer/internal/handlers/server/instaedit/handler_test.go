@@ -10,9 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"velox-server/internal/instaeditauth"
 	"velox-server/internal/store"
+
+	"github.com/gin-gonic/gin"
 )
 
 const testSecret = "this-is-a-32-byte-secret-for-test!"

@@ -4,8 +4,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	workersreg "velox-server/internal/workers"
+
+	"github.com/gin-gonic/gin"
 )
 
 // errFilterInvalid is a sentinel so the caller can detect a parse

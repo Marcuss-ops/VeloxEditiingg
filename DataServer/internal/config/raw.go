@@ -100,13 +100,6 @@ func (r RawConfig) Source(key string) RuntimeConfigSource {
 	return SourceEnv
 }
 
-func rawOrEnv(raws []RawConfig) RawConfig {
-	if len(raws) > 0 {
-		return raws[0]
-	}
-	return RawConfigFromEnv()
-}
-
 func (r RawConfig) Float(key string, fallback, min float64) float64 {
 	raw, ok := r.Lookup(key)
 	if !ok || strings.TrimSpace(raw) == "" {

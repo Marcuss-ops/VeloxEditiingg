@@ -12,8 +12,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"velox-server/internal/store"
+
+	"github.com/gin-gonic/gin"
 )
 
 // writeIdempotencyKeyError writes the canonical 400 envelope for a

@@ -34,8 +34,9 @@ import (
 	"net/http"
 	"sort"
 
-	"github.com/gin-gonic/gin"
 	workersreg "velox-server/internal/workers"
+
+	"github.com/gin-gonic/gin"
 )
 
 // WorkersHandler holds the dependency on the worker registry.

@@ -48,7 +48,7 @@ func (s *TaskReportIngestionService) maybeTransitionJob(ctx context.Context, job
 	anyFailed := false
 	anyHardFailed := false
 	anyCancelled := false
-	allSucceededAndCommitted := true
+	var allSucceededAndCommitted bool
 	for _, t := range tasks {
 		if !t.Status.IsTerminal() {
 			allTerminal = false
@@ -56,7 +56,6 @@ func (s *TaskReportIngestionService) maybeTransitionJob(ctx context.Context, job
 		}
 		if t.Status == taskgraph.StatusFailed || t.Status == taskgraph.StatusCancelled {
 			anyFailed = true
-			allSucceededAndCommitted = false
 			if t.Status == taskgraph.StatusCancelled {
 				anyCancelled = true
 			}

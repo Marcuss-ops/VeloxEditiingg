@@ -1,23 +1,41 @@
-run:
-  timeout: 5m
+version: "2"
+
 linters:
-  disable-all: true
+  default: none
   enable:
+    - funlen
     - govet
-    - goimports
     - ineffassign
     - unused
-    - funlen
-issues:
-  exclude-rules:
-    - path: .*\.generated\.go
-      linters:
-        - all
-    - linters:
-        - errcheck
-      text: Error return value of .* is not checked
-linters-settings:
-  funlen:
-    lines: 600
-    statements: -1
-    complexity: -1
+  settings:
+    funlen:
+      lines: 600
+      statements: -1
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - path: .*\.generated\.go
+        linters:
+          - all
+      - linters:
+          - errcheck
+        text: Error return value of .* is not checked
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+
+formatters:
+  enable:
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

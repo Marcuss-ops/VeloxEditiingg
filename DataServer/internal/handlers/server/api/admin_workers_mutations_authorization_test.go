@@ -8,8 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"velox-server/internal/fleet"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestResumeWorker_FailingResumeGateReturns503(t *testing.T) {

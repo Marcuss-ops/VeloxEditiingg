@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"velox-server/internal/sqliteerr"
 	"velox-server/internal/statemachine"
+
+	"github.com/google/uuid"
 )
 
 // ── Typed lease methods (PR4e) ───────────────────────────────────────────────

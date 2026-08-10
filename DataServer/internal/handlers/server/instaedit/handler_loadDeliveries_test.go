@@ -8,9 +8,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"velox-server/internal/instaeditauth"
 	"velox-server/internal/store"
+
+	"github.com/gin-gonic/gin"
 )
 
 // failingStore is a storeReader implementation that lets tests force

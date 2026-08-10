@@ -4,11 +4,12 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/gin-gonic/gin"
 	"velox-server/internal/config"
 	driveHandlers "velox-server/internal/handlers/server/drive"
 	integrationsDrive "velox-server/internal/integrations/drive"
 	"velox-server/internal/store"
+
+	"github.com/gin-gonic/gin"
 )
 
 // DriveModule provides Google Drive integration endpoints.

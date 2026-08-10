@@ -7,9 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	workersreg "velox-server/internal/workers"
 	"velox-shared/controltransport"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestHeartbeatAgeSeconds(t *testing.T) {

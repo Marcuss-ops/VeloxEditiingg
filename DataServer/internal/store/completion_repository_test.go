@@ -7,8 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
 	"velox-server/internal/store/migrations"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func openCompletionRepositoryTestDB(t *testing.T) (*SQLiteCompletionStore, *sql.DB) {

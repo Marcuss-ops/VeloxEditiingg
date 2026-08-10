@@ -6,8 +6,9 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/google/uuid"
 	"velox-server/internal/audittrail"
+
+	"github.com/google/uuid"
 )
 
 func (s *SQLiteStore) AppendAuditEvent(ctx context.Context, event audittrail.Event) error {

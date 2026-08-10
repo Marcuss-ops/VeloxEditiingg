@@ -1,9 +1,6 @@
 package store
 
-import (
-	"strings"
-	"time"
-)
+import "time"
 
 // nowStrISO is the canonical UTC now-string for INSERT/UPDATE timestamps.
 // Always UTC, RFC3339, shared across all job repository backends.
@@ -23,10 +20,4 @@ func parseTimeOrZero(s string) time.Time {
 		return time.Time{}
 	}
 	return t
-}
-
-// normalizeStatus uppercases and trims a status string. Used by the
-// job repository adapters for consistent predicate matching.
-func normalizeStatus(s string) string {
-	return strings.ToUpper(strings.TrimSpace(s))
 }

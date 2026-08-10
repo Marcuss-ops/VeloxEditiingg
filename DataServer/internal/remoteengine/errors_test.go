@@ -434,17 +434,17 @@ func TestRetryPolicy_ShouldStop_Malformed_LimitedRetry(t *testing.T) {
 	}
 
 	// Below the limit: keep retrying.
-	got, stop := policy.ShouldStop(err, 0)
+	_, stop := policy.ShouldStop(err, 0)
 	if stop {
 		t.Fatal("malformed attempt 0 should NOT stop")
 	}
-	got, stop = policy.ShouldStop(err, 1)
+	_, stop = policy.ShouldStop(err, 1)
 	if stop {
 		t.Fatal("malformed attempt 1 should NOT stop")
 	}
 
 	// At the limit: promote to PERMANENT and stop.
-	got, stop = policy.ShouldStop(err, 2)
+	got, stop := policy.ShouldStop(err, 2)
 	if !stop {
 		t.Fatal("malformed attempt 2 should STOP")
 	}

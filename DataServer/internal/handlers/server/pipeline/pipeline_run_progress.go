@@ -10,9 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"velox-server/internal/pipelineruns"
 	"velox-server/internal/store"
+
+	"github.com/gin-gonic/gin"
 )
 
 // PipelineRunTimeline handles GET /api/v1/pipeline-runs/:id/timeline.

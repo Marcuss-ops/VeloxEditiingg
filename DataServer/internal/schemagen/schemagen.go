@@ -54,7 +54,7 @@ import (
 // manually-edited openapi.yaml structure).
 func Schema(v any, registry ...string) (map[string]any, error) {
 	rv := reflect.ValueOf(v)
-	if rv.Kind() == reflect.Ptr {
+	if rv.Kind() == reflect.Pointer {
 		rv = rv.Elem()
 	}
 	if rv.Kind() != reflect.Struct {
@@ -115,7 +115,7 @@ func fieldSchema(t reflect.Type, validate string, reg map[string]bool) (map[stri
 	// Strip pointer indirection — *T emits the schema of T. The
 	// validate tag's "omitempty" is handled separately (required
 	// stays false even when validate:"required, omitempty, ...").
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 

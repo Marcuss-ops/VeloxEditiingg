@@ -32,12 +32,7 @@
 // -----------------------------------------------------------------------------
 package pipeline
 
-import (
-	"errors"
-	"fmt"
-
-	"github.com/gin-gonic/gin"
-)
+import "fmt"
 
 // writeHTTPError writes a JSON error response in the canonical
 // {"ok": false, "error": ...} envelope.
@@ -62,25 +57,7 @@ import (
 //	writeHTTPError(c, http.StatusBadGateway, err)
 //	writeHTTPError(c, http.StatusServiceUnavailable, errors.New("remote engine not configured"))
 //	writeHTTPError(c, http.StatusBadRequest, valErr) // *ValidationError → structured envelope
-func writeHTTPError(c *gin.Context, statusCode int, err error) {
-	body := gin.H{
-		"ok":    false,
-		"error": err.Error(),
-	}
-
-	// Auto-detect *ValidationError: enrich envelope with code + field.
-	// Transport errors (502/503/etc.) skip this branch and produce the
-	// canonical {ok, error} envelope without empty validation keys.
-	var valErr *ValidationError
-	if errors.As(err, &valErr) {
-		body["error"] = valErr.Message
-		body["code"] = valErr.Code
-		body["field"] = valErr.Field
-	}
-
-	c.JSON(statusCode, body)
-}
-
+//
 // ValidationError is the typed validation failure returned by
 // ValidateCreateRequest. It carries a field name, machine-readable
 // code, and human-readable message so the handler can surface a

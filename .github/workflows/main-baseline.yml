@@ -119,13 +119,11 @@ jobs:
         run: make test
 
       - name: golangci-lint run
-        # Reads the canonical .golangci.yml at repo root. The config
-        # whitelists funlen=600 and disables errcheck on the canonical
-        # `Error return value of .* is not checked` substring.
+        # Reads the canonical .golangci.yml at repo root while linting the
+        # DataServer module. The repository is a multi-module workspace, so
+        # each module gets an explicit linter invocation.
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
           args: --timeout=5m
-          # Cache by go.work so the binary is reused across runs of
-          # the same toolchain.
-          cache: true
+          working-directory: DataServer

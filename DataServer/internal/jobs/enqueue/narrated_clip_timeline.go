@@ -335,15 +335,3 @@ func resolveSceneFinalClipDurationWithProbe(scene map[string]interface{}, clipUR
 	}
 	return 0, fmt.Errorf("%w: clip duration unavailable; duration_ms is required or asset must be probeable", ErrCanonicalAssetDurationUnavailable)
 }
-
-func sceneVoiceoverURL(scene map[string]interface{}) string {
-	return assetURL(canonicalAsset(sceneAsset(scene, "voiceover")))
-}
-
-func firstClipURL(scene map[string]interface{}) string {
-	return assetURL(canonicalAsset(sceneAsset(scene, "clip")))
-}
-
-func sceneFinalClipURL(scene map[string]interface{}) string {
-	return firstClipURL(scene)
-}
