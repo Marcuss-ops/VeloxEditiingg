@@ -181,17 +181,50 @@ func TestEventRecorder_FlushClears(t *testing.T) {
 	}
 }
 
-// TestCanonicalEnumsAndRegistry verifies the closed enum predicates and
-// the phase-spec registry (register → lookup → overwrite).
-func TestWorkerRegistryMatchesSharedCatalog(t *testing.T) {
-	for key, workerSpec := range RegisteredPhaseSpecs() {
-		sharedSpec, ok := sharedtelemetry.Catalog.Lookup(workerSpec.Component, workerSpec.Action)
+// TestWorkerRegistryIsDerivedFromSharedCatalog verifies the single-source
+// rule: the worker phase registry is EXACTLY a projection of the shared
+// catalog — every shared entry is visible through the worker lookup, every
+// PhaseSpec matches its shared source on all five attributes, and no worker
+// entry exists outside the shared catalog. This is the guard that prevents
+// the dual-registry drift (adding an event to only one side).
+func TestWorkerRegistryIsDerivedFromSharedCatalog(t *testing.T) {
+	shared := sharedtelemetry.Catalog.Entries()
+	if len(shared) == 0 {
+		t.Fatal("shared catalog is empty")
+	}
+
+	worker := RegisteredPhaseSpecs()
+	if len(worker) != len(shared) {
+		t.Fatalf("worker registry size %d != shared catalog size %d (parallel registry detected)", len(worker), len(shared))
+	}
+
+	for key, sharedSpec := range shared {
+		ws, ok := worker[key]
 		if !ok {
-			t.Fatalf("worker event %s is missing from shared catalog", key)
+		t.Fatalf("shared event %s missing from worker projection", key)
+	}
+		if ws.Origin != sharedSpec.Origin || ws.Scope != sharedSpec.Scope ||
+			ws.Component != sharedSpec.Component || ws.Action != sharedSpec.Action ||
+			ws.Phase != sharedSpec.Phase || ws.EventType != sharedSpec.EventType {
+			t.Fatalf("worker projection of %s differs from shared: worker=%+v shared=%+v", key, ws, sharedSpec)
 		}
-		if sharedSpec.Origin != workerSpec.Origin || sharedSpec.Scope != workerSpec.Scope {
-			t.Fatalf("worker event %s differs from shared catalog: worker=%s/%s shared=%s/%s", key, workerSpec.Origin, workerSpec.Scope, sharedSpec.Origin, sharedSpec.Scope)
+
+		looked, ok := LookupPhaseSpec(sharedSpec.Component, sharedSpec.Action)
+		if !ok || looked.Key() != key {
+			t.Fatalf("LookupPhaseSpec(%s) = %+v, want key %s", key, looked, key)
 		}
+	}
+
+	// No worker entry outside the shared catalog.
+	for key := range worker {
+		if _, ok := shared[key]; !ok {
+			t.Fatalf("worker event %s has no shared catalog entry (parallel registry detected)", key)
+		}
+	}
+
+	// Count must match the single source.
+	if CanonicalPhaseSpecCount() != len(shared) {
+		t.Fatalf("CanonicalPhaseSpecCount=%d != shared count %d", CanonicalPhaseSpecCount(), len(shared))
 	}
 }
 

@@ -1,25 +1,56 @@
 // Package telemetry contains the immutable wire contract shared by workers
 // and the master. Producers and consumers must validate event taxonomy through
 // this catalog instead of maintaining local origin/scope lists.
+//
+// Single-source rule: the canonical taxonomy is EXACTLY ONE literal list —
+// canonicalEventDescriptors. Every consumer (master validation, worker phase
+// registry, SQL CHECK projections) derives from this catalog; adding an event
+// means editing this one list, never a parallel registry.
 package telemetry
 
 import (
 	"fmt"
-	"strings"
 )
 
 // SchemaVersion is the version of the event taxonomy carried by TaskResult.
 const SchemaVersion int32 = 1
 
-// TelemetryEventSpec is the immutable catalog entry for one component/action
-// pair. Origin and Scope are deliberately strings on the wire, but their
-// values are closed by this catalog.
+// EventDescriptor is the single canonical taxonomy entry. Key() is
+// "component.action"; the remaining fields are the authoritative wire
+// attributes every consumer derives:
+//
+//	Origin    — closed producer vocabulary (master | worker | engine | ...)
+//	Scope     — closed resource vocabulary (job | task | attempt | ...)
+//	Phase     — canonical worker-side lifecycle phase (queue | render | ...)
+//	           or "" when the event has no phase projection.
+//	EventType — default event_type stamped by the worker when the producer
+//	           omits it ("" = leave producer default).
+type EventDescriptor struct {
+	Component string
+	Action    string
+	Origin    string
+	Scope     string
+	Phase     string
+	EventType string
+}
+
+func (d EventDescriptor) Key() string { return d.Component + "." + d.Action }
+
+// TelemetryEventSpec is the catalog entry as exposed to validation callers.
+// It is the EventDescriptor plus the immutable schema version. Kept as a
+// distinct name for the wire-facing API; the fields are populated from the
+// single canonicalEventDescriptors list.
 type TelemetryEventSpec struct {
 	Origin        string
 	Scope         string
 	Component     string
 	Action        string
 	SchemaVersion int32
+	// Phase and EventType are derived attributes of the canonical event.
+	// They are carried on the spec so master-side validation and the
+	// worker phase registry share one source.
+	Phase     string
+	EventType string
 }
 
 func (s TelemetryEventSpec) Key() string { return s.Component + "." + s.Action }
@@ -35,22 +66,21 @@ type TelemetryEventCatalog struct {
 var Catalog = newTelemetryEventCatalog()
 
 func newTelemetryEventCatalog() *TelemetryEventCatalog {
-	entries := make(map[string]TelemetryEventSpec, len(canonicalEventKeys))
-	for _, key := range canonicalEventKeys {
-		component, action, ok := strings.Cut(key, ".")
-		if !ok {
-			panic("telemetry: invalid catalog key " + key)
+	entries := make(map[string]TelemetryEventSpec, len(canonicalEventDescriptors))
+	for _, d := range canonicalEventDescriptors {
+		if d.Component == "" || d.Action == "" {
+			panic("telemetry: empty component/action in canonical descriptor")
 		}
-		// Components may contain dots. Split at the final separator.
-		last := strings.LastIndexByte(key, '.')
-		component, action = key[:last], key[last+1:]
-		origin, scope := canonicalOriginScope(component, action)
-		if origin == "" || scope == "" {
-			panic("telemetry: missing origin/scope for " + key)
+		if d.Origin == "" || d.Scope == "" {
+			panic("telemetry: missing origin/scope for " + d.Key())
 		}
-		entries[key] = TelemetryEventSpec{
-			Origin: origin, Scope: scope, Component: component,
-			Action: action, SchemaVersion: SchemaVersion,
+		if _, exists := entries[d.Key()]; exists {
+			panic("telemetry: duplicate canonical descriptor " + d.Key())
+		}
+		entries[d.Key()] = TelemetryEventSpec{
+			Origin: d.Origin, Scope: d.Scope, Component: d.Component,
+			Action: d.Action, SchemaVersion: SchemaVersion,
+			Phase: d.Phase, EventType: d.EventType,
 		}
 	}
 	return &TelemetryEventCatalog{entries: entries}
@@ -134,109 +164,159 @@ const (
 	ScopeArtifact      = "artifact"
 )
 
-var canonicalEventKeys = []string{
-	"attempt.failure", "attempt.retry",
-	"control.grpc.offer_rtt", "control.grpc.reconnect", "control.grpc.result_ack_wait", "control.grpc.result_send", "control.grpc.send_queue_wait", "control.heartbeat_rtt", "control.lease_renewal_rtt",
-	"db.artifact_commit_tx", "db.claim_tx", "db.enqueue_tx", "db.lock_wait", "db.query", "db.result_ingest_tx", "db.wal_checkpoint",
-	"engine.audio.channel_convert", "engine.audio.ducking", "engine.audio.encode", "engine.audio.limit", "engine.audio.loudness_scan", "engine.audio.mix", "engine.audio.music_decode", "engine.audio.resample", "engine.audio.sfx_decode", "engine.audio.timeline_align", "engine.audio.voiceover_decode",
-	"engine.color_convert_in", "engine.color_convert_out", "engine.composite", "engine.crop", "engine.encode.flush", "engine.encode.frame_submit", "engine.encode.setup", "engine.input.demux_probe", "engine.input.duration_probe", "engine.input.keyframe_scan", "engine.input.open", "engine.input.seek", "engine.input.stream_discovery", "engine.mask", "engine.mux.header", "engine.mux.packet_write", "engine.mux.trailer", "engine.opacity", "engine.output.fsync", "engine.render", "engine.scale", "engine.simulate", "engine.transform", "engine.video.decode", "engine.video.frame_reorder", "engine.video.hw_download", "engine.video.timestamp_normalize",
-	"ffmpeg.progress",
-	"master.commit_ack.send", "master.commit.transaction", "master.enqueue.transaction", "master.http.auth", "master.http.decode", "master.intake.validate", "master.lease.issue", "master.manifest.fetch", "master.manifest.hash_verify", "master.manifest.parse", "master.offer.accept_to_start", "master.offer.offer_to_accept", "master.offer.send", "master.payload.normalize", "master.placement.candidate_scan", "master.placement.match", "master.placement.rejection", "master.placement.snapshot_load", "master.plan.compile", "master.queue.ready_wait", "master.upload_plan.create", "master.upload.verify",
-	"audio.summary", "io.summary", "quality.summary", "quality.audio_sync", "quality.black_frame_scan", "quality.duration_check", "quality.ffprobe", "quality.sha256", "quality.silence_scan", "quality.stream_check", "quality.subtitle_timeline", "retry.summary", "subtitle.summary", "waste.summary",
-	"runner.cache_lookup", "runner.execute", "runner.prefetch", "runner.report", "runner.run", "runner.upload",
-	"subtitle.ass_compile", "subtitle.audio_extract", "subtitle.burn_in", "subtitle.font_fallback", "subtitle.font_load", "subtitle.glyph_raster", "subtitle.layout", "subtitle.parse", "subtitle.segment", "subtitle.transcribe", "subtitle.word_alignment",
-	"worker.asset.connect", "worker.asset.disk_write", "worker.asset.dns", "worker.asset.final_hash", "worker.asset.fsync", "worker.asset.progress_checkpoint", "worker.asset.resolve", "worker.asset.transfer", "worker.asset.ttfb",
-	"worker.cache.eviction", "worker.cache.hash_verify", "worker.cache.hit_read", "worker.cache.lookup", "worker.cache.metadata_read", "worker.cache.miss",
-	"worker.commit_ack_wait", "worker.disk.wait", "worker.engine.binary_resolve", "worker.engine.first_progress", "worker.engine.output_stat", "worker.engine.sidecar_read", "worker.engine.spawn", "worker.engine.tempdir_create", "worker.engine.wait", "worker.output.cleanup", "worker.output.declare", "worker.output.hash", "worker.parallel.queue_wait", "worker.parallel.segment_finish", "worker.parallel.segment_start", "worker.plan.compile", "worker.plan.deserialize", "worker.plan.resolve_assets", "worker.plan.serialize", "worker.plan.validate", "worker.plan.write", "worker.temp.create", "worker.temp.delete", "worker.temp.read", "worker.temp.write", "worker.upload.connect", "worker.upload.transfer",
-}
-
-func canonicalOriginScope(component, action string) (string, string) {
-	key := component + "." + action
-	switch key {
-	case "attempt.failure", "attempt.retry":
-		return OriginWorker, ScopeAttempt
-	case "audio.summary", "io.summary", "quality.summary", "retry.summary", "subtitle.summary", "waste.summary":
-		return OriginValidation, ScopeAttempt
-	case "control.grpc.reconnect", "control.heartbeat_rtt", "control.lease_renewal_rtt", "master.commit.transaction", "master.commit_ack.send", "engine.render":
-		if key == "engine.render" {
-			return OriginEngine, ScopeAttempt
-		}
-		return OriginMaster, ScopeAttempt
-	case "master.http.auth", "master.http.decode":
-		return OriginMaster, ScopeJob
-	case "master.enqueue.transaction":
-		return OriginMaster, ScopeTask
-	case "master.upload.verify", "master.upload_plan.create", "worker.output.declare", "worker.output.hash", "worker.upload.connect", "worker.upload.transfer":
-		return OriginUpload, ScopeArtifact
-	case "quality.subtitle_timeline", "subtitle.ass_compile", "subtitle.audio_extract", "subtitle.segment", "subtitle.transcribe", "subtitle.word_alignment":
-		return OriginValidation, ScopeSubtitleTrack
-	case "subtitle.burn_in", "subtitle.font_fallback", "subtitle.font_load", "subtitle.glyph_raster", "subtitle.layout", "subtitle.parse":
-		return OriginEngine, ScopeSubtitleTrack
-	case "worker.commit_ack_wait":
-		return OriginUpload, ScopeAttempt
-	}
-
-	switch {
-	case strings.HasPrefix(component, "control.grpc"):
-		return OriginMaster, ScopeTask
-	case strings.HasPrefix(component, "db"):
-		if action == "artifact_commit_tx" {
-			return OriginMaster, ScopeArtifact
-		}
-		return OriginMaster, ScopeAttempt
-	case strings.HasPrefix(component, "engine.audio"):
-		return OriginEngine, ScopeAudioTrack
-	case strings.HasPrefix(component, "engine.mux"), strings.HasPrefix(component, "engine.output"):
-		return OriginEngine, ScopeArtifact
-	case strings.HasPrefix(component, "engine"):
-		return OriginEngine, ScopeSegment
-	case component == "ffmpeg":
-		return OriginFFmpeg, ScopeSegment
-	case strings.HasPrefix(component, "master"):
-		return OriginMaster, ScopeTask
-	case strings.HasPrefix(component, "quality"):
-		if action == "sha256" || action == "ffprobe" {
-			// Emitted at render-validation time, BEFORE the master assigns
-			// an artifact_id to the output. Artifact scope would require an
-			// artifact_id that is unavailable here (same reasoning as the
-			// worker.cache comment above), so these two events are
-			// attempt-scoped; the other quality.* checks run once the
-			// artifact identity exists and stay artifact-scoped.
-			return OriginValidation, ScopeAttempt
-		}
-		return OriginValidation, ScopeArtifact
-	case strings.HasPrefix(component, "runner"):
-		return OriginWorker, ScopeAttempt
-	case strings.HasPrefix(component, "worker.asset"):
-		if action == "disk_write" || action == "fsync" || action == "final_hash" {
-			return OriginWorker, ScopeArtifact
-		}
-		return OriginWorker, ScopeTask
-	case strings.HasPrefix(component, "worker.cache"):
-		// Cache access describes task-scoped resolver work. It does not
-		// identify a committed output artifact, so artifact scope would
-		// require an artifact_id that is unavailable during asset lookup.
-		return OriginWorker, ScopeTask
-	case strings.HasPrefix(component, "worker.engine"):
-		if action == "sidecar_read" || action == "output_stat" {
-			return OriginWorker, ScopeArtifact
-		}
-		return OriginWorker, ScopeAttempt
-	case strings.HasPrefix(component, "worker.output"):
-		return OriginWorker, ScopeArtifact
-	case strings.HasPrefix(component, "worker.parallel"):
-		return OriginWorker, ScopeSegment
-	case strings.HasPrefix(component, "worker.plan"):
-		if action == "write" {
-			return OriginWorker, ScopeArtifact
-		}
-		return OriginWorker, ScopeTask
-	case strings.HasPrefix(component, "worker.temp"), component == "worker.disk":
-		return OriginWorker, ScopeAttempt
-	case strings.HasPrefix(component, "worker.upload"):
-		return OriginUpload, ScopeArtifact
-	case strings.HasPrefix(component, "subtitle"):
-		return OriginEngine, ScopeSubtitleTrack
-	}
-	return "", ""
+// canonicalEventDescriptors is the SINGLE canonical taxonomy. Each entry is
+// complete (origin/scope/phase/eventtype resolved at declaration time) so no
+// consumer needs a second registry or a derivation switch. Entries are
+// sorted by Key() for reviewability.
+var canonicalEventDescriptors = []EventDescriptor{
+	{Component: "attempt", Action: "failure", Origin: OriginWorker, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
+	{Component: "attempt", Action: "retry", Origin: OriginWorker, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
+	{Component: "audio", Action: "summary", Origin: OriginValidation, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
+	{Component: "control.grpc", Action: "offer_rtt", Origin: OriginMaster, Scope: ScopeTask, Phase: "queue", EventType: ""},
+	{Component: "control.grpc", Action: "reconnect", Origin: OriginMaster, Scope: ScopeAttempt, Phase: "queue", EventType: ""},
+	{Component: "control.grpc", Action: "result_ack_wait", Origin: OriginMaster, Scope: ScopeTask, Phase: "finalize", EventType: ""},
+	{Component: "control.grpc", Action: "result_send", Origin: OriginMaster, Scope: ScopeTask, Phase: "upload", EventType: ""},
+	{Component: "control.grpc", Action: "send_queue_wait", Origin: OriginMaster, Scope: ScopeTask, Phase: "queue", EventType: ""},
+	{Component: "control", Action: "heartbeat_rtt", Origin: OriginMaster, Scope: ScopeAttempt, Phase: "queue", EventType: ""},
+	{Component: "control", Action: "lease_renewal_rtt", Origin: OriginMaster, Scope: ScopeAttempt, Phase: "queue", EventType: ""},
+	{Component: "db", Action: "artifact_commit_tx", Origin: OriginMaster, Scope: ScopeArtifact, Phase: "finalize", EventType: ""},
+	{Component: "db", Action: "claim_tx", Origin: OriginMaster, Scope: ScopeAttempt, Phase: "queue", EventType: ""},
+	{Component: "db", Action: "enqueue_tx", Origin: OriginMaster, Scope: ScopeAttempt, Phase: "queue", EventType: ""},
+	{Component: "db", Action: "lock_wait", Origin: OriginMaster, Scope: ScopeAttempt, Phase: "queue", EventType: ""},
+	{Component: "db", Action: "query", Origin: OriginMaster, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
+	{Component: "db", Action: "result_ingest_tx", Origin: OriginMaster, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
+	{Component: "db", Action: "wal_checkpoint", Origin: OriginMaster, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
+	{Component: "engine.audio", Action: "channel_convert", Origin: OriginEngine, Scope: ScopeAudioTrack, Phase: "composite", EventType: ""},
+	{Component: "engine.audio", Action: "ducking", Origin: OriginEngine, Scope: ScopeAudioTrack, Phase: "composite", EventType: ""},
+	{Component: "engine.audio", Action: "encode", Origin: OriginEngine, Scope: ScopeAudioTrack, Phase: "encode", EventType: ""},
+	{Component: "engine.audio", Action: "limit", Origin: OriginEngine, Scope: ScopeAudioTrack, Phase: "composite", EventType: ""},
+	{Component: "engine.audio", Action: "loudness_scan", Origin: OriginEngine, Scope: ScopeAudioTrack, Phase: "composite", EventType: ""},
+	{Component: "engine.audio", Action: "mix", Origin: OriginEngine, Scope: ScopeAudioTrack, Phase: "composite", EventType: ""},
+	{Component: "engine.audio", Action: "music_decode", Origin: OriginEngine, Scope: ScopeAudioTrack, Phase: "decode", EventType: ""},
+	{Component: "engine.audio", Action: "resample", Origin: OriginEngine, Scope: ScopeAudioTrack, Phase: "composite", EventType: ""},
+	{Component: "engine.audio", Action: "sfx_decode", Origin: OriginEngine, Scope: ScopeAudioTrack, Phase: "decode", EventType: ""},
+	{Component: "engine.audio", Action: "timeline_align", Origin: OriginEngine, Scope: ScopeAudioTrack, Phase: "composite", EventType: ""},
+	{Component: "engine.audio", Action: "voiceover_decode", Origin: OriginEngine, Scope: ScopeAudioTrack, Phase: "decode", EventType: ""},
+	{Component: "engine", Action: "color_convert_in", Origin: OriginEngine, Scope: ScopeSegment, Phase: "composite", EventType: ""},
+	{Component: "engine", Action: "color_convert_out", Origin: OriginEngine, Scope: ScopeSegment, Phase: "composite", EventType: ""},
+	{Component: "engine", Action: "composite", Origin: OriginEngine, Scope: ScopeSegment, Phase: "composite", EventType: ""},
+	{Component: "engine", Action: "crop", Origin: OriginEngine, Scope: ScopeSegment, Phase: "composite", EventType: ""},
+	{Component: "engine.encode", Action: "flush", Origin: OriginEngine, Scope: ScopeSegment, Phase: "encode", EventType: ""},
+	{Component: "engine.encode", Action: "frame_submit", Origin: OriginEngine, Scope: ScopeSegment, Phase: "encode", EventType: ""},
+	{Component: "engine.encode", Action: "setup", Origin: OriginEngine, Scope: ScopeSegment, Phase: "encode", EventType: ""},
+	{Component: "engine.input", Action: "demux_probe", Origin: OriginEngine, Scope: ScopeSegment, Phase: "decode", EventType: ""},
+	{Component: "engine.input", Action: "duration_probe", Origin: OriginEngine, Scope: ScopeSegment, Phase: "decode", EventType: ""},
+	{Component: "engine.input", Action: "keyframe_scan", Origin: OriginEngine, Scope: ScopeSegment, Phase: "decode", EventType: ""},
+	{Component: "engine.input", Action: "open", Origin: OriginEngine, Scope: ScopeSegment, Phase: "decode", EventType: ""},
+	{Component: "engine.input", Action: "seek", Origin: OriginEngine, Scope: ScopeSegment, Phase: "decode", EventType: ""},
+	{Component: "engine.input", Action: "stream_discovery", Origin: OriginEngine, Scope: ScopeSegment, Phase: "decode", EventType: ""},
+	{Component: "engine", Action: "mask", Origin: OriginEngine, Scope: ScopeSegment, Phase: "composite", EventType: ""},
+	{Component: "engine.mux", Action: "header", Origin: OriginEngine, Scope: ScopeArtifact, Phase: "encode", EventType: ""},
+	{Component: "engine.mux", Action: "packet_write", Origin: OriginEngine, Scope: ScopeArtifact, Phase: "encode", EventType: ""},
+	{Component: "engine.mux", Action: "trailer", Origin: OriginEngine, Scope: ScopeArtifact, Phase: "encode", EventType: ""},
+	{Component: "engine", Action: "opacity", Origin: OriginEngine, Scope: ScopeSegment, Phase: "composite", EventType: ""},
+	{Component: "engine.output", Action: "fsync", Origin: OriginEngine, Scope: ScopeArtifact, Phase: "finalize", EventType: ""},
+	{Component: "engine", Action: "render", Origin: OriginEngine, Scope: ScopeAttempt, Phase: "render", EventType: ""},
+	{Component: "engine", Action: "scale", Origin: OriginEngine, Scope: ScopeSegment, Phase: "composite", EventType: ""},
+	{Component: "engine", Action: "simulate", Origin: OriginEngine, Scope: ScopeSegment, Phase: "simulate", EventType: ""},
+	{Component: "engine", Action: "transform", Origin: OriginEngine, Scope: ScopeSegment, Phase: "composite", EventType: ""},
+	{Component: "engine.video", Action: "decode", Origin: OriginEngine, Scope: ScopeSegment, Phase: "decode", EventType: ""},
+	{Component: "engine.video", Action: "frame_reorder", Origin: OriginEngine, Scope: ScopeSegment, Phase: "decode", EventType: ""},
+	{Component: "engine.video", Action: "hw_download", Origin: OriginEngine, Scope: ScopeSegment, Phase: "decode", EventType: ""},
+	{Component: "engine.video", Action: "timestamp_normalize", Origin: OriginEngine, Scope: ScopeSegment, Phase: "decode", EventType: ""},
+	{Component: "ffmpeg", Action: "progress", Origin: OriginFFmpeg, Scope: ScopeSegment, Phase: "encode", EventType: ""},
+	{Component: "io", Action: "summary", Origin: OriginValidation, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
+	{Component: "master.commit", Action: "transaction", Origin: OriginMaster, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
+	{Component: "master.commit_ack", Action: "send", Origin: OriginMaster, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
+	{Component: "master.enqueue", Action: "transaction", Origin: OriginMaster, Scope: ScopeTask, Phase: "queue", EventType: ""},
+	{Component: "master.http", Action: "auth", Origin: OriginMaster, Scope: ScopeJob, Phase: "queue", EventType: ""},
+	{Component: "master.http", Action: "decode", Origin: OriginMaster, Scope: ScopeJob, Phase: "queue", EventType: ""},
+	{Component: "master.intake", Action: "validate", Origin: OriginMaster, Scope: ScopeTask, Phase: "queue", EventType: ""},
+	{Component: "master.lease", Action: "issue", Origin: OriginMaster, Scope: ScopeTask, Phase: "queue", EventType: ""},
+	{Component: "master.manifest", Action: "fetch", Origin: OriginMaster, Scope: ScopeTask, Phase: "queue", EventType: ""},
+	{Component: "master.manifest", Action: "hash_verify", Origin: OriginMaster, Scope: ScopeTask, Phase: "queue", EventType: ""},
+	{Component: "master.manifest", Action: "parse", Origin: OriginMaster, Scope: ScopeTask, Phase: "queue", EventType: ""},
+	{Component: "master.offer", Action: "accept_to_start", Origin: OriginMaster, Scope: ScopeTask, Phase: "queue", EventType: ""},
+	{Component: "master.offer", Action: "offer_to_accept", Origin: OriginMaster, Scope: ScopeTask, Phase: "queue", EventType: ""},
+	{Component: "master.offer", Action: "send", Origin: OriginMaster, Scope: ScopeTask, Phase: "queue", EventType: ""},
+	{Component: "master.payload", Action: "normalize", Origin: OriginMaster, Scope: ScopeTask, Phase: "compile", EventType: ""},
+	{Component: "master.placement", Action: "candidate_scan", Origin: OriginMaster, Scope: ScopeTask, Phase: "queue", EventType: ""},
+	{Component: "master.placement", Action: "match", Origin: OriginMaster, Scope: ScopeTask, Phase: "queue", EventType: ""},
+	{Component: "master.placement", Action: "rejection", Origin: OriginMaster, Scope: ScopeTask, Phase: "queue", EventType: ""},
+	{Component: "master.placement", Action: "snapshot_load", Origin: OriginMaster, Scope: ScopeTask, Phase: "queue", EventType: ""},
+	{Component: "master.plan", Action: "compile", Origin: OriginMaster, Scope: ScopeTask, Phase: "compile", EventType: ""},
+	{Component: "master.queue", Action: "ready_wait", Origin: OriginMaster, Scope: ScopeTask, Phase: "queue", EventType: ""},
+	{Component: "master.upload", Action: "verify", Origin: OriginUpload, Scope: ScopeArtifact, Phase: "finalize", EventType: ""},
+	{Component: "master.upload_plan", Action: "create", Origin: OriginUpload, Scope: ScopeArtifact, Phase: "upload", EventType: ""},
+	{Component: "quality", Action: "audio_sync", Origin: OriginValidation, Scope: ScopeArtifact, Phase: "finalize", EventType: ""},
+	{Component: "quality", Action: "black_frame_scan", Origin: OriginValidation, Scope: ScopeArtifact, Phase: "finalize", EventType: ""},
+	{Component: "quality", Action: "duration_check", Origin: OriginValidation, Scope: ScopeArtifact, Phase: "finalize", EventType: ""},
+	{Component: "quality", Action: "ffprobe", Origin: OriginValidation, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
+	{Component: "quality", Action: "sha256", Origin: OriginValidation, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
+	{Component: "quality", Action: "silence_scan", Origin: OriginValidation, Scope: ScopeArtifact, Phase: "finalize", EventType: ""},
+	{Component: "quality", Action: "stream_check", Origin: OriginValidation, Scope: ScopeArtifact, Phase: "finalize", EventType: ""},
+	{Component: "quality", Action: "subtitle_timeline", Origin: OriginValidation, Scope: ScopeSubtitleTrack, Phase: "finalize", EventType: ""},
+	{Component: "quality", Action: "summary", Origin: OriginValidation, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
+	{Component: "retry", Action: "summary", Origin: OriginValidation, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
+	{Component: "runner", Action: "cache_lookup", Origin: OriginWorker, Scope: ScopeAttempt, Phase: "cache_lookup", EventType: ""},
+	{Component: "runner", Action: "execute", Origin: OriginWorker, Scope: ScopeAttempt, Phase: "render", EventType: ""},
+	{Component: "runner", Action: "prefetch", Origin: OriginWorker, Scope: ScopeAttempt, Phase: "asset_wait", EventType: ""},
+	{Component: "runner", Action: "report", Origin: OriginWorker, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
+	{Component: "runner", Action: "run", Origin: OriginWorker, Scope: ScopeAttempt, Phase: "finalize", EventType: "failed"},
+	{Component: "runner", Action: "upload", Origin: OriginWorker, Scope: ScopeAttempt, Phase: "upload", EventType: ""},
+	{Component: "subtitle", Action: "ass_compile", Origin: OriginValidation, Scope: ScopeSubtitleTrack, Phase: "compile", EventType: ""},
+	{Component: "subtitle", Action: "audio_extract", Origin: OriginValidation, Scope: ScopeSubtitleTrack, Phase: "compile", EventType: ""},
+	{Component: "subtitle", Action: "burn_in", Origin: OriginEngine, Scope: ScopeSubtitleTrack, Phase: "composite", EventType: ""},
+	{Component: "subtitle", Action: "font_fallback", Origin: OriginEngine, Scope: ScopeSubtitleTrack, Phase: "composite", EventType: ""},
+	{Component: "subtitle", Action: "font_load", Origin: OriginEngine, Scope: ScopeSubtitleTrack, Phase: "composite", EventType: ""},
+	{Component: "subtitle", Action: "glyph_raster", Origin: OriginEngine, Scope: ScopeSubtitleTrack, Phase: "composite", EventType: ""},
+	{Component: "subtitle", Action: "layout", Origin: OriginEngine, Scope: ScopeSubtitleTrack, Phase: "composite", EventType: ""},
+	{Component: "subtitle", Action: "parse", Origin: OriginEngine, Scope: ScopeSubtitleTrack, Phase: "composite", EventType: ""},
+	{Component: "subtitle", Action: "segment", Origin: OriginValidation, Scope: ScopeSubtitleTrack, Phase: "compile", EventType: ""},
+	{Component: "subtitle", Action: "summary", Origin: OriginValidation, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
+	{Component: "subtitle", Action: "transcribe", Origin: OriginValidation, Scope: ScopeSubtitleTrack, Phase: "compile", EventType: ""},
+	{Component: "subtitle", Action: "word_alignment", Origin: OriginValidation, Scope: ScopeSubtitleTrack, Phase: "compile", EventType: ""},
+	{Component: "waste", Action: "summary", Origin: OriginValidation, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
+	{Component: "worker.asset", Action: "connect", Origin: OriginWorker, Scope: ScopeTask, Phase: "download", EventType: ""},
+	{Component: "worker.asset", Action: "disk_write", Origin: OriginWorker, Scope: ScopeArtifact, Phase: "download", EventType: ""},
+	{Component: "worker.asset", Action: "dns", Origin: OriginWorker, Scope: ScopeTask, Phase: "download", EventType: ""},
+	{Component: "worker.asset", Action: "final_hash", Origin: OriginWorker, Scope: ScopeArtifact, Phase: "download", EventType: ""},
+	{Component: "worker.asset", Action: "fsync", Origin: OriginWorker, Scope: ScopeArtifact, Phase: "download", EventType: ""},
+	{Component: "worker.asset", Action: "progress_checkpoint", Origin: OriginWorker, Scope: ScopeTask, Phase: "download", EventType: ""},
+	{Component: "worker.asset", Action: "resolve", Origin: OriginWorker, Scope: ScopeTask, Phase: "asset_wait", EventType: ""},
+	{Component: "worker.asset", Action: "transfer", Origin: OriginWorker, Scope: ScopeTask, Phase: "download", EventType: ""},
+	{Component: "worker.asset", Action: "ttfb", Origin: OriginWorker, Scope: ScopeTask, Phase: "download", EventType: ""},
+	{Component: "worker.cache", Action: "eviction", Origin: OriginWorker, Scope: ScopeTask, Phase: "cache_lookup", EventType: ""},
+	{Component: "worker.cache", Action: "hash_verify", Origin: OriginWorker, Scope: ScopeTask, Phase: "cache_lookup", EventType: ""},
+	{Component: "worker.cache", Action: "hit_read", Origin: OriginWorker, Scope: ScopeTask, Phase: "cache_lookup", EventType: ""},
+	{Component: "worker.cache", Action: "lookup", Origin: OriginWorker, Scope: ScopeTask, Phase: "cache_lookup", EventType: ""},
+	{Component: "worker.cache", Action: "metadata_read", Origin: OriginWorker, Scope: ScopeTask, Phase: "cache_lookup", EventType: ""},
+	{Component: "worker.cache", Action: "miss", Origin: OriginWorker, Scope: ScopeTask, Phase: "cache_lookup", EventType: ""},
+	{Component: "worker", Action: "commit_ack_wait", Origin: OriginUpload, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
+	{Component: "worker.disk", Action: "wait", Origin: OriginWorker, Scope: ScopeAttempt, Phase: "render", EventType: ""},
+	{Component: "worker.engine", Action: "binary_resolve", Origin: OriginWorker, Scope: ScopeAttempt, Phase: "render", EventType: ""},
+	{Component: "worker.engine", Action: "first_progress", Origin: OriginWorker, Scope: ScopeAttempt, Phase: "render", EventType: ""},
+	{Component: "worker.engine", Action: "output_stat", Origin: OriginWorker, Scope: ScopeArtifact, Phase: "finalize", EventType: ""},
+	{Component: "worker.engine", Action: "sidecar_read", Origin: OriginWorker, Scope: ScopeArtifact, Phase: "finalize", EventType: ""},
+	{Component: "worker.engine", Action: "spawn", Origin: OriginWorker, Scope: ScopeAttempt, Phase: "render", EventType: ""},
+	{Component: "worker.engine", Action: "tempdir_create", Origin: OriginWorker, Scope: ScopeAttempt, Phase: "render", EventType: ""},
+	{Component: "worker.engine", Action: "wait", Origin: OriginWorker, Scope: ScopeAttempt, Phase: "render", EventType: ""},
+	{Component: "worker.output", Action: "cleanup", Origin: OriginWorker, Scope: ScopeArtifact, Phase: "finalize", EventType: ""},
+	{Component: "worker.output", Action: "declare", Origin: OriginUpload, Scope: ScopeArtifact, Phase: "upload", EventType: ""},
+	{Component: "worker.output", Action: "hash", Origin: OriginUpload, Scope: ScopeArtifact, Phase: "upload", EventType: ""},
+	{Component: "worker.parallel", Action: "queue_wait", Origin: OriginWorker, Scope: ScopeSegment, Phase: "queue", EventType: ""},
+	{Component: "worker.parallel", Action: "segment_finish", Origin: OriginWorker, Scope: ScopeSegment, Phase: "finalize", EventType: ""},
+	{Component: "worker.parallel", Action: "segment_start", Origin: OriginWorker, Scope: ScopeSegment, Phase: "render", EventType: ""},
+	{Component: "worker.plan", Action: "compile", Origin: OriginWorker, Scope: ScopeTask, Phase: "compile", EventType: ""},
+	{Component: "worker.plan", Action: "deserialize", Origin: OriginWorker, Scope: ScopeTask, Phase: "compile", EventType: ""},
+	{Component: "worker.plan", Action: "resolve_assets", Origin: OriginWorker, Scope: ScopeTask, Phase: "compile", EventType: ""},
+	{Component: "worker.plan", Action: "serialize", Origin: OriginWorker, Scope: ScopeTask, Phase: "compile", EventType: ""},
+	{Component: "worker.plan", Action: "validate", Origin: OriginWorker, Scope: ScopeTask, Phase: "compile", EventType: ""},
+	{Component: "worker.plan", Action: "write", Origin: OriginWorker, Scope: ScopeArtifact, Phase: "compile", EventType: ""},
+	{Component: "worker.temp", Action: "create", Origin: OriginWorker, Scope: ScopeAttempt, Phase: "render", EventType: ""},
+	{Component: "worker.temp", Action: "delete", Origin: OriginWorker, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
+	{Component: "worker.temp", Action: "read", Origin: OriginWorker, Scope: ScopeAttempt, Phase: "render", EventType: ""},
+	{Component: "worker.temp", Action: "write", Origin: OriginWorker, Scope: ScopeAttempt, Phase: "render", EventType: ""},
+	{Component: "worker.upload", Action: "connect", Origin: OriginUpload, Scope: ScopeArtifact, Phase: "upload", EventType: ""},
+	{Component: "worker.upload", Action: "transfer", Origin: OriginUpload, Scope: ScopeArtifact, Phase: "upload", EventType: ""},
 }
