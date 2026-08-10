@@ -136,6 +136,31 @@ func TestReadiness_UpdateCapabilityProbe_GreenWhenFullyWired(t *testing.T) {
 	}
 }
 
+// TestReadiness_CapabilityExposuresHaveFailClosedGates pins the
+// architectural capability contract (AGENTS.md §6): every
+// AddReadinessCapability("X") exposure MUST be paired with a fail-closed
+// AddReadinessCheck("X-capability") so a MISCONFIGURED dependency flips
+// /ready red (readiness rossa su dipendenze mancanti) instead of serving
+// a silently-degraded capability. The same invariant is enforced
+// statically by scripts/ci/check-capability-contract.sh.
+func TestReadiness_CapabilityExposuresHaveFailClosedGates(t *testing.T) {
+	components := readinessTestComponents(t, nil)
+
+	registerReadinessChecks(components, &transportBundle{})
+
+	checkSet := make(map[string]struct{})
+	for _, name := range components.modules.Health.CheckNames() {
+		checkSet[name] = struct{}{}
+	}
+
+	for _, capName := range components.modules.Health.CapabilityNames() {
+		gate := capName + "-capability"
+		if _, ok := checkSet[gate]; !ok {
+			t.Errorf("capability %q has no fail-closed readiness gate %q", capName, gate)
+		}
+	}
+}
+
 func TestReadiness_NoUpdateCapabilityProbeWithoutFleetDep(t *testing.T) {
 	// A boot without fleet wiring (test / partial composition) must
 	// not register the probe and must not crash registerReadinessChecks.

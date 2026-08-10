@@ -77,6 +77,32 @@ func (m *HealthModule) AddReadinessCapability(name string, state func() string) 
 	m.capability = append(m.capability, namedCapability{name: name, state: state})
 }
 
+// CapabilityNames returns the names of all registered capability state
+// exposures, in registration order. Used by tests to pin the capability
+// contract (AGENTS.md §6): every exposure must be paired with a
+// fail-closed readiness gate.
+func (m *HealthModule) CapabilityNames() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	names := make([]string, len(m.capability))
+	for i, item := range m.capability {
+		names[i] = item.name
+	}
+	return names
+}
+
+// CheckNames returns the names of all registered readiness checks, in
+// registration order.
+func (m *HealthModule) CheckNames() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	names := make([]string, len(m.checks))
+	for i, item := range m.checks {
+		names[i] = item.name
+	}
+	return names
+}
+
 // MarkReady signals that bootstrap is complete and /ready should
 // evaluate registered checks (instead of returning 503 unconditionally).
 func (m *HealthModule) MarkReady() {

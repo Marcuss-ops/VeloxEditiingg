@@ -196,3 +196,42 @@ was restored. Do NOT rename `worker_id` for cosmetic/ordering purposes.
   `worker_name` alongside `worker_id`).
 - Allowlist `VELOX_ALLOWED_WORKERS` lists **security IDs**
   (`worker_id`), not display names.
+
+## 6. Capability state machine: `DISABLED` / `READY` / `MISCONFIGURED` only
+
+Codified after the 2026-08-10 fail-open architecture audit (fleet executor
+registry noop fallback, Level-D smoke stub, opsalerts nil datasource,
+alert error swallowing). Every capability (fleet executor, Level-D smoke,
+fleet alerts, alert engine, update path, …) MUST be in exactly one of three
+states, and MUST NEVER be "enabled but with a hidden nil/noop/stub":
+
+| State | Meaning |
+|-------|---------|
+| `DISABLED` | Route/runner intentionally not registered; operator explicitly opted out. Does NOT fail readiness. |
+| `READY` | All real dependencies present and wired. |
+| `MISCONFIGURED` | Capability requested but a dependency is missing/nil/stub. /ready is RED and the operation is refused. |
+
+Concrete rules:
+
+- **Noop/test doubles are test-only.** `NoopOperationExecutor`,
+  `StubAssetResolver` and similar doubles may appear ONLY in `_test.go`
+  files or in explicit dev-mode wiring gated by an env var
+  (`VELOX_SMOKE_MODE=development`) that production `Validate()` rejects.
+  A production registry starts EMPTY; a missing executor yields
+  `EXECUTOR_NOT_CONFIGURED`, never a noop success.
+- **Constructors fail closed on missing dependencies.** `opsalerts.NewEngine`
+  (and equivalents) MUST return an error for a nil/typed-nil datasource or
+  store — never a nil-swallowing engine. A capability wired with a nil
+  dependency is `MISCONFIGURED`.
+- **Every capability exposure MUST have a fail-closed readiness gate.**
+  Each `HealthModule.AddReadinessCapability("X", …)` in
+  `cmd/server/bootstrap_readiness.go` MUST be paired with an
+  `AddReadinessCheck("X-capability", …)` that returns an error when the
+  capability is `MISCONFIGURED` (readiness rossa su dipendenze mancanti).
+  `DISABLED` never fails readiness; `MISCONFIGURED` always does.
+- **Enforcement.** `scripts/ci/check-capability-contract.sh` (wired as
+  the `capability-contract` CI workflow) statically forbids the fail-open
+  symbols in production code and pins the readiness pairing; the pairing
+  is also pinned at runtime by
+  `TestReadiness_CapabilityExposuresHaveFailClosedGates` in
+  `cmd/server/bootstrap_readiness_test.go`.

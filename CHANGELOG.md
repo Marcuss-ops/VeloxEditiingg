@@ -1,5 +1,22 @@
 ## [Unreleased] - 2026-07-29
 
+### Added — capability state machine rule (DISABLED / READY / MISCONFIGURED)
+
+Codified in AGENTS.md §6 after the 2026-08-10 fail-open audit: every
+capability is `DISABLED`, `READY` or `MISCONFIGURED` — never "enabled but
+with a hidden nil/noop/stub". Noop/test doubles are test-only;
+constructors fail closed on missing dependencies; every
+`AddReadinessCapability` exposure is paired with a fail-closed
+`AddReadinessCheck` gate so MISCONFIGURED flips /ready red.
+
+- `scripts/ci/check-capability-contract.sh` — static CI gate (forbidden
+  fail-open symbols in production code + readiness pairing pin).
+- `.github/workflows/capability-contract.yml` — wires the gate + the
+  runtime pairing test.
+- `HealthModule.CapabilityNames` / `CheckNames` accessors + runtime pin
+  `TestReadiness_CapabilityExposuresHaveFailClosedGates` in
+  `cmd/server/bootstrap_readiness_test.go`.
+
 ### Removed — Postgres backend (runtime + test-only adapters)
 
 Postgres is not an active user story for the master. `VELOX_DB_DRIVER=postgres`

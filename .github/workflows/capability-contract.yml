@@ -1,0 +1,85 @@
+# =============================================================================
+# Capability Contract — CI gate that locks the DISABLED / READY /
+# MISCONFIGURED capability rule (AGENTS.md §6).
+#
+# Why a dedicated file?
+# The 2026-08-10 fail-open audit found several capabilities that were
+# "enabled but with a hidden nil/noop/stub" (fleet executor noop
+# fallback, Level-D smoke stub, opsalerts nil datasource). The rule
+# derived from that audit is now enforced two ways:
+#   - scripts/ci/check-capability-contract.sh  — static gate: forbids the
+#     fail-open symbols in production code and pins that every
+#     AddReadinessCapability("X") in bootstrap_readiness.go is paired
+#     with a fail-closed AddReadinessCheck("X-capability") (readiness
+#     rossa su dipendenze mancanti).
+#   - TestReadiness_CapabilityExposuresHaveFailClosedGates — runtime pin
+#     of the same pairing inside the canonical go test suite.
+#
+# Runs on every push to main, every PR, and on-demand dispatch. Status
+# check name in the PR UI: "Capability Contract". Concurrency group is
+# independent of the canonical ci workflow so this gate runs in parallel
+# with make verify.
+#
+# Trigger: push to main / pull_request / workflow_dispatch.
+# Permissions: contents: read (least-privilege, mirrors ci.yml).
+# =============================================================================
+
+name: Capability Contract
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: capability-contract-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Capability Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth: 1 is sufficient — this gate is full-tree, not
+          # diff-scoped, and does not use BASE_REF. Mirrors the shallow
+          # checkout policy from non-branch-diff workflows.
+          fetch-depth: 1
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Mirrors ci.yml. Use go-version-file so the Go toolchain
+          # version tracks DataServer/go.mod (single-source-of-truth)
+          # rather than a hardcoded "1.x" that drifts.
+          go-version-file: DataServer/go.mod
+
+      - name: Cache Go build module cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('DataServer/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Run capability contract static gate
+        run: bash scripts/ci/check-capability-contract.sh
+
+      - name: Run capability pairing test
+        working-directory: DataServer
+        # -short : Go's testing.Short() gate; tests that explicitly skip
+        #          in short mode are bypassed for fast feedback.
+        # -count=1 : disable Go test result caching so the gate ALWAYS
+        #           physically runs the pairing pin.
+        run: go test -short -count=1 ./cmd/server/ -run 'TestReadiness_CapabilityExposuresHaveFailClosedGates'
