@@ -1,13 +1,13 @@
 {
-  "_doc": "Real production asset_ids from the master DB (velox.db). Populated 2026-07-29 from the live VPS master. Workers resolve these via velox-asset://<asset_id> which the master serves from its storage layer.",
+  "_doc": "Real production asset_ids from the master DB (velox.db). Refreshed 2026-08-10 from the live VPS master. Workers resolve these via velox-asset://<asset_id> which the master serves from its storage layer.",
   "voiceover": [
-    {"asset_id": "4d027993c4c3c68540eaab5dcecacaca1a9600a5fdf090b8ac1a924e753b1d15", "note": "current READY voiceover blob, audio/mpeg, storage_provider=local"},
-    {"asset_id": "4d027993c4c3c68540eaab5dcecacaca1a9600a5fdf090b8ac1a924e753b1d15", "note": "e2e-smoke voiceover.mp3, READY, audio/mpeg, storage_provider=local"}
+    {"asset_id": "deeab1d1fc005ff02901f0eb0ef6ff5ccdb0297394e208ba126065180d2abe34", "note": "READY voiceover blob, audio/mpeg, storage_provider=local"},
+    {"asset_id": "8a2ce0f04ca265e4ddf9c9dc6f888e5069b3e0928eac4a6d3592e372d163436e", "note": "READY voiceover blob, audio/mpeg, storage_provider=local"}
   ],
   "clips": [
-    {"asset_id": "27063c51bda8444a7b4d98ab4d9828826c9424f12cf1bbdeefe351afc3a4bd5c", "note": "stock_clip, READY, video/mp4"},
-    {"asset_id": "d4382e86b7475fed0b9e5b074cff68055a3ef1a633a9d2913ba4780b21fef561", "note": "stock_clip, READY, video/mp4"},
-    {"asset_id": "a01f8acfc7a8c919df3179e14c935c6101fe03fd965dfae80c62b57129f57223", "note": "stock_clip, READY, video/mp4"}
+    {"asset_id": "4bed94dde8728261b708781c5ae7b31886ab30f48bf8a0a0f4981fc7a0e78ed6", "note": "clip, READY, video/mp4, storage_provider=local"},
+    {"asset_id": "c47cfe5faa00bca469590b32177b2608cbad49e212ca82bca6a70b47af07e75b", "note": "clip, READY, video/mp4, storage_provider=local"},
+    {"asset_id": "1a250498df0474534833b9d60b05578ebc45cc7ba87d16a682e4f3f3020981e5", "note": "clip, READY, video/mp4, storage_provider=local"}
   ],
   "subtitles": [
     {"asset_id": "subtitle-001", "note": "placeholder — no READY subtitle assets in production DB yet"},
