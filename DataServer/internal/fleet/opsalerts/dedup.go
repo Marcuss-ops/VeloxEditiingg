@@ -85,7 +85,15 @@ func (d *DedupStore) Prepare(event runtimealerts.AlertEvent, now time.Time) runt
 	key := DedupKey{WorkerID: event.Subject, RuleID: RuleID(event.RuleID), Severity: Severity(event.Severity)}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if saved, ok := d.occurrences[key]; ok {
+	saved, ok := d.occurrences[key]
+	if !ok {
+		return event
+	}
+	if _, pending := d.pending[key]; pending {
+		return saved.event
+	}
+	entry, committed := d.entries[key]
+	if !committed || key.Severity != Critical && now.Sub(entry.LastSeenAt) < d.warningWindow {
 		return saved.event
 	}
 	return event
