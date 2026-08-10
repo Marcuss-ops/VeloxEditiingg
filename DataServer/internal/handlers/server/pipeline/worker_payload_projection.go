@@ -123,7 +123,11 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 				scene["clip"] = clipToMap(s.Clip)
 			}
 			if s.Stock != nil {
-				scene["stock"] = clipToMap(s.Stock)
+				// The renderer contract is always scene.stock[] even when
+				// the recipe contains a single stock object. Keeping the
+				// array shape here is essential: the canonical timeline
+				// builder uses one shared stock-list path for every scene.
+				scene["stock"] = []interface{}{clipToMap(s.Stock)}
 			}
 			if len(s.StockAssets) > 0 {
 				stock := make([]interface{}, 0, len(s.StockAssets))

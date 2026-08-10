@@ -1,0 +1,478 @@
+{
+  "idempotency_key": "actors-comedy-clips-canonical-v1",
+  "job_type": "clip.stock.v1",
+  "template_id": "actors-comedy-clips",
+  "template_version": 1,
+  "video_name": "Actors Comedy Clips",
+  "script_text": "Benvenuti nel mondo della comicità. Iniziamo con due momenti spontanei che mostrano il talento e l’energia degli attori.\nIl primo sguardo ci porta su Paul Giamatti, che condivide alcune riflessioni durante un incontro tra attori, mostrando la sua naturale presenza scenica anche fuori dal palcoscenico.\nSuccessivamente, Andrew Scott partecipa a una conversazione, con un tono vivace mentre parla delle sue esperienze nel settore artistico e del suo approccio al mestiere.\nÈ evidente l'energia che porta nei momenti di scambio tra colleghi.\nIl ritmo cambia con Tom Holland, che risponde in modo schietto durante un quiz dedicato alla sua collaborazione con Zendaya, mantenendo sempre un’aria giocosa e coinvolgente per il pubblico.\nProseguendo nel montaggio, troviamo Adam Sandler in un altro momento di intervista. Sembra rilassato ma pieno di aneddoti divertenti da raccontare ai presenti al tavolo rotondo degli attori.\nTorniamo ad Adam Sandler che continua a condividere le sue osservazioni e i suoi ricordi del mondo dello spettacolo, mantenendo quel suo umorismo spontaneo tipico delle interviste informali.\nJeffrey Wright è il prossimo volto in primo piano. Durante la prima parte dell'incontro tra attori, condivide riflessioni acute sul processo creativo e sulla disciplina che richiede l'arte recitare.\nIn un secondo momento con gli stessi colleghi, Jeffrey Wright approfondisce ulteriormente questi temi, offrendo spunti di riflessione molto personali sul suo percorso professionale.\nAndrew Scott torna a parlare, questa volta in una diversa fase dell’evento. Le sue parole continuano ad analizzare la complessità del ruolo dell'attore moderno e le sfumature della performance.\nMark Ruffalo è al centro dell'attenzione per un altro segmento di conversazione tra attori. Mostra un entusiasmo contagioso mentre discute con i colleghi, toccando aspetti diversi del mestiere.\nIn una prima apparizione nel round table, Mark Ruffalo condivide alcune considerazioni che sembrano quasi spontanee, ma che rivelano una profonda conoscenza del settore artistico.\nUn altro momento di riflessione vede Mark Ruffalo parlare nuovamente, approfondendo temi legati alla collaborazione e all'interpretazione dei personaggi sul grande schermo. Il tono si fa più intimo con Demi Moore, che partecipa a un dialogo dedicato alle attrici. Condivide le sue esperienze in modo aperto, rivolgendosi direttamente al pubblico o ai compagni di settore. Infine, concludiamo questo giro di incontri con un altro scambio tra Demi Moore e i colleghi. Le sue parole chiudono questa selezione di momenti comici, lasciando un senso generale di calore e connessione artistica.",
+  "output": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "format": "mp4"
+  },
+  "delivery_plan": [
+    {
+      "destination_id": "drive-smoke",
+      "priority": 1,
+      "retry_budget": 3,
+      "metadata": {
+        "source_specscene": "ops/jobs/comici-json-smoke-job.specscene.json",
+        "stock_strategy": "associated_verified_clip_as_broll",
+        "drive_output_folder": "1u3ckIvtTTl71lySILysPTvJB03sdASRn",
+        "scene_clip_links": {
+          "scene-0": "https://drive.google.com/file/d/11MRzjKA3o7OZGmYZGJMPTGxM_eNt6qAX/view?usp=drivesdk",
+          "scene-1": "https://drive.google.com/file/d/11_5vtQgxOfFdBnsC8FQnCu0UQ2WpfO-c/view?usp=drivesdk",
+          "scene-2": "https://drive.google.com/file/d/128AEiKFTwEZJO4dBUbhe4hu7bzbLAR-W/view?usp=drivesdk",
+          "scene-3": "https://drive.google.com/file/d/1jDRQz8zDFjg86RpgSuxUIHuIE-DKtuET/view?usp=drivesdk",
+          "scene-4": "https://drive.google.com/file/d/1HX3_LUx4Yg-mLaQkukKPrKTlEibuPz98/view?usp=drivesdk",
+          "scene-5": "https://drive.google.com/file/d/1w_wGC43vY4wGtoBOnCErB_r-Hls_bdtO/view?usp=drivesdk",
+          "scene-6": "https://drive.google.com/file/d/1dRv4WFUcXgLUf3QvqheZ9pCqvJY3KcFu/view?usp=drivesdk",
+          "scene-7": "https://drive.google.com/file/d/1Pwng-iqQAVS5VZJmVNGHMBLQBFLsNyOU/view?usp=drivesdk",
+          "scene-8": "https://drive.google.com/file/d/1xWrSFJSg5K5D_hZTxKILhnddvFytWaHI/view?usp=drivesdk",
+          "scene-9": "https://drive.google.com/file/d/1qo69v-Kwuouxyr38-rdsqbS1G53exsFW/view?usp=drivesdk",
+          "scene-10": "https://drive.google.com/file/d/1rsxgdS2fOnIfMAT9LaMpy7U6o07oHtPT/view?usp=drivesdk",
+          "scene-11": "https://drive.google.com/file/d/1teqci7OK3ejVaY6wRGhoWAkDcvHAnIOr/view?usp=drivesdk",
+          "scene-12": "https://drive.google.com/file/d/1tyLaLP_ARFfvaBkEhmNgtg8hLXoGHLsD/view?usp=drivesdk"
+        },
+        "scene_voiceover_links": {
+          "scene-0": "https://drive.google.com/file/d/1lLxBxljlkRQUIbDQ89MuWCUfpgFMIEuH/view",
+          "scene-1": "https://drive.google.com/file/d/1CIcSEK53NWU44_O1qD6yBwoS3RqXwQJi/view",
+          "scene-2": "https://drive.google.com/file/d/1QWhTQuI528pklCV-Og6RC4ESUDE0vemN/view",
+          "scene-3": "https://drive.google.com/file/d/1rmbL6lzJRZysT8z-NJbq1snkXADnfOJC/view",
+          "scene-4": "https://drive.google.com/file/d/15HRFaDu7tGjizvHK1CX5Ilaw2W27mPwx/view",
+          "scene-5": "https://drive.google.com/file/d/1iY6V1S6xxi2nOByMBmV_7X42fDLovva-/view",
+          "scene-6": "https://drive.google.com/file/d/1QpCO_4Yrp33fmMUdPuu9K0I30L76L9Q2/view",
+          "scene-7": "https://drive.google.com/file/d/1C4lCniWS7RrOd96Ji6-NiXKEfN-w2KZD/view",
+          "scene-8": "https://drive.google.com/file/d/1-uwiDpK8057IEh0C30NcyilP_WghRJ7z/view",
+          "scene-9": "https://drive.google.com/file/d/1srP-IZG2RYhjZXS0ErdCx3TcJdgTiIMK/view",
+          "scene-10": "https://drive.google.com/file/d/1qJ4A7F8Tn2Ml9xbUGGzjFo_VroPjkwwI/view",
+          "scene-11": "https://drive.google.com/file/d/1-Bokt1N_cU8rOJsx5dwcH35tBZyQ37nh/view",
+          "scene-12": "https://drive.google.com/file/d/1mb_P4XB41e3TDtu7OjgOvJNPcAlIRAAj/view"
+        }
+      }
+    }
+  ],
+  "spec": {
+    "video_name": "Actors Comedy Clips",
+    "script_text": "Benvenuti nel mondo della comicità. Iniziamo con due momenti spontanei che mostrano il talento e l’energia degli attori.\nIl primo sguardo ci porta su Paul Giamatti, che condivide alcune riflessioni durante un incontro tra attori, mostrando la sua naturale presenza scenica anche fuori dal palcoscenico.\nSuccessivamente, Andrew Scott partecipa a una conversazione, con un tono vivace mentre parla delle sue esperienze nel settore artistico e del suo approccio al mestiere.\nÈ evidente l'energia che porta nei momenti di scambio tra colleghi.\nIl ritmo cambia con Tom Holland, che risponde in modo schietto durante un quiz dedicato alla sua collaborazione con Zendaya, mantenendo sempre un’aria giocosa e coinvolgente per il pubblico.\nProseguendo nel montaggio, troviamo Adam Sandler in un altro momento di intervista. Sembra rilassato ma pieno di aneddoti divertenti da raccontare ai presenti al tavolo rotondo degli attori.\nTorniamo ad Adam Sandler che continua a condividere le sue osservazioni e i suoi ricordi del mondo dello spettacolo, mantenendo quel suo umorismo spontaneo tipico delle interviste informali.\nJeffrey Wright è il prossimo volto in primo piano. Durante la prima parte dell'incontro tra attori, condivide riflessioni acute sul processo creativo e sulla disciplina che richiede l'arte recitare.\nIn un secondo momento con gli stessi colleghi, Jeffrey Wright approfondisce ulteriormente questi temi, offrendo spunti di riflessione molto personali sul suo percorso professionale.\nAndrew Scott torna a parlare, questa volta in una diversa fase dell’evento. Le sue parole continuano ad analizzare la complessità del ruolo dell'attore moderno e le sfumature della performance.\nMark Ruffalo è al centro dell'attenzione per un altro segmento di conversazione tra attori. Mostra un entusiasmo contagioso mentre discute con i colleghi, toccando aspetti diversi del mestiere.\nIn una prima apparizione nel round table, Mark Ruffalo condivide alcune considerazioni che sembrano quasi spontanee, ma che rivelano una profonda conoscenza del settore artistico.\nUn altro momento di riflessione vede Mark Ruffalo parlare nuovamente, approfondendo temi legati alla collaborazione e all'interpretazione dei personaggi sul grande schermo. Il tono si fa più intimo con Demi Moore, che partecipa a un dialogo dedicato alle attrici. Condivide le sue esperienze in modo aperto, rivolgendosi direttamente al pubblico o ai compagni di settore. Infine, concludiamo questo giro di incontri con un altro scambio tra Demi Moore e i colleghi. Le sue parole chiudono questa selezione di momenti comici, lasciando un senso generale di calore e connessione artistica.",
+    "scenes": [
+      {
+        "scene_id": "scene-0",
+        "index": 0,
+        "kind": "intro",
+        "text": "Benvenuti nel mondo della comicità. Iniziamo con due momenti spontanei che mostrano il talento e l’energia degli attori.",
+        "duration_seconds": 47.656,
+        "clip": {
+          "asset_id": "13df6d1efac400032507cdda93abb585bb192f4b451c15842a3e70377412ac2b",
+          "url": "velox-asset://13df6d1efac400032507cdda93abb585bb192f4b451c15842a3e70377412ac2b",
+          "sha256": "13df6d1efac400032507cdda93abb585bb192f4b451c15842a3e70377412ac2b",
+          "size_bytes": 23070714,
+          "duration_ms": 40000
+        },
+        "stock": [
+          {
+            "asset_id": "13df6d1efac400032507cdda93abb585bb192f4b451c15842a3e70377412ac2b",
+            "url": "velox-asset://13df6d1efac400032507cdda93abb585bb192f4b451c15842a3e70377412ac2b",
+            "sha256": "13df6d1efac400032507cdda93abb585bb192f4b451c15842a3e70377412ac2b",
+            "size_bytes": 23070714,
+            "duration_ms": 40000
+          }
+        ],
+        "stock_fallback": false,
+        "voiceover": {
+          "asset_id": "fd80f80a9c2b8f8ed7e8e893fb712bc320b8fa510e7491b6d6e82bf433bddd99",
+          "url": "velox-asset://fd80f80a9c2b8f8ed7e8e893fb712bc320b8fa510e7491b6d6e82bf433bddd99",
+          "sha256": "fd80f80a9c2b8f8ed7e8e893fb712bc320b8fa510e7491b6d6e82bf433bddd99",
+          "size_bytes": 45936,
+          "duration_ms": 7656,
+          "language": "it"
+        }
+      },
+      {
+        "scene_id": "scene-1",
+        "index": 1,
+        "kind": "clip",
+        "text": "Il primo sguardo ci porta su Paul Giamatti, che condivide alcune riflessioni durante un incontro tra attori, mostrando la sua naturale presenza scenica anche fuori dal palcoscenico.",
+        "duration_seconds": 42.391999999999996,
+        "clip": {
+          "asset_id": "df2667f5e5ea107a3b452e209e5c752bf0d997b30f50f7bed8191f54302864ae",
+          "url": "velox-asset://df2667f5e5ea107a3b452e209e5c752bf0d997b30f50f7bed8191f54302864ae",
+          "sha256": "df2667f5e5ea107a3b452e209e5c752bf0d997b30f50f7bed8191f54302864ae",
+          "size_bytes": 20530950,
+          "duration_ms": 32000
+        },
+        "stock": [
+          {
+            "asset_id": "df2667f5e5ea107a3b452e209e5c752bf0d997b30f50f7bed8191f54302864ae",
+            "url": "velox-asset://df2667f5e5ea107a3b452e209e5c752bf0d997b30f50f7bed8191f54302864ae",
+            "sha256": "df2667f5e5ea107a3b452e209e5c752bf0d997b30f50f7bed8191f54302864ae",
+            "size_bytes": 20530950,
+            "duration_ms": 32000
+          }
+        ],
+        "stock_fallback": false,
+        "voiceover": {
+          "asset_id": "3608a20fff93f6f9b2363a2b34071cbdee2833c7c0a65bfd08abeddaf8f34948",
+          "url": "velox-asset://3608a20fff93f6f9b2363a2b34071cbdee2833c7c0a65bfd08abeddaf8f34948",
+          "sha256": "3608a20fff93f6f9b2363a2b34071cbdee2833c7c0a65bfd08abeddaf8f34948",
+          "size_bytes": 62352,
+          "duration_ms": 10392,
+          "language": "it"
+        }
+      },
+      {
+        "scene_id": "scene-2",
+        "index": 2,
+        "kind": "clip",
+        "text": "Successivamente, Andrew Scott partecipa a una conversazione, con un tono vivace mentre parla delle sue esperienze nel settore artistico e del suo approccio al mestiere.",
+        "duration_seconds": 54.647999999999996,
+        "clip": {
+          "asset_id": "57c6e0970f43993e9945942ebbf549fbea167bbb8e684bbc7c593a98429cb6c0",
+          "url": "velox-asset://57c6e0970f43993e9945942ebbf549fbea167bbb8e684bbc7c593a98429cb6c0",
+          "sha256": "57c6e0970f43993e9945942ebbf549fbea167bbb8e684bbc7c593a98429cb6c0",
+          "size_bytes": 28027436,
+          "duration_ms": 45000
+        },
+        "stock": [
+          {
+            "asset_id": "57c6e0970f43993e9945942ebbf549fbea167bbb8e684bbc7c593a98429cb6c0",
+            "url": "velox-asset://57c6e0970f43993e9945942ebbf549fbea167bbb8e684bbc7c593a98429cb6c0",
+            "sha256": "57c6e0970f43993e9945942ebbf549fbea167bbb8e684bbc7c593a98429cb6c0",
+            "size_bytes": 28027436,
+            "duration_ms": 45000
+          }
+        ],
+        "stock_fallback": false,
+        "voiceover": {
+          "asset_id": "5af9804bcedb680aa58b221f0f68cb5399a30ed9d456124625dc3908510e3b00",
+          "url": "velox-asset://5af9804bcedb680aa58b221f0f68cb5399a30ed9d456124625dc3908510e3b00",
+          "sha256": "5af9804bcedb680aa58b221f0f68cb5399a30ed9d456124625dc3908510e3b00",
+          "size_bytes": 57888,
+          "duration_ms": 9648,
+          "language": "it"
+        }
+      },
+      {
+        "scene_id": "scene-3",
+        "index": 3,
+        "kind": "clip",
+        "text": "È evidente l'energia che porta nei momenti di scambio tra colleghi.",
+        "duration_seconds": 37.08,
+        "clip": {
+          "asset_id": "f36351ef4ecd35f551c9a7e4ad1cbe5a9b229ca665253917c6199accb8d7d6f3",
+          "url": "velox-asset://f36351ef4ecd35f551c9a7e4ad1cbe5a9b229ca665253917c6199accb8d7d6f3",
+          "sha256": "f36351ef4ecd35f551c9a7e4ad1cbe5a9b229ca665253917c6199accb8d7d6f3",
+          "size_bytes": 13369171,
+          "duration_ms": 33000
+        },
+        "stock": [
+          {
+            "asset_id": "f36351ef4ecd35f551c9a7e4ad1cbe5a9b229ca665253917c6199accb8d7d6f3",
+            "url": "velox-asset://f36351ef4ecd35f551c9a7e4ad1cbe5a9b229ca665253917c6199accb8d7d6f3",
+            "sha256": "f36351ef4ecd35f551c9a7e4ad1cbe5a9b229ca665253917c6199accb8d7d6f3",
+            "size_bytes": 13369171,
+            "duration_ms": 33000
+          }
+        ],
+        "stock_fallback": false,
+        "voiceover": {
+          "asset_id": "34c381cdd391bba2b612f26a290243235c2516c47d506fe37e888388f08c7c3f",
+          "url": "velox-asset://34c381cdd391bba2b612f26a290243235c2516c47d506fe37e888388f08c7c3f",
+          "sha256": "34c381cdd391bba2b612f26a290243235c2516c47d506fe37e888388f08c7c3f",
+          "size_bytes": 24480,
+          "duration_ms": 4080,
+          "language": "it"
+        }
+      },
+      {
+        "scene_id": "scene-4",
+        "index": 4,
+        "kind": "clip",
+        "text": "Il ritmo cambia con Tom Holland, che risponde in modo schietto durante un quiz dedicato alla sua collaborazione con Zendaya, mantenendo sempre un’aria giocosa e coinvolgente per il pubblico.",
+        "duration_seconds": 43.44,
+        "clip": {
+          "asset_id": "92db22a7cb33aa57bd58bb2b809b8c98ecf7ab99779543fe8570969cde572744",
+          "url": "velox-asset://92db22a7cb33aa57bd58bb2b809b8c98ecf7ab99779543fe8570969cde572744",
+          "sha256": "92db22a7cb33aa57bd58bb2b809b8c98ecf7ab99779543fe8570969cde572744",
+          "size_bytes": 14273131,
+          "duration_ms": 33000
+        },
+        "stock": [
+          {
+            "asset_id": "92db22a7cb33aa57bd58bb2b809b8c98ecf7ab99779543fe8570969cde572744",
+            "url": "velox-asset://92db22a7cb33aa57bd58bb2b809b8c98ecf7ab99779543fe8570969cde572744",
+            "sha256": "92db22a7cb33aa57bd58bb2b809b8c98ecf7ab99779543fe8570969cde572744",
+            "size_bytes": 14273131,
+            "duration_ms": 33000
+          }
+        ],
+        "stock_fallback": false,
+        "voiceover": {
+          "asset_id": "628cdedb83879843813c938ea0c9a3fd39ddd2485dfad7bcf6579c4ec09a5cc0",
+          "url": "velox-asset://628cdedb83879843813c938ea0c9a3fd39ddd2485dfad7bcf6579c4ec09a5cc0",
+          "sha256": "628cdedb83879843813c938ea0c9a3fd39ddd2485dfad7bcf6579c4ec09a5cc0",
+          "size_bytes": 62640,
+          "duration_ms": 10440,
+          "language": "it"
+        }
+      },
+      {
+        "scene_id": "scene-5",
+        "index": 5,
+        "kind": "clip",
+        "text": "Proseguendo nel montaggio, troviamo Adam Sandler in un altro momento di intervista. Sembra rilassato ma pieno di aneddoti divertenti da raccontare ai presenti al tavolo rotondo degli attori.",
+        "duration_seconds": 58.76,
+        "clip": {
+          "asset_id": "5c66310ba045d9b96399bc93d747dc56d906a74463545296e2d3663c06e38ce5",
+          "url": "velox-asset://5c66310ba045d9b96399bc93d747dc56d906a74463545296e2d3663c06e38ce5",
+          "sha256": "5c66310ba045d9b96399bc93d747dc56d906a74463545296e2d3663c06e38ce5",
+          "size_bytes": 28946187,
+          "duration_ms": 47000
+        },
+        "stock": [
+          {
+            "asset_id": "5c66310ba045d9b96399bc93d747dc56d906a74463545296e2d3663c06e38ce5",
+            "url": "velox-asset://5c66310ba045d9b96399bc93d747dc56d906a74463545296e2d3663c06e38ce5",
+            "sha256": "5c66310ba045d9b96399bc93d747dc56d906a74463545296e2d3663c06e38ce5",
+            "size_bytes": 28946187,
+            "duration_ms": 47000
+          }
+        ],
+        "stock_fallback": false,
+        "voiceover": {
+          "asset_id": "77c807deb883dec181ac5d72a86bff0c8c909faa5bcc5c7b4c68b61d81c01df7",
+          "url": "velox-asset://77c807deb883dec181ac5d72a86bff0c8c909faa5bcc5c7b4c68b61d81c01df7",
+          "sha256": "77c807deb883dec181ac5d72a86bff0c8c909faa5bcc5c7b4c68b61d81c01df7",
+          "size_bytes": 70560,
+          "duration_ms": 11760,
+          "language": "it"
+        }
+      },
+      {
+        "scene_id": "scene-6",
+        "index": 6,
+        "kind": "clip",
+        "text": "Torniamo ad Adam Sandler che continua a condividere le sue osservazioni e i suoi ricordi del mondo dello spettacolo, mantenendo quel suo umorismo spontaneo tipico delle interviste informali.",
+        "duration_seconds": 58.248,
+        "clip": {
+          "asset_id": "1aa87431408089c9a0dfdbf2124af95ae4ecf214139140f93928b6d95acd53b8",
+          "url": "velox-asset://1aa87431408089c9a0dfdbf2124af95ae4ecf214139140f93928b6d95acd53b8",
+          "sha256": "1aa87431408089c9a0dfdbf2124af95ae4ecf214139140f93928b6d95acd53b8",
+          "size_bytes": 24655436,
+          "duration_ms": 48000
+        },
+        "stock": [
+          {
+            "asset_id": "1aa87431408089c9a0dfdbf2124af95ae4ecf214139140f93928b6d95acd53b8",
+            "url": "velox-asset://1aa87431408089c9a0dfdbf2124af95ae4ecf214139140f93928b6d95acd53b8",
+            "sha256": "1aa87431408089c9a0dfdbf2124af95ae4ecf214139140f93928b6d95acd53b8",
+            "size_bytes": 24655436,
+            "duration_ms": 48000
+          }
+        ],
+        "stock_fallback": false,
+        "voiceover": {
+          "asset_id": "fb81fb9968a015cc5f896857a3698495ab5d1d724a8ac9fc370c2937d6c95c08",
+          "url": "velox-asset://fb81fb9968a015cc5f896857a3698495ab5d1d724a8ac9fc370c2937d6c95c08",
+          "sha256": "fb81fb9968a015cc5f896857a3698495ab5d1d724a8ac9fc370c2937d6c95c08",
+          "size_bytes": 61488,
+          "duration_ms": 10248,
+          "language": "it"
+        }
+      },
+      {
+        "scene_id": "scene-7",
+        "index": 7,
+        "kind": "clip",
+        "text": "Jeffrey Wright è il prossimo volto in primo piano. Durante la prima parte dell'incontro tra attori, condivide riflessioni acute sul processo creativo e sulla disciplina che richiede l'arte recitare.",
+        "duration_seconds": 43.616,
+        "clip": {
+          "asset_id": "8f615c28ded352eb2ba1ed7db78a3adc978a407cbe3c450806775e5649906b7c",
+          "url": "velox-asset://8f615c28ded352eb2ba1ed7db78a3adc978a407cbe3c450806775e5649906b7c",
+          "sha256": "8f615c28ded352eb2ba1ed7db78a3adc978a407cbe3c450806775e5649906b7c",
+          "size_bytes": 16723958,
+          "duration_ms": 32000
+        },
+        "stock": [
+          {
+            "asset_id": "8f615c28ded352eb2ba1ed7db78a3adc978a407cbe3c450806775e5649906b7c",
+            "url": "velox-asset://8f615c28ded352eb2ba1ed7db78a3adc978a407cbe3c450806775e5649906b7c",
+            "sha256": "8f615c28ded352eb2ba1ed7db78a3adc978a407cbe3c450806775e5649906b7c",
+            "size_bytes": 16723958,
+            "duration_ms": 32000
+          }
+        ],
+        "stock_fallback": false,
+        "voiceover": {
+          "asset_id": "a601292b27be31d4844f476881f8c03483132ff131344acfe961a57ce9c9236f",
+          "url": "velox-asset://a601292b27be31d4844f476881f8c03483132ff131344acfe961a57ce9c9236f",
+          "sha256": "a601292b27be31d4844f476881f8c03483132ff131344acfe961a57ce9c9236f",
+          "size_bytes": 69696,
+          "duration_ms": 11616,
+          "language": "it"
+        }
+      },
+      {
+        "scene_id": "scene-8",
+        "index": 8,
+        "kind": "clip",
+        "text": "In un secondo momento con gli stessi colleghi, Jeffrey Wright approfondisce ulteriormente questi temi, offrendo spunti di riflessione molto personali sul suo percorso professionale.",
+        "duration_seconds": 55.272,
+        "clip": {
+          "asset_id": "232425c7856c8e435c9d5e31b0aec73529df554ede8d0d51a6df5ed0a223f338",
+          "url": "velox-asset://232425c7856c8e435c9d5e31b0aec73529df554ede8d0d51a6df5ed0a223f338",
+          "sha256": "232425c7856c8e435c9d5e31b0aec73529df554ede8d0d51a6df5ed0a223f338",
+          "size_bytes": 18907959,
+          "duration_ms": 45000
+        },
+        "stock": [
+          {
+            "asset_id": "232425c7856c8e435c9d5e31b0aec73529df554ede8d0d51a6df5ed0a223f338",
+            "url": "velox-asset://232425c7856c8e435c9d5e31b0aec73529df554ede8d0d51a6df5ed0a223f338",
+            "sha256": "232425c7856c8e435c9d5e31b0aec73529df554ede8d0d51a6df5ed0a223f338",
+            "size_bytes": 18907959,
+            "duration_ms": 45000
+          }
+        ],
+        "stock_fallback": false,
+        "voiceover": {
+          "asset_id": "ef0d9798007ef42aca157d017018371f3e5c42721873b33c31f3b542e0553998",
+          "url": "velox-asset://ef0d9798007ef42aca157d017018371f3e5c42721873b33c31f3b542e0553998",
+          "sha256": "ef0d9798007ef42aca157d017018371f3e5c42721873b33c31f3b542e0553998",
+          "size_bytes": 61632,
+          "duration_ms": 10272,
+          "language": "it"
+        }
+      },
+      {
+        "scene_id": "scene-9",
+        "index": 9,
+        "kind": "clip",
+        "text": "Andrew Scott torna a parlare, questa volta in una diversa fase dell’evento. Le sue parole continuano ad analizzare la complessità del ruolo dell'attore moderno e le sfumature della performance.",
+        "duration_seconds": 56.712,
+        "clip": {
+          "asset_id": "a9524f94334db14ba7567e2eafbd3190aefec0b5996188d5c91b2e3a1e47cc1d",
+          "url": "velox-asset://a9524f94334db14ba7567e2eafbd3190aefec0b5996188d5c91b2e3a1e47cc1d",
+          "sha256": "a9524f94334db14ba7567e2eafbd3190aefec0b5996188d5c91b2e3a1e47cc1d",
+          "size_bytes": 20221650,
+          "duration_ms": 45000
+        },
+        "stock": [
+          {
+            "asset_id": "a9524f94334db14ba7567e2eafbd3190aefec0b5996188d5c91b2e3a1e47cc1d",
+            "url": "velox-asset://a9524f94334db14ba7567e2eafbd3190aefec0b5996188d5c91b2e3a1e47cc1d",
+            "sha256": "a9524f94334db14ba7567e2eafbd3190aefec0b5996188d5c91b2e3a1e47cc1d",
+            "size_bytes": 20221650,
+            "duration_ms": 45000
+          }
+        ],
+        "stock_fallback": false,
+        "voiceover": {
+          "asset_id": "c7e2e1c33240f2bd561a27084236f3f64d9c35d9816426b494cb0f1f142f0a82",
+          "url": "velox-asset://c7e2e1c33240f2bd561a27084236f3f64d9c35d9816426b494cb0f1f142f0a82",
+          "sha256": "c7e2e1c33240f2bd561a27084236f3f64d9c35d9816426b494cb0f1f142f0a82",
+          "size_bytes": 70272,
+          "duration_ms": 11712,
+          "language": "it"
+        }
+      },
+      {
+        "scene_id": "scene-10",
+        "index": 10,
+        "kind": "clip",
+        "text": "Mark Ruffalo è al centro dell'attenzione per un altro segmento di conversazione tra attori. Mostra un entusiasmo contagioso mentre discute con i colleghi, toccando aspetti diversi del mestiere.",
+        "duration_seconds": 55.832,
+        "clip": {
+          "asset_id": "1a250498df0474534833b9d60b05578ebc45cc7ba87d16a682e4f3f3020981e5",
+          "url": "velox-asset://1a250498df0474534833b9d60b05578ebc45cc7ba87d16a682e4f3f3020981e5",
+          "sha256": "1a250498df0474534833b9d60b05578ebc45cc7ba87d16a682e4f3f3020981e5",
+          "size_bytes": 21270933,
+          "duration_ms": 44000
+        },
+        "stock": [
+          {
+            "asset_id": "1a250498df0474534833b9d60b05578ebc45cc7ba87d16a682e4f3f3020981e5",
+            "url": "velox-asset://1a250498df0474534833b9d60b05578ebc45cc7ba87d16a682e4f3f3020981e5",
+            "sha256": "1a250498df0474534833b9d60b05578ebc45cc7ba87d16a682e4f3f3020981e5",
+            "size_bytes": 21270933,
+            "duration_ms": 44000
+          }
+        ],
+        "stock_fallback": false,
+        "voiceover": {
+          "asset_id": "dd31d7e17a11930b2e9be422b51faab28df012eda4851751b1c8ec16bb3e76d4",
+          "url": "velox-asset://dd31d7e17a11930b2e9be422b51faab28df012eda4851751b1c8ec16bb3e76d4",
+          "sha256": "dd31d7e17a11930b2e9be422b51faab28df012eda4851751b1c8ec16bb3e76d4",
+          "size_bytes": 70992,
+          "duration_ms": 11832,
+          "language": "it"
+        }
+      },
+      {
+        "scene_id": "scene-11",
+        "index": 11,
+        "kind": "clip",
+        "text": "In una prima apparizione nel round table, Mark Ruffalo condivide alcune considerazioni che sembrano quasi spontanee, ma che rivelano una profonda conoscenza del settore artistico.",
+        "duration_seconds": 60.368,
+        "clip": {
+          "asset_id": "c47cfe5faa00bca469590b32177b2608cbad49e212ca82bca6a70b47af07e75b",
+          "url": "velox-asset://c47cfe5faa00bca469590b32177b2608cbad49e212ca82bca6a70b47af07e75b",
+          "sha256": "c47cfe5faa00bca469590b32177b2608cbad49e212ca82bca6a70b47af07e75b",
+          "size_bytes": 23273785,
+          "duration_ms": 50000
+        },
+        "stock": [
+          {
+            "asset_id": "c47cfe5faa00bca469590b32177b2608cbad49e212ca82bca6a70b47af07e75b",
+            "url": "velox-asset://c47cfe5faa00bca469590b32177b2608cbad49e212ca82bca6a70b47af07e75b",
+            "sha256": "c47cfe5faa00bca469590b32177b2608cbad49e212ca82bca6a70b47af07e75b",
+            "size_bytes": 23273785,
+            "duration_ms": 50000
+          }
+        ],
+        "stock_fallback": false,
+        "voiceover": {
+          "asset_id": "8a2ce0f04ca265e4ddf9c9dc6f888e5069b3e0928eac4a6d3592e372d163436e",
+          "url": "velox-asset://8a2ce0f04ca265e4ddf9c9dc6f888e5069b3e0928eac4a6d3592e372d163436e",
+          "sha256": "8a2ce0f04ca265e4ddf9c9dc6f888e5069b3e0928eac4a6d3592e372d163436e",
+          "size_bytes": 62208,
+          "duration_ms": 10368,
+          "language": "it"
+        }
+      },
+      {
+        "scene_id": "scene-12",
+        "index": 12,
+        "kind": "outro",
+        "text": "Un altro momento di riflessione vede Mark Ruffalo parlare nuovamente, approfondendo temi legati alla collaborazione e all'interpretazione dei personaggi sul grande schermo. Il tono si fa più intimo con Demi Moore, che partecipa a un dialogo dedicato alle attrici. Condivide le sue esperienze in modo aperto, rivolgendosi direttamente al pubblico o ai compagni di settore. Infine, concludiamo questo giro di incontri con un altro scambio tra Demi Moore e i colleghi. Le sue parole chiudono questa selezione di momenti comici, lasciando un senso generale di calore e connessione artistica.",
+        "duration_seconds": 84.896,
+        "clip": {
+          "asset_id": "4bed94dde8728261b708781c5ae7b31886ab30f48bf8a0a0f4981fc7a0e78ed6",
+          "url": "velox-asset://4bed94dde8728261b708781c5ae7b31886ab30f48bf8a0a0f4981fc7a0e78ed6",
+          "sha256": "4bed94dde8728261b708781c5ae7b31886ab30f48bf8a0a0f4981fc7a0e78ed6",
+          "size_bytes": 22601477,
+          "duration_ms": 50000
+        },
+        "stock": [
+          {
+            "asset_id": "4bed94dde8728261b708781c5ae7b31886ab30f48bf8a0a0f4981fc7a0e78ed6",
+            "url": "velox-asset://4bed94dde8728261b708781c5ae7b31886ab30f48bf8a0a0f4981fc7a0e78ed6",
+            "sha256": "4bed94dde8728261b708781c5ae7b31886ab30f48bf8a0a0f4981fc7a0e78ed6",
+            "size_bytes": 22601477,
+            "duration_ms": 50000
+          }
+        ],
+        "stock_fallback": false,
+        "voiceover": {
+          "asset_id": "deeab1d1fc005ff02901f0eb0ef6ff5ccdb0297394e208ba126065180d2abe34",
+          "url": "velox-asset://deeab1d1fc005ff02901f0eb0ef6ff5ccdb0297394e208ba126065180d2abe34",
+          "sha256": "deeab1d1fc005ff02901f0eb0ef6ff5ccdb0297394e208ba126065180d2abe34",
+          "size_bytes": 209376,
+          "duration_ms": 34896,
+          "language": "it"
+        }
+      }
+    ]
+  }
+}
