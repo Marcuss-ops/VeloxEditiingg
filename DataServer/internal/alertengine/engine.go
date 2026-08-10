@@ -6,8 +6,6 @@ package alertengine
 import (
 	"context"
 	"errors"
-	"log"
-	"sync"
 	"time"
 
 	runtimealerts "velox-server/internal/alerts"
@@ -35,17 +33,16 @@ type Alert struct {
 
 // Engine evaluates the compute rule group on a periodic tick.
 type Engine struct {
-	tick      time.Duration
-	rules     []RuleFunc
-	notify    Notifier
-	mu        sync.Mutex
-	lastFired map[string]time.Time
-	pending   map[string]struct{}
+	tick  time.Duration
+	rules []RuleFunc
 
 	// Cooldown is the minimum interval between repeated compute events.
+	// It configures the shared runtime deduplicator rather than a
+	// compute-specific implementation.
 	Cooldown time.Duration
 
 	pipeline     *runtimealerts.Pipeline
+	runtime      *runtimealerts.Runtime
 	errorMetrics runtimealerts.ErrorMetrics
 }
 
@@ -54,49 +51,6 @@ var _ runtimealerts.Evaluator = (*Engine)(nil)
 // Notifier is retained as the compute-facing compatibility contract.
 type Notifier interface {
 	Send(ctx context.Context, alert Alert) error
-}
-
-// computeDeduplicator preserves the compute engine's name-based cooldown
-// while implementing the shared claim contract. Its lock is held only for
-// the claim bookkeeping, never while a notifier performs I/O.
-type computeDeduplicator struct{ engine *Engine }
-
-type computeClaim struct {
-	engine *Engine
-	key    string
-	now    time.Time
-	once   sync.Once
-}
-
-func (c *computeClaim) Commit() {
-	c.once.Do(func() {
-		c.engine.mu.Lock()
-		delete(c.engine.pending, c.key)
-		c.engine.lastFired[c.key] = c.now
-		c.engine.mu.Unlock()
-	})
-}
-
-func (c *computeClaim) Release() {
-	c.once.Do(func() {
-		c.engine.mu.Lock()
-		delete(c.engine.pending, c.key)
-		c.engine.mu.Unlock()
-	})
-}
-
-func (d computeDeduplicator) Claim(event runtimealerts.AlertEvent, now time.Time) (runtimealerts.Claim, bool) {
-	d.engine.mu.Lock()
-	defer d.engine.mu.Unlock()
-	key := event.RuleID
-	if _, ok := d.engine.pending[key]; ok {
-		return nil, false
-	}
-	if last, ok := d.engine.lastFired[key]; ok && now.Sub(last) < d.engine.Cooldown {
-		return nil, false
-	}
-	d.engine.pending[key] = struct{}{}
-	return &computeClaim{engine: d.engine, key: key, now: now}, true
 }
 
 type computeNotifierSink struct{ notifier Notifier }
@@ -124,17 +78,21 @@ func New(tick time.Duration, notifier Notifier) *Engine {
 	if tick <= 0 {
 		tick = 30 * time.Second
 	}
-	e := &Engine{
-		tick:      tick,
-		notify:    notifier,
-		lastFired: make(map[string]time.Time),
-		pending:   make(map[string]struct{}),
-		Cooldown:  5 * time.Minute,
-	}
+	e := &Engine{tick: tick, Cooldown: 5 * time.Minute}
 	e.pipeline = runtimealerts.NewPipeline(
-		computeDeduplicator{engine: e},
+		runtimealerts.NewCooldownDeduplicator(e.Cooldown),
 		computeNotifierSink{notifier: notifier},
 	)
+	e.runtime = runtimealerts.NewRuntime(e, e.pipeline, tick)
+	e.runtime.NormalizeDispatchError = func(err error) error {
+		classified := supervisor.ClassifyError(err)
+		if supervisor.IsInfrastructure(classified) {
+			e.recordError("infrastructure")
+			return classified
+		}
+		e.recordError("isolated_sink")
+		return nil
+	}
 	return e
 }
 
@@ -213,47 +171,20 @@ func (e *Engine) Evaluate(ctx context.Context) ([]runtimealerts.AlertEvent, erro
 	return events, errors.Join(errs...)
 }
 
-// Run evaluates and dispatches the compute group until cancellation. Sink
-// failures are returned to the supervisor instead of being silently logged.
+// Run delegates the complete compute lifecycle to the common runtime:
+// evaluator → event → dedup → persistence/notifier.
 func (e *Engine) Run(ctx context.Context) error {
-	log.Printf("[ALERT-ENGINE] starting — tick=%s, rules=%d", e.tick, len(e.rules))
-	if err := e.evaluateAll(ctx); err != nil {
-		return err
+	if dedup, ok := e.pipeline.Dedup.(*runtimealerts.CooldownDeduplicator); ok {
+		dedup.SetCooldown(e.Cooldown)
 	}
-	ticker := time.NewTicker(e.tick)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			log.Printf("[ALERT-ENGINE] exit: %v", ctx.Err())
-			return ctx.Err()
-		case <-ticker.C:
-			if err := e.evaluateAll(ctx); err != nil {
-				return err
-			}
-		}
-	}
+	return e.runtime.Run(ctx)
 }
 
-// evaluateAll is retained for existing package tests and now runs the shared
-// evaluator → event → dedup → sink pipeline. Rule evaluation errors and sink
-// failures are joined so a persistent infra failure reaches the supervisor;
-// alerts produced by healthy rules are still dispatched.
+// evaluateAll is retained for existing package tests and delegates to the
+// same common runtime pass used by Run.
 func (e *Engine) evaluateAll(ctx context.Context) error {
-	events, evalErr := e.Evaluate(ctx)
-	dispatchErr := e.pipeline.Dispatch(ctx, events)
-	if dispatchErr != nil {
-		classified := supervisor.ClassifyError(dispatchErr)
-		if supervisor.IsInfrastructure(classified) {
-			e.recordError("infrastructure")
-			dispatchErr = classified
-		} else {
-			// Isolated sink/notifier failures are retried by the shared
-			// pipeline on the next dispatch, not by restarting the whole
-			// runner. Keep the supervisor healthy while recording the loss.
-			e.recordError("isolated_sink")
-			dispatchErr = nil
-		}
+	if dedup, ok := e.pipeline.Dedup.(*runtimealerts.CooldownDeduplicator); ok {
+		dedup.SetCooldown(e.Cooldown)
 	}
-	return errors.Join(evalErr, dispatchErr)
+	return e.runtime.RunOnce(ctx)
 }

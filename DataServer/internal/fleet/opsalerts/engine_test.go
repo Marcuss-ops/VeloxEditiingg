@@ -261,15 +261,14 @@ func TestEngineEvaluatePropagatesInfrastructureStoreErrors(t *testing.T) {
 	engine, err := NewEngine(infraErrorEngineStore{}, evaluationSource{
 		workerIDs: []string{"worker-1"},
 		snapshots: map[string]*WorkerSnapshot{
-			"worker-1": {WorkerID: "worker-1", HeartbeatAgeSeconds: &goodValue},
+			"worker-1": {WorkerID: "worker-1", DiskUsedPercent: &goodValue},
 		},
 	})
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
-	_, err = engine.Evaluate(context.Background())
-	if !errors.Is(err, supervisor.ErrInfrastructure) || !errors.Is(err, sql.ErrConnDone) {
-		t.Fatalf("error = %v, want infrastructure classification and sql.ErrConnDone", err)
+	if err = engine.RunOnce(context.Background()); !errors.Is(err, supervisor.ErrInfrastructure) || !errors.Is(err, sql.ErrConnDone) {
+		t.Fatalf("RunOnce error = %v, want infrastructure classification and sql.ErrConnDone", err)
 	}
 }
 
@@ -289,11 +288,11 @@ func TestEngineNotifierFailureDoesNotReleasePersistedAlertClaim(t *testing.T) {
 	}
 	engine.AddSink(notifier)
 	engine.SetErrorMetrics(metrics)
-	if _, err := engine.Evaluate(context.Background()); err != nil {
-		t.Fatalf("first Evaluate: %v", err)
+	if err := engine.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first RunOnce: %v", err)
 	}
-	if _, err := engine.Evaluate(context.Background()); err != nil {
-		t.Fatalf("second Evaluate: %v", err)
+	if err := engine.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second RunOnce: %v", err)
 	}
 	if got := store.insertCount(); got != 1 {
 		t.Fatalf("persistence inserts = %d, want 1 after notifier failure", got)
@@ -319,11 +318,37 @@ func TestEngineEvaluateAggregatesIsolatedStoreErrors(t *testing.T) {
 		t.Fatalf("NewEngine: %v", err)
 	}
 	engine.SetErrorMetrics(metrics)
-	if _, err := engine.Evaluate(context.Background()); err != nil {
-		t.Fatalf("isolated store error must not fail whole evaluation: %v", err)
+	if err := engine.RunOnce(context.Background()); err != nil {
+		t.Fatalf("isolated store error must not fail whole runtime pass: %v", err)
 	}
 	if got := metrics.counts["store_insert"]; got != 1 {
 		t.Fatalf("store_insert metric count = %d, want 1", got)
+	}
+}
+
+func TestEvaluateIsSideEffectFreeAndRunOnceOwnsTheSinkLifecycle(t *testing.T) {
+	value := 90.0
+	store := &countingEngineStore{}
+	engine, err := NewEngine(store, evaluationSource{
+		workerIDs: []string{"worker-1"},
+		snapshots: map[string]*WorkerSnapshot{
+			"worker-1": {WorkerID: "worker-1", DiskUsedPercent: &value},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	if _, err := engine.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if got := store.insertCount(); got != 0 {
+		t.Fatalf("Evaluate inserts = %d, want 0; persistence belongs to Runtime", got)
+	}
+	if err := engine.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if got := store.insertCount(); got != 1 {
+		t.Fatalf("RunOnce inserts = %d, want 1", got)
 	}
 }
 

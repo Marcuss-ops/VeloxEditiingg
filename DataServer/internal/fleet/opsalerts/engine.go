@@ -74,7 +74,11 @@ type Engine struct {
 	errorMetrics        WorkerEvaluationErrorSink
 	runtimeErrorMetrics runtimealerts.ErrorMetrics
 	pipeline            *runtimealerts.Pipeline
+	runtime             *runtimealerts.Runtime
 	passMu              sync.Mutex
+	evaluateMu          sync.Mutex
+	passWorkers         []string
+	passSkipped         map[string]struct{}
 }
 
 func newEngine(s AlertStore, source WorkerAlertsDataSource, tick time.Duration, maxBatch int) (*Engine, error) {
@@ -111,6 +115,9 @@ func newEngine(s AlertStore, source WorkerAlertsDataSource, tick time.Duration, 
 		engine.dedup.Touch(DedupKey{WorkerID: event.Subject, RuleID: RuleID(event.RuleID), Severity: Severity(event.Severity)}, event.FiredAt, currentValue, event.Description)
 		return nil
 	}
+	engine.runtime = runtimealerts.NewRuntime(engine, engine.pipeline, tick)
+	engine.runtime.BeforeDispatch = engine.beforeDispatch
+	engine.runtime.NormalizeDispatchError = engine.normalizeDispatchError
 	return engine, nil
 }
 
@@ -161,6 +168,29 @@ func (e *Engine) AddSink(sink runtimealerts.Sink) {
 	e.pipeline.AddAfterCommitSink(sink)
 }
 
+func (e *Engine) normalizeDispatchError(err error) error {
+	if err == nil {
+		return nil
+	}
+	classified := supervisor.ClassifyError(err)
+	if supervisor.IsInfrastructure(classified) {
+		e.recordRuntimeError("infrastructure", 1)
+		return classified
+	}
+	if runtimealerts.StageOf(err) == "persistence" {
+		if e.errorMetrics != nil {
+			e.errorMetrics.RecordWorkerEvaluationErrors("store_insert", 1)
+		}
+	} else if runtimealerts.StageOf(err) == "notifier" {
+		if e.errorMetrics != nil {
+			e.errorMetrics.RecordWorkerEvaluationErrors("notifier", 1)
+		}
+	} else if e.errorMetrics != nil {
+		e.errorMetrics.RecordWorkerEvaluationErrors("pipeline", 1)
+	}
+	return nil
+}
+
 type fleetRuntimeDedup struct{ dedup *DedupStore }
 
 func (d fleetRuntimeDedup) Prepare(event runtimealerts.AlertEvent, now time.Time) runtimealerts.AlertEvent {
@@ -206,10 +236,11 @@ func (s fleetPersistenceSink) Process(ctx context.Context, event runtimealerts.A
 		currentValue = event.Labels["current_value"]
 	}
 	if err := s.store.InsertAlertEvent(ctx, store.AlertEvent{
-		EventID:        event.EventID,
-		WorkerID:       event.Subject,
-		RuleID:         event.RuleID,
-		Severity:       event.Severity,
+		EventID:  event.EventID,
+		WorkerID: event.Subject,
+		RuleID:   event.RuleID,
+		Severity: event.Severity,
+
 		State:          store.AlertStateActive,
 		FiredAt:        event.FiredAt,
 		LastObservedAt: event.FiredAt,
@@ -221,24 +252,48 @@ func (s fleetPersistenceSink) Process(ctx context.Context, event runtimealerts.A
 	return nil
 }
 
-// Run is the supervisor runner contract. A global evaluation error is
-// returned so supervisor restart/backoff policy can act on it.
-func (e *Engine) Run(ctx context.Context) error {
-	ticker := time.NewTicker(e.tick)
-	defer ticker.Stop()
-	if _, err := e.Evaluate(ctx); err != nil {
-		return err
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			if _, err := e.Evaluate(ctx); err != nil {
-				return err
-			}
+// Run delegates the complete fleet lifecycle to the common runtime:
+// evaluator → event → dedup → persistence/notifier.
+func (e *Engine) Run(ctx context.Context) error { return e.runtime.Run(ctx) }
+
+// RunOnce exposes one complete shared runtime pass for compatibility tests
+// and administrative pre-flight checks without making Evaluate perform side
+// effects.
+func (e *Engine) RunOnce(ctx context.Context) error { return e.runtime.RunOnce(ctx) }
+
+func (e *Engine) beforeDispatch(ctx context.Context, events []runtimealerts.AlertEvent) error {
+	e.passMu.Lock()
+	workers := append([]string(nil), e.passWorkers...)
+	e.passMu.Unlock()
+	firedByWorker := make(map[string]map[DedupKey]Alert, len(workers))
+	for _, event := range events {
+		if firedByWorker[event.Subject] == nil {
+			firedByWorker[event.Subject] = make(map[DedupKey]Alert)
+		}
+		firedByWorker[event.Subject][DedupKey{WorkerID: event.Subject, RuleID: RuleID(event.RuleID), Severity: Severity(event.Severity)}] = Alert{
+			WorkerID: event.Subject,
+			RuleID:   RuleID(event.RuleID),
+			Severity: Severity(event.Severity),
 		}
 	}
+	var errs []error
+	e.passMu.Lock()
+	skipped := make(map[string]struct{}, len(e.passSkipped))
+	for workerID := range e.passSkipped {
+		skipped[workerID] = struct{}{}
+	}
+	e.passMu.Unlock()
+	for _, workerID := range workers {
+		if _, ok := skipped[workerID]; ok {
+			continue
+		}
+		failures, infrastructureErrors := e.resolveWorker(ctx, workerID, firedByWorker[workerID])
+		if failures > 0 && e.errorMetrics != nil {
+			e.errorMetrics.RecordWorkerEvaluationErrors("store_resolve", failures)
+		}
+		errs = append(errs, infrastructureErrors...)
+	}
+	return errors.Join(errs...)
 }
 
 // Evaluate runs one complete alert pass and returns the alerts observed.
@@ -246,8 +301,8 @@ func (e *Engine) Run(ctx context.Context) error {
 // supervisor. Snapshot and per-worker persistence failures are isolated,
 // aggregated by category, and reported through the optional metric sink.
 func (e *Engine) Evaluate(ctx context.Context) ([]runtimealerts.AlertEvent, error) {
-	e.passMu.Lock()
-	defer e.passMu.Unlock()
+	e.evaluateMu.Lock()
+	defer e.evaluateMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -261,6 +316,10 @@ func (e *Engine) Evaluate(ctx context.Context) ([]runtimealerts.AlertEvent, erro
 	alerts := make([]runtimealerts.AlertEvent, 0)
 	errorCounts := make(map[string]uint64)
 	var infrastructureErrors []error
+	e.passMu.Lock()
+	e.passWorkers = append(e.passWorkers[:0], workerIDs...)
+	e.passSkipped = make(map[string]struct{})
+	e.passMu.Unlock()
 	for _, workerID := range workerIDs {
 		workerAlerts, workerErrors, workerInfrastructureErrors := e.evaluateWorker(ctx, cc, workerID)
 		alerts = append(alerts, workerAlerts...)
@@ -268,6 +327,11 @@ func (e *Engine) Evaluate(ctx context.Context) ([]runtimealerts.AlertEvent, erro
 			errorCounts[category] += count
 		}
 		infrastructureErrors = append(infrastructureErrors, workerInfrastructureErrors...)
+		if len(workerErrors) > 0 || len(workerInfrastructureErrors) > 0 {
+			e.passMu.Lock()
+			e.passSkipped[workerID] = struct{}{}
+			e.passMu.Unlock()
+		}
 	}
 	for category, count := range errorCounts {
 		if e.errorMetrics != nil {
@@ -312,10 +376,6 @@ func (e *Engine) evaluateWorker(ctx context.Context, cc CallCtx, workerID string
 		fired[key] = hit
 	}
 
-	resolveFailures, resolveInfrastructureErrors := e.resolveWorker(ctx, workerID, fired)
-	errorsByCategory["store_resolve"] += resolveFailures
-	infrastructureErrors = append(infrastructureErrors, resolveInfrastructureErrors...)
-
 	sharedEvents := make([]runtimealerts.AlertEvent, 0, len(fired))
 	for _, hit := range fired {
 		event := runtimealerts.AlertEvent{
@@ -329,23 +389,6 @@ func (e *Engine) evaluateWorker(ctx context.Context, cc CallCtx, workerID string
 			FiredAt:     hit.FiredAt,
 		}
 		sharedEvents = append(sharedEvents, event)
-	}
-	// Dispatch each event independently so one sink failure cannot prevent
-	// successfully persisted sibling events from being observed. This keeps
-	// the retry boundary per alert rather than per batch.
-	for _, event := range sharedEvents {
-		_, err := e.pipeline.DispatchOne(ctx, event)
-		if err != nil {
-			if supervisor.IsInfrastructure(supervisor.ClassifyError(err)) {
-				infrastructureErrors = append(infrastructureErrors, err)
-			} else if runtimealerts.StageOf(err) == "persistence" {
-				errorsByCategory["store_insert"]++
-			} else if runtimealerts.StageOf(err) == "notifier" {
-				errorsByCategory["notifier"]++
-			} else {
-				errorsByCategory["pipeline"]++
-			}
-		}
 	}
 	return sharedEvents, errorsByCategory, infrastructureErrors
 }

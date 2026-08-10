@@ -179,8 +179,8 @@ func TestPipelineAfterCommitRetriesSuppressedEvent(t *testing.T) {
 func TestCooldownDeduplicatorSeparatesRuleGroups(t *testing.T) {
 	dedup := alerts.NewCooldownDeduplicator(time.Hour)
 	now := time.Now().UTC()
-	compute := alerts.AlertEvent{Group: alerts.GroupCompute, RuleID: "offline", Subject: "aggregate"}
-	fleet := alerts.AlertEvent{Group: alerts.GroupFleet, RuleID: "offline", Subject: "worker-1"}
+	compute := alerts.AlertEvent{Group: alerts.GroupCompute, RuleID: "offline", Subject: "shared-subject"}
+	fleet := alerts.AlertEvent{Group: alerts.GroupFleet, RuleID: "offline", Subject: "shared-subject"}
 	computeClaim, ok := dedup.Claim(compute, now)
 	if !ok {
 		t.Fatal("compute should initially claim")
@@ -211,6 +211,16 @@ func TestPipelineSuppliedEventIDReachesSink(t *testing.T) {
 	}
 	if got != eventID {
 		t.Fatalf("sink EventID=%q, want %q", got, eventID)
+	}
+}
+
+func TestEventIDSeparatesRuleGroups(t *testing.T) {
+	now := time.Unix(10, 20).UTC()
+	compute := alerts.AlertEvent{Group: alerts.GroupCompute, RuleID: "offline", Subject: "shared-subject", Severity: "warning", FiredAt: now}
+	fleet := compute
+	fleet.Group = alerts.GroupFleet
+	if got, want := alerts.EventIDFor(compute), alerts.EventIDFor(fleet); got == want {
+		t.Fatalf("compute and fleet event IDs collided: %q", got)
 	}
 }
 
