@@ -72,6 +72,38 @@ func runSmoke(client *fleetClient, args []string) int {
 
 // runResume — POST /api/v1/admin/workers/{id}/resume;
 // polls /admin/operations/{op_id}.
+func runQuarantine(client *fleetClient, args []string) int {
+	workerID, ok := oneArg(args)
+	if !ok {
+		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "quarantine requires a worker_id"))
+		return ExitMisuse
+	}
+	return runMutation(client, "quarantine", workerID, workerPath(workerID, "quarantine"), map[string]any{"reason": parseReasonFlag(args)})
+}
+
+func runRestart(client *fleetClient, args []string) int {
+	workerID, ok := oneArg(args)
+	if !ok {
+		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "restart requires a worker_id"))
+		return ExitMisuse
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var response map[string]any
+	status, err := client.doJSON(ctx, "POST", workerPath(workerID, "restart"), map[string]any{"reason": parseReasonFlag(args)}, &response)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, fmtExit(ExitUnexpected, "%v", err))
+		return ExitUnexpected
+	}
+	if status != 200 {
+		ec := MapHTTPStatusToOpExit(status)
+		fmt.Fprintln(os.Stderr, fmtExit(ec, "POST restart status=%d", status))
+		return ec
+	}
+	fmt.Printf("fleetctl: restart scheduled worker=%s\n", workerID)
+	return ExitOK
+}
+
 func runResume(client *fleetClient, args []string) int {
 	workerID, ok := oneArg(args)
 	if !ok {

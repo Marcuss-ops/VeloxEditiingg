@@ -52,7 +52,7 @@ FLEETCTL_GO_BIN="$MOCK" \
 VELOX_MASTER_URL="https://master.example.test" \
 VELOX_ADMIN_TOKEN='env-token' \
     "$SCRIPT" drain worker-1 "manual drain"
-expected_args=$'drain\nworker-1\n--reason\nmanual drain\n--master=https://master.example.test'
+expected_args=$'drain\nworker-1\nmanual drain\n--master=https://master.example.test'
 actual_args="$(cat "$ARGS")"
 [[ "$actual_args" == "$expected_args" ]] || {
     printf 'FAIL: positional reason was not translated\nwant:\n%s\ngot:\n%s\n' "$expected_args" "$actual_args" >&2
@@ -186,28 +186,34 @@ actual_args="$(cat "$ARGS")"
 }
 
 printf '{}\n' >"$TMP/payload.json"
-ARGS="$TMP/job-submit-args"
-LEGACY_ARGS="$TMP/legacy-args"
-LEGACY="$TMP/legacy"
-cat >"$LEGACY" <<'LEGACY'
-#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$@" >"$FLEETCTL_TEST_LEGACY_ARGS"
-LEGACY
-chmod +x "$LEGACY"
-FLEETCTL_TEST_ARGS="$ARGS" \
-FLEETCTL_TEST_LEGACY_ARGS="$LEGACY_ARGS" \
-FLEETCTL_TEST_ENV="$ENV_OUT" \
-FLEETCTL_GO_BIN="$MOCK" \
-FLEETCTL_LEGACY_BIN="$LEGACY" \
-VELOX_MASTER_URL="https://master.example.test" \
-VELOX_ADMIN_TOKEN='env-token' \
-    "$SCRIPT" job submit --payload "$TMP/payload.json"
-expected_args=$'job\nsubmit\n--payload\n'"$TMP/payload.json"
-actual_args="$(cat "$LEGACY_ARGS")"
-[[ "$actual_args" == "$expected_args" ]] || {
-    printf 'FAIL: job submit was not forwarded to legacy bridge\nwant:\n%s\ngot:\n%s\n' "$expected_args" "$actual_args" >&2
-    exit 1
-}
+for command in \
+    "quarantine worker-1 manual quarantine" \
+    "restart worker-1 manual restart" \
+    "job submit --payload $TMP/payload.json" \
+    "job certify --payload $TMP/payload.json"; do
+    # shellcheck disable=SC2086
+    read -r -a command_args <<<"$command"
+    ARGS="$TMP/command-args"
+    FLEETCTL_TEST_ARGS="$ARGS" \
+    FLEETCTL_TEST_ENV="$ENV_OUT" \
+    FLEETCTL_GO_BIN="$MOCK" \
+    VELOX_MASTER_URL="https://master.example.test" \
+    VELOX_ADMIN_TOKEN='env-token' \
+        "$SCRIPT" "${command_args[@]}"
+    actual_args="$(cat "$ARGS")"
+    expected_args=""
+    for arg in "${command_args[@]}"; do
+        if [[ -n "$expected_args" ]]; then
+            expected_args+=$'\n'
+        fi
+        expected_args+="$arg"
+    done
+    expected_args+=$'\n'
+    expected_args+='--master=https://master.example.test'
+    [[ "$actual_args" == "$expected_args" ]] || {
+        printf 'FAIL: command was not forwarded to Go client: %s\nwant:\n%s\ngot:\n%s\n' "$command" "$expected_args" "$actual_args" >&2
+        exit 1
+    }
+done
 
 echo 'fleetctl launcher delegation: PASS'

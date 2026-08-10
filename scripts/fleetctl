@@ -1,36 +1,21 @@
 #!/usr/bin/env bash
-# Thin fleetctl launcher.
-#
-# The Go client owns HTTP, authentication, typed argument parsing, operation
-# polling, terminal states and output for migrated commands. The compatibility
-# bridge remains available for commands not yet implemented by Go.
-
+# Compatibility launcher for the single typed fleetctl implementation.
+# Bash owns only binary/token/environment resolution; HTTP, parsing, polling,
+# operation IDs, terminal states, rollout and job semantics live in Go.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MASTER_URL="${VELOX_MASTER_URL:-http://127.0.0.1:8000}"
 MASTER_URL="${MASTER_URL%/}"
-LEGACY="${FLEETCTL_LEGACY_BIN:-$ROOT/scripts/fleetctl-legacy}"
 
 usage() {
     cat <<'EOF'
 Usage:
-  scripts/fleetctl status [--json]
-  scripts/fleetctl inspect <worker_id>
-  scripts/fleetctl drain <worker_id> [reason]
-  scripts/fleetctl resume <worker_id> [reason]
-  scripts/fleetctl update <worker_id> <ghcr-image@sha256:digest> [reason]
-  scripts/fleetctl rollback <worker_id> <ghcr-image@sha256:digest> [reason]
-  scripts/fleetctl operations [worker_id] [status]
-  scripts/fleetctl wait-ready <worker_id> [--digest image-or-sha256] [--timeout seconds] [--poll seconds]
-  scripts/fleetctl rollout [--digest image-or-sha256] [--workers all|id1,id2,...] [--reason R] [--wait-ready]
-  scripts/fleetctl job inspect <job_id> [--json]
-  scripts/fleetctl job metrics <job_id>
-  scripts/fleetctl job watch <job_id> [--timeout seconds] [--poll seconds] [--json]
+  scripts/fleetctl <command> [args]
 
-Commands not yet implemented by the Go client (quarantine, restart,
-job submit/certify) are forwarded to the compatibility bridge:
-  scripts/fleetctl-legacy <command> ...
+The command is executed by the typed Go client. Supported commands include:
+  status inspect drain resume quarantine restart update rollback operations
+  wait-ready rollout smoke ssh-check job doctor
 
 Environment:
   VELOX_MASTER_URL   Master base URL (default: http://127.0.0.1:8000)
@@ -67,61 +52,14 @@ resolve_go_fleetctl() {
     printf '%s' "$candidate"
 }
 
-exec_go_fleetctl() {
-    local binary resolved_token
-    binary="$(resolve_go_fleetctl)"
-    export VELOX_MASTER_URL="$MASTER_URL"
-    if [[ -z "${VELOX_ADMIN_TOKEN:-}" ]]; then
-        resolved_token="$(resolve_token)"
-        [[ -n "$resolved_token" ]] || die 'resolved admin token is empty'
-        export VELOX_ADMIN_TOKEN="$resolved_token"
-    fi
-    exec "$binary" "$@" --master="$MASTER_URL"
-}
-
-exec_legacy_fleetctl() {
-    [[ -x "$LEGACY" ]] || die "legacy fleetctl bridge not found: $LEGACY"
-    export VELOX_MASTER_URL="$MASTER_URL"
-    exec "$LEGACY" "$@"
-}
-
-command=${1:-help}
-if [[ "$command" == "help" || "$command" == "--help" || "$command" == "-h" ]]; then
+if [[ $# -eq 0 || "${1:-}" == "help" || "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     usage
-    exit 0
+    [[ $# -eq 0 ]] && exit 2 || exit 0
 fi
 
-# These commands have a complete typed Go implementation. Keep the shell
-# boundary limited to auth/URL compatibility and the historical drain/resume
-# positional reason translation.
-case "$command" in
-    update|rollback|operations|wait-ready|rollout|inspect|smoke|doctor)
-        exec_go_fleetctl "$@"
-        ;;
-    status)
-        if [[ "${2:-}" == "--json" ]]; then
-            exec_go_fleetctl "$@"
-        fi
-        exec_legacy_fleetctl "$@"
-        ;;
-    drain|resume)
-        delegated_args=("$@")
-        if [[ $# -ge 3 && "$3" != --* ]]; then
-            delegated_args=("$1" "$2" --reason "$3")
-        fi
-        exec_go_fleetctl "${delegated_args[@]}"
-        ;;
-    job)
-        case "${2:-}" in
-            inspect|metrics|watch)
-                exec_go_fleetctl "$@"
-                ;;
-            *)
-                exec_legacy_fleetctl "$@"
-                ;;
-        esac
-        ;;
-    *)
-        exec_legacy_fleetctl "$@"
-        ;;
-esac
+binary="$(resolve_go_fleetctl)"
+export VELOX_MASTER_URL="$MASTER_URL"
+if [[ -z "${VELOX_ADMIN_TOKEN:-}" ]]; then
+    export VELOX_ADMIN_TOKEN="$(resolve_token)"
+fi
+exec "$binary" "$@" "--master=$MASTER_URL"

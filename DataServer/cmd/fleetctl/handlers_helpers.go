@@ -35,21 +35,35 @@ func oneArg(args []string) (string, bool) {
 	return "", false
 }
 
-// parseReasonFlag pulls --reason=<value> out of args defensively
-// (returns the default if missing). Kept simple; richer flag
-// parsing lives in runUpdate.
+// parseReasonFlag preserves the historical positional form
+// (`command WORKER REASON`) while accepting the typed form
+// (`command WORKER --reason REASON` / `--reason=REASON`).
 func parseReasonFlag(args []string) string {
-	for _, a := range args {
-		if strings.HasPrefix(a, "--reason=") {
-			return strings.TrimPrefix(a, "--reason=")
+	for i, arg := range args {
+		if arg == "--reason" && i+1 < len(args) {
+			return args[i+1]
 		}
+		if strings.HasPrefix(arg, "--reason=") {
+			return strings.TrimPrefix(arg, "--reason=")
+		}
+	}
+	positional := make([]string, 0, 2)
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		positional = append(positional, arg)
+	}
+	if len(positional) > 1 {
+		return strings.Join(positional[1:], " ")
 	}
 	return "fleetctl " + safeFirstArg(args)
 }
+
 func safeFirstArg(args []string) string {
-	for _, a := range args {
-		if !strings.HasPrefix(a, "-") {
-			return a
+	for _, arg := range args {
+		if !strings.HasPrefix(arg, "-") {
+			return arg
 		}
 	}
 	return ""

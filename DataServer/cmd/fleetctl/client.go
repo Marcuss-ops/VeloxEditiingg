@@ -199,6 +199,19 @@ func snippet(s []byte, n int) string {
 	return string(s[:n]) + "…"
 }
 
+// withToken returns a shallow copy of the client using a different
+// bearer token, sharing the same HTTP transport. Used by job submit,
+// which issues an ephemeral M2M jobs.submit key and authenticates the
+// job POSTs with that least-privilege token instead of the admin token.
+func (c *fleetClient) withToken(token string) *fleetClient {
+	if c == nil {
+		return nil
+	}
+	clone := *c
+	clone.token = token
+	return &clone
+}
+
 // Guard for unused imports when the file is trimmed down. Kept
 // as a no-op expression so the import set stays stable.
 var _ = context.Background

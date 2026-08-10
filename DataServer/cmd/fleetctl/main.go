@@ -53,11 +53,13 @@ const (
 	subSSHCheck   subCommand = "ssh-check"
 	subJob        subCommand = "job"
 	subDoctor     subCommand = "doctor"
+	subQuarantine subCommand = "quarantine"
+	subRestart    subCommand = "restart"
 )
 
 func (s subCommand) valid() bool {
 	switch s {
-	case subStatus, subInspect, subDrain, subUpdate, subSmoke, subResume, subRollback, subOperations, subWaitReady, subRollout, subSSHCheck, subJob, subDoctor:
+	case subStatus, subInspect, subDrain, subUpdate, subSmoke, subResume, subRollback, subOperations, subWaitReady, subRollout, subSSHCheck, subJob, subDoctor, subQuarantine, subRestart:
 		return true
 	default:
 		return false
@@ -91,6 +93,8 @@ Sub-commands:
   job inspect <job_id>    complete job diagnostics (metrics/cache/artifact/delivery)
   job metrics <job_id>    execution and cache metrics for one job
   job watch <job_id>      follow the persisted job event timeline
+  quarantine <worker_id>  exclude worker from placement
+  restart <worker_id>     schedule worker restart
   doctor --production     fleet/readiness/digest production checks
 
 Auth (in precedence order):
@@ -183,6 +187,10 @@ func runMain(args []string) int {
 		return runJob(client, rest[1:])
 	case subDoctor:
 		return runDoctor(client, rest[1:])
+	case subQuarantine:
+		return runQuarantine(client, rest[1:])
+	case subRestart:
+		return runRestart(client, rest[1:])
 	}
 	return ExitUnexpected
 }

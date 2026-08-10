@@ -20,6 +20,10 @@ func runJob(client *fleetClient, args []string) int {
 		return ExitMisuse
 	}
 	switch args[0] {
+	case "submit":
+		return runJobSubmit(client, args[1:], false)
+	case "certify":
+		return runJobSubmit(client, args[1:], true)
 	case "inspect":
 		jobID, jsonOutput, err := parseJobReadArgs(args[1:], "inspect")
 		if err != nil {
