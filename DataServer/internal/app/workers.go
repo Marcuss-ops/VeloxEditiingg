@@ -10,6 +10,7 @@ import (
 	workersapi "velox-server/internal/handlers/remote/workers"
 	"velox-server/internal/handlers/remote/workers/assets"
 	"velox-server/internal/handlers/remote/workers/lifecycle"
+	validationhandlers "velox-server/internal/handlers/remote/workers/validation"
 	"velox-server/internal/handlers/server/api"
 	driveintegration "velox-server/internal/integrations/drive"
 	"velox-server/internal/store"
@@ -46,6 +47,7 @@ type WorkersModule struct {
 	adminWorkersMetricsAggregatorHandler *api.AdminWorkersMetricsAggregatorHandler
 	adminWorkersSSHCheckHandler          *api.AdminWorkersSSHCheckHandler
 	adminWorkersAlertsHandler            *api.AdminWorkersAlertsHandler
+	validationHandler                    *validationhandlers.Handler
 	protectedAssetsHandler               *api.ProtectedAssetsHandler
 	protectedAssetsAuth                  gin.HandlerFunc
 }
@@ -197,6 +199,15 @@ func (m *WorkersModule) SetAlertsHandler(h *api.AdminWorkersAlertsHandler) {
 	m.adminWorkersAlertsHandler = h
 }
 
+// SetValidationHandler wires the persistent worker-validation endpoints.
+// The handler is injected at the composition root so no route can silently
+// fall back to an in-memory or permissive validation state.
+func (m *WorkersModule) SetValidationHandler(h *validationhandlers.Handler) {
+	if m != nil {
+		m.validationHandler = h
+	}
+}
+
 func (m *WorkersModule) Name() string {
 	return "workers"
 }
@@ -211,6 +222,9 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 	// once the usage counter showed zero sustained traffic.
 	if m.workerLifecycle != nil {
 		r.POST("/api/v1/agent/register", m.workerLifecycle.RegisterV2Handler())
+	}
+	if m.validationHandler != nil {
+		r.POST("/api/v1/agent/validation", m.protectedAssetsAuth, m.validationHandler.HandleValidationReport())
 	}
 	if m.workerAssetHandler != nil {
 		r.GET("/api/v1/agent/assets/:asset_id", m.workerAssetHandler.ServeAsset())
@@ -380,6 +394,16 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 	if m.adminWorkersAlertsHandler != nil {
 		fleetGroup.GET("/alerts/active", m.adminWorkersAlertsHandler.ListFleetActiveAlerts())
 		fleetGroup.GET("/alerts/recent", m.adminWorkersAlertsHandler.ListRecentAlerts())
+	}
+	if m.validationHandler != nil {
+		// Keep validation independent from the WorkerCard handler so a
+		// partial bootstrap cannot silently omit a persistence-backed route.
+		adminValidation := r.Group("/api/v1/admin/workers")
+		if m.adminAuth != nil {
+			adminValidation.Use(m.adminAuth)
+		}
+		adminValidation.GET("/:worker_id/validation", m.validationHandler.GetWorkerValidationHandler())
+		fleetGroup.GET("/validations", m.validationHandler.GetAllValidationsHandler())
 	}
 
 	log.Printf("[WORKERS] Routes registered")

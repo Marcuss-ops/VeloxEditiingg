@@ -1,6 +1,7 @@
 package validation
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"time"
@@ -23,36 +24,55 @@ type ValidationReport struct {
 // ValidationStatus is an alias to the store type for backward compatibility
 type ValidationStatus = store.WorkerValidationStatus
 
-// ValidationStore holds validation statuses in memory and persists to SQLite
+// ValidationRepository is the persistence boundary required by the HTTP
+// handlers. Keeping this interface local makes handlers independently
+// testable without opening SQLite.
+type ValidationRepository interface {
+	SaveValidation(report *ValidationReport) error
+	GetValidation(workerID string) (*ValidationStatus, error)
+	GetAllValidations() ([]map[string]any, error)
+}
+
+// ValidationStore persists validation statuses to SQLite.
 type ValidationStore struct {
 	db *store.SQLiteStore
 }
 
-// NewValidationStore creates a new validation store
+var errValidationStoreNotConfigured = errors.New("validation store not configured")
+
+// NewValidationStore creates a validation store backed by db.
 func NewValidationStore(db *store.SQLiteStore) *ValidationStore {
 	return &ValidationStore{db: db}
 }
 
-// globalValidationStore is the global instance
-var globalValidationStore *ValidationStore
-
-// InitValidationStore initializes the global validation store
-func InitValidationStore(db *store.SQLiteStore) {
-	globalValidationStore = NewValidationStore(db)
-
-	// Create table if not exists
-	if db != nil {
-		err := db.CreateValidationTableIfNotExists()
-		if err != nil {
-			log.Printf("[WARN] Failed to create validation table: %v", err)
-		}
+// GetAllValidations retrieves all validation statuses from the backing store.
+func (vs *ValidationStore) GetAllValidations() ([]map[string]any, error) {
+	if vs == nil || vs.db == nil {
+		return nil, errValidationStoreNotConfigured
 	}
+	return vs.db.GetAllWorkerValidations()
 }
 
-// SaveValidation saves a validation report to the store
+// Handler serves worker validation endpoints using an injected repository.
+type Handler struct {
+	repository ValidationRepository
+}
+
+// NewHandler creates validation handlers backed by repository. Production
+// composition must pass a non-nil repository; a nil repository is treated as
+// a wiring failure by every request path and never as a successful fallback.
+func NewHandler(repository ValidationRepository) *Handler {
+	return &Handler{repository: repository}
+}
+
+func (h *Handler) repositoryReady() bool {
+	return h != nil && h.repository != nil
+}
+
+// SaveValidation saves a validation report to the store.
 func (vs *ValidationStore) SaveValidation(report *ValidationReport) error {
-	if vs.db == nil {
-		return nil
+	if vs == nil || vs.db == nil {
+		return errValidationStoreNotConfigured
 	}
 
 	var validatedAt time.Time
@@ -81,17 +101,18 @@ func (vs *ValidationStore) SaveValidation(report *ValidationReport) error {
 	return vs.db.SaveWorkerValidation(report.WorkerID, report.ValidationCode, report.CanonicalUnit, report.ExecStart, validatedAt, failureReason)
 }
 
-// GetValidation retrieves validation status for a worker
+// GetValidation retrieves validation status for a worker.
 func (vs *ValidationStore) GetValidation(workerID string) (*ValidationStatus, error) {
-	if vs.db == nil {
-		return nil, nil
+	if vs == nil || vs.db == nil {
+		return nil, errValidationStoreNotConfigured
 	}
 
 	return vs.db.GetWorkerValidation(workerID)
 }
 
-// HandleValidationReport handles POST /api/workers/validation
-func HandleValidationReport() gin.HandlerFunc {
+// HandleValidationReport handles the canonical POST /api/v1/agent/validation
+// route. Legacy /api/workers paths are test-only and are not mounted.
+func (h *Handler) HandleValidationReport() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var report ValidationReport
 		if err := c.ShouldBindJSON(&report); err != nil {
@@ -118,10 +139,38 @@ func HandleValidationReport() gin.HandlerFunc {
 			return
 		}
 
-		if globalValidationStore != nil {
-			if err := globalValidationStore.SaveValidation(&report); err != nil {
-				log.Printf("[WARN] Failed to save validation report for %s: %v", report.WorkerID, err)
+		if !h.repositoryReady() {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"ok":    false,
+				"error": "validation repository not configured",
+			})
+			return
+		}
+		if authenticatedWorkerID, exists := c.Get("authenticated_worker_id"); exists {
+			if workerID, ok := authenticatedWorkerID.(string); !ok || workerID != report.WorkerID {
+				c.JSON(http.StatusForbidden, gin.H{
+					"ok":    false,
+					"error": "worker identity does not match validation report",
+				})
+				return
 			}
+		}
+		if authenticatedAdmin, exists := c.Get("authenticated_admin"); exists {
+			if isAdmin, ok := authenticatedAdmin.(bool); !ok || !isAdmin {
+				c.JSON(http.StatusForbidden, gin.H{
+					"ok":    false,
+					"error": "invalid authenticated admin context",
+				})
+				return
+			}
+		}
+		if err := h.repository.SaveValidation(&report); err != nil {
+			log.Printf("[ERROR] Failed to save validation report for %s: %v", report.WorkerID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"ok":    false,
+				"error": "failed to persist validation report",
+			})
+			return
 		}
 
 		log.Printf("[VALID] Validation Report: worker=%s code=%s unit=%s",
@@ -139,10 +188,14 @@ func HandleValidationReport() gin.HandlerFunc {
 	}
 }
 
-// GetWorkerValidationHandler handles GET /api/workers/:id/validation
-func GetWorkerValidationHandler() gin.HandlerFunc {
+// GetWorkerValidationHandler handles the canonical
+// GET /api/v1/admin/workers/:worker_id/validation route.
+func (h *Handler) GetWorkerValidationHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		workerID := c.Param("id")
+		workerID := c.Param("worker_id")
+		if workerID == "" {
+			workerID = c.Param("id")
+		}
 		if workerID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"ok":    false,
@@ -151,17 +204,15 @@ func GetWorkerValidationHandler() gin.HandlerFunc {
 			return
 		}
 
-		if globalValidationStore == nil {
-			c.JSON(http.StatusOK, gin.H{
-				"worker_id": workerID,
-				"valid":     true,
-				"code":      "UNKNOWN",
-				"message":   "Validation store not initialized",
+		if !h.repositoryReady() {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"ok":    false,
+				"error": "validation repository not configured",
 			})
 			return
 		}
 
-		status, err := globalValidationStore.GetValidation(workerID)
+		status, err := h.repository.GetValidation(workerID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"ok":    false,
@@ -192,17 +243,19 @@ func GetWorkerValidationHandler() gin.HandlerFunc {
 	}
 }
 
-// GetAllValidationsHandler handles GET /api/workers/validations
-func GetAllValidationsHandler() gin.HandlerFunc {
+// GetAllValidationsHandler handles the canonical
+// GET /api/v1/fleet/validations route.
+func (h *Handler) GetAllValidationsHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if globalValidationStore == nil || globalValidationStore.db == nil {
-			c.JSON(http.StatusOK, gin.H{
-				"validations": []interface{}{},
+		if !h.repositoryReady() {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"ok":    false,
+				"error": "validation repository not configured",
 			})
 			return
 		}
 
-		validations, err := globalValidationStore.db.GetAllWorkerValidations()
+		validations, err := h.repository.GetAllValidations()
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"ok":    false,
@@ -216,20 +269,6 @@ func GetAllValidationsHandler() gin.HandlerFunc {
 			"validations": validations,
 		})
 	}
-}
-
-// CheckWorkerValidation checks if a worker is validated and allowed to run jobs
-func CheckWorkerValidation(workerID string) (bool, string) {
-	if globalValidationStore == nil {
-		return true, ""
-	}
-
-	status, err := globalValidationStore.GetValidation(workerID)
-	if err != nil || status == nil {
-		return true, ""
-	}
-
-	return status.ValidationCode == "PASS", status.FailureReason
 }
 
 func getValidationMessage(code string) string {

@@ -69,11 +69,16 @@ func WorkerOrAdminAuthMiddleware(cfg *config.Config, tokenMgr *workersreg.TokenM
 		}
 		token := workersreg.ExtractBearerToken(c.GetHeader("Authorization"), c.GetHeader("X-Worker-Token"), "")
 		if token != "" && admin != "" && subtle.ConstantTimeCompare([]byte(token), []byte(admin)) == 1 {
+			// Admin operators may submit a report for any worker during
+			// remediation. Mark this explicit exception so handlers do not
+			// confuse it with an unbound worker token.
+			c.Set("authenticated_admin", true)
 			c.Next()
 			return
 		}
 		if token != "" && tokenMgr != nil {
-			if _, ok := tokenMgr.ValidateWorkerCommandToken(token); ok {
+			if workerID, ok := tokenMgr.ValidateWorkerCommandToken(token); ok {
+				c.Set("authenticated_worker_id", workerID)
 				c.Next()
 				return
 			}

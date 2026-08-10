@@ -12,6 +12,7 @@ import (
 	"velox-server/internal/config"
 	workersapi "velox-server/internal/handlers/remote/workers"
 	"velox-server/internal/handlers/remote/workers/lifecycle"
+	validationhandlers "velox-server/internal/handlers/remote/workers/validation"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/protectedasset"
 	"velox-server/internal/store"
@@ -47,6 +48,7 @@ func wiredWorkersModule(t *testing.T) *WorkersModule {
 	)))
 	m.SetMetricsAggregatorHandler(api.NewAdminWorkersMetricsAggregatorHandler(sqlStore, 5*time.Minute))
 	m.SetAlertsHandler(api.NewAdminWorkersAlertsHandler(sqlStore))
+	m.SetValidationHandler(validationhandlers.NewHandler(validationhandlers.NewValidationStore(sqlStore)))
 	m.SetMetricsHandler(api.NewMetricsHandler(reader.Metrics))
 	m.SetSessionsHandler(api.NewSessionsHandler(reader.Sessions))
 	m.SetEventsHandler(api.NewEventsHandler(reader.Events))
@@ -74,18 +76,21 @@ func TestWorkersModule_CanonicalNamespacesRegistered(t *testing.T) {
 	want := []string{
 		// Canonical agent namespace (worker-authenticated traffic).
 		http.MethodPost + " /api/v1/agent/register",
+		http.MethodPost + " /api/v1/agent/validation",
 		http.MethodGet + " /api/v1/agent/assets/:asset_id",
 		http.MethodGet + " /api/v1/agent/cache/protected-assets",
 		// Canonical admin operator namespace (including the migrated
 		// /worker/* control actions and the revoked list).
 		http.MethodGet + " /api/v1/admin/workers",
 		http.MethodGet + " /api/v1/admin/workers/:worker_id",
+		http.MethodGet + " /api/v1/admin/workers/:worker_id/validation",
 		http.MethodPost + " /api/v1/admin/workers/:worker_id/revoke",
 		http.MethodPost + " /api/v1/admin/workers/:worker_id/unrevoke",
 		http.MethodPost + " /api/v1/admin/workers/:worker_id/restart",
 		http.MethodGet + " /api/v1/admin/workers/revoked",
 		// Canonical fleet aggregate namespace.
 		http.MethodGet + " /api/v1/fleet/metrics",
+		http.MethodGet + " /api/v1/fleet/validations",
 		http.MethodGet + " /api/v1/fleet/alerts/active",
 		http.MethodGet + " /api/v1/fleet/alerts/recent",
 	}

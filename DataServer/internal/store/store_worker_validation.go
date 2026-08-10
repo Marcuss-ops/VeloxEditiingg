@@ -30,7 +30,9 @@ CREATE TABLE IF NOT EXISTS worker_validations (
   canonical_unit TEXT,
   exec_start TEXT,
   validated_at TEXT,
-  failure_reason TEXT
+  failure_reason TEXT,
+  created_at TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_worker_validations_code ON worker_validations(validation_code);
 `
@@ -42,15 +44,16 @@ CREATE INDEX IF NOT EXISTS idx_worker_validations_code ON worker_validations(val
 func (s *SQLiteStore) SaveWorkerValidation(workerID, validationCode, canonicalUnit, execStart string, validatedAt time.Time, failureReason string) error {
 	validatedAtStr := validatedAt.UTC().Format(time.RFC3339)
 	_, err := s.db.Exec(
-		`INSERT INTO worker_validations (worker_id, validation_code, canonical_unit, exec_start, validated_at, failure_reason)
-		 VALUES (?, ?, ?, ?, ?, ?)
+		`INSERT INTO worker_validations (worker_id, validation_code, canonical_unit, exec_start, validated_at, failure_reason, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(worker_id) DO UPDATE SET
 		   validation_code=excluded.validation_code,
 		   canonical_unit=excluded.canonical_unit,
 		   exec_start=excluded.exec_start,
 		   validated_at=excluded.validated_at,
-		   failure_reason=excluded.failure_reason`,
-		workerID, validationCode, canonicalUnit, execStart, validatedAtStr, failureReason,
+		   failure_reason=excluded.failure_reason,
+		   updated_at=excluded.updated_at`,
+		workerID, validationCode, canonicalUnit, execStart, validatedAtStr, failureReason, validatedAtStr, validatedAtStr,
 	)
 	return err
 }
@@ -95,7 +98,7 @@ func (s *SQLiteStore) GetAllWorkerValidations() ([]map[string]any, error) {
 	for rows.Next() {
 		var workerID, code, unit, execStart, validatedAt, failureReason string
 		if err := rows.Scan(&workerID, &code, &unit, &execStart, &validatedAt, &failureReason); err != nil {
-			continue
+			return nil, err
 		}
 		out = append(out, map[string]any{
 			"worker_id":       workerID,
@@ -106,6 +109,9 @@ func (s *SQLiteStore) GetAllWorkerValidations() ([]map[string]any, error) {
 			"failure_reason":  failureReason,
 			"valid":           code == "PASS",
 		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

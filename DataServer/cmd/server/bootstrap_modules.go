@@ -14,6 +14,7 @@ import (
 	"velox-server/internal/deliveries"
 	deliveryProviders "velox-server/internal/deliveries/providers"
 	"velox-server/internal/forwarding"
+	validationhandlers "velox-server/internal/handlers/remote/workers/validation"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/observability"
@@ -314,6 +315,8 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	registry.Register(healthMod)
 	workersModule := app.NewWorkersModule(cfg, w.Registry, w.Lifecycle, w.UpdateHandler, auth, assetSvc, p.BlobStore, driveMod.Service())
 	if p.SQLite != nil {
+		workersModule.SetValidationHandler(validationhandlers.NewHandler(validationhandlers.NewValidationStore(p.SQLite)))
+		log.Printf("[BOOTSTRAP] Worker validation repository and canonical routes wired")
 		reader := api.NewSQLDBReader(p.SQLite.DB())
 		if reader != nil {
 			workersModule.SetMetricsHandler(api.NewMetricsHandler(reader.Metrics))
