@@ -97,4 +97,32 @@ actual_args="$(cat "$ARGS")"
     exit 1
 }
 
+ARGS="$TMP/operations-args"
+FLEETCTL_TEST_ARGS="$ARGS" \
+FLEETCTL_TEST_ENV="$ENV_OUT" \
+FLEETCTL_GO_BIN="$MOCK" \
+VELOX_MASTER_URL="https://master.example.test" \
+VELOX_ADMIN_TOKEN='env-token' \
+    "$SCRIPT" operations worker-1 RUNNING
+expected_args=$'operations\nworker-1\nRUNNING\n--master=https://master.example.test'
+actual_args="$(cat "$ARGS")"
+[[ "$actual_args" == "$expected_args" ]] || {
+    printf 'FAIL: operations delegation differs\nwant:\n%s\ngot:\n%s\n' "$expected_args" "$actual_args" >&2
+    exit 1
+}
+
+ARGS="$TMP/wait-ready-args"
+FLEETCTL_TEST_ARGS="$ARGS" \
+FLEETCTL_TEST_ENV="$ENV_OUT" \
+FLEETCTL_GO_BIN="$MOCK" \
+VELOX_MASTER_URL="https://master.example.test" \
+VELOX_ADMIN_TOKEN='env-token' \
+    "$SCRIPT" wait-ready worker-1 --timeout 10 --poll 1
+expected_args=$'wait-ready\nworker-1\n--timeout\n10\n--poll\n1\n--master=https://master.example.test'
+actual_args="$(cat "$ARGS")"
+[[ "$actual_args" == "$expected_args" ]] || {
+    printf 'FAIL: wait-ready delegation differs\nwant:\n%s\ngot:\n%s\n' "$expected_args" "$actual_args" >&2
+    exit 1
+}
+
 echo 'fleetctl launcher delegation: PASS'

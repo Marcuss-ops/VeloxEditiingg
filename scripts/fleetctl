@@ -109,10 +109,10 @@ resolve_token() {
 # `status --json` is delegated first because its wire output is already a
 # stable machine-readable contract; the human table remains on the legacy
 # path until its output compatibility is migrated explicitly.
-if [[ "$command" == update || "$command" == rollback ]]; then
+if [[ "$command" == update || "$command" == rollback || "$command" == operations || "$command" == wait-ready ]]; then
     delegated_args=("$@")
-    # Legacy syntax: update/rollback WORKER IMAGE [REASON]. The Go client
-    # owns digest validation, POST, operation parsing, polling and output.
+    # The Go client owns typed parsing, HTTP, polling, terminal states and
+    # output for these migrated surfaces. Bash only preserves argv/env.
     exec_go_fleetctl "${delegated_args[@]}"
 fi
 if [[ "$command" == status && "${2:-}" == "--json" ]]; then
@@ -652,23 +652,9 @@ case "$command" in
         shift
         parse_update_args "$command" "$@"
         ;;
-    wait-ready)
-        shift
-        parse_wait_ready_args "$@"
-        ;;
     rollout)
         shift
         rollout "$@"
-        ;;
-    operations)
-        path=/api/v1/admin/operations
-        [[ -n "${2:-}" ]] && path+="?worker_id=$(printf '%s' "$2" | jq -sRr @uri)"
-        if [[ -n "${3:-}" ]]; then
-            separator='?'
-            [[ "$path" == *\?* ]] && separator='&'
-            path+="${separator}status=$(printf '%s' "$3" | jq -sRr @uri)"
-        fi
-        api GET "$path" | jq .
         ;;
     smoke)
         worker_id=${2:-}

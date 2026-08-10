@@ -544,6 +544,124 @@ func TestPollOperationLedgerWithInterval_ReturnsTerminalFailure(t *testing.T) {
 	}
 }
 
+func TestRunOperations_PreservesFiltersAndEnvelope(t *testing.T) {
+	var gotWorker, gotStatus string
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/admin/operations" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		gotWorker = r.URL.Query().Get("worker_id")
+		gotStatus = r.URL.Query().Get("status")
+		_ = json.NewEncoder(w).Encode(operationsListResponse{
+			Count:      1,
+			Operations: []operationListRow{{OperationID: "op-1", WorkerID: "worker-1", Status: "RUNNING"}},
+		})
+	})
+	defer srv.Close()
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	ec := runOperations(c, []string{"worker-1", "RUNNING"})
+	w.Close()
+	os.Stdout = old
+	out, _ := io.ReadAll(r)
+
+	if ec != ExitOK || gotWorker != "worker-1" || gotStatus != "RUNNING" {
+		t.Fatalf("operations result = exit %d worker=%q status=%q", ec, gotWorker, gotStatus)
+	}
+	var response operationsListResponse
+	if err := json.Unmarshal(out, &response); err != nil {
+		t.Fatalf("operations output is not JSON: %v; output=%s", err, out)
+	}
+	if response.Count != 1 || len(response.Operations) != 1 || response.Operations[0].OperationID != "op-1" {
+		t.Fatalf("unexpected operations response: %+v", response)
+	}
+}
+
+func TestRunWaitReady_ConvergesAfterWorkerBecomesReady(t *testing.T) {
+	var calls int
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/admin/workers/worker-ready" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		calls++
+		ready := calls > 1
+		readiness := map[string]any{"status": "starting"}
+		health, connection := "DEGRADED", "CONNECTING"
+		if ready {
+			readiness["status"] = "ok"
+			health, connection = "HEALTHY", "CONNECTED"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"worker_id": "worker-ready", "readiness": readiness,
+			"health": health, "connection_state": connection,
+			"image_digest": "sha256:" + strings.Repeat("a", 64),
+		})
+	})
+	defer srv.Close()
+
+	ec := runWaitReadyWithInterval(c, "worker-ready", "sha256:"+strings.Repeat("a", 64), time.Second, time.Millisecond)
+	if ec != ExitOK || calls != 2 {
+		t.Fatalf("wait-ready exit/calls = %d/%d, want 0/2", ec, calls)
+	}
+}
+
+func TestRunWaitReady_MissingReadinessDoesNotPass(t *testing.T) {
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"worker_id": "worker-no-readiness", "health": "HEALTHY", "connection_state": "CONNECTED",
+		})
+	})
+	defer srv.Close()
+
+	ec := runWaitReadyWithInterval(c, "worker-no-readiness", "", 5*time.Millisecond, time.Millisecond)
+	if ec != ExitUnexpected {
+		t.Fatalf("missing readiness exit = %d, want %d", ec, ExitUnexpected)
+	}
+}
+
+func TestParseOperationsArgsRejectsDuplicateFilterSources(t *testing.T) {
+	if _, err := parseOperationsArgs([]string{"worker-1", "--worker-id=worker-2"}); err == nil {
+		t.Fatal("worker_id positional and flag filters must not be combined")
+	}
+	if _, err := parseOperationsArgs([]string{"worker-1", "RUNNING", "--status=FAILED"}); err == nil {
+		t.Fatal("status positional and flag filters must not be combined")
+	}
+}
+
+func TestRunOperationsRejectsInconsistentCount(t *testing.T) {
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(operationsListResponse{
+			Count:      2,
+			Operations: []operationListRow{{OperationID: "op-1"}},
+		})
+	})
+	defer srv.Close()
+	if got := runOperations(c, nil); got != ExitUnexpected {
+		t.Fatalf("inconsistent operations count exit = %d, want %d", got, ExitUnexpected)
+	}
+}
+
+func TestRunWaitReady_DigestMismatchTimesOut(t *testing.T) {
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"worker_id": "worker-mismatch",
+			"readiness": map[string]any{"status": "ok"},
+			"health":    "HEALTHY", "connection_state": "CONNECTED",
+			"image_digest": "sha256:" + strings.Repeat("b", 64),
+		})
+	})
+	defer srv.Close()
+
+	ec := runWaitReadyWithInterval(c, "worker-mismatch", "sha256:"+strings.Repeat("a", 64), 5*time.Millisecond, time.Millisecond)
+	if ec != ExitUnexpected {
+		t.Fatalf("digest mismatch exit = %d, want %d", ec, ExitUnexpected)
+	}
+}
+
 // ---------- token resolution precedence ----------
 
 func TestResolveTokenAdvanced_EnvPrecedence(t *testing.T) {

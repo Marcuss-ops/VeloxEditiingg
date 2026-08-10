@@ -40,21 +40,23 @@ import (
 type subCommand string
 
 const (
-	subStatus   subCommand = "status"
-	subInspect  subCommand = "inspect"
-	subDrain    subCommand = "drain"
-	subUpdate   subCommand = "update"
-	subSmoke    subCommand = "smoke"
-	subResume   subCommand = "resume"
-	subRollback subCommand = "rollback"
-	subSSHCheck subCommand = "ssh-check"
-	subJob      subCommand = "job"
-	subDoctor   subCommand = "doctor"
+	subStatus     subCommand = "status"
+	subInspect    subCommand = "inspect"
+	subDrain      subCommand = "drain"
+	subUpdate     subCommand = "update"
+	subSmoke      subCommand = "smoke"
+	subResume     subCommand = "resume"
+	subRollback   subCommand = "rollback"
+	subOperations subCommand = "operations"
+	subWaitReady  subCommand = "wait-ready"
+	subSSHCheck   subCommand = "ssh-check"
+	subJob        subCommand = "job"
+	subDoctor     subCommand = "doctor"
 )
 
 func (s subCommand) valid() bool {
 	switch s {
-	case subStatus, subInspect, subDrain, subUpdate, subSmoke, subResume, subRollback, subSSHCheck, subJob, subDoctor:
+	case subStatus, subInspect, subDrain, subUpdate, subSmoke, subResume, subRollback, subOperations, subWaitReady, subSSHCheck, subJob, subDoctor:
 		return true
 	default:
 		return false
@@ -80,6 +82,8 @@ Sub-commands:
   smoke    <worker_id>    on-demand Level-D smoke (await terminal state)
   resume   <worker_id>    RESUME (RESUMED after drain/quarantine)
   rollback <worker_id>    rollback to previous_digest (Step 9/15 cascade)
+  operations [worker_id] [status] list operation audit rows
+  wait-ready <worker_id>  wait for canonical worker readiness
   ssh-check               per-worker SSH connectivity (ssh/hostkey/sudo -n)
   job inspect <job_id>    complete job diagnostics (metrics/cache/artifact/delivery)
   job metrics <job_id>    execution and cache metrics for one job
@@ -164,6 +168,10 @@ func runMain(args []string) int {
 		return runResume(client, rest[1:])
 	case subRollback:
 		return runRollback(client, rest[1:])
+	case subOperations:
+		return runOperations(client, rest[1:])
+	case subWaitReady:
+		return runWaitReady(client, rest[1:])
 	case subSSHCheck:
 		return runSSHCheck(client)
 	case subJob:
