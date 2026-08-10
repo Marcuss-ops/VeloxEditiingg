@@ -2,12 +2,8 @@ package instaedit
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
-
-	"velox-shared/contract"
 
 	"velox-server/internal/costmodel"
 	"velox-server/internal/creatorflow"
@@ -134,133 +130,26 @@ func (a *enqueuerAdapter) Enqueue(ctx context.Context, payload map[string]any, w
 	return a.enq.Enqueue(ctx, payload, costmodel.JobRequirements{}, opts...)
 }
 
-// CreateJob validates the request, builds a canonical payload, and
-// enqueues a new job scoped to the command's workspace.
+// CreateJob orchestrates validation, canonical payload construction,
+// submission and the final workspace-scoped response lookup.
 func (s *Service) CreateJob(ctx context.Context, cmd CreateJobCmd) (*jobResponse, error) {
-	if strings.TrimSpace(cmd.ProjectID) == "" {
-		return nil, fmt.Errorf("%w: project_id is required", ErrInvalidPayload)
-	}
-	if !cmd.RenderOnly && len(cmd.Destinations) == 0 {
-		return nil, fmt.Errorf("%w: delivery_plan.destinations is required unless render_only=true", ErrInvalidPayload)
-	}
-
-	var renderSpec map[string]any
-	if len(cmd.RenderSpec) > 0 {
-		if err := json.Unmarshal(cmd.RenderSpec, &renderSpec); err != nil {
-			return nil, fmt.Errorf("%w: invalid render_spec JSON: %v", ErrBadRequest, err)
-		}
-	} else {
-		renderSpec = map[string]any{}
-	}
-
-	if err := contract.StrictValidatePayload(renderSpec); err != nil {
-		return nil, fmt.Errorf("%w: invalid render_spec: %v", ErrInvalidPayload, err)
-	}
-	// The resolver consumes the canonical worker projection. Preserve the
-	// scene list in its stable JSON form so the completion gate and the
-	// renderer see the same scene snapshot on every retry.
-	if _, present := renderSpec["scenes_json"]; !present {
-		if scenes, present := renderSpec["scenes"]; present {
-			encoded, marshalErr := json.Marshal(scenes)
-			if marshalErr != nil {
-				return nil, fmt.Errorf("%w: invalid scenes: %v", ErrInvalidPayload, marshalErr)
-			}
-			renderSpec["scenes_json"] = string(encoded)
-		}
-	}
-
-	deliveryPlan := make([]map[string]any, 0, len(cmd.Destinations))
-	for i, d := range cmd.Destinations {
-		externalID := strings.TrimSpace(d.ExternalDestinationID)
-		if externalID == "" {
-			return nil, fmt.Errorf("%w: destination[%d].external_destination_id is required", ErrInvalidPayload, i)
-		}
-		dest, err := s.jobs.GetDeliveryDestinationByExternalID(ctx, externalID)
-		if err != nil {
-			return nil, err
-		}
-		if dest == nil {
-			return nil, fmt.Errorf("%w: %s", ErrDestinationUnknown, externalID)
-		}
-		if !dest.Enabled {
-			return nil, fmt.Errorf("%w: %s", ErrDestinationDisabled, externalID)
-		}
-
-		metadata := map[string]any{}
-		if len(d.Metadata) > 0 {
-			if err := json.Unmarshal(d.Metadata, &metadata); err != nil {
-				return nil, fmt.Errorf("%w: invalid metadata for destination[%d]: %v", ErrInvalidPayload, i, err)
-			}
-		}
-
-		deliveryPlan = append(deliveryPlan, map[string]any{
-			"destination_id": dest.DestinationID,
-			"priority":       i,
-			"retry_budget":   contract.DefaultDeliveryRetryBudget,
-			"metadata":       metadata,
-		})
-	}
-
-	if _, ok := renderSpec["video_name"]; !ok {
-		renderSpec["video_name"] = cmd.ProjectID
-	}
-	renderSpec["delivery_plan"] = deliveryPlan
-	if cmd.RenderOnly {
-		renderSpec["render_only"] = true
-	}
-
-	typedPayload := contract.NewJobPayloadV2(renderSpec)
-	payload, err := typedPayload.ToMap()
+	renderSpec, err := validateCreateJobCommand(cmd)
 	if err != nil {
-		return nil, fmt.Errorf("build canonical payload: %w", err)
+		return nil, err
 	}
-	payload["project_id"] = cmd.ProjectID
-	// This adapter submits a fully assembled render request (unlike the
-	// remote-engine polling path), so mark the canonical handoff complete
-	// for the resolver's completion gate. The enqueue normalizer still owns
-	// the persisted worker lifecycle status.
-	payload["status"] = "completed"
-
-	var result map[string]interface{}
-	duplicate := false
-	if s.submission != nil {
-		if strings.TrimSpace(cmd.IdempotencyKey) == "" {
-			return nil, fmt.Errorf("%w: idempotency_key is required", ErrInvalidPayload)
-		}
-		sourceID := fmt.Sprintf("workspace:%d:%s", cmd.WorkspaceID, strings.TrimSpace(cmd.IdempotencyKey))
-		resolved, submitErr := s.submission.Submit(ctx, creatorflow.CanonicalJobSubmission{
-			ContractVersion:  cmd.ContractVersion,
-			WorkspaceID:      cmd.WorkspaceID,
-			SourceProvider:   "instaedit_bff",
-			SourceJobID:      sourceID,
-			TargetExecutorID: "scene.composite.v1",
-			Payload:          payload,
-		})
-		if submitErr != nil {
-			return nil, submitErr
-		}
-		if resolved == nil || resolved.Response == nil {
-			return nil, errors.New("job submission returned nil result")
-		}
-		result = resolved.Response
-		if created, ok := result["created"].(bool); ok {
-			duplicate = !created
-		}
-	} else {
-		result, err = s.enqueuer.Enqueue(ctx, payload, cmd.WorkspaceID)
-		if err != nil {
-			return nil, err
-		}
-		if result == nil {
-			return nil, errors.New("enqueue returned nil result")
-		}
+	payload, err := s.buildCreateJobPayload(ctx, cmd, renderSpec)
+	if err != nil {
+		return nil, err
+	}
+	result, duplicate, err := s.submitCreateJob(ctx, cmd, payload)
+	if err != nil {
+		return nil, err
 	}
 
 	jobID := asString(result["job_id"])
 	if jobID == "" {
 		return nil, errors.New("enqueue result missing job_id")
 	}
-
 	row, err := s.jobs.GetJobByWorkspace(ctx, jobID, cmd.WorkspaceID)
 	if err != nil {
 		return nil, err

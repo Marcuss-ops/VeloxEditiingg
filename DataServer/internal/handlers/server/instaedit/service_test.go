@@ -233,8 +233,14 @@ func TestService_CreateJob_Success(t *testing.T) {
 	if enq.last == nil {
 		t.Fatal("expected payload to be enqueued")
 	}
-	if enq.last["project_id"] != "proj-1" {
-		t.Fatalf("expected project_id to be preserved, got %v", enq.last["project_id"])
+	if enq.last["project_id"] != "proj-1" || enq.last["status"] != "completed" {
+		t.Fatalf("expected canonical project/status fields, got project_id=%v status=%v", enq.last["project_id"], enq.last["status"])
+	}
+	if enq.last["video_name"] != "Test" {
+		t.Fatalf("expected video_name Test, got %v", enq.last["video_name"])
+	}
+	if scenesJSON, ok := enq.last["scenes_json"].(string); !ok || scenesJSON != "[]" {
+		t.Fatalf("expected scenes_json [] string, got %#v", enq.last["scenes_json"])
 	}
 	plan, ok := enq.last["delivery_plan"].([]map[string]any)
 	if !ok || len(plan) != 1 {
@@ -242,6 +248,32 @@ func TestService_CreateJob_Success(t *testing.T) {
 	}
 	if plan[0]["retry_budget"] != contract.DefaultDeliveryRetryBudget {
 		t.Fatalf("expected retry_budget %d, got %v", contract.DefaultDeliveryRetryBudget, plan[0]["retry_budget"])
+	}
+}
+
+func TestService_CreateJob_RenderOnlyBuildsCanonicalPayloadWithoutDestinations(t *testing.T) {
+	jobs := &memoryJobGateway{
+		getByID: map[string]map[string]any{
+			"job-render-only": {"job_id": "job-render-only", "status": "PENDING", "project_id": "proj-render"},
+		},
+	}
+	enq := &memoryEnqueuer{result: map[string]any{"job_id": "job-render-only"}}
+	svc := NewService(jobs, nil, nil, enq)
+	_, err := svc.CreateJob(context.Background(), CreateJobCmd{
+		WorkspaceID: 45,
+		ProjectID:   "proj-render",
+		RenderOnly:  true,
+		RenderSpec:  json.RawMessage(`{"scenes":[]}`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if enq.last["status"] != "completed" {
+		t.Fatalf("expected completed payload, got status=%v", enq.last["status"])
+	}
+	plan, ok := enq.last["delivery_plan"].([]map[string]any)
+	if !ok || len(plan) != 0 {
+		t.Fatalf("expected empty delivery plan, got %#v", enq.last["delivery_plan"])
 	}
 }
 
