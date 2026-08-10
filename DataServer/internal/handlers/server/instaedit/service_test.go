@@ -252,7 +252,7 @@ func TestService_CreateJob_Success(t *testing.T) {
 	if enq.last == nil {
 		t.Fatal("expected payload to be enqueued")
 	}
-	if enq.last["project_id"] != "proj-1" || enq.last["status"] != "completed" {
+	if enq.last["project_id"] != "proj-1" || enq.last["status"] != string(contract.InputAssemblyCompleted) {
 		t.Fatalf("expected canonical project/status fields, got project_id=%v status=%v", enq.last["project_id"], enq.last["status"])
 	}
 	if _, present := enq.last["render_only"]; present {
@@ -290,7 +290,7 @@ func TestService_CreateJob_RenderOnlyBuildsCanonicalPayloadWithoutDestinations(t
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if enq.last["status"] != "completed" || enq.last["render_only"] != true {
+	if enq.last["status"] != string(contract.InputAssemblyCompleted) || enq.last["render_only"] != true {
 		t.Fatalf("expected completed render-only payload, got status=%v render_only=%v", enq.last["status"], enq.last["render_only"])
 	}
 	plan, ok := enq.last["delivery_plan"].([]map[string]any)

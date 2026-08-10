@@ -80,7 +80,10 @@ func TestNormalizeExternalJobSubmission_ProducesCanonicalPayload(t *testing.T) {
 
 	// (4)
 	if got := wp["status"]; got != "completed" {
-		t.Errorf("worker_payload[status] = %v, want completed", got)
+		t.Errorf("worker_payload[status] = %v, want historical wire value completed", got)
+	}
+	if got := wp["status"]; got != string(contract.InputAssemblyCompleted) {
+		t.Errorf("worker_payload[status] = %v, want input-assembly status %s", got, contract.InputAssemblyCompleted)
 	}
 	// (5)
 	if got := wp["job_id"]; got != "test-job-123" {
@@ -284,7 +287,7 @@ func TestNormalizeExternalJobSubmission_MatchesCreatorPushShape(t *testing.T) {
 		field string
 		want  interface{}
 	}{
-		{"status", "completed"},
+		{"status", string(contract.InputAssemblyCompleted)},
 		{"job_id", jobID},
 		{"video_name", videoName},
 		{"script_text", scriptText},

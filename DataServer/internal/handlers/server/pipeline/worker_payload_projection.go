@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"velox-shared/compatibility"
+	"velox-shared/contract"
 
 	"velox-server/internal/handlers/server/pipeline/projection"
 )
@@ -22,7 +23,10 @@ func projectWorkerPayload(req *SubmitJobRequest) (map[string]interface{}, error)
 // Identity-bearing URLs and IDs are trimmed; content fields remain verbatim.
 func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 	m := map[string]interface{}{
-		"status": "completed",
+		// This is the producer-side input handoff state, not a terminal job
+		// lifecycle state. Keep the historical wire value while making the
+		// domain semantics explicit at the submission boundary.
+		"status": string(contract.InputAssemblyCompleted),
 		"job_id": strings.TrimSpace(req.IdempotencyKey),
 	}
 	if req.JobType != "" {

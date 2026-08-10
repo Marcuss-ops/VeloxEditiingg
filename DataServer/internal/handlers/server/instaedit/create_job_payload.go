@@ -82,6 +82,9 @@ func (s *Service) buildCreateJobPayload(ctx context.Context, cmd CreateJobCmd, r
 	// remote-engine polling path), so mark the canonical handoff complete
 	// for the resolver's completion gate. The enqueue normalizer still owns
 	// the persisted worker lifecycle status.
+	// `status=completed` is the historical wire value for a fully assembled
+	// input handoff, not a Job completion. Keep the wire key/value unchanged,
+	// but make the semantic domain explicit at this boundary.
 	if !typedPayload.SetInputAssemblyStatus(contract.InputAssemblyCompleted) {
 		return nil, fmt.Errorf("set input assembly status: %w", ErrInvalidPayload)
 	}

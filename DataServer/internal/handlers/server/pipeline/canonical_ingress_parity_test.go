@@ -8,6 +8,7 @@ import (
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/remoteengine"
+	"velox-shared/contract"
 )
 
 // TestCanonicalIngressParity locks the worker-owned payload contract across
@@ -90,7 +91,7 @@ func TestCanonicalIngressParity(t *testing.T) {
 	}
 
 	pipelinePayload, err := enqueue.BuildPipelinePayload(map[string]interface{}{
-		"status": "completed",
+		"status": string(contract.InputAssemblyCompleted),
 		"result": cloneParityMap(rawAPI),
 	})
 	if err != nil {
