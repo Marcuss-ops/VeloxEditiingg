@@ -142,7 +142,7 @@ var canonicalEventKeys = []string{
 	"engine.color_convert_in", "engine.color_convert_out", "engine.composite", "engine.crop", "engine.encode.flush", "engine.encode.frame_submit", "engine.encode.setup", "engine.input.demux_probe", "engine.input.duration_probe", "engine.input.keyframe_scan", "engine.input.open", "engine.input.seek", "engine.input.stream_discovery", "engine.mask", "engine.mux.header", "engine.mux.packet_write", "engine.mux.trailer", "engine.opacity", "engine.output.fsync", "engine.scale", "engine.simulate", "engine.transform", "engine.video.decode", "engine.video.frame_reorder", "engine.video.hw_download", "engine.video.timestamp_normalize",
 	"ffmpeg.progress",
 	"master.commit_ack.send", "master.commit.transaction", "master.enqueue.transaction", "master.http.auth", "master.http.decode", "master.intake.validate", "master.lease.issue", "master.manifest.fetch", "master.manifest.hash_verify", "master.manifest.parse", "master.offer.accept_to_start", "master.offer.offer_to_accept", "master.offer.send", "master.payload.normalize", "master.placement.candidate_scan", "master.placement.match", "master.placement.rejection", "master.placement.snapshot_load", "master.plan.compile", "master.queue.ready_wait", "master.upload_plan.create", "master.upload.verify",
-	"quality.audio_sync", "quality.black_frame_scan", "quality.duration_check", "quality.ffprobe", "quality.sha256", "quality.silence_scan", "quality.stream_check", "quality.subtitle_timeline",
+	"audio.summary", "io.summary", "quality.summary", "quality.audio_sync", "quality.black_frame_scan", "quality.duration_check", "quality.ffprobe", "quality.sha256", "quality.silence_scan", "quality.stream_check", "quality.subtitle_timeline", "retry.summary", "subtitle.summary", "waste.summary",
 	"runner.cache_lookup", "runner.execute", "runner.prefetch", "runner.report", "runner.run", "runner.upload",
 	"subtitle.ass_compile", "subtitle.audio_extract", "subtitle.burn_in", "subtitle.font_fallback", "subtitle.font_load", "subtitle.glyph_raster", "subtitle.layout", "subtitle.parse", "subtitle.segment", "subtitle.transcribe", "subtitle.word_alignment",
 	"worker.asset.connect", "worker.asset.disk_write", "worker.asset.dns", "worker.asset.final_hash", "worker.asset.fsync", "worker.asset.progress_checkpoint", "worker.asset.resolve", "worker.asset.transfer", "worker.asset.ttfb",
@@ -155,6 +155,8 @@ func canonicalOriginScope(component, action string) (string, string) {
 	switch key {
 	case "attempt.failure", "attempt.retry":
 		return OriginWorker, ScopeAttempt
+	case "audio.summary", "io.summary", "quality.summary", "retry.summary", "subtitle.summary", "waste.summary":
+		return OriginValidation, ScopeAttempt
 	case "control.grpc.reconnect", "control.heartbeat_rtt", "control.lease_renewal_rtt", "master.commit.transaction", "master.commit_ack.send":
 		return OriginMaster, ScopeAttempt
 	case "master.http.auth", "master.http.decode":
