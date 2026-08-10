@@ -77,8 +77,8 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     fs::path workBase = fs::temp_directory_path() / "velox_video_engine_plan";
     fs::path workDir;
     {
-        telemetry::ScopedPhase tempPhase(
-            recorder_, telemetry::kOriginWorker, telemetry::kScopeArtifact,
+		telemetry::ScopedPhase tempPhase(
+			recorder_, telemetry::kOriginWorker, telemetry::kScopeAttempt,
             "worker.temp", "create", "prepare");
         ScopedTimer t(metrics_, "workdir_create_ms");
         workDir = file::makeTempDir(workBase, "plan_job_");
@@ -163,8 +163,8 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             auto src = std::get<plan::ImageSource>(item.source);
             fs::path localImg = workDir / ("image_" + std::to_string(i) + ".jpg");
             bool gotImage;
-            telemetry::ScopedPhase assetPhase(
-                recorder_, telemetry::kOriginEngine, telemetry::kScopeSegment,
+			telemetry::ScopedPhase assetPhase(
+				recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
                 "worker.asset", "transfer", "download");
             auto dlStart = std::chrono::steady_clock::now();
             {
@@ -190,8 +190,8 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             auto src = std::get<plan::VideoSource>(item.source);
             fs::path localVid = workDir / ("video_" + std::to_string(i) + ".mp4");
             bool gotVid;
-            telemetry::ScopedPhase assetPhase(
-                recorder_, telemetry::kOriginEngine, telemetry::kScopeSegment,
+			telemetry::ScopedPhase assetPhase(
+				recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
                 "worker.asset", "transfer", "download");
             auto dlStart = std::chrono::steady_clock::now();
             {

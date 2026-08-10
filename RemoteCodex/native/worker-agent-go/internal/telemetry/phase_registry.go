@@ -238,6 +238,7 @@ var canonicalPhaseSpecs = []PhaseSpec{
 	{Origin: OriginEngine, Scope: ScopeArtifact, Component: "engine.mux", Action: "header", Phase: PhaseEncode},
 	{Origin: OriginEngine, Scope: ScopeArtifact, Component: "engine.mux", Action: "packet_write", Phase: PhaseEncode},
 	{Origin: OriginEngine, Scope: ScopeArtifact, Component: "engine.mux", Action: "trailer", Phase: PhaseEncode},
+	{Origin: OriginEngine, Scope: ScopeAttempt, Component: "engine", Action: "render", Phase: PhaseRender},
 	{Origin: OriginEngine, Scope: ScopeArtifact, Component: "engine.output", Action: "fsync", Phase: PhaseFinalize},
 
 	// FFmpeg progress, parallelism, temporary files and I/O.
@@ -245,11 +246,11 @@ var canonicalPhaseSpecs = []PhaseSpec{
 	{Origin: OriginWorker, Scope: ScopeSegment, Component: "worker.parallel", Action: "queue_wait", Phase: PhaseQueue},
 	{Origin: OriginWorker, Scope: ScopeSegment, Component: "worker.parallel", Action: "segment_start", Phase: PhaseRender},
 	{Origin: OriginWorker, Scope: ScopeSegment, Component: "worker.parallel", Action: "segment_finish", Phase: PhaseFinalize},
-	{Origin: OriginWorker, Scope: ScopeArtifact, Component: "worker.temp", Action: "create", Phase: PhaseRender},
-	{Origin: OriginWorker, Scope: ScopeArtifact, Component: "worker.temp", Action: "write", Phase: PhaseRender},
-	{Origin: OriginWorker, Scope: ScopeArtifact, Component: "worker.temp", Action: "read", Phase: PhaseRender},
-	{Origin: OriginWorker, Scope: ScopeArtifact, Component: "worker.temp", Action: "delete", Phase: PhaseFinalize},
-	{Origin: OriginWorker, Scope: ScopeArtifact, Component: "worker.disk", Action: "wait", Phase: PhaseRender},
+	{Origin: OriginWorker, Scope: ScopeAttempt, Component: "worker.temp", Action: "create", Phase: PhaseRender},
+	{Origin: OriginWorker, Scope: ScopeAttempt, Component: "worker.temp", Action: "write", Phase: PhaseRender},
+	{Origin: OriginWorker, Scope: ScopeAttempt, Component: "worker.temp", Action: "read", Phase: PhaseRender},
+	{Origin: OriginWorker, Scope: ScopeAttempt, Component: "worker.temp", Action: "delete", Phase: PhaseFinalize},
+	{Origin: OriginWorker, Scope: ScopeAttempt, Component: "worker.disk", Action: "wait", Phase: PhaseRender},
 
 	// Upload, commit, quality, retries and database persistence.
 	{Origin: OriginUpload, Scope: ScopeArtifact, Component: "worker.output", Action: "hash", Phase: PhaseUpload},
