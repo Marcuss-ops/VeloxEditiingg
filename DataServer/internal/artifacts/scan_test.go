@@ -89,6 +89,12 @@ var allowedWriters = map[string]bool{
 	// is confined to the stale reconciler, uses one transaction plus
 	// append-only audit, and is not a second normal completion path.
 	filepath.Join("internal", "store", "stale_execution_reconciler.go"): true,
+	// Implementation split: applyCommittedArtifact owns the SQL for this
+	// operator-recovery transaction; it is allowlisted separately from the
+	// reconciler orchestration file above. This is not a second normal
+	// completion path: it repairs a READY artifact with a COMMITTED attempt
+	// after a crash and remains append-audited and idempotent.
+	filepath.Join("internal", "store", "stale_execution_reconciler_apply.go"): true,
 	// Separate delivery lifecycle: the terminal/retry SQL moved from
 	// store_deliveries_lease.go into the responsibility-specific marks file.
 	filepath.Join("internal", "store", "store_deliveries_marks.go"): true,
