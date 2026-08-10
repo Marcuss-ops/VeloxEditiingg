@@ -486,7 +486,32 @@ CREATE TABLE worker_validations (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
-CREATE TABLE calendar_events (id TEXT PRIMARY KEY)
+CREATE TABLE calendar_events (id TEXT PRIMARY KEY);
+-- This fixture records migration 094 as applied below, so it must also
+-- provide the pre-138 worker runtime table that migration 138 extends.
+-- The production migration chain creates this table in 094; this test
+-- intentionally creates only the legacy tables it exercises.
+CREATE TABLE worker_task_runtime (
+  task_id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  attempt_id TEXT NOT NULL,
+  attempt_number INTEGER NOT NULL,
+  worker_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  lease_id TEXT NOT NULL,
+  executor_id TEXT NOT NULL,
+  executor_version INTEGER NOT NULL DEFAULT 0,
+  runtime_status TEXT NOT NULL,
+  progress_percent INTEGER NOT NULL DEFAULT 0,
+  progress_stage TEXT,
+  current_scene INTEGER NOT NULL DEFAULT 0,
+  total_scenes INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT NOT NULL,
+  last_progress_at TEXT,
+  cancel_requested_at TEXT,
+  updated_at TEXT NOT NULL,
+  missing_heartbeats INTEGER NOT NULL DEFAULT 0
+)
 `)
 	require.NoError(t, err)
 	seedMigrationHistory(t, legacy, 136)
