@@ -63,4 +63,3 @@ if report.is_file():
         pass
 PY
 }
-

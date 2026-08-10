@@ -113,4 +113,3 @@ guard_destructive() {
     return 1
   }
 }
-
