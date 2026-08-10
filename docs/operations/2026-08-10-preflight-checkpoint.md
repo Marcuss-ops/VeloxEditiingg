@@ -169,6 +169,68 @@ It is terminal (active_jobs now 0) and unrelated to the circuit-breaker
 recovery; it points at the smoke-asset pickup gap addressed by
 `fix(fleet): configure production smoke asset` (`88430140`).
 
+## Poller + auth verification — plan step 3 (2026-08-10 ~20:28 UTC)
+
+**All three requested checks are green.**
+
+### 1. Real request with 200 (master journal, process `481275`)
+
+Transition window 20:15:00–20:15:58 on the production master:
+
+```text
+20:15:09 GET /api/v1/agent/cache/protected-assets 200  8.88032ms
+20:15:17 GET /api/v1/agent/cache/protected-assets 401  265.069µs   ← only 401 in window (last pre-fix rejection)
+20:15:25 GET /api/v1/agent/cache/protected-assets 200  722.347µs   ← auth accepted from here on
+20:15:27 GET /api/v1/agent/cache/protected-assets 200  974.112µs
+20:15:28 GET /api/v1/agent/cache/protected-assets 200  834.419µs
+20:15:35 GET /api/v1/agent/cache/protected-assets 200  638.277µs
+20:15:54 GET /api/v1/agent/cache/protected-assets 200  396.23µs
+20:15:58 GET /api/v1/agent/cache/protected-assets 200  6.403187ms
+```
+
+24 h totals: **1899 requests, 1897 × 200, exactly 2 × 401** (19:54:50 on the
+old process `430787`, 20:15:17 on the new process) — i.e. zero non-200
+responses after 20:15:25. The poll is still flowing at capture time
+(20:28:05 / 20:28:11 / 20:28:24, all 200).
+
+### 2. No `[CIRCUIT_BREAKER]` after recovery
+
+Worker journal (`velox-worker.service`, canary): **0** `CIRCUIT_BREAKER`
+lines after `2026-08-10 20:15:29` (the pre-flight counted 5 lines all at
+the 20:15:28 boundary second itself).
+
+### 3. Master auth accepts the bound credential (code + runtime)
+
+- Route: `r.GET("/api/v1/agent/cache/protected-assets",
+  m.protectedAssetsAuth, m.protectedAssetsHandler.Snapshot())`
+  (`DataServer/internal/app/workers.go:247`).
+- `protectedAssetsAuth = api.WorkerOrAdminAuthMiddleware(cfg, tokenMgr)`
+  (`workers.go:76`). The middleware (`api_v1.go`) accepts the persistent
+  `Hello.credential_hash` ONLY when bound to `X-Worker-ID` and validated
+  against the credential row via `TokenManager.ValidateWorkerCredentialToken`
+  (commit `29b880b2`).
+- Runtime proof: the continuous 200s from 20:15:25 mean the bound
+  credential is accepted; the single 401 at 20:15:17 is the last
+  pre-fix/edge rejection, after which the circuit closed.
+
+### “Snapshot accepted” — worker-side equivalent evidence
+
+The worker poller intentionally logs nothing on success (design invariant
+in `protected_assets_poller.go`: “The poller does NOT log internally”;
+success surfaces through telemetry via `MarkCacheProtectionReady(true)`).
+The observable equivalents on the canary at capture time:
+
+```json
+{"status":"ok","detail":{"blob_ready":true,"bootstrapped":true,
+ "cache_protection_ready":true,"cache_ready":true,
+ "protected_snapshot_age_seconds":55,"registered":true}}
+```
+
+plus the cleanup loop running with `skipped_protected=0` (a valid
+snapshot exists — it is no longer skipped with “no valid protection
+snapshot”). A fresh `protected_snapshot_age_seconds` can only be produced
+by a 200 poll whose snapshot was applied.
+
 ## Next steps (per the certification plan)
 
 1. ✅ Canary recovery confirmed (this document) — no restart needed.
