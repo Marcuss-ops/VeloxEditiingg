@@ -29,7 +29,9 @@
 // Distinct from prepare-host.sh's Level B selftest (which only
 // checks container-level health), the Level D smoke is the
 // canonical end-to-end render path used for analytics baseline.
-// production wires real SSH + real Drive in Step 11+ / follow-up.
+// Production requires real SSH, Drive, asset, lease, smoke-run and artifact
+// verification dependencies; missing wiring fails the operation and boot
+// validation rather than silently becoming a successful no-op.
 //
 // Each Phase uses context.WithTimeout so a runaway step fails
 // fast rather than pinning the FleetController opTimeout for
@@ -64,8 +66,8 @@ const (
 )
 
 // LevelDSmokeExecutor is the Step 12/15 OperationExecutor binding
-// for fleet.OperationKindSmoke. Replaces the noop default that
-// NewExecutorRegistry pre-registered at boot.
+// for fleet.OperationKindSmoke. It must be explicitly registered
+// in the production ExecutorRegistry.
 //
 // Construction takes a single LevelDSmokeBackend bundle (mirrors
 // Step 9/15's UpdateBackend). Nil `now` defaults to time.Now;
@@ -82,6 +84,38 @@ func NewLevelDSmokeExecutor(b LevelDSmokeBackend) *LevelDSmokeExecutor {
 		b.Now = func() time.Time { return time.Now().UTC() }
 	}
 	return &LevelDSmokeExecutor{backend: b}
+}
+
+// ValidateProductionBackends keeps a registered smoke executor from being
+// mistaken for a ready capability. The fleet bootstrap must wire every
+// backend before this executor can be considered production-ready.
+func (e *LevelDSmokeExecutor) ValidateProductionBackends() error {
+	if e == nil {
+		return errors.New("smoke: nil executor")
+	}
+	missing := make([]string, 0, 6)
+	if e.backend.Worker == nil {
+		missing = append(missing, "worker")
+	}
+	if e.backend.Drive == nil {
+		missing = append(missing, "drive")
+	}
+	if e.backend.Asset == nil {
+		missing = append(missing, "asset")
+	}
+	if e.backend.Lease == nil {
+		missing = append(missing, "lease")
+	}
+	if e.backend.SmokeRuns == nil {
+		missing = append(missing, "smoke_runs")
+	}
+	if e.backend.Verifier == nil {
+		missing = append(missing, "verifier")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing dependencies: %s", strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // Execute runs the 6-phase forward pipeline + cleanup cascade.

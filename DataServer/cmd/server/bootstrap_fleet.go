@@ -188,7 +188,9 @@ func buildFleet(p *persistenceDeps, workerRegistry *workersreg.Registry, sharedS
 		Runtime:     registryGater,
 	}
 	updateExecutor := fleet.NewUpdateExecutor(updateBackend)
-	registry.Register(fleet.OperationKindUpdate, updateExecutor)
+	if err := registry.Register(fleet.OperationKindUpdate, updateExecutor); err != nil {
+		return nil, fmt.Errorf("register update executor: %w", err)
+	}
 	log.Printf("[BOOTSTRAP] UpdateExecutor registered for kind=%s (SSH/Docker activation wired; fresh Smoke/Drive attach pending)", fleet.OperationKindUpdate)
 
 	return &FleetDep{

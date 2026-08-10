@@ -6,13 +6,11 @@
 // is intentionally tiny — Go convention: consumer interfaces
 // are smaller than producer interfaces. Production wires live
 // implementations:
-//   - lease store    → WorkerInfo.Drain transient (Step 6/15 owner)
-//   - worker exec    → BackendSSHClient (Step 9/15 owner, real SSH
-//     wiring lands in Step 11+)
+//   - lease store    → WorkerInfo.Drain transient (Step 6/15 owner)//   - worker exec   → BackendSSHClient (the production SSH adapter)
 //   - drive uploader → integrations/drive.Service.UploadFile
-//     (production wiring lands in a follow-up step)
-//   - asset resolver → minimal stub today; bundle lookup wiring
-//     lands when the canonical asset picker lands
+//   - asset resolver → the production asset-bundle lookup; the stub is
+//     restricted to explicit development mode
+
 //   - smoke runs     → SQLiteStore persisted rows
 //
 // Tests wire in-process stubs that drive every phase + failure
@@ -228,11 +226,9 @@ type BackendSmokeRuns interface {
 // bundle at buildFleet; tests construct it stub-by-stub.
 //
 // nil-tolerant per field: each per-step helper surfaces
-// errPhaseNotWired (or the phase analogue) when its specific
-// dep is nil. Empty-backend construction is the production
-// wiring's starting position because BackendWorkerExec and
-// BackendDriveUploader don't yet have real implementations
-// pending Step 11+ and a follow-up Drive-wiring step.
+// ErrSmokeRunnerNotWired when its specific dependency is nil. Empty
+// construction is useful for tests and partial composition only; production
+// validation rejects an incomplete backend before the supervisor starts.
 //
 // Compile-time shape contract: Executor uses store.SmokeRun
 // throughout (rather than a local mirror struct) so Go's

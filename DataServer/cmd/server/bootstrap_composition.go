@@ -236,14 +236,6 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		_ = p.SQLite.Close()
 		return nil, fmt.Errorf("bootstrap: fleet: %w", err)
 	}
-	if fleetDep != nil {
-		if err := registerFleetRunner(supervisor, fleetDep); err != nil {
-			_ = p.SQLite.Close()
-			return nil, fmt.Errorf("bootstrap: fleet supervisor: %w", err)
-		}
-		fleetDep.tickWiredAtBoot = true
-		log.Printf("[BOOTSTRAP] FleetController wired and supervised (operation ledger tick enabled)")
-	}
 
 	// Fleet-operator wiring (admin worker mutations / health / smoke /
 	// metrics / alerts handlers + the shared SSH client) — extracted to
@@ -252,6 +244,21 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	if err := wireFleetOperatorHandlers(cfg, fleetDep, m, p, workerNodeRegistry, sharedSSH); err != nil {
 		_ = p.SQLite.Close()
 		return nil, fmt.Errorf("bootstrap: fleet operator wiring: %w", err)
+	}
+	if fleetDep != nil && fleetDep.Registry != nil {
+		if err := fleetDep.Registry.ValidateRequiredExecutors(); err != nil {
+			_ = p.SQLite.Close()
+			return nil, fmt.Errorf("bootstrap: fleet executor registry: %w", err)
+		}
+		log.Printf("[BOOTSTRAP] Fleet executor registry validated: %s", strings.Join(fleetDep.Registry.Kinds(), ", "))
+	}
+	if fleetDep != nil {
+		if err := registerFleetRunner(supervisor, fleetDep); err != nil {
+			_ = p.SQLite.Close()
+			return nil, fmt.Errorf("bootstrap: fleet supervisor: %w", err)
+		}
+		fleetDep.tickWiredAtBoot = true
+		log.Printf("[BOOTSTRAP] FleetController wired and supervised (operation ledger tick enabled)")
 	}
 
 	return &appComponents{

@@ -48,7 +48,7 @@ func TestLevelDSmoke_ControllerLifecyclePersistsVerifiedArtifactEvidence(t *test
 	backend.SmokeRuns = db
 	backend.Now = func() time.Time { return time.Now().UTC() }
 
-	registry := NewExecutorRegistry()
+	registry := NewTestExecutorRegistry()
 	if err := registry.Register(OperationKindSmoke, NewLevelDSmokeExecutor(backend)); err != nil {
 		t.Fatal(err)
 	}

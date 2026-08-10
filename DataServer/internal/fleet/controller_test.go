@@ -113,7 +113,7 @@ func (f *failExecutor) Execute(ctx context.Context, _ *store.Operation) error {
 
 func TestController_Publish_AssignsIDAndPersists(t *testing.T) {
 	st := &stubStore{}
-	c := NewFleetController(st, NewExecutorRegistry(), time.Second, time.Minute)
+	c := NewFleetController(st, NewTestExecutorRegistry(), time.Second, time.Minute)
 	ctx := context.Background()
 
 	op := &store.Operation{
@@ -145,7 +145,7 @@ func TestController_Publish_AssignsIDAndPersists(t *testing.T) {
 
 func TestController_Publish_PropagatesInsertError(t *testing.T) {
 	st := &stubStore{insertErr: errors.New("disk full")}
-	c := NewFleetController(st, NewExecutorRegistry(), time.Second, time.Minute)
+	c := NewFleetController(st, NewTestExecutorRegistry(), time.Second, time.Minute)
 	err := c.PublishOperation(context.Background(), &store.Operation{
 		WorkerID: "wicket", Op: OperationKindDrain,
 		RequestedBy: "ops", Reason: "err test",
@@ -157,7 +157,7 @@ func TestController_Publish_PropagatesInsertError(t *testing.T) {
 
 func TestController_Publish_InFlightDedupReturnsSentinel(t *testing.T) {
 	st := &stubStore{insertErr: store.ErrOperationInFlight}
-	c := NewFleetController(st, NewExecutorRegistry(), time.Second, time.Minute)
+	c := NewFleetController(st, NewTestExecutorRegistry(), time.Second, time.Minute)
 	ctx := context.Background()
 	err := c.PublishOperation(ctx, &store.Operation{
 		WorkerID: "wicket", Op: OperationKindDrain,
@@ -170,7 +170,7 @@ func TestController_Publish_InFlightDedupReturnsSentinel(t *testing.T) {
 
 func TestController_Publish_PayloadPreserved(t *testing.T) {
 	st := &stubStore{}
-	c := NewFleetController(st, NewExecutorRegistry(), time.Second, time.Minute)
+	c := NewFleetController(st, NewTestExecutorRegistry(), time.Second, time.Minute)
 	pl := json.RawMessage(`{"digest":"sha256:abc","timeout_s":30}`)
 	err := c.PublishOperation(context.Background(), &store.Operation{
 		WorkerID: "wicket", Op: OperationKindUpdate,
@@ -185,9 +185,9 @@ func TestController_Publish_PayloadPreserved(t *testing.T) {
 	}
 }
 
-// TestController_Tick_LifecycleNoop verifies the happy path:
+// TestController_Tick_LifecycleNoop verifies the test-only happy path:
 // a QUEUED row goes QUEUED → RUNNING → SUCCEEDED via the
-// noop default executor. Uses the stubStore so the test does
+// explicit test registry. Uses the stubStore so the test does
 // not need an on-disk SQLite handle for this code path.
 func TestController_Tick_LifecycleNoop(t *testing.T) {
 	st := &stubStore{
@@ -198,7 +198,7 @@ func TestController_Tick_LifecycleNoop(t *testing.T) {
 			Status:      store.OperationStatusQueued,
 		}},
 	}
-	c := NewFleetController(st, NewExecutorRegistry(), time.Second, time.Minute)
+	c := NewFleetController(st, NewTestExecutorRegistry(), time.Second, time.Minute)
 	c.Tick(context.Background())
 
 	if !st.markSucceeded {
@@ -225,7 +225,7 @@ func TestController_Tick_FailedExecutorCapturesErrorMsg(t *testing.T) {
 			Status:      store.OperationStatusQueued,
 		}},
 	}
-	reg := NewExecutorRegistry()
+	reg := NewTestExecutorRegistry()
 	hook := &failExecutor{err: errors.New("ansible: connection refused")}
 	if err := reg.Register(OperationKindDrain, hook); err != nil {
 		t.Fatalf("register: %v", err)
@@ -255,7 +255,7 @@ func TestController_Tick_DoesNotExecuteWhenClaimIsLost(t *testing.T) {
 			Status:      store.OperationStatusQueued,
 		}},
 	}
-	reg := NewExecutorRegistry()
+	reg := NewTestExecutorRegistry()
 	hook := &failExecutor{}
 	if err := reg.Register(OperationKindDrain, hook); err != nil {
 		t.Fatalf("register: %v", err)
@@ -291,8 +291,8 @@ func TestController_Tick_NoExecutorForKind(t *testing.T) {
 	if st.markSucceeded {
 		t.Errorf("MarkSucceeded called; wanted no-executor path to fail")
 	}
-	if !strings.Contains(st.markFailedMsg, "no executor registered for operation kind") {
-		t.Errorf("MarkFailed msg = %q, want ErrNoExecutorForKind substring", st.markFailedMsg)
+	if !strings.Contains(st.markFailedMsg, ErrExecutorNotConfigured.Error()) || !strings.Contains(st.markFailedMsg, "no executor registered for operation kind") {
+		t.Errorf("MarkFailed msg = %q, want EXECUTOR_NOT_CONFIGURED and ErrNoExecutorForKind", st.markFailedMsg)
 	}
 }
 
@@ -302,7 +302,7 @@ func TestController_Tick_NoExecutorForKind(t *testing.T) {
 // exit) — the log entry is acceptable, the next tick retries.
 func TestController_Tick_ListErrRecoversSilently(t *testing.T) {
 	st := &stubStore{listErr: errors.New("db briefly unavailable")}
-	c := NewFleetController(st, NewExecutorRegistry(), time.Second, time.Minute)
+	c := NewFleetController(st, NewTestExecutorRegistry(), time.Second, time.Minute)
 	// No panic, no return-nil-error boundary issue.
 	c.Tick(context.Background())
 	if st.markSucceeded || st.markFailedMsg != "" {
@@ -313,7 +313,7 @@ func TestController_Tick_ListErrRecoversSilently(t *testing.T) {
 
 func TestController_StartStop_Lifecycle(t *testing.T) {
 	st := &stubStore{}
-	c := NewFleetController(st, NewExecutorRegistry(), 50*time.Millisecond, time.Second)
+	c := NewFleetController(st, NewTestExecutorRegistry(), 50*time.Millisecond, time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -336,7 +336,7 @@ func TestController_StartStop_Lifecycle(t *testing.T) {
 
 func TestController_Done_SatisfiableBeforeStart(t *testing.T) {
 	st := &stubStore{}
-	c := NewFleetController(st, NewExecutorRegistry(), time.Second, time.Minute)
+	c := NewFleetController(st, NewTestExecutorRegistry(), time.Second, time.Minute)
 	// A never-Started controller must return a satifiable Done().
 	select {
 	case <-c.Done():
@@ -354,7 +354,7 @@ func TestController_Done_SatisfiableBeforeStart(t *testing.T) {
 // do not backoff-and-retry".
 func TestController_Run_BlocksUntilCtxDone(t *testing.T) {
 	st := &stubStore{}
-	c := NewFleetController(st, NewExecutorRegistry(), 25*time.Millisecond, time.Second)
+	c := NewFleetController(st, NewTestExecutorRegistry(), 25*time.Millisecond, time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan error, 1)
@@ -378,7 +378,7 @@ func TestController_Run_BlocksUntilCtxDone(t *testing.T) {
 // only supported exit shape.
 func TestController_Run_BlocksUntilStop(t *testing.T) {
 	st := &stubStore{}
-	c := NewFleetController(st, NewExecutorRegistry(), 25*time.Millisecond, time.Second)
+	c := NewFleetController(st, NewTestExecutorRegistry(), 25*time.Millisecond, time.Second)
 	c.Start(context.Background())
 
 	done := make(chan error, 1)
@@ -395,6 +395,9 @@ func TestController_Run_BlocksUntilStop(t *testing.T) {
 	}
 }
 
+// TestExecutorRegistry_RegistersAllKinds pins the explicit test-only
+// no-op registry. Production registries are intentionally empty.
+//
 // TestExecutorRegistry_RegistersAllKinds is the canonical-closed-
 // set pin: Kinds() MUST return exactly the canonical
 // AllOperationKinds set (no extras, no missing).
@@ -411,8 +414,45 @@ func TestController_Run_BlocksUntilStop(t *testing.T) {
 // MUST update both AllOperationKinds AND the schema CHECK
 // (sqlite/104 + postgres/014) — pin failure here catches a
 // drift between the two.
-func TestExecutorRegistry_RegistersAllKinds(t *testing.T) {
+func TestExecutorRegistry_ProductionStartsEmpty(t *testing.T) {
 	reg := NewExecutorRegistry()
+	if got := reg.Kinds(); len(got) != 0 {
+		t.Fatalf("production registry kinds = %v, want empty", got)
+	}
+	if _, err := reg.Lookup(OperationKindDrain); !errors.Is(err, ErrExecutorNotConfigured) {
+		t.Fatalf("Lookup(drain) error = %v, want ErrExecutorNotConfigured", err)
+	}
+	if err := reg.Register(OperationKindDrain, &NoopOperationExecutor{}); !errors.Is(err, ErrNoopExecutorNotAllowed) {
+		t.Fatalf("production noop registration error = %v, want ErrNoopExecutorNotAllowed", err)
+	}
+}
+
+func TestExecutorRegistry_RejectsTypedNilExecutor(t *testing.T) {
+	reg := NewExecutorRegistry()
+	var exec *failExecutor
+	if err := reg.Register(OperationKindDrain, exec); err == nil {
+		t.Fatal("typed-nil executor registration should fail")
+	}
+}
+
+func TestExecutorRegistry_ValidateRequiredExecutors(t *testing.T) {
+	reg := NewExecutorRegistry()
+	if err := reg.ValidateRequiredExecutors(OperationKindUpdate); !errors.Is(err, ErrExecutorNotConfigured) {
+		t.Fatalf("empty registry validation error = %v, want ErrExecutorNotConfigured", err)
+	}
+	if err := reg.Register(OperationKindUpdate, &failExecutor{}); err != nil {
+		t.Fatalf("register concrete executor: %v", err)
+	}
+	if err := reg.ValidateRequiredExecutors(OperationKindUpdate); err != nil {
+		t.Fatalf("concrete executor validation: %v", err)
+	}
+	if err := NewTestExecutorRegistry().ValidateRequiredExecutors(OperationKindUpdate); !errors.Is(err, ErrExecutorNotConfigured) {
+		t.Fatalf("noop registry validation error = %v, want ErrExecutorNotConfigured", err)
+	}
+}
+
+func TestExecutorRegistry_RegistersAllKinds(t *testing.T) {
+	reg := NewTestExecutorRegistry()
 	got := reg.Kinds()
 	if len(got) != len(AllOperationKinds) {
 		t.Errorf("len(Kinds()) = %d, want %d", len(got), len(AllOperationKinds))
@@ -436,7 +476,7 @@ func TestExecutorRegistry_RegistersAllKinds(t *testing.T) {
 }
 
 func TestExecutorRegistry_RegisterRejectsUnknownKind(t *testing.T) {
-	reg := NewExecutorRegistry()
+	reg := NewTestExecutorRegistry()
 	err := reg.Register("launch_missile", &failExecutor{})
 	if err == nil {
 		t.Errorf("expected rejection of unknown kind, got nil")
@@ -444,7 +484,7 @@ func TestExecutorRegistry_RegisterRejectsUnknownKind(t *testing.T) {
 }
 
 func TestExecutorRegistry_RegisterNilExecutor(t *testing.T) {
-	reg := NewExecutorRegistry()
+	reg := NewTestExecutorRegistry()
 	err := reg.Register(OperationKindDrain, nil)
 	if err == nil {
 		t.Errorf("expected rejection of nil executor, got nil")

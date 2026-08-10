@@ -290,12 +290,16 @@ func (c *FleetController) processOne(ctx context.Context, op *store.Operation) {
 		// Never replay the external executor on a no-op claim.
 		return
 	}
-	exec, err := c.executors.Lookup(op.Op)
+	var exec OperationExecutor
+	if c.executors == nil {
+		err = fmt.Errorf("%w: registry is nil", ErrExecutorNotConfigured)
+	} else {
+		exec, err = c.executors.Lookup(op.Op)
+	}
 	if err != nil {
-		// Lookup failure: no executor registered. Mark FAILED
-		// with the error string. Audit dashboard surfaces
-		// "no_executor_registered_for_kind_X" so a misconfig
-		// never silently noops.
+		// Lookup failure: no concrete executor registered. Persist the
+		// stable EXECUTOR_NOT_CONFIGURED marker so a misconfigured boot
+		// can never become a false SUCCEEDED operation.
 		c.persistFailed(ctx, op.OperationID, err.Error())
 		return
 	}

@@ -1,13 +1,10 @@
-// Package fleet — Step 4/15 fleet controller abstraction: the
-// OperationExecutor interface and a default in-process registry
-// that future steps replace operation-kind-by-operation-kind.
+// Package fleet — fleet operation execution contracts.
 //
 // The ExecutorRegistry is the SINGLE mapping from operation kind
 // (drain | resume | restart | update | rollback | quarantine | smoke)
-// to a concrete OperationExecutor. Step 4/15 ships only the
-// NoopOperationExecutor; Step 7+ lands concrete Ansible/SSH-backed
-// executors that register themselves on boot, replacing the noop
-// entry without changing any producer-side call sites.
+// to a concrete OperationExecutor. Production registries start empty
+// and are populated explicitly during bootstrap; only test/dev registries
+// may opt into the NoopOperationExecutor.
 //
 // Architectural rule (PR §4): HTTP handlers NEVER call executors
 // directly. The HTTP layer publishes Operations via
@@ -21,7 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
+	"strings"
 	"sync"
 
 	"velox-server/internal/store"
@@ -45,14 +44,10 @@ const (
 	OperationKindSmoke      = "smoke"
 )
 
-// AllOperationKinds is the canonical complete-enum set. Drives
-// both the schema CHECK source-of-truth (mirrored in
-// sqlite/104_fleet_operations.sql and postgres/014) AND the
-// boot-time register list for the default NoopOperationExecutor
-// — adding a kind here without the matching CHECK migrations is
-// a silent schema drift, so the test
-// TestExecutorRegistry_RegistersAllKinds (controller_test.go)
-// pins the invariant.
+// AllOperationKinds is the canonical complete-enum set. It drives
+// the schema CHECK source-of-truth (mirrored in sqlite/104_fleet_operations.sql
+// and postgres/014). Production must register concrete executors explicitly;
+// this list is not a default-registration list.
 //
 // The set is stable for Step 4/15. Future kinds (e.g.
 // "rotate_secret", "drain_cluster") land as additive migrations.
@@ -66,13 +61,18 @@ var AllOperationKinds = []string{
 	OperationKindSmoke,
 }
 
-// ErrNoExecutorForKind is returned by ExecutorRegistry.Lookup
-// when no executor has been registered for the requested kind.
-// SHOULD never happen in production because the FleetModule
-// registers the NoopOperationExecutor at boot for every kind in
-// AllOperationKinds; reachability means a misconfigured boot.
-// Surface as an HTTP 500-class error at the API layer.
+// ErrExecutorNotConfigured is the stable operator-facing marker for a
+// production operation that has no concrete executor. It must be persisted
+// on the fleet operation row instead of allowing a false SUCCEEDED outcome.
+var ErrExecutorNotConfigured = errors.New("EXECUTOR_NOT_CONFIGURED")
+
+// ErrNoExecutorForKind is retained as the detailed lookup sentinel for
+// callers that need to distinguish a missing kind from executor failures.
 var ErrNoExecutorForKind = errors.New("fleet: no executor registered for operation kind")
+
+// ErrNoopExecutorNotAllowed prevents a production registry from being
+// wired to an executor that always reports success.
+var ErrNoopExecutorNotAllowed = errors.New("fleet: noop executor is only allowed in test/dev registries")
 
 // OperationExecutor runs one Operation. Implementations MUST:
 //
@@ -108,19 +108,25 @@ type OperationExecutor interface {
 type ExecutorRegistry struct {
 	mu        sync.RWMutex
 	executors map[string]OperationExecutor
+	allowNoop bool
 }
 
-// NewExecutorRegistry returns a registry with the NoopOperationExecutor
-// pre-registered for every kind in AllOperationKinds. Concrete
-// executors (Ansible, SSH, smoke-test runners) overwrite the
-// entry on boot via Register; the boot sequence stacks over the
-// noop-defaults.
-//
-// Returns a non-nil registry with non-nil default for every
-// canonical kind. Sub-tests pin the invariant via
-// TestExecutorRegistry_RegistersAllKinds.
+// NewExecutorRegistry returns an empty production registry. Every concrete
+// executor must be registered explicitly by bootstrap. A missing binding is
+// therefore observable and fails the operation instead of succeeding through
+// an implicit no-op.
 func NewExecutorRegistry() *ExecutorRegistry {
-	r := &ExecutorRegistry{executors: make(map[string]OperationExecutor)}
+	return &ExecutorRegistry{executors: make(map[string]OperationExecutor)}
+}
+
+// NewTestExecutorRegistry returns the legacy all-kinds registry for unit and
+// local development tests that intentionally exercise the controller without
+// external fleet side effects. It must never be used by production bootstrap.
+func NewTestExecutorRegistry() *ExecutorRegistry {
+	r := &ExecutorRegistry{
+		executors: make(map[string]OperationExecutor),
+		allowNoop: true,
+	}
 	noop := &NoopOperationExecutor{}
 	for _, kind := range AllOperationKinds {
 		r.executors[kind] = noop
@@ -129,7 +135,7 @@ func NewExecutorRegistry() *ExecutorRegistry {
 }
 
 // Register overwrites the executor entry for a single kind. The
-// canonical use is the boot sequence:
+// canonical production use is the boot sequence:
 //
 //	fleet.NewExecutorRegistry()
 //	          .Register(fleet.OperationKindUpdate, &UpdateExecutor{...})
@@ -137,41 +143,82 @@ func NewExecutorRegistry() *ExecutorRegistry {
 //
 // Register is the ONLY way to bind a new executor. Returns nil
 // on success, an error if `exec` is nil or `kind` is not in
-// AllOperationKinds (a typo here would lead to the noop
-// default kicking in silently and the operator seeing a fake
-// "succeeded" outcome — the eager error saves the dashboard
-// the debug trip).
+// AllOperationKinds. Production registries reject no-op executors
+// so a wiring typo cannot create a fake "succeeded" outcome.
 func (r *ExecutorRegistry) Register(kind string, exec OperationExecutor) error {
-	if exec == nil {
+	if r == nil {
+		return errors.New("fleet: nil executor registry")
+	}
+	if isNilExecutor(exec) {
 		return errors.New("fleet: executor cannot be nil")
 	}
 	if !IsKnownKind(kind) {
 		return fmt.Errorf("fleet: unknown operation kind %q", kind)
 	}
+	if isNoopExecutor(exec) && !r.allowNoop {
+		return ErrNoopExecutorNotAllowed
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.executors == nil {
+		r.executors = make(map[string]OperationExecutor)
+	}
 	r.executors[kind] = exec
 	return nil
 }
 
-// Lookup returns the executor for a kind. Returns
-// ErrNoExecutorForKind if absent (no kind in AllOperationKinds
-// has no default — the path is internal-only unless a future
-// step drops a kind without updating the registry).
+// Lookup returns the executor for a kind. Missing bindings are reported with
+// both ErrExecutorNotConfigured (stable operational marker) and
+// ErrNoExecutorForKind (detailed lookup sentinel).
 func (r *ExecutorRegistry) Lookup(kind string) (OperationExecutor, error) {
+	if r == nil {
+		return nil, fmt.Errorf("%w: %w: %q", ErrExecutorNotConfigured, ErrNoExecutorForKind, kind)
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	exec, ok := r.executors[kind]
-	if !ok {
-		return nil, fmt.Errorf("%w: %q", ErrNoExecutorForKind, kind)
+	if !ok || isNilExecutor(exec) {
+		return nil, fmt.Errorf("%w: %w: %q", ErrExecutorNotConfigured, ErrNoExecutorForKind, kind)
 	}
 	return exec, nil
 }
 
-// HasKind is a no-error read used by tests and the audit
-// endpoint to confirm the kind enum surface stays in lockstep
-// with the registry contents (a missing kind means the boot
-// sequence removed a default — a kin to ErrNoExecutorForKind).
+// ValidateRequiredExecutors verifies the concrete executor bindings needed by
+// the current production composition. With no arguments it validates the
+// canonical production set; callers may pass a narrower set in tests or when
+// a capability is deliberately disabled. Noop bindings are never accepted.
+func (r *ExecutorRegistry) ValidateRequiredExecutors(required ...string) error {
+	if len(required) == 0 {
+		required = ProductionRequiredOperationKinds
+	}
+	missing := make([]string, 0, len(required))
+	for _, kind := range required {
+		if !IsKnownKind(kind) {
+			return fmt.Errorf("fleet: unknown required operation kind %q", kind)
+		}
+		exec, err := r.Lookup(kind)
+		if err != nil {
+			missing = append(missing, kind)
+			continue
+		}
+		if isNoopExecutor(exec) {
+			missing = append(missing, kind)
+			continue
+		}
+		if validator, ok := exec.(interface{ ValidateProductionBackends() error }); ok {
+			if err := validator.ValidateProductionBackends(); err != nil {
+				return fmt.Errorf("%w: %s: %v", ErrExecutorNotConfigured, kind, err)
+			}
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: missing concrete executors for %s", ErrExecutorNotConfigured, strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+// HasKind is a no-error read used by tests and readiness reporting
+// to inspect the explicitly wired registry contents.
 func (r *ExecutorRegistry) HasKind(kind string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -180,9 +227,7 @@ func (r *ExecutorRegistry) HasKind(kind string) bool {
 }
 
 // Kinds returns the registered kinds, alphabetically sorted for
-// stable diagnostics. Used by the boot self-check
-// (TestExecutorRegistry_RegistersAllKinds in controller_test.go)
-// and any debug surface.
+// stable diagnostics and boot/readiness reporting.
 func (r *ExecutorRegistry) Kinds() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -205,20 +250,10 @@ func IsKnownKind(kind string) bool {
 	return false
 }
 
-// NoopOperationExecutor is the default executor registered for
-// every OperationKind at boot. It immediately returns nil
-// (success). The FleetController transitions the row
-// QUEUED → RUNNING → SUCCEEDED without any side effect, which
-// proves the full lifecycle path works end-to-end without an
-// SSH/Ansible dependency.
-//
-// Future steps (e.g. Step 7) replace this entry with a concrete
-// executor at boot (Registry.Register(kind, ansibleExec)). The
-// registry mutation is the ONLY way to bind a new executor;
-// the controller does not implement a plugin loader.
-//
-// NoopOperationExecutor is concurrency-safe by virtue of having
-// no state.
+// NoopOperationExecutor is a test/dev-only executor. It immediately returns
+// nil and therefore must never be installed in a production registry: doing
+// so would make QUEUED → RUNNING → SUCCEEDED indistinguishable from real work.
+// NewTestExecutorRegistry is the only constructor that opts into it.
 type NoopOperationExecutor struct{}
 
 // Execute returns nil unconditionally. The Kind and Payload
@@ -226,4 +261,36 @@ type NoopOperationExecutor struct{}
 // in Step 7+ consume them.
 func (NoopOperationExecutor) Execute(_ context.Context, _ *store.Operation) error {
 	return nil
+}
+
+func isNilExecutor(exec OperationExecutor) bool {
+	if exec == nil {
+		return true
+	}
+	value := reflect.ValueOf(exec)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
+func isNoopExecutor(exec OperationExecutor) bool {
+	switch exec.(type) {
+	case NoopOperationExecutor, *NoopOperationExecutor:
+		return true
+	default:
+		return false
+	}
+}
+
+// ProductionRequiredOperationKinds are the concrete capabilities currently
+// promised by the production fleet composition. Other enum values remain
+// valid for persistence and fail at dispatch with EXECUTOR_NOT_CONFIGURED
+// until their capability is explicitly wired.
+var ProductionRequiredOperationKinds = []string{
+	OperationKindUpdate,
+	OperationKindResume,
+	OperationKindSmoke,
 }

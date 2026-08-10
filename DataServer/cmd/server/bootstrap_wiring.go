@@ -222,7 +222,7 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 
 		levelDSmokeExecutor := fleet.NewLevelDSmokeExecutor(smokeBackend)
 		if err := fleetDep.Registry.Register(fleet.OperationKindSmoke, levelDSmokeExecutor); err != nil {
-			log.Printf("[BOOTSTRAP] WARN: LevelDSmokeExecutor registration failed: %v (kind=%s continues with noop fallback)", err, fleet.OperationKindSmoke)
+			return fmt.Errorf("register LevelDSmokeExecutor: %w", err)
 		} else {
 			driveDesc := "nil"
 			assetDesc := "nil"
@@ -230,7 +230,7 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 				driveDesc = "RealDrive"
 			}
 			if smokeBackend.Asset != nil {
-				assetDesc = "StubAsset"
+				assetDesc = "configured"
 			}
 			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor registered for kind=%s (Worker=SSHWorkerExec[%d targets], Drive=%s, Asset=%s, Lease=RegistryDrain, SmokeRuns=SQLite)", fleet.OperationKindSmoke, workerNodeRegistry.Len(), driveDesc, assetDesc)
 		}
@@ -239,7 +239,7 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 			Registry:      m.Workers.Registry(),
 			SmokeExecutor: levelDSmokeExecutor,
 		})); err != nil {
-			log.Printf("[BOOTSTRAP] WARN: ResumeExecutor registration failed: %v", err)
+			return fmt.Errorf("register ResumeExecutor: %w", err)
 		} else {
 			log.Printf("[BOOTSTRAP] ResumeExecutor registered for kind=%s (fresh Level D smoke gate wired)", fleet.OperationKindResume)
 		}
