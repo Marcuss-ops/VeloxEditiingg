@@ -30,6 +30,25 @@ func TestParseInputAssemblyStatusAcceptsLegacyWireSpellings(t *testing.T) {
 	}
 }
 
+func TestCompletedWireStatusNeverBecomesJobOrPublicationTerminal(t *testing.T) {
+	payload := NewJobPayloadV2(map[string]any{"status": string(InputAssemblyCompleted)})
+	if got := payload.InputAssemblyStatus(); got != InputAssemblyCompleted {
+		t.Fatalf("input assembly status = %q, want %q", got, InputAssemblyCompleted)
+	}
+	mapped, err := payload.ToMap()
+	if err != nil {
+		t.Fatalf("ToMap: %v", err)
+	}
+	if got := mapped["status"]; got != string(InputAssemblyCompleted) {
+		t.Fatalf("wire status = %v, want completed", got)
+	}
+	for _, terminal := range []string{"SUCCEEDED", "PUBLISHED"} {
+		if mapped["status"] == terminal {
+			t.Fatalf("completed input handoff emitted lifecycle terminal %q", terminal)
+		}
+	}
+}
+
 func TestJobPayloadInputAssemblyStatusPreservesWireValue(t *testing.T) {
 	incoming := NewJobPayloadV2(map[string]any{"status": "completed"})
 	if got := incoming.InputAssemblyStatus(); got != InputAssemblyCompleted {

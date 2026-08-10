@@ -45,6 +45,25 @@ func TestParsersRejectCrossDomainValues(t *testing.T) {
 	}
 }
 
+func TestCompletedCannotBeCastIntoLifecycleTerminalDomains(t *testing.T) {
+	completed := contract.InputAssemblyCompleted
+	if jobs.JobStatus(completed).Valid() {
+		t.Fatal("completed must not be a valid JobStatus")
+	}
+	if deliveries.DeliveryStatus(completed).Valid() {
+		t.Fatal("completed must not be a valid DeliveryStatus")
+	}
+	if publicationstate.PublicationStatus(completed).Valid() {
+		t.Fatal("completed must not be a valid PublicationStatus")
+	}
+	if contract.InputAssemblyStatus("SUCCEEDED").Valid() {
+		t.Fatal("SUCCEEDED must not be accepted as InputAssemblyStatus")
+	}
+	if contract.InputAssemblyStatus("PUBLISHED").Valid() {
+		t.Fatal("PUBLISHED must not be accepted as InputAssemblyStatus")
+	}
+}
+
 func TestWireValuesRemainStrings(t *testing.T) {
 	for _, tc := range []struct {
 		name string
