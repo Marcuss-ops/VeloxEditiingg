@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"velox-shared/compatibility"
-	"velox-shared/contract"
 
 	"velox-server/internal/handlers/server/pipeline/projection"
 )
@@ -16,58 +15,29 @@ func projectWorkerPayload(req *SubmitJobRequest) (map[string]interface{}, error)
 	return projection.ProjectWorkerPayload(rawPayload, rendererModeForJobType(req.JobType))
 }
 
-// submitRequestToRawPayload builds the canonical flat-map shape consumed
-// by remoteengine.ParseRemotePipelineResult. It owns the DTO boundary,
-// nested scene projection, and delivery retry defaults.
-
-// Identity-bearing URLs and IDs are trimmed; content fields remain verbatim.
+// submitRequestToRawPayload preserves the package-local caller contract while
+// delegating top-level envelope construction to projection. Nested scenes and
+// layers remain here until their independent DTO boundary is extracted.
 func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
-	m := map[string]interface{}{
-		// This is the producer-side input handoff state, not a terminal job
-		// lifecycle state. Keep the historical wire value while making the
-		// domain semantics explicit at the submission boundary.
-		"status": string(contract.InputAssemblyCompleted),
-		"job_id": strings.TrimSpace(req.IdempotencyKey),
-	}
-	if req.JobType != "" {
-		m["job_type"] = strings.TrimSpace(req.JobType)
-	}
-	if req.TemplateID != "" {
-		m["template_id"] = strings.TrimSpace(req.TemplateID)
-	}
-	if req.TemplateVersion > 0 {
-		m["template_version"] = req.TemplateVersion
-	}
-	if mode := rendererModeForJobType(req.JobType); mode != "" {
-		m["video_mode"] = mode
-	}
+	rawPayload := projection.BuildRawPayloadEnvelope(projection.RawPayloadInput{
+		JobID:              req.IdempotencyKey,
+		JobType:            req.JobType,
+		TemplateID:         req.TemplateID,
+		TemplateVersion:    req.TemplateVersion,
+		VideoMode:          rendererModeForJobType(req.JobType),
+		VideoName:          req.VideoName,
+		ScriptText:         req.ScriptText,
+		Spec:               req.Spec,
+		Output:             submitOutputToMap(req.Output),
+		RenderManifest:     req.ResolvedManifest,
+		ManifestRef:        req.ResolvedManifestRef,
+		ManifestSHA256:     req.ResolvedManifestSHA256,
+		PlacementPin:       req.PlacementPinWorkerID,
+		LegacyVoiceovers:   compatibility.ReadStringList(req.Spec, compatibility.VoiceoverPathsKey),
+		DeliveryPlan:       submitDeliveryPlanEntries(req.DeliveryPlan),
+		RetryBudgetDefault: DefaultRetryBudget,
+	})
 
-	if req.VideoName != "" {
-		m["video_name"] = strings.TrimSpace(req.VideoName)
-	}
-	if req.ScriptText != "" {
-		m["script_text"] = req.ScriptText
-	}
-	if len(req.Spec) > 0 {
-		m["spec"] = req.Spec
-	}
-	if req.Output != nil {
-		m["output"] = map[string]interface{}{
-			"width":  req.Output.Width,
-			"height": req.Output.Height,
-			"fps":    req.Output.FPS,
-			"format": req.Output.Format,
-		}
-	}
-	if req.ResolvedManifest != nil {
-		m["render_manifest"] = req.ResolvedManifest
-	}
-	if req.ResolvedManifestRef != nil {
-		m["manifest_ref"] = req.ResolvedManifestRef
-	}
-	if req.ResolvedManifestSHA256 != "" {
-		m["manifest_sha256"] = req.ResolvedManifestSHA256
-	}
 	if len(req.Scenes) > 0 {
 		scenes := make([]interface{}, 0, len(req.Scenes))
 		for _, s := range req.Scenes {
@@ -84,19 +54,10 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 			if s.Kind != "" {
 				scene["kind"] = strings.TrimSpace(s.Kind)
 			}
-			// Per-scene nested objects (Phase 2): clip / voiceover /
-			// subtitles carry their own asset references so the
-			// worker reads the canonical URL directly from
-			// scenes_json[i].voiceover.url (no more positional
-			// coupling with any top-level positional array.
 			if s.Clip != nil {
 				scene["clip"] = clipToMap(s.Clip)
 			}
 			if s.Stock != nil {
-				// The renderer contract is always scene.stock[] even when
-				// the recipe contains a single stock object. Keeping the
-				// array shape here is essential: the canonical timeline
-				// builder uses one shared stock-list path for every scene.
 				scene["stock"] = []interface{}{clipToMap(s.Stock)}
 			}
 			if len(s.StockAssets) > 0 {
@@ -118,7 +79,7 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 			}
 			scenes = append(scenes, scene)
 		}
-		m["scenes"] = scenes
+		rawPayload["scenes"] = scenes
 	}
 	if len(req.Layers) > 0 {
 		layers := make([]interface{}, 0, len(req.Layers))
@@ -136,59 +97,43 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 			}
 			layers = append(layers, entry)
 		}
-		m["layers"] = layers
+		rawPayload["layers"] = layers
 	}
 	if len(req.AudioTracks) > 0 {
+		// Explicit tracks win over the legacy voiceover_paths compatibility
+		// alias already projected by BuildRawPayloadEnvelope.
 		audioTracks := make([]interface{}, 0, len(req.AudioTracks))
 		for _, track := range req.AudioTracks {
 			audioTracks = append(audioTracks, audioTrackToMap(track))
 		}
-		m["audio_tracks"] = audioTracks
-	} else if legacyVoiceovers := compatibility.ReadStringList(req.Spec, compatibility.VoiceoverPathsKey); len(legacyVoiceovers) > 0 {
-		// Compatibility aliases are read only at this boundary and are
-		// immediately projected into the canonical renderer shape. They
-		// must never cross the worker boundary as positional fields.
-		audioTracks := make([]interface{}, 0, len(legacyVoiceovers))
-		for _, sourceURL := range legacyVoiceovers {
-			audioTracks = append(audioTracks, map[string]interface{}{
-				"source_url": sourceURL,
-				"role":       "voiceover",
-			})
-		}
-		m["audio_tracks"] = audioTracks
+		rawPayload["audio_tracks"] = audioTracks
 	}
+	return rawPayload
+}
 
-	if req.PlacementPinWorkerID != "" {
-		m["_placement_pin_worker_id"] = strings.TrimSpace(req.PlacementPinWorkerID)
+func submitOutputToMap(output *SubmitOutput) map[string]interface{} {
+	if output == nil {
+		return nil
 	}
-
-	if len(req.DeliveryPlan) > 0 {
-		plan := make([]interface{}, 0, len(req.DeliveryPlan))
-		for _, d := range req.DeliveryPlan {
-			entry := map[string]interface{}{
-				"destination_id": strings.TrimSpace(d.DestinationID),
-			}
-			if d.Priority > 0 {
-				entry["priority"] = d.Priority
-			}
-			if d.RetryBudget == nil {
-				entry["retry_budget"] = DefaultRetryBudget
-			} else {
-				entry["retry_budget"] = *d.RetryBudget
-			}
-			if d.Metadata != nil {
-				// Destination metadata is control-plane routing data. It must
-				// survive the external DTO projection so providers can honor
-				// per-job targets such as a Drive folder, while it remains
-				// excluded from the renderer worker payload.
-				entry["metadata"] = d.Metadata
-			}
-			plan = append(plan, entry)
-		}
-		m["delivery_plan"] = plan
+	return map[string]interface{}{
+		"width": output.Width, "height": output.Height, "fps": output.FPS, "format": output.Format,
 	}
+}
 
-	return m
+func submitDeliveryPlanEntries(entries []SubmitDeliveryPlanEntry) []projection.RawDeliveryPlanEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]projection.RawDeliveryPlanEntry, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, projection.RawDeliveryPlanEntry{
+			DestinationID: entry.DestinationID,
+			Priority:      entry.Priority,
+			RetryBudget:   entry.RetryBudget,
+			Metadata:      entry.Metadata,
+		})
+	}
+	return out
 }
 
 func rendererModeForJobType(jobType string) string {
