@@ -168,7 +168,7 @@ chown -R "${IMAGE_UID}:${IMAGE_GID}" /opt/velox/current/.velox
 # the image group access to the existing certificate tree so the Docker
 # process can load the configured key without changing its private-key mode.
 if [[ -d /opt/velox/certs ]]; then
-    find /opt/velox/certs -type d -exec chmod g+rx {} +
+    find /opt/velox/certs -type d -exec chown root:"${IMAGE_GID}" {} + -exec chmod g+rx {} +
     find /opt/velox/certs -type f -name '*.key' -exec chown root:"${IMAGE_GID}" {} + -exec chmod 640 {} +
 fi
 ok "Directory tree ready: /opt/velox/current"
