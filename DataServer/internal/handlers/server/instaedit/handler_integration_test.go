@@ -169,6 +169,13 @@ func TestInstaEditBFF_EndToEnd(t *testing.T) {
 	if created.WorkspaceID != 45 {
 		t.Fatalf("expected workspace_id 45, got %d", created.WorkspaceID)
 	}
+	var persistedWorkspaceID int64
+	if err := db.DB().QueryRow(`SELECT workspace_id FROM jobs WHERE job_id = ?`, created.ID).Scan(&persistedWorkspaceID); err != nil {
+		t.Fatalf("read persisted job workspace_id: %v", err)
+	}
+	if persistedWorkspaceID != 45 {
+		t.Fatalf("enqueuer adapter persisted workspace_id %d, want 45", persistedWorkspaceID)
+	}
 
 	// 1b. An identical retry converges on the same durable job.
 	wReplay := doRequest(http.MethodPost, "/api/v1/instaedit/jobs", createBody)

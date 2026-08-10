@@ -24,11 +24,15 @@ type memoryJobGateway struct {
 	getWorkspaceID            int64
 	getJobID                  string
 	cancelErr                 error
+	listJobsErr               error
 	listJobDeliveriesErr      error
 	getDeliveryDestinationErr error
 }
 
 func (m *memoryJobGateway) ListJobsByWorkspace(ctx context.Context, workspaceID int64, limit int) ([]map[string]any, error) {
+	if m.listJobsErr != nil {
+		return nil, m.listJobsErr
+	}
 	return m.jobs, nil
 }
 
@@ -77,21 +81,33 @@ func (m *memoryJobGateway) GetDeliveryDestination(ctx context.Context, destID st
 type memoryWorkerReader struct {
 	workers []map[string]any
 	worker  map[string]any
+	listErr error
+	getErr  error
 }
 
 func (m *memoryWorkerReader) ListWorkersByWorkspace(workspaceID int64) ([]map[string]any, error) {
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
 	return m.workers, nil
 }
 
 func (m *memoryWorkerReader) GetWorkerByWorkspace(workerID string, workspaceID int64) (map[string]any, error) {
+	if m.getErr != nil {
+		return nil, m.getErr
+	}
 	return m.worker, nil
 }
 
 type memoryAssetReader struct {
 	asset *store.AssetRecord
+	err   error
 }
 
 func (m *memoryAssetReader) GetByIDAndWorkspace(ctx context.Context, assetID string, workspaceID int64) (*store.AssetRecord, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
 	return m.asset, nil
 }
 
