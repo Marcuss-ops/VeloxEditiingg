@@ -231,6 +231,68 @@ snapshot exists — it is no longer skipped with “no valid protection
 snapshot”). A fresh `protected_snapshot_age_seconds` can only be produced
 by a 200 poll whose snapshot was applied.
 
+## Serial rollout attempt — STOPPED at worker 2 (2026-08-10 ~20:30 UTC)
+
+Per plan rule (“if a worker does not come back READY, STOP the rollout and
+report”), the serial rollout was **stopped after the first worker**. No
+further worker was touched.
+
+### What happened
+
+```text
+[fleetctl] update queued: operation_id=c7328d38-f178-4baf-86a4-dc71f1d3e096
+           worker_id=host_57_131_20_173 queued_at=2026-08-10T20:29:50Z
+operation ended FAILED:
+  rollback_ok: smoke_failed: smoke: asset resolve:
+  asset asset-canary-001 not found
+  (rollback_ok to ghcr.io/marcuss-ops/velox-worker@sha256:90ffddd6…)
+```
+
+Master journal (`[UPDATE] … cascading ROLLBACK`, 20:29:59): the
+UpdateExecutor ran its Level-D smoke gate as part of the update; the smoke
+asset resolver could not resolve the input asset, so the operation
+**automatically rolled back** to the previous digest. The fail-safe worked:
+
+| Worker | After rollback |
+| --- | --- |
+| `host_57_131_20_173` | CONNECTED / HEALTHY / `90ffddd6…` / `digest_state=ROLLED_BACK` / 0 jobs |
+| `velox-worker-13197` | untouched — CONNECTED / HEALTHY / `90ffddd6…` |
+| `velox-worker-523925eb` | untouched — CONNECTED / HEALTHY / `90ffddd6…` |
+| `host_57_129_132_133` | untouched — DRAINING (isolation) |
+
+### Root cause — smoke INPUT asset missing from the master asset registry
+
+- The smoke capability itself is **READY** on the master (boot 20:15:02):
+  `LevelDSmokeExecutor capability=READY (Worker=SSHWorkerExec[4 targets],
+  Drive and asset resolver configured)`; `Update capability READY: ssh
+  docker deployments cosign image registry smoke drive all wired`.
+- `productionAssetResolver.ResolveAsset` (`bootstrap_wiring.go`) resolves
+  the input asset through the canonical `AssetService.Get(assetID)` — the
+  asset must exist in the master asset registry with `status=READY`.
+- `VELOX_SMOKE_ASSET_ID` is **not set** in `/etc/velox-server.env`, so the
+  ID falls back to `asset-canary-001` (`resume_executor.go`
+  `smokeAssetID`), which is **not registered** → `asset not found`.
+- `VELOX_SMOKE_DRIVE_FOLDER_ID` IS set — but that only configures where
+  the smoke OUTPUT artifact is uploaded; it does not register the input
+  asset.
+- Same missing-asset class caused the 4 earlier task failures at
+  20:16–20:17 (`asset_resolution_failed … velox asset
+  13df6d1efac400032507cdda93abb585bb192f4b451c15842a3e70377412ac2b: asset
+  not found`) and the canary job `job_cf30b525118fbd21` at 20:17:39.
+
+### Fix options (pending operator decision)
+
+1. **Register the smoke input asset** in the master asset registry as
+   `asset-canary-001` (READY + bytes in the BlobStore) via the canonical
+   asset resolution/registration path, then re-run the serial rollout.
+2. **Set `VELOX_SMOKE_ASSET_ID`** in the master env (openbao resolver
+   `resolve-master-env.sh` → master restart) pointing to an asset that
+   already exists and is READY.
+
+Rollout order (2 → 3 → 4) and per-worker `update → wait-ready → smoke →
+resume` sequence remain unchanged; the run resumes once the smoke asset
+resolves.
+
 ## Next steps (per the certification plan)
 
 1. ✅ Canary recovery confirmed (this document) — no restart needed.
