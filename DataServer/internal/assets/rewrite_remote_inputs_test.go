@@ -64,6 +64,30 @@ func TestRewriteRemoteInputPayloadRejectsIncompleteCanonicalNestedAsset(t *testi
 	}
 }
 
+func TestRewriteRemoteInputPayloadMarksDeferredDriveCanonicalAsset(t *testing.T) {
+	payload := map[string]interface{}{
+		"scenes": []interface{}{
+			map[string]interface{}{
+				"clip": map[string]interface{}{
+					"asset_id": "drive-file-123456",
+					"url":      "velox-asset://drive-file-123456",
+				},
+			},
+		},
+	}
+	service := &AssetService{repo: &rewriteAssetRepository{assets: map[string]*AssetRecord{}}}
+	if err := service.RewriteRemoteInputPayload(context.Background(), payload); err != nil {
+		t.Fatalf("RewriteRemoteInputPayload: %v", err)
+	}
+	clip := payload["scenes"].([]interface{})[0].(map[string]interface{})["clip"].(map[string]interface{})
+	if got := clip["asset_ref_kind"]; got != "deferred_drive" {
+		t.Fatalf("asset_ref_kind = %v, want deferred_drive", got)
+	}
+	if got := clip["url"]; got != "velox-asset://drive-file-123456" {
+		t.Fatalf("url = %v, want legacy velox wire value", got)
+	}
+}
+
 func TestRewriteRemoteInputPayloadRejectsUnregisteredCanonicalAsset(t *testing.T) {
 	payload := map[string]interface{}{
 		"scenes": []interface{}{

@@ -22,6 +22,27 @@ func canonicalClipScene() map[string]interface{} {
 	}
 }
 
+func TestNormalizeClipPayloadPreservesDeferredDriveAssetBoundary(t *testing.T) {
+	scene := canonicalClipScene()
+	clip := scene["clip"].(map[string]interface{})
+	clip["asset_id"] = "drive-file-123456"
+	clip["url"] = "velox-asset://drive-file-123456"
+	clip["asset_ref_kind"] = "deferred_drive"
+	entries, _, _, _, _, err := normalizeClipPayload(map[string]interface{}{
+		"scenes": []interface{}{scene},
+	})
+	if err != nil {
+		t.Fatalf("normalizeClipPayload: %v", err)
+	}
+	got := entries[0]["clip"].(map[string]interface{})["asset_ref_kind"]
+	if got != "deferred_drive" {
+		t.Fatalf("asset_ref_kind = %v, want deferred_drive", got)
+	}
+	if entries[0]["clip"].(map[string]interface{})["url"] != "velox-asset://drive-file-123456" {
+		t.Fatalf("deferred wire URL changed: %#v", entries[0]["clip"])
+	}
+}
+
 func TestNormalizeClipPayloadCanonicalNarratedScene(t *testing.T) {
 	entries, items, clips, tracks, mode, err := normalizeClipPayload(map[string]interface{}{
 		"job_id": "canonical-job",

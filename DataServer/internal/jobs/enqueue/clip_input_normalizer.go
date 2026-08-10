@@ -61,6 +61,9 @@ func canonicalAsset(raw map[string]interface{}) map[string]interface{} {
 	if durationMS := canonicalDurationMS(raw); durationMS > 0 {
 		out["duration_ms"] = durationMS
 	}
+	if refKind := strings.TrimSpace(payload.FirstString(raw, "asset_ref_kind")); refKind != "" {
+		out["asset_ref_kind"] = refKind
+	}
 	return out
 }
 

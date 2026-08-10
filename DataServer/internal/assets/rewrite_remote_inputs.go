@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"velox-server/internal/inputsecurity"
+	"velox-shared/assetref"
 )
 
 // RewriteRemoteInputPayload is the single acquisition boundary for remote
@@ -252,16 +253,23 @@ func rewriteCanonicalAssetMap(ctx context.Context, s *AssetService, item map[str
 			return fmt.Errorf("lookup canonical asset %q: %w", assetID, err)
 		}
 		if registered == nil || registered.AssetID != assetID {
-			// Drive-backed canonical references are materialized lazily by the
-			// worker-assets endpoint. This keeps folder imports lightweight:
-			// the enqueue path does not have to stage/hash every Drive file
-			// before dispatching the job.
-			if !isDriveAssetID(assetID) {
+			// Compatibility boundary for payloads produced before asset_ref_kind
+			// existed: only a conservative Drive-ID shape may use deferred
+			// materialization. New producers must emit the explicit annotation
+			// below; this fallback is intentionally not a general asset resolver.
+			if !assetref.IsLikelyDriveFileID(assetID) {
 				return fmt.Errorf("canonical asset %q is not registered", assetID)
 			}
 		}
 		item["asset_id"] = assetID
 		item["url"] = VeloxAssetScheme + "://" + assetID
+		if registered == nil || registered.AssetID != assetID {
+			deferred, err := assetref.NewDeferredDrive(assetID)
+			if err != nil {
+				return fmt.Errorf("canonical asset %q is not a registered local asset or deferred Drive asset: %w", assetID, err)
+			}
+			item["asset_ref_kind"] = string(deferred.Kind())
+		}
 		return nil
 	}
 	asset, err := s.ResolveAndRegister(ctx, ResolveAssetCommand{Kind: string(kind), Reference: reference})
@@ -274,20 +282,6 @@ func rewriteCanonicalAssetMap(ctx context.Context, s *AssetService, item map[str
 	item["asset_id"] = asset.AssetID
 	item["url"] = asset.Reference()
 	return nil
-}
-
-func isDriveAssetID(value string) bool {
-	value = strings.TrimSpace(value)
-	if len(value) < 16 || len(value) > 128 {
-		return false
-	}
-	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			continue
-		}
-		return false
-	}
-	return true
 }
 
 func rewriteFirstMapField(ctx context.Context, s *AssetService, item map[string]interface{}, kind inputsecurity.Kind, keys ...string) error {

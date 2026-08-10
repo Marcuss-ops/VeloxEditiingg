@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"velox-shared/assetref"
 )
 
 // assetMetadata carries optional integrity hints. Folder-backed Drive assets
@@ -14,6 +16,7 @@ import (
 type assetMetadata struct {
 	ID        string
 	URI       string
+	Kind      assetref.RefKind
 	SHA256    string
 	SizeBytes int64
 }
@@ -148,6 +151,18 @@ func (w *Worker) resolveVerifiedAssetReference(ctx context.Context, reference st
 	if metadata.ID == "" {
 		metadata.ID = assetID
 	}
+	if metadata.Kind != "" && metadata.Kind != assetref.RefKindLocal && metadata.Kind != assetref.RefKindDeferredDrive && metadata.Kind != assetref.RefKindRemote {
+		return "", fmt.Errorf("common asset resolver: %s: unknown asset_ref_kind %q", field, metadata.Kind)
+	}
+	if metadata.Kind == assetref.RefKindRemote {
+		return "", fmt.Errorf("common asset resolver: %s: remote asset must be resolved before worker dispatch", field)
+	}
+	if metadata.Kind == assetref.RefKindDeferredDrive {
+		// Deferred Drive assets intentionally arrive without a local asset
+		// row or eager integrity metadata. The master bridge materializes
+		// and verifies the bytes in downloadVeloxAssetWithMetadata.
+		metadata.SHA256 = strings.TrimSpace(metadata.SHA256)
+	}
 	if metadata.SHA256 != "" && !validSHA256(metadata.SHA256) {
 		return "", fmt.Errorf("common asset resolver: %s: invalid SHA-256 for %s", field, reference)
 	}
@@ -184,8 +199,13 @@ func collectAssetMetadata(value interface{}, index assetMetadataIndex) error {
 				continue
 			}
 			if sha == "" || size <= 0 {
-				// Do not fail for arbitrary metadata maps here; the reference
-				// walker emits the precise field error when it is materialized.
+				// Any explicit annotation must survive metadata collection,
+				// including malformed values, so resolveVerifiedAssetReference
+				// can reject unknown kinds fail-closed. Deferred Drive is the
+				// supported no-integrity exception.
+				if rawKind := strings.TrimSpace(firstString(typed, "asset_ref_kind")); rawKind != "" {
+					registerAssetMetadata(index, ref, typed, sha, size)
+				}
 				continue
 			}
 			registerAssetMetadata(index, ref, typed, sha, size)
@@ -220,17 +240,19 @@ func collectAssetMetadata(value interface{}, index assetMetadataIndex) error {
 func registerAssetMetadata(index assetMetadataIndex, reference string, fields map[string]interface{}, sha string, size int64) {
 	ref := strings.TrimSpace(reference)
 	assetID, bridged := parseVeloxAssetReference(ref)
-	if !bridged {
+	if !bridged || ref == "" {
 		return
 	}
-	if ref == "" {
-		return
+	kind := assetref.RefKindLocal
+	if rawKind := strings.TrimSpace(firstString(fields, "asset_ref_kind")); rawKind != "" {
+		kind = assetref.RefKind(rawKind)
 	}
 	canonicalRef := "velox-asset://" + assetID
-	index[ref] = assetMetadata{ID: assetID, URI: canonicalRef, SHA256: strings.TrimSpace(sha), SizeBytes: size}
-	index[canonicalRef] = index[ref]
+	metadata := assetMetadata{ID: assetID, URI: canonicalRef, Kind: kind, SHA256: strings.TrimSpace(sha), SizeBytes: size}
+	index[ref] = metadata
+	index[canonicalRef] = metadata
 	if id := firstString(fields, "asset_id", "id"); id != "" {
-		index["velox-asset://"+id] = index[ref]
+		index["velox-asset://"+id] = metadata
 	}
 }
 

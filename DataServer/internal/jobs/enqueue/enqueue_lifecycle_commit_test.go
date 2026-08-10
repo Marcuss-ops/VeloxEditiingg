@@ -2,6 +2,7 @@ package enqueue
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -85,6 +86,60 @@ func TestEnqueueCreatesJobAndTaskAtomically(t *testing.T) {
 // TestEnqueueDefaultsPreserved verifies the permissive behavior is
 // intact when no Requirements are published: an empty JobRequirements
 // flows through unchanged.
+func TestEnqueuePreservesDeferredDriveAssetWireAndKind(t *testing.T) {
+	t.Parallel()
+	enq := newTestEnqueuer(t)
+	payload := map[string]interface{}{
+		"video_name":  "Deferred Drive enqueue",
+		"script_text": "typed asset boundary",
+		"audio_tracks": []interface{}{map[string]interface{}{
+			"source_url": "velox-asset://voice-1",
+			"role":       "voiceover",
+		}},
+		"scenes": []interface{}{map[string]interface{}{
+			"scene_id": "scene-1",
+			"clip": map[string]interface{}{
+				"asset_id":       "drive-file-123456",
+				"url":            "velox-asset://drive-file-123456",
+				"asset_ref_kind": "deferred_drive",
+				"duration_ms":    3000,
+			},
+			"voiceover": map[string]interface{}{
+				"asset_id":    "voice-1",
+				"url":         "velox-asset://voice-1",
+				"duration_ms": 3000,
+			},
+		}},
+		"delivery_plan": []interface{}{map[string]interface{}{
+			"destination_id": "drive-main",
+			"retry_budget":   1,
+		}},
+	}
+	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	jobID, _ := response["job_id"].(string)
+	job, err := enq.Jobs.Get(context.Background(), jobID)
+	if err != nil || job == nil {
+		t.Fatalf("Get job: err=%v job=%v", err, job)
+	}
+	var persisted map[string]interface{}
+	if err := json.Unmarshal([]byte(job.Payload), &persisted); err != nil {
+		t.Fatalf("decode persisted payload: %v", err)
+	}
+	encoded, err := json.Marshal(persisted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := string(encoded)
+	for _, want := range []string{"velox-asset://drive-file-123456", "drive-file-123456", "deferred_drive"} {
+		if !strings.Contains(wire, want) {
+			t.Fatalf("persisted payload lost %q: %s", want, wire)
+		}
+	}
+}
+
 func TestEnqueueDefaultsPreserved(t *testing.T) {
 	t.Parallel()
 	enq := newTestEnqueuer(t)

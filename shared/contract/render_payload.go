@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"velox-shared/assetref"
 )
 
 // RenderOnlyPayload returns an immutable renderer-facing copy of payload.
@@ -153,9 +155,24 @@ func canonicalizeSceneValue(value interface{}) interface{} {
 }
 
 func canonicalAsset(url string, duration interface{}) map[string]interface{} {
-	asset := map[string]interface{}{"url": strings.TrimSpace(url)}
-	if strings.HasPrefix(asset["url"].(string), "velox-asset://") {
-		asset["asset_id"] = strings.TrimPrefix(asset["url"].(string), "velox-asset://")
+	ref, err := assetref.Parse(strings.TrimSpace(url))
+	if err != nil {
+		return map[string]interface{}{"url": strings.TrimSpace(url)}
+	}
+	wire := ref.Wire()
+	if ref.IsDeferredDrive() {
+		// Preserve the historical source URL in this renderer projection;
+		// enqueue rewriting owns conversion to velox-asset://. The optional
+		// annotation makes the deferred boundary explicit without changing
+		// the existing URL value.
+		wire = strings.TrimSpace(url)
+	}
+	asset := map[string]interface{}{"url": wire}
+	if ref.ID() != "" && (strings.HasPrefix(strings.ToLower(strings.TrimSpace(url)), "velox-asset://") || ref.IsDeferredDrive()) {
+		asset["asset_id"] = ref.ID()
+	}
+	if ref.IsDeferredDrive() {
+		asset["asset_ref_kind"] = string(ref.Kind())
 	}
 	if duration != nil {
 		switch value := duration.(type) {
