@@ -40,10 +40,10 @@ Placeholder `CHANGE_ME_*` mai copiati in produzione.
 | `INSTAEDIT_CONTROL_JWT_SECRET` | ≥32 byte, **condiviso con InstaeditLogin** (minter) — un mismatch = 401/403 su tutte le chiamate BFF |
 | `VELOX_ALLOWED_WORKERS` | allowlist worker (no `*` in produzione) |
 | `VELOX_WORKER_*` / credenziali worker | registry + credential validation |
-| `VELOX_JOB_MASTER_URL` | pipeline master backend |
 | `ALERT_WEBHOOK_URL` | Slack webhook per monitoring |
 
 ### Da NON impostare più
+- ❌ `VELOX_JOB_MASTER_URL` (proxy Drive legacy rimosso; le route `/api/drive/*` sono servite dal modulo Drive canonico)
 - ❌ `VELOX_DARK_EDITOR_DIR`, `VELOX_DARK_EDITOR_PROXY_URL` (rimossi)
 - ❌ `VELOX_NVIDIA_API_KEY`, `VELOX_NVIDIA_TEXT_URL` (rimossi)
 - ❌ `VELOX_SPA_DIR`, `VELOX_GRADIO_APP_URL` (UI non più servita dal master)

@@ -63,10 +63,13 @@ registrato nel supervisor.
    può eseguire `DownloadFile` senza il limite `Store.maxBytes`; il servizio
    Drive concreto oggi delega comunque a una variante bounded, ma il contratto
    permette un adapter non bounded.
-4. `DataServer/internal/handlers/web/proxy/drive.go` contiene un proxy HTTP
-   diretto con `http.Client.Do` e body non bounded. Non è raggiunto dal call
-   path SubmitJob individuato; resta candidato a rimozione o a un audit separato
-   se una route lo rende pubblico.
+4. `DataServer/internal/handlers/web/proxy/drive.go` era un proxy HTTP
+   diretto con `http.Client.Do` e body non bounded. Il call-site inventory del
+   2026-08-10 ha confermato zero caller/import e nessuna route che lo montasse:
+   le route `/api/drive/*` attive appartengono al modulo canonico
+   `internal/handlers/server/drive`. Il proxy è stato quindi rimosso insieme
+   al setting inutilizzato `VELOX_JOB_MASTER_URL`; nessun percorso Drive
+   canonico è stato modificato.
 
 ## Credential lease
 

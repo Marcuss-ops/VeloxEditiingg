@@ -194,9 +194,8 @@ func TestLoadCompatibilityConfigDefaultsToStrict(t *testing.T) {
 
 func TestLoadPipelineConfigRetainsOnlyLiveSettings(t *testing.T) {
 	raw := NewRawConfig(map[string]string{
-		"VELOX_JOB_MASTER_URL": "http://retired-proxy.invalid",
-		"OLLAMA_ADDR":          "http://ollama.internal:11434",
-		"OLLAMA_MODEL":         "test-model",
+		"OLLAMA_ADDR":  "http://ollama.internal:11434",
+		"OLLAMA_MODEL": "test-model",
 	})
 	cfg := FromRaw(raw)
 	if cfg.Pipeline.OllamaURL != "http://ollama.internal:11434" || cfg.Pipeline.OllamaModel != "test-model" {
