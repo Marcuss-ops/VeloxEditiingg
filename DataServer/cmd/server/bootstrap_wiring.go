@@ -295,26 +295,10 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 		m.Workers.SetMetricsAggregatorHandler(metricsHandler)
 		log.Printf("[BOOTSTRAP] Admin workers metrics aggregator handler wired (GET /api/v1/admin/workers/{id}/metrics; fleet aggregate at GET /api/v1/fleet/metrics; metrics-snapshot-supervisor ticks every 5min via buildSupervisor)")
 	}
-	// Step 16/15 fleet-operator: wire the structured alerting
-	// surface (12-rule catalog persisted to alert_events via
-	// migration 107). Read paths: /api/v1/admin/workers/{id}/alerts
-	// (per-worker) + /api/v1/fleet/alerts/active +
-	// /api/v1/fleet/alerts/recent (fleet-wide ledger — the
-	// canonical Phase 6 fleet namespace; the legacy
-	// /api/v1/admin/alerts aliases were removed). All
-	// adminAuth-gated; serve the operator dashboard.
-	// The actual alert EVALUATION runs async in the
-	// alerts-supervisor registered below in buildSupervisor
-	// (ClassRestartable, 5min tick) so HTTP remains read-only.
-	//
-	// Nil-tolerant via the adminWorkersAlertsHandler nil guard —
-	// a misconfigured bootstrap (no SQLite store) keeps the
-	// routes silently un-mounted rather than 503-on-every-request.
-	if m != nil && m.Workers != nil && p != nil && p.SQLite != nil {
-		alertsHandler := api.NewAdminWorkersAlertsHandler(p.SQLite)
-		m.Workers.SetAlertsHandler(alertsHandler)
-		log.Printf("[BOOTSTRAP] Admin workers alerts handler wired (GET /api/v1/admin/workers/{id}/alerts + /api/v1/fleet/alerts/active + /recent; alerts-supervisor ticks every 5min via buildSupervisor)")
-	}
+	// Fleet structured alerting is intentionally DISABLED until a real
+	// WorkerAlertsDataSource is composed. Do not mount the persisted-alert
+	// read routes while evaluation is absent: an empty alert ledger must not
+	// look like a healthy alerting service.
 	// AZIONE 2 — fail-closed boot verdict. All critical backends were
 	// verified above (SSH/Docker/Cosign/Registry wired in buildFleet;
 	// Smoke/Drive attached here). Instead of hard-failing the master

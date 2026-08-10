@@ -39,6 +39,12 @@ func configuredInterface(value any) bool {
 func configuredDataSource(source WorkerAlertsDataSource) bool { return configuredInterface(source) }
 func configuredAlertStore(s AlertStore) bool                  { return configuredInterface(s) }
 
+// DataSourceConfigured reports whether a datasource is safe to use,
+// including the typed-nil interface case at composition boundaries.
+func DataSourceConfigured(source WorkerAlertsDataSource) bool {
+	return configuredDataSource(source)
+}
+
 // AlertStore is the SQLite-backed surface the engine writes to.
 type AlertStore interface {
 	InsertAlertEvent(ctx context.Context, ev store.AlertEvent) error

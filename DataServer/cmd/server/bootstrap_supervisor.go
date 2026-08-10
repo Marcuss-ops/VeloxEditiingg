@@ -21,17 +21,22 @@ import (
 )
 
 // registerOpsAlertsSupervisor constructs the fleet alert engine before
-// registering its runner. A missing datasource means the capability is not
-// ready, so the supervisor is deliberately omitted rather than started as a
-// silent no-op. Other construction failures are composition errors.
-func registerOpsAlertsSupervisor(sup *supervisor.Supervisor, store opsalerts.AlertStore, source opsalerts.WorkerAlertsDataSource, policy supervisor.RestartPolicy, metricsSink opsalerts.WorkerEvaluationErrorSink) error {
+// registering its runner. A missing datasource is an explicit DISABLED
+// capability: no runner is registered and no error is hidden as a healthy
+// service. A non-nil but invalid composition remains a hard bootstrap error.
+func registerOpsAlertsSupervisor(sup *supervisor.Supervisor, store opsalerts.AlertStore, source opsalerts.WorkerAlertsDataSource, policy supervisor.RestartPolicy, metricsSink opsalerts.WorkerEvaluationErrorSink) (opsalerts.CapabilityStatus, error) {
+	if !opsalerts.DataSourceConfigured(source) {
+		status := opsalerts.DisabledStatus("worker datasource is not wired")
+		log.Printf("[FLEET-ALERTS] capability=%s: %s; alerts-supervisor and alert routes are disabled", status.State, status.Reason)
+		return status, nil
+	}
 	engine, err := opsalerts.NewEngine(store, source)
 	if err != nil {
 		if errors.Is(err, opsalerts.ErrDataSourceNotConfigured) {
-			log.Printf("[FLEET-ALERTS] alerts-supervisor disabled: datasource is not configured")
-			return nil
+			status := opsalerts.MisconfiguredStatus(err.Error())
+			return status, status.ReadinessError()
 		}
-		return fmt.Errorf("construct alerts engine: %w", err)
+		return opsalerts.MisconfiguredStatus(err.Error()), fmt.Errorf("construct alerts engine: %w", err)
 	}
 	engine.SetErrorMetrics(metricsSink)
 	if err := sup.Register(supervisor.Runner{
@@ -40,9 +45,9 @@ func registerOpsAlertsSupervisor(sup *supervisor.Supervisor, store opsalerts.Ale
 		Policy: policy,
 		Run:    engine.Run,
 	}); err != nil {
-		return fmt.Errorf("supervisor register alerts-supervisor: %w", err)
+		return opsalerts.MisconfiguredStatus(err.Error()), fmt.Errorf("supervisor register alerts-supervisor: %w", err)
 	}
-	return nil
+	return opsalerts.ReadyStatus(), nil
 }
 
 // buildSupervisor registers the long-lived background runners
@@ -59,8 +64,11 @@ func registerOpsAlertsSupervisor(sup *supervisor.Supervisor, store opsalerts.Ale
 //     removed and the supervisor logs WARN.
 //   - ClassOneShot:     manifest-generator. Run once on startup;
 //     failure is non-fatal (logged WARN).
-func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDeps, w *workerDeps, t *taskDeps, metricsCollector *velmetrics.Collector) (*supervisor.Supervisor, error) {
+func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDeps, w *workerDeps, t *taskDeps, metricsCollector *velmetrics.Collector, opsAlertsCapability *opsalerts.CapabilityStatus) (*supervisor.Supervisor, error) {
 	sup := supervisor.New()
+	if opsAlertsCapability != nil {
+		*opsAlertsCapability = opsalerts.DisabledStatus("worker datasource is not wired")
+	}
 
 	criticalMaxRetries := cfg.Runtime.Supervisor.CriticalMaxRetries
 	criticalFailAfter := cfg.Runtime.Supervisor.CriticalFailAfter
@@ -358,9 +366,14 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 	// constructs first and therefore leaves this capability absent instead
 	// of exposing a healthy-looking runner whose Tick does nothing.
 	if p != nil && p.SQLite != nil && m != nil && m.Workers != nil {
-		if err := registerOpsAlertsSupervisor(sup, p.SQLite, nil, restartablePolicy, metricsCollector); err != nil {
+		status, err := registerOpsAlertsSupervisor(sup, p.SQLite, nil, restartablePolicy, metricsCollector)
+		if err != nil {
 			return nil, err
 		}
+		if opsAlertsCapability != nil {
+			*opsAlertsCapability = status
+		}
+		log.Printf("[BOOTSTRAP] opsalerts capability=%s", status.State)
 	}
 
 	// ── ClassOneShot ─────────────────────────────────────────────────

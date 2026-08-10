@@ -62,3 +62,27 @@ func TestHealth_ReadyAliases(t *testing.T) {
 		})
 	}
 }
+
+func TestHealth_ReadinessCapabilityIsExposedWithoutFailing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	m := NewHealthModule()
+	m.AddReadinessCapability("opsalerts", func() string { return "DISABLED" })
+	m.MarkReady()
+
+	r := gin.New()
+	m.RegisterRoutes(r)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("disabled capability must not fail readiness: %d %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Capabilities map[string]string `json:"capabilities"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode readiness body: %v", err)
+	}
+	if got := body.Capabilities["opsalerts"]; got != "DISABLED" {
+		t.Fatalf("opsalerts capability = %q, want DISABLED", got)
+	}
+}

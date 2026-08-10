@@ -18,6 +18,7 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/fleet"
+	"velox-server/internal/fleet/opsalerts"
 	"velox-server/internal/instaeditauth"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/registry"
@@ -75,6 +76,11 @@ type appComponents struct {
 	// health is a thin alias of modules.Health. Hoisted here so
 	// registerReadinessChecks does not need to reach into modules.
 	health *app.HealthModule
+
+	// opsAlertsCapability is explicit even when the feature is disabled:
+	// readiness and diagnostics must distinguish DISABLED from a missing
+	// or silently no-op evaluator.
+	opsAlertsCapability opsalerts.CapabilityStatus
 }
 
 // close releases owned resources. Called via defer on the returned
@@ -222,7 +228,8 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		log.Printf("[BOOTSTRAP] InstaEdit control JWT verifier configured")
 	}
 
-	supervisor, err := buildSupervisor(cfg, a, m, j, p, w, t, metricsCollector)
+	var opsAlertsCapability opsalerts.CapabilityStatus
+	supervisor, err := buildSupervisor(cfg, a, m, j, p, w, t, metricsCollector, &opsAlertsCapability)
 	if err != nil {
 		_ = p.SQLite.Close()
 		return nil, err
@@ -271,21 +278,22 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	}
 
 	return &appComponents{
-		cfg:                cfg,
-		persistence:        p,
-		jobs:               j,
-		tasks:              t,
-		workers:            w,
-		assets:             a,
-		modules:            m,
-		fleet:              fleetDep,
-		resolver:           resolver,
-		capabilityRegistry: capabilityRegistry,
-		metricsRegistry:    metricsRegistry,
-		metricsCollector:   metricsCollector,
-		instaeditVerifier:  instaeditVerifier,
-		supervisor:         supervisor,
-		health:             m.Health,
+		cfg:                 cfg,
+		persistence:         p,
+		jobs:                j,
+		tasks:               t,
+		workers:             w,
+		assets:              a,
+		modules:             m,
+		fleet:               fleetDep,
+		resolver:            resolver,
+		capabilityRegistry:  capabilityRegistry,
+		metricsRegistry:     metricsRegistry,
+		metricsCollector:    metricsCollector,
+		instaeditVerifier:   instaeditVerifier,
+		supervisor:          supervisor,
+		health:              m.Health,
+		opsAlertsCapability: opsAlertsCapability,
 	}, nil
 }
 

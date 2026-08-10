@@ -20,14 +20,20 @@ type ReadinessCheck func() error
 // A 503 is returned with per-check details when any dependency is
 // not yet available (Kubernetes readiness probe).
 type HealthModule struct {
-	mu     sync.RWMutex
-	booted bool
-	checks []namedCheck
+	mu         sync.RWMutex
+	booted     bool
+	checks     []namedCheck
+	capability []namedCapability
 }
 
 type namedCheck struct {
 	name  string
 	check ReadinessCheck
+}
+
+type namedCapability struct {
+	name  string
+	state func() string
 }
 
 // NewHealthModule creates a new health module.
@@ -59,6 +65,18 @@ func (m *HealthModule) AddReadinessCheck(name string, check ReadinessCheck) {
 	m.checks = append(m.checks, namedCheck{name: name, check: check})
 }
 
+// AddReadinessCapability exposes a non-failing capability state in the
+// readiness payload. This distinguishes intentional DISABLED capabilities
+// from a missing or silently healthy-looking service.
+func (m *HealthModule) AddReadinessCapability(name string, state func() string) {
+	if state == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.capability = append(m.capability, namedCapability{name: name, state: state})
+}
+
 // MarkReady signals that bootstrap is complete and /ready should
 // evaluate registered checks (instead of returning 503 unconditionally).
 func (m *HealthModule) MarkReady() {
@@ -76,6 +94,8 @@ func (m *HealthModule) ready(c *gin.Context) {
 	isReady := m.booted
 	checks := make([]namedCheck, len(m.checks))
 	copy(checks, m.checks)
+	capability := make([]namedCapability, len(m.capability))
+	copy(capability, m.capability)
 	m.mu.RUnlock()
 
 	if !isReady {
@@ -98,16 +118,23 @@ func (m *HealthModule) ready(c *gin.Context) {
 		}
 	}
 
+	capabilityStates := make(map[string]string, len(capability))
+	for _, item := range capability {
+		capabilityStates[item.name] = item.state()
+	}
+
 	if !allOK {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"status":   "not_ready",
-			"failures": failures,
+			"status":       "not_ready",
+			"failures":     failures,
+			"capabilities": capabilityStates,
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"status": "ready",
-		"checks": len(checks),
+		"status":       "ready",
+		"checks":       len(checks),
+		"capabilities": capabilityStates,
 	})
 }

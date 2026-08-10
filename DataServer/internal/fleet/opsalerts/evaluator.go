@@ -25,10 +25,11 @@ import (
 // calls Evaluate() once per (tick, worker) and merges results
 // into the dedup window + alert_events table.
 
-// WorkerAlertsDataSource is the read surface the evaluator
-// consumes. Production wires WorkerAlertsDataSourceAdapter
-// (engine.go) from the SQLite store + fleet.WorkersRegistry.
-// Tests pass a stub.
+// WorkerAlertsDataSource is the read surface the evaluator consumes.
+// Production currently leaves this capability DISABLED because no real
+// adapter is composed yet; tests pass explicit stubs. A future adapter must
+// satisfy this complete contract before the supervisor or alert routes are
+// enabled.
 type WorkerAlertsDataSource interface {
 	// WorkerIDs returns every worker_id registered with the
 	// fleet right now (snapshot at call-time; the engine

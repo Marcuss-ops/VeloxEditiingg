@@ -14,6 +14,7 @@ import (
 	"log"
 	"strings"
 
+	"velox-server/internal/fleet/opsalerts"
 	"velox-server/internal/registry"
 )
 
@@ -145,6 +146,27 @@ func registerReadinessChecks(c *appComponents, t *transportBundle) {
 			return nil
 		})
 	}
+
+	// Fleet alerts capability probe. DISABLED is intentional and does not
+	// make the process unready; MISCONFIGURED is impossible to hide behind
+	// a missing runner and therefore flips /ready red.
+	c.modules.Health.AddReadinessCheck("opsalerts-capability", func() error {
+		status := c.opsAlertsCapability
+		// Zero-value appComponents are used by partial bootstrap tests. Treat
+		// an absent status as the same explicit DISABLED state as production
+		// wiring, never as an unknown/healthy evaluator state.
+		if status.State == "" {
+			status = opsalerts.DisabledStatus("worker datasource is not wired")
+		}
+		return status.ReadinessError()
+	})
+	c.modules.Health.AddReadinessCapability("opsalerts", func() string {
+		status := c.opsAlertsCapability
+		if status.State == "" {
+			return string(opsalerts.CapabilityDisabled)
+		}
+		return string(status.State)
+	})
 
 	// AZIONE 2 — fail-closed update capability probe. The master must
 	// NEVER report itself ready while the update path is half-wired
