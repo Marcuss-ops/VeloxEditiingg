@@ -29,11 +29,15 @@ Usage:
   scripts/fleetctl restart <worker_id> [reason]
   scripts/fleetctl update <worker_id> <ghcr-image@sha256:digest> [reason]
   scripts/fleetctl rollback <worker_id> <ghcr-image@sha256:digest> [reason]
+  scripts/fleetctl wait-ready <worker_id> [--digest image-or-sha256] [--timeout seconds]
+  scripts/fleetctl rollout [--digest image-or-sha256] [--workers all|id1,id2,...] [--serial] [--wait-ready]
   scripts/fleetctl operations [worker_id] [status]
   scripts/fleetctl smoke <worker_id>
   scripts/fleetctl job inspect <job_id>
   scripts/fleetctl job metrics <job_id>
-  scripts/fleetctl job watch <job_id>
+  scripts/fleetctl job watch <job_id> [--timeout seconds] [--poll seconds] [--json]
+  scripts/fleetctl job submit --payload FILE [--workers all|id1,id2,...] [--wait]
+  scripts/fleetctl job certify --payload FILE [--workers all|id1,id2,...]
   scripts/fleetctl doctor --production
 
 Environment:
@@ -42,6 +46,8 @@ Environment:
   TOKEN_FILE         File containing VELOX_ADMIN_TOKEN=<value>
   FLEETCTL_WAIT_TIMEOUT_SECONDS  poll budget for update/rollback (default: 1800)
   FLEETCTL_WAIT_POLL_SECONDS     poll interval for update/rollback (default: 5)
+  FLEETCTL_JOB_TIMEOUT_SECONDS   poll budget for jobs (default: 3600)
+  FLEETCTL_JOB_POLL_SECONDS      poll interval for jobs (default: 5)
 
 update/rollback route through the canonical Master API:
   POST /api/v1/admin/workers/{worker_id}/update   {target_digest, reason}
@@ -267,6 +273,213 @@ poll_operation() {
     done
 }
 
+# wait_ready is the one readiness gate used by rollout and by operators. It
+# reads the canonical worker projection; it never reaches a worker over SSH.
+wait_ready() {
+    local worker_id=$1 expected_image=${2:-} timeout=${3:-${FLEETCTL_READY_TIMEOUT_SECONDS:-180}} poll=${4:-${FLEETCTL_READY_POLL_SECONDS:-5}}
+    local deadline=$(( $(date +%s) + timeout )) card ready connection health actual_digest expected_digest
+    [[ -n "$worker_id" ]] || die 'worker_id is required'
+    if [[ -n "$expected_image" ]]; then
+        expected_digest="${expected_image##*@}"
+        [[ "$expected_digest" =~ ^sha256:[a-f0-9]{64}$ ]] || die 'readiness digest must be a pinned image or sha256 digest'
+    fi
+    while :; do
+        card="$(api GET "$(worker_uri "$worker_id")")"
+        ready="$(jq -r '.readiness.status // "UNKNOWN"' <<<"$card")"
+        connection="$(jq -r '.connection_state // .status // "UNKNOWN"' <<<"$card")"
+        health="$(jq -r '.health // "UNKNOWN"' <<<"$card")"
+        actual_digest="$(jq -r '.image_digest // .digest // ""' <<<"$card")"
+        printf 'fleetctl: worker=%s connection=%s health=%s readiness=%s digest=%s\n' \
+            "$worker_id" "$connection" "$health" "$ready" "${actual_digest:--}" >&2
+        if [[ "$ready" == "ok" && "$connection" == "CONNECTED" && "$health" == "HEALTHY" ]]; then
+            if [[ -z "$expected_digest" || "$actual_digest" == *"$expected_digest"* ]]; then
+                printf 'fleetctl: worker=%s READY\n' "$worker_id" >&2
+                return 0
+            fi
+        fi
+        if (( $(date +%s) >= deadline )); then
+            printf 'fleetctl: worker=%s did not become READY (connection=%s health=%s readiness=%s digest=%s expected=%s)\n' \
+                "$worker_id" "$connection" "$health" "$ready" "${actual_digest:--}" "${expected_digest:--}" >&2
+            return 1
+        fi
+        sleep "$poll"
+    done
+}
+
+resolve_worker_ids() {
+    local selection=${1:-all} worker_id
+    if [[ "$selection" == "all" ]]; then
+        api GET /api/v1/admin/workers | jq -er '.workers[] | .worker_id'
+        return
+    fi
+    IFS=',' read -r -a selected_workers <<<"$selection"
+    for worker_id in "${selected_workers[@]}"; do
+        [[ -n "$worker_id" ]] || die 'worker selection contains an empty worker_id'
+        printf '%s\n' "$worker_id"
+    done
+}
+
+parse_wait_ready_args() {
+    local worker_id='' image='' timeout=${FLEETCTL_READY_TIMEOUT_SECONDS:-180} poll=${FLEETCTL_READY_POLL_SECONDS:-5} arg
+    while [[ $# -gt 0 ]]; do
+        arg=$1
+        case "$arg" in
+            --digest=*) image=${arg#*=}; shift ;;
+            --digest) [[ $# -ge 2 ]] || die '--digest requires a value'; image=$2; shift 2 ;;
+            --timeout=*) timeout=${arg#*=}; shift ;;
+            --timeout) [[ $# -ge 2 ]] || die '--timeout requires a value'; timeout=$2; shift 2 ;;
+            --poll=*) poll=${arg#*=}; shift ;;
+            --poll) [[ $# -ge 2 ]] || die '--poll requires a value'; poll=$2; shift 2 ;;
+            -*) die "unknown wait-ready option: $arg" ;;
+            *) [[ -z "$worker_id" ]] || die "unexpected wait-ready argument: $arg"; worker_id=$arg; shift ;;
+        esac
+    done
+    [[ -n "$worker_id" ]] || die 'worker_id is required'
+    if [[ -n "$image" ]]; then image="$(normalize_update_image "$image")"; fi
+    wait_ready "$worker_id" "$image" "$timeout" "$poll"
+}
+
+rollout() {
+    local image='' selection=all reason=fleetctl-rollout wait_for_ready=0 serial=1 arg worker_id
+    while [[ $# -gt 0 ]]; do
+        arg=$1
+        case "$arg" in
+            --digest=*) image=${arg#*=}; shift ;;
+            --digest) [[ $# -ge 2 ]] || die '--digest requires a value'; image=$2; shift 2 ;;
+            --workers=*) selection=${arg#*=}; shift ;;
+            --workers) [[ $# -ge 2 ]] || die '--workers requires all or a comma-separated worker_id list'; selection=$2; shift 2 ;;
+            --reason=*) reason=${arg#*=}; shift ;;
+            --reason) [[ $# -ge 2 ]] || die '--reason requires a value'; reason=$2; shift 2 ;;
+            --serial) serial=1; shift ;;
+            --wait-ready) wait_for_ready=1; shift ;;
+            --parallel) die 'rollout is serial-only; omit --parallel and use --serial'
+                ;;
+            -*) die "unknown rollout option: $arg" ;;
+            *) [[ -z "$image" ]] || die "unexpected rollout argument: $arg"; image=$arg; shift ;;
+        esac
+    done
+    image="$(normalize_update_image "$image")"
+    mapfile -t workers < <(resolve_worker_ids "$selection")
+    ((${#workers[@]} > 0)) || die 'no workers selected'
+    printf 'fleetctl: rolling out %s to %d worker(s) serially\n' "$image" "${#workers[@]}" >&2
+    for worker_id in "${workers[@]}"; do
+        run_digest_update update "$worker_id" "$image" "$reason"
+        if (( wait_for_ready )); then
+            wait_ready "$worker_id" "$image"
+        fi
+    done
+}
+
+m2m_api() {
+    local token=$1 method=$2 path=$3 body=${4:-}
+    local args=(-fsS -X "$method" -H "Authorization: Bearer $token")
+    if [[ -n "$body" ]]; then
+        args+=(-H 'Content-Type: application/json' --data-raw "$body")
+    fi
+    curl "${args[@]}" "$MASTER_URL$path"
+}
+
+M2M_CLIENT_ID=''
+M2M_TOKEN=''
+cleanup_m2m() {
+    if [[ -n "$M2M_CLIENT_ID" ]]; then
+        api DELETE "/api/v1/admin/m2m/keys/$(printf '%s' "$M2M_CLIENT_ID" | jq -sRr @uri)" >/dev/null 2>&1 || true
+        M2M_CLIENT_ID=''
+        M2M_TOKEN=''
+    fi
+}
+
+issue_m2m() {
+    M2M_CLIENT_ID="fleetctl-job-$(date +%s)-$$"
+    local response body
+    body="$(jq -cn --arg client_id "$M2M_CLIENT_ID" '{client_id:$client_id, description:"fleetctl ephemeral job operator", scopes:["jobs.submit"]}')"
+    response="$(api POST /api/v1/admin/m2m/keys "$body")"
+    M2M_TOKEN="$(jq -er '.plaintext_secret' <<<"$response")" || die 'M2M issue response did not contain plaintext_secret'
+    trap cleanup_m2m EXIT
+}
+
+wait_job() {
+    local job_id=$1 token=$2 timeout=${3:-${FLEETCTL_JOB_TIMEOUT_SECONDS:-3600}} poll=${4:-${FLEETCTL_JOB_POLL_SECONDS:-5}}
+    local deadline=$(( $(date +%s) + timeout )) snapshot status
+    while :; do
+        snapshot="$(m2m_api "$token" GET "/api/v1/jobs/$(printf '%s' "$job_id" | jq -sRr @uri)")"
+        status="$(jq -r '.status // .state // "UNKNOWN"' <<<"$snapshot" | tr '[:lower:]' '[:upper:]')"
+        printf 'fleetctl: job=%s status=%s\n' "$job_id" "$status" >&2
+        case "$status" in
+            SUCCEEDED|FAILED|CANCELLED|COMPLETED) [[ "$status" == "SUCCEEDED" || "$status" == "COMPLETED" ]] ; return $? ;;
+        esac
+        if (( $(date +%s) >= deadline )); then
+            printf 'fleetctl: timed out waiting for job=%s (last status=%s)\n' "$job_id" "$status" >&2
+            return 1
+        fi
+        sleep "$poll"
+    done
+}
+
+print_job_card() {
+    local job_id=$1 snapshot=$2
+    jq -r --arg job_id "$job_id" '
+      . as $root |
+      (($root.execution.attempts // []) | if length > 0 then .[-1] else {} end) as $a |
+      [
+        ("job:        " + $job_id),
+        ("status:     " + (($root.job.status // "UNKNOWN")|tostring)),
+        ("attempt:    " + (($a.attempt_id // "-")|tostring)),
+        ("worker:     " + (($a.worker_id // "-")|tostring)),
+        ("phase:      " + (($a.phase // "-")|tostring)),
+        ("progress:   " + (if $a.current_scene != null then (($a.current_scene|tostring) + "/" + (($a.total_scenes // "?")|tostring) + " scenes, " + (($a.current_segment // "?")|tostring) + "/" + (($a.total_segments // "?")|tostring) + " segments") else "-" end)),
+        ("error_code: " + (($a.error_code // "-")|tostring)),
+        ("error:      " + (($a.error_message // "-")|tostring)),
+        ("ffmpeg:     " + (if $a.ffmpeg_speed_x != null then ($a.ffmpeg_speed_x|tostring) + "x" else "-" end))
+      ] | .[]
+    ' <<<"$snapshot"
+}
+
+job_submit() {
+    local payload_file='' selection=all wait_for_jobs=0 idem_prefix="fleetctl-$(date +%s)" arg
+    while [[ $# -gt 0 ]]; do
+        arg=$1
+        case "$arg" in
+            --payload=*) payload_file=${arg#*=}; shift ;;
+            --payload) [[ $# -ge 2 ]] || die '--payload requires a file'; payload_file=$2; shift 2 ;;
+            --workers=*) selection=${arg#*=}; shift ;;
+            --workers) [[ $# -ge 2 ]] || die '--workers requires all or a comma-separated worker_id list'; selection=$2; shift 2 ;;
+            --idempotency-prefix=*) idem_prefix=${arg#*=}; shift ;;
+            --idempotency-prefix) [[ $# -ge 2 ]] || die '--idempotency-prefix requires a value'; idem_prefix=$2; shift 2 ;;
+            --wait) wait_for_jobs=1; shift ;;
+            -*) die "unknown job submit option: $arg" ;;
+            *) die "unexpected job submit argument: $arg" ;;
+        esac
+    done
+    [[ -n "$payload_file" && -r "$payload_file" ]] || die 'job payload file is required and must be readable'
+    jq -e 'type == "object"' "$payload_file" >/dev/null || die 'job payload must be a JSON object'
+    mapfile -t workers < <(resolve_worker_ids "$selection")
+    ((${#workers[@]} > 0)) || die 'no workers selected'
+    issue_m2m
+    declare -a job_ids=()
+    declare -a job_workers=()
+    local worker_id body response job_id key
+    for worker_id in "${workers[@]}"; do
+        key="${idem_prefix}-${worker_id}-$(date +%s%N)"
+        body="$(jq --arg key "$key" --arg worker "$worker_id" '.idempotency_key=$key | .placement_pin_worker_id=$worker' "$payload_file")"
+        response="$(m2m_api "$M2M_TOKEN" POST /api/v1/jobs "$body")"
+        job_id="$(jq -er '.job_id // .id // empty' <<<"$response")" || die "job submit returned no job_id for worker=$worker_id"
+        job_ids+=("$job_id")
+        job_workers+=("$worker_id")
+        printf 'fleetctl: submitted job=%s worker=%s\n' "$job_id" "$worker_id"
+    done
+    if (( wait_for_jobs )); then
+        local overall=0 i
+        for i in "${!job_ids[@]}"; do
+            wait_job "${job_ids[$i]}" "$M2M_TOKEN" || overall=1
+            snapshot="$(api GET "/api/v1/admin/jobs/$(printf '%s' "${job_ids[$i]}" | jq -sRr @uri)")"
+            print_job_card "${job_ids[$i]}" "$snapshot"
+        done
+        return "$overall"
+    fi
+    printf '%s\n' "${job_ids[@]}"
+}
+
 case "$command" in
     status)
         if [[ "${2:-}" == "--json" ]]; then
@@ -305,6 +518,14 @@ case "$command" in
         shift
         parse_update_args "$command" "$@"
         ;;
+    wait-ready)
+        shift
+        parse_wait_ready_args "$@"
+        ;;
+    rollout)
+        shift
+        rollout "$@"
+        ;;
     operations)
         path=/api/v1/admin/operations
         [[ -n "${2:-}" ]] && path+="?worker_id=$(printf '%s' "$2" | jq -sRr @uri)"
@@ -324,7 +545,17 @@ case "$command" in
     job)
         job_command=${2:-}
         job_id=${3:-}
-        [[ -n "$job_command" && -n "$job_id" ]] || die 'job requires inspect, metrics, or watch plus a job_id'
+        [[ -n "$job_command" ]] || die 'job requires inspect, metrics, watch, submit, or certify'
+        if [[ "$job_command" == "submit" || "$job_command" == "certify" ]]; then
+            shift 2
+            if [[ "$job_command" == "certify" ]]; then
+                job_submit --wait "$@"
+            else
+                job_submit "$@"
+            fi
+            exit $?
+        fi
+        [[ -n "$job_id" ]] || die 'job inspect, metrics, and watch require a job_id'
         job_path="/api/v1/admin/jobs/$(printf '%s' "$job_id" | jq -sRr @uri)"
         case "$job_command" in
             inspect)
@@ -334,20 +565,45 @@ case "$command" in
                 api GET "$job_path/metrics" | jq .
                 ;;
             watch)
-                declare -A seen_events=()
-                while :; do
-                    snapshot=$(api GET "$job_path/events")
-                    while IFS= read -r event; do
-                        event_key=$(jq -r '[.timestamp, .event] | join("\u0000")' <<<"$event")
-                        [[ -n "${seen_events[$event_key]:-}" ]] && continue
-                        seen_events[$event_key]=1
-                        jq -r '(.timestamp // "") + " " + (.event // "") + (if (.payload // {}) == {} then "" else " " + ((.payload // {}) | tojson) end)' <<<"$event"
-                    done < <(jq -c '.events[]?' <<<"$snapshot")
-                    terminal=$(jq -r '.status // ""' <<<"$snapshot")
-                    case "$terminal" in
-                        SUCCEEDED|FAILED|CANCELLED) break ;;
+                shift 3
+                watch_timeout=${FLEETCTL_JOB_TIMEOUT_SECONDS:-3600}
+                watch_poll=${FLEETCTL_JOB_POLL_SECONDS:-5}
+                watch_json=0
+                while [[ $# -gt 0 ]]; do
+                    case "$1" in
+                        --timeout=*) watch_timeout=${1#*=}; shift ;;
+                        --timeout) [[ $# -ge 2 ]] || die '--timeout requires a value'; watch_timeout=$2; shift 2 ;;
+                        --poll=*) watch_poll=${1#*=}; shift ;;
+                        --poll) [[ $# -ge 2 ]] || die '--poll requires a value'; watch_poll=$2; shift 2 ;;
+                        --json) watch_json=1; shift ;;
+                        *) die "unknown job watch option: $1" ;;
                     esac
-                    sleep 2
+                done
+                watch_deadline=$(( $(date +%s) + watch_timeout ))
+                last_watch_signature=''
+                while :; do
+                    snapshot=$(api GET "$job_path")
+                    if (( watch_json )); then
+                        printf '%s\n' "$snapshot"
+                    else
+                        watch_signature=$(jq -r '[(.job.status // "UNKNOWN"), (.execution.attempts[-1].phase // ""), (.execution.attempts[-1].current_scene // 0), (.execution.attempts[-1].current_segment // 0), (.execution.attempts[-1].error_code // "")] | @tsv' <<<"$snapshot")
+                        if [[ "$watch_signature" != "$last_watch_signature" ]]; then
+                            print_job_card "$job_id" "$snapshot"
+                            printf '\n'
+                            last_watch_signature=$watch_signature
+                        fi
+                    fi
+                    terminal=$(jq -r '.job.status // ""' <<<"$snapshot" | tr '[:lower:]' '[:upper:]')
+                    case "$terminal" in
+                        SUCCEEDED|FAILED|CANCELLED|COMPLETED)
+                            [[ "$terminal" == "SUCCEEDED" || "$terminal" == "COMPLETED" ]]
+                            break
+                            ;;
+                    esac
+                    if (( $(date +%s) >= watch_deadline )); then
+                        die "timed out waiting for job $job_id (last status: $terminal)"
+                    fi
+                    sleep "$watch_poll"
                 done
                 ;;
             *)
