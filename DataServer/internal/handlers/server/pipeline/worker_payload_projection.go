@@ -2,54 +2,20 @@
 package pipeline
 
 import (
-	"fmt"
 	"strings"
 
-	"velox-server/internal/jobs/enqueue"
-	"velox-server/internal/remoteengine"
 	"velox-shared/compatibility"
+
+	"velox-server/internal/handlers/server/pipeline/projection"
 )
 
 // projectWorkerPayload follows the canonical remoteengine DTO path.
 func projectWorkerPayload(req *SubmitJobRequest) (map[string]interface{}, error) {
 	rawPayload := submitRequestToRawPayload(req)
-	dto, err := remoteengine.ParseRemotePipelineResult(rawPayload)
-	if err != nil {
-		// This facade is consumed by the typed submission envelope. A
-		// projection failure must remain an error state; never encode it as
-		// a payload key that could be persisted or offered to a worker.
-		return nil, fmt.Errorf("parse canonical submission: %w", err)
-	}
-	workerPayload, projectionErr := dto.ToWorkerPayloadChecked()
-	if projectionErr != nil {
-		return nil, fmt.Errorf("project canonical submission: %w", projectionErr)
-	}
-	preserveWorkerPayloadFields(workerPayload, rawPayload, "audio_tracks", "layers", "_placement_pin_worker_id")
-	if strings.EqualFold(rendererModeForJobType(req.JobType), "clip_stock") {
-		items, audioTracks, timelineErr := enqueue.BuildClipStockTimeline(rawPayload)
-		if timelineErr != nil {
-			return nil, fmt.Errorf("build clip-stock timeline: %w", timelineErr)
-		}
-		if len(items) > 0 {
-			workerPayload["items"] = items
-		}
-		if len(audioTracks) > 0 {
-			workerPayload["audio_tracks"] = audioTracks
-		}
-	}
-	return workerPayload, nil
+	return projection.ProjectWorkerPayload(rawPayload, rendererModeForJobType(req.JobType))
 }
 
-func preserveWorkerPayloadFields(dst, src map[string]interface{}, keys ...string) {
-	if dst == nil || src == nil {
-		return
-	}
-	for _, key := range keys {
-		if value, ok := src[key]; ok && value != nil {
-			dst[key] = value
-		}
-	}
-} // submitRequestToRawPayload builds the canonical flat-map shape consumed
+// submitRequestToRawPayload builds the canonical flat-map shape consumed
 // by remoteengine.ParseRemotePipelineResult. It owns the DTO boundary,
 // nested scene projection, and delivery retry defaults.
 
