@@ -240,6 +240,18 @@ LEASED_WORKER=$(printf '%s' "$LEASE_JSON" | jq -er '.worker_id // empty')
 TASK_ID=$(printf '%s' "$LEASE_JSON" | jq -er '.task_id // empty')
 ATTEMPT_ID=$(printf '%s' "$LEASE_JSON" | jq -er '.attempt_id // empty')
 LEASE_ID=$(printf '%s' "$LEASE_JSON" | jq -er '.lease_id  // empty')
+# GET /api/v1/jobs/{id} is the canonical placement read model. Prefer its
+# identity fields; the Master log is only a compatibility fallback for older
+# deployments. The worker's current_task_id is intentionally not authoritative
+# after SUCCEEDED because the slot may already have been cleared.
+API_WORKER=$(printf '%s' "$last_body" | jq -er '.worker_id // empty' 2>/dev/null || true)
+API_TASK=$(printf '%s' "$last_body" | jq -er '.task_id // empty' 2>/dev/null || true)
+API_ATTEMPT=$(printf '%s' "$last_body" | jq -er '.attempt_id // empty' 2>/dev/null || true)
+API_LEASE=$(printf '%s' "$last_body" | jq -er '.lease_id // empty' 2>/dev/null || true)
+[[ -n "$API_WORKER" ]] && LEASED_WORKER="$API_WORKER"
+[[ -n "$API_TASK" ]] && TASK_ID="$API_TASK"
+[[ -n "$API_ATTEMPT" ]] && ATTEMPT_ID="$API_ATTEMPT"
+[[ -n "$API_LEASE" ]] && LEASE_ID="$API_LEASE"
 log_info "lease worker=$LEASED_WORKER task=$TASK_ID attempt=$ATTEMPT_ID lease_id=$LEASE_ID"
 
 # ─── Compute render_time_ms + artifact size ────────────────────────────────
