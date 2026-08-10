@@ -425,6 +425,21 @@ func TestLevelDSmoke_EmptyWorkerID(t *testing.T) {
 	}
 }
 
+func TestLevelDSmoke_ProductionValidationRejectsMissingAssetResolver(t *testing.T) {
+	backend, _, _, _, _, _ := fullBackend(t)
+	backend.Asset = nil
+	err := NewLevelDSmokeExecutor(backend).ValidateProductionBackends()
+	if err == nil {
+		t.Fatal("missing production asset resolver must fail validation")
+	}
+	if !errors.Is(err, ErrSmokeRunnerNotWired) {
+		t.Fatalf("validation error = %v, want ErrSmokeRunnerNotWired", err)
+	}
+	if !strings.Contains(err.Error(), "asset") {
+		t.Fatalf("validation error = %v, want asset dependency", err)
+	}
+}
+
 func TestLevelDSmoke_NilBackend_Returns(t *testing.T) {
 	b := LevelDSmokeBackend{} // all-nil
 	e := NewLevelDSmokeExecutor(b)

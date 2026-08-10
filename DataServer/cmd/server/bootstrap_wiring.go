@@ -213,14 +213,17 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 			} else {
 				log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: Drive module unavailable — smoke remains not wired")
 			}
-			// Stub asset resolver so Phase 1 resolves a canned pickup
-			// URL. The worker downloads the asset bundle via SSH; the
-			// canary.mp4 asset is pre-staged on each worker.
-			smokeBackend.Asset = fleet.NewStubAssetResolver("asset://e2e/smoke/canary.mp4", 0)
-			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: using StubAssetResolver (asset://e2e/smoke/canary.mp4)")
+			// Production deliberately leaves Asset nil. The canonical asset
+			// resolver is not wired yet; validation below therefore fails the
+			// boot before this capability or its route can become visible.
+			// Never substitute a canned asset in production.
+			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: production asset resolver unavailable — smoke capability disabled")
 		}
 
 		levelDSmokeExecutor := fleet.NewLevelDSmokeExecutor(smokeBackend)
+		if err := levelDSmokeExecutor.ValidateProductionBackends(); err != nil {
+			return fmt.Errorf("LevelDSmokeExecutor production capability unavailable: %w", err)
+		}
 		if err := fleetDep.Registry.Register(fleet.OperationKindSmoke, levelDSmokeExecutor); err != nil {
 			return fmt.Errorf("register LevelDSmokeExecutor: %w", err)
 		} else {

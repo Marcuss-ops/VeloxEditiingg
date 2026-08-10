@@ -44,6 +44,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"reflect"
 	"strings"
 	"time"
 
@@ -94,26 +95,26 @@ func (e *LevelDSmokeExecutor) ValidateProductionBackends() error {
 		return errors.New("smoke: nil executor")
 	}
 	missing := make([]string, 0, 6)
-	if e.backend.Worker == nil {
+	if isNilSmokeDependency(e.backend.Worker) {
 		missing = append(missing, "worker")
 	}
-	if e.backend.Drive == nil {
+	if isNilSmokeDependency(e.backend.Drive) {
 		missing = append(missing, "drive")
 	}
-	if e.backend.Asset == nil {
+	if isNilSmokeDependency(e.backend.Asset) {
 		missing = append(missing, "asset")
 	}
-	if e.backend.Lease == nil {
+	if isNilSmokeDependency(e.backend.Lease) {
 		missing = append(missing, "lease")
 	}
-	if e.backend.SmokeRuns == nil {
+	if isNilSmokeDependency(e.backend.SmokeRuns) {
 		missing = append(missing, "smoke_runs")
 	}
-	if e.backend.Verifier == nil {
+	if isNilSmokeDependency(e.backend.Verifier) {
 		missing = append(missing, "verifier")
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("missing dependencies: %s", strings.Join(missing, ", "))
+		return fmt.Errorf("%w: missing dependencies: %s", ErrSmokeRunnerNotWired, strings.Join(missing, ", "))
 	}
 	return nil
 }
@@ -135,9 +136,9 @@ func (e *LevelDSmokeExecutor) Execute(ctx context.Context, op *store.Operation) 
 	// discovering it mid-pipeline. The 5 required backends each
 	// resolve a specific phase; if any one is nil the pipeline
 	// cannot run.
-	if e.backend.Worker == nil || e.backend.Drive == nil ||
-		e.backend.Lease == nil || e.backend.SmokeRuns == nil ||
-		e.backend.Asset == nil || e.backend.Verifier == nil {
+	if isNilSmokeDependency(e.backend.Worker) || isNilSmokeDependency(e.backend.Drive) ||
+		isNilSmokeDependency(e.backend.Lease) || isNilSmokeDependency(e.backend.SmokeRuns) ||
+		isNilSmokeDependency(e.backend.Asset) || isNilSmokeDependency(e.backend.Verifier) {
 		return fmt.Errorf("%w: required backend missing (worker/drive/lease/asset/smokeruns)", ErrSmokeRunnerNotWired)
 	}
 	// ── Phase 0: parse payload ───────────────────────────────────
@@ -278,6 +279,19 @@ func (e *LevelDSmokeExecutor) Execute(ctx context.Context, op *store.Operation) 
 	log.Printf("[SMOKE] worker=%s run=%s duration_ms=%d artifact_drive_id=%s SUCCEEDED",
 		op.WorkerID, runID, durationMs, driveFileID)
 	return nil
+}
+
+func isNilSmokeDependency(value any) bool {
+	if value == nil {
+		return true
+	}
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return v.IsNil()
+	default:
+		return false
+	}
 }
 
 func artifactPathOr(returned, fallback string) string {
