@@ -511,6 +511,32 @@ CREATE TABLE worker_task_runtime (
   cancel_requested_at TEXT,
   updated_at TEXT NOT NULL,
   missing_heartbeats INTEGER NOT NULL DEFAULT 0
+);
+-- This fixture records migrations through 136 as applied below, so it must
+-- also provide the pre-142 publication_states table that migration 142
+-- extends (ALTER TABLE + state reclassification). The production chain
+-- creates this table in 126; the fixture mirrors that shape so 142 applies
+-- exactly as it would on a real upgraded database.
+CREATE TABLE publication_states (
+  publication_id TEXT PRIMARY KEY,
+  job_id         TEXT,
+  state          TEXT NOT NULL CHECK (state IN (
+    'PENDING', 'WAITING_FOR_RENDER', 'ARTIFACT_BOUND', 'READY',
+    'SCHEDULED', 'UPLOADING', 'VIDEO_CREATED', 'METADATA_APPLYING',
+    'LOCALIZATIONS_APPLYING', 'VERIFYING', 'PUBLISHED', 'PARTIAL',
+    'RETRY_WAIT', 'FAILED', 'CANCELLED'
+  )),
+  retry_from     TEXT CHECK (retry_from IS NULL OR retry_from IN (
+    'WAITING_FOR_RENDER', 'ARTIFACT_BOUND', 'UPLOADING',
+    'METADATA_APPLYING', 'LOCALIZATIONS_APPLYING', 'VERIFYING'
+  )),
+  artifact_id    TEXT,
+  remote_id      TEXT,
+  remote_url     TEXT,
+  revision       INTEGER NOT NULL DEFAULT 0,
+  last_error_code TEXT,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
 )
 `)
 	require.NoError(t, err)
@@ -530,6 +556,13 @@ CREATE TABLE worker_task_runtime (
 	err = migrated.DB().QueryRow(`SELECT version FROM schema_migrations WHERE version = 137`).Scan(&migrationVersion)
 	require.NoError(t, err)
 	require.Equal(t, 137, migrationVersion)
+
+	// Migration 142 (publication submission identity) must apply on the
+	// legacy-upgrade path too — this pins the ALTER TABLE against the
+	// fixture-provided pre-142 publication_states shape.
+	err = migrated.DB().QueryRow(`SELECT version FROM schema_migrations WHERE version = 142`).Scan(&migrationVersion)
+	require.NoError(t, err)
+	require.Equal(t, 142, migrationVersion)
 }
 
 func TestValidationStoreHandlesConcurrentUpserts(t *testing.T) {

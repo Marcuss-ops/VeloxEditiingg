@@ -156,10 +156,13 @@ followups.
   migration 126; the fixture does not create it. Attribution verified:
   `go vet` and `go build` were clean; only the full-module `go test` was
   red, and only on migration 142. Not a regression from the assetref/
-  telemetry/alert work verified in the same run; tracked as a followup
-  for the publication-submission-identity workstream (the migration must
-  either land with its prerequisite table in the fixture chain or be
-  merged with 126).
+  telemetry/alert work verified in the same run. **RESOLVED** (2026-08-10):
+  migration 142 landed on main and the legacy-upgrade fixture in
+  `handler_test.go` now provides the pre-142 `publication_states` shape
+  (mirroring 126, same pattern as the pre-138 `worker_task_runtime`
+  fixture) with a pin asserting 142 is applied; the merge-into-126 option
+  was rejected because 126 is already applied in production and rewriting
+  it would break checksum validation.
 
 ## 5. Worker identity model: `worker_id` is immutable, `worker_name` is mutable
 
