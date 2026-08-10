@@ -401,6 +401,29 @@ func TestService_SummarizeTaskIncludesLiveAttemptProgress(t *testing.T) {
 	if live.Metrics == nil || live.Metrics.AttemptID != "A-live" || live.Metrics.FramesEncoded != 18432 || live.Metrics.FramesDecoded != 0 {
 		t.Fatalf("live metrics projection = %#v; expected the same typed AttemptMetrics shape used by final ingestion", live.Metrics)
 	}
+	if result.AttemptID != "A-live" || result.WorkerID != "worker-live" || result.Phase != "building_segments" || result.LastProgressAt != "2026-08-10T10:03:42Z" {
+		t.Fatalf("top-level live execution identity = attempt=%q worker=%q phase=%q last_progress_at=%q; want the same canonical Attempt projection",
+			result.AttemptID, result.WorkerID, result.Phase, result.LastProgressAt)
+	}
+	if result.Progress == nil || result.Progress.Percent != 46 || result.Progress.Scene != 7 || result.Progress.ScenesTotal != 13 || result.Progress.Segment != 12 || result.Progress.SegmentsTotal != 26 {
+		t.Fatalf("top-level live progress = %#v; want canonical scene/segment projection", result.Progress)
+	}
+	if result.LiveMetrics == nil || result.LiveMetrics.ElapsedMS != 183421 || result.LiveMetrics.FramesEncoded != 18432 || result.LiveMetrics.FFmpegSpeedX != 2.37 {
+		t.Fatalf("top-level live metrics = %#v; want canonical cumulative metrics projection", result.LiveMetrics)
+	}
+}
+
+func TestService_SummarizeTaskOmitsLiveExecutionFieldsForLegacyJob(t *testing.T) {
+	svc, tasks, _, _, _ := newTestService()
+	tasks.tasks["T-legacy"] = &taskgraph.Task{ID: "T-legacy", JobID: "J-legacy", Status: taskgraph.StatusSucceeded, AttemptCount: 1}
+
+	result, err := svc.SummarizeTask(context.Background(), "T-legacy")
+	if err != nil {
+		t.Fatalf("SummarizeTask() error: %v", err)
+	}
+	if result.AttemptID != "" || result.WorkerID != "" || result.Phase != "" || result.Progress != nil || result.LiveMetrics != nil || result.LastProgressAt != "" {
+		t.Fatalf("legacy execution unexpectedly contains live fields: %#v", result)
+	}
 }
 
 func TestService_SummarizeTaskTerminalAttemptWinsOverStaleLiveProjection(t *testing.T) {
@@ -441,6 +464,9 @@ func TestService_SummarizeTaskTerminalAttemptWinsOverStaleLiveProjection(t *test
 	}
 	if got.Metrics == nil || got.Metrics.FramesEncoded != 10 || result.TotalOutputBytes != 80 {
 		t.Fatalf("final durable metrics did not converge: attempt=%#v summary=%#v", got, result)
+	}
+	if result.AttemptID != "" || result.WorkerID != "" || result.Phase != "" || result.Progress != nil || result.LiveMetrics != nil || result.LastProgressAt != "" {
+		t.Fatalf("stale live execution leaked into top-level summary: %#v", result)
 	}
 }
 

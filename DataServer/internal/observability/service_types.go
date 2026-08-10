@@ -183,26 +183,60 @@ type VersionMetricSnapshot struct {
 
 // ExecutionSummary is the aggregated execution diagnostics for a single task.
 type ExecutionSummary struct {
-	TaskID              string            `json:"task_id"`
-	JobID               string            `json:"job_id"`
-	TaskStatus          taskgraph.Status  `json:"task_status"`
-	AttemptCount        int               `json:"attempt_count"`
-	TotalWallTimeMS     int64             `json:"total_wall_time_ms"`
-	PhaseTotals         map[string]int64  `json:"phase_totals"`
-	TotalInputBytes     int64             `json:"total_input_bytes"`
-	TotalOutputBytes    int64             `json:"total_output_bytes"`
-	BytesFromDrive      int64             `json:"bytes_from_drive"`
-	BytesFromBlobstore  int64             `json:"bytes_from_blobstore"`
-	BytesFromLocalCache int64             `json:"bytes_from_local_cache"`
-	CPUTimeMS           int64             `json:"cpu_time_ms"`
-	GPUTimeMS           int64             `json:"gpu_time_ms"`
-	PeakRSSBytes        int64             `json:"peak_rss_bytes"`
-	PeakVRAMBytes       int64             `json:"peak_vram_bytes"`
-	Cache               CacheSummary      `json:"cache"`
-	Retries             int               `json:"retries"`
-	Attempts            []AttemptSummary  `json:"attempts"`
-	PhaseTimings        []PhaseSnapshot   `json:"phase_timings,omitempty"`
-	Segments            []SegmentSnapshot `json:"segments,omitempty"`
+	TaskID       string           `json:"task_id"`
+	JobID        string           `json:"job_id"`
+	TaskStatus   taskgraph.Status `json:"task_status"`
+	AttemptCount int              `json:"attempt_count"`
+	// These live fields are an optional top-level projection of the same
+	// worker_task_runtime Attempt already overlaid into Attempts below.
+	// omitempty preserves the legacy ExecutionSummary shape when no live
+	// Attempt exists (including jobs whose runtime row was cleaned up).
+	AttemptID           string                `json:"attempt_id,omitempty"`
+	WorkerID            string                `json:"worker_id,omitempty"`
+	Phase               string                `json:"phase,omitempty"`
+	Progress            *ExecutionProgress    `json:"progress,omitempty"`
+	LiveMetrics         *ExecutionLiveMetrics `json:"live_metrics,omitempty"`
+	LastProgressAt      string                `json:"last_progress_at,omitempty"`
+	TotalWallTimeMS     int64                 `json:"total_wall_time_ms"`
+	PhaseTotals         map[string]int64      `json:"phase_totals"`
+	TotalInputBytes     int64                 `json:"total_input_bytes"`
+	TotalOutputBytes    int64                 `json:"total_output_bytes"`
+	BytesFromDrive      int64                 `json:"bytes_from_drive"`
+	BytesFromBlobstore  int64                 `json:"bytes_from_blobstore"`
+	BytesFromLocalCache int64                 `json:"bytes_from_local_cache"`
+	CPUTimeMS           int64                 `json:"cpu_time_ms"`
+	GPUTimeMS           int64                 `json:"gpu_time_ms"`
+	PeakRSSBytes        int64                 `json:"peak_rss_bytes"`
+	PeakVRAMBytes       int64                 `json:"peak_vram_bytes"`
+	Cache               CacheSummary          `json:"cache"`
+	Retries             int                   `json:"retries"`
+	Attempts            []AttemptSummary      `json:"attempts"`
+	PhaseTimings        []PhaseSnapshot       `json:"phase_timings,omitempty"`
+	Segments            []SegmentSnapshot     `json:"segments,omitempty"`
+}
+
+// ExecutionProgress is the compact live progress projection exposed by the
+// admin job endpoint. It is derived from the canonical worker_task_runtime
+// Attempt, not maintained as a second tracker.
+type ExecutionProgress struct {
+	Percent       int `json:"percent"`
+	Scene         int `json:"scene"`
+	ScenesTotal   int `json:"scenes_total"`
+	Segment       int `json:"segment"`
+	SegmentsTotal int `json:"segments_total"`
+}
+
+// ExecutionLiveMetrics contains the cumulative counters available while the
+// Attempt is RUNNING. The same values are copied into AttemptMetrics when the
+// final report arrives; CumulativeMetrics preserves additional typed counters
+// without changing this stable envelope.
+type ExecutionLiveMetrics struct {
+	ElapsedMS         int64          `json:"elapsed_ms"`
+	FramesEncoded     int64          `json:"frames_encoded"`
+	FramesDecoded     int64          `json:"frames_decoded"`
+	FramesComposited  int64          `json:"frames_composited"`
+	FFmpegSpeedX      float64        `json:"ffmpeg_speed_x"`
+	CumulativeMetrics map[string]any `json:"cumulative_metrics,omitempty"`
 }
 
 // PhaseSnapshot is the ordered, persisted phase timeline. PhaseTotals remains
@@ -375,6 +409,7 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 			}
 		}
 	}
+	liveActive := live != nil && !task.Status.IsTerminal()
 
 	var firstStart *time.Time
 	var lastEnd *time.Time
@@ -394,7 +429,14 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 		// heartbeat can race with final TaskResult cleanup, so never let a
 		// stale worker_task_runtime row revert a completed Attempt to
 		// RUNNING or overwrite its final report metrics.
+		if live != nil && live.AttemptID == a.ID && a.Status.IsTerminal() {
+			// A volatile row can outlive final report ingest briefly. The
+			// durable Attempt wins, so never expose stale live fields at
+			// the top level once this identity is terminal.
+			liveActive = false
+		}
 		if live != nil && live.AttemptID == a.ID && !a.Status.IsTerminal() {
+			liveActive = true
 			as.Live = true
 			as.Status = taskattempts.AttemptStatus(live.RuntimeStatus)
 			as.WorkerID = live.WorkerID
@@ -569,6 +611,21 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 		}
 	}
 
+	if liveActive {
+		summary.AttemptID = live.AttemptID
+		summary.WorkerID = live.WorkerID
+		summary.Phase = live.ProgressPhase
+		summary.Progress = &ExecutionProgress{
+			Percent: live.ProgressPercent, Scene: live.CurrentScene, ScenesTotal: live.TotalScenes,
+			Segment: live.CurrentSegment, SegmentsTotal: live.TotalSegments,
+		}
+		summary.LiveMetrics = &ExecutionLiveMetrics{
+			ElapsedMS: live.ElapsedMS, FramesEncoded: live.FramesEncoded,
+			FramesDecoded: live.FramesDecoded, FramesComposited: live.FramesComposited,
+			FFmpegSpeedX: live.FFmpegSpeedX, CumulativeMetrics: live.CumulativeMetrics,
+		}
+		summary.LastProgressAt = live.LastProgressAt
+	}
 	if firstStart != nil && lastEnd != nil {
 		summary.TotalWallTimeMS = lastEnd.Sub(*firstStart).Milliseconds()
 	}
