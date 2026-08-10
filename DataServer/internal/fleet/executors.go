@@ -3,8 +3,8 @@
 // The ExecutorRegistry is the SINGLE mapping from operation kind
 // (drain | resume | restart | update | rollback | quarantine | smoke)
 // to a concrete OperationExecutor. Production registries start empty
-// and are populated explicitly during bootstrap; only test/dev registries
-// may opt into the NoopOperationExecutor.
+// and are populated explicitly during bootstrap. Test-only executor
+// helpers are kept in _test.go files and cannot enter the production binary.
 //
 // Architectural rule (PR §4): HTTP handlers NEVER call executors
 // directly. The HTTP layer publishes Operations via
@@ -70,8 +70,9 @@ var ErrExecutorNotConfigured = errors.New("EXECUTOR_NOT_CONFIGURED")
 // callers that need to distinguish a missing kind from executor failures.
 var ErrNoExecutorForKind = errors.New("fleet: no executor registered for operation kind")
 
-// ErrNoopExecutorNotAllowed prevents a production registry from being
-// wired to an executor that always reports success.
+// ErrNoopExecutorNotAllowed prevents a no-op executor from being wired
+// into a production registry. The no-op implementation itself exists only
+// in test files.
 var ErrNoopExecutorNotAllowed = errors.New("fleet: noop executor is only allowed in test/dev registries")
 
 // OperationExecutor runs one Operation. Implementations MUST:
@@ -108,7 +109,6 @@ type OperationExecutor interface {
 type ExecutorRegistry struct {
 	mu        sync.RWMutex
 	executors map[string]OperationExecutor
-	allowNoop bool
 }
 
 // NewExecutorRegistry returns an empty production registry. Every concrete
@@ -117,21 +117,6 @@ type ExecutorRegistry struct {
 // an implicit no-op.
 func NewExecutorRegistry() *ExecutorRegistry {
 	return &ExecutorRegistry{executors: make(map[string]OperationExecutor)}
-}
-
-// NewTestExecutorRegistry returns the legacy all-kinds registry for unit and
-// local development tests that intentionally exercise the controller without
-// external fleet side effects. It must never be used by production bootstrap.
-func NewTestExecutorRegistry() *ExecutorRegistry {
-	r := &ExecutorRegistry{
-		executors: make(map[string]OperationExecutor),
-		allowNoop: true,
-	}
-	noop := &NoopOperationExecutor{}
-	for _, kind := range AllOperationKinds {
-		r.executors[kind] = noop
-	}
-	return r
 }
 
 // Register overwrites the executor entry for a single kind. The
@@ -155,7 +140,7 @@ func (r *ExecutorRegistry) Register(kind string, exec OperationExecutor) error {
 	if !IsKnownKind(kind) {
 		return fmt.Errorf("fleet: unknown operation kind %q", kind)
 	}
-	if isNoopExecutor(exec) && !r.allowNoop {
+	if isNoopExecutor(exec) {
 		return ErrNoopExecutorNotAllowed
 	}
 	r.mu.Lock()
@@ -197,11 +182,7 @@ func (r *ExecutorRegistry) ValidateRequiredExecutors(required ...string) error {
 			return fmt.Errorf("fleet: unknown required operation kind %q", kind)
 		}
 		exec, err := r.Lookup(kind)
-		if err != nil {
-			missing = append(missing, kind)
-			continue
-		}
-		if isNoopExecutor(exec) {
+		if err != nil || isNoopExecutor(exec) {
 			missing = append(missing, kind)
 			continue
 		}
@@ -250,17 +231,13 @@ func IsKnownKind(kind string) bool {
 	return false
 }
 
-// NoopOperationExecutor is a test/dev-only executor. It immediately returns
-// nil and therefore must never be installed in a production registry: doing
-// so would make QUEUED → RUNNING → SUCCEEDED indistinguishable from real work.
-// NewTestExecutorRegistry is the only constructor that opts into it.
-type NoopOperationExecutor struct{}
+type noopExecutorMarker interface {
+	isNoopExecutor()
+}
 
-// Execute returns nil unconditionally. The Kind and Payload
-// arguments are intentionally ignored here — concrete executors
-// in Step 7+ consume them.
-func (NoopOperationExecutor) Execute(_ context.Context, _ *store.Operation) error {
-	return nil
+func isNoopExecutor(exec OperationExecutor) bool {
+	_, ok := exec.(noopExecutorMarker)
+	return ok
 }
 
 func isNilExecutor(exec OperationExecutor) bool {
@@ -271,15 +248,6 @@ func isNilExecutor(exec OperationExecutor) bool {
 	switch value.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
 		return value.IsNil()
-	default:
-		return false
-	}
-}
-
-func isNoopExecutor(exec OperationExecutor) bool {
-	switch exec.(type) {
-	case NoopOperationExecutor, *NoopOperationExecutor:
-		return true
 	default:
 		return false
 	}

@@ -215,13 +215,10 @@ func TestSmoke_ProductionRegistryRequiresExplicitExecutor(t *testing.T) {
 		t.Fatalf("Lookup(smoke) error = %v, want ErrExecutorNotConfigured", err)
 	}
 
-	// Test/dev callers opt into no-op behavior explicitly through the
-	// test registry; this keeps the legacy controller fixtures isolated
-	// from production composition.
-	testReg := fleet.NewTestExecutorRegistry()
-	if _, err := testReg.Lookup(fleet.OperationKindSmoke); err != nil {
-		t.Fatalf("test registry must provide smoke fixture: %v", err)
-	}
+	// Test fixtures that need a successful executor register their own
+	// test implementation in the fleet package. This package only verifies
+	// the production fail-closed contract and must not depend on test-only
+	// fleet helpers, which are unavailable when importing fleet normally.
 }
 
 // _ = workersreg is unused but kept as a reference for the
