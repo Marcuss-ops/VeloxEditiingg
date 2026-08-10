@@ -121,6 +121,72 @@ Ogni azione elenca `File:line → Azione`. Lo stato "owner" è indicativo — i 
 
 ---
 
+## Blocco F — Audit dead code, wrapper e compatibility shim
+
+Questa sezione traccia i risultati dell’audit legacy del 2026-08-10. Le
+rimozioni sono separate dai guardrail: un simbolo non viene eliminato solo
+perché contiene `legacy`, `compat` o `fallback`; prima devono essere verificati
+caller, reflection, registry, payload reali e confini di modulo.
+
+Gli ID `LEGACY-*` sono un’estensione locale del tracker per questo audit e
+non sostituiscono gli ID `RW-PROD-NNN-Ax` dei ticket di rollout. Le priorità
+incrociano impatto/regressione, complessità della superficie e probabilità di
+modifica; `P0` indica un guardrail da non perdere, non necessariamente un
+lavoro di rimozione immediata.
+
+| ID | File/simbolo | Azione | Stato | Decisione | Owner | Priorità | Rischio | Criterio di completamento |
+|----|--------------|--------|-------|-----------|-------|----------|--------|---------------------------|
+| LEGACY-A1 | `DataServer/internal/socialclient/targets.go:152` `ListPublishingTargets`; test in `targets_test.go` | Migrare i test da `ListPublishingTargets` a `ListPublishingCatalog`, poi rimuovere il wrapper non usato in produzione | DA FARE | RIMUOVERE DOPO INVENTARIO | social-platform | P1 | Medio: possibile riferimento test o consumer interno non rilevato | `git grep -n 'ListPublishingTargets' -- '*.go'` mostra solo dichiarazione/test aggiornato; `go test ./internal/socialclient/...`; `scripts/ci/pre-removal-verify.sh` verde |
+| LEGACY-A2 | `DataServer/internal/socialclient/targets.go:27` `PublishingTargetCatalogRequest` | Sostituire l’alias con `PublishingCatalogRequest` e rimuovere il tipo compatibile | DA FARE | RIMUOVERE DOPO INVENTARIO | social-platform | P1 | Basso: alias interno senza comportamento proprio | `git grep -n 'PublishingTargetCatalogRequest' -- '*.go'` non trova riferimenti; wire shape invariata; test socialclient, build e `scripts/ci/pre-removal-verify.sh` verdi |
+| LEGACY-A3 | `DataServer/internal/socialclient/targets.go:95` `Groups`; `DataServer/internal/publishing/resolver_normalize.go:54` | Verificare `Groups` rispetto a `ResolvedGroups`, raccogliere evidenza sui payload reali e definire il sunset | IN ATTESA EVIDENZA | MANTENERE FINO A DECISIONE | social-platform + api-team | P2 | Alto: rimozione prematura può perdere gruppi provenienti da upstream legacy | Entro il riesame del 2026-08-17, report upstream/telemetria indica finestra e soglia; test di rifiuto/assenza del vecchio campo; decisione e data sunset approvate |
+| LEGACY-A4 | `RemoteCodex/native/worker-agent-go/pkg/video/entity_association.go:21,219` `audioFilePath` | Valutare la rimozione graduale del parametro ignorato, verificando interfacce e consumer esterni | IN ATTESA INVENTARIO | MANTENERE FINO A MIGRAZIONE | worker-video | P3 | Alto: modifica della firma può rompere consumer del package `pkg/` | Entro il riesame del 2026-08-17, `git grep` production/test + inventario consumer esterni sono allegati al ticket; owner approva nuova firma; migrazione e test completati oppure shim con sunset |
+| LEGACY-A5 | `RemoteCodex/native/worker-agent-go/pkg/resilience/circuitbreaker.go:175` `GetState`; `RemoteCodex/native/worker-agent-go/pkg/api/circuit_breaker.go` | Valutare il wrapper senza rimuoverlo finché esiste superficie consumabile esterna | GUARDRAIL CONFERMATO | MANTENERE | worker-platform | P2 | Alto: API breaking change per consumer del worker-agent | `State()` è canonico nei nuovi caller; inventario consumer esterni e policy di versioning sono registrati; eventuale deprecazione ha owner, data e note di migrazione |
+| LEGACY-A6 | `shared/compatibility/registry.go`; `scripts/ci/check-compatibility-alias-registry.sh` | Mantenere registry e observer degli alias come guardrail runtime/CI | GUARDRAIL CONFERMATO | MANTENERE | architecture + ci | P0 | Alto: rimozione elimina controllo anti-regressione e visibilità sugli alias | Test registry e check CI passano; ogni alias ha owner, motivazione e scadenza; nessun nuovo alias passa senza registrazione |
+| LEGACY-A7 | `DataServer/internal/metrics/collector_http.go:33` `RouteSurfaceLegacy`; `DataServer/internal/metrics/collector_attempts.go` | Mantenere fallback metrici e classificazione legacy finché servono per osservare schema/route precedenti e pianificare il cutover | GUARDRAIL CONFERMATO | MANTENERE FINO A SOGLIA ZERO | observability | P1 | Alto: perdita di telemetria prima della rimozione delle superfici legacy | Metriche prodotte e consultabili nel report observability; route legacy classificabili; rimozione solo dopo soglia zero documentata per una finestra approvata |
+| LEGACY-A8 | `RemoteCodex/native/worker-agent-go/pkg/bootstrap/view.go` `RunnerView`; `RemoteCodex/native/worker-agent-go/pkg/video/pipeline_runner.go` `pipelineAdapter` | Conservare gli adapter come confini di test/iniezione, non classificarli come dead code per il solo fatto che siano wrapper | GUARDRAIL CONFERMATO | MANTENERE | worker-video | P1 | Medio: rimozione riaccoppia core, I/O e test | Test unitari usano le interfacce; ogni adapter ha consumer o ruolo nel composition root; review architetturale conferma assenza di duplicati canonici |
+| LEGACY-A9 | `DataServer/internal/socialclient/config.go` e `config_test.go` | Mantenere documentazione e configurazione sugli env canonici `SOCIAL_API_URL`, `SOCIAL_API_TOKEN`, `SOCIAL_API_TIMEOUT_MS`, `SOCIAL_CALLBACK_BASE_URL`, mantenendo il comportamento fail-closed per nomi deprecati | CHIUSO | MANTENERE FAIL-CLOSED | social-platform + docs | P2 | Basso: il fallback legacy resta intenzionalmente rifiutato | Cleanup documentale `71c7ee58`; `TestConfigFromEnv` verde; `bash scripts/ci/check-no-legacy.sh` verde; root changelog e runbook canonici preservati |
+| LEGACY-A10 | `scripts/ci/check-no-legacy.sh`; `DataServer/internal/app/workers_namespace_test.go` | Conservare check CI e test sulle route rimosse come guardrail contro la reintroduzione di endpoint e simboli eliminati | GUARDRAIL CONFERMATO | MANTENERE | ci + api-team | P1 | Alto: senza guardia possono ricomparire percorsi duplicati o obsoleti | Check CI eseguito nel gate; test dimostrano che le route legacy non sono montate; eccezioni nominate con owner e scadenza |
+
+### Regole di chiusura del blocco legacy
+
+- `DA FARE` richiede diff piccolo, caller inventory aggiornato, test mirati e
+  `scripts/ci/pre-removal-verify.sh` prima della rimozione di simboli esportati
+  o helper cross-package.
+- `IN ATTESA EVIDENZA` e `IN ATTESA INVENTARIO` non autorizzano modifiche al
+  codice: prima servono dati runtime, consumer esterni o approvazione del
+  proprietario del contratto.
+- `GUARDRAIL CONFERMATO` indica una decisione architetturale di mantenimento;
+  va comunque riesaminata alla scadenza o soglia indicata, non duplicata.
+- Un’azione è completata solo quando il criterio della riga è verificato e
+  l’evidenza (test, query o report) è collegata al commit o al runbook
+  operativo.
+
+### Evidenza verificata — audit YAGNI e gate pre-removal (2026-08-10)
+
+- **Retry Social/API:** `SOCIAL_API_RETRIES` e il retry config del
+  `socialclient` non sono letti dal runtime; i retry effettivi restano di
+  competenza del delivery runner e dei budget per-job/delivery (`MaxRetries`,
+  `RetryBudget`, `MaxAttempts`). La distinzione evita di dichiarare rimosso
+  il `MaxRetries` di dominio, che è ancora attivo.
+- **S3Provider:** rimosso perché non configurato e senza caller dimostrati nel
+  commit `7c684b2a` (`refactor(deliveries): remove unused social retries and S3 stub`);
+  i test del registry verificano il comportamento fail-closed.
+- **`internal/backup`:** call-site proof senza import, caller, bootstrap,
+  scheduler, CLI o job operativi (`9ecdbef5`); scaffolding rimosso in
+  `b0f0d209` (`refactor(backup): remove unreachable backup scaffolding`). Le
+  procedure backup/restore restano documentate nel runbook operativo e non
+  implicano che esista un helper runtime.
+- **Gate di rimozione:** `scripts/ci/pre-removal-verify.sh` verificato verde
+  nelle tre fasi `go vet ./...`, `go build ./...` e
+  `go test -count=1 ./...`. Le correzioni atomiche di evidenza sono:
+  `efa76929` (import test store), `e2b300cb` (wiring phase executor nel test
+  delivery) e `2fe840d8` (fixture worker canonico). Il cleanup documentale
+  degli alias Social è `71c7ee58`.
+- I file dirty concorrenti presenti nel worktree non sono inclusi nelle
+  evidenze o nei commit di questo tracker.
+
+---
+
 ## Sequenza raccomandata (dal runbook §4)
 
 > Non cominciare il ticket successivo finché il precedente non ha test verdi.
