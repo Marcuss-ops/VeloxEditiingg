@@ -142,6 +142,25 @@ followups.
   than a regression; re-verify under `-race` and `-count=3` before
   classifying.
 
+**2026-08-10 deployment** of the gate surfaced:
+
+- `TestMigrationUpgradesLegacyValidationTable` in
+  `DataServer/internal/handlers/remote/workers/validation/handler_test.go`
+  — deterministic failure (`no such table: publication_states`) caused by
+  the then-uncommitted (untracked WIP) migration
+  `DataServer/internal/store/migrations/sqlite/142_publication_submission_identity.sql`,
+  which runs `ALTER TABLE publication_states ADD COLUMN submitted_remote_id`
+  in every migration-enabled store, including the legacy-upgrade test
+  fixture that seeds history through 136 and creates only the legacy
+  tables it exercises. The table `publication_states` is created by
+  migration 126; the fixture does not create it. Attribution verified:
+  `go vet` and `go build` were clean; only the full-module `go test` was
+  red, and only on migration 142. Not a regression from the assetref/
+  telemetry/alert work verified in the same run; tracked as a followup
+  for the publication-submission-identity workstream (the migration must
+  either land with its prerequisite table in the fixture chain or be
+  merged with 126).
+
 ## 5. Worker identity model: `worker_id` is immutable, `worker_name` is mutable
 
 Codified after the 2026-08-08 rename attempt. Changing a worker's
