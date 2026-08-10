@@ -125,6 +125,8 @@ type TypedExecutionMetrics struct {
 	TelemetryCoverageJSON string `json:"telemetry_coverage_json,omitempty"`
 	TelemetryComplete     bool   `json:"telemetry_complete"`
 	TelemetryCPUSource    string `json:"telemetry_cpu_source,omitempty"`
+	CacheLookups          int64  `json:"cache_lookups"`
+	UniqueAssetsRequested int64  `json:"unique_assets_requested"`
 }
 
 // ToProto serializes a TypedExecutionMetrics onto the typed wire
@@ -202,6 +204,8 @@ func (t TypedExecutionMetrics) ToProto() *pb.TaskExecutionMetrics {
 		TelemetryCoverageJson: t.TelemetryCoverageJSON,
 		TelemetryComplete:     t.TelemetryComplete,
 		TelemetryCpuSource:    t.TelemetryCPUSource,
+		CacheLookups:          t.CacheLookups,
+		UniqueAssetsRequested: t.UniqueAssetsRequested,
 	}
 }
 
@@ -276,6 +280,8 @@ func FromProto(p *pb.TaskExecutionMetrics) TypedExecutionMetrics {
 		TelemetryCoverageJSON: p.GetTelemetryCoverageJson(),
 		TelemetryComplete:     p.GetTelemetryComplete(),
 		TelemetryCPUSource:    p.GetTelemetryCpuSource(),
+		CacheLookups:          p.GetCacheLookups(),
+		UniqueAssetsRequested: p.GetUniqueAssetsRequested(),
 	}
 }
 

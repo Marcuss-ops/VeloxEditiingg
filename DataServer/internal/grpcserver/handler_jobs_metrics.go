@@ -238,7 +238,7 @@ func partialPhaseTimingsFromProto(attemptID, taskID, jobID, workerID, executorID
 // deriveCacheStats builds the per-attempt cache delta snapshot. New workers
 // carry domain counters on TaskExecutionMetrics; legacy workers still use the
 // byte-only compatibility path and remain explicitly zero for unknown counts.
-func deriveCacheStats(attemptID string, am taskattempts.AttemptMetrics) taskattempts.AttemptCacheStats {
+func deriveCacheStats(attemptID string, am taskattempts.AttemptMetrics, em *pb.TaskExecutionMetrics) taskattempts.AttemptCacheStats {
 	cs := taskattempts.AttemptCacheStats{
 		AttemptID:    attemptID,
 		CacheHits:    am.AssetCacheHitCount + am.BlobCacheHitCount + am.RenderCacheHitCount,
@@ -250,6 +250,13 @@ func deriveCacheStats(attemptID string, am taskattempts.AttemptMetrics) taskatte
 		// in cache → shadow on scorecard OK; for warm-cache the count
 		// will track real cache size after CACHE_SIZE_LIMIT is wired).
 		CacheBytesUsed: am.BytesFromLocalCache,
+	}
+	if em != nil {
+		cs.CacheLookups = em.GetCacheLookups()
+		cs.UniqueAssetsRequested = em.GetUniqueAssetsRequested()
+	}
+	if cs.CacheLookups == 0 {
+		cs.CacheLookups = cs.CacheHits + cs.CacheMisses
 	}
 	if am.BytesFromDrive > 0 || am.BytesFromBlobstore > 0 {
 		// Cold-warm heuristic on misses: any byte drawn from BlobStore

@@ -114,7 +114,10 @@ var (
 	ErrCompletionBindingConflict    = errors.New("store: completion upload binding conflict")
 )
 
-type SQLiteCompletionStore struct{ db *sql.DB }
+type SQLiteCompletionStore struct {
+	db            *sql.DB
+	retryObserver interface{ RecordDBRetry() }
+}
 
 const completionBusyRetries = 4
 
@@ -125,6 +128,14 @@ func NewSQLiteCompletionStore(db *sql.DB) *SQLiteCompletionStore {
 	return &SQLiteCompletionStore{db: db}
 }
 
+// SetDBRetryObserver wires the shared operational telemetry without making
+// the completion package depend on the metrics implementation.
+func (s *SQLiteCompletionStore) SetDBRetryObserver(observer interface{ RecordDBRetry() }) {
+	if s != nil {
+		s.retryObserver = observer
+	}
+}
+
 func (s *SQLiteCompletionStore) Run(ctx context.Context, fn func(CompletionTx) error) error {
 	if fn == nil {
 		return fmt.Errorf("store: completion transaction callback is nil")
@@ -133,6 +144,9 @@ func (s *SQLiteCompletionStore) Run(ctx context.Context, fn func(CompletionTx) e
 		tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 		if err != nil {
 			if sqliteerr.IsBusy(err) && attempt < completionBusyRetries {
+				if s.retryObserver != nil {
+					s.retryObserver.RecordDBRetry()
+				}
 				if err := waitCompletionRetry(ctx, attempt); err != nil {
 					return err
 				}
@@ -144,6 +158,9 @@ func (s *SQLiteCompletionStore) Run(ctx context.Context, fn func(CompletionTx) e
 		if err := fn(ct); err != nil {
 			_ = tx.Rollback()
 			if sqliteerr.IsBusy(err) && attempt < completionBusyRetries {
+				if s.retryObserver != nil {
+					s.retryObserver.RecordDBRetry()
+				}
 				if waitErr := waitCompletionRetry(ctx, attempt); waitErr != nil {
 					return waitErr
 				}
@@ -153,6 +170,9 @@ func (s *SQLiteCompletionStore) Run(ctx context.Context, fn func(CompletionTx) e
 		}
 		if err := tx.Commit(); err != nil {
 			if sqliteerr.IsBusy(err) && attempt < completionBusyRetries {
+				if s.retryObserver != nil {
+					s.retryObserver.RecordDBRetry()
+				}
 				if waitErr := waitCompletionRetry(ctx, attempt); waitErr != nil {
 					return waitErr
 				}

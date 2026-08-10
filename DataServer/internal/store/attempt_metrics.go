@@ -152,13 +152,18 @@ func (r *SQLiteTaskAttemptRepository) PersistCacheStats(ctx context.Context, sta
 	if stats.AttemptID == "" {
 		return nil
 	}
+	if err := stats.NormalizeCacheAccounting(); err != nil {
+		return fmt.Errorf("cache stats validate: %w", err)
+	}
 	_, err := r.store.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO task_attempt_cache_stats (
 			attempt_id, cache_hits, cache_misses, cache_evictions,
-			cache_corruptions, cache_bytes_used, cache_entries
-		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			cache_corruptions, cache_bytes_used, cache_entries,
+			cache_lookups, unique_assets_requested
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		stats.AttemptID, stats.CacheHits, stats.CacheMisses, stats.CacheEvictions,
 		stats.CacheCorruptions, stats.CacheBytesUsed, stats.CacheEntries,
+		stats.CacheLookups, stats.UniqueAssetsRequested,
 	)
 	if err != nil {
 		return fmt.Errorf("cache stats persist: %w", err)
@@ -174,7 +179,8 @@ func (r *SQLiteTaskAttemptRepository) GetCacheStats(ctx context.Context, attempt
 	}
 	row := r.store.db.QueryRowContext(ctx,
 		`SELECT attempt_id, cache_hits, cache_misses, cache_evictions,
-		        cache_corruptions, cache_bytes_used, cache_entries
+		        cache_corruptions, cache_bytes_used, cache_entries,
+		        cache_lookups, unique_assets_requested
 		 FROM task_attempt_cache_stats WHERE attempt_id = ?`,
 		attemptID,
 	)
@@ -182,6 +188,7 @@ func (r *SQLiteTaskAttemptRepository) GetCacheStats(ctx context.Context, attempt
 	err := row.Scan(
 		&s.AttemptID, &s.CacheHits, &s.CacheMisses, &s.CacheEvictions,
 		&s.CacheCorruptions, &s.CacheBytesUsed, &s.CacheEntries,
+		&s.CacheLookups, &s.UniqueAssetsRequested,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

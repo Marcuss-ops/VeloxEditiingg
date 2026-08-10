@@ -43,6 +43,7 @@ import (
 // WorkerRegistryEntry holds the connectivity details for a single worker.
 type WorkerRegistryEntry struct {
 	WorkerID           identity.WorkerID // canonical id (e.g. "velox-worker-523925eb")
+	WorkerName         string            // mutable operator-facing display name
 	Host               string            // IP or hostname
 	SSHUser            string            // SSH username (e.g. debian, ubuntu)
 	SSHPort            int               // SSH port (0 means default 22)

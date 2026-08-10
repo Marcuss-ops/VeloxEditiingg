@@ -24,16 +24,17 @@ import (
 // handlers are no-op stubs. No runtime path consumes a
 // workflow.Repository any more.
 type assetDeps struct {
-	ArtifactSvc      *artifacts.Service
-	ArtifactReader   artifacts.ArtifactReader
-	BlobStore        store.BlobStore
-	ChunkedUploadSvc *artifacts.ChunkedUploadService
-	Completion       completion.Coordinator
-	CompletionStore  completion.UploadProtocolStore
-	Reconciler       *artifacts.Reconciler // mandatory — buildAssets fails fast if init fails
-	OutboxRegistry   *outbox.Registry
-	OutboxDispatcher *outbox.Dispatcher
-	MediaProbeWorker *artifacts.MediaProbeWorker
+	ArtifactSvc           *artifacts.Service
+	ArtifactReader        artifacts.ArtifactReader
+	BlobStore             store.BlobStore
+	ChunkedUploadSvc      *artifacts.ChunkedUploadService
+	Completion            completion.Coordinator
+	CompletionStore       completion.UploadProtocolStore
+	CompletionSQLiteStore *store.SQLiteCompletionStore
+	Reconciler            *artifacts.Reconciler // mandatory — buildAssets fails fast if init fails
+	OutboxRegistry        *outbox.Registry
+	OutboxDispatcher      *outbox.Dispatcher
+	MediaProbeWorker      *artifacts.MediaProbeWorker
 }
 
 // buildAssets creates the workflow repository, artifact pipeline,
@@ -90,6 +91,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 
 	var completionCoord completion.Coordinator
 	var completionStore completion.UploadProtocolStore
+	var completionSQLiteStore *store.SQLiteCompletionStore
 	if keyHex := cfg.Runtime.CommitHMACKey; keyHex != "" {
 		key, decodeErr := hex.DecodeString(keyHex)
 		if decodeErr != nil {
@@ -101,6 +103,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 			return nil, fmt.Errorf("bootstrap: completion coordinator: %w", coordErr)
 		}
 		completionCoord = coord
+		completionSQLiteStore = completionStoreRepo
 		if bound, ok := coord.(completion.UploadProtocolStore); ok {
 			completionStore = bound
 		} else {
@@ -173,15 +176,16 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	}
 
 	return &assetDeps{
-		ArtifactSvc:      artifactSvc,
-		ArtifactReader:   artifactReader,
-		BlobStore:        p.BlobStore,
-		ChunkedUploadSvc: chunkedSvc,
-		Completion:       completionCoord,
-		CompletionStore:  completionStore,
-		Reconciler:       reconciler,
-		OutboxRegistry:   p.OutboxRegistry,
-		OutboxDispatcher: outboxDispatcher,
-		MediaProbeWorker: probeWorker,
+		ArtifactSvc:           artifactSvc,
+		ArtifactReader:        artifactReader,
+		BlobStore:             p.BlobStore,
+		ChunkedUploadSvc:      chunkedSvc,
+		Completion:            completionCoord,
+		CompletionStore:       completionStore,
+		CompletionSQLiteStore: completionSQLiteStore,
+		Reconciler:            reconciler,
+		OutboxRegistry:        p.OutboxRegistry,
+		OutboxDispatcher:      outboxDispatcher,
+		MediaProbeWorker:      probeWorker,
 	}, nil
 }

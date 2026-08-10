@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"time"
 
 	"velox-server/internal/credentials"
@@ -33,6 +34,32 @@ import (
 // MaxAttempts falls back to r.cfg.MaxAttempts (the historical
 // behavior).
 func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryLease) error {
+	processStarted := time.Now()
+	providerStarted := processStarted
+	providerRan := false
+	var artifactBytes int64
+	providerName := canonicalProviderName(lease.Provider)
+	status := "failed"
+	defer func() {
+		if r.telemetry == nil {
+			return
+		}
+		queueMS := 0.0
+		if !lease.QueuedAt.IsZero() && processStarted.After(lease.QueuedAt) {
+			queueMS = float64(processStarted.Sub(lease.QueuedAt).Microseconds()) / 1000
+		}
+		uploadMS := 0.0
+		if providerRan {
+			uploadMS = float64(time.Since(providerStarted).Microseconds()) / 1000
+		}
+		totalMS := float64(time.Since(processStarted).Microseconds()) / 1000
+		r.telemetry.ObserveDelivery(providerName, queueMS, uploadMS, totalMS, status)
+		if artifactBytes > 0 && uploadMS > 0 && status == "succeeded" {
+			mbps := float64(artifactBytes*8) / uploadMS / 1000
+			r.telemetry.RecordDeliveryUpload(providerName, artifactBytes, mbps)
+		}
+	}()
+
 	// Phase 5.5: per-delivery retry_budget override. The lease
 	// carries MaxAttempts from job_deliveries.max_attempts (set
 	// from job_delivery_plans.retry_budget at INSERT time). A 0
@@ -42,7 +69,6 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 	if lease.MaxAttempts > 0 {
 		maxAttempts = lease.MaxAttempts
 	}
-	providerName := canonicalProviderName(lease.Provider)
 	provider, err := r.registry.Resolve(providerName)
 	if err != nil {
 		// Provider not configured → permanent failure.
@@ -106,7 +132,11 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 			return fmt.Errorf("read publication state: %w", stateErr)
 		}
 		if stateErr == nil && state != nil && state.State == publicationstate.Published {
-			return r.dbStore.MarkDeliverySucceeded(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, state.RemoteID, state.RemoteURL)
+			markErr := r.dbStore.MarkDeliverySucceeded(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, state.RemoteID, state.RemoteURL)
+			if markErr == nil {
+				status = "succeeded"
+			}
+			return markErr
 		}
 	}
 
@@ -125,6 +155,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 		}
 		return fmt.Errorf("hydrate artifact: %w", err)
 	}
+	artifactBytes = artifact.SizeBytes
 	credentialLease, credentialErr := r.issueCredentialLease(ctx, provider, dest, lease)
 	if credentialErr != nil {
 		if markErr := r.dbStore.MarkDeliveryBlockedAuth(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, credentialErrorCode(credentialErr), credentialErr.Error()); markErr != nil {
@@ -143,21 +174,42 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 			_ = r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "PUBLICATION_ID_REQUIRED", err.Error())
 			return err
 		}
-		runErr := r.runPublicationPhases(ctx, publicationPhaseContext{
+		providerRan = true
+		providerStarted = time.Now()
+		phaseErr := r.runPublicationPhases(ctx, publicationPhaseContext{
 			lease: lease, publicationID: publicationID, artifact: artifact,
 			destination: dest, credentialLease: credentialLease,
 		}, executor)
+		retryScheduled := errors.Is(phaseErr, errDeliveryRetryScheduled)
+		if retryScheduled {
+			if r.telemetry != nil {
+				r.telemetry.RecordDeliveryRetry(providerName)
+			}
+			phaseErr = nil
+		} else if phaseErr != nil && r.telemetry != nil {
+			r.telemetry.RecordDeliveryProviderError(providerName, classifyErrorCode(phaseErr))
+			if isDeliveryTimeout(phaseErr) {
+				r.telemetry.RecordDeliveryTimeout(providerName)
+			}
+		}
 		if credentialLease != nil && r.vault != nil {
-			success := runErr == nil
+			success := phaseErr == nil && !retryScheduled
 			code := ""
 			if !success {
-				code = classifyErrorCode(runErr)
+				if retryScheduled {
+					code = "RETRY_SCHEDULED"
+				} else {
+					code = classifyErrorCode(phaseErr)
+				}
 			}
 			if auditErr := r.vault.RecordLeaseResult(ctx, credentialLease, success, code); auditErr != nil {
 				log.Printf("[DELIVERY] credential usage audit failed for %s: %v", lease.DeliveryID, auditErr)
 			}
 		}
-		return runErr
+		if phaseErr == nil && !retryScheduled {
+			status = "succeeded"
+		}
+		return phaseErr
 	}
 
 	// Start a heartbeat goroutine to renew the lease periodically while
@@ -176,6 +228,8 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 
 	var res *Result
 	var runErr error
+	providerRan = true
+	providerStarted = time.Now()
 	if credentialProvider, ok := provider.(CredentialLeaseProvider); ok {
 		res, runErr = credentialProvider.DeliverWithCredential(deliverCtx, artifact, dest, lease.DeliveryID, lease.DeliveryID, credentialLease)
 	} else {
@@ -211,12 +265,19 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 		if err := r.dbStore.MarkDeliverySucceeded(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, res.RemoteID, res.RemoteURL); err != nil {
 			return fmt.Errorf("mark succeeded: %w", err)
 		}
+		status = "succeeded"
 		return nil
 	}
 
 	// ── Failure: classify + dispatch ──
 	errClass := ClassifyError(runErr)
 	errCode := classifyErrorCode(runErr)
+	if r.telemetry != nil {
+		r.telemetry.RecordDeliveryProviderError(providerName, errCode)
+		if isDeliveryTimeout(runErr) {
+			r.telemetry.RecordDeliveryTimeout(providerName)
+		}
+	}
 	errMsg := ""
 	if runErr != nil {
 		errMsg = runErr.Error()
@@ -251,6 +312,9 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 		if err := r.dbStore.MarkDeliveryRetry(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, errCode, errMsg, nextAttempt); err != nil {
 			log.Printf("[DELIVERY] mark retry for %s: %v", lease.DeliveryID, err)
 		}
+		if r.telemetry != nil {
+			r.telemetry.RecordDeliveryRetry(providerName)
+		}
 		return nil
 
 	default: // ErrorClassTransient
@@ -265,8 +329,22 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 		if err := r.dbStore.MarkDeliveryRetry(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, errCode, errMsg, nextAttempt); err != nil {
 			log.Printf("[DELIVERY] mark retry for %s: %v", lease.DeliveryID, err)
 		}
+		if r.telemetry != nil {
+			r.telemetry.RecordDeliveryRetry(providerName)
+		}
 		return nil
 	}
+}
+
+func isDeliveryTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var timeoutErr net.Error
+	return errors.As(err, &timeoutErr) && timeoutErr.Timeout()
 }
 
 // resolveCredentialReference keeps credential material out of the job

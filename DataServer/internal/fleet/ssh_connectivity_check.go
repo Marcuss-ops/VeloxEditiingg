@@ -99,12 +99,13 @@ func SSHConnectivityCheck(ctx context.Context, reg *WorkerRegistry, keyPath, kno
 
 func checkOneWorker(ctx context.Context, e WorkerRegistryEntry, keyPath, knownHosts string, resolveName WorkerNameResolver) WorkerSSHStatus {
 	status := WorkerSSHStatus{
-		WorkerID: e.WorkerID.String(),
-		Host:     e.Host,
-		User:     e.SSHUser,
-		Port:     e.SSHPort,
+		WorkerID:   e.WorkerID.String(),
+		WorkerName: e.WorkerName,
+		Host:       e.Host,
+		User:       e.SSHUser,
+		Port:       e.SSHPort,
 	}
-	if resolveName != nil {
+	if status.WorkerName == "" && resolveName != nil {
 		if name := resolveName(e.WorkerID.String()); name != "" {
 			status.WorkerName = name
 		}

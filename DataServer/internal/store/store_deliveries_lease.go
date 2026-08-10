@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"velox-server/internal/sqliteerr"
 	"velox-server/internal/statemachine"
 )
 
@@ -45,10 +46,19 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 	if batch <= 0 {
 		batch = 1
 	}
+	operationStarted := time.Now()
+	beginStarted := time.Now()
 	tx, err := s.db.BeginTx(ctx, nil)
+	waitMS := float64(time.Since(beginStarted).Microseconds()) / 1000
+	busy := sqliteerr.IsBusy(err)
+	defer func() {
+		transactionMS := float64(time.Since(operationStarted).Microseconds()) / 1000
+		s.observeDBTransaction(waitMS, transactionMS, busy, busy && transactionMS >= 9000, false, 1, 0)
+	}()
 	if err != nil {
 		return nil, wrapDBInfrastructure("ClaimDeliveries begin", err)
 	}
+	s.observeDBOperation(true)
 	defer func() { _ = tx.Rollback() }()
 
 	now := time.Now().UTC()
@@ -70,7 +80,8 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 		     locked_by = ?,
 		     lease_id = ?,
 		     lease_expires_at = ?,
-		     next_attempt_at = NULL,
+			     next_attempt_at = NULL,
+			     queued_at = COALESCE(queued_at, COALESCE(next_attempt_at, created_at)),
 		     attempt_count = attempt_count + 1,
 		     updated_at = ?
 		 WHERE delivery_id IN (
@@ -105,7 +116,7 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 				         eligible.delivery_created_at ASC,
 				         eligible.delivery_id ASC
 		   LIMIT ?
-		 )		RETURNING delivery_id, artifact_id, destination_id, attempt_count, max_attempts`,
+		   )		RETURNING delivery_id, artifact_id, destination_id, attempt_count, max_attempts, COALESCE(queued_at, created_at)`,
 		runnerID, provisionalLeaseID, leaseExpiresISO, nowISO,
 		nowISO, nowISO, batch,
 	)
@@ -117,11 +128,12 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 		deliveryID, artifactID, destID string
 		attemptCount                   int
 		maxAttempts                    int
+		createdAt                      string
 	}
 	var claimed []claimedRow
 	for rows.Next() {
 		var c claimedRow
-		if err := rows.Scan(&c.deliveryID, &c.artifactID, &c.destID, &c.attemptCount, &c.maxAttempts); err != nil {
+		if err := rows.Scan(&c.deliveryID, &c.artifactID, &c.destID, &c.attemptCount, &c.maxAttempts, &c.createdAt); err != nil {
 			return nil, wrapDBInfrastructure("ClaimDeliveries: scan claimed row", err)
 		}
 		claimed = append(claimed, c)
@@ -187,6 +199,10 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 			return nil, wrapDBInfrastructure("ClaimDeliveries: attempts INSERT", err)
 		}
 
+		queuedAt, _ := time.Parse(time.RFC3339Nano, c.createdAt)
+		if queuedAt.IsZero() {
+			queuedAt, _ = time.Parse(time.RFC3339, c.createdAt)
+		}
 		out = append(out, DeliveryLease{
 			DeliveryID:    c.deliveryID,
 			RunnerID:      runnerID,
@@ -204,6 +220,7 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 			ConfigJSON:    configJSON,
 			ArtifactID:    c.artifactID,
 			DestinationID: c.destID,
+			QueuedAt:      queuedAt,
 		})
 	}
 

@@ -5,6 +5,25 @@ import (
 	"testing"
 )
 
+func TestAttemptCacheStatsNormalizeCacheAccounting(t *testing.T) {
+	t.Run("derives legacy lookup count", func(t *testing.T) {
+		stats := AttemptCacheStats{CacheHits: 7, CacheMisses: 3}
+		if err := stats.NormalizeCacheAccounting(); err != nil {
+			t.Fatalf("NormalizeCacheAccounting: %v", err)
+		}
+		if stats.CacheLookups != 10 {
+			t.Fatalf("cache lookups = %d, want 10", stats.CacheLookups)
+		}
+	})
+
+	t.Run("rejects mismatch", func(t *testing.T) {
+		stats := AttemptCacheStats{CacheHits: 7, CacheMisses: 3, CacheLookups: 9}
+		if err := stats.NormalizeCacheAccounting(); err == nil {
+			t.Fatal("expected cache accounting mismatch")
+		}
+	})
+}
+
 func TestAttemptMetrics_RenderFactor(t *testing.T) {
 	cases := []struct {
 		name     string

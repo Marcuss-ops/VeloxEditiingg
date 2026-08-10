@@ -69,6 +69,8 @@ func loadRuntimeConfig(dataDir string, raw RawConfig) RuntimeConfig {
 	// inject via VELOX_COMMIT_HMAC_KEY=<hex>. The Coordinator
 	// validates length on NewCoordinator() and boot fails-fast.
 	c.CommitHMACKey = strings.TrimSpace(raw.Get("VELOX_COMMIT_HMAC_KEY"))
+	c.DeliveryDisabled = raw.Bool("VELOX_DELIVERY_DISABLED", false)
+	c.DeliveryConcurrency = raw.Int("VELOX_DELIVERY_CONCURRENCY", 2, 1)
 
 	return c
 }

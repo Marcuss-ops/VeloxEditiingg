@@ -40,6 +40,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
+
+	"velox-server/internal/sqliteerr"
 )
 
 // TxManager wraps the SQLite connection bound to *SQLiteStore and
@@ -105,8 +108,13 @@ func (m *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context, tx
 		return fmt.Errorf("TxManager.RunInTx: nil callback")
 	}
 
+	started := time.Now()
 	tx, err := m.store.db.BeginTx(ctx, nil)
+	waitMS := float64(time.Since(started).Microseconds()) / 1000
 	if err != nil {
+		transactionMS := float64(time.Since(started).Microseconds()) / 1000
+		busy, busyTimeout := sqliteBusyFlags(err, transactionMS)
+		m.store.observeDBTransaction(waitMS, transactionMS, busy, busyTimeout, false, 1, 0)
 		return fmt.Errorf("TxManager.RunInTx begin: %w", err)
 	}
 
@@ -118,15 +126,35 @@ func (m *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context, tx
 		// cleanup path is fail-safe at the *sql.Tx layer; the
 		// Rollback return value is purely diagnostic.
 		if rbErr := tx.Rollback(); rbErr != nil {
+			transactionMS := float64(time.Since(started).Microseconds()) / 1000
+			busy, busyTimeout := sqliteBusyFlags(fnErr, transactionMS)
+			m.store.observeDBTransaction(waitMS, transactionMS, busy, busyTimeout, false, 1, 0)
 			// Preserve the root cause. The cb error wins; rbErr
 			// is appended for operator diagnosis.
 			return fmt.Errorf("TxManager.RunInTx: callback returned error (rollback also failed: %v): %w", rbErr, fnErr)
 		}
+		transactionMS := float64(time.Since(started).Microseconds()) / 1000
+		busy, busyTimeout := sqliteBusyFlags(fnErr, transactionMS)
+		m.store.observeDBTransaction(waitMS, transactionMS, busy, busyTimeout, false, 1, 0)
 		return fnErr
 	}
 
 	if cErr := tx.Commit(); cErr != nil {
+		transactionMS := float64(time.Since(started).Microseconds()) / 1000
+		busy, busyTimeout := sqliteBusyFlags(cErr, transactionMS)
+		m.store.observeDBTransaction(waitMS, transactionMS, busy, busyTimeout, false, 1, 0)
 		return fmt.Errorf("TxManager.RunInTx commit: %w", cErr)
 	}
+	m.store.observeDBTransaction(waitMS, float64(time.Since(started).Microseconds())/1000, false, false, false, 1, 0)
 	return nil
+}
+
+// sqliteBusyFlags distinguishes any busy/locked result from one that spent
+// approximately the configured 10s SQLite busy timeout before surfacing.
+// The driver does not expose whether the timeout elapsed, so duration is the
+// least-wrong bounded signal and avoids labeling immediate lock conflicts as
+// timeout events.
+func sqliteBusyFlags(err error, transactionMS float64) (busy, busyTimeout bool) {
+	busy = sqliteerr.IsBusy(err)
+	return busy, busy && transactionMS >= 9000
 }

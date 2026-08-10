@@ -17,6 +17,7 @@ import (
 // InsertDeliveryDestination persists a delivery destination (idempotent
 // on destination_id via INSERT OR IGNORE so retries are safe).
 func (s *SQLiteStore) InsertDeliveryDestination(dest *DeliveryDestination) error {
+	s.observeDBOperation(true)
 	if dest.DestinationID == "" || dest.Provider == "" {
 		return fmt.Errorf("store: InsertDeliveryDestination: missing required fields")
 	}
@@ -57,6 +58,7 @@ func (s *SQLiteStore) InsertDeliveryDestination(dest *DeliveryDestination) error
 // canonical opaque reference (renamed from social_destination_id by
 // migration 092, Residuo 4).
 func (s *SQLiteStore) ListDeliveryDestinations(provider string, limit int) ([]DeliveryDestination, error) {
+	s.observeDBOperation(false)
 	if limit <= 0 {
 		limit = 200
 	}
@@ -103,6 +105,7 @@ func (s *SQLiteStore) ListDeliveryDestinations(provider string, limit int) ([]De
 // InstaEdit BFF when creating a job, because the BFF only knows the
 // external_destination_id, not the internal Velox destination_id.
 func (s *SQLiteStore) GetDeliveryDestinationByExternalID(ctx context.Context, externalID string) (*DeliveryDestination, error) {
+	s.observeDBOperation(false)
 	row := s.db.QueryRowContext(ctx,
 		`SELECT destination_id, provider, COALESCE(external_destination_id, ''),
 		        COALESCE(folder_id, ''),
@@ -215,6 +218,7 @@ func (s DeliveryDestinationStatus) String() string {
 // handler-side pre-check and the atomic write agree on the
 // existence + enabled invariant.
 func (s *SQLiteStore) BatchDeliveryDestinationsStatus(ctx context.Context, ids []string) (map[string]DeliveryDestinationStatus, error) {
+	s.observeDBOperation(false)
 	out := make(map[string]DeliveryDestinationStatus, len(ids))
 	if len(ids) == 0 {
 		return out, nil
@@ -300,6 +304,7 @@ func (s *SQLiteStore) BatchDeliveryDestinationsStatus(ctx context.Context, ids [
 // missing member without issuing per-member queries. IDs absent from the
 // registry are omitted from the result map.
 func (s *SQLiteStore) BatchDeliveryDestinations(ctx context.Context, ids []string) (map[string]*DeliveryDestination, error) {
+	s.observeDBOperation(false)
 	out := make(map[string]*DeliveryDestination, len(ids))
 	seen := make(map[string]struct{}, len(ids))
 	unique := make([]string, 0, len(ids))
@@ -382,6 +387,7 @@ func (s *SQLiteStore) BatchDeliveryDestinations(ctx context.Context, ids []strin
 // canonical opaque reference (renamed from social_destination_id by
 // migration 092, Residuo 4).
 func (s *SQLiteStore) GetDeliveryDestination(ctx context.Context, destID string) (*DeliveryDestination, error) {
+	s.observeDBOperation(false)
 	row := s.db.QueryRowContext(ctx,
 		`SELECT destination_id, provider, COALESCE(external_destination_id, ''),
 		        COALESCE(folder_id, ''),

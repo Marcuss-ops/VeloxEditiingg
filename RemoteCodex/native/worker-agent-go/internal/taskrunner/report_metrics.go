@@ -132,6 +132,16 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 	// any metric counters, the typed mirror carries the cache.bytes
 	// value alone (the only field CacheStatsProvider is authoritative
 	// for today) and zeros elsewhere — correct behavior.
+	cacheLookups := positiveIntegerToInt64(m["cache.lookups"])
+	cacheHits := firstPositive(m["asset.cache.hit.count"], m["cache.hits"])
+	cacheMisses := firstPositive(m["asset.cache.miss.count"], m["cache.misses"])
+	expectedCacheLookups := cacheHits + cacheMisses
+	if cacheLookups == 0 || cacheLookups != expectedCacheLookups {
+		// Keep the wire contract canonical even when an older executor or
+		// an extension reports a stale explicit lookup count.
+		cacheLookups = expectedCacheLookups
+		m["cache.lookups"] = cacheLookups
+	}
 	typed := telemetry.TypedExecutionMetrics{
 		BytesFromLocalCache: positiveIntegerToInt64(m["cache.bytes"]),
 		InputBytes:          positiveIntegerToInt64(m["input.bytes"]),
@@ -172,8 +182,8 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 		IowaitMs:       positiveIntegerToInt64(m["iowait.ms"]),
 		OpenFdsPeak:    positiveIntegerToInt64(m["open.fds.peak"]),
 
-		AssetCacheHitCount:  firstPositive(m["asset.cache.hit.count"], m["cache.hits"]),
-		AssetCacheMissCount: firstPositive(m["asset.cache.miss.count"], m["cache.misses"]),
+		AssetCacheHitCount:  cacheHits,
+		AssetCacheMissCount: cacheMisses,
 		BlobCacheHitCount:   firstPositive(m["blob.cache.hit.count"], m["blob.fetch"]),
 		BlobCacheMissCount:  firstPositive(m["blob.cache.miss.count"], m["blob.fetch_miss"]),
 		RenderCacheHitCount: positiveIntegerToInt64(m["render.cache.hit.count"]),
@@ -186,6 +196,8 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 		TelemetryCoverageJSON: stringFromMap(m["telemetry.coverage.json"]),
 		TelemetryComplete:     boolFromMap(m["telemetry.complete"]),
 		TelemetryCPUSource:    stringFromMap(m["telemetry.cpu.source"]),
+		CacheLookups:          cacheLookups,
+		UniqueAssetsRequested: positiveIntegerToInt64(m["unique.assets.requested"]),
 	}
 
 	// CPU capacity is a host-level property, not something the executor

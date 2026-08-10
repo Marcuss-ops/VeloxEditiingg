@@ -201,6 +201,7 @@ func attachAssetOperations(report *taskrunner.TaskExecutionReport, tracker *asse
 	// canonical cache hit/miss is recorded. They intentionally remain zero
 	// when no lookup occurred; zero is not a fabricated hit or miss.
 	var hits, misses int64
+	uniqueAssets := make(map[string]struct{}, len(records))
 	for _, record := range records {
 		switch strings.ToLower(strings.TrimSpace(record.CacheStatus)) {
 		case "hit":
@@ -208,9 +209,13 @@ func attachAssetOperations(report *taskrunner.TaskExecutionReport, tracker *asse
 		case "miss":
 			misses++
 		}
+		if assetID := strings.TrimSpace(record.AssetID); assetID != "" {
+			uniqueAssets[assetID] = struct{}{}
+		}
 	}
 	report.Metrics["cache.enabled"] = tracker.cacheEnabled || len(records) > 0
 	report.Metrics["cache.lookups"] = hits + misses
+	report.Metrics["unique.assets.requested"] = int64(len(uniqueAssets))
 	report.Metrics["asset.cache.hit.count"] = hits
 	report.Metrics["asset.cache.miss.count"] = misses
 	if len(records) > 0 {

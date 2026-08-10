@@ -41,6 +41,9 @@ func buildWorkerRegistryFromStore(p *persistenceDeps) *fleet.WorkerRegistry {
 			Host:     n.SSHHost,
 			SSHUser:  n.SSHUser,
 		}
+		if worker, workerErr := p.SQLite.GetWorker(n.WorkerID); workerErr == nil && worker != nil {
+			entry.WorkerName, _ = worker["worker_name"].(string)
+		}
 		if entry.Host == "" || entry.SSHUser == "" {
 			log.Printf("[BOOTSTRAP] WorkerNodeRegistry: skipping worker %s (missing host or ssh_user)", n.WorkerID)
 			continue

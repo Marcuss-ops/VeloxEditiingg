@@ -101,6 +101,7 @@ type DeliveryLease struct {
 	ConfigJSON    string
 	ArtifactID    string
 	DestinationID string
+	QueuedAt      time.Time
 }
 
 // GetDeliveryPlanMetadata returns the immutable per-destination metadata
@@ -108,6 +109,7 @@ type DeliveryLease struct {
 // is represented as an empty JSON object so providers can safely apply their
 // defaults.
 func (s *SQLiteStore) GetDeliveryPlanMetadata(ctx context.Context, artifactID, destinationID string) (string, error) {
+	s.observeDBOperation(false)
 	if strings.TrimSpace(artifactID) == "" || strings.TrimSpace(destinationID) == "" {
 		return "", fmt.Errorf("store: GetDeliveryPlanMetadata: artifact_id and destination_id are required")
 	}

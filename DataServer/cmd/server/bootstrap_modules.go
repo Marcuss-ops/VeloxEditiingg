@@ -404,19 +404,31 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 		return nil, fmt.Errorf("delivery provider credential contract: %w", err)
 	}
 
-	deliveryRunner := deliveries.NewDeliveryRunner(
-		deliveries.DefaultRunnerConfig(),
-		deliveryReg,
-		p.SQLite,
-		fmt.Sprintf("delivery-runner-%d", time.Now().UnixNano()),
-	)
-	if keys, keyErr := credentials.LoadKeyring(cfg.Runtime.Credentials); keyErr == nil {
-		if vault, vaultErr := credentials.NewVault(p.SQLite, keys); vaultErr == nil {
-			deliveryRunner.WithCredentialVault(vault)
-			log.Printf("[BOOTSTRAP] Delivery credential vault enabled")
-		}
+	var deliveryRunner *deliveries.DeliveryRunner
+	if cfg.Runtime.DeliveryDisabled {
+		log.Printf("[BOOTSTRAP] DeliveryRunner disabled by VELOX_DELIVERY_DISABLED")
 	} else {
-		log.Printf("[BOOTSTRAP] Delivery credential vault unavailable: %v", keyErr)
+		deliveryConfig := deliveries.DefaultRunnerConfig()
+		if cfg.Runtime.DeliveryConcurrency > 0 {
+			deliveryConfig.Concurrency = cfg.Runtime.DeliveryConcurrency
+			if deliveryConfig.ClaimBatch < deliveryConfig.Concurrency {
+				deliveryConfig.ClaimBatch = deliveryConfig.Concurrency
+			}
+		}
+		deliveryRunner = deliveries.NewDeliveryRunner(
+			deliveryConfig,
+			deliveryReg,
+			p.SQLite,
+			fmt.Sprintf("delivery-runner-%d", time.Now().UnixNano()),
+		)
+		if keys, keyErr := credentials.LoadKeyring(cfg.Runtime.Credentials); keyErr == nil {
+			if vault, vaultErr := credentials.NewVault(p.SQLite, keys); vaultErr == nil {
+				deliveryRunner.WithCredentialVault(vault)
+				log.Printf("[BOOTSTRAP] Delivery credential vault enabled")
+			}
+		} else {
+			log.Printf("[BOOTSTRAP] Delivery credential vault unavailable: %v", keyErr)
+		}
 	}
 
 	// ── Creator Forwarding runner ───────────────────────────────────

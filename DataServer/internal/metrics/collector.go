@@ -59,7 +59,8 @@ import (
 // the matching <domain>Families list method, both living in the
 // collector_<domain>.go file next to that domain's recorders.
 type Collector struct {
-	reg *Registry
+	reg         *Registry
+	operational *OperationalTelemetry
 
 	// Per-project.
 	renderSpeed *Family // velox_project_render_speed_ratio (gauge)
@@ -228,6 +229,7 @@ type Collector struct {
 // collector_<domain>.go files.
 func NewCollector(reg *Registry) *Collector {
 	c := &Collector{reg: reg}
+	c.operational = NewOperationalTelemetry(reg)
 
 	c.initRenderFamilies()
 	c.initFFmpegFamilies()
@@ -248,6 +250,15 @@ func NewCollector(reg *Registry) *Collector {
 		reg.Register(f)
 	}
 	return c
+}
+
+// OperationalTelemetry returns the delivery/database/cache sink registered
+// alongside the scorecard families.
+func (c *Collector) OperationalTelemetry() *OperationalTelemetry {
+	if c == nil {
+		return nil
+	}
+	return c.operational
 }
 
 // allFamilies returns the curated list to register. Adding a new family

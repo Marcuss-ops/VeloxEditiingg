@@ -3991,6 +3991,10 @@ type TaskExecutionMetrics struct {
 	TelemetryComplete     bool   `protobuf:"varint,53,opt,name=telemetry_complete,json=telemetryComplete,proto3" json:"telemetry_complete,omitempty"`
 	TelemetryCpuSource    string `protobuf:"bytes,54,opt,name=telemetry_cpu_source,json=telemetryCpuSource,proto3" json:"telemetry_cpu_source,omitempty"` // cgroup_v2, proc, or missing
 	AudioTrackCount       int32  `protobuf:"varint,55,opt,name=audio_track_count,json=audioTrackCount,proto3" json:"audio_track_count,omitempty"`         // final artifact track count from ArtifactVerifier
+	// Cache accounting invariant: cache_lookups equals cache hits plus misses.
+	// unique_assets_requested counts distinct asset identities requested.
+	CacheLookups          int64 `protobuf:"varint,56,opt,name=cache_lookups,json=cacheLookups,proto3" json:"cache_lookups,omitempty"`
+	UniqueAssetsRequested int64 `protobuf:"varint,57,opt,name=unique_assets_requested,json=uniqueAssetsRequested,proto3" json:"unique_assets_requested,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -4406,6 +4410,20 @@ func (x *TaskExecutionMetrics) GetTelemetryCpuSource() string {
 func (x *TaskExecutionMetrics) GetAudioTrackCount() int32 {
 	if x != nil {
 		return x.AudioTrackCount
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetCacheLookups() int64 {
+	if x != nil {
+		return x.CacheLookups
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetUniqueAssetsRequested() int64 {
+	if x != nil {
+		return x.UniqueAssetsRequested
 	}
 	return 0
 }
@@ -5029,7 +5047,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x06job_id\x18\x02 \x01(\tR\x05jobId\x12\x1d\n" +
 	"\n" +
 	"attempt_id\x18\x03 \x01(\tR\tattemptId\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\"\xf2\x12\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"\xcf\x13\n" +
 	"\x14TaskExecutionMetrics\x12\x1f\n" +
 	"\vinput_bytes\x18\x01 \x01(\x03R\n" +
 	"inputBytes\x12!\n" +
@@ -5089,7 +5107,9 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x17telemetry_coverage_json\x184 \x01(\tR\x15telemetryCoverageJson\x12-\n" +
 	"\x12telemetry_complete\x185 \x01(\bR\x11telemetryComplete\x120\n" +
 	"\x14telemetry_cpu_source\x186 \x01(\tR\x12telemetryCpuSource\x12*\n" +
-	"\x11audio_track_count\x187 \x01(\x05R\x0faudioTrackCount\"\x92\b\n" +
+	"\x11audio_track_count\x187 \x01(\x05R\x0faudioTrackCount\x12#\n" +
+	"\rcache_lookups\x188 \x01(\x03R\fcacheLookups\x126\n" +
+	"\x17unique_assets_requested\x189 \x01(\x03R\x15uniqueAssetsRequested\"\x92\b\n" +
 	"\x16WorkerResourceCounters\x122\n" +
 	"\x15cpu_utilization_ratio\x18\x01 \x01(\x01R\x13cpuUtilizationRatio\x12(\n" +
 	"\x10cpu_iowait_ratio\x18\x02 \x01(\x01R\x0ecpuIowaitRatio\x12&\n" +

@@ -4,7 +4,10 @@
 // in the sibling file report_ratios.go.
 package taskattempts
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // Canonical phase names for production rendering pipeline.
 // Workers must use these exact strings; free-form identifiers are rejected.
@@ -181,13 +184,39 @@ type AttemptMetrics struct {
 // cache.corruptions / cache.bytes_used / cache.entries (dotted-key entry
 // surface across the executor pipeline, set by taskrunner.mergeStatsInto).
 type AttemptCacheStats struct {
-	AttemptID        string `json:"attempt_id"`
-	CacheHits        int64  `json:"cache_hits"`
-	CacheMisses      int64  `json:"cache_misses"`
-	CacheEvictions   int64  `json:"cache_evictions"`
-	CacheCorruptions int64  `json:"cache_corruptions"`
-	CacheBytesUsed   int64  `json:"cache_bytes_used"`
-	CacheEntries     int    `json:"cache_entries"`
+	AttemptID             string `json:"attempt_id"`
+	CacheHits             int64  `json:"cache_hits"`
+	CacheMisses           int64  `json:"cache_misses"`
+	CacheEvictions        int64  `json:"cache_evictions"`
+	CacheCorruptions      int64  `json:"cache_corruptions"`
+	CacheBytesUsed        int64  `json:"cache_bytes_used"`
+	CacheEntries          int    `json:"cache_entries"`
+	CacheLookups          int64  `json:"cache_lookups"`
+	UniqueAssetsRequested int64  `json:"unique_assets_requested"`
+}
+
+// NormalizeCacheAccounting applies the legacy default and enforces the
+// accounting invariant used by every cache report:
+// cache_lookups = cache_hits + cache_misses.
+//
+// Older workers did not send cache_lookups, so zero means "derive it". Once a
+// non-zero value is present, a mismatch is rejected instead of silently
+// publishing contradictory telemetry.
+func (s *AttemptCacheStats) NormalizeCacheAccounting() error {
+	if s == nil {
+		return fmt.Errorf("cache stats are nil")
+	}
+	if s.CacheHits < 0 || s.CacheMisses < 0 || s.CacheLookups < 0 || s.UniqueAssetsRequested < 0 {
+		return fmt.Errorf("cache counters must be non-negative")
+	}
+	expected := s.CacheHits + s.CacheMisses
+	if s.CacheLookups == 0 {
+		s.CacheLookups = expected
+	}
+	if s.CacheLookups != expected {
+		return fmt.Errorf("cache accounting invariant violated: lookups=%d hits=%d misses=%d", s.CacheLookups, s.CacheHits, s.CacheMisses)
+	}
+	return nil
 }
 
 // AttemptCostBasis is the cost-model envelope the worker emits. The proto

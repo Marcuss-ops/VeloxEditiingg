@@ -116,7 +116,7 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 	// IngestTaskResult, which persists them under the per-task mutex
 	// immediately after the atomic close-write.
 	typedMetrics := executionMetricsToAttemptMetrics(attemptID, tr.GetExecutionMetrics())
-	typedCache := deriveCacheStats(attemptID, typedMetrics)
+	typedCache := deriveCacheStats(attemptID, typedMetrics, tr.GetExecutionMetrics())
 	typedCost := executionMetricsToCostBasis(attemptID, tr.GetExecutionMetrics())
 	segmentTimings := segmentTimingsFromProto(attemptID, taskID, jobID, workerID, tr.GetSegmentTimings())
 	typedMetrics.SegmentCount = len(segmentTimings)

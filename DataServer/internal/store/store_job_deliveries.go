@@ -16,6 +16,7 @@ import (
 
 // InsertJobDelivery persists a new per-(artifact, destination) row.
 func (s *SQLiteStore) InsertJobDelivery(jobD *JobDelivery) error {
+	s.observeDBOperation(true)
 	if jobD.DeliveryID == "" || jobD.ArtifactID == "" || jobD.DestinationID == "" {
 		return fmt.Errorf("store: InsertJobDelivery: missing required fields")
 	}
@@ -57,6 +58,7 @@ func (s *SQLiteStore) InsertJobDelivery(jobD *JobDelivery) error {
 
 // ListJobDeliveriesByJob returns all deliveries for a job's READY artifacts.
 func (s *SQLiteStore) ListJobDeliveriesByJob(jobID string) ([]JobDelivery, error) {
+	s.observeDBOperation(false)
 	rows, err := s.db.Query(
 		`SELECT jd.delivery_id, jd.artifact_id, jd.destination_id,
 		        jd.status,
@@ -100,6 +102,7 @@ func (s *SQLiteStore) ListJobDeliveriesByJob(jobID string) ([]JobDelivery, error
 
 // GetJobDelivery retrieves a single job_delivery by ID.
 func (s *SQLiteStore) GetJobDelivery(ctx context.Context, deliveryID string) (*JobDelivery, error) {
+	s.observeDBOperation(false)
 	row := s.db.QueryRowContext(ctx,
 		`SELECT delivery_id, artifact_id, destination_id,
 		        status,
@@ -134,6 +137,7 @@ func (s *SQLiteStore) GetJobDelivery(ctx context.Context, deliveryID string) (*J
 }
 
 func (s *SQLiteStore) ListDeliveryReconciliationCandidates(ctx context.Context, limit int) ([]JobDelivery, error) {
+	s.observeDBOperation(false)
 	if limit <= 0 {
 		limit = 100
 	}

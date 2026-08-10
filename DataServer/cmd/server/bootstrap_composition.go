@@ -184,6 +184,15 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 
 	metricsRegistry := velmetrics.NewRegistry()
 	metricsCollector := velmetrics.NewCollector(metricsRegistry)
+	if p.SQLite != nil {
+		p.SQLite.SetDBTelemetry(metricsCollector.OperationalTelemetry())
+	}
+	if a != nil && a.CompletionSQLiteStore != nil {
+		a.CompletionSQLiteStore.SetDBRetryObserver(metricsCollector.OperationalTelemetry())
+	}
+	if m != nil && m.DeliveryRunner != nil {
+		m.DeliveryRunner.WithTelemetry(metricsCollector.OperationalTelemetry())
+	}
 	if m != nil && m.AssetService != nil {
 		for _, family := range velmetrics.NewInputSecurityFamilies(m.AssetService.SecurityMetrics()) {
 			if family != nil {

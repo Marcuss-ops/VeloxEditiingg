@@ -94,6 +94,7 @@ func (s *SQLiteStore) MarkDeliveryRetry(ctx context.Context, deliveryID, runnerI
 			     lease_id = NULL,
 			     lease_expires_at = NULL,
 			     next_attempt_at = ?,
+			     queued_at = ?,
 			     last_error_code = ?,
 			     last_error_message = ?,
 			     updated_at = ?
@@ -101,7 +102,7 @@ func (s *SQLiteStore) MarkDeliveryRetry(ctx context.Context, deliveryID, runnerI
 			   AND status = 'RUNNING'
 			   AND locked_by = ?
 			   AND lease_id = ?`,
-			nextISO, nullIfEmpty(errorCode), nullIfEmpty(errorMsg), now,
+			nextISO, nextISO, nullIfEmpty(errorCode), nullIfEmpty(errorMsg), now,
 			deliveryID, runnerID, leaseID,
 		)
 		if err != nil {

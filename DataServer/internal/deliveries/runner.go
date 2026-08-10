@@ -63,7 +63,16 @@ type DeliveryRunner struct {
 
 	// identity holds a stable per-runner id written on delivery_attempts
 	// so concurrent runners do not race on the same row.
-	identity string
+	identity  string
+	telemetry Telemetry
+}
+
+// WithTelemetry wires the bounded delivery measurement sink.
+func (r *DeliveryRunner) WithTelemetry(t Telemetry) *DeliveryRunner {
+	if r != nil {
+		r.telemetry = t
+	}
+	return r
 }
 
 // WithCredentialVault connects the runner to the central credential

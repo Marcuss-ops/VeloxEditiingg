@@ -42,6 +42,14 @@ type RuntimeConfig struct {
 	Metrics    MetricsConfig
 	Alerts     AlertConfig
 
+	// DeliveryDisabled disables the delivery runner for renderer-only
+	// isolation benchmarks. It is intentionally false by default and is
+	// resolved once at bootstrap; runtime packages do not read the env.
+	DeliveryDisabled bool
+	// DeliveryConcurrency controls the bounded provider delivery pool.
+	// Zero means the delivery runner's default (2).
+	DeliveryConcurrency int
+
 	// Process-level controls are resolved once at bootstrap and injected into
 	// runtime components. Consumers must not consult the process environment.
 	CosignSkipVerify      bool

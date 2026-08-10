@@ -748,6 +748,11 @@ message TaskExecutionMetrics {
   bool telemetry_complete = 53;
   string telemetry_cpu_source = 54; // cgroup_v2, proc, or missing
   int32 audio_track_count = 55; // final artifact track count from ArtifactVerifier
+
+  // Cache accounting invariant: cache_lookups equals cache hits plus misses.
+  // unique_assets_requested counts distinct asset identities requested.
+  int64 cache_lookups = 56;
+  int64 unique_assets_requested = 57;
 }
 
 // WorkerResourceCounters is the typed payload of Heartbeat.resources.

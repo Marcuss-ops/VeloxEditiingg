@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,6 +14,8 @@ import (
 	"velox-server/internal/publicationstate"
 	"velox-server/internal/store"
 )
+
+var errDeliveryRetryScheduled = errors.New("delivery retry scheduled")
 
 // publicationPhaseContext is deliberately private: only the runner can build
 // it after hydrating the artifact, destination, and credential lease.
@@ -305,7 +308,7 @@ func (r *DeliveryRunner) phaseFailure(ctx context.Context, lease store.DeliveryL
 			next = retryAfter
 		}
 		_ = r.dbStore.MarkDeliveryRetry(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, code, runErr.Error(), next)
-		return nil
+		return errDeliveryRetryScheduled
 	}
 	if phase == publicationstate.Uploading {
 		_, _ = r.dbStore.TransitionPublicationState(ctx, publicationID, publicationstate.Failed, code)

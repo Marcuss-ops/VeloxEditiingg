@@ -14,17 +14,23 @@ import (
 
 // persistAttemptCacheStats persists the per-attempt cache snapshot.
 func persistAttemptCacheStats(ctx context.Context, tx *sql.Tx, cmd taskgraph.IngestResultCommand) error {
-	if cmd.CacheStats.AttemptID == "" {
+	stats := cmd.CacheStats
+	if stats.AttemptID == "" {
 		return nil
+	}
+	if err := stats.NormalizeCacheAccounting(); err != nil {
+		return fmt.Errorf("task ingest atomic cache stats validate: %w", err)
 	}
 	_, err := tx.ExecContext(ctx,
 		`INSERT OR REPLACE INTO task_attempt_cache_stats (
 			attempt_id, cache_hits, cache_misses, cache_evictions,
-			cache_corruptions, cache_bytes_used, cache_entries
-		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		cmd.CacheStats.AttemptID, cmd.CacheStats.CacheHits, cmd.CacheStats.CacheMisses,
-		cmd.CacheStats.CacheEvictions, cmd.CacheStats.CacheCorruptions,
-		cmd.CacheStats.CacheBytesUsed, cmd.CacheStats.CacheEntries,
+			cache_corruptions, cache_bytes_used, cache_entries,
+			cache_lookups, unique_assets_requested
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		stats.AttemptID, stats.CacheHits, stats.CacheMisses,
+		stats.CacheEvictions, stats.CacheCorruptions,
+		stats.CacheBytesUsed, stats.CacheEntries,
+		stats.CacheLookups, stats.UniqueAssetsRequested,
 	)
 	if err != nil {
 		return fmt.Errorf("task ingest atomic cache stats: %w", err)
