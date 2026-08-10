@@ -282,6 +282,7 @@ wait_ready() {
     if [[ -n "$expected_image" ]]; then
         expected_digest="${expected_image##*@}"
         [[ "$expected_digest" =~ ^sha256:[a-f0-9]{64}$ ]] || die 'readiness digest must be a pinned image or sha256 digest'
+        expected_digest="${expected_digest#sha256:}"
     fi
     while :; do
         card="$(api GET "$(worker_uri "$worker_id")")"
@@ -289,6 +290,7 @@ wait_ready() {
         connection="$(jq -r '.connection_state // .status // "UNKNOWN"' <<<"$card")"
         health="$(jq -r '.health // "UNKNOWN"' <<<"$card")"
         actual_digest="$(jq -r '.image_digest // .digest // ""' <<<"$card")"
+        actual_digest="${actual_digest#sha256:}"
         printf 'fleetctl: worker=%s connection=%s health=%s readiness=%s digest=%s\n' \
             "$worker_id" "$connection" "$health" "$ready" "${actual_digest:--}" >&2
         if [[ "$ready" == "ok" && "$connection" == "CONNECTED" && "$health" == "HEALTHY" ]]; then
