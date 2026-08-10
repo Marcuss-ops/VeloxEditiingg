@@ -175,10 +175,14 @@ followups.
   The offending file is NOT in the scan allowlist. Attribution verified:
   the fragment is on `HEAD` (not working-tree WIP), the introducing commit
   is `3b6dcdd9`, and the failure is unrelated to the alert-contract work
-  verified in the same run (vet 0 / build 0). Tracked as a followup for
-  the deliverables/publication owner: either allowlist the direct write
-  with a documenting comment or route it through `FinalizeVerified` so the
-  single-writer invariant holds.
+  verified in the same run (vet 0 / build 0). **RESOLVED** (2026-08-10):
+  `store_publication_state.go` was added to the audited allowlist in
+  `internal/artifacts/scan_test.go` with a documenting comment — the
+  SUCCEEDED flip targets `publication_phase_effects` (a SEPARATE
+  lifecycle from jobs: the VERIFYING-phase reconciliation effect, gated
+  by `reconciliation_verified` + `RowsAffected()==1` inside one
+  transaction), so it does not need to route through `FinalizeVerified`.
+  Same pattern as the existing deliveries/workflow/smoke_runs entries.
 
 ## 5. Worker identity model: `worker_id` is immutable, `worker_name` is mutable
 

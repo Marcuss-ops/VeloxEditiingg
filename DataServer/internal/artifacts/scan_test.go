@@ -112,6 +112,16 @@ var allowedWriters = map[string]bool{
 	// verified-finalization writer and does not need to go through
 	// FinalizeVerified.
 	filepath.Join("internal", "store", "store_smoke_runs.go"): true,
+	// SEPARATE lifecycle: UPDATE publication_phase_effects SET
+	// status='SUCCEEDED' is the publication reconciliation/verification
+	// effect writer (NOT jobs). It flips the VERIFYING phase effect to
+	// SUCCEEDED only when the reconciliation proof holds (remote_id and
+	// submitted_remote_id both present and differing, verified inside one
+	// transaction with RowsAffected()==1 on both statements). It is not
+	// a verified-finalization writer for jobs and does not need to go
+	// through FinalizeVerified; the publication lifecycle is its own
+	// audit trail.
+	filepath.Join("internal", "store", "store_publication_state.go"): true,
 }
 
 // allowedTestFiles are files that legitimately contain the SQL
