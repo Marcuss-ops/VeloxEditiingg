@@ -58,7 +58,7 @@ func EnsureEnqueueMetrics(ctx context.Context) (context.Context, *EnqueueMetrics
 	if metrics := EnqueueMetricsFromContext(ctx); metrics != nil {
 		return ctx, metrics
 	}
-	return WithEnqueueMetrics(ctx, telemetryConfig.MeasureEnqueueAllocations)
+	return WithEnqueueMetrics(ctx, globalConfig().MeasureEnqueueAllocations)
 }
 
 // EnqueueMetricsFromContext returns the request accumulator, if installed.

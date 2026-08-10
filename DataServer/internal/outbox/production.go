@@ -64,9 +64,8 @@ import (
 //   - In the subsystem package init(), call
 //     outbox.RegisterHandlerFactory(func(reg) reg.MustRegister(handler)).
 //   - Add a CompletenessKeystone test in that package that wires
-//     outbox.ProductionRegistry() (forced into a fresh build via
-//     ResetHandlerFactoriesForTesting in init) and asserts the
-//     handler is present (see workers/bundle_rebuild_outbox_test.go
+//     outbox.ProductionRegistry() in an isolated test process and
+//     asserts the handler is present (see workers/bundle_rebuild_outbox_test.go
 //     for the factory-presence assertion pattern — opt-in via a
 //     dedicated test in the subsystem package).
 //
@@ -94,24 +93,34 @@ var KnownEventTypes = []string{
 // is called at boot, every JOB_FAILED alert is silently dropped. This
 // is preferable to a panic in production code — the dispatcher must
 // not crash because alert routing is optional at the wire-format level.
-var defaultAlertNotifier alerts.Notifier = alerts.NopNotifier{}
+var (
+	defaultAlertNotifierMu sync.RWMutex
+	defaultAlertNotifier   alerts.Notifier = alerts.NopNotifier{}
+)
 
 // SetAlertNotifier overrides the production alert sink. Called once
 // from the composition root BEFORE the OutboxDispatcher goroutine
 // starts. Calling SetAlertNotifier with nil resets to the no-op
-// default.
+// default. The lock also makes late reads safe for tests and future
+// reconfiguration without changing the bootstrap semantics.
 func SetAlertNotifier(n alerts.Notifier) {
 	if n == nil {
-		defaultAlertNotifier = alerts.NopNotifier{}
-		return
+		n = alerts.NopNotifier{}
 	}
+	defaultAlertNotifierMu.Lock()
 	defaultAlertNotifier = n
+	defaultAlertNotifierMu.Unlock()
 }
 
 // AlertNotifier returns the currently wired sink. ProductionRegistry
 // reads it via this accessor so tests can swap sinks by calling
 // SetAlertNotifier without rebuilding the registry.
-func AlertNotifier() alerts.Notifier { return defaultAlertNotifier }
+func AlertNotifier() alerts.Notifier {
+	defaultAlertNotifierMu.RLock()
+	n := defaultAlertNotifier
+	defaultAlertNotifierMu.RUnlock()
+	return n
+}
 
 // ── ProductionRegistry ────────────────────────────────────────────────────
 
@@ -145,8 +154,13 @@ func AlertNotifier() alerts.Notifier { return defaultAlertNotifier }
 // The handler decodes the canonical payload {job_id, error_code,
 // error} and forwards an Alert to the wired Notifier.
 var (
-	productionRegOnce  sync.Once
-	productionRegCache *Registry
+	productionRegOnce     sync.Once
+	productionRegCache    *Registry
+	productionRegStateMu  sync.Mutex
+	productionRegBuilding bool
+	productionRegBuilt    bool
+	productionRegFailed   bool
+	productionRegFailure  any
 )
 
 // RegistryFactory contributes one or more handlers to the canonical
@@ -166,20 +180,21 @@ var (
 // RegisterHandlerFactory appends a factory that will run inside
 // buildProductionRegistry. Intended for subsystem packages (e.g.
 // workers) that want their handlers wired automatically when the
-// registry is asked-for. Idempotent per (factory pointer) — adding
-// the same factory twice is a no-op so tests and the production
-// boot can both pass the factory without duplicating handlers.
-//
-// Called typically from a package's init() function; safe to call
-// before or after the first ProductionRegistry() call because
-// buildProductionRegistry iterates the slice at call-time.
+// registry is first built. Registration is only valid before the first
+// ProductionRegistry call; rejecting late registration prevents a factory
+// from being silently ignored and keeps the cached registry immutable.
 func RegisterHandlerFactory(f RegistryFactory) {
 	if f == nil {
 		panic("outbox: RegisterHandlerFactory with nil")
 	}
+	productionRegStateMu.Lock()
+	defer productionRegStateMu.Unlock()
+	if productionRegBuilt || productionRegBuilding {
+		panic("outbox: RegisterHandlerFactory called after ProductionRegistry build started")
+	}
 	handlerFactoriesMu.Lock()
-	defer handlerFactoriesMu.Unlock()
 	handlerFactories = append(handlerFactories, f)
+	handlerFactoriesMu.Unlock()
 }
 
 // ProductionRegistry returns the cached canonical *Registry. The
@@ -187,9 +202,44 @@ func RegisterHandlerFactory(f RegistryFactory) {
 // return the same instance. Subsystem handlers registered via
 // RegisterHandlerFactory are included in the very first call.
 func ProductionRegistry() *Registry {
+	productionRegStateMu.Lock()
+	if productionRegFailed {
+		failure := productionRegFailure
+		productionRegStateMu.Unlock()
+		panic(fmt.Sprintf("outbox: production registry build failed: %v", failure))
+	}
+	productionRegStateMu.Unlock()
+
 	productionRegOnce.Do(func() {
-		productionRegCache = buildProductionRegistry()
+		productionRegStateMu.Lock()
+		productionRegBuilding = true
+		productionRegStateMu.Unlock()
+
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				productionRegStateMu.Lock()
+				productionRegBuilding = false
+				productionRegFailed = true
+				productionRegFailure = recovered
+				productionRegStateMu.Unlock()
+				panic(recovered)
+			}
+		}()
+
+		reg := buildProductionRegistry()
+
+		productionRegStateMu.Lock()
+		productionRegCache = reg
+		productionRegBuilding = false
+		productionRegBuilt = true
+		productionRegStateMu.Unlock()
 	})
+
+	productionRegStateMu.Lock()
+	defer productionRegStateMu.Unlock()
+	if productionRegFailed {
+		panic(fmt.Sprintf("outbox: production registry build failed: %v", productionRegFailure))
+	}
 	return productionRegCache
 }
 
@@ -265,19 +315,6 @@ func buildProductionRegistry() *Registry {
 	}
 
 	return reg
-}
-
-// ResetHandlerFactoriesForTesting clears the subsystem factory list
-// AND the cached *Registry so a test can re-register factories and
-// re-build the registry from a clean slate. NOT safe for concurrent
-// callers — only use in `*_test.go` files guarded by t.Parallel or
-// sequential test ordering.
-func ResetHandlerFactoriesForTesting() {
-	handlerFactoriesMu.Lock()
-	handlerFactories = nil
-	handlerFactoriesMu.Unlock()
-	productionRegOnce = sync.Once{}
-	productionRegCache = nil
 }
 
 // MustRegisterFunc is a thin convenience for production code that has a

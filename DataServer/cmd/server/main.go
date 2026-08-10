@@ -63,7 +63,9 @@ func main() {
 		compatibility.SetMode(compatibility.ModeCompat)
 	}
 	logging.Configure(cfg.Runtime.Logging.Quiet, cfg.Runtime.Logging.JSONOutput, cfg.Runtime.Logging.Debug)
-	telemetry.Configure(cfg.Runtime.Telemetry)
+	if err := telemetry.Configure(cfg.Runtime.Telemetry); err != nil {
+		log.Fatalf("telemetry configuration failed: %v", err)
+	}
 	if snapshot, snapshotErr := cfg.SnapshotJSON(); snapshotErr != nil {
 		log.Printf("[BOOTSTRAP] WARNING: config snapshot unavailable: %v", snapshotErr)
 	} else {

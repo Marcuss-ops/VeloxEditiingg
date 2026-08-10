@@ -74,7 +74,8 @@ var allowedWriters = map[string]bool{
 	// transaction-bound repository methods. The application package
 	// owns orchestration only; all SQL and transaction lifecycle live
 	// in internal/store/completion_repository.go.
-	filepath.Join("internal", "store", "completion_repository.go"): true,
+	filepath.Join("internal", "store", "completion_repository.go"):          true,
+	filepath.Join("internal", "store", "completion_repository_finalize.go"): true,
 	// Interface + commands: contains the regex literal in a doc
 	// comment EXPLAINING the contract. No executable SQL update.
 	filepath.Join("internal", "artifacts", "finalization_repository.go"): true,
@@ -123,6 +124,10 @@ var allowedTestFiles = map[string]bool{
 	// fixture (upload session, artifact, job attempt in RENDER_FINISHED state)
 	// which is out of scope for this API-level test.
 	filepath.Join("internal", "handlers", "server", "calendar", "calendar_test.go"): true,
+	// e2e_metrics_worker_flow_test.go seeds a completed jobs row to
+	// exercise worker telemetry projection; this is a test fixture, not
+	// a production completion writer.
+	filepath.Join("internal", "store", "e2e_metrics_worker_flow_test.go"): true,
 }
 
 // allowedJobAttemptsLegacyWriters is the explicit allowlist of files

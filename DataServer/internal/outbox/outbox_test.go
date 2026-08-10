@@ -10,7 +10,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -114,8 +113,6 @@ func startDispatcher(t *testing.T, d *outbox.Dispatcher) context.Context {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		// Suppress noisy log output in tests.
-		log.SetOutput(devNull{})
 		_ = d.Run(ctx)
 	}()
 	t.Cleanup(func() {
@@ -125,11 +122,6 @@ func startDispatcher(t *testing.T, d *outbox.Dispatcher) context.Context {
 	})
 	return ctx
 }
-
-// devNull is an io.Writer that swallows everything.
-type devNull struct{}
-
-func (devNull) Write(p []byte) (int, error) { return len(p), nil }
 
 // insertOne is a tiny ergonomic helper: insert a single PENDING event.
 func insertOne(t *testing.T, store *outbox.Store, evt, aggType, aggID string, payload []byte) string {

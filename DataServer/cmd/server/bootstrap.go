@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"velox-server/internal/config"
+	"velox-server/internal/telemetry"
 )
 
 // requireLiveWorkersEnabled is the canonical gate for the A8 opt-in.
@@ -61,6 +62,11 @@ func runServer(cfg *config.Config) error {
 		return err
 	}
 	defer components.close()
+	defer func() {
+		if err := telemetry.Shutdown(context.Background()); err != nil {
+			log.Printf("[SERVER] Telemetry shutdown failed: %v", err)
+		}
+	}()
 
 	transport, err := startTransports(cfg, components)
 	if err != nil {

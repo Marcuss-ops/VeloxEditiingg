@@ -22,6 +22,7 @@ package telemetry
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync"
 
@@ -40,39 +41,152 @@ import (
 )
 
 var (
-	tracer          trace.Tracer
-	tracerOnce      sync.Once
-	telemetryConfig = config.TelemetryConfig{Insecure: true}
-
-	// propagatorOnce ensures W3C propagation is set exactly once.
-	// Called from initStdoutTracer and initOTLPTracer.
+	// propagatorOnce ensures W3C propagation is set exactly once per process.
 	// The no-op default path does NOT set it — zero overhead when tracing is off.
 	propagatorOnce sync.Once
+
+	globalTelemetryState = struct {
+		sync.RWMutex
+		instance        *Telemetry
+		configured      bool
+		tracerRequested bool
+	}{instance: newTelemetry(config.TelemetryConfig{Insecure: true}, true)}
 )
 
-// Configure applies centrally parsed telemetry settings before the first
-// Tracer call. Calls after initialization are ignored by design.
-func Configure(cfg config.TelemetryConfig) {
-	telemetryConfig = cfg
+// ErrConfigureAfterTracer indicates that the Configure-before-Tracer contract
+// was violated. Reconfiguration after a tracer has been requested is rejected
+// instead of silently racing with or replacing a live provider.
+var ErrConfigureAfterTracer = errors.New("telemetry: Configure must run before Tracer")
+
+// ErrAlreadyConfigured indicates that the process-wide facade was configured
+// more than once. Tests and components that need independent configurations
+// should use NewTelemetry rather than resetting package state.
+var ErrAlreadyConfigured = errors.New("telemetry: already configured")
+
+// Telemetry owns one immutable configuration and one lazily initialized
+// tracer. Instances are the preferred seam for tests and embedded consumers;
+// they cannot contaminate one another through package-global reset state.
+type Telemetry struct {
+	config        config.TelemetryConfig
+	installGlobal bool
+	once          sync.Once
+	tracer        trace.Tracer
+
+	providerMu sync.Mutex
+	provider   *sdktrace.TracerProvider
 }
 
-// Tracer returns the global Velox tracer. Safe for concurrent use.
-// The first call initializes the tracer provider based on VELOX_OTEL_EXPORTER.
+// NewTelemetry creates an isolated telemetry instance. Configure the instance
+// by value at construction time, then safely share it between goroutines.
+// Isolated instances never replace the process-wide OpenTelemetry provider.
+func NewTelemetry(cfg config.TelemetryConfig) *Telemetry {
+	return newTelemetry(cfg, false)
+}
+
+func newTelemetry(cfg config.TelemetryConfig, installGlobal bool) *Telemetry {
+	return &Telemetry{config: cfg, installGlobal: installGlobal}
+}
+
+// Configure applies centrally parsed telemetry settings to the process-wide
+// facade. It must run before the first global Tracer call and may run only
+// once. Use NewTelemetry for isolated configurations in tests.
+func Configure(cfg config.TelemetryConfig) error {
+	globalTelemetryState.Lock()
+	defer globalTelemetryState.Unlock()
+	if globalTelemetryState.tracerRequested {
+		return ErrConfigureAfterTracer
+	}
+	if globalTelemetryState.configured {
+		return ErrAlreadyConfigured
+	}
+	globalTelemetryState.instance = newTelemetry(cfg, true)
+	globalTelemetryState.configured = true
+	return nil
+}
+
+// Tracer returns the process-wide Velox tracer. The facade records the first
+// request before initializing the instance, so a concurrent Configure cannot
+// race with initialization or silently change the selected configuration.
 func Tracer() trace.Tracer {
-	tracerOnce.Do(func() {
-		tracer = initTracer()
-	})
-	return tracer
+	globalTelemetryState.Lock()
+	globalTelemetryState.tracerRequested = true
+	instance := globalTelemetryState.instance
+	globalTelemetryState.Unlock()
+	return instance.Tracer()
 }
 
-// initTracer reads VELOX_OTEL_EXPORTER and returns the appropriate tracer.
-// Default is no-op (zero overhead when tracing is disabled).
-func initTracer() trace.Tracer {
-	switch telemetryConfig.Exporter {
+func globalConfig() config.TelemetryConfig {
+	globalTelemetryState.RLock()
+	defer globalTelemetryState.RUnlock()
+	return globalTelemetryState.instance.Config()
+}
+
+// Shutdown closes the provider owned by the process-wide facade. Bootstrap
+// should defer this after Configure so OTLP/stdout batchers flush during an
+// orderly server shutdown instead of surviving as leaked goroutines.
+func Shutdown(ctx context.Context) error {
+	globalTelemetryState.RLock()
+	instance := globalTelemetryState.instance
+	globalTelemetryState.RUnlock()
+	return instance.Shutdown(ctx)
+}
+
+// Config returns the immutable configuration captured by this instance.
+// It is primarily useful for wiring and tests; callers cannot mutate it.
+func (t *Telemetry) Config() config.TelemetryConfig {
+	if t == nil {
+		return config.TelemetryConfig{}
+	}
+	return t.config
+}
+
+// Tracer returns this instance's tracer. The first call initializes the
+// provider based only on the configuration captured by NewTelemetry.
+func (t *Telemetry) Tracer() trace.Tracer {
+	if t == nil {
+		return noop.NewTracerProvider().Tracer("velox-server")
+	}
+	t.once.Do(func() {
+		t.tracer = t.initTracer()
+	})
+	return t.tracer
+}
+
+// Shutdown releases exporter resources owned by this instance. It is safe to
+// call more than once. Calling it before the first Tracer call initializes the
+// instance first, ensuring a newly-created exporter cannot leak after shutdown.
+func (t *Telemetry) Shutdown(ctx context.Context) error {
+	if t == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	_ = t.Tracer()
+	t.providerMu.Lock()
+	provider := t.provider
+	t.provider = nil
+	t.providerMu.Unlock()
+	if provider == nil {
+		return nil
+	}
+	return provider.Shutdown(ctx)
+}
+
+func (t *Telemetry) setProvider(provider *sdktrace.TracerProvider) {
+	t.providerMu.Lock()
+	t.provider = provider
+	t.providerMu.Unlock()
+}
+
+// initTracer reads the immutable instance configuration. Default is no-op
+// (zero overhead when tracing is disabled).
+func (t *Telemetry) initTracer() trace.Tracer {
+	switch t.config.Exporter {
 	case "stdout":
-		return initStdoutTracer()
+		return t.initStdoutTracer()
 	case "otlp":
-		return initOTLPTracer()
+		return t.initOTLPTracer()
 	default:
 		return noop.NewTracerProvider().Tracer("velox-server")
 	}
@@ -89,18 +203,18 @@ func initPropagator() {
 
 // buildResource constructs the canonical Resource (service.name,
 // service.version) for both stdout and OTLP tracer providers.
-func buildResource() *resource.Resource {
+func (t *Telemetry) buildResource() *resource.Resource {
 	res := resource.NewWithAttributes(
 		semconv.SchemaURL,
 		semconv.ServiceName("velox-server"),
-		semconv.ServiceVersion(telemetryConfig.Version),
+		semconv.ServiceVersion(t.config.Version),
 	)
 	return res
 }
 
 // initStdoutTracer creates a tracer that prints spans to stderr.
 // Also initializes the W3C propagator so gRPC context propagation works.
-func initStdoutTracer() trace.Tracer {
+func (t *Telemetry) initStdoutTracer() trace.Tracer {
 	exp, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
 	if err != nil {
 		log.Printf("[TELEMETRY] stdout exporter init failed: %v — falling back to no-op", err)
@@ -109,12 +223,15 @@ func initStdoutTracer() trace.Tracer {
 
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exp),
-		sdktrace.WithResource(buildResource()),
+		sdktrace.WithResource(t.buildResource()),
 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 	)
 
-	otel.SetTracerProvider(tp)
-	initPropagator()
+	t.setProvider(tp)
+	if t.installGlobal {
+		otel.SetTracerProvider(tp)
+		initPropagator()
+	}
 
 	log.Printf("[TELEMETRY] stdout tracer provider + W3C propagator initialized")
 	return tp.Tracer("velox-server")
@@ -124,8 +241,8 @@ func initStdoutTracer() trace.Tracer {
 // collector via gRPC. Reads VELOX_OTEL_ENDPOINT (host:port, e.g.
 // "otel-collector:4317"). Uses insecure credentials by default;
 // set VELOX_OTEL_INSECURE=false to require TLS (not yet wired).
-func initOTLPTracer() trace.Tracer {
-	endpoint := telemetryConfig.Endpoint
+func (t *Telemetry) initOTLPTracer() trace.Tracer {
+	endpoint := t.config.Endpoint
 	if endpoint == "" {
 		log.Printf("[TELEMETRY] OTLP exporter requested but VELOX_OTEL_ENDPOINT is empty — falling back to no-op")
 		return noop.NewTracerProvider().Tracer("velox-server")
@@ -134,7 +251,7 @@ func initOTLPTracer() trace.Tracer {
 	log.Printf("[TELEMETRY] OTLP gRPC exporter connecting to %s", endpoint)
 
 	options := []otlptracegrpc.Option{otlptracegrpc.WithEndpoint(endpoint)}
-	if telemetryConfig.Insecure {
+	if t.config.Insecure {
 		options = append(options, otlptracegrpc.WithInsecure())
 	}
 	exp, err := otlptracegrpc.New(context.Background(), options...)
@@ -145,12 +262,15 @@ func initOTLPTracer() trace.Tracer {
 
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exp),
-		sdktrace.WithResource(buildResource()),
+		sdktrace.WithResource(t.buildResource()),
 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 	)
 
-	otel.SetTracerProvider(tp)
-	initPropagator()
+	t.setProvider(tp)
+	if t.installGlobal {
+		otel.SetTracerProvider(tp)
+		initPropagator()
+	}
 
 	log.Printf("[TELEMETRY] OTLP gRPC tracer provider + W3C propagator initialized — endpoint=%s", endpoint)
 	return tp.Tracer("velox-server")

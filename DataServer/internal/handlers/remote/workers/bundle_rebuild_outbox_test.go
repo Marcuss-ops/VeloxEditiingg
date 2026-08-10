@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -449,51 +450,34 @@ func authedPost(url, body string) (*http.Response, error) {
 
 // ── 5. Channel-2 completeness: workers.init() factory wired into the canonical registry
 //
-// Phase-5 wiring moved BundleRebuildHandler registration from an
-// explicit bootstrap_workers.go call into workers.init() via
-// outbox.RegisterHandlerFactory. This keystone PROVES that wiring
-// works at runtime AND exercises the ResetHandlerFactoriesForTesting
-// API surface so it has at least one in-package consumer (the prior
-// review flagged it as YAGNI-exported-with-no-caller).
-//
-// Failure mode pinned: a regression that breaks the bootstrap-time
-// factory registration (BuildTag, accidental init() removal,
-// production-registry cache built BEFORE init() ran) leaves the
-// dispatcher's "no handler → MarkFailed" branch firing for
-// production rebuilds. Before this test, the gap was silent.
-//
-// Test flow:
-//  1. Wipe the in-memory factory list + cached registry so the test
-//     starts from a clean slate (mirrors a fresh-process boot).
-//  2. Reregister the subsystem factory via RegisterHandlerFactory.
-//  3. outbox.ProductionRegistry() rebuilds the cached registry from
-//     the factory list.
-//  4. Assert the workers-owned event_type is present, EventType()
-//     matches.
-//
-// CrashRecovery keystone #1 already exercises the dispatch path
-// end-to-end with a real row + claim + handle, so this test stays
-// scoped to the registration/PRODUCTION side without duplicating
-// CrashRecovery's coverage. Both ResetHandlerFactoriesForTesting
-// and RegisterHandlerFactory are now consumed here, so neither is
-// YAGNI surface area.
+// The production registry is process-global by design. This keystone
+// therefore verifies the init-time factory in a subprocess rather than
+// resetting productionRegOnce or the factory list inside the parent test
+// process. That keeps the test compatible with t.Parallel and prevents
+// contamination of other tests that use the canonical registry.
 func TestBundleRebuildHandler_WiredIntoProductionRegistry(t *testing.T) {
-	outbox.ResetHandlerFactoriesForTesting()
-	outbox.RegisterHandlerFactory(RegisterBundleRebuildOutboxHandler)
+	if os.Getenv("VELOX_BUNDLE_OUTBOX_REGISTRY_HELPER") == "1" {
+		reg := outbox.ProductionRegistry()
+		if reg == nil {
+			t.Fatal("outbox.ProductionRegistry() returned nil")
+		}
+		h, err := reg.Lookup(BundleRebuildRequestedEventType)
+		if err != nil {
+			t.Fatalf("registry missing handler for %q: %v", BundleRebuildRequestedEventType, err)
+		}
+		if h == nil {
+			t.Fatalf("registry returned nil handler for %q", BundleRebuildRequestedEventType)
+		}
+		if ht := h.EventType(); ht != BundleRebuildRequestedEventType {
+			t.Errorf("registered handler EventType() = %q, want %q", ht, BundleRebuildRequestedEventType)
+		}
+		return
+	}
 
-	reg := outbox.ProductionRegistry()
-	if reg == nil {
-		t.Fatal("outbox.ProductionRegistry() returned nil after re-registration")
-	}
-	h, err := reg.Lookup(BundleRebuildRequestedEventType)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestBundleRebuildHandler_WiredIntoProductionRegistry$", "-test.v")
+	cmd.Env = append(os.Environ(), "VELOX_BUNDLE_OUTBOX_REGISTRY_HELPER=1")
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("registry missing handler for %q after RegisterHandlerFactory: %v",
-			BundleRebuildRequestedEventType, err)
-	}
-	if h == nil {
-		t.Fatalf("registry returned nil handler for %q", BundleRebuildRequestedEventType)
-	}
-	if ht := h.EventType(); ht != BundleRebuildRequestedEventType {
-		t.Errorf("registered handler EventType() = %q, want %q", ht, BundleRebuildRequestedEventType)
+		t.Fatalf("isolated production registry subprocess failed: %v\n%s", err, output)
 	}
 }

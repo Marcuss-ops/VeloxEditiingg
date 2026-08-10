@@ -3,30 +3,25 @@ package contracts
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"time"
 )
 
-// nanoNow indirection keeps `time` import surface minimal; replaced by tests.
+// nanoNow is kept as a small indirection so package tests can replace the
+// source locally without relying on file-order-dependent init functions.
 func nanoNow() int64 {
-	// Use the real time source. test-only dependency, no production impact.
 	return realNano()
 }
 
-// realNano is the indirection variable; set in time_now.go by the first init to run.
-var realNano func() int64
-
-// realTimeNow is the actual time source; overridden in tests would require build tags.
+// realTimeNow is the production time source. It remains a variable so the
+// package-level compatibility seam used by tests is unchanged.
 var realTimeNow = func() int64 {
-	// Overridden in time_now.go by a later init to avoid a `time` import in this file.
-	return 0
+	return time.Now().UnixNano()
 }
 
-func init() {
-	// Bind once to avoid per-call indirection cost.
-	// If time_now.go's init already ran (file order undefined), realNano keeps its value.
-	if realNano == nil {
-		realNano = realTimeNow
-	}
-}
+// realNano is the source used by nanoNow. It is initialized directly from the
+// production source, so it is never transiently nil and does not depend on
+// init ordering across files.
+var realNano = realTimeNow
 
 // randSuffix returns a 12-char hex nonce for test isolation.
 // crypto/rand → time-based suffix would collide in parallel runs.
