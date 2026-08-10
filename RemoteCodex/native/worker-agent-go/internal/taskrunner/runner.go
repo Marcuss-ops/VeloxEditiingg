@@ -181,6 +181,7 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		rec = telemetry.NewEventRecorder()
 	}
 	report.AttemptRecorder = rec
+	report.AttemptEvents = telemetry.AttemptEventMachineFromContext(parent)
 	// appendPhase writes directly to report.PhaseMarkers so the
 	// returned TaskExecutionReport always carries the recorded phases.
 	// Run is single-goroutine; no mutex needed.

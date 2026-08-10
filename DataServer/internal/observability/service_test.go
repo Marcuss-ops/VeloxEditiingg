@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"testing"
+	"time"
 
 	"velox-server/internal/jobs"
 	"velox-server/internal/taskattempts"
@@ -396,6 +397,50 @@ func TestService_SummarizeTaskIncludesLiveAttemptProgress(t *testing.T) {
 	live := result.Attempts[0]
 	if live.Phase != "building_segments" || live.CurrentScene != 7 || live.CurrentSegment != 12 || live.FramesEncoded != 18432 || live.LastProgressAt == "" {
 		t.Fatalf("live attempt projection = %#v", live)
+	}
+	if live.Metrics == nil || live.Metrics.AttemptID != "A-live" || live.Metrics.FramesEncoded != 18432 || live.Metrics.FramesDecoded != 0 {
+		t.Fatalf("live metrics projection = %#v; expected the same typed AttemptMetrics shape used by final ingestion", live.Metrics)
+	}
+}
+
+func TestService_SummarizeTaskTerminalAttemptWinsOverStaleLiveProjection(t *testing.T) {
+	svc, tasks, attempts, _, _ := newTestService()
+	now := time.Date(2026, 8, 10, 10, 5, 0, 0, time.UTC)
+	tasks.tasks["T-converged"] = &taskgraph.Task{
+		ID: "T-converged", JobID: "J-converged", Status: taskgraph.StatusSucceeded, AttemptCount: 1,
+	}
+	attempts.attempts["T-converged"] = []taskattempts.TaskAttempt{{
+		ID: "A-converged", TaskID: "T-converged", JobID: "J-converged", AttemptNumber: 1,
+		WorkerID: "worker-final", Status: taskattempts.AttemptStatusSucceeded,
+		StartedAt: &now,
+	}}
+	attempts.metrics["A-converged"] = &taskattempts.AttemptMetrics{
+		AttemptID: "A-converged", InputBytes: 100, OutputBytes: 80, FramesEncoded: 10,
+	}
+	// Simulate a heartbeat/runtime cleanup race: the volatile row still has
+	// the same Attempt identity, but its progress is an older RUNNING view.
+	svc.WithLiveAttempts(stubLiveAttemptReader{live: &LiveAttempt{
+		TaskID: "T-converged", JobID: "J-converged", AttemptID: "A-converged", AttemptNumber: 1,
+		WorkerID: "worker-stale", RuntimeStatus: "RUNNING", ProgressPercent: 46,
+		ProgressPhase: "building_segments", FramesEncoded: 999, ElapsedMS: 9999,
+	}})
+
+	result, err := svc.SummarizeTask(context.Background(), "T-converged")
+	if err != nil {
+		t.Fatalf("SummarizeTask() error: %v", err)
+	}
+	if len(result.Attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one canonical attempt", result.Attempts)
+	}
+	got := result.Attempts[0]
+	if got.Live {
+		t.Fatalf("terminal attempt incorrectly marked live: %#v", got)
+	}
+	if got.Status != taskattempts.AttemptStatusSucceeded || got.WorkerID != "worker-final" {
+		t.Fatalf("terminal durable identity/status overwritten by stale live row: %#v", got)
+	}
+	if got.Metrics == nil || got.Metrics.FramesEncoded != 10 || result.TotalOutputBytes != 80 {
+		t.Fatalf("final durable metrics did not converge: attempt=%#v summary=%#v", got, result)
 	}
 }
 

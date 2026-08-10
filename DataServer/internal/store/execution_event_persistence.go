@@ -406,9 +406,29 @@ func quarantineTelemetryEvent(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ing
 }
 
 func deterministicEventID(attemptID string, timing taskattempts.PhaseTimingDetailed) string {
+	// Canonical Attempt lifecycle events are projected live from the same
+	// recorder origin/index tuple. Reuse that identity at final ingest so a
+	// heartbeat event and its TaskResult event converge under one idempotency
+	// key across retries. Other detailed phases retain the historical hash
+	// identity because their component/action/segment tuple is richer than
+	// the compact lifecycle projection.
+	if timing.EventName != "" && isCanonicalAttemptEventName(timing.EventName) {
+		return fmt.Sprintf("attempt-event-%s-%s-%d", attemptID, timing.Origin, timing.EventIndex)
+	}
 	payload := fmt.Sprintf("%s|%s|%s|%d|%s|%s|%d|%s|%d|%s", attemptID, timing.Origin, timing.Scope, timing.EventIndex, timing.Component, timing.Action, timing.SegmentIndex, timing.TrackKind, timing.TrackIndex, timing.ArtifactID)
 	sum := sha256.Sum256([]byte(payload))
 	return "phase-" + hex.EncodeToString(sum[:])
+}
+
+func isCanonicalAttemptEventName(name string) bool {
+	switch name {
+	case "ATTEMPT_STARTED", "PHASE_CHANGED", "SEGMENT_STARTED", "SEGMENT_COMPLETED",
+		"PROGRESS_UPDATED", "ARTIFACT_VERIFY_STARTED", "ARTIFACT_VERIFIED",
+		"DELIVERY_STARTED", "ATTEMPT_COMPLETED":
+		return true
+	default:
+		return false
+	}
 }
 
 func phaseName(timing taskattempts.PhaseTimingDetailed) string {

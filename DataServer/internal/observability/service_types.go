@@ -45,28 +45,29 @@ type LiveAttemptReader interface {
 }
 
 type LiveAttempt struct {
-	TaskID            string
-	JobID             string
-	AttemptID         string
-	AttemptNumber     int
-	WorkerID          string
-	LeaseID           string
-	RuntimeStatus     string
-	ProgressPercent   int
-	ProgressPhase     string
-	CurrentScene      int
-	TotalScenes       int
-	CurrentSegment    int
-	TotalSegments     int
-	FramesEncoded     int64
-	FramesDecoded     int64
-	FramesComposited  int64
-	FFmpegSpeedX      float64
-	ElapsedMS         int64
-	CumulativeMetrics map[string]any
-	StartedAt         string
-	LastProgressAt    string
-	UpdatedAt         string
+	TaskID                 string
+	JobID                  string
+	AttemptID              string
+	AttemptNumber          int
+	WorkerID               string
+	LeaseID                string
+	RuntimeStatus          string
+	ProgressPercent        int
+	ProgressPhase          string
+	CurrentScene           int
+	TotalScenes            int
+	CurrentSegment         int
+	TotalSegments          int
+	FramesEncoded          int64
+	FramesDecoded          int64
+	FramesComposited       int64
+	FFmpegSpeedX           float64
+	ElapsedMS              int64
+	CumulativeMetrics      map[string]any
+	CanonicalAttemptEvents []map[string]any
+	StartedAt              string
+	LastProgressAt         string
+	UpdatedAt              string
 }
 
 // JobReader provides job queries for observability aggregates.
@@ -252,32 +253,34 @@ type CacheSummary struct {
 
 // AttemptSummary is the aggregated diagnostics for a single attempt.
 type AttemptSummary struct {
-	AttemptID         string                          `json:"attempt_id"`
-	AttemptNumber     int                             `json:"attempt_number"`
-	Status            taskattempts.AttemptStatus      `json:"status"`
-	WorkerID          string                          `json:"worker_id"`
-	ErrorCode         string                          `json:"error_code,omitempty"`
-	ErrorMessage      string                          `json:"error_message,omitempty"`
-	StartedAt         string                          `json:"started_at,omitempty"`
-	CompletedAt       string                          `json:"completed_at,omitempty"`
-	DurationMS        int64                           `json:"duration_ms"`
-	PhaseBreakdown    map[string]int64                `json:"phase_breakdown"`
-	Metrics           *taskattempts.AttemptMetrics    `json:"metrics,omitempty"`
-	CacheStats        *taskattempts.AttemptCacheStats `json:"cache_stats,omitempty"`
-	Live              bool                            `json:"live,omitempty"`
-	Phase             string                          `json:"phase,omitempty"`
-	ProgressPercent   int                             `json:"progress_percent,omitempty"`
-	CurrentScene      int                             `json:"current_scene,omitempty"`
-	TotalScenes       int                             `json:"total_scenes,omitempty"`
-	CurrentSegment    int                             `json:"current_segment,omitempty"`
-	TotalSegments     int                             `json:"total_segments,omitempty"`
-	FramesEncoded     int64                           `json:"frames_encoded,omitempty"`
-	FramesDecoded     int64                           `json:"frames_decoded,omitempty"`
-	FramesComposited  int64                           `json:"frames_composited,omitempty"`
-	FFmpegSpeedX      float64                         `json:"ffmpeg_speed_x,omitempty"`
-	ElapsedMS         int64                           `json:"elapsed_ms,omitempty"`
-	LastProgressAt    string                          `json:"last_progress_at,omitempty"`
-	CumulativeMetrics map[string]any                  `json:"cumulative_metrics,omitempty"`
+	AttemptID              string                          `json:"attempt_id"`
+	AttemptNumber          int                             `json:"attempt_number"`
+	Status                 taskattempts.AttemptStatus      `json:"status"`
+	WorkerID               string                          `json:"worker_id"`
+	WorkerName             string                          `json:"worker_name,omitempty"`
+	ErrorCode              string                          `json:"error_code,omitempty"`
+	ErrorMessage           string                          `json:"error_message,omitempty"`
+	StartedAt              string                          `json:"started_at,omitempty"`
+	CompletedAt            string                          `json:"completed_at,omitempty"`
+	DurationMS             int64                           `json:"duration_ms"`
+	PhaseBreakdown         map[string]int64                `json:"phase_breakdown"`
+	Metrics                *taskattempts.AttemptMetrics    `json:"metrics,omitempty"`
+	CacheStats             *taskattempts.AttemptCacheStats `json:"cache_stats,omitempty"`
+	Live                   bool                            `json:"live,omitempty"`
+	Phase                  string                          `json:"phase,omitempty"`
+	ProgressPercent        int                             `json:"progress_percent,omitempty"`
+	CurrentScene           int                             `json:"current_scene,omitempty"`
+	TotalScenes            int                             `json:"total_scenes,omitempty"`
+	CurrentSegment         int                             `json:"current_segment,omitempty"`
+	TotalSegments          int                             `json:"total_segments,omitempty"`
+	FramesEncoded          int64                           `json:"frames_encoded,omitempty"`
+	FramesDecoded          int64                           `json:"frames_decoded,omitempty"`
+	FramesComposited       int64                           `json:"frames_composited,omitempty"`
+	FFmpegSpeedX           float64                         `json:"ffmpeg_speed_x,omitempty"`
+	ElapsedMS              int64                           `json:"elapsed_ms,omitempty"`
+	LastProgressAt         string                          `json:"last_progress_at,omitempty"`
+	CumulativeMetrics      map[string]any                  `json:"cumulative_metrics,omitempty"`
+	CanonicalAttemptEvents []map[string]any                `json:"canonical_attempt_events,omitempty"`
 }
 
 // Service is the read-only observability aggregation service.
@@ -386,10 +389,16 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 			ErrorMessage:   a.ErrorMessage,
 			PhaseBreakdown: make(map[string]int64),
 		}
-		if live != nil && live.AttemptID == a.ID {
+		as.WorkerName = s.workerDisplayName(as.WorkerID)
+		// The durable attempt is authoritative once it is terminal. A
+		// heartbeat can race with final TaskResult cleanup, so never let a
+		// stale worker_task_runtime row revert a completed Attempt to
+		// RUNNING or overwrite its final report metrics.
+		if live != nil && live.AttemptID == a.ID && !a.Status.IsTerminal() {
 			as.Live = true
 			as.Status = taskattempts.AttemptStatus(live.RuntimeStatus)
 			as.WorkerID = live.WorkerID
+			as.WorkerName = s.workerDisplayName(as.WorkerID)
 			as.Phase = live.ProgressPhase
 			as.ProgressPercent = live.ProgressPercent
 			as.CurrentScene = live.CurrentScene
@@ -404,6 +413,7 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 			as.StartedAt = live.StartedAt
 			as.LastProgressAt = live.LastProgressAt
 			as.CumulativeMetrics = live.CumulativeMetrics
+			as.CanonicalAttemptEvents = live.CanonicalAttemptEvents
 		}
 		if a.StartedAt != nil {
 			as.StartedAt = a.StartedAt.UTC().Format(time.RFC3339Nano)
@@ -477,6 +487,25 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 			if metrics.PeakVRAMBytes > summary.PeakVRAMBytes {
 				summary.PeakVRAMBytes = metrics.PeakVRAMBytes
 			}
+		} else if live != nil && live.AttemptID == a.ID && !a.Status.IsTerminal() {
+			// Before final TaskResult ingest, expose the same typed metric
+			// shape that the final report will persist. This is a projection
+			// of worker_task_runtime, not a second telemetry store; once the
+			// durable row exists it remains authoritative above.
+			as.Metrics = liveAttemptMetrics(live)
+			summary.TotalInputBytes += as.Metrics.InputBytes
+			summary.TotalOutputBytes += as.Metrics.OutputBytes
+			summary.BytesFromDrive += as.Metrics.BytesFromDrive
+			summary.BytesFromBlobstore += as.Metrics.BytesFromBlobstore
+			summary.BytesFromLocalCache += as.Metrics.BytesFromLocalCache
+			summary.CPUTimeMS += as.Metrics.CPUTimeMS
+			summary.GPUTimeMS += as.Metrics.GPUTimeMS
+			if as.Metrics.PeakRSSBytes > summary.PeakRSSBytes {
+				summary.PeakRSSBytes = as.Metrics.PeakRSSBytes
+			}
+			if as.Metrics.PeakVRAMBytes > summary.PeakVRAMBytes {
+				summary.PeakVRAMBytes = as.Metrics.PeakVRAMBytes
+			}
 		}
 
 		// Cache counters are a separate typed row because they are not
@@ -526,13 +555,16 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 			summary.Attempts = append(summary.Attempts, AttemptSummary{
 				AttemptID: live.AttemptID, AttemptNumber: live.AttemptNumber,
 				Status: taskattempts.AttemptStatus(live.RuntimeStatus), WorkerID: live.WorkerID,
-				Live: true, Phase: live.ProgressPhase, ProgressPercent: live.ProgressPercent,
+				WorkerName: s.workerDisplayName(live.WorkerID),
+				Metrics:    liveAttemptMetrics(live),
+				Live:       true, Phase: live.ProgressPhase, ProgressPercent: live.ProgressPercent,
 				CurrentScene: live.CurrentScene, TotalScenes: live.TotalScenes,
 				CurrentSegment: live.CurrentSegment, TotalSegments: live.TotalSegments,
 				FramesEncoded: live.FramesEncoded, FramesDecoded: live.FramesDecoded,
 				FramesComposited: live.FramesComposited, FFmpegSpeedX: live.FFmpegSpeedX,
 				ElapsedMS: live.ElapsedMS, StartedAt: live.StartedAt,
 				LastProgressAt: live.LastProgressAt, CumulativeMetrics: live.CumulativeMetrics,
+				CanonicalAttemptEvents: live.CanonicalAttemptEvents,
 			})
 		}
 	}
@@ -549,6 +581,88 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 	}
 
 	return summary, nil
+}
+
+func liveAttemptMetrics(live *LiveAttempt) *taskattempts.AttemptMetrics {
+	if live == nil {
+		return nil
+	}
+	metrics := &taskattempts.AttemptMetrics{
+		AttemptID:         live.AttemptID,
+		FramesEncoded:     live.FramesEncoded,
+		FramesDecoded:     live.FramesDecoded,
+		FramesComposited:  live.FramesComposited,
+		FFmpegSpeedRatio:  live.FFmpegSpeedX,
+		SceneCount:        live.TotalScenes,
+		SegmentCount:      live.TotalSegments,
+		CompletedSegments: live.CurrentSegment,
+		WallClockSeconds:  float64(live.ElapsedMS) / 1000,
+	}
+	for key, value := range live.CumulativeMetrics {
+		switch key {
+		case "input_bytes":
+			metrics.InputBytes = int64Value(value)
+		case "output_bytes":
+			metrics.OutputBytes = int64Value(value)
+		case "bytes_from_drive":
+			metrics.BytesFromDrive = int64Value(value)
+		case "bytes_from_blobstore":
+			metrics.BytesFromBlobstore = int64Value(value)
+		case "bytes_from_local_cache":
+			metrics.BytesFromLocalCache = int64Value(value)
+		case "cpu_time_ms":
+			metrics.CPUTimeMS = int64Value(value)
+		case "gpu_time_ms":
+			metrics.GPUTimeMS = int64Value(value)
+		case "peak_rss_bytes":
+			metrics.PeakRSSBytes = int64Value(value)
+		case "peak_vram_bytes":
+			metrics.PeakVRAMBytes = int64Value(value)
+		case "frames_encoded":
+			metrics.FramesEncoded = int64Value(value)
+		case "frames_decoded":
+			metrics.FramesDecoded = int64Value(value)
+		case "frames_composited":
+			metrics.FramesComposited = int64Value(value)
+		case "ffmpeg_speed_ratio", "ffmpeg_speed_x":
+			metrics.FFmpegSpeedRatio = float64Value(value)
+		case "pipeline_render_ms":
+			metrics.PipelineRenderMs = int64Value(value)
+		case "pipeline_total_ms":
+			metrics.PipelineTotalMs = int64Value(value)
+		}
+	}
+	return metrics
+}
+
+func int64Value(value any) int64 {
+	switch number := value.(type) {
+	case int:
+		return int64(number)
+	case int64:
+		return number
+	case float64:
+		return int64(number)
+	case float32:
+		return int64(number)
+	default:
+		return 0
+	}
+}
+
+func float64Value(value any) float64 {
+	switch number := value.(type) {
+	case int:
+		return float64(number)
+	case int64:
+		return float64(number)
+	case float64:
+		return number
+	case float32:
+		return float64(number)
+	default:
+		return 0
+	}
 }
 
 // SummarizeJob returns the aggregated diagnostics for the task owning a job.

@@ -106,6 +106,9 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 			"status":      "RUNNING",
 			"started_at":  at.StartedAt.UTC().Format(time.RFC3339Nano),
 		}
+		if at.AttemptEvents != nil {
+			jobInfo["canonical_attempt_events"] = at.AttemptEvents.Snapshot()
+		}
 		if !at.Progress.LastProgressAt.IsZero() {
 			jobInfo["progress_percent"] = at.Progress.Percent
 			jobInfo["progress_scene"] = at.Progress.Scene

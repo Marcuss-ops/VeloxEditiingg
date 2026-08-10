@@ -10,28 +10,29 @@ import (
 // WorkerTaskRuntimeRow is the live, heartbeat-derived view of an active
 // Attempt. It is intentionally separate from durable task_attempts history.
 type WorkerTaskRuntimeRow struct {
-	TaskID            string
-	JobID             string
-	AttemptID         string
-	AttemptNumber     int
-	WorkerID          string
-	LeaseID           string
-	RuntimeStatus     string
-	ProgressPercent   int
-	ProgressPhase     string
-	CurrentScene      int
-	TotalScenes       int
-	CurrentSegment    int
-	TotalSegments     int
-	FramesEncoded     int64
-	FramesDecoded     int64
-	FramesComposited  int64
-	FFmpegSpeedX      float64
-	ElapsedMS         int64
-	CumulativeMetrics map[string]any
-	StartedAt         string
-	LastProgressAt    string
-	UpdatedAt         string
+	TaskID                 string
+	JobID                  string
+	AttemptID              string
+	AttemptNumber          int
+	WorkerID               string
+	LeaseID                string
+	RuntimeStatus          string
+	ProgressPercent        int
+	ProgressPhase          string
+	CurrentScene           int
+	TotalScenes            int
+	CurrentSegment         int
+	TotalSegments          int
+	FramesEncoded          int64
+	FramesDecoded          int64
+	FramesComposited       int64
+	FFmpegSpeedX           float64
+	ElapsedMS              int64
+	CumulativeMetrics      map[string]any
+	CanonicalAttemptEvents []map[string]any
+	StartedAt              string
+	LastProgressAt         string
+	UpdatedAt              string
 }
 
 // GetWorkerTaskRuntimeByJob returns the current live Attempt projection for
@@ -46,7 +47,7 @@ func (s *SQLiteStore) GetWorkerTaskRuntimeByJob(ctx context.Context, jobID strin
 		       runtime_status, progress_percent, progress_stage, current_scene,
 		       total_scenes, current_segment, total_segments, frames_encoded,
 		       frames_decoded, frames_composited, ffmpeg_speed_x, elapsed_ms,
-		       cumulative_metrics_json, started_at, last_progress_at, updated_at
+		       cumulative_metrics_json, canonical_events_json, started_at, last_progress_at, updated_at
 		  FROM worker_task_runtime
 		 WHERE job_id=?
 		 ORDER BY updated_at DESC, task_id DESC
@@ -56,13 +57,14 @@ func (s *SQLiteStore) GetWorkerTaskRuntimeByJob(ctx context.Context, jobID strin
 	var metricsJSON sql.NullString
 	var progressPhase sql.NullString
 	var lastProgressAt sql.NullString
+	var canonicalEventsJSON sql.NullString
 	if err := row.Scan(
 		&runtime.TaskID, &runtime.JobID, &runtime.AttemptID, &runtime.AttemptNumber,
 		&runtime.WorkerID, &runtime.LeaseID, &runtime.RuntimeStatus,
 		&runtime.ProgressPercent, &progressPhase, &runtime.CurrentScene,
 		&runtime.TotalScenes, &runtime.CurrentSegment, &runtime.TotalSegments,
 		&runtime.FramesEncoded, &runtime.FramesDecoded, &runtime.FramesComposited,
-		&runtime.FFmpegSpeedX, &runtime.ElapsedMS, &metricsJSON, &runtime.StartedAt,
+		&runtime.FFmpegSpeedX, &runtime.ElapsedMS, &metricsJSON, &canonicalEventsJSON, &runtime.StartedAt,
 		&lastProgressAt, &runtime.UpdatedAt,
 	); err != nil {
 		if err == sql.ErrNoRows {
@@ -75,6 +77,11 @@ func (s *SQLiteStore) GetWorkerTaskRuntimeByJob(ctx context.Context, jobID strin
 	}
 	if lastProgressAt.Valid {
 		runtime.LastProgressAt = lastProgressAt.String
+	}
+	if canonicalEventsJSON.Valid && canonicalEventsJSON.String != "" {
+		if err := json.Unmarshal([]byte(canonicalEventsJSON.String), &runtime.CanonicalAttemptEvents); err != nil {
+			return nil, fmt.Errorf("decode worker task runtime canonical events: %w", err)
+		}
 	}
 	if metricsJSON.Valid && metricsJSON.String != "" {
 		if err := json.Unmarshal([]byte(metricsJSON.String), &runtime.CumulativeMetrics); err != nil {

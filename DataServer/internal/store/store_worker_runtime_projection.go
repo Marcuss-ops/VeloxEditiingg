@@ -79,9 +79,9 @@ func upsertWorkerTaskRuntimeTx(ctx context.Context, tx *sql.Tx, runtime workerTa
 		frames_decoded=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id THEN 0 ELSE worker_task_runtime.frames_decoded END,
 		frames_composited=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id THEN 0 ELSE worker_task_runtime.frames_composited END,
 		ffmpeg_speed_x=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id THEN 0 ELSE worker_task_runtime.ffmpeg_speed_x END,
-		elapsed_ms=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id THEN 0 ELSE worker_task_runtime.elapsed_ms END,
-		cumulative_metrics_json=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id THEN '{}' ELSE worker_task_runtime.cumulative_metrics_json END,
-		last_progress_at=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id
+		elapsed_ms=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id THEN 0 ELSE worker_task_runtime.elapsed_ms END,			cumulative_metrics_json=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id THEN '{}' ELSE worker_task_runtime.cumulative_metrics_json END,
+			canonical_events_json=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id THEN '[]' ELSE worker_task_runtime.canonical_events_json END,
+			last_progress_at=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id
 			THEN NULL ELSE worker_task_runtime.last_progress_at END,
 		cancel_requested_at=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id
 			THEN NULL ELSE worker_task_runtime.cancel_requested_at END,
@@ -152,10 +152,10 @@ func reconcileWorkerRuntime(ctx context.Context, tx *sql.Tx, workerID, sessionID
 		_, err := tx.ExecContext(ctx, `INSERT INTO worker_task_runtime
 			(task_id,job_id,attempt_id,attempt_number,worker_id,session_id,lease_id,
 			executor_id,executor_version,runtime_status,progress_percent,progress_stage,
-			current_scene,total_scenes,current_segment,total_segments,frames_encoded,
+			current_scene,total_scenes,			current_segment,total_segments,frames_encoded,
 			frames_decoded,frames_composited,ffmpeg_speed_x,elapsed_ms,cumulative_metrics_json,
-			started_at,last_progress_at,updated_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			canonical_events_json,started_at,last_progress_at,updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(task_id) DO UPDATE SET
 			job_id=excluded.job_id, attempt_id=excluded.attempt_id, attempt_number=excluded.attempt_number,
 			worker_id=excluded.worker_id, session_id=excluded.session_id, lease_id=excluded.lease_id,
@@ -167,6 +167,7 @@ func reconcileWorkerRuntime(ctx context.Context, tx *sql.Tx, workerID, sessionID
 			frames_decoded=excluded.frames_decoded, frames_composited=excluded.frames_composited,
 			ffmpeg_speed_x=excluded.ffmpeg_speed_x, elapsed_ms=excluded.elapsed_ms,
 			cumulative_metrics_json=excluded.cumulative_metrics_json,
+			canonical_events_json=excluded.canonical_events_json,
 			started_at=COALESCE(worker_task_runtime.started_at, excluded.started_at),
 			last_progress_at=excluded.last_progress_at, updated_at=excluded.updated_at,
 			missing_heartbeats=0`,
@@ -179,6 +180,7 @@ func reconcileWorkerRuntime(ctx context.Context, tx *sql.Tx, workerID, sessionID
 			int64Value(task["frames_encoded"]), int64Value(task["frames_decoded"]),
 			int64Value(task["frames_composited"]), floatValue(task["ffmpeg_speed_x"]),
 			int64Value(task["elapsed_ms"]), jsonString(task["progress_metrics"]),
+			jsonString(task["canonical_attempt_events"]),
 			defaultString(task["started_at"], now), defaultString(task["last_progress_at"], now), now)
 		if err != nil {
 			return fmt.Errorf("upsert worker task runtime %s: %w", taskID, err)

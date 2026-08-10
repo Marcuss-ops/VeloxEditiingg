@@ -132,6 +132,10 @@ func (w *Worker) uploadTaskOutputs(ctx context.Context, pte *PendingTaskExecutio
 	)
 	defer span.End()
 	rec := telemetry.RecorderFromContext(ctx)
+	attemptEvents := telemetry.AttemptEventMachineFromContext(ctx)
+	if attemptEvents != nil {
+		attemptEvents.DeliveryStarted()
+	}
 	transfer := rec.Begin(telemetry.EventSpec{
 		Origin: telemetry.OriginUpload, Scope: telemetry.ScopeArtifact,
 		Component: "worker.upload", Action: "transfer",

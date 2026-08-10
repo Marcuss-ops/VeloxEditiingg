@@ -110,7 +110,17 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	// events; it is never global across attempts.
 	rec := telemetry.NewEventRecorder()
 	rec.BindAttemptTelemetry(telemetry.AttemptTelemetryFromContext(ctx))
+	attemptEvents := telemetry.NewAttemptEventMachine(rec, pte.AttemptID)
+	w.activeTasksMu.Lock()
+	if active := w.activeTasks[pte.TaskID]; active != nil {
+		active.AttemptEvents = attemptEvents
+	}
+	w.activeTasksMu.Unlock()
+	if attemptEvents != nil {
+		attemptEvents.AttemptStarted()
+	}
 	ctx = telemetry.WithRecorder(ctx, rec)
+	ctx = telemetry.WithAttemptEventMachine(ctx, attemptEvents)
 	ctx = withAssetOperationTracker(ctx, assetTracker)
 	ctx = withCacheAccessContext(ctx, pte.JobID, "asset")
 	ctx = telemetry.WithCacheAccessWorkerID(ctx, w.config.WorkerID)
@@ -163,10 +173,16 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	}
 
 	report, runErr := w.taskRunner.Run(ctx, spec)
+	if report.AttemptEvents == nil {
+		report.AttemptEvents = attemptEvents
+	}
 	attachAssetOperations(&report, assetTracker)
 	attachAssetOperationsToPhaseMarkers(&report)
 	if runErr != nil {
 		return &report, fmt.Errorf("taskrunner.Run: %w", runErr)
+	}
+	if report.AttemptEvents != nil {
+		report.AttemptEvents.ArtifactVerifyStarted()
 	}
 	if report.Status != "succeeded" {
 		// Preserve cancellation identity for the wire result. Wrapping every
@@ -182,9 +198,15 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	// Hash before declaring the task succeeded.
 	for i, ref := range report.Outputs {
 		if ref.Hash == "" {
+			if report.AttemptEvents != nil {
+				report.AttemptEvents.ArtifactVerified(telemetry.StatusFailed, fmt.Errorf("output artifact %d has empty hash", i))
+			}
 			return &report, fmt.Errorf("executor %s succeeded but output artifact %d has empty hash (type=%q uri=%q) — executor must provide a content hash for every produced artifact",
 				report.ExecutorKey, i, ref.Type, ref.URI)
 		}
+	}
+	if report.AttemptEvents != nil {
+		report.AttemptEvents.ArtifactVerified(telemetry.StatusOK, nil)
 	}
 	return &report, nil
 }
@@ -283,6 +305,22 @@ func (w *Worker) withJobProgressCallback(parent context.Context, taskID string) 
 			// LastProgressAt describes the newest engine observation;
 			// LastPublishedAt is only the local wake/throttle clock and
 			// is never serialized as operator telemetry.
+			if current.AttemptEvents != nil {
+				// Emit lifecycle edges before the progress sample updates the
+				// machine's last phase/segment context. Segment completion is
+				// emitted after the sample because ProgressUpdated resets the
+				// completion edge for the next segment.
+				if phaseChanged {
+					current.AttemptEvents.PhaseChanged(snapshot.Phase)
+				}
+				if segmentChanged {
+					current.AttemptEvents.SegmentStarted(snapshot.Segment, snapshot.Phase)
+				}
+				current.AttemptEvents.ProgressUpdated(snapshot.Phase, snapshot.Segment, snapshot.Percent, snapshot.ElapsedMS, snapshot.FramesEncoded, now)
+				if segmentCompleted {
+					current.AttemptEvents.SegmentCompleted(snapshot.Segment, snapshot.Phase)
+				}
+			}
 			current.Progress = JobProgress{
 				Percent:     snapshot.Percent,
 				Scene:       snapshot.Scene,

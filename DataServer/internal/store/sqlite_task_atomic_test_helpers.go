@@ -138,7 +138,8 @@ CREATE TABLE worker_task_runtime (
 	frames_composited INTEGER NOT NULL DEFAULT 0,
 	ffmpeg_speed_x REAL NOT NULL DEFAULT 0,
 	elapsed_ms INTEGER NOT NULL DEFAULT 0,
-	cumulative_metrics_json TEXT NOT NULL DEFAULT '{}'
+	cumulative_metrics_json TEXT NOT NULL DEFAULT '{}',
+	canonical_events_json TEXT NOT NULL DEFAULT '[]'
 );
 `
 

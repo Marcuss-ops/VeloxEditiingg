@@ -55,8 +55,9 @@ type TaskExecutionReport struct {
 	DetailedPhases []DetailedPhaseTiming `json:"detailed_phases,omitempty"`
 	// AttemptRecorder remains attached until the outer worker lifecycle has
 	// finished upload/commit. It is transport-local state and never serialized.
-	AttemptRecorder       *telemetry.EventRecorder `json:"-"`
-	AttemptRecorderOffset int                      `json:"-"`
+	AttemptRecorder       *telemetry.EventRecorder       `json:"-"`
+	AttemptRecorderOffset int                            `json:"-"`
+	AttemptEvents         *telemetry.AttemptEventMachine `json:"-"`
 	// CacheBaseline stores provider counters at attempt start so the report
 	// carries per-attempt deltas rather than worker lifetime totals.
 	CacheBaseline    map[string]int64 `json:"-"`

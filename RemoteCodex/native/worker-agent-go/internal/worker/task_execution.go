@@ -133,6 +133,14 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 		}
 	}
 
+	if report != nil && report.AttemptEvents != nil {
+		status := telemetry.StatusOK
+		if execErr != nil {
+			status = telemetry.StatusFailed
+		}
+		report.AttemptEvents.AttemptCompleted(status)
+	}
+
 	// Upload/commit runs outside TaskRunner.Run. Drain those late events
 	// only after the complete attempt lifecycle, preserving the runner
 	// events already snapshotted in report.DetailedPhases.
