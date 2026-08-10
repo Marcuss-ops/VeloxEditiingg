@@ -32,6 +32,8 @@ ExecStartPre=/usr/bin/docker pull ${VELOX_SERVER_IMAGE}
 # converged env points at /opt/velox/current/.velox. The native service used
 # this path; switching to Docker must preserve the same DB rather than
 # creating or copying a second database under /var/lib/velox.
+# The production gRPC certificate paths are rooted at /opt/velox/certs;
+# expose that existing certificate tree read-only inside the container.
 ExecStart=/usr/bin/docker run --rm \
     --name velox-server \
     --network host \
@@ -39,6 +41,7 @@ ExecStart=/usr/bin/docker run --rm \
     --env VELOX_HTTP_PORT=${VELOX_MASTER_PORT} \
     --mount type=bind,src=/var/lib/velox,dst=/var/lib/velox \
     --mount type=bind,src=/opt/velox/current/.velox,dst=/opt/velox/current/.velox \
+    --mount type=bind,src=/opt/velox/certs,dst=/opt/velox/certs,readonly \
     --mount type=bind,src=/etc/velox,dst=/etc/velox,readonly \
     ${VELOX_SERVER_IMAGE}
 ExecStop=/usr/bin/docker stop -t 60 velox-server
