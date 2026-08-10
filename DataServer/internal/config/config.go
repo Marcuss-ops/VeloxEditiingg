@@ -88,6 +88,15 @@ func (c *Config) Validate() error {
 	if c.Auth.ProjectBridgeContractVersion != "instaedit.velox.project-bridge.v1" {
 		return fmt.Errorf("config: VELOX_PROJECT_BRIDGE_CONTRACT_VERSION must be instaedit.velox.project-bridge.v1")
 	}
+	// Postgres is retained only for explicitly env-gated contract tests.
+	// Reject it at the configuration boundary so production bootstrap never
+	// reaches database.Open (and therefore never opens or pings a Postgres
+	// connection). Keep this check before DBPath validation so an unsupported
+	// Postgres deployment receives the actionable driver error even when it
+	// does not provide a SQLite path.
+	if strings.EqualFold(strings.TrimSpace(c.Database.Driver), "postgres") {
+		return fmt.Errorf("config: VELOX_DB_DRIVER=postgres is not supported at runtime; only sqlite is configured for the master")
+	}
 	if c.Compatibility.Mode == "" {
 		c.Compatibility.Mode = "strict"
 	}
@@ -105,6 +114,17 @@ func (c *Config) Validate() error {
 	}
 	if !filepath.IsAbs(c.Database.DBPath) {
 		return fmt.Errorf("config: VELOX_DB_PATH must be an absolute path, got: %s", c.Database.DBPath)
+	}
+	// YAGNI fail-fast (Blocco 4 step #2): VELOX_DB_DRIVER=postgres is not
+	// a runtime user story today. Reject it HERE, before any I/O: the
+	// legacy path reached database.Open (which pings the DSN) and only
+	// then refused the boot. Failing in Validate keeps the refusal
+	// pure-config — no connection is ever opened for an unsupported
+	// driver. The narrow-contract Postgres adapters stay as test-only
+	// helpers and remerge via a single cutover PR when all master
+	// modules have migrated off *SQLiteStore.
+	if strings.EqualFold(strings.TrimSpace(c.Database.Driver), "postgres") {
+		return fmt.Errorf("config: VELOX_DB_DRIVER=postgres is not supported at runtime (Blocco 4 YAGNI); only sqlite is wired. The narrow-contract Postgres adapters remain test-only helpers and will be promoted together when master modules complete the SQLiteStore cutover")
 	}
 	// GRPC control-plane fail-fast: if push mode is the primary delivery
 	// channel then gRPC must be enabled, otherwise the master accepts HTTP

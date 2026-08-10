@@ -75,10 +75,10 @@ func buildPersistence(cfg *config.Config) (*persistenceDeps, error) {
 		// test-only helpers env-gated on VELOX_TEST_POSTGRES_DSN; they
 		// remerge into the master boot path via a single cutover PR
 		// once ALL master modules have migrated off *SQLiteStore.
-		// Until then, VELOX_DB_DRIVER=postgres is a fail-loud
-		// misconfiguration — the master refuses to start so the
-		// operator notices instead of silently booting against
-		// SQLite with a contradicting env var.
+		// Defense-in-depth only: cfg.Validate() (called above) already
+		// rejects VELOX_DB_DRIVER=postgres BEFORE any I/O, so Open is
+		// never reached with this driver in production. This branch
+		// exists for direct-Handle callers that bypass Validate.
 		_ = handle.DB.Close()
 		return nil, fmt.Errorf("bootstrap: VELOX_DB_DRIVER=postgres is not supported at runtime (Blocco 4 YAGNI); only sqlite is wired. The narrow-contract Postgres adapters remain as test-only helpers and will be promoted together when master modules complete the SQLiteStore cutover")
 	default:

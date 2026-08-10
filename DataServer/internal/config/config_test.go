@@ -122,6 +122,20 @@ func TestFromEnv_BootstrapTypedValues(t *testing.T) {
 	}
 }
 
+func TestValidate_RejectsPostgresBeforeSQLitePathValidation(t *testing.T) {
+	cfg := &Config{Database: DatabaseConfig{Driver: "postgres", URL: "postgres://user:pass@db.example/velox"}}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected Postgres runtime driver to be rejected")
+	}
+	if !strings.Contains(err.Error(), "VELOX_DB_DRIVER=postgres is not supported at runtime") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(err.Error(), "VELOX_DB_PATH") {
+		t.Fatalf("Postgres rejection should precede SQLite path validation: %v", err)
+	}
+}
+
 func TestValidate_RelativeDBPath(t *testing.T) {
 	cfg := &Config{
 		Database: DatabaseConfig{DBPath: "relative/path/velox.db"},
@@ -200,6 +214,25 @@ func TestLoadPipelineConfigRetainsOnlyLiveSettings(t *testing.T) {
 	cfg := FromRaw(raw)
 	if cfg.Pipeline.OllamaURL != "http://ollama.internal:11434" || cfg.Pipeline.OllamaModel != "test-model" {
 		t.Fatalf("live pipeline settings were not loaded: %+v", cfg.Pipeline)
+	}
+}
+
+// TestValidate_RejectsPostgresDriver pins the YAGNI fail-fast (Blocco 4
+// step #2): VELOX_DB_DRIVER=postgres must be rejected inside
+// Config.Validate, BEFORE any database.Open I/O. Without this test a
+// regression would silently re-allow the legacy open-then-refuse path in
+// buildPersistence, which pings the Postgres DSN and only then aborts.
+func TestValidate_RejectsPostgresDriver(t *testing.T) {
+	cfg := &Config{
+		Database: DatabaseConfig{DBPath: t.TempDir() + "/velox.db", Driver: "postgres"},
+		Workers:  WorkersConfig{AllowedWorkerIDs: []string{"velox-worker-1", "velox-worker-2"}},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for postgres driver, got nil")
+	}
+	if !strings.Contains(err.Error(), "postgres is not supported at runtime") {
+		t.Fatalf("expected postgres YAGNI error, got: %v", err)
 	}
 }
 
