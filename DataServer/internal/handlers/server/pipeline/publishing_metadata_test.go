@@ -3,6 +3,8 @@ package pipeline
 import (
 	"reflect"
 	"testing"
+
+	"velox-shared/contract/deliveryplan"
 )
 
 func TestNormalizeExternalJobSubmissionSeparatesPublicationSpecsFromWorkerPayload(t *testing.T) {
@@ -69,7 +71,7 @@ func TestNormalizeExternalJobSubmissionSeparatesPublicationSpecsFromWorkerPayloa
 	}
 }
 
-func TestSubmitRequestToRawPayloadStripsLegacyDeliveryMetadata(t *testing.T) {
+func TestProjectWorkerPayloadStripsLegacyDeliveryMetadata(t *testing.T) {
 	retryBudget := 3
 	publishingMetadata := map[string]interface{}{
 		"title":       "Video title",
@@ -93,6 +95,8 @@ func TestSubmitRequestToRawPayloadStripsLegacyDeliveryMetadata(t *testing.T) {
 		}},
 	}
 
+	// The raw canonical payload is also the source for the control-plane
+	// envelope, so it must retain delivery metadata until that boundary.
 	raw := submitRequestToRawPayload(req)
 	plan, ok := raw["delivery_plan"].([]interface{})
 	if !ok || len(plan) != 1 {
@@ -105,7 +109,39 @@ func TestSubmitRequestToRawPayloadStripsLegacyDeliveryMetadata(t *testing.T) {
 	if entry["destination_id"] != "youtube-en" || entry["retry_budget"] != 3 {
 		t.Fatalf("legacy routing fields changed: %#v", entry)
 	}
-	if _, present := entry["metadata"]; present {
-		t.Fatalf("legacy delivery metadata leaked into renderer raw payload: %#v", entry["metadata"])
+	if metadata, present := entry["metadata"]; !present {
+		t.Fatalf("delivery metadata was lost before control-plane extraction")
+	} else if !reflect.DeepEqual(metadata, publishingMetadata) {
+		t.Fatalf("raw delivery metadata changed before control-plane extraction: got=%#v want=%#v", metadata, publishingMetadata)
+	}
+
+	controlPlane := deliveryplan.ExtractEnvelope(raw)
+	controlPlan, ok := controlPlane["delivery_plan"].([]interface{})
+	if !ok || len(controlPlan) != 1 {
+		t.Fatalf("control-plane delivery_plan shape = %#v", controlPlane["delivery_plan"])
+	}
+	controlEntry, ok := controlPlan[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("control-plane delivery entry shape = %#v", controlPlan[0])
+	}
+	if metadata, present := controlEntry["metadata"]; !present {
+		t.Fatalf("delivery metadata was lost from control-plane envelope")
+	} else if !reflect.DeepEqual(metadata, publishingMetadata) {
+		t.Fatalf("control-plane delivery metadata changed: got=%#v want=%#v", metadata, publishingMetadata)
+	}
+
+	// The renderer projection is the separate boundary that must strip all
+	// delivery routing, including nested legacy metadata.
+	workerPayload, err := projectWorkerPayload(req)
+	if err != nil {
+		t.Fatalf("projectWorkerPayload: %v", err)
+	}
+	if _, present := workerPayload["delivery_plan"]; present {
+		t.Fatalf("delivery_plan leaked into renderer payload: %#v", workerPayload["delivery_plan"])
+	}
+	for _, key := range []string{"metadata", "title", "description", "tags", "privacy", "publish_at"} {
+		if _, present := workerPayload[key]; present {
+			t.Fatalf("legacy delivery field %q leaked into renderer payload: %#v", key, workerPayload[key])
+		}
 	}
 }
