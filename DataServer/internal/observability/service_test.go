@@ -380,6 +380,30 @@ func TestService_PhaseTrends_WithExecutor(t *testing.T) {
 	}
 }
 
+func TestApplyLiveAttemptOverlayPreservesDurableFields(t *testing.T) {
+	target := AttemptSummary{
+		AttemptID: "attempt-durable", AttemptNumber: 2,
+		Status: taskattempts.AttemptStatusFailed, WorkerID: "worker-durable",
+		ErrorCode: "FINAL_ERROR", ErrorMessage: "durable failure",
+		StartedAt: "2026-08-10T10:00:00Z", CompletedAt: "2026-08-10T10:04:00Z",
+		Metrics: &taskattempts.AttemptMetrics{AttemptID: "attempt-durable", FramesEncoded: 12},
+	}
+	applyLiveAttemptOverlay(&target, &LiveAttempt{
+		AttemptID: "attempt-live", WorkerID: "worker-live", RuntimeStatus: "RUNNING",
+		ProgressPhase: "render", ProgressPercent: 80, FramesEncoded: 999,
+		StartedAt: "2026-08-10T09:00:00Z", LastProgressAt: "2026-08-10T10:03:00Z",
+	})
+	if !target.Live || target.Status != taskattempts.AttemptStatusFailed || target.WorkerID != "worker-durable" || target.ErrorCode != "FINAL_ERROR" || target.ErrorMessage != "durable failure" {
+		t.Fatalf("overlay replaced durable identity/status/error: %#v", target)
+	}
+	if target.StartedAt != "2026-08-10T10:00:00Z" || target.CompletedAt != "2026-08-10T10:04:00Z" || target.Metrics == nil || target.Metrics.FramesEncoded != 12 {
+		t.Fatalf("overlay replaced durable timestamps/metrics: %#v", target)
+	}
+	if target.Phase != "render" || target.ProgressPercent != 80 || target.FramesEncoded != 999 {
+		t.Fatalf("overlay did not apply volatile progress: %#v", target)
+	}
+}
+
 func TestService_SummarizeTaskIncludesLiveAttemptProgress(t *testing.T) {
 	svc, tasks, _, _, _ := newTestService()
 	tasks.tasks["T-live"] = &taskgraph.Task{ID: "T-live", JobID: "J-live", Status: taskgraph.StatusRunning, AttemptCount: 1}
@@ -591,6 +615,25 @@ func TestService_SummarizeTaskDropsRuntimeForPartitionedWorker(t *testing.T) {
 	}
 	if len(result.Attempts) != 0 || result.AttemptID != "" || result.WorkerID != "" || result.Progress != nil {
 		t.Fatalf("runtime from partitioned worker was exposed as live: %#v", result)
+	}
+}
+
+func TestService_SummarizeTaskKeepsMissingDurableAttemptAsTemporaryOverlay(t *testing.T) {
+	svc, tasks, _, _, _ := newTestService()
+	tasks.tasks["T-missing-durable"] = &taskgraph.Task{ID: "T-missing-durable", JobID: "J-missing-durable", Status: taskgraph.StatusRunning, AttemptCount: 1}
+	svc.WithLiveAttempts(stubLiveAttemptReader{live: &LiveAttempt{
+		TaskID: "T-missing-durable", JobID: "J-missing-durable", AttemptID: "A-missing-durable", AttemptNumber: 1,
+		WorkerID: "worker-live", RuntimeStatus: "RUNNING", ProgressPercent: 50,
+	}})
+	result, err := svc.SummarizeTask(context.Background(), "T-missing-durable")
+	if err != nil {
+		t.Fatalf("SummarizeTask() error: %v", err)
+	}
+	if len(result.Attempts) != 1 || !result.Attempts[0].Live || result.Attempts[0].AttemptID != "A-missing-durable" {
+		t.Fatalf("missing durable row should remain a temporary live overlay: %#v", result)
+	}
+	if result.AttemptID != "A-missing-durable" || result.Progress == nil || result.Progress.Percent != 50 {
+		t.Fatalf("temporary overlay was not projected consistently: %#v", result)
 	}
 }
 

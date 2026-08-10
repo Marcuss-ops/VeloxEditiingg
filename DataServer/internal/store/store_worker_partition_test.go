@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -46,8 +47,22 @@ func TestPartitionDetectionEmitsTaskRuntimeDisappeared(t *testing.T) {
 	workerID := "partition-test-1"
 	now := time.Now().UTC()
 
-	// Step 1 — initial CONNECTED heartbeat that establishes the worker
-	// row and 3 active worker_task_runtime rows.
+	// Step 1 — seed the durable attempt rows first. Heartbeats are a
+	// volatile projection only and must not manufacture runtime history
+	// for orphan attempt IDs.
+	nowText := now.Format(time.RFC3339Nano)
+	for i := 1; i <= 3; i++ {
+		if _, err := s.DB().Exec(`INSERT INTO task_attempts
+			(id, task_id, job_id, attempt_number, worker_id, lease_id, status, report_version, created_at, updated_at)
+			VALUES (?, ?, ?, 1, ?, ?, 'RUNNING', 0, ?, ?)`,
+			fmt.Sprintf("attempt-%d", i), fmt.Sprintf("task-%d", i), fmt.Sprintf("job-%d", i),
+			workerID, fmt.Sprintf("lease-%d", i), nowText, nowText); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Initial CONNECTED heartbeat establishes the worker row and 3 active
+	// worker_task_runtime rows.
 	initialRaw, _ := json.Marshal(map[string]any{
 		"worker_id":   workerID,
 		"worker_name": "node-b",

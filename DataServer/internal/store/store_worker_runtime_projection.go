@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -139,12 +140,45 @@ func reconcileWorkerRuntime(ctx context.Context, tx *sql.Tx, workerID, sessionID
 		seen[taskID] = true
 		// Heartbeats can race with TaskResult delivery. Never recreate a
 		// volatile runtime row from a late heartbeat after the canonical
-		// attempt has already reached a terminal state.
-		var attemptStatus string
-		attemptErr := tx.QueryRowContext(ctx, `SELECT status FROM task_attempts WHERE id=?`, asString(task["attempt_id"])).Scan(&attemptStatus)
-		if attemptErr == nil && attemptStatus != "LEASED" && attemptStatus != "RUNNING" {
+		// attempt has already reached a terminal state. The full identity
+		// tuple is canonical too: an attempt ID alone is not enough to
+		// authorize a runtime projection.
+		var canonicalTaskID, canonicalJobID, canonicalWorkerID, canonicalLeaseID, attemptStatus string
+		var canonicalAttemptNumber int
+		attemptID := asString(task["attempt_id"])
+		attemptErr := tx.QueryRowContext(ctx, `SELECT task_id,job_id,attempt_number,worker_id,lease_id,status FROM task_attempts WHERE id=?`, attemptID).Scan(
+			&canonicalTaskID, &canonicalJobID, &canonicalAttemptNumber, &canonicalWorkerID, &canonicalLeaseID, &attemptStatus,
+		)
+		if errors.Is(attemptErr, sql.ErrNoRows) {
+			// A heartbeat is not allowed to manufacture durable history.
+			// AcceptTaskAtomic writes task_attempts and worker_task_runtime
+			// together, so a missing attempt here is an orphan/late heartbeat
+			// and must be discarded rather than recreated as a live success.
 			delete(seen, taskID)
-			if _, err := tx.ExecContext(ctx, `DELETE FROM worker_task_runtime WHERE task_id=? AND attempt_id=?`, taskID, asString(task["attempt_id"])); err != nil {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM worker_task_runtime WHERE task_id=? AND attempt_id=?`, taskID, attemptID); err != nil {
+				return err
+			}
+			continue
+		}
+		if attemptErr != nil {
+			return fmt.Errorf("lookup task attempt %s for runtime %s: %w", attemptID, taskID, attemptErr)
+		}
+		if attemptStatus != "LEASED" && attemptStatus != "RUNNING" {
+			delete(seen, taskID)
+			if _, err := tx.ExecContext(ctx, `DELETE FROM worker_task_runtime WHERE task_id=? AND attempt_id=?`, taskID, attemptID); err != nil {
+				return err
+			}
+			continue
+		}
+		if canonicalTaskID != taskID || canonicalJobID != asString(task["job_id"]) ||
+			canonicalAttemptNumber != int(int64OrDefault(task["attempt"], 1)) ||
+			canonicalWorkerID != workerID || canonicalLeaseID != asString(task["lease_id"]) {
+			// A stale or spoofed heartbeat must not project an attempt under
+			// another task/job/worker/lease identity. Remove any prior row
+			// for this exact volatile identity and keep it out of seen so the
+			// normal missing-heartbeat reconciliation cannot preserve it.
+			delete(seen, taskID)
+			if _, err := tx.ExecContext(ctx, `DELETE FROM worker_task_runtime WHERE task_id=? AND attempt_id=?`, taskID, attemptID); err != nil {
 				return err
 			}
 			continue

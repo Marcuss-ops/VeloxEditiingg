@@ -17,6 +17,13 @@ func TestPersistWorkerHeartbeat_PersistsCanonicalAttemptEvents(t *testing.T) {
 		"worker-events-1", "worker-events-1", "worker", "{}", "2026-08-10T12:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.DB().Exec(`INSERT INTO task_attempts
+		(id, task_id, job_id, attempt_number, worker_id, lease_id, status, report_version, created_at, updated_at)
+		VALUES (?, ?, ?, 1, ?, ?, 'RUNNING', 0, ?, ?)`,
+		"attempt-events-1", "task-events-1", "job-events-1", "worker-events-1", "lease-events-1",
+		"2026-08-10T12:00:00Z", "2026-08-10T12:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
 	raw, _ := json.Marshal(map[string]any{
 		"worker_id": "worker-events-1", "status": "busy", "current_job": "job-events-1",
 		"metrics": map[string]any{"active_jobs": []any{map[string]any{

@@ -49,7 +49,7 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 			}
 		}
 	}
-	liveActive := liveAttemptIsEligible(live, task, attempts)
+	liveDecision := reconcileLiveAttempt(live, task, attempts)
 
 	var firstStart *time.Time
 	var lastEnd *time.Time
@@ -65,29 +65,11 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 			PhaseBreakdown: make(map[string]int64),
 		}
 		as.WorkerName = s.workerDisplayName(as.WorkerID)
-		// liveActive is decided once by liveAttemptIsEligible before this
-		// loop. That authority includes the matching durable attempt status,
-		// so merge precedence cannot depend on the order of durable rows.
-		if liveActive && live != nil && live.AttemptID == a.ID && !a.Status.IsTerminal() {
-			as.Live = true
-			as.Status = liveAttemptStatus(live)
-			as.WorkerID = live.WorkerID
-			as.WorkerName = s.workerDisplayName(as.WorkerID)
-			as.Phase = live.ProgressPhase
-			as.ProgressPercent = live.ProgressPercent
-			as.CurrentScene = live.CurrentScene
-			as.TotalScenes = live.TotalScenes
-			as.CurrentSegment = live.CurrentSegment
-			as.TotalSegments = live.TotalSegments
-			as.FramesEncoded = live.FramesEncoded
-			as.FramesDecoded = live.FramesDecoded
-			as.FramesComposited = live.FramesComposited
-			as.FFmpegSpeedX = live.FFmpegSpeedX
-			as.ElapsedMS = live.ElapsedMS
-			as.StartedAt = live.StartedAt
-			as.LastProgressAt = live.LastProgressAt
-			as.CumulativeMetrics = live.CumulativeMetrics
-			as.CanonicalAttemptEvents = live.CanonicalAttemptEvents
+		// Reconciliation is decided once before this loop. Only volatile
+		// progress fields are overlaid; durable identity, status, errors,
+		// timestamps, and final metrics remain authoritative.
+		if live != nil && liveDecision.overlaysAttempt(a.ID) {
+			applyLiveAttemptOverlay(&as, live)
 		}
 		if a.StartedAt != nil {
 			as.StartedAt = a.StartedAt.UTC().Format(time.RFC3339Nano)
@@ -161,7 +143,7 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 			if metrics.PeakVRAMBytes > summary.PeakVRAMBytes {
 				summary.PeakVRAMBytes = metrics.PeakVRAMBytes
 			}
-		} else if liveActive && live != nil && live.AttemptID == a.ID && !a.Status.IsTerminal() {
+		} else if live != nil && liveDecision.overlaysAttempt(a.ID) {
 			// Before final TaskResult ingest, expose the same typed metric
 			// shape that the final report will persist. This is a projection
 			// of worker_task_runtime, not a second telemetry store; once the
@@ -217,46 +199,27 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 
 		summary.Attempts = append(summary.Attempts, as)
 	}
-	if liveActive {
-		found := false
-		for _, existing := range summary.Attempts {
-			if existing.AttemptID == live.AttemptID {
-				found = true
-				break
-			}
+	if live != nil && liveDecision.hasTemporaryOverlay() {
+		// Claim/accept visibility window: expose the volatile row as a
+		// temporary overlay until the durable attempt becomes readable.
+		pending := AttemptSummary{
+			AttemptID: live.AttemptID, AttemptNumber: live.AttemptNumber,
+			Status: liveAttemptStatus(live), WorkerID: live.WorkerID,
+			WorkerName: s.workerDisplayName(live.WorkerID),
+			Metrics:    liveAttemptMetrics(live),
 		}
-		if !found {
-			summary.Attempts = append(summary.Attempts, AttemptSummary{
-				AttemptID: live.AttemptID, AttemptNumber: live.AttemptNumber,
-				Status: liveAttemptStatus(live), WorkerID: live.WorkerID,
-				WorkerName: s.workerDisplayName(live.WorkerID),
-				Metrics:    liveAttemptMetrics(live),
-				Live:       true, Phase: live.ProgressPhase, ProgressPercent: live.ProgressPercent,
-				CurrentScene: live.CurrentScene, TotalScenes: live.TotalScenes,
-				CurrentSegment: live.CurrentSegment, TotalSegments: live.TotalSegments,
-				FramesEncoded: live.FramesEncoded, FramesDecoded: live.FramesDecoded,
-				FramesComposited: live.FramesComposited, FFmpegSpeedX: live.FFmpegSpeedX,
-				ElapsedMS: live.ElapsedMS, StartedAt: live.StartedAt,
-				LastProgressAt: live.LastProgressAt, CumulativeMetrics: live.CumulativeMetrics,
-				CanonicalAttemptEvents: live.CanonicalAttemptEvents,
-			})
-		}
+		applyLiveAttemptOverlay(&pending, live)
+		summary.Attempts = append(summary.Attempts, pending)
 	}
 
-	if liveActive {
-		summary.AttemptID = live.AttemptID
-		summary.WorkerID = live.WorkerID
-		summary.Phase = live.ProgressPhase
-		summary.Progress = &ExecutionProgress{
-			Percent: live.ProgressPercent, Scene: live.CurrentScene, ScenesTotal: live.TotalScenes,
-			Segment: live.CurrentSegment, SegmentsTotal: live.TotalSegments,
+	// Derive the top-level live projection from the reconciled attempt row,
+	// never directly from the volatile reader. This keeps the endpoint's
+	// compact fields and Attempts slice on one authority.
+	for i := range summary.Attempts {
+		if summary.Attempts[i].Live {
+			applyExecutionLiveOverlay(summary, &summary.Attempts[i])
+			break
 		}
-		summary.LiveMetrics = &ExecutionLiveMetrics{
-			ElapsedMS: live.ElapsedMS, FramesEncoded: live.FramesEncoded,
-			FramesDecoded: live.FramesDecoded, FramesComposited: live.FramesComposited,
-			FFmpegSpeedX: live.FFmpegSpeedX, CumulativeMetrics: live.CumulativeMetrics,
-		}
-		summary.LastProgressAt = live.LastProgressAt
 	}
 	if firstStart != nil && lastEnd != nil {
 		summary.TotalWallTimeMS = lastEnd.Sub(*firstStart).Milliseconds()

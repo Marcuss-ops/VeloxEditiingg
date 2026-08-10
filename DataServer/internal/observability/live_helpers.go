@@ -2,6 +2,34 @@ package observability
 
 import "velox-server/internal/taskattempts"
 
+// applyLiveAttemptOverlay copies only volatile execution fields onto a
+// durable/non-terminal summary. Identity, status, errors, timestamps, and
+// final metrics remain owned by the durable attempt; the live row is an
+// explicitly temporary overlay.
+func applyLiveAttemptOverlay(target *AttemptSummary, live *LiveAttempt) {
+	if target == nil || live == nil {
+		return
+	}
+	target.Live = true
+	target.Phase = live.ProgressPhase
+	target.ProgressPercent = live.ProgressPercent
+	target.CurrentScene = live.CurrentScene
+	target.TotalScenes = live.TotalScenes
+	target.CurrentSegment = live.CurrentSegment
+	target.TotalSegments = live.TotalSegments
+	target.FramesEncoded = live.FramesEncoded
+	target.FramesDecoded = live.FramesDecoded
+	target.FramesComposited = live.FramesComposited
+	target.FFmpegSpeedX = live.FFmpegSpeedX
+	target.ElapsedMS = live.ElapsedMS
+	if target.StartedAt == "" {
+		target.StartedAt = live.StartedAt
+	}
+	target.LastProgressAt = live.LastProgressAt
+	target.CumulativeMetrics = live.CumulativeMetrics
+	target.CanonicalAttemptEvents = live.CanonicalAttemptEvents
+}
+
 func liveAttemptStatus(live *LiveAttempt) taskattempts.AttemptStatus {
 	if live == nil {
 		return taskattempts.AttemptStatusRunning
@@ -11,6 +39,25 @@ func liveAttemptStatus(live *LiveAttempt) taskattempts.AttemptStatus {
 	// the durable wire contract and reports every eligible non-terminal
 	// runtime phase as RUNNING.
 	return taskattempts.AttemptStatusRunning
+}
+
+func applyExecutionLiveOverlay(summary *ExecutionSummary, attempt *AttemptSummary) {
+	if summary == nil || attempt == nil || !attempt.Live {
+		return
+	}
+	summary.AttemptID = attempt.AttemptID
+	summary.WorkerID = attempt.WorkerID
+	summary.Phase = attempt.Phase
+	summary.Progress = &ExecutionProgress{
+		Percent: attempt.ProgressPercent, Scene: attempt.CurrentScene, ScenesTotal: attempt.TotalScenes,
+		Segment: attempt.CurrentSegment, SegmentsTotal: attempt.TotalSegments,
+	}
+	summary.LiveMetrics = &ExecutionLiveMetrics{
+		ElapsedMS: attempt.ElapsedMS, FramesEncoded: attempt.FramesEncoded,
+		FramesDecoded: attempt.FramesDecoded, FramesComposited: attempt.FramesComposited,
+		FFmpegSpeedX: attempt.FFmpegSpeedX, CumulativeMetrics: attempt.CumulativeMetrics,
+	}
+	summary.LastProgressAt = attempt.LastProgressAt
 }
 
 func liveAttemptMetrics(live *LiveAttempt) *taskattempts.AttemptMetrics {

@@ -51,6 +51,14 @@ func TestPersistWorkerHeartbeatReconcilesRuntimeAtomically(t *testing.T) {
 	}
 	defer s.Close()
 
+	if _, err := s.DB().Exec(`INSERT INTO task_attempts
+		(id,task_id,job_id,attempt_number,worker_id,lease_id,status,report_version,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		"attempt-1", "task-1", "job-1", 1, "worker-runtime-1", "lease-1",
+		"RUNNING", 0, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+
 	raw, _ := json.Marshal(map[string]any{
 		"worker_id": "worker-runtime-1", "worker_name": "pc-b", "status": "busy",
 		"current_job": "job-1", "schedulable": true, "node_role": "worker",
@@ -116,6 +124,128 @@ func TestPersistWorkerHeartbeatReconcilesRuntimeAtomically(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("stale runtime rows=%d, want 0", count)
+	}
+}
+
+func TestPersistWorkerHeartbeatDoesNotRecreateTerminalAttemptRuntime(t *testing.T) {
+	s, err := NewSQLiteStore(t.TempDir() + "/worker-runtime-terminal-fence.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	const (
+		workerID  = "worker-terminal-fence"
+		attemptID = "attempt-terminal-fence"
+	)
+	if _, err := s.DB().Exec(`INSERT INTO workers(worker_id,worker_name,node_role,raw_json,migrated_at) VALUES(?,?,?,?,?)`,
+		workerID, workerID, "worker", "{}", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB().Exec(`INSERT INTO task_attempts
+		(id,task_id,job_id,attempt_number,worker_id,lease_id,status,report_version,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		attemptID, "task-terminal-fence", "job-terminal-fence", 1, workerID, "lease-terminal-fence",
+		"SUCCEEDED", 1, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, _ := json.Marshal(map[string]any{
+		"worker_id": workerID, "status": "busy", "current_job": "job-terminal-fence",
+		"metrics": map[string]any{"active_jobs": []any{map[string]any{
+			"job_id": "job-terminal-fence", "task_id": "task-terminal-fence", "attempt_id": attemptID,
+			"attempt": 1, "lease_id": "lease-terminal-fence", "job_type": "render", "status": "RUNNING",
+		}}},
+	})
+	if err := s.PersistWorkerHeartbeat(context.Background(), raw, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	var count int
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM worker_task_runtime WHERE attempt_id=?`, attemptID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("late heartbeat recreated terminal attempt runtime rows=%d, want 0", count)
+	}
+}
+
+func TestPersistWorkerHeartbeatRejectsMismatchedAttemptIdentity(t *testing.T) {
+	s, err := NewSQLiteStore(t.TempDir() + "/worker-runtime-identity-fence.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	const (
+		workerID  = "worker-identity-fence"
+		attemptID = "attempt-identity-fence"
+	)
+	if _, err := s.DB().Exec(`INSERT INTO task_attempts
+		(id,task_id,job_id,attempt_number,worker_id,lease_id,status,report_version,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		attemptID, "canonical-task", "canonical-job", 1, workerID, "canonical-lease",
+		"RUNNING", 0, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, _ := json.Marshal(map[string]any{
+		"worker_id": workerID, "status": "busy", "current_job": "spoofed-job",
+		"metrics": map[string]any{"active_jobs": []any{map[string]any{
+			"job_id": "spoofed-job", "task_id": "spoofed-task", "attempt_id": attemptID,
+			"attempt": 1, "lease_id": "spoofed-lease", "job_type": "render", "status": "RUNNING",
+		}}},
+	})
+	if err := s.PersistWorkerHeartbeat(context.Background(), raw, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	var count int
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM worker_task_runtime`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("mismatched attempt identity created runtime rows=%d, want 0", count)
+	}
+}
+
+func TestPersistWorkerHeartbeatRejectsMismatchedAttemptNumber(t *testing.T) {
+	s, err := NewSQLiteStore(t.TempDir() + "/worker-runtime-attempt-number-fence.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	const (
+		workerID  = "worker-attempt-number-fence"
+		attemptID = "attempt-attempt-number-fence"
+	)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := s.DB().Exec(`INSERT INTO task_attempts
+		(id,task_id,job_id,attempt_number,worker_id,lease_id,status,report_version,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		attemptID, "task-attempt-number", "job-attempt-number", 2, workerID, "lease-attempt-number",
+		"RUNNING", 0, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, _ := json.Marshal(map[string]any{
+		"worker_id": workerID, "status": "busy", "current_job": "job-attempt-number",
+		"metrics": map[string]any{"active_jobs": []any{map[string]any{
+			"job_id": "job-attempt-number", "task_id": "task-attempt-number", "attempt_id": attemptID,
+			"attempt": 1, "lease_id": "lease-attempt-number", "job_type": "render", "status": "RUNNING",
+		}}},
+	})
+	if err := s.PersistWorkerHeartbeat(context.Background(), raw, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	var count int
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM worker_task_runtime`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("mismatched attempt number created runtime rows=%d, want 0", count)
 	}
 }
 

@@ -36,9 +36,11 @@ type SegmentReader interface {
 	ListSegmentTimings(ctx context.Context, attemptID string) ([]taskattempts.SegmentTiming, error)
 }
 
-// LiveAttemptReader is the existing volatile worker_task_runtime projection.
-// It supplies the current Attempt state while durable attempt metrics are
-// still being produced and therefore may not exist yet.
+// LiveAttemptReader is the volatile worker_task_runtime projection.
+// It is an overlay only: durable task_attempts history remains authoritative
+// for identity, status, errors, timestamps, and final metrics. A live row may
+// be exposed temporarily during claim/accept visibility, but is never durable
+// history and must not resurrect a terminal attempt.
 type LiveAttemptReader interface {
 	GetWorkerTaskRuntimeByJob(ctx context.Context, jobID string) (*LiveAttempt, error)
 }
@@ -190,6 +192,8 @@ type VersionMetricSnapshot struct {
 }
 
 // ExecutionSummary is the aggregated execution diagnostics for a single task.
+// Attempts is the canonical reconciled list; top-level live fields are derived
+// from its one eligible Live row and therefore cannot diverge from that list.
 type ExecutionSummary struct {
 	TaskID       string           `json:"task_id"`
 	JobID        string           `json:"job_id"`
@@ -294,6 +298,8 @@ type CacheSummary struct {
 }
 
 // AttemptSummary is the aggregated diagnostics for a single attempt.
+// Durable fields remain authoritative; Live marks a temporary overlay of
+// volatile progress fields and does not change durable status or final metrics.
 type AttemptSummary struct {
 	AttemptID              string                          `json:"attempt_id"`
 	AttemptNumber          int                             `json:"attempt_number"`
