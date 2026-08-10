@@ -57,17 +57,14 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
-	"velox-server/internal/deploy"
 	"velox-server/internal/fleet"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
@@ -87,30 +84,6 @@ type ControllerPublisher interface {
 	PublishOperation(ctx context.Context, op *store.Operation) error
 }
 
-// MutationRequest is the JSON body shape for drain/resume/quarantine
-// POSTs. Reason is the operator's intent text rendered verbatim in
-// the audit dashboard's audit log; falls back to a constant when
-// the operator omits the field (the admin auth context does not yet
-// carry an operator identity in Step 6).
-//
-// Body is OPTIONAL — handlers tolerate an absent body, an empty
-// body, and a body without the `reason` field. The
-// TrimWhitespace+empty-fallback chain ensures the schema's
-// `length(reason) > 0` CHECK never trips on handler output.
-type MutationRequest struct {
-	Reason       string `json:"reason"`
-	TargetDigest string `json:"target_digest"`
-}
-
-// validateAdminTargetDigest is the API boundary for worker updates. Reuse
-// deploy.ValidateImageRef so the HTTP path, UpdateExecutor, and worker-side
-// prepare-host validation accept exactly the same immutable GHCR reference.
-// Keep this validation before worker lookup, registry mutation, and operation
-// publication so rejected requests have no observable side effects.
-func validateAdminTargetDigest(ref string) error {
-	return deploy.ValidateImageRef(ref)
-}
-
 // MutationResponse is the unified 202 envelope for all 3 mutations.
 // Includes worker_id (echoed) + operation_id (newly-minted UUIDv4
 // row id) + op + status (always QUEUED post-publish) + queued_at
@@ -126,33 +99,6 @@ type MutationResponse struct {
 	Status      string `json:"status"`
 	QueuedAt    string `json:"queued_at"`
 	Reason      string `json:"reason,omitempty"`
-}
-
-// errAlreadyInDesiredState is the sentinel returned by the per-op
-// action closure when the worker is already in the desired
-// state (drain ⇒ already drain=true; resume ⇒ already
-// healthy; etc.). The mutationHandler maps this to 409 Conflict
-// rather than publishing a noop ledger row — keeps the audit
-// table clean and gives the operator a clear "your click was
-// redundant" signal.
-//
-// Reason shape: "worker is already DRAINING (no-op)" /
-// "worker is already HEALTHY (no-op)" / "worker is already
-// QUARANTINED (no-op)". The current-state vocabulary is
-// canonical and matches Health()'s 9-state enum (Step 3/15).
-type errAlreadyInDesiredState struct {
-	desired string
-	current string
-}
-
-func (e errAlreadyInDesiredState) Error() string {
-	// State vocabulary stays in canonical uppercase (matches
-	// Health()'s 9-state enum from registry_health.go) so the
-	// operator-facing error message reads "worker is already
-	// DRAINING" not "worker is already draining" — the
-	// dashboard parser matches the dashboard's vocabulary
-	// verbatim across surfaces.
-	return fmt.Sprintf("worker is already %s (no-op)", e.current)
 }
 
 // AdminWorkersMutationsHandler holds the dependencies for 3 admin
@@ -200,16 +146,6 @@ func (h *AdminWorkersMutationsHandler) SetUpdateGate(gate func() error) {
 	h.updateGate = gate
 }
 
-// mutationAction is the per-op closure the unified handler
-// dispatches against. Receives the freshly-looked-up
-// Worker (snapshot); mutates the registry (Drain /
-// Quarantined flag) and returns:
-//
-//   - nil                  — state flipped; proceed to publish
-//   - errAlreadyInDesiredState — already in target state; 409
-//   - any other error      — unexpected; 500
-type mutationAction func(ctx context.Context, info *workersreg.Worker) error
-
 // mutationHandler is the unified request→publish path used by all
 // 3 mutation endpoints. Each handler is a thin wrapper that
 // supplies the OperationKind + the state-changing action closure.
@@ -235,23 +171,8 @@ func (h *AdminWorkersMutationsHandler) mutationHandler(kind string, action mutat
 			return
 		}
 
-		// ── Fail-closed update capability gate (AZIONE 2) ────────────
-		// Refuse to publish an update operation while the
-		// UpdateExecutor's critical backends are not fully wired.
-		// Without this gate the master would accept the POST, then
-		// fail ~30s later inside the executor ("docker client not
-		// wired" surfaced only after the tick goroutine dispatched
-		// the op). The gate is update-only: drain / resume /
-		// quarantine have no UpdateExecutor dependency and stay
-		// available even while the update capability is NOT READY.
-		if kind == fleet.OperationKindUpdate && h.updateGate != nil {
-			if err := h.updateGate(); err != nil {
-				c.JSON(http.StatusServiceUnavailable, gin.H{
-					"error":  "update capability not ready",
-					"detail": err.Error(),
-				})
-				return
-			}
+		if !h.authorizeMutation(c, kind) {
+			return
 		}
 
 		// ── Path-param validation ─────────────────────────────────────
@@ -261,28 +182,20 @@ func (h *AdminWorkersMutationsHandler) mutationHandler(kind string, action mutat
 			return
 		}
 
-		// ── Body validation (optional) ────────────────────────────────
-		// Tolerate absent body, empty body, and body without `reason`.
-		// Default reason keeps the schema's `length(reason)>0` CHECK
-		// satisfied without forcing the operator to type a custom
-		// string for every click.
-		var req MutationRequest
-		if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON request body"})
-			return
-		}
-		req.Reason = strings.TrimSpace(req.Reason)
-		req.TargetDigest = strings.TrimSpace(req.TargetDigest)
-		if req.Reason == "" {
-			req.Reason = "triggered via admin API"
-		}
-		if kind == fleet.OperationKindUpdate {
-			if err := validateAdminTargetDigest(req.TargetDigest); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{
-					"error": "target_digest is required and must be a pinned ghcr.io image digest",
-				})
+		req, err := bindMutationRequest(c, kind)
+		if err != nil {
+			var invalidJSON invalidMutationJSON
+			if errors.As(err, &invalidJSON) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": invalidJSON.Error()})
 				return
 			}
+			var invalidDigest invalidMutationDigest
+			if errors.As(err, &invalidDigest) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": invalidDigest.Error()})
+				return
+			}
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
 		}
 
 		// ── Worker lookup ─────────────────────────────────────────────
@@ -333,36 +246,14 @@ func (h *AdminWorkersMutationsHandler) mutationHandler(kind string, action mutat
 		}
 
 		// ── Publish operation (audit ledger + downstream executor) ──
-		now := time.Now().UTC()
-		payload := json.RawMessage("{}")
-		if kind == fleet.OperationKindUpdate {
-			payload, _ = json.Marshal(map[string]string{"target_digest": req.TargetDigest})
+		op = newMutationOperation(workerID, kind, req, time.Now().UTC(), op.OperationID)
+		publishErr, cleanupErr := h.publishMutation(c.Request.Context(), kind, workerID, op)
+		if cleanupErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("%v; resume gate cleanup failed: %v", publishErr, cleanupErr)})
+			return
 		}
-		op.WorkerID = workerID
-		op.Op = kind
-		op.RequestedBy = "admin" // Step 6/15: admin auth context does not yet carry an operator identity
-		op.Reason = req.Reason
-		op.Payload = payload
-		op.QueuedAt = now
-
-		if err := h.publisher.PublishOperation(c.Request.Context(), op); err != nil {
-			// Resume marks the worker RESUMING before publication so
-			// placement is fail-closed immediately. Every failed
-			// publication, including ErrOperationInFlight, must release
-			// only this request's claim: no operation was accepted from
-			// this handler invocation, so leaving the gate set would
-			// permanently block a retry.
-			if kind == fleet.OperationKindResume {
-				if cleanupErr := h.reg.ClearWorkerResumingIfOwner(c.Request.Context(), workerID, op.OperationID); cleanupErr != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("%v; resume gate cleanup failed: %v", err, cleanupErr)})
-					return
-				}
-			}
-			if errors.Is(err, store.ErrOperationInFlight) {
-				// Per Q3 design: 409 with structured payload so the
-				// operator UI can render "your click was acknowledged,
-				// but we are already doing this" instead of a flat
-				// error string.
+		if publishErr != nil {
+			if errors.Is(publishErr, store.ErrOperationInFlight) {
 				c.JSON(http.StatusConflict, gin.H{
 					"error":        "operation is already in-flight for this worker",
 					"worker_id":    workerID,
@@ -371,7 +262,7 @@ func (h *AdminWorkersMutationsHandler) mutationHandler(kind string, action mutat
 				})
 				return
 			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": publishErr.Error()})
 			return
 		}
 
@@ -385,110 +276,4 @@ func (h *AdminWorkersMutationsHandler) mutationHandler(kind string, action mutat
 			Reason:      req.Reason,
 		})
 	}
-}
-
-// DrainWorker returns POST /api/v1/admin/workers/:worker_id/drain.
-//
-// Behavior (user spec verbatim: "il Master rifiuta nuovi lease per
-// quel worker e attende active_jobs=0 prima di considerare la
-// transizione"):
-//
-//   - Synchronously: Worker.Drain := true so costmodel.Score
-//     excludes the worker from GetEligibleWorkers on the next
-//     placement call (immediate lease refusal).
-//   - Asynchronously: publish a fleet_operations op="drain" row.
-//     Future executor (Step 7+) waits for active_jobs=0 before
-//     transitioning the worker to a confirmed DRAINING state.
-//     Step 6 ships with the noop executor, so the audit row
-//     transitions QUEUED→RUNNING→SUCCEEDED immediately — the
-//     in-process flag flip is the user-visible effect.
-//
-// Idempotency:
-//   - Already-draining worker → 409 (errAlreadyInDesiredState).
-//   - In-flight drain op → 409 (ErrOperationInFlight).
-func (h *AdminWorkersMutationsHandler) DrainWorker() gin.HandlerFunc {
-	return h.mutationHandler(fleet.OperationKindDrain, func(ctx context.Context, info *workersreg.Worker) error {
-		if info.Drain {
-			return errAlreadyInDesiredState{desired: "DRAINING", current: "DRAINING"}
-		}
-		return h.reg.SetWorkerDrain(ctx, info.WorkerID.String(), true)
-	})
-}
-
-// QuarantineWorker returns POST /api/v1/admin/workers/:worker_id/quarantine.
-//
-// Behavior (user spec verbatim: "stesso + escluso dal placement"):
-//
-//   - Synchronously: Worker.Quarantined := true. Health()
-//     precedence rank-1 in registry_health.go means QUARANTINED
-//     wins over DRAINING/BUSY/HEALTHY/etc., so the operator
-//     dashboard surfaces the worker as QUARANTINED immediately.
-//     costmodel.Score (or future placement gates) treats
-//     Quarantined=true as excluded from placement.
-//   - Asynchronously: publish a fleet_operations op="quarantine"
-//     row for audit.
-//
-// Idempotency:
-//   - Already-quarantined worker → 409 (errAlreadyInDesiredState).
-//   - In-flight quarantine op → 409 (ErrOperationInFlight).
-func (h *AdminWorkersMutationsHandler) QuarantineWorker() gin.HandlerFunc {
-	return h.mutationHandler(fleet.OperationKindQuarantine, func(ctx context.Context, info *workersreg.Worker) error {
-		if info.Quarantined {
-			return errAlreadyInDesiredState{desired: "QUARANTINED", current: "QUARANTINED"}
-		}
-		return h.reg.SetWorkerQuarantine(ctx, info.WorkerID.String(), true)
-	})
-}
-
-// UpdateWorker returns POST /api/v1/admin/workers/:worker_id/update.
-//
-// Accepts {target_digest: "ghcr.io/<owner>/<repo>@sha256:<64hex>", reason: "..."}.
-// The target_digest is validated with deploy.ValidateImageRef before the
-// operation is published. Unlike drain/resume/
-// quarantine, update has no synchronous state flag to flip — the
-// handler publishes the operation and the FleetController's tick
-// goroutine (Step 7+) dispatches it to the UpdateExecutor which
-// handles docker pull + compose restart on the worker host via SSH.
-//
-// Idempotency:
-//   - In-flight update op for the same worker → 409 (ErrOperationInFlight).
-//   - Malformed or missing target_digest → 400.
-func (h *AdminWorkersMutationsHandler) UpdateWorker() gin.HandlerFunc {
-	return h.mutationHandler(fleet.OperationKindUpdate, func(ctx context.Context, info *workersreg.Worker) error {
-		// No synchronous state flag to flip — the update is purely
-		// async via the FleetController tick goroutine.
-		return nil
-	})
-}
-
-// ResumeWorker returns POST /api/v1/admin/workers/:worker_id/resume.
-//
-// Behavior (user spec verbatim: "ritorna a HEALTHY se smoke verde"):
-//
-//   - Synchronously: keep Worker.Drain and Worker.Quarantined
-//     unchanged, so the worker remains excluded from placement
-//     while the asynchronous executor runs the Level D smoke gate.
-//
-//   - Asynchronously: publish a fleet_operations op="resume" row.
-//     The ResumeExecutor clears both exclusion flags only after
-//     the smoke gate succeeds; a failed smoke leaves the worker
-//     excluded and the operation FAILED.
-//
-// Idempotency:
-//   - Already-healthy worker (no drain, not quarantined) → 409.
-//   - In-flight resume op → 409 (ErrOperationInFlight).
-//
-// A smoke failure is recorded by the asynchronous operation runner;
-// the handler itself does not make the worker eligible or clear either
-// exclusion flag.
-func (h *AdminWorkersMutationsHandler) ResumeWorker() gin.HandlerFunc {
-	return h.mutationHandler(fleet.OperationKindResume, func(ctx context.Context, info *workersreg.Worker) error {
-		if !info.Drain && !info.Quarantined {
-			return errAlreadyInDesiredState{desired: "HEALTHY", current: "HEALTHY"}
-		}
-		// RESUMING is claimed atomically by mutationHandler before this
-		// action. Keep the closure as a no-op to preserve the common
-		// mutation shape.
-		return nil
-	})
 }
