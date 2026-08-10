@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"velox-worker-agent/internal/executor"
@@ -280,7 +281,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		}
 		return executor.ExecutionResult{
 			Status:         "failed",
-			ErrorCode:      "execute_failed",
+			ErrorCode:      renderErrorCode(err),
 			ErrorDetail:    fmt.Sprintf("pipeline.Runner.RunWithMetrics(%s): %v", pipelineID, err),
 			Metrics:        metrics,
 			Segments:       segments,
@@ -399,6 +400,13 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		StartedAt:      startedAt,
 		CompletedAt:    time.Now().UTC(),
 	}, nil
+}
+
+func renderErrorCode(err error) string {
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "copy_only media contract rejected") {
+		return "COPY_ONLY_MEDIA_INCOMPATIBLE"
+	}
+	return "execute_failed"
 }
 
 func boolToInt(value bool) int {

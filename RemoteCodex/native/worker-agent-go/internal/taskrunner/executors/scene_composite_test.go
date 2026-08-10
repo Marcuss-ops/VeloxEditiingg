@@ -284,6 +284,15 @@ func TestSceneComposite_Execute_RenderErrorMapsToFailure(t *testing.T) {
 	}
 }
 
+func TestRenderErrorCodeClassifiesCopyOnlyContractFailure(t *testing.T) {
+	if got := renderErrorCode(errors.New("engine failed: copy_only media contract rejected video segment 0")); got != "COPY_ONLY_MEDIA_INCOMPATIBLE" {
+		t.Fatalf("renderErrorCode(copy-only) = %q, want COPY_ONLY_MEDIA_INCOMPATIBLE", got)
+	}
+	if got := renderErrorCode(errors.New("ffmpeg crashed")); got != "execute_failed" {
+		t.Fatalf("renderErrorCode(generic) = %q, want execute_failed", got)
+	}
+}
+
 func TestSceneComposite_Execute_CancellationPreservesPartialTelemetry(t *testing.T) {
 	exec, rclient := newTestSceneComposite(t, context.Canceled)
 	rclient.partialMetrics = pipeline.RenderMetrics{
