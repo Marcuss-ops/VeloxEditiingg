@@ -50,7 +50,9 @@
 set -euo pipefail
 
 # ─── Constants ──────────────────────────────────────────────────────────────
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(dirname "$(readlink -f -- "${BASH_SOURCE[0]}")")"
+readonly SCRIPT_DIR
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly REPO_ROOT
 readonly SRC_DEFAULT="${REPO_ROOT}/runtime/worker_config.example.json"
 readonly COMPOSE_FILE_DEFAULT="${REPO_ROOT}/runtime/compose.yml"
@@ -90,6 +92,11 @@ KEEP_TMP=false
 log()  { printf '[apply] %s\n' "$*" >&2; }
 warn() { printf '[apply][WARN] %s\n' "$*" >&2; }
 die()  { printf '[apply][FAIL] %s\n' "$*" >&2; exit "${2:-1}"; }
+
+RENDERER="$SCRIPT_DIR/render-worker-config.py"
+FINGERPRINT_TOOL="$SCRIPT_DIR/worker-config-fingerprint.py"
+[[ -r "$RENDERER" ]] || die "renderer component missing or unreadable: $RENDERER" 3
+[[ -r "$FINGERPRINT_TOOL" ]] || die "fingerprint component missing or unreadable: $FINGERPRINT_TOOL" 3
 
 # The canonical velox-worker.service.d directory is allowed. Only
 # per-worker legacy directories (velox-worker-<id>.service.d) are forbidden.
@@ -400,70 +407,15 @@ if [[ "$KEEP_TMP" != "true" ]]; then
   trap 'rm -f "$TMP"' EXIT
 fi
 
-python3 - "$SRC" "$TMP" \
+python3 "$RENDERER" \
+  "$SRC" "$TMP" \
   "$WORKER_ID" "$WORKER_NAME" \
   "$CONTROL_GRPC_URL" "$MASTER_URL" \
   "$WORK_DIR" "$HEALTH_PORT" \
   "$PROTOCOL_VERSION" \
   "$BUNDLE_VERSION" "$BUNDLE_HASH" \
   "$IMAGE_DIGEST" \
-  "$ALLOW_INSECURE_GRPC" \
-  <<'PY'
-import json, sys
-src, dst = sys.argv[1], sys.argv[2]
-worker_id, worker_name = sys.argv[3], sys.argv[4]
-control_grpc_url, master_url = sys.argv[5], sys.argv[6]
-work_dir, health_port = sys.argv[7], int(sys.argv[8])
-protocol_version = sys.argv[9]
-bundle_version, bundle_hash = sys.argv[10], sys.argv[11]
-image_digest = sys.argv[12]
-allow_insecure = sys.argv[13].lower() == "true"
-
-with open(src) as f:
-    cfg = json.load(f)
-
-# Strip operator-side documentation keys (prefix _) so runtime JSON is clean.
-cfg = {k: v for k, v in cfg.items() if not k.startswith("_")}
-
-# Operator-supplied fields — ALWAYS overwrite from flags.
-cfg["worker_id"]           = worker_id
-cfg["worker_name"]         = worker_name
-cfg["control_grpc_url"]    = control_grpc_url
-cfg["master_url"]          = master_url
-cfg["work_dir"]            = work_dir
-cfg["health_port"]         = health_port
-cfg["protocol_version"]    = protocol_version
-cfg.setdefault("log_level", "info")
-
-# Optional overrides — only write when explicitly non-empty / non-false.
-if bundle_version:
-    cfg["bundle_version"] = bundle_version
-elif "bundle_version" in cfg and cfg["bundle_version"] == "":
-    pass  # keep empty; runtime fills from env/ldflags/VERSION.txt
-if bundle_hash:
-    cfg["bundle_hash"] = bundle_hash
-elif "bundle_hash" in cfg and cfg["bundle_hash"] == "":
-    pass  # keep empty; runtime fills from VELOX_BUNDLE_HASH / BUNDLE_HASH.txt
-
-if image_digest:
-    cfg["image_digest"] = image_digest
-
-if allow_insecure:
-    cfg["allow_insecure_grpc_dev"] = True
-else:
-    cfg["allow_insecure_grpc_dev"] = False
-
-# Schema sanity defaults. NOTE: HTTP-polling-era keys
-# (command_poll_interval_secs, use_v2_endpoints) were dropped in PR3 final;
-# the worker is gRPC-push only.
-cfg.setdefault("max_active_jobs", 1)
-# Prometheus is enabled by default (9090) so worker cache metrics are
-# scrapeable out of the box; operators disable via VELOX_PROMETHEUS_PORT=0.
-cfg.setdefault("prometheus_port", 9090)
-
-with open(dst, "w") as f:
-    json.dump(cfg, f, indent=2, sort_keys=False)
-PY
+  "$ALLOW_INSECURE_GRPC"
 
 # Preliminary structural check (the embedded Python should always produce
 # valid JSON, but defend against edge cases).
@@ -481,20 +433,8 @@ if [[ -f "$DST" ]]; then
 fi
 
 # ─── Compute deployment fingerprint ─────────────────────────────────────────
-NEW_FINGERPRINT="$(python3 -c '
-import hashlib, sys
-data = open(sys.argv[1], "rb").read()
-# compose.yml: optional; missing on host already produced a warning above.
-if len(sys.argv) > 2 and sys.argv[2]:
-    try:
-        data += open(sys.argv[2], "rb").read()
-    except FileNotFoundError:
-        pass
-# image_digest: optional string (may be empty if docker/image absent).
-if len(sys.argv) > 3 and sys.argv[3]:
-    data += sys.argv[3].encode()
-print(hashlib.sha256(data).hexdigest())
-' "$TMP" "${COMPOSE_FILE:-}" "${IMAGE_DIGEST:-}")"
+NEW_FINGERPRINT="$(python3 "$FINGERPRINT_TOOL" \
+  "$TMP" "${COMPOSE_FILE:-}" "${IMAGE_DIGEST:-}")"
 log "deployment_fingerprint: $NEW_FINGERPRINT (composed of: TMP + compose ${COMPOSE_FILE:-<none>} + image_digest)"
 
 # ─── Idempotency check ───────────────────────────────────────────────────────
