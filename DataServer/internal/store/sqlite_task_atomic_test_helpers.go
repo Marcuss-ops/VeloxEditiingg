@@ -100,16 +100,19 @@ CREATE TABLE task_specs (
 	executor_id    TEXT NOT NULL DEFAULT '',
 	payload_json   TEXT NOT NULL DEFAULT '{}',
 	created_at     TEXT NOT NULL
-);
-CREATE TABLE jobs (
+);CREATE TABLE jobs (
 	job_id             TEXT PRIMARY KEY,
-	status             TEXT NOT NULL,
+	status              TEXT NOT NULL,
 	revision           INTEGER NOT NULL DEFAULT 0,
 	max_retries        INTEGER NOT NULL DEFAULT 0,
 	started_at         TEXT,
 	updated_at         TEXT,
 	created_at         TEXT,
 	completed_at       TEXT
+);
+CREATE TABLE workers (
+	worker_id          TEXT PRIMARY KEY,
+	connection_state   TEXT NOT NULL DEFAULT 'CONNECTED'
 );
 CREATE TABLE worker_task_runtime (
 	task_id            TEXT PRIMARY KEY,
@@ -202,6 +205,12 @@ func seedLeasedTask(t *testing.T, db *sql.DB,
 		"job-"+taskID, now, now,
 	); err != nil {
 		t.Fatalf("seed PENDING job: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO workers (worker_id, connection_state) VALUES (?, 'CONNECTED')`,
+		workerID,
+	); err != nil {
+		t.Fatalf("seed worker: %v", err)
 	}
 	return revision
 }
