@@ -161,7 +161,50 @@ lavoro di rimozione immediata.
   l’evidenza (test, query o report) è collegata al commit o al runbook
   operativo.
 
-### Evidenza verificata — audit YAGNI e gate pre-removal (2026-08-10)
+### Evidenza verificata — audit YAGNI (2026-08-10)
+
+La verifica post-audit corrente è riportata nella sezione successiva; il gate
+storico citato sotto resta l’evidenza del run precedente e non viene usato per
+dichiarare verde il run corrente.
+
+---
+
+### Verifica post-audit corrente — esito parziale (2026-08-10)
+
+- `bash scripts/ci/check-no-legacy.sh`: **PASS** (`check-no-legacy: OK`).
+- Test mirati `go test -count=1 ./internal/socialclient ./internal/deliveries/...`:
+  **PASS** (`socialclient`, `deliveries` e `deliveries/providers`).
+- `cd DataServer && go vet ./...`: **PASS**.
+- `cd DataServer && go build ./...`: **PASS**.
+- `bash scripts/ci/pre-removal-verify.sh`: **FAIL** nella sola fase
+  `go test -count=1 -timeout=15m ./...`; `go vet` e `go build` del gate sono
+  passati. Il failure è
+  `velox-server/internal/fleet/opsalerts/TestEngineNotifierFailureDoesNotReleasePersistedAlertClaim`,
+  con `notifier metric count = 2, want 1`.
+- Il test fallito passa due volte isolatamente con
+  `go test -count=1 -run '^TestEngineNotifierFailureDoesNotReleasePersistedAlertClaim$' ./internal/fleet/opsalerts`.
+  Questa evidenza non dimostra causalità: il package `opsalerts` e altri file
+  correlati contengono modifiche dirty concorrenti, rimaste fuori dal commit
+  documentale. Il gate pre-removal corrente resta quindi **NON VERDE** e deve
+  essere rieseguito dopo aver isolato o corretto il failure della suite completa.
+
+La registrazione è documentale soltanto: nessun file di codice dirty concorrente
+è incluso nel commit.
+
+### Evidenza storica del gate di rimozione
+
+- `scripts/ci/pre-removal-verify.sh` era stato verificato verde
+  precedentemente nelle tre fasi `go vet ./...`, `go build ./...` e
+  `go test -count=1 ./...`. Le correzioni atomiche di evidenza sono:
+  `efa76929` (import test store), `e2b300cb` (wiring phase executor nel test
+  delivery) e `2fe840d8` (fixture worker canonico). Il cleanup documentale
+  degli alias Social è `71c7ee58`.
+- I file dirty concorrenti presenti nel worktree non sono inclusi nelle
+  evidenze o nei commit di questo tracker.
+
+---
+
+### Evidenza verificata — audit YAGNI e gate pre-removal (archivio)
 
 - **Retry Social/API:** `SOCIAL_API_RETRIES` e il retry config del
   `socialclient` non sono letti dal runtime; i retry effettivi restano di
