@@ -21,6 +21,16 @@ const (
 	AttemptStatusTimedOut AttemptStatus = "TIMED_OUT"
 )
 
+// Valid reports whether s is a known persisted attempt status.
+func (s AttemptStatus) Valid() bool {
+	switch s {
+	case AttemptStatusPending, AttemptStatusRunning, AttemptStatusSucceeded, AttemptStatusFailed, AttemptStatusCancelled, AttemptStatusTimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
 // IsTerminal reports whether an attempt in this state has finished.
 func (s AttemptStatus) IsTerminal() bool {
 	switch s {

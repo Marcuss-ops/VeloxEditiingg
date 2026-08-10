@@ -1,8 +1,9 @@
 // Package jobs defines the canonical job domain model.
 //
-// jobs.Status is the single source of truth for job state constants.
-// Both store.JobStatus and jobs.Status are the canonical types.
-// here, so the entire codebase shares one set of statuses at compile time.
+// JobStatus is the single source of truth for job state constants.
+// store.JobStatus remains a source-compatible alias of this type.
+// The distinct type prevents accidental comparison with statuses from
+// attempts, deliveries, publications, or input assembly.
 //
 // State machine:
 //
@@ -29,14 +30,17 @@
 // CANCELLED.
 package jobs
 
-// JobState is the canonical job lifecycle state.
-type JobState string
+// JobStatus is the canonical job lifecycle state.
+type JobStatus string
+
+// JobState is retained as a source-compatible alias for existing callers.
+type JobState = JobStatus
 
 // Status is retained as a source-compatible alias. New code should use
-// JobState to make the job aggregate boundary explicit.
+// JobStatus to make the job aggregate boundary explicit.
 //
-// Deprecated: use JobState.
-type Status = JobState
+// Deprecated: use JobStatus.
+type Status = JobStatus
 
 const (
 	StatusPending          Status = "PENDING"
@@ -59,7 +63,17 @@ const (
 // upload session), in which case the lifecycle moves to FAILED.
 // Treating AWAITING_ARTIFACT as terminal would cause supervisors and
 // calendar APIs to mis-count pending Jobs.
-func (s Status) IsTerminal() bool {
+// Valid reports whether s is a known persisted job status.
+func (s JobStatus) Valid() bool {
+	switch s {
+	case StatusPending, StatusLeased, StatusRunning, StatusAwaitingArtifact, StatusDelivering, StatusRetryWait, StatusSucceeded, StatusFailed, StatusCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s JobStatus) IsTerminal() bool {
 	switch s {
 	case StatusSucceeded, StatusFailed, StatusCancelled:
 		return true

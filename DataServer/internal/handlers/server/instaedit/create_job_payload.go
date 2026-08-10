@@ -82,6 +82,18 @@ func (s *Service) buildCreateJobPayload(ctx context.Context, cmd CreateJobCmd, r
 	// remote-engine polling path), so mark the canonical handoff complete
 	// for the resolver's completion gate. The enqueue normalizer still owns
 	// the persisted worker lifecycle status.
-	payload["status"] = "completed"
+	if !typedPayload.SetInputAssemblyStatus(contract.InputAssemblyCompleted) {
+		return nil, fmt.Errorf("set input assembly status: %w", ErrInvalidPayload)
+	}
+	payload, err = typedPayload.ToMap()
+	if err != nil {
+		return nil, fmt.Errorf("project input assembly payload: %w", err)
+	}
+	// These control-plane fields are intentionally outside JobPayloadV2's
+	// renderer-owned projection, so restore them after the typed projection.
+	payload["project_id"] = cmd.ProjectID
+	if cmd.RenderOnly {
+		payload["render_only"] = true
+	}
 	return payload, nil
 }

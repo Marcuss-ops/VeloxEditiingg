@@ -151,8 +151,11 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 		TimeoutSecs:            payload.EnsureInt(raw["timeout_secs"], 3600),
 		SubmittedVia:           payload.FirstString(raw, "submitted_via"),
 		Source:                 payload.FirstString(raw, "source"),
-		Status:                 "PENDING",
+		Status:                 payload.FirstString(raw, "status"),
 		DeliveryPlan:           raw["delivery_plan"],
+	}
+	if p.Status == "" {
+		p.Status = "PENDING"
 	}
 	if p.JobType == "" {
 		p.JobType = "process_video"

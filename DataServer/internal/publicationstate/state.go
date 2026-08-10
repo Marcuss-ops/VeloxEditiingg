@@ -11,7 +11,13 @@ import (
 	"strings"
 )
 
-type State string
+// PublicationStatus is the durable lifecycle state of one publication.
+// It is distinct from JobStatus and DeliveryStatus; values are converted to
+// strings only at storage and API boundaries.
+type PublicationStatus string
+
+// State is retained as a source-compatible alias for existing callers.
+type State = PublicationStatus
 
 const (
 	Pending               State = "PENDING"
@@ -36,7 +42,7 @@ var (
 	ErrInvalidPublication = errors.New("publicationstate: invalid publication")
 )
 
-var transitions = map[State]map[State]struct{}{
+var transitions = map[PublicationStatus]map[PublicationStatus]struct{}{
 	Pending:               {WaitingForRender: {}, Cancelled: {}},
 	WaitingForRender:      {ArtifactBound: {}, RetryWait: {}, Failed: {}, Cancelled: {}},
 	ArtifactBound:         {Ready: {}, RetryWait: {}, Failed: {}, Cancelled: {}},
@@ -55,7 +61,17 @@ var transitions = map[State]map[State]struct{}{
 	Partial:   {LocalizationsApplying: {}, MetadataApplying: {}, Verifying: {}, Published: {}, RetryWait: {}, Cancelled: {}},
 }
 
-func ValidateTransition(from, to State) error {
+// Valid reports whether s is a known publication state.
+func (s PublicationStatus) Valid() bool {
+	switch s {
+	case Pending, WaitingForRender, ArtifactBound, Ready, Scheduled, Uploading, VideoCreated, MetadataApplying, LocalizationsApplying, Verifying, Published, Partial, RetryWait, Failed, Cancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+func ValidateTransition(from, to PublicationStatus) error {
 	if from == to {
 		return nil
 	}
@@ -87,8 +103,8 @@ func SideEffectKey(publicationID string, phase State, operation string) string {
 // of LOCALIZATIONS_APPLYING must never restart UPLOADING.
 type Snapshot struct {
 	PublicationID string
-	State         State
-	RetryFrom     State
+	State         PublicationStatus
+	RetryFrom     PublicationStatus
 	Revision      uint64
 }
 
@@ -100,7 +116,7 @@ func NewSnapshot(publicationID string) (Snapshot, error) {
 	return Snapshot{PublicationID: publicationID, State: Pending}, nil
 }
 
-func (s Snapshot) Transition(to State) (Snapshot, error) {
+func (s Snapshot) Transition(to PublicationStatus) (Snapshot, error) {
 	if s.PublicationID == "" {
 		return Snapshot{}, fmt.Errorf("%w: publication id is required", ErrInvalidPublication)
 	}
@@ -130,7 +146,7 @@ func (s Snapshot) Transition(to State) (Snapshot, error) {
 // TransitionPartial records the exact phase to retry after a partial result.
 // It is used when metadata/video creation succeeded but a later operation did
 // not; the next command therefore resumes at the failed phase.
-func (s Snapshot) TransitionPartial(retryFrom State) (Snapshot, error) {
+func (s Snapshot) TransitionPartial(retryFrom PublicationStatus) (Snapshot, error) {
 	if retryFrom == "" {
 		retryFrom = LocalizationsApplying
 	}
@@ -146,7 +162,7 @@ func (s Snapshot) TransitionPartial(retryFrom State) (Snapshot, error) {
 // ResumeAfterFailure returns the exact persisted checkpoint. The legacy
 // one-argument behavior is retained for callers that only have a state; new
 // durable callers should use Snapshot.Transition.
-func ResumeAfterFailure(state State) State {
+func ResumeAfterFailure(state PublicationStatus) PublicationStatus {
 	if state == RetryWait {
 		return Uploading // legacy fallback; Snapshot never loses RetryFrom
 	}
@@ -156,14 +172,14 @@ func ResumeAfterFailure(state State) State {
 	return state
 }
 
-func (s Snapshot) withState(state, retryFrom State) Snapshot {
+func (s Snapshot) withState(state, retryFrom PublicationStatus) Snapshot {
 	s.State = state
 	s.RetryFrom = retryFrom
 	s.Revision++
 	return s
 }
 
-func retryCheckpoint(state State) State {
+func retryCheckpoint(state PublicationStatus) PublicationStatus {
 	switch state {
 	case WaitingForRender, ArtifactBound, Uploading, MetadataApplying, LocalizationsApplying, Verifying:
 		return state
@@ -176,6 +192,6 @@ func retryCheckpoint(state State) State {
 	}
 }
 
-func isRetryCheckpoint(state State) bool {
+func isRetryCheckpoint(state PublicationStatus) bool {
 	return retryCheckpoint(state) != ""
 }

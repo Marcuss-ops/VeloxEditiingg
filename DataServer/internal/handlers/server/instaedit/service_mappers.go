@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	deliverydomain "velox-server/internal/deliveries"
+	"velox-server/internal/jobs"
 	"velox-server/internal/store"
 )
 
@@ -36,15 +38,19 @@ func mapJobWithDeliveries(row map[string]any, workspaceID int64, deliveries []de
 	anyFailed := false
 	anyActive := false
 	for _, d := range deliveries {
-		switch strings.ToUpper(d.Status) {
-		case "SUCCEEDED", "PUBLISHED", "COMPLETED":
+		// The response DTO remains string-based at the HTTP boundary. Parse
+		// it into the delivery domain type before applying publication rules;
+		// legacy PUBLISHED/COMPLETED aliases are accepted only here.
+		deliveryStatus := deliverydomain.DeliveryStatus(strings.ToUpper(d.Status))
+		switch deliveryStatus {
+		case deliverydomain.DeliverySucceeded, deliverydomain.DeliveryStatus("PUBLISHED"), deliverydomain.DeliveryStatus("COMPLETED"):
 		default:
 			allSucceeded = false
 		}
-		switch strings.ToUpper(d.Status) {
-		case "FAILED", "BLOCKED_AUTH", "CANCELLED":
+		switch deliveryStatus {
+		case deliverydomain.DeliveryFailed, deliverydomain.DeliveryBlockedAuth, deliverydomain.DeliveryCancelled:
 			anyFailed = true
-		case "RUNNING", "RETRY_WAIT", "CLAIMED", "PENDING":
+		case deliverydomain.DeliveryRunning, deliverydomain.DeliveryRetryWait, deliverydomain.DeliveryStatus("CLAIMED"), deliverydomain.DeliveryPending:
 			anyActive = true
 		}
 	}
@@ -58,7 +64,11 @@ func mapJobWithDeliveries(row map[string]any, workspaceID int64, deliveries []de
 	default:
 		j.PublicationStatus = "pending"
 	}
-	if strings.EqualFold(j.RenderStatus, "succeeded") || strings.EqualFold(j.RenderStatus, "completed") {
+	renderStatus := jobs.JobStatus(strings.ToUpper(j.RenderStatus))
+	// COMPLETED is a legacy aggregate response value, not a JobStatus.
+	// Keep accepting it at this HTTP projection boundary without making it
+	// part of the canonical job state machine.
+	if renderStatus == jobs.StatusSucceeded || strings.ToUpper(j.RenderStatus) == "COMPLETED" {
 		j.OverallStatus = j.PublicationStatus
 	} else {
 		j.OverallStatus = strings.ToLower(j.RenderStatus)

@@ -42,7 +42,7 @@ import (
 // LeaseID, LeaseExpiry, RetryCount, Attempt) removed — tasks carry these now.
 type QueueItem struct {
 	JobID        string      `json:"job_id"`
-	Status       Status      `json:"status"`
+	Status       JobStatus   `json:"status"`
 	VideoName    string      `json:"video_name,omitempty"`
 	ProjectID    string      `json:"project_id,omitempty"`
 	CreatedAt    interface{} `json:"created_at,omitempty"`

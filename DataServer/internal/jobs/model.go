@@ -24,7 +24,7 @@ import (
 type Job struct {
 	ID          string    `json:"id"`
 	Type        string    `json:"type,omitempty"` // job_type from request payload
-	Status      Status    `json:"status"`
+	Status      JobStatus `json:"status"`
 	Attempts    int       `json:"attempts"`               // retry_count / current attempt number
 	Revision    int       `json:"revision"`               // optimistic-lock counter (Ondata 3 PR3 final)
 	VideoName   string    `json:"video_name,omitempty"`   // the asset being rendered
