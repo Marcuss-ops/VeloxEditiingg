@@ -3,9 +3,8 @@
 // Goal:
 //   - Decouple Velox's main flow from Drive / social-platform specifics.
 //   - Allow providers to live as long-lived adapters (DriveProvider,
-//     SocialGatewayProvider) or skeleton stubs (S3Provider, LocalExportProvider)
-//     that return ErrProviderNotConfigured until a future deployment adds
-//     the wiring.
+//     SocialGatewayProvider) or optional providers (such as LocalExportProvider)
+//     that return ErrProviderNotConfigured until their wiring is available.
 //   - Make DeliveryRunner the single durable entry point for "push this
 //     artifact to this destination", so a process restart mid-upload does
 //     not lose work.
@@ -31,9 +30,9 @@ import (
 
 // ── Error sentinels ──────────────────────────────────────────────────────────
 
-// ErrProviderNotConfigured is the sentinel returned by skeleton providers
-// (S3, LocalExport) until environment wiring is added. The runner treats
-// this as a permanent failure with status FAILED, no retry.
+// ErrProviderNotConfigured is the sentinel returned by an optional provider
+// when its environment wiring is unavailable. The runner treats this as a
+// permanent failure with status FAILED, with no retry.
 var ErrProviderNotConfigured = errors.New("deliveries: provider not configured")
 
 // ErrProviderTransient marks a retryable error (network timeout, 5xx, etc.).
@@ -161,7 +160,7 @@ func (e *ProviderError) Unwrap() error {
 // artifact to the destination.
 type Provider interface {
 	// Name returns the canonical provider identifier (e.g. "drive",
-	// "social_gateway", "s3", "local_export"). Registry keys are case-sensitive.
+	// "social_gateway", "local_export"). Registry keys are case-sensitive.
 	Name() string
 
 	// Deliver performs the upload. Implementations must:

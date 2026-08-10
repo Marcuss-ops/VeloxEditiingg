@@ -78,11 +78,13 @@ Nel bootstrap sono registrati `drive` e `social_gateway`; entrambi implementano
 lease prima della consegna e, quando il provider implementa il contratto,
 chiama `DeliverWithCredential`.
 
-La chiusura non è completa: `DeliveryRunner` conserva il fallback a
+La chiusura non è completa: `DeliveryRunner` conserva il
+fallback a
 `Provider.Deliver`, il bootstrap non rifiuta un provider sensibile privo di
 lease e sia `DriveProvider.Deliver` sia `SocialGatewayProvider.Deliver` restano
-superfici monolitiche alternative. `S3Provider` e `LocalExportProvider` hanno
-solo `Deliver` e non sono registrati nel bootstrap corrente.
+superfici monolitiche alternative. `LocalExportProvider` ha solo `Deliver` e
+non è registrato nel bootstrap corrente; l'implementazione S3 non fa parte del
+runtime né del contratto attuale.
 
 ## Punto d’integrazione della publication state machine
 

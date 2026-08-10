@@ -457,11 +457,10 @@ DataServer/
 │   │   ├── providers/
 │   │   │   ├── drive.go                  # DriveProvider (Deliver)
 │   │   │   ├── social_gateway.go         # SocialGatewayProvider (delega via socialclient)
-│   │   │   ├── s3.go                     # S3Provider (skeleton)
-│   │   │   └── localexport.go            # LocalExportProvider (skeleton)
+│   │   │   └── localexport.go            # LocalExportProvider (export locale opzionale)
 │   │   ├── socialclient/
 │   │   │   ├── client.go                 # HTTP client: POST /internal/v1/deliveries
-│   │   │   ├── config.go                 # SOCIAL_API_URL / TOKEN / TIMEOUT / RETRIES
+│   │   │   ├── config.go                 # SOCIAL_API_URL / TOKEN / TIMEOUT
 │   │   │   └── requests.go               # DeliverArtifactRequest/Response typed contract
 │   ├── integrations/
 │   │   └── drive/
