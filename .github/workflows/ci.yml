@@ -66,6 +66,13 @@ jobs:
           bash -n scripts/ci/check-ac-taskresult-convergence.sh
           bash -n scripts/e2e/verify-ac-taskresult-convergence.sh
           ./scripts/ci/test-ac-taskresult-convergence.sh
+      - name: New production-file LOC guardrail
+        env:
+          # Compare only files added by this push/PR; existing long files are
+          # handled by the full-tree LOC gate below.
+          BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || 'HEAD^' }}
+          HEAD_REF: HEAD
+        run: python3 scripts/ci/check-new-production-loc.py
       - name: LOC threshold gate
         # ====== DELIBERATE REDUNDANCY — DO NOT REMOVE ======
         # This step is intentionally redundant with the dedicated

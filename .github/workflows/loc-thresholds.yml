@@ -65,6 +65,13 @@ jobs:
           # maintainers can `git blame` any match the audit surfaced.
           fetch-depth: 0
 
+      - name: Run new production-file LOC guardrail
+        env:
+          # The guardrail scans only Git-added production files; the existing
+          # full-tree gate below remains responsible for legacy long files.
+          BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || 'HEAD^' }}
+          HEAD_REF: HEAD
+        run: python3 scripts/ci/check-new-production-loc.py
       - name: Run LOC threshold gate
         run: |
           set -euo pipefail
