@@ -3990,6 +3990,7 @@ type TaskExecutionMetrics struct {
 	TelemetryCoverageJson string `protobuf:"bytes,52,opt,name=telemetry_coverage_json,json=telemetryCoverageJson,proto3" json:"telemetry_coverage_json,omitempty"`
 	TelemetryComplete     bool   `protobuf:"varint,53,opt,name=telemetry_complete,json=telemetryComplete,proto3" json:"telemetry_complete,omitempty"`
 	TelemetryCpuSource    string `protobuf:"bytes,54,opt,name=telemetry_cpu_source,json=telemetryCpuSource,proto3" json:"telemetry_cpu_source,omitempty"` // cgroup_v2, proc, or missing
+	AudioTrackCount       int32  `protobuf:"varint,55,opt,name=audio_track_count,json=audioTrackCount,proto3" json:"audio_track_count,omitempty"`         // final artifact track count from ArtifactVerifier
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -4400,6 +4401,13 @@ func (x *TaskExecutionMetrics) GetTelemetryCpuSource() string {
 		return x.TelemetryCpuSource
 	}
 	return ""
+}
+
+func (x *TaskExecutionMetrics) GetAudioTrackCount() int32 {
+	if x != nil {
+		return x.AudioTrackCount
+	}
+	return 0
 }
 
 // WorkerResourceCounters is the typed payload of Heartbeat.resources.
@@ -5021,7 +5029,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x06job_id\x18\x02 \x01(\tR\x05jobId\x12\x1d\n" +
 	"\n" +
 	"attempt_id\x18\x03 \x01(\tR\tattemptId\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\"\xc6\x12\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"\xf2\x12\n" +
 	"\x14TaskExecutionMetrics\x12\x1f\n" +
 	"\vinput_bytes\x18\x01 \x01(\x03R\n" +
 	"inputBytes\x12!\n" +
@@ -5080,7 +5088,8 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x13effective_cpu_count\x183 \x01(\x05R\x11effectiveCpuCount\x126\n" +
 	"\x17telemetry_coverage_json\x184 \x01(\tR\x15telemetryCoverageJson\x12-\n" +
 	"\x12telemetry_complete\x185 \x01(\bR\x11telemetryComplete\x120\n" +
-	"\x14telemetry_cpu_source\x186 \x01(\tR\x12telemetryCpuSource\"\x92\b\n" +
+	"\x14telemetry_cpu_source\x186 \x01(\tR\x12telemetryCpuSource\x12*\n" +
+	"\x11audio_track_count\x187 \x01(\x05R\x0faudioTrackCount\"\x92\b\n" +
 	"\x16WorkerResourceCounters\x122\n" +
 	"\x15cpu_utilization_ratio\x18\x01 \x01(\x01R\x13cpuUtilizationRatio\x12(\n" +
 	"\x10cpu_iowait_ratio\x18\x02 \x01(\x01R\x0ecpuIowaitRatio\x12&\n" +

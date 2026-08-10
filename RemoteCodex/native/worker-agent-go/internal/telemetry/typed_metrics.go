@@ -88,6 +88,7 @@ type TypedExecutionMetrics struct {
 	DurationDiffSec   float64 `json:"duration_diff_sec"`
 	HasVideoStream    bool    `json:"has_video_stream"`
 	HasAudioStream    bool    `json:"has_audio_stream"`
+	AudioTrackCount   int32   `json:"audio_track_count"`
 	OutputFileSize    int64   `json:"output_file_size"`
 	BlackFrameRatio   float64 `json:"black_frame_ratio"`
 	AudioSyncOffsetMs int64   `json:"audio_sync_offset_ms"`
@@ -168,6 +169,7 @@ func (t TypedExecutionMetrics) ToProto() *pb.TaskExecutionMetrics {
 		DurationDiffSec:   t.DurationDiffSec,
 		HasVideoStream:    t.HasVideoStream,
 		HasAudioStream:    t.HasAudioStream,
+		AudioTrackCount:   t.AudioTrackCount,
 		OutputFileSize:    t.OutputFileSize,
 		BlackFrameRatio:   t.BlackFrameRatio,
 		AudioSyncOffsetMs: t.AudioSyncOffsetMs,
@@ -241,6 +243,7 @@ func FromProto(p *pb.TaskExecutionMetrics) TypedExecutionMetrics {
 		DurationDiffSec:   p.GetDurationDiffSec(),
 		HasVideoStream:    p.GetHasVideoStream(),
 		HasAudioStream:    p.GetHasAudioStream(),
+		AudioTrackCount:   p.GetAudioTrackCount(),
 		OutputFileSize:    p.GetOutputFileSize(),
 		BlackFrameRatio:   p.GetBlackFrameRatio(),
 		AudioSyncOffsetMs: p.GetAudioSyncOffsetMs(),

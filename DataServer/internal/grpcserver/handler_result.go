@@ -119,6 +119,19 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 	typedCache := deriveCacheStats(attemptID, typedMetrics)
 	typedCost := executionMetricsToCostBasis(attemptID, tr.GetExecutionMetrics())
 	segmentTimings := segmentTimingsFromProto(attemptID, taskID, jobID, workerID, tr.GetSegmentTimings())
+	typedMetrics.SegmentCount = len(segmentTimings)
+	for _, segment := range segmentTimings {
+		if segment.Status == "ok" || segment.Status == "succeeded" {
+			typedMetrics.CompletedSegments++
+		}
+	}
+	seenScenes := make(map[string]struct{}, len(segmentTimings))
+	for _, segment := range segmentTimings {
+		if segment.SceneID != "" {
+			seenScenes[segment.SceneID] = struct{}{}
+		}
+	}
+	typedMetrics.SceneCount = len(seenScenes)
 	phaseTimings := phaseTimingsFromProto(attemptID, taskID, jobID, workerID, canonicalExecutorID, canonicalExecutorVersion, tr.GetPhaseTimings())
 	partialPhaseTimings := partialPhaseTimingsFromProto(attemptID, taskID, jobID, workerID, canonicalExecutorID, canonicalExecutorVersion, tr.GetPartialPhaseMetrics())
 

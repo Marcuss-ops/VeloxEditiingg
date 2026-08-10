@@ -128,6 +128,7 @@ func executionMetricsToAttemptMetrics(attemptID string, em *pb.TaskExecutionMetr
 	am.DurationDiffSec = em.GetDurationDiffSec()
 	am.HasVideoStream = em.GetHasVideoStream()
 	am.HasAudioStream = em.GetHasAudioStream()
+	am.AudioTrackCount = int(em.GetAudioTrackCount())
 	am.OutputFileSize = em.GetOutputFileSize()
 	am.BlackFrameRatio = em.GetBlackFrameRatio()
 	am.AudioSyncOffsetMS = em.GetAudioSyncOffsetMs()

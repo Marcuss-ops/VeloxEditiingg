@@ -50,6 +50,7 @@ func TestHandleTaskResult_PersistTypedMetrics_F1(t *testing.T) {
 		StoragePricePerGb:     0.00012,
 		NetworkPricePerGb:     0.01,
 		TempBytesWritten:      123456789,
+		AudioTrackCount:       1,
 	}
 
 	artItem, _ := structpb.NewStruct(map[string]interface{}{
@@ -98,6 +99,9 @@ func TestHandleTaskResult_PersistTypedMetrics_F1(t *testing.T) {
 	}
 	if got.TempBytesWritten != em.GetTempBytesWritten() {
 		t.Errorf("AttemptMetrics TempBytesWritten = %d; want %d", got.TempBytesWritten, em.GetTempBytesWritten())
+	}
+	if got.AudioTrackCount != int(em.GetAudioTrackCount()) {
+		t.Errorf("AttemptMetrics AudioTrackCount = %d; want %d", got.AudioTrackCount, em.GetAudioTrackCount())
 	}
 
 	gotCache := taskRepo.lastCacheStats

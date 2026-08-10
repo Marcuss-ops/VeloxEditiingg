@@ -747,6 +747,7 @@ message TaskExecutionMetrics {
   string telemetry_coverage_json = 52;
   bool telemetry_complete = 53;
   string telemetry_cpu_source = 54; // cgroup_v2, proc, or missing
+  int32 audio_track_count = 55; // final artifact track count from ArtifactVerifier
 }
 
 // WorkerResourceCounters is the typed payload of Heartbeat.resources.
