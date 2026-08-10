@@ -330,6 +330,22 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		}, nil
 	}
 	metrics["output.bytes"] = outputSize
+	// Quality telemetry must describe the artifact that was actually
+	// produced. ComputeLocalManifest has already hashed and ffprobed this
+	// final file; do not infer these values from the render plan or emit a
+	// synthetic success flag.
+	metrics["quality.ffprobe.valid"] = int64(boolToInt(outputManifest.FfprobeValid))
+	metrics["quality.ffprobe.ok"] = int64(boolToInt(outputManifest.FfprobeOK))
+	metrics["quality.has.video.stream"] = outputManifest.HasVideoStream
+	metrics["quality.has.audio.stream"] = outputManifest.HasAudioStream
+	metrics["quality.audio.track.count"] = int64(outputManifest.AudioTrackCount)
+	metrics["quality.video.codec"] = outputManifest.Codec
+	metrics["quality.audio.codec"] = outputManifest.AudioCodec
+	metrics["quality.output.file.size"] = outputManifest.SizeBytes
+	metrics["output.file.size"] = outputManifest.SizeBytes
+	if outputManifest.FfprobeErr != "" {
+		metrics["quality.ffprobe.error"] = outputManifest.FfprobeErr
+	}
 	metrics["executor.total_ms"] = time.Since(startedAt).Milliseconds()
 
 	outputs := []executor.ArtifactRef{{Type: "render.output", Hash: outputHash, URI: outputPath, SizeBytes: outputSize}}
@@ -368,7 +384,11 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	planHandle.CompleteWith(0, outputSize, runMetrics.RenderMetrics.Frames, telemetry.StatusOK, "", "")
 	planCompleted = true
 	if rec != nil {
-		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginValidation, Scope: telemetry.ScopeAttempt, Component: "quality", Action: "ffprobe"}, telemetry.StatusOK, "", "")
+		status := telemetry.StatusOK
+		if !outputManifest.FfprobeValid {
+			status = telemetry.StatusFailed
+		}
+		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginValidation, Scope: telemetry.ScopeAttempt, Component: "quality", Action: "ffprobe"}, status, outputManifest.FfprobeErr, "")
 	}
 	return executor.ExecutionResult{
 		Status:         "succeeded",
@@ -379,6 +399,13 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		StartedAt:      startedAt,
 		CompletedAt:    time.Now().UTC(),
 	}, nil
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 // resolveOutputPath synthesises <outputBase>/<jobID>.mp4 for the local

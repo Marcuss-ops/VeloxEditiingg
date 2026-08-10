@@ -31,8 +31,9 @@ type AssetOperationRecord struct {
 }
 
 type assetOperationTracker struct {
-	mu      sync.Mutex
-	records []AssetOperationRecord
+	mu           sync.Mutex
+	records      []AssetOperationRecord
+	cacheEnabled bool
 }
 
 type assetOperationTrackerKey struct{}
@@ -192,13 +193,29 @@ func attachAssetOperations(report *taskrunner.TaskExecutionReport, tracker *asse
 		return
 	}
 	records := tracker.snapshot()
-	if len(records) == 0 {
-		return
-	}
 	if report.Metrics == nil {
 		report.Metrics = make(map[string]interface{})
 	}
-	report.Metrics["asset_operations"] = records
+
+	// These counters are derived at the common resolver boundary, where every
+	// canonical cache hit/miss is recorded. They intentionally remain zero
+	// when no lookup occurred; zero is not a fabricated hit or miss.
+	var hits, misses int64
+	for _, record := range records {
+		switch strings.ToLower(strings.TrimSpace(record.CacheStatus)) {
+		case "hit":
+			hits++
+		case "miss":
+			misses++
+		}
+	}
+	report.Metrics["cache.enabled"] = tracker.cacheEnabled || len(records) > 0
+	report.Metrics["cache.lookups"] = hits + misses
+	report.Metrics["asset.cache.hit.count"] = hits
+	report.Metrics["asset.cache.miss.count"] = misses
+	if len(records) > 0 {
+		report.Metrics["asset_operations"] = records
+	}
 }
 
 // attachAssetOperationsToPhaseMarkers preserves the existing TaskResult wire
@@ -210,14 +227,34 @@ func attachAssetOperationsToPhaseMarkers(report *taskrunner.TaskExecutionReport)
 		return
 	}
 	records, ok := report.Metrics["asset_operations"].([]AssetOperationRecord)
-	if !ok || len(records) == 0 {
+	cacheEnabled, hasCacheEnabled := report.Metrics["cache.enabled"]
+	cacheLookups, hasCacheLookups := report.Metrics["cache.lookups"]
+	cacheHits, hasCacheHits := report.Metrics["asset.cache.hit.count"]
+	cacheMisses, hasCacheMisses := report.Metrics["asset.cache.miss.count"]
+	if (!ok || len(records) == 0) && !hasCacheEnabled && !hasCacheLookups && !hasCacheHits && !hasCacheMisses {
 		return
 	}
-	encoded, err := json.Marshal(records)
-	if err != nil {
-		return
+	parts := make([]string, 0, 2)
+	if len(records) > 0 {
+		encoded, err := json.Marshal(records)
+		if err != nil {
+			return
+		}
+		parts = append(parts, fmt.Sprintf("asset_operations=%s", encoded))
 	}
-	notes := fmt.Sprintf("asset_operations=%s", encoded)
+	if hasCacheEnabled || hasCacheLookups || hasCacheHits || hasCacheMisses {
+		encoded, err := json.Marshal(map[string]interface{}{
+			"enabled": cacheEnabled,
+			"lookups": cacheLookups,
+			"hits":    cacheHits,
+			"misses":  cacheMisses,
+		})
+		if err != nil {
+			return
+		}
+		parts = append(parts, fmt.Sprintf("cache_summary=%s", encoded))
+	}
+	notes := strings.Join(parts, " ")
 
 	// Normal TaskRunner reports already contain canonical markers. Enrich the
 	// prefetch marker so ordering and the one-marker-per-phase invariant remain

@@ -155,13 +155,23 @@ func (s *AttemptTelemetrySession) Stop(ctx context.Context) AttemptTelemetry {
 	if s.cgroupRoot == "" {
 		cpuUsec = process.totalUsec() - s.startProcess.totalUsec()
 	}
+	diskReadBytes := positiveDelta(cgroup.DiskReadBytes - s.startCgroup.DiskReadBytes)
+	diskWriteBytes := positiveDelta(cgroup.DiskWriteBytes - s.startCgroup.DiskWriteBytes)
+	// cgroup v2 is authoritative for an attempt because it includes the
+	// native renderer and every FFmpeg child. Older hosts may expose CPU/RAM
+	// cgroup files without io.stat; retain the existing diskstats fallback in
+	// that case.
+	if !cgroupIOAvailable(s.cgroupRoot) {
+		diskReadBytes = positiveDelta(resourceCounter(resources, func(r *SampledResources) int64 { return r.DiskReadBytesTotal }) - resourceCounter(s.startResources, func(r *SampledResources) int64 { return r.DiskReadBytesTotal }))
+		diskWriteBytes = positiveDelta(resourceCounter(resources, func(r *SampledResources) int64 { return r.DiskWriteBytesTotal }) - resourceCounter(s.startResources, func(r *SampledResources) int64 { return r.DiskWriteBytesTotal }))
+	}
 	metrics := TypedExecutionMetrics{
 		CpuTimeMs:        positiveDelta(cpuUsec) / 1000,
 		PeakRssBytes:     s.peakRSSBytes,
 		CpuPercentPeak:   s.peakCPUPercent,
 		WallClockSeconds: wall,
-		DiskReadBytes:    positiveDelta(resourceCounter(resources, func(r *SampledResources) int64 { return r.DiskReadBytesTotal }) - resourceCounter(s.startResources, func(r *SampledResources) int64 { return r.DiskReadBytesTotal })),
-		DiskWriteBytes:   positiveDelta(resourceCounter(resources, func(r *SampledResources) int64 { return r.DiskWriteBytesTotal }) - resourceCounter(s.startResources, func(r *SampledResources) int64 { return r.DiskWriteBytesTotal })),
+		DiskReadBytes:    diskReadBytes,
+		DiskWriteBytes:   diskWriteBytes,
 		NetworkRxBytes:   positiveDelta(resourceCounter(resources, func(r *SampledResources) int64 { return r.NetworkReceiveBytesTotal }) - resourceCounter(s.startResources, func(r *SampledResources) int64 { return r.NetworkReceiveBytesTotal })),
 		NetworkTxBytes:   positiveDelta(resourceCounter(resources, func(r *SampledResources) int64 { return r.NetworkTransmitBytesTotal }) - resourceCounter(s.startResources, func(r *SampledResources) int64 { return r.NetworkTransmitBytesTotal })),
 		TempBytesWritten: positiveDelta(resourceCounter(resources, func(r *SampledResources) int64 { return r.TempBytesWritten }) - resourceCounter(s.startResources, func(r *SampledResources) int64 { return r.TempBytesWritten })),
@@ -175,7 +185,7 @@ func (s *AttemptTelemetrySession) Stop(ctx context.Context) AttemptTelemetry {
 	coverage := map[string]bool{
 		"cpu":          (s.cgroupRoot != "" && cgroup.CPUUsec >= s.startCgroup.CPUUsec) || (s.cgroupRoot == "" && s.startProcess.valid && process.valid && process.totalUsec() >= s.startProcess.totalUsec()),
 		"memory":       s.startCgroup.MemoryCurrent > 0 || cgroup.MemoryCurrent > 0 || s.peakRSSBytes > 0,
-		"disk":         resources != nil && s.startResources != nil,
+		"disk":         (s.cgroupRoot != "" && (cgroup.DiskReadBytes >= s.startCgroup.DiskReadBytes || cgroup.DiskWriteBytes >= s.startCgroup.DiskWriteBytes)) || (resources != nil && s.startResources != nil),
 		"network":      resources != nil && s.startResources != nil,
 		"cgroup":       s.cgroupRoot != "",
 		"process_tree": s.cgroupRoot != "",
@@ -238,11 +248,17 @@ func (s *AttemptTelemetrySession) EndPhase(start PhaseResourceSnapshot) PhaseRes
 	if s.cgroupRoot == "" {
 		cpuUsec = p.totalUsec() - start.process.totalUsec()
 	}
+	diskReadBytes := positiveDelta(c.DiskReadBytes - start.cgroup.DiskReadBytes)
+	diskWriteBytes := positiveDelta(c.DiskWriteBytes - start.cgroup.DiskWriteBytes)
+	if !cgroupIOAvailable(s.cgroupRoot) {
+		diskReadBytes = positiveDelta(resourceCounter(r, func(v *SampledResources) int64 { return v.DiskReadBytesTotal }) - resourceCounter(start.resources, func(v *SampledResources) int64 { return v.DiskReadBytesTotal }))
+		diskWriteBytes = positiveDelta(resourceCounter(r, func(v *SampledResources) int64 { return v.DiskWriteBytesTotal }) - resourceCounter(start.resources, func(v *SampledResources) int64 { return v.DiskWriteBytesTotal }))
+	}
 	return PhaseResourceDelta{
 		CPUTimeMs:      positiveDelta(cpuUsec) / 1000,
 		PeakRSSBytes:   max64(start.cgroup.MemoryCurrent, c.MemoryCurrent),
-		DiskReadBytes:  positiveDelta(resourceCounter(r, func(v *SampledResources) int64 { return v.DiskReadBytesTotal }) - resourceCounter(start.resources, func(v *SampledResources) int64 { return v.DiskReadBytesTotal })),
-		DiskWriteBytes: positiveDelta(resourceCounter(r, func(v *SampledResources) int64 { return v.DiskWriteBytesTotal }) - resourceCounter(start.resources, func(v *SampledResources) int64 { return v.DiskWriteBytesTotal })),
+		DiskReadBytes:  diskReadBytes,
+		DiskWriteBytes: diskWriteBytes,
 		NetworkRxBytes: positiveDelta(resourceCounter(r, func(v *SampledResources) int64 { return v.NetworkReceiveBytesTotal }) - resourceCounter(start.resources, func(v *SampledResources) int64 { return v.NetworkReceiveBytesTotal })),
 		NetworkTxBytes: positiveDelta(resourceCounter(r, func(v *SampledResources) int64 { return v.NetworkTransmitBytesTotal }) - resourceCounter(start.resources, func(v *SampledResources) int64 { return v.NetworkTransmitBytesTotal })),
 	}
@@ -387,6 +403,14 @@ func readCgroupUsage(root string) cgroupUsage {
 		}
 	}
 	return out
+}
+
+func cgroupIOAvailable(root string) bool {
+	if root == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(root, "io.stat"))
+	return err == nil
 }
 
 func (s *AttemptTelemetrySession) BeginPhase() PhaseResourceSnapshot { return s.StartPhase() }

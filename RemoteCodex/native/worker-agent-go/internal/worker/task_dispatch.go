@@ -103,7 +103,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	}
 
 	spec := pte.Spec
-	assetTracker := &assetOperationTracker{}
+	assetTracker := &assetOperationTracker{cacheEnabled: w.canonicalAssetCache != nil}
 	// One recorder belongs to this attempt and is shared with asset
 	// resolution and TaskRunner. Binding it before resolving assets keeps
 	// cache/download events in the same ordered report as runner/engine

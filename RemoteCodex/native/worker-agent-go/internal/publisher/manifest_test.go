@@ -282,6 +282,26 @@ func TestProbeMedia_ParsesHandRolledJSON(t *testing.T) {
 	}
 }
 
+func TestProbeMediaDetails_ParsesVideoAndAudio(t *testing.T) {
+	payload := []byte(`{
+		"streams": [
+			{"codec_type":"video","codec_name":"h264","width":1920,"height":1080},
+			{"codec_type":"audio","codec_name":"aac"}
+		],
+		"format": {"duration":"42.5"}
+	}`)
+	probe, err := parseFfprobeDetails(payload)
+	if err != nil {
+		t.Fatalf("parseFfprobeDetails: %v", err)
+	}
+	if !probe.HasVideo || !probe.HasAudio || probe.AudioTrackCount != 1 {
+		t.Fatalf("stream presence = video:%v audio:%v tracks:%d", probe.HasVideo, probe.HasAudio, probe.AudioTrackCount)
+	}
+	if probe.VideoCodec != "h264" || probe.AudioCodec != "aac" || probe.Width != 1920 || probe.Height != 1080 || probe.DurationSec != 42.5 {
+		t.Fatalf("probe = %+v", probe)
+	}
+}
+
 func TestProbeMedia_ParsesJSON_NoHit(t *testing.T) {
 	codec, dur, w, h := parseFfprobeJSON([]byte(`{"streams":[{}]}`))
 	if codec != "" || dur != 0 || w != 0 || h != 0 {

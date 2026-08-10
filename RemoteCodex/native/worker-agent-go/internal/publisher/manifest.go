@@ -60,15 +60,21 @@ type OutputManifest struct {
 	// "mp4" iff the ftyp box is present, else "" (we do not guess).
 	Format string
 	// Ffprobe populated iff ffprobe was on PATH and returned parseable
-	// JSON. If ffprobe is missing the fields stay zero-valued and
-	// FfprobeErr is set so the supervisor can decide to skip the
-	// wire-shape adapter instead of crashing.
-	Codec       string
-	DurationSec float64
-	Width       int
-	Height      int
-	FfprobeOK   bool
-	FfprobeErr  string
+	// JSON. FfprobeValid is the final media-quality predicate: a real
+	// video stream and a real audio stream with usable metadata. These
+	// fields are deliberately derived from the final artifact, never from
+	// the render plan.
+	Codec           string
+	AudioCodec      string
+	DurationSec     float64
+	Width           int
+	Height          int
+	HasVideoStream  bool
+	HasAudioStream  bool
+	AudioTrackCount int
+	FfprobeOK       bool
+	FfprobeValid    bool
+	FfprobeErr      string
 }
 
 // Sentinel errors.
@@ -133,15 +139,20 @@ func ComputeLocalManifest(ctx context.Context, path string) (*OutputManifest, er
 
 	// ffprobe enrichment is best-effort; missing binary must not
 	// fail the manifest computation.
-	codec, dur, w, h, perr := ProbeMedia(ctx, path)
+	probe, perr := ProbeMediaDetails(ctx, path)
 	if perr != nil {
 		m.FfprobeErr = perr.Error()
 	} else {
-		m.Codec = codec
-		m.DurationSec = dur
-		m.Width = w
-		m.Height = h
+		m.Codec = probe.VideoCodec
+		m.AudioCodec = probe.AudioCodec
+		m.DurationSec = probe.DurationSec
+		m.Width = probe.Width
+		m.Height = probe.Height
+		m.HasVideoStream = probe.HasVideo
+		m.HasAudioStream = probe.HasAudio
+		m.AudioTrackCount = probe.AudioTrackCount
 		m.FfprobeOK = true
+		m.FfprobeValid = probe.HasVideo && probe.HasAudio && probe.VideoCodec != "" && probe.Width > 0 && probe.Height > 0
 	}
 	return m, nil
 }

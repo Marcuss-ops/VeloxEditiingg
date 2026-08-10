@@ -2,6 +2,7 @@ package publisher
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -9,44 +10,114 @@ import (
 )
 
 // manifest_ffprobe.go owns the best-effort ffprobe enrichment of
-// OutputManifest (ProbeMedia + parseFfprobeJSON) and the tiny JSON
-// scanners it relies on (firstJSONString / firstJSONInt /
-// firstJSONFloat / firstNumber / extractJSONObject). The manifest
-// computation itself lives in manifest.go.
+// OutputManifest (ProbeMediaDetails + parseFfprobeJSON) and the legacy
+// pure parsing helpers retained for compatibility. The manifest computation
+// itself lives in manifest.go.
 
 // ────────────────────────────────────────────────────────────────────────
 // ffprobe enrichment (best-effort).
 // ────────────────────────────────────────────────────────────────────────
 
-// ProbeMedia calls ffprobe if it is on PATH and parses codec /
-// duration / dimensions. Returns an error when ffprobe is missing
-// or non-zero-exits; callers should treat that as a soft signal
-// (the rest of the manifest is still valid).
-func ProbeMedia(ctx context.Context, path string) (codec string, durationSec float64, width, height int, err error) {
+// MediaProbe is the final-artifact media metadata used by the publisher.
+// Unlike the old video-only probe, it inspects every stream so the report can
+// prove that the delivered artifact really contains audio as well as video.
+type MediaProbe struct {
+	VideoCodec      string
+	AudioCodec      string
+	DurationSec     float64
+	Width           int
+	Height          int
+	HasVideo        bool
+	HasAudio        bool
+	AudioTrackCount int
+}
+
+type ffprobeDocument struct {
+	Streams []ffprobeStream `json:"streams"`
+	Format  ffprobeFormat   `json:"format"`
+}
+
+type ffprobeStream struct {
+	CodecType string `json:"codec_type"`
+	CodecName string `json:"codec_name"`
+	Width     int    `json:"width"`
+	Height    int    `json:"height"`
+	Duration  string `json:"duration"`
+}
+
+type ffprobeFormat struct {
+	Duration string `json:"duration"`
+}
+
+// ProbeMediaDetails calls ffprobe if it is on PATH and parses every stream.
+// Returns an error when ffprobe is missing, non-zero-exits, or emits invalid
+// JSON. Callers decide whether missing media streams are a quality failure.
+func ProbeMediaDetails(ctx context.Context, path string) (MediaProbe, error) {
 	if _, lookErr := exec.LookPath("ffprobe"); lookErr != nil {
-		return "", 0, 0, 0, fmt.Errorf("ffprobe missing on PATH")
+		return MediaProbe{}, fmt.Errorf("ffprobe missing on PATH")
 	}
 
-	// -show_streams narrow to the first video stream; -show_format
-	// gives us the container duration in seconds.
 	args := []string{
 		"-v", "error",
 		"-print_format", "json",
 		"-show_format",
 		"-show_streams",
-		"-select_streams", "v:0",
 		path,
 	}
 	cmd := exec.CommandContext(ctx, "ffprobe", args...)
 	out, runErr := cmd.Output()
 	if runErr != nil {
-		return "", 0, 0, 0, fmt.Errorf("ffprobe exec: %w", runErr)
+		return MediaProbe{}, fmt.Errorf("ffprobe exec: %w", runErr)
 	}
-	codec, durationSec, width, height = parseFfprobeJSON(out)
-	if codec == "" && durationSec == 0 && width == 0 && height == 0 {
-		return "", 0, 0, 0, fmt.Errorf("ffprobe returned no usable fields")
+	probe, err := parseFfprobeDetails(out)
+	if err != nil {
+		return MediaProbe{}, err
 	}
-	return codec, durationSec, width, height, nil
+	if !probe.HasVideo && !probe.HasAudio {
+		return MediaProbe{}, fmt.Errorf("ffprobe returned no media streams")
+	}
+	return probe, nil
+}
+
+// ProbeMedia keeps the original API for callers that only need video fields.
+func ProbeMedia(ctx context.Context, path string) (codec string, durationSec float64, width, height int, err error) {
+	probe, err := ProbeMediaDetails(ctx, path)
+	if err != nil {
+		return "", 0, 0, 0, err
+	}
+	return probe.VideoCodec, probe.DurationSec, probe.Width, probe.Height, nil
+}
+
+func parseFfprobeDetails(b []byte) (MediaProbe, error) {
+	var doc ffprobeDocument
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return MediaProbe{}, fmt.Errorf("ffprobe JSON parse: %w", err)
+	}
+	probe := MediaProbe{}
+	for _, stream := range doc.Streams {
+		switch stream.CodecType {
+		case "video":
+			probe.HasVideo = true
+			if probe.VideoCodec == "" {
+				probe.VideoCodec = stream.CodecName
+				probe.Width = stream.Width
+				probe.Height = stream.Height
+			}
+		case "audio":
+			probe.HasAudio = true
+			probe.AudioTrackCount++
+			if probe.AudioCodec == "" {
+				probe.AudioCodec = stream.CodecName
+			}
+		}
+		if probe.DurationSec == 0 && stream.Duration != "" {
+			probe.DurationSec, _ = strconv.ParseFloat(stream.Duration, 64)
+		}
+	}
+	if probe.DurationSec == 0 && doc.Format.Duration != "" {
+		probe.DurationSec, _ = strconv.ParseFloat(doc.Format.Duration, 64)
+	}
+	return probe, nil
 }
 
 // parseFfprobeJSON tolerates minimal JSON shapes so the test fixtures

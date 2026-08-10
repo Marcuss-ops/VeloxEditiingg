@@ -363,6 +363,20 @@ func TestAttachAssetOperationsAddsExistingReportMetrics(t *testing.T) {
 	}
 }
 
+func TestAttachAssetOperationsProjectsResolverCacheCounters(t *testing.T) {
+	tracker := &assetOperationTracker{cacheEnabled: true}
+	tracker.add(AssetOperationRecord{AssetID: "hit", CacheStatus: "hit"})
+	tracker.add(AssetOperationRecord{AssetID: "miss", CacheStatus: "miss"})
+	report := taskrunner.TaskExecutionReport{}
+	attachAssetOperations(&report, tracker)
+	if report.Metrics["cache.enabled"] != true || report.Metrics["cache.lookups"] != int64(2) {
+		t.Fatalf("cache summary = %#v", report.Metrics)
+	}
+	if report.Metrics["asset.cache.hit.count"] != int64(1) || report.Metrics["asset.cache.miss.count"] != int64(1) {
+		t.Fatalf("cache hit/miss counters = %#v", report.Metrics)
+	}
+}
+
 func TestAttachAssetOperationsToPhaseMarkersMakesRecordsReportable(t *testing.T) {
 	start := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	end := start.Add(250 * time.Millisecond)
