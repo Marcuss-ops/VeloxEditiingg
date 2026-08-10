@@ -22,12 +22,11 @@
 //     SUCCEEDED lifecycle.
 //     4. Returns 202 Accepted with the new operation_id.
 //
-//     The async Operations Runner (FleetController tick goroutine
-//     — Step 4/15 wires the abstraction; the supervisor wiring
-//     lands in Step 7+) actually drives the SSH/Ansible path:
-//     waits for active_jobs=0, runs smoke, etc. Step 6 ships with
-//     the noop executor only, so the audit row demonstrates the
-//     abstraction end-to-end without an SSH/Ansible dependency.
+//     The async Operations Runner (FleetController tick goroutine)
+//     drives the concrete executor path: it waits for active_jobs=0,
+//     runs the configured smoke flow where required, and records the
+//     terminal audit state. A capability gate rejects operations whose
+//     production dependencies are not fully wired.
 //
 //   - The handler reads through a ControllerPublisher interface
 //     seam so tests substitute a stub controller without standing
@@ -49,10 +48,9 @@
 // Operator-facing: a click on the "drain" button publishes a
 // ledger row AND immediately marks the worker Drain=true. The
 // WorkerCard's health derivation (Step 3/15) reflects DRAINING
-// on the next poll. The tick goroutine's noop executor
-// transitions the ledger row to SUCCEEDED in the next dispatch,
-// giving the dashboard the QUEUED→RUNNING→SUCCEEDED audit
-// trail without an SSH handshake.
+// on the next poll. The tick goroutine's registered concrete
+// executor transitions the ledger row through its auditable
+// QUEUED→RUNNING→SUCCEEDED/FAILED lifecycle.
 package api
 
 import (
@@ -110,14 +108,12 @@ type AdminWorkersMutationsHandler struct {
 	reg       *workersreg.Registry
 	publisher ControllerPublisher
 
-	// updateGate is the fail-closed UpdateExecutor capability gate
-	// (AZIONE 2). nil disables the gate (unit-test / legacy wiring).
-	// When set, POST /update refuses with 503 while the gate returns
-	// non-nil — the master no longer accepts an update operation it
-	// will fail ~30s later inside the executor. The closure reads the
-	// LIVE UpdateExecutor capability at request time so backends
-	// attached later during bootstrap are reflected immediately.
+	// updateGate is the fail-closed UpdateExecutor capability gate.
 	updateGate func() error
+
+	// resumeGate prevents POST /resume from claiming a worker when the
+	// fresh Level-D smoke capability is disabled or misconfigured.
+	resumeGate func() error
 }
 
 // NewAdminWorkersMutationsHandler wires the mutation handler to the
@@ -144,6 +140,11 @@ func NewAdminWorkersMutationsHandler(reg *workersreg.Registry, pub ControllerPub
 // RegisterRoutes).
 func (h *AdminWorkersMutationsHandler) SetUpdateGate(gate func() error) {
 	h.updateGate = gate
+}
+
+// SetResumeGate installs the fail-closed Level-D smoke gate for resume.
+func (h *AdminWorkersMutationsHandler) SetResumeGate(gate func() error) {
+	h.resumeGate = gate
 }
 
 // mutationHandler is the unified request→publish path used by all

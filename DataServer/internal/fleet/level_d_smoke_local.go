@@ -56,7 +56,8 @@ func (w *LocalShellWorker) DownloadAsset(_ context.Context, runID, _, pickupURL,
 	_ = os.MkdirAll(w.runDir(runID), 0755)
 
 	// Production path: download the real asset from the pickup URL.
-	// asset:// URLs are synthetic (StubAssetResolver) — skip curl.
+	// asset:// URLs are synthetic and are accepted only by the explicit
+	// development smoke backend; production resolves a real pickup URL.
 	if pickupURL != "" && !strings.HasPrefix(pickupURL, "asset://") {
 		cmd := exec.Command("curl", "-sSL", "-o", destPath, pickupURL)
 		out, err := cmd.CombinedOutput()

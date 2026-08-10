@@ -57,11 +57,11 @@ type mutationAction func(ctx context.Context, info *workersreg.Worker) error
 //     excludes the worker from GetEligibleWorkers on the next
 //     placement call (immediate lease refusal).
 //   - Asynchronously: publish a fleet_operations op="drain" row.
-//     Future executor (Step 7+) waits for active_jobs=0 before
+//     Future/concrete executor waits for active_jobs=0 before
 //     transitioning the worker to a confirmed DRAINING state.
-//     Step 6 ships with the noop executor, so the audit row
-//     transitions QUEUED→RUNNING→SUCCEEDED immediately — the
-//     in-process flag flip is the user-visible effect.
+//     The operation registry is fail-closed: no missing or noop
+//     production executor may transition an operation to success;
+//     the in-process flag flip is the immediate user-visible effect.
 //
 // Idempotency:
 //   - Already-draining worker → 409 (errAlreadyInDesiredState).

@@ -72,7 +72,10 @@ func wirePostBuild(j *jobsDeps, t *taskDeps) error {
 //
 // Nil-tolerant: each step re-checks its own deps so a partial boot
 // keeps the routes un-mounted instead of 503-on-every-request.
-func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *moduleDeps, p *persistenceDeps, workerNodeRegistry *fleet.WorkerRegistry, sharedSSH fleet.BackendSSHClient) error {
+func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *moduleDeps, p *persistenceDeps, workerNodeRegistry *fleet.WorkerRegistry, sharedSSH fleet.BackendSSHClient, smokeCapability *fleet.SmokeCapabilityStatus) error {
+	if smokeCapability != nil {
+		*smokeCapability = fleet.DisabledSmokeCapability("real asset resolver is not wired")
+	}
 	// Step 6/15 fleet-operator: wire the admin worker mutations handler
 	// (POST /api/v1/admin/workers/{id}/{drain,resume,quarantine}).
 	// Composition order: buildFleet returns FleetDep AFTER buildModules
@@ -95,6 +98,14 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 		// function (fresh Level-D smoke + Drive verifier) once wiring
 		// completes. Drain/resume/quarantine are intentionally not
 		// gated — they have no UpdateExecutor dependency.
+		if smokeCapability != nil {
+			mutationsHandler.SetResumeGate(func() error {
+				if smokeCapability.State == fleet.SmokeCapabilityReady {
+					return nil
+				}
+				return fmt.Errorf("Level-D smoke capability %s: %s", smokeCapability.State, smokeCapability.Reason)
+			})
+		}
 		if fleetDep.Update != nil {
 			mutationsHandler.SetUpdateGate(func() error {
 				if fleetDep.Update.Ready() {
@@ -155,9 +166,9 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 		log.Printf("[BOOTSTRAP] Admin workers health handler wired (SSH=%d targets from WorkerNodeRegistry + Registry + Deployments; level=D smoke pending)", workerNodeRegistry.Len())
 	}
 
-	// Step 12/15 fleet-operator: register the LevelDSmokeExecutor
-	// for the OperationKindSmoke kind (replaces the noop default
-	// from NewExecutorRegistry), AND wire the on-demand POST
+	// Step 12/15 fleet-operator: register the concrete LevelDSmokeExecutor
+	// for the OperationKindSmoke kind (the production registry has no
+	// noop fallback), AND wire the on-demand POST
 	// /api/v1/admin/workers/{id}/smoke endpoint that publishes
 	// these operations.
 	//
@@ -178,7 +189,8 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 	// /api/v1/admin/operations/{id} for terminal state; the
 	// smoke_runs table records the duration_ms baseline.
 	if fleetDep != nil && fleetDep.Registry != nil && m != nil && m.Workers != nil && p != nil && p.SQLite != nil {
-		isDev := strings.EqualFold(strings.TrimSpace(cfg.Fleet.SmokeMode), "development")
+		environment := strings.ToLower(strings.TrimSpace(cfg.Runtime.Environment))
+		isDev := strings.EqualFold(strings.TrimSpace(cfg.Fleet.SmokeMode), "development") && environment == "development"
 
 		smokeBackend := fleet.LevelDSmokeBackend{
 			Lease:     fleet.NewRegistryDrainLease(m.Workers.Registry()),
@@ -214,41 +226,34 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 				log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: Drive module unavailable — smoke remains not wired")
 			}
 			// Production deliberately leaves Asset nil. The canonical asset
-			// resolver is not wired yet; the concrete executor remains
-			// registered but fails smoke operations with
-			// ErrSmokeRunnerNotWired. Never substitute a canned asset in
-			// production.
-			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: production asset resolver unavailable — smoke operations fail closed")
+			// resolver is not wired yet; registration below fails closed and
+			// no smoke or resume capability is exposed. Never substitute a
+			// canned asset in production.
+			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: production asset resolver unavailable — capability registration will fail closed")
 		}
 
 		levelDSmokeExecutor := fleet.NewLevelDSmokeExecutor(smokeBackend)
-		// Register the concrete executor even when production backends are
-		// incomplete. Execute fails closed with ErrSmokeRunnerNotWired,
-		// preserving the operation audit row instead of crashing bootstrap
-		// or silently substituting a no-op executor.
-		if err := fleetDep.Registry.Register(fleet.OperationKindSmoke, levelDSmokeExecutor); err != nil {
-			return fmt.Errorf("register LevelDSmokeExecutor: %w", err)
-		} else {
-			driveDesc := "nil"
-			assetDesc := "nil"
-			if smokeBackend.Drive != nil {
-				driveDesc = "RealDrive"
-			}
-			if smokeBackend.Asset != nil {
-				assetDesc = "configured"
-			}
-			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor registered for kind=%s (Worker=SSHWorkerExec[%d targets], Drive=%s, Asset=%s, Lease=RegistryDrain, SmokeRuns=SQLite)", fleet.OperationKindSmoke, workerNodeRegistry.Len(), driveDesc, assetDesc)
+		status, err := fleet.ConfigureLevelDSmokeCapability(fleetDep.Registry, levelDSmokeExecutor, isDev)
+		if err != nil {
+			return err
 		}
-		m.Workers.SetSmokeHandler(api.NewAdminWorkersSmokeHandler(m.Workers.Registry(), fleetDep.Controller))
-		if err := fleetDep.Registry.Register(fleet.OperationKindResume, fleet.NewResumeExecutor(fleet.ResumeBackend{
-			Registry:      m.Workers.Registry(),
-			SmokeExecutor: levelDSmokeExecutor,
-		})); err != nil {
-			return fmt.Errorf("register ResumeExecutor: %w", err)
-		} else {
-			log.Printf("[BOOTSTRAP] ResumeExecutor registered for kind=%s (fresh Level D smoke gate wired)", fleet.OperationKindResume)
+		if smokeCapability != nil {
+			*smokeCapability = status
 		}
-		if fleetDep.Update != nil && smokeBackend.Drive != nil {
+		if status.State == fleet.SmokeCapabilityReady {
+			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor capability=READY (Worker=SSHWorkerExec[%d targets], Drive and asset resolver configured)", workerNodeRegistry.Len())
+			m.Workers.SetSmokeHandler(api.NewAdminWorkersSmokeHandler(m.Workers.Registry(), fleetDep.Controller))
+			if err := fleetDep.Registry.Register(fleet.OperationKindResume, fleet.NewResumeExecutor(fleet.ResumeBackend{
+				Registry:      m.Workers.Registry(),
+				SmokeExecutor: levelDSmokeExecutor,
+			})); err != nil {
+				return fmt.Errorf("register ResumeExecutor: %w", err)
+			}
+			log.Printf("[BOOTSTRAP] ResumeExecutor registered for kind=%s", fleet.OperationKindResume)
+		} else {
+			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor capability=%s: %s; smoke and resume are not registered", status.State, status.Reason)
+		}
+		if fleetDep.Update != nil && status.State == fleet.SmokeCapabilityReady && smokeBackend.Drive != nil {
 			freshSmoke := fleet.NewFreshSmokeRunner(levelDSmokeExecutor, p.SQLite)
 			// Nil-safe Drive attach (AZIONE 2): a Drive module without a
 			// live service leaves the update capability NOT READY rather
@@ -269,7 +274,9 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 				log.Printf("[BOOTSTRAP] UpdateExecutor fresh Level-D smoke + Drive verifier wired")
 			}
 		}
-		log.Printf("[BOOTSTRAP] Admin workers smoke handler wired (POST /api/v1/admin/workers/{id}/smoke; tick goroutine drives LevelDSmokeExecutor)")
+		if status.State == fleet.SmokeCapabilityReady {
+			log.Printf("[BOOTSTRAP] Admin workers smoke handler wired (POST /api/v1/admin/workers/{id}/smoke; tick goroutine drives LevelDSmokeExecutor)")
+		}
 	}
 
 	// Step 13/15 fleet-operator: wire the per-worker GET telemetry

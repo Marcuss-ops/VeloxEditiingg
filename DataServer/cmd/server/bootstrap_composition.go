@@ -81,6 +81,10 @@ type appComponents struct {
 	// readiness and diagnostics must distinguish DISABLED from a missing
 	// or silently no-op evaluator.
 	opsAlertsCapability opsalerts.CapabilityStatus
+
+	// smokeCapability is explicit even when Level-D is unavailable:
+	// readiness and route wiring distinguish DISABLED from a real executor.
+	smokeCapability fleet.SmokeCapabilityStatus
 }
 
 // close releases owned resources. Called via defer on the returned
@@ -257,7 +261,8 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	// metrics / alerts handlers + the shared SSH client) — extracted to
 	// bootstrap_wiring.go so buildAppComponents stays a readable
 	// dependency-ordered composition. Nil-tolerant per step.
-	if err := wireFleetOperatorHandlers(cfg, fleetDep, m, p, workerNodeRegistry, sharedSSH); err != nil {
+	var smokeCapability fleet.SmokeCapabilityStatus
+	if err := wireFleetOperatorHandlers(cfg, fleetDep, m, p, workerNodeRegistry, sharedSSH, &smokeCapability); err != nil {
 		_ = p.SQLite.Close()
 		return nil, fmt.Errorf("bootstrap: fleet operator wiring: %w", err)
 	}
@@ -294,6 +299,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		supervisor:          supervisor,
 		health:              m.Health,
 		opsAlertsCapability: opsAlertsCapability,
+		smokeCapability:     smokeCapability,
 	}, nil
 }
 

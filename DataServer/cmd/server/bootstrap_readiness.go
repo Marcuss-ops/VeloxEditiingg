@@ -14,6 +14,7 @@ import (
 	"log"
 	"strings"
 
+	"velox-server/internal/fleet"
 	"velox-server/internal/fleet/opsalerts"
 	"velox-server/internal/registry"
 )
@@ -160,6 +161,21 @@ func registerReadinessChecks(c *appComponents, t *transportBundle) {
 		}
 		return status.ReadinessError()
 	})
+	c.modules.Health.AddReadinessCheck("level-d-smoke-capability", func() error {
+		status := c.smokeCapability
+		if status.State == "" {
+			status = fleet.DisabledSmokeCapability("real asset resolver is not wired")
+		}
+		return status.ReadinessError()
+	})
+	c.modules.Health.AddReadinessCapability("level-d-smoke", func() string {
+		status := c.smokeCapability
+		if status.State == "" {
+			return string(fleet.SmokeCapabilityDisabled)
+		}
+		return string(status.State)
+	})
+
 	c.modules.Health.AddReadinessCapability("opsalerts", func() string {
 		status := c.opsAlertsCapability
 		if status.State == "" {

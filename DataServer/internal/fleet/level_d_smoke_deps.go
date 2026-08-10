@@ -8,8 +8,8 @@
 // implementations:
 //   - lease store    → WorkerInfo.Drain transient (Step 6/15 owner)//   - worker exec   → BackendSSHClient (the production SSH adapter)
 //   - drive uploader → integrations/drive.Service.UploadFile
-//   - asset resolver → the production asset-bundle lookup; the stub is
-//     restricted to explicit development mode
+//   - asset resolver → the production asset-bundle lookup; no stub is
+//     permitted in the production composition
 
 //   - smoke runs     → SQLiteStore persisted rows
 //
@@ -185,10 +185,10 @@ type BackendDriveUploader interface {
 }
 
 // BackendAssetResolver maps an AssetID to its pickup URL +
-// expected byte size. Production wires the canonical asset
-// picker (referenced via mission-control/asset bundle lookup);
-// today the orchestrator ships with a minimal stub returning a
-// canned URL — a TODO comment marks the production wiring path.
+// expected byte size. Production must wire the canonical asset
+// picker (referenced via mission-control/asset bundle lookup).
+// The development-only StubAssetResolver is never accepted by
+// ConfigureLevelDSmokeCapability when composing production.
 // The resolver MUST set expectedBytes to the bundle's actual
 // downloaded size (NOT a fixed constant) so Drive's size-mismatch
 // check catches upload truncation.
@@ -246,12 +246,11 @@ type LevelDSmokeBackend struct {
 	Now       NowFunc
 }
 
-// StubAssetResolver is the minimal BackendAssetResolver used
-// for development smoke runs (VELOX_SMOKE_MODE=development) until
-// the canonical asset picker (the stage_preflight / engine_planner
-// asset lookup) lands. Both pickup URL and expected bytes are
-// caller-provided so production wiring can swap it with a real
-// resolver via the same seam.
+// StubAssetResolver is a development-only BackendAssetResolver used
+// exclusively when VELOX_SMOKE_MODE=development. It must never be
+// passed to a production composition; ConfigureLevelDSmokeCapability
+// validates that production has a real resolver and fails closed when
+// the resolver is absent.
 //
 // In production mode this resolver MUST NOT be used — the asset
 // resolver should be nil, causing the executor's pre-flight nil
@@ -262,7 +261,8 @@ type StubAssetResolver struct {
 	ExpectedBytes int64
 }
 
-// NewStubAssetResolver returns a StubAssetResolver for dev-mode smoke runs.
+// NewStubAssetResolver returns a StubAssetResolver for explicit dev-mode
+// smoke runs. Production bootstrap must not call this constructor.
 func NewStubAssetResolver(pickupURL string, expectedBytes int64) *StubAssetResolver {
 	return &StubAssetResolver{PickupURL: pickupURL, ExpectedBytes: expectedBytes}
 }

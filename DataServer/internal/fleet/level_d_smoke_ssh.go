@@ -133,7 +133,8 @@ func NewSSHWorkerExec(ssh BackendSSHClient) BackendWorkerExec {
 // dev-mode fallback: a synthetic ffmpeg-generated clip.
 func (e *SSHWorkerExec) DownloadAsset(ctx context.Context, runID, workerID, pickupURL, destPath string) error {
 	// Production path: download the real asset from the pickup URL.
-	// asset:// URLs are synthetic (StubAssetResolver) — skip curl.
+	// asset:// URLs are synthetic and are accepted only by explicit
+	// development mode; production must provide a real pickup URL.
 	if pickupURL != "" && !strings.HasPrefix(pickupURL, "asset://") {
 		cmd := fmt.Sprintf(
 			"mkdir -p %s && curl -sSL -o %s '%s'",
