@@ -30,6 +30,69 @@ import (
 // (CONNECTED -> STALE -> PARTITIONED -> DISCONNECTED). Touching one
 // does not collapse the other.
 
+// workerTaskRuntimeUpsert is the minimal canonical identity/projection payload
+// written by lease acceptance. Progress fields remain at their defaults until
+// the worker publishes its first detailed heartbeat; identity fields are
+// available immediately because this helper runs in the AcceptTaskAtomic tx.
+// Heartbeat reconciliation keeps its richer progress upsert in the same file
+// because it must preserve the latest counters while accepting identity edges.
+type workerTaskRuntimeUpsert struct {
+	TaskID          string
+	JobID           string
+	AttemptID       string
+	AttemptNumber   int
+	WorkerID        string
+	SessionID       string
+	LeaseID         string
+	ExecutorID      string
+	ExecutorVersion int
+	RuntimeStatus   string
+	StartedAt       string
+	LastProgressAt  string
+	UpdatedAt       string
+}
+
+// upsertWorkerTaskRuntimeTx creates the live Attempt read model without
+// opening a second transaction. It is deliberately reusable by the lease
+// acceptance path and heartbeat reconciliation, so the admin projection has
+// one canonical storage row and one identity source.
+func upsertWorkerTaskRuntimeTx(ctx context.Context, tx *sql.Tx, runtime workerTaskRuntimeUpsert) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO worker_task_runtime
+		(task_id,job_id,attempt_id,attempt_number,worker_id,session_id,lease_id,
+		executor_id,executor_version,runtime_status,started_at,last_progress_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(task_id) DO UPDATE SET
+		job_id=excluded.job_id, attempt_id=excluded.attempt_id,
+		attempt_number=excluded.attempt_number, worker_id=excluded.worker_id,
+		session_id=excluded.session_id, lease_id=excluded.lease_id,
+		executor_id=excluded.executor_id, executor_version=excluded.executor_version,
+		runtime_status=excluded.runtime_status,
+		started_at=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id
+			THEN excluded.started_at ELSE COALESCE(worker_task_runtime.started_at, excluded.started_at) END,
+		progress_percent=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id THEN 0 ELSE worker_task_runtime.progress_percent END,
+		progress_stage=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id THEN NULL ELSE worker_task_runtime.progress_stage END,
+		current_scene=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id THEN 0 ELSE worker_task_runtime.current_scene END,
+		total_scenes=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id THEN 0 ELSE worker_task_runtime.total_scenes END,
+		current_segment=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id THEN 0 ELSE worker_task_runtime.current_segment END,
+		total_segments=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id THEN 0 ELSE worker_task_runtime.total_segments END,
+		frames_encoded=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id THEN 0 ELSE worker_task_runtime.frames_encoded END,
+		frames_decoded=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id THEN 0 ELSE worker_task_runtime.frames_decoded END,
+		frames_composited=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id THEN 0 ELSE worker_task_runtime.frames_composited END,
+		ffmpeg_speed_x=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id THEN 0 ELSE worker_task_runtime.ffmpeg_speed_x END,
+		elapsed_ms=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id THEN 0 ELSE worker_task_runtime.elapsed_ms END,
+		cumulative_metrics_json=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id THEN '{}' ELSE worker_task_runtime.cumulative_metrics_json END,
+		last_progress_at=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id
+			THEN NULL ELSE worker_task_runtime.last_progress_at END,
+		cancel_requested_at=CASE WHEN worker_task_runtime.attempt_id <> excluded.attempt_id
+			THEN NULL ELSE worker_task_runtime.cancel_requested_at END,
+		updated_at=excluded.updated_at, missing_heartbeats=0`,
+		runtime.TaskID, runtime.JobID, runtime.AttemptID, runtime.AttemptNumber,
+		runtime.WorkerID, runtime.SessionID, runtime.LeaseID, runtime.ExecutorID,
+		runtime.ExecutorVersion, runtime.RuntimeStatus, runtime.StartedAt,
+		runtime.LastProgressAt, runtime.UpdatedAt)
+	return err
+}
+
 // DeleteWorkerTaskRuntime removes the volatile runtime projection after the
 // canonical TaskResult transaction has closed the attempt. The task/attempt
 // tables remain the durable history; this table is only the live view.

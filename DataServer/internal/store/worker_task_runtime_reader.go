@@ -54,19 +54,27 @@ func (s *SQLiteStore) GetWorkerTaskRuntimeByJob(ctx context.Context, jobID strin
 
 	var runtime WorkerTaskRuntimeRow
 	var metricsJSON sql.NullString
+	var progressPhase sql.NullString
+	var lastProgressAt sql.NullString
 	if err := row.Scan(
 		&runtime.TaskID, &runtime.JobID, &runtime.AttemptID, &runtime.AttemptNumber,
 		&runtime.WorkerID, &runtime.LeaseID, &runtime.RuntimeStatus,
-		&runtime.ProgressPercent, &runtime.ProgressPhase, &runtime.CurrentScene,
+		&runtime.ProgressPercent, &progressPhase, &runtime.CurrentScene,
 		&runtime.TotalScenes, &runtime.CurrentSegment, &runtime.TotalSegments,
 		&runtime.FramesEncoded, &runtime.FramesDecoded, &runtime.FramesComposited,
 		&runtime.FFmpegSpeedX, &runtime.ElapsedMS, &metricsJSON, &runtime.StartedAt,
-		&runtime.LastProgressAt, &runtime.UpdatedAt,
+		&lastProgressAt, &runtime.UpdatedAt,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("get worker task runtime: %w", err)
+	}
+	if progressPhase.Valid {
+		runtime.ProgressPhase = progressPhase.String
+	}
+	if lastProgressAt.Valid {
+		runtime.LastProgressAt = lastProgressAt.String
 	}
 	if metricsJSON.Valid && metricsJSON.String != "" {
 		if err := json.Unmarshal([]byte(metricsJSON.String), &runtime.CumulativeMetrics); err != nil {

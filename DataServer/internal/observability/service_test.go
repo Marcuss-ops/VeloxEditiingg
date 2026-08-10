@@ -399,6 +399,31 @@ func TestService_SummarizeTaskIncludesLiveAttemptProgress(t *testing.T) {
 	}
 }
 
+func TestService_SummarizeJobLiveAttemptIdentityIsImmediateAndUnique(t *testing.T) {
+	svc, tasks, attempts, _, _ := newTestService()
+	tasks.tasks["T-live-admin"] = &taskgraph.Task{ID: "T-live-admin", JobID: "J-live-admin", Status: taskgraph.StatusRunning, AttemptCount: 1}
+	attempts.attempts["T-live-admin"] = []taskattempts.TaskAttempt{{
+		ID: "A-live-admin", TaskID: "T-live-admin", JobID: "J-live-admin", AttemptNumber: 1,
+		WorkerID: "worker-admin", Status: taskattempts.AttemptStatusRunning,
+	}}
+	svc.WithLiveAttempts(stubLiveAttemptReader{live: &LiveAttempt{
+		TaskID: "T-live-admin", JobID: "J-live-admin", AttemptID: "A-live-admin", AttemptNumber: 1,
+		WorkerID: "worker-admin", RuntimeStatus: "RUNNING", StartedAt: "2026-08-10T10:00:00Z",
+	}})
+
+	result, err := svc.SummarizeJob(context.Background(), "J-live-admin")
+	if err != nil {
+		t.Fatalf("SummarizeJob() error: %v", err)
+	}
+	if len(result.Attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one canonical live Attempt", result.Attempts)
+	}
+	live := result.Attempts[0]
+	if !live.Live || live.WorkerID != "worker-admin" || live.AttemptID != "A-live-admin" || live.StartedAt == "" {
+		t.Fatalf("canonical live Attempt = %#v; worker_id, attempt_id and started_at must be immediate and non-empty", live)
+	}
+}
+
 func TestService_SummarizeJob(t *testing.T) {
 	svc, tasks, _, _, _ := newTestService()
 	tasks.tasks["T-1"] = &taskgraph.Task{ID: "T-1", JobID: "J-1", Status: taskgraph.StatusSucceeded, AttemptCount: 1}

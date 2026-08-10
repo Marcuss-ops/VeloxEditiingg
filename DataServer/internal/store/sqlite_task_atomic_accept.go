@@ -83,17 +83,33 @@ func (r *SQLiteTaskRepository) AcceptTaskAtomic(ctx context.Context, attempt *ta
 		return fmt.Errorf("task accept atomic %s (canonical attempt mismatch?): %w", attempt.TaskID, taskgraph.ErrTransitionConflict)
 	}
 
+	var executorID string
+	var executorVersion int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(executor_id, ''), CAST(COALESCE(executor_version, 0) AS INTEGER)
+		   FROM tasks WHERE task_id = ?`, attempt.TaskID,
+	).Scan(&executorID, &executorVersion); err != nil {
+		return fmt.Errorf("task accept atomic executor identity: %w", err)
+	}
+	var workerSessionID, workerSnapshotID string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(worker_session_id, ''), COALESCE(worker_snapshot_id, '')
+		   FROM task_attempts WHERE id = ?`, attempt.ID,
+	).Scan(&workerSessionID, &workerSnapshotID); err != nil {
+		return fmt.Errorf("task accept atomic runtime identity: %w", err)
+	}
+
 	// 2. Attempt UPDATE: PENDING → RUNNING in the same tx. The CAS tuple
 	// enforces (id, task_id, attempt_number, worker_id, lease_id, PENDING);
 	// any collision surfaces ErrTransitionConflict (attempt_row CAS gate
 	// matches the audit §9.5 invariant on Task RUNNING ⇒ Attempt RUNNING).
 	attRes, err := tx.ExecContext(ctx,
 		`UPDATE task_attempts
-		 SET status = 'RUNNING', updated_at = ?
+		 SET status = 'RUNNING', started_at = COALESCE(started_at, ?), updated_at = ?
 		 WHERE id = ? AND task_id = ? AND attempt_number = ?
 		   AND worker_id = ? AND lease_id = ?
 		   AND status = 'PENDING'`,
-		now, attempt.ID, attempt.TaskID, attempt.AttemptNumber,
+		now, now, attempt.ID, attempt.TaskID, attempt.AttemptNumber,
 		attempt.WorkerID, attempt.LeaseID,
 	)
 	if err != nil {
@@ -107,6 +123,15 @@ func (r *SQLiteTaskRepository) AcceptTaskAtomic(ctx context.Context, attempt *ta
 		// genuinely-missing rows).
 		return fmt.Errorf("task accept atomic attempt %s not PENDING or missing (canonical drift): %w",
 			attempt.ID, taskgraph.ErrTransitionConflict)
+	}
+	if err := upsertWorkerTaskRuntimeTx(ctx, tx, workerTaskRuntimeUpsert{
+		TaskID: attempt.TaskID, JobID: attempt.JobID, AttemptID: attempt.ID,
+		AttemptNumber: attempt.AttemptNumber, WorkerID: attempt.WorkerID,
+		SessionID: workerSessionID, LeaseID: attempt.LeaseID,
+		ExecutorID: executorID, ExecutorVersion: executorVersion,
+		RuntimeStatus: "RUNNING", StartedAt: now, UpdatedAt: now,
+	}); err != nil {
+		return fmt.Errorf("task accept atomic live runtime: %w", err)
 	}
 	if err := persistMasterExecutionEventTx(ctx, tx, masterExecutionEvent{
 		AttemptID: attempt.ID, JobID: attempt.JobID, TaskID: attempt.TaskID,
@@ -147,7 +172,9 @@ func (r *SQLiteTaskRepository) AcceptTaskAtomic(ctx context.Context, attempt *ta
 		return fmt.Errorf("task accept atomic commit: %w", err)
 	}
 	committed = true
+	startedAt, _ := time.Parse(time.RFC3339, now)
 	attempt.CreatedAt, _ = time.Parse(time.RFC3339, now)
+	attempt.StartedAt = &startedAt
 	attempt.UpdatedAt = attempt.CreatedAt
 	attempt.Status = taskattempts.AttemptStatusRunning
 	return nil

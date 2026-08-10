@@ -111,6 +111,35 @@ CREATE TABLE jobs (
 	created_at         TEXT,
 	completed_at       TEXT
 );
+CREATE TABLE worker_task_runtime (
+	task_id            TEXT PRIMARY KEY,
+	job_id             TEXT NOT NULL,
+	attempt_id         TEXT NOT NULL,
+	attempt_number     INTEGER NOT NULL,
+	worker_id          TEXT NOT NULL,
+	session_id         TEXT NOT NULL,
+	lease_id           TEXT NOT NULL,
+	executor_id        TEXT NOT NULL,
+	executor_version   INTEGER NOT NULL DEFAULT 0,
+	runtime_status     TEXT NOT NULL,
+	progress_percent   INTEGER NOT NULL DEFAULT 0,
+	progress_stage     TEXT,
+	current_scene      INTEGER NOT NULL DEFAULT 0,
+	total_scenes       INTEGER NOT NULL DEFAULT 0,
+	started_at         TEXT NOT NULL,
+	last_progress_at   TEXT,
+	cancel_requested_at TEXT,
+	updated_at         TEXT NOT NULL,
+	missing_heartbeats INTEGER NOT NULL DEFAULT 0,
+	current_segment INTEGER NOT NULL DEFAULT 0,
+	total_segments INTEGER NOT NULL DEFAULT 0,
+	frames_encoded INTEGER NOT NULL DEFAULT 0,
+	frames_decoded INTEGER NOT NULL DEFAULT 0,
+	frames_composited INTEGER NOT NULL DEFAULT 0,
+	ffmpeg_speed_x REAL NOT NULL DEFAULT 0,
+	elapsed_ms INTEGER NOT NULL DEFAULT 0,
+	cumulative_metrics_json TEXT NOT NULL DEFAULT '{}'
+);
 `
 
 // openTaskAtomicTestDB returns *SQLiteStore + *SQLiteTaskRepository with the

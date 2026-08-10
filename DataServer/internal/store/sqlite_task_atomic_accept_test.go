@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 
@@ -82,6 +83,84 @@ func TestAcceptTaskAtomic_HappyPath(t *testing.T) {
 	}
 	if jobRevision != 1 {
 		t.Errorf("jobs.revision = %d; want 1", jobRevision)
+	}
+
+	var runtimeWorkerID, runtimeAttemptID, runtimeStatus, runtimeStartedAt string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT worker_id, attempt_id, runtime_status, started_at
+		   FROM worker_task_runtime WHERE job_id = ?`,
+		"job-T-accept-1").Scan(&runtimeWorkerID, &runtimeAttemptID, &runtimeStatus, &runtimeStartedAt); err != nil {
+		t.Fatalf("post-accept SELECT worker_task_runtime: %v", err)
+	}
+	if runtimeWorkerID != "w-1" {
+		t.Fatalf("live runtime worker_id = %q; want w-1 (must never be null/empty after RUNNING)", runtimeWorkerID)
+	}
+	if runtimeAttemptID != "A-accept-1" {
+		t.Fatalf("live runtime attempt_id = %q; want A-accept-1", runtimeAttemptID)
+	}
+	if runtimeStatus != "RUNNING" {
+		t.Fatalf("live runtime status = %q; want RUNNING", runtimeStatus)
+	}
+	if runtimeStartedAt == "" {
+		t.Fatal("live runtime started_at empty; want lease acceptance timestamp")
+	}
+	var runtimeLastProgressAt string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(last_progress_at, '') FROM worker_task_runtime WHERE job_id = ?`,
+		"job-T-accept-1").Scan(&runtimeLastProgressAt); err != nil {
+		t.Fatalf("post-accept SELECT worker_task_runtime last_progress_at: %v", err)
+	}
+	if runtimeLastProgressAt != "" {
+		t.Fatalf("live runtime last_progress_at = %q; want empty until first engine progress", runtimeLastProgressAt)
+	}
+
+	runtime, err := s.GetWorkerTaskRuntimeByJob(ctx, "job-T-accept-1")
+	if err != nil {
+		t.Fatalf("canonical runtime reader: %v", err)
+	}
+	if runtime == nil || runtime.WorkerID != "w-1" || runtime.AttemptID != "A-accept-1" || runtime.StartedAt == "" {
+		t.Fatalf("canonical runtime read model = %+v; want worker/attempt/started_at immediately after RUNNING", runtime)
+	}
+}
+
+func TestUpsertWorkerTaskRuntimeResetsProgressForNewAttempt(t *testing.T) {
+	s, _ := openTaskAtomicTestDB(t)
+	ctx := context.Background()
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO worker_task_runtime
+		(task_id,job_id,attempt_id,attempt_number,worker_id,session_id,lease_id,executor_id,
+		executor_version,runtime_status,progress_percent,progress_stage,current_scene,total_scenes,
+		current_segment,total_segments,frames_encoded,frames_decoded,frames_composited,ffmpeg_speed_x,
+		elapsed_ms,cumulative_metrics_json,started_at,last_progress_at,cancel_requested_at,updated_at)
+		VALUES ('T-runtime-reset','J-runtime-reset','A-old',1,'w-old','s-old','L-old','render',1,
+		'RUNNING',88,'building_segments',7,13,12,26,18432,7200,8450,2.37,183421,'{\"frames_encoded\":18432}',
+		'2026-08-10T09:00:00Z','2026-08-10T09:03:00Z','2026-08-10T09:03:30Z','2026-08-10T09:03:00Z')`); err != nil {
+		t.Fatalf("seed stale runtime: %v", err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin runtime reset tx: %v", err)
+	}
+	if err := upsertWorkerTaskRuntimeTx(ctx, tx, workerTaskRuntimeUpsert{
+		TaskID: "T-runtime-reset", JobID: "J-runtime-reset", AttemptID: "A-new", AttemptNumber: 2,
+		WorkerID: "w-new", SessionID: "s-new", LeaseID: "L-new", ExecutorID: "render",
+		ExecutorVersion: 1, RuntimeStatus: "RUNNING", StartedAt: "2026-08-10T10:00:00Z",
+		UpdatedAt: "2026-08-10T10:00:00Z",
+	}); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("upsert new runtime: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit runtime reset tx: %v", err)
+	}
+	var attemptID, workerID, lastProgress string
+	var phase sql.NullString
+	var percent, scene, segment, frames int
+	var cancelRequested sql.NullString
+	if err := s.db.QueryRowContext(ctx, `SELECT attempt_id,worker_id,progress_stage,COALESCE(last_progress_at,''),COALESCE(cancel_requested_at,''),progress_percent,current_scene,current_segment,frames_encoded FROM worker_task_runtime WHERE task_id='T-runtime-reset'`).Scan(&attemptID, &workerID, &phase, &lastProgress, &cancelRequested, &percent, &scene, &segment, &frames); err != nil {
+		t.Fatalf("read reset runtime: %v", err)
+	}
+	if attemptID != "A-new" || workerID != "w-new" || phase.Valid || lastProgress != "" || cancelRequested.String != "" || percent != 0 || scene != 0 || segment != 0 || frames != 0 {
+		t.Fatalf("stale progress leaked into new attempt: attempt=%q worker=%q phase=%v last=%q cancel=%v percent=%d scene=%d segment=%d frames=%d", attemptID, workerID, phase, lastProgress, cancelRequested, percent, scene, segment, frames)
 	}
 }
 
@@ -231,5 +310,14 @@ func TestAcceptTaskAtomic_RejectsTerminalJobState(t *testing.T) {
 	}
 	if attemptStatusAfter != "PENDING" {
 		t.Errorf("task_attempts.status = %s; want PENDING (rollback)", attemptStatusAfter)
+	}
+	var runtimeCount int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM worker_task_runtime WHERE task_id = ?`,
+		"T-accept-terminal").Scan(&runtimeCount); err != nil {
+		t.Fatalf("post-terminal-conflict SELECT worker_task_runtime: %v", err)
+	}
+	if runtimeCount != 0 {
+		t.Fatalf("worker_task_runtime rows = %d; want 0 after rollback", runtimeCount)
 	}
 }
