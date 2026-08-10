@@ -93,8 +93,9 @@ che dichiarano `internal/platform/database` assente o la build intenzionalmente 
 La sostituzione corretta deve descrivere lo stato reale, per esempio:
 
 - SQLite è il backend operativo completo;
-- Postgres è disponibile a livello connection/repository parziale;
-- il cutover Postgres end-to-end non è concluso;
+- SQLite è l'unico backend runtime supportato dal master;
+- `VELOX_DB_DRIVER=postgres` viene rifiutato da `Config.Validate()` prima di `database.Open`;
+- gli adapter Postgres restano soltanto per le contract test env-gated e non sono wiring produttivo;
 - non esiste una build intenzionalmente rotta.
 
 Aggiungere un test o una guardia che impedisca la ricomparsa delle frasi obsolete:

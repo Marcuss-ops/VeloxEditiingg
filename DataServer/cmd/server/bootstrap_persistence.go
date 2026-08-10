@@ -68,19 +68,6 @@ func buildPersistence(cfg *config.Config) (*persistenceDeps, error) {
 			cfg.Database.DBPath, schemaModeLabel(cfg.Database.MigrateOnStart),
 			database.Driver(strings.ToLower(strings.TrimSpace(cfg.Database.Driver))),
 			cfg.Database.MigrateOnStart)
-	case database.DriverPostgres:
-		// YAGNI (Blocco 4 step #2): runtime Postgres selection removed.
-		// The narrow-contract Postgres adapters (postgres_artifact_
-		// repository.go, postgres_jobs_repository.go) stay in place as
-		// test-only helpers env-gated on VELOX_TEST_POSTGRES_DSN; they
-		// remerge into the master boot path via a single cutover PR
-		// once ALL master modules have migrated off *SQLiteStore.
-		// Defense-in-depth only: cfg.Validate() (called above) already
-		// rejects VELOX_DB_DRIVER=postgres BEFORE any I/O, so Open is
-		// never reached with this driver in production. This branch
-		// exists for direct-Handle callers that bypass Validate.
-		_ = handle.DB.Close()
-		return nil, fmt.Errorf("bootstrap: VELOX_DB_DRIVER=postgres is not supported at runtime (Blocco 4 YAGNI); only sqlite is wired. The narrow-contract Postgres adapters remain as test-only helpers and will be promoted together when master modules complete the SQLiteStore cutover")
 	default:
 		_ = handle.DB.Close()
 		return nil, fmt.Errorf("bootstrap: unsupported driver %q returned by platform/database.Open", handle.Driver)

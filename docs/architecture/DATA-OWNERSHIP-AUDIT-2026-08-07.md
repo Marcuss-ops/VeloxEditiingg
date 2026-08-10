@@ -70,9 +70,9 @@ poteva mai essere scoperta → la migrazione che elimina gruppi/canali
 YouTube dal DB postgres era **irraggiungibile**.
 
 **Fix:** rinomina `010_drop_youtube_domain.sql` → `023_drop_youtube_domain.sql`
-(versione libera, dopo `022_media_probe_jobs.sql`). La chain postgres è
-test-only oggi (il runtime postgres è rifiutato in bootstrap, Blocco 4
-YAGNI), quindi nessuno `schema_migrations` applicato registrava la versione
+(versione libera, dopo `022_media_probe_jobs.sql`). La chain postgres è test-only oggi: `Config.Validate()` rifiuta
+`VELOX_DB_DRIVER=postgres` prima di `database.Open`, mentre il runtime master
+resta SQLite-only. Nessun `schema_migrations` applicato registrava la versione
 10 con questo contenuto: il rinomino è sicuro e non tocca checksum applicati.
 
 **Regression test aggiunto:**

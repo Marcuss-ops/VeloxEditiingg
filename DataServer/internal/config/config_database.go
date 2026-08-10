@@ -8,18 +8,16 @@ import (
 
 // loadDatabaseConfig reads the VELOX_DB_* env vars into a DatabaseConfig.
 //
-// What is required depends on the Driver. With no VELOX_DB_DRIVER set,
-// Driver is left empty so config.Validate() can either default it to
-// "sqlite" (backward compat) or reject a config that mistakenly dropped
-// it entirely. The legacy SQLite-only "DBPath always required" rule
-// is gone — the platform/database abstraction is what consumes this
-// struct.
+// The master runtime accepts an empty driver (which database.Open defaults
+// to SQLite) or an explicit "sqlite". "postgres" is loaded only so the
+// configuration boundary can reject it before bootstrap I/O; isolated
+// repository contract tests construct database.Config directly.
 //
 // Env vars mapped here:
 //
-//	VELOX_DB_DRIVER          → Driver          (sqlite|postgres)
-//	VELOX_DATABASE_URL       → URL             (postgres DSN)
-//	VELOX_DB_PATH            → DBPath          (sqlite file path; absolute)
+//	VELOX_DB_DRIVER          → Driver          (empty|sqlite at runtime; postgres rejected)
+//	VELOX_DATABASE_URL       → URL             (contract tests only)
+//	VELOX_DB_PATH            → DBPath          (SQLite file path; absolute)
 //	VELOX_DB_MAX_OPEN_CONNS  → MaxOpenConns    (int ≥ 0)
 //	VELOX_DB_MAX_IDLE_CONNS  → MaxIdleConns    (int ≥ 0)
 //	VELOX_DB_CONN_MAX_LIFETIME → ConnMaxLifetime (duration string)
@@ -35,7 +33,10 @@ func loadDatabaseConfig(raw RawConfig) DatabaseConfig {
 	// SQLitePath keeps the historical symlink-resolution behaviour for
 	// absolute paths so existing deployments that bind-mount a symlink
 	// at VELOX_DB_PATH continue to see the resolved target downstream.
-	if raw := raw.Get("VELOX_DB_PATH"); raw != "" {
+	// A Postgres config is rejected by Config.Validate before database
+	// opening, so do not touch the filesystem while constructing that
+	// invalid configuration.
+	if raw := raw.Get("VELOX_DB_PATH"); raw != "" && driver != "postgres" {
 		resolved := raw
 		if filepath.IsAbs(raw) {
 			if r, err := filepath.EvalSymlinks(raw); err == nil {

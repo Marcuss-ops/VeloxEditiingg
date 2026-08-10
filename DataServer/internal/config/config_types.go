@@ -117,10 +117,11 @@ type RuntimeConfig struct {
 // DatabaseConfig holds database connection settings for the
 // platform/database abstraction:
 //   - DBPath is the absolute path to the SQLite database file.
-//     Required when Driver == "sqlite" (or empty, which defaults to sqlite).
-//   - Driver selects the SQL backend. "sqlite" or "postgres" are the
-//     only valid values; empty falls back to "sqlite" for backward compat.
-//   - URL is the Postgres DSN. Required when Driver == "postgres".
+//     Required for the only supported runtime driver, SQLite.
+//   - Driver is empty or "sqlite" for the master runtime. "postgres"
+//     is retained only by env-gated repository contract tests and is
+//     rejected by Config.Validate before the master opens a database.
+//   - URL is the Postgres DSN used only by those isolated contract tests.
 //   - MaxOpenConns / MaxIdleConns / ConnMaxLifetime are pool knobs.
 //     Zero means "use platform/database.Open() default" — see
 //     internal/platform/database/database.go for the per-driver values.
@@ -132,13 +133,14 @@ type RuntimeConfig struct {
 //     schema) opt out by setting VELOX_DB_MIGRATE_ON_START=false (or
 //     "0" / "off" / "no") so the master skips both the migrations
 //     runner AND the post-migration ensure-column adjustments. The
-//     opt-out path is orthogonal to the driver dispatch in
-//     cmd/server/bootstrap.go so a single forward-only deployment
-//     works the same way regardless of which SQL backend is selected.
+//     opt-out path is orthogonal to the SQLite-only runtime dispatch in
+//     cmd/server/bootstrap.go. Postgres migrations and adapters remain
+//     available only to isolated contract tests until a complete runtime
+//     cutover is approved.
 type DatabaseConfig struct {
-	DBPath          string        // SQLite file path (required when Driver=sqlite)
-	Driver          string        // "sqlite" | "postgres" | "" (defaults to sqlite)
-	URL             string        // Postgres DSN (required when Driver=postgres)
+	DBPath          string        // SQLite file path (required at runtime)
+	Driver          string        // "sqlite" | "postgres" | "" (master runtime accepts empty/sqlite)
+	URL             string        // Postgres DSN (contract tests only)
 	MaxOpenConns    int           // 0 → driver default
 	MaxIdleConns    int           // 0 → driver default
 	ConnMaxLifetime time.Duration // 0 → driver default
