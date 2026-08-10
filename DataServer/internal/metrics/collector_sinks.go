@@ -166,6 +166,24 @@ func (c *Collector) RecordWorkerEvaluationErrors(category string, count uint64) 
 	c.opsalertsWorkerEvalErrors.Inc([]string{category}, count)
 }
 
+// RecordAlertEvaluationError records global alert-evaluation failures by
+// engine and low-cardinality category. Raw errors and worker IDs are never
+// used as labels, so a dependency outage cannot create unbounded series.
+func (c *Collector) RecordAlertEvaluationError(engine, category string, count uint64) {
+	if count == 0 {
+		return
+	}
+	if engine != "compute" && engine != "fleet" {
+		engine = "unknown"
+	}
+	switch category {
+	case "infrastructure", "inventory", "isolated_rule", "isolated_sink":
+	default:
+		category = "unknown"
+	}
+	c.alertEvaluationErrors.Inc([]string{engine, category}, count)
+}
+
 // RecordErrorClassification increments velox_error_classification_total
 func (c *Collector) RecordErrorClassification(errorCode, component, phase string) {
 	if errorCode == "" {
@@ -237,6 +255,11 @@ func (c *Collector) initSinkFamilies() {
 		"Aggregated isolated opsalerts worker evaluation errors by category",
 		[]string{"category"},
 	)
+	c.alertEvaluationErrors = NewCounterFamily(
+		"velox_alert_evaluation_errors_total",
+		"Alert evaluation failures by engine and low-cardinality category",
+		[]string{"engine", "category"},
+	)
 
 	c.conflictStreakLength = NewHistogramFamily(
 		"velox_conflict_streak_length",
@@ -257,6 +280,7 @@ func (c *Collector) sinkFamilies() []*Family {
 		c.compatibilityAliasRejections,
 		c.errorClassification,
 		c.opsalertsWorkerEvalErrors,
+		c.alertEvaluationErrors,
 		c.conflictStreakReset,
 		c.conflictEscalations,
 		c.conflictStayedUnder,

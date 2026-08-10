@@ -66,14 +66,15 @@ var _ runtimealerts.Evaluator = (*Engine)(nil)
 // affecting the whole pass are returned to the supervisor. Failures isolated
 // to one worker are aggregated and metered while other workers continue.
 type Engine struct {
-	store        AlertStore
-	dedup        *DedupStore
-	source       WorkerAlertsDataSource
-	tick         time.Duration
-	maxBatch     int
-	errorMetrics WorkerEvaluationErrorSink
-	pipeline     *runtimealerts.Pipeline
-	passMu       sync.Mutex
+	store               AlertStore
+	dedup               *DedupStore
+	source              WorkerAlertsDataSource
+	tick                time.Duration
+	maxBatch            int
+	errorMetrics        WorkerEvaluationErrorSink
+	runtimeErrorMetrics runtimealerts.ErrorMetrics
+	pipeline            *runtimealerts.Pipeline
+	passMu              sync.Mutex
 }
 
 func newEngine(s AlertStore, source WorkerAlertsDataSource, tick time.Duration, maxBatch int) (*Engine, error) {
@@ -124,7 +125,31 @@ func NewEngineWithClock(s AlertStore, source WorkerAlertsDataSource, tick time.D
 }
 
 // SetErrorMetrics installs the optional sink for isolated worker failures.
-func (e *Engine) SetErrorMetrics(sink WorkerEvaluationErrorSink) { e.errorMetrics = sink }
+// A typed-nil sink is ignored so an error path cannot panic during partial
+// composition.
+func (e *Engine) SetErrorMetrics(sink WorkerEvaluationErrorSink) {
+	if !configuredInterface(sink) {
+		e.errorMetrics = nil
+		return
+	}
+	e.errorMetrics = sink
+}
+
+// SetRuntimeErrorMetrics installs the shared low-cardinality sink for
+// global evaluation failures that must also be propagated to supervisor.
+func (e *Engine) SetRuntimeErrorMetrics(sink runtimealerts.ErrorMetrics) {
+	if runtimealerts.ErrorMetricsConfigured(sink) {
+		e.runtimeErrorMetrics = sink
+		return
+	}
+	e.runtimeErrorMetrics = nil
+}
+
+func (e *Engine) recordRuntimeError(category string, count uint64) {
+	if e.runtimeErrorMetrics != nil && count > 0 {
+		e.runtimeErrorMetrics.RecordAlertEvaluationError("fleet", category, count)
+	}
+}
 
 // AddSink registers an optional notification or secondary side-effect sink
 // in the shared post-commit pipeline. Call during bootstrap before the engine
@@ -229,6 +254,7 @@ func (e *Engine) Evaluate(ctx context.Context) ([]runtimealerts.AlertEvent, erro
 	cc := CallCtx{Now: time.Now().UTC()}
 	workerIDs, err := e.source.WorkerIDs(cc)
 	if err != nil {
+		e.recordRuntimeError("inventory", 1)
 		return nil, errors.Join(supervisor.ErrInfrastructure, fmt.Errorf("opsalerts: list workers: %w", err))
 	}
 
@@ -249,6 +275,7 @@ func (e *Engine) Evaluate(ctx context.Context) ([]runtimealerts.AlertEvent, erro
 		}
 	}
 	if len(infrastructureErrors) > 0 {
+		e.recordRuntimeError("infrastructure", uint64(len(infrastructureErrors)))
 		return alerts, errors.Join(append([]error{supervisor.ErrInfrastructure}, infrastructureErrors...)...)
 	}
 	return alerts, nil

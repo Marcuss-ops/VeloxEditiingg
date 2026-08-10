@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"velox-server/internal/alertengine"
+	runtimealerts "velox-server/internal/alerts"
 	"velox-server/internal/config"
 	"velox-server/internal/fleet"
 	"velox-server/internal/fleet/opsalerts"
@@ -24,7 +25,7 @@ import (
 // registering its runner. A missing datasource is an explicit DISABLED
 // capability: no runner is registered and no error is hidden as a healthy
 // service. A non-nil but invalid composition remains a hard bootstrap error.
-func registerOpsAlertsSupervisor(sup *supervisor.Supervisor, store opsalerts.AlertStore, source opsalerts.WorkerAlertsDataSource, policy supervisor.RestartPolicy, metricsSink opsalerts.WorkerEvaluationErrorSink) (opsalerts.CapabilityStatus, error) {
+func registerOpsAlertsSupervisor(sup *supervisor.Supervisor, store opsalerts.AlertStore, source opsalerts.WorkerAlertsDataSource, policy supervisor.RestartPolicy, metricsSink opsalerts.WorkerEvaluationErrorSink, runtimeMetrics ...runtimealerts.ErrorMetrics) (opsalerts.CapabilityStatus, error) {
 	if !opsalerts.DataSourceConfigured(source) {
 		status := opsalerts.DisabledStatus("worker datasource is not wired")
 		log.Printf("[FLEET-ALERTS] capability=%s: %s; alerts-supervisor and alert routes are disabled", status.State, status.Reason)
@@ -39,6 +40,9 @@ func registerOpsAlertsSupervisor(sup *supervisor.Supervisor, store opsalerts.Ale
 		return opsalerts.MisconfiguredStatus(err.Error()), fmt.Errorf("construct alerts engine: %w", err)
 	}
 	engine.SetErrorMetrics(metricsSink)
+	if len(runtimeMetrics) > 0 {
+		engine.SetRuntimeErrorMetrics(runtimeMetrics[0])
+	}
 	if err := sup.Register(supervisor.Runner{
 		Name:   "alerts-supervisor",
 		Class:  supervisor.ClassRestartable,
@@ -251,6 +255,7 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 		alertDeps.FFmpegMin = cfg.Runtime.Alerts.FFmpegMin
 
 		engine := alertengine.New(cfg.Runtime.Alerts.EvaluationInterval, alertengine.NewNotifier(cfg.Runtime.Alerts.WebhookURL, cfg.Runtime.Alerts.WebhookType))
+		engine.SetErrorMetrics(metricsCollector)
 		engine.Cooldown = cfg.Runtime.Alerts.Cooldown
 		for _, r := range alertengine.MakeRules(alertDeps) {
 			engine.AddRule(r)
@@ -366,7 +371,7 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 	// constructs first and therefore leaves this capability absent instead
 	// of exposing a healthy-looking runner whose Tick does nothing.
 	if p != nil && p.SQLite != nil && m != nil && m.Workers != nil {
-		status, err := registerOpsAlertsSupervisor(sup, p.SQLite, nil, restartablePolicy, metricsCollector)
+		status, err := registerOpsAlertsSupervisor(sup, p.SQLite, nil, restartablePolicy, metricsCollector, metricsCollector)
 		if err != nil {
 			return nil, err
 		}

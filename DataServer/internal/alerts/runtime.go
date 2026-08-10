@@ -44,7 +44,13 @@ func EventIDFor(event AlertEvent) string {
 	return hex.EncodeToString(h.Sum(nil)[:16])
 }
 
-// Evaluator is the common contract implemented independently by compute and fleet rule groups.
+// Evaluator is the common contract implemented independently by compute and
+// fleet rule groups. Evaluate returns events observed during the pass and an
+// error when the pass was incomplete or a downstream dependency failed.
+// Callers MUST inspect the error even when events is non-empty: partial events
+// are useful for persistence, but they do not prove that the evaluator is
+// healthy. Long-lived runners should return propagated infrastructure errors
+// to supervisor so its retry policy can act.
 type Evaluator interface {
 	Evaluate(context.Context) ([]AlertEvent, error)
 }

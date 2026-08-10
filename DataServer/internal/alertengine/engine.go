@@ -11,6 +11,7 @@ import (
 	"time"
 
 	runtimealerts "velox-server/internal/alerts"
+	"velox-server/internal/supervisor"
 )
 
 // RuleFunc is a compute rule: returns an alert when its condition is
@@ -44,7 +45,8 @@ type Engine struct {
 	// Cooldown is the minimum interval between repeated compute events.
 	Cooldown time.Duration
 
-	pipeline *runtimealerts.Pipeline
+	pipeline     *runtimealerts.Pipeline
+	errorMetrics runtimealerts.ErrorMetrics
 }
 
 var _ runtimealerts.Evaluator = (*Engine)(nil)
@@ -144,6 +146,23 @@ func (e *Engine) AddRule(r RuleFunc) { e.rules = append(e.rules, r) }
 // legacy webhook notifier.
 func (e *Engine) AddSink(sink runtimealerts.Sink) { e.pipeline.AddSink(sink) }
 
+// SetErrorMetrics installs the low-cardinality error metric sink. It is
+// optional so existing embedders remain source-compatible. Typed-nil sinks
+// are ignored so a partial composition cannot panic on an error path.
+func (e *Engine) SetErrorMetrics(sink runtimealerts.ErrorMetrics) {
+	if runtimealerts.ErrorMetricsConfigured(sink) {
+		e.errorMetrics = sink
+		return
+	}
+	e.errorMetrics = nil
+}
+
+func (e *Engine) recordError(category string) {
+	if e.errorMetrics != nil {
+		e.errorMetrics.RecordAlertEvaluationError("compute", category, 1)
+	}
+}
+
 // Evaluate converts the independent compute rule group into shared events.
 // Each rule is evaluated independently: alerts from healthy rules are still
 // returned even when a sibling rule fails, and all rule errors are joined
@@ -153,9 +172,22 @@ func (e *Engine) Evaluate(ctx context.Context) ([]runtimealerts.AlertEvent, erro
 	events := make([]runtimealerts.AlertEvent, 0, len(e.rules))
 	var errs []error
 	for _, rule := range e.rules {
+		if err := ctx.Err(); err != nil {
+			return events, err
+		}
 		alert, err := rule(ctx)
 		if err != nil {
-			errs = append(errs, err)
+			if errors.Is(err, context.Canceled) {
+				// Cancellation is the supervisor's normal shutdown signal,
+				// not an infrastructure outage that should trigger retry.
+				return events, err
+			}
+			// Compute rules are aggregate/global evaluations; unlike the
+			// fleet engine they have no per-worker isolation boundary.
+			// Treat every remaining rule datasource failure as infrastructure
+			// so a generic provider error cannot make the engine look healthy.
+			e.recordError("infrastructure")
+			errs = append(errs, errors.Join(supervisor.ErrInfrastructure, err))
 			continue
 		}
 		if alert == nil {
@@ -185,6 +217,9 @@ func (e *Engine) Evaluate(ctx context.Context) ([]runtimealerts.AlertEvent, erro
 // failures are returned to the supervisor instead of being silently logged.
 func (e *Engine) Run(ctx context.Context) error {
 	log.Printf("[ALERT-ENGINE] starting — tick=%s, rules=%d", e.tick, len(e.rules))
+	if err := e.evaluateAll(ctx); err != nil {
+		return err
+	}
 	ticker := time.NewTicker(e.tick)
 	defer ticker.Stop()
 	for {
@@ -207,5 +242,18 @@ func (e *Engine) Run(ctx context.Context) error {
 func (e *Engine) evaluateAll(ctx context.Context) error {
 	events, evalErr := e.Evaluate(ctx)
 	dispatchErr := e.pipeline.Dispatch(ctx, events)
+	if dispatchErr != nil {
+		classified := supervisor.ClassifyError(dispatchErr)
+		if supervisor.IsInfrastructure(classified) {
+			e.recordError("infrastructure")
+			dispatchErr = classified
+		} else {
+			// Isolated sink/notifier failures are retried by the shared
+			// pipeline on the next dispatch, not by restarting the whole
+			// runner. Keep the supervisor healthy while recording the loss.
+			e.recordError("isolated_sink")
+			dispatchErr = nil
+		}
+	}
 	return errors.Join(evalErr, dispatchErr)
 }
