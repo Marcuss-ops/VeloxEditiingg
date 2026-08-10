@@ -84,15 +84,12 @@ package fleet
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"velox-server/internal/store"
-	"velox-server/internal/workers"
 )
 
 // UpdateExecutor is the Step 9/15 OperationExecutor binding
@@ -300,120 +297,11 @@ func (e *UpdateExecutor) Execute(ctx context.Context, op *store.Operation) error
 	return nil
 }
 
-func (e *UpdateExecutor) authenticatedRunningDigest(ctx context.Context, workerID string) (string, error) {
-	if e.backend.Runtime == nil {
-		return "", nil
-	}
-	snapshot, err := e.backend.Runtime.GetAuthenticatedRuntimeSnapshot(ctx, workerID)
-	if err != nil {
-		return "", fmt.Errorf("update: authenticated runtime snapshot: %w", err)
-	}
-	if snapshot == nil {
-		return "", nil
-	}
-	return strings.TrimSpace(snapshot.DockerImageDigest), nil
-}
-
-func (e *UpdateExecutor) bootstrapLedger(ctx context.Context, op *store.Operation, targetDigest string, info *workers.Worker) error {
-	runningDigest, err := e.authenticatedRunningDigest(ctx, op.WorkerID)
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrBootstrapUnverifiable, err)
-	}
-	if runningDigest == "" {
-		return fmt.Errorf("%w: authenticated runtime digest missing for worker %s", ErrBootstrapUnverifiable, op.WorkerID)
-	}
-	if normalizeDigest(runningDigest) != normalizeDigest(targetDigest) {
-		return fmt.Errorf("%w: requested=%s running=%s", ErrBootstrapDigestMismatch, targetDigest, runningDigest)
-	}
-	if !workerConnected(info) {
-		return fmt.Errorf("%w: worker %s is not CONNECTED", ErrBootstrapWorkerDisconnected, op.WorkerID)
-	}
-	if !workerHealthy(info) {
-		return fmt.Errorf("%w: worker %s is not HEALTHY", ErrBootstrapWorkerUnhealthy, op.WorkerID)
-	}
-
-	baselineRepo, ok := e.backend.Deployments.(BackendDeploymentBaselineRepo)
-	if !ok {
-		return fmt.Errorf("%w: deployment baseline writer not wired", ErrBootstrapUnverifiable)
-	}
-	now := e.backend.Now()
-	if err := baselineRepo.InsertBaselineDeploymentRecord(ctx, store.DeploymentRecord{
-		DeploymentID:   fmt.Sprintf("bootstrap-%s-%d", op.WorkerID, now.UnixNano()),
-		WorkerID:       op.WorkerID,
-		PreviousDigest: "", // missing provenance is truthful; never invent it
-		TargetDigest:   targetDigest,
-		StartedAt:      now,
-		FinishedAt:     &now,
-		Status:         store.DeployStatusSucceeded,
-		AppliedBy:      op.RequestedBy,
-		IsRollback:     false,
-	}); err != nil {
-		return fmt.Errorf("%w: insert baseline: %v", ErrBootstrapUnverifiable, err)
-	}
-	log.Printf("[UPDATE] worker=%s target=%s BOOTSTRAPPED (authenticated runtime; no worker mutation)", op.WorkerID, targetDigest)
-	return nil
-}
-
-func normalizeDigest(ref string) string {
-	ref = strings.ToLower(strings.TrimSpace(ref))
-	if at := strings.LastIndexByte(ref, '@'); at >= 0 {
-		return ref[at+1:]
-	}
-	return ref
-}
-
-func workerConnected(info *workers.Worker) bool {
-	if info == nil {
-		return false
-	}
-	if info.ConnectionState != "" {
-		return info.ConnectionState == workers.ConnectionConnected
-	}
-	return info.ConnectionStatus == workers.StatusConnected && info.SessionActive
-}
-
-func workerHealthy(info *workers.Worker) bool {
-	if info == nil {
-		return false
-	}
-	if info.HealthState != "" {
-		return info.HealthState == workers.HealthHealthy
-	}
-	return info.Health == workers.WorkerHealthHealthy
-}
-
-func (e *UpdateExecutor) releaseOwnedDrain(ctx context.Context, workerID string, owned bool) error {
-	if !owned {
-		return nil
-	}
-	if e.backend.Registry == nil {
-		return errors.New("update: registry gater not wired (cannot release drain)")
-	}
-	if err := e.backend.Registry.SetDrainMode(ctx, workerID, false); err != nil {
-		return err
-	}
-	return nil
-}
-
 // parsePayload unwraps the Operation.Payload into the typed
 // UpdatePayload schema. Returns the target_digest (required,
 // non-empty after Validate), the explicitPreviousDigest
 // (caller-supplied snapshot), and a parse error if the
 // payload is malformed or invalid.
-func (e *UpdateExecutor) parsePayload(op *store.Operation) (string, string, error) {
-	if len(op.Payload) == 0 || string(op.Payload) == "{}" {
-		return "", "", errors.New("update: payload empty (target_digest required)")
-	}
-	var p UpdatePayload
-	if err := json.Unmarshal(op.Payload, &p); err != nil {
-		return "", "", fmt.Errorf("update: payload parse: %w", err)
-	}
-	if p.TargetDigest == "" {
-		return "", "", errors.New("update: target_digest missing")
-	}
-	return strings.TrimSpace(p.TargetDigest), strings.TrimSpace(p.PreviousDigest), nil
-}
-
 // waitForIdle polls the registry's canonical active_tasks signal until
 // the value reaches 0, or until the poll budget elapses. The default
 // budget is timeoutActiveJobsIdle (5min).
@@ -422,28 +310,3 @@ func (e *UpdateExecutor) parsePayload(op *store.Operation) (string, string, erro
 // the registry's in-memory heartbeat metric is the canonical
 // active-task count and polling exposes a simple deadline to
 // the operator's audit trail.
-func (e *UpdateExecutor) waitForIdle(ctx context.Context, workerID string) error {
-	if e.backend.Registry == nil {
-		// Defensive: callers should pass a wired gater, but
-		// a missing dependency surfaces the failure explicitly.
-		return errors.New("update: registry gater not wired (cannot confirm drain)")
-	}
-	drainTimeout := e.drainTimeout
-	if drainTimeout <= 0 {
-		drainTimeout = timeoutActiveJobsIdle
-	}
-	deadline := time.Now().Add(drainTimeout)
-	for {
-		if e.backend.Registry.IsActiveJobsZero(ctx, workerID) {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return errors.New("active_tasks (active_jobs) did not drain to 0 within budget")
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("wait_for_idle: ctx cancelled: %w", ctx.Err())
-		case <-time.After(1 * time.Second):
-		}
-	}
-}
