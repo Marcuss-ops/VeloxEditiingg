@@ -258,3 +258,29 @@ Concrete rules:
   is also pinned at runtime by
   `TestReadiness_CapabilityExposuresHaveFailClosedGates` in
   `cmd/server/bootstrap_readiness_test.go`.
+
+### Post-audit verification (2026-08-10, after the P0/P1/P2 fixes landed)
+
+Matrix of the 2026-08-10 fail-open audit surfaces, all verified on `main`
+(see the individual fix commits referenced from CHANGELOG.md):
+
+| Surface | State on main | Evidence |
+|---------|---------------|----------|
+| Fleet executor registry | READY/MISCONFIGURED only | `NewExecutorRegistry()` returns an EMPTY production registry; dispatch fails with `EXECUTOR_NOT_CONFIGURED`; `ValidateRequiredExecutors` exists; `NoopOperationExecutor` is test-only (`internal/fleet/executors.go`) |
+| Level-D smoke | READY or not registered | no `StubAssetResolver` in production bootstrap; real `VELOX_SMOKE_DRIVE_FOLDER_ID` wiring; static check forbids the stub symbol outside dev/allowlisted files |
+| opsalerts engine | DISABLED/READY/MISCONFIGURED | `DataSourceConfigured` typed-nil guard; `NewEngine` returns `ErrDataSourceNotConfigured` on a nil datasource; supervisor registers `alerts-supervisor` only when READY, else DISABLED, else hard error (`bootstrap_supervisor.go`) |
+| Alert runtime (compute+fleet) | READY via one pipeline | single `AlertEvent` model, single `CooldownDeduplicator`, single `Pipeline`, single `NotifySink`; infrastructure errors propagate to the supervisor (`internal/alerts/runtime.go`, `notifier.go`) |
+| Telemetry catalog | one registry | single `EventDescriptor` list (`canonicalEventDescriptors`); `Key()`/`OriginScope` derived, no parallel `canonicalEventKeys`/`canonicalOriginScope`/`canonicalPhaseSpecs` |
+| AssetRef wire | self-sufficient | `{kind,id}` wire via `MarshalJSON`; `IsLikelyDriveFileID` and `asset_ref_kind` removed (only a documenting comment remains in `assets/rewrite_remote_inputs.go`) |
+| `internal/backup` | removed | package deleted (`b0f0d209`) — no imports, callers, bootstrap or routes |
+| Postgres backend | removed | `DriverPostgres`/`openPostgres`/`PostgresMigrationsFS` gone; `cfg.Validate()` rejects postgres before any I/O (`886f8e32`) |
+| fleetctl Bash helpers | removed / scheduled | `run_digest_update`/`post_update_mutation`/`wait_ready`/`poll_operation` removed (`a222bd4e`); `post_mutation` in `fleetctl-legacy` is currently DEAD (no callers) and is scheduled for removal with the pending fleetctl migration plan |
+
+Rule of thumb for future changes: a capability wired through the
+bootstrap MUST land in exactly one of the three states above; any
+commit that introduces a `nil`/`noop`/`stub` into a production wiring
+path (even behind a WARN log) is a regression of this rule. The static
+gate catches the covered patterns (forbidden fail-open symbols and the
+readiness pairing); constructor-level nil-swallowing outside those
+patterns is caught by review and by the readiness pairing test — never
+hide a missing dependency behind a WARN and keep going.
