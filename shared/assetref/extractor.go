@@ -65,18 +65,18 @@ func ExtractAssetKeys(payload json.RawMessage) map[string]struct{} {
 		case map[string]interface{}:
 			for key, child := range x {
 				switch s := child.(type) {
-			case string:
-				trimmed := strings.TrimSpace(s)
-				// Self-sufficient wire schemes (local velox-asset:// and
-				// deferred velox-drive://) both yield their asset ID for the
-				// worker cache key set.
-				if id, ok := WireAssetID(trimmed); ok {
-					out[id] = struct{}{}
-				} else if _, isClip := clipStringKeys[key]; isClip {
-					if id, err := DriveFileID(trimmed); err == nil && id != "" {
+				case string:
+					trimmed := strings.TrimSpace(s)
+					// Self-sufficient wire schemes (local velox-asset:// and
+					// deferred velox-drive://) both yield their asset ID for the
+					// worker cache key set.
+					if id, ok := WireAssetID(trimmed); ok {
 						out[id] = struct{}{}
+					} else if _, isClip := clipStringKeys[key]; isClip {
+						if id, err := DriveFileID(trimmed); err == nil && id != "" {
+							out[id] = struct{}{}
+						}
 					}
-				}
 				case []interface{}:
 					// Legacy array-shaped clip_links: the recursive
 					// walker normally does not attach parent field

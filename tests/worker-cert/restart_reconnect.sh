@@ -181,7 +181,6 @@ on_exit_cleanup() {
 trap on_exit_cleanup EXIT INT TERM
 
 # ─── Provision ephemeral M2M client ────────────────────────────────────────
-M2M_BEARER=""
 PROVISIONED_CLIENT_ID=""
 if ! smoke_mint_m2m "$ADMIN_TOKEN" "$VELOX_MASTER_URL"; then
   log_error "M2M provisioning failed"; exit 3

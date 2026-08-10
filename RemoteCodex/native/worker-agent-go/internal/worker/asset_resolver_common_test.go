@@ -148,8 +148,8 @@ func TestCommonAssetResolverSchemeIsKindAuthorityOverLegacyAnnotation(t *testing
 	body := []byte("deferred-drive-bytes")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/agent/assets/drive-file-123456" {
-		http.NotFound(w, r)
-		return
+			http.NotFound(w, r)
+			return
 		}
 		w.Header().Set("Content-Type", "video/mp4")
 		_, _ = w.Write(body)

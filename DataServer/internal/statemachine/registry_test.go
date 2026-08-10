@@ -34,9 +34,9 @@ func TestTerminalStatesHaveOnlyCanonicalWriters(t *testing.T) {
 	r := DefaultRegistry()
 	allActors := []Actor{ActorAny, ActorSystem, ActorScheduler, ActorWorker, ActorReaper, ActorUploadReceiver, ActorOperator, ActorWorkerSession, ActorArtifactFinalizer, ActorDeliveryRunner}
 	for _, tc := range []struct {
-		from          string
-		canonical     Actor
-		label         string
+		from      string
+		canonical Actor
+		label     string
 	}{
 		{"RUNNING", ActorArtifactFinalizer, "job finalization"},
 		{"AWAITING_ARTIFACT", ActorArtifactFinalizer, "job finalization after artifact wait"},
@@ -76,9 +76,9 @@ func TestAllTerminalTransitionsHaveExplicitLifecycleWriters(t *testing.T) {
 	r := DefaultRegistry()
 	allActors := []Actor{ActorAny, ActorSystem, ActorScheduler, ActorWorker, ActorReaper, ActorUploadReceiver, ActorOperator, ActorWorkerSession, ActorArtifactFinalizer, ActorDeliveryRunner}
 	cases := []struct {
-		domain       Domain
-		from, to     string
-		canonical    Actor
+		domain    Domain
+		from, to  string
+		canonical Actor
 	}{
 		{DomainJob, "PENDING", "FAILED", ActorSystem},
 		{DomainJob, "PENDING", "CANCELLED", ActorOperator},
