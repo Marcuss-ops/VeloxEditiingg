@@ -121,10 +121,9 @@ La ricerca dei call site produttivi ha evidenziato:
   necessari al percorso di consegna e da congelare per il blocco corrente;
 - backup: il call-site proof del 2026-08-10 ha trovato solo primitive isolate
   in `DataServer/internal/backup`, senza import, caller, scheduler, bootstrap,
-  CLI o restore operativo collegato. La rimozione del package e dei test è stata
-  approvata come pulizia di scaffolding irraggiungibile; il requisito residuo
-  appartiene a platform/operations e resta tracciato in `FUTURE.md` e nel
-  runbook backup;
+  CLI o restore operativo collegato. Il package e i test sono stati rimossi
+  come scaffolding irraggiungibile; il requisito residuo appartiene a
+  platform/operations e resta tracciato in `FUTURE.md` e nel runbook backup;
 - `audittrail.AppendAuditEvent`: schema e repository presenti, ma nessun
   chiamante produttivo per gli eventi di job/delivery/publication richiesti.
 
@@ -144,15 +143,22 @@ rimozione:
 - `scripts/ci/sql-baseline.txt` conteneva soltanto le due righe LOC del
   production code e non rappresentava un consumer.
 
-Decisione: RIMUOVERE. Il package era scaffolding non raggiungibile, non un
-contratto cross-package attivo. La decisione viene chiusa nel commit atomico
-successivo, con il package, i test e il baseline LOC rimossi insieme. Il
-requisito di backup/restore non viene considerato implementato: ownership e
-criteri futuri sono documentati in
+Decisione: RIMOSSO. Il package era scaffolding non raggiungibile, non un
+contratto cross-package attivo. Il package, i test e il baseline LOC sono stati
+rimossi insieme nel commit atomico della pulizia. Il requisito di
+backup/restore non viene considerato implementato: ownership e criteri futuri
+sono documentati in
 `docs/operations/backup-and-restore.md` sotto platform/operations.
 
-Prima di pubblicare la rimozione sono richiesti `go vet ./...`, `go build ./...`
-e `go test -count=1 ./...` tramite `scripts/ci/pre-removal-verify.sh`.
+La verifica completa è stata eseguita con `scripts/ci/pre-removal-verify.sh`
+sia su un worktree pulito baseline sia sul worktree con la rimozione. In
+entrambi i casi `go build ./...` passa; `go vet ./...` e `go test -count=1
+./...` riportano lo stesso failure preesistente in
+`internal/store/store_publication_state_async_test.go:101,104`
+(`undefined: errors`), senza alcun riferimento a `internal/backup` e senza
+variazioni introdotte dalla patch. Il failure è registrato come follow-up
+separato; la rimozione è stata accettata sulla prova di non-regressione e sui
+test mirati del package prima della cancellazione.
 
 ## Audit rimozione endpoint legacy InstaEdit — 2026-08-03
 

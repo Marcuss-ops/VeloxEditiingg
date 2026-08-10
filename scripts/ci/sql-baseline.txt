@@ -1,5 +1,3 @@
-2 DataServer/internal/backup/encrypted.go
-3 DataServer/internal/backup/sqlite.go
 1 DataServer/internal/completion/conflict_budget.go
 2 DataServer/internal/creatorflow/resolver.go
 6 DataServer/internal/deliveries/plan_resolver.go

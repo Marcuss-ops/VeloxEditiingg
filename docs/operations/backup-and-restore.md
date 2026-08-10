@@ -4,10 +4,9 @@
 
 L'audit dei call site del 2026-08-10 ha confermato che il package
 `DataServer/internal/backup` era scaffolding irraggiungibile: non aveva import,
-caller, wiring di bootstrap, scheduler, CLI o job operativo. La decisione di rimuovere il package e i relativi test è stata approvata;
-la rimozione effettiva avverrà nel commit atomico successivo. Questo documento
-descrive quindi il requisito operativo e non dichiara un'implementazione
-automatica disponibile nel server.
+caller, wiring di bootstrap, scheduler, CLI o job operativo. Il package e i relativi test sono stati rimossi nel commit atomico
+successivo all'audit. Questo documento descrive quindi il requisito operativo
+e non dichiara un'implementazione automatica disponibile nel server.
 
 Fino all'introduzione di un componente posseduto e collegato al bootstrap, ogni
 backup pre-deploy o di emergenza deve essere eseguito con una procedura
