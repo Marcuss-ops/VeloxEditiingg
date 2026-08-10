@@ -201,8 +201,8 @@ func TestWorkerRegistryIsDerivedFromSharedCatalog(t *testing.T) {
 	for key, sharedSpec := range shared {
 		ws, ok := worker[key]
 		if !ok {
-		t.Fatalf("shared event %s missing from worker projection", key)
-	}
+			t.Fatalf("shared event %s missing from worker projection", key)
+		}
 		if ws.Origin != sharedSpec.Origin || ws.Scope != sharedSpec.Scope ||
 			ws.Component != sharedSpec.Component || ws.Action != sharedSpec.Action ||
 			ws.Phase != sharedSpec.Phase || ws.EventType != sharedSpec.EventType {
