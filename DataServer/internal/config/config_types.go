@@ -232,6 +232,7 @@ type AlertConfig struct {
 // FleetConfig contains typed fleet-operator development/runtime controls.
 type FleetConfig struct {
 	SmokeMode          string
+	SmokeAssetID       string
 	SmokeDriveFolderID string
 }
 

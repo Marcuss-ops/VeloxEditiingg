@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
@@ -22,6 +23,7 @@ var ErrResumeSmokeFailed = errors.New("resume: smoke gate failed")
 type ResumeBackend struct {
 	Registry      *workersreg.Registry
 	SmokeExecutor OperationExecutor
+	SmokeAssetID  string
 }
 
 // ResumeExecutor is the sole writer that can make a drained or quarantined
@@ -66,7 +68,7 @@ func (e *ResumeExecutor) Execute(ctx context.Context, op *store.Operation) error
 	// actual Level D pipeline. Its smoke_runs row is the durable evidence;
 	// merely reading an older SUCCEEDED row is intentionally impossible.
 	payload, err := json.Marshal(SmokePayload{
-		AssetID: "asset-canary-001",
+		AssetID: smokeAssetID(e.backend.SmokeAssetID),
 		Reason:  "resume Level D smoke gate",
 	})
 	if err != nil {
@@ -99,4 +101,11 @@ func (e *ResumeExecutor) Execute(ctx context.Context, op *store.Operation) error
 		return fmt.Errorf("resume: complete green smoke transition: %w", err)
 	}
 	return nil
+}
+
+func smokeAssetID(configured string) string {
+	if trimmed := strings.TrimSpace(configured); trimmed != "" {
+		return trimmed
+	}
+	return "asset-canary-001"
 }

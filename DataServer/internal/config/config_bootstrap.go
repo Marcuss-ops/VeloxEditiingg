@@ -29,6 +29,7 @@ func loadAlertConfig(raw RawConfig) AlertConfig {
 func loadFleetConfig(raw RawConfig) FleetConfig {
 	return FleetConfig{
 		SmokeMode:          strings.ToLower(strings.TrimSpace(raw.Get("VELOX_SMOKE_MODE"))),
+		SmokeAssetID:       strings.TrimSpace(raw.Get("VELOX_SMOKE_ASSET_ID")),
 		SmokeDriveFolderID: strings.TrimSpace(raw.Get("VELOX_SMOKE_DRIVE_FOLDER_ID")),
 	}
 }

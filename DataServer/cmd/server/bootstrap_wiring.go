@@ -318,6 +318,7 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 			if err := fleetDep.Registry.Register(fleet.OperationKindResume, fleet.NewResumeExecutor(fleet.ResumeBackend{
 				Registry:      m.Workers.Registry(),
 				SmokeExecutor: levelDSmokeExecutor,
+				SmokeAssetID:  cfg.Fleet.SmokeAssetID,
 			})); err != nil {
 				return fmt.Errorf("register ResumeExecutor: %w", err)
 			}
@@ -326,7 +327,7 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor capability=%s: %s; smoke and resume are not registered", status.State, status.Reason)
 		}
 		if fleetDep.Update != nil && status.State == fleet.SmokeCapabilityReady && smokeBackend.Drive != nil {
-			freshSmoke := fleet.NewFreshSmokeRunner(levelDSmokeExecutor, p.SQLite)
+			freshSmoke := fleet.NewFreshSmokeRunnerWithAsset(levelDSmokeExecutor, p.SQLite, cfg.Fleet.SmokeAssetID)
 			// Nil-safe Drive attach (AZIONE 2): a Drive module without a
 			// live service leaves the update capability NOT READY rather
 			// than panicking on m.Drive.Service() at boot — the fail-closed

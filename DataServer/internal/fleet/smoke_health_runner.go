@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"velox-server/internal/store"
@@ -28,17 +29,25 @@ import (
 type FreshSmokeRunner struct {
 	executor OperationExecutor
 	runs     BackendSmokeRuns
+	assetID  string
 }
 
 func NewFreshSmokeRunner(executor OperationExecutor, runs BackendSmokeRuns) *FreshSmokeRunner {
-	return &FreshSmokeRunner{executor: executor, runs: runs}
+	return NewFreshSmokeRunnerWithAsset(executor, runs, "")
+}
+
+// NewFreshSmokeRunnerWithAsset binds the production smoke gate to an
+// operator-configured READY asset. The legacy default remains only for
+// isolated callers/tests; production wiring must provide VELOX_SMOKE_ASSET_ID.
+func NewFreshSmokeRunnerWithAsset(executor OperationExecutor, runs BackendSmokeRuns, assetID string) *FreshSmokeRunner {
+	return &FreshSmokeRunner{executor: executor, runs: runs, assetID: strings.TrimSpace(assetID)}
 }
 
 func (r *FreshSmokeRunner) RunLevelD(ctx context.Context, workerID string) (string, error) {
 	if r == nil || r.executor == nil || r.runs == nil {
 		return "", fmt.Errorf("fresh smoke runner: real executor not wired")
 	}
-	payload, err := json.Marshal(SmokePayload{AssetID: "asset-canary-001", Reason: "worker update Level D smoke gate"})
+	payload, err := json.Marshal(SmokePayload{AssetID: smokeAssetID(r.assetID), Reason: "worker update Level D smoke gate"})
 	if err != nil {
 		return "", fmt.Errorf("fresh smoke payload: %w", err)
 	}
