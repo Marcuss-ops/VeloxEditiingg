@@ -20,7 +20,8 @@ void reportDetailedProgress(const services::EngineProgress& progress,
                             int64_t frames_encoded,
                             int64_t frames_decoded,
                             int64_t frames_composited,
-                            int64_t elapsed_ms);
+                            int64_t elapsed_ms,
+                            bool segment_completed = false);
 
 media::SceneSegmentParams makeParams(
     const plan::CanvasSpec& canvas,

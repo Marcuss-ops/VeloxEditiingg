@@ -232,6 +232,18 @@ func (w *Worker) unregisterActiveTask(taskID string, pte *PendingTaskExecution) 
 	w.wakeHeartbeat()
 }
 
+func cumulativeMetricsEqual(left, right map[string]float64) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if other, ok := right[key]; !ok || other != value {
+			return false
+		}
+	}
+	return true
+}
+
 // withJobProgressCallback returns a child context carrying the
 // canonical progress callback that updates activeTask.Progress under
 // the activeTasksMu lock. The callback uses taskID to dynamically
@@ -246,8 +258,21 @@ func (w *Worker) withJobProgressCallback(parent context.Context, taskID string) 
 			previous := current.Progress
 			phaseChanged := previous.Phase != snapshot.Phase
 			segmentChanged := previous.Segment != snapshot.Segment
-			publishDue := previous.LastPublishedAt.IsZero() ||
-				now.Sub(previous.LastPublishedAt) >= 2*time.Second || phaseChanged || segmentChanged
+			segmentCompleted := snapshot.SegmentCompleted &&
+				(!previous.SegmentCompleted || previous.Segment != snapshot.Segment)
+			identical := previous.Percent == snapshot.Percent &&
+				previous.Scene == snapshot.Scene && previous.TotalScenes == snapshot.TotalScenes &&
+				previous.Segment == snapshot.Segment && previous.TotalSegments == snapshot.TotalSegments &&
+				previous.SegmentCompleted == snapshot.SegmentCompleted &&
+				previous.Phase == snapshot.Phase && !segmentCompleted &&
+				previous.FramesEncoded == snapshot.FramesEncoded &&
+				previous.FramesDecoded == snapshot.FramesDecoded &&
+				previous.FramesComposited == snapshot.FramesComposited &&
+				previous.FfmpegSpeedX == snapshot.FfmpegSpeedX &&
+				previous.ElapsedMS == snapshot.ElapsedMS &&
+				cumulativeMetricsEqual(previous.CumulativeMetrics, snapshot.CumulativeMetrics)
+			publishDue := !identical && (previous.LastPublishedAt.IsZero() ||
+				now.Sub(previous.LastPublishedAt) >= 2*time.Second || phaseChanged || segmentChanged || segmentCompleted)
 
 			metrics := make(map[string]float64, len(snapshot.CumulativeMetrics))
 			for key, value := range snapshot.CumulativeMetrics {
@@ -259,11 +284,11 @@ func (w *Worker) withJobProgressCallback(parent context.Context, taskID string) 
 			// LastPublishedAt is only the local wake/throttle clock and
 			// is never serialized as operator telemetry.
 			current.Progress = JobProgress{
-				Percent:           snapshot.Percent,
-				Scene:             snapshot.Scene,
-				TotalScenes:       snapshot.TotalScenes,
-				Segment:           snapshot.Segment,
+				Percent:     snapshot.Percent,
+				Scene:       snapshot.Scene,
+				TotalScenes: snapshot.TotalScenes, Segment: snapshot.Segment,
 				TotalSegments:     snapshot.TotalSegments,
+				SegmentCompleted:  snapshot.SegmentCompleted,
 				Phase:             snapshot.Phase,
 				Stage:             snapshot.Phase,
 				FramesEncoded:     snapshot.FramesEncoded,

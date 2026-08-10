@@ -18,6 +18,7 @@ type ProgressSnapshot struct {
 	TotalScenes       int32
 	Segment           int32
 	TotalSegments     int32
+	SegmentCompleted  bool
 	Phase             string
 	FramesEncoded     int64
 	FramesDecoded     int64

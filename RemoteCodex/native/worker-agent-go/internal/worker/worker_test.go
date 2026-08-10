@@ -2,9 +2,12 @@ package worker
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
+	"velox-shared/controltransport"
 	"velox-worker-agent/pkg/video/pipeline"
 )
 
@@ -126,11 +129,189 @@ func TestWithJobProgressCallbackPublishesCanonicalSnapshotWithThrottle(t *testin
 		t.Fatalf("throttled heartbeat publication advanced: first=%+v second=%+v", first, second)
 	}
 
+	// An identical snapshot is deduplicated even after the interval.
+	beforeDuplicateWake := len(w.heartbeatWake)
+	callback(pipeline.ProgressSnapshot{Percent: 20, Scene: 2, TotalScenes: 8, Segment: 3, TotalSegments: 16, Phase: "building_segments", FramesEncoded: 200})
+	if len(w.heartbeatWake) != beforeDuplicateWake {
+		t.Fatalf("identical progress snapshot generated traffic")
+	}
+
 	// A phase transition bypasses the interval and publishes immediately.
 	callback(pipeline.ProgressSnapshot{Percent: 75, Scene: 8, TotalScenes: 8, Segment: 16, TotalSegments: 16, Phase: "concatenating", FramesEncoded: 200})
 	third := w.activeTasks["task-progress"].Progress
 	if third.Phase != "concatenating" || third.Percent != 75 || third.FramesEncoded != 200 {
 		t.Fatalf("phase transition was not published: %+v", third)
+	}
+
+	// A metrics-only change is retained in memory but remains subject to the
+	// periodic 2s checkpoint; it must not create an immediate traffic burst.
+	beforeMetricsWake := len(w.heartbeatWake)
+	callback(pipeline.ProgressSnapshot{Percent: 75, Scene: 8, TotalScenes: 8, Segment: 16, TotalSegments: 16, Phase: "concatenating", FramesEncoded: 200, CumulativeMetrics: map[string]float64{"frames_encoded": 201}})
+	if len(w.heartbeatWake) != beforeMetricsWake {
+		t.Fatalf("metrics-only progress bypassed the traffic throttle")
+	}
+	if got := w.activeTasks["task-progress"].Progress.CumulativeMetrics["frames_encoded"]; got != 201 {
+		t.Fatalf("metrics-only snapshot was not retained: %#v", w.activeTasks["task-progress"].Progress.CumulativeMetrics)
+	}
+
+	// A segment completion is an explicit checkpoint, even if the phase is unchanged.
+	callback(pipeline.ProgressSnapshot{Percent: 80, Scene: 8, TotalScenes: 8, Segment: 17, TotalSegments: 17, Phase: "building_segments", SegmentCompleted: true})
+	fourth := w.activeTasks["task-progress"].Progress
+	if !fourth.SegmentCompleted || fourth.Segment != 17 {
+		t.Fatalf("segment completion was not retained: %+v", fourth)
+	}
+}
+
+type heartbeatLoopRecordingTransport struct {
+	mu     sync.Mutex
+	sends  []time.Time
+	notify chan time.Time
+	err    error
+}
+
+func (r *heartbeatLoopRecordingTransport) Connect(context.Context, controltransport.WorkerHello) error {
+	return nil
+}
+
+func (r *heartbeatLoopRecordingTransport) Receive(context.Context) (<-chan controltransport.ControlMessage, <-chan error, error) {
+	return nil, nil, nil
+}
+
+func (r *heartbeatLoopRecordingTransport) Send(_ context.Context, _ controltransport.ControlMessage) error {
+	now := time.Now()
+	r.mu.Lock()
+	r.sends = append(r.sends, now)
+	r.mu.Unlock()
+	select {
+	case r.notify <- now:
+	default:
+	}
+	return r.err
+}
+
+func (r *heartbeatLoopRecordingTransport) Close() error { return nil }
+
+func (r *heartbeatLoopRecordingTransport) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.sends)
+}
+
+func TestHeartbeatLoop_TrafficFloorCoversInitialTickerAndCoalescedWake(t *testing.T) {
+	w, _ := newDispatchTestWorker(t)
+	transport := &heartbeatLoopRecordingTransport{notify: make(chan time.Time, 4)}
+	w.transport = transport
+	w.heartbeatWake = make(chan struct{}, 1)
+	w.activeTasks["task-heartbeat-floor"] = &ActiveTaskExecution{TaskID: "task-heartbeat-floor"}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w.wg.Add(1)
+	// Use a short test-only ticker so this test exercises the ticker branch
+	// without waiting for the production two-second busy cadence.
+	go w.heartbeatLoopWithInterval(ctx, 50*time.Millisecond)
+
+	var firstSent time.Time
+	select {
+	case firstSent = <-transport.notify:
+		if got := transport.count(); got != 1 {
+			t.Fatalf("initial heartbeat sends = %d, want 1", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("initial heartbeat was not sent")
+	}
+
+	// With no wake queued, the short ticker is the only source of the second
+	// send. The shared gate must delay it until the 250ms floor expires.
+	select {
+	case secondSent := <-transport.notify:
+		if got := transport.count(); got != 2 {
+			t.Fatalf("ticker heartbeat sends = %d, want exactly 2", got)
+		}
+		if elapsed := secondSent.Sub(firstSent); elapsed < heartbeatWakeMinInterval-25*time.Millisecond {
+			t.Fatalf("ticker heartbeat elapsed=%v, want at least %v", elapsed, heartbeatWakeMinInterval)
+		}
+	case <-time.After(heartbeatWakeMinInterval + time.Second):
+		t.Fatal("ticker did not produce a heartbeat")
+	}
+
+	// A burst of phase/segment wakes is coalesced by heartbeatWake. The same
+	// gate must apply to the wake path, even though the ticker is also active.
+	wakeQueuedAt := time.Now()
+	for i := 0; i < 32; i++ {
+		w.wakeHeartbeat()
+	}
+	select {
+	case thirdSent := <-transport.notify:
+		if got := transport.count(); got != 3 {
+			t.Fatalf("coalesced wake sends = %d, want exactly 3", got)
+		}
+		if elapsed := thirdSent.Sub(wakeQueuedAt); elapsed < heartbeatWakeMinInterval-25*time.Millisecond {
+			t.Fatalf("wake heartbeat elapsed=%v, want at least %v", elapsed, heartbeatWakeMinInterval)
+		}
+	case <-time.After(heartbeatWakeMinInterval + time.Second):
+		t.Fatal("coalesced wake did not produce a heartbeat")
+	}
+
+	close(w.stopChan)
+	w.wg.Wait()
+}
+
+func TestHeartbeatLoop_TrafficFloorThrottlesFailedAttempts(t *testing.T) {
+	w, _ := newDispatchTestWorker(t)
+	transport := &heartbeatLoopRecordingTransport{
+		notify: make(chan time.Time, 4),
+		err:    errors.New("synthetic heartbeat failure"),
+	}
+	w.transport = transport
+	w.heartbeatWake = make(chan struct{}, 1)
+	w.activeTasks["task-heartbeat-failure-floor"] = &ActiveTaskExecution{TaskID: "task-heartbeat-failure-floor"}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w.wg.Add(1)
+	go w.heartbeatLoopWithInterval(ctx, time.Hour)
+
+	var firstAttempt time.Time
+	select {
+	case firstAttempt = <-transport.notify:
+	case <-time.After(time.Second):
+		t.Fatal("initial failed heartbeat was not attempted")
+	}
+	w.wakeHeartbeat()
+
+	select {
+	case secondAttempt := <-transport.notify:
+		if got := transport.count(); got != 2 {
+			t.Fatalf("failed heartbeat attempts = %d, want exactly 2", got)
+		}
+		if elapsed := secondAttempt.Sub(firstAttempt); elapsed < heartbeatWakeMinInterval-25*time.Millisecond {
+			t.Fatalf("failed-attempt floor elapsed=%v, want at least %v", elapsed, heartbeatWakeMinInterval)
+		}
+	case <-time.After(heartbeatWakeMinInterval + time.Second):
+		t.Fatal("wake retry after failed heartbeat was not attempted")
+	}
+
+	close(w.stopChan)
+	w.wg.Wait()
+}
+
+func TestHeartbeatWakeMinIntervalIsBounded(t *testing.T) {
+	if heartbeatIntervalBusy != 2*time.Second {
+		t.Fatalf("busy heartbeat interval = %v, want 2s", heartbeatIntervalBusy)
+	}
+	if heartbeatWakeMinInterval != 250*time.Millisecond {
+		t.Fatalf("wake floor = %v, want 250ms", heartbeatWakeMinInterval)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stop := make(chan struct{})
+	start := time.Now()
+	if !waitHeartbeatFloor(ctx, stop, start) {
+		t.Fatal("heartbeat floor unexpectedly cancelled")
+	}
+	if elapsed := time.Since(start); elapsed < heartbeatWakeMinInterval-25*time.Millisecond {
+		t.Fatalf("heartbeat floor elapsed=%v, want at least %v", elapsed, heartbeatWakeMinInterval)
 	}
 }
 

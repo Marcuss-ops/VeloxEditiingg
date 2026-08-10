@@ -26,13 +26,15 @@ void reportDetailedProgress(const services::EngineProgress& progress,
                             int64_t frames_encoded,
                             int64_t frames_decoded,
                             int64_t frames_composited,
-                            int64_t elapsed_ms) {
+                            int64_t elapsed_ms,
+                            bool segment_completed) {
     std::cerr << "{\"progress\":" << static_cast<int>(progress.progress_pct)
               << ",\"percent\":" << static_cast<int>(progress.progress_pct)
               << ",\"scene\":" << scene
               << ",\"total_scenes\":" << total_scenes
               << ",\"segment\":" << segment
               << ",\"total_segments\":" << total_segments
+              << ",\"segment_completed\":" << (segment_completed ? "true" : "false")
               << ",\"stage\":\"" << phase << "\""
               << ",\"phase\":\"" << phase << "\""
               << ",\"frames_encoded\":" << frames_encoded

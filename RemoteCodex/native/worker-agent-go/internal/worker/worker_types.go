@@ -121,6 +121,7 @@ type JobProgress struct {
 	TotalScenes       int32
 	Segment           int32
 	TotalSegments     int32
+	SegmentCompleted  bool
 	Phase             string
 	Stage             string // legacy alias for phase in older worker consumers
 	FramesEncoded     int64

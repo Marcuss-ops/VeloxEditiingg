@@ -299,7 +299,8 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                                frames_encoded_.load(), frames_decoded_.load(),
                                frames_composited_.load(),
                                std::chrono::duration_cast<std::chrono::milliseconds>(
-                                   std::chrono::steady_clock::now() - renderStart).count());
+                                   std::chrono::steady_clock::now() - renderStart).count(),
+                               true);
     }
 
     if (total_duration_seconds > 0.0) {

@@ -8,11 +8,12 @@ import (
 // parameters applied by heartbeat_loop.go after consecutive failures.
 // All callers are inside the worker package.
 const (
-	heartbeatIntervalIdle      = 60 * time.Second // Idle: less frequent
-	heartbeatIntervalBusy      = 15 * time.Second // Busy: more frequent for progress updates
-	heartbeatIntervalError     = 10 * time.Second // Error: rapid recovery attempts
-	heartbeatMaxBackoff        = 5 * time.Minute  // Maximum backoff interval
-	heartbeatBackoffMultiplier = 2.0              // Backoff multiplier
+	heartbeatIntervalIdle      = 60 * time.Second       // Idle: less frequent
+	heartbeatIntervalBusy      = 2 * time.Second        // Busy: live progress cadence
+	heartbeatIntervalError     = 10 * time.Second       // Error: rapid recovery attempts
+	heartbeatWakeMinInterval   = 250 * time.Millisecond // Burst floor for phase/segment edges
+	heartbeatMaxBackoff        = 5 * time.Minute        // Maximum backoff interval
+	heartbeatBackoffMultiplier = 2.0                    // Backoff multiplier
 
 	// Lease renewal cadence + requested expiry. Mirrored by lease_renewal.go's
 	// leaseRenewLoop (15s ticker, 30m requested expiry) so the cadence is

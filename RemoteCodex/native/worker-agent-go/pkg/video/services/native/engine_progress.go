@@ -31,6 +31,7 @@ func streamEngineOutput(stdout, stderr io.ReadCloser, ctx context.Context, onPro
 					Total            int     `json:"total_scenes"`
 					Segment          int     `json:"segment"`
 					TotalSegments    int     `json:"total_segments"`
+					SegmentCompleted bool    `json:"segment_completed"`
 					Stage            string  `json:"stage"`
 					Phase            string  `json:"phase"`
 					FramesEncoded    int64   `json:"frames_encoded"`
@@ -45,7 +46,7 @@ func streamEngineOutput(stdout, stderr io.ReadCloser, ctx context.Context, onPro
 					// a live snapshot with zero scene/segment/frame values
 					// would corrupt the canonical Attempt projection.
 					detailed := prog.Phase != "" || prog.Scene != 0 || prog.Total != 0 ||
-						prog.Segment != 0 || prog.TotalSegments != 0 ||
+						prog.Segment != 0 || prog.TotalSegments != 0 || prog.SegmentCompleted ||
 						prog.FramesEncoded != 0 || prog.FramesDecoded != 0 ||
 						prog.FramesComposited != 0 || prog.ElapsedMS != 0
 					if !detailed {
@@ -68,11 +69,19 @@ func streamEngineOutput(stdout, stderr io.ReadCloser, ctx context.Context, onPro
 						"elapsed_ms":        float64(prog.ElapsedMS),
 					}
 					snapshot := pipeline.ProgressSnapshot{
-						Percent: int32(prog.Percent), Scene: int32(prog.Scene), TotalScenes: int32(prog.Total),
-						Segment: int32(prog.Segment), TotalSegments: int32(prog.TotalSegments), Phase: phase,
-						FramesEncoded: prog.FramesEncoded, FramesDecoded: prog.FramesDecoded,
-						FramesComposited: prog.FramesComposited, FfmpegSpeedX: prog.FfmpegSpeedX,
-						ElapsedMS: prog.ElapsedMS, CumulativeMetrics: metrics,
+						Percent:           int32(prog.Percent),
+						Scene:             int32(prog.Scene),
+						TotalScenes:       int32(prog.Total),
+						Segment:           int32(prog.Segment),
+						TotalSegments:     int32(prog.TotalSegments),
+						SegmentCompleted:  prog.SegmentCompleted,
+						Phase:             phase,
+						FramesEncoded:     prog.FramesEncoded,
+						FramesDecoded:     prog.FramesDecoded,
+						FramesComposited:  prog.FramesComposited,
+						FfmpegSpeedX:      prog.FfmpegSpeedX,
+						ElapsedMS:         prog.ElapsedMS,
+						CumulativeMetrics: metrics,
 					}
 					if legacy := pipeline.ProgressCallback(ctx); legacy != nil {
 						legacy(int(snapshot.Percent), int(snapshot.Scene), int(snapshot.TotalScenes), snapshot.Phase)
