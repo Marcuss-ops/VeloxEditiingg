@@ -42,7 +42,10 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 			return nil, deliveryplan.NewValidationError("render_manifest", "must not be empty")
 		}
 	}
-	base := contract.NewJobPayloadV2(payloadMap)
+	base, err := contract.NewJobPayloadV2Checked(payloadMap)
+	if err != nil {
+		return nil, err
+	}
 
 	title := strings.TrimSpace(base.VideoName)
 	if title == "" {
@@ -106,7 +109,7 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 	if base.Source == "" {
 		base.Source = "scene_video_api"
 	}
-	base.Status = "PENDING"
+	base.Status = contract.InputAssemblyPending
 	base.Version = "v2"
 
 	// Apply the fingerprint AFTER all identity + business fields are

@@ -1,10 +1,19 @@
 package contract
 
-import "strings"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
 
 // InputAssemblyStatus describes the producer-side handoff state of a payload.
 // It must not be confused with JobStatus: InputAssemblyCompleted means the
 // request envelope is fully assembled, not that rendering or delivery is done.
+//
+// The type owns the legacy wire spelling at this boundary: pending was
+// historically emitted as uppercase PENDING, while completed and failure
+// values remain lowercase. This keeps old readers compatible without making
+// a generic string status the in-memory representation.
 type InputAssemblyStatus string
 
 const (
@@ -24,6 +33,45 @@ func (s InputAssemblyStatus) Valid() bool {
 	}
 }
 
+// WireValue returns the established JSON spelling for the input-assembly
+// status. PENDING is retained for compatibility with existing payloads.
+func (s InputAssemblyStatus) WireValue() string {
+	if s == InputAssemblyPending {
+		return "PENDING"
+	}
+	return string(s)
+}
+
+// MarshalJSON preserves the historical payload spelling while keeping the
+// domain type explicit in Go. Invalid lifecycle values are rejected rather
+// than being emitted through the overloaded status key.
+func (s InputAssemblyStatus) MarshalJSON() ([]byte, error) {
+	if !s.Valid() {
+		return nil, fmt.Errorf("contract: invalid input assembly status %q", s)
+	}
+	return json.Marshal(s.WireValue())
+}
+
+// UnmarshalJSON accepts both legacy uppercase and canonical lowercase
+// spellings. Unknown values are retained for lossless compatibility reads;
+// callers must use Valid or ParseInputAssemblyStatus before treating them as
+// an input-assembly state.
+func (s *InputAssemblyStatus) UnmarshalJSON(data []byte) error {
+	if s == nil {
+		return nil
+	}
+	var raw string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	parsed, ok := ParseInputAssemblyStatus(raw)
+	if !ok {
+		return fmt.Errorf("contract: invalid input assembly status %q", raw)
+	}
+	*s = parsed
+	return nil
+}
+
 // ParseInputAssemblyStatus converts the case-insensitive payload spelling at
 // the wire boundary into the distinct input-assembly domain type. The legacy
 // canonical payload uses both "PENDING" and lowercase "completed" depending
@@ -38,18 +86,17 @@ func ParseInputAssemblyStatus(raw string) (InputAssemblyStatus, bool) {
 }
 
 // InputAssemblyStatus returns the payload's input-handoff status without
-// conflating it with JobStatus. JobPayloadV2.Status remains a string because
-// it is an established overloaded wire field; callers that need semantics
-// should use this parser/accessor rather than casting it to another domain.
+// conflating it with JobStatus. Invalid or lifecycle values return the zero
+// value, so callers cannot accidentally treat SUCCEEDED/PUBLISHED as a
+// producer-side completion.
 func (p *JobPayloadV2) InputAssemblyStatus() InputAssemblyStatus {
 	if p == nil {
 		return ""
 	}
-	status, ok := ParseInputAssemblyStatus(p.Status)
-	if !ok {
+	if !p.Status.Valid() {
 		return ""
 	}
-	return status
+	return p.Status
 }
 
 // SetInputAssemblyStatus writes the canonical wire spelling for an
@@ -59,13 +106,6 @@ func (p *JobPayloadV2) SetInputAssemblyStatus(status InputAssemblyStatus) bool {
 	if p == nil || !status.Valid() {
 		return false
 	}
-	// Preserve the historical uppercase default on the wire. The completed
-	// handoff values remain lowercase because that is the established creator
-	// payload contract.
-	if status == InputAssemblyPending {
-		p.Status = "PENDING"
-	} else {
-		p.Status = string(status)
-	}
+	p.Status = status
 	return true
 }

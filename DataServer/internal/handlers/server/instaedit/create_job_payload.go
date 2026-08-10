@@ -67,7 +67,10 @@ func (s *Service) buildCreateJobPayload(ctx context.Context, cmd CreateJobCmd, r
 		renderSpec["render_only"] = true
 	}
 
-	typedPayload := contract.NewJobPayloadV2(renderSpec)
+	typedPayload, err := contract.NewJobPayloadV2Checked(renderSpec)
+	if err != nil {
+		return nil, fmt.Errorf("build canonical payload: %w", err)
+	}
 	payload, err := typedPayload.ToMap()
 	if err != nil {
 		return nil, fmt.Errorf("build canonical payload: %w", err)

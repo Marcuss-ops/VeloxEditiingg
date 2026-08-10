@@ -67,7 +67,7 @@ func mustPayloadV2Map(t *testing.T) map[string]any {
 		VideoMetadata: map[string]any{"width": 1920},
 		Priority:      1, TimeoutSecs: 3600, SceneCount: 1, VoiceoverCount: 1,
 		TotalDurationSecs: 5, SceneDurationSecs: 5,
-		SubmittedVia: "test", Source: "test", JobFingerprint: "fingerprint", Status: "PENDING",
+		SubmittedVia: "test", Source: "test", JobFingerprint: "fingerprint", Status: InputAssemblyPending,
 		DeliveryPlan: []map[string]any{{"destination_id": "destination-1"}},
 	}
 	output, err := payload.ToMap()

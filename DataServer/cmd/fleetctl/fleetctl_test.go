@@ -704,13 +704,13 @@ func TestRunJobWatch_FailedReturnsNonZero(t *testing.T) {
 	}
 }
 
-func TestRunJobWatch_CompletedReturnsSuccess(t *testing.T) {
+func TestRunJobWatch_CompletedInputAssemblyStatusIsNotJobSuccess(t *testing.T) {
 	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "COMPLETED"})
 	})
 	defer srv.Close()
-	if got := runJobWatchWithInterval(c, "job-completed", time.Second, time.Millisecond, false); got != ExitOK {
-		t.Fatalf("completed job watch exit = %d, want %d", got, ExitOK)
+	if got := runJobWatchWithInterval(c, "job-completed", time.Second, time.Millisecond, false); got != ExitUnexpected {
+		t.Fatalf("completed input-assembly watch exit = %d, want %d", got, ExitUnexpected)
 	}
 }
 
@@ -798,19 +798,19 @@ func TestParseRolloutArgs_FlagAndPositionalForms(t *testing.T) {
 		waitReady bool
 	}{
 		{
-			name:      "flags with --digest and --workers and --wait-ready",
-			args:      []string{"--digest", pinned, "--workers", "worker-1,worker-2", "--wait-ready"},
-			image:     pinned, selection: "worker-1,worker-2", reason: "fleetctl-rollout", waitReady: true,
+			name:  "flags with --digest and --workers and --wait-ready",
+			args:  []string{"--digest", pinned, "--workers", "worker-1,worker-2", "--wait-ready"},
+			image: pinned, selection: "worker-1,worker-2", reason: "fleetctl-rollout", waitReady: true,
 		},
 		{
-			name:      "equals forms and custom reason",
-			args:      []string{"--digest=" + pinned, "--workers=all", "--reason=release-v2"},
-			image:     pinned, selection: "all", reason: "release-v2", waitReady: false,
+			name:  "equals forms and custom reason",
+			args:  []string{"--digest=" + pinned, "--workers=all", "--reason=release-v2"},
+			image: pinned, selection: "all", reason: "release-v2", waitReady: false,
 		},
 		{
-			name:      "positional image default selection all",
-			args:      []string{pinned, "--serial"},
-			image:     pinned, selection: "all", reason: "fleetctl-rollout", waitReady: false,
+			name:  "positional image default selection all",
+			args:  []string{pinned, "--serial"},
+			image: pinned, selection: "all", reason: "fleetctl-rollout", waitReady: false,
 		},
 	}
 	for _, tc := range cases {
@@ -843,12 +843,12 @@ func TestParseRolloutArgs_IgnoresSpaceFormGlobalFlags(t *testing.T) {
 func TestParseRolloutArgs_RejectsMisuse(t *testing.T) {
 	pinned := "ghcr.io/example/velox-worker@sha256:" + strings.Repeat("a", 64)
 	cases := [][]string{
-		{},                                   // no image
-		{"--workers=worker-1"},              // no image
-		{pinned, pinned},                     // duplicate positional
-		{"--digest", pinned, pinned},        // duplicate image
-		{"--parallel"},                      // serial-only
-		{"--digest", pinned, "--wat"},       // unknown flag
+		{},                            // no image
+		{"--workers=worker-1"},        // no image
+		{pinned, pinned},              // duplicate positional
+		{"--digest", pinned, pinned},  // duplicate image
+		{"--parallel"},                // serial-only
+		{"--digest", pinned, "--wat"}, // unknown flag
 	}
 	for _, args := range cases {
 		if _, err := parseRolloutArgs(args); err == nil {

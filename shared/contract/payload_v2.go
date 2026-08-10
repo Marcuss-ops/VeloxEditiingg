@@ -17,6 +17,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -101,7 +102,10 @@ type JobPayloadV2 struct {
 	SubmittedVia   string `json:"submitted_via,omitempty"`
 	Source         string `json:"source,omitempty"`
 	JobFingerprint string `json:"job_fingerprint,omitempty"`
-	Status         string `json:"status,omitempty"`
+	// Status is the producer-side input assembly state. It is deliberately
+	// not JobStatus: "completed" means the handoff envelope is assembled,
+	// not that rendering, delivery, or publication finished.
+	Status InputAssemblyStatus `json:"status,omitempty"`
 
 	// Delivery contract. Mirrors the raw validated shape, which may be an
 	// array of maps or a single map depending on the ingress point. The
@@ -110,7 +114,11 @@ type JobPayloadV2 struct {
 }
 
 // NewJobPayloadV2 reads a raw map (typically from JSON deserialization at
-// the HTTP/service edge) and returns a populated JobPayloadV2. It enforces
+// the HTTP/service edge) and returns a populated JobPayloadV2. It preserves
+// unknown status values for compatibility reads; canonical writers should
+// use NewJobPayloadV2Checked instead.
+//
+// It enforces
 // the canonical field names and STRIPS the legacy alias keys
 // (id/run_id/title/voiceover_path/audio_path) so they cannot leak into
 // the canonical map produced by ToMap.
@@ -151,11 +159,11 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 		TimeoutSecs:            payload.EnsureInt(raw["timeout_secs"], 3600),
 		SubmittedVia:           payload.FirstString(raw, "submitted_via"),
 		Source:                 payload.FirstString(raw, "source"),
-		Status:                 payload.FirstString(raw, "status"),
+		Status:                 parseInputAssemblyOrLegacy(raw["status"]),
 		DeliveryPlan:           raw["delivery_plan"],
 	}
 	if p.Status == "" {
-		p.Status = "PENDING"
+		p.Status = InputAssemblyPending
 	}
 	if p.JobType == "" {
 		p.JobType = "process_video"
@@ -220,6 +228,32 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 		p.VoiceoverCount = len(p.VoiceoverPaths)
 	}
 	return p
+}
+
+// NewJobPayloadV2Checked constructs a canonical writer payload and rejects
+// lifecycle or unknown values in the producer-side status field before they
+// can be persisted or dispatched. Missing status defaults to input assembly
+// pending, preserving the historical wire value PENDING.
+func NewJobPayloadV2Checked(raw map[string]any) (*JobPayloadV2, error) {
+	if raw != nil {
+		if value, present := raw["status"]; present && value != nil {
+			rawStatus, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("contract: payload status must be an input assembly status")
+			}
+			status, ok := ParseInputAssemblyStatus(rawStatus)
+			if !ok {
+				return nil, fmt.Errorf("contract: payload status %q is not an input assembly status", rawStatus)
+			}
+			copyPayload := make(map[string]any, len(raw)+1)
+			for key, item := range raw {
+				copyPayload[key] = item
+			}
+			copyPayload["status"] = string(status)
+			raw = copyPayload
+		}
+	}
+	return NewJobPayloadV2(raw), nil
 }
 
 // ToMap returns the canonical map representation of the payload for
@@ -361,12 +395,30 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 		out["job_fingerprint"] = p.JobFingerprint
 	}
 	if p.Status != "" {
-		out["status"] = p.Status
+		if !p.Status.Valid() {
+			return nil, fmt.Errorf("invalid input assembly status %q", p.Status)
+		}
+		out["status"] = p.Status.WireValue()
 	}
 	if p.DeliveryPlan != nil {
 		out["delivery_plan"] = p.DeliveryPlan
 	}
 	return out, nil
+}
+
+func parseInputAssemblyOrLegacy(value any) InputAssemblyStatus {
+	raw, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	status, ok := ParseInputAssemblyStatus(raw)
+	if !ok {
+		// Preserve an unknown legacy value for a compatibility read; the
+		// typed accessor intentionally rejects it until a producer-specific
+		// parser validates the domain.
+		return InputAssemblyStatus(strings.TrimSpace(raw))
+	}
+	return status
 }
 
 func cloneObject(in map[string]any) map[string]any {
@@ -402,18 +454,20 @@ func normalizeObjectList(value any) []map[string]any {
 }
 
 // JobPayloadV2FromJSON parses a JSON byte slice back into a typed struct.
-// This is the canonical reader; legacy maps lacking contract_version
-// are returned with ContractVersion=0 (readers may treat 0 as legacy).
+// It intentionally reads through a raw map so legacy rows with an overloaded
+// lifecycle value in `status` remain readable. Canonical writers must use
+// NewJobPayloadV2Checked and ToMap, which reject those values before storage
+// or dispatch.
 func JobPayloadV2FromJSON(data []byte) (*JobPayloadV2, error) {
 	trimmed := strings.TrimSpace(string(data))
 	if trimmed == "" {
 		return nil, nil
 	}
-	var p JobPayloadV2
-	if err := json.Unmarshal([]byte(trimmed), &p); err != nil {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &raw); err != nil {
 		return nil, err
 	}
-	return &p, nil
+	return NewJobPayloadV2(raw), nil
 }
 
 // SceneVideoFingerprint computes a deterministic SHA-256 prefix over the

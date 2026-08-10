@@ -137,7 +137,10 @@ func BuildClipPayloadForMaster(rawPayload map[string]interface{}, dataDir, video
 		delete(normalized, alias)
 	}
 
-	v2 := contract.NewJobPayloadV2(normalized)
+	v2, err := contract.NewJobPayloadV2Checked(normalized)
+	if err != nil {
+		return nil, err
+	}
 	v2.SetIdentity(jobID, jobRunID, correlationID)
 	v2.VideoName = videoName
 	v2.ScriptText = scriptText
@@ -156,7 +159,7 @@ func BuildClipPayloadForMaster(rawPayload map[string]interface{}, dataDir, video
 	v2.SubmittedVia = "api_script_generate"
 	v2.Source = "script_generate"
 	v2.Version = "v2"
-	v2.Status = "PENDING"
+	v2.Status = contract.InputAssemblyPending
 
 	out, err := v2.ToMap()
 	if err != nil {

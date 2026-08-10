@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"velox-server/internal/jobs"
 )
 
 func runJob(client *fleetClient, args []string) int {
@@ -229,11 +231,19 @@ func runJobWatchWithInterval(client *fleetClient, jobID string, timeout, interva
 		if terminalStatus == "" {
 			terminalStatus = response.Job.Status
 		}
-		switch terminalStatus {
-		case "SUCCEEDED", "COMPLETED":
+		// This endpoint reports the Velox JobStatus domain. Parse it into
+		// the domain type before applying terminal semantics. COMPLETED is
+		// reserved for producer-side InputAssemblyStatus and is therefore
+		// rejected rather than treated as job success.
+		jobStatus := jobs.JobStatus(strings.TrimSpace(terminalStatus))
+		switch jobStatus {
+		case jobs.StatusSucceeded:
 			return ExitOK
-		case "FAILED", "CANCELLED":
-			fmt.Fprintln(os.Stderr, fmtExit(ExitUnexpected, "job %s ended %s", jobID, terminalStatus))
+		case jobs.StatusFailed, jobs.StatusCancelled:
+			fmt.Fprintln(os.Stderr, fmtExit(ExitUnexpected, "job %s ended %s", jobID, jobStatus))
+			return ExitUnexpected
+		case jobs.JobStatus("COMPLETED"):
+			fmt.Fprintln(os.Stderr, fmtExit(ExitUnexpected, "job %s returned input-assembly status COMPLETED, not a terminal JobStatus", jobID))
 			return ExitUnexpected
 		}
 		select {

@@ -151,7 +151,10 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	// sub-map mirror. The struct fields are populated from the raw map
 	// directly; the post-projection assignments below finish the extra
 	// fields NormalizeScenesPayload + staging already computed for us.
-	v2 := contract.NewJobPayloadV2(normalized)
+	v2, err := contract.NewJobPayloadV2Checked(normalized)
+	if err != nil {
+		return nil, err
+	}
 	v2.SetIdentity(jobID, jobRunID, correlationID)
 	v2.VideoName = videoName
 	v2.ScriptText = scriptText
@@ -168,7 +171,7 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	v2.SubmittedVia = "api_script_generate_with_images"
 	v2.Source = "script_generate_with_images"
 	v2.Version = "v2"
-	v2.Status = "PENDING"
+	v2.Status = contract.InputAssemblyPending
 	v2.TotalDurationSecs = totalDuration
 	v2.SceneDurationSecs = perSceneDuration
 

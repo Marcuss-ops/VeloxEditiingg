@@ -78,7 +78,10 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 	// PR15.6: canonical-only payload via JobPayloadV2. Legacy alias keys
 	// (id/run_id/title/voiceover_path/audio_path) are emitted ONLY on the
 	// HTTP edge. delivery_plan is now carried by the typed envelope itself.
-	p := contract.NewJobPayloadV2(flat)
+	p, err := contract.NewJobPayloadV2Checked(flat)
+	if err != nil {
+		return nil, err
+	}
 	p.VideoName = title
 	p.ScriptText = scriptText
 	// BuildPipelinePayload is also called directly by legacy/runner paths,
@@ -98,7 +101,7 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 	p.Source = "pipeline_generate_with_images"
 	p.Priority = 1
 	p.TimeoutSecs = 3600
-	p.Status = "PENDING"
+	p.Status = contract.InputAssemblyPending
 	p.SetIdentity(
 		payload.FirstString(flat, "job_id", "script_id", "trace_id"),
 		payload.FirstString(flat, "job_run_id", "run_id", "trace_id"),
