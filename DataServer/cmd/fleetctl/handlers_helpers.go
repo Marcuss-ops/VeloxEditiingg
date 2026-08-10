@@ -7,12 +7,18 @@ import (
 	"strings"
 )
 
-var fullImageDigest = regexp.MustCompile(`@sha256:[0-9a-f]{64}$`)
+var (
+	fullImageDigest = regexp.MustCompile(`@sha256:[0-9a-f]{64}$`)
+	rawDigest       = regexp.MustCompile(`^[0-9a-f]{64}$`)
+)
 
 func digestFromRef(ref string) string {
 	ref = strings.TrimSpace(ref)
 	if digestRegex.MatchString(ref) {
 		return ref
+	}
+	if rawDigest.MatchString(ref) {
+		return "sha256:" + ref
 	}
 	if fullImageDigest.MatchString(ref) {
 		return "sha256:" + strings.TrimPrefix(ref[strings.LastIndex(ref, "@")+1:], "sha256:")

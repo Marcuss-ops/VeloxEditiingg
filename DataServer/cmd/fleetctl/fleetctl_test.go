@@ -279,6 +279,10 @@ func TestDigestFromRef_RequiresImmutableImageDigest(t *testing.T) {
 	if got := digestFromRef("ghcr.io/example/velox-worker:latest"); got != "" {
 		t.Fatalf("digestFromRef mutable tag = %q, want empty", got)
 	}
+	raw := strings.Repeat("b", 64)
+	if got := digestFromRef(raw); got != "sha256:"+raw {
+		t.Fatalf("digestFromRef raw digest = %q, want sha256-prefixed digest", got)
+	}
 }
 
 func TestRunStatusProduction_DriftReturnsNonZero(t *testing.T) {
