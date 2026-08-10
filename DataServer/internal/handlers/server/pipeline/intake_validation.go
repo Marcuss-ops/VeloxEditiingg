@@ -77,62 +77,7 @@ func ValidateSubmitJobRequest(req SubmitJobRequest) (*SubmitJobValidationError, 
 
 	details = append(details, validateSubmitAudioTracks(req)...)
 
-	// publishing_target is an alternate server-side selector. A non-empty
-	// delivery_plan and a selector are ambiguous, so reject the combination
-	// before any catalog/store lookup. An explicitly empty delivery_plan is
-	// treated as absent for backward compatibility with clients that always
-	// serialize arrays.
-	if req.PublishingTarget != nil {
-		target := req.PublishingTarget
-		path := "publishing_target"
-		if target.WorkspaceID <= 0 {
-			details = append(details, gin.H{"path": path + ".workspace_id", "issue": "must_be_positive"})
-		}
-		targetType := strings.TrimSpace(target.Type)
-		if targetType != "channel" && targetType != "group" {
-			details = append(details, gin.H{
-				"path":    path + ".type",
-				"issue":   "unsupported_value",
-				"allowed": []string{"channel", "group"},
-			})
-		}
-		if len(req.DeliveryPlan) > 0 {
-			details = append(details, gin.H{
-				"path":  path,
-				"issue": "conflicts_with_delivery_plan",
-			})
-		}
-		switch targetType {
-		case "channel":
-			if strings.TrimSpace(target.DestinationID) == "" {
-				details = append(details, gin.H{"path": path + ".destination_id", "issue": "required_for_channel"})
-			}
-			if target.GroupID != 0 {
-				details = append(details, gin.H{"path": path + ".group_id", "issue": "forbidden_for_channel"})
-			}
-		case "group":
-			if target.GroupID <= 0 {
-				details = append(details, gin.H{"path": path + ".group_id", "issue": "required_for_group"})
-			}
-			if strings.TrimSpace(target.DestinationID) != "" {
-				details = append(details, gin.H{"path": path + ".destination_id", "issue": "forbidden_for_group"})
-			}
-		}
-	}
-
-	// Per-delivery-plan-entry validation: destination_id non-empty
-	// after trim. RetryBudget has NO upper bound at the OpenAPI layer
-	// (only "minimum: 0"); allowing 0 is the whole point of the *int
-	// change so the explicit zero-round-trip contract holds.
-	for i, d := range req.DeliveryPlan {
-		pathPrefix := fmt.Sprintf("delivery_plan.%d", i)
-		if strings.TrimSpace(d.DestinationID) == "" {
-			details = append(details, gin.H{
-				"path":  pathPrefix + ".destination_id",
-				"issue": "empty",
-			})
-		}
-	}
+	details = append(details, validateSubmitDelivery(req)...)
 
 	// Publications are validated against the shared canonical contract.
 	// This remains separate from the renderer payload and adds the
@@ -140,78 +85,7 @@ func ValidateSubmitJobRequest(req SubmitJobRequest) (*SubmitJobValidationError, 
 	// package cannot know about.
 	details = append(details, validateSubmitPublications(req.Publications)...)
 
-	// ManifestRef shape validation. Runs ONLY when the pointer is
-	// non-nil — a nil pointer is the "client did not opt in" path
-	// and MUST pass through this validator without complaint. When
-	// the pointer is non-nil the body is treated as the canonical
-	// shape contract: schema_version must be in the closed enum,
-	// url must match the http(s) + velox-asset:// allow-list and
-	// be 1..MaxManifestRefURLBytes after trim, sha256 must be
-	// exactly 64 lowercase hex characters.
-	//
-	// The actual fetch + SHA-256 verification happens later in
-	// ResolveRenderManifestRef; this layer is intentionally byte-level
-	// only so the rejection paths are order-stable and a malformed
-	// manifest_ref returns 422 invalid_payload BEFORE any downstream cost.
-	if req.ManifestRef != nil {
-		mr := req.ManifestRef
-		mrPath := "manifest_ref"
-
-		// schema_version must be in the closed enum. The allowed
-		// list is the source of truth — changing it requires
-		// bumping apiwire.SubmitManifestRef's `oneof` tag too, so
-		// the wire schema and the runtime validator agree.
-		if !containsString(manifestRefSchemaVersions, mr.SchemaVersion) {
-			details = append(details, gin.H{
-				"path":     mrPath + ".schema_version",
-				"issue":    "unsupported_value",
-				"observed": mr.SchemaVersion,
-				"allowed":  manifestRefSchemaVersions,
-			})
-		}
-
-		// url: 1..MaxManifestRefURLBytes after trim AND must match
-		// the http(s) + velox-asset:// allow-list. The regex is
-		// duplicated from the apiwire validate tag because the
-		// schemagen cannot express the velox-asset:// scheme
-		// natively; duplicating it here keeps the wire schema
-		// and the runtime validator in lockstep.
-		trimmedURL := strings.TrimSpace(mr.URL)
-		if trimmedURL == "" {
-			details = append(details, gin.H{
-				"path":  mrPath + ".url",
-				"issue": "empty",
-			})
-		} else if len(trimmedURL) > MaxManifestRefURLBytes {
-			details = append(details, gin.H{
-				"path":     mrPath + ".url",
-				"issue":    "max_length",
-				"max":      MaxManifestRefURLBytes,
-				"observed": len(trimmedURL),
-			})
-		} else if !manifestRefURLRegexp.MatchString(trimmedURL) {
-			details = append(details, gin.H{
-				"path":     mrPath + ".url",
-				"issue":    "unsupported_scheme",
-				"observed": trimmedURL,
-				"allowed":  []string{"https://", "http://", "velox-asset://"},
-			})
-		}
-
-		// sha256: exactly 64 lowercase hex characters. The
-		// hex-only check is intentionally strict (lowercase) so
-		// a future drift to mixed case is caught at the wire
-		// rather than silently producing a mismatch inside the
-		// resolver.
-		if !manifestRefSHA256Regexp.MatchString(mr.SHA256) {
-			details = append(details, gin.H{
-				"path":     mrPath + ".sha256",
-				"issue":    "malformed",
-				"observed": mr.SHA256,
-				"expected": "64 lowercase hex characters ([0-9a-f]{64})",
-			})
-		}
-	}
+	details = append(details, validateSubmitManifestRef(req)...)
 
 	if len(details) == 0 {
 		return nil, false
