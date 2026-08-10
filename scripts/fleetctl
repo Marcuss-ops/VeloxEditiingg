@@ -60,6 +60,30 @@ EOF
 
 die() { printf 'fleetctl: %s\n' "$*" >&2; exit 2; }
 
+resolve_go_fleetctl() {
+    local candidate="${FLEETCTL_GO_BIN:-$ROOT/DataServer/bin/fleetctl}"
+    [[ -x "$candidate" ]] || die "Go fleetctl binary not found: $candidate (set FLEETCTL_GO_BIN or build DataServer/cmd/fleetctl)"
+    printf '%s' "$candidate"
+}
+
+exec_go_fleetctl() {
+    local binary
+    binary="$(resolve_go_fleetctl)"
+    export VELOX_MASTER_URL="$MASTER_URL"
+    # Normalize the legacy TOKEN_FILE format before handing control to Go.
+    # The Go client owns HTTP, polling, terminal-state handling and output;
+    # this shell boundary only preserves the historical auth inputs.
+    if [[ -z "${VELOX_ADMIN_TOKEN:-}" ]]; then
+        local resolved_token
+        resolved_token="$(resolve_token)"
+        export VELOX_ADMIN_TOKEN="$resolved_token"
+    fi
+    # Put the sub-command first: Go's global flag set stops parsing at the
+    # first positional command, while loadClientConfig then consumes the
+    # trailing --master flag without stealing command-specific arguments.
+    exec "$binary" "$@" --master="$MASTER_URL"
+}
+
 command=${1:-help}
 if [[ "$command" == "help" || "$command" == "--help" || "$command" == "-h" ]]; then
     usage
@@ -78,6 +102,25 @@ resolve_token() {
     fi
     die 'VELOX_ADMIN_TOKEN or TOKEN_FILE is required'
 }
+
+# Commands already implemented by the typed Go client delegate before
+# loading any Bash-only HTTP helpers. Keep this list intentionally small while
+# the remaining legacy surfaces migrate in separate, tested commits.
+case "$command" in
+    inspect|smoke|doctor)
+        exec_go_fleetctl "$@"
+        ;;
+    drain|resume)
+        delegated_args=("$@")
+        # Preserve the historical positional reason as the Go client's
+        # explicit --reason flag. The Go client owns validation/output/polling;
+        # this translation is the only compatibility work left in Bash.
+        if [[ $# -ge 3 && "$3" != --* ]]; then
+            delegated_args=("$1" "$2" --reason "$3")
+        fi
+        exec_go_fleetctl "${delegated_args[@]}"
+        ;;
+esac
 
 TOKEN="$(resolve_token)"
 [[ -n "$TOKEN" ]] || die 'admin token is empty'
@@ -342,7 +385,7 @@ parse_wait_ready_args() {
 }
 
 rollout() {
-    local image='' selection=all reason=fleetctl-rollout wait_for_ready=0 serial=1 arg worker_id
+    local image='' selection=all reason=fleetctl-rollout wait_for_ready=0 arg worker_id
     while [[ $# -gt 0 ]]; do
         arg=$1
         case "$arg" in
@@ -352,7 +395,7 @@ rollout() {
             --workers) [[ $# -ge 2 ]] || die '--workers requires all or a comma-separated worker_id list'; selection=$2; shift 2 ;;
             --reason=*) reason=${arg#*=}; shift ;;
             --reason) [[ $# -ge 2 ]] || die '--reason requires a value'; reason=$2; shift 2 ;;
-            --serial) serial=1; shift ;;
+            --serial) shift ;;
             --wait-ready) wait_for_ready=1; shift ;;
             --parallel) die 'rollout is serial-only; omit --parallel and use --serial'
                 ;;
@@ -514,7 +557,8 @@ print_job_summary() {
 }
 
 job_submit() {
-    local payload_file='' selection=all wait_for_jobs=0 idem_prefix="fleetctl-$(date +%s)" arg
+    local payload_file='' selection=all wait_for_jobs=0 idem_prefix='' arg
+    idem_prefix="fleetctl-$(date +%s)"
     while [[ $# -gt 0 ]]; do
         arg=$1
         case "$arg" in

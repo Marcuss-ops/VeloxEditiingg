@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCRIPT="$ROOT/scripts/fleetctl"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+MOCK="$TMP/fleetctl"
+ARGS="$TMP/args"
+ENV_OUT="$TMP/env"
+cat >"$MOCK" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" >"$FLEETCTL_TEST_ARGS"
+{
+    printf 'master=%s\n' "${VELOX_MASTER_URL:-}"
+    printf 'token=%s\n' "${VELOX_ADMIN_TOKEN:-}"
+} >"$FLEETCTL_TEST_ENV"
+MOCK
+chmod +x "$MOCK"
+
+TOKEN_FILE="$TMP/token"
+printf 'VELOX_ADMIN_TOKEN=file-token\n' >"$TOKEN_FILE"
+chmod 600 "$TOKEN_FILE"
+
+FLEETCTL_TEST_ARGS="$ARGS" \
+FLEETCTL_TEST_ENV="$ENV_OUT" \
+FLEETCTL_GO_BIN="$MOCK" \
+VELOX_MASTER_URL="https://master.example.test/" \
+TOKEN_FILE="$TOKEN_FILE" \
+VELOX_ADMIN_TOKEN='' \
+    "$SCRIPT" inspect worker-1
+
+expected_args=$'inspect\nworker-1\n--master=https://master.example.test'
+actual_args="$(cat "$ARGS")"
+[[ "$actual_args" == "$expected_args" ]] || {
+    printf 'FAIL: delegated args differ\nwant:\n%s\ngot:\n%s\n' "$expected_args" "$actual_args" >&2
+    exit 1
+}
+grep -Fxq 'master=https://master.example.test' "$ENV_OUT"
+grep -Fxq 'token=file-token' "$ENV_OUT"
+
+ARGS="$TMP/reason-args"
+FLEETCTL_TEST_ARGS="$ARGS" \
+FLEETCTL_TEST_ENV="$ENV_OUT" \
+FLEETCTL_GO_BIN="$MOCK" \
+VELOX_MASTER_URL="https://master.example.test" \
+VELOX_ADMIN_TOKEN='env-token' \
+    "$SCRIPT" drain worker-1 "manual drain"
+expected_args=$'drain\nworker-1\n--reason\nmanual drain\n--master=https://master.example.test'
+actual_args="$(cat "$ARGS")"
+[[ "$actual_args" == "$expected_args" ]] || {
+    printf 'FAIL: positional reason was not translated\nwant:\n%s\ngot:\n%s\n' "$expected_args" "$actual_args" >&2
+    exit 1
+}
+
+echo 'fleetctl launcher delegation: PASS'
