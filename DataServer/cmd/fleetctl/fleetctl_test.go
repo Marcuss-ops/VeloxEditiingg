@@ -156,6 +156,35 @@ func newMockClient(handler http.HandlerFunc) (*fleetClient, *httptest.Server) {
 	return c, srv
 }
 
+func TestRunStatus_JSONEmitsWorkerList(t *testing.T) {
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(workerListResponse{
+			Workers: []map[string]any{{"worker_id": "worker-json", "status": "CONNECTED"}},
+			Count:   1,
+		})
+	})
+	defer srv.Close()
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	ec := runStatusModeWithOutput(c, false, true)
+	w.Close()
+	os.Stdout = old
+	out, _ := io.ReadAll(r)
+
+	if ec != ExitOK {
+		t.Fatalf("JSON status code = %d, want %d", ec, ExitOK)
+	}
+	var got workerListResponse
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("JSON status output: %v; output=%s", err, out)
+	}
+	if got.Count != 1 || len(got.Workers) != 1 || got.Workers[0]["worker_id"] != "worker-json" {
+		t.Fatalf("unexpected JSON status output: %+v", got)
+	}
+}
+
 func TestRunStatus_StatusOK_PrettyPrintsCard(t *testing.T) {
 	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/admin/workers" {

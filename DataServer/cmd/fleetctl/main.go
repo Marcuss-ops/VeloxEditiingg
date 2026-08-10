@@ -142,12 +142,16 @@ func runMain(args []string) int {
 	switch sub {
 	case subStatus:
 		production := false
+		jsonOutput := false
 		for _, arg := range rest[1:] {
-			if arg == "--production" {
+			switch arg {
+			case "--production":
 				production = true
+			case "--json":
+				jsonOutput = true
 			}
 		}
-		return runStatusMode(client, production)
+		return runStatusModeWithOutput(client, production, jsonOutput)
 	case subInspect:
 		return runInspect(client, rest[1:])
 	case subDrain:

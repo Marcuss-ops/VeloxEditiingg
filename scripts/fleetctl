@@ -106,6 +106,12 @@ resolve_token() {
 # Commands already implemented by the typed Go client delegate before
 # loading any Bash-only HTTP helpers. Keep this list intentionally small while
 # the remaining legacy surfaces migrate in separate, tested commits.
+# `status --json` is delegated first because its wire output is already a
+# stable machine-readable contract; the human table remains on the legacy
+# path until its output compatibility is migrated explicitly.
+if [[ "$command" == status && "${2:-}" == "--json" ]]; then
+    exec_go_fleetctl "$@"
+fi
 case "$command" in
     inspect|smoke|doctor)
         exec_go_fleetctl "$@"

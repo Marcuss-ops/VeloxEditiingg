@@ -40,9 +40,14 @@ type sshCheckResponse struct {
 // runStatus — GET /api/v1/admin/workers; pretty-prints a
 // WorkerCard-shaped table per worker. Synchronous; no polling.
 func runStatus(client *fleetClient) int {
-	return runStatusMode(client, false)
+	return runStatusModeWithOutput(client, false, false)
 }
+
 func runStatusMode(client *fleetClient, production bool) int {
+	return runStatusModeWithOutput(client, production, false)
+}
+
+func runStatusModeWithOutput(client *fleetClient, production, jsonOutput bool) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*1e9)
 	defer cancel()
 	resp := workerListResponse{}
@@ -52,8 +57,14 @@ func runStatusMode(client *fleetClient, production bool) int {
 		return ExitUnexpected
 	}
 	if status != 200 {
-		fmt.Fprintln(os.Stderr, fmtExit(MapHTTPStatusToOpExit(status), "GET /admin/workers status=%d", status))
-		return MapHTTPStatusToOpExit(status)
+		ec := MapHTTPStatusToOpExit(status)
+		fmt.Fprintln(os.Stderr, fmtExit(ec, "GET /admin/workers status=%d", status))
+		return ec
+	}
+	if jsonOutput {
+		bs, _ := json.Marshal(resp)
+		fmt.Println(string(bs))
+		return ExitOK
 	}
 	// Pretty-print.
 	if production {
