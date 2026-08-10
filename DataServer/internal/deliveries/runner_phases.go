@@ -54,9 +54,12 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 			if phase == publicationstate.Uploading {
 				return r.phaseFailure(ctx, input.lease, input.publicationID, phase, "CAPABILITY_MISSING", fmt.Errorf("%w: provider does not support %s", ErrProviderPermanent, phase))
 			}
-			phase, err = r.advanceSkippedPhase(ctx, input.publicationID, phase)
+			currentPhase := phase
+			phase, err = r.advanceSkippedPhase(ctx, input.publicationID, currentPhase)
 			if err != nil {
-				return r.phaseFailure(ctx, input.lease, input.publicationID, phase, "STATE_TRANSITION", err)
+				// Keep the failed phase for the durable PARTIAL checkpoint;
+				// never pass the zero next-phase value into phaseFailure.
+				return r.phaseFailure(ctx, input.lease, input.publicationID, currentPhase, "CAPABILITY_MISSING", err)
 			}
 			continue
 		}
@@ -230,10 +233,11 @@ func (r *DeliveryRunner) advanceSkippedPhase(ctx context.Context, publicationID 
 		}
 		return publicationstate.Verifying, nil
 	case publicationstate.Verifying:
-		if _, err := r.dbStore.TransitionPublicationState(ctx, publicationID, publicationstate.Published, ""); err != nil {
-			return "", err
-		}
-		return "", nil
+		// Verification is the evidence boundary for asynchronous or
+		// resumable publication. A provider that cannot execute it must
+		// fail closed; skipping it would promote an accepted/submitted
+		// operation to PUBLISHED without remote proof.
+		return publicationstate.Verifying, fmt.Errorf("%w: provider cannot verify remote publication", ErrProviderPermanent)
 	default:
 		return "", fmt.Errorf("unsupported phase %s", phase)
 	}

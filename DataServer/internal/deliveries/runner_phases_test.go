@@ -47,6 +47,129 @@ func (p *crashResumePhaseProvider) ExecutePhase(_ context.Context, phase publica
 	}
 }
 
+type legacyAcceptedProvider struct{}
+
+func (legacyAcceptedProvider) Name() string { return "legacy-accepted" }
+func (legacyAcceptedProvider) Deliver(context.Context, *store.Artifact, *Destination, string, string) (*Result, error) {
+	return &Result{Success: true, Status: "accepted", RemoteID: "remote-operation-1"}, nil
+}
+
+type unregisteredReconcilerProvider struct{}
+
+func (unregisteredReconcilerProvider) Name() string { return "unregistered-reconciler" }
+func (unregisteredReconcilerProvider) Deliver(context.Context, *store.Artifact, *Destination, string, string) (*Result, error) {
+	return &Result{Success: true, Status: "accepted", RemoteID: "remote-operation-2"}, nil
+}
+func (unregisteredReconcilerProvider) Reconcile(context.Context, string, string) (*Result, error) {
+	return &Result{Success: true, Status: "published", RemoteID: "remote-final-2"}, nil
+}
+
+func TestProcessLeaseRejectsUnregisteredReconciler(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "unregistered-reconciler.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	const (
+		artifactID    = "artifact-unregistered-reconciler"
+		destinationID = "destination-unregistered-reconciler"
+		deliveryID    = "delivery-unregistered-reconciler"
+	)
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := db.InsertDeliveryDestination(&store.DeliveryDestination{DestinationID: destinationID, Provider: "unregistered-reconciler", ExternalDestinationID: "external-reconciler", Enabled: true, ConfigurationJSON: "{}"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertArtifact(&store.Artifact{ID: artifactID, JobID: "job-unregistered-reconciler", Type: "video", StorageProvider: "local", StorageKey: filepath.Join(t.TempDir(), "video.mp4"), SHA256: "unregistered-reconciler-sha", SizeBytes: 1, Status: "READY", VerifiedAt: now, CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertJobDelivery(&store.JobDelivery{DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID, Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := NewRegistry()
+	registry.Register(unregisteredReconcilerProvider{})
+	runner := NewDeliveryRunner(&RunnerConfig{LeaseDuration: time.Minute, MaxAttempts: 3}, registry, db, "unregistered-reconciler-runner")
+	leases, err := db.ClaimDeliveries(ctx, runner.identity, time.Minute, 1)
+	if err != nil || len(leases) != 1 {
+		t.Fatalf("claim: %v leases=%d", err, len(leases))
+	}
+	if err := runner.processLease(ctx, leases[0]); err == nil {
+		t.Fatal("unregistered reconciler was allowed to use monolithic success path")
+	}
+	row, err := db.GetJobDelivery(ctx, deliveryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != "FAILED" || row.RemoteID != "" {
+		t.Fatalf("delivery = %+v, want FAILED without remote publication", row)
+	}
+}
+
+func TestLegacyProviderCannotPromoteAcceptedOperationToPublished(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "legacy-accepted.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	const (
+		publicationID = "publication-legacy-accepted"
+		artifactID    = "artifact-legacy-accepted"
+		destinationID = "destination-legacy-accepted"
+		deliveryID    = "delivery-legacy-accepted"
+	)
+	if err := db.InsertDeliveryDestination(&store.DeliveryDestination{DestinationID: destinationID, Provider: "legacy-accepted", ExternalDestinationID: "external-legacy", Enabled: true, ConfigurationJSON: "{}"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := db.InsertArtifact(&store.Artifact{ID: artifactID, JobID: "job-legacy-accepted", Type: "video", StorageProvider: "local", StorageKey: filepath.Join(t.TempDir(), "video.mp4"), SHA256: "legacy-accepted-sha", SizeBytes: 1, Status: "READY", VerifiedAt: now, CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertJobDelivery(&store.JobDelivery{DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID, Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreatePublicationState(ctx, publicationID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.DB().Exec(`UPDATE publication_states SET job_id = ? WHERE publication_id = ?`, "job-legacy-accepted", publicationID); err != nil {
+		t.Fatal(err)
+	}
+	provider := legacyAcceptedProvider{}
+	registry := NewRegistry()
+	registry.Register(provider)
+	registry.RegisterLegacyPhaseProvider(provider)
+	runner := NewDeliveryRunner(&RunnerConfig{LeaseDuration: time.Minute, MaxAttempts: 3}, registry, db, "legacy-phase-runner")
+	leases, err := db.ClaimDeliveries(ctx, runner.identity, time.Minute, 1)
+	if err != nil || len(leases) != 1 {
+		t.Fatalf("claim: %v leases=%d", err, len(leases))
+	}
+	if err := runner.processLease(ctx, leases[0]); err == nil {
+		t.Fatal("accepted operation was promoted without verification")
+	}
+
+	state, stateErr := db.GetPublicationState(ctx, publicationID)
+	if stateErr != nil {
+		t.Fatal(stateErr)
+	}
+	if state.State == publicationstate.Published {
+		t.Fatalf("publication reached PUBLISHED without remote evidence: %+v", state)
+	}
+	if state.State != publicationstate.Partial || state.RetryFrom != publicationstate.Verifying {
+		t.Fatalf("publication failure checkpoint = %+v, want PARTIAL/VERIFYING", state)
+	}
+	row, rowErr := db.GetJobDelivery(ctx, deliveryID)
+	if rowErr != nil {
+		t.Fatal(rowErr)
+	}
+	if row.Status != "FAILED" || row.RemoteID != "" {
+		t.Fatalf("delivery result = %+v, want FAILED without remote publication", row)
+	}
+}
+
 func TestDeliveryRunnerResumesMetadataWithoutSecondUpload(t *testing.T) {
 	db, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "phase-resume.sqlite"))
 	if err != nil {

@@ -51,6 +51,19 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 		}
 		return err
 	}
+	// Validate the asynchronous provider contract before destination
+	// hydration, artifact reads, or credential issuance. A reconciler
+	// provider without a phase executor has no safe synchronous Success
+	// meaning; reject it before allocating any short-lived credential.
+	if _, reconciles := provider.(DeliveryReconciler); reconciles {
+		if _, registered := r.registry.ResolvePhaseExecutor(providerName); !registered {
+			err := fmt.Errorf("%w: provider %q implements DeliveryReconciler but has no phase executor", ErrProviderPermanent, providerName)
+			if markErr := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "RECONCILIATION_REQUIRED", err.Error()); markErr != nil {
+				log.Printf("[DELIVERY] mark reconciliation failure for %s: %v", lease.DeliveryID, markErr)
+			}
+			return err
+		}
+	}
 
 	dest, err := r.hydrateDestination(ctx, lease.DestinationID)
 	if err != nil {
@@ -122,7 +135,8 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 
 	// Resumable providers enter the phase executor after all durable inputs and
 	// the short-lived credential lease have been resolved. Legacy providers
-	// intentionally continue through Deliver below and remain non-resumable.
+	// without reconciliation continue through Deliver below and remain
+	// non-resumable; their Success contract is synchronous.
 	if executor, ok := r.registry.ResolvePhaseExecutor(providerName); ok {
 		if publicationID == "" {
 			err := fmt.Errorf("%w: publication_id is required for resumable delivery", ErrProviderPermanent)
