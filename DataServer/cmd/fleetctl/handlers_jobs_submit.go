@@ -1,5 +1,4 @@
-// handlers_jobs_submit.go — job submit/certify in Go (migrated from
-// scripts/fleetctl-legacy job_submit()).
+// handlers_jobs_submit.go — typed job submit/certify flow for fleetctl.
 //
 // The flow mirrors the legacy Bash exactly:
 //

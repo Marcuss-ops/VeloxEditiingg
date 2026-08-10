@@ -7,8 +7,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 test -x "$SCRIPT"
-test -x "$ROOT/scripts/fleetctl-legacy"
-bash -n "$SCRIPT" "$ROOT/scripts/fleetctl-legacy"
+bash -n "$SCRIPT"
 
 MOCK="$TMP/fleetctl"
 ARGS="$TMP/args"
