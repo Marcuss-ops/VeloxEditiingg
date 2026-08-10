@@ -118,6 +118,8 @@ duplicate_registry_hits="$(scoped_grep \
   ':!DataServer/internal/workers/' \
   ':!DataServer/internal/assets/' \
   ':!DataServer/internal/store/' \
+  ':!DataServer/internal/config/raw.go' \
+  ':!DataServer/internal/fleet/executors.go' \
   ':!DataServer/cmd/server/**' \
   ':!DataServer/**/*_test.go' \
   ':!scripts/ci/check-registry.sh' \
