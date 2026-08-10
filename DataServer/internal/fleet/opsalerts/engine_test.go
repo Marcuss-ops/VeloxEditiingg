@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
+	runtimealerts "velox-server/internal/alerts"
 	"velox-server/internal/store"
 	"velox-server/internal/supervisor"
 )
@@ -75,6 +77,34 @@ func (m *evaluationMetrics) RecordWorkerEvaluationErrors(category string, count 
 type errorEngineStore struct {
 	engineTestStore
 	insertErr error
+}
+
+type countingEngineStore struct {
+	engineTestStore
+	mu      sync.Mutex
+	inserts int
+}
+
+func (s *countingEngineStore) InsertAlertEvent(context.Context, store.AlertEvent) error {
+	s.mu.Lock()
+	s.inserts++
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *countingEngineStore) insertCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inserts
+}
+
+type failingNotificationSink struct {
+	calls int
+}
+
+func (s *failingNotificationSink) Process(context.Context, runtimealerts.AlertEvent) error {
+	s.calls++
+	return errors.New("notifier unavailable")
 }
 
 type infraErrorEngineStore struct {
@@ -214,7 +244,7 @@ func TestEngineEvaluateAggregatesIsolatedWorkerErrorsAndContinues(t *testing.T) 
 	}
 	foundGood := false
 	for _, alert := range alerts {
-		if alert.WorkerID == "good-worker" && alert.RuleID == RuleHeartbeatStale {
+		if alert.Subject == "good-worker" && alert.RuleID == string(RuleHeartbeatStale) {
 			foundGood = true
 		}
 	}
@@ -240,6 +270,39 @@ func TestEngineEvaluatePropagatesInfrastructureStoreErrors(t *testing.T) {
 	_, err = engine.Evaluate(context.Background())
 	if !errors.Is(err, supervisor.ErrInfrastructure) || !errors.Is(err, sql.ErrConnDone) {
 		t.Fatalf("error = %v, want infrastructure classification and sql.ErrConnDone", err)
+	}
+}
+
+func TestEngineNotifierFailureDoesNotReleasePersistedAlertClaim(t *testing.T) {
+	diskValue := 90.0
+	store := &countingEngineStore{}
+	notifier := &failingNotificationSink{}
+	metrics := &evaluationMetrics{}
+	engine, err := NewEngine(store, evaluationSource{
+		workerIDs: []string{"worker-1"},
+		snapshots: map[string]*WorkerSnapshot{
+			"worker-1": {WorkerID: "worker-1", DiskUsedPercent: &diskValue},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	engine.AddSink(notifier)
+	engine.SetErrorMetrics(metrics)
+	if _, err := engine.Evaluate(context.Background()); err != nil {
+		t.Fatalf("first Evaluate: %v", err)
+	}
+	if _, err := engine.Evaluate(context.Background()); err != nil {
+		t.Fatalf("second Evaluate: %v", err)
+	}
+	if got := store.insertCount(); got != 1 {
+		t.Fatalf("persistence inserts = %d, want 1 after notifier failure", got)
+	}
+	if notifier.calls != 2 {
+		t.Fatalf("notifier calls = %d, want 2 attempts across the firing and suppressed retry", notifier.calls)
+	}
+	if got := metrics.counts["notifier"]; got != 2 {
+		t.Fatalf("notifier metric count = %d, want 2 attempts", got)
 	}
 }
 

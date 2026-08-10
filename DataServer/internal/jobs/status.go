@@ -3,7 +3,8 @@
 // JobStatus is the single source of truth for job state constants.
 // store.JobStatus remains a source-compatible alias of this type.
 // The distinct type prevents accidental comparison with statuses from
-// attempts, deliveries, publications, or input assembly.
+// attempts, deliveries, publications, or input assembly, even though these
+// values are persisted as strings at storage and wire boundaries.
 //
 // State machine:
 //
@@ -30,15 +31,16 @@
 // CANCELLED.
 package jobs
 
-// JobStatus is the canonical job lifecycle state.
+// JobStatus is the canonical job lifecycle state. It is deliberately
+// distinct from task-attempt, delivery, publication, and input-assembly
+// statuses even though each is persisted as a string at storage/wire edges.
 type JobStatus string
 
 // JobState is retained as a source-compatible alias for existing callers.
+// New code should use JobStatus to make the job aggregate boundary explicit.
 type JobState = JobStatus
 
-// Status is retained as a source-compatible alias. New code should use
-// JobStatus to make the job aggregate boundary explicit.
-//
+// Status is retained as a source-compatible alias for existing callers.
 // Deprecated: use JobStatus.
 type Status = JobStatus
 

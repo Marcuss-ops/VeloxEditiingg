@@ -12,7 +12,7 @@ import (
 )
 
 // PublicationStatus is the durable lifecycle state of one publication.
-// It is distinct from JobStatus and DeliveryStatus; values are converted to
+// It is distinct from JobStatus and DeliveryStatus; values are persisted as
 // strings only at storage and API boundaries.
 type PublicationStatus string
 

@@ -301,7 +301,7 @@ func TestOperationalResume_202KeepsExclusionUntilSmokeAndInFlight409(t *testing.
 
 	duplicate := operationalPost(t, r, "/api/v1/admin/workers/w-resume-operational/resume", nil)
 	if duplicate.Code != http.StatusConflict {
-		t.Fatalf("duplicate in-flight resume status=%d want 409: %s", duplicate.Code, duplicate.Body.String())
+		t.Fatalf("duplicate in-flight resume status=%d want 409", duplicate.Code)
 	}
 	queued, err := db.GetOperation(context.Background(), resp.OperationID)
 	if err != nil {
@@ -341,7 +341,7 @@ func TestOperationalSmoke_202LedgerAndDuplicate409(t *testing.T) {
 	}
 	duplicate := operationalPost(t, r, "/api/v1/admin/workers/w-smoke-operational/smoke", body)
 	if duplicate.Code != http.StatusConflict {
-		t.Fatalf("duplicate smoke status=%d want 409: %s", duplicate.Code, duplicate.Body.String())
+		t.Fatalf("duplicate smoke status=%d want 409", duplicate.Code)
 	}
 	controller.Tick(context.Background())
 	terminal := waitOperationalStatus(t, db, resp.OperationID, store.OperationStatusSucceeded)

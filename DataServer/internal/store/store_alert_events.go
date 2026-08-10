@@ -44,6 +44,11 @@ const (
 // Maps to a 404 at the API boundary.
 var ErrAlertEventNotFound = errors.New("no active alert event for (worker_id, rule_id)")
 
+// ErrAlertEventConflict means an EventID was reused for a different payload.
+// A retry of the exact event is successful; a mismatched replay is rejected
+// so an ID-generation or caller bug cannot silently hide event corruption.
+var ErrAlertEventConflict = errors.New("alert event EventID already exists with a different payload")
+
 // AlertEvent mirrors a single row in alert_events. All time fields
 // are RFC3339 in SQL; Go-side conversion at the repository boundary.
 //
@@ -96,7 +101,8 @@ CREATE INDEX IF NOT EXISTS idx_alert_events_severity_rule
 	return err
 }
 
-// InsertAlertEvent persists a new alert_events row.
+// InsertAlertEvent persists a new alert_events row. Replaying the same
+// EventID is idempotent and returns nil without creating a second row.
 // event_id is auto-generated if empty (hex-32 of 16 bytes — same
 // shape as a uuid without dashes for compactness). fired_at +
 // last_observed_at default to time.Now().UTC() if zero.
@@ -130,10 +136,11 @@ func (s *SQLiteStore) InsertAlertEvent(ctx context.Context, ev AlertEvent) error
 		ev.LastObservedAt = ev.FiredAt
 	}
 
-	_, err := s.db.ExecContext(ctx, `
+	res, err := s.db.ExecContext(ctx, `
 INSERT INTO alert_events
   (event_id, worker_id, rule_id, severity, state, fired_at, resolved_at, last_observed_at, current_value, message)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(event_id) DO NOTHING`,
 		ev.EventID, ev.WorkerID, ev.RuleID, ev.Severity, ev.State,
 		ev.FiredAt.UTC().Format(time.RFC3339),
 		nullableTime(ev.ResolvedAt),
@@ -141,7 +148,50 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		nullableString(ev.CurrentValue),
 		ev.Message,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil || rowsAffected > 0 {
+		return err
+	}
+
+	// The EventID already existed. Treat only an exact payload replay as
+	// idempotent; a mismatched payload is a caller/data-integrity error.
+	rows, err := s.db.QueryContext(ctx, `
+SELECT event_id, worker_id, rule_id, severity, state, fired_at, resolved_at, last_observed_at, current_value, message
+FROM alert_events WHERE event_id = ? LIMIT 1`, ev.EventID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		return ErrAlertEventConflict
+	}
+	existing, err := scanAlertEvent(rows)
+	if err != nil {
+		return err
+	}
+	if !sameAlertEvent(*existing, ev) {
+		return ErrAlertEventConflict
+	}
+	return nil
+}
+
+func sameAlertEvent(existing, incoming AlertEvent) bool {
+	if existing.EventID != incoming.EventID || existing.WorkerID != incoming.WorkerID || existing.RuleID != incoming.RuleID || existing.Severity != incoming.Severity || existing.State != incoming.State || existing.Message != incoming.Message {
+		return false
+	}
+	if existing.FiredAt.UTC().Format(time.RFC3339) != incoming.FiredAt.UTC().Format(time.RFC3339) || existing.LastObservedAt.UTC().Format(time.RFC3339) != incoming.LastObservedAt.UTC().Format(time.RFC3339) {
+		return false
+	}
+	if existing.ResolvedAt.Valid != incoming.ResolvedAt.Valid || (existing.ResolvedAt.Valid && !existing.ResolvedAt.Time.Equal(incoming.ResolvedAt.Time)) {
+		return false
+	}
+	return existing.CurrentValue.Valid == incoming.CurrentValue.Valid && (!existing.CurrentValue.Valid || existing.CurrentValue.String == incoming.CurrentValue.String)
 }
 
 // ResolveAlertEvent stamps resolved_at + flips state to RESOLVED
