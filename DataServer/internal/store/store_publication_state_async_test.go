@@ -50,19 +50,30 @@ func TestRecordPublicationRemoteResultBeforePublishedIsReplaySafe(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.State != publicationstate.Verifying || state.RemoteID != "youtube-media-1" {
+	if state.State != publicationstate.Verifying || state.RemoteID != "youtube-media-1" || state.SubmittedRemoteID != "social-operation-1" {
 		t.Fatalf("checkpoint state = %+v", state)
 	}
 
-	// Replay the terminal transition after the simulated crash.
-	if _, err := db.TransitionPublicationState(ctx, publicationID, publicationstate.Published, ""); err != nil {
+	// Replay the terminal transition after the simulated crash. The
+	// succeeded VERIFYING effect is the durable proof that reconciliation
+	// was the authority for this promotion.
+	if _, _, err := db.BeginPublicationPhaseEffect(ctx, publicationID, publicationstate.Verifying, "verify"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CompletePublicationReconciliationEffect(ctx, publicationID, "verify"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.TransitionPublicationState(ctx, publicationID, publicationstate.Published, ""); !errors.Is(err, ErrPublicationPhaseConflict) {
+		t.Fatalf("generic Published transition error = %v, want ErrPublicationPhaseConflict", err)
+	}
+	if _, err := db.CompletePublicationAfterReconciliation(ctx, publicationID, "verify"); err != nil {
 		t.Fatalf("replay Published transition: %v", err)
 	}
 	state, err = db.GetPublicationState(ctx, publicationID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.State != publicationstate.Published || state.RemoteID != "youtube-media-1" {
+	if state.State != publicationstate.Published || state.RemoteID != "youtube-media-1" || !state.ReconciliationVerified {
 		t.Fatalf("replayed final state = %+v", state)
 	}
 }
@@ -111,5 +122,98 @@ func TestRecordPublicationRemoteResultRejectsStaleCheckpoint(t *testing.T) {
 	}
 	if state.RemoteID != "social-operation-stale" {
 		t.Fatalf("stale checkpoint changed remote ID to %q", state.RemoteID)
+	}
+}
+
+func TestCompletePublicationAfterReconciliationRequiresExactSucceededEffect(t *testing.T) {
+	db := setupDeliveryTestDB(t)
+	ctx := context.Background()
+	const publicationID = "pub-async-exact-effect"
+
+	if err := db.CreatePublicationState(ctx, publicationID); err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []publicationstate.State{
+		publicationstate.WaitingForRender,
+		publicationstate.ArtifactBound,
+		publicationstate.Ready,
+		publicationstate.Uploading,
+	} {
+		if _, err := db.TransitionPublicationState(ctx, publicationID, state, ""); err != nil {
+			t.Fatalf("transition to %s: %v", state, err)
+		}
+	}
+	if _, err := db.PersistPublicationVideoCreated(ctx, publicationID, "artifact-exact", "operation-exact", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.TransitionPublicationState(ctx, publicationID, publicationstate.MetadataApplying, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.TransitionPublicationState(ctx, publicationID, publicationstate.Verifying, ""); err != nil {
+		t.Fatal(err)
+	}
+	state, err := db.GetPublicationState(ctx, publicationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecordPublicationRemoteResult(ctx, publicationID, state.Revision, state.RemoteID, "media-exact", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := db.BeginPublicationPhaseEffect(ctx, publicationID, publicationstate.Verifying, "canonical-verify"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CompletePublicationReconciliationEffect(ctx, publicationID, "canonical-verify"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CompletePublicationAfterReconciliation(ctx, publicationID, "wrong-verify"); !errors.Is(err, ErrPublicationPhaseConflict) {
+		t.Fatalf("wrong operation error = %v, want ErrPublicationPhaseConflict", err)
+	}
+	if _, err := db.CompletePublicationAfterReconciliation(ctx, publicationID, "canonical-verify"); err != nil {
+		t.Fatalf("exact operation completion: %v", err)
+	}
+}
+
+func TestCompletePublicationAfterReconciliationRejectsSubmissionAsFinalMedia(t *testing.T) {
+	db := setupDeliveryTestDB(t)
+	ctx := context.Background()
+	const publicationID = "pub-async-same-id"
+
+	if err := db.CreatePublicationState(ctx, publicationID); err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []publicationstate.State{
+		publicationstate.WaitingForRender,
+		publicationstate.ArtifactBound,
+		publicationstate.Ready,
+		publicationstate.Uploading,
+	} {
+		if _, err := db.TransitionPublicationState(ctx, publicationID, state, ""); err != nil {
+			t.Fatalf("transition to %s: %v", state, err)
+		}
+	}
+	if _, err := db.PersistPublicationVideoCreated(ctx, publicationID, "artifact-same", "operation-same", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.TransitionPublicationState(ctx, publicationID, publicationstate.MetadataApplying, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.TransitionPublicationState(ctx, publicationID, publicationstate.Verifying, ""); err != nil {
+		t.Fatal(err)
+	}
+	state, err := db.GetPublicationState(ctx, publicationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecordPublicationRemoteResult(ctx, publicationID, state.Revision, state.RemoteID, "operation-same", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := db.BeginPublicationPhaseEffect(ctx, publicationID, publicationstate.Verifying, "canonical-verify"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CompletePublicationReconciliationEffect(ctx, publicationID, "canonical-verify"); !errors.Is(err, ErrPublicationPhaseConflict) {
+		t.Fatalf("same operation/media ID reconciliation error = %v, want ErrPublicationPhaseConflict", err)
+	}
+	if _, err := db.CompletePublicationAfterReconciliation(ctx, publicationID, "canonical-verify"); !errors.Is(err, ErrPublicationPhaseConflict) {
+		t.Fatalf("same operation/media ID completion error = %v, want ErrPublicationPhaseConflict", err)
 	}
 }

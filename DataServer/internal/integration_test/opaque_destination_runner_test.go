@@ -34,7 +34,7 @@ func TestIntegration_DeliveryRunnerForwardsOpaqueDestinationID(t *testing.T) {
 			_, _ = w.Write([]byte(`{"social_delivery_id":"runner-opaque-social-1","status":"accepted"}`))
 		case http.MethodGet:
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"delivery_id":"runner-opaque-social-1","publish_status":"published","thumbnail_status":"applied","youtube_video_id":"runner-opaque-social-1"}`))
+			_, _ = w.Write([]byte(`{"delivery_id":"runner-opaque-social-1","publish_status":"published","thumbnail_status":"applied","youtube_video_id":"runner-opaque-youtube-final-1"}`))
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -170,7 +170,7 @@ func TestIntegration_DeliveryRunnerForwardsOpaqueDestinationID(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for {
 		row, queryErr := db.GetJobDelivery(context.Background(), deliveryID)
-		if queryErr == nil && row != nil && row.Status == "SUCCEEDED" && row.RemoteID == "runner-opaque-social-1" {
+		if queryErr == nil && row != nil && row.Status == "SUCCEEDED" && row.RemoteID == "runner-opaque-youtube-final-1" {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -205,7 +205,7 @@ func TestIntegration_DeliveryRunnerForwardsOpaqueDestinationID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetJobDelivery: %v", err)
 	}
-	if row.Status != "SUCCEEDED" || row.RemoteID != "runner-opaque-social-1" {
-		t.Fatalf("delivery result = status=%q remote_id=%q, want SUCCEEDED/runner-opaque-social-1", row.Status, row.RemoteID)
+	if row.Status != "SUCCEEDED" || row.RemoteID != "runner-opaque-youtube-final-1" {
+		t.Fatalf("delivery result = status=%q remote_id=%q, want SUCCEEDED/runner-opaque-youtube-final-1", row.Status, row.RemoteID)
 	}
 }

@@ -203,9 +203,10 @@ type PublicationPhaseContext struct {
 }
 
 // PublicationPhaseExecutor is the resumable provider contract. A provider
-// may support only the phases it can execute independently; unsupported
-// phases are skipped by the runner. The legacy Deliver contract remains
-// available during migration and is explicitly non-resumable.
+// may support only the phases it can execute independently. Unsupported
+// phases fail closed; they are never silently advanced to Published. The
+// legacy Deliver contract remains available during migration and is
+// explicitly non-resumable.
 type PublicationPhaseExecutor interface {
 	ExecutePhase(context.Context, publicationstate.State, *PublicationPhaseContext) (*Result, error)
 	Capabilities() map[publicationstate.State]bool
@@ -221,12 +222,23 @@ type legacyPublicationPhaseExecutor struct{ provider Provider }
 func (l legacyPublicationPhaseExecutor) Capabilities() map[publicationstate.State]bool {
 	capabilities := map[publicationstate.State]bool{publicationstate.Uploading: true}
 	if _, ok := l.provider.(DeliveryReconciler); ok {
+		// The Social Gateway applies metadata as part of the accepted
+		// submit operation. This explicit checkpoint is supported as a
+		// no-new-side-effect phase; verification remains mandatory and
+		// is the only authority allowed to return PUBLISHED.
+		capabilities[publicationstate.MetadataApplying] = true
 		capabilities[publicationstate.Verifying] = true
 	}
 	return capabilities
 }
 
 func (l legacyPublicationPhaseExecutor) ExecutePhase(ctx context.Context, phase publicationstate.State, input *PublicationPhaseContext) (*Result, error) {
+	if phase == publicationstate.MetadataApplying {
+		if _, ok := l.provider.(DeliveryReconciler); !ok {
+			return nil, fmt.Errorf("%w: legacy provider cannot execute %s", ErrProviderPermanent, phase)
+		}
+		return &Result{Success: true, Status: ResultStatusRemoteProcessing, RemoteID: input.RemoteID}, nil
+	}
 	if phase == publicationstate.Verifying {
 		reconciler, ok := l.provider.(DeliveryReconciler)
 		if !ok {
@@ -240,19 +252,27 @@ func (l legacyPublicationPhaseExecutor) ExecutePhase(ctx context.Context, phase 
 			return nil, fmt.Errorf("%w: reconciliation returned nil result", ErrProviderTransient)
 		}
 		if result.Success {
-			if err := validateProviderResult(result); err != nil {
+			if result.Status != ResultStatusPublished {
+				return nil, fmt.Errorf("%w: reconciliation returned non-terminal status %q", ErrProviderPermanent, result.Status)
+			}
+			if err := validatePublishedProviderResult(result); err != nil {
 				return nil, err
 			}
 			return result, nil
 		}
-		remoteStatus := strings.ToLower(strings.TrimSpace(result.Status))
-		if remoteStatus == "failed" || remoteStatus == "dead_letter" {
+		remoteStatus := strings.ToUpper(strings.TrimSpace(result.Status))
+		switch remoteStatus {
+		case "FAILED", "DEAD_LETTER":
 			return nil, fmt.Errorf("%w: remote publication status %q", ErrProviderPermanent, result.Status)
-		}
-		if remoteStatus == "blocked_auth" {
+		case "BLOCKED_AUTH":
 			return nil, fmt.Errorf("%w: remote publication status %q", ErrProviderAuth, result.Status)
+		case ResultStatusRemoteProcessing, ResultStatusReconciliation:
+			return nil, fmt.Errorf("%w: remote publication status %q", ErrProviderTransient, result.Status)
+		case ResultStatusPublished:
+			return nil, fmt.Errorf("%w: PUBLISHED reconciliation lacked completion evidence", ErrProviderTransient)
+		default:
+			return nil, fmt.Errorf("%w: unknown reconciliation status %q", ErrProviderPermanent, result.Status)
 		}
-		return nil, fmt.Errorf("%w: remote publication still %q", ErrProviderTransient, result.Status)
 	}
 	if phase != publicationstate.Uploading {
 		return nil, fmt.Errorf("%w: legacy provider cannot execute %s", ErrProviderPermanent, phase)
@@ -293,9 +313,23 @@ type Destination struct {
 	CredentialRef         string
 }
 
-// Result captures the post-upload state. RemoteID/RemoteURL are the
-// canonical identifiers the runner persists on job_deliveries so the
-// JobViewAssembler can surface them on the legacy view.
+// Canonical provider lifecycle statuses. SUBMITTED_TO_PROVIDER is an
+// acknowledgement that the upstream accepted an operation ID; it is never
+// publication completion. REMOTE_PROCESSING and RECONCILIATION are
+// non-terminal observations. Only PUBLISHED, returned by a positive
+// reconciliation, may complete an asynchronous publication.
+const (
+	ResultStatusSubmittedToProvider = "SUBMITTED_TO_PROVIDER"
+	ResultStatusRemoteProcessing    = "REMOTE_PROCESSING"
+	ResultStatusReconciliation      = "RECONCILIATION"
+	ResultStatusPublished           = "PUBLISHED"
+)
+
+// Result captures one provider observation. RemoteID/RemoteURL are the
+// canonical identifiers the runner persists on job_deliveries. For an
+// asynchronous provider, Success means that the current phase completed;
+// it does not mean the overall publication completed unless Status is
+// ResultStatusPublished and the result came from reconciliation.
 type Result struct {
 	Success      bool
 	Status       string

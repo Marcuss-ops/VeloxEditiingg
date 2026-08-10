@@ -37,8 +37,24 @@ func validateProviderResult(res *Result) error {
 	if !res.Success {
 		return fmt.Errorf("%w: result.Success is false", ErrProviderPermanent)
 	}
+	if strings.TrimSpace(res.Status) != "" {
+		return fmt.Errorf("%w: status %q requires reconciler authority", ErrProviderPermanent, res.Status)
+	}
 	if res.RemoteID == "" && res.RemoteURL == "" {
 		return fmt.Errorf("%w: both RemoteID and RemoteURL are empty after Success=true — no verifiable output", ErrProviderPermanent)
+	}
+	return nil
+}
+
+// validatePublishedProviderResult is reserved for the reconciliation
+// authority. It accepts only a positive PUBLISHED observation with final
+// evidence; submit/processing statuses must never pass this boundary.
+func validatePublishedProviderResult(res *Result) error {
+	if res == nil || !res.Success || res.Status != ResultStatusPublished {
+		return fmt.Errorf("%w: reconciliation did not produce PUBLISHED", ErrProviderPermanent)
+	}
+	if res.RemoteID == "" && res.RemoteURL == "" {
+		return fmt.Errorf("%w: published reconciliation has no final media evidence", ErrProviderPermanent)
 	}
 	return nil
 }

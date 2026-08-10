@@ -20,17 +20,17 @@ func (p *asyncSocialGatewayTestProvider) Name() string { return "social_gateway"
 
 func (p *asyncSocialGatewayTestProvider) Deliver(context.Context, *store.Artifact, *Destination, string, string) (*Result, error) {
 	p.uploads++
-	return &Result{Success: true, Status: "accepted", RemoteID: "social-delivery-async-1"}, nil
+	return &Result{Success: true, Status: ResultStatusSubmittedToProvider, RemoteID: "social-delivery-async-1"}, nil
 }
 
 func (p *asyncSocialGatewayTestProvider) Reconcile(context.Context, string, string) (*Result, error) {
 	p.reconciles++
 	if p.remoteStatus != "published" {
-		return &Result{Status: p.remoteStatus}, nil
+		return &Result{Status: ResultStatusRemoteProcessing}, nil
 	}
 	return &Result{
 		Success:  true,
-		Status:   "published",
+		Status:   ResultStatusPublished,
 		RemoteID: "youtube-video-async-1",
 	}, nil
 }

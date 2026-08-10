@@ -28,6 +28,11 @@ func (p *crashResumePhaseProvider) Capabilities() map[publicationstate.State]boo
 		publicationstate.Verifying:        true,
 	}
 }
+func (p *crashResumePhaseProvider) Reconcile(_ context.Context, _, remoteID string) (*Result, error) {
+	p.verifications++
+	return &Result{Success: true, Status: ResultStatusPublished, RemoteID: "remote-video-final-1"}, nil
+}
+
 func (p *crashResumePhaseProvider) ExecutePhase(_ context.Context, phase publicationstate.State, _ *PublicationPhaseContext) (*Result, error) {
 	switch phase {
 	case publicationstate.Uploading:
@@ -40,8 +45,7 @@ func (p *crashResumePhaseProvider) ExecutePhase(_ context.Context, phase publica
 		}
 		return &Result{Success: true}, nil
 	case publicationstate.Verifying:
-		p.verifications++
-		return &Result{Success: true}, nil
+		return &Result{Success: true, Status: ResultStatusPublished, RemoteID: "remote-video-final-1"}, nil
 	default:
 		return nil, ErrProviderPermanent
 	}
@@ -54,6 +58,13 @@ func (legacyAcceptedProvider) Deliver(context.Context, *store.Artifact, *Destina
 	return &Result{Success: true, Status: "accepted", RemoteID: "remote-operation-1"}, nil
 }
 
+type syncPublishedProvider struct{}
+
+func (syncPublishedProvider) Name() string { return "sync-published" }
+func (syncPublishedProvider) Deliver(context.Context, *store.Artifact, *Destination, string, string) (*Result, error) {
+	return &Result{Success: true, Status: "published", RemoteID: "remote-operation-sync"}, nil
+}
+
 type unregisteredReconcilerProvider struct{}
 
 func (unregisteredReconcilerProvider) Name() string { return "unregistered-reconciler" }
@@ -62,6 +73,69 @@ func (unregisteredReconcilerProvider) Deliver(context.Context, *store.Artifact, 
 }
 func (unregisteredReconcilerProvider) Reconcile(context.Context, string, string) (*Result, error) {
 	return &Result{Success: true, Status: "published", RemoteID: "remote-final-2"}, nil
+}
+
+func TestValidateProviderResultRejectsCanonicalAsyncStatusWithoutReconciler(t *testing.T) {
+	for _, status := range []string{ResultStatusSubmittedToProvider, ResultStatusRemoteProcessing, ResultStatusReconciliation, ResultStatusPublished} {
+		err := validateProviderResult(&Result{Success: true, Status: status, RemoteID: "operation-1"})
+		if !errors.Is(err, ErrProviderPermanent) {
+			t.Fatalf("status %q validation error = %v; want canonical permanent classification", status, err)
+		}
+	}
+	if err := validateProviderResult(&Result{Success: true, Status: "published", RemoteID: "operation-1"}); !errors.Is(err, ErrProviderPermanent) {
+		t.Fatalf("lowercase published validation error = %v; want permanent classification", err)
+	}
+}
+
+func TestAdvanceSkippedPhaseRejectsRequiredMetadataPhase(t *testing.T) {
+	runner := &DeliveryRunner{}
+	phase, err := runner.advanceSkippedPhase(context.Background(), "publication-required-metadata", publicationstate.MetadataApplying)
+	if err == nil || !errors.Is(err, ErrProviderPermanent) || phase != publicationstate.MetadataApplying {
+		t.Fatalf("advanceSkippedPhase(metadata) = phase=%s err=%v; want permanent fail-closed error", phase, err)
+	}
+}
+
+func TestProcessLeaseRejectsSynchronousPublishedStatus(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "sync-published.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	const (
+		artifactID    = "artifact-sync-published"
+		destinationID = "destination-sync-published"
+		deliveryID    = "delivery-sync-published"
+	)
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := db.InsertDeliveryDestination(&store.DeliveryDestination{DestinationID: destinationID, Provider: "sync-published", ExternalDestinationID: "external-sync", Enabled: true, ConfigurationJSON: "{}"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertArtifact(&store.Artifact{ID: artifactID, JobID: "job-sync-published", Type: "video", StorageProvider: "local", StorageKey: filepath.Join(t.TempDir(), "video.mp4"), SHA256: "sync-published-sha", SizeBytes: 1, Status: "READY", VerifiedAt: now, CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertJobDelivery(&store.JobDelivery{DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID, Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := NewRegistry()
+	registry.Register(syncPublishedProvider{})
+	runner := NewDeliveryRunner(&RunnerConfig{LeaseDuration: time.Minute, MaxAttempts: 3}, registry, db, "sync-published-runner")
+	leases, err := db.ClaimDeliveries(ctx, runner.identity, time.Minute, 1)
+	if err != nil || len(leases) != 1 {
+		t.Fatalf("claim: %v leases=%d", err, len(leases))
+	}
+	if err := runner.processLease(ctx, leases[0]); err == nil {
+		t.Fatal("synchronous published status was allowed without reconciliation")
+	}
+	row, err := db.GetJobDelivery(ctx, deliveryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != "FAILED" || row.RemoteID != "" {
+		t.Fatalf("delivery = %+v, want FAILED without operation ID persisted", row)
+	}
 }
 
 func TestProcessLeaseRejectsUnregisteredReconciler(t *testing.T) {
@@ -158,8 +232,8 @@ func TestLegacyProviderCannotPromoteAcceptedOperationToPublished(t *testing.T) {
 	if state.State == publicationstate.Published {
 		t.Fatalf("publication reached PUBLISHED without remote evidence: %+v", state)
 	}
-	if state.State != publicationstate.Partial || state.RetryFrom != publicationstate.Verifying {
-		t.Fatalf("publication failure checkpoint = %+v, want PARTIAL/VERIFYING", state)
+	if state.State != publicationstate.Partial || state.RetryFrom != publicationstate.MetadataApplying {
+		t.Fatalf("publication failure checkpoint = %+v, want PARTIAL/METADATA_APPLYING", state)
 	}
 	row, rowErr := db.GetJobDelivery(ctx, deliveryID)
 	if rowErr != nil {
@@ -236,7 +310,7 @@ func TestDeliveryRunnerResumesMetadataWithoutSecondUpload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.Status != "SUCCEEDED" || row.RemoteID != "remote-video-1" {
+	if row.Status != "SUCCEEDED" || row.RemoteID != "remote-video-final-1" {
 		t.Fatalf("delivery = %+v", row)
 	}
 	events, err := db.ListAuditEvents(context.Background(), "publication-phase-resume", 20)

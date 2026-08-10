@@ -25,7 +25,7 @@ func TestSocialGatewayProvider_ReconcileCanonicalResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if !result.Success || result.Status != "published" || result.RemoteID != "yt-1" {
+	if !result.Success || result.Status != deliveries.ResultStatusPublished || result.RemoteID != "yt-1" {
 		t.Fatalf("result = %+v", result)
 	}
 	if got := result.ProviderMeta["thumbnail_status"]; got != "applied" {
@@ -47,8 +47,24 @@ func TestSocialGatewayProvider_ReconcilePublishedWithoutMediaIDIsNotComplete(t *
 	if result.Success {
 		t.Fatalf("published response without youtube_video_id must not be terminal: %+v", result)
 	}
-	if result.Status != "published" || result.RemoteID != "" {
+	if result.Status != deliveries.ResultStatusReconciliation || result.RemoteID != "" {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestSocialGatewayProvider_ReconcileDoesNotTreatSubmissionIDAsPublishedMedia(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"delivery_id":"social-1","publish_status":"published","thumbnail_status":"applied","youtube_video_id":"social-1"}`))
+	}))
+	defer server.Close()
+
+	provider := NewSocialGatewayProvider(socialclient.Config{BaseURL: server.URL})
+	result, err := provider.Reconcile(context.Background(), "velox-delivery-1", "social-1")
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if result.Success || result.Status != deliveries.ResultStatusReconciliation || result.RemoteID != "" {
+		t.Fatalf("submission operation ID was treated as published media: %+v", result)
 	}
 }
 

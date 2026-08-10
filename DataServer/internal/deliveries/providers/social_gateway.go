@@ -93,11 +93,29 @@ func (s *SocialGatewayProvider) Reconcile(ctx context.Context, deliveryID, remot
 	thumbnailStatus := strings.ToLower(strings.TrimSpace(status.ThumbnailStatus))
 	thumbnailReady := thumbnailStatus == "applied" || thumbnailStatus == "skipped"
 	finalMediaID := strings.TrimSpace(status.YouTubeVideoID)
+	// The upstream status is intentionally mapped into Velox's canonical
+	// contract. A remote operation ID is not a published media ID: only
+	// positive reconciliation with thumbnail evidence and final media ID
+	// may return PUBLISHED/Success=true.
+	canonicalStatus := deliveries.ResultStatusReconciliation
+	if publishStatus == "published" && thumbnailReady && finalMediaID != "" && finalMediaID != strings.TrimSpace(remoteID) {
+		canonicalStatus = deliveries.ResultStatusPublished
+	} else if publishStatus == "failed" || publishStatus == "dead_letter" {
+		canonicalStatus = "FAILED"
+	} else if publishStatus == "blocked_auth" {
+		canonicalStatus = "BLOCKED_AUTH"
+	} else if publishStatus == "processing" || publishStatus == "accepted" || publishStatus == "queued" {
+		canonicalStatus = deliveries.ResultStatusRemoteProcessing
+	}
+	reportedRemoteID := ""
+	if canonicalStatus == deliveries.ResultStatusPublished {
+		reportedRemoteID = finalMediaID
+	}
 	return &deliveries.Result{
-		Success:      publishStatus == "published" && thumbnailReady && finalMediaID != "",
-		Status:       publishStatus,
-		RemoteID:     finalMediaID,
-		ProviderMeta: map[string]interface{}{"error_code": status.LastErrorCode, "error_message": status.LastErrorMessage, "thumbnail_status": thumbnailStatus},
+		Success:      canonicalStatus == deliveries.ResultStatusPublished,
+		Status:       canonicalStatus,
+		RemoteID:     reportedRemoteID,
+		ProviderMeta: map[string]interface{}{"error_code": status.LastErrorCode, "error_message": status.LastErrorMessage, "thumbnail_status": thumbnailStatus, "submitted_remote_id": strings.TrimSpace(remoteID)},
 	}, nil
 }
 
@@ -130,10 +148,11 @@ func (s *SocialGatewayProvider) deliver(ctx context.Context, artifact *store.Art
 		return nil, mapSocialClientError(err)
 	}
 	return &deliveries.Result{
-		// Success here means only that the remote operation was accepted.
-		// Publication completion is established later by Reconcile.
+		// The POST acknowledgement is a submission checkpoint only. The
+		// social_delivery_id identifies the remote operation, not the
+		// published media, and must never complete job_deliveries.
 		Success:  true,
-		Status:   resp.Status,
+		Status:   deliveries.ResultStatusSubmittedToProvider,
 		RemoteID: resp.SocialDeliveryID,
 	}, nil
 }

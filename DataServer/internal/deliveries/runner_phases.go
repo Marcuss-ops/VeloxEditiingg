@@ -33,6 +33,13 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 		return r.phaseInfrastructureFailure("PUBLICATION_STATE_NOT_FOUND", err)
 	}
 	if state.State == publicationstate.Published {
+		if strings.TrimSpace(state.RemoteID) == "" || strings.TrimSpace(state.SubmittedRemoteID) == "" || strings.TrimSpace(state.RemoteID) == strings.TrimSpace(state.SubmittedRemoteID) {
+			return r.phaseInfrastructureFailure("PUBLISHED_WITHOUT_DISTINCT_MEDIA_ID", fmt.Errorf("durable PUBLISHED state lacks distinct submission and final media evidence"))
+		}
+		verificationOperation := phaseOperation(publicationstate.Verifying, input.artifact, input.destination, state.SubmittedRemoteID)
+		if err := r.dbStore.ValidatePublishedAfterReconciliation(ctx, input.publicationID, verificationOperation); err != nil {
+			return r.phaseInfrastructureFailure("PUBLISHED_WITHOUT_RECONCILIATION_EVIDENCE", err)
+		}
 		return r.dbStore.MarkDeliverySucceeded(ctx, input.lease.DeliveryID, input.lease.RunnerID, input.lease.LeaseID, state.RemoteID, state.RemoteURL)
 	}
 
@@ -70,7 +77,12 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 		if err := r.enterPublicationPhase(ctx, input.publicationID, phase); err != nil {
 			return r.phaseFailure(ctx, input.lease, input.publicationID, phase, "STATE_TRANSITION", err)
 		}
-		operation := phaseOperation(phase, input.artifact, input.destination, state.RemoteID)
+		remoteIDForOperation := state.RemoteID
+		if state.SubmittedRemoteID != "" {
+			remoteIDForOperation = state.SubmittedRemoteID
+		}
+		operation := phaseOperation(phase, input.artifact, input.destination, remoteIDForOperation)
+
 		key, _, err := r.dbStore.BeginPublicationPhaseEffect(ctx, input.publicationID, phase, operation)
 		if err != nil {
 			return r.phaseFailure(ctx, input.lease, input.publicationID, phase, "PHASE_RESERVATION", err)
@@ -87,17 +99,56 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 		}
 
 		var result *Result
+		verificationReplay := status == "SUCCEEDED" && phase == publicationstate.Verifying
+		if verificationReplay {
+			// A crash after the provider-side verification effect completed
+			// but before the durable state transition leaves no in-memory
+			// Result. The durable final media ID is the replay evidence.
+			if strings.TrimSpace(state.RemoteID) == "" {
+				return r.phaseFailure(ctx, input.lease, input.publicationID, phase, operation, fmt.Errorf("%w: completed verification has no durable final media ID", ErrProviderPermanent))
+			}
+			result = &Result{Success: true, Status: ResultStatusPublished, RemoteID: state.RemoteID, RemoteURL: state.RemoteURL}
+		}
 		if status != "SUCCEEDED" {
-			result, err = executor.ExecutePhase(deliverCtx, phase, &PublicationPhaseContext{
-				Artifact: input.artifact, Destination: input.destination,
-				CredentialLease: input.credentialLease, PublicationID: input.publicationID,
-				DeliveryID: input.lease.DeliveryID, RemoteID: state.RemoteID, RemoteURL: state.RemoteURL,
-				SideEffectKey: key,
-			})
+			if phase == publicationstate.Verifying {
+				provider, resolveErr := r.registry.Resolve(input.lease.Provider)
+				if resolveErr != nil {
+					return r.phaseFailure(ctx, input.lease, input.publicationID, phase, operation, resolveErr)
+				}
+				reconciler, ok := provider.(DeliveryReconciler)
+				if !ok {
+					return r.phaseFailure(ctx, input.lease, input.publicationID, phase, operation, fmt.Errorf("%w: verification requires DeliveryReconciler authority", ErrProviderPermanent))
+				}
+				submittedRemoteID := state.SubmittedRemoteID
+				if submittedRemoteID == "" {
+					submittedRemoteID = state.RemoteID
+				}
+				result, err = reconciler.Reconcile(deliverCtx, input.lease.DeliveryID, submittedRemoteID)
+			} else {
+				result, err = executor.ExecutePhase(deliverCtx, phase, &PublicationPhaseContext{
+					Artifact: input.artifact, Destination: input.destination,
+					CredentialLease: input.credentialLease, PublicationID: input.publicationID,
+					DeliveryID: input.lease.DeliveryID, RemoteID: state.RemoteID, RemoteURL: state.RemoteURL,
+					SideEffectKey: key,
+				})
+			}
 			if err != nil {
 				return r.phaseFailure(ctx, input.lease, input.publicationID, phase, operation, err)
 			}
 			if result == nil || !result.Success {
+				if phase == publicationstate.Verifying && result != nil {
+					switch strings.ToUpper(strings.TrimSpace(result.Status)) {
+					case ResultStatusSubmittedToProvider, ResultStatusRemoteProcessing, ResultStatusReconciliation:
+						return r.phaseFailure(ctx, input.lease, input.publicationID, phase, operation,
+							fmt.Errorf("%w: remote publication status %s", ErrProviderTransient, result.Status))
+					case "BLOCKED_AUTH":
+						return r.phaseFailure(ctx, input.lease, input.publicationID, phase, operation,
+							fmt.Errorf("%w: remote publication requires authentication", ErrProviderAuth))
+					case "FAILED", "DEAD_LETTER":
+						return r.phaseFailure(ctx, input.lease, input.publicationID, phase, operation,
+							fmt.Errorf("%w: remote publication failed with status %s", ErrProviderPermanent, result.Status))
+					}
+				}
 				return r.phaseFailure(ctx, input.lease, input.publicationID, phase, operation, fmt.Errorf("%w: phase returned unsuccessful result", ErrProviderPermanent))
 			}
 		}
@@ -111,6 +162,15 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 				return r.phaseFailure(ctx, input.lease, input.publicationID, phase, operation, err)
 			}
 		} else {
+			// PUBLISHED is an evidence boundary, not merely a successful
+			// phase call. The legacy adapter's Reconcile implementation is
+			// the only safe source of this result; a provider must not mark
+			// verification successful with SUBMITTED/processing semantics.
+			if phase == publicationstate.Verifying && (result == nil || result.Status != ResultStatusPublished ||
+				strings.TrimSpace(result.RemoteID) == "" || (!verificationReplay && strings.TrimSpace(result.RemoteID) == strings.TrimSpace(state.RemoteID))) {
+				return r.phaseFailure(ctx, input.lease, input.publicationID, phase, operation,
+					fmt.Errorf("%w: verification requires PUBLISHED with a final media ID distinct from the submitted operation ID", ErrProviderPermanent))
+			}
 			if result != nil {
 				if strings.TrimSpace(result.RemoteID) != "" {
 					finalRemoteID = result.RemoteID
@@ -138,14 +198,24 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 				}
 			}
 		}
-		if err := r.dbStore.CompletePublicationPhaseEffect(ctx, input.publicationID, phase, operation, true, ""); err != nil {
-			return r.phaseInfrastructureFailure("PHASE_COMMIT", err)
+		var phaseCommitErr error
+		if phase == publicationstate.Verifying {
+			if !verificationReplay {
+				phaseCommitErr = r.dbStore.CompletePublicationReconciliationEffect(ctx, input.publicationID, operation)
+			}
+		} else {
+			phaseCommitErr = r.dbStore.CompletePublicationPhaseEffect(ctx, input.publicationID, phase, operation, true, "")
+		}
+		if phaseCommitErr != nil {
+			return r.phaseInfrastructureFailure("PHASE_COMMIT", phaseCommitErr)
 		}
 
-		phase, err = r.nextPublicationPhase(ctx, input.publicationID, phase)
-		if err != nil {
-			return r.phaseFailure(ctx, input.lease, input.publicationID, phase, "STATE_TRANSITION", err)
+		completedPhase := phase
+		nextPhase, transitionErr := r.nextPublicationPhase(ctx, input.publicationID, completedPhase, operation)
+		if transitionErr != nil {
+			return r.phaseFailure(ctx, input.lease, input.publicationID, completedPhase, operation, transitionErr)
 		}
+		phase = nextPhase
 	}
 
 	finalState, err := r.dbStore.GetPublicationState(ctx, input.publicationID)
@@ -157,6 +227,9 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 	}
 	if finalRemoteURL == "" {
 		finalRemoteURL = finalState.RemoteURL
+	}
+	if finalState.State != publicationstate.Published {
+		return r.phaseInfrastructureFailure("PUBLICATION_NOT_PUBLISHED", fmt.Errorf("publication ended in %s", finalState.State))
 	}
 	return r.dbStore.MarkDeliverySucceeded(ctx, input.lease.DeliveryID, input.lease.RunnerID, input.lease.LeaseID, finalRemoteID, finalRemoteURL)
 }
@@ -231,10 +304,10 @@ func (r *DeliveryRunner) enterPublicationPhase(ctx context.Context, publicationI
 func (r *DeliveryRunner) advanceSkippedPhase(ctx context.Context, publicationID string, phase publicationstate.State) (publicationstate.State, error) {
 	switch phase {
 	case publicationstate.MetadataApplying:
-		if _, err := r.dbStore.TransitionPublicationState(ctx, publicationID, publicationstate.Verifying, ""); err != nil {
-			return "", err
-		}
-		return publicationstate.Verifying, nil
+		// Metadata is part of the provider's publication contract. Never
+		// skip it: a provider that cannot execute this checkpoint must be
+		// rejected rather than allowed to reach verification/published.
+		return phase, fmt.Errorf("%w: provider cannot execute required phase %s", ErrProviderPermanent, phase)
 	case publicationstate.Verifying:
 		// Verification is the evidence boundary for asynchronous or
 		// resumable publication. A provider that cannot execute it must
@@ -246,7 +319,7 @@ func (r *DeliveryRunner) advanceSkippedPhase(ctx context.Context, publicationID 
 	}
 }
 
-func (r *DeliveryRunner) nextPublicationPhase(ctx context.Context, publicationID string, phase publicationstate.State) (publicationstate.State, error) {
+func (r *DeliveryRunner) nextPublicationPhase(ctx context.Context, publicationID string, phase publicationstate.State, verificationOperation string) (publicationstate.State, error) {
 	switch phase {
 	case publicationstate.Uploading:
 		if _, err := r.dbStore.TransitionPublicationState(ctx, publicationID, publicationstate.MetadataApplying, ""); err != nil {
@@ -259,7 +332,7 @@ func (r *DeliveryRunner) nextPublicationPhase(ctx context.Context, publicationID
 		}
 		return publicationstate.Verifying, nil
 	case publicationstate.Verifying:
-		if _, err := r.dbStore.TransitionPublicationState(ctx, publicationID, publicationstate.Published, ""); err != nil {
+		if _, err := r.dbStore.CompletePublicationAfterReconciliation(ctx, publicationID, verificationOperation); err != nil {
 			return "", err
 		}
 		return "", nil

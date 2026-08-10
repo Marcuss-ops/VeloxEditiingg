@@ -252,6 +252,16 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 
 	// ── Success ──
 	if runErr == nil && res != nil && res.Success {
+		// Canonical asynchronous statuses are meaningful only through the
+		// DeliveryReconciler/phase path above. A monolithic provider cannot
+		// claim SUBMITTED, REMOTE_PROCESSING, RECONCILIATION, or PUBLISHED
+		// and then complete a delivery from an operation ID alone.
+		switch res.Status {
+		case ResultStatusSubmittedToProvider, ResultStatusRemoteProcessing, ResultStatusReconciliation, ResultStatusPublished:
+			err := fmt.Errorf("%w: status %q requires reconciler authority", ErrProviderPermanent, res.Status)
+			_ = r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "RECONCILIATION_REQUIRED", err.Error())
+			return err
+		}
 		// Validate the provider result carries verifiable evidence.
 		// A Success:true without a remote ID or URL is a programming
 		// error in the provider adapter — treat as permanent failure.

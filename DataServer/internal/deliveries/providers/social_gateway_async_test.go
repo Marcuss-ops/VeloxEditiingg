@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"velox-server/internal/deliveries"
 	"velox-server/internal/socialclient"
 )
 
@@ -40,7 +41,7 @@ func TestSocialGatewayProvider_acceptedSubmissionRequiresPublishedReconcile(t *t
 	if err != nil {
 		t.Fatalf("Deliver: %v", err)
 	}
-	if !accepted.Success || accepted.Status != "accepted" || accepted.RemoteID != socialDeliveryID {
+	if !accepted.Success || accepted.Status != deliveries.ResultStatusSubmittedToProvider || accepted.RemoteID != socialDeliveryID {
 		t.Fatalf("accepted result = %+v", accepted)
 	}
 
@@ -48,7 +49,7 @@ func TestSocialGatewayProvider_acceptedSubmissionRequiresPublishedReconcile(t *t
 	if err != nil {
 		t.Fatalf("pending Reconcile: %v", err)
 	}
-	if pending.Success || pending.Status != "processing" {
+	if pending.Success || pending.Status != deliveries.ResultStatusRemoteProcessing || pending.RemoteID != "" {
 		t.Fatalf("pending reconciliation result = %+v; accepted operation must not be complete", pending)
 	}
 
@@ -56,7 +57,7 @@ func TestSocialGatewayProvider_acceptedSubmissionRequiresPublishedReconcile(t *t
 	if err != nil {
 		t.Fatalf("published Reconcile: %v", err)
 	}
-	if !published.Success || published.Status != "published" || published.RemoteID != "youtube-final-1" {
+	if !published.Success || published.Status != deliveries.ResultStatusPublished || published.RemoteID != "youtube-final-1" {
 		t.Fatalf("published reconciliation result = %+v", published)
 	}
 }
