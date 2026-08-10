@@ -202,9 +202,18 @@ type SegmentSnapshot struct {
 	AttemptID        string  `json:"attempt_id"`
 	SegmentIndex     int     `json:"segment_index"`
 	SceneID          string  `json:"scene_id,omitempty"`
+	SourceType       string  `json:"source_type,omitempty"`
+	AssetKey         string  `json:"asset_key,omitempty"`
+	SourceURLHash    string  `json:"source_url_hash,omitempty"`
+	Codec            string  `json:"codec,omitempty"`
+	Preset           string  `json:"preset,omitempty"`
 	DurationMS       float64 `json:"duration_ms"`
 	AssetDownloadMS  float64 `json:"asset_download_ms"`
 	FFmpegEncodeMS   float64 `json:"ffmpeg_encode_ms"`
+	SourceBytes      int64   `json:"source_bytes"`
+	OutputBytes      int64   `json:"output_bytes"`
+	InputDurationMS  float64 `json:"input_duration_ms"`
+	OutputDurationMS float64 `json:"output_duration_ms"`
 	FramesEncoded    int64   `json:"frames_encoded"`
 	FramesDecoded    int64   `json:"frames_decoded"`
 	FramesComposited int64   `json:"frames_composited"`
@@ -468,8 +477,13 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 				for _, segment := range segments {
 					summary.Segments = append(summary.Segments, SegmentSnapshot{
 						AttemptID: segment.AttemptID, SegmentIndex: segment.SegmentIndex,
-						SceneID: segment.SceneID, DurationMS: segment.DurationMS,
+						SceneID: segment.SceneID, SourceType: segment.SourceType,
+						AssetKey: segment.CacheKey, SourceURLHash: segment.SourceURLHash,
+						Codec: segment.Codec, Preset: segment.Preset,
+						DurationMS:      segment.DurationMS,
 						AssetDownloadMS: segment.AssetDownloadMS, FFmpegEncodeMS: segment.FfmpegEncodeMS,
+						SourceBytes: segment.SourceBytes, OutputBytes: segment.OutputBytes,
+						InputDurationMS: segment.InputDurationMS, OutputDurationMS: segment.OutputDurationMS,
 						FramesEncoded: segment.FramesEncoded, FramesDecoded: segment.FramesDecoded,
 						FramesComposited: segment.FramesComposited, FFmpegSpeedX: segment.FfmpegSpeedX,
 						Status: segment.Status,
