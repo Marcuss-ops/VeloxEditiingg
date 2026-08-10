@@ -150,31 +150,11 @@ worker_uri() {
     printf '/api/v1/admin/workers/%s' "$(printf '%s' "$1" | jq -sRr @uri)"
 }
 
-# post_mutation issues a JSON POST and prints the response body. On non-2xx it
-# surfaces the server's JSON error (e.g. 409 "operation already in flight") and
-# returns 1 — curl -f would swallow the error body, leaving only a generic
-# "HTTP 409" line for the operator.
-post_mutation() {
-    local path=$1 body=$2 code out msg
-    out="$(mktemp)"
-    code="$(curl -sS -o "$out" -w '%{http_code}' -X POST \
-        -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-        --data-raw "$body" "$MASTER_URL$path" 2>/dev/null || true)"
-    if [[ "$code" =~ ^2 ]]; then
-        cat "$out"
-        rm -f "$out"
-        return 0
-    fi
-    msg="$(jq -r '.error // empty' "$out" 2>/dev/null || true)"
-    rm -f "$out"
-    printf 'fleetctl: POST %s failed (HTTP %s): %s\n' "$path" "$code" "$msg" >&2
-    return 1
-}
-
-# NOTE: update/rollback/wait-ready/rollout are fully implemented by the Go
-# client (delegated at the top of this script) and their legacy Bash helpers
-# (run_digest_update, wait_ready, post_update_mutation, poll_operation and
-# parsers) were removed — the shell must not keep dead copies "for safety".
+# NOTE: update/rollback/wait-ready/rollout and job submit/certify are fully
+# implemented by the Go client (delegated at the top of this script) and
+# their legacy Bash helpers (run_digest_update, wait_ready, post_update_mutation,
+# poll_operation, post_mutation, job_submit and the m2m helpers) were removed
+# — the shell must not keep dead copies "for safety".
 
 resolve_worker_ids() {
     local selection=${1:-all} worker_id
