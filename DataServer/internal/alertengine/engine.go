@@ -5,6 +5,7 @@ package alertengine
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync"
 	"time"
@@ -12,8 +13,12 @@ import (
 	runtimealerts "velox-server/internal/alerts"
 )
 
-// RuleFunc is the legacy compute rule shape retained during migration.
-type RuleFunc func(ctx context.Context) *Alert
+// RuleFunc is a compute rule: returns an alert when its condition is
+// breached, or a non-nil error when the rule's data sources fail.
+// Infrastructure failures MUST propagate to the supervisor — they are
+// never converted into "no alert", which would let the alert engine
+// appear healthy while it is actually blind.
+type RuleFunc func(ctx context.Context) (*Alert, error)
 
 // Alert is the legacy compute rule output. Evaluate converts it to the
 // shared runtime AlertEvent before deduplication and notification.
@@ -140,10 +145,19 @@ func (e *Engine) AddRule(r RuleFunc) { e.rules = append(e.rules, r) }
 func (e *Engine) AddSink(sink runtimealerts.Sink) { e.pipeline.AddSink(sink) }
 
 // Evaluate converts the independent compute rule group into shared events.
+// Each rule is evaluated independently: alerts from healthy rules are still
+// returned even when a sibling rule fails, and all rule errors are joined
+// into the returned error so the supervisor can act on consecutive
+// infrastructure failures.
 func (e *Engine) Evaluate(ctx context.Context) ([]runtimealerts.AlertEvent, error) {
 	events := make([]runtimealerts.AlertEvent, 0, len(e.rules))
+	var errs []error
 	for _, rule := range e.rules {
-		alert := rule(ctx)
+		alert, err := rule(ctx)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
 		if alert == nil {
 			continue
 		}
@@ -164,7 +178,7 @@ func (e *Engine) Evaluate(ctx context.Context) ([]runtimealerts.AlertEvent, erro
 		event.EventID = runtimealerts.EventIDFor(event)
 		events = append(events, event)
 	}
-	return events, nil
+	return events, errors.Join(errs...)
 }
 
 // Run evaluates and dispatches the compute group until cancellation. Sink
@@ -187,11 +201,11 @@ func (e *Engine) Run(ctx context.Context) error {
 }
 
 // evaluateAll is retained for existing package tests and now runs the shared
-// evaluator → event → dedup → sink pipeline.
+// evaluator → event → dedup → sink pipeline. Rule evaluation errors and sink
+// failures are joined so a persistent infra failure reaches the supervisor;
+// alerts produced by healthy rules are still dispatched.
 func (e *Engine) evaluateAll(ctx context.Context) error {
-	events, err := e.Evaluate(ctx)
-	if err != nil {
-		return err
-	}
-	return e.pipeline.Dispatch(ctx, events)
+	events, evalErr := e.Evaluate(ctx)
+	dispatchErr := e.pipeline.Dispatch(ctx, events)
+	return errors.Join(evalErr, dispatchErr)
 }

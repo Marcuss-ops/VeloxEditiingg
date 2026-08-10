@@ -201,7 +201,10 @@ func TestRuleErrorRate_Triggers(t *testing.T) {
 	deps.ErrorRatePct = 10.0 // 20% error rate > 10%
 
 	rule := ruleErrorRate(deps)
-	alert := rule(context.Background())
+	alert, err := rule(context.Background())
+	if err != nil {
+		t.Fatalf("rule returned error: %v", err)
+	}
 	if alert == nil {
 		t.Fatal("expected alert when error rate exceeds threshold")
 	}
@@ -226,7 +229,10 @@ func TestRuleErrorRate_Healthy(t *testing.T) {
 	deps.ErrorRatePct = 10.0 // 5% error rate < 10%
 
 	rule := ruleErrorRate(deps)
-	alert := rule(context.Background())
+	alert, err := rule(context.Background())
+	if err != nil {
+		t.Fatalf("rule returned error: %v", err)
+	}
 	if alert != nil {
 		t.Errorf("expected no alert when error rate below threshold, got %s", alert.Name)
 	}
@@ -238,7 +244,10 @@ func TestRuleErrorRate_NilObs(t *testing.T) {
 	deps.ErrorRatePct = 1.0
 
 	rule := ruleErrorRate(deps)
-	alert := rule(context.Background())
+	alert, err := rule(context.Background())
+	if err != nil {
+		t.Fatalf("rule returned error: %v", err)
+	}
 	if alert != nil {
 		t.Errorf("expected no alert when Obs is nil, got %s", alert.Name)
 	}
@@ -268,7 +277,10 @@ func TestRuleP95WallMs_Triggers(t *testing.T) {
 	deps.P95WallMs = 300_000 // 400s > 300s threshold
 
 	rule := ruleP95WallMs(deps)
-	alert := rule(context.Background())
+	alert, err := rule(context.Background())
+	if err != nil {
+		t.Fatalf("rule returned error: %v", err)
+	}
 	if alert == nil {
 		t.Fatal("expected alert when P95 render exceeds threshold")
 	}
@@ -283,7 +295,10 @@ func TestRuleP95WallMs_NilObs(t *testing.T) {
 	deps.P95WallMs = 300_000
 
 	rule := ruleP95WallMs(deps)
-	alert := rule(context.Background())
+	alert, err := rule(context.Background())
+	if err != nil {
+		t.Fatalf("rule returned error: %v", err)
+	}
 	if alert != nil {
 		t.Errorf("expected no alert when Obs is nil, got %s", alert.Name)
 	}
@@ -296,7 +311,10 @@ func TestRuleP95WallMs_Healthy(t *testing.T) {
 	deps.P95WallMs = 300_000
 
 	rule := ruleP95WallMs(deps)
-	alert := rule(context.Background())
+	alert, err := rule(context.Background())
+	if err != nil {
+		t.Fatalf("rule returned error: %v", err)
+	}
 	if alert != nil {
 		t.Errorf("expected no alert when P95 below threshold, got %s", alert.Name)
 	}
@@ -318,7 +336,10 @@ func TestRuleWorkerOffline_Triggers(t *testing.T) {
 	deps.Obs = obs
 
 	rule := ruleWorkerOffline(deps)
-	alert := rule(context.Background())
+	alert, err := rule(context.Background())
+	if err != nil {
+		t.Fatalf("rule returned error: %v", err)
+	}
 	if alert == nil {
 		t.Fatal("expected alert when workers are offline")
 	}
@@ -336,7 +357,10 @@ func TestRuleWorkerOffline_Healthy(t *testing.T) {
 	deps.Obs = obs
 
 	rule := ruleWorkerOffline(deps)
-	alert := rule(context.Background())
+	alert, err := rule(context.Background())
+	if err != nil {
+		t.Fatalf("rule returned error: %v", err)
+	}
 	if alert != nil {
 		t.Errorf("expected no alert when all workers CONNECTED, got %s", alert.Name)
 	}
@@ -347,7 +371,10 @@ func TestRuleWorkerOffline_NilObs(t *testing.T) {
 	deps.Obs = nil
 
 	rule := ruleWorkerOffline(deps)
-	alert := rule(context.Background())
+	alert, err := rule(context.Background())
+	if err != nil {
+		t.Fatalf("rule returned error: %v", err)
+	}
 	if alert != nil {
 		t.Errorf("expected no alert when Obs is nil, got %s", alert.Name)
 	}
@@ -362,7 +389,10 @@ func TestRuleDiskFree_Triggers(t *testing.T) {
 	deps.DiskFreeGB = 1_000_000.0 // impossibly high → alert triggers
 
 	rule := ruleDiskFree(deps)
-	alert := rule(context.Background())
+	alert, err := rule(context.Background())
+	if err != nil {
+		t.Fatalf("rule returned error: %v", err)
+	}
 	if alert == nil {
 		t.Fatal("expected alert when disk free below threshold")
 	}
@@ -380,7 +410,10 @@ func TestRuleDiskFree_Healthy(t *testing.T) {
 	deps.DiskFreeGB = 0.0 // always above 0 → no alert
 
 	rule := ruleDiskFree(deps)
-	alert := rule(context.Background())
+	alert, err := rule(context.Background())
+	if err != nil {
+		t.Fatalf("rule returned error: %v", err)
+	}
 	if alert != nil {
 		t.Errorf("expected no alert when disk free above threshold, got %s", alert.Name)
 	}
@@ -391,7 +424,10 @@ func TestRuleDiskFree_NoDir(t *testing.T) {
 	deps.DataDir = "" // empty → nil returned
 
 	rule := ruleDiskFree(deps)
-	alert := rule(context.Background())
+	alert, err := rule(context.Background())
+	if err != nil {
+		t.Fatalf("rule returned error: %v", err)
+	}
 	if alert != nil {
 		t.Errorf("expected no alert when DataDir is empty, got %s", alert.Name)
 	}
@@ -419,7 +455,10 @@ func TestRuleFFmpegSpeedRatio_Triggers(t *testing.T) {
 	deps.FFmpegMin = 1.5
 
 	rule := ruleFFmpegSpeedRatio(deps)
-	alert := rule(context.Background())
+	alert, err := rule(context.Background())
+	if err != nil {
+		t.Fatalf("rule returned error: %v", err)
+	}
 	if alert == nil {
 		t.Fatal("expected alert when ffmpeg speed ratio below minimum")
 	}
@@ -435,7 +474,10 @@ func TestRuleFFmpegSpeedRatio_Healthy(t *testing.T) {
 	deps.FFmpegMin = 1.5
 
 	rule := ruleFFmpegSpeedRatio(deps)
-	alert := rule(context.Background())
+	alert, err := rule(context.Background())
+	if err != nil {
+		t.Fatalf("rule returned error: %v", err)
+	}
 	if alert != nil {
 		t.Errorf("expected no alert when speed ratio above minimum, got %s", alert.Name)
 	}
@@ -454,7 +496,10 @@ func TestRuleFFmpegSpeedRatio_NoSamples(t *testing.T) {
 	deps.FFmpegMin = 1.5
 
 	rule := ruleFFmpegSpeedRatio(deps)
-	alert := rule(context.Background())
+	alert, err := rule(context.Background())
+	if err != nil {
+		t.Fatalf("rule returned error: %v", err)
+	}
 	if alert != nil {
 		t.Errorf("expected no alert with 0 samples, got %s", alert.Name)
 	}
@@ -466,7 +511,10 @@ func TestRuleFFmpegSpeedRatio_NilObs(t *testing.T) {
 	deps.FFmpegMin = 1.5
 
 	rule := ruleFFmpegSpeedRatio(deps)
-	alert := rule(context.Background())
+	alert, err := rule(context.Background())
+	if err != nil {
+		t.Fatalf("rule returned error: %v", err)
+	}
 	if alert != nil {
 		t.Errorf("expected no alert when Obs is nil, got %s", alert.Name)
 	}
@@ -480,8 +528,8 @@ func TestCooldown_SuppressesRepeatedAlerts(t *testing.T) {
 	engine.Cooldown = 1 * time.Hour // long cooldown so it persists for the test
 
 	// Register a rule that always fires.
-	engine.AddRule(func(ctx context.Context) *Alert {
-		return &Alert{Name: "AlwaysOn", Severity: "warning", Summary: "test"}
+	engine.AddRule(func(ctx context.Context) (*Alert, error) {
+		return &Alert{Name: "AlwaysOn", Severity: "warning", Summary: "test"}, nil
 	})
 
 	ctx := context.Background()
@@ -504,8 +552,8 @@ func TestCooldown_AllowsAfterCooldown(t *testing.T) {
 	engine := New(1*time.Hour, spy)
 	engine.Cooldown = 10 * time.Millisecond // very short cooldown
 
-	engine.AddRule(func(ctx context.Context) *Alert {
-		return &Alert{Name: "AlwaysOn", Severity: "warning", Summary: "test"}
+	engine.AddRule(func(ctx context.Context) (*Alert, error) {
+		return &Alert{Name: "AlwaysOn", Severity: "warning", Summary: "test"}, nil
 	})
 
 	ctx := context.Background()
@@ -531,11 +579,11 @@ func TestCooldown_DifferentRulesDontSuppressEachOther(t *testing.T) {
 	engine := New(1*time.Hour, spy)
 	engine.Cooldown = 1 * time.Hour
 
-	engine.AddRule(func(ctx context.Context) *Alert {
-		return &Alert{Name: "RuleA", Severity: "warning", Summary: "A"}
+	engine.AddRule(func(ctx context.Context) (*Alert, error) {
+		return &Alert{Name: "RuleA", Severity: "warning", Summary: "A"}, nil
 	})
-	engine.AddRule(func(ctx context.Context) *Alert {
-		return &Alert{Name: "RuleB", Severity: "warning", Summary: "B"}
+	engine.AddRule(func(ctx context.Context) (*Alert, error) {
+		return &Alert{Name: "RuleB", Severity: "warning", Summary: "B"}, nil
 	})
 
 	ctx := context.Background()
@@ -567,7 +615,10 @@ func TestMakeRules_ReturnsFiveRules(t *testing.T) {
 
 	ctx := context.Background()
 	for i, rule := range rules {
-		alert := rule(ctx)
+		alert, err := rule(ctx)
+		if err != nil {
+			t.Errorf("rule %d returned error: %v", i, err)
+		}
 		// With healthy defaults, no rule should fire.
 		if alert != nil {
 			t.Errorf("rule %d fired unexpectedly: %s", i, alert.Name)

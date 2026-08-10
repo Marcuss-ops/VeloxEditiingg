@@ -46,13 +46,13 @@ func MakeRules(deps RuleDeps) []RuleFunc {
 }
 
 func ruleErrorRate(deps RuleDeps) RuleFunc {
-	return func(ctx context.Context) *Alert {
+	return func(ctx context.Context) (*Alert, error) {
 		if deps.Obs == nil {
-			return nil
+			return nil, nil
 		}
 		ov, err := deps.Obs.Overview(ctx)
 		if err != nil {
-			return nil
+			return nil, fmt.Errorf("alert rule ErrorRateHigh: overview: %w", err)
 		}
 		if ov.ErrorRate > deps.ErrorRatePct {
 			return &Alert{
@@ -64,20 +64,20 @@ func ruleErrorRate(deps RuleDeps) RuleFunc {
 					ov.JobsCompleted24h, ov.JobsFailed24h, ov.ErrorRate, ov.QueueDepth,
 				),
 				Labels: map[string]string{"domain": "jobs"},
-			}
+			}, nil
 		}
-		return nil
+		return nil, nil
 	}
 }
 
 func ruleP95WallMs(deps RuleDeps) RuleFunc {
-	return func(ctx context.Context) *Alert {
+	return func(ctx context.Context) (*Alert, error) {
 		if deps.Obs == nil {
-			return nil
+			return nil, nil
 		}
 		ov, err := deps.Obs.Overview(ctx)
 		if err != nil {
-			return nil
+			return nil, fmt.Errorf("alert rule P95WallMsHigh: overview: %w", err)
 		}
 		if ov.P95RenderMS > deps.P95WallMs {
 			return &Alert{
@@ -86,20 +86,20 @@ func ruleP95WallMs(deps RuleDeps) RuleFunc {
 				Summary:     fmt.Sprintf("P95 render time %dms exceeds threshold %dms", ov.P95RenderMS, deps.P95WallMs),
 				Description: fmt.Sprintf("P95 render: %dms. Active workers: %d.", ov.P95RenderMS, ov.ActiveWorkers),
 				Labels:      map[string]string{"domain": "performance"},
-			}
+			}, nil
 		}
-		return nil
+		return nil, nil
 	}
 }
 
 func ruleWorkerOffline(deps RuleDeps) RuleFunc {
-	return func(ctx context.Context) *Alert {
+	return func(ctx context.Context) (*Alert, error) {
 		if deps.Obs == nil {
-			return nil
+			return nil, nil
 		}
 		workers, err := deps.Obs.ListWorkers(ctx)
 		if err != nil {
-			return nil
+			return nil, fmt.Errorf("alert rule WorkersOffline: list workers: %w", err)
 		}
 		var offline []string
 		for _, w := range workers {
@@ -118,21 +118,21 @@ func ruleWorkerOffline(deps RuleDeps) RuleFunc {
 				Summary:     fmt.Sprintf("%d workers offline", len(offline)),
 				Description: fmt.Sprintf("Offline workers: %v", offline),
 				Labels:      map[string]string{"domain": "workers", "count": fmt.Sprintf("%d", len(offline))},
-			}
+			}, nil
 		}
-		return nil
+		return nil, nil
 	}
 }
 
 func ruleDiskFree(deps RuleDeps) RuleFunc {
-	return func(ctx context.Context) *Alert {
+	return func(ctx context.Context) (*Alert, error) {
 		dir := deps.DataDir
 		if dir == "" {
-			return nil
+			return nil, nil
 		}
 		var stat syscall.Statfs_t
 		if err := syscall.Statfs(dir, &stat); err != nil {
-			return nil
+			return nil, fmt.Errorf("alert rule DiskFreeLow: statfs %q: %w", dir, err)
 		}
 		freeGB := float64(stat.Bavail*uint64(stat.Bsize)) / 1_073_741_824.0
 		if freeGB < deps.DiskFreeGB {
@@ -142,23 +142,26 @@ func ruleDiskFree(deps RuleDeps) RuleFunc {
 				Summary:     fmt.Sprintf("Disk free %.1f GB below threshold %.1f GB on %s", freeGB, deps.DiskFreeGB, dir),
 				Description: fmt.Sprintf("Available: %.1f GB. Block size: %d, available blocks: %d.", freeGB, stat.Bsize, stat.Bavail),
 				Labels:      map[string]string{"domain": "infra", "path": dir},
-			}
+			}, nil
 		}
-		return nil
+		return nil, nil
 	}
 }
 
 func ruleFFmpegSpeedRatio(deps RuleDeps) RuleFunc {
-	return func(ctx context.Context) *Alert {
+	return func(ctx context.Context) (*Alert, error) {
 		if deps.Obs == nil {
-			return nil
+			return nil, nil
 		}
 		// ffmpeg_speed_ratio is a scalar column on task_attempt_metrics,
 		// not a phase timing. Use RecentScalarMetric which reads from
 		// the correct table.
 		result, err := deps.Obs.RecentScalarMetric(ctx, "ffmpeg_speed_ratio")
-		if err != nil || result == nil || result.Samples == 0 {
-			return nil
+		if err != nil {
+			return nil, fmt.Errorf("alert rule FFmpegSpeedRatioLow: recent scalar metric: %w", err)
+		}
+		if result == nil || result.Samples == 0 {
+			return nil, nil
 		}
 		p95 := result.P95
 		if p95 > 0 && p95 < deps.FFmpegMin {
@@ -168,8 +171,8 @@ func ruleFFmpegSpeedRatio(deps RuleDeps) RuleFunc {
 				Summary:     fmt.Sprintf("FFmpeg speed ratio P95 %.2fx below threshold %.2fx", p95, deps.FFmpegMin),
 				Description: fmt.Sprintf("P95 ffmpeg speed ratio: %.2fx over %d samples.", p95, result.Samples),
 				Labels:      map[string]string{"domain": "performance"},
-			}
+			}, nil
 		}
-		return nil
+		return nil, nil
 	}
 }
