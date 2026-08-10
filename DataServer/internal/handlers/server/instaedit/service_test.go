@@ -27,6 +27,7 @@ type memoryJobGateway struct {
 	listJobsErr               error
 	listJobDeliveriesErr      error
 	getDeliveryDestinationErr error
+	getDestinationErr         error
 }
 
 func (m *memoryJobGateway) ListJobsByWorkspace(ctx context.Context, workspaceID int64, limit int) ([]map[string]any, error) {
@@ -56,6 +57,9 @@ func (m *memoryJobGateway) Cancel(ctx context.Context, jobID string, reason stri
 }
 
 func (m *memoryJobGateway) GetDeliveryDestinationByExternalID(ctx context.Context, externalID string) (*store.DeliveryDestination, error) {
+	if m.getDestinationErr != nil {
+		return nil, m.getDestinationErr
+	}
 	return m.destinations[externalID], nil
 }
 
@@ -190,6 +194,21 @@ func TestService_CreateJob_UnknownDestination(t *testing.T) {
 	}
 }
 
+func TestService_CreateJob_StoreMissingDestinationMapsToDomainError(t *testing.T) {
+	jobs := &memoryJobGateway{destinations: map[string]*store.DeliveryDestination{}}
+	// Use a gateway variant that reproduces SQLite's normalized missing-row error.
+	jobs.getDestinationErr = store.ErrDeliveryNoRow
+	svc := NewService(jobs, nil, nil, nil)
+	_, err := svc.CreateJob(context.Background(), CreateJobCmd{
+		WorkspaceID:  45,
+		ProjectID:    "proj-1",
+		Destinations: []CreateDestinationCmd{{ExternalDestinationID: "ext-missing"}},
+	})
+	if !errors.Is(err, ErrDestinationUnknown) {
+		t.Fatalf("expected ErrDestinationUnknown, got %v", err)
+	}
+}
+
 func TestService_CreateJob_DisabledDestination(t *testing.T) {
 	jobs := &memoryJobGateway{
 		destinations: map[string]*store.DeliveryDestination{
@@ -236,6 +255,9 @@ func TestService_CreateJob_Success(t *testing.T) {
 	if enq.last["project_id"] != "proj-1" || enq.last["status"] != "completed" {
 		t.Fatalf("expected canonical project/status fields, got project_id=%v status=%v", enq.last["project_id"], enq.last["status"])
 	}
+	if _, present := enq.last["render_only"]; present {
+		t.Fatalf("normal payload unexpectedly contains render_only: %#v", enq.last["render_only"])
+	}
 	if enq.last["video_name"] != "Test" {
 		t.Fatalf("expected video_name Test, got %v", enq.last["video_name"])
 	}
@@ -268,8 +290,8 @@ func TestService_CreateJob_RenderOnlyBuildsCanonicalPayloadWithoutDestinations(t
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if enq.last["status"] != "completed" {
-		t.Fatalf("expected completed payload, got status=%v", enq.last["status"])
+	if enq.last["status"] != "completed" || enq.last["render_only"] != true {
+		t.Fatalf("expected completed render-only payload, got status=%v render_only=%v", enq.last["status"], enq.last["render_only"])
 	}
 	plan, ok := enq.last["delivery_plan"].([]map[string]any)
 	if !ok || len(plan) != 0 {

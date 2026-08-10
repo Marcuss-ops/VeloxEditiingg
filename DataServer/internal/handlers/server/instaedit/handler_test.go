@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"velox-server/internal/instaeditauth"
+	"velox-server/internal/store"
 )
 
 const testSecret = "this-is-a-32-byte-secret-for-test!"
@@ -162,6 +163,33 @@ func TestInstaEditRoutes_EditorSurfaceIsProjectScopedAndHasNoCatalog(t *testing.
 		if _, ok := body[forbidden]; ok {
 			t.Fatalf("editor context leaked forbidden ownership field %q: %v", forbidden, body)
 		}
+	}
+}
+
+func TestInstaEditCreateJob_MissingStoreDestinationReturns422(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	verifier, _ := instaeditauth.New(testSecret)
+	jobs := &memoryJobGateway{getDestinationErr: store.ErrDeliveryNoRow}
+	h := NewHandler(HandlerDeps{
+		Verifier: verifier,
+		Service:  NewService(jobs, nil, nil, nil),
+	})
+	r := gin.New()
+	h.RegisterRoutes(r)
+
+	body := map[string]any{
+		"project_id": "proj-1",
+		"render_spec": map[string]any{
+			"video_name": "Video",
+			"scenes":     []map[string]any{},
+		},
+		"delivery_plan": map[string]any{
+			"destinations": []map[string]any{{"external_destination_id": "missing"}},
+		},
+	}
+	w := postCreateJob(t, r, mintToken(t, validClaims()), body)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for missing store destination, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

@@ -3,9 +3,11 @@ package instaedit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
+	"velox-server/internal/store"
 	"velox-shared/contract"
 )
 
@@ -30,6 +32,9 @@ func (s *Service) buildCreateJobPayload(ctx context.Context, cmd CreateJobCmd, r
 		}
 		dest, err := s.jobs.GetDeliveryDestinationByExternalID(ctx, externalID)
 		if err != nil {
+			if errors.Is(err, store.ErrDeliveryNoRow) {
+				return nil, fmt.Errorf("%w: %s", ErrDestinationUnknown, externalID)
+			}
 			return nil, err
 		}
 		if dest == nil {
@@ -68,6 +73,11 @@ func (s *Service) buildCreateJobPayload(ctx context.Context, cmd CreateJobCmd, r
 		return nil, fmt.Errorf("build canonical payload: %w", err)
 	}
 	payload["project_id"] = cmd.ProjectID
+	if cmd.RenderOnly {
+		// JobPayloadV2 intentionally omits control-plane render_only from its
+		// typed projection; preserve it explicitly for enqueue/creatorflow.
+		payload["render_only"] = true
+	}
 	// This adapter submits a fully assembled render request (unlike the
 	// remote-engine polling path), so mark the canonical handoff complete
 	// for the resolver's completion gate. The enqueue normalizer still owns
