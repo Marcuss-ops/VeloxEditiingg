@@ -25,13 +25,13 @@ func loadAuthConfig(raw RawConfig) AuthConfig {
 
 // ── PipelineConfig ──────────────────────────────────────────────────────
 
-// loadPipelineConfig populates PipelineConfig from environment variables.
-// Spec §8: cfg.Pipeline.JobMasterURL replaces the previously-root Config.JobMasterURL.
+// loadPipelineConfig populates the live pipeline settings from the
+// captured environment snapshot. Job-master proxy routing is retired;
+// only the native translation settings remain here.
 func loadPipelineConfig(raw RawConfig) PipelineConfig {
 	return PipelineConfig{
-		JobMasterURL: raw.Get("VELOX_JOB_MASTER_URL"),
-		OllamaURL:    firstNonEmpty(raw.Get("OLLAMA_ADDR"), "http://127.0.0.1:11434"),
-		OllamaModel:  firstNonEmpty(raw.Get("OLLAMA_MODEL"), "gemma4:e4b"),
+		OllamaURL:   firstNonEmpty(raw.Get("OLLAMA_ADDR"), "http://127.0.0.1:11434"),
+		OllamaModel: firstNonEmpty(raw.Get("OLLAMA_MODEL"), "gemma4:e4b"),
 	}
 }
 

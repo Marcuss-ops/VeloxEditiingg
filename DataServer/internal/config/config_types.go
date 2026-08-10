@@ -273,13 +273,8 @@ type RetentionConfig struct {
 	WorkerResourceRollupDays int
 }
 
-// PipelineConfig groups configuration that controls the production-pipeline
-// integration (Drive proxy target, job-to-master routing, etc.).
+// PipelineConfig groups the live native pipeline settings.
 type PipelineConfig struct {
-	// JobMasterURL is the destination for proxying /api/drive/* and other job-routed
-	// requests. Populated from VELOX_JOB_MASTER_URL. Previously lived at the root
-	// of Config as `JobMasterURL`.
-	JobMasterURL string
 	// OllamaURL and OllamaModel configure the native per-scene translation stage.
 	OllamaURL   string
 	OllamaModel string
