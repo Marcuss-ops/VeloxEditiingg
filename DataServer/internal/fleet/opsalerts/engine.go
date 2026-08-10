@@ -3,43 +3,13 @@ package opsalerts
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"time"
 
 	"velox-server/internal/store"
+	"velox-server/internal/supervisor"
 )
-
-// engine.go — Step 16/15 fleet-operator structured-alerting engine.
-//
-// The engine drives the 12-rule catalog on a periodic tick:
-//
-//   1. ListWorkers() → per-worker Snapshot() via the DataSource.
-//   2. Evaluate() each snapshot against every entry in AllRules().
-//   3. For each hit, consult DedupStore.ShouldFire.
-//   4. If YES (first trip OR window elapsed): persist a new
-//      ACTIVE alert_events row + Observe(key, hit).
-//      For CRITICAL entries with a matching existing ACTIVE row:
-//      re-emit (TouchActiveAlertEvent) so last_observed_at + message
-//      stay fresh but no duplicate row is created.
-//   5. If NO (in-window for WARNING): TouchActiveAlertEvent to bump
-//      last_observed_at without re-firing the row.
-//   6. For each previously-active key not in the new hit set:
-//      Forget + Resolve (stamp alert_events.resolved_at).
-//
-//   7. INFO hits are dropped at step 3 (engine ignores them); they
-//      are logged via the optional Logger for debug but never
-//      persisted.
-//
-// Concurrency: the engine runs in a single goroutine (the
-// supervisor owns the goroutine). The dedup store's mutex lets
-// multiple concurrent ShouldFire calls (e.g., from tests) race
-// safely.
-//
-// Data-source policy: an Engine is ready only when a real
-// WorkerAlertsDataSource is supplied. A missing adapter is a
-// configuration error, not an empty fleet: construction fails
-// closed so bootstrap cannot expose a supervisor that silently
-// evaluates nothing.
 
 // ErrDataSourceNotConfigured is returned when an alerts engine is
 // constructed without the read-side adapter required for evaluation.
@@ -54,8 +24,6 @@ func configuredInterface(value any) bool {
 	if value == nil {
 		return false
 	}
-	// An interface containing a typed nil pointer is non-nil, but is just as
-	// unusable as a nil interface. Keep constructor readiness fail-closed.
 	v := reflect.ValueOf(value)
 	switch v.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
@@ -65,12 +33,34 @@ func configuredInterface(value any) bool {
 	}
 }
 
-func configuredDataSource(source WorkerAlertsDataSource) bool {
-	return configuredInterface(source)
+func configuredDataSource(source WorkerAlertsDataSource) bool { return configuredInterface(source) }
+func configuredAlertStore(s AlertStore) bool                  { return configuredInterface(s) }
+
+// AlertStore is the SQLite-backed surface the engine writes to.
+type AlertStore interface {
+	InsertAlertEvent(ctx context.Context, ev store.AlertEvent) error
+	ResolveAlertEvent(ctx context.Context, workerID, ruleID, severity string, resolvedAt time.Time) error
+	TouchActiveAlertEvent(ctx context.Context, workerID, ruleID, severity string, observedAt time.Time, currentValue, message string) error
+	GetActiveAlertEventForWorkerRule(ctx context.Context, workerID, ruleID, severity string) (*store.AlertEvent, error)
 }
 
-func configuredAlertStore(s AlertStore) bool {
-	return configuredInterface(s)
+// WorkerEvaluationErrorSink receives aggregated per-worker failures. The
+// category is closed and low-cardinality; worker IDs and free-form errors are
+// intentionally excluded from metric labels.
+type WorkerEvaluationErrorSink interface {
+	RecordWorkerEvaluationErrors(category string, count uint64)
+}
+
+// Engine evaluates fleet alerts and persists deduplicated events. Failures
+// affecting the whole pass are returned to the supervisor. Failures isolated
+// to one worker are aggregated and metered while other workers continue.
+type Engine struct {
+	store        AlertStore
+	dedup        *DedupStore
+	source       WorkerAlertsDataSource
+	tick         time.Duration
+	maxBatch     int
+	errorMetrics WorkerEvaluationErrorSink
 }
 
 func newEngine(s AlertStore, source WorkerAlertsDataSource, tick time.Duration, maxBatch int) (*Engine, error) {
@@ -86,129 +76,114 @@ func newEngine(s AlertStore, source WorkerAlertsDataSource, tick time.Duration, 
 	if maxBatch <= 0 {
 		maxBatch = 500
 	}
-	return &Engine{
-		store:    s,
-		dedup:    NewDedupStore(),
-		source:   source,
-		tick:     tick,
-		maxBatch: maxBatch,
-	}, nil
+	return &Engine{store: s, dedup: NewDedupStore(), source: source, tick: tick, maxBatch: maxBatch}, nil
 }
 
-// AlertStore is the SQLite-backed surface the engine writes
-// to. Production passes *store.SQLiteStore (it satisfies the
-// interface via structural typing).
-type AlertStore interface {
-	InsertAlertEvent(ctx context.Context, ev store.AlertEvent) error
-	ResolveAlertEvent(ctx context.Context, workerID, ruleID, severity string, resolvedAt time.Time) error
-	TouchActiveAlertEvent(ctx context.Context, workerID, ruleID, severity string, observedAt time.Time, currentValue, message string) error
-	GetActiveAlertEventForWorkerRule(ctx context.Context, workerID, ruleID, severity string) (*store.AlertEvent, error)
-}
-
-// Engine is the per-tick orchestrator. The supervisor's
-// Run(context) calls Tick(ctx) on a 30-60s interval (Step 16/15
-// defaults; tunable via the constructor).
-type Engine struct {
-	store    AlertStore
-	dedup    *DedupStore
-	source   WorkerAlertsDataSource
-	tick     time.Duration
-	maxBatch int
-}
-
-// NewEngine builds the orchestrator with sane defaults.
-//   - 5 minute tick (the alerts-supervisor registers this in
-//     bootstrap_composition.go).
-//   - 500-row per-tick batch (sufficient for a 50-worker fleet
-//     with 12 rules, leaves headroom for fleet growth).
-//
-// The datasource is mandatory. Callers must handle the returned error and
-// must not register a supervisor when ErrDataSourceNotConfigured is returned.
+// NewEngine builds the orchestrator with production defaults.
 func NewEngine(s AlertStore, source WorkerAlertsDataSource) (*Engine, error) {
 	return newEngine(s, source, 5*time.Minute, 500)
 }
 
-// NewEngineWithClock builds an Engine with custom tick + batch. Used by
-// tests that want millisecond-rate ticks. It has the same readiness contract
-// as NewEngine and rejects a missing or typed-nil datasource.
+// NewEngineWithClock builds an Engine with custom tick and batch limits.
 func NewEngineWithClock(s AlertStore, source WorkerAlertsDataSource, tick time.Duration, maxBatch int) (*Engine, error) {
 	return newEngine(s, source, tick, maxBatch)
 }
 
-// Run is the supervisor.Runner.Run signature — the supervisor
-// owns the goroutine. Returns nil on either clean-exit path
-// (ctx.Done or Stop) so graceful shutdown is not treated as a
-// transient failure by the supervisor's backoff loop.
+// SetErrorMetrics installs the optional sink for isolated worker failures.
+func (e *Engine) SetErrorMetrics(sink WorkerEvaluationErrorSink) { e.errorMetrics = sink }
+
+// Run is the supervisor runner contract. A global evaluation error is
+// returned so supervisor restart/backoff policy can act on it.
 func (e *Engine) Run(ctx context.Context) error {
 	ticker := time.NewTicker(e.tick)
 	defer ticker.Stop()
-	// First tick immediately so bootstrap-time alerts land
-	// fast (a worker that fails heartbeat on bootstrap should
-	// fire within the supervisor's grace period).
-	e.Tick(ctx)
+	if _, err := e.Evaluate(ctx); err != nil {
+		return err
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			e.Tick(ctx)
+			if _, err := e.Evaluate(ctx); err != nil {
+				return err
+			}
 		}
 	}
 }
 
-// Tick runs the full 12-rule evaluation pass once. Exposed so
-// tests can drive deterministically; production drives via Run.
-//
-// Errors inside Tick are logged + ignored — a transient SQLite
-// blip or a single-worker snapshot failure must not stall the
-// engine. The next tick retries.
-func (e *Engine) Tick(ctx context.Context) {
+// Evaluate runs one complete alert pass and returns the alerts observed.
+// Worker inventory failures are infrastructure errors and propagate to the
+// supervisor. Snapshot and per-worker persistence failures are isolated,
+// aggregated by category, and reported through the optional metric sink.
+func (e *Engine) Evaluate(ctx context.Context) ([]Alert, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	cc := CallCtx{Now: time.Now().UTC()}
-	wids, err := e.source.WorkerIDs(cc)
+	workerIDs, err := e.source.WorkerIDs(cc)
 	if err != nil {
-		return
+		return nil, errors.Join(supervisor.ErrInfrastructure, fmt.Errorf("opsalerts: list workers: %w", err))
 	}
-	// Per-worker hit set: dedup key → hit. Engine collects
-	// across all rules and consults the dedup store + the
-	// alert_events table for resolution decisions.
-	for _, wid := range wids {
-		e.tickWorker(ctx, cc, wid)
+
+	alerts := make([]Alert, 0)
+	errorCounts := make(map[string]uint64)
+	var infrastructureErrors []error
+	for _, workerID := range workerIDs {
+		workerAlerts, workerErrors, workerInfrastructureErrors := e.evaluateWorker(ctx, cc, workerID)
+		alerts = append(alerts, workerAlerts...)
+		for category, count := range workerErrors {
+			errorCounts[category] += count
+		}
+		infrastructureErrors = append(infrastructureErrors, workerInfrastructureErrors...)
 	}
+	for category, count := range errorCounts {
+		if e.errorMetrics != nil {
+			e.errorMetrics.RecordWorkerEvaluationErrors(category, count)
+		}
+	}
+	if len(infrastructureErrors) > 0 {
+		return alerts, errors.Join(append([]error{supervisor.ErrInfrastructure}, infrastructureErrors...)...)
+	}
+	return alerts, nil
 }
 
-// tickWorker processes one worker. Errors are isolated so
-// one worker's SQLite hiccup doesn't poison the rest of the
-// fleet's tick.
-func (e *Engine) tickWorker(ctx context.Context, cc CallCtx, workerID string) {
+func (e *Engine) evaluateWorker(ctx context.Context, cc CallCtx, workerID string) ([]Alert, map[string]uint64, []error) {
+	errorsByCategory := make(map[string]uint64)
+	var infrastructureErrors []error
 	snap, err := e.source.Snapshot(cc, workerID)
-	if err != nil || snap == nil {
-		return
+	if err != nil {
+		if supervisor.IsInfrastructure(supervisor.ClassifyError(err)) {
+			infrastructureErrors = append(infrastructureErrors, fmt.Errorf("opsalerts: snapshot worker=%s: %w", workerID, err))
+		} else {
+			errorsByCategory["snapshot"]++
+		}
+		return nil, errorsByCategory, infrastructureErrors
 	}
+	if snap == nil {
+		errorsByCategory["snapshot_empty"]++
+		return nil, errorsByCategory, infrastructureErrors
+	}
+
 	if snap.WorkerID == "" {
 		snap.WorkerID = workerID
 	}
-	hits := Evaluate(cc, snap)
-	// Build the set of (rule_id, severity) triples that fired
-	// this tick — used to detect resolution for triples that
-	// were previously active.
-	fired := make(map[DedupKey]AlertEventHit, len(hits))
-	for _, h := range hits {
-		if h.Severity == Info {
+
+	hits := evaluateSnapshot(cc, snap)
+	fired := make(map[DedupKey]Alert, len(hits))
+	for _, hit := range hits {
+		if hit.Severity == Info {
 			continue
 		}
-		key := DedupKey{WorkerID: h.WorkerID, RuleID: h.RuleID, Severity: h.Severity}
-		fired[key] = h
+		key := DedupKey{WorkerID: hit.WorkerID, RuleID: hit.RuleID, Severity: hit.Severity}
+		fired[key] = hit
 	}
 
-	// Resolution: walk all ACTIVE rows for this worker that
-	// were NOT in the new firing set. Forget + Resolve.
-	resolveWalk(ctx, e.store, e.dedup, workerID, fired)
-
-	// Emission: walk the new hit set; consult the dedup store
-	// to decide whether to persist or to touch.
+	resolveFailures, resolveInfrastructureErrors := e.resolveWorker(ctx, workerID, fired)
+	errorsByCategory["store_resolve"] += resolveFailures
+	infrastructureErrors = append(infrastructureErrors, resolveInfrastructureErrors...)
 	for key, hit := range fired {
 		if e.dedup.ShouldFire(key, hit.Severity, hit.FiredAt) {
-			// Persist a new ACTIVE row.
 			ev := store.AlertEvent{
 				WorkerID:       hit.WorkerID,
 				RuleID:         string(hit.RuleID),
@@ -223,46 +198,48 @@ func (e *Engine) tickWorker(ctx context.Context, cc CallCtx, workerID string) {
 				ev.CurrentValue.Valid = true
 			}
 			if err := e.store.InsertAlertEvent(ctx, ev); err != nil {
+				if supervisor.IsInfrastructure(supervisor.ClassifyError(err)) {
+					infrastructureErrors = append(infrastructureErrors, fmt.Errorf("opsalerts: insert alert worker=%s: %w", workerID, err))
+				} else {
+					errorsByCategory["store_insert"]++
+				}
 				continue
 			}
 			e.dedup.Observe(key, hit)
-		} else {
-			// In window: touch existing row + dedup key.
-			e.dedup.Touch(key, hit.FiredAt, hit.CurrentValueText, hit.Message)
-			_ = e.store.TouchActiveAlertEvent(ctx, hit.WorkerID, string(hit.RuleID), string(hit.Severity), hit.FiredAt, hit.CurrentValueText, hit.Message)
+			continue
+		}
+		e.dedup.Touch(key, hit.FiredAt, hit.CurrentValueText, hit.Message)
+		if err := e.store.TouchActiveAlertEvent(ctx, hit.WorkerID, string(hit.RuleID), string(hit.Severity), hit.FiredAt, hit.CurrentValueText, hit.Message); err != nil {
+			if supervisor.IsInfrastructure(supervisor.ClassifyError(err)) {
+				infrastructureErrors = append(infrastructureErrors, fmt.Errorf("opsalerts: touch alert worker=%s: %w", workerID, err))
+			} else {
+				errorsByCategory["store_touch"]++
+			}
 		}
 	}
+	return hits, errorsByCategory, infrastructureErrors
 }
 
-// resolveWalk scans the dedup store for this worker's keys
-// that are NOT in the new firing set, and resolves them.
-// Dedup state lookup is over an in-memory map; one worker's
-// keys are typically <12 entries so the cost is negligible.
-func resolveWalk(ctx context.Context, s AlertStore, dedup *DedupStore, workerID string, fired map[DedupKey]AlertEventHit) {
-	// Iterate the dedup store's keys for this worker.
-	// (Cheap because we already hold no lock; each access
-	// re-acquires briefly.)
-	for _, key := range dedupKeysForWorker(dedup, workerID) {
+func (e *Engine) resolveWorker(ctx context.Context, workerID string, fired map[DedupKey]Alert) (uint64, []error) {
+	var failures uint64
+	var infrastructureErrors []error
+	for _, key := range dedupKeysForWorker(e.dedup, workerID) {
 		if _, stillFiring := fired[key]; stillFiring {
 			continue
 		}
-		// Resolve: stamp alert_events.resolved_at + flip
-		// state to RESOLVED, then forget the in-memory key.
-		sevStr := string(key.Severity)
-		if err := s.ResolveAlertEvent(ctx, workerID, string(key.RuleID), sevStr, time.Now().UTC()); err != nil && !errors.Is(err, store.ErrAlertEventNotFound) {
-			// Defensively log + continue; a transient
-			// SQLite error is non-fatal for resolution.
+		if err := e.store.ResolveAlertEvent(ctx, workerID, string(key.RuleID), string(key.Severity), time.Now().UTC()); err != nil && !errors.Is(err, store.ErrAlertEventNotFound) {
+			if supervisor.IsInfrastructure(supervisor.ClassifyError(err)) {
+				infrastructureErrors = append(infrastructureErrors, fmt.Errorf("opsalerts: resolve alert worker=%s: %w", workerID, err))
+			} else {
+				failures++
+			}
 			continue
 		}
-		dedup.Forget(key)
+		e.dedup.Forget(key)
 	}
+	return failures, infrastructureErrors
 }
 
-// dedupKeysForWorker returns all dedup keys belonging to the
-// given workerID. Implemented via a method on DedupStore for
-// encapsulation; in tests, use SnapshotForTest directly.
 func dedupKeysForWorker(dedup *DedupStore, workerID string) []DedupKey {
-	// We don't have a Key iterator; iterate via the underlying
-	// map under the lock. Encapsulated by exposing Iterate().
 	return dedup.iterateWorker(workerID)
 }

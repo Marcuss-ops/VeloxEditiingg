@@ -24,7 +24,7 @@ import (
 // registering its runner. A missing datasource means the capability is not
 // ready, so the supervisor is deliberately omitted rather than started as a
 // silent no-op. Other construction failures are composition errors.
-func registerOpsAlertsSupervisor(sup *supervisor.Supervisor, store opsalerts.AlertStore, source opsalerts.WorkerAlertsDataSource, policy supervisor.RestartPolicy) error {
+func registerOpsAlertsSupervisor(sup *supervisor.Supervisor, store opsalerts.AlertStore, source opsalerts.WorkerAlertsDataSource, policy supervisor.RestartPolicy, metricsSink opsalerts.WorkerEvaluationErrorSink) error {
 	engine, err := opsalerts.NewEngine(store, source)
 	if err != nil {
 		if errors.Is(err, opsalerts.ErrDataSourceNotConfigured) {
@@ -33,6 +33,7 @@ func registerOpsAlertsSupervisor(sup *supervisor.Supervisor, store opsalerts.Ale
 		}
 		return fmt.Errorf("construct alerts engine: %w", err)
 	}
+	engine.SetErrorMetrics(metricsSink)
 	if err := sup.Register(supervisor.Runner{
 		Name:   "alerts-supervisor",
 		Class:  supervisor.ClassRestartable,
@@ -357,7 +358,7 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 	// constructs first and therefore leaves this capability absent instead
 	// of exposing a healthy-looking runner whose Tick does nothing.
 	if p != nil && p.SQLite != nil && m != nil && m.Workers != nil {
-		if err := registerOpsAlertsSupervisor(sup, p.SQLite, nil, restartablePolicy); err != nil {
+		if err := registerOpsAlertsSupervisor(sup, p.SQLite, nil, restartablePolicy, metricsCollector); err != nil {
 			return nil, err
 		}
 	}

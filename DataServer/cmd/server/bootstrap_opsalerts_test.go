@@ -32,7 +32,7 @@ func (bootstrapOpsAlertsSource) Snapshot(opsalerts.CallCtx, string) (*opsalerts.
 
 func TestRegisterOpsAlertsSupervisorOmitsUnconfiguredCapability(t *testing.T) {
 	sup := supervisor.New()
-	if err := registerOpsAlertsSupervisor(sup, bootstrapOpsAlertsStore{}, nil, supervisor.RestartPolicy{}); err != nil {
+	if err := registerOpsAlertsSupervisor(sup, bootstrapOpsAlertsStore{}, nil, supervisor.RestartPolicy{}, nil); err != nil {
 		t.Fatalf("registerOpsAlertsSupervisor with missing datasource: %v", err)
 	}
 	for _, name := range sup.Names() {
@@ -44,7 +44,7 @@ func TestRegisterOpsAlertsSupervisorOmitsUnconfiguredCapability(t *testing.T) {
 
 func TestRegisterOpsAlertsSupervisorRegistersReadyCapability(t *testing.T) {
 	sup := supervisor.New()
-	if err := registerOpsAlertsSupervisor(sup, bootstrapOpsAlertsStore{}, bootstrapOpsAlertsSource{}, supervisor.RestartPolicy{}); err != nil {
+	if err := registerOpsAlertsSupervisor(sup, bootstrapOpsAlertsStore{}, bootstrapOpsAlertsSource{}, supervisor.RestartPolicy{}, nil); err != nil {
 		t.Fatalf("registerOpsAlertsSupervisor with ready dependencies: %v", err)
 	}
 	found := false

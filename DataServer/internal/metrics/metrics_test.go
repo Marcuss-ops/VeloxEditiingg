@@ -29,6 +29,24 @@ func TestNewCounterFamily_RejectsUnsafeLabel(t *testing.T) {
 	}
 }
 
+func TestOpsAlertsWorkerEvaluationErrorsMetric(t *testing.T) {
+	reg := NewRegistry()
+	collector := NewCollector(reg)
+	collector.RecordWorkerEvaluationErrors("snapshot", 2)
+	collector.RecordWorkerEvaluationErrors("snapshot", 1)
+	collector.RecordWorkerEvaluationErrors("store_insert", 1)
+	out := dumpRegistryAll(t, reg)
+	for _, want := range []string{
+		"# TYPE velox_opsalerts_worker_evaluation_errors_total counter",
+		`velox_opsalerts_worker_evaluation_errors_total{category="snapshot"} 3`,
+		`velox_opsalerts_worker_evaluation_errors_total{category="store_insert"} 1`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
 func TestRegistry_TextExposition(t *testing.T) {
 	r := NewRegistry()
 	cf := NewCounterFamily("velox_test_counter_total", "test", []string{"executor_id", "phase"})

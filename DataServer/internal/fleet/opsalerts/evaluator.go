@@ -153,15 +153,15 @@ type WorkerSnapshot struct {
 	WorkdirPermissionOK *bool
 }
 
-// Evaluate runs every rule in the catalog against the given
+// evaluateSnapshot runs every rule in the catalog against the given
 // Snapshot and returns the firing events. Pure function:
 // no DB writes, no log statements. The engine drives
 // persistence + dedup + suppression.
-func Evaluate(ctx CallCtx, snap *WorkerSnapshot) []AlertEventHit {
+func evaluateSnapshot(ctx CallCtx, snap *WorkerSnapshot) []Alert {
 	if snap == nil || snap.WorkerID == "" {
 		return nil
 	}
-	var out []AlertEventHit
+	var out []Alert
 	rules := AllRules()
 	for _, r := range rules {
 		if hit, ok := evaluateOne(ctx, snap, r); ok {
@@ -177,7 +177,7 @@ func Evaluate(ctx CallCtx, snap *WorkerSnapshot) []AlertEventHit {
 // Skip-if-missing semantic: if a rule's required data source
 // returns nil, the rule does NOT fire and does NOT log. This is
 // the documented anti-false-positive policy.
-func evaluateOne(ctx CallCtx, snap *WorkerSnapshot, r AlertRule) (AlertEventHit, bool) {
+func evaluateOne(ctx CallCtx, snap *WorkerSnapshot, r AlertRule) (Alert, bool) {
 	switch r.ID {
 	case RuleHeartbeatStale:
 		if snap.HeartbeatAgeSeconds == nil {
@@ -304,13 +304,13 @@ func evaluateOne(ctx CallCtx, snap *WorkerSnapshot, r AlertRule) (AlertEventHit,
 			return makeHit(snap.WorkerID, r, "workdir_permission=changed"), true
 		}
 	}
-	return AlertEventHit{}, false
+	return Alert{}, false
 }
 
-// AlertEventHit is the firing-event value the evaluator returns.
+// Alert is the firing-event value returned by the runtime evaluator.
 // `CurrentValueText` is the operator-facing "what was observed"
 // string (e.g., "disk_used=92%") that lands in alert_events.current_value.
-type AlertEventHit struct {
+type Alert struct {
 	WorkerID         string
 	RuleID           RuleID
 	Severity         Severity
@@ -324,12 +324,12 @@ type AlertEventHit struct {
 // row bounded; messages longer than that usually indicate a
 // stack-trace leak from the executor and are best inspected at
 // the fleet_operations audit row, not in this dashboard.
-func makeHit(workerID string, r AlertRule, currentValue string) AlertEventHit {
+func makeHit(workerID string, r AlertRule, currentValue string) Alert {
 	msg := r.LongDescription
 	if len(msg) > 500 {
 		msg = msg[:500] + "…"
 	}
-	return AlertEventHit{
+	return Alert{
 		WorkerID:         workerID,
 		RuleID:           r.ID,
 		Severity:         r.Severity,
@@ -338,6 +338,11 @@ func makeHit(workerID string, r AlertRule, currentValue string) AlertEventHit {
 		FiredAt:          time.Now().UTC(),
 	}
 }
+
+// AlertEventHit is retained as a source-compatible alias for the
+// dedup package and existing internal callers. New runtime contracts
+// should use Alert.
+type AlertEventHit = Alert
 
 // containsAny is a small case-insensitive substring check the
 // evaluator uses for drive_delivery_failed heuristics. Standard

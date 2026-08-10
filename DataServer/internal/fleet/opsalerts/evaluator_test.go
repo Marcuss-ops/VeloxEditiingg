@@ -14,11 +14,11 @@ import (
 //     independent hits when the value crosses both thresholds.
 
 func TestEvaluateEmptySnapshotReturnsNil(t *testing.T) {
-	if hits := Evaluate(CallCtx{Now: time.Now()}, nil); hits != nil {
+	if hits := evaluateSnapshot(CallCtx{Now: time.Now()}, nil); hits != nil {
 		t.Fatalf("nil snapshot should produce nil hits, got %d", len(hits))
 	}
 	empty := &WorkerSnapshot{WorkerID: ""}
-	if hits := Evaluate(CallCtx{Now: time.Now()}, empty); hits != nil {
+	if hits := evaluateSnapshot(CallCtx{Now: time.Now()}, empty); hits != nil {
 		t.Fatalf("empty workerID snapshot should produce nil hits, got %d", len(hits))
 	}
 }
@@ -27,7 +27,7 @@ func TestEvaluateHeartbeatStaleFiresAbove90(t *testing.T) {
 	ctx := CallCtx{Now: time.Now()}
 	val := 95.0
 	snap := &WorkerSnapshot{WorkerID: "w1", HeartbeatAgeSeconds: &val}
-	hits := Evaluate(ctx, snap)
+	hits := evaluateSnapshot(ctx, snap)
 	if len(hits) == 0 {
 		t.Fatalf("heartbeat 95s should fire heartbeat_stale CRITICAL")
 	}
@@ -46,7 +46,7 @@ func TestEvaluateHeartbeatBelow60DoesNotFire(t *testing.T) {
 	ctx := CallCtx{Now: time.Now()}
 	val := 60.0
 	snap := &WorkerSnapshot{WorkerID: "w1", HeartbeatAgeSeconds: &val}
-	hits := Evaluate(ctx, snap)
+	hits := evaluateSnapshot(ctx, snap)
 	for _, h := range hits {
 		if h.RuleID == RuleHeartbeatStale {
 			t.Fatalf("heartbeat 60s should NOT fire heartbeat_stale, got hit: %+v", h)
@@ -60,7 +60,7 @@ func TestEvaluateDiskDualSeverityEscalation(t *testing.T) {
 	// crossed; 95 not crossed).
 	val92 := 92.0
 	snap92 := &WorkerSnapshot{WorkerID: "w1", DiskUsedPercent: &val92}
-	hits := Evaluate(ctx, snap92)
+	hits := evaluateSnapshot(ctx, snap92)
 	var warn bool
 	for _, h := range hits {
 		if h.RuleID == RuleDiskPressure {
@@ -78,7 +78,7 @@ func TestEvaluateDiskDualSeverityEscalation(t *testing.T) {
 	// Disk at 96 should fire BOTH tiers.
 	val96 := 96.0
 	snap96 := &WorkerSnapshot{WorkerID: "w1", DiskUsedPercent: &val96}
-	hits = Evaluate(ctx, snap96)
+	hits = evaluateSnapshot(ctx, snap96)
 	var gotW, gotC bool
 	for _, h := range hits {
 		if h.RuleID == RuleDiskPressure {
@@ -98,7 +98,7 @@ func TestEvaluateDiskDualSeverityEscalation(t *testing.T) {
 func TestEvaluateSkipIfMissingDisablesEachRule(t *testing.T) {
 	ctx := CallCtx{Now: time.Now()}
 	// Empty snapshot: zero firing events (skip-if-missing).
-	hits := Evaluate(ctx, &WorkerSnapshot{WorkerID: "w1"})
+	hits := evaluateSnapshot(ctx, &WorkerSnapshot{WorkerID: "w1"})
 	if len(hits) != 0 {
 		t.Fatalf("empty snapshot should produce 0 hits (skip-if-missing), got %d: %+v", len(hits), hits)
 	}
@@ -108,7 +108,7 @@ func TestEvaluateSmokeFailedFiresFromStatus(t *testing.T) {
 	ctx := CallCtx{Now: time.Now()}
 	status := "FAILED"
 	snap := &WorkerSnapshot{WorkerID: "w1", LatestSmokeStatus: &status}
-	hits := Evaluate(ctx, snap)
+	hits := evaluateSnapshot(ctx, snap)
 	var found bool
 	for _, h := range hits {
 		if h.RuleID == RuleSmokeFailed && h.Severity == Critical {
@@ -124,7 +124,7 @@ func TestEvaluateSmokeSucceededDoesNotFire(t *testing.T) {
 	ctx := CallCtx{Now: time.Now()}
 	status := "SUCCEEDED"
 	snap := &WorkerSnapshot{WorkerID: "w1", LatestSmokeStatus: &status}
-	hits := Evaluate(ctx, snap)
+	hits := evaluateSnapshot(ctx, snap)
 	for _, h := range hits {
 		if h.RuleID == RuleSmokeFailed {
 			t.Fatalf("smoke=SUCCEEDED should NOT fire smoke_failed, got hit: %+v", h)
@@ -140,7 +140,7 @@ func TestEvaluateDriveDeliveryFailedFromArtifactID(t *testing.T) {
 		LatestSmokeStatus:          &status,
 		LatestSmokeArtifactDriveID: nil, // missing → drive_delivery triggers
 	}
-	hits := Evaluate(ctx, snap)
+	hits := evaluateSnapshot(ctx, snap)
 	var foundSmoke, foundDrive bool
 	for _, h := range hits {
 		if h.RuleID == RuleSmokeFailed && h.Severity == Critical {
@@ -162,7 +162,7 @@ func TestEvaluateDeploymentRolledBackFires(t *testing.T) {
 	ctx := CallCtx{Now: time.Now()}
 	st := "ROLLED_BACK"
 	snap := &WorkerSnapshot{WorkerID: "w1", LatestDeploymentStatus: &st}
-	hits := Evaluate(ctx, snap)
+	hits := evaluateSnapshot(ctx, snap)
 	var found bool
 	for _, h := range hits {
 		if h.RuleID == RuleDeploymentRollback && h.Severity == Critical {
@@ -179,7 +179,7 @@ func TestEvaluateVersionDriftFromDigestMismatch(t *testing.T) {
 	img := "sha256:abc"
 	desired := "sha256:def"
 	snap := &WorkerSnapshot{WorkerID: "w1", ImageDigest: &img, DesiredVersion: &desired}
-	hits := Evaluate(ctx, snap)
+	hits := evaluateSnapshot(ctx, snap)
 	var found bool
 	for _, h := range hits {
 		if h.RuleID == RuleVersionDrift && h.Severity == Warning {
@@ -196,7 +196,7 @@ func TestEvaluateVersionMatchDoesNotFire(t *testing.T) {
 	img := "sha256:abc"
 	desired := "sha256:abc"
 	snap := &WorkerSnapshot{WorkerID: "w1", ImageDigest: &img, DesiredVersion: &desired}
-	hits := Evaluate(ctx, snap)
+	hits := evaluateSnapshot(ctx, snap)
 	for _, h := range hits {
 		if h.RuleID == RuleVersionDrift {
 			t.Fatalf("image==desired should NOT fire version_drift, got hit: %+v", h)
@@ -209,7 +209,7 @@ func TestEvaluateCertDualSeverityEscalation(t *testing.T) {
 	// Cert expires in 7 days: between 5d and 15d → only WARNING.
 	expAt := ctx.Now.Add(7 * 24 * time.Hour)
 	snap := &WorkerSnapshot{WorkerID: "w1", CertExpiresAt: &expAt}
-	hits := Evaluate(ctx, snap)
+	hits := evaluateSnapshot(ctx, snap)
 	var gotW, gotC bool
 	for _, h := range hits {
 		if h.RuleID == RuleCertExpiring {
@@ -227,7 +227,7 @@ func TestEvaluateCertDualSeverityEscalation(t *testing.T) {
 	// Cert expires in 3 days: <5d → CRITICAL (15d WARNING also).
 	expAt = ctx.Now.Add(3 * 24 * time.Hour)
 	snap = &WorkerSnapshot{WorkerID: "w1", CertExpiresAt: &expAt}
-	hits = Evaluate(ctx, snap)
+	hits = evaluateSnapshot(ctx, snap)
 	gotW, gotC = false, false
 	for _, h := range hits {
 		if h.RuleID == RuleCertExpiring {

@@ -156,6 +156,17 @@ func (c *Collector) IncCommitDeadlineExceeded() {
 // errorCode must be a CanonicalErrorCode; component must be from
 // CanonicalErrorComponents; phase must be from CanonicalErrorPhases.
 // Empty strings default to "unknown".
+// RecordWorkerEvaluationErrors records aggregated isolated opsalerts failures.
+// category is a closed low-cardinality classification such as snapshot or
+// store_insert; worker IDs and raw errors must never become labels.
+func (c *Collector) RecordWorkerEvaluationErrors(category string, count uint64) {
+	if category == "" || count == 0 {
+		return
+	}
+	c.opsalertsWorkerEvalErrors.Inc([]string{category}, count)
+}
+
+// RecordErrorClassification increments velox_error_classification_total
 func (c *Collector) RecordErrorClassification(errorCode, component, phase string) {
 	if errorCode == "" {
 		errorCode = "UNKNOWN"
@@ -221,6 +232,11 @@ func (c *Collector) initSinkFamilies() {
 		"Error count classified by canonical error_code, component, and phase",
 		[]string{"error_code", "component", "phase"},
 	)
+	c.opsalertsWorkerEvalErrors = NewCounterFamily(
+		"velox_opsalerts_worker_evaluation_errors_total",
+		"Aggregated isolated opsalerts worker evaluation errors by category",
+		[]string{"category"},
+	)
 
 	c.conflictStreakLength = NewHistogramFamily(
 		"velox_conflict_streak_length",
@@ -240,6 +256,7 @@ func (c *Collector) sinkFamilies() []*Family {
 		c.compatibilityAliasReads,
 		c.compatibilityAliasRejections,
 		c.errorClassification,
+		c.opsalertsWorkerEvalErrors,
 		c.conflictStreakReset,
 		c.conflictEscalations,
 		c.conflictStayedUnder,
