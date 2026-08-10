@@ -241,6 +241,9 @@ func NewJobPayloadV2Checked(raw map[string]any) (*JobPayloadV2, error) {
 			if !ok {
 				return nil, fmt.Errorf("contract: payload status must be an input assembly status")
 			}
+			if strings.TrimSpace(rawStatus) == "COMPLETED" {
+				return nil, fmt.Errorf("contract: payload status %q is ambiguous; use lowercase input-assembly value %q", rawStatus, InputAssemblyCompleted)
+			}
 			status, ok := ParseInputAssemblyStatus(rawStatus)
 			if !ok {
 				return nil, fmt.Errorf("contract: payload status %q is not an input assembly status", rawStatus)
@@ -451,6 +454,22 @@ func normalizeObjectList(value any) []map[string]any {
 	default:
 		return nil
 	}
+}
+
+// UnmarshalJSON keeps direct encoding/json readers compatible with legacy
+// rows whose overloaded status contains a lifecycle value. Canonical writes
+// still go through NewJobPayloadV2Checked and ToMap.
+func (p *JobPayloadV2) UnmarshalJSON(data []byte) error {
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if raw == nil {
+		*p = JobPayloadV2{}
+		return nil
+	}
+	*p = *NewJobPayloadV2(raw)
+	return nil
 }
 
 // JobPayloadV2FromJSON parses a JSON byte slice back into a typed struct.
