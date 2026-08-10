@@ -162,7 +162,7 @@ re-applies cleanly).
   four publish-readiness conditions breaks that pinning test first.
 * Social-client boundary: `VeloxEditiingg/DataServer/internal/socialclient/config.go`
   honors only `SOCIAL_API_URL / SOCIAL_API_TOKEN / SOCIAL_API_TIMEOUT_MS
-  / SOCIAL_API_RETRIES / SOCIAL_CALLBACK_BASE_URL`. The canonical env
+  / SOCIAL_CALLBACK_BASE_URL`. The canonical env
   validator on the *Velox* master side is `deploy/validate-master-env.sh`
   — `bash -n` confirmed, parse-int positive-int helper, regex-tightened
   legacy `SOCIAL_GATEWAY_*` alias detection.

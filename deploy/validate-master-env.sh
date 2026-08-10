@@ -92,10 +92,8 @@ is_pinned_image_ref() {
 }
 
 # is_non_negative_integer — returns 0 iff $1 parses as a non-negative
-# integer (0, 1, 2, …). Used by the SOCIAL_API_TIMEOUT_MS /
-# SOCIAL_API_RETRIES validators below to reject non-numeric / negative
-# operator typos so they cannot silently override the socialclient
-# defaults (30000ms / 3 retries when the env var is empty / unparseable).
+# integer (0, 1, 2, …). Used by the SOCIAL_API_TIMEOUT_MS validator below
+# to reject non-numeric / negative operator typos.
 is_non_negative_integer() {
     local v="${1:-}"
     [[ "$v" =~ ^[0-9]+$ ]]
@@ -318,21 +316,14 @@ else
     esac
 fi
 
-# ─── SOCIAL_API_TIMEOUT_MS / SOCIAL_API_RETRIES parseable integer ──────────
-# Both fields have canonical defaults (TIMEOUT_MS=30000, RETRIES=3) declared
-# in deploy/velox-server.env.example. Empty values are accepted at
-# pre-flight (the canonical defaults still apply); a non-empty value MUST
-# parse as a non-negative integer so socialclient.parseDurationMillis /
-# parseInt cannot silently fall back to defaults on operator typos.
+# ─── SOCIAL_API_TIMEOUT_MS parseable integer ───────────────────────────────
+# The field has a canonical default (TIMEOUT_MS=30000) declared in
+# deploy/velox-server.env.example. Empty values are accepted at pre-flight
+# (the canonical default still applies); a non-empty value MUST parse as a
+# non-negative integer so the client cannot silently accept operator typos.
 SOCIAL_API_TIMEOUT_MS_VAL="$(get_env_value "$ENV_FILE" SOCIAL_API_TIMEOUT_MS)"
 if [[ -n "$SOCIAL_API_TIMEOUT_MS_VAL" ]] && ! is_non_negative_integer "$SOCIAL_API_TIMEOUT_MS_VAL"; then
     err "SOCIAL_API_TIMEOUT_MS='$SOCIAL_API_TIMEOUT_MS_VAL' is not a non-negative integer (single-attempt HTTP timeout in milliseconds; default 30000)"
-    ERR_COUNT=$((ERR_COUNT + 1))
-fi
-
-SOCIAL_API_RETRIES_VAL="$(get_env_value "$ENV_FILE" SOCIAL_API_RETRIES)"
-if [[ -n "$SOCIAL_API_RETRIES_VAL" ]] && ! is_non_negative_integer "$SOCIAL_API_RETRIES_VAL"; then
-    err "SOCIAL_API_RETRIES='$SOCIAL_API_RETRIES_VAL' is not a non-negative integer (default 3; Velox-runnner-driven retry is canonical, see socialclient.ConfigFromEnv)"
     ERR_COUNT=$((ERR_COUNT + 1))
 fi
 

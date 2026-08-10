@@ -85,7 +85,6 @@ the following variables:
 | `SOCIAL_API_URL` | (none — required) | Base URL of the external Social API (e.g. `https://instaedit.example.com`). Read at `config.go:104`. |
 | `SOCIAL_API_TOKEN` | (none — required) | Bearer sent as `Authorization: Bearer <token>` on every Velox→Social call. Read at `config.go:105`. |
 | `SOCIAL_API_TIMEOUT_MS` | `30000` | Per-request timeout (ms) for Velox→Social HTTP calls. Default 30s. |
-| `SOCIAL_API_RETRIES` | `3` | Retries on transient failures (network errors, 5xx). Default 3. |
 | `SOCIAL_CALLBACK_BASE_URL` | (none — required) | Public base URL the Social API calls back to (e.g. `https://velox.example.com`). Used for webhook delivery. |
 
 **No other `SOCIAL_*` variable is honored.** In particular, the
@@ -103,10 +102,9 @@ at every master boot.
 Step 1 — SOCIAL_API_URL
 Step 2 — SOCIAL_API_TOKEN
 Step 3 — SOCIAL_API_TIMEOUT_MS
-Step 4 — SOCIAL_API_RETRIES
-Step 5 — SOCIAL_CALLBACK_BASE_URL
-Step 6 — verify (see §0.1.3)
-Step 7 — restart the master
+Step 4 — SOCIAL_CALLBACK_BASE_URL
+Step 5 — verify (see §0.1.3)
+Step 6 — restart the master
 ```
 
 1. **`SOCIAL_API_URL`** first. Without it, the `socialclient`
@@ -128,12 +126,6 @@ Step 7 — restart the master
    who lower this must verify the downstream timeout on the Social
    API side is strictly greater to avoid spurious `504` from
    intermediate proxies.
-
-4. **`SOCIAL_API_RETRIES`** fourth. Default 3 retries covers
-   transient network failures (network errors, HTTP 5xx). Operators
-   who raise this should monitor the
-   `velox_socialclient_retries_total` metric for exponential retry
-   amplification.
 
 5. **`SOCIAL_CALLBACK_BASE_URL`** fifth. This is the public base URL
    the Social API calls back to. It MUST match the URL the Social
@@ -1049,8 +1041,8 @@ rebase assigns a PR-N.NN anchor):
 * **Residuo 5 (alias removal `SOCIAL_GATEWAY_*`):** DONE — closed in PR-15.10 retirement
   chain on `main` (commits `ca000bf` / `bb407b8` / `6aadcd9`). Canonical-only env contract
   is in force: `socialclient.ConfigFromEnv()` honors ONLY `SOCIAL_API_URL`,
-  `SOCIAL_API_TOKEN`, `SOCIAL_API_TIMEOUT_MS`, `SOCIAL_API_RETRIES`,
-  `SOCIAL_CALLBACK_BASE_URL`. The deprecation-cycle aliases
+  `SOCIAL_API_TOKEN`, `SOCIAL_API_TIMEOUT_MS`, `SOCIAL_CALLBACK_BASE_URL`.
+  The deprecation-cycle aliases
   `SOCIAL_GATEWAY_URL` / `SOCIAL_GATEWAY_API_KEY` /
   `SOCIAL_GATEWAY_CALLBACK_BASE_URL` are NOT honored — operators still carrying
   these in `/etc/velox-server.env` (or the retired
