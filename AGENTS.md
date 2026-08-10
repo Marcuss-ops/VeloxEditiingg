@@ -164,6 +164,22 @@ followups.
   was rejected because 126 is already applied in production and rewriting
   it would break checksum validation.
 
+- `TestSucceededWriterIsFinalizationOnly` in
+  `DataServer/internal/artifacts/scan_test.go` — deterministic failure
+  surfaced on the 2026-08-10 gate run: the audited allowlist pin
+  (`SET status = 'SUCCEEDED'` SQL fragments must be allowlisted with a
+  documenting comment or routed through the verified `FinalizeVerified`)
+  flags `DataServer/internal/store/store_publication_state.go`, which
+  performs a direct `SET status='SUCCEEDED'` UPDATE introduced by commit
+  `3b6dcdd9 fix(deliveries): require reconciled publication evidence`.
+  The offending file is NOT in the scan allowlist. Attribution verified:
+  the fragment is on `HEAD` (not working-tree WIP), the introducing commit
+  is `3b6dcdd9`, and the failure is unrelated to the alert-contract work
+  verified in the same run (vet 0 / build 0). Tracked as a followup for
+  the deliverables/publication owner: either allowlist the direct write
+  with a documenting comment or route it through `FinalizeVerified` so the
+  single-writer invariant holds.
+
 ## 5. Worker identity model: `worker_id` is immutable, `worker_name` is mutable
 
 Codified after the 2026-08-08 rename attempt. Changing a worker's

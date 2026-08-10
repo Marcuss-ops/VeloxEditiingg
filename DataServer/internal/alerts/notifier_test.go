@@ -131,3 +131,99 @@ func TestDefault_IsNopNotifier(t *testing.T) {
 		t.Errorf("alerts.Default should be NopNotifier before override; got %T", alerts.Default)
 	}
 }
+
+// ── NotifySink ──────────────────────────────────────────────────────────
+
+func TestNotifySink_AdaptsEventToCanonicalAlert(t *testing.T) {
+	t.Parallel()
+	rec := &recordingNotifier{}
+	sink := &alerts.NotifySink{Notifier: rec}
+
+	event := alerts.AlertEvent{
+		EventID:     "evt-1",
+		Group:       alerts.GroupFleet,
+		RuleID:      "disk_pressure",
+		Severity:    "CRITICAL",
+		Subject:     "worker-1",
+		Summary:     "disk at 5%",
+		Description: "worker disk below threshold",
+		Labels:      map[string]string{"current_value": "5"},
+		FiredAt:     time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+	}
+	if err := sink.Process(context.Background(), event); err != nil {
+		t.Fatalf("NotifySink.Process returned error: %v", err)
+	}
+
+	if len(rec.calls) != 1 {
+		t.Fatalf("expected 1 notification, got %d", len(rec.calls))
+	}
+	alert := rec.calls[0]
+	if alert.Source != "fleet.disk_pressure" {
+		t.Errorf("Source = %q, want fleet.disk_pressure", alert.Source)
+	}
+	if alert.Severity != alerts.SeverityError {
+		t.Errorf("Severity = %q, want error (normalized from CRITICAL)", alert.Severity)
+	}
+	if alert.Subject != "worker-1" || alert.Body != "worker disk below threshold" {
+		t.Errorf("Subject/Body mismatch: %q / %q", alert.Subject, alert.Body)
+	}
+	if alert.Tags["current_value"] != "5" {
+		t.Errorf("Labels not forwarded: %v", alert.Tags)
+	}
+	if !alert.Timestamp.Equal(event.FiredAt) {
+		t.Errorf("Timestamp = %v, want %v", alert.Timestamp, event.FiredAt)
+	}
+}
+
+func TestNotifySink_ForwardsNotifierError(t *testing.T) {
+	t.Parallel()
+	sinkErr := errors.New("webhook down")
+	rec := &recordingNotifier{err: sinkErr}
+	sink := &alerts.NotifySink{Notifier: rec}
+
+	err := sink.Process(context.Background(), alerts.AlertEvent{Group: alerts.GroupCompute, RuleID: "error_rate", Subject: "x"})
+	if !errors.Is(err, sinkErr) {
+		t.Errorf("NotifySink should forward notifier errors; got %v", err)
+	}
+}
+
+func TestNotifySink_NilNotifierIsNoop(t *testing.T) {
+	t.Parallel()
+	sink := &alerts.NotifySink{} // nil Notifier ⇒ no-op, never fails
+	if err := sink.Process(context.Background(), alerts.AlertEvent{Group: alerts.GroupFleet, RuleID: "r"}); err != nil {
+		t.Errorf("NotifySink with nil Notifier must be a no-op; got %v", err)
+	}
+}
+
+// ── SeverityFromString ───────────────────────────────────────────────────
+
+func TestSeverityFromString_NormalizesVocabularies(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   string
+		want alerts.Severity
+	}{
+		{"info", alerts.SeverityInfo},
+		{"INFO", alerts.SeverityInfo},
+		{"warn", alerts.SeverityWarn},
+		{"warning", alerts.SeverityWarn},
+		{"WARNING", alerts.SeverityWarn},
+		{"error", alerts.SeverityError},
+		{"critical", alerts.SeverityError},
+		{"CRITICAL", alerts.SeverityError},
+		{"fatal", alerts.SeverityFatal},
+		{"  warning  ", alerts.SeverityWarn},
+	}
+	for _, c := range cases {
+		if got := alerts.SeverityFromString(c.in); got != c.want {
+			t.Errorf("SeverityFromString(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestSeverityFromString_UnknownPassesThroughLowercased(t *testing.T) {
+	t.Parallel()
+	if got := alerts.SeverityFromString("PAGE"); got != alerts.Severity("page") {
+		t.Errorf("unknown severity should pass through lowercased; got %q", got)
+	}
+}

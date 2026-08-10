@@ -173,3 +173,50 @@ func (m *MultiNotifier) Notify(ctx context.Context, alert Alert) error {
 // Default is the safe-zero no-op notifier. Used as the package-level
 // default before SetDefault is called.
 var Default Notifier = NopNotifier{}
+
+// ── NotifySink: the single notification sink of the alert runtime ─────────
+
+// NotifySink adapts every AlertEvent of the runtime pipeline into the
+// canonical notification envelope (Alert) and forwards it to the wired
+// Notifier. It is the ONE notification sink: compute, fleet and any
+// future group all land here — the same log/webhook chain the outbox
+// JOB_FAILED handler uses.
+type NotifySink struct {
+	Notifier Notifier
+}
+
+// Process implements Sink.
+func (s *NotifySink) Process(ctx context.Context, event AlertEvent) error {
+	if s == nil || s.Notifier == nil {
+		return nil
+	}
+	return s.Notifier.Notify(ctx, Alert{
+		Source:    string(event.Group) + "." + event.RuleID,
+		Severity:  SeverityFromString(event.Severity),
+		Subject:   event.Subject,
+		Body:      event.Description,
+		Tags:      event.Labels,
+		Timestamp: event.FiredAt,
+	})
+}
+
+// SeverityFromString normalizes a rule severity into the canonical
+// Severity vocabulary. Compute rules emit lowercase
+// ("warning"/"critical"), fleet rules uppercase ("WARNING"/"CRITICAL");
+// both converge here. Unknown values pass through lowercased so an
+// operator-visible line is never dropped.
+func SeverityFromString(s string) Severity {
+	normalized := strings.ToLower(strings.TrimSpace(s))
+	switch normalized {
+	case "info":
+		return SeverityInfo
+	case "warn", "warning":
+		return SeverityWarn
+	case "error", "critical":
+		return SeverityError
+	case "fatal":
+		return SeverityFatal
+	default:
+		return Severity(normalized)
+	}
+}
