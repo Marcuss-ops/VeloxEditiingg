@@ -2,6 +2,7 @@ package app
 
 import (
 	"log"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -32,6 +33,7 @@ import (
 // boilerplate.
 type WorkersModule struct {
 	reg                                  *workersreg.Registry
+	tokenMgr                             *workersreg.TokenManager
 	adminAuth                            gin.HandlerFunc
 	workerLifecycle                      *lifecycle.Handler
 	workerUpdateHandler                  *workersapi.WorkerUpdateHandler
@@ -64,6 +66,7 @@ func NewWorkersModule(cfg *config.Config, reg *workersreg.Registry, lifecycle *l
 	}
 	return &WorkersModule{
 		reg:                 reg,
+		tokenMgr:            tokenMgr,
 		workerLifecycle:     lifecycle,
 		workerUpdateHandler: updateHandler,
 		adminAuth:           adminAuth,
@@ -72,6 +75,17 @@ func NewWorkersModule(cfg *config.Config, reg *workersreg.Registry, lifecycle *l
 		adminWorkersHandler: api.NewAdminWorkersHandler(reg),
 		protectedAssetsAuth: api.WorkerOrAdminAuthMiddleware(cfg, tokenMgr),
 	}
+}
+
+// IssueAssetPickupToken issues a worker-session token for the canonical
+// /api/v1/agent/assets/:asset_id endpoint. The composition root uses this
+// only to build the production Level-D smoke pickup URL; asset bytes still
+// come from AssetService + BlobStore and the endpoint remains authenticated.
+func (m *WorkersModule) IssueAssetPickupToken(principal string) string {
+	if m == nil || m.tokenMgr == nil || strings.TrimSpace(principal) == "" {
+		return ""
+	}
+	return m.tokenMgr.GenerateToken(strings.TrimSpace(principal))
 }
 
 // SetProtectedAssetsHandler wires the master lookahead snapshot consumed by

@@ -13,17 +13,73 @@ package main
 // bootstrap_composition.go.
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"strings"
 
 	"time"
+	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
 
 	"velox-server/internal/fleet"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/ingest"
 )
+
+// productionAssetResolver adapts the canonical AssetService read model to
+// the Level-D smoke resolver contract. Workers fetch the bytes through the
+// existing authenticated /api/v1/agent/assets/:asset_id route; no second
+// asset store or synthetic production asset is introduced.
+type productionAssetResolver struct {
+	service *voiceoverassets.AssetService
+	baseURL string
+	token   string
+}
+
+func newProductionAssetResolver(service *voiceoverassets.AssetService, baseURL, token string) (*productionAssetResolver, error) {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if service == nil {
+		return nil, fmt.Errorf("asset service is unavailable")
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return nil, fmt.Errorf("invalid asset pickup base URL %q", baseURL)
+	}
+	if strings.TrimSpace(token) == "" {
+		return nil, fmt.Errorf("asset pickup token is unavailable")
+	}
+	return &productionAssetResolver{service: service, baseURL: baseURL, token: token}, nil
+}
+
+func (r *productionAssetResolver) ResolveAsset(ctx context.Context, assetID string) (string, int64, error) {
+	if r == nil || r.service == nil {
+		return "", 0, fmt.Errorf("asset resolver is unavailable")
+	}
+	assetID = strings.TrimSpace(assetID)
+	if assetID == "" || strings.ContainsAny(assetID, `/\\`) {
+		return "", 0, fmt.Errorf("invalid asset id")
+	}
+	asset, err := r.service.Get(ctx, assetID)
+	if err != nil {
+		return "", 0, fmt.Errorf("lookup asset %s: %w", assetID, err)
+	}
+	if asset == nil {
+		return "", 0, fmt.Errorf("asset %s not found", assetID)
+	}
+	if asset.Status != voiceoverassets.AssetStatusReady {
+		return "", 0, fmt.Errorf("asset %s is %s, want READY", assetID, asset.Status)
+	}
+	pickup, err := url.Parse(r.baseURL + "/api/v1/agent/assets/" + url.PathEscape(assetID))
+	if err != nil {
+		return "", 0, fmt.Errorf("build asset pickup URL: %w", err)
+	}
+	query := pickup.Query()
+	query.Set("token", r.token)
+	pickup.RawQuery = query.Encode()
+	return pickup.String(), asset.SizeBytes, nil
+}
 
 // wirePostBuild connects dependencies that cross build-layer
 // boundaries (jobs↔tasks). Called by both buildTestDeps (tests)
@@ -225,11 +281,27 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 			} else {
 				log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: Drive module unavailable — smoke remains not wired")
 			}
-			// Production deliberately leaves Asset nil. The canonical asset
-			// resolver is not wired yet; registration below fails closed and
-			// no smoke or resume capability is exposed. Never substitute a
-			// canned asset in production.
-			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: production asset resolver unavailable — capability registration will fail closed")
+			// Resolve smoke assets through the existing worker-authenticated
+			// asset route. Use a real registered worker as the session
+			// principal; the route validates the session token and the
+			// resolver reads the canonical AssetService projection.
+			entries := workerNodeRegistry.ListWorkers()
+			if m.AssetService != nil && len(entries) > 0 && m.Workers != nil {
+				token := m.Workers.IssueAssetPickupToken(entries[0].WorkerID.String())
+				resolver, resolverErr := newProductionAssetResolver(
+					m.AssetService,
+					string(cfg.ControlPlane.RESTPublic),
+					token,
+				)
+				if resolverErr != nil {
+					log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: production asset resolver unavailable: %v", resolverErr)
+				} else {
+					smokeBackend.Asset = resolver
+					log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: canonical AssetService resolver wired through /api/v1/agent/assets")
+				}
+			} else {
+				log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: canonical asset resolver dependencies unavailable (asset service, worker registry, or token manager)")
+			}
 		}
 
 		levelDSmokeExecutor := fleet.NewLevelDSmokeExecutor(smokeBackend)
