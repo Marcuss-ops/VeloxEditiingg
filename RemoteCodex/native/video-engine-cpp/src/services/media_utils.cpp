@@ -281,8 +281,13 @@ FinalAudioMetadata probeFinalAudioMetadata(const fs::path& audioPath) {
             else if (key == "sample_rate") metadata.sample_rate = std::stoi(value);
             else if (key == "channels") metadata.channels = std::stoi(value);
             else if (key == "channel_layout") metadata.channel_layout = value;
-            else if (key == "duration" && value != "N/A") metadata.duration_seconds = std::stod(value);
-            else if (key == "start_time" && value != "N/A") metadata.start_time_seconds = std::stod(value);
+            else if (key == "duration" && value != "N/A") {
+                metadata.duration_seconds = std::stod(value);
+                metadata.duration_verified = true;
+            } else if (key == "start_time" && value != "N/A") {
+                metadata.start_time_seconds = std::stod(value);
+                metadata.start_time_verified = true;
+            }
         } catch (...) {
             return FinalAudioMetadata{};
         }
@@ -293,8 +298,8 @@ FinalAudioMetadata probeFinalAudioMetadata(const fs::path& audioPath) {
         metadata.sample_rate > 0 &&
         metadata.channels > 0 &&
         !metadata.channel_layout.empty() &&
-        std::isfinite(metadata.duration_seconds) && metadata.duration_seconds > 0.0 &&
-        std::isfinite(metadata.start_time_seconds);
+        metadata.duration_verified && std::isfinite(metadata.duration_seconds) && metadata.duration_seconds > 0.0 &&
+        metadata.start_time_verified && std::isfinite(metadata.start_time_seconds);
     return metadata;
 }
 
@@ -315,7 +320,7 @@ FinalAudioDecision resolveFinalAudioMode(
         decision.reason = "final_audio_filter_required";
         return decision;
     }
-    if (!metadata.metadata_verified) {
+    if (!metadata.metadata_verified || !metadata.duration_verified || !metadata.start_time_verified) {
         decision.reason = "audio_metadata_unverified";
         return decision;
     }

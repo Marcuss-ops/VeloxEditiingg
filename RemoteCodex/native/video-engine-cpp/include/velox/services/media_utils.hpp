@@ -20,6 +20,8 @@ struct FinalAudioMetadata {
     std::string channel_layout;
     double duration_seconds{0.0};
     double start_time_seconds{0.0};
+    bool duration_verified{false};
+    bool start_time_verified{false};
 };
 
 struct FinalAudioDecision {

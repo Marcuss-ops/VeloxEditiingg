@@ -173,7 +173,7 @@ void testScopedPhaseMove() {
 void testFinalAudioModeResolver() {
     SUBCASE("final audio COPY requires a verified AAC final mix");
     velox::media::FinalAudioMetadata verified{
-        true, "aac", 24000, 1, "mono", 698.923, 0.0};
+        true, "aac", 24000, 1, "mono", 698.923, 0.0, true, true};
     auto copy = velox::media::resolveFinalAudioMode(verified, true, 698.92, 1.0, 0.0);
     EXPECT_EQ_STR(velox::media::finalAudioModeName(copy.mode), "COPY");
     EXPECT_EQ_STR(copy.reason, "verified_final_mix");
@@ -187,6 +187,12 @@ void testFinalAudioModeResolver() {
     EXPECT_EQ_STR(velox::media::finalAudioModeName(unverified.mode), "ENCODE");
     EXPECT_EQ_STR(unverified.reason, "audio_metadata_unverified");
 
+    verified.duration_verified = false;
+    auto missingDuration = velox::media::resolveFinalAudioMode(verified, true, 698.92, 1.0, 0.0);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(missingDuration.mode), "ENCODE");
+    EXPECT_EQ_STR(missingDuration.reason, "audio_metadata_unverified");
+
+    verified.duration_verified = true;
     verified.codec = "mp3";
     auto wrongCodec = velox::media::resolveFinalAudioMode(verified, true, 698.92, 1.0, 0.0);
     EXPECT_EQ_STR(velox::media::finalAudioModeName(wrongCodec.mode), "ENCODE");
