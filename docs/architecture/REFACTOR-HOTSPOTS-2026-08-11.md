@@ -171,8 +171,10 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - [x] Portare `jobs/enqueue/drive_resolution.go` verso un repository di
   lookup read-only; gli errori DB non degradano più silenziosamente a
   “reference originale”.
-- [ ] Portare `creatorflow/resolver.go` verso repository tipizzati senza
-  duplicare la transazione atomica esistente.
+- [x] Portare `creatorflow/resolver.go` verso repository tipizzati senza
+  duplicare la transazione atomica esistente: i constructor SQLite restano
+  adapter di composizione, mentre il Resolver riceve `JobLookup`,
+  `ForwardingRepository` e `DriveFolderResolver` tramite porte esplicite.
 - [ ] Verificare i resolver delivery e gli adapter metrici contro
   `check-db-access.sh`; ogni eccezione deve avere motivazione e owner.
 - [x] Misurare `sql.DB.Stats()` del Master: `WaitCount` e `WaitDuration`, oltre

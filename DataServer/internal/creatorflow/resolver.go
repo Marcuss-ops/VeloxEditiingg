@@ -97,15 +97,15 @@ func NewResolver(cfg *config.Config, enqueuer *enqueue.Enqueuer, dbStore *store.
 	if cfg == nil || enqueuer == nil || dbStore == nil {
 		return nil
 	}
-	return &Resolver{
-		enqueuer:      enqueuer,
-		jobLookup:     enqueuer.Jobs,
-		forwardRepo:   dbStore,
-		dataDir:       strings.TrimSpace(cfg.Runtime.DataDir),
-		videosDir:     strings.TrimSpace(cfg.Runtime.VideosDir),
-		masterURL:     string(cfg.ControlPlane.RESTPublic),
-		driveResolver: dbStore,
-	}
+	return NewResolverWithRepositories(
+		enqueuer,
+		enqueuer.Jobs,
+		dbStore,
+		dbStore,
+		strings.TrimSpace(cfg.Runtime.DataDir),
+		strings.TrimSpace(cfg.Runtime.VideosDir),
+		string(cfg.ControlPlane.RESTPublic),
+	)
 }
 
 // NewResolverMinimal constructs a Resolver without a *config.Config. It
@@ -119,12 +119,7 @@ func NewResolverMinimal(enqueuer *enqueue.Enqueuer, dbStore *store.SQLiteStore) 
 	if enqueuer == nil || dbStore == nil {
 		return nil
 	}
-	return &Resolver{
-		enqueuer:      enqueuer,
-		jobLookup:     enqueuer.Jobs,
-		forwardRepo:   dbStore,
-		driveResolver: dbStore,
-	}
+	return NewResolverWithRepositories(enqueuer, enqueuer.Jobs, dbStore, dbStore, "", "", "")
 }
 
 // NewResolverFromDeps is the explicit-fields constructor. Useful for
@@ -137,14 +132,41 @@ func NewResolverFromDeps(enqueuer *enqueue.Enqueuer, dbStore *store.SQLiteStore,
 	if enqueuer == nil || dbStore == nil {
 		return nil
 	}
+	return NewResolverWithRepositories(
+		enqueuer,
+		enqueuer.Jobs,
+		dbStore,
+		dbStore,
+		dataDir,
+		videosDir,
+		masterURL,
+	)
+}
+
+// NewResolverWithRepositories constructs a Resolver from its narrow ports.
+// The composition-root constructors above remain as compatibility adapters
+// for the production SQLite wiring, while tests and alternate persistence
+// adapters can inject the job/forwarding/Drive boundaries directly. The
+// Resolver still has exactly one AtomicForwardAndEnqueue writer; this
+// constructor only changes dependency ownership, not transaction ownership.
+func NewResolverWithRepositories(
+	enqueuer *enqueue.Enqueuer,
+	jobLookup JobLookup,
+	forwardRepo ForwardingRepository,
+	driveResolver enqueue.DriveFolderResolver,
+	dataDir, videosDir, masterURL string,
+) *Resolver {
+	if enqueuer == nil || forwardRepo == nil {
+		return nil
+	}
 	return &Resolver{
 		enqueuer:      enqueuer,
-		jobLookup:     enqueuer.Jobs,
-		forwardRepo:   dbStore,
+		jobLookup:     jobLookup,
+		forwardRepo:   forwardRepo,
 		dataDir:       strings.TrimSpace(dataDir),
 		videosDir:     strings.TrimSpace(videosDir),
 		masterURL:     strings.TrimSpace(masterURL),
-		driveResolver: dbStore,
+		driveResolver: driveResolver,
 	}
 }
 
@@ -201,7 +223,7 @@ func (r *Resolver) HasDBAccess() bool {
 // master-URL rewriting. The Resolver applies that step exactly once
 // for every caller.
 func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOutput, error) {
-	if r == nil || r.enqueuer == nil || r.forwardRepo == nil {
+	if r == nil || r.enqueuer == nil || r.jobLookup == nil || r.forwardRepo == nil {
 		return nil, domain.NewInvalidPayload("resolver", "unavailable", "resolver dependencies missing")
 	}
 	if req.Payload == nil {
