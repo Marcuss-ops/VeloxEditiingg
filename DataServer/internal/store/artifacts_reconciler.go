@@ -124,8 +124,11 @@ func (r *ArtifactReconcilerRepository) MarkStuckArtifactFailed(ctx context.Conte
 	if err != nil {
 		return false, fmt.Errorf("store: mark stuck artifact failed: %w", err)
 	}
-	n, err := res.RowsAffected()
-	return n == 1, err
+	n, err := readRowsAffected(res, "mark stuck artifact failed")
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
 }
 
 // QuarantineReadyArtifact atomically changes READY -> QUARANTINED and emits
@@ -145,7 +148,7 @@ func (r *ArtifactReconcilerRepository) QuarantineReadyArtifact(ctx context.Conte
 	if err != nil {
 		return fmt.Errorf("store: quarantine update: %w", err)
 	}
-	n, err := res.RowsAffected()
+	n, err := readRowsAffected(res, "quarantine ready artifact")
 	if err != nil {
 		return err
 	}
