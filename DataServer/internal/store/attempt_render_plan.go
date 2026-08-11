@@ -32,11 +32,19 @@ func (r *SQLiteTaskAttemptRepository) UpsertRenderPlan(ctx context.Context, atte
 		return fmt.Errorf("attempt repository: plan_sha256 is required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := r.store.db.ExecContext(ctx,
+	result, err := r.store.db.ExecContext(ctx,
 		`UPDATE task_attempts SET plan_version = ?, plan_sha256 = ?, render_plan_json = ?, updated_at = ? WHERE id = ?`,
 		planVersion, planSHA256, planJSON, now, attemptID,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("attempt render plan: persist: %w", err)
+	}
+	affected, err := readRowsAffected(result, "attempt render plan: persist")
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return fmt.Errorf("attempt render plan: persist attempt %q: %w", attemptID, ErrTransitionConflict)
 	}
 	return nil
 }

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -121,6 +122,14 @@ func TestGetRenderPlan_MissingAttemptReturnsZero(t *testing.T) {
 	}
 	if version != 0 || sha != "" || planJSON != "" {
 		t.Fatalf("missing attempt readback = %d/%q/%q, want zero", version, sha, planJSON)
+	}
+}
+
+func TestUpsertRenderPlan_MissingAttemptFailsClosed(t *testing.T) {
+	repo := openRenderPlanTestDB(t)
+	err := repo.UpsertRenderPlan(context.Background(), "no-such-attempt", 1, "sha", "json")
+	if !errors.Is(err, ErrTransitionConflict) {
+		t.Fatalf("UpsertRenderPlan missing attempt error = %v, want ErrTransitionConflict", err)
 	}
 }
 
