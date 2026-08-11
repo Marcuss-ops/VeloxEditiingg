@@ -114,7 +114,7 @@ func TestChunkedUpload_EmptyChunkRejected(t *testing.T) {
 
 	err := uploadChunk(t, chunked, uploadID, 0, nil)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "empty chunk")
+	require.True(t, errors.Is(err, ErrEmptyChunk), "got %v want ErrEmptyChunk", err)
 
 	chunks, listErr := e.repo.ListChunks(context.Background(), uploadID)
 	require.NoError(t, listErr)

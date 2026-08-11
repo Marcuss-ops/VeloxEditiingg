@@ -32,6 +32,9 @@ var (
 
 	// Fase 2 (Receive) gates.
 	ErrHashMismatch = errors.New("artifacts: sha256 mismatch (worker-declared != master-computed)")
+	// ErrEmptyChunk rejects a zero-byte chunk in the chunked upload path
+	// (ChunkedUploadService.UploadChunk).
+	ErrEmptyChunk = errors.New("artifacts: chunked upload: empty chunk")
 	// ErrArtifactTransferCorrupted is the canonical marker for a corrupt
 	// transfer: the worker-declared SHA-256 (ExpectedSHA256 supplied at
 	// BeginUpload) differs from the master-computed SHA-256 of the bytes

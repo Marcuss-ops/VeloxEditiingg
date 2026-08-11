@@ -134,6 +134,14 @@ func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploa
 	// pattern, same as the artifact Receive path): the hasher sees exactly
 	// the bytes written to dst, so chunk_sha256 is derived from the stream
 	// without reopening the chunk file afterwards.
+	//
+	// IMPORTANT invariant: the hasher is authoritative ONLY when the write
+	// fully succeeded. io.MultiWriter feeds [dst, hasher] in order, so a
+	// pathological short write from dst would skip the hasher for that
+	// buffer; every such failure path below (copy error, sync error, empty
+	// chunk) removes chunkKey and returns, discarding the hasher value — an
+	// incorrect hash is never persisted. Do not "optimize" those paths into
+	// continuing with a partial file.
 	hasher := sha256.New()
 	written, err := io.Copy(io.MultiWriter(dst, hasher), cmd.Reader)
 	if err != nil {
@@ -150,7 +158,7 @@ func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploa
 
 	if written <= 0 {
 		_ = os.Remove(chunkKey)
-		return fmt.Errorf("artifacts: ChunkedUpload: empty chunk %d", cmd.ChunkIndex)
+		return fmt.Errorf("%w: chunk %d", ErrEmptyChunk, cmd.ChunkIndex)
 	}
 
 	chunkSHA := hex.EncodeToString(hasher.Sum(nil))
