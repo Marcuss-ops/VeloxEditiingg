@@ -192,6 +192,14 @@ func registerReadinessChecks(c *appComponents, t *transportBundle) {
 	// / Image / Smoke / Drive) flips /ready red with a probe-named
 	// failure. Skip when fleet wiring is absent (test/partial boots).
 	if c.fleet != nil && c.fleet.Update != nil {
+		if c.fleet.SSHMaterialCheck != nil {
+			c.modules.Health.AddReadinessCheck("fleet-ssh-credentials", func() error {
+				if err := c.fleet.SSHMaterialCheck(); err != nil {
+					return fmt.Errorf("fleet SSH credentials NOT READY: %w", err)
+				}
+				return nil
+			})
+		}
 		c.modules.Health.AddReadinessCheck("update-capability", func() error {
 			capability := c.fleet.Update.Capability()
 			if !capability.Ready {

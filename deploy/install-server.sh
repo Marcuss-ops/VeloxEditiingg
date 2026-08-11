@@ -25,8 +25,20 @@ SERVICE_DST="/etc/systemd/system/$SERVICE_NAME.service"
 # suffix is required so it is never read as a real config.
 ENV_TEMPLATE="$DEPLOY_DIR/velox-server.env.example"
 ENV_DST="/etc/velox-server.env"
-IMAGE_UID="10001"
-IMAGE_GID="10001"
+
+# The Master container is intentionally unprivileged.  Keep the runtime
+# identity in the canonical env file so a future image can change it without
+# making the SSH credential policy drift back to root-owned 0640 files.
+read_runtime_identity() {
+    local key="$1" fallback="$2" value
+    value="$(awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$ENV_DST" 2>/dev/null || true)"
+    value="${value:-$fallback}"
+    [[ "$value" =~ ^[0-9]+$ ]] || fail "$key must be a numeric uid/gid (got: $value)"
+    printf '%s' "$value"
+}
+
+IMAGE_UID="$(read_runtime_identity VELOX_RUNTIME_UID 10001)"
+IMAGE_GID="$(read_runtime_identity VELOX_RUNTIME_GID 10001)"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 
@@ -173,13 +185,15 @@ if [[ -d /opt/velox/certs ]]; then
     find /opt/velox/certs -type f -name '*.crt' -exec chown root:"${IMAGE_GID}" {} + -exec chmod 640 {} +
 fi
 # The FleetController performs the canonical worker rollout from inside the
-# Master container. Its SSH adapter uses this mounted key and known_hosts;
-# keep the private key non-public while allowing only the image group to
-# traverse the directory and read the files.
+# Master container. Its SSH adapter uses this mounted key and known_hosts.
+# OpenSSH rejects a private key readable by a group, so the private key must be
+# owned by the exact runtime uid/gid and be mode 0600. known_hosts remains a
+# root-owned, runtime-group-readable data file.
 if [[ -d /etc/velox/ssh ]]; then
     find /etc/velox/ssh -type d -exec chown root:"${IMAGE_GID}" {} + -exec chmod g+rx {} +
-    find /etc/velox/ssh -type f -name '*.key' -exec chown root:"${IMAGE_GID}" {} + -exec chmod 640 {} +
-    find /etc/velox/ssh -type f -name 'id_*' -exec chown root:"${IMAGE_GID}" {} + -exec chmod 640 {} +
+    find /etc/velox/ssh -type f -name '*.key' -exec chown "${IMAGE_UID}:${IMAGE_GID}" {} + -exec chmod 600 {} +
+    find /etc/velox/ssh -type f -name 'id_*' ! -name '*.pub' -exec chown "${IMAGE_UID}:${IMAGE_GID}" {} + -exec chmod 600 {} +
+    find /etc/velox/ssh -type f -name '*.pub' -exec chown root:"${IMAGE_GID}" {} + -exec chmod 644 {} +
     find /etc/velox/ssh -type f -name 'known_hosts' -exec chown root:"${IMAGE_GID}" {} + -exec chmod 640 {} +
 fi
 ok "Directory tree ready: /opt/velox/current"
@@ -261,6 +275,27 @@ log "Pulling image $VELOX_SERVER_IMAGE"
 docker pull "$VELOX_SERVER_IMAGE" \
     || fail "docker pull failed. If GHCR is private, run 'docker login ghcr.io' as root on this host, then retry."
 ok "Image pulled"
+
+# Verify the exact private-key contract after the pinned image is available.
+# The mode/owner checks catch a broken host install; the container-side read
+# check catches a UID/GID mismatch that root itself would otherwise hide.
+MASTER_SSH_KEY="/etc/velox/ssh/id_ed25519_velox"
+MASTER_KNOWN_HOSTS="/etc/velox/ssh/known_hosts"
+[[ -r "$MASTER_SSH_KEY" ]] || fail "Master SSH private key missing or unreadable: $MASTER_SSH_KEY"
+[[ -r "$MASTER_KNOWN_HOSTS" ]] || fail "Master SSH known_hosts missing or unreadable: $MASTER_KNOWN_HOSTS"
+key_owner="$(stat -c '%u:%g' "$MASTER_SSH_KEY")"
+key_mode="$(stat -c '%a' "$MASTER_SSH_KEY")"
+[[ "$key_owner" == "$IMAGE_UID:$IMAGE_GID" ]] \
+    || fail "Master SSH private key owner is $key_owner; expected $IMAGE_UID:$IMAGE_GID"
+[[ "$key_mode" == "600" ]] \
+    || fail "Master SSH private key mode is $key_mode; expected 600"
+docker run --rm --user "${IMAGE_UID}:${IMAGE_GID}" \
+    --entrypoint /bin/sh \
+    --mount type=bind,src=/etc/velox/ssh,dst=/etc/velox/ssh,readonly \
+    "$VELOX_SERVER_IMAGE" \
+    -c 'test -r /etc/velox/ssh/id_ed25519_velox && test -r /etc/velox/ssh/known_hosts' \
+    || fail "Master runtime uid ${IMAGE_UID}:${IMAGE_GID} cannot read /etc/velox/ssh credentials"
+ok "Master SSH credentials aligned with runtime uid ${IMAGE_UID}:${IMAGE_GID} (private key mode 0600)"
 
 # ─── Step 6: Enable and start ───────────────────────────────────────────────
 

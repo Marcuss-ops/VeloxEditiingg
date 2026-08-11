@@ -121,10 +121,11 @@ func (a *driveUploaderAdapter) UploadArtifact(ctx context.Context, runID, srcPat
 // composition; production boot must set it to true so published
 // operations cannot remain QUEUED indefinitely.
 type FleetDep struct {
-	Controller      *fleet.FleetController
-	Registry        *fleet.ExecutorRegistry
-	Update          *fleet.UpdateExecutor
-	tickWiredAtBoot bool
+	Controller       *fleet.FleetController
+	Registry         *fleet.ExecutorRegistry
+	Update           *fleet.UpdateExecutor
+	SSHMaterialCheck func() error
+	tickWiredAtBoot  bool
 }
 
 // getHandler returns the api.AdminOperationsHandler wrapping
@@ -207,9 +208,12 @@ func buildFleet(p *persistenceDeps, workerRegistry *workersreg.Registry, sharedS
 	log.Printf("[BOOTSTRAP] UpdateExecutor registered for kind=%s (SSH/Docker activation wired; fresh Smoke/Drive attach pending)", fleet.OperationKindUpdate)
 
 	return &FleetDep{
-		Controller:      controller,
-		Registry:        registry,
-		Update:          updateExecutor,
+		Controller: controller,
+		Registry:   registry,
+		Update:     updateExecutor,
+		SSHMaterialCheck: func() error {
+			return fleet.ValidateSSHMaterial(fleet.DefaultSSHKeyPath, fleet.DefaultKnownHostsPath)
+		},
 		tickWiredAtBoot: false,
 	}, nil
 }
