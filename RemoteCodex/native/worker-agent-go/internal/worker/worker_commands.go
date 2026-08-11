@@ -151,9 +151,7 @@ func (w *Worker) stopAfterActiveTasks() {
 // is restartDrainTimeout (120s) — enough time for the process to gracefully
 // finish in-flight tasks and exit.
 func (w *Worker) autoUndrainAfter(after time.Duration) {
-	select {
-	case <-time.After(after):
-	case <-w.stopChan:
+	if !waitForWorkerBackoff(context.Background(), w.stopChan, after) {
 		return
 	}
 

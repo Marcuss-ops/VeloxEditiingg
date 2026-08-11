@@ -76,15 +76,14 @@ func (w *Worker) Start(ctx context.Context) error {
 			}
 			jitter := time.Duration(rand.Float64() * float64(connectionRetryBackoff) * 0.3)
 			sleepDuration := connectionRetryBackoff + jitter
-			select {
-			case <-time.After(sleepDuration):
-				continue
-			case <-w.stopChan:
+			if !waitForWorkerBackoff(ctx, w.stopChan, sleepDuration) {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				w.logger.Info("Worker stopping during transport-factory backoff")
 				return nil
-			case <-ctx.Done():
-				return ctx.Err()
 			}
+			continue
 		}
 
 		w.setConnState(ConnConnecting)
@@ -154,8 +153,7 @@ func (w *Worker) Start(ctx context.Context) error {
 				w.logger.Info("[CONNECT] Backing off for %v before retry", sleepDuration.Round(time.Millisecond))
 			}
 
-			select {
-			case <-time.After(sleepDuration):
+			if waitForWorkerBackoff(ctx, w.stopChan, sleepDuration) {
 				// Only grow backoff for non-connection errors
 				if !isConnectionLevelError(err) {
 					backoff = time.Duration(float64(backoff) * registrationBackoffMult)
@@ -164,12 +162,12 @@ func (w *Worker) Start(ctx context.Context) error {
 					}
 				}
 				continue
-			case <-w.stopChan:
-				w.logger.Info("Worker stopping during backoff")
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
 			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			w.logger.Info("Worker stopping during backoff")
+			return nil
 		}
 
 		// Registration succeeded — reset backoff
@@ -315,14 +313,29 @@ func (w *Worker) runSession(ctx context.Context) bool {
 		close(done)
 	}()
 
+	shutdownTimer := time.NewTimer(30 * time.Second)
 	select {
 	case <-done:
+		shutdownTimer.Stop()
 		w.logger.Info("All goroutines stopped cleanly")
-	case <-time.After(30 * time.Second):
+	case <-shutdownTimer.C:
 		w.logger.Warn("Timeout waiting for goroutines, forcing exit")
 	}
 
 	return sessionEnded
+}
+
+func waitForWorkerBackoff(ctx context.Context, stop <-chan struct{}, duration time.Duration) bool {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-stop:
+		return false
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // Stop signals the worker to stop gracefully.
