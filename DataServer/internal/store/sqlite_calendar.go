@@ -61,6 +61,49 @@ type CalendarEventFilter struct {
 	Offset   int    `json:"offset"`
 }
 
+func marshalCalendarCollections(event *CalendarEvent) ([][]byte, error) {
+	values := []any{
+		event.StockFootage,
+		event.InitialClips,
+		event.IntermediateClips,
+		event.FinalClips,
+		event.VoiceoverPaths,
+		event.Titles,
+	}
+	out := make([][]byte, len(values))
+	for i, value := range values {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("calendar collection %d: %w", i, err)
+		}
+		out[i] = encoded
+	}
+	return out, nil
+}
+
+func unmarshalCalendarCollections(event *CalendarEvent, values ...[]byte) error {
+	if len(values) != 6 {
+		return fmt.Errorf("calendar collections: expected 6 values, got %d", len(values))
+	}
+	decoders := []func([]byte) error{
+		func(raw []byte) error { return json.Unmarshal(raw, &event.StockFootage) },
+		func(raw []byte) error { return json.Unmarshal(raw, &event.InitialClips) },
+		func(raw []byte) error { return json.Unmarshal(raw, &event.IntermediateClips) },
+		func(raw []byte) error { return json.Unmarshal(raw, &event.FinalClips) },
+		func(raw []byte) error { return json.Unmarshal(raw, &event.VoiceoverPaths) },
+		func(raw []byte) error { return json.Unmarshal(raw, &event.Titles) },
+	}
+	for i, raw := range values {
+		if len(raw) == 0 {
+			continue
+		}
+		if err := decoders[i](raw); err != nil {
+			return fmt.Errorf("calendar collection %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
 // initCalendarSchema has been migrated to migrations/001_initial.sql.
 // Post-migration column adjustments are handled in postMigrationAdjustments().
 // The embedded migrations/sqlite/002_calendar.sql can be removed once confirmed.
@@ -75,14 +118,12 @@ func (s *SQLiteStore) CreateCalendarEvent(ctx context.Context, event *CalendarEv
 	}
 	event.UpdatedAt = time.Now()
 
-	stockFootage, _ := json.Marshal(event.StockFootage)
-	initialClips, _ := json.Marshal(event.InitialClips)
-	intermediateClips, _ := json.Marshal(event.IntermediateClips)
-	finalClips, _ := json.Marshal(event.FinalClips)
-	voiceoverPaths, _ := json.Marshal(event.VoiceoverPaths)
-	titles, _ := json.Marshal(event.Titles)
+	collections, err := marshalCalendarCollections(event)
+	if err != nil {
+		return fmt.Errorf("create calendar event: %w", err)
+	}
 
-	_, err := s.db.ExecContext(ctx,
+	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO calendar_events (
 			id, external_id, source, title, date, month, year, status,
 			stock_footage, initial_clips, intermediate_clips, final_clips,
@@ -92,8 +133,8 @@ func (s *SQLiteStore) CreateCalendarEvent(ctx context.Context, event *CalendarEv
 		)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.ID, event.ExternalID, event.Source, event.Title, event.Date, event.Month, event.Year, event.Status,
-		string(stockFootage), string(initialClips), string(intermediateClips), string(finalClips),
-		string(voiceoverPaths), string(titles), event.ScriptText,
+		string(collections[0]), string(collections[1]), string(collections[2]), string(collections[3]),
+		string(collections[4]), string(collections[5]), event.ScriptText,
 		event.Category, event.JobID, event.JobStatus, event.QueuedAt, event.QueueError,
 		event.CreatedAt.Format(time.RFC3339), event.UpdatedAt.Format(time.RFC3339),
 	)
@@ -125,23 +166,8 @@ func (s *SQLiteStore) GetCalendarEvent(ctx context.Context, id string) (*Calenda
 		return nil, err
 	}
 
-	if len(stockFootage) > 0 {
-		json.Unmarshal(stockFootage, &event.StockFootage)
-	}
-	if len(initialClips) > 0 {
-		json.Unmarshal(initialClips, &event.InitialClips)
-	}
-	if len(intermediateClips) > 0 {
-		json.Unmarshal(intermediateClips, &event.IntermediateClips)
-	}
-	if len(finalClips) > 0 {
-		json.Unmarshal(finalClips, &event.FinalClips)
-	}
-	if len(voiceoverPaths) > 0 {
-		json.Unmarshal(voiceoverPaths, &event.VoiceoverPaths)
-	}
-	if len(titles) > 0 {
-		json.Unmarshal(titles, &event.Titles)
+	if err := unmarshalCalendarCollections(event, stockFootage, initialClips, intermediateClips, finalClips, voiceoverPaths, titles); err != nil {
+		return nil, fmt.Errorf("get calendar event: %w", err)
 	}
 	if createdAt.Valid {
 		event.CreatedAt, _ = time.Parse(time.RFC3339, createdAt.String)
@@ -185,23 +211,8 @@ func (s *SQLiteStore) GetCalendarEventByExternalID(ctx context.Context, external
 		return nil, err
 	}
 
-	if len(stockFootage) > 0 {
-		json.Unmarshal(stockFootage, &event.StockFootage)
-	}
-	if len(initialClips) > 0 {
-		json.Unmarshal(initialClips, &event.InitialClips)
-	}
-	if len(intermediateClips) > 0 {
-		json.Unmarshal(intermediateClips, &event.IntermediateClips)
-	}
-	if len(finalClips) > 0 {
-		json.Unmarshal(finalClips, &event.FinalClips)
-	}
-	if len(voiceoverPaths) > 0 {
-		json.Unmarshal(voiceoverPaths, &event.VoiceoverPaths)
-	}
-	if len(titles) > 0 {
-		json.Unmarshal(titles, &event.Titles)
+	if err := unmarshalCalendarCollections(event, stockFootage, initialClips, intermediateClips, finalClips, voiceoverPaths, titles); err != nil {
+		return nil, fmt.Errorf("get calendar event by external id: %w", err)
 	}
 	if createdAt.Valid {
 		event.CreatedAt, _ = time.Parse(time.RFC3339, createdAt.String)
@@ -220,26 +231,28 @@ func (s *SQLiteStore) GetCalendarEventByExternalID(ctx context.Context, external
 func (s *SQLiteStore) UpdateCalendarEvent(ctx context.Context, event *CalendarEvent) error {
 	event.UpdatedAt = time.Now()
 
-	stockFootage, _ := json.Marshal(event.StockFootage)
-	initialClips, _ := json.Marshal(event.InitialClips)
-	intermediateClips, _ := json.Marshal(event.IntermediateClips)
-	finalClips, _ := json.Marshal(event.FinalClips)
-	voiceoverPaths, _ := json.Marshal(event.VoiceoverPaths)
-	titles, _ := json.Marshal(event.Titles)
+	collections, err := marshalCalendarCollections(event)
+	if err != nil {
+		return fmt.Errorf("update calendar event: %w", err)
+	}
 
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE calendar_events SET external_id=?, source=?, title=?, date=?, month=?, year=?, status=?, stock_footage=?, initial_clips=?, intermediate_clips=?, final_clips=?,
 		 voiceover_paths_json=?, titles_json=?, script_text=?, category=?, job_id=?, job_status=?, queued_at=?, queue_error=?, updated_at=?
 		 WHERE id = ?`,
 		event.ExternalID, event.Source, event.Title, event.Date, event.Month, event.Year, event.Status,
-		string(stockFootage), string(initialClips), string(intermediateClips), string(finalClips),
-		string(voiceoverPaths), string(titles), event.ScriptText, event.Category, event.JobID, event.JobStatus, event.QueuedAt, event.QueueError,
+		string(collections[0]), string(collections[1]), string(collections[2]), string(collections[3]),
+		string(collections[4]), string(collections[5]), event.ScriptText, event.Category, event.JobID, event.JobStatus, event.QueuedAt, event.QueueError,
 		event.UpdatedAt.Format(time.RFC3339), event.ID,
 	)
 	if err != nil {
 		return err
 	}
-	if rows, _ := result.RowsAffected(); rows == 0 {
+	rows, err := readRowsAffected(result, "update calendar event")
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
 		return fmt.Errorf("calendar event not found")
 	}
 	return nil
