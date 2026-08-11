@@ -140,6 +140,7 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 		for id, runtime := range s.jobs {
 			runtime.cancel()
 			delete(s.jobs, id)
+			s.detachJobLocked(runtime.job)
 		}
 		s.mu.Unlock()
 		return nil
@@ -201,6 +202,7 @@ func (s *Scheduler) Cancel(jobID string) bool {
 	}
 	runtime.cancel()
 	delete(s.jobs, jobID)
+	s.detachJobLocked(runtime.job)
 	return true
 }
 

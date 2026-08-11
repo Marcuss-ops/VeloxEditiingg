@@ -67,6 +67,42 @@ func TestScheduler_PrefetchesNPlusOneThroughCanonicalResolver(t *testing.T) {
 	}
 }
 
+func TestScheduler_CancelDetachesReferencesAndReportsWasted(t *testing.T) {
+	events := make(chan string, 8)
+	manager := &schedulerManager{started: make(chan struct{}, 1)}
+	s := NewScheduler(Config{
+		WorkerID:      "worker-a",
+		MaxConcurrent: 1,
+		ByteBudget:    100,
+		OnState: func(state string, _ futureasset.Job, _ futureasset.AssetManifest, _ error) {
+			events <- state
+		},
+	})
+	s.SetResolver(downloader.NewCacheResolver(manager, nil))
+	if err := s.Reconcile(futureTestPlan()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-manager.started:
+	case <-time.After(time.Second):
+		t.Fatal("prefetch did not resolve the asset")
+	}
+	if !s.Cancel("n1") {
+		t.Fatal("Cancel(n1) = false, want true")
+	}
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case state := <-events:
+			if state == "wasted" {
+				return
+			}
+		case <-deadline:
+			t.Fatal("cancel did not report the unused prefetched asset as wasted")
+		}
+	}
+}
+
 func TestScheduler_SharedAssetUsesManagerSingleflight(t *testing.T) {
 	var transfers atomic.Int32
 	release := make(chan struct{})
@@ -112,8 +148,9 @@ func TestScheduler_SharedAssetUsesManagerSingleflight(t *testing.T) {
 
 func TestScheduler_DiskPressureUsesRestrictedCriticalAndRecoveryHysteresis(t *testing.T) {
 	manager := &schedulerManager{started: make(chan struct{}, 8)}
-	usage := 78
-	s := NewScheduler(Config{WorkerID: "worker-a", MaxConcurrent: 3, ByteBudget: 100, DiskRestrictedPercent: 70, DiskCriticalPercent: 85, DiskRecoveryPercent: 75, DiskUsagePercent: func() int { return usage }})
+	var usage atomic.Int32
+	usage.Store(78)
+	s := NewScheduler(Config{WorkerID: "worker-a", MaxConcurrent: 3, ByteBudget: 100, DiskRestrictedPercent: 70, DiskCriticalPercent: 85, DiskRecoveryPercent: 75, DiskUsagePercent: func() int { return int(usage.Load()) }})
 	s.SetResolver(downloader.NewCacheResolver(manager, nil))
 	now := time.Now().UTC()
 	plan := futureasset.Plan{Version: 1, PlanID: "p", WorkerID: "worker-a", GeneratedAt: now, ExpiresAt: now.Add(time.Minute), Limits: futureasset.Limits{PrefetchHorizon: 3, ProtectionLookahead: 10}, PrefetchJobs: []futureasset.Job{
@@ -145,7 +182,7 @@ func TestScheduler_DiskPressureUsesRestrictedCriticalAndRecoveryHysteresis(t *te
 	if len(got) != 1 || got[0] != "D1" {
 		t.Fatalf("restricted prefetch keys=%v, want [D1]", got)
 	}
-	usage = 90
+	usage.Store(90)
 	plan.Version = 2
 	plan.PrefetchJobs = []futureasset.Job{{JobID: "n4", TaskID: "t4", ReservationID: "r4", Distance: 1, Assets: []futureasset.AssetManifest{{AssetKey: "D4", SHA256: "s4", SizeBytes: 10}}}}
 	if err := s.Reconcile(plan); err != nil {
@@ -157,7 +194,7 @@ func TestScheduler_DiskPressureUsesRestrictedCriticalAndRecoveryHysteresis(t *te
 		t.Fatalf("critical disk started new prefetch: %v", manager.keys)
 	}
 	manager.mu.Unlock()
-	usage = 74
+	usage.Store(74)
 	plan.Version = 3
 	plan.PrefetchJobs = []futureasset.Job{{JobID: "n5", TaskID: "t5", ReservationID: "r5", Distance: 1, Assets: []futureasset.AssetManifest{{AssetKey: "D5", SHA256: "s5", SizeBytes: 10}}}}
 	if err := s.Reconcile(plan); err != nil {
