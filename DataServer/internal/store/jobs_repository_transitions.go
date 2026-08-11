@@ -49,7 +49,11 @@ func (b *baseJobRepository) SetStatus(ctx context.Context, id string, from, to j
 	if err != nil {
 		return fmt.Errorf("setstatus exec: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	n, err := readRowsAffected(res, "setstatus rows affected")
+	if err != nil {
+		return err
+	}
+	if n == 0 {
 		return fmt.Errorf("setstatus %s: %w", id, p.ConflictError())
 	}
 	return nil
@@ -97,20 +101,31 @@ func (b *baseJobRepository) Fail(ctx context.Context, id, reason string) error {
 	if err != nil {
 		return fmt.Errorf("fail update: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	n, err := readRowsAffected(res, "fail rows affected")
+	if err != nil {
+		return err
+	}
+	if n == 0 {
 		return fmt.Errorf("fail %s: %w", id, p.ConflictError())
 	}
 
-	_ = p.InsertHistoryTx(ctx, tx, id, "FAILED", "" /* workerID */, "Job failed: "+reason)
-	_ = p.InsertEventTx(ctx, tx, id, "job_failed", map[string]interface{}{
+	if err := p.InsertHistoryTx(ctx, tx, id, "FAILED", "" /* workerID */, "Job failed: "+reason); err != nil {
+		return fmt.Errorf("fail history: %w", err)
+	}
+	if err := p.InsertEventTx(ctx, tx, id, "job_failed", map[string]interface{}{
 		"error": reason,
-	})
+	}); err != nil {
+		return fmt.Errorf("fail event: %w", err)
+	}
 
-	payload, _ := json.Marshal(map[string]interface{}{
+	payload, err := json.Marshal(map[string]interface{}{
 		"job_id":     id,
 		"error_code": "JOB_FAILED_GENERIC",
 		"error":      reason,
 	})
+	if err != nil {
+		return fmt.Errorf("fail payload: %w", err)
+	}
 	// PR-EMITOUTBOX-HARDENING: outbox-not-wired ⇒ EmitOutboxTx returns
 	// error; the transaction must rollback so the FAILED status flip
 	// does NOT persist (callers see the error and can re-attempt after
@@ -181,21 +196,32 @@ func (b *baseJobRepository) FailWithCode(ctx context.Context, id, errorCode, rea
 	if err != nil {
 		return fmt.Errorf("failwithcode update: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	n, err := readRowsAffected(res, "failwithcode rows affected")
+	if err != nil {
+		return err
+	}
+	if n == 0 {
 		return fmt.Errorf("failwithcode %s: %w", id, p.ConflictError())
 	}
 
-	_ = p.InsertHistoryTx(ctx, tx, id, "FAILED", "" /* workerID */, "Job failed ["+errorCode+"]: "+reason)
-	_ = p.InsertEventTx(ctx, tx, id, "job_failed", map[string]interface{}{
+	if err := p.InsertHistoryTx(ctx, tx, id, "FAILED", "" /* workerID */, "Job failed ["+errorCode+"]: "+reason); err != nil {
+		return fmt.Errorf("failwithcode history: %w", err)
+	}
+	if err := p.InsertEventTx(ctx, tx, id, "job_failed", map[string]interface{}{
 		"error_code": errorCode,
 		"error":      reason,
-	})
+	}); err != nil {
+		return fmt.Errorf("failwithcode event: %w", err)
+	}
 
-	payload, _ := json.Marshal(map[string]interface{}{
+	payload, err := json.Marshal(map[string]interface{}{
 		"job_id":     id,
 		"error_code": errorCode,
 		"error":      reason,
 	})
+	if err != nil {
+		return fmt.Errorf("failwithcode payload: %w", err)
+	}
 	if outboxErr := p.EmitOutboxTx(ctx, tx, "job", id, "JOB_FAILED", payload); outboxErr != nil {
 		return fmt.Errorf("failwithcode %s: %w", id, outboxErr)
 	}
@@ -282,7 +308,11 @@ func (b *baseJobRepository) Cancel(ctx context.Context, id, reason string, revis
 	if err != nil {
 		return fmt.Errorf("cancel update: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	n, err := readRowsAffected(res, "cancel rows affected")
+	if err != nil {
+		return err
+	}
+	if n == 0 {
 		return fmt.Errorf("cancel %s: %w", id, p.ConflictError())
 	}
 
@@ -308,8 +338,12 @@ func (b *baseJobRepository) Cancel(ctx context.Context, id, reason string, revis
 		return fmt.Errorf("cancel task attempts: %w", err)
 	}
 
-	_ = p.InsertHistoryTx(ctx, tx, id, "CANCELLED", "" /* workerID */, "Cancelled: "+reason)
-	_ = p.InsertEventTx(ctx, tx, id, "job_cancelled", map[string]interface{}{"reason": reason})
+	if err := p.InsertHistoryTx(ctx, tx, id, "CANCELLED", "" /* workerID */, "Cancelled: "+reason); err != nil {
+		return fmt.Errorf("cancel history: %w", err)
+	}
+	if err := p.InsertEventTx(ctx, tx, id, "job_cancelled", map[string]interface{}{"reason": reason}); err != nil {
+		return fmt.Errorf("cancel event: %w", err)
+	}
 	// Stop local deliveries that have not created a remote object yet. A
 	// delivery with a remote_id is deliberately left in place: cancelling
 	// Velox cannot delete an object already created by InstaEdit, so the

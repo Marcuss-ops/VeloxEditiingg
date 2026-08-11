@@ -207,7 +207,10 @@ func (s *SQLiteStore) InsertCreatorForwarding(ctx context.Context, cf *CreatorFo
 		return nil, wrapDBInfrastructure("InsertCreatorForwarding exec", err)
 	}
 
-	affected, _ := res.RowsAffected()
+	affected, err := readRowsAffected(res, "InsertCreatorForwarding rows affected")
+	if err != nil {
+		return nil, err
+	}
 	if affected == 1 {
 		return &InsertCreatorForwardingResult{Created: true, Forwarding: cf}, nil
 	}
@@ -451,7 +454,10 @@ func (s *SQLiteStore) UpsertCreatorForwardingPayload(ctx context.Context, forwar
 	if err != nil {
 		return wrapDBInfrastructure("UpsertCreatorForwardingPayload exec", err)
 	}
-	n, _ := result.RowsAffected()
+	n, err := readRowsAffected(result, "UpsertCreatorForwardingPayload rows affected")
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return ErrTransitionConflict
 	}
