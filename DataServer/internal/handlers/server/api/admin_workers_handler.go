@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -141,6 +142,7 @@ func (h *AdminWorkersHandler) GetAdminWorker() gin.HandlerFunc {
 
 func (h *AdminWorkersHandler) card(ctx context.Context, info *workersreg.Worker) WorkerCard {
 	card := buildWorkerCard(info)
+	card.RunningDigest = card.ImageDigest
 	if h == nil || h.deployments == nil || info == nil {
 		return card
 	}
@@ -150,7 +152,26 @@ func (h *AdminWorkersHandler) card(ctx context.Context, info *workersreg.Worker)
 	}
 	card.TargetDigest = rec.TargetDigest
 	card.PreviousDigest = rec.PreviousDigest
-	card.DigestState = rec.Status
+	card.LastUpdateOperation = &WorkerUpdateOperation{
+		DeploymentID:   rec.DeploymentID,
+		Status:         rec.Status,
+		TargetDigest:   rec.TargetDigest,
+		PreviousDigest: rec.PreviousDigest,
+		StartedAt:      rec.StartedAt.UTC().Format(time.RFC3339Nano),
+		FinishedAt:     rec.FinishedAt,
+		IsRollback:     rec.IsRollback,
+	}
+	if card.RunningDigest != "" && card.TargetDigest != "" {
+		match := card.RunningDigest == card.TargetDigest
+		card.DigestMatch = &match
+		if match {
+			card.DigestState = "MATCH"
+		} else {
+			card.DigestState = "MISMATCH"
+		}
+	} else {
+		card.DigestState = "UNKNOWN"
+	}
 	return card
 }
 
