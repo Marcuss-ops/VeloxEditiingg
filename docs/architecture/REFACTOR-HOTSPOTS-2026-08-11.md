@@ -42,6 +42,12 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   stale interrompe l'operazione invece di usare un valore non verificato.
 - Retry cancellation: i backoff di remote-engine e multipart publisher usano
   timer stoppabili; la cancellazione durante il backoff è coperta da test.
+- Worker command outbox: allocazione della sequenza per worker e INSERT sono
+  nella stessa transazione; il caso concorrente è coperto da test.
+- Calendar/session read models: JSON persistito corrotto e timestamp sessione
+  malformato producono errore, non uno stato apparentemente valido.
+- Artifact GC, credential revoke e command delivery verificano ownership e
+  righe aggiornate prima di dichiarare completata l'operazione.
 - Render-only: il contatore audio riconosce il contratto esplicito a zero
   destinazioni; i job normali senza delivery plan continuano a fallire chiusi.
 - Gate architetturali e gate full-module verdi dopo i fix (`833cf79e`,
@@ -59,8 +65,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   calendar e rollout command controllano errore, ownership e righe aggiornate.
 - [ ] Completare l'audit dei writer non ancora coperti: ogni `UPDATE`
   autorevole deve controllare `RowsAffected`, ownership e generazione. Restano
-  da verificare in particolare `store_worker_commands`, `store_credential_vault`,
-  `sqlite_calendar`, `artifact_gc` e i writer di progress non terminali.
+  soprattutto i writer di progress non terminali, cleanup idempotenti e le
+  transizioni publication/session che non sono ancora state ricondotte a un
+  unico helper CAS.
 - [ ] Chiudere l'audit mirato di `MarkDeliverySucceeded`,
   `FinalizeVerified`, `CompletePublicationAfterReconciliation` e `TaskResult`:
   nessun ritorno `nil` dopo un commit non avvenuto.
@@ -129,6 +136,16 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   ancora percorsi di break-glass o fixture operative.
 - [ ] Eliminare codice commentato e helper inutilizzati solo in commit
   atomici, senza confondere compatibilità documentata con dead code.
+
+### Stato gate al 2026-08-11
+
+- [x] `go vet ./...` e `go build ./...` del modulo Master.
+- [x] `go test -count=1 ./...` del modulo Master: tutti i package verdi,
+  incluso `internal/store`.
+- [x] Test e vet del modulo worker; `check-db-access`, `check-no-legacy`,
+  `check-capability-contract` e `check-architecture` verdi.
+- [ ] `pre-removal-verify.sh`: da eseguire solo nel prossimo blocco che
+  rimuove simboli esportati o helper cross-package.
 
 ## Benchmark finali — non anticipare
 
