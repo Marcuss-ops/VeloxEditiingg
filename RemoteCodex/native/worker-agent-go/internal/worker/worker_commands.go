@@ -20,6 +20,7 @@ import (
 // via transport.Send(), and logs the outcome.
 func (w *Worker) processCommand(ctx context.Context, cmd api.WorkerCommand) {
 	var resultErr error
+	restartAfterAck := false
 
 	// Deduplicate commands using the in-memory seenCommands map
 	if w.markCommandSeen(cmd) {
@@ -35,14 +36,9 @@ func (w *Worker) processCommand(ctx context.Context, cmd api.WorkerCommand) {
 		w.logger.Info("[COMMANDS] Drain mode enabled — no new jobs will be accepted")
 
 	case "restart_worker":
-		w.logger.Info("[COMMANDS] Restart requested — enabling drain mode, will restart after current jobs complete")
+		w.logger.Info("[COMMANDS] Restart requested — enabling drain mode, will stop after current jobs complete")
 		w.drainMode.Store(true)
-		// Auto-drain-timeout: if the process doesn't actually exit within
-		// restartDrainTimeout (e.g. Docker container restart fails), clear
-		// drain mode so the worker can resume accepting tasks. Without this
-		// guard a failed restart leaves the worker stuck in drain=true forever
-		// because no gRPC message can undo it (see MsgDrain in worker_claimloop.go).
-		go w.autoUndrainAfter(restartDrainTimeout)
+		restartAfterAck = true
 
 	case "update_code":
 		version := ""
@@ -110,9 +106,38 @@ func (w *Worker) processCommand(ctx context.Context, cmd api.WorkerCommand) {
 	} else {
 		w.logger.Debug("[COMMANDS] Acknowledged command: %s (id=%s)", cmd.Command, cmd.CommandID)
 	}
+	if restartAfterAck && resultErr == nil {
+		go w.stopAfterActiveTasks()
+	}
 
 	if resultErr != nil {
 		w.logger.Error("[COMMANDS] Command %s processing error: %v", cmd.Command, resultErr)
+	}
+}
+
+// stopAfterActiveTasks implements the worker-side half of the canonical
+// restart contract. The command is acknowledged first so the Master never
+// observes a missing CommandAck merely because the worker is shutting down.
+// Drain mode prevents new leases while existing work is allowed to finish;
+// once the active set is empty, Stop closes the session and the host
+// supervisor/container performs the actual process restart.
+func (w *Worker) stopAfterActiveTasks() {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		w.activeTasksMu.RLock()
+		active := len(w.activeTasks)
+		w.activeTasksMu.RUnlock()
+		if active == 0 {
+			w.logger.Info("[COMMANDS] Restart drain complete — stopping worker")
+			w.Stop()
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-w.stopChan:
+			return
+		}
 	}
 }
 
