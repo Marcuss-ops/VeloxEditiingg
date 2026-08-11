@@ -65,8 +65,12 @@ func (s *SQLiteStore) PersistWorkerHeartbeat(ctx context.Context, raw []byte, se
 	}
 	defer tx.Rollback()
 
-	var oldStatus, oldJob, oldConnState string
-	_ = tx.QueryRowContext(ctx, `SELECT status,current_job,connection_state FROM workers WHERE worker_id=?`, workerID).Scan(&oldStatus, &oldJob, &oldConnState)
+	var oldStatusRaw, oldJobRaw, oldConnStateRaw sql.NullString
+	stateErr := tx.QueryRowContext(ctx, `SELECT status,current_job,connection_state FROM workers WHERE worker_id=?`, workerID).Scan(&oldStatusRaw, &oldJobRaw, &oldConnStateRaw)
+	if stateErr != nil && stateErr != sql.ErrNoRows {
+		return fmt.Errorf("persist worker heartbeat: read previous worker state: %w", stateErr)
+	}
+	oldStatus, oldJob, oldConnState := oldStatusRaw.String, oldJobRaw.String, oldConnStateRaw.String
 	if err := s.upsertWorkerExec(tx, m, raw, nowRFC3339Nano); err != nil {
 		return fmt.Errorf("persist worker snapshot: %w", err)
 	}

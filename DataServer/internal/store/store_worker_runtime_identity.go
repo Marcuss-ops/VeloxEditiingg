@@ -162,7 +162,10 @@ func (s *SQLiteStore) GetWorkerRuntimeSnapshotBySession(workerID, sessionID stri
 	snapshot.OSRelease = osRelease.String
 	snapshot.StorageClass = storageClass.String
 	snapshot.CapabilitiesJSON = capabilitiesJSON.String
-	snapshot.ConnectedAt, _ = time.Parse(time.RFC3339Nano, connectedAt)
+	snapshot.ConnectedAt, err = parsePersistedWorkerTimestamp(connectedAt, "connected_at")
+	if err != nil {
+		return nil, fmt.Errorf("worker runtime snapshot lookup: %w", err)
+	}
 	return &snapshot, nil
 }
 
@@ -243,6 +246,18 @@ func (s *SQLiteStore) GetAuthenticatedWorkerRuntimeSnapshot(ctx context.Context,
 	snapshot.OSRelease = osRelease.String
 	snapshot.StorageClass = storageClass.String
 	snapshot.CapabilitiesJSON = capabilitiesJSON.String
-	snapshot.ConnectedAt, _ = time.Parse(time.RFC3339Nano, connectedAt)
+	snapshot.ConnectedAt, err = parsePersistedWorkerTimestamp(connectedAt, "connected_at")
+	if err != nil {
+		return nil, fmt.Errorf("authenticated worker runtime snapshot lookup: %w", err)
+	}
 	return &snapshot, nil
+}
+
+func parsePersistedWorkerTimestamp(value, field string) (time.Time, error) {
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("worker runtime: invalid %s %q", field, value)
 }

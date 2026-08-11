@@ -132,8 +132,18 @@ func ListWorkerMetrics(ctx context.Context, db *sql.DB, workerID, since string, 
 
 func maybeInsertWorkerMetric(ctx context.Context, tx *sql.Tx, m map[string]any, workerID, sessionID string, changed bool, now string) error {
 	var last string
-	_ = tx.QueryRowContext(ctx, `SELECT sampled_at FROM worker_metric_samples WHERE worker_id=? ORDER BY sampled_at DESC LIMIT 1`, workerID).Scan(&last)
-	lastAt, _ := time.Parse(time.RFC3339Nano, last)
+	lastErr := tx.QueryRowContext(ctx, `SELECT sampled_at FROM worker_metric_samples WHERE worker_id=? ORDER BY sampled_at DESC LIMIT 1`, workerID).Scan(&last)
+	if lastErr != nil && lastErr != sql.ErrNoRows {
+		return fmt.Errorf("worker metric throttle lookup: %w", lastErr)
+	}
+	var lastAt time.Time
+	if last != "" {
+		var err error
+		lastAt, err = parsePersistedWorkerTimestamp(last, "sampled_at")
+		if err != nil {
+			return fmt.Errorf("worker metric throttle lookup: %w", err)
+		}
+	}
 	active := workerActiveTaskCount(m, func(key string) any {
 		metrics, _ := m["metrics"].(map[string]any)
 		return metrics[key]
