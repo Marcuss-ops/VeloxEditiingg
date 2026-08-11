@@ -130,7 +130,12 @@ func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploa
 		return fmt.Errorf("%w: create chunk file: %v", ErrBlobWriteFailed, err)
 	}
 
-	written, err := io.Copy(dst, cmd.Reader)
+	// Master-compute SHA-256 INCREMENTALLY during the write (no-second-read
+	// pattern, same as the artifact Receive path): the hasher sees exactly
+	// the bytes written to dst, so chunk_sha256 is derived from the stream
+	// without reopening the chunk file afterwards.
+	hasher := sha256.New()
+	written, err := io.Copy(io.MultiWriter(dst, hasher), cmd.Reader)
 	if err != nil {
 		_ = dst.Close()
 		_ = os.Remove(chunkKey)
@@ -148,12 +153,7 @@ func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploa
 		return fmt.Errorf("artifacts: ChunkedUpload: empty chunk %d", cmd.ChunkIndex)
 	}
 
-	// Master-compute SHA-256 for trust boundary.
-	chunkSHA, err := hashFile(chunkKey)
-	if err != nil {
-		_ = os.Remove(chunkKey)
-		return fmt.Errorf("artifacts: ChunkedUpload: hash: %w", err)
-	}
+	chunkSHA := hex.EncodeToString(hasher.Sum(nil))
 
 	// Persist chunk record.
 	if err := s.repo.InsertChunk(ctx, store.ChunkRecord{
@@ -414,20 +414,6 @@ func (s *ChunkedUploadService) cleanupChunks(ctx context.Context, uploadID strin
 func chunkStagingKey(bl store.BlobStore, uploadID string, chunkIndex int) string {
 	dir := filepath.Join(bl.StagingDir(), "chunks", uploadID)
 	return filepath.Join(dir, fmt.Sprintf("chunk_%04d", chunkIndex))
-}
-
-// hashFile computes SHA-256 of a file.
-func hashFile(path string) (string, error) {
-	f, err := os.Open(filepath.Clean(path))
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // Compile-time check: *ChunkedUploadService is used as a value receiver.
