@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"velox-server/internal/placement"
+	"velox-server/internal/renderplan"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 	"velox-shared/controltransport"
@@ -258,24 +259,14 @@ func (h *Handler) stampAttemptRenderPlan(ctx context.Context, tws *taskgraph.Tas
 		log.Printf("[RENDERPLAN] canonical encode skipped task=%s attempt=%s: %v", tws.ID, attempt.ID, err)
 		return
 	}
-	planSHA, err := plan.PlanSHA256()
-	if err != nil {
-		log.Printf("[RENDERPLAN] plan hash skipped task=%s attempt=%s: %v", tws.ID, attempt.ID, err)
-		return
-	}
+	// Hash from the already-canonical bytes (no second marshaling).
+	planSHA := renderplan.HashCanonical(canonical)
 	if err := h.taskAttemptRepo.UpsertRenderPlan(ctx, attempt.ID, plan.PlanVersion, planSHA, string(canonical)); err != nil {
 		log.Printf("[RENDERPLAN] persist skipped task=%s attempt=%s: %v", tws.ID, attempt.ID, err)
 		return
 	}
 	log.Printf("[RENDERPLAN] stamped attempt=%s task=%s plan_version=%d plan_sha256=%s duration_ms=%d segments=%d",
-		attempt.ID, tws.ID, plan.PlanVersion, planSHA[:minInt(16, len(planSHA))], plan.DurationMS, len(plan.Segments))
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
+		attempt.ID, tws.ID, plan.PlanVersion, planSHA[:16], plan.DurationMS, len(plan.Segments))
 }
 
 // recordPlacementRejections logs the rejection reasons produced by the

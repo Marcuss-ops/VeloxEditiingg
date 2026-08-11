@@ -148,11 +148,16 @@ func (c *RenderPlanCompiler) Compile(ctx context.Context, payload map[string]int
 			return nil, fmt.Errorf("render plan: no renderable timeline (clip_segments/items/scenes all empty)")
 		}
 		for i, scene := range scenes {
-			cursor = c.compileSceneSegments(scene, i, cursor, &segments)
+			cursor = compileSceneSegments(scene, i, cursor, &segments)
 		}
 	}
 
 	// Audio: compiled audio_tracks win; otherwise derive per-scene voiceovers.
+	// Caveat (metadata-only): when clip_segments is the visual source, the
+	// scene-derived voiceover StartMS accumulates by sceneDurationMS and may
+	// not match the clip_segments timeline exactly — the worker still muxes
+	// audio from the payload; the plan offsets are a determinism aid, not a
+	// replacement for the payload's own audio timeline.
 	audio := compileAudioTracks(payload)
 	if len(audio) == 0 && len(scenes) > 0 {
 		audio = compileSceneVoiceovers(scenes)
@@ -191,16 +196,16 @@ func (c *RenderPlanCompiler) Compile(ctx context.Context, payload map[string]int
 // compileSceneSegments walks one scene and appends its visual segments in
 // declared order (clip first, then stock[]), accumulating the timeline
 // cursor. Returns the new cursor.
-func (c *RenderPlanCompiler) compileSceneSegments(scene map[string]interface{}, sceneIndex int, cursor int64, segments *[]Segment) int64 {
+func compileSceneSegments(scene map[string]interface{}, sceneIndex int, cursor int64, segments *[]Segment) int64 {
 	sceneDuration := sceneDurationMS(scene)
 	if clip, ok := asMap(scene["clip"]); ok {
-		if seg, duration, ok := segmentFromSceneAsset(clip, "clip", len(*segments), cursor, sceneDuration); ok {
+		if seg, duration, ok := segmentFromSceneAsset(clip, len(*segments), cursor, sceneDuration); ok {
 			*segments = append(*segments, *seg)
 			cursor += duration
 		}
 	}
 	for _, stock := range sliceMaps(scene["stock"]) {
-		if seg, duration, ok := segmentFromSceneAsset(stock, "stock", len(*segments), cursor, sceneDuration); ok {
+		if seg, duration, ok := segmentFromSceneAsset(stock, len(*segments), cursor, sceneDuration); ok {
 			*segments = append(*segments, *seg)
 			cursor += duration
 		}
@@ -210,7 +215,7 @@ func (c *RenderPlanCompiler) compileSceneSegments(scene map[string]interface{}, 
 
 // segmentFromSceneAsset converts a canonical scene asset (clip/stock) into a
 // segment. The trim window comes from start_ms/end_ms when present.
-func segmentFromSceneAsset(asset map[string]interface{}, role string, index int, cursor, sceneDuration int64) (*Segment, int64, bool) {
+func segmentFromSceneAsset(asset map[string]interface{}, index int, cursor, sceneDuration int64) (*Segment, int64, bool) {
 	assetID, ok := assetIDOf(asset, "url")
 	if !ok {
 		return nil, 0, false
@@ -230,7 +235,6 @@ func segmentFromSceneAsset(asset map[string]interface{}, role string, index int,
 	if duration <= 0 {
 		duration = sceneDuration
 	}
-	_ = role
 	return &Segment{
 		SegmentID:       fmt.Sprintf("seg_%03d", index),
 		AssetID:         assetID,

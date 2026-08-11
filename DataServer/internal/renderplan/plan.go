@@ -153,8 +153,15 @@ func (p *CompiledRenderPlan) PlanSHA256() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), nil
+	return HashCanonical(data), nil
+}
+
+// HashCanonical computes the plan hash over already-canonical bytes. Callers
+// that hold the CanonicalJSON output (e.g. the placement stamp path) use this
+// to avoid a second marshaling.
+func HashCanonical(canonical []byte) string {
+	sum := sha256.Sum256(canonical)
+	return hex.EncodeToString(sum[:])
 }
 
 // Decode parses a persisted plan document and validates it.

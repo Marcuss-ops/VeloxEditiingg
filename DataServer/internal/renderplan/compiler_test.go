@@ -281,6 +281,27 @@ func TestCompile_ValidationErrors(t *testing.T) {
 	}
 }
 
+func TestHashCanonical_MatchesPlanSHA256(t *testing.T) {
+	compiler := NewCompiler(Options{})
+	plan := mustCompile(t, compiler, map[string]interface{}{
+		"job_id": "job-hash",
+		"items":  []interface{}{map[string]interface{}{"type": "video", "url": "velox-asset://a", "duration": 1.0}},
+	}, "attempt-hash")
+
+	canonical, err := plan.CanonicalJSON()
+	if err != nil {
+		t.Fatalf("CanonicalJSON: %v", err)
+	}
+	viaHelper := HashCanonical(canonical)
+	viaPlan, err := plan.PlanSHA256()
+	if err != nil {
+		t.Fatalf("PlanSHA256: %v", err)
+	}
+	if viaHelper == "" || viaHelper != viaPlan {
+		t.Fatalf("HashCanonical = %q, PlanSHA256 = %q; must agree", viaHelper, viaPlan)
+	}
+}
+
 func TestPlanRoundTrip(t *testing.T) {
 	compiler := NewCompiler(Options{})
 	plan := mustCompile(t, compiler, map[string]interface{}{
