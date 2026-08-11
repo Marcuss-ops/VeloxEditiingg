@@ -64,7 +64,20 @@ const (
 	EnvPrometheusPort = "VELOX_PROMETHEUS_PORT"
 	// EnvAssetDownloadConcurrency caps the number of simultaneous asset byte
 	// transfers the canonical download manager runs per worker. Default 4.
-	EnvAssetDownloadConcurrency = "VELOX_ASSET_DOWNLOAD_CONCURRENCY"
+	EnvAssetDownloadConcurrency           = "VELOX_ASSET_DOWNLOAD_CONCURRENCY"
+	EnvPrefetchHorizonJobs                = "VELOX_PREFETCH_HORIZON_JOBS"
+	EnvPrefetchProtectionLookaheadJobs    = "VELOX_PREFETCH_PROTECTION_LOOKAHEAD_JOBS"
+	EnvPrefetchMaxConcurrent              = "VELOX_PREFETCH_MAX_CONCURRENT"
+	EnvPrefetchByteBudget                 = "VELOX_PREFETCH_BYTE_BUDGET"
+	EnvPrefetchMaxBandwidthBytesPerSecond = "VELOX_PREFETCH_MAX_BANDWIDTH_BPS"
+	EnvPrefetchDiskRestrictedPercent      = "VELOX_PREFETCH_DISK_RESTRICTED_PERCENT"
+	EnvPrefetchDiskCriticalPercent        = "VELOX_PREFETCH_DISK_CRITICAL_PERCENT"
+	EnvPrefetchDiskRecoveryPercent        = "VELOX_PREFETCH_DISK_RECOVERY_PERCENT"
+	EnvPrefetchRAMEnabled                 = "VELOX_PREFETCH_RAM_ENABLED"
+	EnvPrefetchRAMBudgetBytes             = "VELOX_PREFETCH_RAM_BUDGET_BYTES"
+	EnvPrefetchRAMMaxAssetBytes           = "VELOX_PREFETCH_RAM_MAX_ASSET_BYTES"
+	EnvPrefetchRAMMinFutureRefs           = "VELOX_PREFETCH_RAM_MIN_FUTURE_REFS"
+	EnvPrefetchRAMMaxNextUseDistance      = "VELOX_PREFETCH_RAM_MAX_NEXT_USE_DISTANCE"
 	// EnvTmpfsDir selects the memory-backed scratch directory for small
 	// ATTEMPT_TEMP files (Fase E1 StorageResolver). Empty disables tmpfs.
 	EnvTmpfsDir = "VELOX_TMPFS_DIR"
@@ -93,6 +106,13 @@ var EnvBindings = []string{
 	EnvWorkerProfile,
 	EnvPrometheusPort,
 	EnvAssetDownloadConcurrency,
+	EnvPrefetchHorizonJobs, EnvPrefetchProtectionLookaheadJobs,
+	EnvPrefetchMaxConcurrent, EnvPrefetchByteBudget,
+	EnvPrefetchMaxBandwidthBytesPerSecond, EnvPrefetchDiskRestrictedPercent,
+	EnvPrefetchDiskCriticalPercent, EnvPrefetchDiskRecoveryPercent,
+	EnvPrefetchRAMEnabled, EnvPrefetchRAMBudgetBytes,
+	EnvPrefetchRAMMaxAssetBytes, EnvPrefetchRAMMinFutureRefs,
+	EnvPrefetchRAMMaxNextUseDistance,
 	EnvTmpfsDir,
 	EnvTmpfsThresholdBytes,
 }
@@ -214,6 +234,35 @@ func applyEnvOverrides(cfg *WorkerConfig) error {
 			cfg.AssetDownloadConcurrency = n
 		}
 	}
+	bindPositiveInt := func(name string, dst *int) {
+		if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				*dst = n
+			}
+		}
+	}
+	bindPositiveInt64 := func(name string, dst *int64) {
+		if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+				*dst = n
+			}
+		}
+	}
+	bindPositiveInt(EnvPrefetchHorizonJobs, &cfg.PrefetchHorizonJobs)
+	bindPositiveInt(EnvPrefetchProtectionLookaheadJobs, &cfg.PrefetchProtectionLookaheadJobs)
+	bindPositiveInt(EnvPrefetchMaxConcurrent, &cfg.PrefetchMaxConcurrent)
+	bindPositiveInt64(EnvPrefetchByteBudget, &cfg.PrefetchByteBudget)
+	bindPositiveInt64(EnvPrefetchMaxBandwidthBytesPerSecond, &cfg.PrefetchMaxBandwidthBytesPerSecond)
+	bindPositiveInt(EnvPrefetchDiskRestrictedPercent, &cfg.PrefetchDiskRestrictedPercent)
+	bindPositiveInt(EnvPrefetchDiskCriticalPercent, &cfg.PrefetchDiskCriticalPercent)
+	bindPositiveInt(EnvPrefetchDiskRecoveryPercent, &cfg.PrefetchDiskRecoveryPercent)
+	if v := strings.TrimSpace(os.Getenv(EnvPrefetchRAMEnabled)); v != "" {
+		cfg.PrefetchRAMEnabled = envTruthy(v)
+	}
+	bindPositiveInt64(EnvPrefetchRAMBudgetBytes, &cfg.PrefetchRAMBudgetBytes)
+	bindPositiveInt64(EnvPrefetchRAMMaxAssetBytes, &cfg.PrefetchRAMMaxAssetBytes)
+	bindPositiveInt(EnvPrefetchRAMMinFutureRefs, &cfg.PrefetchRAMMinFutureRefs)
+	bindPositiveInt(EnvPrefetchRAMMaxNextUseDistance, &cfg.PrefetchRAMMaxNextUseDistance)
 	// Fase E1 StorageResolver: VELOX_TMPFS_DIR opt-in memory-backed scratch
 	// for small ATTEMPT_TEMP files; VELOX_TMPFS_THRESHOLD_BYTES tunes the
 	// size gate (default 64 MiB via applyDefaults). Invalid numeric values

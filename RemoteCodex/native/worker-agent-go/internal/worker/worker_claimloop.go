@@ -191,6 +191,12 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					w.logger.Warn("[PREFETCH] rejected FutureAssetPlan version=%d: %v", plan.Version, err)
 					continue
 				}
+				if result.Applied && !result.Stale {
+					if err := w.futureAssetScheduler().Reconcile(plan); err != nil {
+						w.logger.Warn("[PREFETCH] execution reconcile failed plan=%s version=%d: %v", plan.PlanID, plan.Version, err)
+						continue
+					}
+				}
 				w.logger.Info("[PREFETCH] reconciled plan=%s version=%d added=%d removed=%d reprioritized=%d protected=%d expired=%t stale=%t", plan.PlanID, plan.Version, len(result.Added), len(result.Removed), len(result.Reprioritized), len(plan.Protect), result.Expired, result.Stale)
 
 			case controltransport.MsgCancelPrefetch:
@@ -200,6 +206,7 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					continue
 				}
 				if w.futureAssetController().Cancel(cancel.GetJobId(), cancel.GetReservationId(), cancel.GetPlanVersion()) {
+					w.futureAssetScheduler().Cancel(cancel.GetJobId())
 					w.logger.Info("[PREFETCH] cancelled job=%s reservation=%s plan_version=%d reason=%s", cancel.GetJobId(), cancel.GetReservationId(), cancel.GetPlanVersion(), cancel.GetReason())
 				}
 

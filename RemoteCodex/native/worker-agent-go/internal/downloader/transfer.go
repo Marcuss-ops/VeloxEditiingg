@@ -44,6 +44,7 @@ type Transfer struct {
 	mu sync.Mutex
 
 	state    DownloadState
+	priority int
 	cacheHit bool
 	// lookupOutcome is the canonical classification produced by the lookup
 	// point (Transferer.Check) for this transfer. Set exactly once per run.
@@ -109,6 +110,7 @@ func newTransfer(managerCtx context.Context, key assetref.AssetKey, req Download
 		reportCtx:          reportCtx,
 		now:                now,
 		state:              DownloadQueued,
+		priority:           req.Priority,
 		bytesTotal:         req.SizeBytes,
 		queuedAt:           now(),
 		updatedAt:          now(),
@@ -121,6 +123,15 @@ func newTransfer(managerCtx context.Context, key assetref.AssetKey, req Download
 		transferGeneration: transferGeneration,
 	}
 	return t
+}
+
+func (t *Transfer) promote(priority int) {
+	t.mu.Lock()
+	if priority > t.priority {
+		t.priority = priority
+		t.req.Priority = priority
+	}
+	t.mu.Unlock()
 }
 
 // doneCh returns the completion channel, closed once when the transfer

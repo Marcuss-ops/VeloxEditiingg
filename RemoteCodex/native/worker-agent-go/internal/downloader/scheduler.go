@@ -77,6 +77,7 @@ type scheduler struct {
 
 	mu     sync.Mutex
 	queue  schedQueue
+	items  map[assetref.AssetKey]*schedItem
 	cond   *sync.Cond
 	closed bool
 	seq    int64
@@ -91,6 +92,7 @@ func newScheduler(concurrency int, now func() time.Time) *scheduler {
 	s := &scheduler{
 		concurrency: concurrency,
 		now:         now,
+		items:       make(map[assetref.AssetKey]*schedItem),
 	}
 	s.cond = sync.NewCond(&s.mu)
 	return s
@@ -118,14 +120,34 @@ func (s *scheduler) Enqueue(key assetref.AssetKey, priority int, queuedAt time.T
 		s.mu.Unlock()
 		return false
 	}
-	heap.Push(&s.queue, &schedItem{
+	item := &schedItem{
 		key:      key,
 		priority: priority,
 		queuedAt: queuedAt,
 		run:      run,
-	})
+	}
+	heap.Push(&s.queue, item)
+	s.items[key] = item
 	s.cond.Signal()
 	s.mu.Unlock()
+	return true
+}
+
+// Promote updates a queued transfer in place. Running transfers retain the
+// promoted priority on Transfer for observability and future QoS hooks.
+func (s *scheduler) Promote(key assetref.AssetKey, priority int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item := s.items[key]
+	if item == nil || item.index < 0 {
+		return false
+	}
+	if priority <= item.priority {
+		return true
+	}
+	item.priority = priority
+	heap.Fix(&s.queue, item.index)
+	s.cond.Signal()
 	return true
 }
 
@@ -148,6 +170,7 @@ func (s *scheduler) dispatcher() {
 			return
 		}
 		item := heap.Pop(&s.queue).(*schedItem)
+		delete(s.items, item.key)
 		s.mu.Unlock()
 
 		item.run()

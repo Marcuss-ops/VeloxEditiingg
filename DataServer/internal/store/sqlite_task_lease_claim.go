@@ -260,6 +260,18 @@ func (r *SQLiteTaskRepository) ClaimTaskForWorkerAtomic(
 	}
 
 	// 1. SELECT the specific task candidate with revision + executor gate.
+	// Legacy/minimal fixtures may not have the reservation table; production
+	// migrations always do. When present, only the owning worker can consume
+	// a hard future reservation.
+	reservationClause := ""
+	var reservationTable int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='future_task_reservations'`).Scan(&reservationTable); err == nil && reservationTable > 0 {
+		reservationClause = ` AND (NOT EXISTS (SELECT 1 FROM future_task_reservations fr WHERE fr.task_id = tasks.task_id AND fr.expires_at > ?) OR EXISTS (SELECT 1 FROM future_task_reservations fr WHERE fr.task_id = tasks.task_id AND fr.worker_id = ? AND fr.expires_at > ?))`
+	}
+	queryArgs := []interface{}{cmd.TaskID, cmd.ExpectedTaskRevision, execKey.ID, legacyExecutorID, execKey.Version}
+	if reservationClause != "" {
+		queryArgs = append(queryArgs, nowStr, cmd.WorkerID, nowStr)
+	}
 	row := tx.QueryRowContext(ctx,
 		`SELECT `+strings.Join(taskColumns, ", ")+`
 		 FROM tasks
@@ -268,8 +280,8 @@ func (r *SQLiteTaskRepository) ClaimTaskForWorkerAtomic(
 		   AND revision = ?
 		   AND executor_id IN (?, ?)
 		   AND executor_version = ?
-		   AND (worker_id = '' OR worker_id IS NULL)`,
-		cmd.TaskID, cmd.ExpectedTaskRevision, execKey.ID, legacyExecutorID, execKey.Version,
+		   AND (worker_id = '' OR worker_id IS NULL)`+reservationClause,
+		queryArgs...,
 	)
 	t, err := scanTask(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -317,6 +329,11 @@ func (r *SQLiteTaskRepository) ClaimTaskForWorkerAtomic(
 	}
 	if n == 0 {
 		return nil, nil, fmt.Errorf("task claim-for-worker %s: CAS raced out (revision/executor mismatch or concurrent claim): %w", cmd.TaskID, taskgraph.ErrTransitionConflict)
+	}
+	if reservationClause != "" {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM future_task_reservations WHERE task_id = ? AND worker_id = ?`, cmd.TaskID, cmd.WorkerID); err != nil {
+			return nil, nil, wrapDBInfrastructure("task claim-for-worker reservation consume", err)
+		}
 	}
 
 	// 5. INSERT PENDING TaskAttempt in the same tx.

@@ -93,6 +93,14 @@ type ResolutionSink interface {
 	RecordResolution(ctx context.Context, resolution CacheResolution)
 }
 
+// L1Cache is an optional verified memory-backed cache above the canonical
+// manager. It is deliberately a lookup/copy seam; the durable NVMe cache and
+// downloader remain the source of truth.
+type L1Cache interface {
+	Find(context.Context, DownloadRequest) (DownloadedAsset, bool, error)
+	Put(context.Context, DownloadRequest, DownloadedAsset) error
+}
+
 // CacheResolver is the canonical structured-resolution surface. Resolve
 // returns the cache accounting outcome and, when a sink is wired, emits the
 // cache telemetry exactly once per completed resolution. This is the single
@@ -100,11 +108,18 @@ type ResolutionSink interface {
 type CacheResolver struct {
 	manager AssetDownloadManager
 	sink    ResolutionSink
+	l1      L1Cache
 }
 
 // NewCacheResolver wraps a manager with the optional telemetry sink.
 func NewCacheResolver(manager AssetDownloadManager, sink ResolutionSink) *CacheResolver {
 	return &CacheResolver{manager: manager, sink: sink}
+}
+
+func (r *CacheResolver) SetL1Cache(l1 L1Cache) {
+	if r != nil {
+		r.l1 = l1
+	}
 }
 
 // Resolve returns the structured resolution for req. The metric is emitted
@@ -121,6 +136,17 @@ func NewCacheResolver(manager AssetDownloadManager, sink ResolutionSink) *CacheR
 func (r *CacheResolver) Resolve(ctx context.Context, req DownloadRequest) (CacheResolution, error) {
 	if r == nil || r.manager == nil {
 		return CacheResolution{}, ErrEmptyKey
+	}
+	if r.l1 != nil {
+		if asset, ok, err := r.l1.Find(ctx, req); err != nil {
+			return CacheResolution{}, err
+		} else if ok {
+			resolution := CacheResolution{AssetID: req.AssetID, Outcome: CacheOutcomeHitValid, LocalPath: asset.LocalPath, CacheHit: true, Source: CacheSourceLocalDisk, SHA256: asset.SHA256}
+			if r.sink != nil {
+				r.sink.RecordResolution(ctx, resolution)
+			}
+			return resolution, nil
+		}
 	}
 	asset, err := r.manager.Resolve(ctx, req)
 	if err != nil {

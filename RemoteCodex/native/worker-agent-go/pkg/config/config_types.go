@@ -70,6 +70,22 @@ type WorkerConfig struct {
 	// VELOX_ASSET_DOWNLOAD_CONCURRENCY; default 4.
 	AssetDownloadConcurrency int `json:"asset_download_concurrency,omitempty"`
 
+	// Future-asset prefetch policy. These values are centrally loaded here and
+	// passed to the worker scheduler; consumers must not read env directly.
+	PrefetchHorizonJobs                int   `json:"prefetch_horizon_jobs,omitempty"`
+	PrefetchProtectionLookaheadJobs    int   `json:"prefetch_protection_lookahead_jobs,omitempty"`
+	PrefetchMaxConcurrent              int   `json:"prefetch_max_concurrent,omitempty"`
+	PrefetchByteBudget                 int64 `json:"prefetch_byte_budget,omitempty"`
+	PrefetchMaxBandwidthBytesPerSecond int64 `json:"prefetch_max_bandwidth_bytes_per_second,omitempty"`
+	PrefetchDiskRestrictedPercent      int   `json:"prefetch_disk_restricted_percent,omitempty"`
+	PrefetchDiskCriticalPercent        int   `json:"prefetch_disk_critical_percent,omitempty"`
+	PrefetchDiskRecoveryPercent        int   `json:"prefetch_disk_recovery_percent,omitempty"`
+	PrefetchRAMEnabled                 bool  `json:"prefetch_ram_enabled,omitempty"`
+	PrefetchRAMBudgetBytes             int64 `json:"prefetch_ram_budget_bytes,omitempty"`
+	PrefetchRAMMaxAssetBytes           int64 `json:"prefetch_ram_max_asset_bytes,omitempty"`
+	PrefetchRAMMinFutureRefs           int   `json:"prefetch_ram_min_future_refs,omitempty"`
+	PrefetchRAMMaxNextUseDistance      int   `json:"prefetch_ram_max_next_use_distance,omitempty"`
+
 	// ControlGRPCURL is the gRPC endpoint for the persistent worker control stream.
 	// Velox exclusively uses a gRPC-push architecture; this field is mandatory.
 	// Example: "master.example.com:8443"

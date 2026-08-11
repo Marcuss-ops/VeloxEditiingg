@@ -321,6 +321,10 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 
 	sampler := telemetry.NewResourceSampler("", "", cfg.WorkDir, 0, 0)
 	sampler.SetTempDir(cfg.TempDir)
+	var ramCache *prefetch.RAMCache
+	if cfg.PrefetchRAMEnabled {
+		ramCache = prefetch.NewRAMCache(cfg.TmpfsDir, cfg.PrefetchRAMBudgetBytes, cfg.PrefetchRAMMaxAssetBytes)
+	}
 	w := &Worker{
 		config:           cfg,
 		apiClient:        apiClient,
@@ -345,6 +349,7 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		// Remembered self-verified digests for partial-metadata cache hits.
 		assetIntegrity:     make(map[string]assetIntegrityRecord),
 		prefetchController: prefetch.NewController(cfg.WorkerID),
+		prefetchScheduler:  prefetch.NewScheduler(prefetch.Config{WorkerID: cfg.WorkerID, MaxConcurrent: cfg.PrefetchMaxConcurrent, ByteBudget: cfg.PrefetchByteBudget, MaxBandwidthBytesPerSecond: cfg.PrefetchMaxBandwidthBytesPerSecond, DiskRestrictedPercent: cfg.PrefetchDiskRestrictedPercent, DiskCriticalPercent: cfg.PrefetchDiskCriticalPercent, DiskRecoveryPercent: cfg.PrefetchDiskRecoveryPercent, RAM: ramCache, RAMMinFutureRefs: cfg.PrefetchRAMMinFutureRefs, RAMMaxNextUseDistance: cfg.PrefetchRAMMaxNextUseDistance}),
 		// PR-2: TaskOffer-accepted tasks awaiting TaskLeaseGranted before
 		// executeTask dispatch. Keyed by task_id — one canonical entry per
 		// outstanding offer per session.
@@ -438,6 +443,9 @@ func (w *Worker) AttachClipCache(c *workercache.Cache) {
 	}
 	w.clipCache = c
 	w.canonicalAssetCache = workercache.NewCanonicalAssetStore(c)
+	if w.prefetchScheduler != nil {
+		w.prefetchScheduler.SetProtectionStore(w.canonicalAssetCache)
+	}
 }
 
 // signalTaskTerminal wakes the cache cleanup loop only after the master has

@@ -14,10 +14,15 @@ import (
 type FutureAssetPlanner struct {
 	now     func() time.Time
 	version atomic.Uint64
+	limits  shared.Limits
 }
 
-func NewPlanner() *FutureAssetPlanner {
-	return &FutureAssetPlanner{now: func() time.Time { return time.Now().UTC() }}
+func NewPlanner(limits ...shared.Limits) *FutureAssetPlanner {
+	configured := shared.Limits{}
+	if len(limits) > 0 {
+		configured = limits[0]
+	}
+	return &FutureAssetPlanner{now: func() time.Time { return time.Now().UTC() }, limits: configured}
 }
 
 // Build creates the next complete plan for one worker. The input must already
@@ -35,6 +40,6 @@ func (p *FutureAssetPlanner) Build(workerID, currentJobID, planID string, jobs [
 	return shared.Build(shared.PlannerInput{
 		Version: version, PlanID: planID, WorkerID: workerID,
 		GeneratedAt: now, ExpiresAt: now.Add(ttl), CurrentJob: currentJobID,
-		FutureJobs: jobs,
+		FutureJobs: jobs, Limits: p.limits,
 	})
 }

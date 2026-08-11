@@ -16,6 +16,7 @@ import (
 
 	"velox-server/internal/artifacts"
 	"velox-server/internal/completion"
+	futureassetmaster "velox-server/internal/futureasset"
 	"velox-server/internal/ingest"
 	"velox-server/internal/jobs"
 	velmetrics "velox-server/internal/metrics"
@@ -27,6 +28,7 @@ import (
 	"velox-server/internal/taskgraph"
 	workersreg "velox-server/internal/workers"
 	pb "velox-shared/controltransport/pb"
+	sharedfutureasset "velox-shared/futureasset"
 )
 
 // renderPlanCompiler is the narrow seam for the canonical master-side
@@ -88,7 +90,8 @@ type Handler struct {
 	// the stamp (the attempt stays plan_version=0).
 	renderPlanCompiler renderPlanCompiler
 
-	placementMatcher *placement.Matcher
+	placementMatcher   *placement.Matcher
+	futureAssetPlanner *futureassetmaster.FutureAssetPlanner
 
 	// capabilityRegistry gates ArtifactUploaded (the on-the-wire
 	// "artifact.commit.v1" commit path) against the readiness state
@@ -136,18 +139,19 @@ func NewHandler(
 		config = &HandlerConfig{PushMode: true}
 	}
 	return &Handler{
-		registry:         registry,
-		cmdMgr:           cmdMgr,
-		jobsRepo:         jobsRepo,
-		taskRepo:         taskRepo,
-		taskAttemptRepo:  taskAttemptRepo,
-		artifactSvc:      artifactSvc,
-		dbStore:          dbStore,
-		config:           config,
-		authorizer:       NewAllowlistAuthorizer(config.AllowedWorkerIDs, config.AllowInsecure),
-		placementMatcher: placement.NewMatcher(),
-		sessions:         make(map[string]*workerSession),
-		workerSessions:   make(map[string]string),
+		registry:           registry,
+		cmdMgr:             cmdMgr,
+		jobsRepo:           jobsRepo,
+		taskRepo:           taskRepo,
+		taskAttemptRepo:    taskAttemptRepo,
+		artifactSvc:        artifactSvc,
+		dbStore:            dbStore,
+		config:             config,
+		authorizer:         NewAllowlistAuthorizer(config.AllowedWorkerIDs, config.AllowInsecure),
+		placementMatcher:   placement.NewMatcher(),
+		futureAssetPlanner: futureassetmaster.NewPlanner(sharedfutureasset.Limits{PrefetchHorizon: config.FutureAssetPrefetchHorizon, ProtectionLookahead: config.FutureAssetProtectionLookahead}),
+		sessions:           make(map[string]*workerSession),
+		workerSessions:     make(map[string]string),
 	}
 }
 

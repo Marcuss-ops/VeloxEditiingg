@@ -341,6 +341,11 @@ message ArtifactUploaded {
   string lease_id = 9;
   int32 attempt = 10;
   int32 expected_revision = 11;
+  // Canonical attempt ID (UUID). Enables the master to stamp the
+  // authoritative artifact_sha256 on the winning attempt row
+  // (migration 148). Pre-v1 workers send empty; the master resolves
+  // it from the tasks table when missing.
+  string attempt_id = 12;
 }
 
 message Goodbye {}
@@ -520,6 +525,8 @@ message FutureAssetPlan {
   string current_job_id = 6;
   repeated PrefetchJob prefetch_jobs = 7;
   repeated ProtectedFutureAsset protect_assets = 8;
+  int32 prefetch_horizon = 9;
+  int32 protection_lookahead = 10;
 }
 
 message PrefetchJob {

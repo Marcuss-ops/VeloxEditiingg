@@ -17,6 +17,33 @@ type Filter struct {
 	Limit    int      // 0 = all
 }
 
+// FutureReservation is placement metadata for the prefetch window. It must
+// never be represented as a Task status.
+type FutureReservation struct {
+	TaskID        string
+	JobID         string
+	WorkerID      string
+	ReservationID string
+	TaskRevision  int
+	Distance      int
+	ExpiresAt     time.Time
+}
+
+type FutureReservationWithPayload struct {
+	FutureReservation
+	Payload []byte
+}
+
+// FutureReservationStore is optional on lightweight test repositories and is
+// mandatory in the production SQLite repository. It keeps placement policy
+// above the canonical task lifecycle.
+type FutureReservationStore interface {
+	TryReserveFutureTask(context.Context, FutureReservation) (bool, error)
+	ReconcileFutureReservations(context.Context, string, []FutureReservation) error
+	ListFutureReservations(context.Context, string) ([]FutureReservationWithPayload, error)
+	FutureTaskPayload(context.Context, string) ([]byte, error)
+}
+
 // Reader is the read-only task query surface.
 type Reader interface {
 	// Get returns a single task by ID, or (nil, nil) on missing.

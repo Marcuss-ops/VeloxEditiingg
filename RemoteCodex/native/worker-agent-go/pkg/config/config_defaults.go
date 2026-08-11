@@ -20,6 +20,15 @@ import (
 // intermediates or the final artifact.
 const DefaultTmpfsThresholdBytes int64 = 64 * 1024 * 1024
 
+const (
+	DefaultPrefetchByteBudget            int64 = 20 * 1024 * 1024 * 1024
+	DefaultPrefetchRAMBudgetBytes        int64 = 512 * 1024 * 1024
+	DefaultPrefetchRAMMaxAssetBytes      int64 = 128 * 1024 * 1024
+	DefaultPrefetchDiskRestrictedPercent       = 70
+	DefaultPrefetchDiskCriticalPercent         = 85
+	DefaultPrefetchDiskRecoveryPercent         = 75
+)
+
 // GenerateWorkerID creates a unique worker ID in the format "worker-{8-char-hex}".
 //
 // Implementation lives in shared/identity so that the Velox master server and
@@ -104,6 +113,39 @@ func (c *WorkerConfig) applyDefaults() {
 	// tmpfs_dir can never pair with a zero/negative threshold.
 	if c.TmpfsThresholdBytes <= 0 {
 		c.TmpfsThresholdBytes = DefaultTmpfsThresholdBytes
+	}
+	if c.PrefetchHorizonJobs <= 0 {
+		c.PrefetchHorizonJobs = 3
+	}
+	if c.PrefetchProtectionLookaheadJobs <= 0 {
+		c.PrefetchProtectionLookaheadJobs = 10
+	}
+	if c.PrefetchMaxConcurrent <= 0 {
+		c.PrefetchMaxConcurrent = 2
+	}
+	if c.PrefetchByteBudget <= 0 {
+		c.PrefetchByteBudget = DefaultPrefetchByteBudget
+	}
+	if c.PrefetchDiskRestrictedPercent <= 0 {
+		c.PrefetchDiskRestrictedPercent = DefaultPrefetchDiskRestrictedPercent
+	}
+	if c.PrefetchDiskCriticalPercent <= 0 {
+		c.PrefetchDiskCriticalPercent = DefaultPrefetchDiskCriticalPercent
+	}
+	if c.PrefetchDiskRecoveryPercent <= 0 {
+		c.PrefetchDiskRecoveryPercent = DefaultPrefetchDiskRecoveryPercent
+	}
+	if c.PrefetchRAMBudgetBytes <= 0 {
+		c.PrefetchRAMBudgetBytes = DefaultPrefetchRAMBudgetBytes
+	}
+	if c.PrefetchRAMMaxAssetBytes <= 0 {
+		c.PrefetchRAMMaxAssetBytes = DefaultPrefetchRAMMaxAssetBytes
+	}
+	if c.PrefetchRAMMinFutureRefs <= 0 {
+		c.PrefetchRAMMinFutureRefs = 2
+	}
+	if c.PrefetchRAMMaxNextUseDistance <= 0 {
+		c.PrefetchRAMMaxNextUseDistance = 3
 	}
 	if c.VideoEngineCppBin == "" {
 		c.VideoEngineCppBin = "velox-render-cpp"

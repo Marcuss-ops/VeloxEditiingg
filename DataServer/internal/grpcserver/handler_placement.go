@@ -153,6 +153,10 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 		return
 	}
 
+	// Persist and publish the next worker-scoped hard reservation window while
+	// the current task is still running. The planner is best-effort here: a
+	// prefetch outage must never block correctness of the claimed task.
+	h.refreshFutureAssetPlan(ctx, workerID, tws.JobID)
 	h.sendClaimedTaskOffer(ctx, sess, tws, attempt, leaseID)
 }
 

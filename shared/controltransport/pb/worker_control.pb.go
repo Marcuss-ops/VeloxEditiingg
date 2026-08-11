@@ -1748,8 +1748,13 @@ type ArtifactUploaded struct {
 	LeaseId          string                 `protobuf:"bytes,9,opt,name=lease_id,json=leaseId,proto3" json:"lease_id,omitempty"`
 	Attempt          int32                  `protobuf:"varint,10,opt,name=attempt,proto3" json:"attempt,omitempty"`
 	ExpectedRevision int32                  `protobuf:"varint,11,opt,name=expected_revision,json=expectedRevision,proto3" json:"expected_revision,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Canonical attempt ID (UUID). Enables the master to stamp the
+	// authoritative artifact_sha256 on the winning attempt row
+	// (migration 148). Pre-v1 workers send empty; the master resolves
+	// it from the tasks table when missing.
+	AttemptId     string `protobuf:"bytes,12,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ArtifactUploaded) Reset() {
@@ -1857,6 +1862,13 @@ func (x *ArtifactUploaded) GetExpectedRevision() int32 {
 		return x.ExpectedRevision
 	}
 	return 0
+}
+
+func (x *ArtifactUploaded) GetAttemptId() string {
+	if x != nil {
+		return x.AttemptId
+	}
+	return ""
 }
 
 type Goodbye struct {
@@ -3289,17 +3301,19 @@ func (*Ping) Descriptor() ([]byte, []int) {
 // retention protection (lookahead <= 10). No TaskState is changed by this
 // message.
 type FutureAssetPlan struct {
-	state         protoimpl.MessageState  `protogen:"open.v1"`
-	Version       uint64                  `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
-	PlanId        string                  `protobuf:"bytes,2,opt,name=plan_id,json=planId,proto3" json:"plan_id,omitempty"`
-	WorkerId      string                  `protobuf:"bytes,3,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
-	GeneratedAt   *timestamppb.Timestamp  `protobuf:"bytes,4,opt,name=generated_at,json=generatedAt,proto3" json:"generated_at,omitempty"`
-	ExpiresAt     *timestamppb.Timestamp  `protobuf:"bytes,5,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
-	CurrentJobId  string                  `protobuf:"bytes,6,opt,name=current_job_id,json=currentJobId,proto3" json:"current_job_id,omitempty"`
-	PrefetchJobs  []*PrefetchJob          `protobuf:"bytes,7,rep,name=prefetch_jobs,json=prefetchJobs,proto3" json:"prefetch_jobs,omitempty"`
-	ProtectAssets []*ProtectedFutureAsset `protobuf:"bytes,8,rep,name=protect_assets,json=protectAssets,proto3" json:"protect_assets,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state               protoimpl.MessageState  `protogen:"open.v1"`
+	Version             uint64                  `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
+	PlanId              string                  `protobuf:"bytes,2,opt,name=plan_id,json=planId,proto3" json:"plan_id,omitempty"`
+	WorkerId            string                  `protobuf:"bytes,3,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	GeneratedAt         *timestamppb.Timestamp  `protobuf:"bytes,4,opt,name=generated_at,json=generatedAt,proto3" json:"generated_at,omitempty"`
+	ExpiresAt           *timestamppb.Timestamp  `protobuf:"bytes,5,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	CurrentJobId        string                  `protobuf:"bytes,6,opt,name=current_job_id,json=currentJobId,proto3" json:"current_job_id,omitempty"`
+	PrefetchJobs        []*PrefetchJob          `protobuf:"bytes,7,rep,name=prefetch_jobs,json=prefetchJobs,proto3" json:"prefetch_jobs,omitempty"`
+	ProtectAssets       []*ProtectedFutureAsset `protobuf:"bytes,8,rep,name=protect_assets,json=protectAssets,proto3" json:"protect_assets,omitempty"`
+	PrefetchHorizon     int32                   `protobuf:"varint,9,opt,name=prefetch_horizon,json=prefetchHorizon,proto3" json:"prefetch_horizon,omitempty"`
+	ProtectionLookahead int32                   `protobuf:"varint,10,opt,name=protection_lookahead,json=protectionLookahead,proto3" json:"protection_lookahead,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *FutureAssetPlan) Reset() {
@@ -3386,6 +3400,20 @@ func (x *FutureAssetPlan) GetProtectAssets() []*ProtectedFutureAsset {
 		return x.ProtectAssets
 	}
 	return nil
+}
+
+func (x *FutureAssetPlan) GetPrefetchHorizon() int32 {
+	if x != nil {
+		return x.PrefetchHorizon
+	}
+	return 0
+}
+
+func (x *FutureAssetPlan) GetProtectionLookahead() int32 {
+	if x != nil {
+		return x.ProtectionLookahead
+	}
+	return 0
 }
 
 type PrefetchJob struct {
@@ -5309,7 +5337,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"frames_out\x18! \x01(\x03R\tframesOut\x12\x1f\n" +
 	"\vartifact_id\x18\" \x01(\tR\n" +
 	"artifactId\x128\n" +
-	"\x18telemetry_schema_version\x18# \x01(\x05R\x16telemetrySchemaVersion\"\xf3\x02\n" +
+	"\x18telemetry_schema_version\x18# \x01(\x05R\x16telemetrySchemaVersion\"\x92\x03\n" +
 	"\x10ArtifactUploaded\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x1f\n" +
 	"\vartifact_id\x18\x02 \x01(\tR\n" +
@@ -5323,7 +5351,9 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\blease_id\x18\t \x01(\tR\aleaseId\x12\x18\n" +
 	"\aattempt\x18\n" +
 	" \x01(\x05R\aattempt\x12+\n" +
-	"\x11expected_revision\x18\v \x01(\x05R\x10expectedRevision\"\t\n" +
+	"\x11expected_revision\x18\v \x01(\x05R\x10expectedRevision\x12\x1d\n" +
+	"\n" +
+	"attempt_id\x18\f \x01(\tR\tattemptId\"\t\n" +
 	"\aGoodbye\"`\n" +
 	"\x11AssetJobReference\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x17\n" +
@@ -5448,7 +5478,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\fLeaseRevoked\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x06\n" +
-	"\x04Ping\"\x8e\x03\n" +
+	"\x04Ping\"\xec\x03\n" +
 	"\x0fFutureAssetPlan\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x04R\aversion\x12\x17\n" +
 	"\aplan_id\x18\x02 \x01(\tR\x06planId\x12\x1b\n" +
@@ -5458,7 +5488,10 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"expires_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12$\n" +
 	"\x0ecurrent_job_id\x18\x06 \x01(\tR\fcurrentJobId\x12?\n" +
 	"\rprefetch_jobs\x18\a \x03(\v2\x1a.velox.control.PrefetchJobR\fprefetchJobs\x12J\n" +
-	"\x0eprotect_assets\x18\b \x03(\v2#.velox.control.ProtectedFutureAssetR\rprotectAssets\"\xdb\x01\n" +
+	"\x0eprotect_assets\x18\b \x03(\v2#.velox.control.ProtectedFutureAssetR\rprotectAssets\x12)\n" +
+	"\x10prefetch_horizon\x18\t \x01(\x05R\x0fprefetchHorizon\x121\n" +
+	"\x14protection_lookahead\x18\n" +
+	" \x01(\x05R\x13protectionLookahead\"\xdb\x01\n" +
 	"\vPrefetchJob\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x17\n" +
 	"\atask_id\x18\x02 \x01(\tR\x06taskId\x12%\n" +

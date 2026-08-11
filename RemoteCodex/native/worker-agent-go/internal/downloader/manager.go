@@ -112,6 +112,15 @@ type AssetDownloadManager interface {
 	LatestOperational() OperationalSnapshot
 }
 
+// PriorityPromoter is optional so existing manager fakes and adapters remain
+// source-compatible. A foreground waiter can promote a shared queued
+// prefetch transfer without creating a second physical transfer.
+type PriorityPromoter interface {
+	Promote(assetref.AssetKey, int) bool
+}
+
+const PriorityForeground = 1000
+
 // Manager implements AssetDownloadManager.
 type Manager struct {
 	cfg        Config
@@ -177,6 +186,9 @@ func (m *Manager) Resolve(ctx context.Context, req DownloadRequest) (DownloadedA
 	for attempt := 0; attempt < 3; attempt++ {
 		t, shared := m.acquireTransfer(key, req, ctx)
 		if shared {
+			if req.Priority > 0 {
+				m.Promote(key, req.Priority)
+			}
 			m.coalesced.Add(1)
 			if m.cfg.OnCoalescedRequest != nil {
 				m.cfg.OnCoalescedRequest(req.SizeBytes)
@@ -218,6 +230,18 @@ func (m *Manager) Resolve(ctx context.Context, req DownloadRequest) (DownloadedA
 		}
 	}
 	return DownloadedAsset{}, errTransferCancelled
+}
+
+func (m *Manager) Promote(key assetref.AssetKey, priority int) bool {
+	if m == nil || key == "" {
+		return false
+	}
+	t := m.registry.Get(key)
+	if t == nil || t.isTerminal() {
+		return false
+	}
+	t.promote(priority)
+	return m.sched.Promote(key, priority)
 }
 
 // acquireTransfer returns the live transfer for key, creating one (and

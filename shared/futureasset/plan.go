@@ -26,6 +26,23 @@ const (
 	DefaultProtectionLookahead = 10
 )
 
+// Limits controls the two intentionally different worker windows. It is
+// carried in the snapshot so the master and worker validate the same policy.
+type Limits struct {
+	PrefetchHorizon     int
+	ProtectionLookahead int
+}
+
+func (l Limits) withDefaults() Limits {
+	if l.PrefetchHorizon <= 0 {
+		l.PrefetchHorizon = DefaultPrefetchHorizon
+	}
+	if l.ProtectionLookahead <= 0 {
+		l.ProtectionLookahead = DefaultProtectionLookahead
+	}
+	return l
+}
+
 // AssetManifest is the master's canonical integrity contract for one asset.
 // SHA256 and SizeBytes are required before an asset is eligible for verified
 // prefetch.
@@ -67,6 +84,7 @@ type Plan struct {
 	CurrentJob   string
 	PrefetchJobs []Job
 	Protect      []ProtectedAsset
+	Limits       Limits
 }
 
 // PlannerInput is already-placement-scoped input. The caller must provide
@@ -79,6 +97,7 @@ type PlannerInput struct {
 	ExpiresAt   time.Time
 	CurrentJob  string
 	FutureJobs  []Job
+	Limits      Limits
 }
 
 // Build validates and compiles one complete snapshot. It never performs I/O,
@@ -97,17 +116,22 @@ func Build(in PlannerInput) (Plan, error) {
 		return Plan{}, fmt.Errorf("futureasset: generated_at/expires_at must be ordered")
 	}
 
+	limits := in.Limits.withDefaults()
+	if limits.PrefetchHorizon > limits.ProtectionLookahead {
+		return Plan{}, fmt.Errorf("futureasset: prefetch horizon cannot exceed protection lookahead")
+	}
 	plan := Plan{
 		Version: in.Version, PlanID: strings.TrimSpace(in.PlanID), WorkerID: strings.TrimSpace(in.WorkerID),
 		GeneratedAt: in.GeneratedAt, ExpiresAt: in.ExpiresAt, CurrentJob: in.CurrentJob,
 		PrefetchJobs: make([]Job, 0, min(len(in.FutureJobs), DefaultPrefetchHorizon)),
 		Protect:      make([]ProtectedAsset, 0),
+		Limits:       limits,
 	}
 	protected := make(map[string]*ProtectedAsset)
 	seenJobs := make(map[string]struct{}, len(in.FutureJobs))
 
 	for index, inputJob := range in.FutureJobs {
-		if index >= DefaultProtectionLookahead {
+		if index >= limits.ProtectionLookahead {
 			break
 		}
 		job := inputJob
@@ -138,7 +162,7 @@ func Build(in PlannerInput) (Plan, error) {
 				entry.NextUseDistance = job.Distance
 			}
 		}
-		if job.Distance <= DefaultPrefetchHorizon {
+		if job.Distance <= limits.PrefetchHorizon {
 			if job.ReservationID == "" {
 				return Plan{}, fmt.Errorf("futureasset: prefetch job %q requires reservation_id", job.JobID)
 			}
@@ -195,12 +219,13 @@ func (p Plan) Validate() error {
 	if p.GeneratedAt.IsZero() || p.ExpiresAt.IsZero() || !p.ExpiresAt.After(p.GeneratedAt) {
 		return fmt.Errorf("futureasset: invalid plan timestamps")
 	}
-	if len(p.PrefetchJobs) > DefaultPrefetchHorizon {
-		return fmt.Errorf("futureasset: prefetch horizon exceeds %d", DefaultPrefetchHorizon)
+	limits := p.Limits.withDefaults()
+	if len(p.PrefetchJobs) > limits.PrefetchHorizon {
+		return fmt.Errorf("futureasset: prefetch horizon exceeds %d", limits.PrefetchHorizon)
 	}
 	seenJobs := make(map[string]struct{}, len(p.PrefetchJobs))
 	for i, job := range p.PrefetchJobs {
-		if job.Distance != i+1 || job.Distance > DefaultPrefetchHorizon || job.ReservationID == "" {
+		if job.Distance != i+1 || job.Distance > limits.PrefetchHorizon || job.ReservationID == "" {
 			return fmt.Errorf("futureasset: prefetch job %q has invalid distance/reservation", job.JobID)
 		}
 		if job.JobID == "" || job.TaskID == "" {
@@ -223,7 +248,7 @@ func (p Plan) Validate() error {
 	}
 	seenProtected := make(map[string]struct{}, len(p.Protect))
 	for _, asset := range p.Protect {
-		if asset.AssetKey == "" || asset.FutureRefCount <= 0 || asset.NextUseDistance <= 0 || asset.NextUseDistance > DefaultProtectionLookahead {
+		if asset.AssetKey == "" || asset.FutureRefCount <= 0 || asset.NextUseDistance <= 0 || asset.NextUseDistance > limits.ProtectionLookahead {
 			return fmt.Errorf("futureasset: invalid protected asset %q", asset.AssetKey)
 		}
 		if _, exists := seenProtected[asset.AssetKey]; exists {
@@ -239,9 +264,11 @@ func (p Plan) ToProto() *pb.FutureAssetPlan {
 	out := &pb.FutureAssetPlan{
 		Version: p.Version, PlanId: p.PlanID, WorkerId: p.WorkerID,
 		GeneratedAt: timestamppb.New(p.GeneratedAt), ExpiresAt: timestamppb.New(p.ExpiresAt),
-		CurrentJobId:  p.CurrentJob,
-		PrefetchJobs:  make([]*pb.PrefetchJob, 0, len(p.PrefetchJobs)),
-		ProtectAssets: make([]*pb.ProtectedFutureAsset, 0, len(p.Protect)),
+		CurrentJobId:        p.CurrentJob,
+		PrefetchJobs:        make([]*pb.PrefetchJob, 0, len(p.PrefetchJobs)),
+		ProtectAssets:       make([]*pb.ProtectedFutureAsset, 0, len(p.Protect)),
+		PrefetchHorizon:     int32(p.Limits.withDefaults().PrefetchHorizon),
+		ProtectionLookahead: int32(p.Limits.withDefaults().ProtectionLookahead),
 	}
 	for _, job := range p.PrefetchJobs {
 		wireJob := &pb.PrefetchJob{JobId: job.JobID, TaskId: job.TaskID, ReservationId: job.ReservationID, TaskRevision: int32(job.TaskRevision), Distance: int32(job.Distance)}
@@ -261,7 +288,7 @@ func FromProto(in *pb.FutureAssetPlan) (Plan, error) {
 	if in == nil {
 		return Plan{}, fmt.Errorf("futureasset: nil plan")
 	}
-	p := Plan{Version: in.GetVersion(), PlanID: in.GetPlanId(), WorkerID: in.GetWorkerId(), CurrentJob: in.GetCurrentJobId()}
+	p := Plan{Version: in.GetVersion(), PlanID: in.GetPlanId(), WorkerID: in.GetWorkerId(), CurrentJob: in.GetCurrentJobId(), Limits: Limits{PrefetchHorizon: int(in.GetPrefetchHorizon()), ProtectionLookahead: int(in.GetProtectionLookahead())}}
 	if in.GetGeneratedAt() == nil || in.GetExpiresAt() == nil {
 		return Plan{}, fmt.Errorf("futureasset: plan timestamps are required")
 	}

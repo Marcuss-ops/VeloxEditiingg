@@ -15,8 +15,11 @@ const RuntimeConfigSchemaVersion = "velox.runtime.v1"
 
 // CacheConfig controls master-side cache protection refreshes.
 type CacheConfig struct {
-	ProtectedAssetLookaheadJobs int
-	SnapshotInterval            time.Duration
+	ProtectedAssetLookaheadJobs    int
+	SnapshotInterval               time.Duration
+	FutureAssetPrefetchHorizon     int
+	FutureAssetProtectionLookahead int
+	FutureAssetPlanTTL             time.Duration
 }
 
 // SchedulerConfig controls periodic master scheduling/reconciliation loops.
@@ -55,8 +58,11 @@ func loadOperationalRuntimeConfig(raw RawConfig) (SupervisorConfig, CacheConfig,
 	supervisor := loadSupervisorConfig(raw)
 
 	cache := CacheConfig{
-		ProtectedAssetLookaheadJobs: raw.Int("VELOX_CACHE_LOOKAHEAD_JOBS", 10, 1),
-		SnapshotInterval:            raw.Duration("VELOX_CACHE_SNAPSHOT_INTERVAL", 30*time.Second),
+		ProtectedAssetLookaheadJobs:    raw.Int("VELOX_CACHE_LOOKAHEAD_JOBS", 10, 1),
+		SnapshotInterval:               raw.Duration("VELOX_CACHE_SNAPSHOT_INTERVAL", 30*time.Second),
+		FutureAssetPrefetchHorizon:     raw.Int("VELOX_PREFETCH_HORIZON_JOBS", 3, 1),
+		FutureAssetProtectionLookahead: raw.Int("VELOX_PREFETCH_PROTECTION_LOOKAHEAD_JOBS", 10, 1),
+		FutureAssetPlanTTL:             raw.Duration("VELOX_PREFETCH_PLAN_TTL", 2*time.Minute),
 	}
 	scheduler := SchedulerConfig{
 		TaskGraphTick:             raw.Duration("VELOX_TASKGRAPH_TICK", 2*time.Second),
@@ -96,7 +102,7 @@ func operationalParseErrors(raw RawConfig) []string {
 			}
 		}
 	}
-	for _, key := range []string{"VELOX_CACHE_SNAPSHOT_INTERVAL", "VELOX_TASKGRAPH_TICK", "VELOX_ARTIFACT_RECONCILE_INTERVAL", "VELOX_METRICS_SNAPSHOT_INTERVAL", "VELOX_METRICS_TICK", "VELOX_ALERT_EVALUATION_INTERVAL", "VELOX_ALERT_COOLDOWN", "VELOX_RECONCILIATION_TICK"} {
+	for _, key := range []string{"VELOX_CACHE_SNAPSHOT_INTERVAL", "VELOX_PREFETCH_PLAN_TTL", "VELOX_TASKGRAPH_TICK", "VELOX_ARTIFACT_RECONCILE_INTERVAL", "VELOX_METRICS_SNAPSHOT_INTERVAL", "VELOX_METRICS_TICK", "VELOX_ALERT_EVALUATION_INTERVAL", "VELOX_ALERT_COOLDOWN", "VELOX_RECONCILIATION_TICK"} {
 		checkDuration(key)
 	}
 	for _, item := range []struct {

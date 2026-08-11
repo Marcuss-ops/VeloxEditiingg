@@ -154,6 +154,9 @@ type DownloadRequest struct {
 	MIMEType  string
 
 	Priority int
+	// MaxBandwidthBytesPerSecond is a prefetch QoS cap. Zero means the
+	// foreground/unlimited policy.
+	MaxBandwidthBytesPerSecond int64
 }
 
 // DownloadedAsset is the successful outcome of Resolve: a local filesystem

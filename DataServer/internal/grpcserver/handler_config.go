@@ -7,6 +7,7 @@ package grpcserver
 
 import (
 	"strings"
+	"time"
 
 	"velox-server/internal/artifacts"
 	"velox-server/internal/completion"
@@ -25,7 +26,10 @@ type HandlerConfig struct {
 	AllowInsecure bool
 	// AllowedWorkerIDs is the validated worker ID allowlist captured by
 	// the application Config (VELOX_ALLOWED_WORKERS).
-	AllowedWorkerIDs []string
+	AllowedWorkerIDs               []string
+	FutureAssetPrefetchHorizon     int
+	FutureAssetProtectionLookahead int
+	FutureAssetPlanTTL             time.Duration
 }
 
 // SetIngestionSvc installs the canonical TaskReportIngestionService so

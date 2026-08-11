@@ -51,7 +51,7 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 		SHA256:    assetref.ContentHash(expectedSHA256),
 		SizeBytes: expectedSizeBytes,
 		Source:    "master_asset_bridge",
-		Priority:  downloader.DefaultPriority,
+		Priority:  downloader.PriorityForeground,
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to download velox asset %s: %w", assetID, err)
@@ -501,7 +501,7 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 				// partial; progress must not regress while the suffix is fetched.
 				onProgress(resumeOffset)
 			}
-			resp.Body = &assetProgressBody{src: resp.Body, onProgress: onProgress, done: resumeOffset}
+			resp.Body = &assetProgressBody{ctx: ctx, src: resp.Body, onProgress: onProgress, done: resumeOffset, maxBPS: req.MaxBandwidthBytesPerSecond}
 		}
 		localPath, downloadedBytes, actualSHA, verifyDuration, err := writeVeloxAssetToCacheAtOffset(cacheDir, assetID, string(req.SHA256), req.SizeBytes, resp, resumeOffset)
 		resp.Body.Close()
@@ -549,14 +549,29 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 // throttles its own publishes). Counts bytes actually read, so a partial or
 // aborted stream reports exactly the bytes received.
 type assetProgressBody struct {
+	ctx        context.Context
 	src        io.ReadCloser
 	onProgress func(downloadedBytes int64)
 	done       int64
+	maxBPS     int64
+	lastRead   time.Time
 }
 
 func (p *assetProgressBody) Read(b []byte) (int, error) {
+	if p.maxBPS > 0 && p.lastRead.IsZero() {
+		p.lastRead = time.Now()
+	}
 	n, err := p.src.Read(b)
 	if n > 0 {
+		if p.maxBPS > 0 {
+			delay := time.Duration(float64(n) / float64(p.maxBPS) * float64(time.Second))
+			select {
+			case <-time.After(delay):
+			case <-p.ctx.Done():
+				return 0, p.ctx.Err()
+			}
+			p.lastRead = time.Now()
+		}
 		p.done += int64(n)
 		p.onProgress(p.done)
 	}

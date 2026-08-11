@@ -183,6 +183,7 @@ type Worker struct {
 	// does not own downloads; future prefetch will call the existing resolver
 	// after reservation/budget gates are wired.
 	prefetchController *prefetch.Controller
+	prefetchScheduler  *prefetch.Scheduler
 
 	// assetIntegrity remembers the self-verified digest+size of the most
 	// recent successful download of each asset (computed while the file was

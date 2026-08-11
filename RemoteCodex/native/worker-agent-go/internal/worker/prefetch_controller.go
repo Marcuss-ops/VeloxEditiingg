@@ -1,6 +1,8 @@
 package worker
 
-import "velox-worker-agent/internal/prefetch"
+import (
+	"velox-worker-agent/internal/prefetch"
+)
 
 // futureAssetController returns the worker's snapshot reconciler. Tests that
 // construct a Worker literal without New() still get the same fail-closed,
@@ -14,4 +16,29 @@ func (w *Worker) futureAssetController() *prefetch.Controller {
 		w.prefetchController = prefetch.NewController(workerID)
 	}
 	return w.prefetchController
+}
+
+func (w *Worker) futureAssetScheduler() *prefetch.Scheduler {
+	if w.prefetchScheduler == nil {
+		workerID := ""
+		if w.config != nil {
+			workerID = w.config.WorkerID
+		}
+		cfg := prefetch.Config{WorkerID: workerID}
+		if w.config != nil {
+			cfg.MaxConcurrent = w.config.PrefetchMaxConcurrent
+			cfg.ByteBudget = w.config.PrefetchByteBudget
+			cfg.DiskRestrictedPercent = w.config.PrefetchDiskRestrictedPercent
+			cfg.DiskCriticalPercent = w.config.PrefetchDiskCriticalPercent
+			cfg.DiskRecoveryPercent = w.config.PrefetchDiskRecoveryPercent
+		}
+		w.prefetchScheduler = prefetch.NewScheduler(cfg)
+	}
+	resolver := w.assetCacheResolver()
+	if ram := w.prefetchScheduler.RAMCache(); ram != nil {
+		resolver.SetL1Cache(ram)
+	}
+	w.prefetchScheduler.SetResolver(resolver)
+	w.prefetchScheduler.SetProtectionStore(w.canonicalAssetCache)
+	return w.prefetchScheduler
 }
