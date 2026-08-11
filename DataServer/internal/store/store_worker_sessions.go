@@ -157,9 +157,12 @@ func (s *SQLiteStore) DeleteWorkerRuntimeSnapshotBySession(workerID, sessionID s
 	if s == nil || s.db == nil {
 		return fmt.Errorf("worker runtime snapshot: store not initialized")
 	}
-	_, err := s.db.Exec(`DELETE FROM worker_runtime_snapshots WHERE worker_id = ? AND session_id = ?`, workerID, sessionID)
+	result, err := s.db.Exec(`DELETE FROM worker_runtime_snapshots WHERE worker_id = ? AND session_id = ?`, workerID, sessionID)
 	if err != nil {
 		return fmt.Errorf("worker runtime snapshot delete: %w", err)
+	}
+	if _, err := readRowsAffected(result, "worker runtime snapshot delete"); err != nil {
+		return err
 	}
 	return nil
 }
@@ -199,8 +202,16 @@ func (s *SQLiteStore) ValidateSession(tokenHash string) (*PersistedSession, erro
 
 	// Updating last_seen is part of successful validation. If it cannot be
 	// persisted, do not return a valid session based on stale durable state.
-	if _, err := s.db.Exec(`UPDATE worker_sessions SET last_seen = ? WHERE session_id = ?`, now, sess.SessionID); err != nil {
+	result, err := s.db.Exec(`UPDATE worker_sessions SET last_seen = ? WHERE session_id = ?`, now, sess.SessionID)
+	if err != nil {
 		return nil, fmt.Errorf("validate session update last_seen: %w", err)
+	}
+	affected, err := readRowsAffected(result, "validate session update last_seen")
+	if err != nil {
+		return nil, err
+	}
+	if affected != 1 {
+		return nil, fmt.Errorf("validate session update last_seen: %w", ErrTransitionConflict)
 	}
 	sess.LastSeen = nowTime
 
@@ -251,14 +262,31 @@ func parseWorkerSessionTime(value, field string) (time.Time, error) {
 
 // UpdateSessionLastSeen bumps the last_seen timestamp for a session.
 func (s *SQLiteStore) UpdateSessionLastSeen(sessionID string) error {
-	_, err := s.db.Exec(`UPDATE worker_sessions SET last_seen = ? WHERE session_id = ?`,
+	result, err := s.db.Exec(`UPDATE worker_sessions SET last_seen = ? WHERE session_id = ?`,
 		time.Now().UTC().Format(time.RFC3339), sessionID)
-	return err
+	if err != nil {
+		return fmt.Errorf("update session last_seen: %w", err)
+	}
+	affected, err := readRowsAffected(result, "update session last_seen")
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return fmt.Errorf("update session last_seen: %w", ErrTransitionConflict)
+	}
+	return nil
 }
 
 // RevokeWorkerSessions revokes all sessions for a worker.
 func (s *SQLiteStore) RevokeWorkerSessions(workerID string) error {
-	_, err := s.db.Exec(`UPDATE worker_sessions SET revoked = 1 WHERE worker_id = ?`, workerID)
+	result, err := s.db.Exec(`UPDATE worker_sessions SET revoked = 1 WHERE worker_id = ?`, workerID)
+	if err != nil {
+		return fmt.Errorf("revoke worker sessions: %w", err)
+	}
+	// This command is intentionally idempotent: zero rows means the worker
+	// currently has no persisted sessions. Still read the count so a driver
+	// failure cannot be mistaken for a successful revoke.
+	_, err = readRowsAffected(result, "revoke worker sessions")
 	return err
 }
 
@@ -314,8 +342,14 @@ func (s *SQLiteStore) RevokeSession(sessionID string) error {
 	} else {
 		revokeArgs = []interface{}{sessionID}
 	}
-	if _, err := tx.Exec(revokeQuery, revokeArgs...); err != nil {
+	result, err := tx.Exec(revokeQuery, revokeArgs...)
+	if err != nil {
 		return fmt.Errorf("revoke session row: %w", err)
+	}
+	// RevokeSession is idempotent for an already absent session, but a driver
+	// that cannot report the affected rows must not be treated as success.
+	if _, err := readRowsAffected(result, "revoke session row"); err != nil {
+		return err
 	}
 	var snapshotTableCount int
 	if err := tx.QueryRow(`
@@ -324,10 +358,14 @@ func (s *SQLiteStore) RevokeSession(sessionID string) error {
 		return fmt.Errorf("revoke runtime snapshot schema probe: %w", err)
 	}
 	if snapshotTableCount == 1 {
-		if _, err := tx.Exec(`UPDATE worker_runtime_snapshots
+		result, err := tx.Exec(`UPDATE worker_runtime_snapshots
 			SET disconnected_at = COALESCE(disconnected_at, ?)
-			WHERE session_id = ?`, now, sessionID); err != nil {
+			WHERE session_id = ?`, now, sessionID)
+		if err != nil {
 			return fmt.Errorf("revoke runtime snapshot: %w", err)
+		}
+		if _, err := readRowsAffected(result, "revoke runtime snapshot"); err != nil {
+			return err
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -346,7 +384,7 @@ func (s *SQLiteStore) CleanupExpiredSessions() (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	return readRowsAffected(result, "cleanup expired sessions")
 }
 
 // WorkerSessionFreshnessWindow — a session is only considered active if its

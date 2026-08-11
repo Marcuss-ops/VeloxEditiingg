@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -130,6 +131,19 @@ func TestSecurity_RevokedSessionCannotValidate(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatalf("revoked session validated successfully: %+v", got)
+	}
+}
+
+func TestSessionLastSeenRequiresExistingRow(t *testing.T) {
+	s, err := NewSQLiteStore(t.TempDir() + "/missing-session-last-seen.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	defer s.Close()
+
+	err = s.UpdateSessionLastSeen("missing-session")
+	if !errors.Is(err, ErrTransitionConflict) {
+		t.Fatalf("UpdateSessionLastSeen missing session error = %v, want ErrTransitionConflict", err)
 	}
 }
 
