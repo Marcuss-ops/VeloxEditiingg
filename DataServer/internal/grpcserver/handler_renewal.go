@@ -9,6 +9,8 @@ import (
 	"log"
 	"time"
 
+	"velox-server/internal/jobs"
+	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 	pb "velox-shared/controltransport/pb"
 )
@@ -33,6 +35,35 @@ func (h *Handler) handleTaskRenewal(workerID string, tr *pb.TaskLeaseRenewal, se
 	if err != nil || t == nil {
 		log.Printf("[GRPC] TaskLeaseRenewal task %s not found: %v", taskID, err)
 		return
+	}
+	// A cancelled parent is a terminal fence for its active task.  Do this
+	// before accepting another renewal: otherwise an operator cancellation
+	// can leave the worker BUSY until the lease TTL expires, and the worker can
+	// keep extending that TTL indefinitely.  The task repository owns the
+	// atomic Task + TaskAttempt transition and clears the lease tuple.
+	if h.jobsRepo != nil {
+		job, jobErr := h.jobsRepo.Get(ctx, t.JobID)
+		if jobErr != nil {
+			log.Printf("[GRPC] TaskLeaseRenewal parent lookup failed for task %s: %v", taskID, jobErr)
+			return
+		}
+		if job != nil && job.Status == jobs.StatusCancelled {
+			if err := h.taskRepo.TransitionTaskToTerminalAtomic(
+				ctx,
+				taskID,
+				workerID,
+				leaseID,
+				taskgraph.StatusCancelled,
+				taskattempts.AttemptStatusCancelled,
+				"TASK_CANCELLED",
+				"parent job was cancelled",
+			); err != nil {
+				log.Printf("[GRPC] TaskLeaseRenewal cancellation convergence failed for task %s: %v", taskID, err)
+			} else {
+				log.Printf("[GRPC] TaskLeaseRenewal revoked cancelled parent task %s for worker %s", taskID, workerID)
+			}
+			return
+		}
 	}
 	if t.Status != taskgraph.StatusLeased && t.Status != taskgraph.StatusRunning {
 		log.Printf("[GRPC] TaskLeaseRenewal from worker %s refused — task %s is not leasable (status=%s)", workerID, taskID, t.Status)

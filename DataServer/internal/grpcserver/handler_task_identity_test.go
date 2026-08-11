@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"velox-server/internal/jobs"
 	"velox-server/internal/taskgraph"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
@@ -113,6 +114,20 @@ func TestHandleTaskAcceptedGrantUsesPostTransitionRevision(t *testing.T) {
 	h.handleTaskRenewal(task.WorkerID, lifecycleRenewal(repo.nowTask), sess)
 	if repo.renewCalls != 1 || repo.lastRenewRevision != repo.nowTask.Revision {
 		t.Fatalf("renew calls=%d revision=%d, want calls=1 revision=%d", repo.renewCalls, repo.lastRenewRevision, repo.nowTask.Revision)
+	}
+}
+
+func TestHandleTaskRenewalCancelledParentConvergesTask(t *testing.T) {
+	h, repo, sess := lifecycleHandler(t)
+	h.jobsRepo = &spoofStubJobsRepo{getJob: &jobs.Job{ID: "job-identity", Status: jobs.StatusCancelled}}
+
+	h.handleTaskRenewal("worker-identity", lifecycleRenewal(repo.nowTask), sess)
+
+	if repo.transitionCalls != 1 {
+		t.Fatalf("TransitionTaskToTerminalAtomic calls = %d, want 1", repo.transitionCalls)
+	}
+	if repo.renewCalls != 0 {
+		t.Fatalf("RenewLease calls = %d, want 0 for cancelled parent", repo.renewCalls)
 	}
 }
 
