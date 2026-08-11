@@ -128,6 +128,8 @@ func (b *SSEBroker) SSEHandler() gin.HandlerFunc {
 			flusher.Flush()
 		}
 
+		keepaliveTicker := time.NewTicker(30 * time.Second)
+		defer keepaliveTicker.Stop()
 		for {
 			select {
 			case <-c.Request.Context().Done():
@@ -138,7 +140,7 @@ func (b *SSEBroker) SSEHandler() gin.HandlerFunc {
 				}
 				c.SSEvent("message", event)
 				flusher.Flush()
-			case <-time.After(30 * time.Second):
+			case <-keepaliveTicker.C:
 				fmt.Fprintf(c.Writer, ": keepalive\n\n")
 				flusher.Flush()
 			}

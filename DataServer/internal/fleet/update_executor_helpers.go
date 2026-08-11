@@ -49,6 +49,8 @@ func (e *UpdateExecutor) waitForIdle(ctx context.Context, workerID string) error
 		drainTimeout = timeoutActiveJobsIdle
 	}
 	deadline := time.Now().Add(drainTimeout)
+	pollTicker := time.NewTicker(time.Second)
+	defer pollTicker.Stop()
 	for {
 		if e.backend.Registry.IsActiveJobsZero(ctx, workerID) {
 			return nil
@@ -59,7 +61,7 @@ func (e *UpdateExecutor) waitForIdle(ctx context.Context, workerID string) error
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("wait_for_idle: ctx cancelled: %w", ctx.Err())
-		case <-time.After(1 * time.Second):
+		case <-pollTicker.C:
 		}
 	}
 }
