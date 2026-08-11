@@ -58,6 +58,7 @@ func (m *ObservabilityModule) RegisterRoutes(r *gin.Engine) {
 	admin.GET("/:job_id", m.handlers.JobInspectHandler())
 	admin.GET("/:job_id/metrics", m.handlers.JobMetricsHandler())
 	admin.GET("/:job_id/events", m.handlers.JobEventsHandler())
+	admin.POST("/:job_id/cancel", m.handlers.JobCancelHandler())
 	doctor := r.Group("/api/v1/admin/doctor")
 	if m.auth != nil {
 		doctor.Use(m.auth)

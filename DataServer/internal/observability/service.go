@@ -91,6 +91,7 @@ type Service struct {
 	tasks          TaskReader
 	attempts       AttemptReader
 	jobs           JobReader
+	jobWriter      jobs.Writer
 	workers        WorkerReader
 	versionMetrics VersionMetricsReader
 	audit          AuditReader
@@ -113,6 +114,28 @@ func NewService(tasks TaskReader, attempts AttemptReader) (*Service, error) {
 
 // WithJobs sets the job reader for aggregate queries (Overview).
 func (s *Service) WithJobs(r JobReader) *Service { s.jobs = r; return s }
+
+// WithJobWriter wires the canonical job lifecycle mutation surface used by
+// operator-only administrative actions. Read projections remain separate
+// from mutations, and a missing writer keeps cancellation unavailable rather
+// than silently falling back to direct SQL or an in-memory state.
+func (s *Service) WithJobWriter(w jobs.Writer) *Service { s.jobWriter = w; return s }
+
+// CancelJob performs the canonical job cancellation transition. It never
+// mutates task/attempt tables directly; the task lifecycle and reaper own
+// the worker-side convergence after the parent job becomes CANCELLED.
+func (s *Service) CancelJob(ctx context.Context, id, reason string) error {
+	if s == nil || s.jobWriter == nil {
+		return fmt.Errorf("observability: job cancellation is not configured")
+	}
+	if id == "" {
+		return fmt.Errorf("observability: job_id is required")
+	}
+	if reason == "" {
+		reason = "cancelled by admin operator"
+	}
+	return s.jobWriter.Cancel(ctx, id, reason, -1)
+}
 
 // WithWorkers sets the worker reader for worker queries.
 func (s *Service) WithWorkers(r WorkerReader) *Service { s.workers = r; return s }

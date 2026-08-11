@@ -387,7 +387,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	// ── Observability REST API ─────────────────────────────────────
 	if t.Observability != nil {
 		workerReader := &workerRegistryAdapter{reg: w.Registry, store: p.SQLite}
-		obsSvc := t.Observability.WithJobs(j.Repository).WithWorkers(workerReader).
+		obsSvc := t.Observability.WithJobs(j.Repository).WithJobWriter(j.Repository).WithWorkers(workerReader).
 			WithJobInspection(&sqliteJobInspectionAdapter{store: p.SQLite}).
 			WithLiveAttempts(&sqliteLiveAttemptAdapter{store: p.SQLite})
 		registry.Register(observability.NewModule(obsSvc, api.AdminAuthMiddleware(cfg)))

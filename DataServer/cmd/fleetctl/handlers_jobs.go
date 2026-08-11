@@ -24,6 +24,8 @@ func runJob(client *fleetClient, args []string) int {
 		return runJobSubmit(client, args[1:], false)
 	case "certify":
 		return runJobSubmit(client, args[1:], true)
+	case "cancel":
+		return runJobCancel(client, args[1:])
 	case "inspect":
 		jobID, jsonOutput, err := parseJobReadArgs(args[1:], "inspect")
 		if err != nil {
@@ -49,6 +51,59 @@ func runJob(client *fleetClient, args []string) int {
 		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "unknown job command %q", args[0]))
 		return ExitMisuse
 	}
+}
+
+func runJobCancel(client *fleetClient, args []string) int {
+	var jobID, reason string
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--reason":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "--reason requires a value"))
+				return ExitMisuse
+			}
+			i++
+			reason = args[i]
+		case strings.HasPrefix(args[i], "--reason="):
+			reason = strings.TrimPrefix(args[i], "--reason=")
+		case strings.HasPrefix(args[i], "--master=") || strings.HasPrefix(args[i], "--token-file=") || args[i] == "--verbose":
+		case args[i] == "--master" || args[i] == "--token-file":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "%s requires a value", args[i]))
+				return ExitMisuse
+			}
+			i++
+		case strings.HasPrefix(args[i], "-"):
+			fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "unknown job cancel option %q", args[i]))
+			return ExitMisuse
+		default:
+			if jobID != "" {
+				fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "job cancel accepts exactly one job_id"))
+				return ExitMisuse
+			}
+			jobID = args[i]
+		}
+	}
+	if jobID == "" {
+		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "job cancel requires a job_id"))
+		return ExitMisuse
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var response map[string]any
+	status, err := client.doJSON(ctx, "POST", "/api/v1/admin/jobs/"+url.PathEscape(jobID)+"/cancel", map[string]any{"reason": reason}, &response)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, fmtExit(ExitUnexpected, "%v", err))
+		return ExitUnexpected
+	}
+	if status != httpOK {
+		ec := MapHTTPStatusToOpExit(status)
+		fmt.Fprintln(os.Stderr, fmtExit(ec, "POST /api/v1/admin/jobs/%s/cancel status=%d", jobID, status))
+		return ec
+	}
+	encoded, _ := json.Marshal(response)
+	fmt.Println(string(encoded))
+	return ExitOK
 }
 
 func parseJobReadArgs(args []string, command string) (string, bool, error) {

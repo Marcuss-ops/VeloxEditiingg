@@ -7,8 +7,11 @@
 package observability
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -117,6 +120,38 @@ func (h *Handlers) JobEventsHandler() gin.HandlerFunc {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"job_id": jobID, "status": result.Job.Status, "events": result.Events})
+	}
+}
+
+// JobCancelHandler is the canonical operator-only cancellation surface for
+// direct jobs that do not have a pipeline_runs parent.
+//
+//	POST /api/v1/admin/jobs/:job_id/cancel
+func (h *Handlers) JobCancelHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		jobID := strings.TrimSpace(c.Param("job_id"))
+		if jobID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "missing_job_id"})
+			return
+		}
+		var body struct {
+			Reason string `json:"reason"`
+		}
+		if c.Request.Body != nil {
+			if err := json.NewDecoder(c.Request.Body).Decode(&body); err != nil && err != io.EOF {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_json", "message": err.Error()})
+				return
+			}
+		}
+		if err := h.svc.CancelJob(c.Request.Context(), jobID, strings.TrimSpace(body.Reason)); err != nil {
+			status := http.StatusInternalServerError
+			if strings.Contains(err.Error(), "not found") {
+				status = http.StatusNotFound
+			}
+			c.JSON(status, gin.H{"error": "job_cancel_failed", "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "job_id": jobID, "status": "CANCELLED"})
 	}
 }
 
