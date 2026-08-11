@@ -13,6 +13,13 @@ func ValidateTaskPayload(raw map[string]interface{}) error {
 	if _, present := raw["render_plan_version"]; present {
 		return ValidateVersionedRenderPlan(raw)
 	}
+	// Master-compiled render plan (Fase D): when the TaskOffer payload
+	// carries the canonical CompiledRenderPlan document, validate it
+	// strictly. Additive to the legacy payload_contract_version envelope
+	// below — payloads without the compiled plan are untouched.
+	if err := ValidateCompiledRenderPlan(raw); err != nil {
+		return err
+	}
 	// The current master emits payload_contract_version while the fleet
 	// migrates to the compiled RenderPlan envelope. This is still an
 	// explicitly versioned compatibility path and is temporary by design.

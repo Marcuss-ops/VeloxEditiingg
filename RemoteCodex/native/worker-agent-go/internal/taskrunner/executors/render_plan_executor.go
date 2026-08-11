@@ -13,8 +13,11 @@ import (
 
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
+	"velox-worker-agent/pkg/api/renderplan"
 	"velox-worker-agent/pkg/video/ffmpegrunner"
 	"velox-worker-agent/pkg/video/plan"
+
+	"velox-shared/contract"
 )
 
 const (
@@ -80,23 +83,51 @@ func newRenderPlanExecutor(id string, outputTypes []string, runner ffmpegrunner.
 func (e *renderPlanExecutor) Descriptor() executor.Descriptor { return e.descriptor }
 
 func (e *renderPlanExecutor) Validate(spec executor.TaskSpec) error {
-	_, err := parseRenderPlanEnvelope(spec)
-	return err
+	// The v1 render_plan/render_plan_json envelope drives the commands
+	// today; a payload without it is not executable by this executor family.
+	if _, err := parseRenderPlanEnvelope(spec); err != nil {
+		return err
+	}
+	// Master-compiled plan (Fase D) is additive on top of the v1 envelope
+	// for now (the batch FFmpeg commands will consume the compiled segments
+	// in a future executor). When the payload carries it, the document must
+	// still be a valid master-compiled plan.
+	if raw, ok := spec.Payload[contract.PayloadKeyCompiledRenderPlanJSON].(string); ok && strings.TrimSpace(raw) != "" {
+		if _, err := parseCompiledRenderPlanEnvelope(spec); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// renderPlanPayloadKeys is the closed set of payload keys the render-plan
+// executors accept. Timeline must come from render_plan/render_plan_json
+// (v1) or the master-compiled plan (Fase D); everything else is rejected.
+var renderPlanPayloadKeys = map[string]bool{
+	"render_plan": true, "render_plan_json": true,
+	// Master-compiled plan (Fase D) delivered at claim: the batch FFmpeg
+	// path consumes compiled segments directly from this document.
+	contract.PayloadKeyCompiledRenderPlanJSON: true,
+	contract.PayloadKeyCompiledRenderPlanSHA:  true,
+	"input_path": true, "compose_path": true, "audio_mix_path": true,
+	"subtitle_path": true, "output_path": true,
+}
+
+func checkRenderPlanPayloadKeys(spec executor.TaskSpec) error {
+	if spec.Payload == nil {
+		return errors.New("render-plan executor: payload is required")
+	}
+	for key := range spec.Payload {
+		if !renderPlanPayloadKeys[key] {
+			return fmt.Errorf("render-plan executor: unsupported payload key %q; timeline must come from render_plan", key)
+		}
+	}
+	return nil
 }
 
 func parseRenderPlanEnvelope(spec executor.TaskSpec) (*plan.RenderPlan, error) {
-	if spec.Payload == nil {
-		return nil, errors.New("render-plan executor: payload is required")
-	}
-	allowed := map[string]bool{
-		"render_plan": true, "render_plan_json": true,
-		"input_path": true, "compose_path": true, "audio_mix_path": true,
-		"subtitle_path": true, "output_path": true,
-	}
-	for key := range spec.Payload {
-		if !allowed[key] {
-			return nil, fmt.Errorf("render-plan executor: unsupported payload key %q; timeline must come from render_plan", key)
-		}
+	if err := checkRenderPlanPayloadKeys(spec); err != nil {
+		return nil, err
 	}
 	var raw []byte
 	if value, ok := spec.Payload["render_plan_json"].(string); ok && strings.TrimSpace(value) != "" {
@@ -137,6 +168,49 @@ func parseRenderPlanEnvelope(spec executor.TaskSpec) (*plan.RenderPlan, error) {
 		return nil, fmt.Errorf("render-plan executor: detach: %w", err)
 	}
 	return &detached, nil
+}
+
+// parseCompiledRenderPlanEnvelope parses the master-compiled render plan
+// (Fase D) delivered in the TaskOffer payload under
+// contract.PayloadKeyCompiledRenderPlanJSON. It returns nil when the payload
+// does not carry a compiled plan, so callers can treat the compiled plan as
+// additive evidence on top of the v1 envelope.
+func parseCompiledRenderPlanEnvelope(spec executor.TaskSpec) (*renderplan.CompiledRenderPlan, error) {
+	if err := checkRenderPlanPayloadKeys(spec); err != nil {
+		return nil, err
+	}
+	rawJSON, ok := spec.Payload[contract.PayloadKeyCompiledRenderPlanJSON].(string)
+	if !ok || strings.TrimSpace(rawJSON) == "" {
+		return nil, errors.New("render-plan executor: compiled_render_plan_json is required")
+	}
+	plan, err := renderplan.DecodeCompiledRenderPlan(rawJSON)
+	if err != nil {
+		return nil, fmt.Errorf("render-plan executor: compiled plan: %w", err)
+	}
+	if spec.JobID != "" && plan.JobID != spec.JobID {
+		return nil, fmt.Errorf("render-plan executor: compiled plan job_id %q must match task job %q", plan.JobID, spec.JobID)
+	}
+	return plan, nil
+}
+
+// compiledPlanEvidence returns the sanitized identity of the master-compiled
+// plan when the payload carries one: the delivered plan_sha256 (the same
+// value the master stamped on task_attempts.plan_sha256), its schema version
+// and segment count. nil when absent — the compiled plan is additive today.
+func compiledPlanEvidence(spec executor.TaskSpec) map[string]interface{} {
+	plan, err := parseCompiledRenderPlanEnvelope(spec)
+	if err != nil || plan == nil {
+		return nil
+	}
+	evidence := map[string]interface{}{
+		"compiled_render_plan_version":  plan.PlanVersion,
+		"compiled_render_plan_segments": len(plan.Segments),
+		"compiled_render_plan_duration_ms": plan.DurationMS,
+	}
+	if sha, ok := spec.Payload[contract.PayloadKeyCompiledRenderPlanSHA].(string); ok && strings.TrimSpace(sha) != "" {
+		evidence["compiled_render_plan_sha256"] = strings.TrimSpace(sha)
+	}
+	return evidence
 }
 
 func validateRenderPlan(p *plan.RenderPlan, taskJobID string) error {

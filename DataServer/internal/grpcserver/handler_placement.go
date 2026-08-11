@@ -179,8 +179,10 @@ func (h *Handler) sendClaimedTaskOffer(
 	// Fase D: compile the canonical render plan, stamp plan_version/
 	// plan_sha256 on the attempt, and DELIVER the compiled document in the
 	// offer so the worker's batch FFmpeg path consumes the master-compiled
-	// segments instead of re-deriving a timeline from raw scenes. Best-effort
-	// by design: a compile or persist failure must never block the offer.
+	// segments instead of re-deriving a timeline from raw scenes. The keys
+	// are additive: scene.composite tolerates unknown payload keys, and the
+	// render-plan executor family admits them (batch path). Best-effort by
+	// design: a compile or persist failure must never block the offer.
 	if planJSON, planSHA := h.compileAndStampAttemptRenderPlan(ctx, tws, attempt); planJSON != "" {
 		workerPayload[contract.PayloadKeyCompiledRenderPlanJSON] = planJSON
 		workerPayload[contract.PayloadKeyCompiledRenderPlanSHA] = planSHA

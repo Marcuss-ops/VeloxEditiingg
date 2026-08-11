@@ -111,13 +111,22 @@ func runCommandExecutor(ctx context.Context, e *renderPlanExecutor, spec executo
 	if err != nil {
 		return failedResult(started, "artifact_invalid", err), nil
 	}
+	metrics := map[string]interface{}{
+		"command_plan":       cp.Canonical(),
+		"render_plan_sha256": cp.PlanSHA256,
+		"ffmpeg_profile":     profile,
+	}
+	// Determinism chain on the wire: when the master delivered the compiled
+	// plan (Fase D), surface its identity so the attempt report shows which
+	// compiled plan drove this command. Additive — absent payloads emit none.
+	if compiled := compiledPlanEvidence(spec); compiled != nil {
+		for key, value := range compiled {
+			metrics[key] = value
+		}
+	}
 	return executor.ExecutionResult{
 		Status: "succeeded", Outputs: []executor.ArtifactRef{artifact},
-		Metrics: map[string]interface{}{
-			"command_plan":       cp.Canonical(),
-			"render_plan_sha256": cp.PlanSHA256,
-			"ffmpeg_profile":     profile,
-		},
+		Metrics:  metrics,
 		StartedAt: started, CompletedAt: time.Now().UTC(),
 	}, nil
 }
