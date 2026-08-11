@@ -195,6 +195,24 @@ func (s *Scheduler) SetResolver(r *downloader.CacheResolver) {
 	s.signalWork()
 }
 
+// Close stops scheduler workers and cancels outstanding prefetch waiters.
+// The production worker owns the scheduler lifetime; tests and benchmarks
+// can use this to avoid leaking dispatcher goroutines between cases.
+func (s *Scheduler) Close() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	for id, runtime := range s.jobs {
+		runtime.cancel()
+		delete(s.jobs, id)
+	}
+	s.queue = nil
+	s.workerCancel()
+	s.mu.Unlock()
+	s.signalWork()
+}
+
 func (s *Scheduler) RAMCache() *RAMCache {
 	if s == nil {
 		return nil

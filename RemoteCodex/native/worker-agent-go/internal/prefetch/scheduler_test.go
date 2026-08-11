@@ -333,6 +333,44 @@ func TestScheduler_ReprioritizationInvalidatesQueuedGeneration(t *testing.T) {
 	}
 }
 
+func BenchmarkScheduler_AssetQueueEndToEnd(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		manager := &schedulerManager{started: make(chan struct{}, 4)}
+		s := NewScheduler(Config{WorkerID: "worker-a", MaxConcurrent: 2, ByteBudget: 1024})
+		s.SetResolver(downloader.NewCacheResolver(manager, nil))
+		now := time.Now().UTC()
+		plan := futureasset.Plan{
+			Version: 1, PlanID: "benchmark", WorkerID: "worker-a", GeneratedAt: now, ExpiresAt: now.Add(time.Minute),
+			Limits: futureasset.Limits{PrefetchHorizon: 3, ProtectionLookahead: 10},
+			PrefetchJobs: []futureasset.Job{{JobID: "n1", TaskID: "t1", ReservationID: "r1", Distance: 1, Assets: []futureasset.AssetManifest{
+				{AssetKey: "a", SHA256: "s-a", SizeBytes: 10},
+				{AssetKey: "b", SHA256: "s-b", SizeBytes: 10},
+				{AssetKey: "c", SHA256: "s-c", SizeBytes: 10},
+				{AssetKey: "d", SHA256: "s-d", SizeBytes: 10},
+			}}},
+		}
+		b.StartTimer()
+		if err := s.Reconcile(plan); err != nil {
+			b.Fatal(err)
+		}
+		deadline := time.Now().Add(time.Second)
+		for {
+			manager.mu.Lock()
+			resolved := len(manager.keys)
+			manager.mu.Unlock()
+			if resolved == 4 {
+				break
+			}
+			if time.Now().After(deadline) {
+				b.Fatalf("resolved %d assets, want 4", resolved)
+			}
+			time.Sleep(time.Microsecond)
+		}
+		b.StopTimer()
+		s.Close()
+	}
+}
+
 func TestScheduler_DiskPressureUsesRestrictedCriticalAndRecoveryHysteresis(t *testing.T) {
 	manager := &schedulerManager{started: make(chan struct{}, 8)}
 	var usage atomic.Int32
