@@ -114,7 +114,11 @@ func (s *SQLiteStore) ReplayDeadLetter(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("dead letter replay task: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n != 1 {
+	n, err := readRowsAffected(res, "dead letter replay task")
+	if err != nil {
+		return err
+	}
+	if n != 1 {
 		return fmt.Errorf("dead letter replay %s: task is not FAILED", id)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE dead_letter_tasks SET status='REPLAY_PENDING', replay_count=replay_count+1 WHERE id=?`, id); err != nil {
@@ -138,7 +142,11 @@ func (s *SQLiteStore) updateDeadLetterStatus(ctx context.Context, id, status str
 	if err != nil {
 		return fmt.Errorf("dead letter status: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n != 1 {
+	n, err := readRowsAffected(res, "dead letter status")
+	if err != nil {
+		return err
+	}
+	if n != 1 {
 		return fmt.Errorf("dead letter %s: no mutable row", id)
 	}
 	return nil

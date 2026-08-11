@@ -78,7 +78,10 @@ func (s *SQLiteStore) updatePipelineRunForClient(ctx context.Context, id, client
 	if err != nil {
 		return err
 	}
-	n, _ := result.RowsAffected()
+	n, err := readRowsAffected(result, "update pipeline run for client")
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return ErrPipelineRunNoRow
 	}
@@ -158,7 +161,10 @@ func (s *SQLiteStore) MarkCreatorForwardingCancelledForClient(ctx context.Contex
 	if err != nil {
 		return err
 	}
-	n, _ := result.RowsAffected()
+	n, err := readRowsAffected(result, "cancel creator forwarding for client")
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return ErrCreatorForwardingNoRow
 	}

@@ -125,7 +125,11 @@ func (r *MediaProbeRepository) ClaimMediaProbe(ctx context.Context, owner string
 	if err != nil {
 		return nil, fmt.Errorf("store: claim media probe update: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n != 1 {
+	n, err := readRowsAffected(res, "claim media probe")
+	if err != nil {
+		return nil, err
+	}
+	if n != 1 {
 		return nil, nil
 	}
 	if err := tx.Commit(); err != nil {
@@ -160,7 +164,11 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 	if err != nil {
 		return fmt.Errorf("store: complete media probe job: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n != 1 {
+	n, err := readRowsAffected(res, "complete media probe job")
+	if err != nil {
+		return err
+	}
+	if n != 1 {
 		return ErrMediaProbeLeaseConflict
 	}
 
@@ -190,7 +198,11 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 	if err != nil {
 		return fmt.Errorf("store: ready artifact: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n != 1 {
+	n, err = readRowsAffected(res, "ready media probe artifact")
+	if err != nil {
+		return err
+	}
+	if n != 1 {
 		return ErrMediaProbeLeaseConflict
 	}
 
@@ -300,7 +312,11 @@ func (r *MediaProbeRepository) FailMediaProbe(ctx context.Context, job MediaProb
 	if err != nil {
 		return fmt.Errorf("store: fail media probe: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n != 1 {
+	n, err := readRowsAffected(res, "fail media probe")
+	if err != nil {
+		return err
+	}
+	if n != 1 {
 		return ErrMediaProbeLeaseConflict
 	}
 	if terminal {

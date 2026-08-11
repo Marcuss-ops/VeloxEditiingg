@@ -184,7 +184,11 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 		if err != nil {
 			return nil, wrapDBInfrastructure("ClaimDeliveries: per-delivery lease stamp", err)
 		}
-		if n, _ := leaseRes.RowsAffected(); n != 1 {
+		n, err := readRowsAffected(leaseRes, "ClaimDeliveries per-delivery lease stamp")
+		if err != nil {
+			return nil, err
+		}
+		if n != 1 {
 			return nil, fmt.Errorf("ClaimDeliveries: per-delivery lease stamp affected=%d delivery=%s", n, c.deliveryID)
 		}
 
@@ -257,7 +261,10 @@ func (s *SQLiteStore) RenewDeliveryLease(ctx context.Context, deliveryID, runner
 	if err != nil {
 		return wrapDBInfrastructure("RenewDeliveryLease exec", err)
 	}
-	affected, _ := result.RowsAffected()
+	affected, err := readRowsAffected(result, "RenewDeliveryLease")
+	if err != nil {
+		return err
+	}
 	if affected == 0 {
 		return ErrTransitionConflict
 	}
