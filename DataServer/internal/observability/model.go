@@ -212,15 +212,19 @@ type SegmentSnapshot struct {
 // value is meaningful: older workers may have reported byte volume without
 // typed hit/miss counters.
 type CacheSummary struct {
-	Hits                  int64   `json:"hits"`
-	Misses                int64   `json:"misses"`
-	Evictions             int64   `json:"evictions"`
-	Corruptions           int64   `json:"corruptions"`
-	BytesUsed             int64   `json:"bytes_used"`
-	Entries               int64   `json:"entries"`
-	Lookups               int64   `json:"lookups"`
-	UniqueAssetsRequested int64   `json:"unique_assets_requested"`
-	HitRatio              float64 `json:"hit_ratio"`
+	Hits                  int64 `json:"hits"`
+	Misses                int64 `json:"misses"`
+	Evictions             int64 `json:"evictions"`
+	Corruptions           int64 `json:"corruptions"`
+	BytesUsed             int64 `json:"bytes_used"`
+	Entries               int64 `json:"entries"`
+	Lookups               int64 `json:"lookups"`
+	UniqueAssetsRequested int64 `json:"unique_assets_requested"`
+	// Phase A1.5: attempt-scoped asset download volume, hoisted from the
+	// worker's CacheResolver into task_attempt_cache_stats (migration 147).
+	DownloadCount int64   `json:"download_count"`
+	DownloadBytes int64   `json:"download_bytes"`
+	HitRatio      float64 `json:"hit_ratio"`
 }
 
 // AttemptSummary is the aggregated diagnostics for a single attempt.

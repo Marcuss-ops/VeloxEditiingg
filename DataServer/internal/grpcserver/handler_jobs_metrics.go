@@ -254,6 +254,11 @@ func deriveCacheStats(attemptID string, am taskattempts.AttemptMetrics, em *pb.T
 	if em != nil {
 		cs.CacheLookups = em.GetCacheLookups()
 		cs.UniqueAssetsRequested = em.GetUniqueAssetsRequested()
+		// Phase A1.5 (proto 58/59): attempt-scoped download volume from
+		// the worker's CacheResolver. Both start from zero per attempt;
+		// the master persists them on task_attempt_cache_stats.
+		cs.CacheDownloadCount = em.GetCacheDownloadCount()
+		cs.CacheDownloadBytes = em.GetCacheDownloadBytes()
 	}
 	if cs.CacheLookups == 0 {
 		cs.CacheLookups = cs.CacheHits + cs.CacheMisses

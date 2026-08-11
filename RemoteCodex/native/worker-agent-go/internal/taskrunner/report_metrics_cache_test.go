@@ -22,6 +22,36 @@ func TestTypedMetricsFromMap_ExplicitWarmAssetMissesOverrideGenericDelta(t *test
 	}
 }
 
+// TestTypedMetricsFromMap_DownloadVolume verifies the Phase A1.5 seam: the
+// CacheResolver's attempt-scoped download counters ride the dotted report map
+// and must land on the typed envelope so the master can persist them in SQL.
+func TestTypedMetricsFromMap_DownloadVolume(t *testing.T) {
+	metrics := TypedMetricsFromMap(map[string]interface{}{
+		"asset.cache.download.count": int64(26),
+		"asset.cache.download.bytes": int64(26 * 1024),
+		"unique.assets.requested":    int64(12),
+	})
+
+	if metrics == nil {
+		t.Fatal("typed metrics are nil")
+	}
+	if metrics.CacheDownloadCount != 26 {
+		t.Fatalf("cache download count = %d, want 26", metrics.CacheDownloadCount)
+	}
+	if metrics.CacheDownloadBytes != 26*1024 {
+		t.Fatalf("cache download bytes = %d, want %d", metrics.CacheDownloadBytes, 26*1024)
+	}
+	if metrics.UniqueAssetsRequested != 12 {
+		t.Fatalf("unique assets requested = %d, want 12", metrics.UniqueAssetsRequested)
+	}
+
+	// Round-trip through the wire envelope must survive untouched.
+	proto := metrics.ToProto()
+	if proto.GetCacheDownloadCount() != 26 || proto.GetCacheDownloadBytes() != 26*1024 {
+		t.Fatalf("proto download volume = %d/%d, want 26/%d", proto.GetCacheDownloadCount(), proto.GetCacheDownloadBytes(), 26*1024)
+	}
+}
+
 func TestFirstPresentFallsBackOnlyWhenPrimaryMissing(t *testing.T) {
 	metrics := map[string]interface{}{
 		"primary_zero": int64(0),

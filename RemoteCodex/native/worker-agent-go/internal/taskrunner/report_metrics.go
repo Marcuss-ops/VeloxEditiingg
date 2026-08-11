@@ -215,6 +215,12 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 		TelemetryCPUSource:    stringFromMap(m["telemetry.cpu.source"]),
 		CacheLookups:          cacheLookups,
 		UniqueAssetsRequested: positiveIntegerToInt64(m["unique.assets.requested"]),
+		// Phase A1: attempt-scoped download volume surfaced by the
+		// CacheResolver. asset.cache.download.* is the canonical dotted
+		// surface (internal/worker/asset_metrics.go); they ride the typed
+		// envelope so the master can persist them in SQL (migration 147).
+		CacheDownloadCount: positiveIntegerToInt64(m["asset.cache.download.count"]),
+		CacheDownloadBytes: positiveIntegerToInt64(m["asset.cache.download.bytes"]),
 	}
 
 	// CPU capacity is a host-level property, not something the executor

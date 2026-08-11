@@ -126,12 +126,14 @@ func (r *SQLiteLabelResolver) GetCacheStats(ctx context.Context, attemptID strin
 	err := r.DB.QueryRowContext(ctx, `
 		SELECT attempt_id, cache_hits, cache_misses, cache_evictions,
 		       cache_corruptions, cache_bytes_used, cache_entries,
-		       cache_lookups, unique_assets_requested
+		       cache_lookups, unique_assets_requested,
+		       cache_download_count, cache_download_bytes
 		FROM task_attempt_cache_stats WHERE attempt_id = ?`,
 		attemptID,
 	).Scan(&s.AttemptID, &s.CacheHits, &s.CacheMisses, &s.CacheEvictions,
 		&s.CacheCorruptions, &s.CacheBytesUsed, &s.CacheEntries,
-		&s.CacheLookups, &s.UniqueAssetsRequested)
+		&s.CacheLookups, &s.UniqueAssetsRequested,
+		&s.CacheDownloadCount, &s.CacheDownloadBytes)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

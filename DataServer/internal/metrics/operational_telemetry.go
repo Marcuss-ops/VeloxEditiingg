@@ -28,6 +28,11 @@ type OperationalTelemetry struct {
 	cacheMisses          *Family
 	cacheUniqueAssets    *Family
 	cacheInvariantErrors *Family
+
+	// Phase A1.5: attempt-scoped asset download volume hoisted from the
+	// worker's CacheResolver (task_attempt_cache_stats, migration 147).
+	cacheDownloadCount *Family
+	cacheDownloadBytes *Family
 }
 
 // NewOperationalTelemetry registers the delivery, database and cache
@@ -61,6 +66,8 @@ func NewOperationalTelemetry(reg *Registry) *OperationalTelemetry {
 	t.cacheMisses = NewCounterFamily("velox_cache_misses_total", "Cache misses", []string{})
 	t.cacheUniqueAssets = NewGaugeFamily("velox_unique_assets_requested", "Unique assets requested by the latest observed attempt", []string{})
 	t.cacheInvariantErrors = NewCounterFamily("velox_cache_invariant_violations_total", "Cache lookup accounting invariant violations", []string{})
+	t.cacheDownloadCount = NewCounterFamily("velox_cache_downloads_total", "Completed local asset downloads per attempt", []string{})
+	t.cacheDownloadBytes = NewCounterFamily("velox_cache_download_bytes_total", "Bytes downloaded into the local asset cache per attempt", []string{})
 
 	for _, f := range []*Family{
 		t.deliveryQueueMS, t.deliveryUploadMS, t.deliveryTotalMS, t.deliveryRetries,
@@ -68,6 +75,7 @@ func NewOperationalTelemetry(reg *Registry) *OperationalTelemetry {
 		t.dbWriteWaitMS, t.dbTransactionMS, t.dbBusy, t.dbBusyTimeout, t.dbRetries,
 		t.dbWriteOperations, t.dbReadOperations, t.dbLongestTransaction,
 		t.cacheLookups, t.cacheHits, t.cacheMisses, t.cacheUniqueAssets, t.cacheInvariantErrors,
+		t.cacheDownloadCount, t.cacheDownloadBytes,
 	} {
 		reg.Register(f)
 	}
@@ -179,6 +187,25 @@ func (t *OperationalTelemetry) RecordCacheSnapshot(uniqueAssets, lookups, hits, 
 	t.cacheMisses.Inc([]string{}, uint64(misses))
 	if uniqueAssets >= 0 {
 		t.cacheUniqueAssets.GaugeSet([]string{}, uniqueAssets)
+	}
+}
+
+// RecordCacheDownloads records the attempt-scoped asset download volume
+// (Phase A1.5). Counter families are per-attempt cumulative; the supervisor
+// feeds one terminal attempt per call so increments land exactly once.
+func (t *OperationalTelemetry) RecordCacheDownloads(count, bytes int64) {
+	if t == nil || t.cacheDownloadCount == nil {
+		return
+	}
+	if count < 0 || bytes < 0 {
+		t.cacheInvariantErrors.Inc([]string{}, 1)
+		return
+	}
+	if count > 0 {
+		t.cacheDownloadCount.Inc([]string{}, uint64(count))
+	}
+	if bytes > 0 {
+		t.cacheDownloadBytes.Inc([]string{}, uint64(bytes))
 	}
 }
 

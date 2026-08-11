@@ -54,6 +54,7 @@ func (c *Collector) RecordAttempt(am taskattempts.AttemptMetrics, cache taskatte
 			lookups = cache.CacheHits + cache.CacheMisses
 		}
 		c.operational.RecordCacheSnapshot(cache.UniqueAssetsRequested, lookups, cache.CacheHits, cache.CacheMisses)
+		c.operational.RecordCacheDownloads(cache.CacheDownloadCount, cache.CacheDownloadBytes)
 	}
 	// execVersion is intentionally unused here: the video counter
 	// families are documented (docs/metrics-catalog.md) with the

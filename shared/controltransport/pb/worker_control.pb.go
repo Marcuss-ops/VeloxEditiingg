@@ -3995,8 +3995,16 @@ type TaskExecutionMetrics struct {
 	// unique_assets_requested counts distinct asset identities requested.
 	CacheLookups          int64 `protobuf:"varint,56,opt,name=cache_lookups,json=cacheLookups,proto3" json:"cache_lookups,omitempty"`
 	UniqueAssetsRequested int64 `protobuf:"varint,57,opt,name=unique_assets_requested,json=uniqueAssetsRequested,proto3" json:"unique_assets_requested,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	// Per-attempt asset download volume surfaced by the CacheResolver (Phase A1):
+	// cache_download_count is the number of cache MISSes that were satisfied by a
+	// real download, and cache_download_bytes the total bytes transferred. Both
+	// are attempt-scoped (start from zero on every attempt) so a job certification
+	// query never mixes in worker-lifetime counters. The master persists them on
+	// task_attempt_cache_stats (migration 147) alongside cache_lookups.
+	CacheDownloadCount int64 `protobuf:"varint,58,opt,name=cache_download_count,json=cacheDownloadCount,proto3" json:"cache_download_count,omitempty"`
+	CacheDownloadBytes int64 `protobuf:"varint,59,opt,name=cache_download_bytes,json=cacheDownloadBytes,proto3" json:"cache_download_bytes,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *TaskExecutionMetrics) Reset() {
@@ -4424,6 +4432,20 @@ func (x *TaskExecutionMetrics) GetCacheLookups() int64 {
 func (x *TaskExecutionMetrics) GetUniqueAssetsRequested() int64 {
 	if x != nil {
 		return x.UniqueAssetsRequested
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetCacheDownloadCount() int64 {
+	if x != nil {
+		return x.CacheDownloadCount
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetCacheDownloadBytes() int64 {
+	if x != nil {
+		return x.CacheDownloadBytes
 	}
 	return 0
 }
@@ -5047,7 +5069,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x06job_id\x18\x02 \x01(\tR\x05jobId\x12\x1d\n" +
 	"\n" +
 	"attempt_id\x18\x03 \x01(\tR\tattemptId\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\"\xcf\x13\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"\xb3\x14\n" +
 	"\x14TaskExecutionMetrics\x12\x1f\n" +
 	"\vinput_bytes\x18\x01 \x01(\x03R\n" +
 	"inputBytes\x12!\n" +
@@ -5109,7 +5131,9 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x14telemetry_cpu_source\x186 \x01(\tR\x12telemetryCpuSource\x12*\n" +
 	"\x11audio_track_count\x187 \x01(\x05R\x0faudioTrackCount\x12#\n" +
 	"\rcache_lookups\x188 \x01(\x03R\fcacheLookups\x126\n" +
-	"\x17unique_assets_requested\x189 \x01(\x03R\x15uniqueAssetsRequested\"\x92\b\n" +
+	"\x17unique_assets_requested\x189 \x01(\x03R\x15uniqueAssetsRequested\x120\n" +
+	"\x14cache_download_count\x18: \x01(\x03R\x12cacheDownloadCount\x120\n" +
+	"\x14cache_download_bytes\x18; \x01(\x03R\x12cacheDownloadBytes\"\x92\b\n" +
 	"\x16WorkerResourceCounters\x122\n" +
 	"\x15cpu_utilization_ratio\x18\x01 \x01(\x01R\x13cpuUtilizationRatio\x12(\n" +
 	"\x10cpu_iowait_ratio\x18\x02 \x01(\x01R\x0ecpuIowaitRatio\x12&\n" +

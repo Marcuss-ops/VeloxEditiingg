@@ -753,6 +753,15 @@ message TaskExecutionMetrics {
   // unique_assets_requested counts distinct asset identities requested.
   int64 cache_lookups = 56;
   int64 unique_assets_requested = 57;
+
+  // Per-attempt asset download volume surfaced by the CacheResolver (Phase A1):
+  // cache_download_count is the number of cache MISSes that were satisfied by a
+  // real download, and cache_download_bytes the total bytes transferred. Both
+  // are attempt-scoped (start from zero on every attempt) so a job certification
+  // query never mixes in worker-lifetime counters. The master persists them on
+  // task_attempt_cache_stats (migration 147) alongside cache_lookups.
+  int64 cache_download_count = 58;
+  int64 cache_download_bytes = 59;
 }
 
 // WorkerResourceCounters is the typed payload of Heartbeat.resources.

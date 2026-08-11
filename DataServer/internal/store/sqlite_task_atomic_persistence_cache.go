@@ -25,12 +25,14 @@ func persistAttemptCacheStats(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ing
 		`INSERT OR REPLACE INTO task_attempt_cache_stats (
 			attempt_id, cache_hits, cache_misses, cache_evictions,
 			cache_corruptions, cache_bytes_used, cache_entries,
-			cache_lookups, unique_assets_requested
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			cache_lookups, unique_assets_requested,
+			cache_download_count, cache_download_bytes
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		stats.AttemptID, stats.CacheHits, stats.CacheMisses,
 		stats.CacheEvictions, stats.CacheCorruptions,
 		stats.CacheBytesUsed, stats.CacheEntries,
 		stats.CacheLookups, stats.UniqueAssetsRequested,
+		stats.CacheDownloadCount, stats.CacheDownloadBytes,
 	)
 	if err != nil {
 		return fmt.Errorf("task ingest atomic cache stats: %w", err)

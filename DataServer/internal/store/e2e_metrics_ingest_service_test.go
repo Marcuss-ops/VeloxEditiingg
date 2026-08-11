@@ -145,13 +145,15 @@ func TestE2E_PerformanceReport_IngestService(t *testing.T) {
 			OutputFileSize:         52428800,
 		},
 		CacheStats: taskattempts.AttemptCacheStats{
-			AttemptID:        attemptID,
-			CacheHits:        60,
-			CacheMisses:      4,
-			CacheEvictions:   1,
-			CacheCorruptions: 0,
-			CacheBytesUsed:   1048576,
-			CacheEntries:     12,
+			AttemptID:          attemptID,
+			CacheHits:          60,
+			CacheMisses:        4,
+			CacheEvictions:     1,
+			CacheCorruptions:   0,
+			CacheBytesUsed:     1048576,
+			CacheEntries:       12,
+			CacheDownloadCount: 4,
+			CacheDownloadBytes: 4 * 524288,
 		},
 		CostBasis: taskattempts.AttemptCostBasis{
 			AttemptID:           attemptID,
@@ -244,6 +246,12 @@ func TestE2E_PerformanceReport_IngestService(t *testing.T) {
 	}
 	if storedCache.CacheMisses != 4 {
 		t.Errorf("CacheMisses = %d; want 4", storedCache.CacheMisses)
+	}
+	if storedCache.CacheDownloadCount != 4 {
+		t.Errorf("CacheDownloadCount = %d; want 4", storedCache.CacheDownloadCount)
+	}
+	if storedCache.CacheDownloadBytes != 4*524288 {
+		t.Errorf("CacheDownloadBytes = %d; want %d", storedCache.CacheDownloadBytes, 4*524288)
 	}
 
 	// Cost basis persisted.

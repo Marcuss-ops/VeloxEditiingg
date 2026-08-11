@@ -127,6 +127,12 @@ type TypedExecutionMetrics struct {
 	TelemetryCPUSource    string `json:"telemetry_cpu_source,omitempty"`
 	CacheLookups          int64  `json:"cache_lookups"`
 	UniqueAssetsRequested int64  `json:"unique_assets_requested"`
+
+	// ── Per-attempt asset download volume (Phase A1 CacheResolver) ─────
+	// Attempt-scoped: start from zero on every attempt so job
+	// certification never mixes in worker-lifetime counters.
+	CacheDownloadCount int64 `json:"cache_download_count"`
+	CacheDownloadBytes int64 `json:"cache_download_bytes"`
 }
 
 // ToProto serializes a TypedExecutionMetrics onto the typed wire
@@ -206,6 +212,8 @@ func (t TypedExecutionMetrics) ToProto() *pb.TaskExecutionMetrics {
 		TelemetryCpuSource:    t.TelemetryCPUSource,
 		CacheLookups:          t.CacheLookups,
 		UniqueAssetsRequested: t.UniqueAssetsRequested,
+		CacheDownloadCount:    t.CacheDownloadCount,
+		CacheDownloadBytes:    t.CacheDownloadBytes,
 	}
 }
 
@@ -282,6 +290,8 @@ func FromProto(p *pb.TaskExecutionMetrics) TypedExecutionMetrics {
 		TelemetryCPUSource:    p.GetTelemetryCpuSource(),
 		CacheLookups:          p.GetCacheLookups(),
 		UniqueAssetsRequested: p.GetUniqueAssetsRequested(),
+		CacheDownloadCount:    p.GetCacheDownloadCount(),
+		CacheDownloadBytes:    p.GetCacheDownloadBytes(),
 	}
 }
 

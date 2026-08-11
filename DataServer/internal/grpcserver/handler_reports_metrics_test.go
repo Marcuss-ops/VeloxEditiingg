@@ -51,6 +51,9 @@ func TestHandleTaskResult_PersistTypedMetrics_F1(t *testing.T) {
 		NetworkPricePerGb:     0.01,
 		TempBytesWritten:      123456789,
 		AudioTrackCount:       1,
+		// Phase A1.5: attempt-scoped download volume (proto 58/59).
+		CacheDownloadCount: 4,
+		CacheDownloadBytes: 4 * 262144,
 	}
 
 	artItem, _ := structpb.NewStruct(map[string]interface{}{
@@ -113,6 +116,9 @@ func TestHandleTaskResult_PersistTypedMetrics_F1(t *testing.T) {
 	}
 	if gotCache.CacheHits != 0 || gotCache.CacheMisses != 0 || gotCache.CacheEvictions != 0 || gotCache.CacheCorruptions != 0 {
 		t.Errorf("AttemptCacheStats must report 0 for un-derivable counters; got H=%d M=%d E=%d C=%d", gotCache.CacheHits, gotCache.CacheMisses, gotCache.CacheEvictions, gotCache.CacheCorruptions)
+	}
+	if gotCache.CacheDownloadCount != 4 || gotCache.CacheDownloadBytes != 4*262144 {
+		t.Errorf("AttemptCacheStats download volume = %d/%d; want 4/%d (proto 58/59 must flow through deriveCacheStats)", gotCache.CacheDownloadCount, gotCache.CacheDownloadBytes, 4*262144)
 	}
 
 	gotCost := taskRepo.lastCostBasis

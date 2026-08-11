@@ -57,6 +57,7 @@ per-job labels. Per-job delivery timing and cache totals come from
 | `velox_db_write_operations` / `velox_db_read_operations` | C | none | instrumented store operation counts |
 | `velox_db_longest_transaction_ms` | G | none | maximum observed transaction duration since process start |
 | `velox_cache_lookups_total` / `velox_cache_hits_total` / `velox_cache_misses_total` | C | `result` or none | cache accounting with `lookups = hits + misses` |
+| `velox_cache_downloads_total` / `velox_cache_download_bytes_total` | C | none | attempt-scoped asset download count/bytes (Phase A1.5 CacheResolver) |
 | `velox_unique_assets_requested` / `velox_cache_invariant_violations_total` | G/C | none | latest unique-asset snapshot and rejected accounting mismatches |
 
 `db_write_wait_ms` measures time to acquire a `database/sql` transaction
@@ -250,7 +251,9 @@ These dimensions exist in SQLite / Postgres (`task_attempt_metrics`, `task_attem
 | L12 | `retry_count`, `wasted_cpu_ms`, `wasted_download_bytes`, `wasted_cost_estimate` | `task_attempt_metrics` | Waste/cost attribution per attempt | mixed | 078 |
 | L13 | `pipeline_resolve_ms` … `engine_copy_final_ms`  | `task_attempt_metrics`   | Engine-aggregate phase columns (13 total)              | ms         | 070       |
 | L14 | `cache_hits`, `cache_misses`, `cache_evictions`, `cache_corruptions`, `cache_bytes_used`, `cache_entries` | `task_attempt_cache_stats` | Per-attempt cache snapshot | mixed | 054 |
-| L15 | `cpu_price_per_second`, `storage_price_per_gb`, `network_price_per_gb`, `cpu_time_seconds_total`, `storage_gb_written`, `network_gb_egressed`, `output_minutes_total` | `task_attempt_cost_basis` | Cost envelope per attempt | mixed | 054 |
+| L15 | `cache_lookups`, `unique_assets_requested` | `task_attempt_cache_stats` | Cache accounting invariant + distinct-request count | count | 140 |
+| L16 | `cache_download_count`, `cache_download_bytes` | `task_attempt_cache_stats` | Attempt-scoped asset download volume (CacheResolver, Phase A1.5) | count / bytes | 147 |
+| L17 | `cpu_price_per_second`, `storage_price_per_gb`, `network_price_per_gb`, `cpu_time_seconds_total`, `storage_gb_written`, `network_gb_egressed`, `output_minutes_total` | `task_attempt_cost_basis` | Cost envelope per attempt | mixed | 054 |
 
 ---
 
@@ -389,6 +392,7 @@ Worker (otelgrpc client handler)                    Master (otelgrpc server hand
 | 2026-07-06 | **Metric catalog updated** (this revision)         | —         |
 | 2026-07-31 | Eight observability dashboards, SQL detail queries and cardinality contract | — |
 | 2026-08-06 | Phase 6 API-surface split: `velox_master_http_route_requests_total{surface,route}` for legacy-route removal decisions | — |
+| 2026-08-11 | Phase A1.5: per-attempt cache download count/bytes hoisted to SQL (`cache_download_count`, `cache_download_bytes` on `task_attempt_cache_stats`) + `velox_cache_downloads_total` / `velox_cache_download_bytes_total` | 147 |
 
 ---
 

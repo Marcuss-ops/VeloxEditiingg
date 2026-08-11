@@ -177,6 +177,8 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 			summary.Cache.Entries += int64(cacheStats.CacheEntries)
 			summary.Cache.Lookups += cacheStats.CacheLookups
 			summary.Cache.UniqueAssetsRequested += cacheStats.UniqueAssetsRequested
+			summary.Cache.DownloadCount += cacheStats.CacheDownloadCount
+			summary.Cache.DownloadBytes += cacheStats.CacheDownloadBytes
 		}
 
 		if segmentReader, ok := s.attempts.(SegmentReader); ok {

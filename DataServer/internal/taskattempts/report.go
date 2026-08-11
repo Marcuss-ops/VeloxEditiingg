@@ -193,6 +193,13 @@ type AttemptCacheStats struct {
 	CacheEntries          int    `json:"cache_entries"`
 	CacheLookups          int64  `json:"cache_lookups"`
 	UniqueAssetsRequested int64  `json:"unique_assets_requested"`
+
+	// Phase A1.5: attempt-scoped asset download volume (migration 147).
+	// The CacheResolver emits these alongside cache_lookups; both start
+	// from zero per attempt so job-level certification queries never mix
+	// in worker-lifetime counters.
+	CacheDownloadCount int64 `json:"cache_download_count"`
+	CacheDownloadBytes int64 `json:"cache_download_bytes"`
 }
 
 // NormalizeCacheAccounting applies the legacy default and enforces the
@@ -202,11 +209,17 @@ type AttemptCacheStats struct {
 // Older workers did not send cache_lookups, so zero means "derive it". Once a
 // non-zero value is present, a mismatch is rejected instead of silently
 // publishing contradictory telemetry.
+//
+// Phase A1.5 (migration 147): cache_download_count and cache_download_bytes
+// must also be non-negative; they carry no cross-invariant with hits/misses
+// (a shared download can satisfy several attempt requests), so only the
+// sign guard applies.
 func (s *AttemptCacheStats) NormalizeCacheAccounting() error {
 	if s == nil {
 		return fmt.Errorf("cache stats are nil")
 	}
-	if s.CacheHits < 0 || s.CacheMisses < 0 || s.CacheLookups < 0 || s.UniqueAssetsRequested < 0 {
+	if s.CacheHits < 0 || s.CacheMisses < 0 || s.CacheLookups < 0 || s.UniqueAssetsRequested < 0 ||
+		s.CacheDownloadCount < 0 || s.CacheDownloadBytes < 0 {
 		return fmt.Errorf("cache counters must be non-negative")
 	}
 	expected := s.CacheHits + s.CacheMisses

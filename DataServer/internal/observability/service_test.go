@@ -675,6 +675,36 @@ func TestService_SummarizeJob(t *testing.T) {
 	}
 }
 
+func TestService_SummarizeTask_RollsUpDownloadVolumeInCacheSummary(t *testing.T) {
+	svc, tasks, attempts, _, _ := newTestService()
+	tasks.tasks["T-cache-dl"] = &taskgraph.Task{ID: "T-cache-dl", JobID: "J-cache-dl", Status: taskgraph.StatusSucceeded, AttemptCount: 1}
+	attempts.attempts["T-cache-dl"] = []taskattempts.TaskAttempt{{
+		ID: "A-cache-dl", TaskID: "T-cache-dl", JobID: "J-cache-dl", AttemptNumber: 1,
+		WorkerID: "worker-01", Status: taskattempts.AttemptStatusSucceeded,
+	}}
+	attempts.cacheStats = map[string]*taskattempts.AttemptCacheStats{
+		"A-cache-dl": {
+			AttemptID:          "A-cache-dl",
+			CacheHits:          10,
+			CacheMisses:        2,
+			CacheLookups:       12,
+			CacheDownloadCount: 2,
+			CacheDownloadBytes: 2 * 524288,
+		},
+	}
+
+	result, err := svc.SummarizeTask(context.Background(), "T-cache-dl")
+	if err != nil {
+		t.Fatalf("SummarizeTask() error: %v", err)
+	}
+	if result.Cache.DownloadCount != 2 || result.Cache.DownloadBytes != 2*524288 {
+		t.Fatalf("CacheSummary download volume = %d/%d; want 2/%d (migration 147 columns must roll up)", result.Cache.DownloadCount, result.Cache.DownloadBytes, 2*524288)
+	}
+	if result.Cache.Lookups != 12 || result.Cache.HitRatio != 10.0/12.0 {
+		t.Fatalf("CacheSummary lookups/hit_ratio = %d/%.3f; want 12/%.3f", result.Cache.Lookups, result.Cache.HitRatio, 10.0/12.0)
+	}
+}
+
 func TestService_SummarizeJob_NotFound(t *testing.T) {
 	svc, _, _, _, _ := newTestService()
 

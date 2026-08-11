@@ -244,18 +244,18 @@ func (s *spoofStubJobsRepo) Delete(_ context.Context, _ string) error {
 var _ jobs.Repository = (*spoofStubJobsRepo)(nil)
 
 type spoofStubAttemptRepo struct {
-	mu                   sync.Mutex
-	attempts             map[string]*taskattempts.TaskAttempt
-	persistMetricsCalls  int
-	persistCacheCalls    int
-	persistCostCalls     int
-	lastMetrics          taskattempts.AttemptMetrics
-	lastCacheStats       taskattempts.AttemptCacheStats
-	lastCostBasis        taskattempts.AttemptCostBasis
-	upsertPlanCalls      int
-	lastPlanVersion      int
-	lastPlanSHA256       string
-	lastPlanJSON         string
+	mu                  sync.Mutex
+	attempts            map[string]*taskattempts.TaskAttempt
+	persistMetricsCalls int
+	persistCacheCalls   int
+	persistCostCalls    int
+	lastMetrics         taskattempts.AttemptMetrics
+	lastCacheStats      taskattempts.AttemptCacheStats
+	lastCostBasis       taskattempts.AttemptCostBasis
+	upsertPlanCalls     int
+	lastPlanVersion     int
+	lastPlanSHA256      string
+	lastPlanJSON        string
 }
 
 func (s *spoofStubAttemptRepo) seedCanonical(taskID, workerID, leaseID string) {
