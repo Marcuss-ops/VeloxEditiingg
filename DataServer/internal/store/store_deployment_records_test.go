@@ -56,6 +56,8 @@ func deploymentTestDigest(c rune) string {
 	return "sha256:" + strings.Repeat(string(c), 64)
 }
 
+func deploymentTimePtr(t time.Time) *time.Time { return &t }
+
 // TestDeploymentStore_InsertAndGetLatest verifies the basic
 // round-trip: insert a PENDING row, fetch the latest by
 // worker_id, all fields preserved.
@@ -94,6 +96,48 @@ func TestDeploymentStore_InsertAndGetLatest(t *testing.T) {
 	}
 	if got.IsRollback {
 		t.Errorf("IsRollback = true, want false")
+	}
+}
+
+func TestDeploymentStore_LastSuccessfulIgnoresNewerFailedRollout(t *testing.T) {
+	s := newDeploymentTestStore(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+	oldDigest := deploymentTestDigest('a')
+	newDigest := deploymentTestDigest('b')
+
+	if err := s.InsertBaselineDeploymentRecord(ctx, DeploymentRecord{
+		DeploymentID: "deploy-success-old",
+		WorkerID:     "wicket",
+		TargetDigest: oldDigest,
+		StartedAt:    base,
+		FinishedAt:   deploymentTimePtr(base),
+		Status:       DeployStatusSucceeded,
+		AppliedBy:    "bootstrap",
+	}); err != nil {
+		t.Fatalf("InsertBaselineDeploymentRecord: %v", err)
+	}
+	if err := s.InsertDeploymentRecord(ctx, DeploymentRecord{
+		DeploymentID:   "deploy-failed-new",
+		WorkerID:       "wicket",
+		PreviousDigest: oldDigest,
+		TargetDigest:   newDigest,
+		StartedAt:      base.Add(time.Minute),
+		Status:         DeployStatusPending,
+		AppliedBy:      "fleetctl",
+	}); err != nil {
+		t.Fatalf("InsertDeploymentRecord: %v", err)
+	}
+	if err := s.UpdateDeploymentStatus(ctx, "deploy-failed-new", DeployStatusFailed, base.Add(2*time.Minute)); err != nil {
+		t.Fatalf("UpdateDeploymentStatus: %v", err)
+	}
+
+	got, err := s.GetLatestSuccessfulDeploymentForWorker(ctx, "wicket")
+	if err != nil {
+		t.Fatalf("GetLatestSuccessfulDeploymentForWorker: %v", err)
+	}
+	if got.TargetDigest != oldDigest || got.DeploymentID != "deploy-success-old" {
+		t.Fatalf("last successful deployment = %#v, want old successful digest", got)
 	}
 }
 

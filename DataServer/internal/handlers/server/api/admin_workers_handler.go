@@ -44,6 +44,14 @@ type DeploymentReader interface {
 	GetLatestDeploymentForWorker(context.Context, string) (*store.DeploymentRecord, error)
 }
 
+// SuccessfulDeploymentReader is an optional read seam for the last verified
+// runtime digest. It is separate from DeploymentReader because the latest
+// operation may be FAILED while the previous SUCCEEDED digest remains the
+// worker's last known-good provenance.
+type SuccessfulDeploymentReader interface {
+	GetLatestSuccessfulDeploymentForWorker(context.Context, string) (*store.DeploymentRecord, error)
+}
+
 // OperationLedgerReader is the read-only audit seam for the worker's last
 // fleet operation row. It feeds WorkerOperationState.Error (the failure
 // reason) so the operator sees WHY the last update/rollback failed without
@@ -171,7 +179,13 @@ func (h *AdminWorkersHandler) card(ctx context.Context, info *workersreg.Worker)
 		return card
 	}
 	card.TargetDigest = rec.TargetDigest
+	card.DesiredDigest = rec.TargetDigest
 	card.PreviousDigest = rec.PreviousDigest
+	if successfulReader, ok := h.deployments.(SuccessfulDeploymentReader); ok {
+		if successful, successfulErr := successfulReader.GetLatestSuccessfulDeploymentForWorker(ctx, info.WorkerID.String()); successfulErr == nil && successful != nil {
+			card.LastSuccessfulDigest = successful.TargetDigest
+		}
+	}
 	// IMAGE section — real-time state only: what is running vs what the
 	// fleet wants, and whether they match. No operation-history fields.
 	if card.RunningDigest != "" && card.TargetDigest != "" {

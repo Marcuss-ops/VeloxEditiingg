@@ -288,6 +288,32 @@ LIMIT 1`, workerID)
 	return scanDeploymentRecord(rows)
 }
 
+// GetLatestSuccessfulDeploymentForWorker returns the most recent verified
+// deployment for the worker. It is intentionally separate from
+// GetLatestDeploymentForWorker: a failed newer rollout must not erase the
+// last digest that was actually accepted by the worker.
+func (s *SQLiteStore) GetLatestSuccessfulDeploymentForWorker(ctx context.Context, workerID string) (*DeploymentRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT deployment_id, worker_id, previous_digest, target_digest,
+       started_at, finished_at, status, applied_by, is_rollback
+FROM deployment_records
+WHERE worker_id = ? AND status = ?
+ORDER BY started_at DESC
+LIMIT 1`, workerID, DeployStatusSucceeded)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return nil, ErrDeploymentNotFound
+	}
+	return scanDeploymentRecord(rows)
+}
+
 // ListDeploymentsForWorker returns up to `limit` rows in
 // started_at DESC order. limit <= 0 means "no cap".
 func (s *SQLiteStore) ListDeploymentsForWorker(ctx context.Context, workerID string, limit int) ([]DeploymentRecord, error) {

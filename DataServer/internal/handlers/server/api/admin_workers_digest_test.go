@@ -10,11 +10,44 @@ import (
 )
 
 type digestDeploymentReader struct {
-	record *store.DeploymentRecord
+	record     *store.DeploymentRecord
+	successful *store.DeploymentRecord
 }
 
 func (r digestDeploymentReader) GetLatestDeploymentForWorker(context.Context, string) (*store.DeploymentRecord, error) {
 	return r.record, nil
+}
+
+func (r digestDeploymentReader) GetLatestSuccessfulDeploymentForWorker(context.Context, string) (*store.DeploymentRecord, error) {
+	return r.successful, nil
+}
+
+func TestAdminWorkersCard_SeparatesDesiredRunningAndLastSuccessfulDigest(t *testing.T) {
+	info := makeCardInfo("velox-worker-13197", func(w *workersreg.Worker) {
+		w.ImageDigest = "sha256:old"
+	})
+	h := NewAdminWorkersHandler(nil)
+	h.SetDeploymentReader(digestDeploymentReader{
+		record: &store.DeploymentRecord{
+			DeploymentID: "deploy-failed-new",
+			WorkerID:     "velox-worker-13197",
+			TargetDigest: "sha256:new",
+			Status:       store.DeployStatusFailed,
+			StartedAt:    time.Date(2026, time.August, 11, 12, 1, 0, 0, time.UTC),
+		},
+		successful: &store.DeploymentRecord{
+			DeploymentID: "deploy-success-old",
+			WorkerID:     "velox-worker-13197",
+			TargetDigest: "sha256:old",
+			Status:       store.DeployStatusSucceeded,
+			StartedAt:    time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC),
+		},
+	})
+
+	card := h.card(context.Background(), &info)
+	if card.RunningDigest != "sha256:old" || card.DesiredDigest != "sha256:new" || card.LastSuccessfulDigest != "sha256:old" {
+		t.Fatalf("digest state = running=%q desired=%q last_successful=%q", card.RunningDigest, card.DesiredDigest, card.LastSuccessfulDigest)
+	}
 }
 
 func TestAdminWorkersCard_ImageStateUsesRuntimeMatch(t *testing.T) {

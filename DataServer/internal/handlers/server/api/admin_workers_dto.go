@@ -69,41 +69,43 @@ import "time"
 // when the worker self-restarts due to a crash; the field's semantic
 // contract belongs to step §6 of the rollout.
 type WorkerCard struct {
-	WorkerID            string                `json:"worker_id"`
-	WorkerName          string                `json:"worker_name"`
-	Hostname            string                `json:"hostname"`
-	Host                string                `json:"host"`
-	Status              string                `json:"status"`
-	ConnectionState     string                `json:"connection_state"`
-	SchedulingState     string                `json:"scheduling_state"`
-	DeploymentState     string                `json:"deployment_state,omitempty"`
-	HealthState         string                `json:"health_state"`
-	SessionActive       bool                  `json:"session_active"`
-	Executor            string                `json:"executor"`
-	ExecutorVersion     int32                 `json:"executor_version"`
-	ImageDigest         string                `json:"image_digest,omitempty"`
-	RunningDigest       string                `json:"running_digest,omitempty"`
-	TargetDigest        string                `json:"target_digest,omitempty"`
-	PreviousDigest      string                `json:"previous_digest,omitempty"`
-	ImageState          *WorkerImageState     `json:"image_state,omitempty"`
-	OperationState      *WorkerOperationState `json:"operation_state,omitempty"`
-	SoftwareVersion     string                `json:"software_version"`
-	DesiredVersion      string                `json:"desired_version,omitempty"`
-	LastHeartbeatAt     string                `json:"last_heartbeat_at,omitempty"`
-	ActiveJobs          int32                 `json:"active_jobs"`     // compatibility alias for active_slots
-	MaxActiveJobs       int32                 `json:"max_active_jobs"` // compatibility alias for max_slots
-	ActiveSlots         int32                 `json:"active_slots"`
-	MaxSlots            int32                 `json:"max_slots"`
-	AvailableSlots      int32                 `json:"available_slots"`
-	CPUUtilizationRatio float64               `json:"cpu_utilization_ratio,omitempty"`
-	MemoryUsedBytes     int64                 `json:"memory_used_bytes,omitempty"`
-	DiskFreeBytes       int64                 `json:"disk_free_bytes,omitempty"`
-	Load1               float64               `json:"load1,omitempty"`
-	CurrentJob          string                `json:"current_job,omitempty"`
-	Health              string                `json:"health,omitempty"`
-	LastSmokeStatus     string                `json:"last_smoke_status,omitempty"`
-	LastSmokeAt         string                `json:"last_smoke_at,omitempty"`
-	LastRestartAt       string                `json:"last_restart_at,omitempty"`
+	WorkerID             string                `json:"worker_id"`
+	WorkerName           string                `json:"worker_name"`
+	Hostname             string                `json:"hostname"`
+	Host                 string                `json:"host"`
+	Status               string                `json:"status"`
+	ConnectionState      string                `json:"connection_state"`
+	SchedulingState      string                `json:"scheduling_state"`
+	DeploymentState      string                `json:"deployment_state,omitempty"`
+	HealthState          string                `json:"health_state"`
+	SessionActive        bool                  `json:"session_active"`
+	Executor             string                `json:"executor"`
+	ExecutorVersion      int32                 `json:"executor_version"`
+	ImageDigest          string                `json:"image_digest,omitempty"`
+	RunningDigest        string                `json:"running_digest,omitempty"`
+	DesiredDigest        string                `json:"desired_digest,omitempty"`
+	TargetDigest         string                `json:"target_digest,omitempty"`
+	PreviousDigest       string                `json:"previous_digest,omitempty"`
+	LastSuccessfulDigest string                `json:"last_successful_digest,omitempty"`
+	ImageState           *WorkerImageState     `json:"image_state,omitempty"`
+	OperationState       *WorkerOperationState `json:"operation_state,omitempty"`
+	SoftwareVersion      string                `json:"software_version"`
+	DesiredVersion       string                `json:"desired_version,omitempty"`
+	LastHeartbeatAt      string                `json:"last_heartbeat_at,omitempty"`
+	ActiveJobs           int32                 `json:"active_jobs"`     // compatibility alias for active_slots
+	MaxActiveJobs        int32                 `json:"max_active_jobs"` // compatibility alias for max_slots
+	ActiveSlots          int32                 `json:"active_slots"`
+	MaxSlots             int32                 `json:"max_slots"`
+	AvailableSlots       int32                 `json:"available_slots"`
+	CPUUtilizationRatio  float64               `json:"cpu_utilization_ratio,omitempty"`
+	MemoryUsedBytes      int64                 `json:"memory_used_bytes,omitempty"`
+	DiskFreeBytes        int64                 `json:"disk_free_bytes,omitempty"`
+	Load1                float64               `json:"load1,omitempty"`
+	CurrentJob           string                `json:"current_job,omitempty"`
+	Health               string                `json:"health,omitempty"`
+	LastSmokeStatus      string                `json:"last_smoke_status,omitempty"`
+	LastSmokeAt          string                `json:"last_smoke_at,omitempty"`
+	LastRestartAt        string                `json:"last_restart_at,omitempty"`
 	// Readiness and Runtime are worker-reported diagnostic snapshots. They
 	// are optional because older agents do not publish these dimensions yet;
 	// absence is explicit and must not be interpreted as PASS.
