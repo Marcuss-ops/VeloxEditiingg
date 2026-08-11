@@ -362,7 +362,7 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 			case "wasted":
 				metrics.RecordPrefetchWastedBytes(asset.SizeBytes)
 			}
-		}}),
+		}, OnEvent: recordPrefetchEvent}),
 		// PR-2: TaskOffer-accepted tasks awaiting TaskLeaseGranted before
 		// executeTask dispatch. Keyed by task_id — one canonical entry per
 		// outstanding offer per session.

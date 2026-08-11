@@ -186,6 +186,7 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					w.logger.Warn("[PREFETCH] rejected invalid FutureAssetPlan: %v", err)
 					continue
 				}
+				w.futureAssetScheduler().RecordPlanEvent("future_plan_received", plan.Version, plan.PlanID)
 				result, err := w.futureAssetController().Apply(plan)
 				if err != nil {
 					w.logger.Warn("[PREFETCH] rejected FutureAssetPlan version=%d: %v", plan.Version, err)
@@ -196,6 +197,7 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 						w.logger.Warn("[PREFETCH] execution reconcile failed plan=%s version=%d: %v", plan.PlanID, plan.Version, err)
 						continue
 					}
+					w.futureAssetScheduler().RecordPlanEvent("future_plan_applied", plan.Version, plan.PlanID)
 				}
 				w.logger.Info("[PREFETCH] reconciled plan=%s version=%d added=%d removed=%d reprioritized=%d protected=%d expired=%t stale=%t", plan.PlanID, plan.Version, len(result.Added), len(result.Removed), len(result.Reprioritized), len(plan.Protect), result.Expired, result.Stale)
 

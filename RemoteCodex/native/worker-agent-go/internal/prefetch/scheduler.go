@@ -56,6 +56,7 @@ type Event struct {
 	Name         string
 	At           time.Time
 	PlanVersion  uint64
+	PlanID       string
 	JobID        string
 	TaskID       string
 	AssetKey     string
@@ -64,6 +65,8 @@ type Event struct {
 	QueuedAt     time.Time
 	StartedAt    time.Time
 	ReadyAt      time.Time
+	QueueDepth   int
+	Active       int
 	ErrorMessage string
 }
 
@@ -76,6 +79,11 @@ type workItem struct {
 	enqueuedAt  time.Time
 	sequence    uint64
 	index       int
+}
+
+type readyRecord struct {
+	at       time.Time
+	distance int
 }
 
 type workQueue []*workItem
@@ -134,6 +142,8 @@ type Scheduler struct {
 	wake            chan struct{}
 	workerCtx       context.Context
 	workerCancel    context.CancelFunc
+	activePrefetch  int
+	readyAtByJob    map[string]map[string]readyRecord
 }
 
 type diskPressureState uint8
@@ -170,7 +180,7 @@ func NewScheduler(cfg Config) *Scheduler {
 		cfg.RAMMaxNextUseDistance = 3
 	}
 	workerCtx, workerCancel := context.WithCancel(context.Background())
-	s := &Scheduler{cfg: cfg, ram: cfg.RAM, jobs: make(map[string]*jobRuntime), protects: make(map[string]string), pendingProtects: make(map[string]struct{}), protectExpiries: make(map[string]time.Time), hints: make(map[string]futureasset.ProtectedAsset), prefetched: make(map[string]int64), useful: make(map[string]bool), assetJobs: make(map[string]map[string]struct{}), wake: make(chan struct{}, 1), workerCtx: workerCtx, workerCancel: workerCancel}
+	s := &Scheduler{cfg: cfg, ram: cfg.RAM, jobs: make(map[string]*jobRuntime), protects: make(map[string]string), pendingProtects: make(map[string]struct{}), protectExpiries: make(map[string]time.Time), hints: make(map[string]futureasset.ProtectedAsset), prefetched: make(map[string]int64), useful: make(map[string]bool), assetJobs: make(map[string]map[string]struct{}), wake: make(chan struct{}, 1), workerCtx: workerCtx, workerCancel: workerCancel, readyAtByJob: make(map[string]map[string]readyRecord)}
 	heap.Init(&s.queue)
 	for i := 0; i < cfg.MaxConcurrent; i++ {
 		go s.runWorker()
@@ -350,6 +360,7 @@ func (s *Scheduler) nextWorkItem() (*workItem, *downloader.CacheResolver) {
 			continue
 		}
 		s.bytes += item.asset.SizeBytes
+		s.activePrefetch++
 		return item, s.resolver
 	}
 	return nil, nil
@@ -372,7 +383,10 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 		Priority:                   priorityForDistance(job.Distance),
 		MaxBandwidthBytesPerSecond: bandwidth,
 	}
-	s.emit(Event{Name: "download_started", At: startedAt, PlanVersion: item.planVersion, JobID: job.JobID, TaskID: job.TaskID, AssetKey: asset.AssetKey, Distance: job.Distance, Generation: item.generation, QueuedAt: item.enqueuedAt, StartedAt: startedAt})
+	s.mu.Lock()
+	active, queueDepth := s.activePrefetch, s.queue.Len()
+	s.mu.Unlock()
+	s.emit(Event{Name: "download_started", At: startedAt, PlanVersion: item.planVersion, JobID: job.JobID, TaskID: job.TaskID, AssetKey: asset.AssetKey, Distance: job.Distance, Generation: item.generation, QueuedAt: item.enqueuedAt, StartedAt: startedAt, QueueDepth: queueDepth, Active: active})
 	if s.cfg.OnState != nil {
 		s.cfg.OnState("requested", job, asset, nil)
 	}
@@ -403,7 +417,16 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 			_ = s.ram.Put(item.ctx, request, downloader.DownloadedAsset{AssetKey: request.AssetKey, AssetID: request.AssetID, LocalPath: resolved.LocalPath, SHA256: resolved.SHA256, SizeBytes: asset.SizeBytes})
 		}
 	}
-	s.releaseBytes(asset.SizeBytes)
+	s.releaseWork(asset.SizeBytes)
+	readyAt := s.cfg.Now()
+	if err == nil {
+		s.mu.Lock()
+		if s.readyAtByJob[job.JobID] == nil {
+			s.readyAtByJob[job.JobID] = make(map[string]readyRecord)
+		}
+		s.readyAtByJob[job.JobID][asset.AssetKey] = readyRecord{at: readyAt, distance: job.Distance}
+		s.mu.Unlock()
+	}
 	if s.currentItem(item) {
 		if s.cfg.OnState != nil {
 			if err != nil {
@@ -412,8 +435,10 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 				s.cfg.OnState("ready", job, asset, nil)
 			}
 		}
-		readyAt := s.cfg.Now()
-		event := Event{Name: "asset_ready", At: readyAt, PlanVersion: item.planVersion, JobID: job.JobID, TaskID: job.TaskID, AssetKey: asset.AssetKey, Distance: job.Distance, Generation: item.generation, QueuedAt: item.enqueuedAt, StartedAt: startedAt, ReadyAt: readyAt}
+		s.mu.Lock()
+		active, queueDepth := s.activePrefetch, s.queue.Len()
+		s.mu.Unlock()
+		event := Event{Name: "asset_ready", At: readyAt, PlanVersion: item.planVersion, JobID: job.JobID, TaskID: job.TaskID, AssetKey: asset.AssetKey, Distance: job.Distance, Generation: item.generation, QueuedAt: item.enqueuedAt, StartedAt: startedAt, ReadyAt: readyAt, QueueDepth: queueDepth, Active: active}
 		if err != nil {
 			event.ErrorMessage = err.Error()
 		}
@@ -445,9 +470,37 @@ func (s *Scheduler) enqueueJobLocked(planVersion uint64, runtime *jobRuntime) []
 			Distance:    runtime.job.Distance,
 			Generation:  runtime.generation,
 			QueuedAt:    enqueuedAt,
+			QueueDepth:  s.queue.Len(),
+			Active:      s.activePrefetch,
 		})
 	}
 	return events
+}
+
+// RecordPlanEvent lets the receive path put control-plane timestamps in the
+// same structured event stream as queue, download, and READY timestamps.
+func (s *Scheduler) RecordPlanEvent(name string, planVersion uint64, planID string) {
+	if s == nil {
+		return
+	}
+	s.emit(Event{Name: name, At: s.cfg.Now(), PlanVersion: planVersion, PlanID: planID})
+}
+
+// MarkJobStarted closes the READY -> job-start interval for assets that were
+// prefetched for this job. Positive lead means READY happened first; a
+// negative lead identifies a foreground catch-up.
+func (s *Scheduler) MarkJobStarted(jobID string) {
+	if s == nil || jobID == "" {
+		return
+	}
+	startedAt := s.cfg.Now()
+	s.mu.Lock()
+	ready := s.readyAtByJob[jobID]
+	delete(s.readyAtByJob, jobID)
+	s.mu.Unlock()
+	for assetKey, record := range ready {
+		s.emit(Event{Name: "prefetch_ready_lead", At: startedAt, JobID: jobID, AssetKey: assetKey, Distance: record.distance, StartedAt: startedAt, ReadyAt: record.at})
+	}
 }
 
 func (s *Scheduler) currentItemLocked(item *workItem) bool {
@@ -593,13 +646,17 @@ func (s *Scheduler) reserveBytes(n int64) bool {
 	s.bytes += n
 	return true
 }
-func (s *Scheduler) releaseBytes(n int64) {
+func (s *Scheduler) releaseWork(n int64) {
 	s.mu.Lock()
 	s.bytes -= n
 	if s.bytes < 0 {
 		s.bytes = 0
 	}
+	if s.activePrefetch > 0 {
+		s.activePrefetch--
+	}
 	s.mu.Unlock()
+	s.signalWork()
 }
 func priorityForDistance(distance int) int {
 	switch distance {

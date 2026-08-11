@@ -56,6 +56,9 @@ import (
 func (w *Worker) recordTaskStart(pte *PendingTaskExecution) {
 	telemetry.GetPrometheusMetrics().SetWorkerStatus(w.config.WorkerID, 2)
 	telemetry.GetPrometheusMetrics().SetWorkerActiveJobs(w.config.WorkerID, float64(w.concurrencyLimiter.ActiveJobCount()))
+	if w.prefetchScheduler != nil {
+		w.prefetchScheduler.MarkJobStarted(pte.JobID)
+	}
 	logger.LogJobStart(w.config.WorkerID, pte.JobID, pte.ExecutorID, 0)
 }
 

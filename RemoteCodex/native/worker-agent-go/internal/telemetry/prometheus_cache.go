@@ -96,6 +96,40 @@ func (m *PrometheusMetrics) RecordPrefetchWastedBytes(bytes int64) {
 	}
 }
 
+func prefetchDistanceLabel(distance int) string {
+	switch distance {
+	case 1:
+		return "d1"
+	case 2:
+		return "d2"
+	default:
+		return "d3"
+	}
+}
+
+func (m *PrometheusMetrics) RecordPrefetchQueueWait(distance int, duration time.Duration) {
+	m.prefetchQueueWaitSeconds.observe(prefetchDistanceLabel(distance), duration.Seconds())
+}
+
+func (m *PrometheusMetrics) RecordPrefetchResolve(distance int, duration time.Duration) {
+	m.prefetchResolveSeconds.observe(prefetchDistanceLabel(distance), duration.Seconds())
+}
+
+func (m *PrometheusMetrics) RecordPrefetchReadyLead(distance int, lead time.Duration) {
+	m.prefetchReadyLeadSeconds.observe(prefetchDistanceLabel(distance), lead.Seconds())
+}
+
+func (m *PrometheusMetrics) SetPrefetchOperational(active, queued int) {
+	if active < 0 {
+		active = 0
+	}
+	if queued < 0 {
+		queued = 0
+	}
+	m.prefetchActive.set("total", float64(active))
+	m.prefetchQueueDepth.set("total", float64(queued))
+}
+
 // RecordWorkerError increments the worker-side task-failure counter
 // (velox_worker_errors_total) at the same site that bumps
 // tasksFailed, so operators can delta it across a batch window.

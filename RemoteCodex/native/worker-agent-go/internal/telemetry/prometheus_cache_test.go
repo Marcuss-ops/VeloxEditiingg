@@ -63,3 +63,37 @@ func TestPrometheusCacheMetricsExportWithLowCardinalityLabels(t *testing.T) {
 		t.Errorf("size gauge missing expected value:\n%s", export)
 	}
 }
+
+func TestPrometheusPrefetchTimingMetricsUseOnlyDistanceLabels(t *testing.T) {
+	metrics := NewPrometheusMetrics()
+	metrics.RecordPrefetchQueueWait(1, 250*time.Millisecond)
+	metrics.RecordPrefetchResolve(2, 1500*time.Millisecond)
+	metrics.RecordPrefetchReadyLead(1, -2*time.Second)
+	metrics.SetPrefetchOperational(2, 7)
+
+	export := metrics.ExportPrometheus()
+	for _, name := range []string{
+		"velox_prefetch_queue_wait_seconds",
+		"velox_prefetch_resolve_seconds",
+		"velox_prefetch_ready_lead_seconds",
+		"velox_prefetch_active",
+		"velox_prefetch_queue_depth",
+	} {
+		if !strings.Contains(export, name) {
+			t.Errorf("Prometheus export missing %s:\n%s", name, export)
+		}
+	}
+	for _, label := range []string{`label="d1"`, `label="d2"`, `label="total"`} {
+		if !strings.Contains(export, label) {
+			t.Errorf("Prometheus export missing low-cardinality label %s:\n%s", label, export)
+		}
+	}
+	for _, forbidden := range []string{"job-", "asset-", "sha256:"} {
+		if strings.Contains(export, forbidden) {
+			t.Errorf("Prometheus export contains forbidden high-cardinality value %q:\n%s", forbidden, export)
+		}
+	}
+	if !strings.Contains(export, `velox_prefetch_active{label="total"} 2`) || !strings.Contains(export, `velox_prefetch_queue_depth{label="total"} 7`) {
+		t.Fatalf("prefetch operational gauges missing expected values:\n%s", export)
+	}
+}
