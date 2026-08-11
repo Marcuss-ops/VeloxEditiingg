@@ -160,7 +160,20 @@ scripts/fleetctl restart velox-worker-13197 "after config change"
 
 Publishes the restart operation; the Master owns the worker-side action.
 
-### 3.6 `scripts/fleetctl operations [worker_id] [status]`
+### 3.6 `scripts/fleetctl worker-config set <worker_id>`
+
+```bash
+scripts/fleetctl worker-config set velox-worker-13197 \
+  --audio-mix-strategy optimized --audio-mix-profile 0
+```
+
+The command publishes an audited Master operation. The Master invokes only
+the allowlisted root-owned `velox-worker-set-config` helper over SSH; the
+helper updates `worker.env` atomically, restarts the canonical service, waits
+for `/health/ready`, and rolls back the file if readiness does not recover.
+Operators must not edit `worker.env` or run direct SSH mutation commands.
+
+### 3.7 `scripts/fleetctl operations [worker_id] [status]`
 
 ```bash
 scripts/fleetctl operations velox-worker-13197
@@ -168,7 +181,7 @@ scripts/fleetctl operations velox-worker-13197
 
 Reads the `fleet_operations` audit ledger; it does not mutate the worker.
 
-### 3.7 `scripts/fleetctl update <worker_id> <ghcr-image@sha256:digest>`
+### 3.8 `scripts/fleetctl update <worker_id> <ghcr-image@sha256:digest>`
 
 ```bash
 IMAGE=ghcr.io/<owner>/velox-worker@sha256:<64-lowercase-hex>
@@ -395,18 +408,18 @@ to 12 min for smokes, 30 min for updates / rollbacks".
 
 | Surface | Status | Where |
 |---|---|---|
-| Master API commands (status/inspect/drain/resume/quarantine/restart/update/rollback/operations/smoke) | ✅ canonical | `scripts/fleetctl` |
+| Master API commands (status/inspect/drain/resume/quarantine/restart/worker-config/update/rollback/operations/smoke) | ✅ canonical | `scripts/fleetctl` |
 | Token resolution (`$TOKEN_FILE` / `$VELOX_ADMIN_TOKEN`) | ✅ canonical | `scripts/fleetctl` |
 | Exit-code matrix | ✅ atomic | exit_codes.go |
 | Pinned GHCR digest validation | ✅ canonical | `scripts/fleetctl` |
 | Operation polling (5 s interval, kind-specific deadlines) | ✅ atomic | polling.go |
 | Per-sub-command pretty-printing | ✅ atomic | handlers.go |
-| `restart` | ✅ Master API operation | `scripts/fleetctl restart` |
+| `restart` / `worker-config` | ✅ Master API operation | `scripts/fleetctl restart`, `scripts/fleetctl worker-config set` |
 | `logs` | ⏳ diagnostic-only follow-up | host-side inspection, not a rollout mutation |
 | Cobra CLI parser (vs stdlib flag) | ⏳ future | follow-up if operational payoff |
 | Auditing `fleetctl <sub>` invocations into the operation row's actor log | ⏳ future | Step 4/15 ledger extension |
 
 The canonical fleet surface is `scripts/fleetctl` (Master REST API):
-`FleetController → UpdateExecutor → WorkerNodeRegistry → SSH →
-velox-worker-activate-image`. Host-side mutation is owned by the Master and
-must not be performed as an operator bypass.
+`FleetController → WorkerNodeRegistry → SSH → root-owned helper`. Host-side
+mutation is owned by the Master and must not be performed as an operator
+bypass.

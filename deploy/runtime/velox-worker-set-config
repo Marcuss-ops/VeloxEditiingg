@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# velox-worker-set-config — the only privileged worker configuration mutator
+# exposed to the Master. It accepts a deliberately small allowlist of runtime
+# knobs, updates worker.env atomically, restarts the canonical service, and
+# rolls the file back if readiness does not recover.
+
+ENV_FILE="${ENV_FILE:-/etc/velox-worker/worker.env}"
+LOCK_FILE="${LOCK_FILE:-/run/lock/velox-worker-config.lock}"
+POLL_INTERVAL="${POLL_INTERVAL:-2}"
+strategy=""
+profile=""
+
+usage() {
+  echo "usage: velox-worker-set-config [--audio-mix-strategy legacy|optimized|auto] [--audio-mix-profile 0|1]" >&2
+  exit 2
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --audio-mix-strategy)
+      [[ $# -ge 2 ]] || usage
+      strategy="$2"; shift 2 ;;
+    --audio-mix-profile)
+      [[ $# -ge 2 ]] || usage
+      profile="$2"; shift 2 ;;
+    *) usage ;;
+  esac
+done
+[[ -n "$strategy" || -n "$profile" ]] || usage
+[[ -z "$strategy" || "$strategy" =~ ^(legacy|optimized|auto)$ ]] || { echo "invalid audio mix strategy" >&2; exit 2; }
+[[ -z "$profile" || "$profile" =~ ^(0|1)$ ]] || { echo "invalid audio mix profile" >&2; exit 2; }
+[[ -r "$ENV_FILE" ]] || { echo "worker env missing: $ENV_FILE" >&2; exit 1; }
+
+exec 9>"$LOCK_FILE"
+flock 9
+
+BACKUP_FILE="${ENV_FILE}.config-prev"
+cp -p "$ENV_FILE" "$BACKUP_FILE"
+tmp="$(mktemp "${ENV_FILE}.tmp.XXXXXX")"
+trap 'rm -f "$tmp"' EXIT
+
+awk -v strategy="$strategy" -v profile="$profile" '
+  BEGIN { strategy_done=0; profile_done=0 }
+  /^VELOX_AUDIO_MIX_STRATEGY=/ {
+    if (strategy != "") { print "VELOX_AUDIO_MIX_STRATEGY=" strategy; strategy_done=1 }
+    next
+  }
+  /^VELOX_AUDIO_MIX_PROFILE=/ {
+    if (profile != "") { print "VELOX_AUDIO_MIX_PROFILE=" profile; profile_done=1 }
+    next
+  }
+  { print }
+  END {
+    if (strategy != "" && !strategy_done) print "VELOX_AUDIO_MIX_STRATEGY=" strategy
+    if (profile != "" && !profile_done) print "VELOX_AUDIO_MIX_PROFILE=" profile
+  }
+' "$ENV_FILE" >"$tmp"
+chown --reference="$ENV_FILE" "$tmp"
+chmod --reference="$ENV_FILE" "$tmp"
+mv -f "$tmp" "$ENV_FILE"
+trap - EXIT
+
+rollback() {
+  cp -p "$BACKUP_FILE" "$ENV_FILE" || return 1
+  systemctl restart velox-worker.service || return 1
+  for _ in $(seq 1 60); do
+    curl -fsS --max-time 5 http://127.0.0.1:8081/health/ready >/dev/null 2>&1 && return 0
+    sleep "$POLL_INTERVAL"
+  done
+  return 1
+}
+
+if ! systemctl restart velox-worker.service || ! systemctl is-active --quiet velox-worker.service; then
+  rollback || true
+  exit 1
+fi
+for _ in $(seq 1 60); do
+  if curl -fsS --max-time 5 http://127.0.0.1:8081/health/ready >/dev/null 2>&1; then
+    rm -f "$BACKUP_FILE"
+    exit 0
+  fi
+  sleep "$POLL_INTERVAL"
+done
+rollback || true
+exit 1

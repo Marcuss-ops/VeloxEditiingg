@@ -179,6 +179,10 @@ func buildFleet(p *persistenceDeps, workerRegistry *workersreg.Registry, sharedS
 		}
 	}
 	log.Printf("[BOOTSTRAP] WorkerStateExecutors registered for kinds=%s,%s", fleet.OperationKindDrain, fleet.OperationKindQuarantine)
+	if err := registry.Register(fleet.OperationKindRestart, fleet.NewWorkerConfigExecutor(sharedSSH)); err != nil {
+		return nil, fmt.Errorf("register %s executor: %w", fleet.OperationKindRestart, err)
+	}
+	log.Printf("[BOOTSTRAP] WorkerConfigExecutor registered for kind=%s", fleet.OperationKindRestart)
 
 	controller := fleet.NewFleetController(
 		p.SQLite,

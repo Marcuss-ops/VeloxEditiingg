@@ -260,6 +260,7 @@ func isNilExecutor(exec OperationExecutor) bool {
 var ProductionRequiredOperationKinds = []string{
 	OperationKindDrain,
 	OperationKindResume,
+	OperationKindRestart,
 	OperationKindUpdate,
 	OperationKindQuarantine,
 	OperationKindSmoke,

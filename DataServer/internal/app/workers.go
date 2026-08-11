@@ -324,6 +324,7 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 			adminWorkers.POST("/:worker_id/resume", m.adminWorkersMutationsHandler.ResumeWorker())
 			adminWorkers.POST("/:worker_id/quarantine", m.adminWorkersMutationsHandler.QuarantineWorker())
 			adminWorkers.POST("/:worker_id/update", m.adminWorkersMutationsHandler.UpdateWorker())
+			adminWorkers.POST("/:worker_id/config", m.adminWorkersMutationsHandler.ConfigWorker())
 		}
 		// Legacy /worker/* control actions migrated into the canonical
 		// admin namespace (Phase 6 API-surface unification): revoke /

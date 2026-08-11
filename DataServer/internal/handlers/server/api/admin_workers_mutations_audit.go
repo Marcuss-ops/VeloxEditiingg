@@ -15,6 +15,11 @@ func newMutationOperation(workerID, kind string, req MutationRequest, now time.T
 	payload := json.RawMessage("{}")
 	if kind == fleet.OperationKindUpdate {
 		payload, _ = json.Marshal(map[string]string{"target_digest": req.TargetDigest})
+	} else if kind == fleet.OperationKindRestart {
+		payload, _ = json.Marshal(map[string]any{
+			"audio_mix_strategy": req.AudioMixStrategy,
+			"audio_mix_profile":  req.AudioMixProfile,
+		})
 	}
 	return &store.Operation{
 		OperationID: operationID,

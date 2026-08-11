@@ -40,26 +40,27 @@ import (
 type subCommand string
 
 const (
-	subStatus     subCommand = "status"
-	subInspect    subCommand = "inspect"
-	subDrain      subCommand = "drain"
-	subUpdate     subCommand = "update"
-	subSmoke      subCommand = "smoke"
-	subResume     subCommand = "resume"
-	subRollback   subCommand = "rollback"
-	subOperations subCommand = "operations"
-	subWaitReady  subCommand = "wait-ready"
-	subRollout    subCommand = "rollout"
-	subSSHCheck   subCommand = "ssh-check"
-	subJob        subCommand = "job"
-	subDoctor     subCommand = "doctor"
-	subQuarantine subCommand = "quarantine"
-	subRestart    subCommand = "restart"
+	subStatus       subCommand = "status"
+	subInspect      subCommand = "inspect"
+	subDrain        subCommand = "drain"
+	subUpdate       subCommand = "update"
+	subSmoke        subCommand = "smoke"
+	subResume       subCommand = "resume"
+	subRollback     subCommand = "rollback"
+	subOperations   subCommand = "operations"
+	subWaitReady    subCommand = "wait-ready"
+	subRollout      subCommand = "rollout"
+	subSSHCheck     subCommand = "ssh-check"
+	subJob          subCommand = "job"
+	subDoctor       subCommand = "doctor"
+	subQuarantine   subCommand = "quarantine"
+	subRestart      subCommand = "restart"
+	subWorkerConfig subCommand = "worker-config"
 )
 
 func (s subCommand) valid() bool {
 	switch s {
-	case subStatus, subInspect, subDrain, subUpdate, subSmoke, subResume, subRollback, subOperations, subWaitReady, subRollout, subSSHCheck, subJob, subDoctor, subQuarantine, subRestart:
+	case subStatus, subInspect, subDrain, subUpdate, subSmoke, subResume, subRollback, subOperations, subWaitReady, subRollout, subSSHCheck, subJob, subDoctor, subQuarantine, subRestart, subWorkerConfig:
 		return true
 	default:
 		return false
@@ -95,6 +96,8 @@ Sub-commands:
   job watch <job_id>      follow the persisted job event timeline
   quarantine <worker_id>  exclude worker from placement
   restart <worker_id>     schedule worker restart
+  worker-config set <worker_id> [--audio-mix-strategy legacy|optimized|auto] [--audio-mix-profile 0|1]
+                          atomically update allowlisted worker config and wait-ready
   doctor --production     fleet/readiness/digest production checks
 
 Auth (in precedence order):
@@ -191,6 +194,8 @@ func runMain(args []string) int {
 		return runQuarantine(client, rest[1:])
 	case subRestart:
 		return runRestart(client, rest[1:])
+	case subWorkerConfig:
+		return runWorkerConfig(client, rest[1:])
 	}
 	return ExitUnexpected
 }

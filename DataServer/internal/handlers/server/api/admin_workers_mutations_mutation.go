@@ -121,6 +121,13 @@ func (h *AdminWorkersMutationsHandler) UpdateWorker() gin.HandlerFunc {
 	})
 }
 
+// ConfigWorker applies the allowlisted worker runtime settings through the
+// FleetController queue. The existing restart operation kind provides the
+// durable serialization/audit contract; its payload carries the config.
+func (h *AdminWorkersMutationsHandler) ConfigWorker() gin.HandlerFunc {
+	return h.mutationHandler(fleet.OperationKindRestart, func(context.Context, *workersreg.Worker) error { return nil })
+}
+
 // ResumeWorker returns POST /api/v1/admin/workers/:worker_id/resume.
 //
 // Behavior (user spec verbatim: "ritorna a HEALTHY se smoke verde"):

@@ -104,6 +104,79 @@ func runRestart(client *fleetClient, args []string) int {
 	return ExitOK
 }
 
+func runWorkerConfig(client *fleetClient, args []string) int {
+	if len(args) < 2 || args[0] != "set" {
+		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "worker-config requires: set <worker_id> [--audio-mix-strategy ...] [--audio-mix-profile 0|1]"))
+		return ExitMisuse
+	}
+	workerID := args[1]
+	strategy := ""
+	profile := (*int)(nil)
+	reason := "fleetctl worker-config set"
+	for i := 2; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--audio-mix-strategy" || arg == "--audio-mix-profile" || arg == "--reason":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "%s requires a value", arg))
+				return ExitMisuse
+			}
+			value := args[i+1]
+			switch arg {
+			case "--audio-mix-strategy":
+				strategy = value
+			case "--audio-mix-profile":
+				parsed := 0
+				if value != "0" && value != "1" {
+					fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "audio-mix-profile must be 0 or 1"))
+					return ExitMisuse
+				}
+				if value == "1" {
+					parsed = 1
+				}
+				profile = &parsed
+			case "--reason":
+				reason = value
+			}
+			i++
+		case strings.HasPrefix(arg, "--audio-mix-strategy="):
+			strategy = strings.TrimPrefix(arg, "--audio-mix-strategy=")
+		case strings.HasPrefix(arg, "--audio-mix-profile="):
+			value := strings.TrimPrefix(arg, "--audio-mix-profile=")
+			parsed := 0
+			if value != "0" && value != "1" {
+				fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "audio-mix-profile must be 0 or 1"))
+				return ExitMisuse
+			}
+			if value == "1" {
+				parsed = 1
+			}
+			profile = &parsed
+		case strings.HasPrefix(arg, "--reason="):
+			reason = strings.TrimPrefix(arg, "--reason=")
+		default:
+			fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "unknown worker-config option %q", arg))
+			return ExitMisuse
+		}
+	}
+	if strategy != "" && strategy != "legacy" && strategy != "optimized" && strategy != "auto" {
+		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "audio-mix-strategy must be legacy, optimized, or auto"))
+		return ExitMisuse
+	}
+	if strategy == "" && profile == nil {
+		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "worker-config requires at least one supported setting"))
+		return ExitMisuse
+	}
+	body := map[string]any{"reason": reason}
+	if strategy != "" {
+		body["audio_mix_strategy"] = strategy
+	}
+	if profile != nil {
+		body["audio_mix_profile"] = *profile
+	}
+	return runMutation(client, "restart", workerID, workerPath(workerID, "config"), body)
+}
+
 func runResume(client *fleetClient, args []string) int {
 	workerID, ok := oneArg(args)
 	if !ok {
