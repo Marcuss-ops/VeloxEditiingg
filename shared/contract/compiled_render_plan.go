@@ -7,9 +7,10 @@ package contract
 // (plan_version / job_id / attempt_id / duration_ms / media_contract /
 // segments[] / audio[] / assets[] — DataServer/internal/renderplan) and
 // stamps SHA256(canonical JSON) on task_attempts.plan_sha256. At claim the
-// placement pipeline ALSO embeds the canonical document in the offer so the
-// worker's batch FFmpeg path can consume the compiled segments instead of
-// re-deriving a timeline from raw scenes. No local paths ever travel here;
+// placement pipeline ALSO embeds the canonical document in the offer. The
+// current v1 executor validates this document and its hash as additive
+// evidence; the batch FFmpeg consumer will consume compiled segments once
+// that executor migration is complete. No local paths ever travel here;
 // assets stay asset_id + sha256 references resolved worker-side.
 const (
 	// PayloadKeyCompiledRenderPlanJSON carries the canonical

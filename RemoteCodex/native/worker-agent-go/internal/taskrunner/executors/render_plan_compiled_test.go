@@ -2,6 +2,8 @@ package executors
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -41,13 +43,18 @@ func validCompiledPlanForTest(t *testing.T, jobID, attemptID string) string {
 	return string(data)
 }
 
+func compiledPlanSHAForTest(data string) string {
+	sum := sha256.Sum256([]byte(data))
+	return hex.EncodeToString(sum[:])
+}
+
 func TestParseCompiledRenderPlanEnvelope_HappyPath(t *testing.T) {
 	const jobID = "job-compiled-1"
 	plan, err := parseCompiledRenderPlanEnvelope(executor.TaskSpec{
 		JobID: jobID,
 		Payload: map[string]interface{}{
 			contract.PayloadKeyCompiledRenderPlanJSON: validCompiledPlanForTest(t, jobID, "attempt-1"),
-			contract.PayloadKeyCompiledRenderPlanSHA:  strings.Repeat("a", 64),
+			contract.PayloadKeyCompiledRenderPlanSHA:  compiledPlanSHAForTest(validCompiledPlanForTest(t, jobID, "attempt-1")),
 		},
 	})
 	if err != nil {
@@ -59,10 +66,12 @@ func TestParseCompiledRenderPlanEnvelope_HappyPath(t *testing.T) {
 }
 
 func TestParseCompiledRenderPlanEnvelope_JobMismatch(t *testing.T) {
+	raw := validCompiledPlanForTest(t, "job-compiled-1", "attempt-1")
 	_, err := parseCompiledRenderPlanEnvelope(executor.TaskSpec{
 		JobID: "job-other",
 		Payload: map[string]interface{}{
-			contract.PayloadKeyCompiledRenderPlanJSON: validCompiledPlanForTest(t, "job-compiled-1", "attempt-1"),
+			contract.PayloadKeyCompiledRenderPlanJSON: raw,
+			contract.PayloadKeyCompiledRenderPlanSHA:  compiledPlanSHAForTest(raw),
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "must match task job") {
@@ -99,6 +108,7 @@ func TestRenderPlanExecutor_ValidateRequiresV1Envelope(t *testing.T) {
 		Payload: map[string]interface{}{
 			"render_plan_json":                        validRenderPlanJSON(t, jobID),
 			contract.PayloadKeyCompiledRenderPlanJSON: validCompiledPlanForTest(t, jobID, "attempt-2"),
+			contract.PayloadKeyCompiledRenderPlanSHA:  compiledPlanSHAForTest(validCompiledPlanForTest(t, jobID, "attempt-2")),
 		},
 	}
 	if err := e.Validate(ok); err != nil {
@@ -144,7 +154,7 @@ func TestRunCommandExecutor_SurfacesCompiledPlanEvidence(t *testing.T) {
 			"input_path":       "/cache/worker/video.mp4",
 			// Master-compiled plan delivered at claim (Fase D).
 			contract.PayloadKeyCompiledRenderPlanJSON: validCompiledPlanForTest(t, jobID, "attempt-evidence"),
-			contract.PayloadKeyCompiledRenderPlanSHA:  strings.Repeat("c", 64),
+			contract.PayloadKeyCompiledRenderPlanSHA:  compiledPlanSHAForTest(validCompiledPlanForTest(t, jobID, "attempt-evidence")),
 		},
 	}
 	result, err := e.Execute(context.Background(), nil, spec)
@@ -154,8 +164,9 @@ func TestRunCommandExecutor_SurfacesCompiledPlanEvidence(t *testing.T) {
 	if result.Status != "succeeded" {
 		t.Fatalf("Status = %q, want succeeded (%s)", result.Status, result.ErrorDetail)
 	}
-	if got, _ := result.Metrics["compiled_render_plan_sha256"].(string); got != strings.Repeat("c", 64) {
-		t.Errorf("compiled_render_plan_sha256 = %v, want delivered sha", result.Metrics["compiled_render_plan_sha256"])
+	wantSHA := compiledPlanSHAForTest(validCompiledPlanForTest(t, jobID, "attempt-evidence"))
+	if got, _ := result.Metrics["compiled_render_plan_sha256"].(string); got != wantSHA {
+		t.Errorf("compiled_render_plan_sha256 = %v, want delivered sha %s", result.Metrics["compiled_render_plan_sha256"], wantSHA)
 	}
 	if got, _ := result.Metrics["compiled_render_plan_segments"].(int); got != 1 {
 		t.Errorf("compiled_render_plan_segments = %v, want 1", result.Metrics["compiled_render_plan_segments"])

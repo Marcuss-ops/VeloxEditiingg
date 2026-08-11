@@ -1,6 +1,8 @@
 package renderplan
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -38,6 +40,11 @@ func marshalJSONForTest(t *testing.T, value interface{}) string {
 		t.Fatalf("marshal: %v", err)
 	}
 	return string(data)
+}
+
+func compiledPlanSHAForTest(data string) string {
+	sum := sha256.Sum256([]byte(data))
+	return hex.EncodeToString(sum[:])
 }
 
 func TestDecodeCompiledRenderPlan_HappyPath(t *testing.T) {
@@ -114,7 +121,7 @@ func TestValidateCompiledRenderPlan_Admission(t *testing.T) {
 	// Present + valid → nil.
 	payload := map[string]interface{}{
 		contract.PayloadKeyCompiledRenderPlanJSON: valid,
-		contract.PayloadKeyCompiledRenderPlanSHA:  strings.Repeat("a", 64),
+		contract.PayloadKeyCompiledRenderPlanSHA:  compiledPlanSHAForTest(valid),
 	}
 	if err := ValidateCompiledRenderPlan(payload); err != nil {
 		t.Fatalf("valid compiled plan rejected: %v", err)
@@ -143,12 +150,21 @@ func TestValidateCompiledRenderPlan_Admission(t *testing.T) {
 		t.Fatal("malformed compiled_render_plan_sha256 must fail admission")
 	}
 
-	// Empty sha is tolerated (older master may omit it).
+	// Empty sha is rejected: the compiled document and its durable identity
+	// hash are one integrity contract.
 	if err := ValidateCompiledRenderPlan(map[string]interface{}{
 		contract.PayloadKeyCompiledRenderPlanJSON: valid,
 		contract.PayloadKeyCompiledRenderPlanSHA:  "",
-	}); err != nil {
-		t.Fatalf("empty sha rejected: %v", err)
+	}); err == nil {
+		t.Fatal("empty sha must fail admission when compiled plan is present")
+	}
+
+	// A well-formed but unrelated hash must also be rejected.
+	if err := ValidateCompiledRenderPlan(map[string]interface{}{
+		contract.PayloadKeyCompiledRenderPlanJSON: valid,
+		contract.PayloadKeyCompiledRenderPlanSHA:  strings.Repeat("b", 64),
+	}); err == nil {
+		t.Fatal("mismatched sha must fail admission")
 	}
 }
 
@@ -160,7 +176,7 @@ func TestValidateTaskPayload_AcceptsCompiledPlanAlongsideLegacyContract(t *testi
 		"job_type":                 "process_video",
 		"created_at":               "2026-08-11T00:00:00Z",
 		contract.PayloadKeyCompiledRenderPlanJSON: valid,
-		contract.PayloadKeyCompiledRenderPlanSHA:  strings.Repeat("b", 64),
+		contract.PayloadKeyCompiledRenderPlanSHA:  compiledPlanSHAForTest(valid),
 	}
 	if err := ValidateTaskPayload(payload); err != nil {
 		t.Fatalf("compiled plan on legacy envelope must pass admission: %v", err)

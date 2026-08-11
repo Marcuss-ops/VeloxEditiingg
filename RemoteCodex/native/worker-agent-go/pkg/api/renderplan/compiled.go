@@ -13,10 +13,13 @@ package renderplan
 //   - plan_version is the master schema version (CompiledPlanVersion);
 //     bump ONLY with a master migration.
 //
-// The batch FFmpeg path consumes segments[] directly from this document
-// instead of re-deriving a timeline from raw scenes.
+// The current render-plan executor validates this document and exposes its
+// identity as evidence while the batch FFmpeg executor is being migrated to
+// consume segments[] directly instead of re-deriving a timeline from raw
+// scenes.
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -143,14 +146,20 @@ func ValidateCompiledRenderPlan(raw map[string]interface{}) error {
 	if _, err := DecodeCompiledRenderPlan(rawJSON); err != nil {
 		return err
 	}
-	if sha, ok := raw[contract.PayloadKeyCompiledRenderPlanSHA].(string); ok && strings.TrimSpace(sha) != "" {
-		trimmed := strings.TrimSpace(sha)
-		if len(trimmed) != 64 {
-			return planError(ERR_PLAN_SCHEMA, "compiled_render_plan_sha256", "must be a 64-char hex SHA256")
-		}
-		if _, err := hex.DecodeString(trimmed); err != nil {
-			return planError(ERR_PLAN_SCHEMA, "compiled_render_plan_sha256", "must be a 64-char hex SHA256")
-		}
+	sha, ok := raw[contract.PayloadKeyCompiledRenderPlanSHA].(string)
+	if !ok || strings.TrimSpace(sha) == "" {
+		return planError(ERR_PLAN_REQUIRED_FIELD, "compiled_render_plan_sha256", "is required when compiled_render_plan_json is present")
+	}
+	trimmed := strings.TrimSpace(sha)
+	if len(trimmed) != 64 {
+		return planError(ERR_PLAN_SCHEMA, "compiled_render_plan_sha256", "must be a 64-char hex SHA256")
+	}
+	if _, err := hex.DecodeString(trimmed); err != nil {
+		return planError(ERR_PLAN_SCHEMA, "compiled_render_plan_sha256", "must be a 64-char hex SHA256")
+	}
+	actual := sha256.Sum256([]byte(rawJSON))
+	if !strings.EqualFold(trimmed, hex.EncodeToString(actual[:])) {
+		return planError(ERR_PLAN_SCHEMA, "compiled_render_plan_sha256", "does not match compiled_render_plan_json")
 	}
 	return nil
 }

@@ -2,6 +2,8 @@ package executors
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,15 +85,15 @@ func newRenderPlanExecutor(id string, outputTypes []string, runner ffmpegrunner.
 func (e *renderPlanExecutor) Descriptor() executor.Descriptor { return e.descriptor }
 
 func (e *renderPlanExecutor) Validate(spec executor.TaskSpec) error {
-	// The v1 render_plan/render_plan_json envelope drives the commands
-	// today; a payload without it is not executable by this executor family.
+	// The v1 render_plan/render_plan_json envelope drives the commands today;
+	// a payload without it is not executable by this executor family.
 	if _, err := parseRenderPlanEnvelope(spec); err != nil {
 		return err
 	}
-	// Master-compiled plan (Fase D) is additive on top of the v1 envelope
-	// for now (the batch FFmpeg commands will consume the compiled segments
-	// in a future executor). When the payload carries it, the document must
-	// still be a valid master-compiled plan.
+	// Master-compiled plan (Fase D) is additive on top of the v1 envelope for
+	// now. When the payload carries it, both the document and its stamped
+	// identity hash must be valid; the v1 executor must never report evidence
+	// for a different plan.
 	if raw, ok := spec.Payload[contract.PayloadKeyCompiledRenderPlanJSON].(string); ok && strings.TrimSpace(raw) != "" {
 		if _, err := parseCompiledRenderPlanEnvelope(spec); err != nil {
 			return err
@@ -179,6 +181,9 @@ func parseCompiledRenderPlanEnvelope(spec executor.TaskSpec) (*renderplan.Compil
 	if err := checkRenderPlanPayloadKeys(spec); err != nil {
 		return nil, err
 	}
+	if err := verifyCompiledPlanSHA(spec); err != nil {
+		return nil, err
+	}
 	rawJSON, ok := spec.Payload[contract.PayloadKeyCompiledRenderPlanJSON].(string)
 	if !ok || strings.TrimSpace(rawJSON) == "" {
 		return nil, errors.New("render-plan executor: compiled_render_plan_json is required")
@@ -191,6 +196,23 @@ func parseCompiledRenderPlanEnvelope(spec executor.TaskSpec) (*renderplan.Compil
 		return nil, fmt.Errorf("render-plan executor: compiled plan job_id %q must match task job %q", plan.JobID, spec.JobID)
 	}
 	return plan, nil
+}
+
+func verifyCompiledPlanSHA(spec executor.TaskSpec) error {
+	rawJSON, ok := spec.Payload[contract.PayloadKeyCompiledRenderPlanJSON].(string)
+	if !ok || strings.TrimSpace(rawJSON) == "" {
+		return errors.New("render-plan executor: compiled_render_plan_json is required")
+	}
+	rawSHA, ok := spec.Payload[contract.PayloadKeyCompiledRenderPlanSHA].(string)
+	if !ok || strings.TrimSpace(rawSHA) == "" {
+		return errors.New("render-plan executor: compiled_render_plan_sha256 is required when compiled plan is present")
+	}
+	actual := sha256.Sum256([]byte(rawJSON))
+	expected := hex.EncodeToString(actual[:])
+	if !strings.EqualFold(strings.TrimSpace(rawSHA), expected) {
+		return fmt.Errorf("render-plan executor: compiled plan sha256 mismatch (got %q, want %q)", strings.TrimSpace(rawSHA), expected)
+	}
+	return nil
 }
 
 // compiledPlanEvidence returns the sanitized identity of the master-compiled
