@@ -28,8 +28,8 @@ type VideoNormalization struct {
 	VideoTrackTimebase int
 }
 
-// DefaultVideoNormalization is the deterministic Velox video format.
-var DefaultVideoNormalization = VideoNormalization{
+// defaultVideoNormalization is the deterministic Velox video format.
+var defaultVideoNormalization = VideoNormalization{
 	Width:              1920,
 	Height:             1080,
 	FPSNum:             30,
@@ -113,7 +113,7 @@ func NewVideoTrimmer(spec VideoNormalization) *VideoTrimmer {
 	if spec.Width <= 0 || spec.Height <= 0 || spec.FPSNum <= 0 || spec.FPSDen <= 0 ||
 		spec.VideoCodec == "" || spec.AudioCodec == "" || spec.PixelFormat == "" ||
 		spec.AudioSampleRate <= 0 || spec.AudioChannels <= 0 || spec.VideoTrackTimebase <= 0 {
-		spec = DefaultVideoNormalization
+		spec = defaultVideoNormalization
 	}
 	return &VideoTrimmer{runner: execVideoCommandRunner{}, spec: spec}
 }

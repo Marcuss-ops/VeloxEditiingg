@@ -86,7 +86,7 @@ func TestRewriteVideoClipSegmentsRegistersCanonicalSegment(t *testing.T) {
 	}
 	body := []byte("trimmed segment")
 	runner := &recordingVideoRunner{probeOutput: probeJSON(t, normalizedVideoProbe(10, []float64{0, 2, 4, 6, 8, 10}))}
-	trimmer := newVideoTrimmerForTest(runner, DefaultVideoNormalization)
+	trimmer := newVideoTrimmerForTest(runner, defaultVideoNormalization)
 	repo := &segmentTestRepository{}
 	service := &AssetService{
 		repo:         repo,
@@ -151,7 +151,7 @@ func TestTrimAndRegisterVideoSegment_ProbesSourceOnceAcrossSegments(t *testing.T
 		repo:         &segmentTestRepository{},
 		blobStore:    &segmentTestBlobStore{root: filepath.Join(root, "assets")},
 		clock:        clock.System{},
-		videoTrimmer: newVideoTrimmerForTest(runner, DefaultVideoNormalization),
+		videoTrimmer: newVideoTrimmerForTest(runner, defaultVideoNormalization),
 	}
 	memo := make(map[string]*VideoProbe)
 
@@ -180,7 +180,7 @@ func TestRewriteVideoClipSegments_RegisteredSourceWithVerifiedMetadataPassesGate
 		blobStore:     &segmentTestBlobStore{root: t.TempDir()},
 		clock:         clock.System{},
 		mediaMetadata: newMediaMetadataResolverForTest(&recordingVideoRunner{}),
-		videoTrimmer:  newVideoTrimmerForTest(&recordingVideoRunner{}, DefaultVideoNormalization),
+		videoTrimmer:  newVideoTrimmerForTest(&recordingVideoRunner{}, defaultVideoNormalization),
 		// registry intentionally nil: after the C2 metadata gate PASSES, the
 		// rewrite proceeds to materialization which fails on the missing
 		// resolver — proving the verified registered asset was NOT rejected
@@ -216,7 +216,7 @@ func TestRewriteVideoClipSegments_FailsClosedOnUnverifiedRegisteredSource(t *tes
 		blobStore:     &segmentTestBlobStore{root: t.TempDir()},
 		clock:         clock.System{},
 		mediaMetadata: newMediaMetadataResolverForTest(&failingMediaRunner{err: errors.New("ffprobe boom")}),
-		videoTrimmer:  newVideoTrimmerForTest(&recordingVideoRunner{}, DefaultVideoNormalization),
+		videoTrimmer:  newVideoTrimmerForTest(&recordingVideoRunner{}, defaultVideoNormalization),
 	}
 	payload := map[string]interface{}{
 		"clip_segments": []interface{}{
@@ -307,7 +307,7 @@ func TestRewriteVideoClipSegmentsSupportsJSONAndFailsClosedWithoutLocalSource(t 
 		repo:         &segmentTestRepository{},
 		blobStore:    &segmentTestBlobStore{root: filepath.Join(root, "assets")},
 		clock:        clock.System{},
-		videoTrimmer: newVideoTrimmerForTest(runner, DefaultVideoNormalization),
+		videoTrimmer: newVideoTrimmerForTest(runner, defaultVideoNormalization),
 	}
 	encoded, err := json.Marshal([]map[string]interface{}{{
 		"source_path": sourcePath, "start_ms": float64(2000), "end_ms": float64(4000),

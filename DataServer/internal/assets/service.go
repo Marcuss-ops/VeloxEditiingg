@@ -78,7 +78,7 @@ func NewAssetService(repo AssetRepository, blobStore BlobStore, registry *Resolv
 		blobStore:            blobStore,
 		registry:             registry,
 		clock:                c,
-		videoTrimmer:         NewVideoTrimmer(DefaultVideoNormalization),
+		videoTrimmer:         NewVideoTrimmer(defaultVideoNormalization),
 		security:             inputsecurity.NewFetcher(policy),
 		mediaMetadata:        NewMediaMetadataResolver(),
 		mediaMetadataMetrics: NewMediaMetadataMetrics(),

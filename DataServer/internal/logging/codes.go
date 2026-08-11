@@ -190,8 +190,9 @@ const (
 	LevelDebug = "DEBUG"
 )
 
-// CodeDescriptions maps codes to human-readable descriptions
-var CodeDescriptions = map[string]string{
+// codeDescriptions maps codes to human-readable descriptions.
+// Keep the registry private so callers cannot mutate operator-facing text.
+var codeDescriptions = map[string]string{
 	// Master URL.
 	CodeMasterURLUnreachable: "Master URL is not reachable from worker",
 	CodeLocalhostForRemote:   "Cannot use localhost URL for remote workers",
@@ -319,7 +320,7 @@ var CodeDescriptions = map[string]string{
 
 // GetDescription returns the human-readable description for a code
 func GetDescription(code string) string {
-	if desc, ok := CodeDescriptions[code]; ok {
+	if desc, ok := codeDescriptions[code]; ok {
 		return desc
 	}
 	return code

@@ -37,7 +37,7 @@ func (r *recordingVideoRunner) Run(_ context.Context, name string, args ...strin
 
 func TestVideoTrimmerPlanUsesStreamCopyForNormalizedKeyframeSegment(t *testing.T) {
 	runner := &recordingVideoRunner{}
-	trimmer := newVideoTrimmerForTest(runner, DefaultVideoNormalization)
+	trimmer := newVideoTrimmerForTest(runner, defaultVideoNormalization)
 	probe := normalizedVideoProbe(10, []float64{0, 2, 4, 6, 8, 10})
 
 	plan, err := trimmer.Plan(probe, VideoSegment{StartSeconds: 2, EndSeconds: 6}, "/source.mp4", "/segment.mp4")
@@ -54,7 +54,7 @@ func TestVideoTrimmerPlanUsesStreamCopyForNormalizedKeyframeSegment(t *testing.T
 }
 
 func TestVideoTrimmerPlanUsesFrameAccurateReencodeForMidGOPSegment(t *testing.T) {
-	trimmer := newVideoTrimmerForTest(&recordingVideoRunner{}, DefaultVideoNormalization)
+	trimmer := newVideoTrimmerForTest(&recordingVideoRunner{}, defaultVideoNormalization)
 	probe := normalizedVideoProbe(10, []float64{0, 2, 4, 6, 8, 10})
 
 	plan, err := trimmer.Plan(probe, VideoSegment{StartSeconds: 2.25, EndSeconds: 5.75}, "/source.mp4", "/segment.mp4")
@@ -83,7 +83,7 @@ func TestVideoTrimmerNormalizesBeforeTrimming(t *testing.T) {
 		AudioCodec:      "opus",
 		PixelFormat:     "yuv420p10le",
 	})}
-	trimmer := newVideoTrimmerForTest(runner, DefaultVideoNormalization)
+	trimmer := newVideoTrimmerForTest(runner, defaultVideoNormalization)
 	inputPath := filepath.Join(t.TempDir(), "source.webm")
 	outputPath := filepath.Join(t.TempDir(), "segments", "clip.mp4")
 	if err := os.WriteFile(inputPath, []byte("source"), 0o644); err != nil {
@@ -114,7 +114,7 @@ func TestVideoTrimmerNormalizesBeforeTrimming(t *testing.T) {
 }
 
 func TestVideoTrimmerRejectsInvalidOrOutOfBoundsSegments(t *testing.T) {
-	trimmer := newVideoTrimmerForTest(&recordingVideoRunner{}, DefaultVideoNormalization)
+	trimmer := newVideoTrimmerForTest(&recordingVideoRunner{}, defaultVideoNormalization)
 	probe := normalizedVideoProbe(10, []float64{0, 5, 10})
 	cases := []VideoSegment{
 		{StartSeconds: -1, EndSeconds: 2},
@@ -132,17 +132,17 @@ func TestVideoTrimmerRejectsInvalidOrOutOfBoundsSegments(t *testing.T) {
 func normalizedVideoProbe(duration float64, keyframes []float64) VideoProbe {
 	return VideoProbe{
 		DurationSeconds: duration,
-		Width:           DefaultVideoNormalization.Width,
-		Height:          DefaultVideoNormalization.Height,
-		FPSNum:          DefaultVideoNormalization.FPSNum,
-		FPSDen:          DefaultVideoNormalization.FPSDen,
+		Width:           defaultVideoNormalization.Width,
+		Height:          defaultVideoNormalization.Height,
+		FPSNum:          defaultVideoNormalization.FPSNum,
+		FPSDen:          defaultVideoNormalization.FPSDen,
 		TimebaseNum:     1,
-		TimebaseDen:     DefaultVideoNormalization.VideoTrackTimebase,
-		VideoCodec:      DefaultVideoNormalization.VideoCodec,
-		AudioCodec:      DefaultVideoNormalization.AudioCodec,
-		AudioSampleRate: DefaultVideoNormalization.AudioSampleRate,
-		AudioChannels:   DefaultVideoNormalization.AudioChannels,
-		PixelFormat:     DefaultVideoNormalization.PixelFormat,
+		TimebaseDen:     defaultVideoNormalization.VideoTrackTimebase,
+		VideoCodec:      defaultVideoNormalization.VideoCodec,
+		AudioCodec:      defaultVideoNormalization.AudioCodec,
+		AudioSampleRate: defaultVideoNormalization.AudioSampleRate,
+		AudioChannels:   defaultVideoNormalization.AudioChannels,
+		PixelFormat:     defaultVideoNormalization.PixelFormat,
 		Keyframes:       keyframes,
 	}
 }
