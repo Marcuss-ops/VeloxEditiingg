@@ -61,6 +61,11 @@ type Candidate struct {
 	Reason string `json:"reason"`
 }
 
+// immediateReadThreshold is the heuristic for "written then immediately read
+// back": candidates with a shorter lifetime get the stronger reason tag.
+// It is a profiling signal, not a contract — tune per fleet.
+const immediateReadThreshold = 2 * time.Minute
+
 // Graph is the per-attempt ledger. One instance per attempt — never shared
 // across attempts, never global (same rule as the AttemptEventMachine). All
 // methods are safe for concurrent use.
@@ -102,8 +107,12 @@ func (g *Graph) Create(path, producerPhase string) {
 }
 
 // CreateWithSize registers a file with a producer-known expected size (e.g.
-// the sizeBytes the storage resolver used for placement).
+// the sizeBytes the storage resolver used for placement). Negative sizes are
+// clamped to zero; SizeBytes still falls back to written_bytes at Close.
 func (g *Graph) CreateWithSize(path, producerPhase string, sizeBytes int64) {
+	if sizeBytes < 0 {
+		sizeBytes = 0
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if _, ok := g.files[path]; ok {
@@ -189,6 +198,11 @@ func (g *Graph) Snapshot() []Record {
 func (g *Graph) Candidates() []Candidate {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	return g.candidatesLocked()
+}
+
+// candidatesLocked computes the candidate list; caller holds g.mu.
+func (g *Graph) candidatesLocked() []Candidate {
 	var out []Candidate
 	for _, path := range g.order {
 		rec := g.files[path]
@@ -200,7 +214,7 @@ func (g *Graph) Candidates() []Candidate {
 			reread = rec.WrittenBytes
 		}
 		reason := "written then read back"
-		if rec.Lifetime > 0 && rec.Lifetime < 2*time.Minute {
+		if rec.Lifetime > 0 && rec.Lifetime < immediateReadThreshold {
 			reason = "written then immediately read back"
 		}
 		out = append(out, Candidate{Record: *rec, ReReadBytes: reread, Reason: reason})
@@ -225,15 +239,20 @@ type Summary struct {
 	Candidates       []Candidate `json:"candidates,omitempty"`
 }
 
-// Summary returns the aggregate view of the ledger.
+// Summary returns the aggregate view of the ledger. Totals, the candidate
+// list and the re-read total are computed under a SINGLE lock acquisition so
+// the summary is internally consistent even if the executor is still
+// mutating the graph concurrently.
 func (g *Graph) Summary() Summary {
-	records := g.Snapshot()
-	s := Summary{GraphVersion: 1, FileCount: len(records)}
-	for _, rec := range records {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	s := Summary{GraphVersion: 1, FileCount: len(g.order)}
+	for _, path := range g.order {
+		rec := g.files[path]
 		s.TotalWrittenBytes += rec.WrittenBytes
 		s.TotalReadBytes += rec.ReadBytes
 	}
-	s.Candidates = g.Candidates()
+	s.Candidates = g.candidatesLocked()
 	for _, c := range s.Candidates {
 		s.TotalReReadBytes += c.ReReadBytes
 	}

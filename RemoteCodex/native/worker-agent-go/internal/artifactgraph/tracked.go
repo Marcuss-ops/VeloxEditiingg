@@ -79,7 +79,10 @@ func (g *Graph) TrackReader(path, consumerPhase string, r io.Reader) *TrackedRea
 // Read forwards to the underlying reader and records the bytes.
 func (t *TrackedReader) Read(p []byte) (int, error) {
 	if t == nil || t.r == nil {
-		return 0, io.EOF
+		// Same defensive semantics as TrackedWriter.Write: a nil adapter must
+		// fail loudly, not masquerade as a clean end-of-stream (io.EOF would
+		// make io.Copy report a successful 0-byte copy).
+		return 0, io.ErrClosedPipe
 	}
 	n, err := t.r.Read(p)
 	if t.graph != nil {

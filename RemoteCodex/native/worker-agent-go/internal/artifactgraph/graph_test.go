@@ -159,13 +159,30 @@ func (c *closeRecorder) Close() error {
 	return nil
 }
 
-func TestTrackedWriter_NilSafe(t *testing.T) {
+func TestTrackedAdapters_NilSafe(t *testing.T) {
 	var tw *TrackedWriter
 	if n, err := tw.Write([]byte("x")); n != 0 || err == nil {
 		t.Errorf("nil writer Write = %d, %v; want 0, error", n, err)
 	}
 	if err := tw.Close(); err != nil {
 		t.Errorf("nil writer Close = %v", err)
+	}
+	// A nil reader must fail loudly — io.EOF would make io.Copy report a
+	// clean 0-byte copy, masking the missing stream.
+	var tr *TrackedReader
+	if n, err := tr.Read([]byte("x")); n != 0 || err == nil {
+		t.Errorf("nil reader Read = %d, %v; want 0, error", n, err)
+	}
+}
+
+func TestGraph_CreateWithSize_ClampsNegative(t *testing.T) {
+	g := New()
+	g.CreateWithSize("/f", "producer", -42)
+	g.RecordWrite("/f", 7)
+	g.Close("/f")
+	rec := g.Snapshot()[0]
+	if rec.SizeBytes != 7 {
+		t.Errorf("size = %d, want 7 (negative clamped, fallback to written)", rec.SizeBytes)
 	}
 }
 
