@@ -1,5 +1,4 @@
 1 DataServer/internal/completion/conflict_budget.go
-2 DataServer/internal/creatorflow/resolver.go
 6 DataServer/internal/deliveries/plan_resolver.go
 1 DataServer/internal/fleet/opsalerts/engine.go
 1 DataServer/internal/handlers/server/api/admin_m2m_keys.go
@@ -9,13 +8,8 @@
 1 DataServer/internal/handlers/server/pipeline/m2m_audit.go
 1 DataServer/internal/handlers/server/pipeline/pipeline_run_actions.go
 1 DataServer/internal/handlers/server/pipeline/pipeline_run_status.go
-4 DataServer/internal/handlers/server/script/handler.go
+1 DataServer/internal/handlers/server/script/handler.go
 18 DataServer/internal/invariants/audit.go
-5 DataServer/internal/jobs/enqueue/drive_resolution.go
-3 DataServer/internal/jobs/enqueue/enqueue_clips.go
-5 DataServer/internal/jobs/enqueue/enqueue_scene_image.go
-2 DataServer/internal/jobs/enqueue/enqueue_slideshow.go
-3 DataServer/internal/jobs/enqueue/http_response_compat.go
 1 DataServer/internal/metrics/render_performance_rollup.go
 5 DataServer/internal/metrics/supervisor_sqlite.go
 1 DataServer/internal/metrics/supervisor_sqlite_metrics.go
