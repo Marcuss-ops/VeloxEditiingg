@@ -98,9 +98,12 @@ ARG VELOX_GID=10001
 #                      (avoids the docker-default UTC-only behaviour).
 #   - curl:            HEALTHCHECK below (otherwise the probe would
 #                      always fail because `/bin/sh` cannot find curl).
+#   - ffmpeg:          Level-D artifact verification (`ffprobe`) and media
+#                      acceptance gates run inside the Master container.
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        ffmpeg \
         openssh-client \
         tzdata \
     && rm -rf /var/lib/apt/lists/*
