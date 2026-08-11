@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -152,6 +153,104 @@ func TestChunkedUpload_UnknownUploadFails(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrUploadNotFound), "got %v want ErrUploadNotFound", err)
+}
+
+// TestChunkedAssembly_VerifiesAllChunkSHAs pins the assembly contract: the
+// concatenated assembly must equal the uploaded bytes and ReceiveChunked must
+// return the master-computed SHA of exactly those bytes (chunk SHAs verified
+// incrementally during the copy — no second read).
+func TestChunkedAssembly_VerifiesAllChunkSHAs(t *testing.T) {
+	chunked, _, uploadID := setupChunkedEnv(t)
+
+	chunk0 := bytes.Repeat([]byte("first-chunk-data-"), 2048) // ~34 KB
+	chunk1 := bytes.Repeat([]byte("second-chunk-data-"), 2048)
+	require.NoError(t, uploadChunk(t, chunked, uploadID, 0, chunk0))
+	require.NoError(t, uploadChunk(t, chunked, uploadID, 1, chunk1))
+
+	result, err := chunked.ReceiveChunked(context.Background(), uploadID)
+	require.NoError(t, err)
+
+	concat := append(append([]byte{}, chunk0...), chunk1...)
+	require.Equal(t, int64(len(concat)), result.ReceivedSizeBytes)
+	require.Equal(t, sha256Hex(concat), result.ReceivedSHA256,
+		"assembly SHA must be the master hash of the concatenated chunk bytes")
+}
+
+// TestChunkedAssembly_CorruptedChunkFailsClosed: a staged chunk that was
+// corrupted on disk since upload must be caught at ASSEMBLY time (incremental
+// per-chunk SHA check) with ErrArtifactTransferCorrupted — before the final
+// Receive pass — on both the ReceiveChunked and CompleteChunked paths, and
+// for both the first chunk and a later chunk (proving preceding chunks are
+// still verified before the failure localizes).
+func TestChunkedAssembly_CorruptedChunkFailsClosed(t *testing.T) {
+	cases := []struct {
+		name         string
+		complete     bool
+		corruptIndex int
+	}{
+		{"receive_chunked_first_chunk", false, 0},
+		{"receive_chunked_later_chunk", false, 1},
+		{"complete_chunked_first_chunk", true, 0},
+		{"complete_chunked_later_chunk", true, 1},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			chunked, e, uploadID := setupChunkedEnv(t)
+
+			chunk0 := bytes.Repeat([]byte("chunk-a-"), 1024)
+			chunk1 := bytes.Repeat([]byte("chunk-b-"), 1024)
+			require.NoError(t, uploadChunk(t, chunked, uploadID, 0, chunk0))
+			require.NoError(t, uploadChunk(t, chunked, uploadID, 1, chunk1))
+
+			// Corrupt the selected chunk's staged file on disk (truncate
+			// + write different bytes). The chunk record still carries the
+			// original incremental hash.
+			chunks, listErr := e.repo.ListChunks(context.Background(), uploadID)
+			require.NoError(t, listErr)
+			require.Len(t, chunks, 2)
+			require.NoError(t, os.WriteFile(filepath.Clean(chunks[tc.corruptIndex].StorageKey), []byte("corrupted!"), 0o644))
+
+			var err error
+			if tc.complete {
+				_, err = chunked.CompleteChunked(context.Background(), ChunkedCompleteCommand{
+					UploadID: uploadID, JobID: "JC", WorkerID: testWorkerID, LeaseID: testLeaseID,
+					AttemptNumber: 1, ExpectedRevision: testRevision,
+				})
+			} else {
+				_, err = chunked.ReceiveChunked(context.Background(), uploadID)
+			}
+			require.Error(t, err)
+			require.True(t, errors.Is(err, ErrArtifactTransferCorrupted),
+				"got %v want ErrArtifactTransferCorrupted", err)
+			require.Contains(t, err.Error(), fmt.Sprintf("chunk %d", tc.corruptIndex),
+				"assembly error must localize the fault to the corrupted chunk index")
+		})
+	}
+}
+
+// TestChunkedAssembly_LegacyEmptySHAChunkStillAssembles pins the legacy
+// compatibility branch of assembleChunksVerified: a chunk record whose sha256
+// is empty (pre-incremental-hash rows) is copied WITHOUT per-chunk
+// verification and the assembly still completes — the final Receive pass
+// against expected_sha256 remains authoritative for those rows.
+func TestChunkedAssembly_LegacyEmptySHAChunkStillAssembles(t *testing.T) {
+	chunked, e, uploadID := setupChunkedEnv(t)
+
+	chunk0 := []byte("legacy-chunk-0")
+	chunk1 := []byte("legacy-chunk-1")
+	require.NoError(t, uploadChunk(t, chunked, uploadID, 0, chunk0))
+	require.NoError(t, uploadChunk(t, chunked, uploadID, 1, chunk1))
+
+	// Wipe the recorded incremental hash to simulate a legacy row.
+	_, err := e.db.Exec(`UPDATE artifact_upload_chunks SET sha256 = '' WHERE upload_id = ?`, uploadID)
+	require.NoError(t, err)
+
+	result, err := chunked.ReceiveChunked(context.Background(), uploadID)
+	require.NoError(t, err)
+	concat := append(append([]byte{}, chunk0...), chunk1...)
+	require.Equal(t, sha256Hex(concat), result.ReceivedSHA256,
+		"empty-SHA legacy chunks must still assemble to the master hash of the concatenated bytes")
 }
 
 // TestChunkedUpload_StreamErrorCleansUp: a reader error mid-stream must

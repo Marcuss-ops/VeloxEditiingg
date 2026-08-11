@@ -154,7 +154,10 @@ func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploa
 		_ = os.Remove(chunkKey)
 		return fmt.Errorf("%w: sync chunk: %v", ErrBlobWriteFailed, err)
 	}
-	_ = dst.Close()
+	if err := dst.Close(); err != nil {
+		_ = os.Remove(chunkKey)
+		return fmt.Errorf("%w: close chunk: %v", ErrBlobWriteFailed, err)
+	}
 
 	if written <= 0 {
 		_ = os.Remove(chunkKey)
@@ -271,18 +274,9 @@ func (s *ChunkedUploadService) ReceiveChunked(ctx context.Context, uploadID stri
 	if err != nil {
 		return nil, fmt.Errorf("%w: create assembly: %v", ErrBlobWriteFailed, err)
 	}
-	for _, c := range chunks {
-		in, openErr := os.Open(filepath.Clean(c.StorageKey))
-		if openErr != nil {
-			_ = out.Close()
-			return nil, fmt.Errorf("artifacts: ReceiveChunked: open chunk %d: %w", c.ChunkIndex, openErr)
-		}
-		_, copyErr := io.Copy(out, in)
-		_ = in.Close()
-		if copyErr != nil {
-			_ = out.Close()
-			return nil, fmt.Errorf("artifacts: ReceiveChunked: copy chunk %d: %w", c.ChunkIndex, copyErr)
-		}
+	if asmErr := assembleChunksVerified(out, chunks); asmErr != nil {
+		_ = out.Close()
+		return nil, fmt.Errorf("artifacts: ReceiveChunked: %w", asmErr)
 	}
 	if err := out.Sync(); err != nil {
 		_ = out.Close()
@@ -349,20 +343,10 @@ func (s *ChunkedUploadService) CompleteChunked(ctx context.Context, cmd ChunkedC
 		return nil, fmt.Errorf("%w: create assembly file: %v", ErrBlobWriteFailed, err)
 	}
 
-	for _, c := range chunks {
-		in, openErr := os.Open(filepath.Clean(c.StorageKey))
-		if openErr != nil {
-			_ = out.Close()
-			_ = os.Remove(assemblyPath)
-			return nil, fmt.Errorf("artifacts: CompleteChunked: open chunk %d: %w", c.ChunkIndex, openErr)
-		}
-		if _, copyErr := io.Copy(out, in); copyErr != nil {
-			_ = in.Close()
-			_ = out.Close()
-			_ = os.Remove(assemblyPath)
-			return nil, fmt.Errorf("artifacts: CompleteChunked: copy chunk %d: %w", c.ChunkIndex, copyErr)
-		}
-		_ = in.Close()
+	if asmErr := assembleChunksVerified(out, chunks); asmErr != nil {
+		_ = out.Close()
+		_ = os.Remove(assemblyPath)
+		return nil, fmt.Errorf("artifacts: CompleteChunked: %w", asmErr)
 	}
 	if err := out.Sync(); err != nil {
 		_ = out.Close()
@@ -401,6 +385,41 @@ func (s *ChunkedUploadService) CompleteChunked(ctx context.Context, cmd ChunkedC
 	_ = s.cleanupChunks(ctx, cmd.UploadID)
 
 	return art, nil
+}
+
+// assembleChunksVerified streams the recorded chunks into dst while
+// verifying each chunk's SHA-256 INCREMENTALLY during the copy (no second
+// read — the same MultiWriter discipline as UploadChunk). The recorded
+// chunk_sha256 (computed at upload time) is the integrity contract: if a
+// staged chunk was corrupted or truncated on disk since upload, the copy
+// hash diverges and the assembly fails closed with
+// ErrArtifactTransferCorrupted BEFORE the final Receive pass, localizing
+// the fault to a chunk index instead of a whole-artifact rejection.
+//
+// A chunk record with an empty SHA256 (legacy rows) is copied without
+// verification: the final Receive pass against expected_sha256 remains
+// authoritative for those.
+func assembleChunksVerified(dst io.Writer, chunks []store.ChunkRecord) error {
+	for _, c := range chunks {
+		in, openErr := os.Open(filepath.Clean(c.StorageKey))
+		if openErr != nil {
+			return fmt.Errorf("open chunk %d: %w", c.ChunkIndex, openErr)
+		}
+		hasher := sha256.New()
+		_, copyErr := io.Copy(io.MultiWriter(dst, hasher), in)
+		_ = in.Close()
+		if copyErr != nil {
+			return fmt.Errorf("copy chunk %d: %w", c.ChunkIndex, copyErr)
+		}
+		if c.SHA256 == "" {
+			continue
+		}
+		if got := hex.EncodeToString(hasher.Sum(nil)); got != c.SHA256 {
+			return fmt.Errorf("%w: %w: chunk %d: recorded=%s computed=%s (staged chunk corrupted since upload)",
+				ErrArtifactTransferCorrupted, ErrHashMismatch, c.ChunkIndex, c.SHA256, got)
+		}
+	}
+	return nil
 }
 
 // cleanupChunks removes chunk records and their staging files.
