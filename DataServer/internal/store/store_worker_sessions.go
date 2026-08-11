@@ -184,9 +184,18 @@ func (s *SQLiteStore) ValidateSession(tokenHash string) (*PersistedSession, erro
 	if err != nil {
 		return nil, err
 	}
-	sess.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-	sess.ExpiresAt, _ = time.Parse(time.RFC3339, expiresAt)
-	sess.LastSeen, _ = time.Parse(time.RFC3339, lastSeen)
+	sess.CreatedAt, err = parseWorkerSessionTime(createdAt, "created_at")
+	if err != nil {
+		return nil, err
+	}
+	sess.ExpiresAt, err = parseWorkerSessionTime(expiresAt, "expires_at")
+	if err != nil {
+		return nil, err
+	}
+	sess.LastSeen, err = parseWorkerSessionTime(lastSeen, "last_seen")
+	if err != nil {
+		return nil, err
+	}
 
 	// Updating last_seen is part of successful validation. If it cannot be
 	// persisted, do not return a valid session based on stale durable state.
@@ -217,10 +226,27 @@ func (s *SQLiteStore) ValidateSessionByID(sessionID string) (*PersistedSession, 
 	if err != nil {
 		return nil, err
 	}
-	sess.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-	sess.ExpiresAt, _ = time.Parse(time.RFC3339, expiresAt)
-	sess.LastSeen, _ = time.Parse(time.RFC3339, lastSeen)
+	sess.CreatedAt, err = parseWorkerSessionTime(createdAt, "created_at")
+	if err != nil {
+		return nil, err
+	}
+	sess.ExpiresAt, err = parseWorkerSessionTime(expiresAt, "expires_at")
+	if err != nil {
+		return nil, err
+	}
+	sess.LastSeen, err = parseWorkerSessionTime(lastSeen, "last_seen")
+	if err != nil {
+		return nil, err
+	}
 	return &sess, nil
+}
+
+func parseWorkerSessionTime(value, field string) (time.Time, error) {
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("worker session: invalid %s: %w", field, err)
+	}
+	return parsed, nil
 }
 
 // UpdateSessionLastSeen bumps the last_seen timestamp for a session.
