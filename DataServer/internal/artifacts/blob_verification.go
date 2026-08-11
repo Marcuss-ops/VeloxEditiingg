@@ -8,7 +8,6 @@
 //     one sha256 → one canonical storage_key across Receive, Finalize,
 //     and ReconcilerCleanup.
 //   - countingWriter: pipe-through byte counter for io.MultiWriter.
-//   - verifyStagedBlob: post-write end-to-end re-hash (trust boundary).
 //   - detectMIME: content sniff of the staged blob (first 512 bytes
 //     via http.DetectContentType); falls back to "" on read error.
 //     Called by Finalize to derive the canonical storage_key
@@ -19,8 +18,6 @@
 package artifacts
 
 import (
-	"crypto/sha256"
-	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -74,26 +71,6 @@ type countingWriter struct{ n int64 }
 func (c *countingWriter) Write(p []byte) (int, error) {
 	c.n += int64(len(p))
 	return len(p), nil
-}
-
-// verifyStagedBlob reads the staged temp file end-to-end and returns
-// (sha256 hex, byte count). Used AFTER io.Copy completes in Receive()
-// to catch io.MultiWriter partial-write hazards where a downstream
-// error would leave the disk with bytes that were hashed + counted but
-// never actually durably written. The cost is one extra fs read but
-// it is correctness-critical for the trust boundary.
-func verifyStagedBlob(path string) (string, int64, error) {
-	f, err := os.Open(filepath.Clean(path))
-	if err != nil {
-		return "", 0, fmt.Errorf("verifyStagedBlob open: %w", err)
-	}
-	defer f.Close()
-	h := sha256.New()
-	n, err := io.Copy(h, f)
-	if err != nil {
-		return "", 0, fmt.Errorf("verifyStagedBlob read: %w", err)
-	}
-	return fmt.Sprintf("%x", h.Sum(nil)), n, nil
 }
 
 // detectMIME sniffs the first 512 bytes of path and returns the

@@ -29,6 +29,8 @@ func classifyFinalizeError(err error) string {
 	switch {
 	case errors.Is(err, artifacts.ErrTransitionConflict):
 		return "transition_conflict"
+	case errors.Is(err, artifacts.ErrArtifactTransferCorrupted):
+		return "artifact_transfer_corrupted"
 	case errors.Is(err, artifacts.ErrHashMismatch):
 		return "hash_mismatch"
 	case errors.Is(err, artifacts.ErrSizeMismatch):

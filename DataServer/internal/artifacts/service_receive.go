@@ -21,14 +21,19 @@ import (
 // worker cannot report a size or hash that disagrees with what the
 // master observed (the worker is a transport, not a source of truth).
 //
-// On hash or size mismatch against expectedSnapshot (whenever those
+// On hash or size mismatch against the expected snapshot (whenever those
 // were supplied by BeginUpload) the staging blob is removed and the
-// upload is marked FAILED.
+// upload is marked FAILED. A worker-declared hash that differs from the
+// master-computed one is classified ARTIFACT_TRANSFER_CORRUPTED; the
+// master-computed hash of the received bytes is authoritative.
 //
-// Post-write verification (verifyStagedBlob) catches the
-// io.MultiWriter partial-write hazard where a downstream error could
-// leave the file with bytes that were hashed + counted but not actually
-// durably written. This is the trust boundary: mismatch -> FAILED.
+// The io.MultiWriter partial-write hazard (a downstream error leaving
+// the file with bytes that were hashed + counted but not durably
+// written) is closed WITHOUT re-reading the artifact: io.Copy propagates
+// every writer error, dst.Sync() + dst.Close() are checked, and the
+// post-close os.Stat size invariant proves the on-disk file matches the
+// hashed/counted byte count (B2: no second read). This is the trust
+// boundary: any mismatch -> FAILED.
 func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader) (*ReceiveResult, error) {
 	if uploadID == "" {
 		return nil, fmt.Errorf("artifacts: Receive: empty uploadID")
@@ -97,25 +102,36 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 	receivedSHA := fmt.Sprintf("%x", hasher.Sum(nil))
 	receivedSize := counter.n
 
-	// ----- post-write re-verification (io.MultiWriter safety net) -----
-	verifiedSHA, verifiedSize, verr := verifyStagedBlob(session.TemporaryStorageKey)
-	if verr != nil {
+	// ----- O(1) disk-size invariant (replaces the full-file re-hash) -----
+	// The hasher and counter observed EXACTLY the bytes accepted by
+	// dst.Write: io.MultiWriter short-circuits on the first writer error
+	// and os.File never silently under-writes a buffer, so io.Copy success
+	// means hashed == counted == sent-to-disk. With fsync + close already
+	// error-checked above, the only residual hazard is a staged file on
+	// disk shorter than what we hashed; one stat closes that gap without
+	// re-reading the artifact bytes (B2: no second read).
+	info, statErr := os.Stat(session.TemporaryStorageKey)
+	if statErr != nil {
 		_ = os.Remove(session.TemporaryStorageKey)
-		return nil, fmt.Errorf("%w: post-write verify: %v", ErrBlobWriteFailed, verr)
+		return nil, fmt.Errorf("%w: stat staged blob: %v", ErrBlobWriteFailed, statErr)
 	}
-	if verifiedSHA != receivedSHA || verifiedSize != receivedSize {
+	if !info.Mode().IsRegular() || info.Size() != receivedSize {
 		_ = os.Remove(session.TemporaryStorageKey)
-		_ = s.markFailed(ctx, uploadID, "post-write verify mismatch")
-		return nil, fmt.Errorf("%w: post-write verify mismatch sha=%s/%s size=%d/%d",
-			ErrBlobWriteFailed, receivedSHA, verifiedSHA, receivedSize, verifiedSize)
+		_ = s.markFailed(ctx, uploadID, "staged blob size mismatch")
+		return nil, fmt.Errorf("%w: staged blob size=%d hashed=%d", ErrBlobWriteFailed, info.Size(), receivedSize)
 	}
 
 	// ----- compare against worker-declared hints -----
+	// The worker-declared SHA (ExpectedSHA256 supplied at BeginUpload) is a
+	// transport hint, never authority: when it differs from the
+	// master-computed hash of the received bytes the transfer is corrupt
+	// (ARTIFACT_TRANSFER_CORRUPTED) and the master-computed hash is the
+	// authoritative one for the artifact the master stores.
 	if session.ExpectedSHA256 != "" && session.ExpectedSHA256 != receivedSHA {
 		_ = os.Remove(session.TemporaryStorageKey)
 		_ = s.markFailed(ctx, uploadID, "hash mismatch")
-		return nil, fmt.Errorf("%w: expected=%s got=%s",
-			ErrHashMismatch, session.ExpectedSHA256, receivedSHA)
+		return nil, fmt.Errorf("%w: %w: worker_declared=%s master_computed=%s",
+			ErrArtifactTransferCorrupted, ErrHashMismatch, session.ExpectedSHA256, receivedSHA)
 	}
 	if session.ExpectedSizeBytes > 0 && session.ExpectedSizeBytes != receivedSize {
 		_ = os.Remove(session.TemporaryStorageKey)

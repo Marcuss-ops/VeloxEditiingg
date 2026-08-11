@@ -31,9 +31,17 @@ var (
 	ErrDuplicateReadyArtifact   = errors.New("artifacts: duplicate READY artifact of same kind for job")
 
 	// Fase 2 (Receive) gates.
-	ErrHashMismatch    = errors.New("artifacts: sha256 mismatch (worker-declared != master-computed)")
-	ErrSizeMismatch    = errors.New("artifacts: size mismatch")
-	ErrBlobWriteFailed = errors.New("artifacts: failed to write blob to staging")
+	ErrHashMismatch = errors.New("artifacts: sha256 mismatch (worker-declared != master-computed)")
+	// ErrArtifactTransferCorrupted is the canonical marker for a corrupt
+	// transfer: the worker-declared SHA-256 (ExpectedSHA256 supplied at
+	// BeginUpload) differs from the master-computed SHA-256 of the bytes
+	// actually received. It is always wrapped together with ErrHashMismatch
+	// (multi-%w) so both errors.Is matches keep working; the master-computed
+	// hash of the received bytes is the authoritative one for the artifact
+	// the master stores.
+	ErrArtifactTransferCorrupted = errors.New("artifacts: artifact transfer corrupted (worker-declared sha256 != master-computed sha256)")
+	ErrSizeMismatch             = errors.New("artifacts: size mismatch")
+	ErrBlobWriteFailed          = errors.New("artifacts: failed to write blob to staging")
 
 	// Fase 3 (Finalize) + Fase 4 (single-tx CAS) gates.
 	ErrUploadNotFound     = errors.New("artifacts: upload session not found")

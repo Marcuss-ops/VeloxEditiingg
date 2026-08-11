@@ -4,8 +4,9 @@
 // (BeginUpload → Receive → Finalize). Three phase boundaries:
 //
 //   - BeginUpload — validation + atomic insert via UploadSessionWriter.
-//   - Receive     — streaming + master-computed hash + post-write verify
-//     via the typed store.UploadRepository.
+//   - Receive     — streaming + master-computed hash on the write path
+//     (incremental io.MultiWriter, no second read) via the typed
+//     store.UploadRepository.
 //   - Finalize    — blob promotion + FinalizationWriter atomic tx
 //     (sole jobs.status='SUCCEEDED' writer) +
 //     ArtifactReader post-tx read.

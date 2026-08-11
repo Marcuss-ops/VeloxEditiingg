@@ -33,6 +33,7 @@ func TestArtifactAcceptance_HashMismatchNeverFinalizesAndCleansTemporaryFile(t *
 	_, err = env.svc.Receive(context.Background(), session.UploadID, bytes.NewReader(payload))
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrHashMismatch), "error=%v", err)
+	require.True(t, errors.Is(err, ErrArtifactTransferCorrupted), "error=%v", err)
 
 	_, statErr := os.Stat(session.TemporaryStorageKey)
 	require.ErrorIs(t, statErr, os.ErrNotExist, "hash mismatch must remove the staging file")
