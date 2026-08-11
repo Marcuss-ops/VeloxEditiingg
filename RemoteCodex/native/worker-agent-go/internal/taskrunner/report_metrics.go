@@ -133,8 +133,11 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 	// value alone (the only field CacheStatsProvider is authoritative
 	// for today) and zeros elsewhere — correct behavior.
 	cacheLookups := positiveIntegerToInt64(m["cache.lookups"])
-	cacheHits := firstPositive(m["asset.cache.hit.count"], m["cache.hits"])
-	cacheMisses := firstPositive(m["asset.cache.miss.count"], m["cache.misses"])
+	// Asset-operation counters are attempt-scoped and authoritative when the
+	// resolver supplied them. In particular, an explicit zero miss count on a
+	// warm run must not fall back to the generic cache provider's stale delta.
+	cacheHits := firstPresent(m, "asset.cache.hit.count", "cache.hits")
+	cacheMisses := firstPresent(m, "asset.cache.miss.count", "cache.misses")
 	expectedCacheLookups := cacheHits + cacheMisses
 	if cacheLookups == 0 || cacheLookups != expectedCacheLookups {
 		// Keep the wire contract canonical even when an older executor or
@@ -184,8 +187,8 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 
 		AssetCacheHitCount:  cacheHits,
 		AssetCacheMissCount: cacheMisses,
-		BlobCacheHitCount:   firstPositive(m["blob.cache.hit.count"], m["blob.fetch"]),
-		BlobCacheMissCount:  firstPositive(m["blob.cache.miss.count"], m["blob.fetch_miss"]),
+		BlobCacheHitCount:   firstPresent(m, "blob.cache.hit.count", "blob.fetch"),
+		BlobCacheMissCount:  firstPresent(m, "blob.cache.miss.count", "blob.fetch_miss"),
 		RenderCacheHitCount: positiveIntegerToInt64(m["render.cache.hit.count"]),
 
 		WastedCpuMs:           positiveIntegerToInt64(m["wasted.cpu.ms"]),
@@ -315,4 +318,19 @@ func firstPositive(primary, fallback any) int64 {
 		return value
 	}
 	return positiveIntegerToInt64(fallback)
+}
+
+// firstPresent returns the first numerically valid value whose key exists.
+// Unlike firstPositive, zero is meaningful here: a producer that reports an
+// attempt-scoped counter has authority over the fallback provider even when
+// that counter is zero.
+func firstPresent(metrics map[string]interface{}, keys ...string) int64 {
+	for _, key := range keys {
+		value, ok := metrics[key]
+		if !ok {
+			continue
+		}
+		return positiveIntegerToInt64(value)
+	}
+	return 0
 }
