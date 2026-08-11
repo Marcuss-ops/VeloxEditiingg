@@ -5,6 +5,7 @@ package prefetch
 // hash verifier, or eviction implementation of its own.
 
 import (
+	"container/heap"
 	"context"
 	"errors"
 	"fmt"
@@ -38,12 +39,78 @@ type Config struct {
 	RAM                        *RAMCache
 	RAMMinFutureRefs           int
 	RAMMaxNextUseDistance      int
+	OnEvent                    func(Event)
 }
 
 type jobRuntime struct {
-	job    futureasset.Job
-	ctx    context.Context
-	cancel context.CancelFunc
+	job        futureasset.Job
+	ctx        context.Context
+	cancel     context.CancelFunc
+	generation uint64
+}
+
+// Event is a low-cardinality timing hook for the prefetch waterfall. Job and
+// asset identifiers are available to structured-log consumers through the
+// callback, but are intentionally not metric labels.
+type Event struct {
+	Name         string
+	At           time.Time
+	PlanVersion  uint64
+	JobID        string
+	TaskID       string
+	AssetKey     string
+	Distance     int
+	Generation   uint64
+	QueuedAt     time.Time
+	StartedAt    time.Time
+	ReadyAt      time.Time
+	ErrorMessage string
+}
+
+type workItem struct {
+	planVersion uint64
+	generation  uint64
+	job         futureasset.Job
+	asset       futureasset.AssetManifest
+	ctx         context.Context
+	enqueuedAt  time.Time
+	sequence    uint64
+	index       int
+}
+
+type workQueue []*workItem
+
+func (q workQueue) Len() int { return len(q) }
+func (q workQueue) Less(i, j int) bool {
+	if q[i].job.Distance != q[j].job.Distance {
+		return q[i].job.Distance < q[j].job.Distance
+	}
+	if !q[i].enqueuedAt.Equal(q[j].enqueuedAt) {
+		return q[i].enqueuedAt.Before(q[j].enqueuedAt)
+	}
+	if q[i].asset.AssetKey != q[j].asset.AssetKey {
+		return q[i].asset.AssetKey < q[j].asset.AssetKey
+	}
+	return q[i].sequence < q[j].sequence
+}
+func (q workQueue) Swap(i, j int) {
+	q[i], q[j] = q[j], q[i]
+	q[i].index = i
+	q[j].index = j
+}
+func (q *workQueue) Push(value interface{}) {
+	item := value.(*workItem)
+	item.index = len(*q)
+	*q = append(*q, item)
+}
+func (q *workQueue) Pop() interface{} {
+	old := *q
+	n := len(old)
+	item := old[n-1]
+	old[n-1] = nil
+	item.index = -1
+	*q = old[:n-1]
+	return item
 }
 
 type Scheduler struct {
@@ -56,13 +123,17 @@ type Scheduler struct {
 	prefetched      map[string]int64
 	useful          map[string]bool
 	assetJobs       map[string]map[string]struct{}
-	jobs            map[string]jobRuntime
+	jobs            map[string]*jobRuntime
 	protects        map[string]string
 	pendingProtects map[string]struct{}
 	protectExpiries map[string]time.Time
 	bytes           int64
-	sem             chan struct{}
 	state           diskPressureState
+	queue           workQueue
+	nextSequence    uint64
+	wake            chan struct{}
+	workerCtx       context.Context
+	workerCancel    context.CancelFunc
 }
 
 type diskPressureState uint8
@@ -98,13 +169,20 @@ func NewScheduler(cfg Config) *Scheduler {
 	if cfg.RAMMaxNextUseDistance <= 0 {
 		cfg.RAMMaxNextUseDistance = 3
 	}
-	return &Scheduler{cfg: cfg, ram: cfg.RAM, jobs: make(map[string]jobRuntime), protects: make(map[string]string), pendingProtects: make(map[string]struct{}), protectExpiries: make(map[string]time.Time), hints: make(map[string]futureasset.ProtectedAsset), prefetched: make(map[string]int64), useful: make(map[string]bool), assetJobs: make(map[string]map[string]struct{}), sem: make(chan struct{}, cfg.MaxConcurrent)}
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	s := &Scheduler{cfg: cfg, ram: cfg.RAM, jobs: make(map[string]*jobRuntime), protects: make(map[string]string), pendingProtects: make(map[string]struct{}), protectExpiries: make(map[string]time.Time), hints: make(map[string]futureasset.ProtectedAsset), prefetched: make(map[string]int64), useful: make(map[string]bool), assetJobs: make(map[string]map[string]struct{}), wake: make(chan struct{}, 1), workerCtx: workerCtx, workerCancel: workerCancel}
+	heap.Init(&s.queue)
+	for i := 0; i < cfg.MaxConcurrent; i++ {
+		go s.runWorker()
+	}
+	return s
 }
 
 func (s *Scheduler) SetResolver(r *downloader.CacheResolver) {
 	s.mu.Lock()
 	s.resolver = r
 	s.mu.Unlock()
+	s.signalWork()
 }
 
 func (s *Scheduler) RAMCache() *RAMCache {
@@ -146,6 +224,7 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 			s.detachJobLocked(runtime.job)
 		}
 		s.mu.Unlock()
+		s.signalWork()
 		return nil
 	}
 	for id, runtime := range s.jobs {
@@ -193,18 +272,27 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 	s.protects = newProtects
 	s.pendingProtects = pendingProtects
 	s.protectExpiries = protectExpiries
-	resolver := s.resolver
+	var events []Event
 	for _, job := range plan.PrefetchJobs {
-		if _, exists := s.jobs[job.JobID]; exists {
+		if runtime, exists := s.jobs[job.JobID]; exists {
+			if sameScheduledJob(runtime.job, job) {
+				continue
+			}
+			runtime.job = job
+			runtime.generation++
+			events = append(events, s.enqueueJobLocked(plan.Version, runtime)...)
 			continue
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		s.jobs[job.JobID] = jobRuntime{job: job, ctx: ctx, cancel: cancel}
-		if resolver != nil {
-			go s.runJob(ctx, resolver, job)
-		}
+		runtime := &jobRuntime{job: job, ctx: ctx, cancel: cancel, generation: 1}
+		s.jobs[job.JobID] = runtime
+		events = append(events, s.enqueueJobLocked(plan.Version, runtime)...)
 	}
 	s.mu.Unlock()
+	for _, event := range events {
+		s.emit(event)
+	}
+	s.signalWork()
 	return nil
 }
 
@@ -220,74 +308,103 @@ func (s *Scheduler) Cancel(jobID string) bool {
 	runtime.cancel()
 	delete(s.jobs, jobID)
 	s.detachJobLocked(runtime.job)
+	s.signalWork()
 	return true
 }
 
-func (s *Scheduler) runJob(ctx context.Context, resolver *downloader.CacheResolver, job futureasset.Job) {
-	for _, asset := range job.Assets {
-		if ctx.Err() != nil {
-			return
-		}
-		if !s.allowed(job.Distance, asset.SizeBytes) {
+func (s *Scheduler) runWorker() {
+	for {
+		item, resolver := s.nextWorkItem()
+		if item != nil && resolver != nil {
+			s.runWorkItem(item, resolver)
 			continue
 		}
 		select {
-		case s.sem <- struct{}{}:
-		case <-ctx.Done():
+		case <-s.workerCtx.Done():
 			return
+		case <-s.wake:
+		case <-time.After(25 * time.Millisecond):
 		}
-		if !s.reserveBytes(asset.SizeBytes) {
-			<-s.sem
+	}
+}
+
+func (s *Scheduler) nextWorkItem() (*workItem, *downloader.CacheResolver) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for attempts := s.queue.Len(); attempts > 0; attempts-- {
+		item := heap.Pop(&s.queue).(*workItem)
+		if !s.currentItemLocked(item) {
 			continue
 		}
-		bandwidth := s.cfg.MaxBandwidthBytesPerSecond
-		if bandwidth > 0 {
-			bandwidth /= int64(cap(s.sem))
-			if bandwidth == 0 {
-				bandwidth = 1
-			}
+		state := s.diskStateLocked()
+		if state == diskCritical || (state == diskRestricted && item.job.Distance != 1) {
+			heap.Push(&s.queue, item)
+			continue
 		}
-		request := downloader.DownloadRequest{
-			JobID: job.JobID, TaskID: job.TaskID, AssetKey: assetref.AssetKey(asset.AssetKey), AssetID: asset.AssetID,
-			Role: downloader.RoleFromString(asset.Role), Source: "master_asset_bridge",
-			SHA256: assetref.ContentHash(asset.SHA256), SizeBytes: asset.SizeBytes, MIMEType: asset.MIMEType,
-			Priority:                   priorityForDistance(job.Distance),
-			MaxBandwidthBytesPerSecond: bandwidth,
+		if s.resolver == nil {
+			heap.Push(&s.queue, item)
+			return nil, nil
 		}
+		if item.asset.SizeBytes < 0 || (s.bytes > 0 && s.bytes+item.asset.SizeBytes > s.cfg.ByteBudget) {
+			heap.Push(&s.queue, item)
+			continue
+		}
+		s.bytes += item.asset.SizeBytes
+		return item, s.resolver
+	}
+	return nil, nil
+}
+
+func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolver) {
+	job, asset := item.job, item.asset
+	startedAt := s.cfg.Now()
+	bandwidth := s.cfg.MaxBandwidthBytesPerSecond
+	if bandwidth > 0 {
+		bandwidth /= int64(s.cfg.MaxConcurrent)
+		if bandwidth == 0 {
+			bandwidth = 1
+		}
+	}
+	request := downloader.DownloadRequest{
+		JobID: job.JobID, TaskID: job.TaskID, AssetKey: assetref.AssetKey(asset.AssetKey), AssetID: asset.AssetID,
+		Role: downloader.RoleFromString(asset.Role), Source: "master_asset_bridge",
+		SHA256: assetref.ContentHash(asset.SHA256), SizeBytes: asset.SizeBytes, MIMEType: asset.MIMEType,
+		Priority:                   priorityForDistance(job.Distance),
+		MaxBandwidthBytesPerSecond: bandwidth,
+	}
+	s.emit(Event{Name: "download_started", At: startedAt, PlanVersion: item.planVersion, JobID: job.JobID, TaskID: job.TaskID, AssetKey: asset.AssetKey, Distance: job.Distance, Generation: item.generation, QueuedAt: item.enqueuedAt, StartedAt: startedAt})
+	if s.cfg.OnState != nil {
+		s.cfg.OnState("requested", job, asset, nil)
+	}
+	resolved, err := resolver.Resolve(item.ctx, request)
+	if err == nil {
+		// The canonical transferer commits the verified cache row before
+		// Resolve returns. Install a protection that was pending because
+		// the row did not exist when the plan arrived.
+		_ = s.installPendingProtection(asset.AssetKey)
+	}
+	if err == nil && !resolved.CacheHit {
+		s.mu.Lock()
+		s.prefetched[asset.AssetKey] = asset.SizeBytes
+		if s.assetJobs[asset.AssetKey] == nil {
+			s.assetJobs[asset.AssetKey] = make(map[string]struct{})
+		}
+		s.assetJobs[asset.AssetKey][job.JobID] = struct{}{}
+		s.mu.Unlock()
 		if s.cfg.OnState != nil {
-			s.cfg.OnState("requested", job, asset, nil)
+			s.cfg.OnState("downloaded", job, asset, nil)
 		}
-		resolved, err := resolver.Resolve(ctx, request)
-		if err == nil {
-			// The canonical transferer commits the verified cache row before
-			// Resolve returns. Install a protection that was pending because
-			// the row did not exist when the plan arrived. This remains an
-			// optimization-only barrier: a transient protection error never
-			// invalidates an already verified asset or the foreground path.
-			_ = s.installPendingProtection(asset.AssetKey)
+	}
+	if err == nil && s.ram != nil {
+		s.mu.Lock()
+		hint, hinted := s.hints[asset.AssetKey]
+		s.mu.Unlock()
+		if hinted && hint.FutureRefCount >= s.cfg.RAMMinFutureRefs && hint.NextUseDistance <= s.cfg.RAMMaxNextUseDistance {
+			_ = s.ram.Put(item.ctx, request, downloader.DownloadedAsset{AssetKey: request.AssetKey, AssetID: request.AssetID, LocalPath: resolved.LocalPath, SHA256: resolved.SHA256, SizeBytes: asset.SizeBytes})
 		}
-		if err == nil && !resolved.CacheHit {
-			s.mu.Lock()
-			s.prefetched[asset.AssetKey] = asset.SizeBytes
-			if s.assetJobs[asset.AssetKey] == nil {
-				s.assetJobs[asset.AssetKey] = make(map[string]struct{})
-			}
-			s.assetJobs[asset.AssetKey][job.JobID] = struct{}{}
-			s.mu.Unlock()
-			if s.cfg.OnState != nil {
-				s.cfg.OnState("downloaded", job, asset, nil)
-			}
-		}
-		if err == nil && s.ram != nil {
-			s.mu.Lock()
-			hint, hinted := s.hints[asset.AssetKey]
-			s.mu.Unlock()
-			if hinted && hint.FutureRefCount >= s.cfg.RAMMinFutureRefs && hint.NextUseDistance <= s.cfg.RAMMaxNextUseDistance {
-				_ = s.ram.Put(ctx, request, downloader.DownloadedAsset{AssetKey: request.AssetKey, AssetID: request.AssetID, LocalPath: resolved.LocalPath, SHA256: resolved.SHA256, SizeBytes: asset.SizeBytes})
-			}
-		}
-		s.releaseBytes(asset.SizeBytes)
-		<-s.sem
+	}
+	s.releaseBytes(asset.SizeBytes)
+	if s.currentItem(item) {
 		if s.cfg.OnState != nil {
 			if err != nil {
 				s.cfg.OnState("failed", job, asset, err)
@@ -295,7 +412,81 @@ func (s *Scheduler) runJob(ctx context.Context, resolver *downloader.CacheResolv
 				s.cfg.OnState("ready", job, asset, nil)
 			}
 		}
+		readyAt := s.cfg.Now()
+		event := Event{Name: "asset_ready", At: readyAt, PlanVersion: item.planVersion, JobID: job.JobID, TaskID: job.TaskID, AssetKey: asset.AssetKey, Distance: job.Distance, Generation: item.generation, QueuedAt: item.enqueuedAt, StartedAt: startedAt, ReadyAt: readyAt}
+		if err != nil {
+			event.ErrorMessage = err.Error()
+		}
+		s.emit(event)
 	}
+}
+
+func (s *Scheduler) enqueueJobLocked(planVersion uint64, runtime *jobRuntime) []Event {
+	events := make([]Event, 0, len(runtime.job.Assets))
+	for _, asset := range runtime.job.Assets {
+		enqueuedAt := s.cfg.Now()
+		s.nextSequence++
+		heap.Push(&s.queue, &workItem{
+			planVersion: planVersion,
+			generation:  runtime.generation,
+			job:         runtime.job,
+			asset:       asset,
+			ctx:         runtime.ctx,
+			enqueuedAt:  enqueuedAt,
+			sequence:    s.nextSequence,
+		})
+		events = append(events, Event{
+			Name:        "prefetch_queued",
+			At:          enqueuedAt,
+			PlanVersion: planVersion,
+			JobID:       runtime.job.JobID,
+			TaskID:      runtime.job.TaskID,
+			AssetKey:    asset.AssetKey,
+			Distance:    runtime.job.Distance,
+			Generation:  runtime.generation,
+			QueuedAt:    enqueuedAt,
+		})
+	}
+	return events
+}
+
+func (s *Scheduler) currentItemLocked(item *workItem) bool {
+	runtime, ok := s.jobs[item.job.JobID]
+	return ok && runtime.generation == item.generation && runtime.ctx.Err() == nil
+}
+
+func (s *Scheduler) currentItem(item *workItem) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.currentItemLocked(item)
+}
+
+func (s *Scheduler) signalWork() {
+	if s == nil || s.wake == nil {
+		return
+	}
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Scheduler) emit(event Event) {
+	if s != nil && s.cfg.OnEvent != nil {
+		s.cfg.OnEvent(event)
+	}
+}
+
+func sameScheduledJob(a, b futureasset.Job) bool {
+	if a.JobID != b.JobID || a.TaskID != b.TaskID || a.ReservationID != b.ReservationID || a.TaskRevision != b.TaskRevision || a.Distance != b.Distance || len(a.Assets) != len(b.Assets) {
+		return false
+	}
+	for i := range a.Assets {
+		if a.Assets[i] != b.Assets[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // installPendingProtection closes the intentional gap between receiving a
