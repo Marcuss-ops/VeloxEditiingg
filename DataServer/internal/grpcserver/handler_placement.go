@@ -260,43 +260,67 @@ func (h *Handler) sendClaimedTaskOffer(
 // uncompileable payload, or a persist failure returns ("", "") — the worker
 // offer is never blocked by plan compilation.
 func (h *Handler) compileAndStampAttemptRenderPlan(ctx context.Context, tws *taskgraph.TaskWithSpec, attempt *taskattempts.TaskAttempt) (string, string) {
-	if h == nil || h.renderPlanCompiler == nil || h.taskAttemptRepo == nil || tws == nil || attempt == nil {
+	if h == nil || tws == nil || attempt == nil {
 		return "", ""
 	}
+	startedAt := time.Now()
+	compileMS, canonicalizeMS, hashMS, persistMS := int64(0), int64(0), int64(0), int64(0)
+	logSkip := func(reason string, err error) {
+		log.Printf("[RENDERPLAN] skipped task=%s attempt=%s reason=%s error=%v compile_ms=%d canonicalize_ms=%d hash_ms=%d persist_ms=%d total_ms=%d",
+			tws.ID, attempt.ID, reason, err, compileMS, canonicalizeMS, hashMS, persistMS, time.Since(startedAt).Milliseconds())
+	}
+	if h.renderPlanCompiler == nil {
+		logSkip("compiler_unavailable", nil)
+		return "", ""
+	}
+	if h.taskAttemptRepo == nil {
+		logSkip("persistence_unavailable", nil)
+		return "", ""
+	}
+
+	compileStartedAt := time.Now()
 	plan, err := h.renderPlanCompiler.Compile(ctx, tws.SpecPayload, attempt.ID)
+	compileMS = time.Since(compileStartedAt).Milliseconds()
 	if err != nil {
-		log.Printf("[RENDERPLAN] compile skipped task=%s attempt=%s: %v", tws.ID, attempt.ID, err)
+		logSkip("compile_error", err)
 		return "", ""
 	}
 	if plan == nil {
-		log.Printf("[RENDERPLAN] validation skipped task=%s attempt=%s: compiler returned nil plan", tws.ID, attempt.ID)
+		logSkip("nil_plan", nil)
 		return "", ""
 	}
 	if err := plan.Validate(); err != nil {
-		log.Printf("[RENDERPLAN] validation skipped task=%s attempt=%s: %v", tws.ID, attempt.ID, err)
+		logSkip("validation_error", err)
 		return "", ""
 	}
 	if plan.AttemptID != attempt.ID {
-		log.Printf("[RENDERPLAN] identity skipped task=%s attempt=%s: plan attempt_id=%s", tws.ID, attempt.ID, plan.AttemptID)
+		logSkip("attempt_identity_mismatch", fmt.Errorf("plan attempt_id=%s", plan.AttemptID))
 		return "", ""
 	}
 	if tws.JobID != "" && plan.JobID != tws.JobID {
-		log.Printf("[RENDERPLAN] identity skipped task=%s attempt=%s: plan job_id=%s task job_id=%s", tws.ID, attempt.ID, plan.JobID, tws.JobID)
+		logSkip("job_identity_mismatch", fmt.Errorf("plan job_id=%s task job_id=%s", plan.JobID, tws.JobID))
 		return "", ""
 	}
+	canonicalizeStartedAt := time.Now()
 	canonical, err := plan.CanonicalJSON()
+	canonicalizeMS = time.Since(canonicalizeStartedAt).Milliseconds()
 	if err != nil {
-		log.Printf("[RENDERPLAN] canonical encode skipped task=%s attempt=%s: %v", tws.ID, attempt.ID, err)
+		logSkip("canonicalization_error", err)
 		return "", ""
 	}
 	// Hash from the already-canonical bytes (no second marshaling).
+	hashStartedAt := time.Now()
 	planSHA := renderplan.HashCanonical(canonical)
+	hashMS = time.Since(hashStartedAt).Milliseconds()
+	persistStartedAt := time.Now()
 	if err := h.taskAttemptRepo.UpsertRenderPlan(ctx, attempt.ID, plan.PlanVersion, planSHA, string(canonical)); err != nil {
-		log.Printf("[RENDERPLAN] persist skipped task=%s attempt=%s: %v", tws.ID, attempt.ID, err)
+		persistMS = time.Since(persistStartedAt).Milliseconds()
+		logSkip("persist_error", err)
 		return "", ""
 	}
-	log.Printf("[RENDERPLAN] stamped attempt=%s task=%s plan_version=%d plan_sha256=%s duration_ms=%d segments=%d",
-		attempt.ID, tws.ID, plan.PlanVersion, planSHA[:16], plan.DurationMS, len(plan.Segments))
+	persistMS = time.Since(persistStartedAt).Milliseconds()
+	log.Printf("[RENDERPLAN] stamped attempt=%s task=%s plan_version=%d plan_sha256=%s duration_ms=%d segments=%d compile_ms=%d canonicalize_ms=%d hash_ms=%d persist_ms=%d total_ms=%d",
+		attempt.ID, tws.ID, plan.PlanVersion, planSHA[:16], plan.DurationMS, len(plan.Segments), compileMS, canonicalizeMS, hashMS, persistMS, time.Since(startedAt).Milliseconds())
 	return string(canonical), planSHA
 }
 
