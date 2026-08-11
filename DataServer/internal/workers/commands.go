@@ -73,6 +73,7 @@ func (cm *CommandManager) PushCommand(workerID string, cmdType string, params ma
 	if _, err := cm.store.InsertCommand(cmd); err != nil {
 		registryLog.ErrorWithMsg("cmd.push.fail", "Failed to persist command",
 			map[string]interface{}{"worker_id": workerID, "type": cmdType, "err": err.Error()})
+		return ""
 	}
 
 	return commandID
