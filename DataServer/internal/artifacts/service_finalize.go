@@ -25,6 +25,10 @@ func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*s
 
 	receivedSHA := session.ReceivedSHA256
 	receivedSize := session.ReceivedSizeBytes
+	expectedAudioStreams, err := s.expectedAudioStreams(ctx, cmd)
+	if err != nil {
+		return nil, fmt.Errorf("artifacts: Finalize: expected audio streams: %w", err)
+	}
 
 	mimeType := detectMIME(session.TemporaryStorageKey)
 	if mimeType == "" || mimeType == "application/octet-stream" {
@@ -81,7 +85,7 @@ func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*s
 			ErrUploadStateInvalid, cmd.UploadID, session.Status)
 	}
 
-	command := s.buildFinalizeVerifiedCommand(ctx, cmd, session, storageKey, receivedSHA, receivedSize, mimeType)
+	command := s.buildFinalizeVerifiedCommand(cmd, session, storageKey, receivedSHA, receivedSize, mimeType, expectedAudioStreams)
 	art, err := s.finalizeWithDuplicateStorageFallback(ctx, command)
 	if err != nil {
 		return nil, err
@@ -185,17 +189,15 @@ func (s *Service) validateFinalizeSession(ctx context.Context, cmd FinalizeArtif
 
 // buildFinalizeVerifiedCommand constructs the writer command from
 // pre-validated session data + the just-promoted storage key + the
-// just-detected MIME type. Pure struct mapping — no fallible
-// operations in any field, so the error return is omitted.
-// Reintroduce it deliberately (not by accident) if a future change
-// adds a fallible mapping (e.g. keyed-JSON-derived artifact_id).
+// just-detected MIME type. Pure struct mapping — all fallible lookups happen
+// before blob promotion in Finalize.
 func (s *Service) buildFinalizeVerifiedCommand(
-	ctx context.Context,
 	cmd FinalizeArtifactCommand,
 	session *store.UploadSession,
 	storageKey, receivedSHA string,
 	receivedSize int64,
 	mimeType string,
+	expectedAudioStreams int,
 ) FinalizeVerifiedCommand {
 	return FinalizeVerifiedCommand{
 		UploadID:         cmd.UploadID,
@@ -215,19 +217,16 @@ func (s *Service) buildFinalizeVerifiedCommand(
 
 		VerifiedAt:           s.clock.Now(),
 		AsyncProbe:           s.probeQueue != nil,
-		ExpectedAudioStreams: s.expectedAudioStreams(ctx, cmd),
+		ExpectedAudioStreams: expectedAudioStreams,
 	}
 }
 
-func (s *Service) expectedAudioStreams(ctx context.Context, cmd FinalizeArtifactCommand) int {
-	if s.deliveryCounter == nil {
-		return 0
-	}
+func (s *Service) expectedAudioStreams(ctx context.Context, cmd FinalizeArtifactCommand) (int, error) {
 	count, err := s.deliveryCounter.CountExpectedDeliveries(ctx, cmd.JobID, cmd.DestinationID)
 	if err != nil {
-		return 0
+		return 0, err
 	}
-	return count
+	return count, nil
 }
 
 // finalizeWithDuplicateStorageFallback invokes the atomic verified-
