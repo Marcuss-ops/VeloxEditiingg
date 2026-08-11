@@ -1,4 +1,5 @@
 #include "velox/core/render_engine.hpp"
+#include "velox/audio/audio_benchmark.hpp"
 #include "velox/audio/audio_plan.hpp"
 #include "render_engine_helpers.hpp"
 #include "velox/services/file_utils.hpp"
@@ -48,9 +49,10 @@ namespace {
                                   audio::AudioMixStrategy selected,
                                   std::size_t inputCount,
                                   std::size_t filterCount,
-                                  std::size_t amixInputCount) {
+                                  std::size_t amixInputCount,
+                                  const audio::AudioMixBenchmarkResult* benchmark) {
         std::string reason = escapeJsonString(plan.fallback_reason);
-        return std::string("{\"audio_mix_strategy_requested\":\"") +
+        std::string metadata = std::string("{\"audio_mix_strategy_requested\":\"") +
                audio::audioMixStrategyName(requested) +
                "\",\"audio_mix_strategy\":\"" +
                audio::audioMixStrategyName(selected) +
@@ -62,14 +64,38 @@ namespace {
                ",\"audio_max_concurrent_inputs\":" + std::to_string(plan.max_concurrent_inputs) +
                ",\"audio_plan_safe_for_optimized\":" +
                (plan.safe_for_optimized_timeline ? "true" : "false") +
-               ",\"audio_plan_fallback_reason\":\"" + reason + "\"" +
-               // FFmpeg exposes these sub-phases only through controlled
-               // benchmark runs, not from the single production process.
-               // Keep them explicit and null instead of inventing timings.
-               ",\"audio_inputs_open_ms\":null,\"audio_decode_ms\":null" +
-               ",\"audio_filtergraph_ms\":null,\"audio_encode_ms\":null" +
-               ",\"audio_output_write_ms\":null,\"audio_mix_encode_passes\":1" +
-               ",\"audio_mix_required\":true}";
+               ",\"audio_plan_fallback_reason\":\"" + reason + "\"";
+        std::string benchmarkJson =
+            std::string(",\"audio_profile_enabled\":") +
+            (benchmark != nullptr && benchmark->enabled ? "true" : "false");
+        if (benchmark != nullptr && benchmark->ran) {
+            benchmarkJson += ",\"audio_profile_method\":\"" +
+                escapeJsonString(benchmark->method) +
+                "\",\"audio_inputs_open_ms\":" + std::to_string(benchmark->inputs_open_ms) +
+                ",\"audio_decode_ms\":" + std::to_string(benchmark->decode_ms) +
+                ",\"audio_filtergraph_ms\":" + std::to_string(benchmark->filtergraph_ms) +
+                ",\"audio_encode_ms\":" + std::to_string(benchmark->encode_ms) +
+                ",\"audio_output_write_ms\":" + std::to_string(benchmark->output_write_ms) +
+                ",\"audio_profile_wall_ms\":" + std::to_string(benchmark->wall_ms) +
+                ",\"audio_profile_user_cpu_ms\":" + std::to_string(benchmark->user_cpu_ms) +
+                ",\"audio_profile_system_cpu_ms\":" + std::to_string(benchmark->system_cpu_ms) +
+                ",\"audio_profile_peak_rss_kb\":" + std::to_string(benchmark->peak_rss_kb) +
+                ",\"audio_profile_input_bytes\":" + std::to_string(benchmark->input_bytes) +
+                ",\"audio_profile_output_bytes\":" + std::to_string(benchmark->output_bytes);
+        } else {
+            benchmarkJson += ",\"audio_profile_method\":\"" +
+                escapeJsonString(benchmark == nullptr ? "not_requested" : benchmark->method) +
+                "\",\"audio_inputs_open_ms\":null,\"audio_decode_ms\":null" +
+                ",\"audio_filtergraph_ms\":null,\"audio_encode_ms\":null" +
+                ",\"audio_output_write_ms\":null";
+            if (benchmark != nullptr && !benchmark->failure_reason.empty()) {
+                benchmarkJson += ",\"audio_profile_failure_reason\":\"" +
+                    escapeJsonString(benchmark->failure_reason) + "\"";
+            }
+        }
+        benchmarkJson += ",\"audio_mix_encode_passes\":1,\"audio_mix_required\":true}";
+        metadata += benchmarkJson;
+        return metadata;
     }
 
     std::string optimizedAudioFilter(
@@ -604,6 +630,9 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                    << " -c:a aac "
                    << file::shellQuote(mixedAudio.string());
 
+            const auto audioBenchmark = audio::runAudioMixBenchmark(
+                audioPlanInputs, audioFilter.str(), duration_seconds_.load(), workDir.string());
+
             bool mixOk;
             telemetry::ScopedPhase audioEncodePhase(
                 recorder_, telemetry::kOriginEngine, telemetry::kScopeAudioTrack,
@@ -611,7 +640,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             audioEncodePhase.SetMetadataJSON(
                 audioPlanMetadata(compiledAudioPlan, requestedAudioStrategy,
                                   selectedAudioStrategy, downloadedTracks.size(),
-                                  filterCount, amixInputCount));
+                                  filterCount, amixInputCount, &audioBenchmark));
             {
                 // This command performs the multi-track filter graph and AAC
                 // encoding together. Keep it as one truthful timing bucket;

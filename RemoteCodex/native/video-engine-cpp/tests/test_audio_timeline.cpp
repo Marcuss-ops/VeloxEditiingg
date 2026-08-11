@@ -72,7 +72,11 @@ int main() {
     const char* previous = std::getenv("VELOX_AUDIO_MIX_STRATEGY");
     const std::string previousValue = previous == nullptr ? "" : previous;
     const bool hadPrevious = previous != nullptr;
+    const char* previousProfile = std::getenv("VELOX_AUDIO_MIX_PROFILE");
+    const std::string previousProfileValue = previousProfile == nullptr ? "" : previousProfile;
+    const bool hadPreviousProfile = previousProfile != nullptr;
     setenv("VELOX_AUDIO_MIX_STRATEGY", "optimized", 1);
+    setenv("VELOX_AUDIO_MIX_PROFILE", "1", 1);
 
     velox::plan::RenderPlan plan;
     plan.version = 1;
@@ -93,6 +97,11 @@ int main() {
     } else {
         unsetenv("VELOX_AUDIO_MIX_STRATEGY");
     }
+    if (hadPreviousProfile) {
+        setenv("VELOX_AUDIO_MIX_PROFILE", previousProfileValue.c_str(), 1);
+    } else {
+        unsetenv("VELOX_AUDIO_MIX_PROFILE");
+    }
 
     expect(result.success, "optimized sequential audio render succeeds: " + result.error);
     expect(fs::exists(output), "optimized output exists");
@@ -110,6 +119,10 @@ int main() {
            "sidecar records optimized strategy");
     expect(sidecar.find("\"audio_amix_input_count\":0") != std::string::npos,
            "optimized sidecar records no amix inputs");
+    expect(sidecar.find("\"audio_profile_method\":\"controlled_ffmpeg_null_output\"") != std::string::npos,
+           "controlled audio profile is recorded");
+    expect(sidecar.find("\"audio_decode_ms\":null") == std::string::npos,
+           "controlled profile records decode timing");
 
     std::cerr << "summary: fail=" << failures << "\n";
     return failures == 0 ? 0 : 1;
