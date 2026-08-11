@@ -12,6 +12,10 @@ const (
 	StaleUnconfirmedSpool  StaleExecutionCategory = "unconfirmed_spool"
 	StaleWorkerOffline     StaleExecutionCategory = "worker_offline"
 	StaleOrphanAttempt     StaleExecutionCategory = "orphan_attempt"
+	// Canonical Phase A3 reconciliation categories (shared audit ledger).
+	StaleAwaitingArtifact StaleExecutionCategory = "awaiting_artifact"
+	StaleDeliveryPending  StaleExecutionCategory = "delivery_pending"
+	StaleWorkerLost       StaleExecutionCategory = "worker_lost"
 )
 
 // StaleExecutionFinding is a read-only change proposal emitted by Scan.

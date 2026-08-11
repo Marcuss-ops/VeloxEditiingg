@@ -17,6 +17,8 @@ import (
 	"velox-server/internal/handlers/server/api"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/protectedasset"
+	"velox-server/internal/reconcile"
+	"velox-server/internal/store"
 	"velox-server/internal/supervisor"
 	"velox-shared/dispatchable"
 )
@@ -234,6 +236,77 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 			return nil, fmt.Errorf("supervisor register taskgraph-dispatcher: %w", err)
 		}
 	}
+	// ── Canonical reconciliation-supervisor (Phase A3) ──────────────────
+	// Runs the ReconciliationRegistry on a wall-clock cadence:
+	// AWAITING_ARTIFACT (terminalize jobs stuck with no attempt, artifact
+	// or transfer), DELIVERY_PENDING (roll up stuck DELIVERING jobs and
+	// fail budget-exhausted deliveries) and WORKER_LOST (partition workers
+	// whose heartbeat stream stopped). Every transition is CAS-guarded,
+	// idempotent, never touches terminal jobs, and stamps the
+	// reconciled_at / reconciliation_reason / reconciliation_version
+	// traceability columns. ClassRestartable: a failed tick retries with
+	// backoff; the individual reconcilers stay idempotent so a partial
+	// pass is safe to re-run.
+	if p != nil && p.SQLite != nil {
+		if err := sup.Register(supervisor.Runner{
+			Name:   "reconciliation-supervisor",
+			Class:  supervisor.ClassRestartable,
+			Policy: restartablePolicy,
+			Run: func(ctx context.Context) error {
+				registry := reconcile.NewRegistry()
+				awaiting, err := store.NewAwaitingArtifactReconciler(p.SQLite)
+				if err != nil {
+					return fmt.Errorf("reconciliation-supervisor: awaiting artifact reconciler: %w", err)
+				}
+				delivery, err := store.NewDeliveryPendingReconciler(p.SQLite)
+				if err != nil {
+					return fmt.Errorf("reconciliation-supervisor: delivery pending reconciler: %w", err)
+				}
+				workerLost, err := store.NewWorkerLostReconciler(
+					p.SQLite,
+					cfg.Workers.StaleThresholdSeconds,
+					cfg.Workers.PartitionThresholdSeconds,
+				)
+				if err != nil {
+					return fmt.Errorf("reconciliation-supervisor: worker lost reconciler: %w", err)
+				}
+				if err := registry.Register(reconcile.NameAwaitingArtifact, awaiting); err != nil {
+					return err
+				}
+				if err := registry.Register(reconcile.NameDeliveryPending, delivery); err != nil {
+					return err
+				}
+				if err := registry.Register(reconcile.NameWorkerLost, workerLost); err != nil {
+					return err
+				}
+				log.Printf("[BOOTSTRAP] reconciliation-supervisor started (entries=%v; tick=%s)", registry.Names(), cfg.Runtime.Scheduler.ReconciliationTick)
+				runOnce := func() {
+					report := registry.Reconcile(ctx, time.Now().UTC())
+					for _, entry := range report.Entries {
+						if entry.Err != nil {
+							log.Printf("[RECONCILIATION] entry %s failed after %s: %v", entry.Name, entry.Duration, entry.Err)
+						}
+					}
+				}
+				// Immediate first pass so a job stuck in AWAITING_ARTIFACT /
+				// DELIVERING does not wait a full tick after a master restart.
+				runOnce()
+				ticker := time.NewTicker(cfg.Runtime.Scheduler.ReconciliationTick)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-ticker.C:
+						runOnce()
+					}
+				}
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("supervisor register reconciliation-supervisor: %w", err)
+		}
+	}
+
 	// SPEC §14 follow-up: metrics-supervisor is the periodic 15s
 	// tick that stamps the 4 cost-per-output-minute gauges and
 	// refreshes master-health gauges (RSS, goroutines, outbox

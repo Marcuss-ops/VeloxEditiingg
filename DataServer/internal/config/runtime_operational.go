@@ -26,6 +26,11 @@ type SchedulerConfig struct {
 	MetricsSnapshotInterval   time.Duration
 	CalendarInterval          time.Duration
 	RestartableMaxRetries     int
+	// ReconciliationTick is the cadence of the canonical
+	// reconciliation-supervisor (AWAITING_ARTIFACT / DELIVERY_PENDING /
+	// WORKER_LOST registry). It is intentionally shorter than the
+	// individual stale thresholds so catch-up lag stays bounded.
+	ReconciliationTick time.Duration
 }
 
 // MetricsConfig controls the periodic metrics supervisor.
@@ -59,6 +64,7 @@ func loadOperationalRuntimeConfig(raw RawConfig) (SupervisorConfig, CacheConfig,
 		MetricsSnapshotInterval:   raw.Duration("VELOX_METRICS_SNAPSHOT_INTERVAL", 5*time.Minute),
 		CalendarInterval:          time.Duration(raw.Int("VELOX_CALENDAR_SCHEDULER_INTERVAL_SECONDS", 30, 1)) * time.Second,
 		RestartableMaxRetries:     raw.Int("VELOX_RESTARTABLE_MAX_RETRIES", 5, 1),
+		ReconciliationTick:        raw.Duration("VELOX_RECONCILIATION_TICK", 60*time.Second),
 	}
 	metrics := MetricsConfig{
 		Tick:           raw.Duration("VELOX_METRICS_TICK", 15*time.Second),
@@ -90,7 +96,7 @@ func operationalParseErrors(raw RawConfig) []string {
 			}
 		}
 	}
-	for _, key := range []string{"VELOX_CACHE_SNAPSHOT_INTERVAL", "VELOX_TASKGRAPH_TICK", "VELOX_ARTIFACT_RECONCILE_INTERVAL", "VELOX_METRICS_SNAPSHOT_INTERVAL", "VELOX_METRICS_TICK", "VELOX_ALERT_EVALUATION_INTERVAL", "VELOX_ALERT_COOLDOWN"} {
+	for _, key := range []string{"VELOX_CACHE_SNAPSHOT_INTERVAL", "VELOX_TASKGRAPH_TICK", "VELOX_ARTIFACT_RECONCILE_INTERVAL", "VELOX_METRICS_SNAPSHOT_INTERVAL", "VELOX_METRICS_TICK", "VELOX_ALERT_EVALUATION_INTERVAL", "VELOX_ALERT_COOLDOWN", "VELOX_RECONCILIATION_TICK"} {
 		checkDuration(key)
 	}
 	for _, item := range []struct {
@@ -235,6 +241,7 @@ func (c *Config) Snapshot() RuntimeSnapshot {
 		"runtime.scheduler.metrics_snapshot_interval":   c.Runtime.Scheduler.MetricsSnapshotInterval.String(),
 		"runtime.scheduler.calendar_interval":           c.Runtime.Scheduler.CalendarInterval.String(),
 		"runtime.scheduler.restartable_max_retries":     fmt.Sprint(c.Runtime.Scheduler.RestartableMaxRetries),
+		"runtime.scheduler.reconciliation_tick":         c.Runtime.Scheduler.ReconciliationTick.String(),
 		"runtime.metrics.tick":                          c.Runtime.Metrics.Tick.String(),
 		"runtime.metrics.attempt_limit":                 fmt.Sprint(c.Runtime.Metrics.AttemptLimit),
 		"runtime.metrics.seen_ids_cap":                  fmt.Sprint(c.Runtime.Metrics.SeenIDsCap),
