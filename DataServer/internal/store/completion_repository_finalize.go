@@ -11,25 +11,40 @@ import (
 )
 
 func (r *sqliteCompletionTx) MarkCompletionCommitted(ctx context.Context, commitID, now string) error {
-	_, err := r.tx.ExecContext(ctx, `UPDATE attempt_commits SET status='COMMITTED',committed_at=?,updated_at=? WHERE commit_id=? AND status IN ('DECLARED','UPLOADING','RECEIVED','VERIFYING')`, now, now, commitID)
+	res, err := r.tx.ExecContext(ctx, `UPDATE attempt_commits SET status='COMMITTED',committed_at=?,updated_at=? WHERE commit_id=? AND status IN ('DECLARED','UPLOADING','RECEIVED','VERIFYING')`, now, now, commitID)
 	if err != nil {
 		return fmt.Errorf("store: mark completion committed: %w", err)
+	}
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return fmt.Errorf("store: mark completion committed rows: %w", rowsErr)
+	} else if n != 1 {
+		return fmt.Errorf("%w: commit=%s committed rows=%d", ErrCompletionTransitionConflict, commitID, n)
 	}
 	return nil
 }
 
 func (r *sqliteCompletionTx) MarkCompletionTaskAttemptSucceeded(ctx context.Context, attemptID, workerID, leaseID, now string) error {
-	_, err := r.tx.ExecContext(ctx, `UPDATE task_attempts SET status='SUCCEEDED',completed_at=COALESCE(completed_at,?),report_version=report_version+1,updated_at=? WHERE id=? AND worker_id=? AND lease_id=? AND status NOT IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT')`, now, now, attemptID, workerID, leaseID)
+	res, err := r.tx.ExecContext(ctx, `UPDATE task_attempts SET status='SUCCEEDED',completed_at=COALESCE(completed_at,?),report_version=report_version+1,updated_at=? WHERE id=? AND worker_id=? AND lease_id=? AND status NOT IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT')`, now, now, attemptID, workerID, leaseID)
 	if err != nil {
 		return fmt.Errorf("store: mark completion attempt succeeded: %w", err)
+	}
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return fmt.Errorf("store: mark completion attempt succeeded rows: %w", rowsErr)
+	} else if n != 1 {
+		return fmt.Errorf("%w: attempt=%s succeeded rows=%d", ErrCompletionTransitionConflict, attemptID, n)
 	}
 	return nil
 }
 
 func (r *sqliteCompletionTx) MarkCompletionTaskSucceeded(ctx context.Context, taskID, attemptID, workerID, leaseID, now string) error {
-	_, err := r.tx.ExecContext(ctx, `UPDATE tasks SET status='SUCCEEDED',completed_at=?,updated_at=?,winning_attempt_id=?,winning_attempt_committed_at=?,winning_attempt_terminal_pending=0,revision=revision+1 WHERE task_id=? AND attempt_id=? AND worker_id=? AND lease_id=? AND status IN ('RUNNING','LEASED')`, now, now, attemptID, now, taskID, attemptID, workerID, leaseID)
+	res, err := r.tx.ExecContext(ctx, `UPDATE tasks SET status='SUCCEEDED',completed_at=?,updated_at=?,winning_attempt_id=?,winning_attempt_committed_at=?,winning_attempt_terminal_pending=0,revision=revision+1 WHERE task_id=? AND attempt_id=? AND worker_id=? AND lease_id=? AND status IN ('RUNNING','LEASED')`, now, now, attemptID, now, taskID, attemptID, workerID, leaseID)
 	if err != nil {
 		return fmt.Errorf("store: mark completion task succeeded: %w", err)
+	}
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return fmt.Errorf("store: mark completion task succeeded rows: %w", rowsErr)
+	} else if n != 1 {
+		return fmt.Errorf("%w: task=%s succeeded rows=%d", ErrCompletionTransitionConflict, taskID, n)
 	}
 	return nil
 }
