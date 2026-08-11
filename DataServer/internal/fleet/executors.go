@@ -44,14 +44,14 @@ const (
 	OperationKindSmoke      = "smoke"
 )
 
-// AllOperationKinds is the canonical complete-enum set. It drives
+// allOperationKinds is the canonical complete-enum set. It drives
 // the schema CHECK source-of-truth (mirrored in sqlite/104_fleet_operations.sql).
 // Production must register concrete executors explicitly;
 // this list is not a default-registration list.
 //
 // The set is stable for Step 4/15. Future kinds (e.g.
 // "rotate_secret", "drain_cluster") land as additive migrations.
-var AllOperationKinds = []string{
+var allOperationKinds = []string{
 	OperationKindDrain,
 	OperationKindResume,
 	OperationKindRestart,
@@ -174,7 +174,7 @@ func (r *ExecutorRegistry) Lookup(kind string) (OperationExecutor, error) {
 // a capability is deliberately disabled. Noop bindings are never accepted.
 func (r *ExecutorRegistry) ValidateRequiredExecutors(required ...string) error {
 	if len(required) == 0 {
-		required = ProductionRequiredOperationKinds
+		required = ProductionRequiredOperationKinds()
 	}
 	missing := make([]string, 0, len(required))
 	for _, kind := range required {
@@ -221,9 +221,9 @@ func (r *ExecutorRegistry) Kinds() []string {
 }
 
 // IsKnownKind is true when `kind` is in the canonical
-// AllOperationKinds set. Pure helper; no locks.
+// allOperationKinds set. Pure helper; no locks.
 func IsKnownKind(kind string) bool {
-	for _, k := range AllOperationKinds {
+	for _, k := range allOperationKinds {
 		if k == kind {
 			return true
 		}
@@ -253,15 +253,26 @@ func isNilExecutor(exec OperationExecutor) bool {
 	}
 }
 
-// ProductionRequiredOperationKinds are the concrete capabilities currently
+// productionRequiredOperationKinds are the concrete capabilities currently
 // promised by the production fleet composition. Other enum values remain
 // valid for persistence and fail at dispatch with EXECUTOR_NOT_CONFIGURED
 // until their capability is explicitly wired.
-var ProductionRequiredOperationKinds = []string{
+var productionRequiredOperationKinds = []string{
 	OperationKindDrain,
 	OperationKindResume,
 	OperationKindRestart,
 	OperationKindUpdate,
 	OperationKindQuarantine,
 	OperationKindSmoke,
+}
+
+// AllOperationKinds returns a defensive copy of the canonical enum set.
+func AllOperationKinds() []string {
+	return append([]string(nil), allOperationKinds...)
+}
+
+// ProductionRequiredOperationKinds returns a defensive copy of the concrete
+// capabilities promised by the production fleet composition.
+func ProductionRequiredOperationKinds() []string {
+	return append([]string(nil), productionRequiredOperationKinds...)
 }

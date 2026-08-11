@@ -454,15 +454,15 @@ func TestExecutorRegistry_ValidateRequiredExecutors(t *testing.T) {
 func TestExecutorRegistry_RegistersAllKinds(t *testing.T) {
 	reg := NewTestExecutorRegistry()
 	got := reg.Kinds()
-	if len(got) != len(AllOperationKinds) {
-		t.Errorf("len(Kinds()) = %d, want %d", len(got), len(AllOperationKinds))
+	if len(got) != len(AllOperationKinds()) {
+		t.Errorf("len(Kinds()) = %d, want %d", len(got), len(AllOperationKinds()))
 		return
 	}
 	seen := make(map[string]int, len(got))
 	for _, k := range got {
 		seen[k]++
 	}
-	for _, k := range AllOperationKinds {
+	for _, k := range AllOperationKinds() {
 		seen[k]--
 		if seen[k] < 0 {
 			t.Errorf("Kinds() missing %q (declared in AllOperationKinds)", k)
@@ -527,7 +527,7 @@ func TestAllOperationKinds_SchemaCompatible(t *testing.T) {
 	// test should also fail. We assert at the spec-level here —
 	// the SQL-level pin runs in store/ store_fleet_operations_test.
 	kinds := map[string]bool{}
-	for _, k := range AllOperationKinds {
+	for _, k := range AllOperationKinds() {
 		if kinds[k] {
 			t.Errorf("AllOperationKinds has duplicate %q", k)
 		}

@@ -192,7 +192,7 @@ func TestSmoke_OperationalKindIn_AllOperationKinds(t *testing.T) {
 	// so the noop registrations cover it (Step 4/15) and our
 	// Step 12+15 Register call replaces it.
 	found := false
-	for _, k := range fleet.AllOperationKinds {
+	for _, k := range fleet.AllOperationKinds() {
 		if k == fleet.OperationKindSmoke {
 			found = true
 			break

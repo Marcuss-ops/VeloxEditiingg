@@ -20,9 +20,9 @@ func (NoopOperationExecutor) Execute(_ context.Context, _ *store.Operation) erro
 // by controller tests that are not exercising a concrete fleet side effect.
 func NewTestExecutorRegistry() *ExecutorRegistry {
 	registry := NewExecutorRegistry()
-	registry.executors = make(map[string]OperationExecutor, len(AllOperationKinds))
+	registry.executors = make(map[string]OperationExecutor, len(AllOperationKinds()))
 	noop := NoopOperationExecutor{}
-	for _, kind := range AllOperationKinds {
+	for _, kind := range AllOperationKinds() {
 		registry.executors[kind] = noop
 	}
 	return registry
