@@ -23,6 +23,35 @@ import (
 	"velox-shared/dispatchable"
 )
 
+// staleExecutionRegistryEntry adapts the store maintenance surface to the
+// canonical reconciliation registry. The store method intentionally keeps
+// its dry-run/apply arguments explicit for the admin CLI; production wiring
+// always uses apply=true and remains bounded/idempotent through the store's
+// CAS transitions.
+type staleExecutionRegistryEntry struct {
+	reconciler *store.StaleExecutionReconciler
+	limit      int
+	actor      string
+}
+
+func (e staleExecutionRegistryEntry) Reconcile(ctx context.Context, now time.Time) error {
+	if e.reconciler == nil {
+		return fmt.Errorf("stale execution reconciler is not initialized")
+	}
+	limit := e.limit
+	if limit <= 0 {
+		limit = 500
+	}
+	report, err := e.reconciler.Reconcile(ctx, now, limit, true, e.actor)
+	if err != nil {
+		return err
+	}
+	if len(report.Applied) > 0 {
+		log.Printf("[RECONCILIATION] entry=%s applied=%d skipped=%d findings=%d", reconcile.NameStaleExecution, len(report.Applied), report.Skipped, len(report.Findings))
+	}
+	return nil
+}
+
 // registerOpsAlertsSupervisor constructs the fleet alert engine before
 // registering its runner. A missing datasource is an explicit DISABLED
 // capability: no runner is registered and no error is hidden as a healthy
@@ -279,7 +308,18 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 				if err := registry.Register(reconcile.NameWorkerLost, workerLost); err != nil {
 					return err
 				}
-				log.Printf("[BOOTSTRAP] reconciliation-supervisor started (entries=%v; tick=%s)", registry.Names(), cfg.Runtime.Scheduler.ReconciliationTick)
+				staleExecution, err := store.NewStaleExecutionReconciler(p.SQLite)
+				if err != nil {
+					return fmt.Errorf("reconciliation-supervisor: stale execution reconciler: %w", err)
+				}
+				if err := registry.Register(reconcile.NameStaleExecution, staleExecutionRegistryEntry{
+					reconciler: staleExecution,
+					limit:      cfg.Runtime.Scheduler.StaleExecutionLimit,
+					actor:      "master-reconciliation",
+				}); err != nil {
+					return err
+				}
+				log.Printf("[BOOTSTRAP] reconciliation-supervisor started (entries=%v; tick=%s; stale_limit=%d)", registry.Names(), cfg.Runtime.Scheduler.ReconciliationTick, cfg.Runtime.Scheduler.StaleExecutionLimit)
 				runOnce := func() {
 					report := registry.Reconcile(ctx, time.Now().UTC())
 					for _, entry := range report.Entries {

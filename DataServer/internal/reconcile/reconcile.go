@@ -43,9 +43,9 @@ type Reconciler interface {
 	Reconcile(ctx context.Context, now time.Time) error
 }
 
-// Canonical registry entry names. The bootstrap registers exactly these
-// three entries; tests and the operator surface may build their own
-// registries with the same names.
+// Canonical registry entry names. The bootstrap registers these entries;
+// tests and the operator surface may build their own registries with the
+// same names.
 const (
 	// NameAwaitingArtifact terminalizes jobs stuck in AWAITING_ARTIFACT
 	// with no active attempt, no READY artifact, and no active transfer.
@@ -58,6 +58,10 @@ const (
 	// stopped entirely (the recovery-side counterpart of the
 	// heartbeat-path detector).
 	NameWorkerLost = "WORKER_LOST"
+	// NameStaleExecution applies bounded, idempotent recovery for stale
+	// leases, orphaned tasks/attempts, committed artifacts, unconfirmed
+	// spool declarations, and offline workers.
+	NameStaleExecution = "STALE_EXECUTION"
 )
 
 // EntryReport is the per-entry outcome of one registry pass.

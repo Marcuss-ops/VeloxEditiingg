@@ -34,6 +34,9 @@ type SchedulerConfig struct {
 	// WORKER_LOST registry). It is intentionally shorter than the
 	// individual stale thresholds so catch-up lag stays bounded.
 	ReconciliationTick time.Duration
+	// StaleExecutionLimit bounds one automatic stale-execution pass so a
+	// historical backlog cannot monopolize a scheduler tick.
+	StaleExecutionLimit int
 }
 
 // MetricsConfig controls the periodic metrics supervisor.
@@ -71,6 +74,7 @@ func loadOperationalRuntimeConfig(raw RawConfig) (SupervisorConfig, CacheConfig,
 		CalendarInterval:          time.Duration(raw.Int("VELOX_CALENDAR_SCHEDULER_INTERVAL_SECONDS", 30, 1)) * time.Second,
 		RestartableMaxRetries:     raw.Int("VELOX_RESTARTABLE_MAX_RETRIES", 5, 1),
 		ReconciliationTick:        raw.Duration("VELOX_RECONCILIATION_TICK", 60*time.Second),
+		StaleExecutionLimit:       raw.Int("VELOX_STALE_EXECUTION_LIMIT", 500, 1),
 	}
 	metrics := MetricsConfig{
 		Tick:           raw.Duration("VELOX_METRICS_TICK", 15*time.Second),
@@ -111,6 +115,7 @@ func operationalParseErrors(raw RawConfig) []string {
 	}{
 		{"VELOX_CACHE_LOOKAHEAD_JOBS", 1},
 		{"VELOX_RESTARTABLE_MAX_RETRIES", 1},
+		{"VELOX_STALE_EXECUTION_LIMIT", 1},
 		{"VELOX_METRICS_ATTEMPT_LIMIT", 1},
 		{"VELOX_METRICS_SEEN_IDS_CAP", 1},
 		{"VELOX_CALENDAR_SCHEDULER_INTERVAL_SECONDS", 1},
@@ -248,6 +253,7 @@ func (c *Config) Snapshot() RuntimeSnapshot {
 		"runtime.scheduler.calendar_interval":           c.Runtime.Scheduler.CalendarInterval.String(),
 		"runtime.scheduler.restartable_max_retries":     fmt.Sprint(c.Runtime.Scheduler.RestartableMaxRetries),
 		"runtime.scheduler.reconciliation_tick":         c.Runtime.Scheduler.ReconciliationTick.String(),
+		"runtime.scheduler.stale_execution_limit":       fmt.Sprint(c.Runtime.Scheduler.StaleExecutionLimit),
 		"runtime.metrics.tick":                          c.Runtime.Metrics.Tick.String(),
 		"runtime.metrics.attempt_limit":                 fmt.Sprint(c.Runtime.Metrics.AttemptLimit),
 		"runtime.metrics.seen_ids_cap":                  fmt.Sprint(c.Runtime.Metrics.SeenIDsCap),
