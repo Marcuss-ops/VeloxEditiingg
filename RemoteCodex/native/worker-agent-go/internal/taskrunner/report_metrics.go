@@ -81,6 +81,18 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 		m["blob.bytes"] = bs.Bytes
 	}
 
+	// Phase B2: per-attempt FFmpeg profile aggregation. Every canonical
+	// FFmpegResult produced by the executors in this attempt is folded
+	// here once, on success AND failure paths (mergeStatsInto runs from
+	// both). "ffmpeg.aggregate" answers the batching question: total
+	// spawn/setup (total_spawn_ms + total_first_output_ms) vs total
+	// processing (total_processing_ms) across N processes, per operation.
+	if report != nil && report.FFmpegProfiles != nil {
+		if aggregate := report.FFmpegProfiles.Aggregate(); aggregate.ProcessCount > 0 {
+			m["ffmpeg.aggregate"] = aggregate
+		}
+	}
+
 	// Native SceneComposite metrics use engine/native namespaces while the
 	// typed envelope uses the canonical report keys. Preserve an explicitly
 	// supplied canonical value and only fill aliases when it is absent.

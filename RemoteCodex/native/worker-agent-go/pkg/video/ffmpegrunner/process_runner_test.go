@@ -218,6 +218,78 @@ func TestProcessRunner_EnvOverrideWins(t *testing.T) {
 	}
 }
 
+func TestProcessRunner_PhaseTimingBreakdown(t *testing.T) {
+	// Stub writes its first progress line immediately, then does ~200ms of
+	// work, then writes the last line and exits. Expected decomposition:
+	//   first_output_ms small (immediate first byte)
+	//   processing_ms  ≥ 150ms (the work window)
+	//   exit_wait_ms   ≥ 0 (reap only)
+	//   first_output + processing + exit_wait ≈ process_wall_ms
+	result, err := runStub(t, "printf 'start\\n'; sleep 0.2; printf 'end\\n'")
+	if err != nil {
+		t.Fatalf("Run = %v, want nil", err)
+	}
+	if result.FirstOutputMS < 0 || result.FirstOutputMS > 1000 {
+		t.Errorf("FirstOutputMS = %d, want small non-negative", result.FirstOutputMS)
+	}
+	if result.ProcessingMS < 150 {
+		t.Errorf("ProcessingMS = %d, want >= 150 (the sleep window)", result.ProcessingMS)
+	}
+	if result.ExitWaitMS < 0 {
+		t.Errorf("ExitWaitMS = %d, want >= 0", result.ExitWaitMS)
+	}
+	sum := result.FirstOutputMS + result.ProcessingMS + result.ExitWaitMS
+	if delta := sum - result.ProcessWallMS; delta > 100 || delta < -100 {
+		t.Errorf("first_output+processing+exit_wait = %d vs process_wall_ms = %d (delta %d), want within ±100", sum, result.ProcessWallMS, delta)
+	}
+	if result.Operation != OperationCompose {
+		t.Errorf("Operation = %q, want compose (stamped from request)", result.Operation)
+	}
+}
+
+func TestProcessRunner_SilentProcessHasNoPhaseTrio(t *testing.T) {
+	// No output at all: the phase trio stays zero (documented) while wall
+	// and exit code remain complete. A short sleep keeps wall measurable
+	// (a sub-millisecond process legitimately rounds wall to 0ms).
+	result, err := runStub(t, "sleep 0.05; exit 0")
+	if err != nil {
+		t.Fatalf("Run = %v, want nil", err)
+	}
+	if result.FirstOutputMS != 0 || result.ProcessingMS != 0 {
+		t.Errorf("phase trio = first_output=%d processing=%d, want 0/0 for a silent process", result.FirstOutputMS, result.ProcessingMS)
+	}
+	if result.ProcessWallMS < 30 {
+		t.Errorf("ProcessWallMS = %d, want >= 30 for a 50ms silent process", result.ProcessWallMS)
+	}
+	if result.ExitCode != 0 {
+		t.Errorf("ExitCode = %d, want 0", result.ExitCode)
+	}
+}
+
+func TestProcessRunner_FirstOutputPrecedesProcessingEnd(t *testing.T) {
+	// The first byte arrives after a 50ms setup delay, then 100ms of work:
+	// first_output_ms must be measurable and strictly precede the work
+	// window, which must fit inside the wall window. (An instant first byte
+	// truncates to 0ms at ms granularity, so the stub delays it — real
+	// ffmpeg spends tens-to-hundreds of ms in setup before first output.)
+	result, err := runStub(t, "sleep 0.05; printf 'ping\\n'; sleep 0.1; printf 'pong\\n'")
+	if err != nil {
+		t.Fatalf("Run = %v, want nil", err)
+	}
+	if result.FirstOutputMS < 30 {
+		t.Errorf("FirstOutputMS = %d, want >= 30 (the 50ms setup delay)", result.FirstOutputMS)
+	}
+	if result.ProcessingMS < 80 {
+		t.Errorf("ProcessingMS = %d, want >= 80 (the 100ms work window)", result.ProcessingMS)
+	}
+	if result.FirstOutputMS >= result.ProcessWallMS {
+		t.Errorf("FirstOutputMS = %d must be < ProcessWallMS = %d", result.FirstOutputMS, result.ProcessWallMS)
+	}
+	if result.FirstOutputMS >= result.ProcessingMS {
+		t.Errorf("FirstOutputMS = %d must precede ProcessingMS = %d", result.FirstOutputMS, result.ProcessingMS)
+	}
+}
+
 func TestNewProcessRunner_DefaultBinary(t *testing.T) {
 	r := NewProcessRunner()
 	if r.binary() != "ffmpeg" {

@@ -48,6 +48,7 @@ import (
 	"velox-worker-agent/internal/oteltrace"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/logger"
+	"velox-worker-agent/pkg/video/ffmpegrunner"
 )
 
 // TaskRunner is the generic per-task lifecycle orchestrator.
@@ -182,6 +183,10 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	}
 	report.AttemptRecorder = rec
 	report.AttemptEvents = telemetry.AttemptEventMachineFromContext(parent)
+	// Attempt-scoped FFmpeg profile accumulator: executors push every
+	// canonical FFmpegResult; the report finalization stamps the aggregate
+	// (mergeStatsInto) on success AND failure paths.
+	report.FFmpegProfiles = ffmpegrunner.NewAggregator()
 	// appendPhase writes directly to report.PhaseMarkers so the
 	// returned TaskExecutionReport always carries the recorded phases.
 	// Run is single-goroutine; no mutex needed.
@@ -230,16 +235,17 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		},
 	}
 	rc, err := newRunnerContext(ContextOptions{
-		Spec:       spec,
-		ParentCtx:  parent,
-		Logger:     execLog,
-		Clock:      r.clock,
-		Telemetry:  r.telemetry,
-		Resources:  r.resources,
-		LocalCache: r.cache,
-		Artifacts:  r.artifacts,
-		CacheStats: r.cacheStats,
-		BlobStats:  r.blobStats,
+		Spec:           spec,
+		ParentCtx:      parent,
+		Logger:         execLog,
+		Clock:          r.clock,
+		Telemetry:      r.telemetry,
+		Resources:      r.resources,
+		LocalCache:     r.cache,
+		Artifacts:      r.artifacts,
+		CacheStats:     r.cacheStats,
+		BlobStats:      r.blobStats,
+		FFmpegProfiles: report.FFmpegProfiles,
 	})
 	if err != nil {
 		return r.completeError(rec, report, appendPhase, CodeInternalRunnerFault,

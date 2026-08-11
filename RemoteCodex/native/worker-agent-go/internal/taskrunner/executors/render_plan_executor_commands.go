@@ -46,7 +46,11 @@ func operationForOutputType(outputType string) ffmpegrunner.OperationType {
 // counters and safe parameters. Raw paths/tokens never leave the runner.
 func ffmpegProfileMetadata(result ffmpegrunner.FFmpegResult) map[string]any {
 	return map[string]any{
+		"operation":            result.Operation,
 		"process_spawn_ms":     result.ProcessSpawnMS,
+		"first_output_ms":      result.FirstOutputMS,
+		"processing_ms":        result.ProcessingMS,
+		"exit_wait_ms":         result.ExitWaitMS,
 		"process_wall_ms":      result.ProcessWallMS,
 		"user_cpu_ms":          result.UserCPUMs,
 		"system_cpu_ms":        result.SystemCPUMs,
@@ -55,6 +59,7 @@ func ffmpegProfileMetadata(result ffmpegrunner.FFmpegResult) map[string]any {
 		"write_bytes":          result.WriteBytes,
 		"exit_code":            result.ExitCode,
 		"terminated_by_signal": result.TerminatedBySignal,
+		"stream_timed_out":     result.StreamTimedOut,
 		"command_fingerprint":  result.CommandFingerprint,
 		"parameters":           result.Parameters,
 	}
@@ -82,6 +87,16 @@ func runCommandExecutor(ctx context.Context, e *renderPlanExecutor, spec executo
 		Operation: operationForOutputType(outputType),
 		Args:      cp.Args,
 	})
+	// Attempt-scoped aggregation: when the execution context exposes the
+	// per-attempt sink, fold this process into it so the report can answer
+	// "N processes → total spawn/setup vs total processing" per attempt.
+	if sink, ok := execCtx.(interface {
+		FFmpegProfiles() *ffmpegrunner.Aggregator
+	}); ok {
+		if sink.FFmpegProfiles() != nil {
+			sink.FFmpegProfiles().Add(result)
+		}
+	}
 	profile := ffmpegProfileMetadata(result)
 	commandHandle.SetMetadata("executor_id", cp.ExecutorID)
 	commandHandle.SetMetadata("command_fingerprint", result.CommandFingerprint)

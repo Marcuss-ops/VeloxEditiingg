@@ -17,6 +17,24 @@ import (
 // Compile-time assertion: the fake satisfies the canonical runner contract.
 var _ ffmpegrunner.FFmpegRunner = (*fakeFFmpegRunner)(nil)
 
+// sinkExecutionContext is a minimal ExecutionContext stub exposing the
+// attempt-scoped FFmpeg profile sink (B2). The remaining interface
+// methods are noops; the render-plan executors only consult Recorder and
+// FFmpegProfiles through optional interface assertions.
+type sinkExecutionContext struct {
+	agg *ffmpegrunner.Aggregator
+}
+
+func (s *sinkExecutionContext) FFmpegProfiles() *ffmpegrunner.Aggregator { return s.agg }
+func (s *sinkExecutionContext) Artifacts() executor.ArtifactAccess       { return nil }
+func (s *sinkExecutionContext) LocalCache() executor.LocalCache          { return nil }
+func (s *sinkExecutionContext) Telemetry() executor.Telemetry            { return nil }
+func (s *sinkExecutionContext) Resources() executor.ResourceLimits       { return nil }
+func (s *sinkExecutionContext) Clock() executor.Clock                    { return nil }
+func (s *sinkExecutionContext) Logger() executor.Logger                  { return nil }
+func (s *sinkExecutionContext) Done() <-chan struct{}                    { return nil }
+func (s *sinkExecutionContext) Err() error                               { return nil }
+
 // fakeFFmpegRunner records the request it received and returns a canned
 // FFmpegResult, so executor tests never touch a real ffmpeg process.
 type fakeFFmpegRunner struct {
@@ -122,7 +140,9 @@ func TestEncodeExecutor_ConsumesCanonicalRunnerAndPublishesProfile(t *testing.T)
 	outputRoot := t.TempDir()
 	fake := &fakeFFmpegRunner{
 		result: ffmpegrunner.FFmpegResult{
-			ProcessSpawnMS: 12, ProcessWallMS: 340, ExitCode: 0,
+			Operation:      ffmpegrunner.OperationEncode,
+			ProcessSpawnMS: 12, FirstOutputMS: 45, ProcessingMS: 285,
+			ExitWaitMS: 3, ProcessWallMS: 340, ExitCode: 0,
 			CommandFingerprint: "fp-encode", Parameters: ffmpegrunner.SanitizedParameters{Codecs: []string{"aac", "libx264"}, InputCount: 2},
 		},
 	}
@@ -159,6 +179,14 @@ func TestEncodeExecutor_ConsumesCanonicalRunnerAndPublishesProfile(t *testing.T)
 	}
 	if profile["command_fingerprint"] != "fp-encode" {
 		t.Errorf("ffmpeg_profile.command_fingerprint = %v, want fp-encode", profile["command_fingerprint"])
+	}
+	// B2: the per-process phase breakdown must travel with the profile.
+	if profile["operation"] != ffmpegrunner.OperationEncode {
+		t.Errorf("ffmpeg_profile.operation = %v, want encode", profile["operation"])
+	}
+	if profile["first_output_ms"] != int64(45) || profile["processing_ms"] != int64(285) || profile["exit_wait_ms"] != int64(3) {
+		t.Errorf("ffmpeg_profile phase trio = first %v / proc %v / exit %v, want 45/285/3",
+			profile["first_output_ms"], profile["processing_ms"], profile["exit_wait_ms"])
 	}
 	if _, ok := profile["parameters"]; !ok {
 		t.Error("ffmpeg_profile.parameters missing")
@@ -227,6 +255,48 @@ func TestComposeExecutor_RunnerReceivesComposeOperation(t *testing.T) {
 	}
 	if _, ok := result.Metrics["ffmpeg_profile"]; !ok {
 		t.Error("ffmpeg_profile missing from compose metrics")
+	}
+}
+
+func TestEncodeExecutor_PushesProfileIntoAttemptSink(t *testing.T) {
+	const jobID = "job-sink-1"
+	outputRoot := t.TempDir()
+	agg := ffmpegrunner.NewAggregator()
+	fake := &fakeFFmpegRunner{
+		result: ffmpegrunner.FFmpegResult{
+			Operation: ffmpegrunner.OperationEncode,
+			ExitCode:  0, ProcessWallMS: 340,
+			ProcessSpawnMS: 5, FirstOutputMS: 40, ProcessingMS: 290, ExitWaitMS: 2,
+		},
+	}
+	seedOutputFile(t, filepath.Join(outputRoot, jobID+".mp4"))
+
+	executorImpl := NewEncode(fake, outputRoot)
+	spec := executor.TaskSpec{
+		Version:    1,
+		JobID:      jobID,
+		ExecutorID: EncodeID,
+		Payload: map[string]interface{}{
+			"render_plan_json": validRenderPlanJSON(t, jobID),
+			"input_path":       "/cache/worker/video.mp4",
+		},
+	}
+	result, err := executorImpl.Execute(context.Background(), &sinkExecutionContext{agg: agg}, spec)
+	if err != nil {
+		t.Fatalf("Execute = %v, want nil", err)
+	}
+	if result.Status != "succeeded" {
+		t.Fatalf("Status = %q, want succeeded (%s)", result.Status, result.ErrorDetail)
+	}
+	if got := agg.ProcessCount(); got != 1 {
+		t.Fatalf("sink ProcessCount = %d, want 1 (profile must be pushed per attempt)", got)
+	}
+	summary := agg.Aggregate()
+	if summary.TotalProcessingMS != 290 || summary.TotalSpawnMS != 5 {
+		t.Errorf("aggregate = %+v, want processing 290 / spawn 5", summary)
+	}
+	if _, ok := summary.Operations[string(ffmpegrunner.OperationEncode)]; !ok {
+		t.Errorf("aggregate operations missing encode bucket: %+v", summary.Operations)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/blob"
 	"velox-worker-agent/pkg/cache"
+	"velox-worker-agent/pkg/video/ffmpegrunner"
 )
 
 // CacheStatsProvider surfaces cache counters into the taskrunner for
@@ -57,6 +58,10 @@ type ContextOptions struct {
 	// TaskExecutionReport.Metrics. Optional; nil falls back to noop.
 	CacheStats CacheStatsProvider
 	BlobStats  BlobStatsProvider
+
+	// FFmpegProfiles is the attempt-scoped accumulator executors push
+	// every canonical FFmpegResult into. Optional; nil skips aggregation.
+	FFmpegProfiles *ffmpegrunner.Aggregator
 }
 
 // runnerContext is the per-task ExecutionContext handed to Executor.Execute.
@@ -68,14 +73,15 @@ type runnerContext struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	logger     executor.Logger
-	clock      executor.Clock
-	telemetry  executor.Telemetry
-	resources  executor.ResourceLimits
-	cache      executor.LocalCache
-	artifacts  executor.ArtifactAccess
-	cacheStats CacheStatsProvider
-	blobStats  BlobStatsProvider
+	logger         executor.Logger
+	clock          executor.Clock
+	telemetry      executor.Telemetry
+	resources      executor.ResourceLimits
+	cache          executor.LocalCache
+	artifacts      executor.ArtifactAccess
+	cacheStats     CacheStatsProvider
+	blobStats      BlobStatsProvider
+	ffmpegProfiles *ffmpegrunner.Aggregator
 }
 
 func newRunnerContext(opts ContextOptions) (*runnerContext, error) {
@@ -108,17 +114,18 @@ func newRunnerContext(opts ContextOptions) (*runnerContext, error) {
 	}
 	derived, cancel := context.WithCancel(opts.ParentCtx)
 	return &runnerContext{
-		spec:       opts.Spec,
-		ctx:        derived,
-		cancel:     cancel,
-		logger:     opts.Logger,
-		clock:      opts.Clock,
-		telemetry:  opts.Telemetry,
-		resources:  opts.Resources,
-		cache:      opts.LocalCache,
-		artifacts:  opts.Artifacts,
-		cacheStats: opts.CacheStats,
-		blobStats:  opts.BlobStats,
+		spec:           opts.Spec,
+		ctx:            derived,
+		cancel:         cancel,
+		logger:         opts.Logger,
+		clock:          opts.Clock,
+		telemetry:      opts.Telemetry,
+		resources:      opts.Resources,
+		cache:          opts.LocalCache,
+		artifacts:      opts.Artifacts,
+		cacheStats:     opts.CacheStats,
+		blobStats:      opts.BlobStats,
+		ffmpegProfiles: opts.FFmpegProfiles,
 	}, nil
 }
 
@@ -145,6 +152,15 @@ func (c *runnerContext) BlobStats() BlobStatsProvider   { return c.blobStats }
 // executor.ExecutionContext interface, preserving third-party executors.
 func (c *runnerContext) Recorder() *telemetry.EventRecorder {
 	return telemetry.RecorderFromContext(c.ctx)
+}
+
+// FFmpegProfiles exposes the attempt-scoped FFmpeg profile accumulator.
+// Executors detect it through the same optional-interface pattern as
+// Recorder and push every FFmpegResult into it; the report finalization
+// stamps the aggregate into the metrics. Nil when no accumulator was
+// wired (safe to skip).
+func (c *runnerContext) FFmpegProfiles() *ffmpegrunner.Aggregator {
+	return c.ffmpegProfiles
 }
 
 // Done is closed when the parent ctx is canceled AND when the runner

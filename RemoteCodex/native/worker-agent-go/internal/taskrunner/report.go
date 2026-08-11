@@ -5,6 +5,7 @@ import (
 
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
+	"velox-worker-agent/pkg/video/ffmpegrunner"
 )
 
 // SegmentTiming re-exports executor.SegmentTiming so consumers of the
@@ -62,6 +63,11 @@ type TaskExecutionReport struct {
 	// carries per-attempt deltas rather than worker lifetime totals.
 	CacheBaseline    map[string]int64 `json:"-"`
 	CacheBaselineSet bool             `json:"-"`
+	// FFmpegProfiles is the attempt-scoped ffmpeg profile accumulator
+	// (B2). Executors push every FFmpegResult into it; mergeStatsInto
+	// stamps the JSON-safe aggregate into Metrics as "ffmpeg.aggregate"
+	// on every outcome. Transport-local, never serialized directly.
+	FFmpegProfiles *ffmpegrunner.Aggregator `json:"-"`
 }
 
 // DetailedPhaseTiming is the worker-side mirror of

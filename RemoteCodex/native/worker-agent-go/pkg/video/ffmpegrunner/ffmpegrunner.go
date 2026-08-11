@@ -8,6 +8,9 @@
 // contract:
 //
 //	process_spawn_ms    time from Run() entry to successful Start()
+//	first_output_ms     Start() → first byte on stdout/stderr
+//	processing_ms       first output → last byte drained (work window)
+//	exit_wait_ms         last byte → Wait() returning (reap/shutdown)
 //	process_wall_ms     wall time of the executed process
 //	user_cpu_ms         child user CPU (getrusage RUSAGE_CHILDREN delta)
 //	system_cpu_ms       child system CPU
@@ -70,16 +73,45 @@ type FFmpegRequest struct {
 // process. All numeric fields are best-effort where the platform does
 // not expose them (they stay zero); the fingerprint and sanitized
 // parameters are always populated.
+//
+// The wall clock of one process decomposes as:
+//
+//	spawn_ms            Run() entry → Start() success
+//	first_output_ms     Start() → first byte on stdout/stderr
+//	                    (0 when the process produced no output)
+//	processing_ms       first output → last byte drained (the actual
+//	                    work window; 0 when no output was observed)
+//	exit_wait_ms        last byte → Wait() returning (reap/shutdown;
+//	                    clamped at 0)
+//
+// process_wall_ms is the time Wait() blocked (spawn-to-exit minus the
+// sub-millisecond setup between Start and Wait), so
+// first_output_ms + processing_ms + exit_wait_ms ≈ process_wall_ms for
+// processes that produced output. For silent invocations only spawn_ms
+// and process_wall_ms are meaningful and the phase trio stays zero.
 type FFmpegResult struct {
-	ProcessSpawnMS     int64               `json:"process_spawn_ms"`
-	ProcessWallMS      int64               `json:"process_wall_ms"`
-	UserCPUMs          int64               `json:"user_cpu_ms"`
-	SystemCPUMs        int64               `json:"system_cpu_ms"`
-	PeakRSSBytes       int64               `json:"peak_rss_bytes"`
-	ReadBytes          int64               `json:"read_bytes"`
-	WriteBytes         int64               `json:"write_bytes"`
-	ExitCode           int                 `json:"exit_code"`
-	TerminatedBySignal bool                `json:"terminated_by_signal"`
+	// Operation is the phase this process belonged to (audio_mix /
+	// compose / encode). The runner stamps it from the request so results
+	// are self-describing and aggregation can group by phase.
+	Operation          OperationType `json:"operation"`
+	ProcessSpawnMS     int64         `json:"process_spawn_ms"`
+	FirstOutputMS      int64         `json:"first_output_ms"`
+	ProcessingMS       int64         `json:"processing_ms"`
+	ExitWaitMS         int64         `json:"exit_wait_ms"`
+	ProcessWallMS      int64         `json:"process_wall_ms"`
+	UserCPUMs          int64         `json:"user_cpu_ms"`
+	SystemCPUMs        int64         `json:"system_cpu_ms"`
+	PeakRSSBytes       int64         `json:"peak_rss_bytes"`
+	ReadBytes          int64         `json:"read_bytes"`
+	WriteBytes         int64         `json:"write_bytes"`
+	ExitCode           int           `json:"exit_code"`
+	TerminatedBySignal bool          `json:"terminated_by_signal"`
+	// StreamTimedOut is true when an output stream did not close within
+	// streamTimeout after the process exited (a grandchild held the pipe
+	// open). In that case the phase trio is not zero because the process
+	// was silent, but because the window could not be observed — consumers
+	// must not read the zeros as "no output produced".
+	StreamTimedOut     bool                `json:"stream_timed_out,omitempty"`
 	CommandFingerprint string              `json:"command_fingerprint"`
 	Parameters         SanitizedParameters `json:"parameters"`
 }
