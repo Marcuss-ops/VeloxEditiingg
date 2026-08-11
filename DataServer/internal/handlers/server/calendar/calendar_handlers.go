@@ -191,7 +191,10 @@ func (api *CalendarAPI) UpdateEvent() gin.HandlerFunc {
 		if err := api.reconcileCalendarEvent(c.Request.Context(), &event, false); err != nil {
 			event.QueueError = err.Error()
 		}
-		_ = api.store.UpdateCalendarEvent(c.Request.Context(), &event)
+		if err := api.store.UpdateCalendarEvent(c.Request.Context(), &event); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 		api.hydrateQueueState(c.Request.Context(), []*store.CalendarEvent{&event})
 
 		c.JSON(http.StatusOK, event)
@@ -352,7 +355,10 @@ func (api *CalendarAPI) EnqueueEvent() gin.HandlerFunc {
 
 		if err := api.reconcileCalendarEvent(c.Request.Context(), event, true); err != nil {
 			event.QueueError = err.Error()
-			_ = api.store.UpdateCalendarEvent(c.Request.Context(), event)
+			if updateErr := api.store.UpdateCalendarEvent(c.Request.Context(), event); updateErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": updateErr.Error()})
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "event": event})
 			return
 		}
