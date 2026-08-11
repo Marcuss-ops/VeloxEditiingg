@@ -26,6 +26,7 @@ import (
 
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
+	"velox-shared/futureasset"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/api/renderplan"
@@ -173,6 +174,34 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 
 				// PR-2: defer dispatch to MsgTaskLeaseGranted via pendingTasks map.
 				w.storePendingTask(taskID, pte)
+
+			case controltransport.MsgFutureAssetPlan:
+				wirePlan, ok := msg.TypedPayload.(*pb.FutureAssetPlan)
+				if !ok || wirePlan == nil {
+					w.logger.Warn("[PREFETCH] FutureAssetPlan without typed payload")
+					continue
+				}
+				plan, err := futureasset.FromProto(wirePlan)
+				if err != nil {
+					w.logger.Warn("[PREFETCH] rejected invalid FutureAssetPlan: %v", err)
+					continue
+				}
+				result, err := w.futureAssetController().Apply(plan)
+				if err != nil {
+					w.logger.Warn("[PREFETCH] rejected FutureAssetPlan version=%d: %v", plan.Version, err)
+					continue
+				}
+				w.logger.Info("[PREFETCH] reconciled plan=%s version=%d added=%d removed=%d reprioritized=%d protected=%d expired=%t stale=%t", plan.PlanID, plan.Version, len(result.Added), len(result.Removed), len(result.Reprioritized), len(plan.Protect), result.Expired, result.Stale)
+
+			case controltransport.MsgCancelPrefetch:
+				cancel, ok := msg.TypedPayload.(*pb.CancelPrefetch)
+				if !ok || cancel == nil {
+					w.logger.Warn("[PREFETCH] CancelPrefetch without typed payload")
+					continue
+				}
+				if w.futureAssetController().Cancel(cancel.GetJobId(), cancel.GetReservationId(), cancel.GetPlanVersion()) {
+					w.logger.Info("[PREFETCH] cancelled job=%s reservation=%s plan_version=%d reason=%s", cancel.GetJobId(), cancel.GetReservationId(), cancel.GetPlanVersion(), cancel.GetReason())
+				}
 
 			case controltransport.MsgTaskLeaseGranted:
 				// PR-2 (canonical-attempt-identity): executeTask dispatch is

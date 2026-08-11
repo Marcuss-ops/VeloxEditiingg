@@ -177,6 +177,14 @@ func (t *GRPCStreamTransport) envelopeToMessage(env *pb.MasterToWorkerEnvelope) 
 	case *pb.MasterToWorkerEnvelope_TaskCommitAck:
 		msg.Type = controltransport.MsgTaskCommitAck
 		msg.TypedPayload = m.TaskCommitAck
+
+	case *pb.MasterToWorkerEnvelope_FutureAssetPlan:
+		msg.Type = controltransport.MsgFutureAssetPlan
+		msg.TypedPayload = m.FutureAssetPlan
+
+	case *pb.MasterToWorkerEnvelope_CancelPrefetch:
+		msg.Type = controltransport.MsgCancelPrefetch
+		msg.TypedPayload = m.CancelPrefetch
 	}
 
 	return msg

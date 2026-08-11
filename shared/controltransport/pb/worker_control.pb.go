@@ -2236,6 +2236,8 @@ type MasterToWorkerEnvelope struct {
 	//	*MasterToWorkerEnvelope_ArtifactUploadPlan
 	//	*MasterToWorkerEnvelope_TaskCommitAck
 	//	*MasterToWorkerEnvelope_TaskResultAck
+	//	*MasterToWorkerEnvelope_FutureAssetPlan
+	//	*MasterToWorkerEnvelope_CancelPrefetch
 	Msg           isMasterToWorkerEnvelope_Msg `protobuf_oneof:"msg"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2428,6 +2430,24 @@ func (x *MasterToWorkerEnvelope) GetTaskResultAck() *TaskResultAck {
 	return nil
 }
 
+func (x *MasterToWorkerEnvelope) GetFutureAssetPlan() *FutureAssetPlan {
+	if x != nil {
+		if x, ok := x.Msg.(*MasterToWorkerEnvelope_FutureAssetPlan); ok {
+			return x.FutureAssetPlan
+		}
+	}
+	return nil
+}
+
+func (x *MasterToWorkerEnvelope) GetCancelPrefetch() *CancelPrefetch {
+	if x != nil {
+		if x, ok := x.Msg.(*MasterToWorkerEnvelope_CancelPrefetch); ok {
+			return x.CancelPrefetch
+		}
+	}
+	return nil
+}
+
 type isMasterToWorkerEnvelope_Msg interface {
 	isMasterToWorkerEnvelope_Msg()
 }
@@ -2490,6 +2510,20 @@ type MasterToWorkerEnvelope_TaskResultAck struct {
 	TaskResultAck *TaskResultAck `protobuf:"bytes,35,opt,name=task_result_ack,json=taskResultAck,proto3,oneof"`
 }
 
+type MasterToWorkerEnvelope_FutureAssetPlan struct {
+	// Versioned full snapshot of the worker-scoped future asset plan.
+	// The worker reconciles this snapshot; it is not a second download
+	// protocol. Physical transfers remain owned by the canonical cache
+	// resolver / AssetDownloadManager.
+	FutureAssetPlan *FutureAssetPlan `protobuf:"bytes,36,opt,name=future_asset_plan,json=futureAssetPlan,proto3,oneof"`
+}
+
+type MasterToWorkerEnvelope_CancelPrefetch struct {
+	// Low-latency cancellation hint. The next FutureAssetPlan remains the
+	// reconciliation source of truth when this message is lost.
+	CancelPrefetch *CancelPrefetch `protobuf:"bytes,37,opt,name=cancel_prefetch,json=cancelPrefetch,proto3,oneof"`
+}
+
 func (*MasterToWorkerEnvelope_HelloAck) isMasterToWorkerEnvelope_Msg() {}
 
 func (*MasterToWorkerEnvelope_TaskOffer) isMasterToWorkerEnvelope_Msg() {}
@@ -2513,6 +2547,10 @@ func (*MasterToWorkerEnvelope_ArtifactUploadPlan) isMasterToWorkerEnvelope_Msg()
 func (*MasterToWorkerEnvelope_TaskCommitAck) isMasterToWorkerEnvelope_Msg() {}
 
 func (*MasterToWorkerEnvelope_TaskResultAck) isMasterToWorkerEnvelope_Msg() {}
+
+func (*MasterToWorkerEnvelope_FutureAssetPlan) isMasterToWorkerEnvelope_Msg() {}
+
+func (*MasterToWorkerEnvelope_CancelPrefetch) isMasterToWorkerEnvelope_Msg() {}
 
 type HelloAck struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -3246,6 +3284,406 @@ func (*Ping) Descriptor() ([]byte, []int) {
 	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{24}
 }
 
+// FutureAssetPlan is a complete, versioned worker-scoped snapshot. The
+// planner keeps prefetch eligibility (distance <= 3) separate from cache
+// retention protection (lookahead <= 10). No TaskState is changed by this
+// message.
+type FutureAssetPlan struct {
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	Version       uint64                  `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
+	PlanId        string                  `protobuf:"bytes,2,opt,name=plan_id,json=planId,proto3" json:"plan_id,omitempty"`
+	WorkerId      string                  `protobuf:"bytes,3,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	GeneratedAt   *timestamppb.Timestamp  `protobuf:"bytes,4,opt,name=generated_at,json=generatedAt,proto3" json:"generated_at,omitempty"`
+	ExpiresAt     *timestamppb.Timestamp  `protobuf:"bytes,5,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	CurrentJobId  string                  `protobuf:"bytes,6,opt,name=current_job_id,json=currentJobId,proto3" json:"current_job_id,omitempty"`
+	PrefetchJobs  []*PrefetchJob          `protobuf:"bytes,7,rep,name=prefetch_jobs,json=prefetchJobs,proto3" json:"prefetch_jobs,omitempty"`
+	ProtectAssets []*ProtectedFutureAsset `protobuf:"bytes,8,rep,name=protect_assets,json=protectAssets,proto3" json:"protect_assets,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FutureAssetPlan) Reset() {
+	*x = FutureAssetPlan{}
+	mi := &file_velox_control_worker_control_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FutureAssetPlan) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FutureAssetPlan) ProtoMessage() {}
+
+func (x *FutureAssetPlan) ProtoReflect() protoreflect.Message {
+	mi := &file_velox_control_worker_control_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FutureAssetPlan.ProtoReflect.Descriptor instead.
+func (*FutureAssetPlan) Descriptor() ([]byte, []int) {
+	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *FutureAssetPlan) GetVersion() uint64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *FutureAssetPlan) GetPlanId() string {
+	if x != nil {
+		return x.PlanId
+	}
+	return ""
+}
+
+func (x *FutureAssetPlan) GetWorkerId() string {
+	if x != nil {
+		return x.WorkerId
+	}
+	return ""
+}
+
+func (x *FutureAssetPlan) GetGeneratedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.GeneratedAt
+	}
+	return nil
+}
+
+func (x *FutureAssetPlan) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *FutureAssetPlan) GetCurrentJobId() string {
+	if x != nil {
+		return x.CurrentJobId
+	}
+	return ""
+}
+
+func (x *FutureAssetPlan) GetPrefetchJobs() []*PrefetchJob {
+	if x != nil {
+		return x.PrefetchJobs
+	}
+	return nil
+}
+
+func (x *FutureAssetPlan) GetProtectAssets() []*ProtectedFutureAsset {
+	if x != nil {
+		return x.ProtectAssets
+	}
+	return nil
+}
+
+type PrefetchJob struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	TaskId        string                 `protobuf:"bytes,2,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	ReservationId string                 `protobuf:"bytes,3,opt,name=reservation_id,json=reservationId,proto3" json:"reservation_id,omitempty"`
+	TaskRevision  int32                  `protobuf:"varint,4,opt,name=task_revision,json=taskRevision,proto3" json:"task_revision,omitempty"`
+	Distance      int32                  `protobuf:"varint,5,opt,name=distance,proto3" json:"distance,omitempty"`
+	Assets        []*PrefetchAsset       `protobuf:"bytes,6,rep,name=assets,proto3" json:"assets,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PrefetchJob) Reset() {
+	*x = PrefetchJob{}
+	mi := &file_velox_control_worker_control_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrefetchJob) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrefetchJob) ProtoMessage() {}
+
+func (x *PrefetchJob) ProtoReflect() protoreflect.Message {
+	mi := &file_velox_control_worker_control_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrefetchJob.ProtoReflect.Descriptor instead.
+func (*PrefetchJob) Descriptor() ([]byte, []int) {
+	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *PrefetchJob) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *PrefetchJob) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *PrefetchJob) GetReservationId() string {
+	if x != nil {
+		return x.ReservationId
+	}
+	return ""
+}
+
+func (x *PrefetchJob) GetTaskRevision() int32 {
+	if x != nil {
+		return x.TaskRevision
+	}
+	return 0
+}
+
+func (x *PrefetchJob) GetDistance() int32 {
+	if x != nil {
+		return x.Distance
+	}
+	return 0
+}
+
+func (x *PrefetchJob) GetAssets() []*PrefetchAsset {
+	if x != nil {
+		return x.Assets
+	}
+	return nil
+}
+
+type PrefetchAsset struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AssetKey      string                 `protobuf:"bytes,1,opt,name=asset_key,json=assetKey,proto3" json:"asset_key,omitempty"`
+	AssetId       string                 `protobuf:"bytes,2,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
+	Sha256        string                 `protobuf:"bytes,3,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	SizeBytes     int64                  `protobuf:"varint,4,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	MimeType      string                 `protobuf:"bytes,5,opt,name=mime_type,json=mimeType,proto3" json:"mime_type,omitempty"`
+	Role          string                 `protobuf:"bytes,6,opt,name=role,proto3" json:"role,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PrefetchAsset) Reset() {
+	*x = PrefetchAsset{}
+	mi := &file_velox_control_worker_control_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrefetchAsset) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrefetchAsset) ProtoMessage() {}
+
+func (x *PrefetchAsset) ProtoReflect() protoreflect.Message {
+	mi := &file_velox_control_worker_control_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrefetchAsset.ProtoReflect.Descriptor instead.
+func (*PrefetchAsset) Descriptor() ([]byte, []int) {
+	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *PrefetchAsset) GetAssetKey() string {
+	if x != nil {
+		return x.AssetKey
+	}
+	return ""
+}
+
+func (x *PrefetchAsset) GetAssetId() string {
+	if x != nil {
+		return x.AssetId
+	}
+	return ""
+}
+
+func (x *PrefetchAsset) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+func (x *PrefetchAsset) GetSizeBytes() int64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
+func (x *PrefetchAsset) GetMimeType() string {
+	if x != nil {
+		return x.MimeType
+	}
+	return ""
+}
+
+func (x *PrefetchAsset) GetRole() string {
+	if x != nil {
+		return x.Role
+	}
+	return ""
+}
+
+type ProtectedFutureAsset struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	AssetKey        string                 `protobuf:"bytes,1,opt,name=asset_key,json=assetKey,proto3" json:"asset_key,omitempty"`
+	FutureRefCount  int32                  `protobuf:"varint,2,opt,name=future_ref_count,json=futureRefCount,proto3" json:"future_ref_count,omitempty"`
+	NextUseDistance int32                  `protobuf:"varint,3,opt,name=next_use_distance,json=nextUseDistance,proto3" json:"next_use_distance,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ProtectedFutureAsset) Reset() {
+	*x = ProtectedFutureAsset{}
+	mi := &file_velox_control_worker_control_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProtectedFutureAsset) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProtectedFutureAsset) ProtoMessage() {}
+
+func (x *ProtectedFutureAsset) ProtoReflect() protoreflect.Message {
+	mi := &file_velox_control_worker_control_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProtectedFutureAsset.ProtoReflect.Descriptor instead.
+func (*ProtectedFutureAsset) Descriptor() ([]byte, []int) {
+	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *ProtectedFutureAsset) GetAssetKey() string {
+	if x != nil {
+		return x.AssetKey
+	}
+	return ""
+}
+
+func (x *ProtectedFutureAsset) GetFutureRefCount() int32 {
+	if x != nil {
+		return x.FutureRefCount
+	}
+	return 0
+}
+
+func (x *ProtectedFutureAsset) GetNextUseDistance() int32 {
+	if x != nil {
+		return x.NextUseDistance
+	}
+	return 0
+}
+
+type CancelPrefetch struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	JobId         string                 `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	ReservationId string                 `protobuf:"bytes,2,opt,name=reservation_id,json=reservationId,proto3" json:"reservation_id,omitempty"`
+	PlanVersion   uint64                 `protobuf:"varint,3,opt,name=plan_version,json=planVersion,proto3" json:"plan_version,omitempty"`
+	Reason        string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CancelPrefetch) Reset() {
+	*x = CancelPrefetch{}
+	mi := &file_velox_control_worker_control_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelPrefetch) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelPrefetch) ProtoMessage() {}
+
+func (x *CancelPrefetch) ProtoReflect() protoreflect.Message {
+	mi := &file_velox_control_worker_control_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelPrefetch.ProtoReflect.Descriptor instead.
+func (*CancelPrefetch) Descriptor() ([]byte, []int) {
+	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *CancelPrefetch) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *CancelPrefetch) GetReservationId() string {
+	if x != nil {
+		return x.ReservationId
+	}
+	return ""
+}
+
+func (x *CancelPrefetch) GetPlanVersion() uint64 {
+	if x != nil {
+		return x.PlanVersion
+	}
+	return 0
+}
+
+func (x *CancelPrefetch) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 // OutputManifest is the per-file declaration carried inside
 // TaskOutputDeclared. The shape is the canonical one the master
 // stores on attempt_declarations: a logical output identity
@@ -3271,7 +3709,7 @@ type OutputManifest struct {
 
 func (x *OutputManifest) Reset() {
 	*x = OutputManifest{}
-	mi := &file_velox_control_worker_control_proto_msgTypes[25]
+	mi := &file_velox_control_worker_control_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3283,7 +3721,7 @@ func (x *OutputManifest) String() string {
 func (*OutputManifest) ProtoMessage() {}
 
 func (x *OutputManifest) ProtoReflect() protoreflect.Message {
-	mi := &file_velox_control_worker_control_proto_msgTypes[25]
+	mi := &file_velox_control_worker_control_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3296,7 +3734,7 @@ func (x *OutputManifest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OutputManifest.ProtoReflect.Descriptor instead.
 func (*OutputManifest) Descriptor() ([]byte, []int) {
-	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{25}
+	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *OutputManifest) GetOutputKind() string {
@@ -3361,7 +3799,7 @@ type UploadTarget struct {
 
 func (x *UploadTarget) Reset() {
 	*x = UploadTarget{}
-	mi := &file_velox_control_worker_control_proto_msgTypes[26]
+	mi := &file_velox_control_worker_control_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3373,7 +3811,7 @@ func (x *UploadTarget) String() string {
 func (*UploadTarget) ProtoMessage() {}
 
 func (x *UploadTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_velox_control_worker_control_proto_msgTypes[26]
+	mi := &file_velox_control_worker_control_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3386,7 +3824,7 @@ func (x *UploadTarget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadTarget.ProtoReflect.Descriptor instead.
 func (*UploadTarget) Descriptor() ([]byte, []int) {
-	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{26}
+	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *UploadTarget) GetDeclarationId() string {
@@ -3458,7 +3896,7 @@ type TaskOutputDeclared struct {
 
 func (x *TaskOutputDeclared) Reset() {
 	*x = TaskOutputDeclared{}
-	mi := &file_velox_control_worker_control_proto_msgTypes[27]
+	mi := &file_velox_control_worker_control_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3470,7 +3908,7 @@ func (x *TaskOutputDeclared) String() string {
 func (*TaskOutputDeclared) ProtoMessage() {}
 
 func (x *TaskOutputDeclared) ProtoReflect() protoreflect.Message {
-	mi := &file_velox_control_worker_control_proto_msgTypes[27]
+	mi := &file_velox_control_worker_control_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3483,7 +3921,7 @@ func (x *TaskOutputDeclared) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskOutputDeclared.ProtoReflect.Descriptor instead.
 func (*TaskOutputDeclared) Descriptor() ([]byte, []int) {
-	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{27}
+	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *TaskOutputDeclared) GetTaskId() string {
@@ -3556,7 +3994,7 @@ type ArtifactUploadPlan struct {
 
 func (x *ArtifactUploadPlan) Reset() {
 	*x = ArtifactUploadPlan{}
-	mi := &file_velox_control_worker_control_proto_msgTypes[28]
+	mi := &file_velox_control_worker_control_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3568,7 +4006,7 @@ func (x *ArtifactUploadPlan) String() string {
 func (*ArtifactUploadPlan) ProtoMessage() {}
 
 func (x *ArtifactUploadPlan) ProtoReflect() protoreflect.Message {
-	mi := &file_velox_control_worker_control_proto_msgTypes[28]
+	mi := &file_velox_control_worker_control_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3581,7 +4019,7 @@ func (x *ArtifactUploadPlan) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArtifactUploadPlan.ProtoReflect.Descriptor instead.
 func (*ArtifactUploadPlan) Descriptor() ([]byte, []int) {
-	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{28}
+	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *ArtifactUploadPlan) GetTaskId() string {
@@ -3647,7 +4085,7 @@ type ArtifactUploadCompleted struct {
 
 func (x *ArtifactUploadCompleted) Reset() {
 	*x = ArtifactUploadCompleted{}
-	mi := &file_velox_control_worker_control_proto_msgTypes[29]
+	mi := &file_velox_control_worker_control_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3659,7 +4097,7 @@ func (x *ArtifactUploadCompleted) String() string {
 func (*ArtifactUploadCompleted) ProtoMessage() {}
 
 func (x *ArtifactUploadCompleted) ProtoReflect() protoreflect.Message {
-	mi := &file_velox_control_worker_control_proto_msgTypes[29]
+	mi := &file_velox_control_worker_control_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3672,7 +4110,7 @@ func (x *ArtifactUploadCompleted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArtifactUploadCompleted.ProtoReflect.Descriptor instead.
 func (*ArtifactUploadCompleted) Descriptor() ([]byte, []int) {
-	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{29}
+	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ArtifactUploadCompleted) GetTaskId() string {
@@ -3748,7 +4186,7 @@ type TaskCommitAck struct {
 
 func (x *TaskCommitAck) Reset() {
 	*x = TaskCommitAck{}
-	mi := &file_velox_control_worker_control_proto_msgTypes[30]
+	mi := &file_velox_control_worker_control_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3760,7 +4198,7 @@ func (x *TaskCommitAck) String() string {
 func (*TaskCommitAck) ProtoMessage() {}
 
 func (x *TaskCommitAck) ProtoReflect() protoreflect.Message {
-	mi := &file_velox_control_worker_control_proto_msgTypes[30]
+	mi := &file_velox_control_worker_control_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3773,7 +4211,7 @@ func (x *TaskCommitAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskCommitAck.ProtoReflect.Descriptor instead.
 func (*TaskCommitAck) Descriptor() ([]byte, []int) {
-	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{30}
+	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *TaskCommitAck) GetTaskId() string {
@@ -3845,7 +4283,7 @@ type TaskResultAck struct {
 
 func (x *TaskResultAck) Reset() {
 	*x = TaskResultAck{}
-	mi := &file_velox_control_worker_control_proto_msgTypes[31]
+	mi := &file_velox_control_worker_control_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3857,7 +4295,7 @@ func (x *TaskResultAck) String() string {
 func (*TaskResultAck) ProtoMessage() {}
 
 func (x *TaskResultAck) ProtoReflect() protoreflect.Message {
-	mi := &file_velox_control_worker_control_proto_msgTypes[31]
+	mi := &file_velox_control_worker_control_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3870,7 +4308,7 @@ func (x *TaskResultAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskResultAck.ProtoReflect.Descriptor instead.
 func (*TaskResultAck) Descriptor() ([]byte, []int) {
-	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{31}
+	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *TaskResultAck) GetTaskId() string {
@@ -4009,7 +4447,7 @@ type TaskExecutionMetrics struct {
 
 func (x *TaskExecutionMetrics) Reset() {
 	*x = TaskExecutionMetrics{}
-	mi := &file_velox_control_worker_control_proto_msgTypes[32]
+	mi := &file_velox_control_worker_control_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4021,7 +4459,7 @@ func (x *TaskExecutionMetrics) String() string {
 func (*TaskExecutionMetrics) ProtoMessage() {}
 
 func (x *TaskExecutionMetrics) ProtoReflect() protoreflect.Message {
-	mi := &file_velox_control_worker_control_proto_msgTypes[32]
+	mi := &file_velox_control_worker_control_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4034,7 +4472,7 @@ func (x *TaskExecutionMetrics) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskExecutionMetrics.ProtoReflect.Descriptor instead.
 func (*TaskExecutionMetrics) Descriptor() ([]byte, []int) {
-	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{32}
+	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *TaskExecutionMetrics) GetInputBytes() int64 {
@@ -4491,7 +4929,7 @@ type WorkerResourceCounters struct {
 
 func (x *WorkerResourceCounters) Reset() {
 	*x = WorkerResourceCounters{}
-	mi := &file_velox_control_worker_control_proto_msgTypes[33]
+	mi := &file_velox_control_worker_control_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4503,7 +4941,7 @@ func (x *WorkerResourceCounters) String() string {
 func (*WorkerResourceCounters) ProtoMessage() {}
 
 func (x *WorkerResourceCounters) ProtoReflect() protoreflect.Message {
-	mi := &file_velox_control_worker_control_proto_msgTypes[33]
+	mi := &file_velox_control_worker_control_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4516,7 +4954,7 @@ func (x *WorkerResourceCounters) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkerResourceCounters.ProtoReflect.Descriptor instead.
 func (*WorkerResourceCounters) Descriptor() ([]byte, []int) {
-	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{33}
+	return file_velox_control_worker_control_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *WorkerResourceCounters) GetCpuUtilizationRatio() float64 {
@@ -4923,7 +5361,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\ferror_detail\x18\x18 \x01(\tR\verrorDetail\x12;\n" +
 	"\bjob_refs\x18\x19 \x03(\v2 .velox.control.AssetJobReferenceR\ajobRefs\x12/\n" +
 	"\x13checkpoint_sequence\x18\x1a \x01(\x03R\x12checkpointSequence\x12/\n" +
-	"\x13transfer_generation\x18\x1b \x01(\x03R\x12transferGeneration\"\xab\b\n" +
+	"\x13transfer_generation\x18\x1b \x01(\x03R\x12transferGeneration\"\xc3\t\n" +
 	"\x16MasterToWorkerEnvelope\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1b\n" +
@@ -4946,7 +5384,9 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x04ping\x18\x1d \x01(\v2\x13.velox.control.PingH\x00R\x04ping\x12U\n" +
 	"\x14artifact_upload_plan\x18  \x01(\v2!.velox.control.ArtifactUploadPlanH\x00R\x12artifactUploadPlan\x12F\n" +
 	"\x0ftask_commit_ack\x18! \x01(\v2\x1c.velox.control.TaskCommitAckH\x00R\rtaskCommitAck\x12F\n" +
-	"\x0ftask_result_ack\x18# \x01(\v2\x1c.velox.control.TaskResultAckH\x00R\rtaskResultAckB\x05\n" +
+	"\x0ftask_result_ack\x18# \x01(\v2\x1c.velox.control.TaskResultAckH\x00R\rtaskResultAck\x12L\n" +
+	"\x11future_asset_plan\x18$ \x01(\v2\x1e.velox.control.FutureAssetPlanH\x00R\x0ffutureAssetPlan\x12H\n" +
+	"\x0fcancel_prefetch\x18% \x01(\v2\x1d.velox.control.CancelPrefetchH\x00R\x0ecancelPrefetchB\x05\n" +
 	"\x03msgJ\x04\b\x15\x10\x16J\x04\b\x16\x10\x17J\x04\b\x17\x10\x18J\x04\b\"\x10#\"\n" +
 	"\n" +
 	"\bHelloAck\"\x9f\x04\n" +
@@ -5008,7 +5448,41 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\fLeaseRevoked\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x06\n" +
-	"\x04Ping\"\xd2\x01\n" +
+	"\x04Ping\"\x8e\x03\n" +
+	"\x0fFutureAssetPlan\x12\x18\n" +
+	"\aversion\x18\x01 \x01(\x04R\aversion\x12\x17\n" +
+	"\aplan_id\x18\x02 \x01(\tR\x06planId\x12\x1b\n" +
+	"\tworker_id\x18\x03 \x01(\tR\bworkerId\x12=\n" +
+	"\fgenerated_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\vgeneratedAt\x129\n" +
+	"\n" +
+	"expires_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12$\n" +
+	"\x0ecurrent_job_id\x18\x06 \x01(\tR\fcurrentJobId\x12?\n" +
+	"\rprefetch_jobs\x18\a \x03(\v2\x1a.velox.control.PrefetchJobR\fprefetchJobs\x12J\n" +
+	"\x0eprotect_assets\x18\b \x03(\v2#.velox.control.ProtectedFutureAssetR\rprotectAssets\"\xdb\x01\n" +
+	"\vPrefetchJob\x12\x15\n" +
+	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x17\n" +
+	"\atask_id\x18\x02 \x01(\tR\x06taskId\x12%\n" +
+	"\x0ereservation_id\x18\x03 \x01(\tR\rreservationId\x12#\n" +
+	"\rtask_revision\x18\x04 \x01(\x05R\ftaskRevision\x12\x1a\n" +
+	"\bdistance\x18\x05 \x01(\x05R\bdistance\x124\n" +
+	"\x06assets\x18\x06 \x03(\v2\x1c.velox.control.PrefetchAssetR\x06assets\"\xaf\x01\n" +
+	"\rPrefetchAsset\x12\x1b\n" +
+	"\tasset_key\x18\x01 \x01(\tR\bassetKey\x12\x19\n" +
+	"\basset_id\x18\x02 \x01(\tR\aassetId\x12\x16\n" +
+	"\x06sha256\x18\x03 \x01(\tR\x06sha256\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x04 \x01(\x03R\tsizeBytes\x12\x1b\n" +
+	"\tmime_type\x18\x05 \x01(\tR\bmimeType\x12\x12\n" +
+	"\x04role\x18\x06 \x01(\tR\x04role\"\x89\x01\n" +
+	"\x14ProtectedFutureAsset\x12\x1b\n" +
+	"\tasset_key\x18\x01 \x01(\tR\bassetKey\x12(\n" +
+	"\x10future_ref_count\x18\x02 \x01(\x05R\x0efutureRefCount\x12*\n" +
+	"\x11next_use_distance\x18\x03 \x01(\x05R\x0fnextUseDistance\"\x89\x01\n" +
+	"\x0eCancelPrefetch\x12\x15\n" +
+	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12%\n" +
+	"\x0ereservation_id\x18\x02 \x01(\tR\rreservationId\x12!\n" +
+	"\fplan_version\x18\x03 \x01(\x04R\vplanVersion\x12\x16\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\"\xd2\x01\n" +
 	"\x0eOutputManifest\x12\x1f\n" +
 	"\voutput_kind\x18\x01 \x01(\tR\n" +
 	"outputKind\x12!\n" +
@@ -5173,7 +5647,7 @@ func file_velox_control_worker_control_proto_rawDescGZIP() []byte {
 	return file_velox_control_worker_control_proto_rawDescData
 }
 
-var file_velox_control_worker_control_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
+var file_velox_control_worker_control_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
 var file_velox_control_worker_control_proto_goTypes = []any{
 	(*WorkerToMasterEnvelope)(nil),  // 0: velox.control.WorkerToMasterEnvelope
 	(*Hello)(nil),                   // 1: velox.control.Hello
@@ -5200,20 +5674,25 @@ var file_velox_control_worker_control_proto_goTypes = []any{
 	(*ConfigurationUpdate)(nil),     // 22: velox.control.ConfigurationUpdate
 	(*LeaseRevoked)(nil),            // 23: velox.control.LeaseRevoked
 	(*Ping)(nil),                    // 24: velox.control.Ping
-	(*OutputManifest)(nil),          // 25: velox.control.OutputManifest
-	(*UploadTarget)(nil),            // 26: velox.control.UploadTarget
-	(*TaskOutputDeclared)(nil),      // 27: velox.control.TaskOutputDeclared
-	(*ArtifactUploadPlan)(nil),      // 28: velox.control.ArtifactUploadPlan
-	(*ArtifactUploadCompleted)(nil), // 29: velox.control.ArtifactUploadCompleted
-	(*TaskCommitAck)(nil),           // 30: velox.control.TaskCommitAck
-	(*TaskResultAck)(nil),           // 31: velox.control.TaskResultAck
-	(*TaskExecutionMetrics)(nil),    // 32: velox.control.TaskExecutionMetrics
-	(*WorkerResourceCounters)(nil),  // 33: velox.control.WorkerResourceCounters
-	(*timestamppb.Timestamp)(nil),   // 34: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),         // 35: google.protobuf.Struct
+	(*FutureAssetPlan)(nil),         // 25: velox.control.FutureAssetPlan
+	(*PrefetchJob)(nil),             // 26: velox.control.PrefetchJob
+	(*PrefetchAsset)(nil),           // 27: velox.control.PrefetchAsset
+	(*ProtectedFutureAsset)(nil),    // 28: velox.control.ProtectedFutureAsset
+	(*CancelPrefetch)(nil),          // 29: velox.control.CancelPrefetch
+	(*OutputManifest)(nil),          // 30: velox.control.OutputManifest
+	(*UploadTarget)(nil),            // 31: velox.control.UploadTarget
+	(*TaskOutputDeclared)(nil),      // 32: velox.control.TaskOutputDeclared
+	(*ArtifactUploadPlan)(nil),      // 33: velox.control.ArtifactUploadPlan
+	(*ArtifactUploadCompleted)(nil), // 34: velox.control.ArtifactUploadCompleted
+	(*TaskCommitAck)(nil),           // 35: velox.control.TaskCommitAck
+	(*TaskResultAck)(nil),           // 36: velox.control.TaskResultAck
+	(*TaskExecutionMetrics)(nil),    // 37: velox.control.TaskExecutionMetrics
+	(*WorkerResourceCounters)(nil),  // 38: velox.control.WorkerResourceCounters
+	(*timestamppb.Timestamp)(nil),   // 39: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),         // 40: google.protobuf.Struct
 }
 var file_velox_control_worker_control_proto_depIdxs = []int32{
-	34, // 0: velox.control.WorkerToMasterEnvelope.sent_at:type_name -> google.protobuf.Timestamp
+	39, // 0: velox.control.WorkerToMasterEnvelope.sent_at:type_name -> google.protobuf.Timestamp
 	1,  // 1: velox.control.WorkerToMasterEnvelope.hello:type_name -> velox.control.Hello
 	2,  // 2: velox.control.WorkerToMasterEnvelope.heartbeat:type_name -> velox.control.Heartbeat
 	16, // 3: velox.control.WorkerToMasterEnvelope.task_accepted:type_name -> velox.control.TaskAccepted
@@ -5223,25 +5702,25 @@ var file_velox_control_worker_control_proto_depIdxs = []int32{
 	3,  // 7: velox.control.WorkerToMasterEnvelope.command_ack:type_name -> velox.control.CommandAck
 	9,  // 8: velox.control.WorkerToMasterEnvelope.artifact_uploaded:type_name -> velox.control.ArtifactUploaded
 	10, // 9: velox.control.WorkerToMasterEnvelope.goodbye:type_name -> velox.control.Goodbye
-	27, // 10: velox.control.WorkerToMasterEnvelope.task_output_declared:type_name -> velox.control.TaskOutputDeclared
-	29, // 11: velox.control.WorkerToMasterEnvelope.artifact_upload_completed:type_name -> velox.control.ArtifactUploadCompleted
+	32, // 10: velox.control.WorkerToMasterEnvelope.task_output_declared:type_name -> velox.control.TaskOutputDeclared
+	34, // 11: velox.control.WorkerToMasterEnvelope.artifact_upload_completed:type_name -> velox.control.ArtifactUploadCompleted
 	12, // 12: velox.control.WorkerToMasterEnvelope.asset_download_progress:type_name -> velox.control.AssetDownloadProgress
-	35, // 13: velox.control.Hello.capabilities:type_name -> google.protobuf.Struct
-	35, // 14: velox.control.Heartbeat.extra:type_name -> google.protobuf.Struct
-	33, // 15: velox.control.Heartbeat.resources:type_name -> velox.control.WorkerResourceCounters
-	32, // 16: velox.control.TaskResult.execution_metrics:type_name -> velox.control.TaskExecutionMetrics
+	40, // 13: velox.control.Hello.capabilities:type_name -> google.protobuf.Struct
+	40, // 14: velox.control.Heartbeat.extra:type_name -> google.protobuf.Struct
+	38, // 15: velox.control.Heartbeat.resources:type_name -> velox.control.WorkerResourceCounters
+	37, // 16: velox.control.TaskResult.execution_metrics:type_name -> velox.control.TaskExecutionMetrics
 	7,  // 17: velox.control.TaskResult.phase_markers:type_name -> velox.control.PhaseMarker
-	35, // 18: velox.control.TaskResult.output_artifacts:type_name -> google.protobuf.Struct
+	40, // 18: velox.control.TaskResult.output_artifacts:type_name -> google.protobuf.Struct
 	4,  // 19: velox.control.TaskResult.segment_timings:type_name -> velox.control.SegmentTiming
 	8,  // 20: velox.control.TaskResult.partial_phase_metrics:type_name -> velox.control.PhaseTimingDetailed
 	8,  // 21: velox.control.TaskResult.phase_timings:type_name -> velox.control.PhaseTimingDetailed
-	34, // 22: velox.control.TaskLeaseRenewal.requested_expiry:type_name -> google.protobuf.Timestamp
-	34, // 23: velox.control.PhaseMarker.started_at:type_name -> google.protobuf.Timestamp
-	34, // 24: velox.control.PhaseMarker.completed_at:type_name -> google.protobuf.Timestamp
-	34, // 25: velox.control.PhaseTimingDetailed.started_at:type_name -> google.protobuf.Timestamp
-	34, // 26: velox.control.PhaseTimingDetailed.completed_at:type_name -> google.protobuf.Timestamp
+	39, // 22: velox.control.TaskLeaseRenewal.requested_expiry:type_name -> google.protobuf.Timestamp
+	39, // 23: velox.control.PhaseMarker.started_at:type_name -> google.protobuf.Timestamp
+	39, // 24: velox.control.PhaseMarker.completed_at:type_name -> google.protobuf.Timestamp
+	39, // 25: velox.control.PhaseTimingDetailed.started_at:type_name -> google.protobuf.Timestamp
+	39, // 26: velox.control.PhaseTimingDetailed.completed_at:type_name -> google.protobuf.Timestamp
 	11, // 27: velox.control.AssetDownloadProgress.job_refs:type_name -> velox.control.AssetJobReference
-	34, // 28: velox.control.MasterToWorkerEnvelope.sent_at:type_name -> google.protobuf.Timestamp
+	39, // 28: velox.control.MasterToWorkerEnvelope.sent_at:type_name -> google.protobuf.Timestamp
 	14, // 29: velox.control.MasterToWorkerEnvelope.hello_ack:type_name -> velox.control.HelloAck
 	15, // 30: velox.control.MasterToWorkerEnvelope.task_offer:type_name -> velox.control.TaskOffer
 	18, // 31: velox.control.MasterToWorkerEnvelope.task_lease_granted:type_name -> velox.control.TaskLeaseGranted
@@ -5251,25 +5730,32 @@ var file_velox_control_worker_control_proto_depIdxs = []int32{
 	22, // 35: velox.control.MasterToWorkerEnvelope.configuration_update:type_name -> velox.control.ConfigurationUpdate
 	23, // 36: velox.control.MasterToWorkerEnvelope.lease_revoked:type_name -> velox.control.LeaseRevoked
 	24, // 37: velox.control.MasterToWorkerEnvelope.ping:type_name -> velox.control.Ping
-	28, // 38: velox.control.MasterToWorkerEnvelope.artifact_upload_plan:type_name -> velox.control.ArtifactUploadPlan
-	30, // 39: velox.control.MasterToWorkerEnvelope.task_commit_ack:type_name -> velox.control.TaskCommitAck
-	31, // 40: velox.control.MasterToWorkerEnvelope.task_result_ack:type_name -> velox.control.TaskResultAck
-	35, // 41: velox.control.TaskOffer.task_spec:type_name -> google.protobuf.Struct
-	34, // 42: velox.control.TaskOffer.lease_deadline:type_name -> google.protobuf.Timestamp
-	35, // 43: velox.control.TaskOffer.requirements:type_name -> google.protobuf.Struct
-	35, // 44: velox.control.TaskOffer.output_contract:type_name -> google.protobuf.Struct
-	34, // 45: velox.control.Command.timestamp:type_name -> google.protobuf.Timestamp
-	35, // 46: velox.control.Command.params:type_name -> google.protobuf.Struct
-	35, // 47: velox.control.ConfigurationUpdate.configuration:type_name -> google.protobuf.Struct
-	25, // 48: velox.control.TaskOutputDeclared.manifests:type_name -> velox.control.OutputManifest
-	26, // 49: velox.control.ArtifactUploadPlan.targets:type_name -> velox.control.UploadTarget
-	34, // 50: velox.control.TaskCommitAck.committed_at:type_name -> google.protobuf.Timestamp
-	34, // 51: velox.control.WorkerResourceCounters.sampled_at:type_name -> google.protobuf.Timestamp
-	52, // [52:52] is the sub-list for method output_type
-	52, // [52:52] is the sub-list for method input_type
-	52, // [52:52] is the sub-list for extension type_name
-	52, // [52:52] is the sub-list for extension extendee
-	0,  // [0:52] is the sub-list for field type_name
+	33, // 38: velox.control.MasterToWorkerEnvelope.artifact_upload_plan:type_name -> velox.control.ArtifactUploadPlan
+	35, // 39: velox.control.MasterToWorkerEnvelope.task_commit_ack:type_name -> velox.control.TaskCommitAck
+	36, // 40: velox.control.MasterToWorkerEnvelope.task_result_ack:type_name -> velox.control.TaskResultAck
+	25, // 41: velox.control.MasterToWorkerEnvelope.future_asset_plan:type_name -> velox.control.FutureAssetPlan
+	29, // 42: velox.control.MasterToWorkerEnvelope.cancel_prefetch:type_name -> velox.control.CancelPrefetch
+	40, // 43: velox.control.TaskOffer.task_spec:type_name -> google.protobuf.Struct
+	39, // 44: velox.control.TaskOffer.lease_deadline:type_name -> google.protobuf.Timestamp
+	40, // 45: velox.control.TaskOffer.requirements:type_name -> google.protobuf.Struct
+	40, // 46: velox.control.TaskOffer.output_contract:type_name -> google.protobuf.Struct
+	39, // 47: velox.control.Command.timestamp:type_name -> google.protobuf.Timestamp
+	40, // 48: velox.control.Command.params:type_name -> google.protobuf.Struct
+	40, // 49: velox.control.ConfigurationUpdate.configuration:type_name -> google.protobuf.Struct
+	39, // 50: velox.control.FutureAssetPlan.generated_at:type_name -> google.protobuf.Timestamp
+	39, // 51: velox.control.FutureAssetPlan.expires_at:type_name -> google.protobuf.Timestamp
+	26, // 52: velox.control.FutureAssetPlan.prefetch_jobs:type_name -> velox.control.PrefetchJob
+	28, // 53: velox.control.FutureAssetPlan.protect_assets:type_name -> velox.control.ProtectedFutureAsset
+	27, // 54: velox.control.PrefetchJob.assets:type_name -> velox.control.PrefetchAsset
+	30, // 55: velox.control.TaskOutputDeclared.manifests:type_name -> velox.control.OutputManifest
+	31, // 56: velox.control.ArtifactUploadPlan.targets:type_name -> velox.control.UploadTarget
+	39, // 57: velox.control.TaskCommitAck.committed_at:type_name -> google.protobuf.Timestamp
+	39, // 58: velox.control.WorkerResourceCounters.sampled_at:type_name -> google.protobuf.Timestamp
+	59, // [59:59] is the sub-list for method output_type
+	59, // [59:59] is the sub-list for method input_type
+	59, // [59:59] is the sub-list for extension type_name
+	59, // [59:59] is the sub-list for extension extendee
+	0,  // [0:59] is the sub-list for field type_name
 }
 
 func init() { file_velox_control_worker_control_proto_init() }
@@ -5304,6 +5790,8 @@ func file_velox_control_worker_control_proto_init() {
 		(*MasterToWorkerEnvelope_ArtifactUploadPlan)(nil),
 		(*MasterToWorkerEnvelope_TaskCommitAck)(nil),
 		(*MasterToWorkerEnvelope_TaskResultAck)(nil),
+		(*MasterToWorkerEnvelope_FutureAssetPlan)(nil),
+		(*MasterToWorkerEnvelope_CancelPrefetch)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -5311,7 +5799,7 @@ func file_velox_control_worker_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_velox_control_worker_control_proto_rawDesc), len(file_velox_control_worker_control_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   34,
+			NumMessages:   39,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

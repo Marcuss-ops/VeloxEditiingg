@@ -420,6 +420,15 @@ message MasterToWorkerEnvelope {
     // Acknowledgement sent by the master after processing a TaskResult.
     // Carries the attempt_id and an optional error (e.g. "report_conflict").
     TaskResultAck task_result_ack = 35;
+
+    // Versioned full snapshot of the worker-scoped future asset plan.
+    // The worker reconciles this snapshot; it is not a second download
+    // protocol. Physical transfers remain owned by the canonical cache
+    // resolver / AssetDownloadManager.
+    FutureAssetPlan future_asset_plan = 36;
+    // Low-latency cancellation hint. The next FutureAssetPlan remains the
+    // reconciliation source of truth when this message is lost.
+    CancelPrefetch cancel_prefetch = 37;
   }
 
   reserved 21, 22, 23, 34;
@@ -497,6 +506,52 @@ message LeaseRevoked {
 }
 
 message Ping {}
+
+// FutureAssetPlan is a complete, versioned worker-scoped snapshot. The
+// planner keeps prefetch eligibility (distance <= 3) separate from cache
+// retention protection (lookahead <= 10). No TaskState is changed by this
+// message.
+message FutureAssetPlan {
+  uint64 version = 1;
+  string plan_id = 2;
+  string worker_id = 3;
+  google.protobuf.Timestamp generated_at = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  string current_job_id = 6;
+  repeated PrefetchJob prefetch_jobs = 7;
+  repeated ProtectedFutureAsset protect_assets = 8;
+}
+
+message PrefetchJob {
+  string job_id = 1;
+  string task_id = 2;
+  string reservation_id = 3;
+  int32 task_revision = 4;
+  int32 distance = 5;
+  repeated PrefetchAsset assets = 6;
+}
+
+message PrefetchAsset {
+  string asset_key = 1;
+  string asset_id = 2;
+  string sha256 = 3;
+  int64 size_bytes = 4;
+  string mime_type = 5;
+  string role = 6;
+}
+
+message ProtectedFutureAsset {
+  string asset_key = 1;
+  int32 future_ref_count = 2;
+  int32 next_use_distance = 3;
+}
+
+message CancelPrefetch {
+  string job_id = 1;
+  string reservation_id = 2;
+  uint64 plan_version = 3;
+  string reason = 4;
+}
 
 // ---------------------------------------------------------
 // Artifact Commit Protocol (Fase 3.3-3.6) — typed

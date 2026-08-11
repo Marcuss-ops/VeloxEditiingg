@@ -10,9 +10,10 @@ import (
 
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
-	"velox-worker-agent/internal/downloader"
 	"velox-worker-agent/internal/artifactgraph"
+	"velox-worker-agent/internal/downloader"
 	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/prefetch"
 	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/spool"
 	"velox-worker-agent/internal/taskrunner"
@@ -178,6 +179,10 @@ type Worker struct {
 	assetProgressQueue  chan assetProgressEnvelope
 	assetProgressSendMu sync.Mutex
 	assetProgressOnce   sync.Once
+	// futureAssetController reconciles master snapshots only. It deliberately
+	// does not own downloads; future prefetch will call the existing resolver
+	// after reservation/budget gates are wired.
+	prefetchController *prefetch.Controller
 
 	// assetIntegrity remembers the self-verified digest+size of the most
 	// recent successful download of each asset (computed while the file was

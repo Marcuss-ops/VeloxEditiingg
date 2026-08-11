@@ -20,6 +20,7 @@ func TestCapabilities_KnownConstants(t *testing.T) {
 		"artifact.upload.completed.v1",
 		"task.commit.ack.v1",
 		"payload.contract.v2",
+		"prefetch.plan.v1",
 	}
 	if len(AllCapabilities) != len(want) {
 		t.Fatalf("AllCapabilities length: got %d, want %d (orphaned literal?)",
@@ -76,7 +77,8 @@ func TestCapabilities_AllCapabilitiesIsClosedSet(t *testing.T) {
 		CapabilityTaskOutputDeclaredV1:      true,
 		CapabilityArtifactUploadPlanV1:      true,
 		CapabilityArtifactUploadCompletedV1: true, CapabilityTaskCommitAckV1: true,
-		CapabilityCanonicalPayloadV2: true,
+		CapabilityCanonicalPayloadV2:    true,
+		CapabilityFutureAssetPrefetchV1: true,
 	}
 	allAsSet := map[string]bool{}
 	for _, c := range AllCapabilities {

@@ -119,6 +119,7 @@ func (w *Worker) capabilityReport(hostname string) controltransport.CapabilityRe
 		controltransport.CapabilityArtifactUploadCompletedV1,
 		controltransport.CapabilityTaskCommitAckV1,
 		controltransport.CapabilityCanonicalPayloadV2,
+		controltransport.CapabilityFutureAssetPrefetchV1,
 	}
 	if w.config.IsCreatorProfile() {
 		report.Features = append(report.Features,

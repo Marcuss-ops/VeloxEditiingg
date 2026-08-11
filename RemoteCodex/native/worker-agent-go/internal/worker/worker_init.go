@@ -22,6 +22,7 @@ import (
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/prefetch"
 	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/spool"
 	"velox-worker-agent/internal/taskrunner"
@@ -342,7 +343,8 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		activeTasks:  make(map[string]*ActiveTaskExecution),
 		taskIDsByJob: make(map[string][]string),
 		// Remembered self-verified digests for partial-metadata cache hits.
-		assetIntegrity: make(map[string]assetIntegrityRecord),
+		assetIntegrity:     make(map[string]assetIntegrityRecord),
+		prefetchController: prefetch.NewController(cfg.WorkerID),
 		// PR-2: TaskOffer-accepted tasks awaiting TaskLeaseGranted before
 		// executeTask dispatch. Keyed by task_id — one canonical entry per
 		// outstanding offer per session.
@@ -376,9 +378,9 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		// (statvfs + resolveWorkDirDevice degrade to best-effort).
 		// 5s tick + 3-tick emit cadence is the default from
 		// NewResourceSampler.
-		sampler:          sampler,
-		storageResolver:  storageResolver,
-		exitFunc:         os.Exit,
+		sampler:         sampler,
+		storageResolver: storageResolver,
+		exitFunc:        os.Exit,
 	}
 
 	// Load persisted state from previous run (command dedup, job recovery info).

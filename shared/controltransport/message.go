@@ -51,6 +51,8 @@ const (
 	// CapabilityArtifactUploadPlanV1 / CapabilityTaskCommitAckV1.
 	MsgArtifactUploadPlan ControlMessageType = "artifact_upload_plan"
 	MsgTaskCommitAck      ControlMessageType = "task_commit_ack"
+	MsgFutureAssetPlan    ControlMessageType = "future_asset_plan"
+	MsgCancelPrefetch     ControlMessageType = "cancel_prefetch"
 )
 
 // IsWorkerToMaster returns true for messages sent from worker to master.
@@ -69,7 +71,7 @@ func (t ControlMessageType) IsMasterToWorker() bool {
 	switch t {
 	case MsgHelloAck, MsgTaskOffer, MsgTaskLeaseGranted, MsgCommand, MsgCancelJob,
 		MsgDrain, MsgConfigurationUpdate, MsgLeaseRevoked, MsgPing, MsgTaskResultAck,
-		MsgArtifactUploadPlan, MsgTaskCommitAck:
+		MsgArtifactUploadPlan, MsgTaskCommitAck, MsgFutureAssetPlan, MsgCancelPrefetch:
 		return true
 	}
 	return false

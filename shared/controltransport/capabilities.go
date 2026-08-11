@@ -119,6 +119,12 @@ const (
 	// admission capability, not an executor version: executorVersion stays
 	// reserved for exact executor placement matching.
 	CapabilityCanonicalPayloadV2 = "payload.contract.v2"
+
+	// CapabilityFutureAssetPrefetchV1 — the worker accepts versioned
+	// worker-scoped FutureAssetPlan snapshots. The capability does not
+	// imply a second downloader: plans reconcile through the canonical
+	// cache resolver and AssetDownloadManager in a later rollout phase.
+	CapabilityFutureAssetPrefetchV1 = "prefetch.plan.v1"
 )
 
 // AllCapabilities is the canonical closed-set of capabilities the
@@ -134,6 +140,7 @@ var AllCapabilities = []string{
 	CapabilityArtifactUploadCompletedV1,
 	CapabilityTaskCommitAckV1,
 	CapabilityCanonicalPayloadV2,
+	CapabilityFutureAssetPrefetchV1,
 }
 
 // IsKnownCapability reports whether the given string is one of the
