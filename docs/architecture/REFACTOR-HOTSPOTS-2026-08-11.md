@@ -27,7 +27,16 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   esplicitamente il percorso esecutivo finché il batch executor non è migrato.
 - Creator forwarding: il passaggio a `RETRY_WAIT` è protetto da
   `runner_id`, `lease_id` e scadenza del lease.
-- Gate architetturali e gate full-module verdi dopo i fix.
+- Completion/artifact: le transizioni CAS di attempt, task, upload e
+  finalizzazione controllano gli effetti (`RowsAffected`) e i fixture del
+  protocollo rappresentano ora un tentativo scheduler-owned reale.
+- Delivery/smoke/calendar/rollout: gli update terminali o di operation non
+  dichiarano più successo quando la persistenza fallisce o aggiorna zero righe;
+  gli endpoint riportano anche i worker falliti.
+- Render-only: il contatore audio riconosce il contratto esplicito a zero
+  destinazioni; i job normali senza delivery plan continuano a fallire chiusi.
+- Gate architetturali e gate full-module verdi dopo i fix (`833cf79e`,
+  `e4c7154b`).
 
 ## Hotspot da risolvere in ordine
 
@@ -37,11 +46,13 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - [x] Impedire retry forwarding da lease non più proprietario.
 - [x] Rendere fail-closed la persistenza di heartbeat e `last_seen`.
 - [x] Rendere fail-closed token session e command queue quando il DB fallisce.
-- [ ] Verificare tutti i writer di stato con la stessa regola: ogni `UPDATE`
+- [x] Rafforzare i writer già toccati: completion, delivery attempt, smoke,
+  calendar e rollout command controllano errore, ownership e righe aggiornate.
+- [ ] Completare l'audit dei writer non ancora coperti: ogni `UPDATE`
   autorevole deve controllare `RowsAffected`, ownership e generazione.
-- [ ] Audit dei percorsi `MarkDeliverySucceeded`, `FinalizeVerified`,
-  `CompletePublicationAfterReconciliation` e `TaskResult`: nessun ritorno
-  `nil` dopo un commit non avvenuto.
+- [ ] Chiudere l'audit mirato di `MarkDeliverySucceeded`,
+  `FinalizeVerified`, `CompletePublicationAfterReconciliation` e `TaskResult`:
+  nessun ritorno `nil` dopo un commit non avvenuto.
 - [ ] Aggiungere test di race/reclaim per: lease scaduto, reconnect worker,
   retry concorrente e doppio finalizer.
 
@@ -98,7 +109,7 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 
 ### P2 — Legacy e documentazione
 
-- [ ] Aggiornare `docs/roadmap/README.md`: le directory `refactored/...` non
+- [x] Aggiornare `docs/roadmap/README.md`: le directory `refactored/...` non
   esistono più e il documento descrive ancora fasi già completate.
 - [ ] Tenere le route 410 solo finché esiste evidenza di traffico e un owner;
   la rimozione richiede audit usage + gate full-module.
