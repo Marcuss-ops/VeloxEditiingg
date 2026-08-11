@@ -4,7 +4,11 @@ package deliveries
 // DeliveryRunner. Split out of runner.go; the runner lifecycle lives
 // in runner.go and per-lease processing in runner_process.go.
 
-import "time"
+import (
+	"time"
+
+	platformretry "velox-server/internal/platform/retry"
+)
 
 // RunnerConfig tunes the runner.
 type RunnerConfig struct {
@@ -50,15 +54,5 @@ func DefaultRunnerConfig() *RunnerConfig {
 // number using the configured schedule. If the attempt exceeds the schedule
 // length, the last entry is used.
 func (cfg *RunnerConfig) backoffForAttempt(attempt int) time.Duration {
-	if len(cfg.BackoffSchedule) == 0 {
-		return 30 * time.Second
-	}
-	idx := attempt - 1
-	if idx < 0 {
-		idx = 0
-	}
-	if idx >= len(cfg.BackoffSchedule) {
-		idx = len(cfg.BackoffSchedule) - 1
-	}
-	return cfg.BackoffSchedule[idx]
+	return (platformretry.ScheduleBackoff{Schedule: cfg.BackoffSchedule}).Delay(attempt)
 }

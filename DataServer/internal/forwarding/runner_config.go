@@ -1,7 +1,11 @@
 // Package forwarding provides the CreatorForwardingRunner.
 package forwarding
 
-import "time"
+import (
+	"time"
+
+	platformretry "velox-server/internal/platform/retry"
+)
 
 // ── Config ───────────────────────────────────────────────────────────────
 
@@ -46,15 +50,5 @@ func DefaultRunnerConfig() *RunnerConfig {
 // backoffForAttempt returns the backoff delay for the given 1-based
 // attempt number using the configured schedule.
 func (cfg *RunnerConfig) backoffForAttempt(attempt int) time.Duration {
-	if len(cfg.BackoffSchedule) == 0 {
-		return 30 * time.Second
-	}
-	idx := attempt - 1
-	if idx < 0 {
-		idx = 0
-	}
-	if idx >= len(cfg.BackoffSchedule) {
-		idx = len(cfg.BackoffSchedule) - 1
-	}
-	return cfg.BackoffSchedule[idx]
+	return (platformretry.ScheduleBackoff{Schedule: cfg.BackoffSchedule}).Delay(attempt)
 }
