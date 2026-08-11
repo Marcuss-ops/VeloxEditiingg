@@ -244,14 +244,18 @@ func (s *spoofStubJobsRepo) Delete(_ context.Context, _ string) error {
 var _ jobs.Repository = (*spoofStubJobsRepo)(nil)
 
 type spoofStubAttemptRepo struct {
-	mu                  sync.Mutex
-	attempts            map[string]*taskattempts.TaskAttempt
-	persistMetricsCalls int
-	persistCacheCalls   int
-	persistCostCalls    int
-	lastMetrics         taskattempts.AttemptMetrics
-	lastCacheStats      taskattempts.AttemptCacheStats
-	lastCostBasis       taskattempts.AttemptCostBasis
+	mu                   sync.Mutex
+	attempts             map[string]*taskattempts.TaskAttempt
+	persistMetricsCalls  int
+	persistCacheCalls    int
+	persistCostCalls     int
+	lastMetrics          taskattempts.AttemptMetrics
+	lastCacheStats       taskattempts.AttemptCacheStats
+	lastCostBasis        taskattempts.AttemptCostBasis
+	upsertPlanCalls      int
+	lastPlanVersion      int
+	lastPlanSHA256       string
+	lastPlanJSON         string
 }
 
 func (s *spoofStubAttemptRepo) seedCanonical(taskID, workerID, leaseID string) {
@@ -334,6 +338,15 @@ func (s *spoofStubAttemptRepo) PersistPhaseTimingsDetailed(_ context.Context, _ 
 	return nil
 }
 func (s *spoofStubAttemptRepo) PersistSegmentTimings(_ context.Context, _ string, _ []taskattempts.SegmentTiming) error {
+	return nil
+}
+func (s *spoofStubAttemptRepo) UpsertRenderPlan(_ context.Context, _ string, planVersion int, planSHA256, planJSON string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.upsertPlanCalls++
+	s.lastPlanVersion = planVersion
+	s.lastPlanSHA256 = planSHA256
+	s.lastPlanJSON = planJSON
 	return nil
 }
 

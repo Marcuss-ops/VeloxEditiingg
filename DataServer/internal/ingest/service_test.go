@@ -297,6 +297,9 @@ func (s *stubIngestAttemptRepo) PersistPhaseTimingsDetailed(context.Context, str
 func (s *stubIngestAttemptRepo) PersistSegmentTimings(context.Context, string, []taskattempts.SegmentTiming) error {
 	return nil
 }
+func (s *stubIngestAttemptRepo) UpsertRenderPlan(context.Context, string, int, string, string) error {
+	return nil
+}
 
 var _ taskattempts.Repository = (*stubIngestAttemptRepo)(nil)
 

@@ -81,6 +81,12 @@ type Writer interface {
 	// the worker reports, so the table stays in sync with the
 	// authoritative sidecar.
 	PersistSegmentTimings(ctx context.Context, attemptID string, segments []SegmentTiming) error
+
+	// UpsertRenderPlan stamps the master-compiled render plan identity on
+	// an attempt (Fase D): plan_version, plan_sha256 and the canonical plan
+	// JSON produced by the RenderPlanCompiler at claim time. Idempotent
+	// last-writer-wins; plan_version=0 rows are stamped exactly once.
+	UpsertRenderPlan(ctx context.Context, attemptID string, planVersion int, planSHA256, planJSON string) error
 }
 
 // MetricsReader is the read-side of the typed metrics envelope so the
