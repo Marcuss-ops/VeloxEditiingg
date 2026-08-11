@@ -245,7 +245,7 @@ WHERE operation_id = ? AND status = ?`,
 	if err != nil {
 		return false, err
 	}
-	rows, err := result.RowsAffected()
+	rows, err := readRowsAffected(result, "mark fleet operation running")
 	return rows == 1, err
 }
 
@@ -254,7 +254,7 @@ WHERE operation_id = ? AND status = ?`,
 // status='RUNNING'); if the row is already terminal the call is
 // a no-op.
 func (s *SQLiteStore) MarkSucceeded(ctx context.Context, operationID string, finishedAt time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, `
 UPDATE fleet_operations
 SET status = ?, finished_at = ?
 WHERE operation_id = ? AND status = ?`,
@@ -263,6 +263,10 @@ WHERE operation_id = ? AND status = ?`,
 		operationID,
 		OperationStatusRunning,
 	)
+	if err != nil {
+		return err
+	}
+	_, err = readRowsAffected(result, "mark fleet operation succeeded")
 	return err
 }
 
@@ -274,7 +278,7 @@ func (s *SQLiteStore) MarkFailed(ctx context.Context, operationID string, finish
 	if errMsg == "" {
 		errMsg = "executor returned an error (no detail provided)"
 	}
-	_, err := s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, `
 UPDATE fleet_operations
 SET status = ?, finished_at = ?, error_message = ?
 WHERE operation_id = ? AND status = ?`,
@@ -284,6 +288,10 @@ WHERE operation_id = ? AND status = ?`,
 		operationID,
 		OperationStatusRunning,
 	)
+	if err != nil {
+		return err
+	}
+	_, err = readRowsAffected(result, "mark fleet operation failed")
 	return err
 }
 

@@ -99,7 +99,7 @@ func (s *SQLiteStore) DeleteDriveLinksByParent(parentID string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	return readRowsAffected(result, "delete drive links by parent")
 }
 
 // GetDriveLink returns a single drive link by ID.

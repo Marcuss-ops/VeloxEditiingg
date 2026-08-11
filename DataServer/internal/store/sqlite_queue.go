@@ -90,7 +90,7 @@ func (s *SQLiteStore) PurgeDLQJobs(olderThan time.Time) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	return readRowsAffected(result, "purge DLQ jobs")
 }
 
 // --- Job Events ---

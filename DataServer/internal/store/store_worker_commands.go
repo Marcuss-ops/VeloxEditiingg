@@ -157,7 +157,7 @@ func (s *SQLiteStore) ExpireCommands() (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	return readRowsAffected(result, "expire worker commands")
 }
 
 // CleanupOldCommands deletes acknowledged or expired commands older than the given duration.
@@ -170,7 +170,7 @@ func (s *SQLiteStore) CleanupOldCommands(olderThan time.Duration) (int64, error)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	return readRowsAffected(result, "cleanup old worker commands")
 }
 
 // HasPendingCommand checks if a worker already has a pending command of the given type with the given idempotency key.
