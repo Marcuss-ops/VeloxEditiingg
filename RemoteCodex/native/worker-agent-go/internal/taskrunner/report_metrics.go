@@ -132,10 +132,12 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 	// any metric counters, the typed mirror carries the cache.bytes
 	// value alone (the only field CacheStatsProvider is authoritative
 	// for today) and zeros elsewhere — correct behavior.
-	cacheLookups := positiveIntegerToInt64(m["cache.lookups"])
 	// Asset-operation counters are attempt-scoped and authoritative when the
 	// resolver supplied them. In particular, an explicit zero miss count on a
 	// warm run must not fall back to the generic cache provider's stale delta.
+	// The resolver emits the canonical asset.cache.lookups key; cache.lookups
+	// is the legacy alias.
+	cacheLookups := firstPresent(m, "asset.cache.lookups", "cache.lookups")
 	cacheHits := firstPresent(m, "asset.cache.hit.count", "cache.hits")
 	cacheMisses := firstPresent(m, "asset.cache.miss.count", "cache.misses")
 	expectedCacheLookups := cacheHits + cacheMisses

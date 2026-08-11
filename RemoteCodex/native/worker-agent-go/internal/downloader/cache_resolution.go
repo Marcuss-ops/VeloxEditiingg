@@ -1,0 +1,178 @@
+package downloader
+
+// cache_resolution.go — the canonical structured outcome of one asset cache
+// resolution, plus the single-emission resolver adapter.
+//
+// Phase A1 contract: cache telemetry is emitted exactly once per logical
+// resolution, inside CacheResolver.Resolve. Every consumer (the per-attempt
+// attempt metrics and the worker-lifetime Prometheus counters) is fed from
+// this one point; no handler, adapter, transferer or report builder may
+// re-count lookups, hits, misses or downloads.
+//
+// The outcome is classified at the actual lookup point (Transferer.Check),
+// never re-derived by callers. The transferer reports CacheCheckResult.Outcome
+// and the manager carries it onto DownloadedAsset; CacheResolver only
+// projects that classification onto the structured shape.
+
+import (
+	"context"
+	"errors"
+
+	"velox-shared/assetref"
+)
+
+// CacheOutcome is the canonical classification of one cache lookup. It is
+// decided at the lookup point and is the ONLY vocabulary consumers use to
+// reason about cache behaviour.
+type CacheOutcome string
+
+const (
+	// CacheOutcomeHitValid: a verified on-disk file matched the requested
+	// integrity metadata; zero bytes were downloaded.
+	CacheOutcomeHitValid CacheOutcome = "HIT_VALID"
+	// CacheOutcomeMissNotFound: no cache entry and no verified on-disk file
+	// exists for the requested identity.
+	CacheOutcomeMissNotFound CacheOutcome = "MISS_NOT_FOUND"
+	// CacheOutcomeMissInvalid: an entry exists but is incomplete or its size
+	// does not match the requested contract.
+	CacheOutcomeMissInvalid CacheOutcome = "MISS_INVALID"
+	// CacheOutcomeMissHashMismatch: an entry exists but its content hash
+	// does not match the requested SHA-256 (corrupt or foreign bytes).
+	CacheOutcomeMissHashMismatch CacheOutcome = "MISS_HASH_MISMATCH"
+	// CacheOutcomeMissExpired: the durable index claims a complete entry but
+	// the physical file is gone (evicted/expired underneath the index).
+	CacheOutcomeMissExpired CacheOutcome = "MISS_EXPIRED"
+)
+
+// IsHit reports whether the outcome served the request from a verified
+// local file without downloading.
+func (o CacheOutcome) IsHit() bool { return o == CacheOutcomeHitValid }
+
+// IsMiss reports whether the outcome is a classified miss. The empty string
+// is intentionally not a miss: it means "no classification was produced".
+func (o CacheOutcome) IsMiss() bool { return o != "" && !o.IsHit() }
+
+// CacheSource is the low-cardinality origin of the resolved bytes. It is a
+// fixed vocabulary so dashboards never see free-form strings.
+type CacheSource string
+
+const (
+	// CacheSourceLocalDisk: the asset was served from the verified local
+	// cache (HIT_VALID).
+	CacheSourceLocalDisk CacheSource = "local_disk"
+	// CacheSourceMaster: the bytes came from the master asset bridge
+	// (download path, including classified misses).
+	CacheSourceMaster CacheSource = "master_bridge"
+)
+
+// CacheResolution is the structured, telemetry-ready outcome of one asset
+// resolution. It is the ONLY shape consumers read for cache accounting: the
+// per-attempt counters (AttemptCacheMetrics) and the worker-lifetime
+// Prometheus view are both derived from a single RecordResolution call.
+type CacheResolution struct {
+	AssetID string
+	Outcome CacheOutcome
+	// LocalPath is the verified local path when the resolution succeeded.
+	LocalPath string
+	// CacheHit mirrors Outcome.IsHit() for the legacy boolean consumers.
+	CacheHit bool
+	// Downloaded reports whether bytes were transferred from the source.
+	Downloaded bool
+	// DownloadBytes is the number of bytes transferred on the miss path
+	// (0 on a verified hit).
+	DownloadBytes int64
+	Source        CacheSource
+	SHA256        assetref.ContentHash
+}
+
+// ResolutionSink observes each completed resolution exactly once. It runs on
+// the caller's resolution goroutine, so it MUST be non-blocking: value reads,
+// in-memory counters and cheap structured events only — never I/O that could
+// stall a task.
+type ResolutionSink interface {
+	RecordResolution(ctx context.Context, resolution CacheResolution)
+}
+
+// CacheResolver is the canonical structured-resolution surface. Resolve
+// returns the cache accounting outcome and, when a sink is wired, emits the
+// cache telemetry exactly once per completed resolution. This is the single
+// point where cache lookups are counted.
+type CacheResolver struct {
+	manager AssetDownloadManager
+	sink    ResolutionSink
+}
+
+// NewCacheResolver wraps a manager with the optional telemetry sink.
+func NewCacheResolver(manager AssetDownloadManager, sink ResolutionSink) *CacheResolver {
+	return &CacheResolver{manager: manager, sink: sink}
+}
+
+// Resolve returns the structured resolution for req. The metric is emitted
+// exactly once per lookup:
+//
+//   - success → one RecordResolution with the full classified outcome;
+//   - non-cancellation failure → one RecordResolution classified as a miss
+//     (the asset was looked up, was not served from a verified local file
+//     and no bytes were obtained) — this keeps the lookups = hits + misses
+//     accounting invariant honest and mirrors the historical worker
+//     Prometheus behaviour of counting a started download as a miss;
+//   - caller cancellation (ctx.Canceled / context.DeadlineExceeded) and
+//     ErrEmptyKey → nothing is recorded (no lookup outcome exists).
+func (r *CacheResolver) Resolve(ctx context.Context, req DownloadRequest) (CacheResolution, error) {
+	if r == nil || r.manager == nil {
+		return CacheResolution{}, ErrEmptyKey
+	}
+	asset, err := r.manager.Resolve(ctx, req)
+	if err != nil {
+		if r.sink != nil && !errors.Is(err, ErrEmptyKey) &&
+			!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			r.sink.RecordResolution(ctx, CacheResolution{
+				AssetID: req.AssetID,
+				Outcome: CacheOutcomeMissNotFound,
+				Source:  CacheSourceMaster,
+			})
+		}
+		return CacheResolution{}, err
+	}
+	resolution := resolutionFromDownloadedAsset(asset, req)
+	if r.sink != nil {
+		r.sink.RecordResolution(ctx, resolution)
+	}
+	return resolution, nil
+}
+
+// resolutionFromDownloadedAsset projects the manager result onto the
+// canonical resolution shape. The outcome was classified at the lookup point
+// by Transferer.Check and carried through the transfer; the adapter never
+// re-derives hit/miss.
+func resolutionFromDownloadedAsset(asset DownloadedAsset, req DownloadRequest) CacheResolution {
+	resolution := CacheResolution{
+		AssetID:   asset.AssetID,
+		Outcome:   asset.Outcome,
+		LocalPath: asset.LocalPath,
+		CacheHit:  asset.CacheHit,
+		Source:    CacheSourceMaster,
+		SHA256:    asset.SHA256,
+	}
+	if resolution.AssetID == "" {
+		resolution.AssetID = req.AssetID
+	}
+	if asset.CacheHit {
+		resolution.Source = CacheSourceLocalDisk
+	} else {
+		// The manager reports zero downloaded bytes on the hit path; a
+		// positive size therefore means bytes actually transferred.
+		resolution.Downloaded = asset.SizeBytes > 0
+		resolution.DownloadBytes = asset.SizeBytes
+	}
+	// Defensive fallback for legacy transferers (and byte fakes) that do not
+	// classify: the CacheHit flag is still an honest outcome.
+	if resolution.Outcome == "" {
+		if asset.CacheHit {
+			resolution.Outcome = CacheOutcomeHitValid
+		} else {
+			resolution.Outcome = CacheOutcomeMissNotFound
+		}
+	}
+	return resolution
+}

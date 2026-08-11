@@ -67,6 +67,11 @@ type CacheCheckResult struct {
 	// SHA256 is the verified content identity of a cache hit. It prevents a
 	// read-model sync from erasing the digest already persisted by the cache.
 	SHA256 assetref.ContentHash
+	// Outcome is the canonical classification decided AT the lookup point:
+	// HIT_VALID for a verified file, or the specific miss reason otherwise.
+	// Empty when a legacy transferer does not classify; CacheResolver falls
+	// back to the CacheHit flag in that case.
+	Outcome CacheOutcome
 }
 
 // TransferResult is the outcome of a Transferer.Transfer.

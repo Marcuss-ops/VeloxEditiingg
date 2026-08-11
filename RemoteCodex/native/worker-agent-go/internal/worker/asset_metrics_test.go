@@ -19,6 +19,7 @@ import (
 
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
+	"velox-worker-agent/internal/downloader"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/config"
@@ -126,6 +127,17 @@ func TestDownloadVeloxAssetWithSHA_ReportsMissHitAndCorruptRedownload(t *testing
 	}
 	if records[1].DownloadedBytes != 0 || records[1].DownloadMS != 0 {
 		t.Errorf("hit metrics = bytes:%d ms:%d, want 0/0", records[1].DownloadedBytes, records[1].DownloadMS)
+	}
+
+	// Phase A1: the per-attempt counters are fed by the canonical resolver
+	// sink, not re-derived from the caller: 3 resolutions = 2 misses + 1 hit,
+	// with exactly 2 downloads.
+	cache := tracker.cacheSnapshot()
+	if cache.CacheLookups != 3 || cache.CacheHits != 1 || cache.CacheMisses != 2 || cache.CacheDownloadCount != 2 {
+		t.Fatalf("attempt cache counters = %+v, want lookups=3 hits=1 misses=2 downloads=2", cache)
+	}
+	if cache.CacheDownloadBytes != int64(2*len(assetBytes)) {
+		t.Fatalf("attempt cache download bytes = %d, want %d", cache.CacheDownloadBytes, 2*len(assetBytes))
 	}
 }
 
@@ -365,15 +377,53 @@ func TestAttachAssetOperationsAddsExistingReportMetrics(t *testing.T) {
 
 func TestAttachAssetOperationsProjectsResolverCacheCounters(t *testing.T) {
 	tracker := &assetOperationTracker{cacheEnabled: true}
-	tracker.add(AssetOperationRecord{AssetID: "hit", CacheStatus: "hit"})
-	tracker.add(AssetOperationRecord{AssetID: "miss", CacheStatus: "miss"})
+	// The counters are fed exclusively by the canonical resolver sink.
+	tracker.recordResolution(downloader.CacheResolution{AssetID: "hit", CacheHit: true, Outcome: downloader.CacheOutcomeHitValid, Source: downloader.CacheSourceLocalDisk})
+	tracker.recordResolution(downloader.CacheResolution{AssetID: "miss", CacheHit: false, Outcome: downloader.CacheOutcomeMissNotFound, Downloaded: true, DownloadBytes: 4096, Source: downloader.CacheSourceMaster})
 	report := taskrunner.TaskExecutionReport{}
 	attachAssetOperations(&report, tracker)
-	if report.Metrics["cache.enabled"] != true || report.Metrics["cache.lookups"] != int64(2) {
+	if report.Metrics["cache.enabled"] != true || report.Metrics["asset.cache.lookups"] != int64(2) || report.Metrics["cache.lookups"] != int64(2) {
 		t.Fatalf("cache summary = %#v", report.Metrics)
 	}
 	if report.Metrics["asset.cache.hit.count"] != int64(1) || report.Metrics["asset.cache.miss.count"] != int64(1) {
 		t.Fatalf("cache hit/miss counters = %#v", report.Metrics)
+	}
+	if report.Metrics["asset.cache.download.count"] != int64(1) || report.Metrics["asset.cache.download.bytes"] != int64(4096) {
+		t.Fatalf("cache download counters = %#v", report.Metrics)
+	}
+}
+
+// TestAttemptCacheMetrics_StartAtZeroPerAttempt locks Phase A1's core
+// contract: per-attempt cache accounting starts at zero and is fed only by
+// the canonical resolver sink. A warm second attempt never inherits the
+// previous attempt's miss/download counters (the plan's example: attempt A
+// 169 lookups / 143 hits / 26 misses; attempt B 169 / 169 / 0).
+func TestAttemptCacheMetrics_StartAtZeroPerAttempt(t *testing.T) {
+	trackerA := &assetOperationTracker{}
+	trackerB := &assetOperationTracker{}
+
+	// Attempt A: cold — 143 hits + 26 misses (26 downloads of 1 KiB each).
+	for i := 0; i < 169; i++ {
+		if i < 143 {
+			trackerA.recordResolution(downloader.CacheResolution{AssetID: "a", CacheHit: true, Outcome: downloader.CacheOutcomeHitValid, Source: downloader.CacheSourceLocalDisk})
+		} else {
+			trackerA.recordResolution(downloader.CacheResolution{AssetID: "a", CacheHit: false, Outcome: downloader.CacheOutcomeMissNotFound, Downloaded: true, DownloadBytes: 1024, Source: downloader.CacheSourceMaster})
+		}
+	}
+	// Attempt B: warm — every lookup is a verified hit, zero misses. The
+	// tracker is a fresh per-attempt accumulator: it must NOT inherit A's
+	// 26 misses (the historical worker-cumulative contamination bug).
+	for i := 0; i < 169; i++ {
+		trackerB.recordResolution(downloader.CacheResolution{AssetID: "a", CacheHit: true, Outcome: downloader.CacheOutcomeHitValid, Source: downloader.CacheSourceLocalDisk})
+	}
+
+	a := trackerA.cacheSnapshot()
+	if a.CacheLookups != 169 || a.CacheHits != 143 || a.CacheMisses != 26 || a.CacheDownloadCount != 26 || a.CacheDownloadBytes != 26*1024 {
+		t.Fatalf("attempt A counters = %+v, want 169/143/26/26/26624", a)
+	}
+	b := trackerB.cacheSnapshot()
+	if b.CacheLookups != 169 || b.CacheHits != 169 || b.CacheMisses != 0 || b.CacheDownloadCount != 0 || b.CacheDownloadBytes != 0 {
+		t.Fatalf("attempt B counters = %+v, want 169/169/0/0/0 (warm second wave must start at zero)", b)
 	}
 }
 

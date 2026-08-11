@@ -166,6 +166,10 @@ type DownloadedAsset struct {
 	SizeBytes int64
 	CacheHit  bool
 	ReadyAt   time.Time
+	// Outcome is the canonical classification from the lookup point
+	// (Transferer.Check), carried through the transfer so the resolver
+	// boundary never re-derives hit/miss. Empty only for legacy transferers.
+	Outcome CacheOutcome
 }
 
 // DownloadJobReference preserves the per-job ownership metadata for a

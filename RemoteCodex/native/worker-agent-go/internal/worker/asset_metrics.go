@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"velox-worker-agent/internal/downloader"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
 )
@@ -30,10 +31,56 @@ type AssetOperationRecord struct {
 	Source              string    `json:"source"`
 }
 
+// AttemptCacheMetrics is the per-attempt, zero-based cache accounting
+// projection (Phase A1). It is fed ONLY by the canonical resolver sink
+// (cacheResolutionSink via CacheResolver.Resolve) and starts at zero for
+// every attempt: restarts, retries and previous jobs can never contaminate
+// it. The worker-lifetime totals live in the Prometheus exporter as a
+// SEPARATE view (WorkerCacheMetrics).
+type AttemptCacheMetrics struct {
+	CacheLookups       int64
+	CacheHits          int64
+	CacheMisses        int64
+	CacheDownloadCount int64
+	CacheDownloadBytes int64
+}
+
 type assetOperationTracker struct {
 	mu           sync.Mutex
 	records      []AssetOperationRecord
 	cacheEnabled bool
+	cache        AttemptCacheMetrics
+}
+
+// recordResolution accumulates one canonical cache resolution into the
+// per-attempt counters. It is invoked exactly once per resolution by the
+// CacheResolver sink — never by handlers, adapters or report builders.
+func (t *assetOperationTracker) recordResolution(resolution downloader.CacheResolution) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.cache.CacheLookups++
+	if resolution.CacheHit {
+		t.cache.CacheHits++
+	} else {
+		t.cache.CacheMisses++
+	}
+	if resolution.Downloaded {
+		t.cache.CacheDownloadCount++
+		t.cache.CacheDownloadBytes += resolution.DownloadBytes
+	}
+}
+
+// cacheSnapshot returns a copy of the per-attempt cache counters.
+func (t *assetOperationTracker) cacheSnapshot() AttemptCacheMetrics {
+	if t == nil {
+		return AttemptCacheMetrics{}
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.cache
 }
 
 type assetOperationTrackerKey struct{}
@@ -78,6 +125,51 @@ func (t *assetOperationTracker) snapshot() []AssetOperationRecord {
 
 func recordAssetOperation(ctx context.Context, record AssetOperationRecord) {
 	assetOperationTrackerFromContext(ctx).add(record)
+}
+
+// cacheResolutionSink is the canonical single-emission cache telemetry
+// point (Phase A1). It is invoked exactly once per resolution by
+// CacheResolver.Resolve and feeds BOTH views from the same structured
+// outcome:
+//
+//  1. AttemptCacheMetrics — the attempt-scoped tracker, starting at zero
+//     per attempt (certification view);
+//  2. WorkerCacheMetrics — the worker-lifetime Prometheus counters
+//     (host observability view).
+//
+// It also emits the structured per-attempt cache event (hit_read/miss),
+// replacing the previous transfer-scoped emissions inside the transferer.
+type cacheResolutionSink struct{}
+
+func (cacheResolutionSink) RecordResolution(ctx context.Context, resolution downloader.CacheResolution) {
+	// Attempt view: zero-based per-attempt counters.
+	if tracker := assetOperationTrackerFromContext(ctx); tracker != nil {
+		tracker.recordResolution(resolution)
+	}
+	// Worker view: low-cardinality Prometheus counters.
+	prom := telemetry.GetPrometheusMetrics()
+	if resolution.CacheHit {
+		prom.RecordAssetCacheHit("asset")
+		prom.RecordCacheRequest("hit")
+	} else {
+		prom.RecordAssetCacheMiss("asset")
+		prom.RecordCacheRequest("miss")
+	}
+	// Structured attempt event, recorded once per resolution with the
+	// canonical outcome attached.
+	if rec := telemetry.RecorderFromContext(ctx); rec != nil {
+		action := "miss"
+		if resolution.CacheHit {
+			action = "hit_read"
+		}
+		h := rec.Begin(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask, Component: "worker.cache", Action: action})
+		h.SetMetadata("asset_id", resolution.AssetID)
+		h.SetMetadata("outcome", string(resolution.Outcome))
+		if resolution.Downloaded {
+			h.SetMetadata("downloaded_bytes", resolution.DownloadBytes)
+		}
+		h.Complete()
+	}
 }
 
 func cacheAssetKey(assetID, expectedSHA256 string) string {
@@ -197,27 +289,26 @@ func attachAssetOperations(report *taskrunner.TaskExecutionReport, tracker *asse
 		report.Metrics = make(map[string]interface{})
 	}
 
-	// These counters are derived at the common resolver boundary, where every
-	// canonical cache hit/miss is recorded. They intentionally remain zero
-	// when no lookup occurred; zero is not a fabricated hit or miss.
-	var hits, misses int64
+	// The per-attempt counters are accumulated by the canonical resolver
+	// sink (single emission point inside CacheResolver.Resolve). They are
+	// NEVER re-derived from the record list here: the records are per-asset
+	// detail only. Counters intentionally remain zero when no lookup
+	// occurred — zero is not a fabricated hit or miss.
+	cache := tracker.cacheSnapshot()
 	uniqueAssets := make(map[string]struct{}, len(records))
 	for _, record := range records {
-		switch strings.ToLower(strings.TrimSpace(record.CacheStatus)) {
-		case "hit":
-			hits++
-		case "miss":
-			misses++
-		}
 		if assetID := strings.TrimSpace(record.AssetID); assetID != "" {
 			uniqueAssets[assetID] = struct{}{}
 		}
 	}
 	report.Metrics["cache.enabled"] = tracker.cacheEnabled || len(records) > 0
-	report.Metrics["cache.lookups"] = hits + misses
+	report.Metrics["asset.cache.lookups"] = cache.CacheLookups
+	report.Metrics["cache.lookups"] = cache.CacheLookups
 	report.Metrics["unique.assets.requested"] = int64(len(uniqueAssets))
-	report.Metrics["asset.cache.hit.count"] = hits
-	report.Metrics["asset.cache.miss.count"] = misses
+	report.Metrics["asset.cache.hit.count"] = cache.CacheHits
+	report.Metrics["asset.cache.miss.count"] = cache.CacheMisses
+	report.Metrics["asset.cache.download.count"] = cache.CacheDownloadCount
+	report.Metrics["asset.cache.download.bytes"] = cache.CacheDownloadBytes
 	if len(records) > 0 {
 		report.Metrics["asset_operations"] = records
 	}
@@ -233,10 +324,12 @@ func attachAssetOperationsToPhaseMarkers(report *taskrunner.TaskExecutionReport)
 	}
 	records, ok := report.Metrics["asset_operations"].([]AssetOperationRecord)
 	cacheEnabled, hasCacheEnabled := report.Metrics["cache.enabled"]
-	cacheLookups, hasCacheLookups := report.Metrics["cache.lookups"]
+	cacheLookups, hasCacheLookups := report.Metrics["asset.cache.lookups"]
 	cacheHits, hasCacheHits := report.Metrics["asset.cache.hit.count"]
 	cacheMisses, hasCacheMisses := report.Metrics["asset.cache.miss.count"]
-	if (!ok || len(records) == 0) && !hasCacheEnabled && !hasCacheLookups && !hasCacheHits && !hasCacheMisses {
+	cacheDownloadCount, hasDownloadCount := report.Metrics["asset.cache.download.count"]
+	cacheDownloadBytes, hasDownloadBytes := report.Metrics["asset.cache.download.bytes"]
+	if (!ok || len(records) == 0) && !hasCacheEnabled && !hasCacheLookups && !hasCacheHits && !hasCacheMisses && !hasDownloadCount && !hasDownloadBytes {
 		return
 	}
 	parts := make([]string, 0, 2)
@@ -247,13 +340,20 @@ func attachAssetOperationsToPhaseMarkers(report *taskrunner.TaskExecutionReport)
 		}
 		parts = append(parts, fmt.Sprintf("asset_operations=%s", encoded))
 	}
-	if hasCacheEnabled || hasCacheLookups || hasCacheHits || hasCacheMisses {
-		encoded, err := json.Marshal(map[string]interface{}{
+	if hasCacheEnabled || hasCacheLookups || hasCacheHits || hasCacheMisses || hasDownloadCount || hasDownloadBytes {
+		summary := map[string]interface{}{
 			"enabled": cacheEnabled,
 			"lookups": cacheLookups,
 			"hits":    cacheHits,
 			"misses":  cacheMisses,
-		})
+		}
+		if hasDownloadCount {
+			summary["download_count"] = cacheDownloadCount
+		}
+		if hasDownloadBytes {
+			summary["download_bytes"] = cacheDownloadBytes
+		}
+		encoded, err := json.Marshal(summary)
 		if err != nil {
 			return
 		}

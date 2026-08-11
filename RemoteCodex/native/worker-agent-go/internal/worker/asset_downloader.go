@@ -22,11 +22,12 @@ import (
 )
 
 // downloadVeloxAssetWithMetadata is the integrity-aware asset path. It is now
-// a THIN ADAPTER over the canonical AssetDownloadManager: build the explicit
-// DownloadRequest, Resolve it, then record the caller-scoped operation
-// telemetry. All byte transport, dedup, state tracking, pooling and
-// verification live in internal/downloader; this function never touches the
-// network itself.
+// a THIN ADAPTER over the canonical CacheResolver: build the explicit
+// DownloadRequest, Resolve it through the structured resolution surface (the
+// single point where cache telemetry is emitted), then record the
+// caller-scoped operation detail. All byte transport, dedup, state tracking,
+// pooling, outcome classification and verification live in internal/downloader;
+// this function never touches the network itself.
 func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, expectedSHA256 string, expectedSizeBytes int64) (string, error) {
 	operationStarted := time.Now().UTC()
 	accessStarted := time.Now()
@@ -42,7 +43,7 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 	}
 
 	jobID, role := telemetry.CacheAccessContextFromContext(ctx)
-	asset, err := w.assetDownloadManager().Resolve(ctx, downloader.DownloadRequest{
+	resolution, err := w.assetCacheResolver().Resolve(ctx, downloader.DownloadRequest{
 		JobID:     jobID,
 		AssetKey:  assetref.AssetKey(assetID),
 		AssetID:   assetID,
@@ -58,9 +59,9 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 
 	completed := time.Now().UTC()
 	status := "miss"
-	downloadedBytes := asset.SizeBytes
+	downloadedBytes := resolution.DownloadBytes
 	downloadMS := completed.Sub(operationStarted).Milliseconds()
-	if asset.CacheHit {
+	if resolution.CacheHit {
 		status = "hit"
 		downloadedBytes = 0
 		downloadMS = 0
@@ -75,11 +76,11 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 		SHA256Verified:      expectedSHA256 != "",
 		IntegrityCheck:      integrityCheck(expectedSHA256, expectedSizeBytes),
 		IntegrityValid:      expectedSHA256 != "" && expectedSizeBytes > 0,
-		LocalPath:           asset.LocalPath,
+		LocalPath:           resolution.LocalPath,
 		Source:              "master_asset_bridge",
 	})
-	syncSize := asset.SizeBytes
-	if asset.CacheHit {
+	syncSize := resolution.DownloadBytes
+	if resolution.CacheHit {
 		// A cache hit reports zero downloaded bytes; the durable index should
 		// still record the expected file size.
 		syncSize = expectedSizeBytes
@@ -91,12 +92,27 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 			}
 		}
 	}
-	if err := w.syncClipCache(ctx, assetID, asset.LocalPath, syncSize, assetref.ContentHash(asset.SHA256)); err != nil {
+	if err := w.syncClipCache(ctx, assetID, resolution.LocalPath, syncSize, assetref.ContentHash(resolution.SHA256)); err != nil {
 		return "", fmt.Errorf("record downloaded asset %s: %w", assetID, err)
 	}
 	logAssetCacheAccess(ctx, w.config.WorkerID, cacheAssetKey(assetID, expectedSHA256), status, downloadedBytes, time.Since(accessStarted).Milliseconds(), 0)
 	loggedAccess = true
-	return asset.LocalPath, nil
+	return resolution.LocalPath, nil
+}
+
+// assetCacheResolver returns the canonical structured-resolution adapter over
+// the shared download manager, building it lazily on first use (mirrors the
+// manager's lazy construction). The wired sink is the single emission point
+// for cache telemetry: every resolution feeds the attempt-scoped tracker
+// (per-attempt counters starting at zero) AND the worker-lifetime Prometheus
+// view. Rebuilt after Stop() nils the manager.
+func (w *Worker) assetCacheResolver() *downloader.CacheResolver {
+	w.cacheResolverMu.Lock()
+	defer w.cacheResolverMu.Unlock()
+	if w.cacheResolver == nil {
+		w.cacheResolver = downloader.NewCacheResolver(w.assetDownloadManager(), cacheResolutionSink{})
+	}
+	return w.cacheResolver
 }
 
 // assetDownloadManager returns the worker's canonical download manager,
@@ -271,9 +287,11 @@ func (w *Worker) assetDownloadConcurrency() int {
 // used purely for non-blocking telemetry value reads.
 type masterAssetTransferer struct{ w *Worker }
 
-// Check probes the local cache. A hit is valid only when the supplied size
-// and SHA-256 pass against the on-disk file; corrupt entries are evicted
-// individually and reported as a miss.
+// Check probes the local cache and classifies the outcome AT the lookup
+// point. A hit is valid only when the supplied size and SHA-256 pass against
+// the on-disk file. The classification is the canonical CacheOutcome
+// (HIT_VALID / MISS_*); telemetry is NOT emitted here — the resolver
+// boundary (CacheResolver.Resolve) records it exactly once per resolution.
 //
 // Requests that arrive with partial (or no) integrity metadata are upgraded
 // using the remembered self-verified digest of the last successful download
@@ -282,19 +300,39 @@ type masterAssetTransferer struct{ w *Worker }
 func (t *masterAssetTransferer) Check(ctx context.Context, reportCtx context.Context, req downloader.DownloadRequest) (downloader.CacheCheckResult, error) {
 	w := t.w
 	key := assetref.AssetKey(req.AssetKey)
+	var foundIncomplete, foundHashMismatch, foundSizeMismatch, foundExpired bool
 	if w.canonicalAssetCache != nil {
 		if entry, found, err := w.canonicalAssetCache.Find(ctx, key); err != nil {
 			return downloader.CacheCheckResult{}, err
-		} else if found && entry.DownloadComplete {
+		} else if found {
 			requestedHash := req.SHA256
 			if requestedHash == "" {
 				requestedHash = entry.ContentHash
 			}
-			if (requestedHash == "" || entry.ContentHash == requestedHash) &&
-				(req.SizeBytes <= 0 || entry.SizeBytes == req.SizeBytes) {
+			hashOK := requestedHash == "" || entry.ContentHash == requestedHash
+			sizeOK := req.SizeBytes <= 0 || entry.SizeBytes == req.SizeBytes
+			switch {
+			case !entry.DownloadComplete:
+				// An index row without a committed download: incomplete.
+				// Fall through to the probe path — a fully written physical
+				// file may still satisfy the request.
+				foundIncomplete = true
+			case !hashOK:
+				// A durable entry whose content hash contradicts the request:
+				// corrupt/foreign bytes, distinct from a plain not-found.
+				foundHashMismatch = true
+			case !sizeOK:
+				// A durable entry whose recorded size contradicts the request
+				// is a size-invalid entry (MISS_INVALID), not a hash corrupt.
+				foundSizeMismatch = true
+			default:
 				if info, statErr := os.Stat(entry.LocalPath); statErr == nil && info.Mode().IsRegular() {
-					return downloader.CacheCheckResult{CacheHit: true, LocalPath: entry.LocalPath, SHA256: entry.ContentHash}, nil
+					return downloader.CacheCheckResult{CacheHit: true, LocalPath: entry.LocalPath, SHA256: entry.ContentHash, Outcome: downloader.CacheOutcomeHitValid}, nil
 				}
+				// The durable index claims a complete entry but the physical
+				// file is gone (evicted/expired underneath the index). Keep
+				// the probe as a final chance before classifying MISS_EXPIRED.
+				foundExpired = true
 			}
 		}
 	}
@@ -306,17 +344,19 @@ func (t *masterAssetTransferer) Check(ctx context.Context, reportCtx context.Con
 	}
 	if probeSHA != "" && probeSize > 0 {
 		if existing, _, err := cachedAssetPathTimed(w.assetCacheDir(), req.AssetID, probeSHA, probeSize); err == nil && existing != "" {
-			telemetry.GetPrometheusMetrics().RecordAssetCacheHit("asset")
-			telemetry.GetPrometheusMetrics().RecordCacheRequest("hit")
-			if rec := telemetry.RecorderFromContext(reportCtx); rec != nil {
-				h := rec.Begin(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask, Component: "worker.cache", Action: "hit_read"})
-				h.SetMetadata("asset_id", req.AssetID)
-				h.Complete()
-			}
-			return downloader.CacheCheckResult{CacheHit: true, LocalPath: existing, SHA256: assetref.ContentHash(probeSHA)}, nil
+			return downloader.CacheCheckResult{CacheHit: true, LocalPath: existing, SHA256: assetref.ContentHash(probeSHA), Outcome: downloader.CacheOutcomeHitValid}, nil
 		}
 	}
-	return downloader.CacheCheckResult{}, nil
+	switch {
+	case foundExpired:
+		return downloader.CacheCheckResult{Outcome: downloader.CacheOutcomeMissExpired}, nil
+	case foundHashMismatch:
+		return downloader.CacheCheckResult{Outcome: downloader.CacheOutcomeMissHashMismatch}, nil
+	case foundSizeMismatch, foundIncomplete:
+		return downloader.CacheCheckResult{Outcome: downloader.CacheOutcomeMissInvalid}, nil
+	default:
+		return downloader.CacheCheckResult{Outcome: downloader.CacheOutcomeMissNotFound}, nil
+	}
 }
 
 // Transfer streams the asset from the master asset bridge into the local
@@ -333,12 +373,10 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 
 	transferStarted := time.Now()
 
-	telemetry.GetPrometheusMetrics().RecordAssetCacheMiss("asset")
-	telemetry.GetPrometheusMetrics().RecordCacheRequest("miss")
-	if rec := telemetry.RecorderFromContext(reportCtx); rec != nil {
-		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask, Component: "worker.cache", Action: "miss"}, telemetry.StatusOK, "", "")
-	}
-
+	// NOTE: cache miss accounting is intentionally NOT emitted here. The
+	// canonical CacheResolver boundary records the classified miss exactly
+	// once per resolution (attempt + worker views). This transfer only owns
+	// the byte pipeline.
 	downloadURL := strings.TrimRight(strings.TrimSpace(w.config.MasterURL), "/") + "/api/v1/agent/assets/" + neturl.PathEscape(assetID)
 	authToken := ""
 	if w.apiClient != nil {

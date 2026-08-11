@@ -205,6 +205,7 @@ func (m *Manager) Resolve(ctx context.Context, req DownloadRequest) (DownloadedA
 				SizeBytes: result.Bytes,
 				CacheHit:  hit,
 				ReadyAt:   readyAt,
+				Outcome:   t.resolutionOutcome(),
 			}, nil
 
 		case <-ctx.Done():
@@ -388,6 +389,10 @@ func (t *Transfer) run(m *Manager) {
 		t.finish(TransferResult{}, err)
 		return
 	}
+	// Classify the lookup outcome exactly once, at the point where the cache
+	// probe actually ran. CacheResolver propagates this classification to the
+	// telemetry sink; nobody re-derives hit/miss downstream.
+	t.setOutcome(hit.Outcome)
 	if hit.CacheHit {
 		// A cache hit downloaded zero bytes: the verified file was already
 		// on disk. The size is known from the request (BytesTotal), but

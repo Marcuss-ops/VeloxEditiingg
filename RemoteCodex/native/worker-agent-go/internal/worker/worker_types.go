@@ -157,8 +157,16 @@ type Worker struct {
 	// transfer states, bounded pool, shared progress). Constructed lazily on
 	// first use; closed in Stop(). The Transferer it runs is the master-bridge
 	// pipeline (asset_downloader.go).
-	assetManager        *downloader.Manager
-	assetManagerMu      sync.Mutex
+	assetManager   *downloader.Manager
+	assetManagerMu sync.Mutex
+	// cacheResolver is the canonical structured-resolution adapter over
+	// assetManager (downloader/cache_resolution.go). It is the single
+	// emission point for cache telemetry: the attempt-scoped tracker and
+	// the worker-lifetime Prometheus view are both fed from one
+	// RecordResolution call per resolved asset. Rebuilt after Stop() nils
+	// the manager.
+	cacheResolver       *downloader.CacheResolver
+	cacheResolverMu     sync.Mutex
 	transportMu         sync.RWMutex
 	assetProgressQueue  chan assetProgressEnvelope
 	assetProgressSendMu sync.Mutex

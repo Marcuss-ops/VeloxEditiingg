@@ -43,8 +43,11 @@ type Transfer struct {
 
 	mu sync.Mutex
 
-	state           DownloadState
-	cacheHit        bool
+	state    DownloadState
+	cacheHit bool
+	// lookupOutcome is the canonical classification produced by the lookup
+	// point (Transferer.Check) for this transfer. Set exactly once per run.
+	lookupOutcome   CacheOutcome
 	attempt         int
 	queueSeq        int64
 	bytesTotal      int64
@@ -155,6 +158,24 @@ func (t *Transfer) setCacheHit(hit bool) {
 	t.mu.Lock()
 	t.cacheHit = hit
 	t.mu.Unlock()
+}
+
+// setOutcome records the canonical classification decided at the lookup
+// point. It is set once per transfer run, immediately after Check returns,
+// so the outcome is available on both the hit fast path and the miss
+// download path (and survives the transfer even when the download fails).
+func (t *Transfer) setOutcome(o CacheOutcome) {
+	t.mu.Lock()
+	t.lookupOutcome = o
+	t.mu.Unlock()
+}
+
+// resolutionOutcome returns the canonical lookup classification for this
+// transfer (empty when Check never classified it).
+func (t *Transfer) resolutionOutcome() CacheOutcome {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lookupOutcome
 }
 
 // setDownloading records DOWNLOADING start (attempt bump + startedAt) and

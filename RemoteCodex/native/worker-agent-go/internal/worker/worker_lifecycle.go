@@ -384,6 +384,13 @@ func (w *Worker) Stop() {
 			w.assetManager = nil
 		}
 		w.assetManagerMu.Unlock()
+		// Drop the resolver that wrapped the closed manager so the next
+		// session builds a fresh adapter over a fresh manager. The two locks
+		// are never held simultaneously (no AB-BA deadlock with
+		// assetCacheResolver, which takes cacheResolverMu → assetManagerMu).
+		w.cacheResolverMu.Lock()
+		w.cacheResolver = nil
+		w.cacheResolverMu.Unlock()
 	})
 }
 
