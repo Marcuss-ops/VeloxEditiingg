@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,6 +76,7 @@ func (b *segmentTestBlobStore) RemoveStaging(path string) error { return os.Remo
 func (b *segmentTestBlobStore) FinalPath(_, artifactID, extension string) string {
 	return filepath.Join(b.root, "final", artifactID+extension)
 }
+func (b *segmentTestBlobStore) FinalDir() string { return filepath.Join(b.root, "final") }
 
 func TestRewriteVideoClipSegmentsRegistersCanonicalSegment(t *testing.T) {
 	root := t.TempDir()
@@ -136,6 +138,109 @@ func TestRewriteVideoClipSegmentsRegistersCanonicalSegment(t *testing.T) {
 	if sha != hex.EncodeToString(wantHash[:]) {
 		t.Fatalf("sha256 = %q, want hash of prepared segment", sha)
 	}
+}
+
+func TestTrimAndRegisterVideoSegment_ProbesSourceOnceAcrossSegments(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "source.mp4")
+	if err := os.WriteFile(sourcePath, []byte("source video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingVideoRunner{probeOutput: probeJSON(t, normalizedVideoProbe(10, []float64{0, 2, 4, 6, 8, 10}))}
+	service := &AssetService{
+		repo:         &segmentTestRepository{},
+		blobStore:    &segmentTestBlobStore{root: filepath.Join(root, "assets")},
+		clock:        clock.System{},
+		videoTrimmer: newVideoTrimmerForTest(runner, DefaultVideoNormalization),
+	}
+	memo := make(map[string]*VideoProbe)
+
+	if _, _, err := service.TrimAndRegisterVideoSegment(context.Background(), sourcePath, VideoSegment{StartSeconds: 2, EndSeconds: 6}, memo); err != nil {
+		t.Fatalf("first segment: %v", err)
+	}
+	if _, _, err := service.TrimAndRegisterVideoSegment(context.Background(), sourcePath, VideoSegment{StartSeconds: 4, EndSeconds: 8}, memo); err != nil {
+		t.Fatalf("second segment: %v", err)
+	}
+
+	if probes := countFFProbeCommands(runner); probes != 1 {
+		t.Fatalf("ffprobe invocations = %d, want exactly 1 for two segments of the same source", probes)
+	}
+}
+
+func TestRewriteVideoClipSegments_RegisteredSourceWithVerifiedMetadataPassesGate(t *testing.T) {
+	repo := newMetadataProbeRepo(map[string]*AssetRecord{
+		"clip-reg": {AssetID: "clip-reg", Status: AssetStatusReady, MimeType: "video/mp4", StorageKey: "assets/clip-reg.mp4"},
+	})
+	repo.metadata["clip-reg"] = MediaMetadataRecord{
+		AssetID: "clip-reg", Container: "mp4", DurationMs: 5000, VideoCodec: "h264",
+		MetadataVerifiedAt: "2026-08-11T00:00:00Z", MetadataSchemaVersion: MediaMetadataSchemaVersion,
+	}
+	service := &AssetService{
+		repo:          repo,
+		blobStore:     &segmentTestBlobStore{root: t.TempDir()},
+		clock:         clock.System{},
+		mediaMetadata: newMediaMetadataResolverForTest(&recordingVideoRunner{}),
+		videoTrimmer:  newVideoTrimmerForTest(&recordingVideoRunner{}, DefaultVideoNormalization),
+		// registry intentionally nil: after the C2 metadata gate PASSES, the
+		// rewrite proceeds to materialization which fails on the missing
+		// resolver — proving the verified registered asset was NOT rejected
+		// by the metadata gate.
+	}
+	payload := map[string]interface{}{
+		"clip_segments": []interface{}{
+			map[string]interface{}{
+				"source_path":   "velox-asset://clip-reg",
+				"start_seconds": 2.0,
+				"end_seconds":   6.0,
+			},
+		},
+	}
+	err := service.RewriteVideoClipSegments(context.Background(), payload)
+	if err == nil {
+		t.Fatal("expected materialization failure after the metadata gate passed")
+	}
+	if strings.Contains(err.Error(), "no verified media metadata") {
+		t.Fatalf("metadata gate rejected a registered asset WITH verified metadata: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no resolver is configured") {
+		t.Fatalf("expected the no-resolver materialization error, got %v", err)
+	}
+}
+
+func TestRewriteVideoClipSegments_FailsClosedOnUnverifiedRegisteredSource(t *testing.T) {
+	repo := newMetadataProbeRepo(map[string]*AssetRecord{
+		"clip-reg": {AssetID: "clip-reg", Status: AssetStatusReady, MimeType: "video/mp4", StorageKey: "assets/clip-reg.mp4"},
+	})
+	service := &AssetService{
+		repo:          repo,
+		blobStore:     &segmentTestBlobStore{root: t.TempDir()},
+		clock:         clock.System{},
+		mediaMetadata: newMediaMetadataResolverForTest(&failingMediaRunner{err: errors.New("ffprobe boom")}),
+		videoTrimmer:  newVideoTrimmerForTest(&recordingVideoRunner{}, DefaultVideoNormalization),
+	}
+	payload := map[string]interface{}{
+		"clip_segments": []interface{}{
+			map[string]interface{}{
+				"source_path":   "velox-asset://clip-reg",
+				"start_seconds": 2.0,
+				"end_seconds":   6.0,
+			},
+		},
+	}
+	err := service.RewriteVideoClipSegments(context.Background(), payload)
+	if err == nil || !strings.Contains(err.Error(), "no verified media metadata") {
+		t.Fatalf("want fail-closed registered-asset rejection, got %v", err)
+	}
+}
+
+func countFFProbeCommands(runner *recordingVideoRunner) int {
+	count := 0
+	for _, cmd := range runner.commands {
+		if cmd.name == "ffprobe" {
+			count++
+		}
+	}
+	return count
 }
 
 func TestRewriteVideoClipSegmentsSupportsJSONAndFailsClosedWithoutLocalSource(t *testing.T) {

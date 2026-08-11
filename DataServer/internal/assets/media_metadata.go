@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -244,6 +245,22 @@ func (s *AssetService) persistMediaMetadata(ctx context.Context, assetID, finalP
 		s.observeMetadataOutcome(MetadataOutcomeProbeFailed)
 		return
 	}
+	if err := s.upsertMediaMetadataRecord(ctx, assetID, meta); err != nil {
+		s.observeMetadataOutcome(MetadataOutcomePersistFailed)
+		return
+	}
+	s.observeMetadataOutcome(MetadataOutcomeVerified)
+}
+
+// upsertMediaMetadataRecord stamps the canonical schema version + verified-at
+// timestamp and persists the row (idempotent upsert). Shared by the
+// registration-time best-effort path (persistMediaMetadata) and the
+// job-time fail-closed path (EnsureMediaMetadata) so both produce the SAME
+// canonical record shape.
+func (s *AssetService) upsertMediaMetadataRecord(ctx context.Context, assetID string, meta *MediaMetadata) error {
+	if meta == nil {
+		return fmt.Errorf("media metadata record requires a probe result")
+	}
 	now := s.clock.Now().UTC().Format(time.RFC3339)
 	record := MediaMetadataRecord{
 		AssetID:               assetID,
@@ -265,10 +282,83 @@ func (s *AssetService) persistMediaMetadata(ctx context.Context, assetID, finalP
 	}
 	if err := s.repo.UpsertMediaMetadata(ctx, assetID, record); err != nil {
 		log.Printf("[ASSETS] media metadata persist failed asset=%s: %v", assetID, err)
-		s.observeMetadataOutcome(MetadataOutcomePersistFailed)
-		return
+		return err
 	}
-	s.observeMetadataOutcome(MetadataOutcomeVerified)
+	return nil
+}
+
+// EnsureMediaMetadata returns the verified media metadata for an asset,
+// consuming the registry as authoritative (Fase C2). Rules:
+//
+//   - registered + verified row   → return it, NO probe (input-asset probing
+//     is eliminated for already-registered assets);
+//   - registered media, no verified row → probe ONCE through the canonical
+//     MediaMetadataResolver and persist the result; a probe failure is
+//     returned as an error so the caller can fail closed (reject) instead of
+//     inventing metadata;
+//   - non-media asset             → (nil, nil).
+//
+// Job-time consumers MUST use this accessor (or GetMediaMetadata) instead of
+// spawning their own ffprobe.
+func (s *AssetService) EnsureMediaMetadata(ctx context.Context, assetID string) (*MediaMetadata, error) {
+	if s == nil || s.repo == nil || s.mediaMetadata == nil || s.blobStore == nil {
+		return nil, fmt.Errorf("asset service unavailable")
+	}
+	assetID = strings.TrimSpace(assetID)
+	if assetID == "" {
+		return nil, fmt.Errorf("asset id required")
+	}
+	asset, err := s.Get(ctx, assetID)
+	if err != nil {
+		return nil, err
+	}
+	if asset == nil {
+		return nil, fmt.Errorf("asset %s not found", assetID)
+	}
+	if !isMediaMIME(asset.MimeType) {
+		return nil, nil
+	}
+	rec, recErr := s.repo.GetMediaMetadata(ctx, assetID)
+	if recErr != nil {
+		return nil, recErr
+	}
+	if rec != nil && rec.Verified() {
+		return rec.ToDomain(), nil
+	}
+
+	// No verified row: probe ONCE via the canonical component and persist.
+	probePath := resolveFinalBlobPath(s.blobStore.FinalDir(), asset.StorageKey)
+	if probePath == "" {
+		return nil, fmt.Errorf("asset %s has no final blob path", assetID)
+	}
+	meta, probeErr := s.mediaMetadata.Resolve(ctx, probePath)
+	if probeErr != nil {
+		s.observeMetadataOutcome(MetadataOutcomeProbeFailed)
+		return nil, fmt.Errorf("asset %s has no verified media metadata: %w", assetID, probeErr)
+	}
+	if persistErr := s.upsertMediaMetadataRecord(ctx, assetID, meta); persistErr != nil {
+		// The probe produced valid metadata even though the persist failed;
+		// surface it but keep the registry unverified (next consumer re-probes).
+		s.observeMetadataOutcome(MetadataOutcomePersistFailed)
+	} else {
+		s.observeMetadataOutcome(MetadataOutcomeVerified)
+	}
+	return meta, nil
+}
+
+// resolveFinalBlobPath resolves an asset StorageKey into a filesystem path
+// for probing: absolute keys are used as-is (legacy FilesystemBlobStore
+// PromoteToFinal returns absolute paths); relative keys are resolved against
+// the final directory.
+func resolveFinalBlobPath(finalDir, storageKey string) string {
+	cleaned := strings.TrimSpace(storageKey)
+	if cleaned == "" {
+		return ""
+	}
+	if filepath.IsAbs(cleaned) {
+		return filepath.Clean(cleaned)
+	}
+	return filepath.Join(finalDir, filepath.FromSlash(cleaned))
 }
 
 // observeMetadataOutcome records a bounded probe-pipeline outcome (nil-safe

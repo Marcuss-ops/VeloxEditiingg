@@ -229,6 +229,9 @@ func (t *VideoTrimmer) Plan(probe VideoProbe, segment VideoSegment, inputPath, o
 // non-normalized source is normalized into a sibling temporary file before the
 // requested interval is cut, ensuring the worker receives only the segment.
 func (t *VideoTrimmer) Trim(ctx context.Context, inputPath, outputPath string, segment VideoSegment) (TrimResult, error) {
+	if t == nil || t.runner == nil {
+		return TrimResult{}, fmt.Errorf("video trimmer unavailable")
+	}
 	if strings.TrimSpace(inputPath) == "" || strings.TrimSpace(outputPath) == "" {
 		return TrimResult{}, fmt.Errorf("video input and output paths are required")
 	}
@@ -236,6 +239,27 @@ func (t *VideoTrimmer) Trim(ctx context.Context, inputPath, outputPath string, s
 	if err != nil {
 		return TrimResult{}, err
 	}
+	return t.trimWithProbe(ctx, probe, inputPath, outputPath, segment)
+}
+
+// TrimWithProbe trims one segment using a caller-provided canonical probe
+// (registry-first metadata or a per-source memo). Repeated segments from the
+// SAME source probe exactly ONCE (Fase C2: probe UNA volta) instead of
+// spawning N ffprobe processes for N segments.
+func (t *VideoTrimmer) TrimWithProbe(ctx context.Context, probe VideoProbe, inputPath, outputPath string, segment VideoSegment) (TrimResult, error) {
+	if t == nil || t.runner == nil {
+		return TrimResult{}, fmt.Errorf("video trimmer unavailable")
+	}
+	if strings.TrimSpace(inputPath) == "" || strings.TrimSpace(outputPath) == "" {
+		return TrimResult{}, fmt.Errorf("video input and output paths are required")
+	}
+	return t.trimWithProbe(ctx, probe, inputPath, outputPath, segment)
+}
+
+// trimWithProbe is the shared execution body: plan, normalize if needed,
+// execute ffmpeg, atomically promote. The probe is already validated by the
+// caller (Plan fails on an invalid probe via validateSegment).
+func (t *VideoTrimmer) trimWithProbe(ctx context.Context, probe VideoProbe, inputPath, outputPath string, segment VideoSegment) (TrimResult, error) {
 	plan, err := t.Plan(probe, segment, inputPath, outputPath)
 	if err != nil {
 		return TrimResult{}, err

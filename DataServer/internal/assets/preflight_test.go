@@ -17,6 +17,7 @@ func (b preflightBlobStore) StagingPath(string, string, string) (string, error) 
 func (b preflightBlobStore) PromoteToFinal(string, string) (string, error)      { return "", nil }
 func (b preflightBlobStore) RemoveStaging(string) error                         { return nil }
 func (b preflightBlobStore) FinalPath(_, _, _ string) string                    { return "" }
+func (b preflightBlobStore) FinalDir() string                                   { return b.root }
 func (b preflightBlobStore) ReadFinal(storageKey string) (*os.File, error) {
 	return os.Open(filepath.Join(b.root, storageKey))
 }

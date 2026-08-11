@@ -24,12 +24,20 @@ func (s *AssetService) RewriteVideoClipSegments(ctx context.Context, payload map
 	if s == nil || payload == nil {
 		return nil
 	}
-	if err := s.rewriteVideoClipSegmentsMap(ctx, payload); err != nil {
+	// Fase C2: ONE probe per source across the whole rewrite. The memo is
+	// hoisted here so a source referenced in the payload AND in nested
+	// parameters/render_manifest maps is still probed exactly once.
+	// Assumption: a source's content is stable within one rewrite (a job
+	// payload); for remote sources each segment materializes a fresh temp
+	// copy of the same reference, and the memoized probe is reused across
+	// those copies.
+	probes := make(map[string]*VideoProbe)
+	if err := s.rewriteVideoClipSegmentsMap(ctx, payload, probes); err != nil {
 		return err
 	}
 	for _, key := range []string{"parameters", "render_manifest"} {
 		if nested, ok := payload[key].(map[string]interface{}); ok {
-			if err := s.rewriteVideoClipSegmentsMap(ctx, nested); err != nil {
+			if err := s.rewriteVideoClipSegmentsMap(ctx, nested, probes); err != nil {
 				return err
 			}
 		}
@@ -37,13 +45,13 @@ func (s *AssetService) RewriteVideoClipSegments(ctx context.Context, payload map
 	return nil
 }
 
-func (s *AssetService) rewriteVideoClipSegmentsMap(ctx context.Context, payload map[string]interface{}) error {
+func (s *AssetService) rewriteVideoClipSegmentsMap(ctx context.Context, payload map[string]interface{}, probes map[string]*VideoProbe) error {
 	if raw, ok := payload["clip_segments_json"].(string); ok && strings.TrimSpace(raw) != "" {
 		var segments []map[string]interface{}
 		if err := json.Unmarshal([]byte(raw), &segments); err != nil {
 			return fmt.Errorf("clip_segments_json: %w", err)
 		}
-		if err := s.rewriteVideoClipSegmentMaps(ctx, segments); err != nil {
+		if err := s.rewriteVideoClipSegmentMaps(ctx, segments, probes); err != nil {
 			return err
 		}
 		encoded, err := json.Marshal(segments)
@@ -54,36 +62,50 @@ func (s *AssetService) rewriteVideoClipSegmentsMap(ctx context.Context, payload 
 	}
 	switch segments := payload["clip_segments"].(type) {
 	case []interface{}:
-		return s.rewriteVideoClipSegmentValues(ctx, segments)
+		return s.rewriteVideoClipSegmentValues(ctx, segments, probes)
 	case []map[string]interface{}:
-		return s.rewriteVideoClipSegmentMaps(ctx, segments)
+		return s.rewriteVideoClipSegmentMaps(ctx, segments, probes)
 	}
 	return nil
 }
 
-func (s *AssetService) rewriteVideoClipSegmentValues(ctx context.Context, values []interface{}) error {
+func (s *AssetService) rewriteVideoClipSegmentValues(ctx context.Context, values []interface{}, probes map[string]*VideoProbe) error {
 	for i, raw := range values {
 		segment, ok := raw.(map[string]interface{})
 		if !ok {
 			return fmt.Errorf("clip_segments[%d] must be an object", i)
 		}
-		if err := s.rewriteVideoClipSegment(ctx, segment, i); err != nil {
+		if err := s.rewriteVideoClipSegment(ctx, segment, i, probes); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *AssetService) rewriteVideoClipSegmentMaps(ctx context.Context, segments []map[string]interface{}) error {
+func (s *AssetService) rewriteVideoClipSegmentMaps(ctx context.Context, segments []map[string]interface{}, probes map[string]*VideoProbe) error {
 	for i, segment := range segments {
-		if err := s.rewriteVideoClipSegment(ctx, segment, i); err != nil {
+		if err := s.rewriteVideoClipSegment(ctx, segment, i, probes); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *AssetService) rewriteVideoClipSegment(ctx context.Context, segment map[string]interface{}, index int) error {
+// registeredAssetReference extracts an asset id from a canonical
+// velox-asset:// reference. Non-registry references (master-local paths,
+// drive URLs) yield ("", false) and skip the Fase C2 fail-closed metadata
+// gate.
+func registeredAssetReference(reference string) (string, bool) {
+	trimmed := strings.TrimSpace(reference)
+	prefix := VeloxAssetScheme + "://"
+	if !strings.HasPrefix(trimmed, prefix) {
+		return "", false
+	}
+	id := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+	return id, id != ""
+}
+
+func (s *AssetService) rewriteVideoClipSegment(ctx context.Context, segment map[string]interface{}, index int, probes map[string]*VideoProbe) error {
 	if segment == nil {
 		return fmt.Errorf("clip_segments[%d] is nil", index)
 	}
@@ -118,7 +140,19 @@ func (s *AssetService) rewriteVideoClipSegment(ctx context.Context, segment map[
 		return fmt.Errorf("clip_segments[%d] requires start_seconds/end_seconds or start_ms/end_ms", index)
 	}
 
-	asset, result, err := s.TrimAndRegisterVideoSegment(ctx, sourcePath, VideoSegment{StartSeconds: start, EndSeconds: end})
+	// Fase C2 fail-closed gate: a source that references an already-registered
+	// media asset MUST have verified registry metadata before it can be
+	// trimmed. EnsureMediaMetadata consumes the registry when a verified row
+	// exists, otherwise it probes ONCE through the canonical component and
+	// persists; an unverifiable media asset is REJECTED — metadata is never
+	// invented.
+	if assetID, ok := registeredAssetReference(sourcePath); ok {
+		if _, err := s.EnsureMediaMetadata(ctx, assetID); err != nil {
+			return fmt.Errorf("clip_segments[%d]: registered media asset %s: %w", index, assetID, err)
+		}
+	}
+
+	asset, result, err := s.TrimAndRegisterVideoSegment(ctx, sourcePath, VideoSegment{StartSeconds: start, EndSeconds: end}, probes)
 	if err != nil {
 		return fmt.Errorf("clip_segments[%d]: %w", index, err)
 	}
@@ -135,13 +169,21 @@ func (s *AssetService) rewriteVideoClipSegment(ctx context.Context, segment map[
 // TrimAndRegisterVideoSegment trims a master-local source and registers only
 // the resulting segment through the same content-addressed BlobStore and
 // AssetRepository used by ordinary assets.
-func (s *AssetService) TrimAndRegisterVideoSegment(ctx context.Context, sourcePath string, segment VideoSegment) (*Asset, TrimResult, error) {
+//
+// The optional variadic `memo` carries per-source probes across segments of
+// the SAME rewrite (Fase C2: probe UNA volta) so N segments from one source
+// spawn exactly ONE ffprobe instead of N.
+func (s *AssetService) TrimAndRegisterVideoSegment(ctx context.Context, sourcePath string, segment VideoSegment, memo ...map[string]*VideoProbe) (*Asset, TrimResult, error) {
 	if s == nil || s.repo == nil || s.blobStore == nil || s.videoTrimmer == nil {
 		return nil, TrimResult{}, fmt.Errorf("video asset service unavailable")
 	}
 	sourceRef := strings.TrimSpace(sourcePath)
 	if sourceRef == "" {
 		return nil, TrimResult{}, fmt.Errorf("video source path is required")
+	}
+	var sourceProbes map[string]*VideoProbe
+	if len(memo) > 0 {
+		sourceProbes = memo[0]
 	}
 	materializedPath, cleanup, err := s.materializeVideoSource(ctx, sourceRef)
 	if err != nil {
@@ -161,7 +203,28 @@ func (s *AssetService) TrimAndRegisterVideoSegment(ctx context.Context, sourcePa
 	}
 	defer os.Remove(outputPath)
 
-	result, err := s.videoTrimmer.Trim(ctx, materializedPath, outputPath, segment)
+	// Canonical probe, reused across segments of the same source.
+	var probe VideoProbe
+	probeLoaded := false
+	if sourceProbes != nil {
+		if cached := sourceProbes[sourceRef]; cached != nil {
+			probe = *cached
+			probeLoaded = true
+		}
+	}
+	if !probeLoaded {
+		var probeErr error
+		probe, probeErr = s.videoTrimmer.Probe(ctx, materializedPath)
+		if probeErr != nil {
+			return nil, TrimResult{}, probeErr
+		}
+		if sourceProbes != nil {
+			copied := probe
+			sourceProbes[sourceRef] = &copied
+		}
+	}
+
+	result, err := s.videoTrimmer.TrimWithProbe(ctx, probe, materializedPath, outputPath, segment)
 	if err != nil {
 		return nil, TrimResult{}, err
 	}

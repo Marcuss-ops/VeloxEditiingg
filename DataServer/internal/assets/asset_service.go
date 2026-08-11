@@ -25,6 +25,12 @@
 //	                            DB, no BlobStore).
 //	media_extension.go         - extensionFromName: media-extension
 //	                            inference used by ResolveAndRegister.
+//	media_metadata.go          - MediaMetadataResolver (the SINGLE
+//	                            canonical ffprobe extractor),
+//	                            registry-first GetMediaMetadata /
+//	                            EnsureMediaMetadata accessors, and
+//	                            persistMediaMetadata at ingestion.
+//	media_metadata_metrics.go  - bounded probe-outcome counters.
 //
 // Single-instance contract enforced by this split:
 //   - ResolverRegistry remains defined only in registry.go.

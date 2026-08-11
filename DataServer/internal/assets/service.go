@@ -44,6 +44,10 @@ type BlobStore interface {
 	PromoteToFinal(stagingPath, finalPath string) (string, error)
 	RemoveStaging(path string) error
 	FinalPath(jobID, artifactID, extension string) string
+	// FinalDir returns the final storage root. Used to resolve a relative
+	// StorageKey into a filesystem path for the canonical metadata probe
+	// (Fase C2 EnsureMediaMetadata).
+	FinalDir() string
 }
 
 // AssetService is the generic asset registry service.

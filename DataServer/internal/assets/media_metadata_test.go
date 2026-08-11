@@ -181,6 +181,152 @@ type recordingMetadataRepo struct {
 	upserts []MediaMetadataRecord
 }
 
+// metadataProbeRepo stores assets + media-metadata rows (EnsureMediaMetadata
+// tests).
+type metadataProbeRepo struct {
+	*rewriteAssetRepository
+	metadata map[string]MediaMetadataRecord
+}
+
+func newMetadataProbeRepo(assets map[string]*AssetRecord) *metadataProbeRepo {
+	return &metadataProbeRepo{
+		rewriteAssetRepository: &rewriteAssetRepository{assets: assets},
+		metadata:               map[string]MediaMetadataRecord{},
+	}
+}
+
+func (r *metadataProbeRepo) GetMediaMetadata(_ context.Context, assetID string) (*MediaMetadataRecord, error) {
+	if rec, ok := r.metadata[assetID]; ok {
+		copied := rec
+		return &copied, nil
+	}
+	return nil, nil
+}
+
+func (r *metadataProbeRepo) UpsertMediaMetadata(_ context.Context, assetID string, rec MediaMetadataRecord) error {
+	if r.metadata == nil {
+		r.metadata = map[string]MediaMetadataRecord{}
+	}
+	rec.AssetID = assetID
+	r.metadata[assetID] = rec
+	return nil
+}
+
+func TestEnsureMediaMetadata_RegistryHitSkipsProbe(t *testing.T) {
+	repo := newMetadataProbeRepo(map[string]*AssetRecord{
+		"clip-1": {AssetID: "clip-1", Status: AssetStatusReady, MimeType: "video/mp4", StorageKey: "assets/clip-1.mp4"},
+	})
+	repo.metadata["clip-1"] = MediaMetadataRecord{
+		AssetID: "clip-1", Container: "mp4", DurationMs: 5000, VideoCodec: "h264",
+		Width: 1920, Height: 1080, MetadataVerifiedAt: "2026-08-11T00:00:00Z",
+		MetadataSchemaVersion: MediaMetadataSchemaVersion,
+	}
+	runner := &recordingVideoRunner{}
+	service := &AssetService{
+		repo: repo, blobStore: &segmentTestBlobStore{root: t.TempDir()},
+		clock: clock.System{}, mediaMetadata: newMediaMetadataResolverForTest(runner),
+	}
+	meta, err := service.EnsureMediaMetadata(context.Background(), "clip-1")
+	if err != nil {
+		t.Fatalf("EnsureMediaMetadata: %v", err)
+	}
+	if meta == nil || meta.Container != "mp4" || meta.DurationMs != 5000 || meta.Width != 1920 {
+		t.Fatalf("meta = %+v, want registry row surfaced", meta)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("registered asset with verified row must NOT spawn ffprobe, got %d commands", len(runner.commands))
+	}
+}
+
+func TestEnsureMediaMetadata_ProbesOncePersistsThenRegistryHit(t *testing.T) {
+	repo := newMetadataProbeRepo(map[string]*AssetRecord{
+		"clip-1": {AssetID: "clip-1", Status: AssetStatusReady, MimeType: "video/mp4", StorageKey: "assets/clip-1.mp4"},
+	})
+	runner := &recordingVideoRunner{probeOutput: mediaProbeJSON(t, mediaProbeDocument{
+		Streams: []mediaProbeStream{{CodecType: "video", CodecName: "h264", Width: 1920, Height: 1080, FrameRate: "30/1", TimeBase: "1/90000", PixelFormat: "yuv420p", Duration: 10}},
+		Format:  mediaProbeFormat{FormatName: "mp4", Duration: 10},
+	})}
+	service := &AssetService{
+		repo: repo, blobStore: &segmentTestBlobStore{root: t.TempDir()},
+		clock: clock.System{}, mediaMetadata: newMediaMetadataResolverForTest(runner),
+	}
+
+	first, err := service.EnsureMediaMetadata(context.Background(), "clip-1")
+	if err != nil {
+		t.Fatalf("first EnsureMediaMetadata: %v", err)
+	}
+	if first.DurationMs != 10000 {
+		t.Errorf("duration_ms = %d, want 10000", first.DurationMs)
+	}
+	persisted := repo.metadata["clip-1"]
+	if !persisted.Verified() {
+		t.Fatalf("one-time probe must persist a verified row: %+v", persisted)
+	}
+	if got := len(runner.commands); got != 1 {
+		t.Fatalf("probe commands = %d, want exactly 1", got)
+	}
+
+	second, err := service.EnsureMediaMetadata(context.Background(), "clip-1")
+	if err != nil {
+		t.Fatalf("second EnsureMediaMetadata: %v", err)
+	}
+	if second.DurationMs != 10000 {
+		t.Errorf("second duration_ms = %d", second.DurationMs)
+	}
+	if got := len(runner.commands); got != 1 {
+		t.Fatalf("registry-hit must skip the probe: commands = %d, want still 1", got)
+	}
+}
+
+func TestEnsureMediaMetadata_ProbeFailureFailsClosed(t *testing.T) {
+	repo := newMetadataProbeRepo(map[string]*AssetRecord{
+		"clip-1": {AssetID: "clip-1", Status: AssetStatusReady, MimeType: "video/mp4", StorageKey: "assets/clip-1.mp4"},
+	})
+	service := &AssetService{
+		repo: repo, blobStore: &segmentTestBlobStore{root: t.TempDir()},
+		clock: clock.System{}, mediaMetadata: newMediaMetadataResolverForTest(&failingMediaRunner{err: errors.New("boom")}),
+	}
+	_, err := service.EnsureMediaMetadata(context.Background(), "clip-1")
+	if err == nil || !strings.Contains(err.Error(), "no verified media metadata") {
+		t.Fatalf("want fail-closed error, got %v", err)
+	}
+	if _, ok := repo.metadata["clip-1"]; ok {
+		t.Fatal("failed probe must not invent a metadata row")
+	}
+}
+
+func TestEnsureMediaMetadata_NonMediaReturnsNil(t *testing.T) {
+	repo := newMetadataProbeRepo(map[string]*AssetRecord{
+		"font-1": {AssetID: "font-1", Status: AssetStatusReady, MimeType: "font/ttf", StorageKey: "assets/font-1.ttf"},
+	})
+	runner := &recordingVideoRunner{}
+	service := &AssetService{
+		repo: repo, blobStore: &segmentTestBlobStore{root: t.TempDir()},
+		clock: clock.System{}, mediaMetadata: newMediaMetadataResolverForTest(runner),
+	}
+	meta, err := service.EnsureMediaMetadata(context.Background(), "font-1")
+	if err != nil {
+		t.Fatalf("EnsureMediaMetadata non-media: %v", err)
+	}
+	if meta != nil {
+		t.Fatalf("non-media asset must yield (nil, nil), got %+v", meta)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("non-media must not probe, got %d commands", len(runner.commands))
+	}
+}
+
+func TestEnsureMediaMetadata_MissingAssetFailsClosed(t *testing.T) {
+	service := &AssetService{
+		repo: newMetadataProbeRepo(map[string]*AssetRecord{}), blobStore: &segmentTestBlobStore{root: t.TempDir()},
+		clock: clock.System{}, mediaMetadata: newMediaMetadataResolverForTest(&recordingVideoRunner{}),
+	}
+	_, err := service.EnsureMediaMetadata(context.Background(), "ghost")
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("want not-found error, got %v", err)
+	}
+}
+
 func (r *recordingMetadataRepo) UpsertMediaMetadata(_ context.Context, assetID string, rec MediaMetadataRecord) error {
 	rec.AssetID = assetID
 	r.upserts = append(r.upserts, rec)
