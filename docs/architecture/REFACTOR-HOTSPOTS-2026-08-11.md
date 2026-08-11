@@ -83,6 +83,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   rollbackato. Il reconciler di artifact può promuovere un task solo quando
   l'attempt corrispondente è stato realmente portato a `SUCCEEDED` o è già
   `SUCCEEDED` con identità task/job/worker/lease esatta.
+- Creator forwarding: la promozione sincrona a `READY_TO_FORWARD` verifica
+  anche che nessun runner abbia acquisito la lease nel frattempo; una race
+  restituisce conflitto senza cancellare l'ownership del runner.
 - Job progress: gli snapshot tardivi di un tentativo precedente o con
   timestamp più vecchio non possono più regredire il read model.
 - Render-only: il contatore audio riconosce il contratto esplicito a zero

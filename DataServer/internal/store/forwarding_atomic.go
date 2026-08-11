@@ -116,11 +116,11 @@ func (s *SQLiteStore) AtomicForwardAndEnqueue(
 //
 // Diff vs MarkCreatorForwardingReadyToForward: the latter is the legitimate
 // runner lease-holder promotion (CAS on qualifier+lease_id pair). The sync
-// path has no lease — using a CAS that requires one would never match. So
-// the sync method uses a relaxed guard: forwarding_id + status in
-// (PENDING, POLLING) only. Safe because the sync caller just INSERTed the
-// row in the same logical operation (no other runner can have claimed it
-// yet: PENDING = claimable, POLLING = lock/unlikely-immediately-after-insert).
+// path has no lease — using a CAS that requires one would never match. The
+// sync method therefore matches the forwarding ID, a promotable status, and
+// the absence of ownership fields. If a runner claims the row between INSERT
+// and promotion, the sync path gets ErrTransitionConflict and cannot clear or
+// overwrite the runner's ownership.
 //
 // Returns ErrTransitionConflict if the row is not in a promotable state
 // (already READY_TO_FORWARD, FORWARDED, FAILED, BLOCKED, etc.).
@@ -134,10 +134,13 @@ func (s *SQLiteStore) MarkCreatorForwardingReadySync(ctx context.Context, forwar
 		 SET status = 'READY_TO_FORWARD',
 		     source_status = 'completed',
 		     payload_json = ?, payload_sha256 = ?,
-		     locked_by = '', lease_id = '', lease_expires_at = '',
-		     updated_at = ?
+			    locked_by = '', lease_id = '', lease_expires_at = '',
+			    updated_at = ?
 		 WHERE forwarding_id = ?
-		   AND status IN ('PENDING', 'POLLING')`,
+		   AND status IN ('PENDING', 'POLLING')
+		   AND COALESCE(locked_by, '') = ''
+		   AND COALESCE(lease_id, '') = ''
+		   AND COALESCE(lease_expires_at, '') = ''`,
 		payloadJSON, payloadSHA256, now, forwardingID,
 	)
 	if err != nil {

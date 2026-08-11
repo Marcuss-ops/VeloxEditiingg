@@ -457,6 +457,33 @@ func TestMarkForwardingRetry(t *testing.T) {
 	}
 }
 
+func TestMarkCreatorForwardingReadySyncDoesNotStealLease(t *testing.T) {
+	db := setupForwardingTestDB(t)
+	ctx := context.Background()
+	insertTestForwarding(t, db, "cf-sync-fence", "openai", "creator-sync-fence", "scene.composite.v1", "PENDING")
+	leaseExpiry := time.Now().UTC().Add(time.Minute).Format(time.RFC3339)
+	if _, err := db.db.ExecContext(ctx, `UPDATE creator_forwardings
+		SET locked_by=?, lease_id=?, lease_expires_at=? WHERE forwarding_id=?`,
+		"runner-owner", "lease-owner", leaseExpiry, "cf-sync-fence"); err != nil {
+		t.Fatalf("seed forwarding lease: %v", err)
+	}
+
+	err := db.MarkCreatorForwardingReadySync(ctx, "cf-sync-fence", `{"complete":true}`, "sha-complete")
+	if err != ErrTransitionConflict {
+		t.Fatalf("ReadySync error=%v, want ErrTransitionConflict", err)
+	}
+	saved, err := db.GetCreatorForwarding(ctx, "cf-sync-fence")
+	if err != nil {
+		t.Fatalf("GetCreatorForwarding: %v", err)
+	}
+	if saved.Status != "PENDING" || saved.LockedBy != "runner-owner" || saved.LeaseID != "lease-owner" {
+		t.Fatalf("sync path stole lease or changed status: status=%q owner=(%q,%q)", saved.Status, saved.LockedBy, saved.LeaseID)
+	}
+	if saved.PayloadJSON != "" || saved.PayloadSHA256 != "" {
+		t.Fatalf("sync path wrote payload despite lease conflict: payload=%q sha=%q", saved.PayloadJSON, saved.PayloadSHA256)
+	}
+}
+
 func TestMarkForwardingFailed(t *testing.T) {
 	db := setupForwardingTestDB(t)
 	ctx := context.Background()
