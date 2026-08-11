@@ -17,6 +17,14 @@ import (
 // is persisted before the plan is sent, so a reconnect cannot turn a plan
 // into an unowned hint.
 func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJobID string) {
+	refreshStartedAt := time.Now().UTC()
+	var candidatesLoadedAt, reservationsLoadedAt, reservationsReconciledAt, planBuiltAt, planSentAt time.Time
+	defer func() {
+		log.Printf("[PREFETCH_TIMING] worker=%s current_job=%s refresh_started_at=%s candidates_loaded_at=%s reservations_loaded_at=%s reservations_reconciled_at=%s plan_built_at=%s plan_sent_at=%s candidate_query_ms=%d reservation_query_ms=%d reservation_reconcile_ms=%d plan_build_ms=%d plan_send_ms=%d",
+			workerID, currentJobID,
+			refreshStartedAt.Format(time.RFC3339Nano), formatTimingTimestamp(candidatesLoadedAt), formatTimingTimestamp(reservationsLoadedAt), formatTimingTimestamp(reservationsReconciledAt), formatTimingTimestamp(planBuiltAt), formatTimingTimestamp(planSentAt),
+			durationBetween(refreshStartedAt, candidatesLoadedAt), durationBetween(candidatesLoadedAt, reservationsLoadedAt), durationBetween(reservationsLoadedAt, reservationsReconciledAt), durationBetween(reservationsReconciledAt, planBuiltAt), durationBetween(planBuiltAt, planSentAt))
+	}()
 	store, ok := h.taskRepo.(taskgraph.FutureReservationStore)
 	if !ok {
 		return
@@ -26,11 +34,13 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 		log.Printf("[PREFETCH] future candidates worker=%s: %v", workerID, err)
 		return
 	}
+	candidatesLoadedAt = time.Now().UTC()
 	all, err := store.ListFutureReservations(ctx, "")
 	if err != nil {
 		log.Printf("[PREFETCH] future reservations worker=%s: %v", workerID, err)
 		return
 	}
+	reservationsLoadedAt = time.Now().UTC()
 	owned := make(map[string]taskgraph.FutureReservationWithPayload)
 	reservedByOther := make(map[string]struct{})
 	for _, item := range all {
@@ -84,6 +94,7 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 			if !acquired {
 				continue
 			}
+			log.Printf("[PREFETCH_TIMING] event=reservation_created worker=%s task=%s at=%s", workerID, candidate.TaskID, time.Now().UTC().Format(time.RFC3339Nano))
 		} else {
 			// N+4..N+10 are retention forecasts only. They must be
 			// represented in the worker snapshot, but must not acquire a
@@ -103,17 +114,35 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 		log.Printf("[PREFETCH] reconcile worker=%s: %v", workerID, err)
 		return
 	}
+	reservationsReconciledAt = time.Now().UTC()
 	limits := futureasset.Limits{PrefetchHorizon: h.config.FutureAssetPrefetchHorizon, ProtectionLookahead: h.config.FutureAssetProtectionLookahead}
 	plan, err := h.futureAssetPlanner.Build(workerID, currentJobID, fmt.Sprintf("future:%s", workerID), jobs, h.futureAssetPlanTTL())
 	if err != nil {
 		log.Printf("[PREFETCH] build worker=%s: %v", workerID, err)
 		return
 	}
+	planBuiltAt = time.Now().UTC()
 	plan.Limits = limits
 	log.Printf("[PREFETCH] plan worker=%s version=%d current_job=%s hard_reservations=%d protection_jobs=%d protected_assets=%d", workerID, plan.Version, currentJobID, len(desired), len(jobs), len(plan.Protect))
 	if err := h.SendFutureAssetPlan(ctx, plan); err != nil {
 		log.Printf("[PREFETCH] send worker=%s: %v", workerID, err)
+	} else {
+		planSentAt = time.Now().UTC()
 	}
+}
+
+func formatTimingTimestamp(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.Format(time.RFC3339Nano)
+}
+
+func durationBetween(start, end time.Time) int64 {
+	if start.IsZero() || end.IsZero() || end.Before(start) {
+		return 0
+	}
+	return end.Sub(start).Milliseconds()
 }
 
 func (h *Handler) futureAssetPlanTTL() time.Duration {
