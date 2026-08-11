@@ -46,17 +46,25 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 	}
 	snapshot := sess.placementSnapshot(workerID)
 	snapshot.ActiveJobs = 0 // future reservations do not consume current slots
-	limit := h.config.FutureAssetPrefetchHorizon
-	if limit <= 0 {
-		limit = 3
+	prefetchLimit := h.config.FutureAssetPrefetchHorizon
+	if prefetchLimit <= 0 {
+		prefetchLimit = futureasset.DefaultPrefetchHorizon
 	}
-	desired := make([]taskgraph.FutureReservation, 0, limit)
-	jobs := make([]futureasset.Job, 0, limit)
+	protectionLimit := h.config.FutureAssetProtectionLookahead
+	if protectionLimit < prefetchLimit {
+		protectionLimit = prefetchLimit
+	}
+	desired := make([]taskgraph.FutureReservation, 0, prefetchLimit)
+	jobs := make([]futureasset.Job, 0, protectionLimit)
 	for _, candidate := range candidates {
-		if len(desired) >= limit {
+		if len(jobs) >= protectionLimit {
 			break
 		}
 		if _, blocked := reservedByOther[candidate.TaskID]; blocked {
+			continue
+		}
+		match := h.placementMatcher.Select(snapshot, []placement.TaskCandidate{candidate})
+		if match.Candidate == nil {
 			continue
 		}
 		if existing, exists := owned[candidate.TaskID]; exists {
@@ -64,24 +72,29 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 			jobs = append(jobs, futureasset.Job{JobID: existing.JobID, TaskID: existing.TaskID, ReservationID: existing.ReservationID, TaskRevision: existing.TaskRevision, Assets: futureAssetManifests(existing.Payload)})
 			continue
 		}
-		match := h.placementMatcher.Select(snapshot, []placement.TaskCandidate{candidate})
-		if match.Candidate == nil {
-			continue
-		}
-		reservation := taskgraph.FutureReservation{TaskID: candidate.TaskID, JobID: candidate.JobID, WorkerID: workerID, ReservationID: fmt.Sprintf("future:%s:%s", workerID, candidate.TaskID), TaskRevision: candidate.Revision, Distance: len(desired) + 1, ExpiresAt: time.Now().UTC().Add(h.futureAssetPlanTTL())}
-		acquired, err := store.TryReserveFutureTask(ctx, reservation)
-		if err != nil {
-			log.Printf("[PREFETCH] reserve worker=%s task=%s: %v", workerID, candidate.TaskID, err)
-			continue
-		}
-		if !acquired {
-			continue
+		reservation := taskgraph.FutureReservation{TaskID: candidate.TaskID, JobID: candidate.JobID, WorkerID: workerID, ReservationID: fmt.Sprintf("future:%s:%s", workerID, candidate.TaskID), TaskRevision: candidate.Revision, Distance: len(jobs) + 1, ExpiresAt: time.Now().UTC().Add(h.futureAssetPlanTTL())}
+		if len(jobs) < prefetchLimit {
+			acquired, err := store.TryReserveFutureTask(ctx, reservation)
+			if err != nil {
+				log.Printf("[PREFETCH] reserve worker=%s task=%s: %v", workerID, candidate.TaskID, err)
+				continue
+			}
+			if !acquired {
+				continue
+			}
+		} else {
+			// N+4..N+10 are retention forecasts only. They must be
+			// represented in the worker snapshot, but must not acquire a
+			// hard placement reservation or consume a scheduler slot.
+			reservation.ReservationID = ""
 		}
 		payload, err := store.FutureTaskPayload(ctx, candidate.TaskID)
 		if err != nil {
 			continue
 		}
-		desired = append(desired, reservation)
+		if reservation.ReservationID != "" {
+			desired = append(desired, reservation)
+		}
 		jobs = append(jobs, futureasset.Job{JobID: candidate.JobID, TaskID: candidate.TaskID, ReservationID: reservation.ReservationID, TaskRevision: candidate.Revision, Assets: futureAssetManifests(payload)})
 	}
 	if err := store.ReconcileFutureReservations(ctx, workerID, desired); err != nil {
@@ -95,6 +108,7 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 		return
 	}
 	plan.Limits = limits
+	log.Printf("[PREFETCH] plan worker=%s version=%d current_job=%s hard_reservations=%d protection_jobs=%d protected_assets=%d", workerID, plan.Version, currentJobID, len(desired), len(jobs), len(plan.Protect))
 	if err := h.SendFutureAssetPlan(ctx, plan); err != nil {
 		log.Printf("[PREFETCH] send worker=%s: %v", workerID, err)
 	}
