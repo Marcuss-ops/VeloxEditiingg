@@ -56,6 +56,9 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 	if err != nil {
 		return "", fmt.Errorf("failed to download velox asset %s: %w", assetID, err)
 	}
+	if w.prefetchScheduler != nil {
+		w.prefetchScheduler.MarkForegroundUse(assetref.AssetKey(assetID))
+	}
 
 	completed := time.Now().UTC()
 	status := "miss"

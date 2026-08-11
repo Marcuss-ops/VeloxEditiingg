@@ -1,6 +1,8 @@
 package worker
 
 import (
+	"syscall"
+
 	"velox-worker-agent/internal/prefetch"
 )
 
@@ -40,5 +42,18 @@ func (w *Worker) futureAssetScheduler() *prefetch.Scheduler {
 	}
 	w.prefetchScheduler.SetResolver(resolver)
 	w.prefetchScheduler.SetProtectionStore(w.canonicalAssetCache)
+	w.prefetchScheduler.SetDiskUsagePercent(w.prefetchDiskUsagePercent)
 	return w.prefetchScheduler
+}
+
+func (w *Worker) prefetchDiskUsagePercent() int {
+	if w == nil {
+		return 0
+	}
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(w.assetCacheDir(), &stat); err != nil || stat.Blocks == 0 {
+		return 0
+	}
+	used := stat.Blocks - stat.Bfree
+	return int((used * 100) / stat.Blocks)
 }

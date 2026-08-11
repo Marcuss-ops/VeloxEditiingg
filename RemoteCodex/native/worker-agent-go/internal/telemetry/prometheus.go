@@ -38,6 +38,11 @@ type PrometheusMetrics struct {
 	assetCacheEntries                *GaugeVec
 	assetCacheDuplicateDownloads     *CounterVec
 	assetCacheDuplicateDownloadBytes *CounterVec
+	prefetchRequested                *CounterVec
+	prefetchDownloaded               *CounterVec
+	prefetchDownloadedBytes          *CounterVec
+	prefetchUseful                   *CounterVec
+	prefetchWastedBytes              *CounterVec
 	workerErrorsTotal                *CounterVec
 	assetDownloadActive              *GaugeVec
 	assetDownloadQueued              *GaugeVec
@@ -137,6 +142,11 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 			Name: "velox_cache_duplicate_download_bytes_total", Help: "Expected bytes a duplicate request would have consumed when coalesced by AssetDownloadManager",
 			values: map[string]float64{"asset": 0},
 		},
+		prefetchRequested:       &CounterVec{Name: "velox_prefetch_assets_requested_total", Help: "Future assets requested by prefetch", values: map[string]float64{"asset": 0}},
+		prefetchDownloaded:      &CounterVec{Name: "velox_prefetch_assets_downloaded_total", Help: "Future assets downloaded by prefetch", values: map[string]float64{"asset": 0}},
+		prefetchDownloadedBytes: &CounterVec{Name: "velox_prefetch_bytes_total", Help: "Bytes downloaded by prefetch", values: map[string]float64{"asset": 0}},
+		prefetchUseful:          &CounterVec{Name: "velox_prefetch_useful_assets_total", Help: "Prefetched assets later used by foreground", values: map[string]float64{"asset": 0}},
+		prefetchWastedBytes:     &CounterVec{Name: "velox_prefetch_wasted_bytes_total", Help: "Prefetched bytes abandoned before use", values: map[string]float64{"asset": 0}},
 		workerErrorsTotal: &CounterVec{
 			Name: "velox_worker_errors_total", Help: "Worker task failures",
 			values: map[string]float64{"total": 0},
@@ -208,6 +218,11 @@ func (m *PrometheusMetrics) ExportPrometheus() string {
 	output += m.assetCacheEntries.export()
 	output += m.assetCacheDuplicateDownloads.export()
 	output += m.assetCacheDuplicateDownloadBytes.export()
+	output += m.prefetchRequested.export()
+	output += m.prefetchDownloaded.export()
+	output += m.prefetchDownloadedBytes.export()
+	output += m.prefetchUseful.export()
+	output += m.prefetchWastedBytes.export()
 	output += m.workerErrorsTotal.export()
 	output += m.assetDownloadActive.export()
 	output += m.assetDownloadQueued.export()

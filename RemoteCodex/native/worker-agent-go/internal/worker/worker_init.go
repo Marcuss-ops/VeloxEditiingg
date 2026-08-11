@@ -21,6 +21,7 @@ import (
 
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
+	"velox-shared/futureasset"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/prefetch"
 	"velox-worker-agent/internal/publisher"
@@ -349,7 +350,19 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		// Remembered self-verified digests for partial-metadata cache hits.
 		assetIntegrity:     make(map[string]assetIntegrityRecord),
 		prefetchController: prefetch.NewController(cfg.WorkerID),
-		prefetchScheduler:  prefetch.NewScheduler(prefetch.Config{WorkerID: cfg.WorkerID, MaxConcurrent: cfg.PrefetchMaxConcurrent, ByteBudget: cfg.PrefetchByteBudget, MaxBandwidthBytesPerSecond: cfg.PrefetchMaxBandwidthBytesPerSecond, DiskRestrictedPercent: cfg.PrefetchDiskRestrictedPercent, DiskCriticalPercent: cfg.PrefetchDiskCriticalPercent, DiskRecoveryPercent: cfg.PrefetchDiskRecoveryPercent, RAM: ramCache, RAMMinFutureRefs: cfg.PrefetchRAMMinFutureRefs, RAMMaxNextUseDistance: cfg.PrefetchRAMMaxNextUseDistance}),
+		prefetchScheduler: prefetch.NewScheduler(prefetch.Config{WorkerID: cfg.WorkerID, MaxConcurrent: cfg.PrefetchMaxConcurrent, ByteBudget: cfg.PrefetchByteBudget, MaxBandwidthBytesPerSecond: cfg.PrefetchMaxBandwidthBytesPerSecond, DiskRestrictedPercent: cfg.PrefetchDiskRestrictedPercent, DiskCriticalPercent: cfg.PrefetchDiskCriticalPercent, DiskRecoveryPercent: cfg.PrefetchDiskRecoveryPercent, RAM: ramCache, RAMMinFutureRefs: cfg.PrefetchRAMMinFutureRefs, RAMMaxNextUseDistance: cfg.PrefetchRAMMaxNextUseDistance, OnState: func(state string, _ futureasset.Job, asset futureasset.AssetManifest, _ error) {
+			metrics := telemetry.GetPrometheusMetrics()
+			switch state {
+			case "requested":
+				metrics.RecordPrefetchRequested()
+			case "downloaded":
+				metrics.RecordPrefetchDownloaded(asset.SizeBytes)
+			case "useful":
+				metrics.RecordPrefetchUseful()
+			case "wasted":
+				metrics.RecordPrefetchWastedBytes(asset.SizeBytes)
+			}
+		}}),
 		// PR-2: TaskOffer-accepted tasks awaiting TaskLeaseGranted before
 		// executeTask dispatch. Keyed by task_id — one canonical entry per
 		// outstanding offer per session.

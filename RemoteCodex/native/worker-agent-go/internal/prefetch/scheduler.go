@@ -46,17 +46,20 @@ type jobRuntime struct {
 }
 
 type Scheduler struct {
-	mu       sync.Mutex
-	cfg      Config
-	resolver *downloader.CacheResolver
-	protect  workercache.LeaseReservationStore
-	ram      *RAMCache
-	hints    map[string]futureasset.ProtectedAsset
-	jobs     map[string]jobRuntime
-	protects map[string]string
-	bytes    int64
-	sem      chan struct{}
-	state    diskPressureState
+	mu         sync.Mutex
+	cfg        Config
+	resolver   *downloader.CacheResolver
+	protect    workercache.LeaseReservationStore
+	ram        *RAMCache
+	hints      map[string]futureasset.ProtectedAsset
+	prefetched map[string]int64
+	useful     map[string]bool
+	assetJobs  map[string]map[string]struct{}
+	jobs       map[string]jobRuntime
+	protects   map[string]string
+	bytes      int64
+	sem        chan struct{}
+	state      diskPressureState
 }
 
 type diskPressureState uint8
@@ -92,7 +95,7 @@ func NewScheduler(cfg Config) *Scheduler {
 	if cfg.RAMMaxNextUseDistance <= 0 {
 		cfg.RAMMaxNextUseDistance = 3
 	}
-	return &Scheduler{cfg: cfg, ram: cfg.RAM, jobs: make(map[string]jobRuntime), protects: make(map[string]string), hints: make(map[string]futureasset.ProtectedAsset), sem: make(chan struct{}, cfg.MaxConcurrent)}
+	return &Scheduler{cfg: cfg, ram: cfg.RAM, jobs: make(map[string]jobRuntime), protects: make(map[string]string), hints: make(map[string]futureasset.ProtectedAsset), prefetched: make(map[string]int64), useful: make(map[string]bool), assetJobs: make(map[string]map[string]struct{}), sem: make(chan struct{}, cfg.MaxConcurrent)}
 }
 
 func (s *Scheduler) SetResolver(r *downloader.CacheResolver) {
@@ -113,6 +116,14 @@ func (s *Scheduler) SetProtectionStore(store workercache.LeaseReservationStore) 
 	s.mu.Lock()
 	s.protect = store
 	s.mu.Unlock()
+}
+
+func (s *Scheduler) SetDiskUsagePercent(fn func() int) {
+	if s != nil {
+		s.mu.Lock()
+		s.cfg.DiskUsagePercent = fn
+		s.mu.Unlock()
+	}
 }
 
 // Reconcile applies a complete snapshot. New reservations are installed
@@ -137,6 +148,7 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 		if _, ok := findScheduledJob(plan.PrefetchJobs, id); !ok {
 			runtime.cancel()
 			delete(s.jobs, id)
+			s.detachJobLocked(runtime.job)
 		}
 	}
 	store := s.protect
@@ -149,7 +161,10 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 		newProtects[asset.AssetKey] = reservationID
 		if store != nil {
 			// Reserve before releasing the prior snapshot's reservation.
-			_ = store.Reserve(context.Background(), assetref.AssetKey(asset.AssetKey), reservationID, plan.ExpiresAt)
+			if err := store.Reserve(context.Background(), assetref.AssetKey(asset.AssetKey), reservationID, plan.ExpiresAt); err != nil {
+				s.mu.Unlock()
+				return fmt.Errorf("prefetch: protect %s: %w", asset.AssetKey, err)
+			}
 		}
 	}
 	if store != nil {
@@ -206,14 +221,36 @@ func (s *Scheduler) runJob(ctx context.Context, resolver *downloader.CacheResolv
 			<-s.sem
 			continue
 		}
+		bandwidth := s.cfg.MaxBandwidthBytesPerSecond
+		if bandwidth > 0 {
+			bandwidth /= int64(cap(s.sem))
+			if bandwidth == 0 {
+				bandwidth = 1
+			}
+		}
 		request := downloader.DownloadRequest{
 			JobID: job.JobID, TaskID: job.TaskID, AssetKey: assetref.AssetKey(asset.AssetKey), AssetID: asset.AssetID,
 			Role: downloader.RoleFromString(asset.Role), Source: "master_asset_bridge",
 			SHA256: assetref.ContentHash(asset.SHA256), SizeBytes: asset.SizeBytes, MIMEType: asset.MIMEType,
 			Priority:                   priorityForDistance(job.Distance),
-			MaxBandwidthBytesPerSecond: s.cfg.MaxBandwidthBytesPerSecond,
+			MaxBandwidthBytesPerSecond: bandwidth,
+		}
+		if s.cfg.OnState != nil {
+			s.cfg.OnState("requested", job, asset, nil)
 		}
 		resolved, err := resolver.Resolve(ctx, request)
+		if err == nil && !resolved.CacheHit {
+			s.mu.Lock()
+			s.prefetched[asset.AssetKey] = asset.SizeBytes
+			if s.assetJobs[asset.AssetKey] == nil {
+				s.assetJobs[asset.AssetKey] = make(map[string]struct{})
+			}
+			s.assetJobs[asset.AssetKey][job.JobID] = struct{}{}
+			s.mu.Unlock()
+			if s.cfg.OnState != nil {
+				s.cfg.OnState("downloaded", job, asset, nil)
+			}
+		}
 		if err == nil && s.ram != nil {
 			s.mu.Lock()
 			hint, hinted := s.hints[asset.AssetKey]
@@ -230,6 +267,36 @@ func (s *Scheduler) runJob(ctx context.Context, resolver *downloader.CacheResolv
 			} else {
 				s.cfg.OnState("ready", job, asset, nil)
 			}
+		}
+	}
+}
+
+func (s *Scheduler) MarkForegroundUse(key assetref.AssetKey) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if _, prefetched := s.prefetched[string(key)]; !prefetched || s.useful[string(key)] {
+		s.mu.Unlock()
+		return
+	}
+	s.useful[string(key)] = true
+	s.mu.Unlock()
+	if s.cfg.OnState != nil {
+		s.cfg.OnState("useful", futureasset.Job{}, futureasset.AssetManifest{AssetKey: string(key)}, nil)
+	}
+}
+
+func (s *Scheduler) detachJobLocked(job futureasset.Job) {
+	for _, asset := range job.Assets {
+		refs := s.assetJobs[asset.AssetKey]
+		delete(refs, job.JobID)
+		if len(refs) == 0 {
+			if bytes, ok := s.prefetched[asset.AssetKey]; ok && !s.useful[asset.AssetKey] && s.cfg.OnState != nil {
+				asset.SizeBytes = bytes
+				s.cfg.OnState("wasted", job, asset, nil)
+			}
+			delete(s.assetJobs, asset.AssetKey)
 		}
 	}
 }

@@ -82,6 +82,20 @@ func (m *PrometheusMetrics) RecordCacheDuplicateDownload(bytes int64) {
 	}
 }
 
+func (m *PrometheusMetrics) RecordPrefetchRequested() { m.prefetchRequested.inc("asset") }
+func (m *PrometheusMetrics) RecordPrefetchDownloaded(bytes int64) {
+	m.prefetchDownloaded.inc("asset")
+	if bytes > 0 {
+		m.prefetchDownloadedBytes.add("asset", float64(bytes))
+	}
+}
+func (m *PrometheusMetrics) RecordPrefetchUseful() { m.prefetchUseful.inc("asset") }
+func (m *PrometheusMetrics) RecordPrefetchWastedBytes(bytes int64) {
+	if bytes > 0 {
+		m.prefetchWastedBytes.add("asset", float64(bytes))
+	}
+}
+
 // RecordWorkerError increments the worker-side task-failure counter
 // (velox_worker_errors_total) at the same site that bumps
 // tasksFailed, so operators can delta it across a batch window.
