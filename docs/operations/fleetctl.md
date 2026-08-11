@@ -17,10 +17,41 @@ export VELOX_ADMIN_TOKEN="..."
 
 scripts/fleetctl status
 scripts/fleetctl inspect worker-id
+scripts/fleetctl inspect --json worker-id   # machine-readable WorkerCard
 scripts/fleetctl drain worker-id "prepare deployment"
 scripts/fleetctl resume worker-id "deployment complete"
 scripts/fleetctl quarantine worker-id "asset failures"
 scripts/fleetctl operations worker-id
+```
+
+### Inspect: IMAGE + LAST UPDATE OPERATION
+
+`fleetctl inspect <worker_id>` renders the worker card as two canonical
+sections — image state and rollout history are deliberately separate views:
+
+```text
+IMAGE
+  running_digest = sha256:337...
+  target_digest  = sha256:337...
+  digest_match   = true
+
+LAST UPDATE OPERATION
+  status       = FAILED
+  reason       = connection reset by peer
+  operation_id = op_2026-08-08_...
+  type         = update
+  started_at   = 2026-08-08T10:11:12Z
+  finished_at  = 2026-08-08T10:11:19Z
+```
+
+A worker whose digests match is healthy even when the last rollout
+operation failed: `digest_state` no longer conflates the two (Phase A2).
+
+`--json` prints the full machine-readable WorkerCard (`image_state` /
+`operation_state`) for scripts:
+
+```bash
+scripts/fleetctl inspect --json worker-id | jq '.image_state.digest_match'
 ```
 
 ### Worker identity
