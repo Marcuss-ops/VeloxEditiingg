@@ -16,6 +16,7 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -98,7 +99,7 @@ func (c *SmokeRunHealthChecker) runLevelD(ctx context.Context, workerID string, 
 	}
 	run, err := c.runs.GetLatestSmokeForWorker(ctx, workerID)
 	if err != nil {
-		if err == store.ErrSmokeRunNotFound {
+		if errors.Is(err, store.ErrSmokeRunNotFound) {
 			return "", fmt.Errorf("no smoke runs recorded for worker %q", workerID)
 		}
 		return "", fmt.Errorf("smoke health checker: query: %w", err)

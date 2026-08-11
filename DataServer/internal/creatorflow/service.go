@@ -2,6 +2,7 @@ package creatorflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -155,7 +156,7 @@ func (s *Service) StartOrPersistForwarding(ctx context.Context, rawPayload map[s
 			Payload:          workerPayload,
 			DeliveryPlan:     deliveryPlan,
 		})
-		if err != nil && err != ErrResolverNotComplete {
+		if err != nil && !errors.Is(err, ErrResolverNotComplete) {
 			return nil, false, err
 		}
 
