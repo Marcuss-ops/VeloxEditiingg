@@ -15,6 +15,8 @@ var errFakeCompile = errors.New("fake compile failure")
 // fakePlanCompiler implements the renderPlanCompiler seam for handler tests.
 type fakePlanCompiler struct {
 	compileErr    error
+	returnNilPlan bool
+	wrongIdentity bool
 	calls         int
 	lastAttemptID string
 }
@@ -25,9 +27,16 @@ func (f *fakePlanCompiler) Compile(_ context.Context, payload map[string]interfa
 	if f.compileErr != nil {
 		return nil, f.compileErr
 	}
+	if f.returnNilPlan {
+		return nil, nil
+	}
+	jobID := "job-plan"
+	if f.wrongIdentity {
+		jobID = "different-job"
+	}
 	return &renderplan.CompiledRenderPlan{
 		PlanVersion:   renderplan.PlanVersion,
-		JobID:         "job-plan",
+		JobID:         jobID,
 		AttemptID:     attemptID,
 		DurationMS:    1000,
 		MediaContract: renderplan.MediaContract{VideoCodec: "h264", Width: 1920, Height: 1080, FpsNum: 30, FpsDen: 1},
@@ -104,5 +113,35 @@ func TestStampAttemptRenderPlan_CompileErrorSkips(t *testing.T) {
 	}
 	if attempts.upsertPlanCalls != 0 {
 		t.Fatalf("upsert calls = %d, want 0 (compile error is best-effort)", attempts.upsertPlanCalls)
+	}
+}
+
+func TestStampAttemptRenderPlan_NilPlanSkips(t *testing.T) {
+	handler := NewHandler(nil, nil, nil, nil, nil, nil, nil, &HandlerConfig{PushMode: true})
+	handler.SetRenderPlanCompiler(&fakePlanCompiler{returnNilPlan: true})
+	attempts := &spoofStubAttemptRepo{}
+	handler.taskAttemptRepo = attempts
+	if planJSON, planSHA := handler.compileAndStampAttemptRenderPlan(context.Background(),
+		&taskgraph.TaskWithSpec{Task: taskgraph.Task{ID: "task-plan", JobID: "job-plan"}},
+		&taskattempts.TaskAttempt{ID: "attempt-plan"}); planJSON != "" || planSHA != "" {
+		t.Fatalf("nil plan returned %q/%q; want empty/empty", planJSON, planSHA)
+	}
+	if attempts.upsertPlanCalls != 0 {
+		t.Fatalf("upsert calls = %d, want 0 (nil plan)", attempts.upsertPlanCalls)
+	}
+}
+
+func TestStampAttemptRenderPlan_WrongIdentitySkips(t *testing.T) {
+	handler := NewHandler(nil, nil, nil, nil, nil, nil, nil, &HandlerConfig{PushMode: true})
+	handler.SetRenderPlanCompiler(&fakePlanCompiler{wrongIdentity: true})
+	attempts := &spoofStubAttemptRepo{}
+	handler.taskAttemptRepo = attempts
+	if planJSON, planSHA := handler.compileAndStampAttemptRenderPlan(context.Background(),
+		&taskgraph.TaskWithSpec{Task: taskgraph.Task{ID: "task-plan", JobID: "job-plan"}},
+		&taskattempts.TaskAttempt{ID: "attempt-plan"}); planJSON != "" || planSHA != "" {
+		t.Fatalf("wrong identity returned %q/%q; want empty/empty", planJSON, planSHA)
+	}
+	if attempts.upsertPlanCalls != 0 {
+		t.Fatalf("upsert calls = %d, want 0 (wrong identity)", attempts.upsertPlanCalls)
 	}
 }

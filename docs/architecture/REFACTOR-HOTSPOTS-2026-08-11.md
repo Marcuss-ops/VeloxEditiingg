@@ -50,6 +50,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   righe aggiornate prima di dichiarare completata l'operazione.
 - Render-plan stamping: un tentativo inesistente non può più risultare
   aggiornato con successo; il writer restituisce un conflitto CAS.
+- Render-plan offer path: il piano viene validato e confrontato con
+  `job_id`/`attempt_id` prima di essere persistito o consegnato; nil plan e
+  identità incoerenti sono rifiutati fail-closed.
 - Render-only: il contatore audio riconosce il contratto esplicito a zero
   destinazioni; i job normali senza delivery plan continuano a fallire chiusi.
 - Gate architetturali e gate full-module verdi dopo i fix (`833cf79e`,

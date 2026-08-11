@@ -268,6 +268,22 @@ func (h *Handler) compileAndStampAttemptRenderPlan(ctx context.Context, tws *tas
 		log.Printf("[RENDERPLAN] compile skipped task=%s attempt=%s: %v", tws.ID, attempt.ID, err)
 		return "", ""
 	}
+	if plan == nil {
+		log.Printf("[RENDERPLAN] validation skipped task=%s attempt=%s: compiler returned nil plan", tws.ID, attempt.ID)
+		return "", ""
+	}
+	if err := plan.Validate(); err != nil {
+		log.Printf("[RENDERPLAN] validation skipped task=%s attempt=%s: %v", tws.ID, attempt.ID, err)
+		return "", ""
+	}
+	if plan.AttemptID != attempt.ID {
+		log.Printf("[RENDERPLAN] identity skipped task=%s attempt=%s: plan attempt_id=%s", tws.ID, attempt.ID, plan.AttemptID)
+		return "", ""
+	}
+	if tws.JobID != "" && plan.JobID != tws.JobID {
+		log.Printf("[RENDERPLAN] identity skipped task=%s attempt=%s: plan job_id=%s task job_id=%s", tws.ID, attempt.ID, plan.JobID, tws.JobID)
+		return "", ""
+	}
 	canonical, err := plan.CanonicalJSON()
 	if err != nil {
 		log.Printf("[RENDERPLAN] canonical encode skipped task=%s attempt=%s: %v", tws.ID, attempt.ID, err)
