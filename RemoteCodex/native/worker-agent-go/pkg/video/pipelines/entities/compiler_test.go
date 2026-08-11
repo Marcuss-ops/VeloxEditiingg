@@ -124,3 +124,86 @@ func TestParseRequest_EntityStyle_Default(t *testing.T) {
 		t.Fatalf("want EntityStyle \"full_screen\", got %q", req.EntityStyle)
 	}
 }
+
+// forbidProbe fails the test if DurationSeconds is ever invoked. It
+// pins the Fase C1/D migration: when the upstream declares the audio
+// duration (compiled render plan / asset-registry stamping), the
+// compiler MUST consume it and MUST NOT spawn ffprobe on the input.
+type forbidProbe struct{ t *testing.T }
+
+func (p forbidProbe) DurationSeconds(url string) float64 {
+	p.t.Fatalf("probe.DurationSeconds(%q) must not be called when audio duration is declared", url)
+	return 0
+}
+
+// TestCompile_DeclaredAudioDuration_SkipsProbe verifies that a
+// declared audio_duration_seconds (the Fase D compiled-plan / C1
+// registry field) is consumed instead of the probe, and that the
+// produced timeline is exactly audio-length (no trailing fill after
+// the declared end).
+func TestCompile_DeclaredAudioDuration_SkipsProbe(t *testing.T) {
+	input := baseInput()
+	input["audio_duration_seconds"] = 12.0
+	input["entities"] = []interface{}{
+		map[string]interface{}{"name": "e1", "image_url": "https://example.test/a.png", "start": 1.0, "end": 5.0},
+	}
+
+	rp, err := Compile(context.Background(), "job-declared", input, "/tmp/out.mp4", forbidProbe{t})
+	if err != nil {
+		t.Fatalf("Compile() returned unexpected error: %v", err)
+	}
+	if rp == nil {
+		t.Fatal("Compile() returned nil RenderPlan")
+	}
+	// Entity 5s + trailing fill 12-5=7s → total timeline == declared audio.
+	var total float64
+	for _, item := range rp.Timeline {
+		total += item.DurationSeconds
+	}
+	if total != 12.0 {
+		t.Fatalf("timeline total = %v, want declared 12.0 (probe must not have run)", total)
+	}
+}
+
+// TestCompile_DeclaredAudioDurationMs_SkipsProbe pins the millisecond
+// alias of the declared duration.
+func TestCompile_DeclaredAudioDurationMs_SkipsProbe(t *testing.T) {
+	input := baseInput()
+	input["audio_duration_ms"] = 12500.0
+
+	rp, err := Compile(context.Background(), "job-declared-ms", input, "/tmp/out.mp4", forbidProbe{t})
+	if err != nil {
+		t.Fatalf("Compile() returned unexpected error: %v", err)
+	}
+	if rp == nil {
+		t.Fatal("Compile() returned nil RenderPlan")
+	}
+	var total float64
+	for _, item := range rp.Timeline {
+		total += item.DurationSeconds
+	}
+	if total != 12.5 {
+		t.Fatalf("timeline total = %v, want 12.5 from declared audio_duration_ms", total)
+	}
+}
+
+// TestCompile_NoDeclaredDuration_FallsBackToProbe pins the fallback:
+// a payload without a declared duration still probes (legacy/deferred
+// references remain supported).
+func TestCompile_NoDeclaredDuration_FallsBackToProbe(t *testing.T) {
+	input := baseInput()
+	rp, err := Compile(context.Background(), "job-probe", input, "/tmp/out.mp4", fakeProbe{dur: 7.0})
+	if err != nil {
+		t.Fatalf("Compile() returned unexpected error: %v", err)
+	}
+	if rp == nil {
+		t.Fatal("Compile() returned nil RenderPlan")
+	}
+	var total float64
+	for _, item := range rp.Timeline {
+		total += item.DurationSeconds
+	}
+	if total != 7.0 {
+		t.Fatalf("timeline total = %v, want probed 7.0", total)
+	}
+}

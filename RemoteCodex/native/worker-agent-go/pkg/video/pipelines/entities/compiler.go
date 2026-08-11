@@ -53,8 +53,15 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 
 	req := parseRequest(input)
 
-	// Probe audio duration
-	audioDuration := probe.DurationSeconds(req.AudioURL)
+	// Registry/plan-first duration (Fase C1/D): consume the audio
+	// duration declared by the upstream (compiled render plan / asset
+	// registry stamping) instead of spawning ffprobe on the input.
+	// The probe remains the fallback for payloads that carry no
+	// declared duration (legacy/deferred references).
+	audioDuration := declaredAudioDuration(input)
+	if audioDuration <= 0 {
+		audioDuration = probe.DurationSeconds(req.AudioURL)
+	}
 	if audioDuration <= 0 {
 		audioDuration = 10.0 // fallback
 	}
@@ -198,4 +205,22 @@ func toFloat64Default(v interface{}, fallback float64) float64 {
 		return float64(val)
 	}
 	return fallback
+}
+
+// declaredAudioDuration returns the audio duration declared by the
+// upstream (Fase D compiled render plan / asset-registry stamping)
+// before any ffprobe fallback. audio_duration_seconds wins;
+// audio_duration_ms is the millisecond alias. 0 means "not declared"
+// and the caller falls back to the probe.
+//
+// TWIN: keep in sync with images/compiler.go — the two pipeline
+// packages duplicate local coercion helpers by convention.
+func declaredAudioDuration(input map[string]interface{}) float64 {
+	if d := toFloat64Default(input["audio_duration_seconds"], 0); d > 0 {
+		return d
+	}
+	if ms := toFloat64Default(input["audio_duration_ms"], 0); ms > 0 {
+		return ms / 1000
+	}
+	return 0
 }
