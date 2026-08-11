@@ -42,3 +42,15 @@ The stock rule is part of the workload contract: multiple stock assets are
 deterministically shuffled per job and scene, then repeated until the exact
 voiceover duration is covered. The final stock segment is trimmed to the
 remaining duration.
+
+## Render scaling matrix
+
+The controlled phase-profiling matrix is [cases/render-scaling-matrix.json](cases/render-scaling-matrix.json).
+It defines A–D (5/10 minutes × few/many scenes × simple/complex audio), five
+runs per certified worker, normal cache and prefetch enabled. The `fixture`
+values are intentionally operator-supplied until the real media fixtures are
+frozen; no benchmark result should be inferred from these declarations.
+
+`collect_report.py` projects the worker's canonical `render_profile.*` metrics
+into each attempt scorecard, including compile plan, asset/audio download,
+combined audio mix+AAC, mux, artifact SHA/manifest and total artifact time.

@@ -22,6 +22,14 @@ def query_one(conn, sql, args):
     return row_dict(cursor, row) if row else None
 
 
+def first_value(metrics, *names, default=0):
+    for name in names:
+        value = metrics.get(name)
+        if value is not None and value != "":
+            return value
+    return default
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", required=True, help="Master SQLite database")
@@ -90,6 +98,13 @@ def main():
                 "download_ms": int(metrics.get("engine_asset_download_ms") or phase_ms.get("download", 0)),
                 "compile_ms": int(metrics.get("pipeline_compile_ms") or phase_ms.get("compile", 0)),
                 "render_ms": int(metrics.get("pipeline_render_ms") or phase_ms.get("render", 0)),
+                "compile_plan_ms": int(first_value(metrics, "render_profile_compile_plan_ms", "render_profile.compile_plan_ms")),
+                "asset_download_ms": int(first_value(metrics, "render_profile_asset_download_ms", "render_profile.asset_download_ms")),
+                "audio_download_ms": int(first_value(metrics, "render_profile_audio_download_ms", "render_profile.audio_download_ms")),
+                "audio_mix_encode_ms": int(first_value(metrics, "render_profile_audio_mix_encode_ms", "render_profile.audio_mix_encode_ms")),
+                "mux_ms": int(first_value(metrics, "render_profile_mux_ms", "render_profile.mux_ms")),
+                "artifact_sha_ms": int(first_value(metrics, "render_profile_artifact_sha_ms", "render_profile.artifact_sha_ms")),
+                "artifact_total_ms": int(first_value(metrics, "render_profile_artifact_total_ms", "render_profile.artifact_total_ms")),
                 "concat_ms": int(metrics.get("engine_concat_ms") or phase_ms.get("composite", 0)),
                 "upload_ms": phase_ms.get("upload", 0),
                 "cpu_time_ms": int(metrics.get("cpu_time_ms") or 0),

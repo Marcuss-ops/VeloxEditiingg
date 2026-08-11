@@ -1,0 +1,66 @@
+{
+  "schema": "velox.render-scaling-matrix.v1",
+  "purpose": "Controlled render profiling before/after changes",
+  "runs_per_worker": 5,
+  "workers": "all certified workers",
+  "cache_mode": "normal",
+  "prefetch": "on",
+  "manual_intervention": false,
+  "cases": [
+    {
+      "id": "A",
+      "duration_minutes": 5,
+      "scene_profile": "few",
+      "audio_profile": "simple",
+      "asset_profile": "few",
+      "fixture": "operator-supplied/frozen-5m-few-scenes-simple-audio"
+    },
+    {
+      "id": "B",
+      "duration_minutes": 5,
+      "scene_profile": "many",
+      "audio_profile": "complex",
+      "asset_profile": "many",
+      "fixture": "operator-supplied/frozen-5m-many-scenes-complex-audio"
+    },
+    {
+      "id": "C",
+      "duration_minutes": 10,
+      "scene_profile": "few",
+      "audio_profile": "simple",
+      "asset_profile": "few",
+      "fixture": "operator-supplied/frozen-10m-few-scenes-simple-audio"
+    },
+    {
+      "id": "D",
+      "duration_minutes": 10,
+      "scene_profile": "many",
+      "audio_profile": "complex",
+      "asset_profile": "many",
+      "fixture": "operator-supplied/frozen-10m-many-scenes-complex-audio"
+    }
+  ],
+  "required_metrics": [
+    "queue_wait_ms",
+    "compile_plan_ms",
+    "asset_download_ms",
+    "audio_download_ms",
+    "audio_mix_encode_ms",
+    "mux_ms",
+    "artifact_sha_ms",
+    "artifact_total_ms",
+    "cpu_peak_percent",
+    "rss_peak_bytes",
+    "cache_hit_ratio",
+    "foreground_downloads",
+    "prefetch_coverage"
+  ],
+  "acceptance": {
+    "same_fixture_across_workers": true,
+    "same_cache_policy": true,
+    "same_worker_image_digest": true,
+    "no_manual_intervention": true,
+    "report_missing_metrics": true,
+    "do_not_claim_sub_15s_from_this_matrix": true
+  }
+}
