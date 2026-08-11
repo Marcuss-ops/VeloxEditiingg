@@ -293,7 +293,7 @@ func matchesAssetFile(name, assetID string) bool {
 func allowedCacheExtension(name string) bool {
 	ext := strings.ToLower(filepath.Ext(name))
 	switch ext {
-	case ".aac", ".ass", ".audio", ".flac", ".jpeg", ".jpg", ".m4a", ".mp3", ".mp4", ".oga", ".ogg", ".png", ".srt", ".wav", ".webm", ".webp":
+	case ".aac", ".ass", ".audio", ".f4v", ".flac", ".jpeg", ".jpg", ".m4a", ".mp3", ".mp4", ".oga", ".ogg", ".png", ".srt", ".wav", ".webm", ".webp":
 		return true
 	default:
 		return false

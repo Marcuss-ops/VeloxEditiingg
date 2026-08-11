@@ -89,6 +89,26 @@ func TestRun_ExecuteDeletesOnlyExactSelectedAsset(t *testing.T) {
 	}
 }
 
+func TestRun_ExecuteDeletesF4VAsset(t *testing.T) {
+	root := t.TempDir()
+	path := writeCacheFile(t, root, "clip-stock-a_0123456789ab.f4v", []byte("selected"))
+	index := openIndex(t)
+	if err := index.Store(context.Background(), workercache.Entry{AssetKey: "clip-stock-a", LocalPath: path, DownloadComplete: true}); err != nil {
+		t.Fatalf("store index: %v", err)
+	}
+
+	items, err := Run(context.Background(), Options{Root: root, AssetIDs: []string{"clip-stock-a"}, Index: index, Execute: true})
+	if err != nil {
+		t.Fatalf("Run execute: %v", err)
+	}
+	if len(items) != 1 || items[0].Action != "deleted" || items[0].Bytes == 0 {
+		t.Fatalf("items = %+v, want deleted f4v item with bytes", items)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("f4v file still exists, err=%v", err)
+	}
+}
+
 func TestRun_ExecuteRefusesActiveReservationWithoutMutation(t *testing.T) {
 	root := t.TempDir()
 	path := writeCacheFile(t, root, "future-asset_0123456789ab.mp4", []byte("future"))
