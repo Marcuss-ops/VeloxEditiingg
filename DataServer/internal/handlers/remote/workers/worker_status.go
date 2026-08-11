@@ -14,7 +14,14 @@ func WorkersList(reg *workersreg.Registry, workersRepo store.WorkersRepository, 
 	return func(c *gin.Context) {
 		master := workerStatusMetadata(firstUpdateHandler(updateHandler))
 		if workersRepo != nil {
-			if dbWorkers, err := workersRepo.ListWorkers(); err == nil && len(dbWorkers) > 0 {
+			dbWorkers, err := workersRepo.ListWorkers()
+			if err != nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{
+					"error": "worker_read_model_unavailable",
+				})
+				return
+			}
+			if len(dbWorkers) > 0 {
 				c.JSON(http.StatusOK, gin.H{"workers": dbWorkers, "master": master})
 				return
 			}

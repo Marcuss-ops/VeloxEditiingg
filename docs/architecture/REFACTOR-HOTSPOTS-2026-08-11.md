@@ -61,6 +61,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Worker command outbox: payload JSON, timestamp e iterazione delle righe
   vengono validati durante la lettura; una coda corrotta non viene più
   interpretata come coda vuota.
+- Worker status API: un errore del read model persistito risponde `503`
+  invece di degradare a una cache in memoria potenzialmente obsoleta; il
+  fallback resta limitato al solo DB vuoto durante il bootstrap.
 - DB pool telemetry: `OpenConnections`, `InUse`, `Idle`, `WaitCount` e
   `WaitDuration` sono esposti senza label per distinguere lock da queueing.
 - Bootstrap worker: la lista ffmpeg/ffprobe è una dipendenza esplicita con
