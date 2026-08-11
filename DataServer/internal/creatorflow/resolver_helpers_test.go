@@ -324,7 +324,7 @@ func TestCheckIdempotencyFastPath(t *testing.T) {
 		}
 	})
 
-	t.Run("job hit with ensure forwarded error still returns output", func(t *testing.T) {
+	t.Run("job hit with ensure forwarded error fails closed", func(t *testing.T) {
 		repo := &fakeForwardingRepo{
 			ensureForwardedErr: errors.New("transition conflict"),
 			bySource: map[string]*store.CreatorForwarding{
@@ -338,8 +338,8 @@ func TestCheckIdempotencyFastPath(t *testing.T) {
 		out, err := r.checkIdempotencyFastPath(context.Background(),
 			ResolveRequest{ForwardingID: "cf-1", SourceProvider: "remote_engine", SourceJobID: "src-1"},
 			"job-1", "scene.composite.v1", emptyPayload)
-		if err != nil || out == nil {
-			t.Fatalf("expected hit despite repair error, got (%+v, %v)", out, err)
+		if err == nil || out != nil {
+			t.Fatalf("expected repair error, got (%+v, %v)", out, err)
 		}
 	})
 
@@ -366,7 +366,7 @@ func TestCheckIdempotencyFastPath(t *testing.T) {
 		}
 	})
 
-	t.Run("job hit lookup error still returns output", func(t *testing.T) {
+	t.Run("job hit lookup error fails closed", func(t *testing.T) {
 		repo := &fakeForwardingRepo{getSourceErr: errors.New("lookup failed")}
 		r := &Resolver{
 			jobLookup:   &fakeJobLookup{jobs: map[string]*jobs.Job{"job-1": {ID: "job-1", Status: jobs.StatusPending}}},
@@ -374,8 +374,8 @@ func TestCheckIdempotencyFastPath(t *testing.T) {
 		}
 		req := ResolveRequest{SourceProvider: "remote_engine", SourceJobID: "src-1"}
 		out, err := r.checkIdempotencyFastPath(context.Background(), req, "job-1", "scene.composite.v1", emptyPayload)
-		if err != nil || out == nil {
-			t.Fatalf("expected hit despite lookup error, got (%+v, %v)", out, err)
+		if err == nil || out != nil {
+			t.Fatalf("expected lookup error, got (%+v, %v)", out, err)
 		}
 		if len(repo.ensureForwardedCalls) != 0 {
 			t.Fatalf("expected no EnsureForwarded call when forwarding id unknown, got %v", repo.ensureForwardedCalls)

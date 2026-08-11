@@ -64,6 +64,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Worker status API: un errore del read model persistito risponde `503`
   invece di degradare a una cache in memoria potenzialmente obsoleta; il
   fallback resta limitato al solo DB vuoto durante il bootstrap.
+- Creator idempotency fast-path: un errore nel lookup o nella riparazione del
+  forwarding non produce più `enqueue_confirmed=true`; il risultato viene
+  restituito solo dopo che la transizione persistita è stata verificata.
 - DB pool telemetry: `OpenConnections`, `InUse`, `Idle`, `WaitCount` e
   `WaitDuration` sono esposti senza label per distinguere lock da queueing.
 - Bootstrap worker: la lista ffmpeg/ffprobe è una dipendenza esplicita con

@@ -2,6 +2,7 @@ package creatorflow
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 
@@ -46,7 +47,10 @@ func (r *Resolver) checkIdempotencyFastPath(
 	workerPayload map[string]interface{},
 ) (*ResolveOutput, error) {
 	existing, getErr := r.jobLookup.Get(ctx, jobID)
-	if getErr != nil || existing == nil || existing.ID != jobID {
+	if getErr != nil {
+		return nil, fmt.Errorf("creatorflow: idempotency job lookup: %w", getErr)
+	}
+	if existing == nil || existing.ID != jobID {
 		return nil, nil
 	}
 
@@ -57,7 +61,10 @@ func (r *Resolver) checkIdempotencyFastPath(
 	// supplied by the caller.
 	forwardingID := ""
 	cf, lookupErr := r.forwardRepo.GetCreatorForwardingBySource(ctx, req.SourceProvider, req.SourceJobID, targetExecutor)
-	if lookupErr == nil && cf != nil {
+	if lookupErr != nil {
+		return nil, fmt.Errorf("creatorflow: idempotency forwarding lookup: %w", lookupErr)
+	}
+	if cf != nil {
 		forwardingID = cf.ForwardingID
 
 		// Payload-hash conflict check. Compute the SHA of the canonical
@@ -81,12 +88,10 @@ func (r *Resolver) checkIdempotencyFastPath(
 		}
 	}
 
-	// Explicit-id fallback only when bySource didn't resolve. The
-	// runner path supplies req.ForwardingID directly (the row it
-	// leased); if the canonical lookup at the start of this block
-	// raced, transiently failed, or has been GC'd by an unrelated
-	// writer, we MUST still honor the lease id so EnsureForwarded
-	// can complete the FORWARDED repair.
+	// If the canonical lookup has no row, the runner's explicit ID remains
+	// useful for the normal pre-forwarded race where the source tuple is not
+	// yet visible. Lookup errors were returned above: never use an explicit ID
+	// to mask an infrastructure failure or skip the canonical hash check.
 	if forwardingID == "" {
 		forwardingID = req.ForwardingID
 	}
@@ -94,13 +99,14 @@ func (r *Resolver) checkIdempotencyFastPath(
 	// Repair the forwarding row if it exists and is not yet FORWARDED.
 	// EnsureForwarded is idempotent: nil if already FORWARDED with the
 	// same job_id; ErrTransitionConflict if FORWARDED with a different
-	// job_id or in a terminal FAILED/BLOCKED state. We intentionally
-	// ignore ErrTransitionConflict here (the Job already exists; the
-	// forwarding row repair is best-effort and a reaper can reconcile).
+	// job_id or in a terminal FAILED/BLOCKED state. A repair failure must be
+	// returned: the response claims enqueue_confirmed and cannot be honest
+	// while the forwarding row remains unreconciled.
 	if forwardingID != "" {
 		if repairErr := r.forwardRepo.EnsureForwarded(ctx, forwardingID, jobID); repairErr != nil {
 			log.Printf("[CREATORFLOW] idempotency fast-path: EnsureForwarded failed forwarding=%s job=%s: %v",
 				forwardingID, jobID, repairErr)
+			return nil, fmt.Errorf("creatorflow: idempotency forwarding repair: %w", repairErr)
 		}
 	}
 
