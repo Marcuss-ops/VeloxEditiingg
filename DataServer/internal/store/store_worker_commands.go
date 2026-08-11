@@ -223,24 +223,39 @@ func scanCommands(rows *sql.Rows) ([]*PersistedCommand, error) {
 			&expiresAt, &cmd.AttemptCount, &lastError, &idempotencyKey,
 		)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("scan worker command: %w", err)
 		}
 		if payloadJSON != "" {
-			_ = json.Unmarshal([]byte(payloadJSON), &cmd.Payload)
+			if err := json.Unmarshal([]byte(payloadJSON), &cmd.Payload); err != nil {
+				return nil, fmt.Errorf("decode worker command %q payload: %w", cmd.CommandID, err)
+			}
 		}
 		if createdAt.Valid {
-			cmd.CreatedAt, _ = time.Parse(time.RFC3339, createdAt.String)
+			parsed, err := parsePersistedWorkerTimestamp(createdAt.String, "command.created_at")
+			if err != nil {
+				return nil, fmt.Errorf("parse worker command %q created_at: %w", cmd.CommandID, err)
+			}
+			cmd.CreatedAt = parsed
 		}
 		if deliveredAt.Valid {
-			t, _ := time.Parse(time.RFC3339, deliveredAt.String)
+			t, err := parsePersistedWorkerTimestamp(deliveredAt.String, "command.delivered_at")
+			if err != nil {
+				return nil, fmt.Errorf("parse worker command %q delivered_at: %w", cmd.CommandID, err)
+			}
 			cmd.DeliveredAt = &t
 		}
 		if ackedAt.Valid {
-			t, _ := time.Parse(time.RFC3339, ackedAt.String)
+			t, err := parsePersistedWorkerTimestamp(ackedAt.String, "command.acked_at")
+			if err != nil {
+				return nil, fmt.Errorf("parse worker command %q acked_at: %w", cmd.CommandID, err)
+			}
 			cmd.AckedAt = &t
 		}
 		if expiresAt.Valid {
-			t, _ := time.Parse(time.RFC3339, expiresAt.String)
+			t, err := parsePersistedWorkerTimestamp(expiresAt.String, "command.expires_at")
+			if err != nil {
+				return nil, fmt.Errorf("parse worker command %q expires_at: %w", cmd.CommandID, err)
+			}
 			cmd.ExpiresAt = &t
 		}
 		if lastError.Valid {
@@ -250,6 +265,9 @@ func scanCommands(rows *sql.Rows) ([]*PersistedCommand, error) {
 			cmd.IdempotencyKey = idempotencyKey.String
 		}
 		out = append(out, &cmd)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate worker commands: %w", err)
 	}
 	return out, nil
 }

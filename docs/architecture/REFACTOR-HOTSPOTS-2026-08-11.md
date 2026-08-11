@@ -58,6 +58,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Worker snapshot lists: `ListWorkers` e `ListWorkersByWorkspace` non
   scartano più righe con `Scan`, JSON corrotto o errore di iterazione; il
   read model fallisce esplicitamente invece di restituire una flotta parziale.
+- Worker command outbox: payload JSON, timestamp e iterazione delle righe
+  vengono validati durante la lettura; una coda corrotta non viene più
+  interpretata come coda vuota.
 - DB pool telemetry: `OpenConnections`, `InUse`, `Idle`, `WaitCount` e
   `WaitDuration` sono esposti senza label per distinguere lock da queueing.
 - Bootstrap worker: la lista ffmpeg/ffprobe è una dipendenza esplicita con
