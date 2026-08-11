@@ -49,6 +49,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   malformato producono errore, non uno stato apparentemente valido.
 - Calendar read paths: timestamp persistiti malformati, JSON delle collezioni,
   errori di `Scan` e `rows.Err()` non vengono più ignorati nei read model.
+- Worker heartbeat/read models: errori nella lettura dello stato precedente,
+  throttling delle metriche e timestamp runtime non vengono più degradati a
+  valori vuoti; i formati timestamp legacy validi restano supportati.
 - DB pool telemetry: `OpenConnections`, `InUse`, `Idle`, `WaitCount` e
   `WaitDuration` sono esposti senza label per distinguere lock da queueing.
 - Bootstrap worker: la lista ffmpeg/ffprobe è una dipendenza esplicita con
