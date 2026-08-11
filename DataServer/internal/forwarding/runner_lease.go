@@ -82,8 +82,7 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 				procCancel()
 				return supervisor.ErrLeaseLost
 			}
-			return errors.Join(supervisor.ErrElementScoped,
-				fmt.Errorf("record poll forwarding=%s: %w", lease.ForwardingID, recordErr))
+			return forwardingStateError(fmt.Sprintf("record poll forwarding=%s", lease.ForwardingID), recordErr)
 		}
 	}
 
@@ -167,8 +166,7 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 				if errors.Is(err, store.ErrTransitionConflict) || leaseWasLost.Load() {
 					return supervisor.ErrLeaseLost
 				}
-				return errors.Join(supervisor.ErrElementScoped,
-					fmt.Errorf("mark blocked: %w", err))
+				return forwardingStateError("mark blocked", err)
 			}
 			log.Printf("[FORWARDING] payload marshal failed forwarding=%s; marked BLOCKED", lease.ForwardingID)
 			r.metrics.Failed.Add(1)
@@ -213,8 +211,7 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 			if errors.Is(err, store.ErrTransitionConflict) || leaseWasLost.Load() {
 				return supervisor.ErrLeaseLost
 			}
-			return errors.Join(supervisor.ErrElementScoped,
-				fmt.Errorf("mark failed: %w", err))
+			return forwardingStateError("mark failed", err)
 		}
 		log.Printf("[FORWARDING] failed forwarding=%s source_job=%s status=%s",
 			lease.ForwardingID, lease.SourceJobID, resp.Status)
@@ -234,8 +231,7 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 			if errors.Is(err, store.ErrTransitionConflict) || leaseWasLost.Load() {
 				return supervisor.ErrLeaseLost
 			}
-			return errors.Join(supervisor.ErrElementScoped,
-				fmt.Errorf("mark retry (still-running): %w", err))
+			return forwardingStateError("mark retry (still-running)", err)
 		}
 		r.metrics.Retried.Add(1)
 		return nil

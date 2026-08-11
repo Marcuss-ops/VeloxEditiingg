@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"velox-server/internal/store"
-	"velox-server/internal/supervisor"
 )
 
 // handleEnqueueRetry transitions the forwarding to RETRY_WAIT with backoff
@@ -33,8 +32,7 @@ func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease 
 			fmt.Sprintf("exhausted %d attempts: %s", maxAttempts, msg),
 			errorClass,
 		); err != nil {
-			return errors.Join(supervisor.ErrElementScoped,
-				fmt.Errorf("mark failed (max enqueue attempts): %w", err))
+			return forwardingStateError("mark failed (max enqueue attempts)", err)
 		}
 		log.Printf("[FORWARDING] max enqueue attempts exhausted forwarding=%s source_job=%s attempts=%d",
 			lease.ForwardingID, lease.SourceJobID, lease.AttemptCount)
@@ -60,8 +58,7 @@ func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease 
 			fmt.Sprintf("CAS failure on enqueue retry: %v", err),
 			"",
 		); ferr != nil {
-			return errors.Join(supervisor.ErrElementScoped,
-				fmt.Errorf("mark failed (CAS fallback): %w (orig=%v)", ferr, err))
+			return forwardingStateError("mark failed (CAS fallback)", errors.Join(ferr, err))
 		}
 		r.metrics.Failed.Add(1)
 		return nil
@@ -90,8 +87,7 @@ func (r *CreatorForwardingRunner) handleRetry(ctx context.Context, lease store.C
 			fmt.Sprintf("exhausted %d attempts: %s", maxAttempts, msg),
 			errorClass,
 		); err != nil {
-			return errors.Join(supervisor.ErrElementScoped,
-				fmt.Errorf("mark failed (max attempts): %w", err))
+			return forwardingStateError("mark failed (max attempts)", err)
 		}
 		log.Printf("[FORWARDING] max attempts exhausted forwarding=%s source_job=%s attempts=%d",
 			lease.ForwardingID, lease.SourceJobID, lease.AttemptCount)
@@ -105,8 +101,7 @@ func (r *CreatorForwardingRunner) handleRetry(ctx context.Context, lease store.C
 		lease.ForwardingID, lease.RunnerID, lease.LeaseID,
 		code, msg, errorClass, nextAttempt,
 	); err != nil {
-		return errors.Join(supervisor.ErrElementScoped,
-			fmt.Errorf("mark retry: %w", err))
+		return forwardingStateError("mark retry", err)
 	}
 	r.metrics.Retried.Add(1)
 	return nil

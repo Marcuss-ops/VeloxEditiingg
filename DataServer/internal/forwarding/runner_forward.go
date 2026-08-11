@@ -4,7 +4,6 @@ package forwarding
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 
 	"velox-server/internal/creatorflow"
@@ -51,8 +50,7 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 			"PAYLOAD_MARSHAL_ERROR",
 			"enqueue payload is not JSON-serializable",
 		); err != nil {
-			return errors.Join(supervisor.ErrElementScoped,
-				fmt.Errorf("mark blocked: %w", err))
+			return forwardingStateError("mark blocked", err)
 		}
 		log.Printf("[FORWARDING] payload marshal failed forwarding=%s; marked BLOCKED", lease.ForwardingID)
 		r.metrics.Failed.Add(1)
