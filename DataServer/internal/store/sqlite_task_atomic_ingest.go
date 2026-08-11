@@ -83,18 +83,21 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 		// value — potential ARTIFACT_TRANSFER_CORRUPTED. The master-computed
 		// value remains authoritative on artifact_sha256; the flag + event
 		// make the discrepancy visible in the determinism chain instead of
-		// silently dropping the worker hint. Telemetry is best-effort and
-		// never aborts the state transition it describes.
+		// silently dropping the worker hint. The event is part of the atomic
+		// audit record for this transition, so a persistence failure must
+		// abort the ingest rather than report a partially recorded result.
 		log.Printf("[SHA_MISMATCH] attempt=%s task=%s worker=%s worker_sha256=%s master_sha256=%s — potential ARTIFACT_TRANSFER_CORRUPTED",
 			cmd.AttemptID, cmd.TaskID, cmd.WorkerID, cmd.ArtifactSHA256, renderStamp.AuthoritativeSHA256)
-		_ = persistMasterExecutionEventTx(ctx, tx, masterExecutionEvent{
+		if err := persistMasterExecutionEventTx(ctx, tx, masterExecutionEvent{
 			EventID:   fmt.Sprintf("master-%s-sha-mismatch", cmd.AttemptID),
 			AttemptID: cmd.AttemptID, TaskID: cmd.TaskID,
 			Scope: sharedtelemetry.ScopeAttempt, Component: "master.artifact",
 			Action: "sha_mismatch", Phase: "finalize", Status: "suspected",
 			StartedAt: ingestStartedAt, CompletedAt: time.Now().UTC(),
 			MetadataJSON: fmt.Sprintf(`{"worker_sha256":%q,"master_sha256":%q}`, cmd.ArtifactSHA256, renderStamp.AuthoritativeSHA256),
-		})
+		}); err != nil {
+			return fmt.Errorf("task ingest sha mismatch telemetry: %w", err)
+		}
 	}
 	if err := persistAttemptTracing(ctx, tx, cmd, now); err != nil {
 		return err

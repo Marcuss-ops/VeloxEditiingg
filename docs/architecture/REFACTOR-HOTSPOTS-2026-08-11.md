@@ -75,6 +75,11 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   `compile_ms`, `canonicalize_ms`, `hash_ms`, `persist_ms` e `total_ms`, e
   registra il motivo dei fallback (`compile_error`, identità, canonicalization
   o persist error) senza creare un compiler parallelo.
+- Atomic ingest/reconciler: un mismatch SHA non viene più registrato in modo
+  silenziosamente incompleto; se l'evento audit non persiste, l'ingest viene
+  rollbackato. Il reconciler di artifact può promuovere un task solo quando
+  l'attempt corrispondente è stato realmente portato a `SUCCEEDED` o è già
+  `SUCCEEDED` con identità task/job/worker/lease esatta.
 - Job progress: gli snapshot tardivi di un tentativo precedente o con
   timestamp più vecchio non possono più regredire il read model.
 - Render-only: il contatore audio riconosce il contratto esplicito a zero
@@ -99,6 +104,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - [ ] Chiudere l'audit mirato di `MarkDeliverySucceeded`,
   `FinalizeVerified`, `CompletePublicationAfterReconciliation` e `TaskResult`:
   nessun ritorno `nil` dopo un commit non avvenuto.
+- [x] Proteggere il caso stale-artifact in cui il commit è presente ma
+  l'attempt è già fallito o appartiene a un'altra identità: nessuna
+  promozione task/job viene più eseguita in quel caso.
 - [ ] Aggiungere test di race/reclaim per: lease scaduto, reconnect worker,
   retry concorrente e doppio finalizer.
 

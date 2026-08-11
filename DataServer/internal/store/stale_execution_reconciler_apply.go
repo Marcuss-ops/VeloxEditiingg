@@ -113,14 +113,39 @@ func (r *StaleExecutionReconciler) applyCommittedArtifact(ctx context.Context, f
 	// already COMMITTED and its output artifact is READY. Mark the matching
 	// attempt/task terminal, then let the job CAS require that every task is
 	// SUCCEEDED before it becomes SUCCEEDED itself.
-	if _, err := tx.ExecContext(ctx, `
+	attemptRes, err := tx.ExecContext(ctx, `
 		UPDATE task_attempts
 		   SET status='SUCCEEDED', completed_at=COALESCE(completed_at, ?),
 		       report_version=report_version+1, updated_at=?
 		 WHERE id=? AND task_id=? AND job_id=? AND worker_id=? AND lease_id=?
 		   AND status NOT IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT')`,
-		nowStr, nowStr, f.AttemptID, f.TaskID, f.JobID, f.WorkerID, f.LeaseID); err != nil {
+		nowStr, nowStr, f.AttemptID, f.TaskID, f.JobID, f.WorkerID, f.LeaseID)
+	if err != nil {
 		return false, err
+	}
+	attemptRows, err := readRowsAffected(attemptRes, "stale reconciler committed attempt")
+	if err != nil {
+		return false, err
+	}
+	if attemptRows != 1 {
+		// A replay may have completed this exact attempt concurrently. Accept
+		// only that terminal identity; never promote the task when its attempt
+		// is missing, failed, or belongs to another lease/worker.
+		var status, taskID, jobID, workerID, leaseID string
+		err := tx.QueryRowContext(ctx, `
+			SELECT status, task_id, job_id, worker_id, COALESCE(lease_id,'')
+			  FROM task_attempts WHERE id=?`, f.AttemptID).Scan(
+			&status, &taskID, &jobID, &workerID, &leaseID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return false, nil
+			}
+			return false, err
+		}
+		if status != string(taskgraph.StatusSucceeded) || taskID != f.TaskID ||
+			jobID != f.JobID || workerID != f.WorkerID || leaseID != f.LeaseID {
+			return false, nil
+		}
 	}
 	taskRes, err := tx.ExecContext(ctx, `
 		UPDATE tasks
