@@ -34,6 +34,15 @@ deployment that carries the bound-credential auth fix
 | `velox-worker-13197` | CONNECTED | HEALTHY | `90ffddd60f77…` == target | PENDING | 0 |
 | `velox-worker-523925eb` | CONNECTED | HEALTHY | `90ffddd60f77…` == target | PENDING | 0 |
 
+> **Field note (2026-08-11):** `digest_state` was the pre-split fused view
+> that mixed the worker's real-time image match with the last rollout
+> operation — which is why a failed rollout made a worker whose digest was
+> matching look `FAILED`. It has been retired: the admin worker card and
+> `fleetctl inspect` now expose `image_state` (running_digest /
+> target_digest / digest_match) and `operation_state` (last update/rollback)
+> as SEPARATE sections — see commit `9c8a64ef`. The values in this table
+> are the historical pre-fix observations, preserved for audit.
+
 ### Readiness detail — all 4 workers (identical, status `ok`, no reasons)
 
 ```json
