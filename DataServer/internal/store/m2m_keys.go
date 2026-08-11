@@ -265,8 +265,14 @@ func scanM2MAPIKey(row rowScanner) (*M2MAPIKey, error) {
 		}
 		return nil, fmt.Errorf("store: scanM2MAPIKey: %w", err)
 	}
-	createdT, _ := parseSQLiteTime(createdAt)
-	updatedT, _ := parseSQLiteTime(updatedAt)
+	createdT, err := parseSQLiteTime(createdAt)
+	if err != nil {
+		return nil, fmt.Errorf("store: scanM2MAPIKey created_at: %w", err)
+	}
+	updatedT, err := parseSQLiteTime(updatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("store: scanM2MAPIKey updated_at: %w", err)
+	}
 	return &M2MAPIKey{
 		ClientID:       clientID,
 		SecretHash:     secretHash,

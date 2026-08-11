@@ -67,6 +67,8 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Creator idempotency fast-path: un errore nel lookup o nella riparazione del
   forwarding non produce più `enqueue_confirmed=true`; il risultato viene
   restituito solo dopo che la transizione persistita è stata verificata.
+- M2M read models: timestamp corrotti nelle chiavi API o nell'audit non
+  vengono più convertiti in zero time; la lettura fallisce esplicitamente.
 - DB pool telemetry: `OpenConnections`, `InUse`, `Idle`, `WaitCount` e
   `WaitDuration` sono esposti senza label per distinguere lock da queueing.
 - Bootstrap worker: la lista ffmpeg/ffprobe è una dipendenza esplicita con

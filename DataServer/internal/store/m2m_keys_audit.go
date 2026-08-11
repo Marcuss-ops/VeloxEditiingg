@@ -90,7 +90,10 @@ func (s *SQLiteStore) ListM2MAuditLog(ctx context.Context, clientID string, limi
 			&sceneCount, &dur, &ip, &rejectReason, &createdAt); err != nil {
 			return nil, fmt.Errorf("store: ListM2MAuditLog scan: %w", err)
 		}
-		createdT, _ := parseSQLiteTime(createdAt)
+		createdT, err := parseSQLiteTime(createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("store: ListM2MAuditLog created_at: %w", err)
+		}
 		out = append(out, M2MAuditEntry{
 			ID:                   id,
 			ClientID:             clientID,
