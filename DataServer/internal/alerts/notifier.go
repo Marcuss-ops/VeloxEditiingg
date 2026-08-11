@@ -26,11 +26,17 @@ package alerts
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 	"sync"
 	"time"
 )
+
+// ErrNotifierNotConfigured means an alert was emitted without a real sink.
+// Alert paths must fail closed: a missing notifier is not equivalent to a
+// successfully delivered notification.
+var ErrNotifierNotConfigured = errors.New("alerts: notifier not configured")
 
 // Severity is the alert urgency level. Mirrors Prometheus-style
 // severities so a future `/alerts/severity=error` query on the
@@ -67,17 +73,6 @@ type Alert struct {
 type Notifier interface {
 	Notify(ctx context.Context, alert Alert) error
 }
-
-// ── NopNotifier ───────────────────────────────────────────────────────────
-
-// NopNotifier is the safe-zero default: satisfies Notifier without
-// producing side-effects. Used as the package-level default in
-// production.go BEFORE SetAlertNotifier is called at boot, and as the
-// test default so unit tests don't have to wire a real sink.
-type NopNotifier struct{}
-
-// Notify implements Notifier.
-func (NopNotifier) Notify(_ context.Context, _ Alert) error { return nil }
 
 // ── LogNotifier ───────────────────────────────────────────────────────────
 
@@ -168,12 +163,6 @@ func (m *MultiNotifier) Notify(ctx context.Context, alert Alert) error {
 	return firstErr
 }
 
-// ── Defaults ──────────────────────────────────────────────────────────────
-
-// Default is the safe-zero no-op notifier. Used as the package-level
-// default before SetDefault is called.
-var Default Notifier = NopNotifier{}
-
 // ── NotifySink: the single notification sink of the alert runtime ─────────
 
 // NotifySink adapts every AlertEvent of the runtime pipeline into the
@@ -188,7 +177,7 @@ type NotifySink struct {
 // Process implements Sink.
 func (s *NotifySink) Process(ctx context.Context, event AlertEvent) error {
 	if s == nil || s.Notifier == nil {
-		return nil
+		return ErrNotifierNotConfigured
 	}
 	return s.Notifier.Notify(ctx, Alert{
 		Source:    string(event.Group) + "." + event.RuleID,

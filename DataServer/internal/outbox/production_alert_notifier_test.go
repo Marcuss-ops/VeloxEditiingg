@@ -30,12 +30,12 @@ func (n *countingAlertNotifier) Notify(_ context.Context, _ alerts.Alert) error 
 	return nil
 }
 
-func TestAlertNotifierNilResetPreservesNopDefault(t *testing.T) {
+func TestAlertNotifierNilResetClearsSink(t *testing.T) {
 	SetAlertNotifier(nil)
 	t.Cleanup(func() { SetAlertNotifier(nil) })
 
-	if _, ok := AlertNotifier().(alerts.NopNotifier); !ok {
-		t.Fatalf("AlertNotifier after nil reset = %T, want alerts.NopNotifier", AlertNotifier())
+	if got := AlertNotifier(); got != nil {
+		t.Fatalf("AlertNotifier after nil reset = %T, want nil", got)
 	}
 }
 
@@ -92,10 +92,7 @@ func TestAlertNotifierConcurrentSetAndGet(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			n := AlertNotifier()
-			if n == nil {
-				t.Errorf("concurrent AlertNotifier returned nil")
-			}
+			_ = AlertNotifier()
 		}()
 	}
 	wg.Wait()

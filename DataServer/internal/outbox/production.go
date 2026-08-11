@@ -89,24 +89,20 @@ var KnownEventTypes = []string{
 // a sink swap could end up at the new sink), so we keep the
 // configuration change explicit.
 
-// defaultAlertNotifier is the safe-zero default. Until SetAlertNotifier
-// is called at boot, every JOB_FAILED alert is silently dropped. This
-// is preferable to a panic in production code — the dispatcher must
-// not crash because alert routing is optional at the wire-format level.
+// defaultAlertNotifier is nil until the composition root wires a real sink.
+// The JOB_FAILED handler treats nil as a transient configuration failure;
+// it must never turn an undelivered alert into PROCESSED.
 var (
 	defaultAlertNotifierMu sync.RWMutex
-	defaultAlertNotifier   alerts.Notifier = alerts.NopNotifier{}
+	defaultAlertNotifier   alerts.Notifier
 )
 
 // SetAlertNotifier overrides the production alert sink. Called once
 // from the composition root BEFORE the OutboxDispatcher goroutine
-// starts. Calling SetAlertNotifier with nil resets to the no-op
-// default. The lock also makes late reads safe for tests and future
+// starts. Calling SetAlertNotifier with nil clears the sink. The lock
+// also makes late reads safe for tests and future
 // reconfiguration without changing the bootstrap semantics.
 func SetAlertNotifier(n alerts.Notifier) {
-	if n == nil {
-		n = alerts.NopNotifier{}
-	}
 	defaultAlertNotifierMu.Lock()
 	defaultAlertNotifier = n
 	defaultAlertNotifierMu.Unlock()
@@ -292,7 +288,11 @@ func buildProductionRegistry() *Registry {
 		// Alert delivery is not allowed to masquerade as success. The
 		// dispatcher owns retry/backoff and will release the claim for a
 		// later attempt, then mark the event FAILED after MaxAttempts.
-		if err := AlertNotifier().Notify(ctx, alert); err != nil {
+		notifier := AlertNotifier()
+		if notifier == nil {
+			return Transient(fmt.Errorf("JOB_FAILED alert delivery: %w", alerts.ErrNotifierNotConfigured))
+		}
+		if err := notifier.Notify(ctx, alert); err != nil {
 			log.Printf("[OUTBOX] alert sink Notify failed for event_id=%s job_id=%s: %v",
 				e.EventID, p.JobID, err)
 			return Transient(fmt.Errorf("JOB_FAILED alert delivery: %w", err))

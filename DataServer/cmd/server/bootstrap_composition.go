@@ -110,7 +110,8 @@ func (c *appComponents) close() error {
 func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	// Wire the alert sink BEFORE buildSupervisor so the
 	// outbox-dispatcher's first JOB_FAILED delivery hits the real
-	// sink, not the NopNotifier default. buildSupervisor registers
+	// sink. Without this wiring, JOB_FAILED fails closed and is retried
+	// instead of being marked processed without an alert. buildSupervisor registers
 	// outbox-dispatcher as a ClassCritical supervisor runner, and
 	// we don't want any startup-window alerts silently dropped.
 	// The return value of buildAlerts is DISCARDED on purpose: the

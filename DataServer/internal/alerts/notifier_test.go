@@ -13,16 +13,6 @@ import (
 	"velox-server/internal/alerts"
 )
 
-// ── NopNotifier ─────────────────────────────────────────────────────────
-
-func TestNopNotifier_NeverReturnsError(t *testing.T) {
-	t.Parallel()
-	var n alerts.NopNotifier
-	if err := n.Notify(context.Background(), alerts.Alert{}); err != nil {
-		t.Fatalf("NopNotifier must be a no-op; got err=%v", err)
-	}
-}
-
 // ── LogNotifier ─────────────────────────────────────────────────────────
 
 func TestLogNotifier_EmitsStructuredLine(t *testing.T) {
@@ -122,16 +112,6 @@ func TestMultiNotifier_AggregatesFirstError(t *testing.T) {
 	}
 }
 
-// ── Default ─────────────────────────────────────────────────────────────
-
-func TestDefault_IsNopNotifier(t *testing.T) {
-	t.Parallel()
-	// Default is the safe-zero before SetDefault is called.
-	if _, ok := alerts.Default.(alerts.NopNotifier); !ok {
-		t.Errorf("alerts.Default should be NopNotifier before override; got %T", alerts.Default)
-	}
-}
-
 // ── NotifySink ──────────────────────────────────────────────────────────
 
 func TestNotifySink_AdaptsEventToCanonicalAlert(t *testing.T) {
@@ -187,11 +167,11 @@ func TestNotifySink_ForwardsNotifierError(t *testing.T) {
 	}
 }
 
-func TestNotifySink_NilNotifierIsNoop(t *testing.T) {
+func TestNotifySink_NilNotifierFailsClosed(t *testing.T) {
 	t.Parallel()
-	sink := &alerts.NotifySink{} // nil Notifier ⇒ no-op, never fails
-	if err := sink.Process(context.Background(), alerts.AlertEvent{Group: alerts.GroupFleet, RuleID: "r"}); err != nil {
-		t.Errorf("NotifySink with nil Notifier must be a no-op; got %v", err)
+	sink := &alerts.NotifySink{}
+	if err := sink.Process(context.Background(), alerts.AlertEvent{Group: alerts.GroupFleet, RuleID: "r"}); !errors.Is(err, alerts.ErrNotifierNotConfigured) {
+		t.Errorf("NotifySink with nil Notifier error = %v, want ErrNotifierNotConfigured", err)
 	}
 }
 
