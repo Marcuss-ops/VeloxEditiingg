@@ -239,7 +239,10 @@ func (r *DeliveryPendingReconciler) applyJobRollup(ctx context.Context, c Delive
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := readRowsAffected(res, "delivery pending job rollup")
+	if err != nil {
+		return err
+	}
 	if n != 1 {
 		// Concurrent runner already rolled the job up, or it left
 		// DELIVERING. Nothing to do.
@@ -288,7 +291,10 @@ func (r *DeliveryPendingReconciler) applyDeliveryTerminal(ctx context.Context, c
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := readRowsAffected(res, "delivery pending terminalization")
+	if err != nil {
+		return err
+	}
 	if n != 1 {
 		return nil
 	}

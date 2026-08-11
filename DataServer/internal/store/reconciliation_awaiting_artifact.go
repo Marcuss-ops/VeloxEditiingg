@@ -241,7 +241,10 @@ func (r *AwaitingArtifactReconciler) applyCandidate(ctx context.Context, c Await
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := readRowsAffected(res, "awaiting artifact terminalization")
+	if err != nil {
+		return err
+	}
 	if n != 1 {
 		// Concurrent finalize or a previous pass won the CAS. The
 		// job is no longer AWAITING_ARTIFACT; nothing to do.
