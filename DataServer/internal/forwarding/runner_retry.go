@@ -45,7 +45,7 @@ func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease 
 	backoff := r.cfg.backoffForAttempt(lease.AttemptCount)
 	nextAttempt := time.Now().UTC().Add(backoff)
 	if err := r.dbStore.MarkCreatorForwardingEnqueueRetry(ctx,
-		lease.ForwardingID, code, msg, nextAttempt,
+		lease.ForwardingID, lease.RunnerID, lease.LeaseID, code, msg, nextAttempt,
 	); err != nil {
 		// CAS failure (race with another runner or already transitioned) —
 		// fall back to terminal failure to prevent the row from being

@@ -691,10 +691,15 @@ func TestMarkCreatorForwardingEnqueueRetry_FromForwarding(t *testing.T) {
 	if _, err := db.InsertCreatorForwarding(ctx, cf); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
+	if _, err := db.db.ExecContext(ctx, `UPDATE creator_forwardings
+		SET locked_by = ?, lease_id = ?, lease_expires_at = ? WHERE forwarding_id = ?`,
+		"runner-enqueue", "lease-enqueue", time.Now().UTC().Add(time.Minute).Format(time.RFC3339), "cf-enq-retry"); err != nil {
+		t.Fatalf("seed enqueue lease: %v", err)
+	}
 
 	nextAttempt := time.Now().UTC().Add(2 * time.Minute)
 	err := db.MarkCreatorForwardingEnqueueRetry(ctx, "cf-enq-retry",
-		"ENQUEUE_FAILED", "atomic write conflict", nextAttempt)
+		"runner-enqueue", "lease-enqueue", "ENQUEUE_FAILED", "atomic write conflict", nextAttempt)
 	if err != nil {
 		t.Fatalf("MarkCreatorForwardingEnqueueRetry: %v", err)
 	}
@@ -723,10 +728,15 @@ func TestMarkCreatorForwardingEnqueueRetry_FromReadyToForward(t *testing.T) {
 
 	insertTestForwardingWithPayload(t, db, "cf-r2f-retry", "openai", "creator-r2f-retry",
 		"scene.composite.v1", "READY_TO_FORWARD", `{"v":"1"}`, "abc")
+	if _, err := db.db.ExecContext(ctx, `UPDATE creator_forwardings
+		SET locked_by = ?, lease_id = ?, lease_expires_at = ? WHERE forwarding_id = ?`,
+		"runner-ready", "lease-ready", time.Now().UTC().Add(time.Minute).Format(time.RFC3339), "cf-r2f-retry"); err != nil {
+		t.Fatalf("seed enqueue lease: %v", err)
+	}
 
 	nextAttempt := time.Now().UTC().Add(30 * time.Second)
 	err := db.MarkCreatorForwardingEnqueueRetry(ctx, "cf-r2f-retry",
-		"PREPARE_FAILED", "invalid payload", nextAttempt)
+		"runner-ready", "lease-ready", "PREPARE_FAILED", "invalid payload", nextAttempt)
 	if err != nil {
 		t.Fatalf("MarkCreatorForwardingEnqueueRetry: %v", err)
 	}

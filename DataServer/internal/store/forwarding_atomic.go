@@ -139,11 +139,11 @@ func (s *SQLiteStore) MarkCreatorForwardingReadySync(ctx context.Context, forwar
 // MarkCreatorForwardingEnqueueRetry moves a forwarding that failed to enqueue
 // (FORWARDING or READY_TO_FORWARD) to RETRY_WAIT with a backoff delay.
 // This is the enqueue-phase analog of MarkCreatorForwardingRetry (which
-// handles the POLLING phase). CAS on (forwarding_id, status IN enqueue
-// states). Clears lock/lease fields.
-func (s *SQLiteStore) MarkCreatorForwardingEnqueueRetry(ctx context.Context, forwardingID, errorCode, errorMsg string, nextAttemptAt time.Time) error {
-	if forwardingID == "" {
-		return fmt.Errorf("store: MarkCreatorForwardingEnqueueRetry: empty forwarding_id")
+// handles the POLLING phase). The transition is owned by the active lease;
+// a stale runner must not be able to rewrite a row claimed by another runner.
+func (s *SQLiteStore) MarkCreatorForwardingEnqueueRetry(ctx context.Context, forwardingID, runnerID, leaseID, errorCode, errorMsg string, nextAttemptAt time.Time) error {
+	if forwardingID == "" || runnerID == "" || leaseID == "" {
+		return fmt.Errorf("store: MarkCreatorForwardingEnqueueRetry: missing forwarding_id, runner_id or lease_id")
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -153,12 +153,15 @@ func (s *SQLiteStore) MarkCreatorForwardingEnqueueRetry(ctx context.Context, for
 		 SET status = 'RETRY_WAIT',
 		     locked_by = '', lease_id = '', lease_expires_at = '',
 		     next_attempt_at = ?,
-		     last_error_code = ?, last_error_message = ?,
+			 last_error_code = ?, last_error_message = ?,
 		     updated_at = ?
 		 WHERE forwarding_id = ?
-		   AND status IN ('FORWARDING', 'READY_TO_FORWARD')`,
+		   AND status IN ('FORWARDING', 'READY_TO_FORWARD')
+		   AND locked_by = ?
+		   AND lease_id = ?
+		   AND lease_expires_at > ?`,
 		nextISO, nullIfEmpty(errorCode), nullIfEmpty(errorMsg), now,
-		forwardingID,
+		forwardingID, runnerID, leaseID, now,
 	)
 	if err != nil {
 		return wrapDBInfrastructure("MarkCreatorForwardingEnqueueRetry exec", err)
