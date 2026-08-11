@@ -25,7 +25,7 @@ func (h *WorkerUpdateHandler) FullUpdateLinuxHandler() gin.HandlerFunc {
 		}
 
 		maintenanceID := uuid.New().String()
-		commandsQueued := h.queueBundleUpdateForWorkers(eligible, target, dryRun, maintenanceID)
+		commandsQueued, queuedWorkers, failedWorkers := h.queueBundleUpdateForWorkers(eligible, target, dryRun, maintenanceID)
 
 		log.Printf("[UPDATE] Full update Linux: %d workers, %d commands, maintenance_id=%s",
 			len(eligible), commandsQueued, maintenanceID)
@@ -33,15 +33,16 @@ func (h *WorkerUpdateHandler) FullUpdateLinuxHandler() gin.HandlerFunc {
 		c.JSON(http.StatusOK, gin.H{
 			"status":          "queued",
 			"maintenance_id":  maintenanceID,
-			"queued":          len(eligible),
+			"queued":          len(queuedWorkers),
 			"total_eligible":  len(eligible),
 			"commands_queued": commandsQueued,
 			"target_version":  target.Version,
 			"target_hash":     target.Hash,
 			"target_filename": target.Filename,
 			"worker_ids":      eligible,
-			"updated_workers": eligible,
-			"updated_count":   len(eligible),
+			"updated_workers": queuedWorkers,
+			"updated_count":   len(queuedWorkers),
+			"failed_workers":  failedWorkers,
 		})
 	}
 }
@@ -68,7 +69,7 @@ func (h *WorkerUpdateHandler) UpdateAllLatestBundleHandler() gin.HandlerFunc {
 		}
 
 		maintenanceID := uuid.New().String()
-		commandsQueued := h.queueBundleUpdateForWorkers(eligible, target, dryRun, maintenanceID)
+		commandsQueued, queuedWorkers, failedWorkers := h.queueBundleUpdateForWorkers(eligible, target, dryRun, maintenanceID)
 
 		log.Printf("[UPDATE] Latest bundle update queued: workers=%d maintenance_id=%s version=%s hash=%s",
 			len(eligible), maintenanceID, target.Version, target.Hash)
@@ -76,15 +77,16 @@ func (h *WorkerUpdateHandler) UpdateAllLatestBundleHandler() gin.HandlerFunc {
 		c.JSON(http.StatusOK, gin.H{
 			"status":          "queued",
 			"maintenance_id":  maintenanceID,
-			"queued":          len(eligible),
+			"queued":          len(queuedWorkers),
 			"total_eligible":  len(eligible),
 			"commands_queued": commandsQueued,
 			"target_version":  target.Version,
 			"target_hash":     target.Hash,
 			"target_filename": target.Filename,
 			"worker_ids":      eligible,
-			"updated_workers": eligible,
-			"updated_count":   len(eligible),
+			"updated_workers": queuedWorkers,
+			"updated_count":   len(queuedWorkers),
+			"failed_workers":  failedWorkers,
 		})
 	}
 }
@@ -104,18 +106,25 @@ func (h *WorkerUpdateHandler) RestartAllHandler() gin.HandlerFunc {
 			return
 		}
 
+		queuedWorkers := make([]string, 0, len(eligible))
+		failedWorkers := make([]string, 0)
 		for _, wid := range eligible {
-			h.cmdMgr.PushCommand(wid, "restart_worker", nil)
+			if _, err := h.cmdMgr.PushCommandWithError(wid, "restart_worker", nil); err != nil {
+				failedWorkers = append(failedWorkers, wid)
+				continue
+			}
+			queuedWorkers = append(queuedWorkers, wid)
 		}
 
 		log.Printf("[UPDATE] Restart all queued for %d workers", len(eligible))
 
 		c.JSON(http.StatusOK, gin.H{
 			"status":            "queued",
-			"queued":            len(eligible),
+			"queued":            len(queuedWorkers),
 			"worker_ids":        eligible,
-			"restarted_workers": eligible,
-			"restarted_count":   len(eligible),
+			"restarted_workers": queuedWorkers,
+			"restarted_count":   len(queuedWorkers),
+			"failed_workers":    failedWorkers,
 			"command":           "restart_worker",
 		})
 	}
@@ -200,15 +209,29 @@ func (h *WorkerUpdateHandler) RolloutUpdateHandler() gin.HandlerFunc {
 
 		targetArtifactSHA := h.computeBundleSHA256()
 		target := h.latestBundleTarget()
+		queuedCanary := make([]string, 0, len(canaryWorkers))
+		failedCanary := make([]string, 0)
 		for _, wid := range canaryWorkers {
-			h.cmdMgr.PushCommand(wid, "update_code", map[string]interface{}{
+			failed := false
+			if _, err := h.cmdMgr.PushCommandWithError(wid, "update_code", map[string]interface{}{
 				"version":                target.Version,
 				"bundle_version":         target.Version,
 				"bundle_hash":            target.Hash,
 				"target_artifact_sha256": target.Hash,
-			})
-			h.cmdMgr.PushCommand(wid, "restart_worker", nil)
-			h.cmdMgr.PushCommand(wid, "run_smoke_job", buildSmokeJobPayload(wid))
+			}); err != nil {
+				failed = true
+			}
+			if _, err := h.cmdMgr.PushCommandWithError(wid, "restart_worker", nil); err != nil {
+				failed = true
+			}
+			if _, err := h.cmdMgr.PushCommandWithError(wid, "run_smoke_job", buildSmokeJobPayload(wid)); err != nil {
+				failed = true
+			}
+			if failed {
+				failedCanary = append(failedCanary, wid)
+			} else {
+				queuedCanary = append(queuedCanary, wid)
+			}
 			// Phase 4.4: in-memory UpdateManager mirror removed
 		}
 
@@ -216,15 +239,16 @@ func (h *WorkerUpdateHandler) RolloutUpdateHandler() gin.HandlerFunc {
 		log.Printf("   Total eligible: %d, Canary: %d, Batches: %d", totalWorkers, len(canaryWorkers), len(batches))
 
 		c.JSON(http.StatusOK, gin.H{
-			"status":         "queued",
-			"rollout_id":     rolloutID,
-			"target_version": target.Version,
-			"target_hash":    targetArtifactSHA,
-			"canary_workers": canaryWorkers,
-			"batches":        batches,
-			"total_workers":  totalWorkers,
-			"batch_size":     batchSize,
-			"canary_percent": canaryPercent,
+			"status":                "queued",
+			"rollout_id":            rolloutID,
+			"target_version":        target.Version,
+			"target_hash":           targetArtifactSHA,
+			"canary_workers":        queuedCanary,
+			"failed_canary_workers": failedCanary,
+			"batches":               batches,
+			"total_workers":         totalWorkers,
+			"batch_size":            batchSize,
+			"canary_percent":        canaryPercent,
 		})
 	}
 }

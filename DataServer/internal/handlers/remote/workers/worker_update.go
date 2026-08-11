@@ -290,33 +290,53 @@ func (h *WorkerUpdateHandler) latestBundleTarget() bundleTargetInfo {
 	return info
 }
 
-func (h *WorkerUpdateHandler) queueBundleUpdateForWorkers(workerIDs []string, target bundleTargetInfo, dryRun bool, maintenanceID string) int {
+func (h *WorkerUpdateHandler) queueBundleUpdateForWorkers(workerIDs []string, target bundleTargetInfo, dryRun bool, maintenanceID string) (int, []string, []string) {
 	commandsQueued := 0
+	queuedWorkers := make([]string, 0, len(workerIDs))
+	failedWorkers := make([]string, 0)
 	for _, wid := range workerIDs {
-		h.cmdMgr.PushCommand(wid, "maintenance_full_update_linux", map[string]interface{}{
+		workerFailed := false
+		if _, err := h.cmdMgr.PushCommandWithError(wid, "maintenance_full_update_linux", map[string]interface{}{
 			"id":        maintenanceID,
 			"dry_run":   dryRun,
 			"requested": time.Now().Unix(),
-		})
-		commandsQueued++
+		}); err != nil {
+			workerFailed = true
+		} else {
+			commandsQueued++
+		}
 
 		// Phase 4.4: the persistent `update_code` command is the single
 		// source of truth. The component acks via AckCommandByID once the
 		// worker reports readiness; there is no longer an in-memory
 		// UpdateManager write to mirror.
-		h.cmdMgr.PushCommand(wid, "update_code", map[string]interface{}{
+		if _, err := h.cmdMgr.PushCommandWithError(wid, "update_code", map[string]interface{}{
 			"version":                target.Version,
 			"bundle_version":         target.Version,
 			"bundle_hash":            target.Hash,
 			"target_artifact_sha256": target.Hash,
-		})
-		commandsQueued++
+		}); err != nil {
+			workerFailed = true
+		} else {
+			commandsQueued++
+		}
 
-		h.cmdMgr.PushCommand(wid, "restart_worker", nil)
-		commandsQueued++
+		if _, err := h.cmdMgr.PushCommandWithError(wid, "restart_worker", nil); err != nil {
+			workerFailed = true
+		} else {
+			commandsQueued++
+		}
 
-		h.cmdMgr.PushCommand(wid, "run_smoke_job", buildSmokeJobPayload(wid))
-		commandsQueued++
+		if _, err := h.cmdMgr.PushCommandWithError(wid, "run_smoke_job", buildSmokeJobPayload(wid)); err != nil {
+			workerFailed = true
+		} else {
+			commandsQueued++
+		}
+		if workerFailed {
+			failedWorkers = append(failedWorkers, wid)
+		} else {
+			queuedWorkers = append(queuedWorkers, wid)
+		}
 	}
-	return commandsQueued
+	return commandsQueued, queuedWorkers, failedWorkers
 }
