@@ -19,8 +19,55 @@ import (
 )
 
 // =====================================================================
-// #region 8 — doppia finalizzazione (idempotent path)
+// #region 7b — determinism chain: finalization stamps the master-computed
+// authoritative artifact_sha256 on the winning attempt (migration 148)
 // =====================================================================
+
+func TestFinalize_StampsAuthoritativeArtifactSHAOnAttempt(t *testing.T) {
+	env := setupTestEnv(t)
+	env.seedJob("JRI", "AWAITING_ARTIFACT", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
+	env.seedAttempt("JRI", 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
+	// Production claims stamp tasks.attempt_id + worker/lease identity at
+	// Claim time; mirror that so FinalizeVerified's task+attempt winner
+	// CASes can attribute the attempt.
+	_, errTask := env.db.Exec(
+		`UPDATE tasks SET attempt_id = 'JRI-attempt', worker_id = ?, lease_id = ?
+		 WHERE task_id = 'JRI-task'`, testWorkerID, testLeaseID)
+	require.NoError(t, errTask)
+
+	cmd := beginUploadDefaultCmd("JRI")
+	payload := []byte("determinism-chain-finalize-payload")
+	cmd.ExpectedSizeBytes = int64(len(payload))
+	cmd.ExpectedSHA256 = sha256Hex(payload)
+	sess, err := env.svc.BeginUpload(context.Background(), cmd)
+	require.NoError(t, err)
+	_, err = env.svc.Receive(context.Background(), sess.UploadID, uploadBytes(payload))
+	require.NoError(t, err)
+	// AttemptID mirrors the HTTP video-upload finalize path
+	// (handlers/remote/workers/uploads/video.go), the production path that
+	// can attribute the authoritative SHA to a specific attempt.
+	art, err := env.svc.Finalize(context.Background(), FinalizeArtifactCommand{
+		UploadID: sess.UploadID, JobID: "JRI", WorkerID: testWorkerID,
+		LeaseID: testLeaseID, AttemptNumber: 1, ExpectedRevision: testRevision,
+		AttemptID: "JRI-attempt",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "READY", art.Status)
+
+	// The attempt's chain column must carry the master-computed SHA (the
+	// hash of the received bytes), NOT the worker's hint. renderer_version
+	// is stamped only by the worker report, so it stays empty here.
+	var attemptSHA, rendererVersion string
+	require.NoError(t, env.db.QueryRow(
+		`SELECT artifact_sha256, renderer_version FROM task_attempts WHERE id = 'JRI-attempt'`,
+	).Scan(&attemptSHA, &rendererVersion))
+	require.Equal(t, sha256Hex(payload), attemptSHA, "attempt artifact_sha256 must be the master-computed authoritative SHA")
+	require.Equal(t, "", rendererVersion, "renderer_version is report-stamped only; finalize must not fabricate it")
+}
+
+// =====================================================================
+// #region 8 — doppia finalizzazione (idempotent path)
+// =================================================================
 
 func TestFinalize_DoubleFinalizeIdempotent(t *testing.T) {
 	env := setupTestEnv(t)

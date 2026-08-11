@@ -53,7 +53,9 @@ CREATE TABLE task_attempts (
 	span_id              TEXT NOT NULL DEFAULT '',
 	plan_version         INTEGER NOT NULL DEFAULT 0,
 	plan_sha256          TEXT NOT NULL DEFAULT '',
-	render_plan_json     TEXT NOT NULL DEFAULT ''
+	render_plan_json     TEXT NOT NULL DEFAULT '',
+	renderer_version     TEXT NOT NULL DEFAULT '', -- migration 148
+	artifact_sha256      TEXT NOT NULL DEFAULT ''  -- migration 148
 );
 `
 	if _, err := db.Exec(schema); err != nil {

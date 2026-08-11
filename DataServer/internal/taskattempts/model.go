@@ -68,6 +68,13 @@ type TaskAttempt struct {
 	FFmpegVersion     string `json:"ffmpeg_version,omitempty"`
 	ConfigHash        string `json:"config_hash,omitempty"`
 	DockerImageDigest string `json:"docker_image_digest,omitempty"`
+	// Determinism chain closure (migration 148): report-time render
+	// identity stamped when the worker report arrives. Together with
+	// plan_version/plan_sha256 (migration 145) the chain
+	// job→attempt→plan_version→plan_sha256→renderer_version→
+	// artifact_sha256 is reconstructable per attempt.
+	RendererVersion string `json:"renderer_version,omitempty"`
+	ArtifactSHA256  string `json:"artifact_sha256,omitempty"`
 	// Scorecard v2 / Step 15: OpenTelemetry distributed tracing correlation.
 	// trace_id is the W3C trace ID (32 hex chars); span_id is the parent
 	// span that dispatched this attempt (16 hex chars). Both are propagated

@@ -43,6 +43,38 @@ func persistAttemptVersioning(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ing
 	return nil
 }
 
+// persistAttemptRenderIdentity stamps the determinism-chain tail
+// (renderer_version + artifact_sha256, migration 148) on the attempt row
+// when the worker report arrives. renderer_version falls back to the
+// worker engine version when not carried explicitly. artifact_sha256 is
+// the worker-declared primary artifact SHA, stamped as a GAP-FILL ONLY:
+// finalization (store.FinalizeVerified) writes the master-computed
+// authoritative value first in the production ordering, and the
+// CASE-guard below never overwrites it with a worker hint. Both are
+// best-effort: no-op when neither is known.
+func persistAttemptRenderIdentity(ctx context.Context, tx *sql.Tx, cmd taskgraph.IngestResultCommand, now string) error {
+	rendererVersion := cmd.RendererVersion
+	if rendererVersion == "" {
+		rendererVersion = cmd.EngineVersion
+	}
+	if rendererVersion == "" && cmd.ArtifactSHA256 == "" {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx,
+		`UPDATE task_attempts
+		 SET renderer_version = ?,
+		     artifact_sha256 = CASE WHEN artifact_sha256 = '' THEN ? ELSE artifact_sha256 END,
+		     updated_at = ?
+		 WHERE task_id = ? AND worker_id = ? AND lease_id = ?`,
+		rendererVersion, cmd.ArtifactSHA256, now,
+		cmd.TaskID, cmd.WorkerID, cmd.LeaseID,
+	)
+	if err != nil {
+		return fmt.Errorf("task ingest atomic render identity: %w", err)
+	}
+	return nil
+}
+
 // persistAttemptTracing writes OpenTelemetry trace context on the attempt row.
 func persistAttemptTracing(ctx context.Context, tx *sql.Tx, cmd taskgraph.IngestResultCommand, now string) error {
 	if cmd.TraceID == "" && cmd.SpanID == "" {

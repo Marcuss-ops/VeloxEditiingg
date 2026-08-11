@@ -109,6 +109,16 @@ type IngestResultCommand struct {
 	FFmpegVersion     string
 	ConfigHash        string
 	DockerImageDigest string
+	// Determinism chain closure (Fase D tail): report-time render identity.
+	// RendererVersion mirrors the worker engine version that produced the
+	// artifact (fallback inside persistAttemptRenderIdentity);
+	// ArtifactSHA256 is the worker-declared primary artifact SHA at report
+	// time — the master-computed authoritative value lands on
+	// artifacts.sha256 at finalization. Together with the migration-145
+	// plan columns they make job→attempt→plan_version→plan_sha256→
+	// renderer_version→artifact_sha256 reconstructable per attempt.
+	RendererVersion string
+	ArtifactSHA256  string
 	// RenderFingerprint is the complete deterministic identity of the render.
 	// It is persisted with the immutable attempt report when present.
 	RenderFingerprint *renderfingerprint.Fingerprint

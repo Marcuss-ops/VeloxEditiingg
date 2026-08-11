@@ -145,13 +145,19 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		if n, _ := res.RowsAffected(); n != 1 {
 			return nil, fmt.Errorf("%w: task winner affected=%d attempt=%s", ErrTransitionConflict, n, p.AttemptID)
 		}
+		// Determinism chain (migration 148): stamp the master-computed
+		// authoritative artifact SHA on the winning attempt. The worker
+		// report may later declare a SHA hint at ingest; the ingest-side
+		// gap-fill guard (persistAttemptRenderIdentity) never overwrites
+		// this authoritative value.
 		res, err = tx.ExecContext(ctx, `
 			UPDATE task_attempts
-			SET status = ?, completed_at = COALESCE(completed_at, ?), updated_at = ?
+			SET status = ?, completed_at = COALESCE(completed_at, ?), updated_at = ?,
+			    artifact_sha256 = ?
 			WHERE id = ? AND task_id = (SELECT task_id FROM tasks WHERE job_id = ? AND attempt_id = ?)
 			  AND worker_id = ? AND lease_id = ?
 			  AND status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT')`,
-			"SUCCEEDED", nowStr, nowStr, p.AttemptID, p.JobID, p.AttemptID, p.WorkerID, p.LeaseID)
+			"SUCCEEDED", nowStr, nowStr, p.SHA256, p.AttemptID, p.JobID, p.AttemptID, p.WorkerID, p.LeaseID)
 		if err != nil {
 			return nil, fmt.Errorf("store: FinalizeVerified attempt winner CAS: %w", err)
 		}

@@ -73,6 +73,9 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 	if err := persistAttemptVersioning(ctx, tx, cmd, now); err != nil {
 		return err
 	}
+	if err := persistAttemptRenderIdentity(ctx, tx, cmd, now); err != nil {
+		return err
+	}
 	if err := persistAttemptTracing(ctx, tx, cmd, now); err != nil {
 		return err
 	}

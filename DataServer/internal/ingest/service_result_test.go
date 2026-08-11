@@ -118,6 +118,57 @@ func TestIngestionService_CanonicalizesDetailedPhaseIdentityBeforeAtomicIngest_L
 	}
 }
 
+func TestIngestionService_StampsRenderIdentityFromReport(t *testing.T) {
+	taskRepo := &stubIngestTaskRepo{listTasks: []taskgraph.Task{{ID: "T1", JobID: "J1", Status: taskgraph.StatusSucceeded}}}
+	jobsRepo := &stubIngestJobsRepo{getJob: &jobs.Job{ID: "J1", Status: jobs.StatusRunning, MaxRetries: 3, Revision: 0}}
+	svc := newWiredSvc(t, taskRepo, jobsRepo, &stubIngestAttemptRepo{}, newStubIngestOutputArtifacts())
+
+	const (
+		wantEngine  = "velox-engine/v2.9.1"
+		wantFinal   = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+		wantThumb   = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	)
+	_, err := svc.IngestTaskResult(context.Background(), IngestCommand{
+		TaskID: "T1", AttemptID: "A1", LeaseID: "L1", WorkerID: "w-1", JobID: "J1",
+		AttemptNumber: 1, Status: "succeeded",
+		EngineVersion: wantEngine,
+		// The final video is the SECOND declaration and the first with a
+		// non-empty declared SHA (thumbnail declares none) — the derivation
+		// must pick the first non-empty SHA in declaration order.
+		OutputArtifacts: []DeclaredArtifact{
+			{ArtifactID: "art-thumb", ArtifactType: "image", SHA256: ""},
+			{ArtifactID: "art-final", ArtifactType: "video", SHA256: wantFinal},
+			{ArtifactID: "art-audio", ArtifactType: "audio", SHA256: wantThumb},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := taskRepo.lastIngestCommand
+	if got.RendererVersion != wantEngine {
+		t.Errorf("RendererVersion = %q; want %q", got.RendererVersion, wantEngine)
+	}
+	if got.ArtifactSHA256 != wantFinal {
+		t.Errorf("ArtifactSHA256 = %q; want first non-empty declared SHA %q", got.ArtifactSHA256, wantFinal)
+	}
+
+	// No declared SHA → chain tail must not fabricate a value.
+	taskRepo2 := &stubIngestTaskRepo{listTasks: []taskgraph.Task{{ID: "T1", JobID: "J1", Status: taskgraph.StatusSucceeded}}}
+	jobsRepo2 := &stubIngestJobsRepo{getJob: &jobs.Job{ID: "J1", Status: jobs.StatusRunning, MaxRetries: 3, Revision: 0}}
+	svc2 := newWiredSvc(t, taskRepo2, jobsRepo2, &stubIngestAttemptRepo{}, newStubIngestOutputArtifacts())
+	if _, err := svc2.IngestTaskResult(context.Background(), IngestCommand{
+		TaskID: "T1", AttemptID: "A1", LeaseID: "L1", WorkerID: "w-1", JobID: "J1",
+		AttemptNumber: 1, Status: "failed", EngineVersion: "",
+		OutputArtifacts: []DeclaredArtifact{{ArtifactID: "art-final", ArtifactType: "video", SHA256: ""}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got2 := taskRepo2.lastIngestCommand; got2.RendererVersion != "" || got2.ArtifactSHA256 != "" {
+		t.Errorf("empty report fabricated identity: renderer=%q artifact_sha=%q; want empty/empty", got2.RendererVersion, got2.ArtifactSHA256)
+	}
+}
+
 func TestIngestionService_RequiresAllDeps(t *testing.T) {
 	out := newStubIngestOutputArtifacts()
 	attempts := &stubIngestAttemptRepo{}

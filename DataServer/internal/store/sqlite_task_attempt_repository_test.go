@@ -78,7 +78,9 @@ CREATE TABLE task_attempts (
 	config_hash          TEXT NOT NULL DEFAULT '',
 	docker_image_digest  TEXT NOT NULL DEFAULT '',
 	trace_id             TEXT NOT NULL DEFAULT '',
-	span_id              TEXT NOT NULL DEFAULT ''
+	span_id              TEXT NOT NULL DEFAULT '',
+	renderer_version     TEXT NOT NULL DEFAULT '', -- migration 148
+	artifact_sha256      TEXT NOT NULL DEFAULT ''  -- migration 148
 );
 `
 	if _, err := db.Exec(schema); err != nil {

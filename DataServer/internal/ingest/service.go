@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"velox-server/internal/credentials"
@@ -338,6 +339,22 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 	if rawReportJSON != "" {
 		rawReportJSON = credentials.JSON(rawReportJSON)
 	}
+
+	// Determinism chain closure (Fase D tail, migration 148): stamp the
+	// report-time render identity. RendererVersion mirrors the worker
+	// engine version (the session-derived value persisted by the handler);
+	// ArtifactSHA256 is the first non-empty worker-declared SHA in
+	// declaration order (typically the final video). The authoritative
+	// master-computed SHA is joined from the artifacts table after
+	// finalization — the chain column here is the report-time correlation.
+	rendererVersion := cmd.EngineVersion
+	artifactSHA := ""
+	for _, decl := range cmd.OutputArtifacts {
+		if strings.TrimSpace(decl.SHA256) != "" {
+			artifactSHA = strings.TrimSpace(decl.SHA256)
+			break
+		}
+	}
 	ingestErr := s.taskRepo.IngestTaskResultAtomic(ctx, taskgraph.IngestResultCommand{
 		TaskID:        cmd.TaskID,
 		JobID:         cmd.JobID,
@@ -360,6 +377,9 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		FFmpegVersion:     cmd.FFmpegVersion,
 		ConfigHash:        cmd.ConfigHash,
 		DockerImageDigest: cmd.DockerImageDigest,
+		// Determinism chain closure (Fase D tail).
+		RendererVersion:   rendererVersion,
+		ArtifactSHA256:    artifactSHA,
 		RenderFingerprint: cmd.RenderFingerprint,
 		// Scorecard v2 / Step 15: tracing.
 		TraceID: cmd.TraceID,

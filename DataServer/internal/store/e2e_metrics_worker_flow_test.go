@@ -120,6 +120,11 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 		FFmpegVersion:     "n7.0.2",
 		ConfigHash:        "sha256:def5678",
 		DockerImageDigest: "sha256:ghi9012",
+		// Determinism chain closure (migration 148): report-time render
+		// identity. RendererVersion mirrors the engine; ArtifactSHA256 is
+		// the worker-declared primary artifact SHA.
+		RendererVersion: "velox-engine/v2.8.0",
+		ArtifactSHA256:  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		// Step 16: raw worker report payload for audit/replay.
 		RawReportJSON:       `{"task_id":"` + taskID + `","attempt_id":"` + attemptID + `","status":"succeeded"}`,
 		RawReportReceivedAt: now,
@@ -322,6 +327,62 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 	}
 	if storedAttempt.DockerImageDigest != "sha256:ghi9012" {
 		t.Errorf("DockerImageDigest = %q; want sha256:ghi9012", storedAttempt.DockerImageDigest)
+	}
+	// Determinism chain closure (migration 148): renderer_version +
+	// artifact_sha256 must be stamped on the attempt by the report ingest.
+	if storedAttempt.RendererVersion != "velox-engine/v2.8.0" {
+		t.Errorf("RendererVersion = %q; want velox-engine/v2.8.0", storedAttempt.RendererVersion)
+	}
+	if storedAttempt.ArtifactSHA256 != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Errorf("ArtifactSHA256 = %q; want aaaa... (64 hex)", storedAttempt.ArtifactSHA256)
+	}
+
+	// The full determinism chain job→attempt→plan_version→plan_sha256→
+	// renderer_version→artifact_sha256 must be reconstructable from the
+	// attempt row: stamp a plan (migration 145) and read all four columns
+	// back together.
+	const planSHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	const planJSON = `{"plan_version":1,"job_id":"e2e-job-001","attempt_id":"e2e-attempt-001","duration_ms":120500,"segments":[],"audio":[],"assets":[]}`
+	if err := attemptRepo.UpsertRenderPlan(ctx, attemptID, 1, planSHA, planJSON); err != nil {
+		t.Fatalf("UpsertRenderPlan: %v", err)
+	}
+	var (
+		gotPlanVersion    int
+		gotPlanSHA        string
+		gotRendererVer    string
+		gotArtifactSHA    string
+	)
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT plan_version, plan_sha256, renderer_version, artifact_sha256
+		 FROM task_attempts WHERE id = ?`, attemptID,
+	).Scan(&gotPlanVersion, &gotPlanSHA, &gotRendererVer, &gotArtifactSHA); err != nil {
+		t.Fatalf("read determinism chain: %v", err)
+	}
+	if gotPlanVersion != 1 || gotPlanSHA != planSHA ||
+		gotRendererVer != "velox-engine/v2.8.0" || gotArtifactSHA != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("determinism chain = %d/%q/%q/%q; want 1/%q/velox-engine/v2.8.0/aaaa...",
+			gotPlanVersion, gotPlanSHA, gotRendererVer, gotArtifactSHA, planSHA)
+	}
+
+	// Gap-fill guard (migration 148): in the production ordering the
+	// master-computed authoritative SHA is stamped at FinalizeVerified
+	// BEFORE the report arrives. Simulate that ordering by pre-stamping
+	// the attempt, then re-ingesting the same report: the ingest-side
+	// stamp must NOT clobber the authoritative value with the worker hint.
+	execQuery(t, store, ctx,
+		`UPDATE task_attempts SET artifact_sha256 = ? WHERE id = ?`,
+		"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", attemptID)
+	if err := taskRepo.IngestTaskResultAtomic(ctx, cmd); err != nil {
+		t.Fatalf("re-ingest after authoritative stamp: %v", err)
+	}
+	var preservedSHA string
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT artifact_sha256 FROM task_attempts WHERE id = ?`, attemptID,
+	).Scan(&preservedSHA); err != nil {
+		t.Fatalf("read preserved chain SHA: %v", err)
+	}
+	if preservedSHA != "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" {
+		t.Fatalf("gap-fill guard clobbered authoritative SHA: got %q", preservedSHA)
 	}
 
 	// ── 4. Verify observability Overview API ──────────────────────────
