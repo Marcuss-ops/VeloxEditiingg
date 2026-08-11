@@ -187,6 +187,11 @@ func (h *Handler) sendClaimedTaskOffer(
 		}
 	}
 
+	// Fase D: compile the canonical render plan from the claimed payload and
+	// stamp plan_version/plan_sha256 on the attempt. Best-effort by design:
+	// a compile or persist failure must never block the offer.
+	h.stampAttemptRenderPlan(ctx, tws, attempt)
+
 	leaseDeadline := time.Now().UTC().Add(30 * time.Minute)
 	jobRevision := int32(0)
 	if h.jobsRepo != nil {
@@ -231,6 +236,46 @@ func (h *Handler) sendClaimedTaskOffer(
 	sess.pendingTaskOffer = tws
 	log.Printf("[PLACEMENT] TaskOffer queued for worker %s: task=%s job=%s attempt=%s lease=%s executor=%s@%d rev=%d",
 		sess.workerID, tws.ID, tws.JobID, attempt.ID, leaseID, tws.ExecutorID, tws.ExecutorVersion, tws.Revision)
+}
+
+// stampAttemptRenderPlan compiles the canonical render plan for the claimed
+// task payload (Fase D) and persists plan_version/plan_sha256/render_plan_json
+// on the freshly-minted attempt. It is deliberately best-effort and NIL-safe:
+// a missing compiler, an uncompileable payload, or a persist failure only logs
+// and leaves the attempt at plan_version=0 — the worker offer is never blocked
+// by plan compilation.
+func (h *Handler) stampAttemptRenderPlan(ctx context.Context, tws *taskgraph.TaskWithSpec, attempt *taskattempts.TaskAttempt) {
+	if h == nil || h.renderPlanCompiler == nil || h.taskAttemptRepo == nil || tws == nil || attempt == nil {
+		return
+	}
+	plan, err := h.renderPlanCompiler.Compile(ctx, tws.SpecPayload, attempt.ID)
+	if err != nil {
+		log.Printf("[RENDERPLAN] compile skipped task=%s attempt=%s: %v", tws.ID, attempt.ID, err)
+		return
+	}
+	canonical, err := plan.CanonicalJSON()
+	if err != nil {
+		log.Printf("[RENDERPLAN] canonical encode skipped task=%s attempt=%s: %v", tws.ID, attempt.ID, err)
+		return
+	}
+	planSHA, err := plan.PlanSHA256()
+	if err != nil {
+		log.Printf("[RENDERPLAN] plan hash skipped task=%s attempt=%s: %v", tws.ID, attempt.ID, err)
+		return
+	}
+	if err := h.taskAttemptRepo.UpsertRenderPlan(ctx, attempt.ID, plan.PlanVersion, planSHA, string(canonical)); err != nil {
+		log.Printf("[RENDERPLAN] persist skipped task=%s attempt=%s: %v", tws.ID, attempt.ID, err)
+		return
+	}
+	log.Printf("[RENDERPLAN] stamped attempt=%s task=%s plan_version=%d plan_sha256=%s duration_ms=%d segments=%d",
+		attempt.ID, tws.ID, plan.PlanVersion, planSHA[:minInt(16, len(planSHA))], plan.DurationMS, len(plan.Segments))
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // recordPlacementRejections logs the rejection reasons produced by the
