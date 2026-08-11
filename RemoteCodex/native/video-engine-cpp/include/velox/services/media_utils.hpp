@@ -3,6 +3,8 @@
 #include <vector>
 #include <filesystem>
 
+#include "velox/services/file_utils.hpp"
+
 namespace velox::media {
 
 struct SceneSegmentParams {
@@ -72,6 +74,7 @@ bool muxAudio(const std::filesystem::path& videoPath,
               const std::filesystem::path& audioPath,
               const std::filesystem::path& outputPath,
               double volume = 1.0,
-              double startOffset = 0.0);
+              double startOffset = 0.0,
+              file::CommandResult* profile = nullptr);
 
 } // namespace velox::media

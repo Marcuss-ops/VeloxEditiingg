@@ -464,7 +464,23 @@ bool concatSegments(const std::vector<fs::path>& segments, const fs::path& outpu
     return r.ok;
 }
 
-bool muxAudio(const fs::path& videoPath, const fs::path& audioPath, const fs::path& outputPath, double volume, double startOffset) {
+static std::string escapeJsonString(const std::string& value) {
+    std::string out;
+    out.reserve(value.size() + 8);
+    for (char c : value) {
+        switch (c) {
+        case '"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default: out += c; break;
+        }
+    }
+    return out;
+}
+
+bool muxAudio(const fs::path& videoPath, const fs::path& audioPath, const fs::path& outputPath, double volume, double startOffset, file::CommandResult* profile) {
     std::ostringstream cmd;
     cmd << "ffmpeg -y -hide_banner -loglevel error -i " << file::shellQuote(videoPath.string())
         << " -i " << file::shellQuote(audioPath.string())
@@ -488,10 +504,30 @@ bool muxAudio(const fs::path& videoPath, const fs::path& audioPath, const fs::pa
 
     cmd << " -shortest -movflags +faststart "
         << file::shellQuote(outputPath.string());
-    file::CommandResult r = file::runCommandTimed(cmd.str());
+    const std::string command = cmd.str();
+    file::CommandResult r = file::runCommandTimed(command);
+    if (profile != nullptr) {
+        *profile = r;
+    }
+    std::error_code videoEc;
+    std::error_code audioEc;
+    std::error_code outputEc;
+    const auto videoBytes = fs::file_size(videoPath, videoEc);
+    const auto audioBytes = fs::file_size(audioPath, audioEc);
+    const auto outputBytes = fs::file_size(outputPath, outputEc);
     std::cerr << "{\"metric\":\"ffmpeg.mux_audio_ms\",\"value\":" << r.wall_ms
               << ",\"ok\":" << (r.ok ? "true" : "false")
-              << ",\"exit_code\":" << r.exit_code << "}" << std::endl;
+              << ",\"exit_code\":" << r.exit_code
+              << ",\"child_user_ms\":" << r.child_user_ms
+              << ",\"child_system_ms\":" << r.child_system_ms
+              << ",\"child_max_rss_kb\":" << r.child_max_rss_kb
+              << ",\"child_input_blocks\":" << r.child_input_blocks
+              << ",\"child_output_blocks\":" << r.child_output_blocks
+              << ",\"input_video_bytes\":" << (videoEc ? 0 : videoBytes)
+              << ",\"input_audio_bytes\":" << (audioEc ? 0 : audioBytes)
+              << ",\"output_bytes\":" << (outputEc ? 0 : outputBytes)
+              << ",\"command\":\"" << escapeJsonString(command) << "\"}"
+              << std::endl;
     return r.ok;
 }
 

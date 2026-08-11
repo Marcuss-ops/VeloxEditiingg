@@ -12,6 +12,11 @@ struct CommandResult {
     bool ok{false};
     int exit_code{0};
     double wall_ms{0};
+    double child_user_ms{0};
+    double child_system_ms{0};
+    long child_max_rss_kb{0};
+    long child_input_blocks{0};
+    long child_output_blocks{0};
 };
 
 std::string readFile(const std::filesystem::path& path);

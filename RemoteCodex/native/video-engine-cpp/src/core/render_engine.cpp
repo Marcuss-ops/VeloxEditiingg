@@ -25,6 +25,22 @@ namespace {
     using render_detail::reportProgress;
     using render_detail::reportDetailedProgress;
     using render_detail::runFfmpegSegmentWithProgress;
+
+    std::string escapeJsonString(const std::string& value) {
+        std::string out;
+        out.reserve(value.size() + 8);
+        for (char c : value) {
+            switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default: out += c; break;
+            }
+        }
+        return out;
+    }
 }
 
 void RenderEngine::setProgressCallback(services::ProgressCallback cb) {
@@ -419,9 +435,10 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             telemetry::ScopedPhase muxPhase(
                 recorder_, telemetry::kOriginEngine, telemetry::kScopeAudioTrack,
                 "engine.mux", "audio", "audio_mux");
+            file::CommandResult muxProfile;
             {
                 ScopedTimer t(metrics_, "mux_audio_ms");
-                muxOk = media::muxAudio(videoForMux, downloadedTracks[0].first, finalMuxed, vol, offset);
+                muxOk = media::muxAudio(videoForMux, downloadedTracks[0].first, finalMuxed, vol, offset, &muxProfile);
             }
             if (muxOk) {
                 std::error_code ec;
@@ -506,7 +523,31 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 // do not invent a separate encode duration that the process
                 // does not expose independently.
                 ScopedTimer t(metrics_, "mix_audio_ms");
-                mixOk = file::runCommand(mixCmd.str());
+                const std::string command = mixCmd.str();
+                const file::CommandResult mixProfile = file::runCommandTimed(command);
+                std::error_code outputEc;
+                const auto outputBytes = fs::file_size(mixedAudio, outputEc);
+                uintmax_t inputBytes = 0;
+                for (const auto& track : downloadedTracks) {
+                    std::error_code inputEc;
+                    const auto bytes = fs::file_size(track.first, inputEc);
+                    if (!inputEc) {
+                        inputBytes += bytes;
+                    }
+                }
+                std::cerr << "{\"metric\":\"ffmpeg.audio_mix_encode\",\"value\":" << mixProfile.wall_ms
+                          << ",\"ok\":" << (mixProfile.ok ? "true" : "false")
+                          << ",\"exit_code\":" << mixProfile.exit_code
+                          << ",\"child_user_ms\":" << mixProfile.child_user_ms
+                          << ",\"child_system_ms\":" << mixProfile.child_system_ms
+                          << ",\"child_max_rss_kb\":" << mixProfile.child_max_rss_kb
+                          << ",\"child_input_blocks\":" << mixProfile.child_input_blocks
+                          << ",\"child_output_blocks\":" << mixProfile.child_output_blocks
+                          << ",\"input_audio_bytes\":" << inputBytes
+                          << ",\"output_bytes\":" << (outputEc ? 0 : outputBytes)
+                          << ",\"command\":\"" << escapeJsonString(command) << "\"}"
+                          << std::endl;
+                mixOk = mixProfile.ok;
             }
             if (mixOk) {
                 audioEncodePhase.Complete();
@@ -519,9 +560,10 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 telemetry::ScopedPhase muxPhase(
                     recorder_, telemetry::kOriginEngine, telemetry::kScopeAudioTrack,
                     "engine.mux", "audio", "audio_mux");
+                file::CommandResult muxProfile;
                 {
                     ScopedTimer t(metrics_, "mux_audio_ms");
-                    muxOk = media::muxAudio(videoForMux, mixedAudio, finalMuxed);
+                    muxOk = media::muxAudio(videoForMux, mixedAudio, finalMuxed, 1.0, 0.0, &muxProfile);
                 }
                 if (muxOk) {
                     std::error_code ec;

@@ -6,6 +6,7 @@
 #include <sstream>
 #include <regex>
 #include <iostream>
+#include <sys/resource.h>
 #include <unistd.h>
 
 namespace fs = std::filesystem;
@@ -71,12 +72,26 @@ bool runCommand(const std::string& cmd) {
 
 CommandResult runCommandTimed(const std::string& cmd) {
     CommandResult res;
+    struct rusage before{};
+    struct rusage after{};
+    getrusage(RUSAGE_CHILDREN, &before);
     auto start = std::chrono::steady_clock::now();
     int rc = std::system(cmd.c_str());
     auto end = std::chrono::steady_clock::now();
+    getrusage(RUSAGE_CHILDREN, &after);
     res.wall_ms = std::chrono::duration<double, std::milli>(end - start).count();
     res.exit_code = rc;
     res.ok = (rc == 0);
+    res.child_user_ms = static_cast<double>(after.ru_utime.tv_sec - before.ru_utime.tv_sec) * 1000.0 +
+                        static_cast<double>(after.ru_utime.tv_usec - before.ru_utime.tv_usec) / 1000.0;
+    res.child_system_ms = static_cast<double>(after.ru_stime.tv_sec - before.ru_stime.tv_sec) * 1000.0 +
+                          static_cast<double>(after.ru_stime.tv_usec - before.ru_stime.tv_usec) / 1000.0;
+    // ru_maxrss is a high-water mark rather than a delta. It is therefore
+    // reported as the post-command child high-water mark, not as per-command
+    // allocated memory.
+    res.child_max_rss_kb = after.ru_maxrss;
+    res.child_input_blocks = after.ru_inblock - before.ru_inblock;
+    res.child_output_blocks = after.ru_oublock - before.ru_oublock;
     return res;
 }
 
