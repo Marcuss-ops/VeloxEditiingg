@@ -6,6 +6,7 @@ package prefetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -46,20 +47,22 @@ type jobRuntime struct {
 }
 
 type Scheduler struct {
-	mu         sync.Mutex
-	cfg        Config
-	resolver   *downloader.CacheResolver
-	protect    workercache.LeaseReservationStore
-	ram        *RAMCache
-	hints      map[string]futureasset.ProtectedAsset
-	prefetched map[string]int64
-	useful     map[string]bool
-	assetJobs  map[string]map[string]struct{}
-	jobs       map[string]jobRuntime
-	protects   map[string]string
-	bytes      int64
-	sem        chan struct{}
-	state      diskPressureState
+	mu              sync.Mutex
+	cfg             Config
+	resolver        *downloader.CacheResolver
+	protect         workercache.LeaseReservationStore
+	ram             *RAMCache
+	hints           map[string]futureasset.ProtectedAsset
+	prefetched      map[string]int64
+	useful          map[string]bool
+	assetJobs       map[string]map[string]struct{}
+	jobs            map[string]jobRuntime
+	protects        map[string]string
+	pendingProtects map[string]struct{}
+	protectExpiries map[string]time.Time
+	bytes           int64
+	sem             chan struct{}
+	state           diskPressureState
 }
 
 type diskPressureState uint8
@@ -95,7 +98,7 @@ func NewScheduler(cfg Config) *Scheduler {
 	if cfg.RAMMaxNextUseDistance <= 0 {
 		cfg.RAMMaxNextUseDistance = 3
 	}
-	return &Scheduler{cfg: cfg, ram: cfg.RAM, jobs: make(map[string]jobRuntime), protects: make(map[string]string), hints: make(map[string]futureasset.ProtectedAsset), prefetched: make(map[string]int64), useful: make(map[string]bool), assetJobs: make(map[string]map[string]struct{}), sem: make(chan struct{}, cfg.MaxConcurrent)}
+	return &Scheduler{cfg: cfg, ram: cfg.RAM, jobs: make(map[string]jobRuntime), protects: make(map[string]string), pendingProtects: make(map[string]struct{}), protectExpiries: make(map[string]time.Time), hints: make(map[string]futureasset.ProtectedAsset), prefetched: make(map[string]int64), useful: make(map[string]bool), assetJobs: make(map[string]map[string]struct{}), sem: make(chan struct{}, cfg.MaxConcurrent)}
 }
 
 func (s *Scheduler) SetResolver(r *downloader.CacheResolver) {
@@ -155,16 +158,28 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 	store := s.protect
 	oldProtects := s.protects
 	newProtects := make(map[string]string, len(plan.Protect))
+	pendingProtects := make(map[string]struct{})
+	protectExpiries := make(map[string]time.Time, len(plan.Protect))
 	s.hints = make(map[string]futureasset.ProtectedAsset, len(plan.Protect))
 	for _, asset := range plan.Protect {
 		s.hints[asset.AssetKey] = asset
 		reservationID := fmt.Sprintf("future:%s:%s", s.cfg.WorkerID, asset.AssetKey)
 		newProtects[asset.AssetKey] = reservationID
+		protectExpiries[asset.AssetKey] = plan.ExpiresAt
 		if store != nil {
 			// Reserve before releasing the prior snapshot's reservation.
 			if err := store.Reserve(context.Background(), assetref.AssetKey(asset.AssetKey), reservationID, plan.ExpiresAt); err != nil {
-				s.mu.Unlock()
-				return fmt.Errorf("prefetch: protect %s: %w", asset.AssetKey, err)
+				// A future asset is allowed to be absent until its prefetch
+				// resolver creates the verified canonical-cache row. Protection
+				// is an eviction barrier, not a prerequisite for downloading.
+				// Keep the desired reservation pending and install it after the
+				// resolver returns READY. Other store failures remain fail-closed.
+				if errors.Is(err, workercache.ErrNotFound) {
+					pendingProtects[asset.AssetKey] = struct{}{}
+				} else {
+					s.mu.Unlock()
+					return fmt.Errorf("prefetch: protect %s: %w", asset.AssetKey, err)
+				}
 			}
 		}
 	}
@@ -176,6 +191,8 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 		}
 	}
 	s.protects = newProtects
+	s.pendingProtects = pendingProtects
+	s.protectExpiries = protectExpiries
 	resolver := s.resolver
 	for _, job := range plan.PrefetchJobs {
 		if _, exists := s.jobs[job.JobID]; exists {
@@ -241,6 +258,14 @@ func (s *Scheduler) runJob(ctx context.Context, resolver *downloader.CacheResolv
 			s.cfg.OnState("requested", job, asset, nil)
 		}
 		resolved, err := resolver.Resolve(ctx, request)
+		if err == nil {
+			// The canonical transferer commits the verified cache row before
+			// Resolve returns. Install a protection that was pending because
+			// the row did not exist when the plan arrived. This remains an
+			// optimization-only barrier: a transient protection error never
+			// invalidates an already verified asset or the foreground path.
+			_ = s.installPendingProtection(asset.AssetKey)
+		}
 		if err == nil && !resolved.CacheHit {
 			s.mu.Lock()
 			s.prefetched[asset.AssetKey] = asset.SizeBytes
@@ -271,6 +296,38 @@ func (s *Scheduler) runJob(ctx context.Context, resolver *downloader.CacheResolv
 			}
 		}
 	}
+}
+
+// installPendingProtection closes the intentional gap between receiving a
+// plan and the first verified download of an asset. A missing row at plan
+// time is normal; once Resolve succeeds the canonical cache owns the row and
+// can accept the reservation. The desired reservation is checked again under
+// the scheduler lock so a newer plan cannot be resurrected by an old job.
+func (s *Scheduler) installPendingProtection(assetKey string) error {
+	s.mu.Lock()
+	if _, pending := s.pendingProtects[assetKey]; !pending {
+		s.mu.Unlock()
+		return nil
+	}
+	reservationID, desired := s.protects[assetKey]
+	expiresAt := s.protectExpiries[assetKey]
+	store := s.protect
+	s.mu.Unlock()
+	if !desired || store == nil {
+		return nil
+	}
+	if err := store.Reserve(context.Background(), assetref.AssetKey(assetKey), reservationID, expiresAt); err != nil {
+		if errors.Is(err, workercache.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	s.mu.Lock()
+	if current, ok := s.protects[assetKey]; ok && current == reservationID {
+		delete(s.pendingProtects, assetKey)
+	}
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *Scheduler) MarkForegroundUse(key assetref.AssetKey) {

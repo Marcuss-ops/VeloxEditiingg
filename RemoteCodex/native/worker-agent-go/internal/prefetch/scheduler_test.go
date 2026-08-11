@@ -10,12 +10,42 @@ import (
 	"velox-shared/assetref"
 	"velox-shared/futureasset"
 	"velox-worker-agent/internal/downloader"
+	"velox-worker-agent/internal/workercache"
 )
 
 type schedulerManager struct {
 	mu      sync.Mutex
 	keys    []assetref.AssetKey
 	started chan struct{}
+}
+
+type deferredProtectionStore struct {
+	mu           sync.Mutex
+	reserveCalls int
+}
+
+func (s *deferredProtectionStore) Acquire(context.Context, assetref.AssetKey, string) error {
+	return nil
+}
+func (s *deferredProtectionStore) Release(context.Context, assetref.AssetKey, string) error {
+	return nil
+}
+func (s *deferredProtectionStore) Reserve(context.Context, assetref.AssetKey, string, time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reserveCalls++
+	if s.reserveCalls == 1 {
+		return workercache.ErrNotFound
+	}
+	return nil
+}
+func (s *deferredProtectionStore) ReleaseReservation(context.Context, assetref.AssetKey, string) error {
+	return nil
+}
+func (s *deferredProtectionStore) calls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reserveCalls
 }
 
 func (m *schedulerManager) Resolve(_ context.Context, req downloader.DownloadRequest) (downloader.DownloadedAsset, error) {
@@ -64,6 +94,32 @@ func TestScheduler_PrefetchesNPlusOneThroughCanonicalResolver(t *testing.T) {
 	defer manager.mu.Unlock()
 	if len(manager.keys) != 1 || manager.keys[0] != "D" {
 		t.Fatalf("resolved keys=%v, want [D]", manager.keys)
+	}
+}
+
+func TestScheduler_MissingProtectionRowDoesNotAbortPrefetch(t *testing.T) {
+	manager := &schedulerManager{started: make(chan struct{}, 1)}
+	protections := &deferredProtectionStore{}
+	s := NewScheduler(Config{WorkerID: "worker-a", MaxConcurrent: 1, ByteBudget: 100})
+	s.SetResolver(downloader.NewCacheResolver(manager, nil))
+	s.SetProtectionStore(protections)
+
+	if err := s.Reconcile(futureTestPlan()); err != nil {
+		t.Fatalf("Reconcile returned error for an asset not cached yet: %v", err)
+	}
+	select {
+	case <-manager.started:
+	case <-time.After(time.Second):
+		t.Fatal("prefetch did not run after protection row was initially absent")
+	}
+	deadline := time.After(time.Second)
+	for protections.calls() < 2 {
+		select {
+		case <-deadline:
+			t.Fatalf("protection was not retried after verified resolve; calls=%d", protections.calls())
+		default:
+			time.Sleep(time.Millisecond)
+		}
 	}
 }
 
