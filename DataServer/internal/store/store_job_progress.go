@@ -5,7 +5,10 @@ import (
 	"database/sql"
 )
 
-// UpsertJobProgress writes a progress snapshot (upsert by job_id).
+// UpsertJobProgress writes a progress snapshot (upsert by job_id). A late
+// report from an older attempt, or an older timestamp from the same attempt,
+// is deliberately ignored so progress cannot move backwards after a retry or
+// worker reconnect.
 func (s *SQLiteStore) UpsertJobProgress(ctx context.Context, jobID string, attemptNumber int, percent float64, stage string, currentItem, totalItems int, message, updatedAt string) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO job_progress (job_id, attempt_number, percent, stage, current_item, total_items, message, updated_at)
@@ -18,6 +21,9 @@ func (s *SQLiteStore) UpsertJobProgress(ctx context.Context, jobID string, attem
 			total_items = excluded.total_items,
 			message = excluded.message,
 			updated_at = excluded.updated_at
+		WHERE excluded.attempt_number > job_progress.attempt_number
+		   OR (excluded.attempt_number = job_progress.attempt_number
+		       AND excluded.updated_at >= job_progress.updated_at)
 	`, jobID, attemptNumber, percent, stage, currentItem, totalItems, message, updatedAt)
 	return err
 }

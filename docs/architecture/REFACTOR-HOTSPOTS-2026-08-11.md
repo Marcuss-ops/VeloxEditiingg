@@ -53,6 +53,8 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Render-plan offer path: il piano viene validato e confrontato con
   `job_id`/`attempt_id` prima di essere persistito o consegnato; nil plan e
   identità incoerenti sono rifiutati fail-closed.
+- Job progress: gli snapshot tardivi di un tentativo precedente o con
+  timestamp più vecchio non possono più regredire il read model.
 - Render-only: il contatore audio riconosce il contratto esplicito a zero
   destinazioni; i job normali senza delivery plan continuano a fallire chiusi.
 - Gate architetturali e gate full-module verdi dopo i fix (`833cf79e`,
@@ -70,7 +72,7 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   calendar e rollout command controllano errore, ownership e righe aggiornate.
 - [ ] Completare l'audit dei writer non ancora coperti: ogni `UPDATE`
   autorevole deve controllare `RowsAffected`, ownership e generazione. Restano
-  soprattutto i writer di progress non terminali, cleanup idempotenti e le
+  soprattutto cleanup idempotenti e le
   transizioni publication/session che non sono ancora state ricondotte a un
   unico helper CAS.
 - [ ] Chiudere l'audit mirato di `MarkDeliverySucceeded`,
