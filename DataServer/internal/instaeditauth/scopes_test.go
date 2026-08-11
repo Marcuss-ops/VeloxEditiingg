@@ -30,10 +30,10 @@ func TestCanonicalScopeVocabularyContainsOnlyNonEditorFixtureScopes(t *testing.T
 		}
 	}
 
-	if len(AllScopesSuperset) != len(want) {
-		t.Fatalf("AllScopesSuperset count: got %d, want %d", len(AllScopesSuperset), len(want))
+	if len(allScopesSuperset) != len(want) {
+		t.Fatalf("allScopesSuperset count: got %d, want %d", len(allScopesSuperset), len(want))
 	}
-	for _, scope := range AllScopesSuperset {
+	for _, scope := range allScopesSuperset {
 		found := false
 		for _, allowed := range want {
 			if scope == allowed {
@@ -42,7 +42,7 @@ func TestCanonicalScopeVocabularyContainsOnlyNonEditorFixtureScopes(t *testing.T
 			}
 		}
 		if !found {
-			t.Errorf("AllScopesSuperset contains non-canonical scope %q", scope)
+			t.Errorf("allScopesSuperset contains non-canonical scope %q", scope)
 		}
 	}
 }
@@ -55,8 +55,8 @@ func TestCanonicalScopeVocabularyRejectsRetiredEditorAndYouTubeScopes(t *testing
 		strings.Join([]string{"youtube", "session", "publish"}, "."),
 	}
 	for _, scope := range retired {
-		if (&Claims{Scopes: AllScopesSuperset}).HasScope(scope) {
-			t.Errorf("retired scope %q must not be granted by AllScopesSuperset", scope)
+		if (&Claims{Scopes: allScopesSuperset}).HasScope(scope) {
+			t.Errorf("retired scope %q must not be granted by allScopesSuperset", scope)
 		}
 	}
 }

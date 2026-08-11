@@ -97,7 +97,7 @@ func TestValidateInitialResponse_MissingStatus(t *testing.T) {
 func TestValidateInitialResponse_UnknownStatus(t *testing.T) {
 	raw := map[string]interface{}{
 		"job_id": "job_123",
-		"status": "pending", // not in KnownRemoteStatuses
+		"status": "pending", // not in knownRemoteStatuses
 	}
 	_, err := ValidateInitialResponse(raw)
 	if err == nil {
@@ -473,18 +473,18 @@ func TestToWorkerPayload_EmptyDTO(t *testing.T) {
 	}
 }
 
-// ── KnownRemoteStatuses ──────────────────────────────────────────────────────
+// ── knownRemoteStatuses ─────────────────────────────────────────────────────
 
 func TestKnownRemoteStatuses(t *testing.T) {
 	valid := []string{"queued", "running", "completed", "failed", "cancelled"}
 	for _, s := range valid {
-		if !KnownRemoteStatuses[s] {
+		if !knownRemoteStatuses[s] {
 			t.Errorf("status %q should be known", s)
 		}
 	}
 	invalid := []string{"pending", "done", "succeeded", "", "PAUSED"}
 	for _, s := range invalid {
-		if KnownRemoteStatuses[s] {
+		if knownRemoteStatuses[s] {
 			t.Errorf("status %q should NOT be known", s)
 		}
 	}

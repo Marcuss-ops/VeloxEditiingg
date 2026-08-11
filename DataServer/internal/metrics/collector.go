@@ -120,7 +120,7 @@ type Collector struct {
 	// Single counter family with labels {error_code, component, phase}
 	// for failure-reason attribution. error_code is the canonical
 	// closed-enum code (CanonicalErrorCode); component/phase are
-	// low-cardinality enums (CanonicalErrorComponents / CanonicalErrorPhases).
+	// low-cardinality enums (canonicalErrorComponents / canonicalErrorPhases).
 	errorClassification       *Family // velox_error_classification_total
 	opsalertsWorkerEvalErrors *Family // velox_opsalerts_worker_evaluation_errors_total{category}
 	alertEvaluationErrors     *Family // velox_alert_evaluation_errors_total{engine,category}

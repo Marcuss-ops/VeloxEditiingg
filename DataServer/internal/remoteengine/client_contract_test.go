@@ -78,7 +78,7 @@ func TestClient_UnknownStatus(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"job_id": "job_10",
-			"status": "paused", // not in KnownRemoteStatuses
+			"status": "paused", // not in knownRemoteStatuses
 		})
 	}))
 	defer srv.Close()

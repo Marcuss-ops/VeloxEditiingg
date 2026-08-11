@@ -54,9 +54,9 @@ const (
 	ErrUnknown CanonicalErrorCode = "UNKNOWN"
 )
 
-// CanonicalErrorComponents are the well-known component names
+// canonicalErrorComponents are the well-known component names
 // emitted alongside error codes for component-level grouping.
-var CanonicalErrorComponents = []string{
+var canonicalErrorComponents = []string{
 	"asset_download",
 	"ffmpeg",
 	"pipeline",
@@ -66,9 +66,9 @@ var CanonicalErrorComponents = []string{
 	"unknown",
 }
 
-// CanonicalErrorPhases are well-known phase names emitted when
+// canonicalErrorPhases are well-known phase names emitted when
 // an error is attributable to a specific rendering phase.
-var CanonicalErrorPhases = []string{
+var canonicalErrorPhases = []string{
 	"cache_lookup",
 	"download",
 	"decode",

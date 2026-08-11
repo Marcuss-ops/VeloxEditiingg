@@ -140,7 +140,7 @@ func TestMiddleware_AllowsRequestWithExactScope(t *testing.T) {
 
 // TestMiddleware_AllowsRequestWithSupersetScopes — Velox accepts
 // "exact OR superset" (HasAllScopes semantics) so a BFF-superset
-// JWT (e.g. the AllScopesSuperset) is accepted on every protected
+// JWT (e.g. the allScopesSuperset fixture) is accepted on every protected
 // route. This guards the BFF cutover story.
 func TestMiddleware_AllowsRequestWithSupersetScopes(t *testing.T) {
 	v, _ := New(testSecret)
@@ -149,7 +149,7 @@ func TestMiddleware_AllowsRequestWithSupersetScopes(t *testing.T) {
 		MiddlewareWithOperation(v, []string{ScopeJobsWrite}, "create_job"),
 		func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) },
 	)
-	c := validClaimsWithScopes(AllScopesSuperset) // generic non-editor scopes
+	c := validClaimsWithScopes(allScopesSuperset) // generic non-editor scopes
 	token := mintToken(t, testSecret, c)
 	req := httptest.NewRequest("POST", "/api/v1/instaedit/jobs", nil)
 	req.Header.Set("Authorization", "Bearer "+token)

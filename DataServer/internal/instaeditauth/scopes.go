@@ -52,7 +52,7 @@ const (
 	ScopeEditorWrite = "editor.write"
 )
 
-// AllScopesSuperset is the generic job/worker/asset fixture grant. Editor
+// allScopesSuperset is the generic job/worker/asset fixture grant. Editor
 // scopes are intentionally excluded: editor permissions are project-scoped
 // and must always be paired with MiddlewareWithProject.
 //
@@ -65,7 +65,7 @@ const (
 // which weakens the audit-trail granularity on the Velox side.
 // Use the per-route Middleware(requiredScopes) when adding new
 // protected routes.
-var AllScopesSuperset = []string{
+var allScopesSuperset = []string{
 	ScopeJobsRead,
 	ScopeJobsWrite,
 	ScopeWorkersRead,

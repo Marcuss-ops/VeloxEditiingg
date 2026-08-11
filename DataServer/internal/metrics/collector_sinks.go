@@ -154,7 +154,7 @@ func (c *Collector) IncCommitDeadlineExceeded() {
 // for a single error observation. All three labels are low-cardinality
 // closed enums — never pass job_id or free-form strings here.
 // errorCode must be a CanonicalErrorCode; component must be from
-// CanonicalErrorComponents; phase must be from CanonicalErrorPhases.
+// canonicalErrorComponents; phase must be from canonicalErrorPhases.
 // Empty strings default to "unknown".
 // RecordWorkerEvaluationErrors records aggregated isolated opsalerts failures.
 // category is a closed low-cardinality classification such as snapshot or

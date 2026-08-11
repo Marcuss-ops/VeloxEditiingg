@@ -10,10 +10,10 @@ package remoteengine
 
 // ── Known remote statuses ────────────────────────────────────────────────────
 
-// KnownRemoteStatuses is the closed set of statuses the remote engine may
+// knownRemoteStatuses is the closed set of statuses the remote engine may
 // return in the initial response and in poll responses. Any status outside
 // this set is a contract violation.
-var KnownRemoteStatuses = map[string]bool{
+var knownRemoteStatuses = map[string]bool{
 	"queued":    true,
 	"running":   true,
 	"completed": true,
@@ -40,7 +40,7 @@ var ErrContractMissingJobID = &RemoteError{
 }
 
 // ErrContractUnknownStatus is the contract error when the remote response
-// includes a status that is not in KnownRemoteStatuses.
+// includes a status that is not in knownRemoteStatuses.
 var ErrContractUnknownStatus = &RemoteError{
 	Class:   RemoteErrorPermanent,
 	Code:    "CONTRACT_UNKNOWN_STATUS",

@@ -11,7 +11,7 @@ import (
 
 // Canonical phase names for production rendering pipeline.
 // Workers must use these exact strings; free-form identifiers are rejected.
-var CanonicalPhases = []string{
+var canonicalPhases = []string{
 	"queue",
 	"asset_wait",
 	"cache_lookup",
@@ -28,7 +28,7 @@ var CanonicalPhases = []string{
 
 // IsCanonicalPhase reports whether the given phase name is a valid canonical phase.
 func IsCanonicalPhase(phase string) bool {
-	for _, p := range CanonicalPhases {
+	for _, p := range canonicalPhases {
 		if p == phase {
 			return true
 		}

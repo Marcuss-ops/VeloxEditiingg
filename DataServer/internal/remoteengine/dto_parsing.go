@@ -42,7 +42,7 @@ func ValidateInitialResponse(raw map[string]interface{}) (*InitialResponse, erro
 		}
 	}
 
-	if !KnownRemoteStatuses[status] {
+	if !knownRemoteStatuses[status] {
 		return nil, &RemoteError{
 			Class:   RemoteErrorPermanent,
 			Code:    "CONTRACT_UNKNOWN_STATUS",
