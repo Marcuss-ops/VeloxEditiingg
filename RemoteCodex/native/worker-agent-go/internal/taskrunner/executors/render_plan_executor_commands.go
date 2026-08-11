@@ -22,8 +22,43 @@ import (
 
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
+	"velox-worker-agent/pkg/video/ffmpegrunner"
 	"velox-worker-agent/pkg/video/plan"
 )
+
+// operationForOutputType maps the executor output kind onto the canonical
+// ffmpeg phase. audio.mix → audio mix (AudioRecorder), video.compose →
+// segment compose (SegmentRecorder), video.output → final mux/encode
+// (MuxRecorder).
+func operationForOutputType(outputType string) ffmpegrunner.OperationType {
+	switch outputType {
+	case "audio.mix":
+		return ffmpegrunner.OperationAudioMix
+	case "video.output":
+		return ffmpegrunner.OperationEncode
+	default:
+		return ffmpegrunner.OperationCompose
+	}
+}
+
+// ffmpegProfileMetadata is the SANITIZED projection of an FFmpegResult
+// that may travel to the master: fingerprints, durations, CPU/RSS/I/O
+// counters and safe parameters. Raw paths/tokens never leave the runner.
+func ffmpegProfileMetadata(result ffmpegrunner.FFmpegResult) map[string]any {
+	return map[string]any{
+		"process_spawn_ms":     result.ProcessSpawnMS,
+		"process_wall_ms":      result.ProcessWallMS,
+		"user_cpu_ms":          result.UserCPUMs,
+		"system_cpu_ms":        result.SystemCPUMs,
+		"peak_rss_bytes":       result.PeakRSSBytes,
+		"read_bytes":           result.ReadBytes,
+		"write_bytes":          result.WriteBytes,
+		"exit_code":            result.ExitCode,
+		"terminated_by_signal": result.TerminatedBySignal,
+		"command_fingerprint":  result.CommandFingerprint,
+		"parameters":           result.Parameters,
+	}
+}
 
 func runCommandExecutor(ctx context.Context, e *renderPlanExecutor, spec executor.TaskSpec, cp CommandPlan, outputType string, execCtx executor.ExecutionContext) (executor.ExecutionResult, error) {
 	started := time.Now().UTC()
@@ -39,11 +74,23 @@ func runCommandExecutor(ctx context.Context, e *renderPlanExecutor, spec executo
 		specForCommand = telemetry.EventSpec{Origin: telemetry.OriginEngine, Scope: telemetry.ScopeSegment, Component: "engine.encode", Action: "setup"}
 	}
 	commandHandle := rec.Begin(specForCommand)
-	if err := e.runner.Run(ctx, cp.Args); err != nil {
-		commandHandle.Abort("command_failed", err.Error())
-		return failedResult(started, "command_failed", err), nil
-	}
+
+	// Every phase runs through the same canonical FFmpegRunner; the
+	// profiling result is attached once, here, to the phase event and to
+	// the execution metrics.
+	result, runErr := e.runner.Run(ctx, ffmpegrunner.FFmpegRequest{
+		Operation: operationForOutputType(outputType),
+		Args:      cp.Args,
+	})
+	profile := ffmpegProfileMetadata(result)
 	commandHandle.SetMetadata("executor_id", cp.ExecutorID)
+	commandHandle.SetMetadata("command_fingerprint", result.CommandFingerprint)
+	commandHandle.SetMetadata("ffmpeg_profile", profile)
+	if runErr != nil {
+		commandHandle.Abort("command_failed", runErr.Error())
+		detail := fmt.Errorf("%w (exit_code=%d signal=%v)", runErr, result.ExitCode, result.TerminatedBySignal)
+		return failedResult(started, "command_failed", detail), nil
+	}
 	commandHandle.CompleteWith(0, 0, 0, telemetry.StatusOK, "", "")
 	artifact, err := artifactFromFile(outputType, cp.OutputPath)
 	if err != nil {
@@ -51,7 +98,11 @@ func runCommandExecutor(ctx context.Context, e *renderPlanExecutor, spec executo
 	}
 	return executor.ExecutionResult{
 		Status: "succeeded", Outputs: []executor.ArtifactRef{artifact},
-		Metrics:   map[string]interface{}{"command_plan": cp.Canonical(), "render_plan_sha256": cp.PlanSHA256},
+		Metrics: map[string]interface{}{
+			"command_plan":       cp.Canonical(),
+			"render_plan_sha256": cp.PlanSHA256,
+			"ffmpeg_profile":     profile,
+		},
 		StartedAt: started, CompletedAt: time.Now().UTC(),
 	}, nil
 }
@@ -104,8 +155,9 @@ func sortedInputs(values []string) []string {
 	return out
 }
 
-// NewAudioMix creates the deterministic audio mixer.
-func NewAudioMix(runner CommandRunner, outputRoot string) executor.Executor {
+// NewAudioMix creates the deterministic audio mixer. It consumes the
+// shared FFmpegRunner (AudioRecorder surface).
+func NewAudioMix(runner ffmpegrunner.FFmpegRunner, outputRoot string) executor.Executor {
 	return &audioMixExecutor{renderPlanExecutor: newRenderPlanExecutor(AudioMixID, []string{"audio.mix"}, runner, outputRoot)}
 }
 
@@ -212,8 +264,9 @@ func buildAudioMixPlan(spec executor.TaskSpec, p *plan.RenderPlan, output string
 	return CommandPlan{ExecutorID: AudioMixID, Inputs: sortedInputs(inputs), FilterComplex: filterGraph, Args: args, OutputPath: output, PlanSHA256: planDigest(p)}, nil
 }
 
-// NewCompose creates the deterministic video compositor.
-func NewCompose(runner CommandRunner, outputRoot string) executor.Executor {
+// NewCompose creates the deterministic video compositor. It consumes
+// the shared FFmpegRunner (SegmentRecorder surface).
+func NewCompose(runner ffmpegrunner.FFmpegRunner, outputRoot string) executor.Executor {
 	return &composeExecutor{renderPlanExecutor: newRenderPlanExecutor(ComposeID, []string{"video.compose"}, runner, outputRoot)}
 }
 
@@ -258,8 +311,9 @@ func buildComposePlan(spec executor.TaskSpec, p *plan.RenderPlan, output string)
 	return CommandPlan{ExecutorID: ComposeID, Inputs: sortedInputs(inputs), FilterComplex: filterGraph, Args: args, OutputPath: output, PlanSHA256: planDigest(p)}, nil
 }
 
-// NewEncode creates the deterministic final encoder.
-func NewEncode(runner CommandRunner, outputRoot string) executor.Executor {
+// NewEncode creates the deterministic final encoder. It consumes the
+// shared FFmpegRunner (MuxRecorder surface).
+func NewEncode(runner ffmpegrunner.FFmpegRunner, outputRoot string) executor.Executor {
 	return &encodeExecutor{renderPlanExecutor: newRenderPlanExecutor(EncodeID, []string{"video.output"}, runner, outputRoot)}
 }
 

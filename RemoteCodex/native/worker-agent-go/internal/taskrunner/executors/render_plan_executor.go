@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
+	"velox-worker-agent/pkg/video/ffmpegrunner"
 	"velox-worker-agent/pkg/video/plan"
 )
 
@@ -42,30 +42,21 @@ func (p CommandPlan) Canonical() string {
 	return string(b)
 }
 
-// CommandRunner is injected in tests and keeps command construction separate
-// from process execution.
-type CommandRunner interface {
-	Run(context.Context, []string) error
-}
-
-type ffmpegCommandRunner struct{}
-
-func (ffmpegCommandRunner) Run(ctx context.Context, args []string) error {
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
+// The three ffmpeg-driving executors — audioMix (AudioRecorder surface),
+// compose (SegmentRecorder surface) and encode (MuxRecorder surface) —
+// MUST consume the single canonical FFmpegRunner so process profiling is
+// measured once, centrally, instead of each phase implementing its own
+// exec/profile code. The runner is injected for tests and keeps command
+// construction separate from process execution.
 type renderPlanExecutor struct {
 	descriptor executor.Descriptor
-	runner     CommandRunner
+	runner     ffmpegrunner.FFmpegRunner
 	outputRoot string
 }
 
-func newRenderPlanExecutor(id string, outputTypes []string, runner CommandRunner, outputRoot string) *renderPlanExecutor {
+func newRenderPlanExecutor(id string, outputTypes []string, runner ffmpegrunner.FFmpegRunner, outputRoot string) *renderPlanExecutor {
 	if runner == nil {
-		runner = ffmpegCommandRunner{}
+		runner = ffmpegrunner.NewProcessRunner()
 	}
 	if strings.TrimSpace(outputRoot) == "" {
 		outputRoot = filepath.Join(os.TempDir(), "velox", "render-plan")
@@ -227,8 +218,10 @@ func RegisterRenderPlanExecutors(reg *executor.Registry, outputRoot string) erro
 	return nil
 }
 
-// NewSubtitleAlign creates the deterministic subtitle executor.
-func NewSubtitleAlign(runner CommandRunner, outputRoot string) executor.Executor {
+// NewSubtitleAlign creates the deterministic subtitle executor. It does
+// not invoke ffmpeg (it writes the .ass file directly), but accepts the
+// same runner type so the executor surface stays uniform.
+func NewSubtitleAlign(runner ffmpegrunner.FFmpegRunner, outputRoot string) executor.Executor {
 	return &subtitleAlignExecutor{renderPlanExecutor: newRenderPlanExecutor(SubtitleAlignID, []string{"subtitle.ass"}, runner, outputRoot)}
 }
 
