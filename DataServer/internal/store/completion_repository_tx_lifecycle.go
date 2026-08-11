@@ -87,20 +87,44 @@ func (r *sqliteCompletionTx) GetCompletionUploadState(ctx context.Context, uploa
 
 func (r *sqliteCompletionTx) CompleteCompletionUpload(ctx context.Context, verdict CompletionArtifactVerdict, uploadID, serverSHA, now string) error {
 	if verdict == CompletionReady {
-		if _, err := r.tx.ExecContext(ctx, `UPDATE artifact_uploads SET status='COMPLETED',completed_at=?,received_sha256=? WHERE upload_id=? AND status IN ('CREATED','UPLOADING','RECEIVED')`, now, serverSHA, uploadID); err != nil {
+		res, err := r.tx.ExecContext(ctx, `UPDATE artifact_uploads SET status='COMPLETED',completed_at=?,received_sha256=? WHERE upload_id=? AND status IN ('CREATED','UPLOADING','RECEIVED')`, now, serverSHA, uploadID)
+		if err != nil {
 			return fmt.Errorf("store: completion upload ready CAS: %w", err)
 		}
-		if _, err := r.tx.ExecContext(ctx, `UPDATE artifacts SET status='READY',verified_at=?,output_kind=COALESCE((SELECT output_kind FROM task_output_declarations WHERE artifact_id=artifacts.id LIMIT 1),output_kind) WHERE id=(SELECT artifact_id FROM artifact_uploads WHERE upload_id=?) AND status IN ('STAGING','VERIFYING')`, now, uploadID); err != nil {
+		if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+			return fmt.Errorf("store: completion upload ready rows: %w", rowsErr)
+		} else if n != 1 {
+			return fmt.Errorf("%w: upload=%s ready rows=%d", ErrCompletionTransitionConflict, uploadID, n)
+		}
+		res, err = r.tx.ExecContext(ctx, `UPDATE artifacts SET status='READY',verified_at=?,output_kind=COALESCE((SELECT output_kind FROM task_output_declarations WHERE artifact_id=artifacts.id LIMIT 1),output_kind) WHERE id=(SELECT artifact_id FROM artifact_uploads WHERE upload_id=?) AND status IN ('STAGING','VERIFYING')`, now, uploadID)
+		if err != nil {
 			return fmt.Errorf("store: completion artifact ready CAS: %w", err)
+		}
+		if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+			return fmt.Errorf("store: completion artifact ready rows: %w", rowsErr)
+		} else if n != 1 {
+			return fmt.Errorf("%w: upload=%s artifact ready rows=%d", ErrCompletionTransitionConflict, uploadID, n)
 		}
 		return nil
 	}
 	if verdict == CompletionKeepVerifying {
-		if _, err := r.tx.ExecContext(ctx, `UPDATE artifact_uploads SET status='COMPLETED',completed_at=?,received_sha256=COALESCE(received_sha256,?) WHERE upload_id=? AND status IN ('CREATED','UPLOADING','RECEIVED')`, now, serverSHA, uploadID); err != nil {
+		res, err := r.tx.ExecContext(ctx, `UPDATE artifact_uploads SET status='COMPLETED',completed_at=?,received_sha256=COALESCE(received_sha256,?) WHERE upload_id=? AND status IN ('CREATED','UPLOADING','RECEIVED')`, now, serverSHA, uploadID)
+		if err != nil {
 			return fmt.Errorf("store: completion upload verifying CAS: %w", err)
 		}
-		if _, err := r.tx.ExecContext(ctx, `UPDATE artifacts SET status='VERIFYING',verified_at=? WHERE id=(SELECT artifact_id FROM artifact_uploads WHERE upload_id=?) AND status IN ('STAGING','VERIFYING')`, now, uploadID); err != nil {
+		if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+			return fmt.Errorf("store: completion upload verifying rows: %w", rowsErr)
+		} else if n != 1 {
+			return fmt.Errorf("%w: upload=%s verifying rows=%d", ErrCompletionTransitionConflict, uploadID, n)
+		}
+		res, err = r.tx.ExecContext(ctx, `UPDATE artifacts SET status='VERIFYING',verified_at=? WHERE id=(SELECT artifact_id FROM artifact_uploads WHERE upload_id=?) AND status IN ('STAGING','VERIFYING')`, now, uploadID)
+		if err != nil {
 			return fmt.Errorf("store: completion artifact verifying CAS: %w", err)
+		}
+		if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+			return fmt.Errorf("store: completion artifact verifying rows: %w", rowsErr)
+		} else if n != 1 {
+			return fmt.Errorf("%w: upload=%s artifact verifying rows=%d", ErrCompletionTransitionConflict, uploadID, n)
 		}
 		return nil
 	}
@@ -128,17 +152,27 @@ func (r *sqliteCompletionTx) UpdateCompletionProgress(ctx context.Context, commi
 }
 
 func (r *sqliteCompletionTx) UpdateCompletionUploadedBytes(ctx context.Context, f CompletionFence, uploadID string, uploadedBytes int64, now string) error {
-	_, err := r.tx.ExecContext(ctx, `UPDATE task_output_declarations SET uploaded_bytes=MAX(uploaded_bytes,?),updated_at=MAX(updated_at,?) WHERE commit_id IN (SELECT commit_id FROM attempt_commits WHERE task_id=? AND attempt_id=? AND worker_id=? AND lease_id=?) AND upload_id=?`, uploadedBytes, now, f.TaskID, f.AttemptID, f.WorkerID, f.LeaseID, uploadID)
+	res, err := r.tx.ExecContext(ctx, `UPDATE task_output_declarations SET uploaded_bytes=MAX(uploaded_bytes,?),updated_at=MAX(updated_at,?) WHERE commit_id IN (SELECT commit_id FROM attempt_commits WHERE task_id=? AND attempt_id=? AND worker_id=? AND lease_id=?) AND upload_id=?`, uploadedBytes, now, f.TaskID, f.AttemptID, f.WorkerID, f.LeaseID, uploadID)
 	if err != nil {
 		return fmt.Errorf("store: completion uploaded bytes: %w", err)
+	}
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return fmt.Errorf("store: completion uploaded bytes rows: %w", rowsErr)
+	} else if n != 1 {
+		return fmt.Errorf("%w: upload=%s uploaded bytes rows=%d", ErrCompletionTransitionConflict, uploadID, n)
 	}
 	return nil
 }
 
 func (r *sqliteCompletionTx) UpdateCompletionReadyCount(ctx context.Context, f CompletionFence, now string) error {
-	_, err := r.tx.ExecContext(ctx, `UPDATE attempt_commits SET ready_output_count=(SELECT COUNT(*) FROM task_output_declarations d JOIN artifacts a ON a.id=d.artifact_id WHERE d.commit_id=attempt_commits.commit_id AND a.status='READY'),updated_at=? WHERE commit_id IN (SELECT commit_id FROM attempt_commits WHERE task_id=? AND attempt_id=? AND worker_id=? AND lease_id=? AND task_revision=?) AND status IN ('DECLARED','UPLOADING','RECEIVED','VERIFYING')`, now, f.TaskID, f.AttemptID, f.WorkerID, f.LeaseID, f.Revision)
+	res, err := r.tx.ExecContext(ctx, `UPDATE attempt_commits SET ready_output_count=(SELECT COUNT(*) FROM task_output_declarations d JOIN artifacts a ON a.id=d.artifact_id WHERE d.commit_id=attempt_commits.commit_id AND a.status='READY'),updated_at=? WHERE commit_id IN (SELECT commit_id FROM attempt_commits WHERE task_id=? AND attempt_id=? AND worker_id=? AND lease_id=? AND task_revision=?) AND status IN ('DECLARED','UPLOADING','RECEIVED','VERIFYING')`, now, f.TaskID, f.AttemptID, f.WorkerID, f.LeaseID, f.Revision)
 	if err != nil {
 		return fmt.Errorf("store: completion ready count: %w", err)
+	}
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return fmt.Errorf("store: completion ready count rows: %w", rowsErr)
+	} else if n != 1 {
+		return fmt.Errorf("%w: task=%s attempt=%s ready count rows=%d", ErrCompletionTransitionConflict, f.TaskID, f.AttemptID, n)
 	}
 	return nil
 }
