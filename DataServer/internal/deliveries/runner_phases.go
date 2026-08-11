@@ -40,7 +40,10 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 		if err := r.dbStore.ValidatePublishedAfterReconciliation(ctx, input.publicationID, verificationOperation); err != nil {
 			return r.phaseInfrastructureFailure("PUBLISHED_WITHOUT_RECONCILIATION_EVIDENCE", err)
 		}
-		return r.dbStore.MarkDeliverySucceeded(ctx, input.lease.DeliveryID, input.lease.RunnerID, input.lease.LeaseID, state.RemoteID, state.RemoteURL)
+		if err := r.dbStore.MarkDeliverySucceeded(ctx, input.lease.DeliveryID, input.lease.RunnerID, input.lease.LeaseID, state.RemoteID, state.RemoteURL); err != nil {
+			return deliveryStatePersistenceError("mark already-published delivery succeeded", err)
+		}
+		return nil
 	}
 
 	capabilities := executor.Capabilities()
@@ -231,7 +234,10 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 	if finalState.State != publicationstate.Published {
 		return r.phaseInfrastructureFailure("PUBLICATION_NOT_PUBLISHED", fmt.Errorf("publication ended in %s", finalState.State))
 	}
-	return r.dbStore.MarkDeliverySucceeded(ctx, input.lease.DeliveryID, input.lease.RunnerID, input.lease.LeaseID, finalRemoteID, finalRemoteURL)
+	if err := r.dbStore.MarkDeliverySucceeded(ctx, input.lease.DeliveryID, input.lease.RunnerID, input.lease.LeaseID, finalRemoteID, finalRemoteURL); err != nil {
+		return deliveryStatePersistenceError("mark completed delivery succeeded", err)
+	}
+	return nil
 }
 
 func (r *DeliveryRunner) preparePublicationState(ctx context.Context, publicationID string, state *store.PublicationState) (publicationstate.State, error) {
@@ -371,29 +377,47 @@ func phaseOperation(phase publicationstate.State, artifact *store.Artifact, dest
 
 func (r *DeliveryRunner) phaseFailure(ctx context.Context, lease store.DeliveryLease, publicationID string, phase publicationstate.State, operation string, runErr error) error {
 	code := classifyErrorCode(runErr)
+	var persistenceErrors []error
 	if operation != "STATE_TRANSITION" && operation != "PUBLICATION_STATE_NOT_FOUND" {
-		_ = r.dbStore.CompletePublicationPhaseEffect(ctx, publicationID, phase, operation, false, code)
+		if err := r.dbStore.CompletePublicationPhaseEffect(ctx, publicationID, phase, operation, false, code); err != nil {
+			persistenceErrors = append(persistenceErrors, deliveryStatePersistenceError("complete failed publication phase effect", err))
+		}
 	}
 	if ClassifyError(runErr) == ErrorClassTransient || ClassifyError(runErr) == ErrorClassRateLimit {
-		_, _ = r.dbStore.TransitionPublicationState(ctx, publicationID, publicationstate.RetryWait, code)
+		if _, err := r.dbStore.TransitionPublicationState(ctx, publicationID, publicationstate.RetryWait, code); err != nil {
+			persistenceErrors = append(persistenceErrors, deliveryStatePersistenceError("transition publication to retry wait", err))
+		}
 		next := time.Now().UTC().Add(r.cfg.backoffForAttempt(lease.AttemptNumber))
 		if retryAfter := r.resolveRetryAfter(runErr); !retryAfter.IsZero() && retryAfter.After(time.Now().UTC()) {
 			next = retryAfter
 		}
-		_ = r.dbStore.MarkDeliveryRetry(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, code, runErr.Error(), next)
+		if err := r.dbStore.MarkDeliveryRetry(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, code, runErr.Error(), next); err != nil {
+			persistenceErrors = append(persistenceErrors, deliveryStatePersistenceError("mark delivery retry", err))
+		}
+		if len(persistenceErrors) > 0 {
+			return joinDeliveryErrors(runErr, persistenceErrors...)
+		}
 		return errDeliveryRetryScheduled
 	}
 	if phase == publicationstate.Uploading {
-		_, _ = r.dbStore.TransitionPublicationState(ctx, publicationID, publicationstate.Failed, code)
+		if _, err := r.dbStore.TransitionPublicationState(ctx, publicationID, publicationstate.Failed, code); err != nil {
+			persistenceErrors = append(persistenceErrors, deliveryStatePersistenceError("transition publication to failed", err))
+		}
 	} else {
-		_, _ = r.dbStore.TransitionPublicationPartial(ctx, publicationID, phase, code)
+		if _, err := r.dbStore.TransitionPublicationPartial(ctx, publicationID, phase, code); err != nil {
+			persistenceErrors = append(persistenceErrors, deliveryStatePersistenceError("transition publication to partial", err))
+		}
 	}
 	if ClassifyError(runErr) == ErrorClassAuth {
-		_ = r.dbStore.MarkDeliveryBlockedAuth(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, code, runErr.Error())
+		if err := r.dbStore.MarkDeliveryBlockedAuth(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, code, runErr.Error()); err != nil {
+			persistenceErrors = append(persistenceErrors, deliveryStatePersistenceError("mark delivery blocked auth", err))
+		}
 	} else {
-		_ = r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, code, runErr.Error())
+		if err := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, code, runErr.Error()); err != nil {
+			persistenceErrors = append(persistenceErrors, deliveryStatePersistenceError("mark delivery failed", err))
+		}
 	}
-	return runErr
+	return joinDeliveryErrors(runErr, persistenceErrors...)
 }
 
 func (r *DeliveryRunner) phaseInfrastructureFailure(code string, err error) error {

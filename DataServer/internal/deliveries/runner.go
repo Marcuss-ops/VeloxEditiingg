@@ -48,6 +48,28 @@ import (
 	"velox-server/internal/supervisor"
 )
 
+var errDeliveryStatePersistence = errors.New("delivery state persistence failed")
+
+func deliveryStatePersistenceError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %w: %s: %w", supervisor.ErrInfrastructure, errDeliveryStatePersistence, operation, err)
+}
+
+func joinDeliveryErrors(primary error, persistence ...error) error {
+	var joined []error
+	if primary != nil {
+		joined = append(joined, primary)
+	}
+	for _, err := range persistence {
+		if err != nil {
+			joined = append(joined, err)
+		}
+	}
+	return errors.Join(joined...)
+}
+
 // DeliveryRunner drives delivery_attempts persistence + provider dispatch.
 type DeliveryRunner struct {
 	cfg      *RunnerConfig
@@ -192,6 +214,7 @@ func (r *DeliveryRunner) tick(ctx context.Context) error {
 	}
 
 	var wg sync.WaitGroup
+	stateErrors := make(chan error, len(leases))
 	for _, lease := range leases {
 		wg.Add(1)
 		go func(l store.DeliveryLease) {
@@ -207,9 +230,17 @@ func (r *DeliveryRunner) tick(ctx context.Context) error {
 
 			if err := r.processLease(ctx, l); err != nil {
 				log.Printf("[DELIVERY] delivery %s: %v", l.DeliveryID, err)
+				if errors.Is(err, errDeliveryStatePersistence) {
+					stateErrors <- err
+				}
 			}
 		}(lease)
 	}
 	wg.Wait()
+	select {
+	case err := <-stateErrors:
+		return fmt.Errorf("delivery state persistence: %w", err)
+	default:
+	}
 	return nil
 }
