@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -84,7 +85,24 @@ func (c *SQLiteJobDeliveryCounter) CountExpectedDeliveries(ctx context.Context, 
 	if n > 0 {
 		return n, nil
 	}
-	// No explicit plan exists. Never count unrelated global
+	// A render-only job is the one intentional no-delivery contract. The
+	// finalizer accepts it explicitly and therefore the pre-commit probe must
+	// compare against zero expected delivery streams rather than turning the
+	// valid render-only path into a missing-plan error.
+	var requestJSON string
+	if err := c.db.QueryRowContext(ctx,
+		`SELECT COALESCE(request_json, '{}') FROM jobs WHERE job_id = ?`, jobID).
+		Scan(&requestJSON); err != nil {
+		return 0, fmt.Errorf("store: JobDeliveryCounter.CountExpectedDeliveries job contract: %w", err)
+	}
+	var contract map[string]interface{}
+	if err := json.Unmarshal([]byte(requestJSON), &contract); err != nil {
+		return 0, fmt.Errorf("store: JobDeliveryCounter.CountExpectedDeliveries invalid request_json: %w", err)
+	}
+	if renderOnly, _ := contract["render_only"].(bool); renderOnly {
+		return 0, nil
+	}
+	// No explicit plan exists for a normal job. Never count unrelated global
 	// delivery_destinations: finalization must fail closed.
 	return 0, fmt.Errorf("%w: job_id=%s", deliverycontract.ErrNoExplicitPlan, jobID)
 }
