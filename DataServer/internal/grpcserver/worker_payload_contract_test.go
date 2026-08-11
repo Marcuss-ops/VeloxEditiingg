@@ -3,8 +3,10 @@ package grpcserver
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
+	"velox-server/internal/renderplan"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 	"velox-shared/contract"
@@ -123,6 +125,65 @@ func TestSendClaimedTaskOffer_UsesWorkerSpecificPayloadContract(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSendClaimedTaskOffer_DeliversCompiledRenderPlan(t *testing.T) {
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, &HandlerConfig{PushMode: true})
+	h.SetRenderPlanCompiler(&fakePlanCompiler{})
+	h.taskAttemptRepo = &spoofStubAttemptRepo{}
+
+	payload := map[string]interface{}{
+		"payload_contract_version": contract.PayloadContractVersionCanonical,
+		"video_name":               "Compiled delivery",
+		"scenes": []interface{}{
+			map[string]interface{}{
+				"clip": map[string]interface{}{
+					"asset_id":    "clip-1",
+					"url":         "velox-asset://clip-1",
+					"duration_ms": 5000,
+				},
+				"duration_seconds": 5.0,
+			},
+		},
+	}
+	sess := &workerSession{workerID: "worker-1", sendCh: make(chan *outboundMessage, 1)}
+	tws := &taskgraph.TaskWithSpec{Task: taskgraph.Task{
+		ID: "task-1", JobID: "job-plan", ExecutorID: "scene.composite.v1", ExecutorVersion: 2,
+	}, SpecPayload: payload}
+	attempt := &taskattempts.TaskAttempt{ID: "attempt-plan", TaskID: "task-1", JobID: "job-plan", AttemptNumber: 1}
+
+	h.sendClaimedTaskOffer(t.Context(), sess, tws, attempt, "lease-1")
+	out := <-sess.sendCh
+	if out == nil || out.Envelope == nil || out.Envelope.GetTaskOffer() == nil {
+		t.Fatal("sendClaimedTaskOffer did not enqueue a TaskOffer")
+	}
+	wire := out.Envelope.GetTaskOffer().GetTaskSpec().AsMap()
+
+	planJSON, ok := wire[contract.PayloadKeyCompiledRenderPlanJSON].(string)
+	if !ok || strings.TrimSpace(planJSON) == "" {
+		t.Fatalf("TaskOffer must carry %q (got %#v)", contract.PayloadKeyCompiledRenderPlanJSON, wire[contract.PayloadKeyCompiledRenderPlanJSON])
+	}
+	planSHA, ok := wire[contract.PayloadKeyCompiledRenderPlanSHA].(string)
+	if !ok || planSHA == "" {
+		t.Fatalf("TaskOffer must carry %q (got %#v)", contract.PayloadKeyCompiledRenderPlanSHA, wire[contract.PayloadKeyCompiledRenderPlanSHA])
+	}
+	if planSHA != renderplan.HashCanonical([]byte(planJSON)) {
+		t.Fatalf("delivered plan_sha256 = %q, want SHA256(canonical JSON) %q", planSHA, renderplan.HashCanonical([]byte(planJSON)))
+	}
+	// The delivered document must be a valid CompiledRenderPlan (job/attempt
+	// identity + media contract + segments) — the batch path consumes this.
+	plan, err := renderplan.Decode([]byte(planJSON))
+	if err != nil {
+		t.Fatalf("delivered compiled plan does not decode: %v", err)
+	}
+	if plan.JobID != "job-plan" || plan.AttemptID != "attempt-plan" || len(plan.Segments) == 0 {
+		t.Fatalf("delivered plan identity/segments wrong: %+v", plan)
+	}
+	// The source canonical payload must remain unmutated.
+	if _, ok := payload[contract.PayloadKeyCompiledRenderPlanJSON]; ok {
+		t.Fatal("compiled plan leaked into the canonical payload")
+	}
+	assertNoForbiddenWorkerKeys(t, wire)
 }
 
 func assertNoForbiddenWorkerKeys(t *testing.T, payload map[string]interface{}) {

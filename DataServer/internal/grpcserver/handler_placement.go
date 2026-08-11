@@ -18,6 +18,7 @@ import (
 	"velox-server/internal/renderplan"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
+	"velox-shared/contract"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 
@@ -175,6 +176,16 @@ func (h *Handler) sendClaimedTaskOffer(
 		return
 	}
 
+	// Fase D: compile the canonical render plan, stamp plan_version/
+	// plan_sha256 on the attempt, and DELIVER the compiled document in the
+	// offer so the worker's batch FFmpeg path consumes the master-compiled
+	// segments instead of re-deriving a timeline from raw scenes. Best-effort
+	// by design: a compile or persist failure must never block the offer.
+	if planJSON, planSHA := h.compileAndStampAttemptRenderPlan(ctx, tws, attempt); planJSON != "" {
+		workerPayload[contract.PayloadKeyCompiledRenderPlanJSON] = planJSON
+		workerPayload[contract.PayloadKeyCompiledRenderPlanSHA] = planSHA
+	}
+
 	var taskSpecPB *structpb.Struct
 	if workerPayload != nil {
 		var err error
@@ -187,11 +198,6 @@ func (h *Handler) sendClaimedTaskOffer(
 			return
 		}
 	}
-
-	// Fase D: compile the canonical render plan from the claimed payload and
-	// stamp plan_version/plan_sha256 on the attempt. Best-effort by design:
-	// a compile or persist failure must never block the offer.
-	h.stampAttemptRenderPlan(ctx, tws, attempt)
 
 	leaseDeadline := time.Now().UTC().Add(30 * time.Minute)
 	jobRevision := int32(0)
@@ -239,34 +245,37 @@ func (h *Handler) sendClaimedTaskOffer(
 		sess.workerID, tws.ID, tws.JobID, attempt.ID, leaseID, tws.ExecutorID, tws.ExecutorVersion, tws.Revision)
 }
 
-// stampAttemptRenderPlan compiles the canonical render plan for the claimed
-// task payload (Fase D) and persists plan_version/plan_sha256/render_plan_json
-// on the freshly-minted attempt. It is deliberately best-effort and NIL-safe:
-// a missing compiler, an uncompileable payload, or a persist failure only logs
-// and leaves the attempt at plan_version=0 — the worker offer is never blocked
-// by plan compilation.
-func (h *Handler) stampAttemptRenderPlan(ctx context.Context, tws *taskgraph.TaskWithSpec, attempt *taskattempts.TaskAttempt) {
+// compileAndStampAttemptRenderPlan compiles the canonical render plan for
+// the claimed task payload (Fase D), persists plan_version/plan_sha256/
+// render_plan_json on the freshly-minted attempt, and returns the canonical
+// document + its SHA256 so the caller can DELIVER the compiled plan in the
+// TaskOffer payload (contract.PayloadKeyCompiledRenderPlanJSON / *_SHA). It
+// is deliberately best-effort and NIL-safe: a missing compiler, an
+// uncompileable payload, or a persist failure returns ("", "") — the worker
+// offer is never blocked by plan compilation.
+func (h *Handler) compileAndStampAttemptRenderPlan(ctx context.Context, tws *taskgraph.TaskWithSpec, attempt *taskattempts.TaskAttempt) (string, string) {
 	if h == nil || h.renderPlanCompiler == nil || h.taskAttemptRepo == nil || tws == nil || attempt == nil {
-		return
+		return "", ""
 	}
 	plan, err := h.renderPlanCompiler.Compile(ctx, tws.SpecPayload, attempt.ID)
 	if err != nil {
 		log.Printf("[RENDERPLAN] compile skipped task=%s attempt=%s: %v", tws.ID, attempt.ID, err)
-		return
+		return "", ""
 	}
 	canonical, err := plan.CanonicalJSON()
 	if err != nil {
 		log.Printf("[RENDERPLAN] canonical encode skipped task=%s attempt=%s: %v", tws.ID, attempt.ID, err)
-		return
+		return "", ""
 	}
 	// Hash from the already-canonical bytes (no second marshaling).
 	planSHA := renderplan.HashCanonical(canonical)
 	if err := h.taskAttemptRepo.UpsertRenderPlan(ctx, attempt.ID, plan.PlanVersion, planSHA, string(canonical)); err != nil {
 		log.Printf("[RENDERPLAN] persist skipped task=%s attempt=%s: %v", tws.ID, attempt.ID, err)
-		return
+		return "", ""
 	}
 	log.Printf("[RENDERPLAN] stamped attempt=%s task=%s plan_version=%d plan_sha256=%s duration_ms=%d segments=%d",
 		attempt.ID, tws.ID, plan.PlanVersion, planSHA[:16], plan.DurationMS, len(plan.Segments))
+	return string(canonical), planSHA
 }
 
 // recordPlacementRejections logs the rejection reasons produced by the
