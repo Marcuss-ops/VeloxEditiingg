@@ -106,8 +106,8 @@ func TestCompile_ClipSegmentsExplicitTrims(t *testing.T) {
 func TestCompile_NeverEmitsLocalPaths(t *testing.T) {
 	compiler := NewCompiler(Options{})
 	plan := mustCompile(t, compiler, map[string]interface{}{
-		"job_id":   "job-4",
-		"job_type": "process_video",
+		"job_id":      "job-4",
+		"job_type":    "process_video",
 		"output_path": "/var/cache/worker123/final.mp4",
 		"items": []interface{}{
 			map[string]interface{}{"type": "video", "url": "velox-asset://asset-x", "duration": 1.0},

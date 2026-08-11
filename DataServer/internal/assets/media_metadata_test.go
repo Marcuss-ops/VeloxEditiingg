@@ -413,8 +413,8 @@ func TestPersistMediaMetadata_ObservesOutcomes(t *testing.T) {
 		Format:  mediaProbeFormat{FormatName: "m4a", Duration: 2},
 	})}
 	verifiedService := &AssetService{
-		repo:                &recordingMetadataRepo{rewriteAssetRepository: &rewriteAssetRepository{assets: map[string]*AssetRecord{}}},
-		clock:               clock.System{},
+		repo:                 &recordingMetadataRepo{rewriteAssetRepository: &rewriteAssetRepository{assets: map[string]*AssetRecord{}}},
+		clock:                clock.System{},
 		mediaMetadata:        newMediaMetadataResolverForTest(verifiedRunner),
 		mediaMetadataMetrics: metrics,
 	}
@@ -424,8 +424,8 @@ func TestPersistMediaMetadata_ObservesOutcomes(t *testing.T) {
 	}
 
 	failingService := &AssetService{
-		repo:                &recordingMetadataRepo{rewriteAssetRepository: &rewriteAssetRepository{assets: map[string]*AssetRecord{}}},
-		clock:               clock.System{},
+		repo:                 &recordingMetadataRepo{rewriteAssetRepository: &rewriteAssetRepository{assets: map[string]*AssetRecord{}}},
+		clock:                clock.System{},
 		mediaMetadata:        newMediaMetadataResolverForTest(&failingMediaRunner{err: errors.New("boom")}),
 		mediaMetadataMetrics: metrics,
 	}

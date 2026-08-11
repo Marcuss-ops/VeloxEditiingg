@@ -231,12 +231,12 @@ func (g *Graph) candidatesLocked() []Candidate {
 // Summary aggregates the ledger for logging and heartbeat exposure.
 type Summary struct {
 	// GraphVersion is the ledger schema version (bump on field changes).
-	GraphVersion     int         `json:"attempt_graph_version"`
-	FileCount        int         `json:"file_count"`
-	TotalWrittenBytes int64      `json:"total_written_bytes"`
-	TotalReadBytes   int64       `json:"total_read_bytes"`
-	TotalReReadBytes int64       `json:"total_reread_bytes"`
-	Candidates       []Candidate `json:"candidates,omitempty"`
+	GraphVersion      int         `json:"attempt_graph_version"`
+	FileCount         int         `json:"file_count"`
+	TotalWrittenBytes int64       `json:"total_written_bytes"`
+	TotalReadBytes    int64       `json:"total_read_bytes"`
+	TotalReReadBytes  int64       `json:"total_reread_bytes"`
+	Candidates        []Candidate `json:"candidates,omitempty"`
 }
 
 // Summary returns the aggregate view of the ledger. Totals, the candidate

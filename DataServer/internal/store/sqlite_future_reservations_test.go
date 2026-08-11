@@ -11,7 +11,7 @@ import (
 )
 
 func TestFutureReservations_AreExclusiveAndReconciled(t *testing.T) {
-	db, err := sql.Open("sqlite3", "file:future-reservation-test?mode=memory&cache=shared")
+	db, err := sql.Open("sqlite3", "file:future-reservation-test?mode=memory&cache=shared&_busy_timeout=5000")
 	if err != nil {
 		t.Fatal(err)
 	}

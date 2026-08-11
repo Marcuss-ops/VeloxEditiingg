@@ -126,7 +126,7 @@ func runCommandExecutor(ctx context.Context, e *renderPlanExecutor, spec executo
 	}
 	return executor.ExecutionResult{
 		Status: "succeeded", Outputs: []executor.ArtifactRef{artifact},
-		Metrics:  metrics,
+		Metrics:   metrics,
 		StartedAt: started, CompletedAt: time.Now().UTC(),
 	}, nil
 }

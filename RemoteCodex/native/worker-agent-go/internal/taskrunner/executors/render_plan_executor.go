@@ -109,7 +109,7 @@ var renderPlanPayloadKeys = map[string]bool{
 	// path consumes compiled segments directly from this document.
 	contract.PayloadKeyCompiledRenderPlanJSON: true,
 	contract.PayloadKeyCompiledRenderPlanSHA:  true,
-	"input_path": true, "compose_path": true, "audio_mix_path": true,
+	"input_path":                              true, "compose_path": true, "audio_mix_path": true,
 	"subtitle_path": true, "output_path": true,
 }
 
@@ -203,8 +203,8 @@ func compiledPlanEvidence(spec executor.TaskSpec) map[string]interface{} {
 		return nil
 	}
 	evidence := map[string]interface{}{
-		"compiled_render_plan_version":  plan.PlanVersion,
-		"compiled_render_plan_segments": len(plan.Segments),
+		"compiled_render_plan_version":     plan.PlanVersion,
+		"compiled_render_plan_segments":    len(plan.Segments),
 		"compiled_render_plan_duration_ms": plan.DurationMS,
 	}
 	if sha, ok := spec.Payload[contract.PayloadKeyCompiledRenderPlanSHA].(string); ok && strings.TrimSpace(sha) != "" {

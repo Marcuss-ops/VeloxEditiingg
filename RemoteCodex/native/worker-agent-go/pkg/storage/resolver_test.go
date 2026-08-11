@@ -36,9 +36,9 @@ func mustResolver(t *testing.T, cfg Config) *Resolver {
 func TestNew_RequiresAllNvmeBackings(t *testing.T) {
 	base := testConfig(false)
 	cases := map[string]Config{
-		"missing cache":     {TempDir: base.TempDir, ArtifactDir: base.ArtifactDir, TmpfsThresholdBytes: base.TmpfsThresholdBytes},
-		"missing temp":      {CacheDir: base.CacheDir, ArtifactDir: base.ArtifactDir, TmpfsThresholdBytes: base.TmpfsThresholdBytes},
-		"missing artifact":  {CacheDir: base.CacheDir, TempDir: base.TempDir, TmpfsThresholdBytes: base.TmpfsThresholdBytes},
+		"missing cache":      {TempDir: base.TempDir, ArtifactDir: base.ArtifactDir, TmpfsThresholdBytes: base.TmpfsThresholdBytes},
+		"missing temp":       {CacheDir: base.CacheDir, ArtifactDir: base.ArtifactDir, TmpfsThresholdBytes: base.TmpfsThresholdBytes},
+		"missing artifact":   {CacheDir: base.CacheDir, TempDir: base.TempDir, TmpfsThresholdBytes: base.TmpfsThresholdBytes},
 		"tmpfs without gate": {CacheDir: base.CacheDir, TempDir: base.TempDir, ArtifactDir: base.ArtifactDir, TmpfsDir: "/dev/shm/x"},
 	}
 	for name, cfg := range cases {

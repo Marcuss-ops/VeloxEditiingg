@@ -43,8 +43,8 @@ var (
 	// hash of the received bytes is the authoritative one for the artifact
 	// the master stores.
 	ErrArtifactTransferCorrupted = errors.New("artifacts: artifact transfer corrupted (worker-declared sha256 != master-computed sha256)")
-	ErrSizeMismatch             = errors.New("artifacts: size mismatch")
-	ErrBlobWriteFailed          = errors.New("artifacts: failed to write blob to staging")
+	ErrSizeMismatch              = errors.New("artifacts: size mismatch")
+	ErrBlobWriteFailed           = errors.New("artifacts: failed to write blob to staging")
 
 	// Fase 3 (Finalize) + Fase 4 (single-tx CAS) gates.
 	ErrUploadNotFound     = errors.New("artifacts: upload session not found")

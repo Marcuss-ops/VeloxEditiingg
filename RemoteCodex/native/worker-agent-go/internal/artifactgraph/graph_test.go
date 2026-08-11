@@ -76,7 +76,7 @@ func TestGraph_CreateIdempotent_AndUnknownPathsIgnored(t *testing.T) {
 	g.Create("/f", "producer-a")
 	g.Create("/f", "producer-b") // no-op: first producer owns the record
 	g.RecordWrite("/f", 10)
-	g.RecordWrite("/unknown", 999) // ignored
+	g.RecordWrite("/unknown", 999)          // ignored
 	g.RecordRead("/unknown", 5, "consumer") // ignored
 	if got := g.Snapshot()[0].ProducerPhase; got != "producer-a" {
 		t.Errorf("producer = %q, want producer-a (first wins)", got)

@@ -347,10 +347,10 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 		t.Fatalf("UpsertRenderPlan: %v", err)
 	}
 	var (
-		gotPlanVersion    int
-		gotPlanSHA        string
-		gotRendererVer    string
-		gotArtifactSHA    string
+		gotPlanVersion int
+		gotPlanSHA     string
+		gotRendererVer string
+		gotArtifactSHA string
 	)
 	if err := store.db.QueryRowContext(ctx,
 		`SELECT plan_version, plan_sha256, renderer_version, artifact_sha256
@@ -387,7 +387,7 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 	}
 	var (
 		preservedSHA, workerSHA string
-		shaMismatch              int
+		shaMismatch             int
 	)
 	if err := store.db.QueryRowContext(ctx,
 		`SELECT artifact_sha256, worker_sha256, artifact_sha256_mismatch

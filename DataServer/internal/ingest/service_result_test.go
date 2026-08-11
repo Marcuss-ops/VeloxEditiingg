@@ -124,9 +124,9 @@ func TestIngestionService_StampsRenderIdentityFromReport(t *testing.T) {
 	svc := newWiredSvc(t, taskRepo, jobsRepo, &stubIngestAttemptRepo{}, newStubIngestOutputArtifacts())
 
 	const (
-		wantEngine  = "velox-engine/v2.9.1"
-		wantFinal   = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-		wantThumb   = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+		wantEngine = "velox-engine/v2.9.1"
+		wantFinal  = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+		wantThumb  = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 	)
 	_, err := svc.IngestTaskResult(context.Background(), IngestCommand{
 		TaskID: "T1", AttemptID: "A1", LeaseID: "L1", WorkerID: "w-1", JobID: "J1",

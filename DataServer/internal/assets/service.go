@@ -52,12 +52,12 @@ type BlobStore interface {
 
 // AssetService is the generic asset registry service.
 type AssetService struct {
-	repo                AssetRepository
-	blobStore           BlobStore
-	registry            *ResolverRegistry
-	clock               clock.Clock
-	videoTrimmer        *VideoTrimmer
-	security            *inputsecurity.Fetcher
+	repo                 AssetRepository
+	blobStore            BlobStore
+	registry             *ResolverRegistry
+	clock                clock.Clock
+	videoTrimmer         *VideoTrimmer
+	security             *inputsecurity.Fetcher
 	mediaMetadata        *MediaMetadataResolver
 	mediaMetadataMetrics *MediaMetadataMetrics
 }
@@ -74,12 +74,12 @@ func NewAssetService(repo AssetRepository, blobStore BlobStore, registry *Resolv
 		}
 	}
 	return &AssetService{
-		repo:                repo,
-		blobStore:           blobStore,
-		registry:            registry,
-		clock:               c,
-		videoTrimmer:        NewVideoTrimmer(DefaultVideoNormalization),
-		security:            inputsecurity.NewFetcher(policy),
+		repo:                 repo,
+		blobStore:            blobStore,
+		registry:             registry,
+		clock:                c,
+		videoTrimmer:         NewVideoTrimmer(DefaultVideoNormalization),
+		security:             inputsecurity.NewFetcher(policy),
 		mediaMetadata:        NewMediaMetadataResolver(),
 		mediaMetadataMetrics: NewMediaMetadataMetrics(),
 	}

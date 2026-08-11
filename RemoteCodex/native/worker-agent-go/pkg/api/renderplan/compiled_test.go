@@ -84,10 +84,16 @@ func TestDecodeCompiledRenderPlan_RejectsInvalidDocuments(t *testing.T) {
 		{"unsupported version", mutate(func(m map[string]interface{}) { m["plan_version"] = 99 })},
 		{"missing job_id", mutate(func(m map[string]interface{}) { m["job_id"] = "" })},
 		{"missing attempt_id", mutate(func(m map[string]interface{}) { m["attempt_id"] = "" })},
-		{"zero fps_den", mutate(func(m map[string]interface{}) { m["media_contract"] = map[string]interface{}{"width": 1920, "height": 1080, "fps_num": 30, "fps_den": 0} })},
+		{"zero fps_den", mutate(func(m map[string]interface{}) {
+			m["media_contract"] = map[string]interface{}{"width": 1920, "height": 1080, "fps_num": 30, "fps_den": 0}
+		})},
 		{"empty segments", mutate(func(m map[string]interface{}) { m["segments"] = []interface{}{} })},
-		{"segment without asset_id", mutate(func(m map[string]interface{}) { m["segments"] = []interface{}{map[string]interface{}{"segment_id": "seg_000", "timeline_start_ms": 0}} })},
-		{"negative timeline offset", mutate(func(m map[string]interface{}) { m["segments"] = []interface{}{map[string]interface{}{"segment_id": "seg_000", "asset_id": "a", "timeline_start_ms": -5}} })},
+		{"segment without asset_id", mutate(func(m map[string]interface{}) {
+			m["segments"] = []interface{}{map[string]interface{}{"segment_id": "seg_000", "timeline_start_ms": 0}}
+		})},
+		{"negative timeline offset", mutate(func(m map[string]interface{}) {
+			m["segments"] = []interface{}{map[string]interface{}{"segment_id": "seg_000", "asset_id": "a", "timeline_start_ms": -5}}
+		})},
 		{"malformed json", `{"plan_version": 1,`},
 	}
 	for _, tc := range cases {
@@ -149,10 +155,10 @@ func TestValidateCompiledRenderPlan_Admission(t *testing.T) {
 func TestValidateTaskPayload_AcceptsCompiledPlanAlongsideLegacyContract(t *testing.T) {
 	valid := validCompiledPlanJSON(t, "job-1", "attempt-1")
 	payload := map[string]interface{}{
-		"payload_contract_version":               2,
-		"job_id":                                  "job-1",
-		"job_type":                                "process_video",
-		"created_at":                              "2026-08-11T00:00:00Z",
+		"payload_contract_version": 2,
+		"job_id":                   "job-1",
+		"job_type":                 "process_video",
+		"created_at":               "2026-08-11T00:00:00Z",
 		contract.PayloadKeyCompiledRenderPlanJSON: valid,
 		contract.PayloadKeyCompiledRenderPlanSHA:  strings.Repeat("b", 64),
 	}
@@ -161,10 +167,10 @@ func TestValidateTaskPayload_AcceptsCompiledPlanAlongsideLegacyContract(t *testi
 	}
 
 	bad := map[string]interface{}{
-		"payload_contract_version":               2,
-		"job_id":                                  "job-1",
-		"job_type":                                "process_video",
-		"created_at":                              "2026-08-11T00:00:00Z",
+		"payload_contract_version": 2,
+		"job_id":                   "job-1",
+		"job_type":                 "process_video",
+		"created_at":               "2026-08-11T00:00:00Z",
 		contract.PayloadKeyCompiledRenderPlanJSON: `{"plan_version": 7}`,
 	}
 	if err := ValidateTaskPayload(bad); err == nil {

@@ -58,12 +58,12 @@ type CompiledSegment struct {
 // Field order mirrors the master struct so the canonical JSON (and therefore
 // plan_sha256) is byte-stable across the wire.
 type CompiledRenderPlan struct {
-	PlanVersion   int                  `json:"plan_version"`
-	JobID         string               `json:"job_id"`
-	AttemptID     string               `json:"attempt_id"`
-	DurationMS    int64                `json:"duration_ms"`
+	PlanVersion   int                   `json:"plan_version"`
+	JobID         string                `json:"job_id"`
+	AttemptID     string                `json:"attempt_id"`
+	DurationMS    int64                 `json:"duration_ms"`
 	MediaContract CompiledMediaContract `json:"media_contract"`
-	Segments      []CompiledSegment    `json:"segments"`
+	Segments      []CompiledSegment     `json:"segments"`
 	// Audio and Assets are accepted (they carry the asset identity +
 	// integrity references the batch path resolves via the CacheResolver)
 	// but are not yet validated in depth.

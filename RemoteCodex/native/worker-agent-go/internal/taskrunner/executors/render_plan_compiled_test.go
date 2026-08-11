@@ -97,7 +97,7 @@ func TestRenderPlanExecutor_ValidateRequiresV1Envelope(t *testing.T) {
 	ok := executor.TaskSpec{
 		JobID: jobID,
 		Payload: map[string]interface{}{
-			"render_plan_json":                          validRenderPlanJSON(t, jobID),
+			"render_plan_json":                        validRenderPlanJSON(t, jobID),
 			contract.PayloadKeyCompiledRenderPlanJSON: validCompiledPlanForTest(t, jobID, "attempt-2"),
 		},
 	}
@@ -109,7 +109,7 @@ func TestRenderPlanExecutor_ValidateRequiresV1Envelope(t *testing.T) {
 	bad := executor.TaskSpec{
 		JobID: jobID,
 		Payload: map[string]interface{}{
-			"render_plan_json":                          validRenderPlanJSON(t, jobID),
+			"render_plan_json":                        validRenderPlanJSON(t, jobID),
 			contract.PayloadKeyCompiledRenderPlanJSON: `{"plan_version": 99}`,
 		},
 	}
