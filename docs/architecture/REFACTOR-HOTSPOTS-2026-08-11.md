@@ -33,6 +33,15 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Delivery/smoke/calendar/rollout: gli update terminali o di operation non
   dichiarano più successo quando la persistenza fallisce o aggiorna zero righe;
   gli endpoint riportano anche i worker falliti.
+- Store lifecycle e reconciler: i percorsi di `pipeline_runs`, completion,
+  artifact, alert, job, forwarding, media-probe, dead-letter, delivery lease,
+  M2M e riconciliazione stale non ignorano più gli errori del driver restituiti
+  da `RowsAffected()`.
+- Job terminalization: `FAILED`/`CANCELLED` non viene committato se history o
+  event ledger falliscono; un errore di lettura del retry budget nel reconciler
+  stale interrompe l'operazione invece di usare un valore non verificato.
+- Retry cancellation: i backoff di remote-engine e multipart publisher usano
+  timer stoppabili; la cancellazione durante il backoff è coperta da test.
 - Render-only: il contatore audio riconosce il contratto esplicito a zero
   destinazioni; i job normali senza delivery plan continuano a fallire chiusi.
 - Gate architetturali e gate full-module verdi dopo i fix (`833cf79e`,
@@ -49,7 +58,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - [x] Rafforzare i writer già toccati: completion, delivery attempt, smoke,
   calendar e rollout command controllano errore, ownership e righe aggiornate.
 - [ ] Completare l'audit dei writer non ancora coperti: ogni `UPDATE`
-  autorevole deve controllare `RowsAffected`, ownership e generazione.
+  autorevole deve controllare `RowsAffected`, ownership e generazione. Restano
+  da verificare in particolare `store_worker_commands`, `store_credential_vault`,
+  `sqlite_calendar`, `artifact_gc` e i writer di progress non terminali.
 - [ ] Chiudere l'audit mirato di `MarkDeliverySucceeded`,
   `FinalizeVerified`, `CompletePublicationAfterReconciliation` e `TaskResult`:
   nessun ritorno `nil` dopo un commit non avvenuto.
@@ -77,7 +88,8 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   multipart publisher e downloader.
 - [ ] Per ogni policy definire: tentativi totali, errori retryable, massimo
   backoff, jitter, `Retry-After`, deadline e comportamento su cancellation.
-- [ ] Sostituire eventuali sleep non cancellabili con timer legati al context.
+- [x] Sostituire i backoff già individuati non cancellabili con timer legati al
+  context (remote engine e multipart publisher); resta l'audit delle policy.
 - [ ] Verificare che ogni retry abbia una chiave idempotente stabile e che un
   retry dopo timeout non generi un secondo effetto remoto.
 - [ ] Distinguere sempre `lease lost`, `provider error` e `DB/infrastructure
@@ -85,11 +97,11 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 
 ### P1 — Confini I/O e SQL
 
+- [x] Portare `jobs/enqueue/drive_resolution.go` verso un repository di
+  lookup read-only; gli errori DB non degradano più silenziosamente a
+  “reference originale”.
 - [ ] Portare `creatorflow/resolver.go` verso repository tipizzati senza
   duplicare la transazione atomica esistente.
-- [ ] Portare `jobs/enqueue/drive_resolution.go` verso un repository di
-  lookup read-only; gli errori DB non devono degradare silenziosamente a
-  “reference originale”.
 - [ ] Verificare i resolver delivery e gli adapter metrici contro
   `check-db-access.sh`; ogni eccezione deve avere motivazione e owner.
 - [ ] Misurare `sql.DB.Stats()` del Master: `WaitCount` e `WaitDuration`, non
