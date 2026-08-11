@@ -133,7 +133,11 @@ func (s *SQLiteStore) ClaimCreatorForwardings(ctx context.Context, runnerID, lea
 		if err != nil {
 			return nil, wrapDBInfrastructure("ClaimCreatorForwardings: per-record lease stamp", err)
 		}
-		if n, _ := leaseRes.RowsAffected(); n != 1 {
+		n, rowsErr := readRowsAffected(leaseRes, "ClaimCreatorForwardings per-record lease stamp")
+		if rowsErr != nil {
+			return nil, rowsErr
+		}
+		if n != 1 {
 			return nil, fmt.Errorf("ClaimCreatorForwardings: per-record lease stamp affected=%d forwarding=%s", n, c.forwardingID)
 		}
 

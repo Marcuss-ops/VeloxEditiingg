@@ -63,7 +63,10 @@ func (s *SQLiteStore) AtomicForwardAndEnqueue(
 	if err != nil {
 		return wrapDBInfrastructure("AtomicForwardAndEnqueue claim", err)
 	}
-	affected, _ := claimResult.RowsAffected()
+	affected, rowsErr := readRowsAffected(claimResult, "AtomicForwardAndEnqueue claim")
+	if rowsErr != nil {
+		return rowsErr
+	}
 	if affected == 0 {
 		return ErrTransitionConflict
 	}
@@ -92,7 +95,10 @@ func (s *SQLiteStore) AtomicForwardAndEnqueue(
 	if err != nil {
 		return wrapDBInfrastructure("AtomicForwardAndEnqueue forward", err)
 	}
-	affected, _ = forwardResult.RowsAffected()
+	affected, rowsErr = readRowsAffected(forwardResult, "AtomicForwardAndEnqueue forward")
+	if rowsErr != nil {
+		return rowsErr
+	}
 	if affected == 0 {
 		return fmt.Errorf("store: AtomicForwardAndEnqueue: FORWARDING→FORWARDED CAS failed")
 	}
@@ -137,7 +143,10 @@ func (s *SQLiteStore) MarkCreatorForwardingReadySync(ctx context.Context, forwar
 	if err != nil {
 		return wrapDBInfrastructure("MarkCreatorForwardingReadySync exec", err)
 	}
-	affected, _ := result.RowsAffected()
+	affected, rowsErr := readRowsAffected(result, "MarkCreatorForwardingReadySync")
+	if rowsErr != nil {
+		return rowsErr
+	}
 	if affected == 0 {
 		return ErrTransitionConflict
 	}
@@ -174,7 +183,10 @@ func (s *SQLiteStore) MarkCreatorForwardingEnqueueRetry(ctx context.Context, for
 	if err != nil {
 		return wrapDBInfrastructure("MarkCreatorForwardingEnqueueRetry exec", err)
 	}
-	affected, _ := result.RowsAffected()
+	affected, rowsErr := readRowsAffected(result, "MarkCreatorForwardingEnqueueRetry")
+	if rowsErr != nil {
+		return rowsErr
+	}
 	if affected == 0 {
 		return ErrTransitionConflict
 	}
