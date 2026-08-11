@@ -209,6 +209,11 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 				metricsRegistry.Register(family)
 			}
 		}
+		for _, family := range velmetrics.NewAssetMediaMetadataFamilies(m.AssetService.MediaMetadataMetrics()) {
+			if family != nil {
+				metricsRegistry.Register(family)
+			}
+		}
 	}
 	compatibility.SetAliasReadObserver(metricsCollector.NewCompatibilityAliasObserver())
 	compatibility.SetAliasRejectedObserver(metricsCollector.NewCompatibilityAliasRejectionObserver())

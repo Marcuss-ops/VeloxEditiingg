@@ -28,6 +28,12 @@ type AssetRepository interface {
 	UpdateStatus(ctx context.Context, assetID, from, to string) error
 	InsertSource(ctx context.Context, s AssetSourceRecord) error
 	LinkToJob(ctx context.Context, jobID, assetID, role string, ordinal int, required bool) error
+	// UpsertMediaMetadata persists the canonical one-time media probe for an
+	// asset (Fase C1). No-op for non-media assets (no row is ever created).
+	UpsertMediaMetadata(ctx context.Context, assetID string, rec MediaMetadataRecord) error
+	// GetMediaMetadata returns the verified media metadata for an asset, or
+	// (nil, nil) when no metadata row exists (metadata_verified=false).
+	GetMediaMetadata(ctx context.Context, assetID string) (*MediaMetadataRecord, error)
 }
 
 // BlobStore is the storage abstraction for asset blobs.
@@ -42,12 +48,14 @@ type BlobStore interface {
 
 // AssetService is the generic asset registry service.
 type AssetService struct {
-	repo         AssetRepository
-	blobStore    BlobStore
-	registry     *ResolverRegistry
-	clock        clock.Clock
-	videoTrimmer *VideoTrimmer
-	security     *inputsecurity.Fetcher
+	repo                AssetRepository
+	blobStore           BlobStore
+	registry            *ResolverRegistry
+	clock               clock.Clock
+	videoTrimmer        *VideoTrimmer
+	security            *inputsecurity.Fetcher
+	mediaMetadata        *MediaMetadataResolver
+	mediaMetadataMetrics *MediaMetadataMetrics
 }
 
 // NewAssetService creates a new generic asset service.
@@ -62,13 +70,25 @@ func NewAssetService(repo AssetRepository, blobStore BlobStore, registry *Resolv
 		}
 	}
 	return &AssetService{
-		repo:         repo,
-		blobStore:    blobStore,
-		registry:     registry,
-		clock:        c,
-		videoTrimmer: NewVideoTrimmer(DefaultVideoNormalization),
-		security:     inputsecurity.NewFetcher(policy),
+		repo:                repo,
+		blobStore:           blobStore,
+		registry:            registry,
+		clock:               c,
+		videoTrimmer:        NewVideoTrimmer(DefaultVideoNormalization),
+		security:            inputsecurity.NewFetcher(policy),
+		mediaMetadata:        NewMediaMetadataResolver(),
+		mediaMetadataMetrics: NewMediaMetadataMetrics(),
 	}
+}
+
+// MediaMetadataMetrics exposes bounded asset-metadata probe outcome
+// counters for the metrics composition root (verified / probe_failed /
+// persist_failed) without exposing asset IDs, URLs or hashes.
+func (s *AssetService) MediaMetadataMetrics() *MediaMetadataMetrics {
+	if s == nil || s.mediaMetadataMetrics == nil {
+		return nil
+	}
+	return s.mediaMetadataMetrics
 }
 
 // SecurityMetrics exposes bounded input rejection counters for the metrics
@@ -88,6 +108,24 @@ func (s *AssetService) SecurityPolicy() inputsecurity.Policy {
 		return inputsecurity.DefaultPolicy()
 	}
 	return s.security.Policy()
+}
+
+// GetMediaMetadata returns the verified media metadata for an asset, or nil
+// when no metadata was captured (non-media asset, or a probe that did not
+// verify). Job-time resolvers consume this registry metadata instead of
+// spawning their own ffprobe (Fase C1).
+func (s *AssetService) GetMediaMetadata(ctx context.Context, assetID string) (*MediaMetadata, error) {
+	if s == nil || s.repo == nil {
+		return nil, fmt.Errorf("asset service unavailable")
+	}
+	rec, err := s.repo.GetMediaMetadata(ctx, assetID)
+	if err != nil {
+		return nil, err
+	}
+	if rec == nil {
+		return nil, nil
+	}
+	return rec.ToDomain(), nil
 }
 
 // Get retrieves an asset by ID.

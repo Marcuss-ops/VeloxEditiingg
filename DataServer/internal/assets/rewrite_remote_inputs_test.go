@@ -28,6 +28,12 @@ func (r *rewriteAssetRepository) InsertSource(context.Context, AssetSourceRecord
 func (r *rewriteAssetRepository) LinkToJob(context.Context, string, string, string, int, bool) error {
 	return nil
 }
+func (r *rewriteAssetRepository) UpsertMediaMetadata(context.Context, string, MediaMetadataRecord) error {
+	return nil
+}
+func (r *rewriteAssetRepository) GetMediaMetadata(context.Context, string) (*MediaMetadataRecord, error) {
+	return nil, nil
+}
 
 func TestRewriteRemoteInputPayloadRewritesCanonicalAssetsInsideScenesJSON(t *testing.T) {
 	payload := map[string]interface{}{

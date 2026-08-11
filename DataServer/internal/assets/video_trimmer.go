@@ -318,7 +318,8 @@ type ffprobeFrame struct {
 }
 
 type ffprobeFormat struct {
-	Duration json.RawMessage `json:"duration"`
+	Duration   json.RawMessage `json:"duration"`
+	FormatName json.RawMessage `json:"format_name"`
 }
 
 func jsonFloat(raw json.RawMessage) float64 {

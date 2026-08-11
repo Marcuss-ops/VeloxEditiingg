@@ -138,7 +138,14 @@ func (s *AssetService) ResolveAndRegister(ctx context.Context, cmd ResolveAssetC
 		return nil, fmt.Errorf("insert asset: %w", err)
 	}
 
-	// 6. Insert source record
+	// 6. Persist canonical media metadata (Fase C1): run the one-time
+	// probe on the promoted final blob and store the verified result.
+	// Best-effort — a failed probe leaves metadata_verified=false and
+	// never rolls back the registration (inputsecurity already validated
+	// the bytes).
+	s.persistMediaMetadata(ctx, assetID, finalPath, validation.MIMEType)
+
+	// 7. Insert source record
 	sourceID, err := identity.NewHex128()
 	if err != nil {
 		return nil, fmt.Errorf("generate source ID: %w", err)

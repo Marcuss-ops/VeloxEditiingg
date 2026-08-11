@@ -44,6 +44,12 @@ func (r *segmentTestRepository) InsertSource(_ context.Context, source AssetSour
 func (r *segmentTestRepository) LinkToJob(context.Context, string, string, string, int, bool) error {
 	return nil
 }
+func (r *segmentTestRepository) UpsertMediaMetadata(context.Context, string, MediaMetadataRecord) error {
+	return nil
+}
+func (r *segmentTestRepository) GetMediaMetadata(context.Context, string) (*MediaMetadataRecord, error) {
+	return nil, nil
+}
 
 type segmentTestBlobStore struct {
 	root string

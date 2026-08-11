@@ -14,6 +14,7 @@ import (
 // store package (and downstream consumers) don't need to import assets directly.
 type AssetRecord = assets.AssetRecord
 type AssetSourceRecord = assets.AssetSourceRecord
+type MediaMetadataRecord = assets.MediaMetadataRecord
 
 // JobAssetRecord is the storage projection of a job_assets row.
 type JobAssetRecord struct {
@@ -197,6 +198,75 @@ func (r *SQLiteAssetRepository) SoftDelete(ctx context.Context, assetID string) 
 	return r.UpdateStatus(ctx, assetID, "READY", "DELETED")
 }
 
+// UpsertMediaMetadata persists (insert-or-replace) the canonical one-time
+// media probe row for an asset (Fase C1: registry-authoritative metadata;
+// consumers read it instead of spawning ffprobe).
+func (r *SQLiteAssetRepository) UpsertMediaMetadata(ctx context.Context, assetID string, m MediaMetadataRecord) error {
+	if r.store == nil || r.store.db == nil {
+		return fmt.Errorf("asset repository: store not initialized")
+	}
+	if strings.TrimSpace(assetID) == "" {
+		return fmt.Errorf("asset repository: empty asset_id")
+	}
+	_, err := r.store.db.ExecContext(ctx, `
+		INSERT INTO asset_media_metadata
+			(asset_id, container, duration_ms, video_codec, pix_fmt, width, height,
+			 fps_num, fps_den, time_base_num, time_base_den, audio_codec,
+			 audio_sample_rate, audio_channels, metadata_verified_at, metadata_schema_version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(asset_id) DO UPDATE SET
+			container = excluded.container,
+			duration_ms = excluded.duration_ms,
+			video_codec = excluded.video_codec,
+			pix_fmt = excluded.pix_fmt,
+			width = excluded.width,
+			height = excluded.height,
+			fps_num = excluded.fps_num,
+			fps_den = excluded.fps_den,
+			time_base_num = excluded.time_base_num,
+			time_base_den = excluded.time_base_den,
+			audio_codec = excluded.audio_codec,
+			audio_sample_rate = excluded.audio_sample_rate,
+			audio_channels = excluded.audio_channels,
+			metadata_verified_at = excluded.metadata_verified_at,
+			metadata_schema_version = excluded.metadata_schema_version`,
+		assetID, m.Container, m.DurationMs, m.VideoCodec, m.PixelFormat, m.Width, m.Height,
+		m.FPSNum, m.FPSDen, m.TimeBaseNum, m.TimeBaseDen, m.AudioCodec,
+		m.AudioSampleRate, m.AudioChannels, nullIfEmpty(m.MetadataVerifiedAt), m.MetadataSchemaVersion,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert asset media metadata: %w", err)
+	}
+	return nil
+}
+
+// GetMediaMetadata returns the verified media metadata row for an asset, or
+// (nil, nil) when no row exists (metadata_verified=false).
+func (r *SQLiteAssetRepository) GetMediaMetadata(ctx context.Context, assetID string) (*MediaMetadataRecord, error) {
+	if r.store == nil || r.store.db == nil {
+		return nil, fmt.Errorf("asset repository: store not initialized")
+	}
+	row := r.store.db.QueryRowContext(ctx, `
+		SELECT asset_id, container, duration_ms, video_codec, pix_fmt, width, height,
+		       fps_num, fps_den, time_base_num, time_base_den, audio_codec,
+		       audio_sample_rate, audio_channels,
+		       COALESCE(metadata_verified_at,''), metadata_schema_version
+		 FROM asset_media_metadata WHERE asset_id = ?`, assetID,
+	)
+	var m MediaMetadataRecord
+	err := row.Scan(&m.AssetID, &m.Container, &m.DurationMs, &m.VideoCodec, &m.PixelFormat,
+		&m.Width, &m.Height, &m.FPSNum, &m.FPSDen, &m.TimeBaseNum, &m.TimeBaseDen,
+		&m.AudioCodec, &m.AudioSampleRate, &m.AudioChannels,
+		&m.MetadataVerifiedAt, &m.MetadataSchemaVersion)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get asset media metadata: %w", err)
+	}
+	return &m, nil
+}
+
 func (r *SQLiteAssetRepository) InsertSource(ctx context.Context, s AssetSourceRecord) error {
 	if r.store == nil || r.store.db == nil {
 		return fmt.Errorf("asset repository: store not initialized")
@@ -273,6 +343,7 @@ func (r *SQLiteAssetRepository) ListByJob(ctx context.Context, jobID string) ([]
 }
 
 var _ AssetRepository = (*SQLiteAssetRepository)(nil)
+var _ assets.AssetRepository = (*SQLiteAssetRepository)(nil)
 
 // Compile-time guard: every store.BlobStore implementation satisfies assets.BlobStore.
 // This ensures the subset interface in assets doesn't drift from the canonical definition in store.
