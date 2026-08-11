@@ -8,7 +8,7 @@ type Definition struct {
 	Comparator           string
 }
 
-var Catalog = []Definition{
+var catalog = []Definition{
 	{Name: "valid_job_acceptance", Metric: "jobs.acceptance.success_ratio", Window: "30d", Target: .99, Comparator: ">="},
 	{Name: "normal_job_start", Metric: "jobs.start_within_2m_ratio", Window: "30d", Target: .95, Comparator: ">="},
 	{Name: "task_result_persistence", Metric: "task_results.persisted_ratio", Window: "30d", Target: .999, Comparator: ">="},

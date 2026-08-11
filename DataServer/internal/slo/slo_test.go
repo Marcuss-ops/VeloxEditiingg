@@ -3,10 +3,10 @@ package slo
 import "testing"
 
 func TestSLOCatalog(t *testing.T) {
-	if len(Catalog) != 6 {
-		t.Fatalf("catalog=%d", len(Catalog))
+	if len(catalog) != 6 {
+		t.Fatalf("catalog=%d", len(catalog))
 	}
-	if !Meets(Catalog[0], .995) || Meets(Catalog[0], .9) {
+	if !Meets(catalog[0], .995) || Meets(catalog[0], .9) {
 		t.Fatal("SLO comparison incorrect")
 	}
 }
