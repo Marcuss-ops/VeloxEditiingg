@@ -32,11 +32,11 @@ const DefaultOutputDir = "/tmp/velox/scene-composite"
 // The Options struct lets the caller override either location.
 const DefaultBaselineFixtureRel = "tests/fixtures/engine_selftest_baseline.sha256"
 
-// FFmpegBinaries is the list of binaries the bootstrap probes.
-// ffmpeg and ffprobe MUST come from the same vendor build (mixed
-// vendors in the same PATH have historically produced subtle filter-arg
-// incompatibilities on libx264 — RW-PROD-003 §1 pain-point #2).
-var FFmpegBinaries = []string{"ffprobe", "ffmpeg"}
+// defaultFFmpegBinaries is copied into Options at bootstrap construction.
+// ffmpeg and ffprobe MUST come from the same vendor build (mixed vendors in
+// the same PATH have historically produced subtle filter-arg incompatibilities
+// on libx264 — RW-PROD-003 §1 pain-point #2).
+var defaultFFmpegBinaries = []string{"ffprobe", "ffmpeg"}
 
 // Options bundles every knob Run() needs. Zero-value relies on the
 // defaults applied by applyOptions.
@@ -57,6 +57,10 @@ type Options struct {
 	// FFmpegMinMajor is the lowest acceptable major version for ffmpeg
 	// and ffprobe (A3). Defaults to DefaultFFmpegMinMajor when zero.
 	FFmpegMinMajor int
+	// FFmpegBinaries is the explicit, bootstrap-owned list of binaries to
+	// probe. The slice is defensively copied before use; callers cannot mutate
+	// a process-global probe list.
+	FFmpegBinaries []string
 	// BaselineSHA256Path is the file containing the expected SHA-256
 	// of a 1-second black-frame self-render (A1 + A2). Defaults to
 	// <WorkDir>/<DefaultBaselineFixtureRel>.
@@ -94,6 +98,11 @@ func applyOptions(opts Options, cfg *config.WorkerConfig) Options {
 	}
 	if opts.FFmpegMinMajor == 0 {
 		opts.FFmpegMinMajor = DefaultFFmpegMinMajor
+	}
+	if len(opts.FFmpegBinaries) == 0 {
+		opts.FFmpegBinaries = append([]string(nil), defaultFFmpegBinaries...)
+	} else {
+		opts.FFmpegBinaries = append([]string(nil), opts.FFmpegBinaries...)
 	}
 	if opts.BaselineSHA256Path == "" {
 		opts.BaselineSHA256Path = filepath.Join(opts.WorkDir, DefaultBaselineFixtureRel)

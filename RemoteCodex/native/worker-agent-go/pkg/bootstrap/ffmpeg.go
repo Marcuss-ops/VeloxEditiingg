@@ -44,7 +44,7 @@ func runFFmpegSelfTest(ctx context.Context, opts Options) StepResult {
 		StartedAt: start,
 	}
 
-	for _, bin := range FFmpegBinaries {
+	for _, bin := range opts.FFmpegBinaries {
 		if _, err := exec.LookPath(bin); err != nil {
 			res.Status = "FAIL"
 			switch bin {

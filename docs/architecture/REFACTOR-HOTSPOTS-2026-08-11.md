@@ -51,6 +51,8 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   errori di `Scan` e `rows.Err()` non vengono più ignorati nei read model.
 - DB pool telemetry: `OpenConnections`, `InUse`, `Idle`, `WaitCount` e
   `WaitDuration` sono esposti senza label per distinguere lock da queueing.
+- Bootstrap worker: la lista ffmpeg/ffprobe è una dipendenza esplicita con
+  copia difensiva, non più una slice globale esportata e mutabile.
 - Artifact GC, credential revoke e command delivery verificano ownership e
   righe aggiornate prima di dichiarare completata l'operazione.
 - Render-plan stamping: un tentativo inesistente non può più risultare
@@ -136,7 +138,7 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 
 - [ ] Rimuovere la dipendenza dei package pubblici worker da package `internal`
   (`pkg/cache` → telemetry/trace interno; pipeline pubbliche → trace interno).
-- [ ] Rendere la lista binari ffmpeg una dipendenza di bootstrap immutabile o
+- [x] Rendere la lista binari ffmpeg una dipendenza di bootstrap immutabile o
   un’opzione esplicita, non una slice globale esportata e mutabile.
 - [ ] Limitare lo stato globale a registri read-only o inizializzazione; ogni
   contatore/observer che deve essere isolabile nei test riceve un’istanza.
