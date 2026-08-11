@@ -246,6 +246,16 @@ func mapSocialClientError(err error) error {
 	case errors.Is(err, socialclient.ErrAuth):
 		return fmt.Errorf("%w: %v", deliveries.ErrProviderAuth, err)
 	case errors.Is(err, socialclient.ErrRateLimit):
+		var rateLimitErr *socialclient.RateLimitError
+		if errors.As(err, &rateLimitErr) && !rateLimitErr.RetryAfter.IsZero() {
+			return &deliveries.ProviderError{
+				Class:      deliveries.ErrorClassRateLimit,
+				Code:       "RATE_LIMIT",
+				Message:    err.Error(),
+				RetryAfter: rateLimitErr.RetryAfter,
+				Cause:      fmt.Errorf("%w: %v", deliveries.ErrProviderRateLimit, err),
+			}
+		}
 		return fmt.Errorf("%w: %v", deliveries.ErrProviderRateLimit, err)
 	case errors.Is(err, socialclient.ErrPermanent):
 		return fmt.Errorf("%w: %v", deliveries.ErrProviderPermanent, err)

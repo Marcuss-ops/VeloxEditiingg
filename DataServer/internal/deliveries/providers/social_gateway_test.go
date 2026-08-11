@@ -191,6 +191,24 @@ func TestSocialGatewayProvider_SocialReturnsRateLimit(t *testing.T) {
 	}
 }
 
+func TestMapSocialClientError_PreservesRetryAfter(t *testing.T) {
+	want := time.Now().UTC().Add(25 * time.Second)
+	err := mapSocialClientError(&socialclient.RateLimitError{
+		RetryAfter: want,
+		Message:    "social api returned status 429: slow down",
+	})
+	if !errors.Is(err, deliveries.ErrProviderRateLimit) {
+		t.Fatalf("want ErrProviderRateLimit, got %v", err)
+	}
+	var providerErr *deliveries.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("want ProviderError, got %T (%v)", err, err)
+	}
+	if !providerErr.RetryAfter.Equal(want) {
+		t.Fatalf("RetryAfter=%s, want %s", providerErr.RetryAfter, want)
+	}
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Scenario 4 — Social API returns remote media ID
 // When the social_repo accepts publish, it returns the canonical

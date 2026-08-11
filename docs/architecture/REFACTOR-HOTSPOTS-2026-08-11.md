@@ -43,6 +43,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Retry cancellation: i backoff di remote-engine e multipart publisher usano
   timer stoppabili; anche retry asset/chunk e idle wait del prefetch usano
   timer/ticker riutilizzabili e rispettano la cancellazione.
+- Social delivery: `429` conserva `Retry-After` negli errori tipizzati fino al
+  `ProviderError`; il runner applica quella scadenza quando è valida e usa il
+  backoff bounded locale solo in assenza di un header valido.
 - Worker command outbox: allocazione della sequenza per worker e INSERT sono
   nella stessa transazione; il caso concorrente è coperto da test.
 - Calendar/session read models: JSON persistito corrotto e timestamp sessione
@@ -130,7 +133,11 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 
 ### P1 — Retry, deadline e idempotenza
 
-- [ ] Catalogare le policy duplicate: remote engine, forwarding, delivery,
+- [x] Catalogare e collegare il primo confine provider: remote engine,
+  forwarding, delivery, multipart publisher e downloader restano policy
+  separate per responsabilità, mentre il Social `Retry-After` attraversa il
+  confine in modo tipizzato.
+- [ ] Uniformare le policy duplicate: remote engine, forwarding, delivery,
   multipart publisher e downloader.
 - [ ] Per ogni policy definire: tentativi totali, errori retryable, massimo
   backoff, jitter, `Retry-After`, deadline e comportamento su cancellation.

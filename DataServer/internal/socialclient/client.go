@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"time"
 
 	"velox-server/internal/credentials"
 )
@@ -78,7 +80,7 @@ func (c *Client) endpoint(path string) string {
 //
 //	200/2xx                   → returns (DeliverArtifactResponse, nil)
 //	401, 403                  → ErrAuth
-//	429                       → ErrRateLimit (Retry-After NOT parsed here)
+//	429                       → ErrRateLimit (with Retry-After when valid)
 //	5xx                       → ErrUpstreamTransient
 //	other 4xx                 → ErrUpstreamPermanent
 //	network/timeout/cancelled → ErrUpstreamTransient
@@ -114,7 +116,7 @@ func (c *Client) GetDelivery(ctx context.Context, deliveryID string) (*DeliveryS
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, classifyStatusError(resp.StatusCode, credentials.JSON(string(bytes.TrimSpace(body))))
+		return nil, classifyStatusError(resp.StatusCode, credentials.JSON(string(bytes.TrimSpace(body))), resp.Header.Get("Retry-After"))
 	}
 	var out DeliveryStatusResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
@@ -159,7 +161,7 @@ func (c *Client) deliverArtifact(ctx context.Context, req DeliverArtifactRequest
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, classifyStatusError(resp.StatusCode, credentials.JSON(string(bytes.TrimSpace(respBody))))
+		return nil, classifyStatusError(resp.StatusCode, credentials.JSON(string(bytes.TrimSpace(respBody))), resp.Header.Get("Retry-After"))
 	}
 
 	var out DeliverArtifactResponse
@@ -251,7 +253,7 @@ func (c *Client) ValidateDestination(ctx context.Context, socialDestID string) e
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
-		return classifyStatusError(resp.StatusCode, credentials.JSON(string(bytes.TrimSpace(respBody))))
+		return classifyStatusError(resp.StatusCode, credentials.JSON(string(bytes.TrimSpace(respBody))), resp.Header.Get("Retry-After"))
 	}
 	return nil
 }
@@ -259,16 +261,37 @@ func (c *Client) ValidateDestination(ctx context.Context, socialDestID string) e
 // classifyStatusError maps an HTTP status code to the canonical error
 // sentinel so the SocialGatewayProvider can wrap it with the matching
 // deliveries.* sentinel for the runner's retry classification.
-func classifyStatusError(status int, body string) error {
+func classifyStatusError(status int, body string, retryAfter ...string) error {
 	msg := fmt.Sprintf("social api returned status %d: %s", status, body)
 	switch {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return fmt.Errorf("%w: %s", ErrAuth, msg)
 	case status == http.StatusTooManyRequests:
-		return fmt.Errorf("%w: %s", ErrRateLimit, msg)
+		value := ""
+		if len(retryAfter) > 0 {
+			value = retryAfter[0]
+		}
+		return newRateLimitError(status, body, parseRetryAfter(value, time.Now().UTC()))
 	case status >= 500:
 		return fmt.Errorf("%w: %s", ErrTransient, msg)
 	default:
 		return fmt.Errorf("%w: %s", ErrPermanent, msg)
 	}
+}
+
+// parseRetryAfter accepts both forms defined by RFC 9110: delay-seconds and
+// an HTTP date. Invalid or negative values are ignored and let the durable
+// delivery runner apply its bounded default schedule.
+func parseRetryAfter(value string, now time.Time) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}
+	}
+	if seconds, err := strconv.Atoi(value); err == nil && seconds >= 0 {
+		return now.Add(time.Duration(seconds) * time.Second)
+	}
+	if at, err := http.ParseTime(value); err == nil && at.After(now) {
+		return at
+	}
+	return time.Time{}
 }

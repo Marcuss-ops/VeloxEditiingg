@@ -155,6 +155,27 @@ func TestClient_DeliverArtifact_RateLimit(t *testing.T) {
 	}
 }
 
+func TestClient_DeliverArtifact_RateLimitPreservesRetryAfter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "17")
+		http.Error(w, "slow down", http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	c := New(Config{BaseURL: server.URL})
+	_, err := c.DeliverArtifact(context.Background(), DeliverArtifactRequest{ContractVersion: ContractVersionDelivery})
+	if !errors.Is(err, ErrRateLimit) {
+		t.Fatalf("want ErrRateLimit, got %v", err)
+	}
+	var rateLimitErr *RateLimitError
+	if !errors.As(err, &rateLimitErr) {
+		t.Fatalf("want RateLimitError metadata, got %T (%v)", err, err)
+	}
+	remaining := time.Until(rateLimitErr.RetryAfter)
+	if remaining < 16*time.Second || remaining > 18*time.Second {
+		t.Fatalf("Retry-After remaining=%s, want about 17s", remaining)
+	}
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Status mapping: HTTP 5xx → ErrTransient
 // ─────────────────────────────────────────────────────────────────────
