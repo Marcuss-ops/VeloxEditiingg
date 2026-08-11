@@ -1,6 +1,6 @@
 // Package metrics / catalog.go
 //
-// MetricCatalog is the central, single-source-of-truth registry for every
+// metricCatalog is the central, single-source-of-truth registry for every
 // canonical metric name Velox emits. No other package may invent metric
 // names — all producers (workers, pipeline runners, engine sidecar, master
 // supervisors) MUST use names from this catalog. The registry is enforced
@@ -21,7 +21,7 @@
 //
 // The catalog is split by logical family across several files
 // (catalog_engine.go, catalog_pipeline.go, catalog_media.go, etc.) but is
-// always assembled into the single MetricCatalog map by registerMetricFamily
+// always assembled into the single private metricCatalog map by registerMetricFamily
 // at package-init time. Do not bypass the assembler — every entry MUST
 // flow through this central registry so that TestCatalog_* invariants hold.
 package metrics
@@ -29,7 +29,7 @@ package metrics
 import "sort"
 
 // MetricDefinition is the canonical descriptor for one metric name.
-// Every metric Velox emits MUST have a corresponding entry in MetricCatalog.
+// Every metric Velox emits MUST have a corresponding entry in metricCatalog.
 type MetricDefinition struct {
 	// Name is the canonical dotted-key name (e.g. "engine.segment_build_ms").
 	Name string
@@ -79,18 +79,19 @@ const (
 	CompScorecard  = "scorecard"
 )
 
-// MetricCatalog is the central registry of every canonical metric name.
-// The key is the dotted metric name; the value is its full definition.
-// Tests verify no duplicates and that required families are present.
+// metricCatalog is the central registry of every canonical metric name. It is
+// intentionally private: exposing the mutable map let consumers silently
+// register, replace, or delete a metric after init. Consumers use
+// ValidateMetricName, MetricNames, or MetricNamesByComponent instead.
 //
 // The map is declared empty here and populated by the init() assembler
 // from per-family *MetricDefinition() functions. Do NOT populate this
 // map directly from per-family files — that breaks the single-assembly
 // invariant that TestCatalog_NoDuplicateNames and the other catalog
 // tests rely on.
-var MetricCatalog = map[string]MetricDefinition{}
+var metricCatalog = map[string]MetricDefinition{}
 
-// init assembles the central MetricCatalog by calling every per-family
+// init assembles the central metricCatalog by calling every per-family
 // assembler in dependency order. The order is not semantically meaningful
 // (the map is a set) but is kept grouped: engine/pipeline/media first
 // (the rendering hot path), then storage/output, then system resources,
@@ -118,13 +119,13 @@ func init() {
 }
 
 // registerMetricFamily folds every MetricDefinition returned by the
-// provided assemblers into the central MetricCatalog map. If two
+// provided assemblers into the central metricCatalog map. If two
 // families declare the same metric name, the later family wins and
 // TestCatalog_NoDuplicateNames catches the regression.
 func registerMetricFamily(families ...[]MetricDefinition) {
 	for _, family := range families {
 		for _, def := range family {
-			MetricCatalog[def.Name] = def
+			metricCatalog[def.Name] = def
 		}
 	}
 }
@@ -132,15 +133,15 @@ func registerMetricFamily(families ...[]MetricDefinition) {
 // ValidateMetricName reports whether name is a valid entry in the catalog.
 // Returns the definition and true if found, zero-value and false otherwise.
 func ValidateMetricName(name string) (MetricDefinition, bool) {
-	def, ok := MetricCatalog[name]
+	def, ok := metricCatalog[name]
 	return def, ok
 }
 
 // MetricNames returns all registered metric names in sorted order.
 // Useful for iteration, documentation generation, and validation.
 func MetricNames() []string {
-	names := make([]string, 0, len(MetricCatalog))
-	for name := range MetricCatalog {
+	names := make([]string, 0, len(metricCatalog))
+	for name := range metricCatalog {
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -151,7 +152,7 @@ func MetricNames() []string {
 // Results are sorted for deterministic iteration.
 func MetricNamesByComponent(component string) []string {
 	var names []string
-	for name, def := range MetricCatalog {
+	for name, def := range metricCatalog {
 		if def.Component == component {
 			names = append(names, name)
 		}

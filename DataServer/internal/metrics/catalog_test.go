@@ -13,7 +13,7 @@ func TestCatalog_NoDuplicateNames(t *testing.T) {
 	// duplicates). This test also verifies that every Name field matches
 	// its map key — a mismatch would mean the catalog is inconsistent.
 	seen := make(map[string]struct{})
-	for key, def := range MetricCatalog {
+	for key, def := range metricCatalog {
 		if key != def.Name {
 			t.Errorf("catalog entry has key %q but def.Name=%q — must match exactly", key, def.Name)
 		}
@@ -28,7 +28,7 @@ func TestCatalog_NoDuplicateNames(t *testing.T) {
 // follows the naming convention: lowercase, dot-separated, no spaces,
 // no trailing dots, and a valid unit suffix.
 func TestCatalog_AllNamesFollowConvention(t *testing.T) {
-	for name, def := range MetricCatalog {
+	for name, def := range metricCatalog {
 		// Must be lowercase.
 		if name != strings.ToLower(name) {
 			t.Errorf("metric name %q is not lowercase", name)
@@ -120,7 +120,7 @@ func TestCatalog_RequiredMetricsExist(t *testing.T) {
 	}
 
 	for _, name := range required {
-		if _, ok := MetricCatalog[name]; !ok {
+		if _, ok := metricCatalog[name]; !ok {
 			t.Errorf("required metric %q is missing from MetricCatalog", name)
 		}
 	}
@@ -150,8 +150,8 @@ func TestCatalog_MetricNames(t *testing.T) {
 	if len(names) == 0 {
 		t.Fatal("MetricNames() returned empty slice")
 	}
-	if len(names) != len(MetricCatalog) {
-		t.Errorf("MetricNames() returned %d names but catalog has %d entries", len(names), len(MetricCatalog))
+	if len(names) != len(metricCatalog) {
+		t.Errorf("MetricNames() returned %d names but catalog has %d entries", len(names), len(metricCatalog))
 	}
 }
 
@@ -162,7 +162,7 @@ func TestCatalog_MetricNamesByComponent(t *testing.T) {
 		t.Errorf("MetricNamesByComponent(%q) returned empty — expected engine metrics", CompEngine)
 	}
 	for _, name := range engineMetrics {
-		def, ok := MetricCatalog[name]
+		def, ok := metricCatalog[name]
 		if !ok {
 			t.Errorf("MetricNamesByComponent returned %q which is not in catalog", name)
 			continue
@@ -201,7 +201,7 @@ func TestCatalog_NoUnknownComponents(t *testing.T) {
 		CompScorecard:  true,
 	}
 
-	for name, def := range MetricCatalog {
+	for name, def := range metricCatalog {
 		if !known[def.Component] {
 			t.Errorf("metric %q has unknown component %q — use a Comp* constant", name, def.Component)
 		}
