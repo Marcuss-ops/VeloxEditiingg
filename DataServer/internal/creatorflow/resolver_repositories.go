@@ -43,8 +43,10 @@ type ForwardingRepository interface {
 	EnsureForwarded(ctx context.Context, forwardingID, jobID string) error
 
 	// AtomicForwardAndEnqueue packs (READY_TO_FORWARD → FORWARDING →
-	// INSERT job/task/task_spec → FORWARDING → FORWARDED) in one tx.
-	AtomicForwardAndEnqueue(ctx context.Context, forwardingID string, job *jobs.Job, spec *taskgraph.TaskSpec, priority int) error
+	// INSERT job/task/task_spec → FORWARDING → FORWARDED) in one tx. When
+	// runnerID/leaseID are present, both CAS boundaries are lease-fenced;
+	// the synchronous handler passes both empty.
+	AtomicForwardAndEnqueue(ctx context.Context, forwardingID string, job *jobs.Job, spec *taskgraph.TaskSpec, priority int, runnerID, leaseID string) error
 }
 
 // JobLookup is the idempotency pre-check surface. The canonical

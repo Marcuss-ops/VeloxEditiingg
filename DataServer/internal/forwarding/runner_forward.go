@@ -82,6 +82,8 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 	}
 	out, err := rs.Resolve(ctx, creatorflow.ResolveRequest{
 		ForwardingID:     lease.ForwardingID,
+		RunnerID:         lease.RunnerID,
+		LeaseID:          lease.LeaseID,
 		SourceProvider:   lease.SourceProvider,
 		SourceJobID:      lease.SourceJobID,
 		TargetExecutorID: lease.TargetExecutorID,

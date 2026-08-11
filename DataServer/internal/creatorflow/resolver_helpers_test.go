@@ -96,7 +96,7 @@ func (f *fakeForwardingRepo) EnsureForwarded(ctx context.Context, forwardingID, 
 	return f.ensureForwardedErr
 }
 
-func (f *fakeForwardingRepo) AtomicForwardAndEnqueue(ctx context.Context, forwardingID string, job *jobs.Job, spec *taskgraph.TaskSpec, priority int) error {
+func (f *fakeForwardingRepo) AtomicForwardAndEnqueue(ctx context.Context, forwardingID string, job *jobs.Job, spec *taskgraph.TaskSpec, priority int, runnerID, leaseID string) error {
 	return nil
 }
 

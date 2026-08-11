@@ -382,8 +382,8 @@ func TestMarkReadyToForward(t *testing.T) {
 	if cf.PayloadSHA256 != "abc123" {
 		t.Errorf("payload_sha256 = %q, want abc123", cf.PayloadSHA256)
 	}
-	if cf.LockedBy != "" {
-		t.Error("locked_by should be cleared")
+	if cf.LockedBy != l.RunnerID || cf.LeaseID != l.LeaseID {
+		t.Errorf("runner lease = (%q,%q), want retained (%q,%q)", cf.LockedBy, cf.LeaseID, l.RunnerID, l.LeaseID)
 	}
 }
 
@@ -596,7 +596,7 @@ func TestAtomicForwardAndEnqueue_CreatesJobAndMarksForwarded(t *testing.T) {
 	}
 
 	// Act: atomic enqueue + forward.
-	err := db.AtomicForwardAndEnqueue(ctx, "cf-atomic", job, spec, 5)
+	err := db.AtomicForwardAndEnqueue(ctx, "cf-atomic", job, spec, 5, "", "")
 	if err != nil {
 		t.Fatalf("AtomicForwardAndEnqueue: %v", err)
 	}
@@ -630,6 +630,32 @@ func TestAtomicForwardAndEnqueue_CreatesJobAndMarksForwarded(t *testing.T) {
 	}
 }
 
+func TestAtomicForwardAndEnqueue_FencesWrongRunnerLease(t *testing.T) {
+	db := setupForwardingTestDB(t)
+	ctx := context.Background()
+	insertTestForwardingWithPayload(t, db, "cf-owner-fence", "openai", "creator-owner-fence",
+		"scene.composite.v1", "READY_TO_FORWARD", `{"video":"test"}`, "abc")
+	if _, err := db.db.ExecContext(ctx, `UPDATE creator_forwardings
+		SET locked_by = ?, lease_id = ?, lease_expires_at = ? WHERE forwarding_id = ?`,
+		"current-runner", "current-lease", time.Now().UTC().Add(time.Minute).Format(time.RFC3339), "cf-owner-fence"); err != nil {
+		t.Fatalf("seed owner lease: %v", err)
+	}
+
+	err := db.AtomicForwardAndEnqueue(ctx, "cf-owner-fence", &jobs.Job{ID: "job-owner-fence", Type: "process_video"},
+		&taskgraph.TaskSpec{Version: taskgraph.SpecVersion, JobID: "job-owner-fence", ExecutorID: "scene.composite.v1@1"},
+		5, "stale-runner", "stale-lease")
+	if err != ErrTransitionConflict {
+		t.Fatalf("wrong runner atomic enqueue error = %v, want ErrTransitionConflict", err)
+	}
+	cf, err := db.GetCreatorForwarding(ctx, "cf-owner-fence")
+	if err != nil {
+		t.Fatalf("GetCreatorForwarding: %v", err)
+	}
+	if cf.Status != "READY_TO_FORWARD" || cf.LockedBy != "current-runner" || cf.LeaseID != "current-lease" {
+		t.Fatalf("wrong runner changed forwarding: status=%q owner=(%q,%q)", cf.Status, cf.LockedBy, cf.LeaseID)
+	}
+}
+
 func TestAtomicForwardAndEnqueue_ConflictWhenAlreadyClaimed(t *testing.T) {
 	db := setupForwardingTestDB(t)
 	ctx := context.Background()
@@ -652,7 +678,7 @@ func TestAtomicForwardAndEnqueue_ConflictWhenAlreadyClaimed(t *testing.T) {
 	spec := &taskgraph.TaskSpec{Version: taskgraph.SpecVersion, JobID: "job-conflict",
 		ExecutorID: "scene.composite.v1@1"}
 
-	err = db.AtomicForwardAndEnqueue(ctx, "cf-conflict", job, spec, 5)
+	err = db.AtomicForwardAndEnqueue(ctx, "cf-conflict", job, spec, 5, "", "")
 	if err != ErrTransitionConflict {
 		t.Errorf("expected ErrTransitionConflict, got %v", err)
 	}

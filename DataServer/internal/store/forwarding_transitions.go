@@ -57,8 +57,8 @@ func (s *SQLiteStore) RecordCreatorForwardingPoll(ctx context.Context, forwardin
 // MarkCreatorForwardingReadyToForward transitions a POLLING forwarding to
 // READY_TO_FORWARD after the remote creator has completed and the payload
 // has been persisted. CAS guard on (forwarding_id, status=POLLING, locked_by,
-// lease_id). Releases the lease so another runner can pick up the forwarding
-// for the enqueue step.
+// lease_id). The runner lease remains attached through the enqueue transaction
+// so a stale runner cannot rewrite the row after another runner takes over.
 func (s *SQLiteStore) MarkCreatorForwardingReadyToForward(ctx context.Context, forwardingID, runnerID, leaseID, payloadJSON, payloadSHA256 string) error {
 	if forwardingID == "" || runnerID == "" || leaseID == "" {
 		return fmt.Errorf("store: MarkCreatorForwardingReadyToForward: missing required fields")
@@ -77,7 +77,6 @@ func (s *SQLiteStore) MarkCreatorForwardingReadyToForward(ctx context.Context, f
 		     source_status = 'completed',
 		     last_remote_status = 'completed',
 		     payload_json = ?, payload_sha256 = ?,
-		     locked_by = '', lease_id = '', lease_expires_at = '',
 		     updated_at = ?
 		 WHERE forwarding_id = ?
 		   AND status = 'POLLING'

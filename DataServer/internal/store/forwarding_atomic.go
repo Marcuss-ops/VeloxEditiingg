@@ -33,9 +33,14 @@ func (s *SQLiteStore) AtomicForwardAndEnqueue(
 	job *jobs.Job,
 	taskSpec *taskgraph.TaskSpec,
 	priority int,
+	runnerID string,
+	leaseID string,
 ) error {
 	if forwardingID == "" || job == nil || job.ID == "" {
 		return fmt.Errorf("store: AtomicForwardAndEnqueue: missing required fields")
+	}
+	if (runnerID == "") != (leaseID == "") {
+		return fmt.Errorf("store: AtomicForwardAndEnqueue: runner_id and lease_id must be both empty or both present")
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -51,8 +56,9 @@ func (s *SQLiteStore) AtomicForwardAndEnqueue(
 		`UPDATE creator_forwardings
 		 SET status = 'FORWARDING', updated_at = ?
 		 WHERE forwarding_id = ?
-		   AND status = 'READY_TO_FORWARD'`,
-		now, forwardingID,
+		   AND status = 'READY_TO_FORWARD'
+		   AND (? = '' OR (locked_by = ? AND lease_id = ? AND lease_expires_at > ?))`,
+		now, forwardingID, runnerID, runnerID, leaseID, now,
 	)
 	if err != nil {
 		return wrapDBInfrastructure("AtomicForwardAndEnqueue claim", err)
@@ -76,10 +82,12 @@ func (s *SQLiteStore) AtomicForwardAndEnqueue(
 	forwardResult, err := tx.ExecContext(ctx,
 		`UPDATE creator_forwardings
 		 SET status = 'FORWARDED', target_job_id = ?,
+		     locked_by = '', lease_id = '', lease_expires_at = '',
 		     forwarded_at = ?, updated_at = ?
 		 WHERE forwarding_id = ?
-		   AND status = 'FORWARDING'`,
-		job.ID, now, now, forwardingID,
+		   AND status = 'FORWARDING'
+		   AND (? = '' OR (locked_by = ? AND lease_id = ? AND lease_expires_at > ?))`,
+		job.ID, now, now, forwardingID, runnerID, runnerID, leaseID, now,
 	)
 	if err != nil {
 		return wrapDBInfrastructure("AtomicForwardAndEnqueue forward", err)

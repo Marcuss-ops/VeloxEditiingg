@@ -286,7 +286,7 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOut
 	spec.PublicationSpecs = clonePublicationSpecs(req.PublicationSpecs)
 
 	// 7. Atomic FORWARDED transition.
-	if err := r.forwardRepo.AtomicForwardAndEnqueue(ctx, forwardingID, job, spec, priority); err != nil {
+	if err := r.forwardRepo.AtomicForwardAndEnqueue(ctx, forwardingID, job, spec, priority, req.RunnerID, req.LeaseID); err != nil {
 		return nil, fmt.Errorf("creatorflow: Resolve atomic: %w", err)
 	}
 
