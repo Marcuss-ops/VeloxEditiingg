@@ -156,6 +156,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	// counters (frames, speed_x, encode_passes, temp_bytes,
 	// duration_seconds) merged into the final task-scoped metrics map.
 	pipelineID := resolvePipelineID(spec.Payload)
+	artifactStarted := time.Now()
 	pipelineStart := time.Now()
 	runMetrics, err := s.pipelineRunner.RunWithMetrics(ctx, pipelineID, spec.JobID, spec.Payload, outputPath)
 
@@ -303,7 +304,8 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginValidation, Scope: telemetry.ScopeAttempt, Component: "quality", Action: "sha256"}, telemetry.StatusOK, "", "")
 	}
 	outputManifest, manifestErr := publisher.ComputeLocalManifest(ctx, outputPath)
-	metrics["output.hash_ms"] = time.Since(hashStart).Milliseconds()
+	hashMS := time.Since(hashStart).Milliseconds()
+	metrics["output.hash_ms"] = hashMS
 	if manifestErr != nil {
 		planHandle.Abort("quality_manifest", manifestErr.Error())
 		metrics["output.manifest_error"] = manifestErr.Error()
@@ -318,6 +320,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	}
 	outputHash = outputManifest.SHA256Hex
 	outputSize = outputManifest.SizeBytes
+	projectRenderProfile(metrics, runMetrics, artifactStarted, hashMS)
 	if outputSize <= 0 {
 		planHandle.Abort("quality_empty", "render output manifest has zero bytes")
 		metrics["output.manifest_error"] = "render output is empty"
@@ -381,6 +384,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 			CompletedAt: time.Now().UTC(),
 		}, nil
 	}
+	metrics["render_profile.artifact_total_ms"] = time.Since(artifactStarted).Milliseconds()
 
 	planHandle.CompleteWith(0, outputSize, runMetrics.RenderMetrics.Frames, telemetry.StatusOK, "", "")
 	planCompleted = true

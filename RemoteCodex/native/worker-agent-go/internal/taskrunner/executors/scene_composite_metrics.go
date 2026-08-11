@@ -3,9 +3,11 @@ package executors
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
+	"velox-worker-agent/pkg/video/pipeline"
 )
 
 // scene_composite_metrics.go owns the observability projection
@@ -50,6 +52,37 @@ func appendObservabilitySummaryPhases(phases *[]executor.DetailedPhaseTiming, va
 			MetadataJSON: string(metadata),
 		})
 		nextEventIndex++
+	}
+}
+
+// projectRenderProfile exposes a stable, low-cardinality timing vocabulary
+// over the existing pipeline/native counters. It intentionally preserves the
+// native distinction that audio mix and AAC encoding are one FFmpeg command
+// today; emitting a made-up AAC-only duration would make the profile less
+// truthful. The dotted keys are carried through TaskExecutionReport metrics
+// and are suitable for before/after benchmark aggregation.
+func projectRenderProfile(dst map[string]interface{}, run pipeline.RunMetrics, artifactStarted time.Time, artifactSHAms int64) {
+	if dst == nil {
+		return
+	}
+	dst["render_profile.compile_plan_ms"] = run.CompileMs
+	dst["render_profile.render_ms"] = run.RenderMs
+	dst["render_profile.native_total_ms"] = run.RenderMetrics.TotalMs
+	dst["render_profile.artifact_sha_ms"] = artifactSHAms
+	dst["render_profile.artifact_total_ms"] = time.Since(artifactStarted).Milliseconds()
+
+	for _, field := range []struct {
+		name string
+		key  string
+	}{
+		{name: "asset_download_ms", key: "asset_download_ms"},
+		{name: "audio_download_ms", key: "audio_download_ms"},
+		{name: "audio_mix_encode_ms", key: "mix_audio_ms"},
+		{name: "mux_ms", key: "mux_audio_ms"},
+	} {
+		if value, ok := run.RenderMetrics.PhaseMS[field.key]; ok {
+			dst["render_profile."+field.name] = value
+		}
 	}
 }
 
