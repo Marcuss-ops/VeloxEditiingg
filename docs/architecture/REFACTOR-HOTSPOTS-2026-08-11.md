@@ -55,6 +55,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Worker heartbeat/read models: errori nella lettura dello stato precedente,
   throttling delle metriche e timestamp runtime non vengono più degradati a
   valori vuoti; i formati timestamp legacy validi restano supportati.
+- Worker snapshot lists: `ListWorkers` e `ListWorkersByWorkspace` non
+  scartano più righe con `Scan`, JSON corrotto o errore di iterazione; il
+  read model fallisce esplicitamente invece di restituire una flotta parziale.
 - DB pool telemetry: `OpenConnections`, `InUse`, `Idle`, `WaitCount` e
   `WaitDuration` sono esposti senza label per distinguere lock da queueing.
 - Bootstrap worker: la lista ffmpeg/ffprobe è una dipendenza esplicita con

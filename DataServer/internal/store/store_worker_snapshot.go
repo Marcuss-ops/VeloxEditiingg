@@ -174,12 +174,16 @@ func (s *SQLiteStore) ListWorkers() ([]map[string]any, error) {
 	for rows.Next() {
 		var raw string
 		if err := rows.Scan(&raw); err != nil {
-			continue
+			return nil, fmt.Errorf("list workers: scan raw_json: %w", err)
 		}
 		var m map[string]any
-		if err := json.Unmarshal([]byte(raw), &m); err == nil {
-			out = append(out, m)
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
+			return nil, fmt.Errorf("list workers: decode raw_json: %w", err)
 		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list workers: iterate rows: %w", err)
 	}
 	return out, nil
 }
@@ -196,14 +200,18 @@ func (s *SQLiteStore) ListWorkersByWorkspace(workspaceID int64) ([]map[string]an
 	for rows.Next() {
 		var raw string
 		if err := rows.Scan(&raw); err != nil {
-			continue
+			return nil, fmt.Errorf("list workers by workspace: scan raw_json: %w", err)
 		}
 		var m map[string]any
-		if err := json.Unmarshal([]byte(raw), &m); err == nil {
-			out = append(out, m)
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
+			return nil, fmt.Errorf("list workers by workspace: decode raw_json: %w", err)
 		}
+		out = append(out, m)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list workers by workspace: iterate rows: %w", err)
+	}
+	return out, nil
 }
 
 // ReplaceWorkers has been removed. Use individual UpsertWorker + SetWorkerRevoked instead.
