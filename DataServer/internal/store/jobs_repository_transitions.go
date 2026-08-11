@@ -267,6 +267,28 @@ func (b *baseJobRepository) Cancel(ctx context.Context, id, reason string, revis
 		return fmt.Errorf("cancel %s: %w", id, p.ConflictError())
 	}
 
+	// Cancellation is a terminal lifecycle event for the whole job, not only
+	// for its parent row. Close READY/LEASED/RUNNING tasks in the same
+	// transaction so a worker that is draining or disconnected cannot keep a
+	// lease alive by simply never sending another renewal. This also prevents
+	// a cancelled pinned task from being offered repeatedly after the worker
+	// rejects it during a controlled restart.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE tasks
+		   SET status='CANCELLED', completed_at=?, worker_id='', lease_id='',
+		       lease_expires_at=NULL, revision=revision+1, updated_at=?
+		 WHERE job_id=? AND status IN ('READY','LEASED','RUNNING')`, now, now, id); err != nil {
+		return fmt.Errorf("cancel tasks: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE task_attempts
+		   SET status='CANCELLED', completed_at=COALESCE(completed_at,?),
+		       error_code='TASK_CANCELLED', error_message='parent job was cancelled',
+		       report_version=report_version+1, updated_at=?
+		 WHERE job_id=? AND status NOT IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT')`, now, now, id); err != nil {
+		return fmt.Errorf("cancel task attempts: %w", err)
+	}
+
 	_ = p.InsertHistoryTx(ctx, tx, id, "CANCELLED", "" /* workerID */, "Cancelled: "+reason)
 	_ = p.InsertEventTx(ctx, tx, id, "job_cancelled", map[string]interface{}{"reason": reason})
 	// Stop local deliveries that have not created a remote object yet. A
