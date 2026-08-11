@@ -3,6 +3,8 @@ package worker
 import (
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/spool"
+	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
 
 	"google.golang.org/protobuf/proto"
@@ -129,6 +132,74 @@ func TestHandleTaskResultAck_LateAckSignalsCleanup(t *testing.T) {
 	count, err := store.PendingTaskResultCount(context.Background())
 	if err != nil || count != 0 {
 		t.Fatalf("pending rows=%d err=%v; want 0", count, err)
+	}
+}
+
+func TestHandleTaskResultAck_CleansCommittedRenderOutputAfterTerminalAck(t *testing.T) {
+	store, err := spool.Open(":memory:")
+	if err != nil {
+		t.Fatalf("spool.Open: %v", err)
+	}
+	defer store.Close()
+
+	outputDir := t.TempDir()
+	outputPath := filepath.Join(outputDir, "rendered.mp4")
+	if err := os.WriteFile(outputPath, []byte("rendered-output"), 0o640); err != nil {
+		t.Fatalf("write output: %v", err)
+	}
+	entry, err := store.Insert(context.Background(), spool.SpoolEntry{
+		TaskID: "task-output-cleanup", AttemptID: "attempt-output-cleanup",
+		WorkerSpoolKey: "task-output-cleanup:output:0", LocalPath: outputPath,
+		Status: spool.StatusRendering,
+	})
+	if err != nil {
+		t.Fatalf("insert spool entry: %v", err)
+	}
+	for _, step := range []func() error{
+		func() error {
+			return store.MarkReady(context.Background(), entry.SpoolID, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 14)
+		},
+		func() error {
+			return store.MarkUploadPending(context.Background(), entry.SpoolID, "upload-output-cleanup")
+		},
+		func() error { return store.MarkUploading(context.Background(), entry.SpoolID, 0) },
+		func() error { return store.MarkUploaded(context.Background(), entry.SpoolID) },
+		func() error { return store.MarkCommitted(context.Background(), entry.SpoolID) },
+	} {
+		if err := step(); err != nil {
+			t.Fatalf("commit spool lifecycle: %v", err)
+		}
+	}
+
+	payload, err := proto.Marshal(&pb.TaskResult{
+		TaskId: "task-output-cleanup", JobId: "job-output-cleanup",
+		AttemptId: "attempt-output-cleanup", ReportHash: "hash-output-cleanup",
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := store.UpsertTaskResult(context.Background(), "task-output-cleanup", "attempt-output-cleanup", "hash-output-cleanup", payload); err != nil {
+		t.Fatalf("upsert task result: %v", err)
+	}
+	w := &Worker{
+		config: &config.WorkerConfig{WorkerID: "worker-output-cleanup", OutputDir: outputDir},
+		logger: logger.New(logger.InfoLevel, io.Discard), outputSpool: store,
+		pendingTaskResultAcks:     make(map[string]chan *pb.TaskResultAck),
+		pendingTaskResultAckCache: make(map[string]taskResultAckCacheEntry),
+	}
+	w.handleTaskResultAck(&pb.TaskResultAck{
+		TaskId: "task-output-cleanup", JobId: "job-output-cleanup",
+		AttemptId: "attempt-output-cleanup",
+	})
+	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+		t.Fatalf("committed output stat error=%v; output must be removed after terminal ACK", err)
+	}
+	cleaned, err := store.Get(context.Background(), entry.SpoolID)
+	if err != nil {
+		t.Fatalf("get cleaned spool entry: %v", err)
+	}
+	if cleaned.Status != spool.StatusCleaned || cleaned.LocalPath != "" {
+		t.Fatalf("spool after terminal ACK = status=%q path=%q; want CLEANED/empty", cleaned.Status, cleaned.LocalPath)
 	}
 }
 

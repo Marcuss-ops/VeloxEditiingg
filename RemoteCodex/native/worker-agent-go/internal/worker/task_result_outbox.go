@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"math"
+	"os"
+	"path/filepath"
 	"time"
 
 	"velox-shared/controltransport"
@@ -164,6 +166,7 @@ func (w *Worker) handleTaskResultAck(ack *pb.TaskResultAck) {
 		w.logger.Warn("[TASK_RESULT_OUTBOX] non-terminal TaskResultAck retained for retry task=%s attempt=%s error=%q", ack.GetTaskId(), ack.GetAttemptId(), ack.GetError())
 		return
 	}
+	w.cleanupCommittedAttemptOutputs(ack.GetTaskId(), ack.GetAttemptId())
 	deleted, err := w.outputSpool.DeleteTaskResultsForAttempt(context.Background(), ack.GetTaskId(), ack.GetAttemptId())
 	if err != nil {
 		w.logger.Warn("[TASK_RESULT_OUTBOX] ACK cleanup failed task=%s attempt=%s: %v", ack.GetTaskId(), ack.GetAttemptId(), err)
@@ -177,6 +180,53 @@ func (w *Worker) handleTaskResultAck(ack *pb.TaskResultAck) {
 	// arrive after executeTask's synchronous wait or after a reconnect.
 	w.signalTaskTerminal()
 	w.logger.Info("[TASK_RESULT_OUTBOX] TaskResultAck received task=%s attempt=%s error=%q", ack.GetTaskId(), ack.GetAttemptId(), ack.GetError())
+}
+
+// cleanupCommittedAttemptOutputs releases large local render artifacts only
+// after the master has acknowledged the terminal TaskResult. The output spool
+// remains the durability fence until that point; deleting earlier would make
+// a reconnect/replay unable to re-upload a committed artifact. Paths are
+// constrained to the configured render output directory so an unexpected
+// spool row can never turn an ACK into an arbitrary filesystem delete.
+func (w *Worker) cleanupCommittedAttemptOutputs(taskID, attemptID string) {
+	if w == nil || w.outputSpool == nil {
+		return
+	}
+	entries, err := w.outputSpool.ListByAttempt(context.Background(), taskID, attemptID)
+	if err != nil {
+		w.logger.Warn("[TASK_RESULT_OUTBOX] output cleanup list failed task=%s attempt=%s: %v", taskID, attemptID, err)
+		return
+	}
+	root := "/tmp/velox/scene-composite"
+	if w.config != nil && w.config.OutputDir != "" {
+		root = w.config.OutputDir
+	}
+	root, err = filepath.Abs(root)
+	if err != nil {
+		w.logger.Warn("[TASK_RESULT_OUTBOX] output cleanup root invalid task=%s attempt=%s: %v", taskID, attemptID, err)
+		return
+	}
+	for _, entry := range entries {
+		if entry.Status != spool.StatusCommitted && entry.Status != spool.StatusRejected {
+			continue
+		}
+		if entry.LocalPath != "" {
+			path, absErr := filepath.Abs(entry.LocalPath)
+			rel, relErr := filepath.Rel(root, path)
+			outside := relErr != nil || absErr != nil || rel == "." || rel == ".." || len(rel) >= 3 && rel[:3] == ".."+string(filepath.Separator)
+			if outside {
+				w.logger.Warn("[TASK_RESULT_OUTBOX] refusing output cleanup outside output dir task=%s attempt=%s path=%q root=%q", taskID, attemptID, entry.LocalPath, root)
+				continue
+			}
+			if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				w.logger.Warn("[TASK_RESULT_OUTBOX] output file cleanup failed task=%s attempt=%s path=%q: %v", taskID, attemptID, path, removeErr)
+				continue
+			}
+		}
+		if cleanErr := w.outputSpool.MarkCleaned(context.Background(), entry.SpoolID); cleanErr != nil {
+			w.logger.Warn("[TASK_RESULT_OUTBOX] output spool cleanup failed task=%s attempt=%s spool=%s: %v", taskID, attemptID, entry.SpoolID, cleanErr)
+		}
+	}
 }
 
 func (w *Worker) expireTaskResultAckCacheLocked(now time.Time) {
