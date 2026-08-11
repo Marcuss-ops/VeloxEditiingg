@@ -3,10 +3,13 @@ package assets
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"velox-server/internal/platform/clock"
 )
 
 type preflightBlobStore struct {
@@ -47,6 +50,143 @@ func TestAssetServicePreflightVerifiesMetadataAndFinalBlob(t *testing.T) {
 	}
 	if report.Items[0].Issue != "" {
 		t.Fatalf("item issue = %q, want empty", report.Items[0].Issue)
+	}
+}
+
+// writePreflightBlob writes a deterministic blob into the preflight blob
+// store root and returns its content + SHA-256 digest for asset fixtures.
+func writePreflightBlob(t *testing.T, root, name string, content []byte) string {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(root, name), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(content))
+}
+
+// TestAssetServicePreflight_MediaAssetWithVerifiedMetadataPasses pins the
+// Fase C2 registry-hit path: a media asset with a verified asset_media_metadata
+// row passes the gate WITHOUT spawning ffprobe.
+func TestAssetServicePreflight_MediaAssetWithVerifiedMetadataPasses(t *testing.T) {
+	root := t.TempDir()
+	content := []byte("media asset bytes")
+	digest := writePreflightBlob(t, root, "asset.mp4", content)
+	repo := newMetadataProbeRepo(map[string]*AssetRecord{
+		"media-1": {AssetID: "media-1", Status: AssetStatusReady, MimeType: "video/mp4", SHA256: digest, SizeBytes: int64(len(content)), StorageKey: "asset.mp4"},
+	})
+	repo.metadata["media-1"] = MediaMetadataRecord{
+		AssetID: "media-1", Container: "mp4", DurationMs: 5000, VideoCodec: "h264",
+		MetadataVerifiedAt: "2026-08-11T00:00:00Z", MetadataSchemaVersion: MediaMetadataSchemaVersion,
+	}
+	runner := &recordingVideoRunner{}
+	service := &AssetService{
+		repo: repo, blobStore: preflightBlobStore{root: root},
+		clock: clock.System{}, mediaMetadata: newMediaMetadataResolverForTest(runner),
+	}
+
+	report, err := service.Preflight(context.Background(), []AssetPreflightRequirement{{AssetID: "media-1"}})
+	if err != nil {
+		t.Fatalf("Preflight: %v", err)
+	}
+	if report.MediaMetadataAvailable != 1 || !report.Items[0].MediaMetadata {
+		t.Fatalf("report = %#v, want MediaMetadata=true for verified media asset", report)
+	}
+	if report.Items[0].Issue != "" {
+		t.Fatalf("issue = %q, want empty", report.Items[0].Issue)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("verified registry row must NOT spawn ffprobe, got %d commands", len(runner.commands))
+	}
+}
+
+// TestAssetServicePreflight_MediaAssetWithoutRowProbesOnceAndPersists pins the
+// Fase C2 canonical verifier path: a media asset without a verified row is
+// probed ONCE through the single MediaMetadataResolver, the result persisted,
+// and the gate passes.
+func TestAssetServicePreflight_MediaAssetWithoutRowProbesOnceAndPersists(t *testing.T) {
+	root := t.TempDir()
+	content := []byte("media asset bytes")
+	digest := writePreflightBlob(t, root, "asset.mp4", content)
+	repo := newMetadataProbeRepo(map[string]*AssetRecord{
+		"media-1": {AssetID: "media-1", Status: AssetStatusReady, MimeType: "video/mp4", SHA256: digest, SizeBytes: int64(len(content)), StorageKey: "asset.mp4"},
+	})
+	runner := &recordingVideoRunner{probeOutput: mediaProbeJSON(t, mediaProbeDocument{
+		Streams: []mediaProbeStream{{CodecType: "video", CodecName: "h264", Width: 1920, Height: 1080, FrameRate: "30/1", TimeBase: "1/90000", PixelFormat: "yuv420p", Duration: 10}},
+		Format:  mediaProbeFormat{FormatName: "mp4", Duration: 10},
+	})}
+	service := &AssetService{
+		repo: repo, blobStore: preflightBlobStore{root: root},
+		clock: clock.System{}, mediaMetadata: newMediaMetadataResolverForTest(runner),
+	}
+
+	report, err := service.Preflight(context.Background(), []AssetPreflightRequirement{{AssetID: "media-1"}})
+	if err != nil {
+		t.Fatalf("Preflight: %v", err)
+	}
+	if report.MediaMetadataAvailable != 1 || !report.Items[0].MediaMetadata {
+		t.Fatalf("report = %#v, want MediaMetadata=true after one-time probe", report)
+	}
+	if persisted := repo.metadata["media-1"]; !persisted.Verified() {
+		t.Fatalf("one-time probe must persist a verified row, got %+v", persisted)
+	}
+	if len(runner.commands) != 1 {
+		t.Fatalf("probe commands = %d, want exactly 1", len(runner.commands))
+	}
+}
+
+// TestAssetServicePreflight_UnverifiableMediaAssetFailsClosed pins the Fase C2
+// fail-closed semantics: a media asset whose canonical probe fails is flagged
+// media_metadata_unavailable and NEVER invents metadata.
+func TestAssetServicePreflight_UnverifiableMediaAssetFailsClosed(t *testing.T) {
+	root := t.TempDir()
+	content := []byte("media asset bytes")
+	digest := writePreflightBlob(t, root, "asset.mp4", content)
+	repo := newMetadataProbeRepo(map[string]*AssetRecord{
+		"media-1": {AssetID: "media-1", Status: AssetStatusReady, MimeType: "video/mp4", SHA256: digest, SizeBytes: int64(len(content)), StorageKey: "asset.mp4"},
+	})
+	service := &AssetService{
+		repo: repo, blobStore: preflightBlobStore{root: root},
+		clock: clock.System{}, mediaMetadata: newMediaMetadataResolverForTest(&failingMediaRunner{err: errors.New("ffprobe boom")}),
+	}
+
+	report, err := service.Preflight(context.Background(), []AssetPreflightRequirement{{AssetID: "media-1"}})
+	if err != nil {
+		t.Fatalf("Preflight must report, not error: %v", err)
+	}
+	if report.MediaMetadataAvailable != 0 || report.Items[0].MediaMetadata {
+		t.Fatalf("report = %#v, want MediaMetadata=false for unverifiable media asset", report)
+	}
+	if report.Items[0].Issue != "media_metadata_unavailable" {
+		t.Fatalf("issue = %q, want media_metadata_unavailable", report.Items[0].Issue)
+	}
+	if _, ok := repo.metadata["media-1"]; ok {
+		t.Fatal("failed probe must not invent a metadata row")
+	}
+}
+
+// TestAssetServicePreflight_NonMediaAssetPassesWithoutProbe pins the N/A
+// semantics: non-media assets never trigger the media gate and never probe.
+func TestAssetServicePreflight_NonMediaAssetPassesWithoutProbe(t *testing.T) {
+	root := t.TempDir()
+	content := []byte("font bytes")
+	digest := writePreflightBlob(t, root, "font.ttf", content)
+	repo := newMetadataProbeRepo(map[string]*AssetRecord{
+		"font-1": {AssetID: "font-1", Status: AssetStatusReady, MimeType: "font/ttf", SHA256: digest, SizeBytes: int64(len(content)), StorageKey: "font.ttf"},
+	})
+	runner := &recordingVideoRunner{}
+	service := &AssetService{
+		repo: repo, blobStore: preflightBlobStore{root: root},
+		clock: clock.System{}, mediaMetadata: newMediaMetadataResolverForTest(runner),
+	}
+
+	report, err := service.Preflight(context.Background(), []AssetPreflightRequirement{{AssetID: "font-1"}})
+	if err != nil {
+		t.Fatalf("Preflight: %v", err)
+	}
+	if report.MediaMetadataAvailable != 1 || !report.Items[0].MediaMetadata {
+		t.Fatalf("report = %#v, want MediaMetadata N/A true for non-media asset", report)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("non-media asset must not probe, got %d commands", len(runner.commands))
 	}
 }
 

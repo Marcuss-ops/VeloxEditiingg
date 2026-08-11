@@ -243,6 +243,59 @@ func countFFProbeCommands(runner *recordingVideoRunner) int {
 	return count
 }
 
+// TestRegisterPreparedVideoFile_PersistsMediaMetadata pins the Fase C2
+// closure for derived assets: a registered video segment gets its canonical
+// one-time media metadata persisted (best-effort), so later consumers read
+// the registry instead of re-probing.
+func TestRegisterPreparedVideoFile_PersistsMediaMetadata(t *testing.T) {
+	root := t.TempDir()
+	preparedPath := filepath.Join(root, "prepared.mp4")
+	if err := os.WriteFile(preparedPath, []byte("trimmed segment"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo := &recordingMetadataRepo{rewriteAssetRepository: &rewriteAssetRepository{assets: map[string]*AssetRecord{}}}
+	runner := &recordingVideoRunner{probeOutput: mediaProbeJSON(t, mediaProbeDocument{
+		Streams: []mediaProbeStream{
+			{CodecType: "video", CodecName: "h264", Width: 1920, Height: 1080, FrameRate: "30/1", TimeBase: "1/90000", PixelFormat: "yuv420p", Duration: 4},
+		},
+		Format: mediaProbeFormat{FormatName: "mp4", Duration: 4},
+	})}
+	service := &AssetService{
+		repo:          repo,
+		blobStore:     &segmentTestBlobStore{root: filepath.Join(root, "assets")},
+		clock:         clock.System{},
+		mediaMetadata: newMediaMetadataResolverForTest(runner),
+	}
+
+	asset, err := service.registerPreparedVideoFile(context.Background(), preparedPath, "source.mp4", TrimPlan{
+		Segment:         VideoSegment{StartSeconds: 2, EndSeconds: 6},
+		DurationSeconds: 4,
+		Mode:            TrimModeStreamCopy,
+	})
+	if err != nil {
+		t.Fatalf("registerPreparedVideoFile: %v", err)
+	}
+	if asset == nil {
+		t.Fatal("registerPreparedVideoFile returned nil asset")
+	}
+	if len(repo.upserts) != 1 {
+		t.Fatalf("metadata upserts = %d, want 1 for the registered segment", len(repo.upserts))
+	}
+	record := repo.upserts[0]
+	if record.AssetID != asset.AssetID {
+		t.Errorf("metadata asset_id = %q, want %q", record.AssetID, asset.AssetID)
+	}
+	if !record.Verified() {
+		t.Errorf("segment metadata not verified: %+v", record)
+	}
+	if record.Container != "mp4" || record.DurationMs != 4000 || record.VideoCodec != "h264" || record.Width != 1920 {
+		t.Errorf("segment metadata = %+v, want mp4/4000ms/h264/1920", record)
+	}
+	if ffprobes := countFFProbeCommands(runner); ffprobes != 1 {
+		t.Errorf("ffprobe invocations = %d, want exactly 1 for the segment", ffprobes)
+	}
+}
+
 func TestRewriteVideoClipSegmentsSupportsJSONAndFailsClosedWithoutLocalSource(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "source.mp4")

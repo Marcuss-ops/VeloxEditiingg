@@ -45,8 +45,11 @@ func writeIdempotencyKeyError(c *gin.Context, vErr *IdempotencyKeyError) {
 }
 
 // checkAssetPreflight validates local velox-asset references against the
-// Master registry and final blob store before enqueue. It is intentionally
-// read-only: deferred velox-drive references are not materialized here.
+// Master registry and final blob store before enqueue, and enforces the
+// Fase C2 fail-closed media gate: a local media asset MUST carry verified
+// registry metadata (ensured through the canonical one-time probe, which
+// may persist the metadata row) before the job is admitted. Deferred
+// velox-drive references are not materialized here.
 func checkAssetPreflight(c *gin.Context, h *Handlers, req SubmitJobRequest) bool {
 	payload, err := projectWorkerPayload(&req)
 	if err != nil {
@@ -76,13 +79,14 @@ func checkAssetPreflight(c *gin.Context, h *Handlers, req SubmitJobRequest) bool
 	}
 	var details []gin.H
 	for _, item := range report.Items {
-		if item.Metadata && item.BlobResolvable && item.SHA256Valid && item.SizeValid {
+		if item.Metadata && item.MediaMetadata && item.BlobResolvable && item.SHA256Valid && item.SizeValid {
 			continue
 		}
 		details = append(details, gin.H{
 			"asset_id":        item.AssetID,
 			"issue":           item.Issue,
 			"metadata":        item.Metadata,
+			"media_metadata":  item.MediaMetadata,
 			"blob_resolvable": item.BlobResolvable,
 			"sha256_valid":    item.SHA256Valid,
 			"size_valid":      item.SizeValid,

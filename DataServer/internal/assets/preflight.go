@@ -19,8 +19,14 @@ type AssetPreflightRequirement struct {
 
 // AssetPreflightItem is the operator-facing result for one unique asset.
 type AssetPreflightItem struct {
-	AssetID        string `json:"asset_id"`
-	Metadata       bool   `json:"metadata"`
+	AssetID string `json:"asset_id"`
+	// Metadata reports the registry row exists and the asset is READY.
+	Metadata bool `json:"metadata"` // MediaMetadata reports verified media metadata for a media asset
+	// (video/audio MIME), or N/A (true) for non-media assets. A media
+	// asset that cannot be verified is false (Fase C2 fail-closed gate).
+	// Assets with unknown/empty MIME are treated as non-media (N/A) —
+	// they cannot be classified as media, so the gate does not apply.
+	MediaMetadata  bool   `json:"media_metadata"`
 	BlobResolvable bool   `json:"blob_resolvable"`
 	SHA256Valid    bool   `json:"sha256_valid"`
 	SizeValid      bool   `json:"size_valid"`
@@ -28,14 +34,18 @@ type AssetPreflightItem struct {
 }
 
 // AssetPreflightReport is deliberately a validation report, not a resolver.
-// It never downloads, stages, promotes, or mutates an asset.
+// It never downloads, stages, or promotes an asset; the ONLY possible
+// registry write is the canonical one-time media-metadata probe
+// (EnsureMediaMetadata) for media assets (Fase C2), which is idempotent
+// and never invents metadata.
 type AssetPreflightReport struct {
-	Requested         int                  `json:"requested"`
-	MetadataAvailable int                  `json:"metadata_available"`
-	BlobResolvable    int                  `json:"blob_resolvable"`
-	SHA256Valid       int                  `json:"sha256_valid"`
-	SizeValid         int                  `json:"size_valid"`
-	Items             []AssetPreflightItem `json:"items"`
+	Requested              int                  `json:"requested"`
+	MetadataAvailable      int                  `json:"metadata_available"`
+	MediaMetadataAvailable int                  `json:"media_metadata_available"`
+	BlobResolvable         int                  `json:"blob_resolvable"`
+	SHA256Valid            int                  `json:"sha256_valid"`
+	SizeValid              int                  `json:"size_valid"`
+	Items                  []AssetPreflightItem `json:"items"`
 }
 
 type finalBlobReader interface {
@@ -43,8 +53,13 @@ type finalBlobReader interface {
 }
 
 // Preflight checks registry metadata and already-promoted final blobs for the
-// supplied assets. The final blob is read only to verify its digest; no
-// worker-side cache or Drive path is touched.
+// supplied assets, then enforces the Fase C2 fail-closed media gate: a local
+// media asset (video/audio MIME) MUST carry verified registry metadata
+// before the job is admitted. The final blob is read only to verify its
+// digest; no worker-side cache or Drive path is touched. For media assets,
+// the canonical EnsureMediaMetadata runs (registry hit → no probe; missing →
+// probe ONCE via the single MediaMetadataResolver + persist; unverifiable →
+// item flagged media_metadata_unavailable, fail closed).
 func (s *AssetService) Preflight(ctx context.Context, requirements []AssetPreflightRequirement) (*AssetPreflightReport, error) {
 	if s == nil || s.repo == nil {
 		return nil, fmt.Errorf("asset preflight unavailable: asset registry is not configured")
@@ -117,6 +132,23 @@ func (s *AssetService) Preflight(ctx context.Context, requirements []AssetPrefli
 		}
 		item.BlobResolvable = true
 		report.BlobResolvable++
+
+		// Fase C2 fail-closed media gate: a local media asset (video/audio
+		// MIME) MUST carry verified registry metadata before the job is
+		// admitted. EnsureMediaMetadata consumes the registry when a
+		// verified row exists (no probe); otherwise it probes ONCE through
+		// the single MediaMetadataResolver and persists the result. An
+		// unverifiable media asset is REJECTED — metadata is never
+		// invented. Non-media assets (fonts, subtitles, project files) are
+		// N/A and pass.
+		if _, mediaErr := s.EnsureMediaMetadata(ctx, item.AssetID); mediaErr != nil {
+			item.Issue = "media_metadata_unavailable"
+			report.Items = append(report.Items, item)
+			continue
+		}
+		item.MediaMetadata = true
+		report.MediaMetadataAvailable++
+
 		if item.Issue == "" && item.SHA256Valid && item.SizeValid {
 			// A fully verified item has no issue. Keep the individual flags
 			// explicit so callers can render a useful matrix.

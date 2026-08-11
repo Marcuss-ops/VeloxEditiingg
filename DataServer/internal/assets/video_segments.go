@@ -399,6 +399,11 @@ func (s *AssetService) registerPreparedVideoFile(ctx context.Context, preparedPa
 	if err := s.repo.Insert(ctx, record); err != nil {
 		return nil, fmt.Errorf("register prepared segment: %w", err)
 	}
+	// Fase C2: persist the canonical media metadata for the segment too, so
+	// later consumers (preflight, plan compiler, trimmer) read the registry
+	// instead of re-probing. Best-effort by contract — a failed probe leaves
+	// no metadata row and never fails the registration.
+	s.persistMediaMetadata(ctx, sha256Hex, finalPath, "video/mp4")
 	sourceID, err := identity.NewHex128()
 	if err != nil {
 		return nil, fmt.Errorf("generate segment source ID: %w", err)
