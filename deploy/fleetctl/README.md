@@ -83,17 +83,54 @@ velox-worker-523925eb           CONNECTED   DEGRADED   1/1       scene.composite
 …
 ```
 
-### 3.2 `scripts/fleetctl inspect <worker_id>`
+### 3.2 `scripts/fleetctl inspect <worker_id> [--json]`
 
 ```bash
 VELOX_MASTER_URL=https://velox.example.com:8000 scripts/fleetctl inspect velox-worker-13197
+VELOX_MASTER_URL=https://velox.example.com:8000 scripts/fleetctl inspect --json velox-worker-13197
 ```
 
-Prints the full WorkerCard as indented JSON (status, health,
-session_active, executor, executor_version, image_digest,
-software_version, desired_version, last_heartbeat_at,
-active_jobs/max, deployment_state, last_smoke_status/at,
-last_restart_at).
+Fetches the WorkerCard for one worker from
+`GET /api/v1/admin/workers/{id}` and renders it in **two canonical
+operator sections** — the image state and the rollout history are
+deliberately separate views, so an old FAILED rollout never makes a
+worker whose running digest matches the target look unhealthy:
+
+```
+worker_id:    velox-worker-13197
+worker_name:  velox-worker-01
+status:       CONNECTED
+health:       HEALTHY
+executor:     scene.composite.v1@1
+jobs:         0/1
+
+IMAGE
+  running_digest = ghcr.io/acme/velox-worker@sha256:337d…
+  target_digest  = ghcr.io/acme/velox-worker@sha256:337d…
+  digest_match   = true
+
+LAST UPDATE OPERATION
+  status       = SUCCEEDED
+  reason       =
+  operation_id = op_9f2c…
+  type         = update
+  started_at   = 2026-08-09T10:12:00Z
+  finished_at  = 2026-08-09T10:17:00Z
+```
+
+- **IMAGE** — real-time image state (`running_digest` vs
+  `target_digest` vs `digest_match`); no operation history.
+- **LAST UPDATE OPERATION** — the last rollout ledger row
+  (`status`/`reason`, `operation_id`, `type`, started/finished
+  timestamps). A worker with no ledger row prints
+  `(no update operation on record)`.
+
+`--json` prints the **full WorkerCard as indented JSON** — the
+machine-readable contract consumed by scripts such as
+`ops/align-worker-digest.sh` and `ops/canary-worker-rollout.sh`.
+The two views are nested under `image_state` and `operation_state`;
+legacy flat keys (`image_digest`, `running_digest`, `target_digest`)
+remain for compatibility.
 
 ### 3.3 `scripts/fleetctl drain <worker_id>`
 

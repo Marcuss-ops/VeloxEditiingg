@@ -113,6 +113,62 @@ Same shape as a single element of the list. Returns `404` if the worker is not r
 }
 ```
 
+## Admin worker card (`GET /api/v1/admin/workers/:worker_id`)
+
+The admin surface (auth: `VELOX_ADMIN_TOKEN`) returns the canonical
+operator-facing `WorkerCard` for one worker. Two typed sub-objects
+model the image digest and the rollout history as **separate views**
+(digest-state separation — Phase A2), so a worker whose running
+digest matches the target is healthy even when the last rollout
+operation failed:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `image_state.running_digest` | string | digest actually running on the worker (heartbeat metadata) |
+| `image_state.target_digest` | string | digest the fleet wants (last update/rollback target) |
+| `image_state.digest_match` | bool | `running == target` — real-time image health, NO history |
+| `operation_state.operation_id` | string | `fleet_operations` ledger row of the last rollout |
+| `operation_state.type` | string | `update` \| `rollback` |
+| `operation_state.status` | string | operation status (e.g. `SUCCEEDED` / `FAILED`) |
+| `operation_state.error` | string | failure reason (`fleet_operations.error_message`), omitted when empty |
+| `operation_state.started_at` / `finished_at` | string | operation window (RFC3339) |
+
+Example (abridged):
+
+```json
+{
+  "worker_id": "velox-worker-13197",
+  "worker_name": "velox-worker-01",
+  "status": "CONNECTED",
+  "health_state": "HEALTHY",
+  "image_state": {
+    "running_digest": "ghcr.io/acme/velox-worker@sha256:337d…",
+    "target_digest": "ghcr.io/acme/velox-worker@sha256:337d…",
+    "digest_match": true
+  },
+  "operation_state": {
+    "operation_id": "op_9f2c…",
+    "type": "update",
+    "status": "SUCCEEDED",
+    "started_at": "2026-08-09T10:12:00Z",
+    "finished_at": "2026-08-09T10:17:00Z"
+  }
+}
+```
+
+### `fleetctl inspect` rendering
+
+`fleetctl inspect <worker_id>` renders the card as two canonical
+sections — **IMAGE** (`running_digest` / `target_digest` /
+`digest_match`) and **LAST UPDATE OPERATION** (`status` / `reason` /
+`operation_id` / `type` / `started_at` / `finished_at`, or
+`(no update operation on record)` when the ledger is empty).
+`fleetctl inspect --json <worker_id>` prints the full card as
+indented JSON for scripting (see `deploy/fleetctl/README.md` §3.2).
+The same `image_state` / `operation_state` split feeds the health
+probe's `image_digest_match` check and the `status --production`
+CLEAN/DRIFT view.
+
 ## API-surface namespaces (Phase 6)
 
 The worker control-plane API is split into three canonical namespaces.
