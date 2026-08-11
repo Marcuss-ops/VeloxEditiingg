@@ -64,6 +64,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Worker revocation read model: errori di `Scan` e `rows.Err()` nella lista
   dei worker revocati risalgono al registry invece di produrre una lista
   parziale.
+- Legacy job read models: tentativi, artifact, asset, DLQ ed eventi ora
+  propagano gli errori di scansione; anche la serializzazione degli eventi
+  non viene più ignorata.
 - Worker status API: un errore del read model persistito risponde `503`
   invece di degradare a una cache in memoria potenzialmente obsoleta; il
   fallback resta limitato al solo DB vuoto durante il bootstrap.

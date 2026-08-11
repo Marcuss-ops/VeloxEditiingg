@@ -61,7 +61,7 @@ func (s *SQLiteStore) GetJobAttempts(jobID string, limit int) ([]JobAttempt, err
 		if err := rows.Scan(&a.ID, &a.JobID, &a.AttemptNumber, &a.WorkerID, &a.LeaseID,
 			&a.Status, &a.StartedAt, &a.FinishedAt, &a.ErrorCode, &a.EngineVersion,
 			&a.BundleHash, &a.CreatedAt); err != nil {
-			continue
+			return nil, fmt.Errorf("scan job attempt: %w", err)
 		}
 		attempts = append(attempts, a)
 	}
@@ -217,7 +217,7 @@ func (s *SQLiteStore) GetArtifactsByJob(jobID string, limit int) ([]Artifact, er
 			&a.SizeBytes, &a.DurationSeconds,
 			&a.DurationMs, &a.MimeType, &a.VerifiedAt,
 			&a.Status, &a.CreatedAt); err != nil {
-			continue
+			return nil, fmt.Errorf("scan artifact: %w", err)
 		}
 		artifacts = append(artifacts, a)
 	}
@@ -237,7 +237,10 @@ func (s *SQLiteStore) LogJobEvent(jobID, eventType string, extra map[string]inte
 	for k, v := range extra {
 		payload[k] = v
 	}
-	raw, _ := json.Marshal(payload)
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal job event: %w", err)
+	}
 	return s.InsertJobEvent(now, jobID, eventType, string(raw))
 }
 

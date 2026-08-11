@@ -335,7 +335,7 @@ func (r *SQLiteAssetRepository) ListByJob(ctx context.Context, jobID string) ([]
 		if err := rows.Scan(&a.AssetID, &a.Kind, &a.Status, &a.SHA256, &a.MimeType,
 			&a.SizeBytes, &a.StorageProvider, &a.StorageKey, &a.MetadataJSON,
 			&a.CreatedAt, &a.VerifiedAt, &a.DeletedAt); err != nil {
-			continue
+			return nil, fmt.Errorf("scan asset: %w", err)
 		}
 		assets = append(assets, a)
 	}

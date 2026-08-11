@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -63,7 +64,7 @@ func (s *SQLiteStore) ListDLQJobs() ([]DLQJob, error) {
 			&j.JobID, &j.DeadAt, &j.DeadReason, &j.FailReason, &j.FailCount,
 			&replayInt, &j.CreatedAt, &j.RawJSON,
 		); err != nil {
-			continue
+			return nil, fmt.Errorf("scan DLQ job: %w", err)
 		}
 		j.Replayable = replayInt == 1
 		result = append(result, j)
@@ -122,7 +123,7 @@ func (s *SQLiteStore) ListJobEvents(jobID string, limit int) ([]JobEvent, error)
 	for rows.Next() {
 		var e JobEvent
 		if err := rows.Scan(&e.Timestamp, &e.JobID, &e.Event, &e.RawJSON); err != nil {
-			continue
+			return nil, fmt.Errorf("scan job event: %w", err)
 		}
 		result = append(result, e)
 	}
