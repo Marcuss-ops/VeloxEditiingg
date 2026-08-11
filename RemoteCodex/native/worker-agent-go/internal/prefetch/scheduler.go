@@ -341,6 +341,8 @@ func (s *Scheduler) Cancel(jobID string) bool {
 }
 
 func (s *Scheduler) runWorker() {
+	idleTicker := time.NewTicker(25 * time.Millisecond)
+	defer idleTicker.Stop()
 	for {
 		item, resolver := s.nextWorkItem()
 		if item != nil && resolver != nil {
@@ -351,7 +353,7 @@ func (s *Scheduler) runWorker() {
 		case <-s.workerCtx.Done():
 			return
 		case <-s.wake:
-		case <-time.After(25 * time.Millisecond):
+		case <-idleTicker.C:
 		}
 	}
 }

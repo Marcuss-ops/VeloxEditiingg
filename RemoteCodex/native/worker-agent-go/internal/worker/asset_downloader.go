@@ -416,10 +416,8 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 	for attempt := 0; attempt < downloader.DefaultMaxAttempts; attempt++ {
 		if attempt > 0 {
 			wait := backoffs[attempt-1]
-			select {
-			case <-ctx.Done():
-				return downloader.TransferResult{}, ctx.Err()
-			case <-time.After(wait):
+			if err := waitForAssetDuration(ctx, wait); err != nil {
+				return downloader.TransferResult{}, err
 			}
 		}
 
@@ -568,10 +566,8 @@ func (p *assetProgressBody) Read(b []byte) (int, error) {
 	if n > 0 {
 		if p.maxBPS > 0 {
 			delay := time.Duration(float64(n) / float64(p.maxBPS) * float64(time.Second))
-			select {
-			case <-time.After(delay):
-			case <-p.ctx.Done():
-				return 0, p.ctx.Err()
+			if err := waitForAssetDuration(p.ctx, delay); err != nil {
+				return 0, err
 			}
 			p.lastRead = time.Now()
 		}
@@ -582,6 +578,17 @@ func (p *assetProgressBody) Read(b []byte) (int, error) {
 }
 
 func (p *assetProgressBody) Close() error { return p.src.Close() }
+
+func waitForAssetDuration(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
 
 func parseAssetContentRange(value string) (start, end, total int64, err error) {
 	value = strings.TrimSpace(value)

@@ -41,7 +41,8 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   event ledger falliscono; un errore di lettura del retry budget nel reconciler
   stale interrompe l'operazione invece di usare un valore non verificato.
 - Retry cancellation: i backoff di remote-engine e multipart publisher usano
-  timer stoppabili; la cancellazione durante il backoff è coperta da test.
+  timer stoppabili; anche retry asset/chunk e idle wait del prefetch usano
+  timer/ticker riutilizzabili e rispettano la cancellazione.
 - Worker command outbox: allocazione della sequenza per worker e INSERT sono
   nella stessa transazione; il caso concorrente è coperto da test.
 - Calendar/session read models: JSON persistito corrotto e timestamp sessione
@@ -110,7 +111,8 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - [ ] Per ogni policy definire: tentativi totali, errori retryable, massimo
   backoff, jitter, `Retry-After`, deadline e comportamento su cancellation.
 - [x] Sostituire i backoff già individuati non cancellabili con timer legati al
-  context (remote engine e multipart publisher); resta l'audit delle policy.
+  context (remote engine, multipart publisher, asset/chunk worker); resta
+  l'audit delle policy.
 - [ ] Verificare che ogni retry abbia una chiave idempotente stabile e che un
   retry dopo timeout non generi un secondo effetto remoto.
 - [ ] Distinguere sempre `lease lost`, `provider error` e `DB/infrastructure

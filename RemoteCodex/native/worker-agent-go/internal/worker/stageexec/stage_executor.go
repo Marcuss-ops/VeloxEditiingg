@@ -195,10 +195,17 @@ func (se *StageExecutor) executeChunkWithRetry(ctx context.Context, jobID string
 
 		if attempt <= se.config.MaxChunkRetries {
 			backoff := time.Duration(attempt) * se.config.ChunkRetryDelay
+			timer := time.NewTimer(backoff)
 			select {
 			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
 				return ChunkResult{Stage: stage, ChunkID: chunkID, Success: false, Error: fmt.Sprintf("context cancelled during retry backoff: %v", ctx.Err()), Attempt: attempt}
-			case <-time.After(backoff):
+			case <-timer.C:
 			}
 		}
 	}
