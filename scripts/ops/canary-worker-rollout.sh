@@ -162,7 +162,7 @@ verify_healthy_card() {
 }
 
 inspect_worker() {
-  fleetctl inspect "$WORKER_ID"
+  fleetctl inspect --json "$WORKER_ID"
 }
 
 print_explicit_rollback() {

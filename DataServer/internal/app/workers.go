@@ -114,6 +114,16 @@ func (m *WorkersModule) SetDeploymentReader(reader api.DeploymentReader) {
 	}
 }
 
+// SetOperationLedgerReader wires the read-only fleet_operations audit
+// ledger into the admin worker cards (WorkerOperationState.Error — the
+// failure reason of the last update/rollback). Mutations remain owned by
+// FleetController.
+func (m *WorkersModule) SetOperationLedgerReader(reader api.OperationLedgerReader) {
+	if m != nil && m.adminWorkersHandler != nil {
+		m.adminWorkersHandler.SetOperationLedgerReader(reader)
+	}
+}
+
 // SetMutationsHandler wires the Step 6/15 admin mutations handler
 // (POST drain/resume/quarantine). Idempotent — safe to call before
 // RegisterRoutes; passing nil disables the POST routes so a

@@ -79,7 +79,7 @@ Usage:
 
 Sub-commands:
   status                  list all workers + WorkerCard snapshot
-  inspect <worker_id>     one worker detailed WorkerCard
+  inspect <worker_id> [--json]  IMAGE + LAST UPDATE OPERATION sections (--json = raw card)
   drain    <worker_id>    DRAINING transition (waits for active_jobs=0)
   update   <worker_id> [--digest sha256:...]   image update cascade
   smoke    <worker_id>    on-demand Level-D smoke (await terminal state)

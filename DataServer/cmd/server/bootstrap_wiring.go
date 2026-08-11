@@ -209,6 +209,7 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 	//   - Smoke (Level D) — nil; the operator sees "smoke runner not wired"
 	if fleetDep != nil && m != nil && m.Workers != nil {
 		m.Workers.SetDeploymentReader(p.SQLite)
+		m.Workers.SetOperationLedgerReader(p.SQLite)
 		healthHandler := api.NewAdminWorkersHealthHandler(
 			m.Workers.Registry(),
 			api.HealthProbeDeps{

@@ -4,8 +4,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -77,7 +79,7 @@ func runStatusModeWithOutput(client *fleetClient, production, jsonOutput bool) i
 			if name == "" {
 				name, _ = w["hostname"].(string)
 			}
-			desired, _ := w["target_digest"].(string)
+			desired, _ := cardImageField(w, "target_digest").(string)
 			running, _ := w["image_digest"].(string)
 			desiredDigest, runningDigest := digestFromRef(desired), digestFromRef(running)
 			state := "CLEAN"
@@ -120,12 +122,22 @@ func runStatusModeWithOutput(client *fleetClient, production, jsonOutput bool) i
 	return ExitOK
 }
 
-// runInspect — GET /api/v1/admin/workers/{id}; pretty-prints
-// the full WorkerCard. Synchronous; no polling.
+// runInspect — GET /api/v1/admin/workers/{id}; pretty-prints the
+// WorkerCard in two canonical sections by default:
+//
+//	IMAGE                    — real-time image state (running vs target
+//	                           vs digest_match), NO operation history
+//	LAST UPDATE OPERATION    — the last rollout operation (status/reason),
+//	                           deliberately separate from the IMAGE view
+//
+// With --json, prints the full WorkerCard as indented JSON (the
+// machine-readable contract consumed by scripts like
+// align-worker-digest.sh / canary-worker-rollout.sh).
+// Synchronous; no polling.
 func runInspect(client *fleetClient, args []string) int {
-	workerID, ok := oneArg(args)
-	if !ok {
-		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "inspect requires a worker_id"))
+	workerID, jsonOutput, err := parseInspectArgs(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "%v", err))
 		return ExitMisuse
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*1e9)
@@ -140,9 +152,120 @@ func runInspect(client *fleetClient, args []string) int {
 		fmt.Fprintln(os.Stderr, fmtExit(MapHTTPStatusToOpExit(status), "GET /admin/workers/%s status=%d", workerID, status))
 		return MapHTTPStatusToOpExit(status)
 	}
-	bs, _ := json.MarshalIndent(resp, "", "  ")
-	fmt.Println(string(bs))
+	if jsonOutput {
+		bs, _ := json.MarshalIndent(resp, "", "  ")
+		fmt.Println(string(bs))
+		return ExitOK
+	}
+	printInspectSections(resp)
 	return ExitOK
+}
+
+// parseInspectArgs accepts the optional --json flag (raw card JSON) plus
+// the mandatory worker_id. Global --master=/--token-file=/--verbose flags
+// (both = and space forms) are consumed by loadClientConfig and ignored
+// here, mirroring parseOperationsArgs / parseWaitReadyArgs.
+func parseInspectArgs(args []string) (string, bool, error) {
+	var workerID string
+	jsonOutput := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--json":
+			jsonOutput = true
+		case arg == "--master" || arg == "--token-file":
+			if i+1 >= len(args) {
+				return "", false, fmt.Errorf("%s requires a value", arg)
+			}
+			i++
+		case strings.HasPrefix(arg, "--master=") || strings.HasPrefix(arg, "--token-file=") || arg == "--verbose":
+		case strings.HasPrefix(arg, "-"):
+			return "", false, fmt.Errorf("unknown inspect option %q", arg)
+		default:
+			if workerID != "" {
+				return "", false, errors.New("inspect accepts exactly one worker_id")
+			}
+			workerID = arg
+		}
+	}
+	if workerID == "" {
+		return "", false, errors.New("inspect requires a worker_id")
+	}
+	return workerID, jsonOutput, nil
+}
+
+// printInspectSections renders the WorkerCard as the two canonical
+// operator sections: IMAGE (real-time image state, no history) and
+// LAST UPDATE OPERATION (the last rollout, status + reason).
+func printInspectSections(resp workerCardResponse) {
+	wid, _ := resp["worker_id"].(string)
+	name, _ := resp["worker_name"].(string)
+	if name == "" {
+		name, _ = resp["hostname"].(string)
+	}
+	status, _ := resp["status"].(string)
+	health, _ := resp["health"].(string)
+	if health == "" {
+		health, _ = resp["health_state"].(string)
+	}
+	executor, _ := resp["executor"].(string)
+	execVer, _ := resp["executor_version"].(string)
+	active, _ := resp["active_jobs"].(float64)
+	maxJobs, _ := resp["max_active_jobs"].(float64)
+
+	fmt.Printf("worker_id:  %s\n", displayValue(wid))
+	if name != "" && name != wid {
+		fmt.Printf("worker_name: %s\n", name)
+	}
+	fmt.Printf("status:     %s\n", displayValue(status))
+	fmt.Printf("health:     %s\n", displayValue(health))
+	if executor != "" {
+		fmt.Printf("executor:   %s@%v\n", executor, execVer)
+	}
+	fmt.Printf("jobs:       %v/%v\n", displayValue(fmt.Sprintf("%.0f", active)), displayValue(fmt.Sprintf("%.0f", maxJobs)))
+
+	fmt.Println()
+	fmt.Println("IMAGE")
+	running, _ := cardImageField(resp, "running_digest").(string)
+	target, _ := cardImageField(resp, "target_digest").(string)
+	match := "unknown"
+	if m, ok := cardImageField(resp, "digest_match").(bool); ok {
+		match = strconv.FormatBool(m)
+	}
+	fmt.Printf("  running_digest = %s\n", displayValue(running))
+	fmt.Printf("  target_digest  = %s\n", displayValue(target))
+	fmt.Printf("  digest_match   = %s\n", match)
+
+	fmt.Println()
+	fmt.Println("LAST UPDATE OPERATION")
+	if op, ok := resp["operation_state"].(map[string]any); ok {
+		opStatus, _ := op["status"].(string)
+		reason, _ := op["error"].(string)
+		opID, _ := op["operation_id"].(string)
+		opType, _ := op["type"].(string)
+		started, _ := op["started_at"].(string)
+		finished, _ := op["finished_at"].(string)
+		fmt.Printf("  status       = %s\n", displayValue(opStatus))
+		fmt.Printf("  reason       = %s\n", displayValue(reason))
+		fmt.Printf("  operation_id = %s\n", displayValue(opID))
+		fmt.Printf("  type         = %s\n", displayValue(opType))
+		fmt.Printf("  started_at   = %s\n", displayValue(started))
+		fmt.Printf("  finished_at  = %s\n", displayValue(finished))
+	} else {
+		fmt.Println("  (no update operation on record)")
+	}
+}
+
+// cardImageField reads a field from the canonical image_state section,
+// falling back to the legacy flat card key when the nested section is
+// absent (older master / diagnostic surface).
+func cardImageField(card workerCardResponse, key string) any {
+	if img, ok := card["image_state"].(map[string]any); ok {
+		if value, present := img[key]; present {
+			return value
+		}
+	}
+	return card[key]
 }
 func runSSHCheck(client *fleetClient) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*60*1e9)

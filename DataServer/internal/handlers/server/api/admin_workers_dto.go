@@ -49,8 +49,11 @@ import "time"
 //	max_active_jobs   Worker.Capacity.MaxSlots (compatibility alias)
 //
 // `image_digest`, `desired_version`, and `deployment_state` come from
-// heartbeat metadata. `health` is derived by the registry. Smoke and
-// restart timestamps remain empty unless an operation ledger supplies them.
+// heartbeat metadata. `health` is derived by the registry. `image_state`
+// and `operation_state` are the canonical typed digest views: real-time
+// image match (separate from rollout history) and the last deployment
+// ledger row respectively. Smoke and restart timestamps remain empty
+// unless an operation ledger supplies them.
 //
 // `software_version` is intentionally mapped to CodeVersion (NOT
 // BundleVersion) because the operator's dashboard question is
@@ -66,42 +69,41 @@ import "time"
 // when the worker self-restarts due to a crash; the field's semantic
 // contract belongs to step §6 of the rollout.
 type WorkerCard struct {
-	WorkerID            string                 `json:"worker_id"`
-	WorkerName          string                 `json:"worker_name"`
-	Hostname            string                 `json:"hostname"`
-	Host                string                 `json:"host"`
-	Status              string                 `json:"status"`
-	ConnectionState     string                 `json:"connection_state"`
-	SchedulingState     string                 `json:"scheduling_state"`
-	DeploymentState     string                 `json:"deployment_state,omitempty"`
-	HealthState         string                 `json:"health_state"`
-	SessionActive       bool                   `json:"session_active"`
-	Executor            string                 `json:"executor"`
-	ExecutorVersion     int32                  `json:"executor_version"`
-	ImageDigest         string                 `json:"image_digest,omitempty"`
-	RunningDigest       string                 `json:"running_digest,omitempty"`
-	TargetDigest        string                 `json:"target_digest,omitempty"`
-	PreviousDigest      string                 `json:"previous_digest,omitempty"`
-	DigestState         string                 `json:"digest_state,omitempty"`
-	DigestMatch         *bool                  `json:"digest_match,omitempty"`
-	LastUpdateOperation *WorkerUpdateOperation `json:"last_update_operation,omitempty"`
-	SoftwareVersion     string                 `json:"software_version"`
-	DesiredVersion      string                 `json:"desired_version,omitempty"`
-	LastHeartbeatAt     string                 `json:"last_heartbeat_at,omitempty"`
-	ActiveJobs          int32                  `json:"active_jobs"`     // compatibility alias for active_slots
-	MaxActiveJobs       int32                  `json:"max_active_jobs"` // compatibility alias for max_slots
-	ActiveSlots         int32                  `json:"active_slots"`
-	MaxSlots            int32                  `json:"max_slots"`
-	AvailableSlots      int32                  `json:"available_slots"`
-	CPUUtilizationRatio float64                `json:"cpu_utilization_ratio,omitempty"`
-	MemoryUsedBytes     int64                  `json:"memory_used_bytes,omitempty"`
-	DiskFreeBytes       int64                  `json:"disk_free_bytes,omitempty"`
-	Load1               float64                `json:"load1,omitempty"`
-	CurrentJob          string                 `json:"current_job,omitempty"`
-	Health              string                 `json:"health,omitempty"`
-	LastSmokeStatus     string                 `json:"last_smoke_status,omitempty"`
-	LastSmokeAt         string                 `json:"last_smoke_at,omitempty"`
-	LastRestartAt       string                 `json:"last_restart_at,omitempty"`
+	WorkerID            string                `json:"worker_id"`
+	WorkerName          string                `json:"worker_name"`
+	Hostname            string                `json:"hostname"`
+	Host                string                `json:"host"`
+	Status              string                `json:"status"`
+	ConnectionState     string                `json:"connection_state"`
+	SchedulingState     string                `json:"scheduling_state"`
+	DeploymentState     string                `json:"deployment_state,omitempty"`
+	HealthState         string                `json:"health_state"`
+	SessionActive       bool                  `json:"session_active"`
+	Executor            string                `json:"executor"`
+	ExecutorVersion     int32                 `json:"executor_version"`
+	ImageDigest         string                `json:"image_digest,omitempty"`
+	RunningDigest       string                `json:"running_digest,omitempty"`
+	TargetDigest        string                `json:"target_digest,omitempty"`
+	PreviousDigest      string                `json:"previous_digest,omitempty"`
+	ImageState          *WorkerImageState     `json:"image_state,omitempty"`
+	OperationState      *WorkerOperationState `json:"operation_state,omitempty"`
+	SoftwareVersion     string                `json:"software_version"`
+	DesiredVersion      string                `json:"desired_version,omitempty"`
+	LastHeartbeatAt     string                `json:"last_heartbeat_at,omitempty"`
+	ActiveJobs          int32                 `json:"active_jobs"`     // compatibility alias for active_slots
+	MaxActiveJobs       int32                 `json:"max_active_jobs"` // compatibility alias for max_slots
+	ActiveSlots         int32                 `json:"active_slots"`
+	MaxSlots            int32                 `json:"max_slots"`
+	AvailableSlots      int32                 `json:"available_slots"`
+	CPUUtilizationRatio float64               `json:"cpu_utilization_ratio,omitempty"`
+	MemoryUsedBytes     int64                 `json:"memory_used_bytes,omitempty"`
+	DiskFreeBytes       int64                 `json:"disk_free_bytes,omitempty"`
+	Load1               float64               `json:"load1,omitempty"`
+	CurrentJob          string                `json:"current_job,omitempty"`
+	Health              string                `json:"health,omitempty"`
+	LastSmokeStatus     string                `json:"last_smoke_status,omitempty"`
+	LastSmokeAt         string                `json:"last_smoke_at,omitempty"`
+	LastRestartAt       string                `json:"last_restart_at,omitempty"`
 	// Readiness and Runtime are worker-reported diagnostic snapshots. They
 	// are optional because older agents do not publish these dimensions yet;
 	// absence is explicit and must not be interpreted as PASS.
@@ -110,18 +112,30 @@ type WorkerCard struct {
 	RecentErrors []string       `json:"recent_errors,omitempty"`
 }
 
-// WorkerUpdateOperation preserves the last deployment ledger row as an
-// operation-history view. It is deliberately separate from DigestState:
-// an old FAILED/PENDING operation must not make a worker with a matching
-// running digest appear unhealthy.
-type WorkerUpdateOperation struct {
-	DeploymentID   string     `json:"deployment_id"`
-	Status         string     `json:"status"`
-	TargetDigest   string     `json:"target_digest"`
-	PreviousDigest string     `json:"previous_digest,omitempty"`
-	StartedAt      string     `json:"started_at"`
-	FinishedAt     *time.Time `json:"finished_at,omitempty"`
-	IsRollback     bool       `json:"is_rollback"`
+// WorkerImageState is the canonical real-time image state of a worker:
+// the digest actually running vs. the digest the fleet wants, and whether
+// they match. It deliberately contains NO operation-history fields — an
+// old FAILED rollout must not make a worker with a matching running
+// digest appear unhealthy.
+type WorkerImageState struct {
+	RunningDigest string `json:"running_digest"`
+	TargetDigest  string `json:"target_digest"`
+	Match         bool   `json:"digest_match"`
+}
+
+// WorkerOperationState preserves the last deployment ledger row as an
+// operation-history view. It is deliberately separate from
+// WorkerImageState: status here describes the OPERATION (update/rollback
+// cascade), never the worker's current image health. Error carries the
+// failure reason (fleet_operations.error_message) when the operation
+// failed.
+type WorkerOperationState struct {
+	OperationID string     `json:"operation_id"`
+	Type        string     `json:"type"` // update | rollback
+	Status      string     `json:"status"`
+	Error       string     `json:"error,omitempty"`
+	StartedAt   string     `json:"started_at"`
+	FinishedAt  *time.Time `json:"finished_at,omitempty"`
 }
 
 // AdminWorkersListResponse is the JSON envelope for

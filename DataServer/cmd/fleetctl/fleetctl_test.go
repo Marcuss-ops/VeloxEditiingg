@@ -290,13 +290,36 @@ func TestRunStatusProduction_DriftReturnsNonZero(t *testing.T) {
 	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(workerListResponse{Count: 1, Workers: []map[string]any{{
 			"worker_id": "worker-1", "worker_name": "velox_worker_1",
-			"target_digest": "ghcr.io/example/velox-worker@" + digest,
-			"image_digest":  "ghcr.io/example/velox-worker@sha256:" + strings.Repeat("b", 64),
+			"image_state": map[string]any{
+				"target_digest":  "ghcr.io/example/velox-worker@" + digest,
+				"running_digest": "ghcr.io/example/velox-worker@sha256:" + strings.Repeat("b", 64),
+				"digest_match":   false,
+			},
+			"image_digest": "ghcr.io/example/velox-worker@sha256:" + strings.Repeat("b", 64),
 		}}})
 	})
 	defer srv.Close()
 	if got := runStatusMode(c, true); got == ExitOK {
 		t.Fatal("production status must fail on digest drift")
+	}
+}
+
+func TestRunStatusProduction_ImageStateTargetMatchesDigest(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(workerListResponse{Count: 1, Workers: []map[string]any{{
+			"worker_id": "worker-1", "worker_name": "velox_worker_1",
+			"image_state": map[string]any{
+				"target_digest":  "ghcr.io/example/velox-worker@" + digest,
+				"running_digest": "ghcr.io/example/velox-worker@" + digest,
+				"digest_match":   true,
+			},
+			"image_digest": "ghcr.io/example/velox-worker@" + digest,
+		}}})
+	})
+	defer srv.Close()
+	if got := runStatusMode(c, true); got != ExitOK {
+		t.Fatalf("production status with matching image_state must pass, got exit %d", got)
 	}
 }
 
@@ -373,6 +396,124 @@ func TestRunInspect_NotFoundReturnsExitWorkerNotFound(t *testing.T) {
 	ec := runInspect(c, []string{"missing-worker-id"})
 	if ec != ExitWorkerNotFound {
 		t.Errorf("404 must map to exit %d, got %d", ExitWorkerNotFound, ec)
+	}
+}
+
+func TestRunInspect_PrintsImageAndOperationSections(t *testing.T) {
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/admin/workers/w-sec" {
+			http.Error(w, "wrong path: "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"worker_id": "w-sec", "worker_name": "velox-worker-01",
+			"status": "CONNECTED", "health": "HEALTHY",
+			"executor": "scene.composite.v1", "executor_version": "1",
+			"active_jobs": 0.0, "max_active_jobs": 1.0,
+			"image_digest": "sha256:" + strings.Repeat("a", 64),
+			"image_state": map[string]any{
+				"running_digest": "sha256:" + strings.Repeat("a", 64),
+				"target_digest":  "sha256:" + strings.Repeat("a", 64),
+				"digest_match":   true,
+			},
+			"operation_state": map[string]any{
+				"operation_id": "deploy-1", "type": "update",
+				"status": "FAILED", "error": "connection reset by peer",
+				"started_at": "2026-08-11T12:00:00Z", "finished_at": "2026-08-11T12:05:00Z",
+			},
+		})
+	})
+	defer srv.Close()
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	ec := runInspect(c, []string{"w-sec"})
+	w.Close()
+	os.Stdout = old
+	out, _ := io.ReadAll(r)
+
+	if ec != ExitOK {
+		t.Fatalf("inspect exit = %d, want %d", ec, ExitOK)
+	}
+	for _, want := range []string{
+		"IMAGE",
+		"running_digest = sha256:",
+		"target_digest  = sha256:",
+		"digest_match   = true",
+		"LAST UPDATE OPERATION",
+		"status       = FAILED",
+		"reason       = connection reset by peer",
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("inspect output missing %q; got:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunInspect_JSONFlagEmitsRawCard(t *testing.T) {
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/admin/workers/w-json" {
+			http.Error(w, "wrong path: "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"worker_id": "w-json", "status": "CONNECTED",
+			"image_digest": "sha256:" + strings.Repeat("a", 64),
+		})
+	})
+	defer srv.Close()
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	ec := runInspect(c, []string{"--json", "w-json"})
+	w.Close()
+	os.Stdout = old
+	out, _ := io.ReadAll(r)
+
+	if ec != ExitOK {
+		t.Fatalf("inspect --json exit = %d, want %d", ec, ExitOK)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("inspect --json must emit a raw card JSON: %v; output=%s", err, out)
+	}
+	if parsed["worker_id"] != "w-json" {
+		t.Fatalf("raw card worker_id = %v, want w-json", parsed["worker_id"])
+	}
+}
+
+func TestParseInspectArgs_RejectsExtraPositionals(t *testing.T) {
+	if _, _, err := parseInspectArgs([]string{"w-1", "w-2"}); err == nil {
+		t.Fatal("two positional worker_ids must be rejected")
+	}
+	if _, _, err := parseInspectArgs([]string{"w-1", "--bogus"}); err == nil {
+		t.Fatal("unknown flag must be rejected")
+	}
+	if _, _, err := parseInspectArgs(nil); err == nil {
+		t.Fatal("missing worker_id must be rejected")
+	}
+}
+
+func TestParseInspectArgs_AcceptsGlobalFlagForms(t *testing.T) {
+	// Space-form global flags must be skipped like parseOperationsArgs /
+	// parseWaitReadyArgs do, and the worker_id must still resolve.
+	workerID, jsonOutput, err := parseInspectArgs([]string{"--master", "http://master:8000", "--token-file", "/tmp/tok", "--verbose", "--json", "w-1"})
+	if err != nil {
+		t.Fatalf("space-form globals + --json must parse: %v", err)
+	}
+	if workerID != "w-1" || !jsonOutput {
+		t.Fatalf("parsed = (%q, %t), want (w-1, true)", workerID, jsonOutput)
+	}
+	// Equals-form with a value.
+	workerID, _, err = parseInspectArgs([]string{"--master=http://m", "w-2"})
+	if err != nil || workerID != "w-2" {
+		t.Fatalf("equals-form globals: workerID=%q err=%v", workerID, err)
+	}
+	// Missing value for a space-form global must fail loudly.
+	if _, _, err := parseInspectArgs([]string{"--token-file"}); err == nil {
+		t.Fatal("--token-file without a value must be rejected")
 	}
 }
 

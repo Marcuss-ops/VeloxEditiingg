@@ -215,7 +215,7 @@ MISMATCH=0
 INSPECT_FAILS=0
 
 for w in "${ALL_WORKERS[@]}"; do
-  INSPECT="$(VELOX_MASTER_URL="$VELOX_MASTER_URL" "$FLEETCTL" inspect "$w" 2>/dev/null)" || {
+  INSPECT="$(VELOX_MASTER_URL="$VELOX_MASTER_URL" "$FLEETCTL" inspect --json "$w" 2>/dev/null)" || {
     echo "  ⚠ $w → INSPECT_FAILED (fleetctl returned non-zero)"
     WORKER_DIGESTS["$w"]="INSPECT_FAILED"
     INSPECT_FAILS=$((INSPECT_FAILS + 1))

@@ -44,6 +44,16 @@ type DeploymentReader interface {
 	GetLatestDeploymentForWorker(context.Context, string) (*store.DeploymentRecord, error)
 }
 
+// OperationLedgerReader is the read-only audit seam for the worker's last
+// fleet operation row. It feeds WorkerOperationState.Error (the failure
+// reason) so the operator sees WHY the last update/rollback failed without
+// the operation status contaminating the image match view. Optional: when
+// not wired (lightweight/unit deployments), Error is omitted rather than
+// fabricated.
+type OperationLedgerReader interface {
+	ListOperations(context.Context, string, string, int) ([]store.Operation, error)
+}
+
 // AdminWorkersHandler holds the registry dependency for the operator-
 // facing GET /api/v1/admin/workers endpoints.
 //
@@ -54,6 +64,7 @@ type DeploymentReader interface {
 type AdminWorkersHandler struct {
 	reg         *workersreg.Registry
 	deployments DeploymentReader
+	operations  OperationLedgerReader
 }
 
 // NewAdminWorkersHandler wires an AdminWorkersHandler to the worker
@@ -68,6 +79,15 @@ func NewAdminWorkersHandler(reg *workersreg.Registry) *AdminWorkersHandler {
 func (h *AdminWorkersHandler) SetDeploymentReader(reader DeploymentReader) {
 	if h != nil {
 		h.deployments = reader
+	}
+}
+
+// SetOperationLedgerReader wires the fleet_operations audit ledger used to
+// enrich WorkerOperationState.Error. A nil reader is allowed for
+// lightweight/unit-only deployments; Error is then simply omitted.
+func (h *AdminWorkersHandler) SetOperationLedgerReader(reader OperationLedgerReader) {
+	if h != nil {
+		h.operations = reader
 	}
 }
 
@@ -152,26 +172,50 @@ func (h *AdminWorkersHandler) card(ctx context.Context, info *workersreg.Worker)
 	}
 	card.TargetDigest = rec.TargetDigest
 	card.PreviousDigest = rec.PreviousDigest
-	card.LastUpdateOperation = &WorkerUpdateOperation{
-		DeploymentID:   rec.DeploymentID,
-		Status:         rec.Status,
-		TargetDigest:   rec.TargetDigest,
-		PreviousDigest: rec.PreviousDigest,
-		StartedAt:      rec.StartedAt.UTC().Format(time.RFC3339Nano),
-		FinishedAt:     rec.FinishedAt,
-		IsRollback:     rec.IsRollback,
-	}
+	// IMAGE section — real-time state only: what is running vs what the
+	// fleet wants, and whether they match. No operation-history fields.
 	if card.RunningDigest != "" && card.TargetDigest != "" {
-		match := card.RunningDigest == card.TargetDigest
-		card.DigestMatch = &match
-		if match {
-			card.DigestState = "MATCH"
-		} else {
-			card.DigestState = "MISMATCH"
+		card.ImageState = &WorkerImageState{
+			RunningDigest: card.RunningDigest,
+			TargetDigest:  card.TargetDigest,
+			Match:         card.RunningDigest == card.TargetDigest,
 		}
-	} else {
-		card.DigestState = "UNKNOWN"
 	}
+	// LAST UPDATE OPERATION section — the operation history, deliberately
+	// separate from ImageState: an old FAILED rollout must not make a
+	// worker with a matching digest look unhealthy.
+	opType := "update"
+	if rec.IsRollback {
+		opType = "rollback"
+	}
+	operation := &WorkerOperationState{
+		OperationID: rec.DeploymentID,
+		Type:        opType,
+		Status:      rec.Status,
+		StartedAt:   rec.StartedAt.UTC().Format(time.RFC3339Nano),
+		FinishedAt:  rec.FinishedAt,
+	}
+	// Enrich with the failure reason from the fleet_operations audit
+	// ledger when available (optional seam — lightweight deployments
+	// simply omit Error). Only an update/rollback row that actually
+	// FAILED contributes an error: the ledger also carries smoke/drain/
+	// resume rows, and a smoke failure must never surface under
+	// "LAST UPDATE OPERATION" for a healthy image rollout.
+	if h.operations != nil && (rec.Status == store.DeployStatusFailed || rec.Status == store.DeployStatusRolledBack) {
+		if ops, opErr := h.operations.ListOperations(ctx, info.WorkerID.String(), "", 10); opErr == nil {
+			for i := range ops {
+				candidate := ops[i]
+				if candidate.Op != "update" && candidate.Op != "rollback" {
+					continue
+				}
+				if candidate.Status == store.OperationStatusFailed && candidate.ErrorMessage != "" {
+					operation.Error = candidate.ErrorMessage
+					break
+				}
+			}
+		}
+	}
+	card.OperationState = operation
 	return card
 }
 
