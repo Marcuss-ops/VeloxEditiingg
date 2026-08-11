@@ -126,6 +126,7 @@ func (r *Registry) HeartbeatWithSession(ctx context.Context, sessionID, workerID
 			registryLog.ErrorWithMsg(logging.CodeSQLiteUpsertHeartbeatFail,
 				"SQLite upsert worker heartbeat failed",
 				map[string]interface{}{"worker_id": workerID, "err": err.Error()})
+			return fmt.Errorf("persist worker heartbeat: %w", err)
 		}
 	}
 	return nil

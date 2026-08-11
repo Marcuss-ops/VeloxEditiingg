@@ -105,6 +105,14 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 	if h.registry != nil {
 		if err := h.registry.HeartbeatWithSession(context.Background(), sessionID, workerID, hb.GetWorkerName(), hb.GetCurrentJob(), extra); err != nil {
 			log.Printf("[GRPC] Heartbeat failed for worker %s: %v", workerID, err)
+			if activeSess := h.getSession(workerID); activeSess != nil && activeSess.sessionID == sessionID {
+				select {
+				case activeSess.writerErr <- fmt.Errorf("heartbeat persistence failed: %w", err):
+				default:
+				}
+				activeSess.cancel()
+			}
+			return
 		}
 	}
 
@@ -182,7 +190,17 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 			}
 			return
 		}
-		_ = h.dbStore.UpdateSessionLastSeen(sessionID)
+		if err := h.dbStore.UpdateSessionLastSeen(sessionID); err != nil {
+			log.Printf("[GRPC] Session %s last_seen persistence failed for worker %s: %v", sessionID, workerID, err)
+			if activeSess := h.getSession(workerID); activeSess != nil && activeSess.sessionID == sessionID {
+				select {
+				case activeSess.writerErr <- fmt.Errorf("session last_seen persistence failed: %w", err):
+				default:
+				}
+				activeSess.cancel()
+			}
+			return
+		}
 	}
 }
 

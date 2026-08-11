@@ -166,7 +166,8 @@ func (s *SQLiteStore) DeleteWorkerRuntimeSnapshotBySession(workerID, sessionID s
 
 // ValidateSession checks if a token hash maps to a valid, non-expired, non-revoked session.
 func (s *SQLiteStore) ValidateSession(tokenHash string) (*PersistedSession, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
+	nowTime := time.Now().UTC()
+	now := nowTime.Format(time.RFC3339)
 	row := s.db.QueryRow(
 		`SELECT session_id, worker_id, token_hash, ip_address, created_at, expires_at, last_seen, revoked
 		 FROM worker_sessions
@@ -187,9 +188,12 @@ func (s *SQLiteStore) ValidateSession(tokenHash string) (*PersistedSession, erro
 	sess.ExpiresAt, _ = time.Parse(time.RFC3339, expiresAt)
 	sess.LastSeen, _ = time.Parse(time.RFC3339, lastSeen)
 
-	// Update last_seen
-	_, _ = s.db.Exec(`UPDATE worker_sessions SET last_seen = ? WHERE session_id = ?`,
-		time.Now().UTC().Format(time.RFC3339), sess.SessionID)
+	// Updating last_seen is part of successful validation. If it cannot be
+	// persisted, do not return a valid session based on stale durable state.
+	if _, err := s.db.Exec(`UPDATE worker_sessions SET last_seen = ? WHERE session_id = ?`, now, sess.SessionID); err != nil {
+		return nil, fmt.Errorf("validate session update last_seen: %w", err)
+	}
+	sess.LastSeen = nowTime
 
 	return &sess, nil
 }
