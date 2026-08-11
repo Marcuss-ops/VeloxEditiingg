@@ -4,6 +4,13 @@ Questo documento indicizza le Definition of Done per ogni componente mancante
 necessario a raggiungere l'architettura target descritta nel documento
 `velox-communication-analysis.md`.
 
+> **Nota sullo stato.** Le fasi sotto sono la roadmap storica della migrazione
+> al control transport e non sono una lista affidabile di lavoro ancora
+> aperto: gRPC, sessioni persistenti, ACK, mTLS e push sono già presenti nel
+> codice corrente. Per gli interventi attuali usare
+> [`REFACTOR-HOTSPOTS-2026-08-11.md`](../architecture/REFACTOR-HOTSPOTS-2026-08-11.md),
+> che contiene i gate e le priorità aggiornate.
+
 ## Stato attuale vs target
 
 ```
@@ -81,7 +88,7 @@ Ogni documento MD segue questa struttura:
 ## Riferimenti
 
 - Documento originale: `velox-communication-analysis.md`
-- Codice master: `refactored/DataServer/`
-- Codice worker: `refactored/RemoteCodex/native/worker-agent-go/`
-- Store SQLite: `refactored/DataServer/internal/store/`
-- Migrations: `refactored/DataServer/internal/store/migrations/`
+- Codice master: `DataServer/`
+- Codice worker: `RemoteCodex/native/worker-agent-go/`
+- Store SQLite: `DataServer/internal/store/`
+- Migrations: `DataServer/internal/store/migrations/`
