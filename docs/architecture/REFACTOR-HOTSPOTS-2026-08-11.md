@@ -20,6 +20,8 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   vengono più ignorati; risalgono come errori infrastrutturali.
 - Worker heartbeat/session: una scrittura SQLite fallita non produce più un
   successo apparente e non aggiorna il read model in memoria.
+- Worker auth/commands: token e `command_id` non vengono più restituiti come
+  validi quando la relativa sessione o il comando non sono stati persistiti.
 - Render plan: se il piano compilato è presente, il worker verifica che
   `compiled_render_plan_sha256` corrisponda al JSON ricevuto. Il piano v1 resta
   esplicitamente il percorso esecutivo finché il batch executor non è migrato.
@@ -34,6 +36,7 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - [x] Propagare gli errori di persistenza della delivery.
 - [x] Impedire retry forwarding da lease non più proprietario.
 - [x] Rendere fail-closed la persistenza di heartbeat e `last_seen`.
+- [x] Rendere fail-closed token session e command queue quando il DB fallisce.
 - [ ] Verificare tutti i writer di stato con la stessa regola: ogni `UPDATE`
   autorevole deve controllare `RowsAffected`, ownership e generazione.
 - [ ] Audit dei percorsi `MarkDeliverySucceeded`, `FinalizeVerified`,
