@@ -146,10 +146,17 @@ func (c *Client) withRetry(ctx context.Context, fn func(attempt int) error) erro
 		backoff = AddJitter(backoff, int64(attempt)+time.Now().UnixNano())
 
 		if attempt < policy.MaxAttempts-1 {
+			timer := time.NewTimer(backoff)
 			select {
 			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
 				return ctx.Err()
-			case <-time.After(backoff):
+			case <-timer.C:
 			}
 		}
 	}

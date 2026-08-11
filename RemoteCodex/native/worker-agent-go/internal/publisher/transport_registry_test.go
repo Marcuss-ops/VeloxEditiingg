@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // ────────────────────────────────────────────────────────────────────────
@@ -344,6 +345,45 @@ func TestObjectStoreMultipart_Upload_RetriesOnTransient(t *testing.T) {
 	}
 	if got := attempts.Load(); got != 3 {
 		t.Errorf("attempts = %d; want 3 (2 transient + 1 success)", got)
+	}
+}
+
+func TestObjectStoreMultipart_Upload_CancelledDuringRetryBackoff(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "out.bin")
+	if err := os.WriteFile(path, []byte("payload"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var attempts atomic.Int32
+	tr := &ObjectStoreMultipartTransport{
+		S3Client: &fakeS3Client{
+			uploadPartFn: func(context.Context, interface{}) (multipartUploadResult, error) {
+				attempts.Add(1)
+				cancel()
+				return multipartUploadResult{}, fmt.Errorf("503 Service Unavailable")
+			},
+		},
+		ChunkSize:  1024,
+		MaxRetries: 5,
+	}
+
+	start := time.Now()
+	_, err := tr.Upload(ctx, UploadRequest{
+		LocalPath:    path,
+		Target:       UploadTarget{UploadID: "u-test-cancel", UploadURL: "s3://bucket/key"},
+		WorkerSHA256: "unused",
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Upload error = %v; want context.Canceled", err)
+	}
+	if elapsed := time.Since(start); elapsed >= 100*time.Millisecond {
+		t.Fatalf("cancellation did not stop retry backoff promptly: elapsed %s", elapsed)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("upload attempts = %d; want 1", got)
 	}
 }
 

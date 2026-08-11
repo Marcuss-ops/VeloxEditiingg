@@ -224,10 +224,17 @@ func (t *ObjectStoreMultipartTransport) uploadPartWithRetry(
 		if !isTransientS3Error(err) {
 			return multipartUploadResult{}, fmt.Errorf("%w: part %d: %v", ErrUploadFailed, partNumber, err)
 		}
+		timer := time.NewTimer(backoff)
 		select {
-		case <-time.After(backoff):
 		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 			return multipartUploadResult{}, ctx.Err()
+		case <-timer.C:
 		}
 		backoff *= 2
 	}
