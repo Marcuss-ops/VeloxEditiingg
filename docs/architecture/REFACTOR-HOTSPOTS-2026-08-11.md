@@ -48,6 +48,8 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   malformato producono errore, non uno stato apparentemente valido.
 - Artifact GC, credential revoke e command delivery verificano ownership e
   righe aggiornate prima di dichiarare completata l'operazione.
+- Render-plan stamping: un tentativo inesistente non può più risultare
+  aggiornato con successo; il writer restituisce un conflitto CAS.
 - Render-only: il contatore audio riconosce il contratto esplicito a zero
   destinazioni; i job normali senza delivery plan continuano a fallire chiusi.
 - Gate architetturali e gate full-module verdi dopo i fix (`833cf79e`,
@@ -84,8 +86,11 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - [ ] Registrare per ogni attempt il motivo per cui il compiled plan manca:
   compiler assente, compile error, canonicalization error o persist error.
 - [ ] Separare metriche Master `compile`, `canonicalize`, `hash`, `persist`.
-- [ ] Separare metriche worker `asset resolution`, `audio prepare`, `timeline`,
-  `mix`, `AAC`, `mux`, `finalize`, `SHA`.
+- [x] Esporre il tempo nativo `audio_prepare_ms` (compilazione del piano,
+  costruzione del filter graph e comando) nel profilo worker.
+- [ ] Completare le metriche worker `asset resolution`, `timeline`, `mix`,
+  `AAC`, `mux`, `finalize`, `SHA`; il mix/AAC resta un unico bucket finché
+  il processo FFmpeg non espone una separazione veritiera.
 - [ ] Assicurare che la somma dei tempi sia documentata come nested o
   exclusive, evitando breakdown matematicamente incoerenti.
 

@@ -552,6 +552,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             }
             muxPhase.Complete();
         } else {
+            const auto audioPrepareStart = std::chrono::steady_clock::now();
             std::vector<audio::AudioPlanInput> audioPlanInputs;
             audioPlanInputs.reserve(downloadedTracks.size());
             for (const auto& track : downloadedTracks) {
@@ -629,6 +630,9 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                    << " -map \"[aout]\" -t " << duration_seconds_.load()
                    << " -c:a aac "
                    << file::shellQuote(mixedAudio.string());
+
+            metrics_.addMs("audio_prepare_ms", std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - audioPrepareStart).count());
 
             const auto audioBenchmark = audio::runAudioMixBenchmark(
                 audioPlanInputs, audioFilter.str(), duration_seconds_.load(), workDir.string());

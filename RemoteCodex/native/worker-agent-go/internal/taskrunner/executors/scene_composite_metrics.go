@@ -77,6 +77,7 @@ func projectRenderProfile(dst map[string]interface{}, run pipeline.RunMetrics, a
 	}{
 		{name: "asset_download_ms", key: "asset_download_ms"},
 		{name: "audio_download_ms", key: "audio_download_ms"},
+		{name: "audio_prepare_ms", key: "audio_prepare_ms"},
 		{name: "audio_mix_encode_ms", key: "mix_audio_ms"},
 		{name: "mux_ms", key: "mux_audio_ms"},
 	} {

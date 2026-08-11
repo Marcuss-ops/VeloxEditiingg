@@ -18,6 +18,7 @@ func TestProjectRenderProfileUsesCanonicalExistingTimers(t *testing.T) {
 			PhaseMS: map[string]float64{
 				"asset_download_ms": 120,
 				"audio_download_ms": 300,
+				"audio_prepare_ms":  180,
 				"mix_audio_ms":      5500,
 				"mux_audio_ms":      700,
 			},
@@ -31,6 +32,7 @@ func TestProjectRenderProfileUsesCanonicalExistingTimers(t *testing.T) {
 		"render_profile.artifact_sha_ms":     int64(800),
 		"render_profile.asset_download_ms":   float64(120),
 		"render_profile.audio_download_ms":   float64(300),
+		"render_profile.audio_prepare_ms":    float64(180),
 		"render_profile.audio_mix_encode_ms": float64(5500),
 		"render_profile.mux_ms":              float64(700),
 	}

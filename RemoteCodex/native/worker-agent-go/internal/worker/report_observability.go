@@ -36,6 +36,7 @@ func attachWorkerIdentityAndTimings(w *Worker, report *taskrunner.TaskExecutionR
 		"asset_resolution_ms": 0, "cache_lookup_ms": 0, "asset_download_ms": 0,
 		"probe_ms": 0, "compile_ms": 0, "render_ms": 0, "segment_encode_ms": 0,
 		"concat_ms": 0, "audio_download_ms": 0, "audio_mix_ms": 0,
+		"audio_prepare_ms":    0,
 		"audio_mix_encode_ms": 0, "audio_mux_ms": 0, "final_mux_ms": 0,
 		"final_copy_ms": 0, "audio_total_ms": 0,
 		"verification_ms": 0, "artifact_upload_ms": 0,
@@ -92,6 +93,9 @@ func attachWorkerIdentityAndTimings(w *Worker, report *taskrunner.TaskExecutionR
 	// compact timing ledger useful to local diagnostics as well.
 	if value, ok := report.Metrics["engine.audio_download_ms"]; ok {
 		timings["audio_download_ms"] = metricFloat(value)
+	}
+	if value, ok := report.Metrics["engine.audio_prepare_ms"]; ok {
+		timings["audio_prepare_ms"] = metricFloat(value)
 	}
 	if value, ok := report.Metrics["engine.mix_audio_ms"]; ok {
 		timings["audio_mix_ms"] = metricFloat(value)

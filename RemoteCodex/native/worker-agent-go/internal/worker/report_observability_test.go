@@ -15,6 +15,7 @@ func TestAttachWorkerIdentityAndTimingsSplitsAudioWithoutFabrication(t *testing.
 		CompletedAt: start.Add(2 * time.Second),
 		Metrics: map[string]interface{}{
 			"engine.audio_download_ms": float64(120),
+			"engine.audio_prepare_ms":  float64(180),
 		},
 		DetailedPhases: []taskrunner.DetailedPhaseTiming{
 			{Component: "engine.audio", Action: "mix", Phase: "audio", DurationMS: 1500},
@@ -40,6 +41,9 @@ func TestAttachWorkerIdentityAndTimingsSplitsAudioWithoutFabrication(t *testing.
 	}
 	if timings["audio_download_ms"] != 120 {
 		t.Fatalf("audio_download_ms = %v, want 120", timings["audio_download_ms"])
+	}
+	if timings["audio_prepare_ms"] != 180 {
+		t.Fatalf("audio_prepare_ms = %v, want 180", timings["audio_prepare_ms"])
 	}
 	if timings["audio_encode_ms"] != 0 {
 		t.Fatalf("audio_encode_ms = %v, want zero because mix+AAC is one measured command", timings["audio_encode_ms"])
