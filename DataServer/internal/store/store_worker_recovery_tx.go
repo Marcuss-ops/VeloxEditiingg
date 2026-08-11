@@ -167,13 +167,21 @@ func persistPartitionedStateTx(
 	tx *sql.Tx,
 	workerID, nowRFC3339 string,
 ) error {
-	if _, err := tx.ExecContext(ctx,
+	result, err := tx.ExecContext(ctx,
 		`UPDATE workers
 		    SET connection_state=?, last_state_change_at=?, status=?
 		  WHERE worker_id=?`,
 		connectionStatePartitioned, nowRFC3339, connectionStatePartitioned, workerID,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("update %s: %w", workerID, err)
+	}
+	affected, err := readRowsAffected(result, "persist partitioned worker state")
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return fmt.Errorf("update %s: %w", workerID, ErrTransitionConflict)
 	}
 	return nil
 }

@@ -100,11 +100,19 @@ func detectAndPersistPartitionTransition(
 	// Persist the new state + bump last_state_change_at. UPDATE
 	// rather than UPSERT because the heartbeat path always calls
 	// upsertWorkerExec first, which creates the row if needed.
-	if _, err := tx.ExecContext(ctx,
+	result, err := tx.ExecContext(ctx,
 		`UPDATE workers SET connection_state=?, last_state_change_at=? WHERE worker_id=?`,
 		newState, nowRFC3339, workerID,
-	); err != nil {
+	)
+	if err != nil {
 		return "", fmt.Errorf("partition detection: write state: %w", err)
+	}
+	affected, err := readRowsAffected(result, "partition detection write state")
+	if err != nil {
+		return "", err
+	}
+	if affected != 1 {
+		return "", fmt.Errorf("partition detection: write state: %w", ErrTransitionConflict)
 	}
 	return newState, nil
 }
