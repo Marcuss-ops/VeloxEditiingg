@@ -63,7 +63,10 @@ func (s *SQLiteStore) RevokeCredential(ctx context.Context, ref string, at time.
 	if err != nil {
 		return err
 	}
-	count, _ := result.RowsAffected()
+	count, err := readRowsAffected(result, "revoke credential")
+	if err != nil {
+		return err
+	}
 	if count == 0 {
 		return credentials.ErrNotFound
 	}

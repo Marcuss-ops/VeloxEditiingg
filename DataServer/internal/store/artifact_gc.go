@@ -134,7 +134,12 @@ func (s *SQLiteStore) LeaseArtifactGCCandidates(ctx context.Context, owner strin
 			rows.Close()
 			return nil, fmt.Errorf("artifact gc lease update: %w", err)
 		}
-		if n, _ := res.RowsAffected(); n == 1 {
+		n, err := readRowsAffected(res, "artifact gc lease")
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if n == 1 {
 			c.LeaseOwner, c.LeaseExpiresAt, c.Status = owner, &expires, ArtifactGCDeleting
 			candidates = append(candidates, c)
 		}
@@ -155,18 +160,28 @@ func (s *SQLiteStore) CompleteArtifactGC(ctx context.Context, artifactID, owner 
 		return fmt.Errorf("artifact gc: artifact_id and owner are required")
 	}
 	if deleted {
-		_, err := s.db.ExecContext(ctx, `UPDATE artifact_gc_candidates SET status='DELETED', lease_owner='', lease_expires_at=NULL, last_error='' WHERE artifact_id=? AND status='DELETING' AND lease_owner=?`, artifactID, owner)
+		result, err := s.db.ExecContext(ctx, `UPDATE artifact_gc_candidates SET status='DELETED', lease_owner='', lease_expires_at=NULL, last_error='' WHERE artifact_id=? AND status='DELETING' AND lease_owner=?`, artifactID, owner)
 		if err != nil {
 			return fmt.Errorf("artifact gc complete: %w", err)
+		}
+		if n, err := readRowsAffected(result, "artifact gc complete"); err != nil {
+			return err
+		} else if n != 1 {
+			return fmt.Errorf("artifact gc complete: lease not owned or already completed")
 		}
 		if _, err := s.db.ExecContext(ctx, `UPDATE artifacts SET status='DELETED' WHERE id=? AND status IN ('FAILED','QUARANTINED','DELETED')`, artifactID); err != nil {
 			return fmt.Errorf("artifact gc artifact status: %w", err)
 		}
 		return nil
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE artifact_gc_candidates SET status='ELIGIBLE', lease_owner='', lease_expires_at=NULL, delete_attempts=delete_attempts+1, last_error=? WHERE artifact_id=? AND status='DELETING' AND lease_owner=?`, deleteErr, artifactID, owner)
+	result, err := s.db.ExecContext(ctx, `UPDATE artifact_gc_candidates SET status='ELIGIBLE', lease_owner='', lease_expires_at=NULL, delete_attempts=delete_attempts+1, last_error=? WHERE artifact_id=? AND status='DELETING' AND lease_owner=?`, deleteErr, artifactID, owner)
 	if err != nil {
 		return fmt.Errorf("artifact gc failure: %w", err)
+	}
+	if n, err := readRowsAffected(result, "artifact gc failure"); err != nil {
+		return err
+	} else if n != 1 {
+		return fmt.Errorf("artifact gc failure: lease not owned or already completed")
 	}
 	return nil
 }

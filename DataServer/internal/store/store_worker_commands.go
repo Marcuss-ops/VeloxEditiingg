@@ -114,7 +114,10 @@ func (s *SQLiteStore) AckCommandByID(workerID, commandID string) error {
 	if err != nil {
 		return err
 	}
-	n, _ := result.RowsAffected()
+	n, err := readRowsAffected(result, "ack worker command")
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return fmt.Errorf("command %s not found, not owned by worker %s, or already acked", commandID, workerID)
 	}
@@ -124,13 +127,23 @@ func (s *SQLiteStore) AckCommandByID(workerID, commandID string) error {
 // MarkCommandDelivered marks a command as delivered.
 func (s *SQLiteStore) MarkCommandDelivered(commandID string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.Exec(
+	result, err := s.db.Exec(
 		`UPDATE worker_commands SET status = 'delivered', delivered_at = ?,
 		        attempt_count = attempt_count + 1
 		 WHERE command_id = ? AND status = 'pending'`,
 		now, commandID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	n, err := readRowsAffected(result, "mark worker command delivered")
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return fmt.Errorf("command %s not pending", commandID)
+	}
+	return nil
 }
 
 // ExpireCommands marks commands past their expiry as failed.
