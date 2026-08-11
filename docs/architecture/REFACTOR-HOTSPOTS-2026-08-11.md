@@ -68,6 +68,10 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Render-plan offer path: il piano viene validato e confrontato con
   `job_id`/`attempt_id` prima di essere persistito o consegnato; nil plan e
   identità incoerenti sono rifiutati fail-closed.
+- Render-plan profiling: il log strutturato del Master separa
+  `compile_ms`, `canonicalize_ms`, `hash_ms`, `persist_ms` e `total_ms`, e
+  registra il motivo dei fallback (`compile_error`, identità, canonicalization
+  o persist error) senza creare un compiler parallelo.
 - Job progress: gli snapshot tardivi di un tentativo precedente o con
   timestamp più vecchio non possono più regredire il read model.
 - Render-only: il contatore audio riconosce il contratto esplicito a zero
@@ -102,7 +106,7 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   davvero `segments[]`, `audio[]` e `assets[]`.
 - [ ] Solo dopo il passaggio precedente, eliminare la doppia interpretazione
   v1/compiled; fino ad allora il comportamento additive è intenzionale.
-- [ ] Registrare per ogni attempt il motivo per cui il compiled plan manca:
+- [x] Registrare nel log per ogni attempt il motivo per cui il compiled plan manca:
   compiler assente, compile error, canonicalization error o persist error.
 - [ ] Separare metriche Master `compile`, `canonicalize`, `hash`, `persist`.
 - [x] Esporre il tempo nativo `audio_prepare_ms` (compilazione del piano,
