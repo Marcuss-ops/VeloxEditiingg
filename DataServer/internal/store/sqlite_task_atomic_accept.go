@@ -79,7 +79,11 @@ func (r *SQLiteTaskRepository) AcceptTaskAtomic(ctx context.Context, attempt *ta
 	if err != nil {
 		return fmt.Errorf("task accept atomic task cas: %w", err)
 	}
-	if n, _ := taskRes.RowsAffected(); n != 1 {
+	n, rowsErr := readRowsAffected(taskRes, "task accept atomic task cas")
+	if rowsErr != nil {
+		return rowsErr
+	}
+	if n != 1 {
 		return fmt.Errorf("task accept atomic %s (canonical attempt mismatch?): %w", attempt.TaskID, taskgraph.ErrTransitionConflict)
 	}
 
@@ -115,7 +119,11 @@ func (r *SQLiteTaskRepository) AcceptTaskAtomic(ctx context.Context, attempt *ta
 	if err != nil {
 		return fmt.Errorf("task accept atomic attempt cas: %w", err)
 	}
-	if n, _ := attRes.RowsAffected(); n != 1 {
+	n, rowsErr = readRowsAffected(attRes, "task accept atomic attempt cas")
+	if rowsErr != nil {
+		return rowsErr
+	}
+	if n != 1 {
 		// Either: attempt row missing (reject — a §9.5 desync since
 		// ClaimNextWithAttemptAtomic would have created it) OR attempt
 		// is already RUNNING (replay-safe no-op: but in that case the
@@ -163,7 +171,11 @@ func (r *SQLiteTaskRepository) AcceptTaskAtomic(ctx context.Context, attempt *ta
 	if err != nil {
 		return fmt.Errorf("task accept atomic job cas: %w", err)
 	}
-	if n, _ := jobRes.RowsAffected(); n != 1 {
+	n, rowsErr = readRowsAffected(jobRes, "task accept atomic job cas")
+	if rowsErr != nil {
+		return rowsErr
+	}
+	if n != 1 {
 		return fmt.Errorf("task accept atomic job %s not promotable to %s: %w",
 			attempt.JobID, jobs.StatusRunning, taskgraph.ErrTransitionConflict)
 	}

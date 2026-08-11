@@ -137,7 +137,10 @@ func (r *SQLiteTaskRepository) expireTaskLeaseAtomic(
 	if err != nil {
 		return taskgraph.ExpireResult{}, wrapDBInfrastructure("task expire atomic attempt cas", err)
 	}
-	attemptRows, _ := attRes.RowsAffected()
+	attemptRows, rowsErr := readRowsAffected(attRes, "task expire atomic attempt cas")
+	if rowsErr != nil {
+		return taskgraph.ExpireResult{}, rowsErr
+	}
 
 	var attemptID string
 	idProbeErr := tx.QueryRowContext(ctx,
@@ -184,7 +187,10 @@ func (r *SQLiteTaskRepository) expireTaskLeaseAtomic(
 	if err != nil {
 		return taskgraph.ExpireResult{}, wrapDBInfrastructure("task expire atomic task cas", err)
 	}
-	taskRows, _ := taskRes.RowsAffected()
+	taskRows, rowsErr := readRowsAffected(taskRes, "task expire atomic task cas")
+	if rowsErr != nil {
+		return taskgraph.ExpireResult{}, rowsErr
+	}
 	if taskRows == 0 {
 		return taskgraph.ExpireResult{}, fmt.Errorf("task expire atomic %s: task CAS raced out: %w",
 			taskID, taskgraph.ErrTransitionConflict)

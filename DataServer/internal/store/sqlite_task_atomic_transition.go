@@ -77,7 +77,11 @@ func (r *SQLiteTaskRepository) TransitionTaskToTerminalAtomic(
 	if err != nil {
 		return fmt.Errorf("task terminal atomic task cas: %w", err)
 	}
-	if n, _ := taskRes.RowsAffected(); n != 1 {
+	n, rowsErr := readRowsAffected(taskRes, "task terminal atomic task cas")
+	if rowsErr != nil {
+		return rowsErr
+	}
+	if n != 1 {
 		return fmt.Errorf("task terminal atomic %s: %w", taskID, taskgraph.ErrTransitionConflict)
 	}
 
@@ -95,7 +99,10 @@ func (r *SQLiteTaskRepository) TransitionTaskToTerminalAtomic(
 	if err != nil {
 		return fmt.Errorf("task terminal atomic attempt cas: %w", err)
 	}
-	attemptRows, _ := attRes.RowsAffected()
+	attemptRows, rowsErr := readRowsAffected(attRes, "task terminal atomic attempt cas")
+	if rowsErr != nil {
+		return rowsErr
+	}
 	if attemptRows == 0 {
 		// Either the attempt is already terminal (replay-safe) OR no
 		// attempt exists at all for this (task_id, worker_id, lease_id).

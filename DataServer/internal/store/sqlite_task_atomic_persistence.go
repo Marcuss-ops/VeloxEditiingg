@@ -53,7 +53,11 @@ func ingestTaskCAS(ctx context.Context, tx *sql.Tx, cmd taskgraph.IngestResultCo
 	if errCas != nil {
 		return fmt.Errorf("task ingest atomic task cas: %w", errCas)
 	}
-	if n, _ := taskRes.RowsAffected(); n != 1 {
+	n, rowsErr := readRowsAffected(taskRes, "task ingest atomic task cas")
+	if rowsErr != nil {
+		return rowsErr
+	}
+	if n != 1 {
 		return fmt.Errorf("task ingest atomic %s: %w", cmd.TaskID, taskgraph.ErrTransitionConflict)
 	}
 	return nil
@@ -100,7 +104,10 @@ func ingestAttemptCAS(ctx context.Context, tx *sql.Tx, cmd taskgraph.IngestResul
 	if err != nil {
 		return fmt.Errorf("task ingest atomic attempt cas: %w", err)
 	}
-	attemptRows, _ := attRes.RowsAffected()
+	attemptRows, rowsErr := readRowsAffected(attRes, "task ingest atomic attempt cas")
+	if rowsErr != nil {
+		return rowsErr
+	}
 	if attemptRows == 0 {
 		return handleAttemptCASMiss(ctx, tx, cmd.TaskID, cmd.WorkerID, cmd.LeaseID)
 	}
