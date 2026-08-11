@@ -113,7 +113,10 @@ func (s *SQLiteStore) FinalizeArtifactVerified(ctx context.Context, artifactID, 
 	if err != nil {
 		return nil, fmt.Errorf("artifact: FinalizeArtifactVerified: %w", err)
 	}
-	n, _ := res.RowsAffected()
+	n, err := readRowsAffected(res, "artifact: FinalizeArtifactVerified")
+	if err != nil {
+		return nil, err
+	}
 	if n == 0 {
 		var status string
 		row := tx.QueryRowContext(ctx, `SELECT status FROM artifacts WHERE id = ?`, artifactID)

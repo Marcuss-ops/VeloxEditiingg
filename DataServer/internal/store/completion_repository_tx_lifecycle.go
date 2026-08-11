@@ -38,7 +38,10 @@ func (r *sqliteCompletionTx) InsertCompletionAttempt(ctx context.Context, p Comp
 	if err != nil {
 		return "", fmt.Errorf("store: insert completion attempt: %w", err)
 	}
-	n, _ := res.RowsAffected()
+	n, err := readRowsAffected(res, "store: insert completion attempt")
+	if err != nil {
+		return "", err
+	}
 	if n == 1 {
 		return p.CommitID, nil
 	}
@@ -132,12 +135,15 @@ func (r *sqliteCompletionTx) CompleteCompletionUpload(ctx context.Context, verdi
 }
 
 func (r *sqliteCompletionTx) StampCompletionArtifact(ctx context.Context, artifactID, storageKey, sha string, size int64) error {
-	_, err := r.tx.ExecContext(ctx, `UPDATE artifacts SET storage_provider='local',storage_key=?,sha256=?,size_bytes=? WHERE id=?`, storageKey, sha, size, artifactID)
+	res, err := r.tx.ExecContext(ctx, `UPDATE artifacts SET storage_provider='local',storage_key=?,sha256=?,size_bytes=? WHERE id=?`, storageKey, sha, size, artifactID)
 	if err != nil {
 		if sqliteerr.IsUniqueConstraint(err) {
 			return fmt.Errorf("%w: %v", ErrCompletionCanonicalConflict, err)
 		}
 		return fmt.Errorf("store: stamp completion artifact: %w", err)
+	}
+	if _, err := readRowsAffected(res, "store: stamp completion artifact"); err != nil {
+		return err
 	}
 	return nil
 }
@@ -147,7 +153,10 @@ func (r *sqliteCompletionTx) UpdateCompletionProgress(ctx context.Context, commi
 	if err != nil {
 		return 0, fmt.Errorf("store: completion progress: %w", err)
 	}
-	n, _ := res.RowsAffected()
+	n, err := readRowsAffected(res, "store: completion progress")
+	if err != nil {
+		return 0, err
+	}
 	return n, nil
 }
 

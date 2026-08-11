@@ -211,7 +211,10 @@ WHERE worker_id = ? AND rule_id = ? AND severity = ? AND state = 'ACTIVE'`,
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := readRowsAffected(res, "store: resolve alert event")
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return ErrAlertEventNotFound
 	}

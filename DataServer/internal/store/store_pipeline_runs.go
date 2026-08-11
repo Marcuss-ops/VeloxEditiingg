@@ -89,7 +89,10 @@ func (s *SQLiteStore) InsertPipelineRun(ctx context.Context, pr *pipelineruns.Pi
 		return nil, fmt.Errorf("store: InsertPipelineRun: %w", err)
 	}
 
-	affected, _ := res.RowsAffected()
+	affected, err := readRowsAffected(res, "store: InsertPipelineRun")
+	if err != nil {
+		return nil, err
+	}
 	if affected == 1 {
 		return &InsertPipelineRunResult{Created: true, Run: pr}, nil
 	}
@@ -217,7 +220,10 @@ func (s *SQLiteStore) UpdatePipelineRunRemoteJob(ctx context.Context, id, remote
 	if err != nil {
 		return fmt.Errorf("store: UpdatePipelineRunRemoteJob: %w", err)
 	}
-	n, _ := result.RowsAffected()
+	n, err := readRowsAffected(result, "store: UpdatePipelineRunRemoteJob")
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return ErrPipelineRunNoRow
 	}
@@ -241,7 +247,10 @@ func (s *SQLiteStore) UpdatePipelineRunForwarding(ctx context.Context, id, forwa
 	if err != nil {
 		return fmt.Errorf("store: UpdatePipelineRunForwarding: %w", err)
 	}
-	n, _ := result.RowsAffected()
+	n, err := readRowsAffected(result, "store: UpdatePipelineRunForwarding")
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return ErrPipelineRunNoRow
 	}
@@ -279,7 +288,10 @@ func (s *SQLiteStore) UpdatePipelineRunStatus(ctx context.Context, id string, st
 	if err != nil {
 		return fmt.Errorf("store: UpdatePipelineRunStatus: %w", err)
 	}
-	n, _ := result.RowsAffected()
+	n, err := readRowsAffected(result, "store: UpdatePipelineRunStatus")
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return ErrPipelineRunNoRow
 	}
@@ -303,7 +315,10 @@ func (s *SQLiteStore) UpdatePipelineRunVeloxJob(ctx context.Context, id, veloxJo
 	if err != nil {
 		return fmt.Errorf("store: UpdatePipelineRunVeloxJob: %w", err)
 	}
-	n, _ := result.RowsAffected()
+	n, err := readRowsAffected(result, "store: UpdatePipelineRunVeloxJob")
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return ErrPipelineRunNoRow
 	}
@@ -328,7 +343,10 @@ func (s *SQLiteStore) UpdatePipelineRunResult(ctx context.Context, id, resultJSO
 	if err != nil {
 		return fmt.Errorf("store: UpdatePipelineRunResult: %w", err)
 	}
-	n, _ := result.RowsAffected()
+	n, err := readRowsAffected(result, "store: UpdatePipelineRunResult")
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return ErrPipelineRunNoRow
 	}
@@ -353,7 +371,10 @@ func (s *SQLiteStore) ClearPipelineRunError(ctx context.Context, id string) erro
 	if err != nil {
 		return fmt.Errorf("store: ClearPipelineRunError: %w", err)
 	}
-	n, _ := result.RowsAffected()
+	n, err := readRowsAffected(result, "store: ClearPipelineRunError")
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return ErrPipelineRunNoRow
 	}
@@ -378,7 +399,10 @@ func (s *SQLiteStore) UpdatePipelineRunError(ctx context.Context, id, code, mess
 	if err != nil {
 		return fmt.Errorf("store: UpdatePipelineRunError: %w", err)
 	}
-	n, _ := result.RowsAffected()
+	n, err := readRowsAffected(result, "store: UpdatePipelineRunError")
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return ErrPipelineRunNoRow
 	}
