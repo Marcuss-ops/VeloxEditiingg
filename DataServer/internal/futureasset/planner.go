@@ -36,10 +36,26 @@ func (p *FutureAssetPlanner) Build(workerID, currentJobID, planID string, jobs [
 		return shared.Plan{}, fmt.Errorf("futureasset: plan ttl must be positive")
 	}
 	now := p.now().UTC()
-	version := p.version.Add(1)
+	version := p.nextVersion(now)
 	return shared.Build(shared.PlannerInput{
 		Version: version, PlanID: planID, WorkerID: workerID,
 		GeneratedAt: now, ExpiresAt: now.Add(ttl), CurrentJob: currentJobID,
 		FutureJobs: jobs, Limits: p.limits,
 	})
+}
+
+// nextVersion remains ordered across planner instances started at different
+// times (for example after a Master restart), while the atomic floor keeps
+// same-clock and clock-regression calls monotonic within one process.
+func (p *FutureAssetPlanner) nextVersion(now time.Time) uint64 {
+	candidate := uint64(now.UnixNano())
+	for {
+		previous := p.version.Load()
+		if candidate <= previous {
+			candidate = previous + 1
+		}
+		if p.version.CompareAndSwap(previous, candidate) {
+			return candidate
+		}
+	}
 }
