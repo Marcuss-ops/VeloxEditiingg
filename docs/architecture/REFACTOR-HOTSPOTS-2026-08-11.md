@@ -1,0 +1,137 @@
+# Velox — hotspot e piano di stabilizzazione
+
+Questo documento fotografa la codebase al 2026-08-11. È una checklist
+operativa per i prossimi interventi; i test operativi 4/4, 12 job e 16 job
+restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
+
+## Vincoli di lavoro
+
+- Un solo blocco alla volta, con test prima/dopo.
+- Modifiche atomiche direttamente su `main`, sempre pubblicate.
+- Nessun intervento sul WIP preesistente: `DataServer/internal/grpcserver/handler_artifacts.go` e il binario locale `DataServer/fleetctl`.
+- Nessun nuovo fallback `nil`, noop o stub nel wiring di produzione.
+- `worker_id` resta immutabile; i nomi operativi usano `worker_name`.
+- Le rimozioni di simboli o helper cross-package richiedono `scripts/ci/pre-removal-verify.sh`.
+
+## Chiuso in questa stabilizzazione
+
+- Build metadata riallineato a `VERSION.txt`.
+- Delivery: gli errori nelle transizioni di fase, retry e finalizzazione non
+  vengono più ignorati; risalgono come errori infrastrutturali.
+- Worker heartbeat/session: una scrittura SQLite fallita non produce più un
+  successo apparente e non aggiorna il read model in memoria.
+- Render plan: se il piano compilato è presente, il worker verifica che
+  `compiled_render_plan_sha256` corrisponda al JSON ricevuto. Il piano v1 resta
+  esplicitamente il percorso esecutivo finché il batch executor non è migrato.
+- Creator forwarding: il passaggio a `RETRY_WAIT` è protetto da
+  `runner_id`, `lease_id` e scadenza del lease.
+- Gate architetturali e gate full-module verdi dopo i fix.
+
+## Hotspot da risolvere in ordine
+
+### P0 — Contratti autorevoli e concorrenza
+
+- [x] Propagare gli errori di persistenza della delivery.
+- [x] Impedire retry forwarding da lease non più proprietario.
+- [x] Rendere fail-closed la persistenza di heartbeat e `last_seen`.
+- [ ] Verificare tutti i writer di stato con la stessa regola: ogni `UPDATE`
+  autorevole deve controllare `RowsAffected`, ownership e generazione.
+- [ ] Audit dei percorsi `MarkDeliverySucceeded`, `FinalizeVerified`,
+  `CompletePublicationAfterReconciliation` e `TaskResult`: nessun ritorno
+  `nil` dopo un commit non avvenuto.
+- [ ] Aggiungere test di race/reclaim per: lease scaduto, reconnect worker,
+  retry concorrente e doppio finalizer.
+
+### P1 — Render plan e misurabilità
+
+- [x] Hash del compiled plan verificato sul worker.
+- [ ] Definire il passaggio di versione che abilita il batch executor a usare
+  davvero `segments[]`, `audio[]` e `assets[]`.
+- [ ] Solo dopo il passaggio precedente, eliminare la doppia interpretazione
+  v1/compiled; fino ad allora il comportamento additive è intenzionale.
+- [ ] Registrare per ogni attempt il motivo per cui il compiled plan manca:
+  compiler assente, compile error, canonicalization error o persist error.
+- [ ] Separare metriche Master `compile`, `canonicalize`, `hash`, `persist`.
+- [ ] Separare metriche worker `asset resolution`, `audio prepare`, `timeline`,
+  `mix`, `AAC`, `mux`, `finalize`, `SHA`.
+- [ ] Assicurare che la somma dei tempi sia documentata come nested o
+  exclusive, evitando breakdown matematicamente incoerenti.
+
+### P1 — Retry, deadline e idempotenza
+
+- [ ] Catalogare le policy duplicate: remote engine, forwarding, delivery,
+  multipart publisher e downloader.
+- [ ] Per ogni policy definire: tentativi totali, errori retryable, massimo
+  backoff, jitter, `Retry-After`, deadline e comportamento su cancellation.
+- [ ] Sostituire eventuali sleep non cancellabili con timer legati al context.
+- [ ] Verificare che ogni retry abbia una chiave idempotente stabile e che un
+  retry dopo timeout non generi un secondo effetto remoto.
+- [ ] Distinguere sempre `lease lost`, `provider error` e `DB/infrastructure
+  error`; non farli confluire nello stesso contatore.
+
+### P1 — Confini I/O e SQL
+
+- [ ] Portare `creatorflow/resolver.go` verso repository tipizzati senza
+  duplicare la transazione atomica esistente.
+- [ ] Portare `jobs/enqueue/drive_resolution.go` verso un repository di
+  lookup read-only; gli errori DB non devono degradare silenziosamente a
+  “reference originale”.
+- [ ] Verificare i resolver delivery e gli adapter metrici contro
+  `check-db-access.sh`; ogni eccezione deve avere motivazione e owner.
+- [ ] Misurare `sql.DB.Stats()` del Master: `WaitCount` e `WaitDuration`, non
+  solo `database locked`.
+- [ ] Mantenere un solo writer per ogni aggregate e CAS esplicito per le
+  transizioni concorrenti.
+
+### P1 — Worker layering e stato globale
+
+- [ ] Rimuovere la dipendenza dei package pubblici worker da package `internal`
+  (`pkg/cache` → telemetry/trace interno; pipeline pubbliche → trace interno).
+- [ ] Rendere la lista binari ffmpeg una dipendenza di bootstrap immutabile o
+  un’opzione esplicita, non una slice globale esportata e mutabile.
+- [ ] Limitare lo stato globale a registri read-only o inizializzazione; ogni
+  contatore/observer che deve essere isolabile nei test riceve un’istanza.
+- [ ] Verificare che un errore di bootstrap non possa lasciare `READY=true`.
+
+### P2 — Legacy e documentazione
+
+- [ ] Aggiornare `docs/roadmap/README.md`: le directory `refactored/...` non
+  esistono più e il documento descrive ancora fasi già completate.
+- [ ] Tenere le route 410 solo finché esiste evidenza di traffico e un owner;
+  la rimozione richiede audit usage + gate full-module.
+- [ ] Rimuovere i dead seam Ansible/remote solo dopo conferma che non siano
+  ancora percorsi di break-glass o fixture operative.
+- [ ] Eliminare codice commentato e helper inutilizzati solo in commit
+  atomici, senza confondere compatibilità documentata con dead code.
+
+## Benchmark finali — non anticipare
+
+1. Certificazione prefetch: 20 run × 4 worker, `B` pronto prima dell’avvio,
+   zero download foreground.
+2. Fleet/operations: rollout, drain, restart, ready e digest verification
+   senza SSH manuale.
+3. Scaling: workload identico a 12 job, poi identico a 16 job.
+4. Matrice render: 5/10 minuti × poche/molte scene × audio semplice/complesso,
+   ripetuta su ogni worker.
+5. Profiling e AudioProgram: prima misurare, poi compilare la timeline,
+   poi valutare audio preparation upstream.
+6. Target performance: p50 `<15s`, poi `<12s`, infine `<10s`, mantenendo
+   correttezza, determinismo e SHA artifact equivalenti.
+
+## Gate minimo per ogni blocco
+
+```text
+gofmt / lint locale
+test package interessati
+go vet package interessati
+check-architecture.sh
+git diff --check
+commit atomico
+push main
+```
+
+Per rimozioni o cambi di contratti cross-package aggiungere sempre:
+
+```bash
+bash scripts/ci/pre-removal-verify.sh
+```
