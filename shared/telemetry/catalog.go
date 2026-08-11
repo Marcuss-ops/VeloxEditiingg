@@ -226,6 +226,7 @@ var canonicalEventDescriptors = []EventDescriptor{
 	{Component: "engine.video", Action: "timestamp_normalize", Origin: OriginEngine, Scope: ScopeSegment, Phase: "decode", EventType: ""},
 	{Component: "ffmpeg", Action: "progress", Origin: OriginFFmpeg, Scope: ScopeSegment, Phase: "encode", EventType: ""},
 	{Component: "io", Action: "summary", Origin: OriginValidation, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
+	{Component: "master.artifact", Action: "sha_mismatch", Origin: OriginMaster, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
 	{Component: "master.commit", Action: "transaction", Origin: OriginMaster, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
 	{Component: "master.commit_ack", Action: "send", Origin: OriginMaster, Scope: ScopeAttempt, Phase: "finalize", EventType: ""},
 	{Component: "master.enqueue", Action: "transaction", Origin: OriginMaster, Scope: ScopeTask, Phase: "queue", EventType: ""},

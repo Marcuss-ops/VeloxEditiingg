@@ -80,7 +80,9 @@ CREATE TABLE task_attempts (
 	trace_id             TEXT NOT NULL DEFAULT '',
 	span_id              TEXT NOT NULL DEFAULT '',
 	renderer_version     TEXT NOT NULL DEFAULT '', -- migration 148
-	artifact_sha256      TEXT NOT NULL DEFAULT ''  -- migration 148
+	artifact_sha256      TEXT NOT NULL DEFAULT '', -- migration 148
+	worker_sha256        TEXT NOT NULL DEFAULT '', -- migration 149
+	artifact_sha256_mismatch INTEGER NOT NULL DEFAULT 0 -- migration 149
 );
 `
 	if _, err := db.Exec(schema); err != nil {

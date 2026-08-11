@@ -75,6 +75,13 @@ type TaskAttempt struct {
 	// artifact_sha256 is reconstructable per attempt.
 	RendererVersion string `json:"renderer_version,omitempty"`
 	ArtifactSHA256  string `json:"artifact_sha256,omitempty"`
+	// WorkerSHA256 is the worker-declared primary artifact SHA at report
+	// time (migration 149). It is a transport hint, NEVER authoritative;
+	// ArtifactSHA256 carries the master-computed authoritative value.
+	// ArtifactSHA256Mismatch is 1 when the two differ (potential
+	// ARTIFACT_TRANSFER_CORRUPTED), 0 otherwise.
+	WorkerSHA256            string `json:"worker_sha256,omitempty"`
+	ArtifactSHA256Mismatch  bool   `json:"artifact_sha256_mismatch"`
 	// Scorecard v2 / Step 15: OpenTelemetry distributed tracing correlation.
 	// trace_id is the W3C trace ID (32 hex chars); span_id is the parent
 	// span that dispatched this attempt (16 hex chars). Both are propagated

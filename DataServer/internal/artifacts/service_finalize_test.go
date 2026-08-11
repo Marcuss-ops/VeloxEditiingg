@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -63,6 +64,63 @@ func TestFinalize_StampsAuthoritativeArtifactSHAOnAttempt(t *testing.T) {
 	).Scan(&attemptSHA, &rendererVersion))
 	require.Equal(t, sha256Hex(payload), attemptSHA, "attempt artifact_sha256 must be the master-computed authoritative SHA")
 	require.Equal(t, "", rendererVersion, "renderer_version is report-stamped only; finalize must not fabricate it")
+}
+
+// =====================================================================
+// #region 7c — reverse ordering (report-first): FinalizeVerified must
+// preserve the worker-declared hint and flag a mismatch against the
+// master-computed authoritative SHA (migration 149)
+// =====================================================================
+
+func TestFinalize_FlagsWorkerMasterSHAMismatchOnOverwrite(t *testing.T) {
+	env := setupTestEnv(t)
+	env.seedJob("J7C", "AWAITING_ARTIFACT", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
+	env.seedAttempt("J7C", 1, "RENDER_FINISHED", testWorkerID, testLeaseID)
+	_, errTask := env.db.Exec(
+		`UPDATE tasks SET attempt_id = 'J7C-attempt', worker_id = ?, lease_id = ?
+		 WHERE task_id = 'J7C-task'`, testWorkerID, testLeaseID)
+	require.NoError(t, errTask)
+
+	// Simulate the report-first ordering: the worker report gap-filled
+	// artifact_sha256 with a hint BEFORE finalization ran (migration 148
+	// gap-fill). The hint deliberately differs from what the master will
+	// compute from the received bytes.
+	workerHint := strings.Repeat("a", 64)
+	_, errSeed := env.db.Exec(
+		`UPDATE task_attempts SET artifact_sha256 = ? WHERE id = 'J7C-attempt'`, workerHint)
+	require.NoError(t, errSeed)
+
+	cmd := beginUploadDefaultCmd("J7C")
+	payload := []byte("reverse-ordering-mismatch-payload")
+	cmd.ExpectedSizeBytes = int64(len(payload))
+	cmd.ExpectedSHA256 = sha256Hex(payload)
+	sess, err := env.svc.BeginUpload(context.Background(), cmd)
+	require.NoError(t, err)
+	_, err = env.svc.Receive(context.Background(), sess.UploadID, uploadBytes(payload))
+	require.NoError(t, err)
+
+	_, err = env.svc.Finalize(context.Background(), FinalizeArtifactCommand{
+		UploadID: sess.UploadID, JobID: "J7C", WorkerID: testWorkerID,
+		LeaseID: testLeaseID, AttemptNumber: 1, ExpectedRevision: testRevision,
+		AttemptID: "J7C-attempt",
+	})
+	require.NoError(t, err)
+
+	// The authoritative master-computed SHA wins on artifact_sha256; the
+	// worker hint is preserved on worker_sha256; the mismatch is flagged.
+	masterSHA := sha256Hex(payload)
+	require.NotEqual(t, workerHint, masterSHA, "fixture must use differing SHAs")
+	var (
+		gotAuthoritative, gotWorker string
+		gotMismatch                 int
+	)
+	require.NoError(t, env.db.QueryRow(
+		`SELECT artifact_sha256, worker_sha256, artifact_sha256_mismatch
+		 FROM task_attempts WHERE id = 'J7C-attempt'`,
+	).Scan(&gotAuthoritative, &gotWorker, &gotMismatch))
+	require.Equal(t, masterSHA, gotAuthoritative, "artifact_sha256 must be the master-computed authoritative value")
+	require.Equal(t, workerHint, gotWorker, "worker_sha256 must preserve the report-declared hint")
+	require.Equal(t, 1, gotMismatch, "artifact_sha256_mismatch must be 1 (worker hint != master-computed)")
 }
 
 // =====================================================================

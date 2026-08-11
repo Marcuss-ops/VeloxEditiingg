@@ -1,0 +1,26 @@
+-- Worker-declared SHA vs master-computed SHA comparison on task_attempts.
+--
+-- The determinism chain closure (migration 148) stamps artifact_sha256 with
+-- the master-computed authoritative value at FinalizeVerified, and gap-fills
+-- the worker-declared hint only when the authoritative value is absent. This
+-- migration makes the COMPARISON itself reconstructable and queryable:
+--
+--   worker_sha256            — the worker-declared primary artifact SHA at
+--                              report time (migration 148's gap-fill input).
+--   artifact_sha256_mismatch — 1 when the worker-declared SHA differs from
+--                              the master-computed authoritative value
+--                              (potential ARTIFACT_TRANSFER_CORRUPTED); 0
+--                              when they match or no comparison is possible.
+--
+-- The authoritative master SHA stays on artifacts.sha256 and on the
+-- attempt's artifact_sha256 (never overwritten by the worker hint). The
+-- mismatch flag is computed at both stamping points:
+--   * report ingest  (persistAttemptRenderIdentity): authoritative already
+--     stamped by FinalizeVerified in the production ordering → compare.
+--   * FinalizeVerified: when it overwrites a report-gap-filled value that
+--     differs from the master-computed SHA → compare.
+--
+-- Forward-only: plain ADD COLUMN with defaults keeps every existing row
+-- valid ('' and 0 mean "no comparison recorded").
+ALTER TABLE task_attempts ADD COLUMN worker_sha256 TEXT NOT NULL DEFAULT '';
+ALTER TABLE task_attempts ADD COLUMN artifact_sha256_mismatch INTEGER NOT NULL DEFAULT 0;

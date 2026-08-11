@@ -368,21 +368,52 @@ func TestE2E_MetricsFlow_WorkerToDBToAPI(t *testing.T) {
 	// master-computed authoritative SHA is stamped at FinalizeVerified
 	// BEFORE the report arrives. Simulate that ordering by pre-stamping
 	// the attempt, then re-ingesting the same report: the ingest-side
-	// stamp must NOT clobber the authoritative value with the worker hint.
+	// stamp must NOT clobber the authoritative value with the worker hint,
+	// AND the worker hint must be recorded separately with a mismatch
+	// flag (migration 149) — the worker declared aaaa... while the master
+	// computed eeee..., so this is a potential ARTIFACT_TRANSFER_CORRUPTED.
 	execQuery(t, store, ctx,
 		`UPDATE task_attempts SET artifact_sha256 = ? WHERE id = ?`,
 		"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", attemptID)
 	if err := taskRepo.IngestTaskResultAtomic(ctx, cmd); err != nil {
 		t.Fatalf("re-ingest after authoritative stamp: %v", err)
 	}
-	var preservedSHA string
+	// The sha_mismatch master event fired during the re-ingest; re-read the
+	// live count so the later replay/conflict assertions compare against it.
 	if err := store.db.QueryRowContext(ctx,
-		`SELECT artifact_sha256 FROM task_attempts WHERE id = ?`, attemptID,
-	).Scan(&preservedSHA); err != nil {
+		`SELECT COUNT(*) FROM task_execution_events WHERE attempt_id = ?`, attemptID,
+	).Scan(&executionEventCount); err != nil {
+		t.Fatalf("re-count execution events after mismatch stamp: %v", err)
+	}
+	var (
+		preservedSHA, workerSHA string
+		shaMismatch              int
+	)
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT artifact_sha256, worker_sha256, artifact_sha256_mismatch
+		 FROM task_attempts WHERE id = ?`, attemptID,
+	).Scan(&preservedSHA, &workerSHA, &shaMismatch); err != nil {
 		t.Fatalf("read preserved chain SHA: %v", err)
 	}
 	if preservedSHA != "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" {
 		t.Fatalf("gap-fill guard clobbered authoritative SHA: got %q", preservedSHA)
+	}
+	if workerSHA != cmd.ArtifactSHA256 {
+		t.Fatalf("worker_sha256 = %q; want recorded hint %q", workerSHA, cmd.ArtifactSHA256)
+	}
+	if shaMismatch != 1 {
+		t.Fatalf("artifact_sha256_mismatch = %d; want 1 (worker aaaa... != master eeee...)", shaMismatch)
+	}
+	// The mismatch must be visible as a canonical master telemetry event.
+	var mismatchEventCount int
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM task_execution_events
+		 WHERE attempt_id = ? AND component = 'master.artifact' AND action = 'sha_mismatch'`, attemptID,
+	).Scan(&mismatchEventCount); err != nil {
+		t.Fatalf("count sha_mismatch events: %v", err)
+	}
+	if mismatchEventCount != 1 {
+		t.Fatalf("sha_mismatch events = %d; want 1", mismatchEventCount)
 	}
 
 	// ── 4. Verify observability Overview API ──────────────────────────

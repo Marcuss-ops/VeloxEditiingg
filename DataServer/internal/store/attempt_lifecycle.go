@@ -42,6 +42,7 @@ var attemptColumns = []string{
 	"git_sha", "worker_version", "engine_version",
 	"ffmpeg_version", "config_hash", "docker_image_digest",
 	"renderer_version", "artifact_sha256",
+	"worker_sha256", "artifact_sha256_mismatch",
 	"trace_id", "span_id",
 }
 
@@ -57,6 +58,7 @@ func scanAttempt(row interface{ Scan(...interface{}) error }) (*taskattempts.Tas
 		&a.GitSHA, &a.WorkerVersion, &a.EngineVersion,
 		&a.FFmpegVersion, &a.ConfigHash, &a.DockerImageDigest,
 		&a.RendererVersion, &a.ArtifactSHA256,
+		&a.WorkerSHA256, &a.ArtifactSHA256Mismatch,
 		&a.TraceID, &a.SpanID,
 	)
 	if err != nil {

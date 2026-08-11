@@ -14,7 +14,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 
 	"velox-server/internal/taskgraph"
 )
@@ -43,36 +45,74 @@ func persistAttemptVersioning(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ing
 	return nil
 }
 
+// renderIdentityStamp is the outcome of persistAttemptRenderIdentity.
+// Mismatch is true when the worker-declared SHA differs from the
+// master-computed authoritative value already stamped on the attempt row
+// (potential ARTIFACT_TRANSFER_CORRUPTED). AuthoritativeSHA256 is the
+// master-computed value (empty when finalization has not stamped yet).
+type renderIdentityStamp struct {
+	Mismatch            bool
+	AuthoritativeSHA256 string
+}
+
 // persistAttemptRenderIdentity stamps the determinism-chain tail
-// (renderer_version + artifact_sha256, migration 148) on the attempt row
-// when the worker report arrives. renderer_version falls back to the
-// worker engine version when not carried explicitly. artifact_sha256 is
-// the worker-declared primary artifact SHA, stamped as a GAP-FILL ONLY:
-// finalization (store.FinalizeVerified) writes the master-computed
-// authoritative value first in the production ordering, and the
-// CASE-guard below never overwrites it with a worker hint. Both are
-// best-effort: no-op when neither is known.
-func persistAttemptRenderIdentity(ctx context.Context, tx *sql.Tx, cmd taskgraph.IngestResultCommand, now string) error {
+// (renderer_version + artifact_sha256 + worker_sha256 +
+// artifact_sha256_mismatch, migrations 148+149) on the attempt row when
+// the worker report arrives. renderer_version falls back to the worker
+// engine version when not carried explicitly.
+//
+// artifact_sha256 carries the master-computed authoritative value, written
+// as a GAP-FILL ONLY: finalization (store.FinalizeVerified) stamps the
+// authoritative value first in the production ordering, and the CASE-guard
+// never overwrites it with a worker hint. worker_sha256 records the
+// worker-declared hint verbatim so the comparison is reconstructable even
+// when finalization runs after the report. artifact_sha256_mismatch is 1
+// when both values are present and differ. Best-effort: no-op when neither
+// version nor hint is known.
+func persistAttemptRenderIdentity(ctx context.Context, tx *sql.Tx, cmd taskgraph.IngestResultCommand, now string) (renderIdentityStamp, error) {
+	var stamp renderIdentityStamp
 	rendererVersion := cmd.RendererVersion
 	if rendererVersion == "" {
 		rendererVersion = cmd.EngineVersion
 	}
 	if rendererVersion == "" && cmd.ArtifactSHA256 == "" {
-		return nil
+		return stamp, nil
 	}
+
+	// Read the authoritative value before the gap-fill so the worker hint
+	// can be compared against what finalization already stamped (if any).
+	var authoritative string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT artifact_sha256 FROM task_attempts
+		 WHERE task_id = ? AND worker_id = ? AND lease_id = ?`,
+		cmd.TaskID, cmd.WorkerID, cmd.LeaseID,
+	).Scan(&authoritative); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return stamp, fmt.Errorf("task ingest atomic render identity read: %w", err)
+	}
+	authoritative = strings.TrimSpace(authoritative)
+	workerHint := strings.TrimSpace(cmd.ArtifactSHA256)
+	stamp.AuthoritativeSHA256 = authoritative
+	stamp.Mismatch = authoritative != "" && workerHint != "" && authoritative != workerHint
+	mismatch := 0
+	if stamp.Mismatch {
+		mismatch = 1
+	}
+
 	_, err := tx.ExecContext(ctx,
 		`UPDATE task_attempts
 		 SET renderer_version = ?,
 		     artifact_sha256 = CASE WHEN artifact_sha256 = '' THEN ? ELSE artifact_sha256 END,
+		     worker_sha256 = CASE WHEN worker_sha256 = '' THEN ? ELSE worker_sha256 END,
+		     artifact_sha256_mismatch = CASE WHEN artifact_sha256_mismatch = 1 THEN 1 ELSE ? END,
 		     updated_at = ?
 		 WHERE task_id = ? AND worker_id = ? AND lease_id = ?`,
-		rendererVersion, cmd.ArtifactSHA256, now,
+		rendererVersion, workerHint, workerHint, mismatch, now,
 		cmd.TaskID, cmd.WorkerID, cmd.LeaseID,
 	)
 	if err != nil {
-		return fmt.Errorf("task ingest atomic render identity: %w", err)
+		return stamp, fmt.Errorf("task ingest atomic render identity: %w", err)
 	}
-	return nil
+	return stamp, nil
 }
 
 // persistAttemptTracing writes OpenTelemetry trace context on the attempt row.

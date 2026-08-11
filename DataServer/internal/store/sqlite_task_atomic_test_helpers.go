@@ -92,6 +92,8 @@ CREATE TABLE task_attempts (
 	updated_at         TEXT,
 	renderer_version   TEXT NOT NULL DEFAULT '', -- migration 148
 	artifact_sha256    TEXT NOT NULL DEFAULT '', -- migration 148
+	worker_sha256      TEXT NOT NULL DEFAULT '', -- migration 149
+	artifact_sha256_mismatch INTEGER NOT NULL DEFAULT 0, -- migration 149
 	UNIQUE (task_id, attempt_number),
 	FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
 );

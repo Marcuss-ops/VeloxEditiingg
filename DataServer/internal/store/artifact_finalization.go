@@ -153,11 +153,19 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		res, err = tx.ExecContext(ctx, `
 			UPDATE task_attempts
 			SET status = ?, completed_at = COALESCE(completed_at, ?), updated_at = ?,
-			    artifact_sha256 = ?
+			    artifact_sha256 = ?,
+			    -- Determinism chain comparison (migration 149): preserve the
+			    -- worker-declared hint (report gap-fill may have stamped it
+			    -- first) and flag a discrepancy against the master-computed
+			    -- authoritative value (potential ARTIFACT_TRANSFER_CORRUPTED).
+			    worker_sha256 = CASE WHEN worker_sha256 = '' THEN artifact_sha256 ELSE worker_sha256 END,
+			    artifact_sha256_mismatch = CASE
+			        WHEN artifact_sha256 != '' AND artifact_sha256 != ? THEN 1
+			        ELSE artifact_sha256_mismatch END
 			WHERE id = ? AND task_id = (SELECT task_id FROM tasks WHERE job_id = ? AND attempt_id = ?)
 			  AND worker_id = ? AND lease_id = ?
 			  AND status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT')`,
-			"SUCCEEDED", nowStr, nowStr, p.SHA256, p.AttemptID, p.JobID, p.AttemptID, p.WorkerID, p.LeaseID)
+			"SUCCEEDED", nowStr, nowStr, p.SHA256, p.SHA256, p.AttemptID, p.JobID, p.AttemptID, p.WorkerID, p.LeaseID)
 		if err != nil {
 			return nil, fmt.Errorf("store: FinalizeVerified attempt winner CAS: %w", err)
 		}
