@@ -537,6 +537,48 @@ CREATE TABLE publication_states (
   last_error_code TEXT,
   created_at     TEXT NOT NULL,
   updated_at     TEXT NOT NULL
+);
+-- This fixture records migrations through 136 as applied below, so it must
+-- also provide the pre-145 task_attempts table that migration 145 extends
+-- (plain ADD COLUMN). The production chain creates this table in 041 and
+-- extends it through 144; the fixture mirrors that shape so 145 applies
+-- exactly as it would on a real upgraded database.
+CREATE TABLE task_attempts (
+  id                   TEXT PRIMARY KEY,
+  task_id              TEXT NOT NULL,
+  job_id               TEXT NOT NULL,
+  attempt_number       INTEGER NOT NULL,
+  worker_id            TEXT NOT NULL,
+  worker_session_id    TEXT NOT NULL DEFAULT '',
+  worker_snapshot_id   TEXT NOT NULL DEFAULT '',
+  lease_id             TEXT NOT NULL,
+  status               TEXT NOT NULL,
+  started_at           TEXT,
+  completed_at         TEXT,
+  error_code           TEXT NOT NULL DEFAULT '',
+  error_message        TEXT NOT NULL DEFAULT '',
+  report_version       INTEGER NOT NULL DEFAULT 0,
+  created_at           TEXT NOT NULL,
+  updated_at           TEXT NOT NULL,
+  git_sha              TEXT NOT NULL DEFAULT '',
+  worker_version       TEXT NOT NULL DEFAULT '',
+  engine_version       TEXT NOT NULL DEFAULT '',
+  ffmpeg_version       TEXT NOT NULL DEFAULT '',
+  config_hash          TEXT NOT NULL DEFAULT '',
+  docker_image_digest  TEXT NOT NULL DEFAULT '',
+  trace_id             TEXT NOT NULL DEFAULT '',
+  span_id              TEXT NOT NULL DEFAULT ''
+);
+-- This fixture records migrations through 136 as applied below, so it must
+-- also provide the pre-146 jobs table that migration 146 extends (plain
+-- ADD COLUMN + index). The production chain creates this table in 001 and
+-- ALTERs it through 145; the fixture mirrors a compatible shape so 146
+-- applies exactly as it would on a real upgraded database.
+CREATE TABLE jobs (
+  job_id     TEXT PRIMARY KEY,
+  status     TEXT,
+  created_at TEXT,
+  updated_at TEXT
 )
 `)
 	require.NoError(t, err)
@@ -563,6 +605,13 @@ CREATE TABLE publication_states (
 	err = migrated.DB().QueryRow(`SELECT version FROM schema_migrations WHERE version = 142`).Scan(&migrationVersion)
 	require.NoError(t, err)
 	require.Equal(t, 142, migrationVersion)
+
+	// Migration 145 (attempt render plan) must apply on the legacy-upgrade
+	// path too — this pins the ALTER TABLE task_attempts against the
+	// fixture-provided pre-145 task_attempts shape.
+	err = migrated.DB().QueryRow(`SELECT version FROM schema_migrations WHERE version = 145`).Scan(&migrationVersion)
+	require.NoError(t, err)
+	require.Equal(t, 145, migrationVersion)
 }
 
 func TestValidationStoreHandlesConcurrentUpserts(t *testing.T) {
