@@ -73,11 +73,11 @@ grep -Fq "update $WORKER --digest $DIGEST" "$LOG" || { echo 'FAIL: update was no
 grep -Fq "smoke $WORKER" "$LOG" || { echo 'FAIL: smoke was not single-worker' >&2; exit 1; }
 mapfile -t apply_commands <"$LOG"
 [[ "${#apply_commands[@]}" -eq 5 ]] || { echo "FAIL: expected 5 ordered commands, got ${#apply_commands[@]}" >&2; exit 1; }
-[[ "${apply_commands[0]}" == "inspect $WORKER" ]] || { echo 'FAIL: apply did not inspect before update' >&2; exit 1; }
+[[ "${apply_commands[0]}" == "inspect --json $WORKER" ]] || { echo 'FAIL: apply did not inspect before update' >&2; exit 1; }
 [[ "${apply_commands[1]}" == "update $WORKER --digest $DIGEST --reason canary v1.2.28-canonical" ]] || { echo 'FAIL: apply update command contract drifted' >&2; exit 1; }
-[[ "${apply_commands[2]}" == "inspect $WORKER" ]] || { echo 'FAIL: apply did not inspect after update' >&2; exit 1; }
+[[ "${apply_commands[2]}" == "inspect --json $WORKER" ]] || { echo 'FAIL: apply did not inspect after update' >&2; exit 1; }
 [[ "${apply_commands[3]}" == "smoke $WORKER" ]] || { echo 'FAIL: apply did not smoke the selected worker' >&2; exit 1; }
-[[ "${apply_commands[4]}" == "inspect $WORKER" ]] || { echo 'FAIL: apply did not inspect after smoke/reconnect' >&2; exit 1; }
+[[ "${apply_commands[4]}" == "inspect --json $WORKER" ]] || { echo 'FAIL: apply did not inspect after smoke/reconnect' >&2; exit 1; }
 ! grep -Eq '(^| )status( |$)|,|worker-[^ ]+ ' "$LOG" || { echo 'FAIL: apply touched fleet status/implicit workers' >&2; exit 1; }
 printf 'PASS: apply is serial and single-worker\n'
 
@@ -92,7 +92,7 @@ grep -Fq 'ROLLBACK SUCCEEDED' <<<"$output"
 grep -Fq "rollback $WORKER --digest $PREVIOUS_DIGEST" "$LOG" || { echo 'FAIL: explicit rollback did not receive the previous digest' >&2; exit 1; }
 mapfile -t rollback_commands <"$LOG"
 [[ "${#rollback_commands[@]}" -eq 3 ]] || { echo "FAIL: expected inspect/rollback/inspect, got ${#rollback_commands[@]}" >&2; exit 1; }
-[[ "${rollback_commands[0]}" == "inspect $WORKER" && "${rollback_commands[1]}" == "rollback $WORKER --digest $PREVIOUS_DIGEST --reason rollback v1.2.28-canonical canary" && "${rollback_commands[2]}" == "inspect $WORKER" ]] || { echo 'FAIL: rollback command order/target drifted' >&2; exit 1; }
+[[ "${rollback_commands[0]}" == "inspect --json $WORKER" && "${rollback_commands[1]}" == "rollback $WORKER --digest $PREVIOUS_DIGEST --reason rollback v1.2.28-canonical canary" && "${rollback_commands[2]}" == "inspect --json $WORKER" ]] || { echo 'FAIL: rollback command order/target drifted' >&2; exit 1; }
 printf 'PASS: rollback is explicit, digest-pinned, and single-worker\n'
 
 if bash "$SCRIPT" --apply >/dev/null 2>&1; then
