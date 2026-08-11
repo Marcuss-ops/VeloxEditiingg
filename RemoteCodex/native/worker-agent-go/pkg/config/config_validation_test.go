@@ -28,6 +28,16 @@ func TestValidateSuccess(t *testing.T) {
 	}
 }
 
+func TestValidatePrefetchReservesForegroundDownloadSlot(t *testing.T) {
+	cfg := devValidBase()
+	cfg.AssetDownloadConcurrency = 2
+	cfg.PrefetchMaxConcurrent = 2
+
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "reserve a foreground download slot") {
+		t.Fatalf("Validate() error = %v, want foreground-slot reservation failure", err)
+	}
+}
+
 func TestValidateNil(t *testing.T) {
 	var cfg *WorkerConfig
 

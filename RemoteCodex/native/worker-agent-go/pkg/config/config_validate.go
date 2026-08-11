@@ -114,6 +114,23 @@ func (c *WorkerConfig) Validate() error {
 			"invalid worker_profile: %q (valid: %q or empty)", c.WorkerProfile, CreatorProfile))
 	}
 
+	// Keep one download-manager slot available to foreground resolution. A
+	// prefetch plan is an optimization and must never be able to occupy the
+	// entire canonical transfer pool.
+	assetDownloadSlots := c.AssetDownloadConcurrency
+	if assetDownloadSlots <= 0 {
+		assetDownloadSlots = DefaultAssetDownloadConcurrency
+	}
+	prefetchSlots := c.PrefetchMaxConcurrent
+	if prefetchSlots <= 0 {
+		prefetchSlots = 2
+	}
+	if prefetchSlots >= assetDownloadSlots {
+		errs = append(errs, fmt.Sprintf(
+			"prefetch_max_concurrent=%d must be less than asset_download_concurrency=%d to reserve a foreground download slot",
+			prefetchSlots, assetDownloadSlots))
+	}
+
 	hasCert := tlsCfg.CertFile != ""
 	hasKey := tlsCfg.KeyFile != ""
 	hasCA := tlsCfg.CAFile != ""

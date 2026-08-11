@@ -21,6 +21,7 @@ import (
 const DefaultTmpfsThresholdBytes int64 = 64 * 1024 * 1024
 
 const (
+	DefaultAssetDownloadConcurrency            = 4
 	DefaultPrefetchByteBudget            int64 = 20 * 1024 * 1024 * 1024
 	DefaultPrefetchRAMBudgetBytes        int64 = 512 * 1024 * 1024
 	DefaultPrefetchRAMMaxAssetBytes      int64 = 128 * 1024 * 1024
@@ -113,6 +114,9 @@ func (c *WorkerConfig) applyDefaults() {
 	// tmpfs_dir can never pair with a zero/negative threshold.
 	if c.TmpfsThresholdBytes <= 0 {
 		c.TmpfsThresholdBytes = DefaultTmpfsThresholdBytes
+	}
+	if c.AssetDownloadConcurrency <= 0 {
+		c.AssetDownloadConcurrency = DefaultAssetDownloadConcurrency
 	}
 	if c.PrefetchHorizonJobs <= 0 {
 		c.PrefetchHorizonJobs = 3
