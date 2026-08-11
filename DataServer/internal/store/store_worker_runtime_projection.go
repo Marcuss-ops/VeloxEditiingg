@@ -313,12 +313,20 @@ func bulkEmitTaskRuntimeDisappearedOnPartition(ctx context.Context, tx *sql.Tx, 
 		}
 	}
 	if len(identities) > 0 {
-		if _, err := tx.ExecContext(ctx, `UPDATE worker_task_runtime
+		result, err := tx.ExecContext(ctx, `UPDATE worker_task_runtime
 			SET runtime_status = ?, updated_at = ?
 			WHERE worker_id = ?
 			  AND runtime_status NOT IN ('PARTITIONED_SUSPECTED','PARTITIONED')`,
-			connectionStatePartitionedSuspected, now, workerID); err != nil {
+			connectionStatePartitionedSuspected, now, workerID)
+		if err != nil {
 			return 0, fmt.Errorf("flip runtime status to partitioned_suspected: %w", err)
+		}
+		affected, err := readRowsAffected(result, "flip runtime status to partitioned_suspected")
+		if err != nil {
+			return 0, err
+		}
+		if affected != int64(len(identities)) {
+			return 0, fmt.Errorf("flip runtime status to partitioned_suspected: %w", ErrTransitionConflict)
 		}
 	}
 	return len(identities), nil
