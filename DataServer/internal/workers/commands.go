@@ -182,29 +182,46 @@ func NewTokenManager(dbStore *store.SQLiteStore) *TokenManager {
 
 // GenerateToken creates a new session token for a worker and persists it.
 func (tm *TokenManager) GenerateToken(workerID string) string {
+	token, err := tm.GenerateTokenWithError(workerID)
+	if err != nil {
+		registryLog.ErrorWithMsg("token.gen.fail", "Failed to generate worker session token",
+			map[string]interface{}{"worker_id": workerID, "err": err.Error()})
+		return ""
+	}
+	return token
+}
+
+// GenerateTokenWithError creates and durably persists a worker session token.
+// A configured store is authoritative: callers must not receive a usable
+// token when either the worker row or session row could not be persisted.
+// With a nil store it preserves the in-memory test/dev token behavior; such a
+// token cannot validate because all validation paths require a store.
+func (tm *TokenManager) GenerateTokenWithError(workerID string) (string, error) {
+	if tm == nil {
+		return "", fmt.Errorf("token manager is nil")
+	}
 	token := generateRandomToken()
 	tokenHash := store.HashCredential(token)
 	sessionID := fmt.Sprintf("sess-%s-%d", workerID, time.Now().UnixNano())
 
-	if tm.store != nil {
-		if err := tm.store.EnsureWorkerRecord(workerID); err != nil {
-			registryLog.ErrorWithMsg("token.gen.fail", "Failed to bootstrap worker record",
-				map[string]interface{}{"worker_id": workerID, "err": err.Error()})
-		}
-		sess := &store.PersistedSession{
-			SessionID:   sessionID,
-			WorkerID:    workerID,
-			SessionType: "asset",
-			TokenHash:   tokenHash,
-			ExpiresAt:   time.Now().UTC().Add(time.Hour),
-		}
-		if err := tm.store.InsertSession(sess); err != nil {
-			registryLog.ErrorWithMsg("token.gen.fail", "Failed to persist session",
-				map[string]interface{}{"worker_id": workerID, "err": err.Error()})
-		}
+	if tm.store == nil {
+		return token, nil
 	}
 
-	return token
+	if err := tm.store.EnsureWorkerRecord(workerID); err != nil {
+		return "", fmt.Errorf("bootstrap worker record: %w", err)
+	}
+	sess := &store.PersistedSession{
+		SessionID:   sessionID,
+		WorkerID:    workerID,
+		SessionType: "asset",
+		TokenHash:   tokenHash,
+		ExpiresAt:   time.Now().UTC().Add(time.Hour),
+	}
+	if err := tm.store.InsertSession(sess); err != nil {
+		return "", fmt.Errorf("persist session: %w", err)
+	}
+	return token, nil
 }
 
 // ValidateWorkerCommandToken checks if a worker command token is valid and
