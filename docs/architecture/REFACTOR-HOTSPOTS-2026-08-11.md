@@ -48,6 +48,8 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   malformato producono errore, non uno stato apparentemente valido.
 - Calendar read paths: timestamp persistiti malformati, JSON delle collezioni,
   errori di `Scan` e `rows.Err()` non vengono più ignorati nei read model.
+- DB pool telemetry: `OpenConnections`, `InUse`, `Idle`, `WaitCount` e
+  `WaitDuration` sono esposti senza label per distinguere lock da queueing.
 - Artifact GC, credential revoke e command delivery verificano ownership e
   righe aggiornate prima di dichiarare completata l'operazione.
 - Render-plan stamping: un tentativo inesistente non può più risultare
@@ -123,8 +125,8 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   duplicare la transazione atomica esistente.
 - [ ] Verificare i resolver delivery e gli adapter metrici contro
   `check-db-access.sh`; ogni eccezione deve avere motivazione e owner.
-- [ ] Misurare `sql.DB.Stats()` del Master: `WaitCount` e `WaitDuration`, non
-  solo `database locked`.
+- [x] Misurare `sql.DB.Stats()` del Master: `WaitCount` e `WaitDuration`, oltre
+  ai contatori di pool, senza label ad alta cardinalità.
 - [ ] Mantenere un solo writer per ogni aggregate e CAS esplicito per le
   transizioni concorrenti.
 

@@ -1,5 +1,7 @@
 package metrics
 
+import "database/sql"
+
 // OperationalTelemetry contains the low-cardinality measurements needed to
 // separate renderer time from delivery and persistence time. It is kept
 // separate from the scorecard collector so store/delivery packages can depend
@@ -22,6 +24,11 @@ type OperationalTelemetry struct {
 	dbWriteOperations    *Family
 	dbReadOperations     *Family
 	dbLongestTransaction *Family
+	dbOpenConnections    *Family
+	dbInUseConnections   *Family
+	dbIdleConnections    *Family
+	dbWaitCount          *Family
+	dbWaitDurationMS     *Family
 
 	cacheLookups         *Family
 	cacheHits            *Family
@@ -60,6 +67,11 @@ func NewOperationalTelemetry(reg *Registry) *OperationalTelemetry {
 	t.dbWriteOperations = NewCounterFamily("velox_db_write_operations", "Observed database write operations", []string{})
 	t.dbReadOperations = NewCounterFamily("velox_db_read_operations", "Observed database read operations", []string{})
 	t.dbLongestTransaction = NewGaugeFamily("velox_db_longest_transaction_ms", "Longest observed database transaction duration in milliseconds", []string{})
+	t.dbOpenConnections = NewGaugeFamily("velox_db_open_connections", "Current database pool open connections", []string{})
+	t.dbInUseConnections = NewGaugeFamily("velox_db_in_use_connections", "Current database pool connections in use", []string{})
+	t.dbIdleConnections = NewGaugeFamily("velox_db_idle_connections", "Current database pool idle connections", []string{})
+	t.dbWaitCount = NewGaugeFamily("velox_db_wait_count", "Cumulative database pool connection waits", []string{})
+	t.dbWaitDurationMS = NewGaugeFamily("velox_db_wait_duration_ms", "Cumulative database pool wait duration in milliseconds", []string{})
 
 	t.cacheLookups = NewCounterFamily("velox_cache_lookups_total", "Cache lookups by result", []string{"result"})
 	t.cacheHits = NewCounterFamily("velox_cache_hits_total", "Cache hits", []string{})
@@ -74,12 +86,28 @@ func NewOperationalTelemetry(reg *Registry) *OperationalTelemetry {
 		t.deliveryTimeouts, t.deliveryBytes, t.deliveryUploadMbps, t.deliveryProviderError,
 		t.dbWriteWaitMS, t.dbTransactionMS, t.dbBusy, t.dbBusyTimeout, t.dbRetries,
 		t.dbWriteOperations, t.dbReadOperations, t.dbLongestTransaction,
+		t.dbOpenConnections, t.dbInUseConnections, t.dbIdleConnections,
+		t.dbWaitCount, t.dbWaitDurationMS,
 		t.cacheLookups, t.cacheHits, t.cacheMisses, t.cacheUniqueAssets, t.cacheInvariantErrors,
 		t.cacheDownloadCount, t.cacheDownloadBytes,
 	} {
 		reg.Register(f)
 	}
 	return t
+}
+
+// ObserveDBStats projects the cumulative sql.DB pool counters into gauges so
+// operators can distinguish SQLite lock errors from ordinary connection-pool
+// queueing. The values intentionally have no labels.
+func (t *OperationalTelemetry) ObserveDBStats(stats sql.DBStats) {
+	if t == nil || t.dbOpenConnections == nil {
+		return
+	}
+	t.dbOpenConnections.GaugeSet([]string{}, int64(stats.OpenConnections))
+	t.dbInUseConnections.GaugeSet([]string{}, int64(stats.InUse))
+	t.dbIdleConnections.GaugeSet([]string{}, int64(stats.Idle))
+	t.dbWaitCount.GaugeSet([]string{}, stats.WaitCount)
+	t.dbWaitDurationMS.GaugeSet([]string{}, stats.WaitDuration.Milliseconds())
 }
 
 func (t *OperationalTelemetry) ObserveDelivery(provider string, queueMS, uploadMS, totalMS float64, status string) {
