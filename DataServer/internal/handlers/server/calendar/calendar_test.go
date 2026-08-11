@@ -186,6 +186,24 @@ func TestCalendarStore_PersistsFullEventPayload(t *testing.T) {
 	}
 }
 
+func TestCalendarStore_RejectsMalformedPersistedTimestamp(t *testing.T) {
+	db, _, _ := setupCalendarTestEnv(t)
+	event := incompleteAgentEvent()
+	if err := db.CreateCalendarEvent(context.Background(), &event); err != nil {
+		t.Fatalf("create calendar event: %v", err)
+	}
+	if _, err := db.DB().Exec(`UPDATE calendar_events SET updated_at = ? WHERE id = ?`, "not-a-timestamp", event.ID); err != nil {
+		t.Fatalf("corrupt timestamp fixture: %v", err)
+	}
+
+	if _, err := db.GetCalendarEvent(context.Background(), event.ID); err == nil {
+		t.Fatal("GetCalendarEvent accepted malformed updated_at")
+	}
+	if _, err := db.ListCalendarEvents(context.Background(), store.CalendarEventFilter{}); err == nil {
+		t.Fatal("ListCalendarEvents accepted malformed updated_at")
+	}
+}
+
 func TestCalendarAPI_CreateQueuesAndReturnsAgentFields(t *testing.T) {
 	_, _, r := setupCalendarTestEnv(t)
 

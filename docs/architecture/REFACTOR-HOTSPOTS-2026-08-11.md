@@ -46,6 +46,8 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   nella stessa transazione; il caso concorrente è coperto da test.
 - Calendar/session read models: JSON persistito corrotto e timestamp sessione
   malformato producono errore, non uno stato apparentemente valido.
+- Calendar read paths: timestamp persistiti malformati, JSON delle collezioni,
+  errori di `Scan` e `rows.Err()` non vengono più ignorati nei read model.
 - Artifact GC, credential revoke e command delivery verificano ownership e
   righe aggiornate prima di dichiarare completata l'operazione.
 - Render-plan stamping: un tentativo inesistente non può più risultare

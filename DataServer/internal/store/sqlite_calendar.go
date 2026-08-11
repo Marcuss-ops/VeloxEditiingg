@@ -104,6 +104,24 @@ func unmarshalCalendarCollections(event *CalendarEvent, values ...[]byte) error 
 	return nil
 }
 
+func applyCalendarTimestamps(event *CalendarEvent, createdAt, updatedAt sql.NullString) error {
+	if createdAt.Valid {
+		parsed, err := time.Parse(time.RFC3339, createdAt.String)
+		if err != nil {
+			return fmt.Errorf("created_at: %w", err)
+		}
+		event.CreatedAt = parsed
+	}
+	if updatedAt.Valid {
+		parsed, err := time.Parse(time.RFC3339, updatedAt.String)
+		if err != nil {
+			return fmt.Errorf("updated_at: %w", err)
+		}
+		event.UpdatedAt = parsed
+	}
+	return nil
+}
+
 // initCalendarSchema has been migrated to migrations/001_initial.sql.
 // Post-migration column adjustments are handled in postMigrationAdjustments().
 // The embedded migrations/sqlite/002_calendar.sql can be removed once confirmed.
@@ -169,11 +187,8 @@ func (s *SQLiteStore) GetCalendarEvent(ctx context.Context, id string) (*Calenda
 	if err := unmarshalCalendarCollections(event, stockFootage, initialClips, intermediateClips, finalClips, voiceoverPaths, titles); err != nil {
 		return nil, fmt.Errorf("get calendar event: %w", err)
 	}
-	if createdAt.Valid {
-		event.CreatedAt, _ = time.Parse(time.RFC3339, createdAt.String)
-	}
-	if updatedAt.Valid {
-		event.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt.String)
+	if err := applyCalendarTimestamps(event, createdAt, updatedAt); err != nil {
+		return nil, fmt.Errorf("get calendar event: %w", err)
 	}
 	if queuedAt.Valid {
 		event.QueuedAt = queuedAt.String
@@ -214,11 +229,8 @@ func (s *SQLiteStore) GetCalendarEventByExternalID(ctx context.Context, external
 	if err := unmarshalCalendarCollections(event, stockFootage, initialClips, intermediateClips, finalClips, voiceoverPaths, titles); err != nil {
 		return nil, fmt.Errorf("get calendar event by external id: %w", err)
 	}
-	if createdAt.Valid {
-		event.CreatedAt, _ = time.Parse(time.RFC3339, createdAt.String)
-	}
-	if updatedAt.Valid {
-		event.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt.String)
+	if err := applyCalendarTimestamps(event, createdAt, updatedAt); err != nil {
+		return nil, fmt.Errorf("get calendar event by external id: %w", err)
 	}
 	if queuedAt.Valid {
 		event.QueuedAt = queuedAt.String
@@ -310,37 +322,22 @@ func (s *SQLiteStore) ListCalendarEvents(ctx context.Context, filter CalendarEve
 			&stockFootage, &initialClips, &intermediateClips, &finalClips,
 			&voiceoverPaths, &titles, &event.ScriptText, &event.Category, &event.JobID, &event.JobStatus, &queuedAt, &event.QueueError,
 			&createdAt, &updatedAt); err != nil {
-			continue
+			return nil, fmt.Errorf("list calendar events: scan: %w", err)
 		}
 
-		if len(stockFootage) > 0 {
-			json.Unmarshal(stockFootage, &event.StockFootage)
+		if err := unmarshalCalendarCollections(event, stockFootage, initialClips, intermediateClips, finalClips, voiceoverPaths, titles); err != nil {
+			return nil, fmt.Errorf("list calendar events: %w", err)
 		}
-		if len(initialClips) > 0 {
-			json.Unmarshal(initialClips, &event.InitialClips)
-		}
-		if len(intermediateClips) > 0 {
-			json.Unmarshal(intermediateClips, &event.IntermediateClips)
-		}
-		if len(finalClips) > 0 {
-			json.Unmarshal(finalClips, &event.FinalClips)
-		}
-		if len(voiceoverPaths) > 0 {
-			json.Unmarshal(voiceoverPaths, &event.VoiceoverPaths)
-		}
-		if len(titles) > 0 {
-			json.Unmarshal(titles, &event.Titles)
-		}
-		if createdAt.Valid {
-			event.CreatedAt, _ = time.Parse(time.RFC3339, createdAt.String)
-		}
-		if updatedAt.Valid {
-			event.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt.String)
+		if err := applyCalendarTimestamps(event, createdAt, updatedAt); err != nil {
+			return nil, fmt.Errorf("list calendar events: %w", err)
 		}
 		if queuedAt.Valid {
 			event.QueuedAt = queuedAt.String
 		}
 		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list calendar events: rows: %w", err)
 	}
 	return events, nil
 }
@@ -371,37 +368,22 @@ func (s *SQLiteStore) GetCalendarEventsByDateRange(ctx context.Context, startMon
 			&stockFootage, &initialClips, &intermediateClips, &finalClips,
 			&voiceoverPaths, &titles, &event.ScriptText, &event.Category, &event.JobID, &event.JobStatus, &queuedAt, &event.QueueError,
 			&createdAt, &updatedAt); err != nil {
-			continue
+			return nil, fmt.Errorf("calendar date range: scan: %w", err)
 		}
 
-		if len(stockFootage) > 0 {
-			json.Unmarshal(stockFootage, &event.StockFootage)
+		if err := unmarshalCalendarCollections(event, stockFootage, initialClips, intermediateClips, finalClips, voiceoverPaths, titles); err != nil {
+			return nil, fmt.Errorf("calendar date range: %w", err)
 		}
-		if len(initialClips) > 0 {
-			json.Unmarshal(initialClips, &event.InitialClips)
-		}
-		if len(intermediateClips) > 0 {
-			json.Unmarshal(intermediateClips, &event.IntermediateClips)
-		}
-		if len(finalClips) > 0 {
-			json.Unmarshal(finalClips, &event.FinalClips)
-		}
-		if len(voiceoverPaths) > 0 {
-			json.Unmarshal(voiceoverPaths, &event.VoiceoverPaths)
-		}
-		if len(titles) > 0 {
-			json.Unmarshal(titles, &event.Titles)
-		}
-		if createdAt.Valid {
-			event.CreatedAt, _ = time.Parse(time.RFC3339, createdAt.String)
-		}
-		if updatedAt.Valid {
-			event.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt.String)
+		if err := applyCalendarTimestamps(event, createdAt, updatedAt); err != nil {
+			return nil, fmt.Errorf("calendar date range: %w", err)
 		}
 		if queuedAt.Valid {
 			event.QueuedAt = queuedAt.String
 		}
 		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("calendar date range: rows: %w", err)
 	}
 	return events, nil
 }
