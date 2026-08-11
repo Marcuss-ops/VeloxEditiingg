@@ -46,3 +46,38 @@ func TestCancelTerminalizesActiveTasksAndAttemptsAtomically(t *testing.T) {
 		t.Fatalf("attempt after cancel = status=%q error_code=%q", attemptStatus, errorCode)
 	}
 }
+
+func TestCancelIdempotentRetryTerminalizesLateChildTask(t *testing.T) {
+	store, db := openStaleReconcilerTestDB(t)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.Exec(`
+		INSERT INTO jobs (job_id,status,max_retries,revision,created_at,updated_at,migrated_at)
+		VALUES ('job-cancel-retry','CANCELLED',3,1,?,?,?)`, now, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO tasks (task_id,job_id,status,revision,attempt_count,worker_id,lease_id,lease_expires_at,created_at,updated_at)
+		VALUES ('task-cancel-retry','job-cancel-retry','READY',2,1,'worker-1','',NULL,?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO task_attempts (id,task_id,job_id,attempt_number,worker_id,lease_id,status,report_version,created_at,updated_at)
+		VALUES ('attempt-cancel-retry','task-cancel-retry','job-cancel-retry',1,'worker-1','','RUNNING',0,?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := NewSQLiteJobRepository(store).Cancel(context.Background(), "job-cancel-retry", "reconcile", -1); err != nil {
+		t.Fatalf("idempotent Cancel: %v", err)
+	}
+
+	var taskStatus, attemptStatus string
+	if err := db.QueryRow(`SELECT status FROM tasks WHERE task_id='task-cancel-retry'`).Scan(&taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT status FROM task_attempts WHERE id='attempt-cancel-retry'`).Scan(&attemptStatus); err != nil {
+		t.Fatal(err)
+	}
+	if taskStatus != "CANCELLED" || attemptStatus != "CANCELLED" {
+		t.Fatalf("idempotent cancel left child lifecycle task=%q attempt=%q", taskStatus, attemptStatus)
+	}
+}

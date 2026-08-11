@@ -230,6 +230,25 @@ func (b *baseJobRepository) Cancel(ctx context.Context, id, reason string, revis
 	}
 	switch current {
 	case "CANCELLED":
+		// Re-run the child-task convergence on an idempotent retry. A
+		// cancellation request may have committed the parent row before a
+		// worker stopped renewing its lease; returning immediately here would
+		// leave a READY/LEASED task offerable forever.
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE tasks
+			   SET status='CANCELLED', completed_at=?, worker_id='', lease_id='',
+			       lease_expires_at=NULL, revision=revision+1, updated_at=?
+			 WHERE job_id=? AND status IN ('READY','LEASED','RUNNING')`, now, now, id); err != nil {
+			return fmt.Errorf("cancel tasks on idempotent retry: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE task_attempts
+			   SET status='CANCELLED', completed_at=COALESCE(completed_at,?),
+			       error_code='TASK_CANCELLED', error_message='parent job was cancelled',
+			       report_version=report_version+1, updated_at=?
+			 WHERE job_id=? AND status NOT IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT')`, now, now, id); err != nil {
+			return fmt.Errorf("cancel task attempts on idempotent retry: %w", err)
+		}
 		return tx.Commit()
 	case "SUCCEEDED", "FAILED":
 		return fmt.Errorf("cancel %s: cannot cancel terminal job (%s)", id, current)
