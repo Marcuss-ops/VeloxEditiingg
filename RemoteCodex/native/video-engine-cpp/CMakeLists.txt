@@ -33,6 +33,7 @@ add_executable(velox_video_engine
     src/app/commands.cpp
     src/services/file_utils.cpp
     src/services/media_utils.cpp
+    src/audio/audio_plan.cpp
     src/services/ffmpeg_progress_parser.cpp
     src/core/render_engine.cpp
     src/core/render_engine_helpers.cpp
@@ -82,11 +83,48 @@ endif()
 add_test(NAME render_engine_helpers_tests
          COMMAND velox_render_engine_helpers_tests)
 
+add_executable(velox_audio_plan_tests
+    tests/test_audio_plan.cpp
+    src/audio/audio_plan.cpp
+)
+
+target_include_directories(velox_audio_plan_tests
+    PRIVATE include src include/velox)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(velox_audio_plan_tests PRIVATE -O2)
+endif()
+
+add_test(NAME audio_plan_tests
+         COMMAND velox_audio_plan_tests)
+
+add_executable(velox_audio_timeline_tests
+    tests/test_audio_timeline.cpp
+    src/audio/audio_plan.cpp
+    src/core/render_engine.cpp
+    src/core/render_engine_helpers.cpp
+    src/services/file_utils.cpp
+    src/services/media_utils.cpp
+    src/services/ffmpeg_progress_parser.cpp
+    src/telemetry/phase_recorder.cpp
+)
+
+target_include_directories(velox_audio_timeline_tests
+    PRIVATE include src include/velox)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(velox_audio_timeline_tests PRIVATE -O2)
+endif()
+
+add_test(NAME audio_timeline_tests
+         COMMAND velox_audio_timeline_tests)
+
 # ─── Block-1 phase recorder tests ──────────────────────────────────────
 # Standalone test binary for the telemetry PhaseRecorder + ScopedPhase
 # RAII helper. No GoogleTest dependency — the in-repo expect() macros.
 add_executable(velox_phase_recorder_tests
     tests/test_phase_recorder.cpp
+    src/audio/audio_plan.cpp
     src/telemetry/phase_recorder.cpp
     src/core/render_engine.cpp
     src/core/render_engine_helpers.cpp
@@ -112,6 +150,7 @@ add_test(NAME phase_recorder_tests
 # must provide FFmpeg and pgrep to run the full CTest suite.
 add_executable(velox_looped_music_tests
     tests/test_looped_music.cpp
+    src/audio/audio_plan.cpp
     src/core/render_engine.cpp
     src/core/render_engine_helpers.cpp
     src/services/file_utils.cpp

@@ -1,4 +1,5 @@
 #include "velox/core/render_engine.hpp"
+#include "velox/audio/audio_plan.hpp"
 #include "render_engine_helpers.hpp"
 #include "velox/services/file_utils.hpp"
 #include "velox/services/media_utils.hpp"
@@ -40,6 +41,62 @@ namespace {
             }
         }
         return out;
+    }
+
+    std::string audioPlanMetadata(const audio::CompiledAudioPlan& plan,
+                                  audio::AudioMixStrategy requested,
+                                  audio::AudioMixStrategy selected,
+                                  std::size_t inputCount,
+                                  std::size_t filterCount,
+                                  std::size_t amixInputCount) {
+        std::string reason = escapeJsonString(plan.fallback_reason);
+        return std::string("{\"audio_mix_strategy_requested\":\"") +
+               audio::audioMixStrategyName(requested) +
+               "\",\"audio_mix_strategy\":\"" +
+               audio::audioMixStrategyName(selected) +
+               "\",\"audio_mix_input_count\":" + std::to_string(inputCount) +
+               ",\"audio_filter_count\":" + std::to_string(filterCount) +
+               ",\"audio_amix_input_count\":" + std::to_string(amixInputCount) +
+               ",\"audio_sequential_input_count\":" + std::to_string(plan.sequential_count) +
+               ",\"audio_overlapping_input_count\":" + std::to_string(plan.overlapping_count) +
+               ",\"audio_max_concurrent_inputs\":" + std::to_string(plan.max_concurrent_inputs) +
+               ",\"audio_plan_safe_for_optimized\":" +
+               (plan.safe_for_optimized_timeline ? "true" : "false") +
+               ",\"audio_plan_fallback_reason\":\"" + reason + "\"" +
+               // FFmpeg exposes these sub-phases only through controlled
+               // benchmark runs, not from the single production process.
+               // Keep them explicit and null instead of inventing timings.
+               ",\"audio_inputs_open_ms\":null,\"audio_decode_ms\":null" +
+               ",\"audio_filtergraph_ms\":null,\"audio_encode_ms\":null" +
+               ",\"audio_output_write_ms\":null,\"audio_mix_encode_passes\":1" +
+               ",\"audio_mix_required\":true}";
+    }
+
+    std::string optimizedAudioFilter(
+        const std::vector<std::pair<fs::path, const plan::AudioTrack*>>& tracks,
+        const audio::CompiledAudioPlan& compiled) {
+        std::ostringstream filter;
+        if (compiled.primary_indices.size() == 1) {
+            const auto index = compiled.primary_indices.front();
+            const auto* track = tracks[index].second;
+            filter << "[" << index << ":a]atrim=duration=" << track->duration_seconds
+                   << ",asetpts=PTS-STARTPTS,volume=" << track->volume << "[aout]";
+            return filter.str();
+        }
+        for (std::size_t position = 0; position < compiled.primary_indices.size(); ++position) {
+            const auto index = compiled.primary_indices[position];
+            const auto* track = tracks[index].second;
+            if (position > 0) filter << ";";
+            filter << "[" << index << ":a]atrim=duration=" << track->duration_seconds
+                   << ",asetpts=PTS-STARTPTS,volume=" << track->volume
+                   << "[p" << position << "]";
+        }
+        filter << ";";
+        for (std::size_t position = 0; position < compiled.primary_indices.size(); ++position) {
+            filter << "[p" << position << "]";
+        }
+        filter << "concat=n=" << compiled.primary_indices.size() << ":v=0:a=1[aout]";
+        return filter.str();
     }
 }
 
@@ -469,6 +526,24 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             }
             muxPhase.Complete();
         } else {
+            std::vector<audio::AudioPlanInput> audioPlanInputs;
+            audioPlanInputs.reserve(downloadedTracks.size());
+            for (const auto& track : downloadedTracks) {
+                audioPlanInputs.push_back({
+                    track.first.string(),
+                    track.second->role,
+                    track.second->volume,
+                    track.second->start_time_offset,
+                    track.second->duration_seconds,
+                    track.second->loop,
+                });
+            }
+            const auto compiledAudioPlan = audio::compileAudioPlan(
+                audioPlanInputs, duration_seconds_.load());
+            const auto requestedAudioStrategy = audio::requestedAudioMixStrategy();
+            const auto selectedAudioStrategy = audio::resolveAudioMixStrategy(
+                requestedAudioStrategy, compiledAudioPlan);
+
             std::ostringstream audioFilter;
             std::ostringstream audioInputs;
             for (size_t t = 0; t < downloadedTracks.size(); ++t) {
@@ -504,12 +579,21 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 }
                 audioFilter << "[a" << t << "]";
             }
-            int n = static_cast<int>(downloadedTracks.size());
-            audioFilter << ";";
-            for (int t = 0; t < n; ++t) {
-                audioFilter << "[a" << t << "]";
+            const int n = static_cast<int>(downloadedTracks.size());
+            std::size_t filterCount = downloadedTracks.size();
+            std::size_t amixInputCount = downloadedTracks.size();
+            if (selectedAudioStrategy == audio::AudioMixStrategy::OptimizedTimeline) {
+                audioFilter.str(optimizedAudioFilter(downloadedTracks, compiledAudioPlan));
+                audioFilter.clear();
+                filterCount += compiledAudioPlan.primary_indices.size() > 1 ? 1 : 0;
+                amixInputCount = 0;
+            } else {
+                audioFilter << ";";
+                for (int t = 0; t < n; ++t) {
+                    audioFilter << "[a" << t << "]";
+                }
+                audioFilter << "amix=inputs=" << n << ":duration=longest[aout]";
             }
-            audioFilter << "amix=inputs=" << n << ":duration=longest[aout]";
 
             fs::path mixedAudio = workDir / "mixed_audio.m4a";
             std::ostringstream mixCmd;
@@ -524,7 +608,10 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             telemetry::ScopedPhase audioEncodePhase(
                 recorder_, telemetry::kOriginEngine, telemetry::kScopeAudioTrack,
                 "engine.audio", "encode", "audio_encode", "audio", "audio_mix_encode");
-            audioEncodePhase.SetMetadataJSON("{\"audio_mix_encode_passes\":1,\"audio_mix_required\":true}");
+            audioEncodePhase.SetMetadataJSON(
+                audioPlanMetadata(compiledAudioPlan, requestedAudioStrategy,
+                                  selectedAudioStrategy, downloadedTracks.size(),
+                                  filterCount, amixInputCount));
             {
                 // This command performs the multi-track filter graph and AAC
                 // encoding together. Keep it as one truthful timing bucket;
