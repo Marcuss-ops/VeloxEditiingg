@@ -55,6 +55,14 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   copia difensiva, non più una slice globale esportata e mutabile.
 - Artifact GC, credential revoke e command delivery verificano ownership e
   righe aggiornate prima di dichiarare completata l'operazione.
+- Sessioni worker: `ValidateSession` e `UpdateSessionLastSeen` richiedono una
+  riga aggiornata; revoke, snapshot cleanup e scadenza sessioni verificano
+  comunque il risultato del driver mantenendo il comportamento idempotente.
+- Artifact reconciliation e worker partition recovery controllano il numero
+  di righe della transizione prima di confermare `FAILED`, `QUARANTINED` o
+  `PARTITIONED`.
+- Fleet operation e cleanup DLQ/command/drive-link non ignorano più gli errori
+  restituiti da `RowsAffected()`.
 - Render-plan stamping: un tentativo inesistente non può più risultare
   aggiornato con successo; il writer restituisce un conflitto CAS.
 - Render-plan offer path: il piano viene validato e confrontato con
@@ -79,9 +87,8 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   calendar e rollout command controllano errore, ownership e righe aggiornate.
 - [ ] Completare l'audit dei writer non ancora coperti: ogni `UPDATE`
   autorevole deve controllare `RowsAffected`, ownership e generazione. Restano
-  soprattutto cleanup idempotenti e le
-  transizioni publication/session che non sono ancora state ricondotte a un
-  unico helper CAS.
+  soprattutto i writer del runtime volatile e le transizioni publication/
+  session che non sono ancora state ricondotte a un unico helper CAS.
 - [ ] Chiudere l'audit mirato di `MarkDeliverySucceeded`,
   `FinalizeVerified`, `CompletePublicationAfterReconciliation` e `TaskResult`:
   nessun ritorno `nil` dopo un commit non avvenuto.
@@ -162,8 +169,8 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   incluso `internal/store`.
 - [x] Test e vet del modulo worker; `check-db-access`, `check-no-legacy`,
   `check-capability-contract` e `check-architecture` verdi.
-- [ ] `pre-removal-verify.sh`: da eseguire solo nel prossimo blocco che
-  rimuove simboli esportati o helper cross-package.
+- [x] `pre-removal-verify.sh` eseguito prima della rimozione della slice globale
+  `FFmpegBinaries`; vet, build e test full-module verdi.
 
 ## Benchmark finali — non anticipare
 
