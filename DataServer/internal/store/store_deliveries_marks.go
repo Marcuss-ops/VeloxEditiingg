@@ -55,15 +55,8 @@ func (s *SQLiteStore) MarkDeliverySucceeded(ctx context.Context, deliveryID, run
 			return ErrTransitionConflict
 		}
 
-		// Close the latest delivery_attempt — same RunInTx tx.
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE delivery_attempts
-			 SET status = 'SUCCESS', completed_at = ?
-			 WHERE delivery_id = ?
-			   AND id = (SELECT MAX(id) FROM delivery_attempts WHERE delivery_id = ?)`,
-			now, deliveryID, deliveryID,
-		); err != nil {
-			return fmt.Errorf("MarkDeliverySucceeded attempt UPDATE: %w", err)
+		if err := closeLatestDeliveryAttempt(ctx, tx, deliveryID, "SUCCESS", now, ""); err != nil {
+			return err
 		}
 		return finalizeParentJobIfDeliveriesDone(ctx, tx, deliveryID, now)
 	}))
@@ -113,15 +106,8 @@ func (s *SQLiteStore) MarkDeliveryRetry(ctx context.Context, deliveryID, runnerI
 			return ErrTransitionConflict
 		}
 
-		// Close the latest delivery_attempt — same RunInTx tx.
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE delivery_attempts
-			 SET status = 'RETRY_WAIT', completed_at = ?, error_message = ?
-			 WHERE delivery_id = ?
-			   AND id = (SELECT MAX(id) FROM delivery_attempts WHERE delivery_id = ?)`,
-			now, nullIfEmpty(errorMsg), deliveryID, deliveryID,
-		); err != nil {
-			return fmt.Errorf("MarkDeliveryRetry attempt UPDATE: %w", err)
+		if err := closeLatestDeliveryAttempt(ctx, tx, deliveryID, "RETRY_WAIT", now, errorMsg); err != nil {
+			return err
 		}
 		return nil
 	}))
@@ -166,15 +152,8 @@ func (s *SQLiteStore) MarkDeliveryFailed(ctx context.Context, deliveryID, runner
 			return ErrTransitionConflict
 		}
 
-		// Close the latest delivery_attempt — same RunInTx tx.
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE delivery_attempts
-			 SET status = 'FAILED', completed_at = ?, error_message = ?
-			 WHERE delivery_id = ?
-			   AND id = (SELECT MAX(id) FROM delivery_attempts WHERE delivery_id = ?)`,
-			now, nullIfEmpty(errorMsg), deliveryID, deliveryID,
-		); err != nil {
-			return fmt.Errorf("MarkDeliveryFailed attempt UPDATE: %w", err)
+		if err := closeLatestDeliveryAttempt(ctx, tx, deliveryID, "FAILED", now, errorMsg); err != nil {
+			return err
 		}
 		return finalizeParentJobIfDeliveriesDone(ctx, tx, deliveryID, now)
 	}))
@@ -261,16 +240,31 @@ func (s *SQLiteStore) MarkDeliveryBlockedAuth(ctx context.Context, deliveryID, r
 			return ErrTransitionConflict
 		}
 
-		// Close the latest delivery_attempt — same RunInTx tx.
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE delivery_attempts
-			 SET status = 'BLOCKED_AUTH', completed_at = ?, error_message = ?
-			 WHERE delivery_id = ?
-			   AND id = (SELECT MAX(id) FROM delivery_attempts WHERE delivery_id = ?)`,
-			now, nullIfEmpty(errorMsg), deliveryID, deliveryID,
-		); err != nil {
-			return fmt.Errorf("MarkDeliveryBlockedAuth attempt UPDATE: %w", err)
+		if err := closeLatestDeliveryAttempt(ctx, tx, deliveryID, "BLOCKED_AUTH", now, errorMsg); err != nil {
+			return err
 		}
 		return finalizeParentJobIfDeliveriesDone(ctx, tx, deliveryID, now)
 	}))
+}
+
+// closeLatestDeliveryAttempt keeps the delivery row and its attempt ledger
+// atomic. A terminal/retry delivery without a matching latest attempt is a
+// persistence invariant violation, not a successful transition.
+func closeLatestDeliveryAttempt(ctx context.Context, tx *sql.Tx, deliveryID, status, now, errorMessage string) error {
+	res, err := tx.ExecContext(ctx,
+		`UPDATE delivery_attempts
+		 SET status = ?, completed_at = ?, error_message = ?
+		 WHERE delivery_id = ?
+		   AND id = (SELECT MAX(id) FROM delivery_attempts WHERE delivery_id = ?)`,
+		status, now, nullIfEmpty(errorMessage), deliveryID, deliveryID,
+	)
+	if err != nil {
+		return fmt.Errorf("close latest delivery attempt: %w", err)
+	}
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return fmt.Errorf("close latest delivery attempt rows: %w", rowsErr)
+	} else if n != 1 {
+		return fmt.Errorf("%w: delivery=%s attempt rows=%d", ErrTransitionConflict, deliveryID, n)
+	}
+	return nil
 }

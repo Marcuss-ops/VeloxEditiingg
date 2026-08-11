@@ -154,12 +154,19 @@ func (s *SQLiteStore) MarkSmokeSucceeded(ctx context.Context, runID string, fini
 	if durationMs < 0 {
 		return fmt.Errorf("MarkSmokeSucceeded: duration_ms must be >= 0, got %d", durationMs)
 	}
-	_, err := s.db.ExecContext(ctx, `
+	res, err := s.db.ExecContext(ctx, `
 UPDATE smoke_runs
 SET status = 'SUCCEEDED', finished_at = ?, duration_ms = ?, artifact_drive_id = ?, error_message = NULL
-WHERE run_id = ?`,
+WHERE run_id = ? AND status = 'PENDING'`,
 		finishedAt.UTC().Format(time.RFC3339), durationMs, artifactDriveID, runID,
 	)
+	if err == nil {
+		if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+			return fmt.Errorf("MarkSmokeSucceeded rows: %w", rowsErr)
+		} else if n != 1 {
+			return fmt.Errorf("MarkSmokeSucceeded: run %s is missing or not PENDING", runID)
+		}
+	}
 	return err
 }
 
@@ -171,12 +178,19 @@ func (s *SQLiteStore) MarkSmokeFailed(ctx context.Context, runID string, finishe
 	if durationMs < 0 {
 		return fmt.Errorf("MarkSmokeFailed: duration_ms must be >= 0, got %d", durationMs)
 	}
-	_, err := s.db.ExecContext(ctx, `
+	res, err := s.db.ExecContext(ctx, `
 UPDATE smoke_runs
 SET status = 'FAILED', finished_at = ?, duration_ms = ?, error_message = ?
-WHERE run_id = ?`,
+WHERE run_id = ? AND status = 'PENDING'`,
 		finishedAt.UTC().Format(time.RFC3339), durationMs, errMsg, runID,
 	)
+	if err == nil {
+		if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+			return fmt.Errorf("MarkSmokeFailed rows: %w", rowsErr)
+		} else if n != 1 {
+			return fmt.Errorf("MarkSmokeFailed: run %s is missing or not PENDING", runID)
+		}
+	}
 	return err
 }
 
