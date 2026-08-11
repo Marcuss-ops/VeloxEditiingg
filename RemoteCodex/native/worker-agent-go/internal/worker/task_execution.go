@@ -72,7 +72,7 @@ func reportRecorder(report *taskrunner.TaskExecutionReport) *telemetry.EventReco
 //  14. recordTaskFinish (idle-side telemetry restoration).
 //  15. Submit context + ack timing + submitTaskResult +
 //     RecordJobCompleteAck (ack latency captured after Send returns).
-//  16. Error backoff: 2-second sleep + StatusIdle transition (only on
+//  16. Error backoff: cancellable 2-second delay + StatusIdle transition (only on
 //     non-nil execErr).
 func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, taskID, attemptID string) {
 	if err := w.concurrencyLimiter.Acquire(ctx, pte.JobID, 0); err != nil {
@@ -167,7 +167,14 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	telemetry.GetPrometheusMetrics().RecordJobCompleteAck(pte.ExecutorID, float64(time.Since(ackStartTime).Milliseconds()))
 
 	if execErr != nil {
-		time.Sleep(2 * time.Second)
+		timer := time.NewTimer(2 * time.Second)
+		select {
+		case <-jobCtx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+		case <-timer.C:
+		}
 		if w.canTransitionTo(StatusIdle) {
 			w.setStatus(StatusIdle)
 		}
