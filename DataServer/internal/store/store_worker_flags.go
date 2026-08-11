@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -29,12 +30,15 @@ func (s *SQLiteStore) SetWorkerRevoked(workerID string, revoked bool) error {
 		revInt = 1
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	raw, _ := json.Marshal(map[string]any{
+	raw, err := json.Marshal(map[string]any{
 		"worker_id":  workerID,
 		"revoked":    revoked,
 		"updated_at": now,
 	})
-	_, err := s.db.Exec(
+	if err != nil {
+		return fmt.Errorf("marshal worker revoke audit: %w", err)
+	}
+	_, err = s.db.Exec(
 		`INSERT INTO worker_flags (worker_id, revoked, quarantined, raw_json, migrated_at)
 		 VALUES (?, ?, 0, ?, ?)
 		 ON CONFLICT(worker_id) DO UPDATE SET
@@ -57,9 +61,12 @@ func (s *SQLiteStore) GetRevokedWorkers() ([]string, error) {
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			continue
+			return nil, fmt.Errorf("scan revoked worker id: %w", err)
 		}
 		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate revoked worker ids: %w", err)
 	}
 	return ids, nil
 }
