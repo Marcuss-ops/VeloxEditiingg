@@ -74,18 +74,17 @@ func (w *Worker) IsDraining() bool {
 	return w.drainMode.Load()
 }
 
-// cancelJob cancels all running tasks for a job by looking up taskIDsByJob.
+// cancelJob cancels all running tasks and removes all accepted-but-not-yet-
+// leased offers for a job. A TaskOffer is counted against capacity as soon
+// as it is accepted, so leaving a pending offer behind after cancellation
+// permanently consumes a slot until the worker restarts.
 // Called by MsgCancelJob + MsgLeaseRevoked + recovery directive handlers.
-// Snapshots cancel funcs under activeTasksMu, then calls them outside the
-// lock to avoid blocking heartbeat/Status readers during cancellation.
+// Snapshots cancel funcs under activeTasksMu and removes pending offers under
+// pendingTasksMu, then calls the funcs outside the locks to avoid blocking
+// heartbeat/Status readers during cancellation.
 func (w *Worker) cancelJob(jobID string) bool {
 	w.activeTasksMu.Lock()
 	taskIDs := w.taskIDsByJob[jobID]
-	if len(taskIDs) == 0 {
-		w.activeTasksMu.Unlock()
-		w.logger.Warn("[CANCEL] No active tasks for job %s", jobID)
-		return false
-	}
 	// Snapshot cancel funcs before unlocking to avoid holding the write
 	// lock during context cancellation (which may trigger defers that
 	// try to RLock activeTasksMu in heartbeat/Status paths).
@@ -97,11 +96,36 @@ func (w *Worker) cancelJob(jobID string) bool {
 	}
 	w.activeTasksMu.Unlock()
 
+	pendingCancelled := w.removePendingTasksForJob(jobID)
+	if len(taskIDs) == 0 && pendingCancelled == 0 {
+		w.logger.Warn("[CANCEL] No active or pending tasks for job %s", jobID)
+		return false
+	}
+
 	cancelled := 0
 	for _, cancel := range cancels {
 		cancel()
 		cancelled++
 	}
-	w.logger.Info("[CANCEL] Cancelled %d/%d tasks for job %s", cancelled, len(taskIDs), jobID)
-	return cancelled > 0
+	w.logger.Info("[CANCEL] Cancelled %d/%d active tasks and removed %d pending offers for job %s", cancelled, len(taskIDs), pendingCancelled, jobID)
+	return cancelled > 0 || pendingCancelled > 0
+}
+
+// removePendingTasksForJob removes accepted TaskOffers that are waiting for
+// TaskLeaseGranted. They have no cancellation function yet, but they still
+// count toward MaxActiveJobs and must not survive a job cancellation.
+func (w *Worker) removePendingTasksForJob(jobID string) int {
+	if jobID == "" {
+		return 0
+	}
+	w.pendingTasksMu.Lock()
+	defer w.pendingTasksMu.Unlock()
+	removed := 0
+	for taskID, pending := range w.pendingTasks {
+		if pending != nil && pending.JobID == jobID {
+			delete(w.pendingTasks, taskID)
+			removed++
+		}
+	}
+	return removed
 }
