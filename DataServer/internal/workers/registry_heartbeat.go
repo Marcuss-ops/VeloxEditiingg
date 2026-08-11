@@ -110,8 +110,6 @@ func (r *Registry) HeartbeatWithSession(ctx context.Context, sessionID, workerID
 		}
 	}
 
-	r.inMem[id] = info
-
 	// Persist to SQLite (single source of truth). ONLY heartbeat-derived
 	// state is persisted; the read-time-hydrated SessionActive +
 	// ConnectionStatus fields are scrubbed before UpsertWorker so a
@@ -129,6 +127,10 @@ func (r *Registry) HeartbeatWithSession(ctx context.Context, sessionID, workerID
 			return fmt.Errorf("persist worker heartbeat: %w", err)
 		}
 	}
+	// The in-memory read model advances only after the durable projection has
+	// committed. A failed SQLite write must not leave placement/admin reads
+	// ahead of the authoritative worker state.
+	r.inMem[id] = info
 	return nil
 }
 
