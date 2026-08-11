@@ -50,14 +50,19 @@ func (h *WorkerUpdateHandler) SendCommandHandler() gin.HandlerFunc {
 		if command == "run_smoke_job" {
 			params = buildSmokeJobPayload(workerID)
 		}
-		h.cmdMgr.PushCommand(workerID, command, params)
+		commandID, err := h.cmdMgr.PushCommandWithError(workerID, command, params)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist command", "details": err.Error()})
+			return
+		}
 
 		log.Printf("[COMMAND] Command '%s' queued for worker %s", command, workerID[:min(16, len(workerID))]+"...")
 
 		c.JSON(http.StatusOK, gin.H{
-			"status":    "queued",
-			"worker_id": workerID,
-			"command":   command,
+			"status":     "queued",
+			"worker_id":  workerID,
+			"command":    command,
+			"command_id": commandID,
 		})
 	}
 }
@@ -122,6 +127,7 @@ func (h *WorkerUpdateHandler) SendCommandBulkHandler() gin.HandlerFunc {
 		queued := []string{}
 		skipped := []string{}
 		invalid := []string{}
+		failed := []string{}
 
 		for _, wid := range workerIDs {
 			if wid == "" {
@@ -148,7 +154,10 @@ func (h *WorkerUpdateHandler) SendCommandBulkHandler() gin.HandlerFunc {
 					params = buildSmokeJobPayload(wid)
 				}
 			}
-			h.cmdMgr.PushCommand(wid, body.Command, params)
+			if _, err := h.cmdMgr.PushCommandWithError(wid, body.Command, params); err != nil {
+				failed = append(failed, wid)
+				continue
+			}
 			queued = append(queued, wid)
 		}
 
@@ -162,6 +171,7 @@ func (h *WorkerUpdateHandler) SendCommandBulkHandler() gin.HandlerFunc {
 			"queued_worker_ids":  queued,
 			"skipped_worker_ids": skipped,
 			"invalid_worker_ids": invalid,
+			"failed_worker_ids":  failed,
 		})
 	}
 }

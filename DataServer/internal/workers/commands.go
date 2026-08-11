@@ -50,13 +50,36 @@ func NewCommandManager(dbStore *store.SQLiteStore) *CommandManager {
 func (cm *CommandManager) PushCommand(workerID string, cmdType string, params map[string]interface{}) string {
 	commandID := fmt.Sprintf("cmd-%s-%s-%d", workerID, cmdType, time.Now().UnixNano())
 
-	if cm.store == nil {
+	if cm == nil || cm.store == nil {
 		return commandID
 	}
+	commandID, err := cm.PushCommandWithError(workerID, cmdType, params)
+	if err != nil {
+		registryLog.ErrorWithMsg("cmd.push.fail", "Failed to persist command",
+			map[string]interface{}{"worker_id": workerID, "type": cmdType, "err": err.Error()})
+		return ""
+	}
+	return commandID
+}
+
+// PushCommandWithError adds a command to the durable worker command outbox.
+// Unlike the compatibility wrapper PushCommand, it fails when the store is
+// unavailable or when the duplicate-check/persist operation cannot complete;
+// HTTP/control-plane callers must use this method before acknowledging that a
+// command was queued.
+func (cm *CommandManager) PushCommandWithError(workerID string, cmdType string, params map[string]interface{}) (string, error) {
+	if cm == nil || cm.store == nil {
+		return "", fmt.Errorf("worker command store is not configured")
+	}
+	commandID := fmt.Sprintf("cmd-%s-%s-%d", workerID, cmdType, time.Now().UnixNano())
 
 	// Idempotent: skip if same type already pending
-	if ok, _ := cm.store.HasPendingCommand(workerID, cmdType, commandID); ok {
-		return commandID
+	ok, err := cm.store.HasPendingCommand(workerID, cmdType, commandID)
+	if err != nil {
+		return "", fmt.Errorf("check pending command: %w", err)
+	}
+	if ok {
+		return commandID, nil
 	}
 
 	cmd := &store.PersistedCommand{
@@ -71,12 +94,10 @@ func (cm *CommandManager) PushCommand(workerID string, cmdType string, params ma
 	}
 
 	if _, err := cm.store.InsertCommand(cmd); err != nil {
-		registryLog.ErrorWithMsg("cmd.push.fail", "Failed to persist command",
-			map[string]interface{}{"worker_id": workerID, "type": cmdType, "err": err.Error()})
-		return ""
+		return "", fmt.Errorf("persist command: %w", err)
 	}
 
-	return commandID
+	return commandID, nil
 }
 
 // GetPendingCommands returns all pending commands for a worker.

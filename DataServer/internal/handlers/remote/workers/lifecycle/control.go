@@ -25,13 +25,18 @@ func (h *Handler) RestartWorkerHandler() gin.HandlerFunc {
 			return
 		}
 
-		h.cmdMgr.PushCommand(workerID, "restart_worker", nil)
+		commandID, err := h.cmdMgr.PushCommandWithError(workerID, "restart_worker", nil)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to persist restart command", "details": err.Error()})
+			return
+		}
 
 		log.Printf("[CONTROL] Restart requested for worker %s", workerID[:min(16, len(workerID))]+"...")
 
 		c.JSON(http.StatusOK, gin.H{
-			"ok":      true,
-			"message": "Restart scheduled",
+			"ok":         true,
+			"message":    "Restart scheduled",
+			"command_id": commandID,
 		})
 	}
 }

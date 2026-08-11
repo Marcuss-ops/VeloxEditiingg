@@ -28,18 +28,23 @@ func (h *Handler) RequestUpdateHandler() gin.HandlerFunc {
 			version = h.codeVersion
 		}
 
-		h.cmdMgr.PushCommand(body.WorkerID, "update_code", map[string]interface{}{
+		commandID, err := h.cmdMgr.PushCommandWithError(body.WorkerID, "update_code", map[string]interface{}{
 			"version": version,
 		})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to persist update command", "details": err.Error()})
+			return
+		}
 		// Phase 4.4: no in-memory mirror; persistent worker_commands is the
 		// single source of truth.
 
 		log.Printf("[UPDATE] Update requested for worker %s (version: %s)", body.WorkerID[:min(16, len(body.WorkerID))]+"...", version)
 
 		c.JSON(http.StatusOK, gin.H{
-			"ok":      true,
-			"message": "Update scheduled",
-			"version": version,
+			"ok":         true,
+			"message":    "Update scheduled",
+			"version":    version,
+			"command_id": commandID,
 		})
 	}
 }
