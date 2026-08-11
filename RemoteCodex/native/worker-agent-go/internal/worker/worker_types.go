@@ -11,6 +11,7 @@ import (
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/downloader"
+	"velox-worker-agent/internal/artifactgraph"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/spool"
@@ -83,6 +84,11 @@ type ActiveTaskExecution struct {
 	Cancel        context.CancelFunc
 	Progress      JobProgress
 	AttemptEvents *telemetry.AttemptEventMachine
+	// Fase E2: per-attempt intermediate-file telemetry (AttemptArtifactGraph).
+	// Created in dispatchTaskRunner, threaded through the dispatch context
+	// (artifactgraph.GraphFromContext), and profiled at attempt end. Executors
+	// consume it via the context — never a global ledger.
+	ArtifactGraph *artifactgraph.Graph
 }
 
 // PendingTaskExecution is the typed, strongly-validated representation of

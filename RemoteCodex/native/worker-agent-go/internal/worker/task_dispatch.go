@@ -54,6 +54,7 @@ import (
 	"fmt"
 	"time"
 
+	"velox-worker-agent/internal/artifactgraph"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/video/pipeline"
@@ -111,9 +112,17 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	rec := telemetry.NewEventRecorder()
 	rec.BindAttemptTelemetry(telemetry.AttemptTelemetryFromContext(ctx))
 	attemptEvents := telemetry.NewAttemptEventMachine(rec, pte.AttemptID)
+	// Fase E2: one AttemptArtifactGraph per attempt, bound to the active
+	// task and threaded through the dispatch context so executors can
+	// attribute intermediate files via artifactgraph.GraphFromContext. The
+	// profiling log fires on EVERY exit path (defer) but only when the
+	// graph has records, so idle attempts add no noise.
+	artifactGraph := artifactgraph.New()
+	defer w.logArtifactGraphProfiling(pte, artifactGraph)
 	w.activeTasksMu.Lock()
 	if active := w.activeTasks[pte.TaskID]; active != nil {
 		active.AttemptEvents = attemptEvents
+		active.ArtifactGraph = artifactGraph
 	}
 	w.activeTasksMu.Unlock()
 	if attemptEvents != nil {
@@ -121,6 +130,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	}
 	ctx = telemetry.WithRecorder(ctx, rec)
 	ctx = telemetry.WithAttemptEventMachine(ctx, attemptEvents)
+	ctx = artifactgraph.WithGraph(ctx, artifactGraph)
 	ctx = withAssetOperationTracker(ctx, assetTracker)
 	ctx = withCacheAccessContext(ctx, pte.JobID, "asset")
 	ctx = telemetry.WithCacheAccessWorkerID(ctx, w.config.WorkerID)
@@ -252,6 +262,32 @@ func (w *Worker) unregisterActiveTask(taskID string, pte *PendingTaskExecution) 
 	}
 	w.activeTasksMu.Unlock()
 	w.wakeHeartbeat()
+}
+
+// logArtifactGraphProfiling emits the per-attempt intermediate-file
+// profiling summary (Fase E2). Empty graphs (no records registered by the
+// executor) are skipped entirely. Write-then-read candidates — the files a
+// later optimization phase should consider eliminating — surface at INFO;
+// the full ledger rides at DEBUG. This is the evidence base: nothing is
+// removed a priori, candidates are only flagged for a decision.
+func (w *Worker) logArtifactGraphProfiling(pte *PendingTaskExecution, g *artifactgraph.Graph) {
+	if w == nil || g == nil || pte == nil {
+		return
+	}
+	summary := g.Summary()
+	if summary.FileCount == 0 {
+		return
+	}
+	if len(summary.Candidates) > 0 {
+		w.logger.Info("[ARTIFACT-GRAPH] attempt=%s files=%d candidates=%d reread_bytes=%d",
+			pte.AttemptID, summary.FileCount, len(summary.Candidates), summary.TotalReReadBytes)
+		for _, c := range summary.Candidates {
+			w.logger.Info("[ARTIFACT-GRAPH]   reread_bytes=%d lifetime=%s producer=%s consumer=%s path=%s",
+				c.ReReadBytes, c.Lifetime.Round(time.Millisecond), c.ProducerPhase, c.ConsumerPhase, c.Path)
+		}
+	}
+	w.logger.Debug("[ARTIFACT-GRAPH] attempt=%s files=%d written_bytes=%d read_bytes=%d",
+		pte.AttemptID, summary.FileCount, summary.TotalWrittenBytes, summary.TotalReadBytes)
 }
 
 func cumulativeMetricsEqual(left, right map[string]float64) bool {
