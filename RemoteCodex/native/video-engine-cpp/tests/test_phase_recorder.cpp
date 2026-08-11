@@ -12,6 +12,7 @@
 
 #include "velox/core/render_engine.hpp"
 #include "velox/services/file_utils.hpp"
+#include "velox/services/media_utils.hpp"
 #include "velox/telemetry/phase_recorder.hpp"
 
 #include <chrono>
@@ -167,6 +168,29 @@ void testScopedPhaseMove() {
     auto events = r.Snapshot();
     EXPECT_EQ_INT(static_cast<int>(events.size()), 1);
     EXPECT_EQ_STR(events[0].status, "ok");
+}
+
+void testFinalAudioModeResolver() {
+    SUBCASE("final audio COPY requires a verified AAC final mix");
+    velox::media::FinalAudioMetadata verified{
+        true, "aac", 24000, 1, "mono", 698.923, 0.0};
+    auto copy = velox::media::resolveFinalAudioMode(verified, true, 698.92, 1.0, 0.0);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(copy.mode), "COPY");
+    EXPECT_EQ_STR(copy.reason, "verified_final_mix");
+
+    auto filtered = velox::media::resolveFinalAudioMode(verified, true, 698.92, 0.8, 0.0);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(filtered.mode), "ENCODE");
+    EXPECT_EQ_STR(filtered.reason, "final_audio_filter_required");
+
+    auto unverified = velox::media::resolveFinalAudioMode(
+        velox::media::FinalAudioMetadata{}, true, 698.92, 1.0, 0.0);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(unverified.mode), "ENCODE");
+    EXPECT_EQ_STR(unverified.reason, "audio_metadata_unverified");
+
+    verified.codec = "mp3";
+    auto wrongCodec = velox::media::resolveFinalAudioMode(verified, true, 698.92, 1.0, 0.0);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(wrongCodec.mode), "ENCODE");
+    EXPECT_EQ_STR(wrongCodec.reason, "audio_codec_not_aac");
 }
 
 void testAppendJson() {
@@ -485,6 +509,7 @@ int main() {
     testUnknownTokenNoop();
     testScopedPhaseRaii();
     testScopedPhaseMove();
+    testFinalAudioModeResolver();
     testAppendJson();
     testAppendJsonMetadataValidationAndDetailedFields();
     testAppendJsonEscapesStrings();

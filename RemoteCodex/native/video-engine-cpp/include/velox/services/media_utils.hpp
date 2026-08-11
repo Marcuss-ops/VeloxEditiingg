@@ -7,6 +7,38 @@
 
 namespace velox::media {
 
+enum class FinalAudioMode {
+    Encode,
+    Copy,
+};
+
+struct FinalAudioMetadata {
+    bool metadata_verified{false};
+    std::string codec;
+    int sample_rate{0};
+    int channels{0};
+    std::string channel_layout;
+    double duration_seconds{0.0};
+    double start_time_seconds{0.0};
+};
+
+struct FinalAudioDecision {
+    FinalAudioMode mode{FinalAudioMode::Encode};
+    std::string reason{"encode_default"};
+    FinalAudioMetadata metadata;
+};
+
+FinalAudioMetadata probeFinalAudioMetadata(const std::filesystem::path& audioPath);
+
+FinalAudioDecision resolveFinalAudioMode(
+    const FinalAudioMetadata& metadata,
+    bool isFinalMix,
+    double expectedDurationSeconds,
+    double volume,
+    double startOffset);
+
+const char* finalAudioModeName(FinalAudioMode mode);
+
 struct SceneSegmentParams {
     int width{1920};
     int height{1080};
@@ -75,6 +107,9 @@ bool muxAudio(const std::filesystem::path& videoPath,
               const std::filesystem::path& outputPath,
               double volume = 1.0,
               double startOffset = 0.0,
-              file::CommandResult* profile = nullptr);
+              file::CommandResult* profile = nullptr,
+              bool isFinalMix = false,
+              double expectedDurationSeconds = 0.0,
+              FinalAudioDecision* decision = nullptr);
 
 } // namespace velox::media

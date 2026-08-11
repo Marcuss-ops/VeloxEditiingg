@@ -254,6 +254,94 @@ bool hasAudioStream(const fs::path& mediaPath) {
     return !json::trim(file::captureCommandOutput(cmd.str())).empty();
 }
 
+FinalAudioMetadata probeFinalAudioMetadata(const fs::path& audioPath) {
+    FinalAudioMetadata metadata;
+    if (audioPath.empty() || !fs::exists(audioPath)) {
+        return metadata;
+    }
+
+    std::ostringstream cmd;
+    cmd << "ffprobe -v error -select_streams a:0"
+        << " -show_entries stream=codec_name,sample_rate,channels,channel_layout,duration,start_time"
+        << " -of default=noprint_wrappers=1 "
+        << file::shellQuote(audioPath.string());
+    const std::string output = file::captureCommandOutput(cmd.str());
+    std::istringstream lines(output);
+    std::string line;
+    while (std::getline(lines, line)) {
+        line = json::trim(line);
+        const auto separator = line.find('=');
+        if (separator == std::string::npos) {
+            continue;
+        }
+        const std::string key = line.substr(0, separator);
+        const std::string value = json::trim(line.substr(separator + 1));
+        try {
+            if (key == "codec_name") metadata.codec = value;
+            else if (key == "sample_rate") metadata.sample_rate = std::stoi(value);
+            else if (key == "channels") metadata.channels = std::stoi(value);
+            else if (key == "channel_layout") metadata.channel_layout = value;
+            else if (key == "duration" && value != "N/A") metadata.duration_seconds = std::stod(value);
+            else if (key == "start_time" && value != "N/A") metadata.start_time_seconds = std::stod(value);
+        } catch (...) {
+            return FinalAudioMetadata{};
+        }
+    }
+
+    metadata.metadata_verified =
+        !metadata.codec.empty() &&
+        metadata.sample_rate > 0 &&
+        metadata.channels > 0 &&
+        !metadata.channel_layout.empty() &&
+        std::isfinite(metadata.duration_seconds) && metadata.duration_seconds > 0.0 &&
+        std::isfinite(metadata.start_time_seconds);
+    return metadata;
+}
+
+FinalAudioDecision resolveFinalAudioMode(
+    const FinalAudioMetadata& metadata,
+    bool isFinalMix,
+    double expectedDurationSeconds,
+    double volume,
+    double startOffset) {
+    FinalAudioDecision decision;
+    decision.metadata = metadata;
+
+    if (!isFinalMix) {
+        decision.reason = "not_final_mix";
+        return decision;
+    }
+    if (volume != 1.0 || startOffset > 0.0) {
+        decision.reason = "final_audio_filter_required";
+        return decision;
+    }
+    if (!metadata.metadata_verified) {
+        decision.reason = "audio_metadata_unverified";
+        return decision;
+    }
+    if (metadata.codec != "aac") {
+        decision.reason = "audio_codec_not_aac";
+        return decision;
+    }
+    if (expectedDurationSeconds <= 0.0 ||
+        std::abs(metadata.duration_seconds - expectedDurationSeconds) > 0.25) {
+        decision.reason = "audio_duration_mismatch";
+        return decision;
+    }
+    if (std::abs(metadata.start_time_seconds) > 0.05) {
+        decision.reason = "audio_start_time_mismatch";
+        return decision;
+    }
+
+    decision.mode = FinalAudioMode::Copy;
+    decision.reason = "verified_final_mix";
+    return decision;
+}
+
+const char* finalAudioModeName(FinalAudioMode mode) {
+    return mode == FinalAudioMode::Copy ? "COPY" : "ENCODE";
+}
+
 // ─── F5: args-only builders (canonical, the others are wrappers) ──────
 
 std::string buildColorSegmentArgs(
@@ -480,11 +568,18 @@ static std::string escapeJsonString(const std::string& value) {
     return out;
 }
 
-bool muxAudio(const fs::path& videoPath, const fs::path& audioPath, const fs::path& outputPath, double volume, double startOffset, file::CommandResult* profile) {
+bool muxAudio(const fs::path& videoPath, const fs::path& audioPath, const fs::path& outputPath, double volume, double startOffset, file::CommandResult* profile, bool isFinalMix, double expectedDurationSeconds, FinalAudioDecision* decisionOut) {
+    const FinalAudioDecision decision = resolveFinalAudioMode(
+        probeFinalAudioMetadata(audioPath), isFinalMix, expectedDurationSeconds, volume, startOffset);
+    if (decisionOut != nullptr) {
+        *decisionOut = decision;
+    }
+
     std::ostringstream cmd;
     cmd << "ffmpeg -y -hide_banner -loglevel error -i " << file::shellQuote(videoPath.string())
         << " -i " << file::shellQuote(audioPath.string())
-        << " -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac";
+        << " -map 0:v:0 -map 1:a:0 -c:v copy -c:a "
+        << (decision.mode == FinalAudioMode::Copy ? "copy" : "aac");
 
     std::ostringstream af;
     bool hasFilter = false;
@@ -526,6 +621,18 @@ bool muxAudio(const fs::path& videoPath, const fs::path& audioPath, const fs::pa
               << ",\"input_video_bytes\":" << (videoEc ? 0 : videoBytes)
               << ",\"input_audio_bytes\":" << (audioEc ? 0 : audioBytes)
               << ",\"output_bytes\":" << (outputEc ? 0 : outputBytes)
+              << ",\"final_mux_audio_mode\":\"" << finalAudioModeName(decision.mode) << "\""
+              << ",\"final_mux_audio_encode_passes\":"
+              << (decision.mode == FinalAudioMode::Copy ? 0 : 1)
+              << ",\"audio_metadata_verified\":"
+              << (decision.metadata.metadata_verified ? "true" : "false")
+              << ",\"audio_codec\":\"" << decision.metadata.codec << "\""
+              << ",\"audio_sample_rate\":" << decision.metadata.sample_rate
+              << ",\"audio_channels\":" << decision.metadata.channels
+              << ",\"audio_channel_layout\":\"" << decision.metadata.channel_layout << "\""
+              << ",\"audio_duration_seconds\":" << decision.metadata.duration_seconds
+              << ",\"audio_start_time_seconds\":" << decision.metadata.start_time_seconds
+              << ",\"decision_reason\":\"" << decision.reason << "\""
               << ",\"command\":\"" << escapeJsonString(command) << "\"}"
               << std::endl;
     return r.ok;

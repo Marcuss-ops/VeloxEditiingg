@@ -436,10 +436,17 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 recorder_, telemetry::kOriginEngine, telemetry::kScopeAudioTrack,
                 "engine.mux", "audio", "audio_mux");
             file::CommandResult muxProfile;
+            media::FinalAudioDecision muxDecision;
             {
                 ScopedTimer t(metrics_, "mux_audio_ms");
-                muxOk = media::muxAudio(videoForMux, downloadedTracks[0].first, finalMuxed, vol, offset, &muxProfile);
+                muxOk = media::muxAudio(videoForMux, downloadedTracks[0].first, finalMuxed, vol, offset, &muxProfile, false, duration_seconds_.load(), &muxDecision);
             }
+            muxPhase.SetMetadataJSON(
+                std::string("{\"final_mux_audio_mode\":\"") + media::finalAudioModeName(muxDecision.mode) +
+                "\",\"final_mux_audio_encode_passes\":" +
+                (muxDecision.mode == media::FinalAudioMode::Copy ? "0" : "1") +
+                ",\"audio_metadata_verified\":" + (muxDecision.metadata.metadata_verified ? "true" : "false") +
+                ",\"decision_reason\":\"" + muxDecision.reason + "\"}");
             if (muxOk) {
                 std::error_code ec;
                 {
@@ -517,6 +524,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             telemetry::ScopedPhase audioEncodePhase(
                 recorder_, telemetry::kOriginEngine, telemetry::kScopeAudioTrack,
                 "engine.audio", "encode", "audio_encode", "audio", "audio_mix_encode");
+            audioEncodePhase.SetMetadataJSON("{\"audio_mix_encode_passes\":1,\"audio_mix_required\":true}");
             {
                 // This command performs the multi-track filter graph and AAC
                 // encoding together. Keep it as one truthful timing bucket;
@@ -561,10 +569,23 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                     recorder_, telemetry::kOriginEngine, telemetry::kScopeAudioTrack,
                     "engine.mux", "audio", "audio_mux");
                 file::CommandResult muxProfile;
+                media::FinalAudioDecision muxDecision;
                 {
                     ScopedTimer t(metrics_, "mux_audio_ms");
-                    muxOk = media::muxAudio(videoForMux, mixedAudio, finalMuxed, 1.0, 0.0, &muxProfile);
+                    muxOk = media::muxAudio(videoForMux, mixedAudio, finalMuxed, 1.0, 0.0, &muxProfile, true, duration_seconds_.load(), &muxDecision);
                 }
+                muxPhase.SetMetadataJSON(
+                    std::string("{\"final_mux_audio_mode\":\"") + media::finalAudioModeName(muxDecision.mode) +
+                    "\",\"final_mux_audio_encode_passes\":" +
+                    (muxDecision.mode == media::FinalAudioMode::Copy ? "0" : "1") +
+                    ",\"audio_metadata_verified\":" + (muxDecision.metadata.metadata_verified ? "true" : "false") +
+                    ",\"audio_codec\":\"" + muxDecision.metadata.codec +
+                    "\",\"audio_sample_rate\":" + std::to_string(muxDecision.metadata.sample_rate) +
+                    ",\"audio_channels\":" + std::to_string(muxDecision.metadata.channels) +
+                    ",\"audio_channel_layout\":\"" + muxDecision.metadata.channel_layout +
+                    "\",\"audio_duration_seconds\":" + std::to_string(muxDecision.metadata.duration_seconds) +
+                    ",\"audio_start_time_seconds\":" + std::to_string(muxDecision.metadata.start_time_seconds) +
+                    ",\"decision_reason\":\"" + muxDecision.reason + "\"}");
                 if (muxOk) {
                     std::error_code ec;
                     {
