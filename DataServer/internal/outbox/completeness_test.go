@@ -38,7 +38,7 @@ import (
 // remediation so the gap is self-explanatory for operators and future
 // maintainers.
 func TestProductionRegistry_AllKnownEventsHaveHandler(t *testing.T) {
-	known := outbox.KnownEventTypes
+	known := outbox.KnownEventTypes()
 	if len(known) == 0 {
 		t.Fatal("KnownEventTypes is empty — completeness check is disabled. " +
 			"Add the canonical event_types emitted by every EmitOutboxTx caller " +
@@ -66,8 +66,9 @@ func TestProductionRegistry_AllKnownEventsHaveHandler(t *testing.T) {
 // current producer emits. Stale handlers rot silently (dispatcher never
 // picks them up; production wiring quietly loses auditability).
 func TestProductionRegistry_NoStaleHandlers(t *testing.T) {
-	active := make(map[string]bool, len(outbox.KnownEventTypes))
-	for _, et := range outbox.KnownEventTypes {
+	known := outbox.KnownEventTypes()
+	active := make(map[string]bool, len(known))
+	for _, et := range known {
 		active[et] = true
 	}
 	reg := outbox.ProductionRegistry()

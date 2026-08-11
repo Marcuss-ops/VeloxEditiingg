@@ -36,7 +36,7 @@ import (
 	"velox-server/internal/alerts"
 )
 
-// KnownEventTypes is the canonical, hand-maintained list of every
+// knownEventTypes is the canonical, hand-maintained list of every
 // event_type a production producer may emit (via EmitOutboxTx or
 // outbox.Store.Insert).
 //
@@ -71,8 +71,15 @@ import (
 //
 // A "no handler" failure in the outbox-package completeness test
 // names the exact event_type and the file/line that needs editing.
-var KnownEventTypes = []string{
+var knownEventTypes = []string{
 	"JOB_FAILED",
+}
+
+// KnownEventTypes returns a defensive copy of the production event catalog.
+// Callers must not be able to mutate the registry contract used by the
+// completeness checks and operator diagnostics.
+func KnownEventTypes() []string {
+	return append([]string(nil), knownEventTypes...)
 }
 
 // ── Alert sink injection ─────────────────────────────────────────────────
