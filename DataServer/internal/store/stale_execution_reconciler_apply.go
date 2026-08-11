@@ -54,7 +54,11 @@ func (r *StaleExecutionReconciler) applyExpiredLease(ctx context.Context, f Stal
 	}
 	maxRetries := 3
 	if f.JobID != "" {
-		if job, jerr := r.jobs.Get(ctx, f.JobID); jerr == nil && job != nil && job.MaxRetries > 0 {
+		job, jerr := r.jobs.Get(ctx, f.JobID)
+		if jerr != nil {
+			return false, jerr
+		}
+		if job != nil && job.MaxRetries > 0 {
 			maxRetries = job.MaxRetries
 		}
 	}
@@ -77,7 +81,10 @@ func (r *StaleExecutionReconciler) applyOrphanTask(ctx context.Context, f StaleE
 	if err != nil {
 		return false, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := readRowsAffected(res, "stale reconciler orphan task")
+	if err != nil {
+		return false, err
+	}
 	if n != 1 {
 		return false, nil
 	}
@@ -126,7 +133,11 @@ func (r *StaleExecutionReconciler) applyCommittedArtifact(ctx context.Context, f
 	if err != nil {
 		return false, err
 	}
-	if taskRows, _ := taskRes.RowsAffected(); taskRows != 1 {
+	taskRows, err := readRowsAffected(taskRes, "stale reconciler committed task")
+	if err != nil {
+		return false, err
+	}
+	if taskRows != 1 {
 		// A replay may have completed the exact task concurrently. Accept
 		// only that terminal identity; never roll up an unrelated task.
 		var status, attemptID, workerID, leaseID, winningAttemptID string
@@ -157,7 +168,10 @@ func (r *StaleExecutionReconciler) applyCommittedArtifact(ctx context.Context, f
 	if err != nil {
 		return false, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := readRowsAffected(res, "stale reconciler committed job")
+	if err != nil {
+		return false, err
+	}
 	if n != 1 {
 		return false, nil
 	}
@@ -214,7 +228,10 @@ func (r *StaleExecutionReconciler) applyUnconfirmedSpool(ctx context.Context, f 
 	if err != nil {
 		return false, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := readRowsAffected(res, "stale reconciler unconfirmed spool")
+	if err != nil {
+		return false, err
+	}
 	if n != 1 {
 		return false, nil
 	}
@@ -255,7 +272,10 @@ func (r *StaleExecutionReconciler) applyOrphanAttempt(ctx context.Context, f Sta
 	if err != nil {
 		return false, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := readRowsAffected(res, "stale reconciler orphan attempt")
+	if err != nil {
+		return false, err
+	}
 	if n != 1 {
 		return false, nil
 	}
@@ -279,7 +299,10 @@ func (r *StaleExecutionReconciler) applyOfflineWorker(ctx context.Context, f Sta
 	if err != nil {
 		return false, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := readRowsAffected(res, "stale reconciler offline worker")
+	if err != nil {
+		return false, err
+	}
 	if n != 1 {
 		return false, nil
 	}
@@ -323,7 +346,11 @@ func (r *StaleExecutionReconciler) applyOfflineWorker(ctx context.Context, f Sta
 	for _, lease := range leases {
 		maxRetries := 3
 		var configured int
-		if err := tx.QueryRowContext(ctx, `SELECT max_retries FROM jobs WHERE job_id=?`, lease.jobID).Scan(&configured); err == nil && configured > 0 {
+		jobErr := tx.QueryRowContext(ctx, `SELECT max_retries FROM jobs WHERE job_id=?`, lease.jobID).Scan(&configured)
+		if jobErr != nil && !errors.Is(jobErr, sql.ErrNoRows) {
+			return false, jobErr
+		}
+		if jobErr == nil && configured > 0 {
 			maxRetries = configured
 		}
 		effectiveAttempt := maxAttemptOrdinal(lease.attemptCount, lease.attemptNumber)
@@ -341,7 +368,10 @@ func (r *StaleExecutionReconciler) applyOfflineWorker(ctx context.Context, f Sta
 		if err != nil {
 			return false, err
 		}
-		taskRows, _ := taskRes.RowsAffected()
+		taskRows, err := readRowsAffected(taskRes, "stale reconciler expired offline lease")
+		if err != nil {
+			return false, err
+		}
 		if taskRows != 1 {
 			// A renewal or another reaper won the CAS. Do not mutate the
 			// attempt or emit a recovery audit for the stale observation.
