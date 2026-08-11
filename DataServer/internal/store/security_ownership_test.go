@@ -1,9 +1,64 @@
 package store
 
 import (
+	"fmt"
+	"sort"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestInsertCommand_ConcurrentSequenceAllocationIsAtomic(t *testing.T) {
+	s, err := NewSQLiteStore(t.TempDir() + "/command-sequence.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	defer s.Close()
+
+	const total = 20
+	sequences := make(chan int64, total)
+	errs := make(chan error, total)
+	var wg sync.WaitGroup
+	for i := 0; i < total; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			seq, err := s.InsertCommand(&PersistedCommand{
+				CommandID:   fmt.Sprintf("concurrent-command-%d", i),
+				WorkerID:    "sequence-worker",
+				CommandType: "drain",
+				Status:      "pending",
+				CreatedAt:   time.Now().UTC(),
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			sequences <- seq
+		}(i)
+	}
+	wg.Wait()
+	close(sequences)
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent InsertCommand: %v", err)
+	}
+
+	got := make([]int64, 0, total)
+	for seq := range sequences {
+		got = append(got, seq)
+	}
+	sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
+	if len(got) != total {
+		t.Fatalf("sequence count = %d; want %d", len(got), total)
+	}
+	for i, seq := range got {
+		want := int64(i + 1)
+		if seq != want {
+			t.Fatalf("sorted sequence[%d] = %d; want %d (all sequences=%v)", i, seq, want, got)
+		}
+	}
+}
 
 func TestSecurity_AckCommandRejectsOwnershipMismatch(t *testing.T) {
 	s, err := NewSQLiteStore(t.TempDir() + "/ownership.db")

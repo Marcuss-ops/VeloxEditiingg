@@ -50,8 +50,17 @@ func (s *SQLiteStore) InsertCommand(cmd *PersistedCommand) (int64, error) {
 		expiresAt = sql.NullString{String: cmd.ExpiresAt.UTC().Format(time.RFC3339), Valid: true}
 	}
 
-	// Get next sequence number for this worker
-	seq, err := s.nextSequence(cmd.WorkerID)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("insert command: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Allocate the per-worker sequence and persist the command in the same
+	// transaction. Keeping these operations together prevents concurrent
+	// producers from observing the same sequence or leaving a gap whose
+	// command was never durable.
+	seq, err := nextSequenceTx(tx, cmd.WorkerID)
 	if err != nil {
 		return 0, fmt.Errorf("insert command: next sequence: %w", err)
 	}
@@ -61,7 +70,7 @@ func (s *SQLiteStore) InsertCommand(cmd *PersistedCommand) (int64, error) {
 		idempotencyKey = sql.NullString{String: cmd.IdempotencyKey, Valid: true}
 	}
 
-	_, err = s.db.Exec(
+	_, err = tx.Exec(
 		`INSERT INTO worker_commands
 		 (command_id, worker_id, command_type, payload_json, status, sequence_num,
 		  created_at, expires_at, attempt_count, idempotency_key)
@@ -71,6 +80,9 @@ func (s *SQLiteStore) InsertCommand(cmd *PersistedCommand) (int64, error) {
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert command: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("insert command: commit: %w", err)
 	}
 	return seq, nil
 }
@@ -168,8 +180,8 @@ func (s *SQLiteStore) HasPendingCommand(workerID, commandType, idempotencyKey st
 	return count > 0, err
 }
 
-func (s *SQLiteStore) nextSequence(workerID string) (int64, error) {
-	_, err := s.db.Exec(
+func nextSequenceTx(tx *sql.Tx, workerID string) (int64, error) {
+	_, err := tx.Exec(
 		`INSERT INTO worker_sequences (worker_id, next_seq_num) VALUES (?, 1)
 		 ON CONFLICT(worker_id) DO UPDATE SET next_seq_num = next_seq_num + 1`,
 		workerID,
@@ -178,7 +190,7 @@ func (s *SQLiteStore) nextSequence(workerID string) (int64, error) {
 		return 0, err
 	}
 	var seq int64
-	err = s.db.QueryRow(
+	err = tx.QueryRow(
 		`SELECT next_seq_num FROM worker_sequences WHERE worker_id = ?`,
 		workerID,
 	).Scan(&seq)
