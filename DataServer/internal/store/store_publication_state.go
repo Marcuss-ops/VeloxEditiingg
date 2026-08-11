@@ -154,7 +154,11 @@ func (s *SQLiteStore) CompletePublicationAfterReconciliation(ctx context.Context
 	if err != nil {
 		return nil, wrapDBInfrastructure("CompletePublicationAfterReconciliation exec", err)
 	}
-	if affected, _ := result.RowsAffected(); affected != 1 {
+	affected, rowsErr := readRowsAffected(result, "CompletePublicationAfterReconciliation")
+	if rowsErr != nil {
+		return nil, rowsErr
+	}
+	if affected != 1 {
 		return nil, ErrPublicationPhaseConflict
 	}
 	fromState := current.State
@@ -227,7 +231,11 @@ func (s *SQLiteStore) transitionPublicationState(ctx context.Context, publicatio
 	if err != nil {
 		return nil, wrapDBInfrastructure("transitionPublicationState exec", err)
 	}
-	if affected, _ := result.RowsAffected(); affected != 1 {
+	affected, rowsErr := readRowsAffected(result, "transitionPublicationState")
+	if rowsErr != nil {
+		return nil, rowsErr
+	}
+	if affected != 1 {
 		return nil, fmt.Errorf("%w: publication=%s revision=%d", ErrPublicationPhaseConflict, publicationID, current.Revision)
 	}
 	fromState := current.State
@@ -265,7 +273,10 @@ func (s *SQLiteStore) BeginPublicationPhaseEffect(ctx context.Context, publicati
 	if err != nil {
 		return "", false, wrapDBInfrastructure("BeginPublicationPhaseEffect exec", err)
 	}
-	affected, _ := result.RowsAffected()
+	affected, rowsErr := readRowsAffected(result, "BeginPublicationPhaseEffect insert")
+	if rowsErr != nil {
+		return "", false, rowsErr
+	}
 	if phase == publicationstate.Verifying {
 		result, err = tx.ExecContext(ctx, `
 			UPDATE publication_states SET verification_operation = ?
@@ -273,7 +284,11 @@ func (s *SQLiteStore) BeginPublicationPhaseEffect(ctx context.Context, publicati
 		if err != nil {
 			return "", false, wrapDBInfrastructure("BeginPublicationPhaseEffect verification operation", err)
 		}
-		if updated, _ := result.RowsAffected(); updated == 0 {
+		updated, rowsErr := readRowsAffected(result, "BeginPublicationPhaseEffect verification operation")
+		if rowsErr != nil {
+			return "", false, rowsErr
+		}
+		if updated == 0 {
 			var existing string
 			if err := tx.QueryRowContext(ctx, `SELECT COALESCE(verification_operation, '') FROM publication_states WHERE publication_id = ?`, publicationID).Scan(&existing); err != nil {
 				return "", false, wrapDBInfrastructure("BeginPublicationPhaseEffect verification lookup", err)
@@ -305,14 +320,22 @@ func (s *SQLiteStore) CompletePublicationReconciliationEffect(ctx context.Contex
 	if err != nil {
 		return wrapDBInfrastructure("CompletePublicationReconciliationEffect state", err)
 	}
-	if affected, _ := result.RowsAffected(); affected != 1 {
+	affected, rowsErr := readRowsAffected(result, "CompletePublicationReconciliationEffect state")
+	if rowsErr != nil {
+		return rowsErr
+	}
+	if affected != 1 {
 		return ErrPublicationPhaseConflict
 	}
 	result, err = tx.ExecContext(ctx, `UPDATE publication_phase_effects SET status='SUCCEEDED', error_code=NULL, updated_at=? WHERE publication_id=? AND phase='VERIFYING' AND operation=? AND status='RUNNING'`, time.Now().UTC().Format(time.RFC3339), publicationID, operation)
 	if err != nil {
 		return wrapDBInfrastructure("CompletePublicationReconciliationEffect effect", err)
 	}
-	if affected, _ := result.RowsAffected(); affected != 1 {
+	affected, rowsErr = readRowsAffected(result, "CompletePublicationReconciliationEffect effect")
+	if rowsErr != nil {
+		return rowsErr
+	}
+	if affected != 1 {
 		return ErrPublicationPhaseConflict
 	}
 	if err := tx.Commit(); err != nil {
@@ -335,7 +358,11 @@ func (s *SQLiteStore) CompletePublicationPhaseEffect(ctx context.Context, public
 	if err != nil {
 		return wrapDBInfrastructure("CompletePublicationPhaseEffect exec", err)
 	}
-	if affected, _ := result.RowsAffected(); affected != 1 {
+	affected, rowsErr := readRowsAffected(result, "CompletePublicationPhaseEffect")
+	if rowsErr != nil {
+		return rowsErr
+	}
+	if affected != 1 {
 		return ErrPublicationPhaseConflict
 	}
 	return nil
@@ -350,7 +377,11 @@ func (s *SQLiteStore) RetryPublicationPhaseEffect(ctx context.Context, publicati
 	if err != nil {
 		return wrapDBInfrastructure("RetryPublicationPhaseEffect exec", err)
 	}
-	if affected, _ := result.RowsAffected(); affected > 1 {
+	affected, rowsErr := readRowsAffected(result, "RetryPublicationPhaseEffect")
+	if rowsErr != nil {
+		return rowsErr
+	}
+	if affected > 1 {
 		return ErrPublicationPhaseConflict
 	}
 	return nil
@@ -410,7 +441,11 @@ func (s *SQLiteStore) RecordPublicationRemoteResult(ctx context.Context, publica
 	if err != nil {
 		return wrapDBInfrastructure("RecordPublicationRemoteResult exec", err)
 	}
-	if affected, _ := result.RowsAffected(); affected != 1 {
+	affected, rowsErr := readRowsAffected(result, "RecordPublicationRemoteResult")
+	if rowsErr != nil {
+		return rowsErr
+	}
+	if affected != 1 {
 		return ErrPublicationPhaseConflict
 	}
 	return nil
@@ -460,7 +495,11 @@ func (s *SQLiteStore) PersistPublicationVideoCreated(ctx context.Context, public
 	if err != nil {
 		return nil, wrapDBInfrastructure("PersistPublicationVideoCreated exec", err)
 	}
-	if affected, _ := result.RowsAffected(); affected != 1 {
+	affected, rowsErr := readRowsAffected(result, "PersistPublicationVideoCreated")
+	if rowsErr != nil {
+		return nil, rowsErr
+	}
+	if affected != 1 {
 		return nil, ErrPublicationPhaseConflict
 	}
 	current.State = nextState

@@ -50,7 +50,10 @@ func (s *SQLiteStore) MarkDeliverySucceeded(ctx context.Context, deliveryID, run
 		if err != nil {
 			return err
 		}
-		affected, _ := result.RowsAffected()
+		affected, err := readRowsAffected(result, "MarkDeliverySucceeded")
+		if err != nil {
+			return err
+		}
 		if affected == 0 {
 			return ErrTransitionConflict
 		}
@@ -101,7 +104,10 @@ func (s *SQLiteStore) MarkDeliveryRetry(ctx context.Context, deliveryID, runnerI
 		if err != nil {
 			return err
 		}
-		affected, _ := result.RowsAffected()
+		affected, err := readRowsAffected(result, "MarkDeliveryRetry")
+		if err != nil {
+			return err
+		}
 		if affected == 0 {
 			return ErrTransitionConflict
 		}
@@ -147,7 +153,10 @@ func (s *SQLiteStore) MarkDeliveryFailed(ctx context.Context, deliveryID, runner
 		if err != nil {
 			return err
 		}
-		affected, _ := result.RowsAffected()
+		affected, err := readRowsAffected(result, "MarkDeliveryFailed")
+		if err != nil {
+			return err
+		}
 		if affected == 0 {
 			return ErrTransitionConflict
 		}
@@ -235,7 +244,10 @@ func (s *SQLiteStore) MarkDeliveryBlockedAuth(ctx context.Context, deliveryID, r
 		if err != nil {
 			return err
 		}
-		affected, _ := result.RowsAffected()
+		affected, err := readRowsAffected(result, "MarkDeliveryBlockedAuth")
+		if err != nil {
+			return err
+		}
 		if affected == 0 {
 			return ErrTransitionConflict
 		}

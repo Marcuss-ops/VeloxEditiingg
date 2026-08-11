@@ -10,6 +10,30 @@ import (
 	"velox-shared/contract/domain"
 )
 
+type rowsAffectedFailureResult struct{}
+
+func (rowsAffectedFailureResult) LastInsertId() (int64, error) { return 0, nil }
+func (rowsAffectedFailureResult) RowsAffected() (int64, error) {
+	return 0, sql.ErrConnDone
+}
+
+func TestReadRowsAffected_ClassifiesDriverFailure(t *testing.T) {
+	got, err := readRowsAffected(rowsAffectedFailureResult{}, "transition")
+	if got != 0 {
+		t.Fatalf("readRowsAffected count = %d, want 0 on driver failure", got)
+	}
+	if err == nil {
+		t.Fatal("readRowsAffected returned nil error for RowsAffected failure")
+	}
+	derr, ok := domain.AsDomainError(err)
+	if !ok || derr.Code != domain.CodeInfrastructure {
+		t.Fatalf("readRowsAffected error = %v, want infrastructure DomainError", err)
+	}
+	if !errors.Is(err, sql.ErrConnDone) {
+		t.Fatalf("readRowsAffected error does not preserve driver cause: %v", err)
+	}
+}
+
 func TestWrapDBInfrastructure_Nil(t *testing.T) {
 	if got := wrapDBInfrastructure("store.query", nil); got != nil {
 		t.Fatalf("wrapDBInfrastructure(nil) = %v, want nil", got)

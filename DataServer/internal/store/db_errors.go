@@ -1,12 +1,24 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 
 	"velox-server/internal/taskgraph"
 	"velox-shared/contract/domain"
 )
+
+// readRowsAffected is the store boundary for driver-specific RowsAffected
+// failures. A transition must never treat an unreadable row count as zero or
+// as a successful CAS decision.
+func readRowsAffected(result sql.Result, operation string) (int64, error) {
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, wrapDBInfrastructure(operation+" rows affected", err)
+	}
+	return affected, nil
+}
 
 // wrapDBInfrastructure converts an unexpected database failure at the store
 // boundary into the canonical infrastructure DomainError.

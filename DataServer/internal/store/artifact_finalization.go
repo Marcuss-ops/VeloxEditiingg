@@ -142,7 +142,11 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		if err != nil {
 			return nil, fmt.Errorf("store: FinalizeVerified task winner CAS: %w", err)
 		}
-		if n, _ := res.RowsAffected(); n != 1 {
+		n, rowsErr := readRowsAffected(res, "FinalizeVerified task winner CAS")
+		if rowsErr != nil {
+			return nil, rowsErr
+		}
+		if n != 1 {
 			return nil, fmt.Errorf("%w: task winner affected=%d attempt=%s", ErrTransitionConflict, n, p.AttemptID)
 		}
 		// Determinism chain (migration 148): stamp the master-computed
@@ -169,7 +173,11 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		if err != nil {
 			return nil, fmt.Errorf("store: FinalizeVerified attempt winner CAS: %w", err)
 		}
-		if n, _ := res.RowsAffected(); n != 1 {
+		n, rowsErr = readRowsAffected(res, "FinalizeVerified attempt winner CAS")
+		if rowsErr != nil {
+			return nil, rowsErr
+		}
+		if n != 1 {
 			return nil, fmt.Errorf("%w: attempt winner affected=%d attempt=%s", ErrTransitionConflict, n, p.AttemptID)
 		}
 	} else {
@@ -194,7 +202,11 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		if err != nil {
 			return nil, fmt.Errorf("store: FinalizeVerified async artifacts CAS: %w", err)
 		}
-		if n, _ := res.RowsAffected(); n != 1 {
+		n, rowsErr := readRowsAffected(res, "FinalizeVerified async artifacts CAS")
+		if rowsErr != nil {
+			return nil, rowsErr
+		}
+		if n != 1 {
 			return nil, fmt.Errorf("%w: async artifacts affected=%d artifact=%s", ErrTransitionConflict, n, p.ArtifactID)
 		}
 		res, err = tx.ExecContext(ctx, `
@@ -203,7 +215,11 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		if err != nil {
 			return nil, fmt.Errorf("store: FinalizeVerified async upload CAS: %w", err)
 		}
-		if n, _ := res.RowsAffected(); n != 1 {
+		n, rowsErr = readRowsAffected(res, "FinalizeVerified async upload CAS")
+		if rowsErr != nil {
+			return nil, rowsErr
+		}
+		if n != 1 {
 			return nil, fmt.Errorf("%w: async upload affected=%d upload=%s", ErrTransitionConflict, n, p.UploadID)
 		}
 		if _, err := tx.ExecContext(ctx, `
@@ -271,7 +287,11 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		if err != nil {
 			return nil, fmt.Errorf("store: FinalizeVerified jobs CAS: %w", err)
 		}
-		if n, _ := res.RowsAffected(); n != 1 {
+		n, rowsErr := readRowsAffected(res, "FinalizeVerified jobs CAS")
+		if rowsErr != nil {
+			return nil, rowsErr
+		}
+		if n != 1 {
 			var current string
 			if scanErr := tx.QueryRowContext(ctx, `SELECT status FROM jobs WHERE job_id = ?`, p.JobID).Scan(&current); scanErr != nil || current != string(jobs.StatusDelivering) {
 				return nil, fmt.Errorf("%w: jobs affected=%d upload=%s", ErrTransitionConflict, n, p.UploadID)
@@ -290,7 +310,11 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		if err != nil {
 			return nil, fmt.Errorf("store: FinalizeVerified jobs CAS: %w", err)
 		}
-		if n, _ := res.RowsAffected(); n != 1 {
+		n, rowsErr := readRowsAffected(res, "FinalizeVerified jobs CAS")
+		if rowsErr != nil {
+			return nil, rowsErr
+		}
+		if n != 1 {
 			return nil, fmt.Errorf("%w: jobs affected=%d upload=%s", ErrTransitionConflict, n, p.UploadID)
 		}
 	}
@@ -304,7 +328,11 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 	if err != nil {
 		return nil, fmt.Errorf("store: FinalizeVerified artifacts CAS: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n != 1 {
+	n, rowsErr := readRowsAffected(res, "FinalizeVerified artifacts CAS")
+	if rowsErr != nil {
+		return nil, rowsErr
+	}
+	if n != 1 {
 		return nil, fmt.Errorf("%w: artifacts affected=%d artifact=%s", ErrTransitionConflict, n, p.ArtifactID)
 	}
 
@@ -324,7 +352,11 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 	if err != nil {
 		return nil, fmt.Errorf("store: FinalizeVerified artifact_uploads CAS: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n != 1 {
+	n, rowsErr = readRowsAffected(res, "FinalizeVerified artifact_uploads CAS")
+	if rowsErr != nil {
+		return nil, rowsErr
+	}
+	if n != 1 {
 		return nil, fmt.Errorf("%w: upload affected=%d upload=%s", ErrTransitionConflict, n, p.UploadID)
 	}
 	if err := tx.Commit(); err != nil {
