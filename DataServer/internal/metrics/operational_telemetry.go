@@ -1,7 +1,5 @@
 package metrics
 
-import "database/sql"
-
 // OperationalTelemetry contains the low-cardinality measurements needed to
 // separate renderer time from delivery and persistence time. It is kept
 // separate from the scorecard collector so store/delivery packages can depend
@@ -96,18 +94,18 @@ func NewOperationalTelemetry(reg *Registry) *OperationalTelemetry {
 	return t
 }
 
-// ObserveDBStats projects the cumulative sql.DB pool counters into gauges so
+// ObserveDBStats projects the cumulative database-pool counters into gauges so
 // operators can distinguish SQLite lock errors from ordinary connection-pool
 // queueing. The values intentionally have no labels.
-func (t *OperationalTelemetry) ObserveDBStats(stats sql.DBStats) {
+func (t *OperationalTelemetry) ObserveDBStats(openConnections, inUse, idle, waitCount int64, waitDurationMS float64) {
 	if t == nil || t.dbOpenConnections == nil {
 		return
 	}
-	t.dbOpenConnections.GaugeSet([]string{}, int64(stats.OpenConnections))
-	t.dbInUseConnections.GaugeSet([]string{}, int64(stats.InUse))
-	t.dbIdleConnections.GaugeSet([]string{}, int64(stats.Idle))
-	t.dbWaitCount.GaugeSet([]string{}, stats.WaitCount)
-	t.dbWaitDurationMS.GaugeSet([]string{}, stats.WaitDuration.Milliseconds())
+	t.dbOpenConnections.GaugeSet([]string{}, openConnections)
+	t.dbInUseConnections.GaugeSet([]string{}, inUse)
+	t.dbIdleConnections.GaugeSet([]string{}, idle)
+	t.dbWaitCount.GaugeSet([]string{}, waitCount)
+	t.dbWaitDurationMS.GaugeSet([]string{}, int64(waitDurationMS))
 }
 
 func (t *OperationalTelemetry) ObserveDelivery(provider string, queueMS, uploadMS, totalMS float64, status string) {

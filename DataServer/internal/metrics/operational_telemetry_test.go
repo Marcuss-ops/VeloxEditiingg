@@ -2,22 +2,14 @@ package metrics
 
 import (
 	"bytes"
-	"database/sql"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestOperationalTelemetry_ExportsDBPoolStats(t *testing.T) {
 	registry := NewRegistry()
 	telemetry := NewOperationalTelemetry(registry)
-	telemetry.ObserveDBStats(sql.DBStats{
-		OpenConnections: 4,
-		InUse:           2,
-		Idle:            2,
-		WaitCount:       7,
-		WaitDuration:    1250 * time.Millisecond,
-	})
+	telemetry.ObserveDBStats(4, 2, 2, 7, 1250)
 
 	var output bytes.Buffer
 	if err := registry.WritePrometheus(&output); err != nil {

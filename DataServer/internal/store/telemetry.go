@@ -1,12 +1,10 @@
 package store
 
-import "database/sql"
-
 // DBTelemetry is the narrow persistence-observability seam. The store owns
 // when measurements are taken; the metrics package owns how they are exposed.
 type DBTelemetry interface {
 	ObserveDBTransaction(waitMS, transactionMS float64, busy, busyTimeout, retried bool, writeOps, readOps uint64)
-	ObserveDBStats(stats sql.DBStats)
+	ObserveDBStats(openConnections, inUse, idle, waitCount int64, waitDurationMS float64)
 	RecordDBOperation(write bool)
 	RecordDBRetry()
 }
@@ -35,5 +33,9 @@ func (s *SQLiteStore) observeDBStats() {
 	if s == nil || s.db == nil || s.dbTelemetry == nil {
 		return
 	}
-	s.dbTelemetry.ObserveDBStats(s.db.Stats())
+	stats := s.db.Stats()
+	s.dbTelemetry.ObserveDBStats(
+		int64(stats.OpenConnections), int64(stats.InUse), int64(stats.Idle),
+		stats.WaitCount, float64(stats.WaitDuration.Microseconds())/1000,
+	)
 }
