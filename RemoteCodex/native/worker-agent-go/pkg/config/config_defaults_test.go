@@ -71,3 +71,31 @@ func TestDefaultConfigEmptyWorkDir(t *testing.T) {
 		t.Errorf("Expected default work_dir /opt/velox, got %s", cfg.WorkDir)
 	}
 }
+
+// Fase E1 StorageResolver: tmpfs stays opt-out (empty disables it) while
+// the size gate always carries the benchmarked default, so a configured
+// tmpfs_dir can never pair with a zero/negative threshold.
+func TestDefaultConfigStorageTmpfs(t *testing.T) {
+	cfg := DefaultConfig("/opt/velox")
+	cfg.applyDefaults()
+
+	if cfg.TmpfsDir != "" {
+		t.Errorf("tmpfs_dir should default to empty (opt-out), got %q", cfg.TmpfsDir)
+	}
+	if cfg.TmpfsThresholdBytes != DefaultTmpfsThresholdBytes {
+		t.Errorf("tmpfs_threshold_bytes should default to %d, got %d", DefaultTmpfsThresholdBytes, cfg.TmpfsThresholdBytes)
+	}
+
+	// A zero/negative threshold is repaired by applyDefaults.
+	cfg.TmpfsThresholdBytes = -5
+	cfg.applyDefaults()
+	if cfg.TmpfsThresholdBytes != DefaultTmpfsThresholdBytes {
+		t.Errorf("negative threshold should be repaired to %d, got %d", DefaultTmpfsThresholdBytes, cfg.TmpfsThresholdBytes)
+	}
+	// An operator-supplied threshold survives applyDefaults untouched.
+	cfg.TmpfsThresholdBytes = 128 * 1024 * 1024
+	cfg.applyDefaults()
+	if cfg.TmpfsThresholdBytes != 128*1024*1024 {
+		t.Errorf("operator threshold should be preserved, got %d", cfg.TmpfsThresholdBytes)
+	}
+}

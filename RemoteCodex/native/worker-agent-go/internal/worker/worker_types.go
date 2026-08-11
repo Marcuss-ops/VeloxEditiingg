@@ -24,6 +24,7 @@ import (
 	"velox-worker-agent/pkg/cache"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
+	"velox-worker-agent/pkg/storage"
 )
 
 // Status represents the current status of a worker.
@@ -335,6 +336,14 @@ type Worker struct {
 	// session. nil-safe read paths in hostInfo / sendHeartbeat tolerate
 	// a sampler that hasn't yet sampled.
 	sampler *telemetry.Sampler
+
+	// Fase E1 StorageResolver: the single placement abstraction over the
+	// worker's storage classes (CACHE_PERSISTENT / ATTEMPT_TEMP /
+	// ARTIFACT_FINAL) with the tmpfs threshold gate. Built in New() from
+	// cfg; immutable after construction. nil only on construction failure
+	// (which aborts New). Later phases (E2/F) consume it for cache, temp
+	// and artifact placement.
+	storageResolver *storage.Resolver
 
 	// Exit function (for testing, defaults to os.Exit)
 	exitFunc ExitFunc

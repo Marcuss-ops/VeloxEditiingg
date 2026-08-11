@@ -105,6 +105,38 @@ func TestDirs_AllWritable(t *testing.T) {
 	assert.Equal(t, StatusPass, r.Status, "detail: %s", r.Detail)
 }
 
+// Fase E1: a configured tmpfs backing must pass the same writability
+// gate; an unwritable tmpfs_dir fails readiness (fail-closed).
+func TestDirs_TmpfsDirConfigured_Validated(t *testing.T) {
+	cfg := testCfg()
+	tmpDir := t.TempDir()
+	cfg.WorkDir = tmpDir + "/work"
+	cfg.OutputDir = tmpDir + "/output"
+	cfg.TempDir = tmpDir + "/temp"
+	cfg.TmpfsDir = tmpDir + "/shm"
+	t.Setenv("VELOX_WORKER_CACHE_DIR", tmpDir+"/cache")
+	t.Setenv("VELOX_WORKER_BLOB_DIR", tmpDir+"/blobs")
+	r := (&DirsValidator{}).Run(context.Background(), cfg)
+	assert.Equal(t, StatusPass, r.Status, "detail: %s", r.Detail)
+	assert.Contains(t, r.Detail, "tmpfs_dir=")
+}
+
+func TestDirs_TmpfsDirUnwritable_ShouldFail(t *testing.T) {
+	cfg := testCfg()
+	tmpDir := t.TempDir()
+	readOnlyDir := tmpDir + "/readonly"
+	require.NoError(t, os.MkdirAll(readOnlyDir, 0555))
+	cfg.WorkDir = tmpDir + "/work"
+	cfg.OutputDir = tmpDir + "/output"
+	cfg.TempDir = tmpDir + "/temp"
+	cfg.TmpfsDir = readOnlyDir + "/shm" // parent read-only → MkdirAll fails
+	t.Setenv("VELOX_WORKER_CACHE_DIR", tmpDir+"/cache")
+	t.Setenv("VELOX_WORKER_BLOB_DIR", tmpDir+"/blobs")
+	r := (&DirsValidator{}).Run(context.Background(), cfg)
+	assert.Equal(t, StatusFail, r.Status)
+	assert.Contains(t, r.Detail, "tmpfs_dir")
+}
+
 func TestDirs_ReadOnlyParent_ShouldFailOne(t *testing.T) {
 	cfg := testCfg()
 	tmpDir := t.TempDir()

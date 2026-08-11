@@ -12,6 +12,14 @@ import (
 	"velox-shared/identity"
 )
 
+// DefaultTmpfsThresholdBytes is the default size gate for StorageResolver
+// tmpfs placement (Fase E1): ATTEMPT_TEMP files strictly smaller than this
+// may land on TmpfsDir; at/above it they always land on TempDir (NVMe).
+// 64 MiB is a benchmarked starting point for small manifests, concat lists,
+// metadata, small audio fragments and control files — never large
+// intermediates or the final artifact.
+const DefaultTmpfsThresholdBytes int64 = 64 * 1024 * 1024
+
 // GenerateWorkerID creates a unique worker ID in the format "worker-{8-char-hex}".
 //
 // Implementation lives in shared/identity so that the Velox master server and
@@ -90,6 +98,12 @@ func (c *WorkerConfig) applyDefaults() {
 	}
 	if c.TempDir == "" {
 		c.TempDir = os.TempDir() + "/velox-worker"
+	}
+	// Fase E1: tmpfs backing stays OPT-OUT (empty disables it) but the
+	// size gate always has a benchmarked default so a configured
+	// tmpfs_dir can never pair with a zero/negative threshold.
+	if c.TmpfsThresholdBytes <= 0 {
+		c.TmpfsThresholdBytes = DefaultTmpfsThresholdBytes
 	}
 	if c.VideoEngineCppBin == "" {
 		c.VideoEngineCppBin = "velox-render-cpp"

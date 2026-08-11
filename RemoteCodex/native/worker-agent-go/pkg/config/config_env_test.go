@@ -52,6 +52,44 @@ func TestEnvTruthy(t *testing.T) {
 // rule "TLS AND insecure cannot be active simultaneously" forbids
 // setting BOTH paths from env at once — we cover each path in its
 // own t.Run sub-test with a non-conflicting env footprint.
+// Fase E1 StorageResolver env bindings: VELOX_TMPFS_DIR opt-in + the
+// VELOX_TMPFS_THRESHOLD_BYTES size gate. Invalid numeric values are
+// ignored so a typo cannot zero the gate.
+func TestEnvTmpfsOverrides(t *testing.T) {
+	t.Setenv(EnvTmpfsDir, "/dev/shm/velox-worker")
+	t.Setenv(EnvTmpfsThresholdBytes, "134217728") // 128 MiB
+	cfg := &WorkerConfig{}
+	if err := applyEnvOverrides(cfg); err != nil {
+		t.Fatalf("applyEnvOverrides: %v", err)
+	}
+	if cfg.TmpfsDir != "/dev/shm/velox-worker" {
+		t.Errorf("TmpfsDir = %q, want /dev/shm/velox-worker", cfg.TmpfsDir)
+	}
+	if cfg.TmpfsThresholdBytes != 134217728 {
+		t.Errorf("TmpfsThresholdBytes = %d, want 134217728", cfg.TmpfsThresholdBytes)
+	}
+
+	// Invalid / non-positive threshold values are ignored (field keeps its
+	// pre-env value; applyDefaults later fills the default).
+	t.Setenv(EnvTmpfsThresholdBytes, "not-a-number")
+	cfg2 := &WorkerConfig{TmpfsThresholdBytes: 7}
+	if err := applyEnvOverrides(cfg2); err != nil {
+		t.Fatalf("applyEnvOverrides invalid threshold: %v", err)
+	}
+	if cfg2.TmpfsThresholdBytes != 7 {
+		t.Errorf("invalid threshold should be ignored, got %d", cfg2.TmpfsThresholdBytes)
+	}
+
+	t.Setenv(EnvTmpfsThresholdBytes, "0")
+	cfg3 := &WorkerConfig{TmpfsThresholdBytes: 9}
+	if err := applyEnvOverrides(cfg3); err != nil {
+		t.Fatalf("applyEnvOverrides zero threshold: %v", err)
+	}
+	if cfg3.TmpfsThresholdBytes != 9 {
+		t.Errorf("zero threshold should be ignored, got %d", cfg3.TmpfsThresholdBytes)
+	}
+}
+
 func TestWorkerCredentialFileFallback(t *testing.T) {
 	tmpDir := t.TempDir()
 	credentialFile := filepath.Join(tmpDir, "worker_credential")

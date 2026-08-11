@@ -10,8 +10,9 @@ import (
 )
 
 // DirsValidator checks that all working directories are writable:
-// WorkDir, OutputDir, TempDir, and the cache + blob roots env vars.
-// It performs mkdir + write + remove on each directory.
+// WorkDir, OutputDir, TempDir, the cache + blob roots env vars, and
+// (Fase E1) the opt-in tmpfs backing when configured. It performs
+// mkdir + write + remove on each directory.
 // RW-PROD-002 §2 item 5.
 type DirsValidator struct{}
 
@@ -42,6 +43,13 @@ func (v *DirsValidator) Run(_ context.Context, cfg *config.WorkerConfig) Result 
 		dirs["blob_dir"] = bd
 	} else {
 		dirs["blob_dir"] = filepath.Join(stateRoot, "blobs")
+	}
+
+	// Fase E1 StorageResolver: when a tmpfs backing is configured it is a
+	// REAL storage dependency (small ATTEMPT_TEMP files land there) and
+	// must pass the same mkdir+write+remove gate. Empty (opt-out) skips it.
+	if td := trim(cfg.TmpfsDir); td != "" {
+		dirs["tmpfs_dir"] = td
 	}
 
 	var failures []string

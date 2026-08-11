@@ -34,6 +34,7 @@ import (
 	"velox-worker-agent/pkg/cache"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
+	"velox-worker-agent/pkg/storage"
 )
 
 // Option configures a Worker returned by New. Backward-compatible:
@@ -268,6 +269,44 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		return nil, fmt.Errorf("open output spool: %w", err)
 	}
 
+	// Fase E1: build the StorageResolver from the resolved config. The
+	// cache backing mirrors the doctor's canonical resolution
+	// (VELOX_WORKER_CACHE_DIR || <state_dir>/cache); ATTEMPT_TEMP maps to
+	// TempDir (with the opt-in tmpfs gate); ARTIFACT_FINAL maps to
+	// OutputDir. Every NVMe backing falls back under the same stateDir
+	// temp-root pattern used above, so minimal direct-construction configs
+	// (unit tests, headless harnesses) never fail worker construction. The
+	// threshold is repaired to the benchmarked default when a
+	// direct-construction config skipped applyDefaults.
+	storageCacheDir := strings.TrimSpace(os.Getenv("VELOX_WORKER_CACHE_DIR"))
+	if storageCacheDir == "" {
+		storageCacheDir = filepath.Join(stateDir, "cache")
+	}
+	storageTempDir := strings.TrimSpace(cfg.TempDir)
+	if storageTempDir == "" {
+		storageTempDir = filepath.Join(stateDir, "temp")
+	}
+	storageArtifactDir := strings.TrimSpace(cfg.OutputDir)
+	if storageArtifactDir == "" {
+		storageArtifactDir = filepath.Join(stateDir, "artifact")
+	}
+	storageThreshold := cfg.TmpfsThresholdBytes
+	if storageThreshold <= 0 {
+		storageThreshold = config.DefaultTmpfsThresholdBytes
+	}
+	storageResolver, err := storage.New(storage.Config{
+		CacheDir:            storageCacheDir,
+		TempDir:             storageTempDir,
+		TmpfsDir:            cfg.TmpfsDir,
+		ArtifactDir:         storageArtifactDir,
+		TmpfsThresholdBytes: storageThreshold,
+	})
+	if err != nil {
+		_ = initialTransport.Close()
+		return nil, fmt.Errorf("build storage resolver: %w", err)
+	}
+	log.Info("[STORAGE] %s", storageResolver.String())
+
 	// Build the TaskRunner from registry + cache + blobs. The
 	// runner is shared by future executeTask routes and is also
 	// where cache + blob counters get surfaced as report.Metrics entries.
@@ -337,8 +376,9 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		// (statvfs + resolveWorkDirDevice degrade to best-effort).
 		// 5s tick + 3-tick emit cadence is the default from
 		// NewResourceSampler.
-		sampler:  sampler,
-		exitFunc: os.Exit,
+		sampler:          sampler,
+		storageResolver:  storageResolver,
+		exitFunc:         os.Exit,
 	}
 
 	// Load persisted state from previous run (command dedup, job recovery info).
@@ -373,6 +413,18 @@ func (w *Worker) JobDone() <-chan struct{} {
 		return nil
 	}
 	return w.jobDone
+}
+
+// StorageResolver returns the canonical Fase E1 storage resolver (cache /
+// temp / artifact placement with the tmpfs threshold gate). Non-nil for
+// every Worker returned by New(). Later phases (E2 executor placement, F
+// artifact staging) consume storage through this seam instead of
+// scattering os.TempDir() calls.
+func (w *Worker) StorageResolver() *storage.Resolver {
+	if w == nil {
+		return nil
+	}
+	return w.storageResolver
 }
 
 // AttachClipCache is used only by the composition root while the worker is

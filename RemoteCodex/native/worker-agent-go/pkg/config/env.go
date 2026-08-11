@@ -65,6 +65,12 @@ const (
 	// EnvAssetDownloadConcurrency caps the number of simultaneous asset byte
 	// transfers the canonical download manager runs per worker. Default 4.
 	EnvAssetDownloadConcurrency = "VELOX_ASSET_DOWNLOAD_CONCURRENCY"
+	// EnvTmpfsDir selects the memory-backed scratch directory for small
+	// ATTEMPT_TEMP files (Fase E1 StorageResolver). Empty disables tmpfs.
+	EnvTmpfsDir = "VELOX_TMPFS_DIR"
+	// EnvTmpfsThresholdBytes sets the tmpfs size gate in bytes (default
+	// 64 MiB). Files at/above the threshold always land on TempDir (NVMe).
+	EnvTmpfsThresholdBytes = "VELOX_TMPFS_THRESHOLD_BYTES"
 )
 
 // EnvBindings is the set of env-var names this package inspects.
@@ -87,6 +93,8 @@ var EnvBindings = []string{
 	EnvWorkerProfile,
 	EnvPrometheusPort,
 	EnvAssetDownloadConcurrency,
+	EnvTmpfsDir,
+	EnvTmpfsThresholdBytes,
 }
 
 // envTruthy reports whether a string from os.Getenv should be interpreted
@@ -204,6 +212,18 @@ func applyEnvOverrides(cfg *WorkerConfig) error {
 	if v := strings.TrimSpace(os.Getenv(EnvAssetDownloadConcurrency)); v != "" {
 		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
 			cfg.AssetDownloadConcurrency = n
+		}
+	}
+	// Fase E1 StorageResolver: VELOX_TMPFS_DIR opt-in memory-backed scratch
+	// for small ATTEMPT_TEMP files; VELOX_TMPFS_THRESHOLD_BYTES tunes the
+	// size gate (default 64 MiB via applyDefaults). Invalid numeric values
+	// are ignored so a typo cannot zero the gate.
+	if v := strings.TrimSpace(os.Getenv(EnvTmpfsDir)); v != "" {
+		cfg.TmpfsDir = v
+	}
+	if v := strings.TrimSpace(os.Getenv(EnvTmpfsThresholdBytes)); v != "" {
+		if n, perr := strconv.ParseInt(v, 10, 64); perr == nil && n > 0 {
+			cfg.TmpfsThresholdBytes = n
 		}
 	}
 	return nil

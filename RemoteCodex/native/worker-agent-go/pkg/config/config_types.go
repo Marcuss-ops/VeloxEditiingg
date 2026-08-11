@@ -128,7 +128,26 @@ type WorkerConfig struct {
 	// TempDir is the scratch directory for intermediate artifacts during
 	// video pipeline execution. Defaults to os.TempDir()/velox-worker.
 	// RW-PROD-002 §3 A4: validated by pkg/doctor for mkdir+write+remove.
+	// It is the NVMe backing of the StorageResolver ATTEMPT_TEMP class
+	// (Fase E1).
 	TempDir string `json:"temp_dir,omitempty"`
+
+	// TmpfsDir is the memory-backed scratch directory (e.g.
+	// /dev/shm/velox-worker) used by the StorageResolver for ATTEMPT_TEMP
+	// files strictly smaller than TmpfsThresholdBytes — manifests, concat
+	// lists, metadata, small audio fragments, control files. Empty
+	// disables tmpfs entirely: all scratch lands on TempDir. NEVER place
+	// large intermediates or the final artifact on tmpfs: the resolver's
+	// threshold gate enforces that rule. Binds from VELOX_TMPFS_DIR.
+	TmpfsDir string `json:"tmpfs_dir,omitempty"`
+
+	// TmpfsThresholdBytes is the size gate (in bytes) below which an
+	// ATTEMPT_TEMP file may be placed on TmpfsDir. Default 64 MiB
+	// (DefaultTmpfsThresholdBytes). Files at/above the threshold — and
+	// files of unknown size — always land on TempDir (NVMe). The default
+	// is a benchmarked starting point, not a universal truth: operators
+	// tune it per fleet via VELOX_TMPFS_THRESHOLD_BYTES.
+	TmpfsThresholdBytes int64 `json:"tmpfs_threshold_bytes,omitempty"`
 
 	// WorkerClass is the operator-assigned fleet class (cpu-xlarge, gpu-a100,
 	// mixed, io, ...). Binds from VELOX_WORKER_CLASS env. Surfaces in Hello
