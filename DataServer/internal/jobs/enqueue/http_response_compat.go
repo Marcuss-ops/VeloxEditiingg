@@ -34,7 +34,8 @@
 package enqueue
 
 import (
-	"database/sql"
+	"context"
+	"fmt"
 	"velox-shared/payload"
 )
 
@@ -51,13 +52,13 @@ import (
 // The legacy alias probe chain tolerates rows written before PR15.6 that
 // still carry `id` (HTTP01 subtest basic_legacy_alias_fallback) — `id` is
 // consulted LAST so canonical `job_id` wins when present.
-func RenderHTTPBoundaryJobResponse(job map[string]interface{}, full bool, dataDir string, dbs ...*sql.DB) map[string]interface{} {
-	var db *sql.DB
-	if len(dbs) > 0 {
-		db = dbs[0]
-	}
+func RenderHTTPBoundaryJobResponse(ctx context.Context, job map[string]interface{}, full bool, resolver DriveFolderResolver) (map[string]interface{}, error) {
 	if job == nil {
-		return map[string]interface{}{"ok": false}
+		return map[string]interface{}{"ok": false}, nil
+	}
+	driveOutput, err := ResolveDriveOutputFolderReference(ctx, payload.FirstString(job, "drive_output_folder"), resolver)
+	if err != nil {
+		return nil, fmt.Errorf("resolve response drive output folder: %w", err)
 	}
 	response := map[string]interface{}{
 		"ok":                  true,
@@ -72,7 +73,7 @@ func RenderHTTPBoundaryJobResponse(job map[string]interface{}, full bool, dataDi
 		"started_at":          job["started_at"],
 		"completed_at":        job["completed_at"],
 		"output_path":         payload.FirstString(job, "output_path"),
-		"drive_output_folder": ResolveDriveOutputFolderReference(dataDir, payload.FirstString(job, "drive_output_folder"), db),
+		"drive_output_folder": driveOutput,
 		"scene_count":         job["scene_count"],
 		"voiceover_count":     job["voiceover_count"],
 		"video_mode":          payload.FirstString(job, "video_mode"),
@@ -87,5 +88,5 @@ func RenderHTTPBoundaryJobResponse(job map[string]interface{}, full bool, dataDi
 		response["job"] = job
 		response["request"] = job["request"]
 	}
-	return response
+	return response, nil
 }

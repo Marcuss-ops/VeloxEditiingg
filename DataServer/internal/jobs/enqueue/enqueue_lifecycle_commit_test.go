@@ -426,7 +426,10 @@ func TestRenderHTTPBoundaryJobResponse(t *testing.T) {
 			"job_id": "j1", "status": "COMPLETED", "video_name": "V", "scene_count": 5,
 			"voiceover_count": 3, "video_mode": "scene_image",
 		}
-		r := RenderHTTPBoundaryJobResponse(job, false, "")
+		r, err := RenderHTTPBoundaryJobResponse(context.Background(), job, false, nil)
+		if err != nil {
+			t.Fatalf("render response: %v", err)
+		}
 		if r["ok"] != true || r["job_id"] != "j1" || r["status"] != "COMPLETED" {
 			t.Errorf("unexpected: %v", r)
 		}
@@ -441,7 +444,10 @@ func TestRenderHTTPBoundaryJobResponse(t *testing.T) {
 		job := map[string]interface{}{
 			"id": "j1", "status": "COMPLETED", "title": "V",
 		}
-		r := RenderHTTPBoundaryJobResponse(job, false, "")
+		r, err := RenderHTTPBoundaryJobResponse(context.Background(), job, false, nil)
+		if err != nil {
+			t.Fatalf("render response: %v", err)
+		}
 		if r["ok"] != true {
 			t.Error("want ok=true")
 		}
@@ -457,7 +463,10 @@ func TestRenderHTTPBoundaryJobResponse(t *testing.T) {
 	t.Run("full", func(t *testing.T) {
 		t.Parallel()
 		job := map[string]interface{}{"job_id": "j2", "request": map[string]interface{}{"raw": "x"}}
-		r := RenderHTTPBoundaryJobResponse(job, true, "")
+		r, err := RenderHTTPBoundaryJobResponse(context.Background(), job, true, nil)
+		if err != nil {
+			t.Fatalf("render response: %v", err)
+		}
 		if r["job"] == nil || r["request"] == nil {
 			t.Error("want job/request keys when full=true")
 		}
@@ -465,7 +474,10 @@ func TestRenderHTTPBoundaryJobResponse(t *testing.T) {
 
 	t.Run("nil", func(t *testing.T) {
 		t.Parallel()
-		r := RenderHTTPBoundaryJobResponse(nil, false, "")
+		r, err := RenderHTTPBoundaryJobResponse(context.Background(), nil, false, nil)
+		if err != nil {
+			t.Fatalf("render response: %v", err)
+		}
 		if r["ok"] != false {
 			t.Errorf("want ok=false, got %v", r["ok"])
 		}
@@ -474,7 +486,10 @@ func TestRenderHTTPBoundaryJobResponse(t *testing.T) {
 	t.Run("error", func(t *testing.T) {
 		t.Parallel()
 		job := map[string]interface{}{"job_id": "j3", "status": "FAILED", "error": "boom"}
-		r := RenderHTTPBoundaryJobResponse(job, false, "")
+		r, err := RenderHTTPBoundaryJobResponse(context.Background(), job, false, nil)
+		if err != nil {
+			t.Fatalf("render response: %v", err)
+		}
 		if r["error"] != "boom" {
 			t.Errorf("want error 'boom', got %v", r["error"])
 		}

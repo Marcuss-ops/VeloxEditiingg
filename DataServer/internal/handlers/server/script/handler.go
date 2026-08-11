@@ -84,9 +84,9 @@ func RegisterRoutes(group gin.IRoutes, cfg *config.Config, sqliteDB *store.SQLit
 }
 
 func newScriptIngressRegistry(cfg *config.Config, dataDir string, sqliteDB *store.SQLiteStore, docCreator GoogleDocCreator) *ingress.Registry {
-	var db *sql.DB
+	var resolver enqueue.DriveFolderResolver
 	if sqliteDB != nil {
-		db = sqliteDB.DB()
+		resolver = sqliteDB
 	}
 	registry := ingress.NewRegistry()
 	registry.MustRegister(ingress.Definition{
@@ -95,7 +95,7 @@ func newScriptIngressRegistry(cfg *config.Config, dataDir string, sqliteDB *stor
 		ExecutorVersion: 1,
 		PipelineID:      "hybrid.v1",
 		Builder: func(ctx context.Context, raw map[string]any) (map[string]any, error) {
-			normalized, err := buildUnifiedGeneratePayload(raw, dataDir, cfg.Runtime.VideosDir, db)
+			normalized, err := buildUnifiedGeneratePayload(raw, dataDir, cfg.Runtime.VideosDir, resolver)
 			if err != nil {
 				return nil, err
 			}
@@ -122,7 +122,11 @@ func newScriptIngressRegistry(cfg *config.Config, dataDir string, sqliteDB *stor
 					return nil, err
 				}
 				title := firstStringValue(translated, "video_name", "title", "topic")
-				doc, err := docCreator.CreateGoogleDoc(ctx, title, content, enqueue.ResolveDriveOutputFolderReference(dataDir, folder, db), firstStringValue(translated, "correlation_id"))
+				driveFolder, err := enqueue.ResolveDriveOutputFolderReference(ctx, folder, resolver)
+				if err != nil {
+					return nil, fmt.Errorf("resolve script google doc folder: %w", err)
+				}
+				doc, err := docCreator.CreateGoogleDoc(ctx, title, content, driveFolder, firstStringValue(translated, "correlation_id"))
 				if err != nil {
 					return nil, fmt.Errorf("create script google doc: %w", err)
 				}
@@ -139,7 +143,7 @@ func newScriptIngressRegistry(cfg *config.Config, dataDir string, sqliteDB *stor
 				}
 				translated["video_metadata"] = metadata
 			}
-			result, err := enqueue.BuildClipPayloadForMaster(translated, dataDir, cfg.Runtime.VideosDir, "", db)
+			result, err := enqueue.BuildClipPayloadForMaster(translated, dataDir, cfg.Runtime.VideosDir, "", resolver)
 			if err != nil {
 				return nil, err
 			}
@@ -156,7 +160,7 @@ func newScriptIngressRegistry(cfg *config.Config, dataDir string, sqliteDB *stor
 		ExecutorVersion: 1,
 		PipelineID:      "images.v1",
 		Builder: func(ctx context.Context, raw map[string]any) (map[string]any, error) {
-			return enqueue.BuildSlideshowPayloadForMaster(raw, dataDir, cfg.Runtime.VideosDir, "", db)
+			return enqueue.BuildSlideshowPayloadForMaster(raw, dataDir, cfg.Runtime.VideosDir, "", resolver)
 		},
 		Requirements: costmodel.DefaultRequirements(),
 	})
@@ -166,7 +170,7 @@ func newScriptIngressRegistry(cfg *config.Config, dataDir string, sqliteDB *stor
 // buildUnifiedGeneratePayload is the single public POST /script/generate
 // dispatcher. source.type selects the canonical input normalizer without
 // exposing a separate endpoint for each source family.
-func buildUnifiedGeneratePayload(raw map[string]any, dataDir, videosDir string, db *sql.DB) (map[string]any, error) {
+func buildUnifiedGeneratePayload(raw map[string]any, dataDir, videosDir string, resolver enqueue.DriveFolderResolver) (map[string]any, error) {
 	if raw == nil {
 		return nil, fmt.Errorf("request body is required")
 	}
@@ -203,7 +207,7 @@ func buildUnifiedGeneratePayload(raw map[string]any, dataDir, videosDir string, 
 			}
 		}
 
-		normalized, err := enqueue.BuildClipPayloadForMaster(merged, dataDir, videosDir, "", db)
+		normalized, err := enqueue.BuildClipPayloadForMaster(merged, dataDir, videosDir, "", resolver)
 		if err != nil {
 			return nil, err
 		}
@@ -265,10 +269,6 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 			}
 		}
 
-		var db *sql.DB
-		if h.sqliteDB != nil {
-			db = h.sqliteDB.DB()
-		}
 		// `generate-with-images` is also used by the canonical clip/stock
 		// intake. Preserve that explicit mode instead of forcing the image
 		// builder (which drops the narrated `items` timeline required by
@@ -278,9 +278,9 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 			err        error
 		)
 		if strings.EqualFold(firstStringValue(payload, "video_mode"), "clip_stock") {
-			normalized, err = enqueue.BuildClipPayloadForMaster(payload, h.dataDir, cfg.Runtime.VideosDir, resolvedMasterURL, db)
+			normalized, err = enqueue.BuildClipPayloadForMaster(payload, h.dataDir, cfg.Runtime.VideosDir, resolvedMasterURL, h.sqliteDB)
 		} else {
-			normalized, err = enqueue.BuildSceneImagePayloadForMaster(payload, h.dataDir, cfg.Runtime.VideosDir, resolvedMasterURL, db)
+			normalized, err = enqueue.BuildSceneImagePayloadForMaster(payload, h.dataDir, cfg.Runtime.VideosDir, resolvedMasterURL, h.sqliteDB)
 		}
 		if err != nil {
 			if assetErr, ok := voiceoverassets.AsAcquisitionError(err); ok {
@@ -426,7 +426,13 @@ func (h *ScriptHandlers) ScriptJobHandler(full bool) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to load job"})
 			return
 		}
-		c.JSON(http.StatusOK, enqueue.RenderHTTPBoundaryJobResponse(job, full, h.dataDir, h.sqliteDB.DB()))
+		response, resolveErr := enqueue.RenderHTTPBoundaryJobResponse(c.Request.Context(), job, full, h.sqliteDB)
+		if resolveErr != nil {
+			log.Printf("[SCRIPT] render job response failed for job %s: %v", jobID, resolveErr)
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to resolve job response"})
+			return
+		}
+		c.JSON(http.StatusOK, response)
 	}
 }
 
@@ -447,7 +453,13 @@ func (h *ScriptHandlers) ScriptByIDHandler() gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to load script"})
 			return
 		}
-		c.JSON(http.StatusOK, enqueue.RenderHTTPBoundaryJobResponse(job, true, h.dataDir, h.sqliteDB.DB()))
+		response, resolveErr := enqueue.RenderHTTPBoundaryJobResponse(c.Request.Context(), job, true, h.sqliteDB)
+		if resolveErr != nil {
+			log.Printf("[SCRIPT] render script response failed for script %s: %v", scriptID, resolveErr)
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to resolve script response"})
+			return
+		}
+		c.JSON(http.StatusOK, response)
 	}
 }
 

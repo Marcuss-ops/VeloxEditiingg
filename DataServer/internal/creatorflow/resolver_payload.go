@@ -36,7 +36,7 @@ func (r *Resolver) buildAndRewritePayload(reqPayload map[string]interface{}, fwd
 	// fail the worker render without this guard.
 	needsImageRewrite := hasImagesForRewrite(reqPayload)
 	if r.dataDir != "" && r.masterURL != "" && needsImageRewrite {
-		workerPayload, err = enqueue.BuildSceneImagePayloadForMaster(workerPayload, r.dataDir, r.videosDir, r.masterURL, r.db)
+		workerPayload, err = enqueue.BuildSceneImagePayloadForMaster(workerPayload, r.dataDir, r.videosDir, r.masterURL, r.driveResolver)
 		if err != nil {
 			return nil, fmt.Errorf("creatorflow: Resolve rewrite master URL: %w", err)
 		}

@@ -1,8 +1,10 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -115,6 +117,97 @@ func (s *SQLiteStore) GetDriveLink(id string) (map[string]any, error) {
 }
 
 // MasterFolders: structured master folder CRUD
+
+// ResolveDriveFolderReference resolves a user-provided Drive target against
+// the canonical master-folder table. The store owns the SQL lookup so callers
+// do not need a borrowed *sql.DB. Direct folder IDs and URLs are handled
+// without a query; aliases and names are matched against the persisted row.
+func (s *SQLiteStore) ResolveDriveFolderReference(ctx context.Context, ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", nil
+	}
+	if folderID := extractDriveFolderID(ref); folderID != "" {
+		return folderID, nil
+	}
+	if s == nil || s.db == nil {
+		return "", fmt.Errorf("store: resolve drive folder: store is not configured")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
+	normRef := normalizeDriveAlias(ref)
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, name, url, language, metadata_json FROM drive_master_folders`)
+	if err != nil {
+		return "", fmt.Errorf("store: resolve drive folder query: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id, name, url, language, metadataJSON string
+		if err := rows.Scan(&id, &name, &url, &language, &metadataJSON); err != nil {
+			return "", fmt.Errorf("store: resolve drive folder scan: %w", err)
+		}
+		if driveFolderMatches(ref, normRef, id, name, url, language, metadataJSON) {
+			return id, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("store: resolve drive folder rows: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return ref, nil
+}
+
+func extractDriveFolderID(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
+	}
+	if strings.Contains(ref, "drive.google.com") && strings.Contains(ref, "/folders/") {
+		parts := strings.Split(strings.TrimRight(ref, "/"), "/folders/")
+		if len(parts) == 2 {
+			id := strings.TrimSpace(strings.SplitN(parts[1], "?", 2)[0])
+			if id != "" {
+				return id
+			}
+		}
+	}
+	if !strings.Contains(ref, "://") && len(ref) > 15 {
+		return ref
+	}
+	return ""
+}
+
+func normalizeDriveAlias(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func driveFolderMatches(rawRef, normRef, id, name, url, language, metadataJSON string) bool {
+	if normRef == "" {
+		return false
+	}
+	if normalizeDriveAlias(id) == normRef ||
+		normalizeDriveAlias(name) == normRef ||
+		normalizeDriveAlias(language) == normRef ||
+		normalizeDriveAlias(url) == normRef {
+		return true
+	}
+	metadataLower := strings.ToLower(metadataJSON)
+	return strings.Contains(metadataLower, normRef) ||
+		strings.Contains(strings.ToLower(rawRef), normRef)
+}
 
 // UpsertMasterFolder creates or updates a master folder.
 func (s *SQLiteStore) UpsertMasterFolder(id, name, url, language string, subfoldersCount int, metadataJSON ...string) error {

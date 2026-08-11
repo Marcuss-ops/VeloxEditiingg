@@ -54,7 +54,6 @@ package creatorflow
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 
@@ -77,13 +76,13 @@ import (
 // interfaces rather than the concrete *store.SQLiteStore, which improves
 // testability and makes the dependency contract explicit.
 type Resolver struct {
-	enqueuer    *enqueue.Enqueuer
-	jobLookup   JobLookup
-	forwardRepo ForwardingRepository
-	dataDir     string
-	videosDir   string
-	masterURL   string
-	db          *sql.DB
+	enqueuer      *enqueue.Enqueuer
+	jobLookup     JobLookup
+	forwardRepo   ForwardingRepository
+	dataDir       string
+	videosDir     string
+	masterURL     string
+	driveResolver enqueue.DriveFolderResolver
 }
 
 // NewResolver is the canonical constructor for the handler-side Resolver.
@@ -99,13 +98,13 @@ func NewResolver(cfg *config.Config, enqueuer *enqueue.Enqueuer, dbStore *store.
 		return nil
 	}
 	return &Resolver{
-		enqueuer:    enqueuer,
-		jobLookup:   enqueuer.Jobs,
-		forwardRepo: dbStore,
-		dataDir:     strings.TrimSpace(cfg.Runtime.DataDir),
-		videosDir:   strings.TrimSpace(cfg.Runtime.VideosDir),
-		masterURL:   string(cfg.ControlPlane.RESTPublic),
-		db:          dbStore.DB(),
+		enqueuer:      enqueuer,
+		jobLookup:     enqueuer.Jobs,
+		forwardRepo:   dbStore,
+		dataDir:       strings.TrimSpace(cfg.Runtime.DataDir),
+		videosDir:     strings.TrimSpace(cfg.Runtime.VideosDir),
+		masterURL:     string(cfg.ControlPlane.RESTPublic),
+		driveResolver: dbStore,
 	}
 }
 
@@ -121,10 +120,10 @@ func NewResolverMinimal(enqueuer *enqueue.Enqueuer, dbStore *store.SQLiteStore) 
 		return nil
 	}
 	return &Resolver{
-		enqueuer:    enqueuer,
-		jobLookup:   enqueuer.Jobs,
-		forwardRepo: dbStore,
-		db:          dbStore.DB(),
+		enqueuer:      enqueuer,
+		jobLookup:     enqueuer.Jobs,
+		forwardRepo:   dbStore,
+		driveResolver: dbStore,
 	}
 }
 
@@ -139,13 +138,13 @@ func NewResolverFromDeps(enqueuer *enqueue.Enqueuer, dbStore *store.SQLiteStore,
 		return nil
 	}
 	return &Resolver{
-		enqueuer:    enqueuer,
-		jobLookup:   enqueuer.Jobs,
-		forwardRepo: dbStore,
-		dataDir:     strings.TrimSpace(dataDir),
-		videosDir:   strings.TrimSpace(videosDir),
-		masterURL:   strings.TrimSpace(masterURL),
-		db:          dbStore.DB(),
+		enqueuer:      enqueuer,
+		jobLookup:     enqueuer.Jobs,
+		forwardRepo:   dbStore,
+		dataDir:       strings.TrimSpace(dataDir),
+		videosDir:     strings.TrimSpace(videosDir),
+		masterURL:     strings.TrimSpace(masterURL),
+		driveResolver: dbStore,
 	}
 }
 

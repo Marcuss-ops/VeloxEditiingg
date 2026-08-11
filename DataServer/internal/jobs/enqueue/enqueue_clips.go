@@ -14,7 +14,7 @@
 package enqueue
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -56,10 +56,10 @@ func BuildClipStockTimeline(rawPayload map[string]interface{}) ([]map[string]int
 //  7. Fill a contract.NewJobPayloadV2 envelope and project to the output map.
 //  8. Attach clips, items, optional audio_tracks, fit, and (when no
 //     audio tracks yet) audio_url from the first voiceover path.
-func BuildClipPayloadForMaster(rawPayload map[string]interface{}, dataDir, videosDir, _ string, dbs ...*sql.DB) (map[string]interface{}, error) {
-	var db *sql.DB
-	if len(dbs) > 0 {
-		db = dbs[0]
+func BuildClipPayloadForMaster(rawPayload map[string]interface{}, dataDir, videosDir, _ string, resolvers ...DriveFolderResolver) (map[string]interface{}, error) {
+	var resolver DriveFolderResolver
+	if len(resolvers) > 0 {
+		resolver = resolvers[0]
 	}
 	videoName := payload.FirstString(rawPayload, "video_name", "title", "topic")
 	if videoName == "" {
@@ -155,7 +155,11 @@ func BuildClipPayloadForMaster(rawPayload map[string]interface{}, dataDir, video
 	v2.AudioLanguage = audioLanguage
 	v2.VideoMode = videoMode
 	v2.OutputPath = outputPath
-	v2.DriveOutput = ResolveDriveOutputFolderReference(dataDir, payload.FirstString(rawPayload, "drive_output_folder", "output_directory"), db)
+	driveOutput, err := ResolveDriveOutputFolderReference(context.Background(), payload.FirstString(rawPayload, "drive_output_folder", "output_directory"), resolver)
+	if err != nil {
+		return nil, fmt.Errorf("resolve drive output folder: %w", err)
+	}
+	v2.DriveOutput = driveOutput
 	v2.SubmittedVia = "api_script_generate"
 	v2.Source = "script_generate"
 	v2.Version = "v2"
