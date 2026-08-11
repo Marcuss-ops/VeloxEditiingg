@@ -68,7 +68,9 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 			continue
 		}
 		if existing, exists := owned[candidate.TaskID]; exists {
-			desired = append(desired, existing.FutureReservation)
+			reservation := existing.FutureReservation
+			reservation.Distance = len(jobs) + 1
+			desired = append(desired, reservation)
 			jobs = append(jobs, futureasset.Job{JobID: existing.JobID, TaskID: existing.TaskID, ReservationID: existing.ReservationID, TaskRevision: existing.TaskRevision, Assets: futureAssetManifests(existing.Payload)})
 			continue
 		}
