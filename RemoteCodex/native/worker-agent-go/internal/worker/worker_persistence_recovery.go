@@ -112,36 +112,22 @@ func (w *Worker) captureRecoverySnapshot(snap *RecoverySnapshot) {
 //
 // Returns counts:
 //
-//	activeTaskReplayed — always 0 (active tasks are diagnostic only)
-//	pendingReplayed    — pending_tasks restored
-//	leaseReplayed      — active_task_leases restored
+//		activeTaskReplayed — always 0 (active tasks are diagnostic only)
+//		pendingReplayed    — always 0; pending offers are discarded and the
+//	                        master remints them after reconnect
+//		leaseReplayed      — active_task_leases restored
 //
 // Lock-order matches capture (pendingTasksMu < activeTaskLeasesMu <
 // activeTasksMu). No activeTasksMu acquire here — we don't mutate the
 // activeTasks map (intentional: Cancel funcs + goroutines are dead
 // across a worker restart).
 func (w *Worker) applyRecoverySnapshot(snap RecoverySnapshot) (int, int, int, error) {
+	// A pending TaskOffer has been accepted by the previous gRPC session but
+	// has not received a lease grant. Its session/lease fencing is no longer
+	// valid after reconnect, and the Master is responsible for reminting any
+	// still-READY task. Restoring it would consume MaxActiveJobs forever when
+	// the task was cancelled while the worker was disconnected.
 	pendingReplayed := 0
-	w.pendingTasksMu.Lock()
-	for _, pt := range snap.PendingTasks {
-		if _, exists := w.pendingTasks[pt.TaskID]; exists {
-			continue
-		}
-		w.pendingTasks[pt.TaskID] = &PendingTaskExecution{
-			TaskID:          pt.TaskID,
-			JobID:           pt.JobID,
-			JobRevision:     pt.JobRevision,
-			AttemptID:       pt.AttemptID,
-			AttemptNumber:   pt.AttemptNumber,
-			LeaseID:         pt.LeaseID,
-			ExecutorID:      pt.ExecutorID,
-			ExecutorVersion: pt.ExecutorVersion,
-			Revision:        pt.Revision,
-			Spec:            pt.Spec,
-		}
-		pendingReplayed++
-	}
-	w.pendingTasksMu.Unlock()
 
 	leaseReplayed := 0
 	w.activeTaskLeasesMu.Lock()
