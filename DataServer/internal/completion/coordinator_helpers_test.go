@@ -186,6 +186,32 @@ func seedCompleteUploadFixture(t *testing.T, db *sql.DB, uploadID, artifactID, j
 	); err != nil {
 		t.Fatalf("seed jobs: %v", err)
 	}
+	// CommitAttempt has an authoritative CAS over the scheduler-owned task
+	// and task_attempt rows. Keep this fixture faithful to production by
+	// seeding the matching RUNNING attempt instead of relying on a zero-row
+	// UPDATE being silently accepted.
+	jobSuffix := strings.TrimPrefix(jobID, "job-")
+	taskID := "task-" + jobSuffix
+	attemptID := "attempt-" + jobSuffix
+	workerID := "worker-" + taskID
+	leaseID := "lease-" + attemptID
+	if _, err := db.Exec(`
+		INSERT INTO tasks (
+			task_id, job_id, status, revision, attempt_id, attempt_number,
+			worker_id, lease_id, created_at, updated_at
+		) VALUES (?, ?, 'RUNNING', 1, ?, 1, ?, ?, ?, ?)`,
+		taskID, jobID, attemptID, workerID, leaseID, now, now,
+	); err != nil {
+		t.Fatalf("seed tasks: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO task_attempts (
+			id, task_id, attempt_number, worker_id, lease_id, status, created_at, updated_at
+		) VALUES (?, ?, 1, ?, ?, 'RUNNING', ?, ?)`,
+		attemptID, taskID, workerID, leaseID, now, now,
+	); err != nil {
+		t.Fatalf("seed task attempt: %v", err)
+	}
 	if _, err := db.Exec(`
 		INSERT INTO artifacts (
 			id, job_id, type, storage_provider, storage_key,
