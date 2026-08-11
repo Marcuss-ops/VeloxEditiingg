@@ -2,6 +2,8 @@ package outbox
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	osExec "os/exec"
 	"sync"
@@ -13,6 +15,12 @@ import (
 type countingAlertNotifier struct {
 	mu    sync.Mutex
 	calls int
+}
+
+type failingAlertNotifier struct{ err error }
+
+func (n failingAlertNotifier) Notify(_ context.Context, _ alerts.Alert) error {
+	return n.err
 }
 
 func (n *countingAlertNotifier) Notify(_ context.Context, _ alerts.Alert) error {
@@ -94,5 +102,29 @@ func TestAlertNotifierConcurrentSetAndGet(t *testing.T) {
 
 	if got := AlertNotifier(); got != configured {
 		t.Fatalf("final AlertNotifier = %T, want configured notifier", got)
+	}
+}
+
+func TestProductionJOBFailedHandlerRetriesNotifierFailure(t *testing.T) {
+	sinkErr := errors.New("alert sink unavailable")
+	SetAlertNotifier(failingAlertNotifier{err: sinkErr})
+	t.Cleanup(func() { SetAlertNotifier(nil) })
+
+	h, err := ProductionRegistry().Lookup("JOB_FAILED")
+	if err != nil {
+		t.Fatalf("lookup JOB_FAILED handler: %v", err)
+	}
+
+	err = h.Handle(context.Background(), Event{
+		EventID:   "evt-job-failed-1",
+		EventType: "JOB_FAILED",
+		Payload:   []byte(fmt.Sprintf(`{"job_id":%q,"error_code":"JOB_FAILED_GENERIC","error":"render failed"}`, "job-1")),
+	})
+	if !errors.Is(err, sinkErr) {
+		t.Fatalf("JOB_FAILED handler error = %v, want sink error", err)
+	}
+	var handlerErr *HandlerError
+	if !errors.As(err, &handlerErr) || !handlerErr.Transient {
+		t.Fatalf("JOB_FAILED handler error = %T/%v, want transient HandlerError", err, err)
 	}
 }

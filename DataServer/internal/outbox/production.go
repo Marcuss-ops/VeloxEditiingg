@@ -265,9 +265,8 @@ func buildProductionRegistry() *Registry {
 	// Decode failure surfaces as a Permanent HandlerError so the
 	// dispatcher's "no retry" path fires (a malformed payload is not
 	// a transient condition we want to retry forever). Notification
-	// delivery wire-format mismatch (decoder ok, alert wire broken)
-	// is logged but reported as nil so a degraded alert path never
-	// stalls the dispatch loop.
+	// delivery failures are transient: returning nil here would make
+	// the dispatcher mark JOB_FAILED PROCESSED while the alert was lost.
 	MustRegisterFunc(reg, "JOB_FAILED", func(ctx context.Context, e Event) error {
 		var p struct {
 			JobID     string `json:"job_id"`
@@ -290,14 +289,13 @@ func buildProductionRegistry() *Registry {
 			Tags:      map[string]string{"job_id": p.JobID, "error_code": p.ErrorCode, "event_id": e.EventID},
 			Timestamp: e.CreatedAt,
 		}
-		// Best-effort delivery. Alert path is never authoritative —
-		// a transient sink hiccup must not block the dispatcher's
-		// "claim next event" loop. We log and swallow so the
-		// dispatcher marks the event PROCESSED even when the alert
-		// sink is degraded.
+		// Alert delivery is not allowed to masquerade as success. The
+		// dispatcher owns retry/backoff and will release the claim for a
+		// later attempt, then mark the event FAILED after MaxAttempts.
 		if err := AlertNotifier().Notify(ctx, alert); err != nil {
 			log.Printf("[OUTBOX] alert sink Notify failed for event_id=%s job_id=%s: %v",
 				e.EventID, p.JobID, err)
+			return Transient(fmt.Errorf("JOB_FAILED alert delivery: %w", err))
 		}
 		return nil
 	})
