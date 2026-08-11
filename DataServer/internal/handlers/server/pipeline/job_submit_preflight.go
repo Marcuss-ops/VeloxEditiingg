@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"strings"
 
+	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/store"
+	"velox-shared/assetref"
 
 	"github.com/gin-gonic/gin"
 )
@@ -40,6 +42,129 @@ func writeIdempotencyKeyError(c *gin.Context, vErr *IdempotencyKeyError) {
 		"message": vErr.Message,
 		"details": details,
 	})
+}
+
+// checkAssetPreflight validates local velox-asset references against the
+// Master registry and final blob store before enqueue. It is intentionally
+// read-only: deferred velox-drive references are not materialized here.
+func checkAssetPreflight(c *gin.Context, h *Handlers, req SubmitJobRequest) bool {
+	payload, err := projectWorkerPayload(&req)
+	if err != nil {
+		// The canonical projection is run again by the enqueue path. Do not
+		// turn a projection implementation detail into an asset error here.
+		return false
+	}
+	requirements := collectAssetPreflightRequirements(payload)
+	if len(requirements) == 0 {
+		return false
+	}
+	if h == nil || h.assetService == nil {
+		// The production composition always wires AssetService. Lightweight
+		// pipeline profiles and legacy test harnesses may intentionally omit
+		// the optional asset registry; their existing enqueue validation remains
+		// authoritative. Production readiness owns the fail-closed wiring gate.
+		return false
+	}
+	report, err := h.assetService.Preflight(c.Request.Context(), requirements)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"ok":      false,
+			"error":   "asset_preflight_unavailable",
+			"message": err.Error(),
+		})
+		return true
+	}
+	var details []gin.H
+	for _, item := range report.Items {
+		if item.Metadata && item.BlobResolvable && item.SHA256Valid && item.SizeValid {
+			continue
+		}
+		details = append(details, gin.H{
+			"asset_id":        item.AssetID,
+			"issue":           item.Issue,
+			"metadata":        item.Metadata,
+			"blob_resolvable": item.BlobResolvable,
+			"sha256_valid":    item.SHA256Valid,
+			"size_valid":      item.SizeValid,
+		})
+	}
+	if len(details) == 0 {
+		return false
+	}
+	c.JSON(http.StatusUnprocessableEntity, gin.H{
+		"ok":      false,
+		"error":   "asset_preflight_failed",
+		"message": "one or more local assets are unavailable or failed integrity validation",
+		"summary": report,
+		"details": details,
+	})
+	return true
+}
+
+func collectAssetPreflightRequirements(payload map[string]interface{}) []voiceoverassets.AssetPreflightRequirement {
+	byID := make(map[string]voiceoverassets.AssetPreflightRequirement)
+	var walk func(any, string, int64)
+	walk = func(value any, inheritedSHA string, inheritedSize int64) {
+		switch typed := value.(type) {
+		case map[string]interface{}:
+			sha := inheritedSHA
+			if candidate, ok := typed["sha256"].(string); ok && strings.TrimSpace(candidate) != "" {
+				sha = candidate
+			}
+			size := inheritedSize
+			if candidate, ok := typed["size_bytes"].(float64); ok && candidate > 0 {
+				size = int64(candidate)
+			}
+			if candidate, ok := typed["size_bytes"].(int64); ok && candidate > 0 {
+				size = candidate
+			}
+			for key, child := range typed {
+				text, ok := child.(string)
+				if !ok {
+					continue
+				}
+				id, ok := assetref.WireAssetID(text)
+				if !ok || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(text)), assetref.SchemeVeloxAsset+"://") {
+					continue
+				}
+				if key == "asset_id" || key == "id" || strings.EqualFold(key, "url") || strings.EqualFold(key, "source_url") || strings.EqualFold(key, "uri") {
+					mergeAssetPreflightRequirement(byID, voiceoverassets.AssetPreflightRequirement{AssetID: id, SHA256: sha, SizeBytes: size})
+				}
+			}
+			for _, child := range typed {
+				walk(child, sha, size)
+			}
+		case []interface{}:
+			for _, child := range typed {
+				walk(child, inheritedSHA, inheritedSize)
+			}
+		case []map[string]interface{}:
+			for _, child := range typed {
+				walk(child, inheritedSHA, inheritedSize)
+			}
+		}
+	}
+	walk(payload, "", 0)
+	result := make([]voiceoverassets.AssetPreflightRequirement, 0, len(byID))
+	for _, requirement := range byID {
+		result = append(result, requirement)
+	}
+	return result
+}
+
+func mergeAssetPreflightRequirement(dst map[string]voiceoverassets.AssetPreflightRequirement, incoming voiceoverassets.AssetPreflightRequirement) {
+	current, ok := dst[incoming.AssetID]
+	if !ok {
+		dst[incoming.AssetID] = incoming
+		return
+	}
+	if current.SHA256 == "" {
+		current.SHA256 = incoming.SHA256
+	}
+	if current.SizeBytes <= 0 {
+		current.SizeBytes = incoming.SizeBytes
+	}
+	dst[incoming.AssetID] = current
 }
 
 // checkDeliveryPlanDestinations runs the P0 #2 delivery-destination

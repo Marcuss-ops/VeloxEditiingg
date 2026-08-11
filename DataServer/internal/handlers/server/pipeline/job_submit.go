@@ -151,6 +151,15 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 			return
 		}
 
+		// Asset registry/blob pre-flight: validate every local
+		// velox-asset reference before enqueue. This is a Master-local
+		// read-only integrity check; it does not fetch or prefetch anything
+		// onto workers. Deferred velox-drive references remain deferred to
+		// the authenticated worker bridge.
+		if checkAssetPreflight(c, h, req) {
+			return
+		}
+
 		// SSRF URL validator (P1 admin-audit trail step #2): every
 		// nested scene asset URL MUST satisfy the hybrid
 		// blocklist+allowlist policy. Runs AFTER
