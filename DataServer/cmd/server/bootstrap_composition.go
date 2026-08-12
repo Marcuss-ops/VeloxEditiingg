@@ -245,7 +245,11 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		return nil, err
 	}
 
-	workerNodeRegistry := buildWorkerRegistryFromStore(p)
+	workerNodeRegistry, err := buildWorkerRegistryFromStore(p)
+	if err != nil {
+		_ = p.SQLite.Close()
+		return nil, fmt.Errorf("bootstrap: worker node registry: %w", err)
+	}
 	// Health probes and Level-D smoke still consume the existing shell
 	// command adapter; those probes intentionally use a few composed,
 	// read-only commands. The update executor gets its own hardened client

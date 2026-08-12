@@ -12,6 +12,7 @@ package main
 // of silently carrying stale IPs.
 
 import (
+	"fmt"
 	"log"
 
 	"velox-server/internal/fleet"
@@ -23,16 +24,14 @@ import (
 // host or SSH user are skipped (they cannot back a real SSH operation);
 // duplicate worker_ids are logged and dropped. A nil store yields an empty
 // registry (nil-tolerant, matching the surrounding wiring).
-func buildWorkerRegistryFromStore(p *persistenceDeps) *fleet.WorkerRegistry {
+func buildWorkerRegistryFromStore(p *persistenceDeps) (*fleet.WorkerRegistry, error) {
 	reg := fleet.NewWorkerRegistry()
 	if p == nil || p.SQLite == nil {
-		log.Printf("[BOOTSTRAP] WorkerNodeRegistry: no store — SSH surface left empty (health/smoke will fail per-target with a clear error)")
-		return reg
+		return nil, fmt.Errorf("worker node registry: persistent store is not configured")
 	}
 	nodes, err := p.SQLite.ListWorkerNodes()
 	if err != nil {
-		log.Printf("[BOOTSTRAP] WorkerNodeRegistry: ListWorkerNodes failed: %v — SSH surface left empty", err)
-		return reg
+		return nil, fmt.Errorf("worker node registry: list persistent inventory: %w", err)
 	}
 	added := 0
 	for _, n := range nodes {
@@ -55,7 +54,7 @@ func buildWorkerRegistryFromStore(p *persistenceDeps) *fleet.WorkerRegistry {
 		added++
 	}
 	log.Printf("[BOOTSTRAP] WorkerNodeRegistry: loaded %d worker nodes from persistent inventory (enabled + mapped)", added)
-	return reg
+	return reg, nil
 }
 
 // workerNameResolverFromStore returns a fleet.WorkerNameResolver that maps

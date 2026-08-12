@@ -52,7 +52,10 @@ func readinessTestComponents(t *testing.T, update *fleet.UpdateExecutor) *appCom
 // buildFleet + AttachRuntimeBackends: every critical backend non-nil.
 func fullyWiredUpdateExecutor(t *testing.T, p *persistenceDeps) *fleet.UpdateExecutor {
 	t.Helper()
-	workerNodeRegistry := buildWorkerRegistryFromStore(p)
+	workerNodeRegistry, err := buildWorkerRegistryFromStore(p)
+	if err != nil {
+		t.Fatalf("buildWorkerRegistryFromStore: %v", err)
+	}
 	ssh := fleet.NewSSHClientFromRegistry(workerNodeRegistry)
 	return fleet.NewUpdateExecutor(fleet.UpdateBackend{
 		SSHCmd:      ssh,
