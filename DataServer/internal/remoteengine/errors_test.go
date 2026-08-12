@@ -380,10 +380,10 @@ func TestDefaultRetryPolicy(t *testing.T) {
 		t.Fatalf("clamped MaxMalformedAttempts: got %d, want 2", p2.MaxMalformedAttempts)
 	}
 
-	// Zero or negative maxRetries defaults to 3 retries (4 total attempts).
+	// Zero is an explicit no-retry budget (one total attempt).
 	p3 := DefaultRetryPolicy(0)
-	if p3.MaxAttempts != 4 {
-		t.Fatalf("zero MaxAttempts: got %d, want 4", p3.MaxAttempts)
+	if p3.MaxAttempts != 1 {
+		t.Fatalf("zero MaxAttempts: got %d, want 1", p3.MaxAttempts)
 	}
 }
 

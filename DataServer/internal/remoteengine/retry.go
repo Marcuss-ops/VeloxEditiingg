@@ -28,13 +28,13 @@ type RetryPolicy struct {
 	MaxMalformedAttempts int
 }
 
-// DefaultRetryPolicy returns the standard policy derived from the given
-// retry count. A Retries value of N means 1 initial attempt plus up to N
-// retries, i.e. MaxAttempts = N + 1. If maxRetries is zero or negative,
-// it defaults to 3 retries (4 total attempts).
+// DefaultRetryPolicy returns the policy derived from the given retry count.
+// A Retries value of N means 1 initial attempt plus up to N retries, i.e.
+// MaxAttempts = N + 1. Zero is an explicit no-retry budget; negative values
+// are normalized to zero so an invalid caller cannot silently gain retries.
 func DefaultRetryPolicy(maxRetries int) RetryPolicy {
-	if maxRetries <= 0 {
-		maxRetries = 3
+	if maxRetries < 0 {
+		maxRetries = 0
 	}
 	maxAttempts := maxRetries + 1
 	mr := DefaultMalformedRetryLimit

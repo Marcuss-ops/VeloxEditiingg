@@ -23,13 +23,9 @@ import (
 // release path is exercised without waiting through the client's retry
 // backoff.
 //
-// A refused dial (http://localhost:1) is classified TRANSIENT and retried:
-// remoteengine.DefaultRetryPolicy maps Retries<=0 to 3 retries (backoff
-// 1s+5s+15s ≈ 21-25s per lease). That previously made these semaphore
-// tests burn ~24s each and risk tripping their 30s deadline under CI
-// load — the failure was misreported as a tick semaphore deadlock (see
-// AGENTS.md §4 followup). A 404 PERMANENT reply stops the retry loop
-// immediately while still driving the runner through the same
+// A refused dial (http://localhost:1) is classified TRANSIENT. These tests
+// use a 404 PERMANENT reply so the retry loop stops immediately while still
+// driving the runner through the same
 // poll-failure → handleRetry → semaphore-release path. Note the rows'
 // error_class becomes "PERMANENT" instead of "TRANSIENT" — incidental;
 // no test asserts on error_class and handleRetry only passes it through.

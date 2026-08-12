@@ -63,8 +63,9 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 - [x] Remote engine script POST: idempotency key deterministica stabile tra retry.
 - [ ] Scrivere una tabella canonica per ogni policy con: max attempts,
       errori retryable, backoff, jitter, `Retry-After`, deadline e cancellation.
-- [ ] Verificare che `Retries=0` abbia semantica esplicita e uguale alla
-      documentazione in ogni client; nessun default implicito non dichiarato.
+- [x] Verificare e correggere la semantica di `Retries=0`: un solo tentativo;
+      i valori negativi sono normalizzati a zero e il default produttivo resta
+      assegnato dalla configurazione (`3`), non nascosto nel retry loop.
 - [ ] Separare contatori e log per `lease_lost`, `provider_error`,
       `db_error`, `context_canceled` e `permanent_error`.
 

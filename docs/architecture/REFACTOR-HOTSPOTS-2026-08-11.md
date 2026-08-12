@@ -283,6 +283,8 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   `ForwardingRepository` e `DriveFolderResolver` tramite porte esplicite.
 - [ ] Verificare i resolver delivery e gli adapter metrici contro
   `check-db-access.sh`; ogni eccezione deve avere motivazione e owner.
+- [x] Rendere esplicita la semantica del retry remoto: `Retries=0` esegue
+  un solo tentativo; i valori negativi non ottengono retry impliciti.
 - [x] Misurare `sql.DB.Stats()` del Master: `WaitCount` e `WaitDuration`, oltre
   ai contatori di pool, senza label ad alta cardinalità.
 - [ ] Mantenere un solo writer per ogni aggregate e CAS esplicito per le

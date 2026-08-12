@@ -46,6 +46,25 @@ func TestWithRetry_ExactAttemptCount(t *testing.T) {
 	}
 }
 
+func TestWithRetry_ZeroRetriesMakesOneAttempt(t *testing.T) {
+	var callCount int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&callCount, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error": "temporary outage"}`))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL, "token", 0)
+	_, err := client.GetPipelineStatus(context.Background(), "trace_zero_retries")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if got := atomic.LoadInt32(&callCount); got != 1 {
+		t.Fatalf("call count: got %d, want 1", got)
+	}
+}
+
 // TestWithRetry_BackoffDuration verifies that the total elapsed time for a
 // retryable TRANSIENT error stays within the expected backoff bounds.
 // With Retries=1 (MaxAttempts=2) the schedule waits attempt 0's backoff
@@ -122,7 +141,8 @@ func TestDefaultRetryPolicy_Semantics(t *testing.T) {
 		wantMaxAttempts  int
 		wantMaxMalformed int
 	}{
-		{0, 4, 2}, // zero/negative defaults to 3 retries → 4 attempts
+		{0, 1, 1},  // explicit zero budget → one initial attempt only
+		{-1, 1, 1}, // invalid negative budget is fail-closed
 		{1, 2, 2},
 		{2, 3, 2},
 		{5, 6, 2},
