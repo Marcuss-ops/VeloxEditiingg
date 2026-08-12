@@ -172,6 +172,9 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 - [x] Observability task detail: live runtime, cache stats e segment timings
       propagano gli errori dei reader configurati, preservando il significato
       di “nessuna riga” come risultato vuoto legittimo.
+- [x] Worker registry bootstrap: aggiunto costruttore persistente
+      `NewWithError`; il server non avvia più un registry parzialmente caricato
+      dopo un errore di lettura SQLite.
 - [ ] Continuare l’audit degli altri writer/proiezioni prima di chiudere la
       fase di ownership e CAS.
 

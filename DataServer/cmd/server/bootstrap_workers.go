@@ -38,7 +38,10 @@ type workerDeps struct {
 // layering rationale — but the round-trip integrity is asserted by
 // workers/bundle_rebuild_outbox_test.go.
 func buildWorkers(cfg *config.Config, p *persistenceDeps) (*workerDeps, error) {
-	reg := workersreg.New(p.SQLite)
+	reg, err := workersreg.NewWithError(p.SQLite)
+	if err != nil {
+		return nil, fmt.Errorf("bootstrap: load worker registry: %w", err)
+	}
 	revokedCount := len(reg.ListRevoked())
 	if revokedCount > 0 {
 		log.Printf("[BOOTSTRAP] Loaded %d revoked workers from DB", revokedCount)

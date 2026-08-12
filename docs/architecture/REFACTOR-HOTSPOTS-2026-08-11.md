@@ -321,6 +321,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - [x] Rendere fail-closed `observability.SummarizeTask`: errori in live
   runtime, cache stats e segment timings non vengono più convertiti in sezioni
   vuote di una risposta apparentemente valida.
+- [x] Rendere fail-closed il bootstrap del worker registry: `NewWithError`
+  rifiuta proiezioni parziali su errore SQLite e `buildWorkers` interrompe il
+  bootstrap; `New` resta solo compatibilità per fixture/in-memory.
 
 ### P1 — Worker layering e stato globale
 

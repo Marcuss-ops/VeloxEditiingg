@@ -28,7 +28,8 @@ func TestProductionCompositionRegistersRequiredRoutes(t *testing.T) {
 			ReleaseChannel: "dev",
 		},
 		Database: config.DatabaseConfig{
-			DBPath: filepath.Join(root, "velox.db"),
+			DBPath:         filepath.Join(root, "velox.db"),
+			MigrateOnStart: true,
 		},
 		Workers: config.WorkersConfig{
 			AllowedWorkerIDs: []string{"worker-a"},

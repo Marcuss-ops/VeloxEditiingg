@@ -2,6 +2,7 @@ package workers
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
 
 	"velox-server/internal/logging"
@@ -29,15 +30,35 @@ func New(dbStore *store.SQLiteStore) *Registry {
 		revoked: make(map[identity.WorkerID]bool),
 		dbStore: dbStore,
 	}
-	r.load()
+	if err := r.load(); err != nil {
+		registryLog.ErrorWithMsg(logging.CodeRegistryLoadWorkersFail,
+			"Worker registry loaded with persistence errors; compatibility constructor returned a partial projection",
+			map[string]interface{}{"err": err.Error()})
+	}
 	return r
 }
 
-// load reads workers and revoked list from SQLite into the in-memory cache.
-func (r *Registry) load() {
-	if r.dbStore == nil {
-		return
+// NewWithError constructs the persistent worker registry for production
+// bootstrap. Unlike New, it refuses to return a partially loaded registry
+// when SQLite cannot provide the worker or revocation projections.
+func NewWithError(dbStore *store.SQLiteStore) (*Registry, error) {
+	r := &Registry{
+		inMem:   make(map[identity.WorkerID]Worker),
+		revoked: make(map[identity.WorkerID]bool),
+		dbStore: dbStore,
 	}
+	if err := r.load(); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+// load reads workers and revoked list from SQLite into the in-memory cache.
+func (r *Registry) load() error {
+	if r.dbStore == nil {
+		return nil
+	}
+	var loadErr error
 
 	// Load workers
 	workers, err := r.dbStore.ListWorkers()
@@ -45,6 +66,7 @@ func (r *Registry) load() {
 		registryLog.ErrorWithMsg(logging.CodeRegistryLoadWorkersFail,
 			"Failed to load workers from SQLite",
 			map[string]interface{}{"err": err.Error()})
+		loadErr = fmt.Errorf("load workers: %w", err)
 	} else {
 		r.mu.Lock()
 		for _, m := range workers {
@@ -66,6 +88,11 @@ func (r *Registry) load() {
 		registryLog.ErrorWithMsg(logging.CodeRegistryLoadRevokedFail,
 			"Failed to load revoked workers from SQLite",
 			map[string]interface{}{"err": err.Error()})
+		if loadErr == nil {
+			loadErr = fmt.Errorf("load revoked workers: %w", err)
+		} else {
+			loadErr = fmt.Errorf("%v; load revoked workers: %w", loadErr, err)
+		}
 	} else {
 		r.mu.Lock()
 		for _, id := range revokedIDs {
@@ -82,4 +109,5 @@ func (r *Registry) load() {
 			"revoked_count": len(r.revoked),
 		})
 	r.mu.RUnlock()
+	return loadErr
 }

@@ -118,6 +118,24 @@ func TestRegistryRevokeFailsClosedWhenPersistenceFails(t *testing.T) {
 	}
 }
 
+func TestNewWithErrorFailsClosedWhenPersistenceCannotLoad(t *testing.T) {
+	s, err := store.NewSQLiteStore(t.TempDir() + "/test_workers.db")
+	if err != nil {
+		t.Fatalf("failed to create test SQLite store: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	reg, err := NewWithError(s)
+	if err == nil {
+		t.Fatal("NewWithError should fail when SQLite cannot be read")
+	}
+	if reg != nil {
+		t.Fatalf("NewWithError returned partial registry: %#v", reg)
+	}
+}
+
 func TestRegistryUnrevokeFailsClosedWhenPersistenceFails(t *testing.T) {
 	s, err := store.NewSQLiteStore(t.TempDir() + "/test_workers.db")
 	if err != nil {
