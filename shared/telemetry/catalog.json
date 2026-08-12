@@ -73,7 +73,38 @@
       "asset_manifest",
       "worker_state"
     ],
-    "accounted_ratio_rule": "sum only duration events with timing_mode=exclusive; never sum span_parent or span_child"
+    "accounted_ratio_rule": "sum only duration events with timing_mode=exclusive; never sum span_parent or span_child",
+    "origins": [
+      "engine",
+      "ffmpeg",
+      "master",
+      "upload",
+      "validation",
+      "worker"
+    ],
+    "scopes": [
+      "artifact",
+      "attempt",
+      "audio_track",
+      "job",
+      "segment",
+      "subtitle_track",
+      "task"
+    ],
+    "phases": [
+      "asset_wait",
+      "cache_lookup",
+      "compile",
+      "composite",
+      "decode",
+      "download",
+      "encode",
+      "finalize",
+      "queue",
+      "render",
+      "simulate",
+      "upload"
+    ]
   },
   "facts": [
     {

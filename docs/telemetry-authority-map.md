@@ -15,8 +15,9 @@ row explicitly says so.
 Velox already has a strong event-taxonomy SSOT, but not yet one universal
 telemetry SSOT for every metric:
 
-- `shared/telemetry/catalog.go` is the canonical **event taxonomy** for the
-  shared Go wire contract. The worker phase registry derives from it.
+- `shared/telemetry/catalog.json` is the canonical **language-neutral event
+  taxonomy** for the shared Go/C++ wire contract. Go loads it through
+  `catalog_source.go`; the C++ header is generated from the same source.
 - `RemoteCodex/native/worker-agent-go/internal/telemetry/phase_recorder.go`
   is the worker's append-only per-attempt event journal.
 - The native engine has a parallel recorder implementation in
@@ -83,11 +84,12 @@ some of the same execution lifecycle facts outside this single journal.
 
 | Surface | Current status | Notes |
 | --- | --- | --- |
-| `shared/telemetry/catalog.go` | **Authoritative for shared event descriptors** | The only literal `canonicalEventDescriptors` list. It owns component, action, origin, scope, phase, event type, and schema version. |
+| `shared/telemetry/catalog.json` | **Authoritative for shared event descriptors** | The language-neutral source owns component, action, origin, scope, phase, event type, unit, kind, timing mode, aggregation, cardinality, and owner. |
 | `RemoteCodex/native/worker-agent-go/internal/telemetry/phase_registry.go` | Derived worker view | `LookupPhaseSpec`, `RegisteredPhaseSpecs`, and `CanonicalizeEventSpec` read from `velox-shared/telemetry`; it does not declare a second component/action list. |
+| `shared/telemetry/catalog_source.go` | Go loader/validator | Embeds and validates `catalog.json`, then projects it into the existing Go catalog API. |
+| `RemoteCodex/native/video-engine-cpp/include/velox/telemetry/catalog_generated.hpp` | Generated C++ binding | Produced by `telemetry/cmd/cataloggen`; C++ consumers do not maintain a second event or vocabulary list. |
 | Master event validation | Consumer of shared catalog | `DataServer/internal/store/execution_event_persistence.go` calls `sharedtelemetry.Catalog.Validate` before inserting detailed events. |
 | SQL event constraints | Storage guard | `DataServer/internal/store/migrations/sqlite/110_task_execution_events.sql` and subsequent migrations constrain event identity, append-only behavior, and replay/replacement semantics. |
-| C++ origin/scope constants | **Duplicated compatibility vocabulary** | `phase_recorder.hpp` repeats the closed origin/scope values and C++ validates membership, but C++ does not currently generate those values from `shared/telemetry/catalog.go`. |
 
 ### 3.2 Worker recorder chain
 
@@ -210,14 +212,15 @@ currently be represented or calculated more than once. The inventory is
 scoped to those paths; it is not a claim that unrelated diagnostic counters
 outside this execution path have been exhaustively enumerated.
 
-### D1 — C++ repeats the shared taxonomy vocabulary
+### D1 — Generated C++ binding must stay synchronized
 
-- Go authority: `shared/telemetry/catalog.go`.
-- C++ copy: origin/scope constants and membership functions in
-  `phase_recorder.hpp/.cpp`.
-- Impact: adding a new event descriptor can leave C++ producer validation and
-  naming out of sync. C++ currently guarantees closed origin/scope, but not
-  generated parity with every component/action descriptor.
+- Language-neutral authority: `shared/telemetry/catalog.json`.
+- C++ binding: `catalog_generated.hpp`, produced by
+  `shared/telemetry/cmd/cataloggen`.
+- Guard: `scripts/ci/check-telemetry-catalog.sh` runs the Go tests and generator
+  in `-check` mode, so a changed JSON source with a stale C++ header fails
+  closed. The PhaseRecorder aliases its origin/scope vocabulary to the
+  generated header rather than declaring literals locally.
 
 ### D2 — Typed resource metrics and legacy map are both active contracts
 
@@ -376,8 +379,9 @@ worker-side graph is not yet a single recorder-only pipeline.
 
 The map was built from the following implementation evidence:
 
-- shared taxonomy and worker-derived view:
-  `shared/telemetry/catalog.go`,
+- shared taxonomy, Go loader, and worker-derived view:
+  `shared/telemetry/catalog.json`, `shared/telemetry/catalog_source.go`,
+  `shared/telemetry/catalog.go`, and
   `RemoteCodex/native/worker-agent-go/internal/telemetry/phase_registry.go`;
 - worker journal and resource session:
   `internal/telemetry/phase_recorder.go`,
