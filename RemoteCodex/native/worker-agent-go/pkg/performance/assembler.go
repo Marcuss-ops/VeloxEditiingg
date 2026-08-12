@@ -17,6 +17,7 @@ import (
 	"velox-shared/contract"
 	"velox-shared/telemetry"
 	"velox-worker-agent/pkg/video/pipeline"
+	videoplan "velox-worker-agent/pkg/video/plan"
 )
 
 // Assembler is the single resolver/aggregator for the render path. It
@@ -166,6 +167,29 @@ func WorkloadFromCompiledRenderPlan(plan *contract.CompiledRenderPlanV2) Workloa
 		workload.ClipCount += len(track.Segments)
 	}
 	return workload
+}
+
+// WorkloadFromRenderPlanV1 projects workload facts from the legacy render
+// plan used by the complex benchmark. The plan remains the owner of duration,
+// clip count, asset count and output geometry; the receipt never reconstructs
+// these values from observed telemetry.
+func WorkloadFromRenderPlanV1(p *videoplan.RenderPlan) WorkloadProfile {
+	if p == nil {
+		return WorkloadProfile{}
+	}
+	var duration float64
+	for _, item := range p.Timeline {
+		duration += item.DurationSeconds
+	}
+	return WorkloadProfile{
+		DurationUS: int64(duration * 1_000_000),
+		ClipCount:  len(p.Timeline),
+		AssetCount: len(p.Timeline) + len(p.AudioTracks),
+		CopyOnly:   p.CopyOnly,
+		Width:      p.Canvas.Width,
+		Height:     p.Canvas.Height,
+		FPS:        float64(p.Canvas.Fps),
+	}
 }
 
 // assembleTiming maps the pipeline phase clocks and the native

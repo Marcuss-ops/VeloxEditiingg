@@ -41,6 +41,7 @@ const (
 	FixtureComposite5MLow        BenchmarkFixtureID = "COMPOSITE_5M_LOW"
 	FixtureComposite5MHigh       BenchmarkFixtureID = "COMPOSITE_5M_HIGH"
 	FixtureCopyOnlyCanonical5MV1 BenchmarkFixtureID = "COPY_ONLY_CANONICAL_5M_V1"
+	FixtureComplexCanonical5MV1  BenchmarkFixtureID = "COMPLEX_CANONICAL_5M_V1"
 )
 
 // FixtureKind is the rendering class the fixture exercises.
@@ -276,6 +277,14 @@ func NewBenchmarkFixtureRegistry() *BenchmarkFixtureRegistry {
 		AssetSHA256:      canonicalSpec.SpecSHA256(),
 		ExpectedBehavior: "canonical Phase-1 copy-only fixture: ~5m, 24 H264 1080p CFR clips, AAC 48kHz stereo final audio, zero filters/subtitles/transformations, all assets warm cache, single mux pass, deterministic artifact",
 		Budget:           zeroInvariants,
+	})
+	complexSpec := ComplexCanonicalFixtureSpecV1()
+	r.register(BenchmarkFixture{
+		ID: FixtureComplexCanonical5MV1, Kind: FixtureKindComposite, CacheMode: CacheModeWarm,
+		DurationSec: complexSpec.DurationSec, ClipCount: complexSpec.ClipCount,
+		AssetSHA256:      complexSpec.SpecSHA256(),
+		ExpectedBehavior: "canonical Phase-2 complex fixture: 5m, 24 mixed-geometry H264 clips, 14 AAC audio tracks, per-segment scaling and multi-track mix; budgets TBD after baseline",
+		Budget:           FixtureBudget{Correctness: CorrectnessBudget{ArtifactSHARequired: true}},
 	})
 	return r
 }

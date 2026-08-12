@@ -13,7 +13,7 @@ import (
 // invariants are enforced budgets while timing ceilings stay TBD.
 func TestBenchmarkFixtureRegistry_CanonicalSet(t *testing.T) {
 	reg := NewBenchmarkFixtureRegistry()
-	require.Equal(t, 8, reg.Count())
+	require.Equal(t, 9, reg.Count())
 
 	want := []struct {
 		id          BenchmarkFixtureID
@@ -30,6 +30,7 @@ func TestBenchmarkFixtureRegistry_CanonicalSet(t *testing.T) {
 		{FixtureComposite5MLow, FixtureKindComposite, CacheModeWarm, 300, 5},
 		{FixtureComposite5MHigh, FixtureKindComposite, CacheModeWarm, 300, 24},
 		{FixtureCopyOnlyCanonical5MV1, FixtureKindCopyOnly, CacheModeWarm, 300, 24},
+		{FixtureComplexCanonical5MV1, FixtureKindComposite, CacheModeWarm, 300, 24},
 	}
 	for _, w := range want {
 		f, ok := reg.Fixture(w.id)
@@ -46,7 +47,7 @@ func TestBenchmarkFixtureRegistry_CanonicalSet(t *testing.T) {
 
 	// All() is sorted and complete.
 	all := reg.All()
-	require.Len(t, all, 8)
+	require.Len(t, all, 9)
 	for i := 1; i < len(all); i++ {
 		require.Less(t, string(all[i-1].ID), string(all[i].ID), "All() must be sorted by ID")
 	}

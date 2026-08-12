@@ -14,8 +14,8 @@
 # Pipeline:
 #   1. build the performance cmds (velox-benchmark, velox-fixture-gen,
 #      velox-fixture-gate, velox-benchmark-compare)
-#   2. generate the canonical fixture track (velox-fixture-gen) and
-#      verify its manifest against the pinned spec digest
+#   2. generate the selected canonical fixture track and verify its
+#      manifest against the pinned spec digest
 #   3. run the benchmark (velox-benchmark) — VELOX_BENCH_REAL=1 drives
 #      the PRODUCTION zero-spawn renderer over the generated track
 #      (one engine process, libavformat packet copy, no ffmpeg/ffprobe);
@@ -29,7 +29,9 @@
 #   scripts/benchmarks/benchmark-worker.sh
 #
 # Environment:
-#   VELOX_BENCH_FIXTURE     fixture ID (default: COPY_ONLY_CANONICAL_5M_V1)
+#   VELOX_BENCH_FIXTURE     fixture ID (default: COPY_ONLY_CANONICAL_5M_V1;
+#                           COMPLEX_CANONICAL_5M_V1 enables the real V1
+#                           scaling/transcode + multi-track audio baseline)
 #   VELOX_BENCH_RUNS        renders per benchmark (default: 5)
 #   VELOX_BENCH_CONCURRENCY max concurrent renders (default: 1)
 #   VELOX_BENCH_CACHE       warm | cold (default: warm)
@@ -104,7 +106,7 @@ BIN_DIR="$EVIDENCE_DIR/bin"
 mkdir -p "$BIN_DIR"
 (
   cd "$AGENT_DIR"
-  for cmd in velox-benchmark velox-fixture-gen velox-fixture-gate velox-benchmark-compare; do
+  for cmd in velox-benchmark velox-fixture-gen velox-complex-fixture-gen velox-fixture-gate velox-benchmark-compare; do
     go build -o "$BIN_DIR/$cmd" "./cmd/$cmd" || fail_usage "go build $cmd failed"
   done
 )
@@ -112,9 +114,21 @@ mkdir -p "$BIN_DIR"
 # ── 2. Build the track + verify the manifest ─────────────────────────
 TRACK_DIR="$EVIDENCE_DIR/track"
 if [[ "$REAL" == 1 ]]; then
-  "$BIN_DIR/velox-fixture-gen" -out-dir "$TRACK_DIR" || fail_run "fixture generation failed"
-  "$BIN_DIR/velox-fixture-gen" -verify-manifest "$TRACK_DIR/manifest.json" >/dev/null || \
-    fail_run "track manifest does not match the pinned spec digest"
+  case "$FIXTURE" in
+    COPY_ONLY_CANONICAL_5M_V1)
+      "$BIN_DIR/velox-fixture-gen" -out-dir "$TRACK_DIR" || fail_run "fixture generation failed"
+      "$BIN_DIR/velox-fixture-gen" -verify-manifest "$TRACK_DIR/manifest.json" >/dev/null || \
+        fail_run "track manifest does not match the pinned spec digest"
+      ;;
+    COMPLEX_CANONICAL_5M_V1)
+      "$BIN_DIR/velox-complex-fixture-gen" -out-dir "$TRACK_DIR" || fail_run "complex fixture generation failed"
+      "$BIN_DIR/velox-complex-fixture-gen" -verify-manifest "$TRACK_DIR/complex-manifest.json" >/dev/null || \
+        fail_run "complex track manifest does not match the pinned spec digest"
+      ;;
+    *)
+      fail_usage "real benchmark fixture %s has no production track generator" "$FIXTURE"
+      ;;
+  esac
   printf '[benchmark-worker] track generated and manifest verified (%s)\n' "$FIXTURE"
 else
   printf '[benchmark-worker][WARNING] stub renderer: this is NOT a real benchmark. '

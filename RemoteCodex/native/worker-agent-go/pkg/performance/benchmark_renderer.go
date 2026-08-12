@@ -1,12 +1,9 @@
 package performance
 
-// benchmark_renderer.go owns the PRODUCTION RenderRunner for the
-// benchmark loop (plan §9/§21): it drives the ZERO-SPAWN C++ backend
-// (plan §23) over the canonical fixture track and assembles the receipt
-// from the engine sidecar. This is the piece that makes the "Formula 1
-// test track" a real lap: fixture → frame-exact V2 plan + bindings →
-// ONE engine process → libavformat packet copy → atomic output →
-// PerformanceReceiptV1.
+// benchmark_renderer.go owns the production RenderRunner for the benchmark
+// loop (plan §9/§21). The copy-only fixture drives the zero-spawn C++ backend;
+// the complex fixture drives the existing V1 render path as an explicit
+// baseline. Both assemble the receipt from the engine sidecar.
 //
 // Zero-spawn contract enforced here (and re-asserted by the tier-1 gate
 // CheckFixtureGate): no ffmpeg/ffprobe/shell execs, no cache-to-tmp
@@ -123,10 +120,12 @@ func (r *NativeRenderer) Render(ctx context.Context, fixture BenchmarkFixture) (
 	if r == nil || r.client == nil {
 		return result, errors.New("native renderer: not configured")
 	}
-	// The production renderer drives the CANONICAL track only: the track
-	// dir + manifest are defined by CanonicalFixtureSpecV1, so any other
-	// fixture would fail with a confusing manifest mismatch. Fail fast
-	// with the honest message instead.
+	if fixture.ID == FixtureComplexCanonical5MV1 {
+		return r.renderComplex(ctx, fixture)
+	}
+	// The copy-only renderer drives the canonical V2 track only: the track
+	// dir + manifest are defined by CanonicalFixtureSpecV1. Complex V1 is
+	// dispatched above, and any other fixture fails closed here.
 	if fixture.ID != FixtureCopyOnlyCanonical5MV1 {
 		return result, fmt.Errorf("native renderer: only the canonical fixture %s can be rendered over a track dir, got %s", FixtureCopyOnlyCanonical5MV1, fixture.ID)
 	}
@@ -197,6 +196,56 @@ func (r *NativeRenderer) Render(ctx context.Context, fixture BenchmarkFixture) (
 		AssemblyContext{
 			Identity:         identity,
 			Workload:         workload,
+			CPUWallMS:        renderMetrics.CPUUserMs + renderMetrics.CPUSystemMs,
+			UsefulPipelineMS: UsefulPipelineMSFromRenderMetrics(renderMetrics),
+		},
+	)
+	return BenchmarkRenderResult{Receipt: receipt, ArtifactSHA256: evidence.ArtifactSHA256, Evidence: evidence}, nil
+}
+
+// renderComplex runs the canonical V1 complex path. It intentionally keeps
+// the existing segment-by-segment FFmpeg implementation as the baseline: the
+// receipt exposes the exact segment, phase, process, audio and CPU facts that
+// the next optimization must improve. This path must never silently fall back
+// to the copy-only V2 renderer.
+func (r *NativeRenderer) renderComplex(ctx context.Context, fixture BenchmarkFixture) (BenchmarkRenderResult, error) {
+	var result BenchmarkRenderResult
+	spec := ComplexCanonicalFixtureSpecV1()
+	manifest, err := LoadComplexFixtureManifest(filepath.Join(r.trackDir, ComplexFixtureManifestName))
+	if err != nil {
+		return result, fmt.Errorf("complex renderer: %w", err)
+	}
+	if problems := ValidateComplexManifest(*manifest, fixture, spec); len(problems) > 0 {
+		return result, fmt.Errorf("complex renderer: fixture track invalid: %s", strings.Join(problems, "; "))
+	}
+	runDir, err := os.MkdirTemp(r.workDir, "bench-complex-render-*")
+	if err != nil {
+		return result, fmt.Errorf("complex renderer: run dir: %w", err)
+	}
+	defer os.RemoveAll(runDir)
+	outPath := filepath.Join(runDir, "out.mp4")
+	jobID := "bench-" + newBenchmarkRunID()
+	p, err := BuildComplexRenderPlanV1(spec, *manifest, r.trackDir, jobID, outPath)
+	if err != nil {
+		return result, fmt.Errorf("complex renderer: %w", err)
+	}
+	renderMetrics, err := r.client.RenderWithMetrics(ctx, p)
+	if err != nil {
+		return result, fmt.Errorf("complex renderer: %w", err)
+	}
+	evidence := sweepRunDir(runDir, outPath)
+	evidence.ArtifactSHA256 = sha256File(outPath)
+	identity := PerformanceIdentity{
+		JobID: jobID, WorkerID: r.workerID, GitCommit: r.gitCommit,
+		EngineSHA256: r.engineSHA256, BenchmarkFixtureID: string(fixture.ID),
+	}
+	workload := WorkloadFromRenderPlanV1(p)
+	workload.JobType = string(fixture.Kind)
+	workload.AudioCodec = spec.Audio.Codec
+	receipt := NewAssembler().Assemble(
+		pipeline.RunMetrics{RenderMetrics: renderMetrics, TotalMs: renderMetrics.TotalMs},
+		AssemblyContext{
+			Identity: identity, Workload: workload,
 			CPUWallMS:        renderMetrics.CPUUserMs + renderMetrics.CPUSystemMs,
 			UsefulPipelineMS: UsefulPipelineMSFromRenderMetrics(renderMetrics),
 		},
