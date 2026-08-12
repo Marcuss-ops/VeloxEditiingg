@@ -188,9 +188,45 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	if isCompiledPlan && w.clipCache == nil {
 		return failBeforeRun("clip_lease_failed", fmt.Errorf("compiled render plan v2 requires a configured clip cache for asset leases"))
 	}
+	reservationStore := w.canonicalAssetCache
+	if reservationStore == nil && w.clipCache != nil {
+		// Headless tests and legacy worker literals may only provide the
+		// concrete cache. Adapt it to the same typed protection interface
+		// used by prefetch.Scheduler.SetProtectionStore.
+		reservationStore = w.clipCache.AsCanonicalStore()
+	}
 	if w.clipCache != nil {
 		assetKeys := extractAssetKeysFromJSON(spec.Payload)
 		if len(assetKeys) > 0 {
+			var v2Reservation *v2AssetReservation
+			var leaseReleaseErr error
+			if isCompiledPlan {
+				var reservationErr error
+				workerID := ""
+				if w.config != nil {
+					workerID = w.config.WorkerID
+				}
+				v2Reservation, reservationErr = reserveV2AssetProtection(ctx, reservationStore, workerID, pte.JobID, pte.AttemptID, assetKeys, time.Now().UTC().Add(compiledPlanReservationTTL))
+				if reservationErr != nil {
+					return failBeforeRun("clip_reservation_failed", fmt.Errorf("reserve V2 asset protection: %w", reservationErr))
+				}
+				// Register before the lease cleanup defer. Go's LIFO ordering
+				// then releases the active lease first and this reservation second.
+				defer func() {
+					// If active lease cleanup failed, keep this reservation until
+					// its bounded TTL so the durable lease reconciler can finish
+					// without an eviction gap.
+					if leaseReleaseErr != nil {
+						if w.logger != nil {
+							w.logger.Warn("[LEASE] retaining V2 reservation after lease release failure for job=%s: %v", pte.JobID, leaseReleaseErr)
+						}
+						return
+					}
+					if releaseErr := v2Reservation.ReleaseAll(leaseCleanupContext(ctx)); releaseErr != nil && w.logger != nil {
+						w.logger.Warn("[LEASE] V2 reservation release failed for job=%s: %v", pte.JobID, releaseErr)
+					}
+				}()
+			}
 			leased, leaseErr := AcquireJobClips(ctx, w.clipCache, pte.JobID, assetKeys)
 			if leaseErr != nil {
 				return failBeforeRun("clip_lease_failed", fmt.Errorf("acquire clip lease: %w", leaseErr))
@@ -202,8 +238,9 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 			// this defer first so the renewal stop/join defer below runs first
 			// under Go's LIFO defer ordering.
 			defer func() {
-				if releaseErr := clipLease.ReleaseAll(leaseCleanupContext(ctx)); releaseErr != nil && w.logger != nil {
-					w.logger.Warn("[LEASE] release failed for job=%s: %v", pte.JobID, releaseErr)
+				leaseReleaseErr = clipLease.ReleaseAll(leaseCleanupContext(ctx))
+				if leaseReleaseErr != nil && w.logger != nil {
+					w.logger.Warn("[LEASE] release failed for job=%s: %v", pte.JobID, leaseReleaseErr)
 				}
 			}()
 			// Long V2 renders need a periodic cache-lease heartbeat. Stop and

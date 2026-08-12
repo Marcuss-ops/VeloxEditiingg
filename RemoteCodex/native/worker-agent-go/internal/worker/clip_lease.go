@@ -122,7 +122,67 @@ func (l *ClipLease) ReleaseAll(ctx context.Context) error {
 	return firstErr
 }
 
-const compiledPlanLeaseRenewalInterval = time.Minute
+const (
+	compiledPlanLeaseRenewalInterval = time.Minute
+	compiledPlanReservationTTL       = 35 * time.Minute
+)
+
+type v2AssetReservation struct {
+	store         workercache.LeaseReservationStore
+	reservationID string
+	assetKeys     []string
+}
+
+// reserveV2AssetProtection installs a durable reservation for every resolved
+// V2 asset before its active lease is acquired. The reservation uses the same
+// workercache table consumed by the prefetch scheduler, so a future-plan
+// reservation and the current render's reservation coexist safely.
+func reserveV2AssetProtection(ctx context.Context, store workercache.LeaseReservationStore, workerID, jobID, attemptID string, assetKeys []string, expiresAt time.Time) (*v2AssetReservation, error) {
+	if store == nil {
+		return nil, fmt.Errorf("worker.reserveV2AssetProtection: nil reservation store")
+	}
+	if workerID == "" || jobID == "" || attemptID == "" {
+		return nil, fmt.Errorf("worker.reserveV2AssetProtection: workerID, jobID, and attemptID are required")
+	}
+	if expiresAt.IsZero() {
+		expiresAt = time.Now().UTC().Add(compiledPlanReservationTTL)
+	}
+	reservation := &v2AssetReservation{
+		store:         store,
+		reservationID: "v2:" + workerID + ":" + jobID + ":" + attemptID,
+		assetKeys:     append([]string(nil), assetKeys...),
+	}
+	for _, key := range reservation.assetKeys {
+		if err := store.Reserve(ctx, assetref.AssetKey(key), reservation.reservationID, expiresAt); err != nil {
+			rollbackErr := reservation.ReleaseAll(leaseCleanupContext(ctx))
+			if rollbackErr != nil {
+				return nil, errors.Join(fmt.Errorf("worker.reserveV2AssetProtection(%s): %w", key, err), fmt.Errorf("rollback V2 reservations: %w", rollbackErr))
+			}
+			return nil, fmt.Errorf("worker.reserveV2AssetProtection(%s): %w", key, err)
+		}
+	}
+	return reservation, nil
+}
+
+// ReleaseAll removes only this V2 render's reservation. It is intentionally
+// called after active lease release (defer ordering in dispatch) so there is
+// no protection gap. Prefetch reservations use different IDs and are never
+// removed by this cleanup.
+func (r *v2AssetReservation) ReleaseAll(ctx context.Context) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	var firstErr error
+	for _, key := range r.assetKeys {
+		if err := r.store.ReleaseReservation(leaseCleanupContext(ctx), assetref.AssetKey(key), r.reservationID); err != nil {
+			telemetry.GetPrometheusMetrics().RecordLeaseCleanupFailure("reservation_release")
+			if firstErr == nil {
+				firstErr = fmt.Errorf("worker.v2AssetReservation.ReleaseAll(%s): %w", key, err)
+			}
+		}
+	}
+	return firstErr
+}
 
 // RenewAll refreshes every currently acquired V2 asset lease. It continues
 // after an individual failure so one missing asset cannot prevent the final

@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"velox-shared/futureasset"
+	"velox-worker-agent/internal/prefetch"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/workercache"
 )
@@ -111,6 +113,134 @@ func TestAcquireJobClipsRecordsLeaseAcquireAndReleaseMetrics(t *testing.T) {
 	}
 	if got := leaseMetricValue(t, "velox_cache_lease_releases_total", "result", "success"); got != releasesBefore+1 {
 		t.Fatalf("lease release metric = %v, want %v", got, releasesBefore+1)
+	}
+}
+
+func TestV2AssetReservation_UsesSchedulerProtectionStoreAndFutureLifecycle(t *testing.T) {
+	ctx := context.Background()
+	cache, err := workercache.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	defer cache.Close()
+
+	assetPath := filepath.Join(t.TempDir(), "scheduler-v2.asset")
+	if err := os.WriteFile(assetPath, []byte("asset"), 0o640); err != nil {
+		t.Fatalf("write asset: %v", err)
+	}
+	if err := cache.Store(ctx, workercache.Entry{AssetKey: "scheduler-v2", LocalPath: assetPath, SizeBytes: 5, DownloadComplete: true}); err != nil {
+		t.Fatalf("store asset: %v", err)
+	}
+
+	now := time.Now().UTC()
+	plan := futureasset.Plan{
+		Version: 1, PlanID: "future-v2", WorkerID: "worker-a",
+		GeneratedAt: now, ExpiresAt: now.Add(time.Hour),
+		Limits:  futureasset.Limits{PrefetchHorizon: 3, ProtectionLookahead: 10},
+		Protect: []futureasset.ProtectedAsset{{AssetKey: "scheduler-v2", FutureRefCount: 1, NextUseDistance: 1}},
+	}
+	scheduler := prefetch.NewScheduler(prefetch.Config{WorkerID: "worker-a", MaxConcurrent: 1, ByteBudget: 100})
+	defer scheduler.Close()
+	// This is the exact protection store wired by Worker.futureAssetScheduler.
+	scheduler.SetProtectionStore(cache.AsCanonicalStore())
+	if err := scheduler.Reconcile(plan); err != nil {
+		t.Fatalf("reconcile future plan: %v", err)
+	}
+
+	entry, found, err := cache.Find(ctx, "scheduler-v2")
+	if err != nil || !found {
+		t.Fatalf("find future-protected asset: found=%v err=%v", found, err)
+	}
+	if entry.ActiveReservationCount != 1 {
+		t.Fatalf("future reservation count = %d, want 1", entry.ActiveReservationCount)
+	}
+
+	v2Reservation, err := reserveV2AssetProtection(ctx, cache.AsCanonicalStore(), "worker-a", "render-job", "attempt-1", []string{"scheduler-v2"}, now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("reserve V2 asset: %v", err)
+	}
+	entry, _, err = cache.Find(ctx, "scheduler-v2")
+	if err != nil {
+		t.Fatalf("find after V2 reservation: %v", err)
+	}
+	if entry.ActiveReservationCount != 2 {
+		t.Fatalf("coexisting reservation count = %d, want 2", entry.ActiveReservationCount)
+	}
+	if err := v2Reservation.ReleaseAll(ctx); err != nil {
+		t.Fatalf("release V2 reservation: %v", err)
+	}
+	entry, _, err = cache.Find(ctx, "scheduler-v2")
+	if err != nil {
+		t.Fatalf("find after V2 release: %v", err)
+	}
+	if entry.ActiveReservationCount != 1 {
+		t.Fatalf("future reservation was released with V2 reservation: count=%d, want 1", entry.ActiveReservationCount)
+	}
+
+	expired := plan
+	expired.Version = 2
+	expired.GeneratedAt = now.Add(-2 * time.Hour)
+	expired.ExpiresAt = now.Add(-time.Hour)
+	if err := scheduler.Reconcile(expired); err != nil {
+		t.Fatalf("reconcile expired future plan: %v", err)
+	}
+	entry, _, err = cache.Find(ctx, "scheduler-v2")
+	if err != nil {
+		t.Fatalf("find after future reservation expiry: %v", err)
+	}
+	if entry.ActiveReservationCount != 0 {
+		t.Fatalf("future reservation survived scheduler expiry: count=%d, want 0", entry.ActiveReservationCount)
+	}
+}
+
+func TestV2AssetReservation_CoexistsWithFuturePrefetchReservation(t *testing.T) {
+	ctx := context.Background()
+	cache, err := workercache.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	defer cache.Close()
+	assetPath := filepath.Join(t.TempDir(), "reserved.asset")
+	if err := os.WriteFile(assetPath, []byte("asset"), 0o640); err != nil {
+		t.Fatalf("write asset: %v", err)
+	}
+	if err := cache.Store(ctx, workercache.Entry{AssetKey: "reserved-v2", LocalPath: assetPath, SizeBytes: 5, DownloadComplete: true}); err != nil {
+		t.Fatalf("store asset: %v", err)
+	}
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	if err := cache.Reserve(ctx, "reserved-v2", "future:worker:reserved-v2", expiresAt); err != nil {
+		t.Fatalf("reserve future asset: %v", err)
+	}
+	reservation, err := reserveV2AssetProtection(ctx, cache.AsCanonicalStore(), "worker-a", "render-job", "attempt-1", []string{"reserved-v2"}, expiresAt)
+	if err != nil {
+		t.Fatalf("reserve V2 asset: %v", err)
+	}
+	entry, found, err := cache.Find(ctx, "reserved-v2")
+	if err != nil || !found {
+		t.Fatalf("find reserved asset: found=%v err=%v", found, err)
+	}
+	if entry.ActiveReservationCount != 2 {
+		t.Fatalf("reservation count = %d, want 2 (future + V2)", entry.ActiveReservationCount)
+	}
+	lease, err := AcquireJobClips(ctx, cache, "render-job", []string{"reserved-v2"})
+	if err != nil {
+		t.Fatalf("acquire active V2 lease: %v", err)
+	}
+	if err := lease.ReleaseAll(ctx); err != nil {
+		t.Fatalf("release active V2 lease: %v", err)
+	}
+	if err := reservation.ReleaseAll(ctx); err != nil {
+		t.Fatalf("release V2 reservation: %v", err)
+	}
+	entry, found, err = cache.Find(ctx, "reserved-v2")
+	if err != nil || !found {
+		t.Fatalf("find asset after V2 cleanup: found=%v err=%v", found, err)
+	}
+	if entry.ActiveLeaseCount != 0 || entry.ActiveReservationCount != 1 {
+		t.Fatalf("protection after V2 cleanup = leases=%d reservations=%d, want 0/1", entry.ActiveLeaseCount, entry.ActiveReservationCount)
+	}
+	if err := cache.ReleaseReservation(ctx, "reserved-v2", "future:worker:reserved-v2"); err != nil {
+		t.Fatalf("release future reservation: %v", err)
 	}
 }
 

@@ -170,7 +170,7 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 		},
 		leaseCleanupFailures: &CounterVec{
 			Name: "velox_cache_lease_cleanup_failures_total", Help: "Lease cleanup failures by lifecycle stage", Label: "stage",
-			values: map[string]float64{"release": 0, "enqueue": 0, "reconcile_list": 0, "reconcile_release": 0, "reconcile_retry_persist": 0, "reconcile_delete": 0, "other": 0},
+			values: map[string]float64{"release": 0, "enqueue": 0, "reconcile_list": 0, "reconcile_release": 0, "reconcile_retry_persist": 0, "reconcile_delete": 0, "reservation_release": 0, "other": 0},
 		},
 		prefetchRequested:        &CounterVec{Name: "velox_prefetch_assets_requested_total", Help: "Future assets requested by prefetch", values: map[string]float64{"asset": 0}},
 		prefetchDownloaded:       &CounterVec{Name: "velox_prefetch_assets_downloaded_total", Help: "Future assets downloaded by prefetch", values: map[string]float64{"asset": 0}},

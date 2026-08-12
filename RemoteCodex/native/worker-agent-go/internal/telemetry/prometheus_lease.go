@@ -28,7 +28,7 @@ func normalizeLeaseRetrySource(source string) string {
 
 func normalizeLeaseCleanupStage(stage string) string {
 	switch stage {
-	case "release", "enqueue", "reconcile_list", "reconcile_release", "reconcile_retry_persist", "reconcile_delete":
+	case "release", "enqueue", "reconcile_list", "reconcile_release", "reconcile_retry_persist", "reconcile_delete", "reservation_release":
 		return stage
 	default:
 		return "other"
