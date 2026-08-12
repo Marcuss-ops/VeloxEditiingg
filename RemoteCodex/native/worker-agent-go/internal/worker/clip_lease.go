@@ -93,6 +93,11 @@ func (l *ClipLease) ReleaseAll(ctx context.Context) error {
 			time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
 		}
 		if err != nil {
+			if !errors.Is(err, workercache.ErrNotFound) {
+				if enqueueErr := l.cache.EnqueueLeaseRelease(cleanupCtx, id, l.jobID, time.Now().UTC()); enqueueErr != nil {
+					err = errors.Join(err, fmt.Errorf("enqueue durable lease reconciliation: %w", enqueueErr))
+				}
+			}
 			if firstErr == nil {
 				firstErr = fmt.Errorf("worker.ClipLease.ReleaseAll(%s): %w", id, err)
 			}
@@ -143,14 +148,10 @@ func AcquireJobClips(ctx context.Context, cache *workercache.Cache, jobID string
 
 	for _, id := range assetKeys {
 		if err := cache.Acquire(ctx, id, jobID); err != nil {
-			// Roll back the rows already acquired in REVERSE order.
-			// Reverse order keeps the latest acquire (whose context
-			// is freshest) at the back, which is the conventional
-			// release-stack idiom.
-			cleanupCtx := leaseCleanupContext(ctx)
-			for j := len(lease.assetKeys) - 1; j >= 0; j-- {
-				_ = lease.cache.Release(cleanupCtx, lease.assetKeys[j], jobID)
-			}
+			// Roll back through the same durable ReleaseAll path used by
+			// normal dispatch cleanup. If SQLite is transiently unavailable,
+			// each failed rollback release is persisted for reconciliation.
+			_ = lease.ReleaseAll(ctx)
 			return nil, fmt.Errorf("worker.AcquireJobClips(%s) for %s: %w", id, jobID, err)
 		}
 		// Track only successful acquisitions so rollback never attempts

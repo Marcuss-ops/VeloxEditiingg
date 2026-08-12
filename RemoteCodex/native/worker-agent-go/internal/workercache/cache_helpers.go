@@ -14,7 +14,7 @@ import (
 // schema creation/migration, the row projection, the scanner and shared
 // predicates. The public CRUD surface lives in cache.go.
 
-const currentSchemaVersion = 3
+const currentSchemaVersion = 4
 
 // schemaDDL is the canonical schema for new databases. Lease ownership is
 // represented only by cached_asset_leases; cached_assets has no lease mirror.
@@ -48,6 +48,18 @@ CREATE TABLE IF NOT EXISTS cached_asset_leases (
 );
 CREATE INDEX IF NOT EXISTS idx_cached_asset_leases_asset
     ON cached_asset_leases(asset_key);
+CREATE TABLE IF NOT EXISTS pending_lease_releases (
+    asset_key       TEXT NOT NULL,
+    job_id          TEXT NOT NULL,
+    attempt_count   INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT NOT NULL,
+    last_error      TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    PRIMARY KEY (asset_key, job_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pending_lease_releases_due
+    ON pending_lease_releases(next_attempt_at, created_at);
 `
 
 const selectCols = `asset_key, content_hash, local_path, size_bytes,
@@ -291,7 +303,22 @@ func migrateLegacySchemaWithHook(db *sql.DB, afterAssetsRebuild func() error) er
 	if _, err := tx.Exec(`CREATE INDEX idx_cached_asset_leases_asset ON cached_asset_leases(asset_key)`); err != nil {
 		return rollback(fmt.Errorf("create lease index: %w", err))
 	}
-	if _, err := tx.Exec(`PRAGMA user_version = 3`); err != nil {
+	if _, err := tx.Exec(`CREATE TABLE pending_lease_releases (
+		asset_key TEXT NOT NULL,
+		job_id TEXT NOT NULL,
+		attempt_count INTEGER NOT NULL DEFAULT 0,
+		next_attempt_at TEXT NOT NULL,
+		last_error TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		PRIMARY KEY (asset_key, job_id)
+	)`); err != nil {
+		return rollback(fmt.Errorf("create lease reconciliation table: %w", err))
+	}
+	if _, err := tx.Exec(`CREATE INDEX idx_pending_lease_releases_due ON pending_lease_releases(next_attempt_at, created_at)`); err != nil {
+		return rollback(fmt.Errorf("create lease reconciliation index: %w", err))
+	}
+	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, currentSchemaVersion)); err != nil {
 		return rollback(fmt.Errorf("set migrated schema version: %w", err))
 	}
 	if err := tx.Commit(); err != nil {

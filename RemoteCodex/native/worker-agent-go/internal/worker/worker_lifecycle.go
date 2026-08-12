@@ -267,6 +267,7 @@ func (w *Worker) runSession(ctx context.Context) bool {
 
 	w.startPersistenceLoop(sessionCtx)
 	w.startTaskResultReplayLoop(sessionCtx)
+	w.startLeaseReconciliationLoop(sessionCtx)
 
 	sessionEnded := false
 	select {
