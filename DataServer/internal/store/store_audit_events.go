@@ -2,8 +2,8 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"velox-server/internal/audittrail"
@@ -58,7 +58,10 @@ func (s *SQLiteStore) ListAuditEvents(ctx context.Context, resourceID string, li
 		if err := rows.Scan(&event.ID, &occurred, &event.ActorType, &event.ActorID, &event.Action, &event.ResourceType, &event.ResourceID, &event.RequestID, &event.TraceID, &event.BeforeHash, &event.AfterHash, &event.MetadataJSON); err != nil {
 			return nil, err
 		}
-		event.OccurredAt, _ = time.Parse(time.RFC3339Nano, occurred)
+		event.OccurredAt, err = parsePersistedWorkerTimestamp(occurred, "audit_events.occurred_at")
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, event)
 	}
 	if err := rows.Err(); err != nil {
@@ -95,18 +98,15 @@ func (s *SQLiteStore) ListAuditEvents(ctx context.Context, resourceID string, li
 		if eventID == "" {
 			eventID = uuid.NewString()
 		}
-		if occurred == "" {
-			occurred = time.Now().UTC().Format(time.RFC3339Nano)
-		}
-		eventTime, parseErr := time.Parse(time.RFC3339Nano, occurred)
+		eventTime, parseErr := parsePersistedWorkerTimestamp(occurred, "task_execution_events.occurred_at")
 		if parseErr != nil {
-			eventTime, _ = time.Parse(time.RFC3339, occurred)
+			return nil, parseErr
 		}
 		if metadata == "" {
-			metadata = "{}"
+			return nil, fmt.Errorf("task_execution_events.metadata_json is empty")
 		}
 		if !json.Valid([]byte(metadata)) {
-			metadata = "{}"
+			return nil, fmt.Errorf("task_execution_events.metadata_json is invalid JSON")
 		}
 		if action == "" {
 			action = eventName
@@ -119,7 +119,7 @@ func (s *SQLiteStore) ListAuditEvents(ctx context.Context, resourceID string, li
 			Action: action, ResourceType: "job", ResourceID: jobID, MetadataJSON: metadata,
 		})
 	}
-	if err := timelineRows.Err(); err != nil && err != sql.ErrNoRows {
+	if err := timelineRows.Err(); err != nil {
 		return nil, err
 	}
 	return out, nil

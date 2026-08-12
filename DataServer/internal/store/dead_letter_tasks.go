@@ -57,8 +57,14 @@ func (s *SQLiteStore) GetDeadLetter(ctx context.Context, id string) (*deadletter
 	if err != nil {
 		return nil, fmt.Errorf("dead letter get: %w", err)
 	}
-	d.FirstFailedAt, _ = time.Parse(time.RFC3339, first)
-	d.LastFailedAt, _ = time.Parse(time.RFC3339, last)
+	d.FirstFailedAt, err = parsePersistedWorkerTimestamp(first, "dead_letter_tasks.first_failed_at")
+	if err != nil {
+		return nil, err
+	}
+	d.LastFailedAt, err = parsePersistedWorkerTimestamp(last, "dead_letter_tasks.last_failed_at")
+	if err != nil {
+		return nil, err
+	}
 	return &d, nil
 }
 
@@ -87,8 +93,14 @@ func (s *SQLiteStore) ListDeadLetters(ctx context.Context, status string, limit 
 		if err := rows.Scan(&d.ID, &d.JobID, &d.TaskID, &d.LastAttemptID, &d.FailureClass, &d.ErrorCode, &d.Retryable, &d.PayloadSnapshotJSON, &first, &last, &d.ReplayCount, &d.Status); err != nil {
 			return nil, fmt.Errorf("dead letter scan: %w", err)
 		}
-		d.FirstFailedAt, _ = time.Parse(time.RFC3339, first)
-		d.LastFailedAt, _ = time.Parse(time.RFC3339, last)
+		d.FirstFailedAt, err = parsePersistedWorkerTimestamp(first, "dead_letter_tasks.first_failed_at")
+		if err != nil {
+			return nil, err
+		}
+		d.LastFailedAt, err = parsePersistedWorkerTimestamp(last, "dead_letter_tasks.last_failed_at")
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, d)
 	}
 	return out, rows.Err()

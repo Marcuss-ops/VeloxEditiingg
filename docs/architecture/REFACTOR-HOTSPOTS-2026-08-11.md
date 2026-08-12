@@ -69,6 +69,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Legacy job read models: tentativi, artifact, asset, DLQ ed eventi ora
   propagano gli errori di scansione; anche la serializzazione degli eventi
   non viene più ignorata.
+- Audit/DLQ read models: timestamp corrotti e metadata JSON invalidi non
+  vengono più trasformati in `zero time`, `now` o `{}`; l’endpoint risale con
+  errore invece di mostrare una storia operatore alterata.
 - Profiling read model: le fasi di un attempt rifiutano scan e timestamp
   corrotti invece di trasformarli in tempi zero, preservando benchmark
   veritieri.
