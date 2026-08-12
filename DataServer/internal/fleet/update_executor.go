@@ -8,9 +8,12 @@
 //  2. validate worker_id registered AND not in a torn state.
 //  3. snapshot previous_digest from deployment_records, or adopt a verified
 //     authenticated runtime digest when the ledger is empty.
-//  4. set drain=true and wait for active_tasks=0. The executor
-//     owns this transition so callers cannot start an update while
-//     relying on a documentation-only drain step.
+//  4. set drain=true and wait for the authoritative DRAINING
+//     condition: the registry read model reflects drain=true AND
+//     active_tasks=0. A drain() call that returns nil without the
+//     worker entering DRAINING never advances the rollout. The
+//     executor owns this transition so callers cannot start an
+//     update while relying on a documentation-only drain step.
 
 //  5. INSERT deployment_records row, status=PENDING,
 //     is_rollback=false. Health() flips to UPDATING via
@@ -244,7 +247,9 @@ func (e *UpdateExecutor) Execute(ctx context.Context, op *store.Operation) error
 	// Logged at every operator-observable transition.
 	log.Printf("[UPDATE] worker=%s target=%s previous=%s", op.WorkerID, targetDigest, previousDigest)
 
-	// ── Phase 4: own the drain and wait for active_tasks=0 ───────────
+	// ── Phase 4: own the drain and wait for authoritative DRAINING ───
+	// DRAINING means the registry read model reports drain=true AND
+	// active_tasks=0 — never merely that SetDrainMode returned nil.
 	// Preserve an operator-owned drain. Only undo the transition that
 	// this executor made; callers must serialize worker mutations while
 	// an update operation is active.
@@ -315,9 +320,11 @@ func (e *UpdateExecutor) Execute(ctx context.Context, op *store.Operation) error
 // non-empty after Validate), the explicitPreviousDigest
 // (caller-supplied snapshot), and a parse error if the
 // payload is malformed or invalid.
-// waitForIdle polls the registry's canonical active_tasks signal until
-// the value reaches 0, or until the poll budget elapses. The default
-// budget is timeoutActiveJobsIdle (5min).
+// waitForIdle polls until the registry read model reflects the
+// authoritative DRAINING condition (drain=true AND active_tasks=0)
+// or the poll budget elapses. The default budget is
+// timeoutActiveJobsIdle (5min). The full contract lives in
+// update_executor_helpers.go.
 
 // Polling is intentional rather than event-driven because
 // the registry's in-memory heartbeat metric is the canonical

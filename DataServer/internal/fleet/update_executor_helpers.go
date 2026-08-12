@@ -38,6 +38,18 @@ func (e *UpdateExecutor) parsePayload(op *store.Operation) (string, string, erro
 	return strings.TrimSpace(p.TargetDigest), strings.TrimSpace(p.PreviousDigest), nil
 }
 
+// waitForIdle polls the registry until BOTH authoritative DRAINING
+// conditions hold before the executor proceeds to DEPLOYING:
+//
+//  1. the registry read model reflects drain=true (IsDrained), and
+//  2. active_tasks == 0 (IsActiveJobsZero).
+//
+// A drain() call that returns nil without the worker entering
+// DRAINING must never advance the rollout — the flag, not the
+// SetDrainMode return value, is the source of truth. If either
+// condition is unsatisfied within the poll budget the rollout
+// fails closed and the executor-owned drain is released by the
+// caller.
 func (e *UpdateExecutor) waitForIdle(ctx context.Context, workerID string) error {
 	if e.backend.Registry == nil {
 		// Defensive: callers should pass a wired gater, but
@@ -52,11 +64,11 @@ func (e *UpdateExecutor) waitForIdle(ctx context.Context, workerID string) error
 	pollTicker := time.NewTicker(time.Second)
 	defer pollTicker.Stop()
 	for {
-		if e.backend.Registry.IsActiveJobsZero(ctx, workerID) {
+		if e.backend.Registry.IsDrained(ctx, workerID) && e.backend.Registry.IsActiveJobsZero(ctx, workerID) {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return errors.New("active_tasks (active_jobs) did not drain to 0 within budget")
+			return errors.New("worker did not reach DRAINING (drain=true and active_tasks=0) within budget")
 		}
 		select {
 		case <-ctx.Done():

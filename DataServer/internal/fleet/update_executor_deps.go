@@ -113,9 +113,14 @@ type BackendDriveVerifier interface {
 
 // BackendRegistryGater is the typed surface for in-process
 // registry lookups. The worker must be registered BEFORE the
-// update begins; the executor rejects otherwise. The
-// IsActiveJobsZero helper polls Worker.Metrics["active_tasks"]
-// (the canonical active-job indicator in registry_health.go).
+// update begins; the executor rejects otherwise.
+//
+//   - IsActiveJobsZero polls Worker.Metrics["active_tasks"]
+//     (the canonical active-job indicator in registry_health.go).
+//   - IsDrained reports whether the registry read model reflects
+//     drain=true. The executor requires BOTH conditions before
+//     DEPLOYING: a SetDrainMode call that returns nil without the
+//     registry entering DRAINING must never advance the rollout.
 //
 // WaitForIdle is exposed so tests can drive the timeout-bounded
 // polling without standing up a clock; production calls it with
@@ -123,6 +128,7 @@ type BackendDriveVerifier interface {
 type BackendRegistryGater interface {
 	GetWorker(ctx context.Context, workerID string) (*workers.Worker, error)
 	IsActiveJobsZero(ctx context.Context, workerID string) bool
+	IsDrained(ctx context.Context, workerID string) bool
 	SetDrainMode(ctx context.Context, workerID string, drain bool) error
 }
 
@@ -175,6 +181,19 @@ func (g *RealRegistryUpdateGater) IsActiveJobsZero(ctx context.Context, workerID
 	default:
 		return false
 	}
+}
+
+// IsDrained reports whether the registry read model reflects the
+// worker as actually draining. It reads the same cached Worker the
+// placement matcher sees — never the return value of SetDrainMode.
+// This closes the bug class where a drain backend reports success
+// without the worker entering DRAINING.
+func (g *RealRegistryUpdateGater) IsDrained(ctx context.Context, workerID string) bool {
+	info, err := g.GetWorker(ctx, workerID)
+	if err != nil || info == nil {
+		return false
+	}
+	return info.Drain
 }
 
 func (g *RealRegistryUpdateGater) SetDrainMode(ctx context.Context, workerID string, drain bool) error {

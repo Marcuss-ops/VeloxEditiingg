@@ -69,6 +69,11 @@ func (t *rolloutTrace) IsActiveJobsZero(ctx context.Context, workerID string) bo
 	return t.stubBackendsState.IsActiveJobsZero(ctx, workerID)
 }
 
+func (t *rolloutTrace) IsDrained(ctx context.Context, workerID string) bool {
+	t.events = append(t.events, "drained=true")
+	return t.stubBackendsState.IsDrained(ctx, workerID)
+}
+
 func (t *rolloutTrace) SetDrainMode(ctx context.Context, workerID string, drain bool) error {
 	t.events = append(t.events, fmt.Sprintf("drain=%t", drain))
 	return t.stubBackendsState.SetDrainMode(ctx, workerID, drain)
@@ -128,7 +133,7 @@ func TestOfflineRollout_CompleteSequenceUsesExpectedDigestAndReconnects(t *testi
 	if !containsEvent(trace.events, "worker.reconnected") || trace.reconnectChecks == 0 || !containsEvent(trace.events, "master.connected") {
 		t.Fatalf("rollout did not reconnect and verify an active master connection: %v", trace.events)
 	}
-	for _, required := range []string{"drain=true", "active_tasks=0", "cosign", "docker.activate", "docker.running", "ssh", "worker.reconnected", "master.connected", "smoke", "drive.verify", "drain=false"} {
+	for _, required := range []string{"drain=true", "drained=true", "active_tasks=0", "cosign", "docker.activate", "docker.running", "ssh", "worker.reconnected", "master.connected", "smoke", "drive.verify", "drain=false"} {
 		if !containsEvent(trace.events, required) {
 			t.Fatalf("rollout trace missing %q: %v", required, trace.events)
 		}
@@ -154,7 +159,7 @@ func TestOfflineRollout_FailClosedWhenActiveTasksNeverReachZero(t *testing.T) {
 	state.activeTasksZero = false
 	e := NewUpdateExecutor(backend)
 	e.drainTimeout = time.Millisecond
-	if err := e.Execute(context.Background(), mkOp("offline-busy-worker", validImageRef(), "")); err == nil || !strings.Contains(err.Error(), "did not drain to 0") {
+	if err := e.Execute(context.Background(), mkOp("offline-busy-worker", validImageRef(), "")); err == nil || !strings.Contains(err.Error(), "did not reach DRAINING") {
 		t.Fatal("rollout did not fail closed for non-zero active_tasks")
 	}
 	if got, want := state.drainCalls, []bool{true, false}; !equalBools(got, want) {

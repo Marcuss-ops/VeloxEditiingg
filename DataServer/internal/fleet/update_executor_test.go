@@ -130,8 +130,13 @@ type stubBackendsState struct {
 	registeredWorker bool
 	activeTasksZero  bool
 	drain            bool
-	drainCalls       []bool
-	cosignErr        error
+	// drainNotApplied simulates a drain backend that reports success
+	// (SetDrainMode returns nil) without the registry read model ever
+	// reflecting drain=true — the bug class the DRAINING gate exists
+	// to close.
+	drainNotApplied bool
+	drainCalls      []bool
+	cosignErr       error
 	pullErr          error
 	composeErr       error
 	containerRunning bool
@@ -238,7 +243,17 @@ func (s *stubBackendsState) IsActiveJobsZero(_ context.Context, _ string) bool {
 	return s.activeTasksZero
 }
 
+func (s *stubBackendsState) IsDrained(_ context.Context, _ string) bool {
+	return s.drain
+}
+
 func (s *stubBackendsState) SetDrainMode(_ context.Context, _ string, drain bool) error {
+	if drain && s.drainNotApplied {
+		// Report success but leave the registry read model untouched:
+		// the executor must not trust the return value alone.
+		s.drainCalls = append(s.drainCalls, drain)
+		return nil
+	}
 	s.drain = drain
 	s.drainCalls = append(s.drainCalls, drain)
 	return nil
@@ -557,7 +572,7 @@ func TestUpdate_ActiveTasksTimeoutReleasesOwnedDrain(t *testing.T) {
 	e := NewUpdateExecutor(backend)
 	e.drainTimeout = 10 * time.Millisecond
 	err := e.Execute(context.Background(), mkOp("wkr-1", validImageRef(), ""))
-	if err == nil || !strings.Contains(err.Error(), "did not drain to 0") {
+	if err == nil || !strings.Contains(err.Error(), "did not reach DRAINING") {
 		t.Errorf("active-tasks timeout: want drain fail, got %v", err)
 	}
 	if got, want := st.drainCalls, []bool{true, false}; !reflect.DeepEqual(got, want) {
@@ -565,6 +580,32 @@ func TestUpdate_ActiveTasksTimeoutReleasesOwnedDrain(t *testing.T) {
 	}
 	if st.drain {
 		t.Fatal("worker remained drained after pre-forward timeout")
+	}
+}
+
+func TestUpdate_DrainNotReflectedFailsClosed(t *testing.T) {
+	// SetDrainMode returns nil but the registry read model never
+	// reflects drain=true (drainNotApplied). active_tasks is already
+	// 0 — yet the rollout MUST NOT proceed: DRAINING requires the
+	// authoritative drain flag, not the drain() call's return value.
+	backend, st := stubBackends(t)
+	st.drainNotApplied = true
+	e := NewUpdateExecutor(backend)
+	e.drainTimeout = 10 * time.Millisecond
+	err := e.Execute(context.Background(), mkOp("wkr-1", validImageRef(), ""))
+	if err == nil || !strings.Contains(err.Error(), "did not reach DRAINING") {
+		t.Errorf("drain-not-reflected: want DRAINING fail, got %v", err)
+	}
+	// No deployment row may be inserted: the rollout must not start.
+	if len(st.insertedRows) != 0 {
+		t.Fatalf("rollout started despite worker not in DRAINING: rows=%d", len(st.insertedRows))
+	}
+	// The owned drain is still released on the failed gate.
+	if got, want := st.drainCalls, []bool{true, false}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("drain calls after failed DRAINING gate = %v, want %v", got, want)
+	}
+	if st.drain {
+		t.Fatal("worker remained drained after pre-forward DRAINING gate failure")
 	}
 }
 
