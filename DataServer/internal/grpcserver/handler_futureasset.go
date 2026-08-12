@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"time"
 
 	"velox-server/internal/placement"
@@ -195,5 +196,8 @@ func futureAssetManifests(payload []byte) []futureasset.AssetManifest {
 	for _, asset := range seen {
 		out = append(out, asset)
 	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].AssetKey < out[j].AssetKey
+	})
 	return out
 }

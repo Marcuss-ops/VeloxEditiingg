@@ -95,6 +95,8 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
       modulo proprietario senza creare un nuovo package generico prematuro.
 - [ ] Eliminare duplicazioni di parsing per manifest, asset reference e payload;
       una sorgente canonica per ogni contratto.
+- [x] Ordinare il manifest asset estratto dal payload Master per evitare che
+      l'iterazione su map renda instabile la generation del prefetch plan.
 - [ ] Audit di stato globale mutabile, singleton e registri; consentire solo
       dati read-only o inizializzazione protetta.
 - [ ] Audit allocazioni nei loop di render, download, scansione e metriche;
