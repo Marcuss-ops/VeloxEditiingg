@@ -28,6 +28,14 @@ type ContentAddressedCache interface {
 	EvictIfUnleased(context.Context, assetref.AssetKey, string) error
 }
 
+// DerivedAssetStore is the normalization-cache extension of the canonical
+// content store. It deliberately shares the cached_assets table, leases and
+// eviction fences with source assets instead of introducing another cache.
+type DerivedAssetStore interface {
+	FindDerived(context.Context, assetref.ContentHash, NormalizationProfile) (Entry, bool, error)
+	StoreDerived(context.Context, assetref.ContentHash, NormalizationProfile, Entry) (assetref.AssetKey, error)
+}
+
 // LeaseReservationStore is the authoritative protection barrier for cached
 // input assets. Cleanup must consult this store rather than a duplicated
 // active-job field or an in-memory counter.
@@ -88,6 +96,14 @@ func (s *CanonicalAssetStore) EvictIfUnleased(ctx context.Context, key assetref.
 	return s.cache.EvictIfUnleased(ctx, string(key), localPath)
 }
 
+func (s *CanonicalAssetStore) FindDerived(ctx context.Context, sourceHash assetref.ContentHash, profile NormalizationProfile) (Entry, bool, error) {
+	return s.cache.FindDerived(ctx, sourceHash, profile)
+}
+
+func (s *CanonicalAssetStore) StoreDerived(ctx context.Context, sourceHash assetref.ContentHash, profile NormalizationProfile, entry Entry) (assetref.AssetKey, error) {
+	return s.cache.StoreDerived(ctx, sourceHash, profile, entry)
+}
+
 func (s *CanonicalAssetStore) Acquire(ctx context.Context, key assetref.AssetKey, jobID string) error {
 	return s.cache.Acquire(ctx, string(key), jobID)
 }
@@ -107,5 +123,6 @@ func (s *CanonicalAssetStore) ReleaseReservation(ctx context.Context, key assetr
 var (
 	_ AssetRegistry         = (*CanonicalAssetStore)(nil)
 	_ ContentAddressedCache = (*CanonicalAssetStore)(nil)
+	_ DerivedAssetStore     = (*CanonicalAssetStore)(nil)
 	_ LeaseReservationStore = (*CanonicalAssetStore)(nil)
 )
