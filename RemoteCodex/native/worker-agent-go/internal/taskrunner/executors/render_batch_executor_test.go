@@ -1,0 +1,323 @@
+package executors
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"velox-shared/contract"
+	"velox-shared/controltransport"
+	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/runtimeassets"
+	"velox-worker-agent/pkg/video/ffmpegrunner"
+)
+
+type batchFakeFFmpegRunner struct {
+	requests []ffmpegrunner.FFmpegRequest
+}
+
+func (f *batchFakeFFmpegRunner) Run(_ context.Context, req ffmpegrunner.FFmpegRequest) (ffmpegrunner.FFmpegResult, error) {
+	f.requests = append(f.requests, req)
+	if len(req.Args) == 0 {
+		return ffmpegrunner.FFmpegResult{}, nil
+	}
+	output := req.Args[len(req.Args)-1]
+	if err := os.MkdirAll(filepath.Dir(output), 0o750); err != nil {
+		return ffmpegrunner.FFmpegResult{}, err
+	}
+	if err := os.WriteFile(output, []byte("fake-"+string(req.Operation)), 0o640); err != nil {
+		return ffmpegrunner.FFmpegResult{}, err
+	}
+	return ffmpegrunner.FFmpegResult{
+		Operation:          req.Operation,
+		ExitCode:           0,
+		ProcessWallMS:      10,
+		CommandFingerprint: ffmpegrunner.Fingerprint(req),
+		Parameters:         ffmpegrunner.Sanitize(req),
+	}, nil
+}
+
+func batchTestPlan() *contract.CompiledRenderPlanV2 {
+	const timelineSHA = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	return &contract.CompiledRenderPlanV2{
+		PlanVersion:      contract.CompiledPlanVersionV2,
+		TimelineRevision: 7,
+		TimelineSHA256:   timelineSHA,
+		DurationUS:       2_000_000,
+		Output: contract.OutputContractV2{
+			Container: "mp4", VideoCodec: "libx264", Width: 640, Height: 360,
+			FPSNum: 30, FPSDen: 1, PixelFormat: "yuv420p",
+		},
+		FinalAudio: contract.FinalAudioV2{
+			Mode: contract.AudioModeFinalAudioCopy, AssetID: "audio-master-001",
+			SHA256: strings.Repeat("b", 64), SizeBytes: 10, Codec: "aac",
+			SampleRateHz: 48_000, Channels: 2, DurationUS: 2_000_000,
+			TimelineRevision: 7, TimelineSHA256: timelineSHA,
+		},
+		VideoTracks: []contract.VideoTrackV2{{
+			TrackID: "main",
+			Segments: []contract.VideoSegmentV2{{
+				SegmentID: "segment-a", AssetID: "video-a", SHA256: strings.Repeat("a", 64),
+				TimelineStartFrame: 0, FrameCount: 60, SourceInUS: 0, SourceDurationUS: 2_000_000,
+			}},
+		}},
+		Assets: []contract.AssetRefV2{
+			{AssetID: "video-a", SHA256: strings.Repeat("a", 64), SizeBytes: 10, Kind: "video", DurationUS: 2_000_000, Width: 640, Height: 360},
+			{AssetID: "audio-master-001", SHA256: strings.Repeat("b", 64), SizeBytes: 10, Kind: "final_audio", DurationUS: 2_000_000},
+		},
+	}
+}
+
+func batchTaskSpec(t *testing.T, jobID string) executor.TaskSpec {
+	t.Helper()
+	plan := batchTestPlan()
+	canonical, err := plan.CanonicalJSON()
+	if err != nil {
+		t.Fatalf("canonical plan: %v", err)
+	}
+	sum := sha256.Sum256(canonical)
+	return executor.TaskSpec{
+		Version: 1, JobID: jobID, ExecutorID: RenderBatchID,
+		Payload: map[string]interface{}{
+			contract.PayloadKeyCompiledRenderPlanJSON: string(canonical),
+			contract.PayloadKeyCompiledRenderPlanSHA:  hex.EncodeToString(sum[:]),
+		},
+	}
+}
+
+func batchBindings(t *testing.T) runtimeassets.Bindings {
+	t.Helper()
+	dir := t.TempDir()
+	bindings := runtimeassets.Bindings{}
+	for _, item := range []struct {
+		id   string
+		sha  string
+		kind string
+	}{
+		{"video-a", strings.Repeat("a", 64), "video"},
+		{"audio-master-001", strings.Repeat("b", 64), "audio"},
+	} {
+		path := filepath.Join(dir, item.id+".asset")
+		if err := os.WriteFile(path, []byte("0123456789"), 0o640); err != nil {
+			t.Fatalf("write binding %s: %v", item.id, err)
+		}
+		bindings[item.id] = runtimeassets.Binding{AssetID: item.id, Path: path, SHA256: item.sha, Size: 10}
+	}
+	return bindings
+}
+
+func TestRenderBatch_DescriptorAndRegistry(t *testing.T) {
+	runner := &batchFakeFFmpegRunner{}
+	exec := NewRenderBatch(runner, t.TempDir())
+	desc := exec.Descriptor()
+	if desc.ID != RenderBatchID || desc.Version != RenderBatchVersion {
+		t.Fatalf("descriptor identity = %s@%d", desc.ID, desc.Version)
+	}
+	if !reflect.DeepEqual(desc.InputTypes, []string{"render.compiled.v2"}) || !reflect.DeepEqual(desc.OutputTypes, []string{"video/mp4"}) {
+		t.Fatalf("descriptor types = %+v", desc)
+	}
+	if desc.ResourceClass != executor.ResourceCPU || desc.TemporalMode != executor.TemporalGlobal || !desc.Deterministic || !desc.Cacheable {
+		t.Fatalf("descriptor capabilities = %+v", desc)
+	}
+
+	reg := executor.NewRegistry()
+	if err := RegisterRenderBatchExecutor(reg, runner, t.TempDir()); err != nil {
+		t.Fatalf("register render_batch: %v", err)
+	}
+	if !reg.Has(RenderBatchID, RenderBatchVersion) {
+		t.Fatal("render_batch@1 is not registered")
+	}
+}
+
+func TestRenderBatch_CapabilityReportExposesDescriptor(t *testing.T) {
+	reg := executor.NewRegistry()
+	runner := &batchFakeFFmpegRunner{}
+	if err := RegisterRenderBatchExecutor(reg, runner, t.TempDir()); err != nil {
+		t.Fatalf("register render_batch: %v", err)
+	}
+	report := executor.BuildCapabilityReport(reg, controltransport.HostInfo{WorkerID: "worker-test"})
+	if len(report.Executors) != 1 {
+		t.Fatalf("capability executor count = %d, want 1", len(report.Executors))
+	}
+	capability := report.Executors[0]
+	if capability.ID != RenderBatchID || capability.Version != RenderBatchVersion {
+		t.Fatalf("capability identity = %s@%d", capability.ID, capability.Version)
+	}
+	if capability.ResourceClass != string(executor.ResourceCPU) || capability.TemporalMode != string(executor.TemporalGlobal) {
+		t.Fatalf("capability resource/temporal = %q/%q", capability.ResourceClass, capability.TemporalMode)
+	}
+	if !capability.Deterministic || !capability.Cacheable {
+		t.Fatalf("capability deterministic/cacheable = %t/%t", capability.Deterministic, capability.Cacheable)
+	}
+	if !reflect.DeepEqual(capability.OutputTypes, []string{"video/mp4"}) {
+		t.Fatalf("capability output types = %#v", capability.OutputTypes)
+	}
+}
+
+func TestRenderBatch_PreservesLegacyRegistryEntries(t *testing.T) {
+	reg := executor.NewRegistry()
+	if err := RegisterRenderPlanExecutors(reg, t.TempDir()); err != nil {
+		t.Fatalf("register legacy executors: %v", err)
+	}
+	legacyKeys := reg.IDs()
+	if len(legacyKeys) != 4 {
+		t.Fatalf("legacy executor count = %d, want 4", len(legacyKeys))
+	}
+	if err := RegisterRenderBatchExecutor(reg, &batchFakeFFmpegRunner{}, t.TempDir()); err != nil {
+		t.Fatalf("register render_batch: %v", err)
+	}
+	if reg.Len() != 5 {
+		t.Fatalf("combined executor count = %d, want 5", reg.Len())
+	}
+	for _, key := range legacyKeys {
+		found := false
+		for _, current := range reg.IDs() {
+			if current == key {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("legacy executor %q disappeared", key)
+		}
+	}
+}
+
+func TestRenderBatch_RejectsLegacyAndMissingBindings(t *testing.T) {
+	exec := NewRenderBatch(&batchFakeFFmpegRunner{}, t.TempDir())
+	legacy := executor.TaskSpec{JobID: "legacy", Payload: map[string]interface{}{"render_plan_json": "{}"}}
+	if err := exec.Validate(legacy); err == nil {
+		t.Fatal("render_batch accepted a legacy payload")
+	}
+
+	spec := batchTaskSpec(t, "job-missing-bindings")
+	result, err := exec.Execute(context.Background(), nil, spec)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != "failed" || result.ErrorCode != "ASSET_BINDINGS_MISSING" {
+		t.Fatalf("missing bindings result = %+v", result)
+	}
+}
+
+func TestRenderBatch_VideoOnlyThenFinalAudioCopyMux(t *testing.T) {
+	runner := &batchFakeFFmpegRunner{}
+	outputRoot := t.TempDir()
+	exec := NewRenderBatch(runner, outputRoot)
+	spec := batchTaskSpec(t, "job-batch-001")
+	ctx := runtimeassets.WithBindings(context.Background(), batchBindings(t))
+
+	result, err := exec.Execute(ctx, nil, spec)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != "succeeded" {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(runner.requests) != 2 {
+		t.Fatalf("FFmpeg calls = %d, want visual + mux", len(runner.requests))
+	}
+	visual, mux := runner.requests[0], runner.requests[1]
+	if visual.Operation != ffmpegrunner.OperationCompose || mux.Operation != ffmpegrunner.OperationEncode {
+		t.Fatalf("operations = %q then %q, want compose then encode", visual.Operation, mux.Operation)
+	}
+	visualArgs := strings.Join(visual.Args, " ")
+	if !strings.Contains(visualArgs, "-an") {
+		t.Fatalf("visual command must be video-only: %s", visualArgs)
+	}
+	// The V2 command preserves frame placement with overlays instead of
+	// routing through the legacy concat executor.
+	if !strings.Contains(visualArgs, "overlay") {
+		t.Fatalf("visual command does not describe positioned rendering: %s", visualArgs)
+	}
+	muxArgs := strings.Join(mux.Args, " ")
+	for _, required := range []string{"-c:v copy", "-c:a copy", "-map 0:v:0", "-map 1:a:0", "-movflags +faststart"} {
+		if !strings.Contains(muxArgs, required) {
+			t.Errorf("mux args missing %q: %s", required, muxArgs)
+		}
+	}
+	if strings.Contains(muxArgs, "-shortest") {
+		t.Error("mux must not use -shortest as a duration fix")
+	}
+	if got := result.Metrics["audio_mix_count"]; got != int64(0) {
+		t.Errorf("audio_mix_count = %v, want 0", got)
+	}
+	if got := result.Metrics["audio_encode_count"]; got != int64(0) {
+		t.Errorf("audio_encode_count = %v, want 0", got)
+	}
+	if got := result.Metrics["final_audio_copy"]; got != int64(1) {
+		t.Errorf("final_audio_copy = %v, want 1", got)
+	}
+	if len(result.Outputs) != 1 || result.Outputs[0].Type != "video/mp4" || result.Outputs[0].Hash == "" {
+		t.Fatalf("final output = %+v", result.Outputs)
+	}
+	if _, err := os.Stat(filepath.Join(outputRoot, "job-batch-001.video-only.mp4")); !os.IsNotExist(err) {
+		t.Fatalf("video-only intermediate was not cleaned up: err=%v", err)
+	}
+}
+
+func TestRenderBatch_VideoCommandPreservesSegmentPlacementAndGaps(t *testing.T) {
+	plan := batchTestPlan()
+	plan.Assets = append(plan.Assets, contract.AssetRefV2{
+		AssetID: "video-b", SHA256: strings.Repeat("d", 64), SizeBytes: 10,
+		Kind: "video", DurationUS: 1_000_000, Width: 640, Height: 360,
+	})
+	plan.VideoTracks[0].Segments = append(plan.VideoTracks[0].Segments, contract.VideoSegmentV2{
+		SegmentID: "segment-b", AssetID: "video-b", SHA256: strings.Repeat("d", 64),
+		TimelineStartFrame: 90, FrameCount: 30, SourceInUS: 500_000, SourceDurationUS: 1_000_000,
+	})
+	bindings := runtimeassets.Bindings{
+		"video-a": {AssetID: "video-a", Path: "/cache/video-a.mp4"},
+		"video-b": {AssetID: "video-b", Path: "/cache/video-b.mp4"},
+	}
+	args, err := buildVideoOnlyArgs(plan, bindings, "/tmp/video-only.mp4")
+	if err != nil {
+		t.Fatalf("buildVideoOnlyArgs: %v", err)
+	}
+	joined := strings.Join(args, " ")
+	if strings.Count(joined, "overlay=eof_action=pass") != 2 {
+		t.Fatalf("overlay count = %d, want 2: %s", strings.Count(joined, "overlay=eof_action=pass"), joined)
+	}
+	if !strings.Contains(joined, "setpts=PTS-STARTPTS+3.000000/TB") {
+		t.Fatalf("second segment placement was not converted from frame 90 at 30fps: %s", joined)
+	}
+	if !strings.Contains(joined, "trim=start=0.500000:duration=1.000000") {
+		t.Fatalf("second segment source trim was not preserved: %s", joined)
+	}
+}
+
+func TestRenderBatch_RejectsBindingIntegrityMismatch(t *testing.T) {
+	exec := NewRenderBatch(&batchFakeFFmpegRunner{}, t.TempDir())
+	bindings := batchBindings(t)
+	binding := bindings["audio-master-001"]
+	binding.SHA256 = strings.Repeat("d", 64)
+	bindings["audio-master-001"] = binding
+	result, err := exec.Execute(runtimeassets.WithBindings(context.Background(), bindings), nil, batchTaskSpec(t, "job-integrity"))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != "failed" || result.ErrorCode != "ASSET_BINDINGS_INVALID" {
+		t.Fatalf("integrity result = %+v", result)
+	}
+}
+
+func TestRenderBatch_V2PlanHasNoLocalPaths(t *testing.T) {
+	spec := batchTaskSpec(t, "job-path-free")
+	raw := spec.Payload[contract.PayloadKeyCompiledRenderPlanJSON].(string)
+	if strings.Contains(raw, filepath.Join(t.TempDir(), "local")) {
+		t.Fatal("test plan unexpectedly contains a local path")
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		t.Fatalf("decode plan: %v", err)
+	}
+	if _, ok := decoded["local_path"]; ok {
+		t.Fatal("V2 plan contains local_path")
+	}
+}
