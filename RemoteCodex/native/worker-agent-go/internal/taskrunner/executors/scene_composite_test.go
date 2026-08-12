@@ -266,6 +266,30 @@ func TestSceneComposite_Execute_Success(t *testing.T) {
 	if wallMs > 0 && ratio <= 0 {
 		t.Fatalf("cpu.wall_ratio must be positive when wall_ms > 0, got %v (wall=%d)", ratio, wallMs)
 	}
+	// Derived KPIs share the receipt's single Deriver. With the fake's
+	// only detailed phase being a span_child (engine.video.decode) and
+	// no process/IO byte counts, accounted, amplification,
+	// processes_per_clip and useful_work_ratio are all zero while the
+	// whole wall clock is unaccounted; cpu_wall_ratio mirrors the
+	// cpu.* projection exactly (same Deriver, same wall clock).
+	if res.Metrics["derived.unaccounted_ms"] != wallMs {
+		t.Fatalf("derived.unaccounted_ms = %v, want cpu.wall_ms (%d): with no exclusive phases the whole wall clock is unaccounted", res.Metrics["derived.unaccounted_ms"], wallMs)
+	}
+	if res.Metrics["derived.accounted_ratio"] != float64(0) ||
+		res.Metrics["derived.read_amplification"] != float64(0) ||
+		res.Metrics["derived.write_amplification"] != float64(0) ||
+		res.Metrics["derived.processes_per_clip"] != float64(0) ||
+		res.Metrics["derived.useful_work_ratio"] != float64(0) {
+		t.Fatalf("derived KPIs must be zero for a span-child-only fake: %#v", res.Metrics)
+	}
+	if res.Metrics["derived.cpu_wall_ratio"] != res.Metrics["cpu.wall_ratio"] {
+		t.Fatalf("derived.cpu_wall_ratio = %v, cpu.wall_ratio = %v; the two projections must agree", res.Metrics["derived.cpu_wall_ratio"], res.Metrics["cpu.wall_ratio"])
+	}
+	// The accounted_ratio budget flag: "not measured" (ratio 0) is never
+	// a violation, so the flag must be true for the span-child-only fake.
+	if ok, isBool := res.Metrics["derived.accounted_ratio_budget_ok"].(bool); !isBool || !ok {
+		t.Fatalf("derived.accounted_ratio_budget_ok = %#v, want true (not-measured is not a violation)", res.Metrics["derived.accounted_ratio_budget_ok"])
+	}
 }
 
 func TestSceneComposite_Execute_RenderErrorMapsToFailure(t *testing.T) {

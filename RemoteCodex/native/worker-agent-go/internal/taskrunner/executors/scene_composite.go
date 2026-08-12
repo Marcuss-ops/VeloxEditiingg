@@ -211,6 +211,27 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	metrics["cpu.wall_ratio"] = derivedCPU.CPUWallRatio
 	metrics["memory.peak_rss_bytes"] = runMetrics.RenderMetrics.PeakRSSBytes
 	metrics["memory.current_rss_bytes"] = runMetrics.RenderMetrics.CurrentRSSBytes
+	// Derived KPIs share ONE derivation with the PerformanceReceiptV1
+	// (performance.DerivedFromRenderMetrics → Derive): unaccounted_ms,
+	// accounted_ratio, read/write amplification, processes_per_clip,
+	// useful_work_ratio and cpu_wall_ratio are computed by the single
+	// Deriver from the same raw facts the receipt uses — the executor
+	// never recomputes a ratio. Amplifications start from the
+	// engine-declared final size (receipt io.final_bytes_written) and
+	// are re-projected with the verified artifact-manifest size on the
+	// success path.
+	derived := performance.DerivedFromRenderMetrics(runMetrics.RenderMetrics, runMetrics.TotalMs, runMetrics.TimelineItems, runMetrics.RenderMetrics.TotalSize)
+	metrics["derived.unaccounted_ms"] = derived.UnaccountedMS
+	metrics["derived.accounted_ratio"] = derived.AccountedRatio
+	metrics["derived.read_amplification"] = derived.ReadAmplification
+	metrics["derived.write_amplification"] = derived.WriteAmplification
+	metrics["derived.processes_per_clip"] = derived.ProcessesPerClip
+	metrics["derived.useful_work_ratio"] = derived.UsefulWorkRatio
+	metrics["derived.cpu_wall_ratio"] = derived.CPUWallRatio
+	// The Phase-1 accounted_ratio budget (>= 95%) is surfaced as a
+	// single boolean so operators can alert on it without recomputing
+	// the rule; "not measured" (ratio 0) is never a violation.
+	metrics["derived.accounted_ratio_budget_ok"] = len(performance.CheckDerivedBudgets(derived)) == 0
 	metrics["engine.frames"] = runMetrics.RenderMetrics.Frames
 	metrics["engine.frames_decoded"] = runMetrics.RenderMetrics.FramesDecoded
 	metrics["engine.frames_composited"] = runMetrics.RenderMetrics.FramesComposited
@@ -384,6 +405,13 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		}, nil
 	}
 	metrics["output.bytes"] = outputSize
+	// Re-project amplification with the VERIFIED artifact size (the
+	// manifest is the publisher's authoritative byte count). The other
+	// derived KPIs do not depend on the output size and are already
+	// final.
+	derivedVerified := performance.DerivedFromRenderMetrics(runMetrics.RenderMetrics, runMetrics.TotalMs, runMetrics.TimelineItems, outputSize)
+	metrics["derived.read_amplification"] = derivedVerified.ReadAmplification
+	metrics["derived.write_amplification"] = derivedVerified.WriteAmplification
 	// Quality telemetry must describe the artifact that was actually
 	// produced. ComputeLocalManifest has already hashed and ffprobed this
 	// final file; do not infer these values from the render plan or emit a
