@@ -43,6 +43,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Retry cancellation: i backoff di remote-engine e multipart publisher usano
   timer stoppabili; anche retry asset/chunk e idle wait del prefetch usano
   timer/ticker riutilizzabili e rispettano la cancellazione.
+- Worker retry loops: il bootstrap del protected-assets poller e il retry loop
+  del client API usano timer stoppabili invece di creare `time.After` a ogni
+  iterazione; i timeout one-shot di processo/stream restano distinti.
 - Social delivery: `429` conserva `Retry-After` negli errori tipizzati fino al
   `ProviderError`; il runner applica quella scadenza quando è valida e usa il
   backoff bounded locale solo in assenza di un header valido.
@@ -155,7 +158,14 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   `SUCCEEDED` con identità task/job/worker/lease esatta.
 - Creator forwarding: la promozione sincrona a `READY_TO_FORWARD` verifica
   anche che nessun runner abbia acquisito la lease nel frattempo; una race
-  restituisce conflitto senza cancellare l'ownership del runner.
+  restituisce conflitto senza cancellare l’ownership del runner.
+- Delivery plan resolver: una istanza SQLite senza database non viene più
+  interpretata come “piano assente”; restituisce un errore di configurazione
+  distinto da `ErrNoExplicitPlan`, mantenendo separati misconfiguration e
+  contratto render-only.
+- Lease reconciler: quando il jobs repository è configurato, gli errori nella
+  lettura del budget o nella finalizzazione del job padre vengono propagati;
+  il risultato del reap già committato resta disponibile per il retry.
 - Job progress: gli snapshot tardivi di un tentativo precedente o con
   timestamp più vecchio non possono più regredire il read model.
 - Render-only: il contatore audio riconosce il contratto esplicito a zero
