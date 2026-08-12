@@ -376,6 +376,18 @@ func TestController_RunFailsClosedWithoutStore(t *testing.T) {
 	if err := c.Run(context.Background()); !errors.Is(err, ErrStoreNotConfigured) {
 		t.Fatalf("Run error = %v, want ErrStoreNotConfigured", err)
 	}
+	if err := c.Start(context.Background()); !errors.Is(err, ErrStoreNotConfigured) {
+		t.Fatalf("Start error = %v, want ErrStoreNotConfigured", err)
+	}
+	if err := c.PublishOperation(context.Background(), &store.Operation{}); !errors.Is(err, ErrStoreNotConfigured) {
+		t.Fatalf("PublishOperation error = %v, want ErrStoreNotConfigured", err)
+	}
+	if _, err := c.AuditList(context.Background(), "", "", 0); !errors.Is(err, ErrStoreNotConfigured) {
+		t.Fatalf("AuditList error = %v, want ErrStoreNotConfigured", err)
+	}
+	if _, err := c.AuditGet(context.Background(), "missing"); !errors.Is(err, ErrStoreNotConfigured) {
+		t.Fatalf("AuditGet error = %v, want ErrStoreNotConfigured", err)
+	}
 }
 
 // TestController_Run_BlocksUntilStop is the Stop-channel path:

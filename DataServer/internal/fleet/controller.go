@@ -156,6 +156,12 @@ func NewFleetController(
 // error verbatim (the audit dashboard's 5xx path renders the
 // raw error string with a "transient, retry later" framing).
 func (c *FleetController) PublishOperation(ctx context.Context, op *store.Operation) error {
+	if c == nil {
+		return errors.New("fleet: nil controller")
+	}
+	if c.store == nil {
+		return ErrStoreNotConfigured
+	}
 	if op == nil {
 		return errors.New("fleet: nil operation")
 	}
@@ -216,6 +222,12 @@ func (c *FleetController) Run(ctx context.Context) error {
 // directly via the supervisor because the supervisor owns the
 // goroutine and the run-done channel.
 func (c *FleetController) Start(ctx context.Context) error {
+	if c == nil {
+		return errors.New("fleet: nil controller")
+	}
+	if c.store == nil {
+		return ErrStoreNotConfigured
+	}
 	c.mu.Lock()
 	if c.running {
 		c.mu.Unlock()
@@ -250,6 +262,10 @@ func (c *FleetController) Start(ctx context.Context) error {
 // QUEUED rows stranded. Defensive iteration is the
 // fail-loud-but-recover contract.
 func (c *FleetController) Tick(ctx context.Context) {
+	if c == nil || c.store == nil {
+		log.Printf("[FLEET] tick skipped: %v", ErrStoreNotConfigured)
+		return
+	}
 	queued, err := c.store.ListQueuedOperations(ctx, 0)
 	if err != nil {
 		// Transient error: log and let the next tick retry.
@@ -427,12 +443,24 @@ func (c *FleetController) Done() <-chan struct{} {
 // limit <= 0 means "no cap"; the handler passes the canonical
 // 200-row cap.
 func (c *FleetController) AuditList(ctx context.Context, workerID, statusFilter string, limit int) ([]store.Operation, error) {
+	if c == nil {
+		return nil, errors.New("fleet: nil controller")
+	}
+	if c.store == nil {
+		return nil, ErrStoreNotConfigured
+	}
 	return c.store.ListOperations(ctx, workerID, statusFilter, limit)
 }
 
 // AuditGet fetches one row by ID. Thin wrapper. Maps to
 // ErrOperationNotFound on miss (handler turns it into 404).
 func (c *FleetController) AuditGet(ctx context.Context, operationID string) (*store.Operation, error) {
+	if c == nil {
+		return nil, errors.New("fleet: nil controller")
+	}
+	if c.store == nil {
+		return nil, ErrStoreNotConfigured
+	}
 	return c.store.GetOperation(ctx, operationID)
 }
 
