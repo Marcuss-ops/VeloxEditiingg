@@ -53,10 +53,26 @@ mkdir -p "$BUILD_DIR"
 
 if [ -f "$ENGINE_SRC/CMakeLists.txt" ]; then
   echo "Detected CMake project"
+
+  # Optional in-process LibAV backend (MediaProbe + packet mux). The CMake
+  # default is OFF; the canonical builder opts in whenever the pinned dev
+  # libraries are present so the produced engine keeps the zero-spawn probe
+  # and copy-only packet pipeline. VELOX_VIDEO_ENGINE_LIBAV overrides the
+  # pkg-config detection (set to OFF for a conservative ffprobe-only build).
+  if [ -z "${VELOX_VIDEO_ENGINE_LIBAV:-}" ]; then
+    if pkg-config --exists libavformat libavcodec libavutil 2>/dev/null; then
+      VELOX_VIDEO_ENGINE_LIBAV=ON
+    else
+      VELOX_VIDEO_ENGINE_LIBAV=OFF
+    fi
+  fi
+  echo "LibAV in-process backend: $VELOX_VIDEO_ENGINE_LIBAV"
+
   cmake \
       -S "$ENGINE_SRC" \
       -B "$BUILD_DIR" \
-      -DCMAKE_BUILD_TYPE=Release
+      -DCMAKE_BUILD_TYPE=Release \
+      -DVELOX_ENABLE_LIBAV="${VELOX_VIDEO_ENGINE_LIBAV}"
 
   cmake --build "$BUILD_DIR" -j"$(nproc)"
   ctest --test-dir "$BUILD_DIR" --output-on-failure

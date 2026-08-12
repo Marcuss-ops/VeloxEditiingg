@@ -39,6 +39,21 @@ type engineSidecar struct {
 	Observability map[string]interface{} `json:"observability,omitempty"`
 	Segments      []segmentTiming        `json:"segments,omitempty"`
 	Phases        []detailedPhaseTiming  `json:"phases,omitempty"`
+	// IOCounters carries the engine-side real I/O counters (file copies,
+	// asset materialization bytes, avformat input opens) emitted by newer
+	// engines. Legacy sidecars leave it nil.
+	IOCounters *engineIOCounters `json:"io_counters,omitempty"`
+}
+
+// engineIOCounters mirrors the sidecar io_counters block written by
+// RenderEngine::sidecarJson. All values are zero on engines that predate
+// the block.
+type engineIOCounters struct {
+	FileCopyCount    int64 `json:"file_copy_count"`
+	FileCopyBytes    int64 `json:"file_copy_bytes"`
+	AssetBytesCopied int64 `json:"asset_bytes_copied"`
+	InputOpenCount   int64 `json:"input_open_count"`
+	InputReopenCount int64 `json:"input_reopen_count"`
 }
 
 // segmentTiming mirrors the C++ SegmentTiming struct emitted inside

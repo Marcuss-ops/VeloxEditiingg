@@ -1,13 +1,16 @@
 #include "velox/services/media_utils.hpp"
 #include "velox/services/file_utils.hpp"
-#include "velox/services/media_probe.hpp"
 #include "json_utils.hpp"
+
+#ifdef VELOX_ENABLE_LIBAV
+#include "velox/services/media_probe.hpp"
 
 extern "C" {
 #include <libavcodec/codec_id.h>
 #include <libavcodec/avcodec.h>
 #include <libavutil/pixfmt.h>
 }
+#endif
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -155,6 +158,8 @@ static std::string scaleFilterString(const std::string& scale_mode,
     return withDecodeTelemetry(filter);
 }
 
+#ifdef VELOX_ENABLE_LIBAV
+
 double probeMediaDurationSeconds(const fs::path& mediaPath) {
     const auto probe = probeMediaInProcess(mediaPath);
     if (!probe.has_value() || !probe->duration_verified) {
@@ -256,6 +261,174 @@ FinalAudioMetadata probeFinalAudioMetadata(const fs::path& audioPath) {
         metadata.start_time_verified && std::isfinite(metadata.start_time_seconds);
     return metadata;
 }
+
+#else  // !VELOX_ENABLE_LIBAV
+
+// ── ffprobe CLI fallback (pre-LibAV behavior) ────────────────────────────
+// Default build without libav: every probe spawns a short ffprobe child.
+// FINAL_AUDIO_COPY transport verification (extradata/container) is not
+// reproducible through ffprobe, so extradata_verified/container_verified
+// stay false and resolveFinalAudioMode() always falls back to AAC encode —
+// the same safe outcome the legacy mux had before the LibAV guards landed.
+
+double probeMediaDurationSeconds(const fs::path& mediaPath) {
+    if (mediaPath.empty() || !fs::exists(mediaPath)) {
+        return 0.0;
+    }
+    std::ostringstream cmd;
+    cmd << "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "
+        << file::shellQuote(mediaPath.string());
+    const std::string output = json::trim(file::captureCommandOutput(cmd.str()));
+    if (output.empty() || output == "N/A") {
+        return 0.0;
+    }
+    try {
+        const double duration = std::stod(output);
+        return duration > 0.0 ? duration : 0.0;
+    } catch (...) {
+        return 0.0;
+    }
+}
+
+static bool parseFrameRate(const std::string& value, double& out) {
+    const auto slash = value.find('/');
+    try {
+        if (slash == std::string::npos) {
+            out = std::stod(value);
+        } else {
+            const double numerator = std::stod(value.substr(0, slash));
+            const double denominator = std::stod(value.substr(slash + 1));
+            if (denominator == 0.0) {
+                return false;
+            }
+            out = numerator / denominator;
+        }
+    } catch (...) {
+        return false;
+    }
+    return out > 0.0;
+}
+
+static bool nativeVideoStreamCopyCompatible(
+    const fs::path& clipPath,
+    int width,
+    int height,
+    int fps,
+    double requestedDuration) {
+    if (clipPath.empty() || !fs::exists(clipPath) || requestedDuration <= 0.0) {
+        return false;
+    }
+
+    std::ostringstream probe;
+    probe << "ffprobe -v error -select_streams v:0 "
+          << "-show_entries stream=codec_name,width,height,avg_frame_rate,pix_fmt "
+          << "-of csv=p=0 " << file::shellQuote(clipPath.string());
+    const std::string output = json::trim(file::captureCommandOutput(probe.str()));
+    if (output.empty()) {
+        return false;
+    }
+
+    std::istringstream fields(output);
+    std::string codec;
+    std::string widthText;
+    std::string heightText;
+    std::string pixelFormat;
+    std::string frameRateText;
+    if (!std::getline(fields, codec, ',') ||
+        !std::getline(fields, widthText, ',') ||
+        !std::getline(fields, heightText, ',') ||
+        !std::getline(fields, pixelFormat, ',') ||
+        !std::getline(fields, frameRateText, ',')) {
+        return false;
+    }
+
+    double sourceFPS = 0.0;
+    int sourceWidth = 0;
+    int sourceHeight = 0;
+    try {
+        sourceWidth = std::stoi(widthText);
+        sourceHeight = std::stoi(heightText);
+    } catch (...) {
+        return false;
+    }
+    if (!parseFrameRate(frameRateText, sourceFPS)) {
+        return false;
+    }
+
+    // The canonical clip corpus is H.264, yuv420p, 1920x1080 at 24 fps.
+    // Keep this guard conservative: copy-only callers must reject incompatible
+    // media instead of producing a mixed concat stream.
+    if (json::trim(codec) != "h264" || json::trim(pixelFormat) != "yuv420p" ||
+        sourceWidth != width || sourceHeight != height ||
+        std::abs(sourceFPS - static_cast<double>(fps)) > 0.001) {
+        return false;
+    }
+
+    const double sourceDuration = probeMediaDurationSeconds(clipPath);
+    return sourceDuration > 0.0 && requestedDuration <= sourceDuration + 0.05;
+}
+
+bool hasAudioStream(const fs::path& mediaPath) {
+    if (mediaPath.empty() || !fs::exists(mediaPath)) {
+        return false;
+    }
+    std::ostringstream cmd;
+    cmd << "ffprobe -v error -select_streams a:0"
+        << " -show_entries stream=index -of csv=p=0 "
+        << file::shellQuote(mediaPath.string());
+    return !json::trim(file::captureCommandOutput(cmd.str())).empty();
+}
+
+FinalAudioMetadata probeFinalAudioMetadata(const fs::path& audioPath) {
+    FinalAudioMetadata metadata;
+    if (audioPath.empty() || !fs::exists(audioPath)) {
+        return metadata;
+    }
+
+    std::ostringstream cmd;
+    cmd << "ffprobe -v error -select_streams a:0"
+        << " -show_entries stream=codec_name,sample_rate,channels,channel_layout,duration,start_time"
+        << " -of default=noprint_wrappers=1 "
+        << file::shellQuote(audioPath.string());
+    const std::string output = file::captureCommandOutput(cmd.str());
+    std::istringstream lines(output);
+    std::string line;
+    while (std::getline(lines, line)) {
+        line = json::trim(line);
+        const auto separator = line.find('=');
+        if (separator == std::string::npos) {
+            continue;
+        }
+        const std::string key = line.substr(0, separator);
+        const std::string value = json::trim(line.substr(separator + 1));
+        try {
+            if (key == "codec_name") metadata.codec = value;
+            else if (key == "sample_rate") metadata.sample_rate = std::stoi(value);
+            else if (key == "channels") metadata.channels = std::stoi(value);
+            else if (key == "channel_layout") metadata.channel_layout = value;
+            else if (key == "duration" && value != "N/A") {
+                metadata.duration_seconds = std::stod(value);
+                metadata.duration_verified = true;
+            } else if (key == "start_time" && value != "N/A") {
+                metadata.start_time_seconds = std::stod(value);
+                metadata.start_time_verified = true;
+            }
+        } catch (...) {
+            return FinalAudioMetadata{};
+        }
+    }
+
+    metadata.metadata_verified =
+        !metadata.codec.empty() &&
+        metadata.sample_rate > 0 &&
+        metadata.channels > 0 &&
+        !metadata.channel_layout.empty() &&
+        metadata.duration_verified && std::isfinite(metadata.duration_seconds) && metadata.duration_seconds > 0.0 &&
+        metadata.start_time_verified && std::isfinite(metadata.start_time_seconds);
+    return metadata;
+}
+
+#endif // VELOX_ENABLE_LIBAV
 
 FinalAudioDecision resolveFinalAudioMode(
     const FinalAudioMetadata& metadata,

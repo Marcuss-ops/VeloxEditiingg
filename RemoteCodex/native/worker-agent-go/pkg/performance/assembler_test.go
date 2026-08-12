@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"velox-shared/contract"
 	"velox-worker-agent/pkg/video/pipeline"
 )
 
@@ -51,6 +52,11 @@ func sampleRun() pipeline.RunMetrics {
 			ChildWaitMs:          18700,
 			TotalBytesRead:       1_800_000_000,
 			TotalBytesWritten:    1_200_000_000,
+			FileCopyCount:        3,
+			FileCopyBytes:        4_194_304,
+			AssetBytesCopied:     4_194_304,
+			InputOpenCount:       5,
+			InputReopenCount:     2,
 		},
 	}
 }
@@ -130,10 +136,27 @@ func TestAssembler_MapsIO(t *testing.T) {
 	require.Equal(t, int64(302_000_000), io.MuxBytesWritten)
 	// final_bytes_written mirrors the engine-declared total size.
 	require.Equal(t, int64(300_000_000), io.FinalBytesWritten)
-	// Engine-instrumented counters stay zero (Phase-1 target is 0 anyway).
+	// Engine-side counters from the sidecar io_counters block.
+	require.Equal(t, int64(4_194_304), io.AssetBytesCopied)
+	require.Equal(t, int64(3), io.FileCopyCount)
+	require.Equal(t, int64(4_194_304), io.FileCopyBytes)
+	require.Equal(t, int64(5), io.InputOpenCount)
+	require.Equal(t, int64(2), io.InputReopenCount)
+}
+
+func TestAssembler_EngineSidecarIOCountersAbsent(t *testing.T) {
+	// Legacy engines (no io_counters block) leave the engine-side fields
+	// zero — the receipt must not invent values.
+	run := sampleRun()
+	run.RenderMetrics.FileCopyCount = 0
+	run.RenderMetrics.FileCopyBytes = 0
+	run.RenderMetrics.AssetBytesCopied = 0
+	run.RenderMetrics.InputOpenCount = 0
+	run.RenderMetrics.InputReopenCount = 0
+
+	io := NewAssembler().Assemble(run, AssemblyContext{}).IO
 	require.Zero(t, io.AssetBytesCopied)
 	require.Zero(t, io.FileCopyCount)
-	require.Zero(t, io.FileCopyBytes)
 	require.Zero(t, io.InputOpenCount)
 	require.Zero(t, io.InputReopenCount)
 }
@@ -315,14 +338,63 @@ func TestAssembler_WorkloadAndIdentity(t *testing.T) {
 	require.Equal(t, ctx.Identity, receipt.Identity)
 	require.Equal(t, "process_video", receipt.Workload.JobType)
 	require.True(t, receipt.Workload.CopyOnly)
-	// clip_count falls back to timeline items (25) when not provided.
-	require.Equal(t, 25, receipt.Workload.ClipCount)
+}
+
+// TestAssembler_DoesNotInferClipCount pins the no-guess rule: the assembler
+// must NEVER reconstruct clip_count from telemetry (timeline_items=25 is
+// present in sampleRun). The workload comes exclusively from the caller,
+// who builds it from the CompiledRenderPlanV2.
+func TestAssembler_DoesNotInferClipCountFromTimelineItems(t *testing.T) {
+	if sampleRun().TimelineItems != 25 {
+		t.Fatalf("sample fixture lost its timeline_items; this pin lost its point")
+	}
+	receipt := NewAssembler().Assemble(sampleRun(), AssemblyContext{})
+	require.Zero(t, receipt.Workload.ClipCount, "clip_count must not be inferred from timeline items")
 }
 
 func TestAssembler_WorkloadClipCountOverrideWins(t *testing.T) {
 	ctx := AssemblyContext{Workload: WorkloadProfile{ClipCount: 30}}
 	receipt := NewAssembler().Assemble(sampleRun(), ctx)
 	require.Equal(t, 30, receipt.Workload.ClipCount)
+}
+
+// TestAssembler_WorkloadFromCompiledRenderPlan verifies the authoritative
+// workload constructor: clip count and expected duration come from the
+// CompiledRenderPlanV2 (the render_plan owner), never from telemetry.
+func TestAssembler_WorkloadFromCompiledRenderPlan(t *testing.T) {
+	plan := &contract.CompiledRenderPlanV2{
+		PlanVersion: 2,
+		DurationUS:  2_500_000,
+		Output: contract.OutputContractV2{
+			Container:  "mp4",
+			VideoCodec: "h264",
+			Width:      640,
+			Height:     360,
+			FPSNum:     30,
+			FPSDen:     1,
+		},
+		FinalAudio: contract.FinalAudioV2{Mode: contract.AudioModeFinalAudioCopy, Codec: "aac"},
+		VideoTracks: []contract.VideoTrackV2{
+			{TrackID: "main", Segments: make([]contract.VideoSegmentV2, 2)},
+			{TrackID: "overlay", Segments: make([]contract.VideoSegmentV2, 1)},
+		},
+		Assets: make([]contract.AssetRefV2, 4),
+	}
+
+	workload := WorkloadFromCompiledRenderPlan(plan)
+	require.Equal(t, int64(2_500_000), workload.DurationUS)
+	require.Equal(t, 3, workload.ClipCount)
+	require.Equal(t, 4, workload.AssetCount)
+	require.True(t, workload.FinalAudioCopy)
+	require.Equal(t, "h264", workload.VideoCodec)
+	require.Equal(t, "aac", workload.AudioCodec)
+	require.Equal(t, 640, workload.Width)
+	require.Equal(t, 360, workload.Height)
+	require.Equal(t, 30.0, workload.FPS)
+
+	// A nil plan yields an empty profile; the assembler maps it verbatim.
+	require.Zero(t, WorkloadFromCompiledRenderPlan(nil).ClipCount)
+	require.Zero(t, WorkloadFromCompiledRenderPlan(nil).DurationUS)
 }
 
 func TestAssembler_ReceiptMarshals(t *testing.T) {

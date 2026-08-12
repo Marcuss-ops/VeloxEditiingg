@@ -102,6 +102,13 @@ func mapEngineSidecar(sc *engineSidecar, m *pipeline.RenderMetrics) {
 	m.DupFrames = sc.DupFrames
 	m.DropFrames = sc.DropFrames
 	m.PhaseMS = sc.PhaseMS
+	if sc.IOCounters != nil {
+		m.FileCopyCount = sc.IOCounters.FileCopyCount
+		m.FileCopyBytes = sc.IOCounters.FileCopyBytes
+		m.AssetBytesCopied = sc.IOCounters.AssetBytesCopied
+		m.InputOpenCount = sc.IOCounters.InputOpenCount
+		m.InputReopenCount = sc.IOCounters.InputReopenCount
+	}
 	if sc.Observability != nil {
 		m.Observability = make(map[string]interface{}, len(sc.Observability))
 		for key, value := range sc.Observability {

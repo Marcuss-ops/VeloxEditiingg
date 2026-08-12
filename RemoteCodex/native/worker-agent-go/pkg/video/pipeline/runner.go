@@ -178,12 +178,12 @@ type RenderMetrics struct {
 	ProcessStartMs   int64
 	ProcessWaitMs    int64
 	TotalMs          int64
-	// Process lifecycle counters. EngineSpawnCount is 1 when the worker
-	// actually launched the C++ engine subprocess (ProcessStartMs > 0).
-	// The exec counts cover the external tool processes the engine
-	// spawned in its own process group, sampled from /proc by the native
-	// client while the engine ran. They are zero when no native render
-	// occurred.
+	// Process lifecycle counters. EngineSpawnCount is mapped from the
+	// EXPLICIT spawn fact reported by runEngineProcess (cmd.Start()
+	// succeeded) — never inferred from a timing value. The exec counts
+	// cover the external tool processes the engine spawned in its own
+	// process group, sampled from /proc by the native client while the
+	// engine ran. They are zero when no native render occurred.
 	EngineSpawnCount     int64
 	EngineSpawnMs        int64
 	ExternalProcessCount int64
@@ -191,8 +191,7 @@ type RenderMetrics struct {
 	FfprobeExecCount     int64
 	ShellExecCount       int64
 	CurlExecCount        int64
-	ChildWaitMs          int64
-	// Tree I/O totals measured from /proc/<pid>/io over the engine
+	ChildWaitMs          int64 // Tree I/O totals measured from /proc/<pid>/io over the engine
 	// process tree (engine + descendants): logical bytes read/written
 	// through read()/write() including page-cache hits, and the
 	// block-layer storage bytes after the page cache. Zero when no
@@ -201,6 +200,13 @@ type RenderMetrics struct {
 	TotalBytesWritten   int64
 	StorageBytesRead    int64
 	StorageBytesWritten int64
+	// Engine-side real I/O counters reported by the C++ engine in the
+	// sidecar io_counters block. Zero when the engine predates the block.
+	FileCopyCount    int64
+	FileCopyBytes    int64
+	AssetBytesCopied int64
+	InputOpenCount   int64
+	InputReopenCount int64
 	// PhaseMS carries the per-phase engine timings from the C++ sidecar
 	// (engine.asset_download, engine.segment_build, engine.concat, …).
 	// Nil when no sidecar was read.

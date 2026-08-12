@@ -187,14 +187,15 @@ std::string formatUtc(const std::chrono::system_clock::time_point& tp) {
 } // namespace
 
 bool IsCanonicalOrigin(const std::string& s) {
-    return s == kOriginMaster || s == kOriginWorker || s == kOriginEngine ||
-           s == kOriginFFmpeg || s == kOriginUpload || s == kOriginValidation;
+    return catalog::IsCanonicalOrigin(s);
 }
 
 bool IsCanonicalScope(const std::string& s) {
-    return s == kScopeJob || s == kScopeTask || s == kScopeAttempt ||
-           s == kScopeSegment || s == kScopeAudioTrack ||
-           s == kScopeSubtitleTrack || s == kScopeArtifact;
+    return catalog::IsCanonicalScope(s);
+}
+
+bool IsCanonicalEvent(const std::string& component, const std::string& action) {
+    return catalog::IsCatalogEvent(component, action);
 }
 
 bool IsValidJsonObject(const std::string& s) {

@@ -37,6 +37,12 @@ struct MediaProbeResult {
 
 // Opens a local media path and reads its format/stream metadata in-process
 // through libavformat/libavcodec/libavutil. No ffprobe or shell is invoked.
+//
+// Defined only when the engine is built with VELOX_ENABLE_LIBAV=ON (see
+// media_probe.cpp). Non-LibAV builds compile media_probe.cpp to an empty
+// translation unit and route every probe through the ffprobe CLI fallback
+// in media_utils.cpp, so this symbol has no callers and is intentionally
+// left undefined — calling it from a non-LibAV build fails at link time.
 std::optional<MediaProbeResult> probeMediaInProcess(const std::filesystem::path& mediaPath);
 
 } // namespace velox::media

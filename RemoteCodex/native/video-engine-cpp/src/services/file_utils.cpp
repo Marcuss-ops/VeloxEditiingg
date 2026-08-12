@@ -1,4 +1,5 @@
 #include "velox/services/file_utils.hpp"
+#include "velox/services/io_counters.hpp"
 #include "json_utils.hpp"
 #include <array>
 #include <chrono>
@@ -186,6 +187,9 @@ std::string resolveDriveFolderToFileUrl(const std::string& folderUrl) {
 bool copyFile(const fs::path& src, const fs::path& dst) {
     std::error_code ec;
     fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
+    std::error_code sizeEc;
+    const auto bytes = fs::file_size(src, sizeEc);
+    services::recordFileCopy((!ec && !sizeEc) ? static_cast<int64_t>(bytes) : 0);
     const char* diskMetrics = std::getenv("VELOX_BENCH_DISK_COPY_METRICS");
     if (diskMetrics != nullptr && std::string(diskMetrics) != "0" &&
         std::string(diskMetrics) != "false") {
@@ -333,20 +337,27 @@ bool publishAtomic(const fs::path& partial, const fs::path& target, std::string*
     return true;
 }
 
+// Forward declaration: defined after downloadAsset, which uses it.
+static int64_t assetCopyBytes(const fs::path& source);
+
 bool downloadAsset(const std::string& source, const fs::path& dest, const std::string& cacheDir) {
     if (source.empty()) {
         return false;
     }
 
     if (fs::exists(source)) {
-        return copyFile(source, dest);
+        const bool ok = copyFile(source, dest);
+        services::recordAssetCopy(assetCopyBytes(source));
+        return ok;
     }
 
     if (!cacheDir.empty()) {
         fs::create_directories(cacheDir);
         auto cachedPath = cacheAssetPath(cacheDir, source);
         if (fs::exists(cachedPath)) {
-            return copyFile(cachedPath, dest);
+            const bool ok = copyFile(cachedPath, dest);
+            services::recordAssetCopy(assetCopyBytes(cachedPath));
+            return ok;
         }
     }
 
@@ -368,16 +379,28 @@ bool downloadAsset(const std::string& source, const fs::path& dest, const std::s
     }
 
     bool ok = copyFile(tempDest, dest);
+    services::recordAssetCopy(assetCopyBytes(tempDest));
 
     if (!cacheDir.empty() && ok) {
         auto cachedPath = cacheAssetPath(cacheDir, source);
         copyFile(tempDest, cachedPath);
+        services::recordAssetCopy(assetCopyBytes(tempDest));
     }
 
     std::error_code ec;
     fs::remove(tempDest, ec);
 
     return ok;
+}
+
+// assetCopyBytes returns the byte count of a materialization copy source
+// (0 when unreadable) so downloadAsset can project its staging copies
+// into the asset_bytes_copied counter without double counting the
+// generic file_copy accounting done inside copyFile.
+static int64_t assetCopyBytes(const fs::path& source) {
+    std::error_code ec;
+    const auto bytes = fs::file_size(source, ec);
+    return ec ? 0 : static_cast<int64_t>(bytes);
 }
 
 } // namespace velox::file

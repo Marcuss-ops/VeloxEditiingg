@@ -49,6 +49,8 @@ fi
 # ── 1. Architectural invariants ─────────────────────────────────────────────
 log "check-architecture"
 ./scripts/ci/check-architecture.sh
+log "check-telemetry-catalog"
+./scripts/ci/check-telemetry-catalog.sh
 log "check-no-legacy"
 ./scripts/ci/check-no-legacy.sh
 log "test-check-no-legacy"

@@ -3,6 +3,7 @@
 #include "velox/audio/audio_plan.hpp"
 #include "render_engine_helpers.hpp"
 #include "velox/services/file_utils.hpp"
+#include "velox/services/io_counters.hpp"
 #include "velox/services/media_packet_pipeline.hpp"
 #include "velox/services/media_utils.hpp"
 #include <atomic>
@@ -151,6 +152,10 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     last_progress_ = services::EngineProgress{};
     metrics_.reset();
     recorder_.Reset();
+    // The engine CLI runs one render per process, so the process-scoped
+    // I/O counters are reset here to keep sequential in-process renders
+    // independent.
+    services::resetIOCounters();
 
     RenderResult result;
     result.output_path = plan.output_path;
@@ -242,6 +247,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     std::error_code ec_parents;
     fs::create_directories(outPath.parent_path(), ec_parents);
 
+#ifdef VELOX_ENABLE_LIBAV
     // Copy-only is a strict packet contract. It never creates per-segment
     // MP4s, never invokes FFmpeg for segment/concat/mux work, and publishes
     // the final MP4 directly through the in-process LibAV muxer. Keep this
@@ -412,6 +418,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         result.success = true;
         return result;
     }
+#endif // VELOX_ENABLE_LIBAV
 
     // 1. Build timeline segments
     reportProgress(10, "resolving_assets");
@@ -1106,6 +1113,18 @@ std::string RenderEngine::sidecarJson(const std::string& output_path) const {
     s << ",\"duration_seconds\":" << duration_seconds_.load();
     s << ",\"output_durable\":" << (output_durable_.load() ? "true" : "false");
     s << ",\"output_path\":\"" << escapeProgressJsonString(outPath.string()) << "\"";
+
+    // ── Real I/O counters (process-scoped) ──────────────────────
+    {
+        const auto& io = services::ioCounters();
+        s << ",\"io_counters\":{";
+        s << "\"file_copy_count\":" << io.file_copy_count.load();
+        s << ",\"file_copy_bytes\":" << io.file_copy_bytes.load();
+        s << ",\"asset_bytes_copied\":" << io.asset_bytes_copied.load();
+        s << ",\"input_open_count\":" << io.input_open_count.load();
+        s << ",\"input_reopen_count\":" << io.input_reopen_count.load();
+        s << "}";
+    }
 
     // ── Phase-level timings ────────────────────────────────────
     s << ",\"phase_ms\":{";

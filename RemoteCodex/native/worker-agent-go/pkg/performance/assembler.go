@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 
+	"velox-shared/contract"
 	"velox-worker-agent/pkg/video/pipeline"
 )
 
@@ -31,9 +32,11 @@ type AssemblyContext struct {
 	// the run.
 	Identity PerformanceIdentity
 
-	// Workload describes what the run actually did. Fields the caller
-	// leaves zero are filled with the closest telemetry equivalent
-	// (clip_count ← timeline items); authoritative values win.
+	// Workload describes what the run actually did. It MUST be built from
+	// the CompiledRenderPlanV2 via WorkloadFromCompiledRenderPlan — the
+	// render plan is the single owner of clip count and expected duration
+	// (Fact Owner: render_plan). The assembler NEVER guesses workload from
+	// telemetry (no timeline-items fallback): an absent value stays zero.
 	Workload WorkloadProfile
 
 	// WallMs overrides the receipt wall clock when the caller holds a
@@ -54,7 +57,9 @@ type AssemblyContext struct {
 func (a *Assembler) Assemble(run pipeline.RunMetrics, ctx AssemblyContext) *PerformanceReceiptV1 {
 	receipt := NewPerformanceReceiptV1()
 	receipt.Identity = ctx.Identity
-	receipt.Workload = assembleWorkload(run, ctx.Workload)
+	// The caller supplies the authoritative workload (built from the
+	// CompiledRenderPlanV2); the assembler never reconstructs it.
+	receipt.Workload = ctx.Workload
 	receipt.Timing = assembleTiming(run, ctx.WallMs)
 	receipt.Process = assembleProcess(run.RenderMetrics)
 	receipt.IO = DeriveIO(run.RenderMetrics)
@@ -66,15 +71,36 @@ func (a *Assembler) Assemble(run pipeline.RunMetrics, ctx AssemblyContext) *Perf
 	return receipt
 }
 
-// assembleWorkload merges the caller-provided profile with the
-// telemetry fallbacks. Caller values are never overwritten.
-func assembleWorkload(run pipeline.RunMetrics, w WorkloadProfile) WorkloadProfile {
-	if w.ClipCount <= 0 && run.TimelineItems > 0 {
-		// Lower-bound estimate: in the copy-only path each clip is one
-		// timeline item. Callers with authoritative counts override it.
-		w.ClipCount = run.TimelineItems
+// WorkloadFromCompiledRenderPlan builds the authoritative workload profile
+// from the CompiledRenderPlanV2 — the single owner of clip count and
+// expected duration (Fact Owner: render_plan). The assembler and any caller
+// that builds a WorkloadProfile must use this constructor instead of
+// reconstructing workload from pipeline telemetry (e.g. counting timeline
+// items): the plan declares what the attempt is ABOUT, telemetry describes
+// what HAPPENED. Fields the plan does not own (JobType, CopyOnly) stay zero
+// for the caller to fill.
+func WorkloadFromCompiledRenderPlan(plan *contract.CompiledRenderPlanV2) WorkloadProfile {
+	if plan == nil {
+		return WorkloadProfile{}
 	}
-	return w
+	workload := WorkloadProfile{
+		DurationUS:     plan.DurationUS,
+		AssetCount:     len(plan.Assets),
+		VideoCodec:     plan.Output.VideoCodec,
+		AudioCodec:     plan.FinalAudio.Codec,
+		Width:          plan.Output.Width,
+		Height:         plan.Output.Height,
+		FinalAudioCopy: plan.FinalAudio.Mode == contract.AudioModeFinalAudioCopy,
+	}
+	if plan.Output.FPSNum > 0 && plan.Output.FPSDen > 0 {
+		workload.FPS = float64(plan.Output.FPSNum) / float64(plan.Output.FPSDen)
+	}
+	// clip_count = total ordered video segments across all video tracks.
+	// The plan's segment list is the authoritative clip inventory.
+	for _, track := range plan.VideoTracks {
+		workload.ClipCount += len(track.Segments)
+	}
+	return workload
 }
 
 // assembleTiming maps the pipeline phase clocks and the native
@@ -146,19 +172,25 @@ func DeriveIO(rm pipeline.RenderMetrics) IOMetrics {
 //     the artifact manifest.
 //
 // asset_bytes_copied, file_copy_count/bytes and input_open/reopen_count
-// are left zero: they need engine-side instrumentation that does not
-// exist yet. The Phase-1 copy-only target for copies/opens is exactly 0,
-// so the zero values are the honest state of the world today.
+// are engine-side counters reported in the sidecar io_counters block
+// (file::copyFile/downloadAsset/avformat-open chokepoints). Zero on
+// engines that predate the block; the Phase-1 copy-only target is
+// exactly 0 copies and 0 external opens.
 func assembleIO(rm pipeline.RenderMetrics) IOMetrics {
 	muxRead, muxWritten := sumMuxPhaseBytes(rm.DetailedPhases)
 	return IOMetrics{
 		TotalBytesRead:    rm.TotalBytesRead,
 		TotalBytesWritten: rm.TotalBytesWritten,
 		AssetBytesRead:    sumSegmentSourceBytes(rm.Segments),
+		AssetBytesCopied:  rm.AssetBytesCopied,
 		TempBytesWritten:  rm.TempBytes,
 		MuxBytesRead:      muxRead,
 		MuxBytesWritten:   muxWritten,
 		FinalBytesWritten: rm.TotalSize,
+		FileCopyCount:     rm.FileCopyCount,
+		FileCopyBytes:     rm.FileCopyBytes,
+		InputOpenCount:    rm.InputOpenCount,
+		InputReopenCount:  rm.InputReopenCount,
 	}
 }
 

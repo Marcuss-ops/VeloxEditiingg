@@ -12,6 +12,7 @@
 
 #include "velox/core/render_engine.hpp"
 #include "velox/services/file_utils.hpp"
+#include "velox/services/io_counters.hpp"
 #include "velox/services/media_utils.hpp"
 #include "velox/telemetry/phase_recorder.hpp"
 
@@ -74,6 +75,19 @@ int g_fail = 0;
         std::cerr << "── sub-case: " << name << " ──\n";                   \
         ++g_pass;                                                          \
     } while (0)
+
+void testCatalogBinding() {
+    SUBCASE("generated catalog accepts known events and rejects unknown events");
+    EXPECT(vt::IsCanonicalEvent("engine.encode", "setup"),
+           "known catalog event must be discoverable");
+    EXPECT(!vt::IsCanonicalEvent("engine.encode", "invented"),
+           "unknown catalog event must be detectable");
+    const auto* descriptor = vt::catalog::FindEvent("engine.mux", "packet_write");
+    EXPECT(descriptor != nullptr, "mux packet event descriptor must exist");
+    EXPECT_EQ_STR(std::string(descriptor->kind), "counter");
+    EXPECT_EQ_STR(std::string(descriptor->unit), "count");
+    EXPECT_EQ_STR(std::string(descriptor->owner), "muxer");
+}
 
 void testBeginComplete() {
     SUBCASE("Begin/Complete measures monotonic duration + UTC stamps");
@@ -378,6 +392,34 @@ void testCompleteSidecarSchema() {
            "retry rollup emitted");
     EXPECT(std::strstr(json.c_str(), "\"wasted_download_bytes\":512") != nullptr,
            "wasted download rollup emitted");
+    EXPECT(std::strstr(json.c_str(), "\"io_counters\":{") != nullptr,
+           "io_counters block emitted");
+    EXPECT(std::strstr(json.c_str(), "\"input_open_count\":0") != nullptr,
+           "io_counters defaults to zero");
+}
+
+void testIOCountersEmission() {
+    SUBCASE("recorded I/O appears in the sidecar io_counters block");
+    velox::services::resetIOCounters();
+    velox::services::recordFileCopy(4096);
+    velox::services::recordAssetCopy(4096);
+    velox::services::recordInputOpen("/assets/clip_a.mp4");
+    velox::services::recordInputOpen("/assets/clip_a.mp4"); // reopen
+    velox::services::recordInputOpen("/assets/clip_b.mp4");
+
+    velox::core::RenderEngine engine;
+    const std::string json = engine.sidecarJson("/tmp/render-output.mp4");
+    EXPECT(std::strstr(json.c_str(), "\"file_copy_count\":1") != nullptr,
+           "one copy recorded");
+    EXPECT(std::strstr(json.c_str(), "\"file_copy_bytes\":4096") != nullptr,
+           "copy bytes recorded");
+    EXPECT(std::strstr(json.c_str(), "\"asset_bytes_copied\":4096") != nullptr,
+           "asset materialization bytes recorded");
+    EXPECT(std::strstr(json.c_str(), "\"input_open_count\":3") != nullptr,
+           "three input opens recorded");
+    EXPECT(std::strstr(json.c_str(), "\"input_reopen_count\":1") != nullptr,
+           "second open of the same path recorded as reopen");
+    velox::services::resetIOCounters();
 }
 
 void testRenderEngineIntegration() {
@@ -507,6 +549,20 @@ void testCanonicalEnums() {
     EXPECT(vt::IsCanonicalScope("attempt"), "attempt is canonical");
     EXPECT(vt::IsCanonicalScope("segment"), "segment is canonical");
     EXPECT(!vt::IsCanonicalScope("nope"), "nope is not canonical");
+
+    SUBCASE("generated language-neutral catalog parity");
+    EXPECT(vt::catalog::kSchemaVersion == 1, "catalog schema version");
+    EXPECT(vt::catalog::kEvents.size() > 100, "generated catalog is complete");
+    EXPECT(vt::catalog::IsCatalogEvent("engine.encode", "setup"),
+           "known engine event is registered");
+    EXPECT(!vt::catalog::IsCatalogEvent("engine", "invented"),
+           "unknown event is rejected by generated catalog");
+    const auto* encode = vt::catalog::FindEvent("engine.encode", "setup");
+    EXPECT(encode != nullptr, "known event descriptor is findable");
+    EXPECT_EQ_STR(std::string(encode->unit), "milliseconds");
+    EXPECT_EQ_STR(std::string(encode->aggregation), "sum");
+    EXPECT_EQ_STR(std::string(encode->cardinality), "per_segment");
+    EXPECT_EQ_STR(std::string(encode->owner), "encoder");
 }
 
 } // namespace
@@ -514,6 +570,7 @@ void testCanonicalEnums() {
 int main() {
     std::cerr << "running phase_recorder tests\n";
 
+    testCatalogBinding();
     testBeginComplete();
     testPerOriginIndexes();
     testAbortAndNormalize();
@@ -525,6 +582,7 @@ int main() {
     testAppendJsonMetadataValidationAndDetailedFields();
     testAppendJsonEscapesStrings();
     testCompleteSidecarSchema();
+    testIOCountersEmission();
     testRenderEngineIntegration();
     testCopyOnlyTelemetryDoesNotClaimVideoEncoding();
     testReset();

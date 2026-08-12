@@ -1,6 +1,14 @@
 #include "velox/services/media_packet_pipeline.hpp"
 #include "velox/services/file_utils.hpp"
+#include "velox/services/io_counters.hpp"
 #include "velox/services/media_probe.hpp"
+
+// The in-process packet copy pipeline is built only when VELOX_ENABLE_LIBAV
+// is ON. Without the flag a fail-closed stub is compiled instead: the
+// engine's copy-only packet branch is also compiled out (RenderEngine falls
+// back to the legacy segment/concat path), so this stub exists to keep the
+// symbol defined for any caller built without the flag.
+#ifdef VELOX_ENABLE_LIBAV
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -96,6 +104,10 @@ bool openInput(const fs::path& path, UniqueInputContext& result, std::string& er
         }
         return false;
     }
+    // This open is real media I/O: every successful avformat open in the
+    // packet muxer goes through this chokepoint (stream discovery in the
+    // main loop AND the readPackets reopen).
+    services::recordInputOpen(path.string());
     result.reset(raw);
     const int infoResult = avformat_find_stream_info(result.get(), nullptr);
     if (infoResult < 0) {
@@ -675,3 +687,25 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
 }
 
 } // namespace velox::media
+
+#else  // !VELOX_ENABLE_LIBAV
+
+namespace velox::media {
+
+bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
+    (void)request;
+    if (result != nullptr) {
+        *result = CopyOnlyMuxResult{};
+        result->success = false;
+        result->output_durable = false;
+        result->error =
+            "VELOX_ENABLE_LIBAV=OFF: in-process packet mux requires "
+            "libavformat/libavcodec/libavutil; rebuild with "
+            "-DVELOX_ENABLE_LIBAV=ON";
+    }
+    return false;
+}
+
+} // namespace velox::media
+
+#endif // VELOX_ENABLE_LIBAV

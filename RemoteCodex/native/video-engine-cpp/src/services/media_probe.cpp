@@ -1,4 +1,11 @@
 #include "velox/services/media_probe.hpp"
+#include "velox/services/io_counters.hpp"
+
+// The in-process MediaProbe is built only when VELOX_ENABLE_LIBAV is ON.
+// Without the flag this translation unit is empty: media_utils.cpp uses the
+// ffprobe CLI fallback for every probe, so probeMediaInProcess() has no
+// callers in a non-LibAV build (and the libav-only tests are excluded).
+#ifdef VELOX_ENABLE_LIBAV
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -79,6 +86,9 @@ std::optional<MediaProbeResult> probeOpenContext(const fs::path& mediaPath) {
         }
         return std::nullopt;
     }
+    // Every in-process probe (duration, audio stream, final-audio
+    // metadata, output verification) opens a real input through here.
+    services::recordInputOpen(mediaPath.string());
     UniqueFormatContext context(rawContext);
 
     if (avformat_find_stream_info(context.get(), nullptr) < 0) {
@@ -154,3 +164,5 @@ std::optional<MediaProbeResult> probeMediaInProcess(const fs::path& mediaPath) {
 }
 
 } // namespace velox::media
+
+#endif // VELOX_ENABLE_LIBAV

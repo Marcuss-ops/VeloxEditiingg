@@ -185,22 +185,29 @@ type IOMetrics struct {
 	TotalBytesRead    int64 `json:"total_bytes_read"`
 	TotalBytesWritten int64 `json:"total_bytes_written"`
 
+	// AssetBytesRead is the engine-declared size of every asset it bound
+	// or staged (sum of segments[].source_bytes); a file-size proxy for
+	// bytes touched from assets, not a syscall counter.
 	AssetBytesRead int64 `json:"asset_bytes_read"`
-	// AssetBytesCopied is 0 until engine-side instrumentation lands; the
-	// Phase-1 copy-only target is exactly 0, so zero is the honest value.
+	// AssetBytesCopied comes from the engine's io_counters sidecar block
+	// (asset materialization copies); 0 on older engines. The Phase-1
+	// copy-only target is exactly 0 copies.
 	AssetBytesCopied  int64 `json:"asset_bytes_copied"`
 	TempBytesWritten  int64 `json:"temp_bytes_written"`
 	MuxBytesRead      int64 `json:"mux_bytes_read"`
 	MuxBytesWritten   int64 `json:"mux_bytes_written"`
 	FinalBytesWritten int64 `json:"final_bytes_written"`
 
-	// FileCopyCount/FileCopyBytes are 0 until engine-side instrumentation
-	// lands; the Phase-1 copy-only target is 0 copies.
+	// FileCopyCount/FileCopyBytes come from the engine's io_counters
+	// sidecar block; 0 on older engines. The Phase-1 copy-only target is
+	// 0 copies.
 	FileCopyCount int64 `json:"file_copy_count"`
 	FileCopyBytes int64 `json:"file_copy_bytes"`
 
-	// InputOpenCount/InputReopenCount are 0 until engine-side
-	// instrumentation lands.
+	// InputOpenCount/InputReopenCount come from the engine's io_counters
+	// sidecar block; 0 on older engines. Reopens are re-opens of a path
+	// already opened by the same render (e.g. the copy-only muxer's
+	// stream-discovery open followed by the readPackets reopen).
 	InputOpenCount   int64 `json:"input_open_count"`
 	InputReopenCount int64 `json:"input_reopen_count"`
 }

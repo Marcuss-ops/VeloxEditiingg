@@ -22,6 +22,8 @@
 // Origin / scope are CLOSED enums mirroring the task_execution_events
 // CHECK constraints; non-canonical values are coerced to engine/attempt
 // so a drained stream can never be rejected by the master.
+#include "velox/telemetry/catalog_generated.hpp"
+
 #include <chrono>
 #include <cstdint>
 #include <map>
@@ -32,22 +34,22 @@
 
 namespace velox::telemetry {
 
-// ── Closed origin enum ─────────────────────────────────────────────────────
-inline constexpr const char* kOriginMaster = "master";
-inline constexpr const char* kOriginWorker = "worker";
-inline constexpr const char* kOriginEngine = "engine";
-inline constexpr const char* kOriginFFmpeg = "ffmpeg";
-inline constexpr const char* kOriginUpload = "upload";
-inline constexpr const char* kOriginValidation = "validation";
+// Closed vocabularies are aliases to the generated language-neutral catalog;
+// this header owns no second literal list.
+inline constexpr const char* kOriginMaster = catalog::kOriginMaster.data();
+inline constexpr const char* kOriginWorker = catalog::kOriginWorker.data();
+inline constexpr const char* kOriginEngine = catalog::kOriginEngine.data();
+inline constexpr const char* kOriginFFmpeg = catalog::kOriginFFmpeg.data();
+inline constexpr const char* kOriginUpload = catalog::kOriginUpload.data();
+inline constexpr const char* kOriginValidation = catalog::kOriginValidation.data();
 
-// ── Closed scope enum ──────────────────────────────────────────────────────
-inline constexpr const char* kScopeJob = "job";
-inline constexpr const char* kScopeTask = "task";
-inline constexpr const char* kScopeAttempt = "attempt";
-inline constexpr const char* kScopeSegment = "segment";
-inline constexpr const char* kScopeAudioTrack = "audio_track";
-inline constexpr const char* kScopeSubtitleTrack = "subtitle_track";
-inline constexpr const char* kScopeArtifact = "artifact";
+inline constexpr const char* kScopeJob = catalog::kScopeJob.data();
+inline constexpr const char* kScopeTask = catalog::kScopeTask.data();
+inline constexpr const char* kScopeAttempt = catalog::kScopeAttempt.data();
+inline constexpr const char* kScopeSegment = catalog::kScopeSegment.data();
+inline constexpr const char* kScopeAudioTrack = catalog::kScopeAudioTrack.data();
+inline constexpr const char* kScopeSubtitleTrack = catalog::kScopeSubtitleTrack.data();
+inline constexpr const char* kScopeArtifact = catalog::kScopeArtifact.data();
 
 // ── Status vocabulary (shared with task_phase_timings) ─────────────────────
 inline constexpr const char* kStatusOk = "ok";
@@ -57,6 +59,11 @@ inline constexpr const char* kStatusFailed = "failed";
 // enums above. Empty strings are NOT canonical.
 bool IsCanonicalOrigin(const std::string& s);
 bool IsCanonicalScope(const std::string& s);
+// IsCanonicalEvent exposes the generated catalog lookup to C++ producers.
+// PhaseRecorder itself remains compatibility-tolerant for legacy sidecar
+// event names; new producers should gate component/action pairs with this
+// predicate so unknown facts are detectable before recording.
+bool IsCanonicalEvent(const std::string& component, const std::string& action);
 // Validates a complete JSON object using the recorder's dependency-free
 // parser. Used by sidecar compatibility tests and metadata guards.
 bool IsValidJsonObject(const std::string& s);

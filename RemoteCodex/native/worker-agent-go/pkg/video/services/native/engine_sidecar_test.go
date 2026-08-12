@@ -80,6 +80,13 @@ func TestReadEngineSidecar_FullSchemaMapsAllTelemetry(t *testing.T) {
 			"cpu_threads": 4,
 			"parallel_group": "scene-0"
 		}],
+		"io_counters": {
+			"file_copy_count": 3,
+			"file_copy_bytes": 4194304,
+			"asset_bytes_copied": 4194304,
+			"input_open_count": 5,
+			"input_reopen_count": 2
+		},
 		"phases": [{
 			"origin": "engine",
 			"scope": "segment",
@@ -124,6 +131,14 @@ func TestReadEngineSidecar_FullSchemaMapsAllTelemetry(t *testing.T) {
 	if len(sc.Segments) != 1 || sc.Segments[0].FinishedOffsetMs != 53.0 {
 		t.Fatalf("segment timing/parallelism not preserved: %#v", sc.Segments)
 	}
+	if sc.IOCounters == nil {
+		t.Fatalf("io_counters not parsed")
+	}
+	if sc.IOCounters.FileCopyCount != 3 || sc.IOCounters.FileCopyBytes != 4194304 ||
+		sc.IOCounters.AssetBytesCopied != 4194304 || sc.IOCounters.InputOpenCount != 5 ||
+		sc.IOCounters.InputReopenCount != 2 {
+		t.Fatalf("io_counters = %+v", sc.IOCounters)
+	}
 	if len(sc.Phases) != 1 {
 		t.Fatalf("phases = %d, want 1", len(sc.Phases))
 	}
@@ -166,5 +181,30 @@ func TestMapEngineSidecar_PreservesSegmentsAndMapsPhases(t *testing.T) {
 	}
 	if mapped.Observability["quality"].(map[string]interface{})["events"] != float64(3) {
 		t.Fatalf("mapped category observability = %#v", mapped.Observability)
+	}
+}
+
+func TestMapEngineSidecar_MapsIOCounters(t *testing.T) {
+	sc := engineSidecar{
+		IOCounters: &engineIOCounters{
+			FileCopyCount:    2,
+			FileCopyBytes:    1024,
+			AssetBytesCopied: 512,
+			InputOpenCount:   6,
+			InputReopenCount: 1,
+		},
+	}
+	mapped := pipeline.RenderMetrics{}
+	mapEngineSidecar(&sc, &mapped)
+	if mapped.FileCopyCount != 2 || mapped.FileCopyBytes != 1024 || mapped.AssetBytesCopied != 512 ||
+		mapped.InputOpenCount != 6 || mapped.InputReopenCount != 1 {
+		t.Fatalf("mapped io counters = %+v", mapped)
+	}
+
+	// Nil block must leave the metrics fields zero (legacy engines).
+	legacy := pipeline.RenderMetrics{}
+	mapEngineSidecar(&engineSidecar{}, &legacy)
+	if legacy.FileCopyCount != 0 || legacy.InputOpenCount != 0 {
+		t.Fatalf("legacy sidecar must not populate io counters: %+v", legacy)
 	}
 }
