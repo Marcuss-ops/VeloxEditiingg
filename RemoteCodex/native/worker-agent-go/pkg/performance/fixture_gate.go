@@ -1,16 +1,17 @@
 package performance
 
-// fixture_gate.go — the CI deterministic gate (plan §17). On SHARED CI
-// runners the timing budgets (EvaluateFixture) are too noisy to gate
-// on, so the gate fails HARD on deterministic invariants instead:
-// execve forbidden, encode forbidden, decode forbidden, unexpected temp
-// files, unexpected artifact SHA. None of these depend on neighbor
-// load, CPU model or storage speed — they are safe on any runner.
+// fixture_gate.go — the TIER-1 deterministic gate (plan §17), safe on
+// ANY runner including shared CI. It fails HARD on deterministic
+// invariants instead of noisy timing budgets: execve forbidden, encode
+// forbidden, decode forbidden, unexpected temp files, unexpected
+// artifact SHA. None of these depend on neighbor load, CPU model or
+// storage speed.
 //
-// Distinction (the plan's two-tier gate): EvaluateFixture checks the
-// BUDGETS (wall-clock p50/p95, amplification…) and belongs on the
-// dedicated benchmark worker; CheckFixtureGate checks the INVARIANTS
-// and is the CI gate. Both reuse the same BudgetMax thresholds.
+// Two-tier split (gate_tiers.go): CheckFixtureGate is the deterministic
+// tier (normal CI); CheckPerformanceBudgets is the timing/
+// throughput/CPU/amplification tier and belongs ONLY on the dedicated
+// self-hosted benchmark worker. Both reuse the same BudgetMax
+// thresholds.
 
 import (
 	"fmt"
@@ -63,24 +64,24 @@ func CheckFixtureGate(fixture BenchmarkFixture, receipt *PerformanceReceiptV1, e
 
 	// execve forbidden: the engine must not spawn external tool
 	// processes (copy-only Phase-1: zero external execve).
-	if exceeded, enforced := enforcedExceeded(b.Architecture.ExternalExecMax, float64(receipt.Process.ExternalProcessCount)); enforced && exceeded {
+	if violated, enforced := enforcedViolated(b.Architecture.ExternalExecMax, float64(receipt.Process.ExternalProcessCount)); enforced && violated {
 		v = append(v, gateViolation("execve", b.Architecture.ExternalExecMax, receipt.Process.ExternalProcessCount,
 			"copy-only invariant: external execve forbidden"))
 	}
 	// encode forbidden.
-	if exceeded, enforced := enforcedExceeded(b.Correctness.VideoEncodeFramesMax, float64(receipt.Media.Frames)); enforced && exceeded {
+	if violated, enforced := enforcedViolated(b.Correctness.VideoEncodeFramesMax, float64(receipt.Media.Frames)); enforced && violated {
 		v = append(v, gateViolation("encode", b.Correctness.VideoEncodeFramesMax, receipt.Media.Frames,
 			"copy-only invariant: frame encoding forbidden"))
 	}
 	// decode forbidden.
-	if exceeded, enforced := enforcedExceeded(b.Correctness.VideoDecodeFramesMax, float64(receipt.Media.FramesDecoded)); enforced && exceeded {
+	if violated, enforced := enforcedViolated(b.Correctness.VideoDecodeFramesMax, float64(receipt.Media.FramesDecoded)); enforced && violated {
 		v = append(v, gateViolation("decode", b.Correctness.VideoDecodeFramesMax, receipt.Media.FramesDecoded,
 			"copy-only invariant: frame decoding forbidden"))
 	}
 	// unexpected temp files: count over budget, or ANY file when the
 	// budget is a zero invariant (the copy-only fixtures' TempSegmentFilesMax
 	// is exactly 0, so any leftover file is flagged by the name check).
-	if exceeded, enforced := enforcedExceeded(b.Architecture.TempSegmentFilesMax, float64(evidence.TempSegmentFiles)); enforced && exceeded {
+	if violated, enforced := enforcedViolated(b.Architecture.TempSegmentFilesMax, float64(evidence.TempSegmentFiles)); enforced && violated {
 		v = append(v, gateViolation("temp_segment_files", b.Architecture.TempSegmentFilesMax, int64(evidence.TempSegmentFiles),
 			"unexpected temp segment files"))
 	}

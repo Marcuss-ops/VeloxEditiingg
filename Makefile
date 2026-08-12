@@ -55,6 +55,7 @@ help:
 	@echo "  make e2e-grpc                     -- PR 3 gRPC control-plane E2E matrix (6 cases, ~90s)"
 	@echo "  make e2e-workload                 -- PR 5 full workload E2E (Hello → artifact, ~3-5 min)"
 	@echo "  make local-verify-mirror          -- reproduce the GitHub Actions pyramid locally"
+	@echo "  make benchmark-worker             -- dedicated self-hosted benchmark worker (TIER-2 performance gate)"
 	@echo "  make test-certify-fleet            -- deterministic offline fleet-certification gate"
 	@echo "  make telemetry-done                -- fail-closed gate over latest persisted worker attempts"
 	@echo "  make test-canary-worker-rollout     -- offline single-worker canary self-test"
@@ -245,6 +246,13 @@ media-smoke:
 	  JOB_DIR="$$root/subtitle-special-chars" bash tests/smoke/full_payload/subtitle_special_chars/check_subtitle_burn_in.sh; \
 	  JOB_DIR="$$root/styled-highlights" bash tests/smoke/full_payload/styled_highlights/check_styled_highlights.sh; \
 	  echo "media smoke evidence: $$root"
+
+# Dedicated SELF-HOSTED benchmark worker (plan §17). Runs the TIER-2
+# performance gate (p50/p95 wall, throughput, CPU ratio, I/O
+# amplification) that is too noisy for shared CI runners. Never wired
+# into `make verify` — normal CI stays on deterministic invariants.
+benchmark-worker:  ## Tier-2 performance gate on the dedicated benchmark worker
+	@bash scripts/benchmarks/benchmark-worker.sh
 
 verify:        ## Architecture + Go (-race) + cmake + docker (full suite)
 	./scripts/ci/verify.sh

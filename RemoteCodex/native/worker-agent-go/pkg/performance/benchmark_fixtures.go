@@ -60,20 +60,28 @@ const (
 	CacheModeCold CacheMode = "cold" // first-touch cold fetch
 )
 
-// BudgetMax is one budget threshold with an explicit Set flag.
+// BudgetMax is one budget threshold with an explicit Set flag and an
+// explicit direction.
 //
 //	Set=false → "TBD after baseline" (never enforced)
 //	Set=true  → enforced, even when Value is 0 (a real zero invariant)
+//	Min=true  → the KPI must be AT LEAST Value (violated when below);
+//	           default false = upper bound (violated when above).
 type BudgetMax struct {
 	Set   bool    `json:"set"`
 	Value float64 `json:"value"`
+	Min   bool    `json:"min,omitempty"`
 }
 
-// MaxInt64 builds an enforced integer threshold.
+// MaxInt64 builds an enforced upper-bound integer threshold.
 func MaxInt64(v int64) BudgetMax { return BudgetMax{Set: true, Value: float64(v)} }
 
-// MaxFloat builds an enforced float threshold.
+// MaxFloat builds an enforced upper-bound float threshold.
 func MaxFloat(v float64) BudgetMax { return BudgetMax{Set: true, Value: v} }
+
+// MinFloat builds an enforced lower-bound float threshold (e.g. a
+// minimum throughput); violated when actual < Value.
+func MinFloat(v float64) BudgetMax { return BudgetMax{Set: true, Value: v, Min: true} }
 
 // UnsetMax builds a "TBD after baseline" threshold that is never enforced.
 func UnsetMax() BudgetMax { return BudgetMax{} }
@@ -101,12 +109,21 @@ type ArchitectureBudget struct {
 	ExternalExecMax BudgetMax `json:"external_exec_max"`
 }
 
-// PerformanceBudget pins wall-clock ceilings. P50 is a many-run
-// aggregate; EvaluateFixture applies P95WallMSMax as the per-run upper
-// bound (a single receipt is one observation, not a distribution).
+// PerformanceBudget pins the timing/throughput/CPU ceilings. P50 is a
+// many-run aggregate (CheckPerformanceBudgets on the dedicated
+// benchmark worker); P95WallMSMax is the run-level upper bound.
+// MinThroughput is a LOWER bound (content-seconds rendered per
+// wall-second — the realtime factor: DurationSec / wall_seconds);
+// MaxCPUWallRatio caps the CPU/wall ratio (<<1 = not CPU-bound, >1 =
+// CPU-parallel). All performance budgets are TBD until the Phase-1
+// zero-spawn baseline is measured, and they are ONLY enforced on the
+// dedicated self-hosted benchmark worker (plan §17) — never on shared
+// CI runners.
 type PerformanceBudget struct {
-	P50WallMSMax BudgetMax `json:"p50_wall_ms_max"`
-	P95WallMSMax BudgetMax `json:"p95_wall_ms_max"`
+	P50WallMSMax    BudgetMax `json:"p50_wall_ms_max"`
+	P95WallMSMax    BudgetMax `json:"p95_wall_ms_max"`
+	MinThroughput   BudgetMax `json:"min_throughput"`
+	MaxCPUWallRatio BudgetMax `json:"max_cpu_wall_ratio"`
 }
 
 // IOBudget pins the byte-amplification ceilings.
@@ -193,7 +210,7 @@ func NewBenchmarkFixtureRegistry() *BenchmarkFixtureRegistry {
 			TempSegmentFilesMax: MaxInt64(0),
 			ExternalExecMax:     MaxInt64(0),
 		},
-		Performance: PerformanceBudget{P50WallMSMax: UnsetMax(), P95WallMSMax: UnsetMax()},
+		Performance: PerformanceBudget{P50WallMSMax: UnsetMax(), P95WallMSMax: UnsetMax(), MinThroughput: UnsetMax(), MaxCPUWallRatio: UnsetMax()},
 		IO:          IOBudget{WriteAmplificationMax: MaxFloat(1.5), ReadAmplificationMax: UnsetMax()},
 	}
 	r.register(BenchmarkFixture{
@@ -301,12 +318,20 @@ func (r *BenchmarkFixtureRegistry) All() []BenchmarkFixture {
 // Count returns the number of registered fixtures.
 func (r *BenchmarkFixtureRegistry) Count() int { return len(r.fixtures) }
 
-// EvaluateFixture checks a PerformanceReceiptV1 against the fixture's
-// enforced budgets and returns the violations (reuses BudgetViolation,
-// the same type CheckDerivedBudgets uses). Only thresholds with Set=true
-// are evaluated; zero invariants (Set=true, Value=0) are enforced like
-// any other threshold. TBD thresholds (Set=false) are skipped — the
-// plan pins them only after the new baseline is measured.
+// EvaluateFixture checks a SINGLE PerformanceReceiptV1 against the
+// fixture's enforced budgets and returns the violations (reuses
+// BudgetViolation, the same type CheckDerivedBudgets uses). Only
+// thresholds with Set=true are evaluated; zero invariants (Set=true,
+// Value=0) are enforced like any other threshold. TBD thresholds
+// (Set=false) are skipped — the plan pins them only after the new
+// baseline is measured.
+//
+// NOTE (two-tier gate, plan §17): this is the single-receipt budget
+// evaluation, a library/unit-test surface. The run-level performance
+// gate the dedicated benchmark worker actually runs is
+// CheckPerformanceBudgets (gate_tiers.go) — never wire EvaluateFixture
+// into shared CI: its wall-clock and amplification thresholds are too
+// noisy on shared runners.
 //
 // Scope note: artifact-SHA and temp-segment-file correctness cannot be
 // expressed by the receipt (the receipt is pre-manifest and carries no
@@ -332,21 +357,26 @@ func EvaluateFixture(fixture BenchmarkFixture, receipt *PerformanceReceiptV1) []
 }
 
 // evalThreshold appends a violation when the threshold is enforced and
-// the observed value exceeds it.
+// the observed value violates it (above an upper bound, below a
+// lower bound).
 func evalThreshold(v []BudgetViolation, kpi string, actual float64, max BudgetMax, msg string) []BudgetViolation {
-	if exceeded, enforced := enforcedExceeded(max, actual); enforced && exceeded {
+	if violated, enforced := enforcedViolated(max, actual); enforced && violated {
 		return append(v, BudgetViolation{KPI: kpi, Value: actual, Target: max.Value, Message: msg})
 	}
 	return v
 }
 
-// enforcedExceeded is the ONE place that owns the BudgetMax Set
-// semantics, shared by the budget tier (evalThreshold) and the CI gate
-// (fixture_gate.go): an unset threshold is never enforced, a set one is
-// exceeded when actual > Value.
-func enforcedExceeded(max BudgetMax, actual float64) (exceeded, enforced bool) {
+// enforcedViolated is the ONE place that owns the BudgetMax Set/Min
+// semantics, shared by the budget tier (evalThreshold), the CI gate
+// (fixture_gate.go) and the performance tier (gate_tiers.go): an unset
+// threshold is never enforced; a set upper bound is violated when
+// actual > Value; a set lower bound (Min) when actual < Value.
+func enforcedViolated(max BudgetMax, actual float64) (violated, enforced bool) {
 	if !max.Set {
 		return false, false
+	}
+	if max.Min {
+		return actual < max.Value, true
 	}
 	return actual > max.Value, true
 }

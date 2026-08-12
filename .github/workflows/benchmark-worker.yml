@@ -1,0 +1,69 @@
+name: benchmark-worker
+
+# Dedicated SELF-HOSTED benchmark worker (plan §17 / gate_tiers.go).
+#
+# This workflow is the ONLY place the TIER-2 performance gate runs:
+# p50/p95 wall clock, throughput, CPU/wall ratio and read/write
+# amplification. Those KPIs are too noisy on shared GitHub runners
+# (neighbor load, different CPU/storage, thermal state, VM scheduling),
+# so this workflow:
+#   * runs on the [self-hosted, benchmark] runner label — a
+#     self-hosted-only label that shared CI jobs (ubuntu-latest) can
+#     never use, making the split STRUCTURAL, not advisory;
+#   * is dispatched manually (workflow_dispatch) or by labeling a PR
+#     with "benchmark-worker" — never implicitly on every push.
+#
+# Normal CI (test.yml → make verify) keeps running the TIER-1
+# deterministic gate through the Go test suite only.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.25"
+
+jobs:
+  performance-gate:
+    name: Tier-2 performance gate (self-hosted benchmark worker)
+    runs-on: [self-hosted, benchmark]
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'benchmark-worker'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+        with:
+          go-version: "1.25"
+          cache: true
+          cache-dependency-path: RemoteCodex/native/worker-agent-go/go.sum
+
+      # Tier-1 plumbing proof on the dedicated worker: the deterministic
+      # gate must accept a clean synthetic receipt. (The real tier-1
+      # invariants are enforced in normal CI by the Go test suite.)
+      - name: Tier-1 deterministic gate smoke
+        working-directory: RemoteCodex/native/worker-agent-go
+        run: |
+          printf '{}\n' > /tmp/gate-receipt.json
+          printf '{}\n' > /tmp/gate-evidence.json
+          go run ./cmd/velox-fixture-gate -tier deterministic \
+            -fixture COPY_ONLY_CANONICAL_5M_V1 \
+            -receipt /tmp/gate-receipt.json \
+            -evidence /tmp/gate-evidence.json
+
+      # Tier-2 performance gate + baseline compare on the dedicated
+      # worker. Uses the stub renderer by default (loud warning inside);
+      # set VELOX_BENCH_REAL=1 once the production RenderRunner exists.
+      - name: Tier-2 performance gate + baseline
+        env:
+          VELOX_BENCH_EVIDENCE: ${{ runner.temp }}/benchmark-worker-evidence
+          VELOX_BENCH_BASELINE: ${{ runner.temp }}/benchmark-worker-baseline
+          VELOX_BENCH_KEEP: "1"
+        run: scripts/benchmarks/benchmark-worker.sh
