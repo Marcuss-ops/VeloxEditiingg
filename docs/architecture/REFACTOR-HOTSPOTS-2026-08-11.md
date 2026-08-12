@@ -318,6 +318,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - [x] Rendere fail-closed `lookupPipelineRun`: il fallback request-id/legacy
   scatta solo su `ErrPipelineRunNoRow`; errori DB o di ownership non vengono
   più trasformati in una lookup alternativa o in un falso 404.
+- [x] Rendere fail-closed `observability.SummarizeTask`: errori in live
+  runtime, cache stats e segment timings non vengono più convertiti in sezioni
+  vuote di una risposta apparentemente valida.
 
 ### P1 — Worker layering e stato globale
 

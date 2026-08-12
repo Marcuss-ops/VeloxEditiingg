@@ -169,6 +169,9 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 - [x] Pipeline lookup: i fallback tra PK, request id e forwarding legacy sono
       ammessi solo su miss tipizzati; gli errori infrastrutturali vengono
       propagati.
+- [x] Observability task detail: live runtime, cache stats e segment timings
+      propagano gli errori dei reader configurati, preservando il significato
+      di “nessuna riga” come risultato vuoto legittimo.
 - [ ] Continuare l’audit degli altri writer/proiezioni prima di chiudere la
       fase di ownership e CAS.
 

@@ -42,7 +42,10 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 		} else {
 			candidate, liveErr = s.liveAttempts.GetWorkerTaskRuntimeByJob(ctx, task.JobID)
 		}
-		if liveErr == nil && candidate != nil && candidate.TaskID == task.ID && candidate.AttemptID != "" {
+		if liveErr != nil {
+			return nil, fmt.Errorf("observability summarize live runtime: %w", liveErr)
+		}
+		if candidate != nil && candidate.TaskID == task.ID && candidate.AttemptID != "" {
 			live = candidate
 			if live.AttemptNumber > summary.AttemptCount {
 				summary.AttemptCount = live.AttemptNumber
@@ -167,7 +170,10 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 		// Cache counters are a separate typed row because they are not
 		// part of the legacy execution-metrics envelope.
 		cacheStats, cacheErr := s.attempts.GetCacheStats(ctx, a.ID)
-		if cacheErr == nil && cacheStats != nil {
+		if cacheErr != nil {
+			return nil, fmt.Errorf("observability summarize cache stats for attempt %s: %w", a.ID, cacheErr)
+		}
+		if cacheStats != nil {
 			as.CacheStats = cacheStats
 			summary.Cache.Hits += cacheStats.CacheHits
 			summary.Cache.Misses += cacheStats.CacheMisses
@@ -182,22 +188,24 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 		}
 
 		if segmentReader, ok := s.attempts.(SegmentReader); ok {
-			if segments, segmentErr := segmentReader.ListSegmentTimings(ctx, a.ID); segmentErr == nil {
-				for _, segment := range segments {
-					summary.Segments = append(summary.Segments, SegmentSnapshot{
-						AttemptID: segment.AttemptID, SegmentIndex: segment.SegmentIndex,
-						SceneID: segment.SceneID, SourceType: segment.SourceType,
-						AssetKey: segment.CacheKey, SourceURLHash: segment.SourceURLHash,
-						Codec: segment.Codec, Preset: segment.Preset,
-						DurationMS:      segment.DurationMS,
-						AssetDownloadMS: segment.AssetDownloadMS, FFmpegEncodeMS: segment.FfmpegEncodeMS,
-						SourceBytes: segment.SourceBytes, OutputBytes: segment.OutputBytes,
-						InputDurationMS: segment.InputDurationMS, OutputDurationMS: segment.OutputDurationMS,
-						FramesEncoded: segment.FramesEncoded, FramesDecoded: segment.FramesDecoded,
-						FramesComposited: segment.FramesComposited, FFmpegSpeedX: segment.FfmpegSpeedX,
-						Status: segment.Status,
-					})
-				}
+			segments, segmentErr := segmentReader.ListSegmentTimings(ctx, a.ID)
+			if segmentErr != nil {
+				return nil, fmt.Errorf("observability summarize segment timings for attempt %s: %w", a.ID, segmentErr)
+			}
+			for _, segment := range segments {
+				summary.Segments = append(summary.Segments, SegmentSnapshot{
+					AttemptID: segment.AttemptID, SegmentIndex: segment.SegmentIndex,
+					SceneID: segment.SceneID, SourceType: segment.SourceType,
+					AssetKey: segment.CacheKey, SourceURLHash: segment.SourceURLHash,
+					Codec: segment.Codec, Preset: segment.Preset,
+					DurationMS:      segment.DurationMS,
+					AssetDownloadMS: segment.AssetDownloadMS, FFmpegEncodeMS: segment.FfmpegEncodeMS,
+					SourceBytes: segment.SourceBytes, OutputBytes: segment.OutputBytes,
+					InputDurationMS: segment.InputDurationMS, OutputDurationMS: segment.OutputDurationMS,
+					FramesEncoded: segment.FramesEncoded, FramesDecoded: segment.FramesDecoded,
+					FramesComposited: segment.FramesComposited, FFmpegSpeedX: segment.FfmpegSpeedX,
+					Status: segment.Status,
+				})
 			}
 		}
 

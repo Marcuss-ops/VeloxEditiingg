@@ -51,6 +51,7 @@ type stubAttemptReader struct {
 	cacheStats   map[string]*taskattempts.AttemptCacheStats
 	listErr      error
 	phaseErr     error
+	cacheErr     error
 	metricsErr   error
 }
 
@@ -80,6 +81,9 @@ func (s *stubAttemptReader) GetMetrics(_ context.Context, attemptID string) (*ta
 }
 
 func (s *stubAttemptReader) GetCacheStats(_ context.Context, attemptID string) (*taskattempts.AttemptCacheStats, error) {
+	if s.cacheErr != nil {
+		return nil, s.cacheErr
+	}
 	return s.cacheStats[attemptID], nil
 }
 
@@ -255,6 +259,47 @@ func TestService_SummarizeTaskIncludesAttemptFailureDetails(t *testing.T) {
 	if got := result.Attempts[0].ErrorMessage; got != "asset download failed" {
 		t.Fatalf("error_message = %q, want canonical message", got)
 	}
+}
+
+func TestService_SummarizeTaskReadErrorsFailClosed(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*Service, *stubTaskReader, *stubAttemptReader) error
+	}{
+		{
+			name: "cache stats",
+			setup: func(_ *Service, _ *stubTaskReader, attempts *stubAttemptReader) error {
+				attempts.cacheErr = errors.New("cache stats unavailable")
+				return attempts.cacheErr
+			},
+		},
+		{
+			name: "live runtime",
+			setup: func(svc *Service, _ *stubTaskReader, _ *stubAttemptReader) error {
+				want := errors.New("live runtime unavailable")
+				svc.WithLiveAttempts(failingLiveAttemptReader{err: want})
+				return want
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, tasks, attempts, _, _ := newTestService()
+			tasks.tasks["T-read-error"] = &taskgraph.Task{ID: "T-read-error", JobID: "J-read-error", Status: taskgraph.StatusRunning, AttemptCount: 1}
+			attempts.attempts["T-read-error"] = []taskattempts.TaskAttempt{{ID: "A-read-error", TaskID: "T-read-error", JobID: "J-read-error", AttemptNumber: 1, WorkerID: "worker-01", Status: taskattempts.AttemptStatusRunning}}
+			want := tt.setup(svc, tasks, attempts)
+			_, err := svc.SummarizeTask(context.Background(), "T-read-error")
+			if err == nil || !errors.Is(err, want) {
+				t.Fatalf("SummarizeTask() error = %v, want wrapped %v", err, want)
+			}
+		})
+	}
+}
+
+type failingLiveAttemptReader struct{ err error }
+
+func (r failingLiveAttemptReader) GetWorkerTaskRuntimeByJob(context.Context, string) (*LiveAttempt, error) {
+	return nil, r.err
 }
 
 func TestService_Overview_NilWorkers(t *testing.T) {
