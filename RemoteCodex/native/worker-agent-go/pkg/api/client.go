@@ -186,10 +186,14 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 			backoff := retryBackoff(attempt-1, c.retryInterval)
 			logger.Warn("[%s] Retrying request (attempt %d/%d, endpoint: %s, backoff: %v, error: %v)",
 				EventAPIRetry, attempt, c.retryCount, path, backoff.Round(time.Millisecond), lastErr)
+			timer := time.NewTimer(backoff)
 			select {
 			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
 				return nil, ctx.Err()
-			case <-time.After(backoff):
+			case <-timer.C:
 			}
 		}
 		respBody, err := c.doSingleRequest(ctx, method, path, body)

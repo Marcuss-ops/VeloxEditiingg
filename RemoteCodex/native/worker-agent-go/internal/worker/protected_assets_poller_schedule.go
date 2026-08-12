@@ -48,10 +48,8 @@ func (p *ProtectedAssetsPoller) Run(ctx context.Context) error {
 		if err := p.runTickOnce(ctx, "worker.ProtectedAssetsPoller: initial tick"); err == nil {
 			break
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(100 * time.Millisecond):
+		if err := waitContextTimer(ctx, 100*time.Millisecond); err != nil {
+			return err
 		}
 	}
 
@@ -121,11 +119,23 @@ func (p *ProtectedAssetsPoller) waitForRegistration(ctx context.Context) error {
 			return nil
 		}
 		p.invalidateReadiness()
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(100 * time.Millisecond):
+		if err := waitContextTimer(ctx, 100*time.Millisecond); err != nil {
+			return err
 		}
+	}
+}
+
+// waitContextTimer waits without retaining a timer until its deadline after
+// the context has already been cancelled. This helper is used by the retry
+// loops above, where time.After would allocate a timer on every iteration.
+func waitContextTimer(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 
