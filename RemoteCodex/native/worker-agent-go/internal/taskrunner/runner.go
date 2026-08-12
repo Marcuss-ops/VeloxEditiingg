@@ -315,7 +315,7 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	}
 
 	// Phase: report - already built; mark final.
-	appendPhase(r.runPhase(rec, PhaseReport, func() error { return nil }, overallStart))
+	appendPhase(r.runPhase(rec, PhaseReport, func() error { return nil }))
 	report.Status = "succeeded"
 	report.Outputs = result.Outputs
 	// Project both legacy dotted metrics and the typed wire mirror on every
@@ -334,7 +334,7 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 // event. The recorded event reuses the marker's wall stamps and
 // duration so the task_phase_timings summary and the
 // task_execution_events detail correlate exactly.
-func (r *TaskRunner) runPhase(rec *telemetry.EventRecorder, name string, fn func() error, fallbackStart time.Time) PhaseMarker {
+func (r *TaskRunner) runPhase(rec *telemetry.EventRecorder, name string, fn func() error) PhaseMarker {
 	start := r.now()
 	var phaseResources telemetry.PhaseResourceDelta
 	var phaseSnapshot telemetry.PhaseResourceSnapshot

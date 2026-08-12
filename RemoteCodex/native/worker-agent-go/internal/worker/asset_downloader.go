@@ -210,10 +210,9 @@ func unixMillis(t time.Time) int64 {
 	return t.UnixMilli()
 }
 
-// workerFromProgressContext is intentionally a placeholder until the worker
-// context carrier is wired by the caller; the asset manager callback currently
-// receives only the telemetry report context. It returns false for contexts
-// without the worker carrier, preserving headless tests.
+// workerFromProgressContext extracts the worker carrier installed by the
+// asset-manager checkpoint hook. Contexts without that carrier are valid for
+// headless tests and simply do not emit worker-to-master progress messages.
 func workerFromProgressContext(ctx context.Context) (*Worker, bool) {
 	if ctx == nil {
 		return nil, false
