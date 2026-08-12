@@ -171,3 +171,27 @@ func TestClient_GenerateBatchScripts_Success(t *testing.T) {
 		t.Fatalf("Scripts[0].Script: got %q", resp.Scripts[0].Script)
 	}
 }
+
+func TestClient_GenerateSimpleScript_RetryKeepsIdempotencyKey(t *testing.T) {
+	var keys []string
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		keys = append(keys, r.Header.Get("Idempotency-Key"))
+		if calls == 1 {
+			http.Error(w, "temporary", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"script":"ok"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{URL: server.URL, Retries: 1})
+	_, err := client.GenerateSimpleScript(context.Background(), SimpleScriptRequest{Topic: "same"})
+	if err != nil {
+		t.Fatalf("GenerateSimpleScript() error = %v", err)
+	}
+	if calls != 2 || len(keys) != 2 || keys[0] == "" || keys[0] != keys[1] {
+		t.Fatalf("attempts=%d idempotency keys=%v, want two equal non-empty keys", calls, keys)
+	}
+}

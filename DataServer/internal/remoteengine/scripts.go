@@ -2,6 +2,8 @@ package remoteengine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -22,11 +24,12 @@ func (c *Client) GenerateSimpleScript(ctx context.Context, req SimpleScriptReque
 			Cause:   err,
 		}
 	}
+	idempotencyKey := scriptIdempotencyKey("/api/script-simple", body)
 
 	var resp *SimpleScriptResponse
 
 	retryErr := c.withRetry(ctx, func(attempt int) error {
-		r, e := c.doSimpleScriptRequest(ctx, body)
+		r, e := c.doSimpleScriptRequest(ctx, body, idempotencyKey)
 		if e != nil {
 			return e
 		}
@@ -40,8 +43,8 @@ func (c *Client) GenerateSimpleScript(ctx context.Context, req SimpleScriptReque
 	return resp, nil
 }
 
-func (c *Client) doSimpleScriptRequest(ctx context.Context, body []byte) (*SimpleScriptResponse, error) {
-	httpReq, err := c.newRequest(ctx, http.MethodPost, "/api/script-simple", body, "")
+func (c *Client) doSimpleScriptRequest(ctx context.Context, body []byte, idempotencyKey string) (*SimpleScriptResponse, error) {
+	httpReq, err := c.newRequest(ctx, http.MethodPost, "/api/script-simple", body, idempotencyKey)
 	if err != nil {
 		return nil, err
 	}
@@ -74,11 +77,12 @@ func (c *Client) GenerateBatchScripts(ctx context.Context, req BatchScriptReques
 			Cause:   err,
 		}
 	}
+	idempotencyKey := scriptIdempotencyKey("/api/script-multiple", body)
 
 	var resp *BatchScriptResponse
 
 	retryErr := c.withRetry(ctx, func(attempt int) error {
-		r, e := c.doBatchScriptRequest(ctx, body)
+		r, e := c.doBatchScriptRequest(ctx, body, idempotencyKey)
 		if e != nil {
 			return e
 		}
@@ -92,8 +96,8 @@ func (c *Client) GenerateBatchScripts(ctx context.Context, req BatchScriptReques
 	return resp, nil
 }
 
-func (c *Client) doBatchScriptRequest(ctx context.Context, body []byte) (*BatchScriptResponse, error) {
-	httpReq, err := c.newRequest(ctx, http.MethodPost, "/api/script-multiple", body, "")
+func (c *Client) doBatchScriptRequest(ctx context.Context, body []byte, idempotencyKey string) (*BatchScriptResponse, error) {
+	httpReq, err := c.newRequest(ctx, http.MethodPost, "/api/script-multiple", body, idempotencyKey)
 	if err != nil {
 		return nil, err
 	}
@@ -109,4 +113,17 @@ func (c *Client) doBatchScriptRequest(ctx context.Context, body []byte) (*BatchS
 	}
 
 	return &result, nil
+}
+
+// scriptIdempotencyKey binds retries to the exact endpoint and request body.
+// The public script helpers do not receive a caller-owned operation ID, so a
+// digest is the only stable key available at this boundary. Including the
+// endpoint prevents a simple-script request from colliding with a batch
+// request that happens to serialize to the same JSON.
+func scriptIdempotencyKey(endpoint string, body []byte) string {
+	h := sha256.New()
+	_, _ = h.Write([]byte(endpoint))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write(body)
+	return "velox-script-" + hex.EncodeToString(h.Sum(nil))
 }
