@@ -96,6 +96,26 @@ func TestAssembleFromSnapshot_NilIsZeroReceipt(t *testing.T) {
 	}
 }
 
+func TestAssembleFromSnapshot_CoverageDistinguishesUnavailableFromZero(t *testing.T) {
+	snapshot := &attempttelemetry.AttemptSnapshot{
+		Resources: attempttelemetry.RawExecutionMetrics{
+			TelemetryCoverageJSON: `{"cpu":true,"memory":false,"disk":true,"network":false,"cgroup":true,"process_tree":true}`,
+			TelemetryCPUSource:    "cgroup_v2",
+			TelemetryComplete:     false,
+		},
+	}
+	receipt := AssembleFromSnapshot(snapshot)
+	if receipt.Coverage == nil {
+		t.Fatal("coverage projection is nil")
+	}
+	if !receipt.Coverage.CPU || receipt.Coverage.Memory || !receipt.Coverage.Disk || receipt.Coverage.Network {
+		t.Fatalf("coverage = %+v", *receipt.Coverage)
+	}
+	if receipt.Memory.PeakRSSBytes != 0 || receipt.IO.TotalBytesRead != 0 {
+		t.Fatalf("unavailable resource facts must remain zero: memory=%+v io=%+v", receipt.Memory, receipt.IO)
+	}
+}
+
 func TestAssembleFromSnapshot_JSONRoundTrips(t *testing.T) {
 	snapshot := &attempttelemetry.AttemptSnapshot{
 		Identity: attempttelemetry.AttemptIdentity{AttemptID: "rt"},

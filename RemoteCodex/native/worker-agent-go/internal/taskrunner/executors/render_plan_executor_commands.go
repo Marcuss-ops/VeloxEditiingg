@@ -107,7 +107,11 @@ func runCommandExecutor(ctx context.Context, e *renderPlanExecutor, spec executo
 		detail := fmt.Errorf("%w (exit_code=%d signal=%v)", runErr, result.ExitCode, result.TerminatedBySignal)
 		return executor.ExecutionResult{
 			Status: "failed", ErrorCode: "command_failed", ErrorDetail: detail.Error(),
-			RawMetrics: rawMetrics, Metrics: map[string]interface{}{"ffmpeg_profile": profile},
+			RawMetrics: rawMetrics, Metrics: func() map[string]interface{} {
+				projection := newLegacyMetricsProjection()
+				projection.Set("ffmpeg_profile", profile)
+				return projection.Map()
+			}(),
 			StartedAt: started, CompletedAt: time.Now().UTC(),
 		}, nil
 	}
@@ -120,22 +124,21 @@ func runCommandExecutor(ctx context.Context, e *renderPlanExecutor, spec executo
 			StartedAt: started, CompletedAt: time.Now().UTC(),
 		}, nil
 	}
-	metrics := map[string]interface{}{
-		"command_plan":       cp.Canonical(),
-		"render_plan_sha256": cp.PlanSHA256,
-		"ffmpeg_profile":     profile,
-	}
+	metrics := newLegacyMetricsProjection()
+	metrics.Set("command_plan", cp.Canonical())
+	metrics.Set("render_plan_sha256", cp.PlanSHA256)
+	metrics.Set("ffmpeg_profile", profile)
 	// Determinism chain on the wire: when the master delivered the compiled
 	// plan (Fase D), surface its identity so the attempt report shows which
 	// compiled plan drove this command. Additive — absent payloads emit none.
 	if compiled := compiledPlanEvidence(spec); compiled != nil {
 		for key, value := range compiled {
-			metrics[key] = value
+			metrics.Set(key, value)
 		}
 	}
 	return executor.ExecutionResult{
 		Status: "succeeded", Outputs: []executor.ArtifactRef{artifact},
-		RawMetrics: rawMetrics, Metrics: metrics,
+		RawMetrics: rawMetrics, Metrics: metrics.Map(),
 		StartedAt: started, CompletedAt: time.Now().UTC(),
 	}, nil
 }

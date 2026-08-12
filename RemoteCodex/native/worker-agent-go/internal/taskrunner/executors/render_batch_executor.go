@@ -131,7 +131,7 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 	}
 	audioResolveStarted := time.Now()
 	audioErr := validateMediaFile(e.probe, ctx, bindings[plan.FinalAudio.AssetID].Path, "final audio", plan.DurationUS, false, true, &plan.FinalAudio)
-	obs.metrics["final_audio_resolve_ms"] = time.Since(audioResolveStarted).Milliseconds()
+	obs.metrics.Set("final_audio_resolve_ms", time.Since(audioResolveStarted).Milliseconds())
 	if audioErr != nil {
 		obs.finish(assetResolution, telemetry.StatusFailed, "FINAL_AUDIO_INVALID", audioErr)
 		return obs.failure(started, "FINAL_AUDIO_INVALID", audioErr), nil
@@ -184,14 +184,14 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 	obs.finish(mux, telemetry.StatusOK, "", nil)
 
 	metrics := obs.metrics
-	metrics["compiled_asset_count"] = int64(len(plan.Assets))
-	metrics["audio_mix_count"] = int64(0)
-	metrics["audio_encode_count"] = int64(0)
-	metrics["final_audio_copy"] = int64(1)
-	metrics["video_only_bytes"] = visualArtifact.SizeBytes
-	metrics["final_output_bytes"] = finalArtifact.SizeBytes
-	metrics["ffmpeg_visual_profile"] = visualProfile
-	metrics["ffmpeg_mux_profile"] = muxProfile
+	metrics.Set("compiled_asset_count", int64(len(plan.Assets)))
+	metrics.Set("audio_mix_count", int64(0))
+	metrics.Set("audio_encode_count", int64(0))
+	metrics.Set("final_audio_copy", int64(1))
+	metrics.Set("video_only_bytes", visualArtifact.SizeBytes)
+	metrics.Set("final_output_bytes", finalArtifact.SizeBytes)
+	metrics.Set("ffmpeg_visual_profile", visualProfile)
+	metrics.Set("ffmpeg_mux_profile", muxProfile)
 	obs.info("render_batch.succeeded", map[string]interface{}{"compiled_asset_count": int64(len(plan.Assets)), "final_audio_copy": int64(1)})
 
 	obs.ensureRawMetrics()
@@ -204,7 +204,7 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 	obs.rawMetrics.ConcatMode = "stream_copy"
 	return executor.ExecutionResult{
 		Status: "succeeded", Outputs: []executor.ArtifactRef{finalArtifact},
-		RawMetrics: obs.rawMetrics, Metrics: metrics, StartedAt: started, CompletedAt: time.Now().UTC(),
+		RawMetrics: obs.rawMetrics, Metrics: metrics.Map(), StartedAt: started, CompletedAt: time.Now().UTC(),
 	}, nil
 }
 
@@ -417,14 +417,14 @@ type renderBatchObservability struct {
 	planSHA          string
 	timelineSHA      string
 	timelineRevision int64
-	metrics          map[string]interface{}
+	metrics          *legacyMetricsProjection
 	rawMetrics       *telemetry.RawExecutionMetrics
 }
 
 func newRenderBatchObservability(execCtx executor.ExecutionContext, planSHA string) *renderBatchObservability {
 	obs := &renderBatchObservability{
 		planSHA: planSHA,
-		metrics: make(map[string]interface{}),
+		metrics: newLegacyMetricsProjection(),
 	}
 	if execCtx != nil {
 		obs.logger = execCtx.Logger()
@@ -547,13 +547,13 @@ func (o *renderBatchObservability) finish(phase *renderBatchPhase, status, code 
 	}
 	switch phase.stage {
 	case "validation":
-		o.metrics["render_plan_validate_ms"] = duration
+		o.metrics.Set("render_plan_validate_ms", duration)
 	case "asset_resolution":
-		o.metrics["compiled_asset_resolve_ms"] = duration
+		o.metrics.Set("compiled_asset_resolve_ms", duration)
 	case "visual_render":
-		o.metrics["visual_execute_ms"] = duration
+		o.metrics.Set("visual_execute_ms", duration)
 	case "final_mux":
-		o.metrics["final_mux_ms"] = duration
+		o.metrics.Set("final_mux_ms", duration)
 	}
 	if phase.handle == nil {
 		return
@@ -584,7 +584,7 @@ func (o *renderBatchObservability) failure(started time.Time, code string, err e
 	}
 	return executor.ExecutionResult{
 		Status: "failed", ErrorCode: code, ErrorDetail: detail,
-		RawMetrics: o.rawMetrics, Metrics: o.metrics,
+		RawMetrics: o.rawMetrics, Metrics: o.metrics.Map(),
 		StartedAt: started, CompletedAt: time.Now().UTC(),
 	}
 }

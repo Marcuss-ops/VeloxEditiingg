@@ -12,8 +12,10 @@ row explicitly says so.
 
 ## 1. Current verdict
 
-Velox already has a strong event-taxonomy SSOT, but not yet one universal
-telemetry SSOT for every metric:
+The worker execution path now has one canonical attempt telemetry SSOT. The
+shared catalog, recorder, snapshot, receipt builder, and sink registries are
+the authoritative spine; compatibility maps and operational counters are
+projections or explicitly scoped legacy surfaces:
 
 - `shared/telemetry/schema/catalog.json` is the canonical **language-neutral
   event taxonomy** for the shared Go/C++ wire contract. Go loads it through
@@ -28,11 +30,15 @@ telemetry SSOT for every metric:
   target-structure pass; it is a transport-side emitter, not a second
   taxonomy).
 - `AttemptTelemetrySession` is the authoritative worker collector for host,
-  cgroup, process-tree, and I/O resource observations. Its
-  `ApplyToMap` method is a compatibility adapter into the legacy report map.
-- `PerformanceReceiptAssembler` is the only current receipt constructor, but
-  it consumes `pipeline.RunMetrics` and sidecar data rather than an
-  `AttemptSnapshot` built directly from the EventRecorder.
+  cgroup, process-tree, and I/O resource observations. Its resource facts and
+  executor-owned raw facts are merged into one `AttemptSnapshot` before any
+  sink runs.
+- `EventRecorder` is the append-only per-attempt journal and
+  `AttemptSnapshot` is the immutable projection boundary. `CollectorRegistry`
+  and `SinkRegistry` are the only attempt composition points.
+- `PerformanceReceiptAssembler` is the only receipt constructor. Both the
+  legacy `RunMetrics` adapter and the snapshot adapter feed the common builder
+  in `pkg/performance/receipt_builder.go`, which invokes `Derive` exactly once.
 - The Master has a separate canonical **Prometheus metric-name catalog** in
   `DataServer/internal/metrics/catalog.go`. This is a catalog of exported
   metric families, not the shared event taxonomy.
@@ -40,30 +46,28 @@ telemetry SSOT for every metric:
   `IngestTaskResultAtomic`; it persists the typed report, event timeline,
   summaries, and read-model rows in one transaction.
 
-Therefore the present shape is best described as:
+Therefore the worker execution shape is:
 
 ```text
 shared event taxonomy
         |
         +--> worker EventRecorder --------------------+
         |                                               |
-        +--> C++ PhaseRecorder -> sidecar -> Go map ----+--> TaskResult
+        +--> C++ emitter -> sidecar -> Go raw facts ----+
         |                                               |
-        +--> AttemptTelemetrySession -> typed/map ------+
+        +--> AttemptTelemetrySession ------------------+--> AttemptSnapshot
                                                         |
-                                                        v
+              +----------------------+-----------------+----------------+
+              v                      v                 v                v
+       PerformanceReceipt     Prometheus          TaskResult       Benchmark
+              |                      |                 |                |
+              +----------------------+-----------------+----------------+
                                              Master atomic ingest
                                                         |
-                     +------------------+---------------+------------------+
-                     v                  v                                  v
-             append-only SQL      typed SQL read models              raw report
-                     |                  |                                  |
-                     +---------> Prometheus projection              audit/replay
-                     |
-                     +---------> performance queries / dashboards
+                              SQL read models / dashboards / history
 
-worker-local PrometheusMetrics and receipt assembly currently also consume
-some of the same execution lifecycle facts outside this single journal.
+Worker-lifetime operational Prometheus calls remain outside this attempt
+spine by design; they are not allowed to author attempt facts or receipt KPIs.
 ```
 
 ## 2. End-to-end execution path
@@ -162,8 +166,9 @@ value is a projection unless noted otherwise.
 | Task/attempt terminal status | TaskRunner reports the outcome; Master owns accepted terminal state | worker `executeTask` -> `IngestTaskResultAtomic` | TaskResult, `task_attempts`, job roll-up, compute outcome metrics |
 | Artifact bytes and final SHA | Master verified artifact/finalization path | artifact upload/finalization store code | Attempt render identity, output artifact rows, receipt/output fields, dashboards |
 | Raw worker report | Worker `submitTaskResult` serialization | `task_result_builder.go` | `task_attempt_reports.raw_report_json`, replay/audit tooling |
-| Performance receipt | `PerformanceReceiptAssembler` only | `pkg/performance/assembler.go` | `PerformanceReceiptV1` JSON / benchmark artifacts |
-| Derived ratios and benchmark KPIs | Current sources are distributed | Receipt fields, `taskattempts` methods, Master collector, SQL rollups | `PerformanceReceiptV1.Derived`, Prometheus gauges, `render_performance_daily`, Grafana |
+| Performance receipt | `PerformanceReceiptAssembler` only | `pkg/performance/assembler.go`, `pkg/performance/receipt_builder.go` | `PerformanceReceiptV1` JSON / benchmark artifacts |
+| Worker derived ratios and benchmark KPIs | `pkg/performance.Derive` | `pkg/performance/derive.go` via the common receipt builder | `PerformanceReceiptV1.Derived`, worker benchmark projections, worker sink inputs |
+| Master scorecard ratios | Master read-model projection | `DataServer/internal/taskattempts/report_ratios.go` | Master Prometheus gauges and SQL rollups; never fed back into the worker receipt |
 | Master worker-resource gauges | Master `WorkerResourceSink` / `Collector.RecordWorker` | `handler_workers_metrics.go` -> `collector_workers.go` | Master Prometheus registry, worker registry extras |
 | Master attempt/engine metrics | Master metrics supervisor | `collector_attempts.go`, `collector_engine.go`, `supervisor_tick.go` | Master Prometheus registry and daily SQL rollups |
 
@@ -173,11 +178,11 @@ value is a projection unless noted otherwise.
 
 | Projection/sink | Input | Output | Authority status |
 | --- | --- | --- | --- |
-| `AttemptTelemetrySession.ApplyToMap` | Typed `AttemptTelemetry` | `report.Metrics map[string]interface{}` with dotted legacy keys | Compatibility adapter; must not become a producer API. |
+| `AttemptTelemetrySession.ApplyToMap` | Typed `AttemptTelemetry` | `report.Metrics map[string]interface{}` with dotted legacy keys | One-way compatibility adapter; must not become a producer API. |
 | `TypedMetricsFromMap` fallback | Legacy report map | Typed execution metrics | Compatibility reverse bridge used for legacy/failure paths; this is the main bidirectional-contract risk. |
 | `TaskExecutionReport.DetailedPhases` | Executor detailed phases + `EventRecorder` snapshot | Ordered report slice | Projection of event journal plus native transport data. |
 | `CanonicalAttemptEvents` | Recorder snapshot | Compact heartbeat lifecycle events | Read-only live view; not a second event journal. |
-| `PerformanceReceiptAssembler` | `pipeline.RunMetrics`, sidecar mappings, process counters, caller context | `PerformanceReceiptV1` | Final typed artifact; not intended as a mutable metric store. |
+| `PerformanceReceiptAssembler` | `RunMetrics` or immutable `AttemptSnapshot` adapters | `PerformanceReceiptV1` | Final typed artifact; both paths use the common builder and `Derive`. |
 | `telemetry.PrometheusMetrics` | Worker lifecycle/cache/upload/ack calls | Worker-local `/metrics` text | Directly updated by many worker lifecycle helpers; not currently derived solely from the EventRecorder. |
 | TaskResult outbox | Serialized `pb.TaskResult` | Durable retry payload | Transport durability, not telemetry authority. |
 
@@ -227,16 +232,16 @@ outside this execution path have been exhaustively enumerated.
   closed. The PhaseRecorder aliases its origin/scope vocabulary to the
   generated header rather than declaring literals locally.
 
-### D2 — Typed resource metrics and legacy map are both active contracts
+### D2 — Typed resource metrics and legacy map are an explicit one-way boundary
 
-- Source: `AttemptTelemetrySession` returns typed fields.
-- Adapter: `ApplyToMap` writes dotted keys.
-- Reverse compatibility: `TypedMetricsFromMap` can reconstruct typed fields.
-- Consumer: `task_execution.go` writes both `report.Metrics` and
-  `report.TypedMetrics` before `TaskResult` serialization.
-- Impact: a future producer can update the map directly and bypass typed
-  ownership; a disagreement between the two representations has no single
-  conflict policy.
+- Source: `AttemptTelemetrySession` and executor raw facts are merged into the
+  typed attempt snapshot before projections run.
+- Adapter: `ApplyToMap` and `legacyMetricsProjection` write dotted keys only at
+  compatibility boundaries.
+- Reverse compatibility: `TypedMetricsFromMap` remains only for legacy/failure
+  paths and is not part of the normal attempt pipeline.
+- Guard: direct legacy map indexing in executor production code is rejected by
+  `scripts/ci/check-telemetry-architecture.sh`.
 
 ### D3 — Event journal and phase/summary views coexist by design, but need a
 clear authority boundary
@@ -250,29 +255,21 @@ clear authority boundary
   writes a phase summary or heartbeat lifecycle event independently would
   create a second truth. The current map documents the intended direction.
 
-### D4 — Receipt input is not yet the recorder snapshot
+### D4 — Receipt adapters converge at one snapshot-compatible builder
 
-`PerformanceReceiptAssembler.Assemble` consumes `pipeline.RunMetrics`, which
-contains `PhaseMS`, `DetailedPhases`, segments, process counters, and resource
-fields. It does not consume a single immutable `AttemptSnapshot` from
-`EventRecorder` plus `AttemptTelemetrySession`. The receipt is therefore a
-canonical final artifact constructor, but not yet a pure projection of one
-journal.
+The normal attempt path stops the telemetry session, merges executor raw facts,
+and projects an immutable `AttemptSnapshot` to the receipt sink. The legacy
+`RunMetrics` path remains for callers that predate the session, but it is an
+input adapter only: both paths converge in `receipt_builder.go`, which calls
+`Derive` once and assigns the canonical derived section.
 
-There is also an implementation/documentation gap in the current receipt
-shape: `PerformanceReceiptV1` declares `DerivedMetrics`, while
-`Assembler.Assemble` currently populates timing, process, I/O, media, phases,
-and segments but does not calculate or assign `receipt.Derived`. The field is
-therefore a reserved/zero-valued projection until a canonical derivation step
-is wired.
+### D5 — Legacy receipt inputs are explicitly fail-closed
 
-### D5 — Receipt assembler contains compatibility inference
-
-`assembleWorkload` fills `ClipCount` from `run.TimelineItems` when the caller
-leaves it zero. `assemblePhases` falls back from detailed sidecar phases to
-`PhaseMS`. These fallbacks preserve legacy workers, but they are inference or
-reconstruction paths and should not be mistaken for independently observed
-facts.
+The normal snapshot path never infers workload or clip count from telemetry;
+it uses the compiled plan owner. Legacy `RunMetrics` callers must provide the
+workload context explicitly, and absent facts remain zero/not measured. Phase
+fallbacks preserve older sidecars only at the compatibility adapter and are
+not additional authoritative timers.
 
 ### D6 — Worker and Master expose overlapping Prometheus family names
 
@@ -313,20 +310,20 @@ This is intentional denormalized read-model storage, not five authoritative
 producers. The atomic ingest transaction and report hash are the consistency
 boundary.
 
-### D9 — Derived KPI formulas are distributed
+### D9 — Master read-model ratios remain separate projections
 
-The codebase currently has at least these derived surfaces:
+The repository has these derived surfaces with distinct boundaries:
 
-- `PerformanceReceiptV1.Derived` fields and assembler comments;
+- `PerformanceReceiptV1.Derived`, calculated by worker `pkg/performance.Derive`;
 - `taskattempts.AttemptMetrics` ratio helpers;
 - Master `Collector.RecordAttempt` normalized gauges;
 - Master `render_performance_daily` rollup calculations;
 - Grafana/SQL dashboard expressions.
 
-They consume related raw rows but are not all visibly routed through one
-`DerivedMetricsCalculator`. In particular, the receipt's `Derived` section is
-currently not populated by `Assembler.Assemble`, as noted in D4. This is the
-clearest remaining semantic-SSOT gap for benchmark KPIs.
+Master scorecard ratios consume persisted Master read-model rows and are
+deliberately not authoritative inputs to the worker receipt. They must remain
+projections and must not be duplicated in worker producers; the architecture
+gate keeps the worker formula owner singular.
 
 ### D10 — Master attempt counters require supervisor-level deduplication
 
@@ -374,11 +371,10 @@ Prometheus / receipt / dashboards
         +--> read-only consumers; no return edge to recorder or TaskRunner
 ```
 
-The intended no-return-edge rule is mostly present at the Master boundary:
-`IngestTaskResultAtomic` owns terminal persistence, and dashboards read
-projections. The worker still has separate direct lifecycle calls into
-`PrometheusMetrics`, and receipt assembly is fed from `RunMetrics`, so the
-worker-side graph is not yet a single recorder-only pipeline.
+The no-return-edge rule is enforced at the attempt boundary:
+`AttemptSnapshot` is cloned per sink, so projections cannot mutate raw facts or
+affect rendering. `IngestTaskResultAtomic` remains the Master terminal
+persistence boundary, and dashboards read projections only.
 
 ## 8. Evidence and verification notes
 

@@ -145,6 +145,27 @@ func TestAttemptTelemetrySession_DrivesPipeline(t *testing.T) {
 	}
 }
 
+func TestAttemptTelemetrySession_PreservesExecutorRawFactsInSnapshot(t *testing.T) {
+	session := NewAttemptTelemetrySession(nil)
+	pipeline := NewAttemptPipeline()
+	capture := &captureSink{}
+	pipeline.AddCollector(&AttemptResourceCollector{Session: session})
+	pipeline.AddSink(capture)
+	session.BindPipeline(pipeline)
+	session.SetExecutorRawMetrics(&RawExecutionMetrics{
+		OutputBytes:   1234,
+		FramesDecoded: 8,
+	})
+
+	session.Start(context.Background())
+	session.Stop(context.Background())
+
+	raw := capture.snapshot.RawEnvelope().Resources
+	if raw.OutputBytes != 1234 || raw.FramesDecoded != 8 {
+		t.Fatalf("executor raw facts were not preserved in snapshot: %+v", raw)
+	}
+}
+
 func TestAttemptTelemetrySession_NilPipelineKeepsLegacyBehavior(t *testing.T) {
 	session := NewAttemptTelemetrySession(nil)
 	ctx := context.Background()

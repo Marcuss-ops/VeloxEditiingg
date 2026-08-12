@@ -25,11 +25,10 @@ import (
 // cache delta. Sections the snapshot does not carry (workload, mux bytes,
 // scheduling) stay zero until their collector lands.
 func AssembleFromSnapshot(snapshot *attempttelemetry.AttemptSnapshot) *PerformanceReceiptV1 {
-	receipt := NewPerformanceReceiptV1()
 	if snapshot == nil {
-		return receipt
+		return assemblePerformanceReceipt(receiptAssemblyInput{})
 	}
-	receipt.Identity = PerformanceIdentity{
+	identity := PerformanceIdentity{
 		JobID:     snapshot.Identity.JobID,
 		AttemptID: snapshot.Identity.AttemptID,
 		WorkerID:  snapshot.Identity.WorkerID,
@@ -42,8 +41,7 @@ func AssembleFromSnapshot(snapshot *attempttelemetry.AttemptSnapshot) *Performan
 	if wall <= 0 {
 		wall = int64(raw.Resources.WallClockSeconds * 1000)
 	}
-	receipt.Timing.WallMs = wall
-	receipt.Process = ProcessMetrics{
+	process := ProcessMetrics{
 		EngineSpawnCount:         raw.Process.EngineSpawnCount,
 		EngineExternalSpawnCount: raw.Process.EngineExternalSpawnCount,
 		EngineFfmpegSpawnCount:   raw.Process.EngineFfmpegSpawnCount,
@@ -51,49 +49,69 @@ func AssembleFromSnapshot(snapshot *attempttelemetry.AttemptSnapshot) *Performan
 		EngineShellSpawnCount:    raw.Process.EngineShellSpawnCount,
 		EngineCurlSpawnCount:     raw.Process.EngineCurlSpawnCount,
 	}
-	receipt.CPU = CPUMetrics{
+	cpu := CPUMetrics{
 		WallMs:            wall,
 		CPUTotalMs:        raw.Resources.CpuTimeMs,
 		EngineCPUUserMs:   raw.Process.EngineCPUUserMs,
 		EngineCPUSystemMs: raw.Process.EngineCPUSystemMs,
 	}
-	receipt.Scheduling = SchedulingMetrics{
+	var coverageProjection *TelemetryCoverage
+	if coverage := raw.Resources.CoverageMap(); coverage != nil {
+		coverageProjection = &TelemetryCoverage{
+			CPU:         coverage["cpu"],
+			Memory:      coverage["memory"],
+			Disk:        coverage["disk"],
+			Network:     coverage["network"],
+			Cgroup:      coverage["cgroup"],
+			ProcessTree: coverage["process_tree"],
+			CPUSource:   raw.Resources.TelemetryCPUSource,
+			Complete:    raw.Resources.TelemetryComplete,
+		}
+	}
+	readBytes := raw.Resources.DiskReadBytes
+	writeBytes := raw.Resources.DiskWriteBytes
+	outputBytes := raw.Resources.OutputBytes
+	if outputBytes == 0 {
+		outputBytes = raw.Resources.OutputFileSize
+	}
+	scheduling := SchedulingMetrics{
 		VoluntaryContextSwitches:   raw.Process.EngineVoluntaryContextSwitches,
 		InvoluntaryContextSwitches: raw.Process.EngineInvoluntaryContextSwitches,
 		MinorPageFaults:            raw.Process.EngineMinorPageFaults,
 		MajorPageFaults:            raw.Process.EngineMajorPageFaults,
 	}
-	receipt.IO = IOMetrics{
-		TotalBytesRead:    raw.Resources.DiskReadBytes,
-		TotalBytesWritten: raw.Resources.DiskWriteBytes,
-		FinalBytesWritten: raw.Resources.OutputBytes,
+	io := IOMetrics{
+		TotalBytesRead:    readBytes,
+		TotalBytesWritten: writeBytes,
+		FinalBytesWritten: outputBytes,
 	}
-	receipt.Memory = MemoryMetrics{PeakRSSBytes: raw.Resources.PeakRssBytes}
+	memory := MemoryMetrics{PeakRSSBytes: raw.Resources.PeakRssBytes}
 	// Media facts are projected from the canonical journal: output frames
 	// and bytes observed on media-producer events. Fine-grained decode/
 	// encode breakdowns are engine-sidecar-owned and not in the snapshot.
-	receipt.Media = MediaMetrics{
+	media := MediaMetrics{
 		Frames:      raw.Media.FramesOut,
 		OutputBytes: raw.Media.BytesOut,
 	}
-	receipt.Phases = phasesFromSnapshot(snapshot.Events)
-	// Derived KPIs: one call, one definition — the single
-	// DerivedMetricsCalculator. Workload (clip count) and external process
-	// counts are render-plan/ProcessRunner-owned facts not yet carried by
-	// the snapshot; they stay zero until their collectors land.
-	derivedRaw := RawMetrics{
-		WallMs:            wall,
-		Phases:            receipt.Phases,
-		CPUWallMS:         raw.Resources.CpuTimeMs,
-		TotalBytesRead:    raw.Resources.DiskReadBytes,
-		TotalBytesWritten: raw.Resources.DiskWriteBytes,
-		OutputBytes:       raw.Resources.OutputBytes,
+	if media.Frames == 0 {
+		media.Frames = raw.Resources.FramesEncoded
 	}
-	receipt.Derived = Derive(derivedRaw)
-	// CPUWallRatio uses the same Deriver output as the receipt's derived
-	// section; no second ratio formula is allowed in this projection.
-	receipt.CPU.CPUWallRatio = receipt.Derived.CPUWallRatio
-	return receipt
+	if media.OutputBytes == 0 {
+		media.OutputBytes = outputBytes
+	}
+	phases := phasesFromSnapshot(snapshot.Events)
+	timing := TimingMetrics{WallMs: wall}
+	if duration, ok := snapshot.RenderDurationMS(); ok {
+		// The event/span is the authoritative render timer for the snapshot.
+		// Keep all other timing fields at their measured value (or zero).
+		timing.RenderMs = duration
+	}
+	return assemblePerformanceReceipt(receiptAssemblyInput{
+		Identity: identity, Timing: timing, Process: process,
+		CPU: cpu, IO: io, Media: media, Memory: memory, Scheduling: scheduling,
+		Phases: phases, Coverage: coverageProjection,
+		Raw: RawMetrics{WallMs: wall, Phases: phases, CPUWallMS: raw.Resources.CpuTimeMs, TotalBytesRead: readBytes, TotalBytesWritten: writeBytes, OutputBytes: outputBytes},
+	})
 }
 
 // phasesFromSnapshot maps the canonical journal rows onto the receipt

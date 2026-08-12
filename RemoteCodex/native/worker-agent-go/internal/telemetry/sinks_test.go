@@ -26,6 +26,26 @@ func TestSinkRegistry_PublishesAllSinksAndAggregatesErrors(t *testing.T) {
 	}
 }
 
+func TestSinkRegistry_IsolatesSnapshotMutationBetweenSinks(t *testing.T) {
+	registry := NewSinkRegistry()
+	var observed string
+	registry.Register(&captureSink{name: "mutator", fn: func(snapshot *AttemptSnapshot) error {
+		snapshot.Events[0].Action = "mutated"
+		return nil
+	}})
+	registry.Register(&captureSink{name: "observer", fn: func(snapshot *AttemptSnapshot) error {
+		observed = snapshot.Events[0].Action
+		return nil
+	}})
+	snapshot := &AttemptSnapshot{Events: []RecordedPhase{{Action: "canonical"}}}
+	if err := registry.Publish(context.Background(), snapshot); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if observed != "canonical" || snapshot.Events[0].Action != "canonical" {
+		t.Fatalf("snapshot mutation escaped sink boundary: observed=%q original=%q", observed, snapshot.Events[0].Action)
+	}
+}
+
 func TestPrometheusSink_PublishesPerAttemptCacheDeltas(t *testing.T) {
 	metrics := GetPrometheusMetrics()
 	beforeHits := metrics.CacheRequestCount("hit")

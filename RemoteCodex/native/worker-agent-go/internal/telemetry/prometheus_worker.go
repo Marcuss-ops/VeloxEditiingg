@@ -38,6 +38,12 @@ func (m *PrometheusMetrics) RecordTaskResultAckReceived() {
 func (m *PrometheusMetrics) RecordTelemetryInvalidEvent() {
 	m.telemetryInvalidEvents.inc("catalog")
 }
+
+func (m *PrometheusMetrics) RecordTelemetryInvalidEvents(count int64) {
+	for i := int64(0); i < count; i++ {
+		m.RecordTelemetryInvalidEvent()
+	}
+}
 func (m *PrometheusMetrics) RecordFallback(reason string) { m.fallbackCount.inc(reason) }
 func (m *PrometheusMetrics) RecordPythonEmergencyPath(reason string) {
 	m.pythonEmergencyPath.inc(reason)

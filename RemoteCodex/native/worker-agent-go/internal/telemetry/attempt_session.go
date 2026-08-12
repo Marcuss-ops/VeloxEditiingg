@@ -72,6 +72,12 @@ type AttemptTelemetrySession struct {
 	// Start/Stop (the single entry point). When unset, the session keeps
 	// its legacy behavior: resource accounting only, no sink projection.
 	pipeline *AttemptPipeline
+	// executorRaw is the executor-owned raw fact envelope supplied at the
+	// attempt boundary immediately before Stop. It is copied into the
+	// canonical AttemptSnapshot; the session resource collector overlays only
+	// the resource fields it owns.
+	executorRaw   *RawExecutionMetrics
+	executorRawMu sync.RWMutex
 }
 
 type AttemptTelemetry struct {
@@ -232,6 +238,36 @@ func (s *AttemptTelemetrySession) BindPipeline(p *AttemptPipeline) {
 		return
 	}
 	s.pipeline = p
+}
+
+// SetExecutorRawMetrics supplies the executor's observed raw facts to the
+// canonical attempt pipeline. It is deliberately a boundary operation:
+// producers do not publish sinks and the snapshot remains the only input to
+// receipt/Prometheus/benchmark projections.
+func (s *AttemptTelemetrySession) SetExecutorRawMetrics(metrics *RawExecutionMetrics) {
+	if s == nil {
+		return
+	}
+	s.executorRawMu.Lock()
+	defer s.executorRawMu.Unlock()
+	if metrics == nil {
+		s.executorRaw = nil
+		return
+	}
+	copy := *metrics
+	s.executorRaw = &copy
+}
+
+func (s *AttemptTelemetrySession) ExecutorRawMetrics() (RawExecutionMetrics, bool) {
+	if s == nil {
+		return RawExecutionMetrics{}, false
+	}
+	s.executorRawMu.RLock()
+	defer s.executorRawMu.RUnlock()
+	if s.executorRaw == nil {
+		return RawExecutionMetrics{}, false
+	}
+	return *s.executorRaw, true
 }
 
 // BindRecorder attaches the attempt's canonical journal to the pipeline.

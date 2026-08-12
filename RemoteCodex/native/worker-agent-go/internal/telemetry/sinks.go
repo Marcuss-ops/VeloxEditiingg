@@ -28,8 +28,9 @@ type Sink interface {
 }
 
 // SinkRegistry owns the ordered sink set of one attempt. All sinks
-// receive the SAME snapshot; a sink failure does not stop the remaining
-// sinks (a Prometheus error must not drop the diagnostic dump).
+// receive an equivalent immutable-boundary view of the SAME snapshot; a sink
+// failure does not stop the remaining sinks (a Prometheus error must not drop
+// the diagnostic dump).
 type SinkRegistry struct {
 	mu    sync.Mutex
 	sinks []Sink
@@ -56,7 +57,7 @@ func (r *SinkRegistry) Publish(ctx context.Context, snapshot *AttemptSnapshot) e
 	r.mu.Unlock()
 	var firstErr error
 	for _, s := range sinks {
-		if err := s.Publish(ctx, snapshot); err != nil && firstErr == nil {
+		if err := s.Publish(ctx, snapshot.Clone()); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("sink %s: %w", s.Name(), err)
 		}
 	}
@@ -100,6 +101,9 @@ func (s *PrometheusSink) Publish(_ context.Context, snapshot *AttemptSnapshot) e
 		return nil
 	}
 	raw := snapshot.RawEnvelope()
+	if snapshot.InvalidEvents > 0 {
+		s.Metrics.RecordTelemetryInvalidEvents(snapshot.InvalidEvents)
+	}
 	// Typed per-attempt CPU/RSS/I/O/frame/process families all derive from
 	// this same envelope. The remaining calls below preserve existing cache
 	// and render projections.

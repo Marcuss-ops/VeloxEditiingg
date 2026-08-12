@@ -77,6 +77,7 @@ func (p *AttemptPipeline) Run(ctx context.Context) error {
 	if p.recorder != nil {
 		snapshot.Events = p.recorder.Snapshot()
 		snapshot.DroppedEvents = p.recorder.DroppedEventCount()
+		snapshot.InvalidEvents = p.recorder.InvalidEventCount()
 	}
 	p.collectors.Collect(ctx, snapshot)
 	if err := p.sinks.Publish(ctx, snapshot); err != nil {

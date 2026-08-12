@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"velox-shared/contract"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/telemetry"
@@ -126,7 +127,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	// Legacy compatibility projection for pre-typed report consumers. The
 	// canonical producer output is rawMetrics below; this map is retired
 	// incrementally as downstream consumers adopt RawMetrics.
-	metrics := map[string]interface{}{}
+	metrics := newLegacyMetricsProjection()
 	rec := recorderFromExecutionContext(execCtx)
 	planHandle := rec.Begin(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask, Component: "worker.plan", Action: "compile"})
 	if planHandle != nil {
@@ -166,54 +167,54 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	// Materialize native telemetry before handling the render error. The
 	// engine may have emitted useful completed phases and segment timings
 	// even when the process fails or is cancelled.
-	metrics["pipeline.total_ms"] = time.Since(pipelineStart).Milliseconds()
-	metrics["pipeline.id"] = pipelineID
-	metrics["pipeline.resolve_ms"] = runMetrics.ResolveMs
-	metrics["pipeline.validate_ms"] = runMetrics.ValidateMs
-	metrics["pipeline.compile_ms"] = runMetrics.CompileMs
-	metrics["pipeline.render_ms"] = runMetrics.RenderMs
-	metrics["pipeline.timeline_items"] = int64(runMetrics.TimelineItems)
-	metrics["pipeline.audio_tracks"] = int64(runMetrics.AudioTracks)
-	metrics["native.total_ms"] = runMetrics.RenderMetrics.TotalMs
-	metrics["native.plan_write_ms"] = runMetrics.RenderMetrics.PlanWriteMs
-	metrics["native.process_wait_ms"] = runMetrics.RenderMetrics.ProcessWaitMs
-	metrics["process.engine_spawn_count"] = runMetrics.RenderMetrics.EngineSpawnCount
-	metrics["process.engine_spawn_ms"] = runMetrics.RenderMetrics.EngineSpawnMs
-	metrics["process.external_count"] = runMetrics.RenderMetrics.ExternalProcessCount
-	metrics["process.ffmpeg_exec_count"] = runMetrics.RenderMetrics.FfmpegExecCount
-	metrics["process.ffprobe_exec_count"] = runMetrics.RenderMetrics.FfprobeExecCount
-	metrics["process.shell_exec_count"] = runMetrics.RenderMetrics.ShellExecCount
-	metrics["process.curl_exec_count"] = runMetrics.RenderMetrics.CurlExecCount
-	metrics["process.child_wait_ms"] = runMetrics.RenderMetrics.ChildWaitMs
+	metrics.Set("pipeline.total_ms", time.Since(pipelineStart).Milliseconds())
+	metrics.Set("pipeline.id", pipelineID)
+	metrics.Set("pipeline.resolve_ms", runMetrics.ResolveMs)
+	metrics.Set("pipeline.validate_ms", runMetrics.ValidateMs)
+	metrics.Set("pipeline.compile_ms", runMetrics.CompileMs)
+	metrics.Set("pipeline.render_ms", runMetrics.RenderMs)
+	metrics.Set("pipeline.timeline_items", int64(runMetrics.TimelineItems))
+	metrics.Set("pipeline.audio_tracks", int64(runMetrics.AudioTracks))
+	metrics.Set("native.total_ms", runMetrics.RenderMetrics.TotalMs)
+	metrics.Set("native.plan_write_ms", runMetrics.RenderMetrics.PlanWriteMs)
+	metrics.Set("native.process_wait_ms", runMetrics.RenderMetrics.ProcessWaitMs)
+	metrics.Set("process.engine_spawn_count", runMetrics.RenderMetrics.EngineSpawnCount)
+	metrics.Set("process.engine_spawn_ms", runMetrics.RenderMetrics.EngineSpawnMs)
+	metrics.Set("process.external_count", runMetrics.RenderMetrics.ExternalProcessCount)
+	metrics.Set("process.ffmpeg_exec_count", runMetrics.RenderMetrics.FfmpegExecCount)
+	metrics.Set("process.ffprobe_exec_count", runMetrics.RenderMetrics.FfprobeExecCount)
+	metrics.Set("process.shell_exec_count", runMetrics.RenderMetrics.ShellExecCount)
+	metrics.Set("process.curl_exec_count", runMetrics.RenderMetrics.CurlExecCount)
+	metrics.Set("process.child_wait_ms", runMetrics.RenderMetrics.ChildWaitMs)
 	// I/O counters share ONE derivation with the PerformanceReceiptV1
 	// (performance.DeriveIO): the executor telemetry and the receipt can
 	// never disagree about what each io.* value means.
 	derivedIO := performance.DeriveIO(runMetrics.RenderMetrics)
-	metrics["io.total_bytes_read"] = derivedIO.TotalBytesRead
-	metrics["io.total_bytes_written"] = derivedIO.TotalBytesWritten
-	metrics["io.asset_bytes_read"] = derivedIO.AssetBytesRead
-	metrics["io.asset_bytes_copied"] = derivedIO.AssetBytesCopied
-	metrics["io.temp_bytes_written"] = derivedIO.TempBytesWritten
-	metrics["io.mux_bytes_read"] = derivedIO.MuxBytesRead
-	metrics["io.mux_bytes_written"] = derivedIO.MuxBytesWritten
-	metrics["io.final_bytes_written"] = derivedIO.FinalBytesWritten
-	metrics["io.file_copy_count"] = derivedIO.FileCopyCount
-	metrics["io.file_copy_bytes"] = derivedIO.FileCopyBytes
-	metrics["io.input_open_count"] = derivedIO.InputOpenCount
-	metrics["io.input_reopen_count"] = derivedIO.InputReopenCount
+	metrics.Set("io.total_bytes_read", derivedIO.TotalBytesRead)
+	metrics.Set("io.total_bytes_written", derivedIO.TotalBytesWritten)
+	metrics.Set("io.asset_bytes_read", derivedIO.AssetBytesRead)
+	metrics.Set("io.asset_bytes_copied", derivedIO.AssetBytesCopied)
+	metrics.Set("io.temp_bytes_written", derivedIO.TempBytesWritten)
+	metrics.Set("io.mux_bytes_read", derivedIO.MuxBytesRead)
+	metrics.Set("io.mux_bytes_written", derivedIO.MuxBytesWritten)
+	metrics.Set("io.final_bytes_written", derivedIO.FinalBytesWritten)
+	metrics.Set("io.file_copy_count", derivedIO.FileCopyCount)
+	metrics.Set("io.file_copy_bytes", derivedIO.FileCopyBytes)
+	metrics.Set("io.input_open_count", derivedIO.InputOpenCount)
+	metrics.Set("io.input_reopen_count", derivedIO.InputReopenCount)
 	// CPU counters share ONE derivation with the PerformanceReceiptV1
 	// (performance.DeriveCPU): cpu.wall_ms mirrors the pipeline wall
 	// clock, cpu.total_ms = user + system, and cpu.wall_ratio tells us
 	// whether the attempt was CPU-bound at all. The RSS counters come
 	// straight from the /proc sampler (memory.* is not a derivation).
 	derivedCPU := performance.DeriveCPU(runMetrics.RenderMetrics, runMetrics.TotalMs)
-	metrics["cpu.wall_ms"] = derivedCPU.WallMs
-	metrics["cpu.user_ms"] = derivedCPU.CPUUserMs
-	metrics["cpu.system_ms"] = derivedCPU.CPUSystemMs
-	metrics["cpu.total_ms"] = derivedCPU.CPUTotalMs
-	metrics["cpu.wall_ratio"] = derivedCPU.CPUWallRatio
-	metrics["memory.peak_rss_bytes"] = runMetrics.RenderMetrics.PeakRSSBytes
-	metrics["memory.current_rss_bytes"] = runMetrics.RenderMetrics.CurrentRSSBytes
+	metrics.Set("cpu.wall_ms", derivedCPU.WallMs)
+	metrics.Set("cpu.user_ms", derivedCPU.CPUUserMs)
+	metrics.Set("cpu.system_ms", derivedCPU.CPUSystemMs)
+	metrics.Set("cpu.total_ms", derivedCPU.CPUTotalMs)
+	metrics.Set("cpu.wall_ratio", derivedCPU.CPUWallRatio)
+	metrics.Set("memory.peak_rss_bytes", runMetrics.RenderMetrics.PeakRSSBytes)
+	metrics.Set("memory.current_rss_bytes", runMetrics.RenderMetrics.CurrentRSSBytes)
 	// Derived KPIs share ONE derivation with the PerformanceReceiptV1
 	// (performance.DerivedFromRenderMetrics → Derive): unaccounted_ms,
 	// accounted_ratio, read/write amplification, processes_per_clip,
@@ -223,33 +224,37 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	// engine-declared final size (receipt io.final_bytes_written) and
 	// are re-projected with the verified artifact-manifest size on the
 	// success path.
-	derived := performance.DerivedFromRenderMetrics(runMetrics.RenderMetrics, runMetrics.TotalMs, runMetrics.TimelineItems, runMetrics.RenderMetrics.TotalSize)
-	metrics["derived.unaccounted_ms"] = derived.UnaccountedMS
-	metrics["derived.accounted_ratio"] = derived.AccountedRatio
-	metrics["derived.read_amplification"] = derived.ReadAmplification
-	metrics["derived.write_amplification"] = derived.WriteAmplification
-	metrics["derived.processes_per_clip"] = derived.ProcessesPerClip
-	metrics["derived.useful_work_ratio"] = derived.UsefulWorkRatio
-	metrics["derived.cpu_wall_ratio"] = derived.CPUWallRatio
+	// clip_count is owned by the compiled render plan. A legacy V1 payload
+	// that has no compiled plan is explicitly "not measured"; timeline item
+	// count is not a valid substitute because it can include non-clip work.
+	clipCount := compiledPlanClipCount(spec.Payload)
+	derived := performance.DerivedFromRenderMetrics(runMetrics.RenderMetrics, runMetrics.TotalMs, clipCount, runMetrics.RenderMetrics.TotalSize)
+	metrics.Set("derived.unaccounted_ms", derived.UnaccountedMS)
+	metrics.Set("derived.accounted_ratio", derived.AccountedRatio)
+	metrics.Set("derived.read_amplification", derived.ReadAmplification)
+	metrics.Set("derived.write_amplification", derived.WriteAmplification)
+	metrics.Set("derived.processes_per_clip", derived.ProcessesPerClip)
+	metrics.Set("derived.useful_work_ratio", derived.UsefulWorkRatio)
+	metrics.Set("derived.cpu_wall_ratio", derived.CPUWallRatio)
 	// The Phase-1 accounted_ratio budget (>= 95%) is surfaced as a
 	// single boolean so operators can alert on it without recomputing
 	// the rule; "not measured" (ratio 0) is never a violation.
-	metrics["derived.accounted_ratio_budget_ok"] = len(performance.CheckDerivedBudgets(derived)) == 0
-	metrics["engine.frames"] = runMetrics.RenderMetrics.Frames
-	metrics["engine.frames_decoded"] = runMetrics.RenderMetrics.FramesDecoded
-	metrics["engine.frames_composited"] = runMetrics.RenderMetrics.FramesComposited
-	metrics["engine.fps"] = runMetrics.RenderMetrics.Fps
-	metrics["engine.speed_x"] = runMetrics.RenderMetrics.SpeedX
-	metrics["engine.encode_passes"] = runMetrics.RenderMetrics.EncodePasses
-	metrics["engine.temp_bytes"] = runMetrics.RenderMetrics.TempBytes
-	metrics["engine.output_durable"] = runMetrics.RenderMetrics.OutputDurable
-	metrics["engine.duration_seconds"] = runMetrics.RenderMetrics.DurationSec
-	metrics["engine.concat_mode"] = runMetrics.RenderMetrics.ConcatMode
-	metrics["engine.bitrate"] = runMetrics.RenderMetrics.Bitrate
-	metrics["engine.dup_frames"] = runMetrics.RenderMetrics.DupFrames
-	metrics["engine.drop_frames"] = runMetrics.RenderMetrics.DropFrames
+	metrics.Set("derived.accounted_ratio_budget_ok", len(performance.CheckDerivedBudgets(derived)) == 0)
+	metrics.Set("engine.frames", runMetrics.RenderMetrics.Frames)
+	metrics.Set("engine.frames_decoded", runMetrics.RenderMetrics.FramesDecoded)
+	metrics.Set("engine.frames_composited", runMetrics.RenderMetrics.FramesComposited)
+	metrics.Set("engine.fps", runMetrics.RenderMetrics.Fps)
+	metrics.Set("engine.speed_x", runMetrics.RenderMetrics.SpeedX)
+	metrics.Set("engine.encode_passes", runMetrics.RenderMetrics.EncodePasses)
+	metrics.Set("engine.temp_bytes", runMetrics.RenderMetrics.TempBytes)
+	metrics.Set("engine.output_durable", runMetrics.RenderMetrics.OutputDurable)
+	metrics.Set("engine.duration_seconds", runMetrics.RenderMetrics.DurationSec)
+	metrics.Set("engine.concat_mode", runMetrics.RenderMetrics.ConcatMode)
+	metrics.Set("engine.bitrate", runMetrics.RenderMetrics.Bitrate)
+	metrics.Set("engine.dup_frames", runMetrics.RenderMetrics.DupFrames)
+	metrics.Set("engine.drop_frames", runMetrics.RenderMetrics.DropFrames)
 	for k, v := range runMetrics.RenderMetrics.PhaseMS {
-		metrics["engine."+k] = v
+		metrics.Set("engine."+k, v)
 	}
 	for key, value := range runMetrics.RenderMetrics.Observability {
 		flattenObservabilityMetric(metrics, key, value)
@@ -377,7 +382,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 				Status:    "failed",
 				ErrorCode: "cancelled", ErrorDetail: err.Error(),
 				RawMetrics:     rawMetrics,
-				Metrics:        metrics,
+				Metrics:        metrics.Map(),
 				Segments:       segments,
 				DetailedPhases: detailedPhases,
 				StartedAt:      startedAt,
@@ -389,7 +394,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 			ErrorCode:      renderErrorCode(err),
 			ErrorDetail:    fmt.Sprintf("pipeline.Runner.RunWithMetrics(%s): %v", pipelineID, err),
 			RawMetrics:     rawMetrics,
-			Metrics:        metrics,
+			Metrics:        metrics.Map(),
 			Segments:       segments,
 			DetailedPhases: detailedPhases,
 			StartedAt:      startedAt,
@@ -413,13 +418,13 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	outputManifest, manifestErr := publisher.ComputeLocalManifest(ctx, outputPath)
 	if manifestErr != nil {
 		planHandle.Abort("quality_manifest", manifestErr.Error())
-		metrics["output.manifest_error"] = manifestErr.Error()
+		metrics.Set("output.manifest_error", manifestErr.Error())
 		return executor.ExecutionResult{
 			Status:      "failed",
 			ErrorCode:   "output_manifest_missing",
 			ErrorDetail: fmt.Sprintf("render output manifest: %v", manifestErr),
 			RawMetrics:  rawMetrics,
-			Metrics:     metrics,
+			Metrics:     metrics.Map(),
 			StartedAt:   startedAt,
 			CompletedAt: time.Now().UTC(),
 		}, nil
@@ -428,21 +433,21 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	outputSize = outputManifest.SizeBytes
 	// Keep the historical output.hash_ms key, but make it mean exactly the
 	// streaming SHA phase rather than the complete manifest operation.
-	metrics["output.hash_ms"] = outputManifest.Timings.SHA256MS
+	metrics.Set("output.hash_ms", outputManifest.Timings.SHA256MS)
 	if outputSize <= 0 {
 		planHandle.Abort("quality_empty", "render output manifest has zero bytes")
-		metrics["output.manifest_error"] = "render output is empty"
+		metrics.Set("output.manifest_error", "render output is empty")
 		return executor.ExecutionResult{
 			Status:      "failed",
 			ErrorCode:   "output_manifest_empty",
 			ErrorDetail: "render output manifest has zero bytes",
 			RawMetrics:  rawMetrics,
-			Metrics:     metrics,
+			Metrics:     metrics.Map(),
 			StartedAt:   startedAt,
 			CompletedAt: time.Now().UTC(),
 		}, nil
 	}
-	metrics["output.bytes"] = outputSize
+	metrics.Set("output.bytes", outputSize)
 	rawMetrics.OutputBytes = outputSize
 	rawMetrics.OutputFileSize = outputSize
 	rawMetrics.OutputSha256 = outputHash
@@ -454,26 +459,26 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	// manifest is the publisher's authoritative byte count). The other
 	// derived KPIs do not depend on the output size and are already
 	// final.
-	derivedVerified := performance.DerivedFromRenderMetrics(runMetrics.RenderMetrics, runMetrics.TotalMs, runMetrics.TimelineItems, outputSize)
-	metrics["derived.read_amplification"] = derivedVerified.ReadAmplification
-	metrics["derived.write_amplification"] = derivedVerified.WriteAmplification
+	derivedVerified := performance.DerivedFromRenderMetrics(runMetrics.RenderMetrics, runMetrics.TotalMs, clipCount, outputSize)
+	metrics.Set("derived.read_amplification", derivedVerified.ReadAmplification)
+	metrics.Set("derived.write_amplification", derivedVerified.WriteAmplification)
 	// Quality telemetry must describe the artifact that was actually
 	// produced. ComputeLocalManifest has already hashed and ffprobed this
 	// final file; do not infer these values from the render plan or emit a
 	// synthetic success flag.
-	metrics["quality.ffprobe.valid"] = int64(boolToInt(outputManifest.FfprobeValid))
-	metrics["quality.ffprobe.ok"] = int64(boolToInt(outputManifest.FfprobeOK))
-	metrics["quality.has.video.stream"] = outputManifest.HasVideoStream
-	metrics["quality.has.audio.stream"] = outputManifest.HasAudioStream
-	metrics["quality.audio.track.count"] = int64(outputManifest.AudioTrackCount)
-	metrics["quality.video.codec"] = outputManifest.Codec
-	metrics["quality.audio.codec"] = outputManifest.AudioCodec
-	metrics["quality.output.file.size"] = outputManifest.SizeBytes
-	metrics["output.file.size"] = outputManifest.SizeBytes
+	metrics.Set("quality.ffprobe.valid", int64(boolToInt(outputManifest.FfprobeValid)))
+	metrics.Set("quality.ffprobe.ok", int64(boolToInt(outputManifest.FfprobeOK)))
+	metrics.Set("quality.has.video.stream", outputManifest.HasVideoStream)
+	metrics.Set("quality.has.audio.stream", outputManifest.HasAudioStream)
+	metrics.Set("quality.audio.track.count", int64(outputManifest.AudioTrackCount))
+	metrics.Set("quality.video.codec", outputManifest.Codec)
+	metrics.Set("quality.audio.codec", outputManifest.AudioCodec)
+	metrics.Set("quality.output.file.size", outputManifest.SizeBytes)
+	metrics.Set("output.file.size", outputManifest.SizeBytes)
 	if outputManifest.FfprobeErr != "" {
-		metrics["quality.ffprobe.error"] = outputManifest.FfprobeErr
+		metrics.Set("quality.ffprobe.error", outputManifest.FfprobeErr)
 	}
-	metrics["executor.total_ms"] = time.Since(startedAt).Milliseconds()
+	metrics.Set("executor.total_ms", time.Since(startedAt).Milliseconds())
 
 	outputs := []executor.ArtifactRef{{Type: "render.output", Hash: outputHash, URI: outputPath, SizeBytes: outputSize}}
 	sidecarPath := outputPath + ".progress.json"
@@ -487,24 +492,24 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 			URI:       sidecarPath,
 			SizeBytes: sidecarManifest.SizeBytes,
 		})
-		metrics["sidecar.present"] = true
-		metrics["sidecar.bytes"] = sidecarManifest.SizeBytes
+		metrics.Set("sidecar.present", true)
+		metrics.Set("sidecar.bytes", sidecarManifest.SizeBytes)
 		projectRenderProfile(metrics, runMetrics, outputManifest.Timings.SHA256MS, outputManifest.Timings.FfprobeMS, sidecarManifest.Timings.TotalMS, time.Since(artifactStarted).Milliseconds())
 	} else {
 		// The sidecar is the renderer's progress receipt and is part of
 		// the artifact contract. Do not silently report success without
 		// it: the worker cannot register a complete operation receipt.
-		metrics["sidecar.present"] = false
+		metrics.Set("sidecar.present", false)
 		if sidecarErr == nil {
 			sidecarErr = errors.New("render progress sidecar is empty")
 		}
-		metrics["sidecar.error"] = sidecarErr.Error()
+		metrics.Set("sidecar.error", sidecarErr.Error())
 		return executor.ExecutionResult{
 			Status:      "failed",
 			ErrorCode:   "progress_sidecar_missing",
 			ErrorDetail: fmt.Sprintf("render progress sidecar manifest: %v", sidecarErr),
 			RawMetrics:  rawMetrics,
-			Metrics:     metrics,
+			Metrics:     metrics.Map(),
 			StartedAt:   startedAt,
 			CompletedAt: time.Now().UTC(),
 		}, nil
@@ -523,12 +528,28 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		Status:         "succeeded",
 		Outputs:        outputs,
 		RawMetrics:     rawMetrics,
-		Metrics:        metrics,
+		Metrics:        metrics.Map(),
 		Segments:       segments,
 		DetailedPhases: detailedPhases,
 		StartedAt:      startedAt,
 		CompletedAt:    time.Now().UTC(),
 	}, nil
+}
+
+func compiledPlanClipCount(payload map[string]interface{}) int {
+	raw, ok := payload[contract.PayloadKeyCompiledRenderPlanJSON].(string)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return 0
+	}
+	plan, err := contract.DecodeCompiledRenderPlanV2([]byte(raw))
+	if err != nil || plan == nil {
+		return 0
+	}
+	count := 0
+	for _, track := range plan.VideoTracks {
+		count += len(track.Segments)
+	}
+	return count
 }
 
 func rawMetricsFromPipeline(run pipeline.RunMetrics, io performance.IOMetrics, cpu performance.CPUMetrics) *telemetry.RawExecutionMetrics {

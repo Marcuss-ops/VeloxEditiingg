@@ -141,6 +141,7 @@ type AttemptSnapshot struct {
 	// snapshot; the recorder itself is never drained).
 	Events        []RecordedPhase `json:"events,omitempty"`
 	DroppedEvents int64           `json:"dropped_events,omitempty"`
+	InvalidEvents int64           `json:"invalid_events,omitempty"`
 	StartedAt     time.Time       `json:"started_at"`
 	CompletedAt   time.Time       `json:"completed_at"`
 	WallMs        int64           `json:"wall_ms"`
@@ -151,6 +152,22 @@ type AttemptSnapshot struct {
 	// RawEnvelope/applyRawEnvelope.
 	raw      CompleteRawEnvelope
 	rawValid bool
+}
+
+// Clone returns an immutable-boundary copy for a sink. The pipeline owns the
+// original snapshot; each projection receives an independent value so a
+// buggy or future third-party sink cannot mutate facts observed by another
+// sink or by a later diagnostic retry.
+func (s *AttemptSnapshot) Clone() *AttemptSnapshot {
+	if s == nil {
+		return nil
+	}
+	clone := *s
+	if s.Events != nil {
+		clone.Events = make([]RecordedPhase, len(s.Events))
+		copy(clone.Events, s.Events)
+	}
+	return &clone
 }
 
 // RawEnvelope returns the complete typed raw fact envelope. It is a value
@@ -319,7 +336,10 @@ func (c *AttemptResourceCollector) Collect(_ context.Context, snapshot *AttemptS
 	}
 	result := c.Session.Result()
 	raw := snapshot.RawEnvelope()
-	raw.Resources = result.Metrics
+	if executorRaw, ok := c.Session.ExecutorRawMetrics(); ok {
+		raw.Resources = executorRaw
+	}
+	MergeAttemptResourceFactsInto(&raw.Resources, result.Metrics)
 	snapshot.applyRawEnvelope(raw)
 	if snapshot.StartedAt.IsZero() {
 		snapshot.StartedAt = result.StartedAt

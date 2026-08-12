@@ -231,6 +231,26 @@ for path, number, line in matching(
 ):
     violations.append(f"direct telemetry sink reference from renderer at {rel(path)}:{number}: {line}")
 
+# The dotted execution map is a one-way compatibility projection. Executor
+# production code may hand facts to the local projection type, but may not
+# index a map directly: direct indexing makes the legacy map authoritative and
+# is exactly how parallel metric writers re-enter the render path.
+legacy_projection_owner = (
+    "RemoteCodex/native/worker-agent-go/internal/taskrunner/executors/"
+    "legacy_metrics_projection.go"
+)
+for path, number, line in matching(
+    (
+        p for p in production_files({".go"})
+        if "internal/taskrunner/executors" in rel(p)
+    ),
+    r"\b(?:metrics|obs\.metrics|o\.metrics)\s*\[",
+):
+    if rel(path) != legacy_projection_owner:
+        violations.append(
+            f"direct legacy metrics-map write outside adapter at {rel(path)}:{number}: {line}"
+        )
+
 # The receipt constructor is a single projection boundary. A new production
 # constructor call or literal outside the performance package is a bypass.
 # Patterns are narrowed to assignment/literal contexts so a function whose
@@ -245,6 +265,7 @@ for path, number, line in matching(
     if path_name not in {
         "RemoteCodex/native/worker-agent-go/pkg/performance/assembler.go",
         "RemoteCodex/native/worker-agent-go/pkg/performance/performance_receipt_v1.go",
+        "RemoteCodex/native/worker-agent-go/pkg/performance/receipt_builder.go",
         # Canonical projections built on the assembler boundary: the snapshot
         # projection constructs the receipt via NewPerformanceReceiptV1, and
         # the Deriver owns the DerivedMetrics envelope literal.

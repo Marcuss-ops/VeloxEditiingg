@@ -97,6 +97,7 @@ type EventRecorder struct {
 	eventRecords     map[eventIdentity]RecordedPhase
 	attemptTelemetry *AttemptTelemetrySession
 	droppedEvents    int64
+	invalidEvents    int64
 }
 
 func NewEventRecorder() *EventRecorder {
@@ -135,7 +136,7 @@ func (r *EventRecorder) Start(spec EventSpec) *EventHandle {
 	if !normalizeEventSpec(&spec) {
 		// Invalid events remain on the wire so the master can quarantine
 		// them. They must never disappear silently at the producer boundary.
-		GetPrometheusMetrics().RecordTelemetryInvalidEvent()
+		r.markInvalidEvent()
 	}
 	now := time.Now()
 	return &EventHandle{rec: r, spec: spec, startWall: now.UTC(), startMono: now}
@@ -151,7 +152,7 @@ func (r *EventRecorder) Emit(spec EventSpec, status, errCode, errMsg string) {
 		return
 	}
 	if !normalizeEventSpec(&spec) {
-		GetPrometheusMetrics().RecordTelemetryInvalidEvent()
+		r.markInvalidEvent()
 	}
 	now := time.Now()
 	eventType := eventTypeFor(spec.EventType, status)
@@ -174,7 +175,7 @@ func (r *EventRecorder) Record(spec EventSpec, startedAt, completedAt time.Time,
 		return
 	}
 	if !normalizeEventSpec(&spec) {
-		GetPrometheusMetrics().RecordTelemetryInvalidEvent()
+		r.markInvalidEvent()
 	}
 	r.record(RecordedPhase{
 		Origin: spec.Origin, Scope: spec.Scope, Component: spec.Component,
@@ -240,6 +241,22 @@ func (r *EventRecorder) DroppedEventCount() int64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.droppedEvents
+}
+
+// InvalidEventCount reports taxonomy/schema observations retained for
+// quarantine. The recorder owns this raw fact; Prometheus receives it only
+// through PrometheusSink when the AttemptSnapshot is published.
+func (r *EventRecorder) InvalidEventCount() int64 {
+	if r == nil {
+		return 0
+	}
+	return atomic.LoadInt64(&r.invalidEvents)
+}
+
+func (r *EventRecorder) markInvalidEvent() {
+	if r != nil {
+		atomic.AddInt64(&r.invalidEvents, 1)
+	}
 }
 
 // ImportCXX is the official C++ sidecar import boundary. It preserves the

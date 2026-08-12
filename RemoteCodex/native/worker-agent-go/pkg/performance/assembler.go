@@ -71,31 +71,51 @@ type AssemblyContext struct {
 // the raw facts (wall clock, exclusive phases, IO totals, process/workload
 // counts, caller-supplied CPU/useful-work) and hands them to Derive.
 func (a *Assembler) Assemble(run pipeline.RunMetrics, ctx AssemblyContext) *PerformanceReceiptV1 {
-	receipt := NewPerformanceReceiptV1()
-	receipt.Identity = ctx.Identity
 	// The caller supplies the authoritative workload (built from the
 	// CompiledRenderPlanV2); the assembler never reconstructs it.
-	receipt.Workload = ctx.Workload // The wall clock is resolved once and shared by Timing and the CPU
+	// The wall clock is resolved once and shared by Timing, CPU and Derive.
 	// section so the two can never disagree about wall_ms.
 	wall := ctx.WallMs
 	if wall <= 0 {
 		wall = run.TotalMs
 	}
-	receipt.Timing = assembleTiming(run, wall)
-	receipt.Process = assembleProcess(run.RenderMetrics)
-	receipt.CPU = assembleCPU(run.RenderMetrics, wall)
-	receipt.IO = DeriveIO(run.RenderMetrics)
-	receipt.Media = assembleMedia(run.RenderMetrics)
-	receipt.Memory = assembleMemory(run.RenderMetrics)
-	receipt.Scheduling = assembleScheduling(run.RenderMetrics)
-	receipt.FramePipeline = assembleFramePipeline(run.RenderMetrics)
-	receipt.Phases = assemblePhases(run.RenderMetrics)
-	receipt.Segments = assembleSegments(run.RenderMetrics)
-	// Derived KPIs: one call, one definition (the single
-	// DerivedMetricsCalculator). The assembler only gathers the RAW facts
-	// and hands them to Derive — it never computes a ratio itself.
-	receipt.Derived = Derive(rawMetricsFrom(ctx, receipt))
-	return receipt
+	timing := assembleTiming(run, wall)
+	process := assembleProcess(run.RenderMetrics)
+	cpu := assembleCPU(run.RenderMetrics, wall)
+	cpuWallMS := ctx.CPUWallMS
+	if cpuWallMS <= 0 {
+		// Compatibility input from pre-session callers: the engine tree CPU
+		// total is the only available raw CPU fact. The formula still lives
+		// exclusively in Derive; this is only source selection.
+		cpuWallMS = cpu.CPUTotalMs
+	}
+	io := DeriveIO(run.RenderMetrics)
+	phases := assemblePhases(run.RenderMetrics)
+	return assemblePerformanceReceipt(receiptAssemblyInput{
+		Identity:      ctx.Identity,
+		Workload:      ctx.Workload,
+		Timing:        timing,
+		Process:       process,
+		CPU:           cpu,
+		IO:            io,
+		Media:         assembleMedia(run.RenderMetrics),
+		Memory:        assembleMemory(run.RenderMetrics),
+		Scheduling:    assembleScheduling(run.RenderMetrics),
+		FramePipeline: assembleFramePipeline(run.RenderMetrics),
+		Phases:        phases,
+		Segments:      assembleSegments(run.RenderMetrics),
+		Raw: RawMetrics{
+			WallMs:               timing.WallMs,
+			Phases:               phases,
+			CPUWallMS:            cpuWallMS,
+			TotalBytesRead:       io.TotalBytesRead,
+			TotalBytesWritten:    io.TotalBytesWritten,
+			OutputBytes:          io.FinalBytesWritten,
+			ExternalProcessCount: process.ExternalProcessCount,
+			ClipCount:            ctx.Workload.ClipCount,
+			UsefulPipelineMS:     ctx.UsefulPipelineMS,
+		},
+	})
 }
 
 // rawMetricsFrom gathers the RAW observed facts that Assemble hands to the
@@ -214,10 +234,9 @@ func assembleScheduling(rm pipeline.RenderMetrics) SchedulingMetrics {
 // resolves to) so the CPUWallRatio is self-contained.
 func assembleCPU(rm pipeline.RenderMetrics, wallMs int64) CPUMetrics {
 	total := rm.CPUUserMs + rm.CPUSystemMs
-	ratio := 0.0
-	if wallMs > 0 {
-		ratio = float64(total) / float64(wallMs)
-	}
+	// CPUWallRatio is a derived KPI. Resolve it through the single Deriver
+	// instead of maintaining a second division formula in the assembler.
+	ratio := Derive(RawMetrics{WallMs: wallMs, CPUWallMS: total}).CPUWallRatio
 	return CPUMetrics{
 		WallMs:       wallMs,
 		CPUUserMs:    rm.CPUUserMs,

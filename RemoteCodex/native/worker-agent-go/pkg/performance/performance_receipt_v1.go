@@ -54,6 +54,10 @@ type PerformanceReceiptV1 struct {
 	Media      MediaMetrics      `json:"media"`
 	Memory     MemoryMetrics     `json:"memory"`
 	Scheduling SchedulingMetrics `json:"scheduling"`
+	// Coverage distinguishes an observed zero from an unavailable sampler.
+	// It is populated only when the attempt telemetry session supplied a
+	// valid coverage block; nil means the legacy source did not report one.
+	Coverage *TelemetryCoverage `json:"coverage,omitempty"`
 
 	// FramePipeline carries the §25 producer-consumer health metrics of
 	// the in-process encode pipeline (Decoder → FramePool → Render
@@ -75,6 +79,19 @@ type PerformanceReceiptV1 struct {
 	Segments []SegmentTiming `json:"segments,omitempty"`
 
 	Derived DerivedMetrics `json:"derived"`
+}
+
+// TelemetryCoverage is the canonical availability projection for resource
+// facts. A false value means "not measured", never measured zero.
+type TelemetryCoverage struct {
+	CPU         bool   `json:"cpu"`
+	Memory      bool   `json:"memory"`
+	Disk        bool   `json:"disk"`
+	Network     bool   `json:"network"`
+	Cgroup      bool   `json:"cgroup"`
+	ProcessTree bool   `json:"process_tree"`
+	CPUSource   string `json:"cpu_source,omitempty"`
+	Complete    bool   `json:"complete"`
 }
 
 // NewPerformanceReceiptV1 returns a zero-valued V1 receipt with Version

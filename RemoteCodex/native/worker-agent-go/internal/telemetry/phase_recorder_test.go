@@ -99,7 +99,6 @@ func TestEventRecorder_PerOriginIndexes(t *testing.T) {
 // scope, and component/action values remain available for master quarantine.
 func TestEventRecorder_RetainsNonCanonical(t *testing.T) {
 	r := NewEventRecorder()
-	before := GetPrometheusMetrics().telemetryInvalidEvents.total()
 	r.Emit(EventSpec{Origin: "bogus", Scope: "nope", Component: "runner", Action: "cache_lookup"}, "ok", "", "")
 	r.Emit(EventSpec{Origin: OriginWorker, Scope: ScopeAttempt, Component: "runner", Action: "unknown"}, "ok", "", "")
 	events := r.Flush()
@@ -109,8 +108,8 @@ func TestEventRecorder_RetainsNonCanonical(t *testing.T) {
 	if events[0].Origin != "bogus" || events[0].Scope != "nope" || events[1].Action != "unknown" {
 		t.Fatalf("raw invalid taxonomy was not preserved: %+v", events)
 	}
-	if GetPrometheusMetrics().telemetryInvalidEvents.total() < before+2 {
-		t.Fatalf("invalid telemetry counter did not increase: before=%v after=%v", before, GetPrometheusMetrics().telemetryInvalidEvents.total())
+	if got := r.InvalidEventCount(); got != 2 {
+		t.Fatalf("invalid event count=%d, want 2", got)
 	}
 }
 

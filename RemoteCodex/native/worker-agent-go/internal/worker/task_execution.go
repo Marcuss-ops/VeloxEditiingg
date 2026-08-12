@@ -152,6 +152,12 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	// only after the complete attempt lifecycle, preserving the canonical
 	// append-only journal for every later projection.
 	taskrunner.AppendDetailedPhases(report, reportRecorder(report))
+	if report != nil {
+		// Hand the executor-owned RAW envelope to the canonical attempt
+		// pipeline before Stop. The session collector will merge only its
+		// resource-owned fields, preserving engine/resolver/publisher facts.
+		attemptTelemetry.SetExecutorRawMetrics(report.RawMetrics)
+	}
 	result := attemptTelemetry.Stop(context.Background())
 	if report != nil {
 		// Raw typed metrics are the canonical accumulator. Merge only the
